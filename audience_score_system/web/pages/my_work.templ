@@ -1,0 +1,121 @@
+package pages
+
+import (
+	"strconv"
+
+	"github.com/whale-net/everything/audience_score_system/store"
+	"github.com/whale-net/everything/audience_score_system/web/components"
+)
+
+// MyWork is the cross-Channel aggregate page (FR27/FR28): one section per
+// store.ChannelWorkSummary -- ordered exactly as
+// store.MyWorkStore.SummariesForPerson returns them (channel.title, then
+// channel.id) -- so a Person on several Channels can catch up on all of
+// them without opening each one individually. summaries is sourced from
+// exactly one store call (see ../main.go's handleMyWork); this templ adds
+// no supplementary per-Channel query of its own, so NFR9 holds here as
+// strictly as it does for get_my_work (#1719).
+//
+// A Channel with no associations at all renders the empty state below,
+// distinct from channelWorkSection's own per-block "none yet" placeholders
+// -- an empty summaries slice means the Person holds no open role
+// anywhere, not that every Channel they're on happens to be empty.
+templ MyWork(data components.LayoutData, summaries []store.ChannelWorkSummary) {
+	@components.Layout(data) {
+		<h1 class="text-2xl font-bold mb-4">My work</h1>
+		if len(summaries) == 0 {
+			<div class="card bg-base-100 border border-base-300 shadow-sm">
+				<div class="card-body">
+					<p class="text-base-content/70">You have no associated Channels yet.</p>
+				</div>
+			</div>
+		} else {
+			for _, s := range summaries {
+				@channelWorkSection(s)
+			}
+		}
+	}
+}
+
+// channelWorkSection renders one Channel's FR27 four-block summary:
+// latest research notes, latest viability verdict, current schedule-draft
+// state, and most recent outcome comparison -- in the same vocabulary
+// get_channel_overview (C10, #1582/FR24) and web/schedule's
+// entryCard/stateLabel use for the identical concepts (verdict "v{version}:
+// {value} -- {reasoning}", schedule "draft"/"committed" counts, a note's
+// "cited" flag from a non-nil SourceURL), so a Person moving between this
+// page and either of those isn't reading two dialects. Every block renders
+// an explicit "none yet" placeholder rather than being omitted when empty,
+// per this page's Implementation section -- an empty Channel must still be
+// visibly present, not indistinguishable from a missing one.
+templ channelWorkSection(s store.ChannelWorkSummary) {
+	<div class="card bg-base-100 border border-base-300 shadow-sm mb-4">
+		<div class="card-body">
+			<div class="flex justify-between items-start gap-4">
+				<h2 class="card-title">
+					<a class="link" href={ templ.URL("/channels/" + s.Channel.ID.String()) }>
+						{ channelDisplayTitle(s.Channel) }
+					</a>
+				</h2>
+				<span class="badge badge-outline">{ tierLabel(s.Role) }</span>
+			</div>
+
+			<div class="mt-3">
+				<h3 class="font-semibold text-sm uppercase text-base-content/60">Research notes</h3>
+				if len(s.LatestNotes) == 0 {
+					<p class="text-sm text-base-content/70">No research notes yet.</p>
+				} else {
+					<ul class="list-disc list-inside text-sm">
+						for _, n := range s.LatestNotes {
+							<li>
+								{ n.Text }
+								if n.SourceURL != nil {
+									<span class="badge badge-ghost badge-xs align-middle ml-1">cited</span>
+								}
+							</li>
+						}
+					</ul>
+				}
+			</div>
+
+			<div class="mt-3">
+				<h3 class="font-semibold text-sm uppercase text-base-content/60">Viability verdict</h3>
+				if s.LatestVerdict == nil {
+					<p class="text-sm text-base-content/70">No viability verdict recorded yet.</p>
+				} else {
+					<p class="text-sm">
+						{ s.LatestVerdict.IdeaTitle } -- Verdict v{ strconv.Itoa(s.LatestVerdict.Version) }: { string(s.LatestVerdict.Verdict) } -- { s.LatestVerdict.Reasoning }
+					</p>
+				}
+			</div>
+
+			<div class="mt-3">
+				<h3 class="font-semibold text-sm uppercase text-base-content/60">Schedule</h3>
+				if s.ScheduleState.DraftCount == 0 && s.ScheduleState.CommittedCount == 0 {
+					<p class="text-sm text-base-content/70">No schedule drafts yet.</p>
+				} else {
+					<p class="text-sm">
+						{ strconv.Itoa(s.ScheduleState.DraftCount) } draft, { strconv.Itoa(s.ScheduleState.CommittedCount) } committed
+						if s.ScheduleState.NextProposedPublishAt != nil {
+							-- next proposed publish { s.ScheduleState.NextProposedPublishAt.UTC().Format("2006-01-02 15:04 UTC") }
+						}
+					</p>
+				}
+			</div>
+
+			<div class="mt-3">
+				<h3 class="font-semibold text-sm uppercase text-base-content/60">Outcome comparison</h3>
+				if s.LatestOutcome == nil {
+					<p class="text-sm text-base-content/70">No outcome comparison yet.</p>
+				} else {
+					<p class="text-sm">
+						{ s.LatestOutcome.VideoTitle } -- Verdict v{ strconv.Itoa(s.LatestOutcome.VerdictVersion) }: { string(s.LatestOutcome.Verdict) }
+						if s.LatestOutcome.Views != nil {
+							-- { strconv.FormatInt(*s.LatestOutcome.Views, 10) } views
+						}
+					</p>
+				}
+			</div>
+		</div>
+	</div>
+}
