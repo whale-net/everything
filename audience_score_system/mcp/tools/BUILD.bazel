@@ -48,6 +48,7 @@ go_library(
 go_test(
     name = "tools_test",
     srcs = [
+        "access_test.go",
         "research_test.go",
         "schedule_draft_test.go",
         "schedule_read_test.go",
@@ -59,6 +60,7 @@ go_test(
     deps = [
         "//audience_score_system/store",
         "@com_github_google_uuid//:uuid",
+        "@com_github_jackc_pgx_v5//:pgx",
         "@com_github_stretchr_testify//assert",
         "@com_github_stretchr_testify//require",
     ],
@@ -426,6 +428,57 @@ go_test(
     size = "large",
     timeout = "long",
     srcs = ["strategy_integration_test.go"],
+    gotags = ["integration"],
+    tags = [
+        "external",
+        "integration",
+        "manual",
+        "no-cache",
+        "no-sandbox",
+        "requires-network",
+    ],
+    deps = [
+        ":tools",
+        "//audience_score_system/mcp/server",
+        "//audience_score_system/migrate/schema",
+        "//audience_score_system/store",
+        "//libs/go/dbtest",
+        "//libs/go/mcpauth",
+        "//libs/go/migrate",
+        "@com_github_google_uuid//:uuid",
+        "@com_github_jackc_pgx_v5//pgxpool",
+        "@com_github_jackc_pgx_v5//stdlib",
+        "@com_github_modelcontextprotocol_go_sdk//mcp",
+        "@com_github_stretchr_testify//assert",
+        "@com_github_stretchr_testify//require",
+    ],
+)
+
+# invite_co_creator/promote_to_co_creator/remove_channel_person
+# (access.go, issue #1718, FR30/FR31/FR33): real store.CanInvite/
+# store.CanRemove authorization wired through server.RegisterWrite
+# (Founder/Co-Creator invite+promote authority, the full FR33 removal
+# matrix, and every unauthorized combination leaving the target's open
+# channel_person row byte-identical), the SCD2 grant/revoke writes
+# (valid_to, granted_by_person_id, revoked_by_person_id) landing
+# correctly, invite_co_creator's already_live convergence (with a live
+# Analyst invite on the same Channel left untouched), promote_to_
+# co_creator's idempotent already-co_creator no-op (no second row
+# inserted), remove_channel_person's no-open-role no-op, and
+# idempotency-key replay for all three -- all against the real embedded
+# schema and a real HTTP-hosted MCP server, mirroring
+# schedule_draft_integration_test.go's pattern. Deliberately NOT part of
+# `bazel test //...` -- see //libs/go/dbtest's README for the full
+# rationale.
+#
+# Run it explicitly (requires a working Docker daemon):
+#   bazel test //audience_score_system/mcp/tools:access_integration_test --test_output=all
+go_test(
+    # keep
+    name = "access_integration_test",
+    size = "large",
+    timeout = "long",
+    srcs = ["access_integration_test.go"],
     gotags = ["integration"],
     tags = [
         "external",
