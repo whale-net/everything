@@ -399,6 +399,7 @@ go_test(
         "//libs/go/dbtest",
         "//libs/go/mcpauth",
         "//libs/go/migrate",
+        "@com_github_jackc_pgx_v5//:pgx",
         "@com_github_jackc_pgx_v5//pgxpool",
         "@com_github_jackc_pgx_v5//stdlib",
         "@com_github_modelcontextprotocol_go_sdk//mcp",
@@ -500,6 +501,96 @@ go_test(
         "//libs/go/migrate",
         "@com_github_google_uuid//:uuid",
         "@com_github_jackc_pgx_v5//pgxpool",
+        "@com_github_jackc_pgx_v5//stdlib",
+        "@com_github_modelcontextprotocol_go_sdk//mcp",
+        "@com_github_stretchr_testify//assert",
+        "@com_github_stretchr_testify//require",
+    ],
+)
+
+# get_my_work (my_work.go, issue #1719, FR27/FR28): the cross-Channel "my
+# work" aggregate -- three Channels at three tiers each fully/partially/
+# not populated returned correctly with a fourth (no-role) Channel
+# excluded, notes_per_channel capping, an empty-roles caller getting
+# channels: [] rather than an error, and the load-bearing FR28 regression --
+# a role revoked between two get_my_work calls on the SAME *mcp.
+# ClientSession/credential drops that Channel out of the very next call,
+# with no reconnect or re-mint -- all against the real embedded schema and
+# a real HTTP-hosted MCP server, mirroring browse_integration_test.go's
+# pattern. Deliberately NOT part of `bazel test //...` -- see
+# //libs/go/dbtest's README for the full rationale.
+#
+# Run it explicitly (requires a working Docker daemon):
+#   bazel test //audience_score_system/mcp/tools:my_work_integration_test --test_output=all
+go_test(
+    # keep
+    name = "my_work_integration_test",
+    size = "large",
+    timeout = "long",
+    srcs = ["my_work_integration_test.go"],
+    gotags = ["integration"],
+    tags = [
+        "external",
+        "integration",
+        "manual",
+        "no-cache",
+        "no-sandbox",
+        "requires-network",
+    ],
+    deps = [
+        ":tools",
+        "//audience_score_system/mcp/server",
+        "//audience_score_system/migrate/schema",
+        "//audience_score_system/store",
+        "//libs/go/dbtest",
+        "//libs/go/mcpauth",
+        "//libs/go/migrate",
+        "@com_github_google_uuid//:uuid",
+        "@com_github_jackc_pgx_v5//stdlib",
+        "@com_github_modelcontextprotocol_go_sdk//mcp",
+        "@com_github_stretchr_testify//assert",
+        "@com_github_stretchr_testify//require",
+    ],
+)
+
+# get_channel_access (access_audit.go, issue #1719, FR35): Founder/
+# Co-Creator roster + audit-trail reads, the load-bearing FR35 assertion
+# that an Analyst is refused the WHOLE tool (store.CanViewAudit, not
+# RegisterRead's more permissive automatic store.CanRead gate) with
+# neither roster nor history leaking through, the existing ChannelScoped
+# non-member rejection, history's newest-first grant+revoke ordering and
+# history_limit, and pre-M2/no-actor rows rendering "unknown" rather than
+# a fabricated name -- all against the real embedded schema and a real
+# HTTP-hosted MCP server, mirroring access_integration_test.go's pattern.
+# Deliberately NOT part of `bazel test //...` -- see //libs/go/dbtest's
+# README for the full rationale.
+#
+# Run it explicitly (requires a working Docker daemon):
+#   bazel test //audience_score_system/mcp/tools:access_audit_integration_test --test_output=all
+go_test(
+    # keep
+    name = "access_audit_integration_test",
+    size = "large",
+    timeout = "long",
+    srcs = ["access_audit_integration_test.go"],
+    gotags = ["integration"],
+    tags = [
+        "external",
+        "integration",
+        "manual",
+        "no-cache",
+        "no-sandbox",
+        "requires-network",
+    ],
+    deps = [
+        ":tools",
+        "//audience_score_system/mcp/server",
+        "//audience_score_system/migrate/schema",
+        "//audience_score_system/store",
+        "//libs/go/dbtest",
+        "//libs/go/mcpauth",
+        "//libs/go/migrate",
+        "@com_github_google_uuid//:uuid",
         "@com_github_jackc_pgx_v5//stdlib",
         "@com_github_modelcontextprotocol_go_sdk//mcp",
         "@com_github_stretchr_testify//assert",

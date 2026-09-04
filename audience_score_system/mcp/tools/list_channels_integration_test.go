@@ -23,12 +23,15 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"sync/atomic"
 	"testing"
 
-	_ "github.com/jackc/pgx/v5/stdlib"
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
+	_ "github.com/jackc/pgx/v5/stdlib"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -44,8 +47,10 @@ import (
 
 // newListChannelsTestStack mirrors schedule_read_integration_test.go's
 // newScheduleTestStack: an isolated Postgres via dbtest with every real
-// embedded migration applied.
-func newListChannelsTestStack(t *testing.T) (*store.Store, *pgxpool.Pool) {
+// embedded migration applied. Returns pg (not just its Pool) so callers
+// that need a second, separately-traced pool against the same database
+// (e.g. lcQueryCounter below) have its ConnString available.
+func newListChannelsTestStack(t *testing.T) (*store.Store, *dbtest.Postgres) {
 	t.Helper()
 	ctx := context.Background()
 
@@ -58,7 +63,38 @@ func newListChannelsTestStack(t *testing.T) (*store.Store, *pgxpool.Pool) {
 	runner := migrate.NewRunner(sqlDB, schema.Migrations, schema.Dir)
 	require.NoError(t, runner.Up(), "apply every migration from the real embedded schema")
 
-	return store.New(pg.Pool), pg.Pool
+	return store.New(pg.Pool), pg
+}
+
+// lcQueryCounter is a pgx.QueryTracer that counts every SQL statement
+// issued through the pool it's attached to -- mirrors store_integration_
+// test.go's queryCounter/tracedStore pattern (issues #1716/#1717), used
+// here to prove FR26/NFR9: list_channels issues a bounded (not per-Channel)
+// number of queries.
+type lcQueryCounter struct{ n atomic.Int64 }
+
+func (q *lcQueryCounter) TraceQueryStart(ctx context.Context, _ *pgx.Conn, _ pgx.TraceQueryStartData) context.Context {
+	q.n.Add(1)
+	return ctx
+}
+
+func (q *lcQueryCounter) TraceQueryEnd(context.Context, *pgx.Conn, pgx.TraceQueryEndData) {}
+
+// tracedListChannelsStore builds a second *store.Store against pg's
+// database through a pool whose every query is counted by counter.
+func tracedListChannelsStore(t *testing.T, pg *dbtest.Postgres, counter *lcQueryCounter) *store.Store {
+	t.Helper()
+	ctx := context.Background()
+
+	cfg, err := pgxpool.ParseConfig(pg.ConnString)
+	require.NoError(t, err)
+	cfg.ConnConfig.Tracer = counter
+
+	pool, err := pgxpool.NewWithConfig(ctx, cfg)
+	require.NoError(t, err)
+	t.Cleanup(pool.Close)
+
+	return store.New(pool)
 }
 
 // newTestCredentialStore builds the mcpauth.CredentialStore against pool's
@@ -116,7 +152,7 @@ func newListChannelsTestServer(t *testing.T, st *store.Store, pool *pgxpool.Pool
 
 	srv := server.New(st)
 	reg := server.NewRegistry(srv, st)
-	tools.RegisterListChannels(reg, st.Roles())
+	tools.RegisterListChannels(reg, st.Access())
 
 	handler := server.NewHTTPHandler(srv, newTestCredentialStore(t, pool), server.ResourceMetadataConfig{
 		Resource:            "https://mcp.example.com",
@@ -148,13 +184,15 @@ func lcCall(t *testing.T, cs *mcp.ClientSession) (*mcp.CallToolResult, tools.Lis
 // ── list_channels ────────────────────────────────────────────────────────
 
 func TestListChannels_ReturnsOnlyCallersChannelsWithRoleAndConnectionState(t *testing.T) {
-	st, pool := newListChannelsTestStack(t)
+	st, pg := newListChannelsTestStack(t)
 	ctx := context.Background()
-	creds := newTestCredentialStore(t, pool)
+	creds := newTestCredentialStore(t, pg.Pool)
 
 	creator, _, err := st.Persons().UpsertByGoogleSubject(ctx, "sub-lc-creator", "lc-creator@example.com", "Creator")
 	require.NoError(t, err)
 	analyst, _, err := st.Persons().UpsertByGoogleSubject(ctx, "sub-lc-analyst", "lc-analyst@example.com", "Analyst")
+	require.NoError(t, err)
+	coCreator, _, err := st.Persons().UpsertByGoogleSubject(ctx, "sub-lc-cocreator", "lc-cocreator@example.com", "CoCreator")
 	require.NoError(t, err)
 	unassociated, _, err := st.Persons().UpsertByGoogleSubject(ctx, "sub-lc-unassoc", "lc-unassoc@example.com", "Unassociated")
 	require.NoError(t, err)
@@ -162,8 +200,9 @@ func TestListChannels_ReturnsOnlyCallersChannelsWithRoleAndConnectionState(t *te
 	ch, err := st.Channels().Create(ctx, "yt-list-channels-1", "My Channel", creator.ID)
 	require.NoError(t, err)
 	require.NoError(t, st.Roles().AddRole(ctx, ch.ID, analyst.ID, store.RoleAnalyst, creator.ID))
+	require.NoError(t, st.Roles().AddRole(ctx, ch.ID, coCreator.ID, store.RoleCoCreator, creator.ID))
 
-	ts := newListChannelsTestServer(t, st, pool)
+	ts := newListChannelsTestServer(t, st, pg.Pool)
 
 	t.Run("creator sees the channel with role creator", func(t *testing.T) {
 		token, _, err := creds.Mint(ctx, creator.ID.String())
@@ -189,6 +228,17 @@ func TestListChannels_ReturnsOnlyCallersChannelsWithRoleAndConnectionState(t *te
 		assert.Equal(t, []string{string(store.RoleAnalyst)}, out.Channels[0].Roles)
 	})
 
+	t.Run("co-creator sees the same channel with role co_creator (FR26)", func(t *testing.T) {
+		token, _, err := creds.Mint(ctx, coCreator.ID.String())
+		require.NoError(t, err)
+		cs := lcConnectAs(t, ts, token)
+		res, out := lcCall(t, cs)
+		require.False(t, res.IsError, "unexpected error: %s", lcTextOf(res))
+		require.Len(t, out.Channels, 1)
+		assert.Equal(t, ch.ID.String(), out.Channels[0].ChannelID)
+		assert.Equal(t, []string{string(store.RoleCoCreator)}, out.Channels[0].Roles)
+	})
+
 	t.Run("unassociated Person sees an empty list, not an error", func(t *testing.T) {
 		token, _, err := creds.Mint(ctx, unassociated.ID.String())
 		require.NoError(t, err)
@@ -200,9 +250,9 @@ func TestListChannels_ReturnsOnlyCallersChannelsWithRoleAndConnectionState(t *te
 }
 
 func TestListChannels_MultipleChannels_AllReturned(t *testing.T) {
-	st, pool := newListChannelsTestStack(t)
+	st, pg := newListChannelsTestStack(t)
 	ctx := context.Background()
-	creds := newTestCredentialStore(t, pool)
+	creds := newTestCredentialStore(t, pg.Pool)
 
 	person, _, err := st.Persons().UpsertByGoogleSubject(ctx, "sub-lc-multi", "lc-multi@example.com", "Multi")
 	require.NoError(t, err)
@@ -212,7 +262,7 @@ func TestListChannels_MultipleChannels_AllReturned(t *testing.T) {
 	chB, err := st.Channels().Create(ctx, "yt-list-channels-b", "Channel B", person.ID)
 	require.NoError(t, err)
 
-	ts := newListChannelsTestServer(t, st, pool)
+	ts := newListChannelsTestServer(t, st, pg.Pool)
 	token, _, err := creds.Mint(ctx, person.ID.String())
 	require.NoError(t, err)
 
@@ -225,4 +275,62 @@ func TestListChannels_MultipleChannels_AllReturned(t *testing.T) {
 		gotIDs[i] = c.ChannelID
 	}
 	assert.ElementsMatch(t, []string{chA.ID.String(), chB.ID.String()}, gotIDs)
+}
+
+// TestListChannels_IssuesBoundedQueryCount_NFR9 is the concrete regression
+// test for issue #1719's fix: the pre-#1719 implementation called
+// store.RoleStore.RolesFor once per Channel inside a `for` loop, so its
+// query count scaled with how many Channels the caller held a role on. The
+// AccessStore.ChannelsWithRoleForPerson-backed implementation must issue
+// the SAME number of queries whether the caller holds a role on one
+// Channel or five.
+func TestListChannels_IssuesBoundedQueryCount_NFR9(t *testing.T) {
+	st, pg := newListChannelsTestStack(t)
+	ctx := context.Background()
+	creds := newTestCredentialStore(t, pg.Pool)
+
+	person, _, err := st.Persons().UpsertByGoogleSubject(ctx, "sub-lc-nfr9", "lc-nfr9@example.com", "NFR9 Person")
+	require.NoError(t, err)
+
+	founder1, _, err := st.Persons().UpsertByGoogleSubject(ctx, "sub-lc-nfr9-f1", "lc-nfr9-f1@example.com", "Founder 1")
+	require.NoError(t, err)
+	ch1, err := st.Channels().Create(ctx, "yt-lc-nfr9-1", "Channel 1", founder1.ID)
+	require.NoError(t, err)
+	require.NoError(t, st.Roles().AddRole(ctx, ch1.ID, person.ID, store.RoleAnalyst, founder1.ID))
+
+	counter := &lcQueryCounter{}
+	tracedSt := tracedListChannelsStore(t, pg, counter)
+	ts := newListChannelsTestServer(t, tracedSt, pg.Pool)
+
+	token, _, err := creds.Mint(ctx, person.ID.String())
+	require.NoError(t, err)
+	cs := lcConnectAs(t, ts, token)
+
+	counter.n.Store(0)
+	res, out := lcCall(t, cs)
+	require.False(t, res.IsError, "unexpected error: %s", lcTextOf(res))
+	require.Len(t, out.Channels, 1)
+	queriesForOneChannel := counter.n.Load()
+	require.Greater(t, queriesForOneChannel, int64(0), "sanity: the call must issue at least one query")
+
+	// Add four more Channels for the same Person (5 total) -- an N+1
+	// implementation would issue proportionally more queries for the next
+	// call; AccessStore.ChannelsWithRoleForPerson must not.
+	for i := 0; i < 4; i++ {
+		founder, _, err := st.Persons().UpsertByGoogleSubject(ctx,
+			fmt.Sprintf("sub-lc-nfr9-f%d", i+2), fmt.Sprintf("lc-nfr9-f%d@example.com", i+2), fmt.Sprintf("Founder %d", i+2))
+		require.NoError(t, err)
+		ch, err := st.Channels().Create(ctx, fmt.Sprintf("yt-lc-nfr9-%d", i+2), fmt.Sprintf("Channel %d", i+2), founder.ID)
+		require.NoError(t, err)
+		require.NoError(t, st.Roles().AddRole(ctx, ch.ID, person.ID, store.RoleAnalyst, founder.ID))
+	}
+
+	counter.n.Store(0)
+	res2, out2 := lcCall(t, cs)
+	require.False(t, res2.IsError, "unexpected error: %s", lcTextOf(res2))
+	require.Len(t, out2.Channels, 5)
+	queriesForFiveChannels := counter.n.Load()
+
+	assert.Equal(t, queriesForOneChannel, queriesForFiveChannels,
+		"list_channels must issue the same number of queries regardless of how many Channels the caller holds a role on (NFR9) -- a per-Channel RolesFor loop would scale this with Channel count")
 }
