@@ -2,7 +2,9 @@ package main
 
 import (
 	"context"
+	"fmt"
 	"log/slog"
+	"strings"
 	"testing"
 	"time"
 
@@ -96,6 +98,12 @@ type insertedConfig struct {
 	configJSON []byte
 }
 
+// renamedBoard is one recorded fakeRepository.RenameBoard call.
+type renamedBoard struct {
+	boardID int64
+	name    string
+}
+
 // publishedMessage is one recorded fakePublisher.Publish call.
 type publishedMessage struct {
 	exchange   string
@@ -128,6 +136,11 @@ type fakeRepository struct {
 	// board with no sensors yet / no config ever pushed.
 	inventory    map[int64][]InventorySensor
 	lastAccepted map[string]*configpb.DeviceConfig
+
+	// renamedBoards records every RenameBoard(boardID, name) call, in
+	// order, so a test can assert exactly what the repository received (or
+	// that it received nothing at all on a denied/rejected attempt).
+	renamedBoards []renamedBoard
 
 	// Read-path fixtures, returned identically regardless of caller -- FR5
 	// leaves reads unscoped by ownership, so these have no per-caller
@@ -223,6 +236,11 @@ func (f *fakeRepository) ClaimBoard(_ context.Context, boardID, leaflabUserID in
 	}
 	f.owners[boardID] = leaflabUserID
 	f.claimedBoards = append(f.claimedBoards, claimedBoard{boardID: boardID, leaflabUserID: leaflabUserID})
+	return nil
+}
+
+func (f *fakeRepository) RenameBoard(_ context.Context, boardID int64, name string) error {
+	f.renamedBoards = append(f.renamedBoards, renamedBoard{boardID: boardID, name: name})
 	return nil
 }
 
@@ -649,4 +667,179 @@ func boardWithStateByID(boards []*pb.BoardWithState, boardID int64) *pb.BoardWit
 		}
 	}
 	return nil
+}
+
+// -- RenameBoard (#1767, FR3) --------------------------------------------
+//
+// These exercise LeafLabAPIServer.RenameBoard directly against the same
+// fakeRepository/fakePublisher doubles as the PushDeviceConfig tests
+// above, asserting both the returned error/response and, via
+// repo.renamedBoards and pub.published, exactly what (if anything) reached
+// the repository and the publisher -- a denied or rejected call must
+// write and publish nothing.
+
+// TestRenameBoard_Owner_Succeeds is Testing criterion 1: the board's
+// current owner can rename it, and the repository receives the exact
+// string the caller sent.
+func TestRenameBoard_Owner_Succeeds(t *testing.T) {
+	repo := newFakeRepository()
+	repo.users["owner-sub"] = 1
+	repo.owners[100] = 1
+	repo.boardIdentity[100] = BoardIdentity{DeviceID: "device-a"}
+	srv := newOwnershipTestServer(repo, &fakePublisher{})
+
+	resp, err := srv.RenameBoard(claimsCtx("owner-sub"), &pb.RenameBoardRequest{BoardId: 100, Name: "greenhouse"})
+	require.NoError(t, err)
+	require.NotNil(t, resp)
+	require.Len(t, repo.renamedBoards, 1)
+	assert.Equal(t, renamedBoard{boardID: 100, name: "greenhouse"}, repo.renamedBoards[0])
+}
+
+// TestRenameBoard_NonOwner_PermissionDenied is Testing criterion 2: an
+// authenticated caller who is not the board's owner is denied, and the
+// write never reaches the repository.
+func TestRenameBoard_NonOwner_PermissionDenied(t *testing.T) {
+	repo := newFakeRepository()
+	repo.users["owner-sub"] = 1
+	repo.users["other-sub"] = 2
+	repo.owners[100] = 1
+	repo.boardIdentity[100] = BoardIdentity{DeviceID: "device-a"}
+	srv := newOwnershipTestServer(repo, &fakePublisher{})
+
+	_, err := srv.RenameBoard(claimsCtx("other-sub"), &pb.RenameBoardRequest{BoardId: 100, Name: "greenhouse"})
+	require.Error(t, err)
+	assert.Equal(t, codes.PermissionDenied, status.Code(err))
+	assert.Empty(t, repo.renamedBoards)
+}
+
+// TestRenameBoard_UnownedBoard_PermissionDenied is Testing criterion 3: an
+// unowned board denies every renamer -- authorizeBoardWrite treats
+// "unowned" identically to "owned by someone else", not as a free-for-all.
+func TestRenameBoard_UnownedBoard_PermissionDenied(t *testing.T) {
+	repo := newFakeRepository()
+	repo.users["some-sub"] = 1
+	repo.boardIdentity[100] = BoardIdentity{DeviceID: "device-a"}
+	// No repo.owners[100] entry -- unowned.
+	srv := newOwnershipTestServer(repo, &fakePublisher{})
+
+	_, err := srv.RenameBoard(claimsCtx("some-sub"), &pb.RenameBoardRequest{BoardId: 100, Name: "greenhouse"})
+	require.Error(t, err)
+	assert.Equal(t, codes.PermissionDenied, status.Code(err))
+	assert.Empty(t, repo.renamedBoards)
+}
+
+// TestRenameBoard_AdminRole_NoBypass_PermissionDenied is Testing criterion
+// 4 (FR5): holding the admin role grants no rename access to a board the
+// caller does not own -- authorizeBoardWrite consults no role information
+// at all, so RenameBoard has no admin exception either.
+func TestRenameBoard_AdminRole_NoBypass_PermissionDenied(t *testing.T) {
+	repo := newFakeRepository()
+	repo.users["admin-sub"] = 1
+	repo.users["owner-sub"] = 2
+	repo.owners[100] = 2 // owned by someone else
+	repo.boardIdentity[100] = BoardIdentity{DeviceID: "device-a"}
+	srv := newOwnershipTestServer(repo, &fakePublisher{})
+
+	_, err := srv.RenameBoard(claimsCtx("admin-sub", "admin"), &pb.RenameBoardRequest{BoardId: 100, Name: "greenhouse"})
+	require.Error(t, err)
+	assert.Equal(t, codes.PermissionDenied, status.Code(err))
+	assert.Empty(t, repo.renamedBoards)
+}
+
+// TestRenameBoard_EmptyOrWhitespaceName_InvalidArgument is Testing
+// criterion 5: an empty string and a whitespace-only string are both
+// rejected as InvalidArgument, and neither reaches the repository.
+func TestRenameBoard_EmptyOrWhitespaceName_InvalidArgument(t *testing.T) {
+	for _, name := range []string{"", "   ", "\t\n"} {
+		t.Run(fmt.Sprintf("%q", name), func(t *testing.T) {
+			repo := newFakeRepository()
+			repo.users["owner-sub"] = 1
+			repo.owners[100] = 1
+			repo.boardIdentity[100] = BoardIdentity{DeviceID: "device-a"}
+			srv := newOwnershipTestServer(repo, &fakePublisher{})
+
+			_, err := srv.RenameBoard(claimsCtx("owner-sub"), &pb.RenameBoardRequest{BoardId: 100, Name: name})
+			require.Error(t, err)
+			assert.Equal(t, codes.InvalidArgument, status.Code(err))
+			assert.Empty(t, repo.renamedBoards)
+		})
+	}
+}
+
+// TestRenameBoard_UnknownBoardID_NotFound covers the RPC section's
+// "Unknown board_id -> codes.NotFound" contract point: RenameBoard checks
+// existence (GetBoardIdentity) before authorization, so a board_id with no
+// row at all is distinguishable from an unowned one.
+func TestRenameBoard_UnknownBoardID_NotFound(t *testing.T) {
+	repo := newFakeRepository()
+	repo.users["some-sub"] = 1
+	// No repo.boardIdentity[999] entry -- unknown board_id.
+	srv := newOwnershipTestServer(repo, &fakePublisher{})
+
+	_, err := srv.RenameBoard(claimsCtx("some-sub"), &pb.RenameBoardRequest{BoardId: 999, Name: "greenhouse"})
+	require.Error(t, err)
+	assert.Equal(t, codes.NotFound, status.Code(err))
+	assert.Empty(t, repo.renamedBoards)
+}
+
+// TestRenameBoard_NoLengthFormatOrUniquenessRule is Testing criterion 6: a
+// very long name, a name with Unicode/punctuation/spaces, and a name equal
+// to another board's existing name all succeed identically -- no length,
+// format, or uniqueness rule exists on this path. The task issue's red/
+// green discipline note ("add a uniqueness check and confirm this test
+// goes red; remove it and confirm green") was exercised by hand against
+// this test during Testing (see the Testing-phase issue comment on #1767)
+// rather than left as permanent test code, since a real uniqueness check
+// is explicitly a non-goal this test must keep failing forever, not a
+// feature toggle to leave lying around.
+func TestRenameBoard_NoLengthFormatOrUniquenessRule(t *testing.T) {
+	veryLong := strings.Repeat("a", 10_000)
+	unicodePunctuation := "Grow-Room #2 (北棟) — \"Alice's\" tent, row 3!"
+	sameAsAnotherBoard := "duplicate-name"
+
+	for _, tt := range []struct {
+		name string
+		want string
+	}{
+		{name: "very long name", want: veryLong},
+		{name: "unicode and punctuation", want: unicodePunctuation},
+		{name: "identical to another board's existing name", want: sameAsAnotherBoard},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			repo := newFakeRepository()
+			repo.users["owner-sub"] = 1
+			repo.owners[100] = 1
+			repo.owners[200] = 1
+			repo.boardIdentity[100] = BoardIdentity{DeviceID: "device-a"}
+			repo.boardIdentity[200] = BoardIdentity{DeviceID: "device-b"}
+			srv := newOwnershipTestServer(repo, &fakePublisher{})
+
+			// Board 200 already has this name (conceptually -- the fake
+			// repository has no name-storage state to seed, since
+			// RenameBoard only ever issues a blind UPDATE; what matters
+			// here is that renaming board 100 to the same string is not
+			// rejected).
+			resp, err := srv.RenameBoard(claimsCtx("owner-sub"), &pb.RenameBoardRequest{BoardId: 100, Name: tt.want})
+			require.NoError(t, err)
+			require.NotNil(t, resp)
+			require.Len(t, repo.renamedBoards, 1)
+			assert.Equal(t, tt.want, repo.renamedBoards[0].name)
+		})
+	}
+}
+
+// TestRenameBoard_NoPublish is Testing criterion 7: a successful rename
+// issues no publish -- the rename path never pushes firmware.DeviceConfig
+// (board name is not part of it at all) and never touches RabbitMQ.
+func TestRenameBoard_NoPublish(t *testing.T) {
+	repo := newFakeRepository()
+	repo.users["owner-sub"] = 1
+	repo.owners[100] = 1
+	repo.boardIdentity[100] = BoardIdentity{DeviceID: "device-a"}
+	pub := &fakePublisher{}
+	srv := newOwnershipTestServer(repo, pub)
+
+	_, err := srv.RenameBoard(claimsCtx("owner-sub"), &pb.RenameBoardRequest{BoardId: 100, Name: "greenhouse"})
+	require.NoError(t, err)
+	assert.Empty(t, pub.published)
 }

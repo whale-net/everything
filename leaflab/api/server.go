@@ -64,6 +64,7 @@ type repositoryStore interface {
 	ListBoards(ctx context.Context) ([]BoardRow, error)
 	ListBoardsWithState(ctx context.Context) ([]BoardWithReadingRow, error)
 	GetBoardIdentity(ctx context.Context, boardID int64) (BoardIdentity, error)
+	RenameBoard(ctx context.Context, boardID int64, name string) error
 	ListSensorDetailsForBoard(ctx context.Context, boardID int64) ([]SensorDetailRow, error)
 	SensorExists(ctx context.Context, sensorID int64) (bool, error)
 	GetSensorReadingHistory(ctx context.Context, sensorID int64, from, to time.Time) (*SensorReadingHistory, error)
@@ -522,9 +523,47 @@ func (s *LeafLabAPIServer) ClaimBoard(ctx context.Context, req *pb.ClaimBoardReq
 	return &pb.ClaimBoardResponse{}, nil
 }
 
-// RenameBoard is implemented by the RenameBoard task (FR3).
+// RenameBoard renames a board the calling user owns (FR3). The write goes
+// straight to Postgres: it is never gated on the board being online and
+// never waits on a device round-trip (LB2) -- an offline board's name
+// changes immediately, and no config push happens on this path (board name
+// is not part of firmware.DeviceConfig at all).
+//
+// Existence is checked first (GetBoardIdentity, NotFound on
+// pgx.ErrNoRows) -- this must precede authorizeBoardWrite, not follow it:
+// authorizeBoardWrite's owned=false covers both "board exists but is
+// unowned" and "board_id does not exist" identically (PermissionDenied), so
+// checking existence afterward would never be reached for a genuinely
+// unknown board_id. Existence is not ownership-gated information here any
+// more than it already is on GetBoardDetail (FR5: reads are unscoped by
+// ownership), so checking it ahead of authorizeBoardWrite discloses
+// nothing new.
+//
+// Validation is non-empty only (empty or whitespace-only -> InvalidArgument):
+// no length limit, no character-set restriction, and no uniqueness check
+// across boards -- a decided non-goal for this milestone, not a deferral.
 func (s *LeafLabAPIServer) RenameBoard(ctx context.Context, req *pb.RenameBoardRequest) (*pb.RenameBoardResponse, error) {
-	return nil, status.Error(codes.Unimplemented, "RenameBoard: not implemented")
+	if _, err := s.repo.GetBoardIdentity(ctx, req.BoardId); err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return nil, status.Errorf(codes.NotFound, "board %d not found", req.BoardId)
+		}
+		return nil, status.Errorf(codes.Internal, "get board identity: %v", err)
+	}
+
+	if _, err := s.authorizeBoardWrite(ctx, req.BoardId); err != nil {
+		return nil, err
+	}
+
+	if strings.TrimSpace(req.Name) == "" {
+		return nil, status.Error(codes.InvalidArgument, "name must not be empty")
+	}
+
+	if err := s.repo.RenameBoard(ctx, req.BoardId, req.Name); err != nil {
+		return nil, status.Errorf(codes.Internal, "rename board: %v", err)
+	}
+
+	s.logger.Info("board renamed", "board_id", req.BoardId, "name", req.Name)
+	return &pb.RenameBoardResponse{}, nil
 }
 
 // RenameSensor is implemented by the RenameSensor task (FR4).
