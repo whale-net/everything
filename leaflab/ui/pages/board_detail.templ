@@ -70,10 +70,16 @@ templ BoardDetail(data components.LayoutData, resp *leaflabapipb.GetBoardDetailR
 // hx-target="#board-header" hx-swap="outerHTML" -- swapping only the
 // header, never the sensors table below it.
 //
-// renameErr, when non-empty, renders inline under the rename form --
-// handleRenameBoard passes the humanized message for InvalidArgument
-// (empty name) or PermissionDenied (non-owner/unowned), never a raw 500;
-// see handlers_boards.go's handleRenameBoard.
+// renameErr, when non-empty, always renders inline (FR3's Testing
+// criterion 9) -- handleRenameBoard passes the humanized message for
+// InvalidArgument (empty name) or PermissionDenied (non-owner/unowned),
+// never a raw 500; see handlers_boards.go's handleRenameBoard. This must
+// not be gated on ownedByCaller: a PermissionDenied rejection's
+// post-rejection GetBoardDetail refetch reports ownedByCaller == false
+// (the caller was never the owner, or the board is unowned), which would
+// hide renameBoardForm -- and renameErr along with it -- right when the
+// error most needs to be shown. So renameErr renders outside/alongside
+// the owner-gated form, not only inside it.
 //
 // The title uses boardDisplayName (boards.templ), the same board-name
 // fallback rule used everywhere else in the app (falls back to deviceID
@@ -91,6 +97,8 @@ templ BoardHeader(boardID int64, deviceID, boardName string, ownedByCaller bool,
 		<p class="font-mono text-sm text-base-content/70 mb-4">{ deviceID }</p>
 		if ownedByCaller {
 			@renameBoardForm(boardID, boardName, deviceID, renameErr)
+		} else if renameErr != "" {
+			<span class="text-sm text-error">{ renameErr }</span>
 		}
 	</div>
 }
