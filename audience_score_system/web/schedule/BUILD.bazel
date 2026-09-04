@@ -1,7 +1,8 @@
 load("@rules_go//go:def.bzl", "go_test")
 load("//tools:templ.bzl", "templ_library")
 
-# Creator-only schedule approval (C8: FR19, FR20) -- handlers (schedule.go)
+# Creator-tier schedule approval -- Founder or Co-Creator, symmetrically
+# per FR32 (C8: FR19, FR20) -- handlers (schedule.go)
 # and templ views (views.templ) in one package, see schedule.go's package
 # doc comment for why they are not split across a components/pages sibling
 # pair like web/pages (mirrors web/invite's own rationale). Postgres-backed

@@ -616,7 +616,7 @@ func TestHandleList_CreatorAndAnalyst_CanRead_OutsiderForbidden(t *testing.T) {
 	entry := s.draftEntry(t, ctx, ch, creator, time.Now().UTC().Add(24*time.Hour))
 
 	// entryCard (views.templ) never renders the entry's raw uuid as text --
-	// only inside the Creator-only affordance form actions -- so the read
+	// only inside the Creator-tier affordance form actions -- so the read
 	// side is asserted via the bound idea's title, which IS rendered
 	// unconditionally for both roles.
 	var ideaTitle string

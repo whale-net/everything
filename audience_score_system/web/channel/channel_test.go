@@ -340,6 +340,32 @@ func TestHandleReconnect_Creator_RedirectsToConsent(t *testing.T) {
 	assert.Equal(t, 1, exch.calls)
 }
 
+// TestHandleReconnect_CoCreator_RedirectsToConsent mirrors
+// TestHandleReconnect_Creator_RedirectsToConsent with a role=co_creator
+// caller, proving FR32's symmetric authority: a Co-Creator has the exact
+// same reconnect authority as a Founder (no consensus or Founder-tiebreak
+// logic exists anywhere, NFR6).
+func TestHandleReconnect_CoCreator_RedirectsToConsent(t *testing.T) {
+	roles := &fakeRoleStore{roles: []store.Role{store.RoleCoCreator}}
+	exch := &stubExchanger{authURL: "https://accounts.google.com/o/oauth2/v2/auth?scope=x"}
+	h := &Handler{
+		roles:        roles,
+		sessions:     testSessions(),
+		oauth2Config: exch,
+	}
+
+	person := &store.Person{ID: uuid.New()}
+	channelID := uuid.New()
+	req := withPerson(httptest.NewRequest(http.MethodPost, "/channels/"+channelID.String()+"/reconnect", nil), person)
+	req.SetPathValue("id", channelID.String())
+	w := httptest.NewRecorder()
+	h.HandleReconnect(w, req)
+
+	assert.Equal(t, http.StatusFound, w.Code, "a live Co-Creator must be redirected to consent, same as a Founder")
+	assert.Equal(t, exch.authURL, w.Header().Get("Location"))
+	assert.Equal(t, 1, exch.calls)
+}
+
 func TestHandleReconnect_NotSignedIn_Unauthorized(t *testing.T) {
 	h := &Handler{roles: &fakeRoleStore{}, sessions: testSessions()}
 
@@ -628,6 +654,44 @@ func TestHandleCallback_ExistingChannel_CreatorReconnect_SavesAndSetsConnected(t
 	require.True(t, channels.setConnectionStateCalled)
 	assert.Equal(t, existing.ID, channels.setConnectionStateChannelID)
 	assert.Equal(t, store.ConnectionStateConnected, channels.setConnectionStateValue, "a successful reconnect must return connection_state to connected")
+	assert.False(t, channels.createCalled, "an existing Channel must never be re-Created")
+
+	require.Len(t, sched.calls, 1, "FR14/NFR4 (issue #1614): a successful reconnect must call EnsureSchedule exactly once")
+	assert.Equal(t, existing.ID, sched.calls[0], "EnsureSchedule must be called with the existing Channel's ID")
+}
+
+// TestHandleCallback_ExistingChannel_CoCreatorReconnect_SavesAndSetsConnected
+// mirrors TestHandleCallback_ExistingChannel_CreatorReconnect_SavesAndSetsConnected
+// with a role=co_creator caller, proving FR32's symmetric authority holds
+// on HandleCallback's reconnect branch too, not just HandleReconnect.
+func TestHandleCallback_ExistingChannel_CoCreatorReconnect_SavesAndSetsConnected(t *testing.T) {
+	sessions := testSessions()
+	exch := &stubExchanger{token: &oauth2.Token{AccessToken: "at", RefreshToken: "rt"}}
+	existing := store.Channel{ID: uuid.New(), YouTubeChannelID: "yt-existing"}
+	channels := &fakeChannelStore{getByYouTubeChannelIDResult: existing}
+	tok := &fakeTokenStore{}
+	sched := &stubScheduleManager{}
+	h := &Handler{
+		sessions:     sessions,
+		oauth2Config: exch,
+		channels:     channels,
+		roles:        &fakeRoleStore{roles: []store.Role{store.RoleCoCreator}},
+		tokens:       tok,
+		resolver:     stubResolver{youtubeChannelID: "yt-existing"},
+		schedules:    sched,
+	}
+
+	person := &store.Person{ID: uuid.New()}
+	req := withPerson(callbackWithValidState(t, sessions, "abc"), person)
+	w := httptest.NewRecorder()
+	h.HandleCallback(w, req)
+
+	require.Equal(t, http.StatusSeeOther, w.Code, "body: %s", w.Body.String())
+	require.True(t, tok.saveCalled)
+	assert.Equal(t, existing.ID, tok.saveChannelID)
+	require.True(t, channels.setConnectionStateCalled)
+	assert.Equal(t, existing.ID, channels.setConnectionStateChannelID)
+	assert.Equal(t, store.ConnectionStateConnected, channels.setConnectionStateValue, "a successful Co-Creator reconnect must return connection_state to connected, same as a Founder's")
 	assert.False(t, channels.createCalled, "an existing Channel must never be re-Created")
 
 	require.Len(t, sched.calls, 1, "FR14/NFR4 (issue #1614): a successful reconnect must call EnsureSchedule exactly once")
