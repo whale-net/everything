@@ -415,8 +415,8 @@ func TestHandleApprove_ClosedCoCreatorRow_Forbidden(t *testing.T) {
 	require.NoError(t, s.store.Roles().AddRole(ctx, ch.ID, former.ID, store.RoleCoCreator, creator.ID))
 	_, err := s.db.Pool.Exec(ctx, `
 		UPDATE channel_person SET valid_to = NOW()
-		WHERE channel_id = $1 AND person_id = $2 AND valid_to IS NULL
-	`, ch.ID, former.ID)
+		WHERE person_id = $1 AND valid_to IS NULL
+	`, former.ID)
 	require.NoError(t, err)
 
 	cookie := s.sessionCookie(t, ctx, former.ID)
