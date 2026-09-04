@@ -259,13 +259,21 @@ this one's.
   gRPC surface. No ownership check applies to them, whether the board is
   owned or unowned — the fence is a gRPC-layer concept and this traffic
   never reaches it.
-- **FR9's corrective push.** When a rename changes what a device's next
-  config should say, `leaflab-processor` issues its own corrective config
-  push internally. It supplies no caller-originated content (every value is
-  already-committed DB state written by an owner's own FR4-authorized
-  rename) and never touches `PushDeviceConfig`. There is no
-  service-identity/machine-auth concept in this repo's `grpcauth` usage, and
-  none was introduced to accommodate this path.
+- **FR9's corrective push.** `leaflab-processor`'s `handleManifest` compares
+  each sensor's device-reported name against the name the DB held for that
+  sensor immediately before the manifest's own writes; a difference means a
+  rename (FR4) or config push (FR8) the device hasn't actually persisted to
+  NVS. On a difference, `leaflab-processor` composes and publishes its own
+  corrective config push internally, using the same
+  `leaflab/configcompose.ComposeDesiredSensors` `PushDeviceConfig` uses. It
+  supplies no caller-originated content (every value is already-committed DB
+  state written by an owner's own FR4-authorized rename) and never touches
+  `PushDeviceConfig`. There is no service-identity/machine-auth concept in
+  this repo's `grpcauth` usage, and none was introduced to accommodate this
+  path. NFR4 bounds this from looping or storming with two Postgres-backed
+  guards (concurrent-outstanding and sequential/reconnect-storm, capped at 3
+  attempts) — see `MQTT.md`'s "Corrective config push (FR9 / NFR4)" section
+  for the full mechanism.
 
 `PushDeviceConfig` also no longer implicitly registers a board: an unknown
 `device_id` is `codes.NotFound`, not a silently-created row (a caller must
@@ -277,18 +285,26 @@ config (M2, FR8, NFR3).** Once `authorizeBoardWrite` clears the caller,
 board's DB sensor inventory (`Repository.ListSensorInventoryForBoard`) and
 its last accepted config (`GetLatestAcceptedConfig`), then merges them with
 the caller's requested overrides through `ComposeDesiredSensors`
-(`leaflab/api/configcompose.go`) — inventory lowest precedence, last
-accepted config next, caller overrides highest, matched by hardware
-identity `(mux_path, i2c_address)` never by name (a rename must not fork a
-sensor into two entries). The result: every sensor the board is known to
-have is in the published `DeviceConfig`, whether or not the caller
+(`leaflab/configcompose` — a shared package imported by both
+`leaflab/api` and `leaflab/processor`, so the two call sites cannot drift
+into two different composition implementations) — inventory lowest
+precedence, last accepted config next, caller overrides highest, matched by
+hardware identity `(mux_path, i2c_address)` never by name (a rename must not
+fork a sensor into two entries). The result: every sensor the board is known
+to have is in the published `DeviceConfig`, whether or not the caller
 mentioned it, so a single-sensor rename or reconfigure never removes or
 resets the board's other sensors (LB3). `ComposeDesiredSensors` takes no
-DB/transport dependencies so it is independently unit-testable and reusable
-by `leaflab-processor`'s FR9 corrective push. The two added reads are each a
+DB/transport dependencies so it is independently unit-testable and is the
+same function, not a copy, `leaflab-processor`'s FR9 corrective push calls —
+composition parity by construction. The two added reads are each a
 single indexed query (`idx_sensor_board_id`, the open-interval partial index
 on `sensor_name_history`) — no per-sensor round trip, so a typical board's
-push stays imperceptibly slower (NFR3).
+push stays imperceptibly slower (NFR3). `PushDeviceConfig` also resets the
+NFR4 corrective-push counters (`corrective_push_attempts`,
+`corrective_push_outstanding_version`) for exactly the sensors the caller
+named (`configcompose.TouchedSensorIDs`), in the same transaction as the
+version insert — same "explicit push re-arms convergence" contract
+`RenameSensor` already implements for FR4.
 
 ---
 

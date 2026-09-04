@@ -1,4 +1,11 @@
-package main
+// Package configcompose composes a board's full desired sensor list from its
+// current DB sensor inventory, its last accepted DeviceConfig, and a set of
+// requested overrides. It is shared, unmodified, by both //leaflab/api's
+// caller-invoked PushDeviceConfig (FR8) and //leaflab/processor's
+// process-internal corrective push (FR9) -- see ComposeDesiredSensors' doc
+// comment for the composition semantics and #1772's "Composition parity
+// with FR8" note for why this must be one function, not two copies.
+package configcompose
 
 import (
 	"fmt"
@@ -97,6 +104,33 @@ func ComposeDesiredSensors(
 	out := make([]*configpb.SensorConfig, 0, len(order))
 	for _, k := range order {
 		out = append(out, base[k])
+	}
+	return out
+}
+
+// TouchedSensorIDs returns the sensor_id of every inventory entry whose
+// hardware identity (i2c_address, mux_path) matches one of overrides --
+// i.e. the sensors a caller-driven config push (FR8) actually named, as
+// opposed to every sensor ComposeDesiredSensors carries through in its
+// output. An override matching no inventory entry (configuring a brand-new
+// sensor for the first time) has no existing sensor_id and is omitted.
+//
+// Used by leaflab/api's PushDeviceConfig to know which sensors' NFR4
+// corrective-push retry counters an explicit push re-arms: only the
+// sensors the caller actually pushed, not the whole board's composed list
+// -- see leaflab plan #1756/#1772 NFR4's "Reset" note ("only a fresh
+// legitimate rename or an explicit config push for that sensor resets the
+// attempt count").
+func TouchedSensorIDs(inventory []InventorySensor, overrides []*configpb.SensorConfig) []int64 {
+	byKey := make(map[hwKey]int64, len(inventory))
+	for _, inv := range inventory {
+		byKey[makeHWKey(inv.I2CAddress, inv.MuxPath)] = inv.SensorID
+	}
+	var out []int64
+	for _, ov := range overrides {
+		if id, ok := byKey[makeHWKey(ov.GetI2CAddress(), ov.GetMuxPath())]; ok {
+			out = append(out, id)
+		}
 	}
 	return out
 }

@@ -7,7 +7,6 @@ go_library(
     name = "api_lib",
     srcs = [
         "auth.go",
-        "configcompose.go",
         "main.go",
         "repository.go",
         "server.go",
@@ -18,6 +17,7 @@ go_library(
         "//firmware/proto:configpb",
         "//firmware/proto:firmwarepb",
         "//leaflab/api/proto:leaflabapipb",
+        "//leaflab/configcompose",
         "//libs/go/db",
         "//libs/go/grpcauth",
         "//libs/go/logging",
@@ -46,7 +46,6 @@ go_test(
     name = "api_test",
     srcs = [
         "auth_test.go",
-        "configcompose_test.go",
         "history_test.go",
         "server_m2_contract_test.go",
         "server_test.go",
@@ -54,8 +53,8 @@ go_test(
     embed = [":api_lib"],
     deps = [
         "//firmware/proto:configpb",
-        "//firmware/proto:firmwarepb",
         "//leaflab/api/proto:leaflabapipb",
+        "//leaflab/configcompose",
         "//libs/go/grpcauth",
         "@com_github_go_jose_go_jose_v4//:go-jose",
         "@com_github_jackc_pgx_v5//:pgx",
