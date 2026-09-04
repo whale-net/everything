@@ -271,6 +271,8 @@ func (app *App) setupRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("/boards", app.auth.RequireAuthFunc(app.auth.WithAccessToken(app.handleBoards)))
 	// handleBoardDetail (#1503: FR6, FR7) -- every sensor on one board.
 	mux.HandleFunc("/boards/{board_id}", app.auth.RequireAuthFunc(app.auth.WithAccessToken(app.handleBoardDetail)))
+	// handleClaimBoard (#1765: FR1, FR2) -- the Claim button's POST target.
+	mux.HandleFunc("POST /boards/{board_id}/claim", app.auth.RequireAuthFunc(app.auth.WithAccessToken(app.handleClaimBoard)))
 	// handleSensorHistory (#1504: FR8, FR9, FR10) -- one sensor's reading
 	// history chart. handleSensorHistoryData is the small JSON endpoint
 	// its chart fetches range data from on every preset click or

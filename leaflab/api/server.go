@@ -62,10 +62,13 @@ type repositoryStore interface {
 	GetLatestAcceptedConfig(ctx context.Context, deviceID string) (*configpb.DeviceConfig, error)
 	ListBoards(ctx context.Context) ([]BoardRow, error)
 	ListBoardsWithState(ctx context.Context) ([]BoardWithReadingRow, error)
-	GetBoardIdentity(ctx context.Context, boardID int64) (string, error)
+	GetBoardIdentity(ctx context.Context, boardID int64) (BoardIdentity, error)
 	ListSensorDetailsForBoard(ctx context.Context, boardID int64) ([]SensorDetailRow, error)
 	SensorExists(ctx context.Context, sensorID int64) (bool, error)
 	GetSensorReadingHistory(ctx context.Context, sensorID int64, from, to time.Time) (*SensorReadingHistory, error)
+	// ClaimBoard is ClaimBoard's own write path (FR1, FR2, NFR2) -- see
+	// repository.go's doc comment for the race-safety argument.
+	ClaimBoard(ctx context.Context, boardID, leaflabUserID int64) error
 }
 
 // configPublisher is the one *rmq.Publisher method PushDeviceConfig calls,
@@ -117,6 +120,54 @@ func (s *LeafLabAPIServer) callerUserID(ctx context.Context) (int64, error) {
 			claims.Subject)
 	}
 	return userID, nil
+}
+
+// callerUserIDForRead resolves the caller's leaflab_user_id for computing
+// owned_by_caller on a read RPC (ListBoardsWithState, GetBoardDetail).
+// Unlike callerUserID (used to authorize a write), a caller with no
+// leaflab_user row is not an error here: FR5 keeps reads unscoped by
+// ownership, so a caller in that state just sees owned_by_caller false for
+// every board -- returning (0, nil) is enough, since leaflab_user_id is
+// BIGSERIAL starting at 1 and can never legitimately equal 0.
+func (s *LeafLabAPIServer) callerUserIDForRead(ctx context.Context) (int64, error) {
+	claims, ok := grpcauth.ClaimsFromContext(ctx)
+	if !ok {
+		return 0, status.Error(codes.Unauthenticated, "authentication required")
+	}
+
+	userID, found, err := s.repo.GetLeafLabUserIDBySub(ctx, claims.Subject)
+	if err != nil {
+		return 0, status.Errorf(codes.Internal, "resolve caller identity: %v", err)
+	}
+	if !found {
+		return 0, nil
+	}
+	return userID, nil
+}
+
+// ownerToProto converts an *OwnerRow to the wire LeafLabUser message, or nil
+// when the board is unowned. Never sets a field derived from oidc_sub (NFR5)
+// -- OwnerRow itself carries no such field to begin with.
+func ownerToProto(o *OwnerRow) *pb.LeafLabUser {
+	if o == nil {
+		return nil
+	}
+	return &pb.LeafLabUser{
+		LeaflabUserId:     o.LeafLabUserID,
+		DisplayName:       o.DisplayName,
+		PreferredUsername: o.PreferredUsername,
+		Email:             o.Email,
+	}
+}
+
+// boardNameOrEmpty renders a *string board name (nil when unnamed) as the
+// wire's empty-string convention (api.proto: "board_name is empty when the
+// board has no name -- the UI falls back to device_id").
+func boardNameOrEmpty(name *string) string {
+	if name == nil {
+		return ""
+	}
+	return *name
 }
 
 // authorizeBoardWrite returns nil iff the caller is boardID's current
@@ -235,9 +286,16 @@ func (s *LeafLabAPIServer) ListBoards(ctx context.Context, _ *pb.ListBoardsReque
 	return &pb.ListBoardsResponse{Boards: boards}, nil
 }
 
-// ListBoardsWithState returns every board (FR4 — no owner filtering) with a
-// reporting state derived purely from sensor_reading recency (FR5).
+// ListBoardsWithState returns every board (FR4 — no owner filtering of which
+// boards appear) with a reporting state derived purely from sensor_reading
+// recency (FR5), plus M2's read-side ownership fields (board_name,
+// owned_by_caller, owner).
 func (s *LeafLabAPIServer) ListBoardsWithState(ctx context.Context, _ *pb.ListBoardsWithStateRequest) (*pb.ListBoardsWithStateResponse, error) {
+	callerUserID, err := s.callerUserIDForRead(ctx)
+	if err != nil {
+		return nil, err
+	}
+
 	rows, err := s.repo.ListBoardsWithState(ctx)
 	if err != nil {
 		return nil, status.Errorf(codes.Internal, "list boards with state: %v", err)
@@ -250,6 +308,9 @@ func (s *LeafLabAPIServer) ListBoardsWithState(ctx context.Context, _ *pb.ListBo
 			BoardId:        r.BoardID,
 			DeviceId:       r.DeviceID,
 			ReportingState: reportingState(r.LastReadingAt, now),
+			BoardName:      boardNameOrEmpty(r.BoardName),
+			Owner:          ownerToProto(r.Owner),
+			OwnedByCaller:  r.Owner != nil && r.Owner.LeafLabUserID == callerUserID,
 		}
 		if r.LastReadingAt != nil {
 			bw.LastReadingAt = timestamppb.New(*r.LastReadingAt)
@@ -269,7 +330,12 @@ func (s *LeafLabAPIServer) ListBoardsWithState(ctx context.Context, _ *pb.ListBo
 // in the response, not an error, and a board with zero sensors returns an
 // OK response with an empty sensor list.
 func (s *LeafLabAPIServer) GetBoardDetail(ctx context.Context, req *pb.GetBoardDetailRequest) (*pb.GetBoardDetailResponse, error) {
-	deviceID, err := s.repo.GetBoardIdentity(ctx, req.BoardId)
+	callerUserID, err := s.callerUserIDForRead(ctx)
+	if err != nil {
+		return nil, err
+	}
+
+	identity, err := s.repo.GetBoardIdentity(ctx, req.BoardId)
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			return nil, status.Errorf(codes.NotFound, "board %d not found", req.BoardId)
@@ -304,9 +370,12 @@ func (s *LeafLabAPIServer) GetBoardDetail(ctx context.Context, req *pb.GetBoardD
 
 	s.logger.Info("board detail listed", "board_id", req.BoardId, "sensor_count", len(sensors))
 	return &pb.GetBoardDetailResponse{
-		BoardId:  req.BoardId,
-		DeviceId: deviceID,
-		Sensors:  sensors,
+		BoardId:       req.BoardId,
+		DeviceId:      identity.DeviceID,
+		Sensors:       sensors,
+		BoardName:     boardNameOrEmpty(identity.BoardName),
+		Owner:         ownerToProto(identity.Owner),
+		OwnedByCaller: identity.Owner != nil && identity.Owner.LeafLabUserID == callerUserID,
 	}, nil
 }
 
@@ -391,12 +460,46 @@ func (s *LeafLabAPIServer) GetSensorReadingHistory(ctx context.Context, req *pb.
 	return resp, nil
 }
 
-// M2 handler stubs. Contract-only for this task (#1760); each is implemented
-// by its own task and this stub is replaced there.
-
-// ClaimBoard is implemented by the ClaimBoard task (FR1, FR2).
+// ClaimBoard opens ownership of an unowned board for the calling user (FR1,
+// FR2). Deliberately does not call authorizeBoardWrite: that helper denies
+// writes to an unowned board, and claiming an unowned board is exactly the
+// one write FR6 carves out as the explicit exception to that rule.
+//
+// Any signed-in user may claim -- no role required, no prior relationship
+// to the board required. callerUserID (not callerUserIDForRead) is used
+// here on purpose: a claim is a write, so a caller with no leaflab_user row
+// is codes.PermissionDenied, not silently treated as "no owner" the way a
+// read-side caller would be.
+//
+// The board-exists check and the claim are two separate statements, not one
+// transaction: NFR2's race is between two *claims*, which
+// idx_board_owner_history_current (013_ownership.up.sql) resolves at the
+// INSERT itself regardless of what this handler did beforehand. This
+// existence check only distinguishes codes.NotFound from
+// codes.FailedPrecondition for an unknown board_id -- it does not, and does
+// not need to, participate in the race.
 func (s *LeafLabAPIServer) ClaimBoard(ctx context.Context, req *pb.ClaimBoardRequest) (*pb.ClaimBoardResponse, error) {
-	return nil, status.Error(codes.Unimplemented, "ClaimBoard: not implemented")
+	callerUserID, err := s.callerUserID(ctx)
+	if err != nil {
+		return nil, err
+	}
+
+	if _, err := s.repo.GetBoardIdentity(ctx, req.BoardId); err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return nil, status.Errorf(codes.NotFound, "board %d not found", req.BoardId)
+		}
+		return nil, status.Errorf(codes.Internal, "get board identity: %v", err)
+	}
+
+	if err := s.repo.ClaimBoard(ctx, req.BoardId, callerUserID); err != nil {
+		if errors.Is(err, ErrBoardAlreadyOwned) {
+			return nil, status.Errorf(codes.FailedPrecondition, "board %d is already owned", req.BoardId)
+		}
+		return nil, status.Errorf(codes.Internal, "claim board: %v", err)
+	}
+
+	s.logger.Info("board claimed", "board_id", req.BoardId, "leaflab_user_id", callerUserID)
+	return &pb.ClaimBoardResponse{}, nil
 }
 
 // RenameBoard is implemented by the RenameBoard task (FR3).

@@ -8,12 +8,12 @@ import (
 	"github.com/whale-net/everything/libs/go/htmxui"
 )
 
-// Boards is the boards list screen (#1502: FR4, FR5, NFR1) -- every board
-// leaflab-api returns from ListBoardsWithState, with no client-side
-// filtering by owner or ownership status (FR4; all boards are unowned in
-// M1, so there is deliberately no owner column, no "unowned" warning, and
-// no empty-state wording that implies something is wrong when boards are
-// unowned). boards and loadErr are mutually exclusive: handlers_boards.go
+// Boards is the boards list screen (#1502: FR4, FR5, NFR1; #1765 added the
+// Owner column) -- every board leaflab-api returns from
+// ListBoardsWithState, with no client-side filtering by owner or ownership
+// status (FR4: an unowned board is shown the same as an owned one, just
+// with an Unowned label and a Claim button -- never hidden or flagged as an
+// error). boards and loadErr are mutually exclusive: handlers_boards.go
 // passes a nil boards slice on a load failure and a nil loadErr on
 // success, mirroring tools/app_registry/ui/pages/environments.templ's
 // Environments(..., loadErr error) shape.
@@ -42,17 +42,18 @@ templ Boards(data components.LayoutData, boards []*leaflabapipb.BoardWithState, 
 }
 
 // boardsTable renders one row per board (FR4: every board the API
-// returned, unfiltered). device_id is shown in full -- never truncated or
-// abbreviated -- monospaced so it can be matched against the eFuse-derived
-// identifier printed on the hardware; there is no board name field to
-// display and none is invented (out of scope until M2). Each row links to
+// returned, unfiltered). The board's name (falling back to device_id when
+// unnamed, per #1765's boardDisplayName) is the primary label; device_id
+// stays visible underneath, monospaced, so it can still be matched against
+// the eFuse-derived identifier printed on the hardware. Each row links to
 // the board's detail page (#1503).
 templ boardsTable(boards []*leaflabapipb.BoardWithState) {
 	<div class="overflow-x-auto">
 		<table class="table">
 			<thead>
 				<tr>
-					<th>Device ID</th>
+					<th>Board</th>
+					<th>Owner</th>
 					<th>Status</th>
 					<th></th>
 				</tr>
@@ -60,7 +61,8 @@ templ boardsTable(boards []*leaflabapipb.BoardWithState) {
 			<tbody>
 				for _, board := range boards {
 					<tr class="hover">
-						<td class="font-mono text-sm">{ board.GetDeviceId() }</td>
+						<td>@boardNameCell(board.GetBoardName(), board.GetDeviceId())</td>
+						<td>@boardOwnerCell(board.GetBoardId(), board.GetOwnedByCaller(), board.GetOwner())</td>
 						<td>@boardStateCell(board)</td>
 						<td class="text-right">
 							<a href={ templ.URL(fmt.Sprintf("/boards/%d", board.GetBoardId())) } class="btn btn-primary btn-sm">View</a>
@@ -70,6 +72,80 @@ templ boardsTable(boards []*leaflabapipb.BoardWithState) {
 			</tbody>
 		</table>
 	</div>
+}
+
+// boardNameCell renders a board's primary label (name, falling back to
+// device_id when unnamed) plus device_id as monospaced secondary text.
+// When the board has a name, device_id is still shown underneath -- never
+// hidden -- since it remains the identifier printed on the hardware.
+templ boardNameCell(boardName, deviceID string) {
+	<div class="flex flex-col">
+		<span class="font-medium">{ boardDisplayName(boardName, deviceID) }</span>
+		if boardName != "" {
+			<span class="font-mono text-xs text-base-content/60">{ deviceID }</span>
+		}
+	</div>
+}
+
+// boardOwnerCell renders FR1/FR2's three owner states: "You" when the
+// calling user owns the board, the owner's display name for anyone else's
+// board, or "Unowned" plus a Claim button (#1765) when no one owns it yet.
+// ownedByCaller is trusted as the sole signal for the "You" case -- never
+// re-derived by comparing owner IDs client-side, since the caller's own
+// leaflab_user_id is not exposed to this page.
+templ boardOwnerCell(boardID int64, ownedByCaller bool, owner *leaflabapipb.LeafLabUser) {
+	if ownedByCaller {
+		@htmxui.Badge("You", htmxui.BadgeSuccess, htmxui.BadgeSizeSM, true, nil)
+	} else if owner != nil {
+		<span>{ ownerDisplayName(owner) }</span>
+	} else {
+		<div class="flex items-center gap-2">
+			<span class="text-base-content/60">Unowned</span>
+			@claimForm(boardID)
+		</div>
+	}
+}
+
+// boardDisplayName is the shared board-name fallback rule (api.proto:
+// "board_name is empty when the board has no name -- the UI falls back to
+// device_id"), used by both boards.templ and board_detail.templ.
+func boardDisplayName(boardName, deviceID string) string {
+	if boardName == "" {
+		return deviceID
+	}
+	return boardName
+}
+
+// ownerDisplayName picks the best available label for a non-caller owner:
+// display_name first (what a user set for themselves at sign-in), falling
+// back to preferred_username, and finally a fixed placeholder -- never a
+// blank cell -- for the unlikely case leaflab_user has neither (both
+// columns are nullable, see 013_ownership.up.sql).
+func ownerDisplayName(owner *leaflabapipb.LeafLabUser) string {
+	if owner.GetDisplayName() != "" {
+		return owner.GetDisplayName()
+	}
+	if owner.GetPreferredUsername() != "" {
+		return owner.GetPreferredUsername()
+	}
+	return "Unknown user"
+}
+
+// claimForm is the Claim button (FR1) rendered wherever a board is unowned
+// -- the boards list (boardOwnerCell) and the board detail header
+// (board_detail.templ). A plain HTML form POST, not an hx-post fragment
+// swap: leaflab's UI has no existing fragment-render endpoint to target
+// (see handlers_boards.go's handleClaimBoard doc comment for the
+// redirect-based flow this posts into), and NFR1 already rules out any
+// live-update mechanism this button could piggyback on. This is a
+// convenience only (NFR1's server-side note) -- ClaimBoard itself is the
+// actual enforcement point.
+templ claimForm(boardID int64) {
+	<form method="POST" action={ templ.URL(fmt.Sprintf("/boards/%d/claim", boardID)) }>
+		@htmxui.Button(htmxui.ButtonPrimary, htmxui.ButtonSizeSM, false, templ.Attributes{"type": "submit"}) {
+			Claim
+		}
+	</form>
 }
 
 // boardStateCell renders exactly one of FR5's three states (reporting,

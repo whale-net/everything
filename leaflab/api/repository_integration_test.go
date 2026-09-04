@@ -21,6 +21,7 @@ package main
 import (
 	"context"
 	"errors"
+	"sync"
 	"testing"
 	"time"
 
@@ -714,5 +715,176 @@ func TestGetCurrentBoardOwner_ClosedThenReopenedReturnsCurrentOwner(t *testing.T
 	if gotOwnerID != secondOwnerID {
 		t.Errorf("expected the reopened row's owner %d (not the closed row's owner %d), got %d",
 			secondOwnerID, firstOwnerID, gotOwnerID)
+	}
+}
+
+// ─── #1765: ClaimBoard ──────────────────────────────────────────────────────
+
+// countOpenOwnerRows returns the number of open (valid_to IS NULL)
+// board_owner_history rows for boardID -- idx_board_owner_history_current's
+// partial UNIQUE index guarantees this is 0 or 1 in a consistent database,
+// but the race test below asserts the count directly rather than trusting
+// that guarantee blindly.
+func countOpenOwnerRows(t *testing.T, pool *pgxpool.Pool, boardID int64) int {
+	t.Helper()
+	var count int
+	if err := pool.QueryRow(context.Background(),
+		`SELECT count(*) FROM board_owner_history WHERE board_id = $1 AND valid_to IS NULL`,
+		boardID).Scan(&count); err != nil {
+		t.Fatalf("count open board_owner_history rows for board %d: %v", boardID, err)
+	}
+	return count
+}
+
+// TestClaimBoard_UnownedBoard_OpensOneRow proves the straightforward case
+// against real Postgres: claiming an unowned board opens exactly one open
+// board_owner_history row for the claimant.
+func TestClaimBoard_UnownedBoard_OpensOneRow(t *testing.T) {
+	repo, pool := newTestRepository(t)
+	boardID := seedBoard(t, pool, "board-claim-unowned")
+	userID := seedLeafLabUser(t, pool, "sub-claim-unowned")
+
+	if err := repo.ClaimBoard(context.Background(), boardID, userID); err != nil {
+		t.Fatalf("ClaimBoard: %v", err)
+	}
+
+	gotOwnerID, owned, err := repo.GetCurrentBoardOwner(context.Background(), boardID)
+	if err != nil {
+		t.Fatalf("GetCurrentBoardOwner: %v", err)
+	}
+	if !owned {
+		t.Fatalf("expected owned=true after ClaimBoard")
+	}
+	if gotOwnerID != userID {
+		t.Errorf("expected owner %d, got %d", userID, gotOwnerID)
+	}
+	if got := countOpenOwnerRows(t, pool, boardID); got != 1 {
+		t.Errorf("expected exactly 1 open board_owner_history row, got %d", got)
+	}
+}
+
+// TestClaimBoard_AlreadyOwned_ErrBoardAlreadyOwned_RecordUntouched proves
+// FR2 against real Postgres: a second claim on an already-owned board maps
+// the 23505 unique-violation to ErrBoardAlreadyOwned, and the existing open
+// row -- same board_owner_history_id, same valid_from -- is left completely
+// untouched (not closed, not reassigned).
+func TestClaimBoard_AlreadyOwned_ErrBoardAlreadyOwned_RecordUntouched(t *testing.T) {
+	repo, pool := newTestRepository(t)
+	boardID := seedBoard(t, pool, "board-claim-owned")
+	firstOwnerID := seedLeafLabUser(t, pool, "sub-claim-first")
+	secondOwnerID := seedLeafLabUser(t, pool, "sub-claim-second")
+	openBoardOwnerHistory(t, pool, boardID, firstOwnerID)
+
+	var wantHistoryID int64
+	var wantValidFrom time.Time
+	if err := pool.QueryRow(context.Background(),
+		`SELECT board_owner_history_id, valid_from FROM board_owner_history WHERE board_id = $1 AND valid_to IS NULL`,
+		boardID).Scan(&wantHistoryID, &wantValidFrom); err != nil {
+		t.Fatalf("read pre-claim ownership record: %v", err)
+	}
+
+	err := repo.ClaimBoard(context.Background(), boardID, secondOwnerID)
+	if !errors.Is(err, ErrBoardAlreadyOwned) {
+		t.Fatalf("expected ErrBoardAlreadyOwned, got %v", err)
+	}
+
+	var gotHistoryID int64
+	var gotOwnerID int64
+	var gotValidFrom time.Time
+	var gotValidTo *time.Time
+	if err := pool.QueryRow(context.Background(),
+		`SELECT board_owner_history_id, leaflab_user_id, valid_from, valid_to FROM board_owner_history WHERE board_id = $1 AND valid_to IS NULL`,
+		boardID).Scan(&gotHistoryID, &gotOwnerID, &gotValidFrom, &gotValidTo); err != nil {
+		t.Fatalf("read post-claim ownership record: %v", err)
+	}
+	if gotHistoryID != wantHistoryID {
+		t.Errorf("expected the same board_owner_history_id %d, got %d -- a refused claim must not touch the existing row", wantHistoryID, gotHistoryID)
+	}
+	if !gotValidFrom.Equal(wantValidFrom) {
+		t.Errorf("expected valid_from unchanged (%v), got %v", wantValidFrom, gotValidFrom)
+	}
+	if gotValidTo != nil {
+		t.Errorf("expected valid_to still NULL after a refused claim, got %v", gotValidTo)
+	}
+	if gotOwnerID != firstOwnerID {
+		t.Errorf("expected the original owner %d to remain, got %d", firstOwnerID, gotOwnerID)
+	}
+	if got := countOpenOwnerRows(t, pool, boardID); got != 1 {
+		t.Errorf("expected exactly 1 open board_owner_history row after the refused claim, got %d", got)
+	}
+}
+
+// TestClaimBoard_ConcurrentClaims_ExactlyOneWinner is Testing criterion 7
+// (NFR2): two goroutines call Repository.ClaimBoard concurrently for the
+// same unowned board. Exactly one must return nil and exactly one must
+// return ErrBoardAlreadyOwned, and the database must be left with exactly
+// one open board_owner_history row -- never zero (both silently failing),
+// never two (both silently winning), regardless of which goroutine the
+// database happens to serialize first.
+//
+// This is what actually proves NFR2: idx_board_owner_history_current (a
+// partial UNIQUE index on board_id WHERE valid_to IS NULL) rejects the
+// loser's INSERT with a 23505 unique-violation, which ClaimBoard maps to
+// ErrBoardAlreadyOwned -- not an application-level "SELECT then INSERT"
+// check racing against itself. See repository.go's ClaimBoard doc comment.
+//
+// Red/green: the issue's Testing section calls for confirming this goes
+// red under a read-then-write implementation and green under the atomic
+// INSERT. That swap-and-revert was performed by hand against ClaimBoard in
+// repository.go (temporarily replacing the plain INSERT with a
+// SELECT-for-unowned-then-INSERT sequence) and confirmed this test flakes
+// to "2 winners" under load -- not preserved in the committed source, since
+// a real defect would otherwise ship gated behind a code path nothing
+// exercises by default.
+func TestClaimBoard_ConcurrentClaims_ExactlyOneWinner(t *testing.T) {
+	repo, pool := newTestRepository(t)
+	boardID := seedBoard(t, pool, "board-claim-race")
+	firstUserID := seedLeafLabUser(t, pool, "sub-claim-race-1")
+	secondUserID := seedLeafLabUser(t, pool, "sub-claim-race-2")
+
+	const attempts = 20
+	for i := 0; i < attempts; i++ {
+		func() {
+			t.Helper()
+
+			var wg sync.WaitGroup
+			errs := make([]error, 2)
+			userIDs := [2]int64{firstUserID, secondUserID}
+
+			wg.Add(2)
+			for g := 0; g < 2; g++ {
+				go func(g int) {
+					defer wg.Done()
+					errs[g] = repo.ClaimBoard(context.Background(), boardID, userIDs[g])
+				}(g)
+			}
+			wg.Wait()
+
+			var nilCount, alreadyOwnedCount int
+			for _, err := range errs {
+				switch {
+				case err == nil:
+					nilCount++
+				case errors.Is(err, ErrBoardAlreadyOwned):
+					alreadyOwnedCount++
+				default:
+					t.Fatalf("attempt %d: unexpected error from ClaimBoard: %v", i, err)
+				}
+			}
+			if nilCount != 1 || alreadyOwnedCount != 1 {
+				t.Fatalf("attempt %d: expected exactly one nil and one ErrBoardAlreadyOwned, got %d nil and %d ErrBoardAlreadyOwned (errs=%v)",
+					i, nilCount, alreadyOwnedCount, errs)
+			}
+			if got := countOpenOwnerRows(t, pool, boardID); got != 1 {
+				t.Fatalf("attempt %d: expected exactly 1 open board_owner_history row after the race, got %d", i, got)
+			}
+
+			// Reset for the next attempt: close the winning row so the board
+			// is unowned again, keeping every attempt an identical race on a
+			// freshly-unowned board rather than accumulating history rows
+			// that would change which branch (open vs. already-owned) each
+			// subsequent attempt's INSERT takes.
+			closeBoardOwnerHistory(t, pool, boardID)
+		}()
 	}
 }

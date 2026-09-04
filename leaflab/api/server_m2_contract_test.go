@@ -114,9 +114,28 @@ func TestM2RPCs_ReachableAndUnimplemented(t *testing.T) {
 	client := pb.NewLeafLabAPIClient(conn)
 	ctx := context.Background()
 
+	// ClaimBoard's own task (#1765) landed: this subtest is superseded per
+	// this test's doc comment above, in place rather than deleted. Its own
+	// FR1/FR2/NFR2 behavior (claim succeeds, refusal on an already-owned
+	// board, no implicit provisioning, etc.) is covered directly against
+	// LeafLabAPIServer in server_test.go's "#1765 ClaimBoard tests" section
+	// -- what's left to prove here is only the same reachability guarantee
+	// every other subtest proves: a call with no auth claims reaches the
+	// real handler (codes.Unauthenticated, from callerUserID) rather than
+	// grpc-go's own "unknown service"/"unknown method" Unimplemented for an
+	// RPC that was never registered.
 	t.Run("ClaimBoard", func(t *testing.T) {
 		_, err := client.ClaimBoard(ctx, &pb.ClaimBoardRequest{BoardId: 1})
-		assertUnimplementedFromHandler(t, "ClaimBoard", "ClaimBoard: not implemented", err)
+		st, ok := status.FromError(err)
+		if !ok {
+			t.Fatalf("ClaimBoard: expected a gRPC status error, got %v", err)
+		}
+		if st.Code() != codes.Unauthenticated {
+			t.Fatalf("ClaimBoard: expected codes.Unauthenticated (reachable, real handler, no claims in ctx), got %v (%v)", st.Code(), err)
+		}
+		if strings.Contains(st.Message(), "unknown service") || strings.Contains(st.Message(), "unknown method") {
+			t.Fatalf("ClaimBoard: got grpc's own %q -- the RPC was never registered/never reached the handler", st.Message())
+		}
 	})
 
 	t.Run("RenameBoard", func(t *testing.T) {
