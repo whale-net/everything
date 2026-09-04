@@ -125,6 +125,10 @@ type fakeRepository struct {
 	// owners maps a board_id to its current owner's leaflab_user_id. A
 	// board_id absent here is unowned (no open board_owner_history row).
 	owners map[int64]int64
+	// admins is the set of leaflab_user_ids holding an open 'admin' grant --
+	// a user_id absent (or present but false) here has no open admin grant,
+	// exactly like a fresh leaflab_user_role table would report.
+	admins map[int64]bool
 
 	insertedConfigs []insertedConfig
 	nextVersion     int64
@@ -170,6 +174,7 @@ func newFakeRepository() *fakeRepository {
 		users:         map[string]int64{},
 		devices:       map[string]int64{},
 		owners:        map[int64]int64{},
+		admins:        map[int64]bool{},
 		inventory:     map[int64][]InventorySensor{},
 		lastAccepted:  map[string]*configpb.DeviceConfig{},
 		boardIdentity: map[int64]BoardIdentity{},
@@ -187,6 +192,13 @@ func (f *fakeRepository) GetLeafLabUserIDBySub(_ context.Context, oidcSub string
 func (f *fakeRepository) GetCurrentBoardOwner(_ context.Context, boardID int64) (int64, bool, error) {
 	id, ok := f.owners[boardID]
 	return id, ok, nil
+}
+
+func (f *fakeRepository) HasRole(_ context.Context, leaflabUserID int64, role string) (bool, error) {
+	if role != adminRole {
+		return false, nil
+	}
+	return f.admins[leaflabUserID], nil
 }
 
 func (f *fakeRepository) GetBoardIDForDeviceID(_ context.Context, deviceID string) (int64, bool, error) {

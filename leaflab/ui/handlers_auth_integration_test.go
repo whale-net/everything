@@ -33,10 +33,11 @@ import (
 	"github.com/whale-net/everything/libs/go/htmxauth"
 )
 
-// leaflabUserOwnershipSchema mirrors just enough of migrations 001 and 013
-// to prove upsertLeafLabUser's two contracts: idempotency keyed on
-// oidc_sub, and that it never writes board_owner_history or any
-// owner_leaflab_user_id column.
+// leaflabUserOwnershipSchema mirrors just enough of migrations 001, 013, and
+// 016 to prove upsertLeafLabUser's contracts: idempotency keyed on
+// oidc_sub, that it never writes board_owner_history or any
+// owner_leaflab_user_id column, and (016's leaflab_user_role) the FR10
+// empty-database bootstrap grant.
 const leaflabUserOwnershipSchema = `
 	CREATE TABLE leaflab_user (
 		leaflab_user_id     BIGSERIAL   PRIMARY KEY,
@@ -47,6 +48,16 @@ const leaflabUserOwnershipSchema = `
 		created_at          TIMESTAMPTZ NOT NULL DEFAULT NOW(),
 		last_seen_at        TIMESTAMPTZ NOT NULL DEFAULT NOW()
 	);
+
+	CREATE TABLE leaflab_user_role (
+		leaflab_user_role_id BIGSERIAL   PRIMARY KEY,
+		leaflab_user_id      BIGINT      NOT NULL REFERENCES leaflab_user(leaflab_user_id) ON DELETE CASCADE,
+		role                 TEXT        NOT NULL,
+		valid_from           TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+		valid_to             TIMESTAMPTZ
+	);
+	CREATE UNIQUE INDEX idx_leaflab_user_role_current
+		ON leaflab_user_role(leaflab_user_id, role) WHERE valid_to IS NULL;
 
 	CREATE TABLE board (
 		board_id      BIGSERIAL PRIMARY KEY,
