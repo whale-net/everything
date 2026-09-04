@@ -198,6 +198,49 @@ func TestGetChannelScheduleHandler_EmptyChannel_ReturnsEmptyListNotError(t *test
 	assert.Empty(t, out.Videos)
 }
 
+// TestGetChannelScheduleHandler_LimitCapsResponse_TruncatedReflectsIt proves
+// issue #1812's fix: get_channel_schedule had no limit at all, so a
+// long-lived, actively-synced Channel's full synced_video history could
+// exceed an MCP client's response-size cap. limit caps the response with
+// truncated set; the default applies when the caller supplies limit <= 0.
+func TestGetChannelScheduleHandler_LimitCapsResponse_TruncatedReflectsIt(t *testing.T) {
+	ctx := context.Background()
+	channelID := uuid.New()
+
+	videos := make([]store.SyncedVideo, 0, defaultGetChannelScheduleLimit+5)
+	now := time.Now()
+	for i := 0; i < defaultGetChannelScheduleLimit+5; i++ {
+		publishedAt := now.Add(time.Duration(i) * time.Hour)
+		videos = append(videos, store.SyncedVideo{
+			YouTubeVideoID: uuid.NewString(),
+			PrivacyStatus:  store.PrivacyStatusPublic,
+			PublishedAt:    &publishedAt,
+		})
+	}
+	h := getChannelScheduleHandler(fakeSyncStore{videos: videos})
+
+	t.Run("caller-supplied limit caps the response", func(t *testing.T) {
+		_, out, err := h(ctx, nil, GetChannelScheduleInput{ChannelID: channelID.String(), Limit: 3})
+		require.NoError(t, err)
+		require.Len(t, out.Videos, 3, "must be capped at the caller-supplied limit")
+		assert.True(t, out.Truncated, "more videos exist beyond limit")
+	})
+
+	t.Run("limit <= 0 falls back to the default and still reports truncated", func(t *testing.T) {
+		_, out, err := h(ctx, nil, GetChannelScheduleInput{ChannelID: channelID.String()})
+		require.NoError(t, err)
+		require.Len(t, out.Videos, defaultGetChannelScheduleLimit)
+		assert.True(t, out.Truncated)
+	})
+
+	t.Run("a response under the limit is not truncated", func(t *testing.T) {
+		_, out, err := h(ctx, nil, GetChannelScheduleInput{ChannelID: channelID.String(), Limit: defaultGetChannelScheduleLimit + 100})
+		require.NoError(t, err)
+		require.Len(t, out.Videos, len(videos))
+		assert.False(t, out.Truncated)
+	})
+}
+
 func TestGetChannelScheduleHandler_StoreError_Propagates(t *testing.T) {
 	ctx := context.Background()
 	storeErr := errors.New("connection refused")

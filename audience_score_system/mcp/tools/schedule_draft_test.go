@@ -307,3 +307,48 @@ func TestParseWeekdayName_EmptyStringAfterTrimRejected(t *testing.T) {
 	_, err := parseWeekdayName(strings.Repeat(" ", 3))
 	assert.Error(t, err)
 }
+
+// ── filterScheduleEntriesRange ───────────────────────────────────────────
+
+// TestFilterScheduleEntriesRange_SinceInclusiveBeforeExclusive proves
+// list_schedule_entries' issue #1812 pagination bound: since is an
+// inclusive lower bound, before is an exclusive upper bound, and either or
+// both may be nil for "no bound on that side" -- mirroring browse.go's
+// filterNotesRange semantics over ProposedPublishAt instead of CreatedAt.
+func TestFilterScheduleEntriesRange_SinceInclusiveBeforeExclusive(t *testing.T) {
+	base := time.Date(2032, 6, 7, 9, 0, 0, 0, time.UTC)
+	entries := []store.ScheduleEntry{
+		{ID: uuid.New(), ProposedPublishAt: base},
+		{ID: uuid.New(), ProposedPublishAt: base.Add(time.Hour)},
+		{ID: uuid.New(), ProposedPublishAt: base.Add(2 * time.Hour)},
+	}
+
+	t.Run("no bounds returns everything untouched", func(t *testing.T) {
+		got := filterScheduleEntriesRange(entries, nil, nil)
+		assert.Equal(t, entries, got)
+	})
+
+	t.Run("since is inclusive of an exact match", func(t *testing.T) {
+		since := base.Add(time.Hour)
+		got := filterScheduleEntriesRange(entries, &since, nil)
+		require.Len(t, got, 2)
+		assert.Equal(t, entries[1].ID, got[0].ID)
+		assert.Equal(t, entries[2].ID, got[1].ID)
+	})
+
+	t.Run("before is exclusive of an exact match", func(t *testing.T) {
+		before := base.Add(time.Hour)
+		got := filterScheduleEntriesRange(entries, nil, &before)
+		require.Len(t, got, 1)
+		assert.Equal(t, entries[0].ID, got[0].ID)
+	})
+
+	t.Run("since and before together bound a window", func(t *testing.T) {
+		since := base
+		before := base.Add(2 * time.Hour)
+		got := filterScheduleEntriesRange(entries, &since, &before)
+		require.Len(t, got, 2)
+		assert.Equal(t, entries[0].ID, got[0].ID)
+		assert.Equal(t, entries[1].ID, got[1].ID)
+	})
+}

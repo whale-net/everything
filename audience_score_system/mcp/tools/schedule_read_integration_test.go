@@ -20,6 +20,7 @@ package tools_test
 import (
 	"context"
 	"database/sql"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -150,6 +151,7 @@ func callSchedule(t *testing.T, cs *mcp.ClientSession, args tools.GetChannelSche
 		id, _ := v["youtube_video_id"].(string)
 		out.Videos = append(out.Videos, tools.ScheduleVideo{YouTubeVideoID: id})
 	}
+	out.Truncated, _ = m["truncated"].(bool)
 	return res, out
 }
 
@@ -309,6 +311,58 @@ func TestGetChannelSchedule_FromToWindow_FiltersByEffectiveTimestamp(t *testing.
 	res, out := callSchedule(t, cs, tools.GetChannelScheduleInput{ChannelID: ch.ID.String(), From: &from, To: &to})
 	require.False(t, res.IsError, "unexpected error: %s", textOf(res))
 	assert.Equal(t, []string{"vid-mid"}, videoIDs(out), "only the video whose effective timestamp falls within [from, to] must be returned")
+}
+
+// ── limit/truncated pagination ──────────────────────────────────────────
+
+// TestGetChannelSchedule_LimitTruncatedAndFromPagesPastLimit proves issue
+// #1812's fix: get_channel_schedule had no limit at all, so a long-lived,
+// actively-synced Channel's full synced_video history could exceed an MCP
+// client's response-size cap. limit caps the response with truncated set,
+// and narrowing from (using the last returned video's effective timestamp)
+// retrieves the remainder.
+func TestGetChannelSchedule_LimitTruncatedAndFromPagesPastLimit(t *testing.T) {
+	st, pool := newScheduleTestStack(t)
+	ctx := context.Background()
+
+	creator, _, err := st.Persons().UpsertByGoogleSubject(ctx, "sub-creator-limit", "creator-limit@example.com", "Creator")
+	require.NoError(t, err)
+	ch, err := st.Channels().Create(ctx, "yt-schedule-limit-1", "Channel", creator.ID)
+	require.NoError(t, err)
+
+	now := time.Now()
+	vids := make([]store.SyncedVideo, 0, 5)
+	publishTimes := make([]time.Time, 5)
+	for i := 0; i < 5; i++ {
+		publishedAt := now.Add(time.Duration(i) * time.Hour)
+		publishTimes[i] = publishedAt
+		vids = append(vids, store.SyncedVideo{
+			YouTubeVideoID: fmt.Sprintf("vid-limit-%d", i),
+			Title:          fmt.Sprintf("Video %d", i),
+			PrivacyStatus:  store.PrivacyStatusPublic,
+			PublishedAt:    &publishedAt,
+			LastSyncedAt:   now,
+		})
+	}
+	require.NoError(t, st.Sync().UpsertVideos(ctx, ch.ID, vids))
+
+	ts := newScheduleTestServer(t, st, pool)
+	token := mintScheduleToken(t, pool, creator.ID)
+	cs := connectAs(t, ts, token)
+
+	res, out := callSchedule(t, cs, tools.GetChannelScheduleInput{ChannelID: ch.ID.String(), Limit: 3})
+	require.False(t, res.IsError, "unexpected error: %s", textOf(res))
+	require.Len(t, out.Videos, 3, "must be capped at the caller-supplied limit")
+	assert.True(t, out.Truncated, "more videos exist beyond limit")
+	assert.Equal(t, []string{"vid-limit-0", "vid-limit-1", "vid-limit-2"}, videoIDs(out))
+
+	// Page past the truncated response by narrowing From to just after the
+	// last returned video's effective timestamp.
+	from := publishTimes[2].Add(time.Nanosecond)
+	res2, out2 := callSchedule(t, cs, tools.GetChannelScheduleInput{ChannelID: ch.ID.String(), From: &from})
+	require.False(t, res2.IsError, "unexpected error: %s", textOf(res2))
+	assert.False(t, out2.Truncated, "the second page has nothing left to cut")
+	assert.Equal(t, []string{"vid-limit-3", "vid-limit-4"}, videoIDs(out2), "the remaining videos must be reachable via from")
 }
 
 // ── empty Channel: empty list, not an error ─────────────────────────────

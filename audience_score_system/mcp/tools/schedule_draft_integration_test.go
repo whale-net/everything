@@ -33,6 +33,7 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -768,6 +769,64 @@ func TestGetDraftingContext_ReturnsPolicySyncedScheduleAndExistingEntries(t *tes
 	assert.Equal(t, f.idea.ID.String(), out.ScheduleEntries[0].IdeaID)
 }
 
+// ── get_drafting_context: limit/truncated (#1812) ────────────────────────
+
+// TestGetDraftingContext_LimitCapsSyncedScheduleAndScheduleEntriesIndependently
+// proves issue #1812's fix: get_drafting_context fetched a Channel's entire
+// synced_video and schedule_entry history unconditionally. limit caps each
+// list independently, and truncated is set true if either was cut.
+func TestGetDraftingContext_LimitCapsSyncedScheduleAndScheduleEntriesIndependently(t *testing.T) {
+	f := newScheduleDraftFixture(t)
+	cs := f.connect(t, f.creator.ID)
+	ctx := context.Background()
+
+	verdict := f.saveViableVerdict(t, cs, f.idea.ID, "viable, for drafting-context limit")
+	verdictID := uuid.MustParse(verdict.ID)
+
+	const seeded = 3
+	now := time.Now()
+	for i := 0; i < seeded; i++ {
+		publishedAt := now.Add(-time.Duration(seeded-i) * time.Hour)
+		require.NoError(t, f.st.Sync().UpsertVideos(ctx, f.ch.ID, []store.SyncedVideo{{
+			YouTubeVideoID: fmt.Sprintf("ctx-limit-vid-%d", i), Title: fmt.Sprintf("Ctx Video %d", i),
+			PrivacyStatus: store.PrivacyStatusPublic, PublishedAt: &publishedAt, LastSyncedAt: now,
+		}}))
+		_, err := f.st.Schedules().SaveDraft(ctx, store.SaveDraftInput{
+			ChannelID: f.ch.ID, IdeaID: f.idea.ID, VerdictID: verdictID,
+			ProposedPublishAt: mondayAt(9).Add(time.Duration(i) * time.Hour),
+			CreatedByPersonID: f.creator.ID, IdempotencyKey: fmt.Sprintf("ctx-limit-entry-%d", i),
+		})
+		require.NoError(t, err)
+	}
+
+	res := f.call(t, cs, "get_drafting_context", tools.GetDraftingContextInput{ChannelID: f.ch.ID.String(), Limit: 2})
+	require.False(t, res.IsError, "unexpected error: %s", sdTextOf(res))
+	out := sdDecode[tools.GetDraftingContextOutput](t, res)
+
+	assert.Len(t, out.SyncedSchedule, 2, "synced_schedule must be capped at limit")
+	assert.Len(t, out.ScheduleEntries, 2, "schedule_entries must be capped at limit, independently of synced_schedule")
+	assert.True(t, out.Truncated, "either list being cut must set truncated")
+}
+
+// TestGetDraftingContext_UnderLimit_NotTruncated proves a response that
+// doesn't need capping reports truncated: false, not just an empty/zero
+// value by accident.
+func TestGetDraftingContext_UnderLimit_NotTruncated(t *testing.T) {
+	f := newScheduleDraftFixture(t)
+	cs := f.connect(t, f.creator.ID)
+
+	verdict := f.saveViableVerdict(t, cs, f.idea.ID, "viable, under limit")
+	f.call(t, cs, "save_schedule_draft", tools.SaveScheduleDraftInput{
+		ChannelID: f.ch.ID.String(), IdeaID: f.idea.ID.String(), VerdictID: verdict.ID,
+		ProposedPublishAt: mondayAt(9).Format(time.RFC3339), IdempotencyKeyArg: uuid.NewString(),
+	})
+
+	res := f.call(t, cs, "get_drafting_context", tools.GetDraftingContextInput{ChannelID: f.ch.ID.String()})
+	require.False(t, res.IsError, "unexpected error: %s", sdTextOf(res))
+	out := sdDecode[tools.GetDraftingContextOutput](t, res)
+	assert.False(t, out.Truncated)
+}
+
 // ── list_schedule_entries ─────────────────────────────────────────────────
 
 func TestListScheduleEntries_ReturnsIdeaVerdictVersionStateAndTimestamps(t *testing.T) {
@@ -806,6 +865,53 @@ func TestListScheduleEntries_EmptyChannel_ReturnsEmptyListNotError(t *testing.T)
 	require.False(t, res.IsError, "unexpected error: %s", sdTextOf(res))
 	out := sdDecode[tools.ListScheduleEntriesOutput](t, res)
 	assert.Empty(t, out.Entries)
+}
+
+// TestListScheduleEntries_LimitTruncatedSincePageForward_BeforeNarrows
+// proves issue #1812's fix: list_schedule_entries had no limit/pagination
+// at all, so a Channel with enough draft+committed history could exceed an
+// MCP client's response-size cap outright. limit caps the response
+// (ordered by proposed_publish_at ascending) with truncated set, since
+// (inclusive) resumes forward past the last returned entry's
+// proposed_publish_at, and before (exclusive) instead narrows to what came
+// strictly earlier.
+func TestListScheduleEntries_LimitTruncatedSincePageForward_BeforeNarrows(t *testing.T) {
+	f := newScheduleDraftFixture(t)
+	cs := f.connect(t, f.creator.ID)
+	ctx := context.Background()
+
+	verdict := f.saveViableVerdict(t, cs, f.idea.ID, "viable, for list pagination")
+	verdictID := uuid.MustParse(verdict.ID)
+
+	const seeded = 5
+	for i := 0; i < seeded; i++ {
+		_, err := f.st.Schedules().SaveDraft(ctx, store.SaveDraftInput{
+			ChannelID: f.ch.ID, IdeaID: f.idea.ID, VerdictID: verdictID,
+			ProposedPublishAt: mondayAt(9).Add(time.Duration(i) * time.Hour),
+			CreatedByPersonID: f.creator.ID, IdempotencyKey: fmt.Sprintf("list-page-entry-%d", i),
+		})
+		require.NoError(t, err)
+	}
+
+	firstRes := f.call(t, cs, "list_schedule_entries", tools.ListScheduleEntriesInput{ChannelID: f.ch.ID.String(), Limit: 3})
+	firstPage := sdDecode[tools.ListScheduleEntriesOutput](t, firstRes)
+	require.Len(t, firstPage.Entries, 3, "must be capped at the caller-supplied limit")
+	assert.True(t, firstPage.Truncated, "more entries exist beyond limit")
+
+	lastOnFirstPage := firstPage.Entries[len(firstPage.Entries)-1]
+	boundary, err := time.Parse(time.RFC3339, lastOnFirstPage.ProposedPublishAt)
+	require.NoError(t, err)
+
+	sinceRes := f.call(t, cs, "list_schedule_entries", tools.ListScheduleEntriesInput{ChannelID: f.ch.ID.String(), Since: &boundary})
+	sincePage := sdDecode[tools.ListScheduleEntriesOutput](t, sinceRes)
+	require.False(t, sincePage.Truncated)
+	require.Len(t, sincePage.Entries, seeded-2, "since (inclusive) resumes at the last row of the prior page plus the remaining entries")
+	assert.Equal(t, lastOnFirstPage.ScheduleEntryID, sincePage.Entries[0].ScheduleEntryID, "the inclusive bound reappears as the new page's first row")
+
+	beforeRes := f.call(t, cs, "list_schedule_entries", tools.ListScheduleEntriesInput{ChannelID: f.ch.ID.String(), Before: &boundary})
+	beforePage := sdDecode[tools.ListScheduleEntriesOutput](t, beforeRes)
+	require.False(t, beforePage.Truncated)
+	require.Len(t, beforePage.Entries, 2, "before excludes the boundary row itself, matching only the strictly-earlier entries")
 }
 
 // ── commit_schedule_draft: FR19 Creator-tier approval, FR32 Founder/Co-Creator symmetry (issue #1648) ─────
