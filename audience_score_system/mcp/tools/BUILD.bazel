@@ -58,6 +58,7 @@ go_test(
         "strategy_test.go",
         "sync_trigger_test.go",
         "verdict_test.go",
+        "video_script_test.go",
     ],
     embed = [":tools"],
     deps = [
@@ -483,6 +484,56 @@ go_test(
     size = "large",
     timeout = "long",
     srcs = ["access_integration_test.go"],
+    gotags = ["integration"],
+    tags = [
+        "external",
+        "integration",
+        "manual",
+        "no-cache",
+        "no-sandbox",
+        "requires-network",
+    ],
+    deps = [
+        ":tools",
+        "//audience_score_system/mcp/server",
+        "//audience_score_system/migrate/schema",
+        "//audience_score_system/store",
+        "//libs/go/dbtest",
+        "//libs/go/mcpauth",
+        "//libs/go/migrate",
+        "@com_github_google_uuid//:uuid",
+        "@com_github_jackc_pgx_v5//pgxpool",
+        "@com_github_jackc_pgx_v5//stdlib",
+        "@com_github_modelcontextprotocol_go_sdk//mcp",
+        "@com_github_stretchr_testify//assert",
+        "@com_github_stretchr_testify//require",
+    ],
+)
+
+# save_video_script/greenlight_video_script/deny_video_script/
+# archive_video_script (video_script.go, issues #1823/#1825, FR36-FR40,
+# NFR12/NFR13): save_video_script's viable-verdict gate (FR36) and derived
+# idea_id (LB3), the greenlight/deny/archive trio's explicit
+# store.CanApprove gate stacked on top of RegisterWrite's automatic
+# CanWrite gate (an Analyst may propose but not decide), FR40's exhaustive
+# invalid-transition matrix (greenlit->greenlit, denied->anything,
+# archived->anything, proposed->archived), FR39's publish freeze (an
+# auto/confirmed match to an already-published video blocks Archive with
+# no state change), NFR12 idempotency replay/conflict semantics on all
+# four tools, and the Channel scope check rejecting another Channel's
+# video_script_id -- all against the real embedded schema and a real
+# HTTP-hosted MCP server, mirroring schedule_draft_integration_test.go's
+# pattern. Deliberately NOT part of `bazel test //...` -- see
+# //libs/go/dbtest's README for the full rationale.
+#
+# Run it explicitly (requires a working Docker daemon):
+#   bazel test //audience_score_system/mcp/tools:video_script_integration_test --test_output=all
+go_test(
+    # keep
+    name = "video_script_integration_test",
+    size = "large",
+    timeout = "long",
+    srcs = ["video_script_integration_test.go"],
     gotags = ["integration"],
     tags = [
         "external",
