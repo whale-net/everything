@@ -416,6 +416,46 @@ affordances -- the two surfaces are now two independent, equally-capable
 front ends onto the same `store.ScheduleStore`, not a primary (`web`) and a
 read-only shadow (`mcp`).
 
+**NFR3 amendment (M2, issue #1728): C11/C12/C13 are dual-surface, except
+Channel-connect.** M2 adds three capabilities on top of M1's allocation
+above:
+
+- **C11 (multi-Channel management):** Channel-connect (FR25) stays
+  `web`-only, for the identical OAuth-consent reason C2 always was -- there
+  is no more "call this MCP tool to complete a Google consent screen" for
+  a second Channel than there was for the first. The Channel list/switcher
+  page (FR26, `GET /channels`) is `web`-only by the FR text itself (no MCP
+  tool is named for it) -- distinct from `list_channels` (issue #1631,
+  predating M2), an MCP tool that already answered a similar "which
+  Channels can I see" question for an MCP-only client; M2 repoints
+  `list_channels` onto the same `store.AccessStore.
+  ChannelsWithRoleForPerson` query FR26's page uses (issue #1719), so the
+  two now agree by construction, without FR26 itself requiring a new MCP
+  tool.
+- **C12 (cross-Channel aggregate, FR27/FR28):** dual-surface by FR27's own
+  text -- `GET /my-work` (`web/main.go`'s `handleMyWork`) and `get_my_work`
+  (`mcp/tools/my_work.go`) both call `store.MyWorkStore.
+  SummariesForPerson` directly, re-deriving the caller's currently-open
+  roles on every call (FR28) -- neither surface caches or requires a
+  reconnect for a just-revoked Channel to disappear from the very next
+  call.
+- **C13 (three-tier authority, FR30/FR31/FR33/FR35):** invite Co-Creator,
+  promote, remove, and the audit trail are each dual-surface -- `web/
+  access.Handlers` (`GET/POST /channels/{id}/access...`) and `mcp/tools/
+  access.go`'s `invite_co_creator`/`promote_to_co_creator`/
+  `remove_channel_person` plus `mcp/tools/access_audit.go`'s
+  `get_channel_access` call the identical `store.InviteStore`/
+  `store.RoleStore`/`store.AccessStore` methods and the identical
+  `store.CanInvite`/`CanRemove`/`CanViewAudit` authorization checks as
+  their web counterparts -- the same "two independent, equally-capable
+  front ends" relationship C8's amendment above established, not a
+  primary/shadow pair.
+
+The existing NFR3 list (C1/C2/C3 web-only; everything else MCP-exposed
+too) and the C8 amendment above are both unchanged by this addition --
+this is an appended clarification of three new capabilities' allocation,
+not a rewrite of the ones already there.
+
 ## Temporal: schedule upsert helper
 
 `//libs/go/temporal` (the shared Go bootstrap `worker` uses for its
@@ -463,8 +503,25 @@ Migration 001 (`migrate/schema/migrations/001_identity.up.sql`, issue
 join table (LB2, SCD2 per AGENTS.md), and `channel_invite`. `channel` has
 no `owner_id` column -- ownership and every other role live only in
 `channel_person`, read through `//audience_score_system/store`'s
-`CanApprove`/`CanInvite`/`CanReconnect`/`CanRead`/`CanWrite` (NFR5), the
-only sanctioned authorization entry points.
+`CanApprove`/`CanInvite`/`CanReconnect`/`CanRead`/`CanWrite`/`CanRemove`/
+`CanViewAudit` (NFR5/NFR6), the only sanctioned authorization entry
+points. `CanRemove` and `CanViewAudit` are M2 additions (migration 009,
+below) but the mechanism is not new: every one of the seven functions
+resolves purely from `RoleStore.RolesFor`'s currently-held roles for a
+`(channel_id, person_id)` pair -- one role-lookup mechanism, extended for
+a third tier and a removal matrix, never a second, parallel
+authorization path (NFR6). `CanRemove`'s removal matrix (FR33) is the one
+authorization decision in this package that depends on TWO Persons' roles
+at once (the actor's and the target's), not one -- Founder may remove
+Co-Creator or Analyst; Co-Creator may remove Analyst only; nothing ever
+removes a Founder, including a Founder removing themselves (self-removal
+falls out of the matrix's own cells, not a special case). `CanRemove`
+returns `false, nil` both when the matrix disallows a removal and when
+the target already holds no open role at all (FR33's idempotent no-op) --
+callers that must tell the two apart make one extra `RolesFor` call on
+the target, exactly as `store/authz.go`'s `CanRemove` doc comment and
+`web/access.HandleRemove`/`mcp/tools/access.go`'s `remove_channel_person`
+both do.
 
 Migration 002 (`002_research_schedule_outcome.up.sql`, issue #1569) lands
 the LB3 record chain: idea, research notes, viability verdicts (append-only
@@ -598,3 +655,75 @@ Migration 004 (`004_channel_credentials.up.sql`, issue #1571) lands
 "OAuth grants" above), SCD2 per `AGENTS.md`: exactly one live row per
 Channel (`UNIQUE ... WHERE valid_to IS NULL`), a reconnect closes the old
 row and opens a new one.
+
+Migrations 005-007 land `mcp_credential` (original bespoke shape, then
+migrated onto `mcpauth`'s contract) and `mcpauth`'s OAuth2 client-registry/
+auth-code tables -- see "MCP server: caller authentication" above; no
+`channel_person`/`channel_invite` change.
+
+Migration 008 (`008_strategy.up.sql`, issue #1637) is covered above, in
+this same "Data model" section (`strategy`/`strategy_verdict`, the
+Strategy-driven `generate_schedule_plan` read tool).
+
+**Migration 009 (`009_co_creator_tier.up.sql`, issue #1713, M2's C13)**
+lands the third authority tier and its supporting attribution/uniqueness
+machinery, additive-only throughout (NFR6): no existing `channel_person`
+or `channel_invite` row is `UPDATE`d or `DELETE`d, `creator` keeps its
+exact M1 meaning (Founder) unchanged with no backfill, and no row is
+ever backfilled to `co_creator`.
+
+- **Third tier as one more CHECK value (NFR6/NFR7):** `channel_person`'s
+  auto-generated `channel_person_role_check` constraint (Postgres names
+  an unnamed inline CHECK `<table>_<column>_check`) is dropped and
+  replaced with `CHECK (role IN ('creator', 'co_creator', 'analyst'))`.
+  Nothing else about the column, the table, or `store.Role`'s Go type
+  changes shape for this -- `RoleCoCreator` is a new `store.Role`
+  constant (`store/models.go`) and nothing compares roles by rank or
+  order anywhere in the codebase (`containsRole`/`hasRole` in
+  `store/authz.go` are pure set-membership checks). **NFR7's guarantee
+  is exactly this shape:** a future fourth tier is one more CHECK value
+  in a migration plus one more Go constant, never a data migration that
+  would lose existing role history -- nothing in this schema or in
+  `store`'s authorization functions assumes exactly three tiers can ever
+  exist.
+- **Grant/revoke attribution (FR34):** `channel_person` gains
+  `granted_by_person_id` and `revoked_by_person_id`, both nullable (no
+  actor is invented for pre-M2 rows). Per `AGENTS.md`'s SCD2
+  close-and-open convention, `granted_by_person_id` is written once at a
+  row's `INSERT` (`store/role.go`'s `addRoleTx`, the only two write paths
+  that ever touch `channel_person` being `addRoleTx` and `RoleStore.
+  RemoveRole`) and `revoked_by_person_id` is written once, together with
+  `valid_to`, at the closing `UPDATE`. **Known gap (issue #1787, out of
+  scope for #1728):** a promotion's implicit revoke-half -- `addRoleTx`
+  closing a Person's old Analyst row in the same call that opens their
+  new Co-Creator row -- does not thread an actor through to that closing
+  `UPDATE`, so that one `revoked` audit event always renders with no
+  actor (`"unknown"`, never fabricated). This is real, current, and
+  accepted for M2; `//audience_score_system/citest`'s M2 end-to-end test
+  asserts it explicitly as expected behavior rather than treating it as
+  a surprise.
+- **Founder-uniqueness DB backstop (NFR10):** a partial unique index,
+  `channel_person_channel_id_founder_current` on `(channel_id) WHERE
+  role = 'creator' AND valid_to IS NULL`, enforces FR29's "exactly one
+  Founder per Channel" at the database level -- belt-and-suspenders
+  alongside the fact that no FR path other than Channel-connect (FR25)
+  ever grants `creator`.
+- **Per-`(channel_id, role)` live-invite uniqueness (NFR11):**
+  `channel_invite` gains a `role` column (`co_creator` or `analyst` --
+  `creator` is never a valid invite role, since no invite path ever
+  grants Founder), defaulted to `'analyst'` so M1's pre-existing rows
+  read as exactly what they always were (Analyst invites). The live-invite
+  uniqueness index is rescoped from `channel_invite_channel_id_live` on
+  `(channel_id)` to `channel_invite_channel_id_role_live` on `(channel_id,
+  role)`, so a live Co-Creator invite and a live Analyst invite coexist on
+  one Channel (FR30) instead of one live invite total per Channel.
+- **`v_channel_person_audit` (FR35):** a `UNION ALL` view -- one row per
+  grant *event* (every `channel_person` row, at `valid_from`) unioned with
+  one row per revoke *event* (every CLOSED `channel_person` row, at
+  `valid_to`) -- per `AGENTS.md`'s SCD2 "Views" convention: the join from
+  `channel_person` to `person` (subject, and separately the granter/
+  revoker) lives here once, not re-derived per call site.
+  `store.AccessStore.AuditTrail` selects from this view directly rather
+  than hand-rolling the same union in Go. Ordering (most-recent-first, per
+  FR35) is the caller's: `store.AccessStore.AuditTrail` sorts
+  `occurred_at DESC`.

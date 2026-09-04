@@ -15,16 +15,17 @@ server precedent used elsewhere in the repo.
 
 | Binary | `release_app` name | app_type | Responsibility |
 |--------|---------------------|----------|--------|
-| `migrate/` | `migration` | `job` | Applies every migration (001-005: identity, research/schedule/outcome, web session, channel credentials, MCP credentials). |
-| `web/` | `web` | `external-api` | The only UI surface. Three of its surfaces are UI-only (NFR3): Google OAuth sign-in/sign-up (C1), Channel connect (C2), Analyst invite/accept (C3). Its fourth, schedule-draft approve/un-approve/edit (C8), is also reachable via `mcp` (issue #1648) -- both are equally-capable front ends onto the same store. |
-| `mcp/` | `mcp` | `external-api` | Every other capability (C4-C7, C8, C9, C10) as MCP tools -- Channel access discovery (`list_channels`, issue #1631), research notes, viability verdicts, schedule sync reads, pacing policy, schedule drafting/commit/un-commit/edit, outcome match confirm/reject, and browsing. |
+| `migrate/` | `migration` | `job` | Applies every migration (001-009: identity, research/schedule/outcome, web session, channel credentials, MCP credentials (original, then migrated onto `mcpauth`'s contract), `mcpauth` OAuth2 client/auth-code tables, Strategy, and M2's Co-Creator tier). |
+| `web/` | `web` | `external-api` | The only UI surface. Google OAuth sign-in/sign-up (C1), Channel connect (C2), and the Channel list/switcher (`GET /channels`, FR26) are UI-only (NFR3) -- the switcher is the signed-in landing page as of M2, replacing M1's inline Channel list on `/`. Everything else `web` hosts is dual-surface with `mcp` (same store methods, same authorization): Analyst invite/accept (C3), schedule-draft approve/un-approve/edit (C8, issue #1648), and M2's access-management page (`/channels/{id}/access` -- invite Co-Creator, promote, remove, the audit-trail panel, FR30/FR31/FR33/FR35) and cross-Channel aggregate page (`/my-work`, FR27/FR28). |
+| `mcp/` | `mcp` | `external-api` | Every capability not UI-only above, as MCP tools: Channel access discovery (`list_channels`, issue #1631, repointed onto M2's `AccessStore.ChannelsWithRoleForPerson` by issue #1719), research notes, viability verdicts, schedule sync reads, pacing policy, schedule drafting/commit/un-commit/edit, outcome match confirm/reject, browsing, Strategy/Plan generation, and M2's access-management tools (`invite_co_creator`, `promote_to_co_creator`, `remove_channel_person`, `get_channel_access`) and cross-Channel aggregate (`get_my_work`). |
 | `worker/` | `worker` | `worker` | Per-Channel Temporal scheduled workflow: syncs YouTube schedule (C6) and published-video metrics (C9) on a ~1-24 hour cadence (NFR4, default 24h). A manual run can be forced via `mcp`'s `trigger_channel_sync` tool. |
 
-All four are complete as of M1 (see [`PRODUCT.md`](PRODUCT.md)'s roadmap)
-and share the `audience-score-system` `release_app` domain, producing
-images `audience-score-system-migration`, `-web`, `-mcp`, `-worker`. See
-`//audience_score_system/citest` for the milestone's own end-to-end
-integration test, which drives all four together.
+All four are complete as of M1 and M2 (see [`PRODUCT.md`](PRODUCT.md)'s
+roadmap) and share the `audience-score-system` `release_app` domain,
+producing images `audience-score-system-migration`, `-web`, `-mcp`,
+`-worker`. See `//audience_score_system/citest` for each milestone's own
+end-to-end integration test (`e2e_test.go` for M1,
+`m2_multi_channel_test.go` for M2), which drives all four together.
 
 ## Local Development
 
@@ -54,12 +55,14 @@ bazel run //audience_score_system/migrate:migration
 bazel run //audience_score_system/migrate:migration -- -version   # check current version
 bazel run //audience_score_system/migrate:migration -- -history   # applied-migration history
 
-# 2. Run the web UI (OAuth signup/login, Channel connect, invite/accept --
-#    its three UI-only surfaces, per NFR3 -- plus a schedule approve/
-#    un-approve/edit UI that mcp's schedule-draft tools also cover)
+# 2. Run the web UI (OAuth signup/login, Channel connect, and the Channel
+#    list/switcher are UI-only per NFR3; invite/accept, schedule approve/
+#    un-approve/edit, M2's access-management page, and /my-work are each
+#    also reachable via mcp's equivalent tools -- see the Binaries table)
 bazel run //audience_score_system/web
 
-# 3. Run the MCP server (every other capability -- C4-C7, C8, C9, C10)
+# 3. Run the MCP server (every capability not UI-only above -- C4-C7, C8,
+#    C9, C10, and M2's access-management/aggregate tools)
 bazel run //audience_score_system/mcp
 
 # 4. Run the Temporal worker (per-Channel schedule/outcome sync)
