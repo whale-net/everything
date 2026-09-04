@@ -242,8 +242,15 @@ jobs:
         # the image build itself): this job's outputs are throwaway, so
         # --remote_download_minimal not fully materializing remote-cache
         # hits to disk doesn't matter the way it would for the image bake.
+        #
+        # No `bazel shutdown` afterward: it hung and had to be SIGKILL'd
+        # here every time, seemingly a PID-reaping quirk specific to how
+        # GH Actions execs steps into a job `container:` (a plain `docker
+        # build`'s RUN step -- both locally and in the real image-build
+        # workflow -- shuts down cleanly with the exact same command). The
+        # container is destroyed the moment this job ends regardless, so
+        # there's nothing a clean shutdown buys here.
         bazel --output_base=/var/cache/bazel/ob build --config=ci //...
-        bazel --output_base=/var/cache/bazel/ob shutdown
 
   # Container architecture test - verify cross-compilation works correctly
   # Runs in parallel with test job for faster CI
