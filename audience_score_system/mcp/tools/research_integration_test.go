@@ -27,10 +27,12 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -494,6 +496,45 @@ func TestListResearchNotes_IdeaIDFilterRestrictsToThatIdea(t *testing.T) {
 	assert.Equal(t, "for idea one", out.Notes[0].Text)
 }
 
+// TestListResearchNotes_LimitTruncatedAndBeforePageBackwardExactly proves
+// issue #1808's fix: limit caps the response with truncated set, and before
+// (paired with the oldest returned note's created_at) retrieves the row(s)
+// that fell off the page -- before this fix, list_research_notes had no
+// limit at all and could exceed an MCP client's response-size cap outright.
+func TestListResearchNotes_LimitTruncatedAndBeforePageBackwardExactly(t *testing.T) {
+	f := newFixture(t)
+	ctx := context.Background()
+	cs := f.connect(t, f.creator.ID)
+
+	const seeded = 5
+	for i := 0; i < seeded; i++ {
+		_, err := f.st.Research().SaveNote(ctx, store.SaveNoteInput{
+			ChannelID: f.ch.ID, Text: fmt.Sprintf("page note %d", i),
+			AuthorPersonID: f.creator.ID, IdempotencyKey: fmt.Sprintf("page-note-%d", i),
+		})
+		require.NoError(t, err)
+	}
+
+	firstRes := f.call(t, cs, "list_research_notes", tools.ListResearchNotesInput{ChannelID: f.ch.ID.String(), Limit: 3})
+	firstPage := decode[tools.ListResearchNotesOutput](t, firstRes)
+	require.Len(t, firstPage.Notes, 3, "must be capped at the caller-supplied limit")
+	assert.True(t, firstPage.Truncated, "more notes exist beyond limit")
+	for _, n := range firstPage.Notes {
+		assert.NotContains(t, []string{"page note 0", "page note 1"}, n.Text, "the two oldest notes must have fallen off the first (newest-first) page")
+	}
+
+	oldestOnFirstPage := firstPage.Notes[len(firstPage.Notes)-1]
+	before, err := time.Parse(time.RFC3339, oldestOnFirstPage.CreatedAt)
+	require.NoError(t, err)
+
+	secondRes := f.call(t, cs, "list_research_notes", tools.ListResearchNotesInput{ChannelID: f.ch.ID.String(), Before: &before})
+	secondPage := decode[tools.ListResearchNotesOutput](t, secondRes)
+	require.Len(t, secondPage.Notes, 2, "before must surface exactly the notes that fell off the first page")
+	assert.False(t, secondPage.Truncated)
+	texts := []string{secondPage.Notes[0].Text, secondPage.Notes[1].Text}
+	assert.ElementsMatch(t, []string{"page note 0", "page note 1"}, texts)
+}
+
 func TestListIdeas_NoteCountAndHasVerdictStats(t *testing.T) {
 	f := newFixture(t)
 	cs := f.connect(t, f.creator.ID)
@@ -522,4 +563,40 @@ func TestListIdeas_NoteCountAndHasVerdictStats(t *testing.T) {
 	require.Len(t, after.Ideas, 1)
 	assert.Equal(t, 2, after.Ideas[0].NoteCount, "note count must be unaffected by the verdict append")
 	assert.True(t, after.Ideas[0].HasVerdict, "list_ideas must reflect the newly recorded verdict")
+}
+
+// TestListIdeas_LimitTruncatedAndSincePageForwardExactly proves issue
+// #1813's fix: limit caps the response with truncated set, and since
+// (paired with the last returned Idea's created_at) resumes exactly at
+// that boundary row plus the remainder -- before this fix, list_ideas had
+// no limit at all and could exceed an MCP client's response-size cap
+// outright. Ideas are returned oldest-first (same as ListByChannel), so
+// since is an inclusive lower bound used to page forward, mirroring
+// list_pending_matches' pagination from issue #1808 rather than
+// list_research_notes' newest-first before/since pair.
+func TestListIdeas_LimitTruncatedAndSincePageForwardExactly(t *testing.T) {
+	f := newFixture(t)
+	ctx := context.Background()
+	cs := f.connect(t, f.creator.ID)
+
+	const seeded = 5
+	for i := 0; i < seeded; i++ {
+		_, err := f.st.Ideas().Create(ctx, f.ch.ID, fmt.Sprintf("Page Idea %d", i), f.creator.ID)
+		require.NoError(t, err)
+	}
+
+	firstRes := f.call(t, cs, "list_ideas", tools.ListIdeasInput{ChannelID: f.ch.ID.String(), Limit: 3})
+	firstPage := decode[tools.ListIdeasOutput](t, firstRes)
+	require.Len(t, firstPage.Ideas, 3, "must be capped at the caller-supplied limit")
+	assert.True(t, firstPage.Truncated, "more ideas exist beyond limit")
+
+	lastOnFirstPage := firstPage.Ideas[len(firstPage.Ideas)-1]
+	since, err := time.Parse(time.RFC3339Nano, lastOnFirstPage.CreatedAt)
+	require.NoError(t, err)
+
+	secondRes := f.call(t, cs, "list_ideas", tools.ListIdeasInput{ChannelID: f.ch.ID.String(), Since: &since})
+	secondPage := decode[tools.ListIdeasOutput](t, secondRes)
+	require.False(t, secondPage.Truncated)
+	require.Len(t, secondPage.Ideas, seeded-3+1, "since (inclusive) resumes at the last row of the prior page plus the remaining ideas")
+	assert.Equal(t, lastOnFirstPage.IdeaID, secondPage.Ideas[0].IdeaID, "the inclusive bound reappears as the new page's first row")
 }

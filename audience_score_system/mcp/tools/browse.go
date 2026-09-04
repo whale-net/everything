@@ -163,12 +163,13 @@ const defaultPredictionVsOutcomeLimit = 25
 type GetPredictionVsOutcomeInput struct {
 	ChannelID string `json:"channel_id" jsonschema:"Channel to compare predictions against outcomes for, as a UUID string"`
 	IdeaID    string `json:"idea_id,omitempty" jsonschema:"Restrict to this Idea, as a UUID string"`
-	// Since optionally bounds the window by each video's published_at --
-	// a lower bound only, mirroring get_channel_schedule's From/To naming
-	// but simplified to the one direction a comparison read needs (most
-	// recent first, going back to Since).
-	Since *time.Time `json:"since,omitempty" jsonschema:"Only include videos published at or after this time"`
-	Limit int        `json:"limit,omitempty" jsonschema:"Maximum rows to return, most-recently-published first (default 25). The response's truncated flag is set when more matching rows exist."`
+	// Since/Before bound the window by each video's published_at.
+	// Together they let a caller page backward past truncated: request
+	// the newest window, then re-request with before set to the oldest
+	// row's published_at from the previous response (issue #1808).
+	Since  *time.Time `json:"since,omitempty" jsonschema:"Only include videos published at or after this time"`
+	Before *time.Time `json:"before,omitempty" jsonschema:"Only include videos published strictly before this time -- pair with since to page backward past a truncated response"`
+	Limit  int        `json:"limit,omitempty" jsonschema:"Maximum rows to return, most-recently-published first (default 25). The response's truncated flag is set when more matching rows exist."`
 }
 
 // ChannelScopeID implements server.ChannelScoped.
@@ -202,7 +203,8 @@ func registerGetPredictionVsOutcome(reg *server.Registry, browse store.BrowseSto
 			"committed slot, the video, its latest metrics, and the match's provenance (auto vs confirmed) and " +
 			"confidence. Videos with a match still pending human resolution are excluded but counted in " +
 			"pending_match_count -- call list_pending_matches to resolve them. Response is capped at limit (default " +
-			"25); see truncated.",
+			"25); see truncated. Page backward past truncation by re-calling with before set to the oldest returned " +
+			"row's published_at.",
 	}, getPredictionVsOutcome(browse, matches))
 }
 
@@ -215,7 +217,7 @@ func getPredictionVsOutcome(browse store.BrowseStore, matches store.MatchStore) 
 			return nil, GetPredictionVsOutcomeOutput{}, fmt.Errorf("idea_id is not a valid UUID: %w", err)
 		}
 
-		rows, err := browse.PredictionVsOutcome(ctx, channelID, ideaID, in.Since)
+		rows, err := browse.PredictionVsOutcome(ctx, channelID, ideaID, in.Since, in.Before)
 		if err != nil {
 			return nil, GetPredictionVsOutcomeOutput{}, fmt.Errorf("get_prediction_vs_outcome: %w", err)
 		}
@@ -305,12 +307,16 @@ func resolveOverviewSections(requested []string) (map[string]bool, error) {
 // GetChannelOverviewInput is get_channel_overview's argument schema.
 type GetChannelOverviewInput struct {
 	ChannelID string `json:"channel_id" jsonschema:"Channel to read an overview of, as a UUID string"`
-	// Since optionally bounds research_notes (by created_at) and
+	// Since/Before optionally bound research_notes (by created_at) and
 	// prediction_vs_outcome (by the video's published_at) -- ideas and
 	// schedule are unaffected, since an Idea or a schedule entry's
 	// relevance does not expire the way a note or an outcome's freshness
-	// does.
-	Since *time.Time `json:"since,omitempty" jsonschema:"Only include research notes and prediction-vs-outcome rows at/after this time; ideas and schedule entries are unaffected"`
+	// does. Together they let a caller page backward past either
+	// section's fixed default limit (issue #1808): request the newest
+	// window, then re-request with before set to the oldest item's
+	// timestamp from the previous response.
+	Since  *time.Time `json:"since,omitempty" jsonschema:"Only include research notes and prediction-vs-outcome rows at/after this time; ideas and schedule entries are unaffected"`
+	Before *time.Time `json:"before,omitempty" jsonschema:"Only include research notes and prediction-vs-outcome rows strictly before this time -- pair with since to page backward past a section's default limit; ideas and schedule entries are unaffected"`
 	// Sections restricts the response to a subset -- see
 	// allOverviewSections for the accepted names.
 	Sections []string `json:"sections,omitempty" jsonschema:"Restrict the response to these sections: ideas, research_notes, schedule, prediction_vs_outcome. Omit or leave empty for every section."`
@@ -430,13 +436,25 @@ func summarizeSyncedSchedule(vids []store.SyncedVideo) SyncedScheduleSummaryOutp
 	return out
 }
 
-// filterNotesSince returns the subset of notes created at or after since.
-func filterNotesSince(notes []store.ResearchNoteWithAuthor, since time.Time) []store.ResearchNoteWithAuthor {
+// filterNotesRange returns the subset of notes created at/after since (nil
+// = no lower bound) and strictly before before (nil = no upper bound) --
+// the shared helper get_channel_overview's research_notes section and
+// list_research_notes both use to page backward past their default/caller
+// limit (issue #1808): request the newest window, then re-request with
+// before set to the oldest item's created_at from the previous response.
+func filterNotesRange(notes []store.ResearchNoteWithAuthor, since, before *time.Time) []store.ResearchNoteWithAuthor {
+	if since == nil && before == nil {
+		return notes
+	}
 	out := make([]store.ResearchNoteWithAuthor, 0, len(notes))
 	for _, n := range notes {
-		if !n.CreatedAt.Before(since) {
-			out = append(out, n)
+		if since != nil && n.CreatedAt.Before(*since) {
+			continue
 		}
+		if before != nil && !n.CreatedAt.Before(*before) {
+			continue
+		}
+		out = append(out, n)
 	}
 	return out
 }
@@ -478,7 +496,8 @@ func registerGetChannelOverview(reg *server.Registry, deps overviewDeps) {
 			"capped at a documented default and the response's truncated field says which ones were cut -- this tool " +
 			"will never dump a Channel's entire history even if asked, since no MCP client's context window can hold " +
 			"it. Optionally restrict to a subset via sections, and/or bound research_notes/prediction_vs_outcome by " +
-			"since. Empty sections come back as empty lists, never null or an error, for a freshly connected Channel.",
+			"since/before -- pair both to page backward past a section's default limit. Empty sections come back as " +
+			"empty lists, never null or an error, for a freshly connected Channel.",
 	}, getChannelOverview(deps))
 }
 
@@ -536,9 +555,7 @@ func getChannelOverview(deps overviewDeps) mcp.ToolHandlerFor[GetChannelOverview
 			if err != nil {
 				return nil, GetChannelOverviewOutput{}, fmt.Errorf("get_channel_overview: list research notes: %w", err)
 			}
-			if in.Since != nil {
-				notes = filterNotesSince(notes, *in.Since)
-			}
+			notes = filterNotesRange(notes, in.Since, in.Before)
 			trimmed, truncated := truncateSlice(notes, defaultNotesOverviewLimit)
 			if truncated {
 				out.Truncated = append(out.Truncated, overviewSectionNotes)
@@ -569,7 +586,7 @@ func getChannelOverview(deps overviewDeps) mcp.ToolHandlerFor[GetChannelOverview
 		}
 
 		if wantSections[overviewSectionOutcomes] {
-			rows, err := deps.browse.PredictionVsOutcome(ctx, channelID, nil, in.Since)
+			rows, err := deps.browse.PredictionVsOutcome(ctx, channelID, nil, in.Since, in.Before)
 			if err != nil {
 				return nil, GetChannelOverviewOutput{}, fmt.Errorf("get_channel_overview: list prediction vs outcome: %w", err)
 			}

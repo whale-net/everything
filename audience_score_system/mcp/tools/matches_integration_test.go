@@ -23,6 +23,7 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -285,6 +286,69 @@ func TestListPendingMatches_ChannelScoped_OtherChannelsMatchNotVisible(t *testin
 	res := f.call(t, cs, "list_pending_matches", tools.ListPendingMatchesInput{ChannelID: otherCh.ID.String()})
 	out := mdecode[tools.ListPendingMatchesOutput](t, res)
 	assert.Empty(t, out.Matches, "a Channel with no pending matches of its own must never see another Channel's")
+}
+
+// TestListPendingMatches_LimitTruncatedAndSincePageForwardExactly proves
+// issue #1808's fix: limit caps the response with truncated set, and since
+// (paired with the last returned match's created_at) resumes past a
+// truncated page -- before this fix, list_pending_matches had no limit at
+// all and could exceed an MCP client's response-size cap outright.
+func TestListPendingMatches_LimitTruncatedAndSincePageForwardExactly(t *testing.T) {
+	f := newMatchesFixture(t)
+	ctx := context.Background()
+	cs := f.connect(t, f.creator.ID)
+
+	// The fixture already seeded one pending match (f.match); add two more
+	// so there are three total, oldest first (list_pending_matches' order).
+	for i := 0; i < 2; i++ {
+		idea, err := f.st.Ideas().Create(ctx, f.ch.ID, fmt.Sprintf("Extra Idea %d", i), f.creator.ID)
+		require.NoError(t, err)
+		verdict, err := f.st.Verdicts().Append(ctx, store.AppendVerdictInput{
+			IdeaID: idea.ID, Verdict: store.VerdictViable, Reasoning: "greenlit", AuthorPersonID: f.creator.ID,
+		})
+		require.NoError(t, err)
+		entry, err := f.st.Schedules().SaveDraft(ctx, store.SaveDraftInput{
+			ChannelID: f.ch.ID, IdeaID: idea.ID, VerdictID: verdict.ID,
+			ProposedPublishAt: time.Now().Add(time.Duration(48+i) * time.Hour), CreatedByPersonID: f.creator.ID,
+		})
+		require.NoError(t, err)
+		require.NoError(t, f.st.Schedules().Approve(ctx, entry.ID, f.creator.ID))
+
+		publishedAt := time.Now().Add(-time.Hour)
+		require.NoError(t, f.st.Sync().UpsertVideos(ctx, f.ch.ID, []store.SyncedVideo{{
+			YouTubeVideoID: "yt-" + uuid.NewString(), Title: fmt.Sprintf("Extra Video %d", i),
+			PrivacyStatus: store.PrivacyStatusPublic, PublishedAt: &publishedAt, LastSyncedAt: time.Now(),
+		}}))
+		synced, err := f.st.Sync().ListSchedule(ctx, f.ch.ID)
+		require.NoError(t, err)
+		var video store.SyncedVideo
+		for _, v := range synced {
+			if v.Title == fmt.Sprintf("Extra Video %d", i) {
+				video = v
+			}
+		}
+		require.NotEmpty(t, video.ID, "must have found the just-inserted synced video")
+
+		require.NoError(t, f.st.Matches().Record(ctx, store.VideoScheduleMatch{
+			SyncedVideoID: video.ID, ScheduleEntryID: &entry.ID, Confidence: 0.5, State: store.MatchStatePending,
+		}))
+	}
+
+	firstRes := f.call(t, cs, "list_pending_matches", tools.ListPendingMatchesInput{ChannelID: f.ch.ID.String(), Limit: 2})
+	firstPage := mdecode[tools.ListPendingMatchesOutput](t, firstRes)
+	require.Len(t, firstPage.Matches, 2, "must be capped at the caller-supplied limit")
+	assert.True(t, firstPage.Truncated, "more matches exist beyond limit")
+
+	lastOnFirstPage := firstPage.Matches[len(firstPage.Matches)-1]
+	m, err := f.st.Matches().GetByID(ctx, uuid.MustParse(lastOnFirstPage.MatchID))
+	require.NoError(t, err)
+	since := m.CreatedAt
+
+	secondRes := f.call(t, cs, "list_pending_matches", tools.ListPendingMatchesInput{ChannelID: f.ch.ID.String(), Since: &since})
+	secondPage := mdecode[tools.ListPendingMatchesOutput](t, secondRes)
+	require.False(t, secondPage.Truncated)
+	require.Len(t, secondPage.Matches, 2, "since (inclusive) resumes at the last row of the prior page plus the one remaining match")
+	assert.Equal(t, lastOnFirstPage.MatchID, secondPage.Matches[0].MatchID, "the inclusive bound reappears as the new page's first row")
 }
 
 func TestListPendingMatches_UnassociatedPersonDenied(t *testing.T) {

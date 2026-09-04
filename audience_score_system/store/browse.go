@@ -24,11 +24,13 @@ type BrowseStore interface {
 	// video with a live (auto or confirmed) match to a committed
 	// schedule_entry on channelID, most-recently-published first,
 	// optionally narrowed to a single ideaID (nil = no filter) and/or a
-	// lower bound on the video's published_at (since, nil = no filter). A
-	// video with no recorded metrics yet does not appear -- mirrors
-	// migration 002's v_prediction_vs_outcome qualifying-row rule (see
-	// that view's SQL comment) with one deliberate difference: this query
-	// joins schedule_entry directly to viability_verdict via
+	// lower/upper bound on the video's published_at (since/before, nil =
+	// no filter on that side; since/before together let a caller page
+	// backward past a fixed truncation limit, issue #1808). A video with
+	// no recorded metrics yet does not appear -- mirrors migration 002's
+	// v_prediction_vs_outcome qualifying-row rule (see that view's SQL
+	// comment) with one deliberate difference: this query joins
+	// schedule_entry directly to viability_verdict via
 	// schedule_entry.verdict_id, never through v_current_verdict. The view
 	// requires se.verdict_id to equal the idea's CURRENT verdict's id,
 	// which means a schedule_entry committed under an older verdict
@@ -37,7 +39,7 @@ type BrowseStore interface {
 	// version, not a moving target" contract on that column. This method
 	// returns the bound version's data regardless of what the idea's
 	// current verdict has since become.
-	PredictionVsOutcome(ctx context.Context, channelID uuid.UUID, ideaID *uuid.UUID, since *time.Time) ([]PredictionOutcome, error)
+	PredictionVsOutcome(ctx context.Context, channelID uuid.UUID, ideaID *uuid.UUID, since, before *time.Time) ([]PredictionOutcome, error)
 
 	// IdeasWithCurrentVerdict returns every Idea for channelID
 	// (most-recently-created first) alongside its current verdict (the
@@ -86,10 +88,13 @@ const predictionOutcomeJoin = `
 
 // PredictionVsOutcome deliberately does not select from
 // v_prediction_vs_outcome -- see the BrowseStore.PredictionVsOutcome doc
-// for why. $2/$3 use a NULL-safe "no filter" idiom (`$n IS NULL OR ...`)
+// for why. $2/$3/$4 use a NULL-safe "no filter" idiom (`$n IS NULL OR ...`)
 // matching schedule_read.go's withinWindow-adjacent SQL style elsewhere in
-// this package.
-func (s browseStore) PredictionVsOutcome(ctx context.Context, channelID uuid.UUID, ideaID *uuid.UUID, since *time.Time) ([]PredictionOutcome, error) {
+// this package. since/before together let a caller page backward past a
+// fixed truncation limit (issue #1808): request the newest window, then
+// re-request with before set to the oldest row's published_at from the
+// previous response.
+func (s browseStore) PredictionVsOutcome(ctx context.Context, channelID uuid.UUID, ideaID *uuid.UUID, since, before *time.Time) ([]PredictionOutcome, error) {
 	rows, err := s.pool.Query(ctx, `
 		SELECT
 			i.id, i.title,
@@ -104,8 +109,9 @@ func (s browseStore) PredictionVsOutcome(ctx context.Context, channelID uuid.UUI
 		WHERE i.channel_id = $1
 		  AND ($2::uuid IS NULL OR i.id = $2)
 		  AND ($3::timestamptz IS NULL OR sv.published_at >= $3)
+		  AND ($4::timestamptz IS NULL OR sv.published_at < $4)
 		ORDER BY sv.published_at DESC NULLS LAST, i.title
-	`, channelID, ideaID, since)
+	`, channelID, ideaID, since, before)
 	if err != nil {
 		return nil, fmt.Errorf("list prediction vs outcome for channel: %w", err)
 	}
