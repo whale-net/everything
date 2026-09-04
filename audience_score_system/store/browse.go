@@ -55,6 +55,35 @@ type browseStore struct{ pool *pgxpool.Pool }
 
 var _ BrowseStore = browseStore{}
 
+// predictionOutcomeJoin is the FROM/JOIN chain shared by
+// BrowseStore.PredictionVsOutcome (one Channel, every qualifying row) and
+// MyWorkStore.SummariesForPerson (issue #1717, many Channels, top-1-per-
+// Channel): idea -> its committed schedule_entry -> the SPECIFIC
+// viability_verdict version bound to that entry (LB3, not the idea's
+// current verdict) -> its author -> a live (auto/confirmed)
+// video_schedule_match -> the synced_video it points at -> that video's
+// latest video_metrics snapshot. Factored out so this join -- and in
+// particular the LB3 "bound version, not current" subtlety documented at
+// length on PredictionVsOutcome's doc comment above -- is written exactly
+// once; callers add their own SELECT list, WHERE, and ORDER BY/window
+// function on top of it.
+const predictionOutcomeJoin = `
+	FROM idea i
+	JOIN schedule_entry se ON se.idea_id = i.id AND se.state = 'committed'
+	JOIN viability_verdict vv ON vv.id = se.verdict_id
+	JOIN person author ON author.id = vv.author_person_id
+	JOIN video_schedule_match vsm ON vsm.schedule_entry_id = se.id AND vsm.state IN ('auto', 'confirmed')
+	JOIN synced_video sv ON sv.id = vsm.synced_video_id
+	JOIN LATERAL (
+		SELECT m.views, m.average_view_duration_seconds, m.average_view_percentage,
+		       m.impressions, m.impression_ctr, m.measured_at
+		FROM video_metrics m
+		WHERE m.synced_video_id = sv.id
+		ORDER BY m.measured_at DESC
+		LIMIT 1
+	) vm ON TRUE
+`
+
 // PredictionVsOutcome deliberately does not select from
 // v_prediction_vs_outcome -- see the BrowseStore.PredictionVsOutcome doc
 // for why. $2/$3 use a NULL-safe "no filter" idiom (`$n IS NULL OR ...`)
@@ -71,20 +100,7 @@ func (s browseStore) PredictionVsOutcome(ctx context.Context, channelID uuid.UUI
 			sv.id, sv.youtube_video_id, COALESCE(sv.title, ''), sv.published_at,
 			vm.views, vm.average_view_duration_seconds, vm.average_view_percentage,
 			vm.impressions, vm.impression_ctr, vm.measured_at
-		FROM idea i
-		JOIN schedule_entry se ON se.idea_id = i.id AND se.state = 'committed'
-		JOIN viability_verdict vv ON vv.id = se.verdict_id
-		JOIN person author ON author.id = vv.author_person_id
-		JOIN video_schedule_match vsm ON vsm.schedule_entry_id = se.id AND vsm.state IN ('auto', 'confirmed')
-		JOIN synced_video sv ON sv.id = vsm.synced_video_id
-		JOIN LATERAL (
-			SELECT m.views, m.average_view_duration_seconds, m.average_view_percentage,
-			       m.impressions, m.impression_ctr, m.measured_at
-			FROM video_metrics m
-			WHERE m.synced_video_id = sv.id
-			ORDER BY m.measured_at DESC
-			LIMIT 1
-		) vm ON TRUE
+		`+predictionOutcomeJoin+`
 		WHERE i.channel_id = $1
 		  AND ($2::uuid IS NULL OR i.id = $2)
 		  AND ($3::timestamptz IS NULL OR sv.published_at >= $3)

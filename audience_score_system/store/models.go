@@ -456,3 +456,61 @@ type IdeaOverview struct {
 	CurrentVerdict          *VerdictValue
 	CurrentVerdictReasoning *string
 }
+
+// IdeaVerdictSummary is one Channel's single most-recently-recorded
+// viability_verdict across ALL of its Ideas -- MyWorkStore.
+// SummariesForPerson's ChannelWorkSummary.LatestVerdict field (issue
+// #1717, FR27). Deliberately not the same thing as any one Idea's
+// *current* verdict (v_current_verdict/IdeaOverview above): each Idea
+// keeps its own independent version sequence, so this is a cross-Idea
+// "what did this Channel most recently judge" read, ordered by
+// viability_verdict.created_at, not by version.
+type IdeaVerdictSummary struct {
+	IdeaID    uuid.UUID
+	IdeaTitle string
+
+	VerdictID uuid.UUID
+	Version   int
+	Verdict   VerdictValue
+	Reasoning string
+	CreatedAt time.Time
+}
+
+// ScheduleDraftState is one Channel's schedule_entry counts --
+// MyWorkStore.SummariesForPerson's ChannelWorkSummary.ScheduleState field
+// (issue #1717, FR27). NextProposedPublishAt is the earliest
+// proposed_publish_at still at or after the query time across BOTH draft
+// and committed entries, nil if none is upcoming -- the zero value (all
+// fields zero/nil) is the correct "no schedule_entry rows yet" state, not
+// a sentinel error.
+type ScheduleDraftState struct {
+	DraftCount            int
+	CommittedCount        int
+	NextProposedPublishAt *time.Time
+}
+
+// ChannelWorkSummary is one Channel's cross-section "what's going on
+// here" summary -- MyWorkStore.SummariesForPerson's row shape (issue
+// #1717, FR27/FR28). Content-parity with BrowseStore/get_channel_overview
+// (C10, issue #1582/FR24): this is the same four-section summary,
+// assembled across every Channel a Person currently holds an open role
+// on, rather than for one Channel a caller already picked.
+type ChannelWorkSummary struct {
+	Channel Channel
+	Role    Role
+
+	// LatestNotes is most-recent-first, capped at SummariesForPerson's
+	// notesPerChannel argument. Empty (never nil) when the Channel has no
+	// research notes yet.
+	LatestNotes []ResearchNote
+	// LatestVerdict is nil when the Channel has no Idea with a recorded
+	// verdict yet.
+	LatestVerdict *IdeaVerdictSummary
+	ScheduleState ScheduleDraftState
+	// LatestOutcome is nil when the Channel has no published,
+	// live-matched video against a committed schedule entry yet -- see
+	// BrowseStore.PredictionVsOutcome's qualifying-row rule, which this
+	// mirrors exactly (LB3: the verdict version bound to the schedule
+	// entry, not the Idea's current verdict).
+	LatestOutcome *PredictionOutcome
+}

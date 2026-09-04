@@ -93,3 +93,10 @@ func (s *Store) Strategies() StrategyStore { return strategyStore{pool: s.pool} 
 // (FR35). Performs no authorization itself -- see AccessStore's doc
 // comment.
 func (s *Store) Access() AccessStore { return accessStore{pool: s.pool} }
+
+// MyWork returns the MyWorkStore implementation (issue #1717, FR27/FR28,
+// NFR9) -- the cross-Channel "my work" aggregate: for every Channel a
+// Person currently holds an open role on, its latest research notes,
+// verdict, schedule state, and outcome comparison, in a bounded number of
+// queries regardless of Channel count.
+func (s *Store) MyWork() MyWorkStore { return myWorkStore{pool: s.pool} }
