@@ -543,3 +543,112 @@ func TestGenerateSchedulePlan_IgnoresInactiveStrategies(t *testing.T) {
 	assert.Empty(t, out.Proposals)
 	assert.Empty(t, out.Skipped, "an inactive strategy's ideas are simply not considered -- not reported as skipped")
 }
+
+// ── generate_schedule_plan: pacing policy reconciliation ─────────────────
+//
+// Before this reconciliation, a Strategy's cadence and the Channel's
+// pacing policy were two independent, unreconciled numbers:
+// generate_schedule_plan would happily propose more slots into a
+// calendar week than the pacing policy's target_uploads_per_week allows,
+// discoverable only after the fact via FR18's cadence_exceeded flag on
+// save_schedule_draft. These tests prove generate_schedule_plan now
+// pushes a proposal forward (never earlier) until it fits.
+
+func TestGenerateSchedulePlan_NoPacingPolicy_UnaffectedByReconciliation(t *testing.T) {
+	f := newStrategyFixture(t)
+	cs := f.connect(t, f.creator.ID)
+	_, verdict := f.viableIdea(t, cs, f.creator.ID, "No policy idea")
+
+	f.call(t, cs, "save_strategy", tools.SaveStrategyInput{
+		ChannelID: f.ch.ID.String(), Title: "Weekly, no policy", Cadence: "weekly",
+		VerdictIDs: []string{verdict.ID}, IdempotencyKeyArg: uuid.NewString(),
+	})
+
+	res := f.call(t, cs, "generate_schedule_plan", tools.GenerateSchedulePlanInput{ChannelID: f.ch.ID.String()})
+	out := stDecode[tools.GenerateSchedulePlanOutput](t, res)
+	require.Len(t, out.Proposals, 1)
+	assert.False(t, out.Proposals[0].PacingAdjusted, "no pacing policy set -- nothing to reconcile against")
+}
+
+func TestGenerateSchedulePlan_TwoWeeklyStrategiesCollide_SecondPushedToFitPacingTarget(t *testing.T) {
+	f := newStrategyFixture(t)
+	cs := f.connect(t, f.creator.ID)
+
+	f.call(t, cs, "set_pacing_policy", tools.SetPacingPolicyInput{
+		ChannelID: f.ch.ID.String(), TargetUploadsPerWeek: 1,
+	})
+
+	_, verdict1 := f.viableIdea(t, cs, f.creator.ID, "First weekly idea")
+	f.call(t, cs, "save_strategy", tools.SaveStrategyInput{
+		ChannelID: f.ch.ID.String(), Title: "First weekly strategy", Cadence: "weekly",
+		VerdictIDs: []string{verdict1.ID}, IdempotencyKeyArg: uuid.NewString(),
+	})
+	_, verdict2 := f.viableIdea(t, cs, f.creator.ID, "Second weekly idea")
+	f.call(t, cs, "save_strategy", tools.SaveStrategyInput{
+		ChannelID: f.ch.ID.String(), Title: "Second weekly strategy", Cadence: "weekly",
+		VerdictIDs: []string{verdict2.ID}, IdempotencyKeyArg: uuid.NewString(),
+	})
+
+	res := f.call(t, cs, "generate_schedule_plan", tools.GenerateSchedulePlanInput{ChannelID: f.ch.ID.String()})
+	require.False(t, res.IsError, "unexpected error: %s", stTextOf(res))
+	out := stDecode[tools.GenerateSchedulePlanOutput](t, res)
+	require.Len(t, out.Proposals, 2)
+
+	// Both Strategies compute the same raw weekly slot (~now+7d) with no
+	// pacing policy in the picture -- against a target of 1/week, only
+	// one of the two can land in that week; the other must be reconciled
+	// forward into the next one.
+	adjustedCount := 0
+	var times []time.Time
+	for _, p := range out.Proposals {
+		if p.PacingAdjusted {
+			adjustedCount++
+		}
+		ts, err := time.Parse(time.RFC3339, p.ProposedPublishAt)
+		require.NoError(t, err)
+		times = append(times, ts)
+	}
+	assert.Equal(t, 1, adjustedCount, "exactly one of the two colliding weekly proposals must be pushed to fit the pacing target")
+
+	y1, w1 := times[0].ISOWeek()
+	y2, w2 := times[1].ISOWeek()
+	assert.False(t, y1 == y2 && w1 == w2, "the two proposals must land in different calendar weeks once reconciled: %v vs %v", times[0], times[1])
+	assert.Equal(t, 7*24*time.Hour, times[1].Sub(times[0]).Abs(), "the pushed proposal must land exactly one cadence step later, not further")
+}
+
+func TestGenerateSchedulePlan_PacingPolicyCountsPersistedScheduleEntries(t *testing.T) {
+	f := newStrategyFixture(t)
+	cs := f.connect(t, f.creator.ID)
+
+	f.call(t, cs, "set_pacing_policy", tools.SetPacingPolicyInput{
+		ChannelID: f.ch.ID.String(), TargetUploadsPerWeek: 1,
+	})
+
+	// An unrelated Idea already has a committed slot ~7 days out --
+	// occupying that week's entire pacing budget before any Strategy is
+	// even considered.
+	otherIdea, otherVerdict := f.viableIdea(t, cs, f.creator.ID, "Already-scheduled idea")
+	occupiedAt := time.Now().UTC().AddDate(0, 0, 7)
+	f.call(t, cs, "save_schedule_draft", tools.SaveScheduleDraftInput{
+		ChannelID: f.ch.ID.String(), IdeaID: otherIdea.ID.String(), VerdictID: otherVerdict.ID,
+		ProposedPublishAt: occupiedAt.Format(time.RFC3339), IdempotencyKeyArg: uuid.NewString(),
+	})
+
+	_, verdict := f.viableIdea(t, cs, f.creator.ID, "Contending weekly idea")
+	f.call(t, cs, "save_strategy", tools.SaveStrategyInput{
+		ChannelID: f.ch.ID.String(), Title: "Contending weekly strategy", Cadence: "weekly",
+		VerdictIDs: []string{verdict.ID}, IdempotencyKeyArg: uuid.NewString(),
+	})
+
+	res := f.call(t, cs, "generate_schedule_plan", tools.GenerateSchedulePlanInput{ChannelID: f.ch.ID.String()})
+	require.False(t, res.IsError, "unexpected error: %s", stTextOf(res))
+	out := stDecode[tools.GenerateSchedulePlanOutput](t, res)
+	require.Len(t, out.Proposals, 1)
+	assert.True(t, out.Proposals[0].PacingAdjusted, "the already-committed entry alone fills the week's pacing budget")
+
+	proposedAt, err := time.Parse(time.RFC3339, out.Proposals[0].ProposedPublishAt)
+	require.NoError(t, err)
+	oy, ow := occupiedAt.ISOWeek()
+	py, pw := proposedAt.ISOWeek()
+	assert.False(t, oy == py && ow == pw, "the new proposal must not land in the already-fully-booked week")
+}
