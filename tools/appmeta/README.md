@@ -6,7 +6,7 @@ Proto definition of the JSON emitted by the `app_metadata` and
 **Migrated.** `helm/composer.go` and `release_helper_go` both decode into
 `appmetapb.AppManifest` / `appmetapb.ChartManifest`; no hand-written manifest
 struct remains in `tools/`. See [Migration](#migration) and
-`//tools/app_registry/PLAN.md` (phase AR-M).
+`//tools/app_registry/PLAN-HISTORY.md` (phase AR-M).
 
 ## Why this exists
 
@@ -143,11 +143,11 @@ Three edits, and the contract test fails until all three are done:
 `AppMetadataInfo`), the proto field, and `fixture-helm_chart_metadata`'s
 composed app all went in together. `ChartManifest.apps` (bare app names) is
 now deprecated in favor of it — see the proto's doc comment and
-`//tools/app_registry/PLAN.md`'s AR-7a section.
+`//tools/app_registry/PLAN-HISTORY.md`'s AR-7a section.
 
 ## Migration
 
-Sequenced as phase AR-M in `//tools/app_registry/PLAN.md`, ahead of AR-2 so the
+Sequenced as phase AR-M in `//tools/app_registry/PLAN-HISTORY.md`, ahead of AR-2 so the
 registry doesn't add a third manifest representation on top of two that
 already disagreed.
 

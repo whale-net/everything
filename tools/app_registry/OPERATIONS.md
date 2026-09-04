@@ -709,6 +709,80 @@ actually running**. Deployment remains whatever it is today — ArgoCD reading
 values files by hand, outside this system entirely — until the real gitops
 writeback ships.
 
+## Known issues
+
+Small, cross-cutting gaps that belong to no single phase or subsystem above.
+Carried forward from `PLAN.md`'s former "Carry-over items" section.
+
+- **`promotion_event.temporal_workflow_id` / `temporal_run_id` are never
+  stamped back.** `003_promotion.up.sql`'s schema comment anticipates them,
+  and `WritebackOutbox.EventID` exists precisely so the worker can do it, but
+  nothing writes them — so an operator cannot jump from an audit row to its
+  Temporal workflow history. Needs an `event_id`-keyed update path from the
+  worker.
+- **Temporal `WorkflowIDReusePolicy` is left at the SDK default.** Reasoned
+  about in `worker/outbox/drain.go`'s comments but never independently
+  stress-tested. Relevant because workflow id = promotion id, so reuse
+  semantics decide what happens when a promotion is retried.
+- **`--format table` is unimplemented across the whole CLI** — every command
+  falls back to JSON with a `# table format not implemented yet` notice
+  (`cli/cmd/client.go`, `cli/cmd/util.go`). Pre-existing, cosmetic, but the
+  flag is advertised.
+- **`list-apps --format json` prints `deploy_unit` as an integer.** Cosmetic;
+  no CI path reads it.
+- **Version allocation (AR-5) — known gaps:**
+  - The "allocated versions match tag-scanning" parity check that was meant
+    to run during an initial soak period was never built and never run — the
+    rollout ended up unconditional rather than soak-gated (see
+    PLAN-HISTORY.md's AR-5a section), so this check never happened.
+  - The release workflow's version-allocation concurrency group is untouched.
+  - v1 (`release-app`/`release-charts`, `release.yml`) still creates local
+    git tags on every release, kept as a disaster-recovery record — neither
+    command ever pushes them to origin, so this costs nothing to keep. v2
+    (`finalize-app`/`finalize-chart`) never created tags to begin with.
+
+  `AllocateVersion`, `CheckChartHermeticity`, and `RecordArtifact`'s
+  prior-`BeginPublish` requirement apply unconditionally to every domain —
+  `domain_adoption` (migration `024_drop_domain_adoption`) is dropped, and
+  there is no per-domain concept left anywhere in this system. See
+  [`architecture/04-version-model.md`](architecture/04-version-model.md) for
+  the full design (semver semantics, ordering, idempotency) and
+  PLAN-HISTORY.md's "AR-5" section for how `AllocateVersion` itself was built
+  and wired in (issue #829, PR #831).
+
+## App Registry v2 release job — migration checklist
+
+Informal, **ongoing** tracker for [plan #912](https://github.com/whale-net/everything/issues/912)'s
+FR5: which domains dispatch releases through `.github/workflows/release.yml`
+(v1) vs `.github/workflows/release-v2.yml` (v2). No schema or tooling — the
+`WorkflowFile` a `GitHubDispatcher` dispatches against
+(`tools/app_registry/worker/release/github.go`) is a single **global**
+setting (`RELEASE_GITHUB_WORKFLOW_FILE`, default and required value
+`release-v2.yml` — see `tools/app_registry/ENV.md`), not something repointed
+per domain. The actual gate on a domain's cutover is whether `TriggerRelease`
+(`tools/app_registry/server/handlers/release.go`) is ever called for that
+domain's real releases — i.e. whether the App Registry UI/API is used to
+trigger the domain's releases at all — not a config value to flip. Not a
+gate on #912's FR7 retirement; kept only for visibility during v2's
+build-out. `release-v2.yml` has real, non-stub job bodies (ported in by
+PR #924) — cutover is gated on the domain actually calling `TriggerRelease`,
+not on job-body readiness.
+
+| Domain | Dispatch target | Notes |
+|---|---|---|
+| `demo` | v1 (`release.yml`) | Not yet migrated |
+| `manman` | v1 (`release.yml`) | Not yet migrated |
+| `manmanv2` | v2 (`release-v2.yml`, Temporal-dispatched) | `TriggerRelease` is live for this domain's real releases (`release_run_target` rows exist for `manmanv2` apps/charts as of 2026-08-22). |
+| `friendly_computing_machine` | v1 (`release.yml`) | Not yet migrated |
+| `leaflab` | v2 (`release-v2.yml`, Temporal-dispatched) | `TriggerRelease` is live for this domain's real releases (`release_run_target` rows exist for `leaflab` as of 2026-08-22). |
+| `firmware` | v1 (`release.yml`) | Not yet migrated |
+| `tools` (release tooling itself) | v1 (`release.yml`) | Not yet migrated — no `tools-*` CLI release target has appeared in `release_run_target` yet. |
+| `app-registry` | v2 (`release-v2.yml`, Temporal-dispatched) | `TriggerRelease` is live for this domain's real releases (`release_run_target` rows exist for `app-registry` as of 2026-08-22). |
+
+*Table last refreshed 2026-08-22 (moved here, unrevalidated, from the former
+`PLAN.md` on 2026-09-03) — re-check `release_run_target` before trusting a
+domain's row if it's been a while.*
+
 ## Related
 
 - [DEPLOY.md](DEPLOY.md) — first-time setup: Keycloak clients, GitHub

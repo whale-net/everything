@@ -11,8 +11,8 @@ Each story is marked:
 
 - **Shipped** — the behavior exists today; the story documents it so it isn't
   re-litigated.
-- **Gap** — the behavior does not exist yet; no phase in [PLAN.md](PLAN.md)
-  currently owns it.
+- **Gap** — the behavior does not exist yet; no capability in
+  [PRODUCT.md](../PRODUCT.md)'s capability map currently owns it.
 
 ## Persona
 
@@ -95,9 +95,9 @@ existing example of one app being deployed outside its chart's normal path.
     chart and *which* pinning is wrong, not just that hermeticity failed, so
     a shared image used by several charts doesn't turn one bad release into
     an undiagnosable multi-chart outage. — **Shipped.** `AR-7f`'s
-    `CheckChartHermeticity` (PLAN.md) and the record-time reject in
-    `ARCHITECTURE.md` "Chart → image lockfile" both fail per chart artifact,
-    scoped to that chart's own `contains` list.
+    `CheckChartHermeticity` (`architecture/08-release-lifecycle/10-compose-time-hermeticity.md`)
+    and the record-time reject in `ARCHITECTURE.md` "Chart → image lockfile"
+    both fail per chart artifact, scoped to that chart's own `contains` list.
 
 ## Epic C — Redundant (no-op) rebuilds
 
@@ -108,12 +108,12 @@ release.
 31. As a domain owner, I want a build that reproduces a digest the registry
     has already published for that same `(owner, kind, version)` to be
     recorded as an idempotent success, not a conflict, so routine
-    "rebuild-everything-in-the-domain" release batches (`PLAN.md`'s "Current
-    status", issue #585) don't fail loudly for the apps that happened not to
-    change. — **Shipped.** `ARCHITECTURE.md` "Artifact lifecycle": "`published`
-    is terminal. Re-recording the same digest is an idempotent success" —
-    fixed for the `(owner, kind, version)`-scoped case by issue #585 (PLAN.md
-    "Current status").
+    "rebuild-everything-in-the-domain" release batches (issue #585) don't
+    fail loudly for the apps that happened not to change. — **Shipped.**
+    `ARCHITECTURE.md` "Artifact lifecycle": "`published` is terminal.
+    Re-recording the same digest is an idempotent success" — fixed for the
+    `(owner, kind, version)`-scoped case by issue #585, as-built in
+    `architecture/08-release-lifecycle/01-artifact-lifecycle.md`.
 
 32. As a domain owner, I want a build that reproduces the digest of an
     *older* published version of the same app — not the version currently
@@ -127,16 +127,18 @@ release.
     version tag, and skip tag creation (and the App Registry record call)
     on a match — so a no-op rebuild never reaches App Registry as a "new"
     artifact, and the `artifact_digest_idx` hard-fail this story describes
-    no longer happens in practice. See `PLAN.md`'s "Version allocation
-    (AR-5)" for the full account.
+    no longer happens in practice. See [`docs/RELEASE.md`](../../../docs/RELEASE.md)
+    and `architecture/08-release-lifecycle/01-artifact-lifecycle.md` for the
+    full account.
 
 33. As a domain owner, I want a redundant build to still be visible in the
     release run's output (e.g. `app-registry builds status`), labeled as
     redundant, rather than either indistinguishable from a normal publish or
     silently absent, so I can tell "nothing changed" from "this app was
     skipped" from "this app published normally" at a glance. — **Gap.**
-    `PLAN.md`'s `builds status` (`AR-7d`) already models per-artifact state
-    (`PUBLISHING`/`PUBLISHED`/`FAILED`/`ALLOCATED`, `USER_STORIES.md` #12);
+    `builds status` (`AR-7d`) already models per-artifact state
+    (`PUBLISHING`/`PUBLISHED`/`FAILED`/`ALLOCATED` — see OPERATIONS.md's "A
+    release run didn't complete" section, `USER_STORIES.md` #12);
     it has no `REDUNDANT`/no-op state. Depends on #32 landing a server-side
     decision for what a same-content/different-version request *is* before a
     new displayable state can be added on top of it.

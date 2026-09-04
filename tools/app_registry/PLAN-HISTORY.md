@@ -2,12 +2,59 @@
 
 As-built record for every completed phase of `//tools/app_registry`'s
 delivery. **This file is history — it does not change once a phase is
-merged.** For what's true right now (deployment state, open bugs, what's
-next), read [PLAN.md](PLAN.md) → "Current status" instead; this file is
-linked from there for phase-by-phase detail, not meant to be read start to
+merged.** For what's true right now (current capabilities, roadmap), read
+[PRODUCT.md](PRODUCT.md) and [product/01-current-state.md](product/01-current-state.md)
+instead; for day-2 operational status (known issues, the v1/v2 release-job
+migration checklist), read [OPERATIONS.md](OPERATIONS.md). This file is
+linked from those for phase-by-phase detail, not meant to be read start to
 finish.
 
 Read [ARCHITECTURE.md](ARCHITECTURE.md) for the design each phase implements.
+
+---
+
+## Sequencing rationale
+
+Why the phases below shipped in this order, not the order their numbers
+might suggest.
+
+Promotion tracking is additive and low-risk; replacing git-tag version
+allocation moves an existing working source of truth into a stateful service.
+Do the first, prove it, then do the second. Shipping AR-5 before AR-3 would put
+a registry outage in the path of every release before the registry has delivered
+anything.
+
+```mermaid
+graph LR
+    AR0["AR-0<br/>Design"] --> ARM["AR-M<br/>Manifest schema"]
+    ARM --> AR1["AR-1<br/>Foundations"]
+    AR1 --> AR2["AR-2<br/>Observe"]
+    AR2 --> AR3["AR-3<br/>Promote"]
+    AR3 --> AR4["AR-4<br/>Writeback"]
+    AR4 --> AR7["AR-7<br/>Release lifecycle"]
+    AR7 --> AR5["AR-5b+<br/>Allocate versions"]
+    AR7 --> AR8["AR-8<br/>Manifest history"]
+    AR2 -. "soak period" .-> AR3
+    style AR0 fill:#e8f5e8
+    style ARM fill:#fff4e0
+    style AR7 fill:#fff4e0
+    style AR5 fill:#e8f5e8
+    style AR8 fill:#fff4e0
+```
+
+AR-8 depended only on AR-7 being merged (it rewrites AR-7c's `v_current_app`/
+`artifact.manifest_id`) — independent of AR-5 in either direction.
+
+**AR-7 (issue #558) sat between AR-4 and AR-5's version-allocation rollout**,
+despite its number: version allocation happens *before* a build exists, so a
+release needs identity resolved even earlier than it did before — the
+release-vs-reconcile gap would have gotten strictly worse under AR-5 without
+AR-7 first. AR-7a and AR-7b were independently valuable and could land at
+any time.
+
+AR-M stands alone and delivers value with or without the registry — it fixes
+drift that exists today. It is sequenced first because AR-2 otherwise adds a
+third manifest representation to the two that already disagree.
 
 ---
 

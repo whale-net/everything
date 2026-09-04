@@ -10,7 +10,7 @@ name: Release v2
 # Job bodies below are ported from release.yml (Implementation phase of
 # #914); shared composite actions (./.github/actions/*) are referenced
 # unchanged, not forked (FR4). See the v1->v2 migration checklist in
-# tools/app_registry/PLAN.md ("App Registry v2 release job -- migration
+# tools/app_registry/OPERATIONS.md ("App Registry v2 release job -- migration
 # checklist") for which domains dispatch through v1 vs v2 at any point
 # in time.
 #

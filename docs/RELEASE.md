@@ -175,7 +175,8 @@ digest. When that happens:
 
 This exists because App Registry can never mark a duplicate-digest
 artifact `published` — see
-[`tools/app_registry/PLAN.md`](../tools/app_registry/PLAN.md) and issue
+[`tools/app_registry/architecture/08-release-lifecycle/01-artifact-lifecycle.md`](../tools/app_registry/architecture/08-release-lifecycle/01-artifact-lifecycle.md)
+and issue
 [#617](https://github.com/whale-net/everything/issues/617) — so without
 this check, a no-op rebuild used to mint a real git tag and push a real
 image that App Registry could never resolve as promotable.

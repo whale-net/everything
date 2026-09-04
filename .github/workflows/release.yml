@@ -55,7 +55,7 @@ concurrency:
 # removes this file; track that issue for the actual retirement date.
 # Composite actions this file references (./.github/actions/*) remain
 # shared with release-v2.yml and are NOT forked -- changes there still
-# affect both workflows. See tools/app_registry/PLAN.md's "App Registry
+# affect both workflows. See tools/app_registry/OPERATIONS.md's "App Registry
 # v2 release job -- migration checklist" for per-domain v1/v2 status.
 
 env:

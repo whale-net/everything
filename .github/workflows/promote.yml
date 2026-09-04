@@ -5,7 +5,7 @@ name: Promote (Deprecated)
 # are not active.
 #
 # Human-triggered promotion / rollback against the App Registry. See
-# tools/app_registry/PLAN.md -> "AR-3 -> Credential model (decided)" and
+# tools/app_registry/PLAN-HISTORY.md -> "AR-3 -> Credential model (decided)" and
 # ARCHITECTURE.md -> "Authorization": the `environment:` declaration on the
 # `promote` job below is the entire security model for this workflow, not a
 # formality. It is what scopes the job to the target GitHub Environment's

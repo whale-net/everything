@@ -981,7 +981,7 @@ func autoIncrementVersion(domain, name, incrementType string, git GitRunner) (st
 // prerelease suffix, which is stripped — matching this function's
 // pre-existing behaviour) by incrementType ("major", "minor", or "patch"),
 // via the shared libs/go/semver parser rather than a second hand-rolled one.
-// See tools/app_registry/PLAN.md's AR-5 addendum item 1: chart bumping
+// See tools/app_registry/architecture/04-version-model.md: chart bumping
 // (build_helm.go) already accepted all three; "major" was the one this
 // function was missing.
 func incrementVersion(ver, incrementType string) (string, error) {

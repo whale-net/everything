@@ -108,7 +108,7 @@ each with `protojson` and combines them.
 
 Calls `GetEnvironmentState` for each of `<env-a>` and `<env-b>` and computes
 the difference client-side (`diffEnvironmentStates` in `promote.go`) — per
-`PLAN.md`'s AR-3d scope note, there is deliberately no server-side diff RPC.
+`PLAN-HISTORY.md`'s AR-3d scope note, there is deliberately no server-side diff RPC.
 Entries are matched by promotion target (`image:<app_id>` /
 `chart:<chart_id>`, the only stable identity `GetEnvironmentStateResponse`
 carries); entries whose digest is identical on both sides are omitted, so the

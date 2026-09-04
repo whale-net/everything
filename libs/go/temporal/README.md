@@ -7,8 +7,8 @@ helper, and a logging bridge to `libs/go/logging`.
 This is the AR-4a foundations library — it makes `go.temporal.io/sdk` build
 under Bazel and gives services a consistent way to connect. It does **not**
 implement any workflow, activity, or outbox — see
-[`tools/app_registry/PLAN.md`](../../../tools/app_registry/PLAN.md) AR-4b for
-that.
+[`tools/app_registry/PLAN-HISTORY.md`](../../../tools/app_registry/PLAN-HISTORY.md)'s
+AR-4b section for that.
 
 ## Usage
 
