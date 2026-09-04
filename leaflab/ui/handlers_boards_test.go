@@ -38,6 +38,9 @@ type fakeLeafLabAPIClient struct {
 
 	claimResp *leaflabapipb.ClaimBoardResponse
 	claimErr  error
+
+	renameBoardResp *leaflabapipb.RenameBoardResponse
+	renameBoardErr  error
 }
 
 func (f *fakeLeafLabAPIClient) ListBoardsWithState(ctx context.Context, in *leaflabapipb.ListBoardsWithStateRequest, opts ...grpc.CallOption) (*leaflabapipb.ListBoardsWithStateResponse, error) {
@@ -69,6 +72,16 @@ func (f *fakeLeafLabAPIClient) ClaimBoard(ctx context.Context, in *leaflabapipb.
 		return f.claimResp, nil
 	}
 	return &leaflabapipb.ClaimBoardResponse{}, nil
+}
+
+func (f *fakeLeafLabAPIClient) RenameBoard(ctx context.Context, in *leaflabapipb.RenameBoardRequest, opts ...grpc.CallOption) (*leaflabapipb.RenameBoardResponse, error) {
+	if f.renameBoardErr != nil {
+		return nil, f.renameBoardErr
+	}
+	if f.renameBoardResp != nil {
+		return f.renameBoardResp, nil
+	}
+	return &leaflabapipb.RenameBoardResponse{}, nil
 }
 
 // TestHandleBoards_RendersBoardsFromAPI covers the happy path: handleBoards
@@ -435,5 +448,107 @@ func TestHandleClaimBoard_GenericError_RedirectsWithRawMessage(t *testing.T) {
 	}
 	if !strings.HasPrefix(rec.Header().Get("Location"), "/boards/7?claim_error=") {
 		t.Errorf("Location = %q, want a redirect back to /boards/7 carrying claim_error", rec.Header().Get("Location"))
+	}
+}
+
+// --- handleRenameBoard (#1767: FR3) -----------------------------------------
+
+// newRenameBoardRequest builds a "POST /boards/{board_id}/rename" request
+// the way the real route (main.go's setupRoutes) would populate it, with a
+// form-encoded "name" body value the way renameBoardForm submits it.
+func newRenameBoardRequest(boardID, name string) *http.Request {
+	req := httptest.NewRequest(http.MethodPost, "/boards/"+boardID+"/rename", strings.NewReader("name="+name))
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	req.SetPathValue("board_id", boardID)
+	return req
+}
+
+// TestHandleRenameBoard_Success_RerendersHeaderWithNewName covers the
+// happy path: a successful RenameBoard is followed by a GetBoardDetail
+// re-fetch, and the header fragment reflects the new name (not whatever
+// was posted, since the handler re-fetches rather than assumes).
+func TestHandleRenameBoard_Success_RerendersHeaderWithNewName(t *testing.T) {
+	fake := &fakeLeafLabAPIClient{
+		boardDetailResp: &leaflabapipb.GetBoardDetailResponse{
+			BoardId: 7, DeviceId: "leaflab-aaaaaaaaaaaa", BoardName: "greenhouse", OwnedByCaller: true,
+		},
+	}
+	app := &App{api: &LeafLabClient{api: fake}}
+
+	rec := httptest.NewRecorder()
+	app.handleRenameBoard(rec, newRenameBoardRequest("7", "greenhouse"))
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d; body: %s", rec.Code, http.StatusOK, rec.Body.String())
+	}
+	if !strings.Contains(rec.Body.String(), "greenhouse") {
+		t.Errorf("expected the new name in the rendered fragment, got %q", rec.Body.String())
+	}
+}
+
+// TestHandleRenameBoard_InvalidArgument_RendersInlineMessageNot500 is
+// Testing criterion 9's InvalidArgument half: an empty-name rejection from
+// leaflab-api renders inline in the re-rendered fragment (status 200), not
+// a 500.
+func TestHandleRenameBoard_InvalidArgument_RendersInlineMessageNot500(t *testing.T) {
+	fake := &fakeLeafLabAPIClient{
+		renameBoardErr: status.Error(codes.InvalidArgument, "name must not be empty"),
+		boardDetailResp: &leaflabapipb.GetBoardDetailResponse{
+			BoardId: 7, DeviceId: "leaflab-aaaaaaaaaaaa", BoardName: "old-name", OwnedByCaller: true,
+		},
+	}
+	app := &App{api: &LeafLabClient{api: fake}}
+
+	rec := httptest.NewRecorder()
+	app.handleRenameBoard(rec, newRenameBoardRequest("7", ""))
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d (inline error, not a 500)", rec.Code, http.StatusOK)
+	}
+	if !strings.Contains(rec.Body.String(), "name must not be empty") {
+		t.Errorf("expected the inline validation message, got %q", rec.Body.String())
+	}
+	// A rejected rename must re-show the unchanged current name, not the
+	// caller's rejected input.
+	if !strings.Contains(rec.Body.String(), "old-name") {
+		t.Errorf("expected the unchanged current name to still be shown, got %q", rec.Body.String())
+	}
+}
+
+// TestHandleRenameBoard_PermissionDenied_RendersInlineMessageNot500 is
+// Testing criterion 9's PermissionDenied half: a non-owner (or unowned-
+// board) rejection from leaflab-api renders inline, not a 500.
+func TestHandleRenameBoard_PermissionDenied_RendersInlineMessageNot500(t *testing.T) {
+	fake := &fakeLeafLabAPIClient{
+		renameBoardErr: status.Error(codes.PermissionDenied, "caller does not own this board"),
+		boardDetailResp: &leaflabapipb.GetBoardDetailResponse{
+			BoardId: 7, DeviceId: "leaflab-aaaaaaaaaaaa", BoardName: "old-name", OwnedByCaller: false,
+		},
+	}
+	app := &App{api: &LeafLabClient{api: fake}}
+
+	rec := httptest.NewRecorder()
+	app.handleRenameBoard(rec, newRenameBoardRequest("7", "someone-elses-board"))
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d (inline error, not a 500)", rec.Code, http.StatusOK)
+	}
+	if !strings.Contains(rec.Body.String(), "caller does not own this board") {
+		t.Errorf("expected the inline permission-denied message, got %q", rec.Body.String())
+	}
+}
+
+// TestHandleRenameBoard_MalformedBoardID_NotFound mirrors
+// TestHandleBoardDetail_MalformedBoardID_NotFound: a non-numeric board_id
+// path segment short-circuits to a real 404 before any RPC is attempted.
+func TestHandleRenameBoard_MalformedBoardID_NotFound(t *testing.T) {
+	fake := &fakeLeafLabAPIClient{}
+	app := &App{api: &LeafLabClient{api: fake}}
+
+	rec := httptest.NewRecorder()
+	app.handleRenameBoard(rec, newRenameBoardRequest("not-a-number", "greenhouse"))
+
+	if rec.Code != http.StatusNotFound {
+		t.Fatalf("status = %d, want %d", rec.Code, http.StatusNotFound)
 	}
 }
