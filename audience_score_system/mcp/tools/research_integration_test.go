@@ -115,7 +115,7 @@ func newFixture(t *testing.T) *fixture {
 
 	ch, err := st.Channels().Create(ctx, "yt-"+uuid.NewString(), "Channel", creator.ID)
 	require.NoError(t, err)
-	require.NoError(t, st.Roles().AddRole(ctx, ch.ID, analyst.ID, store.RoleAnalyst))
+	require.NoError(t, st.Roles().AddRole(ctx, ch.ID, analyst.ID, store.RoleAnalyst, creator.ID))
 
 	srv := server.New(st)
 	reg := server.NewRegistry(srv, st)

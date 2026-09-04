@@ -250,7 +250,7 @@ func TestHandleApprove_Analyst_Forbidden_StateUnchanged(t *testing.T) {
 	entry := s.draftEntry(t, ctx, ch, creator, time.Now().UTC().Add(24*time.Hour))
 
 	analyst := s.newPerson(t, ctx, "analyst")
-	require.NoError(t, s.store.Roles().AddRole(ctx, ch.ID, analyst.ID, store.RoleAnalyst))
+	require.NoError(t, s.store.Roles().AddRole(ctx, ch.ID, analyst.ID, store.RoleAnalyst, creator.ID))
 	cookie := s.sessionCookie(t, ctx, analyst.ID)
 
 	w := s.do(t, http.MethodPost, "/schedule/"+entry.ID.String()+"/approve", cookie)
@@ -297,14 +297,18 @@ func TestHandleApprove_ClosedCreatorRow_Forbidden(t *testing.T) {
 	// forbids two simultaneously-OPEN creator rows on one Channel; a
 	// closed row followed by a new open row on the same Channel is fine,
 	// which is exactly what this sequence needs to prove a closed row on
-	// THIS Channel (not just "no relationship to it at all") can't
-	// approve.
+	// THIS Channel (not just "no relationship to it at all", already
+	// covered by TestHandleApprove_NoRoleOnChannel_Forbidden above) can't
+	// approve. Mirrors store_integration_test.go's setupChannelWithRoles,
+	// which scopes the closed row and the checked channel to the same
+	// formerChannelID field.
 	former := s.newPerson(t, ctx, "former-creator")
 	ch, err := s.store.Channels().Create(ctx, "yt-"+uuid.NewString(), "Test Channel", former.ID)
 	require.NoError(t, err)
 	// Close former's row directly (bypassing the store API, which has no
-	// "revoke" method yet) to simulate a Person whose creator role has
-	// lapsed -- mirrors store_integration_test.go's setupChannelWithRoles.
+	// "revoke" method wired through AddRole's close-and-open pattern
+	// here) to simulate a Person whose creator role has lapsed --
+	// mirrors store_integration_test.go's setupChannelWithRoles.
 	_, err = s.db.Pool.Exec(ctx, `
 		UPDATE channel_person SET valid_to = NOW()
 		WHERE channel_id = $1 AND person_id = $2 AND valid_to IS NULL
@@ -316,7 +320,7 @@ func TestHandleApprove_ClosedCreatorRow_Forbidden(t *testing.T) {
 	// below is drafted and owned by this current creator, on the exact
 	// Channel former used to (but no longer) hold a creator row on.
 	creator := s.newPerson(t, ctx, "creator")
-	require.NoError(t, s.store.Roles().AddRole(ctx, ch.ID, creator.ID, store.RoleCreator))
+	require.NoError(t, s.store.Roles().AddRole(ctx, ch.ID, creator.ID, store.RoleCreator, former.ID))
 	entry := s.draftEntry(t, ctx, ch, creator, time.Now().UTC().Add(24*time.Hour))
 
 	cookie := s.sessionCookie(t, ctx, former.ID)
@@ -523,7 +527,7 @@ func TestHandleList_CreatorAndAnalyst_CanRead_OutsiderForbidden(t *testing.T) {
 	require.NoError(t, s.db.Pool.QueryRow(ctx, `SELECT title FROM idea WHERE id = $1`, entry.IdeaID).Scan(&ideaTitle))
 
 	analyst := s.newPerson(t, ctx, "analyst")
-	require.NoError(t, s.store.Roles().AddRole(ctx, ch.ID, analyst.ID, store.RoleAnalyst))
+	require.NoError(t, s.store.Roles().AddRole(ctx, ch.ID, analyst.ID, store.RoleAnalyst, creator.ID))
 	outsider := s.newPerson(t, ctx, "outsider")
 
 	creatorW := s.do(t, http.MethodGet, "/channels/"+ch.ID.String()+"/schedule", s.sessionCookie(t, ctx, creator.ID))

@@ -136,6 +136,28 @@ func TestChannelStore_Create_CreatesExactlyOneLiveCreatorRow(t *testing.T) {
 	assert.Equal(t, 1, count, "Create must produce exactly one live creator row, not zero or more than one")
 }
 
+// TestChannelStore_Create_RecordsFounderSelfGrant extends
+// TestChannelStore_Create_CreatesExactlyOneLiveCreatorRow above: it also
+// asserts on granted_by_person_id (FR25/FR34), which that test does not
+// touch.
+func TestChannelStore_Create_RecordsFounderSelfGrant(t *testing.T) {
+	ctx := context.Background()
+	s, db := newStore(t)
+
+	creator, _, err := s.Persons().UpsertByGoogleSubject(ctx, "sub-founder-self-grant", "f@example.com", "Founder")
+	require.NoError(t, err)
+
+	ch, err := s.Channels().Create(ctx, "yt-founder-self-grant", "My Channel", creator.ID)
+	require.NoError(t, err)
+
+	var grantedBy uuid.UUID
+	require.NoError(t, db.Pool.QueryRow(ctx, `
+		SELECT granted_by_person_id FROM channel_person
+		WHERE channel_id = $1 AND person_id = $2 AND valid_to IS NULL
+	`, ch.ID, creator.ID).Scan(&grantedBy))
+	assert.Equal(t, creator.ID, grantedBy, "the connecting Person must be recorded as their own granted_by_person_id (FR25 self-grant at connect)")
+}
+
 // ── authz.go against the real SQL-backed RoleStore ─────────────────────────
 
 // channelWithRoles sets up one Channel with a live creator, a live analyst,
@@ -172,7 +194,7 @@ func setupChannelWithRoles(t *testing.T, ctx context.Context, s *store.Store, db
 
 	analyst, _, err := s.Persons().UpsertByGoogleSubject(ctx, "sub-"+uuid.NewString(), "analyst@example.com", "Analyst")
 	require.NoError(t, err)
-	require.NoError(t, s.Roles().AddRole(ctx, ch.ID, analyst.ID, store.RoleAnalyst))
+	require.NoError(t, s.Roles().AddRole(ctx, ch.ID, analyst.ID, store.RoleAnalyst, creator.ID))
 
 	unassociated, _, err := s.Persons().UpsertByGoogleSubject(ctx, "sub-"+uuid.NewString(), "unassoc@example.com", "Unassociated")
 	require.NoError(t, err)
@@ -272,6 +294,40 @@ func TestAuthz_CreatorOrAnalystChecks_AgainstRealRoleStore(t *testing.T) {
 	}
 }
 
+// TestAuthz_CoCreator_HasCreatorTierAuthority_AgainstRealRoleStore proves a
+// real role=co_creator row (granted via RoleStore.AddRole, not a fake) is
+// enough to authorize approve/invite/reconnect/read/write -- Founder and
+// Co-Creator hold symmetric authority (FR32) against the real SQL-backed
+// RoleStore, not just the pure-Go fake in authz_test.go.
+func TestAuthz_CoCreator_HasCreatorTierAuthority_AgainstRealRoleStore(t *testing.T) {
+	ctx := context.Background()
+	s, _ := newStore(t)
+	ch, creator := setupChannel(t, ctx, s)
+	rs := s.Roles()
+
+	coCreator, _, err := s.Persons().UpsertByGoogleSubject(ctx, "sub-"+uuid.NewString(), "cc@example.com", "Co-Creator")
+	require.NoError(t, err)
+	require.NoError(t, s.Roles().AddRole(ctx, ch.ID, coCreator.ID, store.RoleCoCreator, creator.ID))
+
+	checks := []struct {
+		name string
+		fn   func(context.Context, store.RoleStore, uuid.UUID, uuid.UUID) (bool, error)
+	}{
+		{"CanApprove", store.CanApprove},
+		{"CanInvite", store.CanInvite},
+		{"CanReconnect", store.CanReconnect},
+		{"CanRead", store.CanRead},
+		{"CanWrite", store.CanWrite},
+	}
+	for _, c := range checks {
+		t.Run(c.name, func(t *testing.T) {
+			ok, err := c.fn(ctx, rs, ch.ID, coCreator.ID)
+			require.NoError(t, err)
+			assert.True(t, ok, "a real co_creator row must authorize %s", c.name)
+		})
+	}
+}
+
 // ── InviteStore (FR5-FR8) ──────────────────────────────────────────────────
 
 func TestInviteStore_Generate_TwiceLeavesExactlyOneLiveCode(t *testing.T) {
@@ -342,6 +398,87 @@ func TestInviteStore_Consume_GrantsAnalystRole_SecondConsumeFailsAndAddsNoRow(t 
 		SELECT count(*) FROM channel_person WHERE channel_id = $1 AND person_id = $2
 	`, ch.ID, invitee.ID).Scan(&roleRowCount))
 	assert.Equal(t, 1, roleRowCount, "a failed second consume must not add a duplicate role row")
+}
+
+// ── RoleStore.AddRole/RemoveRole attribution (FR33/FR34) ────────────────────
+
+// TestRoleStore_AddRole_RecordsGrantedBy proves AddRole writes the exact
+// grantedByPersonID it is given onto the new row's granted_by_person_id.
+func TestRoleStore_AddRole_RecordsGrantedBy(t *testing.T) {
+	ctx := context.Background()
+	s, db := newStore(t)
+	ch, creator := setupChannel(t, ctx, s)
+
+	coCreator, _, err := s.Persons().UpsertByGoogleSubject(ctx, "sub-"+uuid.NewString(), "cc@example.com", "Co-Creator")
+	require.NoError(t, err)
+
+	require.NoError(t, s.Roles().AddRole(ctx, ch.ID, coCreator.ID, store.RoleCoCreator, creator.ID))
+
+	var role string
+	var grantedBy uuid.UUID
+	require.NoError(t, db.Pool.QueryRow(ctx, `
+		SELECT role, granted_by_person_id FROM channel_person
+		WHERE channel_id = $1 AND person_id = $2 AND valid_to IS NULL
+	`, ch.ID, coCreator.ID).Scan(&role, &grantedBy))
+	assert.Equal(t, string(store.RoleCoCreator), role)
+	assert.Equal(t, creator.ID, grantedBy, "AddRole must record the exact grantedByPersonID it was given")
+}
+
+// TestRoleStore_RemoveRole_ClosesRowWithRevokedBy proves RemoveRole closes
+// the open row (valid_to set, revoked_by_person_id set to the exact
+// revokedByPersonID given), leaves zero open rows for the pair afterward,
+// and inserts no replacement row.
+func TestRoleStore_RemoveRole_ClosesRowWithRevokedBy(t *testing.T) {
+	ctx := context.Background()
+	s, db := newStore(t)
+	ch, creator := setupChannel(t, ctx, s)
+
+	analyst, _, err := s.Persons().UpsertByGoogleSubject(ctx, "sub-"+uuid.NewString(), "a@example.com", "Analyst")
+	require.NoError(t, err)
+	require.NoError(t, s.Roles().AddRole(ctx, ch.ID, analyst.ID, store.RoleAnalyst, creator.ID))
+
+	removed, err := s.Roles().RemoveRole(ctx, ch.ID, analyst.ID, creator.ID)
+	require.NoError(t, err)
+	assert.True(t, removed)
+
+	var totalCount, openCount int
+	require.NoError(t, db.Pool.QueryRow(ctx, `
+		SELECT count(*) FROM channel_person WHERE channel_id = $1 AND person_id = $2
+	`, ch.ID, analyst.ID).Scan(&totalCount))
+	assert.Equal(t, 1, totalCount, "RemoveRole must not insert a replacement row -- exactly the one closed row must remain")
+
+	require.NoError(t, db.Pool.QueryRow(ctx, `
+		SELECT count(*) FROM channel_person WHERE channel_id = $1 AND person_id = $2 AND valid_to IS NULL
+	`, ch.ID, analyst.ID).Scan(&openCount))
+	assert.Equal(t, 0, openCount, "RemoveRole must leave zero open rows for the pair")
+
+	var validTo *time.Time
+	var revokedBy uuid.UUID
+	require.NoError(t, db.Pool.QueryRow(ctx, `
+		SELECT valid_to, revoked_by_person_id FROM channel_person WHERE channel_id = $1 AND person_id = $2
+	`, ch.ID, analyst.ID).Scan(&validTo, &revokedBy))
+	require.NotNil(t, validTo)
+	assert.Equal(t, creator.ID, revokedBy, "RemoveRole must record the exact revokedByPersonID it was given")
+
+	roles, err := s.Roles().RolesFor(ctx, ch.ID, analyst.ID)
+	require.NoError(t, err)
+	assert.Empty(t, roles)
+}
+
+// TestRoleStore_RemoveRole_NoOpenRow_ReturnsFalseNoError proves FR33's
+// idempotency: removing a Person who holds no open role on the Channel
+// reports removed=false with no error, not an error.
+func TestRoleStore_RemoveRole_NoOpenRow_ReturnsFalseNoError(t *testing.T) {
+	ctx := context.Background()
+	s, _ := newStore(t)
+	ch, _ := setupChannel(t, ctx, s)
+
+	unassociated, _, err := s.Persons().UpsertByGoogleSubject(ctx, "sub-"+uuid.NewString(), "u@example.com", "Unassociated")
+	require.NoError(t, err)
+
+	removed, err := s.Roles().RemoveRole(ctx, ch.ID, unassociated.ID, uuid.New())
+	require.NoError(t, err)
+	assert.False(t, removed, "removing a Person with no open row must report removed=false, not error")
 }
 
 // ── IdeaStore / VerdictStore (FR9, FR12/FR13) ──────────────────────────────
@@ -1032,8 +1169,9 @@ func TestMigration009_AuditViewEmitsGrantAndRevokeEvents(t *testing.T) {
 	ctx := context.Background()
 	s, db := newStore(t)
 	// setupChannel's Create leaves an open role='creator' row for `creator`
-	// with no granted_by_person_id recorded (M1's Create predates FR34) --
-	// this is the "still-open, no actor" case below.
+	// with `creator` recorded as their own granted_by_person_id (FR25's
+	// self-grant at connect, #1714) -- this is the "still-open, self-
+	// granted" case below.
 	ch, creator := setupChannel(t, ctx, s)
 
 	granter, _, err := s.Persons().UpsertByGoogleSubject(ctx, "sub-"+uuid.NewString(), "granter@example.com", "Granter")
@@ -1103,8 +1241,10 @@ func TestMigration009_AuditViewEmitsGrantAndRevokeEvents(t *testing.T) {
 	require.Len(t, creatorRows, 1, "a still-open row must yield exactly one granted event and no revoked event")
 	assert.Equal(t, "granted", creatorRows[0].event)
 	assert.Equal(t, "creator", creatorRows[0].role)
-	assert.Nil(t, creatorRows[0].actorPersonID, "Create() records no granter, so actor_person_id must be nil for this M1-era row")
-	assert.Nil(t, creatorRows[0].actorDisplayName)
+	require.NotNil(t, creatorRows[0].actorPersonID, "Create() self-grants the Founder role (FR25) -- actor_person_id must be the creator themself")
+	assert.Equal(t, creator.ID, *creatorRows[0].actorPersonID)
+	require.NotNil(t, creatorRows[0].actorDisplayName)
+	assert.Equal(t, "Creator", *creatorRows[0].actorDisplayName)
 }
 
 // TestMigration006_McpCredentialTable_ConstraintsAndIndexesSurviveDownUp

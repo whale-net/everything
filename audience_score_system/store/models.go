@@ -37,14 +37,28 @@ type Channel struct {
 	CreatedAt                time.Time
 }
 
-// Role is `channel_person.role` (migration 001, LB2). M1 only ever
-// populates RoleCreator and RoleAnalyst rows, but nothing in this package
-// assumes those are the only two roles that will ever exist.
+// Role is `channel_person.role` (migration 001, LB2; widened by migration
+// 009 for M2). M1 only ever populated RoleCreator and RoleAnalyst rows,
+// but nothing in this package assumes those are the only roles that will
+// ever exist.
 type Role string
 
 const (
+	// RoleCreator is the Founder tier (FR3/FR25/FR29) -- exactly one live
+	// row per Channel, enforced by migration 009's
+	// channel_person_channel_id_founder_current partial unique index.
+	// Never granted or removed by any path other than Channel-connect.
 	RoleCreator Role = "creator"
-	RoleAnalyst Role = "analyst"
+	// RoleCoCreator is M2's new tier (migration 009, FR29), sitting between
+	// Founder and Analyst: it shares the Founder's approve/invite/
+	// reconnect/read/write/audit authority (FR32/FR35) symmetrically, but
+	// cannot be removed by another Co-Creator and can never remove a
+	// Founder (FR33) -- see CanRemove's doc comment for the exact matrix.
+	// NFR7: adding a tier is exactly one constant here plus one CHECK
+	// value in the migration, and nothing else -- no ordering, no rank,
+	// no `>=` comparison anywhere in this package.
+	RoleCoCreator Role = "co_creator"
+	RoleAnalyst   Role = "analyst"
 )
 
 // ChannelPerson is one row of `channel_person` -- the LB2 join table,

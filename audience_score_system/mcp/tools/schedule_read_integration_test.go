@@ -187,7 +187,7 @@ func TestGetChannelSchedule_ChannelScoping_CreatorAndAnalystRead_UnassociatedDen
 
 	ch, err := st.Channels().Create(ctx, "yt-schedule-scope-1", "Channel", creator.ID)
 	require.NoError(t, err)
-	require.NoError(t, st.Roles().AddRole(ctx, ch.ID, analyst.ID, store.RoleAnalyst))
+	require.NoError(t, st.Roles().AddRole(ctx, ch.ID, analyst.ID, store.RoleAnalyst, creator.ID))
 
 	require.NoError(t, st.Sync().UpsertVideos(ctx, ch.ID, []store.SyncedVideo{{
 		YouTubeVideoID: "vid-1",

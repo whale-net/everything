@@ -55,7 +55,10 @@ func scanChannel(row pgx.Row) (Channel, error) {
 // "connected" -- a Channel is only ever created after its creator has
 // just completed the YouTube OAuth connection (FR3) -- plus a
 // role=creator channel_person row for creatorPersonID, in one
-// transaction so a Channel can never exist without a creator.
+// transaction so a Channel can never exist without a creator. The
+// connecting Person is recorded as their own granted_by_person_id
+// (FR25/FR34's self-grant at connect) -- there is no other actor who
+// could have granted the Founder role.
 func (s channelStore) Create(ctx context.Context, youtubeChannelID, title string, creatorPersonID uuid.UUID) (Channel, error) {
 	tx, err := s.pool.Begin(ctx)
 	if err != nil {
@@ -73,7 +76,7 @@ func (s channelStore) Create(ctx context.Context, youtubeChannelID, title string
 	}
 
 	if _, err := tx.Exec(ctx, `
-		INSERT INTO channel_person (channel_id, person_id, role) VALUES ($1, $2, $3)
+		INSERT INTO channel_person (channel_id, person_id, role, granted_by_person_id) VALUES ($1, $2, $3, $2)
 	`, ch.ID, creatorPersonID, RoleCreator); err != nil {
 		return Channel{}, fmt.Errorf("insert creator channel_person row: %w", err)
 	}

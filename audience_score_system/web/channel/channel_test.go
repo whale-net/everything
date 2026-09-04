@@ -142,7 +142,13 @@ func (f *fakeRoleStore) RolesFor(_ context.Context, _, _ uuid.UUID) ([]store.Rol
 	return f.roles, f.err
 }
 
-func (f *fakeRoleStore) AddRole(_ context.Context, _, _ uuid.UUID, _ store.Role) error { return nil }
+func (f *fakeRoleStore) AddRole(_ context.Context, _, _ uuid.UUID, _ store.Role, _ uuid.UUID) error {
+	return nil
+}
+
+func (f *fakeRoleStore) RemoveRole(_ context.Context, _, _, _ uuid.UUID) (bool, error) {
+	return false, nil
+}
 
 func (f *fakeRoleStore) ChannelsForPerson(_ context.Context, _ uuid.UUID) ([]store.Channel, error) {
 	return nil, nil

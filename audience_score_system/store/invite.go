@@ -106,7 +106,11 @@ func (s inviteStore) Lookup(ctx context.Context, code string) (Invite, error) {
 // Consume locks the invite row (SELECT ... FOR UPDATE) so a concurrent
 // double-consume of the same code cannot both succeed, checks it is
 // still live, then atomically stamps it consumed and grants role=analyst
-// via addRoleTx (role.go) -- all in one transaction (FR8).
+// via addRoleTx (role.go) -- all in one transaction (FR8). The invite's
+// own created_by_person_id (the Creator who generated the code) is
+// recorded as the grant's granted_by_person_id (FR34) -- the actor who
+// authorized this Person joining the Channel, distinct from byPersonID
+// (the redeemer).
 func (s inviteStore) Consume(ctx context.Context, code string, byPersonID uuid.UUID) error {
 	tx, err := s.pool.Begin(ctx)
 	if err != nil {
@@ -114,14 +118,14 @@ func (s inviteStore) Consume(ctx context.Context, code string, byPersonID uuid.U
 	}
 	defer tx.Rollback(ctx)
 
-	var id, channelID uuid.UUID
+	var id, channelID, createdByPersonID uuid.UUID
 	var consumedAt, invalidatedAt *time.Time
 	err = tx.QueryRow(ctx, `
-		SELECT id, channel_id, consumed_at, invalidated_at
+		SELECT id, channel_id, created_by_person_id, consumed_at, invalidated_at
 		FROM channel_invite
 		WHERE code = $1
 		FOR UPDATE
-	`, code).Scan(&id, &channelID, &consumedAt, &invalidatedAt)
+	`, code).Scan(&id, &channelID, &createdByPersonID, &consumedAt, &invalidatedAt)
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			return pgx.ErrNoRows
@@ -141,7 +145,7 @@ func (s inviteStore) Consume(ctx context.Context, code string, byPersonID uuid.U
 		return fmt.Errorf("mark invite consumed: %w", err)
 	}
 
-	if err := addRoleTx(ctx, tx, channelID, byPersonID, RoleAnalyst); err != nil {
+	if err := addRoleTx(ctx, tx, channelID, byPersonID, RoleAnalyst, createdByPersonID); err != nil {
 		return err
 	}
 
