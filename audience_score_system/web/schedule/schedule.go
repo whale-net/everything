@@ -85,16 +85,6 @@ func (h *Handlers) HandleList(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	canRead, err := store.CanRead(ctx, h.store.Roles(), channelID, person.ID)
-	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
-		return
-	}
-	if !canRead {
-		http.Error(w, "forbidden", http.StatusForbidden)
-		return
-	}
-
 	ch, err := h.store.Channels().GetByID(ctx, channelID)
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
@@ -102,6 +92,21 @@ func (h *Handlers) HandleList(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	// Re-authorize strictly by this Channel's ID (store.CanRead) only after
+	// confirming it exists -- mirrors handleChannelDetail (web/main.go):
+	// GetByID first (404 for an unknown Channel), CanRead second (403 for a
+	// known Channel the caller can't read), so an unknown ID never leaks as
+	// 403 before the existence check runs.
+	canRead, err := store.CanRead(ctx, h.store.Roles(), channelID, person.ID)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	if !canRead {
+		http.Error(w, "forbidden", http.StatusForbidden)
 		return
 	}
 
