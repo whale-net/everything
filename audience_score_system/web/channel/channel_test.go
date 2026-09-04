@@ -154,6 +154,14 @@ func (f *fakeRoleStore) ChannelsForPerson(_ context.Context, _ uuid.UUID) ([]sto
 	return nil, nil
 }
 
+func (f *fakeRoleStore) RowID(_ context.Context, _, _ uuid.UUID) (uuid.UUID, bool, error) {
+	return uuid.Nil, false, nil
+}
+
+func (f *fakeRoleStore) RowByID(_ context.Context, _ uuid.UUID) (store.ChannelPerson, error) {
+	return store.ChannelPerson{}, nil
+}
+
 var _ store.RoleStore = (*fakeRoleStore)(nil)
 
 // ── fake tokens.Store ────────────────────────────────────────────────────

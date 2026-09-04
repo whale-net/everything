@@ -173,6 +173,7 @@ func run() error {
 	tools.RegisterBrowse(reg, st)
 	tools.RegisterStrategy(reg, st)
 	tools.RegisterTriggerChannelSync(reg, st.Channels(), scheduleManager)
+	tools.RegisterAccess(reg, st)
 
 	handler := server.NewHTTPHandler(srv, creds, server.ResourceMetadataConfig{
 		Resource:            cfg.MCPPublicURL,

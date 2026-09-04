@@ -34,6 +34,27 @@ type InviteStore interface {
 	// such code exists.
 	Lookup(ctx context.Context, code string) (Invite, error)
 
+	// GetByID returns the Invite with this id, or pgx.ErrNoRows if none
+	// exists. Used by mcp/tools/access.go's invite_co_creator write tool
+	// (#1718) to re-read the invite render(ref) needs, so a replay
+	// reflects current persisted state (LB4).
+	GetByID(ctx context.Context, id uuid.UUID) (Invite, error)
+
+	// LiveForRole returns the current live (unconsumed, uninvalidated)
+	// invite for (channelID, role), if any, WITHOUT creating one -- a
+	// read-only peek distinct from Generate. Used by
+	// mcp/tools/access.go's invite_co_creator write tool to determine,
+	// before calling Generate, whether this call is about to mint a
+	// fresh code or return a pre-existing one (its already_live output).
+	// This has an inherent, accepted race against a concurrent Generate
+	// for the same (channel, role): the result is advisory only, never
+	// used for authorization or correctness -- Generate's own
+	// transactional check-or-insert (with its FOR UPDATE lock and the
+	// channel_invite_channel_id_role_live partial unique index) remains
+	// the sole source of truth for "at most one live code per
+	// (Channel, tier)" (NFR11).
+	LiveForRole(ctx context.Context, channelID uuid.UUID, role Role) (Invite, bool, error)
+
 	// Consume atomically sets consumed_at/consumed_by_person_id and adds a
 	// channel_person row for byPersonID at the invite's own Role (FR8,
 	// widened for FR30 -- co_creator or analyst depending on which tier
@@ -183,6 +204,35 @@ func (s inviteStore) Consume(ctx context.Context, code string, byPersonID uuid.U
 		return fmt.Errorf("commit: %w", err)
 	}
 	return nil
+}
+
+// GetByID fetches an invite by its own id, live or not.
+func (s inviteStore) GetByID(ctx context.Context, id uuid.UUID) (Invite, error) {
+	inv, err := scanInvite(s.pool.QueryRow(ctx, `SELECT `+inviteColumns+` FROM channel_invite WHERE id = $1`, id))
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return Invite{}, pgx.ErrNoRows
+		}
+		return Invite{}, fmt.Errorf("get invite by id: %w", err)
+	}
+	return inv, nil
+}
+
+// LiveForRole is a read-only peek at the live invite for (channelID,
+// role) -- see the interface doc comment for why this exists and its
+// accepted race against a concurrent Generate.
+func (s inviteStore) LiveForRole(ctx context.Context, channelID uuid.UUID, role Role) (Invite, bool, error) {
+	inv, err := scanInvite(s.pool.QueryRow(ctx, `
+		SELECT `+inviteColumns+` FROM channel_invite
+		WHERE channel_id = $1 AND role = $2 AND consumed_at IS NULL AND invalidated_at IS NULL
+	`, channelID, role))
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return Invite{}, false, nil
+		}
+		return Invite{}, false, fmt.Errorf("live invite for role: %w", err)
+	}
+	return inv, true, nil
 }
 
 // generateInviteCode returns a high-entropy (crypto/rand), hex-encoded

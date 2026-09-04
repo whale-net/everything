@@ -2,9 +2,11 @@ package store
 
 import (
 	"context"
+	"errors"
 	"fmt"
 
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
@@ -60,6 +62,20 @@ type RoleStore interface {
 	// than calling RolesFor per Channel afterward (that per-Channel loop
 	// is exactly the N+1 issue #1716/#1719 replace).
 	ChannelsForPerson(ctx context.Context, personID uuid.UUID) ([]Channel, error)
+
+	// RowID returns the id of the most recent channel_person row (open OR
+	// closed -- i.e. the row with the greatest valid_from) for
+	// (channelID, personID), or found=false when no row has EVER existed
+	// for that pair. Used by mcp/tools/access.go's promote_to_co_creator/
+	// remove_channel_person write tools (#1718) to build a WriteMutate
+	// ref that RowByID can re-resolve on render, so a replay reflects
+	// current persisted state rather than a value cached from mutate
+	// time (LB4).
+	RowID(ctx context.Context, channelID, personID uuid.UUID) (id uuid.UUID, found bool, err error)
+
+	// RowByID returns the channel_person row (open or closed) identified
+	// by id, or pgx.ErrNoRows if none exists. Pairs with RowID above.
+	RowByID(ctx context.Context, id uuid.UUID) (ChannelPerson, error)
 }
 
 // roleStore implements RoleStore against `channel_person` (migration 001).
@@ -159,6 +175,44 @@ func (s roleStore) ChannelsForPerson(ctx context.Context, personID uuid.UUID) ([
 		return nil, fmt.Errorf("channels for person: %w", err)
 	}
 	return channels, nil
+}
+
+// RowID looks up the most recent channel_person row (by valid_from DESC)
+// for (channelID, personID), regardless of open/closed state -- see the
+// interface doc comment for why access.go's write tools need this.
+func (s roleStore) RowID(ctx context.Context, channelID, personID uuid.UUID) (uuid.UUID, bool, error) {
+	var id uuid.UUID
+	err := s.pool.QueryRow(ctx, `
+		SELECT id FROM channel_person
+		WHERE channel_id = $1 AND person_id = $2
+		ORDER BY valid_from DESC
+		LIMIT 1
+	`, channelID, personID).Scan(&id)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return uuid.Nil, false, nil
+		}
+		return uuid.Nil, false, fmt.Errorf("row id for channel/person: %w", err)
+	}
+	return id, true, nil
+}
+
+// RowByID fetches a channel_person row (open or closed) by its own
+// surrogate id.
+func (s roleStore) RowByID(ctx context.Context, id uuid.UUID) (ChannelPerson, error) {
+	var cp ChannelPerson
+	err := s.pool.QueryRow(ctx, `
+		SELECT id, channel_id, person_id, role, valid_from, valid_to
+		FROM channel_person
+		WHERE id = $1
+	`, id).Scan(&cp.ID, &cp.ChannelID, &cp.PersonID, &cp.Role, &cp.ValidFrom, &cp.ValidTo)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return ChannelPerson{}, pgx.ErrNoRows
+		}
+		return ChannelPerson{}, fmt.Errorf("row by id: %w", err)
+	}
+	return cp, nil
 }
 
 // addRoleTx is the SCD2 close-and-open pattern from AGENTS.md "SCD2",

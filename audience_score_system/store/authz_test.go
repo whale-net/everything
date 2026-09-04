@@ -50,6 +50,14 @@ func (f fakeRoleStore) ChannelsForPerson(context.Context, uuid.UUID) ([]store.Ch
 	return nil, errors.New("fakeRoleStore.ChannelsForPerson is not used by authz tests")
 }
 
+func (f fakeRoleStore) RowID(context.Context, uuid.UUID, uuid.UUID) (uuid.UUID, bool, error) {
+	return uuid.Nil, false, errors.New("fakeRoleStore.RowID is not used by authz tests")
+}
+
+func (f fakeRoleStore) RowByID(context.Context, uuid.UUID) (store.ChannelPerson, error) {
+	return store.ChannelPerson{}, errors.New("fakeRoleStore.RowByID is not used by authz tests")
+}
+
 // TestAuthz_CreatorTierChecks covers CanApprove/CanInvite/CanReconnect,
 // which per FR32 grant symmetric authority to both Founder (RoleCreator)
 // and Co-Creator (RoleCoCreator) -- and to no one else. The "no roles"
@@ -201,6 +209,14 @@ func (f twoPersonRoleStore) RemoveRole(context.Context, uuid.UUID, uuid.UUID, uu
 
 func (f twoPersonRoleStore) ChannelsForPerson(context.Context, uuid.UUID) ([]store.Channel, error) {
 	return nil, errors.New("twoPersonRoleStore.ChannelsForPerson is not used by CanRemove tests")
+}
+
+func (f twoPersonRoleStore) RowID(context.Context, uuid.UUID, uuid.UUID) (uuid.UUID, bool, error) {
+	return uuid.Nil, false, errors.New("twoPersonRoleStore.RowID is not used by CanRemove tests")
+}
+
+func (f twoPersonRoleStore) RowByID(context.Context, uuid.UUID) (store.ChannelPerson, error) {
+	return store.ChannelPerson{}, errors.New("twoPersonRoleStore.RowByID is not used by CanRemove tests")
 }
 
 // TestAuthz_CanRemove_FullMatrix pins down every cell of FR33's removal
