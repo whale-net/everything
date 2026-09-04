@@ -21,6 +21,7 @@ go_library(
         "strategy.go",
         "sync_trigger.go",
         "verdict.go",
+        "video_script.go",
         "whoami.go",
     ],
     importpath = "github.com/whale-net/everything/audience_score_system/mcp/tools",
