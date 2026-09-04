@@ -19,10 +19,14 @@ package store_test
 import (
 	"context"
 	"database/sql"
+	"fmt"
+	"sync/atomic"
 	"testing"
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgxpool"
 	_ "github.com/jackc/pgx/v5/stdlib"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -598,6 +602,238 @@ func TestRoleStore_RemoveRole_NoOpenRow_ReturnsFalseNoError(t *testing.T) {
 	removed, err := s.Roles().RemoveRole(ctx, ch.ID, unassociated.ID, uuid.New())
 	require.NoError(t, err)
 	assert.False(t, removed, "removing a Person with no open row must report removed=false, not error")
+}
+
+// ── AccessStore (FR26/FR30/FR31/FR33/FR35, NFR9) ───────────────────────────
+
+// queryCounter is a pgx.QueryTracer that counts pool.Query/QueryRow/Exec
+// calls -- used by the NFR9 tests below to prove a method issues exactly
+// one SQL statement, per the mechanism issue #1716's Testing section asks
+// for (a pgx.QueryTracer wrapped around the pool, reused across both NFR9
+// tests here).
+type queryCounter struct{ n atomic.Int64 }
+
+func (q *queryCounter) TraceQueryStart(ctx context.Context, _ *pgx.Conn, _ pgx.TraceQueryStartData) context.Context {
+	q.n.Add(1)
+	return ctx
+}
+
+func (q *queryCounter) TraceQueryEnd(context.Context, *pgx.Conn, pgx.TraceQueryEndData) {}
+
+// tracedStore builds a second *store.Store against the same database as db
+// (via its ConnString), but through a pool whose every query is counted by
+// counter -- lets a test assert exactly how many SQL statements a call
+// issued without needing pg_stat_statements.
+func tracedStore(t *testing.T, ctx context.Context, db *dbtest.Postgres, counter *queryCounter) *store.Store {
+	t.Helper()
+
+	cfg, err := pgxpool.ParseConfig(db.ConnString)
+	require.NoError(t, err)
+	cfg.ConnConfig.Tracer = counter
+
+	pool, err := pgxpool.NewWithConfig(ctx, cfg)
+	require.NoError(t, err)
+	t.Cleanup(pool.Close)
+
+	return store.New(pool)
+}
+
+// TestAccessStore_ChannelsWithRoleForPerson_ReturnsTierPerChannel_ExcludesClosedRows
+// proves FR26/FR28: a Person who is Founder on A, Co-Creator on B, Analyst
+// on C, and has a closed (removed) role on D gets exactly A/B/C back, each
+// paired with the right tier, ordered by Channel title.
+func TestAccessStore_ChannelsWithRoleForPerson_ReturnsTierPerChannel_ExcludesClosedRows(t *testing.T) {
+	ctx := context.Background()
+	s, _ := newStore(t)
+
+	person, _, err := s.Persons().UpsertByGoogleSubject(ctx, "sub-"+uuid.NewString(), "p@example.com", "Person")
+	require.NoError(t, err)
+
+	// A: person is Founder -- self-granted by Channels().Create.
+	chA, err := s.Channels().Create(ctx, "yt-"+uuid.NewString(), "A Channel", person.ID)
+	require.NoError(t, err)
+
+	// B: person is Co-Creator, granted by B's own Founder.
+	founderB, _, err := s.Persons().UpsertByGoogleSubject(ctx, "sub-"+uuid.NewString(), "fb@example.com", "Founder B")
+	require.NoError(t, err)
+	chB, err := s.Channels().Create(ctx, "yt-"+uuid.NewString(), "B Channel", founderB.ID)
+	require.NoError(t, err)
+	require.NoError(t, s.Roles().AddRole(ctx, chB.ID, person.ID, store.RoleCoCreator, founderB.ID))
+
+	// C: person is Analyst, granted by C's own Founder.
+	founderC, _, err := s.Persons().UpsertByGoogleSubject(ctx, "sub-"+uuid.NewString(), "fc@example.com", "Founder C")
+	require.NoError(t, err)
+	chC, err := s.Channels().Create(ctx, "yt-"+uuid.NewString(), "C Channel", founderC.ID)
+	require.NoError(t, err)
+	require.NoError(t, s.Roles().AddRole(ctx, chC.ID, person.ID, store.RoleAnalyst, founderC.ID))
+
+	// D: person held an Analyst role that was later removed -- the closed
+	// row must not appear (FR28).
+	founderD, _, err := s.Persons().UpsertByGoogleSubject(ctx, "sub-"+uuid.NewString(), "fd@example.com", "Founder D")
+	require.NoError(t, err)
+	chD, err := s.Channels().Create(ctx, "yt-"+uuid.NewString(), "D Channel", founderD.ID)
+	require.NoError(t, err)
+	require.NoError(t, s.Roles().AddRole(ctx, chD.ID, person.ID, store.RoleAnalyst, founderD.ID))
+	removed, err := s.Roles().RemoveRole(ctx, chD.ID, person.ID, founderD.ID)
+	require.NoError(t, err)
+	require.True(t, removed)
+
+	got, err := s.Access().ChannelsWithRoleForPerson(ctx, person.ID)
+	require.NoError(t, err)
+
+	require.Len(t, got, 3, "must return exactly A/B/C -- the closed D row must be excluded")
+	assert.Equal(t, chA.ID, got[0].Channel.ID)
+	assert.Equal(t, store.RoleCreator, got[0].Role)
+	assert.Equal(t, chB.ID, got[1].Channel.ID)
+	assert.Equal(t, store.RoleCoCreator, got[1].Role)
+	assert.Equal(t, chC.ID, got[2].Channel.ID)
+	assert.Equal(t, store.RoleAnalyst, got[2].Role)
+}
+
+// TestAccessStore_ChannelsWithRoleForPerson_IsSingleQuery proves NFR9 for a
+// Person on 5 Channels: exactly one SQL statement is issued regardless of
+// how many Channels the Person holds a role on.
+func TestAccessStore_ChannelsWithRoleForPerson_IsSingleQuery(t *testing.T) {
+	ctx := context.Background()
+	s, db := newStore(t)
+
+	person, _, err := s.Persons().UpsertByGoogleSubject(ctx, "sub-"+uuid.NewString(), "p@example.com", "Person")
+	require.NoError(t, err)
+
+	for i := 0; i < 5; i++ {
+		founder, _, err := s.Persons().UpsertByGoogleSubject(ctx, "sub-"+uuid.NewString(), fmt.Sprintf("f%d@example.com", i), fmt.Sprintf("Founder %d", i))
+		require.NoError(t, err)
+		ch, err := s.Channels().Create(ctx, "yt-"+uuid.NewString(), fmt.Sprintf("Channel %d", i), founder.ID)
+		require.NoError(t, err)
+		require.NoError(t, s.Roles().AddRole(ctx, ch.ID, person.ID, store.RoleAnalyst, founder.ID))
+	}
+
+	counter := &queryCounter{}
+	traced := tracedStore(t, ctx, db, counter)
+
+	before := counter.n.Load()
+	got, err := traced.Access().ChannelsWithRoleForPerson(ctx, person.ID)
+	require.NoError(t, err)
+	require.Len(t, got, 5)
+
+	assert.Equal(t, int64(1), counter.n.Load()-before,
+		"ChannelsWithRoleForPerson must issue exactly one SQL query regardless of how many Channels the Person is on (NFR9)")
+}
+
+// TestAccessStore_Roster_OrdersFounderCoCreatorAnalyst_IncludesGranter
+// proves FR30/FR31/FR33's presentation order (Founder, then Co-Creator,
+// then Analysts by display name) and that a row with a NULL
+// granted_by_person_id (the pre-M2 case migration 009 does not backfill)
+// surfaces an empty granter rather than an error.
+func TestAccessStore_Roster_OrdersFounderCoCreatorAnalyst_IncludesGranter(t *testing.T) {
+	ctx := context.Background()
+	s, db := newStore(t)
+	ch, creator := setupChannel(t, ctx, s)
+
+	coCreator, _, err := s.Persons().UpsertByGoogleSubject(ctx, "sub-"+uuid.NewString(), "cc@example.com", "Co-Creator")
+	require.NoError(t, err)
+	require.NoError(t, s.Roles().AddRole(ctx, ch.ID, coCreator.ID, store.RoleCoCreator, creator.ID))
+
+	zackAnalyst, _, err := s.Persons().UpsertByGoogleSubject(ctx, "sub-"+uuid.NewString(), "zack@example.com", "Zack Analyst")
+	require.NoError(t, err)
+	require.NoError(t, s.Roles().AddRole(ctx, ch.ID, zackAnalyst.ID, store.RoleAnalyst, creator.ID))
+
+	amyAnalyst, _, err := s.Persons().UpsertByGoogleSubject(ctx, "sub-"+uuid.NewString(), "amy@example.com", "Amy Analyst")
+	require.NoError(t, err)
+	// Insert directly, bypassing AddRole, to leave granted_by_person_id
+	// NULL -- the pre-M2-row case migration 009 does not backfill.
+	_, err = db.Pool.Exec(ctx, `
+		INSERT INTO channel_person (channel_id, person_id, role) VALUES ($1, $2, 'analyst')
+	`, ch.ID, amyAnalyst.ID)
+	require.NoError(t, err)
+
+	got, err := s.Access().Roster(ctx, ch.ID)
+	require.NoError(t, err)
+	require.Len(t, got, 4)
+
+	assert.Equal(t, creator.ID, got[0].PersonID)
+	assert.Equal(t, store.RoleCreator, got[0].Role)
+	assert.Equal(t, "Creator", got[0].GrantedByDisplayName, "Create() self-grants the Founder role (FR25)")
+
+	assert.Equal(t, coCreator.ID, got[1].PersonID)
+	assert.Equal(t, store.RoleCoCreator, got[1].Role)
+	assert.Equal(t, "Creator", got[1].GrantedByDisplayName)
+
+	assert.Equal(t, amyAnalyst.ID, got[2].PersonID, "Analysts ordered by display name: Amy before Zack")
+	assert.Equal(t, store.RoleAnalyst, got[2].Role)
+	assert.Equal(t, "", got[2].GrantedByDisplayName, "a NULL granted_by_person_id (pre-M2 row) must surface as empty, not error")
+
+	assert.Equal(t, zackAnalyst.ID, got[3].PersonID)
+	assert.Equal(t, store.RoleAnalyst, got[3].Role)
+	assert.Equal(t, "Creator", got[3].GrantedByDisplayName)
+}
+
+// TestAccessStore_AuditTrail_MostRecentFirst_GrantAndRevokeEvents proves
+// FR35: a grant, a promote (close-and-open), and a remove on one Channel
+// yield the expected most-recent-first event sequence with correct actors
+// and tiers, and that another Channel's events never leak in.
+func TestAccessStore_AuditTrail_MostRecentFirst_GrantAndRevokeEvents(t *testing.T) {
+	ctx := context.Background()
+	s, _ := newStore(t)
+	ch, creator := setupChannel(t, ctx, s)
+	otherCh, otherCreator := setupChannel(t, ctx, s)
+
+	subject, _, err := s.Persons().UpsertByGoogleSubject(ctx, "sub-"+uuid.NewString(), "subject@example.com", "Subject")
+	require.NoError(t, err)
+	otherSubject, _, err := s.Persons().UpsertByGoogleSubject(ctx, "sub-"+uuid.NewString(), "other@example.com", "Other Subject")
+	require.NoError(t, err)
+
+	require.NoError(t, s.Roles().AddRole(ctx, ch.ID, subject.ID, store.RoleAnalyst, creator.ID))
+	// Promote: SCD2 close-and-open in one transaction -- closes the
+	// analyst row (a 'revoked' event) and opens a co_creator row (a
+	// 'granted' event) at the same occurred_at.
+	require.NoError(t, s.Roles().AddRole(ctx, ch.ID, subject.ID, store.RoleCoCreator, creator.ID))
+	removed, err := s.Roles().RemoveRole(ctx, ch.ID, subject.ID, creator.ID)
+	require.NoError(t, err)
+	require.True(t, removed)
+
+	// Another Channel's events must never leak in.
+	require.NoError(t, s.Roles().AddRole(ctx, otherCh.ID, otherSubject.ID, store.RoleAnalyst, otherCreator.ID))
+
+	events, err := s.Access().AuditTrail(ctx, ch.ID, 0)
+	require.NoError(t, err)
+	require.Len(t, events, 5, "Founder self-grant, plus grant/promote(revoke+grant)/remove on subject == 5 events")
+
+	assert.Equal(t, "revoked", events[0].Event)
+	assert.Equal(t, store.RoleCoCreator, events[0].Role)
+	assert.Equal(t, subject.ID, events[0].SubjectPersonID)
+	require.NotNil(t, events[0].ActorPersonID)
+	assert.Equal(t, creator.ID, *events[0].ActorPersonID)
+
+	assert.Equal(t, "granted", events[1].Event)
+	assert.Equal(t, store.RoleCoCreator, events[1].Role)
+	assert.Equal(t, subject.ID, events[1].SubjectPersonID)
+	require.NotNil(t, events[1].ActorPersonID)
+	assert.Equal(t, creator.ID, *events[1].ActorPersonID)
+
+	assert.Equal(t, "revoked", events[2].Event)
+	assert.Equal(t, store.RoleAnalyst, events[2].Role)
+	assert.Equal(t, subject.ID, events[2].SubjectPersonID)
+
+	assert.Equal(t, "granted", events[3].Event)
+	assert.Equal(t, store.RoleAnalyst, events[3].Role)
+	assert.Equal(t, subject.ID, events[3].SubjectPersonID)
+	require.NotNil(t, events[3].ActorPersonID)
+	assert.Equal(t, creator.ID, *events[3].ActorPersonID)
+
+	assert.Equal(t, "granted", events[4].Event)
+	assert.Equal(t, store.RoleCreator, events[4].Role)
+	assert.Equal(t, creator.ID, events[4].SubjectPersonID, "the Founder's own self-grant at Channel-connect is the oldest event")
+
+	for _, ev := range events {
+		assert.NotEqual(t, otherSubject.ID, ev.SubjectPersonID, "another Channel's events must never leak into this Channel's trail")
+	}
+
+	otherEvents, err := s.Access().AuditTrail(ctx, otherCh.ID, 0)
+	require.NoError(t, err)
+	for _, ev := range otherEvents {
+		assert.NotEqual(t, subject.ID, ev.SubjectPersonID, "this Channel's events must never leak into another Channel's trail")
+	}
 }
 
 // ── IdeaStore / VerdictStore (FR9, FR12/FR13) ──────────────────────────────

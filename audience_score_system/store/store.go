@@ -85,3 +85,11 @@ func (s *Store) Browse() BrowseStore { return browseStore{pool: s.pool} }
 // issue #1637) -- a cadence built directly from viable viability_verdict
 // rows (many-to-many with Strategy).
 func (s *Store) Strategies() StrategyStore { return strategyStore{pool: s.pool} }
+
+// Access returns the AccessStore implementation (migration 009, issue
+// #1716) -- M2's read side of the access model: which Channels a Person
+// has a role on and at what tier (FR26), a Channel's roster (FR30/FR31/
+// FR33), and its grant/revoke audit trail over v_channel_person_audit
+// (FR35). Performs no authorization itself -- see AccessStore's doc
+// comment.
+func (s *Store) Access() AccessStore { return accessStore{pool: s.pool} }
