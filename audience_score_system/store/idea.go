@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
@@ -43,12 +44,16 @@ type IdeaStore interface {
 	// ListByChannel returns every Idea for channelID.
 	ListByChannel(ctx context.Context, channelID uuid.UUID) ([]Idea, error)
 
-	// ListByChannelWithStats returns every Idea for channelID (same
-	// ordering as ListByChannel) alongside its research_note count and
-	// whether it has a viability_verdict yet -- one round trip via two LEFT
-	// JOINs rather than N+1 queries per Idea. Backs list_ideas
+	// ListByChannelWithStats returns Ideas for channelID (same
+	// created_at-ascending ordering as ListByChannel) alongside their
+	// research_note count and whether each has a viability_verdict yet --
+	// one round trip via two LEFT JOINs rather than N+1 queries per Idea.
+	// Bounded by since (inclusive lower bound on created_at, nil = no
+	// bound) and limit (<=0 = unbounded; truncated reports whether more
+	// matching rows exist beyond it) -- list_ideas' since/limit pagination
+	// entirely in this layer (issue #1813's follow-up). Backs list_ideas
 	// (mcp/tools/research.go, issue #1577).
-	ListByChannelWithStats(ctx context.Context, channelID uuid.UUID) ([]IdeaSummary, error)
+	ListByChannelWithStats(ctx context.Context, channelID uuid.UUID, since *time.Time, limit int) (summaries []IdeaSummary, truncated bool, err error)
 }
 
 // ideaStore implements IdeaStore against `idea` (migration 002).
@@ -163,12 +168,14 @@ func (s ideaStore) ListByChannel(ctx context.Context, channelID uuid.UUID) ([]Id
 	return ideas, nil
 }
 
-// ListByChannelWithStats returns every Idea for channelID (same
-// created_at ordering as ListByChannel) alongside its research_note count
-// and whether it has at least one viability_verdict row -- computed with
-// two LEFT JOINs so this is one round trip rather than N+1 queries per
-// Idea. Backs list_ideas (mcp/tools/research.go, issue #1577).
-func (s ideaStore) ListByChannelWithStats(ctx context.Context, channelID uuid.UUID) ([]IdeaSummary, error) {
+// ListByChannelWithStats returns Ideas for channelID (same created_at
+// ordering as ListByChannel) alongside their research_note count and
+// whether each has at least one viability_verdict row -- computed with two
+// LEFT JOINs so this is one round trip rather than N+1 queries per Idea,
+// bounded by since/limit (NULL-safe SQL parameters, see fetchLimit/
+// paginate in pagination.go). Backs list_ideas (mcp/tools/research.go,
+// issue #1577).
+func (s ideaStore) ListByChannelWithStats(ctx context.Context, channelID uuid.UUID, since *time.Time, limit int) ([]IdeaSummary, bool, error) {
 	rows, err := s.pool.Query(ctx, `
 		SELECT
 			i.id, i.channel_id, i.title, i.created_by_person_id, i.created_at,
@@ -178,11 +185,13 @@ func (s ideaStore) ListByChannelWithStats(ctx context.Context, channelID uuid.UU
 		LEFT JOIN research_note rn ON rn.idea_id = i.id
 		LEFT JOIN viability_verdict vv ON vv.idea_id = i.id
 		WHERE i.channel_id = $1
+		  AND ($2::timestamptz IS NULL OR i.created_at >= $2)
 		GROUP BY i.id
 		ORDER BY i.created_at
-	`, channelID)
+		LIMIT $3
+	`, channelID, since, fetchLimit(limit))
 	if err != nil {
-		return nil, fmt.Errorf("list ideas with stats by channel: %w", err)
+		return nil, false, fmt.Errorf("list ideas with stats by channel: %w", err)
 	}
 	defer rows.Close()
 
@@ -190,12 +199,13 @@ func (s ideaStore) ListByChannelWithStats(ctx context.Context, channelID uuid.UU
 	for rows.Next() {
 		var s2 IdeaSummary
 		if err := rows.Scan(&s2.ID, &s2.ChannelID, &s2.Title, &s2.CreatedByPersonID, &s2.CreatedAt, &s2.NoteCount, &s2.HasVerdict); err != nil {
-			return nil, fmt.Errorf("scan idea with stats: %w", err)
+			return nil, false, fmt.Errorf("scan idea with stats: %w", err)
 		}
 		summaries = append(summaries, s2)
 	}
 	if err := rows.Err(); err != nil {
-		return nil, fmt.Errorf("list ideas with stats by channel: %w", err)
+		return nil, false, fmt.Errorf("list ideas with stats by channel: %w", err)
 	}
-	return summaries, nil
+	summaries, truncated := paginate(summaries, limit)
+	return summaries, truncated, nil
 }

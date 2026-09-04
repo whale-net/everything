@@ -217,28 +217,29 @@ func getPredictionVsOutcome(browse store.BrowseStore, matches store.MatchStore) 
 			return nil, GetPredictionVsOutcomeOutput{}, fmt.Errorf("idea_id is not a valid UUID: %w", err)
 		}
 
-		rows, err := browse.PredictionVsOutcome(ctx, channelID, ideaID, in.Since, in.Before)
-		if err != nil {
-			return nil, GetPredictionVsOutcomeOutput{}, fmt.Errorf("get_prediction_vs_outcome: %w", err)
-		}
-
 		limit := in.Limit
 		if limit <= 0 {
 			limit = defaultPredictionVsOutcomeLimit
 		}
-		trimmed, truncated := truncateSlice(rows, limit)
+		rows, truncated, err := browse.PredictionVsOutcome(ctx, channelID, ideaID, in.Since, in.Before, limit)
+		if err != nil {
+			return nil, GetPredictionVsOutcomeOutput{}, fmt.Errorf("get_prediction_vs_outcome: %w", err)
+		}
 
-		pending, err := matches.ListPending(ctx, channelID)
+		// Unbounded (since=nil, limit=0): PendingMatchCount must be the
+		// TRUE total, not however many list_pending_matches' own default
+		// page happens to return.
+		pending, _, err := matches.ListPending(ctx, channelID, nil, 0)
 		if err != nil {
 			return nil, GetPredictionVsOutcomeOutput{}, fmt.Errorf("get_prediction_vs_outcome: list pending matches: %w", err)
 		}
 
 		out := GetPredictionVsOutcomeOutput{
-			Rows:              make([]PredictionVsOutcomeRowOutput, 0, len(trimmed)),
+			Rows:              make([]PredictionVsOutcomeRowOutput, 0, len(rows)),
 			Truncated:         truncated,
 			PendingMatchCount: len(pending),
 		}
-		for _, r := range trimmed {
+		for _, r := range rows {
 			out.Rows = append(out.Rows, toPredictionVsOutcomeRowOutput(r))
 		}
 		return nil, out, nil
@@ -530,55 +531,56 @@ func getChannelOverview(deps overviewDeps) mcp.ToolHandlerFor[GetChannelOverview
 			Truncated:           []string{},
 		}
 
-		pending, err := deps.matches.ListPending(ctx, channelID)
+		// Unbounded (since=nil, limit=0): PendingMatchCount must be the
+		// TRUE total, not however many list_pending_matches' own default
+		// page happens to return.
+		pending, _, err := deps.matches.ListPending(ctx, channelID, nil, 0)
 		if err != nil {
 			return nil, GetChannelOverviewOutput{}, fmt.Errorf("get_channel_overview: list pending matches: %w", err)
 		}
 		out.PendingMatchCount = len(pending)
 
 		if wantSections[overviewSectionIdeas] {
-			ideas, err := deps.browse.IdeasWithCurrentVerdict(ctx, channelID)
+			ideas, truncated, err := deps.browse.IdeasWithCurrentVerdict(ctx, channelID, defaultIdeasOverviewLimit)
 			if err != nil {
 				return nil, GetChannelOverviewOutput{}, fmt.Errorf("get_channel_overview: list ideas: %w", err)
 			}
-			trimmed, truncated := truncateSlice(ideas, defaultIdeasOverviewLimit)
 			if truncated {
 				out.Truncated = append(out.Truncated, overviewSectionIdeas)
 			}
-			for _, i := range trimmed {
+			for _, i := range ideas {
 				out.Ideas = append(out.Ideas, toIdeaOverviewOutput(i))
 			}
 		}
 
 		if wantSections[overviewSectionNotes] {
-			notes, err := deps.research.ListFiltered(ctx, channelID, nil, nil)
+			notes, truncated, err := deps.research.ListFiltered(ctx, channelID, nil, nil, in.Since, in.Before, defaultNotesOverviewLimit)
 			if err != nil {
 				return nil, GetChannelOverviewOutput{}, fmt.Errorf("get_channel_overview: list research notes: %w", err)
 			}
-			notes = filterNotesRange(notes, in.Since, in.Before)
-			trimmed, truncated := truncateSlice(notes, defaultNotesOverviewLimit)
 			if truncated {
 				out.Truncated = append(out.Truncated, overviewSectionNotes)
 			}
-			for _, n := range trimmed {
+			for _, n := range notes {
 				out.ResearchNotes = append(out.ResearchNotes, toResearchNoteOutput(n.ResearchNote, n.AuthorDisplayName))
 			}
 		}
 
 		if wantSections[overviewSectionSchedule] {
-			entries, err := deps.schedules.ListDetailByChannel(ctx, channelID)
+			entries, truncated, err := deps.schedules.ListDetailByChannel(ctx, channelID, defaultScheduleOverviewLimit)
 			if err != nil {
 				return nil, GetChannelOverviewOutput{}, fmt.Errorf("get_channel_overview: list schedule: %w", err)
 			}
-			trimmed, truncated := truncateSlice(entries, defaultScheduleOverviewLimit)
 			if truncated {
 				out.Truncated = append(out.Truncated, overviewSectionSchedule)
 			}
-			for _, e := range trimmed {
+			for _, e := range entries {
 				out.ScheduleEntries = append(out.ScheduleEntries, toScheduleEntryOverviewOutput(e))
 			}
 
-			vids, err := deps.sync.ListSchedule(ctx, channelID)
+			// Unbounded: TotalVideos/ScheduledDrafts/Published/LastSyncedAt
+			// must reflect every synced_video row, not a capped page.
+			vids, _, err := deps.sync.ListSchedule(ctx, channelID, nil, nil, true, 0)
 			if err != nil {
 				return nil, GetChannelOverviewOutput{}, fmt.Errorf("get_channel_overview: list synced schedule: %w", err)
 			}
@@ -586,15 +588,14 @@ func getChannelOverview(deps overviewDeps) mcp.ToolHandlerFor[GetChannelOverview
 		}
 
 		if wantSections[overviewSectionOutcomes] {
-			rows, err := deps.browse.PredictionVsOutcome(ctx, channelID, nil, in.Since, in.Before)
+			rows, truncated, err := deps.browse.PredictionVsOutcome(ctx, channelID, nil, in.Since, in.Before, defaultOutcomesOverviewLimit)
 			if err != nil {
 				return nil, GetChannelOverviewOutput{}, fmt.Errorf("get_channel_overview: list prediction vs outcome: %w", err)
 			}
-			trimmed, truncated := truncateSlice(rows, defaultOutcomesOverviewLimit)
 			if truncated {
 				out.Truncated = append(out.Truncated, overviewSectionOutcomes)
 			}
-			for _, r := range trimmed {
+			for _, r := range rows {
 				out.PredictionVsOutcome = append(out.PredictionVsOutcome, toPredictionVsOutcomeRowOutput(r))
 			}
 		}

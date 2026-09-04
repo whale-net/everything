@@ -14,11 +14,12 @@ import (
 )
 
 // BrowseStore covers issue #1582/FR24's cross-entity Channel-browsing
-// reads. Every method here returns every matching row for its filter,
-// unbounded -- get_channel_overview/get_prediction_vs_outcome
-// (mcp/tools/browse.go) are the layer responsible for capping and
-// reporting truncation (NFR-equivalent "bounded by construction" from
-// #1582's spec), not this store.
+// reads. Every method here takes a limit (<=0 = unbounded) and reports
+// truncated itself (see fetchLimit/paginate, pagination.go) --
+// get_channel_overview/get_prediction_vs_outcome (mcp/tools/browse.go)
+// pass their caller-supplied or documented-default limit straight through
+// rather than fetching everything and capping in Go (issue #1808's
+// follow-up).
 type BrowseStore interface {
 	// PredictionVsOutcome returns one PredictionOutcome row per published
 	// video with a live (auto or confirmed) match to a committed
@@ -26,11 +27,12 @@ type BrowseStore interface {
 	// optionally narrowed to a single ideaID (nil = no filter) and/or a
 	// lower/upper bound on the video's published_at (since/before, nil =
 	// no filter on that side; since/before together let a caller page
-	// backward past a fixed truncation limit, issue #1808). A video with
-	// no recorded metrics yet does not appear -- mirrors migration 002's
-	// v_prediction_vs_outcome qualifying-row rule (see that view's SQL
-	// comment) with one deliberate difference: this query joins
-	// schedule_entry directly to viability_verdict via
+	// backward past a truncated response, issue #1808), capped at limit
+	// (<=0 = unbounded; truncated reports whether more matching rows exist
+	// beyond it). A video with no recorded metrics yet does not appear --
+	// mirrors migration 002's v_prediction_vs_outcome qualifying-row rule
+	// (see that view's SQL comment) with one deliberate difference: this
+	// query joins schedule_entry directly to viability_verdict via
 	// schedule_entry.verdict_id, never through v_current_verdict. The view
 	// requires se.verdict_id to equal the idea's CURRENT verdict's id,
 	// which means a schedule_entry committed under an older verdict
@@ -39,15 +41,15 @@ type BrowseStore interface {
 	// version, not a moving target" contract on that column. This method
 	// returns the bound version's data regardless of what the idea's
 	// current verdict has since become.
-	PredictionVsOutcome(ctx context.Context, channelID uuid.UUID, ideaID *uuid.UUID, since, before *time.Time) ([]PredictionOutcome, error)
+	PredictionVsOutcome(ctx context.Context, channelID uuid.UUID, ideaID *uuid.UUID, since, before *time.Time, limit int) (rows []PredictionOutcome, truncated bool, err error)
 
-	// IdeasWithCurrentVerdict returns every Idea for channelID
-	// (most-recently-created first) alongside its current verdict (the
+	// IdeasWithCurrentVerdict returns Ideas for channelID
+	// (most-recently-created first) alongside their current verdict (the
 	// v_current_verdict row for that idea, nil if none recorded yet) --
 	// one round trip via LEFT JOIN rather than N+1 VerdictStore.Current
 	// calls per Idea (mirrors IdeaStore.ListByChannelWithStats's rationale
-	// in idea.go).
-	IdeasWithCurrentVerdict(ctx context.Context, channelID uuid.UUID) ([]IdeaOverview, error)
+	// in idea.go), capped at limit (<=0 = unbounded).
+	IdeasWithCurrentVerdict(ctx context.Context, channelID uuid.UUID, limit int) (ideas []IdeaOverview, truncated bool, err error)
 }
 
 // browseStore implements BrowseStore against `idea`, `schedule_entry`,
@@ -90,11 +92,11 @@ const predictionOutcomeJoin = `
 // v_prediction_vs_outcome -- see the BrowseStore.PredictionVsOutcome doc
 // for why. $2/$3/$4 use a NULL-safe "no filter" idiom (`$n IS NULL OR ...`)
 // matching schedule_read.go's withinWindow-adjacent SQL style elsewhere in
-// this package. since/before together let a caller page backward past a
-// fixed truncation limit (issue #1808): request the newest window, then
-// re-request with before set to the oldest row's published_at from the
-// previous response.
-func (s browseStore) PredictionVsOutcome(ctx context.Context, channelID uuid.UUID, ideaID *uuid.UUID, since, before *time.Time) ([]PredictionOutcome, error) {
+// this package; $5 is fetchLimit(limit) (pagination.go). since/before
+// together let a caller page backward past a truncated response (issue
+// #1808): request the newest window, then re-request with before set to
+// the oldest row's published_at from the previous response.
+func (s browseStore) PredictionVsOutcome(ctx context.Context, channelID uuid.UUID, ideaID *uuid.UUID, since, before *time.Time, limit int) ([]PredictionOutcome, bool, error) {
 	rows, err := s.pool.Query(ctx, `
 		SELECT
 			i.id, i.title,
@@ -111,9 +113,10 @@ func (s browseStore) PredictionVsOutcome(ctx context.Context, channelID uuid.UUI
 		  AND ($3::timestamptz IS NULL OR sv.published_at >= $3)
 		  AND ($4::timestamptz IS NULL OR sv.published_at < $4)
 		ORDER BY sv.published_at DESC NULLS LAST, i.title
-	`, channelID, ideaID, since, before)
+		LIMIT $5
+	`, channelID, ideaID, since, before, fetchLimit(limit))
 	if err != nil {
-		return nil, fmt.Errorf("list prediction vs outcome for channel: %w", err)
+		return nil, false, fmt.Errorf("list prediction vs outcome for channel: %w", err)
 	}
 	defer rows.Close()
 
@@ -130,17 +133,18 @@ func (s browseStore) PredictionVsOutcome(ctx context.Context, channelID uuid.UUI
 			&r.Views, &r.AverageViewDurationSeconds, &r.AverageViewPercentage,
 			&r.Impressions, &r.ImpressionCTR, &r.MetricsMeasuredAt,
 		); err != nil {
-			return nil, fmt.Errorf("scan prediction vs outcome row: %w", err)
+			return nil, false, fmt.Errorf("scan prediction vs outcome row: %w", err)
 		}
 		out = append(out, r)
 	}
 	if err := rows.Err(); err != nil {
-		return nil, fmt.Errorf("list prediction vs outcome for channel: %w", err)
+		return nil, false, fmt.Errorf("list prediction vs outcome for channel: %w", err)
 	}
-	return out, nil
+	out, truncated := paginate(out, limit)
+	return out, truncated, nil
 }
 
-func (s browseStore) IdeasWithCurrentVerdict(ctx context.Context, channelID uuid.UUID) ([]IdeaOverview, error) {
+func (s browseStore) IdeasWithCurrentVerdict(ctx context.Context, channelID uuid.UUID, limit int) ([]IdeaOverview, bool, error) {
 	rows, err := s.pool.Query(ctx, `
 		SELECT i.id, i.channel_id, i.title, i.created_by_person_id, i.created_at,
 		       cv.id, cv.version, cv.verdict, cv.reasoning
@@ -148,9 +152,10 @@ func (s browseStore) IdeasWithCurrentVerdict(ctx context.Context, channelID uuid
 		LEFT JOIN v_current_verdict cv ON cv.idea_id = i.id
 		WHERE i.channel_id = $1
 		ORDER BY i.created_at DESC
-	`, channelID)
+		LIMIT $2
+	`, channelID, fetchLimit(limit))
 	if err != nil {
-		return nil, fmt.Errorf("list ideas with current verdict for channel: %w", err)
+		return nil, false, fmt.Errorf("list ideas with current verdict for channel: %w", err)
 	}
 	defer rows.Close()
 
@@ -161,12 +166,13 @@ func (s browseStore) IdeasWithCurrentVerdict(ctx context.Context, channelID uuid
 			&o.ID, &o.ChannelID, &o.Title, &o.CreatedByPersonID, &o.CreatedAt,
 			&o.CurrentVerdictID, &o.CurrentVerdictVersion, &o.CurrentVerdict, &o.CurrentVerdictReasoning,
 		); err != nil {
-			return nil, fmt.Errorf("scan idea with current verdict: %w", err)
+			return nil, false, fmt.Errorf("scan idea with current verdict: %w", err)
 		}
 		out = append(out, o)
 	}
 	if err := rows.Err(); err != nil {
-		return nil, fmt.Errorf("list ideas with current verdict for channel: %w", err)
+		return nil, false, fmt.Errorf("list ideas with current verdict for channel: %w", err)
 	}
-	return out, nil
+	out, truncated := paginate(out, limit)
+	return out, truncated, nil
 }

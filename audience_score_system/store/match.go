@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"time"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
@@ -28,9 +29,16 @@ type MatchStore interface {
 	// the sync/matching worker).
 	Record(ctx context.Context, m VideoScheduleMatch) error
 
-	// ListPending returns every VideoScheduleMatch for channelID with
-	// state MatchStatePending, awaiting human resolution.
-	ListPending(ctx context.Context, channelID uuid.UUID) ([]VideoScheduleMatch, error)
+	// ListPending returns VideoScheduleMatch rows for channelID with state
+	// MatchStatePending, awaiting human resolution, oldest first, bounded
+	// by since (inclusive lower bound on created_at, nil = no bound) and
+	// limit (<=0 = unbounded). truncated reports whether more matching
+	// rows exist beyond limit -- implements list_pending_matches'
+	// since/limit pagination entirely in this layer (issue #1808's
+	// follow-up). A caller that only needs the total count (e.g.
+	// PendingMatchCount elsewhere) passes since=nil, limit=0 for the full,
+	// unbounded set.
+	ListPending(ctx context.Context, channelID uuid.UUID, since *time.Time, limit int) (matches []VideoScheduleMatch, truncated bool, err error)
 
 	// Resolve sets matchID's state to MatchStateConfirmed (confirm==true)
 	// or MatchStateRejected (confirm==false), stamping
@@ -123,17 +131,21 @@ func (s matchStore) Record(ctx context.Context, m VideoScheduleMatch) error {
 }
 
 // ListPending joins synced_video for the channel_id filter --
-// video_schedule_match itself carries no channel_id column.
-func (s matchStore) ListPending(ctx context.Context, channelID uuid.UUID) ([]VideoScheduleMatch, error) {
+// video_schedule_match itself carries no channel_id column. since/limit are
+// NULL-safe SQL parameters (fetchLimit, pagination.go) so a nil/zero value
+// means "no bound" without branching the query text.
+func (s matchStore) ListPending(ctx context.Context, channelID uuid.UUID, since *time.Time, limit int) ([]VideoScheduleMatch, bool, error) {
 	rows, err := s.pool.Query(ctx, `
 		SELECT `+videoScheduleMatchColumns+`
 		FROM video_schedule_match vsm
 		JOIN synced_video sv ON sv.id = vsm.synced_video_id
 		WHERE sv.channel_id = $1 AND vsm.state = $2
+		  AND ($3::timestamptz IS NULL OR vsm.created_at >= $3)
 		ORDER BY vsm.created_at
-	`, channelID, MatchStatePending)
+		LIMIT $4
+	`, channelID, MatchStatePending, since, fetchLimit(limit))
 	if err != nil {
-		return nil, fmt.Errorf("list pending video_schedule_match: %w", err)
+		return nil, false, fmt.Errorf("list pending video_schedule_match: %w", err)
 	}
 	defer rows.Close()
 
@@ -141,14 +153,15 @@ func (s matchStore) ListPending(ctx context.Context, channelID uuid.UUID) ([]Vid
 	for rows.Next() {
 		m, err := scanVideoScheduleMatch(rows)
 		if err != nil {
-			return nil, fmt.Errorf("scan video_schedule_match: %w", err)
+			return nil, false, fmt.Errorf("scan video_schedule_match: %w", err)
 		}
 		matches = append(matches, m)
 	}
 	if err := rows.Err(); err != nil {
-		return nil, fmt.Errorf("list pending video_schedule_match: %w", err)
+		return nil, false, fmt.Errorf("list pending video_schedule_match: %w", err)
 	}
-	return matches, nil
+	matches, truncated := paginate(matches, limit)
+	return matches, truncated, nil
 }
 
 // Resolve only ever transitions a MatchStatePending row (the `WHERE ...

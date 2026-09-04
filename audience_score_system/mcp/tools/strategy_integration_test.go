@@ -262,7 +262,7 @@ func TestSaveStrategy_NonViableVerdict_RejectedNoRowWritten(t *testing.T) {
 	})
 	assert.True(t, res.IsError, "a not-viable verdict must be rejected")
 
-	strategies, err := f.st.Strategies().ListByChannel(context.Background(), f.ch.ID, false)
+	strategies, _, err := f.st.Strategies().ListByChannel(context.Background(), f.ch.ID, false, 0)
 	require.NoError(t, err)
 	assert.Empty(t, strategies, "no strategy row must exist after a rejected save")
 }
@@ -335,7 +335,7 @@ func TestSaveStrategy_StrategyIDSupplied_UpdatesAndReplacesLinkedVerdictsWholesa
 	require.Len(t, updated.Verdicts, 1, "the linked verdict set must be replaced wholesale, not merged")
 	assert.Equal(t, idea2.ID.String(), updated.Verdicts[0].IdeaID)
 
-	all, err := f.st.Strategies().ListByChannel(context.Background(), f.ch.ID, false)
+	all, _, err := f.st.Strategies().ListByChannel(context.Background(), f.ch.ID, false, 0)
 	require.NoError(t, err)
 	assert.Len(t, all, 1, "an update must not create a second strategy row")
 }
@@ -374,7 +374,7 @@ func TestSaveStrategy_IdempotentReplay_ConvergesOnSameRow(t *testing.T) {
 	second := stDecode[tools.StrategyOutput](t, f.call(t, cs, "save_strategy", args))
 	assert.Equal(t, first.StrategyID, second.StrategyID)
 
-	all, err := f.st.Strategies().ListByChannel(context.Background(), f.ch.ID, false)
+	all, _, err := f.st.Strategies().ListByChannel(context.Background(), f.ch.ID, false, 0)
 	require.NoError(t, err)
 	assert.Len(t, all, 1, "a replay must never duplicate the strategy row")
 }
@@ -406,7 +406,7 @@ func TestSaveStrategy_AnalystCanSave_UnassociatedPersonDeniedWritesNothing(t *te
 	assert.True(t, denied.IsError)
 	assert.Contains(t, stTextOf(denied), "permission denied")
 
-	all, err := f.st.Strategies().ListByChannel(context.Background(), f.ch.ID, false)
+	all, _, err := f.st.Strategies().ListByChannel(context.Background(), f.ch.ID, false, 0)
 	require.NoError(t, err)
 	assert.Len(t, all, 1, "the denied outsider call must not have written anything")
 }
@@ -520,7 +520,7 @@ func TestGenerateSchedulePlan_ProposesCadenceSlotsWithoutWriting(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, 7*24*time.Hour, second.Sub(first), "consecutive weekly proposals must be exactly 7 days apart")
 
-	entries, err := f.st.Schedules().ListByChannel(context.Background(), f.ch.ID)
+	entries, _, err := f.st.Schedules().ListByChannel(context.Background(), f.ch.ID, nil, nil, 0)
 	require.NoError(t, err)
 	assert.Empty(t, entries, "generate_schedule_plan must not write any schedule_entry rows")
 }

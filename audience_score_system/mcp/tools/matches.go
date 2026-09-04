@@ -184,22 +184,6 @@ type ListPendingMatchesOutput struct {
 	Truncated bool                 `json:"truncated" jsonschema:"True if more pending matches exist beyond limit"`
 }
 
-// filterMatchesSince returns the subset of matches created at or after
-// since (nil = no filter) -- the pagination bound list_pending_matches
-// uses to page forward past a truncated response (issue #1808).
-func filterMatchesSince(matches []store.VideoScheduleMatch, since *time.Time) []store.VideoScheduleMatch {
-	if since == nil {
-		return matches
-	}
-	out := make([]store.VideoScheduleMatch, 0, len(matches))
-	for _, m := range matches {
-		if !m.CreatedAt.Before(*since) {
-			out = append(out, m)
-		}
-	}
-	return out
-}
-
 // registerListPendingMatches registers list_pending_matches via
 // server.RegisterRead -- Channel-scoped (NFR5), Creator and Analyst both
 // allowed (store.CanRead, same as get_channel_schedule).
@@ -219,20 +203,17 @@ func listPendingMatchesHandler(matches store.MatchStore, deps matchDeps) mcp.Too
 	return func(ctx context.Context, _ *mcp.CallToolRequest, in ListPendingMatchesInput) (*mcp.CallToolResult, ListPendingMatchesOutput, error) {
 		channelID := in.ChannelScopeID()
 
-		pending, err := matches.ListPending(ctx, channelID)
-		if err != nil {
-			return nil, ListPendingMatchesOutput{}, fmt.Errorf("list_pending_matches: list pending matches for channel %s: %w", channelID, err)
-		}
-		pending = filterMatchesSince(pending, in.Since)
-
 		limit := in.Limit
 		if limit <= 0 {
 			limit = defaultListPendingMatchesLimit
 		}
-		trimmed, truncated := truncateSlice(pending, limit)
+		pending, truncated, err := matches.ListPending(ctx, channelID, in.Since, limit)
+		if err != nil {
+			return nil, ListPendingMatchesOutput{}, fmt.Errorf("list_pending_matches: list pending matches for channel %s: %w", channelID, err)
+		}
 
-		out := ListPendingMatchesOutput{Matches: make([]PendingMatchOutput, 0, len(trimmed)), Truncated: truncated}
-		for _, m := range trimmed {
+		out := ListPendingMatchesOutput{Matches: make([]PendingMatchOutput, 0, len(pending)), Truncated: truncated}
+		for _, m := range pending {
 			rendered, err := renderPendingMatch(ctx, deps, m)
 			if err != nil {
 				return nil, ListPendingMatchesOutput{}, err

@@ -78,14 +78,14 @@ func (f *fakeSyncStore) UpsertMetrics(context.Context, []store.VideoMetrics) err
 	return errors.New("fakeSyncStore.UpsertMetrics is not used by these tests")
 }
 
-func (f *fakeSyncStore) ListSchedule(_ context.Context, channelID uuid.UUID) ([]store.SyncedVideo, error) {
+func (f *fakeSyncStore) ListSchedule(_ context.Context, channelID uuid.UUID, _, _ *time.Time, _ bool, _ int) ([]store.SyncedVideo, bool, error) {
 	var out []store.SyncedVideo
 	for k, v := range f.rows {
 		if k.channelID == channelID {
 			out = append(out, v)
 		}
 	}
-	return out, nil
+	return out, false, nil
 }
 
 func (f *fakeSyncStore) byVideoID(channelID uuid.UUID, videoID string) (store.SyncedVideo, bool) {
@@ -191,7 +191,7 @@ func TestSyncSchedule_Unit_MixedFixture_MapsFieldsCorrectly(t *testing.T) {
 
 	require.NoError(t, a.SyncSchedule(ctx, channelID))
 
-	rows, err := syncStore.ListSchedule(ctx, channelID)
+	rows, _, err := syncStore.ListSchedule(ctx, channelID, nil, nil, true, 0)
 	require.NoError(t, err)
 	require.Len(t, rows, 2)
 
@@ -224,7 +224,7 @@ func TestSyncSchedule_Unit_DoubleRun_NoChurn_OnlyLastSyncedAtMoves(t *testing.T)
 	a := newUnitActivities(channelID, yt, syncStore, &fakeTokenStore{})
 
 	require.NoError(t, a.SyncSchedule(ctx, channelID))
-	first, err := syncStore.ListSchedule(ctx, channelID)
+	first, _, err := syncStore.ListSchedule(ctx, channelID, nil, nil, true, 0)
 	require.NoError(t, err)
 	require.Len(t, first, 2)
 	firstByID := make(map[string]store.SyncedVideo, len(first))
@@ -235,7 +235,7 @@ func TestSyncSchedule_Unit_DoubleRun_NoChurn_OnlyLastSyncedAtMoves(t *testing.T)
 	time.Sleep(time.Millisecond)
 
 	require.NoError(t, a.SyncSchedule(ctx, channelID))
-	second, err := syncStore.ListSchedule(ctx, channelID)
+	second, _, err := syncStore.ListSchedule(ctx, channelID, nil, nil, true, 0)
 	require.NoError(t, err)
 	require.Len(t, second, 2, "re-running over unchanged YouTube data must not add or remove rows")
 
@@ -273,7 +273,7 @@ func TestSyncSchedule_Unit_ChangedTitleOnSecondRun_UpdatesInPlace(t *testing.T) 
 	assert.Equal(t, originalID, second.ID)
 	assert.Equal(t, "Updated Title", second.Title)
 
-	rows, err := syncStore.ListSchedule(ctx, channelID)
+	rows, _, err := syncStore.ListSchedule(ctx, channelID, nil, nil, true, 0)
 	require.NoError(t, err)
 	assert.Len(t, rows, 1, "a title change must update the existing row, never insert a second one")
 }
@@ -305,7 +305,7 @@ func TestSyncSchedule_Unit_VideoDisappearsOnSecondRun_RowRetained(t *testing.T) 
 	assert.Equal(t, before.ID, after.ID)
 	assert.Equal(t, before.LastSyncedAt, after.LastSyncedAt, "a video not seen this cycle must keep its stale last_synced_at")
 
-	rows, err := syncStore.ListSchedule(ctx, channelID)
+	rows, _, err := syncStore.ListSchedule(ctx, channelID, nil, nil, true, 0)
 	require.NoError(t, err)
 	assert.Len(t, rows, 2, "a disappeared video's row must be retained, not deleted")
 }
@@ -339,7 +339,7 @@ func TestSyncSchedule_Unit_ErrRevoked_MarksNeedsReauthRetainsDataNonRetryable(t 
 	require.Len(t, tokenStore.markNeedsReauthCalls, 1)
 	assert.Equal(t, channelID, tokenStore.markNeedsReauthCalls[0].channelID)
 
-	rows, listErr := syncStore.ListSchedule(ctx, channelID)
+	rows, _, listErr := syncStore.ListSchedule(ctx, channelID, nil, nil, true, 0)
 	require.NoError(t, listErr)
 	require.Len(t, rows, 1, "existing synced_video rows must be retained, not deleted, on a revoked credential")
 	assert.Equal(t, 1, syncStore.upsertCalls, "UpsertVideos must not be called again after ListSchedule fails with ErrRevoked")
@@ -387,10 +387,13 @@ func TestSyncSchedule_Unit_ChannelLookupError_Propagates(t *testing.T) {
 
 	storeErr := errors.New("connection refused")
 	a := &Activities{
-		Channels:         &fakeChannelStore{getByIDErr: storeErr},
-		Tokens:           &fakeTokenStore{},
-		Sync:             newFakeSyncStore(),
-		NewYouTubeClient: func(oauth2.TokenSource) youtube.Client { t.Fatal("must not build a YouTube client when the channel lookup fails"); return nil },
+		Channels: &fakeChannelStore{getByIDErr: storeErr},
+		Tokens:   &fakeTokenStore{},
+		Sync:     newFakeSyncStore(),
+		NewYouTubeClient: func(oauth2.TokenSource) youtube.Client {
+			t.Fatal("must not build a YouTube client when the channel lookup fails")
+			return nil
+		},
 	}
 
 	err := a.SyncSchedule(ctx, channelID)

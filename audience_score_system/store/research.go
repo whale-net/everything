@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"time"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
@@ -45,13 +46,20 @@ type ResearchStore interface {
 	// ListByChannel returns every ResearchNote for channelID.
 	ListByChannel(ctx context.Context, channelID uuid.UUID) ([]ResearchNote, error)
 
-	// ListFiltered returns every ResearchNote for channelID, most-recent
+	// ListFiltered returns ResearchNote rows for channelID, most-recent
 	// first, each joined to its author's display name, optionally narrowed
-	// to a single ideaID (nil = no filter) and/or partitioned by cited
+	// to a single ideaID (nil = no filter), partitioned by cited
 	// (source_url IS NOT NULL, cited=true) vs uncited (source_url IS NULL,
-	// cited=false, FR10). cited=nil means no cited/uncited filter. Backs
-	// list_research_notes (mcp/tools/research.go, issue #1577).
-	ListFiltered(ctx context.Context, channelID uuid.UUID, ideaID *uuid.UUID, cited *bool) ([]ResearchNoteWithAuthor, error)
+	// cited=false, FR10; nil = no cited/uncited filter), and bounded by
+	// since (inclusive lower bound on created_at, nil = no bound) and
+	// before (exclusive upper bound, nil = no bound). limit caps the
+	// number of rows returned (<=0 = unbounded); truncated reports whether
+	// more matching rows exist beyond limit -- both together implement
+	// list_research_notes' and get_channel_overview's since/before/limit
+	// pagination entirely in this layer (issue #1808's follow-up: no
+	// unbounded fetch-then-filter-in-Go). Backs list_research_notes
+	// (mcp/tools/research.go, issue #1577).
+	ListFiltered(ctx context.Context, channelID uuid.UUID, ideaID *uuid.UUID, cited *bool, since, before *time.Time, limit int) (notes []ResearchNoteWithAuthor, truncated bool, err error)
 }
 
 // researchStore implements ResearchStore against `research_note`
@@ -143,12 +151,13 @@ func scanResearchNoteWithAuthor(row pgx.Row) (ResearchNoteWithAuthor, error) {
 }
 
 // ListFiltered joins research_note to person for the author's display
-// name, filters by channelID and optionally ideaID/cited, and orders
-// most-recent first. ideaID nil means no Idea filter; cited nil means no
+// name, filters by channelID and optionally ideaID/cited/since/before, and
+// orders most-recent first, capped at limit (see fetchLimit/paginate,
+// pagination.go). ideaID nil means no Idea filter; cited nil means no
 // cited/uncited filter -- callers (list_research_notes,
 // mcp/tools/research.go) reject a request that sets both cited_only and
 // uncited_only before calling this, so cited here is never ambiguous.
-func (s researchStore) ListFiltered(ctx context.Context, channelID uuid.UUID, ideaID *uuid.UUID, cited *bool) ([]ResearchNoteWithAuthor, error) {
+func (s researchStore) ListFiltered(ctx context.Context, channelID uuid.UUID, ideaID *uuid.UUID, cited *bool, since, before *time.Time, limit int) ([]ResearchNoteWithAuthor, bool, error) {
 	query := `
 		SELECT ` + researchNoteWithAuthorColumns + `
 		FROM research_note rn
@@ -167,11 +176,21 @@ func (s researchStore) ListFiltered(ctx context.Context, channelID uuid.UUID, id
 			query += " AND rn.source_url IS NULL"
 		}
 	}
+	if since != nil {
+		args = append(args, *since)
+		query += fmt.Sprintf(" AND rn.created_at >= $%d", len(args))
+	}
+	if before != nil {
+		args = append(args, *before)
+		query += fmt.Sprintf(" AND rn.created_at < $%d", len(args))
+	}
 	query += " ORDER BY rn.created_at DESC"
+	args = append(args, fetchLimit(limit))
+	query += fmt.Sprintf(" LIMIT $%d", len(args))
 
 	rows, err := s.pool.Query(ctx, query, args...)
 	if err != nil {
-		return nil, fmt.Errorf("list research notes filtered: %w", err)
+		return nil, false, fmt.Errorf("list research notes filtered: %w", err)
 	}
 	defer rows.Close()
 
@@ -179,12 +198,13 @@ func (s researchStore) ListFiltered(ctx context.Context, channelID uuid.UUID, id
 	for rows.Next() {
 		n, err := scanResearchNoteWithAuthor(rows)
 		if err != nil {
-			return nil, fmt.Errorf("scan research_note with author: %w", err)
+			return nil, false, fmt.Errorf("scan research_note with author: %w", err)
 		}
 		notes = append(notes, n)
 	}
 	if err := rows.Err(); err != nil {
-		return nil, fmt.Errorf("list research notes filtered: %w", err)
+		return nil, false, fmt.Errorf("list research notes filtered: %w", err)
 	}
-	return notes, nil
+	notes, truncated := paginate(notes, limit)
+	return notes, truncated, nil
 }

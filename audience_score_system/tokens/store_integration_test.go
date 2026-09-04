@@ -333,7 +333,7 @@ func TestMarkNeedsReauth_FlipsStateAndRetainsSyncedDataRows(t *testing.T) {
 		PrivacyStatus:  store.PrivacyStatusPublic,
 		LastSyncedAt:   time.Now(),
 	}}))
-	videos, err := st.Sync().ListSchedule(ctx, ch.ID)
+	videos, _, err := st.Sync().ListSchedule(ctx, ch.ID, nil, nil, true, 0)
 	require.NoError(t, err)
 	require.Len(t, videos, 1)
 

@@ -20,6 +20,7 @@ package tools_test
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -130,7 +131,10 @@ func videoIDs(out tools.GetChannelScheduleOutput) []string {
 }
 
 // callSchedule calls get_channel_schedule via cs and decodes its
-// StructuredContent into tools.GetChannelScheduleOutput.
+// StructuredContent into tools.GetChannelScheduleOutput -- a full
+// json.Marshal/Unmarshal round trip so every field (not just
+// youtube_video_id) survives, since tests derive pagination cursors from
+// fields like PublishedAt.
 func callSchedule(t *testing.T, cs *mcp.ClientSession, args tools.GetChannelScheduleInput) (*mcp.CallToolResult, tools.GetChannelScheduleOutput) {
 	t.Helper()
 	ctx := context.Background()
@@ -142,16 +146,9 @@ func callSchedule(t *testing.T, cs *mcp.ClientSession, args tools.GetChannelSche
 	}
 
 	var out tools.GetChannelScheduleOutput
-	m, ok := res.StructuredContent.(map[string]any)
-	require.True(t, ok, "StructuredContent must decode to an object")
-	videosRaw, _ := m["videos"].([]any)
-	for _, vRaw := range videosRaw {
-		v, ok := vRaw.(map[string]any)
-		require.True(t, ok)
-		id, _ := v["youtube_video_id"].(string)
-		out.Videos = append(out.Videos, tools.ScheduleVideo{YouTubeVideoID: id})
-	}
-	out.Truncated, _ = m["truncated"].(bool)
+	body, err := json.Marshal(res.StructuredContent)
+	require.NoError(t, err)
+	require.NoError(t, json.Unmarshal(body, &out))
 	return res, out
 }
 
@@ -357,8 +354,15 @@ func TestGetChannelSchedule_LimitTruncatedAndFromPagesPastLimit(t *testing.T) {
 	assert.Equal(t, []string{"vid-limit-0", "vid-limit-1", "vid-limit-2"}, videoIDs(out))
 
 	// Page past the truncated response by narrowing From to just after the
-	// last returned video's effective timestamp.
-	from := publishTimes[2].Add(time.Nanosecond)
+	// last returned video's effective timestamp. Derived from the actual
+	// returned (already Postgres-round-tripped, microsecond-precision)
+	// PublishedAt rather than the pre-insert Go value: TIMESTAMPTZ only
+	// stores microsecond precision, so the persisted value can land up to
+	// ~500ns away from what time.Now() produced, and a from bound this
+	// close to the boundary must be computed from what was actually
+	// stored, not what was originally sent.
+	require.NotNil(t, out.Videos[2].PublishedAt)
+	from := out.Videos[2].PublishedAt.Add(time.Microsecond)
 	res2, out2 := callSchedule(t, cs, tools.GetChannelScheduleInput{ChannelID: ch.ID.String(), From: &from})
 	require.False(t, res2.IsError, "unexpected error: %s", textOf(res2))
 	assert.False(t, out2.Truncated, "the second page has nothing left to cut")

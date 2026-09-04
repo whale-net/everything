@@ -70,7 +70,7 @@ func (a *Activities) SyncOutcomes(ctx context.Context, channelID uuid.UUID) erro
 		return fmt.Errorf("%s: load channel %s: %w", ActivitySyncOutcomes, channelID, err)
 	}
 
-	videos, err := a.Sync.ListSchedule(ctx, channelID)
+	videos, _, err := a.Sync.ListSchedule(ctx, channelID, nil, nil, true, 0)
 	if err != nil {
 		return fmt.Errorf("%s: list synced videos for channel %s: %w", ActivitySyncOutcomes, channelID, err)
 	}

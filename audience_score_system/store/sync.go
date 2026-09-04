@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"time"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
@@ -22,8 +23,23 @@ type SyncStore interface {
 	// natural key.
 	UpsertMetrics(ctx context.Context, m []VideoMetrics) error
 
-	// ListSchedule returns every SyncedVideo for channelID.
-	ListSchedule(ctx context.Context, channelID uuid.UUID) ([]SyncedVideo, error)
+	// ListSchedule returns SyncedVideo rows for channelID, ordered by
+	// effective publish time (PublishAt if set, else PublishedAt -- a row
+	// with neither always passes any from/to window, since there is
+	// nothing to compare against). from/to bound that effective timestamp
+	// (nil = no bound on that side); includeDrafts=false excludes rows
+	// with IsScheduledDraft=true. limit (<=0 = unbounded) caps the
+	// response; truncated reports whether more matching rows exist beyond
+	// it. Callers needing the complete, unbounded set for a correctness-
+	// sensitive computation (get_channel_overview's synced-schedule
+	// summary counts, save_schedule_draft's cadence/collision detection,
+	// generate_schedule_plan's pacing tracker) pass
+	// from=nil, to=nil, includeDrafts=true, limit=0 -- see
+	// mcp/tools/schedule_read.go's get_channel_schedule and
+	// mcp/tools/schedule_draft.go's get_drafting_context for the bounded
+	// callers (issue #1812's follow-up: filtering/pagination belongs in
+	// this layer, not re-implemented over an unbounded Go-side fetch).
+	ListSchedule(ctx context.Context, channelID uuid.UUID, from, to *time.Time, includeDrafts bool, limit int) (vids []SyncedVideo, truncated bool, err error)
 
 	// GetByID returns the SyncedVideo for id, or pgx.ErrNoRows if none
 	// exists -- issue #1581's list_pending_matches/resolve_pending_match
@@ -155,15 +171,30 @@ func (s syncStore) LatestMetricsFor(ctx context.Context, syncedVideoID uuid.UUID
 	return &m, nil
 }
 
-func (s syncStore) ListSchedule(ctx context.Context, channelID uuid.UUID) ([]SyncedVideo, error) {
+// ListSchedule's WHERE clause mirrors the old mcp/tools/schedule_read.go
+// withinWindow helper exactly (a row with no effective timestamp always
+// passes the from/to window) plus an is_scheduled_draft filter, all pushed
+// to SQL so LIMIT can be applied correctly alongside them (issue #1812's
+// follow-up) -- see ListSchedule's doc comment for full parameter
+// semantics.
+func (s syncStore) ListSchedule(ctx context.Context, channelID uuid.UUID, from, to *time.Time, includeDrafts bool, limit int) ([]SyncedVideo, bool, error) {
 	rows, err := s.pool.Query(ctx, `
 		SELECT `+syncedVideoColumns+`
 		FROM synced_video
 		WHERE channel_id = $1
+		  AND (
+		    COALESCE(publish_at, published_at) IS NULL
+		    OR (
+		      ($2::timestamptz IS NULL OR COALESCE(publish_at, published_at) >= $2)
+		      AND ($3::timestamptz IS NULL OR COALESCE(publish_at, published_at) <= $3)
+		    )
+		  )
+		  AND (NOT is_scheduled_draft OR $4)
 		ORDER BY COALESCE(publish_at, published_at)
-	`, channelID)
+		LIMIT $5
+	`, channelID, from, to, includeDrafts, fetchLimit(limit))
 	if err != nil {
-		return nil, fmt.Errorf("list synced videos by channel: %w", err)
+		return nil, false, fmt.Errorf("list synced videos by channel: %w", err)
 	}
 	defer rows.Close()
 
@@ -171,12 +202,13 @@ func (s syncStore) ListSchedule(ctx context.Context, channelID uuid.UUID) ([]Syn
 	for rows.Next() {
 		v, err := scanSyncedVideo(rows)
 		if err != nil {
-			return nil, fmt.Errorf("scan synced_video: %w", err)
+			return nil, false, fmt.Errorf("scan synced_video: %w", err)
 		}
 		vids = append(vids, v)
 	}
 	if err := rows.Err(); err != nil {
-		return nil, fmt.Errorf("list synced videos by channel: %w", err)
+		return nil, false, fmt.Errorf("list synced videos by channel: %w", err)
 	}
-	return vids, nil
+	vids, truncated := paginate(vids, limit)
+	return vids, truncated, nil
 }

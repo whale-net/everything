@@ -62,10 +62,14 @@ type StrategyStore interface {
 	// exists.
 	GetByID(ctx context.Context, id uuid.UUID) (StrategyDetail, error)
 
-	// ListByChannel returns every Strategy for channelID, ordered by
+	// ListByChannel returns Strategies for channelID, ordered by
 	// created_at. activeOnly restricts to active = TRUE -- the set
-	// generate_schedule_plan (mcp/tools/strategy.go) reads from.
-	ListByChannel(ctx context.Context, channelID uuid.UUID, activeOnly bool) ([]StrategyDetail, error)
+	// generate_schedule_plan (mcp/tools/strategy.go) reads from, always
+	// unbounded (limit 0) since it needs every active Strategy to compute
+	// pacing correctly. limit (<=0 = unbounded) caps the response for
+	// list_strategies (mcp/tools/strategy.go, issue #1813's follow-up);
+	// truncated reports whether more matching rows exist beyond it.
+	ListByChannel(ctx context.Context, channelID uuid.UUID, activeOnly bool, limit int) (details []StrategyDetail, truncated bool, err error)
 }
 
 // strategyStore implements StrategyStore against `strategy` and
@@ -248,16 +252,18 @@ func (s strategyStore) GetByID(ctx context.Context, id uuid.UUID) (StrategyDetai
 	return StrategyDetail{Strategy: strategy, Verdicts: verdicts}, nil
 }
 
-func (s strategyStore) ListByChannel(ctx context.Context, channelID uuid.UUID, activeOnly bool) ([]StrategyDetail, error) {
+func (s strategyStore) ListByChannel(ctx context.Context, channelID uuid.UUID, activeOnly bool, limit int) ([]StrategyDetail, bool, error) {
 	query := `SELECT ` + strategyColumns + ` FROM strategy WHERE channel_id = $1`
+	args := []any{channelID}
 	if activeOnly {
 		query += ` AND active`
 	}
-	query += ` ORDER BY created_at`
+	args = append(args, fetchLimit(limit))
+	query += fmt.Sprintf(` ORDER BY created_at LIMIT $%d`, len(args))
 
-	rows, err := s.pool.Query(ctx, query, channelID)
+	rows, err := s.pool.Query(ctx, query, args...)
 	if err != nil {
-		return nil, fmt.Errorf("list strategies by channel: %w", err)
+		return nil, false, fmt.Errorf("list strategies by channel: %w", err)
 	}
 	defer rows.Close()
 
@@ -265,21 +271,22 @@ func (s strategyStore) ListByChannel(ctx context.Context, channelID uuid.UUID, a
 	for rows.Next() {
 		st, err := scanStrategy(rows)
 		if err != nil {
-			return nil, fmt.Errorf("scan strategy: %w", err)
+			return nil, false, fmt.Errorf("scan strategy: %w", err)
 		}
 		strategies = append(strategies, st)
 	}
 	if err := rows.Err(); err != nil {
-		return nil, fmt.Errorf("list strategies by channel: %w", err)
+		return nil, false, fmt.Errorf("list strategies by channel: %w", err)
 	}
+	strategies, truncated := paginate(strategies, limit)
 
 	details := make([]StrategyDetail, 0, len(strategies))
 	for _, st := range strategies {
 		verdicts, err := loadStrategyVerdicts(ctx, s.pool, st.ID)
 		if err != nil {
-			return nil, err
+			return nil, false, err
 		}
 		details = append(details, StrategyDetail{Strategy: st, Verdicts: verdicts})
 	}
-	return details, nil
+	return details, truncated, nil
 }

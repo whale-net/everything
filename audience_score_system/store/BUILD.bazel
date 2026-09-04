@@ -29,6 +29,7 @@ go_library(
         "models.go",
         "mywork.go",
         "pacing.go",
+        "pagination.go",
         "person.go",
         "research.go",
         "role.go",

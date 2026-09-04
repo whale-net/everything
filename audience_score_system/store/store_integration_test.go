@@ -1000,7 +1000,7 @@ func TestSyncStore_UpsertVideos_SameYouTubeIDUpdatesNotDuplicates(t *testing.T) 
 	}})
 	require.NoError(t, err, "a second sync of the same youtube_video_id must update, not error")
 
-	videos, err := s.Sync().ListSchedule(ctx, ch.ID)
+	videos, _, err := s.Sync().ListSchedule(ctx, ch.ID, nil, nil, true, 0)
 	require.NoError(t, err)
 	require.Len(t, videos, 1, "must not duplicate the row")
 	assert.Equal(t, "Published Title", videos[0].Title, "the second upsert must have updated the existing row's fields")
@@ -1041,7 +1041,7 @@ func setupPendingMatch(t *testing.T, ctx context.Context, s *store.Store) (ch st
 		YouTubeVideoID: "yt-resolve-" + uuid.NewString(), Title: "A Video",
 		PrivacyStatus: store.PrivacyStatusPublic, PublishedAt: ptrTime(time.Now()), LastSyncedAt: time.Now(),
 	}}))
-	synced, err := s.Sync().ListSchedule(ctx, ch.ID)
+	synced, _, err := s.Sync().ListSchedule(ctx, ch.ID, nil, nil, true, 0)
 	require.NoError(t, err)
 	require.Len(t, synced, 1)
 	video = synced[0]
@@ -1049,7 +1049,7 @@ func setupPendingMatch(t *testing.T, ctx context.Context, s *store.Store) (ch st
 	require.NoError(t, s.Matches().Record(ctx, store.VideoScheduleMatch{
 		SyncedVideoID: video.ID, ScheduleEntryID: &entry.ID, Confidence: 0.5, State: store.MatchStatePending,
 	}))
-	pending, err := s.Matches().ListPending(ctx, ch.ID)
+	pending, _, err := s.Matches().ListPending(ctx, ch.ID, nil, 0)
 	require.NoError(t, err)
 	require.Len(t, pending, 1)
 	match = pending[0]
@@ -1251,7 +1251,7 @@ func TestPredictionVsOutcomeView_OnlyMatchedPublishedCommittedIdeasAppear(t *tes
 		YouTubeVideoID: "yt-matched", Title: "Matched Video",
 		PrivacyStatus: store.PrivacyStatusPublic, PublishedAt: ptrTime(time.Now()), LastSyncedAt: time.Now(),
 	}}))
-	synced, err := s.Sync().ListSchedule(ctx, ch.ID)
+	synced, _, err := s.Sync().ListSchedule(ctx, ch.ID, nil, nil, true, 0)
 	require.NoError(t, err)
 	require.Len(t, synced, 1)
 	matchedVideoID := synced[0].ID
@@ -1697,7 +1697,7 @@ func setupMyWorkOutcomeChain(t *testing.T, ctx context.Context, s *store.Store, 
 		YouTubeVideoID: "yt-" + uuid.NewString(), Title: videoTitle,
 		PrivacyStatus: store.PrivacyStatusPublic, PublishedAt: &publishedAt, LastSyncedAt: time.Now(),
 	}}))
-	synced, err := s.Sync().ListSchedule(ctx, ch.ID)
+	synced, _, err := s.Sync().ListSchedule(ctx, ch.ID, nil, nil, true, 0)
 	require.NoError(t, err)
 	var video store.SyncedVideo
 	for _, sv := range synced {
