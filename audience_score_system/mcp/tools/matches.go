@@ -117,9 +117,24 @@ type matchDeps struct {
 
 // -- list_pending_matches -----------------------------------------------------
 
+// defaultListPendingMatchesLimit bounds list_pending_matches' response when
+// a caller supplies limit <= 0 -- without this, a Channel with enough
+// pending matches exceeds the calling MCP client's response-size cap and
+// the tool call fails outright with no way to retrieve the data in pages
+// (issue #1808).
+const defaultListPendingMatchesLimit = 50
+
 // ListPendingMatchesInput is list_pending_matches' argument schema.
 type ListPendingMatchesInput struct {
 	ChannelID string `json:"channel_id" jsonschema:"Channel to list pending outcome matches for, as a UUID string"`
+	// Since bounds the window by each match's created_at (inclusive).
+	// Matches are returned oldest-first (the natural triage order), so a
+	// caller pages forward past a truncated response by re-calling with
+	// since set to the last returned match's created_at -- that match
+	// reappears as the new page's first row (inclusive bound), so
+	// de-duplicate on match_id across pages if needed (issue #1808).
+	Since *time.Time `json:"since,omitempty" jsonschema:"Only include matches created at or after this time -- page forward past a truncated response by setting this to the last returned match's created_at (that match will reappear as this page's first row)"`
+	Limit int        `json:"limit,omitempty" jsonschema:"Maximum matches to return, oldest first (default 50). The response's truncated flag is set when more matching rows exist."`
 }
 
 // ChannelScopeID implements server.ChannelScoped.
@@ -165,7 +180,24 @@ func renderPendingMatch(ctx context.Context, deps matchDeps, m store.VideoSchedu
 
 // ListPendingMatchesOutput is list_pending_matches' structured result.
 type ListPendingMatchesOutput struct {
-	Matches []PendingMatchOutput `json:"matches" jsonschema:"every pending match for this Channel, awaiting confirm/reject via resolve_pending_match"`
+	Matches   []PendingMatchOutput `json:"matches" jsonschema:"pending matches for this Channel, oldest first, awaiting confirm/reject via resolve_pending_match"`
+	Truncated bool                 `json:"truncated" jsonschema:"True if more pending matches exist beyond limit"`
+}
+
+// filterMatchesSince returns the subset of matches created at or after
+// since (nil = no filter) -- the pagination bound list_pending_matches
+// uses to page forward past a truncated response (issue #1808).
+func filterMatchesSince(matches []store.VideoScheduleMatch, since *time.Time) []store.VideoScheduleMatch {
+	if since == nil {
+		return matches
+	}
+	out := make([]store.VideoScheduleMatch, 0, len(matches))
+	for _, m := range matches {
+		if !m.CreatedAt.Before(*since) {
+			out = append(out, m)
+		}
+	}
+	return out
 }
 
 // registerListPendingMatches registers list_pending_matches via
@@ -174,11 +206,12 @@ type ListPendingMatchesOutput struct {
 func registerListPendingMatches(reg *server.Registry, matches store.MatchStore, deps matchDeps) {
 	server.RegisterRead(reg, &mcp.Tool{
 		Name: "list_pending_matches",
-		Description: "List every video<->schedule outcome match awaiting human resolution for a Channel (FR23): a " +
-			"published video the sync worker could not confidently auto-link to a committed schedule entry. Each " +
-			"result includes the video's title/publish time/latest metrics, the matcher's best-guess entry (idea " +
-			"title, proposed slot, verdict) if any, and the confidence score -- call resolve_pending_match to " +
-			"confirm or reject.",
+		Description: "List every video<->schedule outcome match awaiting human resolution for a Channel (FR23), " +
+			"oldest first: a published video the sync worker could not confidently auto-link to a committed " +
+			"schedule entry. Each result includes the video's title/publish time/latest metrics, the matcher's " +
+			"best-guess entry (idea title, proposed slot, verdict) if any, and the confidence score -- call " +
+			"resolve_pending_match to confirm or reject. Response is capped at limit (default 50); see truncated. " +
+			"Page forward past truncation by re-calling with since set to the last returned match's created_at.",
 	}, listPendingMatchesHandler(matches, deps))
 }
 
@@ -190,9 +223,16 @@ func listPendingMatchesHandler(matches store.MatchStore, deps matchDeps) mcp.Too
 		if err != nil {
 			return nil, ListPendingMatchesOutput{}, fmt.Errorf("list_pending_matches: list pending matches for channel %s: %w", channelID, err)
 		}
+		pending = filterMatchesSince(pending, in.Since)
 
-		out := ListPendingMatchesOutput{Matches: make([]PendingMatchOutput, 0, len(pending))}
-		for _, m := range pending {
+		limit := in.Limit
+		if limit <= 0 {
+			limit = defaultListPendingMatchesLimit
+		}
+		trimmed, truncated := truncateSlice(pending, limit)
+
+		out := ListPendingMatchesOutput{Matches: make([]PendingMatchOutput, 0, len(trimmed)), Truncated: truncated}
+		for _, m := range trimmed {
 			rendered, err := renderPendingMatch(ctx, deps, m)
 			if err != nil {
 				return nil, ListPendingMatchesOutput{}, err

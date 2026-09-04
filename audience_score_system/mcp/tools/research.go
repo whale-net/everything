@@ -58,7 +58,13 @@ type ResearchNoteOutput struct {
 	Cited             bool    `json:"cited" jsonschema:"True if this note has a source_url. Explicit so a client cannot mistake a missing source_url for a truncated response (FR10)."`
 	AuthorPersonID    string  `json:"author_person_id" jsonschema:"The Person who authored this note (the calling credential, not the Channel's Creator), as a UUID string"`
 	AuthorDisplayName string  `json:"author_display_name" jsonschema:"The author's display name"`
-	CreatedAt         string  `json:"created_at" jsonschema:"When this note was created, RFC3339"`
+	// CreatedAt is formatted with sub-second precision (RFC3339Nano, still
+	// a valid RFC3339 string) rather than plain RFC3339 -- issue #1808's
+	// since/before pagination round-trips this value back as a cursor, and
+	// two notes saved within the same second (a plausible batch-research
+	// pattern) would otherwise render identical timestamps and make that
+	// cursor ambiguous.
+	CreatedAt string `json:"created_at" jsonschema:"When this note was created, RFC3339 (with sub-second precision -- use verbatim as a since/before pagination cursor)"`
 }
 
 // toResearchNoteOutput renders n (plus its already-resolved author display
@@ -74,7 +80,7 @@ func toResearchNoteOutput(n store.ResearchNote, authorDisplayName string) Resear
 		Cited:             n.SourceURL != nil,
 		AuthorPersonID:    n.AuthorPersonID.String(),
 		AuthorDisplayName: authorDisplayName,
-		CreatedAt:         n.CreatedAt.Format(time.RFC3339),
+		CreatedAt:         n.CreatedAt.Format(time.RFC3339Nano),
 	}
 	if n.IdeaID != nil {
 		s := n.IdeaID.String()
@@ -182,12 +188,26 @@ func saveResearchNoteRender(research store.ResearchStore, persons store.PersonSt
 
 // -- list_research_notes ------------------------------------------------------
 
+// defaultListResearchNotesLimit bounds list_research_notes' response when a
+// caller supplies limit <= 0 -- without this, a Channel/Idea with enough
+// notes exceeds the calling MCP client's response-size cap and the tool
+// call fails outright with no way to retrieve the data in pages (issue
+// #1808).
+const defaultListResearchNotesLimit = 50
+
 // ListResearchNotesInput is list_research_notes's argument schema.
 type ListResearchNotesInput struct {
 	ChannelID   string `json:"channel_id" jsonschema:"Channel to list research notes for, as a UUID string"`
 	IdeaID      string `json:"idea_id,omitempty" jsonschema:"Restrict to notes attached to this Idea, as a UUID string"`
 	CitedOnly   bool   `json:"cited_only,omitempty" jsonschema:"Return only notes with a source_url (cited, FR10). Mutually exclusive with uncited_only."`
 	UncitedOnly bool   `json:"uncited_only,omitempty" jsonschema:"Return only notes with no source_url (uncited, FR10). Mutually exclusive with cited_only."`
+	// Since/Before bound the window by each note's created_at. Together
+	// they let a caller page backward past a truncated response (issue
+	// #1808): request the newest window, then re-request with before set
+	// to the oldest note's created_at from the previous response.
+	Since  *time.Time `json:"since,omitempty" jsonschema:"Only include notes created at or after this time"`
+	Before *time.Time `json:"before,omitempty" jsonschema:"Only include notes created strictly before this time -- pair with since to page backward past a truncated response"`
+	Limit  int        `json:"limit,omitempty" jsonschema:"Maximum notes to return, most-recent first (default 50). The response's truncated flag is set when more matching notes exist."`
 }
 
 // ChannelScopeID implements server.ChannelScoped.
@@ -198,14 +218,17 @@ func (i ListResearchNotesInput) ChannelScopeID() uuid.UUID {
 
 // ListResearchNotesOutput is list_research_notes's structured result.
 type ListResearchNotesOutput struct {
-	Notes []ResearchNoteOutput `json:"notes" jsonschema:"Matching research notes, most-recent first"`
+	Notes     []ResearchNoteOutput `json:"notes" jsonschema:"Matching research notes, most-recent first"`
+	Truncated bool                 `json:"truncated" jsonschema:"True if more matching notes exist beyond limit"`
 }
 
 func registerListResearchNotes(reg *server.Registry, research store.ResearchStore) {
 	server.RegisterRead(reg, &mcp.Tool{
 		Name: "list_research_notes",
 		Description: "List research notes for a Channel, most-recent first, each carrying an explicit cited boolean " +
-			"(FR10). Optionally restrict to one Idea (idea_id) and/or partition into cited_only vs uncited_only.",
+			"(FR10). Optionally restrict to one Idea (idea_id) and/or partition into cited_only vs uncited_only. " +
+			"Response is capped at limit (default 50); see truncated. Page backward past truncation by re-calling " +
+			"with before set to the oldest returned note's created_at.",
 	}, listResearchNotes(research))
 }
 
@@ -243,9 +266,16 @@ func listResearchNotes(research store.ResearchStore) mcp.ToolHandlerFor[ListRese
 		if err != nil {
 			return nil, ListResearchNotesOutput{}, err
 		}
+		notes = filterNotesRange(notes, in.Since, in.Before)
 
-		out := ListResearchNotesOutput{Notes: make([]ResearchNoteOutput, 0, len(notes))}
-		for _, n := range notes {
+		limit := in.Limit
+		if limit <= 0 {
+			limit = defaultListResearchNotesLimit
+		}
+		trimmed, truncated := truncateSlice(notes, limit)
+
+		out := ListResearchNotesOutput{Notes: make([]ResearchNoteOutput, 0, len(trimmed)), Truncated: truncated}
+		for _, n := range trimmed {
 			out.Notes = append(out.Notes, toResearchNoteOutput(n.ResearchNote, n.AuthorDisplayName))
 		}
 		return nil, out, nil

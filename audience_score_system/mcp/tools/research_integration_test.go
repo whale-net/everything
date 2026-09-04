@@ -27,10 +27,12 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -492,6 +494,45 @@ func TestListResearchNotes_IdeaIDFilterRestrictsToThatIdea(t *testing.T) {
 	out := decode[tools.ListResearchNotesOutput](t, res)
 	require.Len(t, out.Notes, 1)
 	assert.Equal(t, "for idea one", out.Notes[0].Text)
+}
+
+// TestListResearchNotes_LimitTruncatedAndBeforePageBackwardExactly proves
+// issue #1808's fix: limit caps the response with truncated set, and before
+// (paired with the oldest returned note's created_at) retrieves the row(s)
+// that fell off the page -- before this fix, list_research_notes had no
+// limit at all and could exceed an MCP client's response-size cap outright.
+func TestListResearchNotes_LimitTruncatedAndBeforePageBackwardExactly(t *testing.T) {
+	f := newFixture(t)
+	ctx := context.Background()
+	cs := f.connect(t, f.creator.ID)
+
+	const seeded = 5
+	for i := 0; i < seeded; i++ {
+		_, err := f.st.Research().SaveNote(ctx, store.SaveNoteInput{
+			ChannelID: f.ch.ID, Text: fmt.Sprintf("page note %d", i),
+			AuthorPersonID: f.creator.ID, IdempotencyKey: fmt.Sprintf("page-note-%d", i),
+		})
+		require.NoError(t, err)
+	}
+
+	firstRes := f.call(t, cs, "list_research_notes", tools.ListResearchNotesInput{ChannelID: f.ch.ID.String(), Limit: 3})
+	firstPage := decode[tools.ListResearchNotesOutput](t, firstRes)
+	require.Len(t, firstPage.Notes, 3, "must be capped at the caller-supplied limit")
+	assert.True(t, firstPage.Truncated, "more notes exist beyond limit")
+	for _, n := range firstPage.Notes {
+		assert.NotContains(t, []string{"page note 0", "page note 1"}, n.Text, "the two oldest notes must have fallen off the first (newest-first) page")
+	}
+
+	oldestOnFirstPage := firstPage.Notes[len(firstPage.Notes)-1]
+	before, err := time.Parse(time.RFC3339, oldestOnFirstPage.CreatedAt)
+	require.NoError(t, err)
+
+	secondRes := f.call(t, cs, "list_research_notes", tools.ListResearchNotesInput{ChannelID: f.ch.ID.String(), Before: &before})
+	secondPage := decode[tools.ListResearchNotesOutput](t, secondRes)
+	require.Len(t, secondPage.Notes, 2, "before must surface exactly the notes that fell off the first page")
+	assert.False(t, secondPage.Truncated)
+	texts := []string{secondPage.Notes[0].Text, secondPage.Notes[1].Text}
+	assert.ElementsMatch(t, []string{"page note 0", "page note 1"}, texts)
 }
 
 func TestListIdeas_NoteCountAndHasVerdictStats(t *testing.T) {

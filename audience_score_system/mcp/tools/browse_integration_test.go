@@ -500,6 +500,46 @@ func TestGetChannelOverview_ResearchNotesTruncatedPastDefaultLimit(t *testing.T)
 	assert.Contains(t, out.Truncated, "research_notes", "the response must flag which section was cut")
 }
 
+// TestGetChannelOverview_ResearchNotesBeforePagesBackwardPastTruncation proves
+// issue #1808's fix: before, paired with the oldest row's created_at from a
+// truncated page, retrieves the row(s) that fell off the default limit --
+// before this fix, since's lower-bound-only semantics made everything older
+// than the newest ~20 notes permanently unreachable through this tool.
+func TestGetChannelOverview_ResearchNotesBeforePagesBackwardPastTruncation(t *testing.T) {
+	f := newBrowseFixture(t)
+	ctx := context.Background()
+	cs := f.connect(t, f.creator.ID)
+
+	// defaultNotesOverviewLimit is 20 (browse.go); seed one more than that
+	// so note 0 (the oldest) falls off the first page.
+	const seeded = 21
+	for i := 0; i < seeded; i++ {
+		_, err := f.st.Research().SaveNote(ctx, store.SaveNoteInput{
+			ChannelID: f.ch.ID, Text: fmt.Sprintf("page note %d", i),
+			AuthorPersonID: f.creator.ID, IdempotencyKey: fmt.Sprintf("page-note-%d", i),
+		})
+		require.NoError(t, err)
+	}
+
+	firstPage := mdecode[tools.GetChannelOverviewOutput](t, f.call(t, cs, "get_channel_overview", tools.GetChannelOverviewInput{ChannelID: f.ch.ID.String()}))
+	require.Len(t, firstPage.ResearchNotes, 20)
+	require.Contains(t, firstPage.Truncated, "research_notes")
+	for _, n := range firstPage.ResearchNotes {
+		assert.NotEqual(t, "page note 0", n.Text, "the oldest note must have fallen off the first (newest-first) page")
+	}
+
+	oldestOnFirstPage := firstPage.ResearchNotes[len(firstPage.ResearchNotes)-1]
+	before, err := time.Parse(time.RFC3339, oldestOnFirstPage.CreatedAt)
+	require.NoError(t, err)
+
+	secondPage := mdecode[tools.GetChannelOverviewOutput](t, f.call(t, cs, "get_channel_overview", tools.GetChannelOverviewInput{
+		ChannelID: f.ch.ID.String(), Before: &before,
+	}))
+	require.Len(t, secondPage.ResearchNotes, 1, "before must surface exactly the note(s) that fell off the first page")
+	assert.Equal(t, "page note 0", secondPage.ResearchNotes[0].Text)
+	assert.NotContains(t, secondPage.Truncated, "research_notes", "the second page has nothing left to cut")
+}
+
 // ── get_channel_overview: needs_reauth still browses ───────────────────────
 
 func TestGetChannelOverview_NeedsReauthChannel_StillBrowsesAndSurfacesState(t *testing.T) {
