@@ -118,7 +118,8 @@ func newBuildHelmChartCmd() *cobra.Command {
 			chartTarget, chartDir := chartOutputPaths(workspaceRoot, chart)
 
 			fmt.Fprintf(cmd.OutOrStdout(), "Building bazel target: %s\n", chartTarget)
-			if _, err := defaultBazel.Run("build", chartTarget); err != nil {
+			// chartDir below is read straight off bazel-bin.
+			if _, err := bazelRunToDisk(defaultBazel, "build", chartTarget); err != nil {
 				return fmt.Errorf("bazel build %s: %w", chartTarget, err)
 			}
 

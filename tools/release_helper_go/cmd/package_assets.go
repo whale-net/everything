@@ -122,8 +122,9 @@ func PackageAppAssets(bazel BazelRunner, _ FileSystem, workspaceRoot string, app
 		pkg, binName := binaryTargetPkgAndName(app)
 
 		for _, plat := range platforms {
+			// This build's output is read straight off bazel-bin below.
 			args := []string{"build", "--platforms=" + plat.BazelPlatform, app.BinaryTarget}
-			if _, err := bazel.Run(args...); err != nil {
+			if _, err := bazelRunToDisk(bazel, args...); err != nil {
 				return nil, fmt.Errorf("bazel build %s for platform %s: %w", app.BinaryTarget, plat.Name, err)
 			}
 
@@ -186,12 +187,14 @@ func PackageAppAssets(bazel BazelRunner, _ FileSystem, workspaceRoot string, app
 		pkg, targetName := binaryTargetPkgAndName(app)
 		fwTarget := firmwareTarget(app)
 
+		// Same real-file-on-disk requirement as the platform build above --
+		// the firmware binary is read from bazel-bin below.
 		args := []string{"build", "--config=esp32", fwTarget}
-		if _, err := bazel.Run(args...); err != nil {
+		if _, err := bazelRunToDisk(bazel, args...); err != nil {
 			// Try without _merged_bin fallback
 			fwTarget = fmt.Sprintf("//%s:%s_bin", pkg, targetName)
 			args = []string{"build", "--config=esp32", fwTarget}
-			if _, err2 := bazel.Run(args...); err2 != nil {
+			if _, err2 := bazelRunToDisk(bazel, args...); err2 != nil {
 				return nil, fmt.Errorf("bazel build %s: %w (fallback failed: %v)", fwTarget, err, err2)
 			}
 		}

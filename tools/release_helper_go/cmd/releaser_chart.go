@@ -71,7 +71,8 @@ func (r *ChartReleaser) Build(ctx context.Context, version string) (string, erro
 		var chartTarget string
 		chartTarget, chartDir = chartOutputPaths(r.WorkspaceRoot, r.Chart)
 		fmt.Printf("Building bazel target: %s\n", chartTarget)
-		if _, err := r.Bazel.Run("build", chartTarget); err != nil {
+		// chartDir below is read straight off bazel-bin.
+		if _, err := bazelRunToDisk(r.Bazel, "build", chartTarget); err != nil {
 			return "", fmt.Errorf("bazel build %s: %w", chartTarget, err)
 		}
 	}
