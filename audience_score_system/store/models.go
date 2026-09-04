@@ -298,12 +298,18 @@ const (
 
 // VideoScheduleMatch is one row of `video_schedule_match` (migration 002,
 // FR22/FR23) -- the outcome link between a SyncedVideo and the
-// ScheduleEntry it fulfilled. ScheduleEntryID is nil when a video has
-// arrived with no confident match yet, pending MatchStore.Resolve.
+// ScheduleEntry (legacy) or VideoScript (migration 010, FR43/FR45) it
+// fulfilled. ScheduleEntryID is nil when a video has arrived with no
+// confident match yet, pending MatchStore.Resolve -- it stays on this
+// struct for now (the retirement task removes it) but the matcher
+// (worker/sync, issue #1829) no longer writes it; VideoScriptID is nil
+// under the exact same "no confident match yet" condition, and is what the
+// matcher writes going forward.
 type VideoScheduleMatch struct {
 	ID                 uuid.UUID
 	SyncedVideoID      uuid.UUID
 	ScheduleEntryID    *uuid.UUID
+	VideoScriptID      *uuid.UUID
 	Confidence         float64
 	State              MatchState
 	ResolvedByPersonID *uuid.UUID
@@ -311,15 +317,21 @@ type VideoScheduleMatch struct {
 	CreatedAt          time.Time
 }
 
-// MatchCandidate is one committed `schedule_entry` eligible for
-// worker/sync's matcher (issue #1581, FR22/FR23): a committed entry on a
-// Channel with no existing live (auto/confirmed) video_schedule_match,
-// joined with its bound idea's title -- schedule_entry itself carries no
-// title, only idea_id. MatchStore.ListCandidates returns these.
+// MatchCandidate is one `greenlit` video_script eligible for worker/sync's
+// matcher (issue #1829, FR43 re-anchor of #1581/FR22-FR23): a video_script
+// on a Channel with status = 'greenlit' and no existing live
+// (auto/confirmed) video_schedule_match. Unlike the schedule_entry
+// candidates this replaces, a video_script carries its own Title directly
+// (no idea join needed) and its TargetPublishDate is nilable (FR36 makes
+// the target date optional) -- worker/sync's score treats a nil
+// TargetPublishDate as date-proximity 0, never renormalizing title-only
+// (see matching.go). proposed/denied/archived scripts are NEVER returned
+// here -- that restriction governs candidate generation only, not
+// MatchStore.Resolve (#1830). MatchStore.ListCandidates returns these.
 type MatchCandidate struct {
-	ScheduleEntryID   uuid.UUID
-	IdeaTitle         string
-	ProposedPublishAt time.Time
+	VideoScriptID     uuid.UUID
+	Title             string
+	TargetPublishDate *time.Time
 }
 
 // PredictionVsOutcome is one row of the `v_prediction_vs_outcome` view
