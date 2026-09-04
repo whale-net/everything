@@ -930,6 +930,183 @@ func TestMigration003_WebSessionTable_ConstraintsSurviveDownUp(t *testing.T) {
 	assert.Error(t, err, "web_session.session_id PRIMARY KEY must reject a duplicate session_id")
 }
 
+// ── Migration 009 (co_creator tier, FR29/FR33/FR34/FR35, NFR6/NFR10/NFR11) ──
+
+// TestMigration009_CoCreatorRoleAccepted_UnknownRoleRejected proves NFR6's
+// widened channel_person_role_check accepts the new 'co_creator' value but
+// still rejects anything outside the three-tier list -- the CHECK is a
+// closed enumeration, not merely "anything goes now".
+func TestMigration009_CoCreatorRoleAccepted_UnknownRoleRejected(t *testing.T) {
+	ctx := context.Background()
+	s, db := newStore(t)
+	ch, _ := setupChannel(t, ctx, s)
+
+	coCreator, _, err := s.Persons().UpsertByGoogleSubject(ctx, "sub-"+uuid.NewString(), "cc@example.com", "Co-Creator")
+	require.NoError(t, err)
+	_, err = db.Pool.Exec(ctx, `
+		INSERT INTO channel_person (channel_id, person_id, role) VALUES ($1, $2, 'co_creator')
+	`, ch.ID, coCreator.ID)
+	require.NoError(t, err, "role='co_creator' must satisfy the widened channel_person_role_check (NFR6)")
+
+	unknown, _, err := s.Persons().UpsertByGoogleSubject(ctx, "sub-"+uuid.NewString(), "u@example.com", "Unknown")
+	require.NoError(t, err)
+	_, err = db.Pool.Exec(ctx, `
+		INSERT INTO channel_person (channel_id, person_id, role) VALUES ($1, $2, 'owner')
+	`, ch.ID, unknown.ID)
+	assert.Error(t, err, "role='owner' is not in the three-tier list and must still violate the CHECK")
+}
+
+// TestMigration009_SecondLiveFounderRejected proves NFR10's
+// channel_person_channel_id_founder_current partial unique index enforces
+// "at most one open creator row per Channel", while leaving non-creator
+// roles and non-open creator rows unaffected.
+func TestMigration009_SecondLiveFounderRejected(t *testing.T) {
+	ctx := context.Background()
+	s, db := newStore(t)
+	// setupChannel's Create already leaves one open role='creator' row for
+	// `creator` on ch -- the row every insert below is tested against.
+	ch, _ := setupChannel(t, ctx, s)
+
+	secondFounder, _, err := s.Persons().UpsertByGoogleSubject(ctx, "sub-"+uuid.NewString(), "f2@example.com", "Second Founder")
+	require.NoError(t, err)
+	_, err = db.Pool.Exec(ctx, `
+		INSERT INTO channel_person (channel_id, person_id, role) VALUES ($1, $2, 'creator')
+	`, ch.ID, secondFounder.ID)
+	assert.Error(t, err, "a second open role='creator' row on the same channel must violate "+
+		"channel_person_channel_id_founder_current (NFR10)")
+
+	coCreator, _, err := s.Persons().UpsertByGoogleSubject(ctx, "sub-"+uuid.NewString(), "cc@example.com", "Co-Creator")
+	require.NoError(t, err)
+	_, err = db.Pool.Exec(ctx, `
+		INSERT INTO channel_person (channel_id, person_id, role) VALUES ($1, $2, 'co_creator')
+	`, ch.ID, coCreator.ID)
+	assert.NoError(t, err, "a second open co_creator row on the same channel is unaffected by the "+
+		"Founder-only backstop")
+
+	closedFounder, _, err := s.Persons().UpsertByGoogleSubject(ctx, "sub-"+uuid.NewString(), "f3@example.com", "Closed Founder")
+	require.NoError(t, err)
+	_, err = db.Pool.Exec(ctx, `
+		INSERT INTO channel_person (channel_id, person_id, role, valid_to)
+		VALUES ($1, $2, 'creator', NOW())
+	`, ch.ID, closedFounder.ID)
+	assert.NoError(t, err, "a CLOSED creator row (valid_to set) alongside the channel's already-open "+
+		"creator row must be allowed -- the index is scoped WHERE valid_to IS NULL")
+}
+
+// TestMigration009_LiveAnalystAndCoCreatorInvitesCoexist proves NFR11's
+// rescoped channel_invite_channel_id_role_live index allows one live invite
+// per (channel, role) rather than one live invite per channel -- a live
+// Analyst invite and a live Co-Creator invite must coexist (FR30), but two
+// live invites of the same tier must not.
+func TestMigration009_LiveAnalystAndCoCreatorInvitesCoexist(t *testing.T) {
+	ctx := context.Background()
+	s, db := newStore(t)
+	ch, creator := setupChannel(t, ctx, s)
+
+	_, err := db.Pool.Exec(ctx, `
+		INSERT INTO channel_invite (channel_id, code, created_by_person_id, role)
+		VALUES ($1, $2, $3, 'analyst')
+	`, ch.ID, "code-analyst-"+uuid.NewString(), creator.ID)
+	require.NoError(t, err)
+
+	_, err = db.Pool.Exec(ctx, `
+		INSERT INTO channel_invite (channel_id, code, created_by_person_id, role)
+		VALUES ($1, $2, $3, 'co_creator')
+	`, ch.ID, "code-cocreator-"+uuid.NewString(), creator.ID)
+	assert.NoError(t, err, "a live analyst invite and a live co_creator invite on the same channel "+
+		"must coexist (FR30)")
+
+	_, err = db.Pool.Exec(ctx, `
+		INSERT INTO channel_invite (channel_id, code, created_by_person_id, role)
+		VALUES ($1, $2, $3, 'analyst')
+	`, ch.ID, "code-analyst-2-"+uuid.NewString(), creator.ID)
+	assert.Error(t, err, "a second live analyst invite on the same channel must violate "+
+		"channel_invite_channel_id_role_live")
+}
+
+// TestMigration009_AuditViewEmitsGrantAndRevokeEvents proves FR35's
+// v_channel_person_audit emits exactly one 'granted' event per
+// channel_person row and, only once the row is closed, exactly one
+// additional 'revoked' event -- with the right actor identity on each side.
+func TestMigration009_AuditViewEmitsGrantAndRevokeEvents(t *testing.T) {
+	ctx := context.Background()
+	s, db := newStore(t)
+	// setupChannel's Create leaves an open role='creator' row for `creator`
+	// with no granted_by_person_id recorded (M1's Create predates FR34) --
+	// this is the "still-open, no actor" case below.
+	ch, creator := setupChannel(t, ctx, s)
+
+	granter, _, err := s.Persons().UpsertByGoogleSubject(ctx, "sub-"+uuid.NewString(), "granter@example.com", "Granter")
+	require.NoError(t, err)
+	revoker, _, err := s.Persons().UpsertByGoogleSubject(ctx, "sub-"+uuid.NewString(), "revoker@example.com", "Revoker")
+	require.NoError(t, err)
+	subject, _, err := s.Persons().UpsertByGoogleSubject(ctx, "sub-"+uuid.NewString(), "subject@example.com", "Subject")
+	require.NoError(t, err)
+
+	_, err = db.Pool.Exec(ctx, `
+		INSERT INTO channel_person (channel_id, person_id, role, granted_by_person_id)
+		VALUES ($1, $2, 'co_creator', $3)
+	`, ch.ID, subject.ID, granter.ID)
+	require.NoError(t, err)
+
+	_, err = db.Pool.Exec(ctx, `
+		UPDATE channel_person SET valid_to = NOW(), revoked_by_person_id = $3
+		WHERE channel_id = $1 AND person_id = $2 AND valid_to IS NULL
+	`, ch.ID, subject.ID, revoker.ID)
+	require.NoError(t, err)
+
+	type auditRow struct {
+		event            string
+		occurredAt       time.Time
+		role             string
+		actorPersonID    *uuid.UUID
+		actorDisplayName *string
+	}
+	queryRows := func(personID uuid.UUID) []auditRow {
+		rows, err := db.Pool.Query(ctx, `
+			SELECT event, occurred_at, role, actor_person_id, actor_display_name
+			FROM v_channel_person_audit
+			WHERE channel_id = $1 AND subject_person_id = $2
+			ORDER BY occurred_at
+		`, ch.ID, personID)
+		require.NoError(t, err)
+		defer rows.Close()
+		var out []auditRow
+		for rows.Next() {
+			var r auditRow
+			require.NoError(t, rows.Scan(&r.event, &r.occurredAt, &r.role, &r.actorPersonID, &r.actorDisplayName))
+			out = append(out, r)
+		}
+		require.NoError(t, rows.Err())
+		return out
+	}
+
+	subjectRows := queryRows(subject.ID)
+	require.Len(t, subjectRows, 2, "a granted-then-revoked row must yield exactly two audit events")
+	assert.Equal(t, "granted", subjectRows[0].event)
+	assert.Equal(t, "co_creator", subjectRows[0].role)
+	require.NotNil(t, subjectRows[0].actorPersonID)
+	assert.Equal(t, granter.ID, *subjectRows[0].actorPersonID)
+	require.NotNil(t, subjectRows[0].actorDisplayName)
+	assert.Equal(t, "Granter", *subjectRows[0].actorDisplayName)
+
+	assert.Equal(t, "revoked", subjectRows[1].event)
+	assert.Equal(t, "co_creator", subjectRows[1].role)
+	require.NotNil(t, subjectRows[1].actorPersonID)
+	assert.Equal(t, revoker.ID, *subjectRows[1].actorPersonID)
+	require.NotNil(t, subjectRows[1].actorDisplayName)
+	assert.Equal(t, "Revoker", *subjectRows[1].actorDisplayName)
+	assert.False(t, subjectRows[1].occurredAt.Before(subjectRows[0].occurredAt),
+		"the revoked event's occurred_at (valid_to) must not precede the granted event's (valid_from)")
+
+	creatorRows := queryRows(creator.ID)
+	require.Len(t, creatorRows, 1, "a still-open row must yield exactly one granted event and no revoked event")
+	assert.Equal(t, "granted", creatorRows[0].event)
+	assert.Equal(t, "creator", creatorRows[0].role)
+	assert.Nil(t, creatorRows[0].actorPersonID, "Create() records no granter, so actor_person_id must be nil for this M1-era row")
+	assert.Nil(t, creatorRows[0].actorDisplayName)
+}
+
 // TestMigration006_McpCredentialTable_ConstraintsAndIndexesSurviveDownUp
 // machine-checks (rather than eyeballs) the two things FR13/NFR5 require
 // migration 006 preserve from 005's mcp_credential shape even though the
