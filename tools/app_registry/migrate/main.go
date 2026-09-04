@@ -8,5 +8,5 @@ import (
 
 func main() {
 	migrate.RunCLI(schema.Migrations, schema.Dir,
-		migrate.WithSource(htmxauth.Migrations, "migrations"))
+		migrate.WithSource("htmxauth", htmxauth.Migrations, "migrations"))
 }

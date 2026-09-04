@@ -12,5 +12,5 @@ var migrations embed.FS
 
 func main() {
 	migrate.RunCLI(migrations, "migrations",
-		migrate.WithSource(htmxauth.Migrations, "migrations"))
+		migrate.WithSource("htmxauth", htmxauth.Migrations, "migrations"))
 }

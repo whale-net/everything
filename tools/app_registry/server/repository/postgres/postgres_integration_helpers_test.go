@@ -54,9 +54,9 @@ func authedCtx() context.Context {
 	})
 }
 
-// newTestRegistry starts a real Postgres container, applies the real
-// App Registry migrations plus htmxauth's bundled ui_sessions migration --
-// the same sources the migration binary merges via migrate.WithSource, see
+// newTestRegistry starts a real Postgres container, applies htmxauth's
+// bundled ui_sessions migration plus the real App Registry migrations --
+// the same sources the migration binary applies via migrate.WithSource, see
 // migrate/main.go -- and returns a Registry plus the raw pool for fixture
 // setup / assertions.
 func newTestRegistry(t *testing.T) (*Registry, *pgxpool.Pool) {
@@ -71,13 +71,13 @@ func newTestRegistry(t *testing.T) (*Registry, *pgxpool.Pool) {
 	}
 	defer sqlDB.Close()
 
-	runner, err := migrate.NewMultiRunner(sqlDB,
-		migrate.Source{FS: schema.Migrations, Dir: schema.Dir},
-		migrate.Source{FS: htmxauth.Migrations, Dir: "migrations"},
-	)
-	if err != nil {
-		t.Fatalf("build migration runner: %v", err)
+	if err := migrate.ApplySource(sqlDB, migrate.Source{
+		Name: "htmxauth", FS: htmxauth.Migrations, Dir: "migrations",
+	}); err != nil {
+		t.Fatalf("apply htmxauth migrations: %v", err)
 	}
+
+	runner := migrate.NewRunner(sqlDB, schema.Migrations, schema.Dir)
 	if err := runner.Up(); err != nil {
 		t.Fatalf("apply real migrations: %v", err)
 	}

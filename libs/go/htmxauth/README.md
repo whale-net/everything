@@ -308,12 +308,12 @@ By default, sessions are stored in an encrypted gorilla/sessions cookie. This wo
 
    ```go
    migrate.RunCLI(migrations, "migrations",
-       migrate.WithSource(htmxauth.Migrations, "migrations"))
+       migrate.WithSource("htmxauth", htmxauth.Migrations, "migrations"))
    ```
 
-   See `libs/go/migrate`'s README ("Shared library migrations") for how
-   `WithSource` merges the two sequences and why `htmxauth.Migrations`
-   numbers from 900001.
+   See `libs/go/migrate`'s README ("Shared library migrations") for why
+   `WithSource` tracks `htmxauth.Migrations` in its own dedicated table
+   instead of merging it into your domain's own migration sequence.
 2. Set `PG_DATABASE_URL`.
 3. Use `NewAuthenticatorWithDB` instead of `NewAuthenticator`:
 

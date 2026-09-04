@@ -32,9 +32,10 @@ the exact behavioral bar this package reproduces.
 This library does **not** own, embed, or run any migration — the consuming
 domain's own migration tooling must create the table before the first call
 to `NewCredentialStore` (unlike `libs/go/htmxauth`'s `ui_sessions`, whose
-one shared shape the library now bundles and a domain merges in via
-`migrate.WithSource` — mcpauth's schema varies per domain, so there is no
-single shape to bundle). It does still mirror `DBSessionManager`'s
+one shared shape the library now bundles and a domain applies via
+`migrate.WithSource`, tracked in its own dedicated table — mcpauth's schema
+varies per domain, so there is no single shape to bundle). It does still
+mirror `DBSessionManager`'s
 boot-time preflight behavior (see `db_session.go`'s `probeSessionTable`):
 it
 
@@ -363,9 +364,10 @@ store, err := mcpauth.NewCredentialStore(ctx, mcpauth.StoreConfig{
    for a real domain-owned migration satisfying this contract; mirror that
    pattern for `mcp_credential`. (This is deliberately unlike
    `libs/go/htmxauth`'s `ui_sessions`, which one shared, byte-identical
-   table shape let the library bundle and merge in via
-   `migrate.WithSource` instead — mcpauth's schema varies per domain
-   (identity column name/type/FK), so there is no single shape to bundle.)
+   table shape let the library bundle and apply via `migrate.WithSource`
+   instead, tracked in its own dedicated table — mcpauth's schema varies
+   per domain (identity column name/type/FK), so there is no single shape
+   to bundle.)
 2. Construct a `*pgxpool.Pool` (see `//libs/go/db`).
 3. Call `mcpauth.NewCredentialStore` — it preflights the configured table
    and returns an error naming it if the migration has not been applied.

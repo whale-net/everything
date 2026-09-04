@@ -1,7 +1,8 @@
 -- No-op placeholder. ui_sessions now lives in libs/go/htmxauth's bundled
--- migration (version 900001), merged into this domain's sequence via
--- migrate.WithSource in migrate/main.go -- see that package's migrations.go
--- for why (avoiding copy-pasted schema SQL across every htmxauth adopter).
+-- migration, applied independently (its own schema_migrations_htmxauth
+-- table, not this domain's) via migrate.WithSource in migrate/main.go --
+-- see that package's migrations.go for why (avoiding copy-pasted schema SQL
+-- across every htmxauth adopter).
 --
 -- This file is kept (rather than deleted) only to hold open version slot
 -- 012, since postgres_integration_*_test.go steps through this domain's

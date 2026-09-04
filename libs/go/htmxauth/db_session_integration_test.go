@@ -12,7 +12,7 @@
 // distinction (FR-54).
 //
 // Schema here is a self-contained copy of the column set this package's own
-// bundled migration creates (see migrations/900001_ui_sessions.up.sql) —
+// bundled migration creates (see migrations/001_ui_sessions.up.sql) —
 // dbtest's own README asks integration tests to keep schema self-contained
 // rather than importing another package's migrations.
 //

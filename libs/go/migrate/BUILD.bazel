@@ -20,17 +20,6 @@ go_library(
     ],
 )
 
-go_test(
-    name = "migrate_test",
-    srcs = ["source_test.go"],
-    data = glob(["testdata/**"]),
-    embed = [":migrate"],
-    embedsrcs = glob([
-        "testdata/migrations/*.sql",
-        "testdata/migrations_extra/*.sql",
-    ]),
-)
-
 # Real Postgres integration test for Runner, exercising Up/Down/Steps and
 # history tracking against an actual database (unique constraints, dirty
 # state, etc. that no fake DB driver can verify). Deliberately NOT part of
@@ -45,8 +34,14 @@ go_test(
     name = "migrate_integration_test",
     size = "large",
     timeout = "long",
-    srcs = ["migrate_integration_test.go"],
-    embedsrcs = glob(["testdata/migrations/*.sql"]),
+    srcs = [
+        "migrate_integration_test.go",
+        "source_integration_test.go",
+    ],
+    embedsrcs = glob([
+        "testdata/migrations/*.sql",
+        "testdata/migrations_extra/*.sql",
+    ]),
     gotags = ["integration"],
     tags = [
         "external",

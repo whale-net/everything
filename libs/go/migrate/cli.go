@@ -71,17 +71,7 @@ func RunCLI(migrations embed.FS, migrateDir string, opts ...Option) {
 	defer db.Close()
 
 	o := applyOptions(opts)
-
-	var runner *Runner
-	if len(o.sources) > 0 {
-		all := append([]Source{{FS: migrations, Dir: migrateDir}}, o.sources...)
-		runner, err = NewMultiRunner(db, all...)
-		if err != nil {
-			log.Fatalf("Failed to build merged migration source: %v", err)
-		}
-	} else {
-		runner = NewRunner(db, migrations, migrateDir)
-	}
+	runner := NewRunner(db, migrations, migrateDir)
 
 	// Handle history flag
 	if *history {
@@ -138,6 +128,18 @@ func RunCLI(migrations embed.FS, migrateDir string, opts ...Option) {
 		}
 		log.Println("Rollback completed successfully")
 		return
+	}
+
+	// Bring every WithSource-registered library migration fully up to date,
+	// each independently tracked (see ApplySource's doc) -- before touching
+	// this binary's own migrations at all. Only on the default reconcile
+	// path: -history/-version/-force/-steps/-down (all returned above) act
+	// on this binary's own migrations only and never run a Source.
+	for _, src := range o.sources {
+		log.Printf("Applying %s's bundled migrations...", src.Name)
+		if err := ApplySource(db, src); err != nil {
+			log.Fatalf("Failed to apply %s's migrations: %v", src.Name, err)
+		}
 	}
 
 	// bypassCeiling: an operator-approved ceiling on how far AHEAD of this

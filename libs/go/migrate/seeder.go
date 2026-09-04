@@ -23,16 +23,16 @@ func WithSeeder(s Seeder) Option {
 	}
 }
 
-// WithSource merges an additional migration directory (typically a shared
+// WithSource applies an additional migration directory (typically a shared
 // library's own `//go:embed migrations/*.sql`, e.g. htmxauth.Migrations)
-// into the runner's version sequence alongside the caller's own migrations
-// passed to RunCLI. To avoid version collisions with the caller's own
-// sequence, shared-library sources must number their migrations at or above
-// reservedSharedVersionFloor (see source.go) — htmxauth.Migrations already
-// does.
-func WithSource(fsys embed.FS, dir string) Option {
+// alongside the caller's own migrations passed to RunCLI, before RunCLI's
+// usual flag handling runs against the caller's own migrations. name must
+// be unique among a binary's WithSource calls; see Source and ApplySource's
+// doc for why this is tracked independently rather than merged into the
+// caller's own version sequence.
+func WithSource(name string, fsys embed.FS, dir string) Option {
 	return func(o *runOptions) {
-		o.sources = append(o.sources, Source{FS: fsys, Dir: dir})
+		o.sources = append(o.sources, Source{Name: name, FS: fsys, Dir: dir})
 	}
 }
 

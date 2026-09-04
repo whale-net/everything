@@ -3,88 +3,65 @@ package migrate
 import (
 	"database/sql"
 	"embed"
-	"io/fs"
+	"fmt"
+
+	"github.com/golang-migrate/migrate/v4"
+	"github.com/golang-migrate/migrate/v4/database/postgres"
+	"github.com/golang-migrate/migrate/v4/source/iofs"
 )
 
-// Source is one embedded migration directory that can be merged with others
-// via WithSource / NewMultiRunner. FS is typically a library's own
-// `//go:embed migrations/*.sql` var; Dir is the subdirectory within it.
+// Source is a shared library's own embedded migration directory, applied
+// via WithSource alongside (not merged into) a domain's own migrations. FS
+// is typically the library's `//go:embed migrations/*.sql` var; Dir is the
+// subdirectory within it; Name identifies the source and must be unique
+// among a binary's WithSource calls -- it becomes part of the dedicated
+// migrations-tracking table this source's versions live in.
 type Source struct {
-	FS  embed.FS
-	Dir string
+	Name string
+	FS   embed.FS
+	Dir  string
 }
 
-// reservedSharedVersionFloor is the lowest migration version a shared
-// library (e.g. htmxauth) is allowed to use for its own bundled migrations.
-// Domain-owned migration sequences (manmanv2/migrate, tools/app_registry's
-// migrate, leaflab/migrate, ...) number from 1 and are expected to never
-// reach this range, which keeps merged version numbers globally unique
-// without requiring coordination between independent numbering sequences.
-const reservedSharedVersionFloor = 900000
-
-// mergedFS presents multiple migration Sources as a single flat directory,
-// as required by golang-migrate's iofs source driver. Each Source keeps its
-// own file names; collisions are only a problem if two sources embed a file
-// with the exact same name, which shared-library migrations avoid by
-// numbering above reservedSharedVersionFloor.
-type mergedFS struct {
-	subs []fs.FS
-}
-
-func newMergedFS(sources []Source) (fs.FS, error) {
-	m := &mergedFS{subs: make([]fs.FS, 0, len(sources))}
-	for _, s := range sources {
-		sub, err := fs.Sub(s.FS, s.Dir)
-		if err != nil {
-			return nil, err
-		}
-		m.subs = append(m.subs, sub)
-	}
-	return m, nil
-}
-
-func (m *mergedFS) Open(name string) (fs.File, error) {
-	var firstErr error
-	for _, sub := range m.subs {
-		f, err := sub.Open(name)
-		if err == nil {
-			return f, nil
-		}
-		if firstErr == nil {
-			firstErr = err
-		}
-	}
-	return nil, firstErr
-}
-
-// ReadDir implements fs.ReadDirFS so golang-migrate's iofs driver (which
-// asks for the root directory's contents up front) sees every source's
-// files as one directory instead of only the first source's.
-func (m *mergedFS) ReadDir(name string) ([]fs.DirEntry, error) {
-	var entries []fs.DirEntry
-	for _, sub := range m.subs {
-		des, err := fs.ReadDir(sub, name)
-		if err != nil {
-			return nil, err
-		}
-		entries = append(entries, des...)
-	}
-	return entries, nil
-}
-
-// NewMultiRunner is NewRunner for more than one migration Source, merged
-// into a single version sequence. Use WithSource via RunCLI instead of
-// calling this directly unless you need a Runner outside of RunCLI's flag
-// handling.
-func NewMultiRunner(db *sql.DB, sources ...Source) (*Runner, error) {
-	merged, err := newMergedFS(sources)
+// ApplySource brings a single Source fully up to date against its own
+// "schema_migrations_<name>" table, independent of the domain's own
+// migrations table.
+//
+// This independence is not just tidiness -- it avoids a real correctness
+// bug. golang-migrate tracks exactly one "current version" integer per
+// migrations table, and Up() only ever looks for the next version strictly
+// greater than that integer (source.Driver.Next's contract); it can never
+// go back for a lower one. If a Source's migrations shared the domain's own
+// table -- even numbered into a reserved-high range specifically to avoid
+// colliding with the domain's own numbers -- applying one would jump the
+// domain's tracked version past that range. Any domain migration added
+// later with an ordinary, lower number would then be permanently invisible
+// to Up(): not an error, just silently never applied, forever. A dedicated
+// table per Source means the domain's own migrations keep incrementing from
+// wherever they already are, in their own table, forever unaffected by
+// what any Source does in its own.
+func ApplySource(db *sql.DB, src Source) error {
+	sourceDriver, err := iofs.New(src.FS, src.Dir)
 	if err != nil {
-		return nil, err
+		return fmt.Errorf("%s: failed to create migration source: %w", src.Name, err)
 	}
-	return &Runner{
-		db:         db,
-		migrations: merged,
-		migrateDir: ".",
-		tracker:    NewHistoryTracker(db),
-	}, nil
+	defer sourceDriver.Close()
+
+	dbDriver, err := postgres.WithInstance(db, &postgres.Config{
+		MigrationsTable: "schema_migrations_" + src.Name,
+	})
+	if err != nil {
+		return fmt.Errorf("%s: failed to create database driver: %w", src.Name, err)
+	}
+
+	m, err := migrate.NewWithInstance("iofs", sourceDriver, "postgres", dbDriver)
+	if err != nil {
+		return fmt.Errorf("%s: failed to create migrator: %w", src.Name, err)
+	}
+	// Don't call m.Close() -- WithInstance doesn't own db, but Close() closes
+	// it anyway (see Runner.createMigrator's identical comment).
+
+	if err := m.Up(); err != nil && err != migrate.ErrNoChange {
+		return fmt.Errorf("%s: failed to run migrations: %w", src.Name, err)
+	}
+	return nil
 }

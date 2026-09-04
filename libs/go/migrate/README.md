@@ -22,21 +22,28 @@ func main() {
 
 A shared library that owns a table (e.g. `libs/go/htmxauth`'s `ui_sessions`)
 can bundle its own `//go:embed migrations/*.sql` and have every adopting
-domain merge it in with `WithSource`, instead of each domain copying the
+domain apply it with `WithSource`, instead of each domain copying the
 library's SQL into its own migrations directory:
 
 ```go
 migrate.RunCLI(migrations, "migrations",
-	migrate.WithSource(htmxauth.Migrations, "migrations"))
+	migrate.WithSource("htmxauth", htmxauth.Migrations, "migrations"))
 ```
 
-`WithSource` merges the library's migration files into the same version
-sequence as the domain's own migrations. To do that safely it needs every
-source's version numbers to be globally unique, so **a shared library's
-migrations must number from 900001** (see `reservedSharedVersionFloor` in
-`source.go`) — comfortably above where any domain's own sequential
-numbering (1, 2, 3, ...) is expected to ever reach. A domain's own
-migrations never need to know or care that a merge is happening.
+`WithSource` does **not** merge the library's migrations into the domain's
+own version sequence — it applies them against their own dedicated
+`schema_migrations_<name>` table (`ApplySource` in `source.go`), fully
+independent of the domain's `schema_migrations`. This isn't a stylistic
+choice: golang-migrate's `Up()` tracks exactly one "current version" integer
+per table and only ever advances to the next version *strictly greater*
+than it — it can never go back for a lower one. If a library's migrations
+shared the domain's table, applying one would push that single tracked
+version ahead; any domain migration added later with an ordinary, lower
+number would then be permanently invisible to `Up()` — not an error, just
+silently never applied, forever. A dedicated table per source avoids that
+by construction, so a shared library's migrations number from 1 like any
+ordinary sequence — no reserved range, no coordination with any domain's
+own numbering required.
 
 Only reach for this when a second domain actually needs the same
 library-owned schema; a single adopter can just embed its own copy.
