@@ -1,0 +1,21 @@
+package access
+
+import (
+	"github.com/whale-net/everything/audience_score_system/store"
+	"github.com/whale-net/everything/audience_score_system/web/components"
+)
+
+// View is a scaffold placeholder for the access-management page
+// (FR30/FR31/FR33) -- Implementation replaces this with the real roster
+// table, Invite Co-Creator action, and per-row Remove/Promote
+// affordances.
+templ View(data components.LayoutData, ch store.Channel) {
+	@components.Layout(data) {
+		<div class="card bg-base-100 border border-base-300 shadow-sm">
+			<div class="card-body">
+				<h1 class="card-title">{ ch.Title } access</h1>
+				<p class="text-base-content/70">Not implemented yet.</p>
+			</div>
+		</div>
+	}
+}

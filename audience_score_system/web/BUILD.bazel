@@ -19,6 +19,7 @@ go_library(
     deps = [
         "//audience_score_system/store",
         "//audience_score_system/tokens",
+        "//audience_score_system/web/access",
         "//audience_score_system/web/auth",
         "//audience_score_system/web/channel",
         "//audience_score_system/web/components",

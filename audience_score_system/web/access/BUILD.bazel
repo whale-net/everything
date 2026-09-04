@@ -1,0 +1,70 @@
+load("@rules_go//go:def.bzl", "go_test")
+load("//tools:templ.bzl", "templ_library")
+
+# Founder/Co-Creator-only access management (M2: FR30/FR31/FR33) --
+# handlers (access.go) and templ views (views.templ) in one package, see
+# access.go's package doc comment for why they are not split across a
+# components/pages sibling pair like web/pages (mirrors web/invite and
+# web/schedule's own rationale).
+templ_library(
+    name = "access",
+    srcs = glob(["*.templ"]),
+    go_srcs = ["access.go"],
+    visibility = [
+        "//audience_score_system/citest:__pkg__",
+        "//audience_score_system/web:__pkg__",
+    ],
+    deps = [
+        "//audience_score_system/store",
+        "//audience_score_system/web/auth",
+        "//audience_score_system/web/components",
+        "@com_github_google_uuid//:uuid",
+        "@com_github_jackc_pgx_v5//:pgx",
+    ],
+)
+
+# Postgres-backed handler coverage (Testing phase, issue #1723, FR30/FR31/
+# FR33): the page gate (Founder/Co-Creator 200, Analyst/non-member 403),
+# every cell of FR33's Remove matrix (allowed cells succeed, disallowed
+# cells 403 with a byte-identical channel_person row), the idempotent
+# no-op removes (no open role) and promotes (already co_creator), a
+# forged cross-Channel person_id, and the Co-Creator invite's idempotency
+# (LB4/NFR11) alongside a live Analyst invite. Gated behind `//go:build
+# integration`, gazelle skips it when scanning for go_test srcs; this
+# go_test is hand-written with EXACTLY the tag set from
+# //libs/go/dbtest:postgres_constraints_test (see that package's
+# BUILD.bazel/README.md for why each tag is required), mirroring
+# //audience_score_system/web/schedule:schedule_integration_test. `# keep`
+# markers tell a later `bazel run //:gazelle` not to touch or remove this
+# rule.
+#
+# Run it explicitly (requires a working Docker daemon):
+#   bazel test //audience_score_system/web/access:access_integration_test --test_output=all
+go_test(
+    # keep
+    name = "access_integration_test",
+    size = "large",
+    timeout = "long",
+    srcs = ["access_integration_test.go"],
+    embed = [":access"],
+    gotags = ["integration"],
+    tags = [
+        "external",
+        "integration",
+        "manual",
+        "no-cache",
+        "no-sandbox",
+        "requires-network",
+    ],
+    deps = [
+        "//audience_score_system/migrate/schema",
+        "//audience_score_system/store",
+        "//audience_score_system/web/auth",
+        "//libs/go/dbtest",
+        "//libs/go/migrate",
+        "@com_github_google_uuid//:uuid",
+        "@com_github_jackc_pgx_v5//stdlib",
+        "@com_github_stretchr_testify//assert",
+        "@com_github_stretchr_testify//require",
+    ],
+)

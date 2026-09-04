@@ -24,6 +24,7 @@ import (
 
 	"github.com/whale-net/everything/audience_score_system/store"
 	"github.com/whale-net/everything/audience_score_system/tokens"
+	"github.com/whale-net/everything/audience_score_system/web/access"
 	"github.com/whale-net/everything/audience_score_system/web/auth"
 	"github.com/whale-net/everything/audience_score_system/web/channel"
 	"github.com/whale-net/everything/audience_score_system/web/components"
@@ -139,6 +140,7 @@ type app struct {
 	invite   *invite.Handlers
 	channels *channel.Handler
 	schedule *schedule.Handlers
+	access   *access.Handlers
 
 	// mcpProvider is mcpauth's OAuth2 authorization-server front end
 	// (issue #1646, FR12/NFR4): /authorize, /token, /register, and
@@ -260,6 +262,12 @@ func run() error {
 	// Schedules()/Roles()/Channels()), no separate OAuth grant of its own.
 	scheduleHandlers := schedule.New(st)
 
+	// accessHandlers is M2's Founder/Co-Creator-only access-management
+	// surface (#1723, FR30/FR31/FR33) -- needs only st (store.CanInvite/
+	// store.CanRemove + Access()/Roles()/Channels()/Invites()), no
+	// separate OAuth grant of its own.
+	accessHandlers := access.New(st)
+
 	// mcpauth's OAuth2 authorization-server front end (issue #1646,
 	// FR12/NFR4): mints the bearer credential an MCP client presents to
 	// `mcp`, reusing this Person's existing C1 Google-OIDC-backed session
@@ -308,7 +316,7 @@ func run() error {
 		return fmt.Errorf("construct mcpauth provider: %w", err)
 	}
 
-	application := &app{store: st, auth: authenticator, invite: inviteHandlers, channels: channelHandler, schedule: scheduleHandlers, mcpProvider: mcpProvider}
+	application := &app{store: st, auth: authenticator, invite: inviteHandlers, channels: channelHandler, schedule: scheduleHandlers, access: accessHandlers, mcpProvider: mcpProvider}
 
 	mux := http.NewServeMux()
 	application.setupRoutes(mux)
@@ -411,6 +419,16 @@ func (a *app) setupRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("POST /schedule/{entryID}/approve", a.auth.RequireSignedIn(a.schedule.HandleApprove))
 	mux.HandleFunc("POST /schedule/{entryID}/unapprove", a.auth.RequireSignedIn(a.schedule.HandleUnapprove))
 	mux.HandleFunc("POST /schedule/{entryID}/edit", a.auth.RequireSignedIn(a.schedule.HandleEdit))
+
+	// Protected: access management (M2: FR30/FR31/FR33, #1723). GET is
+	// Founder/Co-Creator only (store.CanInvite); the three mutating POSTs
+	// re-derive authorization fresh on every call (store.CanInvite and,
+	// for remove, store.CanRemove's FR33 matrix) -- see
+	// web/access.Handlers' package doc comment.
+	mux.HandleFunc("GET /channels/{id}/access", a.auth.RequireSignedIn(a.access.HandleShow))
+	mux.HandleFunc("POST /channels/{id}/access/invites", a.auth.RequireSignedIn(a.access.HandleInviteCoCreator))
+	mux.HandleFunc("POST /channels/{id}/access/promote", a.auth.RequireSignedIn(a.access.HandlePromote))
+	mux.HandleFunc("POST /channels/{id}/access/remove", a.auth.RequireSignedIn(a.access.HandleRemove))
 }
 
 func handleHealthz(w http.ResponseWriter, r *http.Request) {
