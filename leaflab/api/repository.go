@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
 	configpb "github.com/whale-net/everything/firmware/proto/config"
 	"google.golang.org/protobuf/encoding/protojson"
@@ -105,18 +106,24 @@ type BoardRow struct {
 	DeviceID string
 }
 
-// ListBoardsWithState returns every board (FR4 — no owner filtering, no
-// ownership table read at all) along with the most recent recorded_at across
-// all of its sensors' readings. LastReadingAt is nil when the board has no
-// readings at all — including boards with zero sensors.
+// ListBoardsWithState returns every board (FR4 — no owner filtering of which
+// boards appear) along with the most recent recorded_at across all of its
+// sensors' readings, plus M2's read-side ownership fields (#1765: BoardName,
+// Owner). LastReadingAt is nil when the board has no readings at all —
+// including boards with zero sensors.
 //
-// Reads from v_board_last_reading rather than joining board/sensor/
-// sensor_reading directly: sensor_reading is a TimescaleDB hypertable with no
-// upper bound on size, and a plain MAX(sr.recorded_at) GROUP BY join scans
-// every reading ever recorded on every call. The view resolves each sensor's
-// latest reading via a LATERAL ORDER BY ... LIMIT 1, which
-// idx_sensor_reading_sensor_id(sensor_id, recorded_at DESC) answers in O(1)
-// per sensor instead of O(total readings).
+// Reads the reporting-state half from v_board_last_reading rather than
+// joining board/sensor/sensor_reading directly: sensor_reading is a
+// TimescaleDB hypertable with no upper bound on size, and a plain
+// MAX(sr.recorded_at) GROUP BY join scans every reading ever recorded on
+// every call. The view resolves each sensor's latest reading via a LATERAL
+// ORDER BY ... LIMIT 1, which idx_sensor_reading_sensor_id(sensor_id,
+// recorded_at DESC) answers in O(1) per sensor instead of O(total readings).
+// The ownership half is added as two LEFT JOINs on top of that view's
+// result, both single-row-per-board lookups keyed on indexed columns
+// (idx_board_owner_history_current's partial UNIQUE(board_id) WHERE
+// valid_to IS NULL, and leaflab_user's primary key) — this does not turn the
+// query back into an unbounded scan.
 //
 // Deliberately does not read board.last_seen_at or sensor.last_seen_at (see
 // #1497): neither is bumped by readings, so neither is a liveness signal.
@@ -124,9 +131,15 @@ type BoardRow struct {
 // arriving", not "is the data good".
 func (r *Repository) ListBoardsWithState(ctx context.Context) ([]BoardWithReadingRow, error) {
 	rows, err := r.db.Query(ctx, `
-		SELECT board_id, device_id, last_reading_at
-		FROM v_board_last_reading
-		ORDER BY board_id
+		SELECT
+			v.board_id, v.device_id, v.last_reading_at,
+			b.name,
+			boh.leaflab_user_id, u.display_name, u.preferred_username, u.email
+		FROM v_board_last_reading v
+		JOIN board b ON b.board_id = v.board_id
+		LEFT JOIN board_owner_history boh ON boh.board_id = v.board_id AND boh.valid_to IS NULL
+		LEFT JOIN leaflab_user u ON u.leaflab_user_id = boh.leaflab_user_id
+		ORDER BY v.board_id
 	`)
 	if err != nil {
 		return nil, fmt.Errorf("list boards with state: %w", err)
@@ -135,35 +148,107 @@ func (r *Repository) ListBoardsWithState(ctx context.Context) ([]BoardWithReadin
 
 	var boards []BoardWithReadingRow
 	for rows.Next() {
-		var b BoardWithReadingRow
-		if err := rows.Scan(&b.BoardID, &b.DeviceID, &b.LastReadingAt); err != nil {
+		var (
+			b                 BoardWithReadingRow
+			ownerID           *int64
+			displayName       *string
+			preferredUsername *string
+			email             *string
+		)
+		if err := rows.Scan(&b.BoardID, &b.DeviceID, &b.LastReadingAt, &b.BoardName,
+			&ownerID, &displayName, &preferredUsername, &email); err != nil {
 			return nil, fmt.Errorf("scan board with state: %w", err)
 		}
+		b.Owner = ownerRowFromScan(ownerID, displayName, preferredUsername, email)
 		boards = append(boards, b)
 	}
 	return boards, rows.Err()
 }
 
 // BoardWithReadingRow is one board plus the max recorded_at across all of its
-// sensors' readings. LastReadingAt is nil when the board has no readings.
+// sensors' readings, plus M2's read-side ownership fields (#1765). BoardName
+// is nil when the board has no name (FR3 — caller falls back to DeviceID).
+// Owner is nil when the board is unowned — never a sentinel user id.
+// LastReadingAt is nil when the board has no readings.
 type BoardWithReadingRow struct {
 	BoardID       int64
 	DeviceID      string
 	LastReadingAt *time.Time
+	BoardName     *string
+	Owner         *OwnerRow
 }
 
-// GetBoardIdentity returns a board's device_id, or pgx.ErrNoRows (unwrapped,
-// so callers can errors.Is against it directly) when board_id is unknown.
-func (r *Repository) GetBoardIdentity(ctx context.Context, boardID int64) (string, error) {
-	var deviceID string
-	err := r.db.QueryRow(ctx, `SELECT device_id FROM board WHERE board_id = $1`, boardID).Scan(&deviceID)
+// OwnerRow is the repository-side projection of a board's current owner,
+// joined from board_owner_history (via its open-interval predicate) and
+// leaflab_user. Mirrors api.proto's LeafLabUser message but never carries
+// oidc_sub (NFR5) — server.go's ownerToProto is the only place this is
+// turned into wire content.
+type OwnerRow struct {
+	LeafLabUserID     int64
+	DisplayName       string
+	PreferredUsername string
+	Email             string
+}
+
+// ownerRowFromScan builds an *OwnerRow from a LEFT JOIN board_owner_history/
+// leaflab_user scan, or nil when ownerID is nil (no open ownership row --
+// the board is unowned). display_name/preferred_username/email are
+// nullable columns on leaflab_user (013_ownership.up.sql); a NULL scans to
+// the wire-safe "" rather than propagating a nil into the response.
+func ownerRowFromScan(ownerID *int64, displayName, preferredUsername, email *string) *OwnerRow {
+	if ownerID == nil {
+		return nil
+	}
+	o := &OwnerRow{LeafLabUserID: *ownerID}
+	if displayName != nil {
+		o.DisplayName = *displayName
+	}
+	if preferredUsername != nil {
+		o.PreferredUsername = *preferredUsername
+	}
+	if email != nil {
+		o.Email = *email
+	}
+	return o
+}
+
+// GetBoardIdentity returns a board's identity plus M2's read-side ownership
+// fields (#1765: BoardName, Owner), or pgx.ErrNoRows (unwrapped, so callers
+// can errors.Is against it directly) when board_id is unknown.
+func (r *Repository) GetBoardIdentity(ctx context.Context, boardID int64) (BoardIdentity, error) {
+	var (
+		bi                BoardIdentity
+		ownerID           *int64
+		displayName       *string
+		preferredUsername *string
+		email             *string
+	)
+	err := r.db.QueryRow(ctx, `
+		SELECT
+			b.device_id, b.name,
+			boh.leaflab_user_id, u.display_name, u.preferred_username, u.email
+		FROM board b
+		LEFT JOIN board_owner_history boh ON boh.board_id = b.board_id AND boh.valid_to IS NULL
+		LEFT JOIN leaflab_user u ON u.leaflab_user_id = boh.leaflab_user_id
+		WHERE b.board_id = $1
+	`, boardID).Scan(&bi.DeviceID, &bi.BoardName, &ownerID, &displayName, &preferredUsername, &email)
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
-			return "", err
+			return BoardIdentity{}, err
 		}
-		return "", fmt.Errorf("get board identity for %d: %w", boardID, err)
+		return BoardIdentity{}, fmt.Errorf("get board identity for %d: %w", boardID, err)
 	}
-	return deviceID, nil
+	bi.Owner = ownerRowFromScan(ownerID, displayName, preferredUsername, email)
+	return bi, nil
+}
+
+// BoardIdentity is a board's device_id plus M2's read-side ownership fields
+// (#1765). BoardName is nil when the board has no name (FR3 — caller falls
+// back to DeviceID). Owner is nil when the board is unowned.
+type BoardIdentity struct {
+	DeviceID  string
+	BoardName *string
+	Owner     *OwnerRow
 }
 
 // ListSensorDetailsForBoard returns every sensor recorded for a board (FR6 —
@@ -304,6 +389,42 @@ func (r *Repository) GetLeafLabUserIDBySub(ctx context.Context, oidcSub string) 
 		return 0, false, fmt.Errorf("get leaflab_user by sub: %w", err)
 	}
 	return id, true, nil
+}
+
+// ErrBoardAlreadyOwned is returned by ClaimBoard when boardID already has
+// an open board_owner_history row -- mapped from Postgres' 23505
+// unique-violation on idx_board_owner_history_current (NFR2). Never
+// returned for any other condition; a genuine DB failure comes back as a
+// plain wrapped error instead.
+var ErrBoardAlreadyOwned = errors.New("board already owned")
+
+// ClaimBoard opens a board_owner_history row for leaflabUserID on boardID
+// (FR1, FR2). Race-safe by construction (NFR2): this is a plain INSERT with
+// no prior read -- resolving a race between two simultaneous claims is left
+// entirely to idx_board_owner_history_current (013_ownership.up.sql's
+// partial UNIQUE index on board_id WHERE valid_to IS NULL), not to an
+// application-level check. Exactly one of two concurrent INSERTs for the
+// same board_id can ever commit; the other fails with SQLSTATE 23505,
+// mapped here to ErrBoardAlreadyOwned via errors.As against *pgconn.PgError
+// (not string-matching, per tools/app_registry/server/repository/postgres/
+// errors.go's translatePgError precedent).
+//
+// Never UPDATEs or closes an existing open row: claiming does not reassign
+// an already-owned board -- that is the admin-only ReassignBoardOwner path
+// (FR12), a distinct RPC this function has no part in.
+func (r *Repository) ClaimBoard(ctx context.Context, boardID, leaflabUserID int64) error {
+	_, err := r.db.Exec(ctx, `
+		INSERT INTO board_owner_history (board_id, leaflab_user_id)
+		VALUES ($1, $2)
+	`, boardID, leaflabUserID)
+	if err != nil {
+		var pgErr *pgconn.PgError
+		if errors.As(err, &pgErr) && pgErr.Code == "23505" {
+			return ErrBoardAlreadyOwned
+		}
+		return fmt.Errorf("claim board %d for user %d: %w", boardID, leaflabUserID, err)
+	}
+	return nil
 }
 
 // GetCurrentBoardOwner returns the leaflab_user_id of a board's current

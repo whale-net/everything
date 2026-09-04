@@ -3,6 +3,7 @@ package main
 import (
 	"fmt"
 	"net/http"
+	"net/url"
 	"strconv"
 
 	"google.golang.org/grpc/codes"
@@ -84,6 +85,10 @@ func (app *App) handleBoardDetail(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Set only by handleClaimBoard's post-claim redirect (#1765) -- empty on
+	// a normal navigation to this page.
+	claimErr := r.URL.Query().Get("claim_error")
+
 	resp, err := app.api.GetBoardDetail(r.Context(), boardID)
 	if err != nil {
 		if st, ok := status.FromError(err); ok {
@@ -113,11 +118,81 @@ func (app *App) handleBoardDetail(w http.ResponseWriter, r *http.Request) {
 		User:  user,
 	}
 
-	// resp.Get*() on a nil resp (the err != nil, non-Unauthenticated/
-	// non-NotFound path above) is safe: generated proto getters nil-check
-	// their receiver and return the zero value.
-	if renderErr := RenderTempl(w, r, "Board Detail", pages.BoardDetail(layoutData, resp.GetBoardId(), resp.GetDeviceId(), resp.GetSensors(), err)); renderErr != nil {
+	// resp is passed through as-is (nil on the err != nil,
+	// non-Unauthenticated/non-NotFound path above) -- pages.BoardDetail's
+	// own comment covers why that's safe: every field access goes through a
+	// generated proto getter, which nil-checks its receiver.
+	if renderErr := RenderTempl(w, r, "Board Detail", pages.BoardDetail(layoutData, resp, err, claimErr)); renderErr != nil {
 		app.log().Error("failed to render board detail page", "board_id", boardID, "err", renderErr)
 		http.Error(w, "Internal server error", http.StatusInternalServerError)
 	}
+}
+
+// handleClaimBoard is the Claim button's POST target (#1765: FR1, FR2),
+// routed at "/boards/{board_id}/claim". It calls ClaimBoard on leaflab-api
+// with the signed-in user's own access token (same NFR2 forwarding as
+// every other app.api call, via htmxauth.Authenticator.WithAccessToken in
+// setupRoutes) and always redirects back to the board's own detail page --
+// there is no dedicated fragment-render endpoint for this button to target
+// (see boards.templ's claimForm doc comment), so a normal POST-redirect-GET
+// is the mechanism, matching the query-param-carried error pattern already
+// used by manmanv2/ui/handlers_sessions.go's handleSessionStart.
+//
+// A codes.FailedPrecondition (already owned, including a re-claim by the
+// current owner) is carried onto the redirect as claim_error and rendered
+// inline by handleBoardDetail/pages.BoardDetail -- never a 500, and never a
+// silent no-op that leaves the page looking like nothing happened.
+func (app *App) handleClaimBoard(w http.ResponseWriter, r *http.Request) {
+	boardID, parseErr := strconv.ParseInt(r.PathValue("board_id"), 10, 64)
+	if parseErr != nil {
+		http.NotFound(w, r)
+		return
+	}
+
+	redirectTo := fmt.Sprintf("/boards/%d", boardID)
+
+	_, err := app.api.ClaimBoard(r.Context(), boardID)
+	if err != nil {
+		if st, ok := status.FromError(err); ok {
+			switch st.Code() {
+			case codes.Unauthenticated:
+				// Same re-authenticate flow as handleBoards/handleBoardDetail's
+				// identical branch -- see handleBoards' comment for why this is
+				// a redirect, not an error page.
+				loginURL := fmt.Sprintf("/auth/login?next=%s", r.URL.RequestURI())
+				if r.Header.Get("HX-Request") == "true" {
+					w.Header().Set("HX-Redirect", loginURL)
+					w.WriteHeader(http.StatusUnauthorized)
+					return
+				}
+				http.Redirect(w, r, loginURL, http.StatusSeeOther)
+				return
+			case codes.NotFound:
+				http.NotFound(w, r)
+				return
+			}
+		}
+		app.log().Info("claim board refused or failed", "board_id", boardID, "err", err)
+		redirectTo += "?claim_error=" + url.QueryEscape(claimErrorMessage(err))
+	}
+
+	if r.Header.Get("HX-Request") == "true" {
+		w.Header().Set("HX-Redirect", redirectTo)
+		w.WriteHeader(http.StatusOK)
+		return
+	}
+	http.Redirect(w, r, redirectTo, http.StatusSeeOther)
+}
+
+// claimErrorMessage renders a ClaimBoard error for display on the board
+// detail page. codes.FailedPrecondition gets a purpose-built "already
+// owned" message (server.go's ClaimBoard doesn't echo the current owner's
+// name on the wire, so this can't say who); anything else falls back to
+// the raw gRPC status message rather than hiding it, consistent with
+// handleBoards'/handleBoardDetail's existing generic-error rendering.
+func claimErrorMessage(err error) string {
+	if st, ok := status.FromError(err); ok && st.Code() == codes.FailedPrecondition {
+		return "This board is already owned."
+	}
+	return "Failed to claim board: " + err.Error()
 }
