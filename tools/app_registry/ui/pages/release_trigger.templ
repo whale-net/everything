@@ -8,6 +8,7 @@ import (
 	"github.com/whale-net/everything/libs/go/htmxui"
 	pb "github.com/whale-net/everything/tools/app_registry/protos"
 	"github.com/whale-net/everything/tools/app_registry/ui/components"
+	appmetapb "github.com/whale-net/everything/tools/appmeta/proto"
 )
 
 // PickerKindDomain/PickerKindApp/PickerKindChart are the "kind:value"
@@ -39,8 +40,20 @@ func PickerToken(kind, value string) string {
 // lockfile"), and vice versa.
 type DomainPickerGroup struct {
 	Domain string
-	Apps   []*pb.App
+	Apps   []PickerApp
 	Charts []*pb.Chart
+}
+
+// PickerApp pairs one releasable app with the chart token(s) it implies --
+// non-empty only for a VIA_CHART app (App.DeployUnit ==
+// DEPLOY_UNIT_CHART, ARCHITECTURE.md "Promotability": its image can't be
+// promoted independently of the chart that composes it). ImpliedChartTokens
+// drives autoSelectRelatedCharts below: checking such an app's box should
+// also check the chart(s) that own it, since releasing the app's image
+// alone doesn't get it deployed.
+type PickerApp struct {
+	App                *pb.App
+	ImpliedChartTokens []string
 }
 
 // BuildDomainPickerGroups groups apps/charts by domain for the picker,
@@ -49,6 +62,20 @@ type DomainPickerGroup struct {
 // own ordering (same rationale as release_scope.go's targetsFromAppsAndCharts
 // sort).
 func BuildDomainPickerGroups(apps []*pb.App, charts []*pb.Chart) []DomainPickerGroup {
+	// chartTokensByAppID indexes every chart's declared composition
+	// (Chart.app_ids -- the same field matrix.go uses to nest a chart's
+	// VIA_CHART child apps) by app ID, so a VIA_CHART app's implied
+	// chart(s) are found by composition membership, not by domain-name
+	// matching (a chart's own Domain happens to agree with its apps'
+	// today, but app_ids is the actual relationship).
+	chartTokensByAppID := make(map[string][]string)
+	for _, c := range charts {
+		tok := PickerToken(PickerKindChart, c.GetFullName())
+		for _, id := range c.GetAppIds() {
+			chartTokensByAppID[id] = append(chartTokensByAppID[id], tok)
+		}
+	}
+
 	byDomain := make(map[string]*DomainPickerGroup)
 	for _, a := range apps {
 		g, ok := byDomain[a.GetDomain()]
@@ -56,7 +83,11 @@ func BuildDomainPickerGroups(apps []*pb.App, charts []*pb.Chart) []DomainPickerG
 			g = &DomainPickerGroup{Domain: a.GetDomain()}
 			byDomain[a.GetDomain()] = g
 		}
-		g.Apps = append(g.Apps, a)
+		pa := PickerApp{App: a}
+		if a.GetDeployUnit() == appmetapb.DeployUnit_DEPLOY_UNIT_CHART {
+			pa.ImpliedChartTokens = chartTokensByAppID[a.GetAppId()]
+		}
+		g.Apps = append(g.Apps, pa)
 	}
 	for _, c := range charts {
 		g, ok := byDomain[c.GetDomain()]
@@ -76,7 +107,7 @@ func BuildDomainPickerGroups(apps []*pb.App, charts []*pb.Chart) []DomainPickerG
 	groups := make([]DomainPickerGroup, 0, len(domains))
 	for _, d := range domains {
 		g := *byDomain[d]
-		sort.Slice(g.Apps, func(i, j int) bool { return g.Apps[i].GetFullName() < g.Apps[j].GetFullName() })
+		sort.Slice(g.Apps, func(i, j int) bool { return g.Apps[i].App.GetFullName() < g.Apps[j].App.GetFullName() })
 		sort.Slice(g.Charts, func(i, j int) bool { return g.Charts[i].GetFullName() < g.Charts[j].GetFullName() })
 		groups = append(groups, g)
 	}
@@ -261,6 +292,26 @@ templ ReleaseTrigger(user *htmxauth.UserInfo, s ReleaseTriggerViewState) {
 	}
 }
 
+// autoSelectRelatedCharts is a templ script template (same pattern as
+// components.copyDigest): checking a VIA_CHART app's box also checks the
+// chart(s) that compose it (chartTokens -- PickerApp.ImpliedChartTokens),
+// since releasing the app's image alone doesn't get it deployed
+// (ARCHITECTURE.md "Promotability"). Unchecking the app deliberately does
+// NOT uncheck the chart(s) -- the operator may have independently wanted
+// the chart released, and un-selecting it as a side effect would be
+// surprising.
+script autoSelectRelatedCharts(chartTokens []string) {
+	if (!event.target.checked) {
+		return;
+	}
+	for (const tok of chartTokens) {
+		const el = document.querySelector('input[type="checkbox"][name="target"][value="' + CSS.escape(tok) + '"]');
+		if (el) {
+			el.checked = true;
+		}
+	}
+}
+
 templ domainPickerGroupView(g DomainPickerGroup, selected map[string]bool) {
 	<div class="card bg-base-100 border border-base-300 shadow-sm">
 		<div class="card-body py-3">
@@ -269,10 +320,14 @@ templ domainPickerGroupView(g DomainPickerGroup, selected map[string]bool) {
 				<span class="label-text font-semibold">{ g.Domain } (all)</span>
 			</label>
 			<div class="flex flex-wrap gap-x-6 gap-y-1 pl-8">
-				for _, a := range g.Apps {
+				for _, pa := range g.Apps {
 					<label class="label cursor-pointer justify-start gap-2 p-0">
-						<input type="checkbox" name="target" value={ PickerToken(PickerKindApp, a.GetFullName()) } class="checkbox checkbox-sm" checked?={ selected[PickerToken(PickerKindApp, a.GetFullName())] }/>
-						<span class="label-text font-mono text-sm">{ a.GetName() }</span>
+						if len(pa.ImpliedChartTokens) > 0 {
+							<input type="checkbox" name="target" value={ PickerToken(PickerKindApp, pa.App.GetFullName()) } class="checkbox checkbox-sm" checked?={ selected[PickerToken(PickerKindApp, pa.App.GetFullName())] } onchange={ autoSelectRelatedCharts(pa.ImpliedChartTokens) }/>
+						} else {
+							<input type="checkbox" name="target" value={ PickerToken(PickerKindApp, pa.App.GetFullName()) } class="checkbox checkbox-sm" checked?={ selected[PickerToken(PickerKindApp, pa.App.GetFullName())] }/>
+						}
+						<span class="label-text font-mono text-sm">{ pa.App.GetName() }</span>
 					</label>
 				}
 				for _, c := range g.Charts {
