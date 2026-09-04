@@ -7,6 +7,7 @@ erDiagram
     board {
         bigserial board_id PK
         varchar   device_id UK
+        varchar   name
         timestamptz registered_at
         timestamptz last_seen_at
     }
@@ -28,6 +29,8 @@ erDiagram
         jsonb       mux_path
         timestamptz registered_at
         timestamptz last_seen_at
+        int         corrective_push_attempts
+        bigint      corrective_push_outstanding_version
     }
 
     sensor_name_history {
@@ -121,6 +124,14 @@ erDiagram
         timestamptz valid_to
     }
 
+    leaflab_user_role {
+        bigserial   leaflab_user_role_id PK
+        bigint      leaflab_user_id FK
+        text        role
+        timestamptz valid_from
+        timestamptz valid_to
+    }
+
     board            ||--o{ sensor               : "hosts"
     sensor_type      ||--o{ sensor               : "classifies"
     region           |o--o{ sensor               : "current placement"
@@ -137,6 +148,7 @@ erDiagram
     board            ||--o{ board_owner_history  : "ownership history"
     leaflab_user     ||--o{ board_owner_history  : "owns"
     leaflab_user     |o--o{ region               : "current owner"
+    leaflab_user     ||--o{ leaflab_user_role    : "role grant history"
 ```
 
 Ownership (`leaflab_user`, `board_owner_history`, and the `owner_leaflab_user_id`
@@ -145,6 +157,33 @@ but interactive sign-in — no row exists in any of these until FR2/C25 land.
 `plant` is omitted from the diagram above along with `plant_type` (existing
 gap, reconciled in M4 per `leaflab/product/03-roadmap.md`), but it gains the
 same nullable `owner_leaflab_user_id FK` as `region`.
+
+`board.name` is a plain current-value column, not a history table, by
+design (FR3, migration 016) -- board name is not an attribution dimension
+for any reading, matching `region.name`'s precedent under LB6. `NULL` means
+"no name set, display `device_id`"; non-empty is enforced in the API layer,
+not by a check constraint.
+
+`leaflab_user_role` (FR10, migration 016) is leaflab-local role storage --
+it is never read from OIDC `realm_access.roles`. It is SCD2-shaped like
+`board_owner_history`: granting, revoking, and re-granting a role preserves
+the closed row rather than erasing the fact that it was once granted. After
+migration 016 runs, exactly one `leaflab_user` row (the one with the
+lowest `leaflab_user_id`, if any exist at migration time) holds an open
+`'admin'` grant, so FR10's "at least one admin, no UI action needed"
+invariant holds without further setup; the zero-users case is bootstrapped
+separately on first sign-in.
+
+`sensor.corrective_push_attempts` and
+`sensor.corrective_push_outstanding_version` (NFR4, migration 016) back the
+corrective-push retry budget. This state lives on the `sensor` row in
+Postgres rather than in `leaflab-processor`'s in-memory `SensorCache`,
+because the processor is `release_app(..., replicas = 1)` and routine
+redeploys restart it -- an in-memory counter would hand a device that never
+persists to NVS a fresh attempt budget on every deploy.
+`corrective_push_outstanding_version` is `NULL` when no corrective push is
+outstanding, and otherwise holds the `device_config.version` of a push
+issued but not yet acked.
 
 ---
 
@@ -271,6 +310,8 @@ SCD2 tables in this schema:
 | `sensor_name_history` | Sensor logical name |
 | `sensor_region_history` | Sensor region assignment |
 | `sensor_hw_history` | Sensor I2C address + mux path |
+| `board_owner_history` | Board ownership (`leaflab_user_id`) |
+| `leaflab_user_role` | leaflab-local role grants (e.g. `'admin'`) -- not OIDC-derived |
 
 `device_config` is NOT SCD2 — it is an append-only event log keyed by `(board_id, version)`. The view `v_board_state_history` derives a SCD2-shaped representation from it using a window function.
 
