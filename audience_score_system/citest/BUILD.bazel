@@ -23,7 +23,10 @@ go_test(
     name = "e2e_test",
     size = "large",
     timeout = "long",
-    srcs = ["e2e_test.go"],
+    srcs = [
+        "e2e_test.go",
+        "m2_multi_channel_test.go",
+    ],
     gotags = ["integration"],
     tags = [
         "external",
@@ -39,6 +42,7 @@ go_test(
         "//audience_score_system/migrate/schema",
         "//audience_score_system/store",
         "//audience_score_system/tokens",
+        "//audience_score_system/web/access",
         "//audience_score_system/web/auth",
         "//audience_score_system/web/invite",
         "//audience_score_system/web/schedule",

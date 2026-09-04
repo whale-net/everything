@@ -128,6 +128,7 @@ import (
 	"github.com/whale-net/everything/audience_score_system/migrate/schema"
 	"github.com/whale-net/everything/audience_score_system/store"
 	"github.com/whale-net/everything/audience_score_system/tokens"
+	"github.com/whale-net/everything/audience_score_system/web/access"
 	"github.com/whale-net/everything/audience_score_system/web/auth"
 	"github.com/whale-net/everything/audience_score_system/web/invite"
 	"github.com/whale-net/everything/audience_score_system/web/schedule"
@@ -187,11 +188,25 @@ func newWorld(t *testing.T) *world {
 	a := auth.NewForTests(st.Persons(), sessions)
 	inv := invite.New(st, sessions)
 	sch := schedule.New(st)
+	acc := access.New(st)
 
 	// web router: mirrors web/main.go's setupRoutes for exactly the
 	// routes this loop drives (invite generate/resume, schedule approve/
-	// unapprove/edit) -- same pattern as web/invite/invite_integration_test.go
-	// and web/schedule/schedule_integration_test.go.
+	// unapprove/edit, M2's access-management page) -- same pattern as
+	// web/invite/invite_integration_test.go, web/schedule/
+	// schedule_integration_test.go, and web/access/access_integration_test.go.
+	// GET /channels (FR26) and GET /my-work (FR27) are deliberately NOT
+	// mirrored here: both handlers live inline on web/main.go's own `app`
+	// type (package main, not importable) rather than in a dedicated
+	// package like access/invite/schedule -- see web/channels_integration_test.go
+	// and web/my_work_integration_test.go for their own HTTP-level
+	// coverage. This file instead drives their exact data sources
+	// directly (store.AccessStore.ChannelsWithRoleForPerson,
+	// store.MyWorkStore.SummariesForPerson) -- identical to what those
+	// two handlers call -- and cross-checks the MCP equivalents
+	// (list_channels, get_my_work) against them, which is what proves
+	// "web and MCP agree" for those two capabilities absent a directly
+	// drivable web handler.
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /invites/{code}", inv.HandleShow)
 	mux.HandleFunc("POST /channels/{id}/invites", a.RequireSignedIn(inv.HandleGenerate))
@@ -202,17 +217,25 @@ func newWorld(t *testing.T) *world {
 	mux.HandleFunc("POST /schedule/{entryID}/approve", a.RequireSignedIn(sch.HandleApprove))
 	mux.HandleFunc("POST /schedule/{entryID}/unapprove", a.RequireSignedIn(sch.HandleUnapprove))
 	mux.HandleFunc("POST /schedule/{entryID}/edit", a.RequireSignedIn(sch.HandleEdit))
+	mux.HandleFunc("GET /channels/{id}/access", a.RequireSignedIn(acc.HandleShow))
+	mux.HandleFunc("POST /channels/{id}/access/invites", a.RequireSignedIn(acc.HandleInviteCoCreator))
+	mux.HandleFunc("POST /channels/{id}/access/promote", a.RequireSignedIn(acc.HandlePromote))
+	mux.HandleFunc("POST /channels/{id}/access/remove", a.RequireSignedIn(acc.HandleRemove))
 
 	// mcp server: mirrors mcp/main.go's tool registration exactly.
 	srv := mcpserver.New(st)
 	reg := mcpserver.NewRegistry(srv, st)
 	mcptools.RegisterWhoami(reg)
+	mcptools.RegisterListChannels(reg, st.Access())
 	mcptools.RegisterResearch(reg, st)
 	mcptools.RegisterVerdict(reg, st)
 	mcptools.RegisterGetChannelSchedule(reg, st.Sync())
 	mcptools.RegisterScheduleDraft(reg, st)
 	mcptools.RegisterMatches(reg, st)
 	mcptools.RegisterBrowse(reg, st)
+	mcptools.RegisterAccess(reg, st)
+	mcptools.RegisterMyWork(reg, st.MyWork())
+	mcptools.RegisterChannelAccess(reg, st.Access(), st.Roles())
 	mcpHandler := mcpserver.NewHTTPHandler(srv, creds, mcpserver.ResourceMetadataConfig{
 		Resource:            "https://mcp.example.com",
 		AuthorizationServer: "https://web.example.com",
