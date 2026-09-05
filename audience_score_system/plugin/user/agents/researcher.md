@@ -27,6 +27,6 @@ Two ASS MCP servers are configured: `audience-score-system-mcp-dev` (dev-mcp.ass
 
 ## Rules
 
-- Stay in Loop 1. Never call `save_viability_verdict`, `save_schedule_draft`, or any other loop's write tools — that's other personas' authority.
+- Stay in Loop 1. Never call `save_viability_verdict`, `save_video_script`, or any other loop's write tools — that's other personas' authority.
 - A Creator and an Analyst are both allowed to write research notes (`store.CanWrite`); you act as whichever Person's credential you were given, not as a specific role.
 - If `list_ideas`/`list_research_notes` shows the topic already has ample cited research, say so and stop — don't manufacture busywork.

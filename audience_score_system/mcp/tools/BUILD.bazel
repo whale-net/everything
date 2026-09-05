@@ -18,8 +18,8 @@ go_library(
         "matches.go",
         "my_work.go",
         "research.go",
-        "schedule_draft.go",
         "strategy.go",
+        "strategy_time.go",
         "sync_trigger.go",
         "verdict.go",
         "video_script.go",
@@ -51,7 +51,6 @@ go_test(
     srcs = [
         "access_test.go",
         "research_test.go",
-        "schedule_draft_test.go",
         "strategy_test.go",
         "sync_trigger_test.go",
         "verdict_test.go",
@@ -184,59 +183,6 @@ go_test(
     size = "large",
     timeout = "long",
     srcs = ["matches_integration_test.go"],
-    gotags = ["integration"],
-    tags = [
-        "external",
-        "integration",
-        "manual",
-        "no-cache",
-        "no-sandbox",
-        "requires-network",
-    ],
-    deps = [
-        ":tools",
-        "//audience_score_system/mcp/server",
-        "//audience_score_system/migrate/schema",
-        "//audience_score_system/store",
-        "//libs/go/dbtest",
-        "//libs/go/mcpauth",
-        "//libs/go/migrate",
-        "@com_github_google_uuid//:uuid",
-        "@com_github_jackc_pgx_v5//pgxpool",
-        "@com_github_jackc_pgx_v5//stdlib",
-        "@com_github_modelcontextprotocol_go_sdk//mcp",
-        "@com_github_stretchr_testify//assert",
-        "@com_github_stretchr_testify//require",
-    ],
-)
-
-# set_pacing_policy/get_pacing_policy/get_drafting_context/
-# save_schedule_draft/list_schedule_entries (schedule_draft.go, issue
-# #1579): FR17's upsert convergence (repeated calls -> one row, same ID,
-# identical content -- NFR2), save_schedule_draft's LB3 verdict-version
-# binding (read back directly from ScheduleStore.GetByID, not just what the
-# tool rendered) including newer-vs-explicit-older-verdict_id binding,
-# FR16's viable-verdict gate rejecting not-viable/needs-more-research/
-# absent verdicts and a cross-idea verdict_id with nothing written, FR18's
-# non-blocking cadence_exceeded/off_preferred_day/collision flags (each
-# proven still-persists-the-draft), flags recomputed fresh on an
-# idempotent replay rather than cached from the first save (LB4),
-# Creator+Analyst write / unassociated-Person-denied authz on both
-# set_pacing_policy and save_schedule_draft, get_drafting_context's
-# explicit-null-vs-zero-value policy rendering, and list_schedule_entries --
-# all against the real embedded schema and a real HTTP-hosted MCP server,
-# mirroring verdict_integration_test.go's pattern. Deliberately NOT part of
-# `bazel test //...` -- see //libs/go/dbtest's README for the full
-# rationale.
-#
-# Run it explicitly (requires a working Docker daemon):
-#   bazel test //audience_score_system/mcp/tools:schedule_draft_integration_test --test_output=all
-go_test(
-    # keep
-    name = "schedule_draft_integration_test",
-    size = "large",
-    timeout = "long",
-    srcs = ["schedule_draft_integration_test.go"],
     gotags = ["integration"],
     tags = [
         "external",
