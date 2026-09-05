@@ -873,6 +873,148 @@ func TestVerdictStore_Append_TwiceYieldsTwoVersions_FirstRowUnchanged(t *testing
 	assert.True(t, history[0].Version < history[1].Version, "History must be ordered by version ascending")
 }
 
+// ── VerdictStore.Append's Source handling (migration 015, M4.1 FR5/NFR4) ───
+
+func TestVerdictStore_Append_SourceHuman_RoundTripsThroughGetByIDCurrentAndHistory(t *testing.T) {
+	ctx := context.Background()
+	s, _ := newStore(t)
+	ch, creator := setupChannel(t, ctx, s)
+	idea, err := s.Ideas().Create(ctx, ch.ID, "Human-authored verdict idea", creator.ID)
+	require.NoError(t, err)
+
+	v, err := s.Verdicts().Append(ctx, store.AppendVerdictInput{
+		IdeaID: idea.ID, Verdict: store.VerdictViable,
+		Reasoning: "human reviewer signed off", AuthorPersonID: creator.ID,
+		Source: store.VerdictSourceHuman,
+	})
+	require.NoError(t, err)
+	assert.Equal(t, store.VerdictSourceHuman, v.Source, "Append must round-trip an explicit VerdictSourceHuman on its own return value")
+
+	byID, err := s.Verdicts().GetByID(ctx, v.ID)
+	require.NoError(t, err)
+	assert.Equal(t, store.VerdictSourceHuman, byID.Source, "GetByID must round-trip source")
+
+	current, err := s.Verdicts().Current(ctx, idea.ID)
+	require.NoError(t, err)
+	assert.Equal(t, store.VerdictSourceHuman, current.Source, "Current (v_current_verdict) must round-trip source")
+
+	history, err := s.Verdicts().History(ctx, idea.ID)
+	require.NoError(t, err)
+	require.Len(t, history, 1)
+	assert.Equal(t, store.VerdictSourceHuman, history[0].Source, "History must round-trip source")
+}
+
+func TestVerdictStore_Append_SourceAgent_RoundTripsThroughGetByIDCurrentAndHistory(t *testing.T) {
+	ctx := context.Background()
+	s, _ := newStore(t)
+	ch, creator := setupChannel(t, ctx, s)
+	idea, err := s.Ideas().Create(ctx, ch.ID, "Agent-authored verdict idea", creator.ID)
+	require.NoError(t, err)
+
+	v, err := s.Verdicts().Append(ctx, store.AppendVerdictInput{
+		IdeaID: idea.ID, Verdict: store.VerdictViable,
+		Reasoning: "agent-authored verdict", AuthorPersonID: creator.ID,
+		Source: store.VerdictSourceAgent,
+	})
+	require.NoError(t, err)
+	assert.Equal(t, store.VerdictSourceAgent, v.Source)
+
+	byID, err := s.Verdicts().GetByID(ctx, v.ID)
+	require.NoError(t, err)
+	assert.Equal(t, store.VerdictSourceAgent, byID.Source)
+
+	current, err := s.Verdicts().Current(ctx, idea.ID)
+	require.NoError(t, err)
+	assert.Equal(t, store.VerdictSourceAgent, current.Source)
+
+	history, err := s.Verdicts().History(ctx, idea.ID)
+	require.NoError(t, err)
+	require.Len(t, history, 1)
+	assert.Equal(t, store.VerdictSourceAgent, history[0].Source)
+}
+
+func TestVerdictStore_Append_EmptySource_StoresAgent(t *testing.T) {
+	ctx := context.Background()
+	s, _ := newStore(t)
+	ch, creator := setupChannel(t, ctx, s)
+	idea, err := s.Ideas().Create(ctx, ch.ID, "Empty-source verdict idea", creator.ID)
+	require.NoError(t, err)
+
+	v, err := s.Verdicts().Append(ctx, store.AppendVerdictInput{
+		IdeaID: idea.ID, Verdict: store.VerdictViable,
+		Reasoning: "pre-FR5-style caller, no Source set", AuthorPersonID: creator.ID,
+		// Source deliberately left zero-value.
+	})
+	require.NoError(t, err)
+	assert.Equal(t, store.VerdictSourceAgent, v.Source, "Append must normalize an empty Source to VerdictSourceAgent, so pre-FR5 callers/fixtures keep working")
+
+	byID, err := s.Verdicts().GetByID(ctx, v.ID)
+	require.NoError(t, err)
+	assert.Equal(t, store.VerdictSourceAgent, byID.Source)
+}
+
+func TestVerdictStore_Append_InvalidSource_ErrorsAndInsertsNothing(t *testing.T) {
+	ctx := context.Background()
+	s, _ := newStore(t)
+	ch, creator := setupChannel(t, ctx, s)
+	idea, err := s.Ideas().Create(ctx, ch.ID, "Invalid-source verdict idea", creator.ID)
+	require.NoError(t, err)
+
+	_, err = s.Verdicts().Append(ctx, store.AppendVerdictInput{
+		IdeaID: idea.ID, Verdict: store.VerdictViable,
+		Reasoning: "should never land", AuthorPersonID: creator.ID,
+		Source: store.VerdictSource("bogus"),
+	})
+	require.ErrorIs(t, err, store.ErrInvalidVerdictSource, "an invalid Source must be rejected with ErrInvalidVerdictSource")
+
+	history, err := s.Verdicts().History(ctx, idea.ID)
+	require.NoError(t, err)
+	assert.Empty(t, history, "a rejected Append must not have inserted a row at all")
+
+	// The version counter must not have advanced either: a subsequent
+	// valid Append must still allocate version 1, not 2.
+	v, err := s.Verdicts().Append(ctx, store.AppendVerdictInput{
+		IdeaID: idea.ID, Verdict: store.VerdictViable,
+		Reasoning: "first real verdict after the rejected attempt", AuthorPersonID: creator.ID,
+	})
+	require.NoError(t, err)
+	assert.Equal(t, 1, v.Version, "a rejected Append with an invalid Source must not have advanced the version counter")
+}
+
+func TestVerdictStore_Append_IdempotentReplay_ReturnsOriginalSourceNotReplayers(t *testing.T) {
+	ctx := context.Background()
+	s, _ := newStore(t)
+	ch, creator := setupChannel(t, ctx, s)
+	idea, err := s.Ideas().Create(ctx, ch.ID, "Replayed verdict idea", creator.ID)
+	require.NoError(t, err)
+
+	original, err := s.Verdicts().Append(ctx, store.AppendVerdictInput{
+		IdeaID: idea.ID, Verdict: store.VerdictViable,
+		Reasoning: "original agent-authored write", AuthorPersonID: creator.ID,
+		IdempotencyKey: "replay-key-source-test",
+		Source:         store.VerdictSourceAgent,
+	})
+	require.NoError(t, err)
+	require.Equal(t, store.VerdictSourceAgent, original.Source)
+
+	// Replay the identical (idea, key) pair, but with a different Source --
+	// the replay must return the original row (and its original Source),
+	// never the replayer's.
+	replayed, err := s.Verdicts().Append(ctx, store.AppendVerdictInput{
+		IdeaID: idea.ID, Verdict: store.VerdictViable,
+		Reasoning: "original agent-authored write", AuthorPersonID: creator.ID,
+		IdempotencyKey: "replay-key-source-test",
+		Source:         store.VerdictSourceHuman,
+	})
+	require.NoError(t, err)
+	assert.Equal(t, original.ID, replayed.ID, "a replayed idempotency key must return the original row, not a new one")
+	assert.Equal(t, store.VerdictSourceAgent, replayed.Source, "a replay must report the original author's Source, never the replayer's")
+
+	history, err := s.Verdicts().History(ctx, idea.ID)
+	require.NoError(t, err)
+	require.Len(t, history, 1, "a replay must not append a second version")
+}
+
 // ── StrategyStore (issue #1637, FR47 #1833) ─────────────────────────────────
 //
 // StrategyStore.Save/GetByID/ListByChannel round-trip through `strategy`
@@ -1583,9 +1725,10 @@ func ptrInt64(v int64) *int64        { return &v }
 // #1823/#1824), again for 011 (strategy.cadence drop, FR47, #1833), again
 // for 012 (v_prediction_vs_outcome's re-anchor onto video_script, FR44,
 // #1830), again for 013 (pacing_policy/schedule_entry drop, FR41/
-// FR45, #1835), and again for 014 (outcome_bar, C14/FR1/FR2/NFR1, #1882),
-// so the version assertion and table list below cover all of them rather
-// than any single one.
+// FR45, #1835), again for 014 (outcome_bar, C14/FR1/FR2/NFR1, #1882), and
+// again for 015 (viability_verdict.source, M4.1 FR5/NFR4, #1898), so the
+// version assertion and table list below cover all of them rather than
+// any single one.
 func TestMigrations_UpDownUp_LeavesNoOrphanObjects(t *testing.T) {
 	ctx := context.Background()
 	db := dbtest.NewPostgres(ctx, t, dbtest.Options{})
@@ -1602,7 +1745,7 @@ func TestMigrations_UpDownUp_LeavesNoOrphanObjects(t *testing.T) {
 	version, dirty, err := runner.Version()
 	require.NoError(t, err)
 	assert.False(t, dirty)
-	assert.Equal(t, uint(14), version, "highest migration in schema.Migrations is 014_outcome_bar")
+	assert.Equal(t, uint(15), version, "highest migration in schema.Migrations is 015_verdict_source")
 
 	for _, tbl := range []string{
 		"person", "channel", "channel_person", "channel_invite",
@@ -1996,13 +2139,22 @@ func TestMigration011_DropStrategyCadence_UpDropsColumn_DownBackfillsDefault(t *
 	ch, creator := setupChannel(t, ctx, s)
 	idea, err := s.Ideas().Create(ctx, ch.ID, "Migration 011 Idea", creator.ID)
 	require.NoError(t, err)
-	verdict, err := s.Verdicts().Append(ctx, store.AppendVerdictInput{
-		IdeaID: idea.ID, Verdict: store.VerdictViable, Reasoning: "viable for migration 011 test", AuthorPersonID: creator.ID,
-	})
-	require.NoError(t, err)
+	// The schema is only migrated to 11 here -- viability_verdict.source
+	// doesn't exist yet (that's migration 015) -- VerdictStore.Append, as
+	// of #1898, always writes it, so it cannot run against this pre-015
+	// schema. Seed the row by SQL directly instead, exactly as a pre-015
+	// caller would have, mirroring video_script_integration_test.go's
+	// pre-010 seeds for the same reason (a current store method that can't
+	// write a historical schema shape).
+	var verdictID uuid.UUID
+	require.NoError(t, db.Pool.QueryRow(ctx, `
+		INSERT INTO viability_verdict (idea_id, version, verdict, reasoning, author_person_id)
+		VALUES ($1, 1, $2, $3, $4)
+		RETURNING id
+	`, idea.ID, store.VerdictViable, "viable for migration 011 test", creator.ID).Scan(&verdictID))
 	saved, err := s.Strategies().Save(ctx, store.SaveStrategyInput{
 		ChannelID: ch.ID, Title: "Pre-down Strategy", Active: true,
-		VerdictIDs: []uuid.UUID{verdict.ID}, CreatedByPersonID: creator.ID,
+		VerdictIDs: []uuid.UUID{verdictID}, CreatedByPersonID: creator.ID,
 	})
 	require.NoError(t, err)
 

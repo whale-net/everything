@@ -620,7 +620,14 @@ Migration 002 (`002_research_schedule_outcome.up.sql`, issue #1569) lands
 the LB3 record chain: idea, research notes, viability verdicts (append-only
 version log, not SCD2 -- see `AGENTS.md`'s SCD2 event-log exclusion),
 pacing policy, schedule entries, synced videos/metrics, and pending
-matches, plus the `mcp_idempotency` ledger (NFR2/LB4).
+matches, plus the `mcp_idempotency` ledger (NFR2/LB4). Migration 015
+(`015_verdict_source.up.sql`, M4.1 FR5/NFR4, issue #1898) adds
+`viability_verdict.source` (`agent` or `human`, `NOT NULL DEFAULT
+'agent'`) -- an authorship marker distinguishing a verdict written via
+MCP's `save_viability_verdict` from one written via the web save-verdict
+form (#1901), on the record itself; the `DEFAULT` deterministically
+backfills every pre-existing row to `agent` in the same statement that
+adds the column (NFR4).
 
 Migration 008 (`008_strategy.up.sql`, issue #1637) lands `strategy` and
 `strategy_verdict`. A Strategy is built directly from one or more

@@ -176,8 +176,25 @@ const (
 	VerdictNeedsMoreResearch VerdictValue = "needs-more-research"
 )
 
-// Verdict is one row of `viability_verdict` (migration 002) -- an
-// append-only version log (FR12), never UPDATEd. See VerdictStore.Append.
+// VerdictSource is `viability_verdict.source` (migration 015, M4.1 FR5/
+// NFR4) -- which surface authored this Verdict version. Distinct from
+// AuthorPersonID: Source names the surface (agent vs. human), while
+// AuthorPersonID always names the calling Person either way.
+type VerdictSource string
+
+const (
+	// VerdictSourceAgent is a verdict written via MCP's
+	// save_viability_verdict -- every call site pre-M4.1, and still the
+	// explicit value save_viability_verdict sets today.
+	VerdictSourceAgent VerdictSource = "agent"
+	// VerdictSourceHuman is a verdict written via M4.1's web save-verdict
+	// form (FR4, issue #1901).
+	VerdictSourceHuman VerdictSource = "human"
+)
+
+// Verdict is one row of `viability_verdict` (migration 002; `source` added
+// by migration 015, FR5) -- an append-only version log (FR12), never
+// UPDATEd. See VerdictStore.Append.
 type Verdict struct {
 	ID             uuid.UUID
 	IdeaID         uuid.UUID
@@ -191,6 +208,8 @@ type Verdict struct {
 	// `verdict_citation` -- populated on read by joining that table, not a
 	// column on `viability_verdict` itself.
 	CitedResearchNoteIDs []uuid.UUID
+	// Source is FR5's authorship marker: agent (MCP) or human (web form).
+	Source VerdictSource
 }
 
 // PrivacyStatus is `synced_video.privacy_status` (migration 002, FR14).

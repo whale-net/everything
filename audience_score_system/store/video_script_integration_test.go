@@ -479,10 +479,19 @@ func TestMigration010_ScheduleEntryBackfill_DerivesStrategyDropsUngroundable(t *
 	// -- Groundable: verdict1 grounds strategy1 via strategy_verdict. -------
 	idea1, err := s.Ideas().Create(ctx, ch.ID, "Groundable Idea", creator.ID)
 	require.NoError(t, err)
-	verdict1, err := s.Verdicts().Append(ctx, store.AppendVerdictInput{
-		IdeaID: idea1.ID, Verdict: store.VerdictViable, Reasoning: "groundable", AuthorPersonID: creator.ID,
-	})
-	require.NoError(t, err)
+	// The schema is only migrated to 9 here -- viability_verdict.source
+	// doesn't exist yet (that's migration 015) -- VerdictStore.Append, as
+	// of #1898, always writes it, so it cannot run against this pre-015
+	// schema. Seed the row by SQL directly instead, exactly as a pre-010
+	// caller would have, mirroring the schedule_entry/video_schedule_match
+	// seeds below for the same reason (a current store method that can't
+	// write a historical schema shape).
+	var verdict1ID uuid.UUID
+	require.NoError(t, db.Pool.QueryRow(ctx, `
+		INSERT INTO viability_verdict (idea_id, version, verdict, reasoning, author_person_id)
+		VALUES ($1, 1, $2, $3, $4)
+		RETURNING id
+	`, idea1.ID, store.VerdictViable, "groundable", creator.ID).Scan(&verdict1ID))
 	// The schema is only migrated to 9 here -- pre-migration-011, `strategy.
 	// cadence` is still NOT NULL with no default (migration 008's original
 	// shape), but StrategyStore.Save (as of #1833/FR47) never populates it.
@@ -496,7 +505,7 @@ func TestMigration010_ScheduleEntryBackfill_DerivesStrategyDropsUngroundable(t *
 		VALUES ($1, $2, 'weekly', true, $3)
 		RETURNING id
 	`, ch.ID, "Groundable Strategy", creator.ID).Scan(&strategy1ID))
-	_, err = db.Pool.Exec(ctx, `INSERT INTO strategy_verdict (strategy_id, verdict_id) VALUES ($1, $2)`, strategy1ID, verdict1.ID)
+	_, err = db.Pool.Exec(ctx, `INSERT INTO strategy_verdict (strategy_id, verdict_id) VALUES ($1, $2)`, strategy1ID, verdict1ID)
 	require.NoError(t, err)
 	// store.ScheduleStore (store/schedule.go) no longer exists (deleted
 	// outright by #1835's retirement task) -- seed the pre-010
@@ -509,7 +518,7 @@ func TestMigration010_ScheduleEntryBackfill_DerivesStrategyDropsUngroundable(t *
 		INSERT INTO schedule_entry (channel_id, idea_id, verdict_id, proposed_publish_at, state, approved_by_person_id, approved_at, created_by_person_id)
 		VALUES ($1, $2, $3, $4, 'committed', $5, NOW(), $5)
 		RETURNING id
-	`, ch.ID, idea1.ID, verdict1.ID, time.Now().Add(24*time.Hour), creator.ID).Scan(&entry1ID))
+	`, ch.ID, idea1.ID, verdict1ID, time.Now().Add(24*time.Hour), creator.ID).Scan(&entry1ID))
 
 	video1 := syncOneVideo(t, ctx, s, ch, "Groundable Video", ptrTime(time.Now().Add(-time.Hour)))
 	// The schema is only migrated to 9 here (video_script_id doesn't exist
@@ -526,16 +535,19 @@ func TestMigration010_ScheduleEntryBackfill_DerivesStrategyDropsUngroundable(t *
 	// -- Ungroundable: verdict2 has no strategy_verdict row at all. --------
 	idea2, err := s.Ideas().Create(ctx, ch.ID, "Ungroundable Idea", creator.ID)
 	require.NoError(t, err)
-	verdict2, err := s.Verdicts().Append(ctx, store.AppendVerdictInput{
-		IdeaID: idea2.ID, Verdict: store.VerdictViable, Reasoning: "ungroundable", AuthorPersonID: creator.ID,
-	})
-	require.NoError(t, err)
+	// Same pre-015 seed-by-SQL reasoning as verdict1 above.
+	var verdict2ID uuid.UUID
+	require.NoError(t, db.Pool.QueryRow(ctx, `
+		INSERT INTO viability_verdict (idea_id, version, verdict, reasoning, author_person_id)
+		VALUES ($1, 1, $2, $3, $4)
+		RETURNING id
+	`, idea2.ID, store.VerdictViable, "ungroundable", creator.ID).Scan(&verdict2ID))
 	var entry2ID uuid.UUID
 	require.NoError(t, db.Pool.QueryRow(ctx, `
 		INSERT INTO schedule_entry (channel_id, idea_id, verdict_id, proposed_publish_at, state, approved_by_person_id, approved_at, created_by_person_id)
 		VALUES ($1, $2, $3, $4, 'committed', $5, NOW(), $5)
 		RETURNING id
-	`, ch.ID, idea2.ID, verdict2.ID, time.Now().Add(48*time.Hour), creator.ID).Scan(&entry2ID))
+	`, ch.ID, idea2.ID, verdict2ID, time.Now().Add(48*time.Hour), creator.ID).Scan(&entry2ID))
 
 	video2 := syncOneVideo(t, ctx, s, ch, "Ungroundable Video", ptrTime(time.Now().Add(-time.Hour)))
 	_, err = db.Pool.Exec(ctx, `

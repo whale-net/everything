@@ -20,11 +20,20 @@ type AppendVerdictInput struct {
 	// CitedResearchNoteIDs populates verdict_citation (FR11) for this
 	// version, in the same transaction as the insert.
 	CitedResearchNoteIDs []uuid.UUID
+	// Source is FR5's authorship marker (migration 015). Append normalizes
+	// an empty Source to VerdictSourceAgent -- see Append's doc.
+	Source VerdictSource
 }
 
 // ErrVerdictNotViable is returned by VideoScriptStore.Propose when the
 // referenced Verdict's Verdict field is not VerdictViable (FR36).
 var ErrVerdictNotViable = errors.New("referenced verdict is not viable")
+
+// ErrInvalidVerdictSource is returned by Append when
+// AppendVerdictInput.Source is neither empty, VerdictSourceAgent, nor
+// VerdictSourceHuman (FR5) -- rejected before opening a transaction, so
+// nothing is written.
+var ErrInvalidVerdictSource = errors.New("verdict source must be \"agent\" or \"human\"")
 
 // VerdictStore covers `viability_verdict` and `verdict_citation`
 // (migration 002, FR11-FR13). viability_verdict is an append-only version
@@ -59,11 +68,11 @@ type verdictStore struct{ pool *pgxpool.Pool }
 
 var _ VerdictStore = verdictStore{}
 
-const verdictColumns = `id, idea_id, version, verdict, reasoning, author_person_id, created_at, COALESCE(idempotency_key, '')`
+const verdictColumns = `id, idea_id, version, verdict, reasoning, author_person_id, created_at, COALESCE(idempotency_key, ''), source`
 
 func scanVerdict(row pgx.Row) (Verdict, error) {
 	var v Verdict
-	err := row.Scan(&v.ID, &v.IdeaID, &v.Version, &v.Verdict, &v.Reasoning, &v.AuthorPersonID, &v.CreatedAt, &v.IdempotencyKey)
+	err := row.Scan(&v.ID, &v.IdeaID, &v.Version, &v.Verdict, &v.Reasoning, &v.AuthorPersonID, &v.CreatedAt, &v.IdempotencyKey, &v.Source)
 	return v, err
 }
 
@@ -101,11 +110,26 @@ func citedResearchNoteIDs(ctx context.Context, q pgxQueryer, verdictID uuid.UUID
 
 // Append honours IdempotencyKey (a replayed (idea, key) pair returns the
 // original row, citations included, rather than allocating a new
-// version), then locks the idea row so a racing Append for the same idea
-// serializes its version allocation, computes version = max+1, and inserts
-// the new viability_verdict row plus its verdict_citation rows -- all in
-// one transaction. Never UPDATEs an existing viability_verdict row (FR12).
+// version -- including its original Source, never the replayer's), then
+// locks the idea row so a racing Append for the same idea serializes its
+// version allocation, computes version = max+1, and inserts the new
+// viability_verdict row plus its verdict_citation rows -- all in one
+// transaction. Never UPDATEs an existing viability_verdict row (FR12).
+//
+// in.Source: an empty Source is normalized to VerdictSourceAgent, so
+// pre-FR5 callers and fixtures keep working and can never write an
+// invalid value; any other value that is neither VerdictSourceAgent nor
+// VerdictSourceHuman is rejected with ErrInvalidVerdictSource before a
+// transaction is even opened, so a bad Source never writes anything.
 func (s verdictStore) Append(ctx context.Context, in AppendVerdictInput) (Verdict, error) {
+	switch in.Source {
+	case "":
+		in.Source = VerdictSourceAgent
+	case VerdictSourceAgent, VerdictSourceHuman:
+	default:
+		return Verdict{}, ErrInvalidVerdictSource
+	}
+
 	tx, err := s.pool.Begin(ctx)
 	if err != nil {
 		return Verdict{}, fmt.Errorf("begin tx: %w", err)
@@ -145,10 +169,10 @@ func (s verdictStore) Append(ctx context.Context, in AppendVerdictInput) (Verdic
 	}
 
 	v, err := scanVerdict(tx.QueryRow(ctx, `
-		INSERT INTO viability_verdict (idea_id, version, verdict, reasoning, author_person_id, idempotency_key)
-		VALUES ($1, $2, $3, $4, $5, NULLIF($6, ''))
+		INSERT INTO viability_verdict (idea_id, version, verdict, reasoning, author_person_id, idempotency_key, source)
+		VALUES ($1, $2, $3, $4, $5, NULLIF($6, ''), $7)
 		RETURNING `+verdictColumns,
-		in.IdeaID, nextVersion, in.Verdict, in.Reasoning, in.AuthorPersonID, in.IdempotencyKey))
+		in.IdeaID, nextVersion, in.Verdict, in.Reasoning, in.AuthorPersonID, in.IdempotencyKey, in.Source))
 	if err != nil {
 		return Verdict{}, fmt.Errorf("insert viability_verdict: %w", err)
 	}
@@ -189,7 +213,7 @@ func (s verdictStore) GetByID(ctx context.Context, id uuid.UUID) (Verdict, error
 
 func (s verdictStore) Current(ctx context.Context, ideaID uuid.UUID) (Verdict, error) {
 	v, err := scanVerdict(s.pool.QueryRow(ctx, `
-		SELECT id, idea_id, version, verdict, reasoning, author_person_id, created_at, COALESCE(idempotency_key, '')
+		SELECT id, idea_id, version, verdict, reasoning, author_person_id, created_at, COALESCE(idempotency_key, ''), source
 		FROM v_current_verdict
 		WHERE idea_id = $1
 	`, ideaID))

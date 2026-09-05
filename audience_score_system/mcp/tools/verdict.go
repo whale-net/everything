@@ -88,6 +88,7 @@ type VerdictOutput struct {
 	AuthorDisplayName  string            `json:"author_display_name" jsonschema:"The author's display name"`
 	CreatedAt          string            `json:"created_at" jsonschema:"When this Verdict version was recorded, RFC3339"`
 	CitedResearchNotes []CitedNoteOutput `json:"cited_research_notes" jsonschema:"The research notes this Verdict version cites (FR11), resolved and in citation order"`
+	Source             string            `json:"source" jsonschema:"Which surface authored this verdict version: agent (MCP) or human (web form)"`
 }
 
 // toVerdictOutput renders v (plus its already-resolved author display
@@ -103,6 +104,7 @@ func toVerdictOutput(v store.Verdict, authorDisplayName string, citedNotes []Cit
 		AuthorDisplayName:  authorDisplayName,
 		CreatedAt:          v.CreatedAt.Format(time.RFC3339),
 		CitedResearchNotes: citedNotes,
+		Source:             string(v.Source),
 	}
 }
 
@@ -243,6 +245,11 @@ func saveViabilityVerdictMutate(verdicts store.VerdictStore, ideas store.IdeaSto
 			AuthorPersonID:       person.ID, // the calling Person, never the Channel's Creator.
 			IdempotencyKey:       in.IdempotencyKeyArg,
 			CitedResearchNoteIDs: citedIDs,
+			// Source is always agent here -- MCP is the agent surface (FR5).
+			// Set explicitly rather than relying on Append's empty-Source
+			// normalization, so this call site can never silently drift if
+			// that default ever changes.
+			Source: store.VerdictSourceAgent,
 		})
 		if err != nil {
 			return uuid.Nil, err

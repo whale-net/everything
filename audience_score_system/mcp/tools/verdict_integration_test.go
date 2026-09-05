@@ -237,6 +237,58 @@ func vmapDecode(v any, out any) error {
 	return json.Unmarshal(body, out)
 }
 
+// ── source (M4.1 FR5, issue #1898): save_viability_verdict writes "agent",
+// get_viability_verdict surfaces it on both current and history ──────────
+
+func TestSaveViabilityVerdict_WritesSourceAgent(t *testing.T) {
+	f := newVerdictFixture(t)
+	cs := f.connect(t, f.creator.ID)
+
+	saveRes := f.call(t, cs, "save_viability_verdict", tools.SaveViabilityVerdictInput{
+		ChannelID:         f.ch.ID.String(),
+		IdeaID:            f.idea.ID.String(),
+		Verdict:           "viable",
+		Reasoning:         "MCP is the agent surface (FR5)",
+		IdempotencyKeyArg: uuid.NewString(),
+	})
+	saved := vdecode[tools.VerdictOutput](t, saveRes)
+	assert.Equal(t, "agent", saved.Source, "save_viability_verdict must write source = agent -- MCP is the agent surface")
+}
+
+func TestGetViabilityVerdict_SourceSurfacedOnCurrentAndEveryHistoryEntry(t *testing.T) {
+	f := newVerdictFixture(t)
+	cs := f.connect(t, f.creator.ID)
+
+	first := vdecode[tools.VerdictOutput](t, f.call(t, cs, "save_viability_verdict", tools.SaveViabilityVerdictInput{
+		ChannelID:         f.ch.ID.String(),
+		IdeaID:            f.idea.ID.String(),
+		Verdict:           "needs-more-research",
+		Reasoning:         "first version",
+		IdempotencyKeyArg: uuid.NewString(),
+	}))
+	assert.Equal(t, "agent", first.Source)
+
+	second := vdecode[tools.VerdictOutput](t, f.call(t, cs, "save_viability_verdict", tools.SaveViabilityVerdictInput{
+		ChannelID:         f.ch.ID.String(),
+		IdeaID:            f.idea.ID.String(),
+		Verdict:           "viable",
+		Reasoning:         "second version",
+		IdempotencyKeyArg: uuid.NewString(),
+	}))
+	assert.Equal(t, "agent", second.Source)
+
+	getRes := f.call(t, cs, "get_viability_verdict", tools.GetViabilityVerdictInput{
+		ChannelID: f.ch.ID.String(), IdeaID: f.idea.ID.String(),
+	})
+	out := vdecode[tools.GetViabilityVerdictOutput](t, getRes)
+	require.NotNil(t, out.Current)
+	assert.Equal(t, "agent", out.Current.Source, "get_viability_verdict must surface source on current")
+	require.Len(t, out.History, 2)
+	for i, h := range out.History {
+		assert.Equal(t, "agent", h.Source, "get_viability_verdict must surface source on every history entry (index %d)", i)
+	}
+}
+
 // ── one save -> version 1, current + one-entry history ─────────────────────
 
 func TestSaveViabilityVerdict_FirstSave_IsVersion1_CurrentAndOneEntryHistory(t *testing.T) {
