@@ -255,6 +255,45 @@ func TestDetectAffectedTargetsWithAffectedTarget(t *testing.T) {
 	}
 }
 
+func TestDetectAffectedTargetsIntersectsWithCandidates(t *testing.T) {
+	// rdeps(universe, x) returns every node in universe's transitive closure
+	// that depends on x, not just members of universe itself -- so if
+	// candidatesExpr denotes a set with intermediate non-candidate
+	// dependents between it and the changed files (e.g. a library sitting
+	// between a changed source file and the tests that eventually consume
+	// it), a bare `rdeps(candidatesExpr, changedExpr)` would leak those
+	// intermediate targets into the result. The query must intersect back
+	// with candidatesExpr to filter them out.
+	candidates := "tests(//pkg/...)"
+	wantExpr := "(tests(//pkg/...)) intersect rdeps(tests(//pkg/...), //pkg/lib:changed.go)"
+
+	bazel := newFakeBazel(
+		fakeBazelCall{
+			argsContain:    []string{"//pkg/lib:changed.go"},
+			argsNotContain: []string{"rdeps"},
+			output:         "//pkg/lib:changed.go",
+		},
+		fakeBazelCall{
+			// Only registered for the intersected form: if DetectAffectedTargets
+			// regresses to a bare rdeps() query, this won't match, the fake
+			// returns an error, and the assertion below catches it.
+			argsContain: []string{wantExpr},
+			output:      "//pkg/lib:lib_test",
+		},
+	)
+	git := newFakeGit(
+		fakeGitCall{argsContain: []string{"diff", "--name-only"}, output: "pkg/lib/changed.go"},
+	)
+
+	result, err := DetectAffectedTargets("abc123", candidates, bazel, git)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(result) != 1 || result[0] != "//pkg/lib:lib_test" {
+		t.Errorf("expected exactly the intersected candidate, got %v", result)
+	}
+}
+
 func TestGetPreviousTag(t *testing.T) {
 	git := newFakeGit(
 		fakeGitCall{argsContain: []string{"describe"}, output: "demo-hello-go.v1.2.3"},

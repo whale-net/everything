@@ -224,12 +224,22 @@ func DetectAffectedTargets(baseCommit string, candidatesExpr string, bazel Bazel
 
 	changedExpr := unionQueryExpr(validLabels, validPkgs)
 
+	// rdeps(universe, x) returns every node in the transitive closure of
+	// `universe` that depends on x -- not just members of `universe` itself.
+	// For a leaf-shaped universe like DetectChangedApps' app_metadata targets
+	// (nothing else in the graph depends on them) that coincides with what we
+	// want, but candidatesExpr here is caller-supplied and may denote targets
+	// with intermediate library/source-file dependents between them and the
+	// changed files (e.g. `tests(//...)`): rdeps would then also surface
+	// those intermediate, non-candidate nodes. Intersecting back with
+	// candidatesExpr restricts the result to actual candidates.
+	//
 	// Same --keep_going rationale as DetectChangedApps: a broken transitive
 	// closure elsewhere shouldn't prevent learning which candidates the diff
 	// touches, and "unknown" collapsing to "no targets affected" is the safe
 	// direction here -- the caller's fallback (unfiltered run on push-to-main)
 	// still covers it.
-	rdepsExpr := fmt.Sprintf("rdeps(%s, %s)", candidatesExpr, changedExpr)
+	rdepsExpr := fmt.Sprintf("(%s) intersect rdeps(%s, %s)", candidatesExpr, candidatesExpr, changedExpr)
 	out, rdepsErr := bazel.Run("query", rdepsExpr, "--output=label", "--keep_going")
 	if rdepsErr != nil {
 		fmt.Fprintf(os.Stderr, "Warning: bazel rdeps query returned non-zero (%v); continuing with partial results\n", rdepsErr)
