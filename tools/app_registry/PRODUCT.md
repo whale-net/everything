@@ -13,8 +13,8 @@
 | File | When to read it |
 |------|-----------------|
 | [product/01-current-state.md](product/01-current-state.md) | Before scoping new work — what's actually shipped vs. what `PLAN.md` claims, per-capability |
-| [product/02-capability-map.md](product/02-capability-map.md) | Before scoping or designing anything in this domain — Now/Next/Later capability list (C1..C13) |
-| [product/03-roadmap.md](product/03-roadmap.md) | Before running `/project-manager:design --milestone` — milestone definitions (M1..M3) only; live status lives on the tracking issue, not here |
+| [product/02-capability-map.md](product/02-capability-map.md) | Before scoping or designing anything in this domain — Now/Next/Later capability list (C1..C15) |
+| [product/03-roadmap.md](product/03-roadmap.md) | Before running `/project-manager:design --milestone` — milestone definitions (M1..M5) only; live status lives on the tracking issue, not here |
 
 ## Vision
 
@@ -110,6 +110,32 @@ strings — the latter would need migrating onto the former the moment
 anyone asks whether an approver role expires/rotates the same way a
 promoter role does. Stays cheap: which specific roles map to "approver"
 per environment, and the approve/reject UI itself.
+
+**LB5 — CAS blob identity is a new axis, not a redefinition of `artifact.digest`.**
+At risk: C14 (CLI-binary CAS publishing) and any future non-OCI kind (firmware)
+riding the same extension point (C15) — plus C4/C9/C10's existing consumption of
+`artifact.digest` as an opaque, per-artifact-*version* identifier (migration 003's
+`v_current_promotion`, `Rollback`/`PROMOTION_ACTION_ROLLBACK`), which already
+holds a non-content-hash value for binary kind today (see current-state note
+above) and must keep working unmodified for every kind M4 doesn't touch.
+Decide now: keep `artifact.digest` exactly as-is (one opaque value per version
+row, kind-defined) and give blob-level content identity its own table/column
+keyed on its own hash, chosen deliberately at M4 design time — specifically
+what gets hashed (uncompressed bytes vs. stored/compressed bytes: #1142's own
+FR-61 hashed uncompressed content and folded encoding + content-type into the
+identity tuple precisely because a bare content hash under-specifies "same
+blob" once compression policy varies) and what digest string format (matching
+the existing `sha256:<hex>` convention `artifact.digest` already uses). This is
+the one choice that's expensive to reverse: every stored blob, every dedupe
+lookup, and any future consumer wanting to address "this artifact's actual
+bytes" rather than "this registry version" gets built against whatever scheme
+M4 picks.
+Stays cheap: which kinds participate in CAS (binary now, firmware later — C15's
+extension point, orthogonal to the hash scheme itself), the upload/broker
+transport (presigned vs. anything else), and whether a kind's `artifact.digest`
+is later derived for convenience from the blob table's own hash — a read-time
+join, not a schema commitment, as long as the blob table's key shape hasn't
+moved.
 
 ## Non-goals
 
