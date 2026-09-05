@@ -37,8 +37,9 @@ go_library(
     ],
 )
 
-# Pure-Go coverage of validateSourceURL (FR10's rejection/NULL-coercion
-# rule) and toResearchNoteOutput's Cited derivation (research.go), plus
+# Pure-Go coverage of toResearchNoteOutput's Cited derivation (research.go
+# -- source_url validation itself moved to package store, FR12, issue
+# #1897), plus
 # parseVerdictValue's enum-rejection and excerpt's rune-safe truncation
 # (verdict.go, issue #1578), plus parseWeekdayName/weekBounds/
 # computeScheduleFlags's FR18 cadence/off-day/collision derivation

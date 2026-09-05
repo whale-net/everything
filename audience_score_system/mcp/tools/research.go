@@ -9,7 +9,6 @@ package tools
 import (
 	"context"
 	"fmt"
-	"net/url"
 	"strings"
 	"time"
 
@@ -68,16 +67,17 @@ type ResearchNoteOutput struct {
 }
 
 // toResearchNoteOutput renders n (plus its already-resolved author display
-// name) as ResearchNoteOutput. Cited is derived from n.SourceURL == nil
-// (FR10) at this single call site so save_research_note and
-// list_research_notes can never disagree on the rule.
+// name) as ResearchNoteOutput. Cited is derived by n.Cited() (FR10, FR12
+// -- store.ResearchNote.Cited, models.go) at this single call site so
+// save_research_note and list_research_notes can never disagree on the
+// rule.
 func toResearchNoteOutput(n store.ResearchNote, authorDisplayName string) ResearchNoteOutput {
 	out := ResearchNoteOutput{
 		ID:                n.ID.String(),
 		ChannelID:         n.ChannelID.String(),
 		Text:              n.Text,
 		SourceURL:         n.SourceURL,
-		Cited:             n.SourceURL != nil,
+		Cited:             n.Cited(),
 		AuthorPersonID:    n.AuthorPersonID.String(),
 		AuthorDisplayName: authorDisplayName,
 		CreatedAt:         n.CreatedAt.Format(time.RFC3339Nano),
@@ -87,27 +87,6 @@ func toResearchNoteOutput(n store.ResearchNote, authorDisplayName string) Resear
 		out.IdeaID = &s
 	}
 	return out
-}
-
-// validateSourceURL trims raw and, if non-empty, requires it to be a
-// well-formed absolute http(s) URL -- rejecting rather than silently
-// storing junk (e.g. "not a url", "javascript:...") that would later be
-// rendered as "cited". Returns nil (never a pointer to an empty string)
-// for an absent/empty/whitespace-only raw, which is what SaveNoteInput
-// persists as SQL NULL -- the FR10 uncited case.
-func validateSourceURL(raw string) (*string, error) {
-	trimmed := strings.TrimSpace(raw)
-	if trimmed == "" {
-		return nil, nil
-	}
-	u, err := url.Parse(trimmed)
-	if err != nil {
-		return nil, fmt.Errorf("source_url is not a well-formed URL: %w", err)
-	}
-	if !u.IsAbs() || (u.Scheme != "http" && u.Scheme != "https") || u.Host == "" {
-		return nil, fmt.Errorf("source_url must be an absolute http or https URL")
-	}
-	return &trimmed, nil
 }
 
 // registerSaveResearchNote registers save_research_note via
@@ -143,21 +122,19 @@ func saveResearchNoteMutate(research store.ResearchStore) server.WriteMutate[Sav
 			ideaID = &id
 		}
 
-		sourceURL, err := validateSourceURL(in.SourceURL)
-		if err != nil {
-			return uuid.Nil, err
-		}
-
 		person := server.PersonFromContext(ctx)
 		if person == nil {
 			return uuid.Nil, fmt.Errorf("unauthenticated: no caller credential resolved")
 		}
 
+		// SourceURL is passed through raw -- SaveNote itself owns the
+		// trim/normalize and the reject (FR12, store/research.go), so this
+		// tool never validates it twice.
 		note, err := research.SaveNote(ctx, store.SaveNoteInput{
 			ChannelID:      channelID,
 			IdeaID:         ideaID,
 			Text:           text,
-			SourceURL:      sourceURL,
+			SourceURL:      &in.SourceURL,
 			AuthorPersonID: person.ID, // the calling Person, never the Channel's Creator.
 			IdempotencyKey: in.IdempotencyKeyArg,
 		})

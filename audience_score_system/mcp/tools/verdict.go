@@ -70,7 +70,7 @@ func resolveCitedNotes(ctx context.Context, research store.ResearchStore, noteID
 			ID:          note.ID.String(),
 			TextExcerpt: excerpt(note.Text),
 			SourceURL:   note.SourceURL,
-			Cited:       note.SourceURL != nil,
+			Cited:       note.Cited(),
 		})
 	}
 	return out, nil

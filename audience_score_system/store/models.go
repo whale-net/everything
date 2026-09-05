@@ -162,6 +162,11 @@ type ResearchNote struct {
 	IdempotencyKey string
 }
 
+// Cited reports whether n has a source_url (FR10). This is the single
+// derivation `web` and `mcp` both read (FR12) -- neither computes
+// SourceURL != nil inline.
+func (n ResearchNote) Cited() bool { return n.SourceURL != nil }
+
 // VerdictValue is `viability_verdict.verdict` (migration 002, FR12).
 type VerdictValue string
 
