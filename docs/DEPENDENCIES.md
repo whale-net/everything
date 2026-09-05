@@ -20,6 +20,8 @@ The repository uses **uv** for Python dependency management with **rules_pycross
    ```bash
    uv lock --python 3.13
    ```
+   Then re-run `bazel vendor //...` if you use the shared vendor directory — see
+   [CONFIGURATION.md](CONFIGURATION.md#shared-vendor-directory-bazel-vendor-).
 
 3. **Use directly in BUILD.bazel** with the `@pypi//` syntax:
    ```starlark
@@ -72,6 +74,9 @@ bazel mod tidy
 # 4. Build
 bazel build //your/target
 ```
+
+If you use the shared vendor directory, re-run `bazel vendor //...` after `bazel mod
+tidy` — see [CONFIGURATION.md](CONFIGURATION.md#shared-vendor-directory-bazel-vendor-).
 
 ### How It Works
 
