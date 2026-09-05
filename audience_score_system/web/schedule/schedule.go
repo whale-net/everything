@@ -1,41 +1,51 @@
-// Package schedule is `web`'s Creator-tier schedule approval surface (C8:
-// FR19, FR20) -- GET /channels/{id}/schedule, POST /schedule/{entryID}/
-// approve, POST /schedule/{entryID}/unapprove, and POST /schedule/{entryID}/
-// edit, all mounted behind web/auth.Authenticator.RequireSignedIn (see
-// ../main.go's setupRoutes). Handlers and templ views live together in
-// this one package, mirroring web/invite's package doc comment rationale:
-// the mutate-then-redirect flow and its one list view are tightly coupled
-// with no reuse outside this package.
+// Package schedule is `web`'s Creator-tier video_script approval surface
+// (milestone video-script-model, FR48/FR49, issue #1834) -- GET
+// /channels/{id}/schedule, POST /schedule/{scriptID}/approve, POST
+// /schedule/{scriptID}/deny, and POST /schedule/{scriptID}/archive, all
+// mounted behind web/auth.Authenticator.RequireSignedIn (see ../main.go's
+// setupRoutes). Handlers and templ views live together in this one
+// package, mirroring web/invite's package doc comment rationale: the
+// mutate-then-redirect flow and its one list view are tightly coupled with
+// no reuse outside this package.
 //
-// Authorization (NFR5, LB2): GET is visible to a Channel's Founder,
-// Co-Creator, AND Analyst (store.CanRead); the three mutating POST routes
-// require Creator-tier authority -- Founder or Co-Creator, symmetrically
-// (FR32) -- each re-deriving authority from a fresh store.CanApprove call
-// -- never from the session alone, a cached field, or the client's choice
-// of which button to render. The Analyst list view renders with no
-// approve/un-approve/edit affordances at all (see views.templ's List/
-// entryActions), but that omission is presentation only -- the
-// server-side CanApprove check in mutate below is what actually rejects a
-// forged POST from an Analyst, so hiding the button is never the only
-// line of defense.
+// This is a rebuild in place of C8's original schedule_entry-backed
+// surface (FR19/FR20) against `video_script` (migration 010, #1824):
+// route paths and the package name are unchanged (FR49's route-and-
+// package-naming note -- {scriptID} describes the path parameter's new
+// referent, not a route rename), but the handlers, store calls, and
+// rendered affordances now speak video_script's propose/greenlit/denied/
+// archived lifecycle (FR36-FR40) instead of schedule_entry's draft/
+// committed pair. HandleEdit and HandleUnapprove have no analog and are
+// retired outright (FR49): a video_script's target date is set once at
+// propose time (FR36, no web edit surface), and FR40 defines no
+// greenlit->proposed transition.
 //
-// The published freeze (FR20): store.ScheduleStore.IsPublished is the
+// Authorization (NFR12, NFR13, NFR5): GET is visible to a Channel's
+// Founder, Co-Creator, AND Analyst (store.CanRead); the three mutating
+// POST routes require Creator-tier authority -- Founder or Co-Creator,
+// symmetrically (FR32) -- each re-deriving authority from a fresh
+// store.CanApprove call -- never from the session alone, a cached field,
+// or the client's choice of which button to render. The Analyst list view
+// renders with no greenlight/deny/archive affordances at all (see
+// views.templ's List/entryActions), but that omission is presentation
+// only -- the server-side CanApprove check in mutate below is what
+// actually rejects a forged POST from an Analyst, so hiding the button is
+// never the only line of defense.
+//
+// The published freeze (FR39): store.VideoScriptStore.IsPublished is the
 // single, reusable "recorded as published" predicate (see
-// store/schedule.go's package doc comment), consulted -- atomically with
-// the mutation itself -- inside Approve/Unapprove/Update. mutate below
-// translates store.ErrScheduleEntryPublished to 409 with no state change;
-// views.templ additionally calls IsPublished (via ScheduleEntryDetail.
-// Published) to omit the un-approve/edit affordances from the rendered
-// page once true, so a Founder or Co-Creator is never shown a button that
-// would just error.
+// store/video_script.go's package doc comment), consulted -- atomically
+// with the mutation itself -- inside Archive. mutate below translates
+// store.ErrVideoScriptPublished to 409 with no state change; views.templ
+// additionally calls IsPublished (via VideoScriptDetail.Published) to
+// omit the archive affordance from the rendered page once true, so a
+// Founder or Co-Creator is never shown a button that would just error.
 package schedule
 
 import (
 	"context"
 	"errors"
-	"fmt"
 	"net/http"
-	"time"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
@@ -45,13 +55,8 @@ import (
 	"github.com/whale-net/everything/audience_score_system/web/components"
 )
 
-// proposedPublishAtInputFormat matches HTML's <input type="datetime-local">
-// value format ("2006-01-02T15:04"), interpreted as UTC -- mirrors
-// tools/app_registry/ui/pages/deployments.go's asOfInputFormat convention.
-const proposedPublishAtInputFormat = "2006-01-02T15:04"
-
 // Handlers holds the dependencies schedule's routes need: the Store (for
-// store.CanRead/store.CanApprove and Schedules()/Roles()/Channels()).
+// store.CanRead/store.CanApprove and VideoScripts()/Roles()/Channels()).
 type Handlers struct {
 	store *store.Store
 }
@@ -61,9 +66,9 @@ func New(st *store.Store) *Handlers {
 	return &Handlers{store: st}
 }
 
-// HandleList serves GET /channels/{id}/schedule (FR19/FR20's read side).
+// HandleList serves GET /channels/{id}/schedule (FR48's read side).
 // Visible to Founder, Co-Creator, and Analyst (store.CanRead) -- canApprove additionally
-// gates whether the rendered view includes the approve/un-approve/edit
+// gates whether the rendered view includes the greenlight/deny/archive
 // affordances (views.templ's entryActions), never whether the schedule
 // itself is visible.
 func (h *Handlers) HandleList(w http.ResponseWriter, r *http.Request) {
@@ -80,16 +85,6 @@ func (h *Handlers) HandleList(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	canRead, err := store.CanRead(ctx, h.store.Roles(), channelID, person.ID)
-	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
-		return
-	}
-	if !canRead {
-		http.Error(w, "forbidden", http.StatusForbidden)
-		return
-	}
-
 	ch, err := h.store.Channels().GetByID(ctx, channelID)
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
@@ -97,6 +92,21 @@ func (h *Handlers) HandleList(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	// Re-authorize strictly by this Channel's ID (store.CanRead) only after
+	// confirming it exists -- mirrors handleChannelDetail (web/main.go):
+	// GetByID first (404 for an unknown Channel), CanRead second (403 for a
+	// known Channel the caller can't read), so an unknown ID never leaks as
+	// 403 before the existence check runs.
+	canRead, err := store.CanRead(ctx, h.store.Roles(), channelID, person.ID)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	if !canRead {
+		http.Error(w, "forbidden", http.StatusForbidden)
 		return
 	}
 
@@ -110,7 +120,7 @@ func (h *Handlers) HandleList(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	entries, _, err := h.store.Schedules().ListDetailByChannel(ctx, channelID, 0)
+	scripts, err := h.store.VideoScripts().ListDetailByChannel(ctx, channelID)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
@@ -118,59 +128,52 @@ func (h *Handlers) HandleList(w http.ResponseWriter, r *http.Request) {
 
 	title := ch.Title + " schedule"
 	data := components.LayoutData{Title: title, User: person}
-	if err := components.Render(w, r, title, List(data, ch, entries, canApprove)); err != nil {
+	if err := components.Render(w, r, title, List(data, ch, scripts, canApprove)); err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 	}
 }
 
-// HandleApprove serves POST /schedule/{entryID}/approve (FR19).
-func (h *Handlers) HandleApprove(w http.ResponseWriter, r *http.Request) {
-	h.mutate(w, r, func(ctx context.Context, entryID, personID uuid.UUID) error {
-		return h.store.Schedules().Approve(ctx, entryID, personID)
+// HandleGreenlight serves POST /schedule/{scriptID}/approve (FR49, FR37).
+// The route path keeps its pre-existing "approve" spelling (FR49's
+// route-and-package-naming note); the store transition it drives is
+// video_script's proposed->greenlit.
+func (h *Handlers) HandleGreenlight(w http.ResponseWriter, r *http.Request) {
+	h.mutate(w, r, func(ctx context.Context, scriptID, personID uuid.UUID) error {
+		return h.store.VideoScripts().Greenlight(ctx, scriptID, personID)
 	})
 }
 
-// HandleUnapprove serves POST /schedule/{entryID}/unapprove (FR20).
-func (h *Handlers) HandleUnapprove(w http.ResponseWriter, r *http.Request) {
-	h.mutate(w, r, func(ctx context.Context, entryID, personID uuid.UUID) error {
-		return h.store.Schedules().Unapprove(ctx, entryID, personID)
+// HandleDeny serves POST /schedule/{scriptID}/deny (FR49, FR38):
+// video_script's proposed->denied transition.
+func (h *Handlers) HandleDeny(w http.ResponseWriter, r *http.Request) {
+	h.mutate(w, r, func(ctx context.Context, scriptID, personID uuid.UUID) error {
+		return h.store.VideoScripts().Deny(ctx, scriptID, personID)
 	})
 }
 
-// HandleEdit serves POST /schedule/{entryID}/edit (FR20): edits a draft
-// entry's proposed_publish_at. The new value is read from the
-// "proposed_publish_at" form field before mutate's authorization check
-// runs, so a malformed value 400s without ever touching the store --
-// mutate's CanApprove gate still runs first for a well-formed one, same as
-// HandleApprove/HandleUnapprove.
-func (h *Handlers) HandleEdit(w http.ResponseWriter, r *http.Request) {
-	if err := r.ParseForm(); err != nil {
-		http.Error(w, "invalid form", http.StatusBadRequest)
-		return
-	}
-	proposedAt, err := parseProposedPublishAt(r.FormValue("proposed_publish_at"))
-	if err != nil {
-		http.Error(w, "invalid proposed_publish_at: "+err.Error(), http.StatusBadRequest)
-		return
-	}
-
-	h.mutate(w, r, func(ctx context.Context, entryID, _ uuid.UUID) error {
-		return h.store.Schedules().Update(ctx, entryID, proposedAt)
+// HandleArchive serves POST /schedule/{scriptID}/archive (FR49, FR39):
+// video_script's greenlit->archived transition, frozen once the script's
+// matched video has published (see mutate's ErrVideoScriptPublished
+// handling below).
+func (h *Handlers) HandleArchive(w http.ResponseWriter, r *http.Request) {
+	h.mutate(w, r, func(ctx context.Context, scriptID, personID uuid.UUID) error {
+		return h.store.VideoScripts().Archive(ctx, scriptID, personID)
 	})
 }
 
-// mutate is HandleApprove/HandleUnapprove/HandleEdit's shared body: parse
-// entryID from the path, load the entry (to learn its ChannelID and
+// mutate is HandleGreenlight/HandleDeny/HandleArchive's shared body: parse
+// scriptID from the path, load the script (to learn its ChannelID and
 // confirm it exists), require store.CanApprove for that Channel
 // (Creator-tier -- Founder or Co-Creator, symmetrically per FR32, NFR5 --
 // re-derived fresh on every call, never trusted from the session or the
-// client), run fn, and translate the result: fn succeeding
-// redirects back to the schedule page (303); store.ErrScheduleEntryPublished
-// (FR20's freeze) and any other error from fn (entry not in the state fn
-// requires, e.g. approving an already-committed entry or un-approving a
-// still-draft one) both 409 with no further state change, since entryID
-// is already confirmed to exist by the GetByID call above.
-func (h *Handlers) mutate(w http.ResponseWriter, r *http.Request, fn func(ctx context.Context, entryID, personID uuid.UUID) error) {
+// client), run fn, and translate the result: fn succeeding redirects back
+// to the schedule page (303); store.ErrVideoScriptPublished (FR39's
+// freeze) maps to 409 specifically, and any other error from fn (an
+// invalid transition per FR40 -- e.g. greenlighting an already-decided
+// script, or archiving one that is not greenlit) also 409s with no
+// further state change, since scriptID is already confirmed to exist by
+// the GetByID call above.
+func (h *Handlers) mutate(w http.ResponseWriter, r *http.Request, fn func(ctx context.Context, scriptID, personID uuid.UUID) error) {
 	ctx := r.Context()
 	person := auth.PersonFromContext(ctx)
 	if person == nil {
@@ -178,13 +181,13 @@ func (h *Handlers) mutate(w http.ResponseWriter, r *http.Request, fn func(ctx co
 		return
 	}
 
-	entryID, err := uuid.Parse(r.PathValue("entryID"))
+	scriptID, err := uuid.Parse(r.PathValue("scriptID"))
 	if err != nil {
-		http.Error(w, "invalid schedule entry id", http.StatusBadRequest)
+		http.Error(w, "invalid video script id", http.StatusBadRequest)
 		return
 	}
 
-	entry, err := h.store.Schedules().GetByID(ctx, entryID)
+	script, err := h.store.VideoScripts().GetByID(ctx, scriptID)
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			http.NotFound(w, r)
@@ -194,7 +197,7 @@ func (h *Handlers) mutate(w http.ResponseWriter, r *http.Request, fn func(ctx co
 		return
 	}
 
-	canApprove, err := store.CanApprove(ctx, h.store.Roles(), entry.ChannelID, person.ID)
+	canApprove, err := store.CanApprove(ctx, h.store.Roles(), script.ChannelID, person.ID)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
@@ -204,38 +207,20 @@ func (h *Handlers) mutate(w http.ResponseWriter, r *http.Request, fn func(ctx co
 		return
 	}
 
-	if err := fn(ctx, entryID, person.ID); err != nil {
-		if errors.Is(err, store.ErrScheduleEntryPublished) {
+	if err := fn(ctx, scriptID, person.ID); err != nil {
+		if errors.Is(err, store.ErrVideoScriptPublished) {
 			http.Error(w, "cannot change: the corresponding video has already been published", http.StatusConflict)
 			return
 		}
 		// Any other error here means fn's own state precondition failed
-		// (e.g. Approve requires draft, Unapprove requires committed,
-		// Update requires draft) -- entryID itself is already confirmed to
-		// exist by GetByID above, so this is always a state conflict, not
-		// a missing resource.
+		// (store.ErrVideoScriptTransition, FR40 -- e.g. greenlighting or
+		// denying a script that is not proposed, or archiving one that is
+		// not greenlit) -- scriptID itself is already confirmed to exist
+		// by GetByID above, so this is always a state conflict, not a
+		// missing resource.
 		http.Error(w, err.Error(), http.StatusConflict)
 		return
 	}
 
-	http.Redirect(w, r, "/channels/"+entry.ChannelID.String()+"/schedule", http.StatusSeeOther)
-}
-
-// parseProposedPublishAt parses the "proposed_publish_at" form field.
-// Accepts RFC3339 (in case a future non-HTML caller sends a
-// timezone-qualified value) and falls back to HTML's
-// <input type="datetime-local"> layout, interpreted as UTC (see
-// proposedPublishAtInputFormat's doc comment) -- the layout List's edit
-// form (views.templ) actually submits.
-func parseProposedPublishAt(raw string) (time.Time, error) {
-	if raw == "" {
-		return time.Time{}, fmt.Errorf("proposed_publish_at is required")
-	}
-	if t, err := time.Parse(time.RFC3339, raw); err == nil {
-		return t, nil
-	}
-	if t, err := time.Parse(proposedPublishAtInputFormat, raw); err == nil {
-		return t.UTC(), nil
-	}
-	return time.Time{}, fmt.Errorf("unrecognized time format %q", raw)
+	http.Redirect(w, r, "/channels/"+script.ChannelID.String()+"/schedule", http.StatusSeeOther)
 }

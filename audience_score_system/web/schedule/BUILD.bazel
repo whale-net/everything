@@ -1,13 +1,14 @@
 load("@rules_go//go:def.bzl", "go_test")
 load("//tools:templ.bzl", "templ_library")
 
-# Creator-tier schedule approval -- Founder or Co-Creator, symmetrically
-# per FR32 (C8: FR19, FR20) -- handlers (schedule.go)
-# and templ views (views.templ) in one package, see schedule.go's package
-# doc comment for why they are not split across a components/pages sibling
-# pair like web/pages (mirrors web/invite's own rationale). Postgres-backed
-# handler coverage (Testing phase, issue #1580) lands as
-# schedule_integration_test.go, mirroring
+# Creator-tier video_script greenlight/deny/archive -- Founder or
+# Co-Creator, symmetrically per FR32 (milestone video-script-model,
+# FR48/FR49, #1834; rebuilt in place of C8's FR19/FR20 schedule_entry
+# surface) -- handlers (schedule.go) and templ views (views.templ) in one
+# package, see schedule.go's package doc comment for why they are not
+# split across a components/pages sibling pair like web/pages (mirrors
+# web/invite's own rationale). Postgres-backed handler coverage (Testing
+# phase, issue #1834) lands as schedule_integration_test.go, mirroring
 # //audience_score_system/web/invite:invite_integration_test.
 templ_library(
     name = "schedule",
@@ -26,16 +27,19 @@ templ_library(
     ],
 )
 
-# Postgres-backed handler coverage (Testing phase, issue #1580, C8:
-# FR19/FR20): Creator approves a draft, Analyst/no-role/closed-creator-row
-# approve attempts are 403 with no state change (NFR5), the approve ->
-# un-approve -> edit -> re-approve cycle repeated three times, the published
-# freeze (409 + unchanged state + omitted affordances) and its near-misses
-# (pending/rejected match, live match to an unpublished video -- neither
-# freezes), an already-committed re-approve, and HandleList's Creator+
-# Analyst read / outsider-forbidden split. Gated behind `//go:build
-# integration`, gazelle skips it when scanning for go_test srcs; this
-# go_test is hand-written with EXACTLY the tag set from
+# Postgres-backed handler coverage (Testing phase, issue #1834, milestone
+# video-script-model FR48/FR49): HandleList's Founder/Co-Creator/Analyst
+# read (same rows for all three) with non-member/unknown-Channel/signed-out
+# negatives, the Analyst's affordance-free rendered page, a forged POST from
+# an Analyst 403ing on all three mutating routes (the load-bearing
+# authorization test, exercised through the real handler), Greenlight/Deny/
+# Archive's happy paths for both Creator-tier roles (FR32), FR40's
+# exhaustive invalid-transition 409s, FR39's publish freeze (409 + state
+# unchanged + omitted affordance) through the web path, the retired
+# /unapprove and /edit routes (404, unregistered), and a malformed script
+# UUID (400). Gated behind `//go:build integration`, gazelle skips it when
+# scanning for go_test srcs; this go_test is hand-written with EXACTLY the
+# tag set from
 # //libs/go/dbtest:postgres_constraints_test (see that package's
 # BUILD.bazel/README.md for why each tag is required), mirroring
 # //audience_score_system/web/invite:invite_integration_test. `# keep`
