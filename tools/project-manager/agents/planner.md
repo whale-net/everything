@@ -14,7 +14,8 @@ Given a root plan issue number (labeled `plan:approved`):
 2. Set up the Project per CONVENTIONS.md § Project setup: create it, link it to the repo, repurpose its `Status` field to the swimlane options (`Scaffold`, `Implementation`, `Testing`, `Validation`, `Done`, `Noted`, `Carry-over`, `Deferred`), and post the `Project board: <url>` comment on the root issue.
 3. Break the work into cohesive task issues. Each issue represents a complete unit of functionality that will progress through swimlanes (`Scaffold` → `Implementation` → `Testing` → `Validation` → `Done`):
    - Include everything the task needs across all phases directly in the issue body (file paths, target names, interfaces, scaffold groundwork, implementation details, test cases for red/green discipline, acceptance criteria).
-   - **Target ~5 task issues per plan, 8 as a hard cap** (CONVENTIONS.md § Task granularity & stack size) — each task issue becomes one branch and one PR in the plan's stack, so task count is stack depth. Group by cohesive deliverable (a vertical slice: schema + handler + tests for one capability), not by phase or by file — phases already all live inside one issue, so splitting further by phase or file just inflates count without adding review value. If grouping this way still leaves more than 8, stop and flag it in your summary comment instead of filing an oversized stack — recommend splitting the root plan into two, or routing it through `/project-manager:product` if it's grown to a new domain-sized subsystem.
+   - Group by cohesive deliverable (a vertical slice: schema + handler + tests for one capability), not by phase or by file — phases already all live inside one issue, so splitting further by phase or file just inflates count without adding review value. There's no cap on task count — a plan can have as many task issues as the work genuinely needs.
+   - **Order the breakdown expand-contract, and set `Depends on:` accordingly** (CONVENTIONS.md § Task granularity & merge cadence): each task lands on trunk on its own as soon as it's validated, so a task must declare `Depends on:` on every task whose absence from trunk would make landing it alone breaking. Additive tasks (new column, new endpoint, new interface path nothing existing calls yet) need no such dependency. A task that changes or removes something existing callers rely on (a migration that drops a column, an API contract change, deleting an old code path) must depend on every task that migrates those callers first, so it only becomes mergeable once trunk is already safe to receive it.
 4. For each task issue:
    ```sh
    gh issue create --title "<task title>" --body-file <tmpfile>
@@ -41,7 +42,7 @@ Whenever you're invoked on a plan: list its `Status: Noted` items (`gh project i
 ## Rules
 
 - Never create a task issue with a dependency that doesn't exist yet — create issues in dependency order.
-- Keep the stack within the ~5 target / 8 cap (see step 3) — if the grouped breakdown still exceeds it, recommend splitting the root plan rather than filing every task.
+- Never let a task's own scope require a breaking change without a `Depends on:` on whatever must land first to make it safe (see step 3) — that dependency is what keeps continuous trunk merging safe, not a limit on task count.
 - Keep each task issue self-contained so workers and validators can execute their phase without re-reading the root plan.
 - You do not implement anything yourself — no code, and never close a task issue directly (that's for the validator who validates it into `Done`). Exceptions: closing triaged finding issues and closing actioned scope notes.
 
