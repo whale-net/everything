@@ -37,7 +37,7 @@ func truncateSlice[T any](items []T, limit int) ([]T, bool) {
 
 // PredictionVsOutcomeVerdictOutput is the verdict half of one
 // get_prediction_vs_outcome row: the SPECIFIC version bound to the
-// schedule entry (LB3), never the idea's current verdict -- see
+// video_script (LB3), never the idea's current verdict -- see
 // store.BrowseStore.PredictionVsOutcome's doc for why those can differ.
 type PredictionVsOutcomeVerdictOutput struct {
 	VerdictID         string `json:"verdict_id" jsonschema:"This verdict version's ID, as a UUID string"`
@@ -61,12 +61,14 @@ func toPredictionVsOutcomeVerdictOutput(r store.PredictionOutcome) PredictionVsO
 	}
 }
 
-// PredictionVsOutcomeScheduleOutput is the committed schedule_entry half
-// of one get_prediction_vs_outcome row.
-type PredictionVsOutcomeScheduleOutput struct {
-	ScheduleEntryID   string     `json:"schedule_entry_id" jsonschema:"The committed schedule_entry's ID, as a UUID string"`
-	ProposedPublishAt time.Time  `json:"proposed_publish_at" jsonschema:"The entry's proposed/committed publish time"`
-	ApprovedAt        *time.Time `json:"approved_at,omitempty" jsonschema:"When this entry was committed (approved)"`
+// PredictionVsOutcomeScriptOutput is the greenlit-or-archived video_script
+// half of one get_prediction_vs_outcome row (#1830's FR44 re-anchor).
+type PredictionVsOutcomeScriptOutput struct {
+	VideoScriptID     string     `json:"video_script_id" jsonschema:"The video_script's ID, as a UUID string"`
+	Title             string     `json:"title" jsonschema:"The video script's own title"`
+	Status            string     `json:"status" jsonschema:"greenlit or archived (FR36-FR40) -- proposed/denied scripts never carry a live match, so never appear here"`
+	TargetPublishDate *time.Time `json:"target_publish_date,omitempty" jsonschema:"The script's target publish date, if set; absent when undated -- undated is normal per FR36"`
+	DecidedAt         *time.Time `json:"decided_at,omitempty" jsonschema:"When this script's status was last decided (greenlit/denied/archived)"`
 }
 
 // PredictionVsOutcomeVideoOutput is the published-video half of one
@@ -89,19 +91,19 @@ type PredictionVsOutcomeMetricsOutput struct {
 }
 
 // PredictionVsOutcomeRowOutput is one get_prediction_vs_outcome row: an
-// idea, the verdict version that predicted it, the committed schedule
-// entry, the published video, its latest metrics, and the match
-// provenance (FR22/FR23) -- whether the video<->schedule link was
+// idea, the verdict version that predicted it, the greenlit-or-archived
+// video_script, the published video, its latest metrics, and the match
+// provenance (FR22/FR23) -- whether the video<->script link was
 // auto-inferred by the sync worker or confirmed by a human. Provenance is
 // not decoration: a Creator judging whether their call was right needs to
 // know which.
 type PredictionVsOutcomeRowOutput struct {
-	IdeaID    string                            `json:"idea_id" jsonschema:"The Idea this row concerns, as a UUID string"`
-	IdeaTitle string                            `json:"idea_title" jsonschema:"The Idea's title"`
-	Verdict   PredictionVsOutcomeVerdictOutput  `json:"verdict" jsonschema:"The verdict version bound to the schedule entry below -- never the Idea's current verdict, if it has since moved on"`
-	Schedule  PredictionVsOutcomeScheduleOutput `json:"schedule" jsonschema:"The committed schedule entry this video fulfilled"`
-	Video     PredictionVsOutcomeVideoOutput    `json:"video" jsonschema:"The published video"`
-	Metrics   PredictionVsOutcomeMetricsOutput  `json:"metrics" jsonschema:"The video's latest recorded metrics snapshot"`
+	IdeaID    string                           `json:"idea_id" jsonschema:"The Idea this row concerns, as a UUID string"`
+	IdeaTitle string                           `json:"idea_title" jsonschema:"The Idea's title"`
+	Verdict   PredictionVsOutcomeVerdictOutput `json:"verdict" jsonschema:"The verdict version bound to the video_script below -- never the Idea's current verdict, if it has since moved on"`
+	Script    PredictionVsOutcomeScriptOutput  `json:"script" jsonschema:"The greenlit or archived video_script this video fulfilled"`
+	Video     PredictionVsOutcomeVideoOutput   `json:"video" jsonschema:"The published video"`
+	Metrics   PredictionVsOutcomeMetricsOutput `json:"metrics" jsonschema:"The video's latest recorded metrics snapshot"`
 	// MatchProvenance is exactly store.PredictionOutcome.MatchState's
 	// string value ("auto" or "confirmed") -- rows with any other match
 	// state never reach this output (see
@@ -115,10 +117,12 @@ func toPredictionVsOutcomeRowOutput(r store.PredictionOutcome) PredictionVsOutco
 		IdeaID:    r.IdeaID.String(),
 		IdeaTitle: r.IdeaTitle,
 		Verdict:   toPredictionVsOutcomeVerdictOutput(r),
-		Schedule: PredictionVsOutcomeScheduleOutput{
-			ScheduleEntryID:   r.ScheduleEntryID.String(),
-			ProposedPublishAt: r.ProposedPublishAt,
-			ApprovedAt:        r.ApprovedAt,
+		Script: PredictionVsOutcomeScriptOutput{
+			VideoScriptID:     r.VideoScriptID.String(),
+			Title:             r.ScriptTitle,
+			Status:            string(r.ScriptStatus),
+			TargetPublishDate: r.TargetPublishDate,
+			DecidedAt:         r.DecidedAt,
 		},
 		Video: PredictionVsOutcomeVideoOutput{
 			YouTubeVideoID: r.YouTubeVideoID,
@@ -197,11 +201,12 @@ type GetPredictionVsOutcomeOutput struct {
 func registerGetPredictionVsOutcome(reg *server.Registry, browse store.BrowseStore, matches store.MatchStore) {
 	server.RegisterRead(reg, &mcp.Tool{
 		Name: "get_prediction_vs_outcome",
-		Description: "Compare a Channel's viability predictions against what actually happened (FR24): for every " +
-			"published video with a resolved (auto or human-confirmed) link to a committed schedule entry, returns " +
-			"the idea, the SPECIFIC verdict version that predicted it (never a possibly-newer current verdict), the " +
-			"committed slot, the video, its latest metrics, and the match's provenance (auto vs confirmed) and " +
-			"confidence. Videos with a match still pending human resolution are excluded but counted in " +
+		Description: "Compare a Channel's viability predictions against what actually happened (FR24, FR44): for " +
+			"every published video with a resolved (auto or human-confirmed) link to a greenlit or archived video " +
+			"script, returns the idea, the SPECIFIC verdict version that predicted it (never a possibly-newer current " +
+			"verdict), the script (title, status, target publish date), the video, its latest metrics, and the " +
+			"match's provenance (auto vs confirmed) and confidence. Videos with a match still pending human " +
+			"resolution are excluded but counted in " +
 			"pending_match_count -- call list_pending_matches to resolve them. Response is capped at limit (default " +
 			"25); see truncated. Page backward past truncation by re-calling with before set to the oldest returned " +
 			"row's published_at.",

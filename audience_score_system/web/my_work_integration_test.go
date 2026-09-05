@@ -166,11 +166,12 @@ func (s *myWorkTestStack) do(t *testing.T, method, target string, cookie *http.C
 	return w
 }
 
-// setupMyWorkOutcomeChain builds one viable Idea on ch with a committed
-// schedule entry, a published SyncedVideo, one VideoMetrics snapshot, and
-// an "auto" video_schedule_match linking them -- the qualifying-row shape
-// the outcome section requires, mirroring store_integration_test.go's
-// identically-named helper (#1717's own test coverage) at the web layer.
+// setupMyWorkOutcomeChain builds one greenlit video_script on ch (FR44/
+// #1830's re-anchor onto video_script), a published SyncedVideo, one
+// VideoMetrics snapshot, and an "auto" video_schedule_match linking them
+// -- the qualifying-row shape the outcome section requires, mirroring
+// store_integration_test.go's identically-named helper (#1717's own test
+// coverage) at the web layer.
 func (s *myWorkTestStack) setupMyWorkOutcomeChain(t *testing.T, ctx context.Context, ch store.Channel, creator store.Person, ideaTitle string) (store.Idea, store.Verdict) {
 	t.Helper()
 
@@ -182,12 +183,17 @@ func (s *myWorkTestStack) setupMyWorkOutcomeChain(t *testing.T, ctx context.Cont
 	})
 	require.NoError(t, err)
 
-	entry, err := s.store.Schedules().SaveDraft(ctx, store.SaveDraftInput{
-		ChannelID: ch.ID, IdeaID: idea.ID, VerdictID: v.ID,
-		ProposedPublishAt: time.Now().Add(24 * time.Hour), CreatedByPersonID: creator.ID,
+	strat, err := s.store.Strategies().Save(ctx, store.SaveStrategyInput{
+		ChannelID: ch.ID, Title: ideaTitle + " Strategy", Active: true,
+		VerdictIDs: []uuid.UUID{v.ID}, CreatedByPersonID: creator.ID,
 	})
 	require.NoError(t, err)
-	require.NoError(t, s.store.Schedules().Approve(ctx, entry.ID, creator.ID))
+	script, err := s.store.VideoScripts().Propose(ctx, store.ProposeVideoScriptInput{
+		ChannelID: ch.ID, VerdictID: v.ID, StrategyID: strat.ID,
+		Title: ideaTitle, ScriptText: "script text for " + ideaTitle, CreatedByPersonID: creator.ID,
+	})
+	require.NoError(t, err)
+	require.NoError(t, s.store.VideoScripts().Greenlight(ctx, script.ID, creator.ID))
 
 	videoTitle := ideaTitle + " Video"
 	publishedAt := time.Now().Add(-time.Hour)
@@ -210,16 +216,9 @@ func (s *myWorkTestStack) setupMyWorkOutcomeChain(t *testing.T, ctx context.Cont
 		SyncedVideoID: video.ID, Views: &views, MeasuredAt: time.Now(),
 	}}))
 
-	// MyWorkStore's outcome section (mywork.go) still joins
-	// video_schedule_match on schedule_entry_id (#1830's re-anchor onto
-	// video_script, not #1829's) -- seed it by direct SQL rather than
-	// through MatchStore.Record, which as of #1829 never writes
-	// schedule_entry_id (see Record's doc comment, store/match.go).
-	_, err = s.db.Pool.Exec(ctx, `
-		INSERT INTO video_schedule_match (synced_video_id, schedule_entry_id, confidence, state)
-		VALUES ($1, $2, $3, $4)
-	`, video.ID, entry.ID, 0.9, store.MatchStateAuto)
-	require.NoError(t, err)
+	require.NoError(t, s.store.Matches().Record(ctx, store.VideoScheduleMatch{
+		SyncedVideoID: video.ID, VideoScriptID: &script.ID, Confidence: 0.9, State: store.MatchStateAuto,
+	}))
 
 	return idea, v
 }
@@ -258,6 +257,24 @@ func TestHandleMyWork_RendersSectionPerAssociatedChannel_WithAllFourBlocks(t *te
 	require.NoError(t, s.store.Roles().AddRole(ctx, chB.ID, person.ID, store.RoleCoCreator, founderB.ID))
 	_, err = s.store.Research().SaveNote(ctx, store.SaveNoteInput{ChannelID: chB.ID, Text: "B research note text", AuthorPersonID: founderB.ID})
 	require.NoError(t, err)
+	// loadScheduleState (store/mywork.go) is unchanged by #1830 -- it still
+	// aggregates schedule_entry directly (that column/table's retirement
+	// is #1835's scope, not this task's) -- so the "0 draft, 1 committed"
+	// assertion below needs its own, separate committed schedule_entry:
+	// setupMyWorkOutcomeChain no longer writes one (it goes through
+	// video_script instead).
+	scheduleIdeaB, err := s.store.Ideas().Create(ctx, chB.ID, "B Schedule Idea", founderB.ID)
+	require.NoError(t, err)
+	scheduleVerdictB, err := s.store.Verdicts().Append(ctx, store.AppendVerdictInput{
+		IdeaID: scheduleIdeaB.ID, Verdict: store.VerdictViable, Reasoning: "B schedule reasoning", AuthorPersonID: founderB.ID,
+	})
+	require.NoError(t, err)
+	scheduleEntryB, err := s.store.Schedules().SaveDraft(ctx, store.SaveDraftInput{
+		ChannelID: chB.ID, IdeaID: scheduleIdeaB.ID, VerdictID: scheduleVerdictB.ID,
+		ProposedPublishAt: time.Now().Add(48 * time.Hour), CreatedByPersonID: founderB.ID,
+	})
+	require.NoError(t, err)
+	require.NoError(t, s.store.Schedules().Approve(ctx, scheduleEntryB.ID, founderB.ID))
 	s.setupMyWorkOutcomeChain(t, ctx, chB, founderB, "B Idea")
 
 	// C: person is Analyst, granted by C's own Founder -- a note only, no

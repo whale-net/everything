@@ -335,10 +335,10 @@ type MatchCandidate struct {
 }
 
 // PredictionVsOutcome is one row of the `v_prediction_vs_outcome` view
-// (migration 002, FR24) -- the pre-joined idea x current-verdict x
-// committed-schedule-entry x resolved-match x synced-video x
-// latest-metrics comparison read. See that view's SQL comment for exactly
-// which rows qualify.
+// (migration 012, FR44 re-anchor of migration 002's FR24 shape) -- the
+// pre-joined idea x current-verdict x greenlit-or-archived-video_script x
+// resolved-match x synced-video x latest-metrics comparison read. See that
+// view's SQL comment for exactly which rows qualify.
 type PredictionVsOutcome struct {
 	IdeaID                     uuid.UUID
 	ChannelID                  uuid.UUID
@@ -347,9 +347,11 @@ type PredictionVsOutcome struct {
 	VerdictVersion             int
 	Verdict                    VerdictValue
 	VerdictReasoning           string
-	ScheduleEntryID            uuid.UUID
-	ProposedPublishAt          time.Time
-	ApprovedAt                 *time.Time
+	VideoScriptID              uuid.UUID
+	ScriptTitle                string
+	ScriptStatus               VideoScriptStatus
+	TargetPublishDate          *time.Time
+	DecidedAt                  *time.Time
 	MatchID                    uuid.UUID
 	MatchState                 MatchState
 	MatchConfidence            float64
@@ -366,15 +368,15 @@ type PredictionVsOutcome struct {
 }
 
 // PredictionOutcome is one row of BrowseStore.PredictionVsOutcome (issue
-// #1582, FR24, C10's comparison read) -- an idea's committed, matched
-// (auto or confirmed), published video, alongside the SPECIFIC
-// viability_verdict version bound to that schedule_entry
-// (schedule_entry.verdict_id, LB3's FK chain) -- never the idea's current
-// verdict. Deliberately NOT the same shape as PredictionVsOutcome above:
-// see BrowseStore.PredictionVsOutcome's doc (browse.go) for why this is a
-// distinct, corrected query rather than a read of migration 002's
-// v_prediction_vs_outcome view, plus the verdict author fields that view
-// does not carry.
+// #1582, FR24, C10's comparison read; #1830's FR44 re-anchor) -- an idea's
+// greenlit-or-archived, matched (auto or confirmed), published video,
+// alongside the SPECIFIC viability_verdict version bound to that
+// video_script (video_script.verdict_id, LB3's FK chain) -- never the
+// idea's current verdict. Deliberately NOT the same shape as
+// PredictionVsOutcome above: see BrowseStore.PredictionVsOutcome's doc
+// (browse.go) for why this is a distinct, corrected query rather than a
+// read of migration 012's v_prediction_vs_outcome view, plus the verdict
+// author fields that view does not carry.
 type PredictionOutcome struct {
 	IdeaID    uuid.UUID
 	IdeaTitle string
@@ -387,9 +389,11 @@ type PredictionOutcome struct {
 	VerdictAuthorDisplayName string
 	VerdictCreatedAt         time.Time
 
-	ScheduleEntryID   uuid.UUID
-	ProposedPublishAt time.Time
-	ApprovedAt        *time.Time
+	VideoScriptID     uuid.UUID
+	ScriptTitle       string
+	ScriptStatus      VideoScriptStatus
+	TargetPublishDate *time.Time
+	DecidedAt         *time.Time
 
 	MatchID         uuid.UUID
 	MatchState      MatchState // always MatchStateAuto or MatchStateConfirmed.
@@ -509,11 +513,11 @@ type ChannelWorkSummary struct {
 	// verdict yet.
 	LatestVerdict *IdeaVerdictSummary
 	ScheduleState ScheduleDraftState
-	// LatestOutcome is nil when the Channel has no published,
-	// live-matched video against a committed schedule entry yet -- see
+	// LatestOutcome is nil when the Channel has no published, live-matched
+	// video against a greenlit or archived video_script yet -- see
 	// BrowseStore.PredictionVsOutcome's qualifying-row rule, which this
-	// mirrors exactly (LB3: the verdict version bound to the schedule
-	// entry, not the Idea's current verdict).
+	// mirrors exactly (LB3: the verdict version bound to the video_script,
+	// not the Idea's current verdict).
 	LatestOutcome *PredictionOutcome
 }
 

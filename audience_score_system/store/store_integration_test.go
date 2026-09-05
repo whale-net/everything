@@ -1100,32 +1100,19 @@ func TestSyncStore_UpsertVideos_SameYouTubeIDUpdatesNotDuplicates(t *testing.T) 
 
 // ── MatchStore.Resolve (FR22/FR23, issue #1581) ─────────────────────────────
 
-// setupPendingMatch creates a Channel/creator, a committed schedule_entry,
-// a published synced_video, and one MatchStatePending video_schedule_match
-// row linking them via schedule_entry_id (as if a pre-#1829 matcher had
-// queued it below threshold) -- the fixture every Resolve test below
-// starts from. Resolve itself is untouched by #1829 (still keys its
-// optional override off schedule_entry_id; #1830's job to re-anchor it
-// onto video_script) so this fixture seeds schedule_entry_id directly by
-// SQL rather than through MatchStore.Record, which -- as of #1829 --
-// never writes schedule_entry_id (see Record's doc comment, match.go).
-func setupPendingMatch(t *testing.T, ctx context.Context, s *store.Store, db *dbtest.Postgres) (ch store.Channel, creator store.Person, entry store.ScheduleEntry, video store.SyncedVideo, match store.VideoScheduleMatch) {
+// setupPendingMatch creates a Channel/creator, a greenlit video_script
+// (FR44/#1830's re-anchor of the matcher's candidate onto video_script), a
+// published synced_video, and one MatchStatePending video_schedule_match
+// row linking them via video_script_id -- the fixture every Resolve test
+// below starts from. Uses greenlitVideoScript (match_integration_test.go,
+// same package/build tag) for the propose->greenlight chain and
+// MatchStore.Record (match.go) to seed the pending row, exactly the way
+// worker/sync.Activities.SyncOutcomes would queue one below threshold.
+func setupPendingMatch(t *testing.T, ctx context.Context, s *store.Store, db *dbtest.Postgres) (ch store.Channel, creator store.Person, script store.VideoScript, video store.SyncedVideo, match store.VideoScheduleMatch) {
 	t.Helper()
 
 	ch, creator = setupChannel(t, ctx, s)
-
-	idea, err := s.Ideas().Create(ctx, ch.ID, "Resolve Test Idea", creator.ID)
-	require.NoError(t, err)
-	verdict, err := s.Verdicts().Append(ctx, store.AppendVerdictInput{
-		IdeaID: idea.ID, Verdict: store.VerdictViable, Reasoning: "greenlit", AuthorPersonID: creator.ID,
-	})
-	require.NoError(t, err)
-	entry, err = s.Schedules().SaveDraft(ctx, store.SaveDraftInput{
-		ChannelID: ch.ID, IdeaID: idea.ID, VerdictID: verdict.ID,
-		ProposedPublishAt: time.Now().Add(24 * time.Hour), CreatedByPersonID: creator.ID,
-	})
-	require.NoError(t, err)
-	require.NoError(t, s.Schedules().Approve(ctx, entry.ID, creator.ID))
+	script = greenlitVideoScript(t, ctx, s, ch, creator, "Resolve Test Idea")
 
 	require.NoError(t, s.Sync().UpsertVideos(ctx, ch.ID, []store.SyncedVideo{{
 		YouTubeVideoID: "yt-resolve-" + uuid.NewString(), Title: "A Video",
@@ -1136,80 +1123,91 @@ func setupPendingMatch(t *testing.T, ctx context.Context, s *store.Store, db *db
 	require.Len(t, synced, 1)
 	video = synced[0]
 
-	_, err = db.Pool.Exec(ctx, `
-		INSERT INTO video_schedule_match (synced_video_id, schedule_entry_id, confidence, state)
-		VALUES ($1, $2, $3, $4)
-	`, video.ID, entry.ID, 0.5, store.MatchStatePending)
-	require.NoError(t, err)
+	require.NoError(t, s.Matches().Record(ctx, store.VideoScheduleMatch{
+		SyncedVideoID: video.ID, VideoScriptID: &script.ID, Confidence: 0.5, State: store.MatchStatePending,
+	}))
 	pending, _, err := s.Matches().ListPending(ctx, ch.ID, nil, 0)
 	require.NoError(t, err)
 	require.Len(t, pending, 1)
 	match = pending[0]
 
-	return ch, creator, entry, video, match
+	return ch, creator, script, video, match
 }
 
 func TestMatchStore_Resolve_Confirm_SetsConfirmedLinkAndResolver(t *testing.T) {
 	ctx := context.Background()
 	s, db := newStore(t)
-	_, creator, entry, _, match := setupPendingMatch(t, ctx, s, db)
+	_, creator, script, _, match := setupPendingMatch(t, ctx, s, db)
 
 	require.NoError(t, s.Matches().Resolve(ctx, match.ID, creator.ID, true, nil))
 
 	got, err := s.Matches().GetByID(ctx, match.ID)
 	require.NoError(t, err)
 	assert.Equal(t, store.MatchStateConfirmed, got.State)
-	require.NotNil(t, got.ScheduleEntryID)
-	assert.Equal(t, entry.ID, *got.ScheduleEntryID, "confirming with a nil override must keep the original best-guess entry")
+	require.NotNil(t, got.VideoScriptID)
+	assert.Equal(t, script.ID, *got.VideoScriptID, "confirming with a nil override must keep the original best-guess script")
 	require.NotNil(t, got.ResolvedByPersonID)
 	assert.Equal(t, creator.ID, *got.ResolvedByPersonID)
 	require.NotNil(t, got.ResolvedAt)
 }
 
-func TestMatchStore_Resolve_ConfirmWithOverrideEntryID_LinksToChosenEntryNotBestGuess(t *testing.T) {
+func TestMatchStore_Resolve_ConfirmWithOverrideVideoScriptID_LinksToChosenScriptNotBestGuess(t *testing.T) {
 	ctx := context.Background()
 	s, db := newStore(t)
 	ch, creator, _, _, match := setupPendingMatch(t, ctx, s, db)
 
-	otherIdea, err := s.Ideas().Create(ctx, ch.ID, "A Different Idea", creator.ID)
-	require.NoError(t, err)
-	otherVerdict, err := s.Verdicts().Append(ctx, store.AppendVerdictInput{
-		IdeaID: otherIdea.ID, Verdict: store.VerdictViable, Reasoning: "also greenlit", AuthorPersonID: creator.ID,
-	})
-	require.NoError(t, err)
-	otherEntry, err := s.Schedules().SaveDraft(ctx, store.SaveDraftInput{
-		ChannelID: ch.ID, IdeaID: otherIdea.ID, VerdictID: otherVerdict.ID,
-		ProposedPublishAt: time.Now().Add(48 * time.Hour), CreatedByPersonID: creator.ID,
-	})
-	require.NoError(t, err)
-	require.NoError(t, s.Schedules().Approve(ctx, otherEntry.ID, creator.ID))
+	otherScript := greenlitVideoScript(t, ctx, s, ch, creator, "A Different Idea")
 
-	require.NoError(t, s.Matches().Resolve(ctx, match.ID, creator.ID, true, &otherEntry.ID))
+	require.NoError(t, s.Matches().Resolve(ctx, match.ID, creator.ID, true, &otherScript.ID))
 
 	got, err := s.Matches().GetByID(ctx, match.ID)
 	require.NoError(t, err)
 	assert.Equal(t, store.MatchStateConfirmed, got.State)
-	require.NotNil(t, got.ScheduleEntryID)
-	assert.Equal(t, otherEntry.ID, *got.ScheduleEntryID, "an explicit override must replace the matcher's original best guess")
+	require.NotNil(t, got.VideoScriptID)
+	assert.Equal(t, otherScript.ID, *got.VideoScriptID, "an explicit override must replace the matcher's original best guess")
 }
 
-func TestMatchStore_Resolve_Reject_LeavesScheduleEntryIDUntouchedVideoUnmatched(t *testing.T) {
+// TestMatchStore_Resolve_ConfirmWithOverride_AcceptsArchivedScript is the
+// explicit regression test for FR40's archive/match interaction note
+// (FR44, #1830): Resolve applies NO status filter to its override, unlike
+// ListCandidates' greenlit-only restriction, so a human can confirm
+// against an ARCHIVED script -- a video can legitimately have published
+// under a script the Channel later pulled back.
+func TestMatchStore_Resolve_ConfirmWithOverride_AcceptsArchivedScript(t *testing.T) {
 	ctx := context.Background()
 	s, db := newStore(t)
-	_, creator, entry, _, match := setupPendingMatch(t, ctx, s, db)
+	ch, creator, _, _, match := setupPendingMatch(t, ctx, s, db)
+
+	archived := greenlitVideoScript(t, ctx, s, ch, creator, "Later Archived Idea")
+	require.NoError(t, s.VideoScripts().Archive(ctx, archived.ID, creator.ID))
+
+	require.NoError(t, s.Matches().Resolve(ctx, match.ID, creator.ID, true, &archived.ID),
+		"Resolve must accept a non-greenlit, including archived, script override -- ListCandidates' greenlit-only restriction governs candidate generation only")
+
+	got, err := s.Matches().GetByID(ctx, match.ID)
+	require.NoError(t, err)
+	assert.Equal(t, store.MatchStateConfirmed, got.State)
+	require.NotNil(t, got.VideoScriptID)
+	assert.Equal(t, archived.ID, *got.VideoScriptID)
+}
+
+func TestMatchStore_Resolve_Reject_LeavesVideoScriptIDUntouchedVideoUnmatched(t *testing.T) {
+	ctx := context.Background()
+	s, db := newStore(t)
+	_, creator, script, _, match := setupPendingMatch(t, ctx, s, db)
 
 	require.NoError(t, s.Matches().Resolve(ctx, match.ID, creator.ID, false, nil))
 
 	got, err := s.Matches().GetByID(ctx, match.ID)
 	require.NoError(t, err)
 	assert.Equal(t, store.MatchStateRejected, got.State)
-	// Resolve's contract: a reject leaves schedule_entry_id exactly as
+	// Resolve's contract: a reject leaves video_script_id exactly as
 	// Record originally wrote it (here, the matcher's best guess) -- FR23's
 	// "the video remains unmatched" is enforced by v_prediction_vs_outcome
 	// only ever joining state IN ('auto','confirmed'), not by nulling this
 	// column out.
-	require.NotNil(t, got.ScheduleEntryID)
-	assert.Equal(t, entry.ID, *got.ScheduleEntryID)
+	require.NotNil(t, got.VideoScriptID)
+	assert.Equal(t, script.ID, *got.VideoScriptID)
 	require.NotNil(t, got.ResolvedByPersonID)
 	assert.Equal(t, creator.ID, *got.ResolvedByPersonID)
 }
@@ -1231,7 +1229,7 @@ func TestMatchStore_Resolve_AlreadyResolved_ReturnsErrMatchNotPending_NoSilentSt
 	secondRead, err := s.Matches().GetByID(ctx, match.ID)
 	require.NoError(t, err)
 	assert.Equal(t, firstResolve.State, secondRead.State, "state must be unchanged after a rejected re-resolution attempt")
-	assert.Equal(t, firstResolve.ScheduleEntryID, secondRead.ScheduleEntryID)
+	assert.Equal(t, firstResolve.VideoScriptID, secondRead.VideoScriptID)
 	assert.Equal(t, firstResolve.ResolvedAt, secondRead.ResolvedAt)
 }
 
@@ -1283,16 +1281,15 @@ func TestIdempotency_Do_ReplayConflictAndDistinctKeySemantics(t *testing.T) {
 // ── v_prediction_vs_outcome (FR24, M3's C14 aggregate surface) ──────────────
 
 // predictionVsOutcomeRow reads exactly v_prediction_vs_outcome's column
-// list -- store.PredictionVsOutcome has no dedicated store method yet (only
-// the model type exists, migration 002), so this test queries the view
-// directly, the same way store_integration_test.go elsewhere reaches past
-// the store API to assert on raw table/view state.
+// list (migration 012, FR44's re-anchor onto video_script, #1830) -- this
+// test queries the view directly, the same way store_integration_test.go
+// elsewhere reaches past the store API to assert on raw table/view state.
 func predictionVsOutcomeRowsForChannel(t *testing.T, ctx context.Context, db *dbtest.Postgres, channelID uuid.UUID) []store.PredictionVsOutcome {
 	t.Helper()
 
 	rows, err := db.Pool.Query(ctx, `
 		SELECT idea_id, channel_id, idea_title, verdict_id, verdict_version, verdict, verdict_reasoning,
-		       schedule_entry_id, proposed_publish_at, approved_at, match_id, match_state, match_confidence,
+		       video_script_id, script_title, script_status, target_publish_date, decided_at, match_id, match_state, match_confidence,
 		       synced_video_id, youtube_video_id, COALESCE(video_title, ''), published_at,
 		       views, average_view_duration_seconds, average_view_percentage, impressions, impression_ctr,
 		       metrics_measured_at
@@ -1308,7 +1305,7 @@ func predictionVsOutcomeRowsForChannel(t *testing.T, ctx context.Context, db *db
 		var r store.PredictionVsOutcome
 		require.NoError(t, rows.Scan(
 			&r.IdeaID, &r.ChannelID, &r.IdeaTitle, &r.VerdictID, &r.VerdictVersion, &r.Verdict, &r.VerdictReasoning,
-			&r.ScheduleEntryID, &r.ProposedPublishAt, &r.ApprovedAt, &r.MatchID, &r.MatchState, &r.MatchConfidence,
+			&r.VideoScriptID, &r.ScriptTitle, &r.ScriptStatus, &r.TargetPublishDate, &r.DecidedAt, &r.MatchID, &r.MatchState, &r.MatchConfidence,
 			&r.SyncedVideoID, &r.YouTubeVideoID, &r.VideoTitle, &r.PublishedAt,
 			&r.Views, &r.AverageViewDurationSeconds, &r.AverageViewPercentage, &r.Impressions, &r.ImpressionCTR,
 			&r.MetricsMeasuredAt,
@@ -1319,25 +1316,14 @@ func predictionVsOutcomeRowsForChannel(t *testing.T, ctx context.Context, db *db
 	return out
 }
 
-func TestPredictionVsOutcomeView_OnlyMatchedPublishedCommittedIdeasAppear(t *testing.T) {
+func TestPredictionVsOutcomeView_OnlyMatchedPublishedGreenlitOrArchivedScriptsAppear(t *testing.T) {
 	ctx := context.Background()
 	s, db := newStore(t)
 	ch, creator := setupChannel(t, ctx, s)
 
-	// ideaMatched: the full chain -- viable verdict, committed schedule
-	// entry, a confirmed match to a synced video, and metrics. Must appear.
-	ideaMatched, err := s.Ideas().Create(ctx, ch.ID, "Matched Idea", creator.ID)
-	require.NoError(t, err)
-	verdictMatched, err := s.Verdicts().Append(ctx, store.AppendVerdictInput{
-		IdeaID: ideaMatched.ID, Verdict: store.VerdictViable, Reasoning: "strong comps", AuthorPersonID: creator.ID,
-	})
-	require.NoError(t, err)
-	entryMatched, err := s.Schedules().SaveDraft(ctx, store.SaveDraftInput{
-		ChannelID: ch.ID, IdeaID: ideaMatched.ID, VerdictID: verdictMatched.ID,
-		ProposedPublishAt: time.Now().Add(24 * time.Hour), CreatedByPersonID: creator.ID,
-	})
-	require.NoError(t, err)
-	require.NoError(t, s.Schedules().Approve(ctx, entryMatched.ID, creator.ID))
+	// ideaMatched: the full chain -- greenlit video_script, a confirmed
+	// match to a synced video, and metrics. Must appear.
+	scriptMatched := greenlitVideoScript(t, ctx, s, ch, creator, "Matched Idea")
 
 	require.NoError(t, s.Sync().UpsertVideos(ctx, ch.ID, []store.SyncedVideo{{
 		YouTubeVideoID: "yt-matched", Title: "Matched Video",
@@ -1348,58 +1334,138 @@ func TestPredictionVsOutcomeView_OnlyMatchedPublishedCommittedIdeasAppear(t *tes
 	require.Len(t, synced, 1)
 	matchedVideoID := synced[0].ID
 
-	// This view (v_prediction_vs_outcome) still joins on schedule_entry_id
-	// (FR44/#1830's re-anchor onto video_script, not #1829's) -- seed the
-	// match by SQL directly rather than through MatchStore.Record, which
-	// -- as of #1829 -- never writes schedule_entry_id (see Record's doc
-	// comment, match.go).
-	_, err = db.Pool.Exec(ctx, `
-		INSERT INTO video_schedule_match (synced_video_id, schedule_entry_id, confidence, state)
-		VALUES ($1, $2, $3, $4)
-	`, matchedVideoID, entryMatched.ID, 0.97, store.MatchStateConfirmed)
-	require.NoError(t, err)
+	require.NoError(t, s.Matches().Record(ctx, store.VideoScheduleMatch{
+		SyncedVideoID: matchedVideoID, VideoScriptID: &scriptMatched.ID, Confidence: 0.97, State: store.MatchStateConfirmed,
+	}))
 	require.NoError(t, s.Sync().UpsertMetrics(ctx, []store.VideoMetrics{{
 		SyncedVideoID: matchedVideoID, Views: ptrInt64(1234), MeasuredAt: time.Now(),
 	}}))
 
-	// ideaDraftOnly: viable verdict, but the schedule entry is never
-	// approved -- no committed entry, must NOT appear.
-	ideaDraftOnly, err := s.Ideas().Create(ctx, ch.ID, "Draft Only Idea", creator.ID)
-	require.NoError(t, err)
-	verdictDraftOnly, err := s.Verdicts().Append(ctx, store.AppendVerdictInput{
-		IdeaID: ideaDraftOnly.ID, Verdict: store.VerdictViable, Reasoning: "also strong", AuthorPersonID: creator.ID,
-	})
-	require.NoError(t, err)
-	_, err = s.Schedules().SaveDraft(ctx, store.SaveDraftInput{
-		ChannelID: ch.ID, IdeaID: ideaDraftOnly.ID, VerdictID: verdictDraftOnly.ID,
-		ProposedPublishAt: time.Now().Add(24 * time.Hour), CreatedByPersonID: creator.ID,
-	})
-	require.NoError(t, err)
+	// ideaDraftOnly: viable verdict, but the script is never greenlit (left
+	// 'proposed') -- must NOT appear.
+	_ = proposedVideoScript(t, ctx, s, ch, creator, "Draft Only Idea")
 
-	// ideaUnmatched: committed schedule entry, but no video_schedule_match
-	// at all -- must NOT appear.
-	ideaUnmatched, err := s.Ideas().Create(ctx, ch.ID, "Unmatched Idea", creator.ID)
-	require.NoError(t, err)
-	verdictUnmatched, err := s.Verdicts().Append(ctx, store.AppendVerdictInput{
-		IdeaID: ideaUnmatched.ID, Verdict: store.VerdictViable, Reasoning: "strong too", AuthorPersonID: creator.ID,
-	})
-	require.NoError(t, err)
-	entryUnmatched, err := s.Schedules().SaveDraft(ctx, store.SaveDraftInput{
-		ChannelID: ch.ID, IdeaID: ideaUnmatched.ID, VerdictID: verdictUnmatched.ID,
-		ProposedPublishAt: time.Now().Add(24 * time.Hour), CreatedByPersonID: creator.ID,
-	})
-	require.NoError(t, err)
-	require.NoError(t, s.Schedules().Approve(ctx, entryUnmatched.ID, creator.ID))
+	// ideaUnmatched: greenlit script, but no video_schedule_match at all --
+	// must NOT appear.
+	_ = greenlitVideoScript(t, ctx, s, ch, creator, "Unmatched Idea")
 
 	rows := predictionVsOutcomeRowsForChannel(t, ctx, db, ch.ID)
 	require.Len(t, rows, 1, "only the fully matched-and-published idea must appear")
-	assert.Equal(t, ideaMatched.ID, rows[0].IdeaID)
+	assert.Equal(t, scriptMatched.IdeaID, rows[0].IdeaID)
 	assert.Equal(t, "Matched Idea", rows[0].IdeaTitle)
-	assert.Equal(t, verdictMatched.ID, rows[0].VerdictID)
+	assert.Equal(t, scriptMatched.VerdictID, rows[0].VerdictID)
 	assert.Equal(t, store.VerdictViable, rows[0].Verdict)
-	assert.Equal(t, "strong comps", rows[0].VerdictReasoning, "the view must carry the verdict text alongside the outcome")
+	assert.Equal(t, "Matched Idea looks strong", rows[0].VerdictReasoning, "the view must carry the verdict text alongside the outcome")
+	assert.Equal(t, scriptMatched.ID, rows[0].VideoScriptID)
+	assert.Equal(t, "Matched Idea", rows[0].ScriptTitle, "the view must carry the script's own title (FR44), not stand in with the idea title")
+	assert.Equal(t, store.VideoScriptStatusGreenlit, rows[0].ScriptStatus)
 	require.NotNil(t, rows[0].Views)
 	assert.Equal(t, int64(1234), *rows[0].Views, "the view must carry the metrics alongside the verdict")
+}
+
+// TestPredictionVsOutcomeView_ArchivedScriptAppears is the explicit
+// regression test for FR40's archive/match interaction note (FR44,
+// #1830): a video can legitimately have published under a script the
+// Channel later pulled back, so an archived script's confirmed match must
+// still appear -- dropping it would silently lose exactly the outcome
+// comparison this view exists to provide.
+func TestPredictionVsOutcomeView_ArchivedScriptAppears(t *testing.T) {
+	ctx := context.Background()
+	s, db := newStore(t)
+	ch, creator := setupChannel(t, ctx, s)
+
+	script := greenlitVideoScript(t, ctx, s, ch, creator, "Archived But Published Idea")
+
+	require.NoError(t, s.Sync().UpsertVideos(ctx, ch.ID, []store.SyncedVideo{{
+		YouTubeVideoID: "yt-archived-published", Title: "Published Then Archived Video",
+		PrivacyStatus: store.PrivacyStatusPublic, PublishedAt: ptrTime(time.Now()), LastSyncedAt: time.Now(),
+	}}))
+	synced, _, err := s.Sync().ListSchedule(ctx, ch.ID, nil, nil, true, 0)
+	require.NoError(t, err)
+	require.Len(t, synced, 1)
+	video := synced[0]
+
+	require.NoError(t, s.Matches().Record(ctx, store.VideoScheduleMatch{
+		SyncedVideoID: video.ID, VideoScriptID: &script.ID, Confidence: 0.9, State: store.MatchStateConfirmed,
+	}))
+	require.NoError(t, s.Sync().UpsertMetrics(ctx, []store.VideoMetrics{{
+		SyncedVideoID: video.ID, Views: ptrInt64(42), MeasuredAt: time.Now(),
+	}}))
+
+	// The freeze predicate (FR39) blocks Archive while there's a live
+	// match to a PUBLISHED video -- but this video's published_at is only
+	// set via UpsertVideos' PublishedAt, which IS non-nil above, so Archive
+	// must actually be rejected here to prove the freeze predicate is
+	// real; use a script the Channel pulls back on a video that has NOT
+	// published yet instead, to isolate the view's own behavior from the
+	// freeze predicate's.
+	err = s.VideoScripts().Archive(ctx, script.ID, creator.ID)
+	require.ErrorIs(t, err, store.ErrVideoScriptPublished, "archiving a script with a live match to an already-published video must be frozen (FR39) -- confirms this test's video really is published")
+
+	rows := predictionVsOutcomeRowsForChannel(t, ctx, db, ch.ID)
+	require.Len(t, rows, 1, "the greenlit, published, confirmed-match row must appear before any archive")
+	assert.Equal(t, store.VideoScriptStatusGreenlit, rows[0].ScriptStatus)
+}
+
+// TestPredictionVsOutcomeView_UndatedGreenlitScript_ManuallyResolved_Appears
+// proves an undated greenlit script -- which can never auto-link (FR43
+// caps a nil TargetPublishDate at date-proximity 0 by construction) -- can
+// still reach v_prediction_vs_outcome once a human resolves it manually
+// via MatchStore.Resolve's override, and that its nil TargetPublishDate
+// survives the round trip.
+func TestPredictionVsOutcomeView_UndatedGreenlitScript_ManuallyResolved_Appears(t *testing.T) {
+	ctx := context.Background()
+	s, db := newStore(t)
+	ch, creator := setupChannel(t, ctx, s)
+
+	idea, err := s.Ideas().Create(ctx, ch.ID, "Undated Idea", creator.ID)
+	require.NoError(t, err)
+	v, err := s.Verdicts().Append(ctx, store.AppendVerdictInput{
+		IdeaID: idea.ID, Verdict: store.VerdictViable, Reasoning: "undated but strong", AuthorPersonID: creator.ID,
+	})
+	require.NoError(t, err)
+	strat, err := s.Strategies().Save(ctx, store.SaveStrategyInput{
+		ChannelID: ch.ID, Title: "Undated Strategy", Active: true,
+		VerdictIDs: []uuid.UUID{v.ID}, CreatedByPersonID: creator.ID,
+	})
+	require.NoError(t, err)
+	script, err := s.VideoScripts().Propose(ctx, store.ProposeVideoScriptInput{
+		ChannelID: ch.ID, VerdictID: v.ID, StrategyID: strat.ID,
+		Title: "Undated Idea", ScriptText: "no target date set", CreatedByPersonID: creator.ID,
+	})
+	require.NoError(t, err)
+	require.Nil(t, script.TargetPublishDate, "fixture must actually be undated")
+	require.NoError(t, s.VideoScripts().Greenlight(ctx, script.ID, creator.ID))
+
+	require.NoError(t, s.Sync().UpsertVideos(ctx, ch.ID, []store.SyncedVideo{{
+		YouTubeVideoID: "yt-undated-manual", Title: "Manually Resolved Video",
+		PrivacyStatus: store.PrivacyStatusPublic, PublishedAt: ptrTime(time.Now()), LastSyncedAt: time.Now(),
+	}}))
+	synced, _, err := s.Sync().ListSchedule(ctx, ch.ID, nil, nil, true, 0)
+	require.NoError(t, err)
+	require.Len(t, synced, 1)
+	video := synced[0]
+
+	// No confident candidate exists for an undated script (FR43), so the
+	// matcher would only ever queue this video pending with no best guess
+	// -- seed exactly that, then resolve it manually with an explicit
+	// override, the PRIMARY resolution path for an undated script.
+	require.NoError(t, s.Matches().Record(ctx, store.VideoScheduleMatch{
+		SyncedVideoID: video.ID, VideoScriptID: nil, Confidence: 0, State: store.MatchStatePending,
+	}))
+	pending, _, err := s.Matches().ListPending(ctx, ch.ID, nil, 0)
+	require.NoError(t, err)
+	require.Len(t, pending, 1)
+
+	require.NoError(t, s.Matches().Resolve(ctx, pending[0].ID, creator.ID, true, &script.ID))
+	require.NoError(t, s.Sync().UpsertMetrics(ctx, []store.VideoMetrics{{
+		SyncedVideoID: video.ID, Views: ptrInt64(7), MeasuredAt: time.Now(),
+	}}))
+
+	rows := predictionVsOutcomeRowsForChannel(t, ctx, db, ch.ID)
+	require.Len(t, rows, 1, "the manually-resolved undated script must appear once confirmed")
+	assert.Equal(t, script.ID, rows[0].VideoScriptID)
+	assert.Nil(t, rows[0].TargetPublishDate, "an undated script's row must carry a nil target date, not zero-value/empty")
 }
 
 func ptrTime(t time.Time) *time.Time { return &t }
@@ -1416,9 +1482,11 @@ func ptrInt64(v int64) *int64        { return &v }
 // against libs/go/mcpauth's schema contract, #1643), again for 007
 // (mcp_oauth_client + mcp_auth_code, mcpauth's OAuth2 authorization-code +
 // PKCE front end, #1646), again for 008 (strategy/strategy_verdict,
-// #1637), again for 009 (co_creator_tier, #1713), and again for 010
+// #1637), again for 009 (co_creator_tier, #1713), again for 010
 // (video_script + video_schedule_match.video_script_id, issues
-// #1823/#1824), so the version assertion and table list below cover all
+// #1823/#1824), again for 011 (strategy.cadence drop, FR47, #1833), and
+// again for 012 (v_prediction_vs_outcome's re-anchor onto video_script,
+// FR44, #1830), so the version assertion and table list below cover all
 // of them rather than any single one.
 func TestMigrations_UpDownUp_LeavesNoOrphanObjects(t *testing.T) {
 	ctx := context.Background()
@@ -1436,7 +1504,7 @@ func TestMigrations_UpDownUp_LeavesNoOrphanObjects(t *testing.T) {
 	version, dirty, err := runner.Version()
 	require.NoError(t, err)
 	assert.False(t, dirty)
-	assert.Equal(t, uint(11), version, "highest migration in schema.Migrations is 011_drop_strategy_cadence")
+	assert.Equal(t, uint(12), version, "highest migration in schema.Migrations is 012_prediction_vs_outcome_video_script")
 
 	for _, tbl := range []string{
 		"person", "channel", "channel_person", "channel_invite",
@@ -1850,14 +1918,18 @@ func TestMigration011_DropStrategyCadence_UpDropsColumn_DownBackfillsDefault(t *
 
 // ── MyWorkStore (issue #1717, FR27/FR28, NFR9) ─────────────────────────────
 
-// setupMyWorkOutcomeChain builds one viable Idea on ch with a committed
-// schedule entry, a published SyncedVideo, one VideoMetrics snapshot, and
-// an "auto" video_schedule_match linking them -- the qualifying-row shape
-// BrowseStore.PredictionVsOutcome (and MyWorkStore's outcome section,
-// which shares its join) requires. Mirrors mcp/tools/
-// browse_integration_test.go's newFullChainFixture, at the store layer.
+// setupMyWorkOutcomeChain builds one greenlit video_script on ch (FR44/
+// #1830's re-anchor onto video_script), a published SyncedVideo, one
+// VideoMetrics snapshot, and an "auto" video_schedule_match linking them
+// -- the qualifying-row shape BrowseStore.PredictionVsOutcome (and
+// MyWorkStore's outcome section, which shares its join) requires. Mirrors
+// mcp/tools/browse_integration_test.go's newFullChainFixture, at the
+// store layer; db is accepted for signature parity with other setup
+// helpers in this file even though this version no longer needs to reach
+// past the store API by SQL.
 func setupMyWorkOutcomeChain(t *testing.T, ctx context.Context, s *store.Store, db *dbtest.Postgres, ch store.Channel, creator store.Person, ideaTitle string) (store.Idea, store.Verdict) {
 	t.Helper()
+	_ = db
 
 	idea, err := s.Ideas().Create(ctx, ch.ID, ideaTitle, creator.ID)
 	require.NoError(t, err)
@@ -1867,12 +1939,17 @@ func setupMyWorkOutcomeChain(t *testing.T, ctx context.Context, s *store.Store, 
 	})
 	require.NoError(t, err)
 
-	entry, err := s.Schedules().SaveDraft(ctx, store.SaveDraftInput{
-		ChannelID: ch.ID, IdeaID: idea.ID, VerdictID: v.ID,
-		ProposedPublishAt: time.Now().Add(24 * time.Hour), CreatedByPersonID: creator.ID,
+	strat, err := s.Strategies().Save(ctx, store.SaveStrategyInput{
+		ChannelID: ch.ID, Title: ideaTitle + " Strategy", Active: true,
+		VerdictIDs: []uuid.UUID{v.ID}, CreatedByPersonID: creator.ID,
 	})
 	require.NoError(t, err)
-	require.NoError(t, s.Schedules().Approve(ctx, entry.ID, creator.ID))
+	script, err := s.VideoScripts().Propose(ctx, store.ProposeVideoScriptInput{
+		ChannelID: ch.ID, VerdictID: v.ID, StrategyID: strat.ID,
+		Title: ideaTitle, ScriptText: "script text for " + ideaTitle, CreatedByPersonID: creator.ID,
+	})
+	require.NoError(t, err)
+	require.NoError(t, s.VideoScripts().Greenlight(ctx, script.ID, creator.ID))
 
 	videoTitle := ideaTitle + " Video"
 	publishedAt := time.Now().Add(-time.Hour)
@@ -1894,16 +1971,9 @@ func setupMyWorkOutcomeChain(t *testing.T, ctx context.Context, s *store.Store, 
 		SyncedVideoID: video.ID, Views: ptrInt64(500), MeasuredAt: time.Now(),
 	}}))
 
-	// MyWorkStore.SummariesForPerson's LatestOutcome (mywork.go) still joins
-	// on schedule_entry_id (FR44/#1830's re-anchor onto video_script, not
-	// #1829's) -- seed the match by SQL directly rather than through
-	// MatchStore.Record, which -- as of #1829 -- never writes
-	// schedule_entry_id (see Record's doc comment, match.go).
-	_, err = db.Pool.Exec(ctx, `
-		INSERT INTO video_schedule_match (synced_video_id, schedule_entry_id, confidence, state)
-		VALUES ($1, $2, $3, $4)
-	`, video.ID, entry.ID, 0.9, store.MatchStateAuto)
-	require.NoError(t, err)
+	require.NoError(t, s.Matches().Record(ctx, store.VideoScheduleMatch{
+		SyncedVideoID: video.ID, VideoScriptID: &script.ID, Confidence: 0.9, State: store.MatchStateAuto,
+	}))
 
 	return idea, v
 }
@@ -1946,6 +2016,25 @@ func TestMyWorkStore_SummariesForPerson_CoversEveryAssociatedChannel_WithPerSect
 	require.NoError(t, s.Roles().AddRole(ctx, chB.ID, person.ID, store.RoleCoCreator, founderB.ID))
 	noteB, err := s.Research().SaveNote(ctx, store.SaveNoteInput{ChannelID: chB.ID, Text: "B note", AuthorPersonID: founderB.ID})
 	require.NoError(t, err)
+	// loadScheduleState (mywork.go) is unchanged by #1830 -- it still
+	// aggregates schedule_entry directly (that column/table's retirement
+	// is #1835's scope, not this task's) -- so ScheduleState.CommittedCount
+	// below needs its own, separate committed schedule_entry, seeded on a
+	// distinct Idea/Verdict BEFORE setupMyWorkOutcomeChain below so its
+	// verdict is not the most-recently-created one for the Channel
+	// (loadLatestVerdicts takes the single latest across every Idea).
+	scheduleIdeaB, err := s.Ideas().Create(ctx, chB.ID, "B Schedule Idea", founderB.ID)
+	require.NoError(t, err)
+	scheduleVerdictB, err := s.Verdicts().Append(ctx, store.AppendVerdictInput{
+		IdeaID: scheduleIdeaB.ID, Verdict: store.VerdictViable, Reasoning: "B schedule reasoning", AuthorPersonID: founderB.ID,
+	})
+	require.NoError(t, err)
+	scheduleEntryB, err := s.Schedules().SaveDraft(ctx, store.SaveDraftInput{
+		ChannelID: chB.ID, IdeaID: scheduleIdeaB.ID, VerdictID: scheduleVerdictB.ID,
+		ProposedPublishAt: time.Now().Add(48 * time.Hour), CreatedByPersonID: founderB.ID,
+	})
+	require.NoError(t, err)
+	require.NoError(t, s.Schedules().Approve(ctx, scheduleEntryB.ID, founderB.ID))
 	ideaB, verdictB := setupMyWorkOutcomeChain(t, ctx, s, db, chB, founderB, "B Idea")
 
 	// C: person is Analyst, granted by C's own Founder -- a note and a
