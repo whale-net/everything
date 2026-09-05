@@ -73,7 +73,7 @@ func (f *outcomesFixture) proposedScript(t *testing.T, ctx context.Context, titl
 	})
 	require.NoError(t, err)
 	strategy, err := f.st.Strategies().Save(ctx, store.SaveStrategyInput{
-		ChannelID: f.ch.ID, Title: title + " Strategy", Cadence: store.CadenceWeekly, Active: true,
+		ChannelID: f.ch.ID, Title: title + " Strategy", Active: true,
 		VerdictIDs: []uuid.UUID{verdict.ID}, CreatedByPersonID: f.creator.ID,
 	})
 	require.NoError(t, err)

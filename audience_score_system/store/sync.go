@@ -32,9 +32,8 @@ type SyncStore interface {
 	// response; truncated reports whether more matching rows exist beyond
 	// it. Callers needing the complete, unbounded set for a correctness-
 	// sensitive computation (get_channel_overview's synced-schedule
-	// summary counts, save_schedule_draft's cadence/collision detection,
-	// generate_schedule_plan's pacing tracker) pass
-	// from=nil, to=nil, includeDrafts=true, limit=0 -- see
+	// summary counts, save_schedule_draft's cadence/collision detection)
+	// pass from=nil, to=nil, includeDrafts=true, limit=0 -- see
 	// mcp/tools/schedule_read.go's get_channel_schedule and
 	// mcp/tools/schedule_draft.go's get_drafting_context for the bounded
 	// callers (issue #1812's follow-up: filtering/pagination belongs in

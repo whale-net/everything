@@ -762,7 +762,7 @@ func TestE2E_ThreeLoopsEndToEnd(t *testing.T) {
 		// yt-idea-video, so the sync cycle below has something to
 		// auto-link to.
 		strategy, err := w.st.Strategies().Save(ctx, store.SaveStrategyInput{
-			ChannelID: ch.ID, Title: "Widget Strategy", Cadence: store.CadenceWeekly,
+			ChannelID: ch.ID, Title: "Widget Strategy", PreferredWeekday: "Tuesday",
 			Active: true, VerdictIDs: []uuid.UUID{verdict2ID}, CreatedByPersonID: creator.ID,
 		})
 		require.NoError(t, err)

@@ -530,56 +530,34 @@ pacing policy, schedule entries, synced videos/metrics, and pending
 matches, plus the `mcp_idempotency` ledger (NFR2/LB4).
 
 Migration 008 (`008_strategy.up.sql`, issue #1637) lands `strategy` and
-`strategy_verdict`: a cadence (weekly/biweekly/monthly, optional preferred
-weekday) sitting between viability verdicts and scheduling -- independent
-of, and finer-grained than, the Channel-wide `pacing_policy` (FR17). A
-Strategy is built directly from one or more `viability_verdict` rows via
-`strategy_verdict` -- not from Ideas: `idea_id` is derived through
-`viability_verdict.idea_id` rather than stored on the join row, the same
-LB3 pattern `schedule_entry.verdict_id` uses one layer downstream, applied
-to the join itself. The relationship is many-to-many in both directions --
-a Strategy is typically grounded in several verdicts (often several
-Ideas), and the same verdict may ground more than one Strategy -- which is
-the point: `save_strategy` records exactly which analysis justified the
-cadence, not just "whichever idea is currently viable."
+`strategy_verdict`. A Strategy is built directly from one or more
+`viability_verdict` rows via `strategy_verdict` -- not from Ideas:
+`idea_id` is derived through `viability_verdict.idea_id` rather than
+stored on the join row, the same LB3 pattern `schedule_entry.verdict_id`
+uses one layer downstream, applied to the join itself. The relationship
+is many-to-many in both directions -- a Strategy is typically grounded in
+several verdicts (often several Ideas), and the same verdict may ground
+more than one Strategy -- which is the point: `save_strategy` records
+exactly which analysis justified the grouping, not just "whichever idea
+is currently viable."
 
-**Strategy cadence is reconciled against pacing policy (issue #1637
-follow-up):** `generate_schedule_plan` reads the Channel's `pacing_policy`
-(if set) and, for each proposal, pushes its cadence-computed slot forward
-a week at a time -- never earlier -- until that week's projected
-committed+draft+synced+already-proposed-this-call count no longer
-exceeds `target_uploads_per_week` (`pacingTracker` in `strategy.go`,
-mirroring `computeScheduleFlags`'s `cadence_exceeded` check in
-`schedule_draft.go` so a plan's proposals agree with what
-`save_schedule_draft` will flag at commit time). Each proposal reports
-this via `pacing_adjusted`. Before this, a Strategy's cadence and the
-Channel-wide pacing policy were two independent, unreconciled numbers --
-`generate_schedule_plan` would happily propose more slots into a
-calendar week than the pacing policy allowed, discoverable only after
-the fact via FR18's non-blocking flag once a caller tried to commit.
-Strategy's cadence still answers a different question than pacing
-policy's `target_uploads_per_week` ("how often does this specific
-verdict-backed Idea deserve a slot" vs. "how many uploads total does the
-Channel want per week") -- reconciliation only makes generation respect
-the aggregate ceiling, it doesn't collapse the two concepts into one. A
-degenerate policy (`target_uploads_per_week` under 1, which no single
-week can ever satisfy once anything at all is scheduled in it) is bounded
-by `maxPacingPushWeeks` (104) rather than pushed forever; past that bound
-the raw cadence-computed slot is returned as before, with FR18's flag
-remaining the backstop at commit time.
-
-**No persisted "Plan" table (issue #1637):** the issue's proposed
-`generate_schedule_from_strategies` surface is implemented as
-`generate_schedule_plan` (`mcp/tools/strategy.go`), a read-only tool that
-derives next-slot proposals fresh on every call from active Strategies +
-the current schedule (LB4: nothing about a plan is cached in Postgres).
-Committing a proposal reuses the existing `save_schedule_draft` tool
-rather than a second write path, so FR16's viable-verdict gate and FR18's
-non-blocking flags stay defined in exactly one place. Revisit only if a
-product need emerges to browse/audit past *generated* plans as their own
-record, distinct from the `schedule_entry` rows a caller chose to commit
-from them -- at that point a `plan`/`plan_proposal` pair is a new
-migration, not a retrofit of this one.
+**Cadence and `generate_schedule_plan` removed (FR47, issue #1833):**
+migration 008 originally gave `strategy` a `cadence` (weekly/biweekly/
+monthly, optional preferred weekday), and `generate_schedule_plan`
+(`mcp/tools/strategy.go`) read it -- together with the Channel-wide
+`pacing_policy` (FR17) -- to propose next-slot schedule entries,
+reconciling the two via a `pacingTracker` so a plan's proposals agreed
+with what `save_schedule_draft` would flag at commit time (FR18's
+`cadence_exceeded`). M2.1 retires this pacing/calendar surface outright
+(FR41/FR47): migration 011 drops `strategy.cadence` and
+`generate_schedule_plan` is deleted, not retargeted. This is a deliberate
+"removed, not deferred" outcome -- not a placeholder for a successor
+field or tool. A Strategy today is purely a grouping of viable verdicts
+under a title and an active flag; `preferred_weekday` is unaffected (no
+FR removes it), and `strategy_id` on `video_script` still resolves a
+Strategy for context grouping (FR36, LB3). A Strategy-driven cadence/
+auto-proposal capability, if ever wanted, is new capability work for a
+later milestone, not a re-add of the dropped column.
 
 **`synced_video` retention on disappearance (issue #1576):** C6's schedule
 sync (`worker/sync.Activities.SyncSchedule`) upserts every video YouTube's
@@ -687,8 +665,10 @@ auth-code tables -- see "MCP server: caller authentication" above; no
 `channel_person`/`channel_invite` change.
 
 Migration 008 (`008_strategy.up.sql`, issue #1637) is covered above, in
-this same "Data model" section (`strategy`/`strategy_verdict`, the
-Strategy-driven `generate_schedule_plan` read tool).
+this same "Data model" section (`strategy`/`strategy_verdict`, and its
+FR47/#1833 cadence removal). Migration 011
+(`011_drop_strategy_cadence.up.sql`, issue #1833) is the FR47 follow-up
+covered there.
 
 **Migration 009 (`009_co_creator_tier.up.sql`, issue #1713, M2's C13)**
 lands the third authority tier and its supporting attribution/uniqueness
