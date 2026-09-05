@@ -445,6 +445,50 @@ time). Migration 013 (issue #1835) drops `schedule_entry`/`pacing_policy`
 outright once every reader was retargeted -- `store.ScheduleStore` and
 `store.PacingStore` no longer exist.
 
+**NFR3 amendment (milestone video-script-model, issue #1823): C18/C19/C10
+are dual-surface under `video_script`; C6/C7/C8 retired outright, no C20
+adopted.** This appends the specific FR-level allocation the amendment
+above established in outline:
+
+- **C18 (propose):** `save_video_script` (`mcp/tools/video_script.go`) is
+  `mcp`-only -- FR48/FR49 rebuild `web/schedule`'s read and write surfaces
+  in place, but do not add a web-side propose action (see "Out of scope"
+  on the milestone's root plan issue), matching M1's shape where drafts
+  were also only ever created via `mcp`, never `web`.
+- **C19 (greenlight/deny/archive):** dual-surface (FR49) --
+  `greenlight_video_script`/`deny_video_script`/`archive_video_script`
+  (`mcp/tools/video_script.go`) and `web/schedule.Handlers.
+  HandleGreenlight`/`HandleDeny`/`HandleArchive` (`POST
+  /schedule/{scriptID}/approve|deny|archive`) call the identical
+  `store.VideoScriptStore` transition methods and the identical
+  `store.CanApprove` (Creator-tier) check -- the same "two independent,
+  equally-capable front ends" relationship the retired-C8 amendment above
+  established, re-anchored onto `video_script`.
+- **C10 (browsing):** dual-surface under `video_script` (FR42/FR48) --
+  `get_channel_overview`'s `video_scripts` section (`mcp/tools/browse.go`,
+  FR42) and `web/schedule.Handlers.HandleList` (`GET
+  /channels/{id}/schedule`, FR48) both read a Channel's `video_script`
+  rows (title, status, target date if set, bound verdict) in place of the
+  retired `schedule_entry` listing; `web`'s list view stays `store.CanRead`
+  (Founder/Co-Creator/Analyst), unchanged from its pre-amendment
+  authorization shape.
+- **C6/C7/C8 retired outright, no successor:** C7's schedule-draft/
+  pacing-policy tool surface (FR41) and C6's read-only YouTube-schedule
+  tool `get_channel_schedule` plus `get_channel_overview`'s
+  `SyncedSchedule` field (FR46) are both gone from the live registry --
+  `mcp/server/registry_tools_test.go`'s
+  `TestRegistry_RetiredScheduleDraftAndPacingTools_NotRegistered` and
+  `mcp/tools/browse_integration_test.go`'s `get_channel_schedule`-retirement
+  coverage assert this by name against the real tool registry, not by
+  grepping deleted source. C6's capability-map text resolves to the "cut
+  entirely" branch of its two-option pending text (FR46) -- no C20
+  (decoupled read-only schedule view) is adopted as a replacement; the
+  underlying `worker/sync` YouTube sync job is unaffected, only the two
+  surfaces that presented synced data *as a schedule* are gone. C8 was
+  already retired by the amendment above; FR47 additionally drops
+  Strategy's `cadence` field, the one remaining input C7's
+  `generate_schedule_plan` read.
+
 **NFR3 amendment (M2, issue #1728): C11/C12/C13 are dual-surface, except
 Channel-connect.** M2 adds three capabilities on top of M1's allocation
 above:
