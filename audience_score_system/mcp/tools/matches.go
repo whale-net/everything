@@ -1,5 +1,6 @@
 // C9's pending-match confirm/reject MCP tool group (issue #1581,
-// FR22/FR23): list_pending_matches (read) surfaces every video_schedule_match
+// FR22/FR23; retargeted onto video_script by #1830's FR44 re-anchor):
+// list_pending_matches (read) surfaces every video_schedule_match
 // worker/sync.Activities.SyncOutcomes queued for human resolution (state =
 // 'pending', below worker/sync.MatchConfidenceThreshold), and
 // resolve_pending_match (write) confirms or rejects one. See
@@ -71,36 +72,37 @@ func renderMatchVideo(ctx context.Context, sync store.SyncStore, syncedVideoID u
 	return out, nil
 }
 
-// MatchEntryOutput is a resolved schedule_entry as a match's linked or
-// best-guess candidate -- the idea title and verdict a human needs to
-// judge whether the guess is right (FR23), since schedule_entry itself
-// carries neither.
-type MatchEntryOutput struct {
-	ScheduleEntryID   string    `json:"schedule_entry_id" jsonschema:"the candidate schedule_entry's ID, as a UUID string"`
-	IdeaTitle         string    `json:"idea_title" jsonschema:"the bound idea's title"`
-	ProposedPublishAt time.Time `json:"proposed_publish_at" jsonschema:"the entry's proposed/committed publish time"`
-	Verdict           string    `json:"verdict" jsonschema:"the verdict version this entry was scheduled under -- viable, not-viable, or needs-more-research"`
+// MatchScriptOutput is a candidate video_script as a match's linked or
+// best-guess candidate -- the script's own title, its status, its target
+// publish date (omitempty: an undated script is normal per FR36, not an
+// error), and the bound verdict (version + value) a human needs to judge
+// whether the guess is right (FR23, FR44).
+type MatchScriptOutput struct {
+	VideoScriptID     string     `json:"video_script_id" jsonschema:"the candidate video_script's ID, as a UUID string"`
+	Title             string     `json:"title" jsonschema:"the video script's own title"`
+	Status            string     `json:"status" jsonschema:"proposed, greenlit, denied, or archived (FR36-FR40) -- resolve_pending_match's override may target any status, including archived"`
+	TargetPublishDate *time.Time `json:"target_publish_date,omitempty" jsonschema:"the script's target publish date, if set; absent when undated -- undated is normal per FR36, not an error"`
+	VerdictVersion    int        `json:"verdict_version" jsonschema:"the verdict version this script was proposed under -- the bound version (LB3), not necessarily the Idea's current one"`
+	Verdict           string     `json:"verdict" jsonschema:"viable, not-viable, or needs-more-research, for the bound verdict version above"`
 }
 
-// renderMatchEntry resolves entryID's ScheduleEntry, its bound Idea's
-// title, and its bound Verdict, rendering all three as MatchEntryOutput.
-func renderMatchEntry(ctx context.Context, schedules store.ScheduleStore, ideas store.IdeaStore, verdicts store.VerdictStore, entryID uuid.UUID) (MatchEntryOutput, error) {
-	entry, err := schedules.GetByID(ctx, entryID)
+// renderMatchScript resolves scriptID's VideoScript and its bound Verdict,
+// rendering both as MatchScriptOutput.
+func renderMatchScript(ctx context.Context, videoScripts store.VideoScriptStore, verdicts store.VerdictStore, scriptID uuid.UUID) (MatchScriptOutput, error) {
+	script, err := videoScripts.GetByID(ctx, scriptID)
 	if err != nil {
-		return MatchEntryOutput{}, fmt.Errorf("load schedule_entry %s: %w", entryID, err)
+		return MatchScriptOutput{}, fmt.Errorf("load video_script %s: %w", scriptID, err)
 	}
-	idea, err := ideas.GetByID(ctx, entry.IdeaID)
+	verdict, err := verdicts.GetByID(ctx, script.VerdictID)
 	if err != nil {
-		return MatchEntryOutput{}, fmt.Errorf("load idea for schedule_entry %s: %w", entryID, err)
+		return MatchScriptOutput{}, fmt.Errorf("load verdict for video_script %s: %w", scriptID, err)
 	}
-	verdict, err := verdicts.GetByID(ctx, entry.VerdictID)
-	if err != nil {
-		return MatchEntryOutput{}, fmt.Errorf("load verdict for schedule_entry %s: %w", entryID, err)
-	}
-	return MatchEntryOutput{
-		ScheduleEntryID:   entry.ID.String(),
-		IdeaTitle:         idea.Title,
-		ProposedPublishAt: entry.ProposedPublishAt,
+	return MatchScriptOutput{
+		VideoScriptID:     script.ID.String(),
+		Title:             script.Title,
+		Status:            string(script.Status),
+		TargetPublishDate: script.TargetPublishDate,
+		VerdictVersion:    verdict.Version,
 		Verdict:           string(verdict.Verdict),
 	}, nil
 }
@@ -109,10 +111,9 @@ func renderMatchEntry(ctx context.Context, schedules store.ScheduleStore, ideas 
 // needs, so registerListPendingMatches/registerResolvePendingMatch each
 // take one argument instead of four.
 type matchDeps struct {
-	sync      store.SyncStore
-	schedules store.ScheduleStore
-	ideas     store.IdeaStore
-	verdicts  store.VerdictStore
+	sync         store.SyncStore
+	videoScripts store.VideoScriptStore
+	verdicts     store.VerdictStore
 }
 
 // -- list_pending_matches -----------------------------------------------------
@@ -145,14 +146,14 @@ func (i ListPendingMatchesInput) ChannelScopeID() uuid.UUID {
 
 // PendingMatchOutput is one pending video_schedule_match as
 // list_pending_matches renders it: the published video (with its latest
-// metrics snapshot), the matcher's best-guess entry (nil if no plausible
+// metrics snapshot), the matcher's best-guess script (nil if no plausible
 // candidate existed at all), and the confidence score the matcher
 // computed -- everything a human needs to confirm or reject (FR23).
 type PendingMatchOutput struct {
-	MatchID        string            `json:"match_id" jsonschema:"the pending match's ID, as a UUID string -- pass this to resolve_pending_match"`
-	Video          MatchVideoOutput  `json:"video" jsonschema:"the published video awaiting resolution"`
-	BestGuessEntry *MatchEntryOutput `json:"best_guess_entry,omitempty" jsonschema:"the matcher's best-guess schedule entry, if any plausible candidate existed; null if none did"`
-	Confidence     float64           `json:"confidence" jsonschema:"the matcher's confidence score for best_guess_entry, in [0,1]; 0 when best_guess_entry is null"`
+	MatchID         string             `json:"match_id" jsonschema:"the pending match's ID, as a UUID string -- pass this to resolve_pending_match"`
+	Video           MatchVideoOutput   `json:"video" jsonschema:"the published video awaiting resolution"`
+	BestGuessScript *MatchScriptOutput `json:"best_guess_script,omitempty" jsonschema:"the matcher's best-guess video_script, if any plausible candidate existed; null if none did"`
+	Confidence      float64            `json:"confidence" jsonschema:"the matcher's confidence score for best_guess_script, in [0,1]; 0 when best_guess_script is null"`
 }
 
 // renderPendingMatch renders m (a MatchStatePending row) as
@@ -168,12 +169,12 @@ func renderPendingMatch(ctx context.Context, deps matchDeps, m store.VideoSchedu
 		Video:      video,
 		Confidence: m.Confidence,
 	}
-	if m.ScheduleEntryID != nil {
-		entry, err := renderMatchEntry(ctx, deps.schedules, deps.ideas, deps.verdicts, *m.ScheduleEntryID)
+	if m.VideoScriptID != nil {
+		script, err := renderMatchScript(ctx, deps.videoScripts, deps.verdicts, *m.VideoScriptID)
 		if err != nil {
 			return PendingMatchOutput{}, err
 		}
-		out.BestGuessEntry = &entry
+		out.BestGuessScript = &script
 	}
 	return out, nil
 }
@@ -190,10 +191,10 @@ type ListPendingMatchesOutput struct {
 func registerListPendingMatches(reg *server.Registry, matches store.MatchStore, deps matchDeps) {
 	server.RegisterRead(reg, &mcp.Tool{
 		Name: "list_pending_matches",
-		Description: "List every video<->schedule outcome match awaiting human resolution for a Channel (FR23), " +
-			"oldest first: a published video the sync worker could not confidently auto-link to a committed " +
-			"schedule entry. Each result includes the video's title/publish time/latest metrics, the matcher's " +
-			"best-guess entry (idea title, proposed slot, verdict) if any, and the confidence score -- call " +
+		Description: "List every video<->video_script outcome match awaiting human resolution for a Channel (FR23), " +
+			"oldest first: a published video the sync worker could not confidently auto-link to a greenlit video " +
+			"script. Each result includes the video's title/publish time/latest metrics, the matcher's best-guess " +
+			"script (title, status, target publish date, bound verdict) if any, and the confidence score -- call " +
 			"resolve_pending_match to confirm or reject. Response is capped at limit (default 50); see truncated. " +
 			"Page forward past truncation by re-calling with since set to the last returned match's created_at.",
 	}, listPendingMatchesHandler(matches, deps))
@@ -231,10 +232,10 @@ type ResolvePendingMatchInput struct {
 	ChannelID string `json:"channel_id" jsonschema:"Channel the match belongs to, as a UUID string"`
 	MatchID   string `json:"match_id" jsonschema:"The pending match to resolve, as a UUID string (from list_pending_matches)"`
 	Confirm   bool   `json:"confirm" jsonschema:"true to confirm the match (creates the outcome link, FR22), false to reject it (the video remains unmatched, FR23)"`
-	// ScheduleEntryID lets a human confirm against a different entry than
-	// the matcher's best guess (this task's Implementation spec) -- only
+	// VideoScriptID lets a human confirm against a different video_script
+	// than the matcher's best guess (#1830's FR44 re-anchor) -- only
 	// meaningful when Confirm is true.
-	ScheduleEntryID string `json:"schedule_entry_id,omitempty" jsonschema:"Optional, confirm only: link to this schedule_entry instead of the matcher's best guess, as a UUID string"`
+	VideoScriptID string `json:"video_script_id,omitempty" jsonschema:"Optional, confirm only: link to this video_script instead of the matcher's best guess, as a UUID string. May point at ANY video_script on the Channel, including an archived one (FR40's archive/match interaction note) -- this is the PRIMARY resolution path for an undated script, since an undated script can never auto-link (FR43 caps it below threshold by construction)."`
 	// IdempotencyKeyArg backs IdempotencyKey() below -- named ...Arg
 	// because a Go type cannot declare both a field and a method named
 	// IdempotencyKey (mirrors verdict.go's identical pattern).
@@ -253,13 +254,13 @@ func (i ResolvePendingMatchInput) IdempotencyKey() string { return i.Idempotency
 // ResolvedMatchOutput is a resolved (confirmed or rejected)
 // video_schedule_match, as resolve_pending_match renders it.
 type ResolvedMatchOutput struct {
-	MatchID            string            `json:"match_id" jsonschema:"the resolved match's ID, as a UUID string"`
-	State              string            `json:"state" jsonschema:"confirmed or rejected"`
-	Video              MatchVideoOutput  `json:"video" jsonschema:"the video this match concerns"`
-	LinkedEntry        *MatchEntryOutput `json:"linked_entry,omitempty" jsonschema:"the schedule entry this match now links to; null for a rejected match (FR23: the video remains unmatched)"`
-	Confidence         float64           `json:"confidence" jsonschema:"the matcher's original confidence score"`
-	ResolvedByPersonID string            `json:"resolved_by_person_id" jsonschema:"the Person who resolved this match, as a UUID string"`
-	ResolvedAt         *time.Time        `json:"resolved_at,omitempty" jsonschema:"when this match was resolved, RFC3339"`
+	MatchID            string             `json:"match_id" jsonschema:"the resolved match's ID, as a UUID string"`
+	State              string             `json:"state" jsonschema:"confirmed or rejected"`
+	Video              MatchVideoOutput   `json:"video" jsonschema:"the video this match concerns"`
+	LinkedScript       *MatchScriptOutput `json:"linked_script,omitempty" jsonschema:"the video_script this match now links to; null for a rejected match (FR23: the video remains unmatched)"`
+	Confidence         float64            `json:"confidence" jsonschema:"the matcher's original confidence score"`
+	ResolvedByPersonID string             `json:"resolved_by_person_id" jsonschema:"the Person who resolved this match, as a UUID string"`
+	ResolvedAt         *time.Time         `json:"resolved_at,omitempty" jsonschema:"when this match was resolved, RFC3339"`
 }
 
 // registerResolvePendingMatch registers resolve_pending_match via
@@ -270,14 +271,16 @@ type ResolvedMatchOutput struct {
 func registerResolvePendingMatch(reg *server.Registry, matches store.MatchStore, deps matchDeps) {
 	server.RegisterWrite(reg, &mcp.Tool{
 		Name: "resolve_pending_match",
-		Description: "Confirm or reject a pending video<->schedule outcome match (FR22/FR23). Confirming creates the " +
-			"outcome link (optionally against a schedule_entry_id other than the matcher's best guess); rejecting " +
-			"leaves the video unmatched. Always supply idempotency_key: resolving an already-resolved match without " +
-			"one is rejected as a conflict, not treated as a no-op replay.",
-	}, resolvePendingMatchMutate(matches, deps.sync, deps.schedules), resolvePendingMatchRender(matches, deps))
+		Description: "Confirm or reject a pending video<->video_script outcome match (FR22/FR23). Confirming creates " +
+			"the outcome link (optionally against a video_script_id other than the matcher's best guess -- this is " +
+			"the PRIMARY resolution path for an undated script, which can never auto-link, FR43); rejecting leaves " +
+			"the video unmatched. The override may target any video_script on the Channel, including an archived one " +
+			"(FR40's archive/match interaction note, FR44). Always supply idempotency_key: resolving an " +
+			"already-resolved match without one is rejected as a conflict, not treated as a no-op replay.",
+	}, resolvePendingMatchMutate(matches, deps.sync, deps.videoScripts), resolvePendingMatchRender(matches, deps))
 }
 
-func resolvePendingMatchMutate(matches store.MatchStore, sync store.SyncStore, schedules store.ScheduleStore) server.WriteMutate[ResolvePendingMatchInput] {
+func resolvePendingMatchMutate(matches store.MatchStore, sync store.SyncStore, videoScripts store.VideoScriptStore) server.WriteMutate[ResolvePendingMatchInput] {
 	return func(ctx context.Context, in ResolvePendingMatchInput) (uuid.UUID, error) {
 		channelID, err := uuid.Parse(in.ChannelID)
 		if err != nil {
@@ -305,26 +308,31 @@ func resolvePendingMatchMutate(matches store.MatchStore, sync store.SyncStore, s
 			return uuid.Nil, fmt.Errorf("match_id does not belong to channel_id")
 		}
 
-		var overrideEntryID *uuid.UUID
-		if in.ScheduleEntryID != "" {
+		// The override deliberately validates ONLY existence + Channel
+		// membership -- no status filter -- so a human can confirm against
+		// a non-greenlit, including archived, video_script (FR40's
+		// archive/match interaction note, FR44). ListCandidates' greenlit
+		// restriction governs candidate generation only.
+		var overrideScriptID *uuid.UUID
+		if in.VideoScriptID != "" {
 			if !in.Confirm {
-				return uuid.Nil, fmt.Errorf("schedule_entry_id may only be set when confirm is true")
+				return uuid.Nil, fmt.Errorf("video_script_id may only be set when confirm is true")
 			}
-			entryID, err := uuid.Parse(in.ScheduleEntryID)
+			scriptID, err := uuid.Parse(in.VideoScriptID)
 			if err != nil {
-				return uuid.Nil, fmt.Errorf("schedule_entry_id is not a valid UUID: %w", err)
+				return uuid.Nil, fmt.Errorf("video_script_id is not a valid UUID: %w", err)
 			}
-			entry, err := schedules.GetByID(ctx, entryID)
+			script, err := videoScripts.GetByID(ctx, scriptID)
 			if err != nil {
 				if errors.Is(err, pgx.ErrNoRows) {
-					return uuid.Nil, fmt.Errorf("schedule_entry_id does not exist")
+					return uuid.Nil, fmt.Errorf("video_script_id does not exist")
 				}
-				return uuid.Nil, fmt.Errorf("load schedule_entry: %w", err)
+				return uuid.Nil, fmt.Errorf("load video_script: %w", err)
 			}
-			if entry.ChannelID != channelID {
-				return uuid.Nil, fmt.Errorf("schedule_entry_id belongs to a different Channel")
+			if script.ChannelID != channelID {
+				return uuid.Nil, fmt.Errorf("video_script_id belongs to a different Channel")
 			}
-			overrideEntryID = &entryID
+			overrideScriptID = &scriptID
 		}
 
 		person := server.PersonFromContext(ctx)
@@ -332,7 +340,7 @@ func resolvePendingMatchMutate(matches store.MatchStore, sync store.SyncStore, s
 			return uuid.Nil, fmt.Errorf("unauthenticated: no caller credential resolved")
 		}
 
-		if err := matches.Resolve(ctx, matchID, person.ID, in.Confirm, overrideEntryID); err != nil {
+		if err := matches.Resolve(ctx, matchID, person.ID, in.Confirm, overrideScriptID); err != nil {
 			return uuid.Nil, err
 		}
 		return matchID, nil
@@ -365,12 +373,12 @@ func resolvePendingMatchRender(matches store.MatchStore, deps matchDeps) server.
 		if m.ResolvedByPersonID != nil {
 			out.ResolvedByPersonID = m.ResolvedByPersonID.String()
 		}
-		if m.ScheduleEntryID != nil && m.State == store.MatchStateConfirmed {
-			entry, err := renderMatchEntry(ctx, deps.schedules, deps.ideas, deps.verdicts, *m.ScheduleEntryID)
+		if m.VideoScriptID != nil && m.State == store.MatchStateConfirmed {
+			script, err := renderMatchScript(ctx, deps.videoScripts, deps.verdicts, *m.VideoScriptID)
 			if err != nil {
 				return nil, ResolvedMatchOutput{}, err
 			}
-			out.LinkedEntry = &entry
+			out.LinkedScript = &script
 		}
 		return nil, out, nil
 	}
@@ -380,9 +388,9 @@ func resolvePendingMatchRender(matches store.MatchStore, deps matchDeps) server.
 
 // RegisterMatches registers list_pending_matches and resolve_pending_match
 // against reg (see ../server/registry.go), backed by st's
-// MatchStore/SyncStore/ScheduleStore/IdeaStore/VerdictStore.
+// MatchStore/SyncStore/VideoScriptStore/VerdictStore.
 func RegisterMatches(reg *server.Registry, st *store.Store) {
-	deps := matchDeps{sync: st.Sync(), schedules: st.Schedules(), ideas: st.Ideas(), verdicts: st.Verdicts()}
+	deps := matchDeps{sync: st.Sync(), videoScripts: st.VideoScripts(), verdicts: st.Verdicts()}
 	registerListPendingMatches(reg, st.Matches(), deps)
 	registerResolvePendingMatch(reg, st.Matches(), deps)
 }

@@ -828,7 +828,7 @@ func TestE2E_ThreeLoopsEndToEnd(t *testing.T) {
 			ChannelID:         ch.ID.String(),
 			MatchID:           matchBID.String(),
 			Confirm:           true,
-			ScheduleEntryID:   entryID.String(),
+			VideoScriptID:     script.ID.String(),
 			IdempotencyKeyArg: uuid.NewString(),
 		})
 		resolved := decode[mcptools.ResolvedMatchOutput](t, resolveRes)

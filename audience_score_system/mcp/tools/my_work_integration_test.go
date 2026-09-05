@@ -192,6 +192,25 @@ func TestGetMyWork_ThreeChannelsThreeTiers_FourthChannelExcluded(t *testing.T) {
 	require.NoError(t, err)
 	require.NoError(t, f.st.Schedules().Approve(ctx, entryA.ID, person.ID))
 
+	// loadScheduleState (store/mywork.go) is unchanged by #1830 -- it still
+	// aggregates schedule_entry directly (that column/table's retirement
+	// is #1835's scope, not this task's) -- entryA above covers
+	// a.Schedule.CommittedCount==1. The outcome chain below (FR44's
+	// re-anchor) is now separately grounded on a greenlit video_script
+	// bound to the SAME verdictA, rather than entryA, so it does not
+	// disturb a.LatestVerdict's "most-recently-created" ordering.
+	stratA, err := f.st.Strategies().Save(ctx, store.SaveStrategyInput{
+		ChannelID: chA.ID, Title: "Idea A Strategy", Active: true,
+		VerdictIDs: []uuid.UUID{verdictA.ID}, CreatedByPersonID: person.ID,
+	})
+	require.NoError(t, err)
+	scriptA, err := f.st.VideoScripts().Propose(ctx, store.ProposeVideoScriptInput{
+		ChannelID: chA.ID, VerdictID: verdictA.ID, StrategyID: stratA.ID,
+		Title: "Idea A", ScriptText: "script text for Idea A", CreatedByPersonID: person.ID,
+	})
+	require.NoError(t, err)
+	require.NoError(t, f.st.VideoScripts().Greenlight(ctx, scriptA.ID, person.ID))
+
 	publishedAt := time.Now().Add(-time.Hour)
 	require.NoError(t, f.st.Sync().UpsertVideos(ctx, chA.ID, []store.SyncedVideo{{
 		YouTubeVideoID: "yt-mw-video-a", Title: "Video A",
@@ -203,16 +222,9 @@ func TestGetMyWork_ThreeChannelsThreeTiers_FourthChannelExcluded(t *testing.T) {
 	require.NoError(t, f.st.Sync().UpsertMetrics(ctx, []store.VideoMetrics{{
 		SyncedVideoID: syncedA[0].ID, Views: ptrInt64MW(1000), MeasuredAt: time.Now(),
 	}}))
-	// MyWorkStore's outcome section (mywork.go) still joins
-	// video_schedule_match on schedule_entry_id (#1830's re-anchor onto
-	// video_script, not #1829's) -- seed it by direct SQL rather than
-	// through MatchStore.Record, which as of #1829 never writes
-	// schedule_entry_id (see Record's doc comment, store/match.go).
-	_, err = f.pg.Pool.Exec(ctx, `
-		INSERT INTO video_schedule_match (synced_video_id, schedule_entry_id, confidence, state)
-		VALUES ($1, $2, $3, $4)
-	`, syncedA[0].ID, entryA.ID, 0.8, store.MatchStateAuto)
-	require.NoError(t, err)
+	require.NoError(t, f.st.Matches().Record(ctx, store.VideoScheduleMatch{
+		SyncedVideoID: syncedA[0].ID, VideoScriptID: &scriptA.ID, Confidence: 0.8, State: store.MatchStateAuto,
+	}))
 
 	// Channel B: person is Co-Creator, granted by B's own Founder. No
 	// content -- proves an empty Channel still appears with zero-valued
