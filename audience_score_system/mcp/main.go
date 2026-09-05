@@ -171,6 +171,7 @@ func run() error {
 	tools.RegisterMatches(reg, st)
 	tools.RegisterBrowse(reg, st)
 	tools.RegisterStrategy(reg, st)
+	tools.RegisterOutcomeBar(reg, st.OutcomeBars())
 	tools.RegisterTriggerChannelSync(reg, st.Channels(), scheduleManager)
 	tools.RegisterAccess(reg, st)
 	tools.RegisterMyWork(reg, st.MyWork())

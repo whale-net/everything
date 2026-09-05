@@ -17,6 +17,7 @@ go_library(
         "list_channels.go",
         "matches.go",
         "my_work.go",
+        "outcome_bar.go",
         "research.go",
         "strategy.go",
         "strategy_time.go",
@@ -50,6 +51,7 @@ go_test(
     name = "tools_test",
     srcs = [
         "access_test.go",
+        "outcome_bar_test.go",
         "research_test.go",
         "strategy_test.go",
         "sync_trigger_test.go",
@@ -330,6 +332,58 @@ go_test(
     size = "large",
     timeout = "long",
     srcs = ["strategy_integration_test.go"],
+    gotags = ["integration"],
+    tags = [
+        "external",
+        "integration",
+        "manual",
+        "no-cache",
+        "no-sandbox",
+        "requires-network",
+    ],
+    deps = [
+        ":tools",
+        "//audience_score_system/mcp/server",
+        "//audience_score_system/migrate/schema",
+        "//audience_score_system/store",
+        "//libs/go/dbtest",
+        "//libs/go/mcpauth",
+        "//libs/go/migrate",
+        "@com_github_google_uuid//:uuid",
+        "@com_github_jackc_pgx_v5//pgxpool",
+        "@com_github_jackc_pgx_v5//stdlib",
+        "@com_github_modelcontextprotocol_go_sdk//mcp",
+        "@com_github_stretchr_testify//assert",
+        "@com_github_stretchr_testify//require",
+    ],
+)
+
+# set_outcome_bar/get_outcome_bar (outcome_bar.go, issue #1883, C14/FR1/
+# FR2/NFR1/NFR2): NFR2 write authority (Creator AND Analyst can both call
+# set_outcome_bar -- the FR17-precedent assertion that proving only
+# Creator access would not cover -- an outsider denied writes nothing) and
+# read authority (Creator/Analyst byte-identical get_outcome_bar output,
+# outsider denied), NFR1's natural-key upsert convergence (two identical
+# set_outcome_bar calls leave one row, identical output), the caller's
+# person.ID -> UpdatedByPersonID pass-through across two different
+# callers, the set_outcome_bar/get_outcome_bar round trip including an
+# immediately-reflected update, FR2's not-configured:false success (not an
+# error) over a real MCP call, and an unsupported metric_name / negative
+# threshold_value rejected over the wire with a readable message while
+# leaving a previously configured bar untouched -- all against the real
+# embedded schema and a real HTTP-hosted MCP server, mirroring
+# strategy_integration_test.go's pattern. Deliberately NOT part of
+# `bazel test //...` -- see //libs/go/dbtest's README for the full
+# rationale.
+#
+# Run it explicitly (requires a working Docker daemon):
+#   bazel test //audience_score_system/mcp/tools:outcome_bar_integration_test --test_output=all
+go_test(
+    # keep
+    name = "outcome_bar_integration_test",
+    size = "large",
+    timeout = "long",
+    srcs = ["outcome_bar_integration_test.go"],
     gotags = ["integration"],
     tags = [
         "external",

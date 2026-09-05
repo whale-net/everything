@@ -76,6 +76,7 @@ func TestRegistry_RetiredScheduleDraftAndPacingTools_NotRegistered(t *testing.T)
 	tools.RegisterMatches(reg, st)
 	tools.RegisterBrowse(reg, st)
 	tools.RegisterStrategy(reg, st)
+	tools.RegisterOutcomeBar(reg, st.OutcomeBars())
 	tools.RegisterTriggerChannelSync(reg, st.Channels(), noopScheduleTrigger{})
 	tools.RegisterAccess(reg, st)
 	tools.RegisterMyWork(reg, st.MyWork())
@@ -102,4 +103,11 @@ func TestRegistry_RetiredScheduleDraftAndPacingTools_NotRegistered(t *testing.T)
 	for _, name := range retiredScheduleDraftAndPacingToolNames {
 		assert.False(t, registered[name], "%s must not be registered -- FR41 retired it", name)
 	}
+
+	// #1883: set_outcome_bar/get_outcome_bar are the new additive surface
+	// over the outcome bar -- present alongside the retired names' absence,
+	// proving this task's RegisterOutcomeBar call actually lands in the
+	// live registry, not just on disk.
+	assert.True(t, registered["set_outcome_bar"], "set_outcome_bar must be registered")
+	assert.True(t, registered["get_outcome_bar"], "get_outcome_bar must be registered")
 }
