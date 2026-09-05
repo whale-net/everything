@@ -183,3 +183,55 @@ func TestMigration013_UpDown_AppliesCleanly(t *testing.T) {
 	`)
 	assert.Error(t, err, "video_schedule_match.schedule_entry_id must still be a FOREIGN KEY to schedule_entry(id) after migration 013's down, rejecting a nonexistent target")
 }
+
+// columnHasUniqueConstraint reports whether column on table is covered by a
+// UNIQUE (or PRIMARY KEY) constraint -- used to prove migration 014's
+// `channel_id UNIQUE` (the natural key OutcomeBarStore.Upsert's `ON
+// CONFLICT (channel_id)` converges on, issue #1882) actually landed as a
+// real constraint, not merely a same-named but unconstrained column.
+func columnHasUniqueConstraint(t *testing.T, ctx context.Context, db *dbtest.Postgres, table, column string) bool {
+	t.Helper()
+
+	var exists bool
+	require.NoError(t, db.Pool.QueryRow(ctx, `
+		SELECT EXISTS (
+			SELECT 1
+			FROM information_schema.table_constraints tc
+			JOIN information_schema.constraint_column_usage ccu
+				ON tc.constraint_name = ccu.constraint_name
+				AND tc.table_schema = ccu.table_schema
+			WHERE tc.table_name = $1
+				AND ccu.column_name = $2
+				AND tc.constraint_type IN ('UNIQUE', 'PRIMARY KEY')
+		)
+	`, table, column).Scan(&exists))
+	return exists
+}
+
+// TestMigration014_UpDown_AppliesCleanly proves the per-Channel outcome
+// bar's storage half (C14 / FR1 / FR2 / NFR1, issue #1882) applies cleanly
+// on a database that already has every earlier migration: up creates
+// outcome_bar with a real UNIQUE constraint on channel_id (the natural key
+// OutcomeBarStore.Upsert's ON CONFLICT converges on, NFR1), down drops it
+// outright. Mirrors TestMigration013_UpDown_AppliesCleanly's isolate-one-
+// step shape.
+func TestMigration014_UpDown_AppliesCleanly(t *testing.T) {
+	ctx := context.Background()
+	db := dbtest.NewPostgres(ctx, t, dbtest.Options{})
+
+	sqlDB, err := sql.Open("pgx", db.ConnString)
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = sqlDB.Close() })
+
+	runner := migrate.NewRunner(sqlDB, schema.Migrations, schema.Dir)
+
+	require.NoError(t, runner.Migrate(13), "apply migrations 1-13 (the full chain up to, but not including, this task's migration)")
+	assert.False(t, tableExists(t, ctx, db, "outcome_bar"), "before migration 014, outcome_bar must not exist")
+
+	require.NoError(t, runner.Migrate(14), "apply migration 014's up -- must not fail")
+	assert.True(t, tableExists(t, ctx, db, "outcome_bar"), "migration 014's up must create outcome_bar")
+	assert.True(t, columnHasUniqueConstraint(t, ctx, db, "outcome_bar", "channel_id"), "outcome_bar.channel_id must carry a real UNIQUE constraint -- the natural key OutcomeBarStore.Upsert's ON CONFLICT converges on (NFR1)")
+
+	require.NoError(t, runner.Migrate(13), "apply migration 014's down -- must not fail")
+	assert.False(t, tableExists(t, ctx, db, "outcome_bar"), "migration 014's down must drop outcome_bar cleanly")
+}

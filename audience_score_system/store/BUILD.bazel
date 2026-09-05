@@ -77,6 +77,7 @@ go_test(
     timeout = "long",
     srcs = [
         "match_integration_test.go",
+        "outcome_bar_integration_test.go",
         "store_integration_test.go",
         "video_script_integration_test.go",
     ],
