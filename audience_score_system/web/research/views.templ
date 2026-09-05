@@ -71,7 +71,15 @@ func authorName(names map[uuid.UUID]string, personID uuid.UUID) string {
 // ideasTruncated/notesTruncated (NFR2) each render a plain static note
 // when the corresponding list hit its 50-row default page -- no "load
 // more" control, no pagination widget anywhere on this page.
-templ ChannelIndex(data components.LayoutData, ch store.Channel, ideas []store.IdeaSummary, unattachedNotes []store.ResearchNoteWithAuthor, ideasTruncated bool, notesTruncated bool) {
+//
+// canWrite (store.CanWrite, research.go's renderChannelIndex) gates the
+// save-note form (FR3, FR6, FR7): omitted entirely when false. This is
+// PRESENTATION ONLY -- exactly like web/schedule's entryActions omission
+// for an Analyst -- the actual authorization boundary is
+// research.go's authorizeWrite, re-derived fresh from Postgres on every
+// POST /channels/{id}/research/notes; hiding this form is never the only
+// line of defense against a forged submit.
+templ ChannelIndex(data components.LayoutData, ch store.Channel, ideas []store.IdeaSummary, unattachedNotes []store.ResearchNoteWithAuthor, ideasTruncated bool, notesTruncated bool, canWrite bool, form noteFormData) {
 	@components.Layout(data) {
 		<div class="card bg-base-100 border border-base-300 shadow-sm">
 			<div class="card-body">
@@ -127,6 +135,13 @@ templ ChannelIndex(data components.LayoutData, ch store.Channel, ideas []store.I
 					}
 				</div>
 
+				if canWrite {
+					<div class="mt-6">
+						<h2 class="text-lg font-semibold">Save a research note</h2>
+						@saveNoteFormChannelIndex(ch, ideas, form)
+					</div>
+				}
+
 				<div class="card-actions justify-end mt-2">
 					<a href={ templ.URL("/channels/" + ch.ID.String()) } class="btn btn-secondary btn-sm">
 						Back to channel
@@ -135,6 +150,67 @@ templ ChannelIndex(data components.LayoutData, ch store.Channel, ideas []store.I
 			</div>
 		</div>
 	}
+}
+
+// saveNoteFields renders the save-note form fields shared by both
+// saveNoteFormChannelIndex and saveNoteFormIdeaDetail (FR3): the
+// validation error (if any, form.Error), the hidden idempotency_key set
+// ONCE at render time (FR6 -- see research.go's newIdempotencyKey doc
+// comment; never client-generated, never derived from the form's own
+// content), the note text, and the optional source_url passed through
+// raw (FR12 -- validated by store.ResearchStore.SaveNote itself, not
+// here).
+templ saveNoteFields(form noteFormData) {
+	if form.Error != "" {
+		<p class="text-error text-sm">{ form.Error }</p>
+	}
+	<input type="hidden" name="idempotency_key" value={ form.IdempotencyKey }/>
+	<div class="form-control">
+		<label class="label">
+			<span class="label-text">Note text</span>
+		</label>
+		<textarea name="text" class="textarea textarea-bordered w-full" rows="3" required>{ form.Text }</textarea>
+	</div>
+	<div class="form-control mt-2">
+		<label class="label">
+			<span class="label-text">Source URL (optional)</span>
+		</label>
+		<input type="url" name="source_url" class="input input-bordered w-full" value={ form.SourceURL }/>
+	</div>
+}
+
+// saveNoteFormChannelIndex renders the Channel research index's save-note
+// form (FR3): an Idea picker populated from ch's own Idea list, plus an
+// explicit "No Idea (unattached note)" choice that submits an empty
+// idea_id (M1 FR9). Rendered by ChannelIndex only when canWrite is true.
+templ saveNoteFormChannelIndex(ch store.Channel, ideas []store.IdeaSummary, form noteFormData) {
+	<form method="post" action={ templ.URL("/channels/" + ch.ID.String() + "/research/notes") } class="mt-2 space-y-2">
+		@saveNoteFields(form)
+		<div class="form-control mt-2">
+			<label class="label">
+				<span class="label-text">Idea</span>
+			</label>
+			<select name="idea_id" class="select select-bordered w-full">
+				<option value="" selected?={ form.IdeaID == "" }>No Idea (unattached note)</option>
+				for _, idea := range ideas {
+					<option value={ idea.ID.String() } selected?={ form.IdeaID == idea.ID.String() }>{ idea.Title }</option>
+				}
+			</select>
+		</div>
+		<button type="submit" class="btn btn-primary btn-sm mt-2">Save note</button>
+	</form>
+}
+
+// saveNoteFormIdeaDetail renders the Idea detail page's save-note form
+// (FR3): idea_id is pre-selected via a hidden input, no picker -- every
+// note saved from this page attaches to idea. Rendered by IdeaDetail only
+// when canWrite is true.
+templ saveNoteFormIdeaDetail(ch store.Channel, idea store.Idea, form noteFormData) {
+	<form method="post" action={ templ.URL("/channels/" + ch.ID.String() + "/research/notes") } class="mt-2 space-y-2">
+		@saveNoteFields(form)
+		<input type="hidden" name="idea_id" value={ idea.ID.String() }/>
+		<button type="submit" class="btn btn-primary btn-sm mt-2">Save note</button>
+	</form>
 }
 
 // ideaRow renders one store.IdeaSummary: title (linking to its
@@ -198,9 +274,16 @@ templ noteBody(note store.ResearchNoteWithAuthor) {
 // resolved once per distinct author by the handler (Verdict carries no
 // AuthorDisplayName field of its own, unlike ResearchNoteWithAuthor).
 //
-// No form, no POST action, no write affordance anywhere on this page --
-// FR3/FR4/FR6/FR7's save forms land here in follow-up tasks.
-templ IdeaDetail(data components.LayoutData, ch store.Channel, idea store.Idea, notes []store.ResearchNoteWithAuthor, notesTruncated bool, current *store.Verdict, history []store.Verdict, authorNames map[uuid.UUID]string) {
+// canWrite (store.CanWrite, research.go's renderIdeaDetail) gates the
+// save-note form (FR3, FR6, FR7): omitted entirely when false --
+// PRESENTATION ONLY, mirroring ChannelIndex's identical rationale (see
+// that doc comment); the actual authorization boundary is
+// research.go's authorizeWrite, re-derived fresh from Postgres on every
+// POST /channels/{id}/research/notes.
+//
+// FR4/FR7's save-verdict form (a follow-up task, #1901) lands on this
+// same page.
+templ IdeaDetail(data components.LayoutData, ch store.Channel, idea store.Idea, notes []store.ResearchNoteWithAuthor, notesTruncated bool, current *store.Verdict, history []store.Verdict, authorNames map[uuid.UUID]string, canWrite bool, form noteFormData) {
 	@components.Layout(data) {
 		<div class="card bg-base-100 border border-base-300 shadow-sm">
 			<div class="card-body">
@@ -224,6 +307,12 @@ templ IdeaDetail(data components.LayoutData, ch store.Channel, idea store.Idea, 
 							Showing the { strconv.Itoa(defaultPageLimit) } most recent notes;
 							older ones are not shown.
 						</p>
+					}
+					if canWrite {
+						<div class="mt-4">
+							<h3 class="text-sm font-semibold">Save a research note</h3>
+							@saveNoteFormIdeaDetail(ch, idea, form)
+						</div>
 					}
 				</div>
 

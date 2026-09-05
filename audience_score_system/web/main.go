@@ -448,14 +448,17 @@ func (a *app) setupRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("POST /channels/{id}/access/promote", a.auth.RequireSignedIn(a.access.HandlePromote))
 	mux.HandleFunc("POST /channels/{id}/access/remove", a.auth.RequireSignedIn(a.access.HandleRemove))
 
-	// Protected: milestone M4.1's read-only Loop 1 browse surface (#1899,
-	// FR1/FR2/FR8/FR9/FR10). Both GETs are visible to a Channel's Founder,
-	// Co-Creator, AND Analyst (store.CanRead) -- mirrors the schedule
-	// block above's read gate exactly. This task ships no POST route;
-	// FR3/FR4/FR6/FR7's save forms land on these same pages in follow-up
-	// tasks.
+	// Protected: milestone M4.1's Loop 1 browse-and-save surface. Both
+	// GETs (#1899, FR1/FR2/FR8/FR9/FR10) are visible to a Channel's
+	// Founder, Co-Creator, AND Analyst (store.CanRead) -- mirrors the
+	// schedule block above's read gate exactly. The POST (#1900, FR3, FR6,
+	// FR7) additionally requires store.CanWrite (identical tier set),
+	// re-derived fresh on every request by research.go's authorizeWrite --
+	// see web/research's package doc comment. FR4/FR7's save-verdict form
+	// lands on these same pages in a follow-up task (#1901).
 	mux.HandleFunc("GET /channels/{id}/research", a.auth.RequireSignedIn(a.research.HandleChannelIndex))
 	mux.HandleFunc("GET /channels/{id}/research/ideas/{ideaID}", a.auth.RequireSignedIn(a.research.HandleIdeaDetail))
+	mux.HandleFunc("POST /channels/{id}/research/notes", a.auth.RequireSignedIn(a.research.HandleSaveNote))
 
 	// Protected: the cross-Channel "my work" aggregate (M2: FR27/FR28,
 	// #1725) -- see handleMyWork's doc comment.
