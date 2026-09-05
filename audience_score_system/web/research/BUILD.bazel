@@ -1,3 +1,4 @@
+load("@rules_go//go:def.bzl", "go_test")
 load("//tools:templ.bzl", "templ_library")
 
 # Milestone M4.1's read-only Loop 1 browse surface (FR1/FR2/FR8/FR9/FR10,
@@ -22,5 +23,54 @@ templ_library(
         "//audience_score_system/web/components",
         "@com_github_google_uuid//:uuid",
         "@com_github_jackc_pgx_v5//:pgx",
+    ],
+)
+
+# Postgres-backed handler coverage (Testing phase, issue #1899, milestone
+# M4.1 FR1/FR2/FR8/FR9/FR10/NFR2): HandleChannelIndex's Founder/Co-Creator/
+# Analyst read (same rows for all three) with non-member/unknown-Channel/
+# signed-out/malformed-UUID negatives, FR1's note-count/verdict-presence
+# rendering, FR9's unattached-notes section, NFR2's 50-row truncation with
+# no paging control; HandleIdeaDetail's identical auth/404/400 ordering,
+# the cross-Channel Idea 404 guard (the load-bearing red/green case, see
+# this file's own doc comment), FR10's cited/uncited rendering from
+# store.ResearchNote.Cited(), FR9's oldest-to-newest verdict history with
+# each version's source, and the empty-verdict 200 (never a 500). Gated
+# behind `//go:build integration`, gazelle skips it when scanning for
+# go_test srcs; this go_test is hand-written with EXACTLY the tag set from
+# //libs/go/dbtest:postgres_constraints_test (see that package's
+# BUILD.bazel/README.md for why each tag is required), mirroring
+# //audience_score_system/web/schedule:schedule_integration_test. `# keep`
+# markers tell a later `bazel run //:gazelle` not to touch or remove this
+# rule.
+#
+# Run it explicitly (requires a working Docker daemon):
+#   bazel test //audience_score_system/web/research:research_integration_test --test_output=all
+go_test(
+    # keep
+    name = "research_integration_test",
+    size = "large",
+    timeout = "long",
+    srcs = ["research_integration_test.go"],
+    embed = [":research"],
+    gotags = ["integration"],
+    tags = [
+        "external",
+        "integration",
+        "manual",
+        "no-cache",
+        "no-sandbox",
+        "requires-network",
+    ],
+    deps = [
+        "//audience_score_system/migrate/schema",
+        "//audience_score_system/store",
+        "//audience_score_system/web/auth",
+        "//libs/go/dbtest",
+        "//libs/go/migrate",
+        "@com_github_google_uuid//:uuid",
+        "@com_github_jackc_pgx_v5//stdlib",
+        "@com_github_stretchr_testify//assert",
+        "@com_github_stretchr_testify//require",
     ],
 )
