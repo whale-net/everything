@@ -25,6 +25,7 @@ go_test(
     timeout = "long",
     srcs = [
         "e2e_test.go",
+        "m2_1_video_script_test.go",
         "m2_multi_channel_test.go",
     ],
     gotags = ["integration"],
