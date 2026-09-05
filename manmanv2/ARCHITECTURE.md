@@ -200,6 +200,35 @@ The host attaches to each game container via the Docker API. Stdin is written
 directly to the container's attached connection. Stdout/stderr are demuxed from
 the same stream using Docker's 8-byte multiplexed header format.
 
+### Event Processor → UI (Live Status)
+
+`event-processor` republishes every session status transition it processes
+onto a second, dedicated topic exchange, `manmanv2.htmxsse`, independent of
+the `manman` and `external` exchanges above. This is a producer-only, purely
+additive path: it does not change `status.session.*` routing, payloads, or
+the `manman`/`external` exchange bindings.
+
+| Direction | Protocol | Use Case |
+|-----------|----------|----------|
+| event-processor → manmanv2/ui | RabbitMQ (`manmanv2.htmxsse` topic exchange) | Trigger live htmx/SSE fragment refresh in the UI |
+
+- **Exchange identity**: defined once in `manmanv2/events` (`ExchangeName`,
+  `TopicForDeployment`, `DeclareArgs`) — the single source of truth shared by
+  both the producer (event-processor) and the consumer (`manmanv2/ui`, via
+  `libs/go/htmxsse.DefaultAttachFunc`). Both processes must declare the
+  exchange with identical arguments or the UI's attach fails with a 406
+  `PRECONDITION_FAILED`.
+- **Routing key**: `deployment.<sgcID>` — keyed by ServerGameConfig (SGC), not
+  session id, so the UI can subscribe per-deployment regardless of which
+  session is currently running under it.
+- **Trigger scope**: unfiltered — every transition `event-processor`
+  successfully processes (including non-terminal `pending`/`starting`/
+  `stopping`) is republished here, unlike the `external`-exchange republish
+  which is filtered to terminal states and `running`.
+- **Payload**: the same `rmq.SessionStatusUpdate` value published to
+  `external`. The payload only needs to be a valid trigger — the UI re-reads
+  current state from `control-api` rather than rendering from this payload.
+
 ---
 
 ## gRPC Service Definitions
@@ -238,6 +267,7 @@ service ManManAPI {
 | Host deployment | **Docker + socket mount** | Leverages existing release artifact support |
 | Game container model | **Direct attach** | Host manages stdin/stdout via Docker attach API |
 | RabbitMQ topology | **Topic exchange + routing keys** | Simple, proven pattern from v1 |
+| Live-status UI trigger | **Dedicated `manmanv2.htmxsse` exchange, SGC-keyed** | Keeps htmx/SSE fan-out isolated from `manman`/`external`; SGC key survives session churn |
 | Parameter validation | **Control plane authoritative** | Host trusts CP, caches locally |
 
 ---

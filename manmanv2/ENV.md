@@ -90,6 +90,15 @@ GRPC_AUTH_CLIENT_ID=                    # service account client ID
 GRPC_AUTH_CLIENT_SECRET=               # service account client secret
 ```
 
+## Event Processor
+
+```bash
+EXTERNAL_EXCHANGE=external            # existing external-facing RabbitMQ exchange
+LIVE_EXCHANGE=manmanv2.htmxsse        # dedicated exchange for live status→UI triggers (see manmanv2/events, ARCHITECTURE.md § Event Processor → UI (Live Status))
+```
+
+`LIVE_EXCHANGE` defaults to `manmanv2/events.ExchangeName` (`manmanv2.htmxsse`) and only needs to be set explicitly to point at a non-default exchange. `manmanv2/ui` must be configured to consume from the same exchange name.
+
 ## Platform-Wide Variables
 
 `GRPC_AUTH_MODE` appears on every component. Set it consistently across the platform — mismatched modes will cause `codes.Unauthenticated` errors.

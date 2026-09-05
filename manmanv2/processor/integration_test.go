@@ -245,7 +245,8 @@ func (e *NotFoundError) Error() string {
 
 // MockPublisher implements handlers.Publisher for testing
 type MockPublisher struct {
-	PublishedEvents []PublishedEvent
+	PublishedEvents     []PublishedEvent
+	PublishedLiveEvents []PublishedEvent
 }
 
 type PublishedEvent struct {
@@ -255,12 +256,21 @@ type PublishedEvent struct {
 
 func NewMockPublisher() *MockPublisher {
 	return &MockPublisher{
-		PublishedEvents: make([]PublishedEvent, 0),
+		PublishedEvents:     make([]PublishedEvent, 0),
+		PublishedLiveEvents: make([]PublishedEvent, 0),
 	}
 }
 
 func (m *MockPublisher) PublishExternal(ctx context.Context, routingKey string, message interface{}) error {
 	m.PublishedEvents = append(m.PublishedEvents, PublishedEvent{
+		RoutingKey: routingKey,
+		Message:    message,
+	})
+	return nil
+}
+
+func (m *MockPublisher) PublishLive(ctx context.Context, routingKey string, message interface{}) error {
+	m.PublishedLiveEvents = append(m.PublishedLiveEvents, PublishedEvent{
 		RoutingKey: routingKey,
 		Message:    message,
 	})
