@@ -4,7 +4,10 @@
 // audience_score_system/migrate/schema/migrations/001_identity.up.sql) --
 // plus the LB3 research/verdict/schedule/outcome record chain, its read
 // models, and the mcp_idempotency ledger (migration 002, see
-// .../002_research_schedule_outcome.up.sql and issue #1569).
+// .../002_research_schedule_outcome.up.sql and issue #1569); plus
+// video_script (migration 010, .../010_video_script.up.sql, issues
+// #1823/#1824), M2.1's replacement for schedule_entry as the record of a
+// proposed video.
 //
 // Store is the single entry point, built over //libs/go/db's
 // *pgxpool.Pool. Its Persons/Channels/Roles/Invites/Ideas/Research/
@@ -30,7 +33,7 @@ import "github.com/jackc/pgx/v5/pgxpool"
 // channel_invite (migration 001) plus idea/research_note/
 // viability_verdict/verdict_citation/pacing_policy/schedule_entry/
 // synced_video/video_metrics/video_schedule_match/mcp_idempotency
-// (migration 002).
+// (migration 002) plus video_script (migration 010).
 type Store struct {
 	pool *pgxpool.Pool
 }
@@ -100,3 +103,11 @@ func (s *Store) Access() AccessStore { return accessStore{pool: s.pool} }
 // verdict, schedule state, and outcome comparison, in a bounded number of
 // queries regardless of Channel count.
 func (s *Store) MyWork() MyWorkStore { return myWorkStore{pool: s.pool} }
+
+// VideoScripts returns the VideoScriptStore implementation (migration
+// 010, milestone video-script-model, issues #1823/#1824) -- M2.1's
+// replacement for schedule_entry as the record of a proposed video: the
+// propose/greenlit/denied/archived lifecycle (FR36-FR40) plus the
+// publish-freeze predicate Archive consults (FR39). Performs no
+// authorization itself -- see VideoScriptStore's doc comment.
+func (s *Store) VideoScripts() VideoScriptStore { return videoScriptStore{pool: s.pool} }

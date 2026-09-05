@@ -1318,9 +1318,10 @@ func ptrInt64(v int64) *int64        { return &v }
 // against libs/go/mcpauth's schema contract, #1643), again for 007
 // (mcp_oauth_client + mcp_auth_code, mcpauth's OAuth2 authorization-code +
 // PKCE front end, #1646), again for 008 (strategy/strategy_verdict,
-// #1637), and again for 009 (co_creator_tier, #1713), so the version
-// assertion and table list below cover all of them rather than any single
-// one.
+// #1637), again for 009 (co_creator_tier, #1713), and again for 010
+// (video_script + video_schedule_match.video_script_id, issues
+// #1823/#1824), so the version assertion and table list below cover all
+// of them rather than any single one.
 func TestMigrations_UpDownUp_LeavesNoOrphanObjects(t *testing.T) {
 	ctx := context.Background()
 	db := dbtest.NewPostgres(ctx, t, dbtest.Options{})
@@ -1337,7 +1338,7 @@ func TestMigrations_UpDownUp_LeavesNoOrphanObjects(t *testing.T) {
 	version, dirty, err := runner.Version()
 	require.NoError(t, err)
 	assert.False(t, dirty)
-	assert.Equal(t, uint(9), version, "highest migration in schema.Migrations is 009_co_creator_tier")
+	assert.Equal(t, uint(10), version, "highest migration in schema.Migrations is 010_video_script")
 
 	for _, tbl := range []string{
 		"person", "channel", "channel_person", "channel_invite",
@@ -1350,6 +1351,7 @@ func TestMigrations_UpDownUp_LeavesNoOrphanObjects(t *testing.T) {
 		"mcp_oauth_client",
 		"mcp_auth_code",
 		"strategy", "strategy_verdict",
+		"video_script",
 	} {
 		var exists bool
 		require.NoError(t, db.Pool.QueryRow(ctx,
@@ -1370,6 +1372,16 @@ func TestMigrations_UpDownUp_LeavesNoOrphanObjects(t *testing.T) {
 		).Scan(&exists))
 		assert.True(t, exists, "view %s must exist after up/down/up", view)
 	}
+
+	// Migration 010's video_schedule_match.video_script_id re-anchor column
+	// (FR45) must also survive the down/up cycle -- a partial down that
+	// forgot to drop it (or a partial up that forgot to re-add it) would
+	// surface here.
+	var hasVideoScriptID bool
+	require.NoError(t, db.Pool.QueryRow(ctx,
+		`SELECT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name = 'video_schedule_match' AND column_name = 'video_script_id')`,
+	).Scan(&hasVideoScriptID))
+	assert.True(t, hasVideoScriptID, "video_schedule_match.video_script_id must exist after up/down/up")
 
 	// A fresh insert must succeed cleanly, proving indexes/constraints
 	// (e.g. the person.google_subject UNIQUE index) survived the

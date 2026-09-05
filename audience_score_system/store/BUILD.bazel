@@ -15,6 +15,11 @@ load("@rules_go//go:def.bzl", "go_library", "go_test")
 # longer lives here (migration 005/credential.go, issue #1575) -- issue
 # #1643 migrated it onto the shared //libs/go/mcpauth.CredentialStore
 # against migration 006's mcp_credential table.
+#
+# video_script.go is the video-script-model milestone's foundation
+# (migration 010, issues #1823/#1824): propose/greenlight/deny/archive
+# lifecycle plus the publish-freeze predicate, M2.1's replacement for
+# schedule_entry as the record of a proposed video.
 go_library(
     name = "store",
     srcs = [
@@ -38,6 +43,7 @@ go_library(
         "strategy.go",
         "sync.go",
         "verdict.go",
+        "video_script.go",
     ],
     importpath = "github.com/whale-net/everything/audience_score_system/store",
     visibility = ["//visibility:public"],
@@ -64,7 +70,10 @@ go_test(
     name = "store_integration_test",
     size = "large",
     timeout = "long",
-    srcs = ["store_integration_test.go"],
+    srcs = [
+        "store_integration_test.go",
+        "video_script_integration_test.go",
+    ],
     gotags = ["integration"],
     tags = [
         "external",

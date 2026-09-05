@@ -514,3 +514,59 @@ type ChannelWorkSummary struct {
 	// entry, not the Idea's current verdict).
 	LatestOutcome *PredictionOutcome
 }
+
+// VideoScriptStatus is `video_script.status` (migration 010, FR36-FR40).
+type VideoScriptStatus string
+
+const (
+	VideoScriptStatusProposed VideoScriptStatus = "proposed"
+	VideoScriptStatusGreenlit VideoScriptStatus = "greenlit"
+	VideoScriptStatusDenied   VideoScriptStatus = "denied"
+	VideoScriptStatusArchived VideoScriptStatus = "archived"
+)
+
+// VideoScript is one row of `video_script` (migration 010, milestone
+// video-script-model, issues #1823/#1824) -- M2.1's replacement for
+// schedule_entry as the record of a proposed video, carrying its own
+// title and script_text and a propose/greenlit/denied/archived lifecycle
+// (FR36-FR40) instead of schedule_entry's draft/committed pair. VerdictID/
+// IdeaID mirror schedule_entry's LB3 identity link exactly (verdict_id
+// pins a specific viability_verdict *version*, never "current"); unlike
+// schedule_entry, StrategyID is never nil -- FR36 requires proposing a
+// video_script under a Strategy. DecidedByPersonID/DecidedAt is a single
+// mutable who+when pair covering greenlight, deny, AND archive, mirroring
+// schedule_entry's approved_by_person_id/approved_at -- deliberately not a
+// history table (see migration 010's SQL comment / AGENTS.md § SCD2).
+type VideoScript struct {
+	ID                uuid.UUID
+	ChannelID         uuid.UUID
+	IdeaID            uuid.UUID
+	VerdictID         uuid.UUID
+	StrategyID        uuid.UUID
+	Title             string
+	ScriptText        string
+	Status            VideoScriptStatus
+	TargetPublishDate *time.Time
+	DecidedByPersonID *uuid.UUID
+	DecidedAt         *time.Time
+	CreatedByPersonID uuid.UUID
+	CreatedAt         time.Time
+	UpdatedAt         time.Time
+	IdempotencyKey    string
+}
+
+// VideoScriptDetail is one `video_script` row joined with its bound
+// Verdict version/value, its bound Idea title, and its bound Strategy
+// title, plus -- when Published holds -- the same "recorded as published"
+// freeze predicate ScheduleEntryDetail.Published uses (VideoScriptStore.
+// IsPublished). Modelled directly on ScheduleEntryDetail (this file) --
+// same join shape, same Published field, since `web`'s views use it to
+// omit affordances the same way.
+type VideoScriptDetail struct {
+	Script         VideoScript
+	VerdictVersion int
+	Verdict        VerdictValue
+	IdeaTitle      string
+	StrategyTitle  string
+	Published      bool
+}
