@@ -76,7 +76,7 @@ func TestRegistry_RetiredScheduleDraftAndPacingTools_NotRegistered(t *testing.T)
 	tools.RegisterMatches(reg, st)
 	tools.RegisterBrowse(reg, st)
 	tools.RegisterStrategy(reg, st)
-	tools.RegisterOutcomeBar(reg, st.OutcomeBars())
+	tools.RegisterOutcomeBar(reg, st.OutcomeBars(), st.Calibration())
 	tools.RegisterTriggerChannelSync(reg, st.Channels(), noopScheduleTrigger{})
 	tools.RegisterAccess(reg, st)
 	tools.RegisterMyWork(reg, st.MyWork())
@@ -110,4 +110,8 @@ func TestRegistry_RetiredScheduleDraftAndPacingTools_NotRegistered(t *testing.T)
 	// live registry, not just on disk.
 	assert.True(t, registered["set_outcome_bar"], "set_outcome_bar must be registered")
 	assert.True(t, registered["get_outcome_bar"], "get_outcome_bar must be registered")
+
+	// #1885: get_calibration_trend is the C14 read surface over the
+	// calibration store, wired through the same RegisterOutcomeBar call.
+	assert.True(t, registered["get_calibration_trend"], "get_calibration_trend must be registered")
 }

@@ -2,13 +2,16 @@
 // 014, issue #1882): set_outcome_bar (FR1, write) and get_outcome_bar
 // (FR2, read) -- the per-Channel outcome bar naming which metric to
 // classify against and the threshold that separates "calibrated" from
-// "miss" (FR4, #1885's own task, reads it). Both tools sit over
+// "miss" -- plus get_calibration_trend (FR5/FR6/FR7, read, issue #1885),
+// the bucketed calibration-trend read over store.CalibrationStore
+// (../../store/calibration.go, already real from #1884), classified
+// against the Channel's CURRENT outcome bar (FR4). All three sit over
 // store.OutcomeBarStore (../../store/outcome_bar.go, already real from
 // #1882).
 //
-// Neither tool performs its own role check: server.RegisterWrite/
-// RegisterRead apply store.CanWrite/store.CanRead automatically to any
-// input implementing server.ChannelScoped (NFR2), and that tier -- not
+// No tool performs its own role check: server.RegisterWrite/RegisterRead
+// apply store.CanWrite/store.CanRead automatically to any input
+// implementing server.ChannelScoped (NFR2), and that tier -- not
 // Creator-only -- is deliberate. The FR17-authority precedent for
 // Channel-level planning inputs (CanWrite gating; see ARCHITECTURE.md
 // "FR17 authority"), from tooling retired outright by M2.1, issue #1832,
@@ -203,11 +206,134 @@ func getOutcomeBarHandler(bars store.OutcomeBarStore) mcp.ToolHandlerFor[GetOutc
 	}
 }
 
+// -- get_calibration_trend -------------------------------------------------
+
+// defaultCalibrationTrendLimit bounds get_calibration_trend's bucket count
+// when the caller doesn't specify one -- twelve months of buckets, most
+// recent first-selected (see store.CalibrationStore.MonthlyTrend's DESC
+// selection before the chronological reversal).
+const defaultCalibrationTrendLimit = 12
+
+// GetCalibrationTrendInput is get_calibration_trend's argument schema
+// (FR5/FR7). Since/Before/Limit mirror browse.go's
+// GetPredictionVsOutcomeInput / defaultPredictionVsOutcomeLimit paging
+// idiom -- see that type's doc comment for the page-backward-past-
+// truncation pattern this reproduces.
+type GetCalibrationTrendInput struct {
+	ChannelID string     `json:"channel_id" jsonschema:"Channel to read the calibration trend for, as a UUID string"`
+	Since     *time.Time `json:"since,omitempty" jsonschema:"Only include calendar-month buckets whose candidate videos published at or after this time"`
+	Before    *time.Time `json:"before,omitempty" jsonschema:"Only include calendar-month buckets whose candidate videos published strictly before this time -- pair with since to page backward past a truncated response"`
+	Limit     int        `json:"limit,omitempty" jsonschema:"Maximum month buckets to return, most recent first-selected (default 12). The response's truncated flag is set when older buckets exist beyond it."`
+}
+
+// ChannelScopeID implements server.ChannelScoped.
+func (i GetCalibrationTrendInput) ChannelScopeID() uuid.UUID {
+	id, _ := uuid.Parse(i.ChannelID)
+	return id
+}
+
+// CalibrationBucketOutput is one calendar-month row of the calibration
+// trend, rendered from store.CalibrationBucket verbatim (FR5) -- no
+// bucketing, filtering, or rate arithmetic happens in this package.
+type CalibrationBucketOutput struct {
+	BucketStart     string  `json:"bucket_start" jsonschema:"Start of this calendar-month bucket, RFC3339"`
+	Candidates      int     `json:"candidates" jsonschema:"Calibration candidates (viable verdict, bound published video, synced metrics) whose video published in this month"`
+	Calibrated      int     `json:"calibrated" jsonschema:"Candidates whose recorded metric met or exceeded the outcome bar's threshold"`
+	Miscalibrated   int     `json:"miscalibrated" jsonschema:"Candidates whose recorded metric fell short of the outcome bar's threshold (candidates - calibrated)"`
+	CalibrationRate float64 `json:"calibration_rate" jsonschema:"calibrated / candidates, in [0,1]"`
+}
+
+// GetCalibrationTrendOutput is get_calibration_trend's structured result
+// (FR5/FR6/FR7).
+type GetCalibrationTrendOutput struct {
+	OutcomeBar OutcomeBarOutput          `json:"outcome_bar" jsonschema:"The bar these rows were classified against (FR4: always the CURRENT setting). configured=false means no trend was computed (FR6)."`
+	Buckets    []CalibrationBucketOutput `json:"buckets" jsonschema:"One row per calendar month with at least one candidate, oldest first; empty when no bar is configured"`
+	Truncated  bool                      `json:"truncated" jsonschema:"True if older month buckets exist beyond limit -- re-call with before set to the oldest returned bucket_start to page backward"`
+}
+
+// registerGetCalibrationTrend registers get_calibration_trend via
+// server.RegisterRead, so store.CanRead applies automatically and
+// Creator/Analyst see byte-identical output (NFR2).
+func registerGetCalibrationTrend(reg *server.Registry, bars store.OutcomeBarStore, calibration store.CalibrationStore) {
+	server.RegisterRead(reg, &mcp.Tool{
+		Name: "get_calibration_trend",
+		Description: "Read the Channel's calibration trend (FR5): one row per calendar month, bucketed by the " +
+			"published video's published_at, of how many candidates met or missed the Channel's outcome bar. A " +
+			"candidate is an idea with a viable verdict, a video_script that was bound to a published video, and " +
+			"synced metrics for that video -- ideas not yet resolved one way or the other are excluded rather than " +
+			"counted against the Creator. Classification always uses the Channel's CURRENT outcome bar (FR4), so " +
+			"changing the bar via set_outcome_bar reclassifies history the next time this is called; there is no " +
+			"historical snapshot. configured: false on outcome_bar means no outcome bar has ever been set for this " +
+			"Channel (FR6) -- a successful response, never an error, with no buckets computed; call set_outcome_bar " +
+			"first. Complements, and does not replace, get_prediction_vs_outcome's per-idea comparison. Single " +
+			"Channel per call.",
+	}, getCalibrationTrendHandler(bars, calibration))
+}
+
+// getCalibrationTrendHandler (1) calls bars.GetByChannel, returning
+// notConfiguredOutcomeBar() with an empty, non-nil Buckets slice and
+// Truncated=false on pgx.ErrNoRows (FR6, nil error --
+// calibration.MonthlyTrend is never called in that branch); (2) otherwise
+// defaults in.Limit to defaultCalibrationTrendLimit when <= 0 and calls
+// calibration.MonthlyTrend(ctx, channelID, bar, in.Since, in.Before,
+// limit); and (3) renders rows in the store's returned order (chronological
+// -- never re-sorted) into a non-nil []CalibrationBucketOutput, echoing the
+// bar classified against and passing truncated through unchanged (FR7).
+func getCalibrationTrendHandler(bars store.OutcomeBarStore, calibration store.CalibrationStore) mcp.ToolHandlerFor[GetCalibrationTrendInput, GetCalibrationTrendOutput] {
+	return func(ctx context.Context, _ *mcp.CallToolRequest, in GetCalibrationTrendInput) (*mcp.CallToolResult, GetCalibrationTrendOutput, error) {
+		channelID, err := uuid.Parse(in.ChannelID)
+		if err != nil {
+			return nil, GetCalibrationTrendOutput{}, err
+		}
+
+		bar, err := bars.GetByChannel(ctx, channelID)
+		if err != nil {
+			if errors.Is(err, pgx.ErrNoRows) {
+				return nil, GetCalibrationTrendOutput{
+					OutcomeBar: notConfiguredOutcomeBar(),
+					Buckets:    make([]CalibrationBucketOutput, 0),
+					Truncated:  false,
+				}, nil
+			}
+			return nil, GetCalibrationTrendOutput{}, err
+		}
+
+		limit := in.Limit
+		if limit <= 0 {
+			limit = defaultCalibrationTrendLimit
+		}
+
+		rows, truncated, err := calibration.MonthlyTrend(ctx, channelID, bar, in.Since, in.Before, limit)
+		if err != nil {
+			return nil, GetCalibrationTrendOutput{}, err
+		}
+
+		buckets := make([]CalibrationBucketOutput, 0, len(rows))
+		for _, r := range rows {
+			buckets = append(buckets, CalibrationBucketOutput{
+				BucketStart:     r.BucketStart.Format(time.RFC3339),
+				Candidates:      r.Candidates,
+				Calibrated:      r.Calibrated,
+				Miscalibrated:   r.Miscalibrated,
+				CalibrationRate: r.Rate,
+			})
+		}
+
+		return nil, GetCalibrationTrendOutput{
+			OutcomeBar: toOutcomeBarOutput(bar),
+			Buckets:    buckets,
+			Truncated:  truncated,
+		}, nil
+	}
+}
+
 // -- registration ------------------------------------------------------------
 
-// RegisterOutcomeBar registers set_outcome_bar and get_outcome_bar against
-// reg (see ../server/registry.go), backed by bars.
-func RegisterOutcomeBar(reg *server.Registry, bars store.OutcomeBarStore) {
+// RegisterOutcomeBar registers set_outcome_bar, get_outcome_bar, and
+// get_calibration_trend against reg (see ../server/registry.go), backed
+// by bars and calibration.
+func RegisterOutcomeBar(reg *server.Registry, bars store.OutcomeBarStore, calibration store.CalibrationStore) {
 	registerSetOutcomeBar(reg, bars)
 	registerGetOutcomeBar(reg, bars)
+	registerGetCalibrationTrend(reg, bars, calibration)
 }
