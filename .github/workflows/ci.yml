@@ -29,7 +29,7 @@ jobs:
   # invisible inside a green job.
   reconcile-app-registry:
     name: Reconcile apps/charts in App Registry
-    runs-on: self-hosted
+    runs-on: ubuntu-latest
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
     # Serializes reconcile runs so an older main push's ReconcileApps call
     # gets cancelled instead of racing a newer one. This job only runs on
@@ -139,7 +139,7 @@ jobs:
   # Combined build + test job - reuses warm Bazel server to avoid duplicate analysis
   test:
     name: Test
-    runs-on: self-hosted
+    runs-on: ubuntu-latest
     
     steps:
     - name: Checkout code
@@ -267,7 +267,7 @@ jobs:
   # Only runs on main branch to reduce CI overhead on feature branches
   test-container-arch:
     name: Test Container Architecture
-    runs-on: self-hosted
+    runs-on: ubuntu-latest
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
 
     steps:
@@ -316,7 +316,7 @@ jobs:
   # runs the full discovered set.
   test-database:
     name: Test Database Integration
-    runs-on: self-hosted
+    runs-on: ubuntu-latest
 
     steps:
     - name: Checkout code
@@ -431,7 +431,7 @@ jobs:
   # the tracking issues linked in this PR.
   plan-docker:
     name: Plan Docker Builds
-    runs-on: self-hosted
+    runs-on: ubuntu-latest
     if: false
     needs: [test, test-container-arch]
     outputs:
@@ -516,7 +516,7 @@ jobs:
   # Note: Images are built but not pushed to registry. Use the Release workflow for publishing.
   docker:
     name: Build Docker Images
-    runs-on: self-hosted
+    runs-on: ubuntu-latest
     needs: plan-docker
     if: github.event_name == 'push' && github.ref == 'refs/heads/main' && needs.plan-docker.outputs.apps && needs.plan-docker.outputs.apps != 'null'
     steps:
@@ -562,7 +562,7 @@ jobs:
   # Build summary - collects status of all jobs for branch protection
   build-summary:
     name: Build Summary
-    runs-on: self-hosted
+    runs-on: ubuntu-latest
     needs: [test, plan-docker, test-container-arch, docker]
     if: always()
     steps:
