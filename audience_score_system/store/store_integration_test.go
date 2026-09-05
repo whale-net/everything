@@ -1484,6 +1484,16 @@ func TestMigrations_UpDownUp_LeavesNoOrphanObjects(t *testing.T) {
 	).Scan(&hasVideoScriptID))
 	assert.True(t, hasVideoScriptID, "video_schedule_match.video_script_id must exist after up/down/up")
 
+	// Migration 013's video_schedule_match.schedule_entry_id drop (FR41/
+	// FR45, #1835) must also survive the down/up cycle -- a down that
+	// forgot to re-add the column (or an up that forgot to drop it again)
+	// would surface here.
+	var hasScheduleEntryID bool
+	require.NoError(t, db.Pool.QueryRow(ctx,
+		`SELECT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name = 'video_schedule_match' AND column_name = 'schedule_entry_id')`,
+	).Scan(&hasScheduleEntryID))
+	assert.False(t, hasScheduleEntryID, "video_schedule_match.schedule_entry_id must not exist after up/down/up (migration 013 drops it outright)")
+
 	// A fresh insert must succeed cleanly, proving indexes/constraints
 	// (e.g. the person.google_subject UNIQUE index) survived the
 	// down/up cycle intact rather than silently not being recreated.
@@ -2060,6 +2070,102 @@ func TestMyWorkStore_SummariesForPerson_EmptyChannelStillAppears(t *testing.T) {
 	assert.Nil(t, got[0].LatestVerdict)
 	assert.Equal(t, store.VideoScriptState{}, got[0].ScriptState)
 	assert.Nil(t, got[0].LatestOutcome)
+}
+
+// TestMyWorkStore_SummariesForPerson_VideoScriptStateCountsAllFourStatusesSeparately
+// proves loadVideoScriptState (mywork.go, retargeted from schedule_entry's
+// draft/committed pair by #1835) aggregates every video_script status
+// independently rather than collapsing any of them together (FR38/FR39
+// require denied and archived stay distinct): a Channel with 2 proposed,
+// 1 greenlit, 1 denied, and 1 archived script -- every status represented,
+// each with its own distinct count so a column-order mixup (e.g. denied/
+// archived swapped) would be caught -- reports exactly those counts, a
+// sibling Channel's scripts do not bleed in (Channel-scoped), and a third
+// Channel with zero scripts reports the zero value, not an error.
+func TestMyWorkStore_SummariesForPerson_VideoScriptStateCountsAllFourStatusesSeparately(t *testing.T) {
+	ctx := context.Background()
+	s, _ := newStore(t)
+
+	person, _, err := s.Persons().UpsertByGoogleSubject(ctx, "sub-"+uuid.NewString(), "p@example.com", "Person")
+	require.NoError(t, err)
+
+	// proposeScript creates a fresh Idea+Verdict(viable) and proposes one
+	// video_script against it, on ch under strategyID.
+	proposeScript := func(ch store.Channel, strategyID uuid.UUID, title string) store.VideoScript {
+		idea, err := s.Ideas().Create(ctx, ch.ID, title+" idea", person.ID)
+		require.NoError(t, err)
+		verdict, err := s.Verdicts().Append(ctx, store.AppendVerdictInput{
+			IdeaID: idea.ID, Verdict: store.VerdictViable, Reasoning: title + " reasoning", AuthorPersonID: person.ID,
+		})
+		require.NoError(t, err)
+		script, err := s.VideoScripts().Propose(ctx, store.ProposeVideoScriptInput{
+			ChannelID: ch.ID, VerdictID: verdict.ID, StrategyID: strategyID,
+			Title: title, ScriptText: title + " text", CreatedByPersonID: person.ID,
+		})
+		require.NoError(t, err)
+		return script
+	}
+
+	// makeStrategy creates a strategy on ch, built off its own seed verdict
+	// (Strategy.Save requires a non-empty VerdictIDs list).
+	makeStrategy := func(ch store.Channel, title string) uuid.UUID {
+		seedIdea, err := s.Ideas().Create(ctx, ch.ID, title+" seed idea", person.ID)
+		require.NoError(t, err)
+		seedVerdict, err := s.Verdicts().Append(ctx, store.AppendVerdictInput{
+			IdeaID: seedIdea.ID, Verdict: store.VerdictViable, Reasoning: "seed reasoning", AuthorPersonID: person.ID,
+		})
+		require.NoError(t, err)
+		strat, err := s.Strategies().Save(ctx, store.SaveStrategyInput{
+			ChannelID: ch.ID, Title: title, Active: true,
+			VerdictIDs: []uuid.UUID{seedVerdict.ID}, CreatedByPersonID: person.ID,
+		})
+		require.NoError(t, err)
+		return strat.ID
+	}
+
+	// A: 2 proposed, 1 greenlit, 1 denied, 1 archived.
+	chA, err := s.Channels().Create(ctx, "yt-"+uuid.NewString(), "Channel A", person.ID)
+	require.NoError(t, err)
+	stratA := makeStrategy(chA, "A Strategy")
+
+	proposeScript(chA, stratA, "A Proposed 1")
+	proposeScript(chA, stratA, "A Proposed 2")
+
+	toGreenlight := proposeScript(chA, stratA, "A Greenlit")
+	require.NoError(t, s.VideoScripts().Greenlight(ctx, toGreenlight.ID, person.ID))
+
+	toDeny := proposeScript(chA, stratA, "A Denied")
+	require.NoError(t, s.VideoScripts().Deny(ctx, toDeny.ID, person.ID))
+
+	toArchive := proposeScript(chA, stratA, "A Archived")
+	require.NoError(t, s.VideoScripts().Greenlight(ctx, toArchive.ID, person.ID))
+	require.NoError(t, s.VideoScripts().Archive(ctx, toArchive.ID, person.ID))
+
+	// B: a sibling Channel with its own single denied script -- proves the
+	// aggregate is scoped per-Channel, not summed across every Channel the
+	// Person can see.
+	chB, err := s.Channels().Create(ctx, "yt-"+uuid.NewString(), "Channel B", person.ID)
+	require.NoError(t, err)
+	stratB := makeStrategy(chB, "B Strategy")
+	toDenyB := proposeScript(chB, stratB, "B Denied")
+	require.NoError(t, s.VideoScripts().Deny(ctx, toDenyB.ID, person.ID))
+
+	// C: a third Channel with no video_script rows at all.
+	chC, err := s.Channels().Create(ctx, "yt-"+uuid.NewString(), "Channel C", person.ID)
+	require.NoError(t, err)
+
+	got, err := s.MyWork().SummariesForPerson(ctx, person.ID, 5)
+	require.NoError(t, err)
+	require.Len(t, got, 3)
+
+	byChannel := map[uuid.UUID]store.VideoScriptState{}
+	for _, summary := range got {
+		byChannel[summary.Channel.ID] = summary.ScriptState
+	}
+
+	assert.Equal(t, store.VideoScriptState{ProposedCount: 2, GreenlitCount: 1, DeniedCount: 1, ArchivedCount: 1}, byChannel[chA.ID], "Channel A must report every status distinctly")
+	assert.Equal(t, store.VideoScriptState{DeniedCount: 1}, byChannel[chB.ID], "Channel B's single denied script must not bleed into or absorb Channel A's counts")
+	assert.Equal(t, store.VideoScriptState{}, byChannel[chC.ID], "a Channel with zero video_script rows must report the zero value, not an error")
 }
 
 // TestMyWorkStore_SummariesForPerson_QueryCountIsBoundedAcrossChannelCount
