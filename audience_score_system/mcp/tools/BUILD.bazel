@@ -17,6 +17,7 @@ go_library(
         "list_channels.go",
         "matches.go",
         "my_work.go",
+        "outcome_bar.go",
         "research.go",
         "strategy.go",
         "strategy_time.go",
