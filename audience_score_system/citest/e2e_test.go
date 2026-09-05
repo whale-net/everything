@@ -77,9 +77,16 @@
 //   - FR17 -- exercised here (step 5: set_pacing_policy).
 //   - FR18 -- exercised here (step 5: a deliberately colliding slot
 //     returns collision=true and the draft is still saved).
-//   - FR19 -- exercised here (step 6: Analyst 403, Creator approves).
-//   - FR20 -- exercised here (steps 6 and 8: un-approve/edit/re-approve
-//     while unpublished, then both rejected 409 once published).
+//   - FR19/FR20 -- retired outright by FR48/FR49 (issue #1834, milestone
+//     video-script-model): schedule_entry's own approve/un-approve/edit
+//     web surface no longer exists (web/schedule/schedule.go's package
+//     doc comment: HandleEdit and HandleUnapprove have no analog). Step 6
+//     now exercises the video_script replacement instead: FR37 (Analyst's
+//     forged approve 403s, Creator greenlights) and FR40 (a second
+//     approve on an already-greenlit script 409s as an invalid
+//     transition, since greenlit->greenlit is not FR40's allowed set).
+//     Step 8 exercises FR39 (archive rejected once the greenlit script's
+//     matched video is published).
 //   - FR21 -- exercised here (step 7: SyncOutcomes' real metrics upsert).
 //   - FR22 -- exercised here (step 7: an exact title/date match auto-links
 //     at/above the confidence threshold).
@@ -217,9 +224,9 @@ func newWorld(t *testing.T) *world {
 	mux.HandleFunc("POST /invites/{code}/accept", a.RequireSignedIn(inv.HandleAccept))
 	mux.HandleFunc("POST /invites/{code}/decline", a.RequireSignedIn(inv.HandleDecline))
 	mux.HandleFunc("GET /channels/{id}/schedule", a.RequireSignedIn(sch.HandleList))
-	mux.HandleFunc("POST /schedule/{entryID}/approve", a.RequireSignedIn(sch.HandleApprove))
-	mux.HandleFunc("POST /schedule/{entryID}/unapprove", a.RequireSignedIn(sch.HandleUnapprove))
-	mux.HandleFunc("POST /schedule/{entryID}/edit", a.RequireSignedIn(sch.HandleEdit))
+	mux.HandleFunc("POST /schedule/{scriptID}/approve", a.RequireSignedIn(sch.HandleGreenlight))
+	mux.HandleFunc("POST /schedule/{scriptID}/deny", a.RequireSignedIn(sch.HandleDeny))
+	mux.HandleFunc("POST /schedule/{scriptID}/archive", a.RequireSignedIn(sch.HandleArchive))
 	mux.HandleFunc("GET /channels/{id}/access", a.RequireSignedIn(acc.HandleShow))
 	mux.HandleFunc("POST /channels/{id}/access/invites", a.RequireSignedIn(acc.HandleInviteCoCreator))
 	mux.HandleFunc("POST /channels/{id}/access/promote", a.RequireSignedIn(acc.HandlePromote))
@@ -448,6 +455,7 @@ func TestE2E_ThreeLoopsEndToEnd(t *testing.T) {
 		ideaID, note1ID, note2ID     uuid.UUID
 		verdict1ID, verdict2ID       uuid.UUID
 		entryID                      uuid.UUID
+		scriptID                     uuid.UUID
 	)
 
 	// ── Step 1: signup & connect ────────────────────────────────────────
@@ -677,40 +685,50 @@ func TestE2E_ThreeLoopsEndToEnd(t *testing.T) {
 
 	// ── Step 6: approval ─────────────────────────────────────────────────
 	t.Run("6_approval", func(t *testing.T) {
-		// FR19: Analyst's approve attempt is 403, no state change.
-		rec := w.postForm(analystCookie, "/schedule/"+entryID.String()+"/approve", nil)
-		assert.Equal(t, http.StatusForbidden, rec.Code)
-		entry, err := w.st.Schedules().GetByID(ctx, entryID)
-		require.NoError(t, err)
-		assert.Equal(t, store.ScheduleStateDraft, entry.State, "an Analyst's rejected approve must not change state")
-
-		// FR19: Creator approves.
-		rec = w.postForm(creatorCookie, "/schedule/"+entryID.String()+"/approve", nil)
-		require.Equal(t, http.StatusSeeOther, rec.Code, "body: %s", rec.Body.String())
-		entry, err = w.st.Schedules().GetByID(ctx, entryID)
-		require.NoError(t, err)
-		assert.Equal(t, store.ScheduleStateCommitted, entry.State)
-
-		// FR20: Creator un-approves, edits the slot, re-approves.
-		rec = w.postForm(creatorCookie, "/schedule/"+entryID.String()+"/unapprove", nil)
-		require.Equal(t, http.StatusSeeOther, rec.Code, "body: %s", rec.Body.String())
-		entry, err = w.st.Schedules().GetByID(ctx, entryID)
-		require.NoError(t, err)
-		assert.Equal(t, store.ScheduleStateDraft, entry.State)
-
-		rec = w.postForm(creatorCookie, "/schedule/"+entryID.String()+"/edit", url.Values{
-			"proposed_publish_at": {editedSlot.Format(time.RFC3339)},
+		// FR36: a video_script is proposed under a Strategy grounded on
+		// the viable verdict -- the record web/schedule's Handlers now
+		// approves/denies/archives (schedule.go's package doc comment).
+		// TargetPublishDate is set to editedSlot up front (FR36: a
+		// video_script's target date is set once at propose time, no web
+		// edit surface) -- step 7's yt-idea-video publishes at this same
+		// instant so FR22's auto-linker scores an exact title/date match.
+		strategy, err := w.st.Strategies().Save(ctx, store.SaveStrategyInput{
+			ChannelID: ch.ID, Title: "Widget Strategy", PreferredWeekday: "Tuesday",
+			Active: true, VerdictIDs: []uuid.UUID{verdict2ID}, CreatedByPersonID: creator.ID,
 		})
-		require.Equal(t, http.StatusSeeOther, rec.Code, "body: %s", rec.Body.String())
-		entry, err = w.st.Schedules().GetByID(ctx, entryID)
 		require.NoError(t, err)
-		assert.WithinDuration(t, editedSlot, entry.ProposedPublishAt, time.Second)
+		script, err := w.st.VideoScripts().Propose(ctx, store.ProposeVideoScriptInput{
+			ChannelID: ch.ID, VerdictID: verdict2ID, StrategyID: strategy.ID,
+			Title: ideaTitle, ScriptText: "script text", TargetPublishDate: &editedSlot,
+			CreatedByPersonID: creator.ID,
+		})
+		require.NoError(t, err)
+		scriptID = script.ID
 
-		rec = w.postForm(creatorCookie, "/schedule/"+entryID.String()+"/approve", nil)
-		require.Equal(t, http.StatusSeeOther, rec.Code, "body: %s", rec.Body.String())
-		entry, err = w.st.Schedules().GetByID(ctx, entryID)
+		// FR37: Analyst's approve attempt is 403, no state change.
+		rec := w.postForm(analystCookie, "/schedule/"+scriptID.String()+"/approve", nil)
+		assert.Equal(t, http.StatusForbidden, rec.Code)
+		got, err := w.st.VideoScripts().GetByID(ctx, scriptID)
 		require.NoError(t, err)
-		assert.Equal(t, store.ScheduleStateCommitted, entry.State)
+		assert.Equal(t, store.VideoScriptStatusProposed, got.Status, "an Analyst's rejected approve must not change state")
+
+		// FR37: Creator greenlights.
+		rec = w.postForm(creatorCookie, "/schedule/"+scriptID.String()+"/approve", nil)
+		require.Equal(t, http.StatusSeeOther, rec.Code, "body: %s", rec.Body.String())
+		got, err = w.st.VideoScripts().GetByID(ctx, scriptID)
+		require.NoError(t, err)
+		assert.Equal(t, store.VideoScriptStatusGreenlit, got.Status)
+
+		// FR40: a second approve on an already-greenlit script is an
+		// invalid transition (greenlit->greenlit is not in FR40's
+		// allowed set) -- 409, no state change. Replaces FR20's retired
+		// un-approve/edit/re-approve sequence (HandleUnapprove/HandleEdit
+		// have no analog, per schedule.go's package doc comment).
+		rec = w.postForm(creatorCookie, "/schedule/"+scriptID.String()+"/approve", nil)
+		assert.Equal(t, http.StatusConflict, rec.Code, "FR40: greenlighting an already-greenlit script must be rejected")
+		got, err = w.st.VideoScripts().GetByID(ctx, scriptID)
+		require.NoError(t, err)
+		assert.Equal(t, store.VideoScriptStatusGreenlit, got.Status, "no state change from the rejected transition")
 	})
 
 	// ── Step 7: outcome loop ─────────────────────────────────────────────
@@ -760,24 +778,12 @@ func TestE2E_ThreeLoopsEndToEnd(t *testing.T) {
 			},
 		}
 
-		// FR22's auto-linker now scores against greenlit video_script
+		// FR22's auto-linker scores against greenlit video_script
 		// candidates, not schedule_entry rows (FR43/#1829's re-anchor,
-		// matching.go) -- give it one, title/date-exact against
-		// yt-idea-video, so the sync cycle below has something to
-		// auto-link to.
-		strategy, err := w.st.Strategies().Save(ctx, store.SaveStrategyInput{
-			ChannelID: ch.ID, Title: "Widget Strategy", PreferredWeekday: "Tuesday",
-			Active: true, VerdictIDs: []uuid.UUID{verdict2ID}, CreatedByPersonID: creator.ID,
-		})
-		require.NoError(t, err)
-		script, err := w.st.VideoScripts().Propose(ctx, store.ProposeVideoScriptInput{
-			ChannelID: ch.ID, VerdictID: verdict2ID, StrategyID: strategy.ID,
-			Title: ideaTitle, ScriptText: "script text", TargetPublishDate: &publishedAtA,
-			CreatedByPersonID: creator.ID,
-		})
-		require.NoError(t, err)
-		require.NoError(t, w.st.VideoScripts().Greenlight(ctx, script.ID, creator.ID))
-
+		// matching.go) -- scriptID (proposed and greenlit in step 6,
+		// TargetPublishDate == editedSlot == publishedAtA) is title/date-
+		// exact against yt-idea-video, so the sync cycle below has
+		// something to auto-link to.
 		counts, err := w.runSyncCycle(ch.ID, fc2)
 		require.NoError(t, err)
 		assert.EqualValues(t, 1, counts.syncSchedule)
@@ -823,12 +829,14 @@ func TestE2E_ThreeLoopsEndToEnd(t *testing.T) {
 		assert.Equal(t, "auto", cmp.Rows[0].MatchProvenance)
 		assert.Equal(t, 1, cmp.PendingMatchCount)
 
-		// FR23: the Analyst confirms the pending match via MCP.
+		// FR23: the Analyst confirms the pending match via MCP, overriding
+		// to scriptID (FR44's re-anchor: ResolvePendingMatchInput now
+		// takes VideoScriptID, not ScheduleEntryID -- #1843's rename).
 		resolveRes := callTool(t, w.mcpConnect(analyst.ID), "resolve_pending_match", mcptools.ResolvePendingMatchInput{
 			ChannelID:         ch.ID.String(),
 			MatchID:           matchBID.String(),
 			Confirm:           true,
-			VideoScriptID:     script.ID.String(),
+			VideoScriptID:     scriptID.String(),
 			IdempotencyKeyArg: uuid.NewString(),
 		})
 		resolved := decode[mcptools.ResolvedMatchOutput](t, resolveRes)
@@ -850,21 +858,21 @@ func TestE2E_ThreeLoopsEndToEnd(t *testing.T) {
 
 	// ── Step 8: freeze ───────────────────────────────────────────────────
 	t.Run("8_freeze", func(t *testing.T) {
-		published, err := w.st.Schedules().IsPublished(ctx, entryID)
+		// FR39: scriptID's matched video (yt-idea-video, auto-linked in
+		// step 7) is now published -- archive must be rejected 409, no
+		// state change. Replaces FR20's retired un-approve/edit freeze
+		// checks (schedule.go's package doc comment: HandleUnapprove and
+		// HandleEdit have no analog under video_script).
+		published, err := w.st.VideoScripts().IsPublished(ctx, scriptID)
 		require.NoError(t, err)
-		require.True(t, published, "the committed entry's video is now auto-matched and published")
+		require.True(t, published, "the greenlit script's video is now auto-matched and published")
 
-		rec := w.postForm(creatorCookie, "/schedule/"+entryID.String()+"/unapprove", nil)
-		assert.Equal(t, http.StatusConflict, rec.Code, "FR20: un-approve must be rejected once published")
+		rec := w.postForm(creatorCookie, "/schedule/"+scriptID.String()+"/archive", nil)
+		assert.Equal(t, http.StatusConflict, rec.Code, "FR39: archive must be rejected once published")
 
-		rec = w.postForm(creatorCookie, "/schedule/"+entryID.String()+"/edit", url.Values{
-			"proposed_publish_at": {editedSlot.Add(time.Hour).Format(time.RFC3339)},
-		})
-		assert.Equal(t, http.StatusConflict, rec.Code, "FR20: edit must be rejected once published")
-
-		entry, err := w.st.Schedules().GetByID(ctx, entryID)
+		got, err := w.st.VideoScripts().GetByID(ctx, scriptID)
 		require.NoError(t, err)
-		assert.Equal(t, store.ScheduleStateCommitted, entry.State, "no state change from either rejected mutation")
+		assert.Equal(t, store.VideoScriptStatusGreenlit, got.Status, "no state change from the rejected archive")
 	})
 
 	// ── Step 9: disconnect/reconnect ─────────────────────────────────────
