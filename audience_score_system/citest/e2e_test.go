@@ -140,6 +140,7 @@ import (
 	"github.com/whale-net/everything/audience_score_system/web/access"
 	"github.com/whale-net/everything/audience_score_system/web/auth"
 	"github.com/whale-net/everything/audience_score_system/web/invite"
+	"github.com/whale-net/everything/audience_score_system/web/research"
 	"github.com/whale-net/everything/audience_score_system/web/schedule"
 	"github.com/whale-net/everything/audience_score_system/worker/sync"
 	"github.com/whale-net/everything/audience_score_system/youtube"
@@ -198,24 +199,29 @@ func newWorld(t *testing.T) *world {
 	inv := invite.New(st, sessions)
 	sch := schedule.New(st)
 	acc := access.New(st)
+	res := research.New(st)
 
 	// web router: mirrors web/main.go's setupRoutes for exactly the
 	// routes this loop drives (invite generate/resume, schedule approve/
-	// unapprove/edit, M2's access-management page) -- same pattern as
-	// web/invite/invite_integration_test.go, web/schedule/
-	// schedule_integration_test.go, and web/access/access_integration_test.go.
+	// unapprove/edit, M2's access-management page, M4.1's research
+	// browse/save routes) -- same pattern as web/invite/
+	// invite_integration_test.go, web/schedule/schedule_integration_test.go,
+	// web/access/access_integration_test.go, and web/research/
+	// research_integration_test.go.
 	// GET /channels (FR26) and GET /my-work (FR27) are deliberately NOT
 	// mirrored here: both handlers live inline on web/main.go's own `app`
 	// type (package main, not importable) rather than in a dedicated
-	// package like access/invite/schedule -- see web/channels_integration_test.go
-	// and web/my_work_integration_test.go for their own HTTP-level
-	// coverage. This file instead drives their exact data sources
-	// directly (store.AccessStore.ChannelsWithRoleForPerson,
-	// store.MyWorkStore.SummariesForPerson) -- identical to what those
-	// two handlers call -- and cross-checks the MCP equivalents
-	// (list_channels, get_my_work) against them, which is what proves
-	// "web and MCP agree" for those two capabilities absent a directly
-	// drivable web handler.
+	// package like access/invite/schedule/research -- see
+	// web/channels_integration_test.go and web/my_work_integration_test.go
+	// for their own HTTP-level coverage. This file instead drives their
+	// exact data sources directly (store.AccessStore.
+	// ChannelsWithRoleForPerson, store.MyWorkStore.SummariesForPerson) --
+	// identical to what those two handlers call -- and cross-checks the
+	// MCP equivalents (list_channels, get_my_work) against them, which is
+	// what proves "web and MCP agree" for those two capabilities absent a
+	// directly drivable web handler. GET /channels/{id} (handleChannelDetail,
+	// FR8's nav-link source) is the same story -- see m4_1_research_web_test.go's
+	// own phase 7 for how it renders pages.ChannelDetail directly instead.
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /invites/{code}", inv.HandleShow)
 	mux.HandleFunc("POST /channels/{id}/invites", a.RequireSignedIn(inv.HandleGenerate))
@@ -230,6 +236,10 @@ func newWorld(t *testing.T) *world {
 	mux.HandleFunc("POST /channels/{id}/access/invites", a.RequireSignedIn(acc.HandleInviteCoCreator))
 	mux.HandleFunc("POST /channels/{id}/access/promote", a.RequireSignedIn(acc.HandlePromote))
 	mux.HandleFunc("POST /channels/{id}/access/remove", a.RequireSignedIn(acc.HandleRemove))
+	mux.HandleFunc("GET /channels/{id}/research", a.RequireSignedIn(res.HandleChannelIndex))
+	mux.HandleFunc("GET /channels/{id}/research/ideas/{ideaID}", a.RequireSignedIn(res.HandleIdeaDetail))
+	mux.HandleFunc("POST /channels/{id}/research/notes", a.RequireSignedIn(res.HandleSaveNote))
+	mux.HandleFunc("POST /channels/{id}/research/ideas/{ideaID}/verdicts", a.RequireSignedIn(res.HandleSaveVerdict))
 
 	// mcp server: mirrors mcp/main.go's tool registration exactly.
 	srv := mcpserver.New(st)

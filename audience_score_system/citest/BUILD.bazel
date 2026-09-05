@@ -28,6 +28,7 @@ go_test(
         "m2_1_video_script_test.go",
         "m2_multi_channel_test.go",
         "m3_calibration_test.go",
+        "m4_1_research_web_test.go",
     ],
     gotags = ["integration"],
     tags = [
@@ -46,7 +47,10 @@ go_test(
         "//audience_score_system/tokens",
         "//audience_score_system/web/access",
         "//audience_score_system/web/auth",
+        "//audience_score_system/web/components",
         "//audience_score_system/web/invite",
+        "//audience_score_system/web/pages",
+        "//audience_score_system/web/research",
         "//audience_score_system/web/schedule",
         "//audience_score_system/worker/sync",
         "//audience_score_system/youtube",

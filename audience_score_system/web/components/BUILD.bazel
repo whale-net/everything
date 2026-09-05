@@ -4,7 +4,10 @@ templ_library(
     name = "components",
     srcs = glob(["*.templ"]),
     go_srcs = ["render.go"],
-    visibility = ["//audience_score_system/web:__subpackages__"],
+    visibility = [
+        "//audience_score_system/citest:__pkg__",
+        "//audience_score_system/web:__subpackages__",
+    ],
     deps = [
         "//audience_score_system/store",
         "//libs/go/htmxbase",
