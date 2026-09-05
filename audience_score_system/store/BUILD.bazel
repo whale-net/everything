@@ -83,6 +83,7 @@ go_test(
     size = "large",
     timeout = "long",
     srcs = [
+        "calibration_integration_test.go",
         "match_integration_test.go",
         "outcome_bar_integration_test.go",
         "store_integration_test.go",
