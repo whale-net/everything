@@ -16,17 +16,12 @@
 // Analyst with an open role, same tier as every other write in this
 // package. This task reproduces that RULE, not the retired code, and
 // does not re-register either retired tool name.
-//
-// Scaffold only: setOutcomeBarMutate below returns
-// errOutcomeBarToolNotImplemented until Implementation wires in the real
-// store.OutcomeBarStore.Upsert call and its error-message mapping, same
-// scaffold/feat split video_script.go (issue #1823) followed for its own
-// mutate functions.
 package tools
 
 import (
 	"context"
 	"errors"
+	"fmt"
 	"time"
 
 	"github.com/google/uuid"
@@ -36,12 +31,6 @@ import (
 	"github.com/whale-net/everything/audience_score_system/mcp/server"
 	"github.com/whale-net/everything/audience_score_system/store"
 )
-
-// errOutcomeBarToolNotImplemented is returned by setOutcomeBarMutate until
-// Implementation lands. Never wrapped into a store error -- this is
-// scaffold-only scaffolding, not a runtime condition a caller can hit
-// through the real store.
-var errOutcomeBarToolNotImplemented = errors.New("outcome_bar tool not implemented yet")
 
 // -- shared rendering ---------------------------------------------------------
 
@@ -114,16 +103,42 @@ func registerSetOutcomeBar(reg *server.Registry, bars store.OutcomeBarStore) {
 	}, setOutcomeBarMutate(bars), setOutcomeBarRender(bars))
 }
 
-// setOutcomeBarMutate is scaffold-only: Implementation must call
-// bars.Upsert with server.PersonFromContext(ctx).ID as
-// UpdatedByPersonID, map store.ErrUnsupportedOutcomeBarMetric and
-// store.ErrInvalidOutcomeBarThreshold to caller-facing messages (neither
-// should surface as a raw pgx error), and return the resulting row's
-// ChannelID as ref -- see setOutcomeBarRender's doc comment on why ref is
-// the channel_id, not the row's own surrogate id.
+// setOutcomeBarMutate calls bars.Upsert with the caller's Person as
+// UpdatedByPersonID (person is always non-nil here: RegisterWrite applies
+// store.CanWrite via ChannelScopeID before mutate ever runs, and that
+// resolution requires an authenticated caller). Maps
+// store.ErrUnsupportedOutcomeBarMetric and store.ErrInvalidOutcomeBarThreshold
+// to caller-facing messages -- neither should surface as a raw pgx error --
+// and returns the resulting row's ChannelID as ref: see setOutcomeBarRender's
+// doc comment on why ref is the channel_id, not the row's own surrogate id.
 func setOutcomeBarMutate(bars store.OutcomeBarStore) server.WriteMutate[SetOutcomeBarInput] {
 	return func(ctx context.Context, in SetOutcomeBarInput) (uuid.UUID, error) {
-		return uuid.Nil, errOutcomeBarToolNotImplemented
+		channelID, err := uuid.Parse(in.ChannelID)
+		if err != nil {
+			return uuid.Nil, fmt.Errorf("channel_id is not a valid UUID: %w", err)
+		}
+
+		person := server.PersonFromContext(ctx)
+		if person == nil {
+			return uuid.Nil, fmt.Errorf("unauthenticated: no caller credential resolved")
+		}
+
+		b, err := bars.Upsert(ctx, store.SetOutcomeBarInput{
+			ChannelID:         channelID,
+			MetricName:        in.MetricName,
+			ThresholdValue:    in.ThresholdValue,
+			UpdatedByPersonID: person.ID,
+		})
+		if err != nil {
+			if errors.Is(err, store.ErrUnsupportedOutcomeBarMetric) {
+				return uuid.Nil, fmt.Errorf("metric_name must be %q in this milestone: %w", store.OutcomeBarMetricViews, err)
+			}
+			if errors.Is(err, store.ErrInvalidOutcomeBarThreshold) {
+				return uuid.Nil, fmt.Errorf("threshold_value must not be negative: %w", err)
+			}
+			return uuid.Nil, err
+		}
+		return b.ChannelID, nil
 	}
 }
 
