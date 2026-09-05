@@ -1,0 +1,26 @@
+load("//tools:templ.bzl", "templ_library")
+
+# Milestone M4.1's read-only Loop 1 browse surface (FR1/FR2/FR8/FR9/FR10,
+# issue #1899): Channel-scoped research index + Idea detail, handlers
+# (research.go) and templ views (views.templ) in one package -- see
+# research.go's package doc comment for why they are not split across a
+# components/pages sibling pair like web/pages (mirrors web/schedule's own
+# rationale). Postgres-backed handler coverage (Testing phase, issue
+# #1899) lands as research_integration_test.go, mirroring
+# //audience_score_system/web/schedule:schedule_integration_test.
+templ_library(
+    name = "research",
+    srcs = glob(["*.templ"]),
+    go_srcs = ["research.go"],
+    visibility = [
+        "//audience_score_system/citest:__pkg__",
+        "//audience_score_system/web:__pkg__",
+    ],
+    deps = [
+        "//audience_score_system/store",
+        "//audience_score_system/web/auth",
+        "//audience_score_system/web/components",
+        "@com_github_google_uuid//:uuid",
+        "@com_github_jackc_pgx_v5//:pgx",
+    ],
+)
