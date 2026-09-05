@@ -33,7 +33,7 @@ LB5's `At risk` list (also present only in open PR #1811, not on `main`) needs t
 Delivers: C14
 Must not foreclose: LB2 (trend queries must stay correctly scoped per person's Channel associations as they broaden in M2), LB3 (this milestone is the aggregate query LB3's FK chain exists to make cheap)
 Deliberately deferred: Creator delegation of research guidance (C15 → Later, unscheduled), deeper Analytics metrics (C16 → Later, unscheduled)
-FR budget: 8 — a read-side aggregate view over data every prior milestone already produces; no new write path.
+FR budget: 8 — a read-side aggregate view over data every prior milestone already produces, plus one narrow new write path (a per-Channel outcome-bar setting: metric_name/threshold_value, views-only for M3, CanWrite for Creator or Analyst, same shape as pacing_policy — see #1880's FR1).
 
 ### M4.1 — A Creator or Analyst can save and browse Loop 1 (research notes + viability verdicts) entirely from the web UI
 
