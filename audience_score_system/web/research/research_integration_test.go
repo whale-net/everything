@@ -23,16 +23,31 @@
 // store.ResearchStore.SaveNote (FR12 -- no second copy of the rule in
 // this package), empty/whitespace text and cross-Channel idea_id
 // rejections, and the save-note form's presence/hidden idempotency_key
-// rendering. See
+// rendering; and HandleSaveVerdict (issue #1901, FR4/FR5/FR6/FR7/NFR1/
+// NFR3): Founder/Co-Creator/Analyst parity appending a new `source =
+// human` version through the identical store.VerdictStore.Append method
+// save_viability_verdict calls (LB5), the append-only guarantee (earlier
+// versions unchanged after a new append, M1 FR12), cited_note_ids
+// populating verdict_citation with exactly the submitted notes and
+// rejecting a note ID belonging to a different Idea (400, nothing
+// written), FR6's same-idempotency-key double-submit producing exactly
+// one version (a different key producing two), the FR7/NFR3 load-bearing
+// forged-POST 403 from a signed-in non-member (History left unchanged)
+// and a signed-out reject, invalid verdict/empty reasoning/cross-Channel
+// Idea rejections, cross-surface agreement between a human-sourced and an
+// agent-sourced version on the same Idea, and the save-verdict form's
+// citation multi-select scoping/hidden idempotency_key rendering. See
 // //audience_score_system/web/schedule:schedule_integration_test for the
 // harness pattern this file follows: spin up a throwaway Postgres via
 // dbtest, apply the domain's own real embedded migrations, wire a real
 // *store.Store and a real *auth.SessionManager against it, and drive
 // research.Handlers through a small local http.ServeMux that mirrors
 // `web`'s main.go route registrations for GET /channels/{id}/research,
-// GET /channels/{id}/research/ideas/{ideaID}, and POST
-// /channels/{id}/research/notes -- so PathValue resolution and
-// auth.RequireSignedIn wrapping behave exactly as they do in production.
+// GET /channels/{id}/research/ideas/{ideaID}, POST
+// /channels/{id}/research/notes, and POST
+// /channels/{id}/research/ideas/{ideaID}/verdicts -- so PathValue
+// resolution and auth.RequireSignedIn wrapping behave exactly as they do
+// in production.
 //
 // A signed-in caller is simulated via auth.NewForTests + SessionManager.
 // Establish, mirroring schedule_integration_test.go's rationale:
@@ -111,6 +126,7 @@ func newResearchTestStack(t *testing.T) *researchTestStack {
 	mux.HandleFunc("GET /channels/{id}/research", a.RequireSignedIn(res.HandleChannelIndex))
 	mux.HandleFunc("GET /channels/{id}/research/ideas/{ideaID}", a.RequireSignedIn(res.HandleIdeaDetail))
 	mux.HandleFunc("POST /channels/{id}/research/notes", a.RequireSignedIn(res.HandleSaveNote))
+	mux.HandleFunc("POST /channels/{id}/research/ideas/{ideaID}/verdicts", a.RequireSignedIn(res.HandleSaveVerdict))
 
 	return &researchTestStack{store: st, sessions: sessions, handlers: res, router: mux, db: db}
 }
@@ -194,6 +210,21 @@ func extractIdempotencyKey(t *testing.T, body string) string {
 	m := idempotencyKeyPattern.FindStringSubmatch(body)
 	require.Len(t, m, 2, "hidden idempotency_key input must be present in the rendered form, body: %s", body)
 	return m[1]
+}
+
+// extractVerdictFormIdempotencyKey extracts the hidden idempotency_key
+// input's value from the save-verdict form specifically (#1901): Idea
+// detail renders the save-note form's key BEFORE the save-verdict form's
+// (see views.templ's IdeaDetail -- research notes section, then
+// "Save a viability verdict"), so this slices body to the substring
+// starting at that heading before applying idempotencyKeyPattern, rather
+// than risking extractIdempotencyKey's first-match picking up the note
+// form's key instead.
+func extractVerdictFormIdempotencyKey(t *testing.T, body string) string {
+	t.Helper()
+	idx := strings.Index(body, "Save a viability verdict")
+	require.Greater(t, idx, 0, "the save-verdict form's heading must render, body: %s", body)
+	return extractIdempotencyKey(t, body[idx:])
 }
 
 // ── HandleChannelIndex (FR1): Founder, Co-Creator, and Analyst all read
@@ -609,12 +640,17 @@ func TestHandleIdeaDetail_FiftyOneNotes_TruncatedNoPagingControl(t *testing.T) {
 	require.Equal(t, http.StatusOK, w.Code, "body: %s", w.Body.String())
 	body := w.Body.String()
 
-	assert.Equal(t, 50, strings.Count(body, "idea note "), "exactly 50 notes must render")
+	// Each of the 50 rendered notes appears TWICE: once in the note list
+	// itself, and once as an <option> in the save-verdict form's citation
+	// multi-select (#1901, FR4) -- populated from the SAME notes slice, no
+	// extra store call and no paging of its own.
+	assert.Equal(t, 100, strings.Count(body, "idea note "), "exactly 50 notes must render, each once in the list and once in the citation multi-select")
 	assert.Contains(t, body, "most recent", "a truncation note must appear")
-	// The Founder's save-note form (FR3, issue #1900) legitimately renders
-	// one <form> on this page now; NFR2's actual guarantee is that no
-	// SEPARATE paging/load-more control exists alongside it.
-	assert.Equal(t, 1, strings.Count(body, "<form"), "exactly the save-note form may appear -- no paging control")
+	// The Founder's save-note form (FR3, issue #1900) and save-verdict form
+	// (FR4, issue #1901) legitimately render two <form>s on this page now;
+	// NFR2's actual guarantee is that no SEPARATE paging/load-more control
+	// exists alongside them.
+	assert.Equal(t, 2, strings.Count(body, "<form"), "exactly the save-note and save-verdict forms may appear -- no paging control")
 	assert.NotContains(t, strings.ToLower(body), "load more", "no load-more control may appear (NFR2)")
 }
 
@@ -622,15 +658,15 @@ func TestHandleIdeaDetail_FiftyOneNotes_TruncatedNoPagingControl(t *testing.T) {
 // issue #1900's save-note form, which is the one and only <form> either
 // page may legitimately render for a store.CanWrite member) ─────────────
 
-// TestChannelIndexAndIdeaDetail_ExactlyOneForm_TheSaveNoteForm_NoPagingAffordance
-// replaces this file's original #1899-era "no form anywhere" assertion,
-// which predated FR3's save-note form and is no longer the correct
-// expectation: both pages now legitimately render exactly one <form>
-// (the save-note form, method="post", pointed at
-// /channels/{id}/research/notes) for a store.CanWrite member -- what
-// must still never appear is any SECOND form or paging/load-more
-// control.
-func TestChannelIndexAndIdeaDetail_ExactlyOneForm_TheSaveNoteForm_NoPagingAffordance(t *testing.T) {
+// TestChannelIndexAndIdeaDetail_OnlyTheSaveFormsAppear_NoPagingAffordance
+// replaces this file's original #1899-era "no form anywhere" assertion
+// (later renamed by #1900 to expect exactly one form): the Channel index
+// still renders exactly one <form> (the save-note form), but Idea detail
+// now renders exactly TWO -- the save-note form (#1900, FR3) AND the
+// save-verdict form (#1901, FR4), both method="post", for a
+// store.CanWrite member -- what must still never appear is any THIRD
+// form or paging/load-more control.
+func TestChannelIndexAndIdeaDetail_OnlyTheSaveFormsAppear_NoPagingAffordance(t *testing.T) {
 	ctx := context.Background()
 	s := newResearchTestStack(t)
 	ch, creator := s.setupChannel(t, ctx)
@@ -648,9 +684,10 @@ func TestChannelIndexAndIdeaDetail_ExactlyOneForm_TheSaveNoteForm_NoPagingAfford
 	detailW := s.do(t, http.MethodGet, "/channels/"+ch.ID.String()+"/research/ideas/"+idea.ID.String(), cookie)
 	require.Equal(t, http.StatusOK, detailW.Code, "body: %s", detailW.Body.String())
 	detailBody := detailW.Body.String()
-	assert.Equal(t, 1, strings.Count(detailBody, "<form"), "exactly one form -- the save-note form -- may appear")
-	assert.Equal(t, 1, strings.Count(strings.ToLower(detailBody), `method="post"`))
+	assert.Equal(t, 2, strings.Count(detailBody, "<form"), "exactly the save-note and save-verdict forms -- no third form -- may appear")
+	assert.Equal(t, 2, strings.Count(strings.ToLower(detailBody), `method="post"`))
 	assert.Contains(t, detailBody, `action="/channels/`+ch.ID.String()+`/research/notes"`)
+	assert.Contains(t, detailBody, `action="/channels/`+ch.ID.String()+`/research/ideas/`+idea.ID.String()+`/verdicts"`)
 }
 
 // ── HandleSaveNote (FR3, FR6, FR7, NFR1, NFR3, issue #1900) ─────────────
@@ -1026,6 +1063,510 @@ func TestSaveNoteForm_HiddenIdempotencyKey_NonEmpty_DiffersAcrossGETs(t *testing
 	require.Equal(t, http.StatusOK, detailW.Code)
 	detailKey := extractIdempotencyKey(t, detailW.Body.String())
 	assert.NotEmpty(t, detailKey)
+}
+
+// ── HandleSaveVerdict (FR4, FR5, FR6, FR7, NFR1, NFR3, issue #1901) ─────
+
+// doVerdictForm POSTs to ch/idea's verdicts route, mirroring doForm above
+// for the save-note route.
+func (s *researchTestStack) doVerdictForm(t *testing.T, channelID, ideaID uuid.UUID, cookie *http.Cookie, form url.Values) *httptest.ResponseRecorder {
+	t.Helper()
+	return s.doForm(t, "/channels/"+channelID.String()+"/research/ideas/"+ideaID.String()+"/verdicts", cookie, form)
+}
+
+// allVerdictHistory is a small helper mirroring allNotes above: every
+// viability_verdict version for ideaID, oldest to newest.
+func (s *researchTestStack) allVerdictHistory(t *testing.T, ctx context.Context, ideaID uuid.UUID) []store.Verdict {
+	t.Helper()
+	history, err := s.store.Verdicts().History(ctx, ideaID)
+	require.NoError(t, err)
+	return history
+}
+
+// TestHandleSaveVerdict_Founder_AppendsHumanVerdict_EarlierVersionUnchanged
+// is FR4/FR5's happy path: a Founder posts viable + reasoning, gets a 303
+// back to the Idea detail page, store.VerdictStore.Current returns the
+// new version with Source == store.VerdictSourceHuman, and History shows
+// it appended after the earlier agent-sourced version with that earlier
+// version byte-identical (value, reasoning, version number) before and
+// after -- the append-only assertion (M1 FR12).
+func TestHandleSaveVerdict_Founder_AppendsHumanVerdict_EarlierVersionUnchanged(t *testing.T) {
+	ctx := context.Background()
+	s := newResearchTestStack(t)
+	ch, creator := s.setupChannel(t, ctx)
+	idea, err := s.store.Ideas().Create(ctx, ch.ID, "Idea One", creator.ID)
+	require.NoError(t, err)
+
+	v1, err := s.store.Verdicts().Append(ctx, store.AppendVerdictInput{
+		IdeaID: idea.ID, Verdict: store.VerdictNeedsMoreResearch, Reasoning: "initial agent take", AuthorPersonID: creator.ID, Source: store.VerdictSourceAgent,
+	})
+	require.NoError(t, err)
+
+	w := s.doVerdictForm(t, ch.ID, idea.ID, s.sessionCookie(t, ctx, creator.ID), url.Values{
+		"idempotency_key": {uuid.NewString()},
+		"verdict":         {string(store.VerdictViable)},
+		"reasoning":       {"human review says viable"},
+	})
+	require.Equal(t, http.StatusSeeOther, w.Code, "body: %s", w.Body.String())
+	assert.Equal(t, "/channels/"+ch.ID.String()+"/research/ideas/"+idea.ID.String(), w.Header().Get("Location"))
+
+	current, err := s.store.Verdicts().Current(ctx, idea.ID)
+	require.NoError(t, err)
+	assert.Equal(t, store.VerdictViable, current.Verdict)
+	assert.Equal(t, "human review says viable", current.Reasoning)
+	assert.Equal(t, store.VerdictSourceHuman, current.Source, "a web-authored verdict must carry source = human (FR5)")
+	assert.Equal(t, 2, current.Version)
+
+	history := s.allVerdictHistory(t, ctx, idea.ID)
+	require.Len(t, history, 2, "the new version must be APPENDED, never overwrite the prior one (M1 FR12)")
+	assert.Equal(t, v1.ID, history[0].ID)
+	assert.Equal(t, v1.Version, history[0].Version)
+	assert.Equal(t, v1.Verdict, history[0].Verdict)
+	assert.Equal(t, v1.Reasoning, history[0].Reasoning)
+	assert.Equal(t, v1.Source, history[0].Source, "the earlier version's source must be unchanged")
+	assert.Equal(t, current.ID, history[1].ID)
+}
+
+// TestHandleSaveVerdict_CoCreatorAndAnalyst_CanSave proves all three
+// store.CanWrite roles -- not just the Founder -- can append a verdict
+// through this handler.
+func TestHandleSaveVerdict_CoCreatorAndAnalyst_CanSave(t *testing.T) {
+	ctx := context.Background()
+	s := newResearchTestStack(t)
+	ch, creator := s.setupChannel(t, ctx)
+	idea, err := s.store.Ideas().Create(ctx, ch.ID, "Idea One", creator.ID)
+	require.NoError(t, err)
+
+	coCreator := s.newPerson(t, ctx, "co-creator")
+	require.NoError(t, s.store.Roles().AddRole(ctx, ch.ID, coCreator.ID, store.RoleCoCreator, creator.ID))
+	analyst := s.newPerson(t, ctx, "analyst")
+	require.NoError(t, s.store.Roles().AddRole(ctx, ch.ID, analyst.ID, store.RoleAnalyst, creator.ID))
+
+	for _, tc := range []struct {
+		name   string
+		person store.Person
+	}{
+		{"CoCreator", coCreator},
+		{"Analyst", analyst},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			w := s.doVerdictForm(t, ch.ID, idea.ID, s.sessionCookie(t, ctx, tc.person.ID), url.Values{
+				"idempotency_key": {uuid.NewString()},
+				"verdict":         {string(store.VerdictViable)},
+				"reasoning":       {tc.name + "'s reasoning"},
+			})
+			assert.Equal(t, http.StatusSeeOther, w.Code, "%s must be able to save, body: %s", tc.name, w.Body.String())
+		})
+	}
+
+	assert.Len(t, s.allVerdictHistory(t, ctx, idea.ID), 2)
+}
+
+// TestHandleSaveVerdict_CitedNoteIDs_PopulatesExactlyThose proves
+// cited_note_ids populates CitedResearchNoteIDs with exactly the
+// submitted notes -- no more, no fewer.
+func TestHandleSaveVerdict_CitedNoteIDs_PopulatesExactlyThose(t *testing.T) {
+	ctx := context.Background()
+	s := newResearchTestStack(t)
+	ch, creator := s.setupChannel(t, ctx)
+	idea, err := s.store.Ideas().Create(ctx, ch.ID, "Idea One", creator.ID)
+	require.NoError(t, err)
+
+	note1, err := s.store.Research().SaveNote(ctx, store.SaveNoteInput{ChannelID: ch.ID, IdeaID: &idea.ID, Text: "note one", AuthorPersonID: creator.ID})
+	require.NoError(t, err)
+	note2, err := s.store.Research().SaveNote(ctx, store.SaveNoteInput{ChannelID: ch.ID, IdeaID: &idea.ID, Text: "note two", AuthorPersonID: creator.ID})
+	require.NoError(t, err)
+	_, err = s.store.Research().SaveNote(ctx, store.SaveNoteInput{ChannelID: ch.ID, IdeaID: &idea.ID, Text: "note three (uncited)", AuthorPersonID: creator.ID})
+	require.NoError(t, err)
+
+	w := s.doVerdictForm(t, ch.ID, idea.ID, s.sessionCookie(t, ctx, creator.ID), url.Values{
+		"idempotency_key": {uuid.NewString()},
+		"verdict":         {string(store.VerdictViable)},
+		"reasoning":       {"citing two of three notes"},
+		"cited_note_ids":  {note1.ID.String(), note2.ID.String()},
+	})
+	require.Equal(t, http.StatusSeeOther, w.Code, "body: %s", w.Body.String())
+
+	current, err := s.store.Verdicts().Current(ctx, idea.ID)
+	require.NoError(t, err)
+	assert.ElementsMatch(t, []uuid.UUID{note1.ID, note2.ID}, current.CitedResearchNoteIDs, "exactly the two submitted notes must be cited")
+}
+
+// TestHandleSaveVerdict_CitedNoteFromDifferentIdea_BadRequest_NoRow is
+// FR4's load-bearing citation-ownership guard: a forged note ID belonging
+// to a DIFFERENT Idea must never end up in verdict_citation -- the whole
+// submission 400s, writing no verdict row.
+func TestHandleSaveVerdict_CitedNoteFromDifferentIdea_BadRequest_NoRow(t *testing.T) {
+	ctx := context.Background()
+	s := newResearchTestStack(t)
+	ch, creator := s.setupChannel(t, ctx)
+	ideaA, err := s.store.Ideas().Create(ctx, ch.ID, "Idea A", creator.ID)
+	require.NoError(t, err)
+	ideaB, err := s.store.Ideas().Create(ctx, ch.ID, "Idea B", creator.ID)
+	require.NoError(t, err)
+	noteOnB, err := s.store.Research().SaveNote(ctx, store.SaveNoteInput{ChannelID: ch.ID, IdeaID: &ideaB.ID, Text: "note on B", AuthorPersonID: creator.ID})
+	require.NoError(t, err)
+
+	w := s.doVerdictForm(t, ch.ID, ideaA.ID, s.sessionCookie(t, ctx, creator.ID), url.Values{
+		"idempotency_key": {uuid.NewString()},
+		"verdict":         {string(store.VerdictViable)},
+		"reasoning":       {"forged citation attempt"},
+		"cited_note_ids":  {noteOnB.ID.String()},
+	})
+	assert.Equal(t, http.StatusBadRequest, w.Code, "body: %s", w.Body.String())
+	assert.Contains(t, w.Body.String(), "invalid cited note selection")
+	assert.Empty(t, s.allVerdictHistory(t, ctx, ideaA.ID), "no verdict row may be written")
+}
+
+// TestHandleSaveVerdict_SameIdempotencyKey_Twice_CreatesOneVersion is
+// FR6/NFR1's load-bearing double-submit case: replaying the exact same
+// POST (same server-generated idempotency_key) must not append a second
+// version, using store.VerdictStore.Append's existing (idea, key) dedupe
+// -- and the replayed response is still a 303.
+func TestHandleSaveVerdict_SameIdempotencyKey_Twice_CreatesOneVersion(t *testing.T) {
+	ctx := context.Background()
+	s := newResearchTestStack(t)
+	ch, creator := s.setupChannel(t, ctx)
+	idea, err := s.store.Ideas().Create(ctx, ch.ID, "Idea One", creator.ID)
+	require.NoError(t, err)
+	cookie := s.sessionCookie(t, ctx, creator.ID)
+	key := uuid.NewString()
+	form := url.Values{
+		"idempotency_key": {key},
+		"verdict":         {string(store.VerdictViable)},
+		"reasoning":       {"replayed verdict"},
+	}
+
+	w1 := s.doVerdictForm(t, ch.ID, idea.ID, cookie, form)
+	require.Equal(t, http.StatusSeeOther, w1.Code, "body: %s", w1.Body.String())
+	history1 := s.allVerdictHistory(t, ctx, idea.ID)
+	require.Len(t, history1, 1)
+	require.Equal(t, 1, history1[0].Version)
+
+	w2 := s.doVerdictForm(t, ch.ID, idea.ID, cookie, form)
+	assert.Equal(t, http.StatusSeeOther, w2.Code, "a replayed submit must still redirect, not error, body: %s", w2.Body.String())
+	history2 := s.allVerdictHistory(t, ctx, idea.ID)
+	assert.Len(t, history2, 1, "a replayed idempotency_key must not append a second version")
+	assert.Equal(t, 1, history2[0].Version, "the version counter must not advance on a replay")
+}
+
+// TestHandleSaveVerdict_DifferentIdempotencyKeys_CreatesTwoVersions proves
+// dedupe is keyed by idempotency_key, not by content: two different keys
+// with identical verdict/reasoning must both append (an intentional
+// re-record is a new version).
+func TestHandleSaveVerdict_DifferentIdempotencyKeys_CreatesTwoVersions(t *testing.T) {
+	ctx := context.Background()
+	s := newResearchTestStack(t)
+	ch, creator := s.setupChannel(t, ctx)
+	idea, err := s.store.Ideas().Create(ctx, ch.ID, "Idea One", creator.ID)
+	require.NoError(t, err)
+	cookie := s.sessionCookie(t, ctx, creator.ID)
+
+	w1 := s.doVerdictForm(t, ch.ID, idea.ID, cookie, url.Values{
+		"idempotency_key": {uuid.NewString()},
+		"verdict":         {string(store.VerdictViable)},
+		"reasoning":       {"identical content"},
+	})
+	require.Equal(t, http.StatusSeeOther, w1.Code, "body: %s", w1.Body.String())
+
+	w2 := s.doVerdictForm(t, ch.ID, idea.ID, cookie, url.Values{
+		"idempotency_key": {uuid.NewString()},
+		"verdict":         {string(store.VerdictViable)},
+		"reasoning":       {"identical content"},
+	})
+	require.Equal(t, http.StatusSeeOther, w2.Code, "body: %s", w2.Body.String())
+
+	history := s.allVerdictHistory(t, ctx, idea.ID)
+	require.Len(t, history, 2, "different idempotency keys with identical content must both append")
+	assert.Equal(t, 1, history[0].Version)
+	assert.Equal(t, 2, history[1].Version)
+}
+
+// TestHandleSaveVerdict_NonMember_Forbidden_HistoryUnchanged is FR7/NFR3's
+// load-bearing authorization test: a forged POST from a signed-in
+// non-member is 403 even though they cannot even GET the page, and
+// History is left completely unchanged.
+func TestHandleSaveVerdict_NonMember_Forbidden_HistoryUnchanged(t *testing.T) {
+	ctx := context.Background()
+	s := newResearchTestStack(t)
+	ch, creator := s.setupChannel(t, ctx)
+	idea, err := s.store.Ideas().Create(ctx, ch.ID, "Idea One", creator.ID)
+	require.NoError(t, err)
+	existing, err := s.store.Verdicts().Append(ctx, store.AppendVerdictInput{
+		IdeaID: idea.ID, Verdict: store.VerdictNeedsMoreResearch, Reasoning: "pre-existing", AuthorPersonID: creator.ID,
+	})
+	require.NoError(t, err)
+	outsider := s.newPerson(t, ctx, "outsider")
+
+	w := s.doVerdictForm(t, ch.ID, idea.ID, s.sessionCookie(t, ctx, outsider.ID), url.Values{
+		"idempotency_key": {uuid.NewString()},
+		"verdict":         {string(store.VerdictViable)},
+		"reasoning":       {"forged verdict"},
+	})
+	assert.Equal(t, http.StatusForbidden, w.Code, "body: %s", w.Body.String())
+	assert.NotContains(t, w.Body.String(), "forged verdict")
+
+	history := s.allVerdictHistory(t, ctx, idea.ID)
+	require.Len(t, history, 1, "a forbidden POST must not append a version")
+	assert.Equal(t, existing.ID, history[0].ID)
+	assert.Equal(t, existing.Reasoning, history[0].Reasoning)
+}
+
+// TestHandleSaveVerdict_SignedOut_Rejected_NoRowCreated covers the
+// signed-out half of FR7/NFR3, mirroring
+// TestHandleSaveNote_SignedOut_Rejected_NoRowCreated.
+func TestHandleSaveVerdict_SignedOut_Rejected_NoRowCreated(t *testing.T) {
+	ctx := context.Background()
+	s := newResearchTestStack(t)
+	ch, creator := s.setupChannel(t, ctx)
+	idea, err := s.store.Ideas().Create(ctx, ch.ID, "Idea One", creator.ID)
+	require.NoError(t, err)
+
+	w := s.doVerdictForm(t, ch.ID, idea.ID, nil, url.Values{
+		"idempotency_key": {uuid.NewString()},
+		"verdict":         {string(store.VerdictViable)},
+		"reasoning":       {"signed-out verdict"},
+	})
+	assert.NotEqual(t, http.StatusSeeOther, w.Code, "a signed-out POST must never succeed, body: %s", w.Body.String())
+	assert.Empty(t, s.allVerdictHistory(t, ctx, idea.ID))
+
+	req := httptest.NewRequest(http.MethodPost, "/channels/"+ch.ID.String()+"/research/ideas/"+idea.ID.String()+"/verdicts", strings.NewReader(url.Values{
+		"idempotency_key": {uuid.NewString()},
+		"verdict":         {string(store.VerdictViable)},
+		"reasoning":       {"direct signed-out verdict"},
+	}.Encode()))
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	req.SetPathValue("id", ch.ID.String())
+	req.SetPathValue("ideaID", idea.ID.String())
+	rec := httptest.NewRecorder()
+	s.handlers.HandleSaveVerdict(rec, req)
+	assert.Equal(t, http.StatusUnauthorized, rec.Code)
+	assert.Empty(t, s.allVerdictHistory(t, ctx, idea.ID))
+}
+
+func TestHandleSaveVerdict_InvalidVerdictValue_BadRequest_NoRow(t *testing.T) {
+	ctx := context.Background()
+	s := newResearchTestStack(t)
+	ch, creator := s.setupChannel(t, ctx)
+	idea, err := s.store.Ideas().Create(ctx, ch.ID, "Idea One", creator.ID)
+	require.NoError(t, err)
+
+	w := s.doVerdictForm(t, ch.ID, idea.ID, s.sessionCookie(t, ctx, creator.ID), url.Values{
+		"idempotency_key": {uuid.NewString()},
+		"verdict":         {"definitely-not-a-real-value"},
+		"reasoning":       {"whatever"},
+	})
+	assert.Equal(t, http.StatusBadRequest, w.Code, "body: %s", w.Body.String())
+	assert.Contains(t, w.Body.String(), "invalid verdict selection")
+	assert.Empty(t, s.allVerdictHistory(t, ctx, idea.ID))
+}
+
+func TestHandleSaveVerdict_EmptyOrWhitespaceReasoning_BadRequest_NoRow(t *testing.T) {
+	ctx := context.Background()
+	s := newResearchTestStack(t)
+	ch, creator := s.setupChannel(t, ctx)
+	idea, err := s.store.Ideas().Create(ctx, ch.ID, "Idea One", creator.ID)
+	require.NoError(t, err)
+	cookie := s.sessionCookie(t, ctx, creator.ID)
+
+	for _, tc := range []struct {
+		name      string
+		reasoning string
+	}{
+		{"Empty", ""},
+		{"WhitespaceOnly", "   \n\t  "},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			w := s.doVerdictForm(t, ch.ID, idea.ID, cookie, url.Values{
+				"idempotency_key": {uuid.NewString()},
+				"verdict":         {string(store.VerdictViable)},
+				"reasoning":       {tc.reasoning},
+			})
+			assert.Equal(t, http.StatusBadRequest, w.Code, "body: %s", w.Body.String())
+			assert.Contains(t, w.Body.String(), "reasoning is required")
+		})
+	}
+	assert.Empty(t, s.allVerdictHistory(t, ctx, idea.ID))
+}
+
+// TestHandleSaveVerdict_CrossChannelIdea_NotFound_NoRow mirrors
+// HandleIdeaDetail's cross-Channel 404 guard, applied to the verdicts
+// POST route: an Idea that exists under a DIFFERENT Channel than the
+// path's {id} must 404, never append a version.
+func TestHandleSaveVerdict_CrossChannelIdea_NotFound_NoRow(t *testing.T) {
+	ctx := context.Background()
+	s := newResearchTestStack(t)
+	chA, creatorA := s.setupChannel(t, ctx)
+	chB, creatorB := s.setupChannel(t, ctx)
+	ideaOnB, err := s.store.Ideas().Create(ctx, chB.ID, "Idea On B", creatorB.ID)
+	require.NoError(t, err)
+
+	w := s.doVerdictForm(t, chA.ID, ideaOnB.ID, s.sessionCookie(t, ctx, creatorA.ID), url.Values{
+		"idempotency_key": {uuid.NewString()},
+		"verdict":         {string(store.VerdictViable)},
+		"reasoning":       {"cross-channel attempt"},
+	})
+	assert.Equal(t, http.StatusNotFound, w.Code, "body: %s", w.Body.String())
+	assert.Empty(t, s.allVerdictHistory(t, ctx, ideaOnB.ID))
+}
+
+// TestHandleSaveVerdict_CrossSurfaceAgreement_HumanVsAgentSource proves
+// FR5: a verdict written here (source = human) and an agent-sourced
+// version already on the same Idea (standing in for an MCP-authored
+// version -- both call the IDENTICAL store.VerdictStore.Append, LB5) are
+// both visible via store.VerdictStore.Current/History AND on the
+// rendered Idea detail page, with "Human"/"Agent" labels matching each.
+func TestHandleSaveVerdict_CrossSurfaceAgreement_HumanVsAgentSource(t *testing.T) {
+	ctx := context.Background()
+	s := newResearchTestStack(t)
+	ch, creator := s.setupChannel(t, ctx)
+	idea, err := s.store.Ideas().Create(ctx, ch.ID, "Idea One", creator.ID)
+	require.NoError(t, err)
+
+	agentV, err := s.store.Verdicts().Append(ctx, store.AppendVerdictInput{
+		IdeaID: idea.ID, Verdict: store.VerdictNeedsMoreResearch, Reasoning: "agent-authored reasoning", AuthorPersonID: creator.ID, Source: store.VerdictSourceAgent,
+	})
+	require.NoError(t, err)
+
+	cookie := s.sessionCookie(t, ctx, creator.ID)
+	w := s.doVerdictForm(t, ch.ID, idea.ID, cookie, url.Values{
+		"idempotency_key": {uuid.NewString()},
+		"verdict":         {string(store.VerdictViable)},
+		"reasoning":       {"human-authored reasoning"},
+	})
+	require.Equal(t, http.StatusSeeOther, w.Code, "body: %s", w.Body.String())
+
+	current, err := s.store.Verdicts().Current(ctx, idea.ID)
+	require.NoError(t, err)
+	assert.Equal(t, store.VerdictSourceHuman, current.Source)
+	history := s.allVerdictHistory(t, ctx, idea.ID)
+	require.Len(t, history, 2)
+	assert.Equal(t, store.VerdictSourceAgent, history[0].Source)
+	assert.Equal(t, agentV.ID, history[0].ID)
+	assert.Equal(t, store.VerdictSourceHuman, history[1].Source)
+
+	detailW := s.do(t, http.MethodGet, "/channels/"+ch.ID.String()+"/research/ideas/"+idea.ID.String(), cookie)
+	require.Equal(t, http.StatusOK, detailW.Code, "body: %s", detailW.Body.String())
+	body := detailW.Body.String()
+	assert.Contains(t, body, "agent-authored reasoning")
+	assert.Contains(t, body, "human-authored reasoning")
+	assert.Contains(t, body, "Agent", "the agent-sourced version must render its source")
+	assert.Contains(t, body, "Human", "the human-sourced version must render its source")
+}
+
+// ── Save-verdict form rendering (FR4, FR6, FR7) ─────────────────────────
+
+// TestSaveVerdictForm_MultiSelect_ListsExactlyThisIdeaNotes proves the
+// citation multi-select is populated ONLY from this page's own Idea's
+// notes -- a note belonging to a different Idea on the same Channel must
+// never appear as an option (or anywhere else on the page).
+func TestSaveVerdictForm_MultiSelect_ListsExactlyThisIdeaNotes(t *testing.T) {
+	ctx := context.Background()
+	s := newResearchTestStack(t)
+	ch, creator := s.setupChannel(t, ctx)
+	ideaA, err := s.store.Ideas().Create(ctx, ch.ID, "Idea A", creator.ID)
+	require.NoError(t, err)
+	ideaB, err := s.store.Ideas().Create(ctx, ch.ID, "Idea B", creator.ID)
+	require.NoError(t, err)
+
+	noteOnA, err := s.store.Research().SaveNote(ctx, store.SaveNoteInput{ChannelID: ch.ID, IdeaID: &ideaA.ID, Text: "note on idea A", AuthorPersonID: creator.ID})
+	require.NoError(t, err)
+	noteOnB, err := s.store.Research().SaveNote(ctx, store.SaveNoteInput{ChannelID: ch.ID, IdeaID: &ideaB.ID, Text: "note on idea B", AuthorPersonID: creator.ID})
+	require.NoError(t, err)
+
+	w := s.do(t, http.MethodGet, "/channels/"+ch.ID.String()+"/research/ideas/"+ideaA.ID.String(), s.sessionCookie(t, ctx, creator.ID))
+	require.Equal(t, http.StatusOK, w.Code, "body: %s", w.Body.String())
+	body := w.Body.String()
+
+	assert.Contains(t, body, `value="`+noteOnA.ID.String()+`"`, "idea A's own note must appear as a citation option")
+	assert.NotContains(t, body, `value="`+noteOnB.ID.String()+`"`, "idea B's note must never appear as a citation option on idea A's page")
+	assert.NotContains(t, body, "note on idea B", "idea B's note text must never render on idea A's page at all")
+}
+
+// TestSaveVerdictForm_AbsentWithoutCanWrite documents the same reality
+// TestSaveNoteForm_PresentForFounderCoCreatorAnalyst_OnBothPages's doc
+// comment does for the note form: in this domain store.CanRead and
+// store.CanWrite grant the exact same three-role set (store/authz.go), so
+// there is no "can read but not write" member to render the negative case
+// against -- a non-member cannot even reach a 200 to check the form's
+// absence (403s on the GET itself, TestHandleIdeaDetail_NonMember_
+// Forbidden). What this proves instead is the POSITIVE case for all three
+// store.CanWrite roles, and that the real authorization boundary is
+// authorizeWrite's fresh store.CanWrite check on the POST (see
+// TestHandleSaveVerdict_NonMember_Forbidden_HistoryUnchanged), never the
+// form's presence/absence.
+func TestSaveVerdictForm_AbsentWithoutCanWrite(t *testing.T) {
+	ctx := context.Background()
+	s := newResearchTestStack(t)
+	ch, creator := s.setupChannel(t, ctx)
+	idea, err := s.store.Ideas().Create(ctx, ch.ID, "Idea One", creator.ID)
+	require.NoError(t, err)
+
+	coCreator := s.newPerson(t, ctx, "co-creator")
+	require.NoError(t, s.store.Roles().AddRole(ctx, ch.ID, coCreator.ID, store.RoleCoCreator, creator.ID))
+	analyst := s.newPerson(t, ctx, "analyst")
+	require.NoError(t, s.store.Roles().AddRole(ctx, ch.ID, analyst.ID, store.RoleAnalyst, creator.ID))
+
+	for _, tc := range []struct {
+		name   string
+		person store.Person
+	}{
+		{"Founder", creator},
+		{"CoCreator", coCreator},
+		{"Analyst", analyst},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			w := s.do(t, http.MethodGet, "/channels/"+ch.ID.String()+"/research/ideas/"+idea.ID.String(), s.sessionCookie(t, ctx, tc.person.ID))
+			require.Equal(t, http.StatusOK, w.Code, "body: %s", w.Body.String())
+			assert.Contains(t, w.Body.String(), `action="/channels/`+ch.ID.String()+`/research/ideas/`+idea.ID.String()+`/verdicts"`, "%s must see the save-verdict form", tc.name)
+		})
+	}
+}
+
+// TestSaveVerdictForm_HiddenIdempotencyKey_NonEmpty_DiffersAcrossGETs
+// proves FR6's server-generated, render-time idempotency key for the
+// save-verdict form specifically: present and non-empty, and two separate
+// GETs mint two DIFFERENT keys.
+func TestSaveVerdictForm_HiddenIdempotencyKey_NonEmpty_DiffersAcrossGETs(t *testing.T) {
+	ctx := context.Background()
+	s := newResearchTestStack(t)
+	ch, creator := s.setupChannel(t, ctx)
+	idea, err := s.store.Ideas().Create(ctx, ch.ID, "Idea One", creator.ID)
+	require.NoError(t, err)
+	cookie := s.sessionCookie(t, ctx, creator.ID)
+
+	w1 := s.do(t, http.MethodGet, "/channels/"+ch.ID.String()+"/research/ideas/"+idea.ID.String(), cookie)
+	require.Equal(t, http.StatusOK, w1.Code)
+	key1 := extractVerdictFormIdempotencyKey(t, w1.Body.String())
+	assert.NotEmpty(t, key1)
+
+	w2 := s.do(t, http.MethodGet, "/channels/"+ch.ID.String()+"/research/ideas/"+idea.ID.String(), cookie)
+	require.Equal(t, http.StatusOK, w2.Code)
+	key2 := extractVerdictFormIdempotencyKey(t, w2.Body.String())
+	assert.NotEmpty(t, key2)
+	assert.NotEqual(t, key1, key2, "two separate GETs must mint two different verdict-form idempotency keys")
+}
+
+// TestSaveVerdictForm_ValidationFailure_RerendersWithSameIdempotencyKey
+// proves the SAME idempotency_key survives a validation-failure
+// re-render (FR6/FR7): a corrected resubmit must still be treated as the
+// same logical write.
+func TestSaveVerdictForm_ValidationFailure_RerendersWithSameIdempotencyKey(t *testing.T) {
+	ctx := context.Background()
+	s := newResearchTestStack(t)
+	ch, creator := s.setupChannel(t, ctx)
+	idea, err := s.store.Ideas().Create(ctx, ch.ID, "Idea One", creator.ID)
+	require.NoError(t, err)
+	key := uuid.NewString()
+
+	w := s.doVerdictForm(t, ch.ID, idea.ID, s.sessionCookie(t, ctx, creator.ID), url.Values{
+		"idempotency_key": {key},
+		"verdict":         {string(store.VerdictViable)},
+		"reasoning":       {""},
+	})
+	require.Equal(t, http.StatusBadRequest, w.Code, "body: %s", w.Body.String())
+	rerenderedKey := extractVerdictFormIdempotencyKey(t, w.Body.String())
+	assert.Equal(t, key, rerenderedKey, "a validation-failure re-render must carry the SAME idempotency_key as the failed submit")
 }
 
 func strPtr(s string) *string { return &s }
