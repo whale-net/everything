@@ -132,6 +132,27 @@ The system supports multiple detection modes, though the current implementation 
 - Infrastructure changes (tools/, .github/, MODULE.bazel) trigger all apps to rebuild as a safety measure
 - If no specific apps are detected as changed but files were modified, all apps are rebuilt conservatively
 
+### Reusing Change Detection for Non-Release Target Pools
+
+`changes`/`DetectChangedApps` is specific to `release_app` metadata targets. For gating some
+other pool of Bazel targets on the same "only run what changed since a commit" logic — e.g. a
+slow test suite in CI — use the more general `changed-targets` command instead:
+
+```bash
+bazel run //tools:release -- changed-targets \
+  --base-commit origin/main \
+  --candidates 'tests(//libs/...) intersect rdeps(//libs/..., //libs/go/dbtest:dbtest)'
+```
+
+`--candidates` is any Bazel query expression describing the pool of targets to filter (it does
+not have to mention `app_metadata`/`release_app` at all). Given `--base-commit`, it prints the
+subset of `--candidates` targets that transitively depend on the files changed since that
+commit; with `--base-commit` omitted, or when the diff touches global build configuration
+(`MODULE.bazel`, `.bzl` files, etc.), it prints every candidate — callers should treat that as
+"run everything," not "nothing changed." See `.github/workflows/ci.yml`'s `test-database` job
+for a worked example gating a database-integration test suite this way on pull requests while
+still running the full suite on `main`.
+
 ## Container Publishing
 
 Each released app gets published to GitHub Container Registry with multiple tags using the `<domain>-<app>:<version>` format:

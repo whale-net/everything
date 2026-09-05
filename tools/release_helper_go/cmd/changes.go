@@ -47,6 +47,43 @@ func newChangesCmd() *cobra.Command {
 	return cmd
 }
 
+func newChangedTargetsCmd() *cobra.Command {
+	var baseCommit string
+	var candidates string
+
+	cmd := &cobra.Command{
+		Use:   "changed-targets",
+		Short: "Filter a pool of candidate Bazel targets down to those affected by changes since a commit",
+		Long: "Given a Bazel query expression describing a pool of candidate targets (e.g. a family of\n" +
+			"integration tests), prints the subset of those targets affected by file changes since\n" +
+			"--base-commit. If --base-commit is empty, or the diff touches global build configuration\n" +
+			"(MODULE.bazel, .bzl files, etc.), every candidate target is printed -- callers should\n" +
+			"treat that as \"run everything\", not as \"nothing changed\".",
+		SilenceUsage: true,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			if candidates == "" {
+				return fmt.Errorf("--candidates is required")
+			}
+			if baseCommit != "" {
+				fmt.Fprintf(cmd.ErrOrStderr(), "Detecting changed targets against commit: %s\n", baseCommit)
+			} else {
+				fmt.Fprintln(cmd.ErrOrStderr(), "No base commit specified, considering all candidate targets as affected")
+			}
+			targets, err := DetectAffectedTargets(baseCommit, candidates, defaultBazel, defaultGit)
+			if err != nil {
+				return err
+			}
+			for _, t := range targets {
+				fmt.Fprintln(cmd.OutOrStdout(), t)
+			}
+			return nil
+		},
+	}
+	cmd.Flags().StringVar(&baseCommit, "base-commit", "", "Compare changes against this commit; if empty, all candidates are considered affected")
+	cmd.Flags().StringVar(&candidates, "candidates", "", "Bazel query expression for the pool of candidate targets to filter (required)")
+	return cmd
+}
+
 // DetectChangedApps finds apps affected by changes since baseCommit.
 // If baseCommit is empty, all apps are considered changed.
 func DetectChangedApps(baseCommit string, bazel BazelRunner, git GitRunner, fs FileSystem, workspaceRoot string) ([]AppMetadata, error) {
@@ -88,22 +125,7 @@ func DetectChangedApps(baseCommit string, bazel BazelRunner, git GitRunner, fs F
 		return nil, nil
 	}
 
-	// Build rdeps seed expression, wrapping multi-part unions in parens for Bazel query syntax.
-	queryParts := make([]string, 0, len(validLabels)+len(validPkgs))
-	if len(validLabels) > 0 {
-		queryParts = append(queryParts, strings.Join(validLabels, " + "))
-	}
-	for _, pkg := range validPkgs {
-		if pkg == "//" {
-			queryParts = append(queryParts, "//...")
-		} else {
-			queryParts = append(queryParts, pkg+"/...")
-		}
-	}
-	expr := strings.Join(queryParts, " + ")
-	if len(queryParts) > 1 {
-		expr = "(" + expr + ")"
-	}
+	expr := unionQueryExpr(validLabels, validPkgs)
 
 	// Find which app_metadata targets are affected by the changed files.
 	metaTargets := make([]string, 0, len(allApps))
@@ -140,6 +162,88 @@ func DetectChangedApps(baseCommit string, bazel BazelRunner, git GitRunner, fs F
 		}
 	}
 	return result, nil
+}
+
+// unionQueryExpr builds a Bazel query union expression from changed-file
+// labels and changed packages, wrapping multi-part unions in parens.
+func unionQueryExpr(labels []string, pkgs []string) string {
+	queryParts := make([]string, 0, len(labels)+len(pkgs))
+	if len(labels) > 0 {
+		queryParts = append(queryParts, strings.Join(labels, " + "))
+	}
+	for _, pkg := range pkgs {
+		if pkg == "//" {
+			queryParts = append(queryParts, "//...")
+		} else {
+			queryParts = append(queryParts, pkg+"/...")
+		}
+	}
+	expr := strings.Join(queryParts, " + ")
+	if len(queryParts) > 1 {
+		expr = "(" + expr + ")"
+	}
+	return expr
+}
+
+// DetectAffectedTargets filters candidatesExpr (an arbitrary Bazel query
+// expression describing a pool of targets, e.g. a family of integration
+// tests) down to the subset affected by changes since baseCommit.
+//
+// If baseCommit is empty, or the diff touches global build configuration
+// (MODULE.bazel, .bzl files, etc.), every target matching candidatesExpr is
+// returned -- callers should treat that as "run everything", the same
+// conservative default DetectChangedApps uses.
+func DetectAffectedTargets(baseCommit string, candidatesExpr string, bazel BazelRunner, git GitRunner) ([]string, error) {
+	if baseCommit == "" {
+		return queryLabels(bazel, candidatesExpr)
+	}
+
+	changedFiles, err := getChangedFiles(baseCommit, git)
+	if err != nil {
+		return nil, err
+	}
+	if len(changedFiles) == 0 {
+		return nil, nil
+	}
+
+	if hasGlobalBuildChanges(changedFiles) {
+		return queryLabels(bazel, candidatesExpr)
+	}
+
+	relevant := filterBuildFiles(changedFiles)
+	if len(relevant) == 0 {
+		return nil, nil
+	}
+
+	fileLabels, changedPkgs := filesToBazelLabels(relevant)
+	validLabels := validateLabels(fileLabels, bazel)
+	validPkgs := validatePackages(changedPkgs, bazel)
+	if len(validLabels) == 0 && len(validPkgs) == 0 {
+		return nil, nil
+	}
+
+	changedExpr := unionQueryExpr(validLabels, validPkgs)
+
+	// Same --keep_going rationale as DetectChangedApps: a broken transitive
+	// closure elsewhere shouldn't prevent learning which candidates the diff
+	// touches, and "unknown" collapsing to "no targets affected" is the safe
+	// direction here -- the caller's fallback (unfiltered run on push-to-main)
+	// still covers it.
+	rdepsExpr := fmt.Sprintf("rdeps(%s, %s)", candidatesExpr, changedExpr)
+	out, rdepsErr := bazel.Run("query", rdepsExpr, "--output=label", "--keep_going")
+	if rdepsErr != nil {
+		fmt.Fprintf(os.Stderr, "Warning: bazel rdeps query returned non-zero (%v); continuing with partial results\n", rdepsErr)
+	}
+	return splitNonEmpty(out), nil
+}
+
+// queryLabels runs a plain label query, returning every matching target.
+func queryLabels(bazel BazelRunner, expr string) ([]string, error) {
+	out, err := bazel.Run("query", expr, "--output=label", "--keep_going")
+	if err != nil && strings.TrimSpace(out) == "" {
+		return nil, fmt.Errorf("bazel query: %w", err)
+	}
+	return splitNonEmpty(out), nil
 }
 
 func getChangedFiles(baseCommit string, git GitRunner) ([]string, error) {
@@ -225,7 +329,7 @@ func filesToBazelLabels(files []string) (labels []string, packages map[string]st
 		}
 		parts := strings.SplitN(f, "/", 2)
 		if len(parts) == 1 {
-			labels = append(labels, "//:" + f)
+			labels = append(labels, "//:"+f)
 		} else {
 			dir := filepath.Dir(f)
 			labels = append(labels, "//"+dir+":"+filepath.Base(f))
