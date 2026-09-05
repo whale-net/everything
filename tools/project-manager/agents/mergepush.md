@@ -28,13 +28,13 @@ For each task, in order:
 1. List this task's own commits, oldest first, straight off the ref — no checkout involved: `git log --format=%H --reverse <parent>..<branch-name>`.
 2. Build a scratch worktree on top of the current stack tip (the last entry in `<registered>`, or `origin/main` if `<registered>` is empty) and replay those commits onto it:
    ```sh
-   git worktree add .pm-worktrees/mergepush-<task-issue-number> -b pm-cherry-<root>-<task-issue-number> <tip>
-   git -C .pm-worktrees/mergepush-<task-issue-number> cherry-pick <sha-1> <sha-2> ...
+   git worktree add .claude/worktrees/mergepush-<task-issue-number> -b pm-cherry-<root>-<task-issue-number> <tip>
+   git -C .claude/worktrees/mergepush-<task-issue-number> cherry-pick <sha-1> <sha-2> ...
    ```
-   **If a cherry-pick conflicts:** run `git -C .pm-worktrees/mergepush-<task-issue-number> cherry-pick --abort`, remove the scratch worktree (`git worktree remove .pm-worktrees/mergepush-<task-issue-number> --force`), and treat it exactly like any other per-task failure below — do not resolve it yourself.
+   **If a cherry-pick conflicts:** run `git -C .claude/worktrees/mergepush-<task-issue-number> cherry-pick --abort`, remove the scratch worktree (`git worktree remove .claude/worktrees/mergepush-<task-issue-number> --force`), and treat it exactly like any other per-task failure below — do not resolve it yourself.
 3. Force-push the scratch branch's result to the task's own conventional branch name on the remote. This is a refspec push, not a checkout, so it's unaffected by `<branch-name>` still being checked out at `<worktree-path>`:
    ```sh
-   git -C .pm-worktrees/mergepush-<task-issue-number> push origin HEAD:<branch-name> --force-with-lease
+   git -C .claude/worktrees/mergepush-<task-issue-number> push origin HEAD:<branch-name> --force-with-lease
    ```
 4. Check whether this branch already has a PR, *before* linking: `gh pr view <branch-name> --json number,url` — note whether it errors (no PR yet) or succeeds (PR already exists, capture its number/url).
 5. `gh stack link <registered...> <branch-name>` — the full running list, with this task's branch appended at the end. On the very first call for a plan (`<registered>` empty), this is just `gh stack link <branch-name>`, which creates a brand-new one-PR stack based on `main`. `link` pushes the branch (a no-op here, since step 3 already pushed this exact content), creates or finds its PR, and corrects that PR's base to chain onto whatever's now below it in the list — this is what actually makes the plan one reviewable stack.
@@ -47,7 +47,7 @@ For each task, in order:
    ```
    Never do this on a re-link of a branch that already had a PR — its title/body are left as a human or a prior `mergepush` run left them.
 7. Append `<branch-name>` to `<registered>` — it's now part of the plan's stack for the next task in the list (or for the next batch, via your report).
-8. Clean up, best-effort, without blocking on either: `git worktree remove .pm-worktrees/mergepush-<task-issue-number>` (the scratch worktree — always safe to remove now, its content is already pushed) and `git worktree remove <worktree-path>` (the original task worktree — the branch it holds is now stale relative to the force-pushed remote, but leaving it in place blocks nothing; if removal fails, note it in your report as a cleanup item and move on).
+8. Clean up, best-effort, without blocking on either: `git worktree remove .claude/worktrees/mergepush-<task-issue-number>` (the scratch worktree — always safe to remove now, its content is already pushed) and `git worktree remove <worktree-path>` (the original task worktree — the branch it holds is now stale relative to the force-pushed remote, but leaving it in place blocks nothing; if removal fails, note it in your report as a cleanup item and move on).
 
 **If step 3 or `gh stack link` fails** (a push rejection, a lock timeout — exit code 8, or GitHub refusing to chain the PR) for a task: stop processing that task, do not attempt to resolve it yourself, and record the failure with its exact error for that task in your report. Then continue on to the *next* task in the list, still appending onto the last `<registered>` state that actually succeeded — one task's failure shouldn't block integrating the rest of the batch. The orchestrator decides whether to retry, resolve inline, or dispatch an ad-hoc `general-purpose` merge subagent (CONVENTIONS.md § Git hygiene, "Division of responsibility") for anything you couldn't link.
 
