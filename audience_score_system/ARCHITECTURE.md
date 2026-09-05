@@ -268,8 +268,8 @@ the raw token or its hash.
 | Component | Binary | `release_app` identity | Responsibility |
 |---|---|---|---|
 | `migrate` | `audience_score_system/migrate` | `migration` (job) | Applies golang-migrate SQL migrations to Postgres. Runs once, ahead of the other three, as a Helm job hook (see `libs/go/migrate/README.md`). |
-| `web` | `audience_score_system/web` (C1 sign-in #1570, C2 Channel-connect #1571, C3 analyst invite #1572, C19 video_script greenlight/deny/archive UI #1834 -- rebuilt in place of C8's original schedule_entry-backed approve/un-approve/edit UI #1580) | `web` (external-api) | The **only** UI surface. Its three UI-only OAuth-consent surfaces are C1/C2/C3 (see "NFR3 interface allocation" below); its C19 schedule page (`web/schedule`, route paths unchanged per FR49) is a UI front end onto the same `store.VideoScriptStore` that `mcp`'s video_script tools also write to. |
-| `mcp` | `audience_score_system/mcp` (#1575, #1577-#1582, #1631, #1648, #1650, #1823-#1835, #1882-#1885) | `mcp` (external-api) | Every other capability (C4-C7, C9, C10, C14, C18, C19): Channel access discovery (`list_channels`, #1631 -- resolves which Channels the caller holds a role on, and that role, without dropping to the web UI), research notes, viability verdicts, schedule sync reads, video_script propose/greenlight/deny/archive (C18/C19, milestone video-script-model -- the schedule-draft/pacing-policy tool surface, C6/C7/C8, was retired outright, FR41), outcome-match confirm/reject (re-anchored onto `video_script`, FR43/FR44), the outcome-bar/calibration-trend family (`set_outcome_bar`/`get_outcome_bar`/`get_calibration_trend`, C14, M3, issues #1882-#1885 -- MCP-only, see "NFR3 interface allocation" below), all browsing, and (#1650) forcing an out-of-band `ChannelSyncWorkflow` run via `trigger_channel_sync`. Exposed as MCP tools to any MCP-capable agent client. |
+| `web` | `audience_score_system/web` (C1 sign-in #1570, C2 Channel-connect #1571, C3 analyst invite #1572, C19 video_script greenlight/deny/archive UI #1834 -- rebuilt in place of C8's original schedule_entry-backed approve/un-approve/edit UI #1580, C4/C5 research/verdict save+browse UI #1896) | `web` (external-api) | The **only** UI surface. Its three UI-only OAuth-consent surfaces are C1/C2/C3 (see "NFR3 interface allocation" below); its C19 schedule page (`web/schedule`, route paths unchanged per FR49) and its `web/research` Channel research index/Idea detail pages plus save-note/save-verdict forms (#1896) are UI front ends onto the same `store.VideoScriptStore` / `store.ResearchStore` / `store.VerdictStore` that `mcp`'s tools also call. |
+| `mcp` | `audience_score_system/mcp` (#1575, #1577-#1582, #1631, #1648, #1650, #1823-#1835, #1882-#1885) | `mcp` (external-api) | Every other capability (C4-C7, C9, C10, C14, C18, C19): Channel access discovery (`list_channels`, #1631 -- resolves which Channels the caller holds a role on, and that role, without dropping to the web UI), research notes and viability verdicts (C4/C5, dual-surface with `web/research` since #1896, see "NFR3 interface allocation" below), schedule sync reads, video_script propose/greenlight/deny/archive (C18/C19, milestone video-script-model -- the schedule-draft/pacing-policy tool surface, C6/C7/C8, was retired outright, FR41), outcome-match confirm/reject (re-anchored onto `video_script`, FR43/FR44), the outcome-bar/calibration-trend family (`set_outcome_bar`/`get_outcome_bar`/`get_calibration_trend`, C14, M3, issues #1882-#1885 -- MCP-only, see "NFR3 interface allocation" below), all browsing, and (#1650) forcing an out-of-band `ChannelSyncWorkflow` run via `trigger_channel_sync`. Exposed as MCP tools to any MCP-capable agent client. |
 | `worker` | `audience_score_system/worker` (#1574, #1576, #1581) | `worker` (worker) | Per-Channel Temporal scheduled workflow: syncs YouTube schedule (C6) and published-video metrics (C9) on a ~1-24 hour cadence (NFR4, default 24h). Skips a cycle for a disconnected/needs-reauth Channel without erroring the workflow. `mcp`'s `trigger_channel_sync` tool (#1650) can force an out-of-band run of the same workflow without waiting for this cadence. |
 | Postgres | — | — | System of record for all four components, accessed via `//libs/go/db` (`PG_DATABASE_URL`). No separate cache/read-model store in M1. |
 
@@ -548,6 +548,36 @@ as every other write in this package, not Creator-only) that M4.3's own
 paragraph will supersede once that milestone ships a `web` front end
 calling these same `store.OutcomeBarStore`/`store.CalibrationStore`
 methods.
+
+**NFR3 amendment (issue #1896): C4 and C5 (save/browse slice) are
+dual-surface.** `web` now renders a Channel research index and an Idea
+detail page (`GET /channels/{id}/research`, `GET
+/channels/{id}/research/ideas/{ideaID}`), plus save-note and
+save-verdict forms (`POST /channels/{id}/research/notes`, `POST
+/channels/{id}/research/ideas/{ideaID}/verdicts`) in
+`audience_score_system/web/research`. This does **not** make C4/C5
+web-only, and does not remove or narrow any MCP tool --
+`save_research_note`, `list_research_notes`, `create_idea`,
+`list_ideas`, `save_viability_verdict`, and `get_viability_verdict` are
+unchanged.
+NFR3's "exactly three UI-only surfaces" rule (C1, C2, C3) is untouched:
+this amendment adds a second surface onto capabilities that remain
+MCP-exposed, which is what NFR3 already permits ("whether or not `web`
+also renders a UI for it"). The shared seams `web` and `mcp` both call
+identically (LB5) are `store.ResearchStore.SaveNote`,
+`store.VerdictStore.Append`, `store.VerdictStore.Current`,
+`store.VerdictStore.History`, and the `store.CanWrite`/`store.CanRead`
+authorization checks -- one implementation each. `source_url`
+validation and the cited/uncited derivation live inside `store` for
+exactly this reason (M4.1 FR12, #1897), so neither surface maintains
+its own copy. `viability_verdict.source` (migration 015, FR5)
+distinguishes an agent-authored version from a human-authored one --
+`web/research`'s save-verdict form always writes
+`store.VerdictSourceHuman` -- so dual-surface writes stay attributable;
+it does not fork the write path. What stays MCP-only: the
+research/viability *reasoning conversation* itself, per the standing
+no-hosted-agent-loop non-goal -- `web` offers the save and browse
+surface, it does not host an agent loop.
 
 ## Temporal: schedule upsert helper
 
