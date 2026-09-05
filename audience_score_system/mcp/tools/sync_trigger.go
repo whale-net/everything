@@ -53,8 +53,8 @@ type TriggerChannelSyncOutput struct {
 // server.RegisterWrite (NFR2 idempotency middleware applies, though this
 // tool declares no idempotency key -- see triggerChannelSyncMutate's doc
 // comment for why). Creator and Analyst may both trigger (store.CanWrite,
-// the same gate save_schedule_draft/set_pacing_policy use) -- there is no
-// product reason to reserve a manual sync for the Creator only. channels
+// the same gate save_video_script uses) -- there is no product reason to
+// reserve a manual sync for the Creator only. channels
 // is used to turn a nonexistent channel_id into a clear error rather than
 // an opaque Temporal "schedule not found" one; trigger is ../main.go's
 // real sync.ScheduleManager (via the ScheduleTrigger interface above).

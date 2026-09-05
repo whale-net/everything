@@ -7,9 +7,10 @@ load("@rules_go//go:def.bzl", "go_library", "go_test")
 # issue #1569). CanApprove/CanInvite/CanReconnect/CanRead/CanWrite
 # (authz.go) are the only sanctioned M1 authorization entry points (NFR5).
 #
-# idea.go/research.go/verdict.go/pacing.go/schedule.go/sync.go/match.go/
-# idempotency.go are real SQL-backed implementations against migration
-# 002's tables (issue #1569's Implementation phase).
+# idea.go/research.go/verdict.go/sync.go/match.go/idempotency.go are real
+# SQL-backed implementations against migration 002's tables (issue #1569's
+# Implementation phase); pacing.go/schedule.go (pacing_policy/
+# schedule_entry) were deleted outright by issue #1835's retirement task.
 #
 # The bearer-credential-to-Person caller-auth mechanism `mcp` uses no
 # longer lives here (migration 005/credential.go, issue #1575) -- issue
@@ -19,7 +20,7 @@ load("@rules_go//go:def.bzl", "go_library", "go_test")
 # video_script.go is the video-script-model milestone's foundation
 # (migration 010, issues #1823/#1824): propose/greenlight/deny/archive
 # lifecycle plus the publish-freeze predicate, M2.1's replacement for
-# schedule_entry as the record of a proposed video.
+# the record of a proposed video.
 go_library(
     name = "store",
     srcs = [
@@ -33,12 +34,10 @@ go_library(
         "match.go",
         "models.go",
         "mywork.go",
-        "pacing.go",
         "pagination.go",
         "person.go",
         "research.go",
         "role.go",
-        "schedule.go",
         "store.go",
         "strategy.go",
         "sync.go",

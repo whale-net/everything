@@ -22,7 +22,7 @@ import (
 var ErrMatchNotPending = errors.New("video_schedule_match: not pending (already resolved, or does not exist)")
 
 // MatchStore covers `video_schedule_match` (migration 002, FR22/FR23) --
-// the outcome link between a SyncedVideo and the ScheduleEntry it
+// the outcome link between a SyncedVideo and the VideoScript it
 // fulfilled.
 type MatchStore interface {
 	// Record inserts m (typically an 'auto' or 'pending' match produced by
@@ -97,21 +97,20 @@ var _ MatchStore = matchStore{}
 // videoScheduleMatchColumns is qualified with the vsm. alias ListPending
 // joins in -- Record/Resolve don't need a SELECT, so this is the only
 // column list this file needs.
-const videoScheduleMatchColumns = `vsm.id, vsm.synced_video_id, vsm.schedule_entry_id, vsm.video_script_id, vsm.confidence, vsm.state, vsm.resolved_by_person_id, vsm.resolved_at, vsm.created_at`
+const videoScheduleMatchColumns = `vsm.id, vsm.synced_video_id, vsm.video_script_id, vsm.confidence, vsm.state, vsm.resolved_by_person_id, vsm.resolved_at, vsm.created_at`
 
 func scanVideoScheduleMatch(row pgx.Row) (VideoScheduleMatch, error) {
 	var m VideoScheduleMatch
-	err := row.Scan(&m.ID, &m.SyncedVideoID, &m.ScheduleEntryID, &m.VideoScriptID, &m.Confidence, &m.State, &m.ResolvedByPersonID, &m.ResolvedAt, &m.CreatedAt)
+	err := row.Scan(&m.ID, &m.SyncedVideoID, &m.VideoScriptID, &m.Confidence, &m.State, &m.ResolvedByPersonID, &m.ResolvedAt, &m.CreatedAt)
 	return m, err
 }
 
 // Record lets `id`/`created_at` take their column defaults rather than
 // trusting a caller-supplied VideoScheduleMatch.ID -- the matching worker
 // never needs the generated id back, only ListPending/Resolve do. Writes
-// video_script_id, not schedule_entry_id (#1829's re-anchor, FR43/FR45) --
-// schedule_entry_id is left NULL on every row Record inserts or updates
-// from here on; it stays on the table only for rows a pre-#1829 code path
-// already wrote.
+// video_script_id (#1829's re-anchor, FR43/FR45); the schedule_entry_id
+// column it used to write alongside no longer exists (migration 013,
+// issue #1835's retirement task).
 //
 // Upserts on video_schedule_match_synced_video_id_live (migration 002's
 // partial unique index on synced_video_id WHERE state != 'rejected') so a

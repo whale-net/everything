@@ -3,9 +3,9 @@
 // areas get_channel_overview (browse.go, C10/FR24) surfaces for ONE
 // Channel a caller already picked, assembled here across EVERY Channel
 // the caller currently holds an open role on. Output naming deliberately
-// mirrors browse.go's vocabulary (channel identity, verdict, schedule,
-// prediction-vs-outcome) so an agent sees one vocabulary across the whole
-// MCP read surface.
+// mirrors browse.go's vocabulary (channel identity, verdict, video
+// scripts, prediction-vs-outcome) so an agent sees one vocabulary across
+// the whole MCP read surface.
 //
 // get_my_work takes no channel_id, so, like whoami/list_channels, it does
 // not implement server.ChannelScoped -- it reports the caller's own
@@ -77,25 +77,31 @@ func toMyWorkVerdictOutput(v store.IdeaVerdictSummary) MyWorkVerdictOutput {
 	}
 }
 
-// MyWorkScheduleOutput is one Channel's schedule_entry counts --
-// get_my_work's schedule field (FR27), mirroring store.ScheduleDraftState.
-type MyWorkScheduleOutput struct {
-	DraftCount            int        `json:"draft_count" jsonschema:"How many schedule_entry rows on this Channel are still drafts"`
-	CommittedCount        int        `json:"committed_count" jsonschema:"How many schedule_entry rows on this Channel are committed"`
-	NextProposedPublishAt *time.Time `json:"next_proposed_publish_at,omitempty" jsonschema:"The earliest upcoming proposed/committed publish time across drafts and committed entries; omitted if none is upcoming"`
+// MyWorkVideoScriptStateOutput is one Channel's video_script counts by
+// status -- get_my_work's video_script_state field (FR27), mirroring
+// store.VideoScriptState (retargeted from schedule_entry's draft/
+// committed pair by issue #1835's retirement task). denied_count and
+// archived_count are deliberately separate fields, never collapsed into
+// one bucket -- FR38/FR39 make `denied` and `archived` distinct terminal
+// states.
+type MyWorkVideoScriptStateOutput struct {
+	ProposedCount int `json:"proposed_count" jsonschema:"How many video_script rows on this Channel are proposed"`
+	GreenlitCount int `json:"greenlit_count" jsonschema:"How many video_script rows on this Channel are greenlit"`
+	DeniedCount   int `json:"denied_count" jsonschema:"How many video_script rows on this Channel are denied"`
+	ArchivedCount int `json:"archived_count" jsonschema:"How many video_script rows on this Channel are archived"`
 }
 
 // ChannelWorkSummaryOutput is one Channel's cross-section summary, as
 // get_my_work renders it (FR27) -- present for every Channel returned even
 // when a section has no data yet (empty ResearchNotes, nil LatestVerdict/
-// LatestOutcome, zero-valued Schedule), never a missing entry.
+// LatestOutcome, zero-valued VideoScriptState), never a missing entry.
 type ChannelWorkSummaryOutput struct {
-	Channel       ChannelIdentityOutput            `json:"channel"`
-	Role          string                           `json:"role" jsonschema:"The caller's own currently-held role on this Channel: creator, co_creator, or analyst"`
-	ResearchNotes []ResearchNoteOutput             `json:"research_notes" jsonschema:"This Channel's most recent research notes, most-recent first, capped at notes_per_channel"`
-	LatestVerdict *MyWorkVerdictOutput             `json:"latest_verdict,omitempty" jsonschema:"This Channel's most-recently-recorded viability verdict across all its Ideas; omitted if none has been recorded yet"`
-	Schedule      MyWorkScheduleOutput             `json:"schedule" jsonschema:"A compact summary of this Channel's schedule_entry state"`
-	LatestOutcome *PredictionVsOutcomeRowOutput    `json:"latest_outcome,omitempty" jsonschema:"This Channel's most-recently-published prediction-vs-outcome comparison; omitted if none qualifies yet -- see get_prediction_vs_outcome's qualifying-row rule"`
+	Channel          ChannelIdentityOutput         `json:"channel"`
+	Role             string                        `json:"role" jsonschema:"The caller's own currently-held role on this Channel: creator, co_creator, or analyst"`
+	ResearchNotes    []ResearchNoteOutput          `json:"research_notes" jsonschema:"This Channel's most recent research notes, most-recent first, capped at notes_per_channel"`
+	LatestVerdict    *MyWorkVerdictOutput          `json:"latest_verdict,omitempty" jsonschema:"This Channel's most-recently-recorded viability verdict across all its Ideas; omitted if none has been recorded yet"`
+	VideoScriptState MyWorkVideoScriptStateOutput  `json:"video_script_state" jsonschema:"A compact summary of this Channel's video_script counts by status"`
+	LatestOutcome    *PredictionVsOutcomeRowOutput `json:"latest_outcome,omitempty" jsonschema:"This Channel's most-recently-published prediction-vs-outcome comparison; omitted if none qualifies yet -- see get_prediction_vs_outcome's qualifying-row rule"`
 }
 
 func toChannelWorkSummaryOutput(s store.ChannelWorkSummary) ChannelWorkSummaryOutput {
@@ -109,10 +115,11 @@ func toChannelWorkSummaryOutput(s store.ChannelWorkSummary) ChannelWorkSummaryOu
 		},
 		Role:          string(s.Role),
 		ResearchNotes: make([]ResearchNoteOutput, 0, len(s.LatestNotes)),
-		Schedule: MyWorkScheduleOutput{
-			DraftCount:            s.ScheduleState.DraftCount,
-			CommittedCount:        s.ScheduleState.CommittedCount,
-			NextProposedPublishAt: s.ScheduleState.NextProposedPublishAt,
+		VideoScriptState: MyWorkVideoScriptStateOutput{
+			ProposedCount: s.ScriptState.ProposedCount,
+			GreenlitCount: s.ScriptState.GreenlitCount,
+			DeniedCount:   s.ScriptState.DeniedCount,
+			ArchivedCount: s.ScriptState.ArchivedCount,
 		},
 	}
 	for _, n := range s.LatestNotes {
@@ -148,7 +155,7 @@ func RegisterMyWork(reg *server.Registry, myWork store.MyWorkStore) {
 		Name: "get_my_work",
 		Description: "Report the calling Person's own cross-Channel work in one call (FR27): for every Channel the " +
 			"caller currently holds an open role on, their role there, recent research notes, the Channel's most " +
-			"recently recorded viability verdict, its schedule state, and its most recent prediction-vs-outcome " +
+			"recently recorded viability verdict, its video_script counts by status, and its most recent prediction-vs-outcome " +
 			"comparison. Re-derived fresh on every call from the caller's currently-held roles (FR28) -- a role " +
 			"revoked between two calls drops that Channel out of the very next call's result, with no re-auth or " +
 			"reconnect required. A caller with no roles anywhere gets channels: [], not an error. The channel list is " +
