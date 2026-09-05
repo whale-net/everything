@@ -53,6 +53,19 @@
   `PromotionState.PENDING_APPROVAL`) — the separate release-trigger-layer
   stub (`worker/release/approval.go`) is not part of this capability; see
   LB1. Scheduled as M3.
+- C14 — CI can publish a CLI binary (and, eventually, other non-OCI
+  artifact kinds such as firmware) to durable storage through a
+  registry-brokered upload: the registry authorizes the upload, the blob
+  is stored and deduplicated by content hash, and the published artifact
+  version is recorded as a pointer to that hash rather than a location CI
+  tracks itself. See LB5 for the blob-identity decision this requires.
+  Scheduled as M5.
+- C15 — CI workflows and other consumers resolve which artifact kinds
+  exist, and how to acquire or publish them, entirely from the registry —
+  with no hardcoded tool-name or app-name list surviving in the release
+  workflow, the CI acquisition action, or any worker/server code.
+  Answerable over the existing publish/resolve mechanism, no CAS
+  required. Scheduled as M4.
 
 ### Later (genuinely unscheduled, no current demand)
 
