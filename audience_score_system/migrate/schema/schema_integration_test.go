@@ -235,3 +235,73 @@ func TestMigration014_UpDown_AppliesCleanly(t *testing.T) {
 	require.NoError(t, runner.Migrate(13), "apply migration 014's down -- must not fail")
 	assert.False(t, tableExists(t, ctx, db, "outcome_bar"), "migration 014's down must drop outcome_bar cleanly")
 }
+
+// TestMigration015_UpDown_AppliesCleanly proves the authorship-marker
+// column (M4.1 FR5/NFR4, issue #1898) applies cleanly on a database that
+// already has every earlier migration and at least one pre-existing
+// viability_verdict row: up adds `source` with a deterministic backfill to
+// 'agent' for that row (NFR4 -- no row is ever null/ambiguous), a real
+// NOT NULL and a real CHECK rejecting anything but 'agent'/'human', and
+// v_current_verdict (SELECT * derived from viability_verdict) picks the
+// column up automatically; down drops the column cleanly. Mirrors
+// TestMigration014_UpDown_AppliesCleanly's isolate-one-step shape.
+func TestMigration015_UpDown_AppliesCleanly(t *testing.T) {
+	ctx := context.Background()
+	db := dbtest.NewPostgres(ctx, t, dbtest.Options{})
+
+	sqlDB, err := sql.Open("pgx", db.ConnString)
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = sqlDB.Close() })
+
+	runner := migrate.NewRunner(sqlDB, schema.Migrations, schema.Dir)
+
+	require.NoError(t, runner.Migrate(14), "apply migrations 1-14 (the full chain up to, but not including, this task's migration)")
+	preCols := viewColumns(t, ctx, db, "viability_verdict")
+	require.NotContains(t, preCols, "source", "before migration 015, viability_verdict must not carry source yet")
+
+	// Seed one pre-existing viability_verdict row -- migration 015's up
+	// must backfill it to source = 'agent' (NFR4), not leave it null.
+	var personID, channelID, ideaID, verdictID string
+	require.NoError(t, db.Pool.QueryRow(ctx, `
+		INSERT INTO person (google_subject, email, display_name) VALUES ($1, $2, $3) RETURNING id
+	`, "sub-015", "a@example.com", "Person").Scan(&personID))
+	require.NoError(t, db.Pool.QueryRow(ctx, `
+		INSERT INTO channel (youtube_channel_id, title, connection_state) VALUES ($1, $2, 'connected') RETURNING id
+	`, "yt-015", "Channel").Scan(&channelID))
+	require.NoError(t, db.Pool.QueryRow(ctx, `
+		INSERT INTO idea (channel_id, title, created_by_person_id) VALUES ($1, $2, $3) RETURNING id
+	`, channelID, "Idea", personID).Scan(&ideaID))
+	require.NoError(t, db.Pool.QueryRow(ctx, `
+		INSERT INTO viability_verdict (idea_id, version, verdict, reasoning, author_person_id)
+		VALUES ($1, 1, 'viable', 'pre-existing row before migration 015', $2) RETURNING id
+	`, ideaID, personID).Scan(&verdictID))
+
+	require.NoError(t, runner.Migrate(15), "apply migration 015's up -- must not fail")
+
+	var source string
+	require.NoError(t, db.Pool.QueryRow(ctx, `SELECT source FROM viability_verdict WHERE id = $1`, verdictID).Scan(&source))
+	assert.Equal(t, "agent", source, "migration 015's up must backfill every pre-existing row to source = 'agent' (NFR4)")
+
+	var nullCount int
+	require.NoError(t, db.Pool.QueryRow(ctx, `SELECT count(*) FROM viability_verdict WHERE source IS NULL`).Scan(&nullCount))
+	assert.Equal(t, 0, nullCount, "no viability_verdict row may be left null/ambiguous after migration 015 (NFR4)")
+
+	_, err = db.Pool.Exec(ctx, `
+		INSERT INTO viability_verdict (idea_id, version, verdict, reasoning, author_person_id, source)
+		VALUES ($1, 2, 'viable', 'bogus source value', $2, 'bogus')
+	`, ideaID, personID)
+	assert.Error(t, err, "an INSERT with an invalid source value must be rejected by the CHECK constraint")
+
+	_, err = db.Pool.Exec(ctx, `
+		INSERT INTO viability_verdict (idea_id, version, verdict, reasoning, author_person_id, source)
+		VALUES ($1, 3, 'viable', 'explicit null source', $2, NULL)
+	`, ideaID, personID)
+	assert.Error(t, err, "source must be NOT NULL -- an explicit NULL must be rejected")
+
+	upCols := viewColumns(t, ctx, db, "v_current_verdict")
+	assert.Contains(t, upCols, "source", "v_current_verdict must expose source after migration 015 -- it is SELECT * derived from viability_verdict")
+
+	require.NoError(t, runner.Migrate(14), "apply migration 015's down -- must not fail")
+	downCols := viewColumns(t, ctx, db, "viability_verdict")
+	assert.NotContains(t, downCols, "source", "migration 015's down must drop the column cleanly")
+}
