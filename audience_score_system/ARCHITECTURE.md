@@ -269,7 +269,7 @@ the raw token or its hash.
 |---|---|---|---|
 | `migrate` | `audience_score_system/migrate` | `migration` (job) | Applies golang-migrate SQL migrations to Postgres. Runs once, ahead of the other three, as a Helm job hook (see `libs/go/migrate/README.md`). |
 | `web` | `audience_score_system/web` (C1 sign-in #1570, C2 Channel-connect #1571, C3 analyst invite #1572, C19 video_script greenlight/deny/archive UI #1834 -- rebuilt in place of C8's original schedule_entry-backed approve/un-approve/edit UI #1580) | `web` (external-api) | The **only** UI surface. Its three UI-only OAuth-consent surfaces are C1/C2/C3 (see "NFR3 interface allocation" below); its C19 schedule page (`web/schedule`, route paths unchanged per FR49) is a UI front end onto the same `store.VideoScriptStore` that `mcp`'s video_script tools also write to. |
-| `mcp` | `audience_score_system/mcp` (#1575, #1577-#1582, #1631, #1648, #1650, #1823-#1835) | `mcp` (external-api) | Every other capability (C4-C7, C9, C10, C18, C19): Channel access discovery (`list_channels`, #1631 -- resolves which Channels the caller holds a role on, and that role, without dropping to the web UI), research notes, viability verdicts, schedule sync reads, video_script propose/greenlight/deny/archive (C18/C19, milestone video-script-model -- the schedule-draft/pacing-policy tool surface, C6/C7/C8, was retired outright, FR41), outcome-match confirm/reject (re-anchored onto `video_script`, FR43/FR44), all browsing, and (#1650) forcing an out-of-band `ChannelSyncWorkflow` run via `trigger_channel_sync`. Exposed as MCP tools to any MCP-capable agent client. |
+| `mcp` | `audience_score_system/mcp` (#1575, #1577-#1582, #1631, #1648, #1650, #1823-#1835, #1882-#1885) | `mcp` (external-api) | Every other capability (C4-C7, C9, C10, C14, C18, C19): Channel access discovery (`list_channels`, #1631 -- resolves which Channels the caller holds a role on, and that role, without dropping to the web UI), research notes, viability verdicts, schedule sync reads, video_script propose/greenlight/deny/archive (C18/C19, milestone video-script-model -- the schedule-draft/pacing-policy tool surface, C6/C7/C8, was retired outright, FR41), outcome-match confirm/reject (re-anchored onto `video_script`, FR43/FR44), the outcome-bar/calibration-trend family (`set_outcome_bar`/`get_outcome_bar`/`get_calibration_trend`, C14, M3, issues #1882-#1885 -- MCP-only, see "NFR3 interface allocation" below), all browsing, and (#1650) forcing an out-of-band `ChannelSyncWorkflow` run via `trigger_channel_sync`. Exposed as MCP tools to any MCP-capable agent client. |
 | `worker` | `audience_score_system/worker` (#1574, #1576, #1581) | `worker` (worker) | Per-Channel Temporal scheduled workflow: syncs YouTube schedule (C6) and published-video metrics (C9) on a ~1-24 hour cadence (NFR4, default 24h). Skips a cycle for a disconnected/needs-reauth Channel without erroring the workflow. `mcp`'s `trigger_channel_sync` tool (#1650) can force an out-of-band run of the same workflow without waiting for this cadence. |
 | Postgres | — | — | System of record for all four components, accessed via `//libs/go/db` (`PG_DATABASE_URL`). No separate cache/read-model store in M1. |
 
@@ -528,6 +528,26 @@ The existing NFR3 list (C1/C2/C3 web-only; everything else MCP-exposed
 too) and the C8 amendment above are both unchanged by this addition --
 this is an appended clarification of three new capabilities' allocation,
 not a rewrite of the ones already there.
+
+**NFR3 amendment (M3, issue #1880): C14 is delivered as MCP-only, no
+`web` surface.** `set_outcome_bar` (FR1, write) and `get_outcome_bar`
+(FR2, read) manage the per-Channel outcome bar, and `get_calibration_trend`
+(FR5/FR6/FR7, read) returns the bucketed calibration trend classified
+against it (`mcp/tools/outcome_bar.go`, issues #1882-#1885); none of the
+three has a `web` counterpart in this milestone. This matches C14's
+roadmap allocation (`product/03-roadmap.md`'s M3 entry): M3's FR budget
+is read-side-aggregate-plus-one-narrow-write, not a UI milestone, and
+LB5's dual-surface parity mechanism explicitly schedules C14's `web`
+surface for **M4.3**, not M3 -- so `web`'s current three-surface list
+(C1/C2/C3) is genuinely unchanged by M3, unlike C11/C12/C13 and C18/C19
+above, which each added `web` routes when they landed. Per LB5's own
+text, this paragraph is the concrete MCP baseline (which store methods,
+which `store.CanX` check -- `store.CanWrite`/`store.CanRead`, same tier
+as every other write in this package, not Creator-only) that M4.3's own
+`**NFR3 amendment (issue #<M4.3 root plan issue>): C14 is dual-surface.**`
+paragraph will supersede once that milestone ships a `web` front end
+calling these same `store.OutcomeBarStore`/`store.CalibrationStore`
+methods.
 
 ## Temporal: schedule upsert helper
 
