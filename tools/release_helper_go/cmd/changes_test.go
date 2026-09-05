@@ -161,6 +161,100 @@ func TestDetectChangedAppsWithAffectedApp(t *testing.T) {
 	}
 }
 
+func TestDetectAffectedTargetsNoBaseCommit(t *testing.T) {
+	bazel := newFakeBazel(fakeBazelCall{
+		argsContain: []string{"query", "tests(//libs/...)", "--output=label"},
+		output:      "//libs/go/dbtest:postgres_constraints_test\n//libs/foo:foo_test",
+	})
+	git := newFakeGit()
+
+	result, err := DetectAffectedTargets("", "tests(//libs/...)", bazel, git)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(result) != 2 {
+		t.Errorf("expected all 2 candidates when no base commit, got %d: %v", len(result), result)
+	}
+}
+
+func TestDetectAffectedTargetsNoChangedFiles(t *testing.T) {
+	bazel := newFakeBazel()
+	git := newFakeGit(
+		fakeGitCall{argsContain: []string{"diff", "--name-only"}, output: ""},
+	)
+
+	result, err := DetectAffectedTargets("abc123", "tests(//libs/...)", bazel, git)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(result) != 0 {
+		t.Errorf("expected 0 targets, got %d", len(result))
+	}
+}
+
+func TestDetectAffectedTargetsOnlyNonBuildFiles(t *testing.T) {
+	bazel := newFakeBazel()
+	git := newFakeGit(
+		fakeGitCall{argsContain: []string{"diff", "--name-only"}, output: "docs/RELEASE.md\n.github/workflows/ci.yml"},
+	)
+
+	result, err := DetectAffectedTargets("abc123", "tests(//libs/...)", bazel, git)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(result) != 0 {
+		t.Errorf("expected 0 targets when only non-build files changed, got %d", len(result))
+	}
+}
+
+func TestDetectAffectedTargetsGlobalBuildFiles(t *testing.T) {
+	bazel := newFakeBazel(fakeBazelCall{
+		argsContain: []string{"query", "tests(//libs/...)", "--output=label"},
+		output:      "//libs/go/dbtest:postgres_constraints_test",
+	})
+	git := newFakeGit(
+		fakeGitCall{argsContain: []string{"diff", "--name-only"}, output: "tools/bazel/release.bzl\n"},
+	)
+
+	result, err := DetectAffectedTargets("abc123", "tests(//libs/...)", bazel, git)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(result) != 1 || result[0] != "//libs/go/dbtest:postgres_constraints_test" {
+		t.Errorf("expected all candidates on global build change, got %v", result)
+	}
+}
+
+func TestDetectAffectedTargetsWithAffectedTarget(t *testing.T) {
+	candidates := "tests(//libs/...) intersect rdeps(//libs/..., //libs/go/dbtest:dbtest)"
+	dbtestTarget := "//libs/go/rmq:rmq_db_test"
+
+	bazel := newFakeBazel(
+		// validate labels
+		fakeBazelCall{
+			argsContain:    []string{"//libs/go/rmq:consumer.go"},
+			argsNotContain: []string{"rdeps"},
+			output:         "//libs/go/rmq:consumer.go",
+		},
+		// rdeps(candidates, changed) narrows down to affected test targets
+		fakeBazelCall{
+			argsContain: []string{"rdeps(" + candidates},
+			output:      dbtestTarget,
+		},
+	)
+	git := newFakeGit(
+		fakeGitCall{argsContain: []string{"diff", "--name-only"}, output: "libs/go/rmq/consumer.go"},
+	)
+
+	result, err := DetectAffectedTargets("abc123", candidates, bazel, git)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(result) != 1 || result[0] != dbtestTarget {
+		t.Errorf("expected %q to be affected, got %v", dbtestTarget, result)
+	}
+}
+
 func TestGetPreviousTag(t *testing.T) {
 	git := newFakeGit(
 		fakeGitCall{argsContain: []string{"describe"}, output: "demo-hello-go.v1.2.3"},

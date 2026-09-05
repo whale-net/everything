@@ -45,6 +45,7 @@ func NewRootCmd() *cobra.Command {
 		newListAppsCmd(),
 		newListCmd(),
 		newChangesCmd(),
+		newChangedTargetsCmd(),
 		newBuildCmd(),
 		newReleaseMultiarchCmd(),
 		newReleaseAppCmd(),
