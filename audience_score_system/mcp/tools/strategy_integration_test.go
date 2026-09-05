@@ -2,11 +2,10 @@
 
 // This file only builds under the "integration" build tag so `bazel test
 // //...` (which runs on Docker-less machines too) never compiles or runs
-// it. See //libs/go/dbtest's README and schedule_draft_integration_test.go
-// for the pattern this file follows: spin up a throwaway Postgres via
-// dbtest, apply the real embedded migrations, host RegisterVerdict's,
-// RegisterScheduleDraft's, and RegisterStrategy's tools behind a real
-// *mcp.Server over an httptest.Server, and drive them with a real
+// it. See //libs/go/dbtest's README for the pattern this file follows:
+// spin up a throwaway Postgres via dbtest, apply the real embedded
+// migrations, host RegisterVerdict's and RegisterStrategy's tools behind
+// a real *mcp.Server over an httptest.Server, and drive them with a real
 // in-process MCP client.
 //
 // strategy_test.go's pure-Go suite (package tools, no build tag) already
@@ -24,8 +23,7 @@
 // get_strategy/list_strategies output carries no cadence key. It also
 // proves generate_schedule_plan (retired by FR41, doubly dead under FR47)
 // is gone from the registry entirely -- all against the real embedded
-// schema and a real HTTP-hosted MCP server, mirroring
-// schedule_draft_integration_test.go's pattern (issue #1637).
+// schema and a real HTTP-hosted MCP server.
 //
 // Run it explicitly (requires a working Docker daemon):
 //
@@ -126,10 +124,10 @@ func newTestCredentialStore(t *testing.T, pool *pgxpool.Pool) mcpauth.Credential
 	return creds
 }
 
-// strategyFixture mirrors scheduleDraftFixture: a Channel with a live
-// Creator and Analyst, an unassociated Person, and a viable-verdict Idea
-// ready to build a Strategy from, hosted behind a real MCP server with
-// RegisterVerdict + RegisterScheduleDraft + RegisterStrategy wired.
+// strategyFixture: a Channel with a live Creator and Analyst, an
+// unassociated Person, and a viable-verdict Idea ready to build a
+// Strategy from, hosted behind a real MCP server with RegisterVerdict +
+// RegisterStrategy wired.
 type strategyFixture struct {
 	st       *store.Store
 	creds    mcpauth.CredentialStore
@@ -168,7 +166,6 @@ func newStrategyFixture(t *testing.T) *strategyFixture {
 	srv := server.New(st)
 	reg := server.NewRegistry(srv, st)
 	tools.RegisterVerdict(reg, st)
-	tools.RegisterScheduleDraft(reg, st)
 	tools.RegisterStrategy(reg, st)
 
 	handler := server.NewHTTPHandler(srv, creds, server.ResourceMetadataConfig{

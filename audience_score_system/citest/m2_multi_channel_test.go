@@ -277,29 +277,34 @@ func TestE2E_M2_MultiChannelMultiTier(t *testing.T) {
 		}))
 		verdictID = uuid.MustParse(verdict.ID)
 
-		// A video_script needs a grounding Strategy (FR36) -- N proposes
-		// both, mirroring e2e_test.go's step 6 pattern; C's approve
-		// authority (below) is what FR32 actually tests, not proposal.
-		strategy, err := w.st.Strategies().Save(ctx, store.SaveStrategyInput{
-			ChannelID: chA.ID, Title: "M2 Strategy", Active: true,
-			VerdictIDs: []uuid.UUID{verdictID}, CreatedByPersonID: n.ID,
-		})
-		require.NoError(t, err)
-		script, err := w.st.VideoScripts().Propose(ctx, store.ProposeVideoScriptInput{
-			ChannelID: chA.ID, VerdictID: verdictID, StrategyID: strategy.ID,
-			Title: "M2 Story Idea", ScriptText: "script text", CreatedByPersonID: n.ID,
-		})
-		require.NoError(t, err)
-		scriptID = script.ID
+		strategy := decode[mcptools.StrategyOutput](t, callTool(t, csAnalystN, "save_strategy", mcptools.SaveStrategyInput{
+			ChannelID:         chA.ID.String(),
+			Title:             "M2 Story Strategy",
+			VerdictIDs:        []string{verdictID.String()},
+			IdempotencyKeyArg: uuid.NewString(),
+		}))
+
+		script := decode[mcptools.VideoScriptOutput](t, callTool(t, csAnalystN, "save_video_script", mcptools.SaveVideoScriptInput{
+			ChannelID:         chA.ID.String(),
+			VerdictID:         verdictID.String(),
+			StrategyID:        strategy.StrategyID,
+			Title:             "M2 Story Idea",
+			ScriptText:        "M2's story script text.",
+			IdempotencyKeyArg: uuid.NewString(),
+		}))
+		scriptID = uuid.MustParse(script.VideoScriptID)
 
 		// C alone greenlights it -- only cCookie is used in this subtest,
 		// fCookie never touched (FR32: "no consensus, voting, or
-		// Founder-tiebreak mechanic").
+		// Founder-tiebreak mechanic"). The route path keeps its
+		// pre-existing "approve" spelling (FR49's route-and-package-naming
+		// note); the store transition it drives is video_script's
+		// proposed->greenlit.
 		rec := w.postForm(cCookie, "/schedule/"+scriptID.String()+"/approve", nil)
 		require.Equal(t, http.StatusSeeOther, rec.Code, "body: %s", rec.Body.String())
-		got, err := w.st.VideoScripts().GetByID(ctx, scriptID)
+		gotScript, err := w.st.VideoScripts().GetByID(ctx, scriptID)
 		require.NoError(t, err)
-		assert.Equal(t, store.VideoScriptStatusGreenlit, got.Status, "FR32: Co-Creator alone can greenlight a proposed script")
+		assert.Equal(t, store.VideoScriptStatusGreenlit, gotScript.Status, "FR32: Co-Creator alone can greenlight a proposed video_script")
 
 		// C also invites the second Analyst (FR32's invite-authority
 		// half) -- the tier-4 invite generated in step 4 is still live,
