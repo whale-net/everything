@@ -306,6 +306,35 @@ func TestListChannels_IssuesBoundedQueryCount_NFR9(t *testing.T) {
 	require.NoError(t, err)
 	cs := lcConnectAs(t, ts, token)
 
+	// Root cause of #1855/#1854's intermittent failure here: the MCP
+	// client sends "notifications/initialized" right after the initialize
+	// handshake (mcp.Client.Connect), and go-sdk's PersonMiddleware
+	// (server.New, auth.go) -- wired via mcp.Server.AddReceivingMiddleware
+	// -- runs on EVERY received method, not just "tools/call", so that
+	// notification ALSO issues a persons.GetByID query against this same
+	// traced pool. go-sdk processes notifications synchronously and calls
+	// synchronously within one session (jsonrpc2 handleAsync's queue,
+	// go-sdk/mcp/server.go's "handle calls asynchronously, and
+	// notifications synchronously" comment), so that query is guaranteed
+	// to complete before any later call's response -- but Connect returns
+	// as soon as the notification is *enqueued* (a 202 Accepted), not once
+	// the server has actually processed it, so whether it lands before or
+	// after our counter reset below is a genuine goroutine-scheduling
+	// race, not an artifact of connection-pool warm-up or CI load (this
+	// reproduced locally, standalone, with no concurrent store package
+	// tests running, ruling out the added-CI-load lead in #1855/#1854).
+	// A throwaway round trip here forces that notification's processing
+	// (and its one-time query) to finish before we ever touch the
+	// counter -- go-sdk's handleAsync loop dequeues session requests
+	// strictly in the order they were enqueued and won't start this
+	// call's handling until the notification's has completed -- so a
+	// synchronous response to this call is proof the notification is
+	// done. Every query below is then a real query list_channels itself
+	// (or its identity-resolving PersonMiddleware) issues per call, with
+	// no leftover protocol bookkeeping in either measurement.
+	_, warmupOut := lcCall(t, cs)
+	require.Len(t, warmupOut.Channels, 1, "warm-up call: sanity, same caller/data as the first measured call")
+
 	counter.n.Store(0)
 	res, out := lcCall(t, cs)
 	require.False(t, res.IsError, "unexpected error: %s", lcTextOf(res))
