@@ -21,6 +21,11 @@ load("@rules_go//go:def.bzl", "go_library", "go_test")
 # (migration 010, issues #1823/#1824): propose/greenlight/deny/archive
 # lifecycle plus the publish-freeze predicate, M2.1's replacement for
 # the record of a proposed video.
+#
+# outcome_bar.go is the per-Channel outcome bar's storage half (migration
+# 014, issue #1882, C14 / FR1 / FR2 / NFR1): a single current-state config
+# row per Channel naming which metric to classify against and its
+# threshold.
 go_library(
     name = "store",
     srcs = [
@@ -34,6 +39,7 @@ go_library(
         "match.go",
         "models.go",
         "mywork.go",
+        "outcome_bar.go",
         "pagination.go",
         "person.go",
         "research.go",

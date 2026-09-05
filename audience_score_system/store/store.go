@@ -7,7 +7,10 @@
 // .../002_research_schedule_outcome.up.sql and issue #1569); plus
 // video_script (migration 010, .../010_video_script.up.sql, issues
 // #1823/#1824), M2.1's replacement for the schedule_entry/pacing_policy
-// tables migration 013 dropped outright (issue #1835's retirement task).
+// tables migration 013 dropped outright (issue #1835's retirement task);
+// plus outcome_bar (migration 014, .../014_outcome_bar.up.sql, issue
+// #1882), the per-Channel outcome bar's storage half (C14 / FR1 / FR2 /
+// NFR1).
 //
 // Store is the single entry point, built over //libs/go/db's
 // *pgxpool.Pool. Its Persons/Channels/Roles/Invites/Ideas/Research/
@@ -34,7 +37,7 @@ import "github.com/jackc/pgx/v5/pgxpool"
 // viability_verdict/verdict_citation/synced_video/video_metrics/
 // video_schedule_match/mcp_idempotency (migration 002; pacing_policy/
 // schedule_entry dropped by migration 013) plus video_script (migration
-// 010).
+// 010) and outcome_bar (migration 014).
 type Store struct {
 	pool *pgxpool.Pool
 }
@@ -107,3 +110,10 @@ func (s *Store) MyWork() MyWorkStore { return myWorkStore{pool: s.pool} }
 // publish-freeze predicate Archive consults (FR39). Performs no
 // authorization itself -- see VideoScriptStore's doc comment.
 func (s *Store) VideoScripts() VideoScriptStore { return videoScriptStore{pool: s.pool} }
+
+// OutcomeBars returns the OutcomeBarStore implementation (migration 014,
+// issue #1882) -- the per-Channel outcome bar's storage half (C14 / FR1 /
+// FR2 / NFR1): a single current-state config row per Channel naming
+// which metric to classify against and its threshold. Performs no
+// authorization itself -- see OutcomeBarStore's doc comment.
+func (s *Store) OutcomeBars() OutcomeBarStore { return outcomeBarStore{pool: s.pool} }
