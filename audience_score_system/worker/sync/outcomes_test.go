@@ -5,10 +5,14 @@
 // it -- mirrors video_sync_test.go's pattern exactly: spin up a throwaway
 // Postgres via dbtest, apply the real embedded migrations, drive
 // SyncOutcomes (outcomes.go) against it with a youtube/fake.Client
-// standing in for the real YouTube Analytics API, and assert against both
-// the real store.MatchStore/store.SyncStore rows and the real
-// v_prediction_vs_outcome view (migration 002, FR24) -- the same LB3 chain
-// end-to-end this task's Testing section calls for.
+// standing in for the real YouTube Analytics API, and assert against the
+// real store.MatchStore/store.SyncStore/store.VideoScriptStore rows --
+// re-anchored onto `video_script` by FR43/#1829 (see matching.go and
+// store/match.go for the production-code side of the re-anchor). FR44's
+// re-anchor of v_prediction_vs_outcome/get_prediction_vs_outcome onto
+// video_script is #1830's scope, not this file's -- so these tests assert
+// against video_schedule_match/video_script rows directly rather than
+// through that view.
 package sync
 
 import (
@@ -29,11 +33,11 @@ import (
 )
 
 // outcomesFixture is the common setup every test below needs: a Channel
-// with a live creator, ready for a committed schedule entry (matching
+// with a live creator, ready for a greenlit video_script (matching
 // candidate) and a published synced_video (the thing to match against it).
 // Deliberately creates its own Channel/Person (rather than reusing
 // setupSyncChannel, which does not hand the creator id back) so
-// committedEntry never needs to re-derive it via a role lookup.
+// greenlitScript never needs to re-derive it via a role lookup.
 type outcomesFixture struct {
 	st      *store.Store
 	db      *dbtest.Postgres
@@ -55,27 +59,68 @@ func newOutcomesFixture(t *testing.T) *outcomesFixture {
 	return &outcomesFixture{st: st, db: db, ch: ch, creator: creator}
 }
 
-// committedEntry creates an Idea -> viable Verdict -> committed
-// schedule_entry chain (LB3's record chain) on f.ch, bound to title/
-// proposedPublishAt -- the matcher's candidate pool (MatchStore.
-// ListCandidates only returns committed entries).
-func (f *outcomesFixture) committedEntry(t *testing.T, ctx context.Context, title string, proposedPublishAt time.Time) store.ScheduleEntry {
+// proposedScript creates an Idea -> viable Verdict -> Strategy chain on
+// f.ch and proposes a video_script against it (FR36), left in status
+// 'proposed' -- the starting point every video_script fixture below builds
+// on, and itself the fixture for the "never a candidate" proposed case.
+func (f *outcomesFixture) proposedScript(t *testing.T, ctx context.Context, title string, targetPublishDate *time.Time) store.VideoScript {
 	t.Helper()
 
 	idea, err := f.st.Ideas().Create(ctx, f.ch.ID, title, f.creator.ID)
 	require.NoError(t, err)
 	verdict, err := f.st.Verdicts().Append(ctx, store.AppendVerdictInput{
-		IdeaID: idea.ID, Verdict: store.VerdictViable, Reasoning: "greenlit for outcomes test", AuthorPersonID: f.creator.ID,
+		IdeaID: idea.ID, Verdict: store.VerdictViable, Reasoning: "viable for outcomes test", AuthorPersonID: f.creator.ID,
 	})
 	require.NoError(t, err)
-	entry, err := f.st.Schedules().SaveDraft(ctx, store.SaveDraftInput{
-		ChannelID: f.ch.ID, IdeaID: idea.ID, VerdictID: verdict.ID,
-		ProposedPublishAt: proposedPublishAt, CreatedByPersonID: f.creator.ID,
+	strategy, err := f.st.Strategies().Save(ctx, store.SaveStrategyInput{
+		ChannelID: f.ch.ID, Title: title + " Strategy", Cadence: store.CadenceWeekly, Active: true,
+		VerdictIDs: []uuid.UUID{verdict.ID}, CreatedByPersonID: f.creator.ID,
 	})
 	require.NoError(t, err)
-	require.NoError(t, f.st.Schedules().Approve(ctx, entry.ID, f.creator.ID))
 
-	got, err := f.st.Schedules().GetByID(ctx, entry.ID)
+	script, err := f.st.VideoScripts().Propose(ctx, store.ProposeVideoScriptInput{
+		ChannelID: f.ch.ID, VerdictID: verdict.ID, StrategyID: strategy.ID,
+		Title: title, ScriptText: "script text for " + title, TargetPublishDate: targetPublishDate,
+		CreatedByPersonID: f.creator.ID,
+	})
+	require.NoError(t, err)
+	return script
+}
+
+// greenlitScript builds on proposedScript and immediately greenlights it
+// (FR37) -- the matcher's candidate pool (MatchStore.ListCandidates only
+// returns `greenlit` video_script rows, FR43).
+func (f *outcomesFixture) greenlitScript(t *testing.T, ctx context.Context, title string, targetPublishDate *time.Time) store.VideoScript {
+	t.Helper()
+
+	script := f.proposedScript(t, ctx, title, targetPublishDate)
+	require.NoError(t, f.st.VideoScripts().Greenlight(ctx, script.ID, f.creator.ID))
+	got, err := f.st.VideoScripts().GetByID(ctx, script.ID)
+	require.NoError(t, err)
+	return got
+}
+
+// deniedScript builds on proposedScript and immediately denies it (FR38) --
+// the fixture for the "never a candidate" denied case.
+func (f *outcomesFixture) deniedScript(t *testing.T, ctx context.Context, title string) store.VideoScript {
+	t.Helper()
+
+	script := f.proposedScript(t, ctx, title, nil)
+	require.NoError(t, f.st.VideoScripts().Deny(ctx, script.ID, f.creator.ID))
+	got, err := f.st.VideoScripts().GetByID(ctx, script.ID)
+	require.NoError(t, err)
+	return got
+}
+
+// archivedScript builds a greenlit script and immediately archives it
+// (FR39 -- no live match yet, so the freeze predicate never blocks this)
+// -- the fixture for the "never a candidate" archived case.
+func (f *outcomesFixture) archivedScript(t *testing.T, ctx context.Context, title string) store.VideoScript {
+	t.Helper()
+
+	script := f.greenlitScript(t, ctx, title, nil)
+	require.NoError(t, f.st.VideoScripts().Archive(ctx, script.ID, f.creator.ID))
+	got, err := f.st.VideoScripts().GetByID(ctx, script.ID)
 	require.NoError(t, err)
 	return got
 }
@@ -116,52 +161,16 @@ func (f *outcomesFixture) singleMatchFor(t *testing.T, ctx context.Context, sync
 	return m
 }
 
-// predictionVsOutcomeRowsForChannel duplicates
-// store_integration_test.go's helper of the same purpose (unexported in
-// that package) -- reads v_prediction_vs_outcome directly since
-// store.PredictionVsOutcome has no dedicated store method yet.
-func predictionVsOutcomeRowsForChannel(t *testing.T, ctx context.Context, db *dbtest.Postgres, channelID uuid.UUID) []store.PredictionVsOutcome {
-	t.Helper()
-
-	rows, err := db.Pool.Query(ctx, `
-		SELECT idea_id, channel_id, idea_title, verdict_id, verdict_version, verdict, verdict_reasoning,
-		       schedule_entry_id, proposed_publish_at, approved_at, match_id, match_state, match_confidence,
-		       synced_video_id, youtube_video_id, COALESCE(video_title, ''), published_at,
-		       views, average_view_duration_seconds, average_view_percentage, impressions, impression_ctr,
-		       metrics_measured_at
-		FROM v_prediction_vs_outcome
-		WHERE channel_id = $1
-		ORDER BY idea_title
-	`, channelID)
-	require.NoError(t, err)
-	defer rows.Close()
-
-	var out []store.PredictionVsOutcome
-	for rows.Next() {
-		var r store.PredictionVsOutcome
-		require.NoError(t, rows.Scan(
-			&r.IdeaID, &r.ChannelID, &r.IdeaTitle, &r.VerdictID, &r.VerdictVersion, &r.Verdict, &r.VerdictReasoning,
-			&r.ScheduleEntryID, &r.ProposedPublishAt, &r.ApprovedAt, &r.MatchID, &r.MatchState, &r.MatchConfidence,
-			&r.SyncedVideoID, &r.YouTubeVideoID, &r.VideoTitle, &r.PublishedAt,
-			&r.Views, &r.AverageViewDurationSeconds, &r.AverageViewPercentage, &r.Impressions, &r.ImpressionCTR,
-			&r.MetricsMeasuredAt,
-		))
-		out = append(out, r)
-	}
-	require.NoError(t, rows.Err())
-	return out
-}
-
 func ptrInt64(v int64) *int64 { return &v }
 
-// ── metrics upsert + auto match + LB3 chain end-to-end ──────────────────────
+// ── metrics upsert + auto match on a greenlit video_script ─────────────────
 
-func TestSyncOutcomes_AboveThreshold_OneAutoMatch_AppearsInPredictionVsOutcome(t *testing.T) {
+func TestSyncOutcomes_AboveThreshold_GreenlitScript_AutoMatch(t *testing.T) {
 	ctx := context.Background()
 	f := newOutcomesFixture(t)
 
 	publishAt := time.Now().Add(-time.Hour)
-	entry := f.committedEntry(t, ctx, "My Great Video Title", publishAt)
+	script := f.greenlitScript(t, ctx, "My Great Video Title", &publishAt)
 	video := f.syncedVideo(t, ctx, "yt-above", "My Great Video Title", publishAt)
 
 	yt := &fake.Client{MetricsByVideoID: map[string]youtube.VideoMetrics{
@@ -173,25 +182,20 @@ func TestSyncOutcomes_AboveThreshold_OneAutoMatch_AppearsInPredictionVsOutcome(t
 
 	m := f.singleMatchFor(t, ctx, video.ID)
 	assert.Equal(t, store.MatchStateAuto, m.State)
-	require.NotNil(t, m.ScheduleEntryID)
-	assert.Equal(t, entry.ID, *m.ScheduleEntryID)
+	require.NotNil(t, m.VideoScriptID)
+	assert.Equal(t, script.ID, *m.VideoScriptID)
 	assert.GreaterOrEqual(t, m.Confidence, MatchConfidenceThreshold)
-
-	rows := predictionVsOutcomeRowsForChannel(t, ctx, f.db, f.ch.ID)
-	require.Len(t, rows, 1, "an auto-matched, published, committed idea must appear in the comparison view")
-	assert.Equal(t, "My Great Video Title", rows[0].IdeaTitle)
-	require.NotNil(t, rows[0].Views)
-	assert.Equal(t, int64(500), *rows[0].Views)
 }
 
-// ── below-threshold: pending, no authoritative link, absent from the view ──
+// ── below-threshold: pending, not auto-linked ───────────────────────────────
 
-func TestSyncOutcomes_BelowThreshold_OnePendingMatch_NoLinkNotInPredictionVsOutcome(t *testing.T) {
+func TestSyncOutcomes_BelowThreshold_GreenlitScript_PendingNotAutoLinked(t *testing.T) {
 	ctx := context.Background()
 	f := newOutcomesFixture(t)
 
 	publishAt := time.Now().Add(-time.Hour)
-	f.committedEntry(t, ctx, "Totally Unrelated Idea Title", publishAt.Add(60*24*time.Hour)) // wildly different title AND date
+	farOff := publishAt.Add(60 * 24 * time.Hour)
+	f.greenlitScript(t, ctx, "Totally Unrelated Idea Title", &farOff) // wildly different title AND date
 	video := f.syncedVideo(t, ctx, "yt-below", "Something Else Entirely", publishAt)
 
 	yt := &fake.Client{MetricsByVideoID: map[string]youtube.VideoMetrics{
@@ -204,47 +208,50 @@ func TestSyncOutcomes_BelowThreshold_OnePendingMatch_NoLinkNotInPredictionVsOutc
 	m := f.singleMatchFor(t, ctx, video.ID)
 	assert.Equal(t, store.MatchStatePending, m.State, "a below-threshold match must be queued pending, never auto-linked (FR23)")
 	assert.Less(t, m.Confidence, MatchConfidenceThreshold)
-
-	rows := predictionVsOutcomeRowsForChannel(t, ctx, f.db, f.ch.ID)
-	assert.Empty(t, rows, "a pending match's schedule_entry_id must not be treated as authoritative -- it must not appear in v_prediction_vs_outcome")
 }
 
-// ── no plausible candidate at all: still pending, never auto-linked ────────
+// ── proposed/denied/archived scripts are NEVER offered as candidates ───────
 
-func TestSyncOutcomes_NoCandidates_StillPendingNeverAutoLinked(t *testing.T) {
+func TestSyncOutcomes_OnlyNonGreenlitScriptsExist_PendingWithNilVideoScriptID(t *testing.T) {
 	ctx := context.Background()
 	f := newOutcomesFixture(t)
 
 	publishAt := time.Now().Add(-time.Hour)
-	video := f.syncedVideo(t, ctx, "yt-no-candidates", "An Orphan Video", publishAt)
+	// Every one of these has a title/date that would otherwise score above
+	// threshold against the video below -- if ListCandidates leaked any of
+	// them, this test would auto-link instead of staying pending.
+	f.proposedScript(t, ctx, "Exact Title Match", &publishAt)
+	f.deniedScript(t, ctx, "Exact Title Match")
+	f.archivedScript(t, ctx, "Exact Title Match")
+	video := f.syncedVideo(t, ctx, "yt-non-greenlit", "Exact Title Match", publishAt)
 
 	yt := &fake.Client{MetricsByVideoID: map[string]youtube.VideoMetrics{
-		"yt-no-candidates": {YouTubeVideoID: "yt-no-candidates", Views: ptrInt64(1), MeasuredAt: time.Now()},
+		"yt-non-greenlit": {YouTubeVideoID: "yt-non-greenlit", Views: ptrInt64(1), MeasuredAt: time.Now()},
 	}}
 	a := newSyncActivities(f.st, yt)
 
 	require.NoError(t, a.SyncOutcomes(ctx, f.ch.ID))
 
 	m := f.singleMatchFor(t, ctx, video.ID)
-	assert.Equal(t, store.MatchStatePending, m.State, "no committed schedule entry at all must still queue pending, never fabricate an auto-link")
-	assert.Nil(t, m.ScheduleEntryID)
+	assert.Equal(t, store.MatchStatePending, m.State, "proposed/denied/archived scripts must never be offered as candidates, however good a title/date match they'd otherwise be (FR43)")
+	assert.Nil(t, m.VideoScriptID)
 	assert.Equal(t, 0.0, m.Confidence)
 }
 
-// ── issue #1652: a candidate committed AFTER the video already synced with
-// no candidates must still get matched on the next cycle, not stay stuck
-// on the first cycle's "no candidate at all" placeholder forever ─────────
+// ── issue #1652 (re-anchored): a candidate greenlit AFTER the video already
+// synced with no candidates must still get matched on the next cycle, not
+// stay stuck on the first cycle's "no candidate at all" placeholder forever ──
 
-func TestSyncOutcomes_CandidateCommittedAfterFirstSync_SecondCycleMatchesInPlace(t *testing.T) {
+func TestSyncOutcomes_ScriptGreenlitAfterFirstSync_SecondCycleMatchesInPlace(t *testing.T) {
 	ctx := context.Background()
 	f := newOutcomesFixture(t)
 
 	publishAt := time.Now().Add(-time.Hour)
-	// The video syncs BEFORE any committed schedule_entry exists for the
+	// The video syncs BEFORE any greenlit video_script exists for the
 	// Channel (the backdated/historical scenario issue #1652 reproduced) --
 	// first SyncOutcomes call must still record the documented "no
 	// plausible candidate at all" pending placeholder (confidence 0, nil
-	// schedule_entry_id).
+	// video_script_id).
 	video := f.syncedVideo(t, ctx, "yt-late-candidate", "Exact Title Match", publishAt)
 
 	yt := &fake.Client{MetricsByVideoID: map[string]youtube.VideoMetrics{
@@ -256,27 +263,65 @@ func TestSyncOutcomes_CandidateCommittedAfterFirstSync_SecondCycleMatchesInPlace
 	first := f.singleMatchFor(t, ctx, video.ID)
 	firstID := first.ID
 	assert.Equal(t, store.MatchStatePending, first.State)
-	assert.Nil(t, first.ScheduleEntryID)
+	assert.Nil(t, first.VideoScriptID)
 	assert.Equal(t, 0.0, first.Confidence)
 
-	// Now the matching schedule_entry gets committed (e.g. a human commits
-	// a backdated draft against this exact already-synced video). A second
-	// sync cycle must NOT skip this video just because it already carries a
-	// video_schedule_match row -- that row is the no-candidate placeholder,
-	// not a settled match.
-	entry := f.committedEntry(t, ctx, "Exact Title Match", publishAt)
+	// Now the matching video_script gets greenlit (e.g. a human greenlights
+	// a backdated proposal against this exact already-synced video). A
+	// second sync cycle must NOT skip this video just because it already
+	// carries a video_schedule_match row -- that row is the no-candidate
+	// placeholder, not a settled match.
+	script := f.greenlitScript(t, ctx, "Exact Title Match", &publishAt)
 	require.NoError(t, a.SyncOutcomes(ctx, f.ch.ID))
 
 	second := f.singleMatchFor(t, ctx, video.ID)
 	assert.Equal(t, firstID, second.ID, "the placeholder row must be updated in place, not duplicated")
 	assert.Equal(t, store.MatchStateAuto, second.State, "exact title+date match must auto-link once the candidate exists (FR22)")
-	require.NotNil(t, second.ScheduleEntryID)
-	assert.Equal(t, entry.ID, *second.ScheduleEntryID)
+	require.NotNil(t, second.VideoScriptID)
+	assert.Equal(t, script.ID, *second.VideoScriptID)
 	assert.GreaterOrEqual(t, second.Confidence, MatchConfidenceThreshold)
 
 	var matchCount int
 	require.NoError(t, f.db.Pool.QueryRow(ctx, `SELECT count(*) FROM video_schedule_match WHERE synced_video_id = $1`, video.ID).Scan(&matchCount))
 	assert.Equal(t, 1, matchCount, "must never leave a stale duplicate row behind")
+}
+
+// ── a video with an existing settled match is skipped (HasMatch) ───────────
+
+func TestSyncOutcomes_ExistingSettledMatch_SkippedNotRescored(t *testing.T) {
+	ctx := context.Background()
+	f := newOutcomesFixture(t)
+
+	publishAt := time.Now().Add(-time.Hour)
+	first := f.greenlitScript(t, ctx, "Stable Title", &publishAt)
+	video := f.syncedVideo(t, ctx, "yt-settled", "Stable Title", publishAt)
+
+	yt := &fake.Client{MetricsByVideoID: map[string]youtube.VideoMetrics{
+		"yt-settled": {YouTubeVideoID: "yt-settled", Views: ptrInt64(100), MeasuredAt: time.Now()},
+	}}
+	a := newSyncActivities(f.st, yt)
+	require.NoError(t, a.SyncOutcomes(ctx, f.ch.ID))
+
+	settled := f.singleMatchFor(t, ctx, video.ID)
+	require.Equal(t, store.MatchStateAuto, settled.State)
+	require.NotNil(t, settled.VideoScriptID)
+	require.Equal(t, first.ID, *settled.VideoScriptID)
+
+	// A second, even better-matching greenlit script now exists, but the
+	// video already has a settled (auto) match -- HasMatch must gate it out
+	// entirely, leaving the original match untouched.
+	f.greenlitScript(t, ctx, "Stable Title", &publishAt)
+	require.NoError(t, a.SyncOutcomes(ctx, f.ch.ID))
+
+	after := f.singleMatchFor(t, ctx, video.ID)
+	assert.Equal(t, settled.ID, after.ID)
+	assert.Equal(t, settled.State, after.State)
+	require.NotNil(t, after.VideoScriptID)
+	assert.Equal(t, first.ID, *after.VideoScriptID, "a settled match must never be re-scored or re-linked to a different candidate")
+
+	var matchCount int
+	require.NoError(t, f.db.Pool.QueryRow(ctx, `SELECT count(*) FROM video_schedule_match WHERE synced_video_id = $1`, video.ID).Scan(&matchCount))
+	assert.Equal(t, 1, matchCount)
 }
 
 // ── double run: no duplicate matches, no duplicate metric rows ─────────────
@@ -286,7 +331,7 @@ func TestSyncOutcomes_DoubleRun_NoDuplicateMatchesNoDuplicateMetricRows(t *testi
 	f := newOutcomesFixture(t)
 
 	publishAt := time.Now().Add(-time.Hour)
-	f.committedEntry(t, ctx, "Stable Title", publishAt)
+	f.greenlitScript(t, ctx, "Stable Title", &publishAt)
 	video := f.syncedVideo(t, ctx, "yt-stable", "Stable Title", publishAt)
 
 	measuredAt := time.Now()
@@ -309,12 +354,12 @@ func TestSyncOutcomes_DoubleRun_NoDuplicateMatchesNoDuplicateMetricRows(t *testi
 
 // ── metrics accumulate across cycles at genuinely different measured_at ────
 
-func TestSyncOutcomes_TwoRunsDifferentMeasuredAt_MetricsAccumulate_ViewReadsLatest(t *testing.T) {
+func TestSyncOutcomes_TwoRunsDifferentMeasuredAt_MetricsAccumulate_LatestIsRead(t *testing.T) {
 	ctx := context.Background()
 	f := newOutcomesFixture(t)
 
 	publishAt := time.Now().Add(-time.Hour)
-	f.committedEntry(t, ctx, "Accumulating Title", publishAt)
+	f.greenlitScript(t, ctx, "Accumulating Title", &publishAt)
 	video := f.syncedVideo(t, ctx, "yt-accum", "Accumulating Title", publishAt)
 
 	firstMeasuredAt := time.Now().Add(-time.Hour)
@@ -337,11 +382,6 @@ func TestSyncOutcomes_TwoRunsDifferentMeasuredAt_MetricsAccumulate_ViewReadsLate
 	require.NotNil(t, latest)
 	require.NotNil(t, latest.Views)
 	assert.Equal(t, int64(999), *latest.Views, "LatestMetricsFor must read the latest measured_at, not the first")
-
-	rows := predictionVsOutcomeRowsForChannel(t, ctx, f.db, f.ch.ID)
-	require.Len(t, rows, 1)
-	require.NotNil(t, rows[0].Views)
-	assert.Equal(t, int64(999), *rows[0].Views, "v_prediction_vs_outcome must also read the latest metrics row")
 }
 
 // ── ErrRevoked mid-run: needs-reauth, retained data, non-retryable ─────────

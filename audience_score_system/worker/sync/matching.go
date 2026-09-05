@@ -10,23 +10,24 @@ import (
 
 // MatchConfidenceThreshold is the score (in [0,1], see Match) at or above
 // which SyncOutcomes (outcomes.go) auto-links a published video to a
-// schedule entry (video_schedule_match.state = 'auto', FR22) rather than
-// queuing it for human resolution (state = 'pending', FR23, never
-// auto-linked below this value -- including "no plausible candidate at
-// all", which Match reports as confidence 0).
+// video_script (video_schedule_match.state = 'auto', FR22, re-anchored onto
+// video_script by FR43/#1829) rather than queuing it for human resolution
+// (state = 'pending', FR23, never auto-linked below this value -- including
+// "no plausible candidate at all", which Match reports as confidence 0).
 //
 // 0.8 is the starting value: title similarity (titleWeight below) is
-// weighted more heavily than publish-date proximity because a Channel's
-// pacing policy can legitimately slip a video's actual publish date by
-// days without the video being a different upload, whereas two
-// differently-titled videos landing on the same day are far more likely to
-// be a real ambiguity (e.g. two ideas both slipping into the same week)
-// than a false negative -- so the combined score only clears 0.8 when the
-// title match is strong (see titleSimilarity) AND the dates are close (see
-// dateProximity), which is exactly the "confident enough to auto-link
-// without a human in the loop" bar FR22 requires. See this file's Testing
-// coverage (matching_test.go, issue #1581) for the boundary cases this
-// value was tuned against.
+// weighted more heavily than publish-date proximity because a video_script's
+// target_publish_date is optional (FR36) and, even when set, a Channel's
+// pacing policy can legitimately slip a video's actual publish date by days
+// without the video being a different upload, whereas two differently-titled
+// videos landing on the same day are far more likely to be a real ambiguity
+// (e.g. two ideas both slipping into the same week) than a false negative --
+// so the combined score only clears 0.8 when the title match is strong (see
+// titleSimilarity) AND the dates are close (see dateProximity), which is
+// exactly the "confident enough to auto-link without a human in the loop"
+// bar FR22 requires. See this file's Testing coverage (matching_test.go,
+// issues #1581/#1829) for the boundary cases this value was tuned against,
+// including the undated-script cap score's doc comment describes.
 //
 // This is the ONLY place the threshold value lives -- SyncOutcomes reads
 // this constant, never a hardcoded literal, so retuning it is a one-line
@@ -43,16 +44,16 @@ const (
 )
 
 // dateProximityWindow bounds dateProximity: a video published this far (or
-// further) from a candidate's proposed_publish_at contributes zero to that
+// further) from a candidate's TargetPublishDate contributes zero to that
 // candidate's date score, however close the title match is -- 14 days
 // covers a Channel's pacing policy slipping a video by up to two weeks
 // (FR18) while still treating a many-weeks-off match as date-implausible.
 const dateProximityWindow = 14 * 24 * time.Hour
 
 // SyncedVideo is the subset of a synced_video row (migration 002) Match
-// scores against each candidate ScheduleEntry -- deliberately decoupled
-// from store.SyncedVideo (which carries fields, like YouTubeVideoID, this
-// pure scoring logic never needs) so this file stays a dependency-free,
+// scores against each candidate VideoScript -- deliberately decoupled from
+// store.SyncedVideo (which carries fields, like YouTubeVideoID, this pure
+// scoring logic never needs) so this file stays a dependency-free,
 // table-testable unit with no store/DB import.
 type SyncedVideo struct {
 	// Title is the video's YouTube title.
@@ -61,17 +62,17 @@ type SyncedVideo struct {
 	PublishedAt time.Time
 }
 
-// ScheduleEntry is one committed schedule_entry candidate Match scores a
-// SyncedVideo against -- store.MatchCandidate's shape (schedule_entry_id +
-// its bound idea's title + proposed_publish_at), renamed/reshaped here
-// purely so this file has no store import; outcomes.go converts between
-// the two.
-type ScheduleEntry struct {
-	ID uuid.UUID
-	// Title is the bound idea's title -- schedule_entry itself carries no
-	// title of its own, only idea_id.
+// VideoScript is one `greenlit` video_script candidate Match scores a
+// SyncedVideo against -- store.MatchCandidate's shape (video_script_id +
+// its own title + target_publish_date, #1829's re-anchor of FR22/FR23 onto
+// FR43), renamed/reshaped here purely so this file has no store import;
+// outcomes.go converts between the two. TargetPublishDate is nilable (FR36
+// makes the target date optional) -- see score's doc comment for how a nil
+// value is scored.
+type VideoScript struct {
+	ID                uuid.UUID
 	Title             string
-	ProposedPublishAt time.Time
+	TargetPublishDate *time.Time
 }
 
 // Match scores video against each of candidates (title similarity +
@@ -83,13 +84,13 @@ type ScheduleEntry struct {
 // MatchConfidenceThreshold: it is the caller's job (SyncOutcomes) to
 // compare confidence against the threshold and decide auto vs. pending,
 // never this function's.
-func Match(video SyncedVideo, candidates []ScheduleEntry) (best ScheduleEntry, confidence float64, ok bool) {
+func Match(video SyncedVideo, candidates []VideoScript) (best VideoScript, confidence float64, ok bool) {
 	if len(candidates) == 0 {
-		return ScheduleEntry{}, 0, false
+		return VideoScript{}, 0, false
 	}
 
 	bestScore := -1.0
-	var bestEntry ScheduleEntry
+	var bestEntry VideoScript
 	for _, c := range candidates {
 		s := score(video, c)
 		if s > bestScore {
@@ -102,9 +103,24 @@ func Match(video SyncedVideo, candidates []ScheduleEntry) (best ScheduleEntry, c
 
 // score combines titleSimilarity and dateProximity per titleWeight/
 // dateWeight into a single confidence value in [0,1].
-func score(video SyncedVideo, entry ScheduleEntry) float64 {
+//
+// entry.TargetPublishDate == nil scores dateProximity as exactly 0 --
+// deliberately NOT renormalized to titleWeight+dateWeight (i.e. never
+// score = 1.0*titleSim just because there is no date to compare against).
+// This is FR43's load-bearing invariant, not an incidental default: with
+// dateProximity pinned at 0, an undated candidate's score is capped at
+// titleWeight*titleSim <= 0.7 < MatchConfidenceThreshold (0.8) by
+// construction, whatever the title match -- so an undated video_script can
+// never auto-link, only ever land in 'pending' for a human to resolve
+// (FR44 frames manual resolution as the primary path for an undated
+// script). Renormalizing would let a perfect title match alone clear 0.8
+// and silently auto-link a script with no target date at all.
+func score(video SyncedVideo, entry VideoScript) float64 {
 	t := titleSimilarity(video.Title, entry.Title)
-	d := dateProximity(video.PublishedAt, entry.ProposedPublishAt)
+	d := 0.0
+	if entry.TargetPublishDate != nil {
+		d = dateProximity(video.PublishedAt, *entry.TargetPublishDate)
+	}
 	return titleWeight*t + dateWeight*d
 }
 

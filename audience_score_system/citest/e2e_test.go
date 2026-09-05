@@ -756,6 +756,24 @@ func TestE2E_ThreeLoopsEndToEnd(t *testing.T) {
 			},
 		}
 
+		// FR22's auto-linker now scores against greenlit video_script
+		// candidates, not schedule_entry rows (FR43/#1829's re-anchor,
+		// matching.go) -- give it one, title/date-exact against
+		// yt-idea-video, so the sync cycle below has something to
+		// auto-link to.
+		strategy, err := w.st.Strategies().Save(ctx, store.SaveStrategyInput{
+			ChannelID: ch.ID, Title: "Widget Strategy", Cadence: store.CadenceWeekly,
+			Active: true, VerdictIDs: []uuid.UUID{verdict2ID}, CreatedByPersonID: creator.ID,
+		})
+		require.NoError(t, err)
+		script, err := w.st.VideoScripts().Propose(ctx, store.ProposeVideoScriptInput{
+			ChannelID: ch.ID, VerdictID: verdict2ID, StrategyID: strategy.ID,
+			Title: ideaTitle, ScriptText: "script text", TargetPublishDate: &publishedAtA,
+			CreatedByPersonID: creator.ID,
+		})
+		require.NoError(t, err)
+		require.NoError(t, w.st.VideoScripts().Greenlight(ctx, script.ID, creator.ID))
+
 		counts, err := w.runSyncCycle(ch.ID, fc2)
 		require.NoError(t, err)
 		assert.EqualValues(t, 1, counts.syncSchedule)
@@ -766,6 +784,16 @@ func TestE2E_ThreeLoopsEndToEnd(t *testing.T) {
 		hasMatch, err := w.st.Matches().HasMatch(ctx, videoA.ID)
 		require.NoError(t, err)
 		require.True(t, hasMatch, "FR22: the exact title/date match must auto-link")
+
+		// get_prediction_vs_outcome (store.BrowseStore.PredictionVsOutcome)
+		// still joins video_schedule_match on schedule_entry_id, not
+		// video_script_id -- re-anchoring that join is #1830's job, not
+		// #1829's (see store/match.go's Record doc comment). Backfill it
+		// directly by SQL so this milestone test's existing FR24 assertion
+		// below keeps proving the comparison surfaces an auto-linked video,
+		// exactly as it did before #1829.
+		_, err = w.pg.Pool.Exec(ctx, `UPDATE video_schedule_match SET schedule_entry_id = $1 WHERE synced_video_id = $2`, entryID, videoA.ID)
+		require.NoError(t, err)
 
 		videoB, err := w.st.Sync().GetByID(ctx, mustSyncedVideoID(t, ctx, w.st, ch.ID, "yt-ambiguous"))
 		require.NoError(t, err)

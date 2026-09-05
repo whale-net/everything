@@ -71,6 +71,7 @@ go_test(
     size = "large",
     timeout = "long",
     srcs = [
+        "match_integration_test.go",
         "store_integration_test.go",
         "video_script_integration_test.go",
     ],

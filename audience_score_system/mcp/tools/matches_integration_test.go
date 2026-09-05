@@ -146,9 +146,16 @@ func newMatchesFixture(t *testing.T) *matchesFixture {
 		SyncedVideoID: video.ID, Views: ptrInt64(250), MeasuredAt: time.Now(),
 	}}))
 
-	require.NoError(t, st.Matches().Record(ctx, store.VideoScheduleMatch{
-		SyncedVideoID: video.ID, ScheduleEntryID: &entry.ID, Confidence: 0.55, State: store.MatchStatePending,
-	}))
+	// list_pending_matches' BestGuessEntry and the confirm-without-override
+	// path (matches.go) still key off schedule_entry_id (#1830's re-anchor
+	// onto video_script, not #1829's) -- seed it by direct SQL rather than
+	// through MatchStore.Record, which as of #1829 never writes
+	// schedule_entry_id (see Record's doc comment, store/match.go).
+	_, err = pg.Pool.Exec(ctx, `
+		INSERT INTO video_schedule_match (synced_video_id, schedule_entry_id, confidence, state)
+		VALUES ($1, $2, $3, $4)
+	`, video.ID, entry.ID, 0.55, store.MatchStatePending)
+	require.NoError(t, err)
 	pending, _, err := st.Matches().ListPending(ctx, ch.ID, nil, 0)
 	require.NoError(t, err)
 	require.Len(t, pending, 1)
@@ -329,9 +336,13 @@ func TestListPendingMatches_LimitTruncatedAndSincePageForwardExactly(t *testing.
 		}
 		require.NotEmpty(t, video.ID, "must have found the just-inserted synced video")
 
-		require.NoError(t, f.st.Matches().Record(ctx, store.VideoScheduleMatch{
-			SyncedVideoID: video.ID, ScheduleEntryID: &entry.ID, Confidence: 0.5, State: store.MatchStatePending,
-		}))
+		// See newMatchesFixture's matching comment: seed schedule_entry_id
+		// by direct SQL, not MatchStore.Record (#1829 never writes it).
+		_, err = f.pg.Pool.Exec(ctx, `
+			INSERT INTO video_schedule_match (synced_video_id, schedule_entry_id, confidence, state)
+			VALUES ($1, $2, $3, $4)
+		`, video.ID, entry.ID, 0.5, store.MatchStatePending)
+		require.NoError(t, err)
 	}
 
 	firstRes := f.call(t, cs, "list_pending_matches", tools.ListPendingMatchesInput{ChannelID: f.ch.ID.String(), Limit: 2})

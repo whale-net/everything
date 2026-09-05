@@ -212,12 +212,16 @@ func (s *scheduleTestStack) recordMatch(t *testing.T, ctx context.Context, ch st
 		SELECT id FROM synced_video WHERE channel_id = $1 ORDER BY last_synced_at DESC LIMIT 1
 	`, ch.ID).Scan(&videoID))
 
-	require.NoError(t, s.store.Matches().Record(ctx, store.VideoScheduleMatch{
-		SyncedVideoID:   videoID,
-		ScheduleEntryID: &entryID,
-		Confidence:      1.0,
-		State:           matchState,
-	}))
+	// FR20's freeze predicate (store.IsPublished, schedule.go) still joins
+	// video_schedule_match on schedule_entry_id (#1830's re-anchor onto
+	// video_script, not #1829's) -- seed it by direct SQL rather than
+	// through MatchStore.Record, which as of #1829 never writes
+	// schedule_entry_id (see Record's doc comment, store/match.go).
+	_, err = s.db.Pool.Exec(ctx, `
+		INSERT INTO video_schedule_match (synced_video_id, schedule_entry_id, confidence, state)
+		VALUES ($1, $2, $3, $4)
+	`, videoID, entryID, 1.0, matchState)
+	require.NoError(t, err)
 }
 
 // ── FR19: Creator approves a draft ──────────────────────────────────────────

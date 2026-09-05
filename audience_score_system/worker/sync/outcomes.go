@@ -12,18 +12,19 @@ import (
 	"github.com/whale-net/everything/audience_score_system/youtube"
 )
 
-// SyncOutcomes is C9's real outcome-sync activity (issue #1581, FR21-FR23):
-// for every `synced_video` on channelID with a non-null published_at,
-// calls youtube.Client.Metrics (#1573) and upserts `video_metrics`
-// (a.Sync.UpsertMetrics, migration 002/#1569) keyed on (synced_video_id,
-// measured_at) -- an append of measurements over time, never a destructive
-// overwrite (see "Metrics accumulate" below) -- then, for a video with no
-// existing SETTLED video_schedule_match row (a.Matches.HasMatch, see its
-// doc comment), scores it against the Channel's committed, still-unmatched
-// schedule entries (a.Matches.ListCandidates, matching.go's Match) and
-// records an 'auto' match at or above matching.MatchConfidenceThreshold or
-// a 'pending' one below it (FR22/FR23 -- never auto-links below the
-// threshold, including when there is no plausible candidate at all).
+// SyncOutcomes is C9's real outcome-sync activity (issue #1581, FR21-FR23;
+// re-anchored onto video_script by FR43/#1829): for every `synced_video` on
+// channelID with a non-null published_at, calls youtube.Client.Metrics
+// (#1573) and upserts `video_metrics` (a.Sync.UpsertMetrics, migration
+// 002/#1569) keyed on (synced_video_id, measured_at) -- an append of
+// measurements over time, never a destructive overwrite (see "Metrics
+// accumulate" below) -- then, for a video with no existing SETTLED
+// video_schedule_match row (a.Matches.HasMatch, see its doc comment),
+// scores it against the Channel's `greenlit`, still-unmatched video_script
+// rows (a.Matches.ListCandidates, matching.go's Match) and records an
+// 'auto' match at or above matching.MatchConfidenceThreshold or a 'pending'
+// one below it (FR22/FR23 -- never auto-links below the threshold,
+// including when there is no plausible candidate at all).
 //
 // # Metrics accumulate, never overwrite
 //
@@ -37,7 +38,7 @@ import (
 //
 // a.Matches.HasMatch gates matching per video BEFORE scoring: a video that
 // already has a SETTLED video_schedule_match row -- auto, confirmed, or
-// rejected in any case, or pending with a real schedule_entry_id -- is
+// rejected in any case, or pending with a real video_script_id -- is
 // skipped entirely on a later cycle. This is deliberate for 'rejected' too:
 // FR23's default is that a rejected match's video stays unmatched, not that
 // it gets automatically re-queued next cycle (that would require an
@@ -45,13 +46,13 @@ import (
 // refresh for every published video regardless of match state -- only
 // matching itself is gated.
 //
-// A pending row with schedule_entry_id == nil (no committed schedule_entry
+// A pending row with video_script_id == nil (no greenlit video_script
 // existed as a candidate at all when this video was first scored -- e.g. a
-// backdated/historical video synced before its schedule_entry was
-// committed, issue #1652) is NOT settled: HasMatch reports false for it, so
-// this video is re-scored on every later cycle until either a real
-// candidate appears (a.Matches.Record then updates that same row in place,
-// see its doc comment) or a human rejects it via resolve_pending_match.
+// backdated/historical video synced before its video_script was greenlit,
+// issue #1652) is NOT settled: HasMatch reports false for it, so this video
+// is re-scored on every later cycle until either a real candidate appears
+// (a.Matches.Record then updates that same row in place, see its doc
+// comment) or a human rejects it via resolve_pending_match.
 //
 // # Error handling (FR4/FR21)
 //
@@ -160,8 +161,8 @@ func (a *Activities) syncMetrics(ctx context.Context, channelID uuid.UUID, youtu
 }
 
 // syncMatches scores every published video with no existing SETTLED
-// video_schedule_match row against channelID's still-unmatched committed
-// schedule entries (matching.Match) and records an 'auto' or 'pending'
+// video_schedule_match row against channelID's `greenlit`, still-unmatched
+// video_script rows (matching.Match) and records an 'auto' or 'pending'
 // match for each -- see SyncOutcomes' doc comment's "Matching is
 // idempotent, except for the no-candidate-at-all placeholder" section for
 // why HasMatch gates this per video, and why ListCandidates is re-queried
@@ -182,38 +183,38 @@ func (a *Activities) syncMatches(ctx context.Context, channelID uuid.UUID, publi
 		if err != nil {
 			return matched, pending, fmt.Errorf("%s: list match candidates for channel %s: %w", ActivitySyncOutcomes, channelID, err)
 		}
-		candidates := make([]ScheduleEntry, len(candidateRows))
+		candidates := make([]VideoScript, len(candidateRows))
 		for i, c := range candidateRows {
-			candidates[i] = ScheduleEntry{ID: c.ScheduleEntryID, Title: c.IdeaTitle, ProposedPublishAt: c.ProposedPublishAt}
+			candidates[i] = VideoScript{ID: c.VideoScriptID, Title: c.Title, TargetPublishDate: c.TargetPublishDate}
 		}
 
 		best, confidence, ok := Match(SyncedVideo{Title: v.Title, PublishedAt: *v.PublishedAt}, candidates)
 
 		state := store.MatchStatePending
-		var scheduleEntryID *uuid.UUID
+		var videoScriptID *uuid.UUID
 		if ok {
 			id := best.ID
-			scheduleEntryID = &id
+			videoScriptID = &id
 			if confidence >= MatchConfidenceThreshold {
 				state = store.MatchStateAuto
 			}
 		}
 
 		if err := a.Matches.Record(ctx, store.VideoScheduleMatch{
-			SyncedVideoID:   v.ID,
-			ScheduleEntryID: scheduleEntryID,
-			Confidence:      confidence,
-			State:           state,
+			SyncedVideoID: v.ID,
+			VideoScriptID: videoScriptID,
+			Confidence:    confidence,
+			State:         state,
 		}); err != nil {
 			return matched, pending, fmt.Errorf("%s: record match for video %s: %w", ActivitySyncOutcomes, v.ID, err)
 		}
 
 		if state == store.MatchStateAuto {
 			matched++
-			logger.Info("video auto-matched to schedule entry", "channel_id", channelID.String(), "synced_video_id", v.ID, "schedule_entry_id", scheduleEntryID, "confidence", confidence)
+			logger.Info("video auto-matched to video script", "channel_id", channelID.String(), "synced_video_id", v.ID, "video_script_id", videoScriptID, "confidence", confidence)
 		} else {
 			pending++
-			logger.Warn("video queued for pending match review", "channel_id", channelID.String(), "synced_video_id", v.ID, "candidate_schedule_entry_id", scheduleEntryID, "confidence", confidence)
+			logger.Warn("video queued for pending match review", "channel_id", channelID.String(), "synced_video_id", v.ID, "candidate_video_script_id", videoScriptID, "confidence", confidence)
 		}
 	}
 	return matched, pending, nil

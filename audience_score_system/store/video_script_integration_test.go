@@ -96,10 +96,9 @@ func syncOneVideo(t *testing.T, ctx context.Context, s *store.Store, ch store.Ch
 
 // recordVideoScriptMatch inserts a video_schedule_match row wired to
 // scriptID via video_script_id (migration 010's FR45 re-anchor column) --
-// directly by SQL rather than through MatchStore.Record, which only ever
-// writes schedule_entry_id (that column's own retirement, and a
-// MatchStore method to write video_script_id, is a later task in this
-// milestone, not #1824's).
+// directly by SQL, for a fixture state (an arbitrary confidence, an
+// arbitrary state) match_integration_test.go's ListCandidates/Record
+// coverage of MatchStore.Record itself (#1829) doesn't need to exercise.
 func recordVideoScriptMatch(t *testing.T, ctx context.Context, db *dbtest.Postgres, scriptID, syncedVideoID uuid.UUID, state store.MatchState) {
 	t.Helper()
 
@@ -497,9 +496,16 @@ func TestMigration010_ScheduleEntryBackfill_DerivesStrategyDropsUngroundable(t *
 	require.NoError(t, s.Schedules().Approve(ctx, entry1.ID, creator.ID))
 
 	video1 := syncOneVideo(t, ctx, s, ch, "Groundable Video", ptrTime(time.Now().Add(-time.Hour)))
-	require.NoError(t, s.Matches().Record(ctx, store.VideoScheduleMatch{
-		SyncedVideoID: video1.ID, ScheduleEntryID: &entry1.ID, Confidence: 0.9, State: store.MatchStateConfirmed,
-	}))
+	// The schema is only migrated to 9 here (video_script_id doesn't exist
+	// yet, that's what migration 010 itself adds) -- MatchStore.Record, as
+	// of #1829, always writes video_script_id, so it cannot run against
+	// this pre-010 schema. Seed the row by SQL directly instead, exactly as
+	// a pre-010 matcher would have.
+	_, err = db.Pool.Exec(ctx, `
+		INSERT INTO video_schedule_match (synced_video_id, schedule_entry_id, confidence, state)
+		VALUES ($1, $2, $3, $4)
+	`, video1.ID, entry1.ID, 0.9, store.MatchStateConfirmed)
+	require.NoError(t, err)
 
 	// -- Ungroundable: verdict2 has no strategy_verdict row at all. --------
 	idea2, err := s.Ideas().Create(ctx, ch.ID, "Ungroundable Idea", creator.ID)
@@ -516,9 +522,11 @@ func TestMigration010_ScheduleEntryBackfill_DerivesStrategyDropsUngroundable(t *
 	require.NoError(t, s.Schedules().Approve(ctx, entry2.ID, creator.ID))
 
 	video2 := syncOneVideo(t, ctx, s, ch, "Ungroundable Video", ptrTime(time.Now().Add(-time.Hour)))
-	require.NoError(t, s.Matches().Record(ctx, store.VideoScheduleMatch{
-		SyncedVideoID: video2.ID, ScheduleEntryID: &entry2.ID, Confidence: 0.9, State: store.MatchStateConfirmed,
-	}))
+	_, err = db.Pool.Exec(ctx, `
+		INSERT INTO video_schedule_match (synced_video_id, schedule_entry_id, confidence, state)
+		VALUES ($1, $2, $3, $4)
+	`, video2.ID, entry2.ID, 0.9, store.MatchStateConfirmed)
+	require.NoError(t, err)
 
 	require.NoError(t, runner.Migrate(10), "apply 010, running the backfill")
 
