@@ -7,8 +7,7 @@
 // (../../store/calibration.go, already real from #1884), classified
 // against the Channel's CURRENT outcome bar (FR4). All three sit over
 // store.OutcomeBarStore (../../store/outcome_bar.go, already real from
-// #1882); get_calibration_trend is scaffolded, not yet implemented, here
-// -- see errCalibrationTrendToolNotImplemented.
+// #1882).
 //
 // No tool performs its own role check: server.RegisterWrite/RegisterRead
 // apply store.CanWrite/store.CanRead automatically to any input
@@ -35,16 +34,6 @@ import (
 	"github.com/whale-net/everything/audience_score_system/mcp/server"
 	"github.com/whale-net/everything/audience_score_system/store"
 )
-
-// errCalibrationTrendToolNotImplemented is returned by
-// getCalibrationTrendHandler until Implementation wires in the real
-// bars.GetByChannel / calibration.MonthlyTrend calls, mirroring the
-// scaffold/feat split set_outcome_bar's own mutate function followed in
-// #1883 (see that commit's errOutcomeBarToolNotImplemented, since
-// replaced by real logic and removed). Never wrapped into a store error --
-// this is scaffold-only, not a runtime condition a caller can hit through
-// the real stores.
-var errCalibrationTrendToolNotImplemented = errors.New("get_calibration_trend tool not implemented yet")
 
 // -- shared rendering ---------------------------------------------------------
 
@@ -281,19 +270,60 @@ func registerGetCalibrationTrend(reg *server.Registry, bars store.OutcomeBarStor
 	}, getCalibrationTrendHandler(bars, calibration))
 }
 
-// getCalibrationTrendHandler is scaffold-only: Implementation must (1)
-// call bars.GetByChannel, returning notConfiguredOutcomeBar() with an
-// empty, non-nil Buckets slice and Truncated=false on pgx.ErrNoRows
-// (FR6, nil error, and calibration.MonthlyTrend must never be called in
-// that branch); (2) otherwise default in.Limit to
-// defaultCalibrationTrendLimit when <= 0 and call
+// getCalibrationTrendHandler (1) calls bars.GetByChannel, returning
+// notConfiguredOutcomeBar() with an empty, non-nil Buckets slice and
+// Truncated=false on pgx.ErrNoRows (FR6, nil error --
+// calibration.MonthlyTrend is never called in that branch); (2) otherwise
+// defaults in.Limit to defaultCalibrationTrendLimit when <= 0 and calls
 // calibration.MonthlyTrend(ctx, channelID, bar, in.Since, in.Before,
-// limit); and (3) render rows in the store's returned order (chronological
-// -- never re-sort) into a non-nil []CalibrationBucketOutput, echoing the
+// limit); and (3) renders rows in the store's returned order (chronological
+// -- never re-sorted) into a non-nil []CalibrationBucketOutput, echoing the
 // bar classified against and passing truncated through unchanged (FR7).
 func getCalibrationTrendHandler(bars store.OutcomeBarStore, calibration store.CalibrationStore) mcp.ToolHandlerFor[GetCalibrationTrendInput, GetCalibrationTrendOutput] {
 	return func(ctx context.Context, _ *mcp.CallToolRequest, in GetCalibrationTrendInput) (*mcp.CallToolResult, GetCalibrationTrendOutput, error) {
-		return nil, GetCalibrationTrendOutput{}, errCalibrationTrendToolNotImplemented
+		channelID, err := uuid.Parse(in.ChannelID)
+		if err != nil {
+			return nil, GetCalibrationTrendOutput{}, err
+		}
+
+		bar, err := bars.GetByChannel(ctx, channelID)
+		if err != nil {
+			if errors.Is(err, pgx.ErrNoRows) {
+				return nil, GetCalibrationTrendOutput{
+					OutcomeBar: notConfiguredOutcomeBar(),
+					Buckets:    make([]CalibrationBucketOutput, 0),
+					Truncated:  false,
+				}, nil
+			}
+			return nil, GetCalibrationTrendOutput{}, err
+		}
+
+		limit := in.Limit
+		if limit <= 0 {
+			limit = defaultCalibrationTrendLimit
+		}
+
+		rows, truncated, err := calibration.MonthlyTrend(ctx, channelID, bar, in.Since, in.Before, limit)
+		if err != nil {
+			return nil, GetCalibrationTrendOutput{}, err
+		}
+
+		buckets := make([]CalibrationBucketOutput, 0, len(rows))
+		for _, r := range rows {
+			buckets = append(buckets, CalibrationBucketOutput{
+				BucketStart:     r.BucketStart.Format(time.RFC3339),
+				Candidates:      r.Candidates,
+				Calibrated:      r.Calibrated,
+				Miscalibrated:   r.Miscalibrated,
+				CalibrationRate: r.Rate,
+			})
+		}
+
+		return nil, GetCalibrationTrendOutput{
+			OutcomeBar: toOutcomeBarOutput(bar),
+			Buckets:    buckets,
+			Truncated:  truncated,
+		}, nil
 	}
 }
 
