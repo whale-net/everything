@@ -10,7 +10,9 @@
 // tables migration 013 dropped outright (issue #1835's retirement task);
 // plus outcome_bar (migration 014, .../014_outcome_bar.up.sql, issue
 // #1882), the per-Channel outcome bar's storage half (C14 / FR1 / FR2 /
-// NFR1).
+// NFR1); plus the calibration trend read (issue #1884, C14 / FR3 / FR4 /
+// FR5 / FR7), classifying browse.go's predictionOutcomeJoin against a
+// Channel's outcome_bar with no schema of its own.
 //
 // Store is the single entry point, built over //libs/go/db's
 // *pgxpool.Pool. Its Persons/Channels/Roles/Invites/Ideas/Research/
@@ -37,7 +39,8 @@ import "github.com/jackc/pgx/v5/pgxpool"
 // viability_verdict/verdict_citation/synced_video/video_metrics/
 // video_schedule_match/mcp_idempotency (migration 002; pacing_policy/
 // schedule_entry dropped by migration 013) plus video_script (migration
-// 010) and outcome_bar (migration 014).
+// 010), outcome_bar (migration 014), and the calibration trend read
+// (issue #1884) built over browse.go's predictionOutcomeJoin.
 type Store struct {
 	pool *pgxpool.Pool
 }
@@ -117,3 +120,10 @@ func (s *Store) VideoScripts() VideoScriptStore { return videoScriptStore{pool: 
 // which metric to classify against and its threshold. Performs no
 // authorization itself -- see OutcomeBarStore's doc comment.
 func (s *Store) OutcomeBars() OutcomeBarStore { return outcomeBarStore{pool: s.pool} }
+
+// Calibration returns the CalibrationStore implementation (issue #1884,
+// C14 / FR3 / FR4 / FR5 / FR7) -- the per-Channel outcome-bar calibration
+// trend: one calendar-month row of candidate / calibrated / miscalibrated
+// counts and rate, classified against a caller-supplied outcome_bar row.
+// Performs no authorization itself -- see CalibrationStore's doc comment.
+func (s *Store) Calibration() CalibrationStore { return calibrationStore{pool: s.pool} }
