@@ -57,6 +57,12 @@
 //     actors -- including the documented granted_by/revoked_by gap on a
 //     promotion's implicit revoke-half, issue #1787 -- and an Analyst is
 //     refused on both the MCP tool and the web page).
+//   - Channel isolation for video_script (milestone video-script-model,
+//     issue #1837) -- exercised here (step 12: C, who holds Co-Creator on
+//     Channel A only, cannot read or mutate Channel B's video_script
+//     through MCP or web; get_channel_overview and the web schedule list
+//     never leak a script across the Channel boundary, checked in both
+//     directions via F, who legitimately holds a role on both).
 //
 // Run it explicitly (requires a working Docker daemon):
 //
@@ -539,5 +545,79 @@ func TestE2E_M2_MultiChannelMultiTier(t *testing.T) {
 				assert.Equal(t, e.role, got[e.channelID], "%s on channel %s", name, e.channelID)
 			}
 		}
+	})
+
+	// ── Step 12: Channel isolation for video_script (issue #1837, milestone
+	// video-script-model) -- a person with a role on Channel A cannot read
+	// or mutate Channel B's video_scripts through either surface, and
+	// get_channel_overview / the web schedule list never leak a script
+	// across the Channel boundary. ─────────────────────────────────────────
+	t.Run("12_channel_isolation_video_scripts", func(t *testing.T) {
+		// A video_script that exists only on Channel B, proposed directly
+		// through the store (idea/verdict/strategy creation mechanics are
+		// not this step's own concern -- see citest/m2_1_video_script_test.go
+		// for that coverage) -- so isolation has something concrete to leak
+		// or not leak.
+		ideaB, err := w.st.Ideas().Create(ctx, chB.ID, "Channel B Only Script Idea", f.ID)
+		require.NoError(t, err)
+		verdictB, err := w.st.Verdicts().Append(ctx, store.AppendVerdictInput{
+			IdeaID: ideaB.ID, Verdict: store.VerdictViable, Reasoning: "viable on B", AuthorPersonID: f.ID,
+		})
+		require.NoError(t, err)
+		strategyB, err := w.st.Strategies().Save(ctx, store.SaveStrategyInput{
+			ChannelID: chB.ID, Title: "Channel B Strategy", Active: true,
+			VerdictIDs: []uuid.UUID{verdictB.ID}, CreatedByPersonID: f.ID,
+		})
+		require.NoError(t, err)
+		scriptB, err := w.st.VideoScripts().Propose(ctx, store.ProposeVideoScriptInput{
+			ChannelID: chB.ID, VerdictID: verdictB.ID, StrategyID: strategyB.ID,
+			Title: "Channel B Only Video", ScriptText: "b-only script text",
+			CreatedByPersonID: f.ID, IdempotencyKey: uuid.NewString(),
+		})
+		require.NoError(t, err)
+
+		// C holds Co-Creator on A only -- never any role on B. FR40's
+		// Channel-scope check must reject C reading or mutating B's script
+		// through either surface.
+		res := callTool(t, w.mcpConnect(c.ID), "deny_video_script", mcptools.DenyVideoScriptInput{
+			ChannelID: chB.ID.String(), VideoScriptID: scriptB.ID.String(), IdempotencyKeyArg: uuid.NewString(),
+		})
+		assert.True(t, res.IsError, "C must not mutate Channel B's video_script via MCP -- C holds no role there")
+
+		rec := w.postForm(cCookie, "/schedule/"+scriptB.ID.String()+"/deny", nil)
+		assert.Equal(t, http.StatusForbidden, rec.Code, "C must not mutate Channel B's video_script via web -- C holds no role there")
+
+		gotB, err := w.st.VideoScripts().GetByID(ctx, scriptB.ID)
+		require.NoError(t, err)
+		assert.Equal(t, store.VideoScriptStatusProposed, gotB.Status, "no state change from either rejected cross-Channel attempt")
+
+		overviewRes := callTool(t, w.mcpConnect(c.ID), "get_channel_overview", mcptools.GetChannelOverviewInput{ChannelID: chB.ID.String()})
+		assert.True(t, overviewRes.IsError, "C must not read Channel B's overview via MCP -- C holds no role there")
+
+		recList := w.get(cCookie, "/channels/"+chB.ID.String()+"/schedule")
+		assert.Equal(t, http.StatusForbidden, recList.Code, "C must not read Channel B's schedule page via web -- C holds no role there")
+
+		// The reverse direction never leaks either: F (legitimately on
+		// both Channels) never sees Channel A's script bleed into Channel
+		// B's overview, or vice versa.
+		overviewA := decode[mcptools.GetChannelOverviewOutput](t, callTool(t, w.mcpConnect(f.ID), "get_channel_overview", mcptools.GetChannelOverviewInput{ChannelID: chA.ID.String()}))
+		for _, vs := range overviewA.VideoScripts {
+			assert.NotEqual(t, scriptB.ID.String(), vs.VideoScriptID, "Channel A's overview must never include Channel B's video_script")
+		}
+		overviewB := decode[mcptools.GetChannelOverviewOutput](t, callTool(t, w.mcpConnect(f.ID), "get_channel_overview", mcptools.GetChannelOverviewInput{ChannelID: chB.ID.String()}))
+		var foundB bool
+		for _, vs := range overviewB.VideoScripts {
+			assert.NotEqual(t, scriptID.String(), vs.VideoScriptID, "Channel B's overview must never include Channel A's video_script")
+			if vs.VideoScriptID == scriptB.ID.String() {
+				foundB = true
+			}
+		}
+		assert.True(t, foundB, "Channel B's own script is genuinely visible on its own overview")
+
+		// The web schedule list agrees: F's page for B never renders A's
+		// script title, and vice versa.
+		bodyB := w.get(fCookie, "/channels/"+chB.ID.String()+"/schedule").Body.String()
+		assert.Contains(t, bodyB, "Channel B Only Video")
+		assert.NotContains(t, bodyB, "M2 Story Idea", "Channel B's schedule page must never render Channel A's video_script")
 	})
 }

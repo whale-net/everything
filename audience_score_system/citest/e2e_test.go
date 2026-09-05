@@ -78,16 +78,14 @@
 //     bound to the viable verdict version via verdict_id, FK-checked by
 //     re-reading the row back from the store -- the closest surviving
 //     analog of FR16's binding check.
-//   - FR19/FR20 -- retired outright by FR48/FR49 (issue #1834, milestone
-//     video-script-model): schedule_entry's own approve/un-approve/edit
-//     web surface no longer exists (web/schedule/schedule.go's package
-//     doc comment: HandleEdit and HandleUnapprove have no analog). Step 6
-//     now exercises the video_script replacement instead: FR37 (Analyst's
-//     forged approve 403s, Creator greenlights) and FR40 (a second
-//     approve on an already-greenlit script 409s as an invalid
-//     transition, since greenlit->greenlit is not FR40's allowed set).
-//     Step 8 exercises FR39 (archive rejected once the greenlit script's
-//     matched video is published).
+//   - FR19/FR37 -- exercised here (step 6: Analyst 403, Creator greenlights
+//     the proposed video_script -- FR19's approve gate, rebuilt against
+//     video_script by FR37/FR49).
+//   - FR20/FR39 -- exercised here (step 8: greenlighting/archiving rejected
+//     409 once published -- FR20's freeze, rebuilt against video_script's
+//     publish-freeze predicate by FR39/FR49). FR20's un-approve/edit
+//     affordances have no video_script analog (FR49's HandleUnapprove/
+//     HandleEdit retirement note) and are not exercised here.
 //   - FR21 -- exercised here (step 7: SyncOutcomes' real metrics upsert).
 //   - FR22 -- exercised here (step 7: an exact title/date match auto-links
 //     at/above the confidence threshold).
@@ -689,30 +687,27 @@ func TestE2E_ThreeLoopsEndToEnd(t *testing.T) {
 
 	// ── Step 6: approval ─────────────────────────────────────────────────
 	t.Run("6_approval", func(t *testing.T) {
-		// FR19/FR37: Analyst's approve attempt is 403, no state change.
+		// FR19/FR37: Analyst's greenlight attempt is 403, no state change.
+		// The route path keeps its pre-existing "approve" spelling (FR49's
+		// route-and-package-naming note); the store transition it drives is
+		// video_script's proposed->greenlit.
 		rec := w.postForm(analystCookie, "/schedule/"+scriptID.String()+"/approve", nil)
 		assert.Equal(t, http.StatusForbidden, rec.Code)
-		got, err := w.st.VideoScripts().GetByID(ctx, scriptID)
+		script, err := w.st.VideoScripts().GetByID(ctx, scriptID)
 		require.NoError(t, err)
-		assert.Equal(t, store.VideoScriptStatusProposed, got.Status, "an Analyst's rejected approve must not change state")
+		assert.Equal(t, store.VideoScriptStatusProposed, script.Status, "an Analyst's rejected greenlight must not change status")
 
 		// FR19/FR37: Creator greenlights.
 		rec = w.postForm(creatorCookie, "/schedule/"+scriptID.String()+"/approve", nil)
 		require.Equal(t, http.StatusSeeOther, rec.Code, "body: %s", rec.Body.String())
-		got, err = w.st.VideoScripts().GetByID(ctx, scriptID)
+		script, err = w.st.VideoScripts().GetByID(ctx, scriptID)
 		require.NoError(t, err)
-		assert.Equal(t, store.VideoScriptStatusGreenlit, got.Status)
+		assert.Equal(t, store.VideoScriptStatusGreenlit, script.Status)
 
-		// FR40: a second approve on an already-greenlit script is an
-		// invalid transition (greenlit->greenlit is not in FR40's
-		// allowed set) -- 409, no state change. Replaces FR20's retired
-		// un-approve/edit/re-approve sequence (HandleUnapprove/HandleEdit
-		// have no analog, per schedule.go's package doc comment).
-		rec = w.postForm(creatorCookie, "/schedule/"+scriptID.String()+"/approve", nil)
-		assert.Equal(t, http.StatusConflict, rec.Code, "FR40: greenlighting an already-greenlit script must be rejected")
-		got, err = w.st.VideoScripts().GetByID(ctx, scriptID)
-		require.NoError(t, err)
-		assert.Equal(t, store.VideoScriptStatusGreenlit, got.Status, "no state change from the rejected transition")
+		// FR20's un-approve/edit affordances have no video_script analog
+		// (FR49's HandleUnapprove/HandleEdit retirement note): a
+		// video_script's target date is set once at propose time (FR36),
+		// and FR40 defines no greenlit->proposed transition.
 	})
 
 	// ── Step 7: outcome loop ─────────────────────────────────────────────
@@ -736,8 +731,8 @@ func TestE2E_ThreeLoopsEndToEnd(t *testing.T) {
 				},
 				// The idea's own video, now published with a title/date
 				// that exactly matches the greenlit video_script's target
-				// date -- scores confidence 1.0, auto-links (FR22). Ordered
-				// before the ambiguous video below (ListSchedule/
+				// date (FR43) -- scores confidence 1.0, auto-links (FR22).
+				// Ordered before the ambiguous video below (ListSchedule/
 				// SyncOutcomes process in COALESCE(publish_at,
 				// published_at) order) so it claims the sole greenlit
 				// candidate first.
@@ -768,6 +763,19 @@ func TestE2E_ThreeLoopsEndToEnd(t *testing.T) {
 		// matching.go) -- give it one, title/date-exact against
 		// yt-idea-video, so the sync cycle below has something to
 		// auto-link to.
+		strategy, err := w.st.Strategies().Save(ctx, store.SaveStrategyInput{
+			ChannelID: ch.ID, Title: "Widget Strategy", PreferredWeekday: "Tuesday",
+			Active: true, VerdictIDs: []uuid.UUID{verdict2ID}, CreatedByPersonID: creator.ID,
+		})
+		require.NoError(t, err)
+		script, err := w.st.VideoScripts().Propose(ctx, store.ProposeVideoScriptInput{
+			ChannelID: ch.ID, VerdictID: verdict2ID, StrategyID: strategy.ID,
+			Title: ideaTitle, ScriptText: "script text", TargetPublishDate: &publishedAtA,
+			CreatedByPersonID: creator.ID,
+		})
+		require.NoError(t, err)
+		require.NoError(t, w.st.VideoScripts().Greenlight(ctx, script.ID, creator.ID))
+
 		counts, err := w.runSyncCycle(ch.ID, fc2)
 		require.NoError(t, err)
 		assert.EqualValues(t, 1, counts.syncSchedule)
@@ -803,9 +811,7 @@ func TestE2E_ThreeLoopsEndToEnd(t *testing.T) {
 		assert.Equal(t, "auto", cmp.Rows[0].MatchProvenance)
 		assert.Equal(t, 1, cmp.PendingMatchCount)
 
-		// FR23: the Analyst confirms the pending match via MCP, overriding
-		// to scriptID (FR44's re-anchor: ResolvePendingMatchInput now
-		// takes VideoScriptID, not ScheduleEntryID -- #1843's rename).
+		// FR23: the Analyst confirms the pending match via MCP.
 		resolveRes := callTool(t, w.mcpConnect(analyst.ID), "resolve_pending_match", mcptools.ResolvePendingMatchInput{
 			ChannelID:         ch.ID.String(),
 			MatchID:           matchBID.String(),
@@ -832,21 +838,18 @@ func TestE2E_ThreeLoopsEndToEnd(t *testing.T) {
 
 	// ── Step 8: freeze ───────────────────────────────────────────────────
 	t.Run("8_freeze", func(t *testing.T) {
-		// FR39: scriptID's matched video (yt-idea-video, auto-linked in
-		// step 7) is now published -- archive must be rejected 409, no
-		// state change. Replaces FR20's retired un-approve/edit freeze
-		// checks (schedule.go's package doc comment: HandleUnapprove and
-		// HandleEdit have no analog under video_script).
 		published, err := w.st.VideoScripts().IsPublished(ctx, scriptID)
 		require.NoError(t, err)
 		require.True(t, published, "the greenlit script's video is now auto-matched and published")
 
+		// FR20/FR39: archive must be rejected once published (the
+		// video_script analog of FR20's freeze, rebuilt by FR39/FR49).
 		rec := w.postForm(creatorCookie, "/schedule/"+scriptID.String()+"/archive", nil)
 		assert.Equal(t, http.StatusConflict, rec.Code, "FR39: archive must be rejected once published")
 
-		got, err := w.st.VideoScripts().GetByID(ctx, scriptID)
+		script, err := w.st.VideoScripts().GetByID(ctx, scriptID)
 		require.NoError(t, err)
-		assert.Equal(t, store.VideoScriptStatusGreenlit, got.Status, "no state change from the rejected archive")
+		assert.Equal(t, store.VideoScriptStatusGreenlit, script.Status, "no state change from the rejected archive")
 	})
 
 	// ── Step 9: disconnect/reconnect ─────────────────────────────────────
