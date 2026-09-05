@@ -203,9 +203,16 @@ func TestGetMyWork_ThreeChannelsThreeTiers_FourthChannelExcluded(t *testing.T) {
 	require.NoError(t, f.st.Sync().UpsertMetrics(ctx, []store.VideoMetrics{{
 		SyncedVideoID: syncedA[0].ID, Views: ptrInt64MW(1000), MeasuredAt: time.Now(),
 	}}))
-	require.NoError(t, f.st.Matches().Record(ctx, store.VideoScheduleMatch{
-		SyncedVideoID: syncedA[0].ID, ScheduleEntryID: &entryA.ID, Confidence: 0.8, State: store.MatchStateAuto,
-	}))
+	// MyWorkStore's outcome section (mywork.go) still joins
+	// video_schedule_match on schedule_entry_id (#1830's re-anchor onto
+	// video_script, not #1829's) -- seed it by direct SQL rather than
+	// through MatchStore.Record, which as of #1829 never writes
+	// schedule_entry_id (see Record's doc comment, store/match.go).
+	_, err = f.pg.Pool.Exec(ctx, `
+		INSERT INTO video_schedule_match (synced_video_id, schedule_entry_id, confidence, state)
+		VALUES ($1, $2, $3, $4)
+	`, syncedA[0].ID, entryA.ID, 0.8, store.MatchStateAuto)
+	require.NoError(t, err)
 
 	// Channel B: person is Co-Creator, granted by B's own Founder. No
 	// content -- proves an empty Channel still appears with zero-valued

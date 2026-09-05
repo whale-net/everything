@@ -252,9 +252,16 @@ func newFullChainFixture(t *testing.T) *fullChainFixture {
 		SyncedVideoID: video.ID, Views: ptrInt64B(500), MeasuredAt: time.Now(),
 	}}))
 
-	require.NoError(t, f.st.Matches().Record(ctx, store.VideoScheduleMatch{
-		SyncedVideoID: video.ID, ScheduleEntryID: &entry.ID, Confidence: 0.91, State: store.MatchStateAuto,
-	}))
+	// get_prediction_vs_outcome/get_channel_overview still join
+	// video_schedule_match on schedule_entry_id (#1830's re-anchor onto
+	// video_script, not #1829's) -- seed it by direct SQL rather than
+	// through MatchStore.Record, which as of #1829 never writes
+	// schedule_entry_id (see Record's doc comment, store/match.go).
+	_, err = f.pg.Pool.Exec(ctx, `
+		INSERT INTO video_schedule_match (synced_video_id, schedule_entry_id, confidence, state)
+		VALUES ($1, $2, $3, $4)
+	`, video.ID, entry.ID, 0.91, store.MatchStateAuto)
+	require.NoError(t, err)
 
 	return &fullChainFixture{
 		browseFixture: f, idea: idea, verdictV1: v1, verdictV2: v2, entry: entry, video: video, publishedAt: publishedAt,

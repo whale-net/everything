@@ -210,9 +210,16 @@ func (s *myWorkTestStack) setupMyWorkOutcomeChain(t *testing.T, ctx context.Cont
 		SyncedVideoID: video.ID, Views: &views, MeasuredAt: time.Now(),
 	}}))
 
-	require.NoError(t, s.store.Matches().Record(ctx, store.VideoScheduleMatch{
-		SyncedVideoID: video.ID, ScheduleEntryID: &entry.ID, Confidence: 0.9, State: store.MatchStateAuto,
-	}))
+	// MyWorkStore's outcome section (mywork.go) still joins
+	// video_schedule_match on schedule_entry_id (#1830's re-anchor onto
+	// video_script, not #1829's) -- seed it by direct SQL rather than
+	// through MatchStore.Record, which as of #1829 never writes
+	// schedule_entry_id (see Record's doc comment, store/match.go).
+	_, err = s.db.Pool.Exec(ctx, `
+		INSERT INTO video_schedule_match (synced_video_id, schedule_entry_id, confidence, state)
+		VALUES ($1, $2, $3, $4)
+	`, video.ID, entry.ID, 0.9, store.MatchStateAuto)
+	require.NoError(t, err)
 
 	return idea, v
 }
