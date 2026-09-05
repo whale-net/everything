@@ -251,16 +251,16 @@ func getPredictionVsOutcome(browse store.BrowseStore, matches store.MatchStore) 
 // Overview section names -- GetChannelOverviewInput.Sections values and
 // GetChannelOverviewOutput.Truncated entries both draw from this set.
 const (
-	overviewSectionIdeas    = "ideas"
-	overviewSectionNotes    = "research_notes"
-	overviewSectionSchedule = "schedule"
-	overviewSectionOutcomes = "prediction_vs_outcome"
+	overviewSectionIdeas        = "ideas"
+	overviewSectionNotes        = "research_notes"
+	overviewSectionVideoScripts = "video_scripts"
+	overviewSectionOutcomes     = "prediction_vs_outcome"
 )
 
 // allOverviewSections is every section resolveOverviewSections accepts, in
 // a stable order -- used both to build the "everything" default set and to
 // render an unknown-section error message.
-var allOverviewSections = []string{overviewSectionIdeas, overviewSectionNotes, overviewSectionSchedule, overviewSectionOutcomes}
+var allOverviewSections = []string{overviewSectionIdeas, overviewSectionNotes, overviewSectionVideoScripts, overviewSectionOutcomes}
 
 // Per-section default caps -- get_channel_overview's "bounded by
 // construction" contract (issue #1582's spec): an overview that dumps a
@@ -268,10 +268,10 @@ var allOverviewSections = []string{overviewSectionIdeas, overviewSectionNotes, o
 // so every section is capped, and the response says what was cut
 // (GetChannelOverviewOutput.Truncated) rather than silently shrinking.
 const (
-	defaultIdeasOverviewLimit    = 50
-	defaultNotesOverviewLimit    = 20
-	defaultScheduleOverviewLimit = 50
-	defaultOutcomesOverviewLimit = 20
+	defaultIdeasOverviewLimit        = 50
+	defaultNotesOverviewLimit        = 20
+	defaultVideoScriptsOverviewLimit = 50
+	defaultOutcomesOverviewLimit     = 20
 )
 
 // resolveOverviewSections turns requested (GetChannelOverviewInput.
@@ -310,17 +310,17 @@ type GetChannelOverviewInput struct {
 	ChannelID string `json:"channel_id" jsonschema:"Channel to read an overview of, as a UUID string"`
 	// Since/Before optionally bound research_notes (by created_at) and
 	// prediction_vs_outcome (by the video's published_at) -- ideas and
-	// schedule are unaffected, since an Idea or a schedule entry's
+	// video_scripts are unaffected, since an Idea or a video_script's
 	// relevance does not expire the way a note or an outcome's freshness
 	// does. Together they let a caller page backward past either
 	// section's fixed default limit (issue #1808): request the newest
 	// window, then re-request with before set to the oldest item's
 	// timestamp from the previous response.
-	Since  *time.Time `json:"since,omitempty" jsonschema:"Only include research notes and prediction-vs-outcome rows at/after this time; ideas and schedule entries are unaffected"`
-	Before *time.Time `json:"before,omitempty" jsonschema:"Only include research notes and prediction-vs-outcome rows strictly before this time -- pair with since to page backward past a section's default limit; ideas and schedule entries are unaffected"`
+	Since  *time.Time `json:"since,omitempty" jsonschema:"Only include research notes and prediction-vs-outcome rows at/after this time; ideas and video_scripts are unaffected"`
+	Before *time.Time `json:"before,omitempty" jsonschema:"Only include research notes and prediction-vs-outcome rows strictly before this time -- pair with since to page backward past a section's default limit; ideas and video_scripts are unaffected"`
 	// Sections restricts the response to a subset -- see
 	// allOverviewSections for the accepted names.
-	Sections []string `json:"sections,omitempty" jsonschema:"Restrict the response to these sections: ideas, research_notes, schedule, prediction_vs_outcome. Omit or leave empty for every section."`
+	Sections []string `json:"sections,omitempty" jsonschema:"Restrict the response to these sections: ideas, research_notes, video_scripts, prediction_vs_outcome. Omit or leave empty for every section."`
 }
 
 // ChannelScopeID implements server.ChannelScoped.
@@ -377,64 +377,30 @@ func toIdeaOverviewOutput(i store.IdeaOverview) IdeaOverviewOutput {
 	return out
 }
 
-// ScheduleEntryOverviewOutput is one schedule_entry (draft or committed),
-// as get_channel_overview's schedule section renders it -- the bound
-// verdict version (LB3), never the idea's current one, mirroring
-// store.ScheduleEntryDetail's own contract (schedule.go's
-// ListDetailByChannel).
-type ScheduleEntryOverviewOutput struct {
-	ScheduleEntryID   string    `json:"schedule_entry_id" jsonschema:"This schedule_entry's ID, as a UUID string"`
-	IdeaTitle         string    `json:"idea_title" jsonschema:"The bound Idea's title"`
-	State             string    `json:"state" jsonschema:"draft or committed"`
-	ProposedPublishAt time.Time `json:"proposed_publish_at" jsonschema:"The entry's proposed/committed publish time"`
-	VerdictVersion    int       `json:"verdict_version" jsonschema:"The verdict version this entry was scheduled under -- the bound version (LB3), not necessarily the Idea's current one"`
-	Verdict           string    `json:"verdict" jsonschema:"viable, not-viable, or needs-more-research, for the bound verdict version above"`
-	ApproverName      string    `json:"approver_name,omitempty" jsonschema:"Who committed (approved) this entry; empty for a draft"`
-	Published         bool      `json:"published" jsonschema:"True once a live match links this entry to an actually-published video (FR19/FR20)"`
-	PublishedVideoID  string    `json:"published_video_id,omitempty" jsonschema:"The YouTube video id that fulfilled this entry, if Published"`
+// VideoScriptOverviewOutput is one video_script, as get_channel_overview's
+// video_scripts section renders it (FR42): the script's own title, its
+// status, its target publish date (if set -- undated is normal, FR36),
+// and the bound verdict (version + value) -- the LB3-style bound version,
+// never the idea's current one, mirroring store.VideoScriptDetail's own
+// contract (video_script.go's ListDetailByChannel).
+type VideoScriptOverviewOutput struct {
+	VideoScriptID     string     `json:"video_script_id" jsonschema:"This video_script's ID, as a UUID string"`
+	Title             string     `json:"title" jsonschema:"The video script's own title"`
+	Status            string     `json:"status" jsonschema:"proposed, greenlit, denied, or archived (FR36-FR40)"`
+	TargetPublishDate *time.Time `json:"target_publish_date,omitempty" jsonschema:"The script's target publish date, if set; absent when undated -- undated is normal per FR36"`
+	VerdictVersion    int        `json:"verdict_version" jsonschema:"The verdict version this script was proposed under -- the bound version (LB3), not necessarily the Idea's current one"`
+	Verdict           string     `json:"verdict" jsonschema:"viable, not-viable, or needs-more-research, for the bound verdict version above"`
 }
 
-func toScheduleEntryOverviewOutput(d store.ScheduleEntryDetail) ScheduleEntryOverviewOutput {
-	return ScheduleEntryOverviewOutput{
-		ScheduleEntryID:   d.Entry.ID.String(),
-		IdeaTitle:         d.IdeaTitle,
-		State:             string(d.Entry.State),
-		ProposedPublishAt: d.Entry.ProposedPublishAt,
+func toVideoScriptOverviewOutput(d store.VideoScriptDetail) VideoScriptOverviewOutput {
+	return VideoScriptOverviewOutput{
+		VideoScriptID:     d.Script.ID.String(),
+		Title:             d.Script.Title,
+		Status:            string(d.Script.Status),
+		TargetPublishDate: d.Script.TargetPublishDate,
 		VerdictVersion:    d.VerdictVersion,
 		Verdict:           string(d.Verdict),
-		ApproverName:      d.ApproverName,
-		Published:         d.Published,
-		PublishedVideoID:  d.PublishedVideoID,
 	}
-}
-
-// SyncedScheduleSummaryOutput is a compact summary of the Channel's synced
-// YouTube schedule -- get_channel_schedule (#1576) is the tool for the
-// full per-video list; this is just enough for an agent to judge scale and
-// freshness in one overview call.
-type SyncedScheduleSummaryOutput struct {
-	TotalVideos     int        `json:"total_videos" jsonschema:"How many videos are on file for this Channel (synced_video row count)"`
-	ScheduledDrafts int        `json:"scheduled_drafts" jsonschema:"How many of those are still scheduled/private drafts, not yet published"`
-	Published       int        `json:"published" jsonschema:"How many of those have actually gone live"`
-	LastSyncedAt    *time.Time `json:"last_synced_at,omitempty" jsonschema:"The most recent last_synced_at across all synced videos -- a staleness proxy for the whole sync, null if no video has ever synced"`
-}
-
-// summarizeSyncedSchedule reduces vids to SyncedScheduleSummaryOutput.
-func summarizeSyncedSchedule(vids []store.SyncedVideo) SyncedScheduleSummaryOutput {
-	out := SyncedScheduleSummaryOutput{TotalVideos: len(vids)}
-	for _, v := range vids {
-		if v.IsScheduledDraft {
-			out.ScheduledDrafts++
-		}
-		if v.PublishedAt != nil {
-			out.Published++
-		}
-		if out.LastSyncedAt == nil || v.LastSyncedAt.After(*out.LastSyncedAt) {
-			lastSynced := v.LastSyncedAt
-			out.LastSyncedAt = &lastSynced
-		}
-	}
-	return out
 }
 
 // filterNotesRange returns the subset of notes created at/after since (nil
@@ -467,8 +433,7 @@ type GetChannelOverviewOutput struct {
 	Channel             ChannelIdentityOutput          `json:"channel"`
 	Ideas               []IdeaOverviewOutput           `json:"ideas" jsonschema:"Ideas on this Channel with their current verdict, most-recently-created first"`
 	ResearchNotes       []ResearchNoteOutput           `json:"research_notes" jsonschema:"Recent research notes, most-recent first, each carrying the explicit cited boolean (FR10)"`
-	ScheduleEntries     []ScheduleEntryOverviewOutput  `json:"schedule_entries" jsonschema:"Schedule drafts and committed entries, each with its bound verdict version (LB3)"`
-	SyncedSchedule      SyncedScheduleSummaryOutput    `json:"synced_schedule" jsonschema:"A compact summary of the Channel's synced YouTube schedule -- call get_channel_schedule for the full per-video list"`
+	VideoScripts        []VideoScriptOverviewOutput    `json:"video_scripts" jsonschema:"This Channel's video scripts, each with its title, status, target publish date if set, and bound verdict version (LB3, FR42)"`
 	PendingMatchCount   int                            `json:"pending_match_count" jsonschema:"Videos on this Channel awaiting human match resolution -- call list_pending_matches to resolve them"`
 	PredictionVsOutcome []PredictionVsOutcomeRowOutput `json:"prediction_vs_outcome" jsonschema:"Recent prediction-vs-outcome comparisons -- call get_prediction_vs_outcome for the full, independently-boundable read"`
 	Truncated           []string                       `json:"truncated" jsonschema:"Section names whose result was capped at its documented default limit; empty if nothing was cut"`
@@ -476,12 +441,11 @@ type GetChannelOverviewOutput struct {
 
 // overviewDeps bundles the read-only stores get_channel_overview needs.
 type overviewDeps struct {
-	channels  store.ChannelStore
-	research  store.ResearchStore
-	schedules store.ScheduleStore
-	sync      store.SyncStore
-	matches   store.MatchStore
-	browse    store.BrowseStore
+	channels     store.ChannelStore
+	research     store.ResearchStore
+	videoScripts store.VideoScriptStore
+	matches      store.MatchStore
+	browse       store.BrowseStore
 }
 
 // registerGetChannelOverview registers get_channel_overview via
@@ -490,10 +454,10 @@ type overviewDeps struct {
 func registerGetChannelOverview(reg *server.Registry, deps overviewDeps) {
 	server.RegisterRead(reg, &mcp.Tool{
 		Name: "get_channel_overview",
-		Description: "Read a Channel's full C10 browsing context in one call: identity + connection_state (so a stale " +
-			"schedule can be explained by needs_reauth), Ideas with their current verdict, recent research notes " +
-			"(cited/uncited, FR10), schedule drafts and committed entries with their bound verdict version, a synced-" +
-			"schedule summary, the pending-match count, and recent prediction-vs-outcome rows. Every section is " +
+		Description: "Read a Channel's full C10 browsing context in one call: identity + connection_state (needs_reauth " +
+			"explains a stale YouTube sync), Ideas with their current verdict, recent research notes " +
+			"(cited/uncited, FR10), video scripts with their title/status/target publish date/bound verdict version " +
+			"(FR42), the pending-match count, and recent prediction-vs-outcome rows. Every section is " +
 			"capped at a documented default and the response's truncated field says which ones were cut -- this tool " +
 			"will never dump a Channel's entire history even if asked, since no MCP client's context window can hold " +
 			"it. Optionally restrict to a subset via sections, and/or bound research_notes/prediction_vs_outcome by " +
@@ -526,7 +490,7 @@ func getChannelOverview(deps overviewDeps) mcp.ToolHandlerFor[GetChannelOverview
 			},
 			Ideas:               []IdeaOverviewOutput{},
 			ResearchNotes:       []ResearchNoteOutput{},
-			ScheduleEntries:     []ScheduleEntryOverviewOutput{},
+			VideoScripts:        []VideoScriptOverviewOutput{},
 			PredictionVsOutcome: []PredictionVsOutcomeRowOutput{},
 			Truncated:           []string{},
 		}
@@ -566,25 +530,22 @@ func getChannelOverview(deps overviewDeps) mcp.ToolHandlerFor[GetChannelOverview
 			}
 		}
 
-		if wantSections[overviewSectionSchedule] {
-			entries, truncated, err := deps.schedules.ListDetailByChannel(ctx, channelID, defaultScheduleOverviewLimit)
+		if wantSections[overviewSectionVideoScripts] {
+			// VideoScriptStore.ListDetailByChannel is unbounded (unlike
+			// ScheduleStore.ListDetailByChannel, it takes no limit) --
+			// truncateSlice caps it here so this section's "bounded by
+			// construction" contract holds regardless.
+			details, err := deps.videoScripts.ListDetailByChannel(ctx, channelID)
 			if err != nil {
-				return nil, GetChannelOverviewOutput{}, fmt.Errorf("get_channel_overview: list schedule: %w", err)
+				return nil, GetChannelOverviewOutput{}, fmt.Errorf("get_channel_overview: list video scripts: %w", err)
 			}
+			details, truncated := truncateSlice(details, defaultVideoScriptsOverviewLimit)
 			if truncated {
-				out.Truncated = append(out.Truncated, overviewSectionSchedule)
+				out.Truncated = append(out.Truncated, overviewSectionVideoScripts)
 			}
-			for _, e := range entries {
-				out.ScheduleEntries = append(out.ScheduleEntries, toScheduleEntryOverviewOutput(e))
+			for _, d := range details {
+				out.VideoScripts = append(out.VideoScripts, toVideoScriptOverviewOutput(d))
 			}
-
-			// Unbounded: TotalVideos/ScheduledDrafts/Published/LastSyncedAt
-			// must reflect every synced_video row, not a capped page.
-			vids, _, err := deps.sync.ListSchedule(ctx, channelID, nil, nil, true, 0)
-			if err != nil {
-				return nil, GetChannelOverviewOutput{}, fmt.Errorf("get_channel_overview: list synced schedule: %w", err)
-			}
-			out.SyncedSchedule = summarizeSyncedSchedule(vids)
 		}
 
 		if wantSections[overviewSectionOutcomes] {
@@ -608,15 +569,14 @@ func getChannelOverview(deps overviewDeps) mcp.ToolHandlerFor[GetChannelOverview
 
 // RegisterBrowse registers get_channel_overview and get_prediction_vs_outcome
 // against reg (see ../server/registry.go), backed by st's
-// ChannelStore/ResearchStore/ScheduleStore/SyncStore/MatchStore/BrowseStore.
+// ChannelStore/ResearchStore/VideoScriptStore/MatchStore/BrowseStore.
 func RegisterBrowse(reg *server.Registry, st *store.Store) {
 	registerGetChannelOverview(reg, overviewDeps{
-		channels:  st.Channels(),
-		research:  st.Research(),
-		schedules: st.Schedules(),
-		sync:      st.Sync(),
-		matches:   st.Matches(),
-		browse:    st.Browse(),
+		channels:     st.Channels(),
+		research:     st.Research(),
+		videoScripts: st.VideoScripts(),
+		matches:      st.Matches(),
+		browse:       st.Browse(),
 	})
 	registerGetPredictionVsOutcome(reg, st.Browse(), st.Matches())
 }
