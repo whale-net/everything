@@ -1725,9 +1725,10 @@ func ptrInt64(v int64) *int64        { return &v }
 // #1823/#1824), again for 011 (strategy.cadence drop, FR47, #1833), again
 // for 012 (v_prediction_vs_outcome's re-anchor onto video_script, FR44,
 // #1830), again for 013 (pacing_policy/schedule_entry drop, FR41/
-// FR45, #1835), and again for 014 (outcome_bar, C14/FR1/FR2/NFR1, #1882),
-// so the version assertion and table list below cover all of them rather
-// than any single one.
+// FR45, #1835), again for 014 (outcome_bar, C14/FR1/FR2/NFR1, #1882), and
+// again for 015 (viability_verdict.source, M4.1 FR5/NFR4, #1898), so the
+// version assertion and table list below cover all of them rather than
+// any single one.
 func TestMigrations_UpDownUp_LeavesNoOrphanObjects(t *testing.T) {
 	ctx := context.Background()
 	db := dbtest.NewPostgres(ctx, t, dbtest.Options{})
@@ -1744,7 +1745,7 @@ func TestMigrations_UpDownUp_LeavesNoOrphanObjects(t *testing.T) {
 	version, dirty, err := runner.Version()
 	require.NoError(t, err)
 	assert.False(t, dirty)
-	assert.Equal(t, uint(14), version, "highest migration in schema.Migrations is 014_outcome_bar")
+	assert.Equal(t, uint(15), version, "highest migration in schema.Migrations is 015_verdict_source")
 
 	for _, tbl := range []string{
 		"person", "channel", "channel_person", "channel_invite",
@@ -2138,13 +2139,22 @@ func TestMigration011_DropStrategyCadence_UpDropsColumn_DownBackfillsDefault(t *
 	ch, creator := setupChannel(t, ctx, s)
 	idea, err := s.Ideas().Create(ctx, ch.ID, "Migration 011 Idea", creator.ID)
 	require.NoError(t, err)
-	verdict, err := s.Verdicts().Append(ctx, store.AppendVerdictInput{
-		IdeaID: idea.ID, Verdict: store.VerdictViable, Reasoning: "viable for migration 011 test", AuthorPersonID: creator.ID,
-	})
-	require.NoError(t, err)
+	// The schema is only migrated to 11 here -- viability_verdict.source
+	// doesn't exist yet (that's migration 015) -- VerdictStore.Append, as
+	// of #1898, always writes it, so it cannot run against this pre-015
+	// schema. Seed the row by SQL directly instead, exactly as a pre-015
+	// caller would have, mirroring video_script_integration_test.go's
+	// pre-010 seeds for the same reason (a current store method that can't
+	// write a historical schema shape).
+	var verdictID uuid.UUID
+	require.NoError(t, db.Pool.QueryRow(ctx, `
+		INSERT INTO viability_verdict (idea_id, version, verdict, reasoning, author_person_id)
+		VALUES ($1, 1, $2, $3, $4)
+		RETURNING id
+	`, idea.ID, store.VerdictViable, "viable for migration 011 test", creator.ID).Scan(&verdictID))
 	saved, err := s.Strategies().Save(ctx, store.SaveStrategyInput{
 		ChannelID: ch.ID, Title: "Pre-down Strategy", Active: true,
-		VerdictIDs: []uuid.UUID{verdict.ID}, CreatedByPersonID: creator.ID,
+		VerdictIDs: []uuid.UUID{verdictID}, CreatedByPersonID: creator.ID,
 	})
 	require.NoError(t, err)
 
