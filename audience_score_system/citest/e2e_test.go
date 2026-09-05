@@ -787,16 +787,6 @@ func TestE2E_ThreeLoopsEndToEnd(t *testing.T) {
 		require.NoError(t, err)
 		require.True(t, hasMatch, "FR22: the exact title/date match must auto-link")
 
-		// get_prediction_vs_outcome (store.BrowseStore.PredictionVsOutcome)
-		// still joins video_schedule_match on schedule_entry_id, not
-		// video_script_id -- re-anchoring that join is #1830's job, not
-		// #1829's (see store/match.go's Record doc comment). Backfill it
-		// directly by SQL so this milestone test's existing FR24 assertion
-		// below keeps proving the comparison surfaces an auto-linked video,
-		// exactly as it did before #1829.
-		_, err = w.pg.Pool.Exec(ctx, `UPDATE video_schedule_match SET schedule_entry_id = $1 WHERE synced_video_id = $2`, entryID, videoA.ID)
-		require.NoError(t, err)
-
 		videoB, err := w.st.Sync().GetByID(ctx, mustSyncedVideoID(t, ctx, w.st, ch.ID, "yt-ambiguous"))
 		require.NoError(t, err)
 
