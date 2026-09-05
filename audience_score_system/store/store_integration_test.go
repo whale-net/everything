@@ -989,6 +989,179 @@ func TestResearchStore_SaveNote_UncitedAndCitedRoundTripDistinctly(t *testing.T)
 	assert.Equal(t, url, *byID[cited.ID].SourceURL, "the read model must distinguish the cited note")
 }
 
+// countResearchNotes returns the number of research_note rows for channelID
+// -- used by the SaveNote validation-failure tests below to prove a
+// rejected source_url leaves no row behind (FR12: validation runs ahead of
+// the INSERT, not after a failed one).
+func countResearchNotes(t *testing.T, ctx context.Context, db *dbtest.Postgres, channelID uuid.UUID) int {
+	t.Helper()
+	var count int
+	require.NoError(t, db.Pool.QueryRow(ctx, `SELECT count(*) FROM research_note WHERE channel_id = $1`, channelID).Scan(&count))
+	return count
+}
+
+// TestResearchStore_SaveNote_ValidHTTPOrHTTPSURLPersistsTrimmedAndCited
+// proves FR12's move of validateSourceURL into SaveNote still accepts a
+// well-formed absolute http(s) URL, trims it, and makes Cited() true --
+// the same acceptance behavior mcp/tools' now-deleted
+// TestValidateSourceURL_WellFormedAbsoluteHTTPOrHTTPSIsAccepted covered
+// before the move (issue #1897).
+func TestResearchStore_SaveNote_ValidHTTPOrHTTPSURLPersistsTrimmedAndCited(t *testing.T) {
+	ctx := context.Background()
+	s, _ := newStore(t)
+	ch, creator := setupChannel(t, ctx, s)
+
+	cases := []struct {
+		name string
+		raw  string
+		want string
+	}{
+		{"https, no surrounding whitespace", "https://example.com/video?x=1", "https://example.com/video?x=1"},
+		{"http accepted", "http://example.com/video", "http://example.com/video"},
+		{"surrounding whitespace trimmed", "  https://example.com/video  ", "https://example.com/video"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			raw := tc.raw
+			note, err := s.Research().SaveNote(ctx, store.SaveNoteInput{
+				ChannelID: ch.ID, Text: "note: " + tc.name, SourceURL: &raw, AuthorPersonID: creator.ID,
+			})
+			require.NoError(t, err)
+			require.NotNil(t, note.SourceURL)
+			assert.Equal(t, tc.want, *note.SourceURL)
+			assert.True(t, note.Cited(), "a note with a non-nil SourceURL must report Cited() true (FR10/FR12)")
+		})
+	}
+}
+
+// TestResearchStore_SaveNote_NilOrBlankSourceURLPersistsAsNullUncited
+// proves nil, "", and whitespace-only all normalize to SQL NULL and
+// Cited() false -- the same coercion mcp/tools' now-deleted
+// TestValidateSourceURL_AbsentOrBlankIsNilNeverEmptyString covered before
+// the move (issue #1897).
+func TestResearchStore_SaveNote_NilOrBlankSourceURLPersistsAsNullUncited(t *testing.T) {
+	ctx := context.Background()
+	s, _ := newStore(t)
+	ch, creator := setupChannel(t, ctx, s)
+
+	blank := ""
+	whitespace := "   "
+	cases := []struct {
+		name string
+		in   *string
+	}{
+		{"nil SourceURL", nil},
+		{"empty string", &blank},
+		{"whitespace only", &whitespace},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			note, err := s.Research().SaveNote(ctx, store.SaveNoteInput{
+				ChannelID: ch.ID, Text: "note: " + tc.name, SourceURL: tc.in, AuthorPersonID: creator.ID,
+			})
+			require.NoError(t, err)
+			assert.Nil(t, note.SourceURL, "an absent/blank source_url must persist as SQL NULL (nil), never a pointer to an empty string (FR10)")
+			assert.False(t, note.Cited())
+		})
+	}
+}
+
+// TestResearchStore_SaveNote_InvalidSourceURLErrorsAndInsertsNoRow proves
+// SaveNote rejects malformed/non-http(s) source_url values and, critically,
+// leaves the row count for the channel unchanged -- validation runs ahead
+// of the INSERT (FR12), not as a check the caller must remember to run
+// itself. Covers the same rejection set as mcp/tools' now-deleted
+// TestValidateSourceURL_RejectsMalformedOrNonHTTPSchemes plus the
+// scope-only/hostless case called out in the issue's Testing section
+// (issue #1897).
+func TestResearchStore_SaveNote_InvalidSourceURLErrorsAndInsertsNoRow(t *testing.T) {
+	ctx := context.Background()
+	s, db := newStore(t)
+	ch, creator := setupChannel(t, ctx, s)
+
+	cases := []string{
+		"not a url",
+		"javascript:alert(1)",
+		"/relative/path",
+		"http://", // absolute scheme, no host
+	}
+	for _, raw := range cases {
+		t.Run(raw, func(t *testing.T) {
+			before := countResearchNotes(t, ctx, db, ch.ID)
+
+			raw := raw
+			_, err := s.Research().SaveNote(ctx, store.SaveNoteInput{
+				ChannelID: ch.ID, Text: "rejected note", SourceURL: &raw, AuthorPersonID: creator.ID,
+			})
+			assert.Error(t, err, "must reject %q rather than silently storing it as a cited source", raw)
+
+			after := countResearchNotes(t, ctx, db, ch.ID)
+			assert.Equal(t, before, after, "a rejected source_url must not insert a row")
+		})
+	}
+}
+
+// TestResearchStore_SaveNote_IdempotentReplayWithValidURLReturnsOriginalRow
+// locks in that FR12's move of validation ahead of the idempotency lookup
+// (research.go's SaveNote doc comment) does not regress the existing
+// idempotency behavior for the common case: a replayed (channel, author,
+// key) triple with a still-valid source_url returns the original row
+// rather than creating a duplicate (NFR2).
+func TestResearchStore_SaveNote_IdempotentReplayWithValidURLReturnsOriginalRow(t *testing.T) {
+	ctx := context.Background()
+	s, db := newStore(t)
+	ch, creator := setupChannel(t, ctx, s)
+
+	url := "https://example.com/first"
+	key := "idem-" + uuid.NewString()
+	first, err := s.Research().SaveNote(ctx, store.SaveNoteInput{
+		ChannelID: ch.ID, Text: "first text", SourceURL: &url, AuthorPersonID: creator.ID, IdempotencyKey: key,
+	})
+	require.NoError(t, err)
+
+	replayed, err := s.Research().SaveNote(ctx, store.SaveNoteInput{
+		ChannelID: ch.ID, Text: "different text, must be ignored", SourceURL: &url, AuthorPersonID: creator.ID, IdempotencyKey: key,
+	})
+	require.NoError(t, err)
+	assert.Equal(t, first.ID, replayed.ID, "a replayed idempotency key must short-circuit to the original row")
+	assert.Equal(t, first.Text, replayed.Text, "the replay must return the original row's fields unchanged, not the replay's payload")
+
+	count := countResearchNotes(t, ctx, db, ch.ID)
+	assert.Equal(t, 1, count, "a replay must not create a second row")
+}
+
+// TestResearchStore_SaveNote_IdempotentReplayWithInvalidURLErrors locks in
+// the ordering choice research.go's SaveNote doc comment calls out
+// explicitly: validation runs before the idempotency short-circuit, so a
+// replay carrying an invalid source_url errors rather than silently
+// returning the original row. This is the regression guard for that
+// specific ordering (issue #1897's Testing section).
+func TestResearchStore_SaveNote_IdempotentReplayWithInvalidURLErrors(t *testing.T) {
+	ctx := context.Background()
+	s, _ := newStore(t)
+	ch, creator := setupChannel(t, ctx, s)
+
+	url := "https://example.com/first"
+	key := "idem-" + uuid.NewString()
+	first, err := s.Research().SaveNote(ctx, store.SaveNoteInput{
+		ChannelID: ch.ID, Text: "first text", SourceURL: &url, AuthorPersonID: creator.ID, IdempotencyKey: key,
+	})
+	require.NoError(t, err)
+
+	invalid := "not a url"
+	_, err = s.Research().SaveNote(ctx, store.SaveNoteInput{
+		ChannelID: ch.ID, Text: "replay with bad url", SourceURL: &invalid, AuthorPersonID: creator.ID, IdempotencyKey: key,
+	})
+	require.Error(t, err, "a replay carrying an invalid source_url must error, not silently return the original row")
+
+	// The original row must remain exactly as first saved it.
+	got, err := s.Research().GetByID(ctx, first.ID)
+	require.NoError(t, err)
+	assert.Equal(t, first.Text, got.Text)
+	require.NotNil(t, got.SourceURL)
+	assert.Equal(t, url, *got.SourceURL)
+}
+
 // ── SyncStore (FR14/FR21) ────────────────────────────────────────────────────
 
 func TestSyncStore_UpsertVideos_SameYouTubeIDUpdatesNotDuplicates(t *testing.T) {
