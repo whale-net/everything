@@ -36,7 +36,7 @@ This is a convenience wrapper, not a new mechanic: it doesn't touch GitHub state
    If the report shows tasks still blocked (not `Done`, not just waiting on a dependency that will clear next pass), surface that to the user and stop the loop — a stuck task issue is a condition for a human, not something to keep looping past.
 
 4. **Validate phase (subagent).** Dispatch a fresh `general-purpose` subagent: invoke `Skill` with `skill: "project-manager:validate"`, `args: "<n>"`, let it run to completion, then report back *only*:
-   - **On a clean pass:** the finalized `<plan-branches>` (branch → PR number/URL, now merged) and the PR number `validate` ran `gh stack merge` on.
+   - **On a clean pass:** the finalized `<plan-branches>` (branch → PR number/URL, all now merged — most likely already landed individually during `implement`'s own continuous merge, with `validate` only needing to close out whatever was left).
    - **On findings:** the new follow-up task issue numbers `validate` had `planner` create in `Scaffold`/`Implementation`.
 
 5. **Loop control.**
