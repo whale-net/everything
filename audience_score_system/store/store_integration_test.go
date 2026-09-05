@@ -1409,9 +1409,10 @@ func ptrInt64(v int64) *int64        { return &v }
 // (video_script + video_schedule_match.video_script_id, issues
 // #1823/#1824), again for 011 (strategy.cadence drop, FR47, #1833), again
 // for 012 (v_prediction_vs_outcome's re-anchor onto video_script, FR44,
-// #1830), and again for 013 (pacing_policy/schedule_entry drop, FR41/
-// FR45, #1835), so the version assertion and table list below cover all
-// of them rather than any single one.
+// #1830), again for 013 (pacing_policy/schedule_entry drop, FR41/
+// FR45, #1835), and again for 014 (outcome_bar, C14/FR1/FR2/NFR1, #1882),
+// so the version assertion and table list below cover all of them rather
+// than any single one.
 func TestMigrations_UpDownUp_LeavesNoOrphanObjects(t *testing.T) {
 	ctx := context.Background()
 	db := dbtest.NewPostgres(ctx, t, dbtest.Options{})
@@ -1428,7 +1429,7 @@ func TestMigrations_UpDownUp_LeavesNoOrphanObjects(t *testing.T) {
 	version, dirty, err := runner.Version()
 	require.NoError(t, err)
 	assert.False(t, dirty)
-	assert.Equal(t, uint(13), version, "highest migration in schema.Migrations is 013_retire_schedule_entry")
+	assert.Equal(t, uint(14), version, "highest migration in schema.Migrations is 014_outcome_bar")
 
 	for _, tbl := range []string{
 		"person", "channel", "channel_person", "channel_invite",
@@ -1442,6 +1443,7 @@ func TestMigrations_UpDownUp_LeavesNoOrphanObjects(t *testing.T) {
 		"mcp_auth_code",
 		"strategy", "strategy_verdict",
 		"video_script",
+		"outcome_bar",
 	} {
 		var exists bool
 		require.NoError(t, db.Pool.QueryRow(ctx,
