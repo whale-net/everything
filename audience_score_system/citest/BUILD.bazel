@@ -27,6 +27,7 @@ go_test(
         "e2e_test.go",
         "m2_1_video_script_test.go",
         "m2_multi_channel_test.go",
+        "m3_calibration_test.go",
     ],
     gotags = ["integration"],
     tags = [

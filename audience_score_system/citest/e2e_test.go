@@ -245,6 +245,7 @@ func newWorld(t *testing.T) *world {
 	mcptools.RegisterAccess(reg, st)
 	mcptools.RegisterMyWork(reg, st.MyWork())
 	mcptools.RegisterChannelAccess(reg, st.Access(), st.Roles())
+	mcptools.RegisterOutcomeBar(reg, st.OutcomeBars(), st.Calibration())
 	mcpHandler := mcpserver.NewHTTPHandler(srv, creds, mcpserver.ResourceMetadataConfig{
 		Resource:            "https://mcp.example.com",
 		AuthorizationServer: "https://web.example.com",
