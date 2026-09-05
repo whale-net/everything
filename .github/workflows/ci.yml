@@ -284,6 +284,12 @@ jobs:
   # Targets are discovered by querying for tests that depend on //libs/go/dbtest,
   # rather than hardcoding a list, so a new dbtest-backed test is covered the
   # moment it is written. Runs in parallel with the test jobs above.
+  #
+  # On pull_request, this is further narrowed to only the targets affected by
+  # the diff against main (release_helper's `changed-targets`), since this
+  # suite is slow and most PRs never touch database code. Every push here is
+  # to main (see this workflow's `push.branches` filter above), and always
+  # runs the full discovered set.
   test-database:
     name: Test Database Integration
     runs-on: ubuntu-latest
@@ -315,21 +321,55 @@ jobs:
         # Uses --config=ci (defined in .bazelrc with --noimplicit_deps) and
         # --universe_scope to accelerate target discovery.
         SCOPE='//libs/... + //tools/... + //manmanv2/... + //audience_score_system/...'
-        TARGETS=$(bazel query \
+        CANDIDATES="tests($SCOPE) intersect rdeps($SCOPE, //libs/go/dbtest:dbtest)"
+        ALL_TARGETS=$(bazel query \
           --config=ci \
           --universe_scope=//... \
-          "tests($SCOPE) intersect rdeps($SCOPE, //libs/go/dbtest:dbtest)" \
+          "$CANDIDATES" \
           | tr '\n' ' ')
-        echo "Targets: ${TARGETS:-<none>}"
+        echo "All dbtest-backed targets: ${ALL_TARGETS:-<none>}"
         echo "::endgroup::"
 
         # An empty result means the query broke, not that there is no work:
         # //libs/go/dbtest:postgres_constraints_test always matches. Failing
         # here is the point — a silently-empty run would report this job green
         # while testing nothing.
-        if [ -z "${TARGETS// /}" ]; then
+        if [ -z "${ALL_TARGETS// /}" ]; then
           echo "::error::No dbtest-backed test targets found. The discovery query is broken - it should always match at least //libs/go/dbtest:postgres_constraints_test."
           exit 1
+        fi
+
+        TARGETS="$ALL_TARGETS"
+
+        # This suite is slow, so PRs only re-run targets actually affected by
+        # the diff; main always runs the full suite (every push here is to
+        # main -- see this workflow's top-level `push.branches` filter).
+        #
+        # Always diffs straight against main's own current tip via the
+        # release tool's changed-targets command (same underlying git-diff
+        # machinery release_helper already uses for release-app change
+        # detection -- see docs/RELEASE.md "Reusing Change Detection for
+        # Non-Release Target Pools"), never the PR's declared base branch and
+        # never a merge-base: a stacked PR's base is another feature branch,
+        # not main, and a stacked branch carries every earlier level's
+        # commits too, so a direct two-dot diff against main is what captures
+        # this PR's full cumulative effect.
+        if [ "${{ github.event_name }}" = "pull_request" ]; then
+          echo "::group::Filtering to targets affected since main"
+          git fetch --no-tags origin main
+          MAIN_SHA=$(git rev-parse FETCH_HEAD)
+          echo "Diffing against main's tip ($MAIN_SHA)"
+          TARGETS=$(bazel run --config=ci //tools:release -- changed-targets \
+            --base-commit="$MAIN_SHA" \
+            --candidates="$CANDIDATES" \
+            | tr '\n' ' ')
+          echo "Affected targets: ${TARGETS:-<none>}"
+          echo "::endgroup::"
+        fi
+
+        if [ -z "${TARGETS// /}" ]; then
+          echo "No dbtest-backed targets affected by this change; skipping."
+          exit 0
         fi
 
         echo "::group::Database Integration Tests"
