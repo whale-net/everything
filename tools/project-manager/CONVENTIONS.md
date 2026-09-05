@@ -327,6 +327,13 @@ Tasks move across swimlanes operated by specialized personas:
 
 Tasks that do not need certain swimlanes (e.g. docs-only tasks or pure refactors) start at or skip to the appropriate swimlane.
 
+### Task granularity & stack size
+
+Each task issue becomes one branch and one PR in the plan's `gh stack` (§ Git hygiene) — task count *is* stack depth. Two mechanisms keep a stack reviewable, in order of importance:
+
+1. **Group by cohesive deliverable, not by phase or file.** A task issue already spans all four swimlanes (scaffold → implementation → testing → validation) for one unit of work — splitting further per-phase or per-file inflates count without adding review value. Group into vertical slices (e.g. one schema + its handler + its tests as a single task), not one issue per file or per CRUD operation.
+2. **Target ~5 task issues per plan, 8 as a hard cap.** This is a backstop, not the primary control — a plan under 8 tasks that each bundle unrelated work is worse than one slightly over. If grouping by cohesive deliverable still leaves more than 8, the root plan is too large for one stack: recommend splitting it into two root plans (same domain) or routing the excess through `/project-manager:product` if it now spans a new domain-sized subsystem — same escape hatch as § Scope control at milestone-design time and § When a milestone re-balloons above. The fix for oversized scope is always to split upstream, never to silently cram it into one stack.
+
 ### Creating task issues
 
 Planner creates one Issue per unit of work with clear criteria across all relevant phases:
