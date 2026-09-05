@@ -150,7 +150,7 @@ func newVideoScriptFixture(t *testing.T) *videoScriptFixture {
 	require.NoError(t, err)
 
 	strategy, err := st.Strategies().Save(ctx, store.SaveStrategyInput{
-		ChannelID: ch.ID, Title: "Video Script Test Strategy", Cadence: store.CadenceWeekly, Active: true,
+		ChannelID: ch.ID, Title: "Video Script Test Strategy", PreferredWeekday: "Tuesday", Active: true,
 		VerdictIDs: []uuid.UUID{verdict.ID}, CreatedByPersonID: creator.ID,
 	})
 	require.NoError(t, err)
@@ -770,7 +770,7 @@ func TestGreenlightVideoScript_CrossChannelVideoScriptID_Rejected(t *testing.T) 
 	})
 	require.NoError(t, err)
 	otherStrategy, err := f.st.Strategies().Save(ctx, store.SaveStrategyInput{
-		ChannelID: otherCh.ID, Title: "Other Channel Strategy", Cadence: store.CadenceWeekly, Active: true,
+		ChannelID: otherCh.ID, Title: "Other Channel Strategy", PreferredWeekday: "Tuesday", Active: true,
 		VerdictIDs: []uuid.UUID{otherVerdict.ID}, CreatedByPersonID: otherCreator.ID,
 	})
 	require.NoError(t, err)
