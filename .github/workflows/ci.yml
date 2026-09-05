@@ -160,13 +160,37 @@ jobs:
       env:
         EVENT_NAME: ${{ github.event_name }}
       run: |
-        # On PRs we narrow to test-only builds so we don't pay for non-test
-        # leaf targets (firmware bins, container image layers, etc.) that
-        # contribute nothing to the test signal but still cost cache fetches
-        # and analysis time. On main we keep the full //... scope so any
-        # untested target whose build breaks still gets caught before release.
+        set -euo pipefail
+
+        # On PRs we only build and run tests actually affected by the diff
+        # against main's own current tip, via release_helper's
+        # `changed-targets` (same mechanism as the test-database job below --
+        # see docs/RELEASE.md "Reusing Change Detection for Non-Release
+        # Target Pools"). We diff straight against main, never this PR's
+        # declared base or a merge-base: a stacked PR's base is another
+        # feature branch, not main, and a stacked branch carries every
+        # earlier level's commits too, so a direct two-dot diff against main
+        # captures this PR's full cumulative effect.
+        #
+        # On main we keep the full //... scope so any untested target whose
+        # build breaks still gets caught before release, and so any test a
+        # sequence of narrowly-scoped PRs didn't individually trigger still
+        # runs eventually.
         if [ "$EVENT_NAME" = "pull_request" ]; then
-          bazel coverage --config=ci --build_tests_only //...
+          git fetch --no-tags origin main
+          MAIN_SHA=$(git rev-parse FETCH_HEAD)
+          echo "::group::Filtering to targets affected since main ($MAIN_SHA)"
+          TARGETS=$(bazel run --config=ci //tools:release -- changed-targets \
+            --base-commit="$MAIN_SHA" \
+            --candidates='tests(//...)' \
+            | tr '\n' ' ')
+          echo "Affected targets: ${TARGETS:-<none>}"
+          echo "::endgroup::"
+          if [ -z "${TARGETS// /}" ]; then
+            echo "No targets affected by this change; skipping."
+          else
+            bazel coverage --config=ci $TARGETS
+          fi
         else
           bazel coverage --config=ci //...
         fi
