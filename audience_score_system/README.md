@@ -15,9 +15,9 @@ server precedent used elsewhere in the repo.
 
 | Binary | `release_app` name | app_type | Responsibility |
 |--------|---------------------|----------|--------|
-| `migrate/` | `migration` | `job` | Applies every migration (001-009: identity, research/schedule/outcome, web session, channel credentials, MCP credentials (original, then migrated onto `mcpauth`'s contract), `mcpauth` OAuth2 client/auth-code tables, Strategy, and M2's Co-Creator tier). |
-| `web/` | `web` | `external-api` | The only UI surface. Google OAuth sign-in/sign-up (C1), Channel connect (C2), and the Channel list/switcher (`GET /channels`, FR26) are UI-only (NFR3) -- the switcher is the signed-in landing page as of M2, replacing M1's inline Channel list on `/`. Everything else `web` hosts is dual-surface with `mcp` (same store methods, same authorization): Analyst invite/accept (C3), schedule-draft approve/un-approve/edit (C8, issue #1648), and M2's access-management page (`/channels/{id}/access` -- invite Co-Creator, promote, remove, the audit-trail panel, FR30/FR31/FR33/FR35) and cross-Channel aggregate page (`/my-work`, FR27/FR28). |
-| `mcp/` | `mcp` | `external-api` | Every capability not UI-only above, as MCP tools: Channel access discovery (`list_channels`, issue #1631, repointed onto M2's `AccessStore.ChannelsWithRoleForPerson` by issue #1719), research notes, viability verdicts, schedule sync reads, pacing policy, schedule drafting/commit/un-commit/edit, outcome match confirm/reject, browsing, Strategy/Plan generation, and M2's access-management tools (`invite_co_creator`, `promote_to_co_creator`, `remove_channel_person`, `get_channel_access`) and cross-Channel aggregate (`get_my_work`). |
+| `migrate/` | `migration` | `job` | Applies every migration (001-009: identity, research/schedule/outcome, web session, channel credentials, MCP credentials (original, then migrated onto `mcpauth`'s contract), `mcpauth` OAuth2 client/auth-code tables, Strategy, and M2's Co-Creator tier; 010-013, milestone `video-script-model`: `video_script` (C18/C19), dropping Strategy's `cadence` field (FR47), re-anchoring prediction-vs-outcome onto `video_script` (FR43-45), and retiring `schedule_entry`/`pacing_policy` outright once every reader was retargeted). |
+| `web/` | `web` | `external-api` | The only UI surface. Google OAuth sign-in/sign-up (C1), Channel connect (C2), and the Channel list/switcher (`GET /channels`, FR26) are UI-only (NFR3) -- the switcher is the signed-in landing page as of M2, replacing M1's inline Channel list on `/`. Everything else `web` hosts is dual-surface with `mcp` (same store methods, same authorization): Analyst invite/accept (C3), video_script greenlight/deny/archive (C19, milestone `video-script-model` -- rebuilt in place of C8's original `schedule_entry`-backed approve/un-approve/edit UI), and M2's access-management page (`/channels/{id}/access` -- invite Co-Creator, promote, remove, the audit-trail panel, FR30/FR31/FR33/FR35) and cross-Channel aggregate page (`/my-work`, FR27/FR28). |
+| `mcp/` | `mcp` | `external-api` | Every capability not UI-only above, as MCP tools: Channel access discovery (`list_channels`, issue #1631, repointed onto M2's `AccessStore.ChannelsWithRoleForPerson` by issue #1719), research notes, viability verdicts, schedule sync reads, video_script propose/greenlight/deny/archive (C18/C19, milestone `video-script-model` -- the schedule-draft/pacing-policy tool surface, C6/C7/C8, was retired outright, FR41/FR46/FR47), outcome match confirm/reject (re-anchored onto `video_script`, FR43/FR44), browsing, Strategy management, and M2's access-management tools (`invite_co_creator`, `promote_to_co_creator`, `remove_channel_person`, `get_channel_access`) and cross-Channel aggregate (`get_my_work`). |
 | `worker/` | `worker` | `worker` | Per-Channel Temporal scheduled workflow: syncs YouTube schedule (C6) and published-video metrics (C9) on a ~1-24 hour cadence (NFR4, default 24h). A manual run can be forced via `mcp`'s `trigger_channel_sync` tool. |
 
 All four are complete as of M1 and M2 (see [`PRODUCT.md`](PRODUCT.md)'s
@@ -56,13 +56,14 @@ bazel run //audience_score_system/migrate:migration -- -version   # check curren
 bazel run //audience_score_system/migrate:migration -- -history   # applied-migration history
 
 # 2. Run the web UI (OAuth signup/login, Channel connect, and the Channel
-#    list/switcher are UI-only per NFR3; invite/accept, schedule approve/
-#    un-approve/edit, M2's access-management page, and /my-work are each
-#    also reachable via mcp's equivalent tools -- see the Binaries table)
+#    list/switcher are UI-only per NFR3; invite/accept, video_script
+#    greenlight/deny/archive, M2's access-management page, and /my-work
+#    are each also reachable via mcp's equivalent tools -- see the
+#    Binaries table)
 bazel run //audience_score_system/web
 
-# 3. Run the MCP server (every capability not UI-only above -- C4-C7, C8,
-#    C9, C10, and M2's access-management/aggregate tools)
+# 3. Run the MCP server (every capability not UI-only above -- C4, C5, C9,
+#    C10, C18, C19, and M2's access-management/aggregate tools)
 bazel run //audience_score_system/mcp
 
 # 4. Run the Temporal worker (per-Channel schedule/outcome sync)
@@ -132,19 +133,19 @@ end-to-end without a human hand-authoring every tool call:
 
 - **Agents** (`plugin/user/agents/`): `researcher` gathers cited research
   notes (C4); `analyst` makes every judgment call the loops require --
-  viability verdicts (C5), schedule-draft proposals (C7), and
+  viability verdicts (C5), video_script proposals (C18), and
   outcome-match resolution (C9) -- always through the MCP write tools,
   never by editing anything directly.
 - **Skills** (`plugin/user/skills/`): `/audience-score-system:research`
-  (Loop 1, C4-C5), `/audience-score-system:schedule` (Loop 2, C6-C7),
-  and `/audience-score-system:outcomes` (Loop 3, C9-C10) each orchestrate
+  (Loop 1, C4-C5), `/audience-score-system:schedule` (Loop 2, C18), and
+  `/audience-score-system:outcomes` (Loop 3, C9-C10) each orchestrate
   the two agents against one Channel.
 
 This is deliberately still "MCP plus an external MCP-capable client,"
 per the product brief's non-goal -- the plugin is a client-side
 convenience for driving that client, not a hosted agent loop inside the
-product. Schedule *commit/un-commit/edit* (C8) tools exist and are
+product. video_script *greenlight/deny/archive* (C19) tools exist and are
 gated by Creator-tier authority -- Founder or Co-Creator, symmetrically
-per FR32 (`store.CanApprove`, matching `web`) -- but the `analyst`
-persona never calls them on its own initiative -- only on the human's
-explicit instruction (see `plugin/user/agents/analyst.md`).
+per FR32/FR37-FR39 (`store.CanApprove`, matching `web`) -- but the
+`analyst` persona never calls them on its own initiative -- only on the
+human's explicit instruction (see `plugin/user/agents/analyst.md`).
