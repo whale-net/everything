@@ -48,9 +48,11 @@ go_test(
         "fakes_test.go",
         "idempotency_test.go",
         "registry_test.go",
+        "registry_tools_test.go",
     ],
     embed = [":server"],
     deps = [
+        "//audience_score_system/mcp/tools",
         "//audience_score_system/store",
         "@com_github_google_uuid//:uuid",
         "@com_github_modelcontextprotocol_go_sdk//auth",

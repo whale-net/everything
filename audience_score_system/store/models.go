@@ -188,65 +188,6 @@ type Verdict struct {
 	CitedResearchNoteIDs []uuid.UUID
 }
 
-// PacingPolicy is one row of `pacing_policy` (migration 002, FR17) --
-// natural key = Channel (channel_id UNIQUE), so PacingStore.Upsert
-// converges on repeated calls with identical values (NFR2).
-type PacingPolicy struct {
-	ID                   uuid.UUID
-	ChannelID            uuid.UUID
-	TargetUploadsPerWeek float64
-	PreferredDays        []string
-	UpdatedAt            time.Time
-	UpdatedByPersonID    uuid.UUID
-}
-
-// ScheduleState is `schedule_entry.state` (migration 002, FR16/FR19/FR20).
-type ScheduleState string
-
-const (
-	ScheduleStateDraft     ScheduleState = "draft"
-	ScheduleStateCommitted ScheduleState = "committed"
-)
-
-// ScheduleEntry is one row of `schedule_entry` (migration 002) -- the
-// draft-and-committed record, one row per proposed slot. VerdictID is the
-// FK to the specific Verdict *version* that judged the Idea viable --
-// LB3's load-bearing link, never nil.
-type ScheduleEntry struct {
-	ID                 uuid.UUID
-	ChannelID          uuid.UUID
-	IdeaID             uuid.UUID
-	VerdictID          uuid.UUID
-	ProposedPublishAt  time.Time
-	State              ScheduleState
-	ApprovedByPersonID *uuid.UUID
-	ApprovedAt         *time.Time
-	CreatedByPersonID  uuid.UUID
-	CreatedAt          time.Time
-	UpdatedAt          time.Time
-	IdempotencyKey     string
-}
-
-// ScheduleEntryDetail is one `schedule_entry` row joined with its bound
-// Idea title, its bound Verdict version/value/reasoning (schedule_entry.
-// verdict_id -- LB3), the approver's display name (empty when not
-// approved), and -- when Published holds -- the identity of the video
-// that fulfilled it (issue #1580, C8: FR19/FR20). Published mirrors
-// ScheduleStore.IsPublished exactly: a live (auto/confirmed)
-// video_schedule_match to a synced_video whose published_at is non-null.
-// Backs `web`'s GET /channels/{id}/schedule page.
-type ScheduleEntryDetail struct {
-	Entry               ScheduleEntry
-	IdeaTitle           string
-	VerdictVersion      int
-	Verdict             VerdictValue
-	VerdictReasoning    string
-	ApproverName        string
-	Published           bool
-	PublishedVideoID    string // YouTube video id; "" unless Published.
-	PublishedVideoTitle string
-}
-
 // PrivacyStatus is `synced_video.privacy_status` (migration 002, FR14).
 type PrivacyStatus string
 
@@ -297,18 +238,13 @@ const (
 )
 
 // VideoScheduleMatch is one row of `video_schedule_match` (migration 002,
-// FR22/FR23) -- the outcome link between a SyncedVideo and the
-// ScheduleEntry (legacy) or VideoScript (migration 010, FR43/FR45) it
-// fulfilled. ScheduleEntryID is nil when a video has arrived with no
-// confident match yet, pending MatchStore.Resolve -- it stays on this
-// struct for now (the retirement task removes it) but the matcher
-// (worker/sync, issue #1829) no longer writes it; VideoScriptID is nil
-// under the exact same "no confident match yet" condition, and is what the
-// matcher writes going forward.
+// FR22/FR23) -- the outcome link between a SyncedVideo and the VideoScript
+// (migration 010, FR43/FR45) it fulfilled. VideoScriptID is nil when a
+// video has arrived with no confident match yet, pending
+// MatchStore.Resolve.
 type VideoScheduleMatch struct {
 	ID                 uuid.UUID
 	SyncedVideoID      uuid.UUID
-	ScheduleEntryID    *uuid.UUID
 	VideoScriptID      *uuid.UUID
 	Confidence         float64
 	State              MatchState
@@ -418,7 +354,7 @@ type PredictionOutcome struct {
 // of its own (FR47, issue #1833 dropped `cadence`); `strategy_id` on
 // video_script uses it purely for context grouping (FR36, LB3).
 // PreferredWeekday is "" for no day preference, else a full English
-// weekday name in the same vocabulary as PacingPolicy.PreferredDays.
+// weekday name.
 type Strategy struct {
 	ID                uuid.UUID
 	ChannelID         uuid.UUID
@@ -482,17 +418,19 @@ type IdeaVerdictSummary struct {
 	CreatedAt time.Time
 }
 
-// ScheduleDraftState is one Channel's schedule_entry counts --
-// MyWorkStore.SummariesForPerson's ChannelWorkSummary.ScheduleState field
-// (issue #1717, FR27). NextProposedPublishAt is the earliest
-// proposed_publish_at still at or after the query time across BOTH draft
-// and committed entries, nil if none is upcoming -- the zero value (all
-// fields zero/nil) is the correct "no schedule_entry rows yet" state, not
-// a sentinel error.
-type ScheduleDraftState struct {
-	DraftCount            int
-	CommittedCount        int
-	NextProposedPublishAt *time.Time
+// VideoScriptState is one Channel's video_script counts by status --
+// MyWorkStore.SummariesForPerson's ChannelWorkSummary.ScriptState field
+// (issue #1717, FR27; retargeted from schedule_entry's draft/committed
+// pair by issue #1835's retirement task). DeniedCount and ArchivedCount
+// are deliberately separate fields, never collapsed into one bucket --
+// FR38/FR39 make `denied` and `archived` distinct terminal states. The
+// zero value (all fields zero) is the correct "no video_script rows yet"
+// state, not a sentinel error.
+type VideoScriptState struct {
+	ProposedCount int
+	GreenlitCount int
+	DeniedCount   int
+	ArchivedCount int
 }
 
 // ChannelWorkSummary is one Channel's cross-section "what's going on
@@ -512,7 +450,7 @@ type ChannelWorkSummary struct {
 	// LatestVerdict is nil when the Channel has no Idea with a recorded
 	// verdict yet.
 	LatestVerdict *IdeaVerdictSummary
-	ScheduleState ScheduleDraftState
+	ScriptState   VideoScriptState
 	// LatestOutcome is nil when the Channel has no published, live-matched
 	// video against a greenlit or archived video_script yet -- see
 	// BrowseStore.PredictionVsOutcome's qualifying-row rule, which this
@@ -564,10 +502,8 @@ type VideoScript struct {
 // VideoScriptDetail is one `video_script` row joined with its bound
 // Verdict version/value, its bound Idea title, and its bound Strategy
 // title, plus -- when Published holds -- the same "recorded as published"
-// freeze predicate ScheduleEntryDetail.Published uses (VideoScriptStore.
-// IsPublished). Modelled directly on ScheduleEntryDetail (this file) --
-// same join shape, same Published field, since `web`'s views use it to
-// omit affordances the same way.
+// freeze predicate VideoScriptStore.IsPublished computes. `web`'s views
+// use the Published field to omit affordances once it holds.
 type VideoScriptDetail struct {
 	Script         VideoScript
 	VerdictVersion int

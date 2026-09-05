@@ -13,8 +13,8 @@ import (
 // ErrStrategyVerdictNotViable is returned by StrategyStore.Save when a
 // linked verdict_id does not exist or its verdict column is not
 // VerdictViable -- a Strategy may only be built from viable
-// viability_verdict rows (issue #1637), the same FR16 gate
-// ScheduleStore.SaveDraft enforces one layer downstream.
+// viability_verdict rows (issue #1637), the same viable-verdict gate
+// VideoScriptStore.Propose enforces one layer downstream (FR36).
 var ErrStrategyVerdictNotViable = errors.New("verdict does not exist or is not viable")
 
 // ErrStrategyNotFound is returned by StrategyStore.Save when
@@ -25,10 +25,10 @@ var ErrStrategyNotFound = errors.New("strategy not found on this channel")
 // SaveStrategyInput is the input to StrategyStore.Save.
 type SaveStrategyInput struct {
 	// StrategyID selects an existing strategy to update when non-nil.
-	// When nil, Save always inserts a new strategy row -- unlike
-	// PacingPolicy, a Strategy has no natural key to converge on (a
-	// Channel may hold many Strategies), so this mirrors IdeaStore.Create
-	// rather than PacingStore.Upsert.
+	// When nil, Save always inserts a new strategy row -- a Strategy has
+	// no natural key to converge on (a Channel may hold many Strategies),
+	// so this mirrors IdeaStore.Create's plain-insert shape rather than a
+	// find-or-create upsert.
 	StrategyID       *uuid.UUID
 	ChannelID        uuid.UUID
 	Title            string

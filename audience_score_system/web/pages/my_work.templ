@@ -90,15 +90,12 @@ templ channelWorkSection(s store.ChannelWorkSummary) {
 			</div>
 
 			<div class="mt-3">
-				<h3 class="font-semibold text-sm uppercase text-base-content/60">Schedule</h3>
-				if s.ScheduleState.DraftCount == 0 && s.ScheduleState.CommittedCount == 0 {
-					<p class="text-sm text-base-content/70">No schedule drafts yet.</p>
+				<h3 class="font-semibold text-sm uppercase text-base-content/60">Video scripts</h3>
+				if s.ScriptState.ProposedCount == 0 && s.ScriptState.GreenlitCount == 0 && s.ScriptState.DeniedCount == 0 && s.ScriptState.ArchivedCount == 0 {
+					<p class="text-sm text-base-content/70">No video scripts yet.</p>
 				} else {
 					<p class="text-sm">
-						{ strconv.Itoa(s.ScheduleState.DraftCount) } draft, { strconv.Itoa(s.ScheduleState.CommittedCount) } committed
-						if s.ScheduleState.NextProposedPublishAt != nil {
-							-- next proposed publish { s.ScheduleState.NextProposedPublishAt.UTC().Format("2006-01-02 15:04 UTC") }
-						}
+						{ strconv.Itoa(s.ScriptState.ProposedCount) } proposed, { strconv.Itoa(s.ScriptState.GreenlitCount) } greenlit, { strconv.Itoa(s.ScriptState.DeniedCount) } denied, { strconv.Itoa(s.ScriptState.ArchivedCount) } archived
 					</p>
 				}
 			</div>

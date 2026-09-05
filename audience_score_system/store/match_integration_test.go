@@ -226,5 +226,4 @@ func TestMatchStore_Record_PersistsVideoScriptID(t *testing.T) {
 	require.NoError(t, err)
 	require.NotNil(t, got.VideoScriptID)
 	assert.Equal(t, script.ID, *got.VideoScriptID, "Record must persist video_script_id")
-	assert.Nil(t, got.ScheduleEntryID, "Record must never write schedule_entry_id (that column's retirement is a later task, but this write path stopped populating it in #1829)")
 }

@@ -114,7 +114,7 @@ func (i SaveStrategyInput) IdempotencyKey() string { return i.IdempotencyKeyArg 
 
 // registerSaveStrategy registers save_strategy via server.RegisterWrite --
 // Channel-scoped via store.CanWrite (both Creator and Analyst may call
-// it, mirroring set_pacing_policy).
+// it).
 func registerSaveStrategy(reg *server.Registry, strategies store.StrategyStore, persons store.PersonStore) {
 	server.RegisterWrite(reg, &mcp.Tool{
 		Name: "save_strategy",

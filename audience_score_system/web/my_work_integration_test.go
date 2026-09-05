@@ -231,7 +231,7 @@ func TestHandleMyWork_RendersSectionPerAssociatedChannel_WithAllFourBlocks(t *te
 
 	person := s.newPerson(t, ctx, "person")
 
-	// A: person is Founder -- note + verdict + a draft-only schedule entry,
+	// A: person is Founder -- note + verdict + a proposed-only video_script,
 	// no outcome yet.
 	chA, err := s.store.Channels().Create(ctx, "yt-a-"+uuid.NewString(), "Channel A", person.ID)
 	require.NoError(t, err)
@@ -243,38 +243,48 @@ func TestHandleMyWork_RendersSectionPerAssociatedChannel_WithAllFourBlocks(t *te
 		IdeaID: ideaA.ID, Verdict: store.VerdictViable, Reasoning: "A verdict reasoning", AuthorPersonID: person.ID,
 	})
 	require.NoError(t, err)
-	_, err = s.store.Schedules().SaveDraft(ctx, store.SaveDraftInput{
-		ChannelID: chA.ID, IdeaID: ideaA.ID, VerdictID: verdictA.ID,
-		ProposedPublishAt: time.Now().Add(48 * time.Hour), CreatedByPersonID: person.ID,
+	stratA, err := s.store.Strategies().Save(ctx, store.SaveStrategyInput{
+		ChannelID: chA.ID, Title: "A Strategy", Active: true,
+		VerdictIDs: []uuid.UUID{verdictA.ID}, CreatedByPersonID: person.ID,
+	})
+	require.NoError(t, err)
+	_, err = s.store.VideoScripts().Propose(ctx, store.ProposeVideoScriptInput{
+		ChannelID: chA.ID, VerdictID: verdictA.ID, StrategyID: stratA.ID,
+		Title: "A Script", ScriptText: "A script text", CreatedByPersonID: person.ID,
 	})
 	require.NoError(t, err)
 
-	// B: person is Co-Creator, granted by B's own Founder -- full outcome
-	// chain (committed schedule entry, published matched video).
+	// B: person is Co-Creator, granted by B's own Founder -- one
+	// separately-proposed video_script plus the full outcome chain
+	// (greenlit video_script, published matched video). loadVideoScriptState
+	// (store/mywork.go, retargeted from schedule_entry by #1835) aggregates
+	// video_script directly, so the "1 proposed, 1 greenlit" assertion below
+	// needs its own, separate proposed video_script alongside
+	// setupMyWorkOutcomeChain's greenlit one, seeded on a distinct
+	// Idea/Verdict BEFORE it so its verdict is not the most-recently-created
+	// one for the Channel.
 	founderB := s.newPerson(t, ctx, "founder-b")
 	chB, err := s.store.Channels().Create(ctx, "yt-b-"+uuid.NewString(), "Channel B", founderB.ID)
 	require.NoError(t, err)
 	require.NoError(t, s.store.Roles().AddRole(ctx, chB.ID, person.ID, store.RoleCoCreator, founderB.ID))
 	_, err = s.store.Research().SaveNote(ctx, store.SaveNoteInput{ChannelID: chB.ID, Text: "B research note text", AuthorPersonID: founderB.ID})
 	require.NoError(t, err)
-	// loadScheduleState (store/mywork.go) is unchanged by #1830 -- it still
-	// aggregates schedule_entry directly (that column/table's retirement
-	// is #1835's scope, not this task's) -- so the "0 draft, 1 committed"
-	// assertion below needs its own, separate committed schedule_entry:
-	// setupMyWorkOutcomeChain no longer writes one (it goes through
-	// video_script instead).
-	scheduleIdeaB, err := s.store.Ideas().Create(ctx, chB.ID, "B Schedule Idea", founderB.ID)
+	proposedIdeaB, err := s.store.Ideas().Create(ctx, chB.ID, "B Proposed Idea", founderB.ID)
 	require.NoError(t, err)
-	scheduleVerdictB, err := s.store.Verdicts().Append(ctx, store.AppendVerdictInput{
-		IdeaID: scheduleIdeaB.ID, Verdict: store.VerdictViable, Reasoning: "B schedule reasoning", AuthorPersonID: founderB.ID,
+	proposedVerdictB, err := s.store.Verdicts().Append(ctx, store.AppendVerdictInput{
+		IdeaID: proposedIdeaB.ID, Verdict: store.VerdictViable, Reasoning: "B proposed reasoning", AuthorPersonID: founderB.ID,
 	})
 	require.NoError(t, err)
-	scheduleEntryB, err := s.store.Schedules().SaveDraft(ctx, store.SaveDraftInput{
-		ChannelID: chB.ID, IdeaID: scheduleIdeaB.ID, VerdictID: scheduleVerdictB.ID,
-		ProposedPublishAt: time.Now().Add(48 * time.Hour), CreatedByPersonID: founderB.ID,
+	proposedStratB, err := s.store.Strategies().Save(ctx, store.SaveStrategyInput{
+		ChannelID: chB.ID, Title: "B Proposed Strategy", Active: true,
+		VerdictIDs: []uuid.UUID{proposedVerdictB.ID}, CreatedByPersonID: founderB.ID,
 	})
 	require.NoError(t, err)
-	require.NoError(t, s.store.Schedules().Approve(ctx, scheduleEntryB.ID, founderB.ID))
+	_, err = s.store.VideoScripts().Propose(ctx, store.ProposeVideoScriptInput{
+		ChannelID: chB.ID, VerdictID: proposedVerdictB.ID, StrategyID: proposedStratB.ID,
+		Title: "B Proposed Script", ScriptText: "B proposed script text", CreatedByPersonID: founderB.ID,
+	})
+	require.NoError(t, err)
 	s.setupMyWorkOutcomeChain(t, ctx, chB, founderB, "B Idea")
 
 	// C: person is Analyst, granted by C's own Founder -- a note only, no
@@ -299,14 +309,14 @@ func TestHandleMyWork_RendersSectionPerAssociatedChannel_WithAllFourBlocks(t *te
 	assert.Contains(t, body, "Co-Creator")
 	assert.Contains(t, body, "Analyst")
 
-	// A: its own note/verdict/schedule content, no outcome content.
+	// A: its own note/verdict/video-script content, no outcome content.
 	assert.Contains(t, body, "A research note text")
 	assert.Contains(t, body, "A verdict reasoning")
-	assert.Contains(t, body, "1 draft, 0 committed")
+	assert.Contains(t, body, "1 proposed, 0 greenlit, 0 denied, 0 archived")
 
-	// B: its own note/schedule/outcome content.
+	// B: its own note/video-script/outcome content.
 	assert.Contains(t, body, "B research note text")
-	assert.Contains(t, body, "0 draft, 1 committed")
+	assert.Contains(t, body, "1 proposed, 1 greenlit, 0 denied, 0 archived")
 	assert.Contains(t, body, "B Idea Video")
 	assert.Contains(t, body, "500 views")
 
@@ -327,7 +337,7 @@ func TestHandleMyWork_RendersSectionPerAssociatedChannel_WithAllFourBlocks(t *te
 }
 
 // TestHandleMyWork_ChannelWithNoContent_RendersEmptyPlaceholders proves a
-// freshly connected Channel with no notes/verdict/schedule/outcome yet
+// freshly connected Channel with no notes/verdict/video_script/outcome yet
 // still renders its section, with explicit "none yet" placeholders rather
 // than omitting any block.
 func TestHandleMyWork_ChannelWithNoContent_RendersEmptyPlaceholders(t *testing.T) {
@@ -346,7 +356,7 @@ func TestHandleMyWork_ChannelWithNoContent_RendersEmptyPlaceholders(t *testing.T
 	assert.Contains(t, body, "Empty Channel", "an empty Channel must still render its own section, not be omitted")
 	assert.Contains(t, body, "No research notes yet.")
 	assert.Contains(t, body, "No viability verdict recorded yet.")
-	assert.Contains(t, body, "No schedule drafts yet.")
+	assert.Contains(t, body, "No video scripts yet.")
 	assert.Contains(t, body, "No outcome comparison yet.")
 }
 
