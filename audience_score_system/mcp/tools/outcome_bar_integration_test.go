@@ -147,7 +147,7 @@ func newOutcomeBarFixture(t *testing.T) *outcomeBarFixture {
 
 	srv := server.New(st)
 	reg := server.NewRegistry(srv, st)
-	tools.RegisterOutcomeBar(reg, st.OutcomeBars())
+	tools.RegisterOutcomeBar(reg, st.OutcomeBars(), st.Calibration())
 
 	handler := server.NewHTTPHandler(srv, creds, server.ResourceMetadataConfig{
 		Resource:            "https://mcp.example.com",
