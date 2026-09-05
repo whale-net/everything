@@ -274,16 +274,19 @@ templ noteBody(note store.ResearchNoteWithAuthor) {
 // resolved once per distinct author by the handler (Verdict carries no
 // AuthorDisplayName field of its own, unlike ResearchNoteWithAuthor).
 //
-// canWrite (store.CanWrite, research.go's renderIdeaDetail) gates the
-// save-note form (FR3, FR6, FR7): omitted entirely when false --
-// PRESENTATION ONLY, mirroring ChannelIndex's identical rationale (see
-// that doc comment); the actual authorization boundary is
-// research.go's authorizeWrite, re-derived fresh from Postgres on every
-// POST /channels/{id}/research/notes.
+// canWrite (store.CanWrite, research.go's renderIdeaDetail) gates BOTH
+// the save-note form (FR3, FR6, FR7) and the save-verdict form (FR4, FR6,
+// FR7, #1901): omitted entirely when false -- PRESENTATION ONLY,
+// mirroring ChannelIndex's identical rationale (see that doc comment);
+// the actual authorization boundary is research.go's authorizeWrite,
+// re-derived fresh from Postgres on every POST
+// /channels/{id}/research/notes or .../verdicts.
 //
-// FR4/FR7's save-verdict form (a follow-up task, #1901) lands on this
-// same page.
-templ IdeaDetail(data components.LayoutData, ch store.Channel, idea store.Idea, notes []store.ResearchNoteWithAuthor, notesTruncated bool, current *store.Verdict, history []store.Verdict, authorNames map[uuid.UUID]string, canWrite bool, form noteFormData) {
+// The save-verdict form's citation multi-select (FR4) is populated from
+// notes -- the SAME slice this page's own note list already loaded, no
+// extra store call, so no notes from any other Idea can ever appear as
+// options.
+templ IdeaDetail(data components.LayoutData, ch store.Channel, idea store.Idea, notes []store.ResearchNoteWithAuthor, notesTruncated bool, current *store.Verdict, history []store.Verdict, authorNames map[uuid.UUID]string, canWrite bool, form noteFormData, verdictForm verdictFormData) {
 	@components.Layout(data) {
 		<div class="card bg-base-100 border border-base-300 shadow-sm">
 			<div class="card-body">
@@ -337,6 +340,13 @@ templ IdeaDetail(data components.LayoutData, ch store.Channel, idea store.Idea, 
 							}
 						</ul>
 					}
+
+					if canWrite {
+						<div class="mt-4">
+							<h3 class="text-sm font-semibold">Save a viability verdict</h3>
+							@saveVerdictForm(ch, idea, notes, verdictForm)
+						</div>
+					}
 				</div>
 
 				<div class="card-actions justify-end mt-2">
@@ -363,4 +373,68 @@ templ verdictBody(v store.Verdict, authorNames map[uuid.UUID]string) {
 		</div>
 		<span class={ verdictBadgeClass(v.Verdict) }>{ verdictLabel(v.Verdict) }</span>
 	</div>
+}
+
+// noteIDSelected reports whether noteID is among the submitted
+// cited_note_ids (verdictForm.CitedNoteIDs) -- used to re-select the
+// citation multi-select's options on a validation-failure re-render.
+func noteIDSelected(citedNoteIDs []string, noteID uuid.UUID) bool {
+	target := noteID.String()
+	for _, id := range citedNoteIDs {
+		if id == target {
+			return true
+		}
+	}
+	return false
+}
+
+// saveVerdictForm renders the Idea detail page's save-verdict form (FR4,
+// FR7, #1901): a verdict select carrying exactly store.VerdictValue's
+// three values, a required reasoning textarea, a multi-select of THIS
+// Idea's own research notes (notes -- the same slice IdeaDetail's note
+// list already loaded, no extra store call, so no other Idea's notes can
+// ever appear here), and the hidden idempotency_key set once at render
+// time (FR6). Submitting always records a NEW verdict version -- never an
+// edit of the current one (M1 FR12) -- which the copy below makes
+// explicit. Rendered by IdeaDetail only when canWrite is true.
+templ saveVerdictForm(ch store.Channel, idea store.Idea, notes []store.ResearchNoteWithAuthor, form verdictFormData) {
+	<form method="post" action={ templ.URL("/channels/" + ch.ID.String() + "/research/ideas/" + idea.ID.String() + "/verdicts") } class="mt-2 space-y-2">
+		if form.Error != "" {
+			<p class="text-error text-sm">{ form.Error }</p>
+		}
+		<p class="text-xs text-base-content/70">
+			Submitting records a new verdict version -- it never edits the current one.
+		</p>
+		<input type="hidden" name="idempotency_key" value={ form.IdempotencyKey }/>
+		<div class="form-control">
+			<label class="label">
+				<span class="label-text">Verdict</span>
+			</label>
+			<select name="verdict" class="select select-bordered w-full" required>
+				<option value="" disabled selected?={ form.Verdict == "" }>Choose a verdict...</option>
+				<option value={ string(store.VerdictViable) } selected?={ form.Verdict == string(store.VerdictViable) }>{ verdictLabel(store.VerdictViable) }</option>
+				<option value={ string(store.VerdictNotViable) } selected?={ form.Verdict == string(store.VerdictNotViable) }>{ verdictLabel(store.VerdictNotViable) }</option>
+				<option value={ string(store.VerdictNeedsMoreResearch) } selected?={ form.Verdict == string(store.VerdictNeedsMoreResearch) }>{ verdictLabel(store.VerdictNeedsMoreResearch) }</option>
+			</select>
+		</div>
+		<div class="form-control mt-2">
+			<label class="label">
+				<span class="label-text">Reasoning</span>
+			</label>
+			<textarea name="reasoning" class="textarea textarea-bordered w-full" rows="3" required>{ form.Reasoning }</textarea>
+		</div>
+		if len(notes) > 0 {
+			<div class="form-control mt-2">
+				<label class="label">
+					<span class="label-text">Cite research notes (optional)</span>
+				</label>
+				<select name="cited_note_ids" class="select select-bordered w-full h-auto" multiple size="4">
+					for _, note := range notes {
+						<option value={ note.ID.String() } selected?={ noteIDSelected(form.CitedNoteIDs, note.ID) }>{ note.Text }</option>
+					}
+				</select>
+			</div>
+		}
+		<button type="submit" class="btn btn-primary btn-sm mt-2">Save verdict</button>
+	</form>
 }
