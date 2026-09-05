@@ -60,6 +60,31 @@ go_test(
     ],
 )
 
+# Pure-Go coverage that the full tool registry ../main.go wires at boot no
+# longer registers any of the eight schedule_draft.go tool names FR41
+# (issue #1832) retired (generate_schedule_plan, the ninth tool that file
+# used to house, is owned separately by #1833's FR47 and deliberately
+# excluded -- see registry_tools_test.go). External package (server_test, not
+# server) precisely because it imports mcp/tools, which imports this
+# package's non-test library -- an internal test file doing the same
+# import is a genuine dependency cycle to rules_go's Go compiler
+# (mcp/server's own test archive importing mcp/tools importing
+# mcp/server), not just an internal/external-test-package style
+# preference. No Docker required, runs as part of `bazel test //...`.
+go_test(
+    name = "registry_tools_test",
+    srcs = ["registry_tools_test.go"],
+    deps = [
+        ":server",
+        "//audience_score_system/mcp/tools",
+        "//audience_score_system/store",
+        "@com_github_google_uuid//:uuid",
+        "@com_github_modelcontextprotocol_go_sdk//mcp",
+        "@com_github_stretchr_testify//assert",
+        "@com_github_stretchr_testify//require",
+    ],
+)
+
 # Real Postgres + real HTTP-transport MCP client integration test: the full
 # caller-auth (auth.go) -> Channel-scoping (channelscope.go) ->
 # idempotency (idempotency.go) stack, end to end, plus the two guarantees
