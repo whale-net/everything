@@ -10,9 +10,10 @@
 //
 // outcome_bar_test.go's pure-Go suite (package tools, no build tag)
 // already covers ChannelScopeID() for both input types, get_outcome_bar's
-// handler (FR2 not-configured and fully-populated branches), and
+// handler (FR2 not-configured and fully-populated branches),
 // set_outcome_bar's mutate rejecting an unauthenticated/unparseable
-// caller against an in-memory fake. What this file proves instead:
+// caller against an in-memory fake, and get_calibration_trend's handler
+// against fakes for both stores. What this file proves instead:
 //   - NFR2 write authority: Creator AND Analyst can both call
 //     set_outcome_bar; a Person with no open role is rejected and writes
 //     nothing (the FR17-precedent assertion -- proving only Creator
@@ -29,6 +30,13 @@
 //   - set_outcome_bar with an unsupported metric_name or a negative
 //     threshold_value fails over the wire with a readable message and
 //     leaves any previously configured bar untouched.
+//   - get_calibration_trend (FR5/FR6/FR7, issue #1885), over a real MCP
+//     call with real Postgres-backed candidates: the full seed ->
+//     set_outcome_bar -> get_calibration_trend path; FR4 reclassification
+//     when the bar changes; NFR2 byte-identical Creator/Analyst output and
+//     outsider rejection; FR6's not-configured result on a Channel with
+//     candidates but no bar; FR7 truncation with most-recent-first
+//     selection kept chronological; and multi-tenant isolation.
 //
 // Run it explicitly (requires a working Docker daemon):
 //
@@ -42,6 +50,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"testing"
+	"time"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -337,4 +346,241 @@ func TestSetOutcomeBar_InvalidMetricAndThreshold_RejectedWithReadableMessage(t *
 
 	stillConfigured := obDecode[tools.OutcomeBarOutput](t, f.call(t, cs, "get_outcome_bar", tools.GetOutcomeBarInput{ChannelID: f.ch.ID.String()}))
 	assert.Equal(t, configured, stillConfigured, "neither rejected call must have changed the previously configured bar")
+}
+
+// ── get_calibration_trend (FR5/FR6/FR7, issue #1885) ─────────────────────
+
+// obMonthStart mirrors calibration_integration_test.go's monthStart
+// (store package) -- separate go_test target/compilation unit, so this
+// file needs its own copy, using the same "ob" prefix convention as
+// obTextOf/obDecode above.
+func obMonthStart(year int, month time.Month, day int) time.Time {
+	return time.Date(year, month, day, 12, 0, 0, 0, time.UTC)
+}
+
+// calibrationCandidate builds a full FR3 calibration candidate on f.ch: a
+// viable-verdict-bound greenlit video_script, a confirmed match to a
+// synced video published at publishedAt, and a video_metrics snapshot
+// carrying views. Mirrors calibration_integration_test.go's helper of the
+// same name/shape (store package) built here against f.st directly --
+// ListSchedule locates the freshly-synced video by its unique YouTube id
+// rather than a raw SQL lookup, since outcomeBarFixture keeps no
+// *dbtest.Postgres handle of its own.
+func (f *outcomeBarFixture) calibrationCandidate(t *testing.T, ctx context.Context, title string, publishedAt time.Time, views *int64) store.VideoScript {
+	t.Helper()
+
+	idea, err := f.st.Ideas().Create(ctx, f.ch.ID, title, f.creator.ID)
+	require.NoError(t, err)
+	v, err := f.st.Verdicts().Append(ctx, store.AppendVerdictInput{
+		IdeaID: idea.ID, Verdict: store.VerdictViable, Reasoning: title + " looks strong", AuthorPersonID: f.creator.ID,
+	})
+	require.NoError(t, err)
+	strat, err := f.st.Strategies().Save(ctx, store.SaveStrategyInput{
+		ChannelID: f.ch.ID, Title: title + " Strategy", Active: true,
+		VerdictIDs: []uuid.UUID{v.ID}, CreatedByPersonID: f.creator.ID,
+	})
+	require.NoError(t, err)
+	script, err := f.st.VideoScripts().Propose(ctx, store.ProposeVideoScriptInput{
+		ChannelID: f.ch.ID, VerdictID: v.ID, StrategyID: strat.ID,
+		Title: title, ScriptText: "script text for " + title, CreatedByPersonID: f.creator.ID,
+	})
+	require.NoError(t, err)
+	require.NoError(t, f.st.VideoScripts().Greenlight(ctx, script.ID, f.creator.ID))
+
+	ytID := "yt-ob-cal-" + uuid.NewString()
+	require.NoError(t, f.st.Sync().UpsertVideos(ctx, f.ch.ID, []store.SyncedVideo{{
+		YouTubeVideoID: ytID, Title: title,
+		PrivacyStatus: store.PrivacyStatusPublic, PublishedAt: &publishedAt, LastSyncedAt: time.Now(),
+	}}))
+	synced, _, err := f.st.Sync().ListSchedule(ctx, f.ch.ID, nil, nil, true, 0)
+	require.NoError(t, err)
+	var video store.SyncedVideo
+	for _, sv := range synced {
+		if sv.YouTubeVideoID == ytID {
+			video = sv
+			break
+		}
+	}
+	require.NotEqual(t, uuid.Nil, video.ID, "the just-synced video must be found by its unique YouTube id")
+
+	require.NoError(t, f.st.Matches().Record(ctx, store.VideoScheduleMatch{
+		SyncedVideoID: video.ID, VideoScriptID: &script.ID, Confidence: 0.9, State: store.MatchStateConfirmed,
+	}))
+	require.NoError(t, f.st.Sync().UpsertMetrics(ctx, []store.VideoMetrics{{
+		SyncedVideoID: video.ID, Views: views, MeasuredAt: time.Now(),
+	}}))
+
+	got, err := f.st.VideoScripts().GetByID(ctx, script.ID)
+	require.NoError(t, err)
+	return got
+}
+
+// TestGetCalibrationTrend_FullPath_OneBucketWithMixedCalibration is test
+// 5: seed two calibration candidates in the same calendar month, one
+// above and one below the bar, set the bar, then call
+// get_calibration_trend over the wire and assert the single resulting
+// bucket's counts and rate.
+func TestGetCalibrationTrend_FullPath_OneBucketWithMixedCalibration(t *testing.T) {
+	f := newOutcomeBarFixture(t)
+	ctx := context.Background()
+	cs := f.connect(t, f.creator.ID)
+
+	f.calibrationCandidate(t, ctx, "Above Bar", obMonthStart(2024, time.May, 5), ptrInt64OB(2000))
+	f.calibrationCandidate(t, ctx, "Below Bar", obMonthStart(2024, time.May, 15), ptrInt64OB(500))
+
+	setRes := f.call(t, cs, "set_outcome_bar", tools.SetOutcomeBarInput{
+		ChannelID: f.ch.ID.String(), MetricName: store.OutcomeBarMetricViews, ThresholdValue: 1000,
+	})
+	require.False(t, setRes.IsError, "set_outcome_bar must succeed: %s", obTextOf(setRes))
+
+	res := f.call(t, cs, "get_calibration_trend", tools.GetCalibrationTrendInput{ChannelID: f.ch.ID.String()})
+	require.False(t, res.IsError, "get_calibration_trend must succeed: %s", obTextOf(res))
+	out := obDecode[tools.GetCalibrationTrendOutput](t, res)
+
+	assert.True(t, out.OutcomeBar.Configured)
+	assert.False(t, out.Truncated)
+	require.Len(t, out.Buckets, 1, "both candidates published in May 2024 must collapse into one bucket")
+	b := out.Buckets[0]
+	assert.Equal(t, 2, b.Candidates)
+	assert.Equal(t, 1, b.Calibrated)
+	assert.Equal(t, 1, b.Miscalibrated)
+	assert.InDelta(t, 0.5, b.CalibrationRate, 1e-9)
+}
+
+// ptrInt64OB avoids colliding with ptrInt64B (browse_integration_test.go)
+// or ptrInt64 (store package) -- each *_integration_test.go file is its
+// own go_test target/compilation unit, but this repo's convention keeps
+// per-file helper names distinct anyway for grep-ability.
+func ptrInt64OB(v int64) *int64 { return &v }
+
+// TestGetCalibrationTrend_ChangingBarReclassifiesSameData is test 6
+// (FR4): re-calling set_outcome_bar with a different threshold and then
+// re-calling get_calibration_trend reclassifies the identical underlying
+// candidates -- proving FR4's "no historical snapshot" over the wire, not
+// just at store level (already covered by
+// TestCalibrationStore_MonthlyTrend_FR4_NoStoredHistory_ReclassifiesOnRerunWithDifferentBar
+// in calibration_integration_test.go).
+func TestGetCalibrationTrend_ChangingBarReclassifiesSameData(t *testing.T) {
+	f := newOutcomeBarFixture(t)
+	ctx := context.Background()
+	cs := f.connect(t, f.creator.ID)
+
+	f.calibrationCandidate(t, ctx, "Reclassified", obMonthStart(2024, time.August, 1), ptrInt64OB(1500))
+
+	f.call(t, cs, "set_outcome_bar", tools.SetOutcomeBarInput{
+		ChannelID: f.ch.ID.String(), MetricName: store.OutcomeBarMetricViews, ThresholdValue: 1000,
+	})
+	low := obDecode[tools.GetCalibrationTrendOutput](t, f.call(t, cs, "get_calibration_trend", tools.GetCalibrationTrendInput{ChannelID: f.ch.ID.String()}))
+	require.Len(t, low.Buckets, 1)
+	assert.Equal(t, 1, low.Buckets[0].Calibrated, "1500 views clears a 1000 threshold")
+
+	f.call(t, cs, "set_outcome_bar", tools.SetOutcomeBarInput{
+		ChannelID: f.ch.ID.String(), MetricName: store.OutcomeBarMetricViews, ThresholdValue: 2000,
+	})
+	high := obDecode[tools.GetCalibrationTrendOutput](t, f.call(t, cs, "get_calibration_trend", tools.GetCalibrationTrendInput{ChannelID: f.ch.ID.String()}))
+	require.Len(t, high.Buckets, 1)
+	assert.Equal(t, 0, high.Buckets[0].Calibrated, "the same seeded data must reclassify as miscalibrated against a higher threshold")
+	assert.Equal(t, 1, high.Buckets[0].Candidates, "the candidate count itself does not change with the bar")
+	assert.Equal(t, 2000.0, *high.OutcomeBar.ThresholdValue, "outcome_bar must echo the CURRENT bar")
+}
+
+// TestGetCalibrationTrend_CreatorAndAnalystByteIdentical_OutsiderDenied is
+// test 7 (NFR2): Creator and Analyst get byte-identical output; a Person
+// with no open role on the Channel is rejected.
+func TestGetCalibrationTrend_CreatorAndAnalystByteIdentical_OutsiderDenied(t *testing.T) {
+	f := newOutcomeBarFixture(t)
+	ctx := context.Background()
+	creatorCS := f.connect(t, f.creator.ID)
+
+	f.calibrationCandidate(t, ctx, "NFR2 Candidate", obMonthStart(2024, time.September, 1), ptrInt64OB(1000))
+	f.call(t, creatorCS, "set_outcome_bar", tools.SetOutcomeBarInput{
+		ChannelID: f.ch.ID.String(), MetricName: store.OutcomeBarMetricViews, ThresholdValue: 500,
+	})
+
+	creatorOut := obDecode[tools.GetCalibrationTrendOutput](t, f.call(t, creatorCS, "get_calibration_trend", tools.GetCalibrationTrendInput{ChannelID: f.ch.ID.String()}))
+
+	analystCS := f.connect(t, f.analyst.ID)
+	analystOut := obDecode[tools.GetCalibrationTrendOutput](t, f.call(t, analystCS, "get_calibration_trend", tools.GetCalibrationTrendInput{ChannelID: f.ch.ID.String()}))
+	assert.Equal(t, creatorOut, analystOut, "Creator and Analyst must see byte-identical output")
+
+	outsiderCS := f.connect(t, f.outsider.ID)
+	denied := f.call(t, outsiderCS, "get_calibration_trend", tools.GetCalibrationTrendInput{ChannelID: f.ch.ID.String()})
+	assert.True(t, denied.IsError, "a Person with no role must be denied")
+}
+
+// TestGetCalibrationTrend_NoBarConfigured_NotConfiguredOverRealMCPCall is
+// test 8 (FR6): a Channel with calibration candidates but no outcome bar
+// ever set returns configured:false, no buckets, and succeeds -- never an
+// error.
+func TestGetCalibrationTrend_NoBarConfigured_NotConfiguredOverRealMCPCall(t *testing.T) {
+	f := newOutcomeBarFixture(t)
+	ctx := context.Background()
+	cs := f.connect(t, f.creator.ID)
+
+	f.calibrationCandidate(t, ctx, "No Bar Yet", obMonthStart(2024, time.October, 1), ptrInt64OB(1000))
+
+	res := f.call(t, cs, "get_calibration_trend", tools.GetCalibrationTrendInput{ChannelID: f.ch.ID.String()})
+	require.False(t, res.IsError, "FR6: not-configured is a successful response, not an error: %s", obTextOf(res))
+	out := obDecode[tools.GetCalibrationTrendOutput](t, res)
+	assert.Equal(t, tools.OutcomeBarOutput{Configured: false}, out.OutcomeBar)
+	assert.Empty(t, out.Buckets)
+	assert.False(t, out.Truncated)
+}
+
+// TestGetCalibrationTrend_FR7_LimitTruncatesToMostRecentButStaysChronological
+// is test 9: seed candidates across several months, call with a limit
+// below that count, and assert truncated:true with the most-recent
+// buckets returned, still chronologically ordered among themselves.
+func TestGetCalibrationTrend_FR7_LimitTruncatesToMostRecentButStaysChronological(t *testing.T) {
+	f := newOutcomeBarFixture(t)
+	ctx := context.Background()
+	cs := f.connect(t, f.creator.ID)
+
+	f.call(t, cs, "set_outcome_bar", tools.SetOutcomeBarInput{
+		ChannelID: f.ch.ID.String(), MetricName: store.OutcomeBarMetricViews, ThresholdValue: 1000,
+	})
+
+	months := []time.Month{time.January, time.February, time.March, time.April, time.May}
+	for _, m := range months {
+		f.calibrationCandidate(t, ctx, m.String(), obMonthStart(2024, m, 10), ptrInt64OB(1000))
+	}
+
+	res := f.call(t, cs, "get_calibration_trend", tools.GetCalibrationTrendInput{ChannelID: f.ch.ID.String(), Limit: 2})
+	require.False(t, res.IsError, "get_calibration_trend must succeed: %s", obTextOf(res))
+	out := obDecode[tools.GetCalibrationTrendOutput](t, res)
+
+	assert.True(t, out.Truncated, "5 months exist, limit 2 must report truncation")
+	require.Len(t, out.Buckets, 2)
+	april := time.Date(2024, time.April, 1, 0, 0, 0, 0, time.UTC).Format(time.RFC3339)
+	may := time.Date(2024, time.May, 1, 0, 0, 0, 0, time.UTC).Format(time.RFC3339)
+	assert.Equal(t, april, out.Buckets[0].BucketStart, "the two MOST RECENT months, kept chronological between themselves")
+	assert.Equal(t, may, out.Buckets[1].BucketStart)
+}
+
+// TestGetCalibrationTrend_MultiTenantIsolation is test 10: another
+// Channel's calibration candidates must never appear in this Channel's
+// trend.
+func TestGetCalibrationTrend_MultiTenantIsolation(t *testing.T) {
+	f1 := newOutcomeBarFixture(t)
+	f2 := newOutcomeBarFixture(t)
+	ctx := context.Background()
+
+	f1.calibrationCandidate(t, ctx, "Channel 1 Candidate", obMonthStart(2024, time.November, 1), ptrInt64OB(1000))
+	f2.calibrationCandidate(t, ctx, "Channel 2 Candidate", obMonthStart(2024, time.November, 1), ptrInt64OB(1000))
+
+	cs1 := f1.connect(t, f1.creator.ID)
+	f1.call(t, cs1, "set_outcome_bar", tools.SetOutcomeBarInput{
+		ChannelID: f1.ch.ID.String(), MetricName: store.OutcomeBarMetricViews, ThresholdValue: 500,
+	})
+	out1 := obDecode[tools.GetCalibrationTrendOutput](t, f1.call(t, cs1, "get_calibration_trend", tools.GetCalibrationTrendInput{ChannelID: f1.ch.ID.String()}))
+	require.Len(t, out1.Buckets, 1)
+	assert.Equal(t, 1, out1.Buckets[0].Candidates, "ch1's bucket must not include ch2's candidate")
+
+	cs2 := f2.connect(t, f2.creator.ID)
+	f2.call(t, cs2, "set_outcome_bar", tools.SetOutcomeBarInput{
+		ChannelID: f2.ch.ID.String(), MetricName: store.OutcomeBarMetricViews, ThresholdValue: 500,
+	})
+	out2 := obDecode[tools.GetCalibrationTrendOutput](t, f2.call(t, cs2, "get_calibration_trend", tools.GetCalibrationTrendInput{ChannelID: f2.ch.ID.String()}))
+	require.Len(t, out2.Buckets, 1)
+	assert.Equal(t, 1, out2.Buckets[0].Candidates)
 }

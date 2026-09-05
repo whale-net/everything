@@ -2,10 +2,11 @@ package tools
 
 // Pure-Go coverage for outcome_bar.go's ChannelScopeID() on both input
 // types, get_outcome_bar's handler (both the FR2 "not configured" branch
-// and the fully-populated render), and set_outcome_bar's mutate rejecting
-// an unauthenticated caller -- all driven against an in-memory fake
-// store.OutcomeBarStore, no Postgres or MCP transport needed, mirroring
-// access_test.go's split.
+// and the fully-populated render), set_outcome_bar's mutate rejecting
+// an unauthenticated caller, and get_calibration_trend's handler
+// (FR5/FR6/FR7, issue #1885) -- all driven against in-memory fakes for
+// store.OutcomeBarStore and store.CalibrationStore, no Postgres or MCP
+// transport needed, mirroring access_test.go's split.
 //
 // What this file deliberately does NOT cover: setOutcomeBarMutate's
 // person.ID -> UpdatedByPersonID pass-through, and its mapping of
@@ -46,6 +47,9 @@ func TestOutcomeBarInputs_ChannelScopeID(t *testing.T) {
 
 	assert.Equal(t, id, GetOutcomeBarInput{ChannelID: id.String()}.ChannelScopeID())
 	assert.Equal(t, uuid.Nil, GetOutcomeBarInput{ChannelID: "not-a-uuid"}.ChannelScopeID())
+
+	assert.Equal(t, id, GetCalibrationTrendInput{ChannelID: id.String()}.ChannelScopeID())
+	assert.Equal(t, uuid.Nil, GetCalibrationTrendInput{ChannelID: "not-a-uuid"}.ChannelScopeID())
 }
 
 // ── fake store.OutcomeBarStore ───────────────────────────────────────────
@@ -156,4 +160,172 @@ func TestSetOutcomeBar_Mutate_RejectsUnparseableChannelID(t *testing.T) {
 	_, err := mutate(context.Background(), SetOutcomeBarInput{ChannelID: "not-a-uuid"})
 	assert.Error(t, err)
 	assert.Empty(t, fake.upsertCalls)
+}
+
+// ── fake store.CalibrationStore ──────────────────────────────────────────
+
+// fakeCalibrationStore is a configurable, in-memory store.CalibrationStore
+// stand-in scoped to what getCalibrationTrendHandler needs -- records every
+// MonthlyTrend call's arguments so tests can assert on what the handler
+// passed through (default-limit selection, FR6's "never called" branch)
+// without duplicating any bucketing/rate logic itself.
+type fakeCalibrationStore struct {
+	rows      []store.CalibrationBucket
+	truncated bool
+	err       error
+
+	calls []fakeCalibrationTrendCall
+}
+
+type fakeCalibrationTrendCall struct {
+	channelID     uuid.UUID
+	bar           store.OutcomeBar
+	since, before *time.Time
+	limit         int
+}
+
+var _ store.CalibrationStore = (*fakeCalibrationStore)(nil)
+
+func (f *fakeCalibrationStore) MonthlyTrend(_ context.Context, channelID uuid.UUID, bar store.OutcomeBar, since, before *time.Time, limit int) ([]store.CalibrationBucket, bool, error) {
+	f.calls = append(f.calls, fakeCalibrationTrendCall{channelID: channelID, bar: bar, since: since, before: before, limit: limit})
+	if f.err != nil {
+		return nil, false, f.err
+	}
+	return f.rows, f.truncated, nil
+}
+
+// ── get_calibration_trend ────────────────────────────────────────────────
+
+// TestGetCalibrationTrend_NotConfigured_ReturnsNotConfiguredAndNeverQueriesCalibration
+// is FR6's central assertion: on pgx.ErrNoRows from GetByChannel, the
+// handler must short-circuit to the shared not-configured shape with an
+// empty, non-nil Buckets slice, Truncated false, a nil error -- and,
+// critically, must never call calibration.MonthlyTrend at all (there is no
+// bar to classify against).
+func TestGetCalibrationTrend_NotConfigured_ReturnsNotConfiguredAndNeverQueriesCalibration(t *testing.T) {
+	bars := &fakeOutcomeBarStore{getErr: pgx.ErrNoRows}
+	calibration := &fakeCalibrationStore{}
+	h := getCalibrationTrendHandler(bars, calibration)
+
+	res, out, err := h(context.Background(), nil, GetCalibrationTrendInput{ChannelID: uuid.New().String()})
+	require.NoError(t, err, "FR6: not-configured is a successful response, never an error")
+	assert.Nil(t, res)
+	assert.Equal(t, notConfiguredOutcomeBar(), out.OutcomeBar)
+	assert.NotNil(t, out.Buckets, "Buckets must be non-nil so a client never distinguishes null from []")
+	assert.Empty(t, out.Buckets)
+	assert.False(t, out.Truncated)
+	assert.Empty(t, calibration.calls, "calibration.MonthlyTrend must never be called when no bar is configured")
+}
+
+// TestGetCalibrationTrend_DefaultLimit_ReachesStoreAsTwelve proves
+// Limit: 0 (the zero value / omitted) is defaulted to
+// defaultCalibrationTrendLimit before reaching the store, not passed
+// through as a literal 0 (which store.CalibrationStore.MonthlyTrend
+// treats as unbounded).
+func TestGetCalibrationTrend_DefaultLimit_ReachesStoreAsTwelve(t *testing.T) {
+	channelID := uuid.New()
+	bar := store.OutcomeBar{MetricName: store.OutcomeBarMetricViews, ThresholdValue: 1000}
+	bars := &fakeOutcomeBarStore{getBar: bar}
+	calibration := &fakeCalibrationStore{}
+	h := getCalibrationTrendHandler(bars, calibration)
+
+	_, _, err := h(context.Background(), nil, GetCalibrationTrendInput{ChannelID: channelID.String()})
+	require.NoError(t, err)
+	require.Len(t, calibration.calls, 1)
+	assert.Equal(t, defaultCalibrationTrendLimit, calibration.calls[0].limit)
+	assert.Equal(t, 12, calibration.calls[0].limit, "default is stated as twelve months of buckets")
+	assert.Equal(t, channelID, calibration.calls[0].channelID)
+	assert.Equal(t, bar, calibration.calls[0].bar, "must classify against the CURRENT bar just read (FR4)")
+}
+
+// TestGetCalibrationTrend_ExplicitLimit_ReachesStoreUnchanged proves a
+// caller-supplied Limit passes straight through, uncapped and undefaulted.
+func TestGetCalibrationTrend_ExplicitLimit_ReachesStoreUnchanged(t *testing.T) {
+	bars := &fakeOutcomeBarStore{getBar: store.OutcomeBar{MetricName: store.OutcomeBarMetricViews, ThresholdValue: 1000}}
+	calibration := &fakeCalibrationStore{}
+	h := getCalibrationTrendHandler(bars, calibration)
+
+	_, _, err := h(context.Background(), nil, GetCalibrationTrendInput{ChannelID: uuid.New().String(), Limit: 3})
+	require.NoError(t, err)
+	require.Len(t, calibration.calls, 1)
+	assert.Equal(t, 3, calibration.calls[0].limit)
+}
+
+// TestGetCalibrationTrend_SinceBefore_PassedThroughUnchanged proves
+// Since/Before reach calibration.MonthlyTrend exactly as given, with no
+// reinterpretation in the handler.
+func TestGetCalibrationTrend_SinceBefore_PassedThroughUnchanged(t *testing.T) {
+	bars := &fakeOutcomeBarStore{getBar: store.OutcomeBar{MetricName: store.OutcomeBarMetricViews, ThresholdValue: 1000}}
+	calibration := &fakeCalibrationStore{}
+	h := getCalibrationTrendHandler(bars, calibration)
+
+	since := time.Date(2025, 1, 1, 0, 0, 0, 0, time.UTC)
+	before := time.Date(2025, 6, 1, 0, 0, 0, 0, time.UTC)
+	_, _, err := h(context.Background(), nil, GetCalibrationTrendInput{ChannelID: uuid.New().String(), Since: &since, Before: &before})
+	require.NoError(t, err)
+	require.Len(t, calibration.calls, 1)
+	require.NotNil(t, calibration.calls[0].since)
+	require.NotNil(t, calibration.calls[0].before)
+	assert.True(t, since.Equal(*calibration.calls[0].since))
+	assert.True(t, before.Equal(*calibration.calls[0].before))
+}
+
+// TestGetCalibrationTrend_RendersRowsInStoreOrder_TruncatedPassedThrough
+// proves the handler neither re-sorts the store's rows nor recomputes
+// truncated -- both are rendered exactly as store.CalibrationStore
+// returned them (FR5/FR7).
+func TestGetCalibrationTrend_RendersRowsInStoreOrder_TruncatedPassedThrough(t *testing.T) {
+	channelID := uuid.New()
+	bar := store.OutcomeBar{MetricName: store.OutcomeBarMetricViews, ThresholdValue: 1000, ChannelID: channelID}
+	jan := time.Date(2024, 1, 1, 0, 0, 0, 0, time.UTC)
+	feb := time.Date(2024, 2, 1, 0, 0, 0, 0, time.UTC)
+	bars := &fakeOutcomeBarStore{getBar: bar}
+	calibration := &fakeCalibrationStore{
+		rows: []store.CalibrationBucket{
+			{BucketStart: jan, Candidates: 3, Calibrated: 2, Miscalibrated: 1, Rate: 2.0 / 3.0},
+			{BucketStart: feb, Candidates: 2, Calibrated: 0, Miscalibrated: 2, Rate: 0},
+		},
+		truncated: true,
+	}
+	h := getCalibrationTrendHandler(bars, calibration)
+
+	_, out, err := h(context.Background(), nil, GetCalibrationTrendInput{ChannelID: channelID.String()})
+	require.NoError(t, err)
+	assert.True(t, out.Truncated, "truncated must be passed through unchanged")
+	require.Len(t, out.Buckets, 2)
+	assert.Equal(t, jan.Format(time.RFC3339), out.Buckets[0].BucketStart, "must render in the store's returned order (chronological), never re-sorted")
+	assert.Equal(t, feb.Format(time.RFC3339), out.Buckets[1].BucketStart)
+	assert.Equal(t, 3, out.Buckets[0].Candidates)
+	assert.Equal(t, 2, out.Buckets[0].Calibrated)
+	assert.Equal(t, 1, out.Buckets[0].Miscalibrated)
+	assert.InDelta(t, 2.0/3.0, out.Buckets[0].CalibrationRate, 1e-9)
+	assert.True(t, out.OutcomeBar.Configured)
+	assert.Equal(t, toOutcomeBarOutput(bar), out.OutcomeBar, "must echo the bar classified against")
+}
+
+// TestGetCalibrationTrend_OtherStoreError_Propagated proves only
+// pgx.ErrNoRows collapses to the not-configured shape -- any other error
+// from GetByChannel must surface.
+func TestGetCalibrationTrend_OtherStoreError_Propagated(t *testing.T) {
+	bars := &fakeOutcomeBarStore{getErr: assert.AnError}
+	calibration := &fakeCalibrationStore{}
+	h := getCalibrationTrendHandler(bars, calibration)
+
+	_, out, err := h(context.Background(), nil, GetCalibrationTrendInput{ChannelID: uuid.New().String()})
+	assert.Error(t, err, "only pgx.ErrNoRows collapses to not-configured -- any other error must surface")
+	assert.Equal(t, GetCalibrationTrendOutput{}, out)
+	assert.Empty(t, calibration.calls, "must not query calibration when the bar lookup itself failed")
+}
+
+// TestGetCalibrationTrend_CalibrationStoreError_Propagated proves an error
+// from calibration.MonthlyTrend itself (once a bar IS configured) also
+// surfaces rather than being swallowed.
+func TestGetCalibrationTrend_CalibrationStoreError_Propagated(t *testing.T) {
+	bars := &fakeOutcomeBarStore{getBar: store.OutcomeBar{MetricName: store.OutcomeBarMetricViews, ThresholdValue: 1000}}
+	calibration := &fakeCalibrationStore{err: assert.AnError}
+	h := getCalibrationTrendHandler(bars, calibration)
+
+	_, out, err := h(context.Background(), nil, GetCalibrationTrendInput{ChannelID: uuid.New().String()})
+	assert.Error(t, err)
+	assert.Equal(t, GetCalibrationTrendOutput{}, out)
 }

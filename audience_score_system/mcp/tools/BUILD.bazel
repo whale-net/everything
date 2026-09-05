@@ -359,18 +359,24 @@ go_test(
 )
 
 # set_outcome_bar/get_outcome_bar (outcome_bar.go, issue #1883, C14/FR1/
-# FR2/NFR1/NFR2): NFR2 write authority (Creator AND Analyst can both call
-# set_outcome_bar -- the FR17-precedent assertion that proving only
+# FR2/NFR1/NFR2) and get_calibration_trend (outcome_bar.go, issue #1885,
+# FR5/FR6/FR7/NFR2): NFR2 write authority (Creator AND Analyst can both
+# call set_outcome_bar -- the FR17-precedent assertion that proving only
 # Creator access would not cover -- an outsider denied writes nothing) and
-# read authority (Creator/Analyst byte-identical get_outcome_bar output,
-# outsider denied), NFR1's natural-key upsert convergence (two identical
-# set_outcome_bar calls leave one row, identical output), the caller's
-# person.ID -> UpdatedByPersonID pass-through across two different
-# callers, the set_outcome_bar/get_outcome_bar round trip including an
-# immediately-reflected update, FR2's not-configured:false success (not an
-# error) over a real MCP call, and an unsupported metric_name / negative
-# threshold_value rejected over the wire with a readable message while
-# leaving a previously configured bar untouched -- all against the real
+# read authority (Creator/Analyst byte-identical get_outcome_bar and
+# get_calibration_trend output, outsider denied), NFR1's natural-key
+# upsert convergence (two identical set_outcome_bar calls leave one row,
+# identical output), the caller's person.ID -> UpdatedByPersonID
+# pass-through across two different callers, the set_outcome_bar/
+# get_outcome_bar round trip including an immediately-reflected update,
+# FR2's not-configured:false success (not an error) over a real MCP call,
+# an unsupported metric_name / negative threshold_value rejected over the
+# wire with a readable message while leaving a previously configured bar
+# untouched, get_calibration_trend's full seed -> set_outcome_bar ->
+# bucketed-trend path with mixed calibration, FR4 reclassification when
+# the bar changes, FR6's not-configured result on a Channel with
+# candidates but no bar, FR7 truncation keeping the most recent buckets
+# chronological, and multi-tenant isolation -- all against the real
 # embedded schema and a real HTTP-hosted MCP server, mirroring
 # strategy_integration_test.go's pattern. Deliberately NOT part of
 # `bazel test //...` -- see //libs/go/dbtest's README for the full
