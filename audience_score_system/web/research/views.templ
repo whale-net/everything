@@ -1,0 +1,277 @@
+package research
+
+import (
+	"strconv"
+
+	"github.com/google/uuid"
+
+	"github.com/whale-net/everything/audience_score_system/store"
+	"github.com/whale-net/everything/audience_score_system/web/components"
+)
+
+// verdictLabel renders a human-readable label for store.VerdictValue,
+// mirroring web/schedule's statusLabel and web/pages's
+// connectionStateLabel convention.
+func verdictLabel(v store.VerdictValue) string {
+	switch v {
+	case store.VerdictViable:
+		return "Viable"
+	case store.VerdictNotViable:
+		return "Not viable"
+	case store.VerdictNeedsMoreResearch:
+		return "Needs more research"
+	default:
+		return string(v)
+	}
+}
+
+// verdictBadgeClass picks a daisyUI badge color matching verdictLabel.
+func verdictBadgeClass(v store.VerdictValue) string {
+	switch v {
+	case store.VerdictViable:
+		return "badge badge-success"
+	case store.VerdictNotViable:
+		return "badge badge-error"
+	case store.VerdictNeedsMoreResearch:
+		return "badge badge-warning"
+	default:
+		return "badge badge-ghost"
+	}
+}
+
+// verdictSourceLabel renders store.VerdictSource (FR5) -- "Agent" for a
+// verdict written via MCP's save_viability_verdict, "Human" for one
+// written via this milestone's web save-verdict form (a future task).
+func verdictSourceLabel(s store.VerdictSource) string {
+	switch s {
+	case store.VerdictSourceHuman:
+		return "Human"
+	case store.VerdictSourceAgent:
+		return "Agent"
+	default:
+		return string(s)
+	}
+}
+
+// authorName looks up personID in names, returning "unknown" rather than
+// a blank string if it is somehow missing -- mirrors web/access's
+// auditActorLabel convention. This should not happen in practice: the
+// handler resolves every AuthorPersonID it renders before calling this
+// view.
+func authorName(names map[uuid.UUID]string, personID uuid.UUID) string {
+	if name, ok := names[personID]; ok && name != "" {
+		return name
+	}
+	return "unknown"
+}
+
+// ChannelIndex is the Channel-scoped research index (FR1): every Idea on
+// ch with its note count and verdict presence, linking to IdeaDetail, plus
+// a separate section for research notes that predate any Idea (M1 FR9).
+// ideasTruncated/notesTruncated (NFR2) each render a plain static note
+// when the corresponding list hit its 50-row default page -- no "load
+// more" control, no pagination widget anywhere on this page.
+templ ChannelIndex(data components.LayoutData, ch store.Channel, ideas []store.IdeaSummary, unattachedNotes []store.ResearchNoteWithAuthor, ideasTruncated bool, notesTruncated bool) {
+	@components.Layout(data) {
+		<div class="card bg-base-100 border border-base-300 shadow-sm">
+			<div class="card-body">
+				<h1 class="card-title">{ ch.Title } research</h1>
+				if len(ideas) == 0 {
+					<p class="text-base-content/70">No ideas recorded yet.</p>
+				} else {
+					<div class="overflow-x-auto">
+						<table class="table">
+							<thead>
+								<tr>
+									<th>Idea</th>
+									<th>Notes</th>
+									<th>Verdict</th>
+								</tr>
+							</thead>
+							<tbody>
+								for _, idea := range ideas {
+									@ideaRow(ch, idea)
+								}
+							</tbody>
+						</table>
+					</div>
+				}
+				if ideasTruncated {
+					<p class="text-base-content/50 text-xs mt-2">
+						Showing the first { strconv.Itoa(defaultPageLimit) } ideas; older ones are not shown.
+					</p>
+				}
+
+				<div class="mt-6">
+					<h2 class="text-lg font-semibold">Unattached notes</h2>
+					<p class="text-sm text-base-content/70">
+						These research notes predate any Idea and so do not fit the
+						Channel-to-Idea hierarchy above.
+					</p>
+					if len(unattachedNotes) == 0 {
+						<p class="text-base-content/70 mt-2">No unattached notes.</p>
+					} else {
+						<ul class="mt-2 space-y-2">
+							for _, note := range unattachedNotes {
+								<li class="border border-base-300 rounded p-2">
+									@noteBody(note)
+								</li>
+							}
+						</ul>
+					}
+					if notesTruncated {
+						<p class="text-base-content/50 text-xs mt-2">
+							Showing the Channel's { strconv.Itoa(defaultPageLimit) } most recent
+							research notes overall; older ones (attached or not) are not shown.
+						</p>
+					}
+				</div>
+
+				<div class="card-actions justify-end mt-2">
+					<a href={ templ.URL("/channels/" + ch.ID.String()) } class="btn btn-secondary btn-sm">
+						Back to channel
+					</a>
+				</div>
+			</div>
+		</div>
+	}
+}
+
+// ideaRow renders one store.IdeaSummary: title (linking to its
+// IdeaDetail page), note count, and "verdict recorded" / "none yet".
+templ ideaRow(ch store.Channel, idea store.IdeaSummary) {
+	<tr>
+		<td>
+			<a href={ templ.URL("/channels/" + ch.ID.String() + "/research/ideas/" + idea.ID.String()) } class="link link-primary">
+				{ idea.Title }
+			</a>
+		</td>
+		<td>{ strconv.Itoa(idea.NoteCount) }</td>
+		<td>
+			if idea.HasVerdict {
+				<span class="badge badge-success">Verdict recorded</span>
+			} else {
+				<span class="badge badge-ghost">None yet</span>
+			}
+		</td>
+	</tr>
+}
+
+// citedBadge renders FR10's explicit cited/uncited indicator, read from
+// note.Cited() -- never a local nil-check on the note's source URL field
+// in this template (that derivation lives in exactly one place,
+// store.ResearchNote.Cited).
+templ citedBadge(note store.ResearchNoteWithAuthor) {
+	if note.Cited() {
+		<span class="badge badge-success">Cited</span>
+	} else {
+		<span class="badge badge-ghost">Uncited</span>
+	}
+}
+
+// noteBody renders one store.ResearchNoteWithAuthor: its text, author
+// display name, created_at, the cited/uncited indicator (FR10), and --
+// when cited -- its source_url as a link.
+templ noteBody(note store.ResearchNoteWithAuthor) {
+	<div class="flex justify-between items-start gap-4">
+		<div>
+			<p>{ note.Text }</p>
+			<p class="text-xs text-base-content/70">
+				{ note.AuthorDisplayName } — { note.CreatedAt.UTC().Format("2006-01-02 15:04 UTC") }
+			</p>
+			if note.Cited() {
+				<p class="text-xs">
+					Source: <a href={ templ.URL(*note.SourceURL) } class="link" target="_blank" rel="noopener noreferrer">{ *note.SourceURL }</a>
+				</p>
+			}
+		</div>
+		@citedBadge(note)
+	</div>
+}
+
+// IdeaDetail is one Idea's research-note list (FR2, FR10) and full
+// viability-verdict version history (FR9): current, then every version
+// oldest-to-newest, each showing value, reasoning, author display name,
+// source (FR5), and created_at -- content-identical to
+// get_viability_verdict's current + history fields. authorNames maps a
+// Verdict's AuthorPersonID (as a UUID string) to its display name --
+// resolved once per distinct author by the handler (Verdict carries no
+// AuthorDisplayName field of its own, unlike ResearchNoteWithAuthor).
+//
+// No form, no POST action, no write affordance anywhere on this page --
+// FR3/FR4/FR6/FR7's save forms land here in follow-up tasks.
+templ IdeaDetail(data components.LayoutData, ch store.Channel, idea store.Idea, notes []store.ResearchNoteWithAuthor, notesTruncated bool, current *store.Verdict, history []store.Verdict, authorNames map[uuid.UUID]string) {
+	@components.Layout(data) {
+		<div class="card bg-base-100 border border-base-300 shadow-sm">
+			<div class="card-body">
+				<h1 class="card-title">{ idea.Title }</h1>
+
+				<div class="mt-2">
+					<h2 class="text-lg font-semibold">Research notes</h2>
+					if len(notes) == 0 {
+						<p class="text-base-content/70">No research notes yet.</p>
+					} else {
+						<ul class="mt-2 space-y-2">
+							for _, note := range notes {
+								<li class="border border-base-300 rounded p-2">
+									@noteBody(note)
+								</li>
+							}
+						</ul>
+					}
+					if notesTruncated {
+						<p class="text-base-content/50 text-xs mt-2">
+							Showing the { strconv.Itoa(defaultPageLimit) } most recent notes;
+							older ones are not shown.
+						</p>
+					}
+				</div>
+
+				<div class="mt-6">
+					<h2 class="text-lg font-semibold">Viability verdict</h2>
+					if current == nil {
+						<p class="text-base-content/70 mt-2">No verdict recorded yet.</p>
+					} else {
+						<div class="border border-base-300 rounded p-2 mt-2">
+							<p class="text-sm font-semibold">Current</p>
+							@verdictBody(*current, authorNames)
+						</div>
+					}
+
+					if len(history) > 0 {
+						<h3 class="text-sm font-semibold mt-4">History (oldest to newest)</h3>
+						<ul class="mt-2 space-y-2">
+							for _, v := range history {
+								<li class="border border-base-300 rounded p-2">
+									@verdictBody(v, authorNames)
+								</li>
+							}
+						</ul>
+					}
+				</div>
+
+				<div class="card-actions justify-end mt-2">
+					<a href={ templ.URL("/channels/" + ch.ID.String() + "/research") } class="btn btn-secondary btn-sm">
+						Back to research
+					</a>
+				</div>
+			</div>
+		</div>
+	}
+}
+
+// verdictBody renders one store.Verdict: version, value badge, reasoning,
+// author display name (from authorNames, keyed by AuthorPersonID as a
+// UUID string), source (FR5), and created_at.
+templ verdictBody(v store.Verdict, authorNames map[uuid.UUID]string) {
+	<div class="flex justify-between items-start gap-4">
+		<div>
+			<p class="text-sm text-base-content/70">Version { strconv.Itoa(v.Version) }</p>
+			<p>{ v.Reasoning }</p>
+			<p class="text-xs text-base-content/70">
+				{ authorName(authorNames, v.AuthorPersonID) } ({ verdictSourceLabel(v.Source) }) — { v.CreatedAt.UTC().Format("2006-01-02 15:04 UTC") }
+			</p>
+		</div>
+		<span class={ verdictBadgeClass(v.Verdict) }>{ verdictLabel(v.Verdict) }</span>
+	</div>
+}
