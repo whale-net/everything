@@ -208,6 +208,7 @@ message RenderedConfiguration {
   string rendered_content = 4;  // Final rendered configuration
   string base_content = 5;  // Base template before patches
   repeated PatchLayer patches = 6;  // Show the layering
+  string patch_format = 7;  // "properties", "json_merge_patch", "json_patch", "yaml_merge", "template" - controls how rendered_content is interpreted
 }
 
 // ============================================================================

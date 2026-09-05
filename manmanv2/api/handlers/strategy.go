@@ -195,6 +195,15 @@ func (h *ConfigurationStrategyHandler) GetSessionConfiguration(ctx context.Conte
 		// Host-manager will merge this with existing file if base is empty (merge mode)
 		rendered.RenderedContent = patchContent
 
+		// The most specific patch (last in cascade order) determines how rendered_content
+		// should be interpreted; fall back to the strategy type's natural default format.
+		rendered.PatchFormat = defaultPatchFormatForStrategyType(strategy.StrategyType)
+		for _, p := range allPatches {
+			if p.PatchFormat != "" {
+				rendered.PatchFormat = p.PatchFormat
+			}
+		}
+
 		renderedConfigs = append(renderedConfigs, rendered)
 	}
 
@@ -243,6 +252,21 @@ func strategyToProto(s *manman.ConfigurationStrategy) *pb.ConfigurationStrategy 
 	}
 
 	return proto
+}
+
+// defaultPatchFormatForStrategyType returns the natural patch_format for a strategy
+// type when no patch explicitly sets one.
+func defaultPatchFormatForStrategyType(strategyType string) string {
+	switch strategyType {
+	case manman.StrategyTypeFileJSON:
+		return manman.PatchFormatJSONMergePatch
+	case manman.StrategyTypeFileYAML:
+		return manman.PatchFormatYAMLMerge
+	case manman.StrategyTypeFileProperties, manman.StrategyTypeEnvVars, manman.StrategyTypeCLIArgs:
+		return manman.PatchFormatProperties
+	default:
+		return manman.PatchFormatTemplate
+	}
 }
 
 // joinPatchContents concatenates non-nil patch contents with newline separators.
