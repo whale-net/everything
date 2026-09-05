@@ -5,7 +5,7 @@
 // ../../ENV.md). This is the pain point issue #1650 hit directly:
 // committing a schedule draft or reconnecting a Channel has no way to
 // verify the change took effect without polling list_pending_matches /
-// get_channel_schedule for up to a full sync interval. `web` has no
+// get_channel_overview for up to a full sync interval. `web` has no
 // equivalent surface -- NFR3 keeps this MCP-only, same as every other
 // C6/C9 tool (see ../../ARCHITECTURE.md "NFR3 interface allocation").
 package tools

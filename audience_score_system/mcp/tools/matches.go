@@ -186,7 +186,7 @@ type ListPendingMatchesOutput struct {
 
 // registerListPendingMatches registers list_pending_matches via
 // server.RegisterRead -- Channel-scoped (NFR5), Creator and Analyst both
-// allowed (store.CanRead, same as get_channel_schedule).
+// allowed (store.CanRead, same as every other C10 browsing read).
 func registerListPendingMatches(reg *server.Registry, matches store.MatchStore, deps matchDeps) {
 	server.RegisterRead(reg, &mcp.Tool{
 		Name: "list_pending_matches",
