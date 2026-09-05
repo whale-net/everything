@@ -9,13 +9,13 @@
 // Neither tool performs its own role check: server.RegisterWrite/
 // RegisterRead apply store.CanWrite/store.CanRead automatically to any
 // input implementing server.ChannelScoped (NFR2), and that tier -- not
-// Creator-only -- is deliberate. set_pacing_policy/get_pacing_policy
-// (retired outright by M2.1, issue #1832; see ARCHITECTURE.md "FR17
-// authority") are the root plan's cited precedent for this rule: a
-// Channel's calibration configuration is available to any Creator or
-// Analyst with an open role, same tier as every other write in this
-// package. This task reproduces that RULE, not the retired code, and
-// does not re-register either retired tool name.
+// Creator-only -- is deliberate. The FR17-authority precedent for
+// Channel-level planning inputs (CanWrite gating; see ARCHITECTURE.md
+// "FR17 authority"), from tooling retired outright by M2.1, issue #1832,
+// governs this rule: a Channel's calibration configuration is available
+// to any Creator or Analyst with an open role, same tier as every other
+// write in this package. This task reproduces that RULE, not the retired
+// code, and does not re-register either retired tool.
 package tools
 
 import (
@@ -90,9 +90,10 @@ func (i SetOutcomeBarInput) ChannelScopeID() uuid.UUID {
 }
 
 // registerSetOutcomeBar registers set_outcome_bar via server.RegisterWrite,
-// so store.CanWrite (Creator, Co-Creator, or Analyst -- reproducing
-// set_pacing_policy's retired FR17-authority rule, not its code) applies
-// automatically; no explicit role check belongs in mutate.
+// so store.CanWrite (Creator, Co-Creator, or Analyst -- reproducing the
+// retired FR17-authority rule for Channel-level planning inputs, see
+// ARCHITECTURE.md "FR17 authority", not its code) applies automatically;
+// no explicit role check belongs in mutate.
 func registerSetOutcomeBar(reg *server.Registry, bars store.OutcomeBarStore) {
 	server.RegisterWrite(reg, &mcp.Tool{
 		Name: "set_outcome_bar",
