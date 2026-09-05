@@ -165,7 +165,7 @@ go_test(
 # resolve_pending_match's confirm (creates the outcome link -- the video's
 # idea appears in v_prediction_vs_outcome afterward) and reject (leaves the
 # video unmatched, never appears in the comparison, FR23) paths, confirming
-# against an explicit schedule_entry_id override rather than the matcher's
+# against an explicit video_script_id override rather than the matcher's
 # best guess, NFR2 idempotency replay (identical result, no second
 # mutation) and conflict (a second resolve under a different key on an
 # already-resolved match is rejected, first resolution unchanged --
@@ -213,9 +213,9 @@ go_test(
 # FR24, C10): the load-bearing regression is
 # TestGetPredictionVsOutcome_BoundVerdictSurvivesNewerVerdictVersion --
 # proving store.BrowseStore.PredictionVsOutcome's deliberate deviation from
-# migration 002's v_prediction_vs_outcome view (joining schedule_entry
+# migration 012's v_prediction_vs_outcome view (joining video_script
 # directly to viability_verdict via verdict_id rather than through
-# v_current_verdict) actually holds: a schedule_entry committed under an
+# v_current_verdict) actually holds: a video_script greenlit under an
 # older verdict version keeps reporting that bound version after a newer
 # one is appended for the same Idea. Also covers get_channel_overview's
 # full-population/empty-channel/truncation/needs_reauth-still-browses

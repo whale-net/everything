@@ -22,8 +22,8 @@ type AppendVerdictInput struct {
 	CitedResearchNoteIDs []uuid.UUID
 }
 
-// ErrVerdictNotViable is returned by ScheduleStore.SaveDraft when the
-// referenced Verdict's Verdict field is not VerdictViable (FR16).
+// ErrVerdictNotViable is returned by VideoScriptStore.Propose when the
+// referenced Verdict's Verdict field is not VerdictViable (FR36).
 var ErrVerdictNotViable = errors.New("referenced verdict is not viable")
 
 // VerdictStore covers `viability_verdict` and `verdict_citation`

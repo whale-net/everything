@@ -1,10 +1,10 @@
 // video_script.go covers `video_script` (migration 010, milestone
-// video-script-model, issues #1823/#1824) -- M2.1's replacement for
-// schedule_entry as the record of a proposed video: Propose/Greenlight/
-// Deny/Archive's full propose/greenlit/denied/archived lifecycle
-// (FR36-FR40), plus the publish-freeze predicate Archive consults (FR39,
-// modelled on scheduleStore's isPublished, store/schedule.go). Every
-// other task in this milestone depends on this file.
+// video-script-model, issues #1823/#1824) -- M2.1's replacement for the
+// now-dropped schedule_entry table (migration 013, issue #1835) as the
+// record of a proposed video: Propose/Greenlight/Deny/Archive's full
+// propose/greenlit/denied/archived lifecycle (FR36-FR40), plus the
+// publish-freeze predicate Archive consults (FR39). Every other task in
+// this milestone depends on this file.
 //
 // VideoScriptStore performs NO authorization itself -- store.CanWrite
 // (propose) and store.CanApprove (greenlight/deny/archive) are applied by
@@ -65,8 +65,7 @@ type ProposeVideoScriptInput struct {
 type VideoScriptStore interface {
 	// Propose inserts a proposed video_script in one transaction (FR36,
 	// NFR12/13). Returns ErrVerdictNotViable without writing anything if
-	// in.VerdictID does not exist or its verdict is not VerdictViable --
-	// mirrors ScheduleStore.SaveDraft's gate (store/schedule.go) exactly.
+	// in.VerdictID does not exist or its verdict is not VerdictViable.
 	// Also rejects (with an error, no write) if in.VerdictID's idea is not
 	// on in.ChannelID, or in.StrategyID is not on in.ChannelID. IdeaID is
 	// always derived from in.VerdictID, never accepted from the caller.
@@ -102,17 +101,15 @@ type VideoScriptStore interface {
 
 	// ListDetailByChannel returns every VideoScriptDetail for channelID,
 	// joining the bound verdict version/value, idea title, and strategy
-	// title, and computing Published per row -- modelled directly on
-	// ScheduleStore.ListDetailByChannel (store/schedule.go).
+	// title, and computing Published per row.
 	ListDetailByChannel(ctx context.Context, channelID uuid.UUID) ([]VideoScriptDetail, error)
 
 	// IsPublished reports whether scriptID has a live (auto or confirmed)
 	// video_schedule_match row whose synced_video.published_at is
 	// non-null -- FR39's freeze predicate (issue #1824), the pool-level
-	// wrapper `web`'s view-rendering code calls directly, mirroring
-	// ScheduleStore.IsPublished (store/schedule.go). Archive consults the
-	// same predicate atomically, inside its own transaction, rather than
-	// calling this method.
+	// wrapper `web`'s view-rendering code calls directly. Archive consults
+	// the same predicate atomically, inside its own transaction, rather
+	// than calling this method.
 	IsPublished(ctx context.Context, scriptID uuid.UUID) (bool, error)
 }
 
@@ -125,8 +122,7 @@ var _ VideoScriptStore = videoScriptStore{}
 const videoScriptColumns = `id, channel_id, idea_id, verdict_id, strategy_id, title, script_text, status, target_publish_date, decided_by_person_id, decided_at, created_by_person_id, created_at, updated_at, COALESCE(idempotency_key, '')`
 
 // videoScriptColumnsAliased is videoScriptColumns qualified with the vs.
-// alias ListDetailByChannel's multi-table join needs (mirroring
-// schedule.go's scheduleEntryColumnsAliased pattern).
+// alias ListDetailByChannel's multi-table join needs.
 const videoScriptColumnsAliased = `vs.id, vs.channel_id, vs.idea_id, vs.verdict_id, vs.strategy_id, vs.title, vs.script_text, vs.status, vs.target_publish_date, vs.decided_by_person_id, vs.decided_at, vs.created_by_person_id, vs.created_at, vs.updated_at, COALESCE(vs.idempotency_key, '')`
 
 func scanVideoScript(row pgx.Row) (VideoScript, error) {
@@ -136,13 +132,12 @@ func scanVideoScript(row pgx.Row) (VideoScript, error) {
 }
 
 // Propose honours IdempotencyKey (a replayed (channel, author, key) triple
-// returns the original row unchanged) exactly like ScheduleStore.SaveDraft
-// (NFR12/LB4). Otherwise, inside the same transaction, it looks up
-// in.VerdictID's verdict, idea, and idea's channel -- rejecting with
-// ErrVerdictNotViable unless the verdict exists and is VerdictViable
-// (mirroring ScheduleStore.SaveDraft's gate exactly), and with a plain
-// error if the verdict's idea is not on in.ChannelID (mirroring
-// StrategyStore.Save's identical check) -- then confirms in.StrategyID is
+// returns the original row unchanged) per NFR12/LB4. Otherwise, inside the
+// same transaction, it looks up in.VerdictID's verdict, idea, and idea's
+// channel -- rejecting with ErrVerdictNotViable unless the verdict exists
+// and is VerdictViable, and with a plain error if the verdict's idea is
+// not on in.ChannelID (mirroring StrategyStore.Save's identical check) --
+// then confirms in.StrategyID is
 // on in.ChannelID (ErrStrategyNotFound otherwise, reused rather than
 // inventing a second "not found on this channel" spelling). idea_id is
 // always taken from the verdict row, never in.IdeaID (there is no such
@@ -319,12 +314,19 @@ func (s videoScriptStore) ListByChannel(ctx context.Context, channelID uuid.UUID
 	return scripts, nil
 }
 
+// dbQueryRower is the subset of *pgxpool.Pool and pgx.Tx
+// isVideoScriptPublished needs -- lets Archive run the same freeze check
+// against its own transaction (atomically with the mutation) that
+// VideoScriptStore.IsPublished runs directly against the pool.
+type dbQueryRower interface {
+	QueryRow(ctx context.Context, sql string, args ...any) pgx.Row
+}
+
 // isVideoScriptPublished is IsPublished's shared body, factored out so
 // Archive can run it inside its own transaction (q == the tx) while
 // VideoScriptStore.IsPublished runs it directly against the pool (q ==
 // s.pool) -- exactly one query defines "recorded as published" for
-// video_script (FR39), mirroring isPublished (schedule.go) for
-// schedule_entry. A pending match does not freeze -- only a live
+// video_script (FR39). A pending match does not freeze -- only a live
 // (auto/confirmed) match to a synced_video with a non-null published_at
 // does.
 func isVideoScriptPublished(ctx context.Context, q dbQueryRower, scriptID uuid.UUID) (bool, error) {
@@ -351,9 +353,11 @@ func (s videoScriptStore) IsPublished(ctx context.Context, scriptID uuid.UUID) (
 
 // ListDetailByChannel joins video_script with its bound idea (title),
 // viability_verdict (version/value), and strategy (title), plus -- via a
-// LATERAL subquery mirroring ScheduleStore.ListDetailByChannel exactly,
-// including the same row-multiplication guard rationale -- whether it has
-// a live, published match. Not channel-scoped by the row's own channel_id
+// LATERAL subquery (guarding against row multiplication: nothing in the
+// schema prevents more than one live match row per video_script_id, and a
+// plain join would silently duplicate the video_script row for each one)
+// -- whether it has a live, published match. Not channel-scoped by the
+// row's own channel_id
 // alone in the sense of leaking another Channel's rows: the WHERE clause
 // below is exactly vs.channel_id = $1, so a second Channel's scripts never
 // appear.

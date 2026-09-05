@@ -23,7 +23,7 @@ type MyWorkStore interface {
 	// AccessStore.ChannelsWithRoleForPerson exactly, since that method is
 	// this one's Channel-set source. Every such Channel appears even when
 	// it has no notes/verdict/schedule/outcome data yet (LatestNotes
-	// empty, LatestVerdict/LatestOutcome nil, ScheduleState zero-valued)
+	// empty, LatestVerdict/LatestOutcome nil, ScriptState zero-valued)
 	// -- never a missing entry. notesPerChannel caps LatestNotes per
 	// Channel (most-recent-first); <= 0 returns none.
 	//
@@ -48,9 +48,9 @@ type MyWorkStore interface {
 }
 
 // myWorkStore implements MyWorkStore over research_note, viability_verdict/
-// idea, schedule_entry (loadScheduleState only -- #1835's retirement task
-// still owns that section), and the predictionOutcomeJoin chain (browse.go,
-// video_script-anchored per #1830's FR44 re-anchor), scoped by
+// idea, video_script (loadVideoScriptState, retargeted from schedule_entry
+// by issue #1835's retirement task), and the predictionOutcomeJoin chain
+// (browse.go, video_script-anchored per #1830's FR44 re-anchor), scoped by
 // AccessStore.ChannelsWithRoleForPerson's Channel set.
 type myWorkStore struct{ pool *pgxpool.Pool }
 
@@ -93,7 +93,7 @@ func (s myWorkStore) SummariesForPerson(ctx context.Context, personID uuid.UUID,
 	if err := s.loadLatestVerdicts(ctx, channelIDs, summaries, index); err != nil {
 		return nil, err
 	}
-	if err := s.loadScheduleState(ctx, channelIDs, summaries, index); err != nil {
+	if err := s.loadVideoScriptState(ctx, channelIDs, summaries, index); err != nil {
 		return nil, err
 	}
 	if err := s.loadLatestOutcomes(ctx, channelIDs, summaries, index); err != nil {
@@ -182,35 +182,40 @@ func (s myWorkStore) loadLatestVerdicts(ctx context.Context, channelIDs []uuid.U
 	return nil
 }
 
-// loadScheduleState runs one aggregate query over schedule_entry, grouped
-// by channel_id, for every Channel in channelIDs at once (NFR9).
-func (s myWorkStore) loadScheduleState(ctx context.Context, channelIDs []uuid.UUID, summaries []ChannelWorkSummary, index map[uuid.UUID]int) error {
+// loadVideoScriptState runs one aggregate query over video_script, grouped
+// by channel_id, for every Channel in channelIDs at once (NFR9) --
+// retargeted from schedule_entry's draft/committed counts by issue #1835's
+// retirement task; counts every video_script status (proposed, greenlit,
+// denied, archived) with denied/archived kept as separate fields (FR38/
+// FR39 make them distinct terminal states, never collapsed together).
+func (s myWorkStore) loadVideoScriptState(ctx context.Context, channelIDs []uuid.UUID, summaries []ChannelWorkSummary, index map[uuid.UUID]int) error {
 	rows, err := s.pool.Query(ctx, `
 		SELECT channel_id,
-		       COUNT(*) FILTER (WHERE state = 'draft'),
-		       COUNT(*) FILTER (WHERE state = 'committed'),
-		       MIN(proposed_publish_at) FILTER (WHERE proposed_publish_at >= NOW())
-		FROM schedule_entry
+		       COUNT(*) FILTER (WHERE status = 'proposed'),
+		       COUNT(*) FILTER (WHERE status = 'greenlit'),
+		       COUNT(*) FILTER (WHERE status = 'denied'),
+		       COUNT(*) FILTER (WHERE status = 'archived')
+		FROM video_script
 		WHERE channel_id = ANY($1)
 		GROUP BY channel_id
 	`, channelIDs)
 	if err != nil {
-		return fmt.Errorf("my work: aggregate schedule state: %w", err)
+		return fmt.Errorf("my work: aggregate video script state: %w", err)
 	}
 	defer rows.Close()
 
 	for rows.Next() {
 		var channelID uuid.UUID
-		var st ScheduleDraftState
-		if err := rows.Scan(&channelID, &st.DraftCount, &st.CommittedCount, &st.NextProposedPublishAt); err != nil {
-			return fmt.Errorf("my work: scan schedule state: %w", err)
+		var st VideoScriptState
+		if err := rows.Scan(&channelID, &st.ProposedCount, &st.GreenlitCount, &st.DeniedCount, &st.ArchivedCount); err != nil {
+			return fmt.Errorf("my work: scan video script state: %w", err)
 		}
 		if i, ok := index[channelID]; ok {
-			summaries[i].ScheduleState = st
+			summaries[i].ScriptState = st
 		}
 	}
 	if err := rows.Err(); err != nil {
-		return fmt.Errorf("my work: aggregate schedule state: %w", err)
+		return fmt.Errorf("my work: aggregate video script state: %w", err)
 	}
 	return nil
 }

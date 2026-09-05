@@ -33,8 +33,8 @@ Two ASS MCP servers are configured: `audience-score-system-mcp-dev` and `audienc
 
 ## Loop 3 — Outcome matching and comparison (C9/C10)
 
-1. `list_pending_matches` (channel_id) — each row has the published video, its latest metrics, the matcher's best-guess schedule entry (nil if no plausible candidate), and a confidence score.
-2. For each match with a plausible candidate you agree with, call `resolve_pending_match` with `confirm: true` (optionally `schedule_entry_id` to link a different entry than the best guess) and an `idempotency_key`. For a spurious/incorrect candidate, call it with `confirm: false` instead — the video stays unmatched rather than being force-linked.
+1. `list_pending_matches` (channel_id) — each row has the published video, its latest metrics, the matcher's best-guess video_script (nil if no plausible candidate), and a confidence score.
+2. For each match with a plausible candidate you agree with, call `resolve_pending_match` with `confirm: true` (optionally `video_script_id` to link a different video_script than the best guess) and an `idempotency_key`. For a spurious/incorrect candidate, call it with `confirm: false` instead — the video stays unmatched rather than being force-linked.
 3. If a match has no plausible candidate at all (nil best guess) and you can't judge it from what's in the store, say so to the human rather than confirming a guess just to clear the queue.
 4. Use `get_prediction_vs_outcome` (optionally scoped to one `idea_id`, or `since`) and `get_channel_overview` to compare what a verdict predicted against what actually published. Report the comparison in plain language — this is a browsing capability (C10); there is no MCP write path for "calibration," and building one is explicitly M3+ (C14) scope, not yours to improvise.
 

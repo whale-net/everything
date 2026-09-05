@@ -316,7 +316,7 @@ func (s tokenStore) Save(ctx context.Context, channelID, byPersonID uuid.UUID, t
 
 // MarkNeedsReauth flips channel.connection_state to needs_reauth via
 // store.ChannelStore.SetConnectionState -- it deliberately never touches
-// channel_credential or any synced_video/video_metrics/schedule_entry row
+// channel_credential or any synced_video/video_metrics/video_script row
 // (FR4's data-retention requirement: a reconnect happens through Save,
 // which closes-and-opens the credential; nothing here deletes anything).
 func (s tokenStore) MarkNeedsReauth(ctx context.Context, channelID uuid.UUID, reason string) error {

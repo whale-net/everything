@@ -2,16 +2,16 @@
 // identity core: person, channel, the Persona<->Channel join table (LB2),
 // and channel_invite codes (migration 001, see
 // audience_score_system/migrate/schema/migrations/001_identity.up.sql) --
-// plus the LB3 research/verdict/schedule/outcome record chain, its read
-// models, and the mcp_idempotency ledger (migration 002, see
+// plus the LB3 research/verdict/outcome record chain, its read models, and
+// the mcp_idempotency ledger (migration 002, see
 // .../002_research_schedule_outcome.up.sql and issue #1569); plus
 // video_script (migration 010, .../010_video_script.up.sql, issues
-// #1823/#1824), M2.1's replacement for schedule_entry as the record of a
-// proposed video.
+// #1823/#1824), M2.1's replacement for the schedule_entry/pacing_policy
+// tables migration 013 dropped outright (issue #1835's retirement task).
 //
 // Store is the single entry point, built over //libs/go/db's
 // *pgxpool.Pool. Its Persons/Channels/Roles/Invites/Ideas/Research/
-// Verdicts/Pacing/Schedules/Sync/Matches/Idempotency accessors
+// Verdicts/Sync/Matches/Idempotency accessors
 // hand back the per-entity Store implementations -- kept as separate
 // concrete types,
 // not all methods on Store itself, because e.g. PersonStore.GetByID and
@@ -31,9 +31,10 @@ import "github.com/jackc/pgx/v5/pgxpool"
 
 // Store is the pgx-backed repository over person/channel/channel_person/
 // channel_invite (migration 001) plus idea/research_note/
-// viability_verdict/verdict_citation/pacing_policy/schedule_entry/
-// synced_video/video_metrics/video_schedule_match/mcp_idempotency
-// (migration 002) plus video_script (migration 010).
+// viability_verdict/verdict_citation/synced_video/video_metrics/
+// video_schedule_match/mcp_idempotency (migration 002; pacing_policy/
+// schedule_entry dropped by migration 013) plus video_script (migration
+// 010).
 type Store struct {
 	pool *pgxpool.Pool
 }
@@ -63,12 +64,6 @@ func (s *Store) Research() ResearchStore { return researchStore{pool: s.pool} }
 
 // Verdicts returns the VerdictStore implementation (migration 002).
 func (s *Store) Verdicts() VerdictStore { return verdictStore{pool: s.pool} }
-
-// Pacing returns the PacingStore implementation (migration 002).
-func (s *Store) Pacing() PacingStore { return pacingStore{pool: s.pool} }
-
-// Schedules returns the ScheduleStore implementation (migration 002).
-func (s *Store) Schedules() ScheduleStore { return scheduleStore{pool: s.pool} }
 
 // Sync returns the SyncStore implementation (migration 002).
 func (s *Store) Sync() SyncStore { return syncStore{pool: s.pool} }
