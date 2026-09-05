@@ -26,12 +26,19 @@ load("@rules_go//go:def.bzl", "go_library", "go_test")
 # 014, issue #1882, C14 / FR1 / FR2 / NFR1): a single current-state config
 # row per Channel naming which metric to classify against and its
 # threshold.
+#
+# calibration.go is the calibration trend read (issue #1884, C14 / FR3 /
+# FR4 / FR5 / FR7): one calendar-month row of candidate/calibrated/
+# miscalibrated counts and rate, built over browse.go's
+# predictionOutcomeJoin and classified against a caller-supplied
+# outcome_bar row. No schema of its own.
 go_library(
     name = "store",
     srcs = [
         "access.go",
         "authz.go",
         "browse.go",
+        "calibration.go",
         "channel.go",
         "idea.go",
         "idempotency.go",
