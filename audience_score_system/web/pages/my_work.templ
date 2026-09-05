@@ -69,7 +69,7 @@ templ channelWorkSection(s store.ChannelWorkSummary) {
 						for _, n := range s.LatestNotes {
 							<li>
 								{ n.Text }
-								if n.SourceURL != nil {
+								if n.Cited() {
 									<span class="badge badge-ghost badge-xs align-middle ml-1">cited</span>
 								}
 							</li>

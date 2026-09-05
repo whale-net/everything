@@ -10,8 +10,9 @@
 // in-process MCP client (mcp.NewClient + StreamableClientTransport).
 //
 // research_test.go's pure-Go suite (package tools, no build tag) already
-// covers validateSourceURL and toResearchNoteOutput's Cited derivation.
-// What this file proves instead is exactly what a fake/unit test cannot:
+// covers toResearchNoteOutput's Cited derivation; store's SaveNote tests
+// cover source_url validation (FR12, issue #1897) directly. What this
+// file proves instead is exactly what a fake/unit test cannot:
 // real caller-auth + Channel-scoping wired through RegisterRead/
 // RegisterWrite, real Postgres NULL-vs-empty-string storage for source_url (FR10),
 // real idempotency replay/conflict semantics (NFR2/LB4) via

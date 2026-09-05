@@ -4,6 +4,8 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net/url"
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
@@ -13,10 +15,14 @@ import (
 
 // SaveNoteInput is the input to ResearchStore.SaveNote.
 type SaveNoteInput struct {
-	ChannelID      uuid.UUID
-	IdeaID         *uuid.UUID // nil if the note predates an Idea (FR9).
-	Text           string
-	SourceURL      *string // nil = uncited (FR10), never an empty string.
+	ChannelID uuid.UUID
+	IdeaID    *uuid.UUID // nil if the note predates an Idea (FR9).
+	Text      string
+	// SourceURL is validated and normalized by SaveNote itself (FR12): nil
+	// or a pointer to an empty/whitespace-only string persists as SQL NULL
+	// (uncited, FR10); a valid http(s) URL persists trimmed; anything else
+	// makes SaveNote return an error with no INSERT attempted.
+	SourceURL      *string
 	AuthorPersonID uuid.UUID
 	IdempotencyKey string
 }
@@ -76,11 +82,46 @@ func scanResearchNote(row pgx.Row) (ResearchNote, error) {
 	return n, err
 }
 
+// validateSourceURL trims raw and, if non-empty, requires it to be a
+// well-formed absolute http(s) URL -- rejecting rather than silently
+// storing junk (e.g. "not a url", "javascript:...") that would later be
+// rendered as "cited". Returns nil (never a pointer to an empty string)
+// for an absent/empty/whitespace-only raw, which is what SaveNote persists
+// as SQL NULL -- the FR10 uncited case. FR12: this is the single copy of
+// the rule both `web`'s save form and `mcp`'s save_research_note rely on
+// by calling SaveNote, rather than each validating independently.
+func validateSourceURL(raw string) (*string, error) {
+	trimmed := strings.TrimSpace(raw)
+	if trimmed == "" {
+		return nil, nil
+	}
+	u, err := url.Parse(trimmed)
+	if err != nil {
+		return nil, fmt.Errorf("source_url is not a well-formed URL: %w", err)
+	}
+	if !u.IsAbs() || (u.Scheme != "http" && u.Scheme != "https") || u.Host == "" {
+		return nil, fmt.Errorf("source_url must be an absolute http or https URL")
+	}
+	return &trimmed, nil
+}
+
 // SaveNote checks for a prior row with the same (channel, author,
 // idempotency_key) triple before inserting -- a replayed call with a
 // non-empty IdempotencyKey returns the original row unchanged rather than
-// creating a duplicate (NFR2).
+// creating a duplicate (NFR2). SourceURL validation (FR12,
+// validateSourceURL above) runs first, ahead of the idempotency
+// short-circuit below: a replay carrying an invalid source_url errors
+// rather than silently returning the original row.
 func (s researchStore) SaveNote(ctx context.Context, in SaveNoteInput) (ResearchNote, error) {
+	var rawSourceURL string
+	if in.SourceURL != nil {
+		rawSourceURL = *in.SourceURL
+	}
+	sourceURL, err := validateSourceURL(rawSourceURL)
+	if err != nil {
+		return ResearchNote{}, err
+	}
+
 	if in.IdempotencyKey != "" {
 		existing, err := scanResearchNote(s.pool.QueryRow(ctx, `
 			SELECT `+researchNoteColumns+`
@@ -99,7 +140,7 @@ func (s researchStore) SaveNote(ctx context.Context, in SaveNoteInput) (Research
 		INSERT INTO research_note (channel_id, idea_id, text, source_url, author_person_id, idempotency_key)
 		VALUES ($1, $2, $3, $4, $5, NULLIF($6, ''))
 		RETURNING `+researchNoteColumns,
-		in.ChannelID, in.IdeaID, in.Text, in.SourceURL, in.AuthorPersonID, in.IdempotencyKey))
+		in.ChannelID, in.IdeaID, in.Text, sourceURL, in.AuthorPersonID, in.IdempotencyKey))
 	if err != nil {
 		return ResearchNote{}, fmt.Errorf("insert research_note: %w", err)
 	}
