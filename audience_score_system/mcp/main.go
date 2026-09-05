@@ -167,6 +167,7 @@ func run() error {
 	tools.RegisterListChannels(reg, st.Access())
 	tools.RegisterResearch(reg, st)
 	tools.RegisterVerdict(reg, st)
+	tools.RegisterVideoScript(reg, st)
 	tools.RegisterGetChannelSchedule(reg, st.Sync())
 	tools.RegisterScheduleDraft(reg, st)
 	tools.RegisterMatches(reg, st)
