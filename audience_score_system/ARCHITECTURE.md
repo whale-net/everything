@@ -268,7 +268,7 @@ the raw token or its hash.
 | Component | Binary | `release_app` identity | Responsibility |
 |---|---|---|---|
 | `migrate` | `audience_score_system/migrate` | `migration` (job) | Applies golang-migrate SQL migrations to Postgres. Runs once, ahead of the other three, as a Helm job hook (see `libs/go/migrate/README.md`). |
-| `web` | `audience_score_system/web` (C1 sign-in #1570, C2 Channel-connect #1571, C3 analyst invite #1572, C19 video_script greenlight/deny/archive UI #1834 -- rebuilt in place of C8's original schedule_entry-backed approve/un-approve/edit UI #1580, C4/C5 research/verdict save+browse UI #1896) | `web` (external-api) | The **only** UI surface. Its three UI-only OAuth-consent surfaces are C1/C2/C3 (see "NFR3 interface allocation" below); its C19 schedule page (`web/schedule`, route paths unchanged per FR49) and its `web/research` Channel research index/Idea detail pages plus save-note/save-verdict forms (#1896) are UI front ends onto the same `store.VideoScriptStore` / `store.ResearchStore` / `store.VerdictStore` that `mcp`'s tools also call. |
+| `web` | `audience_score_system/web` (C1 sign-in #1570, C2 Channel-connect #1571, C3 analyst invite #1572, C19 video_script greenlight/deny/archive UI #1834 -- rebuilt in place of C8's original schedule_entry-backed approve/un-approve/edit UI #1580, C4/C5 research/verdict save+browse UI #1896, C18 video_script propose UI #1914) | `web` (external-api) | The **only** UI surface. Its three UI-only OAuth-consent surfaces are C1/C2/C3 (see "NFR3 interface allocation" below); its C19 schedule page (`web/schedule`, route paths unchanged per FR49) and its `web/research` Channel research index/Idea detail pages plus save-note/save-verdict/propose forms (#1896, #1914) are UI front ends onto the same `store.VideoScriptStore` / `store.ResearchStore` / `store.VerdictStore` that `mcp`'s tools also call. |
 | `mcp` | `audience_score_system/mcp` (#1575, #1577-#1582, #1631, #1648, #1650, #1823-#1835, #1882-#1885) | `mcp` (external-api) | Every other capability (C4-C7, C9, C10, C14, C18, C19): Channel access discovery (`list_channels`, #1631 -- resolves which Channels the caller holds a role on, and that role, without dropping to the web UI), research notes and viability verdicts (C4/C5, dual-surface with `web/research` since #1896, see "NFR3 interface allocation" below), schedule sync reads, video_script propose/greenlight/deny/archive (C18/C19, milestone video-script-model -- the schedule-draft/pacing-policy tool surface, C6/C7/C8, was retired outright, FR41), outcome-match confirm/reject (re-anchored onto `video_script`, FR43/FR44), the outcome-bar/calibration-trend family (`set_outcome_bar`/`get_outcome_bar`/`get_calibration_trend`, C14, M3, issues #1882-#1885 -- MCP-only, see "NFR3 interface allocation" below), all browsing, and (#1650) forcing an out-of-band `ChannelSyncWorkflow` run via `trigger_channel_sync`. Exposed as MCP tools to any MCP-capable agent client. |
 | `worker` | `audience_score_system/worker` (#1574, #1576, #1581) | `worker` (worker) | Per-Channel Temporal scheduled workflow: syncs YouTube schedule (C6) and published-video metrics (C9) on a ~1-24 hour cadence (NFR4, default 24h). Skips a cycle for a disconnected/needs-reauth Channel without erroring the workflow. `mcp`'s `trigger_channel_sync` tool (#1650) can force an out-of-band run of the same workflow without waiting for this cadence. |
 | Postgres | — | — | System of record for all four components, accessed via `//libs/go/db` (`PG_DATABASE_URL`). No separate cache/read-model store in M1. |
@@ -578,6 +578,30 @@ it does not fork the write path. What stays MCP-only: the
 research/viability *reasoning conversation* itself, per the standing
 no-hosted-agent-loop non-goal -- `web` offers the save and browse
 surface, it does not host an agent loop.
+
+**NFR3 amendment (issue #1914): C18 is dual-surface.** `web` now renders
+a propose form on the Idea detail page (`GET
+/channels/{id}/research/ideas/{ideaID}`), submitting to `POST
+/channels/{id}/research/ideas/{ideaID}/video-scripts`
+(`audience_score_system/web/research.Handlers.HandleProposeVideoScript`,
+issue #1915, FR1-FR5/NFR1-NFR3). This does **not** make C18 web-only, and
+removes or narrows no MCP tool -- `save_video_script`
+(`mcp/tools/video_script.go`) is unchanged. The shared seam `web` and
+`save_video_script` both call identically (LB5) is
+`store.VideoScriptStore.Propose` and the identical `store.CanWrite`
+(Founder/Co-Creator/Analyst, matching `save_video_script`'s NFR13 tier)
+authorization check -- the same "two independent, equally-capable front
+ends" relationship the retired-C8 amendment above established, not a
+primary/shadow pair. This **supersedes** the `#1823` amendment's C18
+bullet above, which stated `save_video_script` is `mcp`-only; that
+statement was true as of #1823 and is no longer true as of this
+milestone, per the same "amendment record, never rewritten" convention
+every prior paragraph in this section follows -- the `#1823` paragraph
+itself is left untouched. For the record, C19 (greenlight/deny/archive)
+and C10 (video-scripts browsing slice) are **unchanged** by this
+milestone: both have been dual-surface since #1823/#1834
+(`web/schedule.Handlers.HandleGreenlight`/`HandleDeny`/`HandleArchive`
+and `HandleList`). M4.2's only allocation change is C18.
 
 ## Temporal: schedule upsert helper
 
