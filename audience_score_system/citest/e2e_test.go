@@ -204,7 +204,8 @@ func newWorld(t *testing.T) *world {
 	// web router: mirrors web/main.go's setupRoutes for exactly the
 	// routes this loop drives (invite generate/resume, schedule approve/
 	// unapprove/edit, M2's access-management page, M4.1's research
-	// browse/save routes) -- same pattern as web/invite/
+	// browse/save routes, and M4.2's propose-video-script route, #1915/
+	// #1917) -- same pattern as web/invite/
 	// invite_integration_test.go, web/schedule/schedule_integration_test.go,
 	// web/access/access_integration_test.go, and web/research/
 	// research_integration_test.go.
@@ -240,6 +241,7 @@ func newWorld(t *testing.T) *world {
 	mux.HandleFunc("GET /channels/{id}/research/ideas/{ideaID}", a.RequireSignedIn(res.HandleIdeaDetail))
 	mux.HandleFunc("POST /channels/{id}/research/notes", a.RequireSignedIn(res.HandleSaveNote))
 	mux.HandleFunc("POST /channels/{id}/research/ideas/{ideaID}/verdicts", a.RequireSignedIn(res.HandleSaveVerdict))
+	mux.HandleFunc("POST /channels/{id}/research/ideas/{ideaID}/video-scripts", a.RequireSignedIn(res.HandleProposeVideoScript))
 
 	// mcp server: mirrors mcp/main.go's tool registration exactly.
 	srv := mcpserver.New(st)
