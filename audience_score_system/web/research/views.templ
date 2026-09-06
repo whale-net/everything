@@ -290,12 +290,20 @@ templ noteBody(note store.ResearchNoteWithAuthor) {
 // strategies (#1915, FR2) is the Channel's active-Strategy list, loaded by
 // research.go's renderIdeaDetail, backing the propose-video-script form's
 // picker. proposeForm (#1915) carries that form's current values --
-// mirroring form/verdictForm's identical contract. The propose form is
-// rendered only when current is non-nil, current.Verdict is
-// store.VerdictViable, AND canWrite (FR1) -- PRESENTATION ONLY, mirroring
-// the note/verdict forms' identical rationale above: the actual boundary
-// is HandleProposeVideoScript's own server-side re-resolution of the
-// Idea's current verdict (FR4), never this render-time check alone.
+// mirroring form/verdictForm's identical contract. The propose section is
+// rendered when canWrite AND EITHER (current is non-nil and
+// current.Verdict is store.VerdictViable, FR1) OR proposeForm.Error is
+// non-empty -- the Error branch is NFR3's stale-at-submit case: current/
+// strategies are re-fetched fresh on every render (including this error
+// re-render), so if the verdict or Strategy state changed between GET and
+// a rejected POST, the FR1/FR2 presentation gate alone would hide the
+// very error message and preserved field values that POST's 400 needs to
+// show. Gating on the live state is PRESENTATION ONLY, mirroring the
+// note/verdict forms' identical rationale above: the actual boundary is
+// HandleProposeVideoScript's own server-side re-resolution of the Idea's
+// current verdict (FR4), never this render-time check alone -- but that
+// presentation gate must never suppress an error the server already
+// decided to show.
 templ IdeaDetail(data components.LayoutData, ch store.Channel, idea store.Idea, notes []store.ResearchNoteWithAuthor, notesTruncated bool, current *store.Verdict, history []store.Verdict, authorNames map[uuid.UUID]string, canWrite bool, form noteFormData, verdictForm verdictFormData, strategies []store.StrategyDetail, proposeForm proposeFormData) {
 	@components.Layout(data) {
 		<div class="card bg-base-100 border border-base-300 shadow-sm">
@@ -359,7 +367,7 @@ templ IdeaDetail(data components.LayoutData, ch store.Channel, idea store.Idea, 
 					}
 				</div>
 
-				if current != nil && current.Verdict == store.VerdictViable && canWrite {
+				if canWrite && (proposeForm.Error != "" || (current != nil && current.Verdict == store.VerdictViable)) {
 					<div class="mt-6">
 						<h2 class="text-lg font-semibold">Propose a video script</h2>
 						@proposeVideoScriptForm(ch, idea, strategies, proposeForm)
@@ -465,11 +473,18 @@ templ saveVerdictForm(ch store.Channel, idea store.Idea, notes []store.ResearchN
 // Idea's current verdict is always resolved server-side at submit time
 // (LB3), exactly like saveVerdictForm never accepts an idea_id.
 //
-// FR2: when strategies is empty, this renders an explanatory line and NO
-// submit control at all, rather than an empty picker that could only ever
-// fail at submit -- a Strategy is required to propose a video script.
+// FR2: when strategies is empty AND there is no error to show (a plain
+// GET, or a re-render for a DIFFERENT form entirely), this renders an
+// explanatory line and NO submit control at all, rather than an empty
+// picker that could only ever fail at submit -- a Strategy is required to
+// propose a video script. NFR3: when form.Error is non-empty, the form
+// (with its error and preserved values) always renders even if strategies
+// is now empty -- e.g. the submitted strategy_id's row was deleted between
+// render and submit -- so the picker may show no options besides the
+// placeholder, but the rejection reason and the user's other field values
+// are never silently dropped.
 templ proposeVideoScriptForm(ch store.Channel, idea store.Idea, strategies []store.StrategyDetail, form proposeFormData) {
-	if len(strategies) == 0 {
+	if len(strategies) == 0 && form.Error == "" {
 		<p class="text-base-content/70 mt-2">
 			No active Strategy on this Channel -- a Strategy is required to propose a video script.
 		</p>
