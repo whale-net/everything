@@ -42,6 +42,8 @@
 //     FR7).
 //   - POST /channels/{id}/research/ideas/{ideaID}/verdicts --
 //     HandleSaveVerdict (FR4, FR6, FR7).
+//   - POST /channels/{id}/research/ideas/{ideaID}/video-scripts --
+//     HandleProposeVideoScript (#1915, FR1-FR5, NFR1-NFR3).
 package research
 
 import (
@@ -117,6 +119,36 @@ type verdictFormData struct {
 // rather than reusing HandleSaveNote's).
 func newVerdictFormData() verdictFormData {
 	return verdictFormData{IdempotencyKey: newIdempotencyKey()}
+}
+
+// proposeFormData carries the propose-video-script form's (#1915, FR1-FR5)
+// current values through a render: on a plain GET (HandleIdeaDetail, via
+// newProposeFormData) it holds nothing but a freshly minted IdempotencyKey
+// (newIdempotencyKey, FR5); on a validation-failure re-render from
+// HandleProposeVideoScript it additionally carries the submitted
+// StrategyID/Title/ScriptText/TargetPublishDate and an Error message, with
+// the SAME IdempotencyKey the failed POST carried -- so a corrected
+// resubmit is still the same logical write (FR5), mirroring
+// verdictFormData's contract exactly. There is deliberately no VerdictID
+// field here: the Idea's current verdict is always resolved server-side at
+// submit time (LB3), never accepted as a form input.
+type proposeFormData struct {
+	IdempotencyKey    string
+	StrategyID        string // raw submitted value; "" on a plain GET.
+	Title             string
+	ScriptText        string
+	TargetPublishDate string // raw "YYYY-MM-DD"; "" means unset.
+	Error             string
+}
+
+// newProposeFormData mints a fresh proposeFormData for a plain render --
+// no submitted content, just a freshly minted IdempotencyKey (FR5). Used by
+// HandleIdeaDetail's GET and by HandleSaveNote's/HandleSaveVerdict's
+// re-renders (the propose form was not the form that failed, so it gets
+// its own new key rather than reusing theirs), mirroring
+// newVerdictFormData's identical rationale.
+func newProposeFormData() proposeFormData {
+	return proposeFormData{IdempotencyKey: newIdempotencyKey()}
 }
 
 // newIdempotencyKey mints a server-generated idempotency key (FR6),
@@ -346,7 +378,7 @@ func (h *Handlers) HandleIdeaDetail(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	h.renderIdeaDetail(w, r, person, ch, idea, noteFormData{IdempotencyKey: newIdempotencyKey(), IdeaID: idea.ID.String()}, newVerdictFormData(), http.StatusOK)
+	h.renderIdeaDetail(w, r, person, ch, idea, noteFormData{IdempotencyKey: newIdempotencyKey(), IdeaID: idea.ID.String()}, newVerdictFormData(), newProposeFormData(), http.StatusOK)
 }
 
 // renderIdeaDetail assembles and renders an Idea's detail page: the
@@ -363,12 +395,28 @@ func (h *Handlers) HandleIdeaDetail(w http.ResponseWriter, r *http.Request) {
 // status. canWrite (store.CanWrite, a second call alongside
 // HandleIdeaDetail's CanRead) gates whether IdeaDetail renders EITHER
 // form at all (FR7) -- presentation only, see IdeaDetail's doc comment.
-func (h *Handlers) renderIdeaDetail(w http.ResponseWriter, r *http.Request, person *store.Person, ch store.Channel, idea store.Idea, form noteFormData, verdictForm verdictFormData, status int) {
+//
+// This also loads the Channel's active Strategies (#1915, FR2) for the
+// propose-video-script form's picker -- the identical
+// store.StrategyStore.ListByChannel(activeOnly=true) call, so a Strategy
+// that is not currently active on this Channel can never appear as an
+// option.
+func (h *Handlers) renderIdeaDetail(w http.ResponseWriter, r *http.Request, person *store.Person, ch store.Channel, idea store.Idea, form noteFormData, verdictForm verdictFormData, proposeForm proposeFormData, status int) {
 	ctx := r.Context()
 	channelID := ch.ID
 	ideaID := idea.ID
 
 	canWrite, err := store.CanWrite(ctx, h.store.Roles(), channelID, person.ID)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	// activeStrategies backs the propose-video-script form's picker
+	// (#1915, FR2) -- only Strategies active on THIS Channel are ever
+	// offered, so the form can never present one Propose would itself
+	// reject with ErrStrategyNotFound.
+	activeStrategies, _, err := h.store.Strategies().ListByChannel(ctx, channelID, true, defaultPageLimit)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
@@ -424,7 +472,7 @@ func (h *Handlers) renderIdeaDetail(w http.ResponseWriter, r *http.Request, pers
 	// slice the save-verdict form's citation multi-select is populated
 	// from -- no extra store call, and no notes from any other Idea can
 	// ever appear as options (FR4).
-	if err := components.Render(w, r, title, IdeaDetail(data, ch, idea, notes, notesTruncated, current, history, authorNames, canWrite, form, verdictForm)); err != nil {
+	if err := components.Render(w, r, title, IdeaDetail(data, ch, idea, notes, notesTruncated, current, history, authorNames, canWrite, form, verdictForm, activeStrategies, proposeForm)); err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 	}
 }
@@ -501,7 +549,7 @@ func (h *Handlers) HandleSaveNote(w http.ResponseWriter, r *http.Request) {
 
 	renderErr := func(msg string) {
 		if haveValidIdea {
-			h.renderIdeaDetail(w, r, person, ch, validIdea, formWithError(form, msg), newVerdictFormData(), http.StatusBadRequest)
+			h.renderIdeaDetail(w, r, person, ch, validIdea, formWithError(form, msg), newVerdictFormData(), newProposeFormData(), http.StatusBadRequest)
 			return
 		}
 		h.renderChannelIndex(w, r, person, ch, formWithError(form, msg), http.StatusBadRequest)
@@ -639,9 +687,10 @@ func (h *Handlers) HandleSaveVerdict(w http.ResponseWriter, r *http.Request) {
 	}
 
 	renderErr := func(msg string) {
-		// The note form was not the form that failed here -- it gets its
-		// own freshly minted key rather than reusing verdict's.
-		h.renderIdeaDetail(w, r, person, ch, idea, noteFormData{IdempotencyKey: newIdempotencyKey(), IdeaID: idea.ID.String()}, verdictFormWithError(form, msg), http.StatusBadRequest)
+		// Neither the note form nor the propose form was the form that
+		// failed here -- each gets its own freshly minted key rather than
+		// reusing verdict's.
+		h.renderIdeaDetail(w, r, person, ch, idea, noteFormData{IdempotencyKey: newIdempotencyKey(), IdeaID: idea.ID.String()}, verdictFormWithError(form, msg), newProposeFormData(), http.StatusBadRequest)
 	}
 
 	verdictValue, err := parseVerdictFormValue(form.Verdict)
@@ -704,6 +753,18 @@ func (h *Handlers) HandleSaveVerdict(w http.ResponseWriter, r *http.Request) {
 	}
 
 	http.Redirect(w, r, "/channels/"+channelID.String()+"/research/ideas/"+ideaID.String(), http.StatusSeeOther)
+}
+
+// HandleProposeVideoScript serves POST
+// /channels/{id}/research/ideas/{ideaID}/video-scripts (#1915, FR1-FR5,
+// NFR1-NFR3): proposes a video_script through the IDENTICAL
+// store.VideoScriptStore.Propose method save_video_script's mutate step
+// calls (mcp/tools/video_script.go, LB5 -- one write path, never a
+// parallel one). Scaffolded here as a placeholder response -- validation,
+// the Idea's-current-verdict resolution, and the Propose call itself are
+// added in this task's Implementation phase.
+func (h *Handlers) HandleProposeVideoScript(w http.ResponseWriter, r *http.Request) {
+	http.Error(w, "not implemented", http.StatusNotImplemented)
 }
 
 // verdictAuthorDisplayNames resolves each distinct AuthorPersonID across

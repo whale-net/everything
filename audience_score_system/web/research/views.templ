@@ -286,7 +286,15 @@ templ noteBody(note store.ResearchNoteWithAuthor) {
 // notes -- the SAME slice this page's own note list already loaded, no
 // extra store call, so no notes from any other Idea can ever appear as
 // options.
-templ IdeaDetail(data components.LayoutData, ch store.Channel, idea store.Idea, notes []store.ResearchNoteWithAuthor, notesTruncated bool, current *store.Verdict, history []store.Verdict, authorNames map[uuid.UUID]string, canWrite bool, form noteFormData, verdictForm verdictFormData) {
+//
+// strategies (#1915, FR2) is the Channel's active-Strategy list, loaded by
+// research.go's renderIdeaDetail, backing the propose-video-script form's
+// picker. proposeForm (#1915) carries that form's current values --
+// mirroring form/verdictForm's identical contract. The FR1 visibility gate
+// (render only when the current verdict is Viable, alongside canWrite) is
+// added in this task's Implementation phase; the scaffolded call below is
+// unconditional.
+templ IdeaDetail(data components.LayoutData, ch store.Channel, idea store.Idea, notes []store.ResearchNoteWithAuthor, notesTruncated bool, current *store.Verdict, history []store.Verdict, authorNames map[uuid.UUID]string, canWrite bool, form noteFormData, verdictForm verdictFormData, strategies []store.StrategyDetail, proposeForm proposeFormData) {
 	@components.Layout(data) {
 		<div class="card bg-base-100 border border-base-300 shadow-sm">
 			<div class="card-body">
@@ -347,6 +355,11 @@ templ IdeaDetail(data components.LayoutData, ch store.Channel, idea store.Idea, 
 							@saveVerdictForm(ch, idea, notes, verdictForm)
 						</div>
 					}
+				</div>
+
+				<div class="mt-6">
+					<h2 class="text-lg font-semibold">Propose a video script</h2>
+					@proposeVideoScriptForm(ch, idea, strategies, proposeForm)
 				</div>
 
 				<div class="card-actions justify-end mt-2">
@@ -436,5 +449,57 @@ templ saveVerdictForm(ch store.Channel, idea store.Idea, notes []store.ResearchN
 			</div>
 		}
 		<button type="submit" class="btn btn-primary btn-sm mt-2">Save verdict</button>
+	</form>
+}
+
+// proposeVideoScriptForm renders the Idea detail page's propose-video-
+// script form (#1915, FR1-FR5): a Strategy picker (strategies -- the
+// Channel's active Strategies only, loaded by research.go's
+// renderIdeaDetail, FR2), required title and script_text fields, an
+// optional target_publish_date, and the hidden idempotency_key set once at
+// render time (FR5). verdict_id is deliberately NEVER a field here -- the
+// Idea's current verdict is always resolved server-side at submit time
+// (LB3), exactly like saveVerdictForm never accepts an idea_id.
+//
+// Scaffolded here with its field set only -- the FR1 visibility gate
+// (render only when the current verdict is Viable, alongside canWrite) and
+// FR2's "no active Strategy" fallback copy are added in this task's
+// Implementation phase.
+templ proposeVideoScriptForm(ch store.Channel, idea store.Idea, strategies []store.StrategyDetail, form proposeFormData) {
+	<form method="post" action={ templ.URL("/channels/" + ch.ID.String() + "/research/ideas/" + idea.ID.String() + "/video-scripts") } class="mt-2 space-y-2">
+		if form.Error != "" {
+			<p class="text-error text-sm">{ form.Error }</p>
+		}
+		<input type="hidden" name="idempotency_key" value={ form.IdempotencyKey }/>
+		<div class="form-control">
+			<label class="label">
+				<span class="label-text">Strategy</span>
+			</label>
+			<select name="strategy_id" class="select select-bordered w-full" required>
+				<option value="" disabled selected?={ form.StrategyID == "" }>Choose a strategy...</option>
+				for _, s := range strategies {
+					<option value={ s.ID.String() } selected?={ form.StrategyID == s.ID.String() }>{ s.Title }</option>
+				}
+			</select>
+		</div>
+		<div class="form-control mt-2">
+			<label class="label">
+				<span class="label-text">Title</span>
+			</label>
+			<input type="text" name="title" class="input input-bordered w-full" value={ form.Title } required/>
+		</div>
+		<div class="form-control mt-2">
+			<label class="label">
+				<span class="label-text">Script</span>
+			</label>
+			<textarea name="script_text" class="textarea textarea-bordered w-full" rows="6" required>{ form.ScriptText }</textarea>
+		</div>
+		<div class="form-control mt-2">
+			<label class="label">
+				<span class="label-text">Target publish date (optional)</span>
+			</label>
+			<input type="date" name="target_publish_date" class="input input-bordered w-full" value={ form.TargetPublishDate }/>
+		</div>
+		<button type="submit" class="btn btn-primary btn-sm mt-2">Propose video script</button>
 	</form>
 }

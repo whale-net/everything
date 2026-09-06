@@ -448,18 +448,21 @@ func (a *app) setupRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("POST /channels/{id}/access/promote", a.auth.RequireSignedIn(a.access.HandlePromote))
 	mux.HandleFunc("POST /channels/{id}/access/remove", a.auth.RequireSignedIn(a.access.HandleRemove))
 
-	// Protected: milestone M4.1's Loop 1 browse-and-save surface. Both
-	// GETs (#1899, FR1/FR2/FR8/FR9/FR10) are visible to a Channel's
-	// Founder, Co-Creator, AND Analyst (store.CanRead) -- mirrors the
-	// schedule block above's read gate exactly. Both POSTs (#1900's
-	// notes route, FR3/FR6/FR7; #1901's verdicts route, FR4/FR6/FR7)
-	// additionally require store.CanWrite (identical tier set),
-	// re-derived fresh on every request by research.go's authorizeWrite --
-	// see web/research's package doc comment.
+	// Protected: milestone M4.1's Loop 1 browse-and-save surface, plus
+	// M4.2's Loop 2 propose-video-script route. Both GETs (#1899,
+	// FR1/FR2/FR8/FR9/FR10) are visible to a Channel's Founder,
+	// Co-Creator, AND Analyst (store.CanRead) -- mirrors the schedule
+	// block above's read gate exactly. All three POSTs (#1900's notes
+	// route, FR3/FR6/FR7; #1901's verdicts route, FR4/FR6/FR7; #1915's
+	// video-scripts route, FR1-FR5/NFR1-NFR3) additionally require
+	// store.CanWrite (identical tier set), re-derived fresh on every
+	// request by research.go's authorizeWrite -- see web/research's
+	// package doc comment.
 	mux.HandleFunc("GET /channels/{id}/research", a.auth.RequireSignedIn(a.research.HandleChannelIndex))
 	mux.HandleFunc("GET /channels/{id}/research/ideas/{ideaID}", a.auth.RequireSignedIn(a.research.HandleIdeaDetail))
 	mux.HandleFunc("POST /channels/{id}/research/notes", a.auth.RequireSignedIn(a.research.HandleSaveNote))
 	mux.HandleFunc("POST /channels/{id}/research/ideas/{ideaID}/verdicts", a.auth.RequireSignedIn(a.research.HandleSaveVerdict))
+	mux.HandleFunc("POST /channels/{id}/research/ideas/{ideaID}/video-scripts", a.auth.RequireSignedIn(a.research.HandleProposeVideoScript))
 
 	// Protected: the cross-Channel "my work" aggregate (M2: FR27/FR28,
 	// #1725) -- see handleMyWork's doc comment.
