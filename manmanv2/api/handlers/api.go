@@ -68,6 +68,14 @@ func NewAPIServer(repo *repository.Repository, s3Client *s3.Client, rmqConn *rmq
 	}
 }
 
+// SessionHandler exposes the server's SessionHandler instance so callers
+// wiring up a separate consumer -- e.g. SessionRestartConsumer (#1731) --
+// can reuse its CommandPublisher/workshop.Manager instead of constructing a
+// second one.
+func (s *APIServer) SessionHandler() *SessionHandler {
+	return s.sessionHandler
+}
+
 // Server RPCs
 func (s *APIServer) ListServers(ctx context.Context, req *pb.ListServersRequest) (*pb.ListServersResponse, error) {
 	return s.serverHandler.ListServers(ctx, req)
