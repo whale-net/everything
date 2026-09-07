@@ -49,12 +49,41 @@ rabbitmq_url = 'amqp://{}:{}@{}:{}/'.format(
     rmq_info['port'],
 )
 
+# The shared dev-util rabbitmq-dev chart's K8s Service only exposes ports
+# 5672/15672 (see tools/tilt/common.tilt's setup_rabbitmq() docstring) — it
+# has never needed to expose 1883 because MQTT was previously only reached
+# via Tilt's host port-forward (mosquitto_sub, hardware boards), never
+# pod-to-pod in-cluster. leaflab-emulator (FR19) is the first in-cluster
+# MQTT consumer, so it needs its own reachable Service. Rather than modify
+# the shared chart/common.tilt wiring (would affect every other consumer),
+# declare a small leaflab-local Service here that exposes port 1883 on the
+# existing rabbitmq-dev pod (selector matches the `app: rabbitmq-dev` label
+# set by the dev-util chart / used by setup_rabbitmq_mqtt_plugin's
+# `kubectl wait -l app=rabbitmq-dev`). The broker itself already listens on
+# 1883 once the MQTT plugin is enabled above — this only adds the missing
+# Service port.
+k8s_yaml(blob("""
+apiVersion: v1
+kind: Service
+metadata:
+  name: rabbitmq-dev-mqtt
+  namespace: {namespace}
+spec:
+  selector:
+    app: rabbitmq-dev
+  ports:
+  - port: 1883
+    targetPort: 1883
+""".format(namespace=namespace)))
+
 # RabbitMQ MQTT plugin URL — the emulator (FR19) publishes over MQTT
 # (port 1883), not the AMQP vhost above (port 5672). Credentials are
 # passed separately via MQTT_USERNAME/MQTT_PASSWORD, matching
-# leaflab/emulator/config.go's Config shape.
-mqtt_url = 'tcp://{}:{}'.format(
-    rmq_info['host'],
+# leaflab/emulator/config.go's Config shape. Points at the leaflab-local
+# rabbitmq-dev-mqtt Service above, not rmq_info['host'] — the shared
+# rabbitmq-dev Service does not expose 1883 (see comment above).
+mqtt_url = 'tcp://rabbitmq-dev-mqtt.{}.svc.cluster.local:{}'.format(
+    namespace,
     rmq_info['mqtt_port'],
 )
 
