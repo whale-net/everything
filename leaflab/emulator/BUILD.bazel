@@ -15,6 +15,7 @@ go_library(
         "//firmware/proto:firmwarepb",
         "//libs/go/logging",
         "@com_github_eclipse_paho_mqtt_golang//:paho_mqtt_golang",
+        "@org_golang_google_protobuf//encoding/protojson",
     ],
 )
 
