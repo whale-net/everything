@@ -3,6 +3,7 @@ package handlers
 import (
 	"context"
 	"log"
+	"time"
 
 	"github.com/whale-net/everything/libs/go/rmq"
 	"github.com/whale-net/everything/libs/go/s3"
@@ -33,7 +34,7 @@ type APIServer struct {
 	actionHandler           *ActionHandler
 }
 
-func NewAPIServer(repo *repository.Repository, s3Client *s3.Client, rmqConn *rmq.Connection, workshopManager workshop.WorkshopManagerInterface) *APIServer {
+func NewAPIServer(repo *repository.Repository, s3Client *s3.Client, rmqConn *rmq.Connection, workshopManager workshop.WorkshopManagerInterface, restartStallTimeout time.Duration) *APIServer {
 	// Create command publisher with RPC support
 	commandPublisher, err := NewCommandPublisher(rmqConn)
 	if err != nil {
@@ -54,7 +55,7 @@ func NewAPIServer(repo *repository.Repository, s3Client *s3.Client, rmqConn *rmq
 		gameHandler:             NewGameHandler(repo.Games),
 		gameConfigHandler:       NewGameConfigHandler(repo.GameConfigs),
 		serverGameConfigHandler: NewServerGameConfigHandler(repo.ServerGameConfigs, repo.ServerPorts),
-		sessionHandler:          NewSessionHandler(repo, commandPublisher, workshopManager),
+		sessionHandler:          NewSessionHandler(repo, commandPublisher, workshopManager, restartStallTimeout),
 		registrationHandler:     NewRegistrationHandler(repo.Servers, repo.ServerCapabilities),
 		validationHandler:       NewValidationHandler(repo.Servers, repo.GameConfigs),
 		logsHandler:             NewLogsHandler(repo.LogReferences, s3Client),
@@ -166,6 +167,10 @@ func (s *APIServer) StartSession(ctx context.Context, req *pb.StartSessionReques
 
 func (s *APIServer) StopSession(ctx context.Context, req *pb.StopSessionRequest) (*pb.StopSessionResponse, error) {
 	return s.sessionHandler.StopSession(ctx, req)
+}
+
+func (s *APIServer) RestartDeployment(ctx context.Context, req *pb.RestartDeploymentRequest) (*pb.RestartDeploymentResponse, error) {
+	return s.sessionHandler.RestartDeployment(ctx, req)
 }
 
 func (s *APIServer) SendInput(ctx context.Context, req *pb.SendInputRequest) (*pb.SendInputResponse, error) {

@@ -17,22 +17,29 @@ import (
 
 // SessionHandler handles Session-related RPCs
 type SessionHandler struct {
-	repo            *repository.Repository
-	sessionRepo     repository.SessionRepository
-	sgcRepo         repository.ServerGameConfigRepository
-	gcRepo          repository.GameConfigRepository
-	publisher       *CommandPublisher
-	workshopManager workshop.WorkshopManagerInterface
+	repo                *repository.Repository
+	sessionRepo         repository.SessionRepository
+	sgcRepo             repository.ServerGameConfigRepository
+	gcRepo              repository.GameConfigRepository
+	pendingRestartsRepo repository.PendingRestartRepository
+	publisher           *CommandPublisher
+	workshopManager     workshop.WorkshopManagerInterface
+	// restartStallTimeout bounds how long a RestartDeployment-recorded
+	// pending_restarts row is allowed to sit 'pending' before the reaper
+	// (#1731) expires it -- see RESTART_STALL_TIMEOUT in manmanv2/ENV.md.
+	restartStallTimeout time.Duration
 }
 
-func NewSessionHandler(repo *repository.Repository, publisher *CommandPublisher, workshopManager workshop.WorkshopManagerInterface) *SessionHandler {
+func NewSessionHandler(repo *repository.Repository, publisher *CommandPublisher, workshopManager workshop.WorkshopManagerInterface, restartStallTimeout time.Duration) *SessionHandler {
 	return &SessionHandler{
-		repo:            repo,
-		sessionRepo:     repo.Sessions,
-		sgcRepo:         repo.ServerGameConfigs,
-		gcRepo:          repo.GameConfigs,
-		publisher:       publisher,
-		workshopManager: workshopManager,
+		repo:                repo,
+		sessionRepo:         repo.Sessions,
+		sgcRepo:             repo.ServerGameConfigs,
+		gcRepo:              repo.GameConfigs,
+		pendingRestartsRepo: repo.PendingRestarts,
+		publisher:           publisher,
+		workshopManager:     workshopManager,
+		restartStallTimeout: restartStallTimeout,
 	}
 }
 
@@ -313,6 +320,15 @@ func (h *SessionHandler) StopSession(ctx context.Context, req *pb.StopSessionReq
 	return &pb.StopSessionResponse{
 		Session: sessionToProto(session),
 	}, nil
+}
+
+// RestartDeployment records a durable pending-restart intent in Postgres
+// before dispatching the Stop, so the intent survives the caller's pod
+// dying (#1730, Track B dispatch half of FR9/FR10). The consumer that fires
+// the deferred Start once the gating Stop converges is a separate task
+// (#1731); this scaffold only wires the RPC through.
+func (h *SessionHandler) RestartDeployment(ctx context.Context, req *pb.RestartDeploymentRequest) (*pb.RestartDeploymentResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "RestartDeployment not yet implemented")
 }
 
 func (h *SessionHandler) SendInput(ctx context.Context, req *pb.SendInputRequest) (*pb.SendInputResponse, error) {
