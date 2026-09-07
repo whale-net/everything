@@ -569,8 +569,19 @@ templ citedBadge(note store.ResearchNote) {
 // empty). relations is note.ID's entry from the page's single batched
 // ResearchStore.ListRelationsForNotes call (research.go), never a
 // per-note store read.
+//
+// The outer div carries id="note-<uuid>" (issue #2029, FR1/NFR6) -- the
+// stable anchor scheme a same-Channel note:<uuid> reference's rendered
+// link (FR1, notelink.go's linkifyNoteRefs) targets to scroll the
+// referenced note into view, on both the Channel index's unattached-notes
+// section and the Idea-detail note list -- noteBody is the single call
+// site both of those render through, so emitting the id here covers both
+// without duplicating it onto each <li> wrapper. This is presentation
+// only, not a citedNoteBody concern: a cited-note excerpt is a reference,
+// not the note rendered as itself, so it carries no anchor id (NFR6's
+// scope).
 templ noteBody(note store.ResearchNoteWithAuthor, relations []store.NoteRelation) {
-	<div class="flex justify-between items-start gap-4">
+	<div id={ "note-" + note.ID.String() } class="flex justify-between items-start gap-4">
 		<div>
 			<p>{ note.Text }</p>
 			<p class="text-xs text-base-content/70">
