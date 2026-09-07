@@ -1170,7 +1170,7 @@ func TestChannelIndexAndIdeaDetail_OnlyTheSaveFormsAppear_NoPagingAffordance(t *
 // them from the response body.
 func (s *researchTestStack) allNotes(t *testing.T, ctx context.Context, channelID uuid.UUID) []store.ResearchNoteWithAuthor {
 	t.Helper()
-	notes, _, err := s.store.Research().ListFiltered(ctx, channelID, nil, nil, nil, nil, 0)
+	notes, _, err := s.store.Research().ListFiltered(ctx, channelID, nil, nil, false, nil, nil, 0)
 	require.NoError(t, err)
 	return notes
 }

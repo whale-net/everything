@@ -230,6 +230,11 @@ type ListResearchNotesInput struct {
 	IdeaID      string `json:"idea_id,omitempty" jsonschema:"Restrict to notes attached to this Idea, as a UUID string"`
 	CitedOnly   bool   `json:"cited_only,omitempty" jsonschema:"Return only notes with a source_url (cited, FR10). Mutually exclusive with uncited_only."`
 	UncitedOnly bool   `json:"uncited_only,omitempty" jsonschema:"Return only notes with no source_url (uncited, FR10). Mutually exclusive with cited_only."`
+	// CurrentOnly (FR8) defaults to false, preserving today's behaviour
+	// (every note, including retired ones) when omitted. It composes with
+	// every other filter on this input (idea_id, cited_only/uncited_only,
+	// since/before, limit) rather than replacing any of them.
+	CurrentOnly bool `json:"current_only,omitempty" jsonschema:"Exclude notes superseded or excluded by a later note (i.e. any note that is the target of a 'supersedes' or 'excludes' relation, FR8). Does NOT exclude notes targeted only by 'caveats', 'follows_up', or 'summarizes' relations -- those remain current. Composes with every other filter (idea_id, cited_only/uncited_only, since/before, limit); default false returns every note including retired ones."`
 	// Since/Before bound the window by each note's created_at. Together
 	// they let a caller page backward past a truncated response (issue
 	// #1808): request the newest window, then re-request with before set
@@ -255,7 +260,8 @@ func registerListResearchNotes(reg *server.Registry, research store.ResearchStor
 	server.RegisterRead(reg, &mcp.Tool{
 		Name: "list_research_notes",
 		Description: "List research notes for a Channel, most-recent first, each carrying an explicit cited boolean " +
-			"(FR10). Optionally restrict to one Idea (idea_id) and/or partition into cited_only vs uncited_only. " +
+			"(FR10). Optionally restrict to one Idea (idea_id) and/or partition into cited_only vs uncited_only, " +
+			"and/or set current_only to exclude notes superseded or excluded by a later note (FR8). " +
 			"Response is capped at limit (default 50); see truncated. Page backward past truncation by re-calling " +
 			"with before set to the oldest returned note's created_at.",
 	}, listResearchNotes(research))
@@ -295,7 +301,7 @@ func listResearchNotes(research store.ResearchStore) mcp.ToolHandlerFor[ListRese
 		if limit <= 0 {
 			limit = defaultListResearchNotesLimit
 		}
-		notes, truncated, err := research.ListFiltered(ctx, channelID, ideaID, cited, in.Since, in.Before, limit)
+		notes, truncated, err := research.ListFiltered(ctx, channelID, ideaID, cited, in.CurrentOnly, in.Since, in.Before, limit)
 		if err != nil {
 			return nil, ListResearchNotesOutput{}, err
 		}

@@ -93,16 +93,23 @@ type ResearchStore interface {
 	// first, each joined to its author's display name, optionally narrowed
 	// to a single ideaID (nil = no filter), partitioned by cited
 	// (source_url IS NOT NULL, cited=true) vs uncited (source_url IS NULL,
-	// cited=false, FR10; nil = no cited/uncited filter), and bounded by
-	// since (inclusive lower bound on created_at, nil = no bound) and
-	// before (exclusive upper bound, nil = no bound). limit caps the
-	// number of rows returned (<=0 = unbounded); truncated reports whether
-	// more matching rows exist beyond limit -- both together implement
-	// list_research_notes' and get_channel_overview's since/before/limit
-	// pagination entirely in this layer (issue #1808's follow-up: no
-	// unbounded fetch-then-filter-in-Go). Backs list_research_notes
-	// (mcp/tools/research.go, issue #1577).
-	ListFiltered(ctx context.Context, channelID uuid.UUID, ideaID *uuid.UUID, cited *bool, since, before *time.Time, limit int) (notes []ResearchNoteWithAuthor, truncated bool, err error)
+	// cited=false, FR10; nil = no cited/uncited filter), optionally
+	// restricted by currentOnly (FR8) to rows also present in
+	// v_current_research_note -- i.e. excluding any note that is the
+	// related_note_id target of a 'supersedes' or 'excludes' relation
+	// (being the target of 'caveats'/'follows_up'/'summarizes' does NOT
+	// exclude a note; false = no restriction, the pre-FR8 behaviour) --
+	// and bounded by since (inclusive lower bound on created_at, nil = no
+	// bound) and before (exclusive upper bound, nil = no bound). limit
+	// caps the number of rows returned (<=0 = unbounded); truncated
+	// reports whether more matching rows exist beyond limit -- both
+	// together implement list_research_notes' and get_channel_overview's
+	// since/before/limit pagination entirely in this layer (issue #1808's
+	// follow-up: no unbounded fetch-then-filter-in-Go), and currentOnly
+	// composes with that pagination rather than bypassing it: truncated is
+	// computed over the currentOnly-filtered set, never the raw one.
+	// Backs list_research_notes (mcp/tools/research.go, issue #1577).
+	ListFiltered(ctx context.Context, channelID uuid.UUID, ideaID *uuid.UUID, cited *bool, currentOnly bool, since, before *time.Time, limit int) (notes []ResearchNoteWithAuthor, truncated bool, err error)
 }
 
 // researchStore implements ResearchStore against `research_note`
@@ -383,17 +390,31 @@ func scanResearchNoteWithAuthor(row pgx.Row) (ResearchNoteWithAuthor, error) {
 	return n, err
 }
 
-// ListFiltered joins research_note to person for the author's display
-// name, filters by channelID and optionally ideaID/cited/since/before, and
+// ListFiltered joins research_note (or, when currentOnly is true,
+// v_current_research_note -- FR8) to person for the author's display name,
+// filters by channelID and optionally ideaID/cited/since/before, and
 // orders most-recent first, capped at limit (see fetchLimit/paginate,
 // pagination.go). ideaID nil means no Idea filter; cited nil means no
 // cited/uncited filter -- callers (list_research_notes,
 // mcp/tools/research.go) reject a request that sets both cited_only and
 // uncited_only before calling this, so cited here is never ambiguous.
-func (s researchStore) ListFiltered(ctx context.Context, channelID uuid.UUID, ideaID *uuid.UUID, cited *bool, since, before *time.Time, limit int) ([]ResearchNoteWithAuthor, bool, error) {
+//
+// currentOnly swaps the FROM source rather than adding a NOT EXISTS
+// predicate here: v_current_research_note (migration 016) is the single
+// place FR8's "current" definition lives, and selecting from it -- aliased
+// rn, exactly like the research_note table it replaces -- keeps every
+// other clause (the rt/p joins, the idea_id/cited/since/before filters,
+// fetchLimit/paginate below) byte-for-byte identical to the currentOnly
+// false path, so there is no second copy of the exclusion predicate here
+// to drift from the view's (FR16/NFR2).
+func (s researchStore) ListFiltered(ctx context.Context, channelID uuid.UUID, ideaID *uuid.UUID, cited *bool, currentOnly bool, since, before *time.Time, limit int) ([]ResearchNoteWithAuthor, bool, error) {
+	noteSource := "research_note rn"
+	if currentOnly {
+		noteSource = "v_current_research_note rn"
+	}
 	query := `
 		SELECT ` + researchNoteWithAuthorColumns + `
-		FROM research_note rn
+		FROM ` + noteSource + `
 		LEFT JOIN research_thread rt ON rt.id = rn.thread_id
 		JOIN person p ON p.id = rn.author_person_id
 		WHERE rn.channel_id = $1`
