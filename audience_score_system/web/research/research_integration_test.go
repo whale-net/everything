@@ -387,6 +387,28 @@ func (f *mcpFixture) listResearchNotes(t *testing.T, cs *mcp.ClientSession, chan
 	return out
 }
 
+// saveResearchNote calls save_research_note and decodes its structured
+// result -- backs FR14/FR15/FR16's (#1945) web/MCP save-path parity test:
+// the same store.ResearchStore.SaveNote call, driven from the identical
+// wire shape (thread_id/thread_title, relations) this handler's form
+// posts, must produce equivalent rows regardless of which surface drove
+// it.
+func (f *mcpFixture) saveResearchNote(t *testing.T, cs *mcp.ClientSession, in mcptools.SaveResearchNoteInput) mcptools.ResearchNoteOutput {
+	t.Helper()
+	res, err := cs.CallTool(context.Background(), &mcp.CallToolParams{
+		Name:      "save_research_note",
+		Arguments: in,
+	})
+	require.NoError(t, err)
+	require.False(t, res.IsError, "unexpected save_research_note error: %v", res.Content)
+
+	body, err := json.Marshal(res.StructuredContent)
+	require.NoError(t, err)
+	var out mcptools.ResearchNoteOutput
+	require.NoError(t, json.Unmarshal(body, &out))
+	return out
+}
+
 // idempotencyKeyPattern extracts the hidden idempotency_key input's value
 // from a rendered save-note form (both saveNoteFormChannelIndex and
 // saveNoteFormIdeaDetail render it via the shared saveNoteFields), so
@@ -1786,6 +1808,406 @@ func TestHandleSaveNote_UnknownChannel_NotFound(t *testing.T) {
 		"text":            {"note"},
 	})
 	assert.Equal(t, http.StatusNotFound, w.Code, "an unknown Channel must 404 before authorization runs, body: %s", w.Body.String())
+}
+
+// ── HandleSaveNote thread selection + relation authoring (FR14, FR15,
+// FR16, NFR2, issue #1945) ──────────────────────────────────────────────
+
+// findNoteByText locates the single note in notes whose Text equals text,
+// failing the test if it is missing or ambiguous -- a small helper so the
+// tests below can assert on a specific saved row without re-deriving it
+// from the response body.
+func findNoteByText(t *testing.T, notes []store.ResearchNoteWithAuthor, text string) store.ResearchNoteWithAuthor {
+	t.Helper()
+	var found []store.ResearchNoteWithAuthor
+	for _, n := range notes {
+		if n.Text == text {
+			found = append(found, n)
+		}
+	}
+	require.Len(t, found, 1, "expected exactly one note with text %q, notes: %+v", text, notes)
+	return found[0]
+}
+
+// TestHandleSaveNote_ExistingThreadID_AttachesToThread proves FR14's
+// thread select: posting a valid thread_id attaches the new note to that
+// EXISTING thread (no second thread row created) and still applies the
+// thread's own resolved idea_id, exactly as store.ResearchStore.SaveNote's
+// ThreadID resolution path documents.
+func TestHandleSaveNote_ExistingThreadID_AttachesToThread(t *testing.T) {
+	ctx := context.Background()
+	s := newResearchTestStack(t)
+	ch, creator := s.setupChannel(t, ctx)
+	idea, err := s.store.Ideas().Create(ctx, ch.ID, "Idea One", creator.ID)
+	require.NoError(t, err)
+	thread, err := s.store.Threads().FindOrCreate(ctx, store.FindOrCreateThreadInput{
+		ChannelID: ch.ID, IdeaID: &idea.ID, Title: "Existing thread", CreatedByPersonID: creator.ID,
+	})
+	require.NoError(t, err)
+
+	w := s.doForm(t, "/channels/"+ch.ID.String()+"/research/notes", s.sessionCookie(t, ctx, creator.ID), url.Values{
+		"idempotency_key": {uuid.NewString()},
+		"text":            {"attaches to existing thread"},
+		"idea_id":         {idea.ID.String()},
+		"thread_id":       {thread.ID.String()},
+	})
+	require.Equal(t, http.StatusSeeOther, w.Code, "body: %s", w.Body.String())
+
+	notes := s.allNotes(t, ctx, ch.ID)
+	note := findNoteByText(t, notes, "attaches to existing thread")
+	require.NotNil(t, note.ThreadID)
+	assert.Equal(t, thread.ID, *note.ThreadID)
+	require.NotNil(t, note.IdeaID)
+	assert.Equal(t, idea.ID, *note.IdeaID)
+
+	threads, err := s.store.Threads().ListByChannel(ctx, ch.ID, nil)
+	require.NoError(t, err)
+	assert.Len(t, threads, 1, "posting with an existing thread_id must not create a second thread row")
+}
+
+// TestHandleSaveNote_NewThreadTitle_FindsOrCreates_ReusesOnSecondPost
+// proves FR14's new-thread-title path: the first post creates exactly one
+// research_thread row, and a second post with the SAME title reuses it
+// (find-or-create) rather than creating a duplicate.
+func TestHandleSaveNote_NewThreadTitle_FindsOrCreates_ReusesOnSecondPost(t *testing.T) {
+	ctx := context.Background()
+	s := newResearchTestStack(t)
+	ch, creator := s.setupChannel(t, ctx)
+	cookie := s.sessionCookie(t, ctx, creator.ID)
+
+	w1 := s.doForm(t, "/channels/"+ch.ID.String()+"/research/notes", cookie, url.Values{
+		"idempotency_key": {uuid.NewString()},
+		"text":            {"first note in new thread"},
+		"thread_title":    {"Growth ideas"},
+	})
+	require.Equal(t, http.StatusSeeOther, w1.Code, "body: %s", w1.Body.String())
+
+	w2 := s.doForm(t, "/channels/"+ch.ID.String()+"/research/notes", cookie, url.Values{
+		"idempotency_key": {uuid.NewString()},
+		"text":            {"second note reusing the thread"},
+		"thread_title":    {"Growth ideas"},
+	})
+	require.Equal(t, http.StatusSeeOther, w2.Code, "body: %s", w2.Body.String())
+
+	threads, err := s.store.Threads().ListByChannel(ctx, ch.ID, nil)
+	require.NoError(t, err)
+	require.Len(t, threads, 1, "the same thread_title posted twice must find-or-create ONE thread row, not two")
+
+	notes := s.allNotes(t, ctx, ch.ID)
+	note1 := findNoteByText(t, notes, "first note in new thread")
+	note2 := findNoteByText(t, notes, "second note reusing the thread")
+	require.NotNil(t, note1.ThreadID)
+	require.NotNil(t, note2.ThreadID)
+	assert.Equal(t, *note1.ThreadID, *note2.ThreadID, "both notes must resolve to the SAME thread row")
+	assert.Equal(t, threads[0].ID, *note1.ThreadID)
+}
+
+// TestHandleSaveNote_NeitherThreadIDNorThreadTitle_BadRequest_NoRow is
+// FR14's required-selection case: submitting neither a thread_id nor a
+// thread_title re-renders the originating page with 400 and
+// store.ResearchStore.SaveNote's own "exactly one of" message (no second
+// copy of that rule in this handler -- see HandleSaveNote's doc comment),
+// and creates no row.
+func TestHandleSaveNote_NeitherThreadIDNorThreadTitle_BadRequest_NoRow(t *testing.T) {
+	ctx := context.Background()
+	s := newResearchTestStack(t)
+	ch, creator := s.setupChannel(t, ctx)
+
+	w := s.doForm(t, "/channels/"+ch.ID.String()+"/research/notes", s.sessionCookie(t, ctx, creator.ID), url.Values{
+		"idempotency_key": {uuid.NewString()},
+		"text":            {"no thread selected"},
+	})
+	assert.Equal(t, http.StatusBadRequest, w.Code, "body: %s", w.Body.String())
+	assert.Contains(t, w.Body.String(), "exactly one of thread_id or thread_title must be supplied")
+	assert.Empty(t, s.allNotes(t, ctx, ch.ID))
+}
+
+// TestHandleSaveNote_UnresolvableThreadID_BadRequest_NoRow proves an
+// unknown thread_id is rejected (400, store's own "does not exist"
+// message) with no row created.
+func TestHandleSaveNote_UnresolvableThreadID_BadRequest_NoRow(t *testing.T) {
+	ctx := context.Background()
+	s := newResearchTestStack(t)
+	ch, creator := s.setupChannel(t, ctx)
+
+	w := s.doForm(t, "/channels/"+ch.ID.String()+"/research/notes", s.sessionCookie(t, ctx, creator.ID), url.Values{
+		"idempotency_key": {uuid.NewString()},
+		"text":            {"unresolvable thread"},
+		"thread_id":       {uuid.NewString()},
+	})
+	assert.Equal(t, http.StatusBadRequest, w.Code, "body: %s", w.Body.String())
+	assert.Contains(t, w.Body.String(), "does not exist")
+	assert.Empty(t, s.allNotes(t, ctx, ch.ID))
+}
+
+// TestHandleSaveNote_ThreadFromAnotherChannel_BadRequest_NoRow mirrors
+// TestHandleSaveNote_CrossChannelIdeaID_BadRequest_NoRow for thread_id: a
+// thread that exists but belongs to a DIFFERENT Channel than the POST's
+// {id} must never attach a note to it.
+func TestHandleSaveNote_ThreadFromAnotherChannel_BadRequest_NoRow(t *testing.T) {
+	ctx := context.Background()
+	s := newResearchTestStack(t)
+	chA, creatorA := s.setupChannel(t, ctx)
+	chB, creatorB := s.setupChannel(t, ctx)
+	threadOnB, err := s.store.Threads().FindOrCreate(ctx, store.FindOrCreateThreadInput{
+		ChannelID: chB.ID, Title: "Thread on B", CreatedByPersonID: creatorB.ID,
+	})
+	require.NoError(t, err)
+
+	w := s.doForm(t, "/channels/"+chA.ID.String()+"/research/notes", s.sessionCookie(t, ctx, creatorA.ID), url.Values{
+		"idempotency_key": {uuid.NewString()},
+		"text":            {"cross-channel thread attempt"},
+		"thread_id":       {threadOnB.ID.String()},
+	})
+	assert.Equal(t, http.StatusBadRequest, w.Code, "body: %s", w.Body.String())
+	assert.Contains(t, w.Body.String(), "does not belong to channel")
+	assert.Empty(t, s.allNotes(t, ctx, chA.ID))
+	assert.Empty(t, s.allNotes(t, ctx, chB.ID))
+}
+
+// TestHandleSaveNote_ValidRelation_WritesNoteAndRelationRow is FR15's
+// happy path: picking a prior note in the SAME resolved thread with a
+// relation_type writes both the note and the research_note_relation row,
+// readable back through store.ResearchStore.ListRelationsForNotes with the
+// correct direction from each end.
+func TestHandleSaveNote_ValidRelation_WritesNoteAndRelationRow(t *testing.T) {
+	ctx := context.Background()
+	s := newResearchTestStack(t)
+	ch, creator := s.setupChannel(t, ctx)
+	idea, err := s.store.Ideas().Create(ctx, ch.ID, "Idea Relations", creator.ID)
+	require.NoError(t, err)
+
+	target, err := s.store.Research().SaveNote(ctx, store.SaveNoteInput{
+		ChannelID: ch.ID, IdeaID: &idea.ID, ThreadTitle: "Relation thread", Text: "target note", AuthorPersonID: creator.ID,
+	})
+	require.NoError(t, err)
+
+	w := s.doForm(t, "/channels/"+ch.ID.String()+"/research/notes", s.sessionCookie(t, ctx, creator.ID), url.Values{
+		"idempotency_key":                     {uuid.NewString()},
+		"text":                                {"declaring note via form"},
+		"idea_id":                             {idea.ID.String()},
+		"thread_id":                           {target.ThreadID.String()},
+		"relation_type_" + target.ID.String(): {"supersedes"},
+	})
+	require.Equal(t, http.StatusSeeOther, w.Code, "body: %s", w.Body.String())
+
+	notes := s.allNotes(t, ctx, ch.ID)
+	declaring := findNoteByText(t, notes, "declaring note via form")
+
+	rels, err := s.store.Research().ListRelationsForNotes(ctx, []uuid.UUID{declaring.ID, target.ID})
+	require.NoError(t, err)
+	require.Len(t, rels[declaring.ID], 1)
+	assert.Equal(t, target.ID, rels[declaring.ID][0].RelatedNoteID)
+	assert.Equal(t, store.RelationSupersedes, rels[declaring.ID][0].RelationType)
+	assert.Equal(t, store.RelationOutgoing, rels[declaring.ID][0].Direction)
+	require.Len(t, rels[target.ID], 1)
+	assert.Equal(t, declaring.ID, rels[target.ID][0].RelatedNoteID)
+	assert.Equal(t, store.RelationIncoming, rels[target.ID][0].Direction)
+}
+
+// TestHandleSaveNote_RelationTargetInDifferentThread_BadRequest_NoRowNoRelation
+// is FR15/NFR4's rejection case: a relation naming a note that belongs to
+// a DIFFERENT thread than the one this submission resolves to is rejected
+// by store.ResearchStore.SaveNote's own whole-call rollback -- 400, no note
+// row, no relation row.
+func TestHandleSaveNote_RelationTargetInDifferentThread_BadRequest_NoRowNoRelation(t *testing.T) {
+	ctx := context.Background()
+	s := newResearchTestStack(t)
+	ch, creator := s.setupChannel(t, ctx)
+	idea, err := s.store.Ideas().Create(ctx, ch.ID, "Idea Cross Thread", creator.ID)
+	require.NoError(t, err)
+
+	threadA, err := s.store.Threads().FindOrCreate(ctx, store.FindOrCreateThreadInput{
+		ChannelID: ch.ID, IdeaID: &idea.ID, Title: "Thread A", CreatedByPersonID: creator.ID,
+	})
+	require.NoError(t, err)
+	noteInB, err := s.store.Research().SaveNote(ctx, store.SaveNoteInput{
+		ChannelID: ch.ID, IdeaID: &idea.ID, ThreadTitle: "Thread B", Text: "note in thread B", AuthorPersonID: creator.ID,
+	})
+	require.NoError(t, err)
+
+	before := s.allNotes(t, ctx, ch.ID)
+
+	w := s.doForm(t, "/channels/"+ch.ID.String()+"/research/notes", s.sessionCookie(t, ctx, creator.ID), url.Values{
+		"idempotency_key":                      {uuid.NewString()},
+		"text":                                 {"declaring note, bad relation"},
+		"idea_id":                              {idea.ID.String()},
+		"thread_id":                            {threadA.ID.String()},
+		"relation_type_" + noteInB.ID.String(): {"summarizes"},
+	})
+	assert.Equal(t, http.StatusBadRequest, w.Code, "body: %s", w.Body.String())
+	assert.Contains(t, w.Body.String(), "is not in the resolved thread")
+
+	after := s.allNotes(t, ctx, ch.ID)
+	assert.Len(t, after, len(before), "a rejected relation must leave no note row behind")
+
+	rels, err := s.store.Research().ListRelationsForNotes(ctx, []uuid.UUID{noteInB.ID})
+	require.NoError(t, err)
+	assert.Empty(t, rels[noteInB.ID], "a rejected relation must leave no relation row behind")
+}
+
+// TestHandleSaveNote_ValidationFailure_PreservesThreadAndRelationSelections
+// proves the re-render after a rejected relation (this file's
+// TestHandleSaveNote_RelationTargetInDifferentThread_BadRequest_NoRowNoRelation
+// scenario) preserves EXACTLY what was submitted: the same thread_id
+// selected in the thread <select>, the same relation_type_<noteID> pick
+// re-selected, and the submitted text/source_url echoed back -- mirroring
+// noteFormData's doc comment contract for IdeaID.
+func TestHandleSaveNote_ValidationFailure_PreservesThreadAndRelationSelections(t *testing.T) {
+	ctx := context.Background()
+	s := newResearchTestStack(t)
+	ch, creator := s.setupChannel(t, ctx)
+	idea, err := s.store.Ideas().Create(ctx, ch.ID, "Idea Preserve Selections", creator.ID)
+	require.NoError(t, err)
+
+	threadA, err := s.store.Threads().FindOrCreate(ctx, store.FindOrCreateThreadInput{
+		ChannelID: ch.ID, IdeaID: &idea.ID, Title: "Thread A Preserve", CreatedByPersonID: creator.ID,
+	})
+	require.NoError(t, err)
+	noteInB, err := s.store.Research().SaveNote(ctx, store.SaveNoteInput{
+		ChannelID: ch.ID, IdeaID: &idea.ID, ThreadTitle: "Thread B Preserve", Text: "note in thread B preserve", AuthorPersonID: creator.ID,
+	})
+	require.NoError(t, err)
+
+	w := s.doForm(t, "/channels/"+ch.ID.String()+"/research/notes", s.sessionCookie(t, ctx, creator.ID), url.Values{
+		"idempotency_key":                      {uuid.NewString()},
+		"text":                                 {"preserved text on failed submit"},
+		"source_url":                           {"https://example.com/preserved"},
+		"idea_id":                              {idea.ID.String()},
+		"thread_id":                            {threadA.ID.String()},
+		"relation_type_" + noteInB.ID.String(): {"summarizes"},
+	})
+	require.Equal(t, http.StatusBadRequest, w.Code, "body: %s", w.Body.String())
+	body := w.Body.String()
+
+	assert.Contains(t, body, "preserved text on failed submit", "the submitted note text must survive the re-render")
+	assert.Contains(t, body, `value="https://example.com/preserved"`, "the submitted source_url must survive the re-render")
+	assert.Contains(t, body, `<option value="`+threadA.ID.String()+`" selected`, "the submitted thread_id selection must be re-selected on the re-render")
+	assert.Contains(t, body, `<select name="relation_type_`+noteInB.ID.String()+`"`, "the rejected relation's own picker must still be rendered")
+	assert.Contains(t, body, `<option value="summarizes" selected`, "the submitted relation_type pick must be re-selected on the re-render")
+}
+
+// TestSaveNoteForm_ThreadPicker_ChannelIndexListsChannelWide_IdeaDetailListsIdeaOnly
+// scopes narrowly to the save-note form's OWN thread <select
+// name="thread_id"> (not merely the page's separate "Research threads"
+// list, TestHandleChannelIndex_RendersEveryThreadOnChannel_IncludingNullIdea/
+// TestHandleIdeaDetail_RendersOnlyThatIdeasThreads' own scope): the
+// Channel index's picker must offer every thread on the Channel, while an
+// Idea detail page's picker must offer only that Idea's own threads.
+func TestSaveNoteForm_ThreadPicker_ChannelIndexListsChannelWide_IdeaDetailListsIdeaOnly(t *testing.T) {
+	ctx := context.Background()
+	s := newResearchTestStack(t)
+	ch, creator := s.setupChannel(t, ctx)
+	idea1, err := s.store.Ideas().Create(ctx, ch.ID, "Idea One Picker", creator.ID)
+	require.NoError(t, err)
+	idea2, err := s.store.Ideas().Create(ctx, ch.ID, "Idea Two Picker", creator.ID)
+	require.NoError(t, err)
+
+	thread1, err := s.store.Threads().FindOrCreate(ctx, store.FindOrCreateThreadInput{
+		ChannelID: ch.ID, IdeaID: &idea1.ID, Title: "Idea one picker thread", CreatedByPersonID: creator.ID,
+	})
+	require.NoError(t, err)
+	thread2, err := s.store.Threads().FindOrCreate(ctx, store.FindOrCreateThreadInput{
+		ChannelID: ch.ID, IdeaID: &idea2.ID, Title: "Idea two picker thread", CreatedByPersonID: creator.ID,
+	})
+	require.NoError(t, err)
+
+	threadSelectPattern := regexp.MustCompile(`(?s)<select name="thread_id".*?</select>`)
+
+	indexW := s.do(t, http.MethodGet, "/channels/"+ch.ID.String()+"/research", s.sessionCookie(t, ctx, creator.ID))
+	require.Equal(t, http.StatusOK, indexW.Code, "body: %s", indexW.Body.String())
+	indexSelect := threadSelectPattern.FindString(indexW.Body.String())
+	require.NotEmpty(t, indexSelect, "the Channel index must render the thread_id select")
+	assert.Contains(t, indexSelect, thread1.Title, "the Channel index's thread picker must offer every thread on the Channel")
+	assert.Contains(t, indexSelect, thread2.Title, "the Channel index's thread picker must offer every thread on the Channel")
+
+	detailW := s.do(t, http.MethodGet, "/channels/"+ch.ID.String()+"/research/ideas/"+idea1.ID.String(), s.sessionCookie(t, ctx, creator.ID))
+	require.Equal(t, http.StatusOK, detailW.Code, "body: %s", detailW.Body.String())
+	detailSelect := threadSelectPattern.FindString(detailW.Body.String())
+	require.NotEmpty(t, detailSelect, "the Idea detail page must render the thread_id select")
+	assert.Contains(t, detailSelect, thread1.Title, "Idea One's thread picker must offer Idea One's own thread")
+	assert.NotContains(t, detailSelect, thread2.Title, "Idea One's thread picker must NOT offer Idea Two's thread")
+}
+
+// TestHandleSaveNote_WebFormAndMCP_ProduceEquivalentRows is NFR2/FR16's
+// parity proof for the save path itself (distinct from FR11's existing
+// read-side relations parity, TestHandleIdeaDetail_NoteRelations_
+// MatchListResearchNotesMCP): equivalent input -- same channel/idea, same
+// resolved thread, a relation to the SAME prior note with the SAME
+// relation_type -- submitted once through this handler's web form and
+// once through save_research_note, must produce equivalent research_note
+// and research_note_relation rows, since both call the IDENTICAL
+// store.ResearchStore.SaveNote method (LB5).
+func TestHandleSaveNote_WebFormAndMCP_ProduceEquivalentRows(t *testing.T) {
+	ctx := context.Background()
+	s := newResearchTestStack(t)
+	ch, creator := s.setupChannel(t, ctx)
+	idea, err := s.store.Ideas().Create(ctx, ch.ID, "Idea Parity", creator.ID)
+	require.NoError(t, err)
+
+	seed, err := s.store.Research().SaveNote(ctx, store.SaveNoteInput{
+		ChannelID: ch.ID, IdeaID: &idea.ID, ThreadTitle: "Parity save thread", Text: "seed note", AuthorPersonID: creator.ID,
+	})
+	require.NoError(t, err)
+
+	// Web side: the save-note form posts thread_id + a relation_type_
+	// pick, exactly as HandleSaveNote's doc comment describes.
+	w := s.doForm(t, "/channels/"+ch.ID.String()+"/research/notes", s.sessionCookie(t, ctx, creator.ID), url.Values{
+		"idempotency_key":                   {uuid.NewString()},
+		"text":                              {"web parity note"},
+		"idea_id":                           {idea.ID.String()},
+		"thread_id":                         {seed.ThreadID.String()},
+		"relation_type_" + seed.ID.String(): {"caveats"},
+	})
+	require.Equal(t, http.StatusSeeOther, w.Code, "body: %s", w.Body.String())
+	webNote := findNoteByText(t, s.allNotes(t, ctx, ch.ID), "web parity note")
+
+	// MCP side: save_research_note with the equivalent wire shape --
+	// same idea, same resolved thread, same relation to the SAME seed
+	// note with the SAME relation_type.
+	mcpFix := newMCPFixture(t, s)
+	cs := mcpFix.connect(t, creator.ID)
+	mcpOut := mcpFix.saveResearchNote(t, cs, mcptools.SaveResearchNoteInput{
+		ChannelID:         ch.ID.String(),
+		Text:              "mcp parity note",
+		IdeaID:            idea.ID.String(),
+		ThreadID:          seed.ThreadID.String(),
+		Relations:         []mcptools.SaveResearchNoteRelationInput{{RelatedNoteID: seed.ID.String(), RelationType: "caveats"}},
+		IdempotencyKeyArg: uuid.NewString(),
+	})
+	require.NotEmpty(t, mcpOut.ID)
+	mcpNoteID, err := uuid.Parse(mcpOut.ID)
+	require.NoError(t, err)
+
+	// Both notes must resolve to the SAME thread and Idea (thread
+	// resolution is identical regardless of caller).
+	require.NotNil(t, webNote.ThreadID)
+	require.NotNil(t, mcpOut.ThreadID)
+	assert.Equal(t, seed.ThreadID.String(), (*webNote.ThreadID).String())
+	assert.Equal(t, *webNote.ThreadID, *seed.ThreadID)
+	assert.Equal(t, seed.ThreadID.String(), *mcpOut.ThreadID)
+	require.NotNil(t, webNote.IdeaID)
+	require.NotNil(t, mcpOut.IdeaID)
+	assert.Equal(t, idea.ID, *webNote.IdeaID)
+	assert.Equal(t, idea.ID.String(), *mcpOut.IdeaID)
+
+	// Both notes' relation to the seed note must be equivalent: same
+	// related note, same type, same direction, whichever surface wrote
+	// it.
+	rels, err := s.store.Research().ListRelationsForNotes(ctx, []uuid.UUID{webNote.ID, mcpNoteID})
+	require.NoError(t, err)
+	require.Len(t, rels[webNote.ID], 1)
+	require.Len(t, rels[mcpNoteID], 1)
+	assert.Equal(t, rels[webNote.ID][0].RelatedNoteID, rels[mcpNoteID][0].RelatedNoteID)
+	assert.Equal(t, rels[webNote.ID][0].RelationType, rels[mcpNoteID][0].RelationType)
+	assert.Equal(t, store.RelationCaveats, rels[webNote.ID][0].RelationType)
+	assert.Equal(t, rels[webNote.ID][0].Direction, rels[mcpNoteID][0].Direction)
+	assert.Equal(t, store.RelationOutgoing, rels[webNote.ID][0].Direction)
+
+	require.Len(t, mcpOut.Relations, 1, "save_research_note's own response must reflect the outgoing relation it just wrote")
+	assert.Equal(t, seed.ID.String(), mcpOut.Relations[0].RelatedNoteID)
+	assert.Equal(t, "caveats", mcpOut.Relations[0].RelationType)
+	assert.Equal(t, "outgoing", mcpOut.Relations[0].Direction)
 }
 
 // ── Save-note form rendering (FR3, FR6, FR7) ────────────────────────────
