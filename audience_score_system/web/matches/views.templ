@@ -1,0 +1,23 @@
+package matches
+
+import (
+	"github.com/whale-net/everything/audience_score_system/store"
+	"github.com/whale-net/everything/audience_score_system/web/components"
+)
+
+// List is the pending-matches browse page (FR7, FR8) -- a Scaffold-phase
+// placeholder body. The Implementation phase replaces this with the real
+// per-match video/latest-metrics/best-guess-script/confidence rendering
+// (mirroring mcp/tools/matches.go's PendingMatchOutput shape) plus FR8's
+// message-plus-pointer empty state, assembled from a package-local view
+// struct built in matches.go -- this templ does no store calls itself,
+// matching web/research's split (see matches.go's package doc comment).
+templ List(data components.LayoutData, ch store.Channel) {
+	@components.Layout(data) {
+		<div class="card bg-base-100 border border-base-300 shadow-sm">
+			<div class="card-body">
+				<h1 class="card-title">{ ch.Title } pending matches</h1>
+			</div>
+		</div>
+	}
+}
