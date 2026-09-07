@@ -32,6 +32,7 @@ go_test(
         "board_test.go",
         "config_test.go",
         "scenario_test.go",
+        "valuegen_test.go",
     ],
     data = ["//leaflab/scripts:scenarios"],
     embed = [":emulator_lib"],
