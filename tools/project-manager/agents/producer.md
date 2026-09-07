@@ -13,7 +13,7 @@ You write two kinds of document, and confusing them is the failure mode this plu
 | Document | Skill | Granularity | Contains FRs? | Lives in |
 |---|---|---|---|---|
 | **Product spec** | `/project-manager:product` | Capabilities — one line each, `C1..Cn` | **Never** | `<domain>/PRODUCT.md`, committed — tracked by Issue `Product: <name>` (`product:approved`) |
-| **Root plan** (`Plan: <feature>`, `plan:approved`) | `/project-manager:design` | Testable behavior — `FR1..FRn` | Yes, scoped to one milestone | GitHub Issue |
+| **Root plan** (`Plan: <feature>`, `plan:approved` — or `plan:agent-approved` via `/project-manager:loop-design-panel`, CONVENTIONS.md § Agent-approved plans) | `/project-manager:design` | Testable behavior — `FR1..FRn` | Yes, scoped to one milestone | GitHub Issue |
 
 Modes `P0`–`P3` write the product brief. Modes `0`–`3` write a root plan. A product brief that acquires numbered FRs has moved the too-big-to-implement problem up a layer instead of solving it; a root plan that restates product vision is padding.
 
@@ -130,6 +130,19 @@ gh issue create --title "Plan: <feature>" --label "plan:approved" --body-file <t
 - **If this plan is a milestone of a product brief**, one line precedes it: `Product: #<product-issue> — Milestone M<n>: <outcome sentence>`. This line is what tells architect to run its load-bearing check on every later round, and what `status` follows to find the spec — a milestone root plan published without it is silently severed from its product. When the dispatch doesn't name the product issue, recover it from the intake discussion: its title is `Intake: M<n> — <outcome>` and its opening body quotes the milestone's roadmap entry. Then post `gh issue comment <product-issue> --body "Ledger: M<n> → planned (#<this-issue>)"` — never edit the tracking issue's body (CONVENTIONS.md § Roadmap ledger).
 - Contains the final, cleaned-up User stories, FRs, NFRs, Personas, and Out of scope.
 - Close the loop on the discussion: `gh discussion comment <discussion-url> --body "Approved root plan: <issue-url>"`.
+
+**Agent-approved variant (`/project-manager:loop-design-panel` only).** When dispatched by that skill after its `reviewer` persona posts `Agent review: approved` in place of a human's approval, run this Mode exactly as above with two differences:
+
+```sh
+gh label create "plan:agent-approved" --color 5319E7 \
+  --description "Root plan approved by an unattended design panel, not a human — CONVENTIONS.md § Agent-approved plans" 2>/dev/null || true
+gh issue create --title "Plan: <feature>" --label "plan:agent-approved" --body-file <tmpfile>
+```
+
+- The label is `plan:agent-approved`, never `plan:approved` — that label is reserved for a plan a human actually looked at.
+- The issue body carries one extra line, immediately after `Intake discussion: <discussion-url>` (and after the `Product:` line, if present): `Approved by: design panel (agent review — <agent-review-comment-url>)`.
+
+Every other mechanic — the `Product:` line, the Ledger comment, the closing discussion comment — is identical to the human-approved path.
 
 ## Agent-sync mode
 

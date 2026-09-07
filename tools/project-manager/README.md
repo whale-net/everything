@@ -14,6 +14,7 @@ AGY and Claude Code plugin providing a multi-persona project-management pipeline
 | `architect` | Reconciles the plan against repo conventions inside the Discussion, asks questions via Discussion comments, and signs off when ready for human review. In product mode, writes the current-state survey and the load-bearing decisions; on each milestone, checks the draft doesn't foreclose them | opus |
 | `stakeholder` | Represents exactly one persona from the spec during a stakeholder meeting round; posts guidance, non-blocking feedback, and numbered blockers | sonnet |
 | *(human)* | Reviews the architect-approved draft in the Discussion, either approves it (triggering root plan Issue creation) or requests changes | — |
+| `reviewer` | Stands in for the human, only under `/project-manager:loop-design-panel`: breaks a stakeholder disagreement once the meeting's own round cap is hit, and renders the Approve/Request-changes call at the review gate. Root plan Issue it creates is labeled `plan:agent-approved`, not `plan:approved` | opus |
 | `planner` | Converts an approved root plan Issue into a GitHub Project with swimlanes and task issues | opus |
 | `worker` | Executes tasks in `Scaffold`, `Implementation`, and `Testing` swimlanes inside a dedicated worktree, commits to the task's own `gh stack` branch, and advances tasks to the next swimlane | haiku |
 | `validator` | Checks a task's acceptance criteria in the `Validation` swimlane against merged work (read-only), moves to `Done`, and closes the issue | haiku |
@@ -44,12 +45,12 @@ AGY and Claude Code plugin providing a multi-persona project-management pipeline
                                                      one stakeholder per persona ──blockers──▶ producer/architect (re-loop)
                                                                            │   (cleared)
                                                                            ▼
-                                                                   (human) review gate
+                                                             (human) review gate  ── or, via /project-manager:loop-design-panel: reviewer agent review ──
                                                                     │                  │
                                                             approved      feedback ──▶ producer/architect (loop in Discussion)
                                                                     │
                                                                     ▼
-                                                       producer creates root Issue (plan:approved)
+                                              producer creates root Issue (plan:approved, or plan:agent-approved if reviewer approved it)
                                                                     │
                                                                     ▼
                                                         /project-manager:plan ──dispatches──▶  planner  ──creates──▶  Project board with Swimlanes:
@@ -79,7 +80,7 @@ gh project item-list <project-number> --owner whale-net --query "status:Implemen
 
 ## Skills
 
-Ten skills orchestrate the pipeline:
+Eleven skills orchestrate the pipeline:
 
 | Skill | Drives | Dispatches |
 |---|---|---|
@@ -87,14 +88,15 @@ Ten skills orchestrate the pipeline:
 | `/project-manager:design "<feature>"` or `/project-manager:design <discussion-url>` | Intake discussion → draft spec → producer/architect loop in Discussion until architect sign-off; with `--stakeholder-meeting`, a stakeholder round before hand-off | `producer`, `architect`, *(optionally)* `stakeholder` |
 | `/project-manager:stakeholder-meeting <discussion-url\|issue-number>` | One meeting round: every persona in the spec posts guidance, non-blocking feedback, and blockers; blockers re-loop producer/architect, cleared hands off to review | `stakeholder` (one per persona), `producer`, `architect` |
 | `/project-manager:review <discussion-url>` | The human gate: review architect-approved draft in Discussion → create root Issue (`plan:approved`), or leave feedback | `producer`, `architect` |
+| `/project-manager:loop-design-panel "<feature>"` or `/project-manager:loop-design-panel <discussion-url>` | Unattended alternative to `design --stakeholder-meeting` → `review`: a `reviewer` subagent stands in for the human at the stakeholder round cap and at the final review decision, posting its reasoning as Discussion comments either way. Creates the root Issue labeled `plan:agent-approved` instead of `plan:approved` — same downstream function, distinguishable provenance (CONVENTIONS.md § Agent-approved plans) | `producer`, `architect`, `stakeholder`, `reviewer` |
 | `/project-manager:plan <issue-number> [--planner-model model]` | Task breakdown: converts the approved root Issue into a Project board with swimlanes and cohesive task issues (idempotent — reports the existing board instead of recreating it) | `planner` |
 | `/project-manager:implement <issue-number> [--max-subagents N]` | Orchestrates worker/validator subagents in parallel batches — up to `--max-subagents` (default 4) at a time — each in its own dedicated worktree from branch creation onward, over `gh stack`-managed per-task branches until all tasks are `Done`; each batch's push/PR integration and continuous trunk-merge is handed to `mergepush`, which registers every task into one real `gh stack` stack (`main → task-a → task-b → ...`) via `gh stack link` and merges into `main` whatever's `Done` and ready every batch, so most tasks land individually as they validate instead of at the very end — the orchestrator's own session stays free of `git`/`gh stack` output either way. Requires a Project board to already exist | `worker`, `validator`, `mergepush` |
 | `/project-manager:validate <issue-number>` | Whole-system validation in Tilt (against a local branch merging every task's tip together, since the stack itself doesn't contain any single branch with everyone's combined work) once all tasks are `Done`; lands whatever continuous merge during `/project-manager:implement` hadn't already merged via `gh stack merge` once validation passes, or routes findings to planner | `system-validator`, `planner` |
-| `/project-manager:loop-plan-implement-validate <issue-number> [--max-subagents N] [--planner-model model] [--max-iterations N]` | Unattended end-to-end runner: dispatches `plan`, `implement`, and `validate` each to their own fresh subagent (re-entering that skill via the `Skill` tool), re-looping `implement`→`validate` on findings, until `validate` reports a clean merge — then dispatches one more subagent to independently re-verify the merged stack from a branch/PR description, so this orchestrator's own session never absorbs any phase's `git`/`gh` output. Requires a `plan:approved` root Issue | *(the `plan`/`implement`/`validate` skills, each in its own subagent — which then dispatch their own personas as above)* |
+| `/project-manager:loop-plan-implement-validate <issue-number> [--max-subagents N] [--planner-model model] [--max-iterations N]` | Unattended end-to-end runner: dispatches `plan`, `implement`, and `validate` each to their own fresh subagent (re-entering that skill via the `Skill` tool), re-looping `implement`→`validate` on findings, until `validate` reports a clean merge — then dispatches one more subagent to independently re-verify the merged stack from a branch/PR description, so this orchestrator's own session never absorbs any phase's `git`/`gh` output. Requires a `plan:approved` (or `plan:agent-approved`) root Issue | *(the `plan`/`implement`/`validate` skills, each in its own subagent — which then dispatch their own personas as above)* |
 | `/project-manager:status <issue-number>` | Read-only: current lifecycle state and Project board breakdown by swimlane | *(none — pure `gh` reads)* |
 | `/project-manager:help "<question>"` | Not sure which skill applies? Describe the situation in plain language and get back the exact next skill/command and why | `help` |
 
-Typical flow for one feature: `design` → `review` → `plan` → `implement` → `validate` → (if findings) `implement` again — or run `loop-plan-implement-validate` once `plan:approved` to drive `plan`→`implement`→`validate` (and any re-loop on findings) to a merged stack without re-invoking each phase by hand.
+Typical flow for one feature: `design` → `review` → `plan` → `implement` → `validate` → (if findings) `implement` again — or run `loop-plan-implement-validate` once `plan:approved`/`plan:agent-approved` to drive `plan`→`implement`→`validate` (and any re-loop on findings) to a merged stack without re-invoking each phase by hand. When no human reviewer is available, `loop-design-panel` replaces `design --stakeholder-meeting` → `review` with one unattended run that produces a `plan:agent-approved` root Issue instead — everything after that point is identical either way.
 
 For a product: `product` once, then that same flow per milestone — `design <product-issue> --milestone M1` → `review` → `plan` → `implement` → `validate`, then `M2`, and so on. `<domain>/PRODUCT.md` is read fresh from `main` at the start of each milestone's design, which is what keeps milestone N+1 aware of decisions made in milestone N without anyone re-reading milestone N's spec. `plan` and `validate` each gain one conditional step for this: posting a `Ledger: M<n> → in progress` / `→ shipped` comment on the tracking issue when the root plan names a product brief; ordinary single-feature plans are unaffected.
 

@@ -1,6 +1,6 @@
 ---
 name: loop-plan-implement-validate
-description: Drives a plan:approved root plan all the way to a merged PR stack unattended — dispatches /project-manager:plan, /project-manager:implement, and /project-manager:validate each to their own fresh subagent (which in turn dispatch planner/worker/validator/mergepush/system-validator themselves), looping implement→validate again whenever validate routes findings back to Implementation, until validate reports a clean merge. Finishes with an independent final-verification subagent that re-checks the merged stack from a branch/PR description handed to it, so this orchestrating session's own context never absorbs any phase's gh/git output, start to finish. Use for "run this plan end to end", "loop plan/implement/validate until done", or "get this whole plan merged without me babysitting each phase".
+description: Drives a plan:approved (or plan:agent-approved — see /project-manager:loop-design-panel) root plan all the way to a merged PR stack unattended — dispatches /project-manager:plan, /project-manager:implement, and /project-manager:validate each to their own fresh subagent (which in turn dispatch planner/worker/validator/mergepush/system-validator themselves), looping implement→validate again whenever validate routes findings back to Implementation, until validate reports a clean merge. Finishes with an independent final-verification subagent that re-checks the merged stack from a branch/PR description handed to it, so this orchestrating session's own context never absorbs any phase's gh/git output, start to finish. Use for "run this plan end to end", "loop plan/implement/validate until done", or "get this whole plan merged without me babysitting each phase".
 ---
 
 # loop-plan-implement-validate
@@ -23,7 +23,7 @@ This is a convenience wrapper, not a new mechanic: it doesn't touch GitHub state
 
 ## Steps
 
-1. **Confirm root state.** `gh issue view <n>` — must be labeled `plan:approved`; if not, point the user to `/project-manager:design` or `/project-manager:review` and stop. Note from the comments whether a `Project board: <url>` comment already exists.
+1. **Confirm root state.** `gh issue view <n>` — must be labeled `plan:approved` or `plan:agent-approved` (CONVENTIONS.md § Agent-approved plans — functionally identical here); if neither, point the user to `/project-manager:design`, `/project-manager:review`, or `/project-manager:loop-design-panel` and stop. Note from the comments whether a `Project board: <url>` comment already exists.
 
 2. **Plan phase (subagent), only if no board exists yet.** Dispatch a fresh `general-purpose` subagent with a self-contained prompt: invoke the `Skill` tool with `skill: "project-manager:plan"`, `args: "<n>"` (append `--planner-model <model>` if given), let it run to completion, then report back *only*: the Project board URL/number and the created task issues grouped by swimlane. Nothing else from this phase — no raw `gh`/`git` output — should reach this session.
 

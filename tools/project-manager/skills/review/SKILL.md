@@ -1,6 +1,6 @@
 ---
 name: review
-description: The human review gate for a project-manager plan — reviews an architect-approved draft in a GitHub Discussion, then either approves it (triggering creation of the final root plan Issue labeled plan:approved) or routes feedback back through producer/architect in the Discussion.
+description: The human review gate for a project-manager plan — reviews an architect-approved draft in a GitHub Discussion, then either approves it (triggering creation of the final root plan Issue labeled plan:approved) or routes feedback back through producer/architect in the Discussion. For an unattended run with no human reviewer, see /project-manager:loop-design-panel instead — it produces a plan:agent-approved Issue via the same gate mechanics.
 ---
 
 # review

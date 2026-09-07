@@ -13,7 +13,7 @@ Shared conventions all `project-manager` personas follow. Everything lives in Gi
 | Intake Q&A and round-by-round summaries, architect reconciliation | GitHub Discussion, category `Ideas` | producer & architect |
 | Working draft (the actual spec text while it's still moving) | Secret Gist, linked once from the Discussion (§ Working draft) | producer |
 | Stakeholder meeting agenda, per-persona feedback & minutes | Own GitHub Discussion per round, category `Ideas` — linked back with one comment on the intake Discussion (or root Issue) | `stakeholder` personas & the `stakeholder-meeting` skill |
-| Final root plan (requirements doc / spec of record) | GitHub Issue, labeled `plan:approved` | producer (after human review) |
+| Final root plan (requirements doc / spec of record) | GitHub Issue, labeled `plan:approved` (or `plan:agent-approved` — § Agent-approved plans) | producer (after human review, or after `reviewer`'s agent review) |
 | Task tracking & orchestration | GitHub Project (v2), one per approved plan | planner |
 | Task issues (moving through swimlanes) | GitHub Issue, added as a Project item | planner / system-validator |
 | Scope notes (deferred/cross-cutting decisions) | GitHub Issue, added as a Project item at `Status: Noted` | any persona; triaged by planner |
@@ -72,7 +72,7 @@ The two sections most likely to outgrow a single-file read are the same two sect
 | Document | Granularity | Contains FRs? | Skill |
 |---|---|---|---|
 | Product spec (`<domain>/PRODUCT.md`, tracked by Issue `Product: <name>`, `product:approved`) | capabilities, `C1..Cn`, one line each | **never** | `product` |
-| Root plan (`Plan: <feature>`, `plan:approved`) | testable behavior, `FR1..FRn`, one milestone's worth | yes | `design` → `review` |
+| Root plan (`Plan: <feature>`, `plan:approved` or `plan:agent-approved`) | testable behavior, `FR1..FRn`, one milestone's worth | yes | `design` → `review` (or `loop-design-panel`) |
 
 The spec's hard rule is that it contains **zero numbered FRs or NFRs**. `C7 — Operators can see per-device sensor health at a glance` is a capability; `FR7 — the health endpoint returns 200 with lastSeenAt` is not, and belongs in a milestone's plan. A brief that acquires FRs has moved the too-big-to-implement problem up a layer instead of solving it.
 
@@ -163,8 +163,8 @@ stateDiagram-v2
     draft: Producer drafts requirements
     reconcile: Architect reconciliation & questions
     meeting: Stakeholder meeting (optional)
-    humanReview: Human review gate
-    rootIssue: Final root plan Issue (plan:approved)
+    humanReview: Human review gate (or reviewer agent — loop-design-panel)
+    rootIssue: Final root plan Issue (plan:approved / plan:agent-approved)
     projectBoard: Project board (Planner)
 
     [*] --> discussion: producer opens intake discussion
@@ -216,6 +216,18 @@ stateDiagram-v2
      ```sh
      gh discussion comment <discussion-url> --body "Approved root plan issue: <issue-url>"
      ```
+
+   **Unattended alternative.** `/project-manager:loop-design-panel <discussion-url>` runs this same pipeline with no human at the review gate — see § Agent-approved plans below.
+
+## Agent-approved plans
+
+`/project-manager:loop-design-panel` drives design → stakeholder meeting → issue creation the same way `design` → `review` does, but with no human available to (a) settle a stakeholder disagreement once the meeting's own round cap is hit (§ Stakeholder meeting "Routing" below — the point that normally "goes to the human rather than looping"), or (b) render the Approve / Request changes call `/project-manager:review` step 3 asks a human for. The `reviewer` persona (`agents/reviewer.md`) stands in for both, always posting its reasoning as a Discussion comment — `Design panel ruling (round <k>): ...` for (a), `Agent review: approved` / `Agent review: changes requested` for (b) — so the decision is auditable the same way `stakeholder`'s and `architect`'s comments already are.
+
+The one durable difference from the human-approved path is the label producer applies in Mode 3's agent-approved variant (`agents/producer.md`): `plan:agent-approved` instead of `plan:approved`, plus one extra issue-body line, `Approved by: design panel (agent review — <comment-url>)`.
+
+**Functionally identical downstream.** Every gate that checks for `plan:approved` — `/project-manager:plan`, `/project-manager:implement`, `/project-manager:validate`, `/project-manager:loop-plan-implement-validate`, `/project-manager:stakeholder-meeting`'s issue-target path, `/project-manager:status` — also accepts `plan:agent-approved`. Nothing downstream branches on which label is present; the distinction exists purely so a human skimming issues, or auditing later, can tell at a glance which plans a person actually reviewed and which were settled entirely by the design panel. Never apply `plan:agent-approved` outside `/project-manager:loop-design-panel`, and never apply `plan:approved` from that skill — a human-reviewed plan and an agent-reviewed one must stay distinguishable.
+
+**Escalation still exists.** `loop-design-panel` caps both loops it runs itself (`--max-panel-rounds`, default 3) and stops rather than looping past them, same discipline as every other cap in this document — a disagreement that survives a reasoned ruling and a redraft, or review feedback that keeps recurring, is a real one and goes to the user exactly as it would have without this skill. `reviewer` itself refuses to manufacture a ruling just to keep the loop moving (`agents/reviewer.md` § What you do not do).
 
 ## Agent-sync mode (opt-in)
 
@@ -276,13 +288,13 @@ Stakeholder meeting: cleared
 Stakeholder meeting: blocked (<k> blockers)
 ```
 
-**Routing.** `cleared` → hand off to `/project-manager:review`. `blocked` → producer (Mode 2) reads the consolidated blockers from the meeting discussion's minutes comment, answers each `SB-<round>.<n>` in a bounded comment on the target discussion and updates the draft in the working-draft gist, architect re-reconciles and re-signs off there, then the next meeting round runs (a fresh meeting Discussion). Cap at 2 rounds from `/project-manager:design` (`--stakeholder-rounds`), 3 when the skill is invoked directly; past the cap, the standing disagreement goes to the human rather than looping. If the target is an already-approved root Issue, the spec of record is never edited silently — producer amends the issue body only after the user confirms, and posts `Amended after stakeholder meeting round <N>: <summary>` as a comment on the root issue.
+**Routing.** `cleared` → hand off to `/project-manager:review`. `blocked` → producer (Mode 2) reads the consolidated blockers from the meeting discussion's minutes comment, answers each `SB-<round>.<n>` in a bounded comment on the target discussion and updates the draft in the working-draft gist, architect re-reconciles and re-signs off there, then the next meeting round runs (a fresh meeting Discussion). Cap at 2 rounds from `/project-manager:design` (`--stakeholder-rounds`), 3 when the skill is invoked directly; past the cap, the standing disagreement goes to the human rather than looping — or, under `/project-manager:loop-design-panel`, to its `reviewer` subagent, which rules on each standing blocker in the human's place and keeps the loop going (§ Agent-approved plans). If the target is an already-approved root Issue, the spec of record is never edited silently — producer amends the issue body only after the user confirms, and posts `Amended after stakeholder meeting round <N>: <summary>` as a comment on the root issue.
 
 **Boundaries.** Stakeholders represent one persona each and never speak for another; they do not propose implementations, edit requirements, create task issues, or gate the plan — only the human review gate approves. Blockers change the plan; they never become task issues.
 
 ## Project setup
 
-Once the root issue is created and labeled `plan:approved`, `/project-manager:plan` dispatches planner to create the plan's Project board:
+Once the root issue is created and labeled `plan:approved` (or `plan:agent-approved` — § Agent-approved plans, functionally identical here), `/project-manager:plan` dispatches planner to create the plan's Project board:
 
 1. **Idempotency check first.** `gh issue view <root-issue-number> --comments` — if a prior comment contains `Project board: <url>`, reuse that project number.
 2. Create it: `gh project create --owner whale-net --title "Plan: <feature title> (#<n>)" --format json` — capture `.number`.
@@ -527,6 +539,7 @@ Any persona noticing scope outside its issue files a scope note issue added to t
 |---|---|---|
 | producer, architect, planner | `opus` | Deep reasoning for requirements gathering, architecture reconciliation, and task breakdown |
 | stakeholder | `sonnet` | Bounded single-persona critique of an existing draft; runs once per persona in parallel, so cost multiplies |
+| reviewer | `opus` | Stands in for a human judgment call (`loop-design-panel` only) — breaking a stakeholder disagreement or rendering the review-gate decision; warrants the same tier as producer/architect for the same reason |
 | worker, validator | `haiku` | Fast, cost-efficient execution of scoped swimlane tasks |
 | mergepush | `haiku` | Bounded, mechanical push/PR integration — no reasoning about code, just `git`/`gh stack` plumbing on commits already made |
 | system-validator | `opus` (effort: max) | Comprehensive whole-system validation in running environment |

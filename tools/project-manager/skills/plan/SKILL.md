@@ -1,11 +1,11 @@
 ---
 name: plan
-description: Task breakdown — converts an approved project-manager root plan Issue (plan:approved) into a GitHub Project board with swimlanes and cohesive task issues, by dispatching the planner persona. Idempotent: if the Project board already exists, reports it instead of recreating it. Run after /project-manager:review approves the spec, before /project-manager:implement. Also the right target for requests like "just set up the board" / "create the tasks but don't start work" / "plan only".
+description: Task breakdown — converts an approved project-manager root plan Issue (plan:approved or plan:agent-approved) into a GitHub Project board with swimlanes and cohesive task issues, by dispatching the planner persona. Idempotent: if the Project board already exists, reports it instead of recreating it. Run after /project-manager:review (or /project-manager:loop-design-panel) approves the spec, before /project-manager:implement. Also the right target for requests like "just set up the board" / "create the tasks but don't start work" / "plan only".
 ---
 
 # plan
 
-Turns a `plan:approved` root plan Issue into executable, dependency-tracked task issues on a Project board, by dispatching `project-manager:planner`. This is pure task breakdown — no code is written and no branches are touched; see `tools/project-manager/CONVENTIONS.md` § Project setup and § Task issues & swimlane progression for the mechanics `planner` follows.
+Turns a `plan:approved` (or `plan:agent-approved`) root plan Issue into executable, dependency-tracked task issues on a Project board, by dispatching `project-manager:planner`. This is pure task breakdown — no code is written and no branches are touched; see `tools/project-manager/CONVENTIONS.md` § Project setup and § Task issues & swimlane progression for the mechanics `planner` follows.
 
 ## Usage
 
@@ -18,7 +18,7 @@ Turns a `plan:approved` root plan Issue into executable, dependency-tracked task
 
 ## Steps
 
-1. `gh issue view <n>` — confirm the root issue is labeled `plan:approved`. If not, point the user to `/project-manager:design` or `/project-manager:review`.
+1. `gh issue view <n>` — confirm the root issue is labeled `plan:approved` or `plan:agent-approved` (CONVENTIONS.md § Agent-approved plans — functionally identical here). If neither, point the user to `/project-manager:design`, `/project-manager:review`, or `/project-manager:loop-design-panel`.
 
 2. **Idempotency check.** `gh issue view <n> --comments` — if a `Project board: <url>` comment already exists, the task breakdown has already run: report the existing project number and its task issues (grouped by swimlane, per `/project-manager:status`) and stop here rather than re-dispatching planner.
 
