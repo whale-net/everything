@@ -36,8 +36,16 @@ primitives below exist here but are not yet adopted anywhere.
   `themes.css` currently defines four palettes: `light`, `night`, `oled`,
   and `sunset` (a Phase 3 proof-of-concept theme, #998 FR10 — a warm
   amber/coral palette added to prove the switcher plumbing generalizes
-  past the original three; not a long-term design commitment). A caller's
-  `[]Theme` list may offer any subset.
+  past the original three; not a long-term design commitment).
+- **`Themes`** (`themes.go`) — the canonical `[]Theme` list, 1:1 with the
+  palettes `ThemesCSS` defines. Every current adopter (manmanv2,
+  app-registry, leaflab, audience_score_system) passes this straight
+  through as `ShellData.Themes` rather than declaring its own copy, so
+  the theme set can't drift out of sync across apps the way it used to
+  (manmanv2 and app-registry each hand-maintained an identical list;
+  leaflab and audience_score_system independently fell behind with only
+  `light`/`night`). A caller that genuinely needs a different subset can
+  still pass its own `[]Theme` to `ShellData.Themes` instead.
 
 - **`UserMenu(data UserMenuData)`** (`user_menu.templ`) — the shared
   top-right identity + logout component (FR8). Renders a single daisyUI

@@ -23,19 +23,6 @@ type LayoutData struct {
 	IsAdmin bool
 }
 
-// themes is the theme list leaflab-ui offers through the shared
-// htmxui.ThemeSwitcher (mounted by Layout, below). Matches manmanv2's
-// manmanThemes and app-registry's shellThemes (manmanv2/ui/components/
-// layout.templ, tools/app_registry/ui/components/layout.templ) so every
-// htmxui-adopting app in the monorepo offers the same theme set, keyed to
-// the shared libs/go/htmxui/themes.css palettes.
-var themes = []htmxui.Theme{
-	{Value: "light", Label: "☀️ Light"},
-	{Value: "night", Label: "🌙 Night"},
-	{Value: "oled", Label: "⚫ OLED Night"},
-	{Value: "sunset", Label: "🌅 Sunset"},
-}
-
 // nav is leaflab-ui's app-owned nav item list (FR1a — htmxui.Shell
 // hardcodes no nav of its own, see htmxui.ShellData's doc comment).
 // "Boards" links to the boards list screen (#1502). "Admin" links to the
@@ -81,7 +68,7 @@ templ Layout(data LayoutData) {
 			IdentityLabel: identityLabel(data.User),
 			LogoutHref:    "/auth/logout",
 		}),
-		Themes: themes,
+		Themes: htmxui.Themes,
 	}) {
 		{ children... }
 	}

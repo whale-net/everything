@@ -23,3 +23,19 @@ import _ "embed"
 //
 //go:embed themes.css
 var ThemesCSS string
+
+// Themes is the canonical theme list every htmxui-adopting app offers
+// through ThemeSwitcher, keyed 1:1 to the [data-theme="..."] palettes in
+// ThemesCSS above. This is the single owner of "which themes exist" —
+// consuming apps (manmanv2, tools/app_registry, leaflab,
+// audience_score_system) pass this slice straight through to
+// ShellData.Themes rather than declaring their own copy, so the theme set
+// can never drift out of sync across apps the way it did before (manmanv2
+// and app-registry each hand-maintained an identical copy of this list;
+// leaflab and audience_score_system fell behind with only light/night).
+var Themes = []Theme{
+	{Value: "light", Label: "☀️ Light"},
+	{Value: "night", Label: "🌙 Night"},
+	{Value: "oled", Label: "⚫ OLED Night"},
+	{Value: "sunset", Label: "🌅 Sunset"},
+}

@@ -21,19 +21,6 @@ type LayoutData struct {
 	User  *store.Person
 }
 
-// themes is the theme list `web` offers through the shared
-// htmxui.ThemeSwitcher (mounted by Layout, below). Matches manmanv2's
-// manmanThemes and app-registry's shellThemes (manmanv2/ui/components/
-// layout.templ, tools/app_registry/ui/components/layout.templ) so every
-// htmxui-adopting app in the monorepo offers the same theme set, keyed to
-// the shared libs/go/htmxui/themes.css palettes.
-var themes = []htmxui.Theme{
-	{Value: "light", Label: "☀️ Light"},
-	{Value: "night", Label: "🌙 Night"},
-	{Value: "oled", Label: "⚫ OLED Night"},
-	{Value: "sunset", Label: "🌅 Sunset"},
-}
-
 // nav is `web`'s app-owned nav item list (FR1a -- htmxui.Shell hardcodes
 // no nav of its own, see htmxui.ShellData's doc comment). Home, Channels
 // (FR26's list/switcher, #1722), and My work (FR27/FR28's cross-Channel
@@ -77,7 +64,7 @@ templ Layout(data LayoutData) {
 			IdentityLabel: identityLabel(data.User),
 			LogoutHref:    "/logout",
 		}),
-		Themes: themes,
+		Themes: htmxui.Themes,
 	}) {
 		{ children... }
 	}
