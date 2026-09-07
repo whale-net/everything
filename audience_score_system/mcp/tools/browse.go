@@ -523,7 +523,7 @@ func getChannelOverview(deps overviewDeps) mcp.ToolHandlerFor[GetChannelOverview
 		}
 
 		if wantSections[overviewSectionNotes] {
-			notes, truncated, err := deps.research.ListFiltered(ctx, channelID, nil, nil, in.Since, in.Before, defaultNotesOverviewLimit)
+			notes, truncated, err := deps.research.ListFiltered(ctx, channelID, nil, nil, nil, in.Since, in.Before, defaultNotesOverviewLimit)
 			if err != nil {
 				return nil, GetChannelOverviewOutput{}, fmt.Errorf("get_channel_overview: list research notes: %w", err)
 			}

@@ -314,7 +314,7 @@ func (h *Handlers) renderChannelIndex(w http.ResponseWriter, r *http.Request, pe
 	// truncated, not specifically whether more unattached notes exist
 	// beyond it: this is deliberately the default page, not a complete
 	// unattached-note listing (NFR2).
-	notes, notesTruncated, err := h.store.Research().ListFiltered(ctx, channelID, nil, nil, nil, nil, defaultPageLimit)
+	notes, notesTruncated, err := h.store.Research().ListFiltered(ctx, channelID, nil, nil, nil, nil, nil, defaultPageLimit)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
@@ -454,7 +454,7 @@ func (h *Handlers) renderIdeaDetail(w http.ResponseWriter, r *http.Request, pers
 		return
 	}
 
-	notes, notesTruncated, err := h.store.Research().ListFiltered(ctx, channelID, &ideaID, nil, nil, nil, defaultPageLimit)
+	notes, notesTruncated, err := h.store.Research().ListFiltered(ctx, channelID, &ideaID, nil, nil, nil, nil, defaultPageLimit)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return

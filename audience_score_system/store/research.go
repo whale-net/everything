@@ -25,7 +25,14 @@ type SaveNoteRelationInput struct {
 // SaveNoteInput is the input to ResearchStore.SaveNote.
 type SaveNoteInput struct {
 	ChannelID uuid.UUID
-	IdeaID    *uuid.UUID // nil if the note predates an Idea (FR9).
+	// IdeaID is thread-RESOLUTION input, not the note's own Idea
+	// attachment (issue #1940, FR2 Stage 2) -- the note's effective Idea
+	// always comes from the resolved thread. With ThreadTitle it is the
+	// Idea component of the find-or-create natural key; with ThreadID it
+	// must agree with that thread's resolved Idea or SaveNote rejects the
+	// call (see SaveNote's doc comment). nil if the note predates an Idea
+	// (FR9).
+	IdeaID *uuid.UUID
 	// ThreadID attaches this note to an existing research_thread (FR4).
 	// Exactly one of ThreadID/ThreadTitle must be supplied -- see
 	// SaveNote's doc comment for the full resolution/rejection rules.
@@ -91,18 +98,21 @@ type ResearchStore interface {
 
 	// ListFiltered returns ResearchNote rows for channelID, most-recent
 	// first, each joined to its author's display name, optionally narrowed
-	// to a single ideaID (nil = no filter), partitioned by cited
-	// (source_url IS NOT NULL, cited=true) vs uncited (source_url IS NULL,
-	// cited=false, FR10; nil = no cited/uncited filter), and bounded by
-	// since (inclusive lower bound on created_at, nil = no bound) and
-	// before (exclusive upper bound, nil = no bound). limit caps the
-	// number of rows returned (<=0 = unbounded); truncated reports whether
-	// more matching rows exist beyond limit -- both together implement
-	// list_research_notes' and get_channel_overview's since/before/limit
-	// pagination entirely in this layer (issue #1808's follow-up: no
-	// unbounded fetch-then-filter-in-Go). Backs list_research_notes
+	// to a single ideaID (nil = no filter, matched via the note's resolved
+	// thread's Idea) and/or a single threadID (nil = no filter, issue
+	// #1940, FR2 Stage 2b/FR8 -- composes with every other filter, never
+	// bypasses one), partitioned by cited (source_url IS NOT NULL,
+	// cited=true) vs uncited (source_url IS NULL, cited=false, FR10; nil =
+	// no cited/uncited filter), and bounded by since (inclusive lower
+	// bound on created_at, nil = no bound) and before (exclusive upper
+	// bound, nil = no bound). limit caps the number of rows returned (<=0
+	// = unbounded); truncated reports whether more matching rows exist
+	// beyond limit -- both together implement list_research_notes' and
+	// get_channel_overview's since/before/limit pagination entirely in
+	// this layer (issue #1808's follow-up: no unbounded
+	// fetch-then-filter-in-Go). Backs list_research_notes
 	// (mcp/tools/research.go, issue #1577).
-	ListFiltered(ctx context.Context, channelID uuid.UUID, ideaID *uuid.UUID, cited *bool, since, before *time.Time, limit int) (notes []ResearchNoteWithAuthor, truncated bool, err error)
+	ListFiltered(ctx context.Context, channelID uuid.UUID, ideaID, threadID *uuid.UUID, cited *bool, since, before *time.Time, limit int) (notes []ResearchNoteWithAuthor, truncated bool, err error)
 }
 
 // researchStore implements ResearchStore against `research_note`
@@ -115,7 +125,9 @@ var _ ResearchStore = researchStore{}
 // thread (rt.idea_id) rather than research_note.idea_id directly (issue
 // #1939, FR2 Stage 2a): store.ResearchNote.IdeaID keeps its exact meaning
 // and type (*uuid.UUID) -- only its provenance changes here, so every
-// caller in mcp/web continues to compile and behave identically.
+// caller in mcp/web continues to compile and behave identically. rt.title
+// is also selected (issue #1940, FR2 Stage 2b) so a caller can render a
+// note's thread_title without a second list_research_threads call.
 // thread_id is still nullable until Stage 3, so researchNoteFrom below
 // uses a LEFT JOIN, not an inner join -- an inner join would silently
 // drop any row a backfill or a stale writer left with a NULL thread_id.
@@ -123,7 +135,7 @@ var _ ResearchStore = researchStore{}
 // every READ query; the INSERT...RETURNING in SaveNote uses the separate
 // researchNoteInsertColumns instead (RETURNING cannot reference a
 // joined table).
-const researchNoteColumns = `rn.id, rn.channel_id, rt.idea_id, rn.thread_id, rn.text, rn.source_url, rn.author_person_id, rn.created_at, COALESCE(rn.idempotency_key, '')`
+const researchNoteColumns = `rn.id, rn.channel_id, rt.idea_id, rn.thread_id, rt.title, rn.text, rn.source_url, rn.author_person_id, rn.created_at, COALESCE(rn.idempotency_key, '')`
 
 // researchNoteFrom is the FROM clause every READ query pairs with
 // researchNoteColumns above.
@@ -134,12 +146,16 @@ const researchNoteFrom = `research_note rn LEFT JOIN research_thread rt ON rt.id
 // only in SaveNote's INSERT...RETURNING, where the row was just written
 // with idea_id = the resolved thread's IdeaID (SaveNote's own invariant),
 // so echoing research_note.idea_id back here agrees with the join by
-// construction and needs no subquery.
-const researchNoteInsertColumns = `id, channel_id, idea_id, thread_id, text, source_url, author_person_id, created_at, COALESCE(idempotency_key, '')`
+// construction and needs no subquery. The `NULL::text` in title's
+// position is a placeholder to keep this in column-order lockstep with
+// scanResearchNote/researchNoteColumns -- SaveNote overwrites it with the
+// already-resolved thread.Title in Go immediately after scanning (the
+// INSERT has no research_thread join to read it from directly).
+const researchNoteInsertColumns = `id, channel_id, idea_id, thread_id, NULL::text, text, source_url, author_person_id, created_at, COALESCE(idempotency_key, '')`
 
 func scanResearchNote(row pgx.Row) (ResearchNote, error) {
 	var n ResearchNote
-	err := row.Scan(&n.ID, &n.ChannelID, &n.IdeaID, &n.ThreadID, &n.Text, &n.SourceURL, &n.AuthorPersonID, &n.CreatedAt, &n.IdempotencyKey)
+	err := row.Scan(&n.ID, &n.ChannelID, &n.IdeaID, &n.ThreadID, &n.ThreadTitle, &n.Text, &n.SourceURL, &n.AuthorPersonID, &n.CreatedAt, &n.IdempotencyKey)
 	return n, err
 }
 
@@ -182,7 +198,12 @@ func validateSourceURL(raw string) (*string, error) {
 // be supplied.
 //   - in.ThreadID: the thread must exist and belong to in.ChannelID; the
 //     note's effective idea_id becomes that thread's IdeaID (Stage 1's
-//     invariant: idea_id and thread_id's idea never disagree).
+//     invariant: idea_id and thread_id's idea never disagree). If in.IdeaID
+//     is also supplied, it must agree with the resolved thread's IdeaID
+//     (nil vs non-nil counts as disagreement) -- issue #1940's disagreement
+//     rule, since in.IdeaID is thread-RESOLUTION input, not a note's own
+//     attachment, and a caller passing both must never have them silently
+//     diverge.
 //   - in.ThreadTitle: delegates to findOrCreateThreadTx (thread.go) using
 //     in.IdeaID as the natural key's Idea component.
 //
@@ -239,6 +260,9 @@ func (s researchStore) SaveNote(ctx context.Context, in SaveNoteInput) (Research
 		if thread.ChannelID != in.ChannelID {
 			return ResearchNote{}, fmt.Errorf("thread %s does not belong to channel %s", *in.ThreadID, in.ChannelID)
 		}
+		if in.IdeaID != nil && (thread.IdeaID == nil || *thread.IdeaID != *in.IdeaID) {
+			return ResearchNote{}, fmt.Errorf("idea_id %s does not match thread %s's idea", *in.IdeaID, *in.ThreadID)
+		}
 	} else {
 		thread, err = findOrCreateThreadTx(ctx, tx, FindOrCreateThreadInput{
 			ChannelID:         in.ChannelID,
@@ -280,6 +304,8 @@ func (s researchStore) SaveNote(ctx context.Context, in SaveNoteInput) (Research
 	if err != nil {
 		return ResearchNote{}, fmt.Errorf("insert research_note: %w", err)
 	}
+	title := thread.Title
+	note.ThreadTitle = &title
 
 	for _, rel := range in.Relations {
 		if rel.RelatedNoteID == note.ID {
@@ -374,23 +400,27 @@ func (s researchStore) GetByIDs(ctx context.Context, ids []uuid.UUID) (map[uuid.
 
 // researchNoteWithAuthorColumns mirrors researchNoteColumns -- idea_id
 // read via rt.idea_id, not rn.idea_id (see researchNoteColumns' doc
-// comment, issue #1939) -- plus the author's display name from `person`.
-const researchNoteWithAuthorColumns = `rn.id, rn.channel_id, rt.idea_id, rn.thread_id, rn.text, rn.source_url, rn.author_person_id, rn.created_at, COALESCE(rn.idempotency_key, ''), COALESCE(p.display_name, '')`
+// comment, issue #1939), plus rt.title (issue #1940) -- plus the author's
+// display name from `person`.
+const researchNoteWithAuthorColumns = `rn.id, rn.channel_id, rt.idea_id, rn.thread_id, rt.title, rn.text, rn.source_url, rn.author_person_id, rn.created_at, COALESCE(rn.idempotency_key, ''), COALESCE(p.display_name, '')`
 
 func scanResearchNoteWithAuthor(row pgx.Row) (ResearchNoteWithAuthor, error) {
 	var n ResearchNoteWithAuthor
-	err := row.Scan(&n.ID, &n.ChannelID, &n.IdeaID, &n.ThreadID, &n.Text, &n.SourceURL, &n.AuthorPersonID, &n.CreatedAt, &n.IdempotencyKey, &n.AuthorDisplayName)
+	err := row.Scan(&n.ID, &n.ChannelID, &n.IdeaID, &n.ThreadID, &n.ThreadTitle, &n.Text, &n.SourceURL, &n.AuthorPersonID, &n.CreatedAt, &n.IdempotencyKey, &n.AuthorDisplayName)
 	return n, err
 }
 
 // ListFiltered joins research_note to person for the author's display
-// name, filters by channelID and optionally ideaID/cited/since/before, and
-// orders most-recent first, capped at limit (see fetchLimit/paginate,
-// pagination.go). ideaID nil means no Idea filter; cited nil means no
-// cited/uncited filter -- callers (list_research_notes,
+// name, filters by channelID and optionally ideaID/threadID/cited/since/
+// before, and orders most-recent first, capped at limit (see
+// fetchLimit/paginate, pagination.go). ideaID nil means no Idea filter
+// (matched via rt.idea_id, the note's resolved thread's Idea -- issue
+// #1939); threadID nil means no thread filter (issue #1940, FR2 Stage
+// 2b/FR8) and composes with every other filter rather than replacing it;
+// cited nil means no cited/uncited filter -- callers (list_research_notes,
 // mcp/tools/research.go) reject a request that sets both cited_only and
 // uncited_only before calling this, so cited here is never ambiguous.
-func (s researchStore) ListFiltered(ctx context.Context, channelID uuid.UUID, ideaID *uuid.UUID, cited *bool, since, before *time.Time, limit int) ([]ResearchNoteWithAuthor, bool, error) {
+func (s researchStore) ListFiltered(ctx context.Context, channelID uuid.UUID, ideaID, threadID *uuid.UUID, cited *bool, since, before *time.Time, limit int) ([]ResearchNoteWithAuthor, bool, error) {
 	query := `
 		SELECT ` + researchNoteWithAuthorColumns + `
 		FROM research_note rn
@@ -402,6 +432,10 @@ func (s researchStore) ListFiltered(ctx context.Context, channelID uuid.UUID, id
 	if ideaID != nil {
 		args = append(args, *ideaID)
 		query += fmt.Sprintf(" AND rt.idea_id = $%d", len(args))
+	}
+	if threadID != nil {
+		args = append(args, *threadID)
+		query += fmt.Sprintf(" AND rn.thread_id = $%d", len(args))
 	}
 	if cited != nil {
 		if *cited {

@@ -33,7 +33,15 @@ type SaveResearchNoteInput struct {
 	ChannelID string `json:"channel_id" jsonschema:"Channel to attach this research note to, as a UUID string"`
 	Text      string `json:"text" jsonschema:"The research note's body text; must not be empty"`
 	SourceURL string `json:"source_url,omitempty" jsonschema:"Absolute http(s) URL this note cites; omit or leave empty for an uncited note (FR10) -- never coerced from missing to an empty-string citation"`
-	IdeaID    string `json:"idea_id,omitempty" jsonschema:"Idea this note is attached to, as a UUID string; omit if the note predates an Idea"`
+	// IdeaID is thread-resolution input only (issue #1938/#1940, FR2 Stage
+	// 2): it is NOT the note's own Idea attachment -- that comes from the
+	// resolved thread (thread_id/thread_title below), never from this
+	// field directly. It matters only when thread_title is used (the
+	// Idea component of that natural key's find-or-create) or as a
+	// consistency check when thread_id is supplied: a thread_id whose
+	// resolved thread belongs to a DIFFERENT Idea than idea_id is
+	// rejected outright, never silently reconciled.
+	IdeaID string `json:"idea_id,omitempty" jsonschema:"Thread-resolution input, NOT the note's own Idea (the note's Idea comes from its resolved thread). With thread_title: the Idea component of the find-or-create natural key. With thread_id: must agree with that thread's Idea, or the call is rejected. Omit if the note predates an Idea."`
 	// ThreadID/ThreadTitle are JSON-wire strings (see ChannelID/IdeaID's
 	// doc comment above for why UUID fields are declared as string). FR4:
 	// supply exactly one, never both and never neither -- use
@@ -72,10 +80,18 @@ func (i SaveResearchNoteInput) IdempotencyKey() string { return i.IdempotencyKey
 // ResearchNoteOutput is the shape both save_research_note and
 // list_research_notes render for a single research note.
 type ResearchNoteOutput struct {
-	ID                string  `json:"id" jsonschema:"Research note ID, as a UUID string"`
-	ChannelID         string  `json:"channel_id" jsonschema:"Channel this note belongs to, as a UUID string"`
-	IdeaID            *string `json:"idea_id,omitempty" jsonschema:"Idea this note is attached to, as a UUID string, if any"`
-	Text              string  `json:"text" jsonschema:"The research note's body text"`
+	ID        string `json:"id" jsonschema:"Research note ID, as a UUID string"`
+	ChannelID string `json:"channel_id" jsonschema:"Channel this note belongs to, as a UUID string"`
+	// IdeaID is derived from this note's resolved thread (issue #1940,
+	// FR2 Stage 2b) -- not a column on the note itself. nil when the
+	// resolved thread has no Idea (FR9).
+	IdeaID *string `json:"idea_id,omitempty" jsonschema:"Idea this note is attached to, as a UUID string, if any -- derived from this note's resolved thread, not stored on the note itself"`
+	// ThreadID/ThreadTitle let a caller see and reuse this note's thread
+	// (e.g. to attach a follow-up note or a relation) without a separate
+	// list_research_threads call.
+	ThreadID    *string `json:"thread_id,omitempty" jsonschema:"This note's resolved research thread, as a UUID string -- reference from a later save_research_note's thread_id"`
+	ThreadTitle *string `json:"thread_title,omitempty" jsonschema:"The resolved thread's title"`
+	Text        string  `json:"text" jsonschema:"The research note's body text"`
 	SourceURL         *string `json:"source_url,omitempty" jsonschema:"The cited source URL, if any"`
 	Cited             bool    `json:"cited" jsonschema:"True if this note has a source_url. Explicit so a client cannot mistake a missing source_url for a truncated response (FR10)."`
 	AuthorPersonID    string  `json:"author_person_id" jsonschema:"The Person who authored this note (the calling credential, not the Channel's Creator), as a UUID string"`
@@ -90,10 +106,15 @@ type ResearchNoteOutput struct {
 }
 
 // toResearchNoteOutput renders n (plus its already-resolved author display
-// name) as ResearchNoteOutput. Cited is derived by n.Cited() (FR10, FR12
-// -- store.ResearchNote.Cited, models.go) at this single call site so
-// save_research_note and list_research_notes can never disagree on the
-// rule.
+// name) as ResearchNoteOutput -- the SINGLE conversion save_research_note,
+// list_research_notes, get_channel_overview (browse.go), and my_work
+// (my_work.go) all route through (FR16/NFR2), so none of them can render
+// a note's Idea/thread differently. Cited is derived by n.Cited() (FR10,
+// FR12 -- store.ResearchNote.Cited, models.go) at this single call site so
+// callers can never disagree on that rule either. IdeaID/ThreadID/
+// ThreadTitle are all derived from n's already-resolved thread (issue
+// #1940, FR2 Stage 2b) -- ThreadTitle is nil exactly when ThreadID is nil
+// (store.ResearchNote's own invariant), never independently.
 func toResearchNoteOutput(n store.ResearchNote, authorDisplayName string) ResearchNoteOutput {
 	out := ResearchNoteOutput{
 		ID:                n.ID.String(),
@@ -109,6 +130,13 @@ func toResearchNoteOutput(n store.ResearchNote, authorDisplayName string) Resear
 		s := n.IdeaID.String()
 		out.IdeaID = &s
 	}
+	if n.ThreadID != nil {
+		s := n.ThreadID.String()
+		out.ThreadID = &s
+	}
+	if n.ThreadTitle != nil {
+		out.ThreadTitle = n.ThreadTitle
+	}
 	return out
 }
 
@@ -118,10 +146,12 @@ func toResearchNoteOutput(n store.ResearchNote, authorDisplayName string) Resear
 func registerSaveResearchNote(reg *server.Registry, research store.ResearchStore, persons store.PersonStore) {
 	server.RegisterWrite(reg, &mcp.Tool{
 		Name: "save_research_note",
-		Description: "Save a research note for a Channel, optionally attached to an Idea (idea_id) and citing a source " +
+		Description: "Save a research note for a Channel, attached to a research thread and citing a source " +
 			"(source_url). Omit source_url for an uncited note -- it is never coerced from an empty string. " +
 			"Supply exactly one of thread_id (an existing thread, from list_research_threads) or thread_title " +
-			"(find-or-create by title) -- neither or both is rejected. Optionally add relations to prior notes in " +
+			"(find-or-create by title) -- neither or both is rejected. The note's Idea comes from the resolved " +
+			"thread, not from idea_id directly -- idea_id is thread-resolution input (see its own description) and " +
+			"is rejected if it conflicts with thread_id's resolved Idea. Optionally add relations to prior notes in " +
 			"the same resolved thread: supersedes/excludes retire the target note, caveats/follows_up/summarizes do " +
 			"not. Always supply idempotency_key: a retry without one may create a duplicate note.",
 	}, saveResearchNoteMutate(research), saveResearchNoteRender(research, persons))
@@ -226,8 +256,15 @@ const defaultListResearchNotesLimit = 50
 
 // ListResearchNotesInput is list_research_notes's argument schema.
 type ListResearchNotesInput struct {
-	ChannelID   string `json:"channel_id" jsonschema:"Channel to list research notes for, as a UUID string"`
-	IdeaID      string `json:"idea_id,omitempty" jsonschema:"Restrict to notes attached to this Idea, as a UUID string"`
+	ChannelID string `json:"channel_id" jsonschema:"Channel to list research notes for, as a UUID string"`
+	// IdeaID restricts by the note's resolved THREAD's Idea (issue #1940,
+	// FR2 Stage 2b), not a column on the note itself -- composes with
+	// ThreadID (both may be supplied together) rather than replacing it.
+	IdeaID string `json:"idea_id,omitempty" jsonschema:"Restrict to notes whose resolved thread belongs to this Idea, as a UUID string"`
+	// ThreadID is FR8's thread filter -- composes with idea_id and every
+	// other filter below (cited_only/uncited_only/since/before/limit),
+	// never bypasses them.
+	ThreadID    string `json:"thread_id,omitempty" jsonschema:"Restrict to notes attached to this research thread, as a UUID string"`
 	CitedOnly   bool   `json:"cited_only,omitempty" jsonschema:"Return only notes with a source_url (cited, FR10). Mutually exclusive with uncited_only."`
 	UncitedOnly bool   `json:"uncited_only,omitempty" jsonschema:"Return only notes with no source_url (uncited, FR10). Mutually exclusive with cited_only."`
 	// Since/Before bound the window by each note's created_at. Together
@@ -255,9 +292,10 @@ func registerListResearchNotes(reg *server.Registry, research store.ResearchStor
 	server.RegisterRead(reg, &mcp.Tool{
 		Name: "list_research_notes",
 		Description: "List research notes for a Channel, most-recent first, each carrying an explicit cited boolean " +
-			"(FR10). Optionally restrict to one Idea (idea_id) and/or partition into cited_only vs uncited_only. " +
-			"Response is capped at limit (default 50); see truncated. Page backward past truncation by re-calling " +
-			"with before set to the oldest returned note's created_at.",
+			"(FR10) and its resolved thread_id/thread_title. Optionally restrict to one Idea (idea_id, matched via " +
+			"each note's resolved thread), one thread (thread_id), and/or partition into cited_only vs uncited_only " +
+			"-- filters compose. Response is capped at limit (default 50); see truncated. Page backward past " +
+			"truncation by re-calling with before set to the oldest returned note's created_at.",
 	}, listResearchNotes(research))
 }
 
@@ -281,6 +319,15 @@ func listResearchNotes(research store.ResearchStore) mcp.ToolHandlerFor[ListRese
 			ideaID = &id
 		}
 
+		var threadID *uuid.UUID
+		if strings.TrimSpace(in.ThreadID) != "" {
+			id, err := uuid.Parse(in.ThreadID)
+			if err != nil {
+				return nil, ListResearchNotesOutput{}, fmt.Errorf("thread_id is not a valid UUID: %w", err)
+			}
+			threadID = &id
+		}
+
 		var cited *bool
 		switch {
 		case in.CitedOnly:
@@ -295,7 +342,7 @@ func listResearchNotes(research store.ResearchStore) mcp.ToolHandlerFor[ListRese
 		if limit <= 0 {
 			limit = defaultListResearchNotesLimit
 		}
-		notes, truncated, err := research.ListFiltered(ctx, channelID, ideaID, cited, in.Since, in.Before, limit)
+		notes, truncated, err := research.ListFiltered(ctx, channelID, ideaID, threadID, cited, in.Since, in.Before, limit)
 		if err != nil {
 			return nil, ListResearchNotesOutput{}, err
 		}
