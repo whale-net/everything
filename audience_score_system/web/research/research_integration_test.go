@@ -86,6 +86,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"database/sql"
+	"encoding/json"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -95,15 +96,21 @@ import (
 	"testing"
 
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgxpool"
 	_ "github.com/jackc/pgx/v5/stdlib"
+	"github.com/modelcontextprotocol/go-sdk/mcp"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	mcpserver "github.com/whale-net/everything/audience_score_system/mcp/server"
+	mcptools "github.com/whale-net/everything/audience_score_system/mcp/tools"
 	"github.com/whale-net/everything/audience_score_system/migrate/schema"
 	"github.com/whale-net/everything/audience_score_system/store"
 	"github.com/whale-net/everything/audience_score_system/web/auth"
 	"github.com/whale-net/everything/audience_score_system/web/research"
 	"github.com/whale-net/everything/libs/go/dbtest"
+	"github.com/whale-net/everything/libs/go/mcpauth"
 	"github.com/whale-net/everything/libs/go/migrate"
 )
 
@@ -225,12 +232,167 @@ func (s *researchTestStack) doForm(t *testing.T, target string, cookie *http.Coo
 	return w
 }
 
+// ── #1943 (FR9, FR16, NFR2) test infrastructure: a SQL query counter for
+// the batching assertion, and a real in-process MCP client/server wired
+// against this SAME researchTestStack's Postgres for the web/MCP excerpt
+// parity assertion ──────────────────────────────────────────────────────
+
+// researchQueryCounter is a pgx.QueryTracer that counts every SQL
+// statement issued through the pool it's attached to -- mirrors
+// channels_integration_test.go's channelsQueryCounter (#1716's pattern).
+type researchQueryCounter struct{ n int64 }
+
+func (c *researchQueryCounter) TraceQueryStart(ctx context.Context, _ *pgx.Conn, _ pgx.TraceQueryStartData) context.Context {
+	c.n++
+	return ctx
+}
+
+func (c *researchQueryCounter) TraceQueryEnd(context.Context, *pgx.Conn, pgx.TraceQueryEndData) {}
+
+// tracedResearchStack builds a second router against the SAME database as
+// s, but through a pool whose every query is counted by counter --
+// mirrors channels_integration_test.go's tracedChannelsStack.
+func (s *researchTestStack) tracedResearchStack(t *testing.T, ctx context.Context, counter *researchQueryCounter) *researchTestStack {
+	t.Helper()
+
+	cfg, err := pgxpool.ParseConfig(s.db.ConnString)
+	require.NoError(t, err)
+	cfg.ConnConfig.Tracer = counter
+
+	pool, err := pgxpool.NewWithConfig(ctx, cfg)
+	require.NoError(t, err)
+	t.Cleanup(pool.Close)
+
+	st := store.New(pool)
+	sessions := auth.NewSessionManager(pool, testCookieName, "session-secret", testEncKey())
+	a := auth.NewForTests(st.Persons(), sessions)
+	res := research.New(st)
+
+	mux := http.NewServeMux()
+	mux.HandleFunc("GET /channels/{id}/research", a.RequireSignedIn(res.HandleChannelIndex))
+	mux.HandleFunc("GET /channels/{id}/research/ideas/{ideaID}", a.RequireSignedIn(res.HandleIdeaDetail))
+
+	return &researchTestStack{store: st, sessions: sessions, handlers: res, router: mux, db: s.db}
+}
+
+// mcpFixture is a real MCP server (mcptools.RegisterVerdict) hosted over a
+// real in-process HTTP transport, backed by the SAME *store.Store (and
+// thus the SAME Postgres data) as the researchTestStack it's built from --
+// so a get_viability_verdict call and a GET .../research/ideas/{id} call
+// can be compared against the identical underlying row for the excerpt
+// parity test (FR16/NFR2). Mirrors mcp/tools/verdict_integration_test.go's
+// verdictFixture, trimmed to just what parity needs.
+type mcpFixture struct {
+	creds mcpauth.CredentialStore
+	url   string
+}
+
+func newMCPFixture(t *testing.T, s *researchTestStack) *mcpFixture {
+	t.Helper()
+	ctx := context.Background()
+
+	creds, err := mcpauth.NewCredentialStore(ctx, mcpauth.StoreConfig{
+		Pool:           s.db.Pool,
+		TableName:      "mcp_credential",
+		IdentityColumn: "person_id",
+		IdentityCast:   "uuid",
+	})
+	require.NoError(t, err)
+
+	srv := mcpserver.New(s.store)
+	reg := mcpserver.NewRegistry(srv, s.store)
+	mcptools.RegisterVerdict(reg, s.store)
+
+	handler := mcpserver.NewHTTPHandler(srv, creds, mcpserver.ResourceMetadataConfig{
+		Resource:            "https://mcp.example.com",
+		AuthorizationServer: "https://web.example.com",
+		ResourceName:        "Test MCP",
+	})
+	ts := httptest.NewServer(handler)
+	t.Cleanup(ts.Close)
+
+	return &mcpFixture{creds: creds, url: ts.URL}
+}
+
+// mcpBearerRoundTripper injects an "Authorization: Bearer <token>" header
+// on every request -- mirrors verdict_integration_test.go's
+// bearerRoundTripper.
+type mcpBearerRoundTripper struct{ token string }
+
+func (rt mcpBearerRoundTripper) RoundTrip(req *http.Request) (*http.Response, error) {
+	req = req.Clone(req.Context())
+	req.Header.Set("Authorization", "Bearer "+rt.token)
+	return http.DefaultTransport.RoundTrip(req)
+}
+
+// connect opens a real streamable-HTTP MCP client session authenticated
+// as personID.
+func (f *mcpFixture) connect(t *testing.T, personID uuid.UUID) *mcp.ClientSession {
+	t.Helper()
+	ctx := context.Background()
+
+	token, _, err := f.creds.Mint(ctx, personID.String())
+	require.NoError(t, err)
+
+	transport := &mcp.StreamableClientTransport{
+		Endpoint:   f.url,
+		HTTPClient: &http.Client{Transport: mcpBearerRoundTripper{token: token}},
+	}
+	client := mcp.NewClient(&mcp.Implementation{Name: "test-client", Version: "0.0.1"}, nil)
+	cs, err := client.Connect(ctx, transport, nil)
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = cs.Close() })
+	return cs
+}
+
+// getViabilityVerdict calls get_viability_verdict and decodes its
+// structured result.
+func (f *mcpFixture) getViabilityVerdict(t *testing.T, cs *mcp.ClientSession, channelID, ideaID uuid.UUID) mcptools.GetViabilityVerdictOutput {
+	t.Helper()
+	res, err := cs.CallTool(context.Background(), &mcp.CallToolParams{
+		Name: "get_viability_verdict",
+		Arguments: mcptools.GetViabilityVerdictInput{
+			ChannelID: channelID.String(),
+			IdeaID:    ideaID.String(),
+		},
+	})
+	require.NoError(t, err)
+	require.False(t, res.IsError, "unexpected get_viability_verdict error")
+
+	body, err := json.Marshal(res.StructuredContent)
+	require.NoError(t, err)
+	var out mcptools.GetViabilityVerdictOutput
+	require.NoError(t, json.Unmarshal(body, &out))
+	return out
+}
+
 // idempotencyKeyPattern extracts the hidden idempotency_key input's value
 // from a rendered save-note form (both saveNoteFormChannelIndex and
 // saveNoteFormIdeaDetail render it via the shared saveNoteFields), so
 // tests can assert it is non-empty and that two separate GETs mint two
 // different keys (FR6).
 var idempotencyKeyPattern = regexp.MustCompile(`name="idempotency_key" value="([^"]+)"`)
+
+// citedNoteTextPattern matches ONLY views.templ's citedNoteBody's own text
+// paragraph (`<p class="text-sm">{ excerpt }</p>`) -- distinct from
+// noteBody's plain `<p>{ note.Text }</p>` (no class) and the save-verdict
+// form's citation multi-select `<option>` (which also renders a note's
+// FULL untruncated text as its label) -- so a truncation assertion can
+// scope to exactly the cited-notes-section renders and never be satisfied
+// by the SAME note's full text legitimately appearing elsewhere on the
+// same page.
+var citedNoteTextPattern = regexp.MustCompile(`<p class="text-sm">([^<]*)</p>`)
+
+// citedNoteExcerpts extracts every citedNoteBody text excerpt rendered
+// anywhere on the page (see citedNoteTextPattern).
+func citedNoteExcerpts(body string) []string {
+	matches := citedNoteTextPattern.FindAllStringSubmatch(body, -1)
+	out := make([]string, len(matches))
+	for i, m := range matches {
+		out[i] = m[1]
+	}
+	return out
+}
 
 func extractIdempotencyKey(t *testing.T, body string) string {
 	t.Helper()
@@ -647,6 +809,290 @@ func TestHandleIdeaDetail_CitedAndUncitedNotes_RenderFromCited(t *testing.T) {
 	assert.Contains(t, body, "https://example.com/source", "a cited note's source_url must render as a link")
 	assert.Contains(t, body, "Cited")
 	assert.Contains(t, body, "Uncited")
+}
+
+// ── FR9/FR16/NFR2 (#1943): a verdict's CitedResearchNoteIDs render, for
+// BOTH current and every history entry, resolved via ONE batched read and
+// truncated at the SAME bound get_viability_verdict uses ─────────────────
+
+// TestHandleIdeaDetail_CurrentVerdictCitedNotes_TextSourceURLAndBadge
+// covers the base FR9 rendering on the current verdict: an uncited note's
+// text (no source_url, "Uncited" badge) and a cited note's text, its
+// source_url, and its "Cited" badge -- scoped to JUST current's own
+// "Cited notes" section (the slice between the "Current" and "History"
+// headings, mirroring TestHandleIdeaDetail_ThreeVerdictVersions_
+// OldestToNewest_WithSource's currentIdx/historyIdx technique), so this
+// can never be satisfied by the separate research-note list's own
+// (differently-derived-but-identical) badge rendering instead.
+func TestHandleIdeaDetail_CurrentVerdictCitedNotes_TextSourceURLAndBadge(t *testing.T) {
+	ctx := context.Background()
+	s := newResearchTestStack(t)
+	ch, creator := s.setupChannel(t, ctx)
+	idea, err := s.store.Ideas().Create(ctx, ch.ID, "Idea Cited Verdict", creator.ID)
+	require.NoError(t, err)
+
+	uncitedNote, err := s.store.Research().SaveNote(ctx, store.SaveNoteInput{
+		ChannelID: ch.ID, IdeaID: &idea.ID, Text: "verdict-cited note with no source", AuthorPersonID: creator.ID,
+	})
+	require.NoError(t, err)
+	citedNote, err := s.store.Research().SaveNote(ctx, store.SaveNoteInput{
+		ChannelID: ch.ID, IdeaID: &idea.ID, Text: "verdict-cited note with a source", AuthorPersonID: creator.ID, SourceURL: strPtr("https://example.com/verdict-citation"),
+	})
+	require.NoError(t, err)
+
+	_, err = s.store.Verdicts().Append(ctx, store.AppendVerdictInput{
+		IdeaID: idea.ID, Verdict: store.VerdictViable, Reasoning: "citing both notes", AuthorPersonID: creator.ID, Source: store.VerdictSourceHuman,
+		CitedResearchNoteIDs: []uuid.UUID{uncitedNote.ID, citedNote.ID},
+	})
+	require.NoError(t, err)
+
+	w := s.do(t, http.MethodGet, "/channels/"+ch.ID.String()+"/research/ideas/"+idea.ID.String(), s.sessionCookie(t, ctx, creator.ID))
+	require.Equal(t, http.StatusOK, w.Code, "body: %s", w.Body.String())
+	body := w.Body.String()
+
+	currentIdx := strings.Index(body, "Current")
+	historyIdx := strings.Index(body, "History")
+	require.Greater(t, currentIdx, 0)
+	require.Greater(t, historyIdx, currentIdx)
+	currentSection := body[currentIdx:historyIdx]
+
+	assert.Contains(t, currentSection, "Cited notes", `current's verdict must render a "Cited notes" heading`)
+	assert.Contains(t, currentSection, uncitedNote.Text)
+	assert.Contains(t, currentSection, citedNote.Text)
+	assert.Contains(t, currentSection, "https://example.com/verdict-citation")
+
+	uncitedIdx := strings.Index(currentSection, uncitedNote.Text)
+	citedIdx := strings.Index(currentSection, citedNote.Text)
+	require.Greater(t, uncitedIdx, 0)
+	require.Greater(t, citedIdx, 0)
+	// citedBadge renders immediately after each note's body (views.templ's
+	// citedNoteBody); a window past each note's text is enough to catch
+	// its own badge without spilling into the next <li>.
+	window := 300
+	uncitedWindow := currentSection[uncitedIdx:min(uncitedIdx+window, len(currentSection))]
+	citedWindow := currentSection[citedIdx:min(citedIdx+window, len(currentSection))]
+	assert.Contains(t, uncitedWindow, "Uncited", "the note with no source_url must render the Uncited badge in its own cited-notes entry")
+	assert.Contains(t, citedWindow, "Cited", "the note with a source_url must render the Cited badge in its own cited-notes entry")
+}
+
+// TestHandleIdeaDetail_HistoryVerdictCitedNotes_RenderedOnItsOwnVersionOnly
+// proves FR9's "for history entries too, not only current": a note cited
+// ONLY by an earlier (history-only) version must render inside the
+// History section but never inside Current's own section, which cites a
+// different note entirely.
+func TestHandleIdeaDetail_HistoryVerdictCitedNotes_RenderedOnItsOwnVersionOnly(t *testing.T) {
+	ctx := context.Background()
+	s := newResearchTestStack(t)
+	ch, creator := s.setupChannel(t, ctx)
+	idea, err := s.store.Ideas().Create(ctx, ch.ID, "Idea Version Citations", creator.ID)
+	require.NoError(t, err)
+
+	historyOnlyNote, err := s.store.Research().SaveNote(ctx, store.SaveNoteInput{
+		ChannelID: ch.ID, IdeaID: &idea.ID, Text: "note cited only by the superseded v1 verdict", AuthorPersonID: creator.ID,
+	})
+	require.NoError(t, err)
+	currentNote, err := s.store.Research().SaveNote(ctx, store.SaveNoteInput{
+		ChannelID: ch.ID, IdeaID: &idea.ID, Text: "note cited only by the current v2 verdict", AuthorPersonID: creator.ID,
+	})
+	require.NoError(t, err)
+
+	_, err = s.store.Verdicts().Append(ctx, store.AppendVerdictInput{
+		IdeaID: idea.ID, Verdict: store.VerdictNeedsMoreResearch, Reasoning: "v1 reasoning", AuthorPersonID: creator.ID, Source: store.VerdictSourceHuman,
+		CitedResearchNoteIDs: []uuid.UUID{historyOnlyNote.ID},
+	})
+	require.NoError(t, err)
+	_, err = s.store.Verdicts().Append(ctx, store.AppendVerdictInput{
+		IdeaID: idea.ID, Verdict: store.VerdictViable, Reasoning: "v2 reasoning", AuthorPersonID: creator.ID, Source: store.VerdictSourceHuman,
+		CitedResearchNoteIDs: []uuid.UUID{currentNote.ID},
+	})
+	require.NoError(t, err)
+
+	w := s.do(t, http.MethodGet, "/channels/"+ch.ID.String()+"/research/ideas/"+idea.ID.String(), s.sessionCookie(t, ctx, creator.ID))
+	require.Equal(t, http.StatusOK, w.Code, "body: %s", w.Body.String())
+	body := w.Body.String()
+
+	currentIdx := strings.Index(body, "Current")
+	historyIdx := strings.Index(body, "History")
+	require.Greater(t, currentIdx, 0)
+	require.Greater(t, historyIdx, currentIdx)
+	currentSection := body[currentIdx:historyIdx]
+	historySection := body[historyIdx:]
+
+	assert.Contains(t, currentSection, currentNote.Text, "current (v2) must render its own cited note")
+	assert.NotContains(t, currentSection, historyOnlyNote.Text, "current (v2) must never render v1's cited note")
+
+	assert.Contains(t, historySection, historyOnlyNote.Text, "the History section must render v1's cited note against v1's own entry")
+	assert.Contains(t, historySection, currentNote.Text, "the History section must also render v2's cited note against v2's own entry (v2 appears in History too)")
+}
+
+// TestHandleIdeaDetail_CitedNoteTextExceeding200Runes_TruncatedAtSharedBound
+// proves the 200-rune truncation applied to a verdict's cited-note text is
+// the SAME bound/helper get_viability_verdict uses (mcptools.Excerpt) --
+// asserted against that shared helper's actual output, never a hardcoded
+// string, so the two can never drift apart (NFR2).
+func TestHandleIdeaDetail_CitedNoteTextExceeding200Runes_TruncatedAtSharedBound(t *testing.T) {
+	ctx := context.Background()
+	s := newResearchTestStack(t)
+	ch, creator := s.setupChannel(t, ctx)
+	idea, err := s.store.Ideas().Create(ctx, ch.ID, "Idea Long Note", creator.ID)
+	require.NoError(t, err)
+
+	longText := strings.Repeat("z", mcptools.CitationExcerptRunes+75)
+	note, err := s.store.Research().SaveNote(ctx, store.SaveNoteInput{
+		ChannelID: ch.ID, IdeaID: &idea.ID, Text: longText, AuthorPersonID: creator.ID,
+	})
+	require.NoError(t, err)
+
+	_, err = s.store.Verdicts().Append(ctx, store.AppendVerdictInput{
+		IdeaID: idea.ID, Verdict: store.VerdictViable, Reasoning: "citing the long note", AuthorPersonID: creator.ID, Source: store.VerdictSourceHuman,
+		CitedResearchNoteIDs: []uuid.UUID{note.ID},
+	})
+	require.NoError(t, err)
+
+	w := s.do(t, http.MethodGet, "/channels/"+ch.ID.String()+"/research/ideas/"+idea.ID.String(), s.sessionCookie(t, ctx, creator.ID))
+	require.Equal(t, http.StatusOK, w.Code, "body: %s", w.Body.String())
+	body := w.Body.String()
+
+	wantExcerpt := mcptools.Excerpt(longText)
+	excerpts := citedNoteExcerpts(body)
+	require.NotEmpty(t, excerpts, "the cited-notes section must render at least one citedNoteBody entry")
+	assert.Contains(t, excerpts, wantExcerpt, "the cited-notes section must render EXACTLY mcptools.Excerpt's output")
+	assert.NotContains(t, excerpts, longText, "the FULL untruncated note text must never appear as a citedNoteBody excerpt (it legitimately still appears elsewhere on the page: the research-note list and the save-verdict form's citation multi-select, neither of which this task truncates)")
+}
+
+// TestHandleIdeaDetail_VerdictWithNoCitations_RendersNoCitedNotesSection
+// proves an empty CitedResearchNoteIDs renders NOTHING -- no "Cited
+// notes" heading at all, never an empty one.
+func TestHandleIdeaDetail_VerdictWithNoCitations_RendersNoCitedNotesSection(t *testing.T) {
+	ctx := context.Background()
+	s := newResearchTestStack(t)
+	ch, creator := s.setupChannel(t, ctx)
+	idea, err := s.store.Ideas().Create(ctx, ch.ID, "Idea No Citations", creator.ID)
+	require.NoError(t, err)
+
+	_, err = s.store.Verdicts().Append(ctx, store.AppendVerdictInput{
+		IdeaID: idea.ID, Verdict: store.VerdictViable, Reasoning: "no citations here", AuthorPersonID: creator.ID, Source: store.VerdictSourceHuman,
+	})
+	require.NoError(t, err)
+
+	w := s.do(t, http.MethodGet, "/channels/"+ch.ID.String()+"/research/ideas/"+idea.ID.String(), s.sessionCookie(t, ctx, creator.ID))
+	require.Equal(t, http.StatusOK, w.Code, "body: %s", w.Body.String())
+	body := w.Body.String()
+
+	assert.Contains(t, body, "no citations here")
+	assert.NotContains(t, body, "Cited notes", "a verdict with zero citations must render no cited-notes section at all")
+}
+
+// TestHandleIdeaDetail_CitedNotesResolution_IssuesOneBatchedQuery is the
+// concrete batching regression test for research.go's citedResearchNotes:
+// the SAME Idea shape (a current verdict plus 3 history versions) issues
+// exactly one MORE SQL statement when those 4 versions cite notes
+// (overlapping across versions) than when they cite none at all -- proving
+// resolution is ONE store.ResearchStore.GetByIDs call across the whole
+// page, never one GetByID per citation per verdict version (FR16/NFR2).
+func TestHandleIdeaDetail_CitedNotesResolution_IssuesOneBatchedQuery(t *testing.T) {
+	ctx := context.Background()
+	s := newResearchTestStack(t)
+	ch, creator := s.setupChannel(t, ctx)
+
+	// noCitations: 4 verdict versions (1 current + 3 history), none cites
+	// anything.
+	noCitationsIdea, err := s.store.Ideas().Create(ctx, ch.ID, "Idea No Citations Query", creator.ID)
+	require.NoError(t, err)
+	for i := 0; i < 4; i++ {
+		_, err = s.store.Verdicts().Append(ctx, store.AppendVerdictInput{
+			IdeaID: noCitationsIdea.ID, Verdict: store.VerdictNeedsMoreResearch, Reasoning: fmt.Sprintf("no citations v%d", i+1), AuthorPersonID: creator.ID, Source: store.VerdictSourceHuman,
+		})
+		require.NoError(t, err)
+	}
+
+	// withCitations: the identical 4-version shape, but each version cites
+	// an overlapping set of notes drawn from a pool of 3.
+	withCitationsIdea, err := s.store.Ideas().Create(ctx, ch.ID, "Idea With Citations Query", creator.ID)
+	require.NoError(t, err)
+	var noteIDs []uuid.UUID
+	for i := 0; i < 3; i++ {
+		n, err := s.store.Research().SaveNote(ctx, store.SaveNoteInput{
+			ChannelID: ch.ID, IdeaID: &withCitationsIdea.ID, Text: fmt.Sprintf("citation pool note %d", i), AuthorPersonID: creator.ID,
+		})
+		require.NoError(t, err)
+		noteIDs = append(noteIDs, n.ID)
+	}
+	for i := 0; i < 4; i++ {
+		// Every version cites the same overlapping pair, so GetByIDs must
+		// deduplicate across versions too, not just within one.
+		_, err = s.store.Verdicts().Append(ctx, store.AppendVerdictInput{
+			IdeaID: withCitationsIdea.ID, Verdict: store.VerdictNeedsMoreResearch, Reasoning: fmt.Sprintf("with citations v%d", i+1), AuthorPersonID: creator.ID, Source: store.VerdictSourceHuman,
+			CitedResearchNoteIDs: []uuid.UUID{noteIDs[0], noteIDs[1]},
+		})
+		require.NoError(t, err)
+	}
+
+	noCitationsCounter := &researchQueryCounter{}
+	noCitationsStack := s.tracedResearchStack(t, ctx, noCitationsCounter)
+	w := noCitationsStack.do(t, http.MethodGet, "/channels/"+ch.ID.String()+"/research/ideas/"+noCitationsIdea.ID.String(), noCitationsStack.sessionCookie(t, ctx, creator.ID))
+	require.Equal(t, http.StatusOK, w.Code, "body: %s", w.Body.String())
+
+	withCitationsCounter := &researchQueryCounter{}
+	withCitationsStack := s.tracedResearchStack(t, ctx, withCitationsCounter)
+	w = withCitationsStack.do(t, http.MethodGet, "/channels/"+ch.ID.String()+"/research/ideas/"+withCitationsIdea.ID.String(), withCitationsStack.sessionCookie(t, ctx, creator.ID))
+	require.Equal(t, http.StatusOK, w.Code, "body: %s", w.Body.String())
+
+	assert.Equal(t, noCitationsCounter.n+1, withCitationsCounter.n,
+		"citing overlapping notes across a current verdict plus 3 history versions must issue exactly ONE additional SQL statement (the batched GetByIDs read) versus an identically-shaped Idea with no citations at all; no-citations issued %d, with-citations issued %d", noCitationsCounter.n, withCitationsCounter.n)
+}
+
+// TestHandleIdeaDetail_CitedNoteExcerpt_MatchesGetViabilityVerdictMCP is
+// NFR2's cross-surface parity proof: the SAME fixture verdict's cited-note
+// excerpt, read back through get_viability_verdict (a real in-process MCP
+// call, mcpFixture above) and through the web Idea detail page, against
+// the SAME underlying Postgres row, must be byte-for-byte identical. This
+// is this file's second load-bearing red/green case (after the
+// cross-Channel Idea 404 guard): see this task's Testing-phase commit for
+// the deliberate-break verification -- temporarily hardcoding a different
+// truncation bound on the web side alone turned this test red with a
+// excerpt-mismatch failure, and reverting turned it green again.
+func TestHandleIdeaDetail_CitedNoteExcerpt_MatchesGetViabilityVerdictMCP(t *testing.T) {
+	ctx := context.Background()
+	s := newResearchTestStack(t)
+	ch, creator := s.setupChannel(t, ctx)
+	idea, err := s.store.Ideas().Create(ctx, ch.ID, "Idea Parity", creator.ID)
+	require.NoError(t, err)
+
+	longText := strings.Repeat("parity ", 40) // well over 200 runes
+	note, err := s.store.Research().SaveNote(ctx, store.SaveNoteInput{
+		ChannelID: ch.ID, IdeaID: &idea.ID, Text: longText, AuthorPersonID: creator.ID, SourceURL: strPtr("https://example.com/parity"),
+	})
+	require.NoError(t, err)
+
+	_, err = s.store.Verdicts().Append(ctx, store.AppendVerdictInput{
+		IdeaID: idea.ID, Verdict: store.VerdictViable, Reasoning: "parity fixture verdict", AuthorPersonID: creator.ID, Source: store.VerdictSourceHuman,
+		CitedResearchNoteIDs: []uuid.UUID{note.ID},
+	})
+	require.NoError(t, err)
+
+	// MCP side.
+	mcpFix := newMCPFixture(t, s)
+	cs := mcpFix.connect(t, creator.ID)
+	mcpOut := mcpFix.getViabilityVerdict(t, cs, ch.ID, idea.ID)
+	require.NotNil(t, mcpOut.Current)
+	require.Len(t, mcpOut.Current.CitedResearchNotes, 1)
+	mcpExcerpt := mcpOut.Current.CitedResearchNotes[0].TextExcerpt
+	require.NotEmpty(t, mcpExcerpt)
+
+	// Web side.
+	w := s.do(t, http.MethodGet, "/channels/"+ch.ID.String()+"/research/ideas/"+idea.ID.String(), s.sessionCookie(t, ctx, creator.ID))
+	require.Equal(t, http.StatusOK, w.Code, "body: %s", w.Body.String())
+	body := w.Body.String()
+
+	excerpts := citedNoteExcerpts(body)
+	require.NotEmpty(t, excerpts, "the cited-notes section must render at least one citedNoteBody entry")
+	assert.Contains(t, excerpts, mcpExcerpt, "the web page's citedNoteBody excerpt must be the SAME text get_viability_verdict returned for this note")
+	// Guard against a vacuous pass: the excerpt must actually be truncated
+	// (this fixture's note text is well over the bound), so this assertion
+	// couldn't be satisfied by accident via the untruncated full text.
+	assert.True(t, strings.HasSuffix(mcpExcerpt, "..."), "the fixture's note text exceeds the truncation bound, so the shared excerpt must be truncated")
+	assert.NotContains(t, excerpts, longText, "the FULL untruncated note text must never appear as a citedNoteBody excerpt (it legitimately still appears elsewhere on the page: the research-note list and the save-verdict form's citation multi-select)")
 }
 
 func TestHandleIdeaDetail_FiftyOneNotes_TruncatedNoPagingControl(t *testing.T) {
