@@ -1646,7 +1646,7 @@ func TestResearchStore_ListFiltered_IdeaIDFiltersByResolvingThreadNotNoteColumn(
 	})
 	require.NoError(t, err)
 
-	scoped, truncated, err := s.Research().ListFiltered(ctx, ch.ID, &idea1.ID, nil, false, nil, nil, 0)
+	scoped, truncated, err := s.Research().ListFiltered(ctx, ch.ID, &idea1.ID, nil, nil, false, nil, nil, 0)
 	require.NoError(t, err)
 	assert.False(t, truncated)
 	ids := make([]uuid.UUID, len(scoped))
@@ -1655,7 +1655,7 @@ func TestResearchStore_ListFiltered_IdeaIDFiltersByResolvingThreadNotNoteColumn(
 	}
 	assert.Equal(t, []uuid.UUID{note1.ID}, ids, "ListFiltered(ideaID) must return exactly the notes whose THREAD belongs to that idea -- neither idea2's note nor the no-idea note")
 
-	all, _, err := s.Research().ListFiltered(ctx, ch.ID, nil, nil, false, nil, nil, 0)
+	all, _, err := s.Research().ListFiltered(ctx, ch.ID, nil, nil, nil, false, nil, nil, 0)
 	require.NoError(t, err)
 	assert.Len(t, all, 3, "sanity: unfiltered must still see all three notes")
 	_ = note2
@@ -1750,7 +1750,7 @@ func TestResearchStore_BackfilledPreMigrationNoteReportsSameIdeaIDAfterCutover(t
 	require.NotNil(t, got.IdeaID, "a backfilled note's joined read must still resolve an IdeaID")
 	assert.Equal(t, idea.ID, *got.IdeaID, "a backfilled pre-migration note must report the SAME IdeaID after the cutover (via rt.idea_id) as it did before it (via rn.idea_id directly) -- migration 016's backfill guarantees rt.idea_id agrees with the original rn.idea_id for every backfilled row")
 
-	listed, _, err := s.Research().ListFiltered(ctx, ch.ID, &idea.ID, nil, false, nil, nil, 0)
+	listed, _, err := s.Research().ListFiltered(ctx, ch.ID, &idea.ID, nil, nil, false, nil, nil, 0)
 	require.NoError(t, err)
 	found := false
 	for _, n := range listed {
@@ -1990,7 +1990,7 @@ func TestResearchStore_ListFiltered_CurrentOnlyDefaultFalseIncludesRetiredNotes(
 	})
 	require.NoError(t, err)
 
-	all, truncated, err := s.Research().ListFiltered(ctx, ch.ID, nil, nil, false, nil, nil, 0)
+	all, truncated, err := s.Research().ListFiltered(ctx, ch.ID, nil, nil, nil, false, nil, nil, 0)
 	require.NoError(t, err)
 	assert.False(t, truncated)
 	assert.Len(t, all, 2, "currentOnly=false must return every note including retired ones, exactly as before FR8")
@@ -2030,7 +2030,7 @@ func TestResearchStore_ListFiltered_CurrentOnlyPerRelationType(t *testing.T) {
 			})
 			require.NoError(t, err)
 
-			current, _, err := s.Research().ListFiltered(ctx, ch.ID, nil, nil, true, nil, nil, 0)
+			current, _, err := s.Research().ListFiltered(ctx, ch.ID, nil, nil, nil, true, nil, nil, 0)
 			require.NoError(t, err)
 			ids := researchNoteIDs(current)
 
@@ -2070,7 +2070,7 @@ func TestResearchStore_ListFiltered_CurrentOnlySupersedeChainLeavesOnlyNewest(t 
 	})
 	require.NoError(t, err)
 
-	current, _, err := s.Research().ListFiltered(ctx, ch.ID, nil, nil, true, nil, nil, 0)
+	current, _, err := s.Research().ListFiltered(ctx, ch.ID, nil, nil, nil, true, nil, nil, 0)
 	require.NoError(t, err)
 	assert.Equal(t, []uuid.UUID{c.ID}, researchNoteIDs(current), "a 3-long supersedes chain must leave only the newest note current")
 }
@@ -2102,11 +2102,11 @@ func TestResearchStore_ListFiltered_CurrentOnlyComposesWithIdeaID(t *testing.T) 
 	})
 	require.NoError(t, err)
 
-	scoped, _, err := s.Research().ListFiltered(ctx, ch.ID, &idea1.ID, nil, true, nil, nil, 0)
+	scoped, _, err := s.Research().ListFiltered(ctx, ch.ID, &idea1.ID, nil, nil, true, nil, nil, 0)
 	require.NoError(t, err)
 	assert.Equal(t, []uuid.UUID{idea1Current.ID}, researchNoteIDs(scoped), "idea_id + currentOnly must return only idea1's current note, neither its own retired note nor idea2's")
 
-	other, _, err := s.Research().ListFiltered(ctx, ch.ID, &idea2.ID, nil, true, nil, nil, 0)
+	other, _, err := s.Research().ListFiltered(ctx, ch.ID, &idea2.ID, nil, nil, true, nil, nil, 0)
 	require.NoError(t, err)
 	assert.Equal(t, []uuid.UUID{idea2Current.ID}, researchNoteIDs(other))
 }
@@ -2133,12 +2133,12 @@ func TestResearchStore_ListFiltered_CurrentOnlyComposesWithCitedAndUncited(t *te
 	require.NoError(t, err)
 
 	cited := true
-	citedAndCurrent, _, err := s.Research().ListFiltered(ctx, ch.ID, nil, &cited, true, nil, nil, 0)
+	citedAndCurrent, _, err := s.Research().ListFiltered(ctx, ch.ID, nil, nil, &cited, true, nil, nil, 0)
 	require.NoError(t, err)
 	assert.Empty(t, citedAndCurrent, "the only cited note is retired -- cited_only + currentOnly must return nothing")
 
 	uncited := false
-	uncitedAndCurrent, _, err := s.Research().ListFiltered(ctx, ch.ID, nil, &uncited, true, nil, nil, 0)
+	uncitedAndCurrent, _, err := s.Research().ListFiltered(ctx, ch.ID, nil, nil, &uncited, true, nil, nil, 0)
 	require.NoError(t, err)
 	assert.Equal(t, []uuid.UUID{uncitedSuperseder.ID}, researchNoteIDs(uncitedAndCurrent), "uncited_only + currentOnly must return the current uncited note")
 }
@@ -2173,12 +2173,12 @@ func TestResearchStore_ListFiltered_CurrentOnlyComposesWithSinceBefore(t *testin
 	setResearchNoteCreatedAt(t, ctx, db, inWindow.ID, base.Add(2*time.Minute))
 
 	since := base.Add(30 * time.Second)
-	windowed, _, err := s.Research().ListFiltered(ctx, ch.ID, nil, nil, true, &since, nil, 0)
+	windowed, _, err := s.Research().ListFiltered(ctx, ch.ID, nil, nil, nil, true, &since, nil, 0)
 	require.NoError(t, err)
 	assert.Equal(t, []uuid.UUID{inWindow.ID}, researchNoteIDs(windowed), "since must exclude tooOld and currentOnly must exclude the retired target, leaving only inWindow")
 
 	before := base.Add(90 * time.Second)
-	windowed2, _, err := s.Research().ListFiltered(ctx, ch.ID, nil, nil, true, nil, &before, 0)
+	windowed2, _, err := s.Research().ListFiltered(ctx, ch.ID, nil, nil, nil, true, nil, &before, 0)
 	require.NoError(t, err)
 	assert.Equal(t, []uuid.UUID{tooOld.ID}, researchNoteIDs(windowed2), "before must exclude inWindow (created_at >= before), and currentOnly must exclude the retired target -- leaving only tooOld")
 }
@@ -2242,7 +2242,7 @@ func TestResearchStore_ListFiltered_CurrentOnlyComposesWithLimitTruncated(t *tes
 	setResearchNoteCreatedAt(t, ctx, db, target.ID, base.Add(3*time.Minute))
 	setResearchNoteCreatedAt(t, ctx, db, superseder.ID, base.Add(4*time.Minute))
 
-	page, truncated, err := s.Research().ListFiltered(ctx, ch.ID, nil, nil, true, nil, nil, 3)
+	page, truncated, err := s.Research().ListFiltered(ctx, ch.ID, nil, nil, nil, true, nil, nil, 3)
 	require.NoError(t, err)
 	assert.Equal(t, []uuid.UUID{superseder.ID, c3.ID, c2.ID}, researchNoteIDs(page), "the current-filtered page must be the 3 most recent CURRENT notes, skipping the retired target entirely")
 	assert.True(t, truncated, "c1 is a 4th current note beyond limit=3 -- truncated must reflect the currentOnly-filtered count, not the raw 5-row count minus the page size")
@@ -2251,7 +2251,7 @@ func TestResearchStore_ListFiltered_CurrentOnlyComposesWithLimitTruncated(t *tes
 	// truncated for a different (also true) reason, so the assertion above
 	// is specifically about the currentOnly-filtered count, not a
 	// coincidence of the raw count also exceeding 3.
-	rawPage, rawTruncated, err := s.Research().ListFiltered(ctx, ch.ID, nil, nil, false, nil, nil, 3)
+	rawPage, rawTruncated, err := s.Research().ListFiltered(ctx, ch.ID, nil, nil, nil, false, nil, nil, 3)
 	require.NoError(t, err)
 	assert.Len(t, rawPage, 3)
 	assert.True(t, rawTruncated)

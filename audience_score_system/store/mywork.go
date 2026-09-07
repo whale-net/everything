@@ -110,17 +110,19 @@ func (s myWorkStore) SummariesForPerson(ctx context.Context, personID uuid.UUID,
 // idea_id is read via the note's resolved thread (rt.idea_id), not
 // research_note.idea_id directly -- same rationale and LEFT JOIN (thread_id
 // still nullable pre-Stage-3) as researchNoteColumns in research.go, issue
-// #1939. thread_id is also selected so callers get it without a second
-// query, mirroring research.go's read paths.
+// #1939. thread_id and the thread's title are also selected so callers get
+// them without a second query, mirroring research.go's read paths (issue
+// #1940, FR2 Stage 2b -- my_work's ResearchNoteOutput rendering goes
+// through the same toResearchNoteOutput helper as list_research_notes).
 func (s myWorkStore) loadLatestNotes(ctx context.Context, channelIDs []uuid.UUID, notesPerChannel int, summaries []ChannelWorkSummary, index map[uuid.UUID]int) error {
 	if notesPerChannel <= 0 {
 		return nil
 	}
 
 	rows, err := s.pool.Query(ctx, `
-		SELECT id, channel_id, idea_id, thread_id, text, source_url, author_person_id, created_at, COALESCE(idempotency_key, '')
+		SELECT id, channel_id, idea_id, thread_id, thread_title, text, source_url, author_person_id, created_at, COALESCE(idempotency_key, '')
 		FROM (
-			SELECT rn.id, rn.channel_id, rt.idea_id, rn.thread_id, rn.text, rn.source_url, rn.author_person_id, rn.created_at, rn.idempotency_key,
+			SELECT rn.id, rn.channel_id, rt.idea_id, rn.thread_id, rt.title AS thread_title, rn.text, rn.source_url, rn.author_person_id, rn.created_at, rn.idempotency_key,
 			       ROW_NUMBER() OVER (PARTITION BY rn.channel_id ORDER BY rn.created_at DESC) AS row_num
 			FROM research_note rn
 			LEFT JOIN research_thread rt ON rt.id = rn.thread_id
@@ -136,7 +138,7 @@ func (s myWorkStore) loadLatestNotes(ctx context.Context, channelIDs []uuid.UUID
 
 	for rows.Next() {
 		var n ResearchNote
-		if err := rows.Scan(&n.ID, &n.ChannelID, &n.IdeaID, &n.ThreadID, &n.Text, &n.SourceURL, &n.AuthorPersonID, &n.CreatedAt, &n.IdempotencyKey); err != nil {
+		if err := rows.Scan(&n.ID, &n.ChannelID, &n.IdeaID, &n.ThreadID, &n.ThreadTitle, &n.Text, &n.SourceURL, &n.AuthorPersonID, &n.CreatedAt, &n.IdempotencyKey); err != nil {
 			return fmt.Errorf("my work: scan research_note: %w", err)
 		}
 		if i, ok := index[n.ChannelID]; ok {
