@@ -967,10 +967,12 @@ func (h *Handlers) HandleSaveVerdict(w http.ResponseWriter, r *http.Request) {
 		// verdict_citation -- reject the whole submission (400, nothing
 		// written) rather than silently dropping just that ID.
 		//
-		// note.IdeaID is NOT research_note.idea_id -- store.researchStore
-		// (issue #1939, FR2 Stage 2a) resolves it via a LEFT JOIN from the
-		// note's thread_id to research_thread.idea_id, so this comparison
-		// really reads "does the cited note's thread belong to this Idea".
+		// note.IdeaID is not a column on research_note at all any more
+		// (migration 018/#1947 dropped research_note.idea_id) --
+		// store.researchStore (issue #1939, FR2 Stage 2a) resolves it via a
+		// JOIN from the note's thread_id to research_thread.idea_id, so
+		// this comparison really reads "does the cited note's thread
+		// belong to this Idea".
 		// GetByID above already performed that join, so comparing
 		// note.IdeaID here IS the cleanest form available -- a second
 		// store.Threads().GetByID(note.ThreadID) call to re-derive the same

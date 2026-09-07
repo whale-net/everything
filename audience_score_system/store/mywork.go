@@ -107,10 +107,12 @@ func (s myWorkStore) SummariesForPerson(ctx context.Context, personID uuid.UUID,
 // channelIDs at once, using ROW_NUMBER() PARTITION BY channel_id to take
 // each Channel's top notesPerChannel most-recent notes in a single
 // statement (NFR9) rather than one ListByChannel call per Channel.
-// idea_id is read via the note's resolved thread (rt.idea_id), not
-// research_note.idea_id directly -- same rationale and LEFT JOIN (thread_id
-// still nullable pre-Stage-3) as researchNoteColumns in research.go, issue
-// #1939. thread_id and the thread's title are also selected so callers get
+// idea_id is read via the note's resolved thread (rt.idea_id) -- research_
+// note has no idea_id column of its own any more (migration 018/#1947
+// dropped it) -- same rationale and JOIN as researchNoteColumns in
+// research.go, issue #1939. This is an inner JOIN, not a LEFT JOIN: thread_id
+// is NOT NULL as of migration 018, so every research_note row resolves to
+// exactly one research_thread row. thread_id and the thread's title are also selected so callers get
 // them without a second query, mirroring research.go's read paths (issue
 // #1940, FR2 Stage 2b -- my_work's ResearchNoteOutput rendering goes
 // through the same toResearchNoteOutput helper as list_research_notes).
@@ -125,7 +127,7 @@ func (s myWorkStore) loadLatestNotes(ctx context.Context, channelIDs []uuid.UUID
 			SELECT rn.id, rn.channel_id, rt.idea_id, rn.thread_id, rt.title AS thread_title, rn.text, rn.source_url, rn.author_person_id, rn.created_at, rn.idempotency_key,
 			       ROW_NUMBER() OVER (PARTITION BY rn.channel_id ORDER BY rn.created_at DESC) AS row_num
 			FROM research_note rn
-			LEFT JOIN research_thread rt ON rt.id = rn.thread_id
+			JOIN research_thread rt ON rt.id = rn.thread_id
 			WHERE rn.channel_id = ANY($1)
 		) ranked
 		WHERE row_num <= $2

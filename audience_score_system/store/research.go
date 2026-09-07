@@ -191,39 +191,50 @@ var _ ResearchStore = researchStore{}
 
 // researchNoteColumns reads a ResearchNote's Idea via the note's resolved
 // thread (rt.idea_id) rather than research_note.idea_id directly (issue
-// #1939, FR2 Stage 2a): store.ResearchNote.IdeaID keeps its exact meaning
-// and type (*uuid.UUID) -- only its provenance changes here, so every
-// caller in mcp/web continues to compile and behave identically. rt.title
-// is also selected (issue #1940, FR2 Stage 2b) so a caller can render a
-// note's thread_title without a second list_research_threads call.
-// thread_id is still nullable until Stage 3, so researchNoteFrom below
-// uses a LEFT JOIN, not an inner join -- an inner join would silently
-// drop any row a backfill or a stale writer left with a NULL thread_id.
-// Revisit to an inner join at Stage 3. Used with researchNoteFrom for
-// every READ query; the INSERT...RETURNING in SaveNote uses the separate
+// #1939, FR2 Stage 2a -- the column no longer even exists as of migration
+// 018/#1947, FR2 Stage 3): store.ResearchNote.IdeaID keeps its exact
+// meaning and type (*uuid.UUID) -- only its provenance changed, so every
+// caller in mcp/web continued to compile and behave identically across
+// both stages. rt.title is also selected (issue #1940, FR2 Stage 2b) so a
+// caller can render a note's thread_title without a second
+// list_research_threads call. thread_id is NOT NULL as of migration 018,
+// so researchNoteFrom below uses an inner JOIN, not a LEFT JOIN -- #1939
+// deliberately left it a LEFT JOIN with a comment pointing here, because
+// an inner join would have silently dropped any row a backfill or a
+// stale writer left with a NULL thread_id back when that was still
+// possible; it no longer is. Used with researchNoteFrom for every READ
+// query; the INSERT...RETURNING in SaveNote uses the separate
 // researchNoteInsertColumns instead (RETURNING cannot reference a
 // joined table).
 const researchNoteColumns = `rn.id, rn.channel_id, rt.idea_id, rn.thread_id, rt.title, rn.text, rn.source_url, rn.author_person_id, rn.created_at, COALESCE(rn.idempotency_key, '')`
 
 // researchNoteFrom is the FROM clause every READ query pairs with
 // researchNoteColumns above.
-const researchNoteFrom = `research_note rn LEFT JOIN research_thread rt ON rt.id = rn.thread_id`
+const researchNoteFrom = `research_note rn JOIN research_thread rt ON rt.id = rn.thread_id`
 
-// researchNoteInsertColumns mirrors researchNoteColumns' column order but
-// reads idea_id directly off research_note (unaliased, no JOIN) -- valid
-// only in SaveNote's INSERT...RETURNING, where the row was just written
-// with idea_id = the resolved thread's IdeaID (SaveNote's own invariant),
-// so echoing research_note.idea_id back here agrees with the join by
-// construction and needs no subquery. The `NULL::text` in title's
-// position is a placeholder to keep this in column-order lockstep with
-// scanResearchNote/researchNoteColumns -- SaveNote overwrites it with the
-// already-resolved thread.Title in Go immediately after scanning (the
-// INSERT has no research_thread join to read it from directly).
-const researchNoteInsertColumns = `id, channel_id, idea_id, thread_id, NULL::text, text, source_url, author_person_id, created_at, COALESCE(idempotency_key, '')`
+// researchNoteInsertColumns is what SaveNote's INSERT...RETURNING reads
+// back directly off the just-written research_note row -- no idea_id
+// column exists there any more (migration 018/#1947 dropped it), and no
+// title column exists on research_note at all (title lives on
+// research_thread). SaveNote itself fills in note.IdeaID (from
+// thread.IdeaID, already resolved before the INSERT ran) and
+// note.ThreadTitle (from thread.Title) in Go immediately after scanning,
+// mirroring the read paths' JOIN-derived values without needing one here.
+const researchNoteInsertColumns = `id, channel_id, thread_id, text, source_url, author_person_id, created_at, COALESCE(idempotency_key, '')`
 
 func scanResearchNote(row pgx.Row) (ResearchNote, error) {
 	var n ResearchNote
 	err := row.Scan(&n.ID, &n.ChannelID, &n.IdeaID, &n.ThreadID, &n.ThreadTitle, &n.Text, &n.SourceURL, &n.AuthorPersonID, &n.CreatedAt, &n.IdempotencyKey)
+	return n, err
+}
+
+// scanInsertedResearchNote scans SaveNote's INSERT...RETURNING row (shaped
+// by researchNoteInsertColumns above) -- IdeaID and ThreadTitle are NOT
+// among the scanned columns; SaveNote sets both explicitly right after
+// calling this, from the already-resolved thread.
+func scanInsertedResearchNote(row pgx.Row) (ResearchNote, error) {
+	var n ResearchNote
+	err := row.Scan(&n.ID, &n.ChannelID, &n.ThreadID, &n.Text, &n.SourceURL, &n.AuthorPersonID, &n.CreatedAt, &n.IdempotencyKey)
 	return n, err
 }
 
@@ -265,13 +276,15 @@ func validateSourceURL(raw string) (*string, error) {
 // Thread resolution (FR4): exactly one of in.ThreadID/in.ThreadTitle must
 // be supplied.
 //   - in.ThreadID: the thread must exist and belong to in.ChannelID; the
-//     note's effective idea_id becomes that thread's IdeaID (Stage 1's
-//     invariant: idea_id and thread_id's idea never disagree). If in.IdeaID
-//     is also supplied, it must agree with the resolved thread's IdeaID
-//     (nil vs non-nil counts as disagreement) -- issue #1940's disagreement
-//     rule, since in.IdeaID is thread-RESOLUTION input, not a note's own
-//     attachment, and a caller passing both must never have them silently
-//     diverge.
+//     note's effective IdeaID becomes that thread's IdeaID -- research_note
+//     no longer has its own idea_id column to disagree with (migration
+//     018/#1947 dropped it), so this is now the ONLY source of a note's
+//     Idea, not merely an invariant kept in sync with a duplicate column.
+//     If in.IdeaID is also supplied, it must agree with the resolved
+//     thread's IdeaID (nil vs non-nil counts as disagreement) -- issue
+//     #1940's disagreement rule, since in.IdeaID is thread-RESOLUTION
+//     input, not a note's own attachment, and a caller passing both must
+//     never have them silently diverge.
 //   - in.ThreadTitle: delegates to findOrCreateThreadTx (thread.go) using
 //     in.IdeaID as the natural key's Idea component.
 //
@@ -351,7 +364,10 @@ func (s researchStore) SaveNote(ctx context.Context, in SaveNoteInput) (Research
 		if !rel.RelationType.Valid() {
 			return ResearchNote{}, fmt.Errorf("relation_type %q is not a recognized relation type", rel.RelationType)
 		}
-		var relatedThreadID *uuid.UUID
+		// thread_id is NOT NULL as of migration 018/#1947 -- every
+		// research_note row has a resolving thread, so this is a plain
+		// uuid.UUID scan, not a nullable one.
+		var relatedThreadID uuid.UUID
 		err := tx.QueryRow(ctx, `SELECT thread_id FROM research_note WHERE id = $1`, rel.RelatedNoteID).Scan(&relatedThreadID)
 		if err != nil {
 			if errors.Is(err, pgx.ErrNoRows) {
@@ -359,19 +375,28 @@ func (s researchStore) SaveNote(ctx context.Context, in SaveNoteInput) (Research
 			}
 			return ResearchNote{}, fmt.Errorf("lookup related_note_id %s: %w", rel.RelatedNoteID, err)
 		}
-		if relatedThreadID == nil || *relatedThreadID != thread.ID {
+		if relatedThreadID != thread.ID {
 			return ResearchNote{}, fmt.Errorf("related_note_id %s is not in the resolved thread %s", rel.RelatedNoteID, thread.ID)
 		}
 	}
 
-	note, err := scanResearchNote(tx.QueryRow(ctx, `
-		INSERT INTO research_note (channel_id, idea_id, thread_id, text, source_url, author_person_id, idempotency_key)
-		VALUES ($1, $2, $3, $4, $5, $6, NULLIF($7, ''))
+	// idea_id is no longer a column on research_note (migration 018/#1947
+	// dropped it) -- the INSERT below no longer writes it (this was the
+	// dual-write Stage 2 left in place, and removing it is this task's own
+	// job, landing in the same commit as the migration that drops the
+	// column it wrote to). note.IdeaID/note.ThreadTitle are filled in from
+	// the already-resolved thread immediately after scanning, exactly
+	// mirroring what every READ query derives via its JOIN to
+	// research_thread.
+	note, err := scanInsertedResearchNote(tx.QueryRow(ctx, `
+		INSERT INTO research_note (channel_id, thread_id, text, source_url, author_person_id, idempotency_key)
+		VALUES ($1, $2, $3, $4, $5, NULLIF($6, ''))
 		RETURNING `+researchNoteInsertColumns,
-		in.ChannelID, thread.IdeaID, thread.ID, in.Text, sourceURL, in.AuthorPersonID, in.IdempotencyKey))
+		in.ChannelID, thread.ID, in.Text, sourceURL, in.AuthorPersonID, in.IdempotencyKey))
 	if err != nil {
 		return ResearchNote{}, fmt.Errorf("insert research_note: %w", err)
 	}
+	note.IdeaID = thread.IdeaID
 	title := thread.Title
 	note.ThreadTitle = &title
 
@@ -467,9 +492,10 @@ func (s researchStore) GetByIDs(ctx context.Context, ids []uuid.UUID) (map[uuid.
 }
 
 // researchNoteWithAuthorColumns mirrors researchNoteColumns -- idea_id
-// read via rt.idea_id, not rn.idea_id (see researchNoteColumns' doc
-// comment, issue #1939), plus rt.title (issue #1940) -- plus the author's
-// display name from `person`.
+// read via rt.idea_id, since research_note has no idea_id column of its
+// own any more (issue #1939, then dropped outright by migration 018/
+// #1947), plus rt.title (issue #1940) -- plus the author's display name
+// from `person`.
 const researchNoteWithAuthorColumns = `rn.id, rn.channel_id, rt.idea_id, rn.thread_id, rt.title, rn.text, rn.source_url, rn.author_person_id, rn.created_at, COALESCE(rn.idempotency_key, ''), COALESCE(p.display_name, '')`
 
 func scanResearchNoteWithAuthor(row pgx.Row) (ResearchNoteWithAuthor, error) {
@@ -506,7 +532,7 @@ func (s researchStore) ListFiltered(ctx context.Context, channelID uuid.UUID, id
 	query := `
 		SELECT ` + researchNoteWithAuthorColumns + `
 		FROM ` + noteSource + `
-		LEFT JOIN research_thread rt ON rt.id = rn.thread_id
+		JOIN research_thread rt ON rt.id = rn.thread_id
 		JOIN person p ON p.id = rn.author_person_id
 		WHERE rn.channel_id = $1`
 	args := []any{channelID}
