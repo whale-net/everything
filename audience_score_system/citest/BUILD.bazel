@@ -30,6 +30,7 @@ go_test(
         "m3_calibration_test.go",
         "m4_1_research_web_test.go",
         "m4_2_propose_web_test.go",
+        "m4_3_outcomes_web_test.go",
     ],
     gotags = ["integration"],
     tags = [
@@ -50,6 +51,8 @@ go_test(
         "//audience_score_system/web/auth",
         "//audience_score_system/web/components",
         "//audience_score_system/web/invite",
+        "//audience_score_system/web/matches",
+        "//audience_score_system/web/outcomes",
         "//audience_score_system/web/pages",
         "//audience_score_system/web/research",
         "//audience_score_system/web/schedule",
