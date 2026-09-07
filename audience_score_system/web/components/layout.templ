@@ -21,13 +21,6 @@ type LayoutData struct {
 	User  *store.Person
 }
 
-// themes is the theme list `web` offers through the shared
-// htmxui.ThemeSwitcher (mounted by Layout, below).
-var themes = []htmxui.Theme{
-	{Value: "light", Label: "☀️ Light"},
-	{Value: "night", Label: "🌙 Night"},
-}
-
 // nav is `web`'s app-owned nav item list (FR1a -- htmxui.Shell hardcodes
 // no nav of its own, see htmxui.ShellData's doc comment). Home, Channels
 // (FR26's list/switcher, #1722), and My work (FR27/FR28's cross-Channel
@@ -71,7 +64,7 @@ templ Layout(data LayoutData) {
 			IdentityLabel: identityLabel(data.User),
 			LogoutHref:    "/logout",
 		}),
-		Themes: themes,
+		Themes: htmxui.Themes,
 	}) {
 		{ children... }
 	}

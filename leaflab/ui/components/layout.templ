@@ -23,13 +23,6 @@ type LayoutData struct {
 	IsAdmin bool
 }
 
-// themes is the theme list leaflab-ui offers through the shared
-// htmxui.ThemeSwitcher (mounted by Layout, below).
-var themes = []htmxui.Theme{
-	{Value: "light", Label: "☀️ Light"},
-	{Value: "night", Label: "🌙 Night"},
-}
-
 // nav is leaflab-ui's app-owned nav item list (FR1a — htmxui.Shell
 // hardcodes no nav of its own, see htmxui.ShellData's doc comment).
 // "Boards" links to the boards list screen (#1502). "Admin" links to the
@@ -75,7 +68,7 @@ templ Layout(data LayoutData) {
 			IdentityLabel: identityLabel(data.User),
 			LogoutHref:    "/auth/logout",
 		}),
-		Themes: themes,
+		Themes: htmxui.Themes,
 	}) {
 		{ children... }
 	}

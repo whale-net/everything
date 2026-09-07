@@ -22,24 +22,14 @@ type Breadcrumb struct {
 	Icon  string
 }
 
-// manmanThemes is the FR6 theme list manmanv2 offers through the shared
-// htmxui.ThemeSwitcher (mounted by Layout, below): light, night, oled,
-// and sunset, keyed to the [data-theme="..."] rules in the shared
-// libs/go/htmxui/themes.css. OLED is reachable here where it never was
-// under the old Tailwind darkMode:'class' + manual `dark` class toggle
-// (FR6 defect) — see themes.css for the actual pure-black palette this
-// now renders. sunset is issue #1012's FR10 proof-of-concept theme (warm
-// amber/coral, deliberately distinct from light/night/oled); it was added
-// to tools/app_registry/ui/components/layout.templ's shellThemes when
-// #1012 landed but not here, so manmanv2's switcher fell behind
-// app-registry's until #1085 caught the gap and #1086 wired it in to
-// match.
-var manmanThemes = []htmxui.Theme{
-	{Value: "light", Label: "☀️ Light"},
-	{Value: "night", Label: "🌙 Night"},
-	{Value: "oled", Label: "⚫ OLED Night"},
-	{Value: "sunset", Label: "🌅 Sunset"},
-}
+// manmanThemes is manmanv2's theme list for the shared htmxui.ThemeSwitcher
+// (mounted by Layout, below). Now a direct alias of htmxui.Themes, the
+// single canonical list every htmxui-adopting app offers (see its doc
+// comment in libs/go/htmxui/themes.go) — manmanv2 previously hand-maintained
+// its own copy, which is how it fell behind app-registry's list until
+// #1085/#1086 caught the drift; aliasing here makes that class of drift
+// impossible.
+var manmanThemes = htmxui.Themes
 
 // navLink renders one nav entry, marking it active by exact label match
 // (mirrors the pre-migration NavItem's active-comparison semantics).
