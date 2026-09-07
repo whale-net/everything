@@ -4,6 +4,8 @@ import (
 	"fmt"
 	"os"
 	"strconv"
+
+	"github.com/whale-net/everything/manmanv2/events"
 )
 
 // Config holds all configuration for the processor service
@@ -21,6 +23,7 @@ type Config struct {
 	StaleHostThreshold    int
 	StaleSessionThreshold int
 	ExternalExchange      string
+	LiveExchange          string
 }
 
 // LoadConfig loads configuration from environment variables
@@ -39,6 +42,7 @@ func LoadConfig() (*Config, error) {
 		StaleHostThreshold:    getEnvInt("STALE_HOST_THRESHOLD_SECONDS", 90),
 		StaleSessionThreshold: getEnvInt("STALE_SESSION_THRESHOLD_SECONDS", 30), // Default 30 seconds
 		ExternalExchange:      getEnv("EXTERNAL_EXCHANGE", "external"),
+		LiveExchange:          getEnv("LIVE_EXCHANGE", events.ExchangeName),
 	}
 
 	// Validate required fields

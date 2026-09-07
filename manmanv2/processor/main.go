@@ -62,6 +62,7 @@ func run() error {
 		"stale_host_threshold", cfg.StaleHostThreshold,
 		"stale_session_threshold", cfg.StaleSessionThreshold,
 		"external_exchange", cfg.ExternalExchange,
+		"live_exchange", cfg.LiveExchange,
 		"health_check_port", cfg.HealthCheckPort,
 	)
 
@@ -124,8 +125,8 @@ func run() error {
 		ServerPorts:        postgres.NewServerPortRepository(dbPool),
 	}
 
-	// Initialize publisher for external exchange
-	publisher, err := handlers.NewRMQPublisher(rmqConn, cfg.ExternalExchange, logger)
+	// Initialize publisher for external exchange and the manmanv2.htmxsse live exchange
+	publisher, err := handlers.NewRMQPublisher(rmqConn, cfg.ExternalExchange, cfg.LiveExchange, logger)
 	if err != nil {
 		return fmt.Errorf("failed to create publisher: %w", err)
 	}
