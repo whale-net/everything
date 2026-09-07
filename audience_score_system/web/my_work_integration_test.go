@@ -235,7 +235,7 @@ func TestHandleMyWork_RendersSectionPerAssociatedChannel_WithAllFourBlocks(t *te
 	// no outcome yet.
 	chA, err := s.store.Channels().Create(ctx, "yt-a-"+uuid.NewString(), "Channel A", person.ID)
 	require.NoError(t, err)
-	_, err = s.store.Research().SaveNote(ctx, store.SaveNoteInput{ChannelID: chA.ID, Text: "A research note text", AuthorPersonID: person.ID})
+	_, err = s.store.Research().SaveNote(ctx, store.SaveNoteInput{ThreadTitle: "Research", ChannelID: chA.ID, Text: "A research note text", AuthorPersonID: person.ID})
 	require.NoError(t, err)
 	ideaA, err := s.store.Ideas().Create(ctx, chA.ID, "A Idea", person.ID)
 	require.NoError(t, err)
@@ -267,7 +267,7 @@ func TestHandleMyWork_RendersSectionPerAssociatedChannel_WithAllFourBlocks(t *te
 	chB, err := s.store.Channels().Create(ctx, "yt-b-"+uuid.NewString(), "Channel B", founderB.ID)
 	require.NoError(t, err)
 	require.NoError(t, s.store.Roles().AddRole(ctx, chB.ID, person.ID, store.RoleCoCreator, founderB.ID))
-	_, err = s.store.Research().SaveNote(ctx, store.SaveNoteInput{ChannelID: chB.ID, Text: "B research note text", AuthorPersonID: founderB.ID})
+	_, err = s.store.Research().SaveNote(ctx, store.SaveNoteInput{ThreadTitle: "Research", ChannelID: chB.ID, Text: "B research note text", AuthorPersonID: founderB.ID})
 	require.NoError(t, err)
 	proposedIdeaB, err := s.store.Ideas().Create(ctx, chB.ID, "B Proposed Idea", founderB.ID)
 	require.NoError(t, err)
@@ -293,7 +293,7 @@ func TestHandleMyWork_RendersSectionPerAssociatedChannel_WithAllFourBlocks(t *te
 	chC, err := s.store.Channels().Create(ctx, "yt-c-"+uuid.NewString(), "Channel C", founderC.ID)
 	require.NoError(t, err)
 	require.NoError(t, s.store.Roles().AddRole(ctx, chC.ID, person.ID, store.RoleAnalyst, founderC.ID))
-	_, err = s.store.Research().SaveNote(ctx, store.SaveNoteInput{ChannelID: chC.ID, Text: "C research note text", AuthorPersonID: founderC.ID})
+	_, err = s.store.Research().SaveNote(ctx, store.SaveNoteInput{ThreadTitle: "Research", ChannelID: chC.ID, Text: "C research note text", AuthorPersonID: founderC.ID})
 	require.NoError(t, err)
 
 	cookie := s.sessionCookie(t, ctx, person.ID)
@@ -427,7 +427,7 @@ func TestHandleMyWork_IssuesBoundedQueries(t *testing.T) {
 			ch, err := s.store.Channels().Create(ctx, "yt-"+uuid.NewString(), "Channel "+uuid.NewString(), founder.ID)
 			require.NoError(t, err)
 			require.NoError(t, s.store.Roles().AddRole(ctx, ch.ID, p.ID, store.RoleAnalyst, founder.ID))
-			_, err = s.store.Research().SaveNote(ctx, store.SaveNoteInput{ChannelID: ch.ID, Text: "note", AuthorPersonID: founder.ID})
+			_, err = s.store.Research().SaveNote(ctx, store.SaveNoteInput{ThreadTitle: "Research", ChannelID: ch.ID, Text: "note", AuthorPersonID: founder.ID})
 			require.NoError(t, err)
 		}
 		return p

@@ -34,10 +34,30 @@ type SaveResearchNoteInput struct {
 	Text      string `json:"text" jsonschema:"The research note's body text; must not be empty"`
 	SourceURL string `json:"source_url,omitempty" jsonschema:"Absolute http(s) URL this note cites; omit or leave empty for an uncited note (FR10) -- never coerced from missing to an empty-string citation"`
 	IdeaID    string `json:"idea_id,omitempty" jsonschema:"Idea this note is attached to, as a UUID string; omit if the note predates an Idea"`
+	// ThreadID/ThreadTitle are JSON-wire strings (see ChannelID/IdeaID's
+	// doc comment above for why UUID fields are declared as string). FR4:
+	// supply exactly one, never both and never neither -- use
+	// list_research_threads to discover an existing thread_id, or supply
+	// thread_title to find-or-create one on (channel_id, idea_id, title).
+	ThreadID    string `json:"thread_id,omitempty" jsonschema:"Attach this note to an existing research thread, as a UUID string. Supply exactly one of thread_id/thread_title -- use list_research_threads to discover an existing thread_id."`
+	ThreadTitle string `json:"thread_title,omitempty" jsonschema:"Find-or-create a research thread by title (case/whitespace-insensitive, scoped to this channel_id and idea_id). Supply exactly one of thread_id/thread_title."`
+	// Relations are FR5's typed edges from this note to prior notes in the
+	// SAME resolved thread, written atomically with this note. The five
+	// relation_type values: 'supersedes' and 'excludes' retire the target
+	// note (it drops out of v_current_research_note); 'caveats',
+	// 'follows_up', and 'summarizes' do not.
+	Relations []SaveResearchNoteRelationInput `json:"relations,omitempty" jsonschema:"Typed edges to prior notes in the same resolved thread. relation_type must be one of: supersedes, excludes (both retire the target note), caveats, follows_up, summarizes (none of which retire the target)."`
 	// IdempotencyKeyArg backs IdempotencyKey() below -- named ...Arg because
 	// a Go type cannot declare both a field and a method named
 	// IdempotencyKey (mirrors ../server/fakes_test.go's writeInput.Key).
 	IdempotencyKeyArg string `json:"idempotency_key,omitempty" jsonschema:"Caller-supplied idempotency key. Strongly recommended: a retry without one may create a duplicate note (NFR2)."`
+}
+
+// SaveResearchNoteRelationInput is one entry of SaveResearchNoteInput.
+// Relations (FR5) -- the MCP-wire shape of store.SaveNoteRelationInput.
+type SaveResearchNoteRelationInput struct {
+	RelatedNoteID string `json:"related_note_id" jsonschema:"The prior research note this relation points to, as a UUID string; must be in the same resolved thread as the note being saved"`
+	RelationType  string `json:"relation_type" jsonschema:"One of: supersedes, excludes, caveats, follows_up, summarizes"`
 }
 
 // ChannelScopeID implements server.ChannelScoped.
@@ -100,7 +120,10 @@ func registerSaveResearchNote(reg *server.Registry, research store.ResearchStore
 		Name: "save_research_note",
 		Description: "Save a research note for a Channel, optionally attached to an Idea (idea_id) and citing a source " +
 			"(source_url). Omit source_url for an uncited note -- it is never coerced from an empty string. " +
-			"Always supply idempotency_key: a retry without one may create a duplicate note.",
+			"Supply exactly one of thread_id (an existing thread, from list_research_threads) or thread_title " +
+			"(find-or-create by title) -- neither or both is rejected. Optionally add relations to prior notes in " +
+			"the same resolved thread: supersedes/excludes retire the target note, caveats/follows_up/summarizes do " +
+			"not. Always supply idempotency_key: a retry without one may create a duplicate note.",
 	}, saveResearchNoteMutate(research), saveResearchNoteRender(research, persons))
 }
 
@@ -125,6 +148,28 @@ func saveResearchNoteMutate(research store.ResearchStore) server.WriteMutate[Sav
 			ideaID = &id
 		}
 
+		var threadID *uuid.UUID
+		if strings.TrimSpace(in.ThreadID) != "" {
+			id, err := uuid.Parse(in.ThreadID)
+			if err != nil {
+				return uuid.Nil, fmt.Errorf("thread_id is not a valid UUID: %w", err)
+			}
+			threadID = &id
+		}
+
+		relations := make([]store.SaveNoteRelationInput, 0, len(in.Relations))
+		for _, r := range in.Relations {
+			relatedNoteID, err := uuid.Parse(r.RelatedNoteID)
+			if err != nil {
+				return uuid.Nil, fmt.Errorf("related_note_id %q is not a valid UUID: %w", r.RelatedNoteID, err)
+			}
+			relationType := store.RelationType(r.RelationType)
+			if !relationType.Valid() {
+				return uuid.Nil, fmt.Errorf("relation_type %q is not a recognized relation type", r.RelationType)
+			}
+			relations = append(relations, store.SaveNoteRelationInput{RelatedNoteID: relatedNoteID, RelationType: relationType})
+		}
+
 		person := server.PersonFromContext(ctx)
 		if person == nil {
 			return uuid.Nil, fmt.Errorf("unauthenticated: no caller credential resolved")
@@ -132,10 +177,14 @@ func saveResearchNoteMutate(research store.ResearchStore) server.WriteMutate[Sav
 
 		// SourceURL is passed through raw -- SaveNote itself owns the
 		// trim/normalize and the reject (FR12, store/research.go), so this
-		// tool never validates it twice.
+		// tool never validates it twice. Same for thread_id/thread_title's
+		// exactly-one-of rule (FR4) -- SaveNote itself enforces it.
 		note, err := research.SaveNote(ctx, store.SaveNoteInput{
 			ChannelID:      channelID,
 			IdeaID:         ideaID,
+			ThreadID:       threadID,
+			ThreadTitle:    in.ThreadTitle,
+			Relations:      relations,
 			Text:           text,
 			SourceURL:      &in.SourceURL,
 			AuthorPersonID: person.ID, // the calling Person, never the Channel's Creator.

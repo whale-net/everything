@@ -554,7 +554,7 @@ func TestE2E_ThreeLoopsEndToEnd(t *testing.T) {
 		ideaID = uuid.MustParse(idea.IdeaID)
 
 		// FR9/FR10: one cited, one uncited note.
-		citedRes := callTool(t, csAnalyst, "save_research_note", mcptools.SaveResearchNoteInput{
+		citedRes := callTool(t, csAnalyst, "save_research_note", mcptools.SaveResearchNoteInput{ThreadTitle: "Research",
 			ChannelID:         ch.ID.String(),
 			IdeaID:            ideaID.String(),
 			Text:              "Competitor X's widget video got 2x the channel's usual views.",
@@ -565,7 +565,7 @@ func TestE2E_ThreeLoopsEndToEnd(t *testing.T) {
 		assert.True(t, cited.Cited, "FR10: a note with a source_url renders cited")
 		note1ID = uuid.MustParse(cited.ID)
 
-		uncitedRes := callTool(t, csAnalyst, "save_research_note", mcptools.SaveResearchNoteInput{
+		uncitedRes := callTool(t, csAnalyst, "save_research_note", mcptools.SaveResearchNoteInput{ThreadTitle: "Research",
 			ChannelID:         ch.ID.String(),
 			IdeaID:            ideaID.String(),
 			Text:              "Gut sense: widgets are trending right now.",

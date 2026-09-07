@@ -543,12 +543,12 @@ func TestGetChannelOverview_FullyPopulatedChannel_EveryomeSectionRendered(t *tes
 	ctx := context.Background()
 	cs := f.connect(t, f.creator.ID)
 
-	_, err := f.st.Research().SaveNote(ctx, store.SaveNoteInput{
+	_, err := f.st.Research().SaveNote(ctx, store.SaveNoteInput{ThreadTitle: "Research",
 		ChannelID: f.ch.ID, IdeaID: &f.idea.ID, Text: "cited note", SourceURL: strPtrB("https://example.com/a"),
 		AuthorPersonID: f.creator.ID, IdempotencyKey: "note-cited-1",
 	})
 	require.NoError(t, err)
-	_, err = f.st.Research().SaveNote(ctx, store.SaveNoteInput{
+	_, err = f.st.Research().SaveNote(ctx, store.SaveNoteInput{ThreadTitle: "Research",
 		ChannelID: f.ch.ID, IdeaID: &f.idea.ID, Text: "uncited note",
 		AuthorPersonID: f.creator.ID, IdempotencyKey: "note-uncited-1",
 	})
@@ -815,7 +815,7 @@ func TestGetChannelOverview_ResearchNotesTruncatedPastDefaultLimit(t *testing.T)
 	// defaultNotesOverviewLimit is 20 (browse.go); seed one more than that.
 	const seeded = 21
 	for i := 0; i < seeded; i++ {
-		_, err := f.st.Research().SaveNote(ctx, store.SaveNoteInput{
+		_, err := f.st.Research().SaveNote(ctx, store.SaveNoteInput{ThreadTitle: "Research",
 			ChannelID: f.ch.ID, Text: fmt.Sprintf("note %d", i),
 			AuthorPersonID: f.creator.ID, IdempotencyKey: fmt.Sprintf("trunc-note-%d", i),
 		})
@@ -843,7 +843,7 @@ func TestGetChannelOverview_ResearchNotesBeforePagesBackwardPastTruncation(t *te
 	// so note 0 (the oldest) falls off the first page.
 	const seeded = 21
 	for i := 0; i < seeded; i++ {
-		_, err := f.st.Research().SaveNote(ctx, store.SaveNoteInput{
+		_, err := f.st.Research().SaveNote(ctx, store.SaveNoteInput{ThreadTitle: "Research",
 			ChannelID: f.ch.ID, Text: fmt.Sprintf("page note %d", i),
 			AuthorPersonID: f.creator.ID, IdempotencyKey: fmt.Sprintf("page-note-%d", i),
 		})

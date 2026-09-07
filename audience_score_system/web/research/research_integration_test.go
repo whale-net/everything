@@ -426,7 +426,7 @@ func TestHandleChannelIndex_FounderCoCreatorAnalyst_SeeSameRows(t *testing.T) {
 	ch, creator := s.setupChannel(t, ctx)
 	idea, err := s.store.Ideas().Create(ctx, ch.ID, "Idea One", creator.ID)
 	require.NoError(t, err)
-	_, err = s.store.Research().SaveNote(ctx, store.SaveNoteInput{
+	_, err = s.store.Research().SaveNote(ctx, store.SaveNoteInput{ThreadTitle: "Research",
 		ChannelID: ch.ID, IdeaID: &idea.ID, Text: "a note", AuthorPersonID: creator.ID,
 	})
 	require.NoError(t, err)
@@ -509,11 +509,11 @@ func TestHandleChannelIndex_RendersNoteCountVerdictPresence_AndUnattachedNotesSe
 
 	ideaWithVerdict, err := s.store.Ideas().Create(ctx, ch.ID, "Idea With Verdict", creator.ID)
 	require.NoError(t, err)
-	_, err = s.store.Research().SaveNote(ctx, store.SaveNoteInput{
+	_, err = s.store.Research().SaveNote(ctx, store.SaveNoteInput{ThreadTitle: "Research",
 		ChannelID: ch.ID, IdeaID: &ideaWithVerdict.ID, Text: "note one", AuthorPersonID: creator.ID,
 	})
 	require.NoError(t, err)
-	_, err = s.store.Research().SaveNote(ctx, store.SaveNoteInput{
+	_, err = s.store.Research().SaveNote(ctx, store.SaveNoteInput{ThreadTitle: "Research",
 		ChannelID: ch.ID, IdeaID: &ideaWithVerdict.ID, Text: "note two", AuthorPersonID: creator.ID,
 	})
 	require.NoError(t, err)
@@ -525,7 +525,7 @@ func TestHandleChannelIndex_RendersNoteCountVerdictPresence_AndUnattachedNotesSe
 	ideaNoVerdict, err := s.store.Ideas().Create(ctx, ch.ID, "Idea No Verdict", creator.ID)
 	require.NoError(t, err)
 
-	unattached, err := s.store.Research().SaveNote(ctx, store.SaveNoteInput{
+	unattached, err := s.store.Research().SaveNote(ctx, store.SaveNoteInput{ThreadTitle: "Research",
 		ChannelID: ch.ID, IdeaID: nil, Text: "predates any idea", AuthorPersonID: creator.ID,
 	})
 	require.NoError(t, err)
@@ -560,7 +560,7 @@ func TestHandleChannelIndex_FiftyOneNotes_TruncatedNoteAppearsInUnattachedSectio
 	ch, creator := s.setupChannel(t, ctx)
 
 	for i := 0; i < 51; i++ {
-		_, err := s.store.Research().SaveNote(ctx, store.SaveNoteInput{
+		_, err := s.store.Research().SaveNote(ctx, store.SaveNoteInput{ThreadTitle: "Research",
 			ChannelID: ch.ID, IdeaID: nil, Text: fmt.Sprintf("unattached note %d", i), AuthorPersonID: creator.ID,
 		})
 		require.NoError(t, err)
@@ -588,7 +588,7 @@ func TestHandleIdeaDetail_MemberRoles_SeeSameRows(t *testing.T) {
 	ch, creator := s.setupChannel(t, ctx)
 	idea, err := s.store.Ideas().Create(ctx, ch.ID, "Idea One", creator.ID)
 	require.NoError(t, err)
-	_, err = s.store.Research().SaveNote(ctx, store.SaveNoteInput{
+	_, err = s.store.Research().SaveNote(ctx, store.SaveNoteInput{ThreadTitle: "Research",
 		ChannelID: ch.ID, IdeaID: &idea.ID, Text: "cited note", AuthorPersonID: creator.ID, SourceURL: strPtr("https://example.com/a"),
 	})
 	require.NoError(t, err)
@@ -788,13 +788,13 @@ func TestHandleIdeaDetail_CitedAndUncitedNotes_RenderFromCited(t *testing.T) {
 	idea, err := s.store.Ideas().Create(ctx, ch.ID, "Idea Notes", creator.ID)
 	require.NoError(t, err)
 
-	cited, err := s.store.Research().SaveNote(ctx, store.SaveNoteInput{
+	cited, err := s.store.Research().SaveNote(ctx, store.SaveNoteInput{ThreadTitle: "Research",
 		ChannelID: ch.ID, IdeaID: &idea.ID, Text: "cited note text", AuthorPersonID: creator.ID, SourceURL: strPtr("https://example.com/source"),
 	})
 	require.NoError(t, err)
 	require.True(t, cited.Cited())
 
-	uncited, err := s.store.Research().SaveNote(ctx, store.SaveNoteInput{
+	uncited, err := s.store.Research().SaveNote(ctx, store.SaveNoteInput{ThreadTitle: "Research",
 		ChannelID: ch.ID, IdeaID: &idea.ID, Text: "uncited note text", AuthorPersonID: creator.ID,
 	})
 	require.NoError(t, err)
@@ -831,11 +831,11 @@ func TestHandleIdeaDetail_CurrentVerdictCitedNotes_TextSourceURLAndBadge(t *test
 	idea, err := s.store.Ideas().Create(ctx, ch.ID, "Idea Cited Verdict", creator.ID)
 	require.NoError(t, err)
 
-	uncitedNote, err := s.store.Research().SaveNote(ctx, store.SaveNoteInput{
+	uncitedNote, err := s.store.Research().SaveNote(ctx, store.SaveNoteInput{ThreadTitle: "Research",
 		ChannelID: ch.ID, IdeaID: &idea.ID, Text: "verdict-cited note with no source", AuthorPersonID: creator.ID,
 	})
 	require.NoError(t, err)
-	citedNote, err := s.store.Research().SaveNote(ctx, store.SaveNoteInput{
+	citedNote, err := s.store.Research().SaveNote(ctx, store.SaveNoteInput{ThreadTitle: "Research",
 		ChannelID: ch.ID, IdeaID: &idea.ID, Text: "verdict-cited note with a source", AuthorPersonID: creator.ID, SourceURL: strPtr("https://example.com/verdict-citation"),
 	})
 	require.NoError(t, err)
@@ -887,11 +887,11 @@ func TestHandleIdeaDetail_HistoryVerdictCitedNotes_RenderedOnItsOwnVersionOnly(t
 	idea, err := s.store.Ideas().Create(ctx, ch.ID, "Idea Version Citations", creator.ID)
 	require.NoError(t, err)
 
-	historyOnlyNote, err := s.store.Research().SaveNote(ctx, store.SaveNoteInput{
+	historyOnlyNote, err := s.store.Research().SaveNote(ctx, store.SaveNoteInput{ThreadTitle: "Research",
 		ChannelID: ch.ID, IdeaID: &idea.ID, Text: "note cited only by the superseded v1 verdict", AuthorPersonID: creator.ID,
 	})
 	require.NoError(t, err)
-	currentNote, err := s.store.Research().SaveNote(ctx, store.SaveNoteInput{
+	currentNote, err := s.store.Research().SaveNote(ctx, store.SaveNoteInput{ThreadTitle: "Research",
 		ChannelID: ch.ID, IdeaID: &idea.ID, Text: "note cited only by the current v2 verdict", AuthorPersonID: creator.ID,
 	})
 	require.NoError(t, err)
@@ -938,7 +938,7 @@ func TestHandleIdeaDetail_CitedNoteTextExceeding200Runes_TruncatedAtSharedBound(
 	require.NoError(t, err)
 
 	longText := strings.Repeat("z", mcptools.CitationExcerptRunes+75)
-	note, err := s.store.Research().SaveNote(ctx, store.SaveNoteInput{
+	note, err := s.store.Research().SaveNote(ctx, store.SaveNoteInput{ThreadTitle: "Research",
 		ChannelID: ch.ID, IdeaID: &idea.ID, Text: longText, AuthorPersonID: creator.ID,
 	})
 	require.NoError(t, err)
@@ -1012,7 +1012,7 @@ func TestHandleIdeaDetail_CitedNotesResolution_IssuesOneBatchedQuery(t *testing.
 	require.NoError(t, err)
 	var noteIDs []uuid.UUID
 	for i := 0; i < 3; i++ {
-		n, err := s.store.Research().SaveNote(ctx, store.SaveNoteInput{
+		n, err := s.store.Research().SaveNote(ctx, store.SaveNoteInput{ThreadTitle: "Research",
 			ChannelID: ch.ID, IdeaID: &withCitationsIdea.ID, Text: fmt.Sprintf("citation pool note %d", i), AuthorPersonID: creator.ID,
 		})
 		require.NoError(t, err)
@@ -1060,7 +1060,7 @@ func TestHandleIdeaDetail_CitedNoteExcerpt_MatchesGetViabilityVerdictMCP(t *test
 	require.NoError(t, err)
 
 	longText := strings.Repeat("parity ", 40) // well over 200 runes
-	note, err := s.store.Research().SaveNote(ctx, store.SaveNoteInput{
+	note, err := s.store.Research().SaveNote(ctx, store.SaveNoteInput{ThreadTitle: "Research",
 		ChannelID: ch.ID, IdeaID: &idea.ID, Text: longText, AuthorPersonID: creator.ID, SourceURL: strPtr("https://example.com/parity"),
 	})
 	require.NoError(t, err)
@@ -1103,7 +1103,7 @@ func TestHandleIdeaDetail_FiftyOneNotes_TruncatedNoPagingControl(t *testing.T) {
 	require.NoError(t, err)
 
 	for i := 0; i < 51; i++ {
-		_, err := s.store.Research().SaveNote(ctx, store.SaveNoteInput{
+		_, err := s.store.Research().SaveNote(ctx, store.SaveNoteInput{ThreadTitle: "Research",
 			ChannelID: ch.ID, IdeaID: &idea.ID, Text: fmt.Sprintf("idea note %d", i), AuthorPersonID: creator.ID,
 		})
 		require.NoError(t, err)
@@ -1645,11 +1645,11 @@ func TestHandleSaveVerdict_CitedNoteIDs_PopulatesExactlyThose(t *testing.T) {
 	idea, err := s.store.Ideas().Create(ctx, ch.ID, "Idea One", creator.ID)
 	require.NoError(t, err)
 
-	note1, err := s.store.Research().SaveNote(ctx, store.SaveNoteInput{ChannelID: ch.ID, IdeaID: &idea.ID, Text: "note one", AuthorPersonID: creator.ID})
+	note1, err := s.store.Research().SaveNote(ctx, store.SaveNoteInput{ThreadTitle: "Research", ChannelID: ch.ID, IdeaID: &idea.ID, Text: "note one", AuthorPersonID: creator.ID})
 	require.NoError(t, err)
-	note2, err := s.store.Research().SaveNote(ctx, store.SaveNoteInput{ChannelID: ch.ID, IdeaID: &idea.ID, Text: "note two", AuthorPersonID: creator.ID})
+	note2, err := s.store.Research().SaveNote(ctx, store.SaveNoteInput{ThreadTitle: "Research", ChannelID: ch.ID, IdeaID: &idea.ID, Text: "note two", AuthorPersonID: creator.ID})
 	require.NoError(t, err)
-	_, err = s.store.Research().SaveNote(ctx, store.SaveNoteInput{ChannelID: ch.ID, IdeaID: &idea.ID, Text: "note three (uncited)", AuthorPersonID: creator.ID})
+	_, err = s.store.Research().SaveNote(ctx, store.SaveNoteInput{ThreadTitle: "Research", ChannelID: ch.ID, IdeaID: &idea.ID, Text: "note three (uncited)", AuthorPersonID: creator.ID})
 	require.NoError(t, err)
 
 	w := s.doVerdictForm(t, ch.ID, idea.ID, s.sessionCookie(t, ctx, creator.ID), url.Values{
@@ -1677,7 +1677,7 @@ func TestHandleSaveVerdict_CitedNoteFromDifferentIdea_BadRequest_NoRow(t *testin
 	require.NoError(t, err)
 	ideaB, err := s.store.Ideas().Create(ctx, ch.ID, "Idea B", creator.ID)
 	require.NoError(t, err)
-	noteOnB, err := s.store.Research().SaveNote(ctx, store.SaveNoteInput{ChannelID: ch.ID, IdeaID: &ideaB.ID, Text: "note on B", AuthorPersonID: creator.ID})
+	noteOnB, err := s.store.Research().SaveNote(ctx, store.SaveNoteInput{ThreadTitle: "Research", ChannelID: ch.ID, IdeaID: &ideaB.ID, Text: "note on B", AuthorPersonID: creator.ID})
 	require.NoError(t, err)
 
 	w := s.doVerdictForm(t, ch.ID, ideaA.ID, s.sessionCookie(t, ctx, creator.ID), url.Values{
@@ -1942,9 +1942,9 @@ func TestSaveVerdictForm_MultiSelect_ListsExactlyThisIdeaNotes(t *testing.T) {
 	ideaB, err := s.store.Ideas().Create(ctx, ch.ID, "Idea B", creator.ID)
 	require.NoError(t, err)
 
-	noteOnA, err := s.store.Research().SaveNote(ctx, store.SaveNoteInput{ChannelID: ch.ID, IdeaID: &ideaA.ID, Text: "note on idea A", AuthorPersonID: creator.ID})
+	noteOnA, err := s.store.Research().SaveNote(ctx, store.SaveNoteInput{ThreadTitle: "Research", ChannelID: ch.ID, IdeaID: &ideaA.ID, Text: "note on idea A", AuthorPersonID: creator.ID})
 	require.NoError(t, err)
-	noteOnB, err := s.store.Research().SaveNote(ctx, store.SaveNoteInput{ChannelID: ch.ID, IdeaID: &ideaB.ID, Text: "note on idea B", AuthorPersonID: creator.ID})
+	noteOnB, err := s.store.Research().SaveNote(ctx, store.SaveNoteInput{ThreadTitle: "Research", ChannelID: ch.ID, IdeaID: &ideaB.ID, Text: "note on idea B", AuthorPersonID: creator.ID})
 	require.NoError(t, err)
 
 	w := s.do(t, http.MethodGet, "/channels/"+ch.ID.String()+"/research/ideas/"+ideaA.ID.String(), s.sessionCookie(t, ctx, creator.ID))

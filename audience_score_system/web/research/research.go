@@ -15,9 +15,13 @@
 // discovery list (root plan #1934, issue #1937) via the identical
 // store.ThreadStore.ListByChannel call and store.CanRead check
 // list_research_threads makes (NFR2) -- ChannelIndex renders every thread
-// on the Channel, IdeaDetail that Idea's threads only. The save path
-// itself (choosing a thread_id when saving a note) is a separate task
-// (#1938).
+// on the Channel, IdeaDetail that Idea's threads only.
+//
+// HandleSaveNote calls store.ResearchStore.SaveNote, which as of issue
+// #1938 requires every note to resolve a thread (FR4). This form has no
+// thread/relation UI yet -- defaultNoteThreadTitle is a stopgap constant
+// (see HandleSaveNote's own doc comment) that #1945 replaces with a real
+// picker/creator calling this same SaveNote method (NFR2).
 //
 // This task reuses #1900's write-path plumbing verbatim rather than
 // duplicating it: newIdempotencyKey (server-generated, minted once at
@@ -520,6 +524,14 @@ func (h *Handlers) renderIdeaDetail(w http.ResponseWriter, r *http.Request, pers
 	}
 }
 
+// defaultNoteThreadTitle is HandleSaveNote's stopgap ThreadTitle (issue
+// #1938) until #1945 adds this form's real thread/relation UI. It matches
+// migration 016's backfill title exactly (see that migration's header
+// comment), so every note this form saves converges onto the same
+// per-(channel, idea) default thread the migration already created for
+// pre-existing notes, rather than forking a differently-named bucket.
+const defaultNoteThreadTitle = "Research"
+
 // HandleSaveNote serves POST /channels/{id}/research/notes (FR3, FR6,
 // FR7): saves a research note through store.ResearchStore.SaveNote --
 // the IDENTICAL method save_research_note's mutate step calls (LB5: one
@@ -609,8 +621,19 @@ func (h *Handlers) HandleSaveNote(w http.ResponseWriter, r *http.Request) {
 	}
 
 	_, err := h.store.Research().SaveNote(ctx, store.SaveNoteInput{
-		ChannelID:      channelID,
-		IdeaID:         ideaID,
+		ChannelID: channelID,
+		IdeaID:    ideaID,
+		// ThreadTitle is a stopgap default, not a form field: SaveNote now
+		// requires a resolved thread on every write (FR4, issue #1938),
+		// but this form's own thread/relation UI is a separate task
+		// (#1945). "Research" matches migration 016's backfill title
+		// exactly, so every note this form saves converges onto the same
+		// per-(channel, idea) default thread the migration already
+		// created for pre-existing notes, rather than forking a
+		// differently-named bucket. #1945 replaces this constant with a
+		// real thread picker/creator calling this same SaveNote method
+		// (NFR2).
+		ThreadTitle:    defaultNoteThreadTitle,
 		Text:           text,
 		SourceURL:      sourceURLPtr,
 		AuthorPersonID: person.ID,

@@ -1107,14 +1107,14 @@ func TestResearchStore_SaveNote_UncitedAndCitedRoundTripDistinctly(t *testing.T)
 	s, _ := newStore(t)
 	ch, creator := setupChannel(t, ctx, s)
 
-	uncited, err := s.Research().SaveNote(ctx, store.SaveNoteInput{
+	uncited, err := s.Research().SaveNote(ctx, store.SaveNoteInput{ThreadTitle: "Research",
 		ChannelID: ch.ID, Text: "gut feeling, no source", AuthorPersonID: creator.ID,
 	})
 	require.NoError(t, err)
 	assert.Nil(t, uncited.SourceURL, "a note saved with no SourceURL must round-trip as nil, not empty string (FR10)")
 
 	url := "https://example.com/trend-report"
-	cited, err := s.Research().SaveNote(ctx, store.SaveNoteInput{
+	cited, err := s.Research().SaveNote(ctx, store.SaveNoteInput{ThreadTitle: "Research",
 		ChannelID: ch.ID, Text: "trend report says so", SourceURL: &url, AuthorPersonID: creator.ID,
 	})
 	require.NoError(t, err)
@@ -1165,7 +1165,7 @@ func TestResearchStore_SaveNote_ValidHTTPOrHTTPSURLPersistsTrimmedAndCited(t *te
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			raw := tc.raw
-			note, err := s.Research().SaveNote(ctx, store.SaveNoteInput{
+			note, err := s.Research().SaveNote(ctx, store.SaveNoteInput{ThreadTitle: "Research",
 				ChannelID: ch.ID, Text: "note: " + tc.name, SourceURL: &raw, AuthorPersonID: creator.ID,
 			})
 			require.NoError(t, err)
@@ -1198,7 +1198,7 @@ func TestResearchStore_SaveNote_NilOrBlankSourceURLPersistsAsNullUncited(t *test
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			note, err := s.Research().SaveNote(ctx, store.SaveNoteInput{
+			note, err := s.Research().SaveNote(ctx, store.SaveNoteInput{ThreadTitle: "Research",
 				ChannelID: ch.ID, Text: "note: " + tc.name, SourceURL: tc.in, AuthorPersonID: creator.ID,
 			})
 			require.NoError(t, err)
@@ -1232,7 +1232,7 @@ func TestResearchStore_SaveNote_InvalidSourceURLErrorsAndInsertsNoRow(t *testing
 			before := countResearchNotes(t, ctx, db, ch.ID)
 
 			raw := raw
-			_, err := s.Research().SaveNote(ctx, store.SaveNoteInput{
+			_, err := s.Research().SaveNote(ctx, store.SaveNoteInput{ThreadTitle: "Research",
 				ChannelID: ch.ID, Text: "rejected note", SourceURL: &raw, AuthorPersonID: creator.ID,
 			})
 			assert.Error(t, err, "must reject %q rather than silently storing it as a cited source", raw)
@@ -1256,12 +1256,12 @@ func TestResearchStore_SaveNote_IdempotentReplayWithValidURLReturnsOriginalRow(t
 
 	url := "https://example.com/first"
 	key := "idem-" + uuid.NewString()
-	first, err := s.Research().SaveNote(ctx, store.SaveNoteInput{
+	first, err := s.Research().SaveNote(ctx, store.SaveNoteInput{ThreadTitle: "Research",
 		ChannelID: ch.ID, Text: "first text", SourceURL: &url, AuthorPersonID: creator.ID, IdempotencyKey: key,
 	})
 	require.NoError(t, err)
 
-	replayed, err := s.Research().SaveNote(ctx, store.SaveNoteInput{
+	replayed, err := s.Research().SaveNote(ctx, store.SaveNoteInput{ThreadTitle: "Research",
 		ChannelID: ch.ID, Text: "different text, must be ignored", SourceURL: &url, AuthorPersonID: creator.ID, IdempotencyKey: key,
 	})
 	require.NoError(t, err)
@@ -1285,13 +1285,13 @@ func TestResearchStore_SaveNote_IdempotentReplayWithInvalidURLErrors(t *testing.
 
 	url := "https://example.com/first"
 	key := "idem-" + uuid.NewString()
-	first, err := s.Research().SaveNote(ctx, store.SaveNoteInput{
+	first, err := s.Research().SaveNote(ctx, store.SaveNoteInput{ThreadTitle: "Research",
 		ChannelID: ch.ID, Text: "first text", SourceURL: &url, AuthorPersonID: creator.ID, IdempotencyKey: key,
 	})
 	require.NoError(t, err)
 
 	invalid := "not a url"
-	_, err = s.Research().SaveNote(ctx, store.SaveNoteInput{
+	_, err = s.Research().SaveNote(ctx, store.SaveNoteInput{ThreadTitle: "Research",
 		ChannelID: ch.ID, Text: "replay with bad url", SourceURL: &invalid, AuthorPersonID: creator.ID, IdempotencyKey: key,
 	})
 	require.Error(t, err, "a replay carrying an invalid source_url must error, not silently return the original row")
@@ -1302,6 +1302,306 @@ func TestResearchStore_SaveNote_IdempotentReplayWithInvalidURLErrors(t *testing.
 	assert.Equal(t, first.Text, got.Text)
 	require.NotNil(t, got.SourceURL)
 	assert.Equal(t, url, *got.SourceURL)
+}
+
+// ── ResearchStore.SaveNote thread resolution + typed relations
+// (FR4/FR5/FR6/NFR1/NFR4, root plan #1934, this task #1938) ────────────────
+
+// countResearchThreads returns the number of research_thread rows for
+// channelID -- used below to prove a rejected SaveNote call (bad
+// thread_id/thread_title combination, or a rejected relation) never leaves
+// a find-or-created thread behind either.
+func countResearchThreads(t *testing.T, ctx context.Context, db *dbtest.Postgres, channelID uuid.UUID) int {
+	t.Helper()
+	var count int
+	require.NoError(t, db.Pool.QueryRow(ctx, `SELECT count(*) FROM research_thread WHERE channel_id = $1`, channelID).Scan(&count))
+	return count
+}
+
+// countResearchNoteRelations returns the number of research_note_relation
+// rows whose note_id = noteID.
+func countResearchNoteRelations(t *testing.T, ctx context.Context, db *dbtest.Postgres, noteID uuid.UUID) int {
+	t.Helper()
+	var count int
+	require.NoError(t, db.Pool.QueryRow(ctx, `SELECT count(*) FROM research_note_relation WHERE note_id = $1`, noteID).Scan(&count))
+	return count
+}
+
+func TestResearchStore_SaveNote_ThreadIDPathAttachesToExistingThread(t *testing.T) {
+	ctx := context.Background()
+	s, _ := newStore(t)
+	ch, creator := setupChannel(t, ctx, s)
+
+	first, err := s.Research().SaveNote(ctx, store.SaveNoteInput{
+		ChannelID: ch.ID, ThreadTitle: "Investor outreach", Text: "first note", AuthorPersonID: creator.ID,
+	})
+	require.NoError(t, err)
+	require.NotNil(t, first.ThreadID)
+
+	second, err := s.Research().SaveNote(ctx, store.SaveNoteInput{
+		ChannelID: ch.ID, ThreadID: first.ThreadID, Text: "second note, same thread", AuthorPersonID: creator.ID,
+	})
+	require.NoError(t, err, "an existing thread_id must attach the note without error")
+	assert.Equal(t, *first.ThreadID, *second.ThreadID, "thread_id path must attach to the SAME thread, not create a new one")
+}
+
+func TestResearchStore_SaveNote_ThreadTitlePathCreatesThenReusesThread(t *testing.T) {
+	ctx := context.Background()
+	s, db := newStore(t)
+	ch, creator := setupChannel(t, ctx, s)
+
+	first, err := s.Research().SaveNote(ctx, store.SaveNoteInput{
+		ChannelID: ch.ID, ThreadTitle: "Competitor analysis", Text: "note one", AuthorPersonID: creator.ID,
+	})
+	require.NoError(t, err)
+
+	second, err := s.Research().SaveNote(ctx, store.SaveNoteInput{
+		ChannelID: ch.ID, ThreadTitle: "  competitor ANALYSIS  ", Text: "note two", AuthorPersonID: creator.ID,
+	})
+	require.NoError(t, err)
+
+	require.NotNil(t, first.ThreadID)
+	require.NotNil(t, second.ThreadID)
+	assert.Equal(t, *first.ThreadID, *second.ThreadID, "the natural key must converge case/whitespace-insensitively across two calls")
+	assert.Equal(t, 1, countResearchThreads(t, ctx, db, ch.ID), "must create exactly one thread across both calls")
+}
+
+func TestResearchStore_SaveNote_NeitherThreadSuppliedErrorsNoRow(t *testing.T) {
+	ctx := context.Background()
+	s, db := newStore(t)
+	ch, creator := setupChannel(t, ctx, s)
+
+	before := countResearchNotes(t, ctx, db, ch.ID)
+	_, err := s.Research().SaveNote(ctx, store.SaveNoteInput{
+		ChannelID: ch.ID, Text: "no thread info at all", AuthorPersonID: creator.ID,
+	})
+	require.Error(t, err, "neither thread_id nor thread_title supplied must be rejected")
+	assert.Equal(t, before, countResearchNotes(t, ctx, db, ch.ID), "a rejected call must not insert a note row")
+}
+
+func TestResearchStore_SaveNote_UnresolvableThreadIDErrorsNoRow(t *testing.T) {
+	ctx := context.Background()
+	s, db := newStore(t)
+	ch, creator := setupChannel(t, ctx, s)
+
+	before := countResearchNotes(t, ctx, db, ch.ID)
+	bogus := uuid.New()
+	_, err := s.Research().SaveNote(ctx, store.SaveNoteInput{
+		ChannelID: ch.ID, ThreadID: &bogus, Text: "attach to nonexistent thread", AuthorPersonID: creator.ID,
+	})
+	require.Error(t, err, "a thread_id naming a thread that does not exist must be rejected")
+	assert.Equal(t, before, countResearchNotes(t, ctx, db, ch.ID), "a rejected call must not insert a note row")
+}
+
+func TestResearchStore_SaveNote_ThreadIDOnDifferentChannelErrorsNoRow(t *testing.T) {
+	ctx := context.Background()
+	s, db := newStore(t)
+	chA, creatorA := setupChannel(t, ctx, s)
+	chB, creatorB := setupChannel(t, ctx, s)
+
+	noteB, err := s.Research().SaveNote(ctx, store.SaveNoteInput{
+		ChannelID: chB.ID, ThreadTitle: "Channel B's thread", Text: "note in channel B", AuthorPersonID: creatorB.ID,
+	})
+	require.NoError(t, err)
+
+	before := countResearchNotes(t, ctx, db, chA.ID)
+	_, err = s.Research().SaveNote(ctx, store.SaveNoteInput{
+		ChannelID: chA.ID, ThreadID: noteB.ThreadID, Text: "cross-channel attach attempt", AuthorPersonID: creatorA.ID,
+	})
+	require.Error(t, err, "a thread_id belonging to a different channel must be rejected")
+	assert.Equal(t, before, countResearchNotes(t, ctx, db, chA.ID), "a rejected call must not insert a note row")
+}
+
+func TestResearchStore_SaveNote_BothThreadIDAndThreadTitleErrorsNoRow(t *testing.T) {
+	ctx := context.Background()
+	s, db := newStore(t)
+	ch, creator := setupChannel(t, ctx, s)
+
+	first, err := s.Research().SaveNote(ctx, store.SaveNoteInput{
+		ChannelID: ch.ID, ThreadTitle: "Existing thread", Text: "seed note", AuthorPersonID: creator.ID,
+	})
+	require.NoError(t, err)
+
+	before := countResearchNotes(t, ctx, db, ch.ID)
+	_, err = s.Research().SaveNote(ctx, store.SaveNoteInput{
+		ChannelID: ch.ID, ThreadID: first.ThreadID, ThreadTitle: "A different title entirely",
+		Text: "supplying both, disagreeing", AuthorPersonID: creator.ID,
+	})
+	require.Error(t, err, "supplying both thread_id and thread_title must be rejected")
+	assert.Equal(t, before, countResearchNotes(t, ctx, db, ch.ID), "a rejected call must not insert a note row")
+}
+
+func TestResearchStore_SaveNote_SummarizesRelationToThreeNotesWritesThreeRows(t *testing.T) {
+	ctx := context.Background()
+	s, db := newStore(t)
+	ch, creator := setupChannel(t, ctx, s)
+
+	n1, err := s.Research().SaveNote(ctx, store.SaveNoteInput{ChannelID: ch.ID, ThreadTitle: "Summary thread", Text: "n1", AuthorPersonID: creator.ID})
+	require.NoError(t, err)
+	n2, err := s.Research().SaveNote(ctx, store.SaveNoteInput{ChannelID: ch.ID, ThreadID: n1.ThreadID, Text: "n2", AuthorPersonID: creator.ID})
+	require.NoError(t, err)
+	n3, err := s.Research().SaveNote(ctx, store.SaveNoteInput{ChannelID: ch.ID, ThreadID: n1.ThreadID, Text: "n3", AuthorPersonID: creator.ID})
+	require.NoError(t, err)
+
+	summary, err := s.Research().SaveNote(ctx, store.SaveNoteInput{
+		ChannelID: ch.ID, ThreadID: n1.ThreadID, Text: "summary of n1-n3", AuthorPersonID: creator.ID,
+		Relations: []store.SaveNoteRelationInput{
+			{RelatedNoteID: n1.ID, RelationType: store.RelationSummarizes},
+			{RelatedNoteID: n2.ID, RelationType: store.RelationSummarizes},
+			{RelatedNoteID: n3.ID, RelationType: store.RelationSummarizes},
+		},
+	})
+	require.NoError(t, err, "one note may summarize several prior notes in one call")
+
+	assert.Equal(t, 3, countResearchNoteRelations(t, ctx, db, summary.ID), "must write one relation row per named prior note")
+}
+
+// TestResearchStore_SaveNote_RelationToNoteInDifferentThreadRollsBackWholeCall
+// is an explicit rollback test per the issue's Testing section: the whole
+// call -- note insert, relation insert, AND the "This thread" find-or-create
+// that ran earlier in the same call -- must leave zero trace. Two
+// independent layers reject a cross-thread relation: SaveNote's own
+// app-level check (research.go) and migration 016's
+// research_note_relation_enforce_same_thread DB trigger (defense in
+// depth, FR6/NFR4) -- disabling the app-level check alone still leaves
+// this test green (verified while authoring it), since the trigger raises
+// first at the INSERT. This test guards the observable contract (reject,
+// roll back everything), not which layer catches it.
+func TestResearchStore_SaveNote_RelationToNoteInDifferentThreadRollsBackWholeCall(t *testing.T) {
+	ctx := context.Background()
+	s, db := newStore(t)
+	ch, creator := setupChannel(t, ctx, s)
+
+	otherThreadNote, err := s.Research().SaveNote(ctx, store.SaveNoteInput{
+		ChannelID: ch.ID, ThreadTitle: "Other thread", Text: "lives in a different thread", AuthorPersonID: creator.ID,
+	})
+	require.NoError(t, err)
+
+	before := countResearchNotes(t, ctx, db, ch.ID)
+	_, err = s.Research().SaveNote(ctx, store.SaveNoteInput{
+		ChannelID: ch.ID, ThreadTitle: "This thread",
+		Text: "should be rejected", AuthorPersonID: creator.ID,
+		Relations: []store.SaveNoteRelationInput{
+			{RelatedNoteID: otherThreadNote.ID, RelationType: store.RelationCaveats},
+		},
+	})
+	require.Error(t, err, "a relation naming a note in a different thread must reject the whole call")
+	assert.Equal(t, before, countResearchNotes(t, ctx, db, ch.ID), "no note row must be inserted (rollback)")
+	assert.Equal(t, 0, countResearchNoteRelations(t, ctx, db, otherThreadNote.ID), "no relation row must be inserted (rollback)")
+	// The thread find-or-create itself must also roll back with the rest of
+	// the transaction -- "This thread" must not be left behind as an orphan.
+	assert.Equal(t, 1, countResearchThreads(t, ctx, db, ch.ID), "the rejected call's own thread find-or-create must roll back too")
+}
+
+// TestResearchStore_SaveNote_RelationToNonexistentNoteRollsBackWholeCall
+// guards the same observable contract as the cross-thread rollback test
+// above: SaveNote's own pre-INSERT existence check (research.go) and
+// research_note_relation's FK constraint on related_note_id (migration
+// 016) both independently reject this and roll back the whole
+// transaction.
+func TestResearchStore_SaveNote_RelationToNonexistentNoteRollsBackWholeCall(t *testing.T) {
+	ctx := context.Background()
+	s, db := newStore(t)
+	ch, creator := setupChannel(t, ctx, s)
+
+	before := countResearchNotes(t, ctx, db, ch.ID)
+	bogus := uuid.New()
+	_, err := s.Research().SaveNote(ctx, store.SaveNoteInput{
+		ChannelID: ch.ID, ThreadTitle: "Thread", Text: "should be rejected", AuthorPersonID: creator.ID,
+		Relations: []store.SaveNoteRelationInput{
+			{RelatedNoteID: bogus, RelationType: store.RelationFollowsUp},
+		},
+	})
+	require.Error(t, err, "a relation naming a nonexistent related_note_id must reject the whole call")
+	assert.Equal(t, before, countResearchNotes(t, ctx, db, ch.ID), "no note row must be inserted (rollback)")
+}
+
+// TestResearchStore_SaveNote_InvalidRelationTypeRejectedAtStoreBoundary
+// guards the same observable contract: SaveNote's own
+// RelationType.Valid() check (research.go) and research_note_relation's
+// relation_type CHECK constraint (migration 016) both independently
+// reject an unrecognized value and roll back the whole transaction.
+func TestResearchStore_SaveNote_InvalidRelationTypeRejectedAtStoreBoundary(t *testing.T) {
+	ctx := context.Background()
+	s, db := newStore(t)
+	ch, creator := setupChannel(t, ctx, s)
+
+	target, err := s.Research().SaveNote(ctx, store.SaveNoteInput{
+		ChannelID: ch.ID, ThreadTitle: "Thread", Text: "target note", AuthorPersonID: creator.ID,
+	})
+	require.NoError(t, err)
+
+	before := countResearchNotes(t, ctx, db, ch.ID)
+	_, err = s.Research().SaveNote(ctx, store.SaveNoteInput{
+		ChannelID: ch.ID, ThreadID: target.ThreadID, Text: "should be rejected", AuthorPersonID: creator.ID,
+		Relations: []store.SaveNoteRelationInput{
+			{RelatedNoteID: target.ID, RelationType: store.RelationType("not_a_real_type")},
+		},
+	})
+	require.Error(t, err, "an invalid relation_type must be rejected at the store boundary")
+	assert.Equal(t, before, countResearchNotes(t, ctx, db, ch.ID), "no note row must be inserted (rollback)")
+}
+
+// TestResearchStore_SaveNote_NFR1ReplayCreatesNoDuplicateThreadNoteOrRelation
+// is the red/green discipline test the issue's Testing section calls for.
+// Red/green was verified while authoring this test: temporarily disabling
+// the idempotency early-return in research.go's SaveNote (guarding it with
+// `false &&`, equivalent to moving thread resolution/relation-insert ahead
+// of it) made the replay call mint a SECOND, distinct research_note.ID
+// instead of returning the original row -- this assertion's very first
+// line (`first.ID == replayed.ID`) failed red under that mutation. Reverting
+// the guard restored green. The code as committed here is the reverted
+// (correct) version.
+func TestResearchStore_SaveNote_NFR1ReplayCreatesNoDuplicateThreadNoteOrRelation(t *testing.T) {
+	ctx := context.Background()
+	s, db := newStore(t)
+	ch, creator := setupChannel(t, ctx, s)
+
+	prior, err := s.Research().SaveNote(ctx, store.SaveNoteInput{
+		ChannelID: ch.ID, ThreadTitle: "Replay thread", Text: "prior note", AuthorPersonID: creator.ID,
+	})
+	require.NoError(t, err)
+
+	key := "replay-" + uuid.NewString()
+	in := store.SaveNoteInput{
+		ChannelID: ch.ID, ThreadTitle: "Replay target thread", Text: "replayed note", AuthorPersonID: creator.ID,
+		IdempotencyKey: key,
+		Relations: []store.SaveNoteRelationInput{
+			{RelatedNoteID: prior.ID, RelationType: store.RelationCaveats},
+		},
+	}
+
+	// The relation targets "prior", which lives in a DIFFERENT thread than
+	// "Replay target thread" -- so this call would normally be rejected by
+	// the cross-thread check. Attach the relation target to the SAME
+	// thread this call resolves instead, so the call succeeds and we can
+	// assert on exactly-one-of-everything after two calls.
+	sameThreadPrior, err := s.Research().SaveNote(ctx, store.SaveNoteInput{
+		ChannelID: ch.ID, ThreadTitle: "Replay target thread", Text: "same-thread prior note", AuthorPersonID: creator.ID,
+	})
+	require.NoError(t, err)
+	in.Relations = []store.SaveNoteRelationInput{{RelatedNoteID: sameThreadPrior.ID, RelationType: store.RelationCaveats}}
+
+	first, err := s.Research().SaveNote(ctx, in)
+	require.NoError(t, err)
+
+	replayed, err := s.Research().SaveNote(ctx, in)
+	require.NoError(t, err)
+	assert.Equal(t, first.ID, replayed.ID, "a replay must short-circuit to the original row")
+
+	var threadCount int
+	require.NoError(t, db.Pool.QueryRow(ctx,
+		`SELECT count(*) FROM research_thread WHERE channel_id = $1 AND lower(btrim(title)) = 'replay target thread'`, ch.ID,
+	).Scan(&threadCount))
+	assert.Equal(t, 1, threadCount, "a replay must not find-or-create a second thread")
+
+	var noteCount int
+	require.NoError(t, db.Pool.QueryRow(ctx,
+		`SELECT count(*) FROM research_note WHERE id = $1`, first.ID,
+	).Scan(&noteCount))
+	assert.Equal(t, 1, noteCount, "a replay must not create a second note row")
+
+	assert.Equal(t, 1, countResearchNoteRelations(t, ctx, db, first.ID), "a replay must not create a second relation row")
 }
 
 // ── SyncStore (FR14/FR21) ────────────────────────────────────────────────────
@@ -2280,7 +2580,7 @@ func TestMyWorkStore_SummariesForPerson_CoversEveryAssociatedChannel_WithPerSect
 	// A: person is Founder -- one proposed-only video_script, no outcome yet.
 	chA, err := s.Channels().Create(ctx, "yt-"+uuid.NewString(), "A Channel", person.ID)
 	require.NoError(t, err)
-	noteA, err := s.Research().SaveNote(ctx, store.SaveNoteInput{ChannelID: chA.ID, Text: "A note", AuthorPersonID: person.ID})
+	noteA, err := s.Research().SaveNote(ctx, store.SaveNoteInput{ThreadTitle: "Research", ChannelID: chA.ID, Text: "A note", AuthorPersonID: person.ID})
 	require.NoError(t, err)
 	ideaA, err := s.Ideas().Create(ctx, chA.ID, "A Idea", person.ID)
 	require.NoError(t, err)
@@ -2312,7 +2612,7 @@ func TestMyWorkStore_SummariesForPerson_CoversEveryAssociatedChannel_WithPerSect
 	chB, err := s.Channels().Create(ctx, "yt-"+uuid.NewString(), "B Channel", founderB.ID)
 	require.NoError(t, err)
 	require.NoError(t, s.Roles().AddRole(ctx, chB.ID, person.ID, store.RoleCoCreator, founderB.ID))
-	noteB, err := s.Research().SaveNote(ctx, store.SaveNoteInput{ChannelID: chB.ID, Text: "B note", AuthorPersonID: founderB.ID})
+	noteB, err := s.Research().SaveNote(ctx, store.SaveNoteInput{ThreadTitle: "Research", ChannelID: chB.ID, Text: "B note", AuthorPersonID: founderB.ID})
 	require.NoError(t, err)
 	proposedIdeaB, err := s.Ideas().Create(ctx, chB.ID, "B Proposed Idea", founderB.ID)
 	require.NoError(t, err)
@@ -2339,7 +2639,7 @@ func TestMyWorkStore_SummariesForPerson_CoversEveryAssociatedChannel_WithPerSect
 	chC, err := s.Channels().Create(ctx, "yt-"+uuid.NewString(), "C Channel", founderC.ID)
 	require.NoError(t, err)
 	require.NoError(t, s.Roles().AddRole(ctx, chC.ID, person.ID, store.RoleAnalyst, founderC.ID))
-	noteC, err := s.Research().SaveNote(ctx, store.SaveNoteInput{ChannelID: chC.ID, Text: "C note", AuthorPersonID: founderC.ID})
+	noteC, err := s.Research().SaveNote(ctx, store.SaveNoteInput{ThreadTitle: "Research", ChannelID: chC.ID, Text: "C note", AuthorPersonID: founderC.ID})
 	require.NoError(t, err)
 	ideaC, err := s.Ideas().Create(ctx, chC.ID, "C Idea", founderC.ID)
 	require.NoError(t, err)
@@ -2532,7 +2832,7 @@ func TestMyWorkStore_SummariesForPerson_QueryCountIsBoundedAcrossChannelCount(t 
 			ch, err := s.Channels().Create(ctx, "yt-"+uuid.NewString(), fmt.Sprintf("Channel %d-%d", numChannels, i), founder.ID)
 			require.NoError(t, err)
 			require.NoError(t, s.Roles().AddRole(ctx, ch.ID, person.ID, store.RoleAnalyst, founder.ID))
-			_, err = s.Research().SaveNote(ctx, store.SaveNoteInput{ChannelID: ch.ID, Text: "note", AuthorPersonID: founder.ID})
+			_, err = s.Research().SaveNote(ctx, store.SaveNoteInput{ThreadTitle: "Research", ChannelID: ch.ID, Text: "note", AuthorPersonID: founder.ID})
 			require.NoError(t, err)
 		}
 

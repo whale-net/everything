@@ -205,13 +205,13 @@ func TestE2E_M41_ResearchWebSaveBrowse(t *testing.T) {
 
 	// ── 3: FR1, FR2, FR10 -- MCP write, web read (the mirror, direction 2) ──
 	t.Run("3_fr1_fr2_fr10_mcp_write_web_read", func(t *testing.T) {
-		cited := decode[mcptools.ResearchNoteOutput](t, callTool(t, csAnalyst, "save_research_note", mcptools.SaveResearchNoteInput{
+		cited := decode[mcptools.ResearchNoteOutput](t, callTool(t, csAnalyst, "save_research_note", mcptools.SaveResearchNoteInput{ThreadTitle: "Research",
 			ChannelID: ch.ID.String(), IdeaID: ideaID.String(), Text: citedMCPText, SourceURL: citedMCPSource, IdempotencyKeyArg: uuid.NewString(),
 		}))
 		require.True(t, cited.Cited)
 		citedMCPID = cited.ID
 
-		uncited := decode[mcptools.ResearchNoteOutput](t, callTool(t, csCreator, "save_research_note", mcptools.SaveResearchNoteInput{
+		uncited := decode[mcptools.ResearchNoteOutput](t, callTool(t, csCreator, "save_research_note", mcptools.SaveResearchNoteInput{ThreadTitle: "Research",
 			ChannelID: ch.ID.String(), IdeaID: ideaID.String(), Text: uncitedMCPText, IdempotencyKeyArg: uuid.NewString(),
 		}))
 		require.False(t, uncited.Cited)
@@ -333,7 +333,7 @@ func TestE2E_M41_ResearchWebSaveBrowse(t *testing.T) {
 	// ── 6: FR1 -- unattached notes: an MCP-saved note with no Idea lists
 	// in the Channel index's unattached section, not under any Idea ──────
 	t.Run("6_fr1_unattached_notes", func(t *testing.T) {
-		unattached := decode[mcptools.ResearchNoteOutput](t, callTool(t, csAnalyst, "save_research_note", mcptools.SaveResearchNoteInput{
+		unattached := decode[mcptools.ResearchNoteOutput](t, callTool(t, csAnalyst, "save_research_note", mcptools.SaveResearchNoteInput{ThreadTitle: "Research",
 			ChannelID: ch.ID.String(), Text: unattachedText, IdempotencyKeyArg: uuid.NewString(),
 		}))
 		require.Nil(t, unattached.IdeaID)
@@ -414,6 +414,7 @@ func TestE2E_M41_ResearchWebSaveBrowse(t *testing.T) {
 			// matching m3_calibration_test.go's stated precedent.
 			_, err := w.st.Research().SaveNote(ctx, store.SaveNoteInput{
 				ChannelID: ch.ID, IdeaID: &nfrIdea.ID, Text: fmt.Sprintf("nfr2 note %d", i), AuthorPersonID: creator.ID,
+				ThreadTitle: "Research",
 			})
 			require.NoError(t, err)
 		}

@@ -168,13 +168,13 @@ func TestThreadStore_ListByChannel_NoteCountAndLatestNoteAt(t *testing.T) {
 	})
 	require.NoError(t, err)
 
-	note1, err := s.Research().SaveNote(ctx, store.SaveNoteInput{
+	note1, err := s.Research().SaveNote(ctx, store.SaveNoteInput{ThreadTitle: "Research",
 		ChannelID: ch.ID, Text: "first note", AuthorPersonID: creator.ID,
 	})
 	require.NoError(t, err)
 	attachNoteToThread(t, ctx, db, note1.ID, activeThread.ID)
 
-	note2, err := s.Research().SaveNote(ctx, store.SaveNoteInput{
+	note2, err := s.Research().SaveNote(ctx, store.SaveNoteInput{ThreadTitle: "Research",
 		ChannelID: ch.ID, Text: "second note", AuthorPersonID: creator.ID,
 	})
 	require.NoError(t, err)

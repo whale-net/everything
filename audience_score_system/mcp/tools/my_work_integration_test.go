@@ -173,7 +173,7 @@ func TestGetMyWork_ThreeChannelsThreeTiers_FourthChannelExcluded(t *testing.T) {
 	chA, err := f.st.Channels().Create(ctx, "yt-mw-a", "Channel A", person.ID)
 	require.NoError(t, err)
 
-	_, err = f.st.Research().SaveNote(ctx, store.SaveNoteInput{
+	_, err = f.st.Research().SaveNote(ctx, store.SaveNoteInput{ThreadTitle: "Research",
 		ChannelID: chA.ID, Text: "note on A", AuthorPersonID: person.ID, IdempotencyKey: "mw-note-a",
 	})
 	require.NoError(t, err)
@@ -343,7 +343,7 @@ func TestGetMyWork_NotesPerChannel_CapsResearchNotes(t *testing.T) {
 	require.NoError(t, err)
 
 	for i := 0; i < 5; i++ {
-		_, err := f.st.Research().SaveNote(ctx, store.SaveNoteInput{
+		_, err := f.st.Research().SaveNote(ctx, store.SaveNoteInput{ThreadTitle: "Research",
 			ChannelID: ch.ID, Text: "note", AuthorPersonID: person.ID, IdempotencyKey: uuid.NewString(),
 		})
 		require.NoError(t, err)
