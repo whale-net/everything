@@ -18,10 +18,13 @@ import (
 	"github.com/whale-net/everything/libs/go/grpcclient"
 	"github.com/whale-net/everything/libs/go/htmxauth"
 	"github.com/whale-net/everything/libs/go/htmxbase"
+	"github.com/whale-net/everything/libs/go/htmxsse"
 	"github.com/whale-net/everything/libs/go/logging"
-	"go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp"
-	"github.com/whale-net/everything/manmanv2/ui/components"
+	"github.com/whale-net/everything/libs/go/rmq"
+	"github.com/whale-net/everything/manmanv2/events"
 	manmanpb "github.com/whale-net/everything/manmanv2/protos"
+	"github.com/whale-net/everything/manmanv2/ui/components"
+	"go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp"
 )
 
 //go:embed favicon.ico
@@ -53,6 +56,22 @@ type Config struct {
 
 	// Database (optional; enables DB-backed sessions with automatic token refresh)
 	DatabaseURL string
+
+	// RabbitMQURL backs the SSE hub's live-status consumer (manmanv2.htmxsse
+	// exchange, see initializeSSEHub). Unset or unreachable degrades to
+	// sseHub == nil rather than failing boot (NFR3/NFR8) -- see
+	// initializeSSEHub's doc comment.
+	RabbitMQURL string
+
+	// SSE hub tuning, named with the MANMANV2_SSE_ prefix mirroring
+	// app-registry's APP_REGISTRY_SSE_* (tools/app_registry/ui/main.go).
+	// SSEHeartbeatInterval must stay > SSEAdvertisedRetryInterval/2, or
+	// initializeSSEHub falls back to htmxsse.DefaultConfig() -- see its doc
+	// comment and ENV.md.
+	SSEHeartbeatInterval       time.Duration
+	SSEMaxStreamLifetime       time.Duration
+	SSESubscriberBufferDepth   int
+	SSEAdvertisedRetryInterval time.Duration
 }
 
 // LoadConfig loads configuration from environment variables
@@ -70,6 +89,12 @@ func LoadConfig() *Config {
 		LogProcessorURL:  getEnv("LOG_PROCESSOR_URL", "log-processor:50053"),
 		GRPCAuthMode:     strings.ToLower(getEnv("GRPC_AUTH_MODE", "none")),
 		DatabaseURL:      getEnv("PG_DATABASE_URL", ""),
+		RabbitMQURL:      getEnv("RABBITMQ_URL", ""),
+
+		SSEHeartbeatInterval:       getEnvDuration("MANMANV2_SSE_HEARTBEAT_INTERVAL", 5*time.Second),
+		SSEMaxStreamLifetime:       getEnvDuration("MANMANV2_SSE_MAX_STREAM_LIFETIME", 1*time.Hour),
+		SSESubscriberBufferDepth:   getEnvInt("MANMANV2_SSE_SUBSCRIBER_BUFFER_DEPTH", 100),
+		SSEAdvertisedRetryInterval: getEnvDuration("MANMANV2_SSE_ADVERTISED_RETRY_INTERVAL", 2*time.Second),
 	}
 }
 
@@ -80,6 +105,37 @@ func getEnv(key, defaultValue string) string {
 	return defaultValue
 }
 
+// getEnvDuration parses key via time.ParseDuration (e.g. "5s", "1m"). An
+// unset or unparseable value falls back to defaultValue rather than failing
+// boot -- mirrors tools/app_registry/ui/main.go's own getEnvDuration.
+func getEnvDuration(key string, defaultValue time.Duration) time.Duration {
+	value := os.Getenv(key)
+	if value == "" {
+		return defaultValue
+	}
+	parsed, err := time.ParseDuration(value)
+	if err != nil {
+		log.Printf("invalid %s=%q (expected a duration like \"5s\"); using default %v", key, value, defaultValue)
+		return defaultValue
+	}
+	return parsed
+}
+
+// getEnvInt parses key via strconv.Atoi. An unset or unparseable value falls
+// back to defaultValue rather than failing boot.
+func getEnvInt(key string, defaultValue int) int {
+	value := os.Getenv(key)
+	if value == "" {
+		return defaultValue
+	}
+	parsed, err := strconv.Atoi(value)
+	if err != nil {
+		log.Printf("invalid %s=%q (expected an integer); using default %d", key, value, defaultValue)
+		return defaultValue
+	}
+	return parsed
+}
+
 // App holds the application state
 type App struct {
 	config       *Config
@@ -87,6 +143,11 @@ type App struct {
 	grpc         *ControlClient
 	logProcessor manmanpb.LogProcessorClient
 	userAuthOpt  grpc.DialOption
+	// sseHub backs /api/live/deployments (handlers_sessions_live.go). nil
+	// when RABBITMQ_URL is unset or the broker was unreachable at startup
+	// (initializeSSEHub) -- the route handler must degrade to 503 rather
+	// than dereference a nil hub (NFR3/NFR8).
+	sseHub *htmxsse.Hub
 
 	// deploymentStopPollInterval/deploymentStopTimeout override
 	// handleDeploymentAction's restart stop-then-start poll (#1627). Zero
@@ -172,17 +233,76 @@ func NewApp(ctx context.Context, config *Config) (*App, error) {
 	}
 	logProcessorClient := manmanpb.NewLogProcessorClient(logProcessorConn.GetConnection())
 
+	sseHub := initializeSSEHub(ctx, config)
+
 	return &App{
 		config:       config,
 		auth:         auth,
 		grpc:         grpcClient,
 		logProcessor: logProcessorClient,
 		userAuthOpt:  userAuthOpt,
+		sseHub:       sseHub,
 	}, nil
+}
+
+// initializeSSEHub dials RabbitMQ and builds the Hub backing
+// /api/live/deployments (FR6-FR8). Mirrors
+// tools/app_registry/ui/main.go's initializeSSEHub.
+//
+// RABBITMQ_URL unset or the broker unreachable must not prevent the UI from
+// starting or serving /sessions (NFR3/NFR8 degradation): this returns nil
+// in that case, logged as a WARNING, and handleDeploymentsLiveSSE responds
+// 503 so the client's reconnect loop retries. Attach is lazy in htmxsse
+// (Hub.Subscribe triggers it), so an unreachable-but-configured broker
+// already degrades correctly on its own once a connection is returned here.
+func initializeSSEHub(ctx context.Context, config *Config) *htmxsse.Hub {
+	if config.RabbitMQURL == "" {
+		log.Printf("WARNING: RABBITMQ_URL not set; live deployment updates (/api/live/deployments) disabled")
+		return nil
+	}
+
+	conn, err := rmq.NewConnectionFromURL(config.RabbitMQURL)
+	if err != nil {
+		log.Printf("WARNING: failed to connect to RabbitMQ at %s; live deployment updates (/api/live/deployments) disabled: %v", config.RabbitMQURL, err)
+		return nil
+	}
+
+	// events.DeclareArgs() matches htmxsse.DefaultAttachFunc's own hardcoded
+	// declare call byte-for-byte (topic/durable=true/autoDelete=false/
+	// internal=false/noWait=false/args=nil) -- see events.go's doc comment --
+	// so the library's default attach func is used directly rather than a
+	// local copy that could drift.
+	attachFunc := htmxsse.DefaultAttachFunc(events.ExchangeName, conn)
+
+	hubConfig := htmxsse.DefaultConfig()
+	hubConfig.ExchangeName = events.ExchangeName
+	hubConfig.HeartbeatInterval = config.SSEHeartbeatInterval
+	hubConfig.MaxStreamLifetime = config.SSEMaxStreamLifetime
+	hubConfig.SubscriberBufferDepth = config.SSESubscriberBufferDepth
+	hubConfig.AdvertisedRetryInterval = config.SSEAdvertisedRetryInterval
+
+	if hubConfig.HeartbeatInterval <= 0 {
+		// time.NewTicker (htmxsse.Handler's heartbeat ticker) panics for
+		// d<=0 -- see tools/app_registry/ui/main.go's identical guard.
+		log.Printf("invalid MANMANV2_SSE_HEARTBEAT_INTERVAL=%q (must be positive); using default %v", os.Getenv("MANMANV2_SSE_HEARTBEAT_INTERVAL"), htmxsse.DefaultConfig().HeartbeatInterval)
+		hubConfig.HeartbeatInterval = htmxsse.DefaultConfig().HeartbeatInterval
+	}
+	if err := hubConfig.Validate(); err != nil {
+		log.Printf("invalid SSE hub config (%v); falling back to library defaults", err)
+		hubConfig = htmxsse.DefaultConfig()
+		hubConfig.ExchangeName = events.ExchangeName
+	}
+
+	return htmxsse.NewHub(attachFunc, hubConfig)
 }
 
 // Close cleans up application resources
 func (app *App) Close() error {
+	if app.sseHub != nil {
+		if err := app.sseHub.Close(); err != nil {
+			log.Printf("Error closing SSE hub: %v", err)
+		}
+	}
 	if app.grpc != nil {
 		return app.grpc.Close()
 	}
@@ -269,6 +389,15 @@ func (app *App) setupRoutes(mux *http.ServeMux) {
 	// (#1628) never collides with it under Go's ServeMux
 	// longest-pattern-wins dispatch.
 	mux.HandleFunc("/api/deployments/", app.auth.RequireAuthFunc(app.auth.WithAccessToken(app.handleDeploymentRowFragment)))
+	// SSE route for live per-deployment row updates (FR6, FR7, FR8,
+	// handlers_sessions_live.go). Deliberately a fresh "/api/live/" prefix,
+	// distinct from "/api/sessions/" and "/api/deployments/" above, so it
+	// never depends on ServeMux precedence against either catch-all.
+	// Wrapped with RequireAuthFunc only, never WithAccessToken -- the latter
+	// redirects (or sends HX-Redirect + 401) on a stale token, which would
+	// corrupt an established SSE stream; the token is re-acquired per
+	// delivery inside the fragment instead.
+	mux.HandleFunc("/api/live/deployments", app.auth.RequireAuthFunc(app.handleDeploymentsLiveSSE))
 
 	// Note: Log streaming endpoint is handled by handleSessionDetail which routes to handleSessionLogsStream
 
@@ -326,6 +455,7 @@ func (app *App) setupRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("/api/dashboard-summary", app.auth.RequireAuthFunc(app.auth.WithAccessToken(app.handleDashboardSummary)))
 	mux.HandleFunc("/api/dashboard-sessions", app.auth.RequireAuthFunc(app.auth.WithAccessToken(app.handleDashboardSessions)))
 }
+
 // handleSGCRoutes dispatches /sgc/* routes
 func (app *App) handleSGCRoutes(w http.ResponseWriter, r *http.Request) {
 	pathParts := strings.Split(strings.Trim(r.URL.Path, "/"), "/")
