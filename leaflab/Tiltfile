@@ -49,6 +49,44 @@ rabbitmq_url = 'amqp://{}:{}@{}:{}/'.format(
     rmq_info['port'],
 )
 
+# The shared dev-util rabbitmq-dev chart's K8s Service only exposes ports
+# 5672/15672 (see tools/tilt/common.tilt's setup_rabbitmq() docstring) — it
+# has never needed to expose 1883 because MQTT was previously only reached
+# via Tilt's host port-forward (mosquitto_sub, hardware boards), never
+# pod-to-pod in-cluster. leaflab-emulator (FR19) is the first in-cluster
+# MQTT consumer, so it needs its own reachable Service. Rather than modify
+# the shared chart/common.tilt wiring (would affect every other consumer),
+# declare a small leaflab-local Service here that exposes port 1883 on the
+# existing rabbitmq-dev pod (selector matches the `app: rabbitmq-dev` label
+# set by the dev-util chart / used by setup_rabbitmq_mqtt_plugin's
+# `kubectl wait -l app=rabbitmq-dev`). The broker itself already listens on
+# 1883 once the MQTT plugin is enabled above — this only adds the missing
+# Service port.
+k8s_yaml(blob("""
+apiVersion: v1
+kind: Service
+metadata:
+  name: rabbitmq-dev-mqtt
+  namespace: {namespace}
+spec:
+  selector:
+    app: rabbitmq-dev
+  ports:
+  - port: 1883
+    targetPort: 1883
+""".format(namespace=namespace)))
+
+# RabbitMQ MQTT plugin URL — the emulator (FR19) publishes over MQTT
+# (port 1883), not the AMQP vhost above (port 5672). Credentials are
+# passed separately via MQTT_USERNAME/MQTT_PASSWORD, matching
+# leaflab/emulator/config.go's Config shape. Points at the leaflab-local
+# rabbitmq-dev-mqtt Service above, not rmq_info['host'] — the shared
+# rabbitmq-dev Service does not expose 1883 (see comment above).
+mqtt_url = 'tcp://rabbitmq-dev-mqtt.{}.svc.cluster.local:{}'.format(
+    namespace,
+    rmq_info['mqtt_port'],
+)
+
 # PostgreSQL with TimescaleDB extension available
 db_info = setup_postgres(namespace, resource_name='postgres-dev',
                          image='timescale/timescaledb:latest-pg16')
@@ -93,6 +131,10 @@ APPS = {
     'ui': {
         'bazel_target': '//leaflab/ui:leaflab-ui_image_load',
         'image_name': 'leaflab-leaflab-ui',
+    },
+    'emulator': {
+        'bazel_target': '//leaflab/emulator:leaflab-emulator_image_load',
+        'image_name': 'leaflab-leaflab-emulator',
     },
 }
 
@@ -280,6 +322,56 @@ k8s_resource(
     port_forwards=['8080:8000'],
 )
 
+# Emulator — dev/Tilt-only (FR19, NFR7). Publishes simulated board MQTT
+# traffic so `tilt up` brings up sensor data with no manual step; never
+# added to leaflab_chart (see //leaflab:BUILD.bazel and
+# //leaflab/emulator:BUILD.bazel's release_app deploy_unit = "none").
+# SCENARIO_DIR points at the scenario fixtures baked into the image by
+# //leaflab/emulator:scenarios_tar. EMULATOR_BOARDS is left unset so the
+# default (one board per scenario file) applies.
+k8s_yaml(blob("""
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: leaflab-emulator
+  namespace: {namespace}
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: leaflab-emulator
+  template:
+    metadata:
+      labels:
+        app: leaflab-emulator
+    spec:
+      containers:
+      - name: emulator
+        image: leaflab-leaflab-emulator
+        env:
+        - name: MQTT_BROKER_URL
+          value: "{mqtt_url}"
+        - name: MQTT_USERNAME
+          value: "{mqtt_user}"
+        - name: MQTT_PASSWORD
+          value: "{mqtt_password}"
+        - name: SCENARIO_DIR
+          value: "/etc/leaflab/scenarios"
+        - name: PUBLISH_INTERVAL
+          value: "5s"
+""".format(
+    namespace=namespace,
+    mqtt_url=mqtt_url,
+    mqtt_user=rmq_info['user'],
+    mqtt_password=rmq_info['password'],
+)))
+
+k8s_resource(
+    'leaflab-emulator',
+    resource_deps=['rabbitmq-dev-mqtt-plugin', 'leaflab-migrate'],
+    labels=['leaflab'],
+)
+
 # ===========================
 # Access Information
 # ===========================
@@ -306,6 +398,9 @@ print("    mqtt_user=rabbit mqtt_pass=password")
 print("")
 print("Subscribe to all sensor data:")
 print("  mosquitto_sub -h localhost -p 1883 -u rabbit -P password -t 'leaflab/#' -v")
+print("")
+print("Simulated boards (leaflab-emulator, dev-only, FR19):")
+print("  kubectl logs -n {} deploy/leaflab-emulator | grep -i 'device'".format(namespace))
 print("="*60)
 
 print_footer_info('leaflab')
