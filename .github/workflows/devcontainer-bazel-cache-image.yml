@@ -45,7 +45,7 @@ jobs:
       # Renders to $RUNNER_TEMP (outside the git checkout, so it can never
       # be picked up by COPY . . in the Dockerfile) and is fed to the build
       # below via a BuildKit secret mount, not a build-arg -- see
-      # .devcontainer/Dockerfile and docs/BAZEL_CACHE_IMAGE.md "Remote
+      # .devcontainer/Dockerfile.bazel-cache and docs/BAZEL_CACHE_IMAGE.md "Remote
       # cache during the warm build" for why. Most of what `bazel build
       # //...` would otherwise recompile from scratch here is already in
       # the remote cache from ci.yml's own `test` job runs on this same
@@ -69,7 +69,7 @@ jobs:
         uses: docker/build-push-action@v6
         with:
           context: .
-          file: .devcontainer/Dockerfile
+          file: .devcontainer/Dockerfile.bazel-cache
           build-args: |
             WARM_TARGETS=${{ github.event.inputs.warm_targets || '//...' }}
           secret-files: |

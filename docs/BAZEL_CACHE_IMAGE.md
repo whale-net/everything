@@ -34,7 +34,7 @@ to restore or fetch over the network at all, even on a cold runner?
 
 ## How it works
 
-`.devcontainer/Dockerfile` builds an image that:
+`.devcontainer/Dockerfile.bazel-cache` builds an image that:
 
 1. Installs Bazelisk (resolves the version pinned by `.bazelversion`).
 2. Copies the repo in at a fixed path (`/workspace`).
@@ -75,8 +75,8 @@ passed via `--secret` produced the expected DNS-resolution failure inside
 the build, and a build with no `--secret` at all still succeeds (the
 mount target is simply absent; `.bazelrc`'s `try-import` no-ops on that
 like it would on any missing file) -- so a plain local
-`docker build -f .devcontainer/Dockerfile` (no credentials available)
-keeps working exactly as before.
+`docker build -f .devcontainer/Dockerfile.bazel-cache` (no credentials
+available) keeps working exactly as before.
 
 Deliberately **not** `--config=ci` for this warm build: that config's
 `--remote_download_minimal` would leave remote-cache-hit outputs
@@ -227,7 +227,7 @@ runners as currently sized. It would need one of:
 Dockerfile; useful for iterating on this POC):
 
 ```bash
-docker build -f .devcontainer/Dockerfile \
+docker build -f .devcontainer/Dockerfile.bazel-cache \
   --build-arg WARM_TARGETS=//tools/... \
   -t bazel-cache-devcontainer:local .
 ```
@@ -253,10 +253,15 @@ it) and still pushes `ghcr.io/<owner>/bazel-cache-devcontainer:latest` and
 
 ## Local dev use
 
-`.devcontainer/devcontainer.json` now builds from this same Dockerfile
-(`build.dockerfile` instead of a bare `image`), so opening this repo in a
-devcontainer-aware editor or Codespace gets the same pre-warmed cache --
-existing `features` (Go, Python, docker-in-docker) still layer on top.
+`.devcontainer/devcontainer.json` builds from `.devcontainer/Dockerfile`, a
+separate, tooling-only image (Bazel, the host packages Bazel's toolchains
+shell out to, and a k3d binary) with no baked cache -- this POC's image is
+deliberately **not** used for day-to-day devcontainer/Codespace startup, since
+its 5.45 GB baked-output_base layer would make every container rebuild
+brutally slow and would go stale the moment a dev's checkout diverges from
+whatever commit last warmed it. `features` (Go, Python, docker-in-docker,
+kubectl/helm) layer on top of the plain tooling image the same way they would
+have layered on top of this one.
 
 ## Promoting this beyond POC
 
