@@ -8,7 +8,11 @@ load("//tools:templ.bzl", "templ_library")
 # components/pages sibling pair like web/pages (mirrors web/schedule's own
 # rationale). Postgres-backed handler coverage (Testing phase, issue
 # #1899) lands as research_integration_test.go, mirroring
-# //audience_score_system/web/schedule:schedule_integration_test.
+# //audience_score_system/web/schedule:schedule_integration_test. Depends
+# on //audience_score_system/mcp/tools (#1943, FR9/FR16/NFR2) solely for
+# its exported Excerpt/CitationExcerptRunes -- the SAME truncation bound
+# get_viability_verdict uses for CitedNoteOutput.TextExcerpt -- so
+# IdeaDetail's cited-notes rendering can never drift from MCP's.
 templ_library(
     name = "research",
     srcs = glob(["*.templ"]),
@@ -18,6 +22,7 @@ templ_library(
         "//audience_score_system/web:__pkg__",
     ],
     deps = [
+        "//audience_score_system/mcp/tools",
         "//audience_score_system/store",
         "//audience_score_system/web/auth",
         "//audience_score_system/web/components",

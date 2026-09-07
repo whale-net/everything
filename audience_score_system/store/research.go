@@ -52,6 +52,19 @@ type ResearchStore interface {
 	// ListByChannel returns every ResearchNote for channelID.
 	ListByChannel(ctx context.Context, channelID uuid.UUID) ([]ResearchNote, error)
 
+	// GetByIDs resolves every id in ids to its ResearchNote in ONE batched
+	// query (never one GetByID call per id) -- backs both
+	// mcp/tools/verdict.go's resolveCitedNotes and web/research's
+	// renderIdeaDetail cited-notes rendering (FR9/FR16, NFR2), so an Idea
+	// with a long verdict history citing many notes issues a single query
+	// regardless of how many verdict versions or citations there are. An id
+	// with no matching row is simply absent from the returned map (never an
+	// error) -- verdict_citation FKs research_note and nothing in this
+	// package deletes a research_note, so a missing id is a defensive case,
+	// not an expected one; callers decide how to render it. Duplicate ids
+	// in the input are deduplicated before querying.
+	GetByIDs(ctx context.Context, ids []uuid.UUID) (map[uuid.UUID]ResearchNote, error)
+
 	// ListFiltered returns ResearchNote rows for channelID, most-recent
 	// first, each joined to its author's display name, optionally narrowed
 	// to a single ideaID (nil = no filter), partitioned by cited
@@ -178,6 +191,45 @@ func (s researchStore) ListByChannel(ctx context.Context, channelID uuid.UUID) (
 		return nil, fmt.Errorf("list research notes by channel: %w", err)
 	}
 	return notes, nil
+}
+
+// GetByIDs resolves ids to their ResearchNote rows in one query (`WHERE id
+// = ANY($1)`), deduplicating ids first so a caller can pass a raw union of
+// several verdicts' CitedResearchNoteIDs without pre-deduplicating itself.
+// An id with no matching row is simply absent from the result map.
+func (s researchStore) GetByIDs(ctx context.Context, ids []uuid.UUID) (map[uuid.UUID]ResearchNote, error) {
+	out := make(map[uuid.UUID]ResearchNote, len(ids))
+	if len(ids) == 0 {
+		return out, nil
+	}
+
+	seen := make(map[uuid.UUID]struct{}, len(ids))
+	unique := make([]uuid.UUID, 0, len(ids))
+	for _, id := range ids {
+		if _, ok := seen[id]; ok {
+			continue
+		}
+		seen[id] = struct{}{}
+		unique = append(unique, id)
+	}
+
+	rows, err := s.pool.Query(ctx, `SELECT `+researchNoteColumns+` FROM research_note WHERE id = ANY($1)`, unique)
+	if err != nil {
+		return nil, fmt.Errorf("get research_note by ids: %w", err)
+	}
+	defer rows.Close()
+
+	for rows.Next() {
+		n, err := scanResearchNote(rows)
+		if err != nil {
+			return nil, fmt.Errorf("scan research_note: %w", err)
+		}
+		out[n.ID] = n
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("get research_note by ids: %w", err)
+	}
+	return out, nil
 }
 
 // researchNoteWithAuthorColumns mirrors researchNoteColumns, qualified

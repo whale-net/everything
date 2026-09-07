@@ -25,11 +25,14 @@ import (
 	"github.com/whale-net/everything/audience_score_system/store"
 )
 
-// citationExcerptRunes bounds CitedNoteOutput.TextExcerpt -- long enough
+// CitationExcerptRunes bounds CitedNoteOutput.TextExcerpt -- long enough
 // for an agent to recognize the note, short enough that a verdict with
 // many citations doesn't balloon get_viability_verdict's response. The
 // full note text remains available via list_research_notes (#1577).
-const citationExcerptRunes = 200
+// Exported so web/research's cited-notes rendering (FR9) truncates at the
+// SAME bound (NFR2) rather than duplicating the constant -- see Excerpt
+// below.
+const CitationExcerptRunes = 200
 
 // -- shared rendering ---------------------------------------------------------
 
@@ -42,33 +45,42 @@ type CitedNoteOutput struct {
 	Cited       bool    `json:"cited" jsonschema:"True if the research note itself has a source_url (FR10) -- distinct from the fact that a verdict cites this note"`
 }
 
-// excerpt truncates s to at most citationExcerptRunes runes, appending
+// Excerpt truncates s to at most CitationExcerptRunes runes, appending
 // "..." when truncated, so a note's excerpt is never silently mistaken
-// for its full text.
-func excerpt(s string) string {
+// for its full text. Exported (NFR2) so web/research's cited-notes
+// rendering (FR9) truncates at the identical boundary -- one helper, never
+// a second truncation implementation.
+func Excerpt(s string) string {
 	runes := []rune(s)
-	if len(runes) <= citationExcerptRunes {
+	if len(runes) <= CitationExcerptRunes {
 		return s
 	}
-	return string(runes[:citationExcerptRunes]) + "..."
+	return string(runes[:CitationExcerptRunes]) + "..."
 }
 
-// resolveCitedNotes loads noteIDs (a Verdict's CitedResearchNoteIDs) from
-// research and renders each as CitedNoteOutput, in the same order. An id
-// that no longer resolves (should not happen -- verdict_citation FKs
-// research_note and nothing in this package ever deletes a research_note)
-// is surfaced as an error rather than silently dropped, so a caller never
-// mistakes a broken reference for "not cited".
+// resolveCitedNotes resolves noteIDs (a Verdict's CitedResearchNoteIDs)
+// via research.GetByIDs -- ONE batched query regardless of how many ids
+// are cited (FR16/NFR2: the same batched read web/research's
+// renderIdeaDetail uses) -- and renders each as CitedNoteOutput, in the
+// SAME order as noteIDs. An id that no longer resolves (should not
+// happen -- verdict_citation FKs research_note and nothing in this
+// package ever deletes a research_note) is surfaced as an error rather
+// than silently dropped, so a caller never mistakes a broken reference for
+// "not cited".
 func resolveCitedNotes(ctx context.Context, research store.ResearchStore, noteIDs []uuid.UUID) ([]CitedNoteOutput, error) {
+	notes, err := research.GetByIDs(ctx, noteIDs)
+	if err != nil {
+		return nil, fmt.Errorf("load cited research notes: %w", err)
+	}
 	out := make([]CitedNoteOutput, 0, len(noteIDs))
 	for _, id := range noteIDs {
-		note, err := research.GetByID(ctx, id)
-		if err != nil {
-			return nil, fmt.Errorf("load cited research note %s: %w", id, err)
+		note, ok := notes[id]
+		if !ok {
+			return nil, fmt.Errorf("load cited research note %s: %w", id, pgx.ErrNoRows)
 		}
 		out = append(out, CitedNoteOutput{
 			ID:          note.ID.String(),
-			TextExcerpt: excerpt(note.Text),
+			TextExcerpt: Excerpt(note.Text),
 			SourceURL:   note.SourceURL,
 			Cited:       note.Cited(),
 		})
