@@ -762,7 +762,7 @@ func TestGetViabilityVerdict_CitedNoteLaterSuperseded_RendersRetiredBySupersedes
 	require.False(t, saveRes.IsError, "unexpected error: %s", vtextOf(saveRes))
 
 	_, err := f.st.Research().SaveNote(context.Background(), store.SaveNoteInput{
-		ChannelID: f.ch.ID, IdeaID: &f.idea.ID, ThreadID: f.note.ThreadID,
+		ChannelID: f.ch.ID, IdeaID: &f.idea.ID, ThreadID: &f.note.ThreadID,
 		Text: "a newer note that supersedes the cited one", AuthorPersonID: f.creator.ID,
 		Relations: []store.SaveNoteRelationInput{{RelatedNoteID: f.note.ID, RelationType: store.RelationSupersedes}},
 	})
@@ -796,7 +796,7 @@ func TestGetViabilityVerdict_CitedNoteLaterExcluded_RendersRetiredByExcludes(t *
 	require.False(t, saveRes.IsError, "unexpected error: %s", vtextOf(saveRes))
 
 	_, err := f.st.Research().SaveNote(context.Background(), store.SaveNoteInput{
-		ChannelID: f.ch.ID, IdeaID: &f.idea.ID, ThreadID: f.note.ThreadID,
+		ChannelID: f.ch.ID, IdeaID: &f.idea.ID, ThreadID: &f.note.ThreadID,
 		Text: "a note that excludes the cited one", AuthorPersonID: f.creator.ID,
 		Relations: []store.SaveNoteRelationInput{{RelatedNoteID: f.note.ID, RelationType: store.RelationExcludes}},
 	})
@@ -834,7 +834,7 @@ func TestGetViabilityVerdict_CitedNoteWithNonRetiringRelation_RendersNoWarning(t
 			require.False(t, saveRes.IsError, "unexpected error: %s", vtextOf(saveRes))
 
 			_, err := f.st.Research().SaveNote(context.Background(), store.SaveNoteInput{
-				ChannelID: f.ch.ID, IdeaID: &f.idea.ID, ThreadID: f.note.ThreadID,
+				ChannelID: f.ch.ID, IdeaID: &f.idea.ID, ThreadID: &f.note.ThreadID,
 				Text: "a note related to the cited one via " + relationType, AuthorPersonID: f.creator.ID,
 				Relations: []store.SaveNoteRelationInput{{RelatedNoteID: f.note.ID, RelationType: store.RelationType(relationType)}},
 			})
@@ -897,13 +897,13 @@ func TestGetViabilityVerdict_CitedNoteBothSupersededAndExcluded_RendersBoth(t *t
 
 	ctx := context.Background()
 	_, err := f.st.Research().SaveNote(ctx, store.SaveNoteInput{
-		ChannelID: f.ch.ID, IdeaID: &f.idea.ID, ThreadID: f.note.ThreadID,
+		ChannelID: f.ch.ID, IdeaID: &f.idea.ID, ThreadID: &f.note.ThreadID,
 		Text: "supersedes the cited note", AuthorPersonID: f.creator.ID,
 		Relations: []store.SaveNoteRelationInput{{RelatedNoteID: f.note.ID, RelationType: store.RelationSupersedes}},
 	})
 	require.NoError(t, err)
 	_, err = f.st.Research().SaveNote(ctx, store.SaveNoteInput{
-		ChannelID: f.ch.ID, IdeaID: &f.idea.ID, ThreadID: f.note.ThreadID,
+		ChannelID: f.ch.ID, IdeaID: &f.idea.ID, ThreadID: &f.note.ThreadID,
 		Text: "also excludes the cited note", AuthorPersonID: f.creator.ID,
 		Relations: []store.SaveNoteRelationInput{{RelatedNoteID: f.note.ID, RelationType: store.RelationExcludes}},
 	})
@@ -947,7 +947,7 @@ func TestGetViabilityVerdict_SupersessionDoesNotReResolveCitation_VerdictCitatio
 	require.Equal(t, []uuid.UUID{f.note.ID}, before.CitedResearchNoteIDs)
 
 	superseding, err := f.st.Research().SaveNote(ctx, store.SaveNoteInput{
-		ChannelID: f.ch.ID, IdeaID: &f.idea.ID, ThreadID: f.note.ThreadID,
+		ChannelID: f.ch.ID, IdeaID: &f.idea.ID, ThreadID: &f.note.ThreadID,
 		Text: "a completely different superseding text", AuthorPersonID: f.creator.ID,
 		Relations: []store.SaveNoteRelationInput{{RelatedNoteID: f.note.ID, RelationType: store.RelationSupersedes}},
 	})
@@ -981,7 +981,7 @@ func TestSaveViabilityVerdict_RenderPathAlsoAppliesRetiredWarning(t *testing.T) 
 	ctx := context.Background()
 
 	_, err := f.st.Research().SaveNote(ctx, store.SaveNoteInput{
-		ChannelID: f.ch.ID, IdeaID: &f.idea.ID, ThreadID: f.note.ThreadID,
+		ChannelID: f.ch.ID, IdeaID: &f.idea.ID, ThreadID: &f.note.ThreadID,
 		Text: "supersedes the note before any verdict cites it", AuthorPersonID: f.creator.ID,
 		Relations: []store.SaveNoteRelationInput{{RelatedNoteID: f.note.ID, RelationType: store.RelationSupersedes}},
 	})
@@ -1029,7 +1029,7 @@ func TestGetViabilityVerdict_FiveCitedNotes_RetiredLookupIsSingleQuery(t *testin
 	})
 	require.NoError(t, err)
 	_, err = f.st.Research().SaveNote(ctx, store.SaveNoteInput{
-		ChannelID: f.ch.ID, IdeaID: &oneNoteIdea.ID, ThreadID: oneNote.ThreadID,
+		ChannelID: f.ch.ID, IdeaID: &oneNoteIdea.ID, ThreadID: &oneNote.ThreadID,
 		Text: "supersedes the one-note idea's note", AuthorPersonID: f.creator.ID,
 		Relations: []store.SaveNoteRelationInput{{RelatedNoteID: oneNote.ID, RelationType: store.RelationSupersedes}},
 	})
@@ -1050,7 +1050,7 @@ func TestGetViabilityVerdict_FiveCitedNotes_RetiredLookupIsSingleQuery(t *testin
 		})
 		require.NoError(t, err)
 		_, err = f.st.Research().SaveNote(ctx, store.SaveNoteInput{
-			ChannelID: f.ch.ID, IdeaID: &fiveNoteIdea.ID, ThreadID: n.ThreadID,
+			ChannelID: f.ch.ID, IdeaID: &fiveNoteIdea.ID, ThreadID: &n.ThreadID,
 			Text: fmt.Sprintf("supersedes note %d", i), AuthorPersonID: f.creator.ID,
 			Relations: []store.SaveNoteRelationInput{{RelatedNoteID: n.ID, RelationType: store.RelationSupersedes}},
 		})

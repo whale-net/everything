@@ -389,6 +389,20 @@ func insertPost016ResearchNote(t *testing.T, ctx context.Context, db *dbtest.Pos
 	return id
 }
 
+// insertPost018ResearchNote inserts a research_note row with NO idea_id
+// column at all (migration 018/#1947 dropped it) and a required thread_id
+// -- the shape every research_note row has post-Stage-3. Used by tests
+// that seed data against the head schema (or migration 018 and later),
+// where insertPost016ResearchNote's idea_id column would no longer exist.
+func insertPost018ResearchNote(t *testing.T, ctx context.Context, db *dbtest.Postgres, channelID, threadID, text, authorPersonID string) string {
+	t.Helper()
+	var id string
+	require.NoError(t, db.Pool.QueryRow(ctx, `
+		INSERT INTO research_note (channel_id, thread_id, text, author_person_id) VALUES ($1, $2, $3, $4) RETURNING id
+	`, channelID, threadID, text, authorPersonID).Scan(&id))
+	return id
+}
+
 // TestMigration016_Backfill_CreatesPerBucketThreadsAndPreservesNoteData
 // proves migration 016's backfill (FR2 Stage 1) creates exactly one
 // synthetic research_thread per distinct (channel_id, idea_id) bucket of
@@ -719,4 +733,217 @@ func TestMigration016_UpDown_AppliesCleanly(t *testing.T) {
 
 	_, err = db.Pool.Exec(ctx, `SELECT count(*) FROM v_current_research_note`)
 	assert.Error(t, err, "migration 016's down must drop v_current_research_note")
+}
+
+// ── migration 018 (research_note.thread_id NOT NULL + idea_id drop; FR2
+// Stage 3, NFR4; root plan #1934, this task #1947) ─────────────────────────
+
+// columnNullable reports whether table.column is nullable
+// (information_schema.columns.is_nullable = 'YES') -- used to assert
+// migration 018's SET NOT NULL / down's DROP NOT NULL took effect, which
+// viewColumns' column-NAME-only check above cannot distinguish.
+func columnNullable(t *testing.T, ctx context.Context, db *dbtest.Postgres, table, column string) bool {
+	t.Helper()
+	var nullable string
+	require.NoError(t, db.Pool.QueryRow(ctx, `
+		SELECT is_nullable FROM information_schema.columns WHERE table_name = $1 AND column_name = $2
+	`, table, column).Scan(&nullable))
+	return nullable == "YES"
+}
+
+// TestMigration018_UpDown_AppliesCleanly proves the migration's structural
+// shape on both sides against data seeded through the full Stage 1 (016)
+// path: up sets research_note.thread_id NOT NULL and drops
+// research_note.idea_id entirely (FR2 Stage 3, NFR4), recreating
+// v_current_research_note without the dropped column; down reverses
+// cleanly with no CASCADE, matching migration 013's precedent, restoring
+// idea_id (backfilled, not merely an empty nullable column) and
+// thread_id's nullability.
+func TestMigration018_UpDown_AppliesCleanly(t *testing.T) {
+	ctx := context.Background()
+	db := dbtest.NewPostgres(ctx, t, dbtest.Options{})
+
+	sqlDB, err := sql.Open("pgx", db.ConnString)
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = sqlDB.Close() })
+
+	runner := migrate.NewRunner(sqlDB, schema.Migrations, schema.Dir)
+
+	require.NoError(t, runner.Migrate(17), "apply migrations 1-17 (the full chain up to, but not including, this task's migration)")
+	preCols := viewColumns(t, ctx, db, "research_note")
+	require.Contains(t, preCols, "idea_id", "before migration 018, research_note must still carry idea_id")
+	require.Contains(t, preCols, "thread_id")
+	require.True(t, columnNullable(t, ctx, db, "research_note", "thread_id"), "before migration 018, thread_id must still be nullable")
+
+	// Seed a research_note row through the Stage 1 (016) shape -- a real
+	// thread, idea_id and thread_id both populated and agreeing -- so
+	// migration 018's SET NOT NULL runs against actual data, not an empty
+	// table.
+	p := insertPersonRow(t, ctx, db, "sub-018-updown", "updown@example.com", "UpDown Person")
+	c := insertChannelRow(t, ctx, db, "yt-018-updown", "UpDown Channel")
+	idea := insertIdeaRow(t, ctx, db, c, "UpDown Idea", p)
+	thread := insertResearchThread(t, ctx, db, c, idea, "UpDown Thread", p)
+	noteID := insertPost016ResearchNote(t, ctx, db, c, idea, thread, "seeded before migration 018", p)
+
+	require.NoError(t, runner.Migrate(18), "apply migration 018's up -- must not fail against real Stage 1/2 data")
+	upCols := viewColumns(t, ctx, db, "research_note")
+	assert.NotContains(t, upCols, "idea_id", "migration 018's up must drop research_note.idea_id")
+	assert.Contains(t, upCols, "thread_id")
+	assert.False(t, columnNullable(t, ctx, db, "research_note", "thread_id"), "migration 018's up must make thread_id NOT NULL (NFR4)")
+
+	viewCols := viewColumns(t, ctx, db, "v_current_research_note")
+	assert.NotContains(t, viewCols, "idea_id", "v_current_research_note must be recreated without idea_id")
+	assert.Contains(t, viewCols, "thread_id")
+
+	var count int
+	require.NoError(t, db.Pool.QueryRow(ctx, `SELECT count(*) FROM v_current_research_note WHERE id = $1`, noteID).Scan(&count))
+	assert.Equal(t, 1, count, "the recreated view must still return the seeded note as current")
+
+	require.NoError(t, runner.Migrate(17), "apply migration 018's down -- must not fail")
+	downCols := viewColumns(t, ctx, db, "research_note")
+	assert.Contains(t, downCols, "idea_id", "migration 018's down must restore research_note.idea_id")
+	assert.True(t, columnNullable(t, ctx, db, "research_note", "thread_id"), "migration 018's down must restore thread_id's nullability")
+
+	var restoredIdeaID string
+	require.NoError(t, db.Pool.QueryRow(ctx, `SELECT idea_id FROM research_note WHERE id = $1`, noteID).Scan(&restoredIdeaID))
+	assert.Equal(t, idea, restoredIdeaID, "migration 018's down must backfill idea_id from the note's thread, not merely add an empty column")
+
+	require.NoError(t, db.Pool.QueryRow(ctx, `SELECT count(*) FROM v_current_research_note WHERE id = $1`, noteID).Scan(&count))
+	assert.Equal(t, 1, count, "the down-restored view must still return the seeded note as current")
+}
+
+// TestMigration018_ThreadIDNotNull_RejectsNullInsert is this task's named
+// red/green regression test (NFR4): the exact same INSERT is attempted
+// once against the pre-018 schema, where it must succeed (thread_id is
+// still nullable), and again post-018, where it must fail -- that
+// inversion is the evidence a DB-level guard now exists, not merely that
+// application code happens to always supply a thread_id.
+func TestMigration018_ThreadIDNotNull_RejectsNullInsert(t *testing.T) {
+	ctx := context.Background()
+	db := dbtest.NewPostgres(ctx, t, dbtest.Options{})
+
+	sqlDB, err := sql.Open("pgx", db.ConnString)
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = sqlDB.Close() })
+
+	runner := migrate.NewRunner(sqlDB, schema.Migrations, schema.Dir)
+	require.NoError(t, runner.Migrate(17), "apply migrations 1-17")
+
+	p := insertPersonRow(t, ctx, db, "sub-018-notnull", "notnull@example.com", "NotNull Person")
+	c := insertChannelRow(t, ctx, db, "yt-018-notnull", "NotNull Channel")
+
+	var preNoteID string
+	require.NoError(t, db.Pool.QueryRow(ctx, `
+		INSERT INTO research_note (channel_id, thread_id, text, author_person_id) VALUES ($1, NULL, $2, $3) RETURNING id
+	`, c, "pre-018: NULL thread_id", p).Scan(&preNoteID))
+
+	// Clean up the GREEN row before migrating on -- migration 018's SET
+	// NOT NULL must fail loudly against a genuinely orphaned row (that is
+	// a real safety property, not this test's concern); this test is
+	// about the column-level guard's presence, not about seeding an
+	// invalid database and expecting the migration to succeed anyway.
+	_, err = db.Pool.Exec(ctx, `DELETE FROM research_note WHERE id = $1`, preNoteID)
+	require.NoError(t, err)
+
+	require.NoError(t, runner.Migrate(18), "apply migration 018's up")
+
+	_, err = db.Pool.Exec(ctx, `
+		INSERT INTO research_note (channel_id, thread_id, text, author_person_id) VALUES ($1, NULL, $2, $3)
+	`, c, "post-018: NULL thread_id", p)
+	assert.Error(t, err, "RED (post-018): the identical insert must now be rejected -- thread_id is NOT NULL (NFR4)")
+}
+
+// TestMigration018_CurrentResearchNoteView_StillPartitionsCorrectly reruns
+// migration 016's TestMigration016_CurrentResearchNoteView_
+// RelationTypesDetermineInclusion scenario against the FULL migration
+// chain (head, through 018) instead of stopping at 016, seeding rows with
+// insertPost018ResearchNote (no idea_id column to insert into any more) --
+// proving the DROP + CREATE rewrite (removing idea_id from the SELECT
+// list) preserved the exact same current/retired partition logic (FR7),
+// unchanged except for the dropped column.
+func TestMigration018_CurrentResearchNoteView_StillPartitionsCorrectly(t *testing.T) {
+	ctx := context.Background()
+	db := dbtest.NewPostgres(ctx, t, dbtest.Options{})
+
+	sqlDB, err := sql.Open("pgx", db.ConnString)
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = sqlDB.Close() })
+
+	runner := migrate.NewRunner(sqlDB, schema.Migrations, schema.Dir)
+	require.NoError(t, runner.Up(), "apply the full chain, including migration 018")
+
+	p := insertPersonRow(t, ctx, db, "sub-018-view", "view018@example.com", "View Person")
+	c := insertChannelRow(t, ctx, db, "yt-018-view", "View Channel")
+	thread := insertResearchThread(t, ctx, db, c, "", "Thread", p)
+
+	relator := insertPost018ResearchNote(t, ctx, db, c, thread, "relator", p)
+	superseded := insertPost018ResearchNote(t, ctx, db, c, thread, "superseded", p)
+	excluded := insertPost018ResearchNote(t, ctx, db, c, thread, "excluded", p)
+	caveated := insertPost018ResearchNote(t, ctx, db, c, thread, "caveated", p)
+	followedUp := insertPost018ResearchNote(t, ctx, db, c, thread, "followed up", p)
+	summarized := insertPost018ResearchNote(t, ctx, db, c, thread, "summarized", p)
+
+	for _, rel := range []struct{ target, relType string }{
+		{superseded, "supersedes"},
+		{excluded, "excludes"},
+		{caveated, "caveats"},
+		{followedUp, "follows_up"},
+		{summarized, "summarizes"},
+	} {
+		_, err := db.Pool.Exec(ctx, `
+			INSERT INTO research_note_relation (note_id, related_note_id, relation_type) VALUES ($1, $2, $3)
+		`, relator, rel.target, rel.relType)
+		require.NoError(t, err)
+	}
+
+	isCurrent := func(id string) bool {
+		var count int
+		require.NoError(t, db.Pool.QueryRow(ctx, `SELECT count(*) FROM v_current_research_note WHERE id = $1`, id).Scan(&count))
+		return count == 1
+	}
+
+	assert.True(t, isCurrent(relator), "a note that is not the target of any relation must remain current")
+	assert.False(t, isCurrent(superseded), "a note targeted by a 'supersedes' relation must be excluded (FR7)")
+	assert.False(t, isCurrent(excluded), "a note targeted by an 'excludes' relation must be excluded (FR7)")
+	assert.True(t, isCurrent(caveated), "a note targeted by a 'caveats' relation must remain current -- only supersedes/excludes exclude (FR7)")
+	assert.True(t, isCurrent(followedUp), "a note targeted by a 'follows_up' relation must remain current (FR7)")
+	assert.True(t, isCurrent(summarized), "a note targeted by a 'summarizes' relation must remain current (FR7)")
+}
+
+// TestMigration018_Down_RestoresIdeaIdForPreStage2Read proves the down
+// migration's own contract (see 018.down.sql's header): after up then
+// down, a pre-Stage-2 read of research_note.idea_id (a bare column SELECT,
+// exactly what an old, un-migrated binary would issue) returns the
+// correct Idea for every row -- not merely an empty/NULL column -- for
+// both a note whose thread has an Idea and one whose thread does not
+// (FR9's nil case must round-trip as NULL, never a stray zero UUID).
+func TestMigration018_Down_RestoresIdeaIdForPreStage2Read(t *testing.T) {
+	ctx := context.Background()
+	db := dbtest.NewPostgres(ctx, t, dbtest.Options{})
+
+	sqlDB, err := sql.Open("pgx", db.ConnString)
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = sqlDB.Close() })
+
+	runner := migrate.NewRunner(sqlDB, schema.Migrations, schema.Dir)
+	require.NoError(t, runner.Up(), "apply the full chain, including migration 018")
+
+	p := insertPersonRow(t, ctx, db, "sub-018-down", "down018@example.com", "Down Person")
+	c := insertChannelRow(t, ctx, db, "yt-018-down", "Down Channel")
+	idea := insertIdeaRow(t, ctx, db, c, "Down Idea", p)
+	threadWithIdea := insertResearchThread(t, ctx, db, c, idea, "Thread With Idea", p)
+	threadWithoutIdea := insertResearchThread(t, ctx, db, c, "", "Thread Without Idea", p)
+
+	withIdeaNote := insertPost018ResearchNote(t, ctx, db, c, threadWithIdea, "note on a thread with an idea", p)
+	withoutIdeaNote := insertPost018ResearchNote(t, ctx, db, c, threadWithoutIdea, "note on a thread with no idea", p)
+
+	require.NoError(t, runner.Migrate(17), "apply migration 018's down")
+
+	var gotIdeaID string
+	require.NoError(t, db.Pool.QueryRow(ctx, `SELECT idea_id FROM research_note WHERE id = $1`, withIdeaNote).Scan(&gotIdeaID))
+	assert.Equal(t, idea, gotIdeaID, "a pre-Stage-2 read of idea_id must return the correct Idea after the down migration")
+
+	var gotNullIdeaID sql.NullString
+	require.NoError(t, db.Pool.QueryRow(ctx, `SELECT idea_id FROM research_note WHERE id = $1`, withoutIdeaNote).Scan(&gotNullIdeaID))
+	assert.False(t, gotNullIdeaID.Valid, "a note on an idea-less thread must restore to idea_id IS NULL, not a stray zero value")
 }
