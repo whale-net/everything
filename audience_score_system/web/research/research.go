@@ -18,10 +18,11 @@
 // on the Channel, IdeaDetail that Idea's threads only.
 //
 // HandleSaveNote calls store.ResearchStore.SaveNote, which as of issue
-// #1938 requires every note to resolve a thread (FR4). This form has no
-// thread/relation UI yet -- defaultNoteThreadTitle is a stopgap constant
-// (see HandleSaveNote's own doc comment) that #1945 replaces with a real
-// picker/creator calling this same SaveNote method (NFR2).
+// #1938 requires every note to resolve a thread (FR4). Issue #1945 (FR14,
+// FR15, FR16) adds this form's real thread select / new-thread-title
+// picker plus a relation picker (typed relations to prior notes in the
+// same thread) -- the identical SaveNote call save_research_note makes
+// (NFR2), never a parallel write path.
 //
 // This task reuses #1900's write-path plumbing verbatim rather than
 // duplicating it: newIdempotencyKey (server-generated, minted once at
@@ -80,6 +81,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"sort"
 	"strings"
 	"time"
 
@@ -114,15 +116,82 @@ func New(st *store.Store) *Handlers {
 // nothing but a freshly minted IdempotencyKey (newIdempotencyKey below,
 // FR6) and, on IdeaDetail, that page's own Idea pre-selected; on a
 // validation-failure re-render from HandleSaveNote it additionally
-// carries the submitted Text/SourceURL/IdeaID and an Error message, with
-// the SAME IdempotencyKey the failed POST carried -- so a corrected
-// resubmit is still the same logical write (FR6, FR7).
+// carries the submitted Text/SourceURL/IdeaID/ThreadID/ThreadTitle/
+// Relations and an Error message, with the SAME IdempotencyKey the failed
+// POST carried -- so a corrected resubmit is still the same logical write
+// (FR6, FR7). ThreadID/ThreadTitle (issue #1945, FR14) are echoed back on
+// a re-render exactly as IdeaID already is.
 type noteFormData struct {
 	IdempotencyKey string
 	Text           string
 	SourceURL      string
 	IdeaID         string // "" means unattached / no selection.
-	Error          string
+	// ThreadID is the submitted thread_id (issue #1945, FR14) -- "" means
+	// either no selection yet or a new thread is being created via
+	// ThreadTitle. Exactly one of ThreadID/ThreadTitle must resolve or
+	// HandleSaveNote rejects the submission (400, no row) -- see its own
+	// doc comment.
+	ThreadID string
+	// ThreadTitle is the submitted new-thread-title free-text input
+	// (issue #1945, FR14) -- find-or-creates a thread when ThreadID is
+	// empty.
+	ThreadTitle string
+	// Relations are FR15's submitted relation picks, parsed from the
+	// dynamically-named relation_type_<noteID> fields
+	// (relationTypeFieldPrefix below) -- preserved verbatim (not yet
+	// validated against store.RelationType) so a validation-failure
+	// re-render can re-select each pick exactly as submitted.
+	Relations []relationFormEntry
+	Error     string
+}
+
+// relationFormEntry is one of noteFormData's submitted relation picks
+// (issue #1945, FR15): the candidate prior note's id (as a raw string) and
+// the submitted relation_type value, both RAW -- neither is validated as
+// a real uuid.UUID/store.RelationType until HandleSaveNote builds
+// store.SaveNoteRelationInput values from them. Kept raw here so a
+// malformed or since-invalidated submission still survives a validation-
+// failure re-render byte-for-byte (mirrors every other noteFormData field's
+// contract).
+type relationFormEntry struct {
+	RelatedNoteID string
+	RelationType  string
+}
+
+// relationTypeFieldPrefix is the save-note form's per-candidate-note
+// relation picker field name prefix (issue #1945, FR15): one
+// <select name="relation_type_<note.ID>"> per prior note offered in the
+// resolved thread, its value one of store.RelationType's five constants or
+// "" (no relation to that note). parseRelationPicks below scans
+// r.PostForm for every key carrying this prefix rather than requiring a
+// fixed, server-known candidate list -- SaveNote itself is what actually
+// enforces that a picked note belongs to the resolved thread (FR15/NFR4),
+// so this handler trusts nothing about which keys a legitimate render
+// would have offered.
+const relationTypeFieldPrefix = "relation_type_"
+
+// parseRelationPicks scans postForm for every relationTypeFieldPrefix key
+// carrying a non-empty value, extracting the candidate note id from the
+// key's suffix -- an empty value means "no relation to this note" and is
+// skipped, never turned into a bogus empty-string RelationType. Sorted by
+// RelatedNoteID (map iteration order is otherwise undefined) so both the
+// re-rendered form and the relations this handler builds for
+// store.SaveNoteInput are deterministic.
+func parseRelationPicks(postForm map[string][]string) []relationFormEntry {
+	var picks []relationFormEntry
+	for key, vals := range postForm {
+		noteID, ok := strings.CutPrefix(key, relationTypeFieldPrefix)
+		if !ok || len(vals) == 0 {
+			continue
+		}
+		relationType := strings.TrimSpace(vals[0])
+		if relationType == "" {
+			continue
+		}
+		picks = append(picks, relationFormEntry{RelatedNoteID: noteID, RelationType: relationType})
+	}
+	sort.Slice(picks, func(i, j int) bool { return picks[i].RelatedNoteID < picks[j].RelatedNoteID })
+	return picks
 }
 
 // verdictFormData carries the save-verdict form's (#1901, FR4) current
@@ -358,7 +427,13 @@ func (h *Handlers) renderChannelIndex(w http.ResponseWriter, r *http.Request, pe
 	if status != http.StatusOK {
 		w.WriteHeader(status)
 	}
-	if err := components.Render(w, r, title, ChannelIndex(data, ch, ideas, unattached, relationsByNote, threads, ideasTruncated, notesTruncated, canWrite, form)); err != nil {
+	// notes (the Channel-wide 50-row page loaded above, before the
+	// unattached filter) is FR15's relation-picker candidate universe on
+	// this page: every note on the Channel a thread's prior notes could be
+	// drawn from, grouped by thread in the view -- no extra store call, and
+	// bounded by the SAME default page every other list on this page
+	// already is (NFR2).
+	if err := components.Render(w, r, title, ChannelIndex(data, ch, ideas, unattached, relationsByNote, threads, notes, ideasTruncated, notesTruncated, canWrite, form)); err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 	}
 }
@@ -554,25 +629,20 @@ func (h *Handlers) renderIdeaDetail(w http.ResponseWriter, r *http.Request, pers
 	// notes (already loaded above for the note list, FR2) is the SAME
 	// slice the save-verdict form's citation multi-select is populated
 	// from -- no extra store call, and no notes from any other Idea can
-	// ever appear as options (FR4).
+	// ever appear as options (FR4). It is also FR15's relation-picker
+	// candidate universe on this page: every note across this Idea's own
+	// threads, grouped by thread in the view -- again no extra store call.
 	if err := components.Render(w, r, title, IdeaDetail(data, ch, idea, notes, relationsByNote, notesTruncated, threads, current, history, authorNames, citedNotes, retiredNotes, canWrite, form, verdictForm, activeStrategies, proposeForm)); err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 	}
 }
 
-// defaultNoteThreadTitle is HandleSaveNote's stopgap ThreadTitle (issue
-// #1938) until #1945 adds this form's real thread/relation UI. It matches
-// migration 016's backfill title exactly (see that migration's header
-// comment), so every note this form saves converges onto the same
-// per-(channel, idea) default thread the migration already created for
-// pre-existing notes, rather than forking a differently-named bucket.
-const defaultNoteThreadTitle = "Research"
-
 // HandleSaveNote serves POST /channels/{id}/research/notes (FR3, FR6,
-// FR7): saves a research note through store.ResearchStore.SaveNote --
-// the IDENTICAL method save_research_note's mutate step calls (LB5: one
-// write path, never a parallel one) -- then 303-redirects back to the
-// page the form was rendered on.
+// FR7, FR14, FR15, FR16, issue #1945): saves a research note through
+// store.ResearchStore.SaveNote -- the IDENTICAL method
+// save_research_note's mutate step calls (LB5: one write path, never a
+// parallel one) -- then 303-redirects back to the page the form was
+// rendered on.
 //
 // Field handling:
 //   - text: required; empty/whitespace-only re-renders the originating
@@ -588,6 +658,27 @@ const defaultNoteThreadTitle = "Research"
 //     index (400), since there is no valid Idea to show a detail page
 //     for. A valid idea_id determines both which page is re-rendered on
 //     a later validation failure and which page success redirects to.
+//   - thread_id/thread_title (FR14): passed through RAW to SaveNote,
+//     which itself enforces "exactly one of" plus existence/cross-Channel/
+//     idea-agreement (FR4, issue #1938) -- this handler carries no second
+//     copy of any of those rules, exactly like source_url's rationale
+//     above. A malformed (non-UUID) thread_id is the one thing THIS
+//     handler rejects itself (400, "invalid thread selection") before
+//     ever calling SaveNote, since SaveNote's ThreadID is typed
+//     *uuid.UUID and cannot carry a raw unparsed string.
+//   - relation_type_<noteID> (FR15): zero or more, one per candidate prior
+//     note the form offered (relationTypeFieldPrefix/parseRelationPicks
+//     above) -- a non-empty value names a store.RelationType to apply to
+//     that RelatedNoteID. Each pick's note id must parse as a UUID and its
+//     value must be a recognized store.RelationType (400,
+//     "invalid relation selection", nothing written) before this ever
+//     calls SaveNote -- mirrors save_research_note's identical
+//     mcp-wire-shape parse (mcp/tools/research.go). SaveNote itself is
+//     what actually enforces every relation targets a note in the
+//     resolved thread and is not the note's own id (FR15/NFR4) -- a
+//     rejection there rolls back the WHOLE call (no note row, no relation
+//     rows), surfaced here via the same renderErr(err.Error()) path as
+//     every other SaveNote error.
 //   - idempotency_key: read from the hidden field the rendering GET set
 //     (newIdempotencyKey); if absent, treated as empty, so SaveNote
 //     simply does not dedupe rather than this handler inventing a key
@@ -610,6 +701,9 @@ func (h *Handlers) HandleSaveNote(w http.ResponseWriter, r *http.Request) {
 		Text:           r.FormValue("text"),
 		SourceURL:      r.FormValue("source_url"),
 		IdeaID:         r.FormValue("idea_id"),
+		ThreadID:       r.FormValue("thread_id"),
+		ThreadTitle:    r.FormValue("thread_title"),
+		Relations:      parseRelationPicks(r.PostForm),
 	}
 	text := strings.TrimSpace(form.Text)
 
@@ -651,25 +745,52 @@ func (h *Handlers) HandleSaveNote(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// thread_id (FR14): a malformed value is rejected here -- SaveNote's
+	// ThreadID is typed *uuid.UUID, so there is nowhere else to surface an
+	// unparseable string. Existence, cross-Channel, and idea-agreement are
+	// SaveNote's own rules (see this handler's doc comment) -- not
+	// duplicated here.
+	var threadID *uuid.UUID
+	if trimmedThreadID := strings.TrimSpace(form.ThreadID); trimmedThreadID != "" {
+		parsed, err := uuid.Parse(trimmedThreadID)
+		if err != nil {
+			renderErr("invalid thread selection")
+			return
+		}
+		threadID = &parsed
+	}
+
+	// relations (FR15): each pick's note id and relation type are parsed/
+	// validated here -- the SAME lightweight wire-shape parse
+	// save_research_note's saveResearchNoteMutate performs (mcp/tools/
+	// research.go) -- before SaveNote ever runs its own cross-thread/
+	// self-reference rules (which this handler does NOT duplicate).
+	relations := make([]store.SaveNoteRelationInput, 0, len(form.Relations))
+	for _, pick := range form.Relations {
+		relatedNoteID, err := uuid.Parse(pick.RelatedNoteID)
+		if err != nil {
+			renderErr("invalid relation selection")
+			return
+		}
+		relationType := store.RelationType(pick.RelationType)
+		if !relationType.Valid() {
+			renderErr("invalid relation selection")
+			return
+		}
+		relations = append(relations, store.SaveNoteRelationInput{RelatedNoteID: relatedNoteID, RelationType: relationType})
+	}
+
 	var sourceURLPtr *string
 	if form.SourceURL != "" {
 		sourceURLPtr = &form.SourceURL
 	}
 
 	_, err := h.store.Research().SaveNote(ctx, store.SaveNoteInput{
-		ChannelID: channelID,
-		IdeaID:    ideaID,
-		// ThreadTitle is a stopgap default, not a form field: SaveNote now
-		// requires a resolved thread on every write (FR4, issue #1938),
-		// but this form's own thread/relation UI is a separate task
-		// (#1945). "Research" matches migration 016's backfill title
-		// exactly, so every note this form saves converges onto the same
-		// per-(channel, idea) default thread the migration already
-		// created for pre-existing notes, rather than forking a
-		// differently-named bucket. #1945 replaces this constant with a
-		// real thread picker/creator calling this same SaveNote method
-		// (NFR2).
-		ThreadTitle:    defaultNoteThreadTitle,
+		ChannelID:      channelID,
+		IdeaID:         ideaID,
+		ThreadID:       threadID,
+		ThreadTitle:    form.ThreadTitle,
+		Relations:      relations,
 		Text:           text,
 		SourceURL:      sourceURLPtr,
 		AuthorPersonID: person.ID,

@@ -86,7 +86,13 @@ func authorName(names map[uuid.UUID]string, personID uuid.UUID) string {
 // research.go's authorizeWrite, re-derived fresh from Postgres on every
 // POST /channels/{id}/research/notes; hiding this form is never the only
 // line of defense against a forged submit.
-templ ChannelIndex(data components.LayoutData, ch store.Channel, ideas []store.IdeaSummary, unattachedNotes []store.ResearchNoteWithAuthor, relationsByNote map[uuid.UUID][]store.NoteRelation, threads []store.ThreadSummary, ideasTruncated bool, notesTruncated bool, canWrite bool, form noteFormData) {
+//
+// priorNotes (FR15, issue #1945) is the SAME Channel-wide 50-row page
+// research.go's renderChannelIndex already loads (before it filters down
+// to unattachedNotes) -- the save-note form's relation-picker candidate
+// universe, grouped by thread in saveNoteFormChannelIndex/
+// relationPickerFields below. No extra store call for this.
+templ ChannelIndex(data components.LayoutData, ch store.Channel, ideas []store.IdeaSummary, unattachedNotes []store.ResearchNoteWithAuthor, relationsByNote map[uuid.UUID][]store.NoteRelation, threads []store.ThreadSummary, priorNotes []store.ResearchNoteWithAuthor, ideasTruncated bool, notesTruncated bool, canWrite bool, form noteFormData) {
 	@components.Layout(data) {
 		<div class="card bg-base-100 border border-base-300 shadow-sm">
 			<div class="card-body">
@@ -153,7 +159,7 @@ templ ChannelIndex(data components.LayoutData, ch store.Channel, ideas []store.I
 				if canWrite {
 					<div class="mt-6">
 						<h2 class="text-lg font-semibold">Save a research note</h2>
-						@saveNoteFormChannelIndex(ch, ideas, form)
+						@saveNoteFormChannelIndex(ch, ideas, threads, priorNotes, form)
 					</div>
 				}
 
@@ -195,10 +201,15 @@ templ saveNoteFields(form noteFormData) {
 }
 
 // saveNoteFormChannelIndex renders the Channel research index's save-note
-// form (FR3): an Idea picker populated from ch's own Idea list, plus an
-// explicit "No Idea (unattached note)" choice that submits an empty
-// idea_id (M1 FR9). Rendered by ChannelIndex only when canWrite is true.
-templ saveNoteFormChannelIndex(ch store.Channel, ideas []store.IdeaSummary, form noteFormData) {
+// form (FR3, FR14, FR15): an Idea picker populated from ch's own Idea
+// list, plus an explicit "No Idea (unattached note)" choice that submits
+// an empty idea_id (M1 FR9); threadPickerFields' thread select/new-title
+// picker, scoped to threads (every thread on the Channel here -- see
+// ChannelIndex's doc comment); and relationPickerFields' per-thread prior-
+// note relation picker, scoped to priorNotes (the Channel-wide candidate
+// universe, also ChannelIndex's doc comment). Rendered by ChannelIndex
+// only when canWrite is true.
+templ saveNoteFormChannelIndex(ch store.Channel, ideas []store.IdeaSummary, threads []store.ThreadSummary, priorNotes []store.ResearchNoteWithAuthor, form noteFormData) {
 	<form method="post" action={ templ.URL("/channels/" + ch.ID.String() + "/research/notes") } class="mt-2 space-y-2">
 		@saveNoteFields(form)
 		<div class="form-control mt-2">
@@ -212,20 +223,192 @@ templ saveNoteFormChannelIndex(ch store.Channel, ideas []store.IdeaSummary, form
 				}
 			</select>
 		</div>
+		@threadPickerFields(threads, form)
+		@relationPickerFields(threads, priorNotes, form)
 		<button type="submit" class="btn btn-primary btn-sm mt-2">Save note</button>
 	</form>
 }
 
 // saveNoteFormIdeaDetail renders the Idea detail page's save-note form
-// (FR3): idea_id is pre-selected via a hidden input, no picker -- every
-// note saved from this page attaches to idea. Rendered by IdeaDetail only
-// when canWrite is true.
-templ saveNoteFormIdeaDetail(ch store.Channel, idea store.Idea, form noteFormData) {
+// (FR3, FR14, FR15): idea_id is pre-selected via a hidden input, no
+// picker -- every note saved from this page attaches to idea --
+// threadPickerFields' thread select/new-title picker, scoped to threads
+// (that Idea's threads only -- see IdeaDetail's doc comment); and
+// relationPickerFields' per-thread prior-note relation picker, scoped to
+// priorNotes (that Idea's own notes, also IdeaDetail's doc comment).
+// Rendered by IdeaDetail only when canWrite is true.
+templ saveNoteFormIdeaDetail(ch store.Channel, idea store.Idea, threads []store.ThreadSummary, priorNotes []store.ResearchNoteWithAuthor, form noteFormData) {
 	<form method="post" action={ templ.URL("/channels/" + ch.ID.String() + "/research/notes") } class="mt-2 space-y-2">
 		@saveNoteFields(form)
 		<input type="hidden" name="idea_id" value={ idea.ID.String() }/>
+		@threadPickerFields(threads, form)
+		@relationPickerFields(threads, priorNotes, form)
 		<button type="submit" class="btn btn-primary btn-sm mt-2">Save note</button>
 	</form>
+}
+
+// threadPickerFields renders FR14's thread select -- every thread in
+// threads plus a "-- New thread --" default option (value "") -- paired
+// with a free-text thread_title input used only when that default is
+// selected. Shared by saveNoteFormChannelIndex (threads = every thread on
+// the Channel) and saveNoteFormIdeaDetail (threads = that Idea's threads
+// only) -- the same split those two callers already apply to threadList
+// (research.go's renderChannelIndex/renderIdeaDetail, NFR2). The select
+// carries data-thread-select so threadRelationScript below can find it and
+// keep relationPickerFields' groups in sync with whichever thread (or
+// "-- New thread --") is currently chosen.
+templ threadPickerFields(threads []store.ThreadSummary, form noteFormData) {
+	<div class="form-control mt-2">
+		<label class="label">
+			<span class="label-text">Thread</span>
+		</label>
+		<select name="thread_id" data-thread-select class="select select-bordered w-full">
+			<option value="" selected?={ form.ThreadID == "" }>-- New thread --</option>
+			for _, t := range threads {
+				<option value={ t.ID.String() } selected?={ form.ThreadID == t.ID.String() }>{ t.Title }</option>
+			}
+		</select>
+	</div>
+	<div class="form-control mt-2">
+		<label class="label">
+			<span class="label-text">New thread title (only used when "-- New thread --" is selected above)</span>
+		</label>
+		<input type="text" name="thread_title" class="input input-bordered w-full" value={ form.ThreadTitle }/>
+	</div>
+}
+
+// noteRelationOptions is the closed set of relation types
+// relationPickerFields' per-note <select> offers, read from
+// store.RelationType's own constants (FR16/NFR2's explicit requirement for
+// this form) -- never a hardcoded string list in this template.
+var noteRelationOptions = []store.RelationType{
+	store.RelationSupersedes,
+	store.RelationExcludes,
+	store.RelationCaveats,
+	store.RelationFollowsUp,
+	store.RelationSummarizes,
+}
+
+// notesInThread filters notes to just those whose ThreadID equals
+// threadID -- relationPickerFields' per-thread grouping of priorNotes.
+func notesInThread(notes []store.ResearchNoteWithAuthor, threadID uuid.UUID) []store.ResearchNoteWithAuthor {
+	var out []store.ResearchNoteWithAuthor
+	for _, n := range notes {
+		if n.ThreadID != nil && *n.ThreadID == threadID {
+			out = append(out, n)
+		}
+	}
+	return out
+}
+
+// relationPicked reports whether noteID's relation_type_<noteID> pick
+// (form.Relations, issue #1945) was submitted with value relationType --
+// used to re-select the right option on a validation-failure re-render.
+func relationPicked(relations []relationFormEntry, noteID uuid.UUID, relationType store.RelationType) bool {
+	target := noteID.String()
+	for _, r := range relations {
+		if r.RelatedNoteID == target {
+			return r.RelationType == string(relationType)
+		}
+	}
+	return false
+}
+
+// relationPickedAny reports whether noteID has ANY submitted relation
+// pick at all -- used to select relationPickerFields' "No relation"
+// placeholder option exactly when no store.RelationType matched above.
+func relationPickedAny(relations []relationFormEntry, noteID uuid.UUID) bool {
+	target := noteID.String()
+	for _, r := range relations {
+		if r.RelatedNoteID == target {
+			return true
+		}
+	}
+	return false
+}
+
+// relationPickerFields renders FR15's per-thread prior-note relation
+// picker: one data-thread-group="<threadID>" container per thread in
+// threads, each holding one row per candidate note notesInThread finds in
+// priorNotes -- an excerpt (tools.Excerpt, the SAME truncation
+// citedNoteBody uses) plus shortNoteID (the SAME compact identifier
+// relatedNotesSection uses, issue #1942) alongside a
+// relation_type_<noteID> select offering noteRelationOptions or "No
+// relation". Every group except the one matching form.ThreadID starts
+// hidden with its controls disabled (threadRelationScript below keeps
+// this in sync as the thread select changes) -- so only prior notes in
+// the CURRENTLY selected thread are ever an active, submittable pick,
+// never a cross-thread one (FR15's "offering them would be a broken
+// affordance" rule; SaveNote itself is still what actually enforces this,
+// see HandleSaveNote's doc comment). A thread with no notes in priorNotes
+// yet renders a plain "No prior notes" line instead of an empty picker.
+// Renders nothing at all when threads is empty (a brand-new thread is the
+// only option, and a brand-new thread has no prior notes by definition).
+templ relationPickerFields(threads []store.ThreadSummary, priorNotes []store.ResearchNoteWithAuthor, form noteFormData) {
+	if len(threads) > 0 {
+		<div class="form-control mt-2">
+			<label class="label">
+				<span class="label-text">Relate to prior notes in this thread (optional)</span>
+			</label>
+			for _, t := range threads {
+				{{ inThread := notesInThread(priorNotes, t.ID) }}
+				<div data-thread-group={ t.ID.String() } hidden?={ form.ThreadID != t.ID.String() } class="border border-base-300 rounded p-2 mt-1 space-y-1">
+					if len(inThread) == 0 {
+						<p class="text-xs text-base-content/50">No prior notes in this thread yet.</p>
+					} else {
+						for _, note := range inThread {
+							<div class="flex items-center gap-2">
+								<span class="text-xs flex-1">{ tools.Excerpt(note.Text) } ({ shortNoteID(note.ID) })</span>
+								<select name={ "relation_type_" + note.ID.String() } class="select select-bordered select-xs" disabled?={ form.ThreadID != t.ID.String() }>
+									<option value="" selected?={ !relationPickedAny(form.Relations, note.ID) }>No relation</option>
+									for _, rt := range noteRelationOptions {
+										<option value={ string(rt) } selected?={ relationPicked(form.Relations, note.ID, rt) }>{ string(rt) }</option>
+									}
+								</select>
+							</div>
+						}
+					}
+				</div>
+			}
+		</div>
+	}
+	@threadRelationScript()
+}
+
+// threadRelationScript is FR14/FR15's small vanilla-JS progressive
+// enhancement, rendered once per save-note form: it finds that form's own
+// [data-thread-select] and keeps exactly the matching [data-thread-group]
+// visible with its controls enabled, hiding and disabling every other
+// group -- so switching the thread select can never leave a stale,
+// now-cross-thread relation pick both visible and submittable. This is
+// PRESENTATION ONLY (mirrors canWrite's identical rationale elsewhere in
+// this package): store.ResearchStore.SaveNote is the sole enforcement of
+// "a relation's target must be in the resolved thread" (FR15/NFR4), never
+// this script alone -- see HandleSaveNote's doc comment. Plain vanilla
+// JS, not htmx/Alpine (both already loaded by libs/go/htmxbase.Layout,
+// which every page in this app renders through -- see
+// web/components.Render): this toggle is pure client-side DOM state with
+// no server round trip, so reaching for either library here would add a
+// dependency this one small handler does not need.
+templ threadRelationScript() {
+	<script>
+		(function () {
+			document.querySelectorAll("[data-thread-select]").forEach(function (select) {
+				var form = select.closest("form");
+				if (!form) { return; }
+				function sync() {
+					var chosen = select.value;
+					form.querySelectorAll("[data-thread-group]").forEach(function (group) {
+						var match = group.getAttribute("data-thread-group") === chosen;
+						group.hidden = !match;
+						group.querySelectorAll("select").forEach(function (el) { el.disabled = !match; });
+					});
+				}
+				select.addEventListener("change", sync);
+				sync();
+			});
+		})();
+	</script>
 }
 
 // ideaRow renders one store.IdeaSummary: title (linking to its
@@ -576,7 +759,7 @@ templ IdeaDetail(data components.LayoutData, ch store.Channel, idea store.Idea, 
 					if canWrite {
 						<div class="mt-4">
 							<h3 class="text-sm font-semibold">Save a research note</h3>
-							@saveNoteFormIdeaDetail(ch, idea, form)
+							@saveNoteFormIdeaDetail(ch, idea, threads, notes, form)
 						</div>
 					}
 				</div>
