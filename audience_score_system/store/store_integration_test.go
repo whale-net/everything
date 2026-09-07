@@ -1336,13 +1336,12 @@ func TestResearchStore_SaveNote_ThreadIDPathAttachesToExistingThread(t *testing.
 		ChannelID: ch.ID, ThreadTitle: "Investor outreach", Text: "first note", AuthorPersonID: creator.ID,
 	})
 	require.NoError(t, err)
-	require.NotNil(t, first.ThreadID)
 
 	second, err := s.Research().SaveNote(ctx, store.SaveNoteInput{
-		ChannelID: ch.ID, ThreadID: first.ThreadID, Text: "second note, same thread", AuthorPersonID: creator.ID,
+		ChannelID: ch.ID, ThreadID: &first.ThreadID, Text: "second note, same thread", AuthorPersonID: creator.ID,
 	})
 	require.NoError(t, err, "an existing thread_id must attach the note without error")
-	assert.Equal(t, *first.ThreadID, *second.ThreadID, "thread_id path must attach to the SAME thread, not create a new one")
+	assert.Equal(t, first.ThreadID, second.ThreadID, "thread_id path must attach to the SAME thread, not create a new one")
 }
 
 func TestResearchStore_SaveNote_ThreadTitlePathCreatesThenReusesThread(t *testing.T) {
@@ -1360,9 +1359,7 @@ func TestResearchStore_SaveNote_ThreadTitlePathCreatesThenReusesThread(t *testin
 	})
 	require.NoError(t, err)
 
-	require.NotNil(t, first.ThreadID)
-	require.NotNil(t, second.ThreadID)
-	assert.Equal(t, *first.ThreadID, *second.ThreadID, "the natural key must converge case/whitespace-insensitively across two calls")
+	assert.Equal(t, first.ThreadID, second.ThreadID, "the natural key must converge case/whitespace-insensitively across two calls")
 	assert.Equal(t, 1, countResearchThreads(t, ctx, db, ch.ID), "must create exactly one thread across both calls")
 }
 
@@ -1406,7 +1403,7 @@ func TestResearchStore_SaveNote_ThreadIDOnDifferentChannelErrorsNoRow(t *testing
 
 	before := countResearchNotes(t, ctx, db, chA.ID)
 	_, err = s.Research().SaveNote(ctx, store.SaveNoteInput{
-		ChannelID: chA.ID, ThreadID: noteB.ThreadID, Text: "cross-channel attach attempt", AuthorPersonID: creatorA.ID,
+		ChannelID: chA.ID, ThreadID: &noteB.ThreadID, Text: "cross-channel attach attempt", AuthorPersonID: creatorA.ID,
 	})
 	require.Error(t, err, "a thread_id belonging to a different channel must be rejected")
 	assert.Equal(t, before, countResearchNotes(t, ctx, db, chA.ID), "a rejected call must not insert a note row")
@@ -1424,7 +1421,7 @@ func TestResearchStore_SaveNote_BothThreadIDAndThreadTitleErrorsNoRow(t *testing
 
 	before := countResearchNotes(t, ctx, db, ch.ID)
 	_, err = s.Research().SaveNote(ctx, store.SaveNoteInput{
-		ChannelID: ch.ID, ThreadID: first.ThreadID, ThreadTitle: "A different title entirely",
+		ChannelID: ch.ID, ThreadID: &first.ThreadID, ThreadTitle: "A different title entirely",
 		Text: "supplying both, disagreeing", AuthorPersonID: creator.ID,
 	})
 	require.Error(t, err, "supplying both thread_id and thread_title must be rejected")
@@ -1438,13 +1435,13 @@ func TestResearchStore_SaveNote_SummarizesRelationToThreeNotesWritesThreeRows(t 
 
 	n1, err := s.Research().SaveNote(ctx, store.SaveNoteInput{ChannelID: ch.ID, ThreadTitle: "Summary thread", Text: "n1", AuthorPersonID: creator.ID})
 	require.NoError(t, err)
-	n2, err := s.Research().SaveNote(ctx, store.SaveNoteInput{ChannelID: ch.ID, ThreadID: n1.ThreadID, Text: "n2", AuthorPersonID: creator.ID})
+	n2, err := s.Research().SaveNote(ctx, store.SaveNoteInput{ChannelID: ch.ID, ThreadID: &n1.ThreadID, Text: "n2", AuthorPersonID: creator.ID})
 	require.NoError(t, err)
-	n3, err := s.Research().SaveNote(ctx, store.SaveNoteInput{ChannelID: ch.ID, ThreadID: n1.ThreadID, Text: "n3", AuthorPersonID: creator.ID})
+	n3, err := s.Research().SaveNote(ctx, store.SaveNoteInput{ChannelID: ch.ID, ThreadID: &n1.ThreadID, Text: "n3", AuthorPersonID: creator.ID})
 	require.NoError(t, err)
 
 	summary, err := s.Research().SaveNote(ctx, store.SaveNoteInput{
-		ChannelID: ch.ID, ThreadID: n1.ThreadID, Text: "summary of n1-n3", AuthorPersonID: creator.ID,
+		ChannelID: ch.ID, ThreadID: &n1.ThreadID, Text: "summary of n1-n3", AuthorPersonID: creator.ID,
 		Relations: []store.SaveNoteRelationInput{
 			{RelatedNoteID: n1.ID, RelationType: store.RelationSummarizes},
 			{RelatedNoteID: n2.ID, RelationType: store.RelationSummarizes},
@@ -1533,7 +1530,7 @@ func TestResearchStore_SaveNote_InvalidRelationTypeRejectedAtStoreBoundary(t *te
 
 	before := countResearchNotes(t, ctx, db, ch.ID)
 	_, err = s.Research().SaveNote(ctx, store.SaveNoteInput{
-		ChannelID: ch.ID, ThreadID: target.ThreadID, Text: "should be rejected", AuthorPersonID: creator.ID,
+		ChannelID: ch.ID, ThreadID: &target.ThreadID, Text: "should be rejected", AuthorPersonID: creator.ID,
 		Relations: []store.SaveNoteRelationInput{
 			{RelatedNoteID: target.ID, RelationType: store.RelationType("not_a_real_type")},
 		},
@@ -1714,52 +1711,20 @@ func TestResearchStore_SaveNote_ThreadTitlePathWithNilIdeaReportsNilIdeaID(t *te
 }
 
 // TestResearchStore_BackfilledPreMigrationNoteReportsSameIdeaIDAfterCutover
-// reproduces a research_note row exactly as migration 016 would have found
-// it pre-migration (idea_id populated directly, thread_id NULL) with raw
-// SQL -- SaveNote itself always populates thread_id post-#1938/#1939, so a
-// genuine pre-migration row can only be reproduced this way -- then applies
-// migration 016's own backfill statements (one synthetic per-bucket thread,
-// then UPDATE research_note SET thread_id) verbatim for this one row, and
-// asserts the store's joined read reports the SAME IdeaID the row always
-// had, proving the cutover is invisible to a backfilled row.
-func TestResearchStore_BackfilledPreMigrationNoteReportsSameIdeaIDAfterCutover(t *testing.T) {
-	ctx := context.Background()
-	s, db := newStore(t)
-	ch, creator := setupChannel(t, ctx, s)
-	idea, err := s.Ideas().Create(ctx, ch.ID, "Pre-migration idea", creator.ID)
-	require.NoError(t, err)
-
-	var noteID uuid.UUID
-	require.NoError(t, db.Pool.QueryRow(ctx, `
-		INSERT INTO research_note (channel_id, idea_id, text, author_person_id)
-		VALUES ($1, $2, $3, $4)
-		RETURNING id
-	`, ch.ID, idea.ID, "pre-migration note", creator.ID).Scan(&noteID))
-
-	var threadID uuid.UUID
-	require.NoError(t, db.Pool.QueryRow(ctx, `
-		INSERT INTO research_thread (channel_id, idea_id, title, created_by_person_id)
-		VALUES ($1, $2, 'Research', $3)
-		RETURNING id
-	`, ch.ID, idea.ID, creator.ID).Scan(&threadID))
-	_, err = db.Pool.Exec(ctx, `UPDATE research_note SET thread_id = $1 WHERE id = $2`, threadID, noteID)
-	require.NoError(t, err)
-
-	got, err := s.Research().GetByID(ctx, noteID)
-	require.NoError(t, err)
-	require.NotNil(t, got.IdeaID, "a backfilled note's joined read must still resolve an IdeaID")
-	assert.Equal(t, idea.ID, *got.IdeaID, "a backfilled pre-migration note must report the SAME IdeaID after the cutover (via rt.idea_id) as it did before it (via rn.idea_id directly) -- migration 016's backfill guarantees rt.idea_id agrees with the original rn.idea_id for every backfilled row")
-
-	listed, _, err := s.Research().ListFiltered(ctx, ch.ID, &idea.ID, nil, nil, false, nil, nil, 0)
-	require.NoError(t, err)
-	found := false
-	for _, n := range listed {
-		if n.ID == noteID {
-			found = true
-		}
-	}
-	assert.True(t, found, "ListFiltered(ideaID) must also find the backfilled note via its resolved thread")
-}
+// (issue #1939) reproduced a research_note row exactly as migration 016
+// would have found it pre-migration (idea_id populated directly via raw
+// SQL, thread_id NULL) and proved the thread-derived read reported the
+// same IdeaID. Removed by migration 018/#1947 (FR2 Stage 3): the raw SQL
+// this test depended on (`INSERT INTO research_note (channel_id, idea_id,
+// ...)`) is now itself impossible -- the column it inserted into no
+// longer exists at head. The equivalent, still-valid coverage against a
+// GENUINE pre-migration-016 database (seeded before research_thread
+// existed at all, then migrated all the way to head) lives in
+// web/research/research_integration_test.go's
+// TestHandleIdeaDetail_BackfilledPreMigrationNote_RendersOnSameIdeaPage,
+// which uses migrate.Runner.Migrate(15) rather than raw SQL against the
+// head schema to reproduce the pre-016 state, so it keeps working exactly
+// as migrations are added on top of it.
 
 // ── ResearchStore.RetiredNoteIDs (FR10/FR16/NFR2, issue #1944) ─────────────
 //
@@ -1787,7 +1752,7 @@ func TestResearchStore_RetiredNoteIDs_SupersededNote_ReturnsSupersedes(t *testin
 	})
 	require.NoError(t, err)
 	_, err = s.Research().SaveNote(ctx, store.SaveNoteInput{
-		ChannelID: ch.ID, ThreadID: target.ThreadID, Text: "a newer note that supersedes it", AuthorPersonID: creator.ID,
+		ChannelID: ch.ID, ThreadID: &target.ThreadID, Text: "a newer note that supersedes it", AuthorPersonID: creator.ID,
 		Relations: []store.SaveNoteRelationInput{{RelatedNoteID: target.ID, RelationType: store.RelationSupersedes}},
 	})
 	require.NoError(t, err)
@@ -1809,7 +1774,7 @@ func TestResearchStore_RetiredNoteIDs_ExcludedNote_ReturnsExcludes(t *testing.T)
 	})
 	require.NoError(t, err)
 	_, err = s.Research().SaveNote(ctx, store.SaveNoteInput{
-		ChannelID: ch.ID, ThreadID: target.ThreadID, Text: "a note that excludes it", AuthorPersonID: creator.ID,
+		ChannelID: ch.ID, ThreadID: &target.ThreadID, Text: "a note that excludes it", AuthorPersonID: creator.ID,
 		Relations: []store.SaveNoteRelationInput{{RelatedNoteID: target.ID, RelationType: store.RelationExcludes}},
 	})
 	require.NoError(t, err)
@@ -1835,7 +1800,7 @@ func TestResearchStore_RetiredNoteIDs_NonRetiringRelationTypes_DoNotRetire(t *te
 			})
 			require.NoError(t, err)
 			_, err = s.Research().SaveNote(ctx, store.SaveNoteInput{
-				ChannelID: ch.ID, ThreadID: target.ThreadID, Text: "a related note", AuthorPersonID: creator.ID,
+				ChannelID: ch.ID, ThreadID: &target.ThreadID, Text: "a related note", AuthorPersonID: creator.ID,
 				Relations: []store.SaveNoteRelationInput{{RelatedNoteID: target.ID, RelationType: relationType}},
 			})
 			require.NoError(t, err)
@@ -1880,12 +1845,12 @@ func TestResearchStore_RetiredNoteIDs_BothSupersededAndExcluded_ReturnsBothTypes
 	})
 	require.NoError(t, err)
 	_, err = s.Research().SaveNote(ctx, store.SaveNoteInput{
-		ChannelID: ch.ID, ThreadID: target.ThreadID, Text: "supersedes it", AuthorPersonID: creator.ID,
+		ChannelID: ch.ID, ThreadID: &target.ThreadID, Text: "supersedes it", AuthorPersonID: creator.ID,
 		Relations: []store.SaveNoteRelationInput{{RelatedNoteID: target.ID, RelationType: store.RelationSupersedes}},
 	})
 	require.NoError(t, err)
 	_, err = s.Research().SaveNote(ctx, store.SaveNoteInput{
-		ChannelID: ch.ID, ThreadID: target.ThreadID, Text: "also excludes it", AuthorPersonID: creator.ID,
+		ChannelID: ch.ID, ThreadID: &target.ThreadID, Text: "also excludes it", AuthorPersonID: creator.ID,
 		Relations: []store.SaveNoteRelationInput{{RelatedNoteID: target.ID, RelationType: store.RelationExcludes}},
 	})
 	require.NoError(t, err)
@@ -1919,7 +1884,7 @@ func TestResearchStore_RetiredNoteIDs_FiveNoteIDs_IsSingleQuery(t *testing.T) {
 	first, err := s.Research().GetByID(ctx, noteIDs[0])
 	require.NoError(t, err)
 	_, err = s.Research().SaveNote(ctx, store.SaveNoteInput{
-		ChannelID: ch.ID, ThreadID: first.ThreadID, Text: "supersedes note 0", AuthorPersonID: creator.ID,
+		ChannelID: ch.ID, ThreadID: &first.ThreadID, Text: "supersedes note 0", AuthorPersonID: creator.ID,
 		Relations: []store.SaveNoteRelationInput{{RelatedNoteID: noteIDs[0], RelationType: store.RelationSupersedes}},
 	})
 	require.NoError(t, err)
@@ -1927,7 +1892,7 @@ func TestResearchStore_RetiredNoteIDs_FiveNoteIDs_IsSingleQuery(t *testing.T) {
 	second, err := s.Research().GetByID(ctx, noteIDs[1])
 	require.NoError(t, err)
 	_, err = s.Research().SaveNote(ctx, store.SaveNoteInput{
-		ChannelID: ch.ID, ThreadID: second.ThreadID, Text: "excludes note 1", AuthorPersonID: creator.ID,
+		ChannelID: ch.ID, ThreadID: &second.ThreadID, Text: "excludes note 1", AuthorPersonID: creator.ID,
 		Relations: []store.SaveNoteRelationInput{{RelatedNoteID: noteIDs[1], RelationType: store.RelationExcludes}},
 	})
 	require.NoError(t, err)
@@ -1985,7 +1950,7 @@ func TestResearchStore_ListFiltered_CurrentOnlyDefaultFalseIncludesRetiredNotes(
 	})
 	require.NoError(t, err)
 	_, err = s.Research().SaveNote(ctx, store.SaveNoteInput{
-		ChannelID: ch.ID, ThreadID: target.ThreadID, Text: "supersedes target", AuthorPersonID: creator.ID,
+		ChannelID: ch.ID, ThreadID: &target.ThreadID, Text: "supersedes target", AuthorPersonID: creator.ID,
 		Relations: []store.SaveNoteRelationInput{{RelatedNoteID: target.ID, RelationType: store.RelationSupersedes}},
 	})
 	require.NoError(t, err)
@@ -2025,7 +1990,7 @@ func TestResearchStore_ListFiltered_CurrentOnlyPerRelationType(t *testing.T) {
 			})
 			require.NoError(t, err)
 			later, err := s.Research().SaveNote(ctx, store.SaveNoteInput{
-				ChannelID: ch.ID, ThreadID: target.ThreadID, Text: "later note", AuthorPersonID: creator.ID,
+				ChannelID: ch.ID, ThreadID: &target.ThreadID, Text: "later note", AuthorPersonID: creator.ID,
 				Relations: []store.SaveNoteRelationInput{{RelatedNoteID: target.ID, RelationType: tt.relationType}},
 			})
 			require.NoError(t, err)
@@ -2060,12 +2025,12 @@ func TestResearchStore_ListFiltered_CurrentOnlySupersedeChainLeavesOnlyNewest(t 
 	})
 	require.NoError(t, err)
 	b, err := s.Research().SaveNote(ctx, store.SaveNoteInput{
-		ChannelID: ch.ID, ThreadID: a.ThreadID, Text: "B supersedes A", AuthorPersonID: creator.ID,
+		ChannelID: ch.ID, ThreadID: &a.ThreadID, Text: "B supersedes A", AuthorPersonID: creator.ID,
 		Relations: []store.SaveNoteRelationInput{{RelatedNoteID: a.ID, RelationType: store.RelationSupersedes}},
 	})
 	require.NoError(t, err)
 	c, err := s.Research().SaveNote(ctx, store.SaveNoteInput{
-		ChannelID: ch.ID, ThreadID: a.ThreadID, Text: "C supersedes B", AuthorPersonID: creator.ID,
+		ChannelID: ch.ID, ThreadID: &a.ThreadID, Text: "C supersedes B", AuthorPersonID: creator.ID,
 		Relations: []store.SaveNoteRelationInput{{RelatedNoteID: b.ID, RelationType: store.RelationSupersedes}},
 	})
 	require.NoError(t, err)
@@ -2093,7 +2058,7 @@ func TestResearchStore_ListFiltered_CurrentOnlyComposesWithIdeaID(t *testing.T) 
 	})
 	require.NoError(t, err)
 	idea1Current, err := s.Research().SaveNote(ctx, store.SaveNoteInput{
-		ChannelID: ch.ID, ThreadID: idea1Target.ThreadID, Text: "idea1 supersedes", AuthorPersonID: creator.ID,
+		ChannelID: ch.ID, ThreadID: &idea1Target.ThreadID, Text: "idea1 supersedes", AuthorPersonID: creator.ID,
 		Relations: []store.SaveNoteRelationInput{{RelatedNoteID: idea1Target.ID, RelationType: store.RelationSupersedes}},
 	})
 	require.NoError(t, err)
@@ -2127,7 +2092,7 @@ func TestResearchStore_ListFiltered_CurrentOnlyComposesWithCitedAndUncited(t *te
 	})
 	require.NoError(t, err)
 	uncitedSuperseder, err := s.Research().SaveNote(ctx, store.SaveNoteInput{
-		ChannelID: ch.ID, ThreadID: citedTarget.ThreadID, Text: "uncited, supersedes the cited note", AuthorPersonID: creator.ID,
+		ChannelID: ch.ID, ThreadID: &citedTarget.ThreadID, Text: "uncited, supersedes the cited note", AuthorPersonID: creator.ID,
 		Relations: []store.SaveNoteRelationInput{{RelatedNoteID: citedTarget.ID, RelationType: store.RelationSupersedes}},
 	})
 	require.NoError(t, err)
@@ -2158,11 +2123,11 @@ func TestResearchStore_ListFiltered_CurrentOnlyComposesWithSinceBefore(t *testin
 	})
 	require.NoError(t, err)
 	target, err := s.Research().SaveNote(ctx, store.SaveNoteInput{
-		ChannelID: ch.ID, ThreadID: tooOld.ThreadID, Text: "in window, but retired", AuthorPersonID: creator.ID,
+		ChannelID: ch.ID, ThreadID: &tooOld.ThreadID, Text: "in window, but retired", AuthorPersonID: creator.ID,
 	})
 	require.NoError(t, err)
 	inWindow, err := s.Research().SaveNote(ctx, store.SaveNoteInput{
-		ChannelID: ch.ID, ThreadID: tooOld.ThreadID, Text: "in window, supersedes target", AuthorPersonID: creator.ID,
+		ChannelID: ch.ID, ThreadID: &tooOld.ThreadID, Text: "in window, supersedes target", AuthorPersonID: creator.ID,
 		Relations: []store.SaveNoteRelationInput{{RelatedNoteID: target.ID, RelationType: store.RelationSupersedes}},
 	})
 	require.NoError(t, err)
@@ -2220,14 +2185,14 @@ func TestResearchStore_ListFiltered_CurrentOnlyComposesWithLimitTruncated(t *tes
 
 	c1, err := s.Research().SaveNote(ctx, store.SaveNoteInput{ChannelID: ch.ID, ThreadTitle: "Thread", Text: "c1", AuthorPersonID: creator.ID})
 	require.NoError(t, err)
-	c2, err := s.Research().SaveNote(ctx, store.SaveNoteInput{ChannelID: ch.ID, ThreadID: c1.ThreadID, Text: "c2", AuthorPersonID: creator.ID})
+	c2, err := s.Research().SaveNote(ctx, store.SaveNoteInput{ChannelID: ch.ID, ThreadID: &c1.ThreadID, Text: "c2", AuthorPersonID: creator.ID})
 	require.NoError(t, err)
-	c3, err := s.Research().SaveNote(ctx, store.SaveNoteInput{ChannelID: ch.ID, ThreadID: c1.ThreadID, Text: "c3", AuthorPersonID: creator.ID})
+	c3, err := s.Research().SaveNote(ctx, store.SaveNoteInput{ChannelID: ch.ID, ThreadID: &c1.ThreadID, Text: "c3", AuthorPersonID: creator.ID})
 	require.NoError(t, err)
-	target, err := s.Research().SaveNote(ctx, store.SaveNoteInput{ChannelID: ch.ID, ThreadID: c1.ThreadID, Text: "target", AuthorPersonID: creator.ID})
+	target, err := s.Research().SaveNote(ctx, store.SaveNoteInput{ChannelID: ch.ID, ThreadID: &c1.ThreadID, Text: "target", AuthorPersonID: creator.ID})
 	require.NoError(t, err)
 	superseder, err := s.Research().SaveNote(ctx, store.SaveNoteInput{
-		ChannelID: ch.ID, ThreadID: c1.ThreadID, Text: "superseder", AuthorPersonID: creator.ID,
+		ChannelID: ch.ID, ThreadID: &c1.ThreadID, Text: "superseder", AuthorPersonID: creator.ID,
 		Relations: []store.SaveNoteRelationInput{{RelatedNoteID: target.ID, RelationType: store.RelationSupersedes}},
 	})
 	require.NoError(t, err)
@@ -2682,9 +2647,10 @@ func ptrInt64(v int64) *int64        { return &v }
 // again for 015 (viability_verdict.source, M4.1 FR5/NFR4, #1898), and
 // again for 016 (research_thread, research_note.thread_id backfill, and
 // research_note_relation, FR1/FR2 Stage 1/FR6/FR7, #1936), and again for
-// 017 (research_thread's natural-key unique index, FR4, #1937), so the
-// version assertion and table list below cover all of them rather than
-// any single one.
+// 017 (research_thread's natural-key unique index, FR4, #1937), and again
+// for 018 (research_note.thread_id NOT NULL + idea_id drop, FR2 Stage 3/
+// NFR4, #1947), so the version assertion and table list below cover all
+// of them rather than any single one.
 func TestMigrations_UpDownUp_LeavesNoOrphanObjects(t *testing.T) {
 	ctx := context.Background()
 	db := dbtest.NewPostgres(ctx, t, dbtest.Options{})
@@ -2701,7 +2667,7 @@ func TestMigrations_UpDownUp_LeavesNoOrphanObjects(t *testing.T) {
 	version, dirty, err := runner.Version()
 	require.NoError(t, err)
 	assert.False(t, dirty)
-	assert.Equal(t, uint(17), version, "highest migration in schema.Migrations is 017_research_thread_natural_key")
+	assert.Equal(t, uint(18), version, "highest migration in schema.Migrations is 018_research_note_drop_idea_id")
 
 	for _, tbl := range []string{
 		"person", "channel", "channel_person", "channel_invite",
@@ -3571,7 +3537,7 @@ func TestResearchStore_ListRelationsForNotes_OutgoingAndIncomingFromSameRow(t *t
 	target, err := s.Research().SaveNote(ctx, store.SaveNoteInput{ChannelID: ch.ID, ThreadTitle: "Thread", Text: "target note", AuthorPersonID: creator.ID})
 	require.NoError(t, err)
 	declaring, err := s.Research().SaveNote(ctx, store.SaveNoteInput{
-		ChannelID: ch.ID, ThreadID: target.ThreadID, Text: "declaring note", AuthorPersonID: creator.ID,
+		ChannelID: ch.ID, ThreadID: &target.ThreadID, Text: "declaring note", AuthorPersonID: creator.ID,
 		Relations: []store.SaveNoteRelationInput{{RelatedNoteID: target.ID, RelationType: store.RelationSupersedes}},
 	})
 	require.NoError(t, err)
@@ -3618,13 +3584,13 @@ func TestResearchStore_ListRelationsForNotes_MixedTypesReturnsAllInStableOrder(t
 
 	seed, err := s.Research().SaveNote(ctx, store.SaveNoteInput{ChannelID: ch.ID, ThreadTitle: "Thread", Text: "seed", AuthorPersonID: creator.ID})
 	require.NoError(t, err)
-	a, err := s.Research().SaveNote(ctx, store.SaveNoteInput{ChannelID: ch.ID, ThreadID: seed.ThreadID, Text: "a", AuthorPersonID: creator.ID})
+	a, err := s.Research().SaveNote(ctx, store.SaveNoteInput{ChannelID: ch.ID, ThreadID: &seed.ThreadID, Text: "a", AuthorPersonID: creator.ID})
 	require.NoError(t, err)
-	b, err := s.Research().SaveNote(ctx, store.SaveNoteInput{ChannelID: ch.ID, ThreadID: seed.ThreadID, Text: "b", AuthorPersonID: creator.ID})
+	b, err := s.Research().SaveNote(ctx, store.SaveNoteInput{ChannelID: ch.ID, ThreadID: &seed.ThreadID, Text: "b", AuthorPersonID: creator.ID})
 	require.NoError(t, err)
 
 	declaring, err := s.Research().SaveNote(ctx, store.SaveNoteInput{
-		ChannelID: ch.ID, ThreadID: seed.ThreadID, Text: "declaring", AuthorPersonID: creator.ID,
+		ChannelID: ch.ID, ThreadID: &seed.ThreadID, Text: "declaring", AuthorPersonID: creator.ID,
 		Relations: []store.SaveNoteRelationInput{
 			{RelatedNoteID: b.ID, RelationType: store.RelationFollowsUp},
 			{RelatedNoteID: a.ID, RelationType: store.RelationCaveats},
@@ -3659,7 +3625,7 @@ func TestResearchStore_ListRelationsForNotes_OutsideEndNotLeakedAsMapKey(t *test
 	outside, err := s.Research().SaveNote(ctx, store.SaveNoteInput{ChannelID: ch.ID, ThreadTitle: "Thread", Text: "outside note", AuthorPersonID: creator.ID})
 	require.NoError(t, err)
 	inside, err := s.Research().SaveNote(ctx, store.SaveNoteInput{
-		ChannelID: ch.ID, ThreadID: outside.ThreadID, Text: "inside note", AuthorPersonID: creator.ID,
+		ChannelID: ch.ID, ThreadID: &outside.ThreadID, Text: "inside note", AuthorPersonID: creator.ID,
 		Relations: []store.SaveNoteRelationInput{{RelatedNoteID: outside.ID, RelationType: store.RelationExcludes}},
 	})
 	require.NoError(t, err)
@@ -3687,7 +3653,7 @@ func TestResearchStore_ListRelationsForNotes_BatchingIssuesOneQueryForNNotes(t *
 
 	var noRelationIDs []uuid.UUID
 	for i := 0; i < 5; i++ {
-		n, err := s.Research().SaveNote(ctx, store.SaveNoteInput{ChannelID: ch.ID, ThreadID: seed.ThreadID, Text: fmt.Sprintf("no relation %d", i), AuthorPersonID: creator.ID})
+		n, err := s.Research().SaveNote(ctx, store.SaveNoteInput{ChannelID: ch.ID, ThreadID: &seed.ThreadID, Text: fmt.Sprintf("no relation %d", i), AuthorPersonID: creator.ID})
 		require.NoError(t, err)
 		noRelationIDs = append(noRelationIDs, n.ID)
 	}
@@ -3696,7 +3662,7 @@ func TestResearchStore_ListRelationsForNotes_BatchingIssuesOneQueryForNNotes(t *
 	prior := seed
 	for i := 0; i < 5; i++ {
 		n, err := s.Research().SaveNote(ctx, store.SaveNoteInput{
-			ChannelID: ch.ID, ThreadID: seed.ThreadID, Text: fmt.Sprintf("with relation %d", i), AuthorPersonID: creator.ID,
+			ChannelID: ch.ID, ThreadID: &seed.ThreadID, Text: fmt.Sprintf("with relation %d", i), AuthorPersonID: creator.ID,
 			Relations: []store.SaveNoteRelationInput{{RelatedNoteID: prior.ID, RelationType: store.RelationFollowsUp}},
 		})
 		require.NoError(t, err)
