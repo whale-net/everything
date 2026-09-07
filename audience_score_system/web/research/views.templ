@@ -26,20 +26,6 @@ func verdictLabel(v store.VerdictValue) string {
 	}
 }
 
-// verdictBadgeClass picks a daisyUI badge color matching verdictLabel.
-func verdictBadgeClass(v store.VerdictValue) string {
-	switch v {
-	case store.VerdictViable:
-		return "badge badge-success"
-	case store.VerdictNotViable:
-		return "badge badge-error"
-	case store.VerdictNeedsMoreResearch:
-		return "badge badge-warning"
-	default:
-		return "badge badge-ghost"
-	}
-}
-
 // verdictSourceLabel renders store.VerdictSource (FR5) -- "Agent" for a
 // verdict written via MCP's save_viability_verdict, "Human" for one
 // written via this milestone's web save-verdict form (a future task).
@@ -436,9 +422,9 @@ templ ideaRow(ch store.Channel, idea store.IdeaSummary) {
 		<td>{ strconv.Itoa(idea.NoteCount) }</td>
 		<td>
 			if idea.HasVerdict {
-				<span class="badge badge-success">Verdict recorded</span>
+				<span title="Verdict recorded" aria-label="Verdict recorded">🔖</span>
 			} else {
-				<span class="badge badge-ghost">None yet</span>
+				<span title="No verdict yet" aria-label="No verdict yet">{ components.NoVerdictGlyph }</span>
 			}
 		</td>
 	</tr>
@@ -851,7 +837,7 @@ templ verdictBody(v store.Verdict, authorNames map[uuid.UUID]string, notes map[u
 			</p>
 			@citedNotesSection(v.CitedResearchNoteIDs, notes, retired)
 		</div>
-		<span class={ verdictBadgeClass(v.Verdict) }>{ verdictLabel(v.Verdict) }</span>
+		<span title={ components.VerdictGlyphTitle(v.Verdict) } aria-label={ components.VerdictGlyphTitle(v.Verdict) }>{ components.VerdictGlyph(v.Verdict) }</span>
 	</div>
 }
 

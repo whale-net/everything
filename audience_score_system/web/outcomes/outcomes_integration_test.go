@@ -62,6 +62,7 @@ import (
 	"github.com/whale-net/everything/audience_score_system/migrate/schema"
 	"github.com/whale-net/everything/audience_score_system/store"
 	"github.com/whale-net/everything/audience_score_system/web/auth"
+	"github.com/whale-net/everything/audience_score_system/web/components"
 	"github.com/whale-net/everything/audience_score_system/web/outcomes"
 	"github.com/whale-net/everything/libs/go/dbtest"
 	"github.com/whale-net/everything/libs/go/migrate"
@@ -515,6 +516,11 @@ func TestHandleList_BoundVerdictVersion_SurvivesNewerVerdictAppended(t *testing.
 	assert.Contains(t, body, "Bound verdict (v1", "the BOUND verdict version (v1) must render")
 	assert.Contains(t, body, "looks strong (v1)", "v1's reasoning must render")
 	assert.NotContains(t, body, "Bound verdict (v2", "the Idea's newer verdict version (v2) must never render here -- LB3's bound version, not a moving target")
+
+	// FR31/FR32 (#2028): the bound verdict's status renders as the shared
+	// single-glyph indicator, not raw verdict-value text.
+	assert.Contains(t, body, components.VerdictGlyph(store.VerdictViable), "the bound v1 verdict (viable) must render its glyph")
+	assert.NotContains(t, body, string(store.VerdictViable), "the raw VerdictValue text must never render (FR31/FR32's glyph swap)")
 	assert.NotContains(t, body, "reconsidered (v2)", "v2's reasoning must never leak into this render")
 }
 

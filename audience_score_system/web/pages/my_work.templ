@@ -84,7 +84,7 @@ templ channelWorkSection(s store.ChannelWorkSummary) {
 					<p class="text-sm text-base-content/70">No viability verdict recorded yet.</p>
 				} else {
 					<p class="text-sm">
-						{ s.LatestVerdict.IdeaTitle } -- Verdict v{ strconv.Itoa(s.LatestVerdict.Version) }: { string(s.LatestVerdict.Verdict) } -- { s.LatestVerdict.Reasoning }
+						{ s.LatestVerdict.IdeaTitle } -- Verdict v{ strconv.Itoa(s.LatestVerdict.Version) }: <span title={ components.VerdictGlyphTitle(s.LatestVerdict.Verdict) } aria-label={ components.VerdictGlyphTitle(s.LatestVerdict.Verdict) }>{ components.VerdictGlyph(s.LatestVerdict.Verdict) }</span> -- { s.LatestVerdict.Reasoning }
 					</p>
 				}
 			</div>
@@ -106,7 +106,7 @@ templ channelWorkSection(s store.ChannelWorkSummary) {
 					<p class="text-sm text-base-content/70">No outcome comparison yet.</p>
 				} else {
 					<p class="text-sm">
-						{ s.LatestOutcome.VideoTitle } -- Verdict v{ strconv.Itoa(s.LatestOutcome.VerdictVersion) }: { string(s.LatestOutcome.Verdict) }
+						{ s.LatestOutcome.VideoTitle } -- Verdict v{ strconv.Itoa(s.LatestOutcome.VerdictVersion) }: <span title={ components.VerdictGlyphTitle(s.LatestOutcome.Verdict) } aria-label={ components.VerdictGlyphTitle(s.LatestOutcome.Verdict) }>{ components.VerdictGlyph(s.LatestOutcome.Verdict) }</span>
 						if s.LatestOutcome.Views != nil {
 							-- { strconv.FormatInt(*s.LatestOutcome.Views, 10) } views
 						}

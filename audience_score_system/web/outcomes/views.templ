@@ -229,7 +229,7 @@ templ outcomeCard(row store.PredictionOutcome) {
 		<h2 class="font-semibold">{ row.IdeaTitle }</h2>
 		<div class="mt-2 pl-3 border-l-2 border-base-300">
 			<p class="text-sm font-medium">
-				Bound verdict (v{ strconv.Itoa(row.VerdictVersion) }, not necessarily the Idea's current verdict): { string(row.Verdict) }
+				Bound verdict (v{ strconv.Itoa(row.VerdictVersion) }, not necessarily the Idea's current verdict): <span title={ components.VerdictGlyphTitle(row.Verdict) } aria-label={ components.VerdictGlyphTitle(row.Verdict) }>{ components.VerdictGlyph(row.Verdict) }</span>
 			</p>
 			<p class="text-sm text-base-content/70">{ row.VerdictReasoning }</p>
 			<p class="text-sm text-base-content/50">
