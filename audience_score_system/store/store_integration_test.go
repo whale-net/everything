@@ -1646,7 +1646,7 @@ func TestResearchStore_ListFiltered_IdeaIDFiltersByResolvingThreadNotNoteColumn(
 	})
 	require.NoError(t, err)
 
-	scoped, truncated, err := s.Research().ListFiltered(ctx, ch.ID, &idea1.ID, nil, nil, nil, 0)
+	scoped, truncated, err := s.Research().ListFiltered(ctx, ch.ID, &idea1.ID, nil, false, nil, nil, 0)
 	require.NoError(t, err)
 	assert.False(t, truncated)
 	ids := make([]uuid.UUID, len(scoped))
@@ -1655,7 +1655,7 @@ func TestResearchStore_ListFiltered_IdeaIDFiltersByResolvingThreadNotNoteColumn(
 	}
 	assert.Equal(t, []uuid.UUID{note1.ID}, ids, "ListFiltered(ideaID) must return exactly the notes whose THREAD belongs to that idea -- neither idea2's note nor the no-idea note")
 
-	all, _, err := s.Research().ListFiltered(ctx, ch.ID, nil, nil, nil, nil, 0)
+	all, _, err := s.Research().ListFiltered(ctx, ch.ID, nil, nil, false, nil, nil, 0)
 	require.NoError(t, err)
 	assert.Len(t, all, 3, "sanity: unfiltered must still see all three notes")
 	_ = note2
@@ -1750,7 +1750,7 @@ func TestResearchStore_BackfilledPreMigrationNoteReportsSameIdeaIDAfterCutover(t
 	require.NotNil(t, got.IdeaID, "a backfilled note's joined read must still resolve an IdeaID")
 	assert.Equal(t, idea.ID, *got.IdeaID, "a backfilled pre-migration note must report the SAME IdeaID after the cutover (via rt.idea_id) as it did before it (via rn.idea_id directly) -- migration 016's backfill guarantees rt.idea_id agrees with the original rn.idea_id for every backfilled row")
 
-	listed, _, err := s.Research().ListFiltered(ctx, ch.ID, &idea.ID, nil, nil, nil, 0)
+	listed, _, err := s.Research().ListFiltered(ctx, ch.ID, &idea.ID, nil, false, nil, nil, 0)
 	require.NoError(t, err)
 	found := false
 	for _, n := range listed {
