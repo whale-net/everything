@@ -228,9 +228,10 @@ a `server_game_config_id`:
 This RPC is additive to `StartSession`/`StopSession` — it dispatches through
 their existing handler logic rather than re-deriving command construction or
 config/volume resolution, and does not change `command.*` routing keys or
-`status.session.*` semantics. `manmanv2/ui`'s own goroutine-based
-stop-then-start (`restartDeployment`/`finishRestartInBackground`) is not yet
-rewired to call it — that cutover is separate follow-up work.
+`status.session.*` semantics. `manmanv2/ui`'s `restartDeployment` now
+dispatches a single `RestartDeployment` RPC and holds no restart state of
+its own (#1733) — the goroutine-based stop-then-start
+(`restartDeployment`/`finishRestartInBackground`) described above is gone.
 
 **Trigger half — `SessionRestartConsumer` (`manmanv2/api/handlers/session_restart_consumer.go`,
 control-api):** a second, independent `status.session.#` consumer inside

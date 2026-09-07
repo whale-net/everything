@@ -80,7 +80,7 @@ Services that read this variable: **API**, **log-processor** (archival), **UI** 
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `RESTART_STALL_TIMEOUT` | `45s` | How long a `RestartDeployment`-recorded `pending_restarts` row (see `ARCHITECTURE.md` "Data Model") may sit `'pending'` before the reaper (#1731) expires it. ~3x `waitForNoLiveSession`'s ~15s bound, to give the dispatched Stop real container-stop time without letting a record sit indefinitely. Accepts Go duration syntax (e.g. `90s`, `2m`). |
+| `RESTART_STALL_TIMEOUT` | `45s` | How long a `RestartDeployment`-recorded `pending_restarts` row (see `ARCHITECTURE.md` "Data Model") may sit `'pending'` before the reaper (#1731) expires it. ~3x the ~15s window the UI's now-removed client-side poll bound (deleted by #1733) used to give the dispatched Stop real container-stop time, without letting a record sit indefinitely. Accepts Go duration syntax (e.g. `90s`, `2m`). |
 
 ## Host Manager
 

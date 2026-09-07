@@ -77,25 +77,25 @@ for any of the three actions.
   inline "taking longer than expected" message rather than a generic
   failure, or -- if the host/API layer ever regresses on its fast-ack
   behavior -- a dropped connection.
-- `POST /sessions/deployments/{sgcID}/restart` -- **literally stop-then-start
-  over the same helpers** the plain Stop/Start endpoints use: no distinct
-  RPC, no distinct config resolution. It resolves the live session and
-  dispatches the same bounded-timeout `StopSession` call as the plain Stop
-  endpoint above. If that dispatch fails or times out, it returns the same
-  inline error and never attempts to start (#1664). Otherwise -- since
-  `StopSession` is a fast, ack-only dispatch (#1663) -- the request returns
-  immediately, rendering the transitional "stopping" row; the actual wait for
-  the live session to disappear (polling `app.deploymentStopPollInterval`/
-  `deploymentStopTimeout`, overridable for tests) and the subsequent
-  `StartSession` call (the same helper the plain Start path uses,
-  `force=false`) finish in a background goroutine using `context.Background()`
-  rather than the request's own (about-to-be-cancelled) context, mirroring
-  the host manager's async-dispatch pattern from #1663. The row's own
-  self-terminating poll (see below) picks up convergence from "stopping"
-  through to stopped/crashed or starting/running with no additional client
-  logic. A deployment with no live session (crashed/lost) degenerates to the
-  start step alone, synchronously, exactly as before -- that path was
-  already fast and isn't implicated in #1662/#1664.
+- `POST /sessions/deployments/{sgcID}/restart` -- dispatches a single
+  `RestartDeployment` RPC to control-api (#1730) and returns as soon as
+  it's been durably recorded, wrapped in the same bounded
+  `context.WithTimeout` (`app.deploymentActionTimeout`) as Stop/Start
+  above. The UI holds **no restart state** of its own: control-api's own
+  consumer (#1731) owns waiting for the old session to actually stop and
+  then starting the new one, entirely server-side, so killing the
+  `manmanv2/ui` pod immediately after a restart click no longer strands the
+  deployment stopped. A response with `already_in_flight: true` is a
+  success, not an error -- it means a restart was already running for this
+  deployment (a double click, or the operator retrying after a pod
+  restart) -- and renders the same transitional row with no inline error.
+  An RPC error or a bound timeout renders the usual inline error (FR8). The
+  row's own self-terminating poll (see below) picks up convergence from
+  "stopping" through to stopped/crashed or starting/running with no
+  additional client logic. (Previously this endpoint was a client-side
+  stop-then-start with the wait-then-start step finished in a background
+  goroutine -- removed by #1733 once control-api took over that
+  orchestration.)
 - `GET /api/deployments/{sgcID}/row` -- returns just that deployment's
   `<tr id="deployment-row-{sgcID}">` fragment (`pages.DeploymentRow`), never
   a full page. This is the target of the row's own self-terminating poll

@@ -4,9 +4,12 @@ import "time"
 
 // PendingRestart is a durable, control-plane-local record of a Start that is
 // pending on gating_session_id's Stop reaching a terminal status. It gives
-// finishRestartInBackground's intent (manmanv2/ui/handlers_deployment_actions.go)
-// a durable home instead of a goroutine stack, with at-most-one-pending-per-
-// deployment enforced by the DB (see migration 036_pending_restarts).
+// the restart intent a durable home in the database instead of the UI's
+// former finishRestartInBackground goroutine stack (removed by #1733 once
+// manmanv2/ui/handlers_deployment_actions.go's restartDeployment dispatches
+// a single RestartDeployment RPC and control-api's own consumer, #1731,
+// owns the wait-then-start), with at-most-one-pending-per-deployment
+// enforced by the DB (see migration 036_pending_restarts).
 //
 // Deliberately not SCD2 (AGENTS.md § SCD2): this is a short-lived work
 // intent with a terminal state machine, not dimension history, so it uses
