@@ -129,7 +129,7 @@ func newVerdictFixture(t *testing.T) *verdictFixture {
 	idea, err := st.Ideas().FindOrCreate(ctx, ch.ID, "Test Idea", creator.ID)
 	require.NoError(t, err)
 
-	note, err := st.Research().SaveNote(ctx, store.SaveNoteInput{
+	note, err := st.Research().SaveNote(ctx, store.SaveNoteInput{ThreadTitle: "Research",
 		ChannelID:      ch.ID,
 		IdeaID:         &idea.ID,
 		Text:           "a same-channel research note",
@@ -141,7 +141,7 @@ func newVerdictFixture(t *testing.T) *verdictFixture {
 	require.NoError(t, err)
 	otherChannel, err := st.Channels().Create(ctx, "yt-other-"+uuid.NewString(), "Other Channel", otherCreator.ID)
 	require.NoError(t, err)
-	otherNote, err := st.Research().SaveNote(ctx, store.SaveNoteInput{
+	otherNote, err := st.Research().SaveNote(ctx, store.SaveNoteInput{ThreadTitle: "Research",
 		ChannelID:      otherChannel.ID,
 		Text:           "a different-channel research note",
 		AuthorPersonID: otherCreator.ID,
@@ -642,7 +642,7 @@ func TestGetViabilityVerdict_CitedNotesRenderedWithExcerptSourceURLAndCitedFlag(
 	cs := f.connect(t, f.creator.ID)
 
 	citedURL := "https://example.com/comp-video"
-	citedNoteRes := f.call(t, cs, "save_research_note", tools.SaveResearchNoteInput{
+	citedNoteRes := f.call(t, cs, "save_research_note", tools.SaveResearchNoteInput{ThreadTitle: "Research",
 		ChannelID:         f.ch.ID.String(),
 		IdeaID:            f.idea.ID.String(),
 		Text:              "a note with its own source",

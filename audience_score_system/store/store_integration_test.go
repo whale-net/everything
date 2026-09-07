@@ -1107,14 +1107,14 @@ func TestResearchStore_SaveNote_UncitedAndCitedRoundTripDistinctly(t *testing.T)
 	s, _ := newStore(t)
 	ch, creator := setupChannel(t, ctx, s)
 
-	uncited, err := s.Research().SaveNote(ctx, store.SaveNoteInput{
+	uncited, err := s.Research().SaveNote(ctx, store.SaveNoteInput{ThreadTitle: "Research",
 		ChannelID: ch.ID, Text: "gut feeling, no source", AuthorPersonID: creator.ID,
 	})
 	require.NoError(t, err)
 	assert.Nil(t, uncited.SourceURL, "a note saved with no SourceURL must round-trip as nil, not empty string (FR10)")
 
 	url := "https://example.com/trend-report"
-	cited, err := s.Research().SaveNote(ctx, store.SaveNoteInput{
+	cited, err := s.Research().SaveNote(ctx, store.SaveNoteInput{ThreadTitle: "Research",
 		ChannelID: ch.ID, Text: "trend report says so", SourceURL: &url, AuthorPersonID: creator.ID,
 	})
 	require.NoError(t, err)
@@ -1165,7 +1165,7 @@ func TestResearchStore_SaveNote_ValidHTTPOrHTTPSURLPersistsTrimmedAndCited(t *te
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			raw := tc.raw
-			note, err := s.Research().SaveNote(ctx, store.SaveNoteInput{
+			note, err := s.Research().SaveNote(ctx, store.SaveNoteInput{ThreadTitle: "Research",
 				ChannelID: ch.ID, Text: "note: " + tc.name, SourceURL: &raw, AuthorPersonID: creator.ID,
 			})
 			require.NoError(t, err)
@@ -1198,7 +1198,7 @@ func TestResearchStore_SaveNote_NilOrBlankSourceURLPersistsAsNullUncited(t *test
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			note, err := s.Research().SaveNote(ctx, store.SaveNoteInput{
+			note, err := s.Research().SaveNote(ctx, store.SaveNoteInput{ThreadTitle: "Research",
 				ChannelID: ch.ID, Text: "note: " + tc.name, SourceURL: tc.in, AuthorPersonID: creator.ID,
 			})
 			require.NoError(t, err)
@@ -1232,7 +1232,7 @@ func TestResearchStore_SaveNote_InvalidSourceURLErrorsAndInsertsNoRow(t *testing
 			before := countResearchNotes(t, ctx, db, ch.ID)
 
 			raw := raw
-			_, err := s.Research().SaveNote(ctx, store.SaveNoteInput{
+			_, err := s.Research().SaveNote(ctx, store.SaveNoteInput{ThreadTitle: "Research",
 				ChannelID: ch.ID, Text: "rejected note", SourceURL: &raw, AuthorPersonID: creator.ID,
 			})
 			assert.Error(t, err, "must reject %q rather than silently storing it as a cited source", raw)
@@ -1256,12 +1256,12 @@ func TestResearchStore_SaveNote_IdempotentReplayWithValidURLReturnsOriginalRow(t
 
 	url := "https://example.com/first"
 	key := "idem-" + uuid.NewString()
-	first, err := s.Research().SaveNote(ctx, store.SaveNoteInput{
+	first, err := s.Research().SaveNote(ctx, store.SaveNoteInput{ThreadTitle: "Research",
 		ChannelID: ch.ID, Text: "first text", SourceURL: &url, AuthorPersonID: creator.ID, IdempotencyKey: key,
 	})
 	require.NoError(t, err)
 
-	replayed, err := s.Research().SaveNote(ctx, store.SaveNoteInput{
+	replayed, err := s.Research().SaveNote(ctx, store.SaveNoteInput{ThreadTitle: "Research",
 		ChannelID: ch.ID, Text: "different text, must be ignored", SourceURL: &url, AuthorPersonID: creator.ID, IdempotencyKey: key,
 	})
 	require.NoError(t, err)
@@ -1285,13 +1285,13 @@ func TestResearchStore_SaveNote_IdempotentReplayWithInvalidURLErrors(t *testing.
 
 	url := "https://example.com/first"
 	key := "idem-" + uuid.NewString()
-	first, err := s.Research().SaveNote(ctx, store.SaveNoteInput{
+	first, err := s.Research().SaveNote(ctx, store.SaveNoteInput{ThreadTitle: "Research",
 		ChannelID: ch.ID, Text: "first text", SourceURL: &url, AuthorPersonID: creator.ID, IdempotencyKey: key,
 	})
 	require.NoError(t, err)
 
 	invalid := "not a url"
-	_, err = s.Research().SaveNote(ctx, store.SaveNoteInput{
+	_, err = s.Research().SaveNote(ctx, store.SaveNoteInput{ThreadTitle: "Research",
 		ChannelID: ch.ID, Text: "replay with bad url", SourceURL: &invalid, AuthorPersonID: creator.ID, IdempotencyKey: key,
 	})
 	require.Error(t, err, "a replay carrying an invalid source_url must error, not silently return the original row")
@@ -2280,7 +2280,7 @@ func TestMyWorkStore_SummariesForPerson_CoversEveryAssociatedChannel_WithPerSect
 	// A: person is Founder -- one proposed-only video_script, no outcome yet.
 	chA, err := s.Channels().Create(ctx, "yt-"+uuid.NewString(), "A Channel", person.ID)
 	require.NoError(t, err)
-	noteA, err := s.Research().SaveNote(ctx, store.SaveNoteInput{ChannelID: chA.ID, Text: "A note", AuthorPersonID: person.ID})
+	noteA, err := s.Research().SaveNote(ctx, store.SaveNoteInput{ThreadTitle: "Research", ChannelID: chA.ID, Text: "A note", AuthorPersonID: person.ID})
 	require.NoError(t, err)
 	ideaA, err := s.Ideas().Create(ctx, chA.ID, "A Idea", person.ID)
 	require.NoError(t, err)
@@ -2312,7 +2312,7 @@ func TestMyWorkStore_SummariesForPerson_CoversEveryAssociatedChannel_WithPerSect
 	chB, err := s.Channels().Create(ctx, "yt-"+uuid.NewString(), "B Channel", founderB.ID)
 	require.NoError(t, err)
 	require.NoError(t, s.Roles().AddRole(ctx, chB.ID, person.ID, store.RoleCoCreator, founderB.ID))
-	noteB, err := s.Research().SaveNote(ctx, store.SaveNoteInput{ChannelID: chB.ID, Text: "B note", AuthorPersonID: founderB.ID})
+	noteB, err := s.Research().SaveNote(ctx, store.SaveNoteInput{ThreadTitle: "Research", ChannelID: chB.ID, Text: "B note", AuthorPersonID: founderB.ID})
 	require.NoError(t, err)
 	proposedIdeaB, err := s.Ideas().Create(ctx, chB.ID, "B Proposed Idea", founderB.ID)
 	require.NoError(t, err)
@@ -2339,7 +2339,7 @@ func TestMyWorkStore_SummariesForPerson_CoversEveryAssociatedChannel_WithPerSect
 	chC, err := s.Channels().Create(ctx, "yt-"+uuid.NewString(), "C Channel", founderC.ID)
 	require.NoError(t, err)
 	require.NoError(t, s.Roles().AddRole(ctx, chC.ID, person.ID, store.RoleAnalyst, founderC.ID))
-	noteC, err := s.Research().SaveNote(ctx, store.SaveNoteInput{ChannelID: chC.ID, Text: "C note", AuthorPersonID: founderC.ID})
+	noteC, err := s.Research().SaveNote(ctx, store.SaveNoteInput{ThreadTitle: "Research", ChannelID: chC.ID, Text: "C note", AuthorPersonID: founderC.ID})
 	require.NoError(t, err)
 	ideaC, err := s.Ideas().Create(ctx, chC.ID, "C Idea", founderC.ID)
 	require.NoError(t, err)
@@ -2532,7 +2532,7 @@ func TestMyWorkStore_SummariesForPerson_QueryCountIsBoundedAcrossChannelCount(t 
 			ch, err := s.Channels().Create(ctx, "yt-"+uuid.NewString(), fmt.Sprintf("Channel %d-%d", numChannels, i), founder.ID)
 			require.NoError(t, err)
 			require.NoError(t, s.Roles().AddRole(ctx, ch.ID, person.ID, store.RoleAnalyst, founder.ID))
-			_, err = s.Research().SaveNote(ctx, store.SaveNoteInput{ChannelID: ch.ID, Text: "note", AuthorPersonID: founder.ID})
+			_, err = s.Research().SaveNote(ctx, store.SaveNoteInput{ThreadTitle: "Research", ChannelID: ch.ID, Text: "note", AuthorPersonID: founder.ID})
 			require.NoError(t, err)
 		}
 

@@ -193,7 +193,7 @@ func TestE2E_M21_VideoScriptMilestone(t *testing.T) {
 		}))
 		ideaID := idea.IdeaID
 
-		note := decode[mcptools.ResearchNoteOutput](t, callTool(t, csAnalyst, "save_research_note", mcptools.SaveResearchNoteInput{
+		note := decode[mcptools.ResearchNoteOutput](t, callTool(t, csAnalyst, "save_research_note", mcptools.SaveResearchNoteInput{ThreadTitle: "Research",
 			ChannelID: vsc.ch.ID.String(), IdeaID: ideaID,
 			Text: "Strong comps support this.", SourceURL: "https://example.com/comps",
 			IdempotencyKeyArg: uuid.NewString(),

@@ -210,7 +210,7 @@ func TestSaveResearchNote_CitedVsUncited_StoresNULLNotEmptyString(t *testing.T) 
 	f := newFixture(t)
 	cs := f.connect(t, f.creator.ID)
 
-	uncitedRes := f.call(t, cs, "save_research_note", tools.SaveResearchNoteInput{
+	uncitedRes := f.call(t, cs, "save_research_note", tools.SaveResearchNoteInput{ThreadTitle: "Research",
 		ChannelID:         f.ch.ID.String(),
 		Text:              "no source yet, just a hunch",
 		IdempotencyKeyArg: "note-uncited-1",
@@ -219,7 +219,7 @@ func TestSaveResearchNote_CitedVsUncited_StoresNULLNotEmptyString(t *testing.T) 
 	assert.False(t, uncited.Cited, "omitted source_url must render cited=false")
 	assert.Nil(t, uncited.SourceURL)
 
-	citedRes := f.call(t, cs, "save_research_note", tools.SaveResearchNoteInput{
+	citedRes := f.call(t, cs, "save_research_note", tools.SaveResearchNoteInput{ThreadTitle: "Research",
 		ChannelID:         f.ch.ID.String(),
 		Text:              "found a strong comp",
 		SourceURL:         "https://example.com/comp-video",
@@ -246,7 +246,7 @@ func TestSaveResearchNote_EmptySourceURLIsTreatedAsUncitedNotEmptyStringCitation
 	f := newFixture(t)
 	cs := f.connect(t, f.creator.ID)
 
-	res := f.call(t, cs, "save_research_note", tools.SaveResearchNoteInput{
+	res := f.call(t, cs, "save_research_note", tools.SaveResearchNoteInput{ThreadTitle: "Research",
 		ChannelID:         f.ch.ID.String(),
 		Text:              "text with explicit empty source_url",
 		SourceURL:         "",
@@ -262,7 +262,7 @@ func TestSaveResearchNote_MalformedSourceURLRejectedNothingPersisted(t *testing.
 	cs := f.connect(t, f.creator.ID)
 
 	for i, bad := range []string{"not a url", "javascript:alert(1)"} {
-		res := f.call(t, cs, "save_research_note", tools.SaveResearchNoteInput{
+		res := f.call(t, cs, "save_research_note", tools.SaveResearchNoteInput{ThreadTitle: "Research",
 			ChannelID:         f.ch.ID.String(),
 			Text:              "text",
 			SourceURL:         bad,
@@ -280,7 +280,7 @@ func TestSaveResearchNote_EmptyTextRejected(t *testing.T) {
 	f := newFixture(t)
 	cs := f.connect(t, f.creator.ID)
 
-	res := f.call(t, cs, "save_research_note", tools.SaveResearchNoteInput{
+	res := f.call(t, cs, "save_research_note", tools.SaveResearchNoteInput{ThreadTitle: "Research",
 		ChannelID:         f.ch.ID.String(),
 		Text:              "   ",
 		IdempotencyKeyArg: uuid.NewString(),
@@ -296,7 +296,7 @@ func TestSaveResearchNote_RecordsCallingPersonAsAuthorNotCreator(t *testing.T) {
 	f := newFixture(t)
 	cs := f.connect(t, f.analyst.ID)
 
-	res := f.call(t, cs, "save_research_note", tools.SaveResearchNoteInput{
+	res := f.call(t, cs, "save_research_note", tools.SaveResearchNoteInput{ThreadTitle: "Research",
 		ChannelID:         f.ch.ID.String(),
 		Text:              "analyst's own note",
 		IdempotencyKeyArg: uuid.NewString(),
@@ -312,7 +312,7 @@ func TestSaveResearchNote_AnalystCanSaveAndList_UnassociatedPersonDeniedAndWrite
 	// Analyst can save and immediately see it in list_research_notes
 	// (mutual visibility).
 	analystCS := f.connect(t, f.analyst.ID)
-	saveRes := f.call(t, analystCS, "save_research_note", tools.SaveResearchNoteInput{
+	saveRes := f.call(t, analystCS, "save_research_note", tools.SaveResearchNoteInput{ThreadTitle: "Research",
 		ChannelID:         f.ch.ID.String(),
 		Text:              "analyst research",
 		IdempotencyKeyArg: uuid.NewString(),
@@ -327,7 +327,7 @@ func TestSaveResearchNote_AnalystCanSaveAndList_UnassociatedPersonDeniedAndWrite
 	// A Person with no role on the Channel gets a permission error and
 	// nothing is written.
 	outsiderCS := f.connect(t, f.outsider.ID)
-	deniedRes := f.call(t, outsiderCS, "save_research_note", tools.SaveResearchNoteInput{
+	deniedRes := f.call(t, outsiderCS, "save_research_note", tools.SaveResearchNoteInput{ThreadTitle: "Research",
 		ChannelID:         f.ch.ID.String(),
 		Text:              "should never land",
 		IdempotencyKeyArg: uuid.NewString(),
@@ -346,7 +346,7 @@ func TestSaveResearchNote_Replay_SameKeySameArgsYieldsExactlyOneRowIdenticalResu
 	f := newFixture(t)
 	cs := f.connect(t, f.creator.ID)
 
-	args := tools.SaveResearchNoteInput{
+	args := tools.SaveResearchNoteInput{ThreadTitle: "Research",
 		ChannelID:         f.ch.ID.String(),
 		Text:              "replayed note",
 		IdempotencyKeyArg: "replay-key-1",
@@ -369,7 +369,7 @@ func TestSaveResearchNote_Replay_SameKeyDifferentTextIsConflictAndStillOneRow(t 
 	f := newFixture(t)
 	cs := f.connect(t, f.creator.ID)
 
-	first := tools.SaveResearchNoteInput{
+	first := tools.SaveResearchNoteInput{ThreadTitle: "Research",
 		ChannelID:         f.ch.ID.String(),
 		Text:              "original text",
 		IdempotencyKeyArg: "conflict-key-1",
@@ -453,9 +453,9 @@ func TestListResearchNotes_CitedAndUncitedOnlyFiltersPartitionExactly(t *testing
 	f := newFixture(t)
 	cs := f.connect(t, f.creator.ID)
 
-	f.call(t, cs, "save_research_note", tools.SaveResearchNoteInput{ChannelID: f.ch.ID.String(), Text: "uncited 1", IdempotencyKeyArg: "u1"})
-	f.call(t, cs, "save_research_note", tools.SaveResearchNoteInput{ChannelID: f.ch.ID.String(), Text: "uncited 2", IdempotencyKeyArg: "u2"})
-	f.call(t, cs, "save_research_note", tools.SaveResearchNoteInput{ChannelID: f.ch.ID.String(), Text: "cited 1", SourceURL: "https://example.com/a", IdempotencyKeyArg: "c1"})
+	f.call(t, cs, "save_research_note", tools.SaveResearchNoteInput{ThreadTitle: "Research", ChannelID: f.ch.ID.String(), Text: "uncited 1", IdempotencyKeyArg: "u1"})
+	f.call(t, cs, "save_research_note", tools.SaveResearchNoteInput{ThreadTitle: "Research", ChannelID: f.ch.ID.String(), Text: "uncited 2", IdempotencyKeyArg: "u2"})
+	f.call(t, cs, "save_research_note", tools.SaveResearchNoteInput{ThreadTitle: "Research", ChannelID: f.ch.ID.String(), Text: "cited 1", SourceURL: "https://example.com/a", IdempotencyKeyArg: "c1"})
 
 	allRes := f.call(t, cs, "list_research_notes", tools.ListResearchNotesInput{ChannelID: f.ch.ID.String()})
 	all := decode[tools.ListResearchNotesOutput](t, allRes)
@@ -487,9 +487,9 @@ func TestListResearchNotes_IdeaIDFilterRestrictsToThatIdea(t *testing.T) {
 	idea2Res := f.call(t, cs, "create_idea", tools.CreateIdeaInput{ChannelID: f.ch.ID.String(), Title: "Idea Two"})
 	idea2 := decode[tools.IdeaOutput](t, idea2Res)
 
-	f.call(t, cs, "save_research_note", tools.SaveResearchNoteInput{ChannelID: f.ch.ID.String(), IdeaID: idea1.IdeaID, Text: "for idea one", IdempotencyKeyArg: "i1n1"})
-	f.call(t, cs, "save_research_note", tools.SaveResearchNoteInput{ChannelID: f.ch.ID.String(), IdeaID: idea2.IdeaID, Text: "for idea two", IdempotencyKeyArg: "i2n1"})
-	f.call(t, cs, "save_research_note", tools.SaveResearchNoteInput{ChannelID: f.ch.ID.String(), Text: "no idea at all", IdempotencyKeyArg: "noidea"})
+	f.call(t, cs, "save_research_note", tools.SaveResearchNoteInput{ThreadTitle: "Research", ChannelID: f.ch.ID.String(), IdeaID: idea1.IdeaID, Text: "for idea one", IdempotencyKeyArg: "i1n1"})
+	f.call(t, cs, "save_research_note", tools.SaveResearchNoteInput{ThreadTitle: "Research", ChannelID: f.ch.ID.String(), IdeaID: idea2.IdeaID, Text: "for idea two", IdempotencyKeyArg: "i2n1"})
+	f.call(t, cs, "save_research_note", tools.SaveResearchNoteInput{ThreadTitle: "Research", ChannelID: f.ch.ID.String(), Text: "no idea at all", IdempotencyKeyArg: "noidea"})
 
 	res := f.call(t, cs, "list_research_notes", tools.ListResearchNotesInput{ChannelID: f.ch.ID.String(), IdeaID: idea1.IdeaID})
 	out := decode[tools.ListResearchNotesOutput](t, res)
@@ -509,7 +509,7 @@ func TestListResearchNotes_LimitTruncatedAndBeforePageBackwardExactly(t *testing
 
 	const seeded = 5
 	for i := 0; i < seeded; i++ {
-		_, err := f.st.Research().SaveNote(ctx, store.SaveNoteInput{
+		_, err := f.st.Research().SaveNote(ctx, store.SaveNoteInput{ThreadTitle: "Research",
 			ChannelID: f.ch.ID, Text: fmt.Sprintf("page note %d", i),
 			AuthorPersonID: f.creator.ID, IdempotencyKey: fmt.Sprintf("page-note-%d", i),
 		})
@@ -545,8 +545,8 @@ func TestListIdeas_NoteCountAndHasVerdictStats(t *testing.T) {
 	ideaID, err := uuid.Parse(idea.IdeaID)
 	require.NoError(t, err)
 
-	f.call(t, cs, "save_research_note", tools.SaveResearchNoteInput{ChannelID: f.ch.ID.String(), IdeaID: idea.IdeaID, Text: "note 1", IdempotencyKeyArg: "s1"})
-	f.call(t, cs, "save_research_note", tools.SaveResearchNoteInput{ChannelID: f.ch.ID.String(), IdeaID: idea.IdeaID, Text: "note 2", IdempotencyKeyArg: "s2"})
+	f.call(t, cs, "save_research_note", tools.SaveResearchNoteInput{ThreadTitle: "Research", ChannelID: f.ch.ID.String(), IdeaID: idea.IdeaID, Text: "note 1", IdempotencyKeyArg: "s1"})
+	f.call(t, cs, "save_research_note", tools.SaveResearchNoteInput{ThreadTitle: "Research", ChannelID: f.ch.ID.String(), IdeaID: idea.IdeaID, Text: "note 2", IdempotencyKeyArg: "s2"})
 
 	beforeRes := f.call(t, cs, "list_ideas", tools.ListIdeasInput{ChannelID: f.ch.ID.String()})
 	before := decode[tools.ListIdeasOutput](t, beforeRes)
