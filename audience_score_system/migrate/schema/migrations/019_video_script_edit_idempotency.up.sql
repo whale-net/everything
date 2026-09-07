@@ -1,0 +1,25 @@
+-- video_script.edit_idempotency_key: a SEPARATE idempotency ledger column
+-- for VideoScriptStore.UpdateContent (FR16-FR19, #2037), deliberately NOT
+-- the existing `idempotency_key` column migration 010 added for Propose.
+--
+-- Why a second column, not reuse: Propose's dedupe (store/video_script.go)
+-- looks up a row by (channel_id, created_by_person_id, idempotency_key) --
+-- the ONE column on the row records the key that created it. If
+-- UpdateContent also wrote its own replay key into that same column, a
+-- later replay of the ORIGINAL propose call (same channel/author/key)
+-- would silently miss -- the column would already have been overwritten
+-- by an intervening edit's key -- and Propose would insert a SECOND
+-- video_script row instead of returning the existing one, breaking
+-- Propose's own idempotency contract (NFR12/LB4) for any script that has
+-- ever been edited. edit_idempotency_key keeps the two replay ledgers
+-- independent so neither write path can corrupt the other's dedupe state.
+--
+-- Scoped by (id, edit_idempotency_key) rather than Propose's
+-- (channel_id, author, key): unlike Propose (which has no row yet at
+-- dedupe time and must find one by channel+author), UpdateContent always
+-- targets a specific, already-existing scriptID -- the strictly narrower
+-- id-scoped lookup is at least as safe and cannot collide across two
+-- different scripts edited by the same author with coincidentally equal
+-- keys (astronomically unlikely for a server-minted UUID, but scoping by
+-- id removes the question entirely).
+ALTER TABLE video_script ADD COLUMN edit_idempotency_key TEXT;

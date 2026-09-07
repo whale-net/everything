@@ -42,6 +42,18 @@ var ErrVideoScriptPublished = errors.New("video_script is frozen: its matched vi
 // freeze distinctly from an ordinary invalid transition.
 var ErrVideoScriptTransition = errors.New("video_script: invalid state transition")
 
+// ErrVideoScriptDecided is returned by UpdateContent, with no write, once a
+// video_script has left the editable window FR16/FR17 define: its status
+// is no longer 'proposed', OR its match has already published, whichever
+// holds. Both are checked in the SAME transaction as the attempted
+// content write (isVideoScriptPublished, mirroring Archive's own
+// check-then-update), so a racing Greenlight/Deny/Archive, or a racing
+// match-confirm-then-sync, can never slip an edit through between the
+// check and the UPDATE. See UpdateContent's doc comment for why BOTH
+// conditions are load-bearing -- neither alone closes every hole a
+// concurrent decision or publish can open.
+var ErrVideoScriptDecided = errors.New("video_script is no longer editable: it has been decided or its video has published")
+
 // ProposeVideoScriptInput is the input to VideoScriptStore.Propose. IdeaID
 // is NOT part of this struct -- Propose derives it from VerdictID
 // (viability_verdict.idea_id) so it can never disagree with VerdictID
@@ -91,6 +103,39 @@ type VideoScriptStore interface {
 	// ErrVideoScriptTransition, with no state change, unless scriptID is
 	// currently greenlit.
 	Archive(ctx context.Context, scriptID, byPersonID uuid.UUID) error
+
+	// UpdateContent overwrites scriptID's title and script_text (FR16/FR17,
+	// #2037) -- the one new store method in this batch; no equivalent
+	// exists on the MCP surface (web-only by design, root plan Out of
+	// scope). Authorization (store.CanWrite, distinct from and orthogonal
+	// to the status gate below) is applied by the caller, same convention
+	// as Propose (NFR13/NFR5) -- this method performs no authorization
+	// itself.
+	//
+	// In ONE transaction, checked atomically with the write:
+	//   - status = 'proposed' AND NOT isVideoScriptPublished(scriptID) --
+	//     ErrVideoScriptDecided, with NO write, unless BOTH hold.
+	//     status = 'proposed' alone protects the normal
+	//     greenlight/deny/archive flow; isVideoScriptPublished alone
+	//     protects the match-confirm-then-sync path (store/match.go's
+	//     MatchStore.Resolve, mcp/tools/matches.go's
+	//     resolve_pending_match), which applies no status filter and can
+	//     leave a script published while it still reads 'proposed' --
+	//     only the COMBINATION closes both holes; do not drop either half.
+	//   - Unknown scriptID returns pgx.ErrNoRows, not a silent no-op and
+	//     not ErrVideoScriptDecided.
+	//
+	// Idempotency (NFR2/LB4): a non-empty idempotencyKey is honoured
+	// per-scriptID (video_script.edit_idempotency_key, migration 019 --
+	// deliberately a SEPARATE column from Propose's idempotency_key; see
+	// that migration's header for why reusing Propose's column would
+	// silently break Propose's OWN replay guarantee). A replayed key --
+	// the same scriptID carrying the same edit_idempotency_key already --
+	// is a no-op returning nil with the row left exactly as it is, NOT a
+	// duplicate write and NOT re-validated against the status/published
+	// gate above (mirrors Propose's replay short-circuit, which also
+	// skips its own downstream validation on a replay hit).
+	UpdateContent(ctx context.Context, scriptID uuid.UUID, title, scriptText string, byPersonID uuid.UUID, idempotencyKey string) error
 
 	// GetByID returns the VideoScript for id, or pgx.ErrNoRows if none
 	// exists.
@@ -271,6 +316,91 @@ func (s videoScriptStore) Archive(ctx context.Context, scriptID, byPersonID uuid
 	if tag.RowsAffected() == 0 {
 		return fmt.Errorf("video_script %s not greenlit: %w", scriptID, ErrVideoScriptTransition)
 	}
+	if err := tx.Commit(ctx); err != nil {
+		return fmt.Errorf("commit: %w", err)
+	}
+	return nil
+}
+
+// UpdateContent -- see the interface doc comment for the full contract.
+// byPersonID is accepted (mirroring Greenlight/Deny/Archive's signature)
+// but is NOT part of the idempotency scope below: unlike Propose, which
+// has no row yet and must locate one by (channel, author, key),
+// UpdateContent always targets a specific, already-existing scriptID --
+// scoping the replay lookup by scriptID alone is strictly narrower (and
+// therefore at least as safe) than also requiring the same author, and
+// video_script has no "last edited by" column to compare against anyway
+// (no edit-audit trail is in scope, per the root plan). byPersonID is
+// kept in the signature for call-site symmetry with the other mutating
+// methods and so a future audit column can be threaded through without
+// another interface change.
+func (s videoScriptStore) UpdateContent(ctx context.Context, scriptID uuid.UUID, title, scriptText string, byPersonID uuid.UUID, idempotencyKey string) error {
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return fmt.Errorf("begin tx: %w", err)
+	}
+	defer tx.Rollback(ctx) //nolint:errcheck
+
+	// SELECT ... FOR UPDATE takes a row lock for the rest of this
+	// transaction: a concurrent Greenlight/Deny/Archive's own UPDATE
+	// (each scoped by id + a status predicate) blocks here until this
+	// transaction commits or rolls back, then re-evaluates its WHERE
+	// clause against whatever this transaction actually committed. That
+	// is what makes the status/published check below and the content
+	// UPDATE that follows it atomic as a PAIR, not merely as two
+	// statements that happen to share a transaction -- stronger than
+	// Archive's bare check-then-update (Archive's freeze check reads a
+	// different table it does not lock), which this method's own
+	// "concurrent Greenlight racing UpdateContent" test requires.
+	var status VideoScriptStatus
+	var existingKey string
+	if err := tx.QueryRow(ctx, `
+		SELECT status, COALESCE(edit_idempotency_key, '')
+		FROM video_script
+		WHERE id = $1
+		FOR UPDATE
+	`, scriptID).Scan(&status, &existingKey); err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return fmt.Errorf("video_script %s: %w", scriptID, pgx.ErrNoRows)
+		}
+		return fmt.Errorf("lookup video_script %s for update: %w", scriptID, err)
+	}
+
+	// Idempotency (NFR2/LB4): a replayed (scriptID, edit_idempotency_key)
+	// pair is a no-op returning nil with the row left exactly as it is --
+	// no re-validation of status/published against a replay hit, mirroring
+	// Propose's own replay short-circuit.
+	if idempotencyKey != "" && existingKey == idempotencyKey {
+		if err := tx.Commit(ctx); err != nil {
+			return fmt.Errorf("commit: %w", err)
+		}
+		return nil
+	}
+
+	published, err := isVideoScriptPublished(ctx, tx, scriptID)
+	if err != nil {
+		return err
+	}
+	if status != VideoScriptStatusProposed || published {
+		return ErrVideoScriptDecided
+	}
+
+	tag, err := tx.Exec(ctx, `
+		UPDATE video_script
+		SET title = $1, script_text = $2, edit_idempotency_key = NULLIF($3, ''), updated_at = NOW()
+		WHERE id = $4 AND status = 'proposed'
+	`, title, scriptText, idempotencyKey, scriptID)
+	if err != nil {
+		return fmt.Errorf("update video_script %s content: %w", scriptID, err)
+	}
+	if tag.RowsAffected() == 0 {
+		// The row lock above should make this unreachable in practice
+		// (nothing else can have changed status since the SELECT ... FOR
+		// UPDATE took the lock), but the WHERE clause stays as a second,
+		// independent gate rather than trusting the earlier read alone.
+		return ErrVideoScriptDecided
+	}
+
 	if err := tx.Commit(ctx); err != nil {
 		return fmt.Errorf("commit: %w", err)
 	}
