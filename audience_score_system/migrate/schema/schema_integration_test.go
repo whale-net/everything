@@ -23,6 +23,7 @@ import (
 	"context"
 	"database/sql"
 	"testing"
+	"time"
 
 	_ "github.com/jackc/pgx/v5/stdlib"
 	"github.com/stretchr/testify/assert"
@@ -304,4 +305,418 @@ func TestMigration015_UpDown_AppliesCleanly(t *testing.T) {
 	require.NoError(t, runner.Migrate(14), "apply migration 015's down -- must not fail")
 	downCols := viewColumns(t, ctx, db, "viability_verdict")
 	assert.NotContains(t, downCols, "source", "migration 015's down must drop the column cleanly")
+}
+
+// ── migration 016 helpers (research_thread, research_note.thread_id +
+// backfill, research_note_relation, v_current_research_note; root plan
+// #1934, this task #1936) ───────────────────────────────────────────────────
+
+func insertPersonRow(t *testing.T, ctx context.Context, db *dbtest.Postgres, sub, email, name string) string {
+	t.Helper()
+	var id string
+	require.NoError(t, db.Pool.QueryRow(ctx, `
+		INSERT INTO person (google_subject, email, display_name) VALUES ($1, $2, $3) RETURNING id
+	`, sub, email, name).Scan(&id))
+	return id
+}
+
+func insertChannelRow(t *testing.T, ctx context.Context, db *dbtest.Postgres, ytID, title string) string {
+	t.Helper()
+	var id string
+	require.NoError(t, db.Pool.QueryRow(ctx, `
+		INSERT INTO channel (youtube_channel_id, title, connection_state) VALUES ($1, $2, 'connected') RETURNING id
+	`, ytID, title).Scan(&id))
+	return id
+}
+
+func insertIdeaRow(t *testing.T, ctx context.Context, db *dbtest.Postgres, channelID, title, personID string) string {
+	t.Helper()
+	var id string
+	require.NoError(t, db.Pool.QueryRow(ctx, `
+		INSERT INTO idea (channel_id, title, created_by_person_id) VALUES ($1, $2, $3) RETURNING id
+	`, channelID, title, personID).Scan(&id))
+	return id
+}
+
+// insertPre016ResearchNote inserts a research_note row using only the
+// columns that existed before migration 016 (no thread_id) -- used to seed
+// pre-existing data the backfill must pick up. ideaID == "" means a note
+// that predates an Idea (idea_id NULL).
+func insertPre016ResearchNote(t *testing.T, ctx context.Context, db *dbtest.Postgres, channelID, ideaID, text, authorPersonID string, createdAt time.Time) string {
+	t.Helper()
+	var id string
+	var ideaArg interface{}
+	if ideaID != "" {
+		ideaArg = ideaID
+	}
+	require.NoError(t, db.Pool.QueryRow(ctx, `
+		INSERT INTO research_note (channel_id, idea_id, text, author_person_id, created_at)
+		VALUES ($1, $2, $3, $4, $5) RETURNING id
+	`, channelID, ideaArg, text, authorPersonID, createdAt).Scan(&id))
+	return id
+}
+
+// insertResearchThread inserts a research_thread row directly -- this task
+// adds no store method for it (structs only), so tests that need a thread
+// post-migration-016 construct one via raw SQL, same as the rest of this
+// file. ideaID == "" means a NULL idea_id.
+func insertResearchThread(t *testing.T, ctx context.Context, db *dbtest.Postgres, channelID, ideaID, title, personID string) string {
+	t.Helper()
+	var id string
+	var ideaArg interface{}
+	if ideaID != "" {
+		ideaArg = ideaID
+	}
+	require.NoError(t, db.Pool.QueryRow(ctx, `
+		INSERT INTO research_thread (channel_id, idea_id, title, created_by_person_id) VALUES ($1, $2, $3, $4) RETURNING id
+	`, channelID, ideaArg, title, personID).Scan(&id))
+	return id
+}
+
+// insertPost016ResearchNote inserts a research_note row with an explicit
+// thread_id -- the column migration 016 adds. ideaID == "" means a NULL
+// idea_id.
+func insertPost016ResearchNote(t *testing.T, ctx context.Context, db *dbtest.Postgres, channelID, ideaID, threadID, text, authorPersonID string) string {
+	t.Helper()
+	var id string
+	var ideaArg interface{}
+	if ideaID != "" {
+		ideaArg = ideaID
+	}
+	require.NoError(t, db.Pool.QueryRow(ctx, `
+		INSERT INTO research_note (channel_id, idea_id, thread_id, text, author_person_id) VALUES ($1, $2, $3, $4, $5) RETURNING id
+	`, channelID, ideaArg, threadID, text, authorPersonID).Scan(&id))
+	return id
+}
+
+// TestMigration016_Backfill_CreatesPerBucketThreadsAndPreservesNoteData
+// proves migration 016's backfill (FR2 Stage 1) creates exactly one
+// synthetic research_thread per distinct (channel_id, idea_id) bucket of
+// pre-existing research_note rows -- including the (channel_id, NULL)
+// bucket for notes that predate an Idea -- points every pre-existing note at
+// its bucket's thread, and leaves every note's own text/source_url/
+// author_person_id/created_at/idea_id byte-identical (NFR3: an old binary
+// reading research_note.idea_id must keep working unchanged). The bucket's
+// created_by_person_id is asserted to be the author of the EARLIEST note in
+// the bucket (migration 016's documented deterministic tie-break), not
+// merely some arbitrary author of the bucket.
+func TestMigration016_Backfill_CreatesPerBucketThreadsAndPreservesNoteData(t *testing.T) {
+	ctx := context.Background()
+	db := dbtest.NewPostgres(ctx, t, dbtest.Options{})
+
+	sqlDB, err := sql.Open("pgx", db.ConnString)
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = sqlDB.Close() })
+
+	runner := migrate.NewRunner(sqlDB, schema.Migrations, schema.Dir)
+	require.NoError(t, runner.Migrate(15), "apply migrations 1-15 (the full chain up to, but not including, this task's migration)")
+
+	p1 := insertPersonRow(t, ctx, db, "sub-016-p1", "p1@example.com", "Person One")
+	p2 := insertPersonRow(t, ctx, db, "sub-016-p2", "p2@example.com", "Person Two")
+	c1 := insertChannelRow(t, ctx, db, "yt-016-c1", "Channel One")
+	c2 := insertChannelRow(t, ctx, db, "yt-016-c2", "Channel Two")
+	i1 := insertIdeaRow(t, ctx, db, c1, "Idea One", p1)
+	i2 := insertIdeaRow(t, ctx, db, c2, "Idea Two", p1)
+
+	// Truncated to microsecond precision -- Postgres timestamptz only
+	// stores microseconds, so an untruncated Go time.Time (nanosecond
+	// precision) would never compare byte-identical after a round trip.
+	base := time.Now().UTC().Add(-24 * time.Hour).Truncate(time.Microsecond)
+	// Bucket (c1, i1): two notes, earliest authored by p1 -- the bucket's
+	// thread must be created_by p1, not p2, even though p2 wrote later.
+	n1 := insertPre016ResearchNote(t, ctx, db, c1, i1, "n1 text", p1, base)
+	n2 := insertPre016ResearchNote(t, ctx, db, c1, i1, "n2 text", p2, base.Add(time.Hour))
+	// Bucket (c1, NULL): predates an Idea.
+	n3 := insertPre016ResearchNote(t, ctx, db, c1, "", "n3 text, no idea yet", p2, base.Add(2*time.Hour))
+	// Bucket (c2, i2): isolated from c1's buckets even though the idea
+	// titles/authors overlap.
+	n4 := insertPre016ResearchNote(t, ctx, db, c2, i2, "n4 text", p1, base.Add(3*time.Hour))
+
+	require.NoError(t, runner.Migrate(16), "apply migration 016's up -- must not fail")
+
+	type noteRow struct {
+		text, authorPersonID string
+		ideaID               *string
+		createdAt            time.Time
+		sourceURL            *string
+		threadID             *string
+	}
+	fetch := func(id string) noteRow {
+		var r noteRow
+		require.NoError(t, db.Pool.QueryRow(ctx, `
+			SELECT text, source_url, author_person_id, created_at, idea_id, thread_id
+			FROM research_note WHERE id = $1
+		`, id).Scan(&r.text, &r.sourceURL, &r.authorPersonID, &r.createdAt, &r.ideaID, &r.threadID))
+		return r
+	}
+
+	r1, r2, r3, r4 := fetch(n1), fetch(n2), fetch(n3), fetch(n4)
+
+	// -- data preservation (no DROP/UPDATE of the untouched columns) --------
+	assert.Equal(t, "n1 text", r1.text)
+	assert.Equal(t, p1, r1.authorPersonID)
+	assert.True(t, base.Equal(r1.createdAt), "created_at must be byte-identical (unchanged) after the backfill")
+	assert.Nil(t, r1.sourceURL, "source_url must remain untouched (NULL) after the backfill")
+	require.NotNil(t, r1.ideaID, "NFR3: research_note.idea_id must still be populated and readable exactly as before")
+	assert.Equal(t, i1, *r1.ideaID)
+	assert.Equal(t, "n3 text, no idea yet", r3.text)
+	assert.Nil(t, r3.ideaID, "a note that predated an Idea must keep idea_id NULL -- migration 016 never assigns one retroactively")
+
+	// -- every note ends with a non-null thread_id ---------------------------
+	for _, r := range []noteRow{r1, r2, r3, r4} {
+		require.NotNil(t, r.threadID, "every pre-existing research_note must have a non-null thread_id after migration 016's backfill")
+	}
+
+	requireThreadMatchesBucket := func(threadID, channelID, ideaID string) {
+		t.Helper()
+		var gotChannelID, gotTitle string
+		var gotIdeaID *string
+		require.NoError(t, db.Pool.QueryRow(ctx, `
+			SELECT channel_id, idea_id, title FROM research_thread WHERE id = $1
+		`, threadID).Scan(&gotChannelID, &gotIdeaID, &gotTitle))
+		assert.Equal(t, channelID, gotChannelID, "thread's channel_id must equal the note's channel_id")
+		if ideaID == "" {
+			assert.Nil(t, gotIdeaID, "thread's idea_id must be NULL for the (channel_id, NULL) bucket")
+		} else {
+			require.NotNil(t, gotIdeaID)
+			assert.Equal(t, ideaID, *gotIdeaID, "thread's idea_id must be IS NOT DISTINCT FROM the note's own idea_id")
+		}
+		assert.Equal(t, "Research", gotTitle, "every backfilled thread must be titled \"Research\"")
+	}
+
+	requireThreadMatchesBucket(*r1.threadID, c1, i1)
+	requireThreadMatchesBucket(*r2.threadID, c1, i1)
+	requireThreadMatchesBucket(*r3.threadID, c1, "")
+	requireThreadMatchesBucket(*r4.threadID, c2, i2)
+
+	assert.Equal(t, *r1.threadID, *r2.threadID, "two notes in the same (channel_id, idea_id) bucket must share exactly one backfilled thread")
+	assert.NotEqual(t, *r1.threadID, *r3.threadID, "the (channel_id, NULL) bucket must be a distinct thread from the (channel_id, idea_id) bucket on the same channel")
+	assert.NotEqual(t, *r1.threadID, *r4.threadID, "buckets on different channels must never share a thread")
+
+	// -- deterministic created_by: earliest note in the bucket, not p2 -------
+	var threadCreatedBy string
+	require.NoError(t, db.Pool.QueryRow(ctx, `SELECT created_by_person_id FROM research_thread WHERE id = $1`, *r1.threadID).Scan(&threadCreatedBy))
+	assert.Equal(t, p1, threadCreatedBy, "the bucket's thread must be created_by the author of the EARLIEST note in the bucket (n1, by p1), not a later author (n2, by p2)")
+
+	// -- exactly one thread per distinct bucket, and no more -----------------
+	var threadCount int
+	require.NoError(t, db.Pool.QueryRow(ctx, `SELECT count(*) FROM research_thread`).Scan(&threadCount))
+	assert.Equal(t, 3, threadCount, "exactly one synthetic thread per distinct (channel_id, idea_id) bucket -- (c1,i1), (c1,NULL), (c2,i2)")
+
+	// -- zero research_note_relation rows after the backfill -----------------
+	var relationCount int
+	require.NoError(t, db.Pool.QueryRow(ctx, `SELECT count(*) FROM research_note_relation`).Scan(&relationCount))
+	assert.Equal(t, 0, relationCount, "the backfill must not create any research_note_relation rows (root plan Out of scope)")
+}
+
+// TestMigration016_SameThreadTrigger_EnforcesRelationsWithinOneThreadOnly
+// proves FR6/NFR4's same-thread enforcement is a real DB trigger, not
+// merely documentation: a relation between two notes in the SAME thread is
+// accepted, and one between two notes in DIFFERENT threads is rejected.
+func TestMigration016_SameThreadTrigger_EnforcesRelationsWithinOneThreadOnly(t *testing.T) {
+	ctx := context.Background()
+	db := dbtest.NewPostgres(ctx, t, dbtest.Options{})
+
+	sqlDB, err := sql.Open("pgx", db.ConnString)
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = sqlDB.Close() })
+
+	runner := migrate.NewRunner(sqlDB, schema.Migrations, schema.Dir)
+	require.NoError(t, runner.Migrate(16), "apply the full chain through migration 016")
+
+	p := insertPersonRow(t, ctx, db, "sub-016-trigger", "trigger@example.com", "Trigger Person")
+	c := insertChannelRow(t, ctx, db, "yt-016-trigger", "Trigger Channel")
+
+	threadA := insertResearchThread(t, ctx, db, c, "", "Thread A", p)
+	threadB := insertResearchThread(t, ctx, db, c, "", "Thread B", p)
+
+	noteA1 := insertPost016ResearchNote(t, ctx, db, c, "", threadA, "a1", p)
+	noteA2 := insertPost016ResearchNote(t, ctx, db, c, "", threadA, "a2", p)
+	noteB1 := insertPost016ResearchNote(t, ctx, db, c, "", threadB, "b1", p)
+
+	_, err = db.Pool.Exec(ctx, `
+		INSERT INTO research_note_relation (note_id, related_note_id, relation_type) VALUES ($1, $2, 'supersedes')
+	`, noteA2, noteA1)
+	assert.NoError(t, err, "a relation between two notes in the SAME thread must be accepted")
+
+	_, err = db.Pool.Exec(ctx, `
+		INSERT INTO research_note_relation (note_id, related_note_id, relation_type) VALUES ($1, $2, 'supersedes')
+	`, noteB1, noteA1)
+	assert.Error(t, err, "a relation between two notes in DIFFERENT threads must be rejected by the same-thread trigger (FR6/NFR4)")
+}
+
+// TestMigration016_RelationConstraints_RejectsSelfReferenceAndUnknownType
+// proves research_note_relation's own CHECK constraints -- self-reference
+// and the closed relation_type vocabulary -- reject bad inserts and leave
+// nothing behind.
+func TestMigration016_RelationConstraints_RejectsSelfReferenceAndUnknownType(t *testing.T) {
+	ctx := context.Background()
+	db := dbtest.NewPostgres(ctx, t, dbtest.Options{})
+
+	sqlDB, err := sql.Open("pgx", db.ConnString)
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = sqlDB.Close() })
+
+	runner := migrate.NewRunner(sqlDB, schema.Migrations, schema.Dir)
+	require.NoError(t, runner.Migrate(16), "apply the full chain through migration 016")
+
+	p := insertPersonRow(t, ctx, db, "sub-016-constraints", "constraints@example.com", "Constraints Person")
+	c := insertChannelRow(t, ctx, db, "yt-016-constraints", "Constraints Channel")
+	thread := insertResearchThread(t, ctx, db, c, "", "Thread", p)
+	n1 := insertPost016ResearchNote(t, ctx, db, c, "", thread, "n1", p)
+	n2 := insertPost016ResearchNote(t, ctx, db, c, "", thread, "n2", p)
+
+	_, err = db.Pool.Exec(ctx, `
+		INSERT INTO research_note_relation (note_id, related_note_id, relation_type) VALUES ($1, $1, 'supersedes')
+	`, n1)
+	assert.Error(t, err, "a self-referencing relation (note_id = related_note_id) must be rejected by the table CHECK constraint")
+
+	_, err = db.Pool.Exec(ctx, `
+		INSERT INTO research_note_relation (note_id, related_note_id, relation_type) VALUES ($1, $2, 'bogus')
+	`, n1, n2)
+	assert.Error(t, err, "an unknown relation_type must be rejected by the closed CHECK constraint set")
+
+	var count int
+	require.NoError(t, db.Pool.QueryRow(ctx, `SELECT count(*) FROM research_note_relation`).Scan(&count))
+	assert.Equal(t, 0, count, "neither rejected insert may leave a row behind")
+}
+
+// TestMigration016_CurrentResearchNoteView_RelationTypesDetermineInclusion
+// proves v_current_research_note's exact FR7 inclusion rule: a note is
+// excluded IFF it is the related_note_id target of a 'supersedes' or
+// 'excludes' relation; being the target of 'caveats', 'follows_up', or
+// 'summarizes' does not exclude it.
+func TestMigration016_CurrentResearchNoteView_RelationTypesDetermineInclusion(t *testing.T) {
+	ctx := context.Background()
+	db := dbtest.NewPostgres(ctx, t, dbtest.Options{})
+
+	sqlDB, err := sql.Open("pgx", db.ConnString)
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = sqlDB.Close() })
+
+	runner := migrate.NewRunner(sqlDB, schema.Migrations, schema.Dir)
+	require.NoError(t, runner.Migrate(16), "apply the full chain through migration 016")
+
+	p := insertPersonRow(t, ctx, db, "sub-016-view", "view@example.com", "View Person")
+	c := insertChannelRow(t, ctx, db, "yt-016-view", "View Channel")
+	thread := insertResearchThread(t, ctx, db, c, "", "Thread", p)
+
+	relator := insertPost016ResearchNote(t, ctx, db, c, "", thread, "relator", p)
+	superseded := insertPost016ResearchNote(t, ctx, db, c, "", thread, "superseded", p)
+	excluded := insertPost016ResearchNote(t, ctx, db, c, "", thread, "excluded", p)
+	caveated := insertPost016ResearchNote(t, ctx, db, c, "", thread, "caveated", p)
+	followedUp := insertPost016ResearchNote(t, ctx, db, c, "", thread, "followed up", p)
+	summarized := insertPost016ResearchNote(t, ctx, db, c, "", thread, "summarized", p)
+
+	for _, rel := range []struct{ target, relType string }{
+		{superseded, "supersedes"},
+		{excluded, "excludes"},
+		{caveated, "caveats"},
+		{followedUp, "follows_up"},
+		{summarized, "summarizes"},
+	} {
+		_, err := db.Pool.Exec(ctx, `
+			INSERT INTO research_note_relation (note_id, related_note_id, relation_type) VALUES ($1, $2, $3)
+		`, relator, rel.target, rel.relType)
+		require.NoError(t, err)
+	}
+
+	isCurrent := func(id string) bool {
+		var count int
+		require.NoError(t, db.Pool.QueryRow(ctx, `SELECT count(*) FROM v_current_research_note WHERE id = $1`, id).Scan(&count))
+		return count == 1
+	}
+
+	assert.True(t, isCurrent(relator), "a note that is not the target of any relation must remain current")
+	assert.False(t, isCurrent(superseded), "a note targeted by a 'supersedes' relation must be excluded (FR7)")
+	assert.False(t, isCurrent(excluded), "a note targeted by an 'excludes' relation must be excluded (FR7)")
+	assert.True(t, isCurrent(caveated), "a note targeted by a 'caveats' relation must remain current -- only supersedes/excludes exclude (FR7)")
+	assert.True(t, isCurrent(followedUp), "a note targeted by a 'follows_up' relation must remain current (FR7)")
+	assert.True(t, isCurrent(summarized), "a note targeted by a 'summarizes' relation must remain current (FR7)")
+}
+
+// TestMigration016_CurrentResearchNoteView_SupersedesChain_LeavesOnlyNewestCurrent
+// proves a 3-long supersedes chain leaves only the newest note current with
+// no extra transitive-closure logic in the view -- each edge retiring its
+// own direct target already propagates (FR7).
+func TestMigration016_CurrentResearchNoteView_SupersedesChain_LeavesOnlyNewestCurrent(t *testing.T) {
+	ctx := context.Background()
+	db := dbtest.NewPostgres(ctx, t, dbtest.Options{})
+
+	sqlDB, err := sql.Open("pgx", db.ConnString)
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = sqlDB.Close() })
+
+	runner := migrate.NewRunner(sqlDB, schema.Migrations, schema.Dir)
+	require.NoError(t, runner.Migrate(16), "apply the full chain through migration 016")
+
+	p := insertPersonRow(t, ctx, db, "sub-016-chain", "chain@example.com", "Chain Person")
+	c := insertChannelRow(t, ctx, db, "yt-016-chain", "Chain Channel")
+	thread := insertResearchThread(t, ctx, db, c, "", "Thread", p)
+
+	n1 := insertPost016ResearchNote(t, ctx, db, c, "", thread, "v1", p)
+	n2 := insertPost016ResearchNote(t, ctx, db, c, "", thread, "v2", p)
+	n3 := insertPost016ResearchNote(t, ctx, db, c, "", thread, "v3", p)
+
+	_, err = db.Pool.Exec(ctx, `INSERT INTO research_note_relation (note_id, related_note_id, relation_type) VALUES ($1, $2, 'supersedes')`, n2, n1)
+	require.NoError(t, err)
+	_, err = db.Pool.Exec(ctx, `INSERT INTO research_note_relation (note_id, related_note_id, relation_type) VALUES ($1, $2, 'supersedes')`, n3, n2)
+	require.NoError(t, err)
+
+	rows, err := db.Pool.Query(ctx, `SELECT id FROM v_current_research_note WHERE id IN ($1, $2, $3)`, n1, n2, n3)
+	require.NoError(t, err)
+	defer rows.Close()
+
+	var current []string
+	for rows.Next() {
+		var id string
+		require.NoError(t, rows.Scan(&id))
+		current = append(current, id)
+	}
+	require.NoError(t, rows.Err())
+
+	assert.Equal(t, []string{n3}, current, "a 3-long supersedes chain must leave only the newest note (n3) current")
+}
+
+// TestMigration016_UpDown_AppliesCleanly proves the migration's structural
+// shape on both sides: up creates research_thread and research_note_relation
+// and adds research_note.thread_id, without dropping or NOT NULL-ing
+// research_note.idea_id (FR2 Stage 1 is additive-plus-backfill only, NFR3);
+// down reverses cleanly with no CASCADE, matching migration 013's precedent.
+func TestMigration016_UpDown_AppliesCleanly(t *testing.T) {
+	ctx := context.Background()
+	db := dbtest.NewPostgres(ctx, t, dbtest.Options{})
+
+	sqlDB, err := sql.Open("pgx", db.ConnString)
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = sqlDB.Close() })
+
+	runner := migrate.NewRunner(sqlDB, schema.Migrations, schema.Dir)
+
+	require.NoError(t, runner.Migrate(15), "apply migrations 1-15 (the full chain up to, but not including, this task's migration)")
+	assert.False(t, tableExists(t, ctx, db, "research_thread"), "before migration 016, research_thread must not exist")
+	assert.False(t, tableExists(t, ctx, db, "research_note_relation"), "before migration 016, research_note_relation must not exist")
+	preCols := viewColumns(t, ctx, db, "research_note")
+	require.NotContains(t, preCols, "thread_id", "before migration 016, research_note must not carry thread_id yet")
+	require.Contains(t, preCols, "idea_id")
+
+	require.NoError(t, runner.Migrate(16), "apply migration 016's up -- must not fail")
+	assert.True(t, tableExists(t, ctx, db, "research_thread"), "migration 016's up must create research_thread")
+	assert.True(t, tableExists(t, ctx, db, "research_note_relation"), "migration 016's up must create research_note_relation")
+	upCols := viewColumns(t, ctx, db, "research_note")
+	assert.Contains(t, upCols, "thread_id", "migration 016's up must add research_note.thread_id")
+	assert.Contains(t, upCols, "idea_id", "research_note.idea_id must be untouched -- FR2 Stage 1 is additive-plus-backfill only, no DROP/SET NOT NULL (NFR3)")
+
+	viewCols := viewColumns(t, ctx, db, "v_current_research_note")
+	assert.Contains(t, viewCols, "thread_id")
+	assert.Contains(t, viewCols, "idea_id", "v_current_research_note must still expose idea_id -- Stage 1 never retargets a reader off it (NFR3)")
+
+	require.NoError(t, runner.Migrate(15), "apply migration 016's down -- must not fail")
+	assert.False(t, tableExists(t, ctx, db, "research_thread"), "migration 016's down must drop research_thread")
+	assert.False(t, tableExists(t, ctx, db, "research_note_relation"), "migration 016's down must drop research_note_relation")
+	downCols := viewColumns(t, ctx, db, "research_note")
+	assert.NotContains(t, downCols, "thread_id", "migration 016's down must drop research_note.thread_id cleanly")
+
+	_, err = db.Pool.Exec(ctx, `SELECT count(*) FROM v_current_research_note`)
+	assert.Error(t, err, "migration 016's down must drop v_current_research_note")
 }
