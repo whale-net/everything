@@ -1,5 +1,7 @@
 """Bazel rules for generating OpenAPI specifications from FastAPI apps."""
 
+load("//tools/openapi:platform_reset.bzl", "pinned_py_dep")
+
 def openapi_spec(name, app_target, module_path, app_variable="app", domain=None, **kwargs):
     """
     Generate an OpenAPI specification from a FastAPI application.
@@ -75,6 +77,19 @@ if __name__ == "__main__":
         cmd = "cat > $@ << 'EOF'\n" + script_content + "\nEOF",
     )
     
+    # release_app passes the same binary label used for its multiplatform OCI
+    # image as app_target, so without pinning this edge, app_target's --platforms
+    # split transition (applied by the image build across its entire transitive
+    # closure) would force this genrule to be analyzed/executed once per incoming
+    # platform even though the generated spec never varies by platform. Pinning
+    # collapses those forks into one shared, cacheable action (see issue #1867).
+    pinned_app_target_name = name + "_pinned_app_target"
+    pinned_py_dep(
+        name = pinned_app_target_name,
+        dep = app_target,
+        visibility = ["//visibility:private"],
+    )
+
     # Create a py_binary that includes the app as a dependency
     generator_name = name + "_generator"
     native.py_binary(
@@ -82,7 +97,7 @@ if __name__ == "__main__":
         srcs = [":" + script_name],
         main = script_name + ".py",
         deps = [
-            app_target,
+            ":" + pinned_app_target_name,
             "@pypi//:fastapi",
         ],
         visibility = ["//visibility:private"],
