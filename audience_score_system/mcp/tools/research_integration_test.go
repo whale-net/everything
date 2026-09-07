@@ -123,6 +123,14 @@ func newFixture(t *testing.T) *fixture {
 	srv := server.New(st)
 	reg := server.NewRegistry(srv, st)
 	tools.RegisterResearch(reg, st)
+	// Browse/MyWork are also registered here (not just research.go's own
+	// tools) so this file can prove toResearchNoteOutput's thread-derived
+	// idea_id/thread_id/thread_title agree across get_channel_overview and
+	// get_my_work too (FR16/NFR2 -- see
+	// TestResearchNoteOutputs_AgreeAcrossListGetChannelOverviewAndMyWork
+	// below), not just save_research_note/list_research_notes.
+	tools.RegisterBrowse(reg, st)
+	tools.RegisterMyWork(reg, st.MyWork())
 
 	handler := server.NewHTTPHandler(srv, creds, server.ResourceMetadataConfig{
 		Resource:            "https://mcp.example.com",
@@ -809,4 +817,240 @@ func TestListResearchThreads_UnassociatedPersonDenied(t *testing.T) {
 	deniedRes := f.call(t, outsiderCS, "list_research_threads", tools.ListResearchThreadsInput{ChannelID: f.ch.ID.String()})
 	assert.True(t, deniedRes.IsError)
 	assert.Contains(t, textOf(deniedRes), "permission denied")
+}
+
+// ── FR2 Stage 2b retarget (issue #1940): thread-derived idea_id, thread_id/
+// thread_title exposure, thread_id list filter, and the idea_id/thread_id
+// disagreement rejection ───────────────────────────────────────────────────
+
+// TestSaveResearchNote_And_ListResearchNotes_AgreeOnThreadIDAndThreadTitle
+// proves the shared-helper guarantee: save_research_note's own response and
+// the SAME note's entry in list_research_notes must carry identical
+// thread_id/thread_title, because both render through the one
+// toResearchNoteOutput (research.go).
+func TestSaveResearchNote_And_ListResearchNotes_AgreeOnThreadIDAndThreadTitle(t *testing.T) {
+	f := newFixture(t)
+	cs := f.connect(t, f.creator.ID)
+
+	saveRes := f.call(t, cs, "save_research_note", tools.SaveResearchNoteInput{
+		ChannelID: f.ch.ID.String(), ThreadTitle: "Thread exposure", Text: "note", IdempotencyKeyArg: uuid.NewString(),
+	})
+	saved := decode[tools.ResearchNoteOutput](t, saveRes)
+	require.NotNil(t, saved.ThreadID, "save_research_note's response must carry the resolved thread_id")
+	require.NotNil(t, saved.ThreadTitle, "save_research_note's response must carry the resolved thread_title")
+	assert.Equal(t, "Thread exposure", *saved.ThreadTitle)
+
+	listRes := f.call(t, cs, "list_research_notes", tools.ListResearchNotesInput{ChannelID: f.ch.ID.String()})
+	list := decode[tools.ListResearchNotesOutput](t, listRes)
+	require.Len(t, list.Notes, 1)
+	listed := list.Notes[0]
+
+	require.NotNil(t, listed.ThreadID)
+	require.NotNil(t, listed.ThreadTitle)
+	assert.Equal(t, *saved.ThreadID, *listed.ThreadID, "save_research_note and list_research_notes must agree on thread_id for the same note")
+	assert.Equal(t, *saved.ThreadTitle, *listed.ThreadTitle, "save_research_note and list_research_notes must agree on thread_title for the same note")
+}
+
+// TestSaveResearchNote_NoteOnThreadWithNilIdeaReportsNoIdeaID proves FR9: a
+// note saved onto a thread that has no Idea (thread_title alone, no
+// idea_id) must render idea_id as omitted/nil -- never a stale or
+// zero-value UUID -- both in save_research_note's own response and in
+// list_research_notes.
+func TestSaveResearchNote_NoteOnThreadWithNilIdeaReportsNoIdeaID(t *testing.T) {
+	f := newFixture(t)
+	cs := f.connect(t, f.creator.ID)
+
+	saveRes := f.call(t, cs, "save_research_note", tools.SaveResearchNoteInput{
+		ChannelID: f.ch.ID.String(), ThreadTitle: "No idea yet", Text: "predates an idea", IdempotencyKeyArg: uuid.NewString(),
+	})
+	saved := decode[tools.ResearchNoteOutput](t, saveRes)
+	assert.Nil(t, saved.IdeaID, "a note on an idea-less thread must report no idea_id")
+	require.NotNil(t, saved.ThreadID, "the thread itself must still be reported")
+
+	listRes := f.call(t, cs, "list_research_notes", tools.ListResearchNotesInput{ChannelID: f.ch.ID.String()})
+	list := decode[tools.ListResearchNotesOutput](t, listRes)
+	require.Len(t, list.Notes, 1)
+	assert.Nil(t, list.Notes[0].IdeaID, "list_research_notes must agree: no idea_id for an idea-less thread")
+}
+
+// TestSaveResearchNote_ThreadIDDisagreesWithSuppliedIdeaIDRejected proves
+// issue #1938/#1940's disagreement rule end-to-end through the MCP
+// boundary: a thread_id whose resolved thread's Idea does not match a
+// supplied idea_id is rejected outright, whether the thread's Idea is a
+// DIFFERENT Idea or nil (nil vs non-nil counts as disagreement too) --
+// never silently reconciled onto the thread's Idea, and nothing is
+// persisted either way.
+func TestSaveResearchNote_ThreadIDDisagreesWithSuppliedIdeaIDRejected(t *testing.T) {
+	f := newFixture(t)
+	ctx := context.Background()
+	cs := f.connect(t, f.creator.ID)
+
+	idea1, err := f.st.Ideas().Create(ctx, f.ch.ID, "Idea One", f.creator.ID)
+	require.NoError(t, err)
+	idea2, err := f.st.Ideas().Create(ctx, f.ch.ID, "Idea Two", f.creator.ID)
+	require.NoError(t, err)
+
+	// Thread attached to idea1.
+	attachedThread, err := f.st.Threads().FindOrCreate(ctx, store.FindOrCreateThreadInput{
+		ChannelID: f.ch.ID, IdeaID: &idea1.ID, Title: "Attached thread", CreatedByPersonID: f.creator.ID,
+	})
+	require.NoError(t, err)
+	// Thread with no Idea at all.
+	idealessThread, err := f.st.Threads().FindOrCreate(ctx, store.FindOrCreateThreadInput{
+		ChannelID: f.ch.ID, Title: "Idea-less thread", CreatedByPersonID: f.creator.ID,
+	})
+	require.NoError(t, err)
+
+	// Case 1: thread's idea (idea1) disagrees with a DIFFERENT supplied idea_id (idea2).
+	mismatch := f.call(t, cs, "save_research_note", tools.SaveResearchNoteInput{
+		ChannelID: f.ch.ID.String(), ThreadID: attachedThread.ID.String(), IdeaID: idea2.ID.String(),
+		Text: "should be rejected", IdempotencyKeyArg: uuid.NewString(),
+	})
+	assert.True(t, mismatch.IsError, "thread_id whose resolved idea disagrees with a different supplied idea_id must be rejected")
+	assert.Contains(t, textOf(mismatch), "does not match")
+
+	// Case 2: thread has NO idea, but idea_id is supplied (nil vs non-nil disagreement).
+	nilVsSupplied := f.call(t, cs, "save_research_note", tools.SaveResearchNoteInput{
+		ChannelID: f.ch.ID.String(), ThreadID: idealessThread.ID.String(), IdeaID: idea1.ID.String(),
+		Text: "should also be rejected", IdempotencyKeyArg: uuid.NewString(),
+	})
+	assert.True(t, nilVsSupplied.IsError, "an idea-less thread_id with a supplied idea_id must be rejected (nil vs non-nil counts as disagreement)")
+	assert.Contains(t, textOf(nilVsSupplied), "does not match")
+
+	// Case 3 (control): thread_id agreeing with the SAME idea_id succeeds.
+	agree := f.call(t, cs, "save_research_note", tools.SaveResearchNoteInput{
+		ChannelID: f.ch.ID.String(), ThreadID: attachedThread.ID.String(), IdeaID: idea1.ID.String(),
+		Text: "should succeed", IdempotencyKeyArg: uuid.NewString(),
+	})
+	require.False(t, agree.IsError, "unexpected error: %s", textOf(agree))
+
+	listRes := f.call(t, cs, "list_research_notes", tools.ListResearchNotesInput{ChannelID: f.ch.ID.String()})
+	list := decode[tools.ListResearchNotesOutput](t, listRes)
+	require.Len(t, list.Notes, 1, "only the agreeing call may have persisted a note")
+	assert.Equal(t, "should succeed", list.Notes[0].Text)
+}
+
+// TestListResearchNotes_ThreadIDFilterComposesWithIdeaIDCitedAndLimit proves
+// FR8's thread_id filter: it scopes list_research_notes to exactly the
+// notes on that thread, and composes with idea_id, cited_only/uncited_only,
+// and limit rather than bypassing them.
+func TestListResearchNotes_ThreadIDFilterComposesWithIdeaIDCitedAndLimit(t *testing.T) {
+	f := newFixture(t)
+	ctx := context.Background()
+	cs := f.connect(t, f.creator.ID)
+
+	idea, err := f.st.Ideas().Create(ctx, f.ch.ID, "Threaded Idea", f.creator.ID)
+	require.NoError(t, err)
+
+	threadA, err := f.st.Threads().FindOrCreate(ctx, store.FindOrCreateThreadInput{
+		ChannelID: f.ch.ID, IdeaID: &idea.ID, Title: "Thread A", CreatedByPersonID: f.creator.ID,
+	})
+	require.NoError(t, err)
+	threadB, err := f.st.Threads().FindOrCreate(ctx, store.FindOrCreateThreadInput{
+		ChannelID: f.ch.ID, IdeaID: &idea.ID, Title: "Thread B", CreatedByPersonID: f.creator.ID,
+	})
+	require.NoError(t, err)
+
+	// Thread A: one cited, one uncited note.
+	f.call(t, cs, "save_research_note", tools.SaveResearchNoteInput{
+		ChannelID: f.ch.ID.String(), ThreadID: threadA.ID.String(), Text: "A uncited", IdempotencyKeyArg: "a-uncited",
+	})
+	f.call(t, cs, "save_research_note", tools.SaveResearchNoteInput{
+		ChannelID: f.ch.ID.String(), ThreadID: threadA.ID.String(), Text: "A cited", SourceURL: "https://example.com/a", IdempotencyKeyArg: "a-cited",
+	})
+	// Thread B: one note, unrelated to thread A.
+	f.call(t, cs, "save_research_note", tools.SaveResearchNoteInput{
+		ChannelID: f.ch.ID.String(), ThreadID: threadB.ID.String(), Text: "B note", IdempotencyKeyArg: "b-note",
+	})
+	// A different Idea entirely, own thread -- must never appear under threadA's filter.
+	otherIdea, err := f.st.Ideas().Create(ctx, f.ch.ID, "Other Idea", f.creator.ID)
+	require.NoError(t, err)
+	f.call(t, cs, "save_research_note", tools.SaveResearchNoteInput{
+		ChannelID: f.ch.ID.String(), IdeaID: otherIdea.ID.String(), ThreadTitle: "Other thread", Text: "unrelated", IdempotencyKeyArg: "other",
+	})
+
+	// thread_id alone scopes to exactly threadA's two notes.
+	threadOnly := f.call(t, cs, "list_research_notes", tools.ListResearchNotesInput{ChannelID: f.ch.ID.String(), ThreadID: threadA.ID.String()})
+	threadOnlyOut := decode[tools.ListResearchNotesOutput](t, threadOnly)
+	require.Len(t, threadOnlyOut.Notes, 2)
+	for _, n := range threadOnlyOut.Notes {
+		require.NotNil(t, n.ThreadID)
+		assert.Equal(t, threadA.ID.String(), *n.ThreadID)
+	}
+
+	// thread_id composes with idea_id: same idea, but scoped to thread_id
+	// narrows further to just that thread's notes (not idea's other thread B).
+	threadAndIdea := f.call(t, cs, "list_research_notes", tools.ListResearchNotesInput{
+		ChannelID: f.ch.ID.String(), ThreadID: threadA.ID.String(), IdeaID: idea.ID.String(),
+	})
+	threadAndIdeaOut := decode[tools.ListResearchNotesOutput](t, threadAndIdea)
+	assert.Len(t, threadAndIdeaOut.Notes, 2, "thread_id + idea_id must still be exactly thread A's notes")
+
+	// thread_id composes with cited_only: only thread A's cited note.
+	threadAndCited := f.call(t, cs, "list_research_notes", tools.ListResearchNotesInput{
+		ChannelID: f.ch.ID.String(), ThreadID: threadA.ID.String(), CitedOnly: true,
+	})
+	threadAndCitedOut := decode[tools.ListResearchNotesOutput](t, threadAndCited)
+	require.Len(t, threadAndCitedOut.Notes, 1)
+	assert.Equal(t, "A cited", threadAndCitedOut.Notes[0].Text)
+
+	// thread_id composes with limit/truncated.
+	threadAndLimit := f.call(t, cs, "list_research_notes", tools.ListResearchNotesInput{
+		ChannelID: f.ch.ID.String(), ThreadID: threadA.ID.String(), Limit: 1,
+	})
+	threadAndLimitOut := decode[tools.ListResearchNotesOutput](t, threadAndLimit)
+	require.Len(t, threadAndLimitOut.Notes, 1, "limit must still cap even when thread_id is also supplied")
+	assert.True(t, threadAndLimitOut.Truncated)
+}
+
+// TestResearchNoteOutputs_AgreeAcrossListGetChannelOverviewAndMyWork proves
+// FR16/NFR2's one-conversion guarantee spans every mcp tool group that
+// renders a research_note, not just research.go's own tools:
+// list_research_notes, get_channel_overview (browse.go), and get_my_work
+// (my_work.go) must all report the identical thread-derived idea_id for
+// the same fixture note, because all three route through the shared
+// toResearchNoteOutput.
+func TestResearchNoteOutputs_AgreeAcrossListGetChannelOverviewAndMyWork(t *testing.T) {
+	f := newFixture(t)
+	ctx := context.Background()
+	cs := f.connect(t, f.creator.ID)
+
+	idea, err := f.st.Ideas().Create(ctx, f.ch.ID, "Parity Idea", f.creator.ID)
+	require.NoError(t, err)
+
+	saveRes := f.call(t, cs, "save_research_note", tools.SaveResearchNoteInput{
+		ChannelID: f.ch.ID.String(), IdeaID: idea.ID.String(), ThreadTitle: "Parity thread", Text: "parity note", IdempotencyKeyArg: uuid.NewString(),
+	})
+	saved := decode[tools.ResearchNoteOutput](t, saveRes)
+	require.NotNil(t, saved.IdeaID)
+
+	listRes := f.call(t, cs, "list_research_notes", tools.ListResearchNotesInput{ChannelID: f.ch.ID.String()})
+	list := decode[tools.ListResearchNotesOutput](t, listRes)
+	require.Len(t, list.Notes, 1)
+	listed := list.Notes[0]
+
+	overviewRes := f.call(t, cs, "get_channel_overview", tools.GetChannelOverviewInput{ChannelID: f.ch.ID.String()})
+	overview := decode[tools.GetChannelOverviewOutput](t, overviewRes)
+	require.Len(t, overview.ResearchNotes, 1)
+	overviewed := overview.ResearchNotes[0]
+
+	myWorkRes := f.call(t, cs, "get_my_work", tools.GetMyWorkInput{})
+	myWork := decode[tools.GetMyWorkOutput](t, myWorkRes)
+	require.Len(t, myWork.Channels, 1)
+	require.Len(t, myWork.Channels[0].ResearchNotes, 1)
+	myWorked := myWork.Channels[0].ResearchNotes[0]
+
+	require.NotNil(t, listed.IdeaID)
+	require.NotNil(t, overviewed.IdeaID)
+	require.NotNil(t, myWorked.IdeaID)
+	assert.Equal(t, *saved.IdeaID, *listed.IdeaID, "list_research_notes must agree with save_research_note's idea_id")
+	assert.Equal(t, *saved.IdeaID, *overviewed.IdeaID, "get_channel_overview must agree with save_research_note's idea_id")
+	assert.Equal(t, *saved.IdeaID, *myWorked.IdeaID, "get_my_work must agree with save_research_note's idea_id")
+
+	require.NotNil(t, listed.ThreadID)
+	require.NotNil(t, overviewed.ThreadID)
+	require.NotNil(t, myWorked.ThreadID)
+	assert.Equal(t, *saved.ThreadID, *listed.ThreadID)
+	assert.Equal(t, *saved.ThreadID, *overviewed.ThreadID)
+	assert.Equal(t, *saved.ThreadID, *myWorked.ThreadID)
 }
