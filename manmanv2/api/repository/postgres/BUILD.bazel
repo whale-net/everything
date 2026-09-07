@@ -11,6 +11,7 @@ go_library(
         "gameconfigvolume.go",
         "log_reference.go",
         "patch.go",
+        "pending_restart.go",
         "repository.go",
         "server.go",
         "server_capability.go",
@@ -28,6 +29,7 @@ go_library(
         "//manmanv2/models:models",
         "//manmanv2/api/repository",
         "@com_github_jackc_pgx_v5//:pgx",
+        "@com_github_jackc_pgx_v5//pgconn",
         "@com_github_jackc_pgx_v5//pgxpool",
     ],
 )
@@ -85,4 +87,39 @@ go_test(
     ],
     embed = [":postgres"],
     deps = ["//manmanv2/models:models"],
+)
+
+# Real-Postgres coverage for PendingRestartRepository (#1729): the unique
+# partial index (pending_restarts_one_pending_per_sgc), the single
+# UPDATE...RETURNING atomicity of ClaimForSession/ExpireStalled, and the
+# claim/expire race -- none of which an in-memory fake can verify. Gated
+# behind `//go:build integration`, gazelle skips it when scanning for
+# go_test srcs; this go_test is hand-written with EXACTLY the tag set from
+# //libs/go/dbtest:postgres_constraints_test (see that package's
+# BUILD.bazel/README.md for why each tag is required). `# keep` tells a
+# later `bazel run //:gazelle` not to touch or remove this rule.
+#
+# Run it explicitly (requires a working Docker daemon):
+#   bazel test //manmanv2/api/repository/postgres:pending_restart_integration_test --test_output=all
+go_test(
+    # keep
+    name = "pending_restart_integration_test",
+    size = "large",
+    timeout = "long",
+    srcs = ["pending_restart_integration_test.go"],
+    embed = [":postgres"],
+    gotags = ["integration"],
+    tags = [
+        "external",
+        "integration",
+        "manual",
+        "no-cache",
+        "no-sandbox",
+        "requires-network",
+    ],
+    deps = [
+        "//libs/go/dbtest",
+        "//manmanv2/api/repository",
+        "@com_github_jackc_pgx_v5//pgxpool",
+    ],
 )

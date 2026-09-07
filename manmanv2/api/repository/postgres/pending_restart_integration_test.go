@@ -1,0 +1,428 @@
+//go:build integration
+
+// This file only builds under the "integration" build tag, same as
+// server_test.go's precedent for this package and the pending_restart_test
+// go_test target -- see //libs/go/dbtest's README for how to run it. It
+// exercises the actual DB-enforced guarantees the issue calls out
+// (unique partial index, atomic UPDATE...RETURNING claim/expire) that no
+// in-memory fake can verify.
+//
+// Schema here is hand-written, self-contained DDL mirroring exactly the
+// pieces of manmanv2/migrate/migrations/036_pending_restarts.up.sql and its
+// FK targets (servers, games, game_configs, server_game_configs, sessions
+// from 001_initial_schema.up.sql) -- per dbtest's README ("Options.Schema
+// should be self-contained DDL -- do not depend on another package's
+// migrations").
+package postgres
+
+import (
+	"context"
+	"testing"
+	"time"
+
+	"github.com/jackc/pgx/v5/pgxpool"
+
+	"github.com/whale-net/everything/libs/go/dbtest"
+	"github.com/whale-net/everything/manmanv2/api/repository"
+)
+
+// pendingRestartSchema mirrors 001_initial_schema.up.sql's servers, games,
+// game_configs, server_game_configs, sessions tables (scoped down to only
+// the columns a pending_restarts row's FKs require) plus
+// 036_pending_restarts.up.sql verbatim, including its three indexes.
+const pendingRestartSchema = `
+	CREATE TABLE servers (
+		server_id BIGSERIAL PRIMARY KEY,
+		name VARCHAR(255) NOT NULL UNIQUE
+	);
+
+	CREATE TABLE games (
+		game_id BIGSERIAL PRIMARY KEY,
+		name VARCHAR(255) NOT NULL UNIQUE
+	);
+
+	CREATE TABLE game_configs (
+		config_id BIGSERIAL PRIMARY KEY,
+		game_id BIGINT NOT NULL REFERENCES games(game_id) ON DELETE CASCADE,
+		name VARCHAR(255) NOT NULL,
+		image VARCHAR(500) NOT NULL,
+		UNIQUE(game_id, name)
+	);
+
+	CREATE TABLE server_game_configs (
+		sgc_id BIGSERIAL PRIMARY KEY,
+		server_id BIGINT NOT NULL REFERENCES servers(server_id) ON DELETE CASCADE,
+		game_config_id BIGINT NOT NULL REFERENCES game_configs(config_id) ON DELETE CASCADE,
+		status VARCHAR(50) NOT NULL DEFAULT 'inactive',
+		UNIQUE(server_id, game_config_id)
+	);
+
+	CREATE TABLE sessions (
+		session_id BIGSERIAL PRIMARY KEY,
+		sgc_id BIGINT NOT NULL REFERENCES server_game_configs(sgc_id) ON DELETE CASCADE,
+		status VARCHAR(50) NOT NULL DEFAULT 'pending'
+	);
+
+	CREATE TABLE pending_restarts (
+		pending_restart_id BIGSERIAL PRIMARY KEY,
+		server_game_config_id BIGINT NOT NULL REFERENCES server_game_configs(sgc_id),
+		gating_session_id BIGINT NOT NULL REFERENCES sessions(session_id),
+		status TEXT NOT NULL,
+		stall_deadline TIMESTAMPTZ NOT NULL,
+		started_session_id BIGINT,
+		failure_reason TEXT,
+		created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+		resolved_at TIMESTAMPTZ
+	);
+
+	CREATE UNIQUE INDEX pending_restarts_one_pending_per_sgc
+		ON pending_restarts(server_game_config_id) WHERE status = 'pending';
+
+	CREATE INDEX pending_restarts_gating_session_pending
+		ON pending_restarts(gating_session_id) WHERE status = 'pending';
+
+	CREATE INDEX pending_restarts_stall_deadline
+		ON pending_restarts(stall_deadline) WHERE status = 'pending';
+`
+
+func newPendingRestartTestDB(t *testing.T) *pgxpool.Pool {
+	t.Helper()
+	db := dbtest.NewPostgres(context.Background(), t, dbtest.Options{Schema: pendingRestartSchema})
+	return db.Pool
+}
+
+// seedSGC creates a server + game + game_config + server_game_config chain
+// and returns the resulting sgc_id, so tests can focus on pending_restarts
+// itself.
+func seedSGC(t *testing.T, pool *pgxpool.Pool, label string) int64 {
+	t.Helper()
+	ctx := context.Background()
+
+	var serverID int64
+	if err := pool.QueryRow(ctx, `INSERT INTO servers (name) VALUES ($1) RETURNING server_id`, "server-"+label).Scan(&serverID); err != nil {
+		t.Fatalf("seed server %s: %v", label, err)
+	}
+	var gameID int64
+	if err := pool.QueryRow(ctx, `INSERT INTO games (name) VALUES ($1) RETURNING game_id`, "game-"+label).Scan(&gameID); err != nil {
+		t.Fatalf("seed game %s: %v", label, err)
+	}
+	var configID int64
+	if err := pool.QueryRow(ctx, `INSERT INTO game_configs (game_id, name, image) VALUES ($1, $2, 'image') RETURNING config_id`, gameID, "config-"+label).Scan(&configID); err != nil {
+		t.Fatalf("seed game_config %s: %v", label, err)
+	}
+	var sgcID int64
+	if err := pool.QueryRow(ctx, `INSERT INTO server_game_configs (server_id, game_config_id) VALUES ($1, $2) RETURNING sgc_id`, serverID, configID).Scan(&sgcID); err != nil {
+		t.Fatalf("seed server_game_config %s: %v", label, err)
+	}
+	return sgcID
+}
+
+// seedSession creates a session gated to sgcID and returns its session_id.
+func seedSession(t *testing.T, pool *pgxpool.Pool, sgcID int64) int64 {
+	t.Helper()
+	var sessionID int64
+	if err := pool.QueryRow(context.Background(),
+		`INSERT INTO sessions (sgc_id) VALUES ($1) RETURNING session_id`, sgcID).Scan(&sessionID); err != nil {
+		t.Fatalf("seed session for sgc %d: %v", sgcID, err)
+	}
+	return sessionID
+}
+
+// TestCreate_SecondPendingForSameSGCFailsWithSentinel proves item 1: a
+// second Create for the same SGC while the first is still 'pending' returns
+// ErrPendingRestartExists, asserting the unique partial index
+// (pending_restarts_one_pending_per_sgc), not application-level checking.
+func TestCreate_SecondPendingForSameSGCFailsWithSentinel(t *testing.T) {
+	pool := newPendingRestartTestDB(t)
+	ctx := context.Background()
+	repo := NewPendingRestartRepository(pool)
+
+	sgcID := seedSGC(t, pool, "a")
+	session1 := seedSession(t, pool, sgcID)
+	session2 := seedSession(t, pool, sgcID)
+
+	first, err := repo.Create(ctx, sgcID, session1, time.Now().Add(time.Hour))
+	if err != nil {
+		t.Fatalf("first Create should succeed: %v", err)
+	}
+	if first.Status != "pending" {
+		t.Fatalf("expected status 'pending', got %q", first.Status)
+	}
+
+	_, err = repo.Create(ctx, sgcID, session2, time.Now().Add(time.Hour))
+	if err == nil {
+		t.Fatal("second Create for the same SGC while the first is pending succeeded; pending_restarts_one_pending_per_sgc did not fire")
+	}
+	if err != repository.ErrPendingRestartExists {
+		t.Fatalf("expected repository.ErrPendingRestartExists, got: %v", err)
+	}
+}
+
+// TestCreate_AllowedAgainAfterTerminalStatus proves item 2: once the first
+// record reaches a terminal status, a fresh Create for the same SGC
+// succeeds -- the partial index must not block a *later* restart.
+func TestCreate_AllowedAgainAfterTerminalStatus(t *testing.T) {
+	pool := newPendingRestartTestDB(t)
+	ctx := context.Background()
+	repo := NewPendingRestartRepository(pool)
+
+	sgcID := seedSGC(t, pool, "a")
+	session1 := seedSession(t, pool, sgcID)
+	session2 := seedSession(t, pool, sgcID)
+
+	first, err := repo.Create(ctx, sgcID, session1, time.Now().Add(time.Hour))
+	if err != nil {
+		t.Fatalf("first Create should succeed: %v", err)
+	}
+
+	claimed, err := repo.ClaimForSession(ctx, session1)
+	if err != nil {
+		t.Fatalf("ClaimForSession: %v", err)
+	}
+	if claimed == nil || claimed.PendingRestartID != first.PendingRestartID {
+		t.Fatalf("expected to claim the first record, got %+v", claimed)
+	}
+	if err := repo.MarkFailed(ctx, first.PendingRestartID, "test-terminal"); err != nil {
+		t.Fatalf("MarkFailed: %v", err)
+	}
+
+	second, err := repo.Create(ctx, sgcID, session2, time.Now().Add(time.Hour))
+	if err != nil {
+		t.Fatalf("Create after a prior record reached a terminal status should succeed, got: %v", err)
+	}
+	if second.PendingRestartID == first.PendingRestartID {
+		t.Fatal("expected a new record, got the same PendingRestartID back")
+	}
+}
+
+// TestClaimForSession_SecondCallReturnsNilNil proves item 3: ClaimForSession
+// returns the record once; a second call for the same gating_session_id
+// returns (nil, nil) -- the FR10/NFR10 at-least-once-delivery case.
+func TestClaimForSession_SecondCallReturnsNilNil(t *testing.T) {
+	pool := newPendingRestartTestDB(t)
+	ctx := context.Background()
+	repo := NewPendingRestartRepository(pool)
+
+	sgcID := seedSGC(t, pool, "a")
+	sessionID := seedSession(t, pool, sgcID)
+
+	created, err := repo.Create(ctx, sgcID, sessionID, time.Now().Add(time.Hour))
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+
+	first, err := repo.ClaimForSession(ctx, sessionID)
+	if err != nil {
+		t.Fatalf("first ClaimForSession: %v", err)
+	}
+	if first == nil || first.PendingRestartID != created.PendingRestartID {
+		t.Fatalf("expected to claim the created record, got %+v", first)
+	}
+	if first.Status != "started" {
+		t.Fatalf("expected status 'started' after claim, got %q", first.Status)
+	}
+
+	second, err := repo.ClaimForSession(ctx, sessionID)
+	if err != nil {
+		t.Fatalf("second ClaimForSession should not error: %v", err)
+	}
+	if second != nil {
+		t.Fatalf("second ClaimForSession for an already-claimed session should return nil, got %+v", second)
+	}
+}
+
+// TestClaimForSession_UnknownSessionReturnsNilNilNoError proves item 4:
+// ClaimForSession for an unknown/never-pending session returns (nil, nil),
+// not an error.
+func TestClaimForSession_UnknownSessionReturnsNilNilNoError(t *testing.T) {
+	pool := newPendingRestartTestDB(t)
+	ctx := context.Background()
+	repo := NewPendingRestartRepository(pool)
+
+	pr, err := repo.ClaimForSession(ctx, 999999)
+	if err != nil {
+		t.Fatalf("expected no error for an unknown session, got: %v", err)
+	}
+	if pr != nil {
+		t.Fatalf("expected nil for an unknown session, got %+v", pr)
+	}
+}
+
+// TestExpireStalled_OnlyMovesPendingPastDeadline proves item 5:
+// ExpireStalled moves only records past stall_deadline and still 'pending';
+// a record already 'started' is untouched; the returned slice contains
+// exactly the expired ones.
+func TestExpireStalled_OnlyMovesPendingPastDeadline(t *testing.T) {
+	pool := newPendingRestartTestDB(t)
+	ctx := context.Background()
+	repo := NewPendingRestartRepository(pool)
+
+	now := time.Now()
+
+	// Record A: pending, past deadline -- should expire.
+	sgcA := seedSGC(t, pool, "a")
+	sessionA := seedSession(t, pool, sgcA)
+	recA, err := repo.Create(ctx, sgcA, sessionA, now.Add(-time.Minute))
+	if err != nil {
+		t.Fatalf("Create A: %v", err)
+	}
+
+	// Record B: pending, not yet past deadline -- should stay pending.
+	sgcB := seedSGC(t, pool, "b")
+	sessionB := seedSession(t, pool, sgcB)
+	recB, err := repo.Create(ctx, sgcB, sessionB, now.Add(time.Hour))
+	if err != nil {
+		t.Fatalf("Create B: %v", err)
+	}
+
+	// Record C: already started, past deadline -- must be untouched by
+	// ExpireStalled even though it's past its stall_deadline.
+	sgcC := seedSGC(t, pool, "c")
+	sessionC := seedSession(t, pool, sgcC)
+	recC, err := repo.Create(ctx, sgcC, sessionC, now.Add(-time.Minute))
+	if err != nil {
+		t.Fatalf("Create C: %v", err)
+	}
+	if _, err := repo.ClaimForSession(ctx, sessionC); err != nil {
+		t.Fatalf("claim C: %v", err)
+	}
+
+	expired, err := repo.ExpireStalled(ctx, now)
+	if err != nil {
+		t.Fatalf("ExpireStalled: %v", err)
+	}
+	if len(expired) != 1 {
+		t.Fatalf("expected exactly 1 expired record, got %d: %+v", len(expired), expired)
+	}
+	if expired[0].PendingRestartID != recA.PendingRestartID {
+		t.Fatalf("expected record A to be the one expired, got PendingRestartID=%d", expired[0].PendingRestartID)
+	}
+	if expired[0].Status != "expired" {
+		t.Fatalf("expected expired record's status to be 'expired', got %q", expired[0].Status)
+	}
+
+	latest, err := repo.GetLatestBySGCIDs(ctx, []int64{sgcA, sgcB, sgcC})
+	if err != nil {
+		t.Fatalf("GetLatestBySGCIDs: %v", err)
+	}
+	if latest[sgcA].Status != "expired" {
+		t.Fatalf("expected A to be expired, got %q", latest[sgcA].Status)
+	}
+	if latest[sgcB].Status != "pending" {
+		t.Fatalf("expected B to remain pending (not past deadline), got %q", latest[sgcB].Status)
+	}
+	if latest[sgcC].Status != "started" {
+		t.Fatalf("expected C to remain started (already claimed before deadline check), got %q", latest[sgcC].Status)
+	}
+	_ = recB
+	_ = recC
+}
+
+// TestExpireStalledAndClaimForSession_RaceResolvesExactlyOnce proves item 6:
+// ExpireStalled and ClaimForSession racing on the same record resolve it
+// exactly once -- one returns it, the other returns empty/nil.
+func TestExpireStalledAndClaimForSession_RaceResolvesExactlyOnce(t *testing.T) {
+	pool := newPendingRestartTestDB(t)
+	ctx := context.Background()
+	repo := NewPendingRestartRepository(pool)
+
+	sgcID := seedSGC(t, pool, "a")
+	sessionID := seedSession(t, pool, sgcID)
+
+	// Deadline already in the past, so ExpireStalled(now) is eligible to
+	// expire it at the same instant ClaimForSession tries to claim it.
+	if _, err := repo.Create(ctx, sgcID, sessionID, time.Now().Add(-time.Minute)); err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+
+	claimCh := make(chan struct {
+		claimed bool
+		err     error
+	}, 1)
+	expireCh := make(chan struct {
+		expiredCount int
+		err          error
+	}, 1)
+
+	go func() {
+		pr, err := repo.ClaimForSession(ctx, sessionID)
+		claimCh <- struct {
+			claimed bool
+			err     error
+		}{claimed: pr != nil, err: err}
+	}()
+	go func() {
+		recs, err := repo.ExpireStalled(ctx, time.Now())
+		expireCh <- struct {
+			expiredCount int
+			err          error
+		}{expiredCount: len(recs), err: err}
+	}()
+
+	claimRes := <-claimCh
+	expireRes := <-expireCh
+
+	if claimRes.err != nil {
+		t.Fatalf("ClaimForSession error: %v", claimRes.err)
+	}
+	if expireRes.err != nil {
+		t.Fatalf("ExpireStalled error: %v", expireRes.err)
+	}
+
+	claimedCount := 0
+	if claimRes.claimed {
+		claimedCount++
+	}
+
+	if claimedCount+expireRes.expiredCount != 1 {
+		t.Fatalf("expected exactly one of ClaimForSession/ExpireStalled to resolve the record, got claimed=%d expired=%d", claimedCount, expireRes.expiredCount)
+	}
+
+	latest, err := repo.GetLatestBySGCIDs(ctx, []int64{sgcID})
+	if err != nil {
+		t.Fatalf("GetLatestBySGCIDs: %v", err)
+	}
+	if latest[sgcID].Status != "started" && latest[sgcID].Status != "expired" {
+		t.Fatalf("expected final status to be exactly one of started/expired, got %q", latest[sgcID].Status)
+	}
+}
+
+// TestGetLatestBySGCIDs_OneEntryPerSGCWithRecordAndEmptyInputShortCircuits
+// proves item 7: GetLatestBySGCIDs returns one entry per SGC that has a
+// record and omits SGCs with none; an empty input slice returns an empty
+// map without querying.
+func TestGetLatestBySGCIDs_OneEntryPerSGCWithRecordAndEmptyInputShortCircuits(t *testing.T) {
+	pool := newPendingRestartTestDB(t)
+	ctx := context.Background()
+	repo := NewPendingRestartRepository(pool)
+
+	sgcWithRecord := seedSGC(t, pool, "with-record")
+	sgcWithoutRecord := seedSGC(t, pool, "without-record")
+	sessionID := seedSession(t, pool, sgcWithRecord)
+
+	if _, err := repo.Create(ctx, sgcWithRecord, sessionID, time.Now().Add(time.Hour)); err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+
+	latest, err := repo.GetLatestBySGCIDs(ctx, []int64{sgcWithRecord, sgcWithoutRecord})
+	if err != nil {
+		t.Fatalf("GetLatestBySGCIDs: %v", err)
+	}
+	if _, ok := latest[sgcWithRecord]; !ok {
+		t.Fatalf("expected an entry for the SGC that has a record")
+	}
+	if _, ok := latest[sgcWithoutRecord]; ok {
+		t.Fatalf("expected no entry for the SGC without a record")
+	}
+	if len(latest) != 1 {
+		t.Fatalf("expected exactly 1 entry, got %d: %+v", len(latest), latest)
+	}
+
+	empty, err := repo.GetLatestBySGCIDs(ctx, nil)
+	if err != nil {
+		t.Fatalf("GetLatestBySGCIDs with nil input should not error: %v", err)
+	}
+	if len(empty) != 0 {
+		t.Fatalf("expected an empty map for an empty input slice, got %+v", empty)
+	}
+}
