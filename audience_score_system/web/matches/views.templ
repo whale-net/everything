@@ -1,23 +1,138 @@
 package matches
 
 import (
+	"strconv"
+
 	"github.com/whale-net/everything/audience_score_system/store"
 	"github.com/whale-net/everything/audience_score_system/web/components"
 )
 
-// List is the pending-matches browse page (FR7, FR8) -- a Scaffold-phase
-// placeholder body. The Implementation phase replaces this with the real
-// per-match video/latest-metrics/best-guess-script/confidence rendering
-// (mirroring mcp/tools/matches.go's PendingMatchOutput shape) plus FR8's
-// message-plus-pointer empty state, assembled from a package-local view
-// struct built in matches.go -- this templ does no store calls itself,
-// matching web/research's split (see matches.go's package doc comment).
-templ List(data components.LayoutData, ch store.Channel) {
+// scriptStatusLabel renders a human-readable label for
+// store.VideoScriptStatus, mirroring web/schedule's statusLabel
+// convention (each `web` package that renders a VideoScriptStatus keeps
+// its own copy -- see this package's rationale in matches.go's doc
+// comment on why renderMatchScript isn't shared either).
+func scriptStatusLabel(s store.VideoScriptStatus) string {
+	switch s {
+	case store.VideoScriptStatusGreenlit:
+		return "Greenlit"
+	case store.VideoScriptStatusDenied:
+		return "Denied"
+	case store.VideoScriptStatusArchived:
+		return "Archived"
+	default:
+		return "Proposed"
+	}
+}
+
+// List is the Channel-scoped pending-matches browse page (FR7, FR8):
+// every pendingMatchView assembled by HandleList, oldest-first (as
+// ListPending returns them), for ch. truncated (FR NFR2) renders as a
+// static note when true -- never a paging control, since this package
+// exposes no since/page parameter anywhere (see matches.go's
+// defaultPendingLimit doc comment).
+templ List(data components.LayoutData, ch store.Channel, matches []pendingMatchView, truncated bool) {
 	@components.Layout(data) {
 		<div class="card bg-base-100 border border-base-300 shadow-sm">
 			<div class="card-body">
 				<h1 class="card-title">{ ch.Title } pending matches</h1>
+				if len(matches) == 0 {
+					<p class="text-base-content/70">
+						No pending matches. A match is queued here for human resolution
+						only when the sync worker cannot confidently auto-link a newly
+						published video to a greenlit script above its confidence
+						threshold (see ARCHITECTURE.md's "Outcome matching: confidence
+						threshold"). An empty list means every video synced so far
+						either auto-linked already or has no plausible candidate script
+						yet.
+					</p>
+				} else {
+					for _, m := range matches {
+						@pendingMatchCard(m)
+					}
+					if truncated {
+						<p class="text-sm text-base-content/50 mt-2">
+							Older pending matches exist beyond the newest { strconv.Itoa(defaultPendingLimit) }.
+						</p>
+					}
+				}
 			</div>
 		</div>
 	}
+}
+
+// pendingMatchCard renders one pendingMatchView: the published video
+// (title, publish time, latest metrics or "no metrics synced yet"), the
+// best-guess script (title, status, target publish date or "undated",
+// bound verdict version/value) when present, and the matcher's
+// confidence score.
+templ pendingMatchCard(m pendingMatchView) {
+	<div class="border border-base-300 rounded p-4 mb-2">
+		<h2 class="font-semibold">{ m.Video.Title }</h2>
+		if m.Video.PublishedAt != nil {
+			<p class="text-sm text-base-content/70">
+				Published: { m.Video.PublishedAt.UTC().Format("2006-01-02") }
+			</p>
+		}
+		@videoMetrics(m.Video)
+		<p class="text-sm">
+			Confidence: { strconv.FormatFloat(m.Confidence, 'f', 2, 64) }
+		</p>
+		if m.BestGuessScript != nil {
+			@bestGuessScript(*m.BestGuessScript)
+		} else {
+			<p class="text-sm text-base-content/70">No best-guess script found.</p>
+		}
+	</div>
+}
+
+// videoMetrics renders v's latest metrics snapshot, or an explicit "no
+// metrics synced yet" when v.MetricsMeasuredAt is nil -- never a zero
+// (see matchVideoView's doc comment).
+templ videoMetrics(v matchVideoView) {
+	if v.MetricsMeasuredAt == nil {
+		<p class="text-sm text-base-content/70">No metrics synced yet.</p>
+	} else {
+		<p class="text-sm text-base-content/70">
+			if v.Views != nil {
+				{ strconv.FormatInt(*v.Views, 10) } views
+			}
+			if v.AverageViewDurationSeconds != nil {
+				-- avg duration { strconv.FormatFloat(*v.AverageViewDurationSeconds, 'f', 1, 64) }s
+			}
+			if v.AverageViewPercentage != nil {
+				-- avg { strconv.FormatFloat(*v.AverageViewPercentage, 'f', 1, 64) }%
+			}
+			if v.Impressions != nil {
+				-- { strconv.FormatInt(*v.Impressions, 10) } impressions
+			}
+			if v.ImpressionCTR != nil {
+				-- CTR { strconv.FormatFloat(*v.ImpressionCTR, 'f', 2, 64) }
+			}
+			(measured { v.MetricsMeasuredAt.UTC().Format("2006-01-02") })
+		</p>
+	}
+}
+
+// bestGuessScript renders s: title, status badge, target publish date (or
+// "undated" -- normal per FR36, not an error), and the BOUND verdict
+// version/value (LB3: the version this script was proposed under, never
+// the Idea's current verdict).
+templ bestGuessScript(s matchScriptView) {
+	<div class="mt-2 pl-3 border-l-2 border-base-300">
+		<p class="text-sm font-medium">
+			Best guess: { s.Title }
+			<span class="badge badge-ghost ml-1">{ scriptStatusLabel(s.Status) }</span>
+		</p>
+		if s.TargetPublishDate != nil {
+			<p class="text-sm text-base-content/70">
+				Target: { s.TargetPublishDate.UTC().Format("2006-01-02") }
+			</p>
+		} else {
+			<p class="text-sm text-base-content/70">Undated</p>
+		}
+		<p class="text-sm text-base-content/70">
+			Verdict v{ strconv.Itoa(s.VerdictVersion) }: { string(s.Verdict) }
+		</p>
+	</div>
 }
