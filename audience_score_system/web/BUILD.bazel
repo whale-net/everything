@@ -29,6 +29,7 @@ go_library(
         "//audience_score_system/web/pages",
         "//audience_score_system/web/research",
         "//audience_score_system/web/schedule",
+        "//audience_score_system/web/videos",
         "//audience_score_system/worker/sync",
         "//libs/go/db",
         "//libs/go/htmxbase",
