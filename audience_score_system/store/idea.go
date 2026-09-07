@@ -170,11 +170,17 @@ func (s ideaStore) ListByChannel(ctx context.Context, channelID uuid.UUID) ([]Id
 
 // ListByChannelWithStats returns Ideas for channelID (same created_at
 // ordering as ListByChannel) alongside their research_note count and
-// whether each has at least one viability_verdict row -- computed with two
+// whether each has at least one viability_verdict row -- computed with
 // LEFT JOINs so this is one round trip rather than N+1 queries per Idea,
 // bounded by since/limit (NULL-safe SQL parameters, see fetchLimit/
 // paginate in pagination.go). Backs list_ideas (mcp/tools/research.go,
 // issue #1577).
+//
+// note_count counts notes via each Idea's research_thread(s), not
+// research_note.idea_id directly -- research_thread rt ON rt.idea_id =
+// i.id, then research_note rn ON rn.thread_id = rt.id -- same rationale
+// as researchNoteColumns in research.go, issue #1939: a note's Idea is
+// derived from its resolved thread everywhere in `store` now.
 func (s ideaStore) ListByChannelWithStats(ctx context.Context, channelID uuid.UUID, since *time.Time, limit int) ([]IdeaSummary, bool, error) {
 	rows, err := s.pool.Query(ctx, `
 		SELECT
@@ -182,7 +188,8 @@ func (s ideaStore) ListByChannelWithStats(ctx context.Context, channelID uuid.UU
 			COUNT(DISTINCT rn.id) AS note_count,
 			COUNT(DISTINCT vv.id) > 0 AS has_verdict
 		FROM idea i
-		LEFT JOIN research_note rn ON rn.idea_id = i.id
+		LEFT JOIN research_thread rt ON rt.idea_id = i.id
+		LEFT JOIN research_note rn ON rn.thread_id = rt.id
 		LEFT JOIN viability_verdict vv ON vv.idea_id = i.id
 		WHERE i.channel_id = $1
 		  AND ($2::timestamptz IS NULL OR i.created_at >= $2)
