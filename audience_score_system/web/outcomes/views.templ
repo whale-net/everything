@@ -1,0 +1,171 @@
+package outcomes
+
+import (
+	"strconv"
+
+	"github.com/whale-net/everything/audience_score_system/store"
+	"github.com/whale-net/everything/audience_score_system/web/components"
+)
+
+// scriptStatusLabel renders a human-readable label for
+// store.VideoScriptStatus, mirroring web/matches's/web/schedule's
+// identically-named/documented convention (each `web` package that
+// renders a VideoScriptStatus keeps its own copy -- see outcomes.go's
+// package doc comment on why HandleList's read isn't shared either).
+func scriptStatusLabel(s store.VideoScriptStatus) string {
+	switch s {
+	case store.VideoScriptStatusGreenlit:
+		return "Greenlit"
+	case store.VideoScriptStatusDenied:
+		return "Denied"
+	case store.VideoScriptStatusArchived:
+		return "Archived"
+	default:
+		return "Proposed"
+	}
+}
+
+// matchStateLabel renders a human-readable provenance label for
+// store.MatchState (FR22/FR23). PredictionVsOutcome's qualifying-row rule
+// guarantees every row's MatchState is MatchStateAuto or
+// MatchStateConfirmed -- pending/rejected matches never reach this view --
+// so the default case here is unreachable in practice, not a silently
+// swallowed third state.
+func matchStateLabel(s store.MatchState) string {
+	switch s {
+	case store.MatchStateAuto:
+		return "Auto-matched"
+	case store.MatchStateConfirmed:
+		return "Confirmed"
+	default:
+		return string(s)
+	}
+}
+
+// List is the Channel-scoped prediction-vs-outcome browse page (FR1, FR2):
+// every store.PredictionOutcome row HandleList loaded, most-recently-
+// published first (as PredictionVsOutcome returns them -- no re-sorting
+// here or in HandleList). truncated (NFR2) renders as a static note when
+// true -- never a paging control, since this package exposes no
+// since/before/limit parameter anywhere (see outcomes.go's
+// defaultOutcomesLimit doc comment). An empty rows renders FR2's
+// message-plus-pointer empty state instead of a bare "no data".
+templ List(data components.LayoutData, ch store.Channel, rows []store.PredictionOutcome, truncated bool) {
+	@components.Layout(data) {
+		<div class="card bg-base-100 border border-base-300 shadow-sm">
+			<div class="card-body">
+				<h1 class="card-title">{ ch.Title } outcomes</h1>
+				if len(rows) == 0 {
+					<p class="text-base-content/70">
+						No prediction-vs-outcome rows yet. A row appears here once a
+						greenlit or archived video script is linked to a published
+						video, either auto-matched when the sync worker links it above
+						its confidence threshold, or manually confirmed on the
+						<a href={ templ.URL("/channels/" + ch.ID.String() + "/matches") } class="link link-primary">
+							pending-matches page
+						</a>.
+					</p>
+				} else {
+					for _, row := range rows {
+						@outcomeCard(row)
+					}
+					if truncated {
+						<p class="text-sm text-base-content/50 mt-2">
+							Older outcomes exist beyond the newest { strconv.Itoa(defaultOutcomesLimit) }.
+						</p>
+					}
+				}
+			</div>
+		</div>
+	}
+}
+
+// outcomeCard renders one store.PredictionOutcome row: the Idea title, the
+// SPECIFIC bound verdict version (LB3 -- labeled explicitly so it is never
+// mistaken for the Idea's current verdict), the greenlit-or-archived
+// script (FR40: archived scripts render exactly like greenlit ones, never
+// filtered out), the published video, its latest metrics snapshot
+// (nullables render as "--", never 0), and the match's provenance/
+// confidence (FR22/FR23).
+templ outcomeCard(row store.PredictionOutcome) {
+	<div class="border border-base-300 rounded p-4 mb-2">
+		<h2 class="font-semibold">{ row.IdeaTitle }</h2>
+		<div class="mt-2 pl-3 border-l-2 border-base-300">
+			<p class="text-sm font-medium">
+				Bound verdict (v{ strconv.Itoa(row.VerdictVersion) }, not necessarily the Idea's current verdict): { string(row.Verdict) }
+			</p>
+			<p class="text-sm text-base-content/70">{ row.VerdictReasoning }</p>
+			<p class="text-sm text-base-content/50">
+				-- { row.VerdictAuthorDisplayName }, { row.VerdictCreatedAt.UTC().Format("2006-01-02") }
+			</p>
+		</div>
+		<div class="mt-2 pl-3 border-l-2 border-base-300">
+			<p class="text-sm font-medium">
+				Script: { row.ScriptTitle }
+				<span class="badge badge-ghost ml-1">{ scriptStatusLabel(row.ScriptStatus) }</span>
+			</p>
+			if row.TargetPublishDate != nil {
+				<p class="text-sm text-base-content/70">
+					Target: { row.TargetPublishDate.UTC().Format("2006-01-02") }
+				</p>
+			} else {
+				<p class="text-sm text-base-content/70">Undated</p>
+			}
+			if row.DecidedAt != nil {
+				<p class="text-sm text-base-content/70">
+					Decided: { row.DecidedAt.UTC().Format("2006-01-02") }
+				</p>
+			}
+		</div>
+		<div class="mt-2 pl-3 border-l-2 border-base-300">
+			<p class="text-sm font-medium">
+				Video: { row.VideoTitle } ({ row.YouTubeVideoID })
+			</p>
+			if row.PublishedAt != nil {
+				<p class="text-sm text-base-content/70">
+					Published: { row.PublishedAt.UTC().Format("2006-01-02") }
+				</p>
+			}
+			@outcomeMetrics(row)
+		</div>
+		<p class="text-sm mt-2">
+			{ matchStateLabel(row.MatchState) } -- confidence { strconv.FormatFloat(row.MatchConfidence, 'f', 2, 64) }
+		</p>
+	</div>
+}
+
+// outcomeMetrics renders row's latest metrics snapshot. Per this issue's
+// body, every nullable field renders as "--", never a bare 0 -- MetricsMeasuredAt
+// itself is never nil (PredictionVsOutcome's inner LATERAL join excludes any
+// video with no metrics row at all), but the individual measurement columns
+// still may be.
+templ outcomeMetrics(row store.PredictionOutcome) {
+	<p class="text-sm text-base-content/70">
+		if row.Views != nil {
+			{ strconv.FormatInt(*row.Views, 10) } views
+		} else {
+			-- views
+		}
+		if row.AverageViewDurationSeconds != nil {
+			-- avg duration { strconv.FormatFloat(*row.AverageViewDurationSeconds, 'f', 1, 64) }s
+		} else {
+			-- avg duration --
+		}
+		if row.AverageViewPercentage != nil {
+			-- avg { strconv.FormatFloat(*row.AverageViewPercentage, 'f', 1, 64) }%
+		} else {
+			-- avg --
+		}
+		if row.Impressions != nil {
+			-- { strconv.FormatInt(*row.Impressions, 10) } impressions
+		} else {
+			-- impressions --
+		}
+		if row.ImpressionCTR != nil {
+			-- CTR { strconv.FormatFloat(*row.ImpressionCTR, 'f', 2, 64) }
+		} else {
+			-- CTR --
+		}
+		(measured { row.MetricsMeasuredAt.UTC().Format("2006-01-02") })
+	</p>
+}

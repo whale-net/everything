@@ -32,6 +32,7 @@ import (
 	"github.com/whale-net/everything/audience_score_system/web/components"
 	"github.com/whale-net/everything/audience_score_system/web/invite"
 	"github.com/whale-net/everything/audience_score_system/web/matches"
+	"github.com/whale-net/everything/audience_score_system/web/outcomes"
 	"github.com/whale-net/everything/audience_score_system/web/pages"
 	"github.com/whale-net/everything/audience_score_system/web/research"
 	"github.com/whale-net/everything/audience_score_system/web/schedule"
@@ -147,6 +148,7 @@ type app struct {
 	access   *access.Handlers
 	research *research.Handlers
 	matches  *matches.Handlers
+	outcomes *outcomes.Handlers
 
 	// mcpProvider is mcpauth's OAuth2 authorization-server front end
 	// (issue #1646, FR12/NFR4): /authorize, /token, /register, and
@@ -289,6 +291,12 @@ func run() error {
 	// grant of its own.
 	matchesHandlers := matches.New(st)
 
+	// outcomesHandlers is milestone M4.3's read-only prediction-vs-outcome
+	// browse surface (#1928, FR1/FR2, plus the "View outcomes" link half of
+	// FR11) -- needs only st (store.CanRead + Browse()/Channels()/
+	// Roles()), no separate OAuth grant of its own.
+	outcomesHandlers := outcomes.New(st)
+
 	// mcpauth's OAuth2 authorization-server front end (issue #1646,
 	// FR12/NFR4): mints the bearer credential an MCP client presents to
 	// `mcp`, reusing this Person's existing C1 Google-OIDC-backed session
@@ -337,7 +345,7 @@ func run() error {
 		return fmt.Errorf("construct mcpauth provider: %w", err)
 	}
 
-	application := &app{store: st, auth: authenticator, invite: inviteHandlers, channels: channelHandler, schedule: scheduleHandlers, access: accessHandlers, research: researchHandlers, matches: matchesHandlers, mcpProvider: mcpProvider}
+	application := &app{store: st, auth: authenticator, invite: inviteHandlers, channels: channelHandler, schedule: scheduleHandlers, access: accessHandlers, research: researchHandlers, matches: matchesHandlers, outcomes: outcomesHandlers, mcpProvider: mcpProvider}
 
 	mux := http.NewServeMux()
 	application.setupRoutes(mux)
@@ -483,6 +491,14 @@ func (a *app) setupRoutes(mux *http.ServeMux) {
 	// matches.Handlers.authorizeWrite.
 	mux.HandleFunc("GET /channels/{id}/matches", a.auth.RequireSignedIn(a.matches.HandleList))
 	mux.HandleFunc("POST /channels/{id}/matches/{matchID}/resolve", a.auth.RequireSignedIn(a.matches.HandleResolve))
+
+	// Protected: milestone M4.3's read-only prediction-vs-outcome browse
+	// page (#1928, FR1/FR2, NFR2). Visible to a Channel's Founder,
+	// Co-Creator, AND Analyst (store.CanRead) -- mirrors the matches block
+	// above's read gate exactly. The calibration-trend section and
+	// outcome-bar save form (FR3-FR6) land on this same route in the
+	// follow-up task.
+	mux.HandleFunc("GET /channels/{id}/outcomes", a.auth.RequireSignedIn(a.outcomes.HandleList))
 
 	// Protected: the cross-Channel "my work" aggregate (M2: FR27/FR28,
 	// #1725) -- see handleMyWork's doc comment.
