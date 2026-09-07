@@ -1,4 +1,4 @@
-load("@rules_go//go:def.bzl", "go_binary", "go_library")
+load("@rules_go//go:def.bzl", "go_binary", "go_library", "go_test")
 
 go_library(
     name = "emulator_lib",
@@ -20,4 +20,12 @@ go_binary(
     visibility = ["//visibility:public"],
 )
 
-# emulator_test (srcs = ["config_test.go"]) lands in the Testing phase.
+go_test(
+    name = "emulator_test",
+    srcs = ["config_test.go"],
+    embed = [":emulator_lib"],
+    deps = [
+        "@com_github_stretchr_testify//assert",
+        "@com_github_stretchr_testify//require",
+    ],
+)
