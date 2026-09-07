@@ -14,7 +14,7 @@ Two ASS MCP servers are configured: `audience-score-system-mcp-dev` and `audienc
 
 ## Loop 1 — Viability verdict (C5)
 
-1. `list_research_notes` (channel_id, idea_id) and `get_viability_verdict` (channel_id, idea_id) to read every note and the current verdict history (FR13) for the Idea.
+1. `list_research_notes` (channel_id, idea_id, `current_only: true`) and `get_viability_verdict` (channel_id, idea_id) to read the current notes and the verdict history for the Idea. Set `current_only: true` (FR8/FR13) rather than reading the full uncollapsed history: superseded and excluded notes are omitted so the verdict is grounded in resolved research, not in claims a later note already retired. Notes that are only the target of `caveats`, `follows_up`, or `summarizes` relations are still returned under `current_only: true` — they're context, not corrections, so weigh them alongside whatever they qualify or extend.
 2. Judge viability using *only* what's in the notes — if the research doesn't support a call either way, that itself is the answer: verdict `needs-more-research`, with `reasoning` stating exactly what's missing (so the `research` skill knows what to dispatch the `researcher` persona for next).
 3. Call `save_viability_verdict`:
    - `verdict`: `viable`, `not-viable`, or `needs-more-research`
@@ -22,6 +22,7 @@ Two ASS MCP servers are configured: `audience-score-system-mcp-dev` and `audienc
    - `cited_research_note_ids`: every note ID the verdict actually relies on (FR11) — omitting a note you used breaks the audit trail this field exists for
    - `idempotency_key`: always supply one — a retry without it appends a spurious duplicate version (FR12/NFR2), corrupting the history `get_viability_verdict` returns
 4. Never overwrite — `save_viability_verdict` always appends a new version. If you're revising an earlier call, that's still a new call with fresh reasoning, not an edit.
+5. When reading an *existing* verdict via `get_viability_verdict` (rather than only writing a new one), check each entry in its `cited_research_notes` for a `retired_by` field (FR10) — present only when that exact cited note is now a `supersedes`/`excludes` target. It doesn't redirect you to a replacement note; it's a warning that the verdict's grounding may be stale. Treat a verdict with any `retired_by` citation as a candidate for re-judging against the current (`current_only: true`) notes rather than trusting it at face value.
 
 ## Loop 2 — video_script proposal (C18)
 
