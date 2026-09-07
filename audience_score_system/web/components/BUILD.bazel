@@ -3,7 +3,10 @@ load("//tools:templ.bzl", "templ_library")
 templ_library(
     name = "components",
     srcs = glob(["*.templ"]),
-    go_srcs = ["render.go"],
+    go_srcs = [
+        "render.go",
+        "verdict.go",
+    ],
     visibility = [
         "//audience_score_system/citest:__pkg__",
         "//audience_score_system/web:__subpackages__",
