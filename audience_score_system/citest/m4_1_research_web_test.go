@@ -414,6 +414,7 @@ func TestE2E_M41_ResearchWebSaveBrowse(t *testing.T) {
 			// matching m3_calibration_test.go's stated precedent.
 			_, err := w.st.Research().SaveNote(ctx, store.SaveNoteInput{
 				ChannelID: ch.ID, IdeaID: &nfrIdea.ID, Text: fmt.Sprintf("nfr2 note %d", i), AuthorPersonID: creator.ID,
+				ThreadTitle: "Research",
 			})
 			require.NoError(t, err)
 		}
