@@ -43,6 +43,17 @@ type CitedNoteOutput struct {
 	TextExcerpt string  `json:"text_excerpt" jsonschema:"The cited note's text, truncated to 200 runes; see list_research_notes for the full text"`
 	SourceURL   *string `json:"source_url,omitempty" jsonschema:"The cited note's own source URL, if any"`
 	Cited       bool    `json:"cited" jsonschema:"True if the research note itself has a source_url (FR10) -- distinct from the fact that a verdict cites this note"`
+	// RetiredBy is FR10's staleness warning: the relation type(s)
+	// (research_note_relation.relation_type -- "supersedes" and/or
+	// "excludes") that currently target this cited note, from
+	// store.ResearchStore.RetiredNoteIDs. Omitted entirely (nil, not an
+	// empty list) for a live note -- never a false-y-but-present value a
+	// caller could mistake for "retired but with no reason". This is
+	// purely informational: the citation above still names this EXACT
+	// note (verdict_citation is never re-resolved to whatever superseded
+	// or excluded it -- root plan, Out of scope), so a caller sees both
+	// the original grounding and a warning that it may now be stale.
+	RetiredBy []string `json:"retired_by,omitempty" jsonschema:"Present only when this note is a CURRENT target of a supersedes and/or excludes relation (FR10): the relation type(s) responsible, e.g. [\"supersedes\"]. The citation still points at this exact note -- this is a staleness warning about the verdict's grounding, not a redirect to a replacement note. Absent for a live note."`
 }
 
 // Excerpt truncates s to at most CitationExcerptRunes runes, appending
@@ -58,10 +69,27 @@ func Excerpt(s string) string {
 	return string(runes[:CitationExcerptRunes]) + "..."
 }
 
+// relationTypeStrings renders types (RetiredNoteIDs' per-note slice) as
+// []string for CitedNoteOutput.RetiredBy's wire shape -- nil in, nil out,
+// so an unretired note's RetiredBy stays nil (omitempty) rather than an
+// empty-but-present slice.
+func relationTypeStrings(types []store.RelationType) []string {
+	if len(types) == 0 {
+		return nil
+	}
+	out := make([]string, len(types))
+	for i, t := range types {
+		out[i] = string(t)
+	}
+	return out
+}
+
 // resolveCitedNotes resolves noteIDs (a Verdict's CitedResearchNoteIDs)
 // via research.GetByIDs -- ONE batched query regardless of how many ids
 // are cited (FR16/NFR2: the same batched read web/research's
-// renderIdeaDetail uses) -- and renders each as CitedNoteOutput, in the
+// renderIdeaDetail uses) -- and research.RetiredNoteIDs (FR10, the SAME
+// batched call for the whole list, never one query per note) for each
+// note's staleness warning, then renders each as CitedNoteOutput, in the
 // SAME order as noteIDs. An id that no longer resolves (should not
 // happen -- verdict_citation FKs research_note and nothing in this
 // package ever deletes a research_note) is surfaced as an error rather
@@ -71,6 +99,10 @@ func resolveCitedNotes(ctx context.Context, research store.ResearchStore, noteID
 	notes, err := research.GetByIDs(ctx, noteIDs)
 	if err != nil {
 		return nil, fmt.Errorf("load cited research notes: %w", err)
+	}
+	retired, err := research.RetiredNoteIDs(ctx, noteIDs)
+	if err != nil {
+		return nil, fmt.Errorf("load retired research notes: %w", err)
 	}
 	out := make([]CitedNoteOutput, 0, len(noteIDs))
 	for _, id := range noteIDs {
@@ -83,6 +115,7 @@ func resolveCitedNotes(ctx context.Context, research store.ResearchStore, noteID
 			TextExcerpt: Excerpt(note.Text),
 			SourceURL:   note.SourceURL,
 			Cited:       note.Cited(),
+			RetiredBy:   relationTypeStrings(retired[id]),
 		})
 	}
 	return out, nil

@@ -1761,6 +1761,188 @@ func TestResearchStore_BackfilledPreMigrationNoteReportsSameIdeaIDAfterCutover(t
 	assert.True(t, found, "ListFiltered(ideaID) must also find the backfilled note via its resolved thread")
 }
 
+// ── ResearchStore.RetiredNoteIDs (FR10/FR16/NFR2, issue #1944) ─────────────
+//
+// RetiredNoteIDs is the single "retired" derivation both mcp/tools.
+// resolveCitedNotes and web/research's renderIdeaDetail read (see its own
+// doc comment in research.go for why it's a direct query against
+// research_note_relation rather than v_current_research_note itself --
+// same predicate, different granularity). These tests exercise that
+// predicate directly against real Postgres: supersedes/excludes retire,
+// caveats/follows_up/summarizes never do (FR7's distinction), a note with
+// no relation at all is simply absent from the map, a note targeted by
+// both supersedes and excludes reports both, and the whole call is one
+// SQL statement regardless of how many ids are asked about (FR16/NFR2).
+
+// TestResearchStore_RetiredNoteIDs_SupersededNote_ReturnsSupersedes proves
+// a note that is the CURRENT target of a supersedes relation is reported
+// with exactly RelationSupersedes.
+func TestResearchStore_RetiredNoteIDs_SupersededNote_ReturnsSupersedes(t *testing.T) {
+	ctx := context.Background()
+	s, _ := newStore(t)
+	ch, creator := setupChannel(t, ctx, s)
+
+	target, err := s.Research().SaveNote(ctx, store.SaveNoteInput{
+		ChannelID: ch.ID, ThreadTitle: "Thread", Text: "the original note", AuthorPersonID: creator.ID,
+	})
+	require.NoError(t, err)
+	_, err = s.Research().SaveNote(ctx, store.SaveNoteInput{
+		ChannelID: ch.ID, ThreadID: target.ThreadID, Text: "a newer note that supersedes it", AuthorPersonID: creator.ID,
+		Relations: []store.SaveNoteRelationInput{{RelatedNoteID: target.ID, RelationType: store.RelationSupersedes}},
+	})
+	require.NoError(t, err)
+
+	retired, err := s.Research().RetiredNoteIDs(ctx, []uuid.UUID{target.ID})
+	require.NoError(t, err)
+	assert.Equal(t, []store.RelationType{store.RelationSupersedes}, retired[target.ID])
+}
+
+// TestResearchStore_RetiredNoteIDs_ExcludedNote_ReturnsExcludes mirrors the
+// supersedes test for the excludes relation type.
+func TestResearchStore_RetiredNoteIDs_ExcludedNote_ReturnsExcludes(t *testing.T) {
+	ctx := context.Background()
+	s, _ := newStore(t)
+	ch, creator := setupChannel(t, ctx, s)
+
+	target, err := s.Research().SaveNote(ctx, store.SaveNoteInput{
+		ChannelID: ch.ID, ThreadTitle: "Thread", Text: "the excluded note", AuthorPersonID: creator.ID,
+	})
+	require.NoError(t, err)
+	_, err = s.Research().SaveNote(ctx, store.SaveNoteInput{
+		ChannelID: ch.ID, ThreadID: target.ThreadID, Text: "a note that excludes it", AuthorPersonID: creator.ID,
+		Relations: []store.SaveNoteRelationInput{{RelatedNoteID: target.ID, RelationType: store.RelationExcludes}},
+	})
+	require.NoError(t, err)
+
+	retired, err := s.Research().RetiredNoteIDs(ctx, []uuid.UUID{target.ID})
+	require.NoError(t, err)
+	assert.Equal(t, []store.RelationType{store.RelationExcludes}, retired[target.ID])
+}
+
+// TestResearchStore_RetiredNoteIDs_NonRetiringRelationTypes_DoNotRetire is
+// the FR7 distinction test: caveats, follows_up, and summarizes name a
+// prior note without retiring it -- one subtest per type, per the issue's
+// Testing section ("one test per type").
+func TestResearchStore_RetiredNoteIDs_NonRetiringRelationTypes_DoNotRetire(t *testing.T) {
+	for _, relationType := range []store.RelationType{store.RelationCaveats, store.RelationFollowsUp, store.RelationSummarizes} {
+		t.Run(string(relationType), func(t *testing.T) {
+			ctx := context.Background()
+			s, _ := newStore(t)
+			ch, creator := setupChannel(t, ctx, s)
+
+			target, err := s.Research().SaveNote(ctx, store.SaveNoteInput{
+				ChannelID: ch.ID, ThreadTitle: "Thread", Text: "target note", AuthorPersonID: creator.ID,
+			})
+			require.NoError(t, err)
+			_, err = s.Research().SaveNote(ctx, store.SaveNoteInput{
+				ChannelID: ch.ID, ThreadID: target.ThreadID, Text: "a related note", AuthorPersonID: creator.ID,
+				Relations: []store.SaveNoteRelationInput{{RelatedNoteID: target.ID, RelationType: relationType}},
+			})
+			require.NoError(t, err)
+
+			retired, err := s.Research().RetiredNoteIDs(ctx, []uuid.UUID{target.ID})
+			require.NoError(t, err)
+			_, retiredAtAll := retired[target.ID]
+			assert.False(t, retiredAtAll, "relation_type %q must never retire its target", relationType)
+		})
+	}
+}
+
+// TestResearchStore_RetiredNoteIDs_LiveNoteNoRelation_AbsentFromMap proves
+// a note with no research_note_relation row at all is simply absent from
+// the returned map (never a false-y present entry).
+func TestResearchStore_RetiredNoteIDs_LiveNoteNoRelation_AbsentFromMap(t *testing.T) {
+	ctx := context.Background()
+	s, _ := newStore(t)
+	ch, creator := setupChannel(t, ctx, s)
+
+	note, err := s.Research().SaveNote(ctx, store.SaveNoteInput{
+		ChannelID: ch.ID, ThreadTitle: "Thread", Text: "a live note", AuthorPersonID: creator.ID,
+	})
+	require.NoError(t, err)
+
+	retired, err := s.Research().RetiredNoteIDs(ctx, []uuid.UUID{note.ID})
+	require.NoError(t, err)
+	_, ok := retired[note.ID]
+	assert.False(t, ok, "a note with no supersedes/excludes relation must be absent from the map")
+}
+
+// TestResearchStore_RetiredNoteIDs_BothSupersededAndExcluded_ReturnsBothTypes
+// proves a note that is the target of BOTH a supersedes and an excludes
+// relation (from two different notes) reports both types in its slice.
+func TestResearchStore_RetiredNoteIDs_BothSupersededAndExcluded_ReturnsBothTypes(t *testing.T) {
+	ctx := context.Background()
+	s, _ := newStore(t)
+	ch, creator := setupChannel(t, ctx, s)
+
+	target, err := s.Research().SaveNote(ctx, store.SaveNoteInput{
+		ChannelID: ch.ID, ThreadTitle: "Thread", Text: "target note", AuthorPersonID: creator.ID,
+	})
+	require.NoError(t, err)
+	_, err = s.Research().SaveNote(ctx, store.SaveNoteInput{
+		ChannelID: ch.ID, ThreadID: target.ThreadID, Text: "supersedes it", AuthorPersonID: creator.ID,
+		Relations: []store.SaveNoteRelationInput{{RelatedNoteID: target.ID, RelationType: store.RelationSupersedes}},
+	})
+	require.NoError(t, err)
+	_, err = s.Research().SaveNote(ctx, store.SaveNoteInput{
+		ChannelID: ch.ID, ThreadID: target.ThreadID, Text: "also excludes it", AuthorPersonID: creator.ID,
+		Relations: []store.SaveNoteRelationInput{{RelatedNoteID: target.ID, RelationType: store.RelationExcludes}},
+	})
+	require.NoError(t, err)
+
+	retired, err := s.Research().RetiredNoteIDs(ctx, []uuid.UUID{target.ID})
+	require.NoError(t, err)
+	assert.ElementsMatch(t, []store.RelationType{store.RelationSupersedes, store.RelationExcludes}, retired[target.ID],
+		"a note targeted by both supersedes and excludes must report both relation types")
+}
+
+// TestResearchStore_RetiredNoteIDs_FiveNoteIDs_IsSingleQuery is FR16/
+// NFR2's batching proof, mirroring TestAccessStore_ChannelsWithRoleForPerson_
+// IsSingleQuery's queryCounter/tracedStore pattern: resolving 5 note ids
+// (a mix of superseded, excluded, and live) issues exactly ONE SQL
+// statement, never one per id.
+func TestResearchStore_RetiredNoteIDs_FiveNoteIDs_IsSingleQuery(t *testing.T) {
+	ctx := context.Background()
+	s, db := newStore(t)
+	ch, creator := setupChannel(t, ctx, s)
+
+	var noteIDs []uuid.UUID
+	for i := 0; i < 5; i++ {
+		n, err := s.Research().SaveNote(ctx, store.SaveNoteInput{
+			ChannelID: ch.ID, ThreadTitle: "Thread", Text: fmt.Sprintf("note %d", i), AuthorPersonID: creator.ID,
+		})
+		require.NoError(t, err)
+		noteIDs = append(noteIDs, n.ID)
+	}
+	// Retire two of the five so the query has real predicate work to do,
+	// not just an empty result set.
+	first, err := s.Research().GetByID(ctx, noteIDs[0])
+	require.NoError(t, err)
+	_, err = s.Research().SaveNote(ctx, store.SaveNoteInput{
+		ChannelID: ch.ID, ThreadID: first.ThreadID, Text: "supersedes note 0", AuthorPersonID: creator.ID,
+		Relations: []store.SaveNoteRelationInput{{RelatedNoteID: noteIDs[0], RelationType: store.RelationSupersedes}},
+	})
+	require.NoError(t, err)
+
+	second, err := s.Research().GetByID(ctx, noteIDs[1])
+	require.NoError(t, err)
+	_, err = s.Research().SaveNote(ctx, store.SaveNoteInput{
+		ChannelID: ch.ID, ThreadID: second.ThreadID, Text: "excludes note 1", AuthorPersonID: creator.ID,
+		Relations: []store.SaveNoteRelationInput{{RelatedNoteID: noteIDs[1], RelationType: store.RelationExcludes}},
+	})
+	require.NoError(t, err)
+
+	counter := &queryCounter{}
+	traced := tracedStore(t, ctx, db, counter)
+
+	retired, err := traced.Research().RetiredNoteIDs(ctx, noteIDs)
+	require.NoError(t, err)
+	assert.Equal(t, []store.RelationType{store.RelationSupersedes}, retired[noteIDs[0]])
+	assert.Equal(t, []store.RelationType{store.RelationExcludes}, retired[noteIDs[1]])
+
+	assert.Equal(t, int64(1), counter.n.Load(), "resolving 5 note ids must issue exactly ONE SQL statement, never one per id")
+}
+
 // ── SyncStore (FR14/FR21) ────────────────────────────────────────────────────
 
 func TestSyncStore_UpsertVideos_SameYouTubeIDUpdatesNotDuplicates(t *testing.T) {
