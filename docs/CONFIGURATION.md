@@ -7,6 +7,7 @@ This guide covers the configuration files and build settings for the monorepo.
 The repository uses several configuration files for build and dependency management:
 
 - **`.bazelrc`**: Contains common Bazel configuration including CI optimizations, test settings, and build flags
+- **`.bazelrc.user.example`**: Template for your personal, machine-level `~/.bazelrc` (vendor mode, shared disk cache, remote cache) — see § Sample Machine-Level Config below
 - **`MODULE.bazel`**: Defines external dependencies using Bazel's bzlmod system, including rules for Python, Go, and OCI containers
 - **`pyproject.toml`**: Python dependencies specification managed by uv
 - **`uv.lock`**: Locked Python dependency versions with platform-specific wheels
@@ -54,6 +55,15 @@ The repository supports optional Bazel remote caching for improved CI performanc
 - Secrets and variables are passed from workflow to action via inputs for proper access control
 - Generated `.bazelrc.remote` file is excluded from git via `.gitignore`
 - Basic authentication is embedded in the cache URL and passed as an Authorization header to the remote downloader during configuration
+
+## Sample Machine-Level Config (`~/.bazelrc`)
+
+[`.bazelrc.user.example`](../.bazelrc.user.example) at the repo root is a copy-paste
+starting point for your personal, machine-level `~/.bazelrc`: vendor mode (below),
+a shared disk cache directory, and a commented-out remote cache entry. Copy it to
+`~/.bazelrc` and fill in the placeholders — see that file's header comment for why it
+belongs in your home directory rather than a repo-local file, and never commit your
+personal copy.
 
 ## Shared Vendor Directory (`bazel vendor //...`)
 

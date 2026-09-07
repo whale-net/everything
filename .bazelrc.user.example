@@ -1,0 +1,35 @@
+# Sample machine-level Bazel config — see docs/CONFIGURATION.md § Shared Vendor
+# Directory and § Remote Cache Configuration for background on each setting below.
+#
+# Copy this file to `~/.bazelrc` (your personal, machine-level Bazel config —
+# NOT a file named `.bazelrc.user` inside the repo). Bazel automatically reads
+# `~/.bazelrc` as its "home rc" on every invocation, regardless of which git
+# worktree of this repo you're building from, so settings placed there are
+# shared across every worktree on this machine without any per-worktree setup.
+#
+# Do not commit your personal `~/.bazelrc` — this file is only a template.
+# Replace <you> below with your username (or the equivalent of $HOME).
+
+# ── Vendor mode ───────────────────────────────────────────────────────────────
+# Shares one copy of every external repo (bazel_dep's, Go modules, the Python
+# interpreter/wheels, etc.) across every worktree on this machine, instead of
+# each worktree's own output base independently fetching and extracting its
+# own copy. Must be an absolute path outside any git worktree.
+# Populate/refresh with `bazel vendor //...` after adding or updating a
+# dependency (see the `vendor-sync` skill, which automates this).
+common --vendor_dir=/home/<you>/.cache/bazel-vendor/everything
+
+# ── Shared disk cache ─────────────────────────────────────────────────────────
+# Local action-result cache written outside any worktree, so builds and tests
+# in one worktree reuse action outputs already produced by another worktree
+# instead of recomputing them per-worktree output base.
+build --disk_cache=/home/<you>/.cache/bazel-disk-cache/everything
+
+# ── Remote cache (optional) ───────────────────────────────────────────────────
+# Points at a shared remote cache so local builds can reuse action outputs
+# produced by CI (and vice versa). See docs/CONFIGURATION.md § Remote Cache
+# Configuration for the URL scheme (grpc(s):// or http(s)://) and auth options
+# CI uses via the setup-build-env action. Uncomment and fill in to enable:
+# build --remote_cache=grpcs://cache.example.com:443
+# build --remote_cache_header=Authorization=Basic <base64-user:password>
+# build --remote_upload_local_results=true
