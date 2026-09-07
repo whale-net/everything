@@ -1754,6 +1754,7 @@ func TestMigrations_UpDownUp_LeavesNoOrphanObjects(t *testing.T) {
 		"idea", "research_note", "viability_verdict", "verdict_citation",
 		"synced_video", "video_metrics",
 		"video_schedule_match", "mcp_idempotency",
+		"research_thread", "research_note_relation",
 		"web_session",
 		"channel_credential",
 		"mcp_credential",
@@ -1788,7 +1789,7 @@ func TestMigrations_UpDownUp_LeavesNoOrphanObjects(t *testing.T) {
 	// their underlying tables, so a partial down/up that forgot to re-drop
 	// or re-create a view would surface here as a missing or duplicate
 	// object.
-	for _, view := range []string{"v_current_verdict", "v_prediction_vs_outcome"} {
+	for _, view := range []string{"v_current_verdict", "v_prediction_vs_outcome", "v_current_research_note"} {
 		var exists bool
 		require.NoError(t, db.Pool.QueryRow(ctx,
 			`SELECT EXISTS (SELECT 1 FROM information_schema.views WHERE table_name = $1)`, view,
