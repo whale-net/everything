@@ -27,10 +27,18 @@ go_binary(
 
 go_test(
     name = "emulator_test",
-    srcs = ["config_test.go"],
+    srcs = [
+        "board_test.go",
+        "config_test.go",
+        "scenario_test.go",
+    ],
+    data = ["//leaflab/scripts:scenarios"],
     embed = [":emulator_lib"],
     deps = [
+        "//firmware/proto:configpb",
+        "//firmware/proto:firmwarepb",
         "@com_github_stretchr_testify//assert",
         "@com_github_stretchr_testify//require",
+        "@org_golang_google_protobuf//proto",
     ],
 )
