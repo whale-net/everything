@@ -32,6 +32,9 @@ go_test(
     ],
     embed = [":handlers"],
     deps = [
+        "//manmanv2/api/repository",
+        "//manmanv2/events",
+        "//manmanv2/host/rmq",
         "//manmanv2/models",
     ],
 )
