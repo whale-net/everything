@@ -108,6 +108,7 @@ import (
 	"github.com/whale-net/everything/audience_score_system/migrate/schema"
 	"github.com/whale-net/everything/audience_score_system/store"
 	"github.com/whale-net/everything/audience_score_system/web/auth"
+	"github.com/whale-net/everything/audience_score_system/web/components"
 	"github.com/whale-net/everything/audience_score_system/web/research"
 	"github.com/whale-net/everything/libs/go/dbtest"
 	"github.com/whale-net/everything/libs/go/mcpauth"
@@ -585,8 +586,22 @@ func TestHandleChannelIndex_RendersNoteCountVerdictPresence_AndUnattachedNotesSe
 	// title's row -- a crude but effective check that ListByChannelWithStats'
 	// count made it to the page.
 	assert.Regexp(t, `Idea With Verdict[\s\S]{0,400}>2<`, body, "note count for the two-note idea must render")
-	assert.Contains(t, body, "Verdict recorded", "the idea with a verdict must show verdict-recorded")
-	assert.Contains(t, body, "None yet", "the idea without a verdict must show none-yet")
+	// FR31/FR32 (#2028): the verdict-presence indicator is a single glyph
+	// (with an accessible title/aria-label carrying the old text), never a
+	// badge/box. Scope the badge-absence check to the ideas table itself
+	// (between its own header row and closing tag) -- the page's
+	// unattached-notes section legitimately renders unrelated "badge
+	// badge-ghost"/"badge badge-success" Cited/Uncited indicators
+	// (citedBadge), which must not make this assertion a false negative.
+	assert.Contains(t, body, `title="Verdict recorded"`, "the idea with a verdict must show the verdict-recorded glyph's accessible title")
+	assert.Contains(t, body, `title="No verdict yet"`, "the idea without a verdict must show the no-verdict glyph's accessible title")
+	assert.Contains(t, body, components.NoVerdictGlyph, "the idea without a verdict must render the shared no-verdict glyph")
+	ideasTableStart := strings.Index(body, "<th>Idea</th>")
+	require.Greater(t, ideasTableStart, 0, "the ideas table header must render")
+	ideasTableEnd := strings.Index(body[ideasTableStart:], "</table>")
+	require.Greater(t, ideasTableEnd, 0, "the ideas table must close")
+	ideasTable := body[ideasTableStart : ideasTableStart+ideasTableEnd]
+	assert.NotContains(t, ideasTable, "badge", "the ideas table's verdict-presence indicator must never render as a badge/box (FR31)")
 
 	// The unattached note must not be rendered as though it belonged to
 	// either idea's row -- split the body at the unattached-notes section
@@ -822,6 +837,17 @@ func TestHandleIdeaDetail_ThreeVerdictVersions_OldestToNewest_WithSource(t *test
 
 	assert.Contains(t, body, "Agent", "an agent-sourced verdict must render its source")
 	assert.Contains(t, body, "Human", "a human-sourced verdict must render its source")
+
+	// FR31/FR32 (#2028): each verdict's status renders as a single glyph
+	// (via components.VerdictGlyph), never the old badge-warning/
+	// badge-error verdict box -- needs-more-research and not-viable are
+	// exactly the two verdict values whose old badge classes would appear
+	// here if the badge/box rendering had regressed.
+	assert.Contains(t, body, components.VerdictGlyph(store.VerdictNeedsMoreResearch), "v1's needs-more-research verdict must render its glyph")
+	assert.Contains(t, body, components.VerdictGlyph(store.VerdictNotViable), "v2's not-viable verdict must render its glyph")
+	assert.Contains(t, body, components.VerdictGlyph(store.VerdictViable), "v3's viable verdict must render its glyph")
+	assert.NotContains(t, body, "badge badge-warning", "no verdict status may render as the old needs-more-research badge/box (FR31)")
+	assert.NotContains(t, body, "badge badge-error", "no verdict status may render as the old not-viable badge/box (FR31)")
 }
 
 // TestHandleIdeaDetail_CitedAndUncitedNotes_RenderFromCited proves the

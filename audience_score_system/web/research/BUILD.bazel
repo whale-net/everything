@@ -73,6 +73,7 @@ go_test(
         "//audience_score_system/migrate/schema",
         "//audience_score_system/store",
         "//audience_score_system/web/auth",
+        "//audience_score_system/web/components",
         "//libs/go/dbtest",
         "//libs/go/mcpauth",
         "//libs/go/migrate",
