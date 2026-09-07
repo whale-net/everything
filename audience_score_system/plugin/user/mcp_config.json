@@ -1,0 +1,10 @@
+{
+  "mcpServers": {
+    "audience-score-system-mcp-dev": {
+      "serverUrl": "https://dev-mcp.ass.whalenet.dev"
+    },
+    "audience-score-system-mcp-prod": {
+      "serverUrl": "https://mcp.ass.whalenet.app"
+    }
+  }
+}

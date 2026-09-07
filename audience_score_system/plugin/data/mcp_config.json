@@ -1,0 +1,25 @@
+{
+  "mcpServers": {
+    "audience-score-system-pg-tilt": {
+      "command": "uvx",
+      "args": ["--with", "mcp<2", "postgres-mcp", "--access-mode=restricted"],
+      "env": {
+        "DATABASE_URI": "postgresql://postgres:password@localhost:5432/audience_score_system"
+      }
+    },
+    "audience-score-system-pg-dev": {
+      "command": "uvx",
+      "args": ["--with", "mcp<2", "postgres-mcp", "--access-mode=restricted"],
+      "env": {
+        "DATABASE_URI": "${ASS_DEV_DATABASE_URI}"
+      }
+    },
+    "audience-score-system-pg-prod": {
+      "command": "uvx",
+      "args": ["--with", "mcp<2", "postgres-mcp", "--access-mode=restricted"],
+      "env": {
+        "DATABASE_URI": "${ASS_PROD_DATABASE_URI}"
+      }
+    }
+  }
+}
