@@ -60,6 +60,32 @@ type ResearchNoteWithAuthor struct {
 	AuthorDisplayName string
 }
 
+// RelationDirection is one research_note_relation edge's orientation as
+// seen from one specific note's point of view -- "outgoing" when that note
+// is the row's note_id (it declared the relation), "incoming" when that
+// note is the row's related_note_id (another note targets it). Issue
+// #1942 (FR11): a note's own relation edges must be visible on an
+// ordinary browse, not only inferable from #1941's current_only exclusion
+// or #1944's verdict-citation warning.
+type RelationDirection string
+
+const (
+	RelationOutgoing RelationDirection = "outgoing"
+	RelationIncoming RelationDirection = "incoming"
+)
+
+// NoteRelation is one research_note_relation row as seen from one of the
+// notes it touches: the OTHER note it points to/from (RelatedNoteID), the
+// relation_type, and which end the note ListRelationsForNotes was asked
+// about sits on (Direction). A single research_note_relation row yields up
+// to two NoteRelation values -- one per end -- when both ends are in the
+// same ListRelationsForNotes call.
+type NoteRelation struct {
+	RelatedNoteID uuid.UUID
+	RelationType  RelationType
+	Direction     RelationDirection
+}
+
 // ResearchStore covers `research_note` (migration 002, FR9/FR10).
 type ResearchStore interface {
 	// SaveNote inserts a research_note row, honouring IdempotencyKey
@@ -103,6 +129,23 @@ type ResearchStore interface {
 	// unbounded fetch-then-filter-in-Go). Backs list_research_notes
 	// (mcp/tools/research.go, issue #1577).
 	ListFiltered(ctx context.Context, channelID uuid.UUID, ideaID *uuid.UUID, cited *bool, since, before *time.Time, limit int) (notes []ResearchNoteWithAuthor, truncated bool, err error)
+
+	// ListRelationsForNotes returns every research_note_relation row where
+	// a note in noteIDs sits on either side, keyed by that note's id. ONE
+	// query for the whole set -- never one per note (FR11's inline
+	// rationale: every call site that needs this already loads the notes
+	// themselves in one query, so the relation read must not become an
+	// N+1 on top of it). Empty noteIDs returns an empty map and issues no
+	// query. Ordering within each note's slice is deterministic (relation_
+	// type, then related_note_id) so rendering and tests are stable. A
+	// relation whose OTHER end is outside noteIDs still appears under the
+	// end that IS inside noteIDs, but that outside end is never itself
+	// added as a map key.
+	//
+	// Scaffold note (issue #1942): this method's signature and doc
+	// contract are fixed here; the query itself lands in the
+	// Implementation phase.
+	ListRelationsForNotes(ctx context.Context, noteIDs []uuid.UUID) (map[uuid.UUID][]NoteRelation, error)
 }
 
 // researchStore implements ResearchStore against `research_note`
@@ -441,4 +484,14 @@ func (s researchStore) ListFiltered(ctx context.Context, channelID uuid.UUID, id
 	}
 	notes, truncated := paginate(notes, limit)
 	return notes, truncated, nil
+}
+
+// ListRelationsForNotes is scaffolded here (issue #1942, Scaffold phase):
+// signature and doc contract only, so mcp/web can be wired against a
+// stable interface in later phases. The real batched
+// `WHERE note_id = ANY($1) OR related_note_id = ANY($1)` query, its
+// per-note ordering, and the empty-input short-circuit land in the
+// Implementation phase.
+func (s researchStore) ListRelationsForNotes(ctx context.Context, noteIDs []uuid.UUID) (map[uuid.UUID][]NoteRelation, error) {
+	return nil, fmt.Errorf("ListRelationsForNotes: not yet implemented (issue #1942)")
 }
