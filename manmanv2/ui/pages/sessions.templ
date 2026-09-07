@@ -4,6 +4,7 @@ import (
 	"fmt"
 
 	"github.com/whale-net/everything/libs/go/htmxui"
+	"github.com/whale-net/everything/manmanv2/events"
 	manmanpb "github.com/whale-net/everything/manmanv2/protos"
 	"github.com/whale-net/everything/manmanv2/ui/components"
 )
@@ -23,6 +24,21 @@ type SessionsPageData struct {
 	ServerConfigs       []*manmanpb.ServerGameConfig
 	LiveSessionByConfig map[int64]*manmanpb.Session
 	DeploymentRows      []DeploymentRowData
+
+	// HeartbeatIntervalMs is the resolved MANMANV2_SSE_HEARTBEAT_INTERVAL
+	// (main.go's Config.SSEHeartbeatInterval), in milliseconds, for the
+	// #1726 Not-Live debounce: the client waits one heartbeat interval
+	// after htmx:sseError/htmx:sseClose (or a missed heartbeat) before
+	// flipping the indicator, so a single dropped beat doesn't flap it.
+	HeartbeatIntervalMs int
+	// LiveUpdatesEnabled is false when app.sseHub is nil (RABBITMQ_URL
+	// unset or the broker was unreachable at startup -- see main.go's
+	// initializeSSEHub doc comment, NFR3/NFR8). The live-connection
+	// markup (hx-ext="sse", sse-connect, sse-swap, the Live/Not-Live
+	// indicator) is omitted entirely in that case rather than rendered
+	// pointing at a route that will only ever 503: the page still renders
+	// its server-side snapshot and falls back to the #1628 per-row poll.
+	LiveUpdatesEnabled bool
 }
 
 type SGCDisplayInfo struct {
@@ -53,7 +69,13 @@ templ Sessions(layout components.LayoutData, data SessionsPageData) {
 		@SessionFilters(data.StatusFilter, data.ServerGameConfigID, data.LiveOnly, data.SGCOptions)
 		@StartSessionPanel(data.SelectedServerID, data.SGCOptions, data.StartWarning, data.StartError, data.ShowForce, data.ForceSGCID)
 		if len(data.DeploymentRows) > 0 {
-			@GSCStatusTable(data.DeploymentRows)
+			if data.LiveUpdatesEnabled {
+				@DeploymentsLiveRegion(data.HeartbeatIntervalMs) {
+					@GSCStatusTable(data.DeploymentRows)
+				}
+			} else {
+				@GSCStatusTable(data.DeploymentRows)
+			}
 		}
 		if len(data.Sessions) > 0 {
 			@SessionsTable(data.Sessions, data.SGCDisplayNames)
@@ -192,6 +214,22 @@ templ StartSessionPanel(selectedServerID string, sgcOptions []SGCDisplayInfo, st
 // independent of ActionError: a row with an inline action error still
 // polls (and the error clears) as long as the underlying status is still
 // transient.
+//
+// #1726 decision (kept unchanged, see that issue's Implementation section
+// point 4): this poll stays as the live-updates fallback and costs nothing
+// once SSE is live. Two consequences of the SSE inner-swap only ever
+// touching DeploymentRowInner's <td>s (never the <tr> itself, see
+// DeploymentRowInner's doc comment):
+//   - An SSE delivery cannot add or remove these hx-* attributes on the
+//     <tr>. A row that settles via a pushed SSE update keeps polling until
+//     its *next* poll tick returns a settled row and drops the attrs --
+//     self-healing within one 3s interval, not instantaneous. Acceptable
+//     and intentional; do not "fix" by trying to have the SSE fragment
+//     also carry hx-* attributes.
+//   - Conversely a polled whole-row replacement (outerHTML) *does* replace
+//     the <tr>, including its sse-swap attribute -- DeploymentRow must keep
+//     emitting sse-swap unconditionally (below) so a polled row stays a
+//     valid SSE swap target under the page's hx-ext="sse" ancestor.
 func deploymentRowPollAttrs(data DeploymentRowData) templ.Attributes {
 	if !components.IsTransientStatus(data.LatestSession.GetStatus()) {
 		return templ.Attributes{}
@@ -209,8 +247,24 @@ func deploymentRowPollAttrs(data DeploymentRowData) templ.Attributes {
 // refresh endpoint (#1628) target as their HTMX swap target. Cell content
 // lives in DeploymentRowInner so both whole-row swaps (this component) and
 // future inner-swap responses can reuse it.
+//
+// sse-swap is set unconditionally to events.TopicForDeployment (#1726,
+// FR2) -- via the shared manmanv2/events helper, never a locally formatted
+// literal, so the producer (handlers_sessions_live.go), this consumer
+// attribute, and the DOM id can't drift independently. Emitting it here
+// (not just in the page's initial GSCStatusTable render) matters because
+// this same component also renders the #1628 poll's outerHTML replacement
+// (handleDeploymentRowFragment) and the action endpoints' post-action
+// replacement (handlers_deployment_actions.go) -- both must keep the row a
+// valid SSE swap target, or a polled/acted-on row would go silently dead to
+// further live pushes until the next full page load.
 templ DeploymentRow(data DeploymentRowData) {
-	<tr id={ fmt.Sprintf("deployment-row-%d", data.ServerGameConfigID) } class="hover" { deploymentRowPollAttrs(data)... }>
+	<tr
+		id={ fmt.Sprintf("deployment-row-%d", data.ServerGameConfigID) }
+		class="hover"
+		sse-swap={ events.TopicForDeployment(data.ServerGameConfigID) }
+		{ deploymentRowPollAttrs(data)... }
+	>
 		@DeploymentRowInner(data)
 	</tr>
 }
@@ -314,6 +368,124 @@ templ DeploymentRowInner(data DeploymentRowData) {
 			</div>
 		}
 	</td>
+}
+
+// DeploymentsLiveRegion wraps the deployment table region with the #1726
+// SSE plumbing: hx-ext="sse" + sse-connect on the outer container (an
+// ancestor of every per-row sse-swap target, never itself a swap target --
+// see libs/go/htmxsse/README.md's "Critical for adopters" note: an
+// sse-connect element that gets swapped re-attaches its EventSource
+// listener before the reconnect can carry Last-Event-ID, breaking NFR2's
+// reconnect-baseline suppression), plus the Live/Not-Live indicator and
+// Reload affordance (NFR3), both siblings of -- not descendants of -- any
+// sse-swap element. Mirrors tools/app_registry/ui/pages/
+// promotion_details.templ's container/indicator/script shape; adapted here
+// for N per-row swap targets (one <tr> each) instead of that page's single
+// sse-swap div, so the inline script's "did content change" detector
+// observes the rendered <table> (every row lives under it) rather than one
+// specific swap element, while still excluding the indicator/reload
+// markup (rendered as siblings before the table) from what it observes.
+templ DeploymentsLiveRegion(heartbeatIntervalMs int) {
+	<div
+		id="deployments-live-region"
+		hx-ext="sse"
+		sse-connect="/api/live/deployments"
+		data-heartbeat-ms={ fmt.Sprint(heartbeatIntervalMs) }
+	>
+		<div id="deployments-live-indicator" class="flex items-center gap-2 mb-2">
+			<div id="deployments-live-status" class="badge badge-success" title="SSE connection is healthy">Live</div>
+		</div>
+		<div id="deployments-reload-container" class="mb-2" style="display: none;">
+			<a href="/sessions" class="btn btn-sm btn-warning">Reload</a>
+		</div>
+		{ children... }
+	</div>
+	<script type="module">
+(function() {
+  const container = document.getElementById('deployments-live-region');
+  if (!container) return;
+
+  const indicator = document.getElementById('deployments-live-status');
+  const reloadContainer = document.getElementById('deployments-reload-container');
+  if (!indicator || !reloadContainer) return;
+
+  let isLive = true;
+  let lastEventTime = Date.now();
+  const heartbeatMs = parseInt(container.getAttribute('data-heartbeat-ms'), 10) || 30000;
+  let debounceTimeoutId = null;
+
+  container.addEventListener('htmx:sseOpen', () => {
+    cancelDebounce();
+    setLive(true);
+    lastEventTime = Date.now();
+  });
+
+  container.addEventListener('htmx:sseError', () => {
+    handleDisconnect();
+  });
+
+  container.addEventListener('htmx:sseClose', () => {
+    handleDisconnect();
+  });
+
+  // Any row swap (all rows live under this <table>, never the
+  // indicator/reload markup rendered above it) counts as a live signal --
+  // mirrors promotion_details.templ's single-swap-target MutationObserver,
+  // generalized to N per-row sse-swap targets under one table.
+  const table = container.querySelector('table');
+  if (table) {
+    const observer = new MutationObserver(() => {
+      lastEventTime = Date.now();
+      cancelDebounce();
+      setLive(true);
+    });
+    observer.observe(table, {
+      childList: true,
+      subtree: true,
+      characterData: true,
+      attributes: true
+    });
+  }
+
+  const heartbeatCheckInterval = setInterval(() => {
+    const timeSinceLastEvent = Date.now() - lastEventTime;
+    const timeoutThreshold = heartbeatMs * 2;
+    if (isLive && timeSinceLastEvent > timeoutThreshold) {
+      handleDisconnect();
+    }
+  }, 10000);
+
+  function handleDisconnect() {
+    if (debounceTimeoutId) return;
+    debounceTimeoutId = setTimeout(() => {
+      setLive(false);
+      debounceTimeoutId = null;
+    }, heartbeatMs);
+  }
+
+  function cancelDebounce() {
+    if (debounceTimeoutId) {
+      clearTimeout(debounceTimeoutId);
+      debounceTimeoutId = null;
+    }
+  }
+
+  function setLive(live) {
+    isLive = live;
+    if (live) {
+      indicator.textContent = 'Live';
+      indicator.className = 'badge badge-success';
+      indicator.title = 'SSE connection is healthy';
+      reloadContainer.style.display = 'none';
+    } else {
+      indicator.textContent = 'Not Live';
+      indicator.className = 'badge badge-warning';
+      indicator.title = 'SSE connection is not live - reload to resume updates';
+      reloadContainer.style.display = 'block';
+    }
+  }
+})();
+	</script>
 }
 
 templ GSCStatusTable(rows []DeploymentRowData) {

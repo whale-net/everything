@@ -43,7 +43,13 @@ func RenderTempl(w http.ResponseWriter, r *http.Request, title string, component
 // buildHead constructs the CustomHead markup: a small no-reload theme
 // bootstrap script, then the pinned Tailwind browser build + daisyUI CDN
 // <link>, then htmxui.ThemesCSS, in that exact order (see the "Trap" doc
-// comment above). Split out from RenderTempl so a future
+// comment above), then the htmx SSE extension script (#1726, FR1-FR4). The
+// SSE extension is appended last rather than interleaved: it has no
+// ordering dependency on daisyUI/ThemesCSS, and its only real ordering
+// requirement -- loading after the htmx core script -- is already
+// satisfied by htmxbase.LayoutData rendering core before CustomHead (see
+// RenderTempl's doc comment), so appending here cannot disturb the Trap
+// order above. Split out from RenderTempl so a future
 // templ_render_test.go can assert the NFR5 load order and the FR5/FR6
 // guards directly against production code, mirroring
 // tools/app_registry/ui/templ_render.go's buildHead/templ_render_test.go.
@@ -56,7 +62,8 @@ func buildHead() string {
 </style>
 <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/daisyui@5.6.18/daisyui.css">
 <style>%s</style>
-<style>%s</style>`, themeBootstrapScript, darkVariantDirective, htmxui.ThemesCSS, legacyClassShimCSS)
+<style>%s</style>
+<script src="https://cdn.jsdelivr.net/npm/htmx.org@1.9.10/dist/ext/sse.js"></script>`, themeBootstrapScript, darkVariantDirective, htmxui.ThemesCSS, legacyClassShimCSS)
 }
 
 // themeBootstrapScript applies the operator's saved theme to <html> as

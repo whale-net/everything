@@ -76,6 +76,19 @@ func (app *App) resolveScopedServerGameConfigs(ctx context.Context, r *http.Requ
 	return selectedServerID, configsResp.Configs, nil
 }
 
+// heartbeatIntervalMs resolves the #1726 Not-Live debounce interval from
+// config, in milliseconds. Returns 0 for a nil config (test-constructed
+// *App values that never called NewApp) rather than dereferencing --
+// SessionsPageData.LiveUpdatesEnabled is false in every such case (sseHub
+// is nil too), so the value is never actually rendered into live-connection
+// markup.
+func heartbeatIntervalMs(config *Config) int {
+	if config == nil {
+		return 0
+	}
+	return int(config.SSEHeartbeatInterval.Milliseconds())
+}
+
 func (app *App) handleSessions(w http.ResponseWriter, r *http.Request) {
 	user := htmxauth.GetUser(r.Context())
 
@@ -241,6 +254,19 @@ func (app *App) handleSessions(w http.ResponseWriter, r *http.Request) {
 		ForceSGCID:   forceSGCID,
 		LiveSessionByConfig: liveSessionByConfig,
 		DeploymentRows:      deploymentRows,
+		// #1726: heartbeat interval drives the client-side Not-Live
+		// debounce; LiveUpdatesEnabled mirrors handleDeploymentsLiveSSE's
+		// own app.sseHub nil check (handlers_sessions_live.go) so the page
+		// never renders live-connection markup for a route that would
+		// only ever 503. app.config is nil in some handler-level tests that
+		// construct *App directly without going through NewApp (e.g.
+		// deployment_actions_acceptance_test.go) -- those all leave sseHub
+		// nil too, so LiveUpdatesEnabled is already false and
+		// HeartbeatIntervalMs is unused by the page in that case; guard the
+		// dereference rather than require every such test to populate a
+		// full Config just to read one duration.
+		HeartbeatIntervalMs: heartbeatIntervalMs(app.config),
+		LiveUpdatesEnabled:  app.sseHub != nil,
 	}
 
 	breadcrumbs := []components.Breadcrumb{

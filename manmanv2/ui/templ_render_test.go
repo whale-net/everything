@@ -67,6 +67,39 @@ func TestBuildHead_NoLocationReload(t *testing.T) {
 // switch onto htmxui.ThemeSwitcher's shared storage key
 // (htmxui.ThemeSwitcherStorageKey) instead of silently resetting to the
 // default.
+// TestBuildHead_HTMXSSEExtensionScript guards #1726's htmx SSE extension
+// script: it must be present, pinned to the same htmx.org@1.9.10 build the
+// already-loaded htmx core script uses (see htmxbase.LayoutData, which
+// renders core before CustomHead), and appended after -- not interleaved
+// into -- the daisyUI <link>/htmxui.ThemesCSS <style> pair so it cannot
+// disturb the NFR5 load-order trap TestBuildHead_ThemesCSSLoadsAfterDaisyUILink
+// guards above.
+//
+// mutation-tested (verified red, by hand, then reverted): moving the sse.js
+// <script> tag in buildHead's format string to before the daisyUI <link>
+// made this test's ordering assertion fail (themesStyleIdx ended up before
+// sseScriptIdx became irrelevant -- the real failure was sseScriptIdx no
+// longer being the last element); removing the tag entirely made the
+// "expected sse.js script" assertion fail outright; reverting restored
+// green.
+func TestBuildHead_HTMXSSEExtensionScript(t *testing.T) {
+	head := buildHead()
+
+	wantScript := `<script src="https://cdn.jsdelivr.net/npm/htmx.org@1.9.10/dist/ext/sse.js"></script>`
+	sseScriptIdx := strings.Index(head, wantScript)
+	if sseScriptIdx < 0 {
+		t.Fatalf("expected pinned htmx SSE extension script %q in head, got: %s", wantScript, head)
+	}
+
+	themesStyleIdx := strings.Index(head, "<style>"+htmxui.ThemesCSS+"</style>")
+	if themesStyleIdx < 0 {
+		t.Fatalf("expected htmxui.ThemesCSS wrapped in <style> in head, got: %s", head)
+	}
+	if sseScriptIdx <= themesStyleIdx {
+		t.Errorf("expected the SSE extension script (index %d) to be appended after the daisyUI/ThemesCSS pair (ThemesCSS <style> at index %d), not interleaved before it, got: %s", sseScriptIdx, themesStyleIdx, head)
+	}
+}
+
 func TestThemeBootstrapScript_MigratesLegacyThemeKeyOnce(t *testing.T) {
 	head := buildHead()
 	if !strings.Contains(head, "LEGACY_KEY = 'manman-theme'") {
