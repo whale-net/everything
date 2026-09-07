@@ -29,6 +29,7 @@ go_library(
         "//manmanv2/models:models",
         "//manmanv2/api/repository",
         "@com_github_jackc_pgx_v5//:pgx",
+        "@com_github_jackc_pgx_v5//pgconn",
         "@com_github_jackc_pgx_v5//pgxpool",
     ],
 )
