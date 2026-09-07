@@ -32,6 +32,11 @@ type fakeClock struct {
 	mu     sync.Mutex
 	now    time.Time
 	ticker *fakeTicker
+	// sleeps records every Sleep(d) call's duration, in order --
+	// config_apply_test.go's subscribeConfig retry coverage (#2024) uses
+	// this to assert the actual backoff durations attempted, since Sleep
+	// itself is a no-op below.
+	sleeps []time.Duration
 }
 
 func newFakeClock(start time.Time) *fakeClock {
@@ -52,11 +57,25 @@ func (c *fakeClock) NewTicker(_ time.Duration) clockTicker {
 	return t
 }
 
-// Sleep is a no-op: fakeClock's whole purpose is instant, deterministic
-// time (see Tick) -- a real sleep here would make every test that exercises
-// subscribeConfig's retry backoff (config_apply.go, issue #2024) slow for
-// no benefit, since nothing in these tests reads wall-clock time.
-func (c *fakeClock) Sleep(time.Duration) {}
+// Sleep does not actually block: fakeClock's whole purpose is instant,
+// deterministic time (see Tick) -- a real sleep here would make every test
+// that exercises subscribeConfig's retry backoff (config_apply.go, issue
+// #2024) slow for no benefit, since nothing in these tests reads
+// wall-clock time. The duration is still recorded (sleeps) so a test can
+// assert the backoff schedule an implementation actually used.
+func (c *fakeClock) Sleep(d time.Duration) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.sleeps = append(c.sleeps, d)
+}
+
+// Sleeps returns a copy of every duration passed to Sleep so far, in call
+// order.
+func (c *fakeClock) Sleeps() []time.Duration {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return append([]time.Duration(nil), c.sleeps...)
+}
 
 // hasTicker reports whether Runner.loop has called NewTicker yet -- the
 // loop goroutine spawned by ensureLoopStarted races with the test calling
