@@ -1728,9 +1728,10 @@ func ptrInt64(v int64) *int64        { return &v }
 // FR45, #1835), again for 014 (outcome_bar, C14/FR1/FR2/NFR1, #1882), and
 // again for 015 (viability_verdict.source, M4.1 FR5/NFR4, #1898), and
 // again for 016 (research_thread, research_note.thread_id backfill, and
-// research_note_relation, FR1/FR2 Stage 1/FR6/FR7, #1936), so the version
-// assertion and table list below cover all of them rather than any single
-// one.
+// research_note_relation, FR1/FR2 Stage 1/FR6/FR7, #1936), and again for
+// 017 (research_thread's natural-key unique index, FR4, #1937), so the
+// version assertion and table list below cover all of them rather than
+// any single one.
 func TestMigrations_UpDownUp_LeavesNoOrphanObjects(t *testing.T) {
 	ctx := context.Background()
 	db := dbtest.NewPostgres(ctx, t, dbtest.Options{})
@@ -1747,7 +1748,7 @@ func TestMigrations_UpDownUp_LeavesNoOrphanObjects(t *testing.T) {
 	version, dirty, err := runner.Version()
 	require.NoError(t, err)
 	assert.False(t, dirty)
-	assert.Equal(t, uint(16), version, "highest migration in schema.Migrations is 016_research_thread_relation")
+	assert.Equal(t, uint(17), version, "highest migration in schema.Migrations is 017_research_thread_natural_key")
 
 	for _, tbl := range []string{
 		"person", "channel", "channel_person", "channel_invite",

@@ -2511,3 +2511,66 @@ func TestHandleProposeVideoScript_EmptyTitleOrScriptText_BadRequest_NoRow_SameId
 	}
 	assert.Empty(t, s.allVideoScripts(t, ctx, ch.ID))
 }
+
+// ── Research thread lists (FR3, root plan #1934, issue #1937) ──────────────
+//
+// HandleChannelIndex/HandleIdeaDetail's existing 401/404/403 ordering
+// tests above (TestHandleChannelIndex_NonMember_Forbidden,
+// TestHandleIdeaDetail_NonMember_Forbidden, and their signed-out/unknown-
+// Channel siblings) already cover the denial path for the whole page --
+// the thread-list query added by this task runs strictly after that same
+// store.CanRead check (renderChannelIndex/renderIdeaDetail), so a non-
+// reader never reaches it. What's new here is proving the thread-list
+// section itself renders correctly, and renders the correct SCOPE on each
+// page.
+
+func TestHandleChannelIndex_RendersEveryThreadOnChannel_IncludingNullIdea(t *testing.T) {
+	ctx := context.Background()
+	s := newResearchTestStack(t)
+	ch, creator := s.setupChannel(t, ctx)
+	idea, err := s.store.Ideas().Create(ctx, ch.ID, "Idea One", creator.ID)
+	require.NoError(t, err)
+
+	attached, err := s.store.Threads().FindOrCreate(ctx, store.FindOrCreateThreadInput{
+		ChannelID: ch.ID, IdeaID: &idea.ID, Title: "Attached research thread", CreatedByPersonID: creator.ID,
+	})
+	require.NoError(t, err)
+	unattached, err := s.store.Threads().FindOrCreate(ctx, store.FindOrCreateThreadInput{
+		ChannelID: ch.ID, Title: "Pre-idea research thread", CreatedByPersonID: creator.ID,
+	})
+	require.NoError(t, err)
+
+	w := s.do(t, http.MethodGet, "/channels/"+ch.ID.String()+"/research", s.sessionCookie(t, ctx, creator.ID))
+	require.Equal(t, http.StatusOK, w.Code, "body: %s", w.Body.String())
+	body := w.Body.String()
+
+	assert.Contains(t, body, attached.Title, "the Channel index must render every thread, including ones attached to an Idea")
+	assert.Contains(t, body, unattached.Title, "the Channel index must render threads that predate any Idea (idea_id IS NULL)")
+	assert.Contains(t, body, "Research threads", "the thread-list section heading must render")
+}
+
+func TestHandleIdeaDetail_RendersOnlyThatIdeasThreads(t *testing.T) {
+	ctx := context.Background()
+	s := newResearchTestStack(t)
+	ch, creator := s.setupChannel(t, ctx)
+	idea1, err := s.store.Ideas().Create(ctx, ch.ID, "Idea One", creator.ID)
+	require.NoError(t, err)
+	idea2, err := s.store.Ideas().Create(ctx, ch.ID, "Idea Two", creator.ID)
+	require.NoError(t, err)
+
+	thread1, err := s.store.Threads().FindOrCreate(ctx, store.FindOrCreateThreadInput{
+		ChannelID: ch.ID, IdeaID: &idea1.ID, Title: "Idea one thread", CreatedByPersonID: creator.ID,
+	})
+	require.NoError(t, err)
+	thread2, err := s.store.Threads().FindOrCreate(ctx, store.FindOrCreateThreadInput{
+		ChannelID: ch.ID, IdeaID: &idea2.ID, Title: "Idea two thread", CreatedByPersonID: creator.ID,
+	})
+	require.NoError(t, err)
+
+	w := s.do(t, http.MethodGet, "/channels/"+ch.ID.String()+"/research/ideas/"+idea1.ID.String(), s.sessionCookie(t, ctx, creator.ID))
+	require.Equal(t, http.StatusOK, w.Code, "body: %s", w.Body.String())
+	body := w.Body.String()
+
+	assert.Contains(t, body, thread1.Title, "Idea One's detail page must render its own thread")
+	assert.NotContains(t, body, thread2.Title, "Idea One's detail page must NOT render Idea Two's thread")
+}
