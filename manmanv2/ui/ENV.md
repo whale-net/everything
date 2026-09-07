@@ -22,6 +22,11 @@
 | `PORT` | `8000` | HTTP port |
 | `AUTH_MODE` | `none` | HTTP authentication mode: `none` or `oidc` |
 | `GRPC_AUTH_MODE` | `none` | gRPC token forwarding mode: `none` or `oidc` |
+| `RABBITMQ_URL` | *(unset)* | Backs the `/api/live/deployments` SSE hub's `manmanv2.htmxsse` exchange consumer (issue #1724). Unset, or the broker unreachable at startup, degrades to live updates disabled — `/api/live/deployments` returns `503` and the UI otherwise starts and serves `/sessions` normally (NFR3/NFR8). Format: `amqp[s]://username:password@host:port/vhost`. |
+| `MANMANV2_SSE_HEARTBEAT_INTERVAL` | `5s` | `/api/live/deployments` heartbeat interval (parsed via `time.ParseDuration`, e.g. `10s`, `1m`). Must stay positive and satisfy `MANMANV2_SSE_ADVERTISED_RETRY_INTERVAL < 2 * MANMANV2_SSE_HEARTBEAT_INTERVAL` — see below. An unparseable or non-positive value falls back to this default (logged as a `WARNING`). |
+| `MANMANV2_SSE_MAX_STREAM_LIFETIME` | `1h` | `/api/live/deployments` maximum single-connection lifetime before the server closes the stream (client reconnects automatically). Parsed via `time.ParseDuration`; unparseable falls back to the default. |
+| `MANMANV2_SSE_SUBSCRIBER_BUFFER_DEPTH` | `100` | Per-topic event channel buffer depth for `/api/live/deployments` subscribers. Parsed via `strconv.Atoi`; unparseable falls back to the default. |
+| `MANMANV2_SSE_ADVERTISED_RETRY_INTERVAL` | `2s` | SSE `retry:` field advertised to the browser's EventSource reconnect logic for `/api/live/deployments`. Parsed via `time.ParseDuration`; unparseable falls back to the default. **Constraint:** must be `< 2 * MANMANV2_SSE_HEARTBEAT_INTERVAL`, or `initializeSSEHub` logs a `WARNING` and falls back to `htmxsse.DefaultConfig()`'s values entirely rather than starting with an invalid hub config. |
 
 ## OIDC (Required when AUTH_MODE=oidc)
 

@@ -10,6 +10,8 @@ package events
 
 import (
 	"fmt"
+	"strconv"
+	"strings"
 
 	amqp "github.com/rabbitmq/amqp091-go"
 )
@@ -26,6 +28,27 @@ const ExchangeName = "manmanv2.htmxsse"
 // wildcards (e.g., "deployment.#").
 func TopicForDeployment(sgcID int64) string {
 	return fmt.Sprintf("deployment.%d", sgcID)
+}
+
+// deploymentTopicPrefix is the routing-key prefix TopicForDeployment always
+// produces; ParseDeploymentTopic strips it back off.
+const deploymentTopicPrefix = "deployment."
+
+// ParseDeploymentTopic is the inverse of TopicForDeployment: it recovers the
+// ServerGameConfig id from a routing key of the form "deployment.<sgcID>".
+// ok is false for anything else -- a malformed routing key, a topic from a
+// different (future) event kind, or a non-numeric suffix -- callers (e.g.
+// manmanv2/ui's live SSE fragment, #1724) must treat that as an
+// unknown/unparseable topic rather than guess at a value.
+func ParseDeploymentTopic(topic string) (sgcID int64, ok bool) {
+	if !strings.HasPrefix(topic, deploymentTopicPrefix) {
+		return 0, false
+	}
+	id, err := strconv.ParseInt(strings.TrimPrefix(topic, deploymentTopicPrefix), 10, 64)
+	if err != nil {
+		return 0, false
+	}
+	return id, true
 }
 
 // DeclareArgs returns the AMQP ExchangeDeclare arguments for the manmanv2
