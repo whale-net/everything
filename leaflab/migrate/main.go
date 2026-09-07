@@ -1,17 +1,13 @@
 package main
 
 import (
-	"embed"
-
 	"github.com/whale-net/everything/firmware/sensor/catalog"
+	"github.com/whale-net/everything/leaflab/migrate/schema"
 	"github.com/whale-net/everything/libs/go/migrate"
 )
 
-//go:embed migrations/*.sql
-var migrations embed.FS
-
 func main() {
-	migrate.RunCLI(migrations, "migrations",
+	migrate.RunCLI(schema.Migrations, schema.Dir,
 		migrate.WithSeeder(catalog.Seeder()),
 	)
 }

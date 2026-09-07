@@ -12,12 +12,9 @@
 // claims nothing" guarantee (LB1/NFR5/NFR6) that no ownership row or column
 // is ever touched by this path.
 //
-// Schema here is a self-contained subset of the column sets migrations
-// 013_ownership.up.sql (leaflab_user, board_owner_history, region/plant
-// owner columns) and 001_initial_schema.up.sql (board, region, plant) create
-// — see leaflab/migrate/migrations/013_ownership.up.sql and
-// libs/go/dbtest's README for why integration tests keep schema
-// self-contained rather than importing another package's migrations.
+// Schema setup runs the real migrations via newLeafLabTestPool
+// (testdb_integration_test.go in this package) -- the same embed.FS
+// //leaflab/migrate applies in production.
 package main
 
 import (
@@ -30,73 +27,15 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	"github.com/whale-net/everything/libs/go/dbtest"
 	"github.com/whale-net/everything/libs/go/htmxauth"
 )
-
-// leaflabUserOwnershipSchema mirrors just enough of migrations 001, 013, and
-// 016 to prove upsertLeafLabUser's contracts: idempotency keyed on
-// oidc_sub, that it never writes board_owner_history or any
-// owner_leaflab_user_id column, and (016's leaflab_user_role) the FR10
-// empty-database bootstrap grant.
-const leaflabUserOwnershipSchema = `
-	CREATE TABLE leaflab_user (
-		leaflab_user_id     BIGSERIAL   PRIMARY KEY,
-		oidc_sub            TEXT        NOT NULL UNIQUE,
-		preferred_username  TEXT,
-		email               TEXT,
-		display_name        TEXT,
-		created_at          TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-		last_seen_at        TIMESTAMPTZ NOT NULL DEFAULT NOW()
-	);
-
-	CREATE TABLE leaflab_user_role (
-		leaflab_user_role_id BIGSERIAL   PRIMARY KEY,
-		leaflab_user_id      BIGINT      NOT NULL REFERENCES leaflab_user(leaflab_user_id) ON DELETE CASCADE,
-		role                 TEXT        NOT NULL,
-		valid_from           TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-		valid_to             TIMESTAMPTZ
-	);
-	CREATE UNIQUE INDEX idx_leaflab_user_role_current
-		ON leaflab_user_role(leaflab_user_id, role) WHERE valid_to IS NULL;
-
-	CREATE TABLE board (
-		board_id      BIGSERIAL PRIMARY KEY,
-		device_id     VARCHAR(64) NOT NULL UNIQUE,
-		registered_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-		last_seen_at  TIMESTAMPTZ NOT NULL DEFAULT NOW()
-	);
-
-	CREATE TABLE board_owner_history (
-		board_owner_history_id BIGSERIAL   PRIMARY KEY,
-		board_id               BIGINT      NOT NULL REFERENCES board(board_id) ON DELETE CASCADE,
-		leaflab_user_id        BIGINT      NOT NULL REFERENCES leaflab_user(leaflab_user_id),
-		valid_from             TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-		valid_to               TIMESTAMPTZ
-	);
-	CREATE UNIQUE INDEX idx_board_owner_history_current
-		ON board_owner_history(board_id) WHERE valid_to IS NULL;
-
-	CREATE TABLE region (
-		region_id             BIGSERIAL    PRIMARY KEY,
-		name                  VARCHAR(255) NOT NULL,
-		owner_leaflab_user_id BIGINT REFERENCES leaflab_user(leaflab_user_id)
-	);
-
-	CREATE TABLE plant (
-		plant_id              BIGSERIAL    PRIMARY KEY,
-		region_id             BIGINT       NOT NULL REFERENCES region(region_id) ON DELETE RESTRICT,
-		name                  VARCHAR(128) NOT NULL,
-		owner_leaflab_user_id BIGINT REFERENCES leaflab_user(leaflab_user_id)
-	);
-`
 
 // TestUpsertLeafLabUser_FirstSignIn_InsertsRow covers the Testing section's
 // "first call inserts one row" assertion.
 func TestUpsertLeafLabUser_FirstSignIn_InsertsRow(t *testing.T) {
 	ctx := context.Background()
-	db := dbtest.NewPostgres(ctx, t, dbtest.Options{Schema: leaflabUserOwnershipSchema})
-	app := &App{pool: db.Pool}
+	db := newLeafLabTestPool(t)
+	app := &App{pool: db}
 
 	err := app.upsertLeafLabUser(ctx, &htmxauth.UserInfo{
 		Sub:               "sub-first",
@@ -106,7 +45,7 @@ func TestUpsertLeafLabUser_FirstSignIn_InsertsRow(t *testing.T) {
 	})
 	require.NoError(t, err)
 
-	assert.Equal(t, 1, countLeaflabUsers(t, ctx, db.Pool, "sub-first"))
+	assert.Equal(t, 1, countLeaflabUsers(t, ctx, db, "sub-first"))
 }
 
 // TestUpsertLeafLabUser_RepeatSignIn_UpdatesNotInserts covers the Testing
@@ -117,8 +56,8 @@ func TestUpsertLeafLabUser_FirstSignIn_InsertsRow(t *testing.T) {
 // instead of the second sign-in's profile fields winning.
 func TestUpsertLeafLabUser_RepeatSignIn_UpdatesNotInserts(t *testing.T) {
 	ctx := context.Background()
-	db := dbtest.NewPostgres(ctx, t, dbtest.Options{Schema: leaflabUserOwnershipSchema})
-	app := &App{pool: db.Pool}
+	db := newLeafLabTestPool(t)
+	app := &App{pool: db}
 
 	require.NoError(t, app.upsertLeafLabUser(ctx, &htmxauth.UserInfo{
 		Sub:               "sub-repeat",
@@ -133,11 +72,11 @@ func TestUpsertLeafLabUser_RepeatSignIn_UpdatesNotInserts(t *testing.T) {
 		Name:              "Bob Two",
 	}))
 
-	assert.Equal(t, 1, countLeaflabUsers(t, ctx, db.Pool, "sub-repeat"),
+	assert.Equal(t, 1, countLeaflabUsers(t, ctx, db, "sub-repeat"),
 		"a second sign-in with the same sub must update the existing row, not insert a second one")
 
 	var preferredUsername, email, displayName string
-	err := db.Pool.QueryRow(ctx,
+	err := db.QueryRow(ctx,
 		`SELECT preferred_username, email, display_name FROM leaflab_user WHERE oidc_sub = $1`,
 		"sub-repeat").Scan(&preferredUsername, &email, &displayName)
 	require.NoError(t, err)
@@ -153,8 +92,8 @@ func TestUpsertLeafLabUser_RepeatSignIn_UpdatesNotInserts(t *testing.T) {
 // two rows).
 func TestUpsertLeafLabUser_ConcurrentSignIns_YieldsExactlyOneRow(t *testing.T) {
 	ctx := context.Background()
-	db := dbtest.NewPostgres(ctx, t, dbtest.Options{Schema: leaflabUserOwnershipSchema})
-	app := &App{pool: db.Pool}
+	db := newLeafLabTestPool(t)
+	app := &App{pool: db}
 
 	const concurrency = 10
 	var wg sync.WaitGroup
@@ -176,7 +115,7 @@ func TestUpsertLeafLabUser_ConcurrentSignIns_YieldsExactlyOneRow(t *testing.T) {
 	for i, err := range errs {
 		assert.NoError(t, err, "concurrent upsert %d must not error", i)
 	}
-	assert.Equal(t, 1, countLeaflabUsers(t, ctx, db.Pool, "sub-concurrent"),
+	assert.Equal(t, 1, countLeaflabUsers(t, ctx, db, "sub-concurrent"),
 		"concurrent sign-ins from the same sub must never race two rows into existence")
 }
 
@@ -188,14 +127,19 @@ func TestUpsertLeafLabUser_ConcurrentSignIns_YieldsExactlyOneRow(t *testing.T) {
 // leaflab_user and asserts none of those rows or tables were touched.
 func TestUpsertLeafLabUser_ClaimsNothing(t *testing.T) {
 	ctx := context.Background()
-	db := dbtest.NewPostgres(ctx, t, dbtest.Options{Schema: leaflabUserOwnershipSchema})
-	app := &App{pool: db.Pool}
+	db := newLeafLabTestPool(t)
+	app := &App{pool: db}
 
-	_, err := db.Pool.Exec(ctx, `INSERT INTO board (device_id) VALUES ('leaflab-deadbeef')`)
+	_, err := db.Exec(ctx, `INSERT INTO board (device_id) VALUES ('leaflab-deadbeef')`)
 	require.NoError(t, err)
-	_, err = db.Pool.Exec(ctx, `INSERT INTO region (name) VALUES ('Greenhouse')`)
-	require.NoError(t, err)
-	_, err = db.Pool.Exec(ctx, `INSERT INTO plant (region_id, name) VALUES (1, 'Basil')`)
+	var regionID int64
+	require.NoError(t, db.QueryRow(ctx,
+		`INSERT INTO region (name) VALUES ('Greenhouse') RETURNING region_id`).Scan(&regionID))
+	var plantTypeID int64
+	require.NoError(t, db.QueryRow(ctx,
+		`INSERT INTO plant_type (common_name) VALUES ('Basil plant') RETURNING plant_type_id`).Scan(&plantTypeID))
+	_, err = db.Exec(ctx,
+		`INSERT INTO plant (region_id, plant_type_id, name) VALUES ($1, $2, 'Basil')`, regionID, plantTypeID)
 	require.NoError(t, err)
 
 	require.NoError(t, app.upsertLeafLabUser(ctx, &htmxauth.UserInfo{
@@ -206,12 +150,12 @@ func TestUpsertLeafLabUser_ClaimsNothing(t *testing.T) {
 	}))
 
 	var boardOwnerHistoryCount int
-	require.NoError(t, db.Pool.QueryRow(ctx, `SELECT count(*) FROM board_owner_history`).Scan(&boardOwnerHistoryCount))
+	require.NoError(t, db.QueryRow(ctx, `SELECT count(*) FROM board_owner_history`).Scan(&boardOwnerHistoryCount))
 	assert.Equal(t, 0, boardOwnerHistoryCount, "signing in must never write board_owner_history")
 
 	var regionOwner, plantOwner *int64
-	require.NoError(t, db.Pool.QueryRow(ctx, `SELECT owner_leaflab_user_id FROM region WHERE name = 'Greenhouse'`).Scan(&regionOwner))
-	require.NoError(t, db.Pool.QueryRow(ctx, `SELECT owner_leaflab_user_id FROM plant WHERE name = 'Basil'`).Scan(&plantOwner))
+	require.NoError(t, db.QueryRow(ctx, `SELECT owner_leaflab_user_id FROM region WHERE name = 'Greenhouse'`).Scan(&regionOwner))
+	require.NoError(t, db.QueryRow(ctx, `SELECT owner_leaflab_user_id FROM plant WHERE name = 'Basil'`).Scan(&plantOwner))
 	assert.Nil(t, regionOwner, "signing in must never assign region.owner_leaflab_user_id")
 	assert.Nil(t, plantOwner, "signing in must never assign plant.owner_leaflab_user_id")
 }
@@ -259,24 +203,24 @@ func hasOpenAdminGrant(t *testing.T, ctx context.Context, pool *pgxpool.Pool, oi
 // different subject creates an ordinary user with no grant.
 func TestUpsertLeafLabUser_EmptyDatabase_FirstSignInBecomesAdmin_SecondDoesNot(t *testing.T) {
 	ctx := context.Background()
-	db := dbtest.NewPostgres(ctx, t, dbtest.Options{Schema: leaflabUserOwnershipSchema})
-	app := &App{pool: db.Pool}
+	db := newLeafLabTestPool(t)
+	app := &App{pool: db}
 
 	require.NoError(t, app.upsertLeafLabUser(ctx, &htmxauth.UserInfo{
 		Sub:               "sub-bootstrap-first",
 		PreferredUsername: "first",
 	}))
-	assert.True(t, hasOpenAdminGrant(t, ctx, db.Pool, "sub-bootstrap-first"),
+	assert.True(t, hasOpenAdminGrant(t, ctx, db, "sub-bootstrap-first"),
 		"the first-ever sign-in on an empty database must be granted admin")
-	assert.Equal(t, 1, countOpenAdminGrants(t, ctx, db.Pool))
+	assert.Equal(t, 1, countOpenAdminGrants(t, ctx, db))
 
 	require.NoError(t, app.upsertLeafLabUser(ctx, &htmxauth.UserInfo{
 		Sub:               "sub-bootstrap-second",
 		PreferredUsername: "second",
 	}))
-	assert.False(t, hasOpenAdminGrant(t, ctx, db.Pool, "sub-bootstrap-second"),
+	assert.False(t, hasOpenAdminGrant(t, ctx, db, "sub-bootstrap-second"),
 		"a second, later first-time sign-in must not also become admin")
-	assert.Equal(t, 1, countOpenAdminGrants(t, ctx, db.Pool),
+	assert.Equal(t, 1, countOpenAdminGrants(t, ctx, db),
 		"exactly one open admin grant must exist after the second user's first sign-in")
 }
 
@@ -290,8 +234,8 @@ func TestUpsertLeafLabUser_EmptyDatabase_FirstSignInBecomesAdmin_SecondDoesNot(t
 // make this test flaky/red under concurrency.
 func TestUpsertLeafLabUser_ConcurrentFirstSignIns_ExactlyOneAdminGrant(t *testing.T) {
 	ctx := context.Background()
-	db := dbtest.NewPostgres(ctx, t, dbtest.Options{Schema: leaflabUserOwnershipSchema})
-	app := &App{pool: db.Pool}
+	db := newLeafLabTestPool(t)
+	app := &App{pool: db}
 
 	const concurrency = 10
 	var wg sync.WaitGroup
@@ -314,11 +258,11 @@ func TestUpsertLeafLabUser_ConcurrentFirstSignIns_ExactlyOneAdminGrant(t *testin
 
 	assert.Equal(t, concurrency, func() int {
 		var count int
-		require.NoError(t, db.Pool.QueryRow(ctx, `SELECT count(*) FROM leaflab_user`).Scan(&count))
+		require.NoError(t, db.QueryRow(ctx, `SELECT count(*) FROM leaflab_user`).Scan(&count))
 		return count
 	}(), "every concurrent first sign-in must still create its own leaflab_user row")
 
-	assert.Equal(t, 1, countOpenAdminGrants(t, ctx, db.Pool),
+	assert.Equal(t, 1, countOpenAdminGrants(t, ctx, db),
 		"exactly one of the concurrent first sign-ins must win the bootstrap admin grant")
 }
 
@@ -329,28 +273,28 @@ func TestUpsertLeafLabUser_ConcurrentFirstSignIns_ExactlyOneAdminGrant(t *testin
 // first-time sign-in gets no grant of its own.
 func TestUpsertLeafLabUser_NonEmptyDatabase_ExistingAdminMeansNoGrantOnLaterFirstSignIn(t *testing.T) {
 	ctx := context.Background()
-	db := dbtest.NewPostgres(ctx, t, dbtest.Options{Schema: leaflabUserOwnershipSchema})
-	app := &App{pool: db.Pool}
+	db := newLeafLabTestPool(t)
+	app := &App{pool: db}
 
 	// Simulate migration 016's earliest-user seed: a pre-existing
 	// leaflab_user with an open admin grant, before any sign-in through
 	// upsertLeafLabUser ever runs.
 	var earliestUserID int64
-	require.NoError(t, db.Pool.QueryRow(ctx,
+	require.NoError(t, db.QueryRow(ctx,
 		`INSERT INTO leaflab_user (oidc_sub) VALUES ('sub-migration-seeded') RETURNING leaflab_user_id`,
 	).Scan(&earliestUserID))
-	_, err := db.Pool.Exec(ctx,
+	_, err := db.Exec(ctx,
 		`INSERT INTO leaflab_user_role (leaflab_user_id, role) VALUES ($1, 'admin')`, earliestUserID)
 	require.NoError(t, err)
-	require.Equal(t, 1, countOpenAdminGrants(t, ctx, db.Pool))
+	require.Equal(t, 1, countOpenAdminGrants(t, ctx, db))
 
 	require.NoError(t, app.upsertLeafLabUser(ctx, &htmxauth.UserInfo{
 		Sub:               "sub-later-first-sign-in",
 		PreferredUsername: "later",
 	}))
 
-	assert.False(t, hasOpenAdminGrant(t, ctx, db.Pool, "sub-later-first-sign-in"),
+	assert.False(t, hasOpenAdminGrant(t, ctx, db, "sub-later-first-sign-in"),
 		"a first-time sign-in must not be granted admin once migration 016 already seeded one")
-	assert.Equal(t, 1, countOpenAdminGrants(t, ctx, db.Pool),
+	assert.Equal(t, 1, countOpenAdminGrants(t, ctx, db),
 		"the migration-seeded grant must remain the only open admin grant")
 }

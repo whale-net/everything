@@ -5,15 +5,11 @@
 // -- see those files' doc comments for why (Docker-less machines, `bazel
 // test //...` never even compiling it, let alone running it).
 //
-// Schema here is hand-written, self-contained DDL mirroring exactly what
-// InsertCorrectiveConfigNextVersion (FR9/NFR4, this package's own
-// repository.go) and a raw-SQL stand-in for leaflab-api's
-// InsertDeviceConfigNextVersion (FR8) both touch: board, sensor's two NFR4
-// guard columns (migration 016), and device_config (migration 007). Per
-// repository_integration_test.go's own precedent and dbtest's README
-// ("Options.Schema should be self-contained DDL -- do not depend on another
-// package's migrations"), this does not import leaflab/migrate's real
-// migrations.
+// Schema setup runs the real migrations via newLeafLabTestPool
+// (testdb_integration_test.go in this package) -- the same embed.FS
+// //leaflab/migrate applies in production -- so this exercises
+// InsertCorrectiveConfigNextVersion (FR9/NFR4) and device_config (migration
+// 007) against the actual schema rather than a hand-maintained copy.
 package main
 
 import (
@@ -24,54 +20,12 @@ import (
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
-
-	"github.com/whale-net/everything/libs/go/dbtest"
 )
-
-const processorIntegrationSchema = `
-	CREATE TABLE board (
-		board_id      BIGSERIAL PRIMARY KEY,
-		device_id     VARCHAR(64) NOT NULL UNIQUE,
-		registered_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-		last_seen_at  TIMESTAMPTZ NOT NULL DEFAULT NOW()
-	);
-
-	CREATE TABLE sensor_type (
-		sensor_type_id BIGSERIAL PRIMARY KEY,
-		name           VARCHAR(64) NOT NULL UNIQUE,
-		default_unit   VARCHAR(16) NOT NULL
-	);
-
-	CREATE TABLE sensor (
-		sensor_id                           BIGSERIAL PRIMARY KEY,
-		board_id                            BIGINT NOT NULL REFERENCES board(board_id) ON DELETE RESTRICT,
-		sensor_type_id                      BIGINT NOT NULL REFERENCES sensor_type(sensor_type_id),
-		name                                VARCHAR(128) NOT NULL,
-		unit                                VARCHAR(16) NOT NULL,
-		registered_at                       TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-		last_seen_at                        TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-		corrective_push_attempts            INT NOT NULL DEFAULT 0,
-		corrective_push_outstanding_version BIGINT,
-		UNIQUE (board_id, name)
-	);
-
-	CREATE TABLE device_config (
-		config_id        BIGSERIAL   PRIMARY KEY,
-		board_id         BIGINT      NOT NULL REFERENCES board(board_id) ON DELETE RESTRICT,
-		version          BIGINT      NOT NULL,
-		config_json      JSONB       NOT NULL,
-		accepted         BOOLEAN     NOT NULL DEFAULT FALSE,
-		pushed_at        TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-		acked_at         TIMESTAMPTZ,
-		rejection_reason TEXT,
-		UNIQUE (board_id, version)
-	);
-`
 
 func newProcessorIntegrationTestDB(t *testing.T) (*Repository, *pgxpool.Pool) {
 	t.Helper()
-	db := dbtest.NewPostgres(context.Background(), t, dbtest.Options{Schema: processorIntegrationSchema})
-	return NewRepository(db.Pool), db.Pool
+	pool := newLeafLabTestPool(t)
+	return NewRepository(pool), pool
 }
 
 func seedProcessorBoard(t *testing.T, pool *pgxpool.Pool, deviceID string) int64 {

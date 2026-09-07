@@ -10,14 +10,9 @@
 // SQL, not sliced in Go) and the invalid-reading count cannot be verified
 // against an in-memory fake -- both depend on the query actually running.
 //
-// Schema here is a self-contained copy of the sensor/sensor_reading column
-// set migration 001_initial_schema.up.sql creates (see
-// leaflab/migrate/migrations/001_initial_schema.up.sql) -- dbtest's own
-// README asks integration tests to keep schema self-contained rather than
-// importing another package's migrations. The real migration also creates a
-// TimescaleDB hypertable via create_hypertable(); that's a chunk-pruning
-// performance property, not something these tests need a real hypertable to
-// prove, so a plain table stands in for it here.
+// Schema setup runs the real migrations via newLeafLabTestPool
+// (testdb_integration_test.go), including the TimescaleDB hypertable
+// migration 001_initial_schema.up.sql creates.
 package main
 
 import (
@@ -34,40 +29,44 @@ import (
 	"google.golang.org/protobuf/types/known/timestamppb"
 
 	pb "github.com/whale-net/everything/leaflab/api/proto"
-	"github.com/whale-net/everything/libs/go/dbtest"
 )
 
-const historySchema = `
-	CREATE TABLE sensor (
-		sensor_id BIGSERIAL PRIMARY KEY
-	);
-
-	CREATE TABLE sensor_reading (
-		reading_id  BIGSERIAL,
-		sensor_id   BIGINT NOT NULL REFERENCES sensor(sensor_id),
-		value       DOUBLE PRECISION NOT NULL,
-		valid       BOOLEAN NOT NULL DEFAULT TRUE,
-		recorded_at TIMESTAMPTZ NOT NULL,
-		PRIMARY KEY (reading_id, recorded_at)
-	);
-`
-
-// newHistoryTestRepo starts a real, throwaway Postgres and returns a
-// Repository plus the raw pool for fixture setup.
+// newHistoryTestRepo starts a real, throwaway Postgres with the real
+// migrations applied and returns a Repository plus the raw pool for
+// fixture setup.
 func newHistoryTestRepo(t *testing.T) (*Repository, *pgxpool.Pool) {
 	t.Helper()
-	ctx := context.Background()
-	db := dbtest.NewPostgres(ctx, t, dbtest.Options{Schema: historySchema})
-	return NewRepository(db.Pool), db.Pool
+	pool := newLeafLabTestPool(t)
+	return NewRepository(pool), pool
 }
 
-// insertSensor inserts a bare sensor row and returns its ID. Board/type/
-// region are irrelevant to GetSensorReadingHistory, which queries
-// sensor_reading directly, so the schema above omits them entirely.
+// insertSensor seeds a board, sensor_type, and sensor row (all required
+// NOT NULL FKs on the real sensor table) and returns the sensor's ID.
+// Board/type identity is irrelevant to GetSensorReadingHistory, which
+// queries sensor_reading directly, so fixed placeholder names are used.
 func insertSensor(t *testing.T, ctx context.Context, pool *pgxpool.Pool) int64 {
 	t.Helper()
+
+	var boardID int64
+	err := pool.QueryRow(ctx,
+		`INSERT INTO board (device_id) VALUES ('board') RETURNING board_id`).Scan(&boardID)
+	require.NoError(t, err, "insert board fixture")
+
+	// Upsert, not a plain INSERT: migration 001_initial_schema.up.sql
+	// already seeds real sensor_type rows, so a literal name here could
+	// collide with the real seed data.
+	var sensorTypeID int64
+	err = pool.QueryRow(ctx, `
+		INSERT INTO sensor_type (name, default_unit) VALUES ('type', 'unit')
+		ON CONFLICT (name) DO UPDATE SET name = EXCLUDED.name
+		RETURNING sensor_type_id`).Scan(&sensorTypeID)
+	require.NoError(t, err, "insert sensor_type fixture")
+
 	var sensorID int64
-	err := pool.QueryRow(ctx, `INSERT INTO sensor DEFAULT VALUES RETURNING sensor_id`).Scan(&sensorID)
+	err = pool.QueryRow(ctx, `
+		INSERT INTO sensor (board_id, sensor_type_id, name, unit)
+		VALUES ($1, $2, 'sensor', 'unit')
+		RETURNING sensor_id`, boardID, sensorTypeID).Scan(&sensorID)
 	require.NoError(t, err, "insert sensor fixture")
 	return sensorID
 }
@@ -81,8 +80,8 @@ func insertReadings(t *testing.T, ctx context.Context, pool *pgxpool.Pool, senso
 		return
 	}
 	_, err := pool.Exec(ctx, `
-		INSERT INTO sensor_reading (sensor_id, value, valid, recorded_at)
-		SELECT $1, i, $2, $3::timestamptz + (i * interval '1 second')
+		INSERT INTO sensor_reading (sensor_id, value, valid, uptime_s, recorded_at)
+		SELECT $1, i, $2, 1, $3::timestamptz + (i * interval '1 second')
 		FROM generate_series(0, $4::int - 1) AS s(i)
 	`, sensorID, valid, start, n)
 	require.NoError(t, err, "bulk insert %d readings", n)

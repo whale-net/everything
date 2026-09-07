@@ -88,7 +88,10 @@ go_test(
     name = "history_integration_test",
     size = "large",
     timeout = "long",
-    srcs = ["history_integration_test.go"],
+    srcs = [
+        "history_integration_test.go",
+        "testdb_integration_test.go",
+    ],
     embed = [":api_lib"],
     gotags = ["integration"],
     tags = [
@@ -101,8 +104,11 @@ go_test(
     ],
     deps = [
         "//leaflab/api/proto:leaflabapipb",
+        "//leaflab/migrate/schema",
         "//libs/go/dbtest",
+        "//libs/go/migrate",
         "@com_github_jackc_pgx_v5//pgxpool",
+        "@com_github_jackc_pgx_v5//stdlib",
         "@com_github_stretchr_testify//assert",
         "@com_github_stretchr_testify//require",
         "@org_golang_google_grpc//codes",
@@ -145,6 +151,7 @@ go_test(
     srcs = [
         "migration_016_integration_test.go",
         "repository_integration_test.go",
+        "testdb_integration_test.go",
     ],
     embed = [":api_lib"],
     gotags = ["integration"],
@@ -158,8 +165,11 @@ go_test(
     ],
     deps = [
         "//leaflab/api/proto:leaflabapipb",
+        "//leaflab/migrate/schema",
         "//libs/go/dbtest",
+        "//libs/go/migrate",
         "@com_github_jackc_pgx_v5//pgconn",
         "@com_github_jackc_pgx_v5//pgxpool",
+        "@com_github_jackc_pgx_v5//stdlib",
     ],
 )

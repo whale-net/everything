@@ -6,16 +6,11 @@
 // target's gotags in BUILD.bazel and //libs/go/dbtest's README for how to
 // run it.
 //
-// Schema here is hand-written, self-contained DDL scoped to exactly what
-// ListBoardsWithState (#1497) and ListSensorDetailsForBoard/GetBoardIdentity
-// (#1498) need (board, sensor_type, sensor, sensor_name_history,
-// sensor_reading, plus a v_sensor_current view mirroring the real one's
-// name/type resolution) — per dbtest's own convention, it deliberately does
-// not depend on leaflab/migrate's real migrations (whose embed.FS lives in
-// package main there and isn't importable) and it skips the TimescaleDB
-// extension/hypertable call: the queries under test have no
-// hypertable-specific behavior, and dbtest's default image
-// (postgres:16-alpine) doesn't ship the TimescaleDB extension anyway.
+// Schema setup runs the real golang-migrate migrations from
+// leaflab/migrate/schema (the same embed.FS //leaflab/migrate applies in
+// production) via newLeafLabTestPool in testdb_integration_test.go, rather
+// than a hand-maintained copy of the DDL — see that file for why a
+// TimescaleDB-flavoured image is required.
 package main
 
 import (
@@ -28,158 +23,16 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 
-	"github.com/whale-net/everything/libs/go/dbtest"
-
 	pb "github.com/whale-net/everything/leaflab/api/proto"
 )
 
-const testSchema = `
-	-- name (FR3, migration 016_m2_ownership_rename) added for
-	-- ListBoardsWithState/GetBoardIdentity's BoardName coverage below.
-	CREATE TABLE board (
-		board_id      BIGSERIAL PRIMARY KEY,
-		device_id     VARCHAR(64) NOT NULL UNIQUE,
-		name          TEXT,
-		registered_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-		last_seen_at  TIMESTAMPTZ NOT NULL DEFAULT NOW()
-	);
-
-	CREATE TABLE sensor_type (
-		sensor_type_id BIGSERIAL PRIMARY KEY,
-		name           VARCHAR(64) NOT NULL UNIQUE,
-		default_unit   VARCHAR(16) NOT NULL
-	);
-
-	-- corrective_push_attempts/corrective_push_outstanding_version (NFR4,
-	-- migration 016) added for RenameSensor's (#1770) atomic counter-reset
-	-- coverage below.
-	CREATE TABLE sensor (
-		sensor_id                           BIGSERIAL PRIMARY KEY,
-		board_id                            BIGINT NOT NULL REFERENCES board(board_id) ON DELETE RESTRICT,
-		sensor_type_id                      BIGINT NOT NULL REFERENCES sensor_type(sensor_type_id),
-		name                                VARCHAR(128) NOT NULL,
-		unit                                VARCHAR(16) NOT NULL,
-		registered_at                       TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-		last_seen_at                        TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-		corrective_push_attempts            INT NOT NULL DEFAULT 0,
-		corrective_push_outstanding_version BIGINT,
-		UNIQUE (board_id, name)
-	);
-
-	CREATE TABLE sensor_reading (
-		reading_id  BIGSERIAL PRIMARY KEY,
-		sensor_id   BIGINT NOT NULL REFERENCES sensor(sensor_id) ON DELETE RESTRICT,
-		value       DOUBLE PRECISION NOT NULL,
-		valid       BOOLEAN NOT NULL DEFAULT TRUE,
-		uptime_ms   INTEGER NOT NULL,
-		recorded_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
-	);
-
-	-- SCD2 name history (leaflab/migrate/migrations/011_scd2_naming.up.sql:
-	-- sensor_label renamed to sensor_name_history). valid_to IS NULL = the
-	-- current open row for that sensor.
-	CREATE TABLE sensor_name_history (
-		sensor_name_history_id BIGSERIAL PRIMARY KEY,
-		sensor_id              BIGINT NOT NULL REFERENCES sensor(sensor_id) ON DELETE CASCADE,
-		name                   TEXT NOT NULL,
-		valid_from             TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-		valid_to               TIMESTAMPTZ
-	);
-
-	-- Mirrors the columns ListSensorDetailsForBoard actually reads off the
-	-- real v_sensor_current (leaflab/migrate/migrations/012_views.up.sql):
-	-- current name resolved via the sensor_name_history SCD2 join, plus the
-	-- sensor_type join. Region/board timestamp columns are intentionally
-	-- omitted here — this task's query never reads them.
-	CREATE VIEW v_sensor_current AS
-	SELECT
-		s.sensor_id,
-		s.board_id,
-		b.device_id,
-		snh.name  AS sensor_name,
-		s.unit    AS sensor_unit,
-		s.sensor_type_id,
-		st.name   AS sensor_type_name
-	FROM sensor s
-	JOIN board b ON b.board_id = s.board_id
-	JOIN sensor_type st ON st.sensor_type_id = s.sensor_type_id
-	LEFT JOIN sensor_name_history snh
-		ON snh.sensor_id = s.sensor_id
-		AND snh.valid_to IS NULL;
-
-	-- v_sensor_last_reading/v_board_last_reading (migration
-	-- 015_board_last_reading.up.sql), added for ListBoardsWithState
-	-- coverage below: each sensor's latest reading via a LATERAL join,
-	-- rolled up to one row per board via MAX across its sensors.
-	CREATE VIEW v_sensor_last_reading AS
-	SELECT
-		s.sensor_id,
-		s.board_id,
-		lr.recorded_at AS last_reading_at
-	FROM sensor s
-	LEFT JOIN LATERAL (
-		SELECT sr.recorded_at
-		FROM sensor_reading sr
-		WHERE sr.sensor_id = s.sensor_id
-		ORDER BY sr.recorded_at DESC
-		LIMIT 1
-	) lr ON TRUE;
-
-	CREATE VIEW v_board_last_reading AS
-	SELECT
-		b.board_id,
-		b.device_id,
-		MAX(slr.last_reading_at) AS last_reading_at
-	FROM board b
-	LEFT JOIN v_sensor_last_reading slr ON slr.board_id = b.board_id
-	GROUP BY b.board_id, b.device_id;
-
-	-- Ownership shape (leaflab/migrate/migrations/013_ownership.up.sql),
-	-- added for GetCurrentBoardOwner coverage: SCD2 board_owner_history,
-	-- unowned expressed as the absence of an open (valid_to IS NULL) row,
-	-- never as a NULL owner on an open row. preferred_username/email/
-	-- display_name added for ListBoardsWithState/GetBoardIdentity's Owner
-	-- projection coverage below.
-	CREATE TABLE leaflab_user (
-		leaflab_user_id    BIGSERIAL PRIMARY KEY,
-		oidc_sub           TEXT NOT NULL UNIQUE,
-		preferred_username TEXT,
-		email              TEXT,
-		display_name       TEXT
-	);
-
-	CREATE TABLE board_owner_history (
-		board_owner_history_id BIGSERIAL   PRIMARY KEY,
-		board_id                BIGINT      NOT NULL REFERENCES board(board_id) ON DELETE CASCADE,
-		leaflab_user_id         BIGINT      NOT NULL REFERENCES leaflab_user(leaflab_user_id),
-		valid_from              TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-		valid_to                TIMESTAMPTZ
-	);
-
-	CREATE UNIQUE INDEX idx_board_owner_history_current
-		ON board_owner_history(board_id) WHERE valid_to IS NULL;
-
-	-- FR10/FR14 role grants (leaflab/migrate/migrations/016_m2_ownership_rename.up.sql),
-	-- added for HasRole/GrantRole/RevokeRole coverage.
-	CREATE TABLE leaflab_user_role (
-		leaflab_user_role_id BIGSERIAL   PRIMARY KEY,
-		leaflab_user_id      BIGINT      NOT NULL REFERENCES leaflab_user(leaflab_user_id) ON DELETE CASCADE,
-		role                 TEXT        NOT NULL,
-		valid_from           TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-		valid_to             TIMESTAMPTZ
-	);
-
-	CREATE UNIQUE INDEX idx_leaflab_user_role_current
-		ON leaflab_user_role(leaflab_user_id, role) WHERE valid_to IS NULL;
-`
-
-// newTestRepository starts a real Postgres container (via dbtest), applies
-// the self-contained schema above, and returns a ready Repository plus the
-// raw pool for fixture setup.
+// newTestRepository starts a real Postgres container with the real
+// migrations applied (see newLeafLabTestPool) and returns a ready
+// Repository plus the raw pool for fixture setup.
 func newTestRepository(t *testing.T) (*Repository, *pgxpool.Pool) {
 	t.Helper()
-	db := dbtest.NewPostgres(context.Background(), t, dbtest.Options{Schema: testSchema})
-	return NewRepository(db.Pool), db.Pool
+	pool := newLeafLabTestPool(t)
+	return NewRepository(pool), pool
 }
 
 func seedBoard(t *testing.T, pool *pgxpool.Pool, deviceID string) int64 {
@@ -225,11 +78,17 @@ func closeBoardOwnerHistory(t *testing.T, pool *pgxpool.Pool, boardID int64) {
 	}
 }
 
+// seedSensorType is an upsert, not a plain INSERT: migration
+// 001_initial_schema.up.sql seeds real sensor_type rows ('illuminance',
+// 'temperature', 'humidity'), so a literal name callers pass (e.g.
+// "temperature") may already exist against the real schema.
 func seedSensorType(t *testing.T, pool *pgxpool.Pool, name string) int64 {
 	t.Helper()
 	var id int64
-	if err := pool.QueryRow(context.Background(),
-		`INSERT INTO sensor_type (name, default_unit) VALUES ($1, 'unit') RETURNING sensor_type_id`, name).Scan(&id); err != nil {
+	if err := pool.QueryRow(context.Background(), `
+		INSERT INTO sensor_type (name, default_unit) VALUES ($1, 'unit')
+		ON CONFLICT (name) DO UPDATE SET name = EXCLUDED.name
+		RETURNING sensor_type_id`, name).Scan(&id); err != nil {
 		t.Fatalf("seed sensor_type %s: %v", name, err)
 	}
 	return id
@@ -278,8 +137,8 @@ func renameSensor(t *testing.T, pool *pgxpool.Pool, sensorID int64, newName stri
 func seedReading(t *testing.T, pool *pgxpool.Pool, sensorID int64, recordedAt time.Time, valid bool) {
 	t.Helper()
 	if _, err := pool.Exec(context.Background(), `
-		INSERT INTO sensor_reading (sensor_id, value, valid, uptime_ms, recorded_at)
-		VALUES ($1, 1.0, $2, 1000, $3)`, sensorID, valid, recordedAt); err != nil {
+		INSERT INTO sensor_reading (sensor_id, value, valid, uptime_s, recorded_at)
+		VALUES ($1, 1.0, $2, 1, $3)`, sensorID, valid, recordedAt); err != nil {
 		t.Fatalf("seed reading for sensor %d: %v", sensorID, err)
 	}
 }
