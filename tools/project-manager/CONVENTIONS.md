@@ -107,7 +107,7 @@ e.g. `Ledger: M2 → in design (<discussion-url>)`, `Ledger: M2 → planned (#12
 
 Status moves `not started → in design → planned → in progress → shipped`, one comment per transition, written by:
 - **producer** — `in design` when it opens the milestone's intake discussion; `planned` when it publishes the root plan issue (Mode 3).
-- **`plan` skill** — `in progress` when it creates the milestone's Project board (SKILL.md step 3).
+- **`plan` skill** — `in progress` when it creates the milestone's Project board (SKILL.md step 2).
 - **`validate` skill** — `shipped` once whole-system validation passes cleanly with no findings (SKILL.md step 4).
 
 Each writer checks the root plan issue's first line for `Product: #<p> — Milestone M<k>` before posting; a plan that isn't a milestone of a brief triggers none of this, so ordinary single-feature plans are unaffected.
@@ -383,6 +383,9 @@ stateDiagram-v2
 ```
 
 ### 1. Find work
+
+**Run this discovery once per swimlane scan, not once per dispatched worker/validator.** `/project-manager:implement` runs it itself while building a batch (SKILL.md step 3a) and hands each worker/validator the specific `<task-issue-number>` it already resolved (step 3d) — a dispatched worker/validator that re-runs this query on top of that is pure duplication, multiplied by however many subagents are in the batch. `worker.md`/`validator.md` only fall back to running it themselves when dispatched standalone with no issue number given.
+
 Query unassigned items in the active swimlane for the plan:
 
 ```sh
@@ -390,12 +393,20 @@ gh project item-list <number> --owner whale-net --query "status:<Swimlane> no:as
   | jq -r '.items[] | select(.content.body | test("Part of #<root>([^0-9]|$)")) | .content.number'
 ```
 
-Confirm readiness: every issue in `Depends on:` must be in `state: CLOSED`:
+**Batch-checking dependency state.** Confirm readiness: every issue in `Depends on:` must be in `state: CLOSED`. Extract each candidate's `Depends on:` line with one `gh issue view <n> --json body` per candidate (unavoidable — the project item's own body already fetched by `item-list` doesn't include it fresh enough to trust without a re-read), but never check dependency state one issue at a time — batch every dependency across every candidate into a single GraphQL call using aliases:
+
 ```sh
-gh issue view <n> --json body
-# extract "Depends on: #a, #b", then check each:
-gh issue view <dep> --json state   # must be "CLOSED"
+gh api graphql -f query='
+  query {
+    repository(owner: "whale-net", name: "everything") {
+      d12: issue(number: 12) { state }
+      d17: issue(number: 17) { state }
+      d23: issue(number: 23) { state }
+    }
+  }' --jq '.data.repository | to_entries[] | "\(.key)=\(.value.state)"'
 ```
+
+Build the aliased field list (`d<n>: issue(number: <n>) { state }`) from the deduplicated set of every `#<n>` referenced across every candidate's `Depends on:` line — one API call regardless of how many candidates or dependencies are involved, versus one `gh issue view --json state` call per dependency per candidate. A candidate is ready only if every one of its own dependencies came back `CLOSED`.
 
 ### 2. Claim task
 ```sh
@@ -519,7 +530,12 @@ Task work is tracked with [`gh stack`](../../.claude/skills/gh-stack/SKILL.md) �
    ```sh
    gh stack merge <top-task-pr-number> --yes
    ```
-   Only needed if `<top-task-pr-number>` (the last entry in `<registered>`) isn't already merged. Then post `gh issue comment <root-issue-number> --body "PRs: <url>, <url>, ..."` on the root issue, listing every task's PR regardless of when each merged (`gh pr view <branch> --json number,url` per branch, or the URLs already gathered during `/project-manager:implement`).
+   Only needed if `<top-task-pr-number>` (the last entry in `<registered>`) isn't already merged. Then post `gh issue comment <root-issue-number> --body "PRs: <url>, <url>, ..."` on the root issue, listing every task's PR regardless of when each merged — prefer the URLs already gathered during `/project-manager:implement`; only re-fetch if they weren't collected (e.g. this session didn't run `implement` itself), and even then fetch them in one call, not one `gh pr view` per branch:
+   ```sh
+   gh pr list --repo whale-net/everything --state all --json number,url,headRefName \
+     | jq -r --arg root "<root-issue-number>" '.[] | select(.headRefName | test("^pm[0-9]*-" + $root + "/")) | .url'
+   ```
+   `gh pr list` paginates internally and returns every matching PR in one call regardless of task count; every task branch already carries the `pm[<attempt>]-<root-issue-number>/...` prefix (§ Git hygiene step 2), so filtering on `headRefName` is exact, not a guess.
 
 ## System validation
 
@@ -532,6 +548,16 @@ After all task issues on the Project board reach `Done`, **system-validator** ru
 Any persona noticing scope outside its issue files a scope note issue added to the Project at `Status: Noted` with `from:<persona>` and why it is out of scope.
 - **Triage (Planner):** Planner reviews `Status: Noted` items and classifies each as `Carry-over` (cross-cutting), `Deferred` (plan-specific scope cut), or closes it if not worth tracking.
 - **Actioning:** When planner schedules a `Carry-over`/`Deferred` note, it creates real task issues on the board and closes the note with `Status: Done`.
+
+## API call volume & rate limits
+
+Multiple plans regularly run `implement` batches concurrently against the same repo — every worker/validator dispatch and every `mergepush` call shares one `gh` rate limit budget across all of them. Three principles keep call volume proportional to work done rather than to subagent count:
+
+1. **Never re-derive what the caller already resolved.** `/project-manager:implement` scans swimlanes and confirms dependency readiness once per batch, then hands each worker/validator the exact `<task-issue-number>` to work — a dispatched worker/validator uses that number directly instead of re-running the discovery query itself (§ Worker lifecycle step 1). The same principle applies anywhere one persona already fetched state another is about to ask for again in the same operation — pass it down instead of re-fetching.
+2. **Batch same-shaped per-item calls into one request.** Checking N issues' state, or collecting N branches' PR URLs, is one `gh api graphql` call with aliases or one `gh pr list`/`gh issue list` with a local `jq` filter — never N sequential `gh issue view`/`gh pr view` calls (§ Worker lifecycle "Batch-checking dependency state", § Git hygiene step 8).
+3. **Serialize, don't parallelize, anything touching `gh stack`'s state file or `main`.** Already true by construction (§ Git hygiene — `mergepush` processes its batch one task at a time, dispatched once and waited on before the next), and it has a side benefit here: it naturally spaces out the calls most likely to hit a secondary rate limit instead of bursting them.
+
+If a `gh` call itself fails with a rate-limit error (HTTP 403 with `x-ratelimit-remaining: 0`, or GitHub's secondary-rate-limit message), that is not the same as a real failure of the operation being attempted — back off and retry once (a short fixed wait, or until the time in `x-ratelimit-reset` if the error surfaces it) before reporting it as a task/batch failure the way § Git hygiene "Division of responsibility" describes for a push rejection or lock timeout.
 
 ## Model tiers
 

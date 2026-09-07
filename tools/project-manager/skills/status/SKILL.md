@@ -26,7 +26,7 @@ Pure read — never edits items or dispatches personas. See `tools/project-manag
    gh project item-list <project-number> --owner whale-net --field "Status" --format json \
      | jq '[.items[] | select(.content.body | test("Part of #<n>([^0-9]|$)"))]'
    ```
-   Group items by `Status` (`Scaffold`, `Implementation`, `Testing`, `Validation`, `Done`, `Noted`, `Carry-over`, `Deferred`). For each item not yet `Done`, check its `assignees` field (claimed vs. unclaimed) and whether its `Depends on:` issues are closed (ready vs. blocked).
+   Group items by `Status` (`Scaffold`, `Implementation`, `Testing`, `Validation`, `Done`, `Noted`, `Carry-over`, `Deferred`). For each item not yet `Done`, check its `assignees` field (claimed vs. unclaimed) and whether its `Depends on:` issues are closed (ready vs. blocked) — batch every dependency across every not-yet-`Done` item into one `gh api graphql` call with aliases (CONVENTIONS.md § Worker lifecycle, "Batch-checking dependency state"), not one `gh issue view` per dependency.
 
 3. Report a compact table: Swimlane × (Blocked / Ready / Claimed / Done count). Highlight items currently in progress or waiting to be claimed.
 

@@ -18,12 +18,10 @@ Turns a `plan:approved` (or `plan:agent-approved`) root plan Issue into executab
 
 ## Steps
 
-1. `gh issue view <n>` — confirm the root issue is labeled `plan:approved` or `plan:agent-approved` (CONVENTIONS.md § Agent-approved plans — functionally identical here). If neither, point the user to `/project-manager:design`, `/project-manager:review`, or `/project-manager:loop-design-panel`.
+1. **Confirm and idempotency-check in one call.** `gh issue view <n> --comments` — confirm the root issue is labeled `plan:approved` or `plan:agent-approved` (CONVENTIONS.md § Agent-approved plans — functionally identical here); if neither, point the user to `/project-manager:design`, `/project-manager:review`, or `/project-manager:loop-design-panel`. From the same response, check whether a `Project board: <url>` comment already exists — if so, the task breakdown has already run: report the existing project number and its task issues (grouped by swimlane, per `/project-manager:status`) and stop here rather than re-dispatching planner.
 
-2. **Idempotency check.** `gh issue view <n> --comments` — if a `Project board: <url>` comment already exists, the task breakdown has already run: report the existing project number and its task issues (grouped by swimlane, per `/project-manager:status`) and stop here rather than re-dispatching planner.
-
-3. **Task breakdown.** Otherwise, dispatch `project-manager:planner` — via `Agent` with `model` set to `--planner-model` (default `opus`) — with the root issue number, to create the Project board with swimlanes, create cohesive task issues, and post the summary comment.
+2. **Task breakdown.** Otherwise, dispatch `project-manager:planner` — via `Agent` with `model` set to `--planner-model` (default `opus`) — with the root issue number, to create the Project board with swimlanes, create cohesive task issues, and post the summary comment.
 
    **If the root issue's first line names a product brief** (`Product: #<p> — Milestone M<k>`), post `gh issue comment <p> --body "Ledger: M<k> → in progress (Project board)"` on the product tracking issue once the board exists — never a body edit (CONVENTIONS.md § Roadmap ledger). Ordinary single-feature plans skip this; it's the only product-aware step this skill has.
 
-4. **Report.** Summarize the Project board URL and the created task issues, grouped by starting swimlane, to the user. Tell them `/project-manager:implement <n>` is the next step.
+3. **Report.** Summarize the Project board URL and the created task issues, grouped by starting swimlane, to the user. Tell them `/project-manager:implement <n>` is the next step.
