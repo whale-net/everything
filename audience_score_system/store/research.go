@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"net/url"
+	"sort"
 	"strings"
 	"time"
 
@@ -65,6 +66,32 @@ type SaveNoteInput struct {
 type ResearchNoteWithAuthor struct {
 	ResearchNote
 	AuthorDisplayName string
+}
+
+// RelationDirection is one research_note_relation edge's orientation as
+// seen from one specific note's point of view -- "outgoing" when that note
+// is the row's note_id (it declared the relation), "incoming" when that
+// note is the row's related_note_id (another note targets it). Issue
+// #1942 (FR11): a note's own relation edges must be visible on an
+// ordinary browse, not only inferable from #1941's current_only exclusion
+// or #1944's verdict-citation warning.
+type RelationDirection string
+
+const (
+	RelationOutgoing RelationDirection = "outgoing"
+	RelationIncoming RelationDirection = "incoming"
+)
+
+// NoteRelation is one research_note_relation row as seen from one of the
+// notes it touches: the OTHER note it points to/from (RelatedNoteID), the
+// relation_type, and which end the note ListRelationsForNotes was asked
+// about sits on (Direction). A single research_note_relation row yields up
+// to two NoteRelation values -- one per end -- when both ends are in the
+// same ListRelationsForNotes call.
+type NoteRelation struct {
+	RelatedNoteID uuid.UUID
+	RelationType  RelationType
+	Direction     RelationDirection
 }
 
 // ResearchStore covers `research_note` (migration 002, FR9/FR10).
@@ -141,6 +168,19 @@ type ResearchStore interface {
 	// type appears only once in the target's slice. Resolves the WHOLE
 	// noteIDs list in one query (FR16/NFR2), never one query per note.
 	RetiredNoteIDs(ctx context.Context, noteIDs []uuid.UUID) (map[uuid.UUID][]RelationType, error)
+
+	// ListRelationsForNotes returns every research_note_relation row where
+	// a note in noteIDs sits on either side, keyed by that note's id. ONE
+	// query for the whole set -- never one per note (FR11's inline
+	// rationale: every call site that needs this already loads the notes
+	// themselves in one query, so the relation read must not become an
+	// N+1 on top of it). Empty noteIDs returns an empty map and issues no
+	// query. Ordering within each note's slice is deterministic (relation_
+	// type, then related_note_id) so rendering and tests are stable. A
+	// relation whose OTHER end is outside noteIDs still appears under the
+	// end that IS inside noteIDs, but that outside end is never itself
+	// added as a map key.
+	ListRelationsForNotes(ctx context.Context, noteIDs []uuid.UUID) (map[uuid.UUID][]NoteRelation, error)
 }
 
 // researchStore implements ResearchStore against `research_note`
@@ -567,5 +607,70 @@ func (s researchStore) RetiredNoteIDs(ctx context.Context, noteIDs []uuid.UUID) 
 	if err := rows.Err(); err != nil {
 		return nil, fmt.Errorf("query retired research note ids: %w", err)
 	}
+	return out, nil
+}
+
+// ListRelationsForNotes issues ONE query against research_note_relation
+// (`WHERE note_id = ANY($1) OR related_note_id = ANY($1)`) for the whole
+// noteIDs set, then folds each returned row into up to two NoteRelation
+// entries: one under note_id (Direction: RelationOutgoing, RelatedNoteID:
+// related_note_id) when note_id is itself in noteIDs, and one under
+// related_note_id (Direction: RelationIncoming, RelatedNoteID: note_id)
+// when related_note_id is itself in noteIDs. Both branches run
+// independently per row, so a relation between two notes that are BOTH in
+// noteIDs correctly yields one outgoing entry and one incoming entry, and
+// a relation whose other end is outside noteIDs still yields the one
+// entry for the end that IS inside it without ever adding the outside end
+// as its own map key. Empty noteIDs short-circuits before any query.
+func (s researchStore) ListRelationsForNotes(ctx context.Context, noteIDs []uuid.UUID) (map[uuid.UUID][]NoteRelation, error) {
+	out := make(map[uuid.UUID][]NoteRelation, len(noteIDs))
+	if len(noteIDs) == 0 {
+		return out, nil
+	}
+
+	inSet := make(map[uuid.UUID]struct{}, len(noteIDs))
+	for _, id := range noteIDs {
+		inSet[id] = struct{}{}
+	}
+
+	rows, err := s.pool.Query(ctx, `
+		SELECT note_id, related_note_id, relation_type
+		FROM research_note_relation
+		WHERE note_id = ANY($1) OR related_note_id = ANY($1)
+	`, noteIDs)
+	if err != nil {
+		return nil, fmt.Errorf("list research_note_relation for notes: %w", err)
+	}
+	defer rows.Close()
+
+	for rows.Next() {
+		var noteID, relatedNoteID uuid.UUID
+		var relationType RelationType
+		if err := rows.Scan(&noteID, &relatedNoteID, &relationType); err != nil {
+			return nil, fmt.Errorf("scan research_note_relation: %w", err)
+		}
+		if _, ok := inSet[noteID]; ok {
+			out[noteID] = append(out[noteID], NoteRelation{RelatedNoteID: relatedNoteID, RelationType: relationType, Direction: RelationOutgoing})
+		}
+		if _, ok := inSet[relatedNoteID]; ok {
+			out[relatedNoteID] = append(out[relatedNoteID], NoteRelation{RelatedNoteID: noteID, RelationType: relationType, Direction: RelationIncoming})
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("list research_note_relation for notes: %w", err)
+	}
+
+	// Deterministic per-note ordering (relation_type, then related_note_id)
+	// so rendering and tests are stable regardless of Postgres' row order.
+	for id, rels := range out {
+		sort.Slice(rels, func(i, j int) bool {
+			if rels[i].RelationType != rels[j].RelationType {
+				return rels[i].RelationType < rels[j].RelationType
+			}
+			return rels[i].RelatedNoteID.String() < rels[j].RelatedNoteID.String()
+		})
+		out[id] = rels
+	}
+
 	return out, nil
 }

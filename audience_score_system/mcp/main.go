@@ -174,7 +174,7 @@ func run() error {
 	tools.RegisterOutcomeBar(reg, st.OutcomeBars(), st.Calibration())
 	tools.RegisterTriggerChannelSync(reg, st.Channels(), scheduleManager)
 	tools.RegisterAccess(reg, st)
-	tools.RegisterMyWork(reg, st.MyWork())
+	tools.RegisterMyWork(reg, st.MyWork(), st.Research())
 	tools.RegisterChannelAccess(reg, st.Access(), st.Roles())
 
 	handler := server.NewHTTPHandler(srv, creds, server.ResourceMetadataConfig{

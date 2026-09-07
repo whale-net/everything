@@ -30,14 +30,14 @@ func TestToResearchNoteOutput_CitedIsDerivedFromSourceURLNilness(t *testing.T) {
 
 	uncited := base
 	uncited.SourceURL = nil
-	out := toResearchNoteOutput(uncited, "Author Name")
+	out := toResearchNoteOutput(uncited, "Author Name", nil)
 	assert.False(t, out.Cited, "a nil SourceURL must render cited=false")
 	assert.Nil(t, out.SourceURL)
 
 	url := "https://example.com/source"
 	cited := base
 	cited.SourceURL = &url
-	out = toResearchNoteOutput(cited, "Author Name")
+	out = toResearchNoteOutput(cited, "Author Name", nil)
 	assert.True(t, out.Cited, "a non-nil SourceURL must render cited=true")
 	require.NotNil(t, out.SourceURL)
 	assert.Equal(t, url, *out.SourceURL)
