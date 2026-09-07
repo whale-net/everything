@@ -117,9 +117,9 @@ type ResearchNoteOutput struct {
 	// ThreadID/ThreadTitle let a caller see and reuse this note's thread
 	// (e.g. to attach a follow-up note or a relation) without a separate
 	// list_research_threads call.
-	ThreadID    *string `json:"thread_id,omitempty" jsonschema:"This note's resolved research thread, as a UUID string -- reference from a later save_research_note's thread_id"`
-	ThreadTitle *string `json:"thread_title,omitempty" jsonschema:"The resolved thread's title"`
-	Text        string  `json:"text" jsonschema:"The research note's body text"`
+	ThreadID          *string `json:"thread_id,omitempty" jsonschema:"This note's resolved research thread, as a UUID string -- reference from a later save_research_note's thread_id"`
+	ThreadTitle       *string `json:"thread_title,omitempty" jsonschema:"The resolved thread's title"`
+	Text              string  `json:"text" jsonschema:"The research note's body text"`
 	SourceURL         *string `json:"source_url,omitempty" jsonschema:"The cited source URL, if any"`
 	Cited             bool    `json:"cited" jsonschema:"True if this note has a source_url. Explicit so a client cannot mistake a missing source_url for a truncated response (FR10)."`
 	AuthorPersonID    string  `json:"author_person_id" jsonschema:"The Person who authored this note (the calling credential, not the Channel's Creator), as a UUID string"`

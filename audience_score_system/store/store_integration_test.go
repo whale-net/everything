@@ -3556,3 +3556,174 @@ func TestMyWorkStore_SummariesForPerson_NoRoles_ReturnsEmpty_NoExtraQueries(t *t
 	assert.Empty(t, got)
 	assert.Equal(t, int64(1), counter.n.Load()-before, "no open role anywhere must short-circuit after the one Channel-listing query")
 }
+
+// ── ResearchStore.ListRelationsForNotes (issue #1942, FR11/FR16/NFR2) ─────
+
+// TestResearchStore_ListRelationsForNotes_OutgoingAndIncomingFromSameRow
+// proves the core fold: ONE research_note_relation row (a supersedes b)
+// yields an outgoing entry under a's key AND an incoming entry under b's
+// key when both a and b are in the requested noteIDs set.
+func TestResearchStore_ListRelationsForNotes_OutgoingAndIncomingFromSameRow(t *testing.T) {
+	ctx := context.Background()
+	s, _ := newStore(t)
+	ch, creator := setupChannel(t, ctx, s)
+
+	target, err := s.Research().SaveNote(ctx, store.SaveNoteInput{ChannelID: ch.ID, ThreadTitle: "Thread", Text: "target note", AuthorPersonID: creator.ID})
+	require.NoError(t, err)
+	declaring, err := s.Research().SaveNote(ctx, store.SaveNoteInput{
+		ChannelID: ch.ID, ThreadID: target.ThreadID, Text: "declaring note", AuthorPersonID: creator.ID,
+		Relations: []store.SaveNoteRelationInput{{RelatedNoteID: target.ID, RelationType: store.RelationSupersedes}},
+	})
+	require.NoError(t, err)
+
+	got, err := s.Research().ListRelationsForNotes(ctx, []uuid.UUID{declaring.ID, target.ID})
+	require.NoError(t, err)
+
+	require.Len(t, got[declaring.ID], 1, "the declaring note must carry one outgoing entry")
+	assert.Equal(t, target.ID, got[declaring.ID][0].RelatedNoteID)
+	assert.Equal(t, store.RelationSupersedes, got[declaring.ID][0].RelationType)
+	assert.Equal(t, store.RelationOutgoing, got[declaring.ID][0].Direction)
+
+	require.Len(t, got[target.ID], 1, "the target note must carry one incoming entry from the SAME row")
+	assert.Equal(t, declaring.ID, got[target.ID][0].RelatedNoteID)
+	assert.Equal(t, store.RelationSupersedes, got[target.ID][0].RelationType)
+	assert.Equal(t, store.RelationIncoming, got[target.ID][0].Direction)
+}
+
+// TestResearchStore_ListRelationsForNotes_EmptyInput_NoQuery proves the
+// empty-noteIDs short-circuit: an empty map back, and not even one SQL
+// statement issued.
+func TestResearchStore_ListRelationsForNotes_EmptyInput_NoQuery(t *testing.T) {
+	ctx := context.Background()
+	_, db := newStore(t)
+
+	counter := &queryCounter{}
+	traced := tracedStore(t, ctx, db, counter)
+
+	before := counter.n.Load()
+	got, err := traced.Research().ListRelationsForNotes(ctx, nil)
+	require.NoError(t, err)
+	assert.Empty(t, got)
+	assert.Equal(t, int64(0), counter.n.Load()-before, "empty noteIDs must issue no query at all")
+}
+
+// TestResearchStore_ListRelationsForNotes_MixedTypesReturnsAllInStableOrder
+// proves a note with several relations of mixed type returns them all, in
+// deterministic (relation_type, then related_note_id) order -- called
+// twice to prove the order does not depend on Postgres' own row order.
+func TestResearchStore_ListRelationsForNotes_MixedTypesReturnsAllInStableOrder(t *testing.T) {
+	ctx := context.Background()
+	s, _ := newStore(t)
+	ch, creator := setupChannel(t, ctx, s)
+
+	seed, err := s.Research().SaveNote(ctx, store.SaveNoteInput{ChannelID: ch.ID, ThreadTitle: "Thread", Text: "seed", AuthorPersonID: creator.ID})
+	require.NoError(t, err)
+	a, err := s.Research().SaveNote(ctx, store.SaveNoteInput{ChannelID: ch.ID, ThreadID: seed.ThreadID, Text: "a", AuthorPersonID: creator.ID})
+	require.NoError(t, err)
+	b, err := s.Research().SaveNote(ctx, store.SaveNoteInput{ChannelID: ch.ID, ThreadID: seed.ThreadID, Text: "b", AuthorPersonID: creator.ID})
+	require.NoError(t, err)
+
+	declaring, err := s.Research().SaveNote(ctx, store.SaveNoteInput{
+		ChannelID: ch.ID, ThreadID: seed.ThreadID, Text: "declaring", AuthorPersonID: creator.ID,
+		Relations: []store.SaveNoteRelationInput{
+			{RelatedNoteID: b.ID, RelationType: store.RelationFollowsUp},
+			{RelatedNoteID: a.ID, RelationType: store.RelationCaveats},
+			{RelatedNoteID: a.ID, RelationType: store.RelationSummarizes},
+		},
+	})
+	require.NoError(t, err)
+
+	want := []store.NoteRelation{
+		{RelatedNoteID: a.ID, RelationType: store.RelationCaveats, Direction: store.RelationOutgoing},
+		{RelatedNoteID: b.ID, RelationType: store.RelationFollowsUp, Direction: store.RelationOutgoing},
+		{RelatedNoteID: a.ID, RelationType: store.RelationSummarizes, Direction: store.RelationOutgoing},
+	}
+
+	for i := 0; i < 2; i++ {
+		got, err := s.Research().ListRelationsForNotes(ctx, []uuid.UUID{declaring.ID})
+		require.NoError(t, err)
+		require.Len(t, got[declaring.ID], 3, "all three relations must be returned")
+		assert.Equal(t, want, got[declaring.ID], "order must be deterministic (relation_type, then related_note_id) across repeated calls")
+	}
+}
+
+// TestResearchStore_ListRelationsForNotes_OutsideEndNotLeakedAsMapKey
+// proves a relation whose OTHER end is outside noteIDs still appears for
+// the end that IS inside it, and the outside end never becomes its own
+// map key.
+func TestResearchStore_ListRelationsForNotes_OutsideEndNotLeakedAsMapKey(t *testing.T) {
+	ctx := context.Background()
+	s, _ := newStore(t)
+	ch, creator := setupChannel(t, ctx, s)
+
+	outside, err := s.Research().SaveNote(ctx, store.SaveNoteInput{ChannelID: ch.ID, ThreadTitle: "Thread", Text: "outside note", AuthorPersonID: creator.ID})
+	require.NoError(t, err)
+	inside, err := s.Research().SaveNote(ctx, store.SaveNoteInput{
+		ChannelID: ch.ID, ThreadID: outside.ThreadID, Text: "inside note", AuthorPersonID: creator.ID,
+		Relations: []store.SaveNoteRelationInput{{RelatedNoteID: outside.ID, RelationType: store.RelationExcludes}},
+	})
+	require.NoError(t, err)
+
+	got, err := s.Research().ListRelationsForNotes(ctx, []uuid.UUID{inside.ID})
+	require.NoError(t, err)
+
+	require.Len(t, got[inside.ID], 1, "the note that IS in noteIDs must still see the relation")
+	assert.Equal(t, outside.ID, got[inside.ID][0].RelatedNoteID)
+	_, leaked := got[outside.ID]
+	assert.False(t, leaked, "the outside end must never become its own map key")
+}
+
+// TestResearchStore_ListRelationsForNotes_BatchingIssuesOneQueryForNNotes
+// proves FR11's inline rationale concretely: resolving relations for N
+// notes with relations issues exactly ONE additional SQL statement versus
+// resolving for N notes with none at all -- never one query per note.
+func TestResearchStore_ListRelationsForNotes_BatchingIssuesOneQueryForNNotes(t *testing.T) {
+	ctx := context.Background()
+	s, db := newStore(t)
+	ch, creator := setupChannel(t, ctx, s)
+
+	seed, err := s.Research().SaveNote(ctx, store.SaveNoteInput{ChannelID: ch.ID, ThreadTitle: "Thread", Text: "seed", AuthorPersonID: creator.ID})
+	require.NoError(t, err)
+
+	var noRelationIDs []uuid.UUID
+	for i := 0; i < 5; i++ {
+		n, err := s.Research().SaveNote(ctx, store.SaveNoteInput{ChannelID: ch.ID, ThreadID: seed.ThreadID, Text: fmt.Sprintf("no relation %d", i), AuthorPersonID: creator.ID})
+		require.NoError(t, err)
+		noRelationIDs = append(noRelationIDs, n.ID)
+	}
+
+	var withRelationIDs []uuid.UUID
+	prior := seed
+	for i := 0; i < 5; i++ {
+		n, err := s.Research().SaveNote(ctx, store.SaveNoteInput{
+			ChannelID: ch.ID, ThreadID: seed.ThreadID, Text: fmt.Sprintf("with relation %d", i), AuthorPersonID: creator.ID,
+			Relations: []store.SaveNoteRelationInput{{RelatedNoteID: prior.ID, RelationType: store.RelationFollowsUp}},
+		})
+		require.NoError(t, err)
+		withRelationIDs = append(withRelationIDs, n.ID)
+		prior = n
+	}
+
+	counter := &queryCounter{}
+	traced := tracedStore(t, ctx, db, counter)
+
+	before := counter.n.Load()
+	_, err = traced.Research().ListRelationsForNotes(ctx, noRelationIDs)
+	require.NoError(t, err)
+	noRelationQueries := counter.n.Load() - before
+
+	before = counter.n.Load()
+	got, err := traced.Research().ListRelationsForNotes(ctx, withRelationIDs)
+	require.NoError(t, err)
+	withRelationQueries := counter.n.Load() - before
+
+	total := 0
+	for _, id := range withRelationIDs {
+		total += len(got[id])
+	}
+	require.Greater(t, total, 0, "sanity: the with-relations set must actually carry relations")
+
+	assert.Equal(t, noRelationQueries, withRelationQueries,
+		"resolving relations for N notes must issue the SAME single query count regardless of how many of them actually carry relations")
+	assert.Equal(t, int64(1), noRelationQueries, "resolving relations for a whole note set must issue exactly ONE SQL statement")
+}
