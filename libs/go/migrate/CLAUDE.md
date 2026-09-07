@@ -10,7 +10,7 @@ the canonical example.
 
 `<domain>/DATA.md` is **not** kept in sync automatically. After a migration
 (or a batch of related migrations) lands in a domain's `migrations/`
-directory — e.g. `manmanv2/migrate/migrations/`, `leaflab/migrate/migrations/`,
+directory — e.g. `manmanv2/migrate/migrations/`, `leaflab/migrate/schema/migrations/`,
 `tools/app_registry/migrate/schema/migrations/` — run the `/data-docs
 <domain>` skill before considering the schema change done, so `DATA.md` (and
 its entry in the domain's `TOC.md`) reflects the actual current schema.

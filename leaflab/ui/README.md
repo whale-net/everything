@@ -38,7 +38,7 @@ cookie-only sessions. `PG_DATABASE_URL` is required at boot; if the
 `ui_sessions` table is missing, the DB session manager's preflight
 (`libs/go/htmxauth`) fails startup with a message naming the table and the
 migration that owns it
-(`leaflab/migrate/migrations/014_ui_sessions.up.sql`).
+(`leaflab/migrate/schema/migrations/014_ui_sessions.up.sql`).
 
 `AUTH_MODE=none` runs without an OIDC provider, for local development —
 see `leaflab/Tiltfile`, which sets `AUTH_MODE=none` and `GRPC_AUTH_MODE=none`

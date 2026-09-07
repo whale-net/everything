@@ -290,7 +290,7 @@ type BoardIdentity struct {
 // stopped reporting years ago still appears), each with its most recent
 // reading when it has one.
 //
-// Sensor identity comes from v_sensor_current (leaflab/migrate/migrations/
+// Sensor identity comes from v_sensor_current (leaflab/migrate/schema/migrations/
 // 012_views.up.sql), which already resolves the sensor_name_history SCD2
 // join to the current open row and joins sensor_type — re-deriving that by
 // hand here would duplicate logic that already exists. Readings come

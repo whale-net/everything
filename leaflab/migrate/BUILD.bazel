@@ -4,9 +4,9 @@ load("//tools/bazel:release.bzl", "release_app")
 go_binary(
     name = "migrate",
     srcs = ["main.go"],
-    embedsrcs = glob(["migrations/*.sql"]),
     deps = [
         "//firmware/sensor/catalog",
+        "//leaflab/migrate/schema",
         "//libs/go/migrate",
     ],
     visibility = ["//visibility:public"],

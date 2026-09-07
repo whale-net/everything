@@ -32,7 +32,7 @@ For the target domain, find:
    with embedded FS. Convention is `<domain>/migrate/migrations/*.sql` or
    `<domain>/src/migrations/*.sql`, files named `NNN_description.up.sql` /
    `NNN_description.down.sql`, applied in numeric order. Known locations:
-   - `leaflab/migrate/migrations/`
+   - `leaflab/migrate/schema/migrations/`
    - `manmanv2/migrate/migrations/`
    - `manman/src/migrations/`
    - `friendly_computing_machine/src/migrations/`

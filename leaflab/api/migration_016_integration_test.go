@@ -5,15 +5,12 @@
 // comment for why (Docker-less machines, `bazel test //...` never even
 // compiling it).
 //
-// Schema here is hand-written, self-contained DDL mirroring exactly the
-// pieces of migration 016 (leaflab/migrate/migrations/016_m2_ownership_rename.up.sql)
-// under test: board.name, leaflab_user_role's SCD2 shape (including the
-// partial unique index on the open interval), the seeded-admin INSERT, and
-// the two sensor corrective-push columns. Per repository_integration_test.go's
-// own precedent and dbtest's README ("Options.Schema should be
-// self-contained DDL -- do not depend on another package's migrations"),
-// this does not import leaflab/migrate's real migrations -- its embed.FS
-// lives in package main there and isn't importable anyway.
+// Schema setup runs the real migrations via newLeafLabTestPool
+// (testdb_integration_test.go), so these tests exercise migration 016
+// (leaflab/migrate/schema/migrations/016_m2_ownership_rename.up.sql)
+// itself -- board.name, leaflab_user_role's SCD2 shape, the seeded-admin
+// INSERT, and the two sensor corrective-push columns -- rather than a
+// hand-maintained paraphrase of it.
 package main
 
 import (
@@ -23,65 +20,7 @@ import (
 
 	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
-
-	"github.com/whale-net/everything/libs/go/dbtest"
 )
-
-// migration016Schema mirrors 016_m2_ownership_rename.up.sql: board.name,
-// leaflab_user (013_ownership.up.sql's shape, needed as leaflab_user_role's
-// FK target), leaflab_user_role itself, and sensor's two new
-// corrective-push columns. sensor_type/sensor are scoped down to only the
-// columns migration 016 touches or that a sensor row requires NOT NULL.
-const migration016Schema = `
-	CREATE TABLE board (
-		board_id      BIGSERIAL PRIMARY KEY,
-		device_id     VARCHAR(64) NOT NULL UNIQUE,
-		name          TEXT,
-		registered_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-		last_seen_at  TIMESTAMPTZ NOT NULL DEFAULT NOW()
-	);
-
-	CREATE TABLE leaflab_user (
-		leaflab_user_id     BIGSERIAL   PRIMARY KEY,
-		oidc_sub            TEXT        NOT NULL UNIQUE,
-		preferred_username  TEXT,
-		email               TEXT,
-		display_name        TEXT,
-		created_at          TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-		last_seen_at        TIMESTAMPTZ NOT NULL DEFAULT NOW()
-	);
-
-	CREATE TABLE leaflab_user_role (
-		leaflab_user_role_id BIGSERIAL   PRIMARY KEY,
-		leaflab_user_id      BIGINT      NOT NULL REFERENCES leaflab_user(leaflab_user_id) ON DELETE CASCADE,
-		role                 TEXT        NOT NULL,
-		valid_from           TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-		valid_to             TIMESTAMPTZ
-	);
-
-	CREATE INDEX idx_leaflab_user_role_user_id ON leaflab_user_role(leaflab_user_id);
-	CREATE UNIQUE INDEX idx_leaflab_user_role_current
-		ON leaflab_user_role(leaflab_user_id, role) WHERE valid_to IS NULL;
-
-	CREATE TABLE sensor_type (
-		sensor_type_id BIGSERIAL PRIMARY KEY,
-		name           VARCHAR(64) NOT NULL UNIQUE,
-		default_unit   VARCHAR(16) NOT NULL
-	);
-
-	CREATE TABLE sensor (
-		sensor_id                           BIGSERIAL PRIMARY KEY,
-		board_id                            BIGINT NOT NULL REFERENCES board(board_id) ON DELETE RESTRICT,
-		sensor_type_id                      BIGINT NOT NULL REFERENCES sensor_type(sensor_type_id),
-		name                                VARCHAR(128) NOT NULL,
-		unit                                VARCHAR(16) NOT NULL,
-		registered_at                       TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-		last_seen_at                        TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-		corrective_push_attempts            INT NOT NULL DEFAULT 0,
-		corrective_push_outstanding_version BIGINT,
-		UNIQUE (board_id, name)
-	);
-`
 
 // seedAdminInsert is copied verbatim from migration 016's seeded-first-admin
 // step, so these tests exercise the actual statement the migration runs,
@@ -97,8 +36,7 @@ const seedAdminInsert = `
 
 func newMigration016TestDB(t *testing.T) *pgxpool.Pool {
 	t.Helper()
-	db := dbtest.NewPostgres(context.Background(), t, dbtest.Options{Schema: migration016Schema})
-	return db.Pool
+	return newLeafLabTestPool(t)
 }
 
 func migration016SeedBoard(t *testing.T, pool *pgxpool.Pool, deviceID string) int64 {
@@ -304,9 +242,13 @@ func TestSensorCorrectivePushColumns_DefaultValues(t *testing.T) {
 	ctx := context.Background()
 
 	boardID := migration016SeedBoard(t, pool, "board-sensor-defaults")
+	// Upsert, not a plain INSERT: migration 001_initial_schema.up.sql
+	// already seeds a real 'temperature' sensor_type row.
 	var sensorTypeID int64
-	if err := pool.QueryRow(ctx,
-		`INSERT INTO sensor_type (name, default_unit) VALUES ('temperature', 'C') RETURNING sensor_type_id`).Scan(&sensorTypeID); err != nil {
+	if err := pool.QueryRow(ctx, `
+		INSERT INTO sensor_type (name, default_unit) VALUES ('temperature', 'C')
+		ON CONFLICT (name) DO UPDATE SET name = EXCLUDED.name
+		RETURNING sensor_type_id`).Scan(&sensorTypeID); err != nil {
 		t.Fatalf("seed sensor_type: %v", err)
 	}
 

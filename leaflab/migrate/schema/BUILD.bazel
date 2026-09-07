@@ -1,0 +1,12 @@
+load("@rules_go//go:def.bzl", "go_library")
+
+# Embeds the real golang-migrate SQL so both the migration binary
+# (//leaflab/migrate) and Postgres integration tests across leaflab apply
+# the exact same schema instead of maintaining separate hand-written copies.
+go_library(
+    name = "schema",
+    srcs = ["schema.go"],
+    embedsrcs = glob(["migrations/*"]),
+    importpath = "github.com/whale-net/everything/leaflab/migrate/schema",
+    visibility = ["//visibility:public"],
+)
