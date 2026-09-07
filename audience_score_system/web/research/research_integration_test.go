@@ -639,6 +639,154 @@ func TestHandleChannelIndex_FiftyOneNotes_TruncatedNoteAppearsInUnattachedSectio
 	// SEPARATE paging/load-more control exists alongside it.
 	assert.Equal(t, 1, strings.Count(body, "<form"), "exactly the save-note form may appear -- no paging control")
 	assert.NotContains(t, strings.ToLower(body), "load more", "no load-more control may appear (NFR2)")
+	// The collapse-by-default behavior (FR36, #2033) is unaffected by NFR2's
+	// truncation: the section still renders behind a closed <details> whose
+	// label carries the truncated 50-row count, not 51.
+	sectionStart := strings.Index(body, "<details")
+	require.Greater(t, sectionStart, 0, "the unattached-notes disclosure must render")
+	sectionTag := body[sectionStart:strings.Index(body[sectionStart:], ">")+sectionStart]
+	assert.NotContains(t, sectionTag, "open", "the disclosure must still be collapsed by default with 51 notes present")
+	assert.Contains(t, body, "Unattached notes (50)", "the toggle label must carry the truncated page's count (NFR2), not the true underlying count")
+}
+
+// ── HandleChannelIndex unattached-notes disclosure (FR36, FR37, #2033):
+// collapsed-by-default toggle with a hidden-note count, and proof the
+// collapse never changes what HandleChannelIndex queries or returns ──────
+
+// TestHandleChannelIndex_UnattachedNotesSection_CollapsedByDefault_ToggleLabelHasCount
+// proves FR36: the unattached-notes section renders behind a <details>
+// element with no "open" attribute (collapsed by default) and its
+// <summary> toggle label carries the exact count of unattached notes.
+func TestHandleChannelIndex_UnattachedNotesSection_CollapsedByDefault_ToggleLabelHasCount(t *testing.T) {
+	ctx := context.Background()
+	s := newResearchTestStack(t)
+	ch, creator := s.setupChannel(t, ctx)
+
+	for i := 0; i < 3; i++ {
+		_, err := s.store.Research().SaveNote(ctx, store.SaveNoteInput{ThreadTitle: "Research",
+			ChannelID: ch.ID, IdeaID: nil, Text: fmt.Sprintf("hidden note %d", i), AuthorPersonID: creator.ID,
+		})
+		require.NoError(t, err)
+	}
+
+	w := s.do(t, http.MethodGet, "/channels/"+ch.ID.String()+"/research", s.sessionCookie(t, ctx, creator.ID))
+	require.Equal(t, http.StatusOK, w.Code, "body: %s", w.Body.String())
+	body := w.Body.String()
+
+	require.Equal(t, 1, strings.Count(body, "<details"), "exactly one disclosure element must render for the unattached-notes section")
+	detailsStart := strings.Index(body, "<details")
+	require.GreaterOrEqual(t, detailsStart, 0)
+	openTagEnd := strings.Index(body[detailsStart:], ">") + detailsStart
+	require.Greater(t, openTagEnd, detailsStart)
+	detailsOpenTag := body[detailsStart:openTagEnd]
+	assert.NotContains(t, detailsOpenTag, "open", "the <details> element must render collapsed by default (FR36) -- no \"open\" attribute")
+	assert.Contains(t, body, "Unattached notes (3)", "the toggle label must show the exact hidden-note count (FR36)")
+}
+
+// TestHandleChannelIndex_UnattachedNotesSection_CollapsedButDataStillReturned
+// proves FR37 (load-bearing): the collapse is purely presentational --
+// HandleChannelIndex still queries and renders the unattached notes' full
+// text into the response body even though the <details> element itself is
+// collapsed. If a future change gated the query on the toggle state (an
+// htmx lazy-load round trip, a query param, etc.), this test would fail
+// because the note text would no longer appear in the initial GET response.
+func TestHandleChannelIndex_UnattachedNotesSection_CollapsedButDataStillReturned(t *testing.T) {
+	ctx := context.Background()
+	s := newResearchTestStack(t)
+	ch, creator := s.setupChannel(t, ctx)
+
+	unattached, err := s.store.Research().SaveNote(ctx, store.SaveNoteInput{ThreadTitle: "Research",
+		ChannelID: ch.ID, IdeaID: nil, Text: "text that must survive collapse", AuthorPersonID: creator.ID,
+	})
+	require.NoError(t, err)
+
+	w := s.do(t, http.MethodGet, "/channels/"+ch.ID.String()+"/research", s.sessionCookie(t, ctx, creator.ID))
+	require.Equal(t, http.StatusOK, w.Code, "body: %s", w.Body.String())
+	body := w.Body.String()
+
+	detailsStart := strings.Index(body, "<details")
+	require.Greater(t, detailsStart, 0)
+	openTagEnd := strings.Index(body[detailsStart:], ">") + detailsStart
+	assert.NotContains(t, body[detailsStart:openTagEnd], "open", "the section must render collapsed by default")
+	detailsEnd := strings.Index(body[detailsStart:], "</details>")
+	require.Greater(t, detailsEnd, 0, "the disclosure must close")
+	detailsSection := body[detailsStart : detailsStart+detailsEnd]
+	// Scope this assertion to inside the <details>...</details> element
+	// itself (not merely somewhere in the page) -- the note's text also
+	// legitimately appears a second time in the save-note form's
+	// relation-picker candidate list (#1945, FR15), so an unscoped
+	// assert.Contains(body, ...) would pass even if the collapse-content
+	// rendering itself were broken/gated.
+	assert.Contains(t, detailsSection, unattached.Text, "the unattached note's text must still be present INSIDE the disclosure while collapsed (FR37) -- the query is unaffected by the toggle's presentation state")
+}
+
+// TestHandleChannelIndex_UnattachedNotesSection_ZeroNotes_RendersSensibly
+// proves a Channel with zero unattached notes still renders a coherent
+// disclosure -- an explicit "(0)" count and an empty-state message, not a
+// broken or blank section.
+func TestHandleChannelIndex_UnattachedNotesSection_ZeroNotes_RendersSensibly(t *testing.T) {
+	ctx := context.Background()
+	s := newResearchTestStack(t)
+	ch, creator := s.setupChannel(t, ctx)
+
+	idea, err := s.store.Ideas().Create(ctx, ch.ID, "Only Idea", creator.ID)
+	require.NoError(t, err)
+	_, err = s.store.Research().SaveNote(ctx, store.SaveNoteInput{ThreadTitle: "Research",
+		ChannelID: ch.ID, IdeaID: &idea.ID, Text: "attached note", AuthorPersonID: creator.ID,
+	})
+	require.NoError(t, err)
+
+	w := s.do(t, http.MethodGet, "/channels/"+ch.ID.String()+"/research", s.sessionCookie(t, ctx, creator.ID))
+	require.Equal(t, http.StatusOK, w.Code, "body: %s", w.Body.String())
+	body := w.Body.String()
+
+	assert.Contains(t, body, "Unattached notes (0)", "the toggle must show an explicit 0 count, not a broken/blank section")
+	assert.Contains(t, body, "No unattached notes.", "an explicit empty-state message must render inside the disclosure")
+	require.Equal(t, 1, strings.Count(body, "<details"), "the disclosure must still render even with zero unattached notes")
+}
+
+// TestHandleSaveNote_TargetingUnattachedNote_SucceedsWithSectionCollapsedByDefault
+// proves FR37: posting a new unattached note (no idea_id) still succeeds
+// through HandleSaveNote regardless of the toggle's presentation state, and
+// the following render of the Channel index shows the disclosure still
+// collapsed by default with the updated hidden-note count -- the
+// save-note path is untouched by the collapse.
+func TestHandleSaveNote_TargetingUnattachedNote_SucceedsWithSectionCollapsedByDefault(t *testing.T) {
+	ctx := context.Background()
+	s := newResearchTestStack(t)
+	ch, creator := s.setupChannel(t, ctx)
+
+	w := s.doForm(t, "/channels/"+ch.ID.String()+"/research/notes", s.sessionCookie(t, ctx, creator.ID), url.Values{
+		"idempotency_key": {uuid.NewString()},
+		"text":            {"a note saved while the section is collapsed"},
+		"thread_title":    {"Research"},
+	})
+	require.Equal(t, http.StatusSeeOther, w.Code, "the save-note POST must still succeed regardless of the toggle's state (FR37), body: %s", w.Body.String())
+	assert.Equal(t, "/channels/"+ch.ID.String()+"/research", w.Header().Get("Location"))
+
+	notes := s.allNotes(t, ctx, ch.ID)
+	require.Len(t, notes, 1)
+	assert.Nil(t, notes[0].IdeaID, "the saved note must be unattached")
+
+	// Follow the redirect: the next render must still show the section
+	// collapsed by default (per-navigation default, no persisted expanded
+	// state -- root plan out-of-scope) with the count now including the
+	// just-saved note.
+	w2 := s.do(t, http.MethodGet, w.Header().Get("Location"), s.sessionCookie(t, ctx, creator.ID))
+	require.Equal(t, http.StatusOK, w2.Code, "body: %s", w2.Body.String())
+	body := w2.Body.String()
+	detailsStart := strings.Index(body, "<details")
+	require.Greater(t, detailsStart, 0)
+	openTagEnd := strings.Index(body[detailsStart:], ">") + detailsStart
+	assert.NotContains(t, body[detailsStart:openTagEnd], "open", "the section must render collapsed by default on the next navigation too")
+	assert.Contains(t, body, "Unattached notes (1)", "the toggle count must reflect the just-saved unattached note")
+	detailsEnd := strings.Index(body[detailsStart:], "</details>")
+	require.Greater(t, detailsEnd, 0, "the disclosure must close")
+	// Scoped to inside the disclosure itself, for the same reason as
+	// TestHandleChannelIndex_UnattachedNotesSection_CollapsedButDataStillReturned
+	// above -- the note's text also legitimately appears a second time in
+	// the relation-picker candidate list.
+	assert.Contains(t, body[detailsStart:detailsStart+detailsEnd], "a note saved while the section is collapsed", "the saved note's text must render INSIDE the (collapsed) disclosure")
 }
 
 // ── HandleIdeaDetail (FR2, FR9, FR10): auth ordering, cross-Channel 404
