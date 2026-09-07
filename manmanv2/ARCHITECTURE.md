@@ -267,6 +267,25 @@ the `manman`/`external` exchange bindings.
 - **Payload**: the same `rmq.SessionStatusUpdate` value published to
   `external`. The payload only needs to be a valid trigger — the UI re-reads
   current state from `control-api` rather than rendering from this payload.
+- **Consumer (issue #1724)**: `manmanv2/ui` holds its own RabbitMQ connection
+  (`RABBITMQ_URL`, dialed once at startup via `initializeSSEHub` in
+  `manmanv2/ui/main.go`) dedicated to this exchange — it binds no other
+  exchange, and in particular never binds the shared `manman` exchange. The
+  connection backs `libs/go/htmxsse.Hub`, mounted at the authenticated SSE
+  route `/api/live/deployments`
+  (`manmanv2/ui/handlers_sessions_live.go`), which subscribes each connection
+  to `deployment.<sgcID>` for exactly the SGCs the requester's
+  selected-server scope authorizes (the same scope `handleSessions` renders,
+  via a shared resolution helper) and re-derives each pushed row from
+  `control-api` at delivery time rather than from the trigger payload. This
+  is additive to the UI's existing Postgres use: `PG_DATABASE_URL` remains
+  solely for `htmxauth` session storage — `manmanv2/ui` still holds no direct
+  Postgres access to domain data (sessions, SGCs, games), and the RabbitMQ
+  connection above is used only to trigger fragment refreshes, not to read
+  or write domain state. `RABBITMQ_URL` unset, or the broker unreachable, is
+  a graceful degradation (NFR3/NFR8): the UI still starts and serves
+  `/sessions`, and `/api/live/deployments` returns `503` until a broker
+  becomes reachable.
 
 ---
 

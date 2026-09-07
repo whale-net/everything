@@ -540,9 +540,11 @@ spec:
           value: "manmanv2-api.{namespace}.svc.cluster.local:50051"
         - name: LOG_PROCESSOR_URL
           value: "manmanv2-log-processor.{namespace}.svc.cluster.local:50053"
+        - name: RABBITMQ_URL
+          value: "{rabbitmq_url}"
         - name: OTEL_EXPORTER_OTLP_ENDPOINT
           value: "{otel_endpoint}"
-""".format(namespace=namespace, otel_endpoint=otel_endpoint)))
+""".format(namespace=namespace, otel_endpoint=otel_endpoint, rabbitmq_url=rabbitmq_url)))
 
     # Build dependency list for UI
     ui_deps = ['manmanv2-api']

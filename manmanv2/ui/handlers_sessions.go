@@ -38,13 +38,50 @@ type SessionDetailPageData struct {
 	Installations []*manmanpb.WorkshopInstallation
 }
 
+// resolveScopedServerGameConfigs determines the request's selected server
+// (query param server_id > cookie > default, mirroring getSelectedServerID)
+// and lists the ServerGameConfigs scoped to it -- the exact SGC set
+// handleSessions renders deployment rows for.
+//
+// handleDeploymentsLiveSSE (handlers_sessions_live.go, #1724, FR7) calls this
+// same helper to compute its per-connection topic set. Factoring the
+// resolution here rather than duplicating it means the live stream's
+// authorized SGCs can never drift from -- or leak beyond -- what the
+// server-rendered page itself would show.
+//
+// selectedServerID is 0 (with a nil configs slice and nil error) when no
+// server is selected and none of servers is marked default -- callers must
+// treat that as "no scope", not an error.
+func (app *App) resolveScopedServerGameConfigs(ctx context.Context, r *http.Request, servers []*manmanpb.Server) (selectedServerID int64, serverConfigs []*manmanpb.ServerGameConfig, err error) {
+	selectedServerIDStr := strings.TrimSpace(r.URL.Query().Get("server_id"))
+	if selectedServerIDStr != "" {
+		if id, parseErr := strconv.ParseInt(selectedServerIDStr, 10, 64); parseErr == nil {
+			selectedServerID = id
+		}
+	}
+	if selectedServerID == 0 {
+		selectedServerID = app.getSelectedServerID(r, servers)
+	}
+	if selectedServerID == 0 {
+		return 0, nil, nil
+	}
+
+	configsResp, err := app.grpc.GetAPI().ListServerGameConfigs(ctx, &manmanpb.ListServerGameConfigsRequest{
+		ServerId: selectedServerID,
+		PageSize: 100,
+	})
+	if err != nil {
+		return selectedServerID, nil, err
+	}
+	return selectedServerID, configsResp.Configs, nil
+}
+
 func (app *App) handleSessions(w http.ResponseWriter, r *http.Request) {
 	user := htmxauth.GetUser(r.Context())
 
 	liveOnly := r.URL.Query().Get("live_only") == "1"
 	statusFilter := strings.TrimSpace(r.URL.Query().Get("status"))
 	serverGameConfigIDStr := strings.TrimSpace(r.URL.Query().Get("server_game_config_id"))
-	selectedServerIDStr := strings.TrimSpace(r.URL.Query().Get("server_id"))
 	startError := strings.TrimSpace(r.URL.Query().Get("start_error"))
 	showForce := r.URL.Query().Get("show_force") == "1"
 	forceSGCID := r.URL.Query().Get("sgc_id")
@@ -58,15 +95,14 @@ func (app *App) handleSessions(w http.ResponseWriter, r *http.Request) {
 		servers = []*manmanpb.Server{}
 	}
 
-	// Determine selected server: query param > cookie > default
-	var selectedServerID int64
-	if selectedServerIDStr != "" {
-		if id, err := strconv.ParseInt(selectedServerIDStr, 10, 64); err == nil {
-			selectedServerID = id
-		}
-	}
-	if selectedServerID == 0 {
-		selectedServerID = app.getSelectedServerID(r, servers)
+	// Determine the selected server (query param server_id > cookie >
+	// default) and its authorized ServerGameConfigs via the helper shared
+	// with handleDeploymentsLiveSSE (handlers_sessions_live.go, #1724) --
+	// see resolveScopedServerGameConfigs's doc comment.
+	selectedServerID, serverConfigs, err := app.resolveScopedServerGameConfigs(ctx, r, servers)
+	if err != nil {
+		log.Printf("Error fetching server configs: %v", err)
+		serverConfigs = nil
 	}
 
 	// Build session list request
@@ -100,20 +136,11 @@ func (app *App) handleSessions(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	var serverConfigs []*manmanpb.ServerGameConfig
+	// serverConfigs and selectedServerID were already resolved above via
+	// resolveScopedServerGameConfigs.
 	var selectedServerStatus string
 	var liveSessionByConfig map[int64]*manmanpb.Session
 	if selectedServerID > 0 {
-		configsResp, err := app.grpc.GetAPI().ListServerGameConfigs(ctx, &manmanpb.ListServerGameConfigsRequest{
-			ServerId: selectedServerID,
-			PageSize: 100,
-		})
-		if err != nil {
-			log.Printf("Error fetching server configs: %v", err)
-		} else {
-			serverConfigs = configsResp.Configs
-		}
-
 		for _, server := range servers {
 			if server.ServerId == selectedServerID {
 				selectedServerStatus = server.Status
