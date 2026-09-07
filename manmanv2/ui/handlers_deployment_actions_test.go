@@ -5,6 +5,7 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"runtime"
 	"strings"
 	"sync"
 	"testing"
@@ -16,12 +17,12 @@ import (
 
 // This file guards #1627's deployment-scoped Start/Stop/Restart action
 // endpoints (handlers_deployment_actions.go): routing/method/verb validation,
-// that Start never passes Force=true, that Stop/Restart resolve the live
-// session via ListSessionsWithFilters(LiveOnly: true) rather than assuming
-// one exists, that restart is genuinely stop-then-start over the exact same
-// helpers (not a distinct code path -- the plan's carried-forward note asks
-// for the restart StartSession call to be compared against the plain-Start
-// call, not just trusted "by convention"), and that every outcome re-renders
+// that Start never passes Force=true, that Stop resolves the live session
+// via ListSessionsWithFilters(LiveOnly: true) rather than assuming one
+// exists, that restart dispatches a single RestartDeployment RPC and never
+// calls StopSession/StartSession directly from the UI (#1733 -- the
+// stop-then-start orchestration now lives entirely server-side in
+// control-api's consumer, #1730/#1731), and that every outcome re-renders
 // the row from freshly observed state (FR7/FR8) rather than ever redirecting
 // or assuming success on the HTMX path.
 //
@@ -30,16 +31,7 @@ import (
 // handleDeploymentAction's call graph reaches are overridden, so an
 // unexpected call panics loudly on the nil embedded interface instead of
 // silently returning a zero value.
-// mu guards calls/startCalls/stopCalls/liveSession below. Since #1664,
-// restartDeployment's live-session path finishes stop-then-start in a
-// background goroutine (finishRestartInBackground), which can run
-// concurrently with a test's own goroutine -- StopSession/StartSession/
-// ListSessions all take the lock, and any test whose scenario involves that
-// background goroutine (i.e. a restart with a live session) must read
-// through waitForCalls below rather than touching the fields directly.
-// Tests whose scenario never spawns the goroutine (plain stop/start, or
-// restart's no-live-session path) may still read the fields directly, since
-// there's nothing running concurrently with them.
+// mu guards calls/startCalls/stopCalls/restartCalls/liveSession below.
 type fakeDeploymentAPIClient struct {
 	manmanpb.ManManAPIClient
 
@@ -63,11 +55,13 @@ type fakeDeploymentAPIClient struct {
 	startErr  error
 	stopErr   error
 
-	// stopClearsLive simulates a stop that synchronously clears the live
-	// session, so restart's waitForNoLiveSession sees "no live session"
-	// on its very first (pre-sleep) check and proceeds straight to start
-	// without actually waiting out an interval.
-	stopClearsLive bool
+	// restartResp/restartErr control RestartDeployment's outcome. A nil
+	// restartResp on a nil-error call falls back to an empty
+	// *manmanpb.RestartDeploymentResponse{} (no already_in_flight, no
+	// stopping/started session -- restartDeployment doesn't inspect those
+	// fields at all, only the error).
+	restartResp *manmanpb.RestartDeploymentResponse
+	restartErr  error
 
 	// stopBlocksUntilCtxDone simulates a hung/slow StopSession RPC (#1664's
 	// FR8 defense-in-depth scenario): StopSession blocks until the passed
@@ -80,36 +74,30 @@ type fakeDeploymentAPIClient struct {
 	// startBlocksUntilCtxDone is stopBlocksUntilCtxDone's StartSession
 	// counterpart, covering #1668's extension of the bound to Start.
 	startBlocksUntilCtxDone bool
+	// restartBlocksUntilCtxDone is stopBlocksUntilCtxDone's
+	// RestartDeployment counterpart, covering #1733's extension of the
+	// bound to the single restart dispatch.
+	restartBlocksUntilCtxDone bool
 
-	// stopIgnoresCtx/startIgnoresCtx simulate a StopSession/StartSession
-	// RPC that never returns and never even looks at ctx -- i.e. the
-	// production symptom #1667 actually reported (the API's own handler
-	// blocked for its downstream's full unbounded duration regardless of
-	// what context it was given). Unlike stopBlocksUntilCtxDone above,
-	// these prove boundDeploymentRPC's handler-side race against
-	// time.After(timeout) is what saves the caller here, not the
-	// context.WithTimeout cancellation reaching the fake at all -- the
-	// exact "necessary but not sufficient" gap #1668 calls out about a
-	// fake client that already respects context cancellation instantly.
-	stopIgnoresCtx  bool
-	startIgnoresCtx bool
+	// stopIgnoresCtx/startIgnoresCtx/restartIgnoresCtx simulate a
+	// StopSession/StartSession/RestartDeployment RPC that never returns and
+	// never even looks at ctx -- i.e. the production symptom #1667 actually
+	// reported (the API's own handler blocked for its downstream's full
+	// unbounded duration regardless of what context it was given). Unlike
+	// stopBlocksUntilCtxDone above, these prove boundDeploymentRPC's
+	// handler-side race against time.After(timeout) is what saves the
+	// caller here, not the context.WithTimeout cancellation reaching the
+	// fake at all -- the exact "necessary but not sufficient" gap #1668
+	// calls out about a fake client that already respects context
+	// cancellation instantly.
+	stopIgnoresCtx    bool
+	startIgnoresCtx   bool
+	restartIgnoresCtx bool
 
-	// liveOnlyCallsUntilClear, when > 0, simulates a live session that takes
-	// several LiveOnly ListSessions observations to actually disappear
-	// (a container that takes a few polls to really stop) rather than
-	// clearing on the first check: each LiveOnly=true ListSessions call
-	// decrements it, and liveSession is cleared once it reaches 0. Zero
-	// (the default) disables this and falls back to stopClearsLive/plain
-	// liveSession behavior.
-	liveOnlyCallsUntilClear int
-	// liveOnlyCalls counts every LiveOnly=true ListSessions call, so tests
-	// can assert the request returned before all the polls needed for
-	// liveOnlyCallsUntilClear to reach zero had actually happened.
-	liveOnlyCalls int
-
-	calls      []string // records call order: "stop", "start"
-	startCalls []*manmanpb.StartSessionRequest
-	stopCalls  []*manmanpb.StopSessionRequest
+	calls        []string // records call order: "stop", "start"
+	startCalls   []*manmanpb.StartSessionRequest
+	stopCalls    []*manmanpb.StopSessionRequest
+	restartCalls []*manmanpb.RestartDeploymentRequest
 }
 
 func (f *fakeDeploymentAPIClient) GetServerGameConfig(ctx context.Context, in *manmanpb.GetServerGameConfigRequest, opts ...grpc.CallOption) (*manmanpb.GetServerGameConfigResponse, error) {
@@ -137,15 +125,6 @@ func (f *fakeDeploymentAPIClient) GetGame(ctx context.Context, in *manmanpb.GetG
 
 func (f *fakeDeploymentAPIClient) ListSessions(ctx context.Context, in *manmanpb.ListSessionsRequest, opts ...grpc.CallOption) (*manmanpb.ListSessionsResponse, error) {
 	f.mu.Lock()
-	if in.LiveOnly {
-		f.liveOnlyCalls++
-		if f.liveOnlyCallsUntilClear > 0 {
-			f.liveOnlyCallsUntilClear--
-			if f.liveOnlyCallsUntilClear == 0 {
-				f.liveSession = nil
-			}
-		}
-	}
 	live := f.liveSession
 	all := f.allSessions
 	f.mu.Unlock()
@@ -181,12 +160,6 @@ func (f *fakeDeploymentAPIClient) StopSession(ctx context.Context, in *manmanpb.
 	if stopErr != nil {
 		return nil, stopErr
 	}
-
-	f.mu.Lock()
-	if f.stopClearsLive {
-		f.liveSession = nil
-	}
-	f.mu.Unlock()
 	return &manmanpb.StopSessionResponse{}, nil
 }
 
@@ -216,26 +189,35 @@ func (f *fakeDeploymentAPIClient) StartSession(ctx context.Context, in *manmanpb
 	return &manmanpb.StartSessionResponse{Session: resp}, nil
 }
 
-// waitForCalls polls (under f.mu) until f.startCalls has at least want
-// entries, failing the test if it doesn't land within a generous deadline.
-// Needed for restart scenarios with a live session: since #1664,
-// finishRestartInBackground runs the wait-then-start step in a goroutine
-// that outlives the HTTP request, so a test asserting on StartSession must
-// wait for it rather than reading the field synchronously right after
-// doDeploymentAction returns.
-func waitForCalls(t *testing.T, f *fakeDeploymentAPIClient, want int) {
-	t.Helper()
-	deadline := time.Now().Add(2 * time.Second)
-	for time.Now().Before(deadline) {
-		f.mu.Lock()
-		n := len(f.startCalls)
-		f.mu.Unlock()
-		if n >= want {
-			return
-		}
-		time.Sleep(time.Millisecond)
+// RestartDeployment is the fake's #1733 counterpart to StopSession/
+// StartSession above: handleDeploymentAction's "restart" case now dispatches
+// this single RPC directly (via ControlClient.RestartDeployment) rather than
+// the UI orchestrating StopSession-then-StartSession itself, so this is the
+// only call a restart click should ever produce against this fake.
+func (f *fakeDeploymentAPIClient) RestartDeployment(ctx context.Context, in *manmanpb.RestartDeploymentRequest, opts ...grpc.CallOption) (*manmanpb.RestartDeploymentResponse, error) {
+	f.mu.Lock()
+	f.calls = append(f.calls, "restart")
+	f.restartCalls = append(f.restartCalls, in)
+	blocks := f.restartBlocksUntilCtxDone
+	ignoresCtx := f.restartIgnoresCtx
+	restartErr := f.restartErr
+	resp := f.restartResp
+	f.mu.Unlock()
+
+	if ignoresCtx {
+		select {}
 	}
-	t.Fatalf("timed out waiting for the background restart goroutine's StartSession call(s) to land")
+	if blocks {
+		<-ctx.Done()
+		return nil, ctx.Err()
+	}
+	if restartErr != nil {
+		return nil, restartErr
+	}
+	if resp == nil {
+		resp = &manmanpb.RestartDeploymentResponse{}
+	}
+	return resp, nil
 }
 
 func newDeploymentTestApp(api *fakeDeploymentAPIClient) *App {
@@ -388,147 +370,218 @@ func TestDeploymentAction_Stop_NoLiveSession_RendersInlineNotice(t *testing.T) {
 	}
 }
 
-// TestDeploymentAction_Restart_StopsThenStarts covers FR6: restart is
-// literally stop-then-start over the exact same helpers as the plain
-// Stop/Start paths -- not a distinct code path merely believed to behave
-// the same way. Asserts the call order (stop strictly before start) and
-// compares the restart path's StartSession call directly against what the
-// plain-Start path sends (Force=false, right ServerGameConfigId) rather
-// than trusting the "restart = stop+start" convention by inspection alone.
-func TestDeploymentAction_Restart_StopsThenStarts(t *testing.T) {
-	restartAPI := &fakeDeploymentAPIClient{
-		sgc:            stoppedSGC(42),
-		liveSession:    &manmanpb.Session{SessionId: 777, Status: "running"},
-		allSessions:    []*manmanpb.Session{{SessionId: 999, Status: "pending"}},
-		stopClearsLive: true,
-	}
-	restartApp := newDeploymentTestApp(restartAPI)
-
-	w := doDeploymentAction(restartApp, http.MethodPost, "/sessions/deployments/42/restart", true)
-	if w.Code != http.StatusOK {
-		t.Fatalf("status = %d, want 200; body: %s", w.Code, w.Body.String())
-	}
-
-	// The response returns as soon as the initial StopSession dispatch acks
-	// (#1664) -- StopSession must already have landed, but StartSession only
-	// lands once the background finishRestartInBackground goroutine
-	// converges, so wait for it before asserting call order/content.
-	restartAPI.mu.Lock()
-	stopCallCount, stopSessionID := len(restartAPI.stopCalls), int64(0)
-	if len(restartAPI.stopCalls) > 0 {
-		stopSessionID = restartAPI.stopCalls[0].SessionId
-	}
-	restartAPI.mu.Unlock()
-	if stopCallCount != 1 || stopSessionID != 777 {
-		t.Fatalf("expected StopSession called once with the live session's id 777, got count=%d id=%d", stopCallCount, stopSessionID)
-	}
-
-	waitForCalls(t, restartAPI, 1)
-
-	restartAPI.mu.Lock()
-	got := append([]string(nil), restartAPI.calls...)
-	restartStart := restartAPI.startCalls[0]
-	restartAPI.mu.Unlock()
-	if len(got) != 2 || got[0] != "stop" || got[1] != "start" {
-		t.Fatalf("call order = %v, want [stop start]", got)
-	}
-
-	// Compare against the plain-Start path's own recorded call, rather than
-	// just asserting restartStart's fields in isolation, per the plan's
-	// carried-forward note: prove restart genuinely reuses the Start
-	// helper's exact request shape.
-	plainAPI := &fakeDeploymentAPIClient{
-		sgc:         stoppedSGC(42),
-		allSessions: []*manmanpb.Session{{SessionId: 999, Status: "pending"}},
-	}
-	plainApp := newDeploymentTestApp(plainAPI)
-	doDeploymentAction(plainApp, http.MethodPost, "/sessions/deployments/42/start", true)
-	if len(plainAPI.startCalls) != 1 {
-		t.Fatalf("expected the plain-Start comparison call to record exactly 1 StartSession call, got %d", len(plainAPI.startCalls))
-	}
-	plainStart := plainAPI.startCalls[0]
-
-	if restartStart.Force != plainStart.Force {
-		t.Errorf("restart's StartSession.Force = %v, plain Start's = %v; restart must send the identical Force value", restartStart.Force, plainStart.Force)
-	}
-	if restartStart.ServerGameConfigId != plainStart.ServerGameConfigId {
-		t.Errorf("restart's StartSession.ServerGameConfigId = %d, plain Start's = %d; restart must target the same SGC", restartStart.ServerGameConfigId, plainStart.ServerGameConfigId)
-	}
-	if restartStart.Force {
-		t.Errorf("restart's StartSession.Force = true, want false (FR6: no force=true on restart's start step)")
-	}
-}
-
-// TestDeploymentAction_Restart_CrashedNoLiveSession_StartsOnly covers FR6's
-// degenerate case: a crashed/lost deployment has no live session to stop,
-// so restart degenerates to the start step alone -- StopSession must never
-// be called.
-func TestDeploymentAction_Restart_CrashedNoLiveSession_StartsOnly(t *testing.T) {
-	api := &fakeDeploymentAPIClient{
-		sgc:         stoppedSGC(42),
-		allSessions: []*manmanpb.Session{{SessionId: 5, Status: "crashed"}},
-	}
-	app := newDeploymentTestApp(api)
-
-	w := doDeploymentAction(app, http.MethodPost, "/sessions/deployments/42/restart", true)
-	if w.Code != http.StatusOK {
-		t.Fatalf("status = %d, want 200; body: %s", w.Code, w.Body.String())
-	}
-	if len(api.stopCalls) != 0 {
-		t.Errorf("StopSession call count = %d, want 0 (no live session to stop)", len(api.stopCalls))
-	}
-	if len(api.startCalls) != 1 {
-		t.Errorf("StartSession call count = %d, want 1", len(api.startCalls))
-	}
-}
-
-// TestDeploymentAction_Restart_StopNeverCompletes_RowStaysTransitional
-// covers FR6/FR7 defense-in-depth (#1664): restartDeployment no longer
-// blocks the HTTP response on waitForNoLiveSession, so even when the wait
-// would time out (the live session never actually disappears), the request
-// returns immediately with the transitional "stopping" row rather than an
-// inline stop-timeout error -- and StartSession is never called, since the
-// background convergence goroutine gives up once its own bounded timeout
-// elapses without a second container ever being started.
-func TestDeploymentAction_Restart_StopNeverCompletes_RowStaysTransitional(t *testing.T) {
+// TestDeploymentAction_Restart_CallsRestartDeploymentOnly is the core
+// assertion of the #1733 cutover: a restart click issues exactly one
+// RestartDeployment RPC and zero StopSession/StartSession RPCs from the UI
+// -- the stop-then-start orchestration now happens entirely server-side
+// (control-api's consumer, #1731), so the UI must never call StopSession or
+// StartSession itself for a restart. Also proves the response returns
+// promptly (well under a generous bound) rather than waiting on any
+// convergence, since restartDeployment does nothing but await the single
+// bounded RPC.
+func TestDeploymentAction_Restart_CallsRestartDeploymentOnly(t *testing.T) {
 	api := &fakeDeploymentAPIClient{
 		sgc:         stoppedSGC(42),
 		liveSession: &manmanpb.Session{SessionId: 777, Status: "running"},
 		allSessions: []*manmanpb.Session{{SessionId: 777, Status: "running"}},
-		// stopClearsLive left false: the fake keeps reporting the session
-		// as live no matter how many times StopSession is called, so the
-		// background waitForNoLiveSession poll loop never converges.
 	}
 	app := newDeploymentTestApp(api)
-	app.deploymentStopPollInterval = time.Millisecond
-	app.deploymentStopTimeout = 5 * time.Millisecond
+
+	start := time.Now()
+	w := doDeploymentAction(app, http.MethodPost, "/sessions/deployments/42/restart", true)
+	elapsed := time.Since(start)
+
+	if elapsed > time.Second {
+		t.Fatalf("handler took %s to return, want well under 1s (restart no longer waits on any convergence)", elapsed)
+	}
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200; body: %s", w.Code, w.Body.String())
+	}
+	body := w.Body.String()
+	if !strings.Contains(body, "deployment-row-42") {
+		t.Errorf("expected the row fragment for SGC 42, got: %s", body)
+	}
+	if strings.Contains(body, "alert-error") {
+		t.Errorf("expected no inline error on a successful restart dispatch, got: %s", body)
+	}
+
+	api.mu.Lock()
+	defer api.mu.Unlock()
+	if len(api.restartCalls) != 1 {
+		t.Fatalf("RestartDeployment call count = %d, want 1", len(api.restartCalls))
+	}
+	if got := api.restartCalls[0].ServerGameConfigId; got != 42 {
+		t.Errorf("RestartDeploymentRequest.ServerGameConfigId = %d, want 42", got)
+	}
+	if len(api.stopCalls) != 0 {
+		t.Errorf("StopSession call count = %d, want 0 (restart must not dispatch stop from the UI, #1733)", len(api.stopCalls))
+	}
+	if len(api.startCalls) != 0 {
+		t.Errorf("StartSession call count = %d, want 0 (restart must not dispatch start from the UI, #1733)", len(api.startCalls))
+	}
+}
+
+// TestDeploymentAction_Restart_AlreadyInFlight_RendersTransitionalNoError
+// covers the response's already_in_flight: true case: it is a success
+// outcome (a double click, or the operator retrying after a pod restart),
+// not an error, so it must render the same transitional row as a fresh
+// dispatch with no inline error.
+func TestDeploymentAction_Restart_AlreadyInFlight_RendersTransitionalNoError(t *testing.T) {
+	api := &fakeDeploymentAPIClient{
+		sgc:         stoppedSGC(42),
+		liveSession: &manmanpb.Session{SessionId: 777, Status: "running"},
+		allSessions: []*manmanpb.Session{{SessionId: 777, Status: "running"}},
+		restartResp: &manmanpb.RestartDeploymentResponse{AlreadyInFlight: true},
+	}
+	app := newDeploymentTestApp(api)
+
+	w := doDeploymentAction(app, http.MethodPost, "/sessions/deployments/42/restart", true)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200; body: %s", w.Code, w.Body.String())
+	}
+	body := w.Body.String()
+	if strings.Contains(body, "alert-error") {
+		t.Errorf("expected no inline error for already_in_flight: true, got: %s", body)
+	}
+	if !strings.Contains(body, "deployment-row-42") {
+		t.Errorf("expected the row fragment for SGC 42, got: %s", body)
+	}
+}
+
+// TestDeploymentAction_Restart_Failure_RendersInlineError covers FR8's
+// failure path for restart: an RPC error still responds 200 with the row
+// fragment, ActionError populated inline, and never a 500.
+func TestDeploymentAction_Restart_Failure_RendersInlineError(t *testing.T) {
+	api := &fakeDeploymentAPIClient{
+		sgc:         stoppedSGC(42),
+		liveSession: &manmanpb.Session{SessionId: 777, Status: "running"},
+		allSessions: []*manmanpb.Session{{SessionId: 777, Status: "running"}},
+		restartErr:  errors.New("failed to restart deployment: rpc error: internal"),
+	}
+	app := newDeploymentTestApp(api)
+
+	w := doDeploymentAction(app, http.MethodPost, "/sessions/deployments/42/restart", true)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200 (failure still re-renders the row); body: %s", w.Code, w.Body.String())
+	}
+	body := w.Body.String()
+	if !strings.Contains(body, "alert-error") {
+		t.Errorf("expected an inline alert-error on the failed restart dispatch, got: %s", body)
+	}
+	if !strings.Contains(body, "Failed to restart the deployment") {
+		t.Errorf("expected the generic restart-failure message, got: %s", body)
+	}
+	if !strings.Contains(body, "deployment-row-42") {
+		t.Errorf("expected the row fragment for SGC 42, got: %s", body)
+	}
+}
+
+// TestDeploymentAction_Restart_SlowRestartDeployment_ReturnsInlineErrorNotDroppedConnection
+// covers #1733's extension of the #1664/#1668 outbound-RPC bound to the
+// single RestartDeployment dispatch: a call that hangs past
+// App.deploymentActionTimeout must not block the handler indefinitely -- it
+// must return promptly with a distinct timeout-flavored inline error.
+func TestDeploymentAction_Restart_SlowRestartDeployment_ReturnsInlineErrorNotDroppedConnection(t *testing.T) {
+	api := &fakeDeploymentAPIClient{
+		sgc:                       stoppedSGC(42),
+		liveSession:               &manmanpb.Session{SessionId: 777, Status: "running"},
+		allSessions:               []*manmanpb.Session{{SessionId: 777, Status: "running"}},
+		restartBlocksUntilCtxDone: true,
+	}
+	app := newDeploymentTestApp(api)
+	app.deploymentActionTimeout = 5 * time.Millisecond
+
+	start := time.Now()
+	w := doDeploymentAction(app, http.MethodPost, "/sessions/deployments/42/restart", true)
+	elapsed := time.Since(start)
+
+	if elapsed > time.Second {
+		t.Fatalf("handler took %s to return, want well under 1s (must not block past the bounded timeout)", elapsed)
+	}
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200 (failure still re-renders the row); body: %s", w.Code, w.Body.String())
+	}
+	body := w.Body.String()
+	if !strings.Contains(body, "taking longer than expected") {
+		t.Errorf("expected a distinct timeout-flavored inline error, got: %s", body)
+	}
+	if !strings.Contains(body, "deployment-row-42") {
+		t.Errorf("expected the row fragment for SGC 42, got: %s", body)
+	}
+}
+
+// TestDeploymentAction_Restart_HungRestartDeployment_IgnoresCtx_StillReturnsWithinBound
+// is #1668's belt-and-suspenders proof (see
+// TestDeploymentAction_Stop_HungStopSession_IgnoresCtx_StillReturnsWithinBound's
+// doc comment), extended to restart's single RestartDeployment dispatch:
+// restartIgnoresCtx's RestartDeployment never returns and never looks at
+// ctx at all, so this only passes because boundDeploymentRPC races the call
+// against its own independent time.After(timeout) in the calling goroutine.
+func TestDeploymentAction_Restart_HungRestartDeployment_IgnoresCtx_StillReturnsWithinBound(t *testing.T) {
+	api := &fakeDeploymentAPIClient{
+		sgc:               stoppedSGC(42),
+		liveSession:       &manmanpb.Session{SessionId: 777, Status: "running"},
+		allSessions:       []*manmanpb.Session{{SessionId: 777, Status: "running"}},
+		restartIgnoresCtx: true,
+	}
+	app := newDeploymentTestApp(api)
+	app.deploymentActionTimeout = 10 * time.Millisecond
+
+	start := time.Now()
+	w := doDeploymentAction(app, http.MethodPost, "/sessions/deployments/42/restart", true)
+	elapsed := time.Since(start)
+
+	if elapsed > time.Second {
+		t.Fatalf("handler took %s to return, want well under 1s (a hung callee that ignores ctx must not block the handler)", elapsed)
+	}
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200; body: %s", w.Code, w.Body.String())
+	}
+	if !strings.Contains(w.Body.String(), "taking longer than expected") {
+		t.Errorf("expected a distinct timeout-flavored inline error, got: %s", w.Body.String())
+	}
+}
+
+// TestDeploymentAction_Restart_NoGoroutineSpawned proves the restart path
+// spawns no background goroutine of its own (beyond whatever
+// boundDeploymentRPC itself races the call in, which exits promptly once
+// the bounded RestartDeployment call returns): #1733 deletes
+// finishRestartInBackground entirely, so nothing should hold restart intent
+// on the stack past the request/response boundary. Asserted via
+// runtime.NumGoroutine() settling back to (approximately) its pre-request
+// count shortly after the handler returns, rather than growing and staying
+// grown the way the old background-goroutine design would have.
+func TestDeploymentAction_Restart_NoGoroutineSpawned(t *testing.T) {
+	api := &fakeDeploymentAPIClient{
+		sgc:         stoppedSGC(42),
+		liveSession: &manmanpb.Session{SessionId: 777, Status: "running"},
+		allSessions: []*manmanpb.Session{{SessionId: 777, Status: "running"}},
+	}
+	app := newDeploymentTestApp(api)
+
+	before := runtime.NumGoroutine()
 
 	w := doDeploymentAction(app, http.MethodPost, "/sessions/deployments/42/restart", true)
 	if w.Code != http.StatusOK {
 		t.Fatalf("status = %d, want 200; body: %s", w.Code, w.Body.String())
 	}
-	api.mu.Lock()
-	stopCallCount := len(api.stopCalls)
-	api.mu.Unlock()
-	if stopCallCount != 1 {
-		t.Errorf("StopSession call count = %d, want 1", stopCallCount)
-	}
-	body := w.Body.String()
-	if strings.Contains(body, "alert-error") {
-		t.Errorf("expected no inline error on the immediate response (the wait for convergence now happens in the background), got: %s", body)
-	}
-	if strings.Contains(body, "did not complete in time") {
-		t.Errorf("expected no synchronous stop-timeout error (FR6's guard now lives in the background goroutine), got: %s", body)
-	}
 
-	// Give the background goroutine's bounded timeout (5ms) room to elapse
-	// so we can assert it gave up rather than ever calling StartSession.
-	time.Sleep(50 * time.Millisecond)
-	api.mu.Lock()
-	startCallCount := len(api.startCalls)
-	api.mu.Unlock()
-	if startCallCount != 0 {
-		t.Errorf("StartSession call count = %d, want 0 (must not start a second container after a background stop timeout)", startCallCount)
+	// Give boundDeploymentRPC's own short-lived racing goroutine (which
+	// exits as soon as the bounded call returns, well before this point)
+	// room to unwind before comparing counts.
+	deadline := time.Now().Add(time.Second)
+	var after int
+	for time.Now().Before(deadline) {
+		after = runtime.NumGoroutine()
+		if after <= before {
+			break
+		}
+		time.Sleep(time.Millisecond)
+	}
+	if after > before {
+		t.Errorf("runtime.NumGoroutine() = %d after the restart request, want <= %d (pre-request) -- no goroutine should outlive the response (finishRestartInBackground was deleted by #1733)", after, before)
 	}
 }
 
@@ -662,176 +715,6 @@ func TestDeploymentAction_Start_HungStartSession_IgnoresCtx_StillReturnsWithinBo
 	}
 	if !strings.Contains(w.Body.String(), "taking longer than expected") {
 		t.Errorf("expected a distinct timeout-flavored inline error, got: %s", w.Body.String())
-	}
-}
-
-// TestDeploymentAction_Restart_LiveSession_StopHangs_ReturnsInlineErrorNotDroppedConnection
-// covers issue #1668 scope item 3 for restart's live-session branch: the
-// initial StopSession dispatch restartDeployment awaits inline (before ever
-// launching finishRestartInBackground) must be bounded exactly like
-// stopDeployment's own StopSession call -- a hung/ctx-ignoring callee here
-// must still produce a prompt inline timeout error, and must never launch
-// the background stop-then-start goroutine (StartSession must not be
-// called).
-func TestDeploymentAction_Restart_LiveSession_StopHangs_ReturnsInlineErrorNotDroppedConnection(t *testing.T) {
-	api := &fakeDeploymentAPIClient{
-		sgc:            stoppedSGC(42),
-		liveSession:    &manmanpb.Session{SessionId: 777, Status: "running"},
-		allSessions:    []*manmanpb.Session{{SessionId: 777, Status: "running"}},
-		stopIgnoresCtx: true,
-	}
-	app := newDeploymentTestApp(api)
-	app.deploymentActionTimeout = 10 * time.Millisecond
-
-	start := time.Now()
-	w := doDeploymentAction(app, http.MethodPost, "/sessions/deployments/42/restart", true)
-	elapsed := time.Since(start)
-
-	if elapsed > time.Second {
-		t.Fatalf("handler took %s to return, want well under 1s (a hung stop dispatch must not block restart's handler)", elapsed)
-	}
-	if w.Code != http.StatusOK {
-		t.Fatalf("status = %d, want 200 (failure still re-renders the row); body: %s", w.Code, w.Body.String())
-	}
-	if !strings.Contains(w.Body.String(), "taking longer than expected") {
-		t.Errorf("expected a distinct timeout-flavored inline error, got: %s", w.Body.String())
-	}
-
-	// Give any errant background goroutine room to run before asserting it
-	// never fired -- restart must never launch finishRestartInBackground
-	// when the initial stop dispatch itself times out.
-	time.Sleep(50 * time.Millisecond)
-	api.mu.Lock()
-	startCallCount := len(api.startCalls)
-	api.mu.Unlock()
-	if startCallCount != 0 {
-		t.Errorf("StartSession call count = %d, want 0 (no background goroutine should be launched when the initial stop dispatch times out)", startCallCount)
-	}
-}
-
-// TestDeploymentAction_Restart_NoLiveSession_StartHangs_ReturnsInlineErrorNotDroppedConnection
-// covers issue #1668 scope item 3 for restart's degenerate "no live
-// session, just start" branch (~handlers_deployment_actions.go lines
-// 145-151): this StartSession call must get the same bound as
-// handleDeploymentAction's plain "start" case, since it's the identical
-// underlying RPC -- prior to #1668 only Stop/Restart's StopSession call was
-// ever bounded.
-func TestDeploymentAction_Restart_NoLiveSession_StartHangs_ReturnsInlineErrorNotDroppedConnection(t *testing.T) {
-	api := &fakeDeploymentAPIClient{
-		sgc:             stoppedSGC(42),
-		allSessions:     []*manmanpb.Session{{SessionId: 5, Status: "crashed"}},
-		startIgnoresCtx: true,
-	}
-	app := newDeploymentTestApp(api)
-	app.deploymentActionTimeout = 10 * time.Millisecond
-
-	start := time.Now()
-	w := doDeploymentAction(app, http.MethodPost, "/sessions/deployments/42/restart", true)
-	elapsed := time.Since(start)
-
-	if elapsed > time.Second {
-		t.Fatalf("handler took %s to return, want well under 1s (restart's degenerate start-only path must be bounded too)", elapsed)
-	}
-	if w.Code != http.StatusOK {
-		t.Fatalf("status = %d, want 200 (failure still re-renders the row); body: %s", w.Code, w.Body.String())
-	}
-	if !strings.Contains(w.Body.String(), "taking longer than expected") {
-		t.Errorf("expected a distinct timeout-flavored inline error, got: %s", w.Body.String())
-	}
-}
-
-// TestDeploymentAction_Restart_ReturnsBeforeStopConverges covers #1664's
-// core restart fix: the HTTP response must return as soon as the initial
-// StopSession dispatch acks, not after however many LiveOnly polls it takes
-// for the live session to actually disappear. The fake's live session takes
-// several LiveOnly=true observations to clear (liveOnlyCallsUntilClear),
-// simulating a container that takes a few polls to really stop -- mirroring
-// how #1662 reproduced restart's own distinct bug (the wait for "no live
-// session" is bounded by real container-stop time, not RPC-ack speed).
-func TestDeploymentAction_Restart_ReturnsBeforeStopConverges(t *testing.T) {
-	api := &fakeDeploymentAPIClient{
-		sgc:         stoppedSGC(42),
-		liveSession: &manmanpb.Session{SessionId: 777, Status: "running"},
-		allSessions: []*manmanpb.Session{{SessionId: 777, Status: "running"}},
-		// The initial getLiveSession check in restartDeployment consumes one
-		// LiveOnly call; the background waitForNoLiveSession's own immediate
-		// (pre-sleep) check and subsequent polls consume the rest -- 4 total
-		// means at least 3 poll intervals must elapse before convergence.
-		liveOnlyCallsUntilClear: 4,
-	}
-	app := newDeploymentTestApp(api)
-	app.deploymentStopPollInterval = 50 * time.Millisecond
-	app.deploymentStopTimeout = 2 * time.Second
-
-	start := time.Now()
-	w := doDeploymentAction(app, http.MethodPost, "/sessions/deployments/42/restart", true)
-	elapsed := time.Since(start)
-
-	if w.Code != http.StatusOK {
-		t.Fatalf("status = %d, want 200; body: %s", w.Code, w.Body.String())
-	}
-	if elapsed >= app.deploymentStopPollInterval {
-		t.Errorf("handler took %s to return, want well under one poll interval (%s) -- the response must not wait on convergence", elapsed, app.deploymentStopPollInterval)
-	}
-	api.mu.Lock()
-	startCallCountImmediate := len(api.startCalls)
-	api.mu.Unlock()
-	if startCallCountImmediate != 0 {
-		t.Errorf("StartSession call count = %d immediately after the response, want 0 (must not have converged yet)", startCallCountImmediate)
-	}
-
-	// The background goroutine should eventually converge and call
-	// StartSession once the fake's LiveOnly countdown reaches zero.
-	waitForCalls(t, api, 1)
-}
-
-// TestDeploymentAction_Restart_StopDispatchFails_NoStartAttempted covers
-// #1664's restart error path: if the initial StopSession dispatch itself
-// errors, the handler must behave exactly as today -- return the inline
-// error, and never launch the background goroutine (StartSession must never
-// be called).
-func TestDeploymentAction_Restart_StopDispatchFails_NoStartAttempted(t *testing.T) {
-	api := &fakeDeploymentAPIClient{
-		sgc:         stoppedSGC(42),
-		liveSession: &manmanpb.Session{SessionId: 777, Status: "running"},
-		allSessions: []*manmanpb.Session{{SessionId: 777, Status: "running"}},
-		stopErr:     errors.New("failed to stop session: rpc error: internal"),
-		// liveOnlyCallsUntilClear: 2 means the *second* LiveOnly=true
-		// ListSessions call (i.e. a background wait-then-start goroutine's
-		// own immediate, pre-sleep check, since the first LiveOnly call is
-		// restartDeployment's own initial live-session lookup) would
-		// observe "no live session" right away -- so if the implementation
-		// regressed to launch finishRestartInBackground even after the stop
-		// dispatch errored, that goroutine would call StartSession almost
-		// immediately (no need to wait out a real poll interval), making
-		// this assertion actually sensitive to the bug rather than merely
-		// not having waited long enough for a real background convergence.
-		liveOnlyCallsUntilClear: 2,
-	}
-	app := newDeploymentTestApp(api)
-
-	w := doDeploymentAction(app, http.MethodPost, "/sessions/deployments/42/restart", true)
-
-	if w.Code != http.StatusOK {
-		t.Fatalf("status = %d, want 200 (failure still re-renders the row); body: %s", w.Code, w.Body.String())
-	}
-	body := w.Body.String()
-	if !strings.Contains(body, "alert-error") {
-		t.Errorf("expected an inline alert-error on the failed stop dispatch, got: %s", body)
-	}
-	if !strings.Contains(body, "Failed to stop the running session") {
-		t.Errorf("expected the generic stop-failure message (not a timeout message), got: %s", body)
-	}
-
-	// Give any errant background goroutine room to run before asserting it
-	// never fired -- there is no success signal to wait on here since none
-	// should ever be launched.
-	time.Sleep(50 * time.Millisecond)
-	api.mu.Lock()
-	startCallCount := len(api.startCalls)
-	api.mu.Unlock()
-	if startCallCount != 0 {
-		t.Errorf("StartSession call count = %d, want 0 (no background goroutine should be launched when the stop dispatch itself fails)", startCallCount)
 	}
 }
 

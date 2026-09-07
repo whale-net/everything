@@ -10,7 +10,6 @@ import (
 	"strings"
 	"sync"
 	"testing"
-	"time"
 
 	"github.com/whale-net/everything/libs/go/htmxauth"
 	manmanpb "github.com/whale-net/everything/manmanv2/protos"
@@ -36,27 +35,22 @@ import (
 // every ListSessions call reads from -- so a poll of either the
 // unfiltered/PageSize-200 shape (buildDeploymentRowData's LatestSession/
 // Actions derivation) or the LiveOnly shape (the Live Session cell, and
-// Stop/Restart's live-session resolution) observes the same underlying
-// state. Two distinct convergence mechanisms exist, deliberately:
+// Stop's live-session resolution) observes the same underlying state.
+// Tick(), called explicitly by a test between two HTTP round-trips,
+// converges every currently-transient session one step (pending/starting ->
+// running, or -> crashed if the SGC was configured via setLaunchFails;
+// stopping -> stopped). This is what FR7/FR8 use to model "poll the row
+// fragment endpoint through the fake's lifecycle ticks" -- the test
+// controls exactly when a tick happens, so a poll before the tick observes
+// the pre-tick state and a poll after observes the post-tick state,
+// deterministically.
 //
-//   - Tick(), called explicitly by a test between two HTTP round-trips,
-//     converges every currently-transient session one step (pending/
-//     starting -> running, or -> crashed if the SGC was configured via
-//     setLaunchFails; stopping -> stopped). This is what FR7/FR8 use to
-//     model "poll the row fragment endpoint through the fake's lifecycle
-//     ticks" -- the test controls exactly when a tick happens, so a poll
-//     before the tick observes the pre-tick state and a poll after observes
-//     the post-tick state, deterministically.
-//   - A short auto-converge countdown on "stopping" sessions, applied only
-//     inside the LiveOnly=true query path, exists solely so
-//     restartDeployment's background wait-for-no-live-session poll loop
-//     (waitForNoLiveSession, run from finishRestartInBackground since #1664
-//     moved it off the request's own goroutine) resolves within a couple of
-//     (test-shortened, ~1ms) app.deploymentStopPollInterval iterations
-//     instead of hanging for the real 15s default -- a test cannot inject a
-//     Tick() mid-goroutine since the background goroutine runs concurrently
-//     with (and typically outlives) the test's own doPost call, so
-//     waitForStartCall polls instead of relying on a single well-timed Tick.
+// Since #1733, restart no longer orchestrates stop-then-start from the UI
+// at all -- handleDeploymentAction's "restart" case dispatches a single
+// RestartDeployment RPC (fakeAcceptanceAPIClient.RestartDeployment below)
+// and returns as soon as it acks, so there is no wait-for-no-live-session
+// convergence left in this file to model: RestartDeployment simply records
+// the call and returns a canned response.
 //
 // Red/green discipline (verified by hand, then reverted -- see individual
 // notes at each check):
@@ -68,10 +62,11 @@ import (
 //     app.grpc.StartSession(ctx, sgcID, true) (force=true) made
 //     TestFR2_StartFromListStartsSessionWithoutNavigation fail (Force ==
 //     true, want false); reverting restored green.
-//   - Swapping restartDeployment's order to call StartSession before the
-//     live-session Stop/wait block made TestFR6_RestartIsStopThenStart fail
-//     (call order [start start], not [stop start]); reverting restored
-//     green.
+//   - Changing restartDeployment to call app.grpc.StopSession/StartSession
+//     directly instead of app.grpc.RestartDeployment made
+//     TestFR6_RestartDispatchesRestartDeploymentOnly fail (RestartDeployment
+//     call count == 0, want 1; StopSession/StartSession call counts != 0);
+//     reverting restored green.
 //   - Removing "pending" from components.IsTransientStatus' switch made
 //     TestFR7_RowUpdatesInPlaceWithoutFullReload fail (the immediately-
 //     rendered pending row carried no hx-trigger poll attribute); reverting
@@ -130,9 +125,10 @@ type fakeAcceptanceAPIClient struct {
 	nextSessionID int64
 	launchFails   map[int64]bool
 
-	startCalls []*manmanpb.StartSessionRequest
-	stopCalls  []*manmanpb.StopSessionRequest
-	callOrder  []string // "start" / "stop", in call order
+	startCalls   []*manmanpb.StartSessionRequest
+	stopCalls    []*manmanpb.StopSessionRequest
+	restartCalls []*manmanpb.RestartDeploymentRequest
+	callOrder    []string // "start" / "stop" / "restart", in call order
 }
 
 func newFakeAcceptanceClient(serverID int64) *fakeAcceptanceAPIClient {
@@ -276,9 +272,9 @@ func (f *fakeAcceptanceAPIClient) ListSessions(ctx context.Context, in *manmanpb
 		}
 
 		// LiveOnly path: a "stopping" session auto-converges to "stopped"
-		// after one more observation, so restartDeployment's background
-		// waitForNoLiveSession loop resolves within a couple of
-		// (test-shortened) poll iterations -- see the file header comment.
+		// after one more observation, modeling a container that takes a
+		// moment to actually tear down rather than disappearing from the
+		// live listing the instant StopSession acks.
 		if sess.status == "stopping" {
 			if sess.stopChecksLeft > 0 {
 				sess.stopChecksLeft--
@@ -332,15 +328,28 @@ func (f *fakeAcceptanceAPIClient) StopSession(ctx context.Context, in *manmanpb.
 	return &manmanpb.StopSessionResponse{}, nil
 }
 
+// RestartDeployment is the fake's #1733 counterpart to StopSession/
+// StartSession above: since restart no longer orchestrates stop-then-start
+// from the UI at all (that now lives entirely in control-api's own
+// consumer, #1730/#1731, which this suite does not model), this simply
+// records the dispatch and acks -- there is nothing left for this fake to
+// converge, since the UI holds no restart state across the request/response
+// boundary any more.
+func (f *fakeAcceptanceAPIClient) RestartDeployment(ctx context.Context, in *manmanpb.RestartDeploymentRequest, opts ...grpc.CallOption) (*manmanpb.RestartDeploymentResponse, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+
+	f.restartCalls = append(f.restartCalls, in)
+	f.callOrder = append(f.callOrder, "restart")
+
+	return &manmanpb.RestartDeploymentResponse{}, nil
+}
+
 // newAcceptanceFixture builds an App wired to a fresh fakeAcceptanceAPIClient
 // and a real *http.ServeMux from (*App).setupRoutes, with a real
 // htmxauth.Authenticator in AuthModeNone (auto-authenticates every request,
 // mirroring local dev) so every test here can hit routes through the actual
-// mux/auth stack without constructing a session cookie. deploymentStopPollInterval/
-// deploymentStopTimeout are set small so restart's internal wait-for-stop
-// loop (handlers_deployment_actions.go's waitForNoLiveSession) resolves in
-// low-single-digit milliseconds against this fake instead of the real 15s
-// default.
+// mux/auth stack without constructing a session cookie.
 func newAcceptanceFixture(t *testing.T) (*App, *fakeAcceptanceAPIClient, *http.ServeMux) {
 	t.Helper()
 
@@ -355,10 +364,8 @@ func newAcceptanceFixture(t *testing.T) (*App, *fakeAcceptanceAPIClient, *http.S
 
 	api := newFakeAcceptanceClient(1)
 	app := &App{
-		auth:                       auth,
-		grpc:                       &ControlClient{api: api},
-		deploymentStopPollInterval: time.Millisecond,
-		deploymentStopTimeout:      200 * time.Millisecond,
+		auth: auth,
+		grpc: &ControlClient{api: api},
 	}
 
 	mux := http.NewServeMux()
@@ -382,29 +389,6 @@ func doPost(mux *http.ServeMux, path string, htmx bool) *httptest.ResponseRecord
 	w := httptest.NewRecorder()
 	mux.ServeHTTP(w, req)
 	return w
-}
-
-// waitForStartCall polls until the fake's StartSession call count reaches
-// at least want, failing the test if it doesn't land within a generous
-// deadline. Needed because restartDeployment (#1664) no longer completes
-// its stop-then-start inline within the HTTP request/response cycle -- once
-// the initial StopSession dispatch acks, the wait-for-no-live-session +
-// StartSession finishes in a background goroutine, so a test asserting on
-// StartSession must wait for it rather than reading it synchronously right
-// after doPost returns.
-func waitForStartCall(t *testing.T, api *fakeAcceptanceAPIClient, want int) {
-	t.Helper()
-	deadline := time.Now().Add(2 * time.Second)
-	for time.Now().Before(deadline) {
-		api.mu.Lock()
-		n := len(api.startCalls)
-		api.mu.Unlock()
-		if n >= want {
-			return
-		}
-		time.Sleep(time.Millisecond)
-	}
-	t.Fatalf("timed out waiting for the background restart goroutine's StartSession call(s) to land")
 }
 
 // ── FR1 ──────────────────────────────────────────────────────────────────
@@ -587,55 +571,38 @@ func TestFR5_RestartOfferedOnRunningCrashedLost(t *testing.T) {
 
 // ── FR6 ──────────────────────────────────────────────────────────────────
 
-func TestFR6_RestartIsStopThenStart(t *testing.T) {
-	_, restartAPI, restartMux := newAcceptanceFixture(t)
+// TestFR6_RestartDispatchesRestartDeploymentOnly covers FR6/FR9 post-#1733:
+// restart dispatches a single RestartDeployment RPC and returns as soon as
+// it acks -- the UI must never call StopSession/StartSession itself for a
+// restart any more, since control-api's own consumer (#1730/#1731) now owns
+// the stop-then-start orchestration entirely server-side.
+func TestFR6_RestartDispatchesRestartDeploymentOnly(t *testing.T) {
+	_, api, mux := newAcceptanceFixture(t)
 	const sgcID = 601
-	restartAPI.addSGC(sgcID)
-	restartAPI.seedSession(sgcID, "running")
-	restartAPI.mu.Lock()
-	liveID := restartAPI.sessions[sgcID].id
-	restartAPI.mu.Unlock()
+	api.addSGC(sgcID)
+	api.seedSession(sgcID, "running")
 
-	w := doPost(restartMux, fmt.Sprintf("/sessions/deployments/%d/restart", sgcID), true)
+	w := doPost(mux, fmt.Sprintf("/sessions/deployments/%d/restart", sgcID), true)
 	if w.Code != http.StatusOK {
 		t.Fatalf("status = %d, want 200; body: %s", w.Code, w.Body.String())
 	}
 
-	// The response returns as soon as the initial StopSession dispatch acks
-	// (#1664) -- StopSession must already have landed, but StartSession only
-	// lands once the background wait-then-start goroutine converges.
-	if len(restartAPI.stopCalls) != 1 || restartAPI.stopCalls[0].SessionId != liveID {
-		t.Fatalf("expected StopSession called once with the live session's id %d, got %+v", liveID, restartAPI.stopCalls)
+	api.mu.Lock()
+	defer api.mu.Unlock()
+	if len(api.restartCalls) != 1 {
+		t.Fatalf("RestartDeployment call count = %d, want 1", len(api.restartCalls))
 	}
-
-	waitForStartCall(t, restartAPI, 1)
-
-	if len(restartAPI.callOrder) != 2 || restartAPI.callOrder[0] != "stop" || restartAPI.callOrder[1] != "start" {
-		t.Fatalf("call order = %v, want [stop start]", restartAPI.callOrder)
+	if got := api.restartCalls[0].ServerGameConfigId; got != sgcID {
+		t.Errorf("RestartDeploymentRequest.ServerGameConfigId = %d, want %d", got, sgcID)
 	}
-	restartStart := restartAPI.startCalls[0]
-
-	// Compare against the plain-Start path's own recorded call, per the
-	// plan's carried-forward note: prove restart genuinely reuses the Start
-	// helper's exact request shape rather than trusting the "restart =
-	// stop+start" convention by inspection alone.
-	_, plainAPI, plainMux := newAcceptanceFixture(t)
-	plainAPI.addSGC(sgcID)
-	plainAPI.seedSession(sgcID, "stopped")
-	doPost(plainMux, fmt.Sprintf("/sessions/deployments/%d/start", sgcID), true)
-	if len(plainAPI.startCalls) != 1 {
-		t.Fatalf("expected the plain-Start comparison call to record exactly 1 StartSession call, got %d", len(plainAPI.startCalls))
+	if len(api.stopCalls) != 0 {
+		t.Errorf("StopSession call count = %d, want 0 (restart must not dispatch stop from the UI, #1733)", len(api.stopCalls))
 	}
-	plainStart := plainAPI.startCalls[0]
-
-	if restartStart.Force != plainStart.Force {
-		t.Errorf("restart's StartSession.Force = %v, plain Start's = %v; must be identical", restartStart.Force, plainStart.Force)
+	if len(api.startCalls) != 0 {
+		t.Errorf("StartSession call count = %d, want 0 (restart must not dispatch start from the UI, #1733)", len(api.startCalls))
 	}
-	if restartStart.ServerGameConfigId != plainStart.ServerGameConfigId {
-		t.Errorf("restart's StartSession.ServerGameConfigId = %d, plain Start's = %d; must target the same SGC", restartStart.ServerGameConfigId, plainStart.ServerGameConfigId)
-	}
-	if restartStart.Force {
-		t.Errorf("restart's StartSession.Force = true, want false (no force=true on restart's start step)")
+	if len(api.callOrder) != 1 || api.callOrder[0] != "restart" {
+		t.Errorf("call order = %v, want [restart]", api.callOrder)
 	}
 }
 

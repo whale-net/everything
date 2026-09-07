@@ -28,12 +28,18 @@ import (
 // repeat silently under `bazel test` again.
 //
 // realTransportHungAPI implements manmanpb.ManManAPIServer with
-// StopSession/StartSession handlers that ignore their own ctx entirely and
-// block far longer than any bound under test -- simulating a downstream
-// (host manager) that never answers and an API handler that doesn't even
-// check its own context, which is the actual production shape #1667
-// reported (the API's own gRPC interceptor logged the full unbounded
+// StopSession/StartSession/RestartDeployment handlers that ignore their own
+// ctx entirely and block far longer than any bound under test -- simulating
+// a downstream (host manager) that never answers and an API handler that
+// doesn't even check its own context, which is the actual production shape
+// #1667 reported (the API's own gRPC interceptor logged the full unbounded
 // downstream duration, not an early ctx-cancellation-triggered return).
+// RestartDeployment was added by #1733 alongside restartDeployment's
+// cutover to a single RestartDeployment RPC dispatch -- prior to that,
+// restart's real-transport bound coverage came for free through
+// StopSession above (restart called it directly); now that restart calls a
+// distinct RPC, this method is what proves the bound still holds over a
+// real socket for restart's own dispatch, not just Stop/Start's.
 type realTransportHungAPI struct {
 	manmanpb.UnimplementedManManAPIServer
 }
@@ -46,6 +52,11 @@ func (h *realTransportHungAPI) StopSession(ctx context.Context, req *manmanpb.St
 func (h *realTransportHungAPI) StartSession(ctx context.Context, req *manmanpb.StartSessionRequest) (*manmanpb.StartSessionResponse, error) {
 	time.Sleep(5 * time.Second)
 	return &manmanpb.StartSessionResponse{Session: &manmanpb.Session{SessionId: 1, ServerGameConfigId: req.ServerGameConfigId}}, nil
+}
+
+func (h *realTransportHungAPI) RestartDeployment(ctx context.Context, req *manmanpb.RestartDeploymentRequest) (*manmanpb.RestartDeploymentResponse, error) {
+	time.Sleep(5 * time.Second)
+	return &manmanpb.RestartDeploymentResponse{}, nil
 }
 
 // newRealTransportTestApp starts a real gRPC server on a loopback TCP
@@ -135,6 +146,34 @@ func TestRealTransport_Start_HungBackend_ReturnsWithinBound(t *testing.T) {
 
 	if elapsed > 3*time.Second {
 		t.Fatalf("StartSession call returned after %s, want well under the backend's 5s hang (bound is %s)", elapsed, app.deploymentActionBound())
+	}
+	if err == nil {
+		t.Fatalf("expected a bound-firing error, got nil (elapsed %s)", elapsed)
+	}
+	if !isDeploymentActionTimeout(err) {
+		t.Errorf("expected isDeploymentActionTimeout(err) to be true, got err=%v", err)
+	}
+}
+
+// TestRealTransport_Restart_HungBackend_ReturnsWithinBound is
+// TestRealTransport_Stop_HungBackend_ReturnsWithinBound's RestartDeployment
+// counterpart, covering #1733's cutover of restart to a single
+// RestartDeployment RPC dispatch: prior to #1733 restart's real-transport
+// bound coverage came for free through the StopSession test above (restart
+// called StopSession directly); now that restart calls a distinct RPC, this
+// proves the same real-socket/production-dial-chain bound still holds for
+// RestartDeployment specifically, not merely for Stop/Start.
+func TestRealTransport_Restart_HungBackend_ReturnsWithinBound(t *testing.T) {
+	app := newRealTransportTestApp(t)
+
+	start := time.Now()
+	_, err := boundDeploymentRPC(context.Background(), app.deploymentActionBound(), func(c context.Context) (*manmanpb.RestartDeploymentResponse, error) {
+		return app.grpc.RestartDeployment(c, 42)
+	})
+	elapsed := time.Since(start)
+
+	if elapsed > 3*time.Second {
+		t.Fatalf("RestartDeployment call returned after %s, want well under the backend's 5s hang (bound is %s)", elapsed, app.deploymentActionBound())
 	}
 	if err == nil {
 		t.Fatalf("expected a bound-firing error, got nil (elapsed %s)", elapsed)
