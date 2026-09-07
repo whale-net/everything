@@ -78,7 +78,7 @@ func authorName(names map[uuid.UUID]string, personID uuid.UUID) string {
 // to unattachedNotes) -- the save-note form's relation-picker candidate
 // universe, grouped by thread in saveNoteFormChannelIndex/
 // relationPickerFields below. No extra store call for this.
-templ ChannelIndex(data components.LayoutData, ch store.Channel, ideas []store.IdeaSummary, unattachedNotes []store.ResearchNoteWithAuthor, relationsByNote map[uuid.UUID][]store.NoteRelation, threads []store.ThreadSummary, priorNotes []store.ResearchNoteWithAuthor, ideasTruncated bool, notesTruncated bool, canWrite bool, form noteFormData) {
+templ ChannelIndex(data components.LayoutData, ch store.Channel, ideas []store.IdeaSummary, unattachedNotes []store.ResearchNoteWithAuthor, relationsByNote map[uuid.UUID][]store.NoteRelation, noteRefTargets map[uuid.UUID]*uuid.UUID, threads []store.ThreadSummary, priorNotes []store.ResearchNoteWithAuthor, ideasTruncated bool, notesTruncated bool, canWrite bool, form noteFormData) {
 	@components.Layout(data) {
 		<div class="card bg-base-100 border border-base-300 shadow-sm">
 			<div class="card-body">
@@ -129,7 +129,7 @@ templ ChannelIndex(data components.LayoutData, ch store.Channel, ideas []store.I
 						<ul class="mt-2 space-y-2">
 							for _, note := range unattachedNotes {
 								<li class="border border-base-300 rounded p-2">
-									@noteBody(note, relationsByNote[note.ID])
+									@noteBody(ch, note, relationsByNote[note.ID], noteRefTargets)
 								</li>
 							}
 						</ul>
@@ -156,6 +156,7 @@ templ ChannelIndex(data components.LayoutData, ch store.Channel, ideas []store.I
 				</div>
 			</div>
 		</div>
+		@noteIDCopyScript()
 	}
 }
 
@@ -569,10 +570,50 @@ templ citedBadge(note store.ResearchNote) {
 // empty). relations is note.ID's entry from the page's single batched
 // ResearchStore.ListRelationsForNotes call (research.go), never a
 // per-note store read.
-templ noteBody(note store.ResearchNoteWithAuthor, relations []store.NoteRelation) {
-	<div class="flex justify-between items-start gap-4">
+//
+// The outer div carries id="note-<uuid>" (issue #2029, FR1/NFR6) -- the
+// stable anchor scheme a same-Channel note:<uuid> reference's rendered
+// link (FR1, notelink.go's linkifyNoteRefs) targets to scroll the
+// referenced note into view, on both the Channel index's unattached-notes
+// section and the Idea-detail note list -- noteBody is the single call
+// site both of those render through, so emitting the id here covers both
+// without duplicating it onto each <li> wrapper. This is presentation
+// only, not a citedNoteBody concern: a cited-note excerpt is a reference,
+// not the note rendered as itself, so it carries no anchor id (NFR6's
+// scope).
+//
+// NFR6 -- the note's own UUID renders as visible, selectable text (a
+// small monospace "#<uuid>" label, never only inside an attribute value)
+// with a copy-to-clipboard button (noteIDCopyScript, called once per
+// page by ChannelIndex/IdeaDetail); this is what makes FR2's note:<uuid>
+// syntax something a human can hand-author, not only something an
+// MCP-capable agent can generate.
+//
+// noteRefs is research.go's resolveNoteRefTargets result for the page
+// (id -> IdeaID, nil meaning unattached) for every note:<uuid> reference
+// this Channel could resolve -- notelink.go's noteRefSegments builds
+// linkifyNoteRefs' notesOnChannel/anchorFor from it and channelID, so
+// note.Text renders through templ text nodes segment by segment (FR1),
+// never by string-concatenating HTML: each segment either becomes a
+// plain escaped text node (FR3's every safe-fallback case, and ordinary
+// non-reference text) or an <a href> anchor into the resolved target,
+// with the SAME automatic HTML-escaping either way.
+templ noteBody(ch store.Channel, note store.ResearchNoteWithAuthor, relations []store.NoteRelation, noteRefs map[uuid.UUID]*uuid.UUID) {
+	<div id={ "note-" + note.ID.String() } class="flex justify-between items-start gap-4">
 		<div>
-			<p>{ note.Text }</p>
+			<p>
+				for _, seg := range noteRefSegments(note.Text, ch.ID, noteRefs) {
+					if seg.HRef != "" {
+						<a href={ templ.URL(seg.HRef) } class="link">{ seg.Text }</a>
+					} else {
+						{ seg.Text }
+					}
+				}
+			</p>
+			<p class="text-xs font-mono text-base-content/50 flex items-center gap-1 mt-1">
+				<span data-note-id>#{ note.ID.String() }</span>
+				<button type="button" class="btn btn-ghost btn-xs" data-copy-note-id title="Copy note ID">Copy</button>
+			</p>
 			<p class="text-xs text-base-content/70">
 				{ note.AuthorDisplayName } — { note.CreatedAt.UTC().Format("2006-01-02 15:04 UTC") }
 			</p>
@@ -585,6 +626,34 @@ templ noteBody(note store.ResearchNoteWithAuthor, relations []store.NoteRelation
 		</div>
 		@citedBadge(note.ResearchNote)
 	</div>
+}
+
+// noteIDCopyScript is NFR6's copy-to-clipboard affordance for noteBody's
+// visible "#<uuid>" label: plain vanilla JS (mirrors
+// threadRelationScript's identical rationale above -- this is pure
+// client-side DOM behavior with no server round trip, so htmx/Alpine add
+// nothing a handler this small needs), event-delegated on document so it
+// covers every noteBody on the page from ONE script tag regardless of how
+// many notes are rendered -- ChannelIndex and IdeaDetail each call this
+// once, never once per note. Clicking a [data-copy-note-id] button copies
+// its own note's id (read from the immediately preceding [data-note-id]
+// span's text, minus the leading "#") via navigator.clipboard; browsers
+// without Clipboard API support simply see no-op (the id is already
+// visible, selectable text either way -- NFR6's baseline requirement
+// never depends on this script running).
+templ noteIDCopyScript() {
+	<script>
+		document.addEventListener("click", function (event) {
+			var button = event.target.closest("[data-copy-note-id]");
+			if (!button) { return; }
+			var span = button.previousElementSibling;
+			if (!span || !span.hasAttribute("data-note-id")) { return; }
+			var id = span.textContent.replace(/^#/, "");
+			if (navigator.clipboard && navigator.clipboard.writeText) {
+				navigator.clipboard.writeText(id);
+			}
+		});
+	</script>
 }
 
 // retiredWarningLabel renders FR10's staleness warning text for retiredBy
@@ -730,7 +799,7 @@ templ citedNotesSection(citedIDs []uuid.UUID, notes map[uuid.UUID]store.Research
 // current verdict (FR4), never this render-time check alone -- but that
 // presentation gate must never suppress an error the server already
 // decided to show.
-templ IdeaDetail(data components.LayoutData, ch store.Channel, idea store.Idea, notes []store.ResearchNoteWithAuthor, relationsByNote map[uuid.UUID][]store.NoteRelation, notesTruncated bool, threads []store.ThreadSummary, current *store.Verdict, history []store.Verdict, authorNames map[uuid.UUID]string, citedNotes map[uuid.UUID]store.ResearchNote, retiredNotes map[uuid.UUID][]store.RelationType, canWrite bool, form noteFormData, verdictForm verdictFormData, strategies []store.StrategyDetail, proposeForm proposeFormData) {
+templ IdeaDetail(data components.LayoutData, ch store.Channel, idea store.Idea, notes []store.ResearchNoteWithAuthor, relationsByNote map[uuid.UUID][]store.NoteRelation, noteRefTargets map[uuid.UUID]*uuid.UUID, notesTruncated bool, threads []store.ThreadSummary, current *store.Verdict, history []store.Verdict, authorNames map[uuid.UUID]string, citedNotes map[uuid.UUID]store.ResearchNote, retiredNotes map[uuid.UUID][]store.RelationType, canWrite bool, form noteFormData, verdictForm verdictFormData, strategies []store.StrategyDetail, proposeForm proposeFormData) {
 	@components.Layout(data) {
 		<div class="card bg-base-100 border border-base-300 shadow-sm">
 			<div class="card-body">
@@ -744,7 +813,7 @@ templ IdeaDetail(data components.LayoutData, ch store.Channel, idea store.Idea, 
 						<ul class="mt-2 space-y-2">
 							for _, note := range notes {
 								<li class="border border-base-300 rounded p-2">
-									@noteBody(note, relationsByNote[note.ID])
+									@noteBody(ch, note, relationsByNote[note.ID], noteRefTargets)
 								</li>
 							}
 						</ul>
@@ -815,6 +884,7 @@ templ IdeaDetail(data components.LayoutData, ch store.Channel, idea store.Idea, 
 				</div>
 			</div>
 		</div>
+		@noteIDCopyScript()
 	}
 }
 

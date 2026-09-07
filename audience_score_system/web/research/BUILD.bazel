@@ -16,7 +16,10 @@ load("//tools:templ.bzl", "templ_library")
 templ_library(
     name = "research",
     srcs = glob(["*.templ"]),
-    go_srcs = ["research.go"],
+    go_srcs = [
+        "notelink.go",
+        "research.go",
+    ],
     visibility = [
         "//audience_score_system/citest:__pkg__",
         "//audience_score_system/web:__pkg__",
