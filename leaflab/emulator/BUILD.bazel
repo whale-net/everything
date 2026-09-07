@@ -6,7 +6,10 @@ go_library(
         "board.go",
         "config.go",
         "main.go",
+        "manifest.go",
+        "runner.go",
         "scenario.go",
+        "transport.go",
         "valuegen.go",
     ],
     importpath = "github.com/whale-net/everything/leaflab/emulator",
@@ -17,6 +20,7 @@ go_library(
         "//libs/go/logging",
         "@com_github_eclipse_paho_mqtt_golang//:paho_mqtt_golang",
         "@org_golang_google_protobuf//encoding/protojson",
+        "@org_golang_google_protobuf//proto",
     ],
 )
 
@@ -31,7 +35,10 @@ go_test(
     srcs = [
         "board_test.go",
         "config_test.go",
+        "manifest_test.go",
+        "runner_test.go",
         "scenario_test.go",
+        "transport_test.go",
         "valuegen_test.go",
     ],
     data = ["//leaflab/scripts:scenarios"],
