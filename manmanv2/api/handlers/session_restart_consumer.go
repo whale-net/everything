@@ -11,11 +11,30 @@ import (
 	hostrmq "github.com/whale-net/everything/manmanv2/host/rmq"
 	"github.com/whale-net/everything/manmanv2/models"
 	pb "github.com/whale-net/everything/manmanv2/protos"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 )
 
 // startSessionTimeout bounds the deferred StartSession call so a hung Start
 // can't wedge this consumer's message-processing loop (see handleStatusUpdate).
 const startSessionTimeout = 30 * time.Second
+
+// startSessionRetryAttempts and startSessionRetryBackoff bound a retry of the
+// deferred StartSession call on codes.FailedPrecondition. This absorbs the
+// race between this consumer's read of active sessions for the SGC and
+// event-processor's independent commit of the terminal status that unblocks
+// it (see #1712 FR9, #2059): the same status.session.* message is delivered
+// to both consumers with no ordering guarantee between them, so
+// StartSession's precondition check can occasionally lose that race by a
+// margin of milliseconds to low seconds. The total retry budget (~5s across
+// up to 5 attempts) is deliberately small and stays far inside both
+// startSessionTimeout (30s) and the stall reaper's RESTART_STALL_TIMEOUT
+// default (45s, #1732) -- it exists only to absorb a commit race measured in
+// milliseconds, not to paper over a genuine problem.
+const (
+	startSessionRetryAttempts = 5
+	startSessionRetryBackoff  = 1 * time.Second
+)
 
 // DeferredStarter is the narrow interface SessionRestartConsumer needs over
 // the deferred Start (SessionHandler.StartSession). It exists so the
@@ -151,16 +170,46 @@ func (h *SessionRestartConsumer) handleStatusUpdate(ctx context.Context, msg rmq
 	startCtx, cancel := context.WithTimeout(ctx, startSessionTimeout)
 	defer cancel()
 
-	resp, err := h.starter.StartSession(startCtx, &pb.StartSessionRequest{ServerGameConfigId: rec.ServerGameConfigID})
-	if err != nil {
-		if markErr := h.pendingRepo.MarkFailed(ctx, rec.PendingRestartID, err.Error()); markErr != nil {
+	var resp *pb.StartSessionResponse
+	var startErr error
+	var attempts int
+	for attempts = 1; attempts <= startSessionRetryAttempts; attempts++ {
+		resp, startErr = h.starter.StartSession(startCtx, &pb.StartSessionRequest{ServerGameConfigId: rec.ServerGameConfigID})
+		if startErr == nil {
+			break
+		}
+		if status.Code(startErr) != codes.FailedPrecondition {
+			// Not the commit-race error this retry exists for: fail
+			// immediately, exactly as before.
+			break
+		}
+		if attempts == startSessionRetryAttempts {
+			// Retry budget exhausted; fall through to the failure path
+			// below without waiting again.
+			break
+		}
+		select {
+		case <-time.After(startSessionRetryBackoff):
+		case <-startCtx.Done():
+			// Context expired mid-retry: stop immediately rather than
+			// sleeping past the deadline. startErr already holds the
+			// last FailedPrecondition from the attempt above.
+		}
+		if startCtx.Err() != nil {
+			break
+		}
+	}
+
+	if startErr != nil {
+		if markErr := h.pendingRepo.MarkFailed(ctx, rec.PendingRestartID, startErr.Error()); markErr != nil {
 			h.logger.Warn("failed to mark pending restart as failed", "pending_restart_id", rec.PendingRestartID, "error", markErr)
 		}
 		h.logger.Warn("deferred restart start failed",
 			"pending_restart_id", rec.PendingRestartID,
 			"server_game_config_id", rec.ServerGameConfigID,
 			"gating_session_id", rec.GatingSessionID,
-			"error", err)
+			"attempts", attempts,
+			"error", startErr)
 		// Do not return the error: redelivery would find the record
 		// already claimed and do nothing, so returning nil avoids
 		// pointless retry churn.
@@ -170,6 +219,13 @@ func (h *SessionRestartConsumer) handleStatusUpdate(ctx context.Context, msg rmq
 	if err := h.pendingRepo.MarkStarted(ctx, rec.PendingRestartID, resp.Session.SessionId); err != nil {
 		h.logger.Warn("failed to mark pending restart as started", "pending_restart_id", rec.PendingRestartID, "error", err)
 		return nil
+	}
+
+	if attempts > 1 {
+		h.logger.Warn("deferred restart start succeeded after retry",
+			"pending_restart_id", rec.PendingRestartID,
+			"server_game_config_id", rec.ServerGameConfigID,
+			"attempts", attempts)
 	}
 
 	h.logger.Info("deferred restart start dispatched",
