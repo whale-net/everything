@@ -12,11 +12,14 @@
 // #1882), the per-Channel outcome bar's storage half (C14 / FR1 / FR2 /
 // NFR1); plus the calibration trend read (issue #1884, C14 / FR3 / FR4 /
 // FR5 / FR7), classifying browse.go's predictionOutcomeJoin against a
-// Channel's outcome_bar with no schema of its own.
+// Channel's outcome_bar with no schema of its own; plus research_thread
+// (migration 016, natural-key unique index added by migration 017, issue
+// #1937) -- FR3's discovery list and FR4's find-or-create half of
+// research-note threading (root plan #1934).
 //
 // Store is the single entry point, built over //libs/go/db's
 // *pgxpool.Pool. Its Persons/Channels/Roles/Invites/Ideas/Research/
-// Verdicts/Sync/Matches/Idempotency accessors
+// Verdicts/Sync/Matches/Idempotency/Threads accessors
 // hand back the per-entity Store implementations -- kept as separate
 // concrete types,
 // not all methods on Store itself, because e.g. PersonStore.GetByID and
@@ -67,6 +70,11 @@ func (s *Store) Ideas() IdeaStore { return ideaStore{pool: s.pool} }
 
 // Research returns the ResearchStore implementation (migration 002).
 func (s *Store) Research() ResearchStore { return researchStore{pool: s.pool} }
+
+// Threads returns the ThreadStore implementation (migration 016, natural
+// key unique index added by migration 017, issue #1937) -- FR3's
+// discovery list plus FR4's find-or-create half of threading.
+func (s *Store) Threads() ThreadStore { return threadStore{pool: s.pool} }
 
 // Verdicts returns the VerdictStore implementation (migration 002).
 func (s *Store) Verdicts() VerdictStore { return verdictStore{pool: s.pool} }

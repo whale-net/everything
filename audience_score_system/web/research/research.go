@@ -11,6 +11,14 @@
 // package doc comment rationale: the read/write flow and its views are
 // tightly coupled with no reuse outside this package.
 //
+// renderChannelIndex/renderIdeaDetail also load FR3's research-thread
+// discovery list (root plan #1934, issue #1937) via the identical
+// store.ThreadStore.ListByChannel call and store.CanRead check
+// list_research_threads makes (NFR2) -- ChannelIndex renders every thread
+// on the Channel, IdeaDetail that Idea's threads only. The save path
+// itself (choosing a thread_id when saving a note) is a separate task
+// (#1938).
+//
 // This task reuses #1900's write-path plumbing verbatim rather than
 // duplicating it: newIdempotencyKey (server-generated, minted once at
 // render time) and authorizeWrite (parse + fresh store.CanWrite preamble
@@ -314,12 +322,22 @@ func (h *Handlers) renderChannelIndex(w http.ResponseWriter, r *http.Request, pe
 		}
 	}
 
+	// threads is FR3's discovery list, scoped to the whole Channel
+	// (ideaID nil) -- the IDENTICAL store.ThreadStore.ListByChannel call
+	// and canRead check list_research_threads makes (NFR2, no second
+	// query path).
+	threads, err := h.store.Threads().ListByChannel(ctx, channelID, nil)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+
 	title := ch.Title + " research"
 	data := components.LayoutData{Title: title, User: person}
 	if status != http.StatusOK {
 		w.WriteHeader(status)
 	}
-	if err := components.Render(w, r, title, ChannelIndex(data, ch, ideas, unattached, ideasTruncated, notesTruncated, canWrite, form)); err != nil {
+	if err := components.Render(w, r, title, ChannelIndex(data, ch, ideas, unattached, threads, ideasTruncated, notesTruncated, canWrite, form)); err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 	}
 }
@@ -438,6 +456,15 @@ func (h *Handlers) renderIdeaDetail(w http.ResponseWriter, r *http.Request, pers
 		return
 	}
 
+	// threads is FR3's discovery list, scoped to THIS Idea only -- the
+	// IDENTICAL store.ThreadStore.ListByChannel call and canRead check
+	// list_research_threads makes (NFR2, no second query path).
+	threads, err := h.store.Threads().ListByChannel(ctx, channelID, &ideaID)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+
 	// History + Current are the identical pair of store.VerdictStore calls
 	// get_viability_verdict makes (mcp/tools/verdict.go), in the same
 	// order, so `web` and `mcp` can never disagree on which version is
@@ -488,7 +515,7 @@ func (h *Handlers) renderIdeaDetail(w http.ResponseWriter, r *http.Request, pers
 	// slice the save-verdict form's citation multi-select is populated
 	// from -- no extra store call, and no notes from any other Idea can
 	// ever appear as options (FR4).
-	if err := components.Render(w, r, title, IdeaDetail(data, ch, idea, notes, notesTruncated, current, history, authorNames, citedNotes, canWrite, form, verdictForm, activeStrategies, proposeForm)); err != nil {
+	if err := components.Render(w, r, title, IdeaDetail(data, ch, idea, notes, notesTruncated, threads, current, history, authorNames, citedNotes, canWrite, form, verdictForm, activeStrategies, proposeForm)); err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 	}
 }

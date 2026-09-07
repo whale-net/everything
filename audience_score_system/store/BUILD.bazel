@@ -32,6 +32,11 @@ load("@rules_go//go:def.bzl", "go_library", "go_test")
 # miscalibrated counts and rate, built over browse.go's
 # predictionOutcomeJoin and classified against a caller-supplied
 # outcome_bar row. No schema of its own.
+#
+# thread.go is research_thread's ThreadStore (migration 016, natural-key
+# unique index added by migration 017, issue #1937, root plan #1934):
+# FR3's discovery list (ListByChannel) and FR4's find-or-create half of
+# research-note threading.
 go_library(
     name = "store",
     srcs = [
@@ -54,6 +59,7 @@ go_library(
         "store.go",
         "strategy.go",
         "sync.go",
+        "thread.go",
         "verdict.go",
         "video_script.go",
     ],

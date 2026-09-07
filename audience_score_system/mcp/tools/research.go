@@ -3,7 +3,10 @@
 // that visibly distinguishes cited from uncited notes, plus create_idea/
 // list_ideas since a note may attach to an Idea and every downstream LB3
 // record hangs off Idea identity (see ../../ARCHITECTURE.md and issue
-// #1569).
+// #1569); plus list_research_threads (root plan #1934, issue #1937,
+// FR3/FR4/FR16/NFR2) -- discovery over research_thread (migration 016) so
+// a caller can pick a thread_id before calling save_research_note (the
+// save path itself is issue #1938).
 package tools
 
 import (
@@ -430,14 +433,107 @@ func listIdeas(ideas store.IdeaStore) mcp.ToolHandlerFor[ListIdeasInput, ListIde
 	}
 }
 
+// -- list_research_threads --------------------------------------------------
+
+// ListResearchThreadsInput is list_research_threads's argument schema.
+// ChannelID and IdeaID are JSON-wire strings, not uuid.UUID fields
+// directly -- see SaveResearchNoteInput's doc comment above for why.
+type ListResearchThreadsInput struct {
+	ChannelID string `json:"channel_id" jsonschema:"Channel to list research threads for, as a UUID string"`
+	IdeaID    string `json:"idea_id,omitempty" jsonschema:"Restrict to threads attached to this Idea, as a UUID string; omit to list every thread on the Channel, including ones that predate an Idea"`
+}
+
+// ChannelScopeID implements server.ChannelScoped.
+func (i ListResearchThreadsInput) ChannelScopeID() uuid.UUID {
+	id, _ := uuid.Parse(i.ChannelID)
+	return id
+}
+
+// ResearchThreadOutput is one research_thread row's list_research_threads
+// shape: FR3's discovery fields, no more -- the save path itself (thread
+// content) is a separate task (#1938).
+type ResearchThreadOutput struct {
+	ID        string  `json:"id" jsonschema:"This thread's ID, as a UUID string -- reference this from save_research_note's thread_id"`
+	Title     string  `json:"title" jsonschema:"The thread's title"`
+	IdeaID    *string `json:"idea_id,omitempty" jsonschema:"Idea this thread is attached to, as a UUID string, if any"`
+	NoteCount int     `json:"note_count" jsonschema:"How many research notes are attached to this thread"`
+	// LatestNoteAt is RFC3339Nano (sub-second precision), matching
+	// ResearchNoteOutput.CreatedAt's cursor-safety rationale -- omitted
+	// entirely (not an empty string) when the thread has no notes yet.
+	LatestNoteAt *string `json:"latest_note_at,omitempty" jsonschema:"The most recent note's created_at on this thread, RFC3339 (sub-second precision); omitted if the thread has no notes yet"`
+}
+
+// toResearchThreadOutput renders t as ResearchThreadOutput.
+func toResearchThreadOutput(t store.ThreadSummary) ResearchThreadOutput {
+	out := ResearchThreadOutput{
+		ID:        t.ID.String(),
+		Title:     t.Title,
+		NoteCount: t.NoteCount,
+	}
+	if t.IdeaID != nil {
+		s := t.IdeaID.String()
+		out.IdeaID = &s
+	}
+	if t.LatestNoteAt != nil {
+		s := t.LatestNoteAt.Format(time.RFC3339Nano)
+		out.LatestNoteAt = &s
+	}
+	return out
+}
+
+// ListResearchThreadsOutput is list_research_threads's structured result.
+type ListResearchThreadsOutput struct {
+	Threads []ResearchThreadOutput `json:"threads" jsonschema:"Matching research threads, most-recent activity first (threads with no notes yet last)"`
+}
+
+func registerListResearchThreads(reg *server.Registry, threads store.ThreadStore) {
+	server.RegisterRead(reg, &mcp.Tool{
+		Name: "list_research_threads",
+		Description: "List research threads on a Channel, most-recent activity first (threads with no notes yet " +
+			"last), each with its note count and most-recent note time. Optionally restrict to one Idea (idea_id). " +
+			"Use this to pick a thread_id before calling save_research_note.",
+	}, listResearchThreads(threads))
+}
+
+func listResearchThreads(threads store.ThreadStore) mcp.ToolHandlerFor[ListResearchThreadsInput, ListResearchThreadsOutput] {
+	return func(ctx context.Context, _ *mcp.CallToolRequest, in ListResearchThreadsInput) (*mcp.CallToolResult, ListResearchThreadsOutput, error) {
+		channelID, err := uuid.Parse(in.ChannelID)
+		if err != nil {
+			return nil, ListResearchThreadsOutput{}, fmt.Errorf("channel_id is not a valid UUID: %w", err)
+		}
+
+		var ideaID *uuid.UUID
+		if strings.TrimSpace(in.IdeaID) != "" {
+			id, err := uuid.Parse(in.IdeaID)
+			if err != nil {
+				return nil, ListResearchThreadsOutput{}, fmt.Errorf("idea_id is not a valid UUID: %w", err)
+			}
+			ideaID = &id
+		}
+
+		summaries, err := threads.ListByChannel(ctx, channelID, ideaID)
+		if err != nil {
+			return nil, ListResearchThreadsOutput{}, err
+		}
+
+		out := ListResearchThreadsOutput{Threads: make([]ResearchThreadOutput, 0, len(summaries))}
+		for _, s := range summaries {
+			out.Threads = append(out.Threads, toResearchThreadOutput(s))
+		}
+		return nil, out, nil
+	}
+}
+
 // -- registration ------------------------------------------------------------
 
 // RegisterResearch registers save_research_note, list_research_notes,
-// create_idea, and list_ideas against reg (see ../server/registry.go),
-// backed by st's IdeaStore/ResearchStore/PersonStore.
+// create_idea, list_ideas, and list_research_threads against reg (see
+// ../server/registry.go), backed by st's IdeaStore/ResearchStore/
+// ThreadStore/PersonStore.
 func RegisterResearch(reg *server.Registry, st *store.Store) {
 	registerSaveResearchNote(reg, st.Research(), st.Persons())
 	registerListResearchNotes(reg, st.Research())
 	registerCreateIdea(reg, st.Ideas())
 	registerListIdeas(reg, st.Ideas())
+	registerListResearchThreads(reg, st.Threads())
 }

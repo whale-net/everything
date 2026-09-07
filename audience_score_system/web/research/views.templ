@@ -80,7 +80,7 @@ func authorName(names map[uuid.UUID]string, personID uuid.UUID) string {
 // research.go's authorizeWrite, re-derived fresh from Postgres on every
 // POST /channels/{id}/research/notes; hiding this form is never the only
 // line of defense against a forged submit.
-templ ChannelIndex(data components.LayoutData, ch store.Channel, ideas []store.IdeaSummary, unattachedNotes []store.ResearchNoteWithAuthor, ideasTruncated bool, notesTruncated bool, canWrite bool, form noteFormData) {
+templ ChannelIndex(data components.LayoutData, ch store.Channel, ideas []store.IdeaSummary, unattachedNotes []store.ResearchNoteWithAuthor, threads []store.ThreadSummary, ideasTruncated bool, notesTruncated bool, canWrite bool, form noteFormData) {
 	@components.Layout(data) {
 		<div class="card bg-base-100 border border-base-300 shadow-sm">
 			<div class="card-body">
@@ -110,6 +110,14 @@ templ ChannelIndex(data components.LayoutData, ch store.Channel, ideas []store.I
 						Showing the first { strconv.Itoa(defaultPageLimit) } ideas; older ones are not shown.
 					</p>
 				}
+
+				<div class="mt-6">
+					<h2 class="text-lg font-semibold">Research threads</h2>
+					<p class="text-sm text-base-content/70">
+						Every thread on this Channel (FR3), including ones that predate an Idea.
+					</p>
+					@threadList(threads)
+				</div>
 
 				<div class="mt-6">
 					<h2 class="text-lg font-semibold">Unattached notes</h2>
@@ -229,6 +237,54 @@ templ ideaRow(ch store.Channel, idea store.IdeaSummary) {
 				<span class="badge badge-success">Verdict recorded</span>
 			} else {
 				<span class="badge badge-ghost">None yet</span>
+			}
+		</td>
+	</tr>
+}
+
+// threadList renders FR3's discovery list: title, note count, and
+// last-activity timestamp for each thread, in ideaRow's visual idiom
+// (a table -- not a card list like noteBody's, since a thread carries no
+// body text of its own to display). Rendered by both ChannelIndex (every
+// thread on the Channel) and IdeaDetail (that Idea's threads only) from
+// the identical store.ThreadStore.ListByChannel call (NFR2) -- this view
+// itself does not know or care which scope produced threads.
+templ threadList(threads []store.ThreadSummary) {
+	if len(threads) == 0 {
+		<p class="text-base-content/70 mt-2">No research threads yet.</p>
+	} else {
+		<div class="overflow-x-auto mt-2">
+			<table class="table">
+				<thead>
+					<tr>
+						<th>Thread</th>
+						<th>Notes</th>
+						<th>Last activity</th>
+					</tr>
+				</thead>
+				<tbody>
+					for _, t := range threads {
+						@threadRow(t)
+					}
+				</tbody>
+			</table>
+		</div>
+	}
+}
+
+// threadRow renders one store.ThreadSummary: title, note count, and its
+// most-recent note's created_at -- "No notes yet" (not a blank cell) when
+// LatestNoteAt is nil, mirroring ideaRow's "None yet" verdict badge
+// convention for an absent value.
+templ threadRow(t store.ThreadSummary) {
+	<tr>
+		<td>{ t.Title }</td>
+		<td>{ strconv.Itoa(t.NoteCount) }</td>
+		<td>
+			if t.LatestNoteAt != nil {
+				{ t.LatestNoteAt.UTC().Format("2006-01-02 15:04 UTC") }
+			} else {
+				<span class="text-base-content/50">No notes yet</span>
 			}
 		</td>
 	</tr>
@@ -359,7 +415,7 @@ templ citedNotesSection(citedIDs []uuid.UUID, notes map[uuid.UUID]store.Research
 // current verdict (FR4), never this render-time check alone -- but that
 // presentation gate must never suppress an error the server already
 // decided to show.
-templ IdeaDetail(data components.LayoutData, ch store.Channel, idea store.Idea, notes []store.ResearchNoteWithAuthor, notesTruncated bool, current *store.Verdict, history []store.Verdict, authorNames map[uuid.UUID]string, citedNotes map[uuid.UUID]store.ResearchNote, canWrite bool, form noteFormData, verdictForm verdictFormData, strategies []store.StrategyDetail, proposeForm proposeFormData) {
+templ IdeaDetail(data components.LayoutData, ch store.Channel, idea store.Idea, notes []store.ResearchNoteWithAuthor, notesTruncated bool, threads []store.ThreadSummary, current *store.Verdict, history []store.Verdict, authorNames map[uuid.UUID]string, citedNotes map[uuid.UUID]store.ResearchNote, canWrite bool, form noteFormData, verdictForm verdictFormData, strategies []store.StrategyDetail, proposeForm proposeFormData) {
 	@components.Layout(data) {
 		<div class="card bg-base-100 border border-base-300 shadow-sm">
 			<div class="card-body">
@@ -390,6 +446,14 @@ templ IdeaDetail(data components.LayoutData, ch store.Channel, idea store.Idea, 
 							@saveNoteFormIdeaDetail(ch, idea, form)
 						</div>
 					}
+				</div>
+
+				<div class="mt-6">
+					<h2 class="text-lg font-semibold">Research threads</h2>
+					<p class="text-sm text-base-content/70">
+						This Idea's threads only (FR3).
+					</p>
+					@threadList(threads)
 				</div>
 
 				<div class="mt-6">
