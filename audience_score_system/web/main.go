@@ -31,6 +31,7 @@ import (
 	"github.com/whale-net/everything/audience_score_system/web/channel"
 	"github.com/whale-net/everything/audience_score_system/web/components"
 	"github.com/whale-net/everything/audience_score_system/web/invite"
+	"github.com/whale-net/everything/audience_score_system/web/matches"
 	"github.com/whale-net/everything/audience_score_system/web/pages"
 	"github.com/whale-net/everything/audience_score_system/web/research"
 	"github.com/whale-net/everything/audience_score_system/web/schedule"
@@ -145,6 +146,7 @@ type app struct {
 	schedule *schedule.Handlers
 	access   *access.Handlers
 	research *research.Handlers
+	matches  *matches.Handlers
 
 	// mcpProvider is mcpauth's OAuth2 authorization-server front end
 	// (issue #1646, FR12/NFR4): /authorize, /token, /register, and
@@ -280,6 +282,13 @@ func run() error {
 	// grant of its own.
 	researchHandlers := research.New(st)
 
+	// matchesHandlers is milestone M4.3's read-only pending-matches browse
+	// surface (#1926, FR7/FR8, plus the "Resolve pending matches" link
+	// half of FR11) -- needs only st (store.CanRead + Matches()/Sync()/
+	// VideoScripts()/Verdicts()/Channels()/Roles()), no separate OAuth
+	// grant of its own.
+	matchesHandlers := matches.New(st)
+
 	// mcpauth's OAuth2 authorization-server front end (issue #1646,
 	// FR12/NFR4): mints the bearer credential an MCP client presents to
 	// `mcp`, reusing this Person's existing C1 Google-OIDC-backed session
@@ -328,7 +337,7 @@ func run() error {
 		return fmt.Errorf("construct mcpauth provider: %w", err)
 	}
 
-	application := &app{store: st, auth: authenticator, invite: inviteHandlers, channels: channelHandler, schedule: scheduleHandlers, access: accessHandlers, research: researchHandlers, mcpProvider: mcpProvider}
+	application := &app{store: st, auth: authenticator, invite: inviteHandlers, channels: channelHandler, schedule: scheduleHandlers, access: accessHandlers, research: researchHandlers, matches: matchesHandlers, mcpProvider: mcpProvider}
 
 	mux := http.NewServeMux()
 	application.setupRoutes(mux)
@@ -463,6 +472,13 @@ func (a *app) setupRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("POST /channels/{id}/research/notes", a.auth.RequireSignedIn(a.research.HandleSaveNote))
 	mux.HandleFunc("POST /channels/{id}/research/ideas/{ideaID}/verdicts", a.auth.RequireSignedIn(a.research.HandleSaveVerdict))
 	mux.HandleFunc("POST /channels/{id}/research/ideas/{ideaID}/video-scripts", a.auth.RequireSignedIn(a.research.HandleProposeVideoScript))
+
+	// Protected: milestone M4.3's read-only pending-matches browse page
+	// (#1926, FR7/FR8, NFR2). Visible to a Channel's Founder, Co-Creator,
+	// AND Analyst (store.CanRead) -- mirrors the research block above's
+	// read gate exactly. The confirm/reject POSTs land in the follow-up
+	// task (FR9/FR10).
+	mux.HandleFunc("GET /channels/{id}/matches", a.auth.RequireSignedIn(a.matches.HandleList))
 
 	// Protected: the cross-Channel "my work" aggregate (M2: FR27/FR28,
 	// #1725) -- see handleMyWork's doc comment.

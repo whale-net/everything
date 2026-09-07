@@ -1,0 +1,77 @@
+load("@rules_go//go:def.bzl", "go_test")
+load("//tools:templ.bzl", "templ_library")
+
+# Milestone M4.3's Channel-scoped pending-matches browse page (FR7/FR8,
+# capability C9, issue #1926): handlers (matches.go) and templ views
+# (views.templ) in one package -- see matches.go's package doc comment for
+# why they are not split across a components/pages sibling pair like
+# web/pages (mirrors web/research's own rationale, which in turn mirrors
+# web/schedule's). Postgres-backed handler coverage (Testing phase) lands
+# as matches_integration_test.go, mirroring
+# //audience_score_system/web/research:research_integration_test.
+templ_library(
+    name = "matches",
+    srcs = glob(["*.templ"]),
+    go_srcs = ["matches.go"],
+    visibility = [
+        "//audience_score_system/citest:__pkg__",
+        "//audience_score_system/web:__pkg__",
+    ],
+    deps = [
+        "//audience_score_system/store",
+        "//audience_score_system/web/auth",
+        "//audience_score_system/web/components",
+        "@com_github_google_uuid//:uuid",
+        "@com_github_jackc_pgx_v5//:pgx",
+    ],
+)
+
+# Postgres-backed handler coverage (Testing phase, issue #1926, milestone
+# M4.3 FR7/FR8/NFR2): HandleList's Founder/Co-Creator/Analyst read (same
+# rows for all three), negatives in this issue's load-bearing order
+# (non-member 403, unknown Channel 404 BEFORE the 403 path, malformed
+# {id} 400, signed-out 401), LB3's load-bearing bound-verdict-version
+# rendering (a best-guess script's verdict version stays pinned to what
+# it was proposed under even after a newer verdict version is appended to
+# the same Idea), the video_script_id IS NULL / confidence-0 case, the
+# no-video_metrics-row "no metrics synced yet" case, non-pending matches
+# never appearing, NFR2's 51-row truncation with a static note and no
+# paging control, and FR8's message-plus-pointer empty state. Gated
+# behind `//go:build integration`, gazelle skips it when scanning for
+# go_test srcs; this go_test is hand-written with EXACTLY the tag set
+# from //libs/go/dbtest:postgres_constraints_test (see that package's
+# BUILD.bazel/README.md for why each tag is required), mirroring
+# //audience_score_system/web/research:research_integration_test. `# keep`
+# markers tell a later `bazel run //:gazelle` not to touch or remove this
+# rule.
+#
+# Run it explicitly (requires a working Docker daemon):
+#   bazel test //audience_score_system/web/matches:matches_integration_test --test_output=all
+go_test(
+    # keep
+    name = "matches_integration_test",
+    size = "large",
+    timeout = "long",
+    srcs = ["matches_integration_test.go"],
+    embed = [":matches"],
+    gotags = ["integration"],
+    tags = [
+        "external",
+        "integration",
+        "manual",
+        "no-cache",
+        "no-sandbox",
+        "requires-network",
+    ],
+    deps = [
+        "//audience_score_system/migrate/schema",
+        "//audience_score_system/store",
+        "//audience_score_system/web/auth",
+        "//libs/go/dbtest",
+        "//libs/go/migrate",
+        "@com_github_google_uuid//:uuid",
+        "@com_github_jackc_pgx_v5//stdlib",
+        "@com_github_stretchr_testify//assert",
+        "@com_github_stretchr_testify//require",
+    ],
+)
