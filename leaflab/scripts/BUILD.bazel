@@ -1,0 +1,10 @@
+# leaflab/scripts holds operator scripts (push-config.sh) and the board
+# scenario JSON fixtures they push. The scenarios filegroup lets
+# //leaflab/emulator's tests depend on the real scenario files as a `data`
+# dep instead of forking/copying them -- push-config.sh remains the sole
+# owner of their format and content.
+filegroup(
+    name = "scenarios",
+    srcs = glob(["scenarios/*.json"]),
+    visibility = ["//leaflab/emulator:__pkg__"],
+)

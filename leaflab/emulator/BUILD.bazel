@@ -3,14 +3,19 @@ load("@rules_go//go:def.bzl", "go_binary", "go_library", "go_test")
 go_library(
     name = "emulator_lib",
     srcs = [
+        "board.go",
         "config.go",
         "main.go",
+        "scenario.go",
     ],
     importpath = "github.com/whale-net/everything/leaflab/emulator",
     visibility = ["//visibility:private"],
     deps = [
+        "//firmware/proto:configpb",
+        "//firmware/proto:firmwarepb",
         "//libs/go/logging",
         "@com_github_eclipse_paho_mqtt_golang//:paho_mqtt_golang",
+        "@org_golang_google_protobuf//encoding/protojson",
     ],
 )
 
@@ -22,10 +27,18 @@ go_binary(
 
 go_test(
     name = "emulator_test",
-    srcs = ["config_test.go"],
+    srcs = [
+        "board_test.go",
+        "config_test.go",
+        "scenario_test.go",
+    ],
+    data = ["//leaflab/scripts:scenarios"],
     embed = [":emulator_lib"],
     deps = [
+        "//firmware/proto:configpb",
+        "//firmware/proto:firmwarepb",
         "@com_github_stretchr_testify//assert",
         "@com_github_stretchr_testify//require",
+        "@org_golang_google_protobuf//proto",
     ],
 )
