@@ -1,6 +1,7 @@
 package outcomes
 
 import (
+	"fmt"
 	"strconv"
 
 	"github.com/whale-net/everything/audience_score_system/store"
@@ -42,15 +43,21 @@ func matchStateLabel(s store.MatchState) string {
 	}
 }
 
-// List is the Channel-scoped prediction-vs-outcome browse page (FR1, FR2):
-// every store.PredictionOutcome row HandleList loaded, most-recently-
-// published first (as PredictionVsOutcome returns them -- no re-sorting
-// here or in HandleList). truncated (NFR2) renders as a static note when
-// true -- never a paging control, since this package exposes no
-// since/before/limit parameter anywhere (see outcomes.go's
+// List is the Channel-scoped prediction-vs-outcome browse page (FR1, FR2)
+// PLUS this task's (#1929) calibration-trend section (FR3, FR4) and
+// inline set-outcome-bar form (FR5, FR6), rendered below the
+// prediction-vs-outcome cards on this SAME page. Prediction-vs-outcome
+// rows are every store.PredictionOutcome row HandleList loaded,
+// most-recently-published first (as PredictionVsOutcome returns them --
+// no re-sorting here or in HandleList). truncated (NFR2) renders as a
+// static note when true -- never a paging control, since this package
+// exposes no since/before/limit parameter anywhere (see outcomes.go's
 // defaultOutcomesLimit doc comment). An empty rows renders FR2's
-// message-plus-pointer empty state instead of a bare "no data".
-templ List(data components.LayoutData, ch store.Channel, rows []store.PredictionOutcome, truncated bool) {
+// message-plus-pointer empty state instead of a bare "no data". canWrite
+// (store.CanWrite, outcomes.go's renderList) gates whether the
+// set-outcome-bar form renders at all -- presentation only, see
+// renderList's doc comment.
+templ List(data components.LayoutData, ch store.Channel, rows []store.PredictionOutcome, truncated bool, calib calibrationView, canWrite bool, form outcomeBarFormData) {
 	@components.Layout(data) {
 		<div class="card bg-base-100 border border-base-300 shadow-sm">
 			<div class="card-body">
@@ -77,7 +84,137 @@ templ List(data components.LayoutData, ch store.Channel, rows []store.Prediction
 				}
 			</div>
 		</div>
+		<div class="card bg-base-100 border border-base-300 shadow-sm mt-4">
+			<div class="card-body">
+				<h2 class="card-title">Calibration trend</h2>
+				@calibrationSection(ch, calib)
+				if canWrite {
+					@setOutcomeBarForm(ch, calib, form)
+				}
+			</div>
+		</div>
 	}
+}
+
+// calibrationSection renders the FR3 chart or the FR4 not-configured
+// pointer, based on calib.Configured. Never renders a bare
+// "not configured" (FR4) -- the pointer always names the inline
+// set-outcome-bar form below it on this same page.
+templ calibrationSection(ch store.Channel, calib calibrationView) {
+	if !calib.Configured {
+		<p class="text-base-content/70">
+			No outcome bar is configured for this Channel yet, so no calibration
+			trend can be computed. Set one below to define what "calibrated"
+			means for this Channel.
+		</p>
+	} else if calib.Unsupported != "" {
+		<p class="text-warning text-sm">{ calib.Unsupported }</p>
+	} else if len(calib.Points) == 0 {
+		<p class="text-base-content/70">
+			No calibration candidates yet for the current outcome bar
+			({ calib.MetricName } &gt;= { strconv.FormatFloat(calib.Threshold, 'f', -1, 64) }).
+		</p>
+	} else {
+		<p class="text-sm text-base-content/70">
+			Classified against the current outcome bar: { calib.MetricName } &gt;= { strconv.FormatFloat(calib.Threshold, 'f', -1, 64) }.
+		</p>
+		@calibrationChart(calib)
+		<div class="overflow-x-auto mt-2">
+			<table class="table table-sm">
+				<thead>
+					<tr>
+						<th>Month</th>
+						<th>Candidates</th>
+						<th>Calibrated</th>
+						<th>Miscalibrated</th>
+						<th>Rate</th>
+					</tr>
+				</thead>
+				<tbody>
+					for _, p := range calib.Points {
+						<tr>
+							<td>{ p.Label }</td>
+							<td>{ strconv.Itoa(p.Candidates) }</td>
+							<td>{ strconv.Itoa(p.Calibrated) }</td>
+							<td>{ strconv.Itoa(p.Miscalibrated) }</td>
+							<td>{ strconv.FormatFloat(p.Rate*100, 'f', 0, 64) }%</td>
+						</tr>
+					}
+				</tbody>
+			</table>
+		</div>
+		if calib.Truncated {
+			<p class="text-sm text-base-content/50 mt-2">
+				Older months exist beyond the last { strconv.Itoa(defaultCalibrationTrendLimit) }.
+			</p>
+		}
+	}
+}
+
+// calibrationChart renders calib's calendar-month buckets as an inline
+// SVG line chart (FR3): a single polyline over calib.Points' Rate values,
+// plus one circle marker per point, in calib.Points' EXACT order (NFR4 --
+// this templ performs no re-sorting, no re-bucketing, and no rate
+// arithmetic; every coordinate below was precomputed by outcomes.go). See
+// outcomes.go's package doc comment for why this is hand-rolled SVG
+// rather than a JS charting library or a new libs/go/htmxui component.
+templ calibrationChart(calib calibrationView) {
+	<svg
+		viewBox={ fmt.Sprintf("0 0 %d %d", calib.ChartWidth, calib.ChartHeight) }
+		class="w-full h-48 border border-base-300 rounded bg-base-200/30"
+		role="img"
+		aria-label="Calibration rate by month"
+	>
+		<polyline points={ calib.Polyline } fill="none" stroke="currentColor" stroke-width="2" class="text-primary"></polyline>
+		for _, p := range calib.Points {
+			<circle cx={ fmt.Sprintf("%.1f", p.X) } cy={ fmt.Sprintf("%.1f", p.Y) } r="3" class="fill-primary">
+				<title>{ p.Label }: { strconv.FormatFloat(p.Rate*100, 'f', 0, 64) }% ({ strconv.Itoa(p.Calibrated) }/{ strconv.Itoa(p.Candidates) })</title>
+			</circle>
+		}
+	</svg>
+}
+
+// setOutcomeBarForm renders the inline set-outcome-bar form (FR5): a
+// fixed/disabled metric_name control (only store.OutcomeBarMetricViews is
+// accepted this milestone, but the value still POSTs so
+// HandleSetOutcomeBar's server-side validation is exercised on every
+// submit, forged or not) and a numeric threshold_value field prefilled
+// with the current bar's threshold when one is configured (form,
+// assembled by outcomes.go's newOutcomeBarFormData/HandleSetOutcomeBar).
+// Deliberately no hidden idempotency_key input anywhere in this form
+// (FR6) -- see HandleSetOutcomeBar's doc comment for why none is needed.
+// Rendered by List only when canWrite is true (presentation only, see
+// List's doc comment); the actual rejection of a forged POST happens
+// server-side in HandleSetOutcomeBar's authorizeWrite.
+templ setOutcomeBarForm(ch store.Channel, calib calibrationView, form outcomeBarFormData) {
+	<form method="post" action={ templ.URL("/channels/" + ch.ID.String() + "/outcome-bar") } class="mt-4 space-y-2 max-w-sm">
+		<h3 class="font-semibold text-sm">
+			if calib.Configured {
+				Update outcome bar
+			} else {
+				Set outcome bar
+			}
+		</h3>
+		if form.Error != "" {
+			<p class="text-error text-sm">{ form.Error }</p>
+		}
+		<div class="form-control">
+			<label class="label">
+				<span class="label-text">Metric</span>
+			</label>
+			<select name="metric_name" class="select select-bordered w-full" disabled>
+				<option value={ store.OutcomeBarMetricViews } selected>Views</option>
+			</select>
+			<input type="hidden" name="metric_name" value={ store.OutcomeBarMetricViews }/>
+		</div>
+		<div class="form-control mt-2">
+			<label class="label">
+				<span class="label-text">Threshold (views)</span>
+			</label>
+			<input type="number" step="any" min="0" name="threshold_value" class="input input-bordered w-full" value={ form.ThresholdValue } required/>
+		</div>
+		<button type="submit" class="btn btn-primary btn-sm mt-2">Save outcome bar</button>
+	</form>
 }
 
 // outcomeCard renders one store.PredictionOutcome row: the Idea title, the
