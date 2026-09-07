@@ -59,11 +59,16 @@ func run() error {
 	grpcOIDCIssuer := getEnv("GRPC_OIDC_ISSUER", "")
 	grpcOIDCClientID := getEnv("GRPC_OIDC_CLIENT_ID", "")
 	// RESTART_STALL_TIMEOUT bounds how long a RestartDeployment-recorded
-	// pending_restarts row may sit 'pending' before the reaper (#1731)
+	// pending_restarts row may sit 'pending' before the reaper (#1732)
 	// expires it -- 3x the ~15s window the UI's now-removed client-side
 	// poll bound (deleted by #1733) used to give the dispatched Stop real
 	// container-stop time. See manmanv2/ENV.md.
 	restartStallTimeout := getEnvDuration("RESTART_STALL_TIMEOUT", 45*time.Second)
+	// RESTART_REAPER_INTERVAL is how often PendingRestartReaper (#1732)
+	// ticks. Combined with restartStallTimeout, worst-case detection latency
+	// is stallTimeout+interval -- keep this well below the stall timeout or
+	// the bound is meaningless. See manmanv2/ENV.md.
+	restartReaperInterval := getEnvDuration("RESTART_REAPER_INTERVAL", 10*time.Second)
 
 	// Initialize database pool (reads PG_DATABASE_URL)
 	log.Println("Connecting to database...")
@@ -203,6 +208,18 @@ func run() error {
 		}
 	}()
 	log.Println("Session restart consumer started")
+
+	// Initialize pending restart reaper: the time-based stall bound for
+	// durable restart (#1732, Track B). Independent mechanism from the
+	// consumer above -- see manmanv2/ARCHITECTURE.md "Pending Restarts".
+	log.Println("Setting up pending restart reaper...")
+	pendingRestartReaper := handlers.NewPendingRestartReaper(
+		repo.PendingRestarts,
+		restartReaperInterval,
+		slog.Default(),
+	)
+	pendingRestartReaper.Start(ctx)
+	log.Println("Pending restart reaper started")
 
 	// Register reflection service (for grpcurl, debugging)
 	reflection.Register(grpcServer)
