@@ -65,7 +65,18 @@ func scanThread(row pgx.Row) (ResearchThread, error) {
 	return t, err
 }
 
-// FindOrCreate normalizes title (trim, then compares case-insensitively)
+// FindOrCreate delegates to findOrCreateThreadTx against s.pool directly --
+// see that function's doc comment for the natural-key convergence logic
+// itself. Kept as a thin wrapper so ResearchStore.SaveNote (research.go,
+// issue #1938) can call findOrCreateThreadTx against its OWN transaction
+// instead (composing the thread find-or-create and the note INSERT into
+// one atomic unit), which calling threadStore.FindOrCreate here -- bound
+// to s.pool -- could never do.
+func (s threadStore) FindOrCreate(ctx context.Context, in FindOrCreateThreadInput) (ResearchThread, error) {
+	return findOrCreateThreadTx(ctx, s.pool, in)
+}
+
+// findOrCreateThreadTx normalizes title (trim, then compares case-insensitively)
 // and converges on (channel_id, idea_id, lower(btrim(title))) via
 // INSERT ... ON CONFLICT DO NOTHING against migration 017's partial
 // unique index (research_thread_natural_key), unlike IdeaStore.
@@ -87,7 +98,7 @@ func scanThread(row pgx.Row) (ResearchThread, error) {
 // breakage of convergence for a repeat caller, not a duplicate row. This
 // is the single most likely thing to be silently regressed later; see the
 // FindOrCreate test with IdeaID = nil for the regression coverage.
-func (s threadStore) FindOrCreate(ctx context.Context, in FindOrCreateThreadInput) (ResearchThread, error) {
+func findOrCreateThreadTx(ctx context.Context, q dbQueryRower, in FindOrCreateThreadInput) (ResearchThread, error) {
 	trimmed := strings.TrimSpace(in.Title)
 	if trimmed == "" {
 		return ResearchThread{}, fmt.Errorf("title must not be empty")
@@ -95,7 +106,7 @@ func (s threadStore) FindOrCreate(ctx context.Context, in FindOrCreateThreadInpu
 
 	if in.IdeaID != nil {
 		var ideaChannelID uuid.UUID
-		err := s.pool.QueryRow(ctx, `SELECT channel_id FROM idea WHERE id = $1`, *in.IdeaID).Scan(&ideaChannelID)
+		err := q.QueryRow(ctx, `SELECT channel_id FROM idea WHERE id = $1`, *in.IdeaID).Scan(&ideaChannelID)
 		if err != nil {
 			if errors.Is(err, pgx.ErrNoRows) {
 				return ResearchThread{}, fmt.Errorf("idea %s does not exist", *in.IdeaID)
@@ -107,7 +118,7 @@ func (s threadStore) FindOrCreate(ctx context.Context, in FindOrCreateThreadInpu
 		}
 	}
 
-	thread, err := scanThread(s.pool.QueryRow(ctx, `
+	thread, err := scanThread(q.QueryRow(ctx, `
 		INSERT INTO research_thread (channel_id, idea_id, title, created_by_person_id)
 		VALUES ($1, $2, $3, $4)
 		ON CONFLICT (channel_id, COALESCE(idea_id, '00000000-0000-0000-0000-000000000000'::uuid), lower(btrim(title)))
@@ -124,7 +135,7 @@ func (s threadStore) FindOrCreate(ctx context.Context, in FindOrCreateThreadInpu
 		return ResearchThread{}, fmt.Errorf("insert research_thread: %w", err)
 	}
 
-	existing, err := scanThread(s.pool.QueryRow(ctx, `
+	existing, err := scanThread(q.QueryRow(ctx, `
 		SELECT `+threadColumns+`
 		FROM research_thread
 		WHERE channel_id = $1
@@ -140,7 +151,16 @@ func (s threadStore) FindOrCreate(ctx context.Context, in FindOrCreateThreadInpu
 
 // GetByID returns the ResearchThread for id, or an error if none exists.
 func (s threadStore) GetByID(ctx context.Context, id uuid.UUID) (ResearchThread, error) {
-	thread, err := scanThread(s.pool.QueryRow(ctx, `SELECT `+threadColumns+` FROM research_thread WHERE id = $1`, id))
+	return getThreadByIDTx(ctx, s.pool, id)
+}
+
+// getThreadByIDTx is GetByID's body, factored out so
+// ResearchStore.SaveNote (research.go, issue #1938) can resolve a
+// caller-supplied ThreadID inside its OWN transaction (q == the tx) --
+// mirroring findOrCreateThreadTx's split above and isVideoScriptPublished's
+// precedent (video_script.go).
+func getThreadByIDTx(ctx context.Context, q dbQueryRower, id uuid.UUID) (ResearchThread, error) {
+	thread, err := scanThread(q.QueryRow(ctx, `SELECT `+threadColumns+` FROM research_thread WHERE id = $1`, id))
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			return ResearchThread{}, pgx.ErrNoRows

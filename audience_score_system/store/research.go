@@ -13,10 +13,34 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
+// SaveNoteRelationInput is one entry of FR5's relations list -- a typed
+// edge from the note being saved to a prior note in the SAME resolved
+// thread (FR6/NFR4). See SaveNoteInput.Relations and SaveNote's doc
+// comment for the validation/rollback rules.
+type SaveNoteRelationInput struct {
+	RelatedNoteID uuid.UUID
+	RelationType  RelationType
+}
+
 // SaveNoteInput is the input to ResearchStore.SaveNote.
 type SaveNoteInput struct {
 	ChannelID uuid.UUID
 	IdeaID    *uuid.UUID // nil if the note predates an Idea (FR9).
+	// ThreadID attaches this note to an existing research_thread (FR4).
+	// Exactly one of ThreadID/ThreadTitle must be supplied -- see
+	// SaveNote's doc comment for the full resolution/rejection rules.
+	ThreadID *uuid.UUID
+	// ThreadTitle find-or-creates a thread on the natural key
+	// (channel_id, idea_id, lower(trim(title))), delegating to
+	// findOrCreateThreadTx (thread.go) run inside SaveNote's OWN
+	// transaction -- IdeaID above is the Idea component of that natural
+	// key (FR4).
+	ThreadTitle string
+	// Relations are FR5's typed edges to prior notes, written atomically
+	// with this note (same transaction) -- see SaveNote's doc comment.
+	// Duplicate (RelatedNoteID, RelationType) entries collapse to one row
+	// (the table's PK); this is not an error.
+	Relations []SaveNoteRelationInput
 	Text      string
 	// SourceURL is validated and normalized by SaveNote itself (FR12): nil
 	// or a pointer to an empty/whitespace-only string persists as SQL NULL
@@ -87,11 +111,11 @@ type researchStore struct{ pool *pgxpool.Pool }
 
 var _ ResearchStore = researchStore{}
 
-const researchNoteColumns = `id, channel_id, idea_id, text, source_url, author_person_id, created_at, COALESCE(idempotency_key, '')`
+const researchNoteColumns = `id, channel_id, idea_id, thread_id, text, source_url, author_person_id, created_at, COALESCE(idempotency_key, '')`
 
 func scanResearchNote(row pgx.Row) (ResearchNote, error) {
 	var n ResearchNote
-	err := row.Scan(&n.ID, &n.ChannelID, &n.IdeaID, &n.Text, &n.SourceURL, &n.AuthorPersonID, &n.CreatedAt, &n.IdempotencyKey)
+	err := row.Scan(&n.ID, &n.ChannelID, &n.IdeaID, &n.ThreadID, &n.Text, &n.SourceURL, &n.AuthorPersonID, &n.CreatedAt, &n.IdempotencyKey)
 	return n, err
 }
 
@@ -124,7 +148,25 @@ func validateSourceURL(raw string) (*string, error) {
 // creating a duplicate (NFR2). SourceURL validation (FR12,
 // validateSourceURL above) runs first, ahead of the idempotency
 // short-circuit below: a replay carrying an invalid source_url errors
-// rather than silently returning the original row.
+// rather than silently returning the original row. That early-return
+// happens BEFORE thread resolution or any relation write below, which is
+// exactly what makes a replay under the same key a no-op rather than a
+// second find-or-create/relation-insert pass (NFR1) -- there is no
+// separate idempotency mechanism for those.
+//
+// Thread resolution (FR4): exactly one of in.ThreadID/in.ThreadTitle must
+// be supplied.
+//   - in.ThreadID: the thread must exist and belong to in.ChannelID; the
+//     note's effective idea_id becomes that thread's IdeaID (Stage 1's
+//     invariant: idea_id and thread_id's idea never disagree).
+//   - in.ThreadTitle: delegates to findOrCreateThreadTx (thread.go) using
+//     in.IdeaID as the natural key's Idea component.
+//
+// Both a bad ThreadID/ThreadTitle combination and every relation
+// validation failure below (FR5/FR6/NFR4) are caught INSIDE one
+// transaction that also holds the note INSERT: any failure past this
+// point rolls the whole call back, so a rejected relation never leaves a
+// partial note/relation write behind.
 func (s researchStore) SaveNote(ctx context.Context, in SaveNoteInput) (ResearchNote, error) {
 	var rawSourceURL string
 	if in.SourceURL != nil {
@@ -149,13 +191,87 @@ func (s researchStore) SaveNote(ctx context.Context, in SaveNoteInput) (Research
 		}
 	}
 
-	note, err := scanResearchNote(s.pool.QueryRow(ctx, `
-		INSERT INTO research_note (channel_id, idea_id, text, source_url, author_person_id, idempotency_key)
-		VALUES ($1, $2, $3, $4, $5, NULLIF($6, ''))
+	haveThreadID := in.ThreadID != nil
+	haveThreadTitle := strings.TrimSpace(in.ThreadTitle) != ""
+	if haveThreadID == haveThreadTitle {
+		return ResearchNote{}, fmt.Errorf("exactly one of thread_id or thread_title must be supplied")
+	}
+
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return ResearchNote{}, fmt.Errorf("begin tx: %w", err)
+	}
+	defer tx.Rollback(ctx) //nolint:errcheck
+
+	var thread ResearchThread
+	if haveThreadID {
+		thread, err = getThreadByIDTx(ctx, tx, *in.ThreadID)
+		if err != nil {
+			if errors.Is(err, pgx.ErrNoRows) {
+				return ResearchNote{}, fmt.Errorf("thread %s does not exist", *in.ThreadID)
+			}
+			return ResearchNote{}, fmt.Errorf("lookup thread: %w", err)
+		}
+		if thread.ChannelID != in.ChannelID {
+			return ResearchNote{}, fmt.Errorf("thread %s does not belong to channel %s", *in.ThreadID, in.ChannelID)
+		}
+	} else {
+		thread, err = findOrCreateThreadTx(ctx, tx, FindOrCreateThreadInput{
+			ChannelID:         in.ChannelID,
+			IdeaID:            in.IdeaID,
+			Title:             in.ThreadTitle,
+			CreatedByPersonID: in.AuthorPersonID,
+		})
+		if err != nil {
+			return ResearchNote{}, fmt.Errorf("find or create thread: %w", err)
+		}
+	}
+
+	// Validate every relation BEFORE the note INSERT (FR5/FR6): a single
+	// invalid entry must leave no note row and no relation rows behind,
+	// and validating first avoids ever inserting a note this call is
+	// about to reject anyway.
+	for _, rel := range in.Relations {
+		if !rel.RelationType.Valid() {
+			return ResearchNote{}, fmt.Errorf("relation_type %q is not a recognized relation type", rel.RelationType)
+		}
+		var relatedThreadID *uuid.UUID
+		err := tx.QueryRow(ctx, `SELECT thread_id FROM research_note WHERE id = $1`, rel.RelatedNoteID).Scan(&relatedThreadID)
+		if err != nil {
+			if errors.Is(err, pgx.ErrNoRows) {
+				return ResearchNote{}, fmt.Errorf("related_note_id %s does not exist", rel.RelatedNoteID)
+			}
+			return ResearchNote{}, fmt.Errorf("lookup related_note_id %s: %w", rel.RelatedNoteID, err)
+		}
+		if relatedThreadID == nil || *relatedThreadID != thread.ID {
+			return ResearchNote{}, fmt.Errorf("related_note_id %s is not in the resolved thread %s", rel.RelatedNoteID, thread.ID)
+		}
+	}
+
+	note, err := scanResearchNote(tx.QueryRow(ctx, `
+		INSERT INTO research_note (channel_id, idea_id, thread_id, text, source_url, author_person_id, idempotency_key)
+		VALUES ($1, $2, $3, $4, $5, $6, NULLIF($7, ''))
 		RETURNING `+researchNoteColumns,
-		in.ChannelID, in.IdeaID, in.Text, sourceURL, in.AuthorPersonID, in.IdempotencyKey))
+		in.ChannelID, thread.IdeaID, thread.ID, in.Text, sourceURL, in.AuthorPersonID, in.IdempotencyKey))
 	if err != nil {
 		return ResearchNote{}, fmt.Errorf("insert research_note: %w", err)
+	}
+
+	for _, rel := range in.Relations {
+		if rel.RelatedNoteID == note.ID {
+			return ResearchNote{}, fmt.Errorf("related_note_id %s must not be the note's own id", rel.RelatedNoteID)
+		}
+		if _, err := tx.Exec(ctx, `
+			INSERT INTO research_note_relation (note_id, related_note_id, relation_type)
+			VALUES ($1, $2, $3)
+			ON CONFLICT (note_id, related_note_id, relation_type) DO NOTHING
+		`, note.ID, rel.RelatedNoteID, rel.RelationType); err != nil {
+			return ResearchNote{}, fmt.Errorf("insert research_note_relation: %w", err)
+		}
+	}
+
+	if err := tx.Commit(ctx); err != nil {
+		return ResearchNote{}, fmt.Errorf("commit: %w", err)
 	}
 	return note, nil
 }
@@ -235,11 +351,11 @@ func (s researchStore) GetByIDs(ctx context.Context, ids []uuid.UUID) (map[uuid.
 // researchNoteWithAuthorColumns mirrors researchNoteColumns, qualified
 // with the rn. alias ListFiltered's JOIN requires, plus the author's
 // display name from `person`.
-const researchNoteWithAuthorColumns = `rn.id, rn.channel_id, rn.idea_id, rn.text, rn.source_url, rn.author_person_id, rn.created_at, COALESCE(rn.idempotency_key, ''), COALESCE(p.display_name, '')`
+const researchNoteWithAuthorColumns = `rn.id, rn.channel_id, rn.idea_id, rn.thread_id, rn.text, rn.source_url, rn.author_person_id, rn.created_at, COALESCE(rn.idempotency_key, ''), COALESCE(p.display_name, '')`
 
 func scanResearchNoteWithAuthor(row pgx.Row) (ResearchNoteWithAuthor, error) {
 	var n ResearchNoteWithAuthor
-	err := row.Scan(&n.ID, &n.ChannelID, &n.IdeaID, &n.Text, &n.SourceURL, &n.AuthorPersonID, &n.CreatedAt, &n.IdempotencyKey, &n.AuthorDisplayName)
+	err := row.Scan(&n.ID, &n.ChannelID, &n.IdeaID, &n.ThreadID, &n.Text, &n.SourceURL, &n.AuthorPersonID, &n.CreatedAt, &n.IdempotencyKey, &n.AuthorDisplayName)
 	return n, err
 }
 
