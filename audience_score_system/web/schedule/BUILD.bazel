@@ -10,10 +10,25 @@ load("//tools:templ.bzl", "templ_library")
 # web/invite's own rationale). Postgres-backed handler coverage (Testing
 # phase, issue #1834) lands as schedule_integration_test.go, mirroring
 # //audience_score_system/web/invite:invite_integration_test.
+#
+# #2036 (FR13-FR15, FR21) adds the video-script AUTHORING surface to this
+# SAME package rather than a new sibling -- create.go (routes/handlers/
+# form data) and markdown.go (FR14's preview renderer) -- see schedule.go's
+# package doc comment addendum for why. markdown.go's renderScriptMarkdown
+# is the one new third-party dependency this task adds
+# (@com_github_yuin_goldmark, added via `go get` + a hand-edited
+# MODULE.bazel/BUILD.bazel because a full-repo `bazel run //:gazelle` was
+# not viable in this environment -- see markdown.go's package doc comment
+# for why goldmark specifically, and NOT a new BUILD.bazel dependency
+# beyond that one package).
 templ_library(
     name = "schedule",
     srcs = glob(["*.templ"]),
-    go_srcs = ["schedule.go"],
+    go_srcs = [
+        "create.go",
+        "markdown.go",
+        "schedule.go",
+    ],
     visibility = [
         "//audience_score_system/citest:__pkg__",
         "//audience_score_system/web:__pkg__",
@@ -24,6 +39,7 @@ templ_library(
         "//audience_score_system/web/components",
         "@com_github_google_uuid//:uuid",
         "@com_github_jackc_pgx_v5//:pgx",
+        "@com_github_yuin_goldmark//:goldmark",
     ],
 )
 

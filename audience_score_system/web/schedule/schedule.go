@@ -42,6 +42,25 @@
 // additionally calls IsPublished (via VideoScriptDetail.Published) to
 // omit the archive affordance from the rendered page once true, so a
 // Founder or Co-Creator is never shown a button that would just error.
+//
+// #2036 (FR13-FR15, FR21, plus the create half of FR18/FR19) adds a
+// video-script AUTHORING surface to this SAME package rather than a new
+// sibling: GET /channels/{id}/scripts/new (create form), POST
+// /channels/{id}/scripts (create submit), and GET
+// /channels/{id}/scripts/{scriptID} (detail/authoring page) -- see
+// create.go and markdown.go. This package already owns
+// /channels/{id}/scripts (HandleList above), and the issue is explicit
+// that the create form and the list must not be split across two
+// packages that both own that path family. Authoring reuses
+// store.VideoScriptStore.Propose and store.CanWrite as-is (LB5/NFR1,
+// identical to save_video_script's MCP path and
+// web/research.Handlers.HandleProposeVideoScript's existing Idea-page
+// entry point) -- no new store method. store.CanWrite (Creator-or-
+// Analyst) gates the create POST; store.CanApprove (Creator-tier only,
+// used by mutate below) is untouched and unrelated -- proposing content
+// and greenlighting/denying/archiving it remain two different authority
+// tiers. Script editing (FR16/FR17) is a deliberately separate follow-on
+// task; create.go's routes are create/detail only.
 package schedule
 
 import (
