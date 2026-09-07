@@ -9,9 +9,10 @@ import (
 	"time"
 
 	"github.com/jackc/pgx/v5"
-	"github.com/whale-net/everything/manmanv2/models"
 	"github.com/whale-net/everything/manmanv2/api/repository"
+	"github.com/whale-net/everything/manmanv2/events"
 	"github.com/whale-net/everything/manmanv2/host/rmq"
+	"github.com/whale-net/everything/manmanv2/models"
 )
 
 // SessionStatusHandler handles status.session.* messages
@@ -154,6 +155,20 @@ func (h *SessionStatusHandler) Handle(ctx context.Context, routingKey string, bo
 		}
 	}
 
+	// Republish every processed transition (unfiltered by status) to the
+	// dedicated manmanv2.htmxsse live exchange, keyed by SGC, for the UI's
+	// live-status consumer. Unlike the external publish above, this fires for
+	// every status, including pending/starting/stopping.
+	if err := h.publisher.PublishLive(ctx, events.TopicForDeployment(msg.SGCID), msg); err != nil {
+		h.logger.Error("failed to publish session status to live exchange",
+			"error", err,
+			"session_id", msg.SessionID,
+			"sgc_id", msg.SGCID,
+			"status", msg.Status,
+		)
+		// Don't fail the message processing if live publish fails
+	}
+
 	h.logger.Info("session status updated successfully",
 		"session_id", msg.SessionID,
 		"status", msg.Status,
@@ -228,6 +243,12 @@ func (h *SessionStatusHandler) checkStaleSessions(ctx context.Context, threshold
 		externalRoutingKey := fmt.Sprintf("manman.session.%s", manman.SessionStatusLost)
 		if err := h.publisher.PublishExternal(ctx, externalRoutingKey, update); err != nil {
 			h.logger.Error("failed to publish lost session event", "session_id", session.SessionID, "error", err)
+		}
+
+		// Republish to the live exchange so the UI's stale-session detection
+		// (server-side crash detection) reaches the browser.
+		if err := h.publisher.PublishLive(ctx, events.TopicForDeployment(update.SGCID), update); err != nil {
+			h.logger.Error("failed to publish lost session event to live exchange", "session_id", session.SessionID, "error", err)
 		}
 	}
 
