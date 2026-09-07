@@ -70,6 +70,8 @@
 //     (FR2, FR9, FR10).
 //   - POST /channels/{id}/research/notes -- HandleSaveNote (FR3, FR6,
 //     FR7).
+//   - POST /channels/{id}/research/ideas -- HandleCreateIdea (#2032,
+//     FR33-FR35).
 //   - POST /channels/{id}/research/ideas/{ideaID}/verdicts --
 //     HandleSaveVerdict (FR4, FR6, FR7).
 //   - POST /channels/{id}/research/ideas/{ideaID}/video-scripts --
@@ -201,6 +203,49 @@ func parseRelationPicks(postForm map[string][]string) []relationFormEntry {
 	}
 	sort.Slice(picks, func(i, j int) bool { return picks[i].RelatedNoteID < picks[j].RelatedNoteID })
 	return picks
+}
+
+// ideaFormData carries the add-idea inline row's (#2032, FR33-FR35)
+// current values through a render: on a plain GET (HandleChannelIndex, via
+// newIdeaFormData) it holds nothing but a freshly minted IdempotencyKey
+// (newIdempotencyKey, NFR2) and Open false (the row renders as its inert
+// "add idea" affordance); on a validation-failure re-render from
+// HandleCreateIdea it additionally carries the submitted Title and an
+// Error message, with the SAME IdempotencyKey the failed POST carried --
+// so a corrected resubmit is still the same logical write (NFR2) -- and
+// Open true, so the row re-renders expanded rather than collapsing back to
+// the inert affordance, mirroring noteFormData's/verdictFormData's
+// identical contract.
+type ideaFormData struct {
+	Title          string
+	IdempotencyKey string
+	Error          string
+	// Open reports whether the inline row should render expanded (editing)
+	// rather than as the inert "add idea" affordance -- true on a
+	// validation-failure re-render (HandleCreateIdea) so the submitted
+	// Title/Error are visible, false on a plain GET (HandleChannelIndex)
+	// and after a successful create (FR35).
+	Open bool
+}
+
+// newIdeaFormData mints a fresh ideaFormData for a plain render -- no
+// submitted content, Open false, just a freshly minted IdempotencyKey
+// (NFR2). Used by HandleChannelIndex's GET and by HandleSaveNote's
+// re-renders (the idea form was not the form that failed, so it gets its
+// own new key rather than reusing HandleSaveNote's), mirroring
+// newVerdictFormData's identical rationale.
+func newIdeaFormData() ideaFormData {
+	return ideaFormData{IdempotencyKey: newIdempotencyKey()}
+}
+
+// ideaFormWithError returns a copy of form with Error set to msg and Open
+// set to true (so the inline row re-renders expanded rather than
+// collapsing), mirroring formWithError's/verdictFormWithError's identical
+// contract for HandleCreateIdea's validation-failure call sites.
+func ideaFormWithError(form ideaFormData, msg string) ideaFormData {
+	form.Error = msg
+	form.Open = true
+	return form
 }
 
 // verdictFormData carries the save-verdict form's (#1901, FR4) current
@@ -361,7 +406,7 @@ func (h *Handlers) HandleChannelIndex(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	h.renderChannelIndex(w, r, person, ch, noteFormData{IdempotencyKey: newIdempotencyKey()}, http.StatusOK)
+	h.renderChannelIndex(w, r, person, ch, noteFormData{IdempotencyKey: newIdempotencyKey()}, newIdeaFormData(), http.StatusOK)
 }
 
 // renderChannelIndex assembles and renders /channels/{id}/research: the
@@ -375,7 +420,12 @@ func (h *Handlers) HandleChannelIndex(w http.ResponseWriter, r *http.Request) {
 // CanRead, mirroring web/schedule.HandleList's canApprove alongside
 // canRead) gates whether ChannelIndex renders the save-note form at all
 // (FR7) -- presentation only, see ChannelIndex's doc comment.
-func (h *Handlers) renderChannelIndex(w http.ResponseWriter, r *http.Request, person *store.Person, ch store.Channel, form noteFormData, status int) {
+//
+// ideaForm (#2032, FR33-FR35) carries the add-idea inline row's current
+// values -- a freshly minted newIdeaFormData() on a plain GET, or (from
+// this task's Implementation phase) the submitted Title/Error/Open on a
+// validation-failure re-render from HandleCreateIdea.
+func (h *Handlers) renderChannelIndex(w http.ResponseWriter, r *http.Request, person *store.Person, ch store.Channel, form noteFormData, ideaForm ideaFormData, status int) {
 	ctx := r.Context()
 	channelID := ch.ID
 
@@ -458,7 +508,7 @@ func (h *Handlers) renderChannelIndex(w http.ResponseWriter, r *http.Request, pe
 	// drawn from, grouped by thread in the view -- no extra store call, and
 	// bounded by the SAME default page every other list on this page
 	// already is (NFR2).
-	if err := components.Render(w, r, title, ChannelIndex(data, ch, ideas, unattached, relationsByNote, noteRefTargets, threads, notes, ideasTruncated, notesTruncated, canWrite, form)); err != nil {
+	if err := components.Render(w, r, title, ChannelIndex(data, ch, ideas, unattached, relationsByNote, noteRefTargets, threads, notes, ideasTruncated, notesTruncated, canWrite, form, ideaForm)); err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 	}
 }
@@ -757,7 +807,7 @@ func (h *Handlers) HandleSaveNote(w http.ResponseWriter, r *http.Request) {
 	if form.IdeaID != "" {
 		parsed, err := uuid.Parse(form.IdeaID)
 		if err != nil {
-			h.renderChannelIndex(w, r, person, ch, formWithError(form, "invalid idea selection"), http.StatusBadRequest)
+			h.renderChannelIndex(w, r, person, ch, formWithError(form, "invalid idea selection"), newIdeaFormData(), http.StatusBadRequest)
 			return
 		}
 		idea, err := h.store.Ideas().GetByID(ctx, parsed)
@@ -765,7 +815,7 @@ func (h *Handlers) HandleSaveNote(w http.ResponseWriter, r *http.Request) {
 			// Same cross-Channel rule as HandleIdeaDetail's, but a 400
 			// here (a form field, not a URL path segment) rather than
 			// that handler's 404.
-			h.renderChannelIndex(w, r, person, ch, formWithError(form, "invalid idea selection"), http.StatusBadRequest)
+			h.renderChannelIndex(w, r, person, ch, formWithError(form, "invalid idea selection"), newIdeaFormData(), http.StatusBadRequest)
 			return
 		}
 		ideaID = &parsed
@@ -778,7 +828,7 @@ func (h *Handlers) HandleSaveNote(w http.ResponseWriter, r *http.Request) {
 			h.renderIdeaDetail(w, r, person, ch, validIdea, formWithError(form, msg), newVerdictFormData(), newProposeFormData(), http.StatusBadRequest)
 			return
 		}
-		h.renderChannelIndex(w, r, person, ch, formWithError(form, msg), http.StatusBadRequest)
+		h.renderChannelIndex(w, r, person, ch, formWithError(form, msg), newIdeaFormData(), http.StatusBadRequest)
 	}
 
 	if text == "" {
@@ -846,6 +896,78 @@ func (h *Handlers) HandleSaveNote(w http.ResponseWriter, r *http.Request) {
 		http.Redirect(w, r, "/channels/"+channelID.String()+"/research/ideas/"+ideaID.String(), http.StatusSeeOther)
 		return
 	}
+	http.Redirect(w, r, "/channels/"+channelID.String()+"/research", http.StatusSeeOther)
+}
+
+// HandleCreateIdea serves POST /channels/{id}/research/ideas (#2032,
+// FR33-FR35): the add-idea inline row's submit target on the Channel
+// research index. Converges through the IDENTICAL
+// store.IdeaStore.FindOrCreate method the create_idea MCP tool already
+// calls (NFR1/LB5 -- one write path, never a parallel one), so a title
+// matching an existing Idea case/whitespace-insensitively converges on
+// that Idea rather than forking identity, exactly like the MCP tool --
+// this handler never distinguishes "created" from "converged" in its
+// response; either way the Idea is simply visible on the re-rendered
+// index (FR35).
+//
+// Field handling:
+//   - title: required, non-empty after strings.TrimSpace; empty/
+//     whitespace-only re-renders the Channel index (400) with the row
+//     expanded (ideaFormWithError sets Open true) and an error, no store
+//     call made.
+//   - idempotency_key: read from the hidden field the rendering GET set
+//     (newIdeaFormData); NOT passed to FindOrCreate, which accepts no such
+//     parameter (NFR1/LB5 -- adding one would be a new/changed store
+//     method). Minted and threaded per NFR2 regardless: FindOrCreate's own
+//     natural-key convergence is what actually makes a same-title replay
+//     idempotent (a resubmitted title always converges on the same Idea),
+//     the key here is belt-and-braces conformance with the form
+//     convention every other write form on this page follows, not a
+//     second dedupe mechanism.
+//
+// Any error FindOrCreate itself returns re-renders the Channel index (400)
+// with the row expanded and the store's own message, mirroring
+// HandleSaveNote's/HandleSaveVerdict's identical contract. On success,
+// 303-redirects back to the Channel index (FR35) -- a GET there always
+// re-renders with the new (or converged-to) Idea in the list and the row
+// back to its inert affordance (form.Open false on a fresh GET).
+func (h *Handlers) HandleCreateIdea(w http.ResponseWriter, r *http.Request) {
+	ctx := r.Context()
+	person, ch, ok := h.authorizeWrite(w, r)
+	if !ok {
+		return
+	}
+	channelID := ch.ID
+
+	if err := r.ParseForm(); err != nil {
+		http.Error(w, "invalid form", http.StatusBadRequest)
+		return
+	}
+
+	form := ideaFormData{
+		IdempotencyKey: r.FormValue("idempotency_key"),
+		Title:          r.FormValue("title"),
+	}
+
+	renderErr := func(msg string) {
+		// The save-note form was not the form that failed here -- it gets
+		// its own freshly minted key rather than reusing idea's, mirroring
+		// HandleSaveVerdict's identical rationale for the other forms on
+		// its page.
+		h.renderChannelIndex(w, r, person, ch, noteFormData{IdempotencyKey: newIdempotencyKey()}, ideaFormWithError(form, msg), http.StatusBadRequest)
+	}
+
+	title := strings.TrimSpace(form.Title)
+	if title == "" {
+		renderErr("idea title is required")
+		return
+	}
+
+	if _, err := h.store.Ideas().FindOrCreate(ctx, channelID, title, person.ID); err != nil {
+		renderErr(err.Error())
+		return
+	}
+
 	http.Redirect(w, r, "/channels/"+channelID.String()+"/research", http.StatusSeeOther)
 }
 

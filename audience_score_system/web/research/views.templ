@@ -89,12 +89,24 @@ func authorName(names map[uuid.UUID]string, personID uuid.UUID) string {
 // expanded. Per-navigation default-collapsed only -- no cookie,
 // localStorage, or server-side preference persists the expanded state
 // (root plan #1963, Out of scope).
-templ ChannelIndex(data components.LayoutData, ch store.Channel, ideas []store.IdeaSummary, unattachedNotes []store.ResearchNoteWithAuthor, relationsByNote map[uuid.UUID][]store.NoteRelation, noteRefTargets map[uuid.UUID]*uuid.UUID, threads []store.ThreadSummary, priorNotes []store.ResearchNoteWithAuthor, ideasTruncated bool, notesTruncated bool, canWrite bool, form noteFormData) {
+//
+// ideaForm (#2032, FR33-FR35) carries the add-idea inline row's current
+// values, rendered by addIdeaRow below inside the Idea table only when
+// canWrite is true (same gate as the save-note form's, PRESENTATION ONLY --
+// the actual authorization boundary is research.go's authorizeWrite,
+// re-derived fresh from Postgres on every POST
+// /channels/{id}/research/ideas). addIdeaRow's no-JS <details> disclosure
+// toggles between the inert "+ Add idea" affordance and the expanded
+// title-only row (FR33); HandleCreateIdea's authorizeWrite + title
+// validation + IdeaStore.FindOrCreate call, and the re-render-on-success
+// (via a 303 redirect back here) / re-render-on-error paths, are
+// research.go's HandleCreateIdea (FR34, FR35).
+templ ChannelIndex(data components.LayoutData, ch store.Channel, ideas []store.IdeaSummary, unattachedNotes []store.ResearchNoteWithAuthor, relationsByNote map[uuid.UUID][]store.NoteRelation, noteRefTargets map[uuid.UUID]*uuid.UUID, threads []store.ThreadSummary, priorNotes []store.ResearchNoteWithAuthor, ideasTruncated bool, notesTruncated bool, canWrite bool, form noteFormData, ideaForm ideaFormData) {
 	@components.Layout(data) {
 		<div class="card bg-base-100 border border-base-300 shadow-sm">
 			<div class="card-body">
 				<h1 class="card-title">{ ch.Title } research</h1>
-				if len(ideas) == 0 {
+				if len(ideas) == 0 && !canWrite {
 					<p class="text-base-content/70">No ideas recorded yet.</p>
 				} else {
 					<div class="overflow-x-auto">
@@ -109,6 +121,9 @@ templ ChannelIndex(data components.LayoutData, ch store.Channel, ideas []store.I
 							<tbody>
 								for _, idea := range ideas {
 									@ideaRow(ch, idea)
+								}
+								if canWrite {
+									@addIdeaRow(ch, ideaForm)
 								}
 							</tbody>
 						</table>
@@ -444,6 +459,40 @@ templ ideaRow(ch store.Channel, idea store.IdeaSummary) {
 			} else {
 				<span title="No verdict yet" aria-label="No verdict yet">{ components.NoVerdictGlyph }</span>
 			}
+		</td>
+	</tr>
+}
+
+// addIdeaRow renders the add-idea inline row (#2032, FR33-FR35): the last
+// row of ChannelIndex's Idea table, rendered only when canWrite is true
+// (ChannelIndex's doc comment -- presentation only, the actual
+// authorization boundary is research.go's authorizeWrite). A native
+// <details>/<summary> disclosure (no JS, same idiom as the "Unattached
+// notes" collapse above) toggles between the inert "+ Add idea" affordance
+// (FR33) and the expanded title-only form -- never a modal, never a
+// separate page. form.Open (false on a plain GET/after a successful
+// create, true on a validation-failure re-render from HandleCreateIdea)
+// drives whether the disclosure starts open, so a rejected submission's
+// Title/Error stay visible rather than collapsing away (mirrors
+// noteFormData's/verdictFormData's identical re-render contract).
+templ addIdeaRow(ch store.Channel, form ideaFormData) {
+	<tr>
+		<td colspan="3">
+			<details class="collapse collapse-arrow bg-base-100" open?={ form.Open }>
+				<summary class="collapse-title min-h-0 py-1 text-sm font-medium text-primary cursor-pointer">
+					+ Add idea
+				</summary>
+				<div class="collapse-content">
+					<form method="post" action={ templ.URL("/channels/" + ch.ID.String() + "/research/ideas") } class="flex items-center gap-2">
+						if form.Error != "" {
+							<p class="text-error text-sm">{ form.Error }</p>
+						}
+						<input type="hidden" name="idempotency_key" value={ form.IdempotencyKey }/>
+						<input type="text" name="title" class="input input-bordered input-sm w-full max-w-xs" placeholder="New idea title" value={ form.Title }/>
+						<button type="submit" class="btn btn-primary btn-sm">Add idea</button>
+					</form>
+				</div>
+			</details>
 		</td>
 	</tr>
 }
