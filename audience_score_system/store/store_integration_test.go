@@ -1646,7 +1646,7 @@ func TestResearchStore_ListFiltered_IdeaIDFiltersByResolvingThreadNotNoteColumn(
 	})
 	require.NoError(t, err)
 
-	scoped, truncated, err := s.Research().ListFiltered(ctx, ch.ID, &idea1.ID, nil, nil, nil, 0)
+	scoped, truncated, err := s.Research().ListFiltered(ctx, ch.ID, &idea1.ID, nil, false, nil, nil, 0)
 	require.NoError(t, err)
 	assert.False(t, truncated)
 	ids := make([]uuid.UUID, len(scoped))
@@ -1655,7 +1655,7 @@ func TestResearchStore_ListFiltered_IdeaIDFiltersByResolvingThreadNotNoteColumn(
 	}
 	assert.Equal(t, []uuid.UUID{note1.ID}, ids, "ListFiltered(ideaID) must return exactly the notes whose THREAD belongs to that idea -- neither idea2's note nor the no-idea note")
 
-	all, _, err := s.Research().ListFiltered(ctx, ch.ID, nil, nil, nil, nil, 0)
+	all, _, err := s.Research().ListFiltered(ctx, ch.ID, nil, nil, false, nil, nil, 0)
 	require.NoError(t, err)
 	assert.Len(t, all, 3, "sanity: unfiltered must still see all three notes")
 	_ = note2
@@ -1750,7 +1750,7 @@ func TestResearchStore_BackfilledPreMigrationNoteReportsSameIdeaIDAfterCutover(t
 	require.NotNil(t, got.IdeaID, "a backfilled note's joined read must still resolve an IdeaID")
 	assert.Equal(t, idea.ID, *got.IdeaID, "a backfilled pre-migration note must report the SAME IdeaID after the cutover (via rt.idea_id) as it did before it (via rn.idea_id directly) -- migration 016's backfill guarantees rt.idea_id agrees with the original rn.idea_id for every backfilled row")
 
-	listed, _, err := s.Research().ListFiltered(ctx, ch.ID, &idea.ID, nil, nil, nil, 0)
+	listed, _, err := s.Research().ListFiltered(ctx, ch.ID, &idea.ID, nil, false, nil, nil, 0)
 	require.NoError(t, err)
 	found := false
 	for _, n := range listed {
@@ -1941,6 +1941,320 @@ func TestResearchStore_RetiredNoteIDs_FiveNoteIDs_IsSingleQuery(t *testing.T) {
 	assert.Equal(t, []store.RelationType{store.RelationExcludes}, retired[noteIDs[1]])
 
 	assert.Equal(t, int64(1), counter.n.Load(), "resolving 5 note ids must issue exactly ONE SQL statement, never one per id")
+}
+
+// ── ListFiltered currentOnly (FR8, root plan #1934, this task #1941) ───────
+//
+// v_current_research_note (migration 016) defines "current" as: NOT the
+// related_note_id target of any 'supersedes'/'excludes' relation. These
+// tests prove ListFiltered's currentOnly=true parameter is backed by that
+// view -- not a re-derived predicate in Go (FR16/NFR2) -- and that every
+// other filter (idea_id, cited/uncited, since/before, limit) still composes
+// with it rather than being bypassed.
+//
+// Note: ListFiltered/list_research_notes has no thread_id filter parameter
+// (see mcp/tools/research.go's ListResearchNotesInput and every ListFiltered
+// call site) -- FR6's DB trigger already confines every relation to a single
+// thread, so there is no separate "thread_id" axis to compose currentOnly
+// against here; the idea_id composition test below (which spans two
+// different threads under two different Ideas) already exercises
+// currentOnly not leaking across thread boundaries.
+
+// researchNoteIDs extracts just the IDs from a ListFiltered result, in the
+// order returned, for order-agnostic (assert.Contains/NotContains) or
+// order-sensitive (assert.Equal) assertions below.
+func researchNoteIDs(notes []store.ResearchNoteWithAuthor) []uuid.UUID {
+	ids := make([]uuid.UUID, len(notes))
+	for i, n := range notes {
+		ids[i] = n.ID
+	}
+	return ids
+}
+
+// TestResearchStore_ListFiltered_CurrentOnlyDefaultFalseIncludesRetiredNotes
+// proves the pre-FR8 behaviour is preserved byte-for-byte when currentOnly
+// is false: a note superseded by a later one is still returned, exactly as
+// before this task landed.
+func TestResearchStore_ListFiltered_CurrentOnlyDefaultFalseIncludesRetiredNotes(t *testing.T) {
+	ctx := context.Background()
+	s, _ := newStore(t)
+	ch, creator := setupChannel(t, ctx, s)
+
+	target, err := s.Research().SaveNote(ctx, store.SaveNoteInput{
+		ChannelID: ch.ID, ThreadTitle: "Thread", Text: "target note", AuthorPersonID: creator.ID,
+	})
+	require.NoError(t, err)
+	_, err = s.Research().SaveNote(ctx, store.SaveNoteInput{
+		ChannelID: ch.ID, ThreadID: target.ThreadID, Text: "supersedes target", AuthorPersonID: creator.ID,
+		Relations: []store.SaveNoteRelationInput{{RelatedNoteID: target.ID, RelationType: store.RelationSupersedes}},
+	})
+	require.NoError(t, err)
+
+	all, truncated, err := s.Research().ListFiltered(ctx, ch.ID, nil, nil, false, nil, nil, 0)
+	require.NoError(t, err)
+	assert.False(t, truncated)
+	assert.Len(t, all, 2, "currentOnly=false must return every note including retired ones, exactly as before FR8")
+	assert.Contains(t, researchNoteIDs(all), target.ID)
+}
+
+// TestResearchStore_ListFiltered_CurrentOnlyPerRelationType is one test per
+// relation_type, per the issue's Testing section: 'supersedes' and
+// 'excludes' must retire their target under currentOnly=true; 'caveats',
+// 'follows_up', and 'summarizes' must NOT -- this is exactly the
+// distinction FR7/FR8 turn on.
+func TestResearchStore_ListFiltered_CurrentOnlyPerRelationType(t *testing.T) {
+	tests := []struct {
+		name         string
+		relationType store.RelationType
+		retires      bool
+	}{
+		{"supersedes retires its target", store.RelationSupersedes, true},
+		{"excludes retires its target", store.RelationExcludes, true},
+		{"caveats does not retire its target", store.RelationCaveats, false},
+		{"follows_up does not retire its target", store.RelationFollowsUp, false},
+		{"summarizes does not retire its target", store.RelationSummarizes, false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			ctx := context.Background()
+			s, _ := newStore(t)
+			ch, creator := setupChannel(t, ctx, s)
+
+			target, err := s.Research().SaveNote(ctx, store.SaveNoteInput{
+				ChannelID: ch.ID, ThreadTitle: "Thread", Text: "target note", AuthorPersonID: creator.ID,
+			})
+			require.NoError(t, err)
+			later, err := s.Research().SaveNote(ctx, store.SaveNoteInput{
+				ChannelID: ch.ID, ThreadID: target.ThreadID, Text: "later note", AuthorPersonID: creator.ID,
+				Relations: []store.SaveNoteRelationInput{{RelatedNoteID: target.ID, RelationType: tt.relationType}},
+			})
+			require.NoError(t, err)
+
+			current, _, err := s.Research().ListFiltered(ctx, ch.ID, nil, nil, true, nil, nil, 0)
+			require.NoError(t, err)
+			ids := researchNoteIDs(current)
+
+			assert.Contains(t, ids, later.ID, "the note carrying the relation must never be excluded by being its source")
+			if tt.retires {
+				assert.NotContains(t, ids, target.ID, "%s must exclude its related_note_id target from currentOnly", tt.relationType)
+			} else {
+				assert.Contains(t, ids, target.ID, "%s must NOT exclude its related_note_id target from currentOnly", tt.relationType)
+			}
+		})
+	}
+}
+
+// TestResearchStore_ListFiltered_CurrentOnlySupersedeChainLeavesOnlyNewest
+// proves the issue's 3-long supersedes-chain case: A <- B <- C (B
+// supersedes A, C supersedes B) leaves only C current -- no transitive
+// closure logic is needed because each edge retires its own direct target
+// (migration 016's comment), so this also guards that the chain's middle
+// link (B) doesn't slip back in just because it does the superseding.
+func TestResearchStore_ListFiltered_CurrentOnlySupersedeChainLeavesOnlyNewest(t *testing.T) {
+	ctx := context.Background()
+	s, _ := newStore(t)
+	ch, creator := setupChannel(t, ctx, s)
+
+	a, err := s.Research().SaveNote(ctx, store.SaveNoteInput{
+		ChannelID: ch.ID, ThreadTitle: "Chain", Text: "A", AuthorPersonID: creator.ID,
+	})
+	require.NoError(t, err)
+	b, err := s.Research().SaveNote(ctx, store.SaveNoteInput{
+		ChannelID: ch.ID, ThreadID: a.ThreadID, Text: "B supersedes A", AuthorPersonID: creator.ID,
+		Relations: []store.SaveNoteRelationInput{{RelatedNoteID: a.ID, RelationType: store.RelationSupersedes}},
+	})
+	require.NoError(t, err)
+	c, err := s.Research().SaveNote(ctx, store.SaveNoteInput{
+		ChannelID: ch.ID, ThreadID: a.ThreadID, Text: "C supersedes B", AuthorPersonID: creator.ID,
+		Relations: []store.SaveNoteRelationInput{{RelatedNoteID: b.ID, RelationType: store.RelationSupersedes}},
+	})
+	require.NoError(t, err)
+
+	current, _, err := s.Research().ListFiltered(ctx, ch.ID, nil, nil, true, nil, nil, 0)
+	require.NoError(t, err)
+	assert.Equal(t, []uuid.UUID{c.ID}, researchNoteIDs(current), "a 3-long supersedes chain must leave only the newest note current")
+}
+
+// TestResearchStore_ListFiltered_CurrentOnlyComposesWithIdeaID proves
+// currentOnly narrows WITHIN the idea_id filter rather than replacing it --
+// two different Ideas each get their own independent supersede chain, and
+// scoping to one Idea must never leak the other Idea's current note.
+func TestResearchStore_ListFiltered_CurrentOnlyComposesWithIdeaID(t *testing.T) {
+	ctx := context.Background()
+	s, _ := newStore(t)
+	ch, creator := setupChannel(t, ctx, s)
+	idea1, err := s.Ideas().Create(ctx, ch.ID, "Idea one", creator.ID)
+	require.NoError(t, err)
+	idea2, err := s.Ideas().Create(ctx, ch.ID, "Idea two", creator.ID)
+	require.NoError(t, err)
+
+	idea1Target, err := s.Research().SaveNote(ctx, store.SaveNoteInput{
+		ChannelID: ch.ID, IdeaID: &idea1.ID, ThreadTitle: "Idea one's thread", Text: "idea1 target", AuthorPersonID: creator.ID,
+	})
+	require.NoError(t, err)
+	idea1Current, err := s.Research().SaveNote(ctx, store.SaveNoteInput{
+		ChannelID: ch.ID, ThreadID: idea1Target.ThreadID, Text: "idea1 supersedes", AuthorPersonID: creator.ID,
+		Relations: []store.SaveNoteRelationInput{{RelatedNoteID: idea1Target.ID, RelationType: store.RelationSupersedes}},
+	})
+	require.NoError(t, err)
+	idea2Current, err := s.Research().SaveNote(ctx, store.SaveNoteInput{
+		ChannelID: ch.ID, IdeaID: &idea2.ID, ThreadTitle: "Idea two's thread", Text: "idea2 note", AuthorPersonID: creator.ID,
+	})
+	require.NoError(t, err)
+
+	scoped, _, err := s.Research().ListFiltered(ctx, ch.ID, &idea1.ID, nil, true, nil, nil, 0)
+	require.NoError(t, err)
+	assert.Equal(t, []uuid.UUID{idea1Current.ID}, researchNoteIDs(scoped), "idea_id + currentOnly must return only idea1's current note, neither its own retired note nor idea2's")
+
+	other, _, err := s.Research().ListFiltered(ctx, ch.ID, &idea2.ID, nil, true, nil, nil, 0)
+	require.NoError(t, err)
+	assert.Equal(t, []uuid.UUID{idea2Current.ID}, researchNoteIDs(other))
+}
+
+// TestResearchStore_ListFiltered_CurrentOnlyComposesWithCitedAndUncited
+// proves currentOnly narrows the cited/uncited partition rather than
+// replacing it: a CITED note that gets superseded must not appear even
+// under cited_only, and the UNCITED note that supersedes it must appear
+// under uncited_only.
+func TestResearchStore_ListFiltered_CurrentOnlyComposesWithCitedAndUncited(t *testing.T) {
+	ctx := context.Background()
+	s, _ := newStore(t)
+	ch, creator := setupChannel(t, ctx, s)
+
+	url := "https://example.com/retired-source"
+	citedTarget, err := s.Research().SaveNote(ctx, store.SaveNoteInput{
+		ChannelID: ch.ID, ThreadTitle: "Thread", Text: "cited but retired", SourceURL: &url, AuthorPersonID: creator.ID,
+	})
+	require.NoError(t, err)
+	uncitedSuperseder, err := s.Research().SaveNote(ctx, store.SaveNoteInput{
+		ChannelID: ch.ID, ThreadID: citedTarget.ThreadID, Text: "uncited, supersedes the cited note", AuthorPersonID: creator.ID,
+		Relations: []store.SaveNoteRelationInput{{RelatedNoteID: citedTarget.ID, RelationType: store.RelationSupersedes}},
+	})
+	require.NoError(t, err)
+
+	cited := true
+	citedAndCurrent, _, err := s.Research().ListFiltered(ctx, ch.ID, nil, &cited, true, nil, nil, 0)
+	require.NoError(t, err)
+	assert.Empty(t, citedAndCurrent, "the only cited note is retired -- cited_only + currentOnly must return nothing")
+
+	uncited := false
+	uncitedAndCurrent, _, err := s.Research().ListFiltered(ctx, ch.ID, nil, &uncited, true, nil, nil, 0)
+	require.NoError(t, err)
+	assert.Equal(t, []uuid.UUID{uncitedSuperseder.ID}, researchNoteIDs(uncitedAndCurrent), "uncited_only + currentOnly must return the current uncited note")
+}
+
+// TestResearchStore_ListFiltered_CurrentOnlyComposesWithSinceBefore proves
+// currentOnly narrows the since/before created_at window rather than
+// replacing it. created_at is backdated via direct SQL (SaveNote itself has
+// no created_at input) so the since/before boundary lands deterministically
+// between the three notes.
+func TestResearchStore_ListFiltered_CurrentOnlyComposesWithSinceBefore(t *testing.T) {
+	ctx := context.Background()
+	s, db := newStore(t)
+	ch, creator := setupChannel(t, ctx, s)
+
+	tooOld, err := s.Research().SaveNote(ctx, store.SaveNoteInput{
+		ChannelID: ch.ID, ThreadTitle: "Thread", Text: "too old, outside the window", AuthorPersonID: creator.ID,
+	})
+	require.NoError(t, err)
+	target, err := s.Research().SaveNote(ctx, store.SaveNoteInput{
+		ChannelID: ch.ID, ThreadID: tooOld.ThreadID, Text: "in window, but retired", AuthorPersonID: creator.ID,
+	})
+	require.NoError(t, err)
+	inWindow, err := s.Research().SaveNote(ctx, store.SaveNoteInput{
+		ChannelID: ch.ID, ThreadID: tooOld.ThreadID, Text: "in window, supersedes target", AuthorPersonID: creator.ID,
+		Relations: []store.SaveNoteRelationInput{{RelatedNoteID: target.ID, RelationType: store.RelationSupersedes}},
+	})
+	require.NoError(t, err)
+
+	base := time.Now().UTC().Truncate(time.Second)
+	setResearchNoteCreatedAt(t, ctx, db, tooOld.ID, base)
+	setResearchNoteCreatedAt(t, ctx, db, target.ID, base.Add(time.Minute))
+	setResearchNoteCreatedAt(t, ctx, db, inWindow.ID, base.Add(2*time.Minute))
+
+	since := base.Add(30 * time.Second)
+	windowed, _, err := s.Research().ListFiltered(ctx, ch.ID, nil, nil, true, &since, nil, 0)
+	require.NoError(t, err)
+	assert.Equal(t, []uuid.UUID{inWindow.ID}, researchNoteIDs(windowed), "since must exclude tooOld and currentOnly must exclude the retired target, leaving only inWindow")
+
+	before := base.Add(90 * time.Second)
+	windowed2, _, err := s.Research().ListFiltered(ctx, ch.ID, nil, nil, true, nil, &before, 0)
+	require.NoError(t, err)
+	assert.Equal(t, []uuid.UUID{tooOld.ID}, researchNoteIDs(windowed2), "before must exclude inWindow (created_at >= before), and currentOnly must exclude the retired target -- leaving only tooOld")
+}
+
+// setResearchNoteCreatedAt backdates a research_note's created_at directly
+// via SQL -- SaveNote has no created_at input, and the since/before
+// composition test above needs deterministic, distinctly-ordered
+// timestamps rather than whatever wall-clock time three back-to-back
+// SaveNote calls happen to land on.
+func setResearchNoteCreatedAt(t *testing.T, ctx context.Context, db *dbtest.Postgres, noteID uuid.UUID, at time.Time) {
+	t.Helper()
+	_, err := db.Pool.Exec(ctx, `UPDATE research_note SET created_at = $1 WHERE id = $2`, at, noteID)
+	require.NoError(t, err)
+}
+
+// TestResearchStore_ListFiltered_CurrentOnlyComposesWithLimitTruncated is
+// also this task's named red/green regression test (issue #1941's Testing
+// section): it proves truncated is computed over the currentOnly-FILTERED
+// set, not the raw one. Five notes are seeded, most-recent first:
+// superseder, target (retired by superseder), c3, c2, c1 -- so the raw
+// (currentOnly=false) top-4-by-created_at window is [superseder, target,
+// c3, c2], with the retired "target" occupying a slot inside that window.
+//
+// Implementing currentOnly as a post-query Go filter over an unbounded (or
+// raw-table-bounded) fetch was verified to make this go red while authoring
+// it: fetchLimit(3) issued against the RAW research_note table returns
+// LIMIT 4 rows = [superseder, target, c3, c2]; filtering "target" out in Go
+// afterward leaves exactly 3 rows -- paginate then sees len(rows)==limit
+// and reports truncated=false, even though c1 (never fetched at all) is a
+// fourth current note beyond the limit. Selecting FROM
+// v_current_research_note instead (the reverted, correct code below) makes
+// the LIMIT itself apply to the already-current-filtered set, so the
+// database -- not a Go loop -- decides truncation, and this assertion goes
+// green.
+func TestResearchStore_ListFiltered_CurrentOnlyComposesWithLimitTruncated(t *testing.T) {
+	ctx := context.Background()
+	s, db := newStore(t)
+	ch, creator := setupChannel(t, ctx, s)
+
+	c1, err := s.Research().SaveNote(ctx, store.SaveNoteInput{ChannelID: ch.ID, ThreadTitle: "Thread", Text: "c1", AuthorPersonID: creator.ID})
+	require.NoError(t, err)
+	c2, err := s.Research().SaveNote(ctx, store.SaveNoteInput{ChannelID: ch.ID, ThreadID: c1.ThreadID, Text: "c2", AuthorPersonID: creator.ID})
+	require.NoError(t, err)
+	c3, err := s.Research().SaveNote(ctx, store.SaveNoteInput{ChannelID: ch.ID, ThreadID: c1.ThreadID, Text: "c3", AuthorPersonID: creator.ID})
+	require.NoError(t, err)
+	target, err := s.Research().SaveNote(ctx, store.SaveNoteInput{ChannelID: ch.ID, ThreadID: c1.ThreadID, Text: "target", AuthorPersonID: creator.ID})
+	require.NoError(t, err)
+	superseder, err := s.Research().SaveNote(ctx, store.SaveNoteInput{
+		ChannelID: ch.ID, ThreadID: c1.ThreadID, Text: "superseder", AuthorPersonID: creator.ID,
+		Relations: []store.SaveNoteRelationInput{{RelatedNoteID: target.ID, RelationType: store.RelationSupersedes}},
+	})
+	require.NoError(t, err)
+
+	// created_at ascending: c1, c2, c3, target, superseder -- so DESC
+	// (most-recent-first, ListFiltered's order) is:
+	// superseder, target, c3, c2, c1.
+	base := time.Now().UTC().Truncate(time.Second)
+	setResearchNoteCreatedAt(t, ctx, db, c1.ID, base)
+	setResearchNoteCreatedAt(t, ctx, db, c2.ID, base.Add(time.Minute))
+	setResearchNoteCreatedAt(t, ctx, db, c3.ID, base.Add(2*time.Minute))
+	setResearchNoteCreatedAt(t, ctx, db, target.ID, base.Add(3*time.Minute))
+	setResearchNoteCreatedAt(t, ctx, db, superseder.ID, base.Add(4*time.Minute))
+
+	page, truncated, err := s.Research().ListFiltered(ctx, ch.ID, nil, nil, true, nil, nil, 3)
+	require.NoError(t, err)
+	assert.Equal(t, []uuid.UUID{superseder.ID, c3.ID, c2.ID}, researchNoteIDs(page), "the current-filtered page must be the 3 most recent CURRENT notes, skipping the retired target entirely")
+	assert.True(t, truncated, "c1 is a 4th current note beyond limit=3 -- truncated must reflect the currentOnly-filtered count, not the raw 5-row count minus the page size")
+
+	// Sanity: currentOnly=false over the same 5 raw rows at limit=3 is
+	// truncated for a different (also true) reason, so the assertion above
+	// is specifically about the currentOnly-filtered count, not a
+	// coincidence of the raw count also exceeding 3.
+	rawPage, rawTruncated, err := s.Research().ListFiltered(ctx, ch.ID, nil, nil, false, nil, nil, 3)
+	require.NoError(t, err)
+	assert.Len(t, rawPage, 3)
+	assert.True(t, rawTruncated)
 }
 
 // ── SyncStore (FR14/FR21) ────────────────────────────────────────────────────
