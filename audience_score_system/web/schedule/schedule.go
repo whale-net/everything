@@ -147,9 +147,20 @@ func (h *Handlers) HandleList(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// canWrite (Creator-or-Analyst, #2036 FR13/FR19) gates the "+ New
+	// video script" link -- a separate, lower tier than canApprove above;
+	// it is never used to gate anything on THIS page besides that one
+	// link (the create form itself re-derives store.CanWrite again,
+	// independently, in HandleNewScript/HandleCreateScript).
+	canWrite, err := store.CanWrite(ctx, h.store.Roles(), channelID, person.ID)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+
 	title := ch.Title + " scripts"
 	data := components.LayoutData{Title: title, User: person}
-	if err := components.Render(w, r, title, List(data, ch, scripts, canApprove)); err != nil {
+	if err := components.Render(w, r, title, List(data, ch, scripts, canApprove, canWrite)); err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 	}
 }

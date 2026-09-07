@@ -42,16 +42,21 @@ func statusBadgeClass(s store.VideoScriptStatus) string {
 // symmetrically per FR32, NFR5) gates whether entryActions renders at
 // all; an Analyst (canApprove == false) sees a read-only list with no
 // greenlight/deny/archive forms anywhere in the markup.
-templ List(data components.LayoutData, ch store.Channel, scripts []store.VideoScriptDetail, canApprove bool) {
+templ List(data components.LayoutData, ch store.Channel, scripts []store.VideoScriptDetail, canApprove bool, canWrite bool) {
 	@components.Layout(data) {
 		<div class="card bg-base-100 border border-base-300 shadow-sm">
 			<div class="card-body">
-				<h1 class="card-title">{ ch.Title } scripts</h1>
+				<div class="flex justify-between items-center">
+					<h1 class="card-title">{ ch.Title } scripts</h1>
+					if canWrite {
+						<a class="btn btn-primary btn-sm" href={ templ.URL("/channels/" + ch.ID.String() + "/scripts/new") }>+ New video script</a>
+					}
+				</div>
 				if len(scripts) == 0 {
 					<p class="text-base-content/70">No video scripts yet.</p>
 				}
 				for _, s := range scripts {
-					@scriptCard(s, canApprove)
+					@scriptCard(ch, s, canApprove)
 				}
 			</div>
 		</div>
@@ -64,11 +69,13 @@ templ List(data components.LayoutData, ch store.Channel, scripts []store.VideoSc
 // -- an undated script is normal per FR36), status badge, decider (when
 // set), the published video link (when s.Published), and -- for a
 // Founder or Co-Creator -- entryActions.
-templ scriptCard(s store.VideoScriptDetail, canApprove bool) {
+templ scriptCard(ch store.Channel, s store.VideoScriptDetail, canApprove bool) {
 	<div class="border border-base-300 rounded p-4 mb-2">
 		<div class="flex justify-between items-start gap-4">
 			<div>
-				<h2 class="font-semibold">{ s.Script.Title }</h2>
+				<h2 class="font-semibold">
+					<a class="link" href={ templ.URL("/channels/" + ch.ID.String() + "/scripts/" + s.Script.ID.String()) }>{ s.Script.Title }</a>
+				</h2>
 				<p class="text-sm text-base-content/70">
 					Verdict v{ strconv.Itoa(s.VerdictVersion) }: { string(s.Verdict) }
 				</p>
@@ -121,4 +128,151 @@ templ entryActions(s store.VideoScriptDetail) {
 			}
 		}
 	</div>
+}
+
+// NewScript is GET /channels/{id}/scripts/new's page (#2036, FR13, FR14,
+// FR21): a link back to the scripts list, then either newScriptForm
+// (canWrite) or a plain "no permission" notice (a CanRead-but-not-
+// CanWrite persona -- not reachable given store/authz.go's current
+// definitions, but rendered correctly regardless, mirroring List's
+// canApprove-gates-affordances pattern one tier down).
+templ NewScript(data components.LayoutData, ch store.Channel, verdicts []viableVerdictOption, strategies []store.StrategyDetail, canWrite bool, form scriptFormData) {
+	@components.Layout(data) {
+		<div class="card bg-base-100 border border-base-300 shadow-sm">
+			<div class="card-body">
+				<p>
+					<a class="link" href={ templ.URL("/channels/" + ch.ID.String() + "/scripts") }>&larr; Back to scripts</a>
+				</p>
+				<h1 class="card-title">{ ch.Title } -- new video script</h1>
+				if !canWrite {
+					<p class="text-base-content/70 mt-2">You do not have permission to create a video script on this Channel.</p>
+				} else {
+					@newScriptForm(ch, verdicts, strategies, form)
+				}
+			</div>
+		</div>
+	}
+}
+
+// newScriptForm is the create form itself (#2036, FR13, FR14, FR18/NFR2).
+//
+// FR13: when strategies is empty AND there is no error to show (a plain
+// GET, or a re-render for the preview/edit toggle -- never itself the
+// thing that failed), this renders zeroActiveStrategyMessage and NO form
+// at all, rather than an empty Strategy picker that could only ever fail
+// at submit. NFR3-style: when form.Error is non-empty, the form (with its
+// error and preserved values) always renders even if strategies is now
+// empty -- e.g. the submitted strategy_id's row was deactivated between
+// render and submit -- so the rejection reason and the user's other field
+// values are never silently dropped.
+//
+// FR14: the verdict_id/strategy_id/title fields are always visible;
+// script_text toggles between a plain editable textarea (form.Preview
+// false) and a sanitized rendered-HTML block (form.Preview true, injected
+// via templ.Raw -- form.PreviewHTML is markdown.go's renderScriptMarkdown
+// output, computed server-side by renderNewScript, never client-supplied)
+// with the raw text preserved in a hidden input so a later "Edit" or
+// "Create script" submit still carries it. Both the "Preview"/"Edit"
+// toggle buttons and "Create script" submit the SAME form to the SAME
+// action -- HandleCreateScript's submit_action field is what
+// distinguishes a mode toggle (no store call) from a real create attempt.
+templ newScriptForm(ch store.Channel, verdicts []viableVerdictOption, strategies []store.StrategyDetail, form scriptFormData) {
+	if len(strategies) == 0 && form.Error == "" {
+		<p class="text-base-content/70 mt-2">{ zeroActiveStrategyMessage }</p>
+	} else {
+		<form method="post" action={ templ.URL("/channels/" + ch.ID.String() + "/scripts") } class="mt-2 space-y-2">
+			if form.Error != "" {
+				<p class="text-error text-sm">{ form.Error }</p>
+			}
+			<input type="hidden" name="idempotency_key" value={ form.IdempotencyKey }/>
+			<div class="form-control">
+				<label class="label">
+					<span class="label-text">Verdict</span>
+				</label>
+				<select name="verdict_id" class="select select-bordered w-full" required>
+					<option value="" disabled selected?={ form.VerdictID == "" }>Choose a viable verdict...</option>
+					for _, v := range verdicts {
+						<option value={ v.VerdictID.String() } selected?={ form.VerdictID == v.VerdictID.String() }>
+							{ v.IdeaTitle } (v{ strconv.Itoa(v.Version) }, viable)
+						</option>
+					}
+				</select>
+			</div>
+			<div class="form-control mt-2">
+				<label class="label">
+					<span class="label-text">Strategy</span>
+				</label>
+				<select name="strategy_id" class="select select-bordered w-full" required>
+					<option value="" disabled selected?={ form.StrategyID == "" }>Choose a strategy...</option>
+					for _, s := range strategies {
+						<option value={ s.ID.String() } selected?={ form.StrategyID == s.ID.String() }>{ s.Title }</option>
+					}
+				</select>
+			</div>
+			<div class="form-control mt-2">
+				<label class="label">
+					<span class="label-text">Title</span>
+				</label>
+				<input type="text" name="title" class="input input-bordered w-full" value={ form.Title } required/>
+			</div>
+			<div class="form-control mt-2">
+				<label class="label">
+					<span class="label-text">Script</span>
+				</label>
+				if form.Preview {
+					<input type="hidden" name="script_text" value={ form.ScriptText }/>
+					<div class="border border-base-300 rounded p-4 prose max-w-none">
+						@templ.Raw(form.PreviewHTML)
+					</div>
+					<button type="submit" name="submit_action" value="edit" class="btn btn-ghost btn-sm mt-2">Edit</button>
+				} else {
+					<textarea name="script_text" class="textarea textarea-bordered w-full font-mono" rows="12" required>{ form.ScriptText }</textarea>
+					<button type="submit" name="submit_action" value="preview" class="btn btn-ghost btn-sm mt-2">Preview</button>
+				}
+			</div>
+			<button type="submit" name="submit_action" value="create" class="btn btn-primary btn-sm mt-2">Create script</button>
+		</form>
+	}
+}
+
+// ScriptDetail is GET /channels/{id}/scripts/{scriptID}'s page (#2036,
+// FR14, FR15): the script's current body in a read-only editor/rendered-
+// preview toggle (a plain ?preview=1 query-string link -- the content is
+// static, so there is no unsaved-text concern this toggle needs to
+// protect, unlike newScriptForm's), plus FR15's link back to the bound
+// verdict (idea's detail page, showing that verdict's version and value
+// -- the SPECIFIC bound version, per verdict.Version/verdict.Verdict,
+// never idea's possibly-since-changed current verdict).
+templ ScriptDetail(data components.LayoutData, ch store.Channel, script store.VideoScript, idea store.Idea, verdict store.Verdict, preview bool, previewHTML string) {
+	@components.Layout(data) {
+		<div class="card bg-base-100 border border-base-300 shadow-sm">
+			<div class="card-body">
+				<p>
+					<a class="link" href={ templ.URL("/channels/" + ch.ID.String() + "/scripts") }>&larr; Back to scripts</a>
+				</p>
+				<h1 class="card-title">{ script.Title }</h1>
+				<span class={ statusBadgeClass(script.Status) }>{ statusLabel(script.Status) }</span>
+				<p class="text-sm text-base-content/70 mt-2">
+					Proposed from verdict:
+					<a class="link" href={ templ.URL("/channels/" + ch.ID.String() + "/research/ideas/" + idea.ID.String()) }>
+						{ idea.Title } -- v{ strconv.Itoa(verdict.Version) }: { string(verdict.Verdict) }
+					</a>
+				</p>
+				<div class="form-control mt-4">
+					<label class="label">
+						<span class="label-text">Script</span>
+					</label>
+					if preview {
+						<div class="border border-base-300 rounded p-4 prose max-w-none">
+							@templ.Raw(previewHTML)
+						</div>
+						<a class="btn btn-ghost btn-sm mt-2" href={ templ.URL("/channels/" + ch.ID.String() + "/scripts/" + script.ID.String()) }>Edit view</a>
+					} else {
+						<pre class="border border-base-300 rounded p-4 whitespace-pre-wrap font-mono text-sm">{ script.ScriptText }</pre>
+						<a class="btn btn-ghost btn-sm mt-2" href={ templ.URL("/channels/" + ch.ID.String() + "/scripts/" + script.ID.String() + "?preview=1") }>Preview</a>
+					}
+				</div>
+			</div>
+		</div>
+	}
 }
