@@ -483,6 +483,20 @@ func (app *App) buildDeploymentRowData(ctx context.Context, sgcID int64) (pages.
 		liveSession = nil
 	}
 
+	// FR12/#1735: this single-SGC path is also what the #1724 SSE fragment
+	// and the #1628 poll refresh render through -- it must populate
+	// RestartState the same way handleSessions does, or the restart badge
+	// would appear on the initial page load and vanish on the row's first
+	// live/polled update. Still a batched-shaped call (one sgc id), so it
+	// stays consistent with ControlClient.ListPendingRestarts's contract.
+	// Not fatal to the row render: log at WARNING and leave RestartState
+	// nil, same degradation posture as the live-session fallback above.
+	restartStates, err := app.grpc.ListPendingRestarts(ctx, []int64{sgcID})
+	if err != nil {
+		log.Printf("Warning: failed to list pending restarts for deployment %d: %v", sgcID, err)
+		restartStates = nil
+	}
+
 	return pages.DeploymentRowData{
 		ServerGameConfigID: sgcID,
 		DisplayName:        displayName,
@@ -490,5 +504,6 @@ func (app *App) buildDeploymentRowData(ctx context.Context, sgcID int64) (pages.
 		LatestSession:      latest,
 		LiveSession:        liveSession,
 		Actions:            components.ComputeDeploymentActions(latest),
+		RestartState:       restartStates[sgcID],
 	}, nil
 }

@@ -296,6 +296,13 @@ templ DeploymentRowInner(data DeploymentRowData) {
 		} else {
 			@htmxui.Badge("Never started", htmxui.BadgeNeutral, htmxui.BadgeSizeSM, true, nil)
 		}
+		if label, variant, title, show := components.RestartBadge(data.RestartState); show {
+			if title != "" {
+				@htmxui.Badge(label, variant, htmxui.BadgeSizeSM, true, templ.Attributes{"title": title})
+			} else {
+				@htmxui.Badge(label, variant, htmxui.BadgeSizeSM, true, nil)
+			}
+		}
 	</td>
 	<td class="text-sm">
 		if data.LiveSession != nil {

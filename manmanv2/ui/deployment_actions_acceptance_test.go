@@ -345,6 +345,15 @@ func (f *fakeAcceptanceAPIClient) RestartDeployment(ctx context.Context, in *man
 	return &manmanpb.RestartDeploymentResponse{}, nil
 }
 
+// ListPendingRestarts is the fake's #1735 counterpart: this suite does not
+// model in-flight/failed/expired pending_restarts rows (that is
+// session_test.go's/restart_state_test.go's job), so it always reports "no
+// restart record" for every requested SGC -- an empty response, matching
+// control-api's own contract for a caller that queries any SGC set.
+func (f *fakeAcceptanceAPIClient) ListPendingRestarts(ctx context.Context, in *manmanpb.ListPendingRestartsRequest, opts ...grpc.CallOption) (*manmanpb.ListPendingRestartsResponse, error) {
+	return &manmanpb.ListPendingRestartsResponse{}, nil
+}
+
 // newAcceptanceFixture builds an App wired to a fresh fakeAcceptanceAPIClient
 // and a real *http.ServeMux from (*App).setupRoutes, with a real
 // htmxauth.Authenticator in AuthModeNone (auto-authenticates every request,

@@ -324,6 +324,21 @@ its own terminal state machine (`status` + `resolved_at`), not dimension
 history — SCD2's "current value = row with `valid_to IS NULL`" model doesn't
 fit a record that is created once and resolved exactly once.
 
+**Read half — `ListPendingRestarts` RPC (`manmanv2/api/handlers/session.go`,
+control-api, #1735):** the operator-visibility counterpart to the three
+mechanisms above. FR12 requires that moving orchestration server-side not
+make a post-dispatch failure *less* visible than the old client-side
+goroutine's inline error was, so `manmanv2/ui`'s `/sessions` deployment row
+reads this table back (via `PendingRestartRepository.GetLatestBySGCIDs`) and
+renders a badge distinguishing `pending` (in progress) from `failed`/
+`expired` (stalled/failed) — see `manmanv2/ui/README.md` § "Restart State
+Visibility" for the badge mapping and the UI-side read path. One batched RPC
+per page render (every rendered SGC id in one call), never one per row.
+`GetLatestBySGCIDs` excludes a resolved record older than
+`pendingRestartVisibilityWindow` (5 minutes, `manmanv2/api/repository/postgres/pending_restart.go`)
+so a stale terminal badge doesn't outlive its usefulness. Strictly read-only:
+this RPC never writes to `pending_restarts`.
+
 ---
 
 ## Communication Patterns

@@ -7,6 +7,7 @@ templ_library(
     go_srcs = [
         "deployment_actions.go",
         "deployment_status.go",
+        "restart_state.go",
     ],
     visibility = ["//manmanv2/ui:__subpackages__"],
     deps = [

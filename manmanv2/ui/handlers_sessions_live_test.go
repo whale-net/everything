@@ -36,11 +36,14 @@ import (
 // fakeLiveAPIClient embeds the nil manmanpb.ManManAPIClient interface and
 // overrides only the RPCs handleDeploymentsLiveSSE's call graph reaches
 // (ListServers, ListServerGameConfigs, GetServerGameConfig, GetGameConfig,
-// ListSessions); any other call panics on the nil embedded interface,
-// deliberately, per handlers_sessions_deployment_row_test.go's
-// fakeSessionsAPIClient precedent. GetGameConfig always errors (display
-// name resolution isn't what these tests guard -- DisplayName falls back to
-// "SGC %d" and that fallback is exercised identically everywhere).
+// ListSessions, ListPendingRestarts); any other call panics on the nil
+// embedded interface, deliberately, per
+// handlers_sessions_deployment_row_test.go's fakeSessionsAPIClient
+// precedent. GetGameConfig always errors (display name resolution isn't
+// what these tests guard -- DisplayName falls back to "SGC %d" and that
+// fallback is exercised identically everywhere). ListPendingRestarts
+// (#1735) always returns an empty response -- these tests guard the SSE
+// fragment/exact-match pipeline, not restart-state badges.
 type fakeLiveAPIClient struct {
 	manmanpb.ManManAPIClient
 
@@ -96,6 +99,10 @@ func (f *fakeLiveAPIClient) ListSessions(ctx context.Context, in *manmanpb.ListS
 	// unfiltered "all sessions" call and getLiveSession's LiveOnly call --
 	// they're never expected to disagree in these tests.
 	return &manmanpb.ListSessionsResponse{Sessions: []*manmanpb.Session{sess}}, nil
+}
+
+func (f *fakeLiveAPIClient) ListPendingRestarts(ctx context.Context, in *manmanpb.ListPendingRestartsRequest, opts ...grpc.CallOption) (*manmanpb.ListPendingRestartsResponse, error) {
+	return &manmanpb.ListPendingRestartsResponse{}, nil
 }
 
 // liveTestAuthenticator is a shared AuthModeNone authenticator (auto-

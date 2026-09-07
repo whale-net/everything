@@ -220,6 +220,15 @@ func (f *fakeDeploymentAPIClient) RestartDeployment(ctx context.Context, in *man
 	return resp, nil
 }
 
+// ListPendingRestarts is the fake's #1735 counterpart: buildDeploymentRowData
+// (handlers_deployment_actions.go) calls this for every row it builds,
+// including through the action endpoints this file exercises. This suite's
+// scenarios are not about restart-state badges (see session_test.go/
+// restart_state_test.go for that), so it always reports "no restart record".
+func (f *fakeDeploymentAPIClient) ListPendingRestarts(ctx context.Context, in *manmanpb.ListPendingRestartsRequest, opts ...grpc.CallOption) (*manmanpb.ListPendingRestartsResponse, error) {
+	return &manmanpb.ListPendingRestartsResponse{}, nil
+}
+
 func newDeploymentTestApp(api *fakeDeploymentAPIClient) *App {
 	return &App{grpc: &ControlClient{api: api}}
 }
