@@ -148,13 +148,20 @@ type Idea struct {
 	CreatedAt         time.Time
 }
 
-// ResearchNote is one row of `research_note` (migration 002, FR9/FR10).
-// IdeaID is nil when the note predates an Idea. SourceURL is nil for an
-// uncited note (FR10) -- distinct from an empty string.
+// ResearchNote is one row of `research_note` (migration 002, FR9/FR10;
+// `thread_id` added by migration 016, FR2 Stage 1). IdeaID is nil when the
+// note predates an Idea. SourceURL is nil for an uncited note (FR10) --
+// distinct from an empty string. ThreadID is a pointer during Stages 1-2
+// of the FR2 migration sequence (root plan #1934) -- every pre-existing
+// and newly-written note is backfilled/set to a non-nil thread by
+// migration 016, but the column itself stays nullable until Stage 3
+// (#1947) adds NOT NULL, so the Go type mirrors the DB's actual
+// nullability rather than assuming Stage 3 has already landed.
 type ResearchNote struct {
 	ID             uuid.UUID
 	ChannelID      uuid.UUID
 	IdeaID         *uuid.UUID
+	ThreadID       *uuid.UUID
 	Text           string
 	SourceURL      *string
 	AuthorPersonID uuid.UUID
@@ -166,6 +173,56 @@ type ResearchNote struct {
 // derivation `web` and `mcp` both read (FR12) -- neither computes
 // SourceURL != nil inline.
 func (n ResearchNote) Cited() bool { return n.SourceURL != nil }
+
+// ResearchThread is one row of `research_thread` (migration 016, FR1) --
+// groups research_note rows under one title. IdeaID is nullable with the
+// exact same rule as ResearchNote.IdeaID: a thread may predate an Idea.
+type ResearchThread struct {
+	ID                uuid.UUID
+	ChannelID         uuid.UUID
+	IdeaID            *uuid.UUID
+	Title             string
+	CreatedByPersonID uuid.UUID
+	CreatedAt         time.Time
+}
+
+// RelationType is `research_note_relation.relation_type` (migration 016,
+// FR6) -- a closed set matching the migration's CHECK constraint. Valid is
+// the single derivation `mcp` and `web` must both call before inserting a
+// relation (FR16/NFR2), so the two surfaces never drift the way
+// VerdictValue's own validation (duplicated inline in
+// mcp/tools/verdict.go and web/research/research.go) already has.
+type RelationType string
+
+const (
+	RelationSupersedes RelationType = "supersedes"
+	RelationExcludes   RelationType = "excludes"
+	RelationCaveats    RelationType = "caveats"
+	RelationFollowsUp  RelationType = "follows_up"
+	RelationSummarizes RelationType = "summarizes"
+)
+
+// Valid reports whether r is one of the five relation_type values the
+// migration 016 CHECK constraint allows.
+func (r RelationType) Valid() bool {
+	switch r {
+	case RelationSupersedes, RelationExcludes, RelationCaveats, RelationFollowsUp, RelationSummarizes:
+		return true
+	default:
+		return false
+	}
+}
+
+// ResearchNoteRelation is one row of `research_note_relation` (migration
+// 016, FR6) -- an append-only edge between two ResearchNote rows in the
+// same thread. Same-thread membership is enforced by a DB trigger, not
+// this struct (see migration 016's header comment for why a NULL-vs-NULL
+// app-layer check would be unsafe while thread_id is still nullable).
+type ResearchNoteRelation struct {
+	NoteID        uuid.UUID
+	RelatedNoteID uuid.UUID
+	RelationType  RelationType
+}
 
 // VerdictValue is `viability_verdict.verdict` (migration 002, FR12).
 type VerdictValue string

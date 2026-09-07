@@ -1726,9 +1726,11 @@ func ptrInt64(v int64) *int64        { return &v }
 // for 012 (v_prediction_vs_outcome's re-anchor onto video_script, FR44,
 // #1830), again for 013 (pacing_policy/schedule_entry drop, FR41/
 // FR45, #1835), again for 014 (outcome_bar, C14/FR1/FR2/NFR1, #1882), and
-// again for 015 (viability_verdict.source, M4.1 FR5/NFR4, #1898), so the
-// version assertion and table list below cover all of them rather than
-// any single one.
+// again for 015 (viability_verdict.source, M4.1 FR5/NFR4, #1898), and
+// again for 016 (research_thread, research_note.thread_id backfill, and
+// research_note_relation, FR1/FR2 Stage 1/FR6/FR7, #1936), so the version
+// assertion and table list below cover all of them rather than any single
+// one.
 func TestMigrations_UpDownUp_LeavesNoOrphanObjects(t *testing.T) {
 	ctx := context.Background()
 	db := dbtest.NewPostgres(ctx, t, dbtest.Options{})
@@ -1745,7 +1747,7 @@ func TestMigrations_UpDownUp_LeavesNoOrphanObjects(t *testing.T) {
 	version, dirty, err := runner.Version()
 	require.NoError(t, err)
 	assert.False(t, dirty)
-	assert.Equal(t, uint(15), version, "highest migration in schema.Migrations is 015_verdict_source")
+	assert.Equal(t, uint(16), version, "highest migration in schema.Migrations is 016_research_thread_relation")
 
 	for _, tbl := range []string{
 		"person", "channel", "channel_person", "channel_invite",
@@ -1760,6 +1762,8 @@ func TestMigrations_UpDownUp_LeavesNoOrphanObjects(t *testing.T) {
 		"strategy", "strategy_verdict",
 		"video_script",
 		"outcome_bar",
+		"research_thread",
+		"research_note_relation",
 	} {
 		var exists bool
 		require.NoError(t, db.Pool.QueryRow(ctx,
@@ -1811,6 +1815,15 @@ func TestMigrations_UpDownUp_LeavesNoOrphanObjects(t *testing.T) {
 		`SELECT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name = 'video_schedule_match' AND column_name = 'schedule_entry_id')`,
 	).Scan(&hasScheduleEntryID))
 	assert.False(t, hasScheduleEntryID, "video_schedule_match.schedule_entry_id must not exist after up/down/up (migration 013 drops it outright)")
+
+	// Migration 016's research_note.thread_id column (FR2 Stage 1, #1936)
+	// must also survive the down/up cycle -- a down that forgot to drop it
+	// (or an up that forgot to re-add it) would surface here.
+	var hasThreadID bool
+	require.NoError(t, db.Pool.QueryRow(ctx,
+		`SELECT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name = 'research_note' AND column_name = 'thread_id')`,
+	).Scan(&hasThreadID))
+	assert.True(t, hasThreadID, "research_note.thread_id must exist after up/down/up")
 
 	// A fresh insert must succeed cleanly, proving indexes/constraints
 	// (e.g. the person.google_subject UNIQUE index) survived the
