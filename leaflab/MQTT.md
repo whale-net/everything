@@ -9,6 +9,13 @@ bazel run //leaflab/sensorboard:provision -- /dev/ttyUSB0 \
   wifi_ssid=MySSID wifi_pass=MyPass mqtt_host=192.168.1.42 mqtt_port=1883
 ```
 
+## Emulator
+
+`leaflab/emulator` implements this contract on the device side for local
+dev (see [`emulator/README.md`](emulator/README.md)) — update it alongside
+any change to this contract, or it will silently diverge from real
+firmware.
+
 ## Topic Structure
 
 ```
