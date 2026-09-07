@@ -36,16 +36,42 @@
 // and a signed-out reject, invalid verdict/empty reasoning/cross-Channel
 // Idea rejections, cross-surface agreement between a human-sourced and an
 // agent-sourced version on the same Idea, and the save-verdict form's
-// citation multi-select scoping/hidden idempotency_key rendering. See
-// //audience_score_system/web/schedule:schedule_integration_test for the
-// harness pattern this file follows: spin up a throwaway Postgres via
-// dbtest, apply the domain's own real embedded migrations, wire a real
-// *store.Store and a real *auth.SessionManager against it, and drive
+// citation multi-select scoping/hidden idempotency_key rendering; and
+// HandleProposeVideoScript (issue #1915, FR1-FR5/NFR1-NFR3): the FR1
+// render gate (a viable current verdict AND store.CanWrite) both positive
+// and negative, FR2's active-Strategy-only picker (excluding an inactive
+// Strategy and a different Channel's Strategy) and its empty-Channel
+// explanatory-line/no-submit case, FR3's happy path through the IDENTICAL
+// store.VideoScriptStore.Propose method save_video_script calls (LB5) and
+// its "verdict_id is never a form field" guarantee (a forged verdict_id
+// form value is ignored, the row still binds to the Idea's own current
+// verdict), the FR4 load-bearing forged-POST 403 from a signed-in
+// non-member plus the cross-Channel Idea 404 guard, FR5/NFR1's
+// same-idempotency-key double-submit producing exactly one row (a
+// different key producing a second), plain title/script_text validation
+// with the same idempotency_key echoed on re-render, and NFR3's
+// stale-at-submit cases (a Strategy deleted, and a verdict superseded,
+// between render and submit -- see this file's own two FAILING tests
+// covering that pair, `TestHandleProposeVideoScript_
+// StrategyDeletedBeforeSubmit_BadRequest_NoRow` and
+// `TestHandleProposeVideoScript_VerdictBecomesNonViableBeforeSubmit_
+// BadRequest_NoRow`, which reveal a real Implementation-phase defect:
+// IdeaDetail's/proposeVideoScriptForm's render gates re-evaluate
+// current/activeStrategies fresh on the error re-render too, so when
+// either one no longer holds by submit time the propose section's error
+// message and preserved field values are silently dropped even though the
+// response is still a 400, not a 500 or a redirect -- see this task's
+// (#1915) Testing-phase status comment for the routed-back defect
+// report). See //audience_score_system/web/schedule:schedule_integration_test
+// for the harness pattern this file follows: spin up a throwaway Postgres
+// via dbtest, apply the domain's own real embedded migrations, wire a
+// real *store.Store and a real *auth.SessionManager against it, and drive
 // research.Handlers through a small local http.ServeMux that mirrors
 // `web`'s main.go route registrations for GET /channels/{id}/research,
 // GET /channels/{id}/research/ideas/{ideaID}, POST
-// /channels/{id}/research/notes, and POST
-// /channels/{id}/research/ideas/{ideaID}/verdicts -- so PathValue
+// /channels/{id}/research/notes, POST
+// /channels/{id}/research/ideas/{ideaID}/verdicts, and POST
+// /channels/{id}/research/ideas/{ideaID}/video-scripts -- so PathValue
 // resolution and auth.RequireSignedIn wrapping behave exactly as they do
 // in production.
 //
@@ -127,6 +153,7 @@ func newResearchTestStack(t *testing.T) *researchTestStack {
 	mux.HandleFunc("GET /channels/{id}/research/ideas/{ideaID}", a.RequireSignedIn(res.HandleIdeaDetail))
 	mux.HandleFunc("POST /channels/{id}/research/notes", a.RequireSignedIn(res.HandleSaveNote))
 	mux.HandleFunc("POST /channels/{id}/research/ideas/{ideaID}/verdicts", a.RequireSignedIn(res.HandleSaveVerdict))
+	mux.HandleFunc("POST /channels/{id}/research/ideas/{ideaID}/video-scripts", a.RequireSignedIn(res.HandleProposeVideoScript))
 
 	return &researchTestStack{store: st, sessions: sessions, handlers: res, router: mux, db: db}
 }
@@ -1570,3 +1597,471 @@ func TestSaveVerdictForm_ValidationFailure_RerendersWithSameIdempotencyKey(t *te
 }
 
 func strPtr(s string) *string { return &s }
+
+// ── HandleProposeVideoScript (#1915, FR1-FR5, NFR1-NFR3) ────────────────
+
+// doProposeForm POSTs to ch/idea's video-scripts route, mirroring
+// doVerdictForm above for the verdicts route.
+func (s *researchTestStack) doProposeForm(t *testing.T, channelID, ideaID uuid.UUID, cookie *http.Cookie, form url.Values) *httptest.ResponseRecorder {
+	t.Helper()
+	return s.doForm(t, "/channels/"+channelID.String()+"/research/ideas/"+ideaID.String()+"/video-scripts", cookie, form)
+}
+
+// allVideoScripts is a small helper mirroring allNotes/allVerdictHistory
+// above: every video_script row on channelID.
+func (s *researchTestStack) allVideoScripts(t *testing.T, ctx context.Context, channelID uuid.UUID) []store.VideoScript {
+	t.Helper()
+	scripts, err := s.store.VideoScripts().ListByChannel(ctx, channelID)
+	require.NoError(t, err)
+	return scripts
+}
+
+// setupViableVerdict appends a VerdictViable version on ideaID, authored
+// by authorID, and returns it -- HandleProposeVideoScript's own
+// server-side gate (FR1/FR4) requires a current viable verdict before the
+// propose form renders, or a submit succeeds, at all.
+func (s *researchTestStack) setupViableVerdict(t *testing.T, ctx context.Context, ideaID, authorID uuid.UUID) store.Verdict {
+	t.Helper()
+	v, err := s.store.Verdicts().Append(ctx, store.AppendVerdictInput{
+		IdeaID: ideaID, Verdict: store.VerdictViable, Reasoning: "viable for propose test", AuthorPersonID: authorID,
+	})
+	require.NoError(t, err)
+	return v
+}
+
+// setupActiveStrategy creates a Strategy (active per the active param) on
+// channelID with no linked verdicts (StrategyStore.Save accepts an empty
+// VerdictIDs slice) -- backing the propose form's picker (FR2).
+func (s *researchTestStack) setupStrategy(t *testing.T, ctx context.Context, channelID, authorID uuid.UUID, title string, active bool) store.StrategyDetail {
+	t.Helper()
+	detail, err := s.store.Strategies().Save(ctx, store.SaveStrategyInput{
+		ChannelID: channelID, Title: title, Active: active, CreatedByPersonID: authorID, IdempotencyKey: uuid.NewString(),
+	})
+	require.NoError(t, err)
+	return detail
+}
+
+// extractProposeFormIdempotencyKey mirrors extractVerdictFormIdempotencyKey
+// for the propose-video-script form specifically -- it renders after both
+// the save-note and save-verdict forms on IdeaDetail (see views.templ),
+// so this slices body to the substring starting at the propose form's own
+// heading before applying idempotencyKeyPattern.
+func extractProposeFormIdempotencyKey(t *testing.T, body string) string {
+	t.Helper()
+	idx := strings.Index(body, "Propose a video script")
+	require.Greater(t, idx, 0, "the propose-video-script form's heading must render, body: %s", body)
+	return extractIdempotencyKey(t, body[idx:])
+}
+
+// TestProposeVideoScriptForm_ViableVerdict_CanWrite_Renders is FR1's
+// positive gate: a viable current verdict plus store.CanWrite renders the
+// propose form at its correct action path with all five field names.
+func TestProposeVideoScriptForm_ViableVerdict_CanWrite_Renders(t *testing.T) {
+	ctx := context.Background()
+	s := newResearchTestStack(t)
+	ch, creator := s.setupChannel(t, ctx)
+	idea, err := s.store.Ideas().Create(ctx, ch.ID, "Idea One", creator.ID)
+	require.NoError(t, err)
+	s.setupViableVerdict(t, ctx, idea.ID, creator.ID)
+	s.setupStrategy(t, ctx, ch.ID, creator.ID, "Strategy A", true)
+
+	w := s.do(t, http.MethodGet, "/channels/"+ch.ID.String()+"/research/ideas/"+idea.ID.String(), s.sessionCookie(t, ctx, creator.ID))
+	require.Equal(t, http.StatusOK, w.Code, "body: %s", w.Body.String())
+	body := w.Body.String()
+
+	assert.Contains(t, body, `action="/channels/`+ch.ID.String()+`/research/ideas/`+idea.ID.String()+`/video-scripts"`)
+	for _, field := range []string{"strategy_id", "title", "script_text", "target_publish_date", "idempotency_key"} {
+		assert.Contains(t, body, `name="`+field+`"`, "field %q must render", field)
+	}
+}
+
+// TestProposeVideoScriptForm_NotViableOrNoVerdict_Absent is FR1's negative
+// gate: a non-viable current verdict, and separately an Idea with no
+// verdict at all, must never render the propose form.
+func TestProposeVideoScriptForm_NotViableOrNoVerdict_Absent(t *testing.T) {
+	ctx := context.Background()
+	s := newResearchTestStack(t)
+	ch, creator := s.setupChannel(t, ctx)
+	cookie := s.sessionCookie(t, ctx, creator.ID)
+	s.setupStrategy(t, ctx, ch.ID, creator.ID, "Strategy A", true)
+
+	notViable, err := s.store.Ideas().Create(ctx, ch.ID, "Not Viable Idea", creator.ID)
+	require.NoError(t, err)
+	_, err = s.store.Verdicts().Append(ctx, store.AppendVerdictInput{
+		IdeaID: notViable.ID, Verdict: store.VerdictNotViable, Reasoning: "not viable", AuthorPersonID: creator.ID,
+	})
+	require.NoError(t, err)
+
+	noVerdict, err := s.store.Ideas().Create(ctx, ch.ID, "No Verdict Idea", creator.ID)
+	require.NoError(t, err)
+
+	for _, tc := range []struct {
+		name string
+		idea store.Idea
+	}{
+		{"NotViable", notViable},
+		{"NoVerdict", noVerdict},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			w := s.do(t, http.MethodGet, "/channels/"+ch.ID.String()+"/research/ideas/"+tc.idea.ID.String(), cookie)
+			require.Equal(t, http.StatusOK, w.Code, "body: %s", w.Body.String())
+			assert.NotContains(t, w.Body.String(), "/video-scripts\"", "%s must not render the propose form", tc.name)
+		})
+	}
+}
+
+// TestProposeVideoScriptForm_PresentForAllCanWriteRoles documents the same
+// domain reality TestSaveVerdictForm_AbsentWithoutCanWrite's doc comment
+// does: store.CanRead and store.CanWrite grant the exact same three-role
+// set (store/authz.go) here, so there is no "can read but not write"
+// member who can reach a 200 to check the form's absence against -- a
+// non-member 403s on the GET itself (TestHandleIdeaDetail_NonMember_
+// Forbidden), which is exactly why the form's presence is documented as
+// presentation-only rather than the real authorization boundary (see
+// research.go's/views.templ's IdeaDetail doc comments). What this proves
+// instead is the positive case for all three store.CanWrite roles; the
+// real boundary is HandleProposeVideoScript's own authorizeWrite, proven
+// by TestHandleProposeVideoScript_NonMember_Forbidden_NoRowCreated below
+// (FR4).
+func TestProposeVideoScriptForm_PresentForAllCanWriteRoles(t *testing.T) {
+	ctx := context.Background()
+	s := newResearchTestStack(t)
+	ch, creator := s.setupChannel(t, ctx)
+	idea, err := s.store.Ideas().Create(ctx, ch.ID, "Idea One", creator.ID)
+	require.NoError(t, err)
+	s.setupViableVerdict(t, ctx, idea.ID, creator.ID)
+	s.setupStrategy(t, ctx, ch.ID, creator.ID, "Strategy A", true)
+
+	coCreator := s.newPerson(t, ctx, "co-creator")
+	require.NoError(t, s.store.Roles().AddRole(ctx, ch.ID, coCreator.ID, store.RoleCoCreator, creator.ID))
+	analyst := s.newPerson(t, ctx, "analyst")
+	require.NoError(t, s.store.Roles().AddRole(ctx, ch.ID, analyst.ID, store.RoleAnalyst, creator.ID))
+
+	for _, tc := range []struct {
+		name   string
+		person store.Person
+	}{
+		{"Founder", creator},
+		{"CoCreator", coCreator},
+		{"Analyst", analyst},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			w := s.do(t, http.MethodGet, "/channels/"+ch.ID.String()+"/research/ideas/"+idea.ID.String(), s.sessionCookie(t, ctx, tc.person.ID))
+			require.Equal(t, http.StatusOK, w.Code, "body: %s", w.Body.String())
+			assert.Contains(t, w.Body.String(), `action="/channels/`+ch.ID.String()+`/research/ideas/`+idea.ID.String()+`/video-scripts"`, "%s must see the propose form", tc.name)
+		})
+	}
+}
+
+// TestProposeVideoScriptForm_Picker_OnlyActiveStrategiesOnThisChannel is
+// FR2: only a Channel's ACTIVE Strategies appear as options -- an inactive
+// Strategy on the same Channel, and any Strategy on a different Channel,
+// must never appear.
+func TestProposeVideoScriptForm_Picker_OnlyActiveStrategiesOnThisChannel(t *testing.T) {
+	ctx := context.Background()
+	s := newResearchTestStack(t)
+	ch, creator := s.setupChannel(t, ctx)
+	idea, err := s.store.Ideas().Create(ctx, ch.ID, "Idea One", creator.ID)
+	require.NoError(t, err)
+	s.setupViableVerdict(t, ctx, idea.ID, creator.ID)
+
+	active := s.setupStrategy(t, ctx, ch.ID, creator.ID, "Active Strategy", true)
+	inactive := s.setupStrategy(t, ctx, ch.ID, creator.ID, "Inactive Strategy", false)
+
+	otherCh, otherCreator := s.setupChannel(t, ctx)
+	otherStrategy := s.setupStrategy(t, ctx, otherCh.ID, otherCreator.ID, "Other Channel Strategy", true)
+
+	w := s.do(t, http.MethodGet, "/channels/"+ch.ID.String()+"/research/ideas/"+idea.ID.String(), s.sessionCookie(t, ctx, creator.ID))
+	require.Equal(t, http.StatusOK, w.Code, "body: %s", w.Body.String())
+	body := w.Body.String()
+
+	assert.Contains(t, body, `value="`+active.ID.String()+`"`, "the active strategy must appear as an option")
+	assert.NotContains(t, body, `value="`+inactive.ID.String()+`"`, "the inactive strategy must never appear as an option")
+	assert.NotContains(t, body, "Inactive Strategy")
+	assert.NotContains(t, body, `value="`+otherStrategy.ID.String()+`"`, "a strategy on a different channel must never appear")
+	assert.NotContains(t, body, "Other Channel Strategy")
+}
+
+// TestProposeVideoScriptForm_NoActiveStrategy_ExplanatoryLine_NoSubmit is
+// FR2's empty case: no active Strategy on the Channel renders an
+// explanatory line and no submit control, but the page still 200s.
+func TestProposeVideoScriptForm_NoActiveStrategy_ExplanatoryLine_NoSubmit(t *testing.T) {
+	ctx := context.Background()
+	s := newResearchTestStack(t)
+	ch, creator := s.setupChannel(t, ctx)
+	idea, err := s.store.Ideas().Create(ctx, ch.ID, "Idea One", creator.ID)
+	require.NoError(t, err)
+	s.setupViableVerdict(t, ctx, idea.ID, creator.ID)
+
+	w := s.do(t, http.MethodGet, "/channels/"+ch.ID.String()+"/research/ideas/"+idea.ID.String(), s.sessionCookie(t, ctx, creator.ID))
+	require.Equal(t, http.StatusOK, w.Code, "body: %s", w.Body.String())
+	body := w.Body.String()
+
+	assert.Contains(t, body, "a Strategy is required to propose a video script")
+	assert.NotContains(t, body, "/video-scripts\"", "no submit form may render without an active Strategy")
+}
+
+// TestHandleProposeVideoScript_HappyPath_CreatesProposedRow_RedirectsToSchedule
+// is FR3's happy path: a valid POST 303s to /channels/{id}/schedule and
+// writes a `video_script` row bound to the Idea's current verdict, the
+// picked Strategy, and the poster.
+func TestHandleProposeVideoScript_HappyPath_CreatesProposedRow_RedirectsToSchedule(t *testing.T) {
+	ctx := context.Background()
+	s := newResearchTestStack(t)
+	ch, creator := s.setupChannel(t, ctx)
+	idea, err := s.store.Ideas().Create(ctx, ch.ID, "Idea One", creator.ID)
+	require.NoError(t, err)
+	verdict := s.setupViableVerdict(t, ctx, idea.ID, creator.ID)
+	strategy := s.setupStrategy(t, ctx, ch.ID, creator.ID, "Strategy A", true)
+
+	w := s.doProposeForm(t, ch.ID, idea.ID, s.sessionCookie(t, ctx, creator.ID), url.Values{
+		"idempotency_key": {uuid.NewString()},
+		"strategy_id":     {strategy.ID.String()},
+		"title":           {"My video script"},
+		"script_text":     {"the script body"},
+	})
+	require.Equal(t, http.StatusSeeOther, w.Code, "body: %s", w.Body.String())
+	assert.Equal(t, "/channels/"+ch.ID.String()+"/schedule", w.Header().Get("Location"))
+
+	scripts := s.allVideoScripts(t, ctx, ch.ID)
+	require.Len(t, scripts, 1)
+	script := scripts[0]
+	assert.Equal(t, store.VideoScriptStatusProposed, script.Status)
+	assert.Equal(t, verdict.ID, script.VerdictID)
+	assert.Equal(t, idea.ID, script.IdeaID)
+	assert.Equal(t, strategy.ID, script.StrategyID)
+	assert.Equal(t, creator.ID, script.CreatedByPersonID)
+}
+
+// TestHandleProposeVideoScript_ForgedVerdictID_IgnoredServerDerivesCurrent
+// is FR3's load-bearing "verdict_id is never a form field" case: even a
+// forged verdict_id form value pointing at a DIFFERENT Idea's verdict must
+// be ignored entirely -- the written row still binds to the Idea's own
+// current verdict, proving the field is never read.
+func TestHandleProposeVideoScript_ForgedVerdictID_IgnoredServerDerivesCurrent(t *testing.T) {
+	ctx := context.Background()
+	s := newResearchTestStack(t)
+	ch, creator := s.setupChannel(t, ctx)
+	idea, err := s.store.Ideas().Create(ctx, ch.ID, "Idea One", creator.ID)
+	require.NoError(t, err)
+	verdict := s.setupViableVerdict(t, ctx, idea.ID, creator.ID)
+	strategy := s.setupStrategy(t, ctx, ch.ID, creator.ID, "Strategy A", true)
+
+	otherIdea, err := s.store.Ideas().Create(ctx, ch.ID, "Other Idea", creator.ID)
+	require.NoError(t, err)
+	otherVerdict := s.setupViableVerdict(t, ctx, otherIdea.ID, creator.ID)
+
+	w := s.doProposeForm(t, ch.ID, idea.ID, s.sessionCookie(t, ctx, creator.ID), url.Values{
+		"idempotency_key": {uuid.NewString()},
+		"strategy_id":     {strategy.ID.String()},
+		"title":           {"My video script"},
+		"script_text":     {"the script body"},
+		"verdict_id":      {otherVerdict.ID.String()},
+	})
+	require.Equal(t, http.StatusSeeOther, w.Code, "body: %s", w.Body.String())
+
+	scripts := s.allVideoScripts(t, ctx, ch.ID)
+	require.Len(t, scripts, 1)
+	assert.Equal(t, verdict.ID, scripts[0].VerdictID, "the forged verdict_id form value must be ignored entirely")
+	assert.Equal(t, idea.ID, scripts[0].IdeaID)
+}
+
+// TestHandleProposeVideoScript_NonMember_Forbidden_NoRowCreated is FR4's
+// load-bearing authorization test: a forged POST from a signed-in
+// non-member is 403 even though they cannot even GET the page, and writes
+// no row.
+func TestHandleProposeVideoScript_NonMember_Forbidden_NoRowCreated(t *testing.T) {
+	ctx := context.Background()
+	s := newResearchTestStack(t)
+	ch, creator := s.setupChannel(t, ctx)
+	idea, err := s.store.Ideas().Create(ctx, ch.ID, "Idea One", creator.ID)
+	require.NoError(t, err)
+	s.setupViableVerdict(t, ctx, idea.ID, creator.ID)
+	strategy := s.setupStrategy(t, ctx, ch.ID, creator.ID, "Strategy A", true)
+	outsider := s.newPerson(t, ctx, "outsider")
+
+	w := s.doProposeForm(t, ch.ID, idea.ID, s.sessionCookie(t, ctx, outsider.ID), url.Values{
+		"idempotency_key": {uuid.NewString()},
+		"strategy_id":     {strategy.ID.String()},
+		"title":           {"forged proposal"},
+		"script_text":     {"forged body"},
+	})
+	assert.Equal(t, http.StatusForbidden, w.Code, "body: %s", w.Body.String())
+	assert.NotContains(t, w.Body.String(), "forged proposal")
+	assert.Empty(t, s.allVideoScripts(t, ctx, ch.ID), "a forbidden POST must not create a row")
+}
+
+// TestHandleProposeVideoScript_CrossChannelIdea_NotFound_NoRow mirrors
+// HandleSaveVerdict's/HandleIdeaDetail's cross-Channel 404 guard: an Idea
+// that exists but under a DIFFERENT Channel than the path's {id} must
+// 404, never 403, and never write a row.
+func TestHandleProposeVideoScript_CrossChannelIdea_NotFound_NoRow(t *testing.T) {
+	ctx := context.Background()
+	s := newResearchTestStack(t)
+	chA, creatorA := s.setupChannel(t, ctx)
+	chB, creatorB := s.setupChannel(t, ctx)
+	ideaOnB, err := s.store.Ideas().Create(ctx, chB.ID, "Idea On B", creatorB.ID)
+	require.NoError(t, err)
+	s.setupViableVerdict(t, ctx, ideaOnB.ID, creatorB.ID)
+	strategy := s.setupStrategy(t, ctx, chA.ID, creatorA.ID, "Strategy A", true)
+
+	w := s.doProposeForm(t, chA.ID, ideaOnB.ID, s.sessionCookie(t, ctx, creatorA.ID), url.Values{
+		"idempotency_key": {uuid.NewString()},
+		"strategy_id":     {strategy.ID.String()},
+		"title":           {"cross-channel attempt"},
+		"script_text":     {"body"},
+	})
+	assert.Equal(t, http.StatusNotFound, w.Code, "an Idea belonging to a different Channel must 404, not 403, body: %s", w.Body.String())
+	assert.Empty(t, s.allVideoScripts(t, ctx, chA.ID))
+	assert.Empty(t, s.allVideoScripts(t, ctx, chB.ID))
+}
+
+// TestHandleProposeVideoScript_SameIdempotencyKey_Twice_CreatesOneRow_DifferentKeyCreatesSecond
+// is FR5/NFR1's load-bearing double-submit case: replaying the exact same
+// POST (same server-generated idempotency_key) must not create a second
+// row, using store.VideoScriptStore.Propose's existing (channel, author,
+// key) dedupe with no separate web-side mechanism -- and a THIRD POST with
+// a DIFFERENT key proves the dedupe is keyed, not content-hashed.
+func TestHandleProposeVideoScript_SameIdempotencyKey_Twice_CreatesOneRow_DifferentKeyCreatesSecond(t *testing.T) {
+	ctx := context.Background()
+	s := newResearchTestStack(t)
+	ch, creator := s.setupChannel(t, ctx)
+	idea, err := s.store.Ideas().Create(ctx, ch.ID, "Idea One", creator.ID)
+	require.NoError(t, err)
+	s.setupViableVerdict(t, ctx, idea.ID, creator.ID)
+	strategy := s.setupStrategy(t, ctx, ch.ID, creator.ID, "Strategy A", true)
+	cookie := s.sessionCookie(t, ctx, creator.ID)
+	key := uuid.NewString()
+	form := url.Values{
+		"idempotency_key": {key},
+		"strategy_id":     {strategy.ID.String()},
+		"title":           {"replayed proposal"},
+		"script_text":     {"body"},
+	}
+
+	w1 := s.doProposeForm(t, ch.ID, idea.ID, cookie, form)
+	require.Equal(t, http.StatusSeeOther, w1.Code, "body: %s", w1.Body.String())
+	require.Len(t, s.allVideoScripts(t, ctx, ch.ID), 1)
+
+	w2 := s.doProposeForm(t, ch.ID, idea.ID, cookie, form)
+	assert.Equal(t, http.StatusSeeOther, w2.Code, "a replayed submit must still redirect, not error, body: %s", w2.Body.String())
+	assert.Len(t, s.allVideoScripts(t, ctx, ch.ID), 1, "a replayed idempotency_key must not create a second row")
+
+	w3 := s.doProposeForm(t, ch.ID, idea.ID, cookie, url.Values{
+		"idempotency_key": {uuid.NewString()},
+		"strategy_id":     {strategy.ID.String()},
+		"title":           {"replayed proposal"},
+		"script_text":     {"body"},
+	})
+	require.Equal(t, http.StatusSeeOther, w3.Code, "body: %s", w3.Body.String())
+	assert.Len(t, s.allVideoScripts(t, ctx, ch.ID), 2, "a different idempotency_key with identical content must persist as a second row")
+}
+
+// TestHandleProposeVideoScript_StrategyDeletedBeforeSubmit_BadRequest_NoRow
+// covers NFR3's stale-Strategy case via DELETION: store.VideoScriptStore.
+// Propose's own ErrStrategyNotFound check (video_script.go) is "does this
+// strategy_id still exist on this channel_id" -- it does not re-check the
+// active flag, so a Strategy merely deactivated between render and submit
+// remains a valid strategy_id Propose would still accept (Propose's own
+// existing, unmodified contract; #1915 does not touch
+// store/video_script.go). Deleting the row is what actually exercises
+// ErrStrategyNotFound.
+func TestHandleProposeVideoScript_StrategyDeletedBeforeSubmit_BadRequest_NoRow(t *testing.T) {
+	ctx := context.Background()
+	s := newResearchTestStack(t)
+	ch, creator := s.setupChannel(t, ctx)
+	idea, err := s.store.Ideas().Create(ctx, ch.ID, "Idea One", creator.ID)
+	require.NoError(t, err)
+	s.setupViableVerdict(t, ctx, idea.ID, creator.ID)
+	strategy := s.setupStrategy(t, ctx, ch.ID, creator.ID, "Strategy A", true)
+
+	_, err = s.db.Pool.Exec(ctx, `DELETE FROM strategy WHERE id = $1`, strategy.ID)
+	require.NoError(t, err)
+
+	w := s.doProposeForm(t, ch.ID, idea.ID, s.sessionCookie(t, ctx, creator.ID), url.Values{
+		"idempotency_key": {uuid.NewString()},
+		"strategy_id":     {strategy.ID.String()},
+		"title":           {"deleted strategy attempt"},
+		"script_text":     {"body"},
+	})
+	assert.Equal(t, http.StatusBadRequest, w.Code, "body: %s", w.Body.String())
+	assert.Contains(t, w.Body.String(), "strategy not found", "the store's own ErrStrategyNotFound message must render")
+	assert.Contains(t, w.Body.String(), "deleted strategy attempt", "the submitted title must be preserved on re-render")
+	assert.Empty(t, s.allVideoScripts(t, ctx, ch.ID))
+}
+
+// TestHandleProposeVideoScript_VerdictBecomesNonViableBeforeSubmit_BadRequest_NoRow
+// covers NFR3's stale-verdict case: a NEW verdict version superseding the
+// viable one between render and submit must reject with a 400, never
+// write a row -- HandleProposeVideoScript always resolves the Idea's
+// CURRENT verdict server-side (LB3) at submit time, never the version that
+// was current when the page was rendered.
+func TestHandleProposeVideoScript_VerdictBecomesNonViableBeforeSubmit_BadRequest_NoRow(t *testing.T) {
+	ctx := context.Background()
+	s := newResearchTestStack(t)
+	ch, creator := s.setupChannel(t, ctx)
+	idea, err := s.store.Ideas().Create(ctx, ch.ID, "Idea One", creator.ID)
+	require.NoError(t, err)
+	s.setupViableVerdict(t, ctx, idea.ID, creator.ID)
+	strategy := s.setupStrategy(t, ctx, ch.ID, creator.ID, "Strategy A", true)
+
+	_, err = s.store.Verdicts().Append(ctx, store.AppendVerdictInput{
+		IdeaID: idea.ID, Verdict: store.VerdictNotViable, Reasoning: "changed my mind", AuthorPersonID: creator.ID,
+	})
+	require.NoError(t, err)
+
+	w := s.doProposeForm(t, ch.ID, idea.ID, s.sessionCookie(t, ctx, creator.ID), url.Values{
+		"idempotency_key": {uuid.NewString()},
+		"strategy_id":     {strategy.ID.String()},
+		"title":           {"stale verdict attempt"},
+		"script_text":     {"body"},
+	})
+	assert.Equal(t, http.StatusBadRequest, w.Code, "body: %s", w.Body.String())
+	assert.NotEqual(t, http.StatusInternalServerError, w.Code)
+	assert.Contains(t, w.Body.String(), "not viable", "the re-render must surface a form error, never silently drop it")
+	assert.Contains(t, w.Body.String(), "stale verdict attempt", "the submitted title must be preserved on re-render")
+	assert.Empty(t, s.allVideoScripts(t, ctx, ch.ID))
+}
+
+// TestHandleProposeVideoScript_EmptyTitleOrScriptText_BadRequest_NoRow_SameIdempotencyKeyEchoed
+// covers the plain validation case: empty title, and separately empty
+// script_text, 400 with the submitted values preserved and the SAME
+// idempotency_key echoed back in the hidden field (so a corrected resubmit
+// stays one logical write, FR5).
+func TestHandleProposeVideoScript_EmptyTitleOrScriptText_BadRequest_NoRow_SameIdempotencyKeyEchoed(t *testing.T) {
+	ctx := context.Background()
+	s := newResearchTestStack(t)
+	ch, creator := s.setupChannel(t, ctx)
+	idea, err := s.store.Ideas().Create(ctx, ch.ID, "Idea One", creator.ID)
+	require.NoError(t, err)
+	s.setupViableVerdict(t, ctx, idea.ID, creator.ID)
+	strategy := s.setupStrategy(t, ctx, ch.ID, creator.ID, "Strategy A", true)
+	cookie := s.sessionCookie(t, ctx, creator.ID)
+
+	for _, tc := range []struct {
+		name       string
+		title      string
+		scriptText string
+		wantEcho   string
+	}{
+		{"EmptyTitle", "", "a script body to preserve", "a script body to preserve"},
+		{"EmptyScriptText", "a title to preserve", "", "a title to preserve"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			key := uuid.NewString()
+			w := s.doProposeForm(t, ch.ID, idea.ID, cookie, url.Values{
+				"idempotency_key": {key},
+				"strategy_id":     {strategy.ID.String()},
+				"title":           {tc.title},
+				"script_text":     {tc.scriptText},
+			})
+			require.Equal(t, http.StatusBadRequest, w.Code, "body: %s", w.Body.String())
+			body := w.Body.String()
+			assert.Contains(t, body, "is required")
+			assert.Contains(t, body, tc.wantEcho, "the other submitted value must be preserved on re-render")
+			rerenderedKey := extractProposeFormIdempotencyKey(t, body)
+			assert.Equal(t, key, rerenderedKey, "a validation-failure re-render must carry the SAME idempotency_key as the failed submit")
+		})
+	}
+	assert.Empty(t, s.allVideoScripts(t, ctx, ch.ID))
+}

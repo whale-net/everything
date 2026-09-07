@@ -286,7 +286,25 @@ templ noteBody(note store.ResearchNoteWithAuthor) {
 // notes -- the SAME slice this page's own note list already loaded, no
 // extra store call, so no notes from any other Idea can ever appear as
 // options.
-templ IdeaDetail(data components.LayoutData, ch store.Channel, idea store.Idea, notes []store.ResearchNoteWithAuthor, notesTruncated bool, current *store.Verdict, history []store.Verdict, authorNames map[uuid.UUID]string, canWrite bool, form noteFormData, verdictForm verdictFormData) {
+//
+// strategies (#1915, FR2) is the Channel's active-Strategy list, loaded by
+// research.go's renderIdeaDetail, backing the propose-video-script form's
+// picker. proposeForm (#1915) carries that form's current values --
+// mirroring form/verdictForm's identical contract. The propose section is
+// rendered when canWrite AND EITHER (current is non-nil and
+// current.Verdict is store.VerdictViable, FR1) OR proposeForm.Error is
+// non-empty -- the Error branch is NFR3's stale-at-submit case: current/
+// strategies are re-fetched fresh on every render (including this error
+// re-render), so if the verdict or Strategy state changed between GET and
+// a rejected POST, the FR1/FR2 presentation gate alone would hide the
+// very error message and preserved field values that POST's 400 needs to
+// show. Gating on the live state is PRESENTATION ONLY, mirroring the
+// note/verdict forms' identical rationale above: the actual boundary is
+// HandleProposeVideoScript's own server-side re-resolution of the Idea's
+// current verdict (FR4), never this render-time check alone -- but that
+// presentation gate must never suppress an error the server already
+// decided to show.
+templ IdeaDetail(data components.LayoutData, ch store.Channel, idea store.Idea, notes []store.ResearchNoteWithAuthor, notesTruncated bool, current *store.Verdict, history []store.Verdict, authorNames map[uuid.UUID]string, canWrite bool, form noteFormData, verdictForm verdictFormData, strategies []store.StrategyDetail, proposeForm proposeFormData) {
 	@components.Layout(data) {
 		<div class="card bg-base-100 border border-base-300 shadow-sm">
 			<div class="card-body">
@@ -348,6 +366,13 @@ templ IdeaDetail(data components.LayoutData, ch store.Channel, idea store.Idea, 
 						</div>
 					}
 				</div>
+
+				if canWrite && (proposeForm.Error != "" || (current != nil && current.Verdict == store.VerdictViable)) {
+					<div class="mt-6">
+						<h2 class="text-lg font-semibold">Propose a video script</h2>
+						@proposeVideoScriptForm(ch, idea, strategies, proposeForm)
+					</div>
+				}
 
 				<div class="card-actions justify-end mt-2">
 					<a href={ templ.URL("/channels/" + ch.ID.String() + "/research") } class="btn btn-secondary btn-sm">
@@ -437,4 +462,68 @@ templ saveVerdictForm(ch store.Channel, idea store.Idea, notes []store.ResearchN
 		}
 		<button type="submit" class="btn btn-primary btn-sm mt-2">Save verdict</button>
 	</form>
+}
+
+// proposeVideoScriptForm renders the Idea detail page's propose-video-
+// script form (#1915, FR1-FR5): a Strategy picker (strategies -- the
+// Channel's active Strategies only, loaded by research.go's
+// renderIdeaDetail, FR2), required title and script_text fields, an
+// optional target_publish_date, and the hidden idempotency_key set once at
+// render time (FR5). verdict_id is deliberately NEVER a field here -- the
+// Idea's current verdict is always resolved server-side at submit time
+// (LB3), exactly like saveVerdictForm never accepts an idea_id.
+//
+// FR2: when strategies is empty AND there is no error to show (a plain
+// GET, or a re-render for a DIFFERENT form entirely), this renders an
+// explanatory line and NO submit control at all, rather than an empty
+// picker that could only ever fail at submit -- a Strategy is required to
+// propose a video script. NFR3: when form.Error is non-empty, the form
+// (with its error and preserved values) always renders even if strategies
+// is now empty -- e.g. the submitted strategy_id's row was deleted between
+// render and submit -- so the picker may show no options besides the
+// placeholder, but the rejection reason and the user's other field values
+// are never silently dropped.
+templ proposeVideoScriptForm(ch store.Channel, idea store.Idea, strategies []store.StrategyDetail, form proposeFormData) {
+	if len(strategies) == 0 && form.Error == "" {
+		<p class="text-base-content/70 mt-2">
+			No active Strategy on this Channel -- a Strategy is required to propose a video script.
+		</p>
+	} else {
+		<form method="post" action={ templ.URL("/channels/" + ch.ID.String() + "/research/ideas/" + idea.ID.String() + "/video-scripts") } class="mt-2 space-y-2">
+			if form.Error != "" {
+				<p class="text-error text-sm">{ form.Error }</p>
+			}
+			<input type="hidden" name="idempotency_key" value={ form.IdempotencyKey }/>
+			<div class="form-control">
+				<label class="label">
+					<span class="label-text">Strategy</span>
+				</label>
+				<select name="strategy_id" class="select select-bordered w-full" required>
+					<option value="" disabled selected?={ form.StrategyID == "" }>Choose a strategy...</option>
+					for _, s := range strategies {
+						<option value={ s.ID.String() } selected?={ form.StrategyID == s.ID.String() }>{ s.Title }</option>
+					}
+				</select>
+			</div>
+			<div class="form-control mt-2">
+				<label class="label">
+					<span class="label-text">Title</span>
+				</label>
+				<input type="text" name="title" class="input input-bordered w-full" value={ form.Title } required/>
+			</div>
+			<div class="form-control mt-2">
+				<label class="label">
+					<span class="label-text">Script</span>
+				</label>
+				<textarea name="script_text" class="textarea textarea-bordered w-full" rows="6" required>{ form.ScriptText }</textarea>
+			</div>
+			<div class="form-control mt-2">
+				<label class="label">
+					<span class="label-text">Target publish date (optional)</span>
+				</label>
+				<input type="date" name="target_publish_date" class="input input-bordered w-full" value={ form.TargetPublishDate }/>
+			</div>
+			<button type="submit" class="btn btn-primary btn-sm mt-2">Propose video script</button>
+		</form>
+	}
 }
