@@ -135,6 +135,16 @@ func NewPahoRunner(board Board, cfg *Config, deps RunnerDeps) *Runner {
 		SetWill(statusTopic, "offline", 1, true).
 		SetOnConnectHandler(func(_ mqtt.Client) {
 			r.onConnect()
+		}).
+		SetConnectionLostHandler(func(_ mqtt.Client, err error) {
+			// paho's default OnConnectHandler-driven reconnect logs nothing
+			// about *why* the connection was lost -- only "board reconnected"
+			// once the new connection lands (see onConnect). This is the
+			// only place that error is ever observable, so log it at WARN:
+			// without it, a broker-side "duplicate id" kick (issue #2024)
+			// looks identical in the emulator's own logs to a transient
+			// network blip.
+			r.deps.Logger.Warn("board connection lost", "device_id", board.DeviceID, "error", err)
 		})
 
 	client := mqtt.NewClient(opts)
@@ -198,7 +208,45 @@ func (r *Runner) Start() error {
 // the reading loop. Invoked directly by Start for the test-double path, and
 // by the paho OnConnect handler -- on every connect, including
 // reconnects -- for the real broker path.
+//
+// Issue #2024 Scaffold-phase finding (root cause of #2023's indefinite
+// "duplicate id" churn): NOT paho keepalive/ping misconfiguration
+// (candidate 1 as originally framed) and NOT a Docker Desktop/WSL2
+// networking artifact (candidate 2) -- both ruled out. The actual cause is
+// that board.DeviceID (board.go's deriveDeviceID) is a pure function of
+// scenario name + index with no per-process-instance salt, so two emulator
+// processes pointed at the same broker with the same (default) scenario
+// set -- e.g. the `tilt up`-managed in-cluster pod and a standalone
+// `bazel run //leaflab/emulator:emulator`, exactly the two modes
+// README.md's own Quickstart documents side by side -- mint byte-identical
+// MQTT ClientIDs for every board. The broker (correctly, per MQTT spec)
+// kicks whichever connection is older every time the other side
+// reconnects, forever; neither side's paho client ever backs off long
+// enough to let the collision resolve. Confirmed live in this dev
+// environment: a standalone emulator process left running from an earlier
+// investigation (MQTT_BROKER_URL=tcp://localhost:1883, default
+// SCENARIO_DIR/EMULATOR_BOARDS) was still connected concurrently with the
+// current `tilt up` session's in-cluster leaflab-emulator pod, and
+// rabbitmq-dev's logs showed every one of the 7 boards' "duplicate id"
+// kicks alternating between the pod's own IP and 127.0.0.1 (the
+// standalone process's host port-forward path) in lockstep with that
+// process's presence -- the same alternating-source pattern #2023's
+// evidence captured. This is an emulator-code/usage defect (candidate
+// (1)'s "emulator-code-fixable" bucket in #2024's terms), not a genuine,
+// undocumented environment limitation: see #2024's Implementation section
+// for the resulting fix (README caution against sharing device_ids across
+// concurrent standalone + in-cluster runs, plus the bounded-retry
+// hardening around subscribeConfig() for the residual single-instance
+// reconnect race this doesn't rule out).
 func (r *Runner) onConnect() {
+	// connectStart anchors the Debug timing trail below (issue #2024): it
+	// lets a "board connection lost" WARN (the just-added
+	// ConnectionLostHandler) be cross-referenced against how soon after the
+	// *next* connect this board's resubscribe actually fires, to confirm or
+	// rule out a race against the broker's own async teardown of a
+	// just-kicked prior session (the candidate (1) theory in #2024).
+	connectStart := r.clock.Now()
+
 	// Snapshot board under the lock -- config_apply.go's handleConfig can
 	// mutate r.board.Sensors concurrently on paho's message-handler
 	// goroutine, so this read (like every other read/write of sensor
@@ -208,6 +256,8 @@ func (r *Runner) onConnect() {
 	board := r.board
 	r.mu.Unlock()
 
+	r.deps.Logger.Debug("onConnect sequence started", "device_id", board.DeviceID, "reconnect", reconnect)
+
 	if err := r.transport.Publish(statusTopic(board.DeviceID), 1, true, []byte("online")); err != nil {
 		r.deps.Logger.Warn("retried online status publish", "device_id", board.DeviceID, "error", err)
 	}
@@ -216,13 +266,18 @@ func (r *Runner) onConnect() {
 
 	// Re-subscribe on every connect, including reconnects -- FR18's
 	// reconnect-convergence requirement -- after the manifest publish, per
-	// this issue's Implementation section.
+	// this issue's Implementation section. The two Debug lines around this
+	// call are the #2024 diagnostic: their elapsed-since-connect gap is how
+	// long after the new TCP connect this board's resubscribe actually
+	// lands on the broker.
+	r.deps.Logger.Debug("onConnect: subscribing to config", "device_id", board.DeviceID, "elapsed_since_connect", r.clock.Now().Sub(connectStart))
 	r.subscribeConfig()
+	r.deps.Logger.Debug("onConnect: subscribe complete", "device_id", board.DeviceID, "elapsed_since_connect", r.clock.Now().Sub(connectStart))
 
 	r.ensureLoopStarted()
 
 	if reconnect {
-		r.deps.Logger.Warn("board reconnected", "device_id", board.DeviceID)
+		r.deps.Logger.Warn("board reconnected", "device_id", board.DeviceID, "elapsed_since_connect", r.clock.Now().Sub(connectStart))
 	} else {
 		r.deps.Logger.Info("board connected", "device_id", board.DeviceID, "sensor_count", len(manifest.GetSensors()))
 	}
