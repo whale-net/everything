@@ -292,6 +292,133 @@ func TestSaveResearchNote_EmptyTextRejected(t *testing.T) {
 	assert.Empty(t, list.Notes)
 }
 
+// ── save_research_note thread resolution + relations (FR4/FR5/FR6, root
+// plan #1934, this task #1938) ──────────────────────────────────────────────
+
+func TestSaveResearchNote_NeitherThreadIDNorThreadTitleRejected(t *testing.T) {
+	f := newFixture(t)
+	cs := f.connect(t, f.creator.ID)
+
+	res := f.call(t, cs, "save_research_note", tools.SaveResearchNoteInput{
+		ChannelID:         f.ch.ID.String(),
+		Text:              "no thread info",
+		IdempotencyKeyArg: uuid.NewString(),
+	})
+	assert.True(t, res.IsError, "neither thread_id nor thread_title must be rejected")
+
+	listRes := f.call(t, cs, "list_research_notes", tools.ListResearchNotesInput{ChannelID: f.ch.ID.String()})
+	list := decode[tools.ListResearchNotesOutput](t, listRes)
+	assert.Empty(t, list.Notes, "a rejected call must not persist a note")
+}
+
+func TestSaveResearchNote_ThreadIDPathAttachesToExistingThreadDiscoveredViaListResearchThreads(t *testing.T) {
+	f := newFixture(t)
+	cs := f.connect(t, f.creator.ID)
+
+	first := f.call(t, cs, "save_research_note", tools.SaveResearchNoteInput{
+		ChannelID: f.ch.ID.String(), ThreadTitle: "Investor outreach", Text: "first note", IdempotencyKeyArg: uuid.NewString(),
+	})
+	firstOut := decode[tools.ResearchNoteOutput](t, first)
+
+	threadsRes := f.call(t, cs, "list_research_threads", tools.ListResearchThreadsInput{ChannelID: f.ch.ID.String()})
+	threads := decode[tools.ListResearchThreadsOutput](t, threadsRes)
+	require.Len(t, threads.Threads, 1)
+	threadID := threads.Threads[0].ID
+
+	second := f.call(t, cs, "save_research_note", tools.SaveResearchNoteInput{
+		ChannelID: f.ch.ID.String(), ThreadID: threadID, Text: "second note, same thread", IdempotencyKeyArg: uuid.NewString(),
+	})
+	require.False(t, second.IsError, "unexpected error: %s", textOf(second))
+	secondOut := decode[tools.ResearchNoteOutput](t, second)
+	assert.NotEqual(t, firstOut.ID, secondOut.ID)
+
+	threadsAfter := f.call(t, cs, "list_research_threads", tools.ListResearchThreadsInput{ChannelID: f.ch.ID.String()})
+	after := decode[tools.ListResearchThreadsOutput](t, threadsAfter)
+	require.Len(t, after.Threads, 1, "attaching via thread_id must not create a second thread")
+	assert.Equal(t, 2, after.Threads[0].NoteCount)
+}
+
+func TestSaveResearchNote_BothThreadIDAndThreadTitleRejected(t *testing.T) {
+	f := newFixture(t)
+	cs := f.connect(t, f.creator.ID)
+
+	seed := f.call(t, cs, "save_research_note", tools.SaveResearchNoteInput{
+		ChannelID: f.ch.ID.String(), ThreadTitle: "Seed thread", Text: "seed", IdempotencyKeyArg: uuid.NewString(),
+	})
+	require.False(t, seed.IsError)
+
+	threadsRes := f.call(t, cs, "list_research_threads", tools.ListResearchThreadsInput{ChannelID: f.ch.ID.String()})
+	threads := decode[tools.ListResearchThreadsOutput](t, threadsRes)
+	require.Len(t, threads.Threads, 1)
+
+	res := f.call(t, cs, "save_research_note", tools.SaveResearchNoteInput{
+		ChannelID: f.ch.ID.String(), ThreadID: threads.Threads[0].ID, ThreadTitle: "A different title",
+		Text: "should be rejected", IdempotencyKeyArg: uuid.NewString(),
+	})
+	assert.True(t, res.IsError, "supplying both thread_id and thread_title must be rejected")
+}
+
+func TestSaveResearchNote_SummarizesRelationRoundTripsThroughListResearchNotes(t *testing.T) {
+	f := newFixture(t)
+	cs := f.connect(t, f.creator.ID)
+
+	n1 := decode[tools.ResearchNoteOutput](t, f.call(t, cs, "save_research_note", tools.SaveResearchNoteInput{
+		ChannelID: f.ch.ID.String(), ThreadTitle: "Summary thread", Text: "n1", IdempotencyKeyArg: uuid.NewString(),
+	}))
+	threadsRes := f.call(t, cs, "list_research_threads", tools.ListResearchThreadsInput{ChannelID: f.ch.ID.String()})
+	threads := decode[tools.ListResearchThreadsOutput](t, threadsRes)
+	require.Len(t, threads.Threads, 1)
+	threadID := threads.Threads[0].ID
+
+	n2 := decode[tools.ResearchNoteOutput](t, f.call(t, cs, "save_research_note", tools.SaveResearchNoteInput{
+		ChannelID: f.ch.ID.String(), ThreadID: threadID, Text: "n2", IdempotencyKeyArg: uuid.NewString(),
+	}))
+
+	summaryRes := f.call(t, cs, "save_research_note", tools.SaveResearchNoteInput{
+		ChannelID: f.ch.ID.String(), ThreadID: threadID, Text: "summary of n1+n2", IdempotencyKeyArg: uuid.NewString(),
+		Relations: []tools.SaveResearchNoteRelationInput{
+			{RelatedNoteID: n1.ID, RelationType: "summarizes"},
+			{RelatedNoteID: n2.ID, RelationType: "summarizes"},
+		},
+	})
+	require.False(t, summaryRes.IsError, "unexpected error: %s", textOf(summaryRes))
+
+	listRes := f.call(t, cs, "list_research_notes", tools.ListResearchNotesInput{ChannelID: f.ch.ID.String()})
+	list := decode[tools.ListResearchNotesOutput](t, listRes)
+	require.Len(t, list.Notes, 3, "the summary note plus its two summarized notes must all still be listed")
+}
+
+// TestSaveResearchNote_InvalidRelationTypeRejectedAtMCPBoundary proves the
+// save_research_note tool call rejects an unrecognized relation_type
+// string end-to-end and persists nothing. Two independent checks reject
+// it -- saveResearchNoteMutate's own store.RelationType.Valid() check
+// (research.go) ahead of the store call, and store.ResearchStore.SaveNote's
+// own identical check (defense in depth, see store_integration_test.go's
+// TestResearchStore_SaveNote_InvalidRelationTypeRejectedAtStoreBoundary) --
+// so disabling either one alone still leaves this test green; this test
+// guards the observable end-to-end contract (rejected, nothing persisted),
+// not which layer specifically catches it.
+func TestSaveResearchNote_InvalidRelationTypeRejectedAtMCPBoundary(t *testing.T) {
+	f := newFixture(t)
+	cs := f.connect(t, f.creator.ID)
+
+	target := decode[tools.ResearchNoteOutput](t, f.call(t, cs, "save_research_note", tools.SaveResearchNoteInput{
+		ChannelID: f.ch.ID.String(), ThreadTitle: "Thread", Text: "target", IdempotencyKeyArg: uuid.NewString(),
+	}))
+
+	res := f.call(t, cs, "save_research_note", tools.SaveResearchNoteInput{
+		ChannelID: f.ch.ID.String(), ThreadTitle: "Thread", Text: "should be rejected", IdempotencyKeyArg: uuid.NewString(),
+		Relations: []tools.SaveResearchNoteRelationInput{
+			{RelatedNoteID: target.ID, RelationType: "not_a_real_type"},
+		},
+	})
+	assert.True(t, res.IsError, "an unrecognized relation_type must be rejected")
+
+	listRes := f.call(t, cs, "list_research_notes", tools.ListResearchNotesInput{ChannelID: f.ch.ID.String()})
+	list := decode[tools.ListResearchNotesOutput](t, listRes)
+	assert.Len(t, list.Notes, 1, "the rejected call must not have persisted a second note")
+}
+
 func TestSaveResearchNote_RecordsCallingPersonAsAuthorNotCreator(t *testing.T) {
 	f := newFixture(t)
 	cs := f.connect(t, f.analyst.ID)
