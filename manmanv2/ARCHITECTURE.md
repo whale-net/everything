@@ -230,13 +230,48 @@ their existing handler logic rather than re-deriving command construction or
 config/volume resolution, and does not change `command.*` routing keys or
 `status.session.*` semantics. `manmanv2/ui`'s own goroutine-based
 stop-then-start (`restartDeployment`/`finishRestartInBackground`) is not yet
-rewired to call it — that cutover, and the consumer that fires the deferred
-Start once the gating Stop converges (claiming `started` rows), is a
-separate piece of work (#1731).
+rewired to call it — that cutover is separate follow-up work.
+
+**Trigger half — `SessionRestartConsumer` (`manmanv2/api/handlers/session_restart_consumer.go`,
+control-api):** a second, independent `status.session.#` consumer inside
+control-api, on its own dedicated queue (`control-api.session.restart`) —
+distinct from event-processor's `processor-events` queue, so the two never
+compete for the same message. Two consumers now bind `status.session.#` on
+the shared `"manman"` exchange (event-processor's persistence consumer and
+this one); they are independent, and neither substitutes for the other —
+event-processor keeps sole ownership of persisting status, and this consumer
+never publishes to `status.session.*` or `manmanv2.htmxsse`.
+
+It lives in control-api rather than event-processor because firing the
+deferred Start means calling `SessionHandler.StartSession`, which is
+control-api's own handler logic (config/volume resolution, active-session
+checks) — routing that call through event-processor would mean either
+duplicating that logic or adding a new cross-service RPC, both of which the
+consumer is explicitly scoped to avoid (see #1731). It reuses the same
+`SessionHandler` instance as the gRPC API (via a narrow `DeferredStarter`
+interface, `StartSession(ctx, *pb.StartSessionRequest) (*pb.StartSessionResponse, error)`),
+so it shares that handler's `CommandPublisher`/`workshop.Manager` rather than
+constructing a second one.
+
+On each `status.session.#` message, non-terminal statuses
+(`pending`/`starting`/`running`/`stopping`) are dropped with no DB access —
+the overwhelming majority of this binding's traffic. For a terminal status
+(`stopped`/`crashed`/`lost`), it calls `ClaimForSession(gating_session_id)`:
+that single atomic `UPDATE ... WHERE status='pending' ... RETURNING` *is*
+the idempotency guarantee — a redelivered or duplicated terminal message
+finds the row already `started` and claims nothing, so `StartSession` is
+called at most once per pending restart. The row is claimed before
+`StartSession` is attempted (a bounded, per-call context — not the
+consumer's long-lived one — so a hung Start can't wedge the queue), which is
+a deliberate at-most-once trade: a crash between claim and Start leaves a
+`started` row with no session, rather than risk two sessions racing to start
+against the same `server_game_config_id`. A `StartSession` failure moves the
+row straight to `failed` with a WARNING log; nothing here retries it
+automatically.
 
 `MarkFailed` moves a row to `failed` from either `pending` (dispatch-half
-failure above) or `started` (deferred-Start failure, once a consumer exists)
-— both are terminal failures of the same intent and share one transition.
+failure above) or `started` (deferred-Start failure) — both are terminal
+failures of the same intent and share one transition.
 
 **Not SCD2:** this table intentionally does not use `valid_from`/`valid_to`
 (see `AGENTS.md` § SCD2). A pending restart is a short-lived work intent with

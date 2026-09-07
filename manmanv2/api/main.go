@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log"
+	"log/slog"
 	"net"
 	"os"
 	"os/signal"
@@ -174,6 +175,33 @@ func run() error {
 		}
 	}()
 	log.Println("Workshop status handler started")
+
+	// Initialize session restart consumer: a second, independent
+	// status.session.* consumer that fires the deferred StartSession once
+	// the gating Stop for a pending_restarts record terminalizes (#1731,
+	// Track B durable restart). Reuses apiServer's sessionHandler so it
+	// shares its CommandPublisher/workshop.Manager instead of constructing
+	// a second one.
+	log.Println("Setting up session restart consumer...")
+	sessionRestartConsumer, err := handlers.NewSessionRestartConsumer(
+		repo.PendingRestarts,
+		repo.Sessions,
+		apiServer.SessionHandler(),
+		rmqConn,
+		slog.Default(),
+	)
+	if err != nil {
+		return fmt.Errorf("failed to create session restart consumer: %w", err)
+	}
+	defer sessionRestartConsumer.Close()
+
+	// Start session restart consumer in background
+	go func() {
+		if err := sessionRestartConsumer.Start(ctx); err != nil {
+			log.Printf("Warning: Session restart consumer stopped: %v", err)
+		}
+	}()
+	log.Println("Session restart consumer started")
 
 	// Register reflection service (for grpcurl, debugging)
 	reflection.Register(grpcServer)
