@@ -26,20 +26,26 @@ templ_library(
     ],
 )
 
-# Postgres-backed handler coverage (Testing phase, issue #1926, milestone
-# M4.3 FR7/FR8/NFR2): HandleList's Founder/Co-Creator/Analyst read (same
-# rows for all three), negatives in this issue's load-bearing order
-# (non-member 403, unknown Channel 404 BEFORE the 403 path, malformed
-# {id} 400, signed-out 401), LB3's load-bearing bound-verdict-version
-# rendering (a best-guess script's verdict version stays pinned to what
-# it was proposed under even after a newer verdict version is appended to
-# the same Idea), the video_script_id IS NULL / confidence-0 case, the
-# no-video_metrics-row "no metrics synced yet" case, non-pending matches
-# never appearing, NFR2's 51-row truncation with a static note and no
-# paging control, and FR8's message-plus-pointer empty state. Gated
-# behind `//go:build integration`, gazelle skips it when scanning for
-# go_test srcs; this go_test is hand-written with EXACTLY the tag set
-# from //libs/go/dbtest:postgres_constraints_test (see that package's
+# Postgres-backed handler coverage (Testing phase, issues #1926/#1927,
+# milestone M4.3 FR7/FR8/FR9/FR10/NFR1/NFR2/NFR3): HandleList's
+# Founder/Co-Creator/Analyst read (same rows for all three), negatives in
+# this issue's load-bearing order (non-member 403, unknown Channel 404
+# BEFORE the 403 path, malformed {id} 400, signed-out 401), LB3's
+# load-bearing bound-verdict-version rendering (a best-guess script's
+# verdict version stays pinned to what it was proposed under even after a
+# newer verdict version is appended to the same Idea), the
+# video_script_id IS NULL / confidence-0 case, the no-video_metrics-row
+# "no metrics synced yet" case, non-pending matches never appearing,
+# NFR2's 51-row truncation with a static note and no paging control, and
+# FR8's message-plus-pointer empty state; plus HandleResolve's (#1927)
+# plain confirm/reject, the FR9 load-bearing archived+undated override
+# case, video_script_id-on-reject and cross-Channel-override rejections,
+# FR10/NFR1's replay and conflict cases, NFR3's Analyst-can-resolve /
+# non-member-403-even-unrendered / signed-out-401 cases, and the
+# cross-Channel matchID 404 guard. Gated behind `//go:build integration`,
+# gazelle skips it when scanning for go_test srcs; this go_test is
+# hand-written with EXACTLY the tag set from
+# //libs/go/dbtest:postgres_constraints_test (see that package's
 # BUILD.bazel/README.md for why each tag is required), mirroring
 # //audience_score_system/web/research:research_integration_test. `# keep`
 # markers tell a later `bazel run //:gazelle` not to touch or remove this

@@ -476,9 +476,13 @@ func (a *app) setupRoutes(mux *http.ServeMux) {
 	// Protected: milestone M4.3's read-only pending-matches browse page
 	// (#1926, FR7/FR8, NFR2). Visible to a Channel's Founder, Co-Creator,
 	// AND Analyst (store.CanRead) -- mirrors the research block above's
-	// read gate exactly. The confirm/reject POSTs land in the follow-up
-	// task (FR9/FR10).
+	// read gate exactly. The confirm/reject POST (#1927, FR9/FR10/NFR1/
+	// NFR3) additionally requires store.CanWrite (not store.CanApprove --
+	// shared Creator-or-Analyst authority, see matches.HandleResolve's
+	// doc comment), re-derived fresh from Postgres per request via
+	// matches.Handlers.authorizeWrite.
 	mux.HandleFunc("GET /channels/{id}/matches", a.auth.RequireSignedIn(a.matches.HandleList))
+	mux.HandleFunc("POST /channels/{id}/matches/{matchID}/resolve", a.auth.RequireSignedIn(a.matches.HandleResolve))
 
 	// Protected: the cross-Channel "my work" aggregate (M2: FR27/FR28,
 	// #1725) -- see handleMyWork's doc comment.

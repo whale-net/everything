@@ -25,13 +25,24 @@ func scriptStatusLabel(s store.VideoScriptStatus) string {
 	}
 }
 
-// List is the Channel-scoped pending-matches browse page (FR7, FR8):
-// every pendingMatchView assembled by HandleList, oldest-first (as
-// ListPending returns them), for ch. truncated (FR NFR2) renders as a
+// List is the Channel-scoped pending-matches browse page (FR7, FR8) plus
+// this task's (#1927) confirm/reject write path (FR9, FR10): every
+// pendingMatchView assembled by HandleList/loadPendingViews, oldest-first
+// (as ListPending returns them), for ch. truncated (FR NFR2) renders as a
 // static note when true -- never a paging control, since this package
 // exposes no since/page parameter anywhere (see matches.go's
-// defaultPendingLimit doc comment).
-templ List(data components.LayoutData, ch store.Channel, matches []pendingMatchView, truncated bool) {
+// defaultPendingLimit doc comment). canWrite (store.CanWrite, the shared
+// Creator-or-Analyst write authority, see matches.go's authorizeWrite doc
+// comment) gates whether each row renders its confirm/reject form at all: presentation
+// only, exactly as web/research's ChannelIndex/IdeaDetail document for
+// their own forms -- the server-side check inside authorizeWrite is what
+// actually rejects a forged POST from a non-member or a signed-out
+// request. scripts (store.VideoScriptStore.ListByChannel, no status
+// filter) backs every row's override <select> with the identical option
+// list -- a human may confirm against ANY script on the Channel,
+// including an archived one (FR40's archive/match interaction note,
+// FR44).
+templ List(data components.LayoutData, ch store.Channel, matches []pendingMatchView, truncated bool, canWrite bool, scripts []store.VideoScript) {
 	@components.Layout(data) {
 		<div class="card bg-base-100 border border-base-300 shadow-sm">
 			<div class="card-body">
@@ -48,7 +59,7 @@ templ List(data components.LayoutData, ch store.Channel, matches []pendingMatchV
 					</p>
 				} else {
 					for _, m := range matches {
-						@pendingMatchCard(m)
+						@pendingMatchCard(ch, m, canWrite, scripts)
 					}
 					if truncated {
 						<p class="text-sm text-base-content/50 mt-2">
@@ -64,9 +75,9 @@ templ List(data components.LayoutData, ch store.Channel, matches []pendingMatchV
 // pendingMatchCard renders one pendingMatchView: the published video
 // (title, publish time, latest metrics or "no metrics synced yet"), the
 // best-guess script (title, status, target publish date or "undated",
-// bound verdict version/value) when present, and the matcher's
-// confidence score.
-templ pendingMatchCard(m pendingMatchView) {
+// bound verdict version/value) when present, the matcher's confidence
+// score, and -- only when canWrite -- the confirm/reject form (FR9).
+templ pendingMatchCard(ch store.Channel, m pendingMatchView, canWrite bool, scripts []store.VideoScript) {
 	<div class="border border-base-300 rounded p-4 mb-2">
 		<h2 class="font-semibold">{ m.Video.Title }</h2>
 		if m.Video.PublishedAt != nil {
@@ -83,7 +94,46 @@ templ pendingMatchCard(m pendingMatchView) {
 		} else {
 			<p class="text-sm text-base-content/70">No best-guess script found.</p>
 		}
+		if canWrite {
+			@resolveForm(ch, m, scripts)
+		}
 	</div>
+}
+
+// resolveForm renders m's confirm/reject form (FR9, FR10): a video_script
+// override <select> (confirm-only -- see this file's doc comment on
+// scripts) defaulted to the matcher's best guess when m.ResolveForm.
+// VideoScriptID is set, the hidden idempotency_key set once at render
+// time (matches.go's newResolveFormData, never client-generated), and two
+// submit buttons resolving to confirm=true/confirm=false -- matching
+// store.MatchStore.Resolve's own confirm bool. Rendering this form is
+// PRESENTATION ONLY (see List's doc comment): the server-side
+// authorizeWrite check inside HandleResolve is what actually rejects a
+// forged POST.
+templ resolveForm(ch store.Channel, m pendingMatchView, scripts []store.VideoScript) {
+	<form method="post" action={ templ.URL("/channels/" + ch.ID.String() + "/matches/" + m.MatchID.String() + "/resolve") } class="mt-2 space-y-2">
+		if m.ResolveForm.Error != "" {
+			<p class="text-error text-sm">{ m.ResolveForm.Error }</p>
+		}
+		<input type="hidden" name="idempotency_key" value={ m.ResolveForm.IdempotencyKey }/>
+		<div class="form-control">
+			<label class="label">
+				<span class="label-text">Link to video script (confirm only)</span>
+			</label>
+			<select name="video_script_id" class="select select-bordered w-full">
+				<option value="" selected?={ m.ResolveForm.VideoScriptID == "" }>Matcher's best guess / none</option>
+				for _, s := range scripts {
+					<option value={ s.ID.String() } selected?={ m.ResolveForm.VideoScriptID == s.ID.String() }>
+						{ s.Title } ({ scriptStatusLabel(s.Status) })
+					</option>
+				}
+			</select>
+		</div>
+		<div class="flex gap-2 mt-2">
+			<button type="submit" name="confirm" value="true" class="btn btn-primary btn-sm">Confirm</button>
+			<button type="submit" name="confirm" value="false" class="btn btn-secondary btn-sm">Reject</button>
+		</div>
+	</form>
 }
 
 // videoMetrics renders v's latest metrics snapshot, or an explicit "no
