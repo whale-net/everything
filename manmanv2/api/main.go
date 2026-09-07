@@ -60,8 +60,9 @@ func run() error {
 	grpcOIDCClientID := getEnv("GRPC_OIDC_CLIENT_ID", "")
 	// RESTART_STALL_TIMEOUT bounds how long a RestartDeployment-recorded
 	// pending_restarts row may sit 'pending' before the reaper (#1731)
-	// expires it -- 3x waitForNoLiveSession's ~15s bound (manmanv2/ui) gives
-	// the dispatched Stop real container-stop time. See manmanv2/ENV.md.
+	// expires it -- 3x the ~15s window the UI's now-removed client-side
+	// poll bound (deleted by #1733) used to give the dispatched Stop real
+	// container-stop time. See manmanv2/ENV.md.
 	restartStallTimeout := getEnvDuration("RESTART_STALL_TIMEOUT", 45*time.Second)
 
 	// Initialize database pool (reads PG_DATABASE_URL)

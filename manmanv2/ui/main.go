@@ -149,14 +149,6 @@ type App struct {
 	// than dereference a nil hub (NFR3/NFR8).
 	sseHub *htmxsse.Hub
 
-	// deploymentStopPollInterval/deploymentStopTimeout override
-	// handleDeploymentAction's restart stop-then-start poll (#1627). Zero
-	// value means "use the production defaults" -- see
-	// handlers_deployment_actions.go's deploymentStopPoll -- so only tests
-	// that need a fast timeout set these.
-	deploymentStopPollInterval time.Duration
-	deploymentStopTimeout      time.Duration
-
 	// deploymentActionTimeout overrides boundDeploymentRPC's bound around
 	// Stop/Restart/Start's own outbound StopSession/StartSession RPC call
 	// (#1664 defense-in-depth, hardened and extended to Start by #1668,
