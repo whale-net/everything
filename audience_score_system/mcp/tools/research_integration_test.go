@@ -810,3 +810,131 @@ func TestListResearchThreads_UnassociatedPersonDenied(t *testing.T) {
 	assert.True(t, deniedRes.IsError)
 	assert.Contains(t, textOf(deniedRes), "permission denied")
 }
+
+// ── FR11/FR16/NFR2 (issue #1942): relations inline on save_research_note's
+// own response, list_research_notes' entries (both directions), and
+// parity with get_channel_overview ──────────────────────────────────────
+
+// TestSaveResearchNote_ResponseIncludesOutgoingRelationItJustWrote proves
+// FR11: save_research_note's own response reflects the outgoing edge it
+// just wrote, not merely what the caller asked for -- saveResearchNoteRender
+// re-reads relations from Postgres exactly like it re-reads the note
+// itself.
+func TestSaveResearchNote_ResponseIncludesOutgoingRelationItJustWrote(t *testing.T) {
+	f := newFixture(t)
+	cs := f.connect(t, f.creator.ID)
+
+	target := decode[tools.ResearchNoteOutput](t, f.call(t, cs, "save_research_note", tools.SaveResearchNoteInput{
+		ChannelID: f.ch.ID.String(), ThreadTitle: "Thread", Text: "target", IdempotencyKeyArg: uuid.NewString(),
+	}))
+	assert.Empty(t, target.Relations, "a note with no relations must render an absent/empty relations field")
+
+	declaring := decode[tools.ResearchNoteOutput](t, f.call(t, cs, "save_research_note", tools.SaveResearchNoteInput{
+		ChannelID: f.ch.ID.String(), ThreadTitle: "Thread", Text: "declaring", IdempotencyKeyArg: uuid.NewString(),
+		Relations: []tools.SaveResearchNoteRelationInput{{RelatedNoteID: target.ID, RelationType: "supersedes"}},
+	}))
+	require.Len(t, declaring.Relations, 1, "save_research_note's own response must include the outgoing relation it just wrote")
+	assert.Equal(t, target.ID, declaring.Relations[0].RelatedNoteID)
+	assert.Equal(t, "supersedes", declaring.Relations[0].RelationType)
+	assert.Equal(t, "outgoing", declaring.Relations[0].Direction)
+}
+
+// TestListResearchNotes_EntriesIncludeBothDirections proves list_research_
+// notes renders BOTH the declaring note's outgoing entry and the target
+// note's incoming entry from the same underlying relation row.
+func TestListResearchNotes_EntriesIncludeBothDirections(t *testing.T) {
+	f := newFixture(t)
+	cs := f.connect(t, f.creator.ID)
+
+	target := decode[tools.ResearchNoteOutput](t, f.call(t, cs, "save_research_note", tools.SaveResearchNoteInput{
+		ChannelID: f.ch.ID.String(), ThreadTitle: "Thread", Text: "target", IdempotencyKeyArg: uuid.NewString(),
+	}))
+	declaring := decode[tools.ResearchNoteOutput](t, f.call(t, cs, "save_research_note", tools.SaveResearchNoteInput{
+		ChannelID: f.ch.ID.String(), ThreadTitle: "Thread", Text: "declaring", IdempotencyKeyArg: uuid.NewString(),
+		Relations: []tools.SaveResearchNoteRelationInput{{RelatedNoteID: target.ID, RelationType: "supersedes"}},
+	}))
+
+	listOut := decode[tools.ListResearchNotesOutput](t, f.call(t, cs, "list_research_notes", tools.ListResearchNotesInput{ChannelID: f.ch.ID.String()}))
+	byID := map[string]tools.ResearchNoteOutput{}
+	for _, n := range listOut.Notes {
+		byID[n.ID] = n
+	}
+
+	require.Len(t, byID[declaring.ID].Relations, 1)
+	assert.Equal(t, "outgoing", byID[declaring.ID].Relations[0].Direction)
+	assert.Equal(t, target.ID, byID[declaring.ID].Relations[0].RelatedNoteID)
+
+	require.Len(t, byID[target.ID].Relations, 1, "the target note's own list_research_notes entry must carry the incoming edge from the SAME relation row")
+	assert.Equal(t, "incoming", byID[target.ID].Relations[0].Direction)
+	assert.Equal(t, declaring.ID, byID[target.ID].Relations[0].RelatedNoteID)
+	assert.Equal(t, "supersedes", byID[target.ID].Relations[0].RelationType)
+}
+
+// TestResearchNoteRelations_GetChannelOverviewAgreesWithListResearchNotes
+// is NFR2's parity proof: the SAME fixture notes' relations, read back
+// through list_research_notes and through get_channel_overview against
+// the SAME underlying Postgres rows, must be identical -- both surfaces
+// share toResearchNoteOutput and ResearchStore.ListRelationsForNotes, so
+// they can never disagree.
+func TestResearchNoteRelations_GetChannelOverviewAgreesWithListResearchNotes(t *testing.T) {
+	pg := newTestDB(t)
+	st := store.New(pg.Pool)
+	creds := newTestCredentialStore(t, pg.Pool)
+	ctx := context.Background()
+
+	creator, _, err := st.Persons().UpsertByGoogleSubject(ctx, "sub-creator-"+uuid.NewString(), "creator@example.com", "Creator")
+	require.NoError(t, err)
+	ch, err := st.Channels().Create(ctx, "yt-"+uuid.NewString(), "Channel", creator.ID)
+	require.NoError(t, err)
+
+	srv := server.New(st)
+	reg := server.NewRegistry(srv, st)
+	tools.RegisterResearch(reg, st)
+	tools.RegisterBrowse(reg, st)
+
+	handler := server.NewHTTPHandler(srv, creds, server.ResourceMetadataConfig{
+		Resource:            "https://mcp.example.com",
+		AuthorizationServer: "https://web.example.com",
+		ResourceName:        "Test MCP",
+	})
+	ts := httptest.NewServer(handler)
+	t.Cleanup(ts.Close)
+
+	token, _, err := creds.Mint(ctx, creator.ID.String())
+	require.NoError(t, err)
+	transport := &mcp.StreamableClientTransport{Endpoint: ts.URL, HTTPClient: &http.Client{Transport: bearerRoundTripper{token: token}}}
+	client := mcp.NewClient(&mcp.Implementation{Name: "test-client", Version: "0.0.1"}, nil)
+	cs, err := client.Connect(ctx, transport, nil)
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = cs.Close() })
+
+	call := func(name string, args any) *mcp.CallToolResult {
+		res, err := cs.CallTool(ctx, &mcp.CallToolParams{Name: name, Arguments: args})
+		require.NoError(t, err)
+		return res
+	}
+
+	target := decode[tools.ResearchNoteOutput](t, call("save_research_note", tools.SaveResearchNoteInput{
+		ChannelID: ch.ID.String(), ThreadTitle: "Thread", Text: "target", IdempotencyKeyArg: uuid.NewString(),
+	}))
+	declaring := decode[tools.ResearchNoteOutput](t, call("save_research_note", tools.SaveResearchNoteInput{
+		ChannelID: ch.ID.String(), ThreadTitle: "Thread", Text: "declaring", IdempotencyKeyArg: uuid.NewString(),
+		Relations: []tools.SaveResearchNoteRelationInput{{RelatedNoteID: target.ID, RelationType: "excludes"}},
+	}))
+
+	listOut := decode[tools.ListResearchNotesOutput](t, call("list_research_notes", tools.ListResearchNotesInput{ChannelID: ch.ID.String()}))
+	listByID := map[string]tools.ResearchNoteOutput{}
+	for _, n := range listOut.Notes {
+		listByID[n.ID] = n
+	}
+
+	overviewOut := decode[tools.GetChannelOverviewOutput](t, call("get_channel_overview", tools.GetChannelOverviewInput{ChannelID: ch.ID.String()}))
+	overviewByID := map[string]tools.ResearchNoteOutput{}
+	for _, n := range overviewOut.ResearchNotes {
+		overviewByID[n.ID] = n
+	}
+
+	require.NotEmpty(t, listByID[target.ID].Relations, "sanity: the target note must carry a relation to compare")
+	assert.Equal(t, listByID[target.ID].Relations, overviewByID[target.ID].Relations, "get_channel_overview must agree with list_research_notes for the target note")
+	assert.Equal(t, listByID[declaring.ID].Relations, overviewByID[declaring.ID].Relations, "get_channel_overview must agree with list_research_notes for the declaring note")
+}

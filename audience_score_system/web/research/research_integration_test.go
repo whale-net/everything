@@ -302,6 +302,9 @@ func newMCPFixture(t *testing.T, s *researchTestStack) *mcpFixture {
 	srv := mcpserver.New(s.store)
 	reg := mcpserver.NewRegistry(srv, s.store)
 	mcptools.RegisterVerdict(reg, s.store)
+	// RegisterResearch backs listResearchNotes below -- FR11/NFR2's
+	// (#1942) web/MCP relations-parity test.
+	mcptools.RegisterResearch(reg, s.store)
 
 	handler := mcpserver.NewHTTPHandler(srv, creds, mcpserver.ResourceMetadataConfig{
 		Resource:            "https://mcp.example.com",
@@ -362,6 +365,24 @@ func (f *mcpFixture) getViabilityVerdict(t *testing.T, cs *mcp.ClientSession, ch
 	body, err := json.Marshal(res.StructuredContent)
 	require.NoError(t, err)
 	var out mcptools.GetViabilityVerdictOutput
+	require.NoError(t, json.Unmarshal(body, &out))
+	return out
+}
+
+// listResearchNotes calls list_research_notes and decodes its structured
+// result -- backs FR11/NFR2's (#1942) web/MCP relations-parity test.
+func (f *mcpFixture) listResearchNotes(t *testing.T, cs *mcp.ClientSession, channelID uuid.UUID) mcptools.ListResearchNotesOutput {
+	t.Helper()
+	res, err := cs.CallTool(context.Background(), &mcp.CallToolParams{
+		Name:      "list_research_notes",
+		Arguments: mcptools.ListResearchNotesInput{ChannelID: channelID.String()},
+	})
+	require.NoError(t, err)
+	require.False(t, res.IsError, "unexpected list_research_notes error")
+
+	body, err := json.Marshal(res.StructuredContent)
+	require.NoError(t, err)
+	var out mcptools.ListResearchNotesOutput
 	require.NoError(t, json.Unmarshal(body, &out))
 	return out
 }
@@ -990,15 +1011,30 @@ func TestHandleIdeaDetail_VerdictWithNoCitations_RendersNoCitedNotesSection(t *t
 // (overlapping across versions) than when they cite none at all -- proving
 // resolution is ONE store.ResearchStore.GetByIDs call across the whole
 // page, never one GetByID per citation per verdict version (FR16/NFR2).
+//
+// Both Ideas below carry the SAME 3-note pool (issue #1942 added a second
+// always-issued batched query, relationsForNotes -- since it also
+// short-circuits on an empty note list, an Idea with a citations-only
+// difference but a DIFFERENT note-list shape would confound this
+// assertion by adding relationsForNotes' own query to only one side).
+// Giving both Ideas an identical note list isolates this test back to
+// citedResearchNotes' own citations-driven diff, exactly as before #1942.
 func TestHandleIdeaDetail_CitedNotesResolution_IssuesOneBatchedQuery(t *testing.T) {
 	ctx := context.Background()
 	s := newResearchTestStack(t)
 	ch, creator := s.setupChannel(t, ctx)
 
 	// noCitations: 4 verdict versions (1 current + 3 history), none cites
-	// anything.
+	// anything, but the Idea still carries its own 3-note pool (see this
+	// test's doc comment above) with no relations among them.
 	noCitationsIdea, err := s.store.Ideas().Create(ctx, ch.ID, "Idea No Citations Query", creator.ID)
 	require.NoError(t, err)
+	for i := 0; i < 3; i++ {
+		_, err := s.store.Research().SaveNote(ctx, store.SaveNoteInput{ThreadTitle: "Research",
+			ChannelID: ch.ID, IdeaID: &noCitationsIdea.ID, Text: fmt.Sprintf("uncited pool note %d", i), AuthorPersonID: creator.ID,
+		})
+		require.NoError(t, err)
+	}
 	for i := 0; i < 4; i++ {
 		_, err = s.store.Verdicts().Append(ctx, store.AppendVerdictInput{
 			IdeaID: noCitationsIdea.ID, Verdict: store.VerdictNeedsMoreResearch, Reasoning: fmt.Sprintf("no citations v%d", i+1), AuthorPersonID: creator.ID, Source: store.VerdictSourceHuman,
@@ -2573,4 +2609,198 @@ func TestHandleIdeaDetail_RendersOnlyThatIdeasThreads(t *testing.T) {
 
 	assert.Contains(t, body, thread1.Title, "Idea One's detail page must render its own thread")
 	assert.NotContains(t, body, thread2.Title, "Idea One's detail page must NOT render Idea Two's thread")
+}
+
+// ── FR11/FR16/NFR2 (issue #1942): a note's own relations render inline on
+// BOTH ordinary browse pages -- Idea detail's note list and the Channel
+// index's unattached-notes list -- via ONE batched
+// ResearchStore.ListRelationsForNotes call per page, and agree with MCP ──
+
+// TestHandleIdeaDetail_RelationsRenderSupersedesAndSupersededByLines proves
+// the core FR11 rendering on Idea detail: the declaring note's own list
+// entry shows its outgoing "supersedes" line, and the target note's own
+// entry shows the incoming "superseded by" line -- from the SAME
+// underlying relation row.
+func TestHandleIdeaDetail_RelationsRenderSupersedesAndSupersededByLines(t *testing.T) {
+	ctx := context.Background()
+	s := newResearchTestStack(t)
+	ch, creator := s.setupChannel(t, ctx)
+	idea, err := s.store.Ideas().Create(ctx, ch.ID, "Idea Relations", creator.ID)
+	require.NoError(t, err)
+
+	target, err := s.store.Research().SaveNote(ctx, store.SaveNoteInput{
+		ChannelID: ch.ID, IdeaID: &idea.ID, ThreadTitle: "Relations thread", Text: "target note text", AuthorPersonID: creator.ID,
+	})
+	require.NoError(t, err)
+	declaring, err := s.store.Research().SaveNote(ctx, store.SaveNoteInput{
+		ChannelID: ch.ID, IdeaID: &idea.ID, ThreadID: target.ThreadID, Text: "declaring note text", AuthorPersonID: creator.ID,
+		Relations: []store.SaveNoteRelationInput{{RelatedNoteID: target.ID, RelationType: store.RelationSupersedes}},
+	})
+	require.NoError(t, err)
+
+	w := s.do(t, http.MethodGet, "/channels/"+ch.ID.String()+"/research/ideas/"+idea.ID.String(), s.sessionCookie(t, ctx, creator.ID))
+	require.Equal(t, http.StatusOK, w.Code, "body: %s", w.Body.String())
+	body := w.Body.String()
+
+	wantOutgoing := "supersedes note " + declaringShortID(target.ID)
+	wantIncoming := "superseded by note " + declaringShortID(declaring.ID)
+	assert.Contains(t, body, wantOutgoing, "the declaring note must render its own outgoing 'supersedes' line")
+	assert.Contains(t, body, wantIncoming, "the target note must render the incoming 'superseded by' line from the same relation row")
+}
+
+// declaringShortID mirrors views.templ's shortNoteID (8 hex chars plus
+// ellipsis) so this file's assertions never hardcode a second copy of the
+// truncation rule.
+func declaringShortID(id uuid.UUID) string {
+	s := id.String()
+	return s[:8] + "…"
+}
+
+// TestHandleChannelIndex_UnattachedNoteRelationsRender proves FR11 renders
+// on the Channel index's unattached-notes list too, not only Idea detail.
+func TestHandleChannelIndex_UnattachedNoteRelationsRender(t *testing.T) {
+	ctx := context.Background()
+	s := newResearchTestStack(t)
+	ch, creator := s.setupChannel(t, ctx)
+
+	target, err := s.store.Research().SaveNote(ctx, store.SaveNoteInput{
+		ChannelID: ch.ID, ThreadTitle: "Unattached thread", Text: "unattached target", AuthorPersonID: creator.ID,
+	})
+	require.NoError(t, err)
+	_, err = s.store.Research().SaveNote(ctx, store.SaveNoteInput{
+		ChannelID: ch.ID, ThreadID: target.ThreadID, Text: "unattached declaring", AuthorPersonID: creator.ID,
+		Relations: []store.SaveNoteRelationInput{{RelatedNoteID: target.ID, RelationType: store.RelationCaveats}},
+	})
+	require.NoError(t, err)
+
+	w := s.do(t, http.MethodGet, "/channels/"+ch.ID.String()+"/research", s.sessionCookie(t, ctx, creator.ID))
+	require.Equal(t, http.StatusOK, w.Code, "body: %s", w.Body.String())
+	body := w.Body.String()
+
+	assert.Contains(t, body, "caveats note "+declaringShortID(target.ID), "the Channel index's unattached-notes list must render the declaring note's outgoing relation")
+	assert.Contains(t, body, "caveated by note", "the Channel index's unattached-notes list must render the target note's incoming relation")
+}
+
+// TestNoteWithNoRelations_RendersNoRelatedLine proves a note with zero
+// relations renders NOTHING extra -- never an empty "Related" wrapper --
+// on both pages.
+func TestNoteWithNoRelations_RendersNoRelatedLine(t *testing.T) {
+	ctx := context.Background()
+	s := newResearchTestStack(t)
+	ch, creator := s.setupChannel(t, ctx)
+	idea, err := s.store.Ideas().Create(ctx, ch.ID, "Idea No Relations", creator.ID)
+	require.NoError(t, err)
+
+	_, err = s.store.Research().SaveNote(ctx, store.SaveNoteInput{
+		ChannelID: ch.ID, IdeaID: &idea.ID, ThreadTitle: "No relations thread", Text: "a lone note with no relations", AuthorPersonID: creator.ID,
+	})
+	require.NoError(t, err)
+
+	w := s.do(t, http.MethodGet, "/channels/"+ch.ID.String()+"/research/ideas/"+idea.ID.String(), s.sessionCookie(t, ctx, creator.ID))
+	require.Equal(t, http.StatusOK, w.Code, "body: %s", w.Body.String())
+	body := w.Body.String()
+
+	assert.Contains(t, body, "a lone note with no relations")
+	for _, verb := range []string{"supersedes", "superseded by", "excludes", "excluded by", "caveats", "caveated by", "follows up", "followed up by", "summarizes", "summarized by"} {
+		assert.NotContains(t, body, verb, "a note with no relations must render no Related line at all")
+	}
+}
+
+// TestHandleIdeaDetail_RelationsResolution_IssuesOneBatchedQuery proves
+// FR16/NFR2's batching contract: resolving relations for an Idea's WHOLE
+// note list issues exactly ONE additional SQL statement versus an
+// identically-shaped Idea whose notes carry no relations at all -- never
+// one query per note.
+func TestHandleIdeaDetail_RelationsResolution_IssuesOneBatchedQuery(t *testing.T) {
+	ctx := context.Background()
+	s := newResearchTestStack(t)
+	ch, creator := s.setupChannel(t, ctx)
+
+	noRelationsIdea, err := s.store.Ideas().Create(ctx, ch.ID, "Idea No Relations Query", creator.ID)
+	require.NoError(t, err)
+	seed, err := s.store.Research().SaveNote(ctx, store.SaveNoteInput{
+		ChannelID: ch.ID, IdeaID: &noRelationsIdea.ID, ThreadTitle: "Thread", Text: "seed", AuthorPersonID: creator.ID,
+	})
+	require.NoError(t, err)
+	for i := 0; i < 4; i++ {
+		_, err := s.store.Research().SaveNote(ctx, store.SaveNoteInput{
+			ChannelID: ch.ID, IdeaID: &noRelationsIdea.ID, ThreadID: seed.ThreadID, Text: fmt.Sprintf("no relation note %d", i), AuthorPersonID: creator.ID,
+		})
+		require.NoError(t, err)
+	}
+
+	withRelationsIdea, err := s.store.Ideas().Create(ctx, ch.ID, "Idea With Relations Query", creator.ID)
+	require.NoError(t, err)
+	wrSeed, err := s.store.Research().SaveNote(ctx, store.SaveNoteInput{
+		ChannelID: ch.ID, IdeaID: &withRelationsIdea.ID, ThreadTitle: "Thread", Text: "seed", AuthorPersonID: creator.ID,
+	})
+	require.NoError(t, err)
+	prior := wrSeed
+	for i := 0; i < 4; i++ {
+		n, err := s.store.Research().SaveNote(ctx, store.SaveNoteInput{
+			ChannelID: ch.ID, IdeaID: &withRelationsIdea.ID, ThreadID: wrSeed.ThreadID, Text: fmt.Sprintf("with relation note %d", i), AuthorPersonID: creator.ID,
+			Relations: []store.SaveNoteRelationInput{{RelatedNoteID: prior.ID, RelationType: store.RelationFollowsUp}},
+		})
+		require.NoError(t, err)
+		prior = n
+	}
+
+	noRelationsCounter := &researchQueryCounter{}
+	noRelationsStack := s.tracedResearchStack(t, ctx, noRelationsCounter)
+	w := noRelationsStack.do(t, http.MethodGet, "/channels/"+ch.ID.String()+"/research/ideas/"+noRelationsIdea.ID.String(), noRelationsStack.sessionCookie(t, ctx, creator.ID))
+	require.Equal(t, http.StatusOK, w.Code, "body: %s", w.Body.String())
+
+	withRelationsCounter := &researchQueryCounter{}
+	withRelationsStack := s.tracedResearchStack(t, ctx, withRelationsCounter)
+	w = withRelationsStack.do(t, http.MethodGet, "/channels/"+ch.ID.String()+"/research/ideas/"+withRelationsIdea.ID.String(), withRelationsStack.sessionCookie(t, ctx, creator.ID))
+	require.Equal(t, http.StatusOK, w.Code, "body: %s", w.Body.String())
+
+	assert.Equal(t, noRelationsCounter.n, withRelationsCounter.n,
+		"resolving relations for a whole note list must issue the SAME query count whether or not any note actually carries a relation; no-relations issued %d, with-relations issued %d", noRelationsCounter.n, withRelationsCounter.n)
+}
+
+// TestHandleIdeaDetail_NoteRelations_MatchListResearchNotesMCP is NFR2's
+// parity proof: the SAME fixture note's relation set, read back through
+// list_research_notes (a real in-process MCP call) and through the web
+// Idea detail page, against the SAME underlying Postgres rows, must be
+// the same relation (related note, type, direction) on both surfaces.
+func TestHandleIdeaDetail_NoteRelations_MatchListResearchNotesMCP(t *testing.T) {
+	ctx := context.Background()
+	s := newResearchTestStack(t)
+	ch, creator := s.setupChannel(t, ctx)
+	idea, err := s.store.Ideas().Create(ctx, ch.ID, "Idea Relations Parity", creator.ID)
+	require.NoError(t, err)
+
+	target, err := s.store.Research().SaveNote(ctx, store.SaveNoteInput{
+		ChannelID: ch.ID, IdeaID: &idea.ID, ThreadTitle: "Parity thread", Text: "parity target", AuthorPersonID: creator.ID,
+	})
+	require.NoError(t, err)
+	declaring, err := s.store.Research().SaveNote(ctx, store.SaveNoteInput{
+		ChannelID: ch.ID, IdeaID: &idea.ID, ThreadID: target.ThreadID, Text: "parity declaring", AuthorPersonID: creator.ID,
+		Relations: []store.SaveNoteRelationInput{{RelatedNoteID: target.ID, RelationType: store.RelationSummarizes}},
+	})
+	require.NoError(t, err)
+
+	// MCP side.
+	mcpFix := newMCPFixture(t, s)
+	cs := mcpFix.connect(t, creator.ID)
+	mcpOut := mcpFix.listResearchNotes(t, cs, ch.ID)
+	var mcpDeclaring mcptools.ResearchNoteOutput
+	for _, n := range mcpOut.Notes {
+		if n.ID == declaring.ID.String() {
+			mcpDeclaring = n
+		}
+	}
+	require.NotEmpty(t, mcpDeclaring.ID, "sanity: the declaring note must be present in list_research_notes")
+	require.Len(t, mcpDeclaring.Relations, 1)
+	assert.Equal(t, target.ID.String(), mcpDeclaring.Relations[0].RelatedNoteID)
+	assert.Equal(t, "summarizes", mcpDeclaring.Relations[0].RelationType)
+	assert.Equal(t, "outgoing", mcpDeclaring.Relations[0].Direction)
+
+	// Web side.
+	w := s.do(t, http.MethodGet, "/channels/"+ch.ID.String()+"/research/ideas/"+idea.ID.String(), s.sessionCookie(t, ctx, creator.ID))
+	require.Equal(t, http.StatusOK, w.Code, "body: %s", w.Body.String())
+	body := w.Body.String()
+
+	assert.Contains(t, body, "summarizes note "+declaringShortID(target.ID), "the web page's relation line must agree with MCP's relation (same related note, type, direction)")
 }
