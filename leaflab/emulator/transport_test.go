@@ -1,9 +1,17 @@
 package main
 
 import (
+	"errors"
 	"fmt"
 	"sync"
 )
+
+// errInjectedSubscribeFailure is returned by fakeTransport.Subscribe while
+// an injected failure count (failSubscribeNext) is still outstanding for
+// the given topic -- config_apply_test.go's subscribeConfig bounded-retry
+// coverage (#2024) uses this to simulate the transient post-takeover
+// resubscribe race subscribeRetryAttempts exists to ride out.
+var errInjectedSubscribeFailure = errors.New("fakeTransport: injected subscribe failure")
 
 // publishRecord captures one fakeTransport.Publish call.
 type publishRecord struct {
@@ -35,10 +43,27 @@ type fakeTransport struct {
 	subscribes   []subscribeRecord
 	handlers     map[string]func(topic string, payload []byte)
 	disconnected bool
+	// subscribeFailures, keyed by topic, counts down remaining injected
+	// Subscribe failures for that topic (see failSubscribeNext below).
+	subscribeFailures map[string]int
 }
 
 func newFakeTransport() *fakeTransport {
 	return &fakeTransport{}
+}
+
+// failSubscribeNext arranges for the next n calls to Subscribe(topic, ...)
+// to fail with errInjectedSubscribeFailure (recorded in subscribes but with
+// no handler registered, matching a real paho Subscribe failure) before
+// succeeding normally -- config_apply_test.go's subscribeConfig
+// bounded-retry coverage (#2024).
+func (f *fakeTransport) failSubscribeNext(topic string, n int) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.subscribeFailures == nil {
+		f.subscribeFailures = make(map[string]int)
+	}
+	f.subscribeFailures[topic] = n
 }
 
 func (f *fakeTransport) Publish(topic string, qos byte, retained bool, payload []byte) error {
@@ -52,6 +77,10 @@ func (f *fakeTransport) Subscribe(topic string, qos byte, cb func(topic string, 
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.subscribes = append(f.subscribes, subscribeRecord{topic: topic, qos: qos})
+	if remaining := f.subscribeFailures[topic]; remaining > 0 {
+		f.subscribeFailures[topic] = remaining - 1
+		return errInjectedSubscribeFailure
+	}
 	if f.handlers == nil {
 		f.handlers = make(map[string]func(string, []byte))
 	}

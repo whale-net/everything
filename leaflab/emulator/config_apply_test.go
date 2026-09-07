@@ -676,3 +676,81 @@ func TestHandleConfig_RaceWithReadingLoop(t *testing.T) {
 	assert.NotEmpty(t, r.board.Sensors)
 	r.mu.Unlock()
 }
+
+// TestSubscribeConfig_RetriesTransientFailure pins subscribeConfig's
+// bounded-retry behavior (config_apply.go, issue #2024): a transient
+// Subscribe failure -- modeling the broker-side "queue still exists" race
+// against a just-kicked prior connection's async teardown -- is retried
+// with doubling backoff instead of leaving the board unsubscribed until the
+// next reconnect.
+func TestSubscribeConfig_RetriesTransientFailure(t *testing.T) {
+	board := twoSensorBoard()
+	r, transport, clock := newTestRunner(board, testDeps())
+
+	// Fail the first subscribeRetryAttempts-1 attempts so the retry loop
+	// must exhaust exactly one fewer than its budget before succeeding --
+	// pins that success on the final attempt is still honored, not just
+	// success-on-first-try.
+	transport.failSubscribeNext(configTopic(board.DeviceID), subscribeRetryAttempts-1)
+
+	require.NoError(t, r.Start())
+	waitForTicker(t, clock)
+
+	transport.mu.Lock()
+	var attempts int
+	for _, sub := range transport.subscribes {
+		if sub.topic == configTopic(board.DeviceID) {
+			attempts++
+		}
+	}
+	transport.mu.Unlock()
+	assert.Equal(t, subscribeRetryAttempts, attempts,
+		"expected exactly subscribeRetryAttempts Subscribe calls (all-but-last failing, last succeeding)")
+
+	assert.Equal(t, []time.Duration{subscribeRetryBaseBackoff, subscribeRetryBaseBackoff * 2}, clock.Sleeps(),
+		"expected doubling backoff before each retry, none after the final (successful) attempt")
+
+	// The eventual success must be a real, functional subscribe -- not just
+	// a recorded attempt -- so a config push delivered afterward is still
+	// handled and acked normally.
+	pushConfig(t, transport, board.DeviceID, &configpb.DeviceConfig{
+		Version: 1,
+		Sensors: []*configpb.SensorConfig{
+			{Name: "default-interval", Enabled: proto.Bool(false)},
+		},
+	})
+	require.True(t, lastAck(t, transport, board.DeviceID).GetAccepted())
+}
+
+// TestSubscribeConfig_ExhaustsRetriesWithoutSubscribing pins the other half
+// of #2024's bounded-retry behavior: when every attempt fails, subscribeConfig
+// gives up after subscribeRetryAttempts (not indefinitely) and leaves the
+// board genuinely unsubscribed until its next reconnect, rather than
+// retrying forever or silently pretending to have subscribed.
+func TestSubscribeConfig_ExhaustsRetriesWithoutSubscribing(t *testing.T) {
+	board := twoSensorBoard()
+	r, transport, clock := newTestRunner(board, testDeps())
+
+	transport.failSubscribeNext(configTopic(board.DeviceID), subscribeRetryAttempts)
+
+	require.NoError(t, r.Start())
+	waitForTicker(t, clock)
+
+	transport.mu.Lock()
+	var attempts int
+	for _, sub := range transport.subscribes {
+		if sub.topic == configTopic(board.DeviceID) {
+			attempts++
+		}
+	}
+	transport.mu.Unlock()
+	assert.Equal(t, subscribeRetryAttempts, attempts,
+		"expected the retry loop to stop at subscribeRetryAttempts, not retry indefinitely")
+
+	assert.Len(t, clock.Sleeps(), subscribeRetryAttempts-1,
+		"expected one backoff sleep between each pair of attempts, none after the last failure")
+
+	assert.Panics(t, func() {
+		transport.deliver(configTopic(board.DeviceID), nil)
+	}, "board must genuinely be unsubscribed after every retry attempt fails")
+}
