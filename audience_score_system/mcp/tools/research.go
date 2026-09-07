@@ -150,9 +150,10 @@ type ResearchNoteOutput struct {
 // Cited is derived by n.Cited() (FR10, FR12 -- store.ResearchNote.Cited,
 // models.go) at this single call site so callers can never disagree on
 // that rule either. IdeaID/ThreadID/ThreadTitle are all derived from n's
-// already-resolved thread (issue #1940, FR2 Stage 2b) -- ThreadTitle is
-// nil exactly when ThreadID is nil (store.ResearchNote's own invariant),
-// never independently. relations is this note's own store.NoteRelation
+// already-resolved thread (issue #1940, FR2 Stage 2b) -- ThreadID is
+// always present as of migration 018/#1947 (store.ResearchNote.ThreadID
+// is non-optional now), and ThreadTitle is in practice always non-nil
+// alongside it, though its Go type stays a pointer. relations is this note's own store.NoteRelation
 // slice (issue #1942, FR11) -- callers batch-resolve it via
 // store.ResearchStore.ListRelationsForNotes ONCE per response and pass in
 // just this note's entry (nil is fine: it renders as an absent Relations
@@ -172,10 +173,12 @@ func toResearchNoteOutput(n store.ResearchNote, authorDisplayName string, relati
 		s := n.IdeaID.String()
 		out.IdeaID = &s
 	}
-	if n.ThreadID != nil {
-		s := n.ThreadID.String()
-		out.ThreadID = &s
-	}
+	// n.ThreadID is non-optional (uuid.UUID, not *uuid.UUID) as of
+	// migration 018/#1947 -- every research_note row now has a resolving
+	// thread, so this is unconditional, unlike the IdeaID/ThreadTitle
+	// pointer fields above/below which can still be genuinely absent.
+	threadID := n.ThreadID.String()
+	out.ThreadID = &threadID
 	if n.ThreadTitle != nil {
 		out.ThreadTitle = n.ThreadTitle
 	}

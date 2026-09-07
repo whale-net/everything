@@ -302,10 +302,12 @@ var noteRelationOptions = []store.RelationType{
 
 // notesInThread filters notes to just those whose ThreadID equals
 // threadID -- relationPickerFields' per-thread grouping of priorNotes.
+// ThreadID is non-optional (uuid.UUID, not *uuid.UUID) as of migration
+// 018/#1947 -- every research_note row now has a resolving thread.
 func notesInThread(notes []store.ResearchNoteWithAuthor, threadID uuid.UUID) []store.ResearchNoteWithAuthor {
 	var out []store.ResearchNoteWithAuthor
 	for _, n := range notes {
-		if n.ThreadID != nil && *n.ThreadID == threadID {
+		if n.ThreadID == threadID {
 			out = append(out, n)
 		}
 	}
