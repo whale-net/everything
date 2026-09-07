@@ -291,10 +291,12 @@ func run() error {
 	// grant of its own.
 	matchesHandlers := matches.New(st)
 
-	// outcomesHandlers is milestone M4.3's read-only prediction-vs-outcome
-	// browse surface (#1928, FR1/FR2, plus the "View outcomes" link half of
-	// FR11) -- needs only st (store.CanRead + Browse()/Channels()/
-	// Roles()), no separate OAuth grant of its own.
+	// outcomesHandlers is milestone M4.3's prediction-vs-outcome browse
+	// surface (#1928, FR1/FR2, plus the "View outcomes" link half of FR11)
+	// plus its calibration-trend section and inline set-outcome-bar form
+	// (#1929, FR3-FR6) -- needs only st (store.CanRead/store.CanWrite +
+	// Browse()/Channels()/Roles()/OutcomeBars()/Calibration()), no separate
+	// OAuth grant of its own.
 	outcomesHandlers := outcomes.New(st)
 
 	// mcpauth's OAuth2 authorization-server front end (issue #1646,
@@ -492,13 +494,18 @@ func (a *app) setupRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /channels/{id}/matches", a.auth.RequireSignedIn(a.matches.HandleList))
 	mux.HandleFunc("POST /channels/{id}/matches/{matchID}/resolve", a.auth.RequireSignedIn(a.matches.HandleResolve))
 
-	// Protected: milestone M4.3's read-only prediction-vs-outcome browse
-	// page (#1928, FR1/FR2, NFR2). Visible to a Channel's Founder,
+	// Protected: milestone M4.3's prediction-vs-outcome browse page (#1928,
+	// FR1/FR2, NFR2) PLUS this task's (#1929) calibration-trend section and
+	// inline set-outcome-bar form (FR3-FR6), rendered on this SAME route --
+	// never a separate page. GET is visible to a Channel's Founder,
 	// Co-Creator, AND Analyst (store.CanRead) -- mirrors the matches block
-	// above's read gate exactly. The calibration-trend section and
-	// outcome-bar save form (FR3-FR6) land on this same route in the
-	// follow-up task.
+	// above's read gate exactly. The outcome-bar POST additionally requires
+	// store.CanWrite (Creator, Co-Creator, or Analyst -- not CanApprove,
+	// reproducing the FR17-authority rule outcomes.HandleSetOutcomeBar's
+	// doc comment cites), re-derived fresh from Postgres per request via
+	// outcomes.Handlers.authorizeWrite.
 	mux.HandleFunc("GET /channels/{id}/outcomes", a.auth.RequireSignedIn(a.outcomes.HandleList))
+	mux.HandleFunc("POST /channels/{id}/outcome-bar", a.auth.RequireSignedIn(a.outcomes.HandleSetOutcomeBar))
 
 	// Protected: the cross-Channel "my work" aggregate (M2: FR27/FR28,
 	// #1725) -- see handleMyWork's doc comment.
