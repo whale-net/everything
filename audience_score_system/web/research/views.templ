@@ -811,23 +811,27 @@ templ citedNotesSection(citedIDs []uuid.UUID, notes map[uuid.UUID]store.Research
 	}
 }
 
-// IdeaDetail is one Idea's research-note list (FR2, FR10) and full
-// viability-verdict version history (FR9): current, then every version
-// oldest-to-newest, each showing value, reasoning, author display name,
-// source (FR5), and created_at -- content-identical to
-// get_viability_verdict's current + history fields. authorNames maps a
-// Verdict's AuthorPersonID (as a UUID string) to its display name --
-// resolved once per distinct author by the handler (Verdict carries no
-// AuthorDisplayName field of its own, unlike ResearchNoteWithAuthor).
-// citedNotes (FR9, FR16/NFR2, #1943) maps a cited research_note id to its
-// resolved store.ResearchNote -- research.go's citedResearchNotes resolves
-// the union of every verdict's CitedResearchNoteIDs (current + every
-// history entry) in ONE batched call, never one query per citation.
-// retiredNotes (FR10, FR16/NFR2, #1944) maps that SAME id union to which
-// relation type(s) currently retire it (research.go's
-// retiredCitedResearchNotes, store.ResearchStore.RetiredNoteIDs) -- an id
-// absent from this map is a live note, so citedNoteBody renders no
-// warning for it.
+// IdeaDetail is one Idea's research-note list (FR2, FR10) and its
+// CURRENT viability verdict only (FR4, #2034) -- value (as
+// components.VerdictGlyph), reasoning, author display name, source (FR5),
+// and created_at. Before #2034 this also rendered the full version-history
+// list; that moved to the verdict-details page
+// (research.go's HandleVerdictDetail/renderVerdictDetail, VerdictDetail
+// below), which this page links to (FR5) whenever current is non-nil --
+// current is non-nil iff at least one verdict exists, since
+// store.VerdictStore.Current always succeeds when any version does.
+// authorNames maps a Verdict's AuthorPersonID (as a UUID string) to its
+// display name -- resolved once per distinct author by the handler
+// (Verdict carries no AuthorDisplayName field of its own, unlike
+// ResearchNoteWithAuthor). citedNotes (FR9, FR16/NFR2, #1943) maps a cited
+// research_note id to its resolved store.ResearchNote -- research.go's
+// citedResearchNotes resolves current's CitedResearchNoteIDs (history
+// passed as nil since this page no longer renders history, #2034) in ONE
+// batched call, never one query per citation. retiredNotes (FR10, FR16/
+// NFR2, #1944) maps that SAME id set to which relation type(s) currently
+// retire it (research.go's retiredCitedResearchNotes,
+// store.ResearchStore.RetiredNoteIDs) -- an id absent from this map is a
+// live note, so citedNoteBody renders no warning for it.
 //
 // relationsByNote (FR11, issue #1942) maps notes' ids to their own
 // research_note_relation edges, resolved by research.go's renderIdeaDetail
@@ -865,7 +869,7 @@ templ citedNotesSection(citedIDs []uuid.UUID, notes map[uuid.UUID]store.Research
 // current verdict (FR4), never this render-time check alone -- but that
 // presentation gate must never suppress an error the server already
 // decided to show.
-templ IdeaDetail(data components.LayoutData, ch store.Channel, idea store.Idea, notes []store.ResearchNoteWithAuthor, relationsByNote map[uuid.UUID][]store.NoteRelation, noteRefTargets map[uuid.UUID]*uuid.UUID, notesTruncated bool, threads []store.ThreadSummary, current *store.Verdict, history []store.Verdict, authorNames map[uuid.UUID]string, citedNotes map[uuid.UUID]store.ResearchNote, retiredNotes map[uuid.UUID][]store.RelationType, canWrite bool, form noteFormData, verdictForm verdictFormData, strategies []store.StrategyDetail, proposeForm proposeFormData) {
+templ IdeaDetail(data components.LayoutData, ch store.Channel, idea store.Idea, notes []store.ResearchNoteWithAuthor, relationsByNote map[uuid.UUID][]store.NoteRelation, noteRefTargets map[uuid.UUID]*uuid.UUID, notesTruncated bool, threads []store.ThreadSummary, current *store.Verdict, authorNames map[uuid.UUID]string, citedNotes map[uuid.UUID]store.ResearchNote, retiredNotes map[uuid.UUID][]store.RelationType, canWrite bool, form noteFormData, verdictForm verdictFormData, strategies []store.StrategyDetail, proposeForm proposeFormData) {
 	@components.Layout(data) {
 		<div class="card bg-base-100 border border-base-300 shadow-sm">
 			<div class="card-body">
@@ -915,17 +919,11 @@ templ IdeaDetail(data components.LayoutData, ch store.Channel, idea store.Idea, 
 							<p class="text-sm font-semibold">Current</p>
 							@verdictBody(*current, authorNames, citedNotes, retiredNotes)
 						</div>
-					}
-
-					if len(history) > 0 {
-						<h3 class="text-sm font-semibold mt-4">History (oldest to newest)</h3>
-						<ul class="mt-2 space-y-2">
-							for _, v := range history {
-								<li class="border border-base-300 rounded p-2">
-									@verdictBody(v, authorNames, citedNotes, retiredNotes)
-								</li>
-							}
-						</ul>
+						<p class="mt-2">
+							<a href={ templ.URL("/channels/" + ch.ID.String() + "/research/ideas/" + idea.ID.String() + "/verdicts") } class="link link-primary text-sm">
+								View verdict history
+							</a>
+						</p>
 					}
 
 					if canWrite {
@@ -956,23 +954,59 @@ templ IdeaDetail(data components.LayoutData, ch store.Channel, idea store.Idea, 
 
 // VerdictDetail is the verdict-details page (#2034, FR6-FR9) --
 // research.go's HandleVerdictDetail/renderVerdictDetail serve it at
-// GET /channels/{id}/research/ideas/{ideaID}/verdicts. A Scaffold-phase
-// placeholder body: the Implementation phase replaces this with the
-// current verdict rendered prominently (FR6, reusing verdictBody/
-// components.VerdictGlyph exactly as IdeaDetail does today), a
-// version-select control listing every version oldest-to-newest (FR7,
-// re-rendering this SAME page via a GET query param -- no diff/comparison
-// view anywhere, per #1953's explicit exclusion), the selected version's
-// cited notes (FR8, reusing citedNotesSection/citedNoteBody), and an
-// explicit empty state for a verdict-less Idea (FR9, still a 200) --
-// assembled from data renderVerdictDetail resolves; this templ does no
-// store calls of its own, mirroring IdeaDetail's identical split.
-templ VerdictDetail(data components.LayoutData, ch store.Channel, idea store.Idea) {
+// GET /channels/{id}/research/ideas/{ideaID}/verdicts. history is EVERY
+// version for this Idea, oldest to newest (nil for FR9's empty state,
+// when the Idea has no verdicts at all); selected is the store.Verdict
+// resolveSelectedVerdict picked (FR7 -- current unless a valid "version"
+// query param names an older one, nil for the empty state); current is
+// the Idea's actual current verdict, used only to label selected's card
+// "Current" vs "Version N" and to mark the version-select's default
+// option -- selected itself is what renders (FR6/FR7 are the same render
+// path, they differ only in which version selected names). authorNames/
+// citedNotes/retiredNotes are research.go's identical helpers IdeaDetail
+// uses, resolved for history (authorNames, bounded to ONE call regardless
+// of version count) and selected only (citedNotes/retiredNotes, FR8 -- the
+// selected version's citations, never every version's).
+//
+// No diff/comparison view exists here or anywhere else in this package --
+// #1953's explicit exclusion (root plan #2027, Out of scope).
+templ VerdictDetail(data components.LayoutData, ch store.Channel, idea store.Idea, history []store.Verdict, selected *store.Verdict, current *store.Verdict, authorNames map[uuid.UUID]string, citedNotes map[uuid.UUID]store.ResearchNote, retiredNotes map[uuid.UUID][]store.RelationType) {
 	@components.Layout(data) {
 		<div class="card bg-base-100 border border-base-300 shadow-sm">
 			<div class="card-body">
 				<h1 class="card-title">{ idea.Title } verdict history</h1>
-				<div class="card-actions justify-end mt-2">
+				if selected == nil {
+					<p class="text-base-content/70 mt-2">No verdict recorded yet.</p>
+				} else {
+					if len(history) > 1 {
+						<form method="get" class="mt-2 flex items-end gap-2">
+							<div>
+								<label class="label" for="verdict-version-select">
+									<span class="label-text text-xs">Version</span>
+								</label>
+								<select id="verdict-version-select" name="version" class="select select-bordered select-sm" onchange="this.form.submit()">
+									for _, v := range history {
+										<option value={ strconv.Itoa(v.Version) } selected?={ v.Version == selected.Version }>
+											Version { strconv.Itoa(v.Version) } — { v.CreatedAt.UTC().Format("2006-01-02 15:04 UTC") }
+										</option>
+									}
+								</select>
+							</div>
+							<button type="submit" class="btn btn-secondary btn-sm">View</button>
+						</form>
+					}
+					<div class="border border-base-300 rounded p-2 mt-4">
+						<p class="text-sm font-semibold">
+							if current != nil && selected.Version == current.Version {
+								Current
+							} else {
+								Version { strconv.Itoa(selected.Version) }
+							}
+						</p>
+						@verdictBody(*selected, authorNames, citedNotes, retiredNotes)
+					</div>
+				}
+				<div class="card-actions justify-end mt-4">
 					<a href={ templ.URL("/channels/" + ch.ID.String() + "/research/ideas/" + idea.ID.String()) } class="btn btn-secondary btn-sm">
 						Back to idea
 					</a>
