@@ -140,6 +140,8 @@ import (
 	"github.com/whale-net/everything/audience_score_system/web/access"
 	"github.com/whale-net/everything/audience_score_system/web/auth"
 	"github.com/whale-net/everything/audience_score_system/web/invite"
+	"github.com/whale-net/everything/audience_score_system/web/matches"
+	"github.com/whale-net/everything/audience_score_system/web/outcomes"
 	"github.com/whale-net/everything/audience_score_system/web/research"
 	"github.com/whale-net/everything/audience_score_system/web/schedule"
 	"github.com/whale-net/everything/audience_score_system/worker/sync"
@@ -200,12 +202,15 @@ func newWorld(t *testing.T) *world {
 	sch := schedule.New(st)
 	acc := access.New(st)
 	res := research.New(st)
+	mtc := matches.New(st)
+	out := outcomes.New(st)
 
 	// web router: mirrors web/main.go's setupRoutes for exactly the
 	// routes this loop drives (invite generate/resume, schedule approve/
 	// unapprove/edit, M2's access-management page, M4.1's research
-	// browse/save routes, and M4.2's propose-video-script route, #1915/
-	// #1917) -- same pattern as web/invite/
+	// browse/save routes, M4.2's propose-video-script route, #1915/#1917,
+	// and M4.3's pending-matches/outcomes routes, #1926-#1929) -- same
+	// pattern as web/invite/
 	// invite_integration_test.go, web/schedule/schedule_integration_test.go,
 	// web/access/access_integration_test.go, and web/research/
 	// research_integration_test.go.
@@ -242,6 +247,10 @@ func newWorld(t *testing.T) *world {
 	mux.HandleFunc("POST /channels/{id}/research/notes", a.RequireSignedIn(res.HandleSaveNote))
 	mux.HandleFunc("POST /channels/{id}/research/ideas/{ideaID}/verdicts", a.RequireSignedIn(res.HandleSaveVerdict))
 	mux.HandleFunc("POST /channels/{id}/research/ideas/{ideaID}/video-scripts", a.RequireSignedIn(res.HandleProposeVideoScript))
+	mux.HandleFunc("GET /channels/{id}/matches", a.RequireSignedIn(mtc.HandleList))
+	mux.HandleFunc("POST /channels/{id}/matches/{matchID}/resolve", a.RequireSignedIn(mtc.HandleResolve))
+	mux.HandleFunc("GET /channels/{id}/outcomes", a.RequireSignedIn(out.HandleList))
+	mux.HandleFunc("POST /channels/{id}/outcome-bar", a.RequireSignedIn(out.HandleSetOutcomeBar))
 
 	// mcp server: mirrors mcp/main.go's tool registration exactly.
 	srv := mcpserver.New(st)
