@@ -32,10 +32,14 @@ type clockTicker interface {
 	Stop()
 }
 
-// runnerClock abstracts time.Now/time.NewTicker for the same reason.
+// runnerClock abstracts time.Now/time.NewTicker/time.Sleep for the same
+// reason. Sleep backs subscribeConfig's bounded retry backoff
+// (config_apply.go, issue #2024) so that path is driveable without a real
+// broker or real wall-clock delay too.
 type runnerClock interface {
 	Now() time.Time
 	NewTicker(d time.Duration) clockTicker
+	Sleep(d time.Duration)
 }
 
 type realTicker struct{ t *time.Ticker }
@@ -49,6 +53,7 @@ func (realClock) Now() time.Time { return time.Now() }
 func (realClock) NewTicker(d time.Duration) clockTicker {
 	return &realTicker{t: time.NewTicker(d)}
 }
+func (realClock) Sleep(d time.Duration) { time.Sleep(d) }
 
 // RunnerDeps bundles the per-board dependencies NewRunner needs beyond the
 // Board and Transport, so the constructor's argument list doesn't grow
@@ -234,10 +239,10 @@ func (r *Runner) Start() error {
 // evidence captured. This is an emulator-code/usage defect (candidate
 // (1)'s "emulator-code-fixable" bucket in #2024's terms), not a genuine,
 // undocumented environment limitation: see #2024's Implementation section
-// for the resulting fix (README caution against sharing device_ids across
-// concurrent standalone + in-cluster runs, plus the bounded-retry
-// hardening around subscribeConfig() for the residual single-instance
-// reconnect race this doesn't rule out).
+// for the resulting fix -- a README caution against sharing device_ids
+// across concurrent standalone + in-cluster runs (README.md's Quickstart),
+// plus config_apply.go's subscribeConfig bounded-retry hardening for the
+// residual single-instance reconnect race this doesn't rule out.
 func (r *Runner) onConnect() {
 	// connectStart anchors the Debug timing trail below (issue #2024): it
 	// lets a "board connection lost" WARN (the just-added

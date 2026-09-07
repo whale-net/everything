@@ -52,6 +52,12 @@ func (c *fakeClock) NewTicker(_ time.Duration) clockTicker {
 	return t
 }
 
+// Sleep is a no-op: fakeClock's whole purpose is instant, deterministic
+// time (see Tick) -- a real sleep here would make every test that exercises
+// subscribeConfig's retry backoff (config_apply.go, issue #2024) slow for
+// no benefit, since nothing in these tests reads wall-clock time.
+func (c *fakeClock) Sleep(time.Duration) {}
+
 // hasTicker reports whether Runner.loop has called NewTicker yet -- the
 // loop goroutine spawned by ensureLoopStarted races with the test calling
 // Tick, so tests must wait for this before ticking.

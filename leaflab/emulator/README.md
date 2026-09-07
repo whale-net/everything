@@ -40,6 +40,24 @@ boards use, so a standalone run and a `tilt up`-managed run are
 indistinguishable on the wire. See [`ENV.md`](ENV.md) for every variable and
 its default.
 
+> **Caution — don't run this alongside `tilt up`'s own instance with the
+> same (default) `EMULATOR_BOARDS`/`SCENARIO_DIR`.** Each simulated board's
+> MQTT `ClientID` is its `device_id`, and `device_id` is derived purely from
+> scenario name + index (`deriveDeviceID`, `board.go`) — it has no
+> per-process salt. Two emulator processes that both default to the same
+> scenario set mint byte-identical ClientIDs for every board, and the broker
+> (correctly, per the MQTT spec) kicks whichever connection is older every
+> time the other side reconnects — forever, since neither side's backoff
+> ever gives the collision a chance to resolve. This looks exactly like an
+> unstable connection (repeating `"board reconnected"` WARN log lines and
+> `"duplicate id"` kicks in the broker's own logs) but is actually two
+> processes fighting over the same identity, not a connection-lifecycle bug
+> (root-caused in #2024). If you need a standalone run at the same time as
+> `tilt up`, give it a disjoint `EMULATOR_BOARDS`/`SCENARIO_DIR` (or pin
+> explicit `@<device_id>` overrides) so no ClientID is shared, and stop it
+> before leaving it running unattended — a leftover standalone process is
+> the most common way this collision actually happens.
+
 ## Selecting boards — `EMULATOR_BOARDS`
 
 Comma-separated list of `<scenario>[:<count>][@<device_id>]` entries, e.g.:

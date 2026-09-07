@@ -8,6 +8,7 @@ package main
 import (
 	"fmt"
 	"log/slog"
+	"time"
 
 	"google.golang.org/protobuf/proto"
 
@@ -18,13 +19,52 @@ import (
 func configTopic(deviceID string) string    { return fmt.Sprintf("leaflab/%s/config", deviceID) }
 func configAckTopic(deviceID string) string { return fmt.Sprintf("leaflab/%s/config/ack", deviceID) }
 
-// subscribeConfig subscribes to this board's config topic. Called from
-// onConnect on every connect, including reconnects, so a config push lands
-// (and is acked) the same way after a reconnect as on first connect.
+// subscribeRetryAttempts bounds onConnect's post-takeover resubscribe retry
+// (issue #2024): the broker's own async session/queue teardown of a
+// just-kicked prior connection can transiently race this connection's
+// re-subscribe, surfacing as a Subscribe error immediately after a
+// duplicate-id takeover (RabbitMQ's own logs have shown this as a
+// "queue ... {existing, ...}" declare failure -- see #2024's Problem
+// section). 3 attempts is enough to ride out that teardown without
+// meaningfully delaying FR18's reconnect-convergence guarantee.
+const subscribeRetryAttempts = 3
+
+// subscribeRetryBaseBackoff is the backoff before the second attempt;
+// later attempts double it (250ms, then 500ms -- 2 retries after the
+// first attempt, for subscribeRetryAttempts = 3).
+const subscribeRetryBaseBackoff = 250 * time.Millisecond
+
+// subscribeConfig subscribes to this board's config topic, retrying a
+// transient failure with bounded, doubling backoff (issue #2024) instead of
+// silently leaving the board unsubscribed until the *next* reconnect --
+// extending the existing "retried ... publish" Warn-log-on-failure pattern
+// used elsewhere in this package (runner.go) to an actual bounded retry at
+// this call site, since this is the one call in the connect sequence with a
+// plausible transient-failure race to retry against (see the const doc
+// comment above). Called from onConnect on every connect, including
+// reconnects, so a config push lands (and is acked) the same way after a
+// reconnect as on first connect.
 func (r *Runner) subscribeConfig() {
-	if err := r.transport.Subscribe(configTopic(r.board.DeviceID), 1, r.handleConfig); err != nil {
-		r.deps.Logger.Warn("retried config subscribe", "device_id", r.board.DeviceID, "error", err)
+	deviceID := r.board.DeviceID // immutable for the Runner's lifetime; safe unlocked
+
+	var err error
+	for attempt := 1; attempt <= subscribeRetryAttempts; attempt++ {
+		err = r.transport.Subscribe(configTopic(deviceID), 1, r.handleConfig)
+		if err == nil {
+			return
+		}
+		if attempt == subscribeRetryAttempts {
+			break
+		}
+		backoff := subscribeRetryBaseBackoff * time.Duration(uint(1)<<uint(attempt-1))
+		r.deps.Logger.Warn("retried config subscribe", "device_id", deviceID, "attempt", attempt, "max_attempts", subscribeRetryAttempts, "backoff", backoff, "error", err)
+		r.clock.Sleep(backoff)
 	}
+	// Every attempt failed: the board genuinely cannot receive config pushes
+	// until its next reconnect. That is a real operation failure, not a
+	// transient blip already absorbed by the retry above -- ERROR per this
+	// repo's logging convention (AGENTS.md), not another WARN.
+	r.deps.Logger.Error("config subscribe failed after retries", "device_id", deviceID, "attempts", subscribeRetryAttempts, "error", err)
 }
 
 // handleConfig is the leaflab/<device_id>/config message handler: decode,
