@@ -663,6 +663,53 @@ func TestListResearchNotes_LimitTruncatedAndBeforePageBackwardExactly(t *testing
 	assert.ElementsMatch(t, []string{"page note 0", "page note 1"}, texts)
 }
 
+// TestListResearchNotes_CurrentOnly_DefaultFalseIncludesRetired_TrueExcludesSupersededVsCaveats
+// is the MCP-boundary half of FR8/FR16/NFR2's coverage: store's
+// research_integration_test.go/store_integration_test.go already prove
+// ListFiltered's currentOnly semantics exhaustively (per-relation-type,
+// chains, and every filter composition) -- what this test proves instead
+// is that list_research_notes' current_only JSON field actually plumbs
+// through to that same ListFiltered call, with no second filtering pass in
+// mcp/tools (FR16/NFR2): omitted defaults to false (today's behaviour,
+// retired notes still listed), and current_only: true excludes a note
+// superseded by a later one while still including one only caveated by a
+// later note.
+func TestListResearchNotes_CurrentOnly_DefaultFalseIncludesRetired_TrueExcludesSupersededVsCaveats(t *testing.T) {
+	f := newFixture(t)
+	cs := f.connect(t, f.creator.ID)
+
+	target := decode[tools.ResearchNoteOutput](t, f.call(t, cs, "save_research_note", tools.SaveResearchNoteInput{
+		ChannelID: f.ch.ID.String(), ThreadTitle: "Current only", Text: "target note", IdempotencyKeyArg: uuid.NewString(),
+	}))
+	superseder := decode[tools.ResearchNoteOutput](t, f.call(t, cs, "save_research_note", tools.SaveResearchNoteInput{
+		ChannelID: f.ch.ID.String(), ThreadTitle: "Current only", Text: "supersedes target", IdempotencyKeyArg: uuid.NewString(),
+		Relations: []tools.SaveResearchNoteRelationInput{{RelatedNoteID: target.ID, RelationType: "supersedes"}},
+	}))
+	caveated := decode[tools.ResearchNoteOutput](t, f.call(t, cs, "save_research_note", tools.SaveResearchNoteInput{
+		ChannelID: f.ch.ID.String(), ThreadTitle: "Current only", Text: "caveated but still current", IdempotencyKeyArg: uuid.NewString(),
+	}))
+	caveater := decode[tools.ResearchNoteOutput](t, f.call(t, cs, "save_research_note", tools.SaveResearchNoteInput{
+		ChannelID: f.ch.ID.String(), ThreadTitle: "Current only", Text: "caveats the caveated note", IdempotencyKeyArg: uuid.NewString(),
+		Relations: []tools.SaveResearchNoteRelationInput{{RelatedNoteID: caveated.ID, RelationType: "caveats"}},
+	}))
+
+	defaultRes := f.call(t, cs, "list_research_notes", tools.ListResearchNotesInput{ChannelID: f.ch.ID.String()})
+	defaultList := decode[tools.ListResearchNotesOutput](t, defaultRes)
+	require.Len(t, defaultList.Notes, 4, "current_only omitted must default to false, listing every note including the retired one")
+
+	currentRes := f.call(t, cs, "list_research_notes", tools.ListResearchNotesInput{ChannelID: f.ch.ID.String(), CurrentOnly: true})
+	currentList := decode[tools.ListResearchNotesOutput](t, currentRes)
+	var ids []string
+	for _, n := range currentList.Notes {
+		ids = append(ids, n.ID)
+	}
+	assert.NotContains(t, ids, target.ID, "current_only: true must exclude the note targeted by 'supersedes'")
+	assert.Contains(t, ids, superseder.ID)
+	assert.Contains(t, ids, caveated.ID, "current_only: true must NOT exclude a note only targeted by 'caveats'")
+	assert.Contains(t, ids, caveater.ID)
+	assert.Len(t, currentList.Notes, 3)
+}
+
 func TestListIdeas_NoteCountAndHasVerdictStats(t *testing.T) {
 	f := newFixture(t)
 	cs := f.connect(t, f.creator.ID)
