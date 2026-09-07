@@ -104,10 +104,18 @@ func (r *PendingRestartRepository) MarkStarted(ctx context.Context, pendingResta
 }
 
 func (r *PendingRestartRepository) MarkFailed(ctx context.Context, pendingRestartID int64, reason string) error {
+	// Accepts both 'pending' and 'started': a record can fail either before
+	// it's ever claimed (RestartDeployment's own Stop dispatch fails right
+	// after Create, #1730) or after it's claimed (the deferred Start itself
+	// fails, #1731) -- both are "this restart intent will never resolve
+	// successfully" and share the same terminal transition. resolved_at is
+	// only set here if it wasn't already (ClaimForSession sets it at the
+	// pending->started transition), so it keeps meaning "when this record
+	// stopped being 'pending'" in both cases.
 	query := `
 		UPDATE pending_restarts
-		SET status = 'failed', failure_reason = $2
-		WHERE pending_restart_id = $1 AND status = 'started'
+		SET status = 'failed', failure_reason = $2, resolved_at = COALESCE(resolved_at, NOW())
+		WHERE pending_restart_id = $1 AND status IN ('pending', 'started')
 	`
 	_, err := r.db.Exec(ctx, query, pendingRestartID, reason)
 	return err

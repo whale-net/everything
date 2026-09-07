@@ -232,7 +232,11 @@ type PendingRestartRepository interface {
 	ClaimForSession(ctx context.Context, gatingSessionID int64) (*manman.PendingRestart, error)
 	// MarkStarted records the session id the deferred Start produced.
 	MarkStarted(ctx context.Context, pendingRestartID, startedSessionID int64) error
-	// MarkFailed moves a claimed record to 'failed' with a reason.
+	// MarkFailed moves a 'pending' or 'started' record to 'failed' with a
+	// reason. 'pending' covers RestartDeployment's own Stop-dispatch failing
+	// right after Create (#1730); 'started' covers the deferred Start itself
+	// failing after being claimed (#1731). Both are terminal failures of the
+	// same intent, so they share one transition rather than two.
 	MarkFailed(ctx context.Context, pendingRestartID int64, reason string) error
 	// ExpireStalled atomically moves every 'pending' record past its
 	// stall_deadline to 'expired' and returns them (FR11/NFR12).

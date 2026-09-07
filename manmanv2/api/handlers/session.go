@@ -2,6 +2,7 @@ package handlers
 
 import (
 	"context"
+	"errors"
 	"log/slog"
 	"strconv"
 	"strings"
@@ -326,9 +327,85 @@ func (h *SessionHandler) StopSession(ctx context.Context, req *pb.StopSessionReq
 // before dispatching the Stop, so the intent survives the caller's pod
 // dying (#1730, Track B dispatch half of FR9/FR10). The consumer that fires
 // the deferred Start once the gating Stop converges is a separate task
-// (#1731); this scaffold only wires the RPC through.
+// (#1731); this RPC only records the intent and dispatches the Stop.
+//
+// Ordering is load-bearing: record-then-dispatch. Dispatching the Stop
+// first and recording second would reintroduce exactly the lost-intent
+// window FR9 exists to close (pod dies between the two).
 func (h *SessionHandler) RestartDeployment(ctx context.Context, req *pb.RestartDeploymentRequest) (*pb.RestartDeploymentResponse, error) {
-	return nil, status.Error(codes.Unimplemented, "RestartDeployment not yet implemented")
+	if _, err := h.sgcRepo.Get(ctx, req.ServerGameConfigId); err != nil {
+		slog.Warn("restart requested for unknown server game config", "sgc_id", req.ServerGameConfigId, "error", err)
+		return nil, status.Errorf(codes.NotFound, "server game config not found: %v", err)
+	}
+
+	live, err := h.getLiveSessionForSGC(ctx, req.ServerGameConfigId)
+	if err != nil {
+		slog.Warn("failed to check live session for restart", "sgc_id", req.ServerGameConfigId, "error", err)
+		return nil, status.Errorf(codes.Internal, "failed to check live session: %v", err)
+	}
+
+	// No live session: this is the degenerate case restartDeployment already
+	// handles synchronously today (manmanv2/ui/handlers_deployment_actions.go)
+	// -- there is no lost-intent gap to make durable, so just Start inline
+	// via the existing handler logic rather than re-deriving it.
+	if live == nil {
+		startResp, err := h.StartSession(ctx, &pb.StartSessionRequest{ServerGameConfigId: req.ServerGameConfigId})
+		if err != nil {
+			return nil, err
+		}
+		return &pb.RestartDeploymentResponse{StartedSession: startResp.Session}, nil
+	}
+
+	stallDeadline := time.Now().Add(h.restartStallTimeout)
+	pending, err := h.pendingRestartsRepo.Create(ctx, req.ServerGameConfigId, live.SessionID, stallDeadline)
+	if err != nil {
+		if errors.Is(err, repository.ErrPendingRestartExists) {
+			slog.Info("restart already in flight, no-op", "sgc_id", req.ServerGameConfigId, "gating_session_id", live.SessionID)
+			return &pb.RestartDeploymentResponse{AlreadyInFlight: true}, nil
+		}
+		// Nothing is dispatched here: a failure to record the intent must
+		// leave the deployment exactly as it was, rather than stopped with
+		// no record of why.
+		slog.Warn("failed to record pending restart", "sgc_id", req.ServerGameConfigId, "gating_session_id", live.SessionID, "error", err)
+		return nil, status.Errorf(codes.Internal, "failed to record pending restart: %v", err)
+	}
+
+	slog.Info("restart dispatched", "sgc_id", req.ServerGameConfigId, "gating_session_id", live.SessionID, "pending_restart_id", pending.PendingRestartID, "stall_deadline", stallDeadline)
+
+	// Only after the record is committed do we dispatch the Stop.
+	stopResp, err := h.StopSession(ctx, &pb.StopSessionRequest{SessionId: live.SessionID})
+	if err != nil {
+		// The record is left 'pending' if we can't mark it failed here; the
+		// reaper (#1731) will eventually expire it, just more slowly than
+		// this fast-path cleanup.
+		if markErr := h.pendingRestartsRepo.MarkFailed(ctx, pending.PendingRestartID, err.Error()); markErr != nil {
+			slog.Warn("failed to mark pending restart failed after stop dispatch error", "pending_restart_id", pending.PendingRestartID, "sgc_id", req.ServerGameConfigId, "error", markErr)
+		} else {
+			slog.Warn("stop dispatch failed for restart; pending restart marked failed", "pending_restart_id", pending.PendingRestartID, "sgc_id", req.ServerGameConfigId, "gating_session_id", live.SessionID, "error", err)
+		}
+		return nil, err
+	}
+
+	return &pb.RestartDeploymentResponse{StoppingSession: stopResp.Session}, nil
+}
+
+// getLiveSessionForSGC returns the current live (non-terminal) session for
+// sgcID, or nil if there is none. Reuses the same live-session query path
+// StartSession/StopSession filtering relies on (repository.SessionFilters.
+// LiveOnly) rather than re-deriving the live-status set here.
+func (h *SessionHandler) getLiveSessionForSGC(ctx context.Context, sgcID int64) (*manman.Session, error) {
+	filters := &repository.SessionFilters{
+		SGCID:    &sgcID,
+		LiveOnly: true,
+	}
+	sessions, err := h.sessionRepo.ListWithFilters(ctx, filters, 1, 0)
+	if err != nil {
+		return nil, err
+	}
+	if len(sessions) == 0 {
+		return nil, nil
+	}
+	return sessions[0], nil
 }
 
 func (h *SessionHandler) SendInput(ctx context.Context, req *pb.SendInputRequest) (*pb.SendInputResponse, error) {
