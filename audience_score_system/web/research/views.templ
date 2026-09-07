@@ -290,6 +290,31 @@ templ threadRow(t store.ThreadSummary) {
 	</tr>
 }
 
+// relatedNotesSection scaffolds FR11's per-note "Related" line: a note's
+// own research_note_relation edges (store.NoteRelation), rendered inline
+// alongside its body on an ordinary browse -- not only inferable from
+// #1941's current_only exclusion or #1944's narrow verdict-citation
+// warning. Renders nothing at all when relations is empty (never an
+// empty wrapper), mirroring citedNotesSection's convention below.
+//
+// Scaffold note (issue #1942): this is a placeholder rendering (direction
+// + relation_type + the related note's raw id) so the component has a
+// stable signature for noteBody/ChannelIndex/IdeaDetail to call in later
+// phases. The Implementation phase replaces the body with the
+// "supersedes note …" / "superseded by note …" phrasing FR11 asks for,
+// reusing whichever excerpt/id format #1943 established for cited notes.
+templ relatedNotesSection(relations []store.NoteRelation) {
+	if len(relations) > 0 {
+		<div class="mt-1 space-y-0.5">
+			for _, rel := range relations {
+				<p class="text-xs text-base-content/70">
+					{ string(rel.Direction) } { string(rel.RelationType) } note { rel.RelatedNoteID.String() }
+				</p>
+			}
+		</div>
+	}
+}
+
 // citedBadge renders FR10's explicit cited/uncited indicator, read from
 // note.Cited() -- never a local nil-check on the note's source URL field
 // in this template (that derivation lives in exactly one place,
