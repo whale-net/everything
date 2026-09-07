@@ -1,4 +1,6 @@
 load("@rules_go//go:def.bzl", "go_binary", "go_library", "go_test")
+load("@rules_pkg//:pkg.bzl", "pkg_tar")
+load("//tools/bazel:release.bzl", "release_app")
 
 go_library(
     name = "emulator_lib",
@@ -52,4 +54,37 @@ go_test(
         "@com_github_stretchr_testify//require",
         "@org_golang_google_protobuf//proto",
     ],
+)
+
+# Bakes the board scenario JSON fixtures (//leaflab/scripts:scenarios) into
+# the container image at a fixed absolute path, so the Tilt Deployment and
+# `bazel run //leaflab/emulator:emulator` both resolve SCENARIO_DIR the same
+# way (config.go's default is a repo-relative path that does not exist
+# inside the image). Chosen over a ConfigMap so the image itself is
+# self-contained regardless of how it's launched -- see FR19 in issue #1773.
+pkg_tar(
+    name = "scenarios_tar",
+    srcs = ["//leaflab/scripts:scenarios"],
+    mode = "0644",
+    package_dir = "/etc/leaflab/scenarios",
+    visibility = ["//visibility:private"],
+)
+
+# Dev/Tilt-only packaging (FR19, NFR7): own release_app target and
+# container image, but deploy_unit = "none" below means it is built and
+# published like every other leaflab app yet never bundled into
+# leaflab_chart (see //leaflab:BUILD.bazel's leaflab_chart apps list,
+# which must NOT list this target) or deployed to K8s in production. Do
+# not "fix" this to "chart" -- the emulator is dev tooling that simulates
+# MQTT sensorboards and has no place running in a real environment.
+release_app(
+    name = "leaflab-emulator",
+    additional_tars = [":scenarios_tar"],
+    app_type = "worker",
+    binary_name = ":emulator",
+    deploy_unit = "none",
+    description = "LeafLab local board emulator (dev tooling; simulates MQTT sensorboards)",
+    domain = "leaflab",
+    language = "go",
+    replicas = 1,
 )
