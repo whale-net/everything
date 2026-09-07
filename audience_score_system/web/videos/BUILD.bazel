@@ -1,0 +1,24 @@
+load("//tools:templ.bzl", "templ_library")
+
+# Capability C21's Channel-scoped published-videos listing page (issue
+# #2031, milestone re-anchor of #1960's FR27-FR30): handlers (videos.go) and
+# templ views (views.templ) in one package -- see videos.go's package doc
+# comment for why they are not split across a components/pages sibling pair
+# like web/pages (mirrors web/outcomes's own rationale, which in turn
+# mirrors web/research's/web/schedule's). Postgres-backed handler coverage
+# (Testing phase) lands as videos_integration_test.go plus a hand-written
+# go_test rule, mirroring
+# //audience_score_system/web/outcomes:outcomes_integration_test.
+templ_library(
+    name = "videos",
+    srcs = glob(["*.templ"]),
+    go_srcs = ["videos.go"],
+    visibility = [
+        "//audience_score_system/citest:__pkg__",
+        "//audience_score_system/web:__pkg__",
+    ],
+    deps = [
+        "//audience_score_system/store",
+        "//audience_score_system/web/components",
+    ],
+)

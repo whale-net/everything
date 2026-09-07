@@ -36,6 +36,7 @@ import (
 	"github.com/whale-net/everything/audience_score_system/web/pages"
 	"github.com/whale-net/everything/audience_score_system/web/research"
 	"github.com/whale-net/everything/audience_score_system/web/schedule"
+	"github.com/whale-net/everything/audience_score_system/web/videos"
 	"github.com/whale-net/everything/audience_score_system/worker/sync"
 	"github.com/whale-net/everything/libs/go/db"
 	"github.com/whale-net/everything/libs/go/htmxbase"
@@ -149,6 +150,7 @@ type app struct {
 	research *research.Handlers
 	matches  *matches.Handlers
 	outcomes *outcomes.Handlers
+	videos   *videos.Handlers
 
 	// mcpProvider is mcpauth's OAuth2 authorization-server front end
 	// (issue #1646, FR12/NFR4): /authorize, /token, /register, and
@@ -299,6 +301,12 @@ func run() error {
 	// OAuth grant of its own.
 	outcomesHandlers := outcomes.New(st)
 
+	// videosHandlers is capability C21's published-videos listing surface
+	// (issue #2031, FR27-FR30) -- needs only st (store.CanRead +
+	// Sync()/Channels()/Roles()), no separate OAuth grant of its own. C21
+	// is web-only in this milestone; no MCP mirror.
+	videosHandlers := videos.New(st)
+
 	// mcpauth's OAuth2 authorization-server front end (issue #1646,
 	// FR12/NFR4): mints the bearer credential an MCP client presents to
 	// `mcp`, reusing this Person's existing C1 Google-OIDC-backed session
@@ -347,7 +355,7 @@ func run() error {
 		return fmt.Errorf("construct mcpauth provider: %w", err)
 	}
 
-	application := &app{store: st, auth: authenticator, invite: inviteHandlers, channels: channelHandler, schedule: scheduleHandlers, access: accessHandlers, research: researchHandlers, matches: matchesHandlers, outcomes: outcomesHandlers, mcpProvider: mcpProvider}
+	application := &app{store: st, auth: authenticator, invite: inviteHandlers, channels: channelHandler, schedule: scheduleHandlers, access: accessHandlers, research: researchHandlers, matches: matchesHandlers, outcomes: outcomesHandlers, videos: videosHandlers, mcpProvider: mcpProvider}
 
 	mux := http.NewServeMux()
 	application.setupRoutes(mux)
@@ -507,6 +515,13 @@ func (a *app) setupRoutes(mux *http.ServeMux) {
 	// outcomes.Handlers.authorizeWrite.
 	mux.HandleFunc("GET /channels/{id}/outcomes", a.auth.RequireSignedIn(a.outcomes.HandleList))
 	mux.HandleFunc("POST /channels/{id}/outcome-bar", a.auth.RequireSignedIn(a.outcomes.HandleSetOutcomeBar))
+
+	// Protected: capability C21's published-videos listing page (#2031,
+	// FR27-FR30, the listing half of NFR3). Visible to a Channel's
+	// Founder, Co-Creator, AND Analyst (store.CanRead) -- mirrors the
+	// outcomes block above's read gate exactly. No write path in this
+	// task.
+	mux.HandleFunc("GET /channels/{id}/videos", a.auth.RequireSignedIn(a.videos.HandleList))
 
 	// Protected: the cross-Channel "my work" aggregate (M2: FR27/FR28,
 	// #1725) -- see handleMyWork's doc comment.

@@ -104,6 +104,12 @@ func (f *fakeSyncStore) LatestMetricsFor(context.Context, uuid.UUID) (*store.Vid
 	return nil, errors.New("fakeSyncStore.LatestMetricsFor is not used by these tests")
 }
 
+// ListPublishedWithMetrics (issue #2031) is not exercised by SyncSchedule's
+// tests (this file) -- `web`'s videos page is the only caller.
+func (f *fakeSyncStore) ListPublishedWithMetrics(context.Context, uuid.UUID, store.PublishedVideoFilter, int) ([]store.PublishedVideoRow, bool, error) {
+	return nil, false, errors.New("fakeSyncStore.ListPublishedWithMetrics is not used by these tests")
+}
+
 // ── fake tokens.Store ────────────────────────────────────────────────────
 
 type markNeedsReauthCall struct {

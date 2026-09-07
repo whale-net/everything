@@ -1,0 +1,21 @@
+package videos
+
+import (
+	"github.com/whale-net/everything/audience_score_system/store"
+	"github.com/whale-net/everything/audience_score_system/web/components"
+)
+
+// List is the Channel-scoped published-videos listing page (FR27-FR30).
+// Stubbed for Scaffold -- this task's Implementation step replaces this
+// body with the real render of every store.PublishedVideoRow HandleList
+// loads, plus the title/date-range/sync-status filter form (FR28) and the
+// explicit empty/no-metrics/truncated states (FR27, FR30).
+templ List(data components.LayoutData, ch store.Channel) {
+	@components.Layout(data) {
+		<div class="card bg-base-100 border border-base-300 shadow-sm">
+			<div class="card-body">
+				<h1 class="card-title">{ ch.Title } videos</h1>
+			</div>
+		</div>
+	}
+}

@@ -11,6 +11,55 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
+// ErrPublishedVideosNotImplemented is returned by ListPublishedWithMetrics
+// until Implementation wires in the real SQL -- same scaffold/feat split
+// other store methods in this package have followed (e.g. CalibrationStore.
+// MonthlyTrend, calibration.go).
+var ErrPublishedVideosNotImplemented = errors.New("store: published videos listing not implemented")
+
+// PublishedVideoFilter is ListPublishedWithMetrics' combinable filter set
+// (issue #2031, FR28/FR29/FR30) -- every non-zero-value field narrows the
+// result set, and all set fields combine with AND (FR30). The zero value
+// (TitleContains == "", PublishedFrom == nil, PublishedTo == nil,
+// Synced == nil) applies no filter at all.
+type PublishedVideoFilter struct {
+	// TitleContains is a case-insensitive substring match against the
+	// video's title (FR28); "" means no title filter.
+	TitleContains string
+	// PublishedFrom/PublishedTo bound the video's published_at, inclusive
+	// on both ends (FR28); nil means unbounded on that side.
+	PublishedFrom *time.Time
+	PublishedTo   *time.Time
+	// Synced is FR29's binary sync-status bucket filter: nil means no
+	// filter, true restricts to videos with a live (auto or confirmed)
+	// video_schedule_match, false restricts to everything else (no match
+	// row, a pending row with or without a candidate, or a rejected row)
+	// -- see PublishedVideoRow.Synced's doc comment for the exact rule
+	// this must classify against once Implementation wires in the query.
+	Synced *bool
+}
+
+// PublishedVideoRow is one row of ListPublishedWithMetrics (issue #2031,
+// FR27/FR28/FR29/FR30) -- a published SyncedVideo paired with its latest
+// recorded VideoMetrics (nil when none has been recorded yet -- FR27's
+// explicit "no metrics recorded" placeholder, never a zero value presented
+// as data) and its FR29 sync-status bucket.
+type PublishedVideoRow struct {
+	SyncedVideo SyncedVideo
+	// Metrics is nil when no video_metrics row has been recorded yet for
+	// this video (FR27) -- rendered as an explicit placeholder, never as
+	// zeros.
+	Metrics *VideoMetrics
+	// Synced is FR29's binary bucket, confirmed against match.go's
+	// "live match" predicate (the same one isVideoScriptPublished and
+	// MatchStore.ListCandidates already use): true when the video has a
+	// video_schedule_match row with state IN ('auto', 'confirmed');
+	// false for everything else -- no match row at all, a pending row
+	// (with or without a candidate video_script_id, per HasMatch's doc
+	// comment), or a rejected row. There is deliberately no third state.
+	Synced bool
+}
+
 // SyncStore covers `synced_video` and `video_metrics` (migration 002,
 // FR14/FR21) -- the read models the Temporal sync writes into.
 type SyncStore interface {
@@ -49,6 +98,22 @@ type SyncStore interface {
 	// measured_at) for syncedVideoID, or nil if none has been recorded
 	// yet -- issue #1581's list_pending_matches metrics snapshot.
 	LatestMetricsFor(ctx context.Context, syncedVideoID uuid.UUID) (*VideoMetrics, error)
+
+	// ListPublishedWithMetrics returns published SyncedVideos
+	// (published_at IS NOT NULL) on channelID with their latest recorded
+	// metrics and sync-status bucket (issue #2031, FR27/FR28/FR29/FR30),
+	// most-recently-published first, narrowed by f (all set fields
+	// combine with AND, FR30) and capped at limit (<=0 = unbounded;
+	// truncated reports whether more matching rows exist beyond it, per
+	// pagination.go's fetchLimit/paginate idiom). NFR3: the whole
+	// listing -- rows, latest metrics, and sync bucket -- is answered in
+	// ONE query (a LATERAL join for latest metrics per video, a LEFT JOIN
+	// onto video_schedule_match for the bucket, mirroring browse.go's
+	// PredictionVsOutcome/calibration.go's MonthlyTrend) -- never a
+	// Go-side loop calling LatestMetricsFor or MatchStore.HasMatch once
+	// per video. Returns ErrPublishedVideosNotImplemented until
+	// Implementation wires in the real SQL.
+	ListPublishedWithMetrics(ctx context.Context, channelID uuid.UUID, f PublishedVideoFilter, limit int) (rows []PublishedVideoRow, truncated bool, err error)
 }
 
 // syncStore implements SyncStore against `synced_video` and
@@ -210,4 +275,13 @@ func (s syncStore) ListSchedule(ctx context.Context, channelID uuid.UUID, from, 
 	}
 	vids, truncated := paginate(vids, limit)
 	return vids, truncated, nil
+}
+
+// ListPublishedWithMetrics is stubbed for Scaffold -- this task's
+// Implementation step replaces this body with the real one-query SQL (see
+// the SyncStore.ListPublishedWithMetrics doc comment for the exact shape:
+// a LATERAL join for latest metrics, a LEFT JOIN onto
+// video_schedule_match for the FR29 bucket, no per-row Go-side loop).
+func (s syncStore) ListPublishedWithMetrics(ctx context.Context, channelID uuid.UUID, f PublishedVideoFilter, limit int) ([]PublishedVideoRow, bool, error) {
+	return nil, false, ErrPublishedVideosNotImplemented
 }
