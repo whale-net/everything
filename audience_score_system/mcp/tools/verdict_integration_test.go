@@ -29,12 +29,14 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"sync"
 	"testing"
 
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 	_ "github.com/jackc/pgx/v5/stdlib"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
@@ -105,6 +107,7 @@ type verdictFixture struct {
 	otherCreator store.Person
 	otherNote    store.ResearchNote // different-Channel note, must be rejected as a citation
 	url          string
+	pg           *dbtest.Postgres // exposed so a traced fixture (see tracedFixture) can point a second, query-counted pool at the SAME database
 }
 
 func newVerdictFixture(t *testing.T) *verdictFixture {
@@ -164,8 +167,58 @@ func newVerdictFixture(t *testing.T) *verdictFixture {
 	return &verdictFixture{
 		st: st, creds: creds, ch: ch, creator: creator, analyst: analyst, outsider: outsider,
 		idea: idea, note: note, otherChannel: otherChannel, otherCreator: otherCreator, otherNote: otherNote,
-		url: ts.URL,
+		url: ts.URL, pg: pg,
 	}
+}
+
+// verdictQueryCounter is a pgx.QueryTracer that counts every SQL statement
+// issued through the pool it's attached to -- mirrors web/research's
+// researchQueryCounter (#1943's pattern), used below for FR16/NFR2's
+// batching proof at the MCP orchestration layer.
+type verdictQueryCounter struct{ n int64 }
+
+func (c *verdictQueryCounter) TraceQueryStart(ctx context.Context, _ *pgx.Conn, _ pgx.TraceQueryStartData) context.Context {
+	c.n++
+	return ctx
+}
+
+func (c *verdictQueryCounter) TraceQueryEnd(context.Context, *pgx.Conn, pgx.TraceQueryEndData) {}
+
+// tracedFixture builds a second, fully independent MCP server (same
+// tools, same registration) against the SAME underlying Postgres as f, but
+// through a pool whose every query is counted by counter -- so a test can
+// call get_viability_verdict through this second server and see EXACTLY
+// how many SQL statements that single call issued, isolated from whatever
+// f's own fixture setup already did. Mirrors web/research's
+// tracedResearchStack.
+func (f *verdictFixture) tracedFixture(t *testing.T, ctx context.Context, counter *verdictQueryCounter) *verdictFixture {
+	t.Helper()
+
+	cfg, err := pgxpool.ParseConfig(f.pg.ConnString)
+	require.NoError(t, err)
+	cfg.ConnConfig.Tracer = counter
+
+	pool, err := pgxpool.NewWithConfig(ctx, cfg)
+	require.NoError(t, err)
+	t.Cleanup(pool.Close)
+
+	st := store.New(pool)
+	creds := newTestCredentialStore(t, pool)
+
+	srv := server.New(st)
+	reg := server.NewRegistry(srv, st)
+	tools.RegisterVerdict(reg, st)
+	tools.RegisterResearch(reg, st)
+
+	handler := server.NewHTTPHandler(srv, creds, server.ResourceMetadataConfig{
+		Resource:            "https://mcp.example.com",
+		AuthorizationServer: "https://web.example.com",
+		ResourceName:        "Test MCP",
+	})
+	ts := httptest.NewServer(handler)
+	t.Cleanup(ts.Close)
+
+	return &verdictFixture{st: st, creds: creds, url: ts.URL, pg: f.pg}
 }
 
 // bearerRoundTripper injects an "Authorization: Bearer <token>" header on
@@ -685,4 +738,360 @@ func TestGetViabilityVerdict_CitedNotesRenderedWithExcerptSourceURLAndCitedFlag(
 	require.NotNil(t, cited.SourceURL)
 	assert.Equal(t, citedURL, *cited.SourceURL)
 	assert.Equal(t, "a note with its own source", cited.TextExcerpt)
+}
+
+// ── superseded/excluded staleness warning on cited notes (FR10/FR16/NFR2, issue #1944) ──
+
+// TestGetViabilityVerdict_CitedNoteLaterSuperseded_RendersRetiredBySupersedes
+// proves FR10: a verdict cites note A; A is later superseded by note B
+// (same thread, via save_research_note's relations); get_viability_verdict
+// must render A's citation with retired_by = ["supersedes"], and the
+// citation itself must still name A (never re-resolved to B).
+func TestGetViabilityVerdict_CitedNoteLaterSuperseded_RendersRetiredBySupersedes(t *testing.T) {
+	f := newVerdictFixture(t)
+	cs := f.connect(t, f.creator.ID)
+
+	saveRes := f.call(t, cs, "save_viability_verdict", tools.SaveViabilityVerdictInput{
+		ChannelID:            f.ch.ID.String(),
+		IdeaID:               f.idea.ID.String(),
+		Verdict:              "viable",
+		Reasoning:            "citing a note that will later be superseded",
+		CitedResearchNoteIDs: []string{f.note.ID.String()},
+		IdempotencyKeyArg:    uuid.NewString(),
+	})
+	require.False(t, saveRes.IsError, "unexpected error: %s", vtextOf(saveRes))
+
+	_, err := f.st.Research().SaveNote(context.Background(), store.SaveNoteInput{
+		ChannelID: f.ch.ID, IdeaID: &f.idea.ID, ThreadID: f.note.ThreadID,
+		Text: "a newer note that supersedes the cited one", AuthorPersonID: f.creator.ID,
+		Relations: []store.SaveNoteRelationInput{{RelatedNoteID: f.note.ID, RelationType: store.RelationSupersedes}},
+	})
+	require.NoError(t, err)
+
+	getRes := f.call(t, cs, "get_viability_verdict", tools.GetViabilityVerdictInput{
+		ChannelID: f.ch.ID.String(), IdeaID: f.idea.ID.String(),
+	})
+	out := vdecode[tools.GetViabilityVerdictOutput](t, getRes)
+	require.NotNil(t, out.Current)
+	require.Len(t, out.Current.CitedResearchNotes, 1)
+	citation := out.Current.CitedResearchNotes[0]
+	assert.Equal(t, f.note.ID.String(), citation.ID, "the citation must still name the original note, never the superseding one")
+	assert.Equal(t, []string{"supersedes"}, citation.RetiredBy)
+}
+
+// TestGetViabilityVerdict_CitedNoteLaterExcluded_RendersRetiredByExcludes
+// mirrors the supersedes test for the excludes relation type.
+func TestGetViabilityVerdict_CitedNoteLaterExcluded_RendersRetiredByExcludes(t *testing.T) {
+	f := newVerdictFixture(t)
+	cs := f.connect(t, f.creator.ID)
+
+	saveRes := f.call(t, cs, "save_viability_verdict", tools.SaveViabilityVerdictInput{
+		ChannelID:            f.ch.ID.String(),
+		IdeaID:               f.idea.ID.String(),
+		Verdict:              "viable",
+		Reasoning:            "citing a note that will later be excluded",
+		CitedResearchNoteIDs: []string{f.note.ID.String()},
+		IdempotencyKeyArg:    uuid.NewString(),
+	})
+	require.False(t, saveRes.IsError, "unexpected error: %s", vtextOf(saveRes))
+
+	_, err := f.st.Research().SaveNote(context.Background(), store.SaveNoteInput{
+		ChannelID: f.ch.ID, IdeaID: &f.idea.ID, ThreadID: f.note.ThreadID,
+		Text: "a note that excludes the cited one", AuthorPersonID: f.creator.ID,
+		Relations: []store.SaveNoteRelationInput{{RelatedNoteID: f.note.ID, RelationType: store.RelationExcludes}},
+	})
+	require.NoError(t, err)
+
+	getRes := f.call(t, cs, "get_viability_verdict", tools.GetViabilityVerdictInput{
+		ChannelID: f.ch.ID.String(), IdeaID: f.idea.ID.String(),
+	})
+	out := vdecode[tools.GetViabilityVerdictOutput](t, getRes)
+	require.NotNil(t, out.Current)
+	require.Len(t, out.Current.CitedResearchNotes, 1)
+	citation := out.Current.CitedResearchNotes[0]
+	assert.Equal(t, f.note.ID.String(), citation.ID, "the citation must still name the original note, never the excluding one")
+	assert.Equal(t, []string{"excludes"}, citation.RetiredBy)
+}
+
+// TestGetViabilityVerdict_CitedNoteWithNonRetiringRelation_RendersNoWarning
+// is the FR7 distinction test: caveats, follows_up, and summarizes name a
+// prior note without retiring it -- one subtest per type, per the issue's
+// Testing section ("one test per type").
+func TestGetViabilityVerdict_CitedNoteWithNonRetiringRelation_RendersNoWarning(t *testing.T) {
+	for _, relationType := range []string{"caveats", "follows_up", "summarizes"} {
+		t.Run(relationType, func(t *testing.T) {
+			f := newVerdictFixture(t)
+			cs := f.connect(t, f.creator.ID)
+
+			saveRes := f.call(t, cs, "save_viability_verdict", tools.SaveViabilityVerdictInput{
+				ChannelID:            f.ch.ID.String(),
+				IdeaID:               f.idea.ID.String(),
+				Verdict:              "viable",
+				Reasoning:            "citing a note related by " + relationType,
+				CitedResearchNoteIDs: []string{f.note.ID.String()},
+				IdempotencyKeyArg:    uuid.NewString(),
+			})
+			require.False(t, saveRes.IsError, "unexpected error: %s", vtextOf(saveRes))
+
+			_, err := f.st.Research().SaveNote(context.Background(), store.SaveNoteInput{
+				ChannelID: f.ch.ID, IdeaID: &f.idea.ID, ThreadID: f.note.ThreadID,
+				Text: "a note related to the cited one via " + relationType, AuthorPersonID: f.creator.ID,
+				Relations: []store.SaveNoteRelationInput{{RelatedNoteID: f.note.ID, RelationType: store.RelationType(relationType)}},
+			})
+			require.NoError(t, err)
+
+			getRes := f.call(t, cs, "get_viability_verdict", tools.GetViabilityVerdictInput{
+				ChannelID: f.ch.ID.String(), IdeaID: f.idea.ID.String(),
+			})
+			out := vdecode[tools.GetViabilityVerdictOutput](t, getRes)
+			require.NotNil(t, out.Current)
+			require.Len(t, out.Current.CitedResearchNotes, 1)
+			assert.Empty(t, out.Current.CitedResearchNotes[0].RetiredBy, "relation_type %q must never trigger a retired warning", relationType)
+		})
+	}
+}
+
+// TestGetViabilityVerdict_CitedLiveNoteNoRelation_RendersNoWarning proves
+// a cited note with no supersedes/excludes/caveats/follows_up/summarizes
+// relation at all renders retired_by absent (nil), not an empty-but-
+// present list.
+func TestGetViabilityVerdict_CitedLiveNoteNoRelation_RendersNoWarning(t *testing.T) {
+	f := newVerdictFixture(t)
+	cs := f.connect(t, f.creator.ID)
+
+	saveRes := f.call(t, cs, "save_viability_verdict", tools.SaveViabilityVerdictInput{
+		ChannelID:            f.ch.ID.String(),
+		IdeaID:               f.idea.ID.String(),
+		Verdict:              "viable",
+		Reasoning:            "citing a live note",
+		CitedResearchNoteIDs: []string{f.note.ID.String()},
+		IdempotencyKeyArg:    uuid.NewString(),
+	})
+	require.False(t, saveRes.IsError, "unexpected error: %s", vtextOf(saveRes))
+
+	getRes := f.call(t, cs, "get_viability_verdict", tools.GetViabilityVerdictInput{
+		ChannelID: f.ch.ID.String(), IdeaID: f.idea.ID.String(),
+	})
+	out := vdecode[tools.GetViabilityVerdictOutput](t, getRes)
+	require.NotNil(t, out.Current)
+	require.Len(t, out.Current.CitedResearchNotes, 1)
+	assert.Nil(t, out.Current.CitedResearchNotes[0].RetiredBy, "a live note must render retired_by as nil, not an empty-but-present list")
+}
+
+// TestGetViabilityVerdict_CitedNoteBothSupersededAndExcluded_RendersBoth
+// proves a note targeted by both a supersedes and an excludes relation
+// (from two different notes) reports both in retired_by.
+func TestGetViabilityVerdict_CitedNoteBothSupersededAndExcluded_RendersBoth(t *testing.T) {
+	f := newVerdictFixture(t)
+	cs := f.connect(t, f.creator.ID)
+
+	saveRes := f.call(t, cs, "save_viability_verdict", tools.SaveViabilityVerdictInput{
+		ChannelID:            f.ch.ID.String(),
+		IdeaID:               f.idea.ID.String(),
+		Verdict:              "viable",
+		Reasoning:            "citing a note that will be both superseded and excluded",
+		CitedResearchNoteIDs: []string{f.note.ID.String()},
+		IdempotencyKeyArg:    uuid.NewString(),
+	})
+	require.False(t, saveRes.IsError, "unexpected error: %s", vtextOf(saveRes))
+
+	ctx := context.Background()
+	_, err := f.st.Research().SaveNote(ctx, store.SaveNoteInput{
+		ChannelID: f.ch.ID, IdeaID: &f.idea.ID, ThreadID: f.note.ThreadID,
+		Text: "supersedes the cited note", AuthorPersonID: f.creator.ID,
+		Relations: []store.SaveNoteRelationInput{{RelatedNoteID: f.note.ID, RelationType: store.RelationSupersedes}},
+	})
+	require.NoError(t, err)
+	_, err = f.st.Research().SaveNote(ctx, store.SaveNoteInput{
+		ChannelID: f.ch.ID, IdeaID: &f.idea.ID, ThreadID: f.note.ThreadID,
+		Text: "also excludes the cited note", AuthorPersonID: f.creator.ID,
+		Relations: []store.SaveNoteRelationInput{{RelatedNoteID: f.note.ID, RelationType: store.RelationExcludes}},
+	})
+	require.NoError(t, err)
+
+	getRes := f.call(t, cs, "get_viability_verdict", tools.GetViabilityVerdictInput{
+		ChannelID: f.ch.ID.String(), IdeaID: f.idea.ID.String(),
+	})
+	out := vdecode[tools.GetViabilityVerdictOutput](t, getRes)
+	require.NotNil(t, out.Current)
+	require.Len(t, out.Current.CitedResearchNotes, 1)
+	assert.ElementsMatch(t, []string{"supersedes", "excludes"}, out.Current.CitedResearchNotes[0].RetiredBy)
+}
+
+// TestGetViabilityVerdict_SupersessionDoesNotReResolveCitation_
+// VerdictCitationByteIdenticalOriginalTextReturned is the load-bearing
+// non-negotiable from the root plan's Out of scope ("Re-resolving
+// verdict_citation"): after a cited note is superseded, verdict_citation's
+// stored research_note_id is UNCHANGED, and get_viability_verdict still
+// returns the ORIGINAL note's text_excerpt, never the superseding note's --
+// the warning is purely additive annotation, never a redirect.
+func TestGetViabilityVerdict_SupersessionDoesNotReResolveCitation_VerdictCitationByteIdenticalOriginalTextReturned(t *testing.T) {
+	f := newVerdictFixture(t)
+	cs := f.connect(t, f.creator.ID)
+	ctx := context.Background()
+
+	saveRes := f.call(t, cs, "save_viability_verdict", tools.SaveViabilityVerdictInput{
+		ChannelID:            f.ch.ID.String(),
+		IdeaID:               f.idea.ID.String(),
+		Verdict:              "viable",
+		Reasoning:            "citing the original note",
+		CitedResearchNoteIDs: []string{f.note.ID.String()},
+		IdempotencyKeyArg:    uuid.NewString(),
+	})
+	saved := vdecode[tools.VerdictOutput](t, saveRes)
+	verdictID, err := uuid.Parse(saved.ID)
+	require.NoError(t, err)
+
+	before, err := f.st.Verdicts().GetByID(ctx, verdictID)
+	require.NoError(t, err)
+	require.Equal(t, []uuid.UUID{f.note.ID}, before.CitedResearchNoteIDs)
+
+	superseding, err := f.st.Research().SaveNote(ctx, store.SaveNoteInput{
+		ChannelID: f.ch.ID, IdeaID: &f.idea.ID, ThreadID: f.note.ThreadID,
+		Text: "a completely different superseding text", AuthorPersonID: f.creator.ID,
+		Relations: []store.SaveNoteRelationInput{{RelatedNoteID: f.note.ID, RelationType: store.RelationSupersedes}},
+	})
+	require.NoError(t, err)
+
+	after, err := f.st.Verdicts().GetByID(ctx, verdictID)
+	require.NoError(t, err)
+	assert.Equal(t, before.CitedResearchNoteIDs, after.CitedResearchNoteIDs, "verdict_citation's research_note_id must be byte-identical after a supersession")
+
+	getRes := f.call(t, cs, "get_viability_verdict", tools.GetViabilityVerdictInput{
+		ChannelID: f.ch.ID.String(), IdeaID: f.idea.ID.String(),
+	})
+	out := vdecode[tools.GetViabilityVerdictOutput](t, getRes)
+	require.NotNil(t, out.Current)
+	require.Len(t, out.Current.CitedResearchNotes, 1)
+	citation := out.Current.CitedResearchNotes[0]
+	assert.Equal(t, f.note.ID.String(), citation.ID)
+	assert.Equal(t, "a same-channel research note", citation.TextExcerpt, "get_viability_verdict must still return the ORIGINAL note's text, never the superseding note's")
+	assert.NotEqual(t, superseding.Text, citation.TextExcerpt)
+	assert.Equal(t, []string{"supersedes"}, citation.RetiredBy)
+}
+
+// TestSaveViabilityVerdict_RenderPathAlsoAppliesRetiredWarning proves the
+// issue's "for consistency, to save_viability_verdict's render path"
+// requirement: citing an ALREADY-superseded note at save time renders the
+// warning immediately in save_viability_verdict's own response too, since
+// both tools share renderVerdict/resolveCitedNotes.
+func TestSaveViabilityVerdict_RenderPathAlsoAppliesRetiredWarning(t *testing.T) {
+	f := newVerdictFixture(t)
+	cs := f.connect(t, f.creator.ID)
+	ctx := context.Background()
+
+	_, err := f.st.Research().SaveNote(ctx, store.SaveNoteInput{
+		ChannelID: f.ch.ID, IdeaID: &f.idea.ID, ThreadID: f.note.ThreadID,
+		Text: "supersedes the note before any verdict cites it", AuthorPersonID: f.creator.ID,
+		Relations: []store.SaveNoteRelationInput{{RelatedNoteID: f.note.ID, RelationType: store.RelationSupersedes}},
+	})
+	require.NoError(t, err)
+
+	saveRes := f.call(t, cs, "save_viability_verdict", tools.SaveViabilityVerdictInput{
+		ChannelID:            f.ch.ID.String(),
+		IdeaID:               f.idea.ID.String(),
+		Verdict:              "viable",
+		Reasoning:            "citing an already-superseded note",
+		CitedResearchNoteIDs: []string{f.note.ID.String()},
+		IdempotencyKeyArg:    uuid.NewString(),
+	})
+	require.False(t, saveRes.IsError, "unexpected error: %s", vtextOf(saveRes))
+	saved := vdecode[tools.VerdictOutput](t, saveRes)
+	require.Len(t, saved.CitedResearchNotes, 1)
+	assert.Equal(t, []string{"supersedes"}, saved.CitedResearchNotes[0].RetiredBy, "save_viability_verdict's OWN render path must also carry the retired warning")
+}
+
+// TestGetViabilityVerdict_FiveCitedNotes_RetiredLookupIsSingleQuery is
+// FR16/NFR2's batching proof at the MCP orchestration layer: citing 1 note
+// versus citing 5 notes (all superseded) must issue the SAME number of
+// additional SQL statements beyond an identical zero-citation baseline --
+// proving resolveCitedNotes' RetiredNoteIDs call is batched for the WHOLE
+// citation list, never one query per cited note.
+func TestGetViabilityVerdict_FiveCitedNotes_RetiredLookupIsSingleQuery(t *testing.T) {
+	f := newVerdictFixture(t)
+	ctx := context.Background()
+	cs := f.connect(t, f.creator.ID)
+
+	// baseline: an Idea with a verdict citing nothing.
+	baselineIdea, err := f.st.Ideas().FindOrCreate(ctx, f.ch.ID, "Baseline Idea", f.creator.ID)
+	require.NoError(t, err)
+	baseRes := f.call(t, cs, "save_viability_verdict", tools.SaveViabilityVerdictInput{
+		ChannelID: f.ch.ID.String(), IdeaID: baselineIdea.ID.String(), Verdict: "viable", Reasoning: "no citations",
+		IdempotencyKeyArg: uuid.NewString(),
+	})
+	require.False(t, baseRes.IsError, "unexpected error: %s", vtextOf(baseRes))
+
+	// oneNoteIdea: cites 1 superseded note.
+	oneNoteIdea, err := f.st.Ideas().FindOrCreate(ctx, f.ch.ID, "One Note Idea", f.creator.ID)
+	require.NoError(t, err)
+	oneNote, err := f.st.Research().SaveNote(ctx, store.SaveNoteInput{
+		ChannelID: f.ch.ID, IdeaID: &oneNoteIdea.ID, ThreadTitle: "Research", Text: "one-note idea's note", AuthorPersonID: f.creator.ID,
+	})
+	require.NoError(t, err)
+	_, err = f.st.Research().SaveNote(ctx, store.SaveNoteInput{
+		ChannelID: f.ch.ID, IdeaID: &oneNoteIdea.ID, ThreadID: oneNote.ThreadID,
+		Text: "supersedes the one-note idea's note", AuthorPersonID: f.creator.ID,
+		Relations: []store.SaveNoteRelationInput{{RelatedNoteID: oneNote.ID, RelationType: store.RelationSupersedes}},
+	})
+	require.NoError(t, err)
+	oneRes := f.call(t, cs, "save_viability_verdict", tools.SaveViabilityVerdictInput{
+		ChannelID: f.ch.ID.String(), IdeaID: oneNoteIdea.ID.String(), Verdict: "viable", Reasoning: "cites one superseded note",
+		CitedResearchNoteIDs: []string{oneNote.ID.String()}, IdempotencyKeyArg: uuid.NewString(),
+	})
+	require.False(t, oneRes.IsError, "unexpected error: %s", vtextOf(oneRes))
+
+	// fiveNoteIdea: cites 5 superseded notes.
+	fiveNoteIdea, err := f.st.Ideas().FindOrCreate(ctx, f.ch.ID, "Five Note Idea", f.creator.ID)
+	require.NoError(t, err)
+	var fiveNoteIDs []string
+	for i := 0; i < 5; i++ {
+		n, err := f.st.Research().SaveNote(ctx, store.SaveNoteInput{
+			ChannelID: f.ch.ID, IdeaID: &fiveNoteIdea.ID, ThreadTitle: fmt.Sprintf("Research %d", i), Text: fmt.Sprintf("five-note idea's note %d", i), AuthorPersonID: f.creator.ID,
+		})
+		require.NoError(t, err)
+		_, err = f.st.Research().SaveNote(ctx, store.SaveNoteInput{
+			ChannelID: f.ch.ID, IdeaID: &fiveNoteIdea.ID, ThreadID: n.ThreadID,
+			Text: fmt.Sprintf("supersedes note %d", i), AuthorPersonID: f.creator.ID,
+			Relations: []store.SaveNoteRelationInput{{RelatedNoteID: n.ID, RelationType: store.RelationSupersedes}},
+		})
+		require.NoError(t, err)
+		fiveNoteIDs = append(fiveNoteIDs, n.ID.String())
+	}
+	fiveRes := f.call(t, cs, "save_viability_verdict", tools.SaveViabilityVerdictInput{
+		ChannelID: f.ch.ID.String(), IdeaID: fiveNoteIdea.ID.String(), Verdict: "viable", Reasoning: "cites five superseded notes",
+		CitedResearchNoteIDs: fiveNoteIDs, IdempotencyKeyArg: uuid.NewString(),
+	})
+	require.False(t, fiveRes.IsError, "unexpected error: %s", vtextOf(fiveRes))
+
+	// Each traced fixture below points a FRESH, independently-counted pool
+	// at the SAME database and issues exactly one get_viability_verdict
+	// call -- so each counter's final value is entirely attributable to
+	// that one call, with no cross-contamination from fixture setup above
+	// (which all ran through f's own, uncounted pool).
+	baselineCounter := &verdictQueryCounter{}
+	baselineFix := f.tracedFixture(t, ctx, baselineCounter)
+	baselineCS := baselineFix.connect(t, f.creator.ID)
+	baselineGet := f.call(t, baselineCS, "get_viability_verdict", tools.GetViabilityVerdictInput{
+		ChannelID: f.ch.ID.String(), IdeaID: baselineIdea.ID.String(),
+	})
+	require.False(t, baselineGet.IsError, "unexpected error: %s", vtextOf(baselineGet))
+
+	oneCounter := &verdictQueryCounter{}
+	oneFix := f.tracedFixture(t, ctx, oneCounter)
+	oneCS := oneFix.connect(t, f.creator.ID)
+	oneGet := f.call(t, oneCS, "get_viability_verdict", tools.GetViabilityVerdictInput{
+		ChannelID: f.ch.ID.String(), IdeaID: oneNoteIdea.ID.String(),
+	})
+	require.False(t, oneGet.IsError, "unexpected error: %s", vtextOf(oneGet))
+
+	fiveCounter := &verdictQueryCounter{}
+	fiveFix := f.tracedFixture(t, ctx, fiveCounter)
+	fiveCS := fiveFix.connect(t, f.creator.ID)
+	fiveGet := f.call(t, fiveCS, "get_viability_verdict", tools.GetViabilityVerdictInput{
+		ChannelID: f.ch.ID.String(), IdeaID: fiveNoteIdea.ID.String(),
+	})
+	require.False(t, fiveGet.IsError, "unexpected error: %s", vtextOf(fiveGet))
+
+	assert.Equal(t, oneCounter.n, fiveCounter.n, "citing five notes must issue the SAME number of SQL statements as citing one -- resolveCitedNotes' RetiredNoteIDs call is batched for the whole citation list, never one query per cited note")
+	assert.Greater(t, oneCounter.n, baselineCounter.n, "citing at least one note must issue MORE statements than citing none, so this comparison isn't vacuously satisfied by an unrelated code path")
 }

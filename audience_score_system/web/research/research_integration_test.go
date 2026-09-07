@@ -984,12 +984,16 @@ func TestHandleIdeaDetail_VerdictWithNoCitations_RendersNoCitedNotesSection(t *t
 }
 
 // TestHandleIdeaDetail_CitedNotesResolution_IssuesOneBatchedQuery is the
-// concrete batching regression test for research.go's citedResearchNotes:
-// the SAME Idea shape (a current verdict plus 3 history versions) issues
-// exactly one MORE SQL statement when those 4 versions cite notes
-// (overlapping across versions) than when they cite none at all -- proving
-// resolution is ONE store.ResearchStore.GetByIDs call across the whole
-// page, never one GetByID per citation per verdict version (FR16/NFR2).
+// concrete batching regression test for research.go's citedResearchNotes
+// AND retiredCitedResearchNotes: the SAME Idea shape (a current verdict
+// plus 3 history versions) issues exactly two MORE SQL statements when
+// those 4 versions cite notes (overlapping across versions) than when
+// they cite none at all -- one store.ResearchStore.GetByIDs call (FR9)
+// plus one store.ResearchStore.RetiredNoteIDs call (FR10, #1944), each
+// resolving the WHOLE page's citation union in a single query, never one
+// query per citation per verdict version (FR16/NFR2). The delta was ONE
+// statement before #1944 added the second (RetiredNoteIDs) batched call;
+// it is TWO now that both derivations exist, each independently O(1).
 func TestHandleIdeaDetail_CitedNotesResolution_IssuesOneBatchedQuery(t *testing.T) {
 	ctx := context.Background()
 	s := newResearchTestStack(t)
@@ -1038,8 +1042,8 @@ func TestHandleIdeaDetail_CitedNotesResolution_IssuesOneBatchedQuery(t *testing.
 	w = withCitationsStack.do(t, http.MethodGet, "/channels/"+ch.ID.String()+"/research/ideas/"+withCitationsIdea.ID.String(), withCitationsStack.sessionCookie(t, ctx, creator.ID))
 	require.Equal(t, http.StatusOK, w.Code, "body: %s", w.Body.String())
 
-	assert.Equal(t, noCitationsCounter.n+1, withCitationsCounter.n,
-		"citing overlapping notes across a current verdict plus 3 history versions must issue exactly ONE additional SQL statement (the batched GetByIDs read) versus an identically-shaped Idea with no citations at all; no-citations issued %d, with-citations issued %d", noCitationsCounter.n, withCitationsCounter.n)
+	assert.Equal(t, noCitationsCounter.n+2, withCitationsCounter.n,
+		"citing overlapping notes across a current verdict plus 3 history versions must issue exactly TWO additional SQL statements (the batched GetByIDs read for FR9 plus the batched RetiredNoteIDs read for FR10, #1944) versus an identically-shaped Idea with no citations at all; no-citations issued %d, with-citations issued %d", noCitationsCounter.n, withCitationsCounter.n)
 }
 
 // TestHandleIdeaDetail_CitedNoteExcerpt_MatchesGetViabilityVerdictMCP is
@@ -1093,6 +1097,278 @@ func TestHandleIdeaDetail_CitedNoteExcerpt_MatchesGetViabilityVerdictMCP(t *test
 	// couldn't be satisfied by accident via the untruncated full text.
 	assert.True(t, strings.HasSuffix(mcpExcerpt, "..."), "the fixture's note text exceeds the truncation bound, so the shared excerpt must be truncated")
 	assert.NotContains(t, excerpts, longText, "the FULL untruncated note text must never appear as a citedNoteBody excerpt (it legitimately still appears elsewhere on the page: the research-note list and the save-verdict form's citation multi-select)")
+}
+
+// ── FR10/FR16/NFR2 (#1944): superseded/excluded staleness warning on cited notes ──
+
+// TestHandleIdeaDetail_CitedNoteSuperseded_RendersSupersededWarning proves
+// FR10 on the web surface: a verdict cites note A; A is later superseded
+// by note B (same thread); the Idea detail page must render A's citation
+// with the "Superseded" warning, while still showing A's own text --
+// never re-resolving the citation to B.
+func TestHandleIdeaDetail_CitedNoteSuperseded_RendersSupersededWarning(t *testing.T) {
+	ctx := context.Background()
+	s := newResearchTestStack(t)
+	ch, creator := s.setupChannel(t, ctx)
+	idea, err := s.store.Ideas().Create(ctx, ch.ID, "Idea Stale Note Warning Supersede Case", creator.ID)
+	require.NoError(t, err)
+
+	note, err := s.store.Research().SaveNote(ctx, store.SaveNoteInput{ThreadTitle: "Research",
+		ChannelID: ch.ID, IdeaID: &idea.ID, Text: "the original cited note", AuthorPersonID: creator.ID,
+	})
+	require.NoError(t, err)
+	_, err = s.store.Verdicts().Append(ctx, store.AppendVerdictInput{
+		IdeaID: idea.ID, Verdict: store.VerdictViable, Reasoning: "citing the note that will be superseded", AuthorPersonID: creator.ID, Source: store.VerdictSourceHuman,
+		CitedResearchNoteIDs: []uuid.UUID{note.ID},
+	})
+	require.NoError(t, err)
+	_, err = s.store.Research().SaveNote(ctx, store.SaveNoteInput{
+		ChannelID: ch.ID, IdeaID: &idea.ID, ThreadID: note.ThreadID, Text: "a newer note that supersedes it", AuthorPersonID: creator.ID,
+		Relations: []store.SaveNoteRelationInput{{RelatedNoteID: note.ID, RelationType: store.RelationSupersedes}},
+	})
+	require.NoError(t, err)
+
+	w := s.do(t, http.MethodGet, "/channels/"+ch.ID.String()+"/research/ideas/"+idea.ID.String(), s.sessionCookie(t, ctx, creator.ID))
+	require.Equal(t, http.StatusOK, w.Code, "body: %s", w.Body.String())
+	body := w.Body.String()
+
+	assert.Contains(t, body, "the original cited note", "the citation must still name the original note")
+	assert.Contains(t, body, "Superseded", "the cited-notes section must render a Superseded warning")
+	assert.NotContains(t, body, "Excluded", "an only-superseded note must not also show Excluded")
+}
+
+// TestHandleIdeaDetail_CitedNoteExcluded_RendersExcludedWarning mirrors the
+// superseded test for the excludes relation type.
+func TestHandleIdeaDetail_CitedNoteExcluded_RendersExcludedWarning(t *testing.T) {
+	ctx := context.Background()
+	s := newResearchTestStack(t)
+	ch, creator := s.setupChannel(t, ctx)
+	idea, err := s.store.Ideas().Create(ctx, ch.ID, "Idea Stale Note Warning Exclude Case", creator.ID)
+	require.NoError(t, err)
+
+	note, err := s.store.Research().SaveNote(ctx, store.SaveNoteInput{ThreadTitle: "Research",
+		ChannelID: ch.ID, IdeaID: &idea.ID, Text: "the original cited note", AuthorPersonID: creator.ID,
+	})
+	require.NoError(t, err)
+	_, err = s.store.Verdicts().Append(ctx, store.AppendVerdictInput{
+		IdeaID: idea.ID, Verdict: store.VerdictViable, Reasoning: "citing the note that will be excluded", AuthorPersonID: creator.ID, Source: store.VerdictSourceHuman,
+		CitedResearchNoteIDs: []uuid.UUID{note.ID},
+	})
+	require.NoError(t, err)
+	_, err = s.store.Research().SaveNote(ctx, store.SaveNoteInput{
+		ChannelID: ch.ID, IdeaID: &idea.ID, ThreadID: note.ThreadID, Text: "a note that excludes it", AuthorPersonID: creator.ID,
+		Relations: []store.SaveNoteRelationInput{{RelatedNoteID: note.ID, RelationType: store.RelationExcludes}},
+	})
+	require.NoError(t, err)
+
+	w := s.do(t, http.MethodGet, "/channels/"+ch.ID.String()+"/research/ideas/"+idea.ID.String(), s.sessionCookie(t, ctx, creator.ID))
+	require.Equal(t, http.StatusOK, w.Code, "body: %s", w.Body.String())
+	body := w.Body.String()
+
+	assert.Contains(t, body, "the original cited note")
+	assert.Contains(t, body, "Excluded", "the cited-notes section must render an Excluded warning")
+	assert.NotContains(t, body, "Superseded", "an only-excluded note must not also show Superseded")
+}
+
+// TestHandleIdeaDetail_CitedNoteNonRetiringRelations_RenderNoWarning is the
+// FR7 distinction test on the web surface: caveats, follows_up, and
+// summarizes name a prior note without retiring it -- one subtest per
+// type, per the issue's Testing section ("one test per type").
+func TestHandleIdeaDetail_CitedNoteNonRetiringRelations_RenderNoWarning(t *testing.T) {
+	for _, relationType := range []store.RelationType{store.RelationCaveats, store.RelationFollowsUp, store.RelationSummarizes} {
+		t.Run(string(relationType), func(t *testing.T) {
+			ctx := context.Background()
+			s := newResearchTestStack(t)
+			ch, creator := s.setupChannel(t, ctx)
+			idea, err := s.store.Ideas().Create(ctx, ch.ID, "Idea Non-Retiring "+string(relationType), creator.ID)
+			require.NoError(t, err)
+
+			note, err := s.store.Research().SaveNote(ctx, store.SaveNoteInput{ThreadTitle: "Research",
+				ChannelID: ch.ID, IdeaID: &idea.ID, Text: "a note related via " + string(relationType), AuthorPersonID: creator.ID,
+			})
+			require.NoError(t, err)
+			_, err = s.store.Verdicts().Append(ctx, store.AppendVerdictInput{
+				IdeaID: idea.ID, Verdict: store.VerdictViable, Reasoning: "citing a non-retired note", AuthorPersonID: creator.ID, Source: store.VerdictSourceHuman,
+				CitedResearchNoteIDs: []uuid.UUID{note.ID},
+			})
+			require.NoError(t, err)
+			_, err = s.store.Research().SaveNote(ctx, store.SaveNoteInput{
+				ChannelID: ch.ID, IdeaID: &idea.ID, ThreadID: note.ThreadID, Text: "a related note", AuthorPersonID: creator.ID,
+				Relations: []store.SaveNoteRelationInput{{RelatedNoteID: note.ID, RelationType: relationType}},
+			})
+			require.NoError(t, err)
+
+			w := s.do(t, http.MethodGet, "/channels/"+ch.ID.String()+"/research/ideas/"+idea.ID.String(), s.sessionCookie(t, ctx, creator.ID))
+			require.Equal(t, http.StatusOK, w.Code, "body: %s", w.Body.String())
+			body := w.Body.String()
+
+			assert.Contains(t, body, "a note related via "+string(relationType))
+			assert.NotContains(t, body, "Superseded", "relation_type %q must never render a Superseded warning", relationType)
+			assert.NotContains(t, body, "Excluded", "relation_type %q must never render an Excluded warning", relationType)
+		})
+	}
+}
+
+// TestHandleIdeaDetail_CitedLiveNoteNoRelation_RendersNoWarning proves a
+// cited note with no relation at all renders no warning markup.
+func TestHandleIdeaDetail_CitedLiveNoteNoRelation_RendersNoWarning(t *testing.T) {
+	ctx := context.Background()
+	s := newResearchTestStack(t)
+	ch, creator := s.setupChannel(t, ctx)
+	idea, err := s.store.Ideas().Create(ctx, ch.ID, "Idea Live Citation", creator.ID)
+	require.NoError(t, err)
+
+	note, err := s.store.Research().SaveNote(ctx, store.SaveNoteInput{ThreadTitle: "Research",
+		ChannelID: ch.ID, IdeaID: &idea.ID, Text: "a live cited note", AuthorPersonID: creator.ID,
+	})
+	require.NoError(t, err)
+	_, err = s.store.Verdicts().Append(ctx, store.AppendVerdictInput{
+		IdeaID: idea.ID, Verdict: store.VerdictViable, Reasoning: "citing a live note", AuthorPersonID: creator.ID, Source: store.VerdictSourceHuman,
+		CitedResearchNoteIDs: []uuid.UUID{note.ID},
+	})
+	require.NoError(t, err)
+
+	w := s.do(t, http.MethodGet, "/channels/"+ch.ID.String()+"/research/ideas/"+idea.ID.String(), s.sessionCookie(t, ctx, creator.ID))
+	require.Equal(t, http.StatusOK, w.Code, "body: %s", w.Body.String())
+	body := w.Body.String()
+
+	assert.Contains(t, body, "a live cited note")
+	assert.NotContains(t, body, "Superseded")
+	assert.NotContains(t, body, "Excluded")
+}
+
+// TestHandleIdeaDetail_CitedNoteBothSupersededAndExcluded_RendersBothWarning
+// proves a note targeted by both a supersedes and an excludes relation
+// renders the combined "Superseded and excluded" label.
+func TestHandleIdeaDetail_CitedNoteBothSupersededAndExcluded_RendersBothWarning(t *testing.T) {
+	ctx := context.Background()
+	s := newResearchTestStack(t)
+	ch, creator := s.setupChannel(t, ctx)
+	idea, err := s.store.Ideas().Create(ctx, ch.ID, "Idea Both Retired Citation", creator.ID)
+	require.NoError(t, err)
+
+	note, err := s.store.Research().SaveNote(ctx, store.SaveNoteInput{ThreadTitle: "Research",
+		ChannelID: ch.ID, IdeaID: &idea.ID, Text: "the doubly-retired note", AuthorPersonID: creator.ID,
+	})
+	require.NoError(t, err)
+	_, err = s.store.Verdicts().Append(ctx, store.AppendVerdictInput{
+		IdeaID: idea.ID, Verdict: store.VerdictViable, Reasoning: "citing a note that will be both superseded and excluded", AuthorPersonID: creator.ID, Source: store.VerdictSourceHuman,
+		CitedResearchNoteIDs: []uuid.UUID{note.ID},
+	})
+	require.NoError(t, err)
+	_, err = s.store.Research().SaveNote(ctx, store.SaveNoteInput{
+		ChannelID: ch.ID, IdeaID: &idea.ID, ThreadID: note.ThreadID, Text: "supersedes it", AuthorPersonID: creator.ID,
+		Relations: []store.SaveNoteRelationInput{{RelatedNoteID: note.ID, RelationType: store.RelationSupersedes}},
+	})
+	require.NoError(t, err)
+	_, err = s.store.Research().SaveNote(ctx, store.SaveNoteInput{
+		ChannelID: ch.ID, IdeaID: &idea.ID, ThreadID: note.ThreadID, Text: "also excludes it", AuthorPersonID: creator.ID,
+		Relations: []store.SaveNoteRelationInput{{RelatedNoteID: note.ID, RelationType: store.RelationExcludes}},
+	})
+	require.NoError(t, err)
+
+	w := s.do(t, http.MethodGet, "/channels/"+ch.ID.String()+"/research/ideas/"+idea.ID.String(), s.sessionCookie(t, ctx, creator.ID))
+	require.Equal(t, http.StatusOK, w.Code, "body: %s", w.Body.String())
+	body := w.Body.String()
+
+	assert.Contains(t, body, "the doubly-retired note")
+	assert.Contains(t, body, "Superseded and excluded", "a note retired by both relation types must render the combined label")
+}
+
+// TestHandleIdeaDetail_RetiredWarning_RenderedOnHistoryEntryToo proves the
+// warning renders for a history-only citation too, not just current -- the
+// note superseding a note cited ONLY by an earlier (history-only) verdict
+// version must still surface the warning against that history entry.
+func TestHandleIdeaDetail_RetiredWarning_RenderedOnHistoryEntryToo(t *testing.T) {
+	ctx := context.Background()
+	s := newResearchTestStack(t)
+	ch, creator := s.setupChannel(t, ctx)
+	idea, err := s.store.Ideas().Create(ctx, ch.ID, "Idea Past-Version Retired Citation", creator.ID)
+	require.NoError(t, err)
+
+	historyNote, err := s.store.Research().SaveNote(ctx, store.SaveNoteInput{ThreadTitle: "Research",
+		ChannelID: ch.ID, IdeaID: &idea.ID, Text: "note cited only by the superseded v1 verdict", AuthorPersonID: creator.ID,
+	})
+	require.NoError(t, err)
+	_, err = s.store.Verdicts().Append(ctx, store.AppendVerdictInput{
+		IdeaID: idea.ID, Verdict: store.VerdictNeedsMoreResearch, Reasoning: "v1 reasoning", AuthorPersonID: creator.ID, Source: store.VerdictSourceHuman,
+		CitedResearchNoteIDs: []uuid.UUID{historyNote.ID},
+	})
+	require.NoError(t, err)
+	_, err = s.store.Verdicts().Append(ctx, store.AppendVerdictInput{
+		IdeaID: idea.ID, Verdict: store.VerdictViable, Reasoning: "v2 reasoning, no citations", AuthorPersonID: creator.ID, Source: store.VerdictSourceHuman,
+	})
+	require.NoError(t, err)
+	_, err = s.store.Research().SaveNote(ctx, store.SaveNoteInput{
+		ChannelID: ch.ID, IdeaID: &idea.ID, ThreadID: historyNote.ThreadID, Text: "supersedes the history-only note", AuthorPersonID: creator.ID,
+		Relations: []store.SaveNoteRelationInput{{RelatedNoteID: historyNote.ID, RelationType: store.RelationSupersedes}},
+	})
+	require.NoError(t, err)
+
+	w := s.do(t, http.MethodGet, "/channels/"+ch.ID.String()+"/research/ideas/"+idea.ID.String(), s.sessionCookie(t, ctx, creator.ID))
+	require.Equal(t, http.StatusOK, w.Code, "body: %s", w.Body.String())
+	body := w.Body.String()
+
+	currentIdx := strings.Index(body, "Current")
+	historyIdx := strings.Index(body, "History")
+	require.Greater(t, currentIdx, 0)
+	require.Greater(t, historyIdx, currentIdx)
+	historySection := body[historyIdx:]
+
+	assert.Contains(t, historySection, historyNote.Text)
+	assert.Contains(t, historySection, "Superseded", "the History section must render the warning against v1's own retired citation")
+}
+
+// TestHandleIdeaDetail_RetiredWarningParity_MatchesGetViabilityVerdictMCP
+// is NFR2's cross-surface parity proof for FR10: the SAME fixture
+// verdict's cited-note retired-by set, read through get_viability_verdict
+// (a real in-process MCP call) and through the web Idea detail page, must
+// agree -- a note retired by BOTH supersedes and excludes must render as
+// "supersedes"+"excludes" via MCP and as the combined "Superseded and
+// excluded" label on the web page; neither surface may disagree about
+// which relation types retired the note.
+func TestHandleIdeaDetail_RetiredWarningParity_MatchesGetViabilityVerdictMCP(t *testing.T) {
+	ctx := context.Background()
+	s := newResearchTestStack(t)
+	ch, creator := s.setupChannel(t, ctx)
+	idea, err := s.store.Ideas().Create(ctx, ch.ID, "Idea Retired Parity", creator.ID)
+	require.NoError(t, err)
+
+	note, err := s.store.Research().SaveNote(ctx, store.SaveNoteInput{ThreadTitle: "Research",
+		ChannelID: ch.ID, IdeaID: &idea.ID, Text: "the parity fixture's cited note", AuthorPersonID: creator.ID,
+	})
+	require.NoError(t, err)
+	_, err = s.store.Verdicts().Append(ctx, store.AppendVerdictInput{
+		IdeaID: idea.ID, Verdict: store.VerdictViable, Reasoning: "parity fixture verdict", AuthorPersonID: creator.ID, Source: store.VerdictSourceHuman,
+		CitedResearchNoteIDs: []uuid.UUID{note.ID},
+	})
+	require.NoError(t, err)
+	_, err = s.store.Research().SaveNote(ctx, store.SaveNoteInput{
+		ChannelID: ch.ID, IdeaID: &idea.ID, ThreadID: note.ThreadID, Text: "supersedes the parity note", AuthorPersonID: creator.ID,
+		Relations: []store.SaveNoteRelationInput{{RelatedNoteID: note.ID, RelationType: store.RelationSupersedes}},
+	})
+	require.NoError(t, err)
+	_, err = s.store.Research().SaveNote(ctx, store.SaveNoteInput{
+		ChannelID: ch.ID, IdeaID: &idea.ID, ThreadID: note.ThreadID, Text: "also excludes the parity note", AuthorPersonID: creator.ID,
+		Relations: []store.SaveNoteRelationInput{{RelatedNoteID: note.ID, RelationType: store.RelationExcludes}},
+	})
+	require.NoError(t, err)
+
+	// MCP side.
+	mcpFix := newMCPFixture(t, s)
+	cs := mcpFix.connect(t, creator.ID)
+	mcpOut := mcpFix.getViabilityVerdict(t, cs, ch.ID, idea.ID)
+	require.NotNil(t, mcpOut.Current)
+	require.Len(t, mcpOut.Current.CitedResearchNotes, 1)
+	assert.ElementsMatch(t, []string{"supersedes", "excludes"}, mcpOut.Current.CitedResearchNotes[0].RetiredBy,
+		"get_viability_verdict must report both relation types")
+
+	// Web side.
+	w := s.do(t, http.MethodGet, "/channels/"+ch.ID.String()+"/research/ideas/"+idea.ID.String(), s.sessionCookie(t, ctx, creator.ID))
+	require.Equal(t, http.StatusOK, w.Code, "body: %s", w.Body.String())
+	body := w.Body.String()
+
+	assert.Contains(t, body, "Superseded and excluded", "the web page must render the SAME combined retired-by set get_viability_verdict reported")
 }
 
 func TestHandleIdeaDetail_FiftyOneNotes_TruncatedNoPagingControl(t *testing.T) {
