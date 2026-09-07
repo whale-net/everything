@@ -447,6 +447,54 @@ func (h *SessionHandler) SendInput(ctx context.Context, req *pb.SendInputRequest
 	return &pb.SendInputResponse{}, nil
 }
 
+// ListPendingRestarts is the batched FR12 read path: one RPC for every
+// rendered deployment row, never one call per row (#1735's /sessions page
+// renders N rows from a single response). An empty id list is a no-op --
+// no query, an empty response -- rather than a query with an empty ANY($1),
+// which would still round-trip to Postgres for nothing.
+func (h *SessionHandler) ListPendingRestarts(ctx context.Context, req *pb.ListPendingRestartsRequest) (*pb.ListPendingRestartsResponse, error) {
+	if len(req.ServerGameConfigIds) == 0 {
+		return &pb.ListPendingRestartsResponse{}, nil
+	}
+
+	latest, err := h.pendingRestartsRepo.GetLatestBySGCIDs(ctx, req.ServerGameConfigIds)
+	if err != nil {
+		slog.Warn("failed to list pending restarts", "sgc_ids", req.ServerGameConfigIds, "error", err)
+		return nil, status.Errorf(codes.Internal, "failed to list pending restarts: %v", err)
+	}
+
+	resp := &pb.ListPendingRestartsResponse{}
+	for _, sgcID := range req.ServerGameConfigIds {
+		pr, ok := latest[sgcID]
+		if !ok {
+			continue
+		}
+		resp.States = append(resp.States, pendingRestartToProto(pr))
+	}
+	return resp, nil
+}
+
+// pendingRestartToProto maps a PendingRestart to its wire representation.
+// Timestamps are emitted as absolute unix seconds only (NFR11) -- never a
+// relative/formatted string -- so the SSE-pushed fragment this feeds stays
+// byte-stable across renders for an unchanged restart state.
+func pendingRestartToProto(pr *manman.PendingRestart) *pb.PendingRestartState {
+	state := &pb.PendingRestartState{
+		ServerGameConfigId: pr.ServerGameConfigID,
+		PendingRestartId:   pr.PendingRestartID,
+		Status:             pr.Status,
+		GatingSessionId:    pr.GatingSessionID,
+		CreatedAtUnix:      pr.CreatedAt.Unix(),
+	}
+	if pr.FailureReason != nil {
+		state.FailureReason = *pr.FailureReason
+	}
+	if pr.ResolvedAt != nil {
+		state.ResolvedAtUnix = pr.ResolvedAt.Unix()
+	}
+	return state
+}
+
 // buildStartSessionCommand converts database models to RabbitMQ message format
 func buildStartSessionCommand(session *manman.Session, sgc *manman.ServerGameConfig, gc *manman.GameConfig, force bool, volumes []*manman.GameConfigVolume) map[string]interface{} {
 	// Build game config message

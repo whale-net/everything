@@ -74,3 +74,25 @@ message SendInputRequest {
 message SendInputResponse {
   // Empty response on success
 }
+
+// ListPendingRestarts is the batched read path for FR12 restart-state
+// visibility (#1735): /sessions renders every deployment row in one
+// request, so this takes the full set of server_game_config_ids and
+// returns at most one state per id -- never a per-row RPC.
+message ListPendingRestartsRequest {
+  repeated int64 server_game_config_ids = 1;
+}
+
+message PendingRestartState {
+  int64 server_game_config_id = 1;
+  int64 pending_restart_id = 2;
+  string status = 3;  // pending | started | failed | expired
+  int64 gating_session_id = 4;
+  string failure_reason = 5;
+  int64 created_at_unix = 6;   // absolute, not relative -- NFR11
+  int64 resolved_at_unix = 7;  // 0 when unresolved
+}
+
+message ListPendingRestartsResponse {
+  repeated PendingRestartState states = 1;
+}

@@ -56,6 +56,12 @@ type DeploymentRowData struct {
 	LiveSession        *manmanpb.Session // nil when not live
 	Actions            components.DeploymentActions
 	ActionError        string // FR8 inline error; "" when none
+	// RestartState is the latest pending_restarts record for this SGC
+	// within the visibility window (FR12, #1735), or nil when there is no
+	// restart in flight/recently resolved to surface. Populated by the
+	// caller from one batched ListPendingRestarts RPC per page render, not
+	// a per-row call.
+	RestartState *manmanpb.PendingRestartState
 }
 
 templ Sessions(layout components.LayoutData, data SessionsPageData) {
