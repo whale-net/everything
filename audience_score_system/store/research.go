@@ -111,7 +111,31 @@ type researchStore struct{ pool *pgxpool.Pool }
 
 var _ ResearchStore = researchStore{}
 
-const researchNoteColumns = `id, channel_id, idea_id, thread_id, text, source_url, author_person_id, created_at, COALESCE(idempotency_key, '')`
+// researchNoteColumns reads a ResearchNote's Idea via the note's resolved
+// thread (rt.idea_id) rather than research_note.idea_id directly (issue
+// #1939, FR2 Stage 2a): store.ResearchNote.IdeaID keeps its exact meaning
+// and type (*uuid.UUID) -- only its provenance changes here, so every
+// caller in mcp/web continues to compile and behave identically.
+// thread_id is still nullable until Stage 3, so researchNoteFrom below
+// uses a LEFT JOIN, not an inner join -- an inner join would silently
+// drop any row a backfill or a stale writer left with a NULL thread_id.
+// Revisit to an inner join at Stage 3. Used with researchNoteFrom for
+// every READ query; the INSERT...RETURNING in SaveNote uses the separate
+// researchNoteInsertColumns instead (RETURNING cannot reference a
+// joined table).
+const researchNoteColumns = `rn.id, rn.channel_id, rt.idea_id, rn.thread_id, rn.text, rn.source_url, rn.author_person_id, rn.created_at, COALESCE(rn.idempotency_key, '')`
+
+// researchNoteFrom is the FROM clause every READ query pairs with
+// researchNoteColumns above.
+const researchNoteFrom = `research_note rn LEFT JOIN research_thread rt ON rt.id = rn.thread_id`
+
+// researchNoteInsertColumns mirrors researchNoteColumns' column order but
+// reads idea_id directly off research_note (unaliased, no JOIN) -- valid
+// only in SaveNote's INSERT...RETURNING, where the row was just written
+// with idea_id = the resolved thread's IdeaID (SaveNote's own invariant),
+// so echoing research_note.idea_id back here agrees with the join by
+// construction and needs no subquery.
+const researchNoteInsertColumns = `id, channel_id, idea_id, thread_id, text, source_url, author_person_id, created_at, COALESCE(idempotency_key, '')`
 
 func scanResearchNote(row pgx.Row) (ResearchNote, error) {
 	var n ResearchNote
@@ -180,8 +204,8 @@ func (s researchStore) SaveNote(ctx context.Context, in SaveNoteInput) (Research
 	if in.IdempotencyKey != "" {
 		existing, err := scanResearchNote(s.pool.QueryRow(ctx, `
 			SELECT `+researchNoteColumns+`
-			FROM research_note
-			WHERE channel_id = $1 AND author_person_id = $2 AND idempotency_key = $3
+			FROM `+researchNoteFrom+`
+			WHERE rn.channel_id = $1 AND rn.author_person_id = $2 AND rn.idempotency_key = $3
 		`, in.ChannelID, in.AuthorPersonID, in.IdempotencyKey))
 		if err == nil {
 			return existing, nil
@@ -251,7 +275,7 @@ func (s researchStore) SaveNote(ctx context.Context, in SaveNoteInput) (Research
 	note, err := scanResearchNote(tx.QueryRow(ctx, `
 		INSERT INTO research_note (channel_id, idea_id, thread_id, text, source_url, author_person_id, idempotency_key)
 		VALUES ($1, $2, $3, $4, $5, $6, NULLIF($7, ''))
-		RETURNING `+researchNoteColumns,
+		RETURNING `+researchNoteInsertColumns,
 		in.ChannelID, thread.IdeaID, thread.ID, in.Text, sourceURL, in.AuthorPersonID, in.IdempotencyKey))
 	if err != nil {
 		return ResearchNote{}, fmt.Errorf("insert research_note: %w", err)
@@ -278,7 +302,7 @@ func (s researchStore) SaveNote(ctx context.Context, in SaveNoteInput) (Research
 
 // GetByID returns the ResearchNote for id, or an error if none exists.
 func (s researchStore) GetByID(ctx context.Context, id uuid.UUID) (ResearchNote, error) {
-	note, err := scanResearchNote(s.pool.QueryRow(ctx, `SELECT `+researchNoteColumns+` FROM research_note WHERE id = $1`, id))
+	note, err := scanResearchNote(s.pool.QueryRow(ctx, `SELECT `+researchNoteColumns+` FROM `+researchNoteFrom+` WHERE rn.id = $1`, id))
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			return ResearchNote{}, pgx.ErrNoRows
@@ -289,7 +313,7 @@ func (s researchStore) GetByID(ctx context.Context, id uuid.UUID) (ResearchNote,
 }
 
 func (s researchStore) ListByChannel(ctx context.Context, channelID uuid.UUID) ([]ResearchNote, error) {
-	rows, err := s.pool.Query(ctx, `SELECT `+researchNoteColumns+` FROM research_note WHERE channel_id = $1 ORDER BY created_at`, channelID)
+	rows, err := s.pool.Query(ctx, `SELECT `+researchNoteColumns+` FROM `+researchNoteFrom+` WHERE rn.channel_id = $1 ORDER BY rn.created_at`, channelID)
 	if err != nil {
 		return nil, fmt.Errorf("list research notes by channel: %w", err)
 	}
@@ -329,7 +353,7 @@ func (s researchStore) GetByIDs(ctx context.Context, ids []uuid.UUID) (map[uuid.
 		unique = append(unique, id)
 	}
 
-	rows, err := s.pool.Query(ctx, `SELECT `+researchNoteColumns+` FROM research_note WHERE id = ANY($1)`, unique)
+	rows, err := s.pool.Query(ctx, `SELECT `+researchNoteColumns+` FROM `+researchNoteFrom+` WHERE rn.id = ANY($1)`, unique)
 	if err != nil {
 		return nil, fmt.Errorf("get research_note by ids: %w", err)
 	}
@@ -348,10 +372,10 @@ func (s researchStore) GetByIDs(ctx context.Context, ids []uuid.UUID) (map[uuid.
 	return out, nil
 }
 
-// researchNoteWithAuthorColumns mirrors researchNoteColumns, qualified
-// with the rn. alias ListFiltered's JOIN requires, plus the author's
-// display name from `person`.
-const researchNoteWithAuthorColumns = `rn.id, rn.channel_id, rn.idea_id, rn.thread_id, rn.text, rn.source_url, rn.author_person_id, rn.created_at, COALESCE(rn.idempotency_key, ''), COALESCE(p.display_name, '')`
+// researchNoteWithAuthorColumns mirrors researchNoteColumns -- idea_id
+// read via rt.idea_id, not rn.idea_id (see researchNoteColumns' doc
+// comment, issue #1939) -- plus the author's display name from `person`.
+const researchNoteWithAuthorColumns = `rn.id, rn.channel_id, rt.idea_id, rn.thread_id, rn.text, rn.source_url, rn.author_person_id, rn.created_at, COALESCE(rn.idempotency_key, ''), COALESCE(p.display_name, '')`
 
 func scanResearchNoteWithAuthor(row pgx.Row) (ResearchNoteWithAuthor, error) {
 	var n ResearchNoteWithAuthor
@@ -370,13 +394,14 @@ func (s researchStore) ListFiltered(ctx context.Context, channelID uuid.UUID, id
 	query := `
 		SELECT ` + researchNoteWithAuthorColumns + `
 		FROM research_note rn
+		LEFT JOIN research_thread rt ON rt.id = rn.thread_id
 		JOIN person p ON p.id = rn.author_person_id
 		WHERE rn.channel_id = $1`
 	args := []any{channelID}
 
 	if ideaID != nil {
 		args = append(args, *ideaID)
-		query += fmt.Sprintf(" AND rn.idea_id = $%d", len(args))
+		query += fmt.Sprintf(" AND rt.idea_id = $%d", len(args))
 	}
 	if cited != nil {
 		if *cited {

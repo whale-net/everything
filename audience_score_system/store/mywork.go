@@ -107,20 +107,26 @@ func (s myWorkStore) SummariesForPerson(ctx context.Context, personID uuid.UUID,
 // channelIDs at once, using ROW_NUMBER() PARTITION BY channel_id to take
 // each Channel's top notesPerChannel most-recent notes in a single
 // statement (NFR9) rather than one ListByChannel call per Channel.
+// idea_id is read via the note's resolved thread (rt.idea_id), not
+// research_note.idea_id directly -- same rationale and LEFT JOIN (thread_id
+// still nullable pre-Stage-3) as researchNoteColumns in research.go, issue
+// #1939. thread_id is also selected so callers get it without a second
+// query, mirroring research.go's read paths.
 func (s myWorkStore) loadLatestNotes(ctx context.Context, channelIDs []uuid.UUID, notesPerChannel int, summaries []ChannelWorkSummary, index map[uuid.UUID]int) error {
 	if notesPerChannel <= 0 {
 		return nil
 	}
 
 	rows, err := s.pool.Query(ctx, `
-		SELECT id, channel_id, idea_id, text, source_url, author_person_id, created_at, COALESCE(idempotency_key, '')
+		SELECT id, channel_id, idea_id, thread_id, text, source_url, author_person_id, created_at, COALESCE(idempotency_key, '')
 		FROM (
-			SELECT id, channel_id, idea_id, text, source_url, author_person_id, created_at, idempotency_key,
-			       ROW_NUMBER() OVER (PARTITION BY channel_id ORDER BY created_at DESC) AS rn
-			FROM research_note
-			WHERE channel_id = ANY($1)
+			SELECT rn.id, rn.channel_id, rt.idea_id, rn.thread_id, rn.text, rn.source_url, rn.author_person_id, rn.created_at, rn.idempotency_key,
+			       ROW_NUMBER() OVER (PARTITION BY rn.channel_id ORDER BY rn.created_at DESC) AS row_num
+			FROM research_note rn
+			LEFT JOIN research_thread rt ON rt.id = rn.thread_id
+			WHERE rn.channel_id = ANY($1)
 		) ranked
-		WHERE rn <= $2
+		WHERE row_num <= $2
 		ORDER BY channel_id, created_at DESC
 	`, channelIDs, notesPerChannel)
 	if err != nil {
@@ -130,7 +136,7 @@ func (s myWorkStore) loadLatestNotes(ctx context.Context, channelIDs []uuid.UUID
 
 	for rows.Next() {
 		var n ResearchNote
-		if err := rows.Scan(&n.ID, &n.ChannelID, &n.IdeaID, &n.Text, &n.SourceURL, &n.AuthorPersonID, &n.CreatedAt, &n.IdempotencyKey); err != nil {
+		if err := rows.Scan(&n.ID, &n.ChannelID, &n.IdeaID, &n.ThreadID, &n.Text, &n.SourceURL, &n.AuthorPersonID, &n.CreatedAt, &n.IdempotencyKey); err != nil {
 			return fmt.Errorf("my work: scan research_note: %w", err)
 		}
 		if i, ok := index[n.ChannelID]; ok {
