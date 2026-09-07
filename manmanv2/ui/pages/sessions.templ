@@ -23,6 +23,21 @@ type SessionsPageData struct {
 	ServerConfigs       []*manmanpb.ServerGameConfig
 	LiveSessionByConfig map[int64]*manmanpb.Session
 	DeploymentRows      []DeploymentRowData
+
+	// HeartbeatIntervalMs is the resolved MANMANV2_SSE_HEARTBEAT_INTERVAL
+	// (main.go's Config.SSEHeartbeatInterval), in milliseconds, for the
+	// #1726 Not-Live debounce: the client waits one heartbeat interval
+	// after htmx:sseError/htmx:sseClose (or a missed heartbeat) before
+	// flipping the indicator, so a single dropped beat doesn't flap it.
+	HeartbeatIntervalMs int
+	// LiveUpdatesEnabled is false when app.sseHub is nil (RABBITMQ_URL
+	// unset or the broker was unreachable at startup -- see main.go's
+	// initializeSSEHub doc comment, NFR3/NFR8). The live-connection
+	// markup (hx-ext="sse", sse-connect, sse-swap, the Live/Not-Live
+	// indicator) is omitted entirely in that case rather than rendered
+	// pointing at a route that will only ever 503: the page still renders
+	// its server-side snapshot and falls back to the #1628 per-row poll.
+	LiveUpdatesEnabled bool
 }
 
 type SGCDisplayInfo struct {

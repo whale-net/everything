@@ -241,6 +241,13 @@ func (app *App) handleSessions(w http.ResponseWriter, r *http.Request) {
 		ForceSGCID:   forceSGCID,
 		LiveSessionByConfig: liveSessionByConfig,
 		DeploymentRows:      deploymentRows,
+		// #1726: heartbeat interval drives the client-side Not-Live
+		// debounce; LiveUpdatesEnabled mirrors handleDeploymentsLiveSSE's
+		// own app.sseHub nil check (handlers_sessions_live.go) so the page
+		// never renders live-connection markup for a route that would
+		// only ever 503.
+		HeartbeatIntervalMs: int(app.config.SSEHeartbeatInterval.Milliseconds()),
+		LiveUpdatesEnabled:  app.sseHub != nil,
 	}
 
 	breadcrumbs := []components.Breadcrumb{
