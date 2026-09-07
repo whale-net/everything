@@ -69,11 +69,27 @@
 // research.Handlers through a small local http.ServeMux that mirrors
 // `web`'s main.go route registrations for GET /channels/{id}/research,
 // GET /channels/{id}/research/ideas/{ideaID}, POST
-// /channels/{id}/research/notes, POST
+// /channels/{id}/research/notes, POST /channels/{id}/research/ideas
+// (HandleCreateIdea, #2032, FR33-FR35), POST
 // /channels/{id}/research/ideas/{ideaID}/verdicts, and POST
 // /channels/{id}/research/ideas/{ideaID}/video-scripts -- so PathValue
 // resolution and auth.RequireSignedIn wrapping behave exactly as they do
 // in production.
+//
+// HandleCreateIdea (#2032, FR33-FR35): Founder/Co-Creator/Analyst parity
+// creating an Idea through the add-idea inline row's submit target, the
+// load-bearing FR34 convergence case (a title matching an existing Idea
+// case/whitespace-insensitively returns that SAME Idea rather than
+// forking identity, via the identical store.IdeaStore.FindOrCreate the
+// create_idea MCP tool uses -- NFR1/LB5) and its cross-Channel guard (a
+// same-titled Idea on a DIFFERENT Channel never converges), the FR7-style
+// forged-POST 403 from a signed-in non-member (and a signed-out reject)
+// with no row created, an unknown Channel 404 and malformed Channel UUID
+// 400 in the same order as HandleSaveNote, empty/whitespace-title
+// validation (400, no row, row re-renders expanded with an error), the
+// FR33 affordance's presence/absence gated on canWrite, FR35's
+// new-Idea-visible-after-redirect behavior, and NFR2's
+// same-idempotency-key double-submit producing exactly one Idea.
 //
 // A signed-in caller is simulated via auth.NewForTests + SessionManager.
 // Establish, mirroring schedule_integration_test.go's rationale:
@@ -160,6 +176,7 @@ func newResearchTestStack(t *testing.T) *researchTestStack {
 	mux.HandleFunc("GET /channels/{id}/research", a.RequireSignedIn(res.HandleChannelIndex))
 	mux.HandleFunc("GET /channels/{id}/research/ideas/{ideaID}", a.RequireSignedIn(res.HandleIdeaDetail))
 	mux.HandleFunc("POST /channels/{id}/research/notes", a.RequireSignedIn(res.HandleSaveNote))
+	mux.HandleFunc("POST /channels/{id}/research/ideas", a.RequireSignedIn(res.HandleCreateIdea))
 	mux.HandleFunc("POST /channels/{id}/research/ideas/{ideaID}/verdicts", a.RequireSignedIn(res.HandleSaveVerdict))
 	mux.HandleFunc("POST /channels/{id}/research/ideas/{ideaID}/video-scripts", a.RequireSignedIn(res.HandleProposeVideoScript))
 
@@ -612,6 +629,25 @@ func TestHandleChannelIndex_RendersNoteCountVerdictPresence_AndUnattachedNotesSe
 	assert.Greater(t, noteIdx, sectionIdx, "the unattached note must render inside the unattached-notes section, not under an idea")
 }
 
+// unattachedNotesDetailsStart locates the START of the unattached-notes
+// section's OWN <details> element specifically -- scoped by walking
+// backward from the "Unattached notes (" toggle-label text to the nearest
+// preceding "<details" tag -- rather than the page's FIRST "<details"
+// occurrence. Since #2032 (FR33) the add-idea row (views.templ's
+// addIdeaRow) renders its OWN "<details" disclosure earlier in the Idea
+// table, ABOVE this section, so an unscoped strings.Index(body,
+// "<details") now finds the wrong element; every pre-existing FR36/FR37
+// test below that used to assume "the first (and only) <details> on the
+// page IS the unattached-notes section" needs this instead.
+func unattachedNotesDetailsStart(t *testing.T, body string) int {
+	t.Helper()
+	headingIdx := strings.Index(body, "Unattached notes (")
+	require.Greater(t, headingIdx, 0, "the unattached notes toggle label must render, body: %s", body)
+	detailsStart := strings.LastIndex(body[:headingIdx], "<details")
+	require.GreaterOrEqual(t, detailsStart, 0, "the unattached notes section's own <details> element must render, body: %s", body)
+	return detailsStart
+}
+
 func TestHandleChannelIndex_FiftyOneNotes_TruncatedNoteAppearsInUnattachedSection_NoPagingControl(t *testing.T) {
 	ctx := context.Background()
 	s := newResearchTestStack(t)
@@ -634,16 +670,16 @@ func TestHandleChannelIndex_FiftyOneNotes_TruncatedNoteAppearsInUnattachedSectio
 	// from the SAME Channel-wide notes page, no extra store call.
 	assert.Equal(t, 100, strings.Count(body, "unattached note "), "exactly 50 notes must render, each once in the unattached section and once in the relation picker")
 	assert.Contains(t, body, "most recent", "a truncation note must appear when the 50-row default page is hit")
-	// The Founder's save-note form (FR3, issue #1900) legitimately renders
-	// one <form> on this page now; NFR2's actual guarantee is that no
-	// SEPARATE paging/load-more control exists alongside it.
-	assert.Equal(t, 1, strings.Count(body, "<form"), "exactly the save-note form may appear -- no paging control")
+	// The Founder's save-note form (FR3, issue #1900) and the add-idea
+	// inline row's form (#2032, FR33) legitimately render TWO <form>
+	// elements on this page now; NFR2's actual guarantee is that no
+	// SEPARATE paging/load-more control exists alongside them.
+	assert.Equal(t, 2, strings.Count(body, "<form"), "exactly the save-note form and the add-idea form may appear -- no paging control")
 	assert.NotContains(t, strings.ToLower(body), "load more", "no load-more control may appear (NFR2)")
 	// The collapse-by-default behavior (FR36, #2033) is unaffected by NFR2's
 	// truncation: the section still renders behind a closed <details> whose
 	// label carries the truncated 50-row count, not 51.
-	sectionStart := strings.Index(body, "<details")
-	require.Greater(t, sectionStart, 0, "the unattached-notes disclosure must render")
+	sectionStart := unattachedNotesDetailsStart(t, body)
 	sectionTag := body[sectionStart:strings.Index(body[sectionStart:], ">")+sectionStart]
 	assert.NotContains(t, sectionTag, "open", "the disclosure must still be collapsed by default with 51 notes present")
 	assert.Contains(t, body, "Unattached notes (50)", "the toggle label must carry the truncated page's count (NFR2), not the true underlying count")
@@ -673,9 +709,14 @@ func TestHandleChannelIndex_UnattachedNotesSection_CollapsedByDefault_ToggleLabe
 	require.Equal(t, http.StatusOK, w.Code, "body: %s", w.Body.String())
 	body := w.Body.String()
 
-	require.Equal(t, 1, strings.Count(body, "<details"), "exactly one disclosure element must render for the unattached-notes section")
-	detailsStart := strings.Index(body, "<details")
-	require.GreaterOrEqual(t, detailsStart, 0)
+	// Since #2032 (FR33) the add-idea row also renders its own <details>
+	// disclosure on this page, so the page-wide count is now 2, not 1; the
+	// load-bearing assertion here is that the UNATTACHED-NOTES section's OWN
+	// <details> (located by unattachedNotesDetailsStart, not by page-wide
+	// position) still renders collapsed with the right count -- unaffected
+	// by the unrelated add-idea disclosure existing alongside it.
+	assert.Equal(t, 2, strings.Count(body, "<details"), "the unattached-notes disclosure and the add-idea row's disclosure (#2032) must both render")
+	detailsStart := unattachedNotesDetailsStart(t, body)
 	openTagEnd := strings.Index(body[detailsStart:], ">") + detailsStart
 	require.Greater(t, openTagEnd, detailsStart)
 	detailsOpenTag := body[detailsStart:openTagEnd]
@@ -704,8 +745,7 @@ func TestHandleChannelIndex_UnattachedNotesSection_CollapsedButDataStillReturned
 	require.Equal(t, http.StatusOK, w.Code, "body: %s", w.Body.String())
 	body := w.Body.String()
 
-	detailsStart := strings.Index(body, "<details")
-	require.Greater(t, detailsStart, 0)
+	detailsStart := unattachedNotesDetailsStart(t, body)
 	openTagEnd := strings.Index(body[detailsStart:], ">") + detailsStart
 	assert.NotContains(t, body[detailsStart:openTagEnd], "open", "the section must render collapsed by default")
 	detailsEnd := strings.Index(body[detailsStart:], "</details>")
@@ -742,7 +782,12 @@ func TestHandleChannelIndex_UnattachedNotesSection_ZeroNotes_RendersSensibly(t *
 
 	assert.Contains(t, body, "Unattached notes (0)", "the toggle must show an explicit 0 count, not a broken/blank section")
 	assert.Contains(t, body, "No unattached notes.", "an explicit empty-state message must render inside the disclosure")
-	require.Equal(t, 1, strings.Count(body, "<details"), "the disclosure must still render even with zero unattached notes")
+	// unattachedNotesDetailsStart itself already requires the unattached
+	// notes section's own <details> to be present; this is here as an
+	// explicit page-wide sanity check that it (plus the add-idea row's own
+	// disclosure, #2032) both render.
+	unattachedNotesDetailsStart(t, body)
+	assert.Equal(t, 2, strings.Count(body, "<details"), "the unattached-notes disclosure must still render (even with zero notes) alongside the add-idea row's own disclosure (#2032)")
 }
 
 // TestHandleSaveNote_TargetingUnattachedNote_SucceedsWithSectionCollapsedByDefault
@@ -775,8 +820,7 @@ func TestHandleSaveNote_TargetingUnattachedNote_SucceedsWithSectionCollapsedByDe
 	w2 := s.do(t, http.MethodGet, w.Header().Get("Location"), s.sessionCookie(t, ctx, creator.ID))
 	require.Equal(t, http.StatusOK, w2.Code, "body: %s", w2.Body.String())
 	body := w2.Body.String()
-	detailsStart := strings.Index(body, "<details")
-	require.Greater(t, detailsStart, 0)
+	detailsStart := unattachedNotesDetailsStart(t, body)
 	openTagEnd := strings.Index(body[detailsStart:], ">") + detailsStart
 	assert.NotContains(t, body[detailsStart:openTagEnd], "open", "the section must render collapsed by default on the next navigation too")
 	assert.Contains(t, body, "Unattached notes (1)", "the toggle count must reflect the just-saved unattached note")
@@ -1647,12 +1691,13 @@ func TestHandleIdeaDetail_FiftyOneNotes_TruncatedNoPagingControl(t *testing.T) {
 
 // TestChannelIndexAndIdeaDetail_OnlyTheSaveFormsAppear_NoPagingAffordance
 // replaces this file's original #1899-era "no form anywhere" assertion
-// (later renamed by #1900 to expect exactly one form): the Channel index
-// still renders exactly one <form> (the save-note form), but Idea detail
-// now renders exactly TWO -- the save-note form (#1900, FR3) AND the
-// save-verdict form (#1901, FR4), both method="post", for a
-// store.CanWrite member -- what must still never appear is any THIRD
-// form or paging/load-more control.
+// (later renamed by #1900 to expect exactly one form, then by #2032 to
+// expect exactly two): the Channel index now renders exactly TWO <form>s
+// -- the save-note form (#1900, FR3) AND the add-idea inline row's form
+// (#2032, FR33) -- and Idea detail renders exactly TWO -- the save-note
+// form AND the save-verdict form (#1901, FR4) -- both pages' forms
+// method="post", for a store.CanWrite member -- what must still never
+// appear is any THIRD form or paging/load-more control on either page.
 func TestChannelIndexAndIdeaDetail_OnlyTheSaveFormsAppear_NoPagingAffordance(t *testing.T) {
 	ctx := context.Background()
 	s := newResearchTestStack(t)
@@ -1664,9 +1709,13 @@ func TestChannelIndexAndIdeaDetail_OnlyTheSaveFormsAppear_NoPagingAffordance(t *
 	indexW := s.do(t, http.MethodGet, "/channels/"+ch.ID.String()+"/research", cookie)
 	require.Equal(t, http.StatusOK, indexW.Code, "body: %s", indexW.Body.String())
 	indexBody := indexW.Body.String()
-	assert.Equal(t, 1, strings.Count(indexBody, "<form"), "exactly one form -- the save-note form -- may appear")
-	assert.Equal(t, 1, strings.Count(strings.ToLower(indexBody), `method="post"`))
+	// The save-note form (#1900, FR3) and the add-idea inline row's form
+	// (#2032, FR33) legitimately render two <form>s on this page now; what
+	// must still never appear is any THIRD form or paging/load-more control.
+	assert.Equal(t, 2, strings.Count(indexBody, "<form"), "exactly the save-note and add-idea forms -- no third form -- may appear")
+	assert.Equal(t, 2, strings.Count(strings.ToLower(indexBody), `method="post"`))
 	assert.Contains(t, indexBody, `action="/channels/`+ch.ID.String()+`/research/notes"`)
+	assert.Contains(t, indexBody, `action="/channels/`+ch.ID.String()+`/research/ideas"`)
 
 	detailW := s.do(t, http.MethodGet, "/channels/"+ch.ID.String()+"/research/ideas/"+idea.ID.String(), cookie)
 	require.Equal(t, http.StatusOK, detailW.Code, "body: %s", detailW.Body.String())
@@ -4160,4 +4209,327 @@ func TestHandleIdeaDetail_NoteReference_BoundedQueryCount_DoesNotScaleWithN(t *t
 
 	assert.Equal(t, noRefsCount+1, fewRefsCount, "3 references to 3 distinct off-page notes must add exactly ONE batched query versus no references at all")
 	assert.Equal(t, fewRefsCount, manyRefsCount, "12 references to 12 distinct off-page notes must issue the SAME query count as 3 references -- resolution must not scale per-reference")
+}
+
+// ── HandleCreateIdea (#2032, FR33-FR35, NFR1/NFR2, issue #2032) ─────────
+
+// TestHandleCreateIdea_FounderCoCreatorAnalyst_CanCreate proves all three
+// store.CanWrite tiers -- not just the Founder -- can create an Idea
+// through this handler (FR34), matching store.CanWrite's actual role set
+// (RoleCreator, RoleCoCreator, RoleAnalyst -- store/authz.go), not an
+// assumed subset of it.
+func TestHandleCreateIdea_FounderCoCreatorAnalyst_CanCreate(t *testing.T) {
+	ctx := context.Background()
+	s := newResearchTestStack(t)
+	ch, creator := s.setupChannel(t, ctx)
+
+	coCreator := s.newPerson(t, ctx, "co-creator")
+	require.NoError(t, s.store.Roles().AddRole(ctx, ch.ID, coCreator.ID, store.RoleCoCreator, creator.ID))
+	analyst := s.newPerson(t, ctx, "analyst")
+	require.NoError(t, s.store.Roles().AddRole(ctx, ch.ID, analyst.ID, store.RoleAnalyst, creator.ID))
+
+	for _, tc := range []struct {
+		name   string
+		person store.Person
+	}{
+		{"Founder", creator},
+		{"CoCreator", coCreator},
+		{"Analyst", analyst},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			w := s.doForm(t, "/channels/"+ch.ID.String()+"/research/ideas", s.sessionCookie(t, ctx, tc.person.ID), url.Values{
+				"idempotency_key": {uuid.NewString()},
+				"title":           {tc.name + "'s idea"},
+			})
+			assert.Equal(t, http.StatusSeeOther, w.Code, "%s must be able to create an idea, body: %s", tc.name, w.Body.String())
+		})
+	}
+
+	ideas, err := s.store.Ideas().ListByChannel(ctx, ch.ID)
+	require.NoError(t, err)
+	assert.Len(t, ideas, 3, "all three CanWrite tiers must have created a row")
+}
+
+// TestHandleCreateIdea_NonMember_Forbidden_NoRowCreated is FR34's
+// load-bearing authorization test, mirroring TestHandleSaveNote_
+// NonMember_Forbidden_NoRowCreated: a forged POST from a signed-in
+// non-member is 403 (re-derived fresh via authorizeWrite, never from
+// which affordance the client was shown) and creates no Idea row.
+func TestHandleCreateIdea_NonMember_Forbidden_NoRowCreated(t *testing.T) {
+	ctx := context.Background()
+	s := newResearchTestStack(t)
+	ch, _ := s.setupChannel(t, ctx)
+	outsider := s.newPerson(t, ctx, "outsider")
+
+	w := s.doForm(t, "/channels/"+ch.ID.String()+"/research/ideas", s.sessionCookie(t, ctx, outsider.ID), url.Values{
+		"idempotency_key": {uuid.NewString()},
+		"title":           {"forged idea"},
+	})
+	assert.Equal(t, http.StatusForbidden, w.Code, "body: %s", w.Body.String())
+
+	ideas, err := s.store.Ideas().ListByChannel(ctx, ch.ID)
+	require.NoError(t, err)
+	assert.Empty(t, ideas, "a forbidden POST must not create a row")
+}
+
+// TestHandleCreateIdea_SignedOut_Rejected_NoRowCreated covers the
+// signed-out half of FR34's authorization, mirroring TestHandleSaveNote_
+// SignedOut_Rejected_NoRowCreated: through the router (RequireSignedIn) a
+// signed-out POST never reaches the handler and creates no row; calling
+// the handler directly proves authorizeWrite's own defensive 401.
+func TestHandleCreateIdea_SignedOut_Rejected_NoRowCreated(t *testing.T) {
+	ctx := context.Background()
+	s := newResearchTestStack(t)
+	ch, _ := s.setupChannel(t, ctx)
+
+	w := s.doForm(t, "/channels/"+ch.ID.String()+"/research/ideas", nil, url.Values{
+		"idempotency_key": {uuid.NewString()},
+		"title":           {"signed-out idea"},
+	})
+	assert.NotEqual(t, http.StatusSeeOther, w.Code, "a signed-out POST must never succeed, body: %s", w.Body.String())
+
+	req := httptest.NewRequest(http.MethodPost, "/channels/"+ch.ID.String()+"/research/ideas", strings.NewReader(url.Values{
+		"idempotency_key": {uuid.NewString()},
+		"title":           {"direct signed-out idea"},
+	}.Encode()))
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	req.SetPathValue("id", ch.ID.String())
+	rec := httptest.NewRecorder()
+	s.handlers.HandleCreateIdea(rec, req)
+	assert.Equal(t, http.StatusUnauthorized, rec.Code)
+
+	ideas, err := s.store.Ideas().ListByChannel(ctx, ch.ID)
+	require.NoError(t, err)
+	assert.Empty(t, ideas, "a signed-out POST must not create a row")
+}
+
+// TestHandleCreateIdea_UnknownChannel_NotFound mirrors
+// TestHandleSaveNote_UnknownChannel_NotFound: an unknown Channel must 404
+// before authorization runs.
+func TestHandleCreateIdea_UnknownChannel_NotFound(t *testing.T) {
+	ctx := context.Background()
+	s := newResearchTestStack(t)
+	_, creator := s.setupChannel(t, ctx)
+
+	w := s.doForm(t, "/channels/"+uuid.NewString()+"/research/ideas", s.sessionCookie(t, ctx, creator.ID), url.Values{
+		"idempotency_key": {uuid.NewString()},
+		"title":           {"idea"},
+	})
+	assert.Equal(t, http.StatusNotFound, w.Code, "an unknown Channel must 404 before authorization runs, body: %s", w.Body.String())
+}
+
+// TestHandleCreateIdea_MalformedChannelUUID_BadRequest mirrors
+// TestHandleSaveNote_MalformedChannelUUID_BadRequest.
+func TestHandleCreateIdea_MalformedChannelUUID_BadRequest(t *testing.T) {
+	ctx := context.Background()
+	s := newResearchTestStack(t)
+	_, creator := s.setupChannel(t, ctx)
+
+	w := s.doForm(t, "/channels/not-a-uuid/research/ideas", s.sessionCookie(t, ctx, creator.ID), url.Values{
+		"idempotency_key": {uuid.NewString()},
+		"title":           {"idea"},
+	})
+	assert.Equal(t, http.StatusBadRequest, w.Code)
+}
+
+// TestHandleCreateIdea_EmptyOrWhitespaceTitle_BadRequest_NoRowWritten
+// proves FR34's validation: an empty or whitespace-only title re-renders
+// the Channel index (400, not 500) with the row expanded and an error,
+// and calls IdeaStore.FindOrCreate not at all.
+func TestHandleCreateIdea_EmptyOrWhitespaceTitle_BadRequest_NoRowWritten(t *testing.T) {
+	ctx := context.Background()
+	s := newResearchTestStack(t)
+	ch, creator := s.setupChannel(t, ctx)
+	cookie := s.sessionCookie(t, ctx, creator.ID)
+
+	for _, tc := range []struct {
+		name  string
+		title string
+	}{
+		{"Empty", ""},
+		{"WhitespaceOnly", "   \n\t  "},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			w := s.doForm(t, "/channels/"+ch.ID.String()+"/research/ideas", cookie, url.Values{
+				"idempotency_key": {uuid.NewString()},
+				"title":           {tc.title},
+			})
+			assert.Equal(t, http.StatusBadRequest, w.Code, "body: %s", w.Body.String())
+			assert.Contains(t, w.Body.String(), "idea title is required")
+		})
+	}
+
+	ideas, err := s.store.Ideas().ListByChannel(ctx, ch.ID)
+	require.NoError(t, err)
+	assert.Empty(t, ideas, "an empty/whitespace title must not create a row")
+}
+
+// TestHandleCreateIdea_ConvergesOnExistingTitle_CaseWhitespaceInsensitive
+// is FR34's load-bearing convergence case: submitting a title that
+// differs from an existing Idea's title only by case and/or surrounding
+// whitespace must converge on the SAME Idea (via IdeaStore.FindOrCreate's
+// natural-key upsert) rather than forking a duplicate -- the Channel's
+// Idea count must stay unchanged.
+func TestHandleCreateIdea_ConvergesOnExistingTitle_CaseWhitespaceInsensitive(t *testing.T) {
+	ctx := context.Background()
+	s := newResearchTestStack(t)
+	ch, creator := s.setupChannel(t, ctx)
+	existing, err := s.store.Ideas().Create(ctx, ch.ID, "Cooking Channel Revamp", creator.ID)
+	require.NoError(t, err)
+
+	w := s.doForm(t, "/channels/"+ch.ID.String()+"/research/ideas", s.sessionCookie(t, ctx, creator.ID), url.Values{
+		"idempotency_key": {uuid.NewString()},
+		"title":           {"  cooking channel REVAMP  "},
+	})
+	require.Equal(t, http.StatusSeeOther, w.Code, "body: %s", w.Body.String())
+
+	ideas, err := s.store.Ideas().ListByChannel(ctx, ch.ID)
+	require.NoError(t, err)
+	require.Len(t, ideas, 1, "a case/whitespace-insensitive title match must converge, not fork a second Idea")
+	assert.Equal(t, existing.ID, ideas[0].ID)
+	assert.Equal(t, "Cooking Channel Revamp", ideas[0].Title, "the ORIGINAL title must be preserved, not overwritten by the converged-to submission")
+}
+
+// TestHandleCreateIdea_CrossChannelSameTitle_DoesNotConverge_CreatesNewIdea
+// proves FR34's convergence is scoped per-Channel: an Idea with the same
+// title on a DIFFERENT Channel must never cause convergence -- a new
+// Idea is created on the viewed Channel instead.
+func TestHandleCreateIdea_CrossChannelSameTitle_DoesNotConverge_CreatesNewIdea(t *testing.T) {
+	ctx := context.Background()
+	s := newResearchTestStack(t)
+	chA, creatorA := s.setupChannel(t, ctx)
+	chB, creatorB := s.setupChannel(t, ctx)
+	_, err := s.store.Ideas().Create(ctx, chB.ID, "Shared Title", creatorB.ID)
+	require.NoError(t, err)
+
+	w := s.doForm(t, "/channels/"+chA.ID.String()+"/research/ideas", s.sessionCookie(t, ctx, creatorA.ID), url.Values{
+		"idempotency_key": {uuid.NewString()},
+		"title":           {"Shared Title"},
+	})
+	require.Equal(t, http.StatusSeeOther, w.Code, "body: %s", w.Body.String())
+
+	ideasA, err := s.store.Ideas().ListByChannel(ctx, chA.ID)
+	require.NoError(t, err)
+	require.Len(t, ideasA, 1, "Channel A must get its OWN new Idea, not converge cross-Channel")
+	assert.Equal(t, "Shared Title", ideasA[0].Title)
+
+	ideasB, err := s.store.Ideas().ListByChannel(ctx, chB.ID)
+	require.NoError(t, err)
+	require.Len(t, ideasB, 1, "Channel B's original Idea must be untouched")
+	assert.NotEqual(t, ideasA[0].ID, ideasB[0].ID, "the two Channels must end up with DIFFERENT Idea rows despite the identical title")
+}
+
+// TestChannelIndex_AddIdeaAffordance_PresentForFounderCoCreatorAnalyst is
+// FR33's render-gate test: the "+ Add idea" affordance (and its
+// underlying form) appears for every canWrite viewer -- Founder,
+// Co-Creator, and Analyst alike. There is no read-but-not-write viewer to
+// exercise an "absent" case against today: store.CanRead and
+// store.CanWrite share the identical role set (store/authz.go), and a
+// non-member cannot even GET this page (403, covered by
+// TestHandleChannelIndex_NonMember_Forbidden) -- so canWrite's gate has no
+// distinct false-but-visible case to assert on this page as things stand.
+func TestChannelIndex_AddIdeaAffordance_PresentForFounderCoCreatorAnalyst(t *testing.T) {
+	ctx := context.Background()
+	s := newResearchTestStack(t)
+	ch, creator := s.setupChannel(t, ctx)
+
+	coCreator := s.newPerson(t, ctx, "co-creator")
+	require.NoError(t, s.store.Roles().AddRole(ctx, ch.ID, coCreator.ID, store.RoleCoCreator, creator.ID))
+	analyst := s.newPerson(t, ctx, "analyst")
+	require.NoError(t, s.store.Roles().AddRole(ctx, ch.ID, analyst.ID, store.RoleAnalyst, creator.ID))
+
+	for _, tc := range []struct {
+		name   string
+		person store.Person
+	}{
+		{"Founder", creator},
+		{"CoCreator", coCreator},
+		{"Analyst", analyst},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			w := s.do(t, http.MethodGet, "/channels/"+ch.ID.String()+"/research", s.sessionCookie(t, ctx, tc.person.ID))
+			require.Equal(t, http.StatusOK, w.Code, "body: %s", w.Body.String())
+			assert.Contains(t, w.Body.String(), "+ Add idea", "%s must see the add-idea affordance", tc.name)
+			assert.Contains(t, w.Body.String(), `action="/channels/`+ch.ID.String()+`/research/ideas"`, "%s must see the add-idea form", tc.name)
+		})
+	}
+}
+
+// TestHandleCreateIdea_Success_NewIdeaVisible_RowReturnsToInertAffordance
+// proves FR35: after a successful create, redirecting back to the
+// Channel index (or a fresh GET of it) shows the new Idea in the list,
+// and the inline row's form.Open is back to false (rendered as the inert
+// "+ Add idea" affordance, not pre-expanded).
+func TestHandleCreateIdea_Success_NewIdeaVisible_RowReturnsToInertAffordance(t *testing.T) {
+	ctx := context.Background()
+	s := newResearchTestStack(t)
+	ch, creator := s.setupChannel(t, ctx)
+	cookie := s.sessionCookie(t, ctx, creator.ID)
+
+	w := s.doForm(t, "/channels/"+ch.ID.String()+"/research/ideas", cookie, url.Values{
+		"idempotency_key": {uuid.NewString()},
+		"title":           {"Brand New Idea"},
+	})
+	require.Equal(t, http.StatusSeeOther, w.Code, "body: %s", w.Body.String())
+	assert.Equal(t, "/channels/"+ch.ID.String()+"/research", w.Header().Get("Location"))
+
+	follow := s.do(t, http.MethodGet, w.Header().Get("Location"), cookie)
+	require.Equal(t, http.StatusOK, follow.Code, "body: %s", follow.Body.String())
+	body := follow.Body.String()
+	assert.Contains(t, body, "Brand New Idea", "the new Idea must be visible in the re-rendered list")
+	assert.NotContains(t, body, `<details class="collapse collapse-arrow bg-base-100" open`, "the add-idea row must be back to its inert (collapsed) state after a successful create")
+}
+
+// TestHandleCreateIdea_ValidationFailure_RowRendersExpandedWithError
+// proves the Open/Error half of the validation-failure re-render contract
+// (ideaFormWithError): a rejected submission's row re-renders expanded
+// with the submitted (empty) title's error, rather than collapsing back
+// to the inert affordance.
+func TestHandleCreateIdea_ValidationFailure_RowRendersExpandedWithError(t *testing.T) {
+	ctx := context.Background()
+	s := newResearchTestStack(t)
+	ch, creator := s.setupChannel(t, ctx)
+
+	w := s.doForm(t, "/channels/"+ch.ID.String()+"/research/ideas", s.sessionCookie(t, ctx, creator.ID), url.Values{
+		"idempotency_key": {uuid.NewString()},
+		"title":           {"   "},
+	})
+	require.Equal(t, http.StatusBadRequest, w.Code, "body: %s", w.Body.String())
+	body := w.Body.String()
+	assert.Contains(t, body, "idea title is required")
+	assert.Contains(t, body, `<details class="collapse collapse-arrow bg-base-100" open`, "a validation-failure re-render must render the row expanded, not collapsed")
+}
+
+// TestHandleCreateIdea_SameIdempotencyKey_Twice_CreatesOneIdea is NFR2's
+// load-bearing double-submit case, mirroring TestHandleSaveNote_
+// SameIdempotencyKey_Twice_CreatesOneRow: a browser back-button/refresh
+// replaying the exact same POST (same server-minted idempotency_key,
+// identical title) must not create a second Idea. FindOrCreate's own
+// natural-key convergence is what actually enforces this (see
+// HandleCreateIdea's doc comment) -- this test proves that guarantee
+// holds end-to-end through the real handler, not just at the store layer.
+func TestHandleCreateIdea_SameIdempotencyKey_Twice_CreatesOneIdea(t *testing.T) {
+	ctx := context.Background()
+	s := newResearchTestStack(t)
+	ch, creator := s.setupChannel(t, ctx)
+	cookie := s.sessionCookie(t, ctx, creator.ID)
+	key := uuid.NewString()
+	form := url.Values{
+		"idempotency_key": {key},
+		"title":           {"Replayed Idea"},
+	}
+
+	w1 := s.doForm(t, "/channels/"+ch.ID.String()+"/research/ideas", cookie, form)
+	require.Equal(t, http.StatusSeeOther, w1.Code, "body: %s", w1.Body.String())
+
+	ideas, err := s.store.Ideas().ListByChannel(ctx, ch.ID)
+	require.NoError(t, err)
+	require.Len(t, ideas, 1)
+
+	w2 := s.doForm(t, "/channels/"+ch.ID.String()+"/research/ideas", cookie, form)
+	assert.Equal(t, http.StatusSeeOther, w2.Code, "a replayed submit must still redirect, not error, body: %s", w2.Body.String())
+
+	ideas, err = s.store.Ideas().ListByChannel(ctx, ch.ID)
+	require.NoError(t, err)
+	assert.Len(t, ideas, 1, "a replayed idempotency_key (and identical title) must not create a second Idea")
 }
