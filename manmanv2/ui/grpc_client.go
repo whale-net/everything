@@ -242,6 +242,19 @@ func (c *ControlClient) StartSession(ctx context.Context, serverGameConfigID int
 	return resp.Session, nil
 }
 
+// RestartDeployment dispatches a durable restart for a server game config,
+// letting control-api own the stop-then-start orchestration (#1730) instead
+// of the UI holding the restart intent across two calls.
+func (c *ControlClient) RestartDeployment(ctx context.Context, serverGameConfigID int64) (*manmanpb.RestartDeploymentResponse, error) {
+	resp, err := c.api.RestartDeployment(ctx, &manmanpb.RestartDeploymentRequest{
+		ServerGameConfigId: serverGameConfigID,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("failed to restart deployment: %w", err)
+	}
+	return resp, nil
+}
+
 // ListConfigurationStrategies retrieves all strategies for a game.
 func (c *ControlClient) ListConfigurationStrategies(ctx context.Context, req *manmanpb.ListConfigurationStrategiesRequest) (*manmanpb.ListConfigurationStrategiesResponse, error) {
 	return c.api.ListConfigurationStrategies(ctx, req)
