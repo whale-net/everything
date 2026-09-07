@@ -2649,8 +2649,9 @@ func ptrInt64(v int64) *int64        { return &v }
 // research_note_relation, FR1/FR2 Stage 1/FR6/FR7, #1936), and again for
 // 017 (research_thread's natural-key unique index, FR4, #1937), and again
 // for 018 (research_note.thread_id NOT NULL + idea_id drop, FR2 Stage 3/
-// NFR4, #1947), so the version assertion and table list below cover all
-// of them rather than any single one.
+// NFR4, #1947), and again for 019 (video_script.edit_idempotency_key,
+// FR16-FR19, #2037), so the version assertion and table list below cover
+// all of them rather than any single one.
 func TestMigrations_UpDownUp_LeavesNoOrphanObjects(t *testing.T) {
 	ctx := context.Background()
 	db := dbtest.NewPostgres(ctx, t, dbtest.Options{})
@@ -2667,7 +2668,7 @@ func TestMigrations_UpDownUp_LeavesNoOrphanObjects(t *testing.T) {
 	version, dirty, err := runner.Version()
 	require.NoError(t, err)
 	assert.False(t, dirty)
-	assert.Equal(t, uint(18), version, "highest migration in schema.Migrations is 018_research_note_drop_idea_id")
+	assert.Equal(t, uint(19), version, "highest migration in schema.Migrations is 019_video_script_edit_idempotency")
 
 	for _, tbl := range []string{
 		"person", "channel", "channel_person", "channel_invite",
@@ -2745,6 +2746,15 @@ func TestMigrations_UpDownUp_LeavesNoOrphanObjects(t *testing.T) {
 		`SELECT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name = 'research_note' AND column_name = 'thread_id')`,
 	).Scan(&hasThreadID))
 	assert.True(t, hasThreadID, "research_note.thread_id must exist after up/down/up")
+
+	// Migration 019's video_script.edit_idempotency_key column (FR16-FR19,
+	// #2037) must also survive the down/up cycle -- a down that forgot to
+	// drop it (or an up that forgot to re-add it) would surface here.
+	var hasEditIdempotencyKey bool
+	require.NoError(t, db.Pool.QueryRow(ctx,
+		`SELECT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name = 'video_script' AND column_name = 'edit_idempotency_key')`,
+	).Scan(&hasEditIdempotencyKey))
+	assert.True(t, hasEditIdempotencyKey, "video_script.edit_idempotency_key must exist after up/down/up")
 
 	// A fresh insert must succeed cleanly, proving indexes/constraints
 	// (e.g. the person.google_subject UNIQUE index) survived the
