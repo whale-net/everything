@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"net/url"
+	"sort"
 	"strings"
 	"time"
 
@@ -141,10 +142,6 @@ type ResearchStore interface {
 	// relation whose OTHER end is outside noteIDs still appears under the
 	// end that IS inside noteIDs, but that outside end is never itself
 	// added as a map key.
-	//
-	// Scaffold note (issue #1942): this method's signature and doc
-	// contract are fixed here; the query itself lands in the
-	// Implementation phase.
 	ListRelationsForNotes(ctx context.Context, noteIDs []uuid.UUID) (map[uuid.UUID][]NoteRelation, error)
 }
 
@@ -486,12 +483,67 @@ func (s researchStore) ListFiltered(ctx context.Context, channelID uuid.UUID, id
 	return notes, truncated, nil
 }
 
-// ListRelationsForNotes is scaffolded here (issue #1942, Scaffold phase):
-// signature and doc contract only, so mcp/web can be wired against a
-// stable interface in later phases. The real batched
-// `WHERE note_id = ANY($1) OR related_note_id = ANY($1)` query, its
-// per-note ordering, and the empty-input short-circuit land in the
-// Implementation phase.
+// ListRelationsForNotes issues ONE query against research_note_relation
+// (`WHERE note_id = ANY($1) OR related_note_id = ANY($1)`) for the whole
+// noteIDs set, then folds each returned row into up to two NoteRelation
+// entries: one under note_id (Direction: RelationOutgoing, RelatedNoteID:
+// related_note_id) when note_id is itself in noteIDs, and one under
+// related_note_id (Direction: RelationIncoming, RelatedNoteID: note_id)
+// when related_note_id is itself in noteIDs. Both branches run
+// independently per row, so a relation between two notes that are BOTH in
+// noteIDs correctly yields one outgoing entry and one incoming entry, and
+// a relation whose other end is outside noteIDs still yields the one
+// entry for the end that IS inside it without ever adding the outside end
+// as its own map key. Empty noteIDs short-circuits before any query.
 func (s researchStore) ListRelationsForNotes(ctx context.Context, noteIDs []uuid.UUID) (map[uuid.UUID][]NoteRelation, error) {
-	return nil, fmt.Errorf("ListRelationsForNotes: not yet implemented (issue #1942)")
+	out := make(map[uuid.UUID][]NoteRelation, len(noteIDs))
+	if len(noteIDs) == 0 {
+		return out, nil
+	}
+
+	inSet := make(map[uuid.UUID]struct{}, len(noteIDs))
+	for _, id := range noteIDs {
+		inSet[id] = struct{}{}
+	}
+
+	rows, err := s.pool.Query(ctx, `
+		SELECT note_id, related_note_id, relation_type
+		FROM research_note_relation
+		WHERE note_id = ANY($1) OR related_note_id = ANY($1)
+	`, noteIDs)
+	if err != nil {
+		return nil, fmt.Errorf("list research_note_relation for notes: %w", err)
+	}
+	defer rows.Close()
+
+	for rows.Next() {
+		var noteID, relatedNoteID uuid.UUID
+		var relationType RelationType
+		if err := rows.Scan(&noteID, &relatedNoteID, &relationType); err != nil {
+			return nil, fmt.Errorf("scan research_note_relation: %w", err)
+		}
+		if _, ok := inSet[noteID]; ok {
+			out[noteID] = append(out[noteID], NoteRelation{RelatedNoteID: relatedNoteID, RelationType: relationType, Direction: RelationOutgoing})
+		}
+		if _, ok := inSet[relatedNoteID]; ok {
+			out[relatedNoteID] = append(out[relatedNoteID], NoteRelation{RelatedNoteID: noteID, RelationType: relationType, Direction: RelationIncoming})
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("list research_note_relation for notes: %w", err)
+	}
+
+	// Deterministic per-note ordering (relation_type, then related_note_id)
+	// so rendering and tests are stable regardless of Postgres' row order.
+	for id, rels := range out {
+		sort.Slice(rels, func(i, j int) bool {
+			if rels[i].RelationType != rels[j].RelationType {
+				return rels[i].RelationType < rels[j].RelationType
+			}
+			return rels[i].RelatedNoteID.String() < rels[j].RelatedNoteID.String()
+		})
+		out[id] = rels
+	}
+
+	return out, nil
 }

@@ -73,6 +73,12 @@ func authorName(names map[uuid.UUID]string, personID uuid.UUID) string {
 // when the corresponding list hit its 50-row default page -- no "load
 // more" control, no pagination widget anywhere on this page.
 //
+// relationsByNote (FR11, issue #1942) maps unattachedNotes' ids to their
+// own research_note_relation edges, resolved by research.go's
+// renderChannelIndex in ONE batched ResearchStore.ListRelationsForNotes
+// call for the whole unattached-notes list -- never one call per note.
+// noteBody renders each note's entry via relatedNotesSection.
+//
 // canWrite (store.CanWrite, research.go's renderChannelIndex) gates the
 // save-note form (FR3, FR6, FR7): omitted entirely when false. This is
 // PRESENTATION ONLY -- exactly like web/schedule's entryActions omission
@@ -80,7 +86,7 @@ func authorName(names map[uuid.UUID]string, personID uuid.UUID) string {
 // research.go's authorizeWrite, re-derived fresh from Postgres on every
 // POST /channels/{id}/research/notes; hiding this form is never the only
 // line of defense against a forged submit.
-templ ChannelIndex(data components.LayoutData, ch store.Channel, ideas []store.IdeaSummary, unattachedNotes []store.ResearchNoteWithAuthor, threads []store.ThreadSummary, ideasTruncated bool, notesTruncated bool, canWrite bool, form noteFormData) {
+templ ChannelIndex(data components.LayoutData, ch store.Channel, ideas []store.IdeaSummary, unattachedNotes []store.ResearchNoteWithAuthor, relationsByNote map[uuid.UUID][]store.NoteRelation, threads []store.ThreadSummary, ideasTruncated bool, notesTruncated bool, canWrite bool, form noteFormData) {
 	@components.Layout(data) {
 		<div class="card bg-base-100 border border-base-300 shadow-sm">
 			<div class="card-body">
@@ -131,7 +137,7 @@ templ ChannelIndex(data components.LayoutData, ch store.Channel, ideas []store.I
 						<ul class="mt-2 space-y-2">
 							for _, note := range unattachedNotes {
 								<li class="border border-base-300 rounded p-2">
-									@noteBody(note)
+									@noteBody(note, relationsByNote[note.ID])
 								</li>
 							}
 						</ul>
@@ -290,25 +296,69 @@ templ threadRow(t store.ThreadSummary) {
 	</tr>
 }
 
-// relatedNotesSection scaffolds FR11's per-note "Related" line: a note's
-// own research_note_relation edges (store.NoteRelation), rendered inline
-// alongside its body on an ordinary browse -- not only inferable from
-// #1941's current_only exclusion or #1944's narrow verdict-citation
-// warning. Renders nothing at all when relations is empty (never an
-// empty wrapper), mirroring citedNotesSection's convention below.
-//
-// Scaffold note (issue #1942): this is a placeholder rendering (direction
-// + relation_type + the related note's raw id) so the component has a
-// stable signature for noteBody/ChannelIndex/IdeaDetail to call in later
-// phases. The Implementation phase replaces the body with the
-// "supersedes note …" / "superseded by note …" phrasing FR11 asks for,
-// reusing whichever excerpt/id format #1943 established for cited notes.
+// relationVerbPhrase renders one store.NoteRelation's verb, direction-
+// aware: an outgoing edge reads as this note's own declaration
+// ("supersedes"), an incoming edge as what the OTHER note declared about
+// this one ("superseded by") -- mirroring FR11's rule that supersedes/
+// excludes as an incoming relation means THIS note is the one retired.
+func relationVerbPhrase(relationType store.RelationType, direction store.RelationDirection) string {
+	outgoing := direction != store.RelationIncoming
+	switch relationType {
+	case store.RelationSupersedes:
+		if outgoing {
+			return "supersedes"
+		}
+		return "superseded by"
+	case store.RelationExcludes:
+		if outgoing {
+			return "excludes"
+		}
+		return "excluded by"
+	case store.RelationCaveats:
+		if outgoing {
+			return "caveats"
+		}
+		return "caveated by"
+	case store.RelationFollowsUp:
+		if outgoing {
+			return "follows up"
+		}
+		return "followed up by"
+	case store.RelationSummarizes:
+		if outgoing {
+			return "summarizes"
+		}
+		return "summarized by"
+	default:
+		return string(relationType)
+	}
+}
+
+// shortNoteID renders id as an 8-hex-character-plus-ellipsis identifier --
+// the same short-id idiom a git short SHA uses -- so relatedNotesSection's
+// "Related" line stays a compact one-liner rather than spelling out a
+// full 36-character UUID per relation.
+func shortNoteID(id uuid.UUID) string {
+	s := id.String()
+	return s[:8] + "…"
+}
+
+// relatedNotesSection renders FR11's per-note "Related" line: a note's own
+// research_note_relation edges (store.NoteRelation), inline alongside its
+// body on an ordinary browse -- not only inferable from #1941's
+// current_only exclusion or #1944's narrow verdict-citation warning.
+// Renders nothing at all when relations is empty (never an empty
+// wrapper), mirroring citedNotesSection's convention below. Each line
+// reads e.g. "supersedes note ab12cd34…" (outgoing) or "superseded by
+// note ab12cd34…" (incoming) -- relationVerbPhrase above picks the verb,
+// shortNoteID above the compact identifier, echoing citedNoteBody's own
+// truncated-excerpt idiom for keeping a per-note annotation compact.
 templ relatedNotesSection(relations []store.NoteRelation) {
 	if len(relations) > 0 {
 		<div class="mt-1 space-y-0.5">
 			for _, rel := range relations {
 				<p class="text-xs text-base-content/70">
-					{ string(rel.Direction) } { string(rel.RelationType) } note { rel.RelatedNoteID.String() }
+					{ relationVerbPhrase(rel.RelationType, rel.Direction) } note { shortNoteID(rel.RelatedNoteID) }
 				</p>
 			}
 		</div>
@@ -331,9 +381,13 @@ templ citedBadge(note store.ResearchNote) {
 }
 
 // noteBody renders one store.ResearchNoteWithAuthor: its text, author
-// display name, created_at, the cited/uncited indicator (FR10), and --
-// when cited -- its source_url as a link.
-templ noteBody(note store.ResearchNoteWithAuthor) {
+// display name, created_at, the cited/uncited indicator (FR10), its
+// source_url as a link when cited, and -- FR11, issue #1942 -- its own
+// relations via relatedNotesSection (renders nothing when relations is
+// empty). relations is note.ID's entry from the page's single batched
+// ResearchStore.ListRelationsForNotes call (research.go), never a
+// per-note store read.
+templ noteBody(note store.ResearchNoteWithAuthor, relations []store.NoteRelation) {
 	<div class="flex justify-between items-start gap-4">
 		<div>
 			<p>{ note.Text }</p>
@@ -345,6 +399,7 @@ templ noteBody(note store.ResearchNoteWithAuthor) {
 					Source: <a href={ templ.URL(*note.SourceURL) } class="link" target="_blank" rel="noopener noreferrer">{ *note.SourceURL }</a>
 				</p>
 			}
+			@relatedNotesSection(relations)
 		</div>
 		@citedBadge(note.ResearchNote)
 	</div>
@@ -410,6 +465,12 @@ templ citedNotesSection(citedIDs []uuid.UUID, notes map[uuid.UUID]store.Research
 // the union of every verdict's CitedResearchNoteIDs (current + every
 // history entry) in ONE batched call, never one query per citation.
 //
+// relationsByNote (FR11, issue #1942) maps notes' ids to their own
+// research_note_relation edges, resolved by research.go's renderIdeaDetail
+// in ONE batched ResearchStore.ListRelationsForNotes call for this page's
+// whole note list -- never one call per note. noteBody renders each
+// note's entry via relatedNotesSection.
+//
 // canWrite (store.CanWrite, research.go's renderIdeaDetail) gates BOTH
 // the save-note form (FR3, FR6, FR7) and the save-verdict form (FR4, FR6,
 // FR7, #1901): omitted entirely when false -- PRESENTATION ONLY,
@@ -440,7 +501,7 @@ templ citedNotesSection(citedIDs []uuid.UUID, notes map[uuid.UUID]store.Research
 // current verdict (FR4), never this render-time check alone -- but that
 // presentation gate must never suppress an error the server already
 // decided to show.
-templ IdeaDetail(data components.LayoutData, ch store.Channel, idea store.Idea, notes []store.ResearchNoteWithAuthor, notesTruncated bool, threads []store.ThreadSummary, current *store.Verdict, history []store.Verdict, authorNames map[uuid.UUID]string, citedNotes map[uuid.UUID]store.ResearchNote, canWrite bool, form noteFormData, verdictForm verdictFormData, strategies []store.StrategyDetail, proposeForm proposeFormData) {
+templ IdeaDetail(data components.LayoutData, ch store.Channel, idea store.Idea, notes []store.ResearchNoteWithAuthor, relationsByNote map[uuid.UUID][]store.NoteRelation, notesTruncated bool, threads []store.ThreadSummary, current *store.Verdict, history []store.Verdict, authorNames map[uuid.UUID]string, citedNotes map[uuid.UUID]store.ResearchNote, canWrite bool, form noteFormData, verdictForm verdictFormData, strategies []store.StrategyDetail, proposeForm proposeFormData) {
 	@components.Layout(data) {
 		<div class="card bg-base-100 border border-base-300 shadow-sm">
 			<div class="card-body">
@@ -454,7 +515,7 @@ templ IdeaDetail(data components.LayoutData, ch store.Channel, idea store.Idea, 
 						<ul class="mt-2 space-y-2">
 							for _, note := range notes {
 								<li class="border border-base-300 rounded p-2">
-									@noteBody(note)
+									@noteBody(note, relationsByNote[note.ID])
 								</li>
 							}
 						</ul>

@@ -326,6 +326,15 @@ func (h *Handlers) renderChannelIndex(w http.ResponseWriter, r *http.Request, pe
 		}
 	}
 
+	// relationsByNote (FR11, issue #1942) is ONE batched
+	// ResearchStore.ListRelationsForNotes call for the unattached-notes
+	// list actually rendered below -- never one call per note.
+	relationsByNote, err := h.relationsForNotes(ctx, unattached)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+
 	// threads is FR3's discovery list, scoped to the whole Channel
 	// (ideaID nil) -- the IDENTICAL store.ThreadStore.ListByChannel call
 	// and canRead check list_research_threads makes (NFR2, no second
@@ -341,7 +350,7 @@ func (h *Handlers) renderChannelIndex(w http.ResponseWriter, r *http.Request, pe
 	if status != http.StatusOK {
 		w.WriteHeader(status)
 	}
-	if err := components.Render(w, r, title, ChannelIndex(data, ch, ideas, unattached, threads, ideasTruncated, notesTruncated, canWrite, form)); err != nil {
+	if err := components.Render(w, r, title, ChannelIndex(data, ch, ideas, unattached, relationsByNote, threads, ideasTruncated, notesTruncated, canWrite, form)); err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 	}
 }
@@ -460,6 +469,15 @@ func (h *Handlers) renderIdeaDetail(w http.ResponseWriter, r *http.Request, pers
 		return
 	}
 
+	// relationsByNote (FR11, issue #1942) is ONE batched
+	// ResearchStore.ListRelationsForNotes call for this page's whole note
+	// list -- never one call per note.
+	relationsByNote, err := h.relationsForNotes(ctx, notes)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+
 	// threads is FR3's discovery list, scoped to THIS Idea only -- the
 	// IDENTICAL store.ThreadStore.ListByChannel call and canRead check
 	// list_research_threads makes (NFR2, no second query path).
@@ -519,7 +537,7 @@ func (h *Handlers) renderIdeaDetail(w http.ResponseWriter, r *http.Request, pers
 	// slice the save-verdict form's citation multi-select is populated
 	// from -- no extra store call, and no notes from any other Idea can
 	// ever appear as options (FR4).
-	if err := components.Render(w, r, title, IdeaDetail(data, ch, idea, notes, notesTruncated, threads, current, history, authorNames, citedNotes, canWrite, form, verdictForm, activeStrategies, proposeForm)); err != nil {
+	if err := components.Render(w, r, title, IdeaDetail(data, ch, idea, notes, relationsByNote, notesTruncated, threads, current, history, authorNames, citedNotes, canWrite, form, verdictForm, activeStrategies, proposeForm)); err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 	}
 }
@@ -1053,4 +1071,24 @@ func (h *Handlers) citedResearchNotes(ctx context.Context, history []store.Verdi
 		return nil, fmt.Errorf("load cited research notes: %w", err)
 	}
 	return notes, nil
+}
+
+// relationsForNotes batch-resolves notes' own research_note_relation
+// edges in ONE store.ResearchStore.ListRelationsForNotes call (issue
+// #1942, FR11/FR16/NFR2) -- the IDENTICAL method mcp's
+// toResearchNoteOutput callers use (mcp/tools/research.go), under the
+// SAME store.CanRead check renderChannelIndex/renderIdeaDetail already
+// made for notes itself -- never a second, web-only relations query path.
+// views.templ's relatedNotesSection reads this map by note id; a note
+// with no relations is simply absent (never an empty slice entry).
+func (h *Handlers) relationsForNotes(ctx context.Context, notes []store.ResearchNoteWithAuthor) (map[uuid.UUID][]store.NoteRelation, error) {
+	ids := make([]uuid.UUID, len(notes))
+	for i, n := range notes {
+		ids[i] = n.ID
+	}
+	rels, err := h.store.Research().ListRelationsForNotes(ctx, ids)
+	if err != nil {
+		return nil, fmt.Errorf("load research note relations: %w", err)
+	}
+	return rels, nil
 }
