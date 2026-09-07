@@ -447,15 +447,16 @@ func (a *app) setupRoutes(mux *http.ServeMux) {
 	// Co-Creator, symmetrically per FR32 (store.CanApprove, re-checked
 	// fresh inside each handler -- see schedule.go's package doc comment
 	// for why hiding the button client-side is never sufficient on its
-	// own). Route paths are unchanged from C8 (FR49's route-and-package-
-	// naming note) even though {scriptID} now addresses a video_script
-	// row; /unapprove and /edit have no analog and are gone (FR40 defines
-	// no greenlit->proposed transition, and a video_script's target date
-	// is set once at propose time, FR36).
-	mux.HandleFunc("GET /channels/{id}/schedule", a.auth.RequireSignedIn(a.schedule.HandleList))
-	mux.HandleFunc("POST /schedule/{scriptID}/approve", a.auth.RequireSignedIn(a.schedule.HandleGreenlight))
-	mux.HandleFunc("POST /schedule/{scriptID}/deny", a.auth.RequireSignedIn(a.schedule.HandleDeny))
-	mux.HandleFunc("POST /schedule/{scriptID}/archive", a.auth.RequireSignedIn(a.schedule.HandleArchive))
+	// own). Route paths were unchanged from C8 through FR49, but are now
+	// renamed from /schedule to /scripts (FR20/FR22, #2030 -- no redirect
+	// or alias, NFR5) to match the video_script data model; {scriptID}
+	// addresses a video_script row; /unapprove and /edit have no analog
+	// and are gone (FR40 defines no greenlit->proposed transition, and a
+	// video_script's target date is set once at propose time, FR36).
+	mux.HandleFunc("GET /channels/{id}/scripts", a.auth.RequireSignedIn(a.schedule.HandleList))
+	mux.HandleFunc("POST /scripts/{scriptID}/approve", a.auth.RequireSignedIn(a.schedule.HandleGreenlight))
+	mux.HandleFunc("POST /scripts/{scriptID}/deny", a.auth.RequireSignedIn(a.schedule.HandleDeny))
+	mux.HandleFunc("POST /scripts/{scriptID}/archive", a.auth.RequireSignedIn(a.schedule.HandleArchive))
 
 	// Protected: access management (M2: FR30/FR31/FR33, #1723). GET is
 	// Founder/Co-Creator only (store.CanInvite); the three mutating POSTs

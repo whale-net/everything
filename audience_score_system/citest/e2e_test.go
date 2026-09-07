@@ -234,10 +234,10 @@ func newWorld(t *testing.T) *world {
 	mux.HandleFunc("GET /invites/{code}/resume", a.RequireSignedIn(inv.HandleResume))
 	mux.HandleFunc("POST /invites/{code}/accept", a.RequireSignedIn(inv.HandleAccept))
 	mux.HandleFunc("POST /invites/{code}/decline", a.RequireSignedIn(inv.HandleDecline))
-	mux.HandleFunc("GET /channels/{id}/schedule", a.RequireSignedIn(sch.HandleList))
-	mux.HandleFunc("POST /schedule/{scriptID}/approve", a.RequireSignedIn(sch.HandleGreenlight))
-	mux.HandleFunc("POST /schedule/{scriptID}/deny", a.RequireSignedIn(sch.HandleDeny))
-	mux.HandleFunc("POST /schedule/{scriptID}/archive", a.RequireSignedIn(sch.HandleArchive))
+	mux.HandleFunc("GET /channels/{id}/scripts", a.RequireSignedIn(sch.HandleList))
+	mux.HandleFunc("POST /scripts/{scriptID}/approve", a.RequireSignedIn(sch.HandleGreenlight))
+	mux.HandleFunc("POST /scripts/{scriptID}/deny", a.RequireSignedIn(sch.HandleDeny))
+	mux.HandleFunc("POST /scripts/{scriptID}/archive", a.RequireSignedIn(sch.HandleArchive))
 	mux.HandleFunc("GET /channels/{id}/access", a.RequireSignedIn(acc.HandleShow))
 	mux.HandleFunc("POST /channels/{id}/access/invites", a.RequireSignedIn(acc.HandleInviteCoCreator))
 	mux.HandleFunc("POST /channels/{id}/access/promote", a.RequireSignedIn(acc.HandlePromote))
@@ -713,14 +713,14 @@ func TestE2E_ThreeLoopsEndToEnd(t *testing.T) {
 		// The route path keeps its pre-existing "approve" spelling (FR49's
 		// route-and-package-naming note); the store transition it drives is
 		// video_script's proposed->greenlit.
-		rec := w.postForm(analystCookie, "/schedule/"+scriptID.String()+"/approve", nil)
+		rec := w.postForm(analystCookie, "/scripts/"+scriptID.String()+"/approve", nil)
 		assert.Equal(t, http.StatusForbidden, rec.Code)
 		script, err := w.st.VideoScripts().GetByID(ctx, scriptID)
 		require.NoError(t, err)
 		assert.Equal(t, store.VideoScriptStatusProposed, script.Status, "an Analyst's rejected greenlight must not change status")
 
 		// FR19/FR37: Creator greenlights.
-		rec = w.postForm(creatorCookie, "/schedule/"+scriptID.String()+"/approve", nil)
+		rec = w.postForm(creatorCookie, "/scripts/"+scriptID.String()+"/approve", nil)
 		require.Equal(t, http.StatusSeeOther, rec.Code, "body: %s", rec.Body.String())
 		script, err = w.st.VideoScripts().GetByID(ctx, scriptID)
 		require.NoError(t, err)
@@ -866,7 +866,7 @@ func TestE2E_ThreeLoopsEndToEnd(t *testing.T) {
 
 		// FR20/FR39: archive must be rejected once published (the
 		// video_script analog of FR20's freeze, rebuilt by FR39/FR49).
-		rec := w.postForm(creatorCookie, "/schedule/"+scriptID.String()+"/archive", nil)
+		rec := w.postForm(creatorCookie, "/scripts/"+scriptID.String()+"/archive", nil)
 		assert.Equal(t, http.StatusConflict, rec.Code, "FR39: archive must be rejected once published")
 
 		script, err := w.st.VideoScripts().GetByID(ctx, scriptID)

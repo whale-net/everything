@@ -19,7 +19,7 @@
 // domain's own real embedded migrations, wire a real *store.Store and a
 // real *auth.SessionManager against it, and drive schedule.Handlers
 // through a small local http.ServeMux that mirrors `web`'s main.go route
-// registrations for GET /channels/{id}/schedule and POST /schedule/
+// registrations for GET /channels/{id}/scripts and POST /scripts/
 // {scriptID}/{approve,deny,archive} -- so PathValue resolution and
 // auth.RequireSignedIn wrapping behave exactly as they do in production.
 //
@@ -97,10 +97,10 @@ func newScheduleTestStack(t *testing.T) *scheduleTestStack {
 	sch := schedule.New(st)
 
 	mux := http.NewServeMux()
-	mux.HandleFunc("GET /channels/{id}/schedule", a.RequireSignedIn(sch.HandleList))
-	mux.HandleFunc("POST /schedule/{scriptID}/approve", a.RequireSignedIn(sch.HandleGreenlight))
-	mux.HandleFunc("POST /schedule/{scriptID}/deny", a.RequireSignedIn(sch.HandleDeny))
-	mux.HandleFunc("POST /schedule/{scriptID}/archive", a.RequireSignedIn(sch.HandleArchive))
+	mux.HandleFunc("GET /channels/{id}/scripts", a.RequireSignedIn(sch.HandleList))
+	mux.HandleFunc("POST /scripts/{scriptID}/approve", a.RequireSignedIn(sch.HandleGreenlight))
+	mux.HandleFunc("POST /scripts/{scriptID}/deny", a.RequireSignedIn(sch.HandleDeny))
+	mux.HandleFunc("POST /scripts/{scriptID}/archive", a.RequireSignedIn(sch.HandleArchive))
 
 	return &scheduleTestStack{store: st, sessions: sessions, handlers: sch, router: mux, db: db}
 }
@@ -255,7 +255,7 @@ func TestHandleList_FounderCoCreatorAnalyst_SeeSameScripts(t *testing.T) {
 		{"Analyst", analyst},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			w := s.do(t, http.MethodGet, "/channels/"+ch.ID.String()+"/schedule", s.sessionCookie(t, ctx, tc.person.ID))
+			w := s.do(t, http.MethodGet, "/channels/"+ch.ID.String()+"/scripts", s.sessionCookie(t, ctx, tc.person.ID))
 			require.Equal(t, http.StatusOK, w.Code, "body: %s", w.Body.String())
 			assert.Contains(t, w.Body.String(), script.Title, "%s must see the same script", tc.name)
 		})
@@ -268,7 +268,7 @@ func TestHandleList_NonMember_Forbidden(t *testing.T) {
 	ch, _, _, _ := s.setupVideoScriptFixture(t, ctx, "Outsider")
 	outsider := s.newPerson(t, ctx, "outsider")
 
-	w := s.do(t, http.MethodGet, "/channels/"+ch.ID.String()+"/schedule", s.sessionCookie(t, ctx, outsider.ID))
+	w := s.do(t, http.MethodGet, "/channels/"+ch.ID.String()+"/scripts", s.sessionCookie(t, ctx, outsider.ID))
 	assert.Equal(t, http.StatusForbidden, w.Code)
 }
 
@@ -277,7 +277,7 @@ func TestHandleList_UnknownChannel_NotFound(t *testing.T) {
 	s := newScheduleTestStack(t)
 	_, creator, _, _ := s.setupVideoScriptFixture(t, ctx, "UnknownChannel")
 
-	w := s.do(t, http.MethodGet, "/channels/"+uuid.NewString()+"/schedule", s.sessionCookie(t, ctx, creator.ID))
+	w := s.do(t, http.MethodGet, "/channels/"+uuid.NewString()+"/scripts", s.sessionCookie(t, ctx, creator.ID))
 	assert.Equal(t, http.StatusNotFound, w.Code, "body: %s", w.Body.String())
 }
 
@@ -291,7 +291,7 @@ func TestHandleList_NotSignedIn_Unauthorized(t *testing.T) {
 	s := newScheduleTestStack(t)
 	ch, _ := s.setupChannel(t, ctx)
 
-	req := httptest.NewRequest(http.MethodGet, "/channels/"+ch.ID.String()+"/schedule", nil)
+	req := httptest.NewRequest(http.MethodGet, "/channels/"+ch.ID.String()+"/scripts", nil)
 	req.SetPathValue("id", ch.ID.String())
 	w := httptest.NewRecorder()
 	s.handlers.HandleList(w, req)
@@ -315,14 +315,14 @@ func TestHandleList_Analyst_NoMutatingAffordances(t *testing.T) {
 	analyst := s.newPerson(t, ctx, "analyst")
 	require.NoError(t, s.store.Roles().AddRole(ctx, ch.ID, analyst.ID, store.RoleAnalyst, creator.ID))
 
-	w := s.do(t, http.MethodGet, "/channels/"+ch.ID.String()+"/schedule", s.sessionCookie(t, ctx, analyst.ID))
+	w := s.do(t, http.MethodGet, "/channels/"+ch.ID.String()+"/scripts", s.sessionCookie(t, ctx, analyst.ID))
 	require.Equal(t, http.StatusOK, w.Code, "body: %s", w.Body.String())
 	body := w.Body.String()
 	assert.Contains(t, body, proposedScript.Title, "an Analyst must still be able to read the schedule (store.CanRead)")
 	assert.Contains(t, body, greenlitScript.Title)
-	assert.NotContains(t, body, "/schedule/"+proposedScript.ID.String()+"/approve", "an Analyst's view must render no greenlight affordance")
-	assert.NotContains(t, body, "/schedule/"+proposedScript.ID.String()+"/deny", "an Analyst's view must render no deny affordance")
-	assert.NotContains(t, body, "/schedule/"+greenlitScript.ID.String()+"/archive", "an Analyst's view must render no archive affordance")
+	assert.NotContains(t, body, "/scripts/"+proposedScript.ID.String()+"/approve", "an Analyst's view must render no greenlight affordance")
+	assert.NotContains(t, body, "/scripts/"+proposedScript.ID.String()+"/deny", "an Analyst's view must render no deny affordance")
+	assert.NotContains(t, body, "/scripts/"+greenlitScript.ID.String()+"/archive", "an Analyst's view must render no archive affordance")
 }
 
 // ── Forged POST from an Analyst -- the load-bearing authorization test:
@@ -345,7 +345,7 @@ func TestForgedPOST_Analyst_Forbidden_NoStateChange(t *testing.T) {
 			analyst := s.newPerson(t, ctx, "analyst")
 			require.NoError(t, s.store.Roles().AddRole(ctx, ch.ID, analyst.ID, store.RoleAnalyst, creator.ID))
 
-			w := s.do(t, http.MethodPost, "/schedule/"+script.ID.String()+"/"+route, s.sessionCookie(t, ctx, analyst.ID))
+			w := s.do(t, http.MethodPost, "/scripts/"+script.ID.String()+"/"+route, s.sessionCookie(t, ctx, analyst.ID))
 			assert.Equal(t, http.StatusForbidden, w.Code, "an Analyst's forged POST to /%s must 403 -- store.CanApprove re-derived fresh, never from a hidden button", route)
 
 			got, err := s.store.VideoScripts().GetByID(ctx, script.ID)
@@ -368,7 +368,7 @@ func TestHandleGreenlight_FounderAndCoCreator_ProposedToGreenlit(t *testing.T) {
 			script := s.proposeScript(t, ctx, ch, creator, verdict, strategy, "Script")
 			actor := s.actorForRole(t, ctx, ch, creator, roleName)
 
-			w := s.do(t, http.MethodPost, "/schedule/"+script.ID.String()+"/approve", s.sessionCookie(t, ctx, actor.ID))
+			w := s.do(t, http.MethodPost, "/scripts/"+script.ID.String()+"/approve", s.sessionCookie(t, ctx, actor.ID))
 			assert.Equal(t, http.StatusSeeOther, w.Code, "body: %s", w.Body.String())
 
 			got, err := s.store.VideoScripts().GetByID(ctx, script.ID)
@@ -390,7 +390,7 @@ func TestHandleDeny_FounderAndCoCreator_ProposedToDenied(t *testing.T) {
 			script := s.proposeScript(t, ctx, ch, creator, verdict, strategy, "Script")
 			actor := s.actorForRole(t, ctx, ch, creator, roleName)
 
-			w := s.do(t, http.MethodPost, "/schedule/"+script.ID.String()+"/deny", s.sessionCookie(t, ctx, actor.ID))
+			w := s.do(t, http.MethodPost, "/scripts/"+script.ID.String()+"/deny", s.sessionCookie(t, ctx, actor.ID))
 			assert.Equal(t, http.StatusSeeOther, w.Code, "body: %s", w.Body.String())
 
 			got, err := s.store.VideoScripts().GetByID(ctx, script.ID)
@@ -410,7 +410,7 @@ func TestHandleArchive_FounderAndCoCreator_GreenlitToArchived(t *testing.T) {
 			require.NoError(t, s.store.VideoScripts().Greenlight(ctx, script.ID, creator.ID))
 			actor := s.actorForRole(t, ctx, ch, creator, roleName)
 
-			w := s.do(t, http.MethodPost, "/schedule/"+script.ID.String()+"/archive", s.sessionCookie(t, ctx, actor.ID))
+			w := s.do(t, http.MethodPost, "/scripts/"+script.ID.String()+"/archive", s.sessionCookie(t, ctx, actor.ID))
 			assert.Equal(t, http.StatusSeeOther, w.Code, "body: %s", w.Body.String())
 
 			got, err := s.store.VideoScripts().GetByID(ctx, script.ID)
@@ -443,10 +443,10 @@ func TestHandleGreenlight_AlreadyGreenlit_Conflict_NoStateChange(t *testing.T) {
 	script := s.proposeScript(t, ctx, ch, creator, verdict, strategy, "Script")
 	cookie := s.sessionCookie(t, ctx, creator.ID)
 
-	w := s.do(t, http.MethodPost, "/schedule/"+script.ID.String()+"/approve", cookie)
+	w := s.do(t, http.MethodPost, "/scripts/"+script.ID.String()+"/approve", cookie)
 	require.Equal(t, http.StatusSeeOther, w.Code, "body: %s", w.Body.String())
 
-	w = s.do(t, http.MethodPost, "/schedule/"+script.ID.String()+"/approve", cookie)
+	w = s.do(t, http.MethodPost, "/scripts/"+script.ID.String()+"/approve", cookie)
 	assert.Equal(t, http.StatusConflict, w.Code, "greenlighting an already-greenlit script must 409")
 
 	got, err := s.store.VideoScripts().GetByID(ctx, script.ID)
@@ -461,10 +461,10 @@ func TestHandleDeny_AlreadyDenied_Conflict_NoStateChange(t *testing.T) {
 	script := s.proposeScript(t, ctx, ch, creator, verdict, strategy, "Script")
 	cookie := s.sessionCookie(t, ctx, creator.ID)
 
-	w := s.do(t, http.MethodPost, "/schedule/"+script.ID.String()+"/deny", cookie)
+	w := s.do(t, http.MethodPost, "/scripts/"+script.ID.String()+"/deny", cookie)
 	require.Equal(t, http.StatusSeeOther, w.Code, "body: %s", w.Body.String())
 
-	w = s.do(t, http.MethodPost, "/schedule/"+script.ID.String()+"/deny", cookie)
+	w = s.do(t, http.MethodPost, "/scripts/"+script.ID.String()+"/deny", cookie)
 	assert.Equal(t, http.StatusConflict, w.Code, "denying an already-denied script must 409")
 
 	got, err := s.store.VideoScripts().GetByID(ctx, script.ID)
@@ -479,7 +479,7 @@ func TestHandleArchive_Proposed_Conflict_NoStateChange(t *testing.T) {
 	script := s.proposeScript(t, ctx, ch, creator, verdict, strategy, "Script")
 	cookie := s.sessionCookie(t, ctx, creator.ID)
 
-	w := s.do(t, http.MethodPost, "/schedule/"+script.ID.String()+"/archive", cookie)
+	w := s.do(t, http.MethodPost, "/scripts/"+script.ID.String()+"/archive", cookie)
 	assert.Equal(t, http.StatusConflict, w.Code, "archiving a proposed (not-yet-greenlit) script must 409")
 
 	got, err := s.store.VideoScripts().GetByID(ctx, script.ID)
@@ -496,24 +496,24 @@ func TestHandleArchive_PublishedFreeze_Conflict_StateUnchanged_AffordanceOmitted
 	script := s.proposeScript(t, ctx, ch, creator, verdict, strategy, "Frozen Script")
 	cookie := s.sessionCookie(t, ctx, creator.ID)
 
-	w := s.do(t, http.MethodPost, "/schedule/"+script.ID.String()+"/approve", cookie)
+	w := s.do(t, http.MethodPost, "/scripts/"+script.ID.String()+"/approve", cookie)
 	require.Equal(t, http.StatusSeeOther, w.Code, "body: %s", w.Body.String())
 
 	// A live (confirmed) match to an actually-published video -- FR39's
 	// exact "recorded as published" predicate.
 	s.recordPublishedMatch(t, ctx, ch, script.ID, store.MatchStateConfirmed, true)
 
-	archiveW := s.do(t, http.MethodPost, "/schedule/"+script.ID.String()+"/archive", cookie)
+	archiveW := s.do(t, http.MethodPost, "/scripts/"+script.ID.String()+"/archive", cookie)
 	assert.Equal(t, http.StatusConflict, archiveW.Code, "archiving a script whose matched video has published must 409 (FR39)")
 
 	got, err := s.store.VideoScripts().GetByID(ctx, script.ID)
 	require.NoError(t, err)
 	assert.Equal(t, store.VideoScriptStatusGreenlit, got.Status, "the freeze must leave state unchanged")
 
-	listW := s.do(t, http.MethodGet, "/channels/"+ch.ID.String()+"/schedule", cookie)
+	listW := s.do(t, http.MethodGet, "/channels/"+ch.ID.String()+"/scripts", cookie)
 	require.Equal(t, http.StatusOK, listW.Code, "body: %s", listW.Body.String())
 	body := listW.Body.String()
-	assert.NotContains(t, body, "/schedule/"+script.ID.String()+"/archive", "a frozen script's page must render no archive affordance")
+	assert.NotContains(t, body, "/scripts/"+script.ID.String()+"/archive", "a frozen script's page must render no archive affordance")
 	assert.Contains(t, body, "frozen", "a frozen script's page must explain the freeze")
 }
 
@@ -528,10 +528,10 @@ func TestRetiredRoutes_UnapproveAndEdit_NotFound(t *testing.T) {
 	script := s.proposeScript(t, ctx, ch, creator, verdict, strategy, "Script")
 	cookie := s.sessionCookie(t, ctx, creator.ID)
 
-	unapproveW := s.do(t, http.MethodPost, "/schedule/"+script.ID.String()+"/unapprove", cookie)
+	unapproveW := s.do(t, http.MethodPost, "/scripts/"+script.ID.String()+"/unapprove", cookie)
 	assert.Equal(t, http.StatusNotFound, unapproveW.Code, "/unapprove has no analog under video_script (FR40) and must not be routed")
 
-	editW := s.do(t, http.MethodPost, "/schedule/"+script.ID.String()+"/edit", cookie)
+	editW := s.do(t, http.MethodPost, "/scripts/"+script.ID.String()+"/edit", cookie)
 	assert.Equal(t, http.StatusNotFound, editW.Code, "/edit has no analog under video_script (FR36, no web edit surface) and must not be routed")
 }
 
@@ -543,6 +543,6 @@ func TestMutate_MalformedScriptUUID_BadRequest(t *testing.T) {
 	_, creator := s.setupChannel(t, ctx)
 	cookie := s.sessionCookie(t, ctx, creator.ID)
 
-	w := s.do(t, http.MethodPost, "/schedule/not-a-uuid/approve", cookie)
+	w := s.do(t, http.MethodPost, "/scripts/not-a-uuid/approve", cookie)
 	assert.Equal(t, http.StatusBadRequest, w.Code)
 }

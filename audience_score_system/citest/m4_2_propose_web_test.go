@@ -196,7 +196,7 @@ func TestE2E_M42_ProposeWebBrowseReview(t *testing.T) {
 	t.Run("2_fr3_fr4_propose_over_web", func(t *testing.T) {
 		rec := w.postForm(analystCookie, "/channels/"+ch.ID.String()+"/research/ideas/"+ideaID.String()+"/video-scripts", proposeForm)
 		require.Equal(t, http.StatusSeeOther, rec.Code, "body: %s", rec.Body.String())
-		assert.Equal(t, "/channels/"+ch.ID.String()+"/schedule", rec.Header().Get("Location"), "FR3: redirects to web/schedule's existing list")
+		assert.Equal(t, "/channels/"+ch.ID.String()+"/scripts", rec.Header().Get("Location"), "FR3: redirects to web/schedule's existing list")
 
 		scripts, err := w.st.VideoScripts().ListByChannel(ctx, ch.ID)
 		require.NoError(t, err)
@@ -216,7 +216,7 @@ func TestE2E_M42_ProposeWebBrowseReview(t *testing.T) {
 	t.Run("3_fr5_nfr1_idempotent_replay", func(t *testing.T) {
 		rec := w.postForm(analystCookie, "/channels/"+ch.ID.String()+"/research/ideas/"+ideaID.String()+"/video-scripts", proposeForm)
 		require.Equal(t, http.StatusSeeOther, rec.Code, "a replayed submit must still redirect, not error, body: %s", rec.Body.String())
-		assert.Equal(t, "/channels/"+ch.ID.String()+"/schedule", rec.Header().Get("Location"))
+		assert.Equal(t, "/channels/"+ch.ID.String()+"/scripts", rec.Header().Get("Location"))
 
 		scripts, err := w.st.VideoScripts().ListByChannel(ctx, ch.ID)
 		require.NoError(t, err)
@@ -226,7 +226,7 @@ func TestE2E_M42_ProposeWebBrowseReview(t *testing.T) {
 	// ── 4: C10 (already shipped) -- the proposed script browses on
 	// web/schedule, regression guard ─────────────────────────────────────
 	t.Run("4_c10_browse_on_web_regression_guard", func(t *testing.T) {
-		rec := w.get(analystCookie, "/channels/"+ch.ID.String()+"/schedule")
+		rec := w.get(analystCookie, "/channels/"+ch.ID.String()+"/scripts")
 		require.Equal(t, http.StatusOK, rec.Code, "body: %s", rec.Body.String())
 		body := rec.Body.String()
 		assert.Contains(t, body, webProposedTitle)
@@ -260,7 +260,7 @@ func TestE2E_M42_ProposeWebBrowseReview(t *testing.T) {
 		assert.Equal(t, string(store.VerdictViable), found.Verdict)
 
 		// Mirror direction: propose a second script via MCP, then confirm
-		// it renders identically on GET /channels/{id}/schedule, right
+		// it renders identically on GET /channels/{id}/scripts, right
 		// alongside the web-proposed one.
 		scriptRes := decode[mcptools.VideoScriptOutput](t, callTool(t, csAnalyst, "save_video_script", mcptools.SaveVideoScriptInput{
 			ChannelID: ch.ID.String(), VerdictID: verdictOut.ID, StrategyID: activeStrategy.StrategyID,
@@ -269,7 +269,7 @@ func TestE2E_M42_ProposeWebBrowseReview(t *testing.T) {
 		mcpScriptID = uuid.MustParse(scriptRes.VideoScriptID)
 		assert.Equal(t, "proposed", scriptRes.Status)
 
-		rec := w.get(analystCookie, "/channels/"+ch.ID.String()+"/schedule")
+		rec := w.get(analystCookie, "/channels/"+ch.ID.String()+"/scripts")
 		require.Equal(t, http.StatusOK, rec.Code, "body: %s", rec.Body.String())
 		body := rec.Body.String()
 		assert.Contains(t, body, mcpProposedTitle, "a script proposed via MCP must render on web/schedule identically to one proposed via web")
@@ -280,7 +280,7 @@ func TestE2E_M42_ProposeWebBrowseReview(t *testing.T) {
 	// greenlights the web-proposed script, then denies the MCP-proposed
 	// one -- closes the milestone's outcome sentence entirely over web ───
 	t.Run("6_c19_review_on_web_regression_guard", func(t *testing.T) {
-		rec := w.postForm(creatorCookie, "/schedule/"+webScriptID.String()+"/approve", nil)
+		rec := w.postForm(creatorCookie, "/scripts/"+webScriptID.String()+"/approve", nil)
 		require.Equal(t, http.StatusSeeOther, rec.Code, "body: %s", rec.Body.String())
 		script, err := w.st.VideoScripts().GetByID(ctx, webScriptID)
 		require.NoError(t, err)
@@ -289,11 +289,11 @@ func TestE2E_M42_ProposeWebBrowseReview(t *testing.T) {
 		assert.Equal(t, creator.ID, *script.DecidedByPersonID)
 		require.NotNil(t, script.DecidedAt)
 
-		listRec := w.get(analystCookie, "/channels/"+ch.ID.String()+"/schedule")
+		listRec := w.get(analystCookie, "/channels/"+ch.ID.String()+"/scripts")
 		require.Equal(t, http.StatusOK, listRec.Code, "body: %s", listRec.Body.String())
 		assert.Contains(t, listRec.Body.String(), "Greenlit")
 
-		denyRec := w.postForm(creatorCookie, "/schedule/"+mcpScriptID.String()+"/deny", nil)
+		denyRec := w.postForm(creatorCookie, "/scripts/"+mcpScriptID.String()+"/deny", nil)
 		require.Equal(t, http.StatusSeeOther, denyRec.Code, "body: %s", denyRec.Body.String())
 		script2, err := w.st.VideoScripts().GetByID(ctx, mcpScriptID)
 		require.NoError(t, err)
@@ -339,7 +339,7 @@ func TestE2E_M42_ProposeWebBrowseReview(t *testing.T) {
 		})
 		require.NoError(t, err)
 
-		rejectApprove := w.postForm(analystCookie, "/schedule/"+fixtureScript.ID.String()+"/approve", nil)
+		rejectApprove := w.postForm(analystCookie, "/scripts/"+fixtureScript.ID.String()+"/approve", nil)
 		assert.Equal(t, http.StatusForbidden, rejectApprove.Code, "body: %s", rejectApprove.Body.String())
 
 		reloaded, err := w.st.VideoScripts().GetByID(ctx, fixtureScript.ID)

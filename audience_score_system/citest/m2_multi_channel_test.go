@@ -306,7 +306,7 @@ func TestE2E_M2_MultiChannelMultiTier(t *testing.T) {
 		// pre-existing "approve" spelling (FR49's route-and-package-naming
 		// note); the store transition it drives is video_script's
 		// proposed->greenlit.
-		rec := w.postForm(cCookie, "/schedule/"+scriptID.String()+"/approve", nil)
+		rec := w.postForm(cCookie, "/scripts/"+scriptID.String()+"/approve", nil)
 		require.Equal(t, http.StatusSeeOther, rec.Code, "body: %s", rec.Body.String())
 		gotScript, err := w.st.VideoScripts().GetByID(ctx, scriptID)
 		require.NoError(t, err)
@@ -584,7 +584,7 @@ func TestE2E_M2_MultiChannelMultiTier(t *testing.T) {
 		})
 		assert.True(t, res.IsError, "C must not mutate Channel B's video_script via MCP -- C holds no role there")
 
-		rec := w.postForm(cCookie, "/schedule/"+scriptB.ID.String()+"/deny", nil)
+		rec := w.postForm(cCookie, "/scripts/"+scriptB.ID.String()+"/deny", nil)
 		assert.Equal(t, http.StatusForbidden, rec.Code, "C must not mutate Channel B's video_script via web -- C holds no role there")
 
 		gotB, err := w.st.VideoScripts().GetByID(ctx, scriptB.ID)
@@ -594,7 +594,7 @@ func TestE2E_M2_MultiChannelMultiTier(t *testing.T) {
 		overviewRes := callTool(t, w.mcpConnect(c.ID), "get_channel_overview", mcptools.GetChannelOverviewInput{ChannelID: chB.ID.String()})
 		assert.True(t, overviewRes.IsError, "C must not read Channel B's overview via MCP -- C holds no role there")
 
-		recList := w.get(cCookie, "/channels/"+chB.ID.String()+"/schedule")
+		recList := w.get(cCookie, "/channels/"+chB.ID.String()+"/scripts")
 		assert.Equal(t, http.StatusForbidden, recList.Code, "C must not read Channel B's schedule page via web -- C holds no role there")
 
 		// The reverse direction never leaks either: F (legitimately on
@@ -616,7 +616,7 @@ func TestE2E_M2_MultiChannelMultiTier(t *testing.T) {
 
 		// The web schedule list agrees: F's page for B never renders A's
 		// script title, and vice versa.
-		bodyB := w.get(fCookie, "/channels/"+chB.ID.String()+"/schedule").Body.String()
+		bodyB := w.get(fCookie, "/channels/"+chB.ID.String()+"/scripts").Body.String()
 		assert.Contains(t, bodyB, "Channel B Only Video")
 		assert.NotContains(t, bodyB, "M2 Story Idea", "Channel B's schedule page must never render Channel A's video_script")
 	})
