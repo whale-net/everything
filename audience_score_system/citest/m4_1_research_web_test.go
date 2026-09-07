@@ -224,7 +224,7 @@ func TestE2E_M41_ResearchWebSaveBrowse(t *testing.T) {
 		indexBody := indexRec.Body.String()
 		assert.Contains(t, indexBody, ideaOut.Title)
 		assert.Regexp(t, `M4\.1 Loop 1 Idea[\s\S]{0,400}>3<`, indexBody, "the Idea's note count (3: 1 web + 2 mcp) must render on the index")
-		assert.Contains(t, indexBody, "None yet", "no verdict has been recorded for this Idea yet")
+		assert.Contains(t, indexBody, `title="No verdict yet"`, "no verdict has been recorded for this Idea yet (FR31/FR32 glyph, not the old \"None yet\" badge text)")
 
 		// FR2, FR10: the Idea detail page shows all three notes, each with
 		// the correct cited/uncited indicator -- never a local nil-check,
