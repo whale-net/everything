@@ -59,8 +59,19 @@
 // Analyst) gates the create POST; store.CanApprove (Creator-tier only,
 // used by mutate below) is untouched and unrelated -- proposing content
 // and greenlighting/denying/archiving it remain two different authority
-// tiers. Script editing (FR16/FR17) is a deliberately separate follow-on
-// task; create.go's routes are create/detail only.
+// tiers.
+//
+// #2037 (FR16-FR19) adds the edit half to this SAME create.go: POST
+// /channels/{id}/scripts/{scriptID} (HandleUpdateScript) plus an in-place
+// edit mode on the GET detail page (?edit=1, no separate route/path) --
+// title/body editing while a script is still 'proposed' and unpublished,
+// gated by the SAME store.CanWrite tier as create (authorizeScriptWrite),
+// with the status/published freeze enforced solely inside
+// store.VideoScriptStore.UpdateContent (ErrVideoScriptDecided) -- never
+// duplicated as a second check at this layer. views.templ's ScriptDetail
+// renders a status-specific read-only indicator (scriptFreezeReason) once
+// the script is no longer editable; that rendering is presentation only,
+// never the only enforcement.
 package schedule
 
 import (

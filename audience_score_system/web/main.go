@@ -478,12 +478,24 @@ func (a *app) setupRoutes(mux *http.ServeMux) {
 	// access is store.CanRead (three-tier, matching HandleList); the
 	// create POST is gated by store.CanWrite (Creator-or-Analyst,
 	// distinct from the Creator-tier store.CanApprove the mutating routes
-	// above use) -- see create.go's package-doc addendum. Script editing
-	// (FR16/FR17) is a separate follow-on task; these three routes are
-	// create/detail only.
+	// above use) -- see create.go's package-doc addendum.
+	//
+	// #2037 (FR16-FR19) adds the edit half: POST to the SAME
+	// /channels/{id}/scripts/{scriptID} path the GET detail route already
+	// owns -- Go's ServeMux dispatches by method+pattern, so this is a
+	// distinct registration, not a conflict, and keeps "one script, one
+	// URL" for both viewing and editing it (GET's own ?edit=1 query
+	// parameter switches the SAME page into edit mode; there is no
+	// separate .../edit path). Also gated by store.CanWrite, same tier as
+	// create -- the status/published freeze that actually decides WHEN an
+	// edit is allowed is enforced inside
+	// store.VideoScriptStore.UpdateContent itself, not by anything at this
+	// routing layer (see create.go's HandleUpdateScript/
+	// authorizeScriptWrite doc comments).
 	mux.HandleFunc("GET /channels/{id}/scripts/new", a.auth.RequireSignedIn(a.schedule.HandleNewScript))
 	mux.HandleFunc("POST /channels/{id}/scripts", a.auth.RequireSignedIn(a.schedule.HandleCreateScript))
 	mux.HandleFunc("GET /channels/{id}/scripts/{scriptID}", a.auth.RequireSignedIn(a.schedule.HandleScriptDetail))
+	mux.HandleFunc("POST /channels/{id}/scripts/{scriptID}", a.auth.RequireSignedIn(a.schedule.HandleUpdateScript))
 
 	// Protected: access management (M2: FR30/FR31/FR33, #1723). GET is
 	// Founder/Co-Creator only (store.CanInvite); the three mutating POSTs

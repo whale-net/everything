@@ -68,6 +68,56 @@ func newScriptFormData() scriptFormData {
 	return scriptFormData{IdempotencyKey: newIdempotencyKey()}
 }
 
+// newEditFormData mints scriptFormData for a fresh edit-mode GET render
+// (#2037, FR16, FR18/NFR2): the script's CURRENT title/script_text as the
+// starting edit values, plus a freshly minted IdempotencyKey -- mirrors
+// newScriptFormData's rationale exactly, adapted for editing an existing
+// row instead of creating one. VerdictID/StrategyID are left "" and
+// ignored by scriptEditForm -- an edit never changes which verdict/
+// strategy a script is bound to.
+func newEditFormData(script store.VideoScript) scriptFormData {
+	return scriptFormData{
+		Title:          script.Title,
+		ScriptText:     script.ScriptText,
+		IdempotencyKey: newIdempotencyKey(),
+	}
+}
+
+// scriptFreezeReason returns FR17's status-specific indicator text once a
+// video_script has left the editable window store.VideoScriptStore.
+// UpdateContent enforces (status != proposed OR published) -- "" when the
+// script is still editable. This function is PRESENTATION ONLY: it must
+// never disagree with UpdateContent's own combined check (see that
+// method's doc comment), but it does not itself enforce anything --
+// HandleUpdateScript rejects an edit attempt via UpdateContent's returned
+// error regardless of what this renders (see that handler and
+// store.ErrVideoScriptDecided).
+//
+// Distinguishes WHY a script is frozen rather than one generic read-only
+// string:
+//   - published (reachable while status is STILL 'proposed', via the
+//     match-confirm-then-sync path UpdateContent's doc comment describes)
+//     takes priority over status -- it is the more specific, more current
+//     truth, including for a script that is ALSO greenlit.
+//   - greenlit, not (yet) published -> "approved, awaiting publish".
+//   - denied -> "denied".
+//   - archived -> "archived".
+func scriptFreezeReason(status store.VideoScriptStatus, published bool) string {
+	if published {
+		return "This script's video has already been published, so it can no longer be edited."
+	}
+	switch status {
+	case store.VideoScriptStatusGreenlit:
+		return "This script has been approved and is awaiting publish, so it can no longer be edited."
+	case store.VideoScriptStatusDenied:
+		return "This script was denied, so it can no longer be edited."
+	case store.VideoScriptStatusArchived:
+		return "This script has been archived, so it can no longer be edited."
+	default:
+		return ""
+	}
+}
+
 // newIdempotencyKey mints a server-generated idempotency key (FR18/NFR2),
 // created ONCE at render time and carried as a hidden
 // <input name="idempotency_key"> on the create form, threaded to
@@ -449,19 +499,30 @@ func (h *Handlers) HandleCreateScript(w http.ResponseWriter, r *http.Request) {
 }
 
 // HandleScriptDetail serves GET /channels/{id}/scripts/{scriptID}
-// (#2036, FR14, FR15): the per-script authoring page -- the script's
-// current body in the SAME markdown editor/preview toggle as the create
-// form (here a plain ?preview=1 query-string toggle, since the content is
-// static/read-only -- there is no unsaved text to lose), and FR15's link
-// back to the bound verdict (its Idea, version, and value). Script body
-// editing (FR16/FR17) is a deliberately separate follow-on task -- this
-// route is read-only display of the create-time body plus the FR15
-// verdict link. Order of operations mirrors HandleList's exactly: an
+// (#2036, FR14, FR15; #2037, FR16, FR17): the per-script authoring page --
+// the script's current body in the SAME markdown editor/preview toggle as
+// the create form (here a plain ?preview=1 query-string toggle for the
+// read-only render, since that content is static -- there is no unsaved
+// text to lose), FR15's link back to the bound verdict (its Idea, version,
+// and value), and -- new in #2037 -- an in-place edit mode
+// (?edit=1) that swaps the read-only body for scriptEditForm, but ONLY
+// while the script is still editable (FR16/FR17): status = 'proposed' AND
+// not published. Order of operations mirrors HandleList's exactly: an
 // unknown Channel or script 404s before/regardless of authorization, and
 // a script that exists but belongs to a different Channel than the
 // path's {id} 404s exactly like an unknown script (mirrors
 // HandleIdeaDetail's identical cross-Channel rule in web/research) --
 // never 403, never distinguishable from "does not exist".
+//
+// canRead (store.CanRead) gates the page itself, same three-tier
+// visibility as HandleList; canWrite (store.CanWrite, FR19) is derived
+// separately and gates ONLY whether an edit affordance can ever be
+// rendered -- renderScriptDetail additionally requires the script be
+// Editable before actually entering edit mode, so a manually-appended
+// ?edit=1 on a frozen script, or one from a CanRead-but-not-CanWrite
+// Analyst-tier-below persona (not reachable today, see authorizeWrite's
+// identical note), silently falls back to the read-only render rather than
+// ever exposing an edit form that would just 409 on submit.
 func (h *Handlers) HandleScriptDetail(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 	person := auth.PersonFromContext(ctx)
@@ -516,6 +577,46 @@ func (h *Handlers) HandleScriptDetail(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// canWrite (Creator-or-Analyst, FR19) gates whether the Edit
+	// affordance/edit mode can appear at all -- re-derived fresh on every
+	// request, never cached, mirroring HandleNewScript's identical
+	// canWrite derivation one route over.
+	canWrite, err := store.CanWrite(ctx, h.store.Roles(), channelID, person.ID)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	editRequested := r.URL.Query().Get("edit") == "1"
+	readPreview := !editRequested && r.URL.Query().Get("preview") == "1"
+
+	var form scriptFormData
+	if editRequested {
+		form = newEditFormData(script)
+	}
+
+	h.renderScriptDetail(w, r, person, ch, script, canWrite, editRequested, form, readPreview, http.StatusOK)
+}
+
+// renderScriptDetail is HandleScriptDetail's and HandleUpdateScript's
+// shared render body (#2037): loads FR15's verdict/idea link fields fresh,
+// computes FR16/FR17's published/freeze state fresh (never cached across
+// GET/POST, and never trusted from a caller's stale copy), computes
+// whichever preview HTML is relevant for the active mode, and renders
+// ScriptDetail exactly once. canWrite is passed in rather than re-derived
+// here since every caller already has it from its own authorization step
+// (HandleScriptDetail's store.CanRead+CanWrite pair, or
+// authorizeScriptWrite's CanWrite).
+//
+// requestedEditMode is the CALLER's intent (an explicit ?edit=1, or "stay
+// in edit mode" after a preview toggle/validation/freeze error on
+// HandleUpdateScript's POST) -- the view's actual EditMode is that AND
+// canWrite AND Editable, so this function is the single place that can
+// never render an edit form for a script that is not, right now, both
+// writable by this caller and still in its editable window.
+func (h *Handlers) renderScriptDetail(w http.ResponseWriter, r *http.Request, person *store.Person, ch store.Channel, script store.VideoScript, canWrite bool, requestedEditMode bool, form scriptFormData, readPreview bool, status int) {
+	ctx := r.Context()
+
 	// verdict is FR15's load-bearing link target: the SPECIFIC verdict
 	// version this script is bound to (LB3), never just the idea's
 	// current verdict, which may have changed since.
@@ -531,9 +632,25 @@ func (h *Handlers) HandleScriptDetail(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	preview := r.URL.Query().Get("preview") == "1"
+	published, err := h.store.VideoScripts().IsPublished(ctx, script.ID)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	freezeReason := scriptFreezeReason(script.Status, published)
+	editable := freezeReason == ""
+
+	if requestedEditMode && form.Preview {
+		html, err := renderScriptMarkdown(form.ScriptText)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		form.PreviewHTML = html
+	}
+
 	var previewHTML string
-	if preview {
+	if readPreview {
 		previewHTML, err = renderScriptMarkdown(script.ScriptText)
 		if err != nil {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
@@ -541,9 +658,193 @@ func (h *Handlers) HandleScriptDetail(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	view := scriptDetailView{
+		Ch:      ch,
+		Script:  script,
+		Idea:    idea,
+		Verdict: verdict,
+
+		Preview:     readPreview,
+		PreviewHTML: previewHTML,
+
+		CanWrite:     canWrite,
+		Editable:     editable,
+		FreezeReason: freezeReason,
+		EditMode:     requestedEditMode && canWrite && editable,
+		Form:         form,
+	}
+
 	title := script.Title
 	data := components.LayoutData{Title: title, User: person}
-	if err := components.Render(w, r, title, ScriptDetail(data, ch, script, idea, verdict, preview, previewHTML)); err != nil {
+	if status != http.StatusOK {
+		w.WriteHeader(status)
+	}
+	if err := components.Render(w, r, title, ScriptDetail(data, view)); err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 	}
+}
+
+// authorizeScriptWrite is HandleUpdateScript's authorization + parse
+// preamble (#2037, FR19, NFR4): resolve the signed-in Person (401), parse
+// {id} and {scriptID} (400 on either malformed), load the Channel (404 via
+// pgx.ErrNoRows) and the script (404 via pgx.ErrNoRows), 404 again if the
+// script's own ChannelID does not match the path's {id} (mirrors
+// HandleScriptDetail's identical cross-Channel rule -- never
+// distinguishable from "does not exist"), and re-derive store.CanWrite
+// fresh from Postgres ON THIS REQUEST (403 when false) -- never from
+// session state, a hidden form field, or which button the client rendered.
+//
+// This is the TIER authorization check ONLY (FR19, "WHO"). The orthogonal
+// status/published freeze (FR16/FR17, "WHEN") is deliberately NOT checked
+// here -- it is enforced solely inside store.VideoScriptStore.UpdateContent
+// itself (ErrVideoScriptDecided), so there is exactly one place that
+// decides editability, never two that could drift apart. This also covers
+// FR19's orthogonality note: a Creator who greenlit the very script they
+// are now trying to edit still passes THIS check (they hold CanWrite) and
+// is frozen only by UpdateContent's own status gate, not by anything here.
+func (h *Handlers) authorizeScriptWrite(w http.ResponseWriter, r *http.Request) (person *store.Person, ch store.Channel, script store.VideoScript, ok bool) {
+	ctx := r.Context()
+	person = auth.PersonFromContext(ctx)
+	if person == nil {
+		http.Error(w, "not signed in", http.StatusUnauthorized)
+		return nil, store.Channel{}, store.VideoScript{}, false
+	}
+
+	channelID, err := uuid.Parse(r.PathValue("id"))
+	if err != nil {
+		http.Error(w, "invalid channel id", http.StatusBadRequest)
+		return nil, store.Channel{}, store.VideoScript{}, false
+	}
+
+	scriptID, err := uuid.Parse(r.PathValue("scriptID"))
+	if err != nil {
+		http.Error(w, "invalid video script id", http.StatusBadRequest)
+		return nil, store.Channel{}, store.VideoScript{}, false
+	}
+
+	ch, err = h.store.Channels().GetByID(ctx, channelID)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			http.NotFound(w, r)
+			return nil, store.Channel{}, store.VideoScript{}, false
+		}
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return nil, store.Channel{}, store.VideoScript{}, false
+	}
+
+	script, err = h.store.VideoScripts().GetByID(ctx, scriptID)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			http.NotFound(w, r)
+			return nil, store.Channel{}, store.VideoScript{}, false
+		}
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return nil, store.Channel{}, store.VideoScript{}, false
+	}
+	if script.ChannelID != channelID {
+		http.NotFound(w, r)
+		return nil, store.Channel{}, store.VideoScript{}, false
+	}
+
+	canWrite, err := store.CanWrite(ctx, h.store.Roles(), channelID, person.ID)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return nil, store.Channel{}, store.VideoScript{}, false
+	}
+	if !canWrite {
+		http.Error(w, "forbidden", http.StatusForbidden)
+		return nil, store.Channel{}, store.VideoScript{}, false
+	}
+
+	return person, ch, script, true
+}
+
+// HandleUpdateScript serves POST /channels/{id}/scripts/{scriptID}
+// (#2037, FR16, FR18/NFR2, FR19): the edit form's submit target, dispatched
+// by the submitted submit_action field, mirroring HandleCreateScript's
+// preview/edit/save dispatch exactly:
+//
+//   - "preview"/"edit" (reuses FR14's toggle): re-render THIS SAME edit
+//     form with every submitted field preserved -- no store call at all,
+//     so switching modes can never lose unsaved ScriptText and never
+//     rotates or consumes the idempotency key.
+//   - anything else (the "Save changes" submit, or an omitted field):
+//     validates non-empty title/script_text, then calls
+//     store.VideoScriptStore.UpdateContent -- the ONE place that decides
+//     whether the script is still editable (ErrVideoScriptDecided, FR16/
+//     FR17) and applies the idempotent replay (FR18/NFR2).
+//
+// A validation failure re-renders the edit form (400) with a form error
+// and the submitted values preserved, carrying the SAME idempotency_key
+// the failed POST carried. ErrVideoScriptDecided re-renders the READ-ONLY
+// view instead (409, editable is now known false) with the rejection
+// surfaced as a visible error alongside FR17's freeze indicator -- forcing
+// the edit form back open here would contradict the very state check that
+// just failed. Any other error from UpdateContent is a 500, mirroring
+// HandleCreateScript's convention of never masking an unexpected store
+// error as a form error.
+func (h *Handlers) HandleUpdateScript(w http.ResponseWriter, r *http.Request) {
+	person, ch, script, ok := h.authorizeScriptWrite(w, r)
+	if !ok {
+		return
+	}
+	ctx := r.Context()
+
+	if err := r.ParseForm(); err != nil {
+		http.Error(w, "invalid form", http.StatusBadRequest)
+		return
+	}
+
+	form := scriptFormData{
+		IdempotencyKey: r.FormValue("idempotency_key"),
+		Title:          r.FormValue("title"),
+		ScriptText:     r.FormValue("script_text"),
+	}
+
+	switch r.FormValue("submit_action") {
+	case "preview":
+		form.Preview = true
+		h.renderScriptDetail(w, r, person, ch, script, true, true, form, false, http.StatusOK)
+		return
+	case "edit":
+		form.Preview = false
+		h.renderScriptDetail(w, r, person, ch, script, true, true, form, false, http.StatusOK)
+		return
+	}
+
+	title := strings.TrimSpace(form.Title)
+	if title == "" {
+		form.Error = "title is required"
+		h.renderScriptDetail(w, r, person, ch, script, true, true, form, false, http.StatusBadRequest)
+		return
+	}
+	scriptText := strings.TrimSpace(form.ScriptText)
+	if scriptText == "" {
+		form.Error = "script text is required"
+		h.renderScriptDetail(w, r, person, ch, script, true, true, form, false, http.StatusBadRequest)
+		return
+	}
+
+	if err := h.store.VideoScripts().UpdateContent(ctx, script.ID, title, scriptText, person.ID, form.IdempotencyKey); err != nil {
+		if errors.Is(err, store.ErrVideoScriptDecided) {
+			// Re-fetch: UpdateContent's own rejection means status and/or
+			// published has moved since authorizeScriptWrite loaded script
+			// above (or was already frozen when this request started) --
+			// render against the CURRENT row so FR17's freeze indicator
+			// (renderScriptDetail's own status/published check) reflects
+			// reality, not the stale pre-POST snapshot.
+			current, getErr := h.store.VideoScripts().GetByID(ctx, script.ID)
+			if getErr != nil {
+				http.Error(w, getErr.Error(), http.StatusInternalServerError)
+				return
+			}
+			form.Error = "this script can no longer be edited: it has been decided, or its video has already been published"
+			h.renderScriptDetail(w, r, person, ch, current, true, false, form, false, http.StatusConflict)
+			return
+		}
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	http.Redirect(w, r, "/channels/"+ch.ID.String()+"/scripts/"+script.ID.String(), http.StatusSeeOther)
 }
