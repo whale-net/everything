@@ -101,6 +101,13 @@ func newScheduleTestStack(t *testing.T) *scheduleTestStack {
 	mux.HandleFunc("POST /scripts/{scriptID}/approve", a.RequireSignedIn(sch.HandleGreenlight))
 	mux.HandleFunc("POST /scripts/{scriptID}/deny", a.RequireSignedIn(sch.HandleDeny))
 	mux.HandleFunc("POST /scripts/{scriptID}/archive", a.RequireSignedIn(sch.HandleArchive))
+	// #2036 (FR13-FR15, FR21): the authoring surface's three routes,
+	// mirroring main.go's setupRoutes registration order and comment
+	// (Channel-scoped /channels/{id}/scripts prefix, distinct from the
+	// three top-level POST /scripts/{scriptID}/... routes above).
+	mux.HandleFunc("GET /channels/{id}/scripts/new", a.RequireSignedIn(sch.HandleNewScript))
+	mux.HandleFunc("POST /channels/{id}/scripts", a.RequireSignedIn(sch.HandleCreateScript))
+	mux.HandleFunc("GET /channels/{id}/scripts/{scriptID}", a.RequireSignedIn(sch.HandleScriptDetail))
 
 	return &scheduleTestStack{store: st, sessions: sessions, handlers: sch, router: mux, db: db}
 }

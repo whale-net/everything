@@ -69,7 +69,10 @@ go_test(
     name = "schedule_integration_test",
     size = "large",
     timeout = "long",
-    srcs = ["schedule_integration_test.go"],
+    srcs = [
+        "create_integration_test.go",
+        "schedule_integration_test.go",
+    ],
     embed = [":schedule"],
     gotags = ["integration"],
     tags = [
