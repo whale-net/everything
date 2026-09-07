@@ -78,6 +78,17 @@ func authorName(names map[uuid.UUID]string, personID uuid.UUID) string {
 // to unattachedNotes) -- the save-note form's relation-picker candidate
 // universe, grouped by thread in saveNoteFormChannelIndex/
 // relationPickerFields below. No extra store call for this.
+//
+// The unattached-notes section below (FR36, FR37, issue #2033) renders
+// via a no-JS <details>/<summary> disclosure, collapsed by default (no
+// "open" attribute) behind a toggle labeled with unattachedNotes' count.
+// This is PRESENTATION ONLY: research.go's renderChannelIndex still loads
+// and passes the full unattachedNotes/relationsByNote data unconditionally
+// -- the collapse never gates the query, never adds an htmx round trip,
+// and the save-note form nested below remains fully functional once
+// expanded. Per-navigation default-collapsed only -- no cookie,
+// localStorage, or server-side preference persists the expanded state
+// (root plan #1963, Out of scope).
 templ ChannelIndex(data components.LayoutData, ch store.Channel, ideas []store.IdeaSummary, unattachedNotes []store.ResearchNoteWithAuthor, relationsByNote map[uuid.UUID][]store.NoteRelation, noteRefTargets map[uuid.UUID]*uuid.UUID, threads []store.ThreadSummary, priorNotes []store.ResearchNoteWithAuthor, ideasTruncated bool, notesTruncated bool, canWrite bool, form noteFormData) {
 	@components.Layout(data) {
 		<div class="card bg-base-100 border border-base-300 shadow-sm">
@@ -118,28 +129,34 @@ templ ChannelIndex(data components.LayoutData, ch store.Channel, ideas []store.I
 				</div>
 
 				<div class="mt-6">
-					<h2 class="text-lg font-semibold">Unattached notes</h2>
-					<p class="text-sm text-base-content/70">
-						These research notes predate any Idea and so do not fit the
-						Channel-to-Idea hierarchy above.
-					</p>
-					if len(unattachedNotes) == 0 {
-						<p class="text-base-content/70 mt-2">No unattached notes.</p>
-					} else {
-						<ul class="mt-2 space-y-2">
-							for _, note := range unattachedNotes {
-								<li class="border border-base-300 rounded p-2">
-									@noteBody(ch, note, relationsByNote[note.ID], noteRefTargets)
-								</li>
+					<details class="collapse collapse-arrow border border-base-300 bg-base-100">
+						<summary class="collapse-title text-lg font-semibold">
+							Unattached notes ({ strconv.Itoa(len(unattachedNotes)) })
+						</summary>
+						<div class="collapse-content">
+							<p class="text-sm text-base-content/70">
+								These research notes predate any Idea and so do not fit the
+								Channel-to-Idea hierarchy above.
+							</p>
+							if len(unattachedNotes) == 0 {
+								<p class="text-base-content/70 mt-2">No unattached notes.</p>
+							} else {
+								<ul class="mt-2 space-y-2">
+									for _, note := range unattachedNotes {
+										<li class="border border-base-300 rounded p-2">
+											@noteBody(ch, note, relationsByNote[note.ID], noteRefTargets)
+										</li>
+									}
+								</ul>
 							}
-						</ul>
-					}
-					if notesTruncated {
-						<p class="text-base-content/50 text-xs mt-2">
-							Showing the Channel's { strconv.Itoa(defaultPageLimit) } most recent
-							research notes overall; older ones (attached or not) are not shown.
-						</p>
-					}
+							if notesTruncated {
+								<p class="text-base-content/50 text-xs mt-2">
+									Showing the Channel's { strconv.Itoa(defaultPageLimit) } most recent
+									research notes overall; older ones (attached or not) are not shown.
+								</p>
+							}
+						</div>
+					</details>
 				</div>
 
 				if canWrite {
