@@ -156,12 +156,17 @@ type Idea struct {
 // and newly-written note is backfilled/set to a non-nil thread by
 // migration 016, but the column itself stays nullable until Stage 3
 // (#1947) adds NOT NULL, so the Go type mirrors the DB's actual
-// nullability rather than assuming Stage 3 has already landed.
+// nullability rather than assuming Stage 3 has already landed. ThreadTitle
+// is populated by a LEFT JOIN to research_thread alongside ThreadID (issue
+// #1940, FR2 Stage 2b) -- nil exactly when ThreadID is nil, never an
+// out-of-sync pair; not every read query populates it (see each query's
+// own doc comment), in which case it is left as the zero value (nil).
 type ResearchNote struct {
 	ID             uuid.UUID
 	ChannelID      uuid.UUID
 	IdeaID         *uuid.UUID
 	ThreadID       *uuid.UUID
+	ThreadTitle    *string
 	Text           string
 	SourceURL      *string
 	AuthorPersonID uuid.UUID
