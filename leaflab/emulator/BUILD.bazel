@@ -29,6 +29,7 @@ go_library(
 
 go_binary(
     name = "emulator",
+    data = ["//leaflab/scripts:scenarios"],
     embed = [":emulator_lib"],
     visibility = ["//visibility:public"],
 )
