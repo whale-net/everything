@@ -17,8 +17,10 @@ metadata:
   {{- with $.Values.ingressDefaults.annotations }}
     {{- toYaml . | nindent 4 }}
   {{- end }}
+  {{- if $app.ingress }}
   {{- with $app.ingress.annotations }}
     {{- toYaml . | nindent 4 }}
+  {{- end }}
   {{- end }}
 spec:
   {{- if $.Values.ingressDefaults.className }}

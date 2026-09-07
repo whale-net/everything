@@ -2,6 +2,22 @@
 
 load("@bazel_skylib//lib:shell.bzl", "shell")
 
+def _reset_openapi_codegen_platform_impl(settings, attr):
+    # The generated OpenAPI client is platform-independent generated Python text.
+    # Consumers of openapi_client (e.g. multiplatform container images) apply their
+    # own --platforms transitions across their *entire* transitive closure, which
+    # otherwise forces this genrule to be analyzed/executed once per incoming
+    # platform (see issue #1867) even though its output never varies by platform.
+    # Pinning this edge to one canonical platform collapses all of those forks back
+    # into a single, cacheable action shared by every consumer.
+    return {"//command_line_option:platforms": ["//tools:linux_x86_64"]}
+
+_reset_openapi_codegen_platform = transition(
+    implementation = _reset_openapi_codegen_platform_impl,
+    inputs = [],
+    outputs = ["//command_line_option:platforms"],
+)
+
 def _openapi_client_provider_impl(ctx):
     """Provide PyInfo for generated OpenAPI client (target configuration)."""
     # Get the generated tar from the genrule
@@ -63,7 +79,7 @@ def _openapi_client_provider_impl(ctx):
 openapi_client_provider_rule = rule(
     implementation = _openapi_client_provider_impl,
     attrs = {
-        "tar": attr.label(allow_single_file = [".tar"], mandatory = True),
+        "tar": attr.label(allow_single_file = [".tar"], mandatory = True, cfg = _reset_openapi_codegen_platform),
         "app": attr.string(mandatory = True),
         "deps": attr.label_list(providers = [PyInfo]),
         "_package_inits": attr.label_list(
