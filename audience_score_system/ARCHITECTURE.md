@@ -268,8 +268,8 @@ the raw token or its hash.
 | Component | Binary | `release_app` identity | Responsibility |
 |---|---|---|---|
 | `migrate` | `audience_score_system/migrate` | `migration` (job) | Applies golang-migrate SQL migrations to Postgres. Runs once, ahead of the other three, as a Helm job hook (see `libs/go/migrate/README.md`). |
-| `web` | `audience_score_system/web` (C1 sign-in #1570, C2 Channel-connect #1571, C3 analyst invite #1572, C19 video_script greenlight/deny/archive UI #1834 -- rebuilt in place of C8's original schedule_entry-backed approve/un-approve/edit UI #1580, C4/C5 research/verdict save+browse UI #1896, C18 video_script propose UI #1914, C9/C10/C14 outcomes+matches UI `web/outcomes`/`web/matches` #1924) | `web` (external-api) | The **only** UI surface. Its three UI-only OAuth-consent surfaces are C1/C2/C3 (see "NFR3 interface allocation" below); its C19 schedule page (`web/schedule`, route paths unchanged per FR49), its `web/research` Channel research index/Idea detail pages plus save-note/save-verdict/propose forms (#1896, #1914), and its `web/outcomes`/`web/matches` pages plus set-outcome-bar/resolve forms (#1924) are UI front ends onto the same `store.VideoScriptStore` / `store.ResearchStore` / `store.VerdictStore` / `store.BrowseStore` / `store.MatchStore` / `store.OutcomeBarStore` / `store.CalibrationStore` that `mcp`'s tools also call. |
-| `mcp` | `audience_score_system/mcp` (#1575, #1577-#1582, #1631, #1648, #1650, #1823-#1835, #1882-#1885) | `mcp` (external-api) | Every other capability (C4-C7, C9, C10, C14, C18, C19): Channel access discovery (`list_channels`, #1631 -- resolves which Channels the caller holds a role on, and that role, without dropping to the web UI), research notes and viability verdicts (C4/C5, dual-surface with `web/research` since #1896, see "NFR3 interface allocation" below), schedule sync reads, video_script propose/greenlight/deny/archive (C18/C19, milestone video-script-model -- the schedule-draft/pacing-policy tool surface, C6/C7/C8, was retired outright, FR41), outcome-match confirm/reject (`list_pending_matches`/`resolve_pending_match`, C9, dual-surface with `web/matches` since #1924, re-anchored onto `video_script`, FR43/FR44), the outcome-bar/calibration-trend family (`set_outcome_bar`/`get_outcome_bar`/`get_calibration_trend`, C14, dual-surface with `web/outcomes` since #1924, see "NFR3 interface allocation" below), all browsing (`get_prediction_vs_outcome`'s C10 slice dual-surface with `web/outcomes` since #1924), and (#1650) forcing an out-of-band `ChannelSyncWorkflow` run via `trigger_channel_sync`. Exposed as MCP tools to any MCP-capable agent client. |
+| `web` | `audience_score_system/web` (C1 sign-in #1570, C2 Channel-connect #1571, C3 analyst invite #1572, C19 video_script greenlight/deny/archive UI #1834 -- rebuilt in place of C8's original schedule_entry-backed approve/un-approve/edit UI #1580, C4/C5 research/verdict save+browse UI #1896, C18 video_script propose UI #1914, C9/C10/C14 outcomes+matches UI `web/outcomes`/`web/matches` #1924, C4/C10 thread select + typed-relation picker on save-note plus thread/relation browse #1937/#1941/#1942/#1945, C5 cited-notes superseded/excluded warning #1943/#1944) | `web` (external-api) | The **only** UI surface. Its three UI-only OAuth-consent surfaces are C1/C2/C3 (see "NFR3 interface allocation" below); its C19 schedule page (`web/schedule`, route paths unchanged per FR49), its `web/research` Channel research index/Idea detail pages plus save-note/save-verdict/propose forms (#1896, #1914) -- the save-note form's thread select and relation picker, and the index/Idea-detail Related lines and cited-notes warning (#1937, #1941, #1942, #1943, #1944, #1945) -- and its `web/outcomes`/`web/matches` pages plus set-outcome-bar/resolve forms (#1924) are UI front ends onto the same `store.VideoScriptStore` / `store.ResearchStore` / `store.ThreadStore` / `store.VerdictStore` / `store.BrowseStore` / `store.MatchStore` / `store.OutcomeBarStore` / `store.CalibrationStore` that `mcp`'s tools also call. |
+| `mcp` | `audience_score_system/mcp` (#1575, #1577-#1582, #1631, #1648, #1650, #1823-#1835, #1882-#1885, #1937, #1938, #1941, #1942, #1944) | `mcp` (external-api) | Every other capability (C4-C7, C9, C10, C14, C18, C19): Channel access discovery (`list_channels`, #1631 -- resolves which Channels the caller holds a role on, and that role, without dropping to the web UI), research notes and viability verdicts (C4/C5, dual-surface with `web/research` since #1896, see "NFR3 interface allocation" below), thread discovery (`list_research_threads`, #1937) and typed relations on save/browse (`save_research_note`'s relations, `current_only` on `list_research_notes`, `get_channel_overview`'s relations section, and `get_viability_verdict`'s superseded/excluded warning -- #1937/#1938/#1941/#1942/#1944, dual-surface with `web/research` since those issues, see "NFR3 interface allocation" below), schedule sync reads, video_script propose/greenlight/deny/archive (C18/C19, milestone video-script-model -- the schedule-draft/pacing-policy tool surface, C6/C7/C8, was retired outright, FR41), outcome-match confirm/reject (`list_pending_matches`/`resolve_pending_match`, C9, dual-surface with `web/matches` since #1924, re-anchored onto `video_script`, FR43/FR44), the outcome-bar/calibration-trend family (`set_outcome_bar`/`get_outcome_bar`/`get_calibration_trend`, C14, dual-surface with `web/outcomes` since #1924, see "NFR3 interface allocation" below), all browsing (`get_prediction_vs_outcome`'s C10 slice dual-surface with `web/outcomes` since #1924), and (#1650) forcing an out-of-band `ChannelSyncWorkflow` run via `trigger_channel_sync`. Exposed as MCP tools to any MCP-capable agent client. |
 | `worker` | `audience_score_system/worker` (#1574, #1576, #1581) | `worker` (worker) | Per-Channel Temporal scheduled workflow: syncs YouTube schedule (C6) and published-video metrics (C9) on a ~1-24 hour cadence (NFR4, default 24h). Skips a cycle for a disconnected/needs-reauth Channel without erroring the workflow. `mcp`'s `trigger_channel_sync` tool (#1650) can force an out-of-band run of the same workflow without waiting for this cadence. |
 | Postgres | — | — | System of record for all four components, accessed via `//libs/go/db` (`PG_DATABASE_URL`). No separate cache/read-model store in M1. |
 
@@ -637,6 +637,59 @@ rewritten" convention every prior paragraph in this section follows; the
 extension: `set_outcome_bar`'s write is now dual-surface, which the
 M4.3 roadmap entry did not originally anticipate (see #1924's FR5 scope
 note).
+
+**NFR3 amendment (issue #1934): thread discovery/save, typed relations,
+`current_only` filtering, and the cited-notes superseded/excluded warning
+are dual-surface.** This plan (root #1934) adds no new capability number
+(product/02-capability-map.md, root plan "Out of scope") -- it amends
+already-dual-surface C4 (write) and C10 (browse), and touches C5's
+citation-warning surface, so this paragraph records FR-level allocation
+rather than a capability-list change. None of the following is
+implemented once for `mcp` and once, differently, for `web` (NFR2/LB5) --
+each bullet names the one `store` method and the one `store.CanX` check
+both surfaces call:
+
+- **Thread discovery + find-or-create (FR3/FR4):** `list_research_threads`
+  (`mcp/tools/research.go`, issue #1937) and `web/research`'s thread
+  select on the save-note form (`web/research.Handlers.HandleChannelIndex`/
+  `HandleIdeaDetail`, issue #1945) both call `store.ThreadStore.
+  ListByChannel` under `store.CanRead`. On the save path, `save_research_note`
+  (issue #1938) and `HandleSaveNote` (issue #1945) both resolve-or-create
+  the thread via `store.ThreadStore.FindOrCreate`, called from inside
+  `store.ResearchStore.SaveNote`'s own transaction so thread creation and
+  note insert commit atomically -- gated by `store.CanWrite` on both
+  surfaces.
+- **Relation-typed save (FR5):** `save_research_note` (issue #1938) and
+  `HandleSaveNote`'s relation picker (issue #1945) both write through the
+  same `store.ResearchStore.SaveNote` call (its `Relations` field), under
+  the identical `store.CanWrite` check every other write in this package
+  uses.
+- **The `current_only` filter (FR8):** `list_research_notes`'s
+  `current_only` argument (issue #1941) and `web/research`'s browse pages
+  (index and Idea detail) both read through `store.ResearchStore.
+  ListFiltered`, gated by `store.CanRead`.
+- **Verdict cited-notes rendering (FR9) and its superseded/excluded
+  warning (FR10):** `get_viability_verdict`'s `resolveCitedNotes`
+  (`mcp/tools/verdict.go`) and `web/research.Handlers.renderIdeaDetail`'s
+  `retiredCitedResearchNotes` (issue #1943 renders the base cited-notes
+  list, issue #1944 adds the warning) both resolve a Verdict's cited-note
+  id union and then call `store.ResearchStore.RetiredNoteIDs` ONCE over
+  that union, gated by `store.CanRead` -- the same batched-resolution
+  shape on both surfaces, so `mcp` and `web` can never disagree on which
+  notes are flagged retired.
+- **Relation visibility on ordinary browse (FR11):** `get_channel_overview`'s
+  relations section (`mcp/tools/browse.go`, issue #1942) and
+  `web/research`'s Related lines on the index/Idea-detail pages
+  (`Handlers.relationsForNotes`, issue #1942) both batch-resolve via ONE
+  `store.ResearchStore.ListRelationsForNotes` call, gated by
+  `store.CanRead`.
+
+This is the same "two independent, equally-capable front ends onto the
+same store methods and the same authorization checks" relationship the
+retired-C8 amendment above established -- not a primary/shadow pair --
+extended to a fifth capability slice without adding a sixth. The
+existing C4/C5/C10 dual-surface amendments above (#1896, #1911, #1924)
+are unchanged by this addition.
 
 ## Temporal: schedule upsert helper
 
