@@ -94,3 +94,29 @@ func linkifyNoteRefs(text string, notesOnChannel map[uuid.UUID]struct{}, anchorF
 	}
 	return segments
 }
+
+// noteRefSegments is views.templ's noteBody's single call into
+// linkifyNoteRefs (FR1): it builds notesOnChannel and anchorFor from
+// targets -- research.go's resolveNoteRefTargets result, id -> IdeaID
+// (nil meaning unattached) for every note:<uuid> reference this page
+// could resolve to a note on channelID -- so noteBody itself never
+// touches notesOnChannel/anchorFor construction directly. anchorFor
+// points at wherever the target note renders as itself (FR1): its Idea's
+// detail page when it has one, else the Channel index's unattached
+// section -- both keyed off the SAME "note-<uuid>" anchor id views.templ
+// emits on noteBody's outer div, regardless of which page the reference
+// itself appears on.
+func noteRefSegments(text string, channelID uuid.UUID, targets map[uuid.UUID]*uuid.UUID) []noteTextSegment {
+	onChannel := make(map[uuid.UUID]struct{}, len(targets))
+	for id := range targets {
+		onChannel[id] = struct{}{}
+	}
+	anchorFor := func(id uuid.UUID) string {
+		base := "/channels/" + channelID.String()
+		if ideaID := targets[id]; ideaID != nil {
+			return base + "/research/ideas/" + ideaID.String() + "#note-" + id.String()
+		}
+		return base + "/research#note-" + id.String()
+	}
+	return linkifyNoteRefs(text, onChannel, anchorFor)
+}

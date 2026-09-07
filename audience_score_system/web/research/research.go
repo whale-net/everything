@@ -426,6 +426,17 @@ func (h *Handlers) renderChannelIndex(w http.ResponseWriter, r *http.Request, pe
 		return
 	}
 
+	// noteRefTargets (FR1/FR2, issue #2029) resolves every note:<uuid>
+	// reference inside unattached's Text fields -- the only notes this
+	// page renders as themselves via noteBody -- seeded for free from
+	// notes (the Channel-wide page already loaded below), at most one
+	// additional batched GetByIDs call for references it truncated past.
+	noteRefTargets, err := h.resolveNoteRefTargets(ctx, channelID, notes, unattached)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+
 	// threads is FR3's discovery list, scoped to the whole Channel
 	// (ideaID nil) -- the IDENTICAL store.ThreadStore.ListByChannel call
 	// and canRead check list_research_threads makes (NFR2, no second
@@ -447,7 +458,7 @@ func (h *Handlers) renderChannelIndex(w http.ResponseWriter, r *http.Request, pe
 	// drawn from, grouped by thread in the view -- no extra store call, and
 	// bounded by the SAME default page every other list on this page
 	// already is (NFR2).
-	if err := components.Render(w, r, title, ChannelIndex(data, ch, ideas, unattached, relationsByNote, threads, notes, ideasTruncated, notesTruncated, canWrite, form)); err != nil {
+	if err := components.Render(w, r, title, ChannelIndex(data, ch, ideas, unattached, relationsByNote, noteRefTargets, threads, notes, ideasTruncated, notesTruncated, canWrite, form)); err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 	}
 }
@@ -575,6 +586,18 @@ func (h *Handlers) renderIdeaDetail(w http.ResponseWriter, r *http.Request, pers
 		return
 	}
 
+	// noteRefTargets (FR1/FR2, issue #2029) resolves every note:<uuid>
+	// reference inside this Idea's own notes -- the only notes this page
+	// renders as themselves via noteBody -- seeded for free from notes
+	// itself (this page's own Idea-scoped load), at most one additional
+	// batched GetByIDs call for a reference to a note on a DIFFERENT Idea
+	// or unattached (see resolveNoteRefTargets' doc comment).
+	noteRefTargets, err := h.resolveNoteRefTargets(ctx, channelID, notes, notes)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+
 	// threads is FR3's discovery list, scoped to THIS Idea only -- the
 	// IDENTICAL store.ThreadStore.ListByChannel call and canRead check
 	// list_research_threads makes (NFR2, no second query path).
@@ -646,7 +669,7 @@ func (h *Handlers) renderIdeaDetail(w http.ResponseWriter, r *http.Request, pers
 	// ever appear as options (FR4). It is also FR15's relation-picker
 	// candidate universe on this page: every note across this Idea's own
 	// threads, grouped by thread in the view -- again no extra store call.
-	if err := components.Render(w, r, title, IdeaDetail(data, ch, idea, notes, relationsByNote, notesTruncated, threads, current, history, authorNames, citedNotes, retiredNotes, canWrite, form, verdictForm, activeStrategies, proposeForm)); err != nil {
+	if err := components.Render(w, r, title, IdeaDetail(data, ch, idea, notes, relationsByNote, noteRefTargets, notesTruncated, threads, current, history, authorNames, citedNotes, retiredNotes, canWrite, form, verdictForm, activeStrategies, proposeForm)); err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 	}
 }
@@ -1284,4 +1307,75 @@ func (h *Handlers) relationsForNotes(ctx context.Context, notes []store.Research
 		return nil, fmt.Errorf("load research note relations: %w", err)
 	}
 	return rels, nil
+}
+
+// resolveNoteRefTargets resolves every note:<uuid> reference (FR1/FR2,
+// notelink.go's noteRefPattern) found in rendered's Text fields to the
+// IdeaID of the note it names -- views.templ's noteBody reads the
+// returned map (id -> IdeaID, nil meaning unattached) to build both
+// linkifyNoteRefs' notesOnChannel set and its anchorFor href, so a
+// same-Channel reference links straight to wherever the target note
+// renders as itself (its Idea's detail page, or the Channel index's
+// unattached section).
+//
+// notesLoaded seeds the result for free: every note in it (the page's own
+// already-loaded note list -- ChannelIndex's Channel-wide page or
+// IdeaDetail's Idea-scoped page) is known-on-channelID by construction,
+// with its IdeaID already in hand, so no store call is needed for a
+// reference that targets one of them. Only ids referenced by rendered but
+// ABSENT from notesLoaded (a reference to a note on a different Idea, or
+// to a note the page's default-page limit truncated) trigger a single
+// additional store.ResearchStore.GetByIDs call, batched across every such
+// id on the page -- so resolving N references never issues more than ONE
+// extra query, regardless of N (NFR3-style perf requirement, issue
+// #2029). A resolved note whose ChannelID != channelID (FR3's
+// cross-Channel leak guard) or an id GetByIDs did not return at all
+// (nonexistent, or malformed and never queried) is left OUT of the
+// returned map entirely -- linkifyNoteRefs' notesOnChannel check then
+// renders it as plain text, never a link.
+func (h *Handlers) resolveNoteRefTargets(ctx context.Context, channelID uuid.UUID, notesLoaded, rendered []store.ResearchNoteWithAuthor) (map[uuid.UUID]*uuid.UUID, error) {
+	resolved := make(map[uuid.UUID]*uuid.UUID, len(notesLoaded))
+	for _, n := range notesLoaded {
+		resolved[n.ID] = n.IdeaID
+	}
+
+	seen := make(map[uuid.UUID]struct{})
+	var missing []uuid.UUID
+	for _, n := range rendered {
+		for _, m := range noteRefPattern.FindAllStringSubmatch(n.Text, -1) {
+			id, err := uuid.Parse(m[1])
+			if err != nil {
+				// Malformed after all (should not happen -- the regex
+				// already constrains this group's shape) -- FR3 plain-text
+				// fallback, never queried.
+				continue
+			}
+			if _, ok := resolved[id]; ok {
+				continue
+			}
+			if _, dup := seen[id]; dup {
+				continue
+			}
+			seen[id] = struct{}{}
+			missing = append(missing, id)
+		}
+	}
+	if len(missing) == 0 {
+		return resolved, nil
+	}
+
+	fetched, err := h.store.Research().GetByIDs(ctx, missing)
+	if err != nil {
+		return nil, fmt.Errorf("resolve note reference targets: %w", err)
+	}
+	for id, n := range fetched {
+		if n.ChannelID != channelID {
+			// Cross-Channel (FR3) -- deliberately left unresolved so it
+			// renders as plain text, never a link into another Channel's
+			// data.
+			continue
+		}
+		resolved[id] = n.IdeaID
+	}
+	return resolved, nil
 }
