@@ -233,9 +233,22 @@ func (h *SessionStatusHandler) checkStaleSessions(ctx context.Context, threshold
 		// let's just do what Handle does but for "lost" status.
 
 		now := time.Now()
-		// Mark as lost (terminal state)
-		if err := h.repo.Sessions.UpdateSessionEnd(ctx, session.SessionID, manman.SessionStatusLost, now, nil); err != nil {
+		// Mark as lost (terminal state), but only if the row's status still
+		// matches the snapshot we read -- a legitimate transition may have
+		// committed since GetStaleSessions ran, and that transition must win.
+		updated, err := h.repo.Sessions.UpdateSessionEndIfStatus(ctx, session.SessionID, session.Status, manman.SessionStatusLost, now, nil)
+		if err != nil {
 			h.logger.Error("failed to mark session as lost", "session_id", session.SessionID, "error", err)
+			continue
+		}
+		if !updated {
+			// Expected, handled control flow (AGENTS.md logging levels) -- the
+			// session transitioned for real between GetStaleSessions' snapshot
+			// and this write, so the real transition wins and there is nothing
+			// stale to mark. Not a WARNING: no adjustment was needed, the system
+			// just found there was no longer anything to do.
+			h.logger.Info("stale session already transitioned, skipping stale-lost marking",
+				"session_id", session.SessionID, "snapshot_status", session.Status)
 			continue
 		}
 

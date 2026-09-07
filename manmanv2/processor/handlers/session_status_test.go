@@ -117,6 +117,26 @@ type fakeSessionRepository struct {
 	sessions      map[int64]*manman.Session
 	staleSessions []*manman.Session
 	updateErr     error
+
+	// updateResults, keyed by session_id, forces UpdateSessionEndIfStatus's
+	// return value for that session -- simulating a status change that raced
+	// the CAS write. A missing entry defaults to (true, nil) and applies the
+	// write to the in-memory session, like the fake's other Update* methods.
+	updateResults map[int64]fakeUpdateResult
+
+	// calls records every UpdateSessionEndIfStatus invocation, in order.
+	calls []fakeUpdateCall
+}
+
+type fakeUpdateResult struct {
+	updated bool
+	err     error
+}
+
+type fakeUpdateCall struct {
+	sessionID      int64
+	expectedStatus string
+	newStatus      string
 }
 
 func newFakeSessionRepository() *fakeSessionRepository {
@@ -190,6 +210,23 @@ func (f *fakeSessionRepository) UpdateSessionEnd(ctx context.Context, sessionID 
 
 func (f *fakeSessionRepository) GetStaleSessions(ctx context.Context, threshold time.Duration) ([]*manman.Session, error) {
 	return f.staleSessions, nil
+}
+
+// UpdateSessionEndIfStatus is UpdateSessionEnd's compare-and-swap variant
+// (see repository.SessionRepository). f.updateResults lets a test force a
+// CAS hit/miss/error for a given session; otherwise it defaults to a CAS hit
+// and applies the write.
+func (f *fakeSessionRepository) UpdateSessionEndIfStatus(ctx context.Context, sessionID int64, expectedStatus, newStatus string, endedAt time.Time, exitCode *int) (bool, error) {
+	f.calls = append(f.calls, fakeUpdateCall{sessionID: sessionID, expectedStatus: expectedStatus, newStatus: newStatus})
+	if res, ok := f.updateResults[sessionID]; ok {
+		return res.updated, res.err
+	}
+	if s, ok := f.sessions[sessionID]; ok {
+		s.Status = newStatus
+		s.EndedAt = &endedAt
+		s.ExitCode = exitCode
+	}
+	return true, nil
 }
 
 func (f *fakeSessionRepository) StopOtherSessionsForSGC(ctx context.Context, sessionID int64, sgcID int64) error {
@@ -508,5 +545,193 @@ func TestCheckStaleSessionsPublishesLive(t *testing.T) {
 
 	if len(pub.external) != 1 {
 		t.Errorf("expected exactly 1 PublishExternal call for the stale session, got %d", len(pub.external))
+	}
+}
+
+// --- CAS-specific coverage for checkStaleSessions (issue #2061) ---
+
+// capturingLogHandler is a minimal slog.Handler that records every emitted
+// record so tests can assert on level + message without parsing text/JSON
+// output.
+type capturingLogHandler struct {
+	records *[]slog.Record
+}
+
+func newCapturingLogger() (*slog.Logger, *[]slog.Record) {
+	records := &[]slog.Record{}
+	return slog.New(&capturingLogHandler{records: records}), records
+}
+
+func (h *capturingLogHandler) Enabled(ctx context.Context, level slog.Level) bool { return true }
+func (h *capturingLogHandler) Handle(ctx context.Context, r slog.Record) error {
+	*h.records = append(*h.records, r)
+	return nil
+}
+func (h *capturingLogHandler) WithAttrs(attrs []slog.Attr) slog.Handler { return h }
+func (h *capturingLogHandler) WithGroup(name string) slog.Handler      { return h }
+
+func recordsAtLevel(records []slog.Record, level slog.Level) []slog.Record {
+	var out []slog.Record
+	for _, r := range records {
+		if r.Level == level {
+			out = append(out, r)
+		}
+	}
+	return out
+}
+
+// newTestHandlerWithLogger is newTestHandler with a caller-supplied logger
+// (for tests that assert on emitted log records) and no ServerPorts fake,
+// since checkStaleSessions never touches it.
+func newTestHandlerWithLogger(sessionRepo repository.SessionRepository, pub Publisher, logger *slog.Logger) *SessionStatusHandler {
+	repo := &repository.Repository{Sessions: sessionRepo}
+	return NewSessionStatusHandler(repo, pub, logger)
+}
+
+// TestCheckStaleSessions_UnchangedStatusMarksLostAndPublishes proves the CAS
+// hit path: a stale session whose status is unchanged since the snapshot is
+// written via UpdateSessionEndIfStatus (returns updated=true) and its "lost"
+// event is published externally.
+func TestCheckStaleSessions_UnchangedStatusMarksLostAndPublishes(t *testing.T) {
+	sessionRepo := newFakeSessionRepository()
+	sessionRepo.staleSessions = []*manman.Session{
+		{SessionID: 1, SGCID: 10, Status: manman.SessionStatusStopping},
+	}
+	pub := &fakePublisher{}
+	logger, records := newCapturingLogger()
+	h := newTestHandlerWithLogger(sessionRepo, pub, logger)
+
+	if err := h.checkStaleSessions(context.Background(), time.Minute); err != nil {
+		t.Fatalf("checkStaleSessions: %v", err)
+	}
+
+	if len(sessionRepo.calls) != 1 {
+		t.Fatalf("expected 1 UpdateSessionEndIfStatus call, got %d", len(sessionRepo.calls))
+	}
+	call := sessionRepo.calls[0]
+	if call.sessionID != 1 || call.expectedStatus != manman.SessionStatusStopping || call.newStatus != manman.SessionStatusLost {
+		t.Fatalf("unexpected UpdateSessionEndIfStatus call: %+v", call)
+	}
+
+	if len(pub.external) != 1 {
+		t.Fatalf("expected 1 PublishExternal call, got %d", len(pub.external))
+	}
+	if pub.external[0].RoutingKey != "manman.session.lost" {
+		t.Fatalf("expected routing key manman.session.lost, got %q", pub.external[0].RoutingKey)
+	}
+
+	if got := recordsAtLevel(*records, slog.LevelError); len(got) != 0 {
+		t.Fatalf("expected no ERROR logs on a successful CAS write, got %d: %+v", len(got), got)
+	}
+}
+
+// TestCheckStaleSessions_ChangedStatusSkipsPublishAndLogsInfo proves the CAS
+// miss path: a stale session whose status changed underneath (fake returns
+// updated=false) is not published, an INFO (not WARNING/ERROR) log is
+// emitted, and the loop continues without error.
+func TestCheckStaleSessions_ChangedStatusSkipsPublishAndLogsInfo(t *testing.T) {
+	sessionRepo := newFakeSessionRepository()
+	sessionRepo.staleSessions = []*manman.Session{
+		{SessionID: 2, SGCID: 20, Status: manman.SessionStatusStopping},
+	}
+	sessionRepo.updateResults = map[int64]fakeUpdateResult{
+		2: {updated: false, err: nil},
+	}
+	pub := &fakePublisher{}
+	logger, records := newCapturingLogger()
+	h := newTestHandlerWithLogger(sessionRepo, pub, logger)
+
+	if err := h.checkStaleSessions(context.Background(), time.Minute); err != nil {
+		t.Fatalf("checkStaleSessions: %v", err)
+	}
+
+	if len(pub.external) != 0 {
+		t.Fatalf("expected no PublishExternal calls on a CAS miss, got %d", len(pub.external))
+	}
+
+	// checkStaleSessions logs a WARN unconditionally before attempting the
+	// CAS write (pre-existing, out of this task's scope), so this asserts
+	// the *new* CAS-miss behavior specifically: an INFO log noting the skip,
+	// and no ERROR (a CAS miss is not a failure).
+	if got := recordsAtLevel(*records, slog.LevelError); len(got) != 0 {
+		t.Fatalf("expected no ERROR logs for a CAS miss, got %d: %+v", len(got), got)
+	}
+	infoLogs := recordsAtLevel(*records, slog.LevelInfo)
+	found := false
+	for _, r := range infoLogs {
+		if r.Message == "stale session already transitioned, skipping stale-lost marking" {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("expected an INFO log noting the skipped stale-lost marking, got: %+v", infoLogs)
+	}
+}
+
+// TestCheckStaleSessions_UpdateErrorLogsErrorAndContinues proves the error
+// path: UpdateSessionEndIfStatus returning an error is logged at ERROR and
+// the loop continues to the next session (existing `continue` behavior
+// preserved) rather than aborting.
+func TestCheckStaleSessions_UpdateErrorLogsErrorAndContinues(t *testing.T) {
+	boom := errors.New("boom")
+	sessionRepo := newFakeSessionRepository()
+	sessionRepo.staleSessions = []*manman.Session{
+		{SessionID: 3, SGCID: 30, Status: manman.SessionStatusStopping},
+		{SessionID: 4, SGCID: 40, Status: manman.SessionStatusPending},
+	}
+	sessionRepo.updateResults = map[int64]fakeUpdateResult{
+		3: {updated: false, err: boom},
+	}
+	pub := &fakePublisher{}
+	logger, records := newCapturingLogger()
+	h := newTestHandlerWithLogger(sessionRepo, pub, logger)
+
+	if err := h.checkStaleSessions(context.Background(), time.Minute); err != nil {
+		t.Fatalf("checkStaleSessions should not surface a per-session error: %v", err)
+	}
+
+	if len(sessionRepo.calls) != 2 {
+		t.Fatalf("expected both sessions to be attempted (loop continues past the error), got %d calls", len(sessionRepo.calls))
+	}
+
+	errorLogs := recordsAtLevel(*records, slog.LevelError)
+	if len(errorLogs) != 1 {
+		t.Fatalf("expected exactly 1 ERROR log for the failed update, got %d: %+v", len(errorLogs), errorLogs)
+	}
+
+	// Session 4 (no configured error) should still have been marked lost and
+	// published -- the failure on session 3 must not skip it.
+	if len(pub.external) != 1 {
+		t.Fatalf("expected 1 PublishExternal call for the session that did not error, got %d", len(pub.external))
+	}
+}
+
+// TestCheckStaleSessions_MixedOutcomesHandledIndependently proves multiple
+// stale sessions in one tick are each handled independently: one
+// clobber-avoided (CAS miss), one genuinely marked lost -- no early return
+// skips remaining sessions.
+func TestCheckStaleSessions_MixedOutcomesHandledIndependently(t *testing.T) {
+	sessionRepo := newFakeSessionRepository()
+	sessionRepo.staleSessions = []*manman.Session{
+		{SessionID: 5, SGCID: 50, Status: manman.SessionStatusStopping}, // CAS hit
+		{SessionID: 6, SGCID: 60, Status: manman.SessionStatusPending},  // CAS miss
+	}
+	sessionRepo.updateResults = map[int64]fakeUpdateResult{
+		6: {updated: false, err: nil},
+	}
+	pub := &fakePublisher{}
+	logger, _ := newCapturingLogger()
+	h := newTestHandlerWithLogger(sessionRepo, pub, logger)
+
+	if err := h.checkStaleSessions(context.Background(), time.Minute); err != nil {
+		t.Fatalf("checkStaleSessions: %v", err)
+	}
+
+	if len(sessionRepo.calls) != 2 {
+		t.Fatalf("expected both sessions to be attempted, got %d calls", len(sessionRepo.calls))
+	}
+
+	if len(pub.external) != 1 {
+		t.Fatalf("expected exactly 1 PublishExternal call (only the CAS-hit session), got %d", len(pub.external))
 	}
 }

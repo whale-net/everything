@@ -345,6 +345,10 @@ func (m *mockSessionRepo) UpdateSessionEnd(ctx context.Context, sessionID int64,
 	return fmt.Errorf("not implemented")
 }
 
+func (m *mockSessionRepo) UpdateSessionEndIfStatus(ctx context.Context, sessionID int64, expectedStatus, newStatus string, endedAt time.Time, exitCode *int) (bool, error) {
+	return false, fmt.Errorf("not implemented")
+}
+
 func (m *mockSessionRepo) GetStaleSessions(ctx context.Context, threshold time.Duration) ([]*manman.Session, error) {
 	return nil, fmt.Errorf("not implemented")
 }

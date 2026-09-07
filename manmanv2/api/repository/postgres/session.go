@@ -2,10 +2,12 @@ package postgres
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 	"time"
 
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/whale-net/everything/manmanv2/models"
 	"github.com/whale-net/everything/manmanv2/api/repository"
@@ -281,6 +283,22 @@ func (r *SessionRepository) UpdateSessionEnd(ctx context.Context, sessionID int6
 	var returnedID int64
 	err := r.db.QueryRow(ctx, query, sessionID, status, endedAt, exitCode).Scan(&returnedID)
 	return err
+}
+
+func (r *SessionRepository) UpdateSessionEndIfStatus(ctx context.Context, sessionID int64, expectedStatus, newStatus string, endedAt time.Time, exitCode *int) (bool, error) {
+	query := `
+		UPDATE sessions
+		SET status = $3, ended_at = $4, exit_code = $5
+		WHERE session_id = $1 AND status = $2
+		RETURNING session_id
+	`
+
+	var returnedID int64
+	err := r.db.QueryRow(ctx, query, sessionID, expectedStatus, newStatus, endedAt, exitCode).Scan(&returnedID)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return false, nil // row changed underneath us -- not an error, the caller skips this session
+	}
+	return err == nil, err
 }
 
 func (r *SessionRepository) GetStaleSessions(ctx context.Context, threshold time.Duration) ([]*manman.Session, error) {
