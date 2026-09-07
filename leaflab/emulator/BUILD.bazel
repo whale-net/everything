@@ -1,0 +1,23 @@
+load("@rules_go//go:def.bzl", "go_binary", "go_library")
+
+go_library(
+    name = "emulator_lib",
+    srcs = [
+        "config.go",
+        "main.go",
+    ],
+    importpath = "github.com/whale-net/everything/leaflab/emulator",
+    visibility = ["//visibility:private"],
+    deps = [
+        "//libs/go/logging",
+        "@com_github_eclipse_paho_mqtt_golang//:paho_mqtt_golang",
+    ],
+)
+
+go_binary(
+    name = "emulator",
+    embed = [":emulator_lib"],
+    visibility = ["//visibility:public"],
+)
+
+# emulator_test (srcs = ["config_test.go"]) lands in the Testing phase.
