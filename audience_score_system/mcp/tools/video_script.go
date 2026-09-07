@@ -100,7 +100,7 @@ func renderVideoScript(ctx context.Context, ideas store.IdeaStore, verdicts stor
 		CreatedAt:            script.CreatedAt.Format(time.RFC3339),
 	}
 	if script.TargetPublishDate != nil {
-		formatted := script.TargetPublishDate.Format(time.RFC3339)
+		formatted := script.TargetPublishDate.UTC().Format(time.RFC3339)
 		out.TargetPublishDate = &formatted
 	}
 	if script.DecidedByPersonID != nil {

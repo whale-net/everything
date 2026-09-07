@@ -791,6 +791,50 @@ func TestHandleList_NFR4_BucketsRenderInMonthlyTrendOrder(t *testing.T) {
 	}
 }
 
+// TestHandleList_CalibrationTrend_UTCNormalizesLabelRegardlessOfProcessLocal
+// covers finding #1980/issue #1981: pgx v5 decodes timestamptz columns via
+// time.Unix(...), which returns a time.Time in the PROCESS's time.Local,
+// not UTC (no ScanLocation configured anywhere in libs/go/db). The store
+// layer's b.BucketStart is correct at rest (date_trunc('month',
+// published_at), UTC per store.CalibrationBucket's doc comment and
+// TestCalibrationStore_MonthlyTrend_FR5_BucketsByCalendarMonthChronologically
+// in store/calibration_integration_test.go), but calibrationPoints must
+// call .UTC() before Format("2006-01") or the SAME instant renders under
+// a DIFFERENT calendar month whenever the web process's OS timezone isn't
+// UTC. This test flips time.Local to America/New_York for its duration
+// (restored via t.Cleanup, and safe here because this file's tests never
+// run with t.Parallel) and seeds a candidate published exactly at
+// 2024-02-01T00:00:00Z -- 2024-01-31T19:00:00-05:00 in New York, i.e. the
+// same instant but ACROSS a month boundary -- so an un-normalized
+// Format("2006-01") would render "2024-01" instead of the correct
+// "2024-02".
+func TestHandleList_CalibrationTrend_UTCNormalizesLabelRegardlessOfProcessLocal(t *testing.T) {
+	nyLoc, err := time.LoadLocation("America/New_York")
+	require.NoError(t, err)
+	savedLocal := time.Local
+	time.Local = nyLoc
+	t.Cleanup(func() { time.Local = savedLocal })
+
+	ctx := context.Background()
+	s := newOutcomesTestStack(t)
+	ch, creator := s.setupChannel(t, ctx)
+	s.setOutcomeBar(t, ctx, ch, creator, 1000)
+
+	febStart := time.Date(2024, time.February, 1, 0, 0, 0, 0, time.UTC)
+	s.buildCalibrationCandidate(t, ctx, ch, creator, "Feb Boundary Candidate", febStart, ptrInt64Outcomes(5000))
+
+	w := s.do(t, http.MethodGet, "/channels/"+ch.ID.String()+"/outcomes", s.sessionCookie(t, ctx, creator.ID))
+	require.Equal(t, http.StatusOK, w.Code, "body: %s", w.Body.String())
+	body := w.Body.String()
+
+	calibIdx := strings.Index(body, "Calibration trend")
+	require.NotEqual(t, -1, calibIdx, "the calibration-trend section must render")
+	section := body[calibIdx:]
+
+	assert.Contains(t, section, "2024-02", "the bucket label must be UTC-normalized to February regardless of the web process's time.Local")
+	assert.NotContains(t, section, "2024-01", "must never render the un-normalized America/New_York calendar month (January) for a UTC February month-start")
+}
+
 // TestHandleList_FR4_ClassificationUsesCurrentBar_ReclassifiesOnChange
 // proves FR4's "always the CURRENT bar, no historical snapshot" rule: a
 // candidate classified as calibrated against one threshold must

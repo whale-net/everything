@@ -311,7 +311,7 @@ func getCalibrationTrendHandler(bars store.OutcomeBarStore, calibration store.Ca
 		buckets := make([]CalibrationBucketOutput, 0, len(rows))
 		for _, r := range rows {
 			buckets = append(buckets, CalibrationBucketOutput{
-				BucketStart:     r.BucketStart.Format(time.RFC3339),
+				BucketStart:     r.BucketStart.UTC().Format(time.RFC3339),
 				Candidates:      r.Candidates,
 				Calibrated:      r.Calibrated,
 				Miscalibrated:   r.Miscalibrated,
