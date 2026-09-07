@@ -296,21 +296,6 @@ go_deps = use_extension("@gazelle//:extensions.bzl", "go_deps")
 # listed in go.mod and their transitive dependencies.
 go_deps.from_file(go_mod = "//:go.mod")
 
-# TEMPORARY PATCH: Fix Docker SDK v28.5.2 dependency issue
-# Docker SDK imports github.com/containerd/errdefs/pkg/errhttp which doesn't exist
-# in containerd/errdefs v1.0.0. This patch adds a stub package.
-# TODO: Remove this patch once:
-#   1. Docker SDK is updated to work with released containerd/errdefs versions, OR
-#   2. containerd/errdefs re-adds the pkg/errhttp package
-# See: tools/bazel/patches/PATCH_REMOVAL_PLAN.md for removal instructions
-go_deps.module_override(
-    patch_strip = 1,
-    patches = [
-        "//tools/bazel/patches:containerd-errdefs-pkg-errhttp.patch",
-    ],
-    path = "github.com/containerd/errdefs",
-)
-
 # OTel SDK internal/x visibility: sdk_metric needs access to sdk/internal/x
 # but gazelle doesn't generate the visibility entry. Override with public
 # visibility for the SDK module's internal packages.
