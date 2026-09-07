@@ -5,6 +5,7 @@ go_library(
     srcs = [
         "board.go",
         "config.go",
+        "config_apply.go",
         "main.go",
         "manifest.go",
         "runner.go",

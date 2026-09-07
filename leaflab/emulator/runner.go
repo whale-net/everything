@@ -85,6 +85,13 @@ type Runner struct {
 	boardStart  time.Time
 	walkers     map[string]*Walker
 	nextDue     map[string]time.Time
+	// configVersion is the last DeviceConfig version successfully applied
+	// (config_apply.go, FR18). Starts at 0 -- a fresh board has never had a
+	// config applied, and since versions are monotonic and 1-based, version
+	// 0 is never itself a legal accepted push. In-memory only: the
+	// emulator's equivalent of "survives reboot" is a fresh device_id on
+	// `tilt down`/`tilt up` (see deriveDeviceID), not NVS persistence.
+	configVersion uint64
 }
 
 // NewRunner constructs a Runner for board, publishing through transport.
@@ -192,29 +199,52 @@ func (r *Runner) Start() error {
 // by the paho OnConnect handler -- on every connect, including
 // reconnects -- for the real broker path.
 func (r *Runner) onConnect() {
+	// Snapshot board under the lock -- config_apply.go's handleConfig can
+	// mutate r.board.Sensors concurrently on paho's message-handler
+	// goroutine, so this read (like every other read/write of sensor
+	// state) must not touch r.board directly outside r.mu.
 	r.mu.Lock()
 	reconnect := r.loopStarted
+	board := r.board
 	r.mu.Unlock()
 
-	if err := r.transport.Publish(statusTopic(r.board.DeviceID), 1, true, []byte("online")); err != nil {
-		r.deps.Logger.Warn("retried online status publish", "device_id", r.board.DeviceID, "error", err)
+	if err := r.transport.Publish(statusTopic(board.DeviceID), 1, true, []byte("online")); err != nil {
+		r.deps.Logger.Warn("retried online status publish", "device_id", board.DeviceID, "error", err)
 	}
 
-	manifest := BuildManifest(r.board)
-	payload, err := proto.Marshal(manifest)
-	if err != nil {
-		r.deps.Logger.Error("failed to marshal device manifest", "device_id", r.board.DeviceID, "error", err)
-	} else if err := r.transport.Publish(manifestTopic(r.board.DeviceID), 1, true, payload); err != nil {
-		r.deps.Logger.Warn("retried manifest publish", "device_id", r.board.DeviceID, "error", err)
-	}
+	manifest := r.publishManifest(board)
+
+	// Re-subscribe on every connect, including reconnects -- FR18's
+	// reconnect-convergence requirement -- after the manifest publish, per
+	// this issue's Implementation section.
+	r.subscribeConfig()
 
 	r.ensureLoopStarted()
 
 	if reconnect {
-		r.deps.Logger.Warn("board reconnected", "device_id", r.board.DeviceID)
+		r.deps.Logger.Warn("board reconnected", "device_id", board.DeviceID)
 	} else {
-		r.deps.Logger.Info("board connected", "device_id", r.board.DeviceID, "sensor_count", len(manifest.GetSensors()))
+		r.deps.Logger.Info("board connected", "device_id", board.DeviceID, "sensor_count", len(manifest.GetSensors()))
 	}
+}
+
+// publishManifest marshals and publishes the retained DeviceManifest for
+// board (a snapshot taken by the caller under r.mu, then used after the
+// lock is released for the network call). Shared by onConnect and
+// config_apply.go's handleConfig -- the config-apply re-publish step -- so
+// the wire encoding and retained/QoS flags can't drift between the two call
+// sites.
+func (r *Runner) publishManifest(board Board) *firmwarepb.DeviceManifest {
+	manifest := BuildManifest(board)
+	payload, err := proto.Marshal(manifest)
+	if err != nil {
+		r.deps.Logger.Error("failed to marshal device manifest", "device_id", board.DeviceID, "error", err)
+		return manifest
+	}
+	if err := r.transport.Publish(manifestTopic(board.DeviceID), 1, true, payload); err != nil {
+		r.deps.Logger.Warn("retried manifest publish", "device_id", board.DeviceID, "error", err)
+	}
+	return manifest
 }
 
 // ensureLoopStarted starts the per-sensor reading loop goroutine the first
@@ -244,6 +274,41 @@ func (r *Runner) ensureLoopStarted() {
 	r.mu.Unlock()
 
 	go r.loop(stopCh)
+}
+
+// reconcileLoopStateLocked keeps r.walkers/r.nextDue in sync after a
+// config_apply.go push swaps r.board.Sensors from old to new (same length
+// and order -- applyConfig only ever mutates fields in place). Must be
+// called with r.mu held.
+//
+// Deliberately never calls NewWalker: a newly-enabled sensor's walker is
+// created lazily by publishDueReadings on the loop's own goroutine instead,
+// so deps.Rand (shared, not concurrency-safe -- see RunnerDeps and
+// valuegen.go) is only ever touched from the reading-loop goroutine, never
+// from handleConfig's.
+func (r *Runner) reconcileLoopStateLocked(old, newSensors []Sensor) {
+	for i, ns := range newSensors {
+		os := old[i]
+
+		if os.Name != ns.Name {
+			// Move the existing walker/due-time to the new key so a rename
+			// doesn't reset the sensor's value walk or scheduling -- only
+			// its topic changes.
+			if w, ok := r.walkers[os.Name]; ok {
+				r.walkers[ns.Name] = w
+				delete(r.walkers, os.Name)
+			}
+			if due, ok := r.nextDue[os.Name]; ok {
+				r.nextDue[ns.Name] = due
+				delete(r.nextDue, os.Name)
+			}
+		}
+
+		if !ns.Enabled {
+			delete(r.walkers, ns.Name)
+			delete(r.nextDue, ns.Name)
+		}
+	}
 }
 
 // loop drives the single ticker for this board, checking each enabled
@@ -280,7 +345,18 @@ func (r *Runner) publishDueReadings(now time.Time) {
 			continue
 		}
 		next, ok := r.nextDue[s.Name]
-		if !ok || now.Before(next) {
+		if !ok {
+			// Enabled but not yet tracked: a config_apply.go push just
+			// enabled this sensor. Create its walker here, on the loop's
+			// own goroutine -- deps.Rand must never be touched from
+			// handleConfig's goroutine (valuegen.go) -- and give it a
+			// fresh due time exactly like ensureLoopStarted does at
+			// startup.
+			r.walkers[s.Name] = NewWalker(s.SensorType, r.deps.Rand)
+			next = now.Add(intervalFor(r.deps.DefaultInterval, s))
+			r.nextDue[s.Name] = next
+		}
+		if now.Before(next) {
 			continue
 		}
 		r.nextDue[s.Name] = next.Add(intervalFor(r.deps.DefaultInterval, s))
