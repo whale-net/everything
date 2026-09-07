@@ -45,6 +45,7 @@ go_library(
         "browse.go",
         "calibration.go",
         "channel.go",
+        "dashboard.go",
         "idea.go",
         "idempotency.go",
         "invite.go",

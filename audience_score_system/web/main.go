@@ -677,11 +677,19 @@ func (a *app) handleChannelDetail(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// FR23-FR26 (issue #2038, C20): the recent-activity dashboard section
+	// below the connection-status card. Scaffolded as a zero-value
+	// placeholder -- Implementation replaces this with the real
+	// a.store.Dashboard().ChannelActivity(r.Context(), channelID,
+	// time.Now().UTC()) read (currently stubbed, see
+	// store.ErrChannelActivityNotImplemented) and its error handling.
+	activity := store.ChannelActivity{}
+
 	data := components.LayoutData{
 		Title: ch.Title,
 		User:  person,
 	}
-	if err := renderTempl(w, r, ch.Title, pages.ChannelDetail(data, ch, canReconnect, canInvite)); err != nil {
+	if err := renderTempl(w, r, ch.Title, pages.ChannelDetail(data, ch, canReconnect, canInvite, activity)); err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 	}
 }
