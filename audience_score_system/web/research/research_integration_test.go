@@ -3526,3 +3526,207 @@ func TestHandleIdeaDetail_NoteRelations_MatchListResearchNotesMCP(t *testing.T) 
 
 	assert.Contains(t, body, "summarizes note "+declaringShortID(target.ID), "the web page's relation line must agree with MCP's relation (same related note, type, direction)")
 }
+
+// ── FR2 Stage 2c: web/research fully thread-derived (issue #1946) ──────────
+//
+// #1939 (store) and #1940 (mcp/tools) already made every reader resolve a
+// note's Idea via research_note.thread_id -> research_thread.idea_id
+// (researchNoteColumns/researchNoteWithAuthorColumns, store/research.go);
+// web/research's own call sites (HandleSaveVerdict's cited-note same-Idea
+// check, renderChannelIndex's unattached-notes partition) were already
+// reading that same thread-derived value, so #1946 only restated their doc
+// comments in thread terms. These four tests are #1946's own Testing-phase
+// evidence that the *behaviour* those comments describe actually holds,
+// not just the prose above it.
+
+// TestHandleSaveVerdict_CitedNoteFromDifferentIdea_ThreadDerivedNotColumn_BadRequest_NoRow
+// extends TestHandleSaveVerdict_CitedNoteFromDifferentIdea_BadRequest_NoRow
+// with a fixture that proves the same-Idea citation guard
+// (research.go's `if note.IdeaID == nil || *note.IdeaID != ideaID`) reads
+// the cited note's THREAD's Idea, not research_note.idea_id directly: the
+// note is attached (via ThreadID) to a thread whose own idea_id is ideaB,
+// but its own research_note.idea_id column is then tampered via raw SQL to
+// equal ideaA -- the same Idea the verdict is being saved against. If the
+// guard read the raw column it would (incorrectly) accept the citation; it
+// must still 400, because store.researchStore.GetByID's LEFT JOIN to
+// research_thread ignores the tampered column and returns ideaB.
+func TestHandleSaveVerdict_CitedNoteFromDifferentIdea_ThreadDerivedNotColumn_BadRequest_NoRow(t *testing.T) {
+	ctx := context.Background()
+	s := newResearchTestStack(t)
+	ch, creator := s.setupChannel(t, ctx)
+	ideaA, err := s.store.Ideas().Create(ctx, ch.ID, "Idea A", creator.ID)
+	require.NoError(t, err)
+	ideaB, err := s.store.Ideas().Create(ctx, ch.ID, "Idea B", creator.ID)
+	require.NoError(t, err)
+
+	threadOnB, err := s.store.Threads().FindOrCreate(ctx, store.FindOrCreateThreadInput{
+		ChannelID: ch.ID, IdeaID: &ideaB.ID, Title: "Thread on B", CreatedByPersonID: creator.ID,
+	})
+	require.NoError(t, err)
+	note, err := s.store.Research().SaveNote(ctx, store.SaveNoteInput{
+		ChannelID: ch.ID, IdeaID: &ideaB.ID, ThreadID: &threadOnB.ID, Text: "note genuinely on B's thread", AuthorPersonID: creator.ID,
+	})
+	require.NoError(t, err)
+
+	// Tamper research_note.idea_id directly to ideaA (the verdict's own
+	// Idea) -- something no store method exposes, but exactly the stale/
+	// forged state the thread-derived read must be immune to.
+	_, err = s.db.Pool.Exec(ctx, `UPDATE research_note SET idea_id = $1 WHERE id = $2`, ideaA.ID, note.ID)
+	require.NoError(t, err)
+
+	// Sanity: GetByID must report the note's Idea as B (thread-derived),
+	// NOT A (the tampered column) -- otherwise this test would not be
+	// exercising what it claims to.
+	reread, err := s.store.Research().GetByID(ctx, note.ID)
+	require.NoError(t, err)
+	require.NotNil(t, reread.IdeaID)
+	require.Equal(t, ideaB.ID, *reread.IdeaID, "sanity: GetByID must resolve idea_id via the thread join, ignoring the tampered research_note.idea_id column")
+
+	w := s.doVerdictForm(t, ch.ID, ideaA.ID, s.sessionCookie(t, ctx, creator.ID), url.Values{
+		"idempotency_key": {uuid.NewString()},
+		"verdict":         {string(store.VerdictViable)},
+		"reasoning":       {"forged citation attempt via tampered idea_id column"},
+		"cited_note_ids":  {note.ID.String()},
+	})
+	assert.Equal(t, http.StatusBadRequest, w.Code, "body: %s", w.Body.String())
+	assert.Contains(t, w.Body.String(), "invalid cited note selection")
+	assert.Empty(t, s.allVerdictHistory(t, ctx, ideaA.ID), "no verdict row may be written -- the citation must be rejected on the note's THREAD's idea (B), not the tampered column value (A)")
+}
+
+// TestHandleIdeaDetail_NullIdeaThreadNote_NotRenderedOnAnyIdeaDetailPage
+// proves a note on a NULL-Idea thread (predates any Idea, M1 FR9) lands
+// only in the Channel index's unattached-notes section (already covered by
+// TestHandleChannelIndex_RendersNoteCountVerdictPresence_AndUnattachedNotesSection)
+// and never appears on ANY Idea's detail page -- the partition
+// renderChannelIndex's `if n.IdeaID == nil` performs is exhaustive, not
+// merely additive.
+func TestHandleIdeaDetail_NullIdeaThreadNote_NotRenderedOnAnyIdeaDetailPage(t *testing.T) {
+	ctx := context.Background()
+	s := newResearchTestStack(t)
+	ch, creator := s.setupChannel(t, ctx)
+	ideaA, err := s.store.Ideas().Create(ctx, ch.ID, "Idea A", creator.ID)
+	require.NoError(t, err)
+	ideaB, err := s.store.Ideas().Create(ctx, ch.ID, "Idea B", creator.ID)
+	require.NoError(t, err)
+
+	unattached, err := s.store.Research().SaveNote(ctx, store.SaveNoteInput{
+		ChannelID: ch.ID, IdeaID: nil, ThreadTitle: "Pre-idea research", Text: "a note on a NULL-idea thread", AuthorPersonID: creator.ID,
+	})
+	require.NoError(t, err)
+	require.Nil(t, unattached.IdeaID, "sanity: the note's resolved Idea must be nil before checking either detail page")
+
+	cookie := s.sessionCookie(t, ctx, creator.ID)
+
+	wIndex := s.do(t, http.MethodGet, "/channels/"+ch.ID.String()+"/research", cookie)
+	require.Equal(t, http.StatusOK, wIndex.Code, "body: %s", wIndex.Body.String())
+	assert.Contains(t, wIndex.Body.String(), unattached.Text, "the Channel index's unattached-notes section must render it")
+
+	wA := s.do(t, http.MethodGet, "/channels/"+ch.ID.String()+"/research/ideas/"+ideaA.ID.String(), cookie)
+	require.Equal(t, http.StatusOK, wA.Code, "body: %s", wA.Body.String())
+	assert.NotContains(t, wA.Body.String(), unattached.Text, "a NULL-Idea-thread note must not render on Idea A's detail page")
+
+	wB := s.do(t, http.MethodGet, "/channels/"+ch.ID.String()+"/research/ideas/"+ideaB.ID.String(), cookie)
+	require.Equal(t, http.StatusOK, wB.Code, "body: %s", wB.Body.String())
+	assert.NotContains(t, wB.Body.String(), unattached.Text, "a NULL-Idea-thread note must not render on Idea B's detail page either")
+}
+
+// TestHandleSaveNote_ReplayWithDifferentIdeaAndThread_OriginalNoteIdeaUnchanged
+// is this task's "impossible by construction" case: a thread's idea_id has
+// no update path (store.ThreadStore exposes only FindOrCreate/GetByID/
+// ListByChannel, no setter), and web/research exposes no edit-note
+// endpoint at all -- the ONLY web-facing call that could even be suspected
+// of moving an existing note to a different Idea is a POST replay under the
+// note's own idempotency_key. store.researchStore.SaveNote's idempotency
+// lookup (store/research.go) returns the existing row BEFORE thread
+// resolution ever runs, so a replay with a different idea_id/thread_title
+// must be a complete no-op: same row, same Idea.
+func TestHandleSaveNote_ReplayWithDifferentIdeaAndThread_OriginalNoteIdeaUnchanged(t *testing.T) {
+	ctx := context.Background()
+	s := newResearchTestStack(t)
+	ch, creator := s.setupChannel(t, ctx)
+	cookie := s.sessionCookie(t, ctx, creator.ID)
+	ideaA, err := s.store.Ideas().Create(ctx, ch.ID, "Idea A", creator.ID)
+	require.NoError(t, err)
+	ideaB, err := s.store.Ideas().Create(ctx, ch.ID, "Idea B", creator.ID)
+	require.NoError(t, err)
+
+	key := uuid.NewString()
+	w1 := s.doForm(t, "/channels/"+ch.ID.String()+"/research/notes", cookie, url.Values{
+		"idempotency_key": {key},
+		"text":            {"attached to A first"},
+		"thread_title":    {"Thread on A"},
+		"idea_id":         {ideaA.ID.String()},
+	})
+	require.Equal(t, http.StatusSeeOther, w1.Code, "body: %s", w1.Body.String())
+
+	notes := s.allNotes(t, ctx, ch.ID)
+	require.Len(t, notes, 1)
+	require.NotNil(t, notes[0].IdeaID)
+	require.Equal(t, ideaA.ID, *notes[0].IdeaID)
+	originalID := notes[0].ID
+
+	// Replay under the SAME key, but pointed at a completely different
+	// Idea/thread -- a forged attempt to "move" the note.
+	w2 := s.doForm(t, "/channels/"+ch.ID.String()+"/research/notes", cookie, url.Values{
+		"idempotency_key": {key},
+		"text":            {"attempted move to B"},
+		"thread_title":    {"A different thread on B"},
+		"idea_id":         {ideaB.ID.String()},
+	})
+	assert.Equal(t, http.StatusSeeOther, w2.Code, "a replayed submit must still redirect, not error, body: %s", w2.Body.String())
+
+	notesAfter := s.allNotes(t, ctx, ch.ID)
+	require.Len(t, notesAfter, 1, "a replayed idempotency_key must not create a second row")
+	assert.Equal(t, originalID, notesAfter[0].ID)
+	require.NotNil(t, notesAfter[0].IdeaID)
+	assert.Equal(t, ideaA.ID, *notesAfter[0].IdeaID, "a note's Idea must never change after creation -- the replay's different idea_id/thread_title must be ignored entirely")
+}
+
+// TestHandleIdeaDetail_BackfilledPreMigrationNote_RendersOnSameIdeaPage
+// proves a note that existed BEFORE migration 016 (#1936) introduced
+// research_thread/thread_id -- and was therefore only ever backfilled onto
+// a synthetic thread, never saved through SaveNote's thread-resolution path
+// -- still renders on the exact same Idea detail page it did before #1936,
+// now read via the thread join (researchNoteColumns' LEFT JOIN, not an
+// INNER JOIN, specifically to not silently drop a row like this one -- see
+// that column list's doc comment in store/research.go).
+func TestHandleIdeaDetail_BackfilledPreMigrationNote_RendersOnSameIdeaPage(t *testing.T) {
+	ctx := context.Background()
+	db := dbtest.NewPostgres(ctx, t, dbtest.Options{})
+
+	sqlDB, err := sql.Open("pgx", db.ConnString)
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = sqlDB.Close() })
+
+	runner := migrate.NewRunner(sqlDB, schema.Migrations, schema.Dir)
+	require.NoError(t, runner.Migrate(15), "apply migrations 1-15, before research_thread/thread_id existed (issue #1936)")
+
+	st := store.New(db.Pool)
+	creator, _, err := st.Persons().UpsertByGoogleSubject(ctx, "sub-backfill-"+uuid.NewString(), "backfill@example.com", "Backfill Creator")
+	require.NoError(t, err)
+	ch, err := st.Channels().Create(ctx, "yt-backfill-"+uuid.NewString(), "Backfill Channel", creator.ID)
+	require.NoError(t, err)
+	idea, err := st.Ideas().Create(ctx, ch.ID, "Pre-Migration Idea", creator.ID)
+	require.NoError(t, err)
+
+	// Insert the note using only the columns that existed before migration
+	// 016 -- no thread_id column to set even if we wanted to.
+	const noteText = "a note that predates research_thread entirely"
+	var noteID uuid.UUID
+	require.NoError(t, db.Pool.QueryRow(ctx, `
+		INSERT INTO research_note (channel_id, idea_id, text, author_person_id) VALUES ($1, $2, $3, $4) RETURNING id
+	`, ch.ID, idea.ID, noteText, creator.ID).Scan(&noteID))
+
+	require.NoError(t, runner.Up(), "apply migration 016's backfill (and every migration after it)")
+
+	sessions := auth.NewSessionManager(db.Pool, testCookieName, "session-secret", testEncKey())
+	a := auth.NewForTests(st.Persons(), sessions)
+	res := research.New(st)
+	mux := http.NewServeMux()
+	mux.HandleFunc("GET /channels/{id}/research/ideas/{ideaID}", a.RequireSignedIn(res.HandleIdeaDetail))
+	stack := &researchTestStack{store: st, sessions: sessions, handlers: res, router: mux, db: db}
+
+	w := stack.do(t, http.MethodGet, "/channels/"+ch.ID.String()+"/research/ideas/"+idea.ID.String(), stack.sessionCookie(t, ctx, creator.ID))
+	require.Equal(t, http.StatusOK, w.Code, "body: %s", w.Body.String())
+	assert.Contains(t, w.Body.String(), noteText, "a note backfilled by migration 016 must render on the same Idea detail page it did before #1936, via its resolved thread's idea_id")
+}

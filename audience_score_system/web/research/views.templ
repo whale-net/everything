@@ -203,7 +203,13 @@ templ saveNoteFields(form noteFormData) {
 // saveNoteFormChannelIndex renders the Channel research index's save-note
 // form (FR3, FR14, FR15): an Idea picker populated from ch's own Idea
 // list, plus an explicit "No Idea (unattached note)" choice that submits
-// an empty idea_id (M1 FR9); threadPickerFields' thread select/new-title
+// an empty idea_id. Since #1945, this picker is thread-RESOLUTION input,
+// not the note's attachment control -- HandleSaveNote/SaveNote use the
+// submitted idea_id only to cross-check against (or, for a brand-new
+// thread, seed) the resolved thread's own Idea; the note's actual Idea is
+// always its thread's Idea (issue #1939, FR2 Stage 2a). Submitting "No
+// Idea" still produces an unattached note (M1 FR9) whenever the resolved
+// thread itself has no Idea. threadPickerFields' thread select/new-title
 // picker, scoped to threads (every thread on the Channel here -- see
 // ChannelIndex's doc comment); and relationPickerFields' per-thread prior-
 // note relation picker, scoped to priorNotes (the Channel-wide candidate
@@ -231,7 +237,12 @@ templ saveNoteFormChannelIndex(ch store.Channel, ideas []store.IdeaSummary, thre
 
 // saveNoteFormIdeaDetail renders the Idea detail page's save-note form
 // (FR3, FR14, FR15): idea_id is pre-selected via a hidden input, no
-// picker -- every note saved from this page attaches to idea --
+// picker. Since #1945/#1939 this idea_id is thread-RESOLUTION input, not
+// a direct attachment -- SaveNote cross-checks it against the resolved
+// thread's own Idea (rejecting a disagreement) or seeds a brand-new
+// thread's Idea with it; every note saved from this page still ends up
+// attached to idea in practice, because every thread reachable from this
+// page's picker already belongs to idea (see IdeaDetail's doc comment) --
 // threadPickerFields' thread select/new-title picker, scoped to threads
 // (that Idea's threads only -- see IdeaDetail's doc comment); and
 // relationPickerFields' per-thread prior-note relation picker, scoped to

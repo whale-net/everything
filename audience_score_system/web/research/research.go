@@ -125,7 +125,16 @@ type noteFormData struct {
 	IdempotencyKey string
 	Text           string
 	SourceURL      string
-	IdeaID         string // "" means unattached / no selection.
+	// IdeaID is the submitted idea_id. Since #1945, the form's authoritative
+	// attachment control is thread selection (ThreadID/ThreadTitle below);
+	// IdeaID here is thread-RESOLUTION input only -- HandleSaveNote passes
+	// it through to SaveNoteInput.IdeaID, which SaveNote uses solely to
+	// cross-check against the resolved thread's own Idea (rejecting a
+	// disagreement) and, for a brand-new thread, as the Idea the new thread
+	// is created under. It never directly sets a note's Idea; a note's Idea
+	// is always its resolved thread's Idea (see store.researchStore,
+	// issue #1939). "" means no idea_id was submitted.
+	IdeaID string
 	// ThreadID is the submitted thread_id (issue #1945, FR14) -- "" means
 	// either no selection yet or a new thread is being created via
 	// ThreadTitle. Exactly one of ThreadID/ThreadTitle must resolve or
@@ -396,6 +405,11 @@ func (h *Handlers) renderChannelIndex(w http.ResponseWriter, r *http.Request, pe
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
+	// unattached partitions on n.IdeaID, which store.researchStore.
+	// ListFiltered (issue #1939, FR2 Stage 2a) resolves via the note's
+	// thread_id -> research_thread.idea_id join, not research_note.idea_id
+	// directly -- so a note on a NULL-Idea thread lands here exactly like a
+	// pre-#1936 note with no thread at all.
 	var unattached []store.ResearchNoteWithAuthor
 	for _, n := range notes {
 		if n.IdeaID == nil {
@@ -652,12 +666,16 @@ func (h *Handlers) renderIdeaDetail(w http.ResponseWriter, r *http.Request, pers
 //     rule inside SaveNote itself precisely so this handler carries no
 //     second copy of it; a SaveNote validation error re-renders the
 //     originating page (400) with the store's own message.
-//   - idea_id: optional. Empty means IdeaID: nil (M1 FR9's unattached
-//     note). When present, it must parse as a UUID and name an Idea that
-//     belongs to THIS Channel -- otherwise this re-renders the Channel
-//     index (400), since there is no valid Idea to show a detail page
-//     for. A valid idea_id determines both which page is re-rendered on
-//     a later validation failure and which page success redirects to.
+//   - idea_id: optional, and (since #1945) thread-RESOLUTION input only --
+//     it does not by itself attach the note to anything; SaveNote uses it
+//     to cross-check against (or, for a new thread, set) the resolved
+//     thread's own Idea (issue #1939, FR2 Stage 2a: a note's actual Idea is
+//     always its thread's Idea). Empty means no idea_id was submitted.
+//     When present, it must parse as a UUID and name an Idea that belongs
+//     to THIS Channel -- otherwise this re-renders the Channel index (400),
+//     since there is no valid Idea to show a detail page for. A valid
+//     idea_id determines both which page is re-rendered on a later
+//     validation failure and which page success redirects to.
 //   - thread_id/thread_title (FR14): passed through RAW to SaveNote,
 //     which itself enforces "exactly one of" plus existence/cross-Channel/
 //     idea-agreement (FR4, issue #1938) -- this handler carries no second
@@ -948,6 +966,16 @@ func (h *Handlers) HandleSaveVerdict(w http.ResponseWriter, r *http.Request) {
 		// or another Channel entirely) must never end up in
 		// verdict_citation -- reject the whole submission (400, nothing
 		// written) rather than silently dropping just that ID.
+		//
+		// note.IdeaID is NOT research_note.idea_id -- store.researchStore
+		// (issue #1939, FR2 Stage 2a) resolves it via a LEFT JOIN from the
+		// note's thread_id to research_thread.idea_id, so this comparison
+		// really reads "does the cited note's thread belong to this Idea".
+		// GetByID above already performed that join, so comparing
+		// note.IdeaID here IS the cleanest form available -- a second
+		// store.Threads().GetByID(note.ThreadID) call to re-derive the same
+		// value would be redundant. The rule itself (a verdict may only
+		// cite notes belonging to the same Idea) is unchanged.
 		if note.IdeaID == nil || *note.IdeaID != ideaID {
 			renderErr("invalid cited note selection")
 			return
