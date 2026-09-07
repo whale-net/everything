@@ -2,12 +2,20 @@ package handlers
 
 import (
 	"context"
+	"encoding/json"
 	"log/slog"
+	"time"
 
 	"github.com/whale-net/everything/libs/go/rmq"
 	"github.com/whale-net/everything/manmanv2/api/repository"
+	hostrmq "github.com/whale-net/everything/manmanv2/host/rmq"
+	"github.com/whale-net/everything/manmanv2/models"
 	pb "github.com/whale-net/everything/manmanv2/protos"
 )
+
+// startSessionTimeout bounds the deferred StartSession call so a hung Start
+// can't wedge this consumer's message-processing loop (see handleStatusUpdate).
+const startSessionTimeout = 30 * time.Second
 
 // DeferredStarter is the narrow interface SessionRestartConsumer needs over
 // the deferred Start (SessionHandler.StartSession). It exists so the
@@ -95,16 +103,79 @@ func (h *SessionRestartConsumer) Close() error {
 
 // handleStatusUpdate processes a status.session.* message and, if it
 // terminalizes the gating Stop of a pending restart, fires the deferred
-// Start. See #1731's Implementation section for the full contract; the
-// scaffold stub below is filled in during Implementation.
+// Start.
+//
+// The pending record is claimed (moved to 'started') *before* the Start is
+// attempted -- ClaimForSession's atomic UPDATE...WHERE status='pending' is
+// the entire NFR10 idempotency guarantee, since a redelivered or duplicated
+// terminal message will find the record already claimed and do nothing.
+// The deliberate trade this makes is at-most-once: a crash between the
+// claim and the Start call leaves a 'started' record with no session and no
+// automatic retry. That is intentional (FR10) -- a missed restart is
+// recoverable by an operator, whereas two sessions racing to start against
+// the same server_game_config_id is not. The stalled/never-started case is
+// surfaced by a separate reaper/observability task, not this consumer.
 func (h *SessionRestartConsumer) handleStatusUpdate(ctx context.Context, msg rmq.Message) error {
-	// TODO(#1731 Implementation): unmarshal msg.Body into
-	// manmanv2/host/rmq.SessionStatusUpdate; fast-path out for non-terminal
-	// statuses; ClaimForSession; call h.starter.StartSession with a bounded
-	// context; MarkStarted/MarkFailed accordingly. See issue body for the
-	// exact contract (NFR7 unknown-field tolerance, NFR9 no periodic sweep,
-	// NFR10 idempotency via the atomic claim).
-	_ = ctx
-	_ = msg
+	var update hostrmq.SessionStatusUpdate
+	if err := json.Unmarshal(msg.Body, &update); err != nil {
+		// Malformed payload is a permanent error: log and drop rather than
+		// requeue-loop it. Returning nil acks the message.
+		h.logger.Warn("failed to unmarshal session status update", "error", err)
+		return nil
+	}
+
+	// Fast path: the overwhelming majority of status.session.# traffic is
+	// non-terminal (pending/starting/running/stopping) and must cost
+	// nothing -- no repository access at all.
+	switch update.Status {
+	case manman.SessionStatusStopped, manman.SessionStatusCrashed, manman.SessionStatusLost:
+	default:
+		return nil
+	}
+
+	rec, err := h.pendingRepo.ClaimForSession(ctx, update.SessionID)
+	if err != nil {
+		// Unlike the failure paths below, this is a genuine (likely
+		// transient) DB failure that happened before any claim took
+		// effect, so let the caller's retry/requeue policy have a shot at
+		// it instead of silently dropping the trigger.
+		h.logger.Warn("failed to claim pending restart for session", "session_id", update.SessionID, "error", err)
+		return err
+	}
+	if rec == nil {
+		// No restart was pending for this session -- the common case, not
+		// a warning.
+		return nil
+	}
+
+	startCtx, cancel := context.WithTimeout(ctx, startSessionTimeout)
+	defer cancel()
+
+	resp, err := h.starter.StartSession(startCtx, &pb.StartSessionRequest{ServerGameConfigId: rec.ServerGameConfigID})
+	if err != nil {
+		if markErr := h.pendingRepo.MarkFailed(ctx, rec.PendingRestartID, err.Error()); markErr != nil {
+			h.logger.Warn("failed to mark pending restart as failed", "pending_restart_id", rec.PendingRestartID, "error", markErr)
+		}
+		h.logger.Warn("deferred restart start failed",
+			"pending_restart_id", rec.PendingRestartID,
+			"server_game_config_id", rec.ServerGameConfigID,
+			"gating_session_id", rec.GatingSessionID,
+			"error", err)
+		// Do not return the error: redelivery would find the record
+		// already claimed and do nothing, so returning nil avoids
+		// pointless retry churn.
+		return nil
+	}
+
+	if err := h.pendingRepo.MarkStarted(ctx, rec.PendingRestartID, resp.Session.SessionId); err != nil {
+		h.logger.Warn("failed to mark pending restart as started", "pending_restart_id", rec.PendingRestartID, "error", err)
+		return nil
+	}
+
+	h.logger.Info("deferred restart start dispatched",
+		"server_game_config_id", rec.ServerGameConfigID,
+		"gating_session_id", rec.GatingSessionID,
+		"started_session_id", resp.Session.SessionId)
+
 	return nil
 }
