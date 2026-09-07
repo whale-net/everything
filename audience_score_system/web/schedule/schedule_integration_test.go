@@ -535,6 +535,29 @@ func TestRetiredRoutes_UnapproveAndEdit_NotFound(t *testing.T) {
 	assert.Equal(t, http.StatusNotFound, editW.Code, "/edit has no analog under video_script (FR36, no web edit surface) and must not be routed")
 }
 
+// ── FR20/NFR5: the old /schedule paths are gone, not duplicated -- no
+// redirect or alias is registered alongside the new /scripts routes ────────
+
+func TestOldSchedulePaths_NotFound(t *testing.T) {
+	ctx := context.Background()
+	s := newScheduleTestStack(t)
+	ch, creator, verdict, strategy := s.setupVideoScriptFixture(t, ctx, "OldPaths")
+	script := s.proposeScript(t, ctx, ch, creator, verdict, strategy, "Script")
+	cookie := s.sessionCookie(t, ctx, creator.ID)
+
+	listW := s.do(t, http.MethodGet, "/channels/"+ch.ID.String()+"/schedule", cookie)
+	assert.Equal(t, http.StatusNotFound, listW.Code, "GET /channels/{id}/schedule must not be routed (FR20 moved it to /scripts, NFR5 forbids an alias)")
+
+	approveW := s.do(t, http.MethodPost, "/schedule/"+script.ID.String()+"/approve", cookie)
+	assert.Equal(t, http.StatusNotFound, approveW.Code, "POST /schedule/{scriptID}/approve must not be routed (FR20 moved it to /scripts, NFR5 forbids an alias)")
+
+	denyW := s.do(t, http.MethodPost, "/schedule/"+script.ID.String()+"/deny", cookie)
+	assert.Equal(t, http.StatusNotFound, denyW.Code, "POST /schedule/{scriptID}/deny must not be routed (FR20 moved it to /scripts, NFR5 forbids an alias)")
+
+	archiveW := s.do(t, http.MethodPost, "/schedule/"+script.ID.String()+"/archive", cookie)
+	assert.Equal(t, http.StatusNotFound, archiveW.Code, "POST /schedule/{scriptID}/archive must not be routed (FR20 moved it to /scripts, NFR5 forbids an alias)")
+}
+
 // ── Malformed input ─────────────────────────────────────────────────────────
 
 func TestMutate_MalformedScriptUUID_BadRequest(t *testing.T) {
