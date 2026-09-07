@@ -380,7 +380,6 @@ use_repo(
     "com_github_google_uuid",
     "com_github_gorilla_securecookie",
     "com_github_gorilla_sessions",
-    "com_github_gorilla_websocket",
     "com_github_inconshreveable_mousetrap",
     "com_github_jackc_pgx_v5",
     "com_github_microsoft_go_winio",
