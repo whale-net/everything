@@ -38,6 +38,14 @@
 // (mcp/tools.Excerpt/CitationExcerptRunes) -- one resolution path and one
 // truncation bound for both surfaces (FR16/NFR2).
 //
+// #1944 (FR10, FR16, NFR2) adds a superseded/excluded warning on top of
+// #1943's cited-notes rendering: retiredCitedResearchNotes resolves the
+// SAME id union via store.ResearchStore.RetiredNoteIDs in one more
+// batched call, and views.templ's citedNoteBody renders the warning from
+// that map. This is read-side annotation only -- verdict_citation is
+// never re-resolved to whatever superseded or excluded the cited note
+// (root plan #1934, Out of scope).
+//
 // Authorization (NFR2, NFR3, NFR5): both GET routes are visible to a
 // Channel's Founder, Co-Creator, AND Analyst (store.CanRead) -- mirrors
 // web/schedule.Handlers.HandleList's read gate exactly, since Loop 1
@@ -504,6 +512,16 @@ func (h *Handlers) renderIdeaDetail(w http.ResponseWriter, r *http.Request, pers
 		return
 	}
 
+	// retiredNotes (FR10) is the SAME batched RetiredNoteIDs call
+	// get_viability_verdict's resolveCitedNotes makes, over the identical
+	// id union citedNotes above was resolved from -- see
+	// retiredCitedResearchNotes's doc comment.
+	retiredNotes, err := h.retiredCitedResearchNotes(ctx, history, current)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+
 	// The save-note form always attaches to this page's own Idea (FR3):
 	// idea_id is pre-selected regardless of what the caller passed in
 	// form.IdeaID, so a HandleSaveNote re-render can never accidentally
@@ -519,7 +537,7 @@ func (h *Handlers) renderIdeaDetail(w http.ResponseWriter, r *http.Request, pers
 	// slice the save-verdict form's citation multi-select is populated
 	// from -- no extra store call, and no notes from any other Idea can
 	// ever appear as options (FR4).
-	if err := components.Render(w, r, title, IdeaDetail(data, ch, idea, notes, notesTruncated, threads, current, history, authorNames, citedNotes, canWrite, form, verdictForm, activeStrategies, proposeForm)); err != nil {
+	if err := components.Render(w, r, title, IdeaDetail(data, ch, idea, notes, notesTruncated, threads, current, history, authorNames, citedNotes, retiredNotes, canWrite, form, verdictForm, activeStrategies, proposeForm)); err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 	}
 }
@@ -1032,15 +1050,12 @@ func (h *Handlers) verdictAuthorDisplayNames(ctx context.Context, history []stor
 	return names, nil
 }
 
-// citedResearchNotes resolves the UNION of every CitedResearchNoteIDs
-// across history (and current, when non-nil) to its store.ResearchNote in
-// ONE batched store.ResearchStore.GetByIDs call (FR9, FR16/NFR2) -- never
-// one GetByID call per citation per verdict version, so an Idea with a
-// long verdict history citing many notes still issues a single query.
-// views.templ's citedNoteBody reads this map by id; an id absent from it
-// (should not happen -- see store.ResearchStore.GetByIDs's doc comment)
-// renders as a benign "note unavailable" marker rather than panicking.
-func (h *Handlers) citedResearchNotes(ctx context.Context, history []store.Verdict, current *store.Verdict) (map[uuid.UUID]store.ResearchNote, error) {
+// citedNoteIDUnion collects the UNION of every CitedResearchNoteIDs across
+// history (and current, when non-nil) -- the single id set both
+// citedResearchNotes' GetByIDs call and retiredCitedResearchNotes'
+// RetiredNoteIDs call resolve (FR9/FR10, FR16/NFR2), so the two never
+// drift onto different id lists.
+func citedNoteIDUnion(history []store.Verdict, current *store.Verdict) []uuid.UUID {
 	var ids []uuid.UUID
 	for _, v := range history {
 		ids = append(ids, v.CitedResearchNoteIDs...)
@@ -1048,9 +1063,36 @@ func (h *Handlers) citedResearchNotes(ctx context.Context, history []store.Verdi
 	if current != nil {
 		ids = append(ids, current.CitedResearchNoteIDs...)
 	}
-	notes, err := h.store.Research().GetByIDs(ctx, ids)
+	return ids
+}
+
+// citedResearchNotes resolves citedNoteIDUnion's ids to their
+// store.ResearchNote in ONE batched store.ResearchStore.GetByIDs call
+// (FR9, FR16/NFR2) -- never one GetByID call per citation per verdict
+// version, so an Idea with a long verdict history citing many notes still
+// issues a single query. views.templ's citedNoteBody reads this map by
+// id; an id absent from it (should not happen -- see
+// store.ResearchStore.GetByIDs's doc comment) renders as a benign "note
+// unavailable" marker rather than panicking.
+func (h *Handlers) citedResearchNotes(ctx context.Context, history []store.Verdict, current *store.Verdict) (map[uuid.UUID]store.ResearchNote, error) {
+	notes, err := h.store.Research().GetByIDs(ctx, citedNoteIDUnion(history, current))
 	if err != nil {
 		return nil, fmt.Errorf("load cited research notes: %w", err)
 	}
 	return notes, nil
+}
+
+// retiredCitedResearchNotes resolves citedNoteIDUnion's ids via
+// store.ResearchStore.RetiredNoteIDs in ONE batched call (FR10, FR16/
+// NFR2) -- the identical store method mcp/tools/verdict.go's
+// resolveCitedNotes calls, so `web` and `mcp` can never disagree on which
+// cited notes carry a superseded/excluded warning. An id absent from the
+// returned map is a live note (views.templ's citedNoteBody renders no
+// warning for it).
+func (h *Handlers) retiredCitedResearchNotes(ctx context.Context, history []store.Verdict, current *store.Verdict) (map[uuid.UUID][]store.RelationType, error) {
+	retired, err := h.store.Research().RetiredNoteIDs(ctx, citedNoteIDUnion(history, current))
+	if err != nil {
+		return nil, fmt.Errorf("load retired research notes: %w", err)
+	}
+	return retired, nil
 }
