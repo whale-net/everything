@@ -27,6 +27,14 @@
                Dashboards / future API
 ```
 
+`leaflab/emulator` sits in the same position as the physical ESP32 above —
+it speaks the same MQTT wire contract ([`MQTT.md`](MQTT.md)) with synthetic
+sensor values instead of real hardware. It is **dev-only and never
+deployed**: `release_app`'s `deploy_unit = "none"`
+(`emulator/BUILD.bazel`) keeps it out of `leaflab_chart` and every K8s
+environment; `tilt up` is its only home. See
+[`emulator/README.md`](emulator/README.md).
+
 ---
 
 ## Firmware Architecture

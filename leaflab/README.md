@@ -166,6 +166,12 @@ Key design decisions:
 
 ## Local Dev: Claiming a Board Under Auth (M2)
 
+Physical hardware is optional for most local work: `tilt up` also starts
+`leaflab-emulator`, which publishes simulated board MQTT traffic against
+real scenario configs so the rest of the pipeline (claiming, config push,
+readings) can be exercised end to end without a flashed board — see
+[`emulator/README.md`](emulator/README.md).
+
 Under Tilt, `leaflab-api` and `leaflab-ui` both run with `GRPC_AUTH_MODE=none`
 (no OIDC config), so every request is treated as a signed-in caller with
 subject `dev-user`. As of M2, that caller still has to exist as a
