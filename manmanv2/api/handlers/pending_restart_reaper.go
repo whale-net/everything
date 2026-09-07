@@ -74,12 +74,29 @@ func (r *PendingRestartReaper) Start(ctx context.Context) {
 // tick runs a single expiry pass. Errors must never kill the goroutine --
 // the next tick retries.
 func (r *PendingRestartReaper) tick(ctx context.Context) {
-	// TODO(#1732 Implementation): call r.pendingRepo.ExpireStalled(ctx,
-	// time.Now()); on error, log ERROR and return (next tick retries); for
-	// each expired record, log WARNING with server_game_config_id,
-	// gating_session_id, pending_restart_id, created_at, stall_deadline, and
-	// an explicit message that the restart's Stop never reached a terminal
-	// state so the Start was not dispatched and the deployment remains
-	// stopped. Zero expired records is silent.
-	_ = ctx
+	expired, err := r.pendingRepo.ExpireStalled(ctx, time.Now())
+	if err != nil {
+		// ERROR per AGENTS.md § Logging Levels: this tick's expiry pass
+		// could not run at all. The goroutine survives -- the next tick
+		// retries -- so this is never returned to a caller, only logged.
+		r.logger.Error("failed to expire stalled pending restarts", "error", err)
+		return
+	}
+
+	// Zero expired records is the common case on a healthy system and is
+	// deliberately silent (no per-tick logging) to avoid log spam.
+	for _, pr := range expired {
+		// WARNING per AGENTS.md § Logging Levels and NFR11: the system
+		// bounded the stall and kept going, but the operator's Restart
+		// never completed and the deployment remains stopped -- a genuine
+		// deviation the operator needs to see, not handled control flow.
+		r.logger.Warn(
+			"pending restart stalled and was expired: gating Stop never reached a terminal status, Start was never dispatched, deployment remains stopped",
+			"server_game_config_id", pr.ServerGameConfigID,
+			"gating_session_id", pr.GatingSessionID,
+			"pending_restart_id", pr.PendingRestartID,
+			"created_at", pr.CreatedAt,
+			"stall_deadline", pr.StallDeadline,
+		)
+	}
 }
