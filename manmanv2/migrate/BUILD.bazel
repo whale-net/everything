@@ -1,4 +1,4 @@
-load("@rules_go//go:def.bzl", "go_binary")
+load("@rules_go//go:def.bzl", "go_binary", "go_test")
 load("//tools/bazel:release.bzl", "release_app")
 
 go_binary(
@@ -9,6 +9,44 @@ go_binary(
         "//libs/go/migrate",
     ],
     visibility = ["//visibility:public"],
+)
+
+# Real-Postgres coverage for migration 036 (#1729): drives the domain's
+# actual embedded migrations FS (declared in main.go, same package) through
+# the migrate tool, proving 036 applies cleanly on top of the full prior
+# history and rolls back cleanly (issue Testing item 8). Gated behind
+# `//go:build integration`, gazelle skips it when scanning for go_test
+# srcs; this go_test is hand-written with EXACTLY the tag set from
+# //libs/go/dbtest:postgres_constraints_test (see that package's
+# BUILD.bazel/README.md for why each tag is required). `# keep` tells a
+# later `bazel run //:gazelle` not to touch or remove this rule.
+#
+# Run it explicitly (requires a working Docker daemon):
+#   bazel test //manmanv2/migrate:migration_036_integration_test --test_output=all
+go_test(
+    # keep
+    name = "migration_036_integration_test",
+    size = "large",
+    timeout = "long",
+    srcs = [
+        "main.go",
+        "migration_036_integration_test.go",
+    ],
+    embedsrcs = glob(["migrations/*.sql"]),
+    gotags = ["integration"],
+    tags = [
+        "external",
+        "integration",
+        "manual",
+        "no-cache",
+        "no-sandbox",
+        "requires-network",
+    ],
+    deps = [
+        "//libs/go/dbtest",
+        "//libs/go/migrate",
+        "@com_github_jackc_pgx_v5//stdlib",
+    ],
 )
 
 # Release metadata for migration job
