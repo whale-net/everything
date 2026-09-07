@@ -31,6 +31,7 @@ go_test(
         "m4_1_research_web_test.go",
         "m4_2_propose_web_test.go",
         "m4_3_outcomes_web_test.go",
+        "research_threading_test.go",
         "thread_discovery_parity_test.go",
     ],
     gotags = ["integration"],
