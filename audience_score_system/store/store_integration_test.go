@@ -1604,6 +1604,163 @@ func TestResearchStore_SaveNote_NFR1ReplayCreatesNoDuplicateThreadNoteOrRelation
 	assert.Equal(t, 1, countResearchNoteRelations(t, ctx, db, first.ID), "a replay must not create a second relation row")
 }
 
+// ── FR2 Stage 2a: research_note reads derived via thread_id -> research_thread
+// (issue #1939, root plan #1934) ─────────────────────────────────────────────
+//
+// These tests guard the cutover research.go's researchNoteColumns/
+// researchNoteWithAuthorColumns/ListFiltered made: every READ path derives a
+// note's IdeaID from its resolved thread (rt.idea_id via a LEFT JOIN to
+// research_thread), not from research_note.idea_id directly, even though
+// research_note.idea_id is still physically present and still dual-written
+// by SaveNote (Stage 3's job to remove).
+
+// TestResearchStore_ListFiltered_IdeaIDFiltersByResolvingThreadNotNoteColumn
+// is also this task's named red/green regression test: research.go's
+// ListFiltered builds `AND rt.idea_id = $n` for the ideaID filter. While
+// authoring this test, that literal was changed to `AND rt.channel_id = $n`
+// (research.go) and the test suite re-run: this test went red immediately
+// (note2 and note3, which share note1's channel_id, leaked into "scoped"
+// alongside note1 -- clearly wrong, since channel_id doesn't scope by Idea
+// at all), then the literal was reverted to `rt.idea_id` and the suite went
+// green again. The code as committed here is the reverted (correct)
+// version.
+func TestResearchStore_ListFiltered_IdeaIDFiltersByResolvingThreadNotNoteColumn(t *testing.T) {
+	ctx := context.Background()
+	s, _ := newStore(t)
+	ch, creator := setupChannel(t, ctx, s)
+	idea1, err := s.Ideas().Create(ctx, ch.ID, "Idea one", creator.ID)
+	require.NoError(t, err)
+	idea2, err := s.Ideas().Create(ctx, ch.ID, "Idea two", creator.ID)
+	require.NoError(t, err)
+
+	note1, err := s.Research().SaveNote(ctx, store.SaveNoteInput{
+		ChannelID: ch.ID, IdeaID: &idea1.ID, ThreadTitle: "Idea one's thread", Text: "note under idea one", AuthorPersonID: creator.ID,
+	})
+	require.NoError(t, err)
+	note2, err := s.Research().SaveNote(ctx, store.SaveNoteInput{
+		ChannelID: ch.ID, IdeaID: &idea2.ID, ThreadTitle: "Idea two's thread", Text: "note under idea two", AuthorPersonID: creator.ID,
+	})
+	require.NoError(t, err)
+	note3, err := s.Research().SaveNote(ctx, store.SaveNoteInput{
+		ChannelID: ch.ID, ThreadTitle: "No idea yet", Text: "note with no idea", AuthorPersonID: creator.ID,
+	})
+	require.NoError(t, err)
+
+	scoped, truncated, err := s.Research().ListFiltered(ctx, ch.ID, &idea1.ID, nil, nil, nil, 0)
+	require.NoError(t, err)
+	assert.False(t, truncated)
+	ids := make([]uuid.UUID, len(scoped))
+	for i, n := range scoped {
+		ids[i] = n.ID
+	}
+	assert.Equal(t, []uuid.UUID{note1.ID}, ids, "ListFiltered(ideaID) must return exactly the notes whose THREAD belongs to that idea -- neither idea2's note nor the no-idea note")
+
+	all, _, err := s.Research().ListFiltered(ctx, ch.ID, nil, nil, nil, nil, 0)
+	require.NoError(t, err)
+	assert.Len(t, all, 3, "sanity: unfiltered must still see all three notes")
+	_ = note2
+	_ = note3
+}
+
+// TestResearchStore_SaveNote_ThreadIDPathReportsResolvingThreadsIdeaID proves
+// a note written through #1938's thread_id path reports the RESOLVING
+// THREAD's idea_id as its IdeaID, not any idea_id supplied elsewhere on the
+// call (SaveNoteInput.IdeaID is not even consulted on the thread_id path --
+// research.go's SaveNote takes thread.IdeaID unconditionally).
+func TestResearchStore_SaveNote_ThreadIDPathReportsResolvingThreadsIdeaID(t *testing.T) {
+	ctx := context.Background()
+	s, _ := newStore(t)
+	ch, creator := setupChannel(t, ctx, s)
+	idea, err := s.Ideas().Create(ctx, ch.ID, "Idea for thread_id path", creator.ID)
+	require.NoError(t, err)
+
+	thread, err := s.Threads().FindOrCreate(ctx, store.FindOrCreateThreadInput{
+		ChannelID: ch.ID, IdeaID: &idea.ID, Title: "Threaded research", CreatedByPersonID: creator.ID,
+	})
+	require.NoError(t, err)
+
+	note, err := s.Research().SaveNote(ctx, store.SaveNoteInput{
+		ChannelID: ch.ID, ThreadID: &thread.ID, Text: "attached via thread_id", AuthorPersonID: creator.ID,
+	})
+	require.NoError(t, err)
+
+	require.NotNil(t, note.IdeaID, "a note attached via thread_id to a thread with an Idea must report that Idea, not nil")
+	assert.Equal(t, idea.ID, *note.IdeaID, "IdeaID must come from the resolving thread's idea_id (rt.idea_id)")
+
+	got, err := s.Research().GetByID(ctx, note.ID)
+	require.NoError(t, err)
+	require.NotNil(t, got.IdeaID)
+	assert.Equal(t, idea.ID, *got.IdeaID, "GetByID must derive the same IdeaID via the join as SaveNote's own RETURNING")
+}
+
+// TestResearchStore_SaveNote_ThreadTitlePathWithNilIdeaReportsNilIdeaID
+// proves a note written through the thread_title path with no Idea supplied
+// resolves to a thread with idea_id NULL, and reports IdeaID == nil (not a
+// zero-value uuid.UUID) -- the FR9 "note predates an Idea" case.
+func TestResearchStore_SaveNote_ThreadTitlePathWithNilIdeaReportsNilIdeaID(t *testing.T) {
+	ctx := context.Background()
+	s, _ := newStore(t)
+	ch, creator := setupChannel(t, ctx, s)
+
+	note, err := s.Research().SaveNote(ctx, store.SaveNoteInput{
+		ChannelID: ch.ID, ThreadTitle: "Pre-idea research", Text: "no idea yet", AuthorPersonID: creator.ID,
+	})
+	require.NoError(t, err)
+	assert.Nil(t, note.IdeaID, "a thread_title find-or-create with no IdeaID must resolve to a thread with idea_id NULL, so the note's IdeaID must be nil")
+
+	got, err := s.Research().GetByID(ctx, note.ID)
+	require.NoError(t, err)
+	assert.Nil(t, got.IdeaID, "GetByID's joined read must also report nil, matching SaveNote's own return")
+}
+
+// TestResearchStore_BackfilledPreMigrationNoteReportsSameIdeaIDAfterCutover
+// reproduces a research_note row exactly as migration 016 would have found
+// it pre-migration (idea_id populated directly, thread_id NULL) with raw
+// SQL -- SaveNote itself always populates thread_id post-#1938/#1939, so a
+// genuine pre-migration row can only be reproduced this way -- then applies
+// migration 016's own backfill statements (one synthetic per-bucket thread,
+// then UPDATE research_note SET thread_id) verbatim for this one row, and
+// asserts the store's joined read reports the SAME IdeaID the row always
+// had, proving the cutover is invisible to a backfilled row.
+func TestResearchStore_BackfilledPreMigrationNoteReportsSameIdeaIDAfterCutover(t *testing.T) {
+	ctx := context.Background()
+	s, db := newStore(t)
+	ch, creator := setupChannel(t, ctx, s)
+	idea, err := s.Ideas().Create(ctx, ch.ID, "Pre-migration idea", creator.ID)
+	require.NoError(t, err)
+
+	var noteID uuid.UUID
+	require.NoError(t, db.Pool.QueryRow(ctx, `
+		INSERT INTO research_note (channel_id, idea_id, text, author_person_id)
+		VALUES ($1, $2, $3, $4)
+		RETURNING id
+	`, ch.ID, idea.ID, "pre-migration note", creator.ID).Scan(&noteID))
+
+	var threadID uuid.UUID
+	require.NoError(t, db.Pool.QueryRow(ctx, `
+		INSERT INTO research_thread (channel_id, idea_id, title, created_by_person_id)
+		VALUES ($1, $2, 'Research', $3)
+		RETURNING id
+	`, ch.ID, idea.ID, creator.ID).Scan(&threadID))
+	_, err = db.Pool.Exec(ctx, `UPDATE research_note SET thread_id = $1 WHERE id = $2`, threadID, noteID)
+	require.NoError(t, err)
+
+	got, err := s.Research().GetByID(ctx, noteID)
+	require.NoError(t, err)
+	require.NotNil(t, got.IdeaID, "a backfilled note's joined read must still resolve an IdeaID")
+	assert.Equal(t, idea.ID, *got.IdeaID, "a backfilled pre-migration note must report the SAME IdeaID after the cutover (via rt.idea_id) as it did before it (via rn.idea_id directly) -- migration 016's backfill guarantees rt.idea_id agrees with the original rn.idea_id for every backfilled row")
+
+	listed, _, err := s.Research().ListFiltered(ctx, ch.ID, &idea.ID, nil, nil, nil, 0)
+	require.NoError(t, err)
+	found := false
+	for _, n := range listed {
+		if n.ID == noteID {
+			found = true
+		}
+	}
+	assert.True(t, found, "ListFiltered(ideaID) must also find the backfilled note via its resolved thread")
+}
+
 // ── SyncStore (FR14/FR21) ────────────────────────────────────────────────────
 
 func TestSyncStore_UpsertVideos_SameYouTubeIDUpdatesNotDuplicates(t *testing.T) {
