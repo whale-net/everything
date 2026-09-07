@@ -5,6 +5,7 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/whale-net/everything/audience_score_system/mcp/tools"
 	"github.com/whale-net/everything/audience_score_system/store"
 	"github.com/whale-net/everything/audience_score_system/web/components"
 )
@@ -236,8 +237,11 @@ templ ideaRow(ch store.Channel, idea store.IdeaSummary) {
 // citedBadge renders FR10's explicit cited/uncited indicator, read from
 // note.Cited() -- never a local nil-check on the note's source URL field
 // in this template (that derivation lives in exactly one place,
-// store.ResearchNote.Cited).
-templ citedBadge(note store.ResearchNoteWithAuthor) {
+// store.ResearchNote.Cited). Takes the bare store.ResearchNote (not
+// ResearchNoteWithAuthor) so citedNoteBody below -- which has no author to
+// join -- can share it too; noteBody passes note.ResearchNote, its
+// embedded field.
+templ citedBadge(note store.ResearchNote) {
 	if note.Cited() {
 		<span class="badge badge-success">Cited</span>
 	} else {
@@ -261,8 +265,55 @@ templ noteBody(note store.ResearchNoteWithAuthor) {
 				</p>
 			}
 		</div>
-		@citedBadge(note)
+		@citedBadge(note.ResearchNote)
 	</div>
+}
+
+// citedNoteBody renders one verdict citation (FR9, FR16/NFR2): the cited
+// store.ResearchNote's text excerpt -- truncated by mcp/tools.Excerpt, the
+// SAME bound get_viability_verdict truncates at, never a second
+// truncation -- its source_url if any, and citedBadge (shared with
+// noteBody, never reimplemented). ok is false when id did not resolve
+// (citedNotes map, from research.go's citedResearchNotes) -- a defensive
+// path (verdict_citation FKs research_note and nothing in this package
+// deletes one), rendered as a benign "note unavailable" marker rather than
+// panicking or silently dropping the row.
+templ citedNoteBody(note store.ResearchNote, ok bool) {
+	if !ok {
+		<li class="text-xs text-base-content/50 italic">Cited note unavailable</li>
+	} else {
+		<li class="border border-base-300 rounded p-2">
+			<div class="flex justify-between items-start gap-4">
+				<div>
+					<p class="text-sm">{ tools.Excerpt(note.Text) }</p>
+					if note.Cited() {
+						<p class="text-xs">
+							Source: <a href={ templ.URL(*note.SourceURL) } class="link" target="_blank" rel="noopener noreferrer">{ *note.SourceURL }</a>
+						</p>
+					}
+				</div>
+				@citedBadge(note)
+			</div>
+		</li>
+	}
+}
+
+// citedNotesSection renders a verdict's cited-notes list (FR9): nothing at
+// all when citedIDs is empty (never an empty heading), otherwise a small
+// heading plus one citedNoteBody per id, resolved from notes (research.go's
+// citedResearchNotes map, keyed by research_note id).
+templ citedNotesSection(citedIDs []uuid.UUID, notes map[uuid.UUID]store.ResearchNote) {
+	if len(citedIDs) > 0 {
+		<div class="mt-2">
+			<p class="text-xs font-semibold text-base-content/70">Cited notes</p>
+			<ul class="mt-1 space-y-1">
+				for _, id := range citedIDs {
+					{{ note, ok := notes[id] }}
+					@citedNoteBody(note, ok)
+				}
+			</ul>
+		</div>
+	}
 }
 
 // IdeaDetail is one Idea's research-note list (FR2, FR10) and full
@@ -273,6 +324,10 @@ templ noteBody(note store.ResearchNoteWithAuthor) {
 // Verdict's AuthorPersonID (as a UUID string) to its display name --
 // resolved once per distinct author by the handler (Verdict carries no
 // AuthorDisplayName field of its own, unlike ResearchNoteWithAuthor).
+// citedNotes (FR9, FR16/NFR2, #1943) maps a cited research_note id to its
+// resolved store.ResearchNote -- research.go's citedResearchNotes resolves
+// the union of every verdict's CitedResearchNoteIDs (current + every
+// history entry) in ONE batched call, never one query per citation.
 //
 // canWrite (store.CanWrite, research.go's renderIdeaDetail) gates BOTH
 // the save-note form (FR3, FR6, FR7) and the save-verdict form (FR4, FR6,
@@ -304,7 +359,7 @@ templ noteBody(note store.ResearchNoteWithAuthor) {
 // current verdict (FR4), never this render-time check alone -- but that
 // presentation gate must never suppress an error the server already
 // decided to show.
-templ IdeaDetail(data components.LayoutData, ch store.Channel, idea store.Idea, notes []store.ResearchNoteWithAuthor, notesTruncated bool, current *store.Verdict, history []store.Verdict, authorNames map[uuid.UUID]string, canWrite bool, form noteFormData, verdictForm verdictFormData, strategies []store.StrategyDetail, proposeForm proposeFormData) {
+templ IdeaDetail(data components.LayoutData, ch store.Channel, idea store.Idea, notes []store.ResearchNoteWithAuthor, notesTruncated bool, current *store.Verdict, history []store.Verdict, authorNames map[uuid.UUID]string, citedNotes map[uuid.UUID]store.ResearchNote, canWrite bool, form noteFormData, verdictForm verdictFormData, strategies []store.StrategyDetail, proposeForm proposeFormData) {
 	@components.Layout(data) {
 		<div class="card bg-base-100 border border-base-300 shadow-sm">
 			<div class="card-body">
@@ -344,7 +399,7 @@ templ IdeaDetail(data components.LayoutData, ch store.Channel, idea store.Idea, 
 					} else {
 						<div class="border border-base-300 rounded p-2 mt-2">
 							<p class="text-sm font-semibold">Current</p>
-							@verdictBody(*current, authorNames)
+							@verdictBody(*current, authorNames, citedNotes)
 						</div>
 					}
 
@@ -353,7 +408,7 @@ templ IdeaDetail(data components.LayoutData, ch store.Channel, idea store.Idea, 
 						<ul class="mt-2 space-y-2">
 							for _, v := range history {
 								<li class="border border-base-300 rounded p-2">
-									@verdictBody(v, authorNames)
+									@verdictBody(v, authorNames, citedNotes)
 								</li>
 							}
 						</ul>
@@ -386,8 +441,11 @@ templ IdeaDetail(data components.LayoutData, ch store.Channel, idea store.Idea, 
 
 // verdictBody renders one store.Verdict: version, value badge, reasoning,
 // author display name (from authorNames, keyed by AuthorPersonID as a
-// UUID string), source (FR5), and created_at.
-templ verdictBody(v store.Verdict, authorNames map[uuid.UUID]string) {
+// UUID string), source (FR5), created_at, and -- FR9, #1943 -- its cited
+// notes (citedNotesSection above; renders nothing when v.CitedResearchNoteIDs
+// is empty). notes is the citedNotes map IdeaDetail resolved once for the
+// whole page, keyed by research_note id.
+templ verdictBody(v store.Verdict, authorNames map[uuid.UUID]string, notes map[uuid.UUID]store.ResearchNote) {
 	<div class="flex justify-between items-start gap-4">
 		<div>
 			<p class="text-sm text-base-content/70">Version { strconv.Itoa(v.Version) }</p>
@@ -395,6 +453,7 @@ templ verdictBody(v store.Verdict, authorNames map[uuid.UUID]string) {
 			<p class="text-xs text-base-content/70">
 				{ authorName(authorNames, v.AuthorPersonID) } ({ verdictSourceLabel(v.Source) }) — { v.CreatedAt.UTC().Format("2006-01-02 15:04 UTC") }
 			</p>
+			@citedNotesSection(v.CitedResearchNoteIDs, notes)
 		</div>
 		<span class={ verdictBadgeClass(v.Verdict) }>{ verdictLabel(v.Verdict) }</span>
 	</div>

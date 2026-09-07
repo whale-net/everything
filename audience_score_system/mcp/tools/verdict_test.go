@@ -55,33 +55,33 @@ func TestParseVerdictValue_RejectsAnythingElse(t *testing.T) {
 
 func TestExcerpt_ShortTextPassesThroughUnchanged(t *testing.T) {
 	short := "a short note"
-	assert.Equal(t, short, excerpt(short))
+	assert.Equal(t, short, Excerpt(short))
 
-	exact := strings.Repeat("x", citationExcerptRunes)
-	assert.Equal(t, exact, excerpt(exact), "text exactly at the limit must not be truncated")
+	exact := strings.Repeat("x", CitationExcerptRunes)
+	assert.Equal(t, exact, Excerpt(exact), "text exactly at the limit must not be truncated")
 }
 
 func TestExcerpt_LongTextTruncatedWithEllipsisAtExactRuneBound(t *testing.T) {
-	long := strings.Repeat("y", citationExcerptRunes+50)
-	got := excerpt(long)
+	long := strings.Repeat("y", CitationExcerptRunes+50)
+	got := Excerpt(long)
 
 	assert.True(t, strings.HasSuffix(got, "..."), "truncated excerpt must end with an ellipsis marker")
 	runes := []rune(got)
-	assert.Len(t, runes, citationExcerptRunes+3, "truncated excerpt must be exactly citationExcerptRunes runes plus the 3-rune ellipsis")
-	assert.Equal(t, strings.Repeat("y", citationExcerptRunes), string(runes[:citationExcerptRunes]))
+	assert.Len(t, runes, CitationExcerptRunes+3, "truncated excerpt must be exactly CitationExcerptRunes runes plus the 3-rune ellipsis")
+	assert.Equal(t, strings.Repeat("y", CitationExcerptRunes), string(runes[:CitationExcerptRunes]))
 }
 
 func TestExcerpt_TruncatesByRuneNotByte_MultiByteCharactersNotSplit(t *testing.T) {
 	// Each "é" is a single rune but 2 bytes in UTF-8; a byte-based
-	// truncation at citationExcerptRunes bytes would split one of these in
+	// truncation at CitationExcerptRunes bytes would split one of these in
 	// half and corrupt the excerpt.
-	long := strings.Repeat("é", citationExcerptRunes+10)
-	got := excerpt(long)
+	long := strings.Repeat("é", CitationExcerptRunes+10)
+	got := Excerpt(long)
 
 	require.True(t, strings.HasSuffix(got, "..."))
 	body := strings.TrimSuffix(got, "...")
 	runes := []rune(body)
-	assert.Len(t, runes, citationExcerptRunes)
+	assert.Len(t, runes, CitationExcerptRunes)
 	for _, r := range runes {
 		assert.Equal(t, 'é', r, "truncation must never split a multi-byte rune")
 	}

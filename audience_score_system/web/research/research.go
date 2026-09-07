@@ -17,6 +17,15 @@
 // for POST handlers) back HandleSaveVerdict exactly as they back
 // HandleSaveNote -- see each's doc comment.
 //
+// #1943 (FR9, FR16, NFR2) adds IdeaDetail's cited-notes rendering: every
+// verdict's CitedResearchNoteIDs, resolved to its store.ResearchNote by
+// citedResearchNotes below in ONE batched store.ResearchStore.GetByIDs
+// call across the whole page (current plus every history entry), never
+// one query per citation. mcp/tools/verdict.go's resolveCitedNotes shares
+// the SAME GetByIDs method and the SAME excerpt truncation
+// (mcp/tools.Excerpt/CitationExcerptRunes) -- one resolution path and one
+// truncation bound for both surfaces (FR16/NFR2).
+//
 // Authorization (NFR2, NFR3, NFR5): both GET routes are visible to a
 // Channel's Founder, Co-Creator, AND Analyst (store.CanRead) -- mirrors
 // web/schedule.Handlers.HandleList's read gate exactly, since Loop 1
@@ -458,6 +467,12 @@ func (h *Handlers) renderIdeaDetail(w http.ResponseWriter, r *http.Request, pers
 		return
 	}
 
+	citedNotes, err := h.citedResearchNotes(ctx, history, current)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+
 	// The save-note form always attaches to this page's own Idea (FR3):
 	// idea_id is pre-selected regardless of what the caller passed in
 	// form.IdeaID, so a HandleSaveNote re-render can never accidentally
@@ -473,7 +488,7 @@ func (h *Handlers) renderIdeaDetail(w http.ResponseWriter, r *http.Request, pers
 	// slice the save-verdict form's citation multi-select is populated
 	// from -- no extra store call, and no notes from any other Idea can
 	// ever appear as options (FR4).
-	if err := components.Render(w, r, title, IdeaDetail(data, ch, idea, notes, notesTruncated, current, history, authorNames, canWrite, form, verdictForm, activeStrategies, proposeForm)); err != nil {
+	if err := components.Render(w, r, title, IdeaDetail(data, ch, idea, notes, notesTruncated, current, history, authorNames, citedNotes, canWrite, form, verdictForm, activeStrategies, proposeForm)); err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 	}
 }
@@ -965,4 +980,27 @@ func (h *Handlers) verdictAuthorDisplayNames(ctx context.Context, history []stor
 		}
 	}
 	return names, nil
+}
+
+// citedResearchNotes resolves the UNION of every CitedResearchNoteIDs
+// across history (and current, when non-nil) to its store.ResearchNote in
+// ONE batched store.ResearchStore.GetByIDs call (FR9, FR16/NFR2) -- never
+// one GetByID call per citation per verdict version, so an Idea with a
+// long verdict history citing many notes still issues a single query.
+// views.templ's citedNoteBody reads this map by id; an id absent from it
+// (should not happen -- see store.ResearchStore.GetByIDs's doc comment)
+// renders as a benign "note unavailable" marker rather than panicking.
+func (h *Handlers) citedResearchNotes(ctx context.Context, history []store.Verdict, current *store.Verdict) (map[uuid.UUID]store.ResearchNote, error) {
+	var ids []uuid.UUID
+	for _, v := range history {
+		ids = append(ids, v.CitedResearchNoteIDs...)
+	}
+	if current != nil {
+		ids = append(ids, current.CitedResearchNoteIDs...)
+	}
+	notes, err := h.store.Research().GetByIDs(ctx, ids)
+	if err != nil {
+		return nil, fmt.Errorf("load cited research notes: %w", err)
+	}
+	return notes, nil
 }
