@@ -77,7 +77,7 @@ func newMyWorkFixture(t *testing.T) *myWorkFixture {
 
 	srv := server.New(st)
 	reg := server.NewRegistry(srv, st)
-	tools.RegisterMyWork(reg, st.MyWork())
+	tools.RegisterMyWork(reg, st.MyWork(), st.Research())
 
 	handler := server.NewHTTPHandler(srv, creds, server.ResourceMetadataConfig{
 		Resource:            "https://mcp.example.com",

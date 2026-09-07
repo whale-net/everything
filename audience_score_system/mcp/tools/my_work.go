@@ -20,6 +20,7 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/google/uuid"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 
 	"github.com/whale-net/everything/audience_score_system/mcp/server"
@@ -104,7 +105,11 @@ type ChannelWorkSummaryOutput struct {
 	LatestOutcome    *PredictionVsOutcomeRowOutput `json:"latest_outcome,omitempty" jsonschema:"This Channel's most-recently-published prediction-vs-outcome comparison; omitted if none qualifies yet -- see get_prediction_vs_outcome's qualifying-row rule"`
 }
 
-func toChannelWorkSummaryOutput(s store.ChannelWorkSummary) ChannelWorkSummaryOutput {
+// toChannelWorkSummaryOutput renders s. relByNote is get_my_work's
+// (issue #1942, FR11/FR16/NFR2) SINGLE relation map, batch-resolved ONCE
+// across every Channel summary in the response (see getMyWork below) --
+// never one ListRelationsForNotes call per Channel.
+func toChannelWorkSummaryOutput(s store.ChannelWorkSummary, relByNote map[uuid.UUID][]store.NoteRelation) ChannelWorkSummaryOutput {
 	out := ChannelWorkSummaryOutput{
 		Channel: ChannelIdentityOutput{
 			ChannelID:                s.Channel.ID.String(),
@@ -127,7 +132,7 @@ func toChannelWorkSummaryOutput(s store.ChannelWorkSummary) ChannelWorkSummaryOu
 		// notes query (NFR9's 5-statement budget) does not join to
 		// person for authorship the way BrowseStore's does -- only
 		// AuthorPersonID is available here.
-		out.ResearchNotes = append(out.ResearchNotes, toResearchNoteOutput(n, ""))
+		out.ResearchNotes = append(out.ResearchNotes, toResearchNoteOutput(n, "", relByNote[n.ID]))
 	}
 	if s.LatestVerdict != nil {
 		v := toMyWorkVerdictOutput(*s.LatestVerdict)
@@ -149,21 +154,30 @@ type GetMyWorkOutput struct {
 	Truncated []string `json:"truncated" jsonschema:"Section names whose result was capped at its documented default limit; empty if nothing was cut"`
 }
 
-// RegisterMyWork registers get_my_work via server.RegisterRead.
-func RegisterMyWork(reg *server.Registry, myWork store.MyWorkStore) {
+// RegisterMyWork registers get_my_work via server.RegisterRead. research
+// backs the batched research-note-relations read (issue #1942, FR11) --
+// see getMyWork's doc comment for why it is resolved ONCE per whole
+// response, not once per Channel.
+func RegisterMyWork(reg *server.Registry, myWork store.MyWorkStore, research store.ResearchStore) {
 	server.RegisterRead(reg, &mcp.Tool{
 		Name: "get_my_work",
 		Description: "Report the calling Person's own cross-Channel work in one call (FR27): for every Channel the " +
-			"caller currently holds an open role on, their role there, recent research notes, the Channel's most " +
-			"recently recorded viability verdict, its video_script counts by status, and its most recent prediction-vs-outcome " +
-			"comparison. Re-derived fresh on every call from the caller's currently-held roles (FR28) -- a role " +
-			"revoked between two calls drops that Channel out of the very next call's result, with no re-auth or " +
-			"reconnect required. A caller with no roles anywhere gets channels: [], not an error. The channel list is " +
-			"capped at a documented default; see truncated.",
-	}, getMyWork(myWork))
+			"caller currently holds an open role on, their role there, recent research notes (each with its own " +
+			"relations, FR11), the Channel's most recently recorded viability verdict, its video_script counts by " +
+			"status, and its most recent prediction-vs-outcome comparison. Re-derived fresh on every call from the " +
+			"caller's currently-held roles (FR28) -- a role revoked between two calls drops that Channel out of the " +
+			"very next call's result, with no re-auth or reconnect required. A caller with no roles anywhere gets " +
+			"channels: [], not an error. The channel list is capped at a documented default; see truncated.",
+	}, getMyWork(myWork, research))
 }
 
-func getMyWork(myWork store.MyWorkStore) mcp.ToolHandlerFor[GetMyWorkInput, GetMyWorkOutput] {
+// getMyWork batch-resolves relations for EVERY returned Channel's
+// LatestNotes in ONE ListRelationsForNotes call across the whole response
+// (issue #1942, FR11/FR16/NFR2) -- collecting note ids from every trimmed
+// summary first, then a single relation read, rather than one read per
+// Channel (which would turn a cross-Channel aggregate into an N+1 on top
+// of SummariesForPerson's own already-bounded query set).
+func getMyWork(myWork store.MyWorkStore, research store.ResearchStore) mcp.ToolHandlerFor[GetMyWorkInput, GetMyWorkOutput] {
 	return func(ctx context.Context, _ *mcp.CallToolRequest, in GetMyWorkInput) (*mcp.CallToolResult, GetMyWorkOutput, error) {
 		person := server.PersonFromContext(ctx)
 		if person == nil {
@@ -182,12 +196,23 @@ func getMyWork(myWork store.MyWorkStore) mcp.ToolHandlerFor[GetMyWorkInput, GetM
 
 		trimmed, truncated := truncateSlice(summaries, defaultMyWorkChannelsLimit)
 
+		var noteIDs []uuid.UUID
+		for _, s := range trimmed {
+			for _, n := range s.LatestNotes {
+				noteIDs = append(noteIDs, n.ID)
+			}
+		}
+		relByNote, err := research.ListRelationsForNotes(ctx, noteIDs)
+		if err != nil {
+			return nil, GetMyWorkOutput{}, fmt.Errorf("get_my_work: load research note relations: %w", err)
+		}
+
 		out := GetMyWorkOutput{Channels: make([]ChannelWorkSummaryOutput, 0, len(trimmed)), Truncated: []string{}}
 		if truncated {
 			out.Truncated = append(out.Truncated, myWorkChannelsSection)
 		}
 		for _, s := range trimmed {
-			out.Channels = append(out.Channels, toChannelWorkSummaryOutput(s))
+			out.Channels = append(out.Channels, toChannelWorkSummaryOutput(s, relByNote))
 		}
 		return nil, out, nil
 	}

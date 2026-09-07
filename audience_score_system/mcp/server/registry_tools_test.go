@@ -79,7 +79,7 @@ func TestRegistry_RetiredScheduleDraftAndPacingTools_NotRegistered(t *testing.T)
 	tools.RegisterOutcomeBar(reg, st.OutcomeBars(), st.Calibration())
 	tools.RegisterTriggerChannelSync(reg, st.Channels(), noopScheduleTrigger{})
 	tools.RegisterAccess(reg, st)
-	tools.RegisterMyWork(reg, st.MyWork())
+	tools.RegisterMyWork(reg, st.MyWork(), st.Research())
 	tools.RegisterChannelAccess(reg, st.Access(), st.Roles())
 
 	serverTransport, clientTransport := mcp.NewInMemoryTransports()

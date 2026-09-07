@@ -77,6 +77,34 @@ func (i SaveResearchNoteInput) ChannelScopeID() uuid.UUID {
 // IdempotencyKey implements server.IdempotencyKeyed.
 func (i SaveResearchNoteInput) IdempotencyKey() string { return i.IdempotencyKeyArg }
 
+// NoteRelationOutput is one store.NoteRelation as save_research_note and
+// list_research_notes render it inline on ResearchNoteOutput (FR11): the
+// OTHER note this edge points to/from, its relation_type, and which end
+// THIS note sits on.
+type NoteRelationOutput struct {
+	RelatedNoteID string `json:"related_note_id" jsonschema:"The other research note in this relation, as a UUID string"`
+	RelationType  string `json:"relation_type" jsonschema:"One of: supersedes, excludes, caveats, follows_up, summarizes"`
+	// Direction spells out which end of the edge this note sits on:
+	// "outgoing" means THIS note declared the relation (it points AT
+	// related_note_id); "incoming" means related_note_id declared a
+	// relation pointing AT this note. Direction changes what
+	// supersedes/excludes MEAN: as an outgoing relation, this note retires
+	// related_note_id (related_note_id drops out of v_current_research_note);
+	// as an incoming relation, the reverse holds -- related_note_id retires
+	// THIS note, so this note itself is the one no longer current.
+	// caveats/follows_up/summarizes never retire either side, in either
+	// direction.
+	Direction string `json:"direction" jsonschema:"'outgoing' (this note declared the relation) or 'incoming' (the other note declared a relation pointing at this one). For supersedes/excludes specifically: incoming means THIS note is the one being retired, not the other note."`
+}
+
+func toNoteRelationOutput(r store.NoteRelation) NoteRelationOutput {
+	return NoteRelationOutput{
+		RelatedNoteID: r.RelatedNoteID.String(),
+		RelationType:  string(r.RelationType),
+		Direction:     string(r.Direction),
+	}
+}
+
 // ResearchNoteOutput is the shape both save_research_note and
 // list_research_notes render for a single research note.
 type ResearchNoteOutput struct {
@@ -103,19 +131,33 @@ type ResearchNoteOutput struct {
 	// pattern) would otherwise render identical timestamps and make that
 	// cursor ambiguous.
 	CreatedAt string `json:"created_at" jsonschema:"When this note was created, RFC3339 (with sub-second precision -- use verbatim as a since/before pagination cursor)"`
+	// Relations is this note's own research_note_relation edges, inline
+	// (FR11, issue #1942) -- never a separate lookup tool. Both directions
+	// appear: an entry with direction=outgoing is one this note declared;
+	// an entry with direction=incoming is one another note declared
+	// pointing at this note -- see NoteRelationOutput.Direction for what
+	// incoming supersedes/excludes specifically means (this note is
+	// retired). Omitted (never an empty array) when this note has no
+	// relations at all.
+	Relations []NoteRelationOutput `json:"relations,omitempty" jsonschema:"This note's own relation edges in both directions (FR11); see each entry's direction field for outgoing vs incoming semantics. Absent when this note has no relations."`
 }
 
 // toResearchNoteOutput renders n (plus its already-resolved author display
-// name) as ResearchNoteOutput -- the SINGLE conversion save_research_note,
-// list_research_notes, get_channel_overview (browse.go), and my_work
-// (my_work.go) all route through (FR16/NFR2), so none of them can render
-// a note's Idea/thread differently. Cited is derived by n.Cited() (FR10,
-// FR12 -- store.ResearchNote.Cited, models.go) at this single call site so
-// callers can never disagree on that rule either. IdeaID/ThreadID/
-// ThreadTitle are all derived from n's already-resolved thread (issue
-// #1940, FR2 Stage 2b) -- ThreadTitle is nil exactly when ThreadID is nil
-// (store.ResearchNote's own invariant), never independently.
-func toResearchNoteOutput(n store.ResearchNote, authorDisplayName string) ResearchNoteOutput {
+// name and relations) as ResearchNoteOutput -- the SINGLE conversion
+// save_research_note, list_research_notes, get_channel_overview
+// (browse.go), and my_work (my_work.go) all route through (FR16/NFR2), so
+// none of them can render a note's Idea/thread/relations differently.
+// Cited is derived by n.Cited() (FR10, FR12 -- store.ResearchNote.Cited,
+// models.go) at this single call site so callers can never disagree on
+// that rule either. IdeaID/ThreadID/ThreadTitle are all derived from n's
+// already-resolved thread (issue #1940, FR2 Stage 2b) -- ThreadTitle is
+// nil exactly when ThreadID is nil (store.ResearchNote's own invariant),
+// never independently. relations is this note's own store.NoteRelation
+// slice (issue #1942, FR11) -- callers batch-resolve it via
+// store.ResearchStore.ListRelationsForNotes ONCE per response and pass in
+// just this note's entry (nil is fine: it renders as an absent Relations
+// field, never an empty array).
+func toResearchNoteOutput(n store.ResearchNote, authorDisplayName string, relations []store.NoteRelation) ResearchNoteOutput {
 	out := ResearchNoteOutput{
 		ID:                n.ID.String(),
 		ChannelID:         n.ChannelID.String(),
@@ -137,6 +179,9 @@ func toResearchNoteOutput(n store.ResearchNote, authorDisplayName string) Resear
 	if n.ThreadTitle != nil {
 		out.ThreadTitle = n.ThreadTitle
 	}
+	for _, r := range relations {
+		out.Relations = append(out.Relations, toNoteRelationOutput(r))
+	}
 	return out
 }
 
@@ -153,7 +198,8 @@ func registerSaveResearchNote(reg *server.Registry, research store.ResearchStore
 			"thread, not from idea_id directly -- idea_id is thread-resolution input (see its own description) and " +
 			"is rejected if it conflicts with thread_id's resolved Idea. Optionally add relations to prior notes in " +
 			"the same resolved thread: supersedes/excludes retire the target note, caveats/follows_up/summarizes do " +
-			"not. Always supply idempotency_key: a retry without one may create a duplicate note.",
+			"not. The response's relations field reflects the outgoing edges this call just wrote. Always supply " +
+			"idempotency_key: a retry without one may create a duplicate note.",
 	}, saveResearchNoteMutate(research), saveResearchNoteRender(research, persons))
 }
 
@@ -230,7 +276,11 @@ func saveResearchNoteMutate(research store.ResearchStore) server.WriteMutate[Sav
 // saveResearchNoteRender always re-reads the note (and its author's
 // current display name) from Postgres rather than trusting anything
 // cached from mutate -- see server.RegisterWrite's doc on why render runs
-// on every call, replay included.
+// on every call, replay included. It also re-reads this note's own
+// relations (issue #1942, FR11) via the identical
+// ListRelationsForNotes([]uuid.UUID{ref}) call list_research_notes makes
+// per batch, so a save carrying relations reflects what was actually
+// written, not what the caller merely asked for.
 func saveResearchNoteRender(research store.ResearchStore, persons store.PersonStore) server.WriteRender[ResearchNoteOutput] {
 	return func(ctx context.Context, ref uuid.UUID) (*mcp.CallToolResult, ResearchNoteOutput, error) {
 		note, err := research.GetByID(ctx, ref)
@@ -241,7 +291,11 @@ func saveResearchNoteRender(research store.ResearchStore, persons store.PersonSt
 		if err != nil {
 			return nil, ResearchNoteOutput{}, fmt.Errorf("load research note author: %w", err)
 		}
-		return nil, toResearchNoteOutput(note, author.DisplayName), nil
+		relByNote, err := research.ListRelationsForNotes(ctx, []uuid.UUID{note.ID})
+		if err != nil {
+			return nil, ResearchNoteOutput{}, fmt.Errorf("load research note relations: %w", err)
+		}
+		return nil, toResearchNoteOutput(note, author.DisplayName, relByNote[note.ID]), nil
 	}
 }
 
@@ -297,7 +351,9 @@ func registerListResearchNotes(reg *server.Registry, research store.ResearchStor
 	server.RegisterRead(reg, &mcp.Tool{
 		Name: "list_research_notes",
 		Description: "List research notes for a Channel, most-recent first, each carrying an explicit cited boolean " +
-			"(FR10) and its resolved thread_id/thread_title. Optionally restrict to one Idea (idea_id, matched via " +
+			"(FR10), its resolved thread_id/thread_title, and its own relations field (FR11) -- both directions: " +
+			"outgoing edges this note declared, and incoming edges another note declared pointing at it (an incoming " +
+			"supersedes/excludes means THIS note is retired). Optionally restrict to one Idea (idea_id, matched via " +
 			"each note's resolved thread), one thread (thread_id), and/or partition into cited_only vs uncited_only " +
 			"-- filters compose. Set current_only to exclude notes superseded or excluded by a later note (FR8). " +
 			"Response is capped at limit (default 50); see truncated. Page backward past truncation by re-calling " +
@@ -353,9 +409,21 @@ func listResearchNotes(research store.ResearchStore) mcp.ToolHandlerFor[ListRese
 			return nil, ListResearchNotesOutput{}, err
 		}
 
+		// Relations are batch-resolved in ONE ListRelationsForNotes call for
+		// the whole page of notes (issue #1942, FR11/FR16/NFR2) -- never one
+		// call per note.
+		noteIDs := make([]uuid.UUID, len(notes))
+		for i, n := range notes {
+			noteIDs[i] = n.ID
+		}
+		relByNote, err := research.ListRelationsForNotes(ctx, noteIDs)
+		if err != nil {
+			return nil, ListResearchNotesOutput{}, fmt.Errorf("load research note relations: %w", err)
+		}
+
 		out := ListResearchNotesOutput{Notes: make([]ResearchNoteOutput, 0, len(notes)), Truncated: truncated}
 		for _, n := range notes {
-			out.Notes = append(out.Notes, toResearchNoteOutput(n.ResearchNote, n.AuthorDisplayName))
+			out.Notes = append(out.Notes, toResearchNoteOutput(n.ResearchNote, n.AuthorDisplayName, relByNote[n.ID]))
 		}
 		return nil, out, nil
 	}

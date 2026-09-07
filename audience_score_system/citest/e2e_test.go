@@ -264,7 +264,7 @@ func newWorld(t *testing.T) *world {
 	mcptools.RegisterMatches(reg, st)
 	mcptools.RegisterBrowse(reg, st)
 	mcptools.RegisterAccess(reg, st)
-	mcptools.RegisterMyWork(reg, st.MyWork())
+	mcptools.RegisterMyWork(reg, st.MyWork(), st.Research())
 	mcptools.RegisterChannelAccess(reg, st.Access(), st.Roles())
 	mcptools.RegisterOutcomeBar(reg, st.OutcomeBars(), st.Calibration())
 	mcpHandler := mcpserver.NewHTTPHandler(srv, creds, mcpserver.ResourceMetadataConfig{

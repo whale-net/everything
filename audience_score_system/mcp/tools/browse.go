@@ -530,8 +530,20 @@ func getChannelOverview(deps overviewDeps) mcp.ToolHandlerFor[GetChannelOverview
 			if truncated {
 				out.Truncated = append(out.Truncated, overviewSectionNotes)
 			}
+			// Relations are batch-resolved in ONE ListRelationsForNotes call
+			// for this section's whole note list (issue #1942, FR11/FR16/
+			// NFR2) -- the same shared toResearchNoteOutput helper
+			// list_research_notes uses, never a second relations query path.
+			noteIDs := make([]uuid.UUID, len(notes))
+			for i, n := range notes {
+				noteIDs[i] = n.ID
+			}
+			relByNote, err := deps.research.ListRelationsForNotes(ctx, noteIDs)
+			if err != nil {
+				return nil, GetChannelOverviewOutput{}, fmt.Errorf("get_channel_overview: load research note relations: %w", err)
+			}
 			for _, n := range notes {
-				out.ResearchNotes = append(out.ResearchNotes, toResearchNoteOutput(n.ResearchNote, n.AuthorDisplayName))
+				out.ResearchNotes = append(out.ResearchNotes, toResearchNoteOutput(n.ResearchNote, n.AuthorDisplayName, relByNote[n.ID]))
 			}
 		}
 
