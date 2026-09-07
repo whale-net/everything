@@ -46,7 +46,7 @@ templ List(data components.LayoutData, ch store.Channel, scripts []store.VideoSc
 	@components.Layout(data) {
 		<div class="card bg-base-100 border border-base-300 shadow-sm">
 			<div class="card-body">
-				<h1 class="card-title">{ ch.Title } schedule</h1>
+				<h1 class="card-title">{ ch.Title } scripts</h1>
 				if len(scripts) == 0 {
 					<p class="text-base-content/70">No video scripts yet.</p>
 				}
@@ -102,10 +102,10 @@ templ scriptCard(s store.VideoScriptDetail, canApprove bool) {
 templ entryActions(s store.VideoScriptDetail) {
 	<div class="card-actions justify-end mt-2 items-center gap-2">
 		if s.Script.Status == store.VideoScriptStatusProposed {
-			<form method="post" action={ templ.URL("/schedule/" + s.Script.ID.String() + "/approve") }>
+			<form method="post" action={ templ.URL("/scripts/" + s.Script.ID.String() + "/approve") }>
 				<button type="submit" class="btn btn-primary btn-sm">Greenlight</button>
 			</form>
-			<form method="post" action={ templ.URL("/schedule/" + s.Script.ID.String() + "/deny") }>
+			<form method="post" action={ templ.URL("/scripts/" + s.Script.ID.String() + "/deny") }>
 				<button type="submit" class="btn btn-secondary btn-sm">Deny</button>
 			</form>
 		} else if s.Script.Status == store.VideoScriptStatusGreenlit {
@@ -115,7 +115,7 @@ templ entryActions(s store.VideoScriptDetail) {
 					can no longer be archived.
 				</p>
 			} else {
-				<form method="post" action={ templ.URL("/schedule/" + s.Script.ID.String() + "/archive") }>
+				<form method="post" action={ templ.URL("/scripts/" + s.Script.ID.String() + "/archive") }>
 					<button type="submit" class="btn btn-secondary btn-sm">Archive</button>
 				</form>
 			}

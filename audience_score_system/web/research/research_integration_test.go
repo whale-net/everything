@@ -3016,11 +3016,11 @@ func TestProposeVideoScriptForm_NoActiveStrategy_ExplanatoryLine_NoSubmit(t *tes
 	assert.NotContains(t, body, "/video-scripts\"", "no submit form may render without an active Strategy")
 }
 
-// TestHandleProposeVideoScript_HappyPath_CreatesProposedRow_RedirectsToSchedule
-// is FR3's happy path: a valid POST 303s to /channels/{id}/schedule and
+// TestHandleProposeVideoScript_HappyPath_CreatesProposedRow_RedirectsToScripts
+// is FR3's happy path: a valid POST 303s to /channels/{id}/scripts and
 // writes a `video_script` row bound to the Idea's current verdict, the
 // picked Strategy, and the poster.
-func TestHandleProposeVideoScript_HappyPath_CreatesProposedRow_RedirectsToSchedule(t *testing.T) {
+func TestHandleProposeVideoScript_HappyPath_CreatesProposedRow_RedirectsToScripts(t *testing.T) {
 	ctx := context.Background()
 	s := newResearchTestStack(t)
 	ch, creator := s.setupChannel(t, ctx)
@@ -3036,7 +3036,7 @@ func TestHandleProposeVideoScript_HappyPath_CreatesProposedRow_RedirectsToSchedu
 		"script_text":     {"the script body"},
 	})
 	require.Equal(t, http.StatusSeeOther, w.Code, "body: %s", w.Body.String())
-	assert.Equal(t, "/channels/"+ch.ID.String()+"/schedule", w.Header().Get("Location"))
+	assert.Equal(t, "/channels/"+ch.ID.String()+"/scripts", w.Header().Get("Location"))
 
 	scripts := s.allVideoScripts(t, ctx, ch.ID)
 	require.Len(t, scripts, 1)

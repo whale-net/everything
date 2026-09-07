@@ -459,7 +459,8 @@ above established in outline:
   `greenlight_video_script`/`deny_video_script`/`archive_video_script`
   (`mcp/tools/video_script.go`) and `web/schedule.Handlers.
   HandleGreenlight`/`HandleDeny`/`HandleArchive` (`POST
-  /schedule/{scriptID}/approve|deny|archive`) call the identical
+  /scripts/{scriptID}/approve|deny|archive`, renamed from `/schedule` by
+  FR20/FR22, #2030) call the identical
   `store.VideoScriptStore` transition methods and the identical
   `store.CanApprove` (Creator-tier) check -- the same "two independent,
   equally-capable front ends" relationship the retired-C8 amendment above
@@ -467,7 +468,8 @@ above established in outline:
 - **C10 (browsing):** dual-surface under `video_script` (FR42/FR48) --
   `get_channel_overview`'s `video_scripts` section (`mcp/tools/browse.go`,
   FR42) and `web/schedule.Handlers.HandleList` (`GET
-  /channels/{id}/schedule`, FR48) both read a Channel's `video_script`
+  /channels/{id}/scripts`, FR48; the route was renamed to this by
+  FR20/FR22, #2030) both read a Channel's `video_script`
   rows (title, status, target date if set, bound verdict) in place of the
   retired `schedule_entry` listing; `web`'s list view stays `store.CanRead`
   (Founder/Co-Creator/Analyst), unchanged from its pre-amendment

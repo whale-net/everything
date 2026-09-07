@@ -1,7 +1,9 @@
 // Package schedule is `web`'s Creator-tier video_script approval surface
 // (milestone video-script-model, FR48/FR49, issue #1834) -- GET
-// /channels/{id}/schedule, POST /schedule/{scriptID}/approve, POST
-// /schedule/{scriptID}/deny, and POST /schedule/{scriptID}/archive, all
+// /channels/{id}/scripts, POST /scripts/{scriptID}/approve, POST
+// /scripts/{scriptID}/deny, and POST /scripts/{scriptID}/archive (FR20/
+// FR22, issue #2030 -- renamed from /schedule to match the video_script
+// model; package name and handler names are unchanged), all
 // mounted behind web/auth.Authenticator.RequireSignedIn (see ../main.go's
 // setupRoutes). Handlers and templ views live together in this one
 // package, mirroring web/invite's package doc comment rationale: the
@@ -66,10 +68,10 @@ func New(st *store.Store) *Handlers {
 	return &Handlers{store: st}
 }
 
-// HandleList serves GET /channels/{id}/schedule (FR48's read side).
+// HandleList serves GET /channels/{id}/scripts (FR48's read side).
 // Visible to Founder, Co-Creator, and Analyst (store.CanRead) -- canApprove additionally
 // gates whether the rendered view includes the greenlight/deny/archive
-// affordances (views.templ's entryActions), never whether the schedule
+// affordances (views.templ's entryActions), never whether the scripts list
 // itself is visible.
 func (h *Handlers) HandleList(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
@@ -126,14 +128,14 @@ func (h *Handlers) HandleList(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	title := ch.Title + " schedule"
+	title := ch.Title + " scripts"
 	data := components.LayoutData{Title: title, User: person}
 	if err := components.Render(w, r, title, List(data, ch, scripts, canApprove)); err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 	}
 }
 
-// HandleGreenlight serves POST /schedule/{scriptID}/approve (FR49, FR37).
+// HandleGreenlight serves POST /scripts/{scriptID}/approve (FR49, FR37).
 // The route path keeps its pre-existing "approve" spelling (FR49's
 // route-and-package-naming note); the store transition it drives is
 // video_script's proposed->greenlit.
@@ -143,7 +145,7 @@ func (h *Handlers) HandleGreenlight(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-// HandleDeny serves POST /schedule/{scriptID}/deny (FR49, FR38):
+// HandleDeny serves POST /scripts/{scriptID}/deny (FR49, FR38):
 // video_script's proposed->denied transition.
 func (h *Handlers) HandleDeny(w http.ResponseWriter, r *http.Request) {
 	h.mutate(w, r, func(ctx context.Context, scriptID, personID uuid.UUID) error {
@@ -151,7 +153,7 @@ func (h *Handlers) HandleDeny(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-// HandleArchive serves POST /schedule/{scriptID}/archive (FR49, FR39):
+// HandleArchive serves POST /scripts/{scriptID}/archive (FR49, FR39):
 // video_script's greenlit->archived transition, frozen once the script's
 // matched video has published (see mutate's ErrVideoScriptPublished
 // handling below).
@@ -167,7 +169,7 @@ func (h *Handlers) HandleArchive(w http.ResponseWriter, r *http.Request) {
 // (Creator-tier -- Founder or Co-Creator, symmetrically per FR32, NFR5 --
 // re-derived fresh on every call, never trusted from the session or the
 // client), run fn, and translate the result: fn succeeding redirects back
-// to the schedule page (303); store.ErrVideoScriptPublished (FR39's
+// to the scripts page (303); store.ErrVideoScriptPublished (FR39's
 // freeze) maps to 409 specifically, and any other error from fn (an
 // invalid transition per FR40 -- e.g. greenlighting an already-decided
 // script, or archiving one that is not greenlit) also 409s with no
@@ -203,7 +205,7 @@ func (h *Handlers) mutate(w http.ResponseWriter, r *http.Request, fn func(ctx co
 		return
 	}
 	if !canApprove {
-		http.Error(w, "forbidden: only a Channel's Founder or Co-Creator may change its schedule", http.StatusForbidden)
+		http.Error(w, "forbidden: only a Channel's Founder or Co-Creator may change its scripts", http.StatusForbidden)
 		return
 	}
 
@@ -222,5 +224,5 @@ func (h *Handlers) mutate(w http.ResponseWriter, r *http.Request, fn func(ctx co
 		return
 	}
 
-	http.Redirect(w, r, "/channels/"+script.ChannelID.String()+"/schedule", http.StatusSeeOther)
+	http.Redirect(w, r, "/channels/"+script.ChannelID.String()+"/scripts", http.StatusSeeOther)
 }

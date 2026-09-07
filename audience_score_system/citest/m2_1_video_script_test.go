@@ -330,7 +330,7 @@ func TestE2E_M21_VideoScriptMilestone(t *testing.T) {
 			Title: "Cross Surface Greenlight Video", ScriptText: "proposed over MCP, greenlit over web", IdempotencyKeyArg: uuid.NewString(),
 		}))
 
-		rec := w.postForm(creatorCookie, "/schedule/"+script.VideoScriptID+"/approve", nil)
+		rec := w.postForm(creatorCookie, "/scripts/"+script.VideoScriptID+"/approve", nil)
 		require.Equal(t, http.StatusSeeOther, rec.Code, "body: %s", rec.Body.String())
 
 		overview := decode[mcptools.GetChannelOverviewOutput](t, callTool(t, w.mcpConnect(analyst.ID), "get_channel_overview", mcptools.GetChannelOverviewInput{ChannelID: vsc.ch.ID.String()}))
@@ -354,7 +354,7 @@ func TestE2E_M21_VideoScriptMilestone(t *testing.T) {
 			Title: "Cross Surface Deny Video", ScriptText: "proposed over MCP, denied over web", IdempotencyKeyArg: uuid.NewString(),
 		}))
 
-		rec := w.postForm(creatorCookie, "/schedule/"+script.VideoScriptID+"/deny", nil)
+		rec := w.postForm(creatorCookie, "/scripts/"+script.VideoScriptID+"/deny", nil)
 		require.Equal(t, http.StatusSeeOther, rec.Code, "body: %s", rec.Body.String())
 
 		scriptID := uuid.MustParse(script.VideoScriptID)
@@ -397,7 +397,7 @@ func TestE2E_M21_VideoScriptMilestone(t *testing.T) {
 		})
 		assert.True(t, greenlightRes.IsError, "FR37: an Analyst calling greenlight_video_script must be rejected")
 		assertUnchanged(t)
-		recGreenlight := w.postForm(analystCookie, "/schedule/"+script.VideoScriptID+"/approve", nil)
+		recGreenlight := w.postForm(analystCookie, "/scripts/"+script.VideoScriptID+"/approve", nil)
 		assert.Equal(t, http.StatusForbidden, recGreenlight.Code)
 		assertUnchanged(t)
 
@@ -406,7 +406,7 @@ func TestE2E_M21_VideoScriptMilestone(t *testing.T) {
 		})
 		assert.True(t, denyRes.IsError, "FR38: an Analyst calling deny_video_script must be rejected")
 		assertUnchanged(t)
-		recDeny := w.postForm(analystCookie, "/schedule/"+script.VideoScriptID+"/deny", nil)
+		recDeny := w.postForm(analystCookie, "/scripts/"+script.VideoScriptID+"/deny", nil)
 		assert.Equal(t, http.StatusForbidden, recDeny.Code)
 		assertUnchanged(t)
 
@@ -415,7 +415,7 @@ func TestE2E_M21_VideoScriptMilestone(t *testing.T) {
 		})
 		assert.True(t, archiveRes.IsError, "FR39: an Analyst calling archive_video_script must be rejected")
 		assertUnchanged(t)
-		recArchive := w.postForm(analystCookie, "/schedule/"+script.VideoScriptID+"/archive", nil)
+		recArchive := w.postForm(analystCookie, "/scripts/"+script.VideoScriptID+"/archive", nil)
 		assert.Equal(t, http.StatusForbidden, recArchive.Code)
 		assertUnchanged(t)
 	})
@@ -443,7 +443,7 @@ func TestE2E_M21_VideoScriptMilestone(t *testing.T) {
 
 		// greenlight -- web.
 		s2 := propose(t, "Co-Creator Greenlight Web")
-		recG2 := w.postForm(coCreatorCookie, "/schedule/"+s2.VideoScriptID+"/approve", nil)
+		recG2 := w.postForm(coCreatorCookie, "/scripts/"+s2.VideoScriptID+"/approve", nil)
 		require.Equal(t, http.StatusSeeOther, recG2.Code, "body: %s", recG2.Body.String())
 		got2, err := w.st.VideoScripts().GetByID(ctx, uuid.MustParse(s2.VideoScriptID))
 		require.NoError(t, err)
@@ -458,7 +458,7 @@ func TestE2E_M21_VideoScriptMilestone(t *testing.T) {
 
 		// deny -- web.
 		s4 := propose(t, "Co-Creator Deny Web")
-		recD4 := w.postForm(coCreatorCookie, "/schedule/"+s4.VideoScriptID+"/deny", nil)
+		recD4 := w.postForm(coCreatorCookie, "/scripts/"+s4.VideoScriptID+"/deny", nil)
 		require.Equal(t, http.StatusSeeOther, recD4.Code, "body: %s", recD4.Body.String())
 		got4, err := w.st.VideoScripts().GetByID(ctx, uuid.MustParse(s4.VideoScriptID))
 		require.NoError(t, err)
@@ -479,7 +479,7 @@ func TestE2E_M21_VideoScriptMilestone(t *testing.T) {
 		_ = decode[mcptools.VideoScriptOutput](t, callTool(t, csCoCreator, "greenlight_video_script", mcptools.GreenlightVideoScriptInput{
 			ChannelID: vsc.ch.ID.String(), VideoScriptID: s6.VideoScriptID, IdempotencyKeyArg: uuid.NewString(),
 		}))
-		recA6 := w.postForm(coCreatorCookie, "/schedule/"+s6.VideoScriptID+"/archive", nil)
+		recA6 := w.postForm(coCreatorCookie, "/scripts/"+s6.VideoScriptID+"/archive", nil)
 		require.Equal(t, http.StatusSeeOther, recA6.Code, "body: %s", recA6.Body.String())
 		got6, err := w.st.VideoScripts().GetByID(ctx, uuid.MustParse(s6.VideoScriptID))
 		require.NoError(t, err)
@@ -526,7 +526,7 @@ func TestE2E_M21_VideoScriptMilestone(t *testing.T) {
 		assert.Equal(t, store.VideoScriptStatusGreenlit, gotAfterMCP.Status, "the rejected MCP archive attempt must cause no state change")
 
 		// Web archive attempt: 409, no state change either.
-		recWeb := w.postForm(creatorCookie, "/schedule/"+script.VideoScriptID+"/archive", nil)
+		recWeb := w.postForm(creatorCookie, "/scripts/"+script.VideoScriptID+"/archive", nil)
 		assert.Equal(t, http.StatusConflict, recWeb.Code, "FR39: the web archive route must 409 once published")
 		gotAfterWeb, err := w.st.VideoScripts().GetByID(ctx, scriptID)
 		require.NoError(t, err)
@@ -602,7 +602,7 @@ func TestE2E_M21_VideoScriptMilestone(t *testing.T) {
 		}
 		require.NotNil(t, webMatch, "the just-synced web video must have webScript as its best guess")
 
-		recWeb := w.postForm(creatorCookie, "/schedule/"+webScript.VideoScriptID+"/archive", nil)
+		recWeb := w.postForm(creatorCookie, "/scripts/"+webScript.VideoScriptID+"/archive", nil)
 		require.Equal(t, http.StatusSeeOther, recWeb.Code, "body: %s", recWeb.Body.String())
 		gotWeb, err := w.st.VideoScripts().GetByID(ctx, uuid.MustParse(webScript.VideoScriptID))
 		require.NoError(t, err)

@@ -356,6 +356,14 @@ func TestE2E_M41_ResearchWebSaveBrowse(t *testing.T) {
 		assert.Contains(t, body, `href="/channels/`+ch.ID.String()+`/research"`)
 	})
 
+	// ── 7b: FR22 -- the Channel-detail page's scripts link targets the
+	// renamed /scripts path, not the retired /schedule path ─────────────
+	t.Run("7b_fr22_channel_detail_links_to_scripts", func(t *testing.T) {
+		body := w.renderChannelDetail(t, ch, creator)
+		assert.Contains(t, body, `href="/channels/`+ch.ID.String()+`/scripts"`)
+		assert.NotContains(t, body, `/channels/`+ch.ID.String()+`/schedule"`)
+	})
+
 	// ── 8: FR7, NFR3 -- a Person with no role on the Channel is rejected
 	// by both GET routes and both POST routes; nothing is written ────────
 	t.Run("8_fr7_nfr3_outsider_rejected_no_write", func(t *testing.T) {

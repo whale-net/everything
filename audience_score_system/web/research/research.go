@@ -1044,7 +1044,7 @@ func proposeFormWithError(form proposeFormData, msg string) proposeFormData {
 // NFR1-NFR3): proposes a video_script through the IDENTICAL
 // store.VideoScriptStore.Propose method save_video_script's mutate step
 // calls (mcp/tools/video_script.go, LB5 -- one write path, never a
-// parallel one), then 303-redirects to /channels/{id}/schedule (FR3),
+// parallel one), then 303-redirects to /channels/{id}/scripts (FR3),
 // where the new proposed row is immediately visible -- no separate
 // propose-confirmation page.
 //
@@ -1207,7 +1207,7 @@ func (h *Handlers) HandleProposeVideoScript(w http.ResponseWriter, r *http.Reque
 		return
 	}
 
-	http.Redirect(w, r, "/channels/"+channelID.String()+"/schedule", http.StatusSeeOther)
+	http.Redirect(w, r, "/channels/"+channelID.String()+"/scripts", http.StatusSeeOther)
 }
 
 // verdictAuthorDisplayNames resolves each distinct AuthorPersonID across
