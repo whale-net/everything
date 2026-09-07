@@ -29,6 +29,7 @@ go_test(
         "m2_multi_channel_test.go",
         "m3_calibration_test.go",
         "m4_1_research_web_test.go",
+        "m4_2_propose_web_test.go",
     ],
     gotags = ["integration"],
     tags = [
