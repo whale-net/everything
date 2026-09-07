@@ -47,10 +47,12 @@ go_test(
         "converters_test.go",
         "registration_test.go",
         "server_test.go",
+        "session_restart_consumer_test.go",
         "session_test.go",
     ],
     embed = [":handlers"],
     deps = [
+        "//libs/go/rmq",
         "//manmanv2/models:models",
         "//manmanv2/api/repository",
         "//manmanv2/protos:manmanpb",
