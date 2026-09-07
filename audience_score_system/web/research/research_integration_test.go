@@ -591,7 +591,11 @@ func TestHandleChannelIndex_FiftyOneNotes_TruncatedNoteAppearsInUnattachedSectio
 	require.Equal(t, http.StatusOK, w.Code, "body: %s", w.Body.String())
 	body := w.Body.String()
 
-	assert.Equal(t, 50, strings.Count(body, "unattached note "), "exactly 50 notes must render")
+	// Each of the 50 rendered notes appears TWICE: once in the unattached-
+	// notes section itself, and once as a relation-picker candidate in the
+	// save-note form's single thread group (#1945, FR15) -- both populated
+	// from the SAME Channel-wide notes page, no extra store call.
+	assert.Equal(t, 100, strings.Count(body, "unattached note "), "exactly 50 notes must render, each once in the unattached section and once in the relation picker")
 	assert.Contains(t, body, "most recent", "a truncation note must appear when the 50-row default page is hit")
 	// The Founder's save-note form (FR3, issue #1900) legitimately renders
 	// one <form> on this page now; NFR2's actual guarantee is that no
@@ -1425,11 +1429,13 @@ func TestHandleIdeaDetail_FiftyOneNotes_TruncatedNoPagingControl(t *testing.T) {
 	require.Equal(t, http.StatusOK, w.Code, "body: %s", w.Body.String())
 	body := w.Body.String()
 
-	// Each of the 50 rendered notes appears TWICE: once in the note list
-	// itself, and once as an <option> in the save-verdict form's citation
-	// multi-select (#1901, FR4) -- populated from the SAME notes slice, no
-	// extra store call and no paging of its own.
-	assert.Equal(t, 100, strings.Count(body, "idea note "), "exactly 50 notes must render, each once in the list and once in the citation multi-select")
+	// Each of the 50 rendered notes appears THREE times: once in the note
+	// list itself, once as an <option> in the save-verdict form's citation
+	// multi-select (#1901, FR4), and once as a relation-picker candidate in
+	// the save-note form's thread group (#1945, FR15) -- all three
+	// populated from the SAME notes slice, no extra store call and no
+	// paging of its own.
+	assert.Equal(t, 150, strings.Count(body, "idea note "), "exactly 50 notes must render, each once in the list, once in the citation multi-select, and once in the relation picker")
 	assert.Contains(t, body, "most recent", "a truncation note must appear")
 	// The Founder's save-note form (FR3, issue #1900) and save-verdict form
 	// (FR4, issue #1901) legitimately render two <form>s on this page now;
@@ -1495,6 +1501,7 @@ func TestHandleSaveNote_TextOnly_CreatesUnattachedNote_RedirectsToChannelIndex(t
 	w := s.doForm(t, "/channels/"+ch.ID.String()+"/research/notes", s.sessionCookie(t, ctx, creator.ID), url.Values{
 		"idempotency_key": {uuid.NewString()},
 		"text":            {"a plain research note"},
+		"thread_title":    {"Research"},
 	})
 	require.Equal(t, http.StatusSeeOther, w.Code, "body: %s", w.Body.String())
 	assert.Equal(t, "/channels/"+ch.ID.String()+"/research", w.Header().Get("Location"))
@@ -1530,6 +1537,7 @@ func TestHandleSaveNote_CoCreatorAndAnalyst_CanSave(t *testing.T) {
 			w := s.doForm(t, "/channels/"+ch.ID.String()+"/research/notes", s.sessionCookie(t, ctx, tc.person.ID), url.Values{
 				"idempotency_key": {uuid.NewString()},
 				"text":            {tc.name + "'s note"},
+				"thread_title":    {"Research"},
 			})
 			assert.Equal(t, http.StatusSeeOther, w.Code, "%s must be able to save, body: %s", tc.name, w.Body.String())
 		})
@@ -1550,6 +1558,7 @@ func TestHandleSaveNote_WithIdeaID_AttachesAndRedirectsToIdeaDetail(t *testing.T
 		"idempotency_key": {uuid.NewString()},
 		"text":            {"attached note"},
 		"idea_id":         {idea.ID.String()},
+		"thread_title":    {"Research"},
 	})
 	require.Equal(t, http.StatusSeeOther, w.Code, "body: %s", w.Body.String())
 	assert.Equal(t, "/channels/"+ch.ID.String()+"/research/ideas/"+idea.ID.String(), w.Header().Get("Location"))
@@ -1576,6 +1585,7 @@ func TestHandleSaveNote_SameIdempotencyKey_Twice_CreatesOneRow(t *testing.T) {
 	form := url.Values{
 		"idempotency_key": {key},
 		"text":            {"replayed note"},
+		"thread_title":    {"Research"},
 	}
 
 	w1 := s.doForm(t, "/channels/"+ch.ID.String()+"/research/notes", cookie, form)
@@ -1599,12 +1609,14 @@ func TestHandleSaveNote_DifferentIdempotencyKeys_CreatesTwoRows(t *testing.T) {
 	w1 := s.doForm(t, "/channels/"+ch.ID.String()+"/research/notes", cookie, url.Values{
 		"idempotency_key": {uuid.NewString()},
 		"text":            {"identical content"},
+		"thread_title":    {"Research"},
 	})
 	require.Equal(t, http.StatusSeeOther, w1.Code, "body: %s", w1.Body.String())
 
 	w2 := s.doForm(t, "/channels/"+ch.ID.String()+"/research/notes", cookie, url.Values{
 		"idempotency_key": {uuid.NewString()},
 		"text":            {"identical content"},
+		"thread_title":    {"Research"},
 	})
 	require.Equal(t, http.StatusSeeOther, w2.Code, "body: %s", w2.Body.String())
 
@@ -1677,6 +1689,7 @@ func TestHandleSaveNote_ValidSourceURL_SavesAndRendersCited(t *testing.T) {
 		"idempotency_key": {uuid.NewString()},
 		"text":            {"cited note"},
 		"source_url":      {"https://example.com/source"},
+		"thread_title":    {"Research"},
 	})
 	require.Equal(t, http.StatusSeeOther, w.Code, "body: %s", w.Body.String())
 
@@ -2959,7 +2972,14 @@ func TestHandleChannelIndex_UnattachedNoteRelationsRender(t *testing.T) {
 
 // TestNoteWithNoRelations_RendersNoRelatedLine proves a note with zero
 // relations renders NOTHING extra -- never an empty "Related" wrapper --
-// on both pages.
+// in the note list itself. Scoped to the body BEFORE the "Save a research
+// note" heading (issue #1945): that save-note form's own FR15 relation
+// picker legitimately offers every store.RelationType as a
+// relation_type_<noteID> <select> option regardless of whether ANY note
+// on the page has a relation yet, so a whole-body check for these verbs
+// would false-positive on the picker's own options, not on a spurious
+// relatedNotesSection render -- exactly the section this test actually
+// guards against.
 func TestNoteWithNoRelations_RendersNoRelatedLine(t *testing.T) {
 	ctx := context.Background()
 	s := newResearchTestStack(t)
@@ -2977,8 +2997,12 @@ func TestNoteWithNoRelations_RendersNoRelatedLine(t *testing.T) {
 	body := w.Body.String()
 
 	assert.Contains(t, body, "a lone note with no relations")
+	noteListSection := body
+	if idx := strings.Index(body, "Save a research note"); idx > 0 {
+		noteListSection = body[:idx]
+	}
 	for _, verb := range []string{"supersedes", "superseded by", "excludes", "excluded by", "caveats", "caveated by", "follows up", "followed up by", "summarizes", "summarized by"} {
-		assert.NotContains(t, body, verb, "a note with no relations must render no Related line at all")
+		assert.NotContains(t, noteListSection, verb, "a note with no relations must render no Related line at all")
 	}
 }
 
