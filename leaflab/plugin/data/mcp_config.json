@@ -1,0 +1,25 @@
+{
+  "mcpServers": {
+    "leaflab-pg-tilt": {
+      "command": "uvx",
+      "args": ["--with", "mcp<2", "postgres-mcp", "--access-mode=restricted"],
+      "env": {
+        "DATABASE_URI": "postgresql://postgres:password@localhost:5432/leaflab"
+      }
+    },
+    "leaflab-pg-dev": {
+      "command": "uvx",
+      "args": ["--with", "mcp<2", "postgres-mcp", "--access-mode=restricted"],
+      "env": {
+        "DATABASE_URI": "${LEAFLAB_DEV_DATABASE_URI}"
+      }
+    },
+    "leaflab-pg-prod": {
+      "command": "uvx",
+      "args": ["--with", "mcp<2", "postgres-mcp", "--access-mode=restricted"],
+      "env": {
+        "DATABASE_URI": "${LEAFLAB_PROD_DATABASE_URI}"
+      }
+    }
+  }
+}
