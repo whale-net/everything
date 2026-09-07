@@ -98,6 +98,15 @@ type fakeDeploymentAPIClient struct {
 	startCalls   []*manmanpb.StartSessionRequest
 	stopCalls    []*manmanpb.StopSessionRequest
 	restartCalls []*manmanpb.RestartDeploymentRequest
+
+	// listPendingRestartsStates/listPendingRestartsErr (#1735), when set,
+	// drive ListPendingRestarts's response for tests that care about
+	// RestartState propagation/degradation (this file's own scenarios don't
+	// -- see the doc comment on ListPendingRestarts below); zero value keeps
+	// the pre-existing "no restart record" behavior.
+	listPendingRestartsStates map[int64]*manmanpb.PendingRestartState
+	listPendingRestartsErr    error
+	listPendingRestartsCalls  [][]int64
 }
 
 func (f *fakeDeploymentAPIClient) GetServerGameConfig(ctx context.Context, in *manmanpb.GetServerGameConfigRequest, opts ...grpc.CallOption) (*manmanpb.GetServerGameConfigResponse, error) {
@@ -223,10 +232,25 @@ func (f *fakeDeploymentAPIClient) RestartDeployment(ctx context.Context, in *man
 // ListPendingRestarts is the fake's #1735 counterpart: buildDeploymentRowData
 // (handlers_deployment_actions.go) calls this for every row it builds,
 // including through the action endpoints this file exercises. This suite's
-// scenarios are not about restart-state badges (see session_test.go/
-// restart_state_test.go for that), so it always reports "no restart record".
+// own scenarios are not about restart-state badges (see session_test.go/
+// components/restart_state_test.go for that), so the zero value reports "no
+// restart record" for every sgc id; listPendingRestartsStates/Err let the
+// dedicated buildDeploymentRowData tests below opt into a populated or
+// failing response without touching every other scenario in this file.
 func (f *fakeDeploymentAPIClient) ListPendingRestarts(ctx context.Context, in *manmanpb.ListPendingRestartsRequest, opts ...grpc.CallOption) (*manmanpb.ListPendingRestartsResponse, error) {
-	return &manmanpb.ListPendingRestartsResponse{}, nil
+	f.mu.Lock()
+	f.listPendingRestartsCalls = append(f.listPendingRestartsCalls, in.ServerGameConfigIds)
+	f.mu.Unlock()
+	if f.listPendingRestartsErr != nil {
+		return nil, f.listPendingRestartsErr
+	}
+	resp := &manmanpb.ListPendingRestartsResponse{}
+	for _, id := range in.ServerGameConfigIds {
+		if state, ok := f.listPendingRestartsStates[id]; ok {
+			resp.States = append(resp.States, state)
+		}
+	}
+	return resp, nil
 }
 
 func newDeploymentTestApp(api *fakeDeploymentAPIClient) *App {

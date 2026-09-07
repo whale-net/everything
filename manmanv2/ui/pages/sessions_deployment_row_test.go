@@ -307,6 +307,84 @@ func TestDeploymentRow_ActionErrorWithTransientStatus_StillPolls(t *testing.T) {
 	}
 }
 
+// --- 9a. RestartState badges (#1735, FR12) ----------------------------------
+//
+// Each of the four PendingRestartState.Status values renders its own
+// distinguishable badge text in the row's status cell, and a nil
+// RestartState renders none of them.
+
+func TestDeploymentRow_RestartState_BadgeTextByStatus(t *testing.T) {
+	cases := []struct {
+		status     string
+		wantText   string
+		wantAbsent []string
+	}{
+		{status: "pending", wantText: "Restarting", wantAbsent: []string{"Restart failed", "Restart stalled"}},
+		{status: "started", wantText: "", wantAbsent: []string{"Restarting", "Restart failed", "Restart stalled"}},
+		{status: "failed", wantText: "Restart failed", wantAbsent: []string{"Restarting", "Restart stalled"}},
+		{status: "expired", wantText: "Restart stalled", wantAbsent: []string{"Restarting", "Restart failed"}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.status, func(t *testing.T) {
+			latest := &manmanpb.Session{SessionId: 60, ServerGameConfigId: 40, Status: "stopping"}
+			data := buildDeploymentRowData(40, "Nu", "active", latest, nil, "")
+			data.RestartState = &manmanpb.PendingRestartState{
+				ServerGameConfigId: 40,
+				Status:             tc.status,
+				FailureReason:      "some failure",
+			}
+			body := deploymentRowMarkup(t, data)
+
+			if tc.wantText != "" && !strings.Contains(body, tc.wantText) {
+				t.Errorf("status %q: expected badge text %q, got body %q", tc.status, tc.wantText, body)
+			}
+			for _, absent := range tc.wantAbsent {
+				if strings.Contains(body, absent) {
+					t.Errorf("status %q: expected no %q badge, got body %q", tc.status, absent, body)
+				}
+			}
+		})
+	}
+}
+
+func TestDeploymentRow_RestartState_Nil_NoBadge(t *testing.T) {
+	latest := &manmanpb.Session{SessionId: 61, ServerGameConfigId: 41, Status: "running"}
+	data := buildDeploymentRowData(41, "Xi", "active", latest, latest, "")
+	data.RestartState = nil
+	body := deploymentRowMarkup(t, data)
+
+	for _, badge := range []string{"Restarting", "Restart failed", "Restart stalled"} {
+		if strings.Contains(body, badge) {
+			t.Errorf("expected no restart badge for a nil RestartState, got %q in body %q", badge, body)
+		}
+	}
+}
+
+// TestDeploymentRow_RestartState_ByteStableAcrossRenders covers #1735 item 5
+// (NFR11): two consecutive renders of a row with an unchanged RestartState
+// must produce byte-identical output -- this content is inside the
+// SSE-pushed fragment (#1724), so any per-render-varying content (e.g. a
+// relative timestamp) would defeat the no-swap change detector and destroy
+// scroll position/text selection on every heartbeat.
+func TestDeploymentRow_RestartState_ByteStableAcrossRenders(t *testing.T) {
+	latest := &manmanpb.Session{SessionId: 62, ServerGameConfigId: 42, Status: "stopping"}
+	data := buildDeploymentRowData(42, "Omicron", "active", latest, nil, "")
+	data.RestartState = &manmanpb.PendingRestartState{
+		ServerGameConfigId: 42,
+		PendingRestartId:   5,
+		Status:             "pending",
+		GatingSessionId:    62,
+		CreatedAtUnix:      1700000000,
+	}
+
+	first := deploymentRowMarkup(t, data)
+	second := deploymentRowMarkup(t, data)
+
+	if first != second {
+		t.Errorf("two renders of an unchanged RestartState diverged:\nfirst:  %q\nsecond: %q", first, second)
+	}
+}
+
 // --- 9. GSCStatusTable loops rows and includes an Actions header -----------
 
 func TestGSCStatusTable_RendersAllRowsWithActionsHeader(t *testing.T) {

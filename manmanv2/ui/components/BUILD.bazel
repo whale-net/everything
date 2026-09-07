@@ -31,10 +31,12 @@ go_test(
         "deployment_actions_test.go",
         "deployment_status_test.go",
         "layout_test.go",
+        "restart_state_test.go",
     ],
     embed = [":components"],
     deps = [
         "//libs/go/htmxauth",
+        "//libs/go/htmxui",
         "//manmanv2/protos:manmanpb",
     ],
 )

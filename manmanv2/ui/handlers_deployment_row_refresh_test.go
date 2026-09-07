@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"errors"
 	"net/http"
 	"net/http/httptest"
@@ -242,5 +243,88 @@ func TestDeploymentRowFragment_DoesNotCollideWithSessionStdinRoute(t *testing.T)
 	}
 	if w2.Code != http.StatusOK {
 		t.Fatalf("status = %d, want 200 from the stdin stub; body: %s", w2.Code, w2.Body.String())
+	}
+}
+
+// TestBuildDeploymentRowData_PopulatesRestartState covers #1735 item 4: the
+// single-SGC path (buildDeploymentRowData) -- which is what this file's row
+// fragment endpoint and the #1724 SSE fragment both render through -- must
+// populate RestartState from ListPendingRestarts the same way handleSessions'
+// batched page-level path does. Without this, the restart badge would show
+// on the initial /sessions render and then vanish the moment the row is
+// polled or live-pushed, which is exactly the asymmetry FR12 exists to rule
+// out.
+//
+// Red this by hand: comment out (or delete) the
+// `restartStates, err := app.grpc.ListPendingRestarts(...)` block and the
+// `RestartState: restartStates[sgcID]` line in buildDeploymentRowData
+// (handlers_deployment_actions.go) -- this test fails (RestartState comes
+// back nil) while TestHandleSessions_DeploymentRows_LatestSessionNotLiveOnly
+// and its siblings in handlers_sessions_deployment_row_test.go keep passing
+// unchanged, because that page-level path builds DeploymentRowData directly
+// in handleSessions, not through buildDeploymentRowData. That asymmetry --
+// one path broken, the other silently fine -- is the bug this test exists
+// to catch. Verified red/green by hand; reverted to green before commit.
+func TestBuildDeploymentRowData_PopulatesRestartState(t *testing.T) {
+	const sgcID = int64(42)
+	want := &manmanpb.PendingRestartState{
+		ServerGameConfigId: sgcID,
+		PendingRestartId:   7,
+		Status:             "pending",
+		GatingSessionId:    999,
+		CreatedAtUnix:      1000,
+	}
+	api := &fakeDeploymentAPIClient{
+		sgc:         stoppedSGC(sgcID),
+		allSessions: []*manmanpb.Session{{SessionId: 999, Status: "stopping"}},
+		listPendingRestartsStates: map[int64]*manmanpb.PendingRestartState{
+			sgcID: want,
+		},
+	}
+	app := newDeploymentTestApp(api)
+
+	data, err := app.buildDeploymentRowData(context.Background(), sgcID)
+	if err != nil {
+		t.Fatalf("buildDeploymentRowData: %v", err)
+	}
+	if data.RestartState == nil {
+		t.Fatal("expected RestartState to be populated from ListPendingRestarts, got nil")
+	}
+	if data.RestartState.PendingRestartId != want.PendingRestartId || data.RestartState.Status != want.Status {
+		t.Errorf("RestartState = %+v, want %+v", data.RestartState, want)
+	}
+
+	if len(api.listPendingRestartsCalls) != 1 {
+		t.Fatalf("expected exactly one ListPendingRestarts call, got %d", len(api.listPendingRestartsCalls))
+	}
+	if got := api.listPendingRestartsCalls[0]; len(got) != 1 || got[0] != sgcID {
+		t.Errorf("expected ListPendingRestarts called with [%d], got %v", sgcID, got)
+	}
+}
+
+// TestDeploymentRowFragment_ListPendingRestartsFailure_NoBadgeNo500 covers
+// #1735 item 6: a ListPendingRestarts RPC failure must not fail the row --
+// the fragment still renders 200 with no restart badge, degrading the same
+// way the pre-existing getLiveSession failure fallback does (see the
+// buildDeploymentRowData doc comment).
+func TestDeploymentRowFragment_ListPendingRestartsFailure_NoBadgeNo500(t *testing.T) {
+	api := &fakeDeploymentAPIClient{
+		sgc:                    stoppedSGC(42),
+		allSessions:            []*manmanpb.Session{{SessionId: 999, Status: "running"}},
+		liveSession:            &manmanpb.Session{SessionId: 999, Status: "running"},
+		listPendingRestartsErr: errors.New("control-api unavailable"),
+	}
+	app := newDeploymentTestApp(api)
+
+	w := doRowFragment(app, http.MethodGet, "/api/deployments/42/row")
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200 (a ListPendingRestarts failure must not fail the row); body: %s", w.Code, w.Body.String())
+	}
+	body := w.Body.String()
+	for _, badge := range []string{"Restarting", "Restart failed", "Restart stalled"} {
+		if strings.Contains(body, badge) {
+			t.Errorf("expected no restart badge on a ListPendingRestarts failure, got %q in body: %s", badge, body)
+		}
 	}
 }
