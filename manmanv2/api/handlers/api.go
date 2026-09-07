@@ -185,6 +185,10 @@ func (s *APIServer) SendInput(ctx context.Context, req *pb.SendInputRequest) (*p
 	return s.sessionHandler.SendInput(ctx, req)
 }
 
+func (s *APIServer) ListPendingRestarts(ctx context.Context, req *pb.ListPendingRestartsRequest) (*pb.ListPendingRestartsResponse, error) {
+	return s.sessionHandler.ListPendingRestarts(ctx, req)
+}
+
 // Registration RPCs
 func (s *APIServer) RegisterServer(ctx context.Context, req *pb.RegisterServerRequest) (*pb.RegisterServerResponse, error) {
 	return s.registrationHandler.RegisterServer(ctx, req)

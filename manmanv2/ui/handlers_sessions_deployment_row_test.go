@@ -23,9 +23,13 @@ import (
 // fakeSessionsAPIClient embeds the nil manmanpb.ManManAPIClient interface
 // and overrides only the RPCs handleSessions' DeploymentRows call graph
 // reaches for these scenarios (ListServers, ListServerGameConfigs,
-// GetGameConfig, ListSessions); any other call panics on the nil embedded
-// interface, which is deliberate -- it fails loudly instead of silently
-// returning a zero value if the call graph ever grows. GetGameConfig always
+// GetGameConfig, ListSessions, ListPendingRestarts); any other call panics
+// on the nil embedded interface, which is deliberate -- it fails loudly
+// instead of silently returning a zero value if the call graph ever grows.
+// ListPendingRestarts (#1735) always returns an empty response here: these
+// scenarios guard LatestSession derivation, not restart-state badges (see
+// handlers_deployment_row_refresh_test.go/restart_state_test.go for that).
+// GetGameConfig always
 // errors here (display-name resolution isn't what these tests guard;
 // sessions_deployment_row_test.go and the DisplayName field already cover
 // the fallback-to-"SGC %d" path via the handler's existing tolerate-and-
@@ -80,6 +84,10 @@ func (f *fakeSessionsAPIClient) ListSessions(ctx context.Context, in *manmanpb.L
 		return &manmanpb.ListSessionsResponse{Sessions: f.liveSessions}, nil
 	}
 	return &manmanpb.ListSessionsResponse{Sessions: f.mainSessions}, nil
+}
+
+func (f *fakeSessionsAPIClient) ListPendingRestarts(ctx context.Context, in *manmanpb.ListPendingRestartsRequest, opts ...grpc.CallOption) (*manmanpb.ListPendingRestartsResponse, error) {
+	return &manmanpb.ListPendingRestartsResponse{}, nil
 }
 
 func newSessionsTestApp(api *fakeSessionsAPIClient) *App {

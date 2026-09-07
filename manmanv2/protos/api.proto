@@ -50,6 +50,7 @@ service ManManAPI {
   rpc StopSession(StopSessionRequest) returns (StopSessionResponse);
   rpc RestartDeployment(RestartDeploymentRequest) returns (RestartDeploymentResponse);
   rpc SendInput(SendInputRequest) returns (SendInputResponse);
+  rpc ListPendingRestarts(ListPendingRestartsRequest) returns (ListPendingRestartsResponse);
 
   // Backup management
   rpc CreateBackup(CreateBackupRequest) returns (CreateBackupResponse);

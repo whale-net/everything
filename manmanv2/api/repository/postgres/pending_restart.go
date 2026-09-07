@@ -16,6 +16,16 @@ import (
 // https://www.postgresql.org/docs/current/errcodes-appendix.html.
 const sqlStateUniqueViolation = "23505"
 
+// pendingRestartVisibilityWindow bounds how long a terminal ('failed' or
+// 'expired') pending_restarts record stays visible to GetLatestBySGCIDs
+// (FR12, #1735): without a bound, a week-old "Restart failed" badge would
+// sit on a deployment that has since been happily restarted by hand. Chosen
+// as 5 minutes -- long enough for an operator glancing at the page shortly
+// after a failure to still see it, short enough that it isn't mistaken for
+// current state. Only applies to resolved records; an unresolved ('pending'
+// or 'started') record is always visible regardless of age.
+const pendingRestartVisibilityWindow = 5 * time.Minute
+
 // pendingRestartsOnePendingPerSGCIndex is the unique partial index name from
 // migration 036_pending_restarts. Create checks the violating index by name
 // (not just the SQLSTATE) so it never mistranslates an unrelated future
@@ -145,6 +155,10 @@ func (r *PendingRestartRepository) ExpireStalled(ctx context.Context, now time.T
 	return expired, rows.Err()
 }
 
+// GetLatestBySGCIDs returns the latest pending_restarts record per SGC,
+// excluding records resolved more than pendingRestartVisibilityWindow ago
+// (FR12, #1735 -- see that constant's doc comment). Unresolved records
+// (resolved_at IS NULL) are never excluded by the window.
 func (r *PendingRestartRepository) GetLatestBySGCIDs(ctx context.Context, sgcIDs []int64) (map[int64]*manman.PendingRestart, error) {
 	result := make(map[int64]*manman.PendingRestart)
 	if len(sgcIDs) == 0 {
@@ -155,10 +169,11 @@ func (r *PendingRestartRepository) GetLatestBySGCIDs(ctx context.Context, sgcIDs
 		SELECT DISTINCT ON (server_game_config_id) ` + pendingRestartColumns + `
 		FROM pending_restarts
 		WHERE server_game_config_id = ANY($1)
+			AND (resolved_at IS NULL OR resolved_at > $2)
 		ORDER BY server_game_config_id, pending_restart_id DESC
 	`
 
-	rows, err := r.db.Query(ctx, query, sgcIDs)
+	rows, err := r.db.Query(ctx, query, sgcIDs, time.Now().Add(-pendingRestartVisibilityWindow))
 	if err != nil {
 		return nil, err
 	}

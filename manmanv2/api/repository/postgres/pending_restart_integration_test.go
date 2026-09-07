@@ -426,3 +426,57 @@ func TestGetLatestBySGCIDs_OneEntryPerSGCWithRecordAndEmptyInputShortCircuits(t 
 		t.Fatalf("expected an empty map for an empty input slice, got %+v", empty)
 	}
 }
+
+// TestGetLatestBySGCIDs_VisibilityWindowExcludesOldResolved proves #1735's
+// visibility-window trim: a resolved ('failed') record older than
+// pendingRestartVisibilityWindow is excluded from GetLatestBySGCIDs, while
+// one resolved inside the window is still returned. resolved_at is backdated
+// directly via SQL after MarkFailed -- the repository has no write path that
+// takes an explicit resolved_at, and the trim is a read-time predicate, so
+// this is the only way to put a row on either side of the boundary.
+func TestGetLatestBySGCIDs_VisibilityWindowExcludesOldResolved(t *testing.T) {
+	pool := newPendingRestartTestDB(t)
+	ctx := context.Background()
+	repo := NewPendingRestartRepository(pool)
+
+	// Old: resolved well outside the visibility window -- must be excluded.
+	sgcOld := seedSGC(t, pool, "old")
+	sessionOld := seedSession(t, pool, sgcOld)
+	recOld, err := repo.Create(ctx, sgcOld, sessionOld, time.Now().Add(time.Hour))
+	if err != nil {
+		t.Fatalf("Create old: %v", err)
+	}
+	if err := repo.MarkFailed(ctx, recOld.PendingRestartID, "old failure"); err != nil {
+		t.Fatalf("MarkFailed old: %v", err)
+	}
+	if _, err := pool.Exec(ctx, `UPDATE pending_restarts SET resolved_at = $1 WHERE pending_restart_id = $2`,
+		time.Now().Add(-(pendingRestartVisibilityWindow + time.Minute)), recOld.PendingRestartID); err != nil {
+		t.Fatalf("backdate resolved_at old: %v", err)
+	}
+
+	// Recent: resolved just inside the visibility window -- must be included.
+	sgcRecent := seedSGC(t, pool, "recent")
+	sessionRecent := seedSession(t, pool, sgcRecent)
+	recRecent, err := repo.Create(ctx, sgcRecent, sessionRecent, time.Now().Add(time.Hour))
+	if err != nil {
+		t.Fatalf("Create recent: %v", err)
+	}
+	if err := repo.MarkFailed(ctx, recRecent.PendingRestartID, "recent failure"); err != nil {
+		t.Fatalf("MarkFailed recent: %v", err)
+	}
+	if _, err := pool.Exec(ctx, `UPDATE pending_restarts SET resolved_at = $1 WHERE pending_restart_id = $2`,
+		time.Now().Add(-(pendingRestartVisibilityWindow - time.Minute)), recRecent.PendingRestartID); err != nil {
+		t.Fatalf("backdate resolved_at recent: %v", err)
+	}
+
+	latest, err := repo.GetLatestBySGCIDs(ctx, []int64{sgcOld, sgcRecent})
+	if err != nil {
+		t.Fatalf("GetLatestBySGCIDs: %v", err)
+	}
+	if _, ok := latest[sgcOld]; ok {
+		t.Fatalf("expected the old resolved record to be excluded by the visibility window, got %+v", latest[sgcOld])
+	}
+	if got, ok := latest[sgcRecent]; !ok || got.PendingRestartID != recRecent.PendingRestartID {
+		t.Fatalf("expected the recently-resolved record to be included, got %+v (present=%v)", got, ok)
+	}
+}

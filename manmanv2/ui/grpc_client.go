@@ -255,6 +255,28 @@ func (c *ControlClient) RestartDeployment(ctx context.Context, serverGameConfigI
 	return resp, nil
 }
 
+// ListPendingRestarts fetches the current restart state for every given
+// server game config in one batched RPC (FR12, #1735) -- callers must pass
+// every sgc id a page render needs in a single call, never one call per
+// row. Returns a map keyed by server_game_config_id; an sgc with no pending
+// restart record simply has no entry.
+func (c *ControlClient) ListPendingRestarts(ctx context.Context, sgcIDs []int64) (map[int64]*manmanpb.PendingRestartState, error) {
+	result := make(map[int64]*manmanpb.PendingRestartState)
+	if len(sgcIDs) == 0 {
+		return result, nil
+	}
+	resp, err := c.api.ListPendingRestarts(ctx, &manmanpb.ListPendingRestartsRequest{
+		ServerGameConfigIds: sgcIDs,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("failed to list pending restarts: %w", err)
+	}
+	for _, state := range resp.States {
+		result[state.ServerGameConfigId] = state
+	}
+	return result, nil
+}
+
 // ListConfigurationStrategies retrieves all strategies for a game.
 func (c *ControlClient) ListConfigurationStrategies(ctx context.Context, req *manmanpb.ListConfigurationStrategiesRequest) (*manmanpb.ListConfigurationStrategiesResponse, error) {
 	return c.api.ListConfigurationStrategies(ctx, req)

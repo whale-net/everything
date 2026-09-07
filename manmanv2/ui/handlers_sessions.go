@@ -232,6 +232,23 @@ func (app *App) handleSessions(w http.ResponseWriter, r *http.Request) {
 				Actions:            components.ComputeDeploymentActions(latest),
 			})
 		}
+
+		// FR12/#1735: one batched ListPendingRestarts RPC for every rendered
+		// SGC, not a per-row call. A failure here must not fail the page --
+		// rows just render without the restart badge (same degradation
+		// posture as the live-session fallback above).
+		sgcIDs := make([]int64, len(serverConfigs))
+		for i, sgc := range serverConfigs {
+			sgcIDs[i] = sgc.ServerGameConfigId
+		}
+		restartStates, err := app.grpc.ListPendingRestarts(ctx, sgcIDs)
+		if err != nil {
+			log.Printf("Warning: failed to list pending restarts: %v", err)
+		} else {
+			for i := range deploymentRows {
+				deploymentRows[i].RestartState = restartStates[deploymentRows[i].ServerGameConfigID]
+			}
+		}
 	}
 
 	var startWarning string

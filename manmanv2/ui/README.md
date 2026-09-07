@@ -81,14 +81,17 @@ for any of the three actions.
   `RestartDeployment` RPC to control-api (#1730) and returns as soon as
   it's been durably recorded, wrapped in the same bounded
   `context.WithTimeout` (`app.deploymentActionTimeout`) as Stop/Start
-  above. The UI holds **no restart state** of its own: control-api's own
-  consumer (#1731) owns waiting for the old session to actually stop and
-  then starting the new one, entirely server-side, so killing the
-  `manmanv2/ui` pod immediately after a restart click no longer strands the
-  deployment stopped. A response with `already_in_flight: true` is a
-  success, not an error -- it means a restart was already running for this
-  deployment (a double click, or the operator retrying after a pod
-  restart) -- and renders the same transitional row with no inline error.
+  above. The UI holds **no restart state** of its own to *orchestrate* a
+  restart with: control-api's own consumer (#1731) owns waiting for the old
+  session to actually stop and then starting the new one, entirely
+  server-side, so killing the `manmanv2/ui` pod immediately after a restart
+  click no longer strands the deployment stopped. A response with
+  `already_in_flight: true` is a success, not an error -- it means a
+  restart was already running for this deployment (a double click, or the
+  operator retrying after a pod restart) -- and renders the same
+  transitional row with no inline error. The UI does, however, *read* that
+  server-side state back out for display -- see "Restart State Visibility"
+  below.
   An RPC error or a bound timeout renders the usual inline error (FR8). The
   row's own self-terminating poll (see below) picks up convergence from
   "stopping" through to stopped/crashed or starting/running with no
@@ -127,6 +130,57 @@ bookkeeping required.
 unmodified -- `ConfigurationPatch`/`env_vars` overrides are **not** resolved
 or applied by any M2 action. That work is scoped to M3/C22; see
 [`manmanv2/docs/DESIGN_SGC_ENV_OVERRIDES.md`](../docs/DESIGN_SGC_ENV_OVERRIDES.md).
+
+## Restart State Visibility (FR12, #1735)
+
+Moving restart orchestration server-side (#1733) means a failure after the
+`RestartDeployment` RPC returns is no longer visible inline the way the old
+client-side background goroutine's error was. FR12 requires that durable
+restart not make failure *less* visible than that -- so the deployment row
+reads back control-api's own durable restart record (`pending_restarts`,
+#1729-#1732) and renders a badge distinguishing "in progress" from
+"stalled"/"failed", never a single generic "restart" indicator:
+
+| `pending_restarts.status` | Badge | Meaning |
+|---|---|---|
+| `pending` | "Restarting" (info) | The Stop dispatched by `RestartDeployment` hasn't reached a terminal status yet; the deferred Start hasn't been claimed. |
+| `started` | *(none)* | The record was claimed and the deferred Start was dispatched -- the normal session-status badge (`starting`/`running`) already tells this story. |
+| `failed` | "Restart failed" (error) | The Stop dispatch or the deferred Start itself failed. The failure reason is the badge's `title` tooltip. |
+| `expired` | "Restart stalled" (warning) | The gating Stop never reached a terminal status before the reaper's (#1732) stall deadline, so the Start was never dispatched. |
+| *(no record)* | *(none)* | No restart in flight or recently resolved for this deployment. |
+
+The mapping lives in `components.RestartBadge` (`manmanv2/ui/components/restart_state.go`)
+so it is unit-testable independent of template rendering.
+
+**Read path, one batched RPC per render**: `ControlClient.ListPendingRestarts`
+(`manmanv2/ui/grpc_client.go`) wraps control-api's `ListPendingRestarts` RPC,
+which takes every rendered SGC id in one call -- never a per-row RPC. Both
+row-building paths populate `pages.DeploymentRowData.RestartState` from it:
+`handleSessions` (`handlers_sessions.go`, the full-page render) and
+`buildDeploymentRowData` (`handlers_deployment_actions.go`, the single-SGC
+path shared by the #1628 poll, the three action endpoints, and -- via
+`handleDeploymentsLiveSSE` -- the #1724 SSE fragment). A `ListPendingRestarts`
+failure is not fatal to the row/page: it logs at WARNING and leaves
+`RestartState` nil, the same degradation posture as the live-session
+fallback above.
+
+**Terminal states age out**: control-api's `GetLatestBySGCIDs`
+(`manmanv2/api/repository/postgres/pending_restart.go`) excludes a resolved
+(`failed`/`expired`) record more than `pendingRestartVisibilityWindow` (5
+minutes) old, so a stale failure badge doesn't sit indefinitely on a
+deployment that has since been restarted by hand. Unresolved (`pending`/
+`started`) records are never excluded by the window.
+
+**NFR11 byte-stability**: this content renders inside the SSE-pushed row
+fragment (#1724), so the badge never renders a relative/formatted
+timestamp -- only the four static (status, label, title) combinations
+above. Two consecutive renders of an unchanged `RestartState` are
+byte-identical, preserving the no-swap guarantee `libs/go/htmxsse/README.md`
+documents.
+
+**Read-only**: this is a display concern only. No UI code writes to
+`pending_restarts` -- that stays entirely on control-api's `RestartDeployment`
+handler and its consumer/reaper.
 
 ## Live Row Updates over SSE (#1726)
 

@@ -6,8 +6,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/whale-net/everything/manmanv2/models"
 	"github.com/whale-net/everything/manmanv2/api/repository"
+	"github.com/whale-net/everything/manmanv2/models"
 	pb "github.com/whale-net/everything/manmanv2/protos"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
@@ -142,6 +142,18 @@ type MockPendingRestartRepo struct {
 	// opLog, when non-nil, records this mock's tracked calls in invocation
 	// order, shared with MockSessionRepo (see above).
 	opLog *[]string
+
+	// byLatestSGCID and getLatestErr drive GetLatestBySGCIDs for
+	// ListPendingRestarts tests (#1735). The mock does not apply the
+	// visibility-window trim itself -- that's exercised against the real
+	// postgres repository, not this fake -- it just returns exactly what the
+	// test populates, keyed by sgc id, echoing repository.go's contract that
+	// an id with no record is simply absent from the map.
+	byLatestSGCID map[int64]*manman.PendingRestart
+	getLatestErr  error
+	// getLatestCalls records each GetLatestBySGCIDs call's id slice, so tests
+	// can assert an empty id list never reaches the repository.
+	getLatestCalls [][]int64
 }
 
 type pendingRestartCreateCall struct {
@@ -179,6 +191,20 @@ func (m *MockPendingRestartRepo) MarkFailed(ctx context.Context, pendingRestartI
 		*m.opLog = append(*m.opLog, "pendingRestart.MarkFailed")
 	}
 	return nil
+}
+
+func (m *MockPendingRestartRepo) GetLatestBySGCIDs(ctx context.Context, sgcIDs []int64) (map[int64]*manman.PendingRestart, error) {
+	m.getLatestCalls = append(m.getLatestCalls, sgcIDs)
+	if m.getLatestErr != nil {
+		return nil, m.getLatestErr
+	}
+	result := make(map[int64]*manman.PendingRestart)
+	for _, id := range sgcIDs {
+		if pr, ok := m.byLatestSGCID[id]; ok {
+			result[id] = pr
+		}
+	}
+	return result, nil
 }
 
 // MockGCRepo
@@ -531,3 +557,89 @@ func TestRestartDeploymentDispatchHalf(t *testing.T) {
 		}
 	})
 }
+
+// newListPendingRestartsHandler builds a SessionHandler with only the
+// pending-restarts repo populated -- ListPendingRestarts (#1735) doesn't
+// touch the session, sgc, or gc repos at all, so those stay nil to keep an
+// accidental dependency on them a hard nil-pointer failure rather than a
+// silent pass.
+func newListPendingRestartsHandler(pendingRepo *MockPendingRestartRepo) *SessionHandler {
+	repo := &repository.Repository{PendingRestarts: pendingRepo}
+	return &SessionHandler{
+		repo:                repo,
+		pendingRestartsRepo: pendingRepo,
+	}
+}
+
+func TestListPendingRestarts(t *testing.T) {
+	t.Run("empty id list: empty response, no query", func(t *testing.T) {
+		pendingRepo := &MockPendingRestartRepo{}
+		h := newListPendingRestartsHandler(pendingRepo)
+
+		resp, err := h.ListPendingRestarts(context.Background(), &pb.ListPendingRestartsRequest{})
+		if err != nil {
+			t.Fatalf("expected no error, got %v", err)
+		}
+		if len(resp.States) != 0 {
+			t.Fatalf("expected zero states, got %d", len(resp.States))
+		}
+		if len(pendingRepo.getLatestCalls) != 0 {
+			t.Fatalf("expected zero GetLatestBySGCIDs calls for an empty id list, got %d", len(pendingRepo.getLatestCalls))
+		}
+	})
+
+	t.Run("one state per SGC with a record, SGCs without one omitted", func(t *testing.T) {
+		reason := "stop dispatch failed"
+		pendingRepo := &MockPendingRestartRepo{
+			byLatestSGCID: map[int64]*manman.PendingRestart{
+				100: {PendingRestartID: 1, ServerGameConfigID: 100, GatingSessionID: 5, Status: "pending", CreatedAt: time.Unix(1000, 0)},
+				102: {PendingRestartID: 2, ServerGameConfigID: 102, GatingSessionID: 6, Status: "failed", FailureReason: &reason, CreatedAt: time.Unix(2000, 0), ResolvedAt: timePtr(time.Unix(2100, 0))},
+			},
+		}
+		h := newListPendingRestartsHandler(pendingRepo)
+
+		resp, err := h.ListPendingRestarts(context.Background(), &pb.ListPendingRestartsRequest{ServerGameConfigIds: []int64{100, 101, 102}})
+		if err != nil {
+			t.Fatalf("expected no error, got %v", err)
+		}
+		if len(resp.States) != 2 {
+			t.Fatalf("expected 2 states (101 has no record), got %d: %+v", len(resp.States), resp.States)
+		}
+
+		bySGC := make(map[int64]*pb.PendingRestartState)
+		for _, s := range resp.States {
+			bySGC[s.ServerGameConfigId] = s
+		}
+		if _, ok := bySGC[101]; ok {
+			t.Fatalf("expected SGC 101 (no record) to be omitted, got %+v", bySGC[101])
+		}
+
+		got100 := bySGC[100]
+		if got100 == nil || got100.Status != "pending" || got100.PendingRestartId != 1 || got100.GatingSessionId != 5 || got100.CreatedAtUnix != 1000 {
+			t.Errorf("unexpected state for SGC 100: %+v", got100)
+		}
+		got102 := bySGC[102]
+		if got102 == nil || got102.Status != "failed" || got102.FailureReason != reason || got102.ResolvedAtUnix != 2100 {
+			t.Errorf("unexpected state for SGC 102: %+v", got102)
+		}
+	})
+
+	t.Run("GetLatestBySGCIDs failure: internal error", func(t *testing.T) {
+		pendingRepo := &MockPendingRestartRepo{getLatestErr: errors.New("db unavailable")}
+		h := newListPendingRestartsHandler(pendingRepo)
+
+		resp, err := h.ListPendingRestarts(context.Background(), &pb.ListPendingRestartsRequest{ServerGameConfigIds: []int64{100}})
+		if err == nil {
+			t.Fatal("expected error, got nil")
+		}
+		if resp != nil {
+			t.Fatalf("expected nil response on error, got %+v", resp)
+		}
+		st, ok := status.FromError(err)
+		if !ok || st.Code() != codes.Internal {
+			t.Errorf("expected Internal error, got %v", err)
+		}
+	})
+}
+
+func timePtr(t time.Time) *time.Time { return &t }
