@@ -63,11 +63,9 @@ func outcomeTrendLabel(t store.TrendDirection) string {
 //
 // activity (issue #2038, FR23-FR26, C20) is the added recent-activity
 // dashboard section rendered below the connection-status card -- an
-// ADDED section, never a replacement of the card above. Scaffolded here
-// as a skeleton over store.ChannelActivity's zero value (handleChannelDetail
-// passes a placeholder until Implementation wires in the real
-// store.Dashboard().ChannelActivity read); the section always renders
-// regardless, which is also FR26's contract once real data lands (a
+// ADDED section, never a replacement of the card above. handleChannelDetail
+// supplies the real store.Dashboard().ChannelActivity read; the section
+// always renders regardless of the Channel's activity level, per FR26 (a
 // zero-activity Channel renders zeros, never an omitted card).
 templ ChannelDetail(data components.LayoutData, ch store.Channel, canReconnect bool, canInvite bool, activity store.ChannelActivity) {
 	@components.Layout(data) {
@@ -130,10 +128,7 @@ templ ChannelDetail(data components.LayoutData, ch store.Channel, canReconnect b
 // #2038, FR23-FR26, C20): FR23's five entity-type counts over the
 // trailing 24h and 7d, and FR24's outcome count + trend for each window.
 // Renders unconditionally -- FR26's zero-activity Channel gets the same
-// section with every count at 0, never an omitted card. Scaffolded over
-// activity's zero value; Implementation replaces handleChannelDetail's
-// placeholder with the real store.Dashboard().ChannelActivity read (this
-// templ itself does not change shape once that lands).
+// section with every count at 0, never an omitted card.
 templ channelActivitySection(activity store.ChannelActivity) {
 	<div class="card bg-base-100 border border-base-300 shadow-sm mt-4">
 		<div class="card-body">

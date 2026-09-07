@@ -678,12 +678,14 @@ func (a *app) handleChannelDetail(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// FR23-FR26 (issue #2038, C20): the recent-activity dashboard section
-	// below the connection-status card. Scaffolded as a zero-value
-	// placeholder -- Implementation replaces this with the real
-	// a.store.Dashboard().ChannelActivity(r.Context(), channelID,
-	// time.Now().UTC()) read (currently stubbed, see
-	// store.ErrChannelActivityNotImplemented) and its error handling.
-	activity := store.ChannelActivity{}
+	// below the connection-status card, computed against a single
+	// request-time now (UTC, consistent with how the rest of web formats
+	// timestamps) so both windows' boundaries are internally consistent.
+	activity, err := a.store.Dashboard().ChannelActivity(r.Context(), channelID, time.Now().UTC())
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
 
 	data := components.LayoutData{
 		Title: ch.Title,
