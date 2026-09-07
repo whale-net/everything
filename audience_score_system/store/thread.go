@@ -23,9 +23,9 @@ type ThreadSummary struct {
 
 // FindOrCreateThreadInput is the input to ThreadStore.FindOrCreate.
 type FindOrCreateThreadInput struct {
-	ChannelID uuid.UUID
-	IdeaID    *uuid.UUID // nil if the thread predates an Idea, same rule as ResearchNote.IdeaID.
-	Title     string
+	ChannelID         uuid.UUID
+	IdeaID            *uuid.UUID // nil if the thread predates an Idea, same rule as ResearchNote.IdeaID.
+	Title             string
 	CreatedByPersonID uuid.UUID
 }
 

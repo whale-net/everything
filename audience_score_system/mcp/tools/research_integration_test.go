@@ -601,3 +601,85 @@ func TestListIdeas_LimitTruncatedAndSincePageForwardExactly(t *testing.T) {
 	require.Len(t, secondPage.Ideas, seeded-3+1, "since (inclusive) resumes at the last row of the prior page plus the remaining ideas")
 	assert.Equal(t, lastOnFirstPage.IdeaID, secondPage.Ideas[0].IdeaID, "the inclusive bound reappears as the new page's first row")
 }
+
+// ── list_research_threads (FR3, FR4, FR16, NFR2, issue #1937) ──────────────
+
+// TestListResearchThreads_ReturnsChannelThreads proves the discovery shape
+// (FR3): a caller can list every thread on a Channel, and FindOrCreate's
+// natural-key convergence (FR4) is reachable through the MCP surface, not
+// just store.ThreadStore directly.
+func TestListResearchThreads_ReturnsChannelThreads(t *testing.T) {
+	f := newFixture(t)
+	ctx := context.Background()
+	cs := f.connect(t, f.creator.ID)
+
+	thread, err := f.st.Threads().FindOrCreate(ctx, store.FindOrCreateThreadInput{
+		ChannelID: f.ch.ID, Title: "Format saturation", CreatedByPersonID: f.creator.ID,
+	})
+	require.NoError(t, err)
+
+	// FindOrCreate must converge, even called from the tool's own store
+	// dependency a second time -- exercising the same natural key.
+	again, err := f.st.Threads().FindOrCreate(ctx, store.FindOrCreateThreadInput{
+		ChannelID: f.ch.ID, Title: "  format SATURATION  ", CreatedByPersonID: f.creator.ID,
+	})
+	require.NoError(t, err)
+	require.Equal(t, thread.ID, again.ID)
+
+	listRes := f.call(t, cs, "list_research_threads", tools.ListResearchThreadsInput{ChannelID: f.ch.ID.String()})
+	list := decode[tools.ListResearchThreadsOutput](t, listRes)
+	require.Len(t, list.Threads, 1)
+	assert.Equal(t, thread.ID.String(), list.Threads[0].ID)
+	assert.Equal(t, "Format saturation", list.Threads[0].Title)
+	assert.Equal(t, 0, list.Threads[0].NoteCount)
+	assert.Nil(t, list.Threads[0].LatestNoteAt, "a thread with no notes yet must render latest_note_at omitted (nil)")
+}
+
+// TestListResearchThreads_IdeaFilterRestrictsToThatIdea proves the
+// idea_id scoping half of FR3.
+func TestListResearchThreads_IdeaFilterRestrictsToThatIdea(t *testing.T) {
+	f := newFixture(t)
+	ctx := context.Background()
+	cs := f.connect(t, f.creator.ID)
+
+	idea, err := f.st.Ideas().Create(ctx, f.ch.ID, "Filter Idea", f.creator.ID)
+	require.NoError(t, err)
+
+	attached, err := f.st.Threads().FindOrCreate(ctx, store.FindOrCreateThreadInput{
+		ChannelID: f.ch.ID, IdeaID: &idea.ID, Title: "Attached thread", CreatedByPersonID: f.creator.ID,
+	})
+	require.NoError(t, err)
+
+	_, err = f.st.Threads().FindOrCreate(ctx, store.FindOrCreateThreadInput{
+		ChannelID: f.ch.ID, Title: "Unattached thread", CreatedByPersonID: f.creator.ID,
+	})
+	require.NoError(t, err)
+
+	scopedRes := f.call(t, cs, "list_research_threads", tools.ListResearchThreadsInput{ChannelID: f.ch.ID.String(), IdeaID: idea.ID.String()})
+	scoped := decode[tools.ListResearchThreadsOutput](t, scopedRes)
+	require.Len(t, scoped.Threads, 1)
+	assert.Equal(t, attached.ID.String(), scoped.Threads[0].ID)
+
+	allRes := f.call(t, cs, "list_research_threads", tools.ListResearchThreadsInput{ChannelID: f.ch.ID.String()})
+	all := decode[tools.ListResearchThreadsOutput](t, allRes)
+	assert.Len(t, all.Threads, 2, "idea_id omitted must return every thread on the Channel, including the unattached one")
+}
+
+// TestListResearchThreads_UnassociatedPersonDenied proves NFR2/NFR5:
+// list_research_threads is a read tool gated by store.CanRead exactly
+// like every other Channel-scoped read, so a Person with no role on the
+// Channel is denied rather than seeing its threads.
+func TestListResearchThreads_UnassociatedPersonDenied(t *testing.T) {
+	f := newFixture(t)
+	ctx := context.Background()
+
+	_, err := f.st.Threads().FindOrCreate(ctx, store.FindOrCreateThreadInput{
+		ChannelID: f.ch.ID, Title: "Private thread", CreatedByPersonID: f.creator.ID,
+	})
+	require.NoError(t, err)
+
+	outsiderCS := f.connect(t, f.outsider.ID)
+	deniedRes := f.call(t, outsiderCS, "list_research_threads", tools.ListResearchThreadsInput{ChannelID: f.ch.ID.String()})
+	assert.True(t, deniedRes.IsError)
+	assert.Contains(t, textOf(deniedRes), "permission denied")
+}
