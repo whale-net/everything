@@ -1,21 +1,155 @@
 package videos
 
 import (
+	"strconv"
+
 	"github.com/whale-net/everything/audience_score_system/store"
 	"github.com/whale-net/everything/audience_score_system/web/components"
 )
 
-// List is the Channel-scoped published-videos listing page (FR27-FR30).
-// Stubbed for Scaffold -- this task's Implementation step replaces this
-// body with the real render of every store.PublishedVideoRow HandleList
-// loads, plus the title/date-range/sync-status filter form (FR28) and the
-// explicit empty/no-metrics/truncated states (FR27, FR30).
-templ List(data components.LayoutData, ch store.Channel) {
+// List is the Channel-scoped published-videos listing page (FR27-FR30):
+// the filter form (FR28, always rendered, carrying form's submitted
+// values verbatim so a reload/bookmark shows the same controls the URL
+// already encodes), then either errMsg (a filter that failed to parse,
+// HandleList's 400 path -- rows/truncated are unused in that case), FR2-
+// style empty state (rows empty, filters applied or not), or one
+// videoCard per row (rows is exactly the order
+// store.SyncStore.ListPublishedWithMetrics returned -- most-recently-
+// published first, per that method's doc comment; never re-sorted here),
+// plus a truncated note (FR30/NFR3) when more rows exist beyond
+// defaultVideosLimit.
+templ List(data components.LayoutData, ch store.Channel, form filterFormData, rows []store.PublishedVideoRow, truncated bool, errMsg string) {
 	@components.Layout(data) {
 		<div class="card bg-base-100 border border-base-300 shadow-sm">
 			<div class="card-body">
 				<h1 class="card-title">{ ch.Title } videos</h1>
+				@filterForm(ch, form)
+				if errMsg != "" {
+					<p class="text-error text-sm mt-2">{ errMsg }</p>
+				} else if len(rows) == 0 {
+					<p class="text-base-content/70 mt-2">
+						No published videos match these filters yet. Once this
+						Channel's synced videos include one with a publish date and
+						a title matching the current filters, it appears here.
+					</p>
+				} else {
+					<div class="mt-2">
+						for _, row := range rows {
+							@videoCard(row)
+						}
+					</div>
+					if truncated {
+						<p class="text-sm text-base-content/50 mt-2">
+							Older videos exist beyond the newest { strconv.Itoa(defaultVideosLimit) }. Narrow the filters above to see them.
+						</p>
+					}
+				}
 			</div>
 		</div>
+	}
+}
+
+// filterForm renders FR28's title/date-range/sync-status filter controls
+// as a plain GET form (bookmarkable, no POST -- action is deliberately
+// omitted so the browser submits back to the current path) with form's
+// values preserved. The sync-status <select> is FR29's binary bucket:
+// "" (no filter), "true" (Synced), "false" (Unsynced) -- there is
+// deliberately no third option.
+templ filterForm(ch store.Channel, form filterFormData) {
+	<form method="get" class="flex flex-wrap gap-3 items-end mt-2 mb-2">
+		<div class="form-control">
+			<label class="label">
+				<span class="label-text">Title contains</span>
+			</label>
+			<input type="text" name="title" value={ form.Title } class="input input-bordered input-sm"/>
+		</div>
+		<div class="form-control">
+			<label class="label">
+				<span class="label-text">Published from</span>
+			</label>
+			<input type="date" name="from" value={ form.From } class="input input-bordered input-sm"/>
+		</div>
+		<div class="form-control">
+			<label class="label">
+				<span class="label-text">Published to</span>
+			</label>
+			<input type="date" name="to" value={ form.To } class="input input-bordered input-sm"/>
+		</div>
+		<div class="form-control">
+			<label class="label">
+				<span class="label-text">Sync status</span>
+			</label>
+			<select name="synced" class="select select-bordered select-sm">
+				<option value="" selected?={ form.Synced == "" }>All</option>
+				<option value="true" selected?={ form.Synced == "true" }>Synced</option>
+				<option value="false" selected?={ form.Synced == "false" }>Unsynced</option>
+			</select>
+		</div>
+		<button type="submit" class="btn btn-primary btn-sm">Filter</button>
+	</form>
+}
+
+// videoCard renders one store.PublishedVideoRow: the video's title,
+// YouTube id, and publish date, its FR29 sync-status badge, and its
+// latest metrics snapshot (or FR27's explicit "no metrics recorded yet"
+// placeholder when row.Metrics is nil -- never a zero value presented as
+// data).
+templ videoCard(row store.PublishedVideoRow) {
+	<div class="border border-base-300 rounded p-4 mb-2">
+		<div class="flex items-center justify-between">
+			<h2 class="font-semibold">{ row.SyncedVideo.Title } ({ row.SyncedVideo.YouTubeVideoID })</h2>
+			if row.Synced {
+				<span class="badge badge-success">Synced</span>
+			} else {
+				<span class="badge badge-ghost">Unsynced</span>
+			}
+		</div>
+		if row.SyncedVideo.PublishedAt != nil {
+			<p class="text-sm text-base-content/70">
+				Published: { row.SyncedVideo.PublishedAt.UTC().Format("2006-01-02") }
+			</p>
+		}
+		@videoMetrics(row)
+	</div>
+}
+
+// videoMetrics renders row's latest metrics snapshot (FR27). row.Metrics
+// itself is nil when no video_metrics row has been recorded yet for this
+// video -- an explicit placeholder, never a zero-valued table row. Within
+// a recorded snapshot, an individual nullable field (YouTube Analytics
+// can omit any of them, store.VideoMetrics' doc comment) still renders as
+// "--", never a bare 0, matching outcomes' outcomeMetrics convention.
+templ videoMetrics(row store.PublishedVideoRow) {
+	if row.Metrics == nil {
+		<p class="text-sm text-base-content/50 mt-1">No metrics recorded yet.</p>
+	} else {
+		<p class="text-sm text-base-content/70 mt-1">
+			if row.Metrics.Views != nil {
+				{ strconv.FormatInt(*row.Metrics.Views, 10) } views
+			} else {
+				-- views
+			}
+			if row.Metrics.AverageViewDurationSeconds != nil {
+				-- avg duration { strconv.FormatFloat(*row.Metrics.AverageViewDurationSeconds, 'f', 1, 64) }s
+			} else {
+				-- avg duration --
+			}
+			if row.Metrics.AverageViewPercentage != nil {
+				-- avg { strconv.FormatFloat(*row.Metrics.AverageViewPercentage, 'f', 1, 64) }%
+			} else {
+				-- avg --
+			}
+			if row.Metrics.Impressions != nil {
+				-- { strconv.FormatInt(*row.Metrics.Impressions, 10) } impressions
+			} else {
+				-- impressions --
+			}
+			if row.Metrics.ImpressionCTR != nil {
+				-- CTR { strconv.FormatFloat(*row.Metrics.ImpressionCTR, 'f', 2, 64) }
+			} else {
+				-- CTR --
+			}
+			(measured { row.Metrics.MeasuredAt.UTC().Format("2006-01-02") })
+		</p>
 	}
 }
