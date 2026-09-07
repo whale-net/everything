@@ -74,6 +74,11 @@ type SessionRepository interface {
 	UpdateStatus(ctx context.Context, sessionID int64, status string) error
 	UpdateSessionStart(ctx context.Context, sessionID int64, startedAt time.Time) error
 	UpdateSessionEnd(ctx context.Context, sessionID int64, status string, endedAt time.Time, exitCode *int) error
+	// UpdateSessionEndIfStatus is UpdateSessionEnd's compare-and-swap variant:
+	// it only writes if the row's status still matches expectedStatus at write
+	// time, so a stale read (e.g. checkStaleSessions' snapshot-then-later-write
+	// tick) can never clobber a terminal transition that committed in between.
+	UpdateSessionEndIfStatus(ctx context.Context, sessionID int64, expectedStatus string, newStatus string, endedAt time.Time, exitCode *int) (updated bool, err error)
 	GetStaleSessions(ctx context.Context, threshold time.Duration) ([]*manman.Session, error)
 	StopOtherSessionsForSGC(ctx context.Context, sessionID int64, sgcID int64) error
 }

@@ -198,6 +198,21 @@ func (m *MockSessionRepository) UpdateSessionEnd(ctx context.Context, sessionID 
 	return nil
 }
 
+func (m *MockSessionRepository) UpdateSessionEndIfStatus(ctx context.Context, sessionID int64, expectedStatus, newStatus string, endedAt time.Time, exitCode *int) (bool, error) {
+	session, ok := m.sessions[sessionID]
+	if !ok {
+		return false, nil
+	}
+	if session.Status != expectedStatus {
+		return false, nil
+	}
+	session.Status = newStatus
+	session.EndedAt = &endedAt
+	session.ExitCode = exitCode
+	session.UpdatedAt = time.Now()
+	return true, nil
+}
+
 func (m *MockSessionRepository) GetStaleSessions(ctx context.Context, threshold time.Duration) ([]*manman.Session, error) {
 	stale := make([]*manman.Session, 0)
 	cutoff := time.Now().Add(-threshold)

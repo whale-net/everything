@@ -26,8 +26,8 @@ go_library(
     importpath = "github.com/whale-net/everything/manmanv2/api/repository/postgres",
     visibility = ["//manmanv2:__subpackages__"],
     deps = [
-        "//manmanv2/models:models",
         "//manmanv2/api/repository",
+        "//manmanv2/models:models",
         "@com_github_jackc_pgx_v5//:pgx",
         "@com_github_jackc_pgx_v5//pgconn",
         "@com_github_jackc_pgx_v5//pgxpool",
@@ -120,6 +120,37 @@ go_test(
     deps = [
         "//libs/go/dbtest",
         "//manmanv2/api/repository",
+        "@com_github_jackc_pgx_v5//pgxpool",
+    ],
+)
+
+# Real-Postgres coverage for SessionRepository.UpdateSessionEndIfStatus
+# (#2061): the "WHERE status = $2" compare-and-swap clause -- whether a
+# stale-snapshot write is skipped when the row's actual status has already
+# moved on -- is enforced by Postgres itself at write time, not by
+# application code, so an in-memory fake can't exercise the same guarantee.
+# Same tag set/rationale as pending_restart_integration_test above.
+#
+# Run it explicitly (requires a working Docker daemon):
+#   bazel test //manmanv2/api/repository/postgres:session_repository_integration_test --test_output=all
+go_test(
+    # keep
+    name = "session_repository_integration_test",
+    size = "large",
+    timeout = "long",
+    srcs = ["session_repository_integration_test.go"],
+    embed = [":postgres"],
+    gotags = ["integration"],
+    tags = [
+        "external",
+        "integration",
+        "manual",
+        "no-cache",
+        "no-sandbox",
+        "requires-network",
+    ],
+    deps = [
+        "//libs/go/dbtest",
         "@com_github_jackc_pgx_v5//pgxpool",
     ],
 )
