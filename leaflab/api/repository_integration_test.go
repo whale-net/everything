@@ -34,9 +34,12 @@ import (
 )
 
 const testSchema = `
+	-- name (FR3, migration 016_m2_ownership_rename) added for
+	-- ListBoardsWithState/GetBoardIdentity's BoardName coverage below.
 	CREATE TABLE board (
 		board_id      BIGSERIAL PRIMARY KEY,
 		device_id     VARCHAR(64) NOT NULL UNIQUE,
+		name          TEXT,
 		registered_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
 		last_seen_at  TIMESTAMPTZ NOT NULL DEFAULT NOW()
 	);
@@ -104,13 +107,45 @@ const testSchema = `
 		ON snh.sensor_id = s.sensor_id
 		AND snh.valid_to IS NULL;
 
+	-- v_sensor_last_reading/v_board_last_reading (migration
+	-- 015_board_last_reading.up.sql), added for ListBoardsWithState
+	-- coverage below: each sensor's latest reading via a LATERAL join,
+	-- rolled up to one row per board via MAX across its sensors.
+	CREATE VIEW v_sensor_last_reading AS
+	SELECT
+		s.sensor_id,
+		s.board_id,
+		lr.recorded_at AS last_reading_at
+	FROM sensor s
+	LEFT JOIN LATERAL (
+		SELECT sr.recorded_at
+		FROM sensor_reading sr
+		WHERE sr.sensor_id = s.sensor_id
+		ORDER BY sr.recorded_at DESC
+		LIMIT 1
+	) lr ON TRUE;
+
+	CREATE VIEW v_board_last_reading AS
+	SELECT
+		b.board_id,
+		b.device_id,
+		MAX(slr.last_reading_at) AS last_reading_at
+	FROM board b
+	LEFT JOIN v_sensor_last_reading slr ON slr.board_id = b.board_id
+	GROUP BY b.board_id, b.device_id;
+
 	-- Ownership shape (leaflab/migrate/migrations/013_ownership.up.sql),
 	-- added for GetCurrentBoardOwner coverage: SCD2 board_owner_history,
 	-- unowned expressed as the absence of an open (valid_to IS NULL) row,
-	-- never as a NULL owner on an open row.
+	-- never as a NULL owner on an open row. preferred_username/email/
+	-- display_name added for ListBoardsWithState/GetBoardIdentity's Owner
+	-- projection coverage below.
 	CREATE TABLE leaflab_user (
-		leaflab_user_id BIGSERIAL PRIMARY KEY,
-		oidc_sub        TEXT NOT NULL UNIQUE
+		leaflab_user_id    BIGSERIAL PRIMARY KEY,
+		oidc_sub           TEXT NOT NULL UNIQUE,
+		preferred_username TEXT,
+		email              TEXT,
+		display_name       TEXT
 	);
 
 	CREATE TABLE board_owner_history (
