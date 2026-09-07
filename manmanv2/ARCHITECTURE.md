@@ -274,6 +274,50 @@ automatically.
 failure above) or `started` (deferred-Start failure) — both are terminal
 failures of the same intent and share one transition.
 
+**Stall bound half — `PendingRestartReaper` (`manmanv2/api/handlers/pending_restart_reaper.go`,
+control-api):** the trigger half above only ever resolves a row on the happy
+path — a gating Stop that reaches a terminal status, which
+`SessionRestartConsumer` observes. A Stop that never converges (host manager
+gone, container wedged) leaves the row `pending` forever with nothing to
+resolve it: the "stuck pending forever" failure FR11 exists to prevent,
+merely relocated from a goroutine into a table. `PendingRestartReaper` is
+that resolver, and it is a deliberately different mechanism from the trigger
+half: a plain ticker (modelled on
+`SessionStatusHandler.StartStaleSessionChecker`,
+`manmanv2/processor/handlers/session_status.go`), not another
+`status.session.#` consumer.
+
+This is intentionally *not* event-driven. #1712's NFR9 ("not a periodic
+sweep") scopes only to the normal-path dispatch — `RestartDeployment` and
+`SessionRestartConsumer` above, which never poll. NFR12 explicitly permits a
+time-based safety net for the stall case, since there is no event that
+signals "this Stop is never coming" to drive an event-driven equivalent.
+Two mechanisms, two jobs: the consumer resolves the row the instant a
+terminal status arrives; the reaper is the backstop for when one never does.
+
+Each tick calls `ExpireStalled(now)` — one atomic
+`UPDATE ... WHERE status='pending' AND stall_deadline <= now RETURNING`, so
+concurrent `control-api` replicas ticking at the same time each expire a
+given row exactly once, the same idempotency shape as `ClaimForSession`
+above. For every row it expires, the reaper logs one WARNING (`server_game_config_id`,
+`gating_session_id`, `pending_restart_id`, `created_at`, `stall_deadline`) —
+WARNING per `AGENTS.md` § Logging Levels, since the system kept going but the
+operator's deployment is not running and nothing else will surface that
+without this log. `ExpireStalled` erroring is logged at ERROR and the tick is
+skipped; the goroutine itself never dies, so the next tick retries. Zero
+expired rows is silent. The reaper only ever expires rows — it never
+dispatches a `StartSession`, never retries one, and never touches a row that
+isn't `pending`; an expired row is terminal, and the operator re-issues
+`RestartDeployment` for another attempt (FR10, at-most-once).
+
+Interval (`RESTART_REAPER_INTERVAL`, default `10s`) and stall timeout
+(`RESTART_STALL_TIMEOUT`, default `45s`) are independent env vars — see
+`ENV.md`. Worst-case stall-detection latency is their sum (~55s at the
+defaults), order-of-magnitude comparable to the ~15s bound
+`waitForNoLiveSession` used to give the client-side poll this table replaces
+(NFR12). The interval must stay well below the timeout or the bound is
+meaningless — enforced only by review, not code.
+
 **Not SCD2:** this table intentionally does not use `valid_from`/`valid_to`
 (see `AGENTS.md` § SCD2). A pending restart is a short-lived work intent with
 its own terminal state machine (`status` + `resolved_at`), not dimension

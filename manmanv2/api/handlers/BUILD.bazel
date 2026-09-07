@@ -14,6 +14,7 @@ go_library(
         "gameconfig.go",
         "logs.go",
         "patch.go",
+        "pending_restart_reaper.go",
         "registration.go",
         "server.go",
         "servergameconfig.go",
@@ -45,6 +46,7 @@ go_test(
     name = "handlers_test",
     srcs = [
         "converters_test.go",
+        "pending_restart_reaper_test.go",
         "registration_test.go",
         "server_test.go",
         "session_restart_consumer_test.go",
