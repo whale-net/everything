@@ -268,8 +268,8 @@ the raw token or its hash.
 | Component | Binary | `release_app` identity | Responsibility |
 |---|---|---|---|
 | `migrate` | `audience_score_system/migrate` | `migration` (job) | Applies golang-migrate SQL migrations to Postgres. Runs once, ahead of the other three, as a Helm job hook (see `libs/go/migrate/README.md`). |
-| `web` | `audience_score_system/web` (C1 sign-in #1570, C2 Channel-connect #1571, C3 analyst invite #1572, C19 video_script greenlight/deny/archive UI #1834 -- rebuilt in place of C8's original schedule_entry-backed approve/un-approve/edit UI #1580, C4/C5 research/verdict save+browse UI #1896, C18 video_script propose UI #1914) | `web` (external-api) | The **only** UI surface. Its three UI-only OAuth-consent surfaces are C1/C2/C3 (see "NFR3 interface allocation" below); its C19 schedule page (`web/schedule`, route paths unchanged per FR49) and its `web/research` Channel research index/Idea detail pages plus save-note/save-verdict/propose forms (#1896, #1914) are UI front ends onto the same `store.VideoScriptStore` / `store.ResearchStore` / `store.VerdictStore` that `mcp`'s tools also call. |
-| `mcp` | `audience_score_system/mcp` (#1575, #1577-#1582, #1631, #1648, #1650, #1823-#1835, #1882-#1885) | `mcp` (external-api) | Every other capability (C4-C7, C9, C10, C14, C18, C19): Channel access discovery (`list_channels`, #1631 -- resolves which Channels the caller holds a role on, and that role, without dropping to the web UI), research notes and viability verdicts (C4/C5, dual-surface with `web/research` since #1896, see "NFR3 interface allocation" below), schedule sync reads, video_script propose/greenlight/deny/archive (C18/C19, milestone video-script-model -- the schedule-draft/pacing-policy tool surface, C6/C7/C8, was retired outright, FR41), outcome-match confirm/reject (re-anchored onto `video_script`, FR43/FR44), the outcome-bar/calibration-trend family (`set_outcome_bar`/`get_outcome_bar`/`get_calibration_trend`, C14, M3, issues #1882-#1885 -- MCP-only, see "NFR3 interface allocation" below), all browsing, and (#1650) forcing an out-of-band `ChannelSyncWorkflow` run via `trigger_channel_sync`. Exposed as MCP tools to any MCP-capable agent client. |
+| `web` | `audience_score_system/web` (C1 sign-in #1570, C2 Channel-connect #1571, C3 analyst invite #1572, C19 video_script greenlight/deny/archive UI #1834 -- rebuilt in place of C8's original schedule_entry-backed approve/un-approve/edit UI #1580, C4/C5 research/verdict save+browse UI #1896, C18 video_script propose UI #1914, C9/C10/C14 outcomes+matches UI `web/outcomes`/`web/matches` #1924) | `web` (external-api) | The **only** UI surface. Its three UI-only OAuth-consent surfaces are C1/C2/C3 (see "NFR3 interface allocation" below); its C19 schedule page (`web/schedule`, route paths unchanged per FR49), its `web/research` Channel research index/Idea detail pages plus save-note/save-verdict/propose forms (#1896, #1914), and its `web/outcomes`/`web/matches` pages plus set-outcome-bar/resolve forms (#1924) are UI front ends onto the same `store.VideoScriptStore` / `store.ResearchStore` / `store.VerdictStore` / `store.BrowseStore` / `store.MatchStore` / `store.OutcomeBarStore` / `store.CalibrationStore` that `mcp`'s tools also call. |
+| `mcp` | `audience_score_system/mcp` (#1575, #1577-#1582, #1631, #1648, #1650, #1823-#1835, #1882-#1885) | `mcp` (external-api) | Every other capability (C4-C7, C9, C10, C14, C18, C19): Channel access discovery (`list_channels`, #1631 -- resolves which Channels the caller holds a role on, and that role, without dropping to the web UI), research notes and viability verdicts (C4/C5, dual-surface with `web/research` since #1896, see "NFR3 interface allocation" below), schedule sync reads, video_script propose/greenlight/deny/archive (C18/C19, milestone video-script-model -- the schedule-draft/pacing-policy tool surface, C6/C7/C8, was retired outright, FR41), outcome-match confirm/reject (`list_pending_matches`/`resolve_pending_match`, C9, dual-surface with `web/matches` since #1924, re-anchored onto `video_script`, FR43/FR44), the outcome-bar/calibration-trend family (`set_outcome_bar`/`get_outcome_bar`/`get_calibration_trend`, C14, dual-surface with `web/outcomes` since #1924, see "NFR3 interface allocation" below), all browsing (`get_prediction_vs_outcome`'s C10 slice dual-surface with `web/outcomes` since #1924), and (#1650) forcing an out-of-band `ChannelSyncWorkflow` run via `trigger_channel_sync`. Exposed as MCP tools to any MCP-capable agent client. |
 | `worker` | `audience_score_system/worker` (#1574, #1576, #1581) | `worker` (worker) | Per-Channel Temporal scheduled workflow: syncs YouTube schedule (C6) and published-video metrics (C9) on a ~1-24 hour cadence (NFR4, default 24h). Skips a cycle for a disconnected/needs-reauth Channel without erroring the workflow. `mcp`'s `trigger_channel_sync` tool (#1650) can force an out-of-band run of the same workflow without waiting for this cadence. |
 | Postgres | — | — | System of record for all four components, accessed via `//libs/go/db` (`PG_DATABASE_URL`). No separate cache/read-model store in M1. |
 
@@ -602,6 +602,41 @@ and C10 (video-scripts browsing slice) are **unchanged** by this
 milestone: both have been dual-surface since #1823/#1834
 (`web/schedule.Handlers.HandleGreenlight`/`HandleDeny`/`HandleArchive`
 and `HandleList`). M4.2's only allocation change is C18.
+
+**NFR3 amendment (issue #1924): C9, C10 (prediction-vs-outcome slice),
+and C14 are dual-surface.** `web` now renders `GET
+/channels/{id}/outcomes` (`audience_score_system/web/outcomes`, issue
+#1928) and `GET /channels/{id}/matches` plus `POST
+/channels/{id}/matches/{matchID}/resolve` (`audience_score_system/web/
+matches`, issues #1926/#1927), alongside `web/outcomes`'s inline
+set-outcome-bar form (`POST /channels/{id}/outcome-bar`, issue #1929).
+None of this makes C9, C10, or C14 web-only, and none of it narrows an
+MCP tool -- `get_prediction_vs_outcome` (`mcp/tools/browse.go`),
+`list_pending_matches`/`resolve_pending_match` (`mcp/tools/matches.go`),
+and `get_outcome_bar`/`set_outcome_bar`/`get_calibration_trend`
+(`mcp/tools/outcome_bar.go`) are unchanged. The shared seams `web` and
+`mcp` both call identically (LB5) are `store.BrowseStore.
+PredictionVsOutcome` (C10's prediction-vs-outcome slice, gated by
+`store.CanRead` on both surfaces), `store.MatchStore.ListPending` and
+`store.MatchStore.Resolve` (C9, `store.CanRead` for the list and
+`store.CanWrite` for the resolve, on both surfaces), `store.
+OutcomeBarStore.GetByChannel` and `store.OutcomeBarStore.Upsert` (C14's
+read and write, `store.CanRead` and `store.CanWrite` respectively --
+Creator, Co-Creator, or Analyst, not Creator-only), and `store.
+CalibrationStore.MonthlyTrend` (C14's trend read, `store.CanRead`,
+classified against the Channel's current bar only) -- the same "two
+independent, equally-capable front ends onto the same store methods and
+the same authorization checks" relationship the retired-C8 amendment
+above established: not a primary and a read-only shadow, so an
+agent-only client and a browser-only user have the same authority. This
+**supersedes** the `#1880` amendment's statement that C14 is MCP-only
+with no `web` surface -- that statement was true as of M3 and is no
+longer true as of this milestone, per the same "amendment record, never
+rewritten" convention every prior paragraph in this section follows; the
+`#1880` paragraph itself is left untouched. Note FR5's flagged scope
+extension: `set_outcome_bar`'s write is now dual-surface, which the
+M4.3 roadmap entry did not originally anticipate (see #1924's FR5 scope
+note).
 
 ## Temporal: schedule upsert helper
 
