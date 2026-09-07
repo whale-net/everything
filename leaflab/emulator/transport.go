@@ -23,8 +23,8 @@ type Transport interface {
 // pahoTransport is created per simulated board -- never shared -- so each
 // board has its own connection identity (ClientID, LWT), exactly like N
 // real boards. Connect-time options (ClientID, LWT, auto-reconnect,
-// OnConnect) are constructed by the caller before Connect() is invoked;
-// that wiring lands in the Implementation phase.
+// OnConnect) are constructed by NewPahoRunner (runner.go); Connect() itself
+// is invoked by Runner.Start().
 type pahoTransport struct {
 	client mqtt.Client
 }
