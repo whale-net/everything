@@ -130,7 +130,7 @@ func newFixture(t *testing.T) *fixture {
 	// TestResearchNoteOutputs_AgreeAcrossListGetChannelOverviewAndMyWork
 	// below), not just save_research_note/list_research_notes.
 	tools.RegisterBrowse(reg, st)
-	tools.RegisterMyWork(reg, st.MyWork())
+	tools.RegisterMyWork(reg, st.MyWork(), st.Research())
 
 	handler := server.NewHTTPHandler(srv, creds, server.ResourceMetadataConfig{
 		Resource:            "https://mcp.example.com",
