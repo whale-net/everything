@@ -3713,3 +3713,303 @@ func TestHandleIdeaDetail_BackfilledPreMigrationNote_RendersOnSameIdeaPage(t *te
 	require.Equal(t, http.StatusOK, w.Code, "body: %s", w.Body.String())
 	assert.Contains(t, w.Body.String(), noteText, "a note backfilled by migration 016 must render on the same Idea detail page it did before #1936, via its resolved thread's idea_id")
 }
+
+// ── Issue #2029 (FR1/FR2/FR3/NFR6): note:<uuid> auto-linking + visible
+// note UUID coverage. anchorFor is "note-<uuid>" everywhere (notelink.go),
+// and every assertion below checks for a rendered <a href="..."> whose
+// target is that exact anchor on the exact page the referenced note
+// renders as itself -- never merely that SOME anchor exists. ─────────────
+
+// noteAnchor is the stable "note-<uuid>" fragment id notelink.go's
+// anchorFor and views.templ's noteBody both key off of (issue #2029).
+func noteAnchor(id uuid.UUID) string { return "note-" + id.String() }
+
+func TestHandleChannelIndex_NoteReference_SameChannel_RendersLinkToTargetAnchor(t *testing.T) {
+	ctx := context.Background()
+	s := newResearchTestStack(t)
+	ch, creator := s.setupChannel(t, ctx)
+
+	idea, err := s.store.Ideas().Create(ctx, ch.ID, "Target Idea", creator.ID)
+	require.NoError(t, err)
+	target, err := s.store.Research().SaveNote(ctx, store.SaveNoteInput{ThreadTitle: "Research",
+		ChannelID: ch.ID, IdeaID: &idea.ID, Text: "the target note", AuthorPersonID: creator.ID,
+	})
+	require.NoError(t, err)
+
+	_, err = s.store.Research().SaveNote(ctx, store.SaveNoteInput{ThreadTitle: "Unattached",
+		ChannelID: ch.ID, Text: fmt.Sprintf("see note:%s for context", target.ID), AuthorPersonID: creator.ID,
+	})
+	require.NoError(t, err)
+
+	w := s.do(t, http.MethodGet, "/channels/"+ch.ID.String()+"/research", s.sessionCookie(t, ctx, creator.ID))
+	require.Equal(t, http.StatusOK, w.Code, "body: %s", w.Body.String())
+
+	wantHRef := "/channels/" + ch.ID.String() + "/research/ideas/" + idea.ID.String() + "#" + noteAnchor(target.ID)
+	assert.Contains(t, w.Body.String(), `href="`+wantHRef+`"`, "an unattached note's note:<uuid> reference to a note on the same Channel must render as a link to that note's Idea-detail anchor")
+}
+
+func TestHandleIdeaDetail_NoteReference_SameIdea_RendersLinkToTargetAnchorOnSamePage(t *testing.T) {
+	ctx := context.Background()
+	s := newResearchTestStack(t)
+	ch, creator := s.setupChannel(t, ctx)
+
+	idea, err := s.store.Ideas().Create(ctx, ch.ID, "Shared Idea", creator.ID)
+	require.NoError(t, err)
+	target, err := s.store.Research().SaveNote(ctx, store.SaveNoteInput{ThreadTitle: "Research",
+		ChannelID: ch.ID, IdeaID: &idea.ID, Text: "the target note", AuthorPersonID: creator.ID,
+	})
+	require.NoError(t, err)
+	_, err = s.store.Research().SaveNote(ctx, store.SaveNoteInput{ThreadTitle: "Research",
+		ChannelID: ch.ID, IdeaID: &idea.ID, Text: fmt.Sprintf("as noted in NOTE:%s", target.ID), AuthorPersonID: creator.ID,
+	})
+	require.NoError(t, err)
+
+	w := s.do(t, http.MethodGet, "/channels/"+ch.ID.String()+"/research/ideas/"+idea.ID.String(), s.sessionCookie(t, ctx, creator.ID))
+	require.Equal(t, http.StatusOK, w.Code, "body: %s", w.Body.String())
+
+	wantHRef := "/channels/" + ch.ID.String() + "/research/ideas/" + idea.ID.String() + "#" + noteAnchor(target.ID)
+	assert.Contains(t, w.Body.String(), `href="`+wantHRef+`"`, "a same-Idea note:<uuid> reference must link to the target note's own anchor on this same page")
+}
+
+// TestHandleIdeaDetail_NoteReference_ToNoteOnDifferentIdea_LinksToThatIdeasPage
+// proves resolveNoteRefTargets' one-additional-batched-GetByIDs path
+// (research.go): the referenced note is NOT among the referencing Idea's
+// own loaded notes, so it can only resolve via that extra call -- and it
+// must still link to the OTHER Idea's own detail page, not the page
+// currently being viewed.
+func TestHandleIdeaDetail_NoteReference_ToNoteOnDifferentIdea_LinksToThatIdeasPage(t *testing.T) {
+	ctx := context.Background()
+	s := newResearchTestStack(t)
+	ch, creator := s.setupChannel(t, ctx)
+
+	ideaA, err := s.store.Ideas().Create(ctx, ch.ID, "Idea A", creator.ID)
+	require.NoError(t, err)
+	ideaB, err := s.store.Ideas().Create(ctx, ch.ID, "Idea B", creator.ID)
+	require.NoError(t, err)
+
+	target, err := s.store.Research().SaveNote(ctx, store.SaveNoteInput{ThreadTitle: "Research",
+		ChannelID: ch.ID, IdeaID: &ideaB.ID, Text: "idea B's own note", AuthorPersonID: creator.ID,
+	})
+	require.NoError(t, err)
+	_, err = s.store.Research().SaveNote(ctx, store.SaveNoteInput{ThreadTitle: "Research",
+		ChannelID: ch.ID, IdeaID: &ideaA.ID, Text: fmt.Sprintf("related to note:%s", target.ID), AuthorPersonID: creator.ID,
+	})
+	require.NoError(t, err)
+
+	w := s.do(t, http.MethodGet, "/channels/"+ch.ID.String()+"/research/ideas/"+ideaA.ID.String(), s.sessionCookie(t, ctx, creator.ID))
+	require.Equal(t, http.StatusOK, w.Code, "body: %s", w.Body.String())
+
+	wantHRef := "/channels/" + ch.ID.String() + "/research/ideas/" + ideaB.ID.String() + "#" + noteAnchor(target.ID)
+	assert.Contains(t, w.Body.String(), `href="`+wantHRef+`"`, "a reference to a note on a DIFFERENT Idea (resolved via the extra batched GetByIDs call) must link to that Idea's own detail page, not the page being viewed")
+}
+
+// TestHandleChannelIndex_NoteReference_UnresolvableID_RendersPlainText is
+// FR3's first negative case: a well-formed uuid that names no real note.
+func TestHandleChannelIndex_NoteReference_UnresolvableID_RendersPlainText(t *testing.T) {
+	ctx := context.Background()
+	s := newResearchTestStack(t)
+	ch, creator := s.setupChannel(t, ctx)
+
+	randomID := uuid.New()
+	_, err := s.store.Research().SaveNote(ctx, store.SaveNoteInput{ThreadTitle: "Unattached",
+		ChannelID: ch.ID, Text: fmt.Sprintf("dangling reference note:%s here", randomID), AuthorPersonID: creator.ID,
+	})
+	require.NoError(t, err)
+
+	w := s.do(t, http.MethodGet, "/channels/"+ch.ID.String()+"/research", s.sessionCookie(t, ctx, creator.ID))
+	require.Equal(t, http.StatusOK, w.Code, "body: %s", w.Body.String())
+
+	body := w.Body.String()
+	assert.Contains(t, body, "note:"+randomID.String(), "an unresolvable reference must still render its literal text")
+	assert.NotContains(t, body, `href="`+"/channels/"+ch.ID.String()+"/research#"+noteAnchor(randomID)+`"`, "an unresolvable reference must never render as a link")
+	assert.NotContains(t, body, `href="/channels/`+ch.ID.String()+`/research/ideas/`, "an unresolvable reference must not link into any Idea page either")
+}
+
+// TestHandleChannelIndex_NoteReference_CrossChannel_RendersPlainText_NoDataLeak
+// is FR3's load-bearing negative case: a note on Channel A references a
+// REAL note on a DIFFERENT Channel B. It must render as plain text -- and
+// Channel B's note text must never appear in Channel A's response body at
+// all (the cross-Channel leak guard, resolveNoteRefTargets' ChannelID
+// check in research.go).
+//
+// This is this file's load-bearing red/green case for issue #2029: see
+// this task's Testing-phase status comment for the deliberate-break
+// verification -- temporarily removing resolveNoteRefTargets' `if
+// n.ChannelID != channelID { continue }` guard turned this test red
+// (Channel B's secret note text leaked into Channel A's response, and the
+// reference rendered as a live link), and restoring the guard turned it
+// green again.
+func TestHandleChannelIndex_NoteReference_CrossChannel_RendersPlainText_NoDataLeak(t *testing.T) {
+	ctx := context.Background()
+	s := newResearchTestStack(t)
+	chA, creatorA := s.setupChannel(t, ctx)
+	chB, creatorB := s.setupChannel(t, ctx)
+
+	const secretText = "SECRET-CHANNEL-B-ONLY-CONTENT-should-never-leak-to-A"
+	noteB, err := s.store.Research().SaveNote(ctx, store.SaveNoteInput{ThreadTitle: "B Research",
+		ChannelID: chB.ID, Text: secretText, AuthorPersonID: creatorB.ID,
+	})
+	require.NoError(t, err)
+
+	_, err = s.store.Research().SaveNote(ctx, store.SaveNoteInput{ThreadTitle: "A Research",
+		ChannelID: chA.ID, Text: fmt.Sprintf("cross-channel reference note:%s", noteB.ID), AuthorPersonID: creatorA.ID,
+	})
+	require.NoError(t, err)
+
+	w := s.do(t, http.MethodGet, "/channels/"+chA.ID.String()+"/research", s.sessionCookie(t, ctx, creatorA.ID))
+	require.Equal(t, http.StatusOK, w.Code, "body: %s", w.Body.String())
+
+	body := w.Body.String()
+	assert.Contains(t, body, "note:"+noteB.ID.String(), "a cross-Channel reference must still render its literal text")
+	assert.NotContains(t, body, secretText, "Channel B's note text must NEVER appear in Channel A's response body")
+	assert.NotContains(t, body, `href="/channels/`+chB.ID.String(), "Channel A's response must never link into Channel B at all")
+	assert.NotContains(t, body, `#`+noteAnchor(noteB.ID), "Channel A's response must never anchor-link to Channel B's note id")
+}
+
+// TestHandleIdeaDetail_NoteReference_MalformedUUID_RendersPlainText is
+// FR3's third negative case: text shaped like a reference but whose
+// "uuid" is not one (noteRefPattern's hex-digit character class never
+// matches it, so it falls straight through as literal text).
+func TestHandleIdeaDetail_NoteReference_MalformedUUID_RendersPlainText(t *testing.T) {
+	ctx := context.Background()
+	s := newResearchTestStack(t)
+	ch, creator := s.setupChannel(t, ctx)
+
+	idea, err := s.store.Ideas().Create(ctx, ch.ID, "Malformed Ref Idea", creator.ID)
+	require.NoError(t, err)
+	_, err = s.store.Research().SaveNote(ctx, store.SaveNoteInput{ThreadTitle: "Research",
+		ChannelID: ch.ID, IdeaID: &idea.ID, Text: "see note:not-a-uuid for details", AuthorPersonID: creator.ID,
+	})
+	require.NoError(t, err)
+
+	w := s.do(t, http.MethodGet, "/channels/"+ch.ID.String()+"/research/ideas/"+idea.ID.String(), s.sessionCookie(t, ctx, creator.ID))
+	require.Equal(t, http.StatusOK, w.Code, "body: %s", w.Body.String())
+
+	body := w.Body.String()
+	assert.Contains(t, body, "note:not-a-uuid", "a malformed reference must render its literal text unchanged")
+	assert.NotContains(t, body, `href="/channels/`+ch.ID.String()+`/research/ideas/`+idea.ID.String()+`#note-not-a-uuid"`, "a malformed reference must never render as a link")
+}
+
+// TestHandleIdeaDetail_NoteReference_TextEscaped_EvenAlongsideValidReference
+// proves FR3's escaping requirement holds for BOTH the literal-text
+// segments AND the linked segment of the same note's Text: templ's
+// automatic escaping must apply to every segment linkifyNoteRefs produces,
+// never a raw string-concatenation shortcut.
+func TestHandleIdeaDetail_NoteReference_TextEscaped_EvenAlongsideValidReference(t *testing.T) {
+	ctx := context.Background()
+	s := newResearchTestStack(t)
+	ch, creator := s.setupChannel(t, ctx)
+
+	idea, err := s.store.Ideas().Create(ctx, ch.ID, "Escaping Idea", creator.ID)
+	require.NoError(t, err)
+	target, err := s.store.Research().SaveNote(ctx, store.SaveNoteInput{ThreadTitle: "Research",
+		ChannelID: ch.ID, IdeaID: &idea.ID, Text: "target note", AuthorPersonID: creator.ID,
+	})
+	require.NoError(t, err)
+	_, err = s.store.Research().SaveNote(ctx, store.SaveNoteInput{ThreadTitle: "Research",
+		ChannelID: ch.ID, IdeaID: &idea.ID, Text: fmt.Sprintf("<script>alert(1)</script> note:%s", target.ID), AuthorPersonID: creator.ID,
+	})
+	require.NoError(t, err)
+
+	w := s.do(t, http.MethodGet, "/channels/"+ch.ID.String()+"/research/ideas/"+idea.ID.String(), s.sessionCookie(t, ctx, creator.ID))
+	require.Equal(t, http.StatusOK, w.Code, "body: %s", w.Body.String())
+
+	body := w.Body.String()
+	assert.Contains(t, body, "&lt;script&gt;alert(1)&lt;/script&gt;", "note text must stay HTML-escaped even when it also contains a valid note:<uuid> reference")
+	assert.NotContains(t, body, "<script>alert(1)</script>", "the raw, unescaped script tag from note text must never appear in the response body")
+	assert.Contains(t, body, `href="/channels/`+ch.ID.String()+`/research/ideas/`+idea.ID.String()+`#`+noteAnchor(target.ID)+`"`, "the valid reference alongside the escaped text must still render as a link")
+}
+
+// TestHandleChannelIndexAndIdeaDetail_NFR6_EveryNoteUUIDVisibleInBodyText
+// proves NFR6: every note rendered as itself shows its own uuid as
+// visible, selectable BODY text (inside an element, e.g. `>#<uuid><`),
+// never only inside an attribute value like an <option value="...">.
+func TestHandleChannelIndexAndIdeaDetail_NFR6_EveryNoteUUIDVisibleInBodyText(t *testing.T) {
+	ctx := context.Background()
+	s := newResearchTestStack(t)
+	ch, creator := s.setupChannel(t, ctx)
+
+	idea, err := s.store.Ideas().Create(ctx, ch.ID, "NFR6 Idea", creator.ID)
+	require.NoError(t, err)
+	attached, err := s.store.Research().SaveNote(ctx, store.SaveNoteInput{ThreadTitle: "Research",
+		ChannelID: ch.ID, IdeaID: &idea.ID, Text: "attached note", AuthorPersonID: creator.ID,
+	})
+	require.NoError(t, err)
+	unattached, err := s.store.Research().SaveNote(ctx, store.SaveNoteInput{ThreadTitle: "Unattached",
+		ChannelID: ch.ID, Text: "unattached note", AuthorPersonID: creator.ID,
+	})
+	require.NoError(t, err)
+
+	wIndex := s.do(t, http.MethodGet, "/channels/"+ch.ID.String()+"/research", s.sessionCookie(t, ctx, creator.ID))
+	require.Equal(t, http.StatusOK, wIndex.Code, "body: %s", wIndex.Body.String())
+	assert.Contains(t, wIndex.Body.String(), ">#"+unattached.ID.String()+"<", "the unattached note's own uuid must appear as visible element text on the Channel index, not only inside an attribute value")
+
+	wIdea := s.do(t, http.MethodGet, "/channels/"+ch.ID.String()+"/research/ideas/"+idea.ID.String(), s.sessionCookie(t, ctx, creator.ID))
+	require.Equal(t, http.StatusOK, wIdea.Code, "body: %s", wIdea.Body.String())
+	assert.Contains(t, wIdea.Body.String(), ">#"+attached.ID.String()+"<", "the attached note's own uuid must appear as visible element text on the Idea-detail page, not only inside an attribute value")
+}
+
+// TestHandleIdeaDetail_NoteReference_BoundedQueryCount_DoesNotScaleWithN is
+// the NFR3-style performance requirement (issue #2029): resolving many
+// note:<uuid> references, each naming a DIFFERENT note outside the page's
+// already-loaded set, must still issue at most ONE additional batched
+// query -- never one round trip per reference. fewRefs (3 notes, 3
+// distinct off-page targets) and manyRefs (12 notes, 12 distinct off-page
+// targets) must therefore issue the IDENTICAL total query count as each
+// other, both exactly one more than a same-shape Idea with no references
+// at all.
+func TestHandleIdeaDetail_NoteReference_BoundedQueryCount_DoesNotScaleWithN(t *testing.T) {
+	ctx := context.Background()
+	s := newResearchTestStack(t)
+	ch, creator := s.setupChannel(t, ctx)
+
+	otherIdea, err := s.store.Ideas().Create(ctx, ch.ID, "Off-Page Targets", creator.ID)
+	require.NoError(t, err)
+
+	makeOffPageTargets := func(n int) []uuid.UUID {
+		ids := make([]uuid.UUID, n)
+		for i := 0; i < n; i++ {
+			note, err := s.store.Research().SaveNote(ctx, store.SaveNoteInput{ThreadTitle: "Off-Page Targets",
+				ChannelID: ch.ID, IdeaID: &otherIdea.ID, Text: fmt.Sprintf("off-page target %d", i), AuthorPersonID: creator.ID,
+			})
+			require.NoError(t, err)
+			ids[i] = note.ID
+		}
+		return ids
+	}
+
+	buildIdeaWithReferences := func(label string, targets []uuid.UUID) store.Idea {
+		idea, err := s.store.Ideas().Create(ctx, ch.ID, label, creator.ID)
+		require.NoError(t, err)
+		for i, target := range targets {
+			text := fmt.Sprintf("note %d, no reference", i)
+			if target != uuid.Nil {
+				text = fmt.Sprintf("note %d references note:%s", i, target)
+			}
+			_, err := s.store.Research().SaveNote(ctx, store.SaveNoteInput{ThreadTitle: "Research",
+				ChannelID: ch.ID, IdeaID: &idea.ID, Text: text, AuthorPersonID: creator.ID,
+			})
+			require.NoError(t, err)
+		}
+		return idea
+	}
+
+	noRefsIdea := buildIdeaWithReferences("No Refs", make([]uuid.UUID, 3))
+	fewRefsIdea := buildIdeaWithReferences("Few Refs", makeOffPageTargets(3))
+	manyRefsIdea := buildIdeaWithReferences("Many Refs", makeOffPageTargets(12))
+
+	runTraced := func(idea store.Idea) int64 {
+		counter := &researchQueryCounter{}
+		stack := s.tracedResearchStack(t, ctx, counter)
+		w := stack.do(t, http.MethodGet, "/channels/"+ch.ID.String()+"/research/ideas/"+idea.ID.String(), stack.sessionCookie(t, ctx, creator.ID))
+		require.Equal(t, http.StatusOK, w.Code, "body: %s", w.Body.String())
+		return counter.n
+	}
+
+	noRefsCount := runTraced(noRefsIdea)
+	fewRefsCount := runTraced(fewRefsIdea)
+	manyRefsCount := runTraced(manyRefsIdea)
+
+	assert.Equal(t, noRefsCount+1, fewRefsCount, "3 references to 3 distinct off-page notes must add exactly ONE batched query versus no references at all")
+	assert.Equal(t, fewRefsCount, manyRefsCount, "12 references to 12 distinct off-page notes must issue the SAME query count as 3 references -- resolution must not scale per-reference")
+}
