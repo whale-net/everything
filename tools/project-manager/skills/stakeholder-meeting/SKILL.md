@@ -13,7 +13,7 @@ Callable directly, or automatically by `/project-manager:design --stakeholder-me
 
 ```
 /project-manager:stakeholder-meeting <discussion-url>          # after architect sign-off, before human review
-/project-manager:stakeholder-meeting <root-issue-number>       # after the root plan is labeled plan:approved
+/project-manager:stakeholder-meeting <root-issue-number>       # after the root plan is labeled plan:approved (or plan:agent-approved)
 /project-manager:stakeholder-meeting <target> --personas "Operator,Release engineer"   # only these personas
 /project-manager:stakeholder-meeting <target> --add-persona "On-call SRE"              # spec personas plus extras
 ```
@@ -22,7 +22,7 @@ Callable directly, or automatically by `/project-manager:design --stakeholder-me
 
 1. **Resolve the target and read the plan.**
    - Discussion URL/number → `gh discussion view <target> --comments` for sign-off status and the working-draft gist link (CONVENTIONS.md § Working draft); the gist content is authoritative for the spec itself, not any comment. If no `Architect sign-off: approved` comment is present, say so and ask the user whether to hold the meeting anyway — a meeting on an unreconciled draft usually just re-raises what architect is about to ask.
-   - Issue number → `gh issue view <n> --json title,body,url,labels` plus `gh issue view <n> --comments`. Warn if it is not labeled `plan:approved`.
+   - Issue number → `gh issue view <n> --json title,body,url,labels` plus `gh issue view <n> --comments`. Warn if it is not labeled `plan:approved` or `plan:agent-approved`.
 
 2. **Determine the round number.** Count existing `Stakeholder meeting round <N>: <url>` link comments on the target; this meeting is round `N+1` (first meeting is round 1).
 

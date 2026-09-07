@@ -24,7 +24,7 @@ This orchestrator tracks `<plan-branches>`: every branch already registered into
 
 ## Steps
 
-1. `gh issue view <n> --comments` — confirm the root issue is labeled `plan:approved` and a `Project board: <url>` comment exists (extract the project number). If the label is missing, point the user to `/project-manager:design` or `/project-manager:review`. If the label is present but there's no `Project board:` comment yet, point the user to `/project-manager:plan <n>` first and stop.
+1. `gh issue view <n> --comments` — confirm the root issue is labeled `plan:approved` or `plan:agent-approved` (CONVENTIONS.md § Agent-approved plans — functionally identical here) and a `Project board: <url>` comment exists (extract the project number). If neither label is present, point the user to `/project-manager:design`, `/project-manager:review`, or `/project-manager:loop-design-panel`. If the label is present but there's no `Project board:` comment yet, point the user to `/project-manager:plan <n>` first and stop.
 
 2. **Stack prerequisites** (CONVENTIONS.md § Git hygiene step 1):
    ```sh
