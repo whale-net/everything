@@ -954,6 +954,34 @@ templ IdeaDetail(data components.LayoutData, ch store.Channel, idea store.Idea, 
 	}
 }
 
+// VerdictDetail is the verdict-details page (#2034, FR6-FR9) --
+// research.go's HandleVerdictDetail/renderVerdictDetail serve it at
+// GET /channels/{id}/research/ideas/{ideaID}/verdicts. A Scaffold-phase
+// placeholder body: the Implementation phase replaces this with the
+// current verdict rendered prominently (FR6, reusing verdictBody/
+// components.VerdictGlyph exactly as IdeaDetail does today), a
+// version-select control listing every version oldest-to-newest (FR7,
+// re-rendering this SAME page via a GET query param -- no diff/comparison
+// view anywhere, per #1953's explicit exclusion), the selected version's
+// cited notes (FR8, reusing citedNotesSection/citedNoteBody), and an
+// explicit empty state for a verdict-less Idea (FR9, still a 200) --
+// assembled from data renderVerdictDetail resolves; this templ does no
+// store calls of its own, mirroring IdeaDetail's identical split.
+templ VerdictDetail(data components.LayoutData, ch store.Channel, idea store.Idea) {
+	@components.Layout(data) {
+		<div class="card bg-base-100 border border-base-300 shadow-sm">
+			<div class="card-body">
+				<h1 class="card-title">{ idea.Title } verdict history</h1>
+				<div class="card-actions justify-end mt-2">
+					<a href={ templ.URL("/channels/" + ch.ID.String() + "/research/ideas/" + idea.ID.String()) } class="btn btn-secondary btn-sm">
+						Back to idea
+					</a>
+				</div>
+			</div>
+		</div>
+	}
+}
+
 // verdictBody renders one store.Verdict: version, value badge, reasoning,
 // author display name (from authorNames, keyed by AuthorPersonID as a
 // UUID string), source (FR5), created_at, and -- FR9, #1943 -- its cited

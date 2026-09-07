@@ -74,8 +74,17 @@
 //     FR33-FR35).
 //   - POST /channels/{id}/research/ideas/{ideaID}/verdicts --
 //     HandleSaveVerdict (FR4, FR6, FR7).
+//   - GET /channels/{id}/research/ideas/{ideaID}/verdicts --
+//     HandleVerdictDetail (#2034, FR4-FR9): the verdict-details page --
+//     see that handler's doc comment.
 //   - POST /channels/{id}/research/ideas/{ideaID}/video-scripts --
 //     HandleProposeVideoScript (#1915, FR1-FR5, NFR1-NFR3).
+//
+// #2034 (FR4-FR9) shrinks IdeaDetail's inline verdict section down to the
+// Idea's current verdict only and moves the full version history plus
+// each version's cited notes to this new GET .../verdicts page --
+// depended on #2028's shared components.VerdictGlyph landing first so
+// neither surface re-introduces the old text badge.
 package research
 
 import (
@@ -1151,6 +1160,51 @@ func (h *Handlers) HandleSaveVerdict(w http.ResponseWriter, r *http.Request) {
 	}
 
 	http.Redirect(w, r, "/channels/"+channelID.String()+"/research/ideas/"+ideaID.String(), http.StatusSeeOther)
+}
+
+// HandleVerdictDetail serves GET
+// /channels/{id}/research/ideas/{ideaID}/verdicts (#2034, FR4-FR9): the
+// verdict-details page a link on IdeaDetail's now-shrunk inline verdict
+// section (FR5) points to whenever the Idea has at least one verdict.
+// Renders the Idea's current verdict prominently (FR6: value via
+// components.VerdictGlyph, reasoning, author, timestamp), a version-select
+// populated from EVERY version oldest-to-newest (FR7, a bookmarkable GET
+// query param -- no POST, no diff/comparison view per #1953's explicit
+// exclusion), the selected version's cited research notes (FR8, reusing
+// citedResearchNotes/retiredCitedResearchNotes exactly as verdictBody
+// does today), and an explicit 200 empty state for a verdict-less Idea
+// (FR9 -- VerdictStore.Current's pgx.ErrNoRows is NOT a missing page).
+//
+// Scaffolded here as a compiling stub -- the Implementation phase adds
+// the real auth -> 404 -> 400 preamble mirroring HandleIdeaDetail exactly
+// (resolve the signed-in Person; parse+load {id}'s Channel, 404 if
+// missing; store.CanRead, 403 if not a member; parse+load {ideaID}'s
+// Idea, 404 if missing or if it belongs to a different Channel -- NFR4's
+// load-bearing cross-Channel guard) before calling renderVerdictDetail.
+func (h *Handlers) HandleVerdictDetail(w http.ResponseWriter, r *http.Request) {
+	http.Error(w, "not implemented", http.StatusNotImplemented)
+}
+
+// renderVerdictDetail assembles and renders the verdict-details page
+// (FR6-FR9) once HandleVerdictDetail's preamble has resolved person, ch,
+// and idea -- mirroring renderIdeaDetail's split from HandleIdeaDetail so
+// a future re-render call site (FR7's out-of-range/unparseable/
+// cross-Idea version-selector fallback) has ONE render path to reuse
+// rather than duplicating it.
+//
+// Scaffolded here as a compiling stub -- the Implementation phase adds
+// the real store.VerdictStore.Current/History loads (the identical pair
+// renderIdeaDetail already makes, so `web` never disagrees with
+// get_viability_verdict on which version is current), FR7's version
+// query-param resolution (falling back to current on anything
+// out-of-range, unparseable, or naming a verdict on a different Idea --
+// never a 500, never another Idea's verdict), FR8's cited-notes
+// resolution for the SELECTED version only (reusing citedResearchNotes/
+// citedNotesSection/retiredCitedResearchNotes, never a per-version or
+// per-note query), and FR9's empty-state branch when
+// VerdictStore.Current returns pgx.ErrNoRows.
+func (h *Handlers) renderVerdictDetail(w http.ResponseWriter, r *http.Request, person *store.Person, ch store.Channel, idea store.Idea) {
+	http.Error(w, "not implemented", http.StatusNotImplemented)
 }
 
 // proposeFormWithError returns a copy of form with Error set to msg,

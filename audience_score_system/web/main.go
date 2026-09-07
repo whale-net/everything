@@ -510,6 +510,15 @@ func (a *app) setupRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("POST /channels/{id}/research/notes", a.auth.RequireSignedIn(a.research.HandleSaveNote))
 	mux.HandleFunc("POST /channels/{id}/research/ideas", a.auth.RequireSignedIn(a.research.HandleCreateIdea))
 	mux.HandleFunc("POST /channels/{id}/research/ideas/{ideaID}/verdicts", a.auth.RequireSignedIn(a.research.HandleSaveVerdict))
+	// GET on this SAME path pattern as the POST directly above (#2034,
+	// FR4-FR9): Go 1.22 ServeMux keys a registered pattern on its method
+	// PLUS its path, so "GET /channels/{id}/research/ideas/{ideaID}/verdicts"
+	// and "POST /channels/{id}/research/ideas/{ideaID}/verdicts" are two
+	// distinct patterns that neither shadows nor conflicts with the other --
+	// confirmed via `go doc net/http ServeMux.Handle`'s "patterns that differ
+	// only in method are not conflicting" rule; both are free to coexist on
+	// this identical path.
+	mux.HandleFunc("GET /channels/{id}/research/ideas/{ideaID}/verdicts", a.auth.RequireSignedIn(a.research.HandleVerdictDetail))
 	mux.HandleFunc("POST /channels/{id}/research/ideas/{ideaID}/video-scripts", a.auth.RequireSignedIn(a.research.HandleProposeVideoScript))
 
 	// Protected: milestone M4.3's read-only pending-matches browse page
