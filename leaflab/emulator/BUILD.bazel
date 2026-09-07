@@ -43,6 +43,7 @@ go_test(
         "manifest_test.go",
         "runner_test.go",
         "scenario_test.go",
+        "soak_test.go",
         "transport_test.go",
         "valuegen_test.go",
     ],
