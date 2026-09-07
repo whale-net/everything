@@ -325,16 +325,51 @@ templ noteBody(note store.ResearchNoteWithAuthor) {
 	</div>
 }
 
+// retiredWarningLabel renders FR10's staleness warning text for retiredBy
+// (store.ResearchStore.RetiredNoteIDs' per-note relation-type slice),
+// distinguishing "superseded" from "excluded" as FR10 requires -- both
+// together when a note is a target of both relation types. This is the
+// single label-composition point citedNoteBody's warning uses, so the
+// wording can never drift between a superseded-only, excluded-only, and
+// both case.
+func retiredWarningLabel(retiredBy []store.RelationType) string {
+	superseded, excluded := false, false
+	for _, t := range retiredBy {
+		switch t {
+		case store.RelationSupersedes:
+			superseded = true
+		case store.RelationExcludes:
+			excluded = true
+		}
+	}
+	switch {
+	case superseded && excluded:
+		return "Superseded and excluded"
+	case superseded:
+		return "Superseded"
+	case excluded:
+		return "Excluded"
+	default:
+		return ""
+	}
+}
+
 // citedNoteBody renders one verdict citation (FR9, FR16/NFR2): the cited
 // store.ResearchNote's text excerpt -- truncated by mcp/tools.Excerpt, the
 // SAME bound get_viability_verdict truncates at, never a second
-// truncation -- its source_url if any, and citedBadge (shared with
-// noteBody, never reimplemented). ok is false when id did not resolve
-// (citedNotes map, from research.go's citedResearchNotes) -- a defensive
-// path (verdict_citation FKs research_note and nothing in this package
-// deletes one), rendered as a benign "note unavailable" marker rather than
-// panicking or silently dropping the row.
-templ citedNoteBody(note store.ResearchNote, ok bool) {
+// truncation -- its source_url if any, citedBadge (shared with noteBody,
+// never reimplemented), and -- FR10, #1944 -- a superseded/excluded
+// warning when retiredBy is non-empty (store.ResearchStore.RetiredNoteIDs,
+// resolved once per page by research.go's retiredCitedResearchNotes).
+// This warning is purely informational: the citation still names this
+// EXACT note -- verdict_citation is never re-resolved to whatever
+// superseded or excluded it (root plan #1934, Out of scope). ok is false
+// when id did not resolve (citedNotes map, from research.go's
+// citedResearchNotes) -- a defensive path (verdict_citation FKs
+// research_note and nothing in this package deletes one), rendered as a
+// benign "note unavailable" marker rather than panicking or silently
+// dropping the row.
+templ citedNoteBody(note store.ResearchNote, ok bool, retiredBy []store.RelationType) {
 	if !ok {
 		<li class="text-xs text-base-content/50 italic">Cited note unavailable</li>
 	} else {
@@ -347,6 +382,11 @@ templ citedNoteBody(note store.ResearchNote, ok bool) {
 							Source: <a href={ templ.URL(*note.SourceURL) } class="link" target="_blank" rel="noopener noreferrer">{ *note.SourceURL }</a>
 						</p>
 					}
+					if label := retiredWarningLabel(retiredBy); label != "" {
+						<p class="text-xs text-warning font-semibold mt-1">
+							⚠ { label } -- this citation still points at the note text above as originally cited.
+						</p>
+					}
 				</div>
 				@citedBadge(note)
 			</div>
@@ -357,15 +397,17 @@ templ citedNoteBody(note store.ResearchNote, ok bool) {
 // citedNotesSection renders a verdict's cited-notes list (FR9): nothing at
 // all when citedIDs is empty (never an empty heading), otherwise a small
 // heading plus one citedNoteBody per id, resolved from notes (research.go's
-// citedResearchNotes map, keyed by research_note id).
-templ citedNotesSection(citedIDs []uuid.UUID, notes map[uuid.UUID]store.ResearchNote) {
+// citedResearchNotes map, keyed by research_note id) and retired
+// (research.go's retiredCitedResearchNotes map, FR10, #1944 -- absent id
+// means a live note, no warning).
+templ citedNotesSection(citedIDs []uuid.UUID, notes map[uuid.UUID]store.ResearchNote, retired map[uuid.UUID][]store.RelationType) {
 	if len(citedIDs) > 0 {
 		<div class="mt-2">
 			<p class="text-xs font-semibold text-base-content/70">Cited notes</p>
 			<ul class="mt-1 space-y-1">
 				for _, id := range citedIDs {
 					{{ note, ok := notes[id] }}
-					@citedNoteBody(note, ok)
+					@citedNoteBody(note, ok, retired[id])
 				}
 			</ul>
 		</div>
@@ -384,6 +426,11 @@ templ citedNotesSection(citedIDs []uuid.UUID, notes map[uuid.UUID]store.Research
 // resolved store.ResearchNote -- research.go's citedResearchNotes resolves
 // the union of every verdict's CitedResearchNoteIDs (current + every
 // history entry) in ONE batched call, never one query per citation.
+// retiredNotes (FR10, FR16/NFR2, #1944) maps that SAME id union to which
+// relation type(s) currently retire it (research.go's
+// retiredCitedResearchNotes, store.ResearchStore.RetiredNoteIDs) -- an id
+// absent from this map is a live note, so citedNoteBody renders no
+// warning for it.
 //
 // canWrite (store.CanWrite, research.go's renderIdeaDetail) gates BOTH
 // the save-note form (FR3, FR6, FR7) and the save-verdict form (FR4, FR6,
@@ -415,7 +462,7 @@ templ citedNotesSection(citedIDs []uuid.UUID, notes map[uuid.UUID]store.Research
 // current verdict (FR4), never this render-time check alone -- but that
 // presentation gate must never suppress an error the server already
 // decided to show.
-templ IdeaDetail(data components.LayoutData, ch store.Channel, idea store.Idea, notes []store.ResearchNoteWithAuthor, notesTruncated bool, threads []store.ThreadSummary, current *store.Verdict, history []store.Verdict, authorNames map[uuid.UUID]string, citedNotes map[uuid.UUID]store.ResearchNote, canWrite bool, form noteFormData, verdictForm verdictFormData, strategies []store.StrategyDetail, proposeForm proposeFormData) {
+templ IdeaDetail(data components.LayoutData, ch store.Channel, idea store.Idea, notes []store.ResearchNoteWithAuthor, notesTruncated bool, threads []store.ThreadSummary, current *store.Verdict, history []store.Verdict, authorNames map[uuid.UUID]string, citedNotes map[uuid.UUID]store.ResearchNote, retiredNotes map[uuid.UUID][]store.RelationType, canWrite bool, form noteFormData, verdictForm verdictFormData, strategies []store.StrategyDetail, proposeForm proposeFormData) {
 	@components.Layout(data) {
 		<div class="card bg-base-100 border border-base-300 shadow-sm">
 			<div class="card-body">
@@ -463,7 +510,7 @@ templ IdeaDetail(data components.LayoutData, ch store.Channel, idea store.Idea, 
 					} else {
 						<div class="border border-base-300 rounded p-2 mt-2">
 							<p class="text-sm font-semibold">Current</p>
-							@verdictBody(*current, authorNames, citedNotes)
+							@verdictBody(*current, authorNames, citedNotes, retiredNotes)
 						</div>
 					}
 
@@ -472,7 +519,7 @@ templ IdeaDetail(data components.LayoutData, ch store.Channel, idea store.Idea, 
 						<ul class="mt-2 space-y-2">
 							for _, v := range history {
 								<li class="border border-base-300 rounded p-2">
-									@verdictBody(v, authorNames, citedNotes)
+									@verdictBody(v, authorNames, citedNotes, retiredNotes)
 								</li>
 							}
 						</ul>
@@ -508,8 +555,11 @@ templ IdeaDetail(data components.LayoutData, ch store.Channel, idea store.Idea, 
 // UUID string), source (FR5), created_at, and -- FR9, #1943 -- its cited
 // notes (citedNotesSection above; renders nothing when v.CitedResearchNoteIDs
 // is empty). notes is the citedNotes map IdeaDetail resolved once for the
-// whole page, keyed by research_note id.
-templ verdictBody(v store.Verdict, authorNames map[uuid.UUID]string, notes map[uuid.UUID]store.ResearchNote) {
+// whole page, keyed by research_note id. retired (FR10, #1944) is the
+// SAME page-wide retiredCitedResearchNotes map, threaded through to
+// citedNotesSection so both the current verdict and every history entry
+// show the identical superseded/excluded warning.
+templ verdictBody(v store.Verdict, authorNames map[uuid.UUID]string, notes map[uuid.UUID]store.ResearchNote, retired map[uuid.UUID][]store.RelationType) {
 	<div class="flex justify-between items-start gap-4">
 		<div>
 			<p class="text-sm text-base-content/70">Version { strconv.Itoa(v.Version) }</p>
@@ -517,7 +567,7 @@ templ verdictBody(v store.Verdict, authorNames map[uuid.UUID]string, notes map[u
 			<p class="text-xs text-base-content/70">
 				{ authorName(authorNames, v.AuthorPersonID) } ({ verdictSourceLabel(v.Source) }) — { v.CreatedAt.UTC().Format("2006-01-02 15:04 UTC") }
 			</p>
-			@citedNotesSection(v.CitedResearchNoteIDs, notes)
+			@citedNotesSection(v.CitedResearchNoteIDs, notes, retired)
 		</div>
 		<span class={ verdictBadgeClass(v.Verdict) }>{ verdictLabel(v.Verdict) }</span>
 	</div>

@@ -103,6 +103,27 @@ type ResearchStore interface {
 	// unbounded fetch-then-filter-in-Go). Backs list_research_notes
 	// (mcp/tools/research.go, issue #1577).
 	ListFiltered(ctx context.Context, channelID uuid.UUID, ideaID *uuid.UUID, cited *bool, since, before *time.Time, limit int) (notes []ResearchNoteWithAuthor, truncated bool, err error)
+
+	// RetiredNoteIDs returns the subset of noteIDs that are a CURRENT
+	// target of a 'supersedes' or 'excludes' research_note_relation,
+	// mapped to which relation type(s) retired each -- FR10's warning
+	// source for a cited-but-retired note (mcp/tools/verdict.go's
+	// resolveCitedNotes, web/research's citedResearchNotes). This is the
+	// SAME predicate v_current_research_note (migration 016) excludes
+	// on -- related_note_id is the target of a 'supersedes' or 'excludes'
+	// relation -- just queried directly against research_note_relation
+	// rather than through the view, because this needs the per-type detail
+	// (which relation(s) retired it) the view's WHERE NOT EXISTS collapses
+	// away. There is exactly one definition of "retired" in the codebase;
+	// this and the view merely express it at two necessary granularities.
+	// A noteID absent from the returned map is live for FR10's purposes
+	// (it may still be a 'caveats'/'follows_up'/'summarizes' target --
+	// FR7's unrelated, non-retiring distinction). Duplicate ids in the
+	// input are deduplicated before querying, and if two different notes
+	// each 'supersedes' (or 'excludes') the same target, that relation
+	// type appears only once in the target's slice. Resolves the WHOLE
+	// noteIDs list in one query (FR16/NFR2), never one query per note.
+	RetiredNoteIDs(ctx context.Context, noteIDs []uuid.UUID) (map[uuid.UUID][]RelationType, error)
 }
 
 // researchStore implements ResearchStore against `research_note`
@@ -416,4 +437,55 @@ func (s researchStore) ListFiltered(ctx context.Context, channelID uuid.UUID, id
 	}
 	notes, truncated := paginate(notes, limit)
 	return notes, truncated, nil
+}
+
+// RetiredNoteIDs queries research_note_relation directly (SELECT DISTINCT
+// related_note_id, relation_type WHERE related_note_id = ANY(noteIDs) AND
+// relation_type IN ('supersedes', 'excludes')) -- the identical predicate
+// v_current_research_note's WHERE NOT EXISTS clause negates (migration
+// 016), so "retired" has exactly one definition in the codebase even
+// though this method and that view read it at different granularities
+// (this needs which type(s) retired a note; the view only needs
+// current-vs-not). DISTINCT collapses the case where two different notes
+// each 'supersedes' (or 'excludes') the same target down to one entry per
+// relation type in that target's slice.
+func (s researchStore) RetiredNoteIDs(ctx context.Context, noteIDs []uuid.UUID) (map[uuid.UUID][]RelationType, error) {
+	out := make(map[uuid.UUID][]RelationType)
+	if len(noteIDs) == 0 {
+		return out, nil
+	}
+
+	seen := make(map[uuid.UUID]struct{}, len(noteIDs))
+	unique := make([]uuid.UUID, 0, len(noteIDs))
+	for _, id := range noteIDs {
+		if _, ok := seen[id]; ok {
+			continue
+		}
+		seen[id] = struct{}{}
+		unique = append(unique, id)
+	}
+
+	rows, err := s.pool.Query(ctx, `
+		SELECT DISTINCT related_note_id, relation_type
+		FROM research_note_relation
+		WHERE related_note_id = ANY($1) AND relation_type IN ('supersedes', 'excludes')
+		ORDER BY related_note_id, relation_type
+	`, unique)
+	if err != nil {
+		return nil, fmt.Errorf("query retired research note ids: %w", err)
+	}
+	defer rows.Close()
+
+	for rows.Next() {
+		var id uuid.UUID
+		var relationType RelationType
+		if err := rows.Scan(&id, &relationType); err != nil {
+			return nil, fmt.Errorf("scan retired research note relation: %w", err)
+		}
+		out[id] = append(out[id], relationType)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("query retired research note ids: %w", err)
+	}
+	return out, nil
 }
