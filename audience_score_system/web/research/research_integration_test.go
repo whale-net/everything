@@ -1185,7 +1185,7 @@ func TestHandleIdeaDetail_CitedNoteSuperseded_RendersSupersededWarning(t *testin
 	})
 	require.NoError(t, err)
 	_, err = s.store.Research().SaveNote(ctx, store.SaveNoteInput{
-		ChannelID: ch.ID, IdeaID: &idea.ID, ThreadID: note.ThreadID, Text: "a newer note that supersedes it", AuthorPersonID: creator.ID,
+		ChannelID: ch.ID, IdeaID: &idea.ID, ThreadID: &note.ThreadID, Text: "a newer note that supersedes it", AuthorPersonID: creator.ID,
 		Relations: []store.SaveNoteRelationInput{{RelatedNoteID: note.ID, RelationType: store.RelationSupersedes}},
 	})
 	require.NoError(t, err)
@@ -1218,7 +1218,7 @@ func TestHandleIdeaDetail_CitedNoteExcluded_RendersExcludedWarning(t *testing.T)
 	})
 	require.NoError(t, err)
 	_, err = s.store.Research().SaveNote(ctx, store.SaveNoteInput{
-		ChannelID: ch.ID, IdeaID: &idea.ID, ThreadID: note.ThreadID, Text: "a note that excludes it", AuthorPersonID: creator.ID,
+		ChannelID: ch.ID, IdeaID: &idea.ID, ThreadID: &note.ThreadID, Text: "a note that excludes it", AuthorPersonID: creator.ID,
 		Relations: []store.SaveNoteRelationInput{{RelatedNoteID: note.ID, RelationType: store.RelationExcludes}},
 	})
 	require.NoError(t, err)
@@ -1255,7 +1255,7 @@ func TestHandleIdeaDetail_CitedNoteNonRetiringRelations_RenderNoWarning(t *testi
 			})
 			require.NoError(t, err)
 			_, err = s.store.Research().SaveNote(ctx, store.SaveNoteInput{
-				ChannelID: ch.ID, IdeaID: &idea.ID, ThreadID: note.ThreadID, Text: "a related note", AuthorPersonID: creator.ID,
+				ChannelID: ch.ID, IdeaID: &idea.ID, ThreadID: &note.ThreadID, Text: "a related note", AuthorPersonID: creator.ID,
 				Relations: []store.SaveNoteRelationInput{{RelatedNoteID: note.ID, RelationType: relationType}},
 			})
 			require.NoError(t, err)
@@ -1319,12 +1319,12 @@ func TestHandleIdeaDetail_CitedNoteBothSupersededAndExcluded_RendersBothWarning(
 	})
 	require.NoError(t, err)
 	_, err = s.store.Research().SaveNote(ctx, store.SaveNoteInput{
-		ChannelID: ch.ID, IdeaID: &idea.ID, ThreadID: note.ThreadID, Text: "supersedes it", AuthorPersonID: creator.ID,
+		ChannelID: ch.ID, IdeaID: &idea.ID, ThreadID: &note.ThreadID, Text: "supersedes it", AuthorPersonID: creator.ID,
 		Relations: []store.SaveNoteRelationInput{{RelatedNoteID: note.ID, RelationType: store.RelationSupersedes}},
 	})
 	require.NoError(t, err)
 	_, err = s.store.Research().SaveNote(ctx, store.SaveNoteInput{
-		ChannelID: ch.ID, IdeaID: &idea.ID, ThreadID: note.ThreadID, Text: "also excludes it", AuthorPersonID: creator.ID,
+		ChannelID: ch.ID, IdeaID: &idea.ID, ThreadID: &note.ThreadID, Text: "also excludes it", AuthorPersonID: creator.ID,
 		Relations: []store.SaveNoteRelationInput{{RelatedNoteID: note.ID, RelationType: store.RelationExcludes}},
 	})
 	require.NoError(t, err)
@@ -1362,7 +1362,7 @@ func TestHandleIdeaDetail_RetiredWarning_RenderedOnHistoryEntryToo(t *testing.T)
 	})
 	require.NoError(t, err)
 	_, err = s.store.Research().SaveNote(ctx, store.SaveNoteInput{
-		ChannelID: ch.ID, IdeaID: &idea.ID, ThreadID: historyNote.ThreadID, Text: "supersedes the history-only note", AuthorPersonID: creator.ID,
+		ChannelID: ch.ID, IdeaID: &idea.ID, ThreadID: &historyNote.ThreadID, Text: "supersedes the history-only note", AuthorPersonID: creator.ID,
 		Relations: []store.SaveNoteRelationInput{{RelatedNoteID: historyNote.ID, RelationType: store.RelationSupersedes}},
 	})
 	require.NoError(t, err)
@@ -1406,12 +1406,12 @@ func TestHandleIdeaDetail_RetiredWarningParity_MatchesGetViabilityVerdictMCP(t *
 	})
 	require.NoError(t, err)
 	_, err = s.store.Research().SaveNote(ctx, store.SaveNoteInput{
-		ChannelID: ch.ID, IdeaID: &idea.ID, ThreadID: note.ThreadID, Text: "supersedes the parity note", AuthorPersonID: creator.ID,
+		ChannelID: ch.ID, IdeaID: &idea.ID, ThreadID: &note.ThreadID, Text: "supersedes the parity note", AuthorPersonID: creator.ID,
 		Relations: []store.SaveNoteRelationInput{{RelatedNoteID: note.ID, RelationType: store.RelationSupersedes}},
 	})
 	require.NoError(t, err)
 	_, err = s.store.Research().SaveNote(ctx, store.SaveNoteInput{
-		ChannelID: ch.ID, IdeaID: &idea.ID, ThreadID: note.ThreadID, Text: "also excludes the parity note", AuthorPersonID: creator.ID,
+		ChannelID: ch.ID, IdeaID: &idea.ID, ThreadID: &note.ThreadID, Text: "also excludes the parity note", AuthorPersonID: creator.ID,
 		Relations: []store.SaveNoteRelationInput{{RelatedNoteID: note.ID, RelationType: store.RelationExcludes}},
 	})
 	require.NoError(t, err)
@@ -1855,8 +1855,7 @@ func TestHandleSaveNote_ExistingThreadID_AttachesToThread(t *testing.T) {
 
 	notes := s.allNotes(t, ctx, ch.ID)
 	note := findNoteByText(t, notes, "attaches to existing thread")
-	require.NotNil(t, note.ThreadID)
-	assert.Equal(t, thread.ID, *note.ThreadID)
+	assert.Equal(t, thread.ID, note.ThreadID)
 	require.NotNil(t, note.IdeaID)
 	assert.Equal(t, idea.ID, *note.IdeaID)
 
@@ -1896,10 +1895,8 @@ func TestHandleSaveNote_NewThreadTitle_FindsOrCreates_ReusesOnSecondPost(t *test
 	notes := s.allNotes(t, ctx, ch.ID)
 	note1 := findNoteByText(t, notes, "first note in new thread")
 	note2 := findNoteByText(t, notes, "second note reusing the thread")
-	require.NotNil(t, note1.ThreadID)
-	require.NotNil(t, note2.ThreadID)
-	assert.Equal(t, *note1.ThreadID, *note2.ThreadID, "both notes must resolve to the SAME thread row")
-	assert.Equal(t, threads[0].ID, *note1.ThreadID)
+	assert.Equal(t, note1.ThreadID, note2.ThreadID, "both notes must resolve to the SAME thread row")
+	assert.Equal(t, threads[0].ID, note1.ThreadID)
 }
 
 // TestHandleSaveNote_NeitherThreadIDNorThreadTitle_BadRequest_NoRow is
@@ -2181,10 +2178,9 @@ func TestHandleSaveNote_WebFormAndMCP_ProduceEquivalentRows(t *testing.T) {
 
 	// Both notes must resolve to the SAME thread and Idea (thread
 	// resolution is identical regardless of caller).
-	require.NotNil(t, webNote.ThreadID)
 	require.NotNil(t, mcpOut.ThreadID)
-	assert.Equal(t, seed.ThreadID.String(), (*webNote.ThreadID).String())
-	assert.Equal(t, *webNote.ThreadID, *seed.ThreadID)
+	assert.Equal(t, seed.ThreadID.String(), webNote.ThreadID.String())
+	assert.Equal(t, webNote.ThreadID, seed.ThreadID)
 	assert.Equal(t, seed.ThreadID.String(), *mcpOut.ThreadID)
 	require.NotNil(t, webNote.IdeaID)
 	require.NotNil(t, mcpOut.IdeaID)
@@ -3344,7 +3340,7 @@ func TestHandleIdeaDetail_RelationsRenderSupersedesAndSupersededByLines(t *testi
 	})
 	require.NoError(t, err)
 	declaring, err := s.store.Research().SaveNote(ctx, store.SaveNoteInput{
-		ChannelID: ch.ID, IdeaID: &idea.ID, ThreadID: target.ThreadID, Text: "declaring note text", AuthorPersonID: creator.ID,
+		ChannelID: ch.ID, IdeaID: &idea.ID, ThreadID: &target.ThreadID, Text: "declaring note text", AuthorPersonID: creator.ID,
 		Relations: []store.SaveNoteRelationInput{{RelatedNoteID: target.ID, RelationType: store.RelationSupersedes}},
 	})
 	require.NoError(t, err)
@@ -3379,7 +3375,7 @@ func TestHandleChannelIndex_UnattachedNoteRelationsRender(t *testing.T) {
 	})
 	require.NoError(t, err)
 	_, err = s.store.Research().SaveNote(ctx, store.SaveNoteInput{
-		ChannelID: ch.ID, ThreadID: target.ThreadID, Text: "unattached declaring", AuthorPersonID: creator.ID,
+		ChannelID: ch.ID, ThreadID: &target.ThreadID, Text: "unattached declaring", AuthorPersonID: creator.ID,
 		Relations: []store.SaveNoteRelationInput{{RelatedNoteID: target.ID, RelationType: store.RelationCaveats}},
 	})
 	require.NoError(t, err)
@@ -3446,7 +3442,7 @@ func TestHandleIdeaDetail_RelationsResolution_IssuesOneBatchedQuery(t *testing.T
 	require.NoError(t, err)
 	for i := 0; i < 4; i++ {
 		_, err := s.store.Research().SaveNote(ctx, store.SaveNoteInput{
-			ChannelID: ch.ID, IdeaID: &noRelationsIdea.ID, ThreadID: seed.ThreadID, Text: fmt.Sprintf("no relation note %d", i), AuthorPersonID: creator.ID,
+			ChannelID: ch.ID, IdeaID: &noRelationsIdea.ID, ThreadID: &seed.ThreadID, Text: fmt.Sprintf("no relation note %d", i), AuthorPersonID: creator.ID,
 		})
 		require.NoError(t, err)
 	}
@@ -3460,7 +3456,7 @@ func TestHandleIdeaDetail_RelationsResolution_IssuesOneBatchedQuery(t *testing.T
 	prior := wrSeed
 	for i := 0; i < 4; i++ {
 		n, err := s.store.Research().SaveNote(ctx, store.SaveNoteInput{
-			ChannelID: ch.ID, IdeaID: &withRelationsIdea.ID, ThreadID: wrSeed.ThreadID, Text: fmt.Sprintf("with relation note %d", i), AuthorPersonID: creator.ID,
+			ChannelID: ch.ID, IdeaID: &withRelationsIdea.ID, ThreadID: &wrSeed.ThreadID, Text: fmt.Sprintf("with relation note %d", i), AuthorPersonID: creator.ID,
 			Relations: []store.SaveNoteRelationInput{{RelatedNoteID: prior.ID, RelationType: store.RelationFollowsUp}},
 		})
 		require.NoError(t, err)
@@ -3498,7 +3494,7 @@ func TestHandleIdeaDetail_NoteRelations_MatchListResearchNotesMCP(t *testing.T) 
 	})
 	require.NoError(t, err)
 	declaring, err := s.store.Research().SaveNote(ctx, store.SaveNoteInput{
-		ChannelID: ch.ID, IdeaID: &idea.ID, ThreadID: target.ThreadID, Text: "parity declaring", AuthorPersonID: creator.ID,
+		ChannelID: ch.ID, IdeaID: &idea.ID, ThreadID: &target.ThreadID, Text: "parity declaring", AuthorPersonID: creator.ID,
 		Relations: []store.SaveNoteRelationInput{{RelatedNoteID: target.ID, RelationType: store.RelationSummarizes}},
 	})
 	require.NoError(t, err)
@@ -3540,58 +3536,19 @@ func TestHandleIdeaDetail_NoteRelations_MatchListResearchNotesMCP(t *testing.T) 
 // not just the prose above it.
 
 // TestHandleSaveVerdict_CitedNoteFromDifferentIdea_ThreadDerivedNotColumn_BadRequest_NoRow
-// extends TestHandleSaveVerdict_CitedNoteFromDifferentIdea_BadRequest_NoRow
-// with a fixture that proves the same-Idea citation guard
-// (research.go's `if note.IdeaID == nil || *note.IdeaID != ideaID`) reads
-// the cited note's THREAD's Idea, not research_note.idea_id directly: the
-// note is attached (via ThreadID) to a thread whose own idea_id is ideaB,
-// but its own research_note.idea_id column is then tampered via raw SQL to
-// equal ideaA -- the same Idea the verdict is being saved against. If the
-// guard read the raw column it would (incorrectly) accept the citation; it
-// must still 400, because store.researchStore.GetByID's LEFT JOIN to
-// research_thread ignores the tampered column and returns ideaB.
-func TestHandleSaveVerdict_CitedNoteFromDifferentIdea_ThreadDerivedNotColumn_BadRequest_NoRow(t *testing.T) {
-	ctx := context.Background()
-	s := newResearchTestStack(t)
-	ch, creator := s.setupChannel(t, ctx)
-	ideaA, err := s.store.Ideas().Create(ctx, ch.ID, "Idea A", creator.ID)
-	require.NoError(t, err)
-	ideaB, err := s.store.Ideas().Create(ctx, ch.ID, "Idea B", creator.ID)
-	require.NoError(t, err)
-
-	threadOnB, err := s.store.Threads().FindOrCreate(ctx, store.FindOrCreateThreadInput{
-		ChannelID: ch.ID, IdeaID: &ideaB.ID, Title: "Thread on B", CreatedByPersonID: creator.ID,
-	})
-	require.NoError(t, err)
-	note, err := s.store.Research().SaveNote(ctx, store.SaveNoteInput{
-		ChannelID: ch.ID, IdeaID: &ideaB.ID, ThreadID: &threadOnB.ID, Text: "note genuinely on B's thread", AuthorPersonID: creator.ID,
-	})
-	require.NoError(t, err)
-
-	// Tamper research_note.idea_id directly to ideaA (the verdict's own
-	// Idea) -- something no store method exposes, but exactly the stale/
-	// forged state the thread-derived read must be immune to.
-	_, err = s.db.Pool.Exec(ctx, `UPDATE research_note SET idea_id = $1 WHERE id = $2`, ideaA.ID, note.ID)
-	require.NoError(t, err)
-
-	// Sanity: GetByID must report the note's Idea as B (thread-derived),
-	// NOT A (the tampered column) -- otherwise this test would not be
-	// exercising what it claims to.
-	reread, err := s.store.Research().GetByID(ctx, note.ID)
-	require.NoError(t, err)
-	require.NotNil(t, reread.IdeaID)
-	require.Equal(t, ideaB.ID, *reread.IdeaID, "sanity: GetByID must resolve idea_id via the thread join, ignoring the tampered research_note.idea_id column")
-
-	w := s.doVerdictForm(t, ch.ID, ideaA.ID, s.sessionCookie(t, ctx, creator.ID), url.Values{
-		"idempotency_key": {uuid.NewString()},
-		"verdict":         {string(store.VerdictViable)},
-		"reasoning":       {"forged citation attempt via tampered idea_id column"},
-		"cited_note_ids":  {note.ID.String()},
-	})
-	assert.Equal(t, http.StatusBadRequest, w.Code, "body: %s", w.Body.String())
-	assert.Contains(t, w.Body.String(), "invalid cited note selection")
-	assert.Empty(t, s.allVerdictHistory(t, ctx, ideaA.ID), "no verdict row may be written -- the citation must be rejected on the note's THREAD's idea (B), not the tampered column value (A)")
-}
+// (issue #1946) proved the same-Idea citation guard reads the cited
+// note's THREAD's Idea, not research_note.idea_id directly, by tampering
+// research_note.idea_id via raw SQL to a different Idea than the note's
+// real (thread-derived) one and asserting the tampered value never leaks
+// through. Removed by migration 018/#1947 (FR2 Stage 3): the column this
+// test tampered no longer exists, so the scenario it guarded against --
+// a stale/forged idea_id disagreeing with the note's actual thread -- is
+// now impossible by construction, the same category as
+// TestHandleSaveNote_ReplayWithDifferentIdeaAndThread_OriginalNoteIdeaUnchanged
+// above. The guard itself (research.go's
+// `if note.IdeaID == nil || *note.IdeaID != ideaID`) is still exercised,
+// on real (non-tampered) data, by
+// TestHandleSaveVerdict_CitedNoteFromDifferentIdea_BadRequest_NoRow.
 
 // TestHandleIdeaDetail_NullIdeaThreadNote_NotRenderedOnAnyIdeaDetailPage
 // proves a note on a NULL-Idea thread (predates any Idea, M1 FR9) lands

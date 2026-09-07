@@ -149,23 +149,25 @@ type Idea struct {
 }
 
 // ResearchNote is one row of `research_note` (migration 002, FR9/FR10;
-// `thread_id` added by migration 016, FR2 Stage 1). IdeaID is nil when the
-// note predates an Idea. SourceURL is nil for an uncited note (FR10) --
-// distinct from an empty string. ThreadID is a pointer during Stages 1-2
-// of the FR2 migration sequence (root plan #1934) -- every pre-existing
-// and newly-written note is backfilled/set to a non-nil thread by
-// migration 016, but the column itself stays nullable until Stage 3
-// (#1947) adds NOT NULL, so the Go type mirrors the DB's actual
-// nullability rather than assuming Stage 3 has already landed. ThreadTitle
-// is populated by a LEFT JOIN to research_thread alongside ThreadID (issue
-// #1940, FR2 Stage 2b) -- nil exactly when ThreadID is nil, never an
-// out-of-sync pair; not every read query populates it (see each query's
-// own doc comment), in which case it is left as the zero value (nil).
+// `thread_id` added by migration 016, FR2 Stage 1, made NOT NULL by
+// migration 018/#1947, FR2 Stage 3, NFR4). IdeaID is derived from this
+// note's resolved thread (rt.idea_id via a JOIN to research_thread, issue
+// #1939/#1940), not a column on research_note itself since #1947 dropped
+// it -- nil exactly when the resolved thread has no Idea (FR9).
+// SourceURL is nil for an uncited note (FR10) -- distinct from an empty
+// string. ThreadID is non-optional (uuid.UUID, not *uuid.UUID): migration
+// 018 made the column NOT NULL, so the Go type mirrors the DB's actual
+// nullability -- there is no longer a nil ThreadID case to represent.
+// ThreadTitle is still a pointer, populated by the same JOIN to
+// research_thread (issue #1940, FR2 Stage 2b); not every read query
+// populates it (see each query's own doc comment), in which case it is
+// left as the zero value (nil), but in practice it is always non-nil
+// post-#1947 since every note now has a resolving thread.
 type ResearchNote struct {
 	ID             uuid.UUID
 	ChannelID      uuid.UUID
 	IdeaID         *uuid.UUID
-	ThreadID       *uuid.UUID
+	ThreadID       uuid.UUID
 	ThreadTitle    *string
 	Text           string
 	SourceURL      *string
