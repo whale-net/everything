@@ -1,0 +1,26 @@
+load("//tools:templ.bzl", "templ_library")
+
+# Milestone M4.3's Channel-scoped prediction-vs-outcome browse page
+# (FR1/FR2/FR11, capability C10, issue #1928): handlers (outcomes.go) and
+# templ views (views.templ) in one package -- see outcomes.go's package doc
+# comment for why they are not split across a components/pages sibling pair
+# like web/pages (mirrors web/matches's own rationale, which in turn mirrors
+# web/research's/web/schedule's). Postgres-backed handler coverage (Testing
+# phase) lands as outcomes_integration_test.go plus a hand-written go_test
+# rule, mirroring //audience_score_system/web/matches:matches_integration_test.
+templ_library(
+    name = "outcomes",
+    srcs = glob(["*.templ"]),
+    go_srcs = ["outcomes.go"],
+    visibility = [
+        "//audience_score_system/citest:__pkg__",
+        "//audience_score_system/web:__pkg__",
+    ],
+    deps = [
+        "//audience_score_system/store",
+        "//audience_score_system/web/auth",
+        "//audience_score_system/web/components",
+        "@com_github_google_uuid//:uuid",
+        "@com_github_jackc_pgx_v5//:pgx",
+    ],
+)
