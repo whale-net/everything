@@ -35,6 +35,8 @@ go_test(
     srcs = [
         "board_test.go",
         "config_test.go",
+        "manifest_test.go",
+        "runner_test.go",
         "scenario_test.go",
         "transport_test.go",
         "valuegen_test.go",
