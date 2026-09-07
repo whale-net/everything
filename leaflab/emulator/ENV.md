@@ -6,7 +6,7 @@
 
 | Variable | Default | Required | Description |
 |----------|---------|----------|-------------|
-| `MQTT_BROKER_URL` | `tcp://localhost:1883` | No | Broker address, e.g. `tcp://rabbitmq-dev.leaflab-local-dev.svc.cluster.local:1883` |
+| `MQTT_BROKER_URL` | `tcp://localhost:1883` | No | Broker address, e.g. `tcp://rabbitmq-dev-mqtt.leaflab-local-dev.svc.cluster.local:1883` |
 | `MQTT_USERNAME` | `rabbit` | No | Broker user |
 | `MQTT_PASSWORD` | `password` | No | Broker password |
 
@@ -35,7 +35,7 @@ apply.
 All values are injected from the Tiltfile. No `.env` file is needed.
 
 ```bash
-MQTT_BROKER_URL=tcp://rabbitmq-dev.leaflab-local-dev.svc.cluster.local:1883
+MQTT_BROKER_URL=tcp://rabbitmq-dev-mqtt.leaflab-local-dev.svc.cluster.local:1883
 MQTT_USERNAME=rabbit
 MQTT_PASSWORD=password
 ```
