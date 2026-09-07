@@ -905,14 +905,70 @@ func (h *Handlers) HandleSaveNote(w http.ResponseWriter, r *http.Request) {
 // store.IdeaStore.FindOrCreate method the create_idea MCP tool already
 // calls (NFR1/LB5 -- one write path, never a parallel one), so a title
 // matching an existing Idea case/whitespace-insensitively converges on
-// that Idea rather than forking identity, exactly like the MCP tool.
+// that Idea rather than forking identity, exactly like the MCP tool --
+// this handler never distinguishes "created" from "converged" in its
+// response; either way the Idea is simply visible on the re-rendered
+// index (FR35).
 //
-// Scaffolded here as a placeholder response -- authorization (via
-// authorizeWrite, reused verbatim), title validation, the FindOrCreate
-// call itself, and the re-render-on-success/re-render-on-error paths are
-// added in this task's Implementation phase.
+// Field handling:
+//   - title: required, non-empty after strings.TrimSpace; empty/
+//     whitespace-only re-renders the Channel index (400) with the row
+//     expanded (ideaFormWithError sets Open true) and an error, no store
+//     call made.
+//   - idempotency_key: read from the hidden field the rendering GET set
+//     (newIdeaFormData); NOT passed to FindOrCreate, which accepts no such
+//     parameter (NFR1/LB5 -- adding one would be a new/changed store
+//     method). Minted and threaded per NFR2 regardless: FindOrCreate's own
+//     natural-key convergence is what actually makes a same-title replay
+//     idempotent (a resubmitted title always converges on the same Idea),
+//     the key here is belt-and-braces conformance with the form
+//     convention every other write form on this page follows, not a
+//     second dedupe mechanism.
+//
+// Any error FindOrCreate itself returns re-renders the Channel index (400)
+// with the row expanded and the store's own message, mirroring
+// HandleSaveNote's/HandleSaveVerdict's identical contract. On success,
+// 303-redirects back to the Channel index (FR35) -- a GET there always
+// re-renders with the new (or converged-to) Idea in the list and the row
+// back to its inert affordance (form.Open false on a fresh GET).
 func (h *Handlers) HandleCreateIdea(w http.ResponseWriter, r *http.Request) {
-	http.Error(w, "not implemented", http.StatusNotImplemented)
+	ctx := r.Context()
+	person, ch, ok := h.authorizeWrite(w, r)
+	if !ok {
+		return
+	}
+	channelID := ch.ID
+
+	if err := r.ParseForm(); err != nil {
+		http.Error(w, "invalid form", http.StatusBadRequest)
+		return
+	}
+
+	form := ideaFormData{
+		IdempotencyKey: r.FormValue("idempotency_key"),
+		Title:          r.FormValue("title"),
+	}
+
+	renderErr := func(msg string) {
+		// The save-note form was not the form that failed here -- it gets
+		// its own freshly minted key rather than reusing idea's, mirroring
+		// HandleSaveVerdict's identical rationale for the other forms on
+		// its page.
+		h.renderChannelIndex(w, r, person, ch, noteFormData{IdempotencyKey: newIdempotencyKey()}, ideaFormWithError(form, msg), http.StatusBadRequest)
+	}
+
+	title := strings.TrimSpace(form.Title)
+	if title == "" {
+		renderErr("idea title is required")
+		return
+	}
+
+	if _, err := h.store.Ideas().FindOrCreate(ctx, channelID, title, person.ID); err != nil {
+		renderErr(err.Error())
+		return
+	}
+
+	http.Redirect(w, r, "/channels/"+channelID.String()+"/research", http.StatusSeeOther)
 }
 
 // formWithError returns a copy of form with Error set to msg -- a small
