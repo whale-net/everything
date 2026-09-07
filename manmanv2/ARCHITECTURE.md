@@ -197,13 +197,46 @@ on `finishRestartInBackground`'s goroutine stack
 (`manmanv2/ui/handlers_deployment_actions.go`). It is control-plane state
 only — restarting does not add a new wire routing key or payload field.
 
-- **`status`**: `pending` → `started` | `failed` | `expired`.
+- **`status`**: `pending` → `started` → `failed` | `expired` (a `pending`
+  row can also fail directly, without ever being claimed — see below).
 - At most one `pending` row per `server_game_config_id`, enforced by a unique
   partial index (`pending_restarts_one_pending_per_sgc`), not application
   logic — this is the DB-level idempotency guard.
 - Claiming a row (transition to `started`) and expiring stalled rows
   (transition to `expired` past `stall_deadline`) are each a single atomic
   `UPDATE ... RETURNING`, so concurrent callers resolve a row exactly once.
+
+**Dispatch half — `RestartDeployment` RPC (`manmanv2/api/handlers/session.go`,
+control-api):** the entry point that creates a `pending_restarts` row. Given
+a `server_game_config_id`:
+1. No live session → degenerates to an inline `StartSession` call (there is
+   no lost-intent gap to make durable in this case), returning
+   `started_session`.
+2. Live session present → `Create`s the `pending_restarts` row (status
+   `pending`, `gating_session_id` = the live session, `stall_deadline` = now
+   + `RESTART_STALL_TIMEOUT`, see `ENV.md`) and only *after* that commits
+   dispatches `StopSession`, returning `stopping_session`. Ordering is
+   load-bearing: recording before dispatching is what closes the pod-dies-
+   between-them window FR9 exists for. `ErrPendingRestartExists` short-
+   circuits to `already_in_flight: true` with no second Stop dispatch — the
+   DB unique index above is the actual enforcement, this is just surfacing
+   it as an idempotent no-op.
+   - If the `StopSession` dispatch itself fails, the row is moved straight
+     from `pending` to `failed` (`MarkFailed` — see below) rather than left
+     to sit until the reaper expires it.
+
+This RPC is additive to `StartSession`/`StopSession` — it dispatches through
+their existing handler logic rather than re-deriving command construction or
+config/volume resolution, and does not change `command.*` routing keys or
+`status.session.*` semantics. `manmanv2/ui`'s own goroutine-based
+stop-then-start (`restartDeployment`/`finishRestartInBackground`) is not yet
+rewired to call it — that cutover, and the consumer that fires the deferred
+Start once the gating Stop converges (claiming `started` rows), is a
+separate piece of work (#1731).
+
+`MarkFailed` moves a row to `failed` from either `pending` (dispatch-half
+failure above) or `started` (deferred-Start failure, once a consumer exists)
+— both are terminal failures of the same intent and share one transition.
 
 **Not SCD2:** this table intentionally does not use `valid_from`/`valid_to`
 (see `AGENTS.md` § SCD2). A pending restart is a short-lived work intent with

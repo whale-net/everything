@@ -53,6 +53,19 @@ message StopSessionResponse {
   Session session = 1;
 }
 
+message RestartDeploymentRequest {
+  int64 server_game_config_id = 1;
+}
+
+message RestartDeploymentResponse {
+  // The session being stopped, when a restart was dispatched.
+  Session stopping_session = 1;
+  // The new session, when the deployment had nothing running and Start ran inline.
+  Session started_session = 2;
+  // True when a restart was already in flight for this deployment (idempotent no-op).
+  bool already_in_flight = 3;
+}
+
 message SendInputRequest {
   int64 session_id = 1;
   bytes input = 2;

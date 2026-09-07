@@ -57,6 +57,11 @@ func run() error {
 	grpcAuthMode := getEnv("GRPC_AUTH_MODE", "none")
 	grpcOIDCIssuer := getEnv("GRPC_OIDC_ISSUER", "")
 	grpcOIDCClientID := getEnv("GRPC_OIDC_CLIENT_ID", "")
+	// RESTART_STALL_TIMEOUT bounds how long a RestartDeployment-recorded
+	// pending_restarts row may sit 'pending' before the reaper (#1731)
+	// expires it -- 3x waitForNoLiveSession's ~15s bound (manmanv2/ui) gives
+	// the dispatched Stop real container-stop time. See manmanv2/ENV.md.
+	restartStallTimeout := getEnvDuration("RESTART_STALL_TIMEOUT", 45*time.Second)
 
 	// Initialize database pool (reads PG_DATABASE_URL)
 	log.Println("Connecting to database...")
@@ -140,7 +145,7 @@ func run() error {
 	)
 
 	// Register API server
-	apiServer := handlers.NewAPIServer(repo, s3Client, rmqConn, workshopManager)
+	apiServer := handlers.NewAPIServer(repo, s3Client, rmqConn, workshopManager, restartStallTimeout)
 	pb.RegisterManManAPIServer(grpcServer, apiServer)
 
 	// Register Workshop service
@@ -208,4 +213,17 @@ func getEnv(key, defaultValue string) string {
 		return value
 	}
 	return defaultValue
+}
+
+func getEnvDuration(key string, defaultValue time.Duration) time.Duration {
+	value := os.Getenv(key)
+	if value == "" {
+		return defaultValue
+	}
+	d, err := time.ParseDuration(value)
+	if err != nil {
+		log.Printf("Warning: invalid duration for %s=%q, using default %s: %v", key, value, defaultValue, err)
+		return defaultValue
+	}
+	return d
 }
