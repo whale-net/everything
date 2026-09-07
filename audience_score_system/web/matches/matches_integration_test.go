@@ -14,15 +14,35 @@
 // has no video_metrics row rendering "no metrics synced yet" rather than
 // a bare 0; non-pending (auto/confirmed/rejected) matches never
 // appearing; NFR2's 51-pending-match 50-row truncation with a static note
-// and no paging control; and FR8's message-plus-pointer empty state. See
+// and no paging control; and FR8's message-plus-pointer empty state.
+//
+// HandleResolve (issue #1927, FR9/FR10/NFR1/NFR3): a plain confirm links
+// the matcher's best-guess script and removes the row from the pending
+// list; this issue's LOAD-BEARING case, confirming WITH an override links
+// to an ARCHIVED, UNDATED script (the primary resolution path for a
+// script that can never auto-link, FR40/FR44); a reject sets state to
+// 'rejected' and leaves video_script_id untouched; video_script_id on a
+// reject 400s with nothing written; an override on a different Channel is
+// rejected with nothing written; FR10's replay (same key twice resolves
+// once) and conflict (a second attempt against an already-resolved match,
+// with either a different key or no key, is rejected with no further
+// state change) cases; NFR3's authz (Analyst may resolve via the shared
+// Creator-or-Analyst store.CanWrite authority -- deliberately not the
+// stricter Creator-tier-only approval gate schedule/script decisions use;
+// a non-member's forged POST 403s even though their own GET never
+// rendered the form; signed-out 401s); and the cross-Channel matchID 404
+// guard mirroring resolvePendingMatchMutate exactly.
+//
+// See
 // //audience_score_system/web/research:research_integration_test for the
 // harness pattern this file follows: spin up a throwaway Postgres via
 // dbtest, apply the domain's own real embedded migrations, wire a real
 // *store.Store and a real *auth.SessionManager against it, and drive
 // matches.Handlers through a small local http.ServeMux that mirrors
-// `web`'s main.go route registration for GET /channels/{id}/matches -- so
-// PathValue resolution and auth.RequireSignedIn wrapping behave exactly
-// as they do in production.
+// `web`'s main.go route registrations for GET /channels/{id}/matches and
+// POST /channels/{id}/matches/{matchID}/resolve -- so PathValue
+// resolution and auth.RequireSignedIn wrapping behave exactly as they do
+// in production.
 //
 // A signed-in caller is simulated via auth.NewForTests + SessionManager.
 // Establish, mirroring research_integration_test.go's rationale:
@@ -38,6 +58,8 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
+	"regexp"
 	"strings"
 	"testing"
 	"time"
@@ -97,6 +119,7 @@ func newMatchesTestStack(t *testing.T) *matchesTestStack {
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /channels/{id}/matches", a.RequireSignedIn(m.HandleList))
+	mux.HandleFunc("POST /channels/{id}/matches/{matchID}/resolve", a.RequireSignedIn(m.HandleResolve))
 
 	return &matchesTestStack{store: st, sessions: sessions, handlers: m, router: mux}
 }
@@ -150,6 +173,52 @@ func (s *matchesTestStack) do(t *testing.T, method, target string, cookie *http.
 	w := httptest.NewRecorder()
 	s.router.ServeHTTP(w, req)
 	return w
+}
+
+// doForm POSTs an application/x-www-form-urlencoded body through the
+// router, mirroring what a rendered confirm/reject <form method="post">
+// would submit (research_integration_test.go's identically-named/
+// documented helper) -- HandleResolve's r.ParseForm() reads it exactly
+// like a real browser submission.
+func (s *matchesTestStack) doForm(t *testing.T, target string, cookie *http.Cookie, form url.Values) *httptest.ResponseRecorder {
+	t.Helper()
+	req := httptest.NewRequest(http.MethodPost, target, strings.NewReader(form.Encode()))
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	if cookie != nil {
+		req.AddCookie(cookie)
+	}
+	w := httptest.NewRecorder()
+	s.router.ServeHTTP(w, req)
+	return w
+}
+
+// resolveIdempotencyKeyPattern extracts a row's hidden idempotency_key
+// input value from a rendered pending-matches list, mirroring
+// research_integration_test.go's idempotencyKeyPattern.
+var resolveIdempotencyKeyPattern = regexp.MustCompile(`name="idempotency_key" value="([^"]+)"`)
+
+// extractResolveIdempotencyKeys returns every hidden idempotency_key
+// input value found in body, in document order -- for a page with one
+// pending match this is a length-1 slice; asserting length-N proves
+// every row's form got a distinct render-time key.
+func extractResolveIdempotencyKeys(t *testing.T, body string) []string {
+	t.Helper()
+	matches := resolveIdempotencyKeyPattern.FindAllStringSubmatch(body, -1)
+	keys := make([]string, len(matches))
+	for i, m := range matches {
+		keys[i] = m[1]
+	}
+	return keys
+}
+
+// extractResolveIdempotencyKey returns the sole hidden idempotency_key
+// value in body, failing the test if there is not exactly one -- for use
+// against a page rendered with a single pending match.
+func extractResolveIdempotencyKey(t *testing.T, body string) string {
+	t.Helper()
+	keys := extractResolveIdempotencyKeys(t, body)
+	require.Len(t, keys, 1, "expected exactly one rendered resolve form, body: %s", body)
+	return keys[0]
 }
 
 // greenlitVideoScript builds a full Idea -> viable Verdict -> Strategy ->
@@ -472,7 +541,11 @@ func TestHandleList_FiftyOnePendingMatches_TruncatedNoPagingControl(t *testing.T
 	assert.Equal(t, 50, strings.Count(body, "Pending Video "), "exactly 50 pending matches must render")
 	assert.Contains(t, body, "Older pending matches exist beyond the newest 50.", "a static truncation note must appear (NFR2)")
 	assert.NotContains(t, strings.ToLower(body), "load more", "no load-more control may appear (NFR2)")
-	assert.NotContains(t, body, "<form", "this read-only page renders no paging form/control at all")
+	// NFR2 bans a PAGING form/control specifically -- not every <form>: since
+	// #1927, a Founder's (canWrite) GET legitimately renders one confirm/
+	// reject form per row (FR9). Assert on the paging-specific affordances
+	// instead of a bare "<form" ban, which #1927's write path makes stale.
+	assert.NotContains(t, body, `name="since"`, "no since query parameter control may appear (NFR2)")
 	assert.NotContains(t, body, "since=", "no since/page query parameter control may appear (NFR2)")
 }
 
@@ -491,4 +564,366 @@ func TestHandleList_NoPendingMatches_RendersMessagePlusPointer(t *testing.T) {
 	assert.Contains(t, body, "No pending matches.")
 	assert.Contains(t, body, "confidence", "the empty state must name the confidence-threshold queueing rule, not just state the list is empty")
 	assert.Contains(t, body, "threshold")
+}
+
+// ── HandleResolve (FR9, FR10, NFR1, NFR3) ───────────────────────────────
+
+// singlePendingMatchID returns the ID of ch's sole pending match --
+// convenience for tests that record exactly one and then resolve it.
+func (s *matchesTestStack) singlePendingMatchID(t *testing.T, ctx context.Context, ch store.Channel) uuid.UUID {
+	t.Helper()
+	pending, _, err := s.store.Matches().ListPending(ctx, ch.ID, nil, 0)
+	require.NoError(t, err)
+	require.Len(t, pending, 1, "expected exactly one pending match")
+	return pending[0].ID
+}
+
+// resolveForm builds the confirm/reject form.Values HandleResolve expects,
+// mirroring resolveForm's rendered <form> fields (views.templ).
+func resolveFormValues(key string, confirm bool, videoScriptID string) url.Values {
+	v := url.Values{"idempotency_key": {key}}
+	if confirm {
+		v.Set("confirm", "true")
+	} else {
+		v.Set("confirm", "false")
+	}
+	if videoScriptID != "" {
+		v.Set("video_script_id", videoScriptID)
+	}
+	return v
+}
+
+func resolveURL(ch store.Channel, matchID uuid.UUID) string {
+	return "/channels/" + ch.ID.String() + "/matches/" + matchID.String() + "/resolve"
+}
+
+// TestHandleResolve_ConfirmNoOverride_LinksBestGuessScript_LeavesPendingList
+// covers the plain-confirm path: no video_script_id override submitted,
+// so the matcher's best-guess script (already on the row) is what
+// Resolve links -- the row leaves the pending list and the underlying
+// row's state becomes 'confirmed' with video_script_id unchanged.
+func TestHandleResolve_ConfirmNoOverride_LinksBestGuessScript_LeavesPendingList(t *testing.T) {
+	ctx := context.Background()
+	s := newMatchesTestStack(t)
+	ch, creator := s.setupChannel(t, ctx)
+	script, _ := s.greenlitVideoScript(t, ctx, ch, creator, "Confirm Idea")
+	video := s.addSyncedVideo(t, ctx, ch, "Confirm Video")
+	require.NoError(t, s.store.Matches().Record(ctx, store.VideoScheduleMatch{
+		SyncedVideoID: video.ID, VideoScriptID: &script.ID, Confidence: 0.9, State: store.MatchStatePending,
+	}))
+	matchID := s.singlePendingMatchID(t, ctx, ch)
+
+	listW := s.do(t, http.MethodGet, "/channels/"+ch.ID.String()+"/matches", s.sessionCookie(t, ctx, creator.ID))
+	require.Equal(t, http.StatusOK, listW.Code, "body: %s", listW.Body.String())
+	key := extractResolveIdempotencyKey(t, listW.Body.String())
+
+	w := s.doForm(t, resolveURL(ch, matchID), s.sessionCookie(t, ctx, creator.ID), resolveFormValues(key, true, ""))
+	require.Equal(t, http.StatusSeeOther, w.Code, "body: %s", w.Body.String())
+	assert.Equal(t, "/channels/"+ch.ID.String()+"/matches", w.Header().Get("Location"))
+
+	m, err := s.store.Matches().GetByID(ctx, matchID)
+	require.NoError(t, err)
+	assert.Equal(t, store.MatchStateConfirmed, m.State)
+	require.NotNil(t, m.VideoScriptID)
+	assert.Equal(t, script.ID, *m.VideoScriptID, "no override submitted -- video_script_id must remain the matcher's best guess")
+
+	afterW := s.do(t, http.MethodGet, "/channels/"+ch.ID.String()+"/matches", s.sessionCookie(t, ctx, creator.ID))
+	require.Equal(t, http.StatusOK, afterW.Code, "body: %s", afterW.Body.String())
+	assert.NotContains(t, afterW.Body.String(), "Confirm Video", "a confirmed match must leave the pending list")
+}
+
+// TestHandleResolve_ConfirmWithOverride_LinksArchivedAndUndatedScripts is
+// this issue's LOAD-BEARING FR9 case: confirming with an explicit
+// video_script_id override links to that script even when it is
+// ARCHIVED and UNDATED -- the primary resolution path for a script that
+// can never auto-link (no target_publish_date). Breaking Resolve's
+// deliberate lack of a status filter (e.g. adding a greenlit-only check)
+// must turn this test red.
+func TestHandleResolve_ConfirmWithOverride_LinksArchivedAndUndatedScripts(t *testing.T) {
+	ctx := context.Background()
+	s := newMatchesTestStack(t)
+	ch, creator := s.setupChannel(t, ctx)
+
+	// An undated, then archived, greenlit script -- never a plausible
+	// best-guess candidate for the matcher, but still a valid override
+	// target per FR40/FR44.
+	undatedArchived, _ := s.greenlitVideoScript(t, ctx, ch, creator, "Undated Archived Idea")
+	require.Nil(t, undatedArchived.TargetPublishDate, "fixture script must be undated")
+	require.NoError(t, s.store.VideoScripts().Archive(ctx, undatedArchived.ID, creator.ID))
+	archived, err := s.store.VideoScripts().GetByID(ctx, undatedArchived.ID)
+	require.NoError(t, err)
+	require.Equal(t, store.VideoScriptStatusArchived, archived.Status)
+
+	// A match recorded with NO best-guess candidate at all (video_script_id
+	// IS NULL) -- proving the override is what supplies the link, not a
+	// pre-existing best guess.
+	video := s.addSyncedVideo(t, ctx, ch, "Override Video")
+	require.NoError(t, s.store.Matches().Record(ctx, store.VideoScheduleMatch{
+		SyncedVideoID: video.ID, VideoScriptID: nil, Confidence: 0, State: store.MatchStatePending,
+	}))
+	matchID := s.singlePendingMatchID(t, ctx, ch)
+
+	listW := s.do(t, http.MethodGet, "/channels/"+ch.ID.String()+"/matches", s.sessionCookie(t, ctx, creator.ID))
+	require.Equal(t, http.StatusOK, listW.Code, "body: %s", listW.Body.String())
+	key := extractResolveIdempotencyKey(t, listW.Body.String())
+
+	w := s.doForm(t, resolveURL(ch, matchID), s.sessionCookie(t, ctx, creator.ID), resolveFormValues(key, true, archived.ID.String()))
+	require.Equal(t, http.StatusSeeOther, w.Code, "an archived, undated script must be a VALID override target, body: %s", w.Body.String())
+
+	m, err := s.store.Matches().GetByID(ctx, matchID)
+	require.NoError(t, err)
+	assert.Equal(t, store.MatchStateConfirmed, m.State)
+	require.NotNil(t, m.VideoScriptID)
+	assert.Equal(t, archived.ID, *m.VideoScriptID, "the override must link to the archived/undated script")
+}
+
+// TestHandleResolve_Reject_SetsRejectedState_LeavesVideoUnmatched proves
+// reject leaves video_script_id untouched (nil here, since no best-guess
+// candidate existed) and sets state to 'rejected'.
+func TestHandleResolve_Reject_SetsRejectedState_LeavesVideoUnmatched(t *testing.T) {
+	ctx := context.Background()
+	s := newMatchesTestStack(t)
+	ch, creator := s.setupChannel(t, ctx)
+	video := s.addSyncedVideo(t, ctx, ch, "Reject Video")
+	require.NoError(t, s.store.Matches().Record(ctx, store.VideoScheduleMatch{
+		SyncedVideoID: video.ID, VideoScriptID: nil, Confidence: 0, State: store.MatchStatePending,
+	}))
+	matchID := s.singlePendingMatchID(t, ctx, ch)
+
+	listW := s.do(t, http.MethodGet, "/channels/"+ch.ID.String()+"/matches", s.sessionCookie(t, ctx, creator.ID))
+	key := extractResolveIdempotencyKey(t, listW.Body.String())
+
+	w := s.doForm(t, resolveURL(ch, matchID), s.sessionCookie(t, ctx, creator.ID), resolveFormValues(key, false, ""))
+	require.Equal(t, http.StatusSeeOther, w.Code, "body: %s", w.Body.String())
+
+	m, err := s.store.Matches().GetByID(ctx, matchID)
+	require.NoError(t, err)
+	assert.Equal(t, store.MatchStateRejected, m.State)
+	assert.Nil(t, m.VideoScriptID, "a reject must leave video_script_id untouched")
+}
+
+// TestHandleResolve_VideoScriptIDOnReject_BadRequest_NothingWritten proves
+// the "video_script_id may only be set when confirm is true" rule this
+// handler shares with resolve_pending_match.
+func TestHandleResolve_VideoScriptIDOnReject_BadRequest_NothingWritten(t *testing.T) {
+	ctx := context.Background()
+	s := newMatchesTestStack(t)
+	ch, creator := s.setupChannel(t, ctx)
+	script, _ := s.greenlitVideoScript(t, ctx, ch, creator, "Reject Override Idea")
+	video := s.addSyncedVideo(t, ctx, ch, "Reject Override Video")
+	require.NoError(t, s.store.Matches().Record(ctx, store.VideoScheduleMatch{
+		SyncedVideoID: video.ID, VideoScriptID: nil, Confidence: 0, State: store.MatchStatePending,
+	}))
+	matchID := s.singlePendingMatchID(t, ctx, ch)
+
+	listW := s.do(t, http.MethodGet, "/channels/"+ch.ID.String()+"/matches", s.sessionCookie(t, ctx, creator.ID))
+	key := extractResolveIdempotencyKey(t, listW.Body.String())
+
+	w := s.doForm(t, resolveURL(ch, matchID), s.sessionCookie(t, ctx, creator.ID), resolveFormValues(key, false, script.ID.String()))
+	assert.Equal(t, http.StatusBadRequest, w.Code)
+
+	m, err := s.store.Matches().GetByID(ctx, matchID)
+	require.NoError(t, err)
+	assert.Equal(t, store.MatchStatePending, m.State, "nothing must be written on this validation failure")
+	assert.Nil(t, m.VideoScriptID)
+}
+
+// TestHandleResolve_OverrideOnDifferentChannel_Rejected_NothingWritten
+// proves the override's Channel-membership check: a video_script that
+// exists but belongs to a DIFFERENT Channel than the match's own must be
+// rejected, with nothing written.
+func TestHandleResolve_OverrideOnDifferentChannel_Rejected_NothingWritten(t *testing.T) {
+	ctx := context.Background()
+	s := newMatchesTestStack(t)
+	ch, creator := s.setupChannel(t, ctx)
+	otherCh, otherCreator := s.setupChannel(t, ctx)
+	otherScript, _ := s.greenlitVideoScript(t, ctx, otherCh, otherCreator, "Other Channel Idea")
+
+	video := s.addSyncedVideo(t, ctx, ch, "Cross Channel Override Video")
+	require.NoError(t, s.store.Matches().Record(ctx, store.VideoScheduleMatch{
+		SyncedVideoID: video.ID, VideoScriptID: nil, Confidence: 0, State: store.MatchStatePending,
+	}))
+	matchID := s.singlePendingMatchID(t, ctx, ch)
+
+	listW := s.do(t, http.MethodGet, "/channels/"+ch.ID.String()+"/matches", s.sessionCookie(t, ctx, creator.ID))
+	key := extractResolveIdempotencyKey(t, listW.Body.String())
+
+	w := s.doForm(t, resolveURL(ch, matchID), s.sessionCookie(t, ctx, creator.ID), resolveFormValues(key, true, otherScript.ID.String()))
+	assert.Equal(t, http.StatusBadRequest, w.Code, "an override on a different Channel must be rejected, body: %s", w.Body.String())
+
+	m, err := s.store.Matches().GetByID(ctx, matchID)
+	require.NoError(t, err)
+	assert.Equal(t, store.MatchStatePending, m.State, "nothing must be written")
+	assert.Nil(t, m.VideoScriptID)
+}
+
+// TestHandleResolve_SameIdempotencyKey_Twice_ResolvesOnce is FR10/NFR1's
+// load-bearing replay case: POSTing the identical form twice with the
+// same key must resolve exactly once -- the second call is a no-op
+// redirect, not a second state transition or an error.
+func TestHandleResolve_SameIdempotencyKey_Twice_ResolvesOnce(t *testing.T) {
+	ctx := context.Background()
+	s := newMatchesTestStack(t)
+	ch, creator := s.setupChannel(t, ctx)
+	script, _ := s.greenlitVideoScript(t, ctx, ch, creator, "Replay Idea")
+	video := s.addSyncedVideo(t, ctx, ch, "Replay Video")
+	require.NoError(t, s.store.Matches().Record(ctx, store.VideoScheduleMatch{
+		SyncedVideoID: video.ID, VideoScriptID: &script.ID, Confidence: 0.8, State: store.MatchStatePending,
+	}))
+	matchID := s.singlePendingMatchID(t, ctx, ch)
+
+	listW := s.do(t, http.MethodGet, "/channels/"+ch.ID.String()+"/matches", s.sessionCookie(t, ctx, creator.ID))
+	key := extractResolveIdempotencyKey(t, listW.Body.String())
+	form := resolveFormValues(key, true, "")
+
+	w1 := s.doForm(t, resolveURL(ch, matchID), s.sessionCookie(t, ctx, creator.ID), form)
+	require.Equal(t, http.StatusSeeOther, w1.Code, "body: %s", w1.Body.String())
+
+	w2 := s.doForm(t, resolveURL(ch, matchID), s.sessionCookie(t, ctx, creator.ID), form)
+	assert.Equal(t, http.StatusSeeOther, w2.Code, "a replay with the identical key must still redirect as a no-op, not error, body: %s", w2.Body.String())
+
+	m, err := s.store.Matches().GetByID(ctx, matchID)
+	require.NoError(t, err)
+	assert.Equal(t, store.MatchStateConfirmed, m.State, "exactly one state transition must have occurred")
+}
+
+// TestHandleResolve_AlreadyResolved_DifferentKeyAndNoKey_Rejected_NoStateChange
+// is FR10/NFR1's load-bearing conflict case: once a match is resolved, a
+// second POST against it -- whether carrying a fresh, different key, or
+// carrying NO key at all -- must be rejected with an explanatory error
+// and no further state change (store.ErrMatchNotPending surfaced, never a
+// silent second resolution).
+func TestHandleResolve_AlreadyResolved_DifferentKeyAndNoKey_Rejected_NoStateChange(t *testing.T) {
+	ctx := context.Background()
+	s := newMatchesTestStack(t)
+	ch, creator := s.setupChannel(t, ctx)
+	script, _ := s.greenlitVideoScript(t, ctx, ch, creator, "Conflict Idea")
+	video := s.addSyncedVideo(t, ctx, ch, "Conflict Video")
+	require.NoError(t, s.store.Matches().Record(ctx, store.VideoScheduleMatch{
+		SyncedVideoID: video.ID, VideoScriptID: &script.ID, Confidence: 0.8, State: store.MatchStatePending,
+	}))
+	matchID := s.singlePendingMatchID(t, ctx, ch)
+
+	listW := s.do(t, http.MethodGet, "/channels/"+ch.ID.String()+"/matches", s.sessionCookie(t, ctx, creator.ID))
+	firstKey := extractResolveIdempotencyKey(t, listW.Body.String())
+
+	w1 := s.doForm(t, resolveURL(ch, matchID), s.sessionCookie(t, ctx, creator.ID), resolveFormValues(firstKey, true, ""))
+	require.Equal(t, http.StatusSeeOther, w1.Code, "body: %s", w1.Body.String())
+
+	for _, tc := range []struct {
+		name string
+		key  string
+	}{
+		{"DifferentKey", uuid.NewString()},
+		{"NoKey", ""},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			w := s.doForm(t, resolveURL(ch, matchID), s.sessionCookie(t, ctx, creator.ID), resolveFormValues(tc.key, true, ""))
+			assert.NotEqual(t, http.StatusSeeOther, w.Code, "a second resolve attempt against an already-resolved match must never silently succeed, body: %s", w.Body.String())
+
+			m, err := s.store.Matches().GetByID(ctx, matchID)
+			require.NoError(t, err)
+			assert.Equal(t, store.MatchStateConfirmed, m.State, "the already-resolved state must not change again")
+		})
+	}
+}
+
+// ── NFR3 authz: Analyst may resolve (shared Creator-or-Analyst
+// store.CanWrite authority, deliberately not the stricter Creator-tier
+// approval gate schedule/script decisions use); a non-member POST 403s
+// even though the form was never rendered for them; a signed-out POST
+// 401s ──────────────────────────────────────────────────────────────────
+
+func TestHandleResolve_Analyst_CanResolve(t *testing.T) {
+	ctx := context.Background()
+	s := newMatchesTestStack(t)
+	ch, creator := s.setupChannel(t, ctx)
+	analyst := s.newPerson(t, ctx, "resolve-analyst")
+	require.NoError(t, s.store.Roles().AddRole(ctx, ch.ID, analyst.ID, store.RoleAnalyst, creator.ID))
+
+	video := s.addSyncedVideo(t, ctx, ch, "Analyst Video")
+	require.NoError(t, s.store.Matches().Record(ctx, store.VideoScheduleMatch{
+		SyncedVideoID: video.ID, VideoScriptID: nil, Confidence: 0, State: store.MatchStatePending,
+	}))
+	matchID := s.singlePendingMatchID(t, ctx, ch)
+
+	listW := s.do(t, http.MethodGet, "/channels/"+ch.ID.String()+"/matches", s.sessionCookie(t, ctx, analyst.ID))
+	require.Equal(t, http.StatusOK, listW.Code, "body: %s", listW.Body.String())
+	key := extractResolveIdempotencyKey(t, listW.Body.String())
+
+	w := s.doForm(t, resolveURL(ch, matchID), s.sessionCookie(t, ctx, analyst.ID), resolveFormValues(key, false, ""))
+	require.Equal(t, http.StatusSeeOther, w.Code, "an Analyst must be able to resolve (shared Creator-or-Analyst store.CanWrite authority), body: %s", w.Body.String())
+
+	m, err := s.store.Matches().GetByID(ctx, matchID)
+	require.NoError(t, err)
+	assert.Equal(t, store.MatchStateRejected, m.State)
+}
+
+// TestHandleResolve_NonMember_Forbidden_EvenWithoutRenderedForm proves
+// NFR3: a non-member's forged POST 403s even though the form was never
+// rendered for them (their GET of the list would omit it -- canWrite is
+// presentation only), with nothing written.
+func TestHandleResolve_NonMember_Forbidden_EvenWithoutRenderedForm(t *testing.T) {
+	ctx := context.Background()
+	s := newMatchesTestStack(t)
+	ch, _ := s.setupChannel(t, ctx)
+	outsider := s.newPerson(t, ctx, "resolve-outsider")
+
+	video := s.addSyncedVideo(t, ctx, ch, "Outsider Video")
+	require.NoError(t, s.store.Matches().Record(ctx, store.VideoScheduleMatch{
+		SyncedVideoID: video.ID, VideoScriptID: nil, Confidence: 0, State: store.MatchStatePending,
+	}))
+	matchID := s.singlePendingMatchID(t, ctx, ch)
+
+	w := s.doForm(t, resolveURL(ch, matchID), s.sessionCookie(t, ctx, outsider.ID), resolveFormValues(uuid.NewString(), true, ""))
+	assert.Equal(t, http.StatusForbidden, w.Code, "a non-member's forged POST must 403 even though their GET never rendered this form")
+
+	m, err := s.store.Matches().GetByID(ctx, matchID)
+	require.NoError(t, err)
+	assert.Equal(t, store.MatchStatePending, m.State, "nothing must be written")
+}
+
+// TestHandleResolve_SignedOut_Unauthorized calls HandleResolve directly,
+// bypassing the router's RequireSignedIn wrapper (which redirects to
+// /login), mirroring TestHandleList_NotSignedIn_Unauthorized.
+func TestHandleResolve_SignedOut_Unauthorized(t *testing.T) {
+	ctx := context.Background()
+	s := newMatchesTestStack(t)
+	ch, _ := s.setupChannel(t, ctx)
+
+	video := s.addSyncedVideo(t, ctx, ch, "Signed Out Video")
+	require.NoError(t, s.store.Matches().Record(ctx, store.VideoScheduleMatch{
+		SyncedVideoID: video.ID, VideoScriptID: nil, Confidence: 0, State: store.MatchStatePending,
+	}))
+	matchID := s.singlePendingMatchID(t, ctx, ch)
+
+	form := resolveFormValues(uuid.NewString(), true, "")
+	req := httptest.NewRequest(http.MethodPost, resolveURL(ch, matchID), strings.NewReader(form.Encode()))
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	req.SetPathValue("id", ch.ID.String())
+	req.SetPathValue("matchID", matchID.String())
+	w := httptest.NewRecorder()
+	s.handlers.HandleResolve(w, req)
+
+	assert.Equal(t, http.StatusUnauthorized, w.Code)
+}
+
+// TestHandleResolve_CrossChannelMatchID_NotFound proves the Channel guard
+// mirroring resolvePendingMatchMutate exactly: a match that exists but
+// belongs to a different Channel than the path's {id} must 404, never a
+// 403 or a distinguishable response from an unknown match.
+func TestHandleResolve_CrossChannelMatchID_NotFound(t *testing.T) {
+	ctx := context.Background()
+	s := newMatchesTestStack(t)
+	ch, creator := s.setupChannel(t, ctx)
+	otherCh, _ := s.setupChannel(t, ctx)
+
+	video := s.addSyncedVideo(t, ctx, otherCh, "Cross Channel Match Video")
+	require.NoError(t, s.store.Matches().Record(ctx, store.VideoScheduleMatch{
+		SyncedVideoID: video.ID, VideoScriptID: nil, Confidence: 0, State: store.MatchStatePending,
+	}))
+	matchID := s.singlePendingMatchID(t, ctx, otherCh)
+
+	w := s.doForm(t, resolveURL(ch, matchID), s.sessionCookie(t, ctx, creator.ID), resolveFormValues(uuid.NewString(), true, ""))
+	assert.Equal(t, http.StatusNotFound, w.Code, "a match belonging to a different Channel must 404, body: %s", w.Body.String())
 }
