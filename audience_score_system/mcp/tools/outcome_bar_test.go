@@ -26,6 +26,7 @@ package tools
 
 import (
 	"context"
+	"strings"
 	"testing"
 	"time"
 
@@ -301,6 +302,53 @@ func TestGetCalibrationTrend_RendersRowsInStoreOrder_TruncatedPassedThrough(t *t
 	assert.InDelta(t, 2.0/3.0, out.Buckets[0].CalibrationRate, 1e-9)
 	assert.True(t, out.OutcomeBar.Configured)
 	assert.Equal(t, toOutcomeBarOutput(bar), out.OutcomeBar, "must echo the bar classified against")
+}
+
+// TestGetCalibrationTrend_BucketStartNormalizedToUTC_RegardlessOfLocation
+// covers finding #1980/issue #1981: libs/go/db configures no ScanLocation,
+// so pgx v5 hands back a timestamptz-sourced time.Time in the PROCESS's
+// time.Local, not UTC. store.CalibrationBucket.BucketStart's Location can
+// therefore be non-UTC even though the underlying instant is a correct
+// UTC month start; simulating that here (rather than flipping the global
+// time.Local) keeps this pure-Go test deterministic and Docker-free while
+// exercising the exact shape pgx would produce.
+//
+// 2024-02-01T00:00:00Z expressed in America/New_York is
+// 2024-01-31T19:00:00-05:00 -- the same instant, but a calendar month
+// EARLIER. The handler must call .UTC() before Format(time.RFC3339) so
+// the emitted BucketStart string is always UTC-normalized ("...Z"),
+// matching the field's documented "calendar-month bucket" meaning
+// regardless of the mcp process's time.Local -- both for a caller that
+// parses the string, and for one that reads its calendar-date substring
+// directly.
+func TestGetCalibrationTrend_BucketStartNormalizedToUTC_RegardlessOfLocation(t *testing.T) {
+	nyLoc, err := time.LoadLocation("America/New_York")
+	require.NoError(t, err)
+
+	utcFebStart := time.Date(2024, 2, 1, 0, 0, 0, 0, time.UTC)
+	nonUTCBucketStart := utcFebStart.In(nyLoc)
+	require.Equal(t, "2024-01", nonUTCBucketStart.Format("2006-01"), "sanity check: the un-normalized value must render the WRONG month, or this test would not be proving anything")
+
+	channelID := uuid.New()
+	bar := store.OutcomeBar{MetricName: store.OutcomeBarMetricViews, ThresholdValue: 1000, ChannelID: channelID}
+	bars := &fakeOutcomeBarStore{getBar: bar}
+	calibration := &fakeCalibrationStore{
+		rows: []store.CalibrationBucket{
+			{BucketStart: nonUTCBucketStart, Candidates: 1, Calibrated: 1, Miscalibrated: 0, Rate: 1},
+		},
+	}
+	h := getCalibrationTrendHandler(bars, calibration)
+
+	_, out, err := h(context.Background(), nil, GetCalibrationTrendInput{ChannelID: channelID.String()})
+	require.NoError(t, err)
+	require.Len(t, out.Buckets, 1)
+
+	raw := out.Buckets[0].BucketStart
+	assert.True(t, strings.HasSuffix(raw, "Z"), "BucketStart must be UTC-normalized (end in Z) so a caller reading its calendar-date substring directly gets the right answer without parsing: got %q", raw)
+
+	parsed, err := time.Parse(time.RFC3339, raw)
+	require.NoError(t, err)
+	assert.Equal(t, "2024-02", parsed.UTC().Format("2006-01"), "must render the calendar-month bucket the value represents (February), not the month it happens to fall in under a non-UTC time.Local (January)")
 }
 
 // TestGetCalibrationTrend_OtherStoreError_Propagated proves only

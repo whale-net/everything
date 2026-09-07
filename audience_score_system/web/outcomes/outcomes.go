@@ -219,7 +219,7 @@ func calibrationPoints(buckets []store.CalibrationBucket) []calibrationPoint {
 	points := make([]calibrationPoint, 0, len(buckets))
 	for i, b := range buckets {
 		points = append(points, calibrationPoint{
-			Label:         b.BucketStart.Format("2006-01"),
+			Label:         b.BucketStart.UTC().Format("2006-01"),
 			Candidates:    b.Candidates,
 			Calibrated:    b.Calibrated,
 			Miscalibrated: b.Miscalibrated,
