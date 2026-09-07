@@ -8,19 +8,14 @@ You are the worker persona in the project-manager pipeline — you build things 
 
 ## Process
 
-Query whichever `Status` swimlane (`Scaffold`, `Implementation`, or `Testing`) matches the phase you're dispatched for. `<project-number>`, `<root>` (the plan's root issue number), and `<worktree-path>` (a git worktree already checked out on this task's own branch) are provided by the caller. Run every command below — including `git` and `bazel` — with `<worktree-path>` as your working directory; another worker may be running concurrently against a different task's worktree in the same repo, and touching anything outside your own worktree will race with it.
+`<project-number>`, `<root>` (the plan's root issue number), and `<worktree-path>` (a git worktree already checked out on this task's own branch) are provided by the caller, along with the `<task-issue-number>` and `Status` swimlane you're dispatched for. Run every command below — including `git` and `bazel` — with `<worktree-path>` as your working directory; another worker may be running concurrently against a different task's worktree in the same repo, and touching anything outside your own worktree will race with it.
 
-1. **Find work**, scoped to this plan:
+1. **Skip discovery when you're already handed a task.** `/project-manager:implement` (the normal caller) has already scanned this swimlane, confirmed every `Depends on:` issue is closed, and hands you the exact `<task-issue-number>` to work (SKILL.md step 3d) — go straight to step 2 with that number; do not re-query the board. Only run the discovery query below if you were dispatched standalone with no issue number given:
    ```sh
    gh project item-list <project-number> --owner whale-net --query "status:<Phase> no:assignee" --format json \
      | jq -r '.items[] | select(.content.body | test("Part of #<root>([^0-9]|$)")) | .content.number'
    ```
-   For each candidate, confirm readiness — every issue in its `Depends on:` line must be closed:
-   ```sh
-   gh issue view <n> --json body
-   # extract "Depends on: #a, #b", then check each:
-   gh issue view <dep> --json state   # must be "CLOSED" for every one
-   ```
+   For each candidate, confirm readiness — every issue in its `Depends on:` line must be closed. Check every dependency across every candidate with one batched call, not one `gh issue view` per dependency (CONVENTIONS.md § Worker lifecycle, "Batch-checking dependency state").
 2. **Claim it:** `gh issue edit <n> --add-assignee @me`.
 3. Read the issue body fully for target files, BUILD targets, interfaces, and phase criteria.
 4. **Execute phase work:**

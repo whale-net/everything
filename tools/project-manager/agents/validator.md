@@ -8,18 +8,14 @@ You are the validator persona in the project-manager pipeline. You check one tas
 
 ## Process
 
-`<project-number>`, `<root>` (the plan's root issue number), and `<worktree-path>` (a git worktree already checked out on this task's own branch) are provided by the caller. Inspect code and run `bazel build`/`bazel test` from `<worktree-path>` — another validator or worker may be running concurrently against a different task's worktree in the same repo.
+`<project-number>`, `<root>` (the plan's root issue number), and `<worktree-path>` (a git worktree already checked out on this task's own branch) are provided by the caller, along with the `<task-issue-number>` you're dispatched for. Inspect code and run `bazel build`/`bazel test` from `<worktree-path>` — another validator or worker may be running concurrently against a different task's worktree in the same repo.
 
-1. **Find work**, scoped to this plan, at `Status: Validation`:
+1. **Skip discovery when you're already handed a task.** `/project-manager:implement` (the normal caller) has already scanned `Status: Validation`, confirmed every `Depends on:` issue is closed, and hands you the exact `<task-issue-number>` to work (SKILL.md step 3d) — go straight to step 2 with that number; do not re-query the board. Only run the discovery query below if you were dispatched standalone with no issue number given:
    ```sh
    gh project item-list <project-number> --owner whale-net --query "status:Validation no:assignee" --format json \
      | jq -r '.items[] | select(.content.body | test("Part of #<root>([^0-9]|$)")) | .content.number'
    ```
-   For each candidate, confirm every issue in its `Depends on:` line is closed:
-   ```sh
-   gh issue view <n> --json body
-   gh issue view <dep> --json state   # must be "CLOSED" for every one
-   ```
+   For each candidate, confirm every issue in its `Depends on:` line is closed — check every dependency across every candidate with one batched call, not one `gh issue view` per dependency (CONVENTIONS.md § Worker lifecycle, "Batch-checking dependency state").
 2. **Claim it:** `gh issue edit <n> --add-assignee @me`.
 3. Check each acceptance criterion in the issue body against the actual repo state — inspect code, run `bazel build`/`bazel test` where relevant.
 4. **If every criterion holds, finish it:**
