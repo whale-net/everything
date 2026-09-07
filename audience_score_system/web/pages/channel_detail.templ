@@ -85,6 +85,9 @@ templ ChannelDetail(data components.LayoutData, ch store.Channel, canReconnect b
 					<a href={ templ.URL("/channels/" + ch.ID.String() + "/matches") } class="btn btn-secondary btn-sm">
 						Resolve pending matches
 					</a>
+					<a href={ templ.URL("/channels/" + ch.ID.String() + "/outcomes") } class="btn btn-secondary btn-sm">
+						View outcomes
+					</a>
 				</div>
 			</div>
 		</div>
