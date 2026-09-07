@@ -9,6 +9,7 @@ templ_library(
     deps = [
         "//libs/go/htmxauth",
         "//libs/go/htmxui",
+        "//manmanv2/events",
         "//manmanv2/protos:manmanpb",
         "//manmanv2/ui/components",
     ],

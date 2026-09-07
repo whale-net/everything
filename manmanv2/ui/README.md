@@ -128,6 +128,47 @@ unmodified -- `ConfigurationPatch`/`env_vars` overrides are **not** resolved
 or applied by any M2 action. That work is scoped to M3/C22; see
 [`manmanv2/docs/DESIGN_SGC_ENV_OVERRIDES.md`](../docs/DESIGN_SGC_ENV_OVERRIDES.md).
 
+## Live Row Updates over SSE (#1726)
+
+`/sessions` opens one SSE connection (`GET /api/live/deployments`, the
+`handleDeploymentsLiveSSE` handler in `handlers_sessions_live.go`, #1724)
+that keeps every visible deployment row current with no reload -- including
+rows in a transient status and rows another user's action changed. The
+initial server-side render of the GSC status table is unaffected by whether
+that connection succeeds (it always renders the freshest data the page
+handler already fetched); the SSE connection only keeps it current
+afterward.
+
+**Markup shape** (`pages.DeploymentsLiveRegion`/`pages.DeploymentRow` in
+`pages/sessions.templ`): the table is wrapped in one ancestor `<div
+hx-ext="sse" sse-connect="/api/live/deployments">` -- never itself a swap
+target, per `libs/go/htmxsse/README.md`'s reconnect-baseline note -- and
+each `<tr id="deployment-row-{sgcID}">` carries `sse-swap="deployment.
+{sgcID}"` (`events.TopicForDeployment`), matching the routing key
+`handleDeploymentsLiveSSE` publishes on. A row rendered via the #1628
+self-terminating poll (`GET /api/deployments/{sgcID}/row`) or any of the
+Start/Stop/Restart action endpoints re-renders through the same
+`pages.DeploymentRow`, so it always carries `sse-swap` too and never drops
+out of the live stream.
+
+**Live / Not Live indicator**: a badge and hidden "Reload" link (both
+outside the swapped rows, inside the same `hx-ext="sse"` container) flip to
+"Not Live" after one heartbeat interval (`MANMANV2_SSE_HEARTBEAT_INTERVAL`,
+passed to the page as `data-heartbeat-ms`) with no `htmx:sseOpen`/row
+update -- covering both an explicit `htmx:sseError`/`htmx:sseClose` and a
+silently stalled connection (no event within `2 * heartbeatMs`). The
+debounce avoids flapping the indicator on a single dropped beat. Reconnect
+itself is the browser's native `EventSource` retry, driven by the interval
+`htmxsse` advertises -- there is no hand-rolled reconnect loop; the Reload
+link is the documented manual fallback while not-live.
+
+**When live updates are unavailable** (`app.sseHub == nil` -- no
+`RABBITMQ_URL`, or the broker was unreachable at startup, see `ENV.md`):
+`SessionsPageData.LiveUpdatesEnabled` is `false` and the page omits the
+`hx-ext="sse"`/`sse-connect`/indicator markup entirely rather than pointing
+it at a route that would only 503. The #1628 per-row poll remains the
+update path in that case, unchanged.
+
 ## Documentation
 
 - **[ARCHITECTURE.md](ARCHITECTURE.md)** - System architecture and patterns
