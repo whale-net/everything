@@ -5,16 +5,18 @@ Temporal session workflows, MCP surface, and an embeddable session UI.
 
 ## Start Here
 
-- [`README.md`](README.md) — What this domain is, current status (pre-M1,
-  design only), the planned binaries and shared packages.
+- [`README.md`](README.md) — What this domain is, current status (M1
+  shipped), the four binaries, the Keycloak role M1's seeded agent
+  requires, the agent-definition config (`config/agents.yaml`), and local
+  dev (`bazel run` targets + Tilt).
 - [`ARCHITECTURE.md`](ARCHITECTURE.md) — Component map, the
   session/transcript/context split, transcript storage tiers (RMQ bus /
   Postgres hot / S3 cold), service-vs-package boundary, session workflow,
   tool contract for domain-owned MCP servers, embeddable UI model, auth
   chaining, idempotency, phasing, open items. Read before scoping or
   designing any whagent-net work.
-- [`ENV.md`](ENV.md) — Environment variables. Skeleton until M1 lands
-  binaries that read them.
+- [`ENV.md`](ENV.md) — Environment variables for all four M1 binaries
+  (`migrate`, `api`, `worker`, `mcp`).
 
 ## Product Docs
 

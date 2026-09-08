@@ -12,6 +12,7 @@ go_library(
         "client.go",
         "dispatch.go",
         "keys.go",
+        "listdefs.go",
     ],
     importpath = "github.com/whale-net/everything/whagent_net/worker/tools",
     visibility = ["//visibility:public"],

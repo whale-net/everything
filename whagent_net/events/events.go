@@ -82,17 +82,23 @@ const (
 	EventTypeFailure = "failure"
 
 	// EventTypeToolCall and EventTypeToolResult (issue #2121) are the two
-	// transcript events SessionWorkflow.processTurn's tool-dispatch step
-	// commits for each of a turn's model-requested tool calls (FR2, FR8):
-	// EventTypeToolCall records the call as the model requested it
-	// (name + arguments) before dispatch; EventTypeToolResult records
+	// transcript event type *prefixes* SessionWorkflow.processTurn's
+	// tool-dispatch step commits for each of a turn's model-requested
+	// tool calls (FR2, FR8): EventTypeToolCall records the call as the
+	// model requested it (name + arguments) before dispatch;
+	// EventTypeToolResult records
 	// whagent_net/worker/tools.Dispatcher.Dispatch's outcome (content +
 	// the domain server's own IsError, per dispatch.go's "isError is not
-	// a whagent-net failure") after. Not yet committed by any workflow
-	// code as of this Scaffold-phase task -- see
-	// whagent_net/worker/activities.go's DispatchTool doc comment for
-	// where Implementation phase wires the commit-before/commit-after
-	// pair in.
+	// a whagent-net failure") after. The committed `type` column is never
+	// this bare constant -- whagent_net/worker/activities.go's
+	// DispatchTool commits "tool_call:<call_index>"/
+	// "tool_result:<call_index>" (context.go's
+	// toolCallEventType/toolResultEventType), since
+	// TranscriptStore.AppendIfAbsent's idempotency key is (session_id,
+	// turn, type) only and a single turn may carry more than one tool
+	// call; a consumer recognizing "is this a tool_call/tool_result
+	// event" should match on this prefix (strings.HasPrefix), not on
+	// equality with these constants.
 	EventTypeToolCall   = "tool_call"
 	EventTypeToolResult = "tool_result"
 )

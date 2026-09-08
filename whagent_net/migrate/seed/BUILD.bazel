@@ -10,5 +10,7 @@ go_library(
     visibility = ["//visibility:public"],
     deps = [
         "//whagent_net/config",
+        "//whagent_net/llm",
+        "//whagent_net/session",
     ],
 )

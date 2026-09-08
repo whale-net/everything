@@ -478,19 +478,32 @@ type ListToolDefinitionsResult struct {
 // never whagent-side-filtered against ToolServerRef.AllowedTools (C22/
 // Later, dispatch.go's package doc comment "Tool selection").
 //
-// Not implemented in this Scaffold-phase task (issue #2121) --
-// Implementation phase wires this through a.Dispatcher.Issuer (minting)
-// and whagent_net/worker/tools' Connect/ListToolNames-adjacent listing
-// call (a new ListToolDefinitions func in that package, converting
-// *mcp.ClientSession.ListTools' mcp.Tool entries -- Name/Description/
-// InputSchema -- into llm.ToolDefinition), aggregated across every
-// in.ToolSet entry the same order dispatch.go's resolveTarget already
-// iterates in.
+// Implemented via whagent_net/worker/tools.ListToolDefinitions
+// (listdefs.go), over a.Dispatcher.Issuer (minting) -- this activity is a
+// thin activity-boundary wrapper: read in.SessionID's *session.Session
+// (needed by mintCredential's sub/sub_iss/act derivation, keys.go) then
+// delegate.
 func (a *Activities) ListToolDefinitions(ctx context.Context, in ListToolDefinitionsInput) (ListToolDefinitionsResult, error) {
 	if a.Dispatcher == nil {
 		return ListToolDefinitionsResult{}, fmt.Errorf("worker: Activities.Dispatcher is nil")
 	}
-	return ListToolDefinitionsResult{}, fmt.Errorf("worker: ListToolDefinitions not implemented (issue #2121 Implementation phase)")
+	if a.Store == nil {
+		return ListToolDefinitionsResult{}, fmt.Errorf("worker: Activities.Store is nil")
+	}
+
+	sess, err := a.Store.Sessions().GetByID(ctx, in.SessionID)
+	if err != nil {
+		return ListToolDefinitionsResult{}, fmt.Errorf("list tool definitions: get session: %w", err)
+	}
+	if sess == nil {
+		return ListToolDefinitionsResult{}, fmt.Errorf("list tool definitions: session %s not found", in.SessionID)
+	}
+
+	defs, err := tools.ListToolDefinitions(ctx, a.Dispatcher.Issuer, sess, in.AgentID, in.ToolSet)
+	if err != nil {
+		return ListToolDefinitionsResult{}, fmt.Errorf("list tool definitions: %w", err)
+	}
+	return ListToolDefinitionsResult{Tools: defs}, nil
 }
 
 // DispatchToolInput is DispatchTool's activity input.
@@ -530,20 +543,31 @@ type DispatchToolResult struct {
 // workflow.GetVersion("session-workflow-tool-dispatch", ...) gate per
 // that file's NFR1 doc comment.
 //
-// Not implemented in this Scaffold-phase task (issue #2121) --
-// Implementation phase wires this activity to: (1) commit an
-// events.EventTypeToolCall transcript event for in.Call before dispatch
-// (a.Store.Transcript().AppendIfAbsent, retry-safe the same way
-// CommitTerminalEvent above is), (2) look up in.SessionID's
-// *session.Session (a.Store.Sessions().GetByID) to build
-// tools.DispatchInput and call a.Dispatcher.Dispatch, and (3) commit the
-// matching events.EventTypeToolResult event carrying the returned
-// tools.Result -- both events go through the same AppendIfAbsent path
-// every other transcript event uses, so a re-invoked activity (Temporal's
+// Commits an events.EventTypeToolCall transcript event for in.Call before
+// dispatch (a.Store.Transcript().AppendIfAbsent, retry-safe the same way
+// CommitTerminalEvent above is), looks up in.SessionID's *session.Session
+// (a.Store.Sessions().GetByID) to build tools.DispatchInput and call
+// a.Dispatcher.Dispatch, then commits the matching
+// events.EventTypeToolResult event carrying the returned tools.Result --
+// both events go through the same AppendIfAbsent path every other
+// transcript event uses, so a re-invoked activity (Temporal's
 // at-least-once execution) commits each exactly once rather than
 // duplicating it, and a tool result's own IsError never gets reinterpreted
 // as a whagent-net failure (dispatch.go's package doc comment, "isError
 // is not a whagent-net failure").
+//
+// AppendIfAbsent's idempotency key is (session_id, turn, type) only --
+// see TranscriptStore.AppendIfAbsent's doc comment -- so a turn with more
+// than one tool call cannot commit two events both literally typed
+// "tool_call"/"tool_result": the second AppendIfAbsent call would find the
+// first call's row already present for that (session, turn, type) and
+// silently return it unchanged, dropping the second call's own event.
+// toolCallEventType/toolResultEventType (context.go) fold in.CallIndex
+// into the stored `type` column (e.g. "tool_call:1") to keep each call's
+// event distinct while remaining exactly as retry-safe per call --a
+// retried DispatchTool activity for the same (session, turn, call_index)
+// still dedupes correctly, since CallIndex is stable across a Temporal
+// retry of the same call (DispatchToolInput's doc comment).
 func (a *Activities) DispatchTool(ctx context.Context, in DispatchToolInput) (DispatchToolResult, error) {
 	if a.Store == nil {
 		return DispatchToolResult{}, fmt.Errorf("worker: Activities.Store is nil")
@@ -551,5 +575,42 @@ func (a *Activities) DispatchTool(ctx context.Context, in DispatchToolInput) (Di
 	if a.Dispatcher == nil {
 		return DispatchToolResult{}, fmt.Errorf("worker: Activities.Dispatcher is nil")
 	}
-	return DispatchToolResult{}, fmt.Errorf("worker: DispatchTool not implemented (issue #2121 Implementation phase)")
+
+	callPayload, err := marshalToolCallPayload(in.Call)
+	if err != nil {
+		return DispatchToolResult{}, fmt.Errorf("dispatch tool: marshal tool call payload: %w", err)
+	}
+	if _, err := a.Store.Transcript().AppendIfAbsent(ctx, in.SessionID, in.Turn, toolCallEventType(in.CallIndex), callPayload); err != nil {
+		return DispatchToolResult{}, fmt.Errorf("dispatch tool: commit tool call event: %w", err)
+	}
+
+	sess, err := a.Store.Sessions().GetByID(ctx, in.SessionID)
+	if err != nil {
+		return DispatchToolResult{}, fmt.Errorf("dispatch tool: get session: %w", err)
+	}
+	if sess == nil {
+		return DispatchToolResult{}, fmt.Errorf("dispatch tool: session %s not found", in.SessionID)
+	}
+
+	result, err := a.Dispatcher.Dispatch(ctx, tools.DispatchInput{
+		Session:   sess,
+		AgentID:   in.AgentID,
+		ToolSet:   in.ToolSet,
+		Turn:      in.Turn,
+		CallIndex: in.CallIndex,
+		Call:      in.Call,
+	})
+	if err != nil {
+		return DispatchToolResult{}, fmt.Errorf("dispatch tool: %w", err)
+	}
+
+	resultPayload, err := marshalToolResultPayload(result)
+	if err != nil {
+		return DispatchToolResult{}, fmt.Errorf("dispatch tool: marshal tool result payload: %w", err)
+	}
+	if _, err := a.Store.Transcript().AppendIfAbsent(ctx, in.SessionID, in.Turn, toolResultEventType(in.CallIndex), resultPayload); err != nil {
+		return DispatchToolResult{}, fmt.Errorf("dispatch tool: commit tool result event: %w", err)
+	}
+
+	return DispatchToolResult{Result: result}, nil
 }

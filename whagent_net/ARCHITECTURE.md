@@ -98,7 +98,9 @@ Programmatic integrators need `GetSession` (is it done? waiting on me?),
 | `whagent_net/mcp` | MCP server, `external-api` | `start_session`, `send_turn`, `get_session`, `read_transcript` over `api`. Phase-1 test surface (Claude Code drives it directly) and, later, how agents spawn agents. Same `web` + `mcp` sibling shape as `audience_score_system`. |
 | `whagent_net/embed` | Go package | The shareable UI component: `templ` session components (transcript, turn composer, session list) + `embed.Mount(mux, apiClient, sseHub, opts)` registering fragment + SSE routes under a host-chosen prefix + a persona-mapping hook. Cross-app primitives only, per `libs/go/htmxui`'s rule. |
 | `whagent_net/ui` | Web UI, `external-api` | Standalone agent UI: session list, session view, "run an agent" form, view any session. `htmxui.Shell` + `embed` + an `htmxsse.Hub` on `whagent/events`. First consumer of `embed`; first *clean* `htmxui` adopter. |
-| `whagent_net/migrate` | Job | Applies `session` migrations, same as `audience_score_system/migrate`. |
+| `whagent_net/migrate` | Job | Applies `session` migrations, then runs the agent-definition seeder (`whagent_net/migrate/seed`, issue #2121) as a post-migration step — upserts `whagent_net/config/agents.yaml`'s checked-in definitions into `agent_definition`, minting a new version row whenever a definition's fields drift from the latest seeded one, never editing a version already pinned to a session. |
+| `whagent_net/config` | Go package | The checked-in agent-definition seed source (`agents.yaml` + `Load`/`Validate`) `whagent_net/migrate/seed` consumes — LB5/NFR6: config-driven seeding, but `agent_definition` stays a real, versioned table, never replaced by a config lookup. |
+| `whagent_net/llm` | Go package | The OpenRouter model client (issue #2112): a single OpenAI-wire `Client` pointed at OpenRouter's base URL, `Catalog` (FR5's "does the provider serve this model" gate, cached), and per-turn cost accounting (`cost.go`/`pricing.go`, FR7/LB6). One provider, one client — see [Open items](#open-items) "Provider abstraction". |
 | `//libs/go/whagent` | Go package | Tool contract for domain-owned MCP servers: idempotency-key field, persona claim shape, agent definition registration format. |
 
 ## Transcript storage tiers
@@ -184,15 +186,16 @@ if v >= 1 {
 ```
 
 `workflow.go`'s `updateSessionStatus` (change ID
-`session-workflow-status-transitions`) is the first real usage: the
-Scaffold-phase loop never wrote `sessions.status` at all, so
-Implementation phase's addition of that write is a genuine new branch, not
-just documentation. The next one lands with the follow-up tool-dispatch
-task, gating the `ExecuteActivity` calls it adds at `processTurn`'s
-tool-call dispatch step (`session-workflow-tool-dispatch`) -- see that
-function's comment in `workflow.go`. Every later task that changes
-`SessionWorkflow`/`processTurn`'s control flow inherits this convention
-rather than reinventing it.
+`session-workflow-status-transitions`, issue #2114) was the first real
+usage: the Scaffold-phase loop never wrote `sessions.status` at all, so
+Implementation phase's addition of that write was a genuine new branch,
+not just documentation. Issue #2119 (`session-workflow-cap-enforcement`)
+added the turn/cost cap checks and failure-classification path. Issue
+#2121 (`session-workflow-tool-dispatch`) added the `ActivityListToolDefinitions`
+call ahead of the model call and the per-tool-call `ActivityDispatchTool`
+loop after it — the tool-dispatch step `processTurn` had left a no-op hook
+since #2114. Every later task that changes `SessionWorkflow`/`processTurn`'s
+control flow inherits this convention rather than reinventing it.
 
 ## Domain-owned MCP servers and the tool contract
 
@@ -392,8 +395,13 @@ outright — the session still exists and a caller should retry with
 
 - **Front door for humans before Phase 2**: `mcp` from Claude Code is the
   v1 answer; Slack via `friendly_computing_machine` is plausible later.
-- **`StreamEvents` in v1 or v1+**: cheap bridge, but a second consumer of
-  the exchange to operate. Decide at M1 design.
+- **`StreamEvents`**: resolved **v1+ / M2** (C17) — a deliberate M1
+  deferral, not an open question. `api`'s RPC surface stays
+  `StartSession`/`SendTurn`/`StopSession`/`GetSession`/`ListSessions`/
+  `ReadTranscript` through M1; a server-streaming bridge over
+  `whagent/events` is a second consumer of the exchange to operate and
+  isn't required for M1's outcome sentence (an operator can already poll
+  `read_transcript`).
 - **Context budgeting strategy** (summarization vs. truncation, when to
   write summary events): worker-internal, defer to the milestone that
   first hits the budget.

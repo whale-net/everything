@@ -4,12 +4,14 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"strings"
 
 	"github.com/google/uuid"
 
 	"github.com/whale-net/everything/whagent_net/events"
 	"github.com/whale-net/everything/whagent_net/llm"
 	"github.com/whale-net/everything/whagent_net/session"
+	"github.com/whale-net/everything/whagent_net/worker/tools"
 )
 
 // BuildContextInput is BuildContext's activity input.
@@ -178,16 +180,26 @@ func marshalMessagePayload(m llm.Message) (json.RawMessage, error) {
 
 // eventsToMessages decodes evs (already in seq/chronological order, see
 // TranscriptStore.Read/ReadByIDs) back into the llm.Message list CallModel
-// (activities.go) sends as a Request. Events of a type this package does
-// not yet produce (future tool-call/tool-result/summary event types --
-// follow-up tasks per the issue body) are skipped rather than failing the
-// whole turn, since this package's writers (BuildContext, CommitTurn) only
-// ever produce EventTypeUserMessage/EventTypeAssistantMessage today.
+// (activities.go) sends as a Request. A user_message/assistant_message
+// event decodes into its role's message verbatim (an assistant_message
+// already carries any ToolCalls the model requested that turn,
+// transcriptMessagePayload.ToolCalls, so there is nothing further to fold
+// in from a separate tool_call event -- see below). A tool_result event
+// (toolResultEventType's "tool_result:<call_index>" prefix, issue #2121)
+// decodes into an llm.RoleTool message bound back to its call via
+// ToolCallID -- the OpenAI wire protocol CallModel speaks (llm/client.go)
+// requires exactly this reply-message shape following an assistant
+// message that requested tool calls, or the provider rejects the request.
+// A tool_call event itself (informational -- FR2's transcript visibility)
+// is intentionally not turned into a message here: the assistant_message
+// event it accompanies already carries the identical call in its
+// ToolCalls field. Any other/future event type is skipped rather than
+// failing the whole turn.
 func eventsToMessages(evs []events.Event) ([]llm.Message, error) {
 	messages := make([]llm.Message, 0, len(evs))
 	for _, ev := range evs {
-		switch ev.Type {
-		case events.EventTypeUserMessage, events.EventTypeAssistantMessage:
+		switch {
+		case ev.Type == events.EventTypeUserMessage || ev.Type == events.EventTypeAssistantMessage:
 			var payload transcriptMessagePayload
 			if err := json.Unmarshal(ev.Payload, &payload); err != nil {
 				return nil, fmt.Errorf("unmarshal message payload for event %s: %w", ev.EventID, err)
@@ -204,9 +216,82 @@ func eventsToMessages(evs []events.Event) ([]llm.Message, error) {
 				}
 			}
 			messages = append(messages, msg)
+		case strings.HasPrefix(ev.Type, events.EventTypeToolResult+":"):
+			var payload toolResultEventPayload
+			if err := json.Unmarshal(ev.Payload, &payload); err != nil {
+				return nil, fmt.Errorf("unmarshal tool result payload for event %s: %w", ev.EventID, err)
+			}
+			messages = append(messages, llm.Message{
+				Role:       llm.RoleTool,
+				Content:    payload.Content,
+				ToolCallID: payload.ToolCallID,
+			})
 		default:
 			continue
 		}
 	}
 	return messages, nil
+}
+
+// toolCallEventType/toolResultEventType derive the `type` column
+// DispatchTool (activities.go) commits for one tool call's before/after
+// transcript events -- see that method's doc comment for why callIndex
+// must be folded in rather than using events.EventTypeToolCall/
+// EventTypeToolResult verbatim: AppendIfAbsent's idempotency key is
+// (session_id, turn, type) only, and a turn may carry more than one tool
+// call.
+func toolCallEventType(callIndex int) string {
+	return fmt.Sprintf("%s:%d", events.EventTypeToolCall, callIndex)
+}
+
+func toolResultEventType(callIndex int) string {
+	return fmt.Sprintf("%s:%d", events.EventTypeToolResult, callIndex)
+}
+
+// toolCallEventPayload is a tool_call transcript event's JSON payload
+// (FR2): the model-requested call exactly as it arrived, before dispatch.
+type toolCallEventPayload struct {
+	ToolCallID string `json:"tool_call_id"`
+	Name       string `json:"name"`
+	Arguments  string `json:"arguments"`
+}
+
+// toolResultEventPayload is a tool_result transcript event's JSON payload
+// (FR2): tools.Dispatcher.Dispatch's outcome verbatim, including the
+// domain server's own IsError flag (dispatch.go's package doc comment,
+// "isError is not a whagent-net failure") -- never reinterpreted here.
+type toolResultEventPayload struct {
+	ToolCallID string `json:"tool_call_id"`
+	Name       string `json:"name"`
+	Content    string `json:"content"`
+	IsError    bool   `json:"is_error"`
+}
+
+// marshalToolCallPayload converts an llm.ToolCall into the JSON payload
+// DispatchTool commits for its tool_call transcript event.
+func marshalToolCallPayload(call llm.ToolCall) (json.RawMessage, error) {
+	raw, err := json.Marshal(toolCallEventPayload{
+		ToolCallID: call.ID,
+		Name:       call.Name,
+		Arguments:  call.Arguments,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("marshal tool call payload: %w", err)
+	}
+	return raw, nil
+}
+
+// marshalToolResultPayload converts a tools.Result into the JSON payload
+// DispatchTool commits for its tool_result transcript event.
+func marshalToolResultPayload(result tools.Result) (json.RawMessage, error) {
+	raw, err := json.Marshal(toolResultEventPayload{
+		ToolCallID: result.ToolCallID,
+		Name:       result.Name,
+		Content:    result.Content,
+		IsError:    result.IsError,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("marshal tool result payload: %w", err)
+	}
+	return raw, nil
 }

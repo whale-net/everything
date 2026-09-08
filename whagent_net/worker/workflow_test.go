@@ -50,6 +50,21 @@ func registerActivityStubs(env *testsuite.TestWorkflowEnvironment) {
 	env.RegisterActivityWithOptions(func(ctx context.Context, in CommitTerminalEventInput) (CommitTerminalEventResult, error) {
 		return CommitTerminalEventResult{}, nil
 	}, activity.RegisterOptions{Name: ActivityCommitTerminalEvent})
+	// ListToolDefinitions/DispatchTool (issue #2121): processTurn calls
+	// ListToolDefinitions ahead of CallModel on every turn (gated behind
+	// "session-workflow-tool-dispatch", which every fresh test-environment
+	// workflow execution takes -- see workflow.go's NFR1 doc comment), so
+	// every test using this helper needs it registered even when it never
+	// mocks any tool calls; DispatchTool is only invoked when
+	// ActivityCallModel's result carries ToolCalls, but is registered here
+	// too so any test that does exercise tool calls can rely on this
+	// helper alone.
+	env.RegisterActivityWithOptions(func(ctx context.Context, in ListToolDefinitionsInput) (ListToolDefinitionsResult, error) {
+		return ListToolDefinitionsResult{}, nil
+	}, activity.RegisterOptions{Name: ActivityListToolDefinitions})
+	env.RegisterActivityWithOptions(func(ctx context.Context, in DispatchToolInput) (DispatchToolResult, error) {
+		return DispatchToolResult{}, nil
+	}, activity.RegisterOptions{Name: ActivityDispatchTool})
 }
 
 func testSessionID() uuid.UUID {

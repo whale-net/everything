@@ -57,24 +57,23 @@
 // here, not per individual branch, since every branch this task adds
 // ships in the same deploy and a run open across that deploy must keep
 // taking the pre-#2119 path for all of them uniformly, not some subset).
-// The next behavior-changing edit to this file (the follow-up
-// tool-dispatch task's ExecuteActivity call per tool call, noted at
-// processTurn's tool-dispatch step below) must add its own change ID the
-// same way.
+// issue #2121 (agent definition seeding, tool dispatch wiring, M1
+// close-out) is the third: its own change ID,
+// "session-workflow-tool-dispatch", gates the ActivityListToolDefinitions
+// call ahead of ActivityCallModel and the per-tool-call
+// ActivityDispatchTool loop after it, both added to processTurn below.
+// The next behavior-changing edit to this file must add its own change ID
+// the same way.
 //
 // # Implementation status (issues #2114, #2119, #2121)
 //
 // SessionWorkflow's signal-per-turn loop, Stop/cancellation handling,
-// session-status transitions, turn/cost cap enforcement (FR6/FR7), and
-// failure classification (FR2/FR3) are all real. Still deferred to issue
-// #2121's Implementation phase (this file's Scaffold-phase task adds the
-// ListToolDefinitions/DispatchTool activities, activities.go, but does not
-// yet call either from processTurn): the tool-call dispatch step in
-// processTurn stays a no-op hook, and CommitTurnResult.Done
-// (activities.go) is always false (no task yet teaches CommitTurn to
-// recognize a real agent-initiated finish signal), so this workflow can
-// reach `awaiting_input`, `stopped`, `capped`, or `failed`, but never
-// `done`.
+// session-status transitions, turn/cost cap enforcement (FR6/FR7), tool
+// dispatch (FR8, FR10, FR11), and failure classification (FR2/FR3) are all
+// real. Still deferred: CommitTurnResult.Done (activities.go) is always
+// false (no task yet teaches CommitTurn to recognize a real
+// agent-initiated finish signal), so this workflow can reach
+// `awaiting_input`, `stopped`, `capped`, or `failed`, but never `done`.
 package main
 
 import (
@@ -321,10 +320,10 @@ func runTurn(ctx workflow.Context, stopCh workflow.ReceiveChannel, sessionID uui
 
 // processTurn runs one turn's activity sequence (ARCHITECTURE.md "Session
 // workflow"): resolve the current agent definition, check caps (FR6/FR7,
-// "before" half), build context, call the model, (tool-call dispatch -- a
-// no-op hook in this task, filled in by the follow-up tool-dispatch
-// task), commit the turn, check caps again ("after" half), then return.
-// Any activity error along the way is routed to failTurn (FR2/FR3)
+// "before" half), build context, list the tools this turn's model call may
+// use (FR8), call the model, dispatch each tool call the model requested
+// (FR8/FR10/FR11), commit the turn, check caps again ("after" half), then
+// return. Any activity error along the way is routed to failTurn (FR2/FR3)
 // instead of propagating as a raw workflow error -- see failTurn's doc
 // comment for why.
 //
@@ -382,12 +381,35 @@ func processTurn(ctx workflow.Context, sessionID uuid.UUID, turn int, in SendTur
 		return failTurn(ctx, sessionID, turn, err)
 	}
 
+	// FR8's tool-attach step: resolves what CallModel below may offer the
+	// model this turn (ActivityListToolDefinitions), then, once the model
+	// responds, dispatches each requested call (ActivityDispatchTool).
+	// Gated behind its own change ID ("session-workflow-tool-dispatch")
+	// per this file's NFR1 doc comment -- issue #2121 is the first task to
+	// add either call, and a run already open across this deploy must keep
+	// taking the old no-tools/no-dispatch path (empty CallModelInput.Tools,
+	// no dispatch loop) rather than replay into a non-determinism error.
+	toolVersion := workflow.GetVersion(ctx, "session-workflow-tool-dispatch", workflow.DefaultVersion, 1)
+
+	var toolDefs ListToolDefinitionsResult
+	if toolVersion >= 1 {
+		listIn := ListToolDefinitionsInput{
+			SessionID: sessionID,
+			AgentID:   resolved.Definition.AgentID,
+			ToolSet:   resolved.Definition.ToolSet,
+		}
+		if err := workflow.ExecuteActivity(ctx, ActivityListToolDefinitions, listIn).Get(ctx, &toolDefs); err != nil {
+			return failTurn(ctx, sessionID, turn, err)
+		}
+	}
+
 	var modelResult CallModelResult
 	callIn := CallModelInput{
 		SessionID: sessionID,
 		Turn:      turn,
 		Model:     resolved.Model,
 		EventIDs:  built.EventIDs,
+		Tools:     toolDefs.Tools,
 	}
 	if err := workflow.ExecuteActivity(ctx, ActivityCallModel, callIn).Get(ctx, &modelResult); err != nil {
 		if v == workflow.DefaultVersion {
@@ -396,18 +418,29 @@ func processTurn(ctx workflow.Context, sessionID uuid.UUID, turn int, in SendTur
 		return failTurn(ctx, sessionID, turn, err)
 	}
 
-	// Tool-call dispatch step: a no-op hook as of this Scaffold-phase task
-	// (issue #2121). Implementation phase adds an ActivityDispatchTool
-	// ExecuteActivity call (activities.go) per modelResult.Response.
-	// ToolCalls entry here, each carrying the idempotency key and persona
-	// claim (ARCHITECTURE.md "Idempotency", "Identity and auth chaining")
-	// -- under a workflow.GetVersion("session-workflow-tool-dispatch", ...)
-	// gate per this file's NFR1 doc comment, since it changes processTurn's
-	// control flow for any run already open when it deploys. The same
-	// change also adds an ActivityListToolDefinitions call ahead of
-	// ActivityCallModel above, populating CallModelInput.Tools (FR8) so
-	// the model has something to request tool calls against in the first
-	// place.
+	if toolVersion >= 1 {
+		// Dispatch every tool call the model requested this turn, in
+		// order (FR2's "tool calls, tool results in commit order").
+		// CallIndex is the call's 0-based position within
+		// modelResult.Response.ToolCalls -- stable across a Temporal
+		// retry of this same activity, and DispatchToolInput/DispatchTool
+		// (activities.go) both depend on that stability for FR11's
+		// idempotency key and for keeping each call's transcript events
+		// distinct (context.go's toolCallEventType/toolResultEventType).
+		for i, call := range modelResult.Response.ToolCalls {
+			dispatchIn := DispatchToolInput{
+				SessionID: sessionID,
+				AgentID:   resolved.Definition.AgentID,
+				ToolSet:   resolved.Definition.ToolSet,
+				Turn:      turn,
+				CallIndex: i,
+				Call:      call,
+			}
+			if err := workflow.ExecuteActivity(ctx, ActivityDispatchTool, dispatchIn).Get(ctx, nil); err != nil {
+				return failTurn(ctx, sessionID, turn, err)
+			}
+		}
+	}
 
 	var commitResult CommitTurnResult
 	commitIn := CommitTurnInput{

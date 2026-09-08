@@ -1,0 +1,240 @@
+# Audience Score System Tiltfile
+# Local development environment for `audience_score_system` -- currently
+# scoped to exactly what whagent-net's M1 close-out (issue #2121) needs:
+# `migrate` + `mcp`, wired with the whagent-net trust configuration
+# (ASS_WHAGENT_JWKS_URL/ASS_WHAGENT_ISSUER, issue #2116) so the
+# cross-domain tool-dispatch path (whagent_net/worker -> this `mcp`) is
+# exercisable end to end. `web`/`worker` (Google OAuth sign-in, YouTube
+# sync) are NOT wired here -- out of scope for whagent-net's M1 milestone;
+# add them in a follow-up if this domain gets its own full local-dev
+# story.
+#
+# Run alongside whagent_net's own Tiltfile:
+#   cd whagent_net && tilt up                    # in one terminal
+#   cd audience_score_system && tilt up           # in another
+#
+# The namespace below ('audience-score-system-local-dev') and the `mcp`
+# Service name ('audience-score-system-mcp') are exactly what
+# whagent_net/config/agents.yaml's seeded tool_set server_url names --
+# keep them in sync if either changes.
+
+load('ext://namespace', 'namespace_create')
+load('ext://dotenv', 'dotenv')
+load('../tools/tilt/common.tilt',
+     'build_images_from_apps', 'detect_platform', 'get_bazel_platform', 'get_watch_paths',
+     'setup_dev_util', 'setup_postgres', 'setup_temporal', 'setup_otelcollector',
+     'get_env_bool', 'get_custom_or_default',
+     'print_startup_banner', 'print_footer_info')
+
+# ===========================
+# Configuration
+# ===========================
+
+namespace = 'audience-score-system-local-dev'
+namespace_create(namespace)
+dotenv()
+
+platform = detect_platform()
+bazel_platform = get_bazel_platform(platform)
+
+print_startup_banner("Audience Score System", namespace, platform)
+
+# ===========================
+# Infrastructure Setup
+# ===========================
+
+setup_dev_util(namespace)
+
+db_info = setup_postgres(namespace, db_name='audience_score_system')
+pg_database_url = get_custom_or_default(
+    'BUILD_POSTGRES_ENV',
+    'PG_DATABASE_URL',
+    'postgres://{}:{}@{}:{}/{}?sslmode=disable'.format(
+        db_info['user'], db_info['password'], db_info['host'], db_info['port'], db_info['database']
+    )
+)
+
+# mcp hard-depends on Temporal at startup (main.go: constructs a Temporal
+# client unconditionally for trigger_channel_sync's ScheduleManager),
+# same as web/worker.
+temporal_info = setup_temporal(namespace)
+temporal_host = temporal_info['grpc_target']
+
+otel_endpoint = setup_otelcollector(namespace)
+
+print("📊 Infrastructure configured:")
+print("  Postgres:  {}".format("custom" if os.environ.get('BUILD_POSTGRES_ENV') == 'custom' else "local"))
+print("  Temporal:  {}".format(temporal_host))
+print("  OTEL:      {}".format(otel_endpoint))
+
+# ===========================
+# whagent-net trust configuration (issue #2116/#2121)
+# ===========================
+#
+# Points this mcp's whagent verifier at whagent_net/api's JWKS endpoint
+# and issuer -- see whagent_net/Tiltfile for that side (namespace
+# 'whagent-net-local-dev', WHAGENT_ISSUER "whagent-net"). Both unset (the
+# ASS_WHAGENT_JWKS_URL/ASS_WHAGENT_ISSUER default) would fall back to
+# mcp_credential-only auth (main.go) -- setting them here mounts the
+# whagent-net path ALONGSIDE it, never in place of it.
+whagent_jwks_url = get_custom_or_default(
+    'BUILD_WHAGENT_ENV', 'ASS_WHAGENT_JWKS_URL',
+    'http://whagent-net-api.whagent-net-local-dev.svc.cluster.local:8090/.well-known/jwks.json',
+)
+whagent_issuer = get_custom_or_default('BUILD_WHAGENT_ENV', 'ASS_WHAGENT_ISSUER', 'whagent-net')
+
+# ===========================
+# Application Configuration
+# ===========================
+
+watch_paths = get_watch_paths('audience_score_system')
+
+APPS = {
+    'migration': {
+        'enabled_env': 'ENABLE_ASS_MIGRATION',
+        'bazel_target': '//audience_score_system/migrate:migration_image_load',
+        'image_name': 'audience-score-system-migration',
+    },
+    'mcp': {
+        'enabled_env': 'ENABLE_ASS_MCP',
+        'bazel_target': '//audience_score_system/mcp:mcp_image_load',
+        'image_name': 'audience-score-system-mcp',
+    },
+}
+
+# ===========================
+# Bazel Image Building
+# ===========================
+
+build_images_from_apps(APPS, watch_paths, platform)
+
+# ===========================
+# Kubernetes Deployments
+# ===========================
+
+if get_env_bool('ENABLE_ASS_MIGRATION', default='true'):
+    k8s_yaml(blob("""
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: audience-score-system-migration
+  namespace: {namespace}
+spec:
+  ttlSecondsAfterFinished: 30
+  template:
+    metadata:
+      labels:
+        app: audience-score-system-migration
+    spec:
+      restartPolicy: OnFailure
+      containers:
+      - name: migration
+        image: audience-score-system-migration
+        env:
+        - name: PG_DATABASE_URL
+          value: "{pg_database_url}"
+""".format(namespace=namespace, pg_database_url=pg_database_url)))
+
+    k8s_resource(
+        'audience-score-system-migration',
+        resource_deps=['postgres-dev'],
+        labels=['audience-score-system-infrastructure'],
+    )
+    print("🔄 Migration job configured")
+
+# mcp: the only interface for C4-C7/C9/C10 (../ARCHITECTURE.md "NFR3
+# interface allocation"). Deployed as Service name
+# 'audience-score-system-mcp' -- whagent_net/config/agents.yaml's seeded
+# tool_set server_url names exactly this Service, in this namespace, on
+# port 8081.
+if get_env_bool('ENABLE_ASS_MCP', default='true'):
+    k8s_yaml(blob("""
+apiVersion: v1
+kind: Service
+metadata:
+  name: audience-score-system-mcp
+  namespace: {namespace}
+spec:
+  selector:
+    app: audience-score-system-mcp
+  ports:
+    - name: http
+      port: 8081
+      targetPort: 8081
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: audience-score-system-mcp
+  namespace: {namespace}
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: audience-score-system-mcp
+  template:
+    metadata:
+      labels:
+        app: audience-score-system-mcp
+    spec:
+      containers:
+      - name: mcp
+        image: audience-score-system-mcp
+        ports:
+        - containerPort: 8081
+          name: http
+        env:
+        - name: PG_DATABASE_URL
+          value: "{pg_database_url}"
+        - name: ASS_MCP_ADDR
+          value: ":8081"
+        - name: ASS_MCP_PUBLIC_URL
+          value: "http://localhost:8081"
+        - name: ASS_OAUTH_REDIRECT_BASE_URL
+          value: "http://localhost:8081"
+        - name: TEMPORAL_HOST
+          value: "{temporal_host}"
+        - name: ASS_WHAGENT_JWKS_URL
+          value: "{whagent_jwks_url}"
+        - name: ASS_WHAGENT_ISSUER
+          value: "{whagent_issuer}"
+        - name: OTEL_EXPORTER_OTLP_ENDPOINT
+          value: "{otel_endpoint}"
+""".format(
+        namespace=namespace,
+        pg_database_url=pg_database_url,
+        temporal_host=temporal_host,
+        whagent_jwks_url=whagent_jwks_url,
+        whagent_issuer=whagent_issuer,
+        otel_endpoint=otel_endpoint,
+    )))
+
+    mcp_deps = ['temporal-dev']
+    if get_env_bool('ENABLE_ASS_MIGRATION', default='true'):
+        mcp_deps.append('audience-score-system-migration')
+
+    k8s_resource(
+        'audience-score-system-mcp',
+        resource_deps=mcp_deps,
+        port_forwards=['8081:8081'],
+        labels=['audience-score-system'],
+    )
+    print("🔌 mcp forwarded to http://localhost:8081/ (whagent-net trust: {})".format(whagent_jwks_url))
+
+# ===========================
+# Access Information
+# ===========================
+
+print("\n" + "="*60)
+print("📡 Access Information")
+print("="*60)
+print("  PostgreSQL:  localhost:5432 (user: postgres, pass: password)")
+print("  Temporal:    localhost:7233 (gRPC), {} (Web UI)".format(temporal_info['ui_service_info']))
+print("  mcp (HTTP):  http://localhost:8081/")
+print("="*60)
+
+print_footer_info('audience-score-system')
+
+print("\n🚀 Quick Start:")
+print("  1. tilt up                         # Start migration + mcp (this)")
+print("  2. cd whagent_net && tilt up        # The whagent-net side of the cross-domain trust wiring")
