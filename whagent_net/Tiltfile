@@ -71,7 +71,7 @@ rabbitmq_url = 'amqp://{}:{}@{}:{}/whagent-net-dev'.format(
 )
 
 # OpenTelemetry Collector
-otel_endpoint = setup_otelcollector(namespace)
+otel_endpoint = setup_otelcollector(namespace, resource_name='otelcollector-dev-whagent')
 
 print("📊 Infrastructure configured:")
 print("  Postgres:  {}".format("custom" if os.environ.get('BUILD_POSTGRES_ENV') == 'custom' else "local"))
