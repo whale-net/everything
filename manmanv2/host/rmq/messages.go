@@ -36,12 +36,22 @@ type ServerGameConfigMessage struct {
 }
 
 // StartSessionCommand represents a command to start a session
+//
+// RenderedEnv (FR5) is the server-side rendered effective environment:
+// the GameConfig env template merged with deployment-level overrides.
+// Presence semantics: nil/absent means "not rendered" -- the host falls
+// back to GameConfig.EnvTemplate; an empty (non-nil) map is present and
+// authoritative -- an intentionally empty env is honored, not replaced
+// by the template. Strictly additive (NFR2/LB1): no other field changes.
+// The json tag must NOT be omitempty: an empty-but-present map carries
+// meaning and must survive marshaling.
 type StartSessionCommand struct {
 	SessionID        int64                   `json:"session_id"`
 	SGCID            int64                   `json:"sgc_id"`
 	GameConfig       GameConfigMessage       `json:"game_config"`
 	ServerGameConfig ServerGameConfigMessage `json:"server_game_config"`
 	Force            bool                   `json:"force"`
+	RenderedEnv      map[string]string       `json:"rendered_env"`
 }
 
 // StopSessionCommand represents a command to stop a session

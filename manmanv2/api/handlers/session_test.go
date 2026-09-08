@@ -3,6 +3,7 @@ package handlers
 import (
 	"context"
 	"errors"
+	"fmt"
 	"testing"
 	"time"
 
@@ -210,19 +211,72 @@ func (m *MockPendingRestartRepo) GetLatestBySGCIDs(ctx context.Context, sgcIDs [
 // MockGCRepo
 type MockGCRepo struct {
 	repository.GameConfigRepository
+	// gc, when non-nil, is returned by Get instead of the default stub.
+	gc *manman.GameConfig
 }
 
 func (m *MockGCRepo) Get(ctx context.Context, id int64) (*manman.GameConfig, error) {
+	if m.gc != nil {
+		return m.gc, nil
+	}
 	return &manman.GameConfig{ConfigID: id, GameID: 1}, nil
 }
 
 // MockStrategyRepo
 type MockStrategyRepo struct {
 	repository.ConfigurationStrategyRepository
+	// strategies, when non-nil, is returned by ListByGame (default: empty).
+	strategies []*manman.ConfigurationStrategy
 }
 
 func (m *MockStrategyRepo) ListByGame(ctx context.Context, gameID int64) ([]*manman.ConfigurationStrategy, error) {
+	if m.strategies != nil {
+		return m.strategies, nil
+	}
 	return []*manman.ConfigurationStrategy{}, nil
+}
+
+// MockPatchRepo
+type MockPatchRepo struct {
+	repository.ConfigurationPatchRepository
+	// patches is returned (filtered by the requested level/entity) by List.
+	patches []*manman.ConfigurationPatch
+	listErr error
+	// listCalls records each List call's (level, entityID) filter so tests
+	// can assert both deployment levels were consulted.
+	listCalls []string
+}
+
+func (m *MockPatchRepo) List(ctx context.Context, strategyID *int64, patchLevel *string, entityID *int64) ([]*manman.ConfigurationPatch, error) {
+	m.listCalls = append(m.listCalls, fmt.Sprintf("level=%v entity=%v", derefStr(patchLevel), derefI64(entityID)))
+	if m.listErr != nil {
+		return nil, m.listErr
+	}
+	var result []*manman.ConfigurationPatch
+	for _, p := range m.patches {
+		if patchLevel != nil && p.PatchLevel != *patchLevel {
+			continue
+		}
+		if entityID != nil && p.EntityID != *entityID {
+			continue
+		}
+		result = append(result, p)
+	}
+	return result, nil
+}
+
+func derefStr(s *string) string {
+	if s == nil {
+		return "<nil>"
+	}
+	return *s
+}
+
+func derefI64(i *int64) int64 {
+	if i == nil {
+		return -1
+	}
+	return *i
 }
 
 // MockServerPortRepo
@@ -248,6 +302,7 @@ func TestStartSessionLifecycle(t *testing.T) {
 	sgcRepo := &MockSGCRepo{}
 	gcRepo := &MockGCRepo{}
 	strategyRepo := &MockStrategyRepo{}
+	patchRepo := &MockPatchRepo{}
 	serverPortRepo := &MockServerPortRepo{}
 	volumeRepo := &MockGameConfigVolumeRepo{}
 
@@ -256,6 +311,7 @@ func TestStartSessionLifecycle(t *testing.T) {
 		ServerGameConfigs:       sgcRepo,
 		GameConfigs:             gcRepo,
 		ConfigurationStrategies: strategyRepo,
+		ConfigurationPatches:    patchRepo,
 		ServerPorts:             serverPortRepo,
 		GameConfigVolumes:       volumeRepo,
 	}
@@ -358,12 +414,14 @@ func newRestartDeploymentHandler(sessions []*manman.Session, sgcRepo *MockSGCRep
 	volumeRepo := &MockGameConfigVolumeRepo{}
 
 	repo := &repository.Repository{
-		Sessions:          sessionRepo,
-		ServerGameConfigs: sgcRepo,
-		GameConfigs:       gcRepo,
-		ServerPorts:       serverPortRepo,
-		GameConfigVolumes: volumeRepo,
-		PendingRestarts:   pendingRepo,
+		Sessions:                sessionRepo,
+		ServerGameConfigs:       sgcRepo,
+		GameConfigs:             gcRepo,
+		ConfigurationStrategies: &MockStrategyRepo{},
+		ConfigurationPatches:    &MockPatchRepo{},
+		ServerPorts:             serverPortRepo,
+		GameConfigVolumes:       volumeRepo,
+		PendingRestarts:         pendingRepo,
 	}
 
 	h := &SessionHandler{
