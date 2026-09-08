@@ -39,6 +39,24 @@ func RoutingKey(sessionID uuid.UUID, eventType string) string {
 	return fmt.Sprintf("session.%s.%s", sessionID, eventType)
 }
 
+// Transcript event type constants (LB1): the `type` column value every
+// producer/consumer of a `transcript_event` row agrees on -- centralized
+// here for the same reason ExchangeName/RoutingKey are (a free-text
+// column with no DB-level enum, so drift between the worker that writes it
+// and any later reader, e.g. archiver/ui/mcp, must be prevented by sharing
+// one Go definition rather than by convention alone). whagent_net/worker
+// is the first writer (issue #2114): EventTypeUserMessage/
+// EventTypeAssistantMessage carry a message-shaped payload (see
+// whagent_net/worker/context.go's transcriptMessagePayload, the schema
+// every producer/consumer of these two types agrees on). Tool-call/
+// tool-result/summary/failure event types are added by the follow-up
+// tasks that first write them (tool dispatch, cap enforcement, terminal
+// classification -- ARCHITECTURE.md "Session workflow").
+const (
+	EventTypeUserMessage      = "user_message"
+	EventTypeAssistantMessage = "assistant_message"
+)
+
 // Event is the whagent-net LB1 record: the single definition of a
 // committed transcript event. The `transcript_event` Postgres row, the
 // RabbitMQ message body, and -- later -- the S3 jsonl line are all this

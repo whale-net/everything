@@ -8,6 +8,7 @@ go_library(
         "session.go",
         "sessions.go",
         "transcript.go",
+        "turn_commit.go",
         "usage.go",
     ],
     importpath = "github.com/whale-net/everything/whagent_net/session",

@@ -15,26 +15,28 @@
 // deterministic: no direct network/disk I/O, no time.Now(), nothing that
 // could produce a different result on replay than it did the first time.
 // Every side effect (resolving the agent definition, building context,
-// calling the model, committing transcript events) lives behind the
-// activity methods on *Activities (activities.go, context.go) and is
-// invoked only via workflow.ExecuteActivity -- mirrors
+// calling the model, committing transcript events, writing session
+// status) lives behind the activity methods on *Activities (activities.go,
+// context.go) and is invoked only via workflow.ExecuteActivity -- mirrors
 // tools/app_registry/worker/release/workflow.go's and
 // audience_score_system/worker/sync's identical discipline and
-// AGENTS.md/PLAN.md's "Workflow determinism" hazard.
+// AGENTS.md/PLAN.md's "Workflow determinism" hazard. workflow.WithCancel/
+// workflow.Go/workflow.NewSelector/workflow.NewBufferedChannel (below) are
+// all part of the Temporal SDK's deterministic workflow API -- safe to use
+// here for exactly that reason, unlike a raw goroutine/channel/select.
 //
 // # NFR1 -- Temporal versioning discipline
 //
 // Every change to this workflow's code must go through workflow.GetVersion
 // (or equivalent) so a run already open across a deploy continues
 // correctly under the new code rather than replaying into a
-// non-determinism error. Convention for this package: one change ID per
-// behavior-changing edit, named "session-workflow-<short-slug>" (e.g.
-// "session-workflow-tool-dispatch" for the follow-up task that fills in
-// the tool-call dispatch hook in processTurn below), added at the exact
-// point in SessionWorkflow/processTurn where the new branch diverges from
-// old behavior:
+// non-determinism error (see ARCHITECTURE.md "Workflow versioning
+// (NFR1)"). Convention for this package: one change ID per
+// behavior-changing edit, named "session-workflow-<short-slug>", added at
+// the exact point in SessionWorkflow/processTurn where the new branch
+// diverges from old behavior:
 //
-//	v := workflow.GetVersion(ctx, "session-workflow-tool-dispatch", workflow.DefaultVersion, 1)
+//	v := workflow.GetVersion(ctx, "session-workflow-<slug>", workflow.DefaultVersion, 1)
 //	if v >= 1 {
 //	    // new behavior
 //	} else {
@@ -42,39 +44,40 @@
 //	    // change deployed
 //	}
 //
-// This task (#2114) establishes the convention rather than exercising it:
-// SessionWorkflow has no prior deployed behavior yet to preserve, so no
-// GetVersion call is needed until the first behavior-changing edit lands
-// (the Implementation phase's tool-dispatch hook, cap enforcement, or
-// terminal classification -- all follow-up tasks per the issue body).
-// Every later task that changes SessionWorkflow or processTurn's control
-// flow must add one, named per the convention above.
+// updateSessionStatus below (change ID "session-workflow-status-
+// transitions") is this convention's first real usage: the Scaffold-phase
+// loop never wrote `sessions.status` at all, so this Implementation-phase
+// addition of a genuinely new control-flow branch is exactly the shape
+// NFR1 exists to protect -- any run already open on the old (no-op)
+// behavior when this change deploys keeps taking the old branch, forever,
+// for that run. The next behavior-changing edit to this file (the
+// follow-up tool-dispatch task's ExecuteActivity call per tool call,
+// noted at processTurn's tool-dispatch step below) must add its own change
+// ID the same way.
 //
-// # Scaffold status
+// # Implementation status (issue #2114)
 //
-// SessionWorkflow's signal-per-turn loop below is NOT a stub: the
-// block-in-awaiting_input / signal-driven turn dispatch / Stop-signal exit
-// shape is this task's Scaffold-phase deliverable (the shape neither
-// tools/app_registry/worker nor ChannelSyncWorkflow has), so
-// Testing-phase work asserts against it as-is. What IS scaffold-only is
-// processTurn's activity bodies (activities.go, context.go): every one is
-// a no-op stub returning a zero-value result, exactly like
-// audience_score_system/worker/sync's original SyncSchedule/SyncOutcomes
-// scaffold -- the Implementation phase replaces each body with its real
-// logic without changing this file's control flow or any activity's
-// input/output shape. Likewise, Stop's cancellation semantics (FR1: an
-// in-flight activity is cancelled, not drained) and the awaiting_input/
-// done/stopped status writes are Implementation-phase work; this file
-// establishes where they attach (the stopped branch and the end of each
-// loop iteration below).
+// SessionWorkflow's signal-per-turn loop, Stop/cancellation handling, and
+// session-status transitions are all real as of this task -- not a
+// Scaffold-phase stub. Deliberately still deferred to follow-up tasks per
+// the issue body ("Tool dispatch, cap enforcement, and terminal
+// classification land in follow-up tasks; this task builds the durable
+// loop they hang off"): the tool-call dispatch step in processTurn stays a
+// no-op hook, no turn/cost cap is checked before or after a turn, and
+// CommitTurnResult.Done (activities.go) is always false, so this task's
+// workflow only ever reaches `awaiting_input` or `stopped`, never `done`
+// or `capped`.
 package main
 
 import (
 	"time"
 
 	"github.com/google/uuid"
+	"go.temporal.io/sdk/log"
 	"go.temporal.io/sdk/temporal"
 	"go.temporal.io/sdk/workflow"
+
+	"github.com/whale-net/everything/whagent_net/session"
 )
 
 // TaskQueue is the Temporal task queue SessionWorkflow and its activities
@@ -126,12 +129,13 @@ var defaultActivityOptions = workflow.ActivityOptions{
 // SessionWorkflow is the long-lived, one-per-session loop (LB2,
 // ARCHITECTURE.md "Session workflow"): started by api.StartSession with
 // workflow ID == in.SessionID, it never returns between turns. It blocks
-// on SignalSendTurn while in the workflow-equivalent of the
-// awaiting_input status (the actual `sessions` row status write is
-// Implementation-phase work, see the package doc comment's "Scaffold
-// status" section), runs one processTurn per signalled turn, and exits
-// only on a SignalStop (FR1's emergency-brake path) or an unrecoverable
-// processTurn error.
+// on SignalSendTurn/SignalStop while in the `awaiting_input` status,
+// writes `running` for the duration of a signalled turn (runTurn), then
+// writes `awaiting_input` again (or `done`, once a future task teaches
+// CommitTurn real terminal classification) once the turn finishes. It
+// exits, writing `stopped`, on a SignalStop (FR1's emergency-brake path,
+// whether it arrives between turns or cancels an in-flight turn) or an
+// unrecoverable processTurn error.
 //
 // Bounded tasks (~100 turns) are the target; Continue-As-New is
 // deliberately not used here -- see ARCHITECTURE.md "Session workflow".
@@ -141,6 +145,10 @@ func SessionWorkflow(ctx workflow.Context, in SessionWorkflowInput) error {
 
 	turnCh := workflow.GetSignalChannel(ctx, SignalSendTurn)
 	stopCh := workflow.GetSignalChannel(ctx, SignalStop)
+
+	if err := updateSessionStatus(ctx, in.SessionID, session.StatusAwaitingInput); err != nil {
+		return err
+	}
 
 	turn := 0
 	for {
@@ -159,39 +167,122 @@ func SessionWorkflow(ctx workflow.Context, in SessionWorkflowInput) error {
 		sel.Select(ctx)
 
 		if stopped {
-			// FR1: a stop cancels whatever is in flight rather than
-			// draining it. Nothing is in flight in this branch (the
-			// selector above only ever unblocks between turns), so there
-			// is no activity to cancel here -- the Implementation phase's
-			// cancellable-context wiring is inside processTurn, guarding
-			// the case where Stop arrives mid-turn instead of between
-			// turns. Session status -> `stopped` (session.StatusStopped)
-			// is also Implementation-phase work (see the package doc
-			// comment's "Scaffold status" section).
-			logger.Info("session stop signal received", "session_id", in.SessionID.String(), "turn", turn)
-			return nil
+			// Nothing is in flight in this branch (the selector above only
+			// ever unblocks between turns, where the session is already
+			// idle) -- writing `stopped` is the only work left to do.
+			logger.Info("session stop signal received while awaiting input", "session_id", in.SessionID.String(), "turn", turn)
+			return updateSessionStatus(ctx, in.SessionID, session.StatusStopped)
 		}
 
 		turn++
-		if err := processTurn(ctx, in.SessionID, turn, signal); err != nil {
+		if err := updateSessionStatus(ctx, in.SessionID, session.StatusRunning); err != nil {
 			return err
 		}
+
+		outcome, err := runTurn(ctx, stopCh, in.SessionID, turn, signal, logger)
+		if err != nil {
+			return err
+		}
+		if outcome.stopped {
+			return updateSessionStatus(ctx, in.SessionID, session.StatusStopped)
+		}
+
+		nextStatus := session.StatusAwaitingInput
+		if outcome.done {
+			nextStatus = session.StatusDone
+		}
+		if err := updateSessionStatus(ctx, in.SessionID, nextStatus); err != nil {
+			return err
+		}
+		if outcome.done {
+			return nil
+		}
 	}
+}
+
+// turnOutcome is runTurn's result: exactly one of done/stopped is
+// meaningful when err is nil (neither is set when the turn simply
+// completed and the session should keep waiting for the next signalled
+// turn).
+type turnOutcome struct {
+	done    bool
+	stopped bool
+}
+
+// turnGoroutineResult carries processTurn's result across the
+// workflow.Go coroutine boundary in runTurn.
+type turnGoroutineResult struct {
+	commit CommitTurnResult
+	err    error
+}
+
+// runTurn runs processTurn under a cancellable child context, racing it
+// against stopCh so a Stop signal that arrives mid-turn interrupts
+// whatever activity is currently in flight rather than waiting for it to
+// finish (FR1: "an in-flight tool call or in-flight model call is
+// cancelled, not allowed to run to completion"). This is the
+// "cancellable-context wiring... guarding the case where Stop arrives
+// mid-turn instead of between turns" the package doc comment's
+// Implementation-status section describes.
+func runTurn(ctx workflow.Context, stopCh workflow.ReceiveChannel, sessionID uuid.UUID, turn int, signal SendTurnSignal, logger log.Logger) (turnOutcome, error) {
+	turnCtx, cancelTurn := workflow.WithCancel(ctx)
+	defer cancelTurn()
+
+	resultCh := workflow.NewBufferedChannel(ctx, 1)
+	workflow.Go(turnCtx, func(gctx workflow.Context) {
+		commitResult, err := processTurn(gctx, sessionID, turn, signal)
+		resultCh.Send(gctx, turnGoroutineResult{commit: commitResult, err: err})
+	})
+
+	var result turnGoroutineResult
+	stopped := false
+	sel := workflow.NewSelector(ctx)
+	sel.AddReceive(resultCh, func(c workflow.ReceiveChannel, more bool) {
+		c.Receive(ctx, &result)
+	})
+	sel.AddReceive(stopCh, func(c workflow.ReceiveChannel, more bool) {
+		var empty struct{}
+		c.Receive(ctx, &empty)
+		stopped = true
+	})
+	sel.Select(ctx)
+
+	if stopped {
+		logger.Info("session stop signal received mid-turn; cancelling in-flight work", "session_id", sessionID.String(), "turn", turn)
+		cancelTurn()
+
+		// Drain the coroutine's result: workflow.Go coroutines must run to
+		// completion (here, observe the cancellation and return) before
+		// this workflow execution can safely proceed, and every branch
+		// below expects resultCh to have exactly one pending send. The
+		// error (if any) is expected to be a cancellation propagated up
+		// from whichever activity was in flight and is deliberately not
+		// surfaced: FR1's stop is a controlled shutdown, not a workflow
+		// failure. Whatever processTurn had already durably committed
+		// before the cancellation landed stays exactly as committed --
+		// nothing is rolled back, and nothing further is fabricated.
+		drain := workflow.NewSelector(ctx)
+		drain.AddReceive(resultCh, func(c workflow.ReceiveChannel, more bool) {
+			c.Receive(ctx, &result)
+		})
+		drain.Select(ctx)
+		return turnOutcome{stopped: true}, nil
+	}
+
+	if result.err != nil {
+		return turnOutcome{}, result.err
+	}
+	return turnOutcome{done: result.commit.Done}, nil
 }
 
 // processTurn runs one turn's activity sequence (ARCHITECTURE.md "Session
 // workflow"): resolve the current agent definition, build context, call
 // the model, (tool-call dispatch -- a no-op hook in this task, filled in
-// by the follow-up tool-dispatch task), then commit the turn. Every
-// activity body invoked here is a Scaffold-phase no-op stub (activities.go,
-// context.go); this function fixes the call sequence and the data each
-// step passes to the next, which is this task's "new shape" deliverable --
-// see the package doc comment's "Scaffold status" section for exactly
-// what Implementation fills in without changing this sequence.
-func processTurn(ctx workflow.Context, sessionID uuid.UUID, turn int, in SendTurnSignal) error {
+// by the follow-up tool-dispatch task), then commit the turn.
+func processTurn(ctx workflow.Context, sessionID uuid.UUID, turn int, in SendTurnSignal) (CommitTurnResult, error) {
 	var resolved ResolveAgentDefinitionResult
 	if err := workflow.ExecuteActivity(ctx, ActivityResolveAgentDefinition, sessionID).Get(ctx, &resolved); err != nil {
-		return err
+		return CommitTurnResult{}, err
 	}
 
 	var built BuildContextResult
@@ -202,18 +293,18 @@ func processTurn(ctx workflow.Context, sessionID uuid.UUID, turn int, in SendTur
 		Input:      in.Input,
 	}
 	if err := workflow.ExecuteActivity(ctx, ActivityBuildContext, buildIn).Get(ctx, &built); err != nil {
-		return err
+		return CommitTurnResult{}, err
 	}
 
 	var modelResult CallModelResult
 	callIn := CallModelInput{
 		SessionID: sessionID,
 		Turn:      turn,
-		Model:     resolved.Definition.Model,
+		Model:     resolved.Model,
 		EventIDs:  built.EventIDs,
 	}
 	if err := workflow.ExecuteActivity(ctx, ActivityCallModel, callIn).Get(ctx, &modelResult); err != nil {
-		return err
+		return CommitTurnResult{}, err
 	}
 
 	// Tool-call dispatch step: a no-op hook in this task (issue body,
@@ -229,12 +320,31 @@ func processTurn(ctx workflow.Context, sessionID uuid.UUID, turn int, in SendTur
 	commitIn := CommitTurnInput{
 		SessionID: sessionID,
 		Turn:      turn,
+		Model:     resolved.Model,
 		EventIDs:  built.EventIDs,
 		Response:  modelResult.Response,
 	}
 	if err := workflow.ExecuteActivity(ctx, ActivityCommitTurn, commitIn).Get(ctx, &commitResult); err != nil {
-		return err
+		return CommitTurnResult{}, err
 	}
 
-	return nil
+	return commitResult, nil
+}
+
+// updateSessionStatus is SessionWorkflow's write path for a session's
+// control-plane status (`sessions.status`, ARCHITECTURE.md "Session
+// workflow" step 6) -- see this file's package doc comment, "NFR1", for
+// why this is gated behind workflow.GetVersion rather than called
+// unconditionally.
+func updateSessionStatus(ctx workflow.Context, sessionID uuid.UUID, status session.Status) error {
+	v := workflow.GetVersion(ctx, "session-workflow-status-transitions", workflow.DefaultVersion, 1)
+	if v == workflow.DefaultVersion {
+		// Pre-existing behavior for any run whose history predates this
+		// change: no status write.
+		return nil
+	}
+	return workflow.ExecuteActivity(ctx, ActivityUpdateSessionStatus, UpdateSessionStatusInput{
+		SessionID: sessionID,
+		Status:    status,
+	}).Get(ctx, nil)
 }

@@ -55,16 +55,22 @@ func run() error {
 	pub := initializePublisher(ctx, logger)
 	store := session.New(pool, pub)
 
-	// OpenRouter client (issue #2112) -- CallModel's Implementation-phase
-	// body calls this. Constructed unconditionally: OPENROUTER_API_KEY is
-	// documented required in ENV.md, but this Scaffold-phase worker never
-	// calls Complete (CallModel is a no-op stub), so an empty key does not
-	// block startup.
+	// OpenRouter client (issue #2112) -- CallModel (activities.go) calls
+	// this on every turn. Constructed unconditionally: OPENROUTER_API_KEY
+	// is documented required in ENV.md, but startup itself does not
+	// validate it -- an empty/invalid key surfaces as a CallModel activity
+	// failure on the first turn, not a startup error, matching this
+	// worker's other soft-fail-at-startup dependencies (initializePublisher
+	// below).
 	llmClient := llm.NewClient(os.Getenv("OPENROUTER_API_KEY"), getEnv("OPENROUTER_BASE_URL", "https://openrouter.ai/api/v1"))
 
-	// Price table (LB6, ENV.md's WHAGENT_PRICE_TABLE_PATH) -- optional at
-	// this Scaffold phase since CallModel/CommitTurn never resolve cost
-	// yet; Implementation phase's cost-accounting body will need it set.
+	// Price table (LB6, ENV.md's WHAGENT_PRICE_TABLE_PATH) -- CommitTurn's
+	// resolveCost (activities.go) falls back to this only when the
+	// provider omits cost in its response (uncommon with
+	// usage.include=true, but not guaranteed for every model/provider
+	// combination on OpenRouter); left nil when unset rather than failing
+	// startup, since a process that only ever sees provider-reported cost
+	// never dereferences it.
 	var prices *llm.PriceTable
 	if priceTablePath := os.Getenv("WHAGENT_PRICE_TABLE_PATH"); priceTablePath != "" {
 		prices, err = llm.LoadPriceTable(priceTablePath)
@@ -72,11 +78,10 @@ func run() error {
 			return fmt.Errorf("load price table: %w", err)
 		}
 	} else {
-		logger.Warn("WHAGENT_PRICE_TABLE_PATH not set; cost estimation will be unavailable once CallModel is implemented")
+		logger.Warn("WHAGENT_PRICE_TABLE_PATH not set; cost estimation will be unavailable if the provider ever omits usage cost")
 	}
 
-	// Temporal client + worker, via libs/go/temporal (issue #2114's
-	// scaffold deliverable: NewWorker bootstrap).
+	// Temporal client + worker, via libs/go/temporal (NewWorker bootstrap).
 	temporalCfg := temporallib.ConfigFromEnv()
 	if temporalCfg.TaskQueue == "" {
 		temporalCfg.TaskQueue = TaskQueue
@@ -96,6 +101,7 @@ func run() error {
 	w.RegisterActivityWithOptions(acts.BuildContext, activity.RegisterOptions{Name: ActivityBuildContext})
 	w.RegisterActivityWithOptions(acts.CallModel, activity.RegisterOptions{Name: ActivityCallModel})
 	w.RegisterActivityWithOptions(acts.CommitTurn, activity.RegisterOptions{Name: ActivityCommitTurn})
+	w.RegisterActivityWithOptions(acts.UpdateSessionStatus, activity.RegisterOptions{Name: ActivityUpdateSessionStatus})
 
 	done := make(chan error, 1)
 	go func() {
