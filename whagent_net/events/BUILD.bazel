@@ -1,4 +1,4 @@
-load("@rules_go//go:def.bzl", "go_library")
+load("@rules_go//go:def.bzl", "go_library", "go_test")
 
 go_library(
     name = "events",
@@ -10,6 +10,22 @@ go_library(
     visibility = ["//visibility:public"],
     deps = [
         "//libs/go/rmq",
+        "@com_github_google_uuid//:uuid",
+        "@com_github_rabbitmq_amqp091_go//:amqp091-go",
+    ],
+)
+
+# Unit tests for the event-bus contract itself (issue #2111's Testing
+# section): routing-key format, DeclareArgs() stability, and the Event
+# JSON round trip/field names every publisher and consumer depends on. No
+# RabbitMQ dependency -- Publisher's actual Publish call is exercised by
+# //whagent_net/session's store-level integration test via a fake
+# PublisherInterface instead.
+go_test(
+    name = "events_test",
+    srcs = ["events_test.go"],
+    embed = [":events"],
+    deps = [
         "@com_github_google_uuid//:uuid",
         "@com_github_rabbitmq_amqp091_go//:amqp091-go",
     ],
