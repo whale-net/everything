@@ -76,6 +76,7 @@ go_test(
         "handlers_sgc_ports_guidance_test.go",
         "handlers_sgc_update_ports_test.go",
         "handlers_workshop_batch_status_test.go",
+        "handlers_workshop_bulk_test.go",
         "main_test.go",
         "templ_render_test.go",
     ],

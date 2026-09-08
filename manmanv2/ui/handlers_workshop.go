@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"fmt"
 	"log"
 	"net/http"
@@ -799,31 +800,19 @@ func (app *App) handleDeleteAddon(w http.ResponseWriter, r *http.Request) {
 	http.Redirect(w, r, "/workshop/library", http.StatusSeeOther)
 }
 
-func (app *App) handleLibraryDetail(w http.ResponseWriter, r *http.Request) {
-	user := htmxauth.GetUser(r.Context())
-	ctx := r.Context()
-
-	libraryIDStr := r.URL.Query().Get("library_id")
-	if libraryIDStr == "" {
-		http.Error(w, "library_id required", http.StatusBadRequest)
-		return
-	}
-
-	libraryID, err := strconv.ParseInt(libraryIDStr, 10, 64)
+// loadWorkshopLibraryDetailData gathers the data needed to render the
+// library detail page. It is shared by the GET handler and by
+// handleBulkAddCollection/handleBatchCreateAddons (FR1/FR2, plan #2175),
+// which re-render this page inline -- rather than redirecting -- on a
+// job-level RPC failure so the Server Manager's pasted text isn't lost.
+func (app *App) loadWorkshopLibraryDetailData(ctx context.Context, libraryID int64) (library *manmanpb.WorkshopLibrary, game *manmanpb.Game, games []*manmanpb.Game, addons, availableAddons []*manmanpb.WorkshopAddon, presets []*manmanpb.GameAddonPathPreset, err error) {
+	library, err = app.grpc.GetLibrary(ctx, libraryID)
 	if err != nil {
-		http.Error(w, "Invalid library_id", http.StatusBadRequest)
-		return
-	}
-
-	library, err := app.grpc.GetLibrary(ctx, libraryID)
-	if err != nil {
-		log.Printf("Error fetching library: %v", err)
-		http.Error(w, "Failed to fetch library", http.StatusInternalServerError)
-		return
+		return nil, nil, nil, nil, nil, nil, err
 	}
 
 	// Get addons in this library
-	addons, err := app.grpc.GetLibraryAddons(ctx, libraryID)
+	addons, err = app.grpc.GetLibraryAddons(ctx, libraryID)
 	if err != nil {
 		log.Printf("Error fetching library addons: %v", err)
 		addons = []*manmanpb.WorkshopAddon{}
@@ -841,20 +830,50 @@ func (app *App) handleLibraryDetail(w http.ResponseWriter, r *http.Request) {
 		log.Printf("Error fetching available addons: %v", err)
 		allAddons = []*manmanpb.WorkshopAddon{}
 	}
-	var availableAddons []*manmanpb.WorkshopAddon
 	for _, a := range allAddons {
 		if !inLibrary[a.AddonId] {
 			availableAddons = append(availableAddons, a)
 		}
 	}
 
-	games, _ := app.grpc.ListGames(ctx)
-	var game *manmanpb.Game
+	games, _ = app.grpc.ListGames(ctx)
 	for _, g := range games {
 		if g.GameId == library.GameId {
 			game = g
 			break
 		}
+	}
+
+	presets, err = app.grpc.ListAddonPathPresets(ctx, library.GameId)
+	if err != nil {
+		log.Printf("Error fetching presets: %v", err)
+		presets = []*manmanpb.GameAddonPathPreset{}
+	}
+
+	return library, game, games, addons, availableAddons, presets, nil
+}
+
+func (app *App) handleLibraryDetail(w http.ResponseWriter, r *http.Request) {
+	user := htmxauth.GetUser(r.Context())
+	ctx := r.Context()
+
+	libraryIDStr := r.URL.Query().Get("library_id")
+	if libraryIDStr == "" {
+		http.Error(w, "library_id required", http.StatusBadRequest)
+		return
+	}
+
+	libraryID, err := strconv.ParseInt(libraryIDStr, 10, 64)
+	if err != nil {
+		http.Error(w, "Invalid library_id", http.StatusBadRequest)
+		return
+	}
+
+	library, game, games, addons, availableAddons, presets, err := app.loadWorkshopLibraryDetailData(ctx, libraryID)
+	if err != nil {
+		log.Printf("Error fetching library: %v", err)
+		http.Error(w, "Failed to fetch library", http.StatusInternalServerError)
+		return
 	}
 
 	breadcrumbs := []components.Breadcrumb{
@@ -875,9 +894,164 @@ func (app *App) handleLibraryDetail(w http.ResponseWriter, r *http.Request) {
 		Games:           games,
 		Addons:          addons,
 		AvailableAddons: availableAddons,
+		Presets:         presets,
 	}
 
 	RenderTempl(w, r, library.Name, pages.WorkshopLibraryDetail(data))
+}
+
+// renderWorkshopLibraryDetailWithFormState re-renders the library detail
+// page inline (no redirect) after a job-level failure from
+// handleBulkAddCollection or handleBatchCreateAddons, preserving whichever
+// form's error/echoed input is non-empty so the Server Manager doesn't have
+// to retype a pasted collection ID/URL or batch block (FR1/FR2/FR3, plan
+// #2175).
+func (app *App) renderWorkshopLibraryDetailWithFormState(w http.ResponseWriter, r *http.Request, libraryID int64, bulkAddErr, bulkAddInput, batchErr, batchEntries string) {
+	user := htmxauth.GetUser(r.Context())
+	ctx := r.Context()
+
+	library, game, games, addons, availableAddons, presets, err := app.loadWorkshopLibraryDetailData(ctx, libraryID)
+	if err != nil {
+		log.Printf("Error fetching library: %v", err)
+		http.Error(w, "Failed to fetch library", http.StatusInternalServerError)
+		return
+	}
+
+	breadcrumbs := []components.Breadcrumb{
+		{Label: "Workshop", URL: "/workshop/library"},
+		{Label: library.Name, URL: ""},
+	}
+	layoutData, err := app.buildTemplLayoutData(r, library.Name, "workshop", user, breadcrumbs)
+	if err != nil {
+		log.Printf("Error building layout data: %v", err)
+		http.Error(w, "Failed to build layout", http.StatusInternalServerError)
+		return
+	}
+
+	data := pages.WorkshopLibraryDetailPageData{
+		Layout:                 layoutData,
+		Library:                library,
+		Game:                   game,
+		Games:                  games,
+		Addons:                 addons,
+		AvailableAddons:        availableAddons,
+		Presets:                presets,
+		BulkAddCollectionError: bulkAddErr,
+		BulkAddCollectionInput: bulkAddInput,
+		BatchCreateError:       batchErr,
+		BatchCreateEntries:     batchEntries,
+	}
+
+	RenderTempl(w, r, library.Name, pages.WorkshopLibraryDetail(data))
+}
+
+// handleBulkAddCollection resolves a Steam Workshop collection's current
+// membership and adds every item to a library in one action (FR1, plan
+// #2175), then hands off to the batch-status view (#2179) for the returned
+// batch_job_id -- the Server Manager lands on per-item results, not a
+// spinner or a bare toast.
+func (app *App) handleBulkAddCollection(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	ctx := r.Context()
+
+	gameIDStr := r.FormValue("game_id")
+	libraryIDStr := r.FormValue("library_id")
+	collectionInput := r.FormValue("collection_input")
+	presetIDStr := r.FormValue("preset_id")
+
+	gameID, err := strconv.ParseInt(gameIDStr, 10, 64)
+	if err != nil {
+		http.Error(w, "Invalid game_id", http.StatusBadRequest)
+		return
+	}
+
+	libraryID, err := strconv.ParseInt(libraryIDStr, 10, 64)
+	if err != nil {
+		http.Error(w, "Invalid library_id", http.StatusBadRequest)
+		return
+	}
+
+	// Required-field rejection happens before any RPC call -- an empty
+	// collection input can never resolve to a collection, so there is
+	// nothing useful for the server to do with it.
+	if strings.TrimSpace(collectionInput) == "" {
+		app.renderWorkshopLibraryDetailWithFormState(w, r, libraryID, "Collection ID or Workshop URL is required.", collectionInput, "", "")
+		return
+	}
+
+	var presetID int64
+	if presetIDStr != "" {
+		presetID, _ = strconv.ParseInt(presetIDStr, 10, 64)
+	}
+
+	resp, err := app.grpc.AddCollectionToLibrary(ctx, gameID, libraryID, collectionInput, presetID)
+	if err != nil {
+		log.Printf("Error adding collection to library: %v", err)
+		app.renderWorkshopLibraryDetailWithFormState(w, r, libraryID, "Could not add this collection: "+err.Error(), collectionInput, "", "")
+		return
+	}
+
+	http.Redirect(w, r, "/workshop/batch-status?batch_job_id="+strconv.FormatInt(resp.BatchJobId, 10), http.StatusSeeOther)
+}
+
+// handleBatchCreateAddons takes a pasted block of mixed raw Workshop IDs and
+// Workshop URLs and creates an addon per valid entry (FR2, plan #2175),
+// then hands off to the batch-status view (#2179) for the returned
+// batch_job_id, same as handleBulkAddCollection. A partial-failure result
+// (completed_with_errors) is still a successful RPC call -- it is reported
+// per-item on the batch-status view (FR3), not surfaced as a UI-level error
+// here.
+func (app *App) handleBatchCreateAddons(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	ctx := r.Context()
+
+	gameIDStr := r.FormValue("game_id")
+	libraryIDStr := r.FormValue("library_id")
+	entries := r.FormValue("entries")
+	presetIDStr := r.FormValue("preset_id")
+
+	gameID, err := strconv.ParseInt(gameIDStr, 10, 64)
+	if err != nil {
+		http.Error(w, "Invalid game_id", http.StatusBadRequest)
+		return
+	}
+
+	libraryID, err := strconv.ParseInt(libraryIDStr, 10, 64)
+	if err != nil {
+		http.Error(w, "Invalid library_id", http.StatusBadRequest)
+		return
+	}
+
+	// Required-field rejection happens before any RPC call. Note this only
+	// rejects a wholly-empty textarea -- individual bad lines within a
+	// non-empty block are the server's job to flag per-item (FR3), not the
+	// UI's job to pre-filter (see handlers_workshop_bulk_test.go).
+	if strings.TrimSpace(entries) == "" {
+		app.renderWorkshopLibraryDetailWithFormState(w, r, libraryID, "", "", "At least one Workshop ID or URL is required.", entries)
+		return
+	}
+
+	var presetID int64
+	if presetIDStr != "" {
+		presetID, _ = strconv.ParseInt(presetIDStr, 10, 64)
+	}
+
+	resp, err := app.grpc.BatchCreateAddons(ctx, gameID, libraryID, entries, presetID)
+	if err != nil {
+		log.Printf("Error batch-creating addons: %v", err)
+		app.renderWorkshopLibraryDetailWithFormState(w, r, libraryID, "", "", "Could not process this batch: "+err.Error(), entries)
+		return
+	}
+
+	http.Redirect(w, r, "/workshop/batch-status?batch_job_id="+strconv.FormatInt(resp.BatchJobId, 10), http.StatusSeeOther)
 }
 
 func (app *App) handleCreateLibrary(w http.ResponseWriter, r *http.Request) {

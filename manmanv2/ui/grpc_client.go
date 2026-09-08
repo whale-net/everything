@@ -651,6 +651,43 @@ func (c *ControlClient) ListBatchJobs(ctx context.Context, gameID int64, limit i
 	return resp.Jobs, nil
 }
 
+// AddCollectionToLibrary resolves a Steam Workshop collection's current
+// membership and adds every item in it to a library in one action (FR1,
+// plan #2175). A returned error means a job-level failure (unresolvable
+// collection, missing game/library) -- a partial-failure result
+// (completed_with_errors) is still a nil error here and is reported via the
+// batch-status view (FR3), not as a UI-level error.
+func (c *ControlClient) AddCollectionToLibrary(ctx context.Context, gameID, libraryID int64, collectionInput string, presetID int64) (*manmanpb.AddCollectionToLibraryResponse, error) {
+	resp, err := c.workshop.AddCollectionToLibrary(ctx, &manmanpb.AddCollectionToLibraryRequest{
+		GameId:          gameID,
+		LibraryId:       libraryID,
+		CollectionInput: collectionInput,
+		PresetId:        presetID,
+	})
+	if err != nil {
+		return nil, err
+	}
+	return resp, nil
+}
+
+// BatchCreateAddons takes a pasted block of mixed raw Workshop IDs and
+// Workshop URLs and creates an addon per valid entry (FR2, plan #2175). As
+// with AddCollectionToLibrary, a returned error means a job-level failure;
+// per-entry parse/lookup failures are reported via the batch-status view
+// (FR3), not as a UI-level error.
+func (c *ControlClient) BatchCreateAddons(ctx context.Context, gameID, libraryID int64, entries string, presetID int64) (*manmanpb.BatchCreateAddonsResponse, error) {
+	resp, err := c.workshop.BatchCreateAddons(ctx, &manmanpb.BatchCreateAddonsRequest{
+		GameId:    gameID,
+		LibraryId: libraryID,
+		Entries:   entries,
+		PresetId:  presetID,
+	})
+	if err != nil {
+		return nil, err
+	}
+	return resp, nil
+}
+
 func (c *ControlClient) DeleteAddon(ctx context.Context, addonID int64) error {
 	_, err := c.workshop.DeleteAddon(ctx, &manmanpb.DeleteAddonRequest{
 		AddonId: addonID,
