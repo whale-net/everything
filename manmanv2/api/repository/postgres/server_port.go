@@ -93,7 +93,7 @@ func (r *ServerPortRepository) IsPortAvailable(ctx context.Context, serverID int
 // GetPortAllocation retrieves the allocation details for a specific port
 func (r *ServerPortRepository) GetPortAllocation(ctx context.Context, serverID int64, port int, protocol string) (*manman.ServerPort, error) {
 	query := `
-		SELECT server_id, port, protocol, sgc_id, session_id, allocated_at
+		SELECT server_id, port, protocol, session_id, allocated_at
 		FROM server_ports
 		WHERE server_id = $1 AND port = $2 AND protocol = $3
 	`
@@ -103,7 +103,6 @@ func (r *ServerPortRepository) GetPortAllocation(ctx context.Context, serverID i
 		&allocation.ServerID,
 		&allocation.Port,
 		&allocation.Protocol,
-		&allocation.SGCID,
 		&allocation.SessionID,
 		&allocation.AllocatedAt,
 	)
@@ -125,7 +124,7 @@ func (r *ServerPortRepository) GetPortAllocation(ctx context.Context, serverID i
 // ListAllocatedPorts lists all port allocations for a server
 func (r *ServerPortRepository) ListAllocatedPorts(ctx context.Context, serverID int64) ([]*manman.ServerPort, error) {
 	query := `
-		SELECT server_id, port, protocol, sgc_id, session_id, allocated_at
+		SELECT server_id, port, protocol, session_id, allocated_at
 		FROM server_ports
 		WHERE server_id = $1
 		ORDER BY port, protocol
@@ -144,7 +143,6 @@ func (r *ServerPortRepository) ListAllocatedPorts(ctx context.Context, serverID 
 			&port.ServerID,
 			&port.Port,
 			&port.Protocol,
-			&port.SGCID,
 			&port.SessionID,
 			&port.AllocatedAt,
 		)
@@ -160,7 +158,7 @@ func (r *ServerPortRepository) ListAllocatedPorts(ctx context.Context, serverID 
 // ListPortsBySessionID lists all port allocations for a specific ServerGameConfig
 func (r *ServerPortRepository) ListPortsBySessionID(ctx context.Context, sessionID int64) ([]*manman.ServerPort, error) {
 	query := `
-		SELECT server_id, port, protocol, sgc_id, session_id, allocated_at
+		SELECT server_id, port, protocol, session_id, allocated_at
 		FROM server_ports
 		WHERE session_id = $1
 		ORDER BY server_id, port, protocol
@@ -179,7 +177,6 @@ func (r *ServerPortRepository) ListPortsBySessionID(ctx context.Context, session
 			&port.ServerID,
 			&port.Port,
 			&port.Protocol,
-			&port.SGCID,
 			&port.SessionID,
 			&port.AllocatedAt,
 		)
@@ -489,14 +486,6 @@ type InvalidSessionIDError struct {
 
 func (e *InvalidSessionIDError) Error() string {
 	return fmt.Sprintf("invalid SessionID: %d (must be > 0)", e.SessionID)
-}
-
-type InvalidSGCIDError struct {
-	SGCID int64
-}
-
-func (e *InvalidSGCIDError) Error() string {
-	return fmt.Sprintf("invalid SGCID: %d (must be > 0)", e.SGCID)
 }
 
 type PortNotFoundError struct {
