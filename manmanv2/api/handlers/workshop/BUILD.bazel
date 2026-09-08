@@ -4,6 +4,7 @@ go_library(
     name = "workshop",
     srcs = [
         "addon.go",
+        "cache.go",
         "handler.go",
         "installation.go",
         "library.go",
@@ -13,7 +14,9 @@ go_library(
     importpath = "github.com/whale-net/everything/manmanv2/api/handlers/workshop",
     visibility = ["//manmanv2/api:__subpackages__"],
     deps = [
+        "//libs/go/grpcauth",
         "//libs/go/rmq",
+        "//libs/go/s3",
         "//manmanv2/models:models",
         "//manmanv2/api/repository",
         "//manmanv2/api/workshop",

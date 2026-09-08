@@ -6,6 +6,7 @@ import (
 	"log/slog"
 
 	"github.com/whale-net/everything/libs/go/rmq"
+	s3lib "github.com/whale-net/everything/libs/go/s3"
 	"github.com/whale-net/everything/manmanv2/api/repository"
 	"github.com/whale-net/everything/manmanv2/api/workshop"
 	hostrmq "github.com/whale-net/everything/manmanv2/host/rmq"
@@ -20,7 +21,9 @@ type WorkshopServiceHandler struct {
 	libraryRepo      repository.WorkshopLibraryRepository
 	sgcRepo          repository.ServerGameConfigRepository
 	presetRepo       repository.AddonPathPresetRepository
+	cacheRepo        repository.WorkshopCacheRepository
 	workshopManager  workshop.WorkshopManagerInterface
+	s3Client         *s3lib.Client
 }
 
 // NewWorkshopServiceHandler creates a new WorkshopServiceHandler
@@ -30,7 +33,9 @@ func NewWorkshopServiceHandler(
 	libraryRepo repository.WorkshopLibraryRepository,
 	sgcRepo repository.ServerGameConfigRepository,
 	presetRepo repository.AddonPathPresetRepository,
+	cacheRepo repository.WorkshopCacheRepository,
 	workshopManager *workshop.WorkshopManager,
+	s3Client *s3lib.Client,
 ) *WorkshopServiceHandler {
 	return &WorkshopServiceHandler{
 		addonRepo:        addonRepo,
@@ -38,7 +43,9 @@ func NewWorkshopServiceHandler(
 		libraryRepo:      libraryRepo,
 		sgcRepo:          sgcRepo,
 		presetRepo:       presetRepo,
+		cacheRepo:        cacheRepo,
 		workshopManager:  workshopManager,
+		s3Client:         s3Client,
 	}
 }
 
