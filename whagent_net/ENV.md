@@ -31,7 +31,10 @@ Read via `//libs/go/rmq` (`worker` publishes; `archiver`, `ui`, and any
 
 | Variable | Component | Default | Description |
 |----------|-----------|---------|-------------|
-| `RABBITMQ_URL` | worker, archiver, ui | — | Broker URL. Exchange name `whagent/events` is fixed. |
+| `RABBITMQ_URL` | worker, archiver, ui | — | Broker URL (`amqp://` or `amqps://`). Exchange name `whagent/events` is fixed. Unset disables publishing: `whagent_net/session`'s transcript append path still commits, it just skips the publish step (see `whagent_net/events`, issue #2111). |
+| `RABBITMQ_SSL_VERIFY` | worker, archiver, ui | `true` | For `amqps://` URLs only: set to `false` to skip server certificate verification (dev/test only). Read by `//libs/go/rmq`. |
+| `RABBITMQ_CA_CERT_PATH` | worker, archiver, ui | — | For `amqps://` URLs only: path to a custom CA certificate file. Read by `//libs/go/rmq`. |
+| `RABBITMQ_TLS_SERVER_NAME` | worker, archiver, ui | — | For `amqps://` URLs only: server name for certificate verification, for when the connection URL's host differs from the certificate's. Read by `//libs/go/rmq`. |
 
 ## S3 (cold tier)
 

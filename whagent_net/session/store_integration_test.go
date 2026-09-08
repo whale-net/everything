@@ -46,7 +46,7 @@ func newStore(t *testing.T) (*session.Store, *dbtest.Postgres) {
 	runner := migrate.NewRunner(sqlDB, schema.Migrations, schema.Dir)
 	require.NoError(t, runner.Up(), "apply every migration from the real embedded schema")
 
-	return session.New(db.Pool), db
+	return session.New(db.Pool, nil), db
 }
 
 // newTestSession builds a Session fixture with subject and on_behalf_of

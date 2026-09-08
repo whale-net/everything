@@ -16,18 +16,27 @@
 // straightforward INSERT/SELECT/UPDATE.
 package session
 
-import "github.com/jackc/pgx/v5/pgxpool"
+import (
+	"github.com/jackc/pgx/v5/pgxpool"
+
+	"github.com/whale-net/everything/whagent_net/events"
+)
 
 // Store is the pgx-backed repository over `sessions`, `transcript_event`,
 // `turn_context`, `turn_usage`, `agent_definition`, `session_agent`, and
 // `tool_call_idempotency` (migration 001, issue #2109).
 type Store struct {
 	pool *pgxpool.Pool
+	pub  events.PublisherInterface
 }
 
-// New returns a Store backed by pool (see //libs/go/db.NewPool).
-func New(pool *pgxpool.Pool) *Store {
-	return &Store{pool: pool}
+// New returns a Store backed by pool (see //libs/go/db.NewPool). pub is the
+// whagent_net/events publisher the Transcript store's Append publishes
+// committed events to after each Postgres commit (NFR2); pass nil to
+// disable publishing entirely (e.g. no RABBITMQ_URL configured) -- Append
+// still works, it simply skips the publish step.
+func New(pool *pgxpool.Pool, pub events.PublisherInterface) *Store {
+	return &Store{pool: pool, pub: pub}
 }
 
 // Sessions returns the SessionStore implementation (sessions.go, LB2/NFR3).
@@ -35,7 +44,7 @@ func (s *Store) Sessions() SessionStore { return sessionStore{pool: s.pool} }
 
 // Transcript returns the TranscriptStore implementation (transcript.go,
 // LB1).
-func (s *Store) Transcript() TranscriptStore { return transcriptStore{pool: s.pool} }
+func (s *Store) Transcript() TranscriptStore { return transcriptStore{pool: s.pool, pub: s.pub} }
 
 // AgentDefinitions returns the AgentDefinitionStore implementation
 // (agentdef.go, LB5/NFR6).
