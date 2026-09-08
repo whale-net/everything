@@ -1,0 +1,25 @@
+"""whagent-net worker's tool-dispatch package (issue #2118): routes a
+turn's model-requested tool calls to the agent definition's domain-owned
+MCP server(s), carrying a per-server persona credential (FR10) and a
+deterministic idempotency key (FR11). See dispatch.go's package doc
+comment for the full contract."""
+
+load("@rules_go//go:def.bzl", "go_library")
+
+go_library(
+    name = "tools",
+    srcs = [
+        "client.go",
+        "dispatch.go",
+        "keys.go",
+    ],
+    importpath = "github.com/whale-net/everything/whagent_net/worker/tools",
+    visibility = ["//visibility:public"],
+    deps = [
+        "//libs/go/whagent",
+        "//whagent_net/api/persona",
+        "//whagent_net/llm",
+        "//whagent_net/session",
+        "@com_github_modelcontextprotocol_go_sdk//mcp",
+    ],
+)
