@@ -1,4 +1,4 @@
-load("@rules_go//go:def.bzl", "go_library")
+load("@rules_go//go:def.bzl", "go_library", "go_test")
 
 go_library(
     name = "handlers",
@@ -17,5 +17,64 @@ go_library(
         "@org_golang_google_grpc//codes",
         "@org_golang_google_grpc//status",
         "@org_golang_google_protobuf//types/known/timestamppb",
+    ],
+)
+
+# Unit test for the RequireClaimsUnaryInterceptor/RequireClaimsStreamInterceptor
+# pair (issue #2113's Testing section: "Unauthenticated and bad-token calls to
+# every RPC are rejected by the interceptor before any handler runs"). No
+# Postgres/network dependency, so this runs as part of `bazel test //...`.
+go_test(
+    name = "handlers_test",
+    srcs = ["auth_test.go"],
+    deps = [
+        ":handlers",
+        "//libs/go/grpcauth",
+        "@org_golang_google_grpc//:grpc",
+        "@org_golang_google_grpc//codes",
+        "@org_golang_google_grpc//status",
+    ],
+)
+
+# Real Postgres + real gRPC server integration test for GetSession/
+# ReadTranscript (issue #2113's Testing section: "Integration test over a
+# real gRPC server + //libs/go/dbtest Postgres covering the two read RPCs
+# end to end"). Deliberately NOT part of `bazel test //...` -- see
+# //libs/go/dbtest's README and whagent_net/session:session_integration_test
+# for the full rationale behind each tag and how to run a test like this one.
+#
+# Run it explicitly (requires a working Docker daemon):
+#   bazel test //whagent_net/api/handlers:session_integration_test --test_output=all
+go_test(
+    name = "session_integration_test",
+    size = "large",
+    timeout = "long",
+    srcs = ["session_integration_test.go"],
+    gotags = ["integration"],
+    tags = [
+        "external",
+        "integration",
+        "manual",
+        "no-cache",
+        "no-sandbox",
+        "requires-network",
+    ],
+    deps = [
+        ":handlers",
+        "//libs/go/dbtest",
+        "//libs/go/grpcauth",
+        "//libs/go/migrate",
+        "//whagent_net/migrate/schema",
+        "//whagent_net/protos:whagentpb",
+        "//whagent_net/session",
+        "@com_github_google_uuid//:uuid",
+        "@com_github_jackc_pgx_v5//stdlib",
+        "@com_github_stretchr_testify//assert",
+        "@com_github_stretchr_testify//require",
+        "@org_golang_google_grpc//:grpc",
+        "@org_golang_google_grpc//codes",
+        "@org_golang_google_grpc//credentials/insecure",
+        "@org_golang_google_grpc//status",
+        "@org_golang_google_grpc//test/bufconn",
     ],
 )
