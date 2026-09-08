@@ -13,10 +13,15 @@ the component map and design decisions.
 
 ## Status
 
-**Pre-M1 — design only.** No code, BUILD targets, or migrations exist yet.
-The product brief (`PRODUCT.md`) is produced by `/project-manager:product`;
-milestones are then specced with `/project-manager:design --milestone M<n>`.
-Origin discussion: GitHub issue #1552.
+**M1 in progress.** The `session` store schema and `migrate` job exist
+(issue #2109): `whagent_net/migrate` applies `001_initial_schema` (see
+`whagent_net/migrate/migrations/`), and `whagent_net/session` exposes the
+store interfaces (`SessionStore`, `TranscriptStore`, `AgentDefinitionStore`,
+`UsageStore`, `IdempotencyLedger`) other M1 tasks build on. No other binary
+below exists yet. The product brief (`PRODUCT.md`) is produced by
+`/project-manager:product`; milestones are then specced with
+`/project-manager:design --milestone M<n>`. Origin discussion: GitHub issue
+#1552.
 
 ## Planned binaries
 
