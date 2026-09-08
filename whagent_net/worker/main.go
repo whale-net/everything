@@ -102,6 +102,13 @@ func run() error {
 	w.RegisterActivityWithOptions(acts.CallModel, activity.RegisterOptions{Name: ActivityCallModel})
 	w.RegisterActivityWithOptions(acts.CommitTurn, activity.RegisterOptions{Name: ActivityCommitTurn})
 	w.RegisterActivityWithOptions(acts.UpdateSessionStatus, activity.RegisterOptions{Name: ActivityUpdateSessionStatus})
+	// SumCost/CommitTerminalEvent (issue #2119): registered now so the
+	// worker binary exposes them from Scaffold phase onward, even though
+	// processTurn does not call either yet -- Implementation phase wires
+	// the ExecuteActivity calls into workflow.go under this task's
+	// workflow.GetVersion gate (caps.go/activities.go doc comments).
+	w.RegisterActivityWithOptions(acts.SumCost, activity.RegisterOptions{Name: ActivitySumCost})
+	w.RegisterActivityWithOptions(acts.CommitTerminalEvent, activity.RegisterOptions{Name: ActivityCommitTerminalEvent})
 
 	done := make(chan error, 1)
 	go func() {

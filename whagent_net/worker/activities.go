@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 
@@ -25,6 +26,14 @@ const (
 	ActivityCallModel              = "CallModel"
 	ActivityCommitTurn             = "CommitTurn"
 	ActivityUpdateSessionStatus    = "UpdateSessionStatus"
+	// ActivitySumCost and ActivityCommitTerminalEvent are issue #2119's two
+	// new activities -- FR7's cost-cap input (usage.go's UsageStore.SumCost,
+	// the running committed total, never a mutable counter) and the
+	// terminal transcript event a cap trip or failure commits before the
+	// session's status write goes terminal (FR6/FR7/FR2). See this file's
+	// SumCost/CommitTerminalEvent doc comments and caps.go/classify.go.
+	ActivitySumCost             = "SumCost"
+	ActivityCommitTerminalEvent = "CommitTerminalEvent"
 )
 
 // Activities groups the per-turn activities SessionWorkflow drives
@@ -178,7 +187,15 @@ type CommitTurnInput struct {
 	Response llm.Response
 }
 
-// CommitTurnResult is CommitTurn's activity result.
+// CommitTurnResult is processTurn's (workflow.go) per-turn result --
+// historically exactly whatever the CommitTurn activity returned, and
+// still is on the ordinary (no cap trip, no failure) path. Capped/CapKind/
+// Failed/ErrorCategory/ErrorDetail (issue #2119) are folded in by
+// processTurn's cappedTurn/failTurn helpers (workflow.go), never set by
+// the CommitTurn activity itself -- checkCaps/classifyError are pure,
+// I/O-free workflow code, not activities, so there is no second activity
+// result type to define; a real CommitTurn invocation that neither caps
+// nor fails always returns these five fields at their zero value.
 type CommitTurnResult struct {
 	// Done reports whether the agent finished the whole session (session
 	// -> `done`) as opposed to waiting for the next turn (session ->
@@ -191,6 +208,25 @@ type CommitTurnResult struct {
 	// waiting for the next signalled turn, until a future task teaches
 	// CommitTurn to recognize a real finish signal.
 	Done bool
+
+	// Capped and CapKind report a tripped turn or cost cap (FR6/FR7):
+	// SessionWorkflow's loop (workflow.go) writes session.StatusCapped
+	// with CapKind in the terminal reason when Capped is true. CapKind is
+	// only meaningful when Capped is true.
+	Capped  bool
+	CapKind session.CapKind
+
+	// Failed, ErrorCategory, and ErrorDetail report a session-ending
+	// failure (FR2/FR3): SessionWorkflow's loop writes
+	// session.StatusFailed with ErrorCategory/ErrorDetail in the terminal
+	// reason when Failed is true -- the exact same (category, detail)
+	// pair failTurn (workflow.go) already committed to the failure
+	// transcript event via classifyError, never independently
+	// recomputed. ErrorCategory/ErrorDetail are only meaningful when
+	// Failed is true.
+	Failed        bool
+	ErrorCategory session.ErrorCategory
+	ErrorDetail   string
 }
 
 // CommitTurn is per-turn activity #5 (ARCHITECTURE.md "Session workflow"):
@@ -266,11 +302,10 @@ type UpdateSessionStatusInput struct {
 	SessionID uuid.UUID
 	Status    session.Status
 	// Terminal carries cap_kind/error_category/error_detail for a capped
-	// or failed transition (session.TerminalReason) -- always nil in this
-	// task's calls (workflow.go only ever writes running/awaiting_input/
-	// done/stopped); kept on the input so a future cap-enforcement or
-	// terminal-classification task can populate it without changing this
-	// activity's shape.
+	// or failed transition (session.TerminalReason) -- nil for every
+	// non-terminal transition (running/awaiting_input) and for done/
+	// stopped, populated by workflow.go's updateSessionStatus only for
+	// the capped/failed calls (issue #2119).
 	Terminal *session.TerminalReason
 }
 
@@ -299,4 +334,77 @@ func (a *Activities) UpdateSessionStatus(ctx context.Context, in UpdateSessionSt
 		return UpdateSessionStatusResult{}, fmt.Errorf("update session status: %w", err)
 	}
 	return UpdateSessionStatusResult{}, nil
+}
+
+// SumCostInput is SumCost's activity input.
+type SumCostInput struct {
+	SessionID uuid.UUID
+}
+
+// SumCostResult is SumCost's activity result.
+type SumCostResult struct {
+	// CostUSD is a.Store.Usage().SumCost's committed running total (LB6,
+	// FR7) -- includes every turn_usage row for the session, estimated or
+	// provider-reported alike (usage.go's TurnUsage.CostEstimated doc
+	// comment: "unknown cost is never treated as free").
+	CostUSD float64
+}
+
+// SumCost is FR7's cost-cap input activity: a fresh read of
+// a.Store.Usage().SumCost on every call, never a value cached in workflow
+// state (caps.go's package doc comment: "never a separately-mutated
+// counter"). SessionWorkflow's evaluateCaps (workflow.go) calls this both
+// before and after each turn, then evaluates the result via caps.go's
+// checkCaps.
+func (a *Activities) SumCost(ctx context.Context, in SumCostInput) (SumCostResult, error) {
+	if a.Store == nil {
+		return SumCostResult{}, fmt.Errorf("worker: Activities.Store is nil")
+	}
+	total, err := a.Store.Usage().SumCost(ctx, in.SessionID)
+	if err != nil {
+		return SumCostResult{}, fmt.Errorf("sum cost: %w", err)
+	}
+	return SumCostResult{CostUSD: total}, nil
+}
+
+// CommitTerminalEventInput is CommitTerminalEvent's activity input.
+// EventType must be events.EventTypeCapped or events.EventTypeFailure
+// (events.go) -- this activity is the one commit path both terminal
+// events share, mirroring how CommitTurn is the one commit path every
+// per-turn model-response event shares.
+type CommitTerminalEventInput struct {
+	SessionID uuid.UUID
+	Turn      int
+	EventType string
+	Payload   json.RawMessage
+}
+
+// CommitTerminalEventResult is CommitTerminalEvent's activity result --
+// empty; the workflow only needs to know the commit succeeded before it
+// writes the session's terminal status.
+type CommitTerminalEventResult struct{}
+
+// CommitTerminalEvent commits the terminal transcript event a cap trip
+// (FR6/FR7) or a session failure (FR2) writes before the session's status
+// write goes terminal (issue body: "Tripping either cap writes its own
+// transcript event before the session goes terminal... It is committed
+// and published like any other event"). SessionWorkflow calls this before
+// updateSessionStatus's terminal write, never after -- a consumer reading
+// the transcript must be able to see why a session ended by the time
+// GetSession reports it as ended.
+//
+// Goes through a.Store.Transcript().AppendIfAbsent, not Append: the same
+// retry-safe, publish-after-commit path (NFR2) every other transcript
+// event already uses, so a re-invoked activity (Temporal's at-least-once
+// execution) commits the terminal event exactly once (keyed on
+// (SessionID, Turn, EventType), same as CommitTurn's own event) rather
+// than duplicating it.
+func (a *Activities) CommitTerminalEvent(ctx context.Context, in CommitTerminalEventInput) (CommitTerminalEventResult, error) {
+	if a.Store == nil {
+		return CommitTerminalEventResult{}, fmt.Errorf("worker: Activities.Store is nil")
+	}
+	if _, err := a.Store.Transcript().AppendIfAbsent(ctx, in.SessionID, in.Turn, in.EventType, in.Payload); err != nil {
+		return CommitTerminalEventResult{}, fmt.Errorf("commit terminal event: %w", err)
+	}
+	return CommitTerminalEventResult{}, nil
 }

@@ -45,31 +45,38 @@
 //	}
 //
 // updateSessionStatus below (change ID "session-workflow-status-
-// transitions") is this convention's first real usage: the Scaffold-phase
-// loop never wrote `sessions.status` at all, so this Implementation-phase
-// addition of a genuinely new control-flow branch is exactly the shape
-// NFR1 exists to protect -- any run already open on the old (no-op)
-// behavior when this change deploys keeps taking the old branch, forever,
-// for that run. The next behavior-changing edit to this file (the
-// follow-up tool-dispatch task's ExecuteActivity call per tool call,
-// noted at processTurn's tool-dispatch step below) must add its own change
-// ID the same way.
+// transitions") was this convention's first real usage (issue #2114): the
+// Scaffold-phase loop never wrote `sessions.status` at all, so that
+// Implementation-phase addition of a genuinely new control-flow branch was
+// exactly the shape NFR1 exists to protect. issue #2119 (turn/cost caps,
+// terminal classification, failure events) is the second: every new
+// branch it adds to processTurn -- the pre/post cap checks (evaluateCaps)
+// and the classify-and-commit failure path (failTurn) -- lives behind one
+// shared change ID, "session-workflow-cap-enforcement", gated at the top
+// of processTurn, per this task's own scope note (one change ID per task
+// here, not per individual branch, since every branch this task adds
+// ships in the same deploy and a run open across that deploy must keep
+// taking the pre-#2119 path for all of them uniformly, not some subset).
+// The next behavior-changing edit to this file (the follow-up
+// tool-dispatch task's ExecuteActivity call per tool call, noted at
+// processTurn's tool-dispatch step below) must add its own change ID the
+// same way.
 //
-// # Implementation status (issue #2114)
+// # Implementation status (issues #2114, #2119)
 //
-// SessionWorkflow's signal-per-turn loop, Stop/cancellation handling, and
-// session-status transitions are all real as of this task -- not a
-// Scaffold-phase stub. Deliberately still deferred to follow-up tasks per
-// the issue body ("Tool dispatch, cap enforcement, and terminal
-// classification land in follow-up tasks; this task builds the durable
-// loop they hang off"): the tool-call dispatch step in processTurn stays a
-// no-op hook, no turn/cost cap is checked before or after a turn, and
-// CommitTurnResult.Done (activities.go) is always false, so this task's
-// workflow only ever reaches `awaiting_input` or `stopped`, never `done`
-// or `capped`.
+// SessionWorkflow's signal-per-turn loop, Stop/cancellation handling,
+// session-status transitions, turn/cost cap enforcement (FR6/FR7), and
+// failure classification (FR2/FR3) are all real. Still deferred to the
+// follow-up tool-dispatch task: the tool-call dispatch step in processTurn
+// stays a no-op hook, and CommitTurnResult.Done (activities.go) is always
+// false (no task yet teaches CommitTurn to recognize a real
+// agent-initiated finish signal), so this workflow can reach
+// `awaiting_input`, `stopped`, `capped`, or `failed`, but never `done`.
 package main
 
 import (
+	"encoding/json"
+	"fmt"
 	"time"
 
 	"github.com/google/uuid"
@@ -77,6 +84,7 @@ import (
 	"go.temporal.io/sdk/temporal"
 	"go.temporal.io/sdk/workflow"
 
+	"github.com/whale-net/everything/whagent_net/events"
 	"github.com/whale-net/everything/whagent_net/session"
 )
 
@@ -146,7 +154,7 @@ func SessionWorkflow(ctx workflow.Context, in SessionWorkflowInput) error {
 	turnCh := workflow.GetSignalChannel(ctx, SignalSendTurn)
 	stopCh := workflow.GetSignalChannel(ctx, SignalStop)
 
-	if err := updateSessionStatus(ctx, in.SessionID, session.StatusAwaitingInput); err != nil {
+	if err := updateSessionStatus(ctx, in.SessionID, session.StatusAwaitingInput, nil); err != nil {
 		return err
 	}
 
@@ -171,11 +179,11 @@ func SessionWorkflow(ctx workflow.Context, in SessionWorkflowInput) error {
 			// ever unblocks between turns, where the session is already
 			// idle) -- writing `stopped` is the only work left to do.
 			logger.Info("session stop signal received while awaiting input", "session_id", in.SessionID.String(), "turn", turn)
-			return updateSessionStatus(ctx, in.SessionID, session.StatusStopped)
+			return updateSessionStatus(ctx, in.SessionID, session.StatusStopped, nil)
 		}
 
 		turn++
-		if err := updateSessionStatus(ctx, in.SessionID, session.StatusRunning); err != nil {
+		if err := updateSessionStatus(ctx, in.SessionID, session.StatusRunning, nil); err != nil {
 			return err
 		}
 
@@ -184,14 +192,33 @@ func SessionWorkflow(ctx workflow.Context, in SessionWorkflowInput) error {
 			return err
 		}
 		if outcome.stopped {
-			return updateSessionStatus(ctx, in.SessionID, session.StatusStopped)
+			return updateSessionStatus(ctx, in.SessionID, session.StatusStopped, nil)
+		}
+		if outcome.failed {
+			// FR2/FR3: category/detail are exactly what failTurn
+			// (processTurn) already classified and committed to the
+			// failure transcript event -- never recomputed here, so
+			// GetSession and that event always agree.
+			category, detail := outcome.errorCategory, outcome.errorDetail
+			return updateSessionStatus(ctx, in.SessionID, session.StatusFailed, &session.TerminalReason{
+				ErrorCategory: &category,
+				ErrorDetail:   &detail,
+			})
+		}
+		if outcome.capped {
+			// FR6/FR7: capKind is exactly what cappedTurn (processTurn)
+			// already committed to the capped transcript event.
+			capKind := outcome.capKind
+			return updateSessionStatus(ctx, in.SessionID, session.StatusCapped, &session.TerminalReason{
+				CapKind: &capKind,
+			})
 		}
 
 		nextStatus := session.StatusAwaitingInput
 		if outcome.done {
 			nextStatus = session.StatusDone
 		}
-		if err := updateSessionStatus(ctx, in.SessionID, nextStatus); err != nil {
+		if err := updateSessionStatus(ctx, in.SessionID, nextStatus, nil); err != nil {
 			return err
 		}
 		if outcome.done {
@@ -200,13 +227,20 @@ func SessionWorkflow(ctx workflow.Context, in SessionWorkflowInput) error {
 	}
 }
 
-// turnOutcome is runTurn's result: exactly one of done/stopped is
-// meaningful when err is nil (neither is set when the turn simply
+// turnOutcome is runTurn's result: at most one of done/stopped/failed/
+// capped is ever set when err is nil (none set means the turn simply
 // completed and the session should keep waiting for the next signalled
-// turn).
+// turn). errorCategory/errorDetail are only meaningful when failed is
+// true; capKind is only meaningful when capped is true.
 type turnOutcome struct {
 	done    bool
 	stopped bool
+	failed  bool
+	capped  bool
+
+	errorCategory session.ErrorCategory
+	errorDetail   string
+	capKind       session.CapKind
 }
 
 // turnGoroutineResult carries processTurn's result across the
@@ -272,17 +306,63 @@ func runTurn(ctx workflow.Context, stopCh workflow.ReceiveChannel, sessionID uui
 	if result.err != nil {
 		return turnOutcome{}, result.err
 	}
-	return turnOutcome{done: result.commit.Done}, nil
+	return turnOutcome{
+		done:          result.commit.Done,
+		failed:        result.commit.Failed,
+		capped:        result.commit.Capped,
+		errorCategory: result.commit.ErrorCategory,
+		errorDetail:   result.commit.ErrorDetail,
+		capKind:       result.commit.CapKind,
+	}, nil
 }
 
 // processTurn runs one turn's activity sequence (ARCHITECTURE.md "Session
-// workflow"): resolve the current agent definition, build context, call
-// the model, (tool-call dispatch -- a no-op hook in this task, filled in
-// by the follow-up tool-dispatch task), then commit the turn.
+// workflow"): resolve the current agent definition, check caps (FR6/FR7,
+// "before" half), build context, call the model, (tool-call dispatch -- a
+// no-op hook in this task, filled in by the follow-up tool-dispatch
+// task), commit the turn, check caps again ("after" half), then return.
+// Any activity error along the way is routed to failTurn (FR2/FR3)
+// instead of propagating as a raw workflow error -- see failTurn's doc
+// comment for why.
+//
+// issue #2119's change ID ("session-workflow-cap-enforcement", this
+// file's package doc comment "NFR1") gates every branch below that did
+// not exist before this task: for a run already open when this change
+// deploys, v == workflow.DefaultVersion and processTurn takes exactly the
+// pre-#2119 path -- no cap check, and an activity error still propagates
+// as a raw error (the old, pre-failTurn behavior) rather than writing a
+// failed status.
 func processTurn(ctx workflow.Context, sessionID uuid.UUID, turn int, in SendTurnSignal) (CommitTurnResult, error) {
+	v := workflow.GetVersion(ctx, "session-workflow-cap-enforcement", workflow.DefaultVersion, 1)
+
 	var resolved ResolveAgentDefinitionResult
 	if err := workflow.ExecuteActivity(ctx, ActivityResolveAgentDefinition, sessionID).Get(ctx, &resolved); err != nil {
-		return CommitTurnResult{}, err
+		if v == workflow.DefaultVersion {
+			return CommitTurnResult{}, err
+		}
+		return failTurn(ctx, sessionID, turn, err)
+	}
+
+	if v >= 1 {
+		// "Before" half of FR6/FR7's "before each turn and after each LLM
+		// response" (ARCHITECTURE.md "Guardrails"): evaluated against
+		// turn-1 (turns already completed, not this one), so the turn
+		// that actually reaches a cap is still allowed to run once and
+		// produce its own transcript event -- see evaluateCaps' doc
+		// comment for the full reasoning. In ordinary operation this
+		// never trips (the "after" check on the prior turn already ended
+		// the session and this workflow's own loop never calls
+		// processTurn again once terminal); it exists as defense in
+		// depth against a resumed/replayed run whose prior "after" check
+		// committed the cap event but was interrupted before the session
+		// status write landed.
+		check, err := evaluateCaps(ctx, sessionID, turn-1, resolved.Definition)
+		if err != nil {
+			return failTurn(ctx, sessionID, turn, err)
+		}
+		if check.Capped {
+			return cappedTurn(ctx, sessionID, turn, check.CapKind)
+		}
 	}
 
 	var built BuildContextResult
@@ -293,7 +373,10 @@ func processTurn(ctx workflow.Context, sessionID uuid.UUID, turn int, in SendTur
 		Input:      in.Input,
 	}
 	if err := workflow.ExecuteActivity(ctx, ActivityBuildContext, buildIn).Get(ctx, &built); err != nil {
-		return CommitTurnResult{}, err
+		if v == workflow.DefaultVersion {
+			return CommitTurnResult{}, err
+		}
+		return failTurn(ctx, sessionID, turn, err)
 	}
 
 	var modelResult CallModelResult
@@ -304,7 +387,10 @@ func processTurn(ctx workflow.Context, sessionID uuid.UUID, turn int, in SendTur
 		EventIDs:  built.EventIDs,
 	}
 	if err := workflow.ExecuteActivity(ctx, ActivityCallModel, callIn).Get(ctx, &modelResult); err != nil {
-		return CommitTurnResult{}, err
+		if v == workflow.DefaultVersion {
+			return CommitTurnResult{}, err
+		}
+		return failTurn(ctx, sessionID, turn, err)
 	}
 
 	// Tool-call dispatch step: a no-op hook in this task (issue body,
@@ -325,18 +411,137 @@ func processTurn(ctx workflow.Context, sessionID uuid.UUID, turn int, in SendTur
 		Response:  modelResult.Response,
 	}
 	if err := workflow.ExecuteActivity(ctx, ActivityCommitTurn, commitIn).Get(ctx, &commitResult); err != nil {
-		return CommitTurnResult{}, err
+		if v == workflow.DefaultVersion {
+			return CommitTurnResult{}, err
+		}
+		return failTurn(ctx, sessionID, turn, err)
+	}
+
+	if v >= 1 {
+		// "After" half of the same FR6/FR7 check: this turn's own cost
+		// (just committed above) is now included in SumCost's running
+		// total, so this is where a turn or cost cap this turn itself
+		// reaches actually gets caught, ending the session immediately
+		// rather than waiting for a further signal that will never come
+		// (Testing phase's "does not process a further signalled turn").
+		check, err := evaluateCaps(ctx, sessionID, turn, resolved.Definition)
+		if err != nil {
+			return failTurn(ctx, sessionID, turn, err)
+		}
+		if check.Capped {
+			return cappedTurn(ctx, sessionID, turn, check.CapKind)
+		}
 	}
 
 	return commitResult, nil
+}
+
+// evaluateCaps reads FR7's cost-cap input fresh (the SumCost activity;
+// caps.go's package doc comment: "never a separately-mutated counter")
+// and evaluates it, together with turnForCapCheck, against def via
+// checkCaps (caps.go). processTurn calls this twice per turn with two
+// different turnForCapCheck values, both named "the turn number just
+// reached" by checkCaps' own doc comment:
+//
+//   - the "before" call passes turn-1 (this turn has not run yet, so the
+//     turns/cost "just reached" are whatever the previous turn left
+//     committed);
+//   - the "after" call passes turn (this turn's own commit has already
+//     landed by the time it runs).
+//
+// Both calls read SumCost fresh rather than sharing one read, since the
+// "after" call's whole point is to observe this turn's own
+// just-committed cost, which the "before" call's read necessarily
+// predates.
+func evaluateCaps(ctx workflow.Context, sessionID uuid.UUID, turnForCapCheck int, def session.AgentDefinition) (capCheck, error) {
+	var sum SumCostResult
+	if err := workflow.ExecuteActivity(ctx, ActivitySumCost, SumCostInput{SessionID: sessionID}).Get(ctx, &sum); err != nil {
+		return capCheck{}, err
+	}
+	return checkCaps(turnForCapCheck, def, sum.CostUSD)
+}
+
+// cappedTurn is processTurn's shared cap-trip terminal path (FR6/FR7):
+// commits the capped transcript event (CommitTerminalEvent,
+// AppendIfAbsent-backed and therefore safe to retry) carrying capKind,
+// then returns a CommitTurnResult reporting Capped so SessionWorkflow's
+// loop (workflow.go) writes the session's `capped` status with the same
+// capKind in its terminal reason -- the event is committed before that
+// status write, per the issue body ("Tripping either cap writes its own
+// transcript event before the session goes terminal").
+func cappedTurn(ctx workflow.Context, sessionID uuid.UUID, turn int, capKind session.CapKind) (CommitTurnResult, error) {
+	payload, err := marshalCappedEvent(capKind)
+	if err != nil {
+		return CommitTurnResult{}, fmt.Errorf("marshal capped event payload: %w", err)
+	}
+	if err := workflow.ExecuteActivity(ctx, ActivityCommitTerminalEvent, CommitTerminalEventInput{
+		SessionID: sessionID,
+		Turn:      turn,
+		EventType: events.EventTypeCapped,
+		Payload:   payload,
+	}).Get(ctx, nil); err != nil {
+		return CommitTurnResult{}, err
+	}
+	return CommitTurnResult{Capped: true, CapKind: capKind}, nil
+}
+
+// failureEventPayload is EventTypeFailure's transcript-event payload
+// (FR2). ErrorCategory/ErrorDetail are exactly the pair classifyError
+// (classify.go) produced -- the same pair failTurn folds into the
+// CommitTurnResult SessionWorkflow's loop uses for the session's
+// error_category/error_detail columns (FR3), never independently
+// recomputed.
+type failureEventPayload struct {
+	ErrorCategory session.ErrorCategory `json:"error_category"`
+	ErrorDetail   string                `json:"error_detail"`
+}
+
+// failTurn is processTurn's shared terminal-failure path (FR2/FR3):
+// classifies cause exactly once via classifyError, commits the failure
+// transcript event carrying that classification (CommitTerminalEvent,
+// AppendIfAbsent-backed and therefore safe to retry), and returns a
+// CommitTurnResult reporting Failed so SessionWorkflow's loop writes the
+// session's `failed` status with the same category/detail -- one
+// classification, two surfaces (issue body), computed exactly once here,
+// never independently derived a second time for the status write.
+//
+// Returns a nil error deliberately: a session ending `failed` is a
+// legitimate terminal business outcome this workflow execution completes
+// normally over, not a Temporal workflow execution failure --
+// SessionWorkflow itself still finishes (returns nil, same as the done/
+// stopped/capped paths) once the session's terminal status is durably
+// written. Only commitTerminalEvent's own activity failure (i.e.
+// whagent-net cannot even record why the session failed) propagates a
+// real error here, since there is nothing safe to report in that case.
+func failTurn(ctx workflow.Context, sessionID uuid.UUID, turn int, cause error) (CommitTurnResult, error) {
+	category, detail := classifyError(cause)
+
+	payload, err := json.Marshal(failureEventPayload{ErrorCategory: category, ErrorDetail: detail})
+	if err != nil {
+		return CommitTurnResult{}, fmt.Errorf("marshal failure event payload: %w", err)
+	}
+	if err := workflow.ExecuteActivity(ctx, ActivityCommitTerminalEvent, CommitTerminalEventInput{
+		SessionID: sessionID,
+		Turn:      turn,
+		EventType: events.EventTypeFailure,
+		Payload:   payload,
+	}).Get(ctx, nil); err != nil {
+		return CommitTurnResult{}, err
+	}
+
+	return CommitTurnResult{Failed: true, ErrorCategory: category, ErrorDetail: detail}, nil
 }
 
 // updateSessionStatus is SessionWorkflow's write path for a session's
 // control-plane status (`sessions.status`, ARCHITECTURE.md "Session
 // workflow" step 6) -- see this file's package doc comment, "NFR1", for
 // why this is gated behind workflow.GetVersion rather than called
-// unconditionally.
-func updateSessionStatus(ctx workflow.Context, sessionID uuid.UUID, status session.Status) error {
+// unconditionally. terminal carries cap_kind/error_category/error_detail
+// for a capped or failed status (nil for every other status, issue
+// #2119) -- passed straight through to UpdateSessionStatusInput.Terminal,
+// which the underlying compare-and-swap (session.SessionStore.UpdateStatus)
+// applies only when status is itself terminal.
+func updateSessionStatus(ctx workflow.Context, sessionID uuid.UUID, status session.Status, terminal *session.TerminalReason) error {
 	v := workflow.GetVersion(ctx, "session-workflow-status-transitions", workflow.DefaultVersion, 1)
 	if v == workflow.DefaultVersion {
 		// Pre-existing behavior for any run whose history predates this
@@ -346,5 +551,6 @@ func updateSessionStatus(ctx workflow.Context, sessionID uuid.UUID, status sessi
 	return workflow.ExecuteActivity(ctx, ActivityUpdateSessionStatus, UpdateSessionStatusInput{
 		SessionID: sessionID,
 		Status:    status,
+		Terminal:  terminal,
 	}).Get(ctx, nil)
 }

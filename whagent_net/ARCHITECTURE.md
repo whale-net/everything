@@ -231,8 +231,37 @@ configurable per-model price table and the turn's usage record is flagged
 `estimated` — never treated as free. Tripping either cap ends the session in
 `capped`, a terminal status distinct from `done` with its own transcript
 event, so consumers can react to "ran out" differently from "finished".
+Cap evaluation always reads `UsageStore.SumCost`'s committed running total,
+never a separately-mutated counter, and the turn cap/cost cap check itself
+(`whagent_net/worker/caps.go`'s `checkCaps`) is agent-definition-level only
+in M1 — there is no per-session cap override.
 
 There is no human-approval gate for tool calls (non-goal for now).
+
+### Terminal outcome classification (FR2, FR3)
+
+A session's `GetSession` result reports which of `done` / `stopped` /
+`failed` / `capped` it ended in; for `capped`, which cap (`cap_kind`:
+`turns` or `cost`); for `failed`, an **error category** of `retryable` or
+`non_retryable` plus a short human-readable `error_detail`. A session that
+ends `failed` also commits a failure transcript event carrying the exact
+same category and detail `GetSession` reports — one classification
+(`whagent_net/worker/classify.go`'s `classifyError`), computed once per
+failure, never independently re-derived for the transcript event and the
+session row. A tool result a domain server returns with its own `isError`
+flag set is an ordinary tool-result event, never this failure event or an
+input to this classification — that boundary is whagent-net's own
+judgement, never originated or tagged by a domain server.
+
+Classification rules:
+
+| Category | Causes |
+|---|---|
+| `retryable` | A provider rate limit (HTTP 429); a transient transport failure (connection reset, DNS failure, a provider 5xx); a timeout (the activity's `StartToCloseTimeout` elapsing, or a lower-level transport timeout). |
+| `non_retryable` | A model the provider does not serve; an auth/permission failure (HTTP 401/403); a malformed agent definition; an exhausted retry budget (Temporal's `MaximumAttempts` exhausted with no more specific cause identified) — also the safe default for any error this classification does not otherwise recognize. |
+
+The goal: an operator can decide retry-vs-escalate from `GetSession`'s
+category alone, without reading the transcript.
 
 ## Embeddable session UI
 

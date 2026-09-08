@@ -40,6 +40,16 @@ func registerActivityStubs(env *testsuite.TestWorkflowEnvironment) {
 	env.RegisterActivityWithOptions(func(ctx context.Context, in UpdateSessionStatusInput) (UpdateSessionStatusResult, error) {
 		return UpdateSessionStatusResult{}, nil
 	}, activity.RegisterOptions{Name: ActivityUpdateSessionStatus})
+	// SumCost/CommitTerminalEvent (issue #2119): processTurn's cap checks
+	// (evaluateCaps) call SumCost before and after every turn regardless
+	// of whether either cap is ever tripped, so every test using this
+	// helper needs it registered even if it never mocks a non-zero cost.
+	env.RegisterActivityWithOptions(func(ctx context.Context, in SumCostInput) (SumCostResult, error) {
+		return SumCostResult{}, nil
+	}, activity.RegisterOptions{Name: ActivitySumCost})
+	env.RegisterActivityWithOptions(func(ctx context.Context, in CommitTerminalEventInput) (CommitTerminalEventResult, error) {
+		return CommitTerminalEventResult{}, nil
+	}, activity.RegisterOptions{Name: ActivityCommitTerminalEvent})
 }
 
 func testSessionID() uuid.UUID {
@@ -96,6 +106,12 @@ func mockHappyPathActivities(env *testsuite.TestWorkflowEnvironment, tracker *st
 			*commits = append(*commits, in.Turn)
 			commitsMu.Unlock()
 		})
+	// SumCost stays at the default cap (100 turns / $1, caps.go) with 0
+	// cost reported -- neither cap ever trips on this happy path, so
+	// CommitTerminalEvent (mocked via registerActivityStubs) is never
+	// actually invoked here.
+	env.OnActivity(ActivitySumCost, mock.Anything, mock.Anything).
+		Return(SumCostResult{CostUSD: 0}, nil)
 }
 
 // TestSessionWorkflow_BlocksThenProcessesTurn_DoesNotCompleteBetweenTurns
@@ -204,6 +220,12 @@ func TestSessionWorkflow_StopDuringInFlightActivity_CancelsAndEndsStopped(t *tes
 	env.RegisterActivityWithOptions(func(ctx context.Context, in UpdateSessionStatusInput) (UpdateSessionStatusResult, error) {
 		return UpdateSessionStatusResult{}, nil
 	}, activity.RegisterOptions{Name: ActivityUpdateSessionStatus})
+	env.RegisterActivityWithOptions(func(ctx context.Context, in SumCostInput) (SumCostResult, error) {
+		return SumCostResult{}, nil
+	}, activity.RegisterOptions{Name: ActivitySumCost})
+	env.RegisterActivityWithOptions(func(ctx context.Context, in CommitTerminalEventInput) (CommitTerminalEventResult, error) {
+		return CommitTerminalEventResult{}, nil
+	}, activity.RegisterOptions{Name: ActivityCommitTerminalEvent})
 	// CallModel is a REAL registered activity (not an OnActivity mock) that
 	// blocks until its context is cancelled -- this is what lets the test
 	// prove actual cancellation propagation (FR1: "cancelled, not allowed
@@ -234,6 +256,8 @@ func TestSessionWorkflow_StopDuringInFlightActivity_CancelsAndEndsStopped(t *tes
 	env.OnActivity(ActivityCommitTurn, mock.Anything, mock.Anything).
 		Return(CommitTurnResult{}, nil).
 		Run(func(args mock.Arguments) { commitCalled = true })
+	env.OnActivity(ActivitySumCost, mock.Anything, mock.Anything).
+		Return(SumCostResult{CostUSD: 0}, nil)
 
 	env.RegisterDelayedCallback(func() {
 		env.SignalWorkflow(SignalSendTurn, SendTurnSignal{Input: "hello"})
@@ -281,6 +305,8 @@ func TestSessionWorkflow_DefinitionChangedBetweenTurns_PickedUpFreshOnSecondTurn
 		Return(BuildContextResult{EventIDs: []uuid.UUID{uuid.New()}}, nil)
 	env.OnActivity(ActivityCommitTurn, mock.Anything, mock.Anything).
 		Return(CommitTurnResult{Done: false}, nil)
+	env.OnActivity(ActivitySumCost, mock.Anything, mock.Anything).
+		Return(SumCostResult{CostUSD: 0}, nil)
 
 	// ResolveAgentDefinition returns a different model on each call --
 	// simulating the definition drifting between turn 1 and turn 2 (a

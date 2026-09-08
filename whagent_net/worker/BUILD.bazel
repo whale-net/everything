@@ -7,6 +7,8 @@ go_library(
     name = "worker_lib",
     srcs = [
         "activities.go",
+        "caps.go",
+        "classify.go",
         "context.go",
         "main.go",
         "workflow.go",
@@ -22,6 +24,7 @@ go_library(
         "//whagent_net/llm",
         "//whagent_net/session",
         "@com_github_google_uuid//:uuid",
+        "@io_temporal_go_api//enums/v1:enums",
         "@io_temporal_go_sdk//activity",
         "@io_temporal_go_sdk//log",
         "@io_temporal_go_sdk//temporal",
@@ -46,11 +49,15 @@ go_test(
     name = "worker_test",
     srcs = [
         "activities_test.go",
+        "caps_test.go",
+        "classify_test.go",
         "replay_test.go",
+        "workflow_caps_test.go",
         "workflow_test.go",
     ],
     embed = [":worker_lib"],
     deps = [
+        "//whagent_net/events",
         "//whagent_net/llm",
         "//whagent_net/session",
         "@com_github_google_uuid//:uuid",
