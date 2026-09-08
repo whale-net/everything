@@ -62,16 +62,19 @@
 // processTurn's tool-dispatch step below) must add its own change ID the
 // same way.
 //
-// # Implementation status (issues #2114, #2119)
+// # Implementation status (issues #2114, #2119, #2121)
 //
 // SessionWorkflow's signal-per-turn loop, Stop/cancellation handling,
 // session-status transitions, turn/cost cap enforcement (FR6/FR7), and
-// failure classification (FR2/FR3) are all real. Still deferred to the
-// follow-up tool-dispatch task: the tool-call dispatch step in processTurn
-// stays a no-op hook, and CommitTurnResult.Done (activities.go) is always
-// false (no task yet teaches CommitTurn to recognize a real
-// agent-initiated finish signal), so this workflow can reach
-// `awaiting_input`, `stopped`, `capped`, or `failed`, but never `done`.
+// failure classification (FR2/FR3) are all real. Still deferred to issue
+// #2121's Implementation phase (this file's Scaffold-phase task adds the
+// ListToolDefinitions/DispatchTool activities, activities.go, but does not
+// yet call either from processTurn): the tool-call dispatch step in
+// processTurn stays a no-op hook, and CommitTurnResult.Done
+// (activities.go) is always false (no task yet teaches CommitTurn to
+// recognize a real agent-initiated finish signal), so this workflow can
+// reach `awaiting_input`, `stopped`, `capped`, or `failed`, but never
+// `done`.
 package main
 
 import (
@@ -393,14 +396,18 @@ func processTurn(ctx workflow.Context, sessionID uuid.UUID, turn int, in SendTur
 		return failTurn(ctx, sessionID, turn, err)
 	}
 
-	// Tool-call dispatch step: a no-op hook in this task (issue body,
-	// "Scaffold"). The follow-up tool-dispatch task adds an
-	// ExecuteActivity call per modelResult.Response.ToolCalls entry here,
-	// each carrying the idempotency key and persona claim
-	// (ARCHITECTURE.md "Idempotency", "Identity and auth chaining") --
-	// under a workflow.GetVersion("session-workflow-tool-dispatch", ...)
+	// Tool-call dispatch step: a no-op hook as of this Scaffold-phase task
+	// (issue #2121). Implementation phase adds an ActivityDispatchTool
+	// ExecuteActivity call (activities.go) per modelResult.Response.
+	// ToolCalls entry here, each carrying the idempotency key and persona
+	// claim (ARCHITECTURE.md "Idempotency", "Identity and auth chaining")
+	// -- under a workflow.GetVersion("session-workflow-tool-dispatch", ...)
 	// gate per this file's NFR1 doc comment, since it changes processTurn's
-	// control flow for any run already open when it deploys.
+	// control flow for any run already open when it deploys. The same
+	// change also adds an ActivityListToolDefinitions call ahead of
+	// ActivityCallModel above, populating CallModelInput.Tools (FR8) so
+	// the model has something to request tool calls against in the first
+	// place.
 
 	var commitResult CommitTurnResult
 	commitIn := CommitTurnInput{

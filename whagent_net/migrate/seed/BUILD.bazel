@@ -1,0 +1,14 @@
+"""whagent-net agent-definition seeder (issue #2121): a
+libs/go/migrate.Seeder over whagent_net/config's agents.yaml."""
+
+load("@rules_go//go:def.bzl", "go_library")
+
+go_library(
+    name = "seed",
+    srcs = ["seed.go"],
+    importpath = "github.com/whale-net/everything/whagent_net/migrate/seed",
+    visibility = ["//visibility:public"],
+    deps = [
+        "//whagent_net/config",
+    ],
+)

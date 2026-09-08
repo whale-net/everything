@@ -11,6 +11,7 @@ import (
 	"github.com/whale-net/everything/whagent_net/events"
 	"github.com/whale-net/everything/whagent_net/llm"
 	"github.com/whale-net/everything/whagent_net/session"
+	"github.com/whale-net/everything/whagent_net/worker/tools"
 )
 
 // Activity name constants. SessionWorkflow (workflow.go) dispatches every
@@ -34,6 +35,19 @@ const (
 	// SumCost/CommitTerminalEvent doc comments and caps.go/classify.go.
 	ActivitySumCost             = "SumCost"
 	ActivityCommitTerminalEvent = "CommitTerminalEvent"
+
+	// ActivityListToolDefinitions and ActivityDispatchTool are issue
+	// #2121's two new activities, filling in the tool-dispatch step
+	// workflow.go's processTurn has left a no-op hook since #2114 (see
+	// that file's package doc comment, "the follow-up tool-dispatch
+	// task"): ActivityListToolDefinitions resolves what CallModel should
+	// even offer the model this turn (FR8), and ActivityDispatchTool
+	// routes one model-requested tool call to its target server (FR2/
+	// FR8/FR10/FR11), via the already-implemented
+	// whagent_net/worker/tools.Dispatcher (issue #2118). See those two
+	// activities' doc comments below.
+	ActivityListToolDefinitions = "ListToolDefinitions"
+	ActivityDispatchTool        = "DispatchTool"
 )
 
 // Activities groups the per-turn activities SessionWorkflow drives
@@ -55,6 +69,16 @@ type Activities struct {
 	// that fallback -- resolveCost only dereferences it when the provider
 	// omitted cost, see resolveCost's doc comment.
 	Prices *llm.PriceTable
+	// Dispatcher routes a turn's model-requested tool calls to their
+	// target domain-owned MCP server (issue #2118, ARCHITECTURE.md
+	// "Domain-owned MCP servers and the tool contract"). Constructed in
+	// main.go from worker's own in-process *persona.Issuer (the same
+	// signing-key configuration api reads, ENV.md "Persona claim
+	// issuance") plus a.Store.Idempotency() -- see
+	// whagent_net/worker/tools/dispatch.go's package doc comment for the
+	// full contract. May be nil in a dev/test process that never
+	// exercises DispatchTool, same as Prices above.
+	Dispatcher *tools.Dispatcher
 }
 
 // ResolveAgentDefinitionResult is ResolveAgentDefinition's activity result.
@@ -127,6 +151,16 @@ type CallModelInput struct {
 	Turn      int
 	Model     string
 	EventIDs  []uuid.UUID
+	// Tools is what the model may call this turn (FR8) -- llm.Request.Tools
+	// verbatim, so an empty/nil Tools produces the identical
+	// no-tools-attached request this activity has always sent (issue
+	// #2114/#2117's "no tools are attached to the request" scaffold-phase
+	// behavior, preserved for any caller that does not yet populate this
+	// field). Implementation phase (issue #2121) populates it from
+	// ActivityListToolDefinitions' result, called once per turn ahead of
+	// CallModel in processTurn (workflow.go) -- see that activity's doc
+	// comment below.
+	Tools []llm.ToolDefinition
 }
 
 // CallModelResult is CallModel's activity result.
@@ -139,11 +173,14 @@ type CallModelResult struct {
 // over the activity boundary itself -- see CallModelInput's doc comment),
 // decodes them back into an llm.Request via eventsToMessages
 // (context.go), and calls a.LLM.Complete using the session's resolved
-// model. No tools are attached to the request -- the tool-call dispatch
-// step is a no-op hook in this task (processTurn, workflow.go); a model
-// response that happens to request tool calls anyway is still recorded
-// verbatim by CommitTurn, just not acted on until the follow-up
-// tool-dispatch task fills that step in.
+// model plus in.Tools (FR8) -- forwarded to llm.Request.Tools verbatim,
+// so a caller that leaves Tools nil/empty gets the identical
+// no-tools-attached request this activity has always sent. A model
+// response that requests tool calls is still recorded verbatim by
+// CommitTurn regardless of whether they were ever dispatched -- see
+// ActivityDispatchTool's doc comment for the dispatch step itself, still
+// a no-op hook in processTurn (workflow.go) as of this Scaffold-phase
+// task.
 func (a *Activities) CallModel(ctx context.Context, in CallModelInput) (CallModelResult, error) {
 	if a.Store == nil {
 		return CallModelResult{}, fmt.Errorf("worker: Activities.Store is nil")
@@ -162,7 +199,7 @@ func (a *Activities) CallModel(ctx context.Context, in CallModelInput) (CallMode
 		return CallModelResult{}, fmt.Errorf("call model: decode context events: %w", err)
 	}
 
-	resp, err := a.LLM.Complete(ctx, llm.Request{Model: in.Model, Messages: messages})
+	resp, err := a.LLM.Complete(ctx, llm.Request{Model: in.Model, Messages: messages, Tools: in.Tools})
 	if err != nil {
 		return CallModelResult{}, fmt.Errorf("call model: %w", err)
 	}
@@ -407,4 +444,112 @@ func (a *Activities) CommitTerminalEvent(ctx context.Context, in CommitTerminalE
 		return CommitTerminalEventResult{}, fmt.Errorf("commit terminal event: %w", err)
 	}
 	return CommitTerminalEventResult{}, nil
+}
+
+// ListToolDefinitionsInput is ListToolDefinitions' activity input.
+type ListToolDefinitionsInput struct {
+	SessionID uuid.UUID
+	// AgentID is the current turn's agent definition ID, passed through
+	// like DispatchToolInput.AgentID below (persona.Issuer.Issue's doc
+	// comment: a session's assignment can drift, SCD2, so this is always
+	// supplied explicitly rather than re-derived from the session row).
+	AgentID string
+	// ToolSet is the current agent definition's tool_set
+	// (session.ToolServerRef) -- ResolveAgentDefinitionResult.Definition.
+	// ToolSet, unchanged.
+	ToolSet []session.ToolServerRef
+}
+
+// ListToolDefinitionsResult is ListToolDefinitions' activity result.
+type ListToolDefinitionsResult struct {
+	// Tools is what CallModelInput.Tools (above) forwards to
+	// llm.Request.Tools (FR8) -- the union of every configured server's
+	// exposed tool set, converted from each server's MCP tool schema
+	// (mcp.Tool.InputSchema) into llm.ToolDefinition.Parameters.
+	Tools []llm.ToolDefinition
+}
+
+// ListToolDefinitions is per-turn activity #2.5 (ARCHITECTURE.md "Session
+// workflow" step 3, immediately ahead of CallModel): resolves FR8's
+// "which tools may this turn's model call" by connecting to every server
+// in in.ToolSet and listing its exposed tools, mirroring
+// whagent_net/worker/tools/dispatch.go's resolveTarget -- a fresh
+// credential minted per server (FR10), never reused across servers, and
+// never whagent-side-filtered against ToolServerRef.AllowedTools (C22/
+// Later, dispatch.go's package doc comment "Tool selection").
+//
+// Not implemented in this Scaffold-phase task (issue #2121) --
+// Implementation phase wires this through a.Dispatcher.Issuer (minting)
+// and whagent_net/worker/tools' Connect/ListToolNames-adjacent listing
+// call (a new ListToolDefinitions func in that package, converting
+// *mcp.ClientSession.ListTools' mcp.Tool entries -- Name/Description/
+// InputSchema -- into llm.ToolDefinition), aggregated across every
+// in.ToolSet entry the same order dispatch.go's resolveTarget already
+// iterates in.
+func (a *Activities) ListToolDefinitions(ctx context.Context, in ListToolDefinitionsInput) (ListToolDefinitionsResult, error) {
+	if a.Dispatcher == nil {
+		return ListToolDefinitionsResult{}, fmt.Errorf("worker: Activities.Dispatcher is nil")
+	}
+	return ListToolDefinitionsResult{}, fmt.Errorf("worker: ListToolDefinitions not implemented (issue #2121 Implementation phase)")
+}
+
+// DispatchToolInput is DispatchTool's activity input.
+type DispatchToolInput struct {
+	SessionID uuid.UUID
+	// AgentID and ToolSet are the current turn's resolved agent
+	// definition fields tools.DispatchInput needs (dispatch.go) -- passed
+	// through from ResolveAgentDefinitionResult the same way
+	// ListToolDefinitionsInput's do above.
+	AgentID string
+	ToolSet []session.ToolServerRef
+	// Turn and CallIndex are tools.DispatchInput's idempotency-key
+	// derivation inputs (FR11) -- CallIndex is this call's 0-based
+	// position within modelResult.Response.ToolCalls, stable across an
+	// activity retry of the same call.
+	Turn      int
+	CallIndex int
+	// Call is the model-requested tool call (llm.ToolCall,
+	// modelResult.Response.ToolCalls[CallIndex]) to dispatch.
+	Call llm.ToolCall
+}
+
+// DispatchToolResult is DispatchTool's activity result: exactly
+// tools.Dispatcher.Dispatch's Result (dispatch.go) -- this activity is a
+// thin activity-boundary wrapper over that already-implemented (issue
+// #2118) call, not a second copy of its logic.
+type DispatchToolResult struct {
+	Result tools.Result
+}
+
+// DispatchTool is per-turn activity #4 (ARCHITECTURE.md "Session
+// workflow" step 4): routes one model-requested tool call to its target
+// domain-owned MCP server via a.Dispatcher.Dispatch (issue #2118, fully
+// implemented -- see whagent_net/worker/tools/dispatch.go). Called once
+// per entry of modelResult.Response.ToolCalls from processTurn
+// (workflow.go), under this task's own
+// workflow.GetVersion("session-workflow-tool-dispatch", ...) gate per
+// that file's NFR1 doc comment.
+//
+// Not implemented in this Scaffold-phase task (issue #2121) --
+// Implementation phase wires this activity to: (1) commit an
+// events.EventTypeToolCall transcript event for in.Call before dispatch
+// (a.Store.Transcript().AppendIfAbsent, retry-safe the same way
+// CommitTerminalEvent above is), (2) look up in.SessionID's
+// *session.Session (a.Store.Sessions().GetByID) to build
+// tools.DispatchInput and call a.Dispatcher.Dispatch, and (3) commit the
+// matching events.EventTypeToolResult event carrying the returned
+// tools.Result -- both events go through the same AppendIfAbsent path
+// every other transcript event uses, so a re-invoked activity (Temporal's
+// at-least-once execution) commits each exactly once rather than
+// duplicating it, and a tool result's own IsError never gets reinterpreted
+// as a whagent-net failure (dispatch.go's package doc comment, "isError
+// is not a whagent-net failure").
+func (a *Activities) DispatchTool(ctx context.Context, in DispatchToolInput) (DispatchToolResult, error) {
+	if a.Store == nil {
+		return DispatchToolResult{}, fmt.Errorf("worker: Activities.Store is nil")
+	}
+	if a.Dispatcher == nil {
+		return DispatchToolResult{}, fmt.Errorf("worker: Activities.Dispatcher is nil")
+	}
+	return DispatchToolResult{}, fmt.Errorf("worker: DispatchTool not implemented (issue #2121 Implementation phase)")
 }
