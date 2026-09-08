@@ -45,6 +45,7 @@ go_library(
         "browse.go",
         "calibration.go",
         "channel.go",
+        "dashboard.go",
         "idea.go",
         "idempotency.go",
         "invite.go",
@@ -90,6 +91,7 @@ go_test(
     timeout = "long",
     srcs = [
         "calibration_integration_test.go",
+        "dashboard_integration_test.go",
         "match_integration_test.go",
         "outcome_bar_integration_test.go",
         "store_integration_test.go",

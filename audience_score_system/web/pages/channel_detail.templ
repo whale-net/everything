@@ -1,6 +1,8 @@
 package pages
 
 import (
+	"strconv"
+
 	"github.com/whale-net/everything/audience_score_system/store"
 	"github.com/whale-net/everything/audience_score_system/web/components"
 )
@@ -28,6 +30,23 @@ func connectionStateBadgeClass(state store.ConnectionState) string {
 	return "badge badge-warning"
 }
 
+// outcomeTrendLabel renders a human-readable label for
+// store.TrendDirection (FR24) -- "Better" / "Same" / "Worse" against the
+// immediately preceding period of the same length (see
+// store.OutcomeWindow's doc comment for the exact comparison).
+func outcomeTrendLabel(t store.TrendDirection) string {
+	switch t {
+	case store.TrendBetter:
+		return "Better"
+	case store.TrendWorse:
+		return "Worse"
+	case store.TrendSame:
+		return "Same"
+	default:
+		return string(t)
+	}
+}
+
 // ChannelDetail is a Channel's detail page (C2, FR4): shows its
 // connection_state, and -- for a Founder or Co-Creator (Creator-tier,
 // symmetrically per FR32) -- the reconnect affordance (canReconnect,
@@ -41,7 +60,14 @@ func connectionStateBadgeClass(state store.ConnectionState) string {
 // names the identical Founder+Co-Creator tier set that page's own
 // HandleShow re-checks server-side, so this link's visibility and that
 // page's access gate always agree.
-templ ChannelDetail(data components.LayoutData, ch store.Channel, canReconnect bool, canInvite bool) {
+//
+// activity (issue #2038, FR23-FR26, C20) is the added recent-activity
+// dashboard section rendered below the connection-status card -- an
+// ADDED section, never a replacement of the card above. handleChannelDetail
+// supplies the real store.Dashboard().ChannelActivity read; the section
+// always renders regardless of the Channel's activity level, per FR26 (a
+// zero-activity Channel renders zeros, never an omitted card).
+templ ChannelDetail(data components.LayoutData, ch store.Channel, canReconnect bool, canInvite bool, activity store.ChannelActivity) {
 	@components.Layout(data) {
 		<div class="card bg-base-100 border border-base-300 shadow-sm">
 			<div class="card-body">
@@ -88,8 +114,72 @@ templ ChannelDetail(data components.LayoutData, ch store.Channel, canReconnect b
 					<a href={ templ.URL("/channels/" + ch.ID.String() + "/outcomes") } class="btn btn-secondary btn-sm">
 						View outcomes
 					</a>
+					<a href={ templ.URL("/channels/" + ch.ID.String() + "/videos") } class="btn btn-secondary btn-sm">
+						View videos
+					</a>
 				</div>
 			</div>
 		</div>
+		@channelActivitySection(activity)
 	}
+}
+
+// channelActivitySection renders the recent-activity dashboard (issue
+// #2038, FR23-FR26, C20): FR23's five entity-type counts over the
+// trailing 24h and 7d, and FR24's outcome count + trend for each window.
+// Renders unconditionally -- FR26's zero-activity Channel gets the same
+// section with every count at 0, never an omitted card.
+templ channelActivitySection(activity store.ChannelActivity) {
+	<div class="card bg-base-100 border border-base-300 shadow-sm mt-4">
+		<div class="card-body">
+			<h2 class="card-title">Recent activity</h2>
+			<div class="overflow-x-auto">
+				<table class="table table-sm">
+					<thead>
+						<tr>
+							<th></th>
+							<th>Last 24h</th>
+							<th>Last 7d</th>
+						</tr>
+					</thead>
+					<tbody>
+						<tr>
+							<td>Research notes</td>
+							<td>{ strconv.Itoa(activity.Last24h.ResearchNotes) }</td>
+							<td>{ strconv.Itoa(activity.Last7d.ResearchNotes) }</td>
+						</tr>
+						<tr>
+							<td>Ideas</td>
+							<td>{ strconv.Itoa(activity.Last24h.Ideas) }</td>
+							<td>{ strconv.Itoa(activity.Last7d.Ideas) }</td>
+						</tr>
+						<tr>
+							<td>Verdicts</td>
+							<td>{ strconv.Itoa(activity.Last24h.Verdicts) }</td>
+							<td>{ strconv.Itoa(activity.Last7d.Verdicts) }</td>
+						</tr>
+						<tr>
+							<td>Video scripts</td>
+							<td>{ strconv.Itoa(activity.Last24h.VideoScripts) }</td>
+							<td>{ strconv.Itoa(activity.Last7d.VideoScripts) }</td>
+						</tr>
+						<tr>
+							<td>Newly linked videos</td>
+							<td>{ strconv.Itoa(activity.Last24h.LinkedVideos) }</td>
+							<td>{ strconv.Itoa(activity.Last7d.LinkedVideos) }</td>
+						</tr>
+						<tr>
+							<td>Outcomes</td>
+							<td>{ strconv.Itoa(activity.Outcomes24h.Count) }</td>
+							<td>{ strconv.Itoa(activity.Outcomes7d.Count) }</td>
+						</tr>
+					</tbody>
+				</table>
+			</div>
+			<p class="text-sm text-base-content/70">
+				Outcomes trending, vs. the immediately preceding period of the same
+				length: 24h { outcomeTrendLabel(activity.Outcomes24h.Trend) }, 7d { outcomeTrendLabel(activity.Outcomes7d.Trend) }.
+			</p>
+		</div>
+	</div>
 }

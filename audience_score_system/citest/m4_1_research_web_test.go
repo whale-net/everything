@@ -122,7 +122,11 @@ func (w *world) renderChannelDetail(t *testing.T, ch store.Channel, viewer store
 	data := components.LayoutData{Title: ch.Title, User: &viewer}
 	req := httptest.NewRequest(http.MethodGet, "/channels/"+ch.ID.String(), nil)
 	rec := httptest.NewRecorder()
-	require.NoError(t, components.Render(rec, req, ch.Title, pages.ChannelDetail(data, ch, canReconnect, canInvite)))
+	// activity (#2038, FR23-FR26) is a zero-value placeholder here too,
+	// mirroring handleChannelDetail's own Scaffold-phase placeholder --
+	// Implementation replaces both with the real
+	// store.Dashboard().ChannelActivity read.
+	require.NoError(t, components.Render(rec, req, ch.Title, pages.ChannelDetail(data, ch, canReconnect, canInvite, store.ChannelActivity{})))
 	return rec.Body.String()
 }
 
