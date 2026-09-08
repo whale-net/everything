@@ -25,6 +25,7 @@ import (
 	"github.com/whale-net/everything/libs/go/logging"
 	"github.com/whale-net/everything/libs/go/mcpauth"
 	temporallib "github.com/whale-net/everything/libs/go/temporal"
+	"github.com/whale-net/everything/libs/go/whagent"
 )
 
 // scheduleManagerInterval is passed to sync.NewScheduleManager purely to
@@ -56,17 +57,34 @@ type config struct {
 	// advertises. `mcp` never talks to this URL itself; it only publishes
 	// it for MCP clients to follow.
 	OAuthIssuer string
+
+	// WhagentJWKSURL and WhagentIssuer are ASS_WHAGENT_JWKS_URL /
+	// ASS_WHAGENT_ISSUER (issue #2116, FR12) -- whagent-net's own JWKS
+	// endpoint and issuer identifier, passed to whagent.NewVerifier so
+	// this `mcp` instance can verify a whagent-net-minted Claim without
+	// ever needing per-domain Keycloak token-exchange configuration
+	// (NFR4). Optional for now (scaffold phase): when either is unset,
+	// `mcp` mounts only the existing mcp_credential path (NewHTTPHandler),
+	// exactly as it did before this task -- see run()'s construction
+	// below. The whagent-net Claim's audience is ASS_MCP_PUBLIC_URL
+	// itself (MCPPublicURL, above) -- this `mcp` instance's own
+	// externally reachable URL -- so no separate audience variable is
+	// introduced.
+	WhagentJWKSURL string
+	WhagentIssuer  string
 }
 
 // loadConfig loads configuration from environment variables. See
 // ../ENV.md for the full variable list.
 func loadConfig() config {
 	return config{
-		MCPAddr:      getEnv("ASS_MCP_ADDR", ":8081"),
-		DatabaseURL:  os.Getenv("PG_DATABASE_URL"),
-		LogLevel:     getEnv("LOG_LEVEL", "info"),
-		MCPPublicURL: os.Getenv("ASS_MCP_PUBLIC_URL"),
-		OAuthIssuer:  os.Getenv("ASS_OAUTH_REDIRECT_BASE_URL"),
+		MCPAddr:        getEnv("ASS_MCP_ADDR", ":8081"),
+		DatabaseURL:    os.Getenv("PG_DATABASE_URL"),
+		LogLevel:       getEnv("LOG_LEVEL", "info"),
+		MCPPublicURL:   os.Getenv("ASS_MCP_PUBLIC_URL"),
+		OAuthIssuer:    os.Getenv("ASS_OAUTH_REDIRECT_BASE_URL"),
+		WhagentJWKSURL: os.Getenv("ASS_WHAGENT_JWKS_URL"),
+		WhagentIssuer:  os.Getenv("ASS_WHAGENT_ISSUER"),
 	}
 }
 
@@ -177,11 +195,32 @@ func run() error {
 	tools.RegisterMyWork(reg, st.MyWork(), st.Research())
 	tools.RegisterChannelAccess(reg, st.Access(), st.Roles())
 
-	handler := server.NewHTTPHandler(srv, creds, server.ResourceMetadataConfig{
+	resourceMeta := server.ResourceMetadataConfig{
 		Resource:            cfg.MCPPublicURL,
 		AuthorizationServer: cfg.OAuthIssuer,
 		ResourceName:        "Audience Score System MCP",
-	})
+	}
+
+	// FR12(a): mount the whagent-net auth path ALONGSIDE the existing
+	// mcp_credential one -- never in place of it -- whenever it's
+	// configured. Both ASS_WHAGENT_JWKS_URL and ASS_WHAGENT_ISSUER unset
+	// (the default today, since no whagent-net deployment consumes this
+	// domain yet) falls back to the exact pre-#2116 NewHTTPHandler call,
+	// so this is a no-op change until an operator opts in.
+	var handler http.Handler
+	if cfg.WhagentJWKSURL != "" && cfg.WhagentIssuer != "" {
+		whagentVerifier, err := whagent.NewVerifier(ctx, cfg.WhagentJWKSURL, cfg.WhagentIssuer)
+		if err != nil {
+			return fmt.Errorf("whagent verifier: %w", err)
+		}
+		srv.AddReceivingMiddleware(server.WhagentPersonMiddleware(st.PersonIdentities()))
+		handler = server.NewDualAuthHTTPHandler(srv, creds, server.WhagentAuthConfig{
+			Verifier: whagentVerifier,
+			Audience: cfg.MCPPublicURL,
+		}, resourceMeta)
+	} else {
+		handler = server.NewHTTPHandler(srv, creds, resourceMeta)
+	}
 
 	httpServer := &http.Server{
 		Addr:         cfg.MCPAddr,

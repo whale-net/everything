@@ -54,11 +54,40 @@ func NewHTTPHandler(srv *mcp.Server, credentials mcpauth.CredentialStore, resour
 		return srv
 	}, nil)
 
-	resourceMetadataURL := mcpauth.ProtectedResourceMetadataURL(resourceMeta.Resource)
 	requireBearer := mcpauth.RequireBearerToken(credentials, &sdkauth.RequireBearerTokenOptions{
-		ResourceMetadataURL: resourceMetadataURL,
+		ResourceMetadataURL: mcpauth.ProtectedResourceMetadataURL(resourceMeta.Resource),
 	})
 
+	return newMux(requireBearer(mcpHandler), resourceMeta)
+}
+
+// NewDualAuthHTTPHandler is NewHTTPHandler's FR12(a) counterpart (issue
+// #2116): the same mux, `/` guarded instead by DualAuthHTTPHandler
+// (whagent_auth.go) so BOTH caller-authentication paths -- the existing
+// mcp_credential path (credentials, unchanged) and the new whagent-net
+// path (whagentCfg) -- are mounted alongside one another, per FR12(a).
+// `mcp`'s main.go calls this instead of NewHTTPHandler once the
+// whagent-net path is configured; NewHTTPHandler itself is left exactly
+// as it was (existing tests/callers keep building and passing unchanged)
+// for any caller that only ever wants the single, pre-existing path.
+func NewDualAuthHTTPHandler(srv *mcp.Server, credentials mcpauth.CredentialStore, whagentCfg WhagentAuthConfig, resourceMeta ResourceMetadataConfig) http.Handler {
+	mcpHandler := mcp.NewStreamableHTTPHandler(func(*http.Request) *mcp.Server {
+		return srv
+	}, nil)
+
+	guarded := DualAuthHTTPHandler(mcpHandler, credentials, whagentCfg, &sdkauth.RequireBearerTokenOptions{
+		ResourceMetadataURL: mcpauth.ProtectedResourceMetadataURL(resourceMeta.Resource),
+	})
+
+	return newMux(guarded, resourceMeta)
+}
+
+// newMux builds `mcp`'s mux -- healthz, RFC 9728 protected-resource
+// metadata, and the streamable-HTTP MCP endpoint at "/" guarded by
+// guarded -- shared by NewHTTPHandler and NewDualAuthHTTPHandler so the
+// two caller-auth entry points can never drift on the non-auth parts of
+// the mux.
+func newMux(guarded http.Handler, resourceMeta ResourceMetadataConfig) http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /healthz", handleHealthz)
 	mux.Handle(mcpauth.ProtectedResourceMetadataPath, mcpauth.NewProtectedResourceMetadataHandler(mcpauth.ProtectedResourceMetadataConfig{
@@ -66,7 +95,7 @@ func NewHTTPHandler(srv *mcp.Server, credentials mcpauth.CredentialStore, resour
 		AuthorizationServer: resourceMeta.AuthorizationServer,
 		ResourceName:        resourceMeta.ResourceName,
 	}))
-	mux.Handle("/", requireBearer(mcpHandler))
+	mux.Handle("/", guarded)
 	return mux
 }
 

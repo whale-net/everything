@@ -55,6 +55,7 @@ go_library(
         "outcome_bar.go",
         "pagination.go",
         "person.go",
+        "person_identity.go",
         "research.go",
         "role.go",
         "store.go",

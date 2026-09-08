@@ -16,6 +16,7 @@ go_library(
         "registry.go",
         "server.go",
         "transport.go",
+        "whagent_auth.go",
     ],
     importpath = "github.com/whale-net/everything/audience_score_system/mcp/server",
     visibility = ["//visibility:public"],
@@ -23,6 +24,7 @@ go_library(
         "//audience_score_system/store",
         "//libs/go/logging",
         "//libs/go/mcpauth",
+        "//libs/go/whagent",
         "@com_github_google_uuid//:uuid",
         "@com_github_modelcontextprotocol_go_sdk//auth",
         "@com_github_modelcontextprotocol_go_sdk//mcp",
@@ -49,6 +51,7 @@ go_test(
         "idempotency_test.go",
         "registry_test.go",
         "registry_tools_test.go",
+        "whagent_auth_test.go",
     ],
     embed = [":server"],
     deps = [
