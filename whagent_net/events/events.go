@@ -1,0 +1,57 @@
+// Package events owns the whagent-net event-bus contract (LB1/LB7): the
+// exchange identity, routing-key scheme, and the record type every
+// publisher and consumer agrees on. This is a dedicated, tiny package
+// (modelled on tools/app_registry/events) rather than living inside a
+// binary's implementation, because every process that touches the bus --
+// worker (publish), archiver, ui, and any embed host (consume) -- must
+// agree on the exact exchange name, routing-key shape, and declare
+// arguments; centralizing them here prevents 406 PRECONDITION_FAILED from
+// argument drift and keeps the routing-key format out of call sites.
+package events
+
+import (
+	"encoding/json"
+	"fmt"
+	"time"
+
+	"github.com/google/uuid"
+	amqp "github.com/rabbitmq/amqp091-go"
+)
+
+// ExchangeName is the RabbitMQ topic exchange every whagent-net process
+// publishes committed transcript events to and consumes them from.
+const ExchangeName = "whagent/events"
+
+// DeclareArgs returns the AMQP ExchangeDeclare arguments for ExchangeName.
+// Every publisher and consumer must use this when declaring the exchange:
+// ExchangeDeclare is idempotent only for matching arguments, so drift
+// between processes causes a 406 PRECONDITION_FAILED that closes the
+// channel.
+func DeclareArgs() (kind string, durable, autoDelete, internal, noWait bool, args amqp.Table) {
+	return "topic", true, false, false, false, nil
+}
+
+// RoutingKey builds the routing key for a session's event, in the fixed
+// scheme "session.{session_id}.{event_type}". Callers must always go
+// through this builder rather than formatting the string themselves, so
+// the scheme has exactly one definition.
+func RoutingKey(sessionID uuid.UUID, eventType string) string {
+	return fmt.Sprintf("session.%s.%s", sessionID, eventType)
+}
+
+// Event is the whagent-net LB1 record: the single definition of a
+// committed transcript event. The `transcript_event` Postgres row, the
+// RabbitMQ message body, and -- later -- the S3 jsonl line are all this
+// same record, not three independent projections of it. EventID is
+// globally unique and time-ordered (UUIDv7 or equivalent) and stable
+// across re-publish onto the bus; Seq is a per-session monotonic sequence
+// assigned at commit time.
+type Event struct {
+	EventID     uuid.UUID       `json:"event_id"`
+	SessionID   uuid.UUID       `json:"session_id"`
+	Seq         int64           `json:"seq"`
+	Turn        int             `json:"turn"`
+	Type        string          `json:"type"`
+	Payload     json.RawMessage `json:"payload"`
+	CommittedAt time.Time       `json:"committed_at"`
+}

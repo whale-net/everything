@@ -23,17 +23,16 @@ import (
 
 	"github.com/whale-net/everything/libs/go/dbtest"
 	"github.com/whale-net/everything/libs/go/migrate"
+	"github.com/whale-net/everything/whagent_net/events"
 	"github.com/whale-net/everything/whagent_net/migrate/schema"
 	"github.com/whale-net/everything/whagent_net/session"
 )
 
-// newStore provisions an isolated Postgres database via dbtest, applies
-// every migration in whagent-net's own embedded schema
-// (schema.Migrations, currently only 001_initial_schema, #2109), and
-// returns a ready *session.Store plus the underlying dbtest.Postgres for
-// tests that need to reach past the store's own API (e.g. to assert on
-// constraint-rejection behavior directly via raw SQL).
-func newStore(t *testing.T) (*session.Store, *dbtest.Postgres) {
+// newDB provisions an isolated Postgres database via dbtest and applies
+// every migration in whagent-net's own embedded schema (schema.Migrations,
+// currently only 001_initial_schema, #2109). Shared by newStore and
+// newStoreWithPublisher below.
+func newDB(t *testing.T) *dbtest.Postgres {
 	t.Helper()
 	ctx := context.Background()
 
@@ -46,7 +45,28 @@ func newStore(t *testing.T) (*session.Store, *dbtest.Postgres) {
 	runner := migrate.NewRunner(sqlDB, schema.Migrations, schema.Dir)
 	require.NoError(t, runner.Up(), "apply every migration from the real embedded schema")
 
-	return session.New(db.Pool), db
+	return db
+}
+
+// newStore provisions an isolated, migrated Postgres database (see newDB)
+// and returns a ready *session.Store with publishing disabled (nil
+// publisher) plus the underlying dbtest.Postgres for tests that need to
+// reach past the store's own API (e.g. to assert on constraint-rejection
+// behavior directly via raw SQL).
+func newStore(t *testing.T) (*session.Store, *dbtest.Postgres) {
+	t.Helper()
+	db := newDB(t)
+	return session.New(db.Pool, nil), db
+}
+
+// newStoreWithPublisher is newStore but wires pub as the Store's
+// events.PublisherInterface, for tests
+// (transcript_publish_integration_test.go) that need to observe or control
+// the publish-after-commit path (NFR2, issue #2111).
+func newStoreWithPublisher(t *testing.T, pub events.PublisherInterface) (*session.Store, *dbtest.Postgres) {
+	t.Helper()
+	db := newDB(t)
+	return session.New(db.Pool, pub), db
 }
 
 // newTestSession builds a Session fixture with subject and on_behalf_of
