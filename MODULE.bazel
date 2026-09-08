@@ -370,6 +370,7 @@ use_repo(
     "com_github_microsoft_go_winio",
     "com_github_moby_docker_image_spec",
     "com_github_modelcontextprotocol_go_sdk",
+    "com_github_openai_openai_go_v2",
     "com_github_opencontainers_go_digest",
     "com_github_opencontainers_image_spec",
     "com_github_pkg_errors",

@@ -1,0 +1,31 @@
+load("@rules_go//go:def.bzl", "go_library", "go_test")
+
+go_library(
+    name = "llm",
+    srcs = [
+        "catalog.go",
+        "client.go",
+        "cost.go",
+        "pricing.go",
+    ],
+    importpath = "github.com/whale-net/everything/whagent_net/llm",
+    visibility = ["//visibility:public"],
+    deps = [
+        "@com_github_openai_openai_go_v2//:openai-go",
+        "@com_github_openai_openai_go_v2//option",
+        "@com_github_openai_openai_go_v2//packages/param",
+        "@com_github_openai_openai_go_v2//shared",
+    ],
+)
+
+go_test(
+    name = "llm_test",
+    srcs = [
+        "catalog_test.go",
+        "client_test.go",
+        "cost_test.go",
+        "pricing_test.go",
+    ],
+    embed = [":llm"],
+    deps = ["@com_github_openai_openai_go_v2//option"],
+)
