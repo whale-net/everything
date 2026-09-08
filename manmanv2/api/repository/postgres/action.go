@@ -25,7 +25,7 @@ func (r *ActionRepository) Get(ctx context.Context, actionID int64) (*manman.Act
 		       display_order, group_name, button_style, icon, requires_confirmation,
 		       confirmation_message, enabled, created_at, updated_at
 		FROM action_definitions
-		WHERE action_id = $1
+		WHERE action_id = $1 AND deleted_at IS NULL
 	`
 
 	err := r.db.QueryRow(ctx, query, actionID).Scan(
@@ -170,7 +170,7 @@ func (r *ActionRepository) ListByGame(ctx context.Context, gameID int64) ([]*man
 		       display_order, group_name, button_style, icon, requires_confirmation,
 		       confirmation_message, enabled, created_at, updated_at
 		FROM action_definitions
-		WHERE definition_level = 'game' AND entity_id = $1 AND enabled = true
+		WHERE definition_level = 'game' AND entity_id = $1 AND enabled = true AND deleted_at IS NULL
 		ORDER BY display_order, action_id
 	`
 
@@ -235,7 +235,7 @@ func (r *ActionRepository) GetSessionActions(ctx context.Context, sessionID int6
 			-- ServerGameConfig-level actions
 			OR (ad.definition_level = 'server_game_config' AND ad.entity_id = si.sgc_id)
 		)
-		WHERE ad.enabled = true
+		WHERE ad.enabled = true AND ad.deleted_at IS NULL
 		ORDER BY
 			-- Order by level (game first, then config, then sgc)
 			CASE ad.definition_level
@@ -382,6 +382,14 @@ func (r *ActionRepository) Create(ctx context.Context, action *manman.ActionDefi
 			requires_confirmation = EXCLUDED.requires_confirmation,
 			confirmation_message = EXCLUDED.confirmation_message,
 			enabled = EXCLUDED.enabled,
+			-- FR10 re-create semantics: an insert/update conflict on the
+			-- (definition_level, entity_id, name) arbiter restores a
+			-- soft-deleted row, so a deleted action's name is immediately
+			-- re-usable and the outcome is identical for the UI writer
+			-- (this method) and the seed scripts (same ON CONFLICT
+			-- arbiter). The UNIQUE constraint deliberately stays
+			-- non-partial (migration 037) so this inference keeps working.
+			deleted_at = NULL,
 			updated_at = NOW()
 		RETURNING action_id
 	`
@@ -607,11 +615,18 @@ func (r *ActionRepository) Update(ctx context.Context, action *manman.ActionDefi
 }
 
 // Delete deletes an action definition
+// Delete soft-deletes the action definition (FR9, task #2092): the row is
+// marked with deleted_at rather than removed, so its action_executions
+// history is always retained and the (definition_level, entity_id, name)
+// slot can be re-created later (re-creation restores the row).
 func (r *ActionRepository) Delete(ctx context.Context, actionID int64) error {
-	query := `DELETE FROM action_definitions WHERE action_id = $1`
-	_, err := r.db.Exec(ctx, query, actionID)
+	query := `UPDATE action_definitions SET deleted_at = NOW() WHERE action_id = $1 AND deleted_at IS NULL`
+	tag, err := r.db.Exec(ctx, query, actionID)
 	if err != nil {
 		return fmt.Errorf("failed to delete action: %w", err)
+	}
+	if tag.RowsAffected() == 0 {
+		return fmt.Errorf("action %d not found or already deleted", actionID)
 	}
 	return nil
 }
@@ -623,7 +638,7 @@ func (r *ActionRepository) ListByLevel(ctx context.Context, level string, entity
 		       display_order, group_name, button_style, icon, requires_confirmation,
 		       confirmation_message, enabled, created_at, updated_at
 		FROM action_definitions
-		WHERE definition_level = $1 AND entity_id = $2
+		WHERE definition_level = $1 AND entity_id = $2 AND deleted_at IS NULL
 		ORDER BY display_order, action_id
 	`
 

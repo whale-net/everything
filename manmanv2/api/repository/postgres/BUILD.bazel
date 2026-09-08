@@ -118,6 +118,39 @@ go_test(
     ],
 )
 
+# Real-Postgres coverage for FR9/FR10 soft-delete (task #2092): Delete must
+# mark (not remove) the definition so action_executions history survives,
+# soft-deleted definitions vanish from listings/lookup, and re-creating at
+# the same (definition_level, entity_id, name) revives the row via both the
+# repository upsert (UI/API writer) and the seed scripts' ON CONFLICT
+# upsert. Same hand-written, build-tagged precedent as the other
+# integration targets in this package.
+#
+# Run it explicitly (requires a working Docker daemon):
+#   bazel test //manmanv2/api/repository/postgres:action_soft_delete_integration_test --test_output=all
+go_test(
+    # keep
+    name = "action_soft_delete_integration_test",
+    size = "large",
+    timeout = "long",
+    srcs = ["action_soft_delete_integration_test.go"],
+    embed = [":postgres"],
+    gotags = ["integration"],
+    tags = [
+        "external",
+        "integration",
+        "manual",
+        "no-cache",
+        "no-sandbox",
+        "requires-network",
+    ],
+    deps = [
+        "//libs/go/dbtest",
+        "//manmanv2/models",
+        "@com_github_jackc_pgx_v5//pgxpool",
+    ],
+)
+
 # Real-Postgres coverage for PendingRestartRepository (#1729): the unique
 # partial index (pending_restarts_one_pending_per_sgc), the single
 # UPDATE...RETURNING atomicity of ClaimForSession/ExpireStalled, and the
