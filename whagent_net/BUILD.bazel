@@ -1,0 +1,7 @@
+"""whagent-net domain root."""
+
+filegroup(
+    name = "docs",
+    srcs = glob(["*.md"]),
+    visibility = ["//visibility:public"],
+)
