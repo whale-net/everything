@@ -47,6 +47,7 @@ go_test(
         "store_integration_test.go",
         "transcript_integration_test.go",
         "transcript_publish_integration_test.go",
+        "turn_commit_integration_test.go",
         "usage_integration_test.go",
     ],
     gotags = ["integration"],

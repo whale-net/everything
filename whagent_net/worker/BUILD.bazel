@@ -1,6 +1,6 @@
 """whagent-net Temporal worker: SessionWorkflow + per-turn activities (issue #2114)."""
 
-load("@rules_go//go:def.bzl", "go_binary", "go_library")
+load("@rules_go//go:def.bzl", "go_binary", "go_library", "go_test")
 load("//tools/bazel:release.bzl", "release_app")
 
 go_library(
@@ -34,6 +34,75 @@ go_binary(
     name = "worker",
     embed = [":worker_lib"],
     visibility = ["//visibility:public"],
+)
+
+# Temporal testsuite + WorkflowReplayer tests (issue #2114's Testing
+# phase): SessionWorkflow's signal-per-turn loop, Stop cancellation, the
+# definition-drift-across-turns guard, and the WorkflowReplayer durability/
+# NFR1 guard (replay_test.go) -- all hermetic, no live Temporal server or
+# Postgres, so this is part of the default `bazel test //...` set (unlike
+# worker_integration_test below).
+go_test(
+    name = "worker_test",
+    srcs = [
+        "activities_test.go",
+        "replay_test.go",
+        "workflow_test.go",
+    ],
+    embed = [":worker_lib"],
+    deps = [
+        "//whagent_net/llm",
+        "//whagent_net/session",
+        "@com_github_google_uuid//:uuid",
+        "@com_github_stretchr_testify//assert",
+        "@com_github_stretchr_testify//mock",
+        "@com_github_stretchr_testify//require",
+        "@io_temporal_go_api//common/v1:common",
+        "@io_temporal_go_api//enums/v1:enums",
+        "@io_temporal_go_api//history/v1:history",
+        "@io_temporal_go_api//taskqueue/v1:taskqueue",
+        "@io_temporal_go_sdk//activity",
+        "@io_temporal_go_sdk//converter",
+        "@io_temporal_go_sdk//testsuite",
+        "@io_temporal_go_sdk//worker",
+    ],
+)
+
+# Real-Postgres integration test for the per-turn activities that touch
+# the store directly (issue #2114's Testing phase: BuildContext's
+# turn_context persistence contract). See
+# //whagent_net/session:session_integration_test's BUILD comment for the
+# full rationale behind each tag -- deliberately NOT part of `bazel test
+# //...`.
+#
+# Run it explicitly (requires a working Docker daemon):
+#   bazel test //whagent_net/worker:worker_integration_test --test_output=all
+go_test(
+    name = "worker_integration_test",
+    size = "large",
+    timeout = "long",
+    srcs = ["context_integration_test.go"],
+    embed = [":worker_lib"],
+    gotags = ["integration"],
+    tags = [
+        "external",
+        "integration",
+        "manual",
+        "no-cache",
+        "no-sandbox",
+        "requires-network",
+    ],
+    deps = [
+        "//libs/go/dbtest",
+        "//libs/go/migrate",
+        "//whagent_net/events",
+        "//whagent_net/migrate/schema",
+        "//whagent_net/session",
+        "@com_github_google_uuid//:uuid",
+        "@com_github_jackc_pgx_v5//stdlib",
+        "@com_github_stretchr_testify//assert",
+        "@com_github_stretchr_testify//require",
+    ],
 )
 
 # Release metadata. domain "whagent-net" + name "worker" matches the binary
