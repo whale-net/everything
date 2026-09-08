@@ -42,6 +42,45 @@ go_library(
     ],
 )
 
+# FR8 live-at-execution guarantee (tasks #2093/#2141, plan #2080):
+# ExecuteAction must read the definition (and fields) fresh from the
+# repository at execution time. Real Postgres + real RabbitMQ via
+# testcontainers; hand-written, build-tagged integration target per the
+# pending_restart precedent. Restored to trunk by #2141 after #2103's
+# squash-merge dropped the file.
+#
+# Run it explicitly (requires working Docker):
+#   bazel test //manmanv2/api/handlers:action_execution_integration_test --test_output=all
+go_test(
+    # keep
+    name = "action_execution_integration_test",
+    size = "large",
+    timeout = "long",
+    srcs = ["action_execution_integration_test.go"],
+    embed = [":handlers"],
+    gotags = ["integration"],
+    tags = [
+        "external",
+        "integration",
+        "manual",
+        "no-cache",
+        "no-sandbox",
+        "requires-network",
+    ],
+    deps = [
+        "//libs/go/dbtest",
+        "//libs/go/rmq",
+        "//manmanv2/api/repository/postgres",
+        "//manmanv2/protos:manmanpb",
+        "@com_github_jackc_pgx_v5//pgxpool",
+        "@com_github_jackc_pgx_v5//stdlib",
+        "@com_github_testcontainers_testcontainers_go//:testcontainers-go",
+        "@com_github_testcontainers_testcontainers_go//wait",
+        "@org_golang_google_grpc//codes",
+        "@org_golang_google_grpc//status",
+    ],
+)
+
 go_test(
     name = "handlers_test",
     srcs = [
