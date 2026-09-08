@@ -162,7 +162,9 @@ func run() error {
 		repo.WorkshopLibraries,
 		repo.ServerGameConfigs,
 		repo.AddonPathPresets,
+		repo.WorkshopCache,
 		workshopManager,
+		s3Client,
 	)
 	pb.RegisterWorkshopServiceServer(grpcServer, workshopHandler)
 

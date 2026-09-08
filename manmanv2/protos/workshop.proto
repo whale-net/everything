@@ -46,6 +46,10 @@ service WorkshopService {
   rpc ListAddonPathPresets(ListAddonPathPresetsRequest) returns (ListAddonPathPresetsResponse);
   rpc UpdateAddonPathPreset(UpdateAddonPathPresetRequest) returns (UpdateAddonPathPresetResponse);
   rpc DeleteAddonPathPreset(DeleteAddonPathPresetRequest) returns (DeleteAddonPathPresetResponse);
+
+  // Content Cache — presigned-URL relay (host talks to S3 directly; control-api never proxies bytes)
+  rpc GetCacheDownloadURL(GetCacheDownloadURLRequest) returns (GetCacheDownloadURLResponse);
+  rpc GetCacheUploadURL(GetCacheUploadURLRequest) returns (GetCacheUploadURLResponse);
 }
 
 // ============================================================================
@@ -439,3 +443,34 @@ message DeleteAddonPathPresetRequest {
 }
 
 message DeleteAddonPathPresetResponse {}
+
+// ============================================================================
+// Content Cache RPCs (presigned-URL relay)
+// ============================================================================
+
+message GetCacheDownloadURLRequest {
+  int64 server_id = 1;
+  string workshop_id = 2;
+  string content_version = 3;
+}
+
+message GetCacheDownloadURLResponse {
+  bool cache_hit = 1;
+  int64 cache_entry_id = 2;
+  string presigned_url = 3;  // empty when cache_hit == false
+  int64 expires_at = 4;      // Unix timestamp
+  int64 size_bytes = 5;
+}
+
+message GetCacheUploadURLRequest {
+  int64 server_id = 1;
+  string workshop_id = 2;
+  string content_version = 3;
+}
+
+message GetCacheUploadURLResponse {
+  int64 cache_entry_id = 1;
+  string presigned_url = 2;
+  int64 expires_at = 3;
+  string s3_key = 4;
+}

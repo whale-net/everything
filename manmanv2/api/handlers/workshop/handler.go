@@ -20,7 +20,9 @@ type WorkshopServiceHandler struct {
 	libraryRepo      repository.WorkshopLibraryRepository
 	sgcRepo          repository.ServerGameConfigRepository
 	presetRepo       repository.AddonPathPresetRepository
+	cacheRepo        repository.WorkshopCacheRepository
 	workshopManager  workshop.WorkshopManagerInterface
+	s3Client         cachePresigner
 }
 
 // NewWorkshopServiceHandler creates a new WorkshopServiceHandler
@@ -30,7 +32,9 @@ func NewWorkshopServiceHandler(
 	libraryRepo repository.WorkshopLibraryRepository,
 	sgcRepo repository.ServerGameConfigRepository,
 	presetRepo repository.AddonPathPresetRepository,
+	cacheRepo repository.WorkshopCacheRepository,
 	workshopManager *workshop.WorkshopManager,
+	s3Client cachePresigner,
 ) *WorkshopServiceHandler {
 	return &WorkshopServiceHandler{
 		addonRepo:        addonRepo,
@@ -38,7 +42,9 @@ func NewWorkshopServiceHandler(
 		libraryRepo:      libraryRepo,
 		sgcRepo:          sgcRepo,
 		presetRepo:       presetRepo,
+		cacheRepo:        cacheRepo,
 		workshopManager:  workshopManager,
+		s3Client:         s3Client,
 	}
 }
 
