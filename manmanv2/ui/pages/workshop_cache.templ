@@ -93,7 +93,6 @@ templ WorkshopCache(data WorkshopCachePageData) {
 						<th>Created</th>
 						<th>Last Verified</th>
 						<th>Hosts</th>
-						<!-- Slots for #2186 (force-verify) and #2187 (evict) actions. -->
 						<th></th>
 					</tr>
 				</thead>
@@ -116,12 +115,25 @@ templ WorkshopCache(data WorkshopCachePageData) {
 								}
 							</td>
 							<td>
-								<form method="post" action="/workshop/cache/verify">
-									<input type="hidden" name="addon_id" value={ fmt.Sprintf("%d", data.AddonID) }/>
-									<input type="hidden" name="cache_entry_id" value={ fmt.Sprintf("%d", entry.CacheEntryId) }/>
-									<button type="submit" class="btn btn-xs btn-outline">Verify now</button>
-								</form>
-								<!-- Evict (#2187) action lands here. -->
+								<div class="flex gap-2 items-center justify-end">
+									<form method="post" action="/workshop/cache/verify">
+										<input type="hidden" name="addon_id" value={ fmt.Sprintf("%d", data.AddonID) }/>
+										<input type="hidden" name="cache_entry_id" value={ fmt.Sprintf("%d", entry.CacheEntryId) }/>
+										<button type="submit" class="btn btn-xs btn-outline">Verify now</button>
+									</form>
+									<div x-data="{ confirmEvict: false }" class="flex gap-2 items-center justify-end">
+										<button x-show="!confirmEvict" @click="confirmEvict = true" class="btn btn-error btn-xs">Evict</button>
+										<div x-show="confirmEvict" x-cloak class="flex gap-2 items-center">
+											<span class="text-xs text-error font-medium">Evict { entry.ContentVersion }?</span>
+											<form method="POST" action="/workshop/cache/evict" class="inline">
+												<input type="hidden" name="addon_id" value={ fmt.Sprintf("%d", data.AddonID) }/>
+												<input type="hidden" name="cache_entry_id" value={ fmt.Sprintf("%d", entry.CacheEntryId) }/>
+												<button type="submit" class="btn btn-error btn-xs">Yes, Evict</button>
+											</form>
+											<button @click="confirmEvict = false" class="btn btn-secondary btn-xs">Cancel</button>
+										</div>
+									</div>
+								</div>
 							</td>
 						</tr>
 					}

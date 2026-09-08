@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/whale-net/everything/libs/go/grpcauth"
+	s3lib "github.com/whale-net/everything/libs/go/s3"
 	"github.com/whale-net/everything/manmanv2/api/workshop"
 	hostrmq "github.com/whale-net/everything/manmanv2/host/rmq"
 	"github.com/whale-net/everything/manmanv2/models"
@@ -16,18 +17,22 @@ import (
 	"google.golang.org/grpc/status"
 )
 
-// cachePresigner is the narrow S3 presign surface GetCacheDownloadURL and
-// GetCacheUploadURL need -- exactly the two single-object presign methods,
-// nothing else (no Upload, Delete, Exists, etc). *s3lib.Client (wired in by
+// cachePresigner is the narrow S3 surface the cache handlers need: the two
+// single-object presign methods GetCacheDownloadURL and GetCacheUploadURL
+// use, plus the single-object Delete EvictCacheEntry uses (FR12) -- nothing
+// else (no Upload, Exists, etc). *s3lib.Client (wired in by
 // manmanv2/api/main.go) satisfies this. Declaring it here rather than
 // depending on *s3lib.Client directly lets cache_test.go substitute a fake
-// that records the exact key/ttl it was called with and can be made to fail
-// on demand, without dragging in real AWS SDK config/credentials or letting
-// a test accidentally reach for one of the concrete client's unrelated
-// methods.
+// that records the exact key/ttl/delete calls it received and can be made to
+// fail on demand, without dragging in real AWS SDK config/credentials or
+// letting a test accidentally reach for one of the concrete client's
+// unrelated methods.
 type cachePresigner interface {
 	PresignGetURL(ctx context.Context, key string, ttl time.Duration) (string, error)
 	PresignPutURL(ctx context.Context, key string, ttl time.Duration) (string, error)
+	// Delete deletes exactly the single object at key -- never a prefix,
+	// never a bulk/multi-object delete (FR12 blast-radius rule).
+	Delete(ctx context.Context, key string) error
 }
 
 // cacheURLTTL is NFR6's load-bearing constant: every presigned URL this
@@ -250,6 +255,61 @@ func (h *WorkshopServiceHandler) ListAddonCacheEntries(ctx context.Context, req 
 	}
 
 	return &pb.ListAddonCacheEntriesResponse{Entries: pbEntries}, nil
+}
+
+// EvictCacheEntry implements FR12: Admin manual eviction of exactly one
+// content-addressed cache entry. This is a control-plane action, not a host
+// operation -- control-api holds the S3 credentials and deletes the object
+// directly, with no presigned-URL relay and no command.host.* message
+// published (FR12).
+//
+// Ordering is load-bearing: delete the S3 object first, then the
+// workshop_cache_entries row (workshop_cache_host_presence rows for it
+// cascade via ON DELETE CASCADE, migration 040). If the object delete fails,
+// return an error and leave the row -- an orphaned row pointing at a live
+// object is recoverable by retrying the eviction, whereas a deleted row
+// pointing at a live object leaves an unreferenced object nobody can ever
+// find or clean up (M4 has no GC to catch it). An object already absent
+// from S3 (NoSuchKey) is treated as success and the row is still removed --
+// eviction should converge, not wedge on an inconsistency.
+//
+// Deletes by this entry's exact object key only -- never a prefix, never a
+// bulk/multi-object delete, never "all versions of this addon" (FR12
+// blast-radius rule). Sibling entries for the same workshop_id, their
+// presence rows, and every addon/installation/library/batch-job row are
+// untouched.
+func (h *WorkshopServiceHandler) EvictCacheEntry(ctx context.Context, req *pb.EvictCacheEntryRequest) (*pb.EvictCacheEntryResponse, error) {
+	if req.CacheEntryId == 0 {
+		return nil, status.Error(codes.InvalidArgument, "cache_entry_id is required")
+	}
+
+	entry, err := h.cacheRepo.GetCacheEntry(ctx, req.CacheEntryId)
+	if err != nil {
+		slog.Warn("failed to look up workshop cache entry for eviction", "cache_entry_id", req.CacheEntryId, "error", err)
+		return nil, status.Errorf(codes.Internal, "failed to look up cache entry: %v", err)
+	}
+	if entry == nil {
+		return nil, status.Errorf(codes.NotFound, "cache entry %d not found", req.CacheEntryId)
+	}
+
+	// Object first: an object delete failure here must leave the row in
+	// place so the eviction can be retried (see doc comment above).
+	if err := h.s3Client.Delete(ctx, entry.S3Key); err != nil && !s3lib.IsNoSuchKey(err) {
+		slog.Warn("failed to evict workshop cache object from S3", "cache_entry_id", entry.CacheEntryID, "s3_key", entry.S3Key, "error", err)
+		return nil, status.Errorf(codes.Internal, "failed to delete cache object: %v", err)
+	}
+
+	// Row second, only once the object is confirmed gone (or was already
+	// gone).
+	if err := h.cacheRepo.DeleteCacheEntry(ctx, entry.CacheEntryID); err != nil {
+		slog.Warn("failed to delete workshop cache entry row after evicting object", "cache_entry_id", entry.CacheEntryID, "s3_key", entry.S3Key, "error", err)
+		return nil, status.Errorf(codes.Internal, "failed to delete cache entry: %v", err)
+	}
+
+	slog.Info("evicted workshop cache entry",
+		"cache_entry_id", entry.CacheEntryID, "workshop_id", entry.WorkshopID, "content_version", entry.ContentVersion, "s3_key", entry.S3Key)
+
+	return &pb.EvictCacheEntryResponse{Evicted: true, S3Key: entry.S3Key}, nil
 }
 
 // cacheEntryToProto converts a cache entry plus its already-fetched host

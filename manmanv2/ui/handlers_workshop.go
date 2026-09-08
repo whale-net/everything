@@ -1458,3 +1458,40 @@ func (app *App) handleWorkshopCacheVerify(w http.ResponseWriter, r *http.Request
 
 	http.Redirect(w, r, fmt.Sprintf("%s&verify_status=dispatched&verify_server_id=%d", redirectURL, resp.ServerId), http.StatusSeeOther)
 }
+
+// handleWorkshopCacheEvict implements FR12's UI entry point: Admin manual
+// eviction of exactly one content-addressed cache entry, submitted from the
+// confirmation step on workshop_cache.templ that names the specific content
+// version being evicted (the destructive scope is exactly one version, and
+// the confirmation makes that unambiguous before the request is sent).
+// Redirects back to the cache view for the same addon so the evicted row
+// disappears on the reloaded list while every sibling version remains.
+func (app *App) handleWorkshopCacheEvict(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	ctx := r.Context()
+
+	addonIDStr := r.FormValue("addon_id")
+	addonID, err := strconv.ParseInt(addonIDStr, 10, 64)
+	if err != nil {
+		http.Error(w, "Invalid addon_id", http.StatusBadRequest)
+		return
+	}
+
+	cacheEntryID, err := strconv.ParseInt(r.FormValue("cache_entry_id"), 10, 64)
+	if err != nil {
+		http.Error(w, "Invalid cache_entry_id", http.StatusBadRequest)
+		return
+	}
+
+	if _, err := app.grpc.EvictCacheEntry(ctx, cacheEntryID); err != nil {
+		log.Printf("Error evicting workshop cache entry %d: %v", cacheEntryID, err)
+		http.Error(w, "Failed to evict cache entry", http.StatusInternalServerError)
+		return
+	}
+
+	http.Redirect(w, r, fmt.Sprintf("/workshop/cache?addon_id=%d", addonID), http.StatusSeeOther)
+}
