@@ -5,6 +5,7 @@ go_library(
     srcs = [
         "cache_client.go",
         "orchestrator.go",
+        "verify.go",
     ],
     importpath = "github.com/whale-net/everything/manmanv2/host/workshop",
     visibility = ["//manmanv2/host:__subpackages__"],
