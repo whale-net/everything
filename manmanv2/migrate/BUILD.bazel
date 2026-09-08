@@ -110,6 +110,37 @@ go_test(
     ],
 )
 
+# Workshop batch-job persistence (#2175 / task #2176, NFR1/NFR2): migration
+# round-trip + constraint tests, plus the information_schema assertion that
+# neither new table carries an sgc_id column. Manual-tagged; run explicitly
+# (requires a working Docker daemon):
+#   bazel test //manmanv2/migrate:migration_039_integration_test --test_output=all
+go_test(
+    # keep
+    name = "migration_039_integration_test",
+    size = "large",
+    timeout = "long",
+    srcs = [
+        "main.go",
+        "migration_039_integration_test.go",
+    ],
+    embedsrcs = glob(["migrations/*.sql"]),
+    gotags = ["integration"],
+    tags = [
+        "external",
+        "integration",
+        "manual",
+        "no-cache",
+        "no-sandbox",
+        "requires-network",
+    ],
+    deps = [
+        "//libs/go/dbtest",
+        "//libs/go/migrate",
+        "@com_github_jackc_pgx_v5//stdlib",
+    ],
+)
+
 # Release metadata for migration job
 release_app(
     name = "control-migration",

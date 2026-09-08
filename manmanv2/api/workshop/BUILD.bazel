@@ -9,19 +9,23 @@ go_library(
     importpath = "github.com/whale-net/everything/manmanv2/api/workshop",
     visibility = ["//visibility:public"],
     deps = [
-        "//manmanv2/models:models",
         "//manmanv2/api/repository",
         "//manmanv2/api/steam",
+        "//manmanv2/models",
     ],
 )
 
 go_test(
     name = "workshop_test",
-    srcs = ["manager_test.go"],
+    srcs = [
+        "entry_parser_test.go",
+        "manager_test.go",
+    ],
     embed = [":workshop"],
     deps = [
-        "//manmanv2/models:models",
         "//manmanv2/api/repository",
         "//manmanv2/api/steam",
+        "//manmanv2/models",
     ],
 )
+
