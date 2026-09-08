@@ -21,6 +21,7 @@ go_library(
         "session.go",
         "strategy.go",
         "workshop_addon.go",
+        "workshop_batch_job.go",
         "workshop_installation.go",
         "workshop_library.go",
     ],
