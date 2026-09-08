@@ -27,7 +27,8 @@ Temporal session workflows, MCP surface, and an embeddable session UI.
 
 - GitHub issue #1552 — the original manmanv2-scoped exploration this domain
   generalizes.
-- [`manmanv2/TOC.md`](../manmanv2/TOC.md) — first pilot domain MCP server
-  (`ControlClient` extraction prerequisite).
 - [`audience_score_system/TOC.md`](../audience_score_system/TOC.md) —
-  existing Go MCP server and the Phase-3 embedded research-agent host.
+  first consumer: existing Go MCP server (M1 tool target) and the M3
+  embedded research-agent host.
+- manmanv2 is a non-goal of this product (still idea phase; would need the
+  `ControlClient` extraction from #1552 first).
