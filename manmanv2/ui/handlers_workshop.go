@@ -1344,3 +1344,48 @@ func (app *App) handleWorkshopBatchStatus(w http.ResponseWriter, r *http.Request
 
 	RenderTempl(w, r, "Batch Job Status", pages.WorkshopBatchStatus(data))
 }
+
+// handleWorkshopCache renders the Admin fleet-wide Workshop cache visibility
+// view for a single addon (FR10, plan #2175): every content-addressed cache
+// entry, which hosts hold a copy, and each entry's staleness.
+//
+// Scaffold stub: does not yet call ListAddonCacheEntries -- that wiring, the
+// staleness rendering, and the per-entry host list land in the
+// Implementation phase of #2185. This stub only proves out the route,
+// layout, and page skeleton.
+func (app *App) handleWorkshopCache(w http.ResponseWriter, r *http.Request) {
+	user := htmxauth.GetUser(r.Context())
+
+	addonIDStr := r.URL.Query().Get("addon_id")
+	if addonIDStr == "" {
+		http.Error(w, "addon_id required", http.StatusBadRequest)
+		return
+	}
+
+	addonID, err := strconv.ParseInt(addonIDStr, 10, 64)
+	if err != nil {
+		http.Error(w, "Invalid addon_id", http.StatusBadRequest)
+		return
+	}
+
+	breadcrumbs := []components.Breadcrumb{
+		{Label: "Workshop", URL: "/workshop/library"},
+		{Label: "Cache", URL: "/workshop/cache"},
+	}
+	layoutData, err := app.buildTemplLayoutData(r, "Workshop Cache", "workshop", user, breadcrumbs)
+	if err != nil {
+		log.Printf("Error building layout data: %v", err)
+		http.Error(w, "Failed to build layout", http.StatusInternalServerError)
+		return
+	}
+
+	// TODO(#2185 Implementation): call app.grpc.ListAddonCacheEntries and
+	// populate Entries instead of rendering the empty-state placeholder.
+	data := pages.WorkshopCachePageData{
+		Layout:  layoutData,
+		AddonID: addonID,
+		Entries: nil,
+	}
+
+	RenderTempl(w, r, "Workshop Cache", pages.WorkshopCache(data))
+}

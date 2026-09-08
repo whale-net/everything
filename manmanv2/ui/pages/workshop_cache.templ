@@ -1,0 +1,81 @@
+package pages
+
+import (
+	"fmt"
+	"github.com/whale-net/everything/manmanv2/ui/components"
+	manmanpb "github.com/whale-net/everything/manmanv2/protos"
+)
+
+// WorkshopCachePageData backs the Admin fleet-wide cache visibility view
+// (FR10, plan #2175): for a given addon, every content-addressed cache
+// entry, which hosts hold a copy, and how stale each entry's verification
+// is -- without querying hosts one at a time.
+//
+// Scaffold only: the handler (handleWorkshopCache in
+// manmanv2/ui/handlers_workshop.go) does not yet populate Entries from the
+// ListAddonCacheEntries RPC -- that wiring, plus the staleness rendering and
+// per-entry host list, land in the Implementation phase of #2185. AddonID is
+// set so the skeleton can at least echo back which addon was requested.
+type WorkshopCachePageData struct {
+	Layout  components.LayoutData
+	AddonID int64
+	Entries []*manmanpb.WorkshopCacheEntry
+}
+
+templ WorkshopCache(data WorkshopCachePageData) {
+	@components.Layout(data.Layout) {
+		<div class="rounded-box p-6 md:p-8 mb-6 shadow-lg" style="background: linear-gradient(to bottom right, var(--color-primary), var(--color-secondary));">
+			<div class="flex flex-col md:flex-row justify-between items-start md:items-center gap-4">
+				<div class="text-primary-content">
+					<h1 class="text-2xl md:text-3xl font-bold mb-2">Workshop Cache</h1>
+					<p class="text-primary-content/80 text-sm">Fleet-wide cache entries, hosts, and staleness for this addon</p>
+				</div>
+				<div class="flex flex-wrap gap-2">
+					<a href={ templ.URL(fmt.Sprintf("/workshop/addon?addon_id=%d", data.AddonID)) } class="btn bg-primary-content/20 hover:bg-primary-content/30 text-primary-content border-primary-content/30">← Addon</a>
+					<!-- Same M4 boundary as the batch-status view: manual reload only, no SSE/polling/hx-trigger. -->
+					<a
+						href="#"
+						onclick="window.location.reload(); return false;"
+						class="btn bg-base-100 hover:bg-base-200 text-primary border-none"
+					>Refresh</a>
+				</div>
+			</div>
+		</div>
+		<div class="bg-base-100 rounded-box border border-base-300 overflow-x-auto">
+			<table class="table">
+				<thead>
+					<tr>
+						<th>Content Address</th>
+						<th>Size</th>
+						<th>Created</th>
+						<th>Last Verified</th>
+						<th>Hosts</th>
+						<!-- Slots for #2186 (force-verify) and #2187 (evict) actions. -->
+						<th></th>
+					</tr>
+				</thead>
+				<tbody>
+					for _, entry := range data.Entries {
+						<tr>
+							<td class="font-mono text-xs">{ entry.ContentVersion }</td>
+							<td>{ fmt.Sprintf("%d", entry.SizeBytes) }</td>
+							<td>{ fmt.Sprintf("%d", entry.CreatedAt) }</td>
+							<td>{ fmt.Sprintf("%d", entry.LastVerifiedAt) }</td>
+							<td>
+								for _, host := range entry.Hosts {
+									<div class="text-xs">{ host.ServerName }</div>
+								}
+							</td>
+							<td>
+								<!-- Force-verify (#2186) and evict (#2187) actions land here. -->
+							</td>
+						</tr>
+					}
+				</tbody>
+			</table>
+			if len(data.Entries) == 0 {
+				<div class="text-center py-12 text-base-content/60">No cache entries for this addon</div>
+			}
+		</div>
+	}
+}
