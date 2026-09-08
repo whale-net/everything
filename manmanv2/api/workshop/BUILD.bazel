@@ -5,6 +5,7 @@ go_library(
     srcs = [
         "batch.go",
         "cachekey.go",
+        "collection.go",
         "entry_parser.go",
         "manager.go",
     ],
