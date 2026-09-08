@@ -82,12 +82,16 @@ func run() error {
 	if err != nil {
 		return fmt.Errorf("persona: %w", err)
 	}
-	// persona.NewIssuer(keySet.ActiveSigner()) mints the persona Claim
-	// workers present on every tool call (Issuer.Issue,
-	// whagent_net/api/persona/issuer.go). Not yet wired to any RPC or
-	// internal call path here -- that wiring, and its exposure-surface
-	// guarantee (never reachable for a subject other than the caller's
-	// own session), is this issue's Implementation phase.
+	// This process never constructs a persona.Issuer: minting happens in
+	// `worker`'s own process, not `api`'s (issue #2115's Implementation
+	// phase decision -- see whagent_net/ARCHITECTURE.md "Identity and auth
+	// chaining" § "Issuance mechanism"). `worker` builds its own Issuer
+	// from the identical WHAGENT_SIGNING_KEY/WHAGENT_SIGNING_KEY_ID/
+	// WHAGENT_ISSUER configuration read here, in-process, immediately
+	// before each tool call -- no RPC hop, and nothing to register on this
+	// (or any) gRPC/HTTP surface. `api`'s job is solely key ownership
+	// (above) and publishing the public JWKS (below) so a domain server's
+	// whagent.Verifier can check what `worker` mints.
 
 	jwksAddr := getEnv("WHAGENT_JWKS_ADDR", ":8090")
 	jwksServer := &http.Server{

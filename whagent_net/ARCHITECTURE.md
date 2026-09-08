@@ -233,19 +233,49 @@ non-Keycloak identity (an ASS Person is keyed on Google `sub`) be an
 on-behalf-of subject later without a schema change; C8's role check
 applies to the *acting* subject.
 
-Chain: subject → `api` → `worker` → domain MCP server → domain API. `api`
-mints a short-lived **whagent-signed JWT** (`sub` + `sub_iss` = the
-on-behalf-of subject and its issuer, exactly the session's stored shape;
-`act` = agent/session; `aud` = the domain server) that `worker` forwards
-on every tool call; domains verify it against whagent-net's public key via
-the `//libs/go/whagent` adapter, and own the mapping from Keycloak `sub` to
-their local identity (e.g. ASS `person_id`). whagent-net is the trust root
-for agent actions — no Keycloak token-exchange configuration per domain.
-"Which agent, for which user, did X" is then answerable from any domain's
-audit log. The Phase-3 goal (an ASS
-research agent acting *as the signed-in ASS user* against ASS's own MCP
-tools) is the first concrete exercise of this. This is a load-bearing
-decision for the product brief.
+Chain: subject → `api` → `worker` → domain MCP server → domain API. A
+short-lived **whagent-signed JWT** (`sub` + `sub_iss` = the on-behalf-of
+subject and its issuer, exactly the session's stored shape; `act` =
+agent/session; `aud` = the domain server) is minted and forwarded by
+`worker` on every tool call; domains verify it against whagent-net's
+public key via the `//libs/go/whagent` adapter, and own the mapping from
+Keycloak `sub` to their local identity (e.g. ASS `person_id`). whagent-net
+is the trust root for agent actions — no Keycloak token-exchange
+configuration per domain. "Which agent, for which user, did X" is then
+answerable from any domain's audit log. The Phase-3 goal (an ASS research
+agent acting *as the signed-in ASS user* against ASS's own MCP tools) is
+the first concrete exercise of this. This is a load-bearing decision for
+the product brief.
+
+**Issuance mechanism (issue #2115).** `api` owns the signing key(s) and
+publishes the public JWKS: `whagent_net/api/persona`'s `KeySet`/
+`LoadKeySet` load the active asymmetric signing key (plus any retired keys
+kept only for JWKS publication during a rotation window) from config/
+secret — never checked in, never a symmetric fallback, fatal at startup
+if unconfigured — and `JWKSHandler`/`NewMux` serve them at the fixed
+`/.well-known/jwks.json` path over a small `net/http` mux alongside `api`'s
+gRPC surface.
+
+Minting itself happens **in `worker`'s own process**, not over an RPC to
+`api`: `worker` is configured with the identical signing-key material (the
+same `WHAGENT_SIGNING_KEY`/`WHAGENT_SIGNING_KEY_ID`/`WHAGENT_ISSUER` values
+`api` reads — see `ENV.md`) and constructs its own `persona.Issuer` (via
+`persona.LoadKeySet` + `persona.NewIssuer`) to mint each tool call's Claim
+locally, immediately before dispatch (#2118) — one call per target server,
+never reused across servers. This mirrors the "no RPC hop" package-boundary
+`api` and `worker` already share for `session` (see
+[Service boundary vs. package boundary](#service-boundary-vs-package-boundary)
+above) rather than adding a new internal RPC surface purely to move a JWT
+from one process to another.
+
+`persona.Issuer.Issue` is therefore never registered on any gRPC or MCP
+service, public or otherwise — there is nothing to reach over the network
+at all. The only way to obtain a token is to already be the trusted
+`worker` process, holding both the signing-key secret and direct `session`
+store access needed to resolve a real session's `on_behalf_of`/`subject`
+columns; there is no code path by which an external gRPC or MCP caller (or
+a compromised public RPC) can mint a credential for a subject other than an
+existing session's own (NFR4).
 
 ## Idempotency
 

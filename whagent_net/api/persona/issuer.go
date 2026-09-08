@@ -8,17 +8,25 @@ import (
 	"github.com/whale-net/everything/whagent_net/session"
 )
 
-// Issuer mints whagent-net-signed persona Claims for `api`'s own sessions
-// (LB3, FR10) -- the per-tool-call minting surface this task adds. It
-// wraps a *whagent.Signer (a KeySet's ActiveSigner) rather than
-// reimplementing minting: //libs/go/whagent (#2110) is the one place the
-// Claim's field-by-field JWT mapping and short-TTL enforcement live.
+// Issuer mints whagent-net-signed persona Claims (LB3, FR10) -- the
+// per-tool-call minting surface this task adds. It wraps a *whagent.Signer
+// (a KeySet's ActiveSigner) rather than reimplementing minting:
+// //libs/go/whagent (#2110) is the one place the Claim's field-by-field
+// JWT mapping and short-TTL enforcement live.
 //
-// Exposure surface (this task's Implementation section, pending): Issue
-// must never be reachable from an external gRPC or MCP caller for a
-// subject other than that caller's own session -- see
-// whagent_net/ARCHITECTURE.md "Identity and auth chaining" (updated once
-// that wiring decision is made) for the mechanism whagent-net-api chooses.
+// Exposure surface (issue #2115's Implementation section, decided): Issue
+// is never registered on any gRPC or MCP service, public or otherwise --
+// there is no RPC path to it at all. `worker` (#2118) constructs its own
+// Issuer directly, in-process, from the same signing-key configuration
+// `api` reads (see whagent_net/ENV.md), and mints immediately before
+// dispatching each tool call -- mirroring the "no RPC hop" package-
+// boundary `api` and `worker` already share for `whagent_net/session`.
+// See whagent_net/ARCHITECTURE.md "Identity and auth chaining" §
+// "Issuance mechanism" for the full writeup. Concretely, this means the
+// only way to ever call Issue is to already be a process holding both the
+// signing-key secret and direct `session` store access -- there is no
+// path by which an external caller can mint a credential for a subject
+// other than an existing session's own.
 type Issuer struct {
 	signer *whagent.Signer
 }

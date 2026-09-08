@@ -7,12 +7,13 @@
 // (#2110) -- this package's own job is key material lifecycle (this
 // file) and the two small surfaces built on top of it.
 //
-// Scaffold phase (#2115): key loading (LoadKeySet), the Issuer/KeySet
-// skeleton, and the JWKS http.Handler are wired up and exercised by
-// `bazel build //whagent_net/...`. Pending Implementation phase: the
-// internal-only exposure decision for Issuer.Issue (documented in
-// whagent_net/ARCHITECTURE.md "Identity and auth chaining" once made) and
-// whagent_net/ENV.md's variable table.
+// Implementation phase (#2115) complete: key loading (LoadKeySet), the
+// Issuer/KeySet, and the JWKS http.Handler are fully implemented and
+// exercised by `bazel build //whagent_net/...`. The internal-only exposure
+// decision for Issuer.Issue is documented in whagent_net/ARCHITECTURE.md
+// "Identity and auth chaining" § "Issuance mechanism", and this package's
+// env-var contract (read by both `api` and, later, `worker`) is documented
+// in whagent_net/ENV.md § "Persona claim issuance".
 package persona
 
 import (
@@ -38,8 +39,8 @@ import (
 // change (an env var edit), never a restart-with-different-code (this
 // task's Implementation section).
 //
-// Build with LoadKeySet -- see whagent_net/ENV.md (pending Implementation
-// phase) for the WHAGENT_SIGNING_KEY / WHAGENT_SIGNING_KEY_ID /
+// Build with LoadKeySet -- see whagent_net/ENV.md § "Persona claim
+// issuance" for the WHAGENT_SIGNING_KEY / WHAGENT_SIGNING_KEY_ID /
 // WHAGENT_SIGNING_KEYS_ADDITIONAL variables LoadKeySet reads via its
 // KeySetEnvConfig argument.
 type KeySet struct {
