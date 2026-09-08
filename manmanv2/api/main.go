@@ -213,6 +213,30 @@ func run() error {
 	}()
 	log.Println("Session restart consumer started")
 
+	// Initialize workshop cache status consumer: consumes host-manager's install-time
+	// verify/cache-refresh outcomes (#2184, plan #2175 FR8/FR9/FR10) on the new
+	// status.host.*.workshop.cache routing key. Additive alongside (never replacing)
+	// workshopStatusHandler's existing status.workshop.installation.# consumption above,
+	// per NFR3.
+	log.Println("Setting up workshop cache status consumer...")
+	workshopCacheStatusConsumer, err := handlers.NewWorkshopCacheStatusConsumer(
+		repo.WorkshopCache,
+		rmqConn,
+		slog.Default(),
+	)
+	if err != nil {
+		return fmt.Errorf("failed to create workshop cache status consumer: %w", err)
+	}
+	defer workshopCacheStatusConsumer.Close()
+
+	// Start workshop cache status consumer in background
+	go func() {
+		if err := workshopCacheStatusConsumer.Start(ctx); err != nil {
+			log.Printf("Warning: Workshop cache status consumer stopped: %v", err)
+		}
+	}()
+	log.Println("Workshop cache status consumer started")
+
 	// Initialize pending restart reaper: the time-based stall bound for
 	// durable restart (#1732, Track B). Independent mechanism from the
 	// consumer above -- see manmanv2/ARCHITECTURE.md "Pending Restarts".

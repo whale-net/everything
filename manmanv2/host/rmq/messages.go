@@ -149,3 +149,20 @@ type BackupStatusUpdate struct {
 	Status       string  `json:"status"` // "completed" | "failed"
 	ErrorMessage *string `json:"error_message,omitempty"`
 }
+
+// WorkshopCacheStatusUpdate reports the outcome of an install-time Workshop
+// verify/cache-refresh cycle (#2184, plan #2175 FR8/FR9/FR10). Published on
+// the "status.host.<serverID>.workshop.cache" routing key, additive
+// alongside (never replacing) the existing installation-status publishing
+// above -- NFR3 forbids renaming a field, repurposing a routing key, or
+// changing the shape of DownloadAddonCommand/InstallationStatusUpdate for
+// existing consumers.
+type WorkshopCacheStatusUpdate struct {
+	ServerID       int64     `json:"server_id"`
+	WorkshopID     string    `json:"workshop_id"`
+	ContentVersion string    `json:"content_version"`
+	CacheEntryID   int64     `json:"cache_entry_id"`
+	Event          string    `json:"event"` // "verified_unchanged" | "refreshed" | "populated" | "present"
+	SizeBytes      int64     `json:"size_bytes,omitempty"`
+	VerifiedAt     time.Time `json:"verified_at"`
+}

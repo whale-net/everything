@@ -46,17 +46,28 @@ func NewCacheClient(workshopClient pb.WorkshopServiceClient, serverID int64, htt
 // read path's extraction logic matches what was uploaded.
 const cacheObjectFormat = "tar"
 
+// FetchResult reports the outcome of TryFetch: whether the requested content version was
+// found in the cache, and (on a hit) which cache entry served it -- callers that need to
+// report status back to control-api (e.g. host/workshop/orchestrator.go's
+// "verified_unchanged" publish, #2184 FR10) need the entry identity, not just a hit/miss
+// bool.
+type FetchResult struct {
+	Hit          bool
+	CacheEntryID int64
+	SizeBytes    int64
+}
+
 // TryFetch asks control-api for a presigned GET URL for the given (workshopID,
 // contentVersion) pair and, on a cache hit, streams the object from S3 into destDir.
 //
-// hit == false, err == nil means control-api reports no cache entry for this content —
-// this is the ordinary path for a first-ever download and callers must fall back to a
-// normal SteamCMD download without treating it as an error.
+// result.Hit == false, err == nil means control-api reports no cache entry for this
+// content — this is the ordinary path for a first-ever download and callers must fall
+// back to a normal SteamCMD download without treating it as an error.
 //
-// hit == false, err != nil (e.g. an expired presigned URL, RPC failure, or the RPC being
-// Unimplemented against an older control-api) must also degrade to the SteamCMD fallback
-// path rather than failing the install.
-func (c *CacheClient) TryFetch(ctx context.Context, workshopID, contentVersion, destDir string) (hit bool, err error) {
+// result.Hit == false, err != nil (e.g. an expired presigned URL, RPC failure, or the RPC
+// being Unimplemented against an older control-api) must also degrade to the SteamCMD
+// fallback path rather than failing the install.
+func (c *CacheClient) TryFetch(ctx context.Context, workshopID, contentVersion, destDir string) (result FetchResult, err error) {
 	logger := slog.With("workshop_id", workshopID, "content_version", contentVersion)
 	start := time.Now()
 
@@ -73,19 +84,19 @@ func (c *CacheClient) TryFetch(ctx context.Context, workshopID, contentVersion, 
 		} else {
 			logger.Warn("workshop cache lookup failed, falling back to SteamCMD", "error", err)
 		}
-		return false, err
+		return FetchResult{}, err
 	}
 
 	if !resp.CacheHit {
 		// Ordinary miss path (e.g. first-ever download of this content version) — not an error.
-		return false, nil
+		return FetchResult{}, nil
 	}
 
 	if err := fetchAndExtract(ctx, c.httpClient, resp.PresignedUrl, destDir); err != nil {
 		// A stale/expired presigned URL (or any other transfer failure) must degrade to
 		// the SteamCMD fallback, never fail the install outright (NFR: see issue #2183).
 		logger.Warn("workshop cache download failed, falling back to SteamCMD", "cache_entry_id", resp.CacheEntryId, "error", err)
-		return false, err
+		return FetchResult{}, err
 	}
 
 	duration := time.Since(start)
@@ -106,7 +117,7 @@ func (c *CacheClient) TryFetch(ctx context.Context, workshopID, contentVersion, 
 		}
 	}
 
-	return true, nil
+	return FetchResult{Hit: true, CacheEntryID: resp.CacheEntryId, SizeBytes: resp.SizeBytes}, nil
 }
 
 // fetchAndExtract streams presignedURL's body into a temp file and extracts it (as a
