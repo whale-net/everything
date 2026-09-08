@@ -60,12 +60,12 @@ func TestMigration039_AppliesOnTopOfFullHistoryAndCreatesExpectedShape(t *testin
 	if err != nil {
 		t.Fatalf("LatestVersion: %v", err)
 	}
-	if latest != 39 {
-		t.Fatalf("expected the latest migration source version to be 39, got %d -- update this test if a newer migration has since landed", latest)
+	if latest != 40 {
+		t.Fatalf("expected the latest migration source version to be 40, got %d -- update this test if a newer migration has since landed", latest)
 	}
 
 	if err := runner.Up(); err != nil {
-		t.Fatalf("Up (applying every migration through 039): %v", err)
+		t.Fatalf("Up (applying every migration through 040): %v", err)
 	}
 
 	version, dirty, err := runner.Version()
@@ -75,8 +75,8 @@ func TestMigration039_AppliesOnTopOfFullHistoryAndCreatesExpectedShape(t *testin
 	if dirty {
 		t.Fatalf("expected clean state after Up, got dirty")
 	}
-	if version != 39 {
-		t.Fatalf("expected version 39 after Up, got %d", version)
+	if version != 40 {
+		t.Fatalf("expected version 40 after Up, got %d", version)
 	}
 
 	// All documented columns of both tables must exist.
@@ -221,18 +221,22 @@ func TestMigration039_DownThenUpRoundTrips(t *testing.T) {
 		t.Fatalf("seed batch job: %v", err)
 	}
 
-	// Down exactly one step (both tables gone). Runner.Down() rolls back ALL
-	// migrations, which trips over pre-existing down-chain issues in
-	// unrelated early migrations -- one step is all this round-trip needs.
-	if err := runner.Steps(-1); err != nil {
-		t.Fatalf("Steps(-1): %v", err)
+	// Roll back to exactly one below 039 (both tables gone). Runner.Down()
+	// rolls back ALL migrations, which trips over pre-existing down-chain
+	// issues in unrelated early migrations -- targeting 038 explicitly
+	// (rather than a relative Steps(-1) off of whatever the latest
+	// migration happens to be) is what keeps this round-trip testing 039's
+	// own down migration specifically, regardless of how many later
+	// migrations have since landed on top of it.
+	if err := runner.Migrate(38); err != nil {
+		t.Fatalf("Migrate(38) (rolling back 039): %v", err)
 	}
 	version, _, err := runner.Version()
 	if err != nil {
 		t.Fatalf("Version after down-step: %v", err)
 	}
-	if version == 39 {
-		t.Fatalf("expected version below 39 after down-step, got %d", version)
+	if version != 38 {
+		t.Fatalf("expected version 38 after Migrate(38), got %d", version)
 	}
 	for _, table := range []string{"workshop_batch_jobs", "workshop_batch_job_items"} {
 		var exists bool
