@@ -199,6 +199,27 @@ bazel run //manman/migrate:control-migration -- up
 
 This applies migration `003_s3_logs.up.sql` which updates the `file_path` column documentation.
 
+## Workshop content cache
+
+The content-addressed Workshop cache (#2181, plan #2175, FR5) stores one
+object per `(workshop_id, content_version)` pair -- see
+`manmanv2/api/workshop/cachekey.go` for the key derivation and
+`workshop_cache_entries`/`workshop_cache_host_presence` (migration `040`)
+for the metadata this section configures.
+
+- **Bucket/prefix:** the cache reuses the same `S3_BUCKET` as session logs,
+  under the `workshop-cache/` prefix (`S3Key` renders
+  `workshop-cache/<workshopID>/<contentVersion>.tar`). There is no separate
+  `WORKSHOP_CACHE_S3_BUCKET` environment variable in this layer -- if the
+  cache is later split into its own bucket, that is a config change for the
+  presigned-URL relay task, not this one.
+- **Credentials:** control-api holds the same S3 credentials described
+  above for both logs and the Workshop cache. **host-manager holds no S3
+  credentials for this bucket at all** -- hosts never talk to S3 directly.
+  A host's only path to cache objects is a presigned URL issued by
+  control-api (the relay task filed after #2181), which is what keeps the
+  cache's IAM surface limited to the control-api service identity.
+
 ## Troubleshooting
 
 ### "Access Denied" errors
