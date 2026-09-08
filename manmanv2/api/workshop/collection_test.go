@@ -243,6 +243,53 @@ func TestAddCollectionToLibrary_NotACollectionIsRejected(t *testing.T) {
 	}
 }
 
+// TestAddCollectionToLibrary_ChildrenFetchErrorLeavesNoRows is a regression
+// test for the ordering gap flagged in validation: the collection's own
+// metadata resolves successfully (so resolveCollectionAddon would create or
+// reuse a workshop_addons row for the collection), but the subsequent
+// GetCollectionDetails call to fetch its children fails with a genuine
+// Steam-side error. This must still be a job-level RPC error with zero
+// addon rows and zero batch job rows left behind -- unlike
+// TestAddCollectionToLibrary_UnresolvableCollectionLeavesNoRows and
+// TestAddCollectionToLibrary_NotACollectionIsRejected, both of which fail
+// inside resolveCollectionAddon itself (before any Create call), this
+// exercises a Steam error that happens (or, prior to the fix, would have
+// been observed) only after the collection's own addon row was already
+// persisted.
+func TestAddCollectionToLibrary_ChildrenFetchErrorLeavesNoRows(t *testing.T) {
+	ctx := context.Background()
+	manager, addonRepo, _, batchJobRepo, steamClient := createTestBatchManager()
+
+	collectionID := "777777"
+	steamClient.items[collectionID] = &steam.WorkshopItemMetadata{
+		WorkshopID: collectionID, Title: "Broken Collection", IsCollection: true, TimeUpdated: time.Now(),
+	}
+	// Deliberately do not populate steamClient.collections[collectionID], so
+	// GetCollectionDetails fails with a Steam-side error even though the
+	// collection's own metadata (fetched by resolveCollectionAddon) resolves
+	// fine.
+
+	job, collectionAddonID, items, err := manager.AddCollectionToLibrary(ctx, 1, 50, collectionID, 0)
+	if err == nil {
+		t.Fatal("expected an error when fetching collection children fails, got nil")
+	}
+	if job != nil {
+		t.Errorf("expected no batch job returned on children-fetch failure, got %+v", job)
+	}
+	if collectionAddonID != 0 {
+		t.Errorf("expected no collection addon ID on failure, got %d", collectionAddonID)
+	}
+	if items != nil {
+		t.Errorf("expected no items on failure, got %v", items)
+	}
+	if len(addonRepo.addons) != 0 {
+		t.Errorf("expected no addon rows left behind (collection addon must not be orphaned), got %d", len(addonRepo.addons))
+	}
+	if len(batchJobRepo.jobs) != 0 {
+		t.Errorf("expected no batch job rows left behind, got %d", len(batchJobRepo.jobs))
+	}
+}
+
 // TestAddCollectionToLibrary_ReRunReusesExistingRows covers re-adding the
 // same collection: no duplicate addon or junction rows are created, but a
 // second batch job row is still recorded for the new run.

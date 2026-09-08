@@ -34,14 +34,20 @@ func (wm *WorkshopManager) AddCollectionToLibrary(ctx context.Context, gameID, l
 		return nil, 0, nil, fmt.Errorf("could not resolve collection_input %q: %w", collectionInput, err)
 	}
 
-	collectionAddon, err := wm.resolveCollectionAddon(ctx, gameID, collectionWorkshopID, presetID)
-	if err != nil {
-		return nil, 0, nil, err
-	}
-
+	// Fetch the collection's children before persisting anything. A genuine
+	// Steam-side error here must be a job-level error with no partial rows
+	// written, so this must happen before resolveCollectionAddon's
+	// addonRepo.Create -- otherwise a Steam error on this call would leave
+	// an orphaned collection addon row with no corresponding
+	// workshop_batch_jobs row behind it.
 	children, err := wm.steamClient.GetCollectionDetails(ctx, collectionWorkshopID)
 	if err != nil {
 		return nil, 0, nil, fmt.Errorf("failed to fetch collection %s details: %w", collectionWorkshopID, err)
+	}
+
+	collectionAddon, err := wm.resolveCollectionAddon(ctx, gameID, collectionWorkshopID, presetID)
+	if err != nil {
+		return nil, 0, nil, err
 	}
 
 	var libraryIDPtr *int64
