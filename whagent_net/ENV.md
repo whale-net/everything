@@ -76,3 +76,14 @@ Read by `api` (token verification + authorization), `ui` and `mcp`
 | Variable | Component | Default | Description |
 |----------|-----------|---------|-------------|
 | `WHAGENT_API_URL` | mcp, ui, embed hosts | — | `api` gRPC address. |
+
+## `api` server (SessionService, issue #2113)
+
+Read directly via `os.Getenv` in `whagent_net/api/main.go` (not
+`//libs/go/db`/`ConfigFromEnv` conventions above, which cover the
+database/Temporal/RabbitMQ/S3 client libraries this binary also uses).
+
+| Variable | Component | Default | Description |
+|----------|-----------|---------|-------------|
+| `PORT` | api | `50051` | gRPC listen port for `SessionService`. |
+| `GRPC_AUTH_MODE` | api | `none` | `none` or `oidc` (`//libs/go/grpcauth.AuthMode`). `none` injects dev claims for every call and logs a startup warning -- development only; every RPC still requires *some* claims (`handlers.RequireClaimsUnaryInterceptor`), so `none` is "skip token verification," never "skip authentication." |
