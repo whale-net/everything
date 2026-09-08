@@ -49,6 +49,7 @@ go_test(
         "patch_test.go",
         "pending_restart_reaper_test.go",
         "registration_test.go",
+        "server_allocated_ports_test.go",
         "server_test.go",
         "server_port_range_test.go",
         "session_restart_consumer_test.go",

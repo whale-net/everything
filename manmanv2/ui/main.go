@@ -461,6 +461,12 @@ func (app *App) handleSGCRoutes(w http.ResponseWriter, r *http.Request) {
 		app.handleSGCUpdatePorts(w, r, pathParts[1])
 		return
 	}
+	// /sgc/{id}/random-port (task #2098, FR13): one random in-range,
+	// not-in-use host port for the ports editor's random affordance.
+	if len(pathParts) >= 3 && pathParts[2] == "random-port" {
+		app.handleSGCRandomPort(w, r, pathParts[1])
+		return
+	}
 	// /sgc/{id}/env/set, /sgc/{id}/env/remove, /sgc/{id}/env/edit
 	// (task #2090: deployment-level environment overrides, FR2/FR4).
 	if len(pathParts) >= 4 && pathParts[2] == "env" {

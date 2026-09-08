@@ -236,6 +236,13 @@ func (app *App) handleSGCDetail(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Ports editor guidance (task #2098, FR13/FR14): the server's allowed
+	// host-port ranges plus the in-use set (allocated + sibling-saved),
+	// fetched through the public API. Auxiliary fetches degrade silently
+	// inside the builder (guidance weaker, never an error page), and a nil
+	// context renders the editor without the random affordance/warnings.
+	portContext := buildSGCPortContext(ctx, app.grpc.GetAPI(), sgc.ServerId, sgc.ServerGameConfigId)
+
 	pageData := pages.SGCDetailPageData{
 		Layout:                    layoutData,
 		SGC:                       sgc,
@@ -250,6 +257,7 @@ func (app *App) handleSGCDetail(w http.ResponseWriter, r *http.Request) {
 		DeploymentStatus:          deploymentStatus,
 		ConnectAddresses:          connectAddresses,
 		ConnectAddressUnavailable: connectAddressUnavailable,
+		PortContext:               portContext,
 	}
 
 	// Deployment Environment layered view (task #2090, FR1/FR2/FR4):
