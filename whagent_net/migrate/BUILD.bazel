@@ -4,13 +4,12 @@ load("//tools/bazel:release.bzl", "release_app")
 go_library(
     name = "migrate_lib",
     srcs = ["main.go"],
-    embedsrcs = [
-        "migrations/001_initial_schema.down.sql",
-        "migrations/001_initial_schema.up.sql",
-    ],
     importpath = "github.com/whale-net/everything/whagent_net/migrate",
     visibility = ["//visibility:private"],
-    deps = ["//libs/go/migrate"],
+    deps = [
+        "//libs/go/migrate",
+        "//whagent_net/migrate/schema",
+    ],
 )
 
 go_binary(

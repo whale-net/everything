@@ -1,22 +1,20 @@
 // Command migrate applies whagent-net's `session` store schema
-// (whagent_net/migrate/migrations, starting with 001_initial_schema --
-// see issue #2109) via //libs/go/migrate's standard CLI. Modelled on
-// manmanv2/migrate/main.go: migrations are embedded directly in this
-// package rather than a separate schema sub-package, since no other
-// package here needs to import the embedded FS (contrast
-// audience_score_system/migrate, whose migrate/schema package is also
-// imported by that domain's store integration tests).
+// (whagent_net/migrate/schema/migrations, starting with 001_initial_schema
+// -- see issue #2109) via //libs/go/migrate's standard CLI. Migrations are
+// embedded in the sibling schema package (not directly in this package)
+// because the `whagent_net/session` store's Postgres integration tests
+// (#2109 Testing) need to apply the exact same schema -- same shape as
+// audience_score_system/migrate, whose migrate/schema package is imported
+// by that domain's store integration tests. (Scaffold's original comment
+// here assumed no other package would need the embedded FS; that
+// assumption didn't survive Testing.)
 package main
 
 import (
-	"embed"
-
 	"github.com/whale-net/everything/libs/go/migrate"
+	"github.com/whale-net/everything/whagent_net/migrate/schema"
 )
 
-//go:embed migrations/*.sql
-var migrations embed.FS
-
 func main() {
-	migrate.RunCLI(migrations, "migrations")
+	migrate.RunCLI(schema.Migrations, schema.Dir)
 }
