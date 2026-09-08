@@ -3,9 +3,11 @@ package session
 import (
 	"context"
 	"errors"
+	"fmt"
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
@@ -126,19 +128,137 @@ type sessionStore struct{ pool *pgxpool.Pool }
 
 var _ SessionStore = sessionStore{}
 
-// errNotImplemented is returned by every scaffold-phase stub method in
-// this package (issue #2109's Scaffold phase). Real SQL lands in the
-// Implementation phase.
-var errNotImplemented = errors.New("not implemented: whagent_net/session scaffold phase (#2109)")
+const sessionColumns = `
+	session_id, subject_iss, subject_sub, subject_kind,
+	on_behalf_of_iss, on_behalf_of_sub, on_behalf_of_kind,
+	parent_session_id, agent_id, model, model_override,
+	status, cap_kind, error_category, error_detail,
+	created_at, updated_at
+`
 
+// scanSession scans one sessionColumns row. The enum-shaped columns
+// (subject_kind/on_behalf_of_kind/status/cap_kind/error_category) are
+// scanned into plain strings first, then converted to their named types --
+// matching tools/app_registry's scanApp convention rather than relying on
+// pgx to scan TEXT directly into a named string type. cap_kind/
+// error_category are only ever non-NULL for a terminal session (FR3), but
+// are scanned as plain nullable fields regardless of status.
+func scanSession(row pgx.Row) (*Session, error) {
+	var sess Session
+	var subjectKind, onBehalfOfKind, status string
+	var capKind, errorCategory *string
+	if err := row.Scan(
+		&sess.SessionID, &sess.Subject.Iss, &sess.Subject.Sub, &subjectKind,
+		&sess.OnBehalfOf.Iss, &sess.OnBehalfOf.Sub, &onBehalfOfKind,
+		&sess.ParentSessionID, &sess.AgentID, &sess.Model, &sess.ModelOverride,
+		&status, &capKind, &errorCategory, &sess.ErrorDetail,
+		&sess.CreatedAt, &sess.UpdatedAt,
+	); err != nil {
+		return nil, err
+	}
+	sess.Subject.Kind = SubjectKind(subjectKind)
+	sess.OnBehalfOf.Kind = SubjectKind(onBehalfOfKind)
+	sess.Status = Status(status)
+	if capKind != nil {
+		ck := CapKind(*capKind)
+		sess.CapKind = &ck
+	}
+	if errorCategory != nil {
+		ec := ErrorCategory(*errorCategory)
+		sess.ErrorCategory = &ec
+	}
+	return &sess, nil
+}
+
+// Create inserts sess and fills in the DB-assigned CreatedAt/UpdatedAt
+// (both DEFAULT NOW()) on the passed-in pointer.
 func (s sessionStore) Create(ctx context.Context, sess *Session) error {
-	return errNotImplemented
+	err := s.pool.QueryRow(ctx, `
+		INSERT INTO sessions (
+			session_id, subject_iss, subject_sub, subject_kind,
+			on_behalf_of_iss, on_behalf_of_sub, on_behalf_of_kind,
+			parent_session_id, agent_id, model, model_override, status
+		) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
+		RETURNING created_at, updated_at
+	`,
+		sess.SessionID, sess.Subject.Iss, sess.Subject.Sub, string(sess.Subject.Kind),
+		sess.OnBehalfOf.Iss, sess.OnBehalfOf.Sub, string(sess.OnBehalfOf.Kind),
+		sess.ParentSessionID, sess.AgentID, sess.Model, sess.ModelOverride, string(sess.Status),
+	).Scan(&sess.CreatedAt, &sess.UpdatedAt)
+	if err != nil {
+		return fmt.Errorf("insert session: %w", err)
+	}
+	return nil
 }
 
+// GetByID returns nil (not an error) when no session with id exists.
 func (s sessionStore) GetByID(ctx context.Context, id uuid.UUID) (*Session, error) {
-	return nil, errNotImplemented
+	sess, err := scanSession(s.pool.QueryRow(ctx, `
+		SELECT `+sessionColumns+`
+		FROM sessions
+		WHERE session_id = $1
+	`, id))
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return nil, nil
+		}
+		return nil, fmt.Errorf("get session by id: %w", err)
+	}
+	return sess, nil
 }
 
+// ErrTerminalStatus is returned by UpdateStatus when id's session has
+// already reached a terminal status -- the compare-and-swap this method
+// implements never lets any later write (terminal or not) overwrite a
+// terminal status once committed (same guarantee as manmanv2 control-api/
+// event-processor's UpdateSessionEndIfStatus, see #2063).
+var ErrTerminalStatus = errors.New("session status is already terminal")
+
+// UpdateStatus is a single UPDATE ... WHERE guarded on the row's current
+// status never already being terminal -- the compare-and-swap. A
+// zero-row UPDATE (session already terminal, or id does not exist) is
+// reported as ErrTerminalStatus/pgx.ErrNoRows respectively rather than
+// silently succeeding, so a caller racing a terminal write finds out its
+// write was dropped.
 func (s sessionStore) UpdateStatus(ctx context.Context, id uuid.UUID, status Status, terminal *TerminalReason) error {
-	return errNotImplemented
+	var capKind, errorCategory, errorDetail *string
+	if terminal != nil {
+		if terminal.CapKind != nil {
+			ck := string(*terminal.CapKind)
+			capKind = &ck
+		}
+		if terminal.ErrorCategory != nil {
+			ec := string(*terminal.ErrorCategory)
+			errorCategory = &ec
+		}
+		errorDetail = terminal.ErrorDetail
+	}
+
+	tag, err := s.pool.Exec(ctx, `
+		UPDATE sessions
+		SET status = $2, cap_kind = $3, error_category = $4, error_detail = $5, updated_at = NOW()
+		WHERE session_id = $1
+		  AND status NOT IN (`+terminalStatusList+`)
+	`, id, string(status), capKind, errorCategory, errorDetail)
+	if err != nil {
+		return fmt.Errorf("update session status: %w", err)
+	}
+	if tag.RowsAffected() == 0 {
+		// Distinguish "session doesn't exist" from "session is terminal"
+		// so callers get an accurate error.
+		existing, getErr := s.GetByID(ctx, id)
+		if getErr != nil {
+			return getErr
+		}
+		if existing == nil {
+			return pgx.ErrNoRows
+		}
+		return ErrTerminalStatus
+	}
+	return nil
 }
+
+// terminalStatusList is the SQL-literal IN-list of Status.IsTerminal's
+// terminal values, kept in one place so UpdateStatus's CAS predicate
+// cannot drift from IsTerminal's Go-side definition.
+const terminalStatusList = `'done', 'stopped', 'failed', 'capped'`

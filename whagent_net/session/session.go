@@ -9,10 +9,11 @@
 // idempotency.go), kept as separate concrete types rather than all
 // methods on Store itself.
 //
-// Scaffold phase (#2109): interfaces and models are final per the issue's
-// Implementation-phase column contract; every method body here is a stub
-// (errors.New("not implemented: ...")) that compiles but does no real
-// work. Real SQL lands in the Implementation phase.
+// Implementation phase (#2109): every store below is a real Postgres
+// implementation against migration 001's tables. UpdateStatus and
+// AssignToSession are the two compare-and-swap/SCD2 write paths worth
+// reading first (sessions.go, agentdef.go) -- everything else is a
+// straightforward INSERT/SELECT/UPDATE.
 package session
 
 import "github.com/jackc/pgx/v5/pgxpool"

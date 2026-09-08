@@ -2,6 +2,7 @@ package session
 
 import (
 	"context"
+	"fmt"
 	"time"
 
 	"github.com/google/uuid"
@@ -42,10 +43,32 @@ type usageStore struct{ pool *pgxpool.Pool }
 
 var _ UsageStore = usageStore{}
 
+// RecordTurn inserts one turn_usage row. Retrying an already-recorded
+// (session_id, turn) is not a supported use of this method -- the PK
+// constraint surfaces as a plain error, matching the interface's "insert"
+// wording; callers that need retry-safety compose it themselves (e.g. via
+// IdempotencyLedger).
 func (s usageStore) RecordTurn(ctx context.Context, usage TurnUsage) error {
-	return errNotImplemented
+	_, err := s.pool.Exec(ctx, `
+		INSERT INTO turn_usage (session_id, turn, model, prompt_tokens, completion_tokens, cost_usd, cost_estimated, generation_id)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+	`, usage.SessionID, usage.Turn, usage.Model, usage.PromptTokens, usage.CompletionTokens, usage.CostUSD, usage.CostEstimated, usage.GenerationID)
+	if err != nil {
+		return fmt.Errorf("record turn usage: %w", err)
+	}
+	return nil
 }
 
+// SumCost is FR7's only cap input: a running total derived fresh from
+// turn_usage on every call, never a separately-mutated counter that could
+// drift from the rows it is supposed to summarize.
 func (s usageStore) SumCost(ctx context.Context, sessionID uuid.UUID) (float64, error) {
-	return 0, errNotImplemented
+	var total float64
+	err := s.pool.QueryRow(ctx, `
+		SELECT COALESCE(SUM(cost_usd), 0) FROM turn_usage WHERE session_id = $1
+	`, sessionID).Scan(&total)
+	if err != nil {
+		return 0, fmt.Errorf("sum turn usage cost: %w", err)
+	}
+	return total, nil
 }
