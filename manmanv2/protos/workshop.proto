@@ -83,7 +83,17 @@ service WorkshopService {
   // the existing status.host.*.workshop.cache key (#2184) and is not part of
   // this response.
   rpc VerifyCacheEntry(VerifyCacheEntryRequest) returns (VerifyCacheEntryResponse);
+
+  // EvictCacheEntry deletes exactly one content-addressed cache entry: its
+  // single S3 object and its workshop_cache_entries row (FR12). This is a
+  // control-plane action -- control-api holds the S3 credentials and deletes
+  // the object directly by exact key. It does not go through the
+  // presigned-URL relay and does not publish any host command. Sibling
+  // entries for the same addon, and every other addon/installation/library/
+  // batch-job row, are untouched.
+  rpc EvictCacheEntry(EvictCacheEntryRequest) returns (EvictCacheEntryResponse);
 }
+
 
 // ============================================================================
 // Domain Models
@@ -656,4 +666,20 @@ message VerifyCacheEntryResponse {
   bool dispatched = 1;
   int64 server_id = 2;
   string status = 3;     // "dispatched" | "no_host_available"
+}
+
+// ============================================================================
+// Admin Manual Cache Eviction RPC (FR12)
+// ============================================================================
+
+// EvictCacheEntryRequest identifies exactly one content-addressed cache
+// entry to evict. There is no bulk/prefix form: eviction is always scoped to
+// a single cache_entry_id.
+message EvictCacheEntryRequest {
+  int64 cache_entry_id = 1;
+}
+
+message EvictCacheEntryResponse {
+  bool evicted = 1;
+  string s3_key = 2;
 }
