@@ -75,6 +75,14 @@ service WorkshopService {
   // of querying hosts one at a time (FR10). Read-only: it must not create,
   // touch, or verify anything.
   rpc ListAddonCacheEntries(ListAddonCacheEntriesRequest) returns (ListAddonCacheEntriesResponse);
+
+  // VerifyCacheEntry triggers an on-demand SteamCMD verify of a specific
+  // cache entry against its Workshop source, independent of any install
+  // (FR11). Dispatch is asynchronous: the RPC only reports whether a host was
+  // found to run the verify; the up-to-date/changed outcome arrives later on
+  // the existing status.host.*.workshop.cache key (#2184) and is not part of
+  // this response.
+  rpc VerifyCacheEntry(VerifyCacheEntryRequest) returns (VerifyCacheEntryResponse);
 }
 
 // ============================================================================
@@ -633,4 +641,19 @@ message ListAddonCacheEntriesRequest {
 
 message ListAddonCacheEntriesResponse {
   repeated WorkshopCacheEntry entries = 1;
+}
+
+// ============================================================================
+// Admin On-Demand Cache-Entry Verify RPC (FR11)
+// ============================================================================
+
+message VerifyCacheEntryRequest {
+  int64 cache_entry_id = 1;
+  int64 server_id = 2;   // host asked to run the verify; 0 = control-api picks a host that holds a copy
+}
+
+message VerifyCacheEntryResponse {
+  bool dispatched = 1;
+  int64 server_id = 2;
+  string status = 3;     // "dispatched" | "no_host_available"
 }

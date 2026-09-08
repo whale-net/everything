@@ -46,6 +46,11 @@ func NewConsumer(conn *rmq.Connection, serverID int64, handler CommandHandler) (
 		fmt.Sprintf("command.host.%d.session.send_input", serverID),
 		fmt.Sprintf("command.host.%d.workshop.download", serverID),
 		fmt.Sprintf("command.host.%d.workshop.remove", serverID),
+		// cache_verify (#2186, plan #2175 FR11) is additive alongside the
+		// existing workshop.download/remove keys above (NFR3): a new binding,
+		// not a modification of an existing one. Handler wiring (CommandHandler
+		// method + dispatch) lands in the Implementation phase of #2186.
+		fmt.Sprintf("command.host.%d.workshop.cache_verify", serverID),
 		fmt.Sprintf("command.host.%d.backup", serverID),
 	}
 

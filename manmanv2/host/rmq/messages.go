@@ -166,3 +166,20 @@ type WorkshopCacheStatusUpdate struct {
 	SizeBytes      int64     `json:"size_bytes,omitempty"`
 	VerifiedAt     time.Time `json:"verified_at"`
 }
+
+// VerifyCacheEntryCommand instructs the host-manager to run an on-demand
+// SteamCMD verify of a specific cache entry against its Workshop source,
+// independent of any install (#2186, plan #2175 FR11). Published on the new
+// "command.host.<serverID>.workshop.cache_verify" routing key, additive
+// alongside (never replacing) the existing workshop.download/workshop.remove
+// commands above -- NFR3 forbids renaming a field, repurposing a routing
+// key, or changing the shape of an existing command for existing consumers.
+// The result is reported asynchronously on the existing
+// "status.host.<serverID>.workshop.cache" key (#2184) via
+// WorkshopCacheStatusUpdate -- this command has no dedicated reply message.
+type VerifyCacheEntryCommand struct {
+	CacheEntryID   int64  `json:"cache_entry_id"`
+	WorkshopID     string `json:"workshop_id"`
+	ContentVersion string `json:"content_version"`
+	SteamAppID     string `json:"steam_app_id"`
+}
