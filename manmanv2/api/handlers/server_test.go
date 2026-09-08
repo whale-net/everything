@@ -18,7 +18,7 @@ func addServer(repo *mockServerRepository, s *manman.Server) {
 func TestUpdateServer_SetHostPublicAddress(t *testing.T) {
 	repo := newMockServerRepository()
 	addServer(repo, &manman.Server{ServerID: 1, Name: "srv-1", Status: manman.ServerStatusOnline})
-	handler := NewServerHandler(repo)
+	handler := NewServerHandler(repo, newMockServerPortRangeRepository())
 
 	req := &pb.UpdateServerRequest{
 		ServerId:          1,
@@ -48,7 +48,7 @@ func TestUpdateServer_ClearHostPublicAddress(t *testing.T) {
 	repo := newMockServerRepository()
 	addr := "203.0.113.5"
 	addServer(repo, &manman.Server{ServerID: 1, Name: "srv-1", Status: manman.ServerStatusOnline, HostPublicAddress: &addr})
-	handler := NewServerHandler(repo)
+	handler := NewServerHandler(repo, newMockServerPortRangeRepository())
 
 	req := &pb.UpdateServerRequest{
 		ServerId:          1,
@@ -78,7 +78,7 @@ func TestUpdateServer_FieldMaskIsolatesHostPublicAddress(t *testing.T) {
 	repo := newMockServerRepository()
 	addr := "203.0.113.5"
 	addServer(repo, &manman.Server{ServerID: 1, Name: "srv-1", Status: manman.ServerStatusOnline, HostPublicAddress: &addr})
-	handler := NewServerHandler(repo)
+	handler := NewServerHandler(repo, newMockServerPortRangeRepository())
 
 	req := &pb.UpdateServerRequest{
 		ServerId:          1,
@@ -107,7 +107,7 @@ func TestUpdateServer_FieldMaskIsolatesHostPublicAddress(t *testing.T) {
 func TestGetServer_NullHostPublicAddress(t *testing.T) {
 	repo := newMockServerRepository()
 	addServer(repo, &manman.Server{ServerID: 1, Name: "srv-1", Status: manman.ServerStatusOnline})
-	handler := NewServerHandler(repo)
+	handler := NewServerHandler(repo, newMockServerPortRangeRepository())
 
 	resp, err := handler.GetServer(context.Background(), &pb.GetServerRequest{ServerId: 1})
 	if err != nil {

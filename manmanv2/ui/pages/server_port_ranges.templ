@@ -1,0 +1,148 @@
+package pages
+
+import (
+	"fmt"
+	"strings"
+
+	"github.com/whale-net/everything/libs/go/htmxui"
+	manmanpb "github.com/whale-net/everything/manmanv2/protos"
+)
+
+// allowedPortRangeProtocols is the UI-side protocol guidance for FR12
+// host-port ranges (Decision 7: guidance only, no save-time enforcement).
+var allowedPortRangeProtocols = []string{"TCP", "UDP"}
+
+// validPortRangeProtocol reports whether s is a displayable protocol.
+func validPortRangeProtocol(s string) bool {
+	for _, p := range allowedPortRangeProtocols {
+		if strings.EqualFold(s, p) {
+			return true
+		}
+	}
+	return false
+}
+
+// ServerPortRangesSection renders the allowed host-port ranges card on the
+// server detail page (FR12, task #2095). The zero-ranges state is
+// first-class: it nudges toward configuring ranges while stating that an
+// empty set leaves host-port assignment unconstrained (SB-1.2). Writes go
+// through the public API (NFR3) via the ports/set and ports/remove routes;
+// save-time API validation stays out of scope per Decision 7.
+templ ServerPortRangesSection(server *manmanpb.Server, portsNotice string, portsEdit *manmanpb.PortRange) {
+	<div class="card bg-base-100 border border-base-300 shadow-sm overflow-hidden mb-6" id="allowed-port-ranges">
+		<div class="flex justify-between items-center p-4 border-b border-base-300 bg-base-200">
+			<div>
+				<h2 class="text-lg font-semibold text-base-content">Allowed Host Port Ranges</h2>
+				<p class="text-xs text-base-content/60 mt-1">Restrict which host ports sessions may bind on this server.</p>
+			</div>
+		</div>
+		if portsNotice != "" {
+			<div class="px-4 py-3 border-b border-base-300 bg-base-200">
+				<p class="text-sm text-error">{ portsNotice }</p>
+			</div>
+		}
+		if len(server.AllowedPortRanges) > 0 {
+			<div class="overflow-x-auto">
+				<table class="table">
+					<thead>
+						<tr>
+							<th>Range</th>
+							<th>Protocol</th>
+							<th class="text-right">Actions</th>
+						</tr>
+					</thead>
+					<tbody>
+						for _, pr := range server.AllowedPortRanges {
+							if portsEdit != nil && pr.Start == portsEdit.Start && pr.End == portsEdit.End && strings.EqualFold(pr.Protocol, portsEdit.Protocol) {
+								@serverPortRangeEditRow(server, pr)
+							} else {
+								<tr class="hover">
+									<td class="text-sm font-mono">{ fmt.Sprintf("%d-%d", pr.Start, pr.End) }</td>
+									<td>
+										@htmxui.Badge(pr.Protocol, htmxui.BadgeInfo, htmxui.BadgeSizeSM, true, nil)
+									</td>
+									<td class="text-right">
+										<div class="flex justify-end gap-2">
+											<a href={ templ.URL(fmt.Sprintf("/servers/%d/ports/edit?start=%d&end=%d&protocol=%s", server.ServerId, pr.Start, pr.End, pr.Protocol)) } class="btn btn-secondary btn-sm">Edit</a>
+											<form method="POST" action={ templ.URL(fmt.Sprintf("/servers/%d/ports/remove", server.ServerId)) } class="inline">
+												<input type="hidden" name="start" value={ fmt.Sprintf("%d", pr.Start) }/>
+												<input type="hidden" name="end" value={ fmt.Sprintf("%d", pr.End) }/>
+												<input type="hidden" name="protocol" value={ pr.Protocol }/>
+												<button type="submit" class="btn btn-error btn-sm">Remove</button>
+											</form>
+										</div>
+									</td>
+								</tr>
+							}
+						}
+					</tbody>
+				</table>
+			</div>
+		} else {
+			<div class="p-8 text-center">
+				<p class="text-base-content/60 mb-2">No allowed host-port ranges configured for this server.</p>
+				<p class="text-sm text-base-content/50 mb-4">Host-port assignment is currently unconstrained. Add a range to restrict which host ports sessions may bind.</p>
+			</div>
+		}
+		if portsEdit == nil {
+			<div class="p-4 border-t border-base-300">
+				<h3 class="text-sm font-semibold text-base-content mb-2">Add a range</h3>
+				<form method="POST" action={ templ.URL(fmt.Sprintf("/servers/%d/ports/set", server.ServerId)) } class="flex flex-col sm:flex-row sm:items-end gap-2 max-w-xl">
+					<div>
+						<label for="port_range_start" class="block text-xs font-medium text-base-content/60 mb-1">Start port</label>
+						<input type="number" id="port_range_start" name="start" min="1" max="65535" required class="input input-bordered input-sm w-32"/>
+					</div>
+					<div>
+						<label for="port_range_end" class="block text-xs font-medium text-base-content/60 mb-1">End port</label>
+						<input type="number" id="port_range_end" name="end" min="1" max="65535" required class="input input-bordered input-sm w-32"/>
+					</div>
+					<div>
+						<label for="port_range_protocol" class="block text-xs font-medium text-base-content/60 mb-1">Protocol</label>
+						<select id="port_range_protocol" name="protocol" class="select select-bordered select-sm w-32">
+							for _, p := range allowedPortRangeProtocols {
+								<option value={ p }>{ p }</option>
+							}
+						</select>
+					</div>
+					<div>
+						<button type="submit" class="btn btn-primary btn-sm">Add Range</button>
+					</div>
+				</form>
+			</div>
+		}
+	</div>
+}
+
+// serverPortRangeEditRow renders the in-table edit form for one range.
+templ serverPortRangeEditRow(server *manmanpb.Server, pr *manmanpb.PortRange) {
+	<tr>
+		<td class="text-sm font-mono">
+			<input type="number" name="start" form={ fmt.Sprintf("port-range-edit-%d-%d-%d-%s", server.ServerId, pr.Start, pr.End, pr.Protocol) } value={ fmt.Sprintf("%d", pr.Start) } min="1" max="65535" required class="input input-bordered input-sm w-24"/>
+			<span class="mx-1">–</span>
+			<input type="number" name="end" form={ fmt.Sprintf("port-range-edit-%d-%d-%d-%s", server.ServerId, pr.Start, pr.End, pr.Protocol) } value={ fmt.Sprintf("%d", pr.End) } min="1" max="65535" required class="input input-bordered input-sm w-24"/>
+		</td>
+		<td>
+			<select name="protocol" form={ fmt.Sprintf("port-range-edit-%d-%d-%d-%s", server.ServerId, pr.Start, pr.End, pr.Protocol) } class="select select-bordered select-sm w-24">
+				for _, p := range allowedPortRangeProtocols {
+					if strings.EqualFold(p, pr.Protocol) {
+						<option value={ p } selected>{ p }</option>
+					} else {
+						<option value={ p }>{ p }</option>
+					}
+				}
+			</select>
+		</td>
+		<td class="text-right">
+			<div class="flex justify-end gap-2">
+				<form method="POST" action={ templ.URL(fmt.Sprintf("/servers/%d/ports/set", server.ServerId)) } class="inline-flex gap-2" id={ fmt.Sprintf("port-range-edit-%d-%d-%d-%s", server.ServerId, pr.Start, pr.End, pr.Protocol) }>
+					<input type="hidden" name="orig_start" value={ fmt.Sprintf("%d", pr.Start) }/>
+					<input type="hidden" name="orig_end" value={ fmt.Sprintf("%d", pr.End) }/>
+					<input type="hidden" name="orig_protocol" value={ pr.Protocol }/>
+					<input type="hidden" name="editing" value="true"/>
+					<button type="submit" class="btn btn-success btn-sm">Save</button>
+					<a href={ templ.URL(fmt.Sprintf("/servers/%d", server.ServerId)) } class="btn btn-ghost btn-sm">Cancel</a>
+				</form>
+			</div>
+		</td>
+	</tr>
+}

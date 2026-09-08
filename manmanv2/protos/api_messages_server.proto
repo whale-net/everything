@@ -54,3 +54,17 @@ message DeleteServerRequest {
 }
 
 message DeleteServerResponse {}
+
+// UpdateServerAllowedPortRanges replaces the server's full set of allowed
+// host-port ranges (FR12, task #2095). Replace-all keeps the API simple and
+// matches the UI's read-modify-write flow; an empty set is first-class and
+// means unconstrained (SB-1.2). Save-time validation (overlap checks etc.)
+// is deliberately out of scope per root-plan Decision 7.
+message UpdateServerAllowedPortRangesRequest {
+  int64 server_id = 1;
+  repeated PortRange ranges = 2;
+}
+
+message UpdateServerAllowedPortRangesResponse {
+  repeated PortRange ranges = 1;
+}

@@ -18,6 +18,7 @@ func NewRepository(pool *pgxpool.Pool) *repository.Repository {
 		Backups:                 NewBackupRepository(pool),
 		BackupConfigs:           NewBackupConfigRepository(pool),
 		ServerPorts:             NewServerPortRepository(pool),
+		ServerPortRanges:        NewServerPortRangeRepository(pool),
 		ConfigurationStrategies: NewConfigurationStrategyRepository(pool),
 		ConfigurationPatches:    NewConfigurationPatchRepository(pool),
 		GameConfigVolumes:       NewGameConfigVolumeRepository(pool),

@@ -140,6 +140,15 @@ type ServerPortRepository interface {
 	GetAvailablePortsInRange(ctx context.Context, serverID int64, protocol string, startPort, endPort, limit int) ([]int, error)
 }
 
+// ServerPortRangeRepository defines operations for a server's allowed
+// host-port ranges (FR12, task #2095). Replace is replace-all semantics:
+// the caller fetches the current set, modifies it, and stores the whole
+// set back; an empty slice clears all ranges (unconstrained, SB-1.2).
+type ServerPortRangeRepository interface {
+	List(ctx context.Context, serverID int64) ([]*manman.ServerAllowedPortRange, error)
+	Replace(ctx context.Context, serverID int64, ranges []*manman.ServerAllowedPortRange) ([]*manman.ServerAllowedPortRange, error)
+}
+
 // ConfigurationStrategyRepository defines operations for ConfigurationStrategy entities
 type ConfigurationStrategyRepository interface {
 	Create(ctx context.Context, strategy *manman.ConfigurationStrategy) (*manman.ConfigurationStrategy, error)
@@ -272,6 +281,7 @@ type Repository struct {
 	Backups                 BackupRepository
 	BackupConfigs           BackupConfigRepository
 	ServerPorts             ServerPortRepository
+	ServerPortRanges        ServerPortRangeRepository
 	ConfigurationStrategies ConfigurationStrategyRepository
 	ConfigurationPatches    ConfigurationPatchRepository
 	GameConfigVolumes       GameConfigVolumeRepository
