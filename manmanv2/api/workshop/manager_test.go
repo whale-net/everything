@@ -384,6 +384,7 @@ func createTestManager() (*WorkshopManager, *mockAddonRepo, *mockInstallationRep
 		volumeRepo,
 		nil, // presetRepo not needed for these tests
 		sessionRepo,
+		nil, // batchJobRepo not needed for these tests
 		nil, // steamClient not needed for these tests
 		rmqPublisher,
 	)

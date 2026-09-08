@@ -316,6 +316,19 @@ func (m *MockWorkshopManager) EnsureLibraryAddonsInstalled(ctx context.Context, 
 	return args.Error(0)
 }
 
+func (m *MockWorkshopManager) BatchCreateAddons(ctx context.Context, gameID, libraryID int64, entries string, presetID int64) (*manman.WorkshopBatchJob, []*manman.WorkshopBatchJobItem, error) {
+	args := m.Called(ctx, gameID, libraryID, entries, presetID)
+	var job *manman.WorkshopBatchJob
+	if args.Get(0) != nil {
+		job = args.Get(0).(*manman.WorkshopBatchJob)
+	}
+	var items []*manman.WorkshopBatchJobItem
+	if args.Get(1) != nil {
+		items = args.Get(1).([]*manman.WorkshopBatchJobItem)
+	}
+	return job, items, args.Error(2)
+}
+
 // TestInstallAddon tests the InstallAddon RPC
 func TestInstallAddon(t *testing.T) {
 	tests := []struct {
