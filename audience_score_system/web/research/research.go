@@ -258,21 +258,30 @@ func ideaFormWithError(form ideaFormData, msg string) ideaFormData {
 	return form
 }
 
-// verdictFormData carries the save-verdict form's (#1901, FR4) current
-// values through a render: on a plain GET (HandleIdeaDetail, via
-// newVerdictFormData) it holds nothing but a freshly minted
-// IdempotencyKey (newIdempotencyKey, FR6); on a validation-failure
-// re-render from HandleSaveVerdict it additionally carries the submitted
-// Verdict/Reasoning/CitedNoteIDs and an Error message, with the SAME
-// IdempotencyKey the failed POST carried -- so a corrected resubmit is
-// still the same logical write (FR6, FR7), mirroring noteFormData's
-// contract exactly.
+// verdictFormData carries the save-verdict panel's (#1901, FR4, re-laid-out
+// alongside the note list by #2035/FR10-FR12) current values through a
+// render: on a plain GET (HandleIdeaDetail, via newVerdictFormData) it
+// holds nothing but a freshly minted IdempotencyKey (newIdempotencyKey,
+// FR6) and Open false (panel collapsed, FR10's default); on a
+// validation-failure re-render from HandleSaveVerdict it additionally
+// carries the submitted Verdict/Reasoning/CitedNoteIDs and an Error
+// message, with the SAME IdempotencyKey the failed POST carried -- so a
+// corrected resubmit is still the same logical write (FR6, FR7) -- and
+// Open true, so the panel re-renders expanded rather than collapsing away
+// with the error hidden inside it, mirroring ideaFormData's identical
+// Open contract.
 type verdictFormData struct {
 	IdempotencyKey string
 	Verdict        string // raw submitted value; "" on a plain GET.
 	Reasoning      string
-	CitedNoteIDs   []string // submitted cited_note_ids, as strings, for re-selecting the multi-select.
+	CitedNoteIDs   []string // submitted cited_note_ids, as strings -- FR11: re-checks the note list's checkboxes on re-render.
 	Error          string
+	// Open reports whether the save-verdict panel (FR10) should render
+	// expanded rather than collapsed -- true on a validation-failure
+	// re-render (HandleSaveVerdict) so the submitted values and Error stay
+	// visible, false on a plain GET (HandleIdeaDetail) and after a
+	// successful save (redirect, fresh GET).
+	Open bool
 }
 
 // newVerdictFormData mints a fresh verdictFormData for a plain render --
@@ -991,11 +1000,13 @@ func formWithError(form noteFormData, msg string) noteFormData {
 	return form
 }
 
-// verdictFormWithError returns a copy of form with Error set to msg,
-// mirroring formWithError above for HandleSaveVerdict's validation-failure
-// call sites.
+// verdictFormWithError returns a copy of form with Error set to msg and
+// Open set to true (so the save-verdict panel re-renders expanded, FR10),
+// mirroring ideaFormWithError's identical contract for HandleSaveVerdict's
+// validation-failure call sites.
 func verdictFormWithError(form verdictFormData, msg string) verdictFormData {
 	form.Error = msg
+	form.Open = true
 	return form
 }
 
