@@ -113,7 +113,7 @@ database/Temporal/RabbitMQ/S3 client libraries this binary also uses).
 | Variable | Component | Default | Description |
 |----------|-----------|---------|-------------|
 | `PORT` | api | `50051` | gRPC listen port for `SessionService`. |
-| `GRPC_AUTH_MODE` | api | `none` | `none` or `oidc` (`//libs/go/grpcauth.AuthMode`). `none` injects dev claims for every call and logs a startup warning -- development only; every RPC still requires *some* claims (`handlers.RequireClaimsUnaryInterceptor`), so `none` is "skip token verification," never "skip authentication." |
+| `GRPC_AUTH_MODE` | api | `none` | `none` or `oidc` (`//libs/go/grpcauth.AuthMode`). `none` injects dev claims for every call and logs a startup warning -- development only; every RPC still requires *some* claims (`handlers.RequireClaimsUnaryInterceptor`), so `none` is "skip token verification," never "skip authentication." In `none` mode the injected dev claims' roles are every seeded agent's `required_role` (`config.RequiredRoles`, sourced from `whagent_net/config/agents.yaml`), not a fixed list -- so FR9's `required_role` check passes for any seeded agent under the checked-in local Tilt config (issue #2154). |
 
 ## `mcp` server (issue #2120)
 

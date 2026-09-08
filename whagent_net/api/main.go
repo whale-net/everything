@@ -24,6 +24,7 @@ import (
 	temporallib "github.com/whale-net/everything/libs/go/temporal"
 	"github.com/whale-net/everything/whagent_net/api/handlers"
 	"github.com/whale-net/everything/whagent_net/api/persona"
+	"github.com/whale-net/everything/whagent_net/config"
 	"github.com/whale-net/everything/whagent_net/llm"
 	pb "github.com/whale-net/everything/whagent_net/protos"
 	"github.com/whale-net/everything/whagent_net/session"
@@ -144,6 +145,19 @@ func run() error {
 
 	sessionServer := handlers.NewSessionServer(store, grpcOIDCIssuer, temporalClient, temporalCfg.TaskQueue, catalog)
 
+	// agentDefs feeds DevRoles below: DevRoles matters only in
+	// AuthModeNone, where it makes the injected dev Claims carry every
+	// seeded agent's required_role instead of grpcauth's generic default
+	// of ["admin"] (which matches none of them) -- see FR9/issue #2154 and
+	// tools/app_registry/server/main.go's identical precedent. This load
+	// failing fails api's startup the same loud way it already fails
+	// migrate/worker's seeder (whagent_net/migrate/seed.Seeder) -- never
+	// silently falling back to no DevRoles.
+	agentDefs, err := config.Load()
+	if err != nil {
+		return fmt.Errorf("config: %w", err)
+	}
+
 	// Every SessionService RPC authenticates (ARCHITECTURE.md "Identity and
 	// auth chaining"; whagent_net/api/auth.go's requireClaims) -- unlike
 	// leaflab/manmanv2 there is no unauthenticated-method allowlist to wire
@@ -152,6 +166,7 @@ func run() error {
 		Mode:      grpcauth.AuthMode(grpcAuthMode),
 		IssuerURL: grpcOIDCIssuer,
 		ClientID:  grpcOIDCAudience,
+		DevRoles:  config.RequiredRoles(agentDefs),
 	})
 	if err != nil {
 		return fmt.Errorf("grpcauth: %w", err)
