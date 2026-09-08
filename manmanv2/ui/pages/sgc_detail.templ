@@ -30,6 +30,11 @@ type SGCDetailPageData struct {
 	// ConnectAddressUnavailable is true when ComputeConnectAddresses
 	// returned no addresses (FR7), e.g. no host_public_address configured.
 	ConnectAddressUnavailable bool
+	// EnvOverrides drives the layered Environment section (task #2090,
+	// FR1/FR2/FR4), built by handleSGCDetail from the GameConfig env
+	// template plus the deployment's env_vars patches. nil renders no
+	// Environment section (e.g. GameConfig fetch failed).
+	EnvOverrides *SGCEnvOverridesData
 }
 
 type LibraryAttachment struct {
@@ -114,6 +119,15 @@ templ SGCDetail(data SGCDetailPageData) {
 				}
 			</div>
 		</div>
+		<!--
+			Deployment Environment (task #2090, FR1/FR2/FR4): layered
+			template→override→effective view with override CRUD. Built by
+			handleSGCDetail; nil renders no Environment section (e.g. the
+			GameConfig fetch failed).
+		-->
+		if data.EnvOverrides != nil {
+			@SGCEnvOverrides(*data.EnvOverrides)
+		}
 		<!-- SGC Info -->
 		<div x-data="{ editPorts: false }" class="card bg-base-100 border border-base-300 shadow-sm mb-6">
 			<div class="card-body">

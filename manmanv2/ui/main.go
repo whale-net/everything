@@ -461,6 +461,21 @@ func (app *App) handleSGCRoutes(w http.ResponseWriter, r *http.Request) {
 		app.handleSGCUpdatePorts(w, r, pathParts[1])
 		return
 	}
+	// /sgc/{id}/env/set, /sgc/{id}/env/remove, /sgc/{id}/env/edit
+	// (task #2090: deployment-level environment overrides, FR2/FR4).
+	if len(pathParts) >= 4 && pathParts[2] == "env" {
+		switch pathParts[3] {
+		case "set":
+			app.handleSGCEnvSet(w, r, pathParts[1])
+			return
+		case "remove":
+			app.handleSGCEnvRemove(w, r, pathParts[1])
+			return
+		case "edit":
+			app.handleSGCEnvEdit(w, r, pathParts[1])
+			return
+		}
+	}
 	app.handleSGCDetail(w, r)
 }
 

@@ -126,3 +126,24 @@ templ SGCEnvOverrides(data SGCEnvOverridesData) {
 		</div>
 	</div>
 }
+
+// SGCEnvOverrideEditForm is the hx-swap fragment for editing one
+// override (GET /sgc/{id}/env/edit?key=NAME into #sgc-env-editor).
+templ SGCEnvOverrideEditForm(sgcID int64, key, value string) {
+	<form
+		method="POST"
+		action={ templ.URL(fmt.Sprintf("/sgc/%d/env/set", sgcID)) }
+		class="flex flex-col sm:flex-row gap-2 items-start sm:items-center"
+	>
+		<input type="hidden" name="key" value={ key }/>
+		<span class="font-mono text-sm text-base-content">{ key }</span>
+		<input
+			type="text"
+			name="value"
+			value={ value }
+			placeholder="override value"
+			class="input input-bordered input-sm font-mono flex-1"
+		/>
+		<button type="submit" class="btn btn-primary btn-sm">Save override</button>
+	</form>
+}

@@ -252,6 +252,19 @@ func (app *App) handleSGCDetail(w http.ResponseWriter, r *http.Request) {
 		ConnectAddressUnavailable: connectAddressUnavailable,
 	}
 
+	// Deployment Environment layered view (task #2090, FR1/FR2/FR4):
+	// template → deployment override → effective, read-only data for the
+	// section template. Failure is tolerated like the other optional
+	// sections: log a warning and omit the section (pageData stays nil).
+	if gameConfig != nil {
+		envData, _, envErr := app.buildSGCEnvOverridesData(ctx, sgc, gameConfig)
+		if envErr != nil {
+			log.Printf("Warning: failed to build env overrides view for SGC %d: %v", sgcID, envErr)
+		} else {
+			pageData.EnvOverrides = &envData
+		}
+	}
+
 	RenderTempl(w, r, fmt.Sprintf("SGC %d", sgcID), pages.SGCDetail(pageData))
 }
 
