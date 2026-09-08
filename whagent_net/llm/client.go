@@ -7,20 +7,17 @@
 // provider (OpenRouter) and a base-URL swap covers the foreseeable
 // need"): there is exactly one Client type here, never a provider
 // interface.
-//
-// Scaffold phase (#2112): types and signatures are final per the issue's
-// Implementation-phase column contract; every method body in this
-// package is a stub (errNotImplemented) that compiles but does no real
-// work. Real HTTP calls and response parsing land in the Implementation
-// phase.
 package llm
 
 import (
 	"context"
-	"errors"
+	"encoding/json"
+	"fmt"
 
 	openai "github.com/openai/openai-go/v2"
 	"github.com/openai/openai-go/v2/option"
+	"github.com/openai/openai-go/v2/packages/param"
+	"github.com/openai/openai-go/v2/shared"
 )
 
 // Role is a chat message's role, mirroring the OpenAI wire protocol that
@@ -91,13 +88,15 @@ type Client struct {
 // NewClient builds a Client against baseURL (OpenRouter's
 // OpenAI-compatible endpoint -- see whagent_net/ENV.md's
 // OPENROUTER_BASE_URL), authenticating with apiKey (OPENROUTER_API_KEY).
-func NewClient(apiKey, baseURL string) *Client {
-	return &Client{
-		oa: openai.NewClient(
-			option.WithAPIKey(apiKey),
-			option.WithBaseURL(baseURL),
-		),
-	}
+// Extra opts are appended after the api-key/base-URL options, so a
+// caller (in particular a test) can override the underlying HTTP
+// transport via option.WithHTTPClient without a live OpenRouter call.
+func NewClient(apiKey, baseURL string, opts ...option.RequestOption) *Client {
+	all := append([]option.RequestOption{
+		option.WithAPIKey(apiKey),
+		option.WithBaseURL(baseURL),
+	}, opts...)
+	return &Client{oa: openai.NewClient(all...)}
 }
 
 // Complete makes one chat-completion call. It always requests provider
@@ -107,10 +106,150 @@ func NewClient(apiKey, baseURL string) *Client {
 // (including, when the provider supplies them, its own reported cost and
 // generation id).
 func (c *Client) Complete(ctx context.Context, req Request) (Response, error) {
-	return Response{}, errNotImplemented
+	params := openai.ChatCompletionNewParams{
+		Model:    shared.ChatModel(req.Model),
+		Messages: toWireMessages(req.Messages),
+		Tools:    toWireTools(req.Tools),
+	}
+
+	// usage.include=true unconditionally, on every call (LB6/FR7): the
+	// worker asks for provider usage/cost reporting opportunistically
+	// never suffices, so this is not gated on anything caller-supplied.
+	resp, err := c.oa.Chat.Completions.New(ctx, params, option.WithJSONSet("usage.include", true))
+	if err != nil {
+		return Response{}, fmt.Errorf("llm: chat completion: %w", err)
+	}
+	if len(resp.Choices) == 0 {
+		return Response{}, fmt.Errorf("llm: chat completion: response had no choices")
+	}
+
+	choice := resp.Choices[0]
+	message, toolCalls := fromWireMessage(choice.Message)
+
+	return Response{
+		Message:   message,
+		ToolCalls: toolCalls,
+		Usage:     fromWireUsage(resp.ID, resp.Usage),
+	}, nil
 }
 
-// errNotImplemented is returned by every scaffold-phase stub method in
-// this package (whagent_net/llm, issue #2112). Real logic lands in the
-// Implementation phase.
-var errNotImplemented = errors.New("not implemented: whagent_net/llm scaffold phase (#2112)")
+// toWireMessages converts the assembled context (Message, in this
+// package's provider-agnostic shape) into the OpenAI-wire message params
+// Complete sends.
+func toWireMessages(messages []Message) []openai.ChatCompletionMessageParamUnion {
+	out := make([]openai.ChatCompletionMessageParamUnion, 0, len(messages))
+	for _, m := range messages {
+		switch m.Role {
+		case RoleSystem:
+			out = append(out, openai.SystemMessage(m.Content))
+		case RoleUser:
+			out = append(out, openai.UserMessage(m.Content))
+		case RoleTool:
+			out = append(out, openai.ToolMessage(m.Content, m.ToolCallID))
+		case RoleAssistant:
+			out = append(out, assistantMessage(m))
+		default:
+			// Unknown roles are sent as-is via the user role rather than
+			// silently dropped -- the worker's context build is the only
+			// producer of Role today and always uses one of the four
+			// constants above, but a dropped message would be a silent
+			// context-loss bug if that ever changed.
+			out = append(out, openai.UserMessage(m.Content))
+		}
+	}
+	return out
+}
+
+// assistantMessage builds the assistant-message param for m, including
+// any tool calls it requested -- openai.AssistantMessage's helper does
+// not accept tool calls, so this constructs the param struct directly.
+func assistantMessage(m Message) openai.ChatCompletionMessageParamUnion {
+	asst := openai.ChatCompletionAssistantMessageParam{}
+	if m.Content != "" {
+		asst.Content = openai.ChatCompletionAssistantMessageParamContentUnion{
+			OfString: param.NewOpt(m.Content),
+		}
+	}
+	if len(m.ToolCalls) > 0 {
+		calls := make([]openai.ChatCompletionMessageToolCallUnionParam, 0, len(m.ToolCalls))
+		for _, tc := range m.ToolCalls {
+			calls = append(calls, openai.ChatCompletionMessageToolCallUnionParam{
+				OfFunction: &openai.ChatCompletionMessageFunctionToolCallParam{
+					ID:   tc.ID,
+					Type: "function",
+					Function: openai.ChatCompletionMessageFunctionToolCallFunctionParam{
+						Name:      tc.Name,
+						Arguments: tc.Arguments,
+					},
+				},
+			})
+		}
+		asst.ToolCalls = calls
+	}
+	return openai.ChatCompletionMessageParamUnion{OfAssistant: &asst}
+}
+
+// toWireTools converts the agent definition's allowed tool set into the
+// OpenAI-wire function-tool params Complete sends.
+func toWireTools(tools []ToolDefinition) []openai.ChatCompletionToolUnionParam {
+	if len(tools) == 0 {
+		return nil
+	}
+	out := make([]openai.ChatCompletionToolUnionParam, 0, len(tools))
+	for _, t := range tools {
+		fn := shared.FunctionDefinitionParam{
+			Name:       t.Name,
+			Parameters: shared.FunctionParameters(t.Parameters),
+		}
+		if t.Description != "" {
+			fn.Description = param.NewOpt(t.Description)
+		}
+		out = append(out, openai.ChatCompletionFunctionTool(fn))
+	}
+	return out
+}
+
+// fromWireMessage converts a provider response's message into this
+// package's Message plus its tool calls. Arguments is passed through
+// verbatim -- the worker's tool dispatch activity decodes it, this
+// package does not.
+func fromWireMessage(msg openai.ChatCompletionMessage) (Message, []ToolCall) {
+	toolCalls := make([]ToolCall, 0, len(msg.ToolCalls))
+	for _, tc := range msg.ToolCalls {
+		toolCalls = append(toolCalls, ToolCall{
+			ID:        tc.ID,
+			Name:      tc.Function.Name,
+			Arguments: tc.Function.Arguments,
+		})
+	}
+	return Message{
+		Role:      RoleAssistant,
+		Content:   msg.Content,
+		ToolCalls: toolCalls,
+	}, toolCalls
+}
+
+// fromWireUsage converts a provider response's id and usage block into a
+// UsageReport. generationID is the provider's response id -- OpenRouter
+// returns its generation id as the top-level chat-completion "id" (LB6:
+// recorded even though M1 has no reader of it). ProviderCostUSD is
+// populated from usage's "cost" extra field -- OpenRouter's
+// usage.include=true extension to the OpenAI-compatible usage block,
+// which the openai-go response types have no typed field for -- and left
+// nil when the provider omitted it, which ResolveCost (cost.go) treats
+// as "must estimate", never as "free".
+func fromWireUsage(generationID string, usage openai.CompletionUsage) UsageReport {
+	report := UsageReport{
+		PromptTokens:     usage.PromptTokens,
+		CompletionTokens: usage.CompletionTokens,
+		GenerationID:     generationID,
+	}
+	if field, ok := usage.JSON.ExtraFields["cost"]; ok && field.Valid() {
+		var costUSD float64
+		if err := json.Unmarshal([]byte(field.Raw()), &costUSD); err == nil {
+			cost := usdToMicros(costUSD)
+			report.ProviderCostUSD = &cost
+		}
+	}
+	return report
+}

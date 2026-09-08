@@ -13,5 +13,7 @@ go_library(
     deps = [
         "@com_github_openai_openai_go_v2//:openai-go",
         "@com_github_openai_openai_go_v2//option",
+        "@com_github_openai_openai_go_v2//packages/param",
+        "@com_github_openai_openai_go_v2//shared",
     ],
 )
