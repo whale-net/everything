@@ -49,6 +49,36 @@ go_test(
     ],
 )
 
+# Server-level allowed host-port ranges (#2080 / #2095, FR12): migration
+# round-trip + constraint tests. Manual-tagged; run explicitly (requires a
+# working Docker daemon):
+#   bazel test //manmanv2/migrate:migration_038_integration_test --test_output=all
+go_test(
+    # keep
+    name = "migration_038_integration_test",
+    size = "large",
+    timeout = "long",
+    srcs = [
+        "main.go",
+        "migration_038_integration_test.go",
+    ],
+    embedsrcs = glob(["migrations/*.sql"]),
+    gotags = ["integration"],
+    tags = [
+        "external",
+        "integration",
+        "manual",
+        "no-cache",
+        "no-sandbox",
+        "requires-network",
+    ],
+    deps = [
+        "//libs/go/dbtest",
+        "//libs/go/migrate",
+        "@com_github_jackc_pgx_v5//stdlib",
+    ],
+)
+
 # Release metadata for migration job
 release_app(
     name = "control-migration",
