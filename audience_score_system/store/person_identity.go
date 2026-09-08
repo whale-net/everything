@@ -109,7 +109,13 @@ func (s personIdentityStore) FindOrCreateByIssSub(ctx context.Context, iss, sub 
 	if err != nil {
 		return Person{}, false, fmt.Errorf("find or create person identity: begin tx: %w", err)
 	}
-	defer tx.Rollback(ctx) //nolint:errcheck // no-op once Commit has succeeded; otherwise this is the rollback that undoes a lost race (see doc comment).
+	// The unique-violation branch below rolls tx back explicitly (see that
+	// branch for why) before this defer ever fires; when it does, this
+	// call is a no-op (tx.Rollback on an already-closed tx just returns
+	// pgx.ErrTxClosed, which is fine to ignore). Otherwise this defer is
+	// either the rollback that undoes a lost race, or a no-op once Commit
+	// has succeeded.
+	defer tx.Rollback(ctx) //nolint:errcheck // no-op once Commit -- or the explicit Rollback below -- has already run.
 
 	var p Person
 	if err := tx.QueryRow(ctx, `
@@ -124,10 +130,24 @@ func (s personIdentityStore) FindOrCreateByIssSub(ctx context.Context, iss, sub 
 		INSERT INTO person_oidc_identity (person_id, iss, sub) VALUES ($1, $2, $3)
 	`, p.ID, iss, sub); err != nil {
 		if isUniqueViolation(err) {
-			// Lost the race for this exact (iss, sub) pair -- the deferred
-			// Rollback above discards the Person row just INSERTed, so it
-			// never becomes a second, orphaned row for this pair. Resolve
-			// to the pair's actual owner instead.
+			// Lost the race for this exact (iss, sub) pair. Roll back
+			// explicitly -- and *before* the re-lookup below -- rather than
+			// relying on the deferred Rollback at function exit: the
+			// re-lookup below acquires its own connection from s.pool, and
+			// under a saturated pool (e.g. a concurrent-race test driving
+			// more losers than the pool has connections) every loser
+			// holding its own tx connection open while *also* blocking on a
+			// second connection for the re-lookup is a self-deadlock --
+			// every held connection is waiting on one more connection from
+			// the very pool it's exhausting. Rolling back first returns
+			// this connection to the pool before asking for another, so
+			// the re-lookup can never deadlock against sibling losers.
+			// Rollback here also still discards the Person row just
+			// INSERTed, so it never becomes a second, orphaned row for
+			// this pair; the deferred Rollback above becomes a no-op.
+			if rollbackErr := tx.Rollback(ctx); rollbackErr != nil {
+				return Person{}, false, fmt.Errorf("find or create person identity: rollback after concurrent create: %w", rollbackErr)
+			}
 			existing, lookupErr := s.lookup(ctx, iss, sub)
 			if lookupErr != nil {
 				return Person{}, false, fmt.Errorf("find or create person identity: resolve after concurrent create: %w", lookupErr)
