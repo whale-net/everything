@@ -413,8 +413,13 @@ func (r *ActionRepository) Create(ctx context.Context, action *manman.ActionDefi
 		return 0, fmt.Errorf("failed to delete existing input fields: %w", err)
 	}
 
-	// Insert input fields and options
-	for _, field := range fields {
+	// Insert input fields and options. Option payloads reference fields by
+	// their 0-based position in the fields slice (FieldID): the DB field_id
+	// doesn't exist yet and changes on every update, so it can't be used as
+	// the link. An unset FieldID (0) means "first field" -- what seed scripts
+	// and single-field payloads send. (Matching on 0 for every field would
+	// duplicate the option into every field of a multi-field action.)
+	for fieldIdx, field := range fields {
 		fieldQuery := `
 			INSERT INTO action_input_fields (
 				action_id, name, label, field_type, required, placeholder,
@@ -446,10 +451,9 @@ func (r *ActionRepository) Create(ctx context.Context, action *manman.ActionDefi
 			return 0, fmt.Errorf("failed to insert input field: %w", err)
 		}
 
-		// Insert options for this field
+		// Insert options for this field (FieldID = field position, see above)
 		for _, option := range options {
-			// Only insert options that belong to this field (matched by name)
-			if option.FieldID == field.FieldID || option.FieldID == 0 {
+			if option.FieldID == int64(fieldIdx) {
 				optionQuery := `
 					INSERT INTO action_input_options (
 						field_id, value, label, display_order, is_default
@@ -536,8 +540,11 @@ func (r *ActionRepository) Update(ctx context.Context, action *manman.ActionDefi
 		return fmt.Errorf("failed to delete existing input fields: %w", err)
 	}
 
-	// Insert new input fields and options
-	for _, field := range fields {
+	// Insert new input fields and options. Option payloads reference fields
+	// by their 0-based position in the fields slice (FieldID), same convention
+	// as Create: the previous DB field_id is stale after the delete+reinsert,
+	// and matching on 0 for every field would duplicate options across fields.
+	for fieldIdx, field := range fields {
 		fieldQuery := `
 			INSERT INTO action_input_fields (
 				action_id, name, label, field_type, required, placeholder,
@@ -569,10 +576,9 @@ func (r *ActionRepository) Update(ctx context.Context, action *manman.ActionDefi
 			return fmt.Errorf("failed to insert input field: %w", err)
 		}
 
-		// Insert options for this field
+		// Insert options for this field (FieldID = field position, see above)
 		for _, option := range options {
-			// Only insert options that belong to this field (matched by field_id or name)
-			if option.FieldID == field.FieldID || option.FieldID == 0 {
+			if option.FieldID == int64(fieldIdx) {
 				optionQuery := `
 					INSERT INTO action_input_options (
 						field_id, value, label, display_order, is_default
