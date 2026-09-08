@@ -125,3 +125,38 @@ type WorkshopBatchJobItem struct {
 	CreatedAt      time.Time `db:"created_at"`
 	UpdatedAt      time.Time `db:"updated_at"`
 }
+
+// WorkshopCacheEntry is one version of a content-addressed Workshop cache
+// object (#2181, plan #2175, FR5/FR9). Identity is WorkshopID +
+// ContentVersion ONLY (NFR1) -- there is deliberately no sgc_id, server_id,
+// deployment_id, library_id, or game_id column here, and CacheKey (derived
+// by //manmanv2/api/workshop.CacheKey) never embeds any of them. No
+// SGC-scoped uniqueness exists anywhere in this layer (NFR2).
+//
+// This is an append-only version history, not SCD2 (AGENTS.md § SCD2): when
+// an addon's source changes, a new row is inserted and the prior row is
+// never closed out via valid_from/valid_to or an is_current flag. Rows are
+// only ever removed by explicit Admin eviction (FR12); no garbage collection
+// of superseded entries exists in this layer.
+type WorkshopCacheEntry struct {
+	CacheEntryID   int64      `db:"cache_entry_id"`
+	WorkshopID     string     `db:"workshop_id"`
+	ContentVersion string     `db:"content_version"`
+	CacheKey       string     `db:"cache_key"`
+	S3Key          string     `db:"s3_key"`
+	SizeBytes      *int64     `db:"size_bytes"`
+	LastVerifiedAt *time.Time `db:"last_verified_at"`
+	CreatedAt      time.Time  `db:"created_at"`
+}
+
+// WorkshopCacheHostPresence records that server_id currently holds a copy of
+// cache_entry_id's object. This is purely an observation of *where a copy
+// currently sits* -- it is never part of a cache entry's identity (NFR1),
+// which is why it lives in its own table rather than as a column on
+// WorkshopCacheEntry.
+type WorkshopCacheHostPresence struct {
+	CacheEntryID int64     `db:"cache_entry_id"`
+	ServerID     int64     `db:"server_id"`
+	FirstSeenAt  time.Time `db:"first_seen_at"`
+	LastSeenAt   time.Time `db:"last_seen_at"`
+}
