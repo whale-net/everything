@@ -32,7 +32,8 @@ VALUES (
     'success',
     'fa-save'
 )
-ON CONFLICT (definition_level, entity_id, name) DO NOTHING;
+ON CONFLICT (definition_level, entity_id, name) DO UPDATE SET
+    deleted_at = NULL;  -- FR10 re-create: revive a soft-deleted action at this slot (task #2092); a live row is left untouched
 
 -- Simple button: Kick all bots
 INSERT INTO action_definitions (definition_level, entity_id, name, label, description, command_template, display_order, group_name, button_style, requires_confirmation, confirmation_message)
@@ -49,7 +50,8 @@ VALUES (
     true,
     'Are you sure you want to kick all bots?'
 )
-ON CONFLICT (definition_level, entity_id, name) DO NOTHING;
+ON CONFLICT (definition_level, entity_id, name) DO UPDATE SET
+    deleted_at = NULL;  -- FR10 re-create: revive a soft-deleted action at this slot (task #2092); a live row is left untouched
 
 -- Select button: Change map
 INSERT INTO action_definitions (definition_level, entity_id, name, label, description, command_template, display_order, group_name, button_style)
@@ -64,7 +66,8 @@ VALUES (
     'Map Selection',
     'primary'
 )
-ON CONFLICT (definition_level, entity_id, name) DO NOTHING;
+ON CONFLICT (definition_level, entity_id, name) DO UPDATE SET
+    deleted_at = NULL;  -- FR10 re-create: revive a soft-deleted action at this slot (task #2092); a live row is left untouched
 
 -- Add map selection input field
 INSERT INTO action_input_fields (action_id, name, label, field_type, required, display_order, help_text)
@@ -111,7 +114,8 @@ VALUES (
     'Workshop',
     'info'
 )
-ON CONFLICT (definition_level, entity_id, name) DO NOTHING;
+ON CONFLICT (definition_level, entity_id, name) DO UPDATE SET
+    deleted_at = NULL;  -- FR10 re-create: revive a soft-deleted action at this slot (task #2092); a live row is left untouched
 
 -- Add workshop ID input field
 INSERT INTO action_input_fields (action_id, name, label, field_type, required, placeholder, pattern, display_order, help_text)
@@ -145,7 +149,8 @@ VALUES (
     true,
     'This will execute a server config file. Continue?'
 )
-ON CONFLICT (definition_level, entity_id, name) DO NOTHING;
+ON CONFLICT (definition_level, entity_id, name) DO UPDATE SET
+    deleted_at = NULL;  -- FR10 re-create: revive a soft-deleted action at this slot (task #2092); a live row is left untouched
 
 INSERT INTO action_input_fields (action_id, name, label, field_type, required, placeholder, display_order, help_text)
 SELECT

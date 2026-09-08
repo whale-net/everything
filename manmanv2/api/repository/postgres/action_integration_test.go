@@ -47,6 +47,9 @@ const actionSchema = `
 		enabled BOOLEAN DEFAULT true,
 		created_at TIMESTAMPTZ DEFAULT NOW(),
 		updated_at TIMESTAMPTZ DEFAULT NOW(),
+		-- Post-037 shape (task #2092): soft-delete marker referenced by
+		-- ActionRepository.Create/Delete upserts.
+		deleted_at TIMESTAMPTZ,
 		UNIQUE (definition_level, entity_id, name),
 		CHECK (name ~ '^[a-z0-9_]+$'),
 		CHECK (definition_level IN ('game', 'game_config', 'server_game_config')),

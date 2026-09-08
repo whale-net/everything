@@ -23,6 +23,37 @@ go_binary(
 #
 # Run it explicitly (requires a working Docker daemon):
 #   bazel test //manmanv2/migrate:migration_036_integration_test --test_output=all
+# Same precedent as migration_036_integration_test for the FR9/FR10
+# migration (task #2092): real embedded migrations through the Runner.
+#
+# Run it explicitly (requires a working Docker daemon):
+#   bazel test //manmanv2/migrate:migration_037_integration_test --test_output=all
+go_test(
+    # keep
+    name = "migration_037_integration_test",
+    size = "large",
+    timeout = "long",
+    srcs = [
+        "main.go",
+        "migration_037_integration_test.go",
+    ],
+    embedsrcs = glob(["migrations/*.sql"]),
+    gotags = ["integration"],
+    tags = [
+        "external",
+        "integration",
+        "manual",
+        "no-cache",
+        "no-sandbox",
+        "requires-network",
+    ],
+    deps = [
+        "//libs/go/dbtest",
+        "//libs/go/migrate",
+        "@com_github_jackc_pgx_v5//stdlib",
+    ],
+)
+
 go_test(
     # keep
     name = "migration_036_integration_test",
