@@ -730,7 +730,11 @@ func (h *Handlers) renderIdeaDetail(w http.ResponseWriter, r *http.Request, pers
 	form.IdeaID = idea.ID.String()
 
 	title := idea.Title
-	data := components.LayoutData{Title: title, User: person}
+	data := components.LayoutData{
+		Title:          title,
+		User:           person,
+		ContainerClass: "max-w-4xl xl:max-w-7xl 2xl:max-w-[1600px]",
+	}
 	if status != http.StatusOK {
 		w.WriteHeader(status)
 	}

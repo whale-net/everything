@@ -480,6 +480,28 @@ func TestShell_EmptyUserLabelOmitsLabel(t *testing.T) {
 	}
 }
 
+func TestShell_ContainerClassDefaultAndCustom(t *testing.T) {
+	defaultBody := render(t, Shell(ShellData{
+		BrandLabel: "Brand",
+		BrandHref:  "/",
+	}))
+	if !hasClass(defaultBody, "max-w-4xl") {
+		t.Errorf("expected default container class 'max-w-4xl', got %q", defaultBody)
+	}
+
+	customBody := render(t, Shell(ShellData{
+		BrandLabel:     "Brand",
+		BrandHref:      "/",
+		ContainerClass: "max-w-7xl",
+	}))
+	if !hasClass(customBody, "max-w-7xl") {
+		t.Errorf("expected custom container class 'max-w-7xl', got %q", customBody)
+	}
+	if hasClass(customBody, "max-w-4xl") {
+		t.Errorf("custom container class must override default 'max-w-4xl', got %q", customBody)
+	}
+}
+
 // --- ThemesCSS (FR10 POC theme parity) ----------------------------------------
 
 // cssRuleRE matches one CSS rule's raw selector text and body, e.g. for

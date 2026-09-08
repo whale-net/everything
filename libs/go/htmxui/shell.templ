@@ -42,15 +42,20 @@ package htmxui
 // <head> and does not render it; this mirrors app-registry's existing
 // Shell(title string, ...), whose title parameter is likewise not
 // referenced inside the component body today.
+//
+// ContainerClass allows overriding the default "max-w-4xl" main container
+// width class (e.g. for widescreen or full-bleed layouts). Empty defaults
+// to "max-w-4xl".
 type ShellData struct {
-	Title       string
-	BrandLabel  string
-	BrandHref   string
-	Nav         templ.Component
-	Banner      templ.Component
-	HeaderRight templ.Component
-	UserLabel   string
-	Themes      []Theme
+	Title          string
+	BrandLabel     string
+	BrandHref      string
+	Nav            templ.Component
+	Banner         templ.Component
+	HeaderRight    templ.Component
+	UserLabel      string
+	Themes         []Theme
+	ContainerClass string
 }
 
 // Shell is htmxui's shared navbar+main chrome (FR1): the navbar frame,
@@ -82,7 +87,7 @@ templ Shell(data ShellData) {
 		</div>
 	</div>
 	<main class="min-h-screen bg-base-200 p-6">
-		<div class="mx-auto max-w-4xl space-y-6">
+		<div class={ "mx-auto space-y-6", templ.KV(data.ContainerClass, data.ContainerClass != ""), templ.KV("max-w-4xl", data.ContainerClass == "") }>
 			if data.Banner != nil {
 				@data.Banner
 			}

@@ -604,9 +604,9 @@ func shortNoteID(id uuid.UUID) string {
 // truncated-excerpt idiom for keeping a per-note annotation compact.
 templ relatedNotesSection(relations []store.NoteRelation) {
 	if len(relations) > 0 {
-		<div class="mt-1 space-y-0.5">
+		<div class="mt-1 space-y-0.5 min-w-0">
 			for _, rel := range relations {
-				<p class="text-xs text-base-content/70">
+				<p class="text-xs text-base-content/70 break-words">
 					{ relationVerbPhrase(rel.RelationType, rel.Direction) } note { shortNoteID(rel.RelatedNoteID) }
 				</p>
 			}
@@ -666,11 +666,11 @@ templ citedBadge(note store.ResearchNote) {
 // with the SAME automatic HTML-escaping either way.
 templ noteBody(ch store.Channel, note store.ResearchNoteWithAuthor, relations []store.NoteRelation, noteRefs map[uuid.UUID]*uuid.UUID) {
 	<div id={ "note-" + note.ID.String() } class="flex justify-between items-start gap-4">
-		<div>
-			<p>
+		<div class="min-w-0 flex-1">
+			<p class="whitespace-pre-wrap break-words">
 				for _, seg := range noteRefSegments(note.Text, ch.ID, noteRefs) {
 					if seg.HRef != "" {
-						<a href={ templ.URL(seg.HRef) } class="link">{ seg.Text }</a>
+						<a href={ templ.URL(seg.HRef) } class="link break-all">{ seg.Text }</a>
 					} else {
 						{ seg.Text }
 					}
@@ -684,13 +684,15 @@ templ noteBody(ch store.Channel, note store.ResearchNoteWithAuthor, relations []
 				{ note.AuthorDisplayName } — { note.CreatedAt.UTC().Format("2006-01-02 15:04 UTC") }
 			</p>
 			if note.Cited() {
-				<p class="text-xs">
-					Source: <a href={ templ.URL(*note.SourceURL) } class="link" target="_blank" rel="noopener noreferrer">{ *note.SourceURL }</a>
+				<p class="text-xs break-all">
+					Source: <a href={ templ.URL(*note.SourceURL) } class="link break-all" target="_blank" rel="noopener noreferrer">{ *note.SourceURL }</a>
 				</p>
 			}
 			@relatedNotesSection(relations)
 		</div>
-		@citedBadge(note.ResearchNote)
+		<div class="shrink-0">
+			@citedBadge(note.ResearchNote)
+		</div>
 	</div>
 }
 
@@ -772,20 +774,22 @@ templ citedNoteBody(note store.ResearchNote, ok bool, retiredBy []store.Relation
 	} else {
 		<li class="border border-base-300 rounded p-2">
 			<div class="flex justify-between items-start gap-4">
-				<div>
-					<p class="text-sm">{ tools.Excerpt(note.Text) }</p>
+				<div class="min-w-0 flex-1">
+					<p class="text-sm whitespace-pre-wrap break-words">{ tools.Excerpt(note.Text) }</p>
 					if note.Cited() {
-						<p class="text-xs">
-							Source: <a href={ templ.URL(*note.SourceURL) } class="link" target="_blank" rel="noopener noreferrer">{ *note.SourceURL }</a>
+						<p class="text-xs break-all">
+							Source: <a href={ templ.URL(*note.SourceURL) } class="link break-all" target="_blank" rel="noopener noreferrer">{ *note.SourceURL }</a>
 						</p>
 					}
 					if label := retiredWarningLabel(retiredBy); label != "" {
-						<p class="text-xs text-warning font-semibold mt-1">
+						<p class="text-xs text-warning font-semibold mt-1 break-words">
 							⚠ { label } -- this citation still points at the note text above as originally cited.
 						</p>
 					}
 				</div>
-				@citedBadge(note)
+				<div class="shrink-0">
+					@citedBadge(note)
+				</div>
 			</div>
 		</li>
 	}
@@ -878,21 +882,27 @@ templ citedNotesSection(citedIDs []uuid.UUID, notes map[uuid.UUID]store.Research
 // presentation gate must never suppress an error the server already
 // decided to show.
 templ IdeaDetail(data components.LayoutData, ch store.Channel, idea store.Idea, notes []store.ResearchNoteWithAuthor, relationsByNote map[uuid.UUID][]store.NoteRelation, noteRefTargets map[uuid.UUID]*uuid.UUID, notesTruncated bool, threads []store.ThreadSummary, current *store.Verdict, authorNames map[uuid.UUID]string, citedNotes map[uuid.UUID]store.ResearchNote, retiredNotes map[uuid.UUID][]store.RelationType, canWrite bool, form noteFormData, verdictForm verdictFormData, strategies []store.StrategyDetail, proposeForm proposeFormData) {
+	{{
+		if data.ContainerClass == "" {
+			data.ContainerClass = "max-w-4xl xl:max-w-7xl 2xl:max-w-[1600px]"
+		}
+	}}
 	@components.Layout(data) {
-		<div class="card bg-base-100 border border-base-300 shadow-sm">
-			<div class="card-body">
-				<h1 class="card-title">{ idea.Title }</h1>
+		<div class="verdict-layout-container xl:flex xl:flex-row xl:items-start xl:gap-6">
+			<!-- Main Column: Research Notes, Threads, Propose Script -->
+			<div class="flex-1 min-w-0">
+				<div class="card bg-base-100 border border-base-300 shadow-sm">
+					<div class="card-body">
+						<h1 class="card-title text-2xl">{ idea.Title }</h1>
 
-				<div class="mt-2">
-					<h2 class="text-lg font-semibold">Research notes</h2>
-					<div class="mt-2 grid grid-cols-1 lg:grid-cols-2 gap-4 items-start">
-						<div>
+						<div class="mt-4">
+							<h2 class="text-lg font-semibold">Research notes</h2>
 							if len(notes) == 0 {
-								<p class="text-base-content/70">No research notes yet.</p>
+								<p class="text-base-content/70 mt-2">No research notes yet.</p>
 							} else {
-								<ul class="space-y-2 lg:max-h-[32rem] lg:overflow-y-auto lg:pr-1">
+								<ul class="mt-2 space-y-2">
 									for _, note := range notes {
-										<li class="border border-base-300 rounded p-2">
+										<li class="border border-base-300 rounded p-3 min-w-0 overflow-hidden">
 											<div class="flex items-start gap-2">
 												if canWrite {
 													<input
@@ -920,60 +930,95 @@ templ IdeaDetail(data components.LayoutData, ch store.Channel, idea store.Idea, 
 								</p>
 							}
 							if canWrite {
-								<div class="mt-4">
+								<div class="mt-6 border-t border-base-300 pt-4">
 									<h3 class="text-sm font-semibold">Save a research note</h3>
 									@saveNoteFormIdeaDetail(ch, idea, threads, notes, form)
 								</div>
 							}
 						</div>
-						if canWrite {
-							<div>
-								@saveVerdictPanel(ch, idea, verdictForm)
+
+						<div class="mt-6 border-t border-base-300 pt-4">
+							<h2 class="text-lg font-semibold">Research threads</h2>
+							<p class="text-sm text-base-content/70">
+								This Idea's threads only (FR3).
+							</p>
+							@threadList(threads)
+						</div>
+
+						if canWrite && (proposeForm.Error != "" || (current != nil && current.Verdict == store.VerdictViable)) {
+							<div class="mt-6 border-t border-base-300 pt-4">
+								<h2 class="text-lg font-semibold">Propose a video script</h2>
+								@proposeVideoScriptForm(ch, idea, strategies, proposeForm)
 							</div>
 						}
-					</div>
-				</div>
 
-				<div class="mt-6">
-					<h2 class="text-lg font-semibold">Research threads</h2>
-					<p class="text-sm text-base-content/70">
-						This Idea's threads only (FR3).
-					</p>
-					@threadList(threads)
-				</div>
-
-				<div class="mt-6">
-					<h2 class="text-lg font-semibold">Viability verdict</h2>
-					if current == nil {
-						<p class="text-base-content/70 mt-2">No verdict recorded yet.</p>
-					} else {
-						<div class="border border-base-300 rounded p-2 mt-2">
-							<p class="text-sm font-semibold">Current</p>
-							@verdictBody(*current, authorNames, citedNotes, retiredNotes)
-						</div>
-						<p class="mt-2">
-							<a href={ templ.URL("/channels/" + ch.ID.String() + "/research/ideas/" + idea.ID.String() + "/verdicts") } class="link link-primary text-sm">
-								View verdict history
+						<div class="card-actions justify-end mt-4">
+							<a href={ templ.URL("/channels/" + ch.ID.String() + "/research") } class="btn btn-secondary btn-sm">
+								Back to research
 							</a>
-						</p>
-					}
-				</div>
-
-				if canWrite && (proposeForm.Error != "" || (current != nil && current.Verdict == store.VerdictViable)) {
-					<div class="mt-6">
-						<h2 class="text-lg font-semibold">Propose a video script</h2>
-						@proposeVideoScriptForm(ch, idea, strategies, proposeForm)
+						</div>
 					</div>
-				}
-
-				<div class="card-actions justify-end mt-2">
-					<a href={ templ.URL("/channels/" + ch.ID.String() + "/research") } class="btn btn-secondary btn-sm">
-						Back to research
-					</a>
 				</div>
 			</div>
+
+			<!-- Floating Trigger Button (mobile / portrait / 1080x1920 when minimized) -->
+			<button
+				id="verdict-floating-btn"
+				type="button"
+				class="verdict-floating-btn btn btn-primary shadow-2xl gap-2 z-40"
+				data-toggle-verdict-box
+				aria-label="Open viability verdict box"
+			>
+				<span>Viability verdict</span>
+				if current != nil {
+					<span title={ components.VerdictGlyphTitle(current.Verdict) }>{ components.VerdictGlyph(current.Verdict) }</span>
+				} else {
+					<span title="No verdict yet">{ components.NoVerdictGlyph }</span>
+				}
+			</button>
+
+			<!-- Verdict Section: Floating box on 1080x1920 portrait / Narrow sidebar on widescreen -->
+			<aside
+				id="verdict-panel"
+				class="verdict-floating-panel border border-base-300 bg-base-100 rounded-box p-4 xl:p-5"
+			>
+				<div class="flex items-center justify-between pb-2 mb-2 border-b border-base-300">
+					<h2 class="text-lg font-semibold">Viability verdict</h2>
+					<button
+						type="button"
+						class="verdict-minimize-btn btn btn-ghost btn-xs"
+						data-toggle-verdict-box
+						title="Minimize verdict box"
+						aria-label="Minimize verdict box"
+					>
+						✕
+					</button>
+				</div>
+
+				if current == nil {
+					<p class="text-base-content/70 mt-2 text-sm">No verdict recorded yet.</p>
+				} else {
+					<div class="border border-base-300 rounded p-3 mt-2 bg-base-200/50">
+						<p class="text-xs uppercase font-bold tracking-wider text-base-content/60 mb-2">Current</p>
+						@verdictBody(*current, authorNames, citedNotes, retiredNotes)
+					</div>
+					<p class="mt-2">
+						<a href={ templ.URL("/channels/" + ch.ID.String() + "/research/ideas/" + idea.ID.String() + "/verdicts") } class="link link-primary text-sm">
+							View verdict history
+						</a>
+					</p>
+				}
+
+				if canWrite {
+					<div class="mt-4 pt-3 border-t border-base-300">
+						@saveVerdictPanel(ch, idea, verdictForm)
+					</div>
+				}
+			</aside>
 		</div>
 		@noteIDCopyScript()
+		@verdictBoxScript()
+		@verdictStyles()
 	}
 }
 
@@ -1052,15 +1097,15 @@ templ VerdictDetail(data components.LayoutData, ch store.Channel, idea store.Ide
 // show the identical superseded/excluded warning.
 templ verdictBody(v store.Verdict, authorNames map[uuid.UUID]string, notes map[uuid.UUID]store.ResearchNote, retired map[uuid.UUID][]store.RelationType) {
 	<div class="flex justify-between items-start gap-4">
-		<div>
+		<div class="min-w-0 flex-1">
 			<p class="text-sm text-base-content/70">Version { strconv.Itoa(v.Version) }</p>
-			<p>{ v.Reasoning }</p>
-			<p class="text-xs text-base-content/70">
+			<p class="whitespace-pre-wrap break-words">{ v.Reasoning }</p>
+			<p class="text-xs text-base-content/70 mt-1">
 				{ authorName(authorNames, v.AuthorPersonID) } ({ verdictSourceLabel(v.Source) }) — { v.CreatedAt.UTC().Format("2006-01-02 15:04 UTC") }
 			</p>
 			@citedNotesSection(v.CitedResearchNoteIDs, notes, retired)
 		</div>
-		<span title={ components.VerdictGlyphTitle(v.Verdict) } aria-label={ components.VerdictGlyphTitle(v.Verdict) }>{ components.VerdictGlyph(v.Verdict) }</span>
+		<span class="shrink-0 text-lg" title={ components.VerdictGlyphTitle(v.Verdict) } aria-label={ components.VerdictGlyphTitle(v.Verdict) }>{ components.VerdictGlyph(v.Verdict) }</span>
 	</div>
 }
 
@@ -1123,7 +1168,7 @@ templ saveVerdictPanel(ch store.Channel, idea store.Idea, form verdictFormData) 
 templ saveVerdictForm(ch store.Channel, idea store.Idea, form verdictFormData) {
 	<form id="save-verdict-form" method="post" action={ templ.URL("/channels/" + ch.ID.String() + "/research/ideas/" + idea.ID.String() + "/verdicts") } class="mt-2 space-y-2">
 		if form.Error != "" {
-			<p class="text-error text-sm">{ form.Error }</p>
+			<p class="text-error text-sm break-words">{ form.Error }</p>
 		}
 		<p class="text-xs text-base-content/70">
 			Submitting records a new verdict version -- it never edits the current one.
@@ -1131,10 +1176,10 @@ templ saveVerdictForm(ch store.Channel, idea store.Idea, form verdictFormData) {
 		</p>
 		<input type="hidden" name="idempotency_key" value={ form.IdempotencyKey }/>
 		<div class="form-control">
-			<label class="label">
-				<span class="label-text">Verdict</span>
+			<label class="label py-1">
+				<span class="label-text text-xs font-semibold">Verdict</span>
 			</label>
-			<select name="verdict" class="select select-bordered w-full" required>
+			<select name="verdict" class="select select-bordered select-sm w-full" required>
 				<option value="" disabled selected?={ form.Verdict == "" }>Choose a verdict...</option>
 				<option value={ string(store.VerdictViable) } selected?={ form.Verdict == string(store.VerdictViable) }>{ verdictLabel(store.VerdictViable) }</option>
 				<option value={ string(store.VerdictNotViable) } selected?={ form.Verdict == string(store.VerdictNotViable) }>{ verdictLabel(store.VerdictNotViable) }</option>
@@ -1142,13 +1187,95 @@ templ saveVerdictForm(ch store.Channel, idea store.Idea, form verdictFormData) {
 			</select>
 		</div>
 		<div class="form-control mt-2">
-			<label class="label">
-				<span class="label-text">Reasoning</span>
+			<label class="label py-1">
+				<span class="label-text text-xs font-semibold">Reasoning</span>
 			</label>
-			<textarea name="reasoning" class="textarea textarea-bordered w-full" rows="3" required>{ form.Reasoning }</textarea>
+			<textarea name="reasoning" class="textarea textarea-bordered textarea-sm w-full" rows="3" required>{ form.Reasoning }</textarea>
 		</div>
-		<button type="submit" class="btn btn-primary btn-sm mt-2">Save verdict</button>
+		<button type="submit" class="btn btn-primary btn-sm w-full mt-3">Save verdict</button>
 	</form>
+}
+
+// verdictBoxScript provides progressive enhancement for toggling the
+// floating verdict box on mobile/portrait monitors into a compact
+// floating action button, and expanding it back.
+templ verdictBoxScript() {
+	<script>
+		document.addEventListener("click", function (event) {
+			var toggle = event.target.closest("[data-toggle-verdict-box]");
+			if (!toggle) { return; }
+			var panel = document.getElementById("verdict-panel");
+			var btn = document.getElementById("verdict-floating-btn");
+			if (!panel || !btn) { return; }
+			panel.classList.toggle("is-minimized");
+			btn.classList.toggle("is-minimized");
+		});
+	</script>
+}
+
+// verdictStyles provides the responsive styling for IdeaDetail:
+// - On widescreen (landscape, width >= 1280px): two-column layout with
+//   full-length research notes and a narrow verdict sidebar that scrolls
+//   in normal document flow.
+// - On 1080x1920 portrait monitors and mobile: a floating verdict box pinned
+//   to the bottom-right corner, collapsible to a floating action button.
+templ verdictStyles() {
+	<style>
+		@media (orientation: portrait), (max-width: 1279px) {
+			.verdict-floating-panel {
+				position: fixed;
+				bottom: 1.5rem;
+				right: 1.5rem;
+				width: 24rem;
+				max-width: calc(100vw - 3rem);
+				max-height: 85vh;
+				overflow-y: auto;
+				box-shadow: 0 25px 50px -12px rgb(0 0 0 / 0.25);
+				z-index: 40;
+			}
+			.verdict-floating-panel.is-minimized {
+				display: none !important;
+			}
+			.verdict-floating-btn {
+				position: fixed;
+				bottom: 1.5rem;
+				right: 1.5rem;
+			}
+			.verdict-floating-btn.is-minimized {
+				display: inline-flex !important;
+			}
+			.verdict-floating-btn:not(.is-minimized) {
+				display: none !important;
+			}
+			.verdict-minimize-btn {
+				display: inline-flex !important;
+			}
+		}
+		@media (min-width: 1280px) and (orientation: landscape) {
+			.verdict-layout-container {
+				display: flex;
+				flex-direction: row;
+				align-items: flex-start;
+				gap: 1.5rem;
+			}
+			.verdict-floating-panel {
+				position: static;
+				width: 24rem;
+				max-width: none;
+				max-height: none;
+				overflow: visible;
+				box-shadow: var(--shadow-sm, 0 1px 2px 0 rgb(0 0 0 / 0.05));
+				z-index: auto;
+				display: block !important;
+			}
+			.verdict-floating-btn {
+				display: none !important;
+			}
+			.verdict-minimize-btn {
+				display: none !important;
+			}
+		}
+	</style>
 }
 
 // proposeVideoScriptForm renders the Idea detail page's propose-video-

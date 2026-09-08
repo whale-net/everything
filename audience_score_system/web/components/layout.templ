@@ -17,8 +17,9 @@ import (
 // instead of a shared-library auth struct (mirrors htmxui.ShellData's
 // UserLabel being a plain string for the same reason).
 type LayoutData struct {
-	Title string
-	User  *store.Person
+	Title          string
+	User           *store.Person
+	ContainerClass string
 }
 
 // nav is `web`'s app-owned nav item list (FR1a -- htmxui.Shell hardcodes
@@ -64,7 +65,8 @@ templ Layout(data LayoutData) {
 			IdentityLabel: identityLabel(data.User),
 			LogoutHref:    "/logout",
 		}),
-		Themes: htmxui.Themes,
+		Themes:         htmxui.Themes,
+		ContainerClass: data.ContainerClass,
 	}) {
 		{ children... }
 	}
