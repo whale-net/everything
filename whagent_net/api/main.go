@@ -11,6 +11,7 @@ import (
 	"errors"
 	"fmt"
 	"net"
+	"net/http"
 	"os"
 	"os/signal"
 	"sync"
@@ -20,6 +21,7 @@ import (
 	"github.com/whale-net/everything/libs/go/grpcauth"
 	"github.com/whale-net/everything/libs/go/logging"
 	"github.com/whale-net/everything/whagent_net/api/handlers"
+	"github.com/whale-net/everything/whagent_net/api/persona"
 	pb "github.com/whale-net/everything/whagent_net/protos"
 	"github.com/whale-net/everything/whagent_net/session"
 	"go.opentelemetry.io/contrib/instrumentation/google.golang.org/grpc/otelgrpc"
@@ -65,6 +67,34 @@ func run() error {
 	defer pool.Close()
 	logger.Info("database connected")
 
+	// api is whagent-net's trust root (LB3/FR10/NFR4, issue #2115): it
+	// owns the signing key(s) persona.LoadKeySet loads here, fails
+	// startup loudly when none is configured -- never falling back to an
+	// unsigned or symmetric mode -- and serves the resulting KeySet's
+	// public half over persona.NewMux (below), alongside this process's
+	// gRPC surface.
+	keySet, err := persona.LoadKeySet(persona.KeySetEnvConfig{
+		Issuer:              getEnv("WHAGENT_ISSUER", "whagent-net"),
+		ActiveKeyID:         os.Getenv("WHAGENT_SIGNING_KEY_ID"),
+		ActivePrivateKeyPEM: os.Getenv("WHAGENT_SIGNING_KEY"),
+		AdditionalKeysJSON:  os.Getenv("WHAGENT_SIGNING_KEYS_ADDITIONAL"),
+	})
+	if err != nil {
+		return fmt.Errorf("persona: %w", err)
+	}
+	// persona.NewIssuer(keySet.ActiveSigner()) mints the persona Claim
+	// workers present on every tool call (Issuer.Issue,
+	// whagent_net/api/persona/issuer.go). Not yet wired to any RPC or
+	// internal call path here -- that wiring, and its exposure-surface
+	// guarantee (never reachable for a subject other than the caller's
+	// own session), is this issue's Implementation phase.
+
+	jwksAddr := getEnv("WHAGENT_JWKS_ADDR", ":8090")
+	jwksServer := &http.Server{
+		Addr:    jwksAddr,
+		Handler: persona.NewMux(keySet),
+	}
+
 	// pub is nil: this task's SessionService scope is read-only RPCs
 	// (GetSession/ReadTranscript) that never publish events. The write
 	// RPCs that will need a real events.PublisherInterface land with the
@@ -98,6 +128,7 @@ func run() error {
 		return fmt.Errorf("listen :%s: %w", port, err)
 	}
 	logger.Info("whagent-net api listening", "port", port)
+	logger.Info("whagent-net jwks listening", "addr", jwksAddr, "path", persona.JWKSPath)
 
 	done := make(chan error, 1)
 	var once sync.Once
@@ -109,6 +140,9 @@ func run() error {
 		<-sig
 		logger.Info("shutting down")
 		grpcServer.GracefulStop()
+		if err := jwksServer.Shutdown(context.Background()); err != nil {
+			logger.Warn("jwks server shutdown", "error", err)
+		}
 		sendDone(nil)
 	}()
 	go func() {
@@ -118,6 +152,14 @@ func run() error {
 				return
 			}
 			sendDone(fmt.Errorf("grpc serve: %w", err))
+		}
+	}()
+	go func() {
+		if err := jwksServer.ListenAndServe(); err != nil {
+			if errors.Is(err, http.ErrServerClosed) {
+				return
+			}
+			sendDone(fmt.Errorf("jwks serve: %w", err))
 		}
 	}()
 

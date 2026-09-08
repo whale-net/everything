@@ -1,0 +1,21 @@
+"""whagent-net's persona claim issuance and JWKS surface (issue #2115) --
+api's trust-root implementation over //libs/go/whagent's Signer/Verifier
+contract."""
+
+load("@rules_go//go:def.bzl", "go_library")
+
+go_library(
+    name = "persona",
+    srcs = [
+        "issuer.go",
+        "jwks.go",
+        "keys.go",
+    ],
+    importpath = "github.com/whale-net/everything/whagent_net/api/persona",
+    visibility = ["//visibility:public"],
+    deps = [
+        "//libs/go/whagent",
+        "//whagent_net/session",
+        "@com_github_go_jose_go_jose_v4//:go-jose",
+    ],
+)
