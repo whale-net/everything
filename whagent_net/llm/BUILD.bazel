@@ -1,0 +1,17 @@
+load("@rules_go//go:def.bzl", "go_library")
+
+go_library(
+    name = "llm",
+    srcs = [
+        "catalog.go",
+        "client.go",
+        "cost.go",
+        "pricing.go",
+    ],
+    importpath = "github.com/whale-net/everything/whagent_net/llm",
+    visibility = ["//visibility:public"],
+    deps = [
+        "@com_github_openai_openai_go_v2//:openai-go",
+        "@com_github_openai_openai_go_v2//option",
+    ],
+)
