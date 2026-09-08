@@ -468,6 +468,19 @@ func (h *CommandHandlerImpl) HandleRemoveAddon(ctx context.Context, cmd *rmq.Rem
 	return h.downloadOrchestrator.HandleRemoveCommand(ctx, cmd)
 }
 
+// HandleVerifyCacheEntry handles an Admin's on-demand SteamCMD verify of a single
+// workshop cache entry, independent of any install (#2186, plan #2175 FR11). Delegates
+// directly to the download orchestrator's VerifyWorkshopItem-backed handler -- the same
+// reuse pattern HandleDownloadAddon/HandleRemoveAddon already follow for their own
+// orchestrator methods.
+func (h *CommandHandlerImpl) HandleVerifyCacheEntry(ctx context.Context, cmd *rmq.VerifyCacheEntryCommand) error {
+	slog.Info("processing verify cache entry command",
+		"cache_entry_id", cmd.CacheEntryID,
+		"workshop_id", cmd.WorkshopID,
+		"steam_app_id", cmd.SteamAppID)
+	return h.downloadOrchestrator.HandleVerifyCacheEntryCommand(ctx, cmd)
+}
+
 // initializeGRPCClient creates a gRPC client connection to the control API
 func initializeGRPCClient(ctx context.Context, apiAddress string, authOpt grpc.DialOption) (pb.ManManAPIClient, pb.WorkshopServiceClient, error) {
 	// Build TLS config based on environment and auto-detection

@@ -2,7 +2,9 @@ package postgres
 
 import (
 	"context"
+	"errors"
 
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/whale-net/everything/manmanv2/models"
 )
@@ -116,6 +118,56 @@ func (r *WorkshopAddonRepository) GetByWorkshopID(ctx context.Context, gameID in
 		&addon.UpdatedAt,
 	)
 	if err != nil {
+		return nil, err
+	}
+
+	return addon, nil
+}
+
+// GetByWorkshopIDAnyGame resolves workshopID to its addon (joined with its
+// game's steam_app_id) without a known game_id -- see the interface doc
+// comment (repository.go) for why the on-demand verify RPC (#2186) needs
+// this rather than GetByWorkshopID. A Steam Workshop item id is globally
+// unique to the app it belongs to, so at most one row is expected; this
+// takes the lowest addon_id if more than one somehow matches, for
+// deterministic behavior. Returns (nil, nil) on no match.
+func (r *WorkshopAddonRepository) GetByWorkshopIDAnyGame(ctx context.Context, workshopID string) (*manman.WorkshopAddonWithGame, error) {
+	query := `
+		SELECT wa.addon_id, wa.game_id, wa.workshop_id, wa.platform_type, wa.name, wa.description,
+			   wa.file_size_bytes, wa.installation_path, wa.preset_id,
+			   wa.is_collection, wa.is_deprecated, wa.collection_id, wa.metadata, wa.last_updated,
+			   wa.created_at, wa.updated_at, g.steam_app_id
+		FROM workshop_addons wa
+		INNER JOIN games g ON wa.game_id = g.game_id
+		WHERE wa.workshop_id = $1
+		ORDER BY wa.addon_id
+		LIMIT 1
+	`
+
+	addon := &manman.WorkshopAddonWithGame{}
+	err := r.db.QueryRow(ctx, query, workshopID).Scan(
+		&addon.AddonID,
+		&addon.GameID,
+		&addon.WorkshopID,
+		&addon.PlatformType,
+		&addon.Name,
+		&addon.Description,
+		&addon.FileSizeBytes,
+		&addon.InstallationPath,
+		&addon.PresetID,
+		&addon.IsCollection,
+		&addon.IsDeprecated,
+		&addon.CollectionID,
+		&addon.Metadata,
+		&addon.LastUpdated,
+		&addon.CreatedAt,
+		&addon.UpdatedAt,
+		&addon.SteamAppID,
+	)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return nil, nil
+		}
 		return nil, err
 	}
 

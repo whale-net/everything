@@ -461,7 +461,7 @@ func (do *DownloadOrchestrator) HandleDownloadCommand(ctx context.Context, cmd *
 	// error or followed by a status publish (NFR4: no presence row, no completeness claim
 	// on a failed upload).
 	if haveAddon {
-		do.uploadToCache(ctx, cmd, stagingDir, contentVersion, changed, logger)
+		do.uploadToCache(ctx, cmd.WorkshopID, stagingDir, contentVersion, changed, logger)
 	}
 
 	logger.Info("download completed successfully")
@@ -846,6 +846,11 @@ func (do *DownloadOrchestrator) publishWorkshopCacheStatus(ctx context.Context, 
 // (workshopID, contentVersion)'s cache entry, then publish the outcome on the workshop
 // cache status key so control-api can record the entry and this host's presence (FR10).
 //
+// Takes workshopID directly (rather than a *DownloadAddonCommand) so the admin-triggered
+// on-demand verify path (#2186, HandleVerifyCacheEntryCommand) can reuse this exact upload
+// primitive for its own "changed" result -- it has no DownloadAddonCommand of its own,
+// only a workshop_id/content_version pulled off the verify command.
+//
 // This is entirely best-effort with respect to the install that already succeeded by the
 // time this is called: NFR4 requires that "a failed upload leaves no presence row and no
 // claim that the entry is complete", so any failure here is logged and swallowed --
@@ -855,7 +860,7 @@ func (do *DownloadOrchestrator) publishWorkshopCacheStatus(ctx context.Context, 
 // cache_entry_id/s3_key (control-api's GetCacheUploadURL, NFR4) and upload
 // byte-identical content, so the ordinary last-writer-wins semantics of an S3 PUT are
 // harmless here -- no distributed lock is used or needed (LB8).
-func (do *DownloadOrchestrator) uploadToCache(ctx context.Context, cmd *DownloadAddonCommand, contentDir, contentVersion string, changed bool, logger *slog.Logger) {
+func (do *DownloadOrchestrator) uploadToCache(ctx context.Context, workshopID, contentDir, contentVersion string, changed bool, logger *slog.Logger) {
 	if do.workshopClient == nil {
 		return
 	}
@@ -869,7 +874,7 @@ func (do *DownloadOrchestrator) uploadToCache(ctx context.Context, cmd *Download
 
 	uploadResp, err := do.workshopClient.GetCacheUploadURL(ctx, &pb.GetCacheUploadURLRequest{
 		ServerId:       do.serverID,
-		WorkshopId:     cmd.WorkshopID,
+		WorkshopId:     workshopID,
 		ContentVersion: contentVersion,
 	})
 	if err != nil {
@@ -895,7 +900,7 @@ func (do *DownloadOrchestrator) uploadToCache(ctx context.Context, cmd *Download
 	if changed {
 		event = workshopCacheEventRefreshed
 	}
-	do.publishWorkshopCacheStatus(ctx, cmd.WorkshopID, contentVersion, uploadResp.CacheEntryId, event, size)
+	do.publishWorkshopCacheStatus(ctx, workshopID, contentVersion, uploadResp.CacheEntryId, event, size)
 	logger.Info("uploaded workshop content to cache", "cache_entry_id", uploadResp.CacheEntryId, "event", event, "size_bytes", size)
 }
 

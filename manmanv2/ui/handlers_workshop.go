@@ -1397,10 +1397,64 @@ func (app *App) handleWorkshopCache(w http.ResponseWriter, r *http.Request) {
 	}
 
 	data := pages.WorkshopCachePageData{
-		Layout:  layoutData,
-		AddonID: addonID,
-		Entries: entries,
+		Layout:      layoutData,
+		AddonID:     addonID,
+		Entries:     entries,
+		VerifyState: r.URL.Query().Get("verify_status"),
+		VerifyServerID: func() int64 {
+			id, _ := strconv.ParseInt(r.URL.Query().Get("verify_server_id"), 10, 64)
+			return id
+		}(),
 	}
 
 	RenderTempl(w, r, "Workshop Cache", pages.WorkshopCache(data))
+}
+
+// handleWorkshopCacheVerify dispatches an Admin's on-demand SteamCMD verify of a single
+// cache entry (FR11, plan #2175, #2186). Dispatch is fire-and-forget from this handler's
+// perspective -- the up-to-date/changed outcome is not part of the RPC response and only
+// appears on the cache view's next manual reload (same M4 boundary as the rest of this
+// view: no polling/SSE). The redirect carries the dispatch outcome as a query param so
+// the cache page can render it as an inline banner rather than a toast, and so a
+// no_host_available result renders as a clear message rather than an error page.
+func (app *App) handleWorkshopCacheVerify(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	ctx := r.Context()
+
+	addonIDStr := r.FormValue("addon_id")
+	cacheEntryIDStr := r.FormValue("cache_entry_id")
+
+	addonID, err := strconv.ParseInt(addonIDStr, 10, 64)
+	if err != nil {
+		http.Error(w, "Invalid addon_id", http.StatusBadRequest)
+		return
+	}
+	cacheEntryID, err := strconv.ParseInt(cacheEntryIDStr, 10, 64)
+	if err != nil {
+		http.Error(w, "Invalid cache_entry_id", http.StatusBadRequest)
+		return
+	}
+
+	redirectURL := fmt.Sprintf("/workshop/cache?addon_id=%d", addonID)
+
+	// serverID 0: let control-api pick a host that already holds a copy (FR11).
+	resp, err := app.grpc.VerifyCacheEntry(ctx, cacheEntryID, 0)
+	if err != nil {
+		log.Printf("Error dispatching workshop cache verify for cache_entry_id %d: %v", cacheEntryID, err)
+		http.Redirect(w, r, redirectURL+"&verify_status=error", http.StatusSeeOther)
+		return
+	}
+
+	if !resp.Dispatched {
+		// no_host_available is a real, reportable outcome, not an error (issue: "renders
+		// as a clear inline message, not an error toast").
+		http.Redirect(w, r, redirectURL+"&verify_status="+resp.Status, http.StatusSeeOther)
+		return
+	}
+
+	http.Redirect(w, r, fmt.Sprintf("%s&verify_status=dispatched&verify_server_id=%d", redirectURL, resp.ServerId), http.StatusSeeOther)
 }

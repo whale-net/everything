@@ -42,6 +42,10 @@ func (m *mockAddonRepo) GetByWorkshopID(ctx context.Context, gameID int64, works
 	return nil, fmt.Errorf("addon not found")
 }
 
+func (m *mockAddonRepo) GetByWorkshopIDAnyGame(ctx context.Context, workshopID string) (*manman.WorkshopAddonWithGame, error) {
+	return nil, fmt.Errorf("not implemented")
+}
+
 func (m *mockAddonRepo) List(ctx context.Context, gameID *int64, includeDeprecated bool, limit, offset int) ([]*manman.WorkshopAddon, error) {
 	return nil, fmt.Errorf("not implemented")
 }

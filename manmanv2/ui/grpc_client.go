@@ -665,6 +665,18 @@ func (c *ControlClient) ListAddonCacheEntries(ctx context.Context, addonID int64
 	return resp.Entries, nil
 }
 
+// VerifyCacheEntry dispatches an Admin's on-demand SteamCMD verify of a single cache
+// entry, independent of any install (FR11, plan #2175, #2186). serverID == 0 lets
+// control-api pick a host that already holds a copy of the entry. The RPC only reports
+// whether/where dispatch happened -- the up-to-date/changed outcome is not part of this
+// response and only appears on the cache view's next manual reload.
+func (c *ControlClient) VerifyCacheEntry(ctx context.Context, cacheEntryID, serverID int64) (*manmanpb.VerifyCacheEntryResponse, error) {
+	return c.workshop.VerifyCacheEntry(ctx, &manmanpb.VerifyCacheEntryRequest{
+		CacheEntryId: cacheEntryID,
+		ServerId:     serverID,
+	})
+}
+
 // AddCollectionToLibrary resolves a Steam Workshop collection's current
 // membership and adds every item in it to a library in one action (FR1,
 // plan #2175). A returned error means a job-level failure (unresolvable

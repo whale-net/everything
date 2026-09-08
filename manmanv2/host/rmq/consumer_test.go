@@ -41,13 +41,14 @@ func newFakeCommandHandler() *fakeCommandHandler {
 type recordingCommandHandler struct {
 	mu sync.Mutex
 
-	startSession  *StartSessionCommand
-	stopSession   *StopSessionCommand
-	killSession   *KillSessionCommand
-	sendInput     *SendInputCommand
-	downloadAddon *DownloadAddonCommand
-	removeAddon   *RemoveAddonCommand
-	backup        *BackupCommand
+	startSession     *StartSessionCommand
+	stopSession      *StopSessionCommand
+	killSession      *KillSessionCommand
+	sendInput        *SendInputCommand
+	downloadAddon    *DownloadAddonCommand
+	removeAddon      *RemoveAddonCommand
+	backup           *BackupCommand
+	verifyCacheEntry *VerifyCacheEntryCommand
 
 	done chan struct{}
 }
@@ -104,6 +105,14 @@ func (f *recordingCommandHandler) HandleRemoveAddon(ctx context.Context, cmd *Re
 func (f *recordingCommandHandler) HandleBackup(ctx context.Context, cmd *BackupCommand) error {
 	f.mu.Lock()
 	f.backup = cmd
+	f.mu.Unlock()
+	f.done <- struct{}{}
+	return nil
+}
+
+func (f *recordingCommandHandler) HandleVerifyCacheEntry(ctx context.Context, cmd *VerifyCacheEntryCommand) error {
+	f.mu.Lock()
+	f.verifyCacheEntry = cmd
 	f.mu.Unlock()
 	f.done <- struct{}{}
 	return nil
@@ -246,6 +255,10 @@ func (f *fakeCommandHandler) HandleDownloadAddon(ctx context.Context, cmd *Downl
 }
 
 func (f *fakeCommandHandler) HandleRemoveAddon(ctx context.Context, cmd *RemoveAddonCommand) error {
+	return nil
+}
+
+func (f *fakeCommandHandler) HandleVerifyCacheEntry(ctx context.Context, cmd *VerifyCacheEntryCommand) error {
 	return nil
 }
 
