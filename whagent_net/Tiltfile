@@ -109,6 +109,26 @@ local_resource(
     kubectl exec -n {namespace} rabbitmq-dev-0 -- rabbitmqctl set_permissions -p whagent-net-dev rabbit ".*" ".*" ".*"
     echo "✓ RabbitMQ vhost 'whagent-net-dev' configured successfully"
     '''.format(namespace=namespace),
+    # serve_cmd: self-heals the vhost/permissions after a rabbitmq-dev pod
+    # restart (issue #2152 / #2156). RabbitMQ's Mnesia state -- including
+    # this vhost and its permissions -- lives only in the pod, so a rolling
+    # update, eviction, or manual `kubectl delete pod` wipes it; without this
+    # loop, NFR2's publish-on-commit path silently and permanently breaks
+    # until an operator notices and manually runs
+    # `tilt trigger rabbitmq-vhost-setup`. This loop re-asserts the vhost and
+    # its permissions every 15s for as long as `tilt up` runs -- a redundant
+    # add_vhost/set_permissions call on an already-correct vhost is a
+    # harmless no-op (the same idempotency `cmd` above already relies on).
+    serve_cmd='''
+    set -e
+    while true; do
+      if kubectl exec -n {namespace} rabbitmq-dev-0 -- rabbitmqctl status >/dev/null 2>&1; then
+        kubectl exec -n {namespace} rabbitmq-dev-0 -- rabbitmqctl add_vhost whagent-net-dev >/dev/null 2>&1 || true
+        kubectl exec -n {namespace} rabbitmq-dev-0 -- rabbitmqctl set_permissions -p whagent-net-dev rabbit ".*" ".*" ".*" >/dev/null 2>&1 || true
+      fi
+      sleep 15
+    done
+    '''.format(namespace=namespace),
     resource_deps=['rabbitmq-dev'],
     labels=['whagent-net-infrastructure'],
 )
