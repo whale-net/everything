@@ -1,0 +1,64 @@
+package tools
+
+import (
+	"context"
+	"fmt"
+
+	"github.com/modelcontextprotocol/go-sdk/mcp"
+
+	pb "github.com/whale-net/everything/whagent_net/protos"
+)
+
+// ReadTranscriptInput is read_transcript's argument schema (issue #2120,
+// FR2). FromSeq/Limit mirror pb.ReadTranscriptRequest's pagination
+// exactly: FromSeq is inclusive, 0 (the default/omitted) reads from the
+// beginning; Limit may be capped server-side.
+type ReadTranscriptInput struct {
+	SessionID string `json:"session_id" jsonschema:"The session whose transcript to read, as a UUID string"`
+	FromSeq   int64  `json:"from_seq,omitempty" jsonschema:"Inclusive resume point; 0 or omitted reads from the beginning"`
+	Limit     int32  `json:"limit,omitempty" jsonschema:"Maximum events to return; 0 or omitted uses the server default"`
+}
+
+// TranscriptEventOutput is one transcript event, mirroring
+// pb.TranscriptEvent's wire shape (FR2): Payload is carried verbatim
+// (JSON body, per-type shape) so no consumer needs a second call to
+// interpret an event.
+type TranscriptEventOutput struct {
+	EventID     string `json:"event_id" jsonschema:"The event's id"`
+	Seq         int64  `json:"seq" jsonschema:"The event's commit-order sequence number"`
+	Turn        int32  `json:"turn" jsonschema:"The turn this event belongs to"`
+	Type        string `json:"type" jsonschema:"The event's type (user turn, model message, tool call, tool result, or session failure)"`
+	Payload     string `json:"payload" jsonschema:"The event's JSON payload, verbatim"`
+	CommittedAt string `json:"committed_at" jsonschema:"RFC3339 timestamp this event was committed"`
+}
+
+// ReadTranscriptOutput is read_transcript's structured result: events in
+// commit order (FR2), plus next_from_seq to resume exactly after the
+// last event returned -- no gap, no duplicate (mirrors
+// pb.ReadTranscriptResponse).
+type ReadTranscriptOutput struct {
+	Events      []TranscriptEventOutput `json:"events" jsonschema:"Transcript events in commit (seq) order"`
+	NextFromSeq int64                   `json:"next_from_seq" jsonschema:"Pass back as from_seq on the next call to resume exactly after the last event returned here"`
+}
+
+// readTranscriptTool holds the SessionService client this tool is a
+// pass-through to.
+type readTranscriptTool struct {
+	client pb.SessionServiceClient
+}
+
+// RegisterReadTranscript registers the read_transcript tool on srv.
+func RegisterReadTranscript(srv *mcp.Server, client pb.SessionServiceClient) {
+	t := &readTranscriptTool{client: client}
+	mcp.AddTool(srv, &mcp.Tool{
+		Name:        "read_transcript",
+		Description: "Read a whagent-net session's transcript events in commit order, paginated by from_seq/limit (FR2). Works for a running or ended session.",
+	}, t.call)
+}
+
+// call is a scaffold stub: issue #2120's Implementation phase wires this
+// to t.client.ReadTranscript, a direct pass-through with no business
+// logic, forwarding the caller's bearer token via ctx.
+func (t *readTranscriptTool) call(ctx context.Context, req *mcp.CallToolRequest, in ReadTranscriptInput) (*mcp.CallToolResult, ReadTranscriptOutput, error) {
+	return nil, ReadTranscriptOutput{}, fmt.Errorf("read_transcript: not implemented yet (issue #2120 scaffold phase)")
+}

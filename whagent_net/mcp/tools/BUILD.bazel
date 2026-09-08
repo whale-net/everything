@@ -1,0 +1,23 @@
+load("@rules_go//go:def.bzl", "go_library")
+
+# whagent-net's MCP tool group, one file per tool (issue #2120): the five
+# gRPC RPCs FR1/FR2/FR3 require from this surface -- start_session,
+# send_turn, stop_session, get_session, read_transcript -- and no others
+# (no agent-discovery tool, no wait-for-completion tool; see the issue
+# body's Implementation section).
+go_library(
+    name = "tools",
+    srcs = [
+        "get_session.go",
+        "read_transcript.go",
+        "send_turn.go",
+        "start_session.go",
+        "stop_session.go",
+    ],
+    importpath = "github.com/whale-net/everything/whagent_net/mcp/tools",
+    visibility = ["//visibility:public"],
+    deps = [
+        "//whagent_net/protos:whagentpb",
+        "@com_github_modelcontextprotocol_go_sdk//mcp",
+    ],
+)

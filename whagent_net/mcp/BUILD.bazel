@@ -1,0 +1,41 @@
+load("@rules_go//go:def.bzl", "go_binary", "go_library")
+load("//tools/bazel:release.bzl", "release_app")
+
+# `mcp` -- whagent-net's MCP surface for Claude Code (issue #2120,
+# ARCHITECTURE.md "Open items": "`mcp` from Claude Code is the v1
+# answer"). A thin, faithful facade over `api`'s SessionService: start,
+# send, stop, get, read transcript (FR1/FR2/FR3), identical to the gRPC
+# surface.
+go_library(
+    name = "mcp_lib",
+    srcs = ["main.go"],
+    importpath = "github.com/whale-net/everything/whagent_net/mcp",
+    visibility = ["//visibility:private"],
+    deps = [
+        "//libs/go/grpcclient",
+        "//libs/go/logging",
+        "//whagent_net/mcp/server",
+        "//whagent_net/mcp/tools",
+        "//whagent_net/protos:whagentpb",
+        "@io_opentelemetry_go_contrib_instrumentation_net_http_otelhttp//:otelhttp",
+    ],
+)
+
+go_binary(
+    name = "mcp",
+    embed = [":mcp_lib"],
+    visibility = ["//visibility:public"],
+)
+
+# Release metadata. domain "whagent-net" + name "mcp" matches the binary
+# table in ../README.md. external-api: MCP clients (Claude Code) reach
+# this over ingress, the same category as `api`.
+release_app(
+    name = "mcp",
+    binary_name = ":mcp",
+    language = "go",
+    domain = "whagent-net",
+    description = "whagent-net MCP surface for Claude Code: start/send/stop/get/read-transcript, a thin facade over SessionService",
+    app_type = "external-api",
+    port = 8082,
+)
