@@ -2,11 +2,40 @@ package whagent
 
 import (
 	"context"
+	"errors"
 	"net/http"
 
 	sdkauth "github.com/modelcontextprotocol/go-sdk/auth"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 )
+
+// errUnauthenticated is the single fixed error Middleware returns for every
+// rejection case -- an absent, malformed, or wrong-audience/issuer verified
+// credential -- mirroring mcpauth's own single-fixed-error convention
+// (libs/go/mcpauth/verify.go's errInvalidToken) rather than echoing which
+// specific check failed back to an MCP caller.
+var errUnauthenticated = errors.New("whagent: unauthenticated: no verified whagent-net credential")
+
+// errAuthenticationFailed is the single fixed error HTTPMiddleware's
+// sdkauth.TokenVerifier returns for every Verifier.Verify failure. It wraps
+// sdkauth.ErrInvalidToken so sdkauth.RequireBearerToken's own
+// errors.Is(err, sdkauth.ErrInvalidToken) branch treats it as a 401, not a
+// 500 -- and, like mcpauth's errInvalidToken, its Error() string is a
+// compile-time constant that never varies with, or reveals, which of
+// Verify's distinct rejection cases actually occurred, since that string is
+// what sdkauth.RequireBearerToken writes directly to the HTTP response
+// body.
+var errAuthenticationFailed = errAuthenticationFailedWrap{}
+
+type errAuthenticationFailedWrap struct{}
+
+func (errAuthenticationFailedWrap) Error() string {
+	return "whagent: invalid, expired, or unverifiable credential"
+}
+
+func (errAuthenticationFailedWrap) Unwrap() error { return sdkauth.ErrInvalidToken }
+
+var _ error = errAuthenticationFailedWrap{}
 
 // claimExtraKey is the sdkauth.TokenInfo.Extra key HTTPMiddleware stashes
 // a verified *Claim under, and Middleware reads it back from
@@ -47,11 +76,28 @@ func withClaim(ctx context.Context, claim *Claim) context.Context {
 // claimExtraKey), places it on ctx (ClaimFromContext / withClaim), and
 // calls next; on any verification failure it rejects and never invokes
 // next. v and aud are the same Verifier/audience HTTPMiddleware was
-// constructed with.
+// constructed with -- used here as a defense-in-depth re-check (the
+// stashed Claim's issuer and audience still match what this exact
+// Middleware instance expects) rather than a second signature
+// verification, which HTTPMiddleware already performed.
 func Middleware(v *Verifier, aud string) mcp.Middleware {
 	return func(next mcp.MethodHandler) mcp.MethodHandler {
 		return func(ctx context.Context, method string, req mcp.Request) (mcp.Result, error) {
-			return nil, errNotImplemented
+			extra := req.GetExtra()
+			if extra == nil || extra.TokenInfo == nil {
+				return nil, errUnauthenticated
+			}
+
+			claim, ok := extra.TokenInfo.Extra[claimExtraKey].(*Claim)
+			if !ok || claim == nil {
+				return nil, errUnauthenticated
+			}
+
+			if claim.Issuer != v.issuer || !claim.Audience.Contains(aud) {
+				return nil, errUnauthenticated
+			}
+
+			return next(withClaim(ctx, claim), method, req)
 		}
 	}
 }
@@ -67,7 +113,15 @@ func Middleware(v *Verifier, aud string) mcp.Middleware {
 // libs/go/mcpauth to be anywhere in the chain (FR12(a)).
 func HTTPMiddleware(v *Verifier, aud string) func(http.Handler) http.Handler {
 	verifier := sdkauth.TokenVerifier(func(ctx context.Context, token string, _ *http.Request) (*sdkauth.TokenInfo, error) {
-		return nil, errNotImplemented
+		claim, err := v.Verify(ctx, token, aud)
+		if err != nil {
+			return nil, errAuthenticationFailed
+		}
+		return &sdkauth.TokenInfo{
+			UserID:     claim.Subject,
+			Expiration: claim.Expiry.Time(),
+			Extra:      map[string]any{claimExtraKey: claim},
+		}, nil
 	})
 	return sdkauth.RequireBearerToken(verifier, nil)
 }

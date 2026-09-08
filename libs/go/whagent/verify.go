@@ -3,7 +3,9 @@ package whagent
 import (
 	"context"
 	"crypto"
+	"encoding/json"
 	"errors"
+	"time"
 
 	"github.com/coreos/go-oidc/v3/oidc"
 )
@@ -79,10 +81,54 @@ func NewVerifierFromKey(pub crypto.PublicKey, issuer string) (*Verifier, error) 
 // Verifier's configured whagent-net issuer -- rejecting with one of the
 // distinct errors above otherwise.
 //
-// Implementation-phase note: this must never delegate audience/issuer/
-// expiry checking to a generic verifier configured against a Keycloak (or
-// any other) issuer or JWKS -- v.keySet is always whagent-net's own, set
-// once at construction (NewVerifier / NewVerifierFromKey), never per-call.
+// This never delegates audience/issuer/expiry checking to a generic
+// verifier configured against a Keycloak (or any other) issuer or JWKS --
+// v.keySet is always whagent-net's own, set once at construction
+// (NewVerifier / NewVerifierFromKey), never per-call. v.keySet.VerifySignature
+// alone decides whether token was signed by a key whagent-net's own JWKS
+// (or, for tests, NewVerifierFromKey's static key) actually knows about --
+// so a token signed by any other key, including a valid Keycloak token,
+// fails here before any of the claim-shape checks below ever run (NFR4).
 func (v *Verifier) Verify(ctx context.Context, token, expectedAudience string) (*Claim, error) {
-	return nil, errNotImplemented
+	payload, err := v.keySet.VerifySignature(ctx, token)
+	if err != nil {
+		return nil, ErrInvalidSignature
+	}
+
+	var claim Claim
+	if err := json.Unmarshal(payload, &claim); err != nil {
+		// The signature verified, but the payload isn't even parseable as a
+		// Claim -- this cannot be a genuine whagent-net-minted token, so it
+		// is reported the same way as any other signature failure rather
+		// than inventing a sixth error case the published contract doesn't
+		// document.
+		return nil, ErrInvalidSignature
+	}
+
+	if claim.Subject == "" ||
+		claim.SubjectIssuer == "" ||
+		claim.Actor.Subject == "" ||
+		claim.Actor.AgentID == "" ||
+		claim.WhagentSessionID == "" ||
+		claim.Issuer == "" ||
+		claim.ID == "" ||
+		claim.IssuedAt == nil ||
+		claim.Expiry == nil ||
+		len(claim.Audience) == 0 {
+		return nil, ErrMissingClaim
+	}
+
+	if claim.Issuer != v.issuer {
+		return nil, ErrUnknownIssuer
+	}
+
+	if !claim.Audience.Contains(expectedAudience) {
+		return nil, ErrInvalidAudience
+	}
+
+	if claim.Expiry.Time().Before(time.Now()) {
+		return nil, ErrExpired
+	}
+
+	return &claim, nil
 }

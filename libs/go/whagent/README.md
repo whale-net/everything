@@ -60,11 +60,14 @@ token, err := signer.Mint(ctx, whagent.MintRequest{
 })
 ```
 
-`New` requires an asymmetric `crypto.Signer` (e.g. an Ed25519 or ECDSA
-private key) — **asymmetric signing only**, so a `Verifier` never needs,
-and is never given, the signing key. `Signer.JWKS()` returns the public
-JWKS document the minting service serves so a `Verifier` constructed
-against a JWKS URL can fetch and cache it.
+`New` requires an asymmetric `crypto.Signer` (Ed25519, ECDSA, or RSA —
+`Mint` picks the matching JWS algorithm, e.g. `EdDSA`/`ES256`/`RS256`,
+from the key's own type) — **asymmetric signing only**, so a `Verifier`
+never needs, and is never given, the signing key. `Mint` defaults
+`MintRequest.TTL` to `DefaultTTL` when left zero, and rejects any TTL
+longer than `MaxTTL` (LB3 — minutes, not hours). `Signer.JWKS()` returns
+the public JWKS document the minting service serves so a `Verifier`
+constructed against a JWKS URL can fetch and cache it.
 
 ## Verifying (`Verifier`)
 
@@ -156,11 +159,15 @@ lookup keyed on `(iss, sub)`, alongside its existing
 
 ## Status
 
-Scaffold phase (issue #2110): the package shape above -- `Claim`,
-`Signer`, `Verifier`, `Middleware`/`HTTPMiddleware`, and the idempotency
-contract -- is settled and builds (`bazel build //libs/go/whagent/...`).
-`Signer.Mint`, `Verifier.Verify`, and both middleware halves are stubs
-(`errNotImplemented`) pending the Implementation phase.
+Implementation phase (issue #2110) complete: `Signer.Mint`/`Signer.JWKS`,
+`Verifier.Verify`, and both `Middleware`/`HTTPMiddleware` halves are fully
+implemented (asymmetric signing via go-jose, keyed on the private key's
+own type -- Ed25519/ECDSA/RSA -- with `kid` set from `Signer.New`'s
+`keyID`; verification via `oidc.KeySet.VerifySignature` so JWKS `kid`
+rotation and caching come from the already-vendored `go-oidc` library
+rather than reimplemented here). `bazel build //libs/go/whagent/...`
+passes. Pending the Testing phase: the pure-Go unit test suite described
+below.
 
 ## Testing
 
