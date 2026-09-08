@@ -231,14 +231,20 @@ def setup_dev_util(namespace):
     """
     helm_repo('dev-util', 'https://whale-net.github.io/dev-util')
 
-def setup_postgres(namespace, db_name='default', resource_name='postgres-dev', port_forward=True, image=''):
+def setup_postgres(namespace, db_name='default', resource_name='postgres-dev', service_name='postgres-dev', port_forward=True, image=''):
     """
     Setup PostgreSQL using dev-util helm chart.
 
     Args:
         namespace: Kubernetes namespace
         db_name: Database name to create
-        resource_name: K8s resource name
+        resource_name: K8s resource (Helm release) name. Distinguishes releases
+                       when multiple domains share a namespace-adjacent chart install.
+        service_name: K8s Service name to resolve for the DNS host. Defaults
+                       independently of resource_name because the dev-util/postgres-dev
+                       chart hardcodes its Service object to the literal name
+                       'postgres-dev' regardless of the Helm release name — the
+                       chart does not template the Service name from .Release.Name.
         port_forward: Whether to forward port 5432
         image: Override the postgres image (e.g. 'timescale/timescaledb:latest-pg16').
                Defaults to the chart default (postgres:15.3).
@@ -276,7 +282,7 @@ def setup_postgres(namespace, db_name='default', resource_name='postgres-dev', p
     if port_forward:
         k8s_resource(workload=resource_name, port_forwards='5432:5432')
 
-    host = '{}.{}.svc.cluster.local'.format(resource_name, namespace)
+    host = '{}.{}.svc.cluster.local'.format(service_name, namespace)
 
     return {
         'url': 'postgresql+psycopg2://postgres:password@{}:5432/{}'.format(host, db_name),
