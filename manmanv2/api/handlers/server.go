@@ -6,19 +6,20 @@ import (
 	"fmt"
 	"strconv"
 
-	"github.com/whale-net/everything/manmanv2/models"
 	"github.com/whale-net/everything/manmanv2/api/repository"
+	manman "github.com/whale-net/everything/manmanv2/models"
 	pb "github.com/whale-net/everything/manmanv2/protos"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 )
 
 type ServerHandler struct {
-	repo repository.ServerRepository
+	repo          repository.ServerRepository
+	portRangeRepo repository.ServerPortRangeRepository
 }
 
-func NewServerHandler(repo repository.ServerRepository) *ServerHandler {
-	return &ServerHandler{repo: repo}
+func NewServerHandler(repo repository.ServerRepository, portRangeRepo repository.ServerPortRangeRepository) *ServerHandler {
+	return &ServerHandler{repo: repo, portRangeRepo: portRangeRepo}
 }
 
 func (h *ServerHandler) ListServers(ctx context.Context, req *pb.ListServersRequest) (*pb.ListServersResponse, error) {
@@ -68,8 +69,64 @@ func (h *ServerHandler) GetServer(ctx context.Context, req *pb.GetServerRequest)
 	}
 
 	return &pb.GetServerResponse{
-		Server: serverToProto(server),
+		Server: h.serverToProtoWithRanges(ctx, server),
 	}, nil
+}
+
+// UpdateServerAllowedPortRanges replaces the server's full allowed
+// host-port range set (FR12, task #2095). Empty set = unconstrained
+// (SB-1.2); save-time validation beyond basic shape stays out per
+// root-plan Decision 7.
+func (h *ServerHandler) UpdateServerAllowedPortRanges(ctx context.Context, req *pb.UpdateServerAllowedPortRangesRequest) (*pb.UpdateServerAllowedPortRangesResponse, error) {
+	if req.ServerId <= 0 {
+		return nil, status.Error(codes.InvalidArgument, "server_id is required")
+	}
+	if _, err := h.repo.Get(ctx, req.ServerId); err != nil {
+		return nil, status.Errorf(codes.NotFound, "server not found: %v", err)
+	}
+
+	ranges := make([]*manman.ServerAllowedPortRange, 0, len(req.Ranges))
+	for _, pr := range req.Ranges {
+		if pr == nil {
+			continue
+		}
+		ranges = append(ranges, &manman.ServerAllowedPortRange{
+			ServerID:  req.ServerId,
+			StartPort: pr.Start,
+			EndPort:   pr.End,
+			Protocol:  pr.Protocol,
+		})
+	}
+
+	stored, err := h.portRangeRepo.Replace(ctx, req.ServerId, ranges)
+	if err != nil {
+		return nil, status.Errorf(codes.InvalidArgument, "failed to update allowed port ranges: %v", err)
+	}
+
+	return &pb.UpdateServerAllowedPortRangesResponse{
+		Ranges: portRangesToProto(stored),
+	}, nil
+}
+
+// serverToProtoWithRanges is serverToProto plus the server's allowed
+// host-port ranges (additive, FR12). ListServers keeps the cheap shape;
+// ranges ride on GetServer only.
+func (h *ServerHandler) serverToProtoWithRanges(ctx context.Context, server *manman.Server) *pb.Server {
+	pbServer := serverToProto(server)
+	ranges, err := h.portRangeRepo.List(ctx, server.ServerID)
+	if err != nil {
+		return pbServer
+	}
+	pbServer.AllowedPortRanges = portRangesToProto(ranges)
+	return pbServer
+}
+
+func portRangesToProto(ranges []*manman.ServerAllowedPortRange) []*pb.PortRange {
+	out := make([]*pb.PortRange, 0, len(ranges))
+	for _, r := range ranges {
+		out = append(out, &pb.PortRange{Start: r.StartPort, End: r.EndPort, Protocol: r.Protocol})
+	}
+	return out
 }
 
 func (h *ServerHandler) CreateServer(ctx context.Context, req *pb.CreateServerRequest) (*pb.CreateServerResponse, error) {

@@ -102,7 +102,7 @@ func TestServerDetail_StartSessionButtonPreservesHxWiring(t *testing.T) {
 	configs := []*manmanpb.ServerGameConfig{
 		{ServerGameConfigId: 42, ServerId: 5, GameConfigId: 9, Status: "active"},
 	}
-	body := renderPage(t, ServerDetail(components.LayoutData{Title: "Server"}, server, configs))
+	body := renderPage(t, ServerDetail(components.LayoutData{Title: "Server"}, server, configs, "", nil))
 
 	if !strings.Contains(body, `class="btn btn-success btn-sm"`) {
 		t.Errorf("expected the Start Session button to render btn-success btn-sm, got %q", body)

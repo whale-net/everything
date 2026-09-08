@@ -8,7 +8,7 @@ import (
 	"github.com/whale-net/everything/manmanv2/ui/components"
 )
 
-templ ServerDetail(layout components.LayoutData, server *manmanpb.Server, configs []*manmanpb.ServerGameConfig) {
+templ ServerDetail(layout components.LayoutData, server *manmanpb.Server, configs []*manmanpb.ServerGameConfig, portsNotice string, portsEdit *manmanpb.PortRange) {
 	@components.Layout(layout) {
 		<div class="flex justify-between items-center mb-6">
 			<h1 class="text-3xl font-bold text-base-content">{ server.Name }</h1>
@@ -59,6 +59,7 @@ templ ServerDetail(layout components.LayoutData, server *manmanpb.Server, config
 				</form>
 			</div>
 		</div>
+		@ServerPortRangesSection(server, portsNotice, portsEdit)
 		<div class="card bg-base-100 border border-base-300 shadow-sm overflow-hidden mb-6">
 			<div class="flex justify-between items-center p-4 border-b border-base-300 bg-base-200">
 				<h2 class="text-lg font-semibold text-base-content">Deployments</h2>

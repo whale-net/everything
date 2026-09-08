@@ -72,18 +72,37 @@ func (app *App) handleServerDetail(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	user := htmxauth.GetUser(r.Context())
+	// FR12 (task #2095): allowed host-port range management routes.
+	if len(pathParts) >= 4 && pathParts[2] == "ports" {
+		switch pathParts[3] {
+		case "set":
+			app.handleServerPortRangeSet(w, r, pathParts[1])
+			return
+		case "remove":
+			app.handleServerPortRangeRemove(w, r, pathParts[1])
+			return
+		case "edit":
+			app.handleServerPortRangeEdit(w, r, pathParts[1])
+			return
+		}
+	}
 
-	serverIDStr := pathParts[1]
-	serverID, err := strconv.ParseInt(serverIDStr, 10, 64)
+	serverID, err := strconv.ParseInt(pathParts[1], 10, 64)
 	if err != nil {
 		http.Error(w, "Invalid server ID", http.StatusBadRequest)
 		return
 	}
-	
+
+	app.renderServerDetail(w, r, serverID, "", nil)
+}
+
+// renderServerDetail renders the server detail page, optionally with an
+// allowed-port-ranges notice banner and/or one range row in edit mode
+// (FR12, task #2095).
+func (app *App) renderServerDetail(w http.ResponseWriter, r *http.Request, serverID int64, portsNotice string, portsEdit *manmanpb.PortRange) {
 	ctx := r.Context()
-	
-	// Fetch server details
+	user := htmxauth.GetUser(ctx)
+
 	resp, err := app.grpc.GetAPI().GetServer(ctx, &manmanpb.GetServerRequest{
 		ServerId: serverID,
 	})
@@ -92,8 +111,7 @@ func (app *App) handleServerDetail(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "Server not found", http.StatusNotFound)
 		return
 	}
-	
-	// Fetch server game configs (deployments)
+
 	configsResp, err := app.grpc.GetAPI().ListServerGameConfigs(ctx, &manmanpb.ListServerGameConfigsRequest{
 		ServerId: serverID,
 		PageSize: 100,
@@ -102,7 +120,7 @@ func (app *App) handleServerDetail(w http.ResponseWriter, r *http.Request) {
 		log.Printf("Error fetching server configs: %v", err)
 		configsResp = &manmanpb.ListServerGameConfigsResponse{Configs: []*manmanpb.ServerGameConfig{}}
 	}
-	
+
 	breadcrumbs := []components.Breadcrumb{
 		{Label: "Servers", URL: "/servers"},
 		{Label: resp.Server.Name, URL: ""},
@@ -115,7 +133,7 @@ func (app *App) handleServerDetail(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if err := RenderTempl(w, r, resp.Server.Name, pages.ServerDetail(layoutData, resp.Server, configsResp.Configs)); err != nil {
+	if err := RenderTempl(w, r, resp.Server.Name, pages.ServerDetail(layoutData, resp.Server, configsResp.Configs, portsNotice, portsEdit)); err != nil {
 		log.Printf("Error rendering template: %v", err)
 		http.Error(w, "Internal server error", http.StatusInternalServerError)
 	}
