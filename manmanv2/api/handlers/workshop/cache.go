@@ -175,3 +175,28 @@ func (h *WorkshopServiceHandler) GetCacheUploadURL(ctx context.Context, req *pb.
 		S3Key:        entry.S3Key,
 	}, nil
 }
+
+// ReportCacheRead implements FR10's data source: a host calls this after it
+// has actually landed a cached object on disk via GetCacheDownloadURL, so
+// that host presence for the entry is recorded. A URL being issued is not
+// the same as a copy landing -- this call is what makes the difference, and
+// the host-manager caller is responsible for only invoking it post-landing.
+func (h *WorkshopServiceHandler) ReportCacheRead(ctx context.Context, req *pb.ReportCacheReadRequest) (*pb.ReportCacheReadResponse, error) {
+	if req.ServerId == 0 {
+		return nil, status.Error(codes.InvalidArgument, "server_id is required")
+	}
+	if req.CacheEntryId == 0 {
+		return nil, status.Error(codes.InvalidArgument, "cache_entry_id is required")
+	}
+	if err := requireHostIdentity(ctx, req.ServerId); err != nil {
+		return nil, err
+	}
+
+	if err := h.cacheRepo.UpsertHostPresence(ctx, req.CacheEntryId, req.ServerId); err != nil {
+		slog.Warn("failed to record workshop cache host presence", "cache_entry_id", req.CacheEntryId, "server_id", req.ServerId, "error", err)
+		return nil, status.Errorf(codes.Internal, "failed to record host presence: %v", err)
+	}
+
+	slog.Info("recorded workshop cache host presence", "cache_entry_id", req.CacheEntryId, "server_id", req.ServerId)
+	return &pb.ReportCacheReadResponse{}, nil
+}
