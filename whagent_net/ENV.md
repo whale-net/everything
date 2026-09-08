@@ -77,6 +77,26 @@ Read by `api` (token verification + authorization), `ui` and `mcp`
 |----------|-----------|---------|-------------|
 | `WHAGENT_API_URL` | mcp, ui, embed hosts | — | `api` gRPC address. |
 
+## Persona claim issuance (trust root, issue #2115)
+
+`api` owns whagent-net's signing key(s) and publishes the public JWKS
+(`whagent_net/api/persona`, read directly via `os.Getenv` like the `api`
+server variables below). `worker` (#2118) reads the *same* signing-key
+variables — `WHAGENT_ISSUER`/`WHAGENT_SIGNING_KEY`/`WHAGENT_SIGNING_KEY_ID`
+— to construct its own `persona.Issuer` and mint each tool call's claim
+in-process (see `ARCHITECTURE.md` "Identity and auth chaining" §
+"Issuance mechanism"); there is no RPC between the two. `api` never falls
+back to an unsigned or symmetric mode — it fails startup loudly when the
+active key is missing or unparseable.
+
+| Variable | Component | Default | Description |
+|----------|-----------|---------|-------------|
+| `WHAGENT_ISSUER` | api, worker | `whagent-net` | The `iss` value every minted Claim carries — whagent-net's own issuer, never a domain's or a Keycloak realm's. |
+| `WHAGENT_SIGNING_KEY` | api, worker | *(required)* | PEM-encoded PKCS8 asymmetric private signing key (e.g. `openssl genpkey -algorithm ed25519`) — the active key `Issuer.Issue` mints with. Never checked in. |
+| `WHAGENT_SIGNING_KEY_ID` | api, worker | *(required)* | The JWKS `kid` for `WHAGENT_SIGNING_KEY` — what a `whagent.Verifier` uses to select the matching public key on rotation. |
+| `WHAGENT_SIGNING_KEYS_ADDITIONAL` | api | — | Optional JSON array of `{"kid": "...", "private_key_pem": "..."}` entries for retired keys — published in the JWKS response only (never used to mint), kept only long enough for a token signed moments before rotation to still verify until it expires. Introducing or dropping an entry is a config change, never a code redeploy. |
+| `WHAGENT_JWKS_ADDR` | api | `:8090` | Listen address for the `net/http` mux serving `/.well-known/jwks.json` (`persona.JWKSPath`), alongside `api`'s gRPC surface. |
+
 ## `api` server (SessionService, issue #2113)
 
 Read directly via `os.Getenv` in `whagent_net/api/main.go` (not

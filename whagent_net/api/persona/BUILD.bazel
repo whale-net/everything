@@ -1,0 +1,47 @@
+"""whagent-net's persona claim issuance and JWKS surface (issue #2115) --
+api's trust-root implementation over //libs/go/whagent's Signer/Verifier
+contract."""
+
+load("@rules_go//go:def.bzl", "go_library", "go_test")
+
+go_library(
+    name = "persona",
+    srcs = [
+        "issuer.go",
+        "jwks.go",
+        "keys.go",
+    ],
+    importpath = "github.com/whale-net/everything/whagent_net/api/persona",
+    visibility = ["//visibility:public"],
+    deps = [
+        "//libs/go/whagent",
+        "//whagent_net/session",
+        "@com_github_go_jose_go_jose_v4//:go-jose",
+    ],
+)
+
+# Testing-phase suite (issue #2115): KeySet/LoadKeySet failure modes and
+# JWKS's public-material-only guarantee (keys_test.go), Issuer.Issue's claim
+# shape/TTL/audience and the mint-then-verify round trip through
+# //libs/go/whagent's own Verifier (issuer_test.go), and the JWKS HTTP
+# handler's real httptest.Server + whagent.NewVerifier round trip,
+# including kid-based key rotation (jwks_test.go). No Postgres/network
+# dependency beyond httptest, so this runs as part of `bazel test //...`.
+go_test(
+    name = "persona_test",
+    srcs = [
+        "issuer_test.go",
+        "jwks_test.go",
+        "keys_test.go",
+    ],
+    deps = [
+        ":persona",
+        "//libs/go/whagent",
+        "//whagent_net/protos:whagentpb",
+        "//whagent_net/session",
+        "@com_github_go_jose_go_jose_v4//:go-jose",
+        "@com_github_google_uuid//:uuid",
+        "@com_github_stretchr_testify//assert",
+        "@com_github_stretchr_testify//require",
+    ],
+)
