@@ -279,3 +279,29 @@ go_test(
         "@com_github_jackc_pgx_v5//pgxpool",
     ],
 )
+
+# Real-schema coverage for the server_ports allocation reads (task #2142,
+# plan #2080): ListAllocatedPorts / ListPortsBySessionID / GetPortAllocation
+# kept SELECTing the sgc_id column migration 014 dropped (SQLSTATE 42703 at
+# runtime, invisible to the mock-based suite). Same build-tag/target
+# conventions as server_port_range_integration_test above.
+go_test(
+    name = "server_port_listalloc_integration_test",
+    size = "large",
+    timeout = "long",
+    srcs = ["server_port_listalloc_integration_test.go"],
+    embed = [":postgres"],
+    gotags = ["integration"],
+    tags = [
+        "external",
+        "integration",
+        "manual",
+        "no-cache",
+        "no-sandbox",
+        "requires-network",
+    ],
+    deps = [
+        "//libs/go/dbtest",
+        "@com_github_jackc_pgx_v5//pgxpool",
+    ],
+)

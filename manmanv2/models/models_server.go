@@ -39,12 +39,13 @@ type ServerCapability struct {
 	RecordedAt             *time.Time `db:"recorded_at"`
 }
 
-// ServerPort represents port allocation tracking at server level
+// ServerPort represents port allocation tracking at server level.
+// Session-scoped since migration 014_port_allocation_per_session dropped
+// the SGC-scoped sgc_id column (task #2142, plan #2080).
 type ServerPort struct {
 	ServerID    int64     `db:"server_id"`
 	Port        int       `db:"port"`
 	Protocol    string    `db:"protocol"`
-	SGCID       *int64    `db:"sgc_id"`
 	SessionID   *int64    `db:"session_id"`
 	AllocatedAt time.Time `db:"allocated_at"`
 }
