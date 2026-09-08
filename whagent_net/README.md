@@ -164,6 +164,27 @@ see `Tiltfile`. The seeded agent definition targets
 with the matching whagent-net trust configuration
 (`ASS_WHAGENT_JWKS_URL`/`ASS_WHAGENT_ISSUER`).
 
+**Cross-domain smoke check** (issue #2155). After both Tiltfiles are up,
+confirm the FR8 cross-domain tool-dispatch path is wired correctly end
+to end without needing a full Claude Code MCP client — `api`'s
+SessionService is a plain gRPC service (reflection enabled), so
+`grpcurl` reaches it directly:
+
+```bash
+SESSION_ID=$(grpcurl -plaintext -d '{"agent_id": "audience-score-system-research"}' \
+  localhost:50054 whagent.v1.SessionService/StartSession | jq -r '.session.sessionId')
+grpcurl -plaintext -d "{\"session_id\": \"$SESSION_ID\", \"input\": \"list your tools\"}" \
+  localhost:50054 whagent.v1.SessionService/SendTurn
+grpcurl -plaintext -d "{\"session_id\": \"$SESSION_ID\"}" \
+  localhost:50054 whagent.v1.SessionService/GetSession
+```
+
+`GetSession`'s `state` should be `SESSION_STATE_RUNNING`, or (absent an
+`OPENROUTER_API_KEY` in a sandboxed environment) `SESSION_STATE_FAILED`
+with `errorDetail` naming the model-call step — never a failure naming
+claim minting ("Mint requires a non-empty SubjectIssuer", #2150) or tool
+listing ("Unauthorized", #2151).
+
 **`bazel run`**, in order (each blocks in the foreground; use separate
 terminals):
 

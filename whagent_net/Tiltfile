@@ -141,6 +141,21 @@ MC4CAQAwBQYDK2VwBCIEIJ24ADljcQFdb5ZBhTWbOTrZJhQe91FsLOSQUUn+mg/5
 whagent_signing_key_yaml = whagent_signing_key.replace("\n", "\\n")
 
 # ===========================
+# On-behalf-of OIDC issuer (issue #2150, dev-only)
+# ===========================
+#
+# WHAGENT_OIDC_ISSUER is api's grpcauth OIDC issuer AND (main.go)
+# `worker`'s in-process persona-claim minting reads it too: every
+# on-behalf-of Claim's SubjectIssuer must be non-empty
+# (whagent.Sign -- "Mint requires a non-empty SubjectIssuer") or minting
+# fails closed before any tool is ever listed. This is a fixed dev-only
+# placeholder value -- whagent.Sign places no verification requirement
+# on its content, only on its presence (libs/go/whagent/sign.go) -- and
+# is overridable via WHAGENT_OIDC_ISSUER in a local .env, same precedent
+# as whagent_signing_key above.
+whagent_oidc_issuer = os.environ.get('WHAGENT_OIDC_ISSUER', 'dev-issuer')
+
+# ===========================
 # Application Configuration
 # ===========================
 
@@ -285,6 +300,8 @@ spec:
           value: "{whagent_signing_key}"
         - name: WHAGENT_JWKS_ADDR
           value: ":8090"
+        - name: WHAGENT_OIDC_ISSUER
+          value: "{whagent_oidc_issuer}"
         - name: OTEL_EXPORTER_OTLP_ENDPOINT
           value: "{otel_endpoint}"
 """.format(
@@ -294,6 +311,7 @@ spec:
         openrouter_api_key=os.environ.get('OPENROUTER_API_KEY', ''),
         whagent_signing_key_id=whagent_signing_key_id,
         whagent_signing_key=whagent_signing_key_yaml,
+        whagent_oidc_issuer=whagent_oidc_issuer,
         otel_endpoint=otel_endpoint,
     )))
 

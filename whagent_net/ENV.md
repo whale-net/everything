@@ -73,7 +73,7 @@ Read by `api` (token verification + authorization), `ui` and `mcp`
 
 | Variable | Component | Default | Description |
 |----------|-----------|---------|-------------|
-| `WHAGENT_OIDC_ISSUER` | api, ui, mcp | — | Keycloak realm issuer URL. |
+| `WHAGENT_OIDC_ISSUER` | api, ui, mcp | — | Keycloak realm issuer URL. Also stamped as the on-behalf-of `SubjectIssuer` `worker` mints into every session's persona Claim (issue #2150) — it only needs to be non-empty; `whagent.Sign` carries no verification requirement on its value, only on its presence (`libs/go/whagent/sign.go`). `whagent_net/Tiltfile` defaults this to a fixed `dev-issuer` placeholder locally, overridable via a local `.env`. |
 | `WHAGENT_OIDC_CLIENT_ID` | ui, mcp | — | OIDC client for the interactive surfaces. |
 | `WHAGENT_OIDC_CLIENT_SECRET` | ui, mcp | — | Client secret. |
 | `WHAGENT_OIDC_AUDIENCE` | api | — | Expected audience on tokens presented to `api`. |
