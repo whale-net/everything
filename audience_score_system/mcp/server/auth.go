@@ -46,9 +46,23 @@ import (
 // "tools/call") -- these calls never reach instrumentToolCall
 // (observability.go), since that only wraps a tool once RegisterRead/
 // RegisterWrite's mcp.AddTool handler is actually entered.
+//
+// Coexistence with the whagent-net path (issue #2116, FR12(a)): if a
+// Person is already on ctx when this middleware runs, some earlier
+// receiving middleware -- WhagentPersonMiddleware, whagent_auth.go -- has
+// already authenticated and resolved this call via a different path, and
+// this middleware must not re-interpret its (non-mcp_credential-shaped)
+// TokenInfo as an ASS credential and reject it. This check is a no-op for
+// every call that predates #2116 (nothing else ever placed a Person on
+// ctx before PersonMiddleware ran), so mcp_credential's own resolution
+// below is unchanged for those callers.
 func PersonMiddleware(persons store.PersonStore) mcp.Middleware {
 	return func(next mcp.MethodHandler) mcp.MethodHandler {
 		return func(ctx context.Context, method string, req mcp.Request) (mcp.Result, error) {
+			if PersonFromContext(ctx) != nil {
+				return next(ctx, method, req)
+			}
+
 			extra := req.GetExtra()
 			if extra == nil || extra.TokenInfo == nil || extra.TokenInfo.UserID == "" {
 				logger.WarnContext(ctx, "mcp call rejected: no caller credential resolved", "method", method)

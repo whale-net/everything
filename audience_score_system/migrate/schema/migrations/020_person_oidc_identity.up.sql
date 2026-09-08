@@ -16,7 +16,17 @@
 -- display name (FR10), so the Person an unseen (iss, sub) pair
 -- provisions is identity-key-only -- person.email/display_name stay NULL,
 -- exactly like any other Person row (both columns are already nullable,
--- migration 001).
+-- migration 001). google_subject, however, was NOT NULL UNIQUE as of
+-- migration 001 -- it was ASS's ONLY identity key until now, so nothing
+-- ever had to construct a Person without one. An auto-provisioned
+-- whagent-net Person has no Google identity at all (it may never sign
+-- into `web`), so PersonIdentityStore.FindOrCreateByIssSub needs to be
+-- able to insert a person row with a NULL google_subject. UNIQUE still
+-- enforces "at most one Person per real google_subject" afterward --
+-- Postgres does not treat NULL as equal to NULL for a UNIQUE constraint,
+-- so any number of google_subject-less rows may coexist.
+ALTER TABLE person ALTER COLUMN google_subject DROP NOT NULL;
+
 CREATE TABLE person_oidc_identity (
     id         UUID        PRIMARY KEY DEFAULT gen_random_uuid(),
     person_id  UUID        NOT NULL REFERENCES person(id),

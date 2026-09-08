@@ -57,6 +57,8 @@ go_test(
     deps = [
         "//audience_score_system/mcp/tools",
         "//audience_score_system/store",
+        "//libs/go/mcpauth",
+        "//libs/go/whagent",
         "@com_github_google_uuid//:uuid",
         "@com_github_modelcontextprotocol_go_sdk//auth",
         "@com_github_modelcontextprotocol_go_sdk//mcp",
@@ -109,6 +111,7 @@ go_test(
     srcs = [
         "oauth_bootstrap_integration_test.go",
         "server_integration_test.go",
+        "whagent_auth_integration_test.go",
     ],
     gotags = ["integration"],
     tags = [
@@ -129,6 +132,7 @@ go_test(
         "//libs/go/dbtest",
         "//libs/go/mcpauth",
         "//libs/go/migrate",
+        "//libs/go/whagent",
         "@com_github_google_uuid//:uuid",
         "@com_github_jackc_pgx_v5//pgxpool",
         "@com_github_jackc_pgx_v5//stdlib",

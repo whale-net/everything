@@ -11,16 +11,12 @@ package store
 import (
 	"context"
 	"errors"
+	"fmt"
 
+	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
-
-// errPersonIdentityNotImplemented is returned by FindOrCreateByIssSub until
-// the Implementation phase of issue #2116 lands the real
-// ON CONFLICT (iss, sub) idiom. Scaffold exists to settle this store's
-// public shape -- the interface method and migration 020's schema -- not
-// the method body.
-var errPersonIdentityNotImplemented = errors.New("store: PersonIdentityStore.FindOrCreateByIssSub not implemented yet (scaffold phase, see issue #2116)")
 
 // PersonIdentityStore covers person_oidc_identity (migration 020).
 type PersonIdentityStore interface {
@@ -41,15 +37,109 @@ type personIdentityStore struct{ pool *pgxpool.Pool }
 
 var _ PersonIdentityStore = personIdentityStore{}
 
+// personIdentityColumns is the person_oidc_identity -> person join's SELECT
+// list, in Person scan order -- shared by the fast-path lookup and the
+// post-race re-lookup below so the two can never drift on which columns
+// (or COALESCE rules) they read.
+const personIdentityColumns = `p.id, COALESCE(p.google_subject, ''), COALESCE(p.email, ''), COALESCE(p.display_name, ''), p.created_at`
+
+// lookup resolves (iss, sub) to its already-linked Person, or pgx.ErrNoRows
+// if this pair has never been seen.
+func (s personIdentityStore) lookup(ctx context.Context, iss, sub string) (Person, error) {
+	var p Person
+	err := s.pool.QueryRow(ctx, `
+		SELECT `+personIdentityColumns+`
+		FROM person_oidc_identity i
+		JOIN person p ON p.id = i.person_id
+		WHERE i.iss = $1 AND i.sub = $2
+	`, iss, sub).Scan(&p.ID, &p.GoogleSubject, &p.Email, &p.DisplayName, &p.CreatedAt)
+	return p, err
+}
+
+// isUniqueViolation reports whether err is a Postgres unique-constraint
+// violation (SQLSTATE 23505), via errors.As against *pgconn.PgError rather
+// than string-matching -- so it keeps working regardless of how pgx wraps
+// the underlying error.
+func isUniqueViolation(err error) bool {
+	var pgErr *pgconn.PgError
+	return errors.As(err, &pgErr) && pgErr.Code == "23505"
+}
+
 // FindOrCreateByIssSub -- see the interface doc comment for the full
-// contract. Implementation-phase note: lands the same
-// ON CONFLICT (iss, sub) DO UPDATE ... RETURNING ..., (xmax = 0) atomic
-// find-or-create idiom person.go's UpsertByGoogleSubject already uses,
-// joined back to `person` to hand back the full Person row (COALESCE'd
-// email/display_name, exactly like GetByID) -- not stubbed further here
-// since Scaffold's job is settling this method's signature and the
-// migration 020 schema it reads/writes, not this body (issue #2116
-// Scaffold vs. Implementation split).
+// contract.
+//
+// Unlike UpsertByGoogleSubject's single-statement ON CONFLICT idiom, this
+// find-or-create spans two tables (person, person_oidc_identity are
+// deliberately separate -- see migration 020's header), so no single
+// statement's ON CONFLICT can cover it. Instead:
+//
+//  1. Fast path (no transaction): look the pair up directly. This is the
+//     common case -- every call after the first for a given (iss, sub).
+//  2. Not found: open a transaction, INSERT a fresh identity-key-only
+//     Person (NULL google_subject/email/display_name -- see migration
+//     020's up.sql for why google_subject had to become nullable for
+//     this), then INSERT the (person_id, iss, sub) link row.
+//  3. If step 2's link insert unique-violates person_oidc_identity_iss_sub,
+//     a concurrent call for the exact same pair won the race and committed
+//     first. Postgres's own unique-index locking (not app-level retry
+//     logic) is what makes this detectable rather than silently
+//     duplicating: the losing transaction's INSERT either blocks on the
+//     winner's uncommitted index entry and then fails once the winner
+//     commits, or fails immediately if the winner already had. Either way
+//     this transaction rolls back in full -- including the speculative
+//     Person row step 2 created, via the deferred Rollback below -- so
+//     losing the race never leaves an orphaned, identity-less Person
+//     behind. The pair is then re-looked-up to hand back the winner's
+//     Person instead.
+//
+// This is what guarantees "first call for an unseen (iss, sub) creates
+// exactly one Person row" holds even under concurrent first-sight calls.
 func (s personIdentityStore) FindOrCreateByIssSub(ctx context.Context, iss, sub string) (Person, bool, error) {
-	return Person{}, false, errPersonIdentityNotImplemented
+	if iss == "" || sub == "" {
+		return Person{}, false, errors.New("find or create person identity: iss and sub are both required")
+	}
+
+	if p, err := s.lookup(ctx, iss, sub); err == nil {
+		return p, false, nil
+	} else if !errors.Is(err, pgx.ErrNoRows) {
+		return Person{}, false, fmt.Errorf("find or create person identity: lookup: %w", err)
+	}
+
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return Person{}, false, fmt.Errorf("find or create person identity: begin tx: %w", err)
+	}
+	defer tx.Rollback(ctx) //nolint:errcheck // no-op once Commit has succeeded; otherwise this is the rollback that undoes a lost race (see doc comment).
+
+	var p Person
+	if err := tx.QueryRow(ctx, `
+		INSERT INTO person (google_subject, email, display_name)
+		VALUES (NULL, NULL, NULL)
+		RETURNING id, COALESCE(google_subject, ''), COALESCE(email, ''), COALESCE(display_name, ''), created_at
+	`).Scan(&p.ID, &p.GoogleSubject, &p.Email, &p.DisplayName, &p.CreatedAt); err != nil {
+		return Person{}, false, fmt.Errorf("find or create person identity: auto-provision person: %w", err)
+	}
+
+	if _, err := tx.Exec(ctx, `
+		INSERT INTO person_oidc_identity (person_id, iss, sub) VALUES ($1, $2, $3)
+	`, p.ID, iss, sub); err != nil {
+		if isUniqueViolation(err) {
+			// Lost the race for this exact (iss, sub) pair -- the deferred
+			// Rollback above discards the Person row just INSERTed, so it
+			// never becomes a second, orphaned row for this pair. Resolve
+			// to the pair's actual owner instead.
+			existing, lookupErr := s.lookup(ctx, iss, sub)
+			if lookupErr != nil {
+				return Person{}, false, fmt.Errorf("find or create person identity: resolve after concurrent create: %w", lookupErr)
+			}
+			return existing, false, nil
+		}
+		return Person{}, false, fmt.Errorf("find or create person identity: link identity: %w", err)
+	}
+
+	if err := tx.Commit(ctx); err != nil {
+		return Person{}, false, fmt.Errorf("find or create person identity: commit: %w", err)
+	}
+
+	return p, true, nil
 }
