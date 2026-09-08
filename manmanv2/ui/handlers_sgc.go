@@ -257,10 +257,15 @@ func (app *App) handleSGCDetail(w http.ResponseWriter, r *http.Request) {
 	// section template. Failure is tolerated like the other optional
 	// sections: log a warning and omit the section (pageData stays nil).
 	if gameConfig != nil {
-		envData, _, envErr := app.buildSGCEnvOverridesData(ctx, sgc, gameConfig)
+		envData, envPatch, envErr := app.buildSGCEnvOverridesData(ctx, sgc, gameConfig)
 		if envErr != nil {
 			log.Printf("Warning: failed to build env overrides view for SGC %d: %v", sgcID, envErr)
 		} else {
+			// Pending-override hint (task #2096, FR3): visible only while a
+			// session is running and the latest saved override edit is newer
+			// than that session's start. Derived from the patch timestamps
+			// the API now surfaces plus the sessions already listed above.
+			envData.PendingEditHint = pendingEnvOverrideHint(envPatch, sessions)
 			pageData.EnvOverrides = &envData
 		}
 	}

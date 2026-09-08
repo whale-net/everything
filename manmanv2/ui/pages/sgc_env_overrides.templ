@@ -34,6 +34,13 @@ type SGCEnvOverridesData struct {
 	// HasTemplateKeys reports whether the GameConfig env template
 	// defines any variables at all; false renders the empty-state nudge.
 	HasTemplateKeys bool
+	// PendingEditHint is true while a session is running and the latest
+	// saved deployment-level env override edit is newer than that
+	// session's start (task #2096, FR3): the saved edits have not been
+	// run by any session start yet. It clears only when a start whose
+	// command build happened after the save actually runs -- computed by
+	// the handler via pendingEnvOverrideHint, never by this template.
+	PendingEditHint bool
 }
 
 // envLayerOverridden reports whether a layer row is deployment-overridden.
@@ -49,6 +56,13 @@ templ SGCEnvOverrides(data SGCEnvOverridesData) {
 				GameConfig template → deployment overrides → effective
 			</span>
 		</div>
+		if data.PendingEditHint {
+			<div role="alert" class="alert alert-info alert-soft mx-4 mt-4" data-testid="sgc-env-pending-hint">
+				<span class="text-sm text-base-content">
+					pending override edit applies on next session start
+				</span>
+			</div>
+		}
 		if len(data.Layers) == 0 {
 			<div class="p-6">
 				if !data.HasTemplateKeys {

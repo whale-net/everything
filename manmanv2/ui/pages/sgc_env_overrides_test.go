@@ -94,3 +94,46 @@ func TestSGCEnvOverrideEditForm(t *testing.T) {
 		}
 	}
 }
+
+// Task #2096 (FR3): while a running start predates the latest saved
+// override edit, the Environment section shows the pending hint; it never
+// renders itself without the handler's PendingEditHint input.
+func TestSGCEnvOverrides_PendingHintVisibleWhileSaveIsUnrun(t *testing.T) {
+	data := SGCEnvOverridesData{
+		SGC: &manmanpb.ServerGameConfig{ServerGameConfigId: 7},
+		Layers: []EnvVarLayer{
+			{Key: "MAX_PLAYERS", TemplateValue: "20", OverrideValue: strP("32"), EffectiveValue: "32"},
+		},
+		HasTemplateKeys: true,
+		PendingEditHint: true,
+	}
+	body := renderSGCEnvOverrides(t, data)
+
+	if !strings.Contains(body, "pending override edit applies on next session start") {
+		t.Error("pending hint missing while a saved edit is newer than the running session's start")
+	}
+	if !strings.Contains(body, `data-testid="sgc-env-pending-hint"`) {
+		t.Error("pending hint missing its stable test hook")
+	}
+}
+
+func TestSGCEnvOverrides_NoPendingHintWithoutInput(t *testing.T) {
+	data := SGCEnvOverridesData{
+		SGC: &manmanpb.ServerGameConfig{ServerGameConfigId: 7},
+		Layers: []EnvVarLayer{
+			{Key: "MAX_PLAYERS", TemplateValue: "20", OverrideValue: strP("32"), EffectiveValue: "32"},
+		},
+		HasTemplateKeys: true,
+		PendingEditHint: false,
+	}
+	body := renderSGCEnvOverrides(t, data)
+
+	if strings.Contains(body, "pending override edit applies on next session start") {
+		t.Error("pending hint rendered although no unrun save is pending")
+	}
+	// The standing explanation under the editor is unchanged and always
+	// present -- it describes the general behavior, not a pending state.
+	if !strings.Contains(body, "Overrides apply at the next session start") {
+		t.Error("standing override-timing explanation missing")
+	}
+}
