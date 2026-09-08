@@ -15,9 +15,11 @@ import (
 	"github.com/whale-net/everything/libs/go/logging"
 	"github.com/whale-net/everything/libs/go/rmq"
 	temporallib "github.com/whale-net/everything/libs/go/temporal"
+	"github.com/whale-net/everything/whagent_net/api/persona"
 	"github.com/whale-net/everything/whagent_net/events"
 	"github.com/whale-net/everything/whagent_net/llm"
 	"github.com/whale-net/everything/whagent_net/session"
+	"github.com/whale-net/everything/whagent_net/worker/tools"
 )
 
 func main() {
@@ -81,6 +83,24 @@ func run() error {
 		logger.Warn("WHAGENT_PRICE_TABLE_PATH not set; cost estimation will be unavailable if the provider ever omits usage cost")
 	}
 
+	// Persona issuer + tool dispatcher (issue #2118/#2121; ARCHITECTURE.md
+	// "Identity and auth chaining" § "Issuance mechanism"): worker mints
+	// its own persona credentials in-process, from the identical signing-
+	// key configuration api reads (ENV.md "Persona claim issuance") --
+	// there is no RPC hop to api for this. Fails startup loudly the same
+	// way api's own persona.LoadKeySet call does, never falling back to
+	// an unsigned mode -- see persona.LoadKeySet's doc comment.
+	keySet, err := persona.LoadKeySet(persona.KeySetEnvConfig{
+		Issuer:              getEnv("WHAGENT_ISSUER", "whagent-net"),
+		ActiveKeyID:         os.Getenv("WHAGENT_SIGNING_KEY_ID"),
+		ActivePrivateKeyPEM: os.Getenv("WHAGENT_SIGNING_KEY"),
+	})
+	if err != nil {
+		return fmt.Errorf("persona: %w", err)
+	}
+	issuer := persona.NewIssuer(keySet.ActiveSigner())
+	dispatcher := &tools.Dispatcher{Issuer: issuer, Ledger: store.Idempotency()}
+
 	// Temporal client + worker, via libs/go/temporal (NewWorker bootstrap).
 	temporalCfg := temporallib.ConfigFromEnv()
 	if temporalCfg.TaskQueue == "" {
@@ -96,7 +116,7 @@ func run() error {
 	w := temporallib.NewWorker(temporalClient, temporalCfg.TaskQueue, worker.Options{})
 	w.RegisterWorkflow(SessionWorkflow)
 
-	acts := &Activities{Store: store, LLM: llmClient, Prices: prices}
+	acts := &Activities{Store: store, LLM: llmClient, Prices: prices, Dispatcher: dispatcher}
 	w.RegisterActivityWithOptions(acts.ResolveAgentDefinition, activity.RegisterOptions{Name: ActivityResolveAgentDefinition})
 	w.RegisterActivityWithOptions(acts.BuildContext, activity.RegisterOptions{Name: ActivityBuildContext})
 	w.RegisterActivityWithOptions(acts.CallModel, activity.RegisterOptions{Name: ActivityCallModel})
@@ -109,6 +129,12 @@ func run() error {
 	// workflow.GetVersion gate (caps.go/activities.go doc comments).
 	w.RegisterActivityWithOptions(acts.SumCost, activity.RegisterOptions{Name: ActivitySumCost})
 	w.RegisterActivityWithOptions(acts.CommitTerminalEvent, activity.RegisterOptions{Name: ActivityCommitTerminalEvent})
+	// ListToolDefinitions/DispatchTool (issue #2121): same "registered now,
+	// wired into processTurn in Implementation phase" shape as SumCost/
+	// CommitTerminalEvent above -- see activities.go's doc comments on
+	// both.
+	w.RegisterActivityWithOptions(acts.ListToolDefinitions, activity.RegisterOptions{Name: ActivityListToolDefinitions})
+	w.RegisterActivityWithOptions(acts.DispatchTool, activity.RegisterOptions{Name: ActivityDispatchTool})
 
 	done := make(chan error, 1)
 	go func() {

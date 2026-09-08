@@ -1,0 +1,48 @@
+# whagent-net agent-definition seed config (issue #2121, LB5/NFR6).
+#
+# This is the checked-in source of truth `whagent_net/migrate/seed`
+# (config.go's Load, seed.go's Seeder) upserts into the `agent_definition`
+# table on every `migrate` run -- config-driven seeding, never a UI, but
+# `agent_definition` stays a real versioned table (AGENTS.md "SCD2";
+# ARCHITECTURE.md "Domain-owned MCP servers and the tool contract"): the
+# seeder never edits a version already pinned to a session in place, it
+# only ever inserts a new one when a definition's fields drift from the
+# latest seeded version (see seed.go's package doc comment for the exact
+# diff-and-insert rule).
+#
+# Each entry's shape mirrors whagent_net/session.AgentDefinition
+# (agentdef.go) minus `version`/`created_at`, which the seeder derives:
+#   - agent_id:       stable identifier sessions pin to (session_agent.agent_id)
+#   - model:          an OpenRouter-served model id (llm.Catalog.Supports checks
+#                      this at StartSession time, api/handlers/start.go)
+#   - tool_set:       one or more {server_url, allowed_tools} pairs
+#                      (session.ToolServerRef) -- allowed_tools: null means
+#                      "whatever the server exposes" (whagent-side filtering
+#                      is C22/Later, ARCHITECTURE.md "Tool selection")
+#   - max_turns / max_cost_usd: FR6/FR7 guardrails, left at/near the 100 /
+#                      $1 defaults (worker/caps.go's defaultMaxTurns/
+#                      defaultMaxCostUSD) so the caps stay exercisable
+#   - required_role:  the Keycloak realm role FR9's authorization check
+#                      requires the acting subject to hold (api's
+#                      StartSession handler) -- see whagent_net/README.md
+#                      "Keycloak role" for how to grant it (Implementation
+#                      phase closes out that doc section)
+
+agents:
+  - agent_id: audience-score-system-research
+    model: anthropic/claude-3.5-sonnet
+    tool_set:
+      # In-cluster Tilt/deploy address for audience_score_system/mcp
+      # (issue #2116's server_url target, port 8081, endpoint "/" per
+      # audience_score_system/mcp/server/transport.go) -- domain-name
+      # svc.cluster.local convention manmanv2/Tiltfile already uses
+      # ("<domain>-<binary>.<namespace>.svc.cluster.local:<port>").
+      # Implementation phase's Tilt wiring for audience_score_system
+      # (currently no audience_score_system/Tiltfile exists) must stand up
+      # a namespace matching this value, or this entry must be updated to
+      # match whatever namespace that wiring actually picks.
+      - server_url: "http://audience-score-system-mcp.audience-score-system-local-dev.svc.cluster.local:8081/"
+        allowed_tools: null
+    max_turns: 100
+    max_cost_usd: 1.0
+    required_role: whagent-audience-score-system-research

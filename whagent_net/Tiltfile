@@ -1,0 +1,455 @@
+# whagent-net Tiltfile
+# Local development environment for whagent-net (issue #2121, M1 close-out).
+#
+# migrate (job, runs the agent-definition seeder per whagent_net/migrate/
+# seed's package doc comment) + api (SessionService gRPC + JWKS) + worker
+# (Temporal SessionWorkflow) + mcp (the Claude-Code-facing MCP surface),
+# with Postgres, Temporal, and RabbitMQ dependencies -- follows
+# tools/app_registry/Tiltfile's raw-k8s_yaml-blob shape (same three
+# infrastructure dependencies), not manmanv2's Helm-chart path. The
+# archiver (C18) is out of scope for M1 -- not wired here.
+#
+# whagent-net's agent definition (whagent_net/config/agents.yaml) targets
+# audience_score_system/mcp at
+# "audience-score-system-mcp.audience-score-system-local-dev.svc.cluster.local:8081"
+# -- see audience_score_system/Tiltfile for that half of the cross-domain
+# wiring (`cd audience_score_system && tilt up`, run alongside this one).
+
+load('ext://namespace', 'namespace_create')
+load('ext://dotenv', 'dotenv')
+load('../tools/tilt/common.tilt',
+     'build_images_from_apps', 'detect_platform', 'get_bazel_platform', 'get_watch_paths',
+     'setup_dev_util', 'setup_postgres', 'setup_temporal', 'setup_rabbitmq', 'setup_otelcollector',
+     'get_env_bool', 'get_custom_or_default',
+     'print_startup_banner', 'print_footer_info')
+
+# ===========================
+# Configuration
+# ===========================
+
+namespace = 'whagent-net-local-dev'
+namespace_create(namespace)
+dotenv()
+
+platform = detect_platform()
+bazel_platform = get_bazel_platform(platform)
+
+print_startup_banner("whagent-net", namespace, platform)
+
+# ===========================
+# Infrastructure Setup
+# ===========================
+
+setup_dev_util(namespace)
+
+# PostgreSQL Database (the `session` store, LB1/LB2/LB5/LB6)
+db_info = setup_postgres(namespace, db_name='whagent_net')
+pg_database_url = get_custom_or_default(
+    'BUILD_POSTGRES_ENV',
+    'PG_DATABASE_URL',
+    'postgres://{}:{}@{}:{}/{}?sslmode=disable'.format(
+        db_info['user'], db_info['password'], db_info['host'], db_info['port'], db_info['database']
+    )
+)
+
+# Temporal dev server -- hosts SessionWorkflow (worker) and is dialed by
+# api to start/signal it (StartSession/SendTurn/StopSession never run a
+# worker themselves).
+temporal_info = setup_temporal(namespace)
+temporal_host = temporal_info['grpc_target']
+
+# RabbitMQ (the `whagent/events` bus, NFR2) -- worker publishes every
+# committed transcript event; nothing consumes it yet (M1 has no
+# archiver/ui), but the publish path is still real.
+rmq_info = setup_rabbitmq(namespace)
+rabbitmq_host = get_custom_or_default('BUILD_RABBITMQ_ENV', 'RABBITMQ_HOST', rmq_info['host'])
+rabbitmq_port = get_custom_or_default('BUILD_RABBITMQ_ENV', 'RABBITMQ_PORT', rmq_info['port'])
+rabbitmq_user = get_custom_or_default('BUILD_RABBITMQ_ENV', 'RABBITMQ_USER', rmq_info['user'])
+rabbitmq_password = get_custom_or_default('BUILD_RABBITMQ_ENV', 'RABBITMQ_PASSWORD', rmq_info['password'])
+rabbitmq_url = 'amqp://{}:{}@{}:{}/whagent-net-dev'.format(
+    rabbitmq_user, rabbitmq_password, rabbitmq_host, rabbitmq_port,
+)
+
+# OpenTelemetry Collector
+otel_endpoint = setup_otelcollector(namespace)
+
+print("📊 Infrastructure configured:")
+print("  Postgres:  {}".format("custom" if os.environ.get('BUILD_POSTGRES_ENV') == 'custom' else "local"))
+print("  Temporal:  {}".format(temporal_host))
+print("  RabbitMQ:  {}".format("custom" if os.environ.get('BUILD_RABBITMQ_ENV') == 'custom' else "local"))
+print("  OTEL:      {}".format(otel_endpoint))
+
+# Setup RabbitMQ vhost for whagent-net (mirrors manmanv2/app_registry's
+# identical per-domain vhost-isolation setup).
+local_resource(
+    'rabbitmq-vhost-setup',
+    cmd='''
+    set -e
+    echo "Waiting for RabbitMQ pod to be ready..."
+    kubectl wait --for=condition=ready pod -l app=rabbitmq-dev -n {namespace} --timeout=60s
+
+    echo "Waiting for RabbitMQ app to be fully started..."
+    for i in $(seq 1 30); do
+        if kubectl exec -n {namespace} rabbitmq-dev-0 -- rabbitmqctl status >/dev/null 2>&1; then
+            echo "✓ RabbitMQ app is running"
+            break
+        fi
+        echo "  Attempt $i/30: RabbitMQ app not ready yet, waiting..."
+        sleep 2
+    done
+
+    kubectl exec -n {namespace} rabbitmq-dev-0 -- rabbitmqctl add_vhost whagent-net-dev 2>/dev/null || {{
+        if kubectl exec -n {namespace} rabbitmq-dev-0 -- rabbitmqctl list_vhosts | grep -q "^whagent-net-dev$"; then
+            echo "  ✓ vhost already exists"
+        else
+            echo "  ✗ Failed to create vhost"
+            exit 1
+        fi
+    }}
+    kubectl exec -n {namespace} rabbitmq-dev-0 -- rabbitmqctl set_permissions -p whagent-net-dev rabbit ".*" ".*" ".*"
+    echo "✓ RabbitMQ vhost 'whagent-net-dev' configured successfully"
+    '''.format(namespace=namespace),
+    resource_deps=['rabbitmq-dev'],
+    labels=['whagent-net-infrastructure'],
+)
+
+# ===========================
+# Persona signing key (issue #2115, dev-only)
+# ===========================
+#
+# WHAGENT_SIGNING_KEY/WHAGENT_SIGNING_KEY_ID are api's (and worker's)
+# in-process persona-issuance trust root (ENV.md "Persona claim
+# issuance") -- both binaries fail startup loudly without them
+# (persona.LoadKeySet). This is a fixed, checked-in dev-only Ed25519 key
+# (PKCS8 PEM, generated via `openssl genpkey -algorithm ed25519`), the
+# same "dev-secret-key" precedent every other domain's Tiltfile uses for
+# a local-only secret (e.g. app-registry-ui's SECRET_KEY) -- never a
+# production key, and overridable via WHAGENT_SIGNING_KEY/
+# WHAGENT_SIGNING_KEY_ID in a local .env for anyone who wants a different
+# one.
+whagent_signing_key_id = os.environ.get('WHAGENT_SIGNING_KEY_ID', 'dev-key-1')
+whagent_signing_key = os.environ.get('WHAGENT_SIGNING_KEY', '''-----BEGIN PRIVATE KEY-----
+MC4CAQAwBQYDK2VwBCIEIJ24ADljcQFdb5ZBhTWbOTrZJhQe91FsLOSQUUn+mg/5
+-----END PRIVATE KEY-----''')
+# The PEM above is multi-line; a raw newline inside a double-quoted YAML
+# flow scalar (this file's k8s_yaml blob()s below) breaks the parser (a
+# bare "---" line inside the value reads as a YAML document separator).
+# k8s YAML's double-quoted scalar supports the two-character `\n` escape
+# and decodes it back to a real newline in the container's env var, so
+# every blob() below interpolates this escaped form, never
+# whagent_signing_key directly.
+whagent_signing_key_yaml = whagent_signing_key.replace("\n", "\\n")
+
+# ===========================
+# Application Configuration
+# ===========================
+
+watch_paths = get_watch_paths('whagent_net')
+
+APPS = {
+    'migrate': {
+        'enabled_env': 'ENABLE_WHAGENT_NET_MIGRATE',
+        'bazel_target': '//whagent_net/migrate:migrate_image_load',
+        'image_name': 'whagent-net-migrate',
+    },
+    'api': {
+        'enabled_env': 'ENABLE_WHAGENT_NET_API',
+        'bazel_target': '//whagent_net/api:api_image_load',
+        'image_name': 'whagent-net-api',
+    },
+    'worker': {
+        'enabled_env': 'ENABLE_WHAGENT_NET_WORKER',
+        'bazel_target': '//whagent_net/worker:worker_image_load',
+        'image_name': 'whagent-net-worker',
+    },
+    'mcp': {
+        'enabled_env': 'ENABLE_WHAGENT_NET_MCP',
+        'bazel_target': '//whagent_net/mcp:mcp_image_load',
+        'image_name': 'whagent-net-mcp',
+    },
+}
+
+# ===========================
+# Bazel Image Building
+# ===========================
+
+build_images_from_apps(APPS, watch_paths, platform)
+
+# ===========================
+# Kubernetes Deployments
+# ===========================
+
+# migrate: applies 001_initial_schema then runs the agent-definition
+# seeder (whagent_net/migrate/seed) -- OPENROUTER_API_KEY/
+# OPENROUTER_BASE_URL are needed here too: the seeder validates
+# agents.yaml's model against the live OpenRouter catalogue before
+# writing any row (this file's Seeder doc comment, "Config validation"),
+# so this job needs outbound network access to OpenRouter even in dev.
+if get_env_bool('ENABLE_WHAGENT_NET_MIGRATE', default='true'):
+    k8s_yaml(blob("""
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: whagent-net-migrate
+  namespace: {namespace}
+spec:
+  ttlSecondsAfterFinished: 30
+  template:
+    metadata:
+      labels:
+        app: whagent-net-migrate
+    spec:
+      restartPolicy: OnFailure
+      containers:
+      - name: migrate
+        image: whagent-net-migrate
+        env:
+        - name: PG_DATABASE_URL
+          value: "{pg_database_url}"
+        - name: OPENROUTER_API_KEY
+          value: "{openrouter_api_key}"
+""".format(
+        namespace=namespace,
+        pg_database_url=pg_database_url,
+        openrouter_api_key=os.environ.get('OPENROUTER_API_KEY', ''),
+    )))
+
+    k8s_resource(
+        'whagent-net-migrate',
+        resource_deps=['postgres-dev'],
+        labels=['whagent-net-infrastructure'],
+    )
+    print("🔄 Migration job configured (applies schema + seeds agent_definition)")
+
+# api: SessionService gRPC (start/send-turn/stop/get/read-transcript) +
+# the JWKS endpoint (WHAGENT_JWKS_ADDR) domain-owned MCP servers
+# (audience_score_system/mcp) verify a worker-minted persona credential
+# against.
+if get_env_bool('ENABLE_WHAGENT_NET_API', default='true'):
+    k8s_yaml(blob("""
+apiVersion: v1
+kind: Service
+metadata:
+  name: whagent-net-api
+  namespace: {namespace}
+spec:
+  selector:
+    app: whagent-net-api
+  ports:
+    - name: grpc
+      port: 50051
+      targetPort: 50051
+    - name: jwks
+      port: 8090
+      targetPort: 8090
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: whagent-net-api
+  namespace: {namespace}
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: whagent-net-api
+  template:
+    metadata:
+      labels:
+        app: whagent-net-api
+    spec:
+      containers:
+      - name: api
+        image: whagent-net-api
+        ports:
+        - containerPort: 50051
+          name: grpc
+        - containerPort: 8090
+          name: jwks
+        env:
+        - name: PORT
+          value: "50051"
+        - name: PG_DATABASE_URL
+          value: "{pg_database_url}"
+        - name: GRPC_AUTH_MODE
+          value: "none"
+        - name: TEMPORAL_HOST
+          value: "{temporal_host}"
+        - name: OPENROUTER_API_KEY
+          value: "{openrouter_api_key}"
+        - name: WHAGENT_ISSUER
+          value: "whagent-net"
+        - name: WHAGENT_SIGNING_KEY_ID
+          value: "{whagent_signing_key_id}"
+        - name: WHAGENT_SIGNING_KEY
+          value: "{whagent_signing_key}"
+        - name: WHAGENT_JWKS_ADDR
+          value: ":8090"
+        - name: OTEL_EXPORTER_OTLP_ENDPOINT
+          value: "{otel_endpoint}"
+""".format(
+        namespace=namespace,
+        pg_database_url=pg_database_url,
+        temporal_host=temporal_host,
+        openrouter_api_key=os.environ.get('OPENROUTER_API_KEY', ''),
+        whagent_signing_key_id=whagent_signing_key_id,
+        whagent_signing_key=whagent_signing_key_yaml,
+        otel_endpoint=otel_endpoint,
+    )))
+
+    api_deps = ['temporal-dev']
+    if get_env_bool('ENABLE_WHAGENT_NET_MIGRATE', default='true'):
+        api_deps.append('whagent-net-migrate')
+
+    k8s_resource(
+        'whagent-net-api',
+        resource_deps=api_deps,
+        port_forwards=['50054:50051', '8090:8090'],
+        labels=['whagent-net'],
+    )
+    print("🔌 api forwarded to localhost:50054 (gRPC), localhost:8090 (JWKS)")
+
+# worker: the long-lived SessionWorkflow + per-turn activities, including
+# tool dispatch (issue #2121) against whatever domain-owned MCP server(s)
+# the resolved agent definition's tool_set names.
+if get_env_bool('ENABLE_WHAGENT_NET_WORKER', default='true'):
+    k8s_yaml(blob("""
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: whagent-net-worker
+  namespace: {namespace}
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: whagent-net-worker
+  template:
+    metadata:
+      labels:
+        app: whagent-net-worker
+    spec:
+      containers:
+      - name: worker
+        image: whagent-net-worker
+        env:
+        - name: PG_DATABASE_URL
+          value: "{pg_database_url}"
+        - name: TEMPORAL_HOST
+          value: "{temporal_host}"
+        - name: RABBITMQ_URL
+          value: "{rabbitmq_url}"
+        - name: OPENROUTER_API_KEY
+          value: "{openrouter_api_key}"
+        - name: WHAGENT_ISSUER
+          value: "whagent-net"
+        - name: WHAGENT_SIGNING_KEY_ID
+          value: "{whagent_signing_key_id}"
+        - name: WHAGENT_SIGNING_KEY
+          value: "{whagent_signing_key}"
+        - name: OTEL_EXPORTER_OTLP_ENDPOINT
+          value: "{otel_endpoint}"
+""".format(
+        namespace=namespace,
+        pg_database_url=pg_database_url,
+        temporal_host=temporal_host,
+        rabbitmq_url=rabbitmq_url,
+        openrouter_api_key=os.environ.get('OPENROUTER_API_KEY', ''),
+        whagent_signing_key_id=whagent_signing_key_id,
+        whagent_signing_key=whagent_signing_key_yaml,
+        otel_endpoint=otel_endpoint,
+    )))
+
+    worker_deps = ['temporal-dev', 'rabbitmq-vhost-setup']
+    if get_env_bool('ENABLE_WHAGENT_NET_MIGRATE', default='true'):
+        worker_deps.append('whagent-net-migrate')
+
+    k8s_resource(
+        'whagent-net-worker',
+        resource_deps=worker_deps,
+        labels=['whagent-net'],
+    )
+    print("⚙️  worker configured (task queue: whagent-net-session)")
+
+# mcp: the Claude-Code-facing MCP surface, a thin facade over api's
+# SessionService (README.md "Connecting Claude Code to `mcp`").
+if get_env_bool('ENABLE_WHAGENT_NET_MCP', default='true'):
+    k8s_yaml(blob("""
+apiVersion: v1
+kind: Service
+metadata:
+  name: whagent-net-mcp
+  namespace: {namespace}
+spec:
+  selector:
+    app: whagent-net-mcp
+  ports:
+    - name: http
+      port: 8082
+      targetPort: 8082
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: whagent-net-mcp
+  namespace: {namespace}
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: whagent-net-mcp
+  template:
+    metadata:
+      labels:
+        app: whagent-net-mcp
+    spec:
+      containers:
+      - name: mcp
+        image: whagent-net-mcp
+        ports:
+        - containerPort: 8082
+          name: http
+        env:
+        - name: WHAGENT_MCP_ADDR
+          value: ":8082"
+        - name: WHAGENT_API_URL
+          value: "whagent-net-api.{namespace}.svc.cluster.local:50051"
+        - name: OTEL_EXPORTER_OTLP_ENDPOINT
+          value: "{otel_endpoint}"
+""".format(namespace=namespace, otel_endpoint=otel_endpoint)))
+
+    mcp_deps = []
+    if get_env_bool('ENABLE_WHAGENT_NET_API', default='true'):
+        mcp_deps.append('whagent-net-api')
+
+    k8s_resource(
+        'whagent-net-mcp',
+        resource_deps=mcp_deps,
+        port_forwards=['8082:8082'],
+        labels=['whagent-net'],
+    )
+    print("🔌 mcp forwarded to http://localhost:8082 (streamable-HTTP MCP)")
+
+# ===========================
+# Access Information
+# ===========================
+
+print("\n" + "="*60)
+print("📡 Access Information")
+print("="*60)
+print("  PostgreSQL:      localhost:5432 (user: postgres, pass: password)")
+print("  Temporal:        localhost:7233 (gRPC), {} (Web UI)".format(temporal_info['ui_service_info']))
+print("  RabbitMQ:        localhost:5672 (user: rabbit, pass: password)")
+print("  RabbitMQ Mgmt:   http://localhost:15672")
+print("  api (gRPC):      localhost:50054")
+print("  api (JWKS):      http://localhost:8090/.well-known/jwks.json")
+print("  mcp (MCP):       http://localhost:8082/")
+print("="*60)
+
+print_footer_info('whagent-net')
+
+print("\n🚀 Quick Start:")
+print("  1. tilt up                              # Start migrate + api + worker + mcp (this)")
+print("  2. cd audience_score_system && tilt up  # Cross-domain tool target (issue #2121)")
+print("  3. Add mcp to Claude Code's MCP config (README.md \"Connecting Claude Code to mcp\")")
+print("  4. start_session against the seeded agent_id (whagent_net/config/agents.yaml)")

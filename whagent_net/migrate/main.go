@@ -8,13 +8,23 @@
 // by that domain's store integration tests. (Scaffold's original comment
 // here assumed no other package would need the embedded FS; that
 // assumption didn't survive Testing.)
+//
+// migrate.WithSeeder(seed.Seeder()) (issue #2121) runs the
+// agent-definition seeder as a post-migration step, after every
+// successful `up` -- see whagent_net/migrate/seed's package doc comment
+// for the seeding/versioning contract, and whagent_net/config for the
+// checked-in agents.yaml it seeds from. Mirrors leaflab/migrate/main.go's
+// identical WithSeeder(catalog.Seeder()) shape.
 package main
 
 import (
 	"github.com/whale-net/everything/libs/go/migrate"
 	"github.com/whale-net/everything/whagent_net/migrate/schema"
+	"github.com/whale-net/everything/whagent_net/migrate/seed"
 )
 
 func main() {
-	migrate.RunCLI(schema.Migrations, schema.Dir)
+	migrate.RunCLI(schema.Migrations, schema.Dir,
+		migrate.WithSeeder(seed.Seeder()),
+	)
 }

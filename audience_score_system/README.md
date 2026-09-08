@@ -70,6 +70,17 @@ bazel run //audience_score_system/mcp
 bazel run //audience_score_system/worker
 ```
 
+A `Tiltfile` also exists, but is currently scoped to only `migrate` + `mcp`
+(Postgres + Temporal) — enough to exercise the whagent-net trust
+configuration end to end (issue #2121, `ASS_WHAGENT_JWKS_URL`/
+`ASS_WHAGENT_ISSUER`, see `ENV.md`). It does not stand up `web`/`worker`;
+run those via `bazel run` above until this domain gets its own full
+local-dev story:
+
+```bash
+cd audience_score_system && tilt up
+```
+
 See [`ENV.md`](ENV.md) for the full environment variable list and
 [`libs/go/migrate/README.md`](../libs/go/migrate/README.md) for the runner's
 CLI flags.

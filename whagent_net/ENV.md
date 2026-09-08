@@ -1,8 +1,8 @@
 # whagent-net — Environment Variables
 
-> Skeleton. No binary reads any of these yet (pre-M1). Rows are the variable
-> families the architecture commits to; fill in defaults and per-component
-> ownership as each binary lands, per `AGENTS.md` § Maintaining Docs.
+M1 shipped (issue #2121): `migrate`, `api`, `worker`, and `mcp` all read
+the variables below. `archiver` and `ui` (M2+) are not built yet — their
+rows are still forward-looking, per `AGENTS.md` § Maintaining Docs.
 
 ## Database
 

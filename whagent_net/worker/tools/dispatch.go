@@ -61,15 +61,17 @@
 // terminal outcome, made elsewhere (a follow-up cap-enforcement/terminal-
 // classification task), never originated by a domain server's response.
 //
-// Implementation phase (this task) complete: Dispatch below wires
+// Implementation phase (issue #2118) complete: Dispatch below wires
 // client.go and keys.go together into the real body this file's doc
 // comment documents -- resolve target server (FR8), mint a per-server
 // credential (FR10), reserve/short-circuit on the idempotency key (FR11),
 // call out, and return the domain server's result verbatim (FR2). Wiring
-// Dispatch into SessionWorkflow's processTurn (the ExecuteActivity call
-// this package's doc comment describes activities.go eventually making)
-// is intentionally out of this task's scope -- see this task's Scope note
-// on issue #2118.
+// Dispatch into SessionWorkflow's processTurn was deferred to issue #2118's
+// Scope note and closed out by issue #2121's Implementation phase --
+// whagent_net/worker/activities.go's DispatchTool activity is the
+// activity-boundary wrapper, called once per tool call from
+// whagent_net/worker/workflow.go's processTurn, under that file's
+// workflow.GetVersion("session-workflow-tool-dispatch", ...) gate.
 package tools
 
 import (

@@ -13,30 +13,35 @@ the component map and design decisions.
 
 ## Status
 
-**M1 in progress.** The `session` store schema and `migrate` job exist
-(issue #2109): `whagent_net/migrate` applies `001_initial_schema` (see
-`whagent_net/migrate/migrations/`), and `whagent_net/session` exposes the
-store interfaces (`SessionStore`, `TranscriptStore`, `AgentDefinitionStore`,
-`UsageStore`, `IdempotencyLedger`) other M1 tasks build on. No other binary
-below exists yet. The product brief (`PRODUCT.md`) is produced by
-`/project-manager:product`; milestones are then specced with
-`/project-manager:design --milestone M<n>`. Origin discussion: GitHub issue
-#1552.
+**M1 shipped.** An operator can run a capped, tool-enabled session as
+themselves against `audience_score_system`'s MCP server from Claude Code,
+and read its transcript — the milestone's outcome sentence, exercised end
+to end (issue #2121). `migrate`, `api`, `worker`, and `mcp` all exist and
+build; `whagent_net/config/agents.yaml` seeds one real agent definition
+(`audience-score-system-research`) targeting `audience_score_system/mcp`.
+Deferred to M2/Later per the roadmap: the `archiver` (C18), `ui`/`embed`
+(C13–C16), `StreamEvents` (C17), a service-account caller path (C10), and
+whagent-side `allowed_tools` enforcement (C22). The product brief
+(`PRODUCT.md`) is produced by `/project-manager:product`; milestones are
+then specced with `/project-manager:design --milestone M<n>`. Origin
+discussion: GitHub issue #1552.
 
-## Planned binaries
+## Binaries
 
-| Binary | app_type | Responsibility |
-|--------|----------|----------------|
-| `migrate/` | `job` | Applies `session` store migrations. |
-| `api/` | `external-api` | Session service gRPC: start/send-turn/stop/get/list/read-transcript. |
-| `worker/` | `worker` | Temporal `SessionWorkflow` + activities (context build, LLM call, tool dispatch, commit). |
-| `archiver/` | `worker` | Postgres → S3 transcript archival and hot-tier retention. |
-| `mcp/` | `external-api` | MCP surface over `api` — how Claude Code and other agents drive agents. |
-| `ui/` | `external-api` | Standalone agent UI (session list, session view, run an agent). |
+| Binary | app_type | Responsibility | `bazel run` |
+|--------|----------|-----------------|-------------|
+| `migrate/` | `job` | Applies `session` store migrations, then seeds `agent_definition` from `config/agents.yaml` (see "Agent definition config" below). | `bazel run //whagent_net/migrate:migrate` |
+| `api/` | `external-api` | Session service gRPC: start/send-turn/stop/get/list/read-transcript; publishes the JWKS every domain-owned MCP server verifies a `worker`-minted persona credential against. | `bazel run //whagent_net/api:api` |
+| `worker/` | `worker` | Temporal `SessionWorkflow` + activities: resolve agent definition, build context, list/attach tools (FR8), call the model, dispatch each requested tool call, commit the turn, enforce turn/cost caps. | `bazel run //whagent_net/worker:worker` |
+| `mcp/` | `external-api` | MCP surface over `api` — how Claude Code and other agents drive agents. | `bazel run //whagent_net/mcp:mcp` |
 
-Shared Go packages: `session/` (store), `embed/` (embeddable session UI
-component), and `//libs/go/whagent` (tool contract for domain-owned MCP
-servers).
+Planned, not yet built (M2+): `archiver/` (Postgres → S3 transcript
+archival and hot-tier retention), `ui/` (standalone agent UI).
+
+Shared Go packages: `session/` (store), `config/` (the agent-definition
+seed source), `llm/` (the OpenRouter model client), `worker/tools/` (tool
+dispatch to domain-owned MCP servers), and `//libs/go/whagent` (the tool
+contract those servers implement).
 
 ## Connecting Claude Code to `mcp`
 
@@ -75,9 +80,96 @@ returns as soon as `api` has accepted and queued a turn, never once it has
 completed (FR1) -- follow up with `read_transcript` or `get_session` to see
 the result.
 
+## Agent definition config
+
+`whagent_net/config/agents.yaml` is the checked-in source of truth
+`whagent_net/migrate/seed` upserts into the `agent_definition` table on
+every `migrate` run — config-driven seeding, but `agent_definition` stays
+a real, versioned table (LB5/NFR6), never a config-lookup shortcut: the
+seeder never edits a version already pinned to a session in place, it
+only inserts a new one when a config entry's fields (`model`, `tool_set`,
+`max_turns`, `max_cost_usd`, `required_role`) drift from the latest
+seeded version. Re-running the seeder with an unchanged config is a
+no-op. Before writing anything, the seeder also checks every entry's
+`model` against the configured OpenRouter provider's live catalogue
+(`OPENROUTER_API_KEY`/`OPENROUTER_BASE_URL`, see `ENV.md`) — an unserved
+model fails the whole `migrate` run loudly rather than writing a
+half-seeded table, so `migrate` needs outbound network access to
+OpenRouter even in local dev.
+
+To add or change a seeded agent definition, edit `agents.yaml` and
+re-run `migrate` (`bazel run //whagent_net/migrate:migrate`, or the Tilt
+job below) — see that file's own doc comment for the exact field shape.
+
+## Keycloak role
+
+FR9's authorization check (`api`'s `StartSession` handler) requires the
+acting subject to hold the seeded agent definition's `required_role` — a
+**realm role** (`libs/go/grpcauth/KEYCLOAK.md`'s "Gotcha 1": `grpcauth`
+reads `realm_access.roles` only, never a client role) checked against
+`grpcauth.Claims.Roles`. The seeded `audience-score-system-research`
+definition (`config/agents.yaml`) requires:
+
+```
+whagent-audience-score-system-research
+```
+
+**To create and grant it** (see `libs/go/grpcauth/KEYCLOAK.md` §§ 2, 5
+for the full mental model — realm roles are global to the realm, so this
+name is already prefixed `whagent-` to avoid colliding with another
+domain's roles):
+
+1. Admin console → your realm → **Realm roles** → **Create role** → name
+   it exactly `whagent-audience-score-system-research` → Save.
+2. Grant it to a human operator via a **group** (KEYCLOAK.md § 5: "Humans
+   get roles via groups, never individually") — create or reuse a group,
+   add the role to the group's **Role mapping**, add the operator to the
+   group.
+3. The realm role must also land in the acting subject's token's
+   `realm_access.roles` claim, which it does automatically once granted
+   (no separate mapper needed for realm roles, unlike the audience
+   mapper client roles require — KEYCLOAK.md § 4).
+
+**To verify it appears in `grpcauth.Claims.Roles`:** obtain a token for
+an operator who holds the role (interactively, or
+`grant_type=password`/`client_credentials` per KEYCLOAK.md § 7's curl
+recipe) and decode it — `realm_access.roles` in the JWT payload must list
+`whagent-audience-score-system-research`. `api`'s
+`RequireClaimsUnaryInterceptor` (`GRPC_AUTH_MODE=oidc`) puts the decoded
+token's roles on `grpcauth.Claims.Roles` for every RPC; `StartSession`'s
+`hasRole` check (`api/handlers/start.go`) is what actually gates the
+call — a `start_session` for this agent as an operator without the role
+must fail with `PermissionDenied` and no session row created (M1
+Validation criterion 1).
+
+Realm configuration itself (creating the role, the group, and granting
+it) is **manual** in this repo today — there is no in-repo Keycloak
+realm-config-as-code for whagent-net, so this section is the deliverable
+per the milestone's own scope (`AGENTS.md` § Documentation Conventions).
+
 ## Local development
 
-Will require Postgres (`PG_DATABASE_URL`), Temporal (`TEMPORAL_HOST`),
-RabbitMQ (`RABBITMQ_URL`), and an S3-compatible bucket for the archiver.
-Concrete `bazel run` targets and Tilt wiring land with M1; see
-[`ENV.md`](ENV.md) for the variable set as it is defined.
+Requires Postgres (`PG_DATABASE_URL`), Temporal (`TEMPORAL_HOST`),
+RabbitMQ (`RABBITMQ_URL`, `worker` only), an OpenRouter API key
+(`OPENROUTER_API_KEY`), and a whagent-net signing key
+(`WHAGENT_SIGNING_KEY`/`WHAGENT_SIGNING_KEY_ID`, `api` and `worker` both
+fail startup loudly without one) — see [`ENV.md`](ENV.md) for the
+complete variable set across all four binaries.
+
+**Tilt** (`cd whagent_net && tilt up`) stands up all four binaries plus
+Postgres/Temporal/RabbitMQ, with a checked-in dev-only signing key —
+see `Tiltfile`. The seeded agent definition targets
+`audience_score_system/mcp`, which has its own minimal Tiltfile
+(`cd audience_score_system && tilt up`, run alongside this one) wired
+with the matching whagent-net trust configuration
+(`ASS_WHAGENT_JWKS_URL`/`ASS_WHAGENT_ISSUER`).
+
+**`bazel run`**, in order (each blocks in the foreground; use separate
+terminals):
+
+```bash
+bazel run //whagent_net/migrate:migrate   # applies migrations + seeds agent_definition
+bazel run //whagent_net/api:api           # SessionService gRPC + JWKS
+bazel run //whagent_net/worker:worker     # SessionWorkflow
+bazel run //whagent_net/mcp:mcp           # the Claude-Code-facing MCP surface
+```
