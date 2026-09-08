@@ -119,6 +119,27 @@ func (app *App) handleWorkshopLibrary(w http.ResponseWriter, r *http.Request) {
 		recentAddons = recentAddons[:8]
 	}
 
+	// Recent batch jobs (FR4, plan #2175): ListBatchJobs is scoped to a
+	// single game_id, so gather the latest few per game shown on this page
+	// and merge -- batch_job_id is assigned in creation order, so sorting by
+	// it descending is equivalent to newest-first across games without a
+	// second timestamp comparison.
+	var recentBatchJobs []*manmanpb.WorkshopBatchJob
+	for _, game := range games {
+		jobs, err := app.grpc.ListBatchJobs(ctx, game.GameId, 5)
+		if err != nil {
+			log.Printf("Error fetching batch jobs for game %d: %v", game.GameId, err)
+			continue
+		}
+		recentBatchJobs = append(recentBatchJobs, jobs...)
+	}
+	sort.Slice(recentBatchJobs, func(i, j int) bool {
+		return recentBatchJobs[i].BatchJobId > recentBatchJobs[j].BatchJobId
+	})
+	if len(recentBatchJobs) > 8 {
+		recentBatchJobs = recentBatchJobs[:8]
+	}
+
 	breadcrumbs := []components.Breadcrumb{
 		{Label: "Workshop", URL: "/workshop/library"},
 	}
@@ -130,11 +151,12 @@ func (app *App) handleWorkshopLibrary(w http.ResponseWriter, r *http.Request) {
 	}
 
 	pageData := pages.WorkshopLibraryPageData{
-		Layout:       layoutData,
-		Games:        games,
-		Libraries:    libraries,
-		RecentAddons: recentAddons,
-		Addons:       addons,
+		Layout:          layoutData,
+		Games:           games,
+		Libraries:       libraries,
+		RecentAddons:    recentAddons,
+		Addons:          addons,
+		RecentBatchJobs: recentBatchJobs,
 	}
 
 	RenderTempl(w, r, "Workshop Library", pages.WorkshopLibrary(pageData))
@@ -1094,13 +1116,12 @@ func (app *App) handlePresetsForGame(w http.ResponseWriter, r *http.Request) {
 }
 
 // handleWorkshopBatchStatus renders the manual-reload batch-status view for
-// a Workshop collection add or batch create job (FR4, plan #2175).
-//
-// Scaffold stub: does not yet call GetBatchJob -- that wiring, plus the
-// per-item table content, land in the Implementation phase of #2179. This
-// stub only proves out the route, layout, and page skeleton.
+// a Workshop collection add or batch create job (FR4, plan #2175). Reloads
+// are entirely manual (the page's "Refresh" link does a plain navigation) --
+// no SSE/polling/hx-trigger is wired here, by design (FR4 scope boundary).
 func (app *App) handleWorkshopBatchStatus(w http.ResponseWriter, r *http.Request) {
 	user := htmxauth.GetUser(r.Context())
+	ctx := r.Context()
 
 	batchJobIDStr := r.URL.Query().Get("batch_job_id")
 	if batchJobIDStr == "" {
@@ -1108,7 +1129,8 @@ func (app *App) handleWorkshopBatchStatus(w http.ResponseWriter, r *http.Request
 		return
 	}
 
-	if _, err := strconv.ParseInt(batchJobIDStr, 10, 64); err != nil {
+	batchJobID, err := strconv.ParseInt(batchJobIDStr, 10, 64)
+	if err != nil {
 		http.Error(w, "Invalid batch_job_id", http.StatusBadRequest)
 		return
 	}
@@ -1124,12 +1146,26 @@ func (app *App) handleWorkshopBatchStatus(w http.ResponseWriter, r *http.Request
 		return
 	}
 
-	// TODO(#2179 Implementation): call app.grpc.GetBatchJob and populate
-	// Job/Items instead of rendering the "not found" placeholder.
+	job, items, err := app.grpc.GetBatchJob(ctx, batchJobID)
+	if err != nil {
+		// Unknown batch_job_id (control-api returns NotFound) renders the
+		// "not found" state rather than an error page -- there is no
+		// well-known distinction to make between NotFound and other RPC
+		// failures from this read-only view.
+		log.Printf("Error fetching batch job %d: %v", batchJobID, err)
+		data := pages.WorkshopBatchStatusPageData{
+			Layout: layoutData,
+			Job:    nil,
+			Items:  nil,
+		}
+		RenderTempl(w, r, "Batch Job Status", pages.WorkshopBatchStatus(data))
+		return
+	}
+
 	data := pages.WorkshopBatchStatusPageData{
 		Layout: layoutData,
-		Job:    nil,
-		Items:  nil,
+		Job:    job,
+		Items:  items,
 	}
 
 	RenderTempl(w, r, "Batch Job Status", pages.WorkshopBatchStatus(data))
