@@ -86,12 +86,18 @@ func (r *WorkshopCacheRepository) UpsertCacheEntry(ctx context.Context, entry *m
 	))
 }
 
+// ListCacheEntriesForWorkshopID returns every cache entry for workshopID,
+// newest-first by created_at (FR10: an Admin scanning an addon's cache wants
+// its most recent content version at the top). cache_entry_id is a
+// BIGSERIAL and so is monotonic with insertion order too, but created_at is
+// the documented, semantically-meaningful sort key -- order by it directly
+// rather than relying on that correlation.
 func (r *WorkshopCacheRepository) ListCacheEntriesForWorkshopID(ctx context.Context, workshopID string) ([]*manman.WorkshopCacheEntry, error) {
 	query := `
 		SELECT ` + workshopCacheEntryColumns + `
 		FROM workshop_cache_entries
 		WHERE workshop_id = $1
-		ORDER BY cache_entry_id
+		ORDER BY created_at DESC, cache_entry_id DESC
 	`
 	rows, err := r.db.Query(ctx, query, workshopID)
 	if err != nil {
@@ -178,4 +184,38 @@ func (r *WorkshopCacheRepository) ListHostPresence(ctx context.Context, cacheEnt
 		presence = append(presence, p)
 	}
 	return presence, rows.Err()
+}
+
+// ListHostPresenceForCacheEntryIDs is the FR10 fleet-visibility read path:
+// one query (ANY($1) over cacheEntryIDs, joined with servers for a display
+// name) regardless of how many entries are being rendered -- the query count
+// must not scale with entry count. An empty input returns an empty map with
+// no query at all.
+func (r *WorkshopCacheRepository) ListHostPresenceForCacheEntryIDs(ctx context.Context, cacheEntryIDs []int64) (map[int64][]*manman.WorkshopCacheHostPresenceWithServer, error) {
+	result := make(map[int64][]*manman.WorkshopCacheHostPresenceWithServer)
+	if len(cacheEntryIDs) == 0 {
+		return result, nil
+	}
+
+	query := `
+		SELECT p.cache_entry_id, p.server_id, s.name, p.first_seen_at, p.last_seen_at
+		FROM workshop_cache_host_presence p
+		JOIN servers s ON s.server_id = p.server_id
+		WHERE p.cache_entry_id = ANY($1)
+		ORDER BY p.cache_entry_id, s.name
+	`
+	rows, err := r.db.Query(ctx, query, cacheEntryIDs)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	for rows.Next() {
+		p := &manman.WorkshopCacheHostPresenceWithServer{}
+		if err := rows.Scan(&p.CacheEntryID, &p.ServerID, &p.ServerName, &p.FirstSeenAt, &p.LastSeenAt); err != nil {
+			return nil, err
+		}
+		result[p.CacheEntryID] = append(result[p.CacheEntryID], p)
+	}
+	return result, rows.Err()
 }

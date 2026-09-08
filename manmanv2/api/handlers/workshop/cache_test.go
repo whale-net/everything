@@ -169,6 +169,15 @@ func (f *fakeCacheRepo) ListHostPresence(_ context.Context, _ int64) ([]*manman.
 	return nil, nil
 }
 
+// ListHostPresenceForCacheEntryIDs is a placeholder satisfying the
+// repository.WorkshopCacheRepository interface for the presigned-URL tests
+// in this file, which don't exercise the ListAddonCacheEntries path. #2185's
+// own Testing phase adds fakeHostPresenceRepo/equivalent fixtures and
+// coverage for the batched lookup itself (see the issue's Testing section).
+func (f *fakeCacheRepo) ListHostPresenceForCacheEntryIDs(_ context.Context, _ []int64) (map[int64][]*manman.WorkshopCacheHostPresenceWithServer, error) {
+	return map[int64][]*manman.WorkshopCacheHostPresenceWithServer{}, nil
+}
+
 func (f *fakeCacheRepo) entryCount() int {
 	f.mu.Lock()
 	defer f.mu.Unlock()

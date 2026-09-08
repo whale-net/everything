@@ -200,3 +200,83 @@ func (h *WorkshopServiceHandler) ReportCacheRead(ctx context.Context, req *pb.Re
 	slog.Info("recorded workshop cache host presence", "cache_entry_id", req.CacheEntryId, "server_id", req.ServerId)
 	return &pb.ReportCacheReadResponse{}, nil
 }
+
+// ListAddonCacheEntries implements FR10: fleet-wide Admin visibility into a
+// single addon's cache -- every content-addressed version, which hosts hold
+// a copy of each, and how stale each entry's last verification is, without
+// querying hosts one at a time. Resolves addon_id -> workshop_id, then
+// fetches that workshop's cache entries newest-first and their host
+// presence in one batched follow-up query (never one query per entry, so an
+// addon with a long version history doesn't fan out into N round-trips).
+// Read-only: this RPC must not create, touch, or verify any cache entry.
+func (h *WorkshopServiceHandler) ListAddonCacheEntries(ctx context.Context, req *pb.ListAddonCacheEntriesRequest) (*pb.ListAddonCacheEntriesResponse, error) {
+	if req.AddonId == 0 {
+		return nil, status.Error(codes.InvalidArgument, "addon_id is required")
+	}
+
+	addon, err := h.addonRepo.Get(ctx, req.AddonId)
+	if err != nil {
+		return nil, status.Errorf(codes.NotFound, "addon %d not found: %v", req.AddonId, err)
+	}
+
+	entries, err := h.cacheRepo.ListCacheEntriesForWorkshopID(ctx, addon.WorkshopID)
+	if err != nil {
+		slog.Warn("failed to list workshop cache entries", "addon_id", req.AddonId, "workshop_id", addon.WorkshopID, "error", err)
+		return nil, status.Errorf(codes.Internal, "failed to list cache entries: %v", err)
+	}
+	if len(entries) == 0 {
+		return &pb.ListAddonCacheEntriesResponse{Entries: []*pb.WorkshopCacheEntry{}}, nil
+	}
+
+	cacheEntryIDs := make([]int64, len(entries))
+	for i, e := range entries {
+		cacheEntryIDs[i] = e.CacheEntryID
+	}
+
+	// One query for every entry's host presence -- see
+	// ListHostPresenceForCacheEntryIDs' doc comment: looping ListHostPresence
+	// per entry here is exactly the per-host, per-entry fan-out FR10 rules out.
+	presenceByEntry, err := h.cacheRepo.ListHostPresenceForCacheEntryIDs(ctx, cacheEntryIDs)
+	if err != nil {
+		slog.Warn("failed to list workshop cache host presence", "addon_id", req.AddonId, "workshop_id", addon.WorkshopID, "error", err)
+		return nil, status.Errorf(codes.Internal, "failed to list cache host presence: %v", err)
+	}
+
+	pbEntries := make([]*pb.WorkshopCacheEntry, len(entries))
+	for i, e := range entries {
+		pbEntries[i] = cacheEntryToProto(e, presenceByEntry[e.CacheEntryID])
+	}
+
+	return &pb.ListAddonCacheEntriesResponse{Entries: pbEntries}, nil
+}
+
+// cacheEntryToProto converts a cache entry plus its already-fetched host
+// presence into the wire type. LastVerifiedAt is 0 when the entry has never
+// been verified (WorkshopCacheEntry.LastVerifiedAt == nil) -- the UI page
+// renders that as "never verified" rather than a raw zero timestamp.
+func cacheEntryToProto(entry *manman.WorkshopCacheEntry, presence []*manman.WorkshopCacheHostPresenceWithServer) *pb.WorkshopCacheEntry {
+	pbEntry := &pb.WorkshopCacheEntry{
+		CacheEntryId:   entry.CacheEntryID,
+		WorkshopId:     entry.WorkshopID,
+		ContentVersion: entry.ContentVersion,
+		CacheKey:       entry.CacheKey,
+		S3Key:          entry.S3Key,
+		CreatedAt:      entry.CreatedAt.Unix(),
+		Hosts:          make([]*pb.WorkshopCacheHost, len(presence)),
+	}
+	if entry.SizeBytes != nil {
+		pbEntry.SizeBytes = *entry.SizeBytes
+	}
+	if entry.LastVerifiedAt != nil {
+		pbEntry.LastVerifiedAt = entry.LastVerifiedAt.Unix()
+	}
+	for i, p := range presence {
+		pbEntry.Hosts[i] = &pb.WorkshopCacheHost{
+			ServerId:    p.ServerID,
+			ServerName:  p.ServerName,
+			FirstSeenAt: p.FirstSeenAt.Unix(),
+			LastSeenAt:  p.LastSeenAt.Unix(),
+		}
+	}
+	return pbEntry
+}

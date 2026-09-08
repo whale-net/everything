@@ -1347,14 +1347,12 @@ func (app *App) handleWorkshopBatchStatus(w http.ResponseWriter, r *http.Request
 
 // handleWorkshopCache renders the Admin fleet-wide Workshop cache visibility
 // view for a single addon (FR10, plan #2175): every content-addressed cache
-// entry, which hosts hold a copy, and each entry's staleness.
-//
-// Scaffold stub: does not yet call ListAddonCacheEntries -- that wiring, the
-// staleness rendering, and the per-entry host list land in the
-// Implementation phase of #2185. This stub only proves out the route,
-// layout, and page skeleton.
+// entry, which hosts hold a copy, and each entry's staleness -- from one
+// place, without querying hosts one at a time. Manual reload only, same M4
+// boundary as the batch-status view: no polling or SSE.
 func (app *App) handleWorkshopCache(w http.ResponseWriter, r *http.Request) {
 	user := htmxauth.GetUser(r.Context())
+	ctx := r.Context()
 
 	addonIDStr := r.URL.Query().Get("addon_id")
 	if addonIDStr == "" {
@@ -1368,9 +1366,19 @@ func (app *App) handleWorkshopCache(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Best-effort: an unresolvable addon name still renders the cache view
+	// (an addon_id-only title/breadcrumb) rather than failing the page --
+	// ListAddonCacheEntries below is the RPC that actually determines whether
+	// the addon exists.
+	addonName := "Addon " + addonIDStr
+	if addon, addonErr := app.grpc.GetWorkshopAddon(ctx, addonID); addonErr == nil && addon.Name != "" {
+		addonName = addon.Name
+	}
+
 	breadcrumbs := []components.Breadcrumb{
 		{Label: "Workshop", URL: "/workshop/library"},
-		{Label: "Cache", URL: "/workshop/cache"},
+		{Label: addonName, URL: fmt.Sprintf("/workshop/addon?addon_id=%d", addonID)},
+		{Label: "Cache", URL: ""},
 	}
 	layoutData, err := app.buildTemplLayoutData(r, "Workshop Cache", "workshop", user, breadcrumbs)
 	if err != nil {
@@ -1379,12 +1387,19 @@ func (app *App) handleWorkshopCache(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// TODO(#2185 Implementation): call app.grpc.ListAddonCacheEntries and
-	// populate Entries instead of rendering the empty-state placeholder.
+	entries, err := app.grpc.ListAddonCacheEntries(ctx, addonID)
+	if err != nil {
+		// Unknown addon_id (control-api returns NotFound) renders the empty
+		// state rather than an error page, matching the batch-status view's
+		// precedent for a read-only lookup by id.
+		log.Printf("Error fetching workshop cache entries for addon %d: %v", addonID, err)
+		entries = nil
+	}
+
 	data := pages.WorkshopCachePageData{
 		Layout:  layoutData,
 		AddonID: addonID,
-		Entries: nil,
+		Entries: entries,
 	}
 
 	RenderTempl(w, r, "Workshop Cache", pages.WorkshopCache(data))

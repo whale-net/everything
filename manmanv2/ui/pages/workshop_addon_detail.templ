@@ -41,6 +41,7 @@ templ WorkshopAddonDetail(data WorkshopAddonDetailPageData) {
 						}
 					</div>
 				</div>
+				<a href={ templ.URL(fmt.Sprintf("/workshop/cache?addon_id=%d", data.Addon.AddonId)) } class="btn btn-outline btn-sm">Cache</a>
 			</div>
 			<!-- Info Grid -->
 			<div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4 mb-6">

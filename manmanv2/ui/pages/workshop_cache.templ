@@ -9,17 +9,37 @@ import (
 // WorkshopCachePageData backs the Admin fleet-wide cache visibility view
 // (FR10, plan #2175): for a given addon, every content-addressed cache
 // entry, which hosts hold a copy, and how stale each entry's verification
-// is -- without querying hosts one at a time.
-//
-// Scaffold only: the handler (handleWorkshopCache in
-// manmanv2/ui/handlers_workshop.go) does not yet populate Entries from the
-// ListAddonCacheEntries RPC -- that wiring, plus the staleness rendering and
-// per-entry host list, land in the Implementation phase of #2185. AddonID is
-// set so the skeleton can at least echo back which addon was requested.
+// is -- without querying hosts one at a time. Entries is populated by
+// handleWorkshopCache (manmanv2/ui/handlers_workshop.go) from the
+// ListAddonCacheEntries RPC, already newest-first with each entry's host
+// presence attached; this page does no further sorting or fetching.
 type WorkshopCachePageData struct {
 	Layout  components.LayoutData
 	AddonID int64
 	Entries []*manmanpb.WorkshopCacheEntry
+}
+
+// cacheEntrySize renders SizeBytes the same way the addon detail/library
+// pages render FileSizeBytes (fmt.Sprintf("%.1f MB", ...)), so a size looks
+// the same wherever it appears in the Workshop UI.
+func cacheEntrySize(sizeBytes int64) string {
+	if sizeBytes <= 0 {
+		return "Unknown"
+	}
+	return fmt.Sprintf("%.1f MB", float64(sizeBytes)/1048576)
+}
+
+// cacheEntryVerifiedLabel is the thing an Admin is actually reading this
+// page for (issue #2185): a rendered staleness, not a raw timestamp.
+// LastVerifiedAt == 0 means the entry has never been verified (see
+// WorkshopCacheEntry proto doc), which is a distinct, worth-calling-out
+// state from "verified a very long time ago" -- so it gets its own label
+// rather than falling through to timeAgo's "Never".
+func cacheEntryVerifiedLabel(lastVerifiedAt int64) string {
+	if lastVerifiedAt == 0 {
+		return "never verified"
+	}
+	return "verified " + timeAgo(lastVerifiedAt)
 }
 
 templ WorkshopCache(data WorkshopCachePageData) {
@@ -58,12 +78,18 @@ templ WorkshopCache(data WorkshopCachePageData) {
 					for _, entry := range data.Entries {
 						<tr>
 							<td class="font-mono text-xs">{ entry.ContentVersion }</td>
-							<td>{ fmt.Sprintf("%d", entry.SizeBytes) }</td>
-							<td>{ fmt.Sprintf("%d", entry.CreatedAt) }</td>
-							<td>{ fmt.Sprintf("%d", entry.LastVerifiedAt) }</td>
+							<td>{ cacheEntrySize(entry.SizeBytes) }</td>
+							<td class="text-sm">{ timeAgo(entry.CreatedAt) } <span class="text-base-content/60">({ formatTime(entry.CreatedAt) })</span></td>
+							<td class="text-sm">{ cacheEntryVerifiedLabel(entry.LastVerifiedAt) }</td>
 							<td>
+								if len(entry.Hosts) == 0 {
+									<span class="text-xs text-base-content/60">No hosts reported</span>
+								}
 								for _, host := range entry.Hosts {
-									<div class="text-xs">{ host.ServerName }</div>
+									<div class="text-xs">
+										<span class="font-medium">{ host.ServerName }</span>
+										<span class="text-base-content/60">— last seen { timeAgo(host.LastSeenAt) }</span>
+									</div>
 								}
 							</td>
 							<td>
