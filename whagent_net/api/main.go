@@ -65,7 +65,11 @@ func run() error {
 	defer pool.Close()
 	logger.Info("database connected")
 
-	store := session.New(pool)
+	// pub is nil: this task's SessionService scope is read-only RPCs
+	// (GetSession/ReadTranscript) that never publish events. The write
+	// RPCs that will need a real events.PublisherInterface land with the
+	// SessionWorkflow (#2117).
+	store := session.New(pool, nil)
 	sessionServer := handlers.NewSessionServer(store, grpcOIDCIssuer)
 
 	// Every SessionService RPC authenticates (ARCHITECTURE.md "Identity and

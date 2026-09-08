@@ -17,6 +17,7 @@ package handlers
 import (
 	"context"
 
+	"github.com/whale-net/everything/whagent_net/events"
 	pb "github.com/whale-net/everything/whagent_net/protos"
 	"github.com/whale-net/everything/whagent_net/session"
 
@@ -149,7 +150,7 @@ func (s *SessionServer) ReadTranscript(ctx context.Context, req *pb.ReadTranscri
 		limit = maxTranscriptLimit
 	}
 
-	events, err := s.store.Transcript().Read(ctx, id, req.GetFromSeq(), limit)
+	transcriptEvents, err := s.store.Transcript().Read(ctx, id, req.GetFromSeq(), limit)
 	if err != nil {
 		return nil, status.Errorf(codes.Internal, "read transcript: %v", err)
 	}
@@ -158,8 +159,8 @@ func (s *SessionServer) ReadTranscript(ctx context.Context, req *pb.ReadTranscri
 	// gap, no duplicate (FR2). When nothing new was read, it echoes the
 	// request's from_seq back unchanged (nothing to resume past yet).
 	nextFromSeq := req.GetFromSeq()
-	pbEvents := make([]*pb.TranscriptEvent, len(events))
-	for i, ev := range events {
+	pbEvents := make([]*pb.TranscriptEvent, len(transcriptEvents))
+	for i, ev := range transcriptEvents {
 		pbEvents[i] = transcriptEventToProto(ev)
 		if ev.Seq >= nextFromSeq {
 			nextFromSeq = ev.Seq + 1
@@ -242,7 +243,7 @@ func sessionToProto(sess *session.Session) *pb.Session {
 // FR2's distinction (a domain-server error is an ordinary tool-result
 // event, never the session's own failure event) falls out of `type` never
 // being rewritten here, not out of any special-casing in this mapping.
-func transcriptEventToProto(ev session.Event) *pb.TranscriptEvent {
+func transcriptEventToProto(ev events.Event) *pb.TranscriptEvent {
 	return &pb.TranscriptEvent{
 		EventId:     ev.EventID.String(),
 		Seq:         ev.Seq,
