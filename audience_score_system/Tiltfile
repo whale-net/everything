@@ -83,6 +83,20 @@ whagent_jwks_url = get_custom_or_default(
 )
 whagent_issuer = get_custom_or_default('BUILD_WHAGENT_ENV', 'ASS_WHAGENT_ISSUER', 'whagent-net')
 
+# ASS_MCP_PUBLIC_URL doubles as the whagent-net Claim's `aud` (audience)
+# this mcp's verifier checks (ENV.md, "ASS_MCP_PUBLIC_URL"; issue #2151)
+# -- it must exactly match whagent_net/config/agents.yaml's tool_set
+# server_url for this service, INCLUDING the trailing slash (the `aud`
+# check is an exact/Contains match, libs/go/whagent/verify.go). Default
+# to the in-cluster address (not a host-facing localhost URL, which the
+# worker -> mcp call never traverses) -- keep in sync with agents.yaml's
+# server_url if either changes, same as this file's namespace/service-
+# name comment above.
+ass_mcp_public_url = get_custom_or_default(
+    'BUILD_WHAGENT_ENV', 'ASS_MCP_PUBLIC_URL',
+    'http://audience-score-system-mcp.{}.svc.cluster.local:8081/'.format(namespace),
+)
+
 # ===========================
 # Application Configuration
 # ===========================
@@ -189,7 +203,7 @@ spec:
         - name: ASS_MCP_ADDR
           value: ":8081"
         - name: ASS_MCP_PUBLIC_URL
-          value: "http://localhost:8081"
+          value: "{ass_mcp_public_url}"
         - name: ASS_OAUTH_REDIRECT_BASE_URL
           value: "http://localhost:8081"
         - name: TEMPORAL_HOST
@@ -204,6 +218,7 @@ spec:
         namespace=namespace,
         pg_database_url=pg_database_url,
         temporal_host=temporal_host,
+        ass_mcp_public_url=ass_mcp_public_url,
         whagent_jwks_url=whagent_jwks_url,
         whagent_issuer=whagent_issuer,
         otel_endpoint=otel_endpoint,
