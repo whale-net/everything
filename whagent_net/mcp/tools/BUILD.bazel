@@ -1,4 +1,4 @@
-load("@rules_go//go:def.bzl", "go_library")
+load("@rules_go//go:def.bzl", "go_library", "go_test")
 
 # whagent-net's MCP tool group, one file per tool (issue #2120): the five
 # gRPC RPCs FR1/FR2/FR3 require from this surface -- start_session,
@@ -22,5 +22,32 @@ go_library(
         "//whagent_net/protos:whagentpb",
         "@com_github_modelcontextprotocol_go_sdk//mcp",
         "@org_golang_google_grpc//status",
+    ],
+)
+
+go_test(
+    name = "tools_test",
+    srcs = [
+        "deps_test.go",
+        "errors_test.go",
+        "fake_client_test.go",
+        "get_session_test.go",
+        "read_transcript_test.go",
+        "registration_test.go",
+        "send_turn_test.go",
+        "start_session_test.go",
+        "stop_session_test.go",
+    ],
+    embed = [":tools"],
+    embedsrcs = ["BUILD.bazel"],
+    deps = [
+        "//whagent_net/protos:whagentpb",
+        "@com_github_modelcontextprotocol_go_sdk//mcp",
+        "@com_github_stretchr_testify//assert",
+        "@com_github_stretchr_testify//require",
+        "@org_golang_google_grpc//:grpc",
+        "@org_golang_google_grpc//codes",
+        "@org_golang_google_grpc//status",
+        "@org_golang_google_protobuf//types/known/timestamppb",
     ],
 )

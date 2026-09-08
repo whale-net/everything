@@ -1,4 +1,4 @@
-load("@rules_go//go:def.bzl", "go_library")
+load("@rules_go//go:def.bzl", "go_library", "go_test")
 
 # `mcp`'s server bootstrap (server.go), caller-identity pass-through
 # middleware (auth.go), and streamable HTTP transport (transport.go). See
@@ -16,5 +16,27 @@ go_library(
         "//libs/go/grpcauth",
         "@com_github_modelcontextprotocol_go_sdk//auth",
         "@com_github_modelcontextprotocol_go_sdk//mcp",
+    ],
+)
+
+go_test(
+    name = "server_test",
+    srcs = [
+        "auth_pass_through_test.go",
+        "deps_test.go",
+    ],
+    embed = [":server"],
+    embedsrcs = ["BUILD.bazel"],
+    deps = [
+        "//libs/go/grpcauth",
+        "//libs/go/grpcclient",
+        "//whagent_net/mcp/tools",
+        "//whagent_net/protos:whagentpb",
+        "@com_github_modelcontextprotocol_go_sdk//mcp",
+        "@com_github_stretchr_testify//assert",
+        "@com_github_stretchr_testify//require",
+        "@org_golang_google_grpc//:grpc",
+        "@org_golang_google_grpc//metadata",
+        "@org_golang_google_grpc//test/bufconn",
     ],
 )
