@@ -1,19 +1,16 @@
 // Package handlers implements whagent-net's SessionServiceServer
-// (whagent_net/protos/session.proto, issue #2113). Issue #2113's Scaffold
-// phase wired up every RPC through the authenticated gRPC server
-// (whagent_net/api/main.go, auth.go) with every method returning
-// codes.Unimplemented; its Implementation phase filled in the two read
-// paths -- GetSession (FR3) and ReadTranscript (FR2) -- against
-// whagent_net/session.Store directly (no Temporal round trip,
-// ARCHITECTURE.md "Service boundary vs. package boundary"). This file
-// (session.go) still owns the SessionServer type itself, those two read
-// RPCs, ListSessions, and the proto-mapping helpers every handler file
-// shares; the three write RPCs live in their own files per issue #2117's
-// Scaffold split: start.go (StartSession), send.go (SendTurn), stop.go
-// (StopSession) -- each is UNIMPLEMENTED until #2117's Implementation
-// phase fills it in against the Temporal client now wired onto
-// SessionServer (see NewSessionServer below) and the SessionWorkflow
-// #2114 built. ListSessions stays UNIMPLEMENTED regardless: the issue
+// (whagent_net/protos/session.proto, issue #2113). Issue #2113's
+// Implementation phase filled in the two read paths -- GetSession (FR3) and
+// ReadTranscript (FR2) -- against whagent_net/session.Store directly (no
+// Temporal round trip, ARCHITECTURE.md "Service boundary vs. package
+// boundary"). This file (session.go) owns the SessionServer type itself,
+// those two read RPCs, ListSessions, and the proto-mapping helpers every
+// handler file shares; the three write RPCs live in their own files per
+// issue #2117's Scaffold split -- start.go (StartSession), send.go
+// (SendTurn), stop.go (StopSession) -- and are real as of #2117's
+// Implementation phase: each drives the SessionWorkflow #2114 built,
+// through the Temporal client and model catalogue wired onto SessionServer
+// (see NewSessionServer below). ListSessions stays UNIMPLEMENTED: the issue
 // allows either a minimal "list the caller's own sessions" implementation
 // or UNIMPLEMENTED, and session.SessionStore (#2109) exposes no
 // by-subject list query -- adding one would expand scope beyond any
@@ -25,6 +22,7 @@ import (
 	"context"
 
 	"github.com/whale-net/everything/whagent_net/events"
+	"github.com/whale-net/everything/whagent_net/llm"
 	pb "github.com/whale-net/everything/whagent_net/protos"
 	"github.com/whale-net/everything/whagent_net/session"
 
@@ -52,6 +50,26 @@ const (
 // import; kept here as the single place `api` itself needs the name.
 const sessionWorkflowTaskQueue = "whagent-net-session"
 
+// sessionWorkflowName is the Temporal workflow type StartSession starts.
+// Temporal's SDK registers a workflow function under its bare Go function
+// name when no explicit name is passed to worker.Worker.RegisterWorkflow
+// (go.temporal.io/sdk/internal.getFunctionName: the last "."-separated
+// element of the function's fully-qualified runtime name) -- worker/
+// main.go calls `w.RegisterWorkflow(SessionWorkflow)` with no override, so
+// this string must track that function's name exactly. Duplicated (not
+// imported) for the same `package main` reason as sessionWorkflowTaskQueue
+// above.
+const sessionWorkflowName = "SessionWorkflow"
+
+// Signal name constants start.go/send.go/stop.go signal a running
+// SessionWorkflow with. Must match worker/workflow.go's SignalSendTurn/
+// SignalStop constants exactly -- duplicated for the same `package main`
+// reason as sessionWorkflowTaskQueue above.
+const (
+	signalSendTurn = "SendTurn"
+	signalStop     = "Stop"
+)
+
 // SessionServer implements pb.SessionServiceServer over a
 // *session.Store -- the same store package `worker` will import directly
 // (ARCHITECTURE.md "Service boundary vs. package boundary": no RPC hop
@@ -77,19 +95,27 @@ type SessionServer struct {
 	// taskQueue is the Temporal task queue to start/signal
 	// SessionWorkflow executions on.
 	taskQueue string
+	// catalog is StartSession's FR5 gate: the OpenRouter model catalogue a
+	// requested model_override is checked against before any session row is
+	// written. nil is tolerated only by tests that never exercise
+	// StartSession's override path (e.g. the read-path integration
+	// coverage in session_integration_test.go) -- main.go always
+	// constructs a real one.
+	catalog *llm.Catalog
 }
 
 var _ pb.SessionServiceServer = (*SessionServer)(nil)
 
 // NewSessionServer returns a SessionServer backed by store, authenticating
-// callers against issuer (see SessionServer.issuer) and starting/signalling
-// SessionWorkflow executions through temporalClient on taskQueue. An empty
+// callers against issuer (see SessionServer.issuer), starting/signalling
+// SessionWorkflow executions through temporalClient on taskQueue, and
+// checking StartSession's FR5 model_override against catalog. An empty
 // taskQueue defaults to sessionWorkflowTaskQueue -- main.go passes
 // //libs/go/temporal's Config.TaskQueue (TEMPORAL_TASK_QUEUE) straight
 // through unchanged, mirroring whagent_net/worker/main.go's identical
 // "env value if set, else the package's own default" fallback for the
 // same setting on the other side of this same queue.
-func NewSessionServer(store *session.Store, issuer string, temporalClient temporalclient.Client, taskQueue string) *SessionServer {
+func NewSessionServer(store *session.Store, issuer string, temporalClient temporalclient.Client, taskQueue string, catalog *llm.Catalog) *SessionServer {
 	if taskQueue == "" {
 		taskQueue = sessionWorkflowTaskQueue
 	}
@@ -98,6 +124,7 @@ func NewSessionServer(store *session.Store, issuer string, temporalClient tempor
 		issuer:         issuer,
 		temporalClient: temporalClient,
 		taskQueue:      taskQueue,
+		catalog:        catalog,
 	}
 }
 
@@ -226,6 +253,19 @@ func (s *SessionServer) callerSubject(ctx context.Context) (session.Subject, err
 // metadata about the identity rather than part of it.
 func subjectsEqual(a, b session.Subject) bool {
 	return a.Iss == b.Iss && a.Sub == b.Sub
+}
+
+// hasRole reports whether required is present in roles (FR9's role check:
+// StartSession requires the caller's Keycloak realm/client roles --
+// grpcauth.Claims.Roles -- to include an agent definition's required_role
+// verbatim; there is no whagent-side ACL table or role hierarchy, LB5).
+func hasRole(roles []string, required string) bool {
+	for _, r := range roles {
+		if r == required {
+			return true
+		}
+	}
+	return false
 }
 
 // sessionToProto maps a `sessions` row to its wire shape (FR3), translating

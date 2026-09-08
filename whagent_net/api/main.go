@@ -16,6 +16,7 @@ import (
 	"os/signal"
 	"sync"
 	"syscall"
+	"time"
 
 	"github.com/whale-net/everything/libs/go/db"
 	"github.com/whale-net/everything/libs/go/grpcauth"
@@ -23,6 +24,7 @@ import (
 	temporallib "github.com/whale-net/everything/libs/go/temporal"
 	"github.com/whale-net/everything/whagent_net/api/handlers"
 	"github.com/whale-net/everything/whagent_net/api/persona"
+	"github.com/whale-net/everything/whagent_net/llm"
 	pb "github.com/whale-net/everything/whagent_net/protos"
 	"github.com/whale-net/everything/whagent_net/session"
 	"go.opentelemetry.io/contrib/instrumentation/google.golang.org/grpc/otelgrpc"
@@ -100,10 +102,12 @@ func run() error {
 		Handler: persona.NewMux(keySet),
 	}
 
-	// pub is nil: this task's SessionService scope is read-only RPCs
-	// (GetSession/ReadTranscript) that never publish events. The write
-	// RPCs that will need a real events.PublisherInterface land with the
-	// SessionWorkflow (#2117).
+	// pub is nil: none of api's own writes go through Transcript().Append
+	// (NFR2's publish-on-commit path) -- StartSession only writes
+	// `sessions`/`session_agent` rows directly, never a transcript event.
+	// Transcript events are appended (and published) exclusively by
+	// `worker`'s CommitTurn activity, which constructs its own store with a
+	// real events.PublisherInterface (worker/main.go).
 	store := session.New(pool, nil)
 
 	// Temporal client (issue #2117's Scaffold): StartSession/SendTurn/
@@ -122,7 +126,23 @@ func run() error {
 	defer temporalClient.Close()
 	logger.Info("temporal connected")
 
-	sessionServer := handlers.NewSessionServer(store, grpcOIDCIssuer, temporalClient, temporalCfg.TaskQueue)
+	// Model catalogue (FR5, issue #2117): StartSession checks a requested
+	// model_override against this before any session row is written --
+	// same OpenRouter client/catalogue shape `worker` builds for CallModel
+	// (worker/main.go), constructed separately here because `api` and
+	// `worker` are different processes/binaries sharing no in-memory state.
+	catalogTTL := 5 * time.Minute
+	if raw := os.Getenv("WHAGENT_MODEL_CATALOG_TTL"); raw != "" {
+		parsed, err := time.ParseDuration(raw)
+		if err != nil {
+			return fmt.Errorf("parse WHAGENT_MODEL_CATALOG_TTL %q: %w", raw, err)
+		}
+		catalogTTL = parsed
+	}
+	llmClient := llm.NewClient(os.Getenv("OPENROUTER_API_KEY"), getEnv("OPENROUTER_BASE_URL", "https://openrouter.ai/api/v1"))
+	catalog := llm.NewCatalog(llmClient, catalogTTL)
+
+	sessionServer := handlers.NewSessionServer(store, grpcOIDCIssuer, temporalClient, temporalCfg.TaskQueue, catalog)
 
 	// Every SessionService RPC authenticates (ARCHITECTURE.md "Identity and
 	// auth chaining"; whagent_net/api/auth.go's requireClaims) -- unlike

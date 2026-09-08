@@ -49,16 +49,21 @@ Read by `archiver` (write) and `api` (hydrate archived transcripts).
 
 ## LLM provider
 
-Read by `worker` (`//whagent_net/llm`, issue #2112).
+Read by `worker` (`//whagent_net/llm`, issue #2112) and, for `OPENROUTER_API_KEY`/
+`OPENROUTER_BASE_URL`/`WHAGENT_MODEL_CATALOG_TTL` only, by `api` as well
+(issue #2117): `StartSession` builds its own `llm.Client`/`llm.Catalog` pair
+to check a requested `model_override` against the provider catalogue (FR5)
+before any session row is written -- a separate in-process cache from
+`worker`'s, since the two are different binaries sharing no memory.
 
 | Variable | Component | Default | Description |
 |----------|-----------|---------|-------------|
-| `OPENROUTER_API_KEY` | worker | *(required)* | OpenRouter API key. |
-| `OPENROUTER_BASE_URL` | worker | `https://openrouter.ai/api/v1` | OpenAI-compatible base URL; swapping it is how a second provider would be introduced. |
+| `OPENROUTER_API_KEY` | worker, api | *(required)* | OpenRouter API key. |
+| `OPENROUTER_BASE_URL` | worker, api | `https://openrouter.ai/api/v1` | OpenAI-compatible base URL; swapping it is how a second provider would be introduced. |
 | `WHAGENT_DEFAULT_MODEL` | worker, api | — | Model used when neither agent definition nor session specifies one. |
 | `WHAGENT_DEFAULT_MAX_TURNS` | api | `100` | Per-session turn cap default. |
 | `WHAGENT_DEFAULT_MAX_COST_USD` | api | `1` | Per-session cost cap default. |
-| `WHAGENT_MODEL_CATALOG_TTL` | worker | `5m` | How long `llm.Catalog` caches OpenRouter's model list (FR5) before refetching. |
+| `WHAGENT_MODEL_CATALOG_TTL` | worker, api | `5m` | How long `llm.Catalog` caches OpenRouter's model list (FR5) before refetching. |
 | `WHAGENT_PRICE_TABLE_PATH` | worker | *(required)* | Path to the per-model price table `llm.LoadPriceTable` reads (LB6: contents and source stay cheap to change -- a config file, not a code table). JSON object keyed on model id, e.g. `{"openai/gpt-4o": {"prompt_usd_per_million": 2.5, "completion_usd_per_million": 10}}`; read fresh on every call, so an edit takes effect without a code change. |
 
 ## Identity (OIDC / Keycloak)

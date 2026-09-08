@@ -15,6 +15,7 @@ go_library(
         "//libs/go/temporal",
         "//whagent_net/api/handlers",
         "//whagent_net/api/persona",
+        "//whagent_net/llm",
         "//whagent_net/protos:whagentpb",
         "//whagent_net/session",
         "@io_opentelemetry_go_contrib_instrumentation_google_golang_org_grpc_otelgrpc//:otelgrpc",

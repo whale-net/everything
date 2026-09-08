@@ -14,6 +14,7 @@ go_library(
     deps = [
         "//libs/go/grpcauth",
         "//whagent_net/events",
+        "//whagent_net/llm",
         "//whagent_net/protos:whagentpb",
         "//whagent_net/session",
         "@com_github_google_uuid//:uuid",
