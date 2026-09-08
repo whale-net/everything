@@ -1,4 +1,4 @@
-load("@rules_go//go:def.bzl", "go_library")
+load("@rules_go//go:def.bzl", "go_library", "go_test")
 
 go_library(
     name = "whagent",
@@ -18,5 +18,26 @@ go_library(
         "@com_github_google_uuid//:uuid",
         "@com_github_modelcontextprotocol_go_sdk//auth",
         "@com_github_modelcontextprotocol_go_sdk//mcp",
+    ],
+)
+
+go_test(
+    name = "whagent_test",
+    srcs = [
+        "claim_test.go",
+        "idempotency_test.go",
+        "middleware_test.go",
+        "sign_test.go",
+        "testutil_test.go",
+        "verify_test.go",
+    ],
+    embed = [":whagent"],
+    deps = [
+        "@com_github_go_jose_go_jose_v4//:go-jose",
+        "@com_github_go_jose_go_jose_v4//jwt",
+        "@com_github_modelcontextprotocol_go_sdk//auth",
+        "@com_github_modelcontextprotocol_go_sdk//mcp",
+        "@com_github_stretchr_testify//assert",
+        "@com_github_stretchr_testify//require",
     ],
 )
