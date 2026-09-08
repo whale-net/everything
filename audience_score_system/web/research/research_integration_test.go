@@ -446,7 +446,7 @@ var idempotencyKeyPattern = regexp.MustCompile(`name="idempotency_key" value="([
 // assertion can scope to exactly the cited-notes-section renders and
 // never be satisfied by the SAME note's full text legitimately appearing
 // elsewhere on the same page (the research-note list).
-var citedNoteTextPattern = regexp.MustCompile(`<p class="text-sm">([^<]*)</p>`)
+var citedNoteTextPattern = regexp.MustCompile(`<p class="text-sm[^"]*">([^<]*)</p>`)
 
 // citedNoteExcerpts extracts every citedNoteBody text excerpt rendered
 // anywhere on the page (see citedNoteTextPattern).
@@ -3118,11 +3118,9 @@ func TestIdeaDetail_CitationCheckboxes_ListExactlyThisIdeaNotes(t *testing.T) {
 // TestSaveVerdictPanel_SiblingOfNoteList_CollapsedByDefault_SameRoute
 // proves FR10 (#2035): the save-verdict panel renders as a no-JS
 // <details>/<summary> disclosure, COLLAPSED by default on a plain GET (no
-// `open` attribute), as a SIBLING of the research-note list inside the
-// "Research notes" section -- never below the separate "Viability
-// verdict" section further down the page -- and it never introduces a
-// second/new route: exactly one <form> targets the existing POST
-// .../verdicts action.
+// `open` attribute), alongside the research-note list inside the
+// responsive layout container -- and it never introduces a second/new
+// route: exactly one <form> targets the existing POST .../verdicts action.
 func TestSaveVerdictPanel_SiblingOfNoteList_CollapsedByDefault_SameRoute(t *testing.T) {
 	ctx := context.Background()
 	s := newResearchTestStack(t)
@@ -3143,18 +3141,15 @@ func TestSaveVerdictPanel_SiblingOfNoteList_CollapsedByDefault_SameRoute(t *test
 	assert.NotContains(t, body, `<details class="collapse collapse-arrow border border-base-300 bg-base-100" open`, "the save-verdict panel must render collapsed by default (FR10)")
 	assert.Contains(t, body, `<details class="collapse collapse-arrow border border-base-300 bg-base-100">`, "the save-verdict panel's collapsed <details> tag must render")
 
-	// Siblings inside the SAME "Research notes" section -- both the note
-	// list's own text and the panel's heading must fall between "Research
-	// notes" and the NEXT section ("Research threads"), proving the panel
-	// sits alongside the note list rather than below "Viability verdict"
-	// further down the page.
-	notesIdx := strings.Index(body, "Research notes")
-	threadsIdx := strings.Index(body, "Research threads")
-	require.Greater(t, notesIdx, 0)
-	require.Greater(t, threadsIdx, notesIdx)
-	notesSection := body[notesIdx:threadsIdx]
-	assert.Contains(t, notesSection, "a note in the list", "the note list must render inside the Research notes section")
-	assert.Contains(t, notesSection, "Save a viability verdict", "the save-verdict panel must render as a sibling inside the SAME Research notes section, not below Viability verdict")
+	// Sibling columns inside the responsive layout container: both the note
+	// list's own text and the panel's heading render within the layout
+	// container so the note list has full length and citations can be checked
+	// directly on the visible notes.
+	layoutIdx := strings.Index(body, "verdict-layout-container")
+	require.Greater(t, layoutIdx, 0, "the responsive layout container must render")
+	layoutSection := body[layoutIdx:]
+	assert.Contains(t, layoutSection, "a note in the list", "the note list must render inside the layout container")
+	assert.Contains(t, layoutSection, "Save a viability verdict", "the save-verdict panel must render inside the layout container")
 }
 
 // TestSaveVerdictPanel_ValidationFailure_PreservesCheckedNotesAndReasoning
