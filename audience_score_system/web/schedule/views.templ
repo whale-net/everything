@@ -235,44 +235,128 @@ templ newScriptForm(ch store.Channel, verdicts []viableVerdictOption, strategies
 	}
 }
 
+// scriptDetailView bundles GET /channels/{id}/scripts/{scriptID}'s render
+// inputs: the script/idea/verdict triple #2036 already rendered, plus
+// #2037's edit-mode and freeze-state additions -- a single struct instead
+// of a growing positional-argument list, since create.go's
+// renderScriptDetail is now the one place that assembles all of it.
+type scriptDetailView struct {
+	Ch      store.Channel
+	Script  store.VideoScript
+	Idea    store.Idea
+	Verdict store.Verdict
+
+	Preview     bool   // FR14's read-only rendered-markdown toggle (?preview=1).
+	PreviewHTML string // set only when Preview is true.
+
+	CanWrite     bool           // store.CanWrite (FR19): gates whether an Edit affordance can ever appear -- never whether editing is currently allowed.
+	Editable     bool           // FR16/FR17: status == proposed && not published -- the actual freeze gate, orthogonal to CanWrite.
+	FreezeReason string         // FR17's status-specific indicator text; "" when Editable.
+	EditMode     bool           // true only when CanWrite && Editable && the caller requested edit mode (see renderScriptDetail).
+	Form         scriptFormData // edit form's live values; only rendered when EditMode, except Form.Error which also surfaces in the read-only view (see below).
+}
+
 // ScriptDetail is GET /channels/{id}/scripts/{scriptID}'s page (#2036,
-// FR14, FR15): the script's current body in a read-only editor/rendered-
-// preview toggle (a plain ?preview=1 query-string link -- the content is
-// static, so there is no unsaved-text concern this toggle needs to
-// protect, unlike newScriptForm's), plus FR15's link back to the bound
-// verdict (idea's detail page, showing that verdict's version and value
-// -- the SPECIFIC bound version, per verdict.Version/verdict.Verdict,
+// FR14, FR15; #2037, FR16, FR17): the script's body in one of three
+// mutually exclusive modes -- v.EditMode's scriptEditForm, v.Preview's
+// read-only rendered-markdown block (?preview=1 -- the content is static
+// in this mode, so there is no unsaved-text concern to protect, unlike
+// scriptEditForm's), or the plain raw-text block -- plus FR15's link back
+// to the bound verdict (idea's detail page, showing that verdict's
+// SPECIFIC bound version/value, per v.Verdict.Version/v.Verdict.Verdict,
 // never idea's possibly-since-changed current verdict).
-templ ScriptDetail(data components.LayoutData, ch store.Channel, script store.VideoScript, idea store.Idea, verdict store.Verdict, preview bool, previewHTML string) {
+//
+// FR17: once !v.Editable, an Edit affordance is never rendered (v.EditMode
+// is already forced false by renderScriptDetail in that case) and
+// v.FreezeReason is shown instead, distinguishing WHY the script is frozen
+// rather than one generic read-only state. v.Form.Error additionally
+// surfaces there when set -- HandleUpdateScript's ErrVideoScriptDecided
+// path renders this exact combination (409): the up-to-date freeze reason
+// plus the rejected-edit message, never a resurrected edit form for a
+// script that just proved itself no longer editable.
+templ ScriptDetail(data components.LayoutData, v scriptDetailView) {
 	@components.Layout(data) {
 		<div class="card bg-base-100 border border-base-300 shadow-sm">
 			<div class="card-body">
 				<p>
-					<a class="link" href={ templ.URL("/channels/" + ch.ID.String() + "/scripts") }>&larr; Back to scripts</a>
+					<a class="link" href={ templ.URL("/channels/" + v.Ch.ID.String() + "/scripts") }>&larr; Back to scripts</a>
 				</p>
-				<h1 class="card-title">{ script.Title }</h1>
-				<span class={ statusBadgeClass(script.Status) }>{ statusLabel(script.Status) }</span>
+				<div class="flex justify-between items-start gap-4">
+					<h1 class="card-title">{ v.Script.Title }</h1>
+					if v.CanWrite && v.Editable && !v.EditMode {
+						<a class="btn btn-ghost btn-sm" href={ templ.URL("/channels/" + v.Ch.ID.String() + "/scripts/" + v.Script.ID.String() + "?edit=1") }>Edit</a>
+					}
+				</div>
+				<span class={ statusBadgeClass(v.Script.Status) }>{ statusLabel(v.Script.Status) }</span>
+				if !v.Editable {
+					<p class="text-sm text-warning mt-2">{ v.FreezeReason }</p>
+					if v.Form.Error != "" {
+						<p class="text-error text-sm mt-1">{ v.Form.Error }</p>
+					}
+				}
 				<p class="text-sm text-base-content/70 mt-2">
 					Proposed from verdict:
-					<a class="link" href={ templ.URL("/channels/" + ch.ID.String() + "/research/ideas/" + idea.ID.String()) }>
-						{ idea.Title } -- v{ strconv.Itoa(verdict.Version) }: { string(verdict.Verdict) }
+					<a class="link" href={ templ.URL("/channels/" + v.Ch.ID.String() + "/research/ideas/" + v.Idea.ID.String()) }>
+						{ v.Idea.Title } -- v{ strconv.Itoa(v.Verdict.Version) }: { string(v.Verdict.Verdict) }
 					</a>
 				</p>
 				<div class="form-control mt-4">
 					<label class="label">
 						<span class="label-text">Script</span>
 					</label>
-					if preview {
+					if v.EditMode {
+						@scriptEditForm(v.Ch, v.Script, v.Form)
+					} else if v.Preview {
 						<div class="border border-base-300 rounded p-4 prose max-w-none">
-							@templ.Raw(previewHTML)
+							@templ.Raw(v.PreviewHTML)
 						</div>
-						<a class="btn btn-ghost btn-sm mt-2" href={ templ.URL("/channels/" + ch.ID.String() + "/scripts/" + script.ID.String()) }>Edit view</a>
+						<a class="btn btn-ghost btn-sm mt-2" href={ templ.URL("/channels/" + v.Ch.ID.String() + "/scripts/" + v.Script.ID.String()) }>Show source</a>
 					} else {
-						<pre class="border border-base-300 rounded p-4 whitespace-pre-wrap font-mono text-sm">{ script.ScriptText }</pre>
-						<a class="btn btn-ghost btn-sm mt-2" href={ templ.URL("/channels/" + ch.ID.String() + "/scripts/" + script.ID.String() + "?preview=1") }>Preview</a>
+						<pre class="border border-base-300 rounded p-4 whitespace-pre-wrap font-mono text-sm">{ v.Script.ScriptText }</pre>
+						<a class="btn btn-ghost btn-sm mt-2" href={ templ.URL("/channels/" + v.Ch.ID.String() + "/scripts/" + v.Script.ID.String() + "?preview=1") }>Preview</a>
 					}
 				</div>
 			</div>
 		</div>
 	}
+}
+
+// scriptEditForm is FR16/FR17's edit-mode form, rendered in place on
+// ScriptDetail's own page rather than a separate route -- reuses
+// scriptFormData (Title/ScriptText/IdempotencyKey/Preview/PreviewHTML/
+// Error; VerdictID/StrategyID are unused here, an edit never changes which
+// verdict/strategy a script is bound to) and the SAME preview/edit toggle
+// mechanic as newScriptForm's (submit_action="preview"/"edit" re-renders
+// this SAME form via HandleUpdateScript with no store call; anything else
+// is the actual "Save changes" attempt). idempotency_key is a hidden field
+// minted once per edit-mode GET (newEditFormData) and carried through
+// every re-render exactly like newScriptForm's, so a corrected resubmit
+// after a validation/freeze error is still one logical write (FR18/NFR2).
+templ scriptEditForm(ch store.Channel, script store.VideoScript, form scriptFormData) {
+	<form method="post" action={ templ.URL("/channels/" + ch.ID.String() + "/scripts/" + script.ID.String()) } class="space-y-2">
+		if form.Error != "" {
+			<p class="text-error text-sm">{ form.Error }</p>
+		}
+		<input type="hidden" name="idempotency_key" value={ form.IdempotencyKey }/>
+		<div class="form-control">
+			<label class="label">
+				<span class="label-text">Title</span>
+			</label>
+			<input type="text" name="title" class="input input-bordered w-full" value={ form.Title } required/>
+		</div>
+		<div class="form-control mt-2">
+			if form.Preview {
+				<input type="hidden" name="script_text" value={ form.ScriptText }/>
+				<div class="border border-base-300 rounded p-4 prose max-w-none">
+					@templ.Raw(form.PreviewHTML)
+				</div>
+				<button type="submit" name="submit_action" value="edit" class="btn btn-ghost btn-sm mt-2">Edit</button>
+			} else {
+				<textarea name="script_text" class="textarea textarea-bordered w-full font-mono" rows="12" required>{ form.ScriptText }</textarea>
+				<button type="submit" name="submit_action" value="preview" class="btn btn-ghost btn-sm mt-2">Preview</button>
+			}
+		</div>
+		<button type="submit" name="submit_action" value="save" class="btn btn-primary btn-sm mt-2">Save changes</button>
+		<a class="btn btn-ghost btn-sm mt-2" href={ templ.URL("/channels/" + ch.ID.String() + "/scripts/" + script.ID.String()) }>Cancel</a>
+	</form>
 }
