@@ -3,6 +3,7 @@ package research
 import (
 	"bytes"
 	"context"
+	"strings"
 	"testing"
 	"time"
 
@@ -124,4 +125,41 @@ func TestIdeaDetail_ResponsiveLayoutAndFloatingBox(t *testing.T) {
 	// 8. Responsive style tag defining portrait 1080x1920 floating box and landscape widescreen
 	assert.Contains(t, html, "@media (orientation: portrait), (max-width: 1279px)", "responsive style for portrait/narrow monitors must be present")
 	assert.Contains(t, html, "@media (min-width: 1280px) and (orientation: landscape)", "responsive style for widescreen monitors must be present")
+
+	// 9. The actual verdict itself renders in the main card (not inside the expando/floating aside)
+	panelIdx := strings.Index(html, `id="verdict-panel"`)
+	require.Greater(t, panelIdx, 0)
+	mainContent := html[:panelIdx]
+	assert.Contains(t, mainContent, "Viability verdict", "viability verdict section must render in the main card")
+	assert.Contains(t, mainContent, "Strong premise and audience demand.", "current verdict reasoning must render in the main card")
+	assert.Contains(t, mainContent, "View verdict history", "verdict history link must render in the main card")
+
+	// 10. When canWrite is false, the floating/sidebar save-verdict expando is omitted but the actual verdict still renders
+	readOnlyComponent := IdeaDetail(
+		data,
+		ch,
+		idea,
+		notes,
+		relationsByNote,
+		noteRefTargets,
+		false,
+		threads,
+		current,
+		authorNames,
+		citedNotes,
+		retiredNotes,
+		false, // canWrite = false
+		form,
+		verdictForm,
+		strategies,
+		proposeForm,
+	)
+	var readOnlyBuf bytes.Buffer
+	err = readOnlyComponent.Render(context.Background(), &readOnlyBuf)
+	require.NoError(t, err)
+	readOnlyHTML := readOnlyBuf.String()
+	assert.NotContains(t, readOnlyHTML, `id="verdict-panel"`, "save verdict expando panel must be omitted when canWrite is false")
+	assert.NotContains(t, readOnlyHTML, `id="verdict-floating-btn"`, "save verdict floating button must be omitted when canWrite is false")
+	assert.Contains(t, readOnlyHTML, "Viability verdict", "actual verdict must still render in main card when canWrite is false")
+	assert.Contains(t, readOnlyHTML, "Strong premise and audience demand.", "verdict body must still render when canWrite is false")
 }
