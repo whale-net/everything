@@ -61,7 +61,11 @@ func (m *mockAddonRepo) Update(ctx context.Context, addon *manman.WorkshopAddon)
 }
 
 func (m *mockAddonRepo) Delete(ctx context.Context, addonID int64) error {
-	return fmt.Errorf("not implemented")
+	if _, ok := m.addons[addonID]; !ok {
+		return fmt.Errorf("addon not found")
+	}
+	delete(m.addons, addonID)
+	return nil
 }
 
 type mockInstallationRepo struct {
