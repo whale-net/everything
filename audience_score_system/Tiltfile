@@ -60,7 +60,7 @@ pg_database_url = get_custom_or_default(
 temporal_info = setup_temporal(namespace)
 temporal_host = temporal_info['grpc_target']
 
-otel_endpoint = setup_otelcollector(namespace)
+otel_endpoint = setup_otelcollector(namespace, resource_name='otelcollector-dev-ass')
 
 print("📊 Infrastructure configured:")
 print("  Postgres:  {}".format("custom" if os.environ.get('BUILD_POSTGRES_ENV') == 'custom' else "local"))
