@@ -30,7 +30,7 @@
 
 agents:
   - agent_id: audience-score-system-research
-    model: anthropic/claude-3.5-sonnet
+    model: anthropic/claude-sonnet-4.5
     tool_set:
       # In-cluster Tilt/deploy address for audience_score_system/mcp
       # (issue #2116's server_url target, port 8081, endpoint "/" per
