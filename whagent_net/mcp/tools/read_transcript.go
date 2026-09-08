@@ -2,7 +2,7 @@ package tools
 
 import (
 	"context"
-	"fmt"
+	"time"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 
@@ -56,9 +56,39 @@ func RegisterReadTranscript(srv *mcp.Server, client pb.SessionServiceClient) {
 	}, t.call)
 }
 
-// call is a scaffold stub: issue #2120's Implementation phase wires this
-// to t.client.ReadTranscript, a direct pass-through with no business
-// logic, forwarding the caller's bearer token via ctx.
+// call is a direct pass-through to t.client.ReadTranscript -- no
+// business logic -- forwarding the caller's bearer token via ctx exactly
+// as ../server/auth.go's AuthMiddleware placed it there. Events come
+// back from api already in commit (seq) order (FR2); this method
+// preserves that order rather than re-sorting.
 func (t *readTranscriptTool) call(ctx context.Context, req *mcp.CallToolRequest, in ReadTranscriptInput) (*mcp.CallToolResult, ReadTranscriptOutput, error) {
-	return nil, ReadTranscriptOutput{}, fmt.Errorf("read_transcript: not implemented yet (issue #2120 scaffold phase)")
+	resp, err := t.client.ReadTranscript(ctx, &pb.ReadTranscriptRequest{
+		SessionId: in.SessionID,
+		FromSeq:   in.FromSeq,
+		Limit:     in.Limit,
+	})
+	if err != nil {
+		return nil, ReadTranscriptOutput{}, toolError("ReadTranscript", err)
+	}
+
+	events := make([]TranscriptEventOutput, 0, len(resp.GetEvents()))
+	for _, ev := range resp.GetEvents() {
+		var committedAt string
+		if ts := ev.GetCommittedAt(); ts != nil {
+			committedAt = ts.AsTime().Format(time.RFC3339)
+		}
+		events = append(events, TranscriptEventOutput{
+			EventID:     ev.GetEventId(),
+			Seq:         ev.GetSeq(),
+			Turn:        ev.GetTurn(),
+			Type:        ev.GetType(),
+			Payload:     string(ev.GetPayload()),
+			CommittedAt: committedAt,
+		})
+	}
+
+	return nil, ReadTranscriptOutput{
+		Events:      events,
+		NextFromSeq: resp.GetNextFromSeq(),
+	}, nil
 }

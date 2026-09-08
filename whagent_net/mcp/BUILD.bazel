@@ -12,6 +12,7 @@ go_library(
     importpath = "github.com/whale-net/everything/whagent_net/mcp",
     visibility = ["//visibility:private"],
     deps = [
+        "//libs/go/grpcauth",
         "//libs/go/grpcclient",
         "//libs/go/logging",
         "//whagent_net/mcp/server",

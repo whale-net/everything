@@ -20,6 +20,7 @@ import (
 
 	"go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp"
 
+	"github.com/whale-net/everything/libs/go/grpcauth"
 	"github.com/whale-net/everything/libs/go/grpcclient"
 	"github.com/whale-net/everything/libs/go/logging"
 	pb "github.com/whale-net/everything/whagent_net/protos"
@@ -85,8 +86,14 @@ func run() error {
 	// mcp is a pure facade over api's SessionService: the only thing it
 	// dials is api's own gRPC address -- it never connects to Postgres or
 	// Temporal itself (ARCHITECTURE.md "Service boundary vs. package
-	// boundary").
-	apiConn, err := grpcclient.NewClient(ctx, cfg.APIAddr)
+	// boundary"). NewUserTokenDialOption(AuthModeOIDC) is unconditional
+	// (not read from GRPC_AUTH_MODE-style config): every call that reaches
+	// a tool handler already carries a bearer token on ctx (server/auth.go's
+	// AuthMiddleware rejects any call without one before a tool handler
+	// runs), so this dial option always forwards it, byte for byte, as the
+	// outbound call's own Authorization header -- the operator's identity,
+	// never a shared service account (FR10).
+	apiConn, err := grpcclient.NewClient(ctx, cfg.APIAddr, grpcauth.NewUserTokenDialOption(grpcauth.AuthModeOIDC))
 	if err != nil {
 		return fmt.Errorf("dial api at %s: %w", cfg.APIAddr, err)
 	}

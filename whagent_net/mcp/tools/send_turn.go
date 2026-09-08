@@ -39,9 +39,35 @@ func RegisterSendTurn(srv *mcp.Server, client pb.SessionServiceClient) {
 	}, t.call)
 }
 
-// call is a scaffold stub: issue #2120's Implementation phase wires this
-// to t.client.SendTurn, a direct pass-through with no business logic,
-// forwarding the caller's bearer token via ctx.
+// call is a direct pass-through to t.client.SendTurn -- no business
+// logic -- forwarding the caller's bearer token via ctx exactly as
+// ../server/auth.go's AuthMiddleware placed it there. FR1: SendTurn
+// returns as soon as api has accepted and queued the turn, not once it
+// has completed, so this method returns immediately after that RPC
+// resolves -- it never polls or waits. The result's Content is set
+// explicitly (rather than left to the default JSON-only rendering) so
+// that "not completed yet" reads as text, not just as an omission an
+// operator could miss.
 func (t *sendTurnTool) call(ctx context.Context, req *mcp.CallToolRequest, in SendTurnInput) (*mcp.CallToolResult, SendTurnOutput, error) {
-	return nil, SendTurnOutput{}, fmt.Errorf("send_turn: not implemented yet (issue #2120 scaffold phase)")
+	resp, err := t.client.SendTurn(ctx, &pb.SendTurnRequest{
+		SessionId: in.SessionID,
+		Input:     in.Input,
+	})
+	if err != nil {
+		return nil, SendTurnOutput{}, toolError("SendTurn", err)
+	}
+
+	out := SendTurnOutput{
+		SessionID: in.SessionID,
+		State:     sessionStateString(resp.GetSession().GetState()),
+	}
+	result := &mcp.CallToolResult{
+		Content: []mcp.Content{&mcp.TextContent{
+			Text: fmt.Sprintf(
+				"Turn accepted and queued (session state: %s). This does NOT mean the turn has completed -- use read_transcript or get_session to observe the result.",
+				out.State,
+			),
+		}},
+	}
+	return result, out, nil
 }

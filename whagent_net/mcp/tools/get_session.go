@@ -2,7 +2,6 @@ package tools
 
 import (
 	"context"
-	"fmt"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 
@@ -46,10 +45,34 @@ func RegisterGetSession(srv *mcp.Server, client pb.SessionServiceClient) {
 	}, t.call)
 }
 
-// call is a scaffold stub: issue #2120's Implementation phase wires this
-// to t.client.GetSession, mapping pb.GetSessionResponse's optional
-// cap_kind/error_category/error_detail fields onto GetSessionOutput,
-// forwarding the caller's bearer token via ctx.
+// call wires get_session to t.client.GetSession, mapping
+// pb.GetSessionResponse's optional cap_kind/error_category/error_detail
+// fields onto GetSessionOutput -- present only when the underlying
+// pointer on the *pb.Session itself is non-nil (proto3 `optional`
+// presence), never a zero-value substitute -- and forwarding the
+// caller's bearer token via ctx exactly as ../server/auth.go's
+// AuthMiddleware placed it there.
 func (t *getSessionTool) call(ctx context.Context, req *mcp.CallToolRequest, in GetSessionInput) (*mcp.CallToolResult, GetSessionOutput, error) {
-	return nil, GetSessionOutput{}, fmt.Errorf("get_session: not implemented yet (issue #2120 scaffold phase)")
+	resp, err := t.client.GetSession(ctx, &pb.GetSessionRequest{SessionId: in.SessionID})
+	if err != nil {
+		return nil, GetSessionOutput{}, toolError("GetSession", err)
+	}
+	sess := resp.GetSession()
+
+	out := GetSessionOutput{
+		SessionID: sess.GetSessionId(),
+		State:     sessionStateString(sess.GetState()),
+		AgentID:   sess.GetAgentId(),
+		Model:     sess.GetModel(),
+	}
+	if sess.CapKind != nil {
+		out.CapKind = capKindString(*sess.CapKind)
+	}
+	if sess.ErrorCategory != nil {
+		out.ErrorCategory = errorCategoryString(*sess.ErrorCategory)
+	}
+	if sess.ErrorDetail != nil {
+		out.ErrorDetail = *sess.ErrorDetail
+	}
+	return nil, out, nil
 }

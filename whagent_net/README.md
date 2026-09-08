@@ -38,6 +38,43 @@ Shared Go packages: `session/` (store), `embed/` (embeddable session UI
 component), and `//libs/go/whagent` (tool contract for domain-owned MCP
 servers).
 
+## Connecting Claude Code to `mcp`
+
+`mcp` (issue #2120) is a thin MCP facade over `api`'s `SessionService`:
+`start_session`, `send_turn`, `stop_session`, `get_session`, and
+`read_transcript` -- identical to what's available over gRPC (FR1/FR2/FR3),
+and nothing more (no agent discovery, no wait-for-completion tool -- see
+`ARCHITECTURE.md` "Open items"). It runs it as an unauthenticated
+`GET /healthz` plus a streamable-HTTP MCP endpoint at `/` that requires a
+bearer token -- your own Keycloak access token, forwarded byte-for-byte to
+`api` as the caller (never a shared service account, per FR10/`ARCHITECTURE.md`
+"Identity and auth chaining").
+
+Add it to Claude Code's MCP config (`claude mcp add` or your
+`.mcp.json`) as a streamable-HTTP server pointed at `mcp`'s listen address
+(`WHAGENT_MCP_ADDR`, see `ENV.md`), e.g.:
+
+```json
+{
+  "mcpServers": {
+    "whagent-net": {
+      "type": "http",
+      "url": "http://localhost:8082/",
+      "headers": {
+        "Authorization": "Bearer <your Keycloak access token>"
+      }
+    }
+  }
+}
+```
+
+`start_session`'s optional `first_turn` field sends that turn as soon as
+the session has started (two RPC calls under the hood --
+`ARCHITECTURE.md` "`mcp`'s start_session: two RPCs, one tool"). `send_turn`
+returns as soon as `api` has accepted and queued a turn, never once it has
+completed (FR1) -- follow up with `read_transcript` or `get_session` to see
+the result.
+
 ## Local development
 
 Will require Postgres (`PG_DATABASE_URL`), Temporal (`TEMPORAL_HOST`),

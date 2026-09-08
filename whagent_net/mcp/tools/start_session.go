@@ -45,12 +45,53 @@ func RegisterStartSession(srv *mcp.Server, client pb.SessionServiceClient) {
 	}, t.call)
 }
 
-// call is a scaffold stub: issue #2120's Implementation phase wires this
-// to t.client.StartSession, then t.client.SendTurn when FirstTurn is set,
-// forwarding the caller's bearer token via ctx exactly as
-// ../server/auth.go's AuthMiddleware placed it there -- no business logic
-// beyond that two-call sequence (StartSessionRequest carries no
-// first-turn field of its own).
+// call wires start_session to t.client.StartSession, then, only when
+// in.FirstTurn is non-empty, t.client.SendTurn on the session just
+// started (issue #2120's Implementation section, "Design question:
+// first_turn" -- StartSessionRequest carries no first-turn field of its
+// own, so this is two RPC calls under the hood, not one; see
+// ../../ARCHITECTURE.md "Open items" for the recorded decision). The
+// caller's bearer token travels on ctx exactly as
+// ../server/auth.go's AuthMiddleware placed it there -- grpcauth's user
+// token dial option (main.go) reads it back off ctx for both calls, so
+// both reach api as the same operator identity. If SendTurn fails after
+// StartSession already succeeded, the error says so explicitly (the
+// session was created, but its first turn was not queued) rather than
+// looking like start_session failed outright -- an operator seeing this
+// should retry with send_turn against the returned session_id, not
+// start_session again.
 func (t *startSessionTool) call(ctx context.Context, req *mcp.CallToolRequest, in StartSessionInput) (*mcp.CallToolResult, StartSessionOutput, error) {
-	return nil, StartSessionOutput{}, fmt.Errorf("start_session: not implemented yet (issue #2120 scaffold phase)")
+	startReq := &pb.StartSessionRequest{AgentId: in.AgentID}
+	if in.ModelOverride != "" {
+		startReq.ModelOverride = &in.ModelOverride
+	}
+
+	startResp, err := t.client.StartSession(ctx, startReq)
+	if err != nil {
+		return nil, StartSessionOutput{}, toolError("StartSession", err)
+	}
+	sess := startResp.GetSession()
+
+	if in.FirstTurn == "" {
+		return nil, StartSessionOutput{
+			SessionID: sess.GetSessionId(),
+			State:     sessionStateString(sess.GetState()),
+		}, nil
+	}
+
+	turnResp, err := t.client.SendTurn(ctx, &pb.SendTurnRequest{
+		SessionId: sess.GetSessionId(),
+		Input:     in.FirstTurn,
+	})
+	if err != nil {
+		return nil, StartSessionOutput{}, fmt.Errorf(
+			"start_session: session %s was started but its first turn was not queued: %w",
+			sess.GetSessionId(), toolError("SendTurn", err),
+		)
+	}
+
+	return nil, StartSessionOutput{
+		SessionID: sess.GetSessionId(),
+		State:     sessionStateString(turnResp.GetSession().GetState()),
+	}, nil
 }

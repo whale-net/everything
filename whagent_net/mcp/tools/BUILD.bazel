@@ -8,6 +8,8 @@ load("@rules_go//go:def.bzl", "go_library")
 go_library(
     name = "tools",
     srcs = [
+        "convert.go",
+        "errors.go",
         "get_session.go",
         "read_transcript.go",
         "send_turn.go",
@@ -19,5 +21,6 @@ go_library(
     deps = [
         "//whagent_net/protos:whagentpb",
         "@com_github_modelcontextprotocol_go_sdk//mcp",
+        "@org_golang_google_grpc//status",
     ],
 )

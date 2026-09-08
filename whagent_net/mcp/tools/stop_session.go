@@ -2,7 +2,6 @@ package tools
 
 import (
 	"context"
-	"fmt"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 
@@ -37,9 +36,17 @@ func RegisterStopSession(srv *mcp.Server, client pb.SessionServiceClient) {
 	}, t.call)
 }
 
-// call is a scaffold stub: issue #2120's Implementation phase wires this
-// to t.client.StopSession, a direct pass-through with no business logic,
-// forwarding the caller's bearer token via ctx.
+// call is a direct pass-through to t.client.StopSession -- no business
+// logic -- forwarding the caller's bearer token via ctx exactly as
+// ../server/auth.go's AuthMiddleware placed it there.
 func (t *stopSessionTool) call(ctx context.Context, req *mcp.CallToolRequest, in StopSessionInput) (*mcp.CallToolResult, StopSessionOutput, error) {
-	return nil, StopSessionOutput{}, fmt.Errorf("stop_session: not implemented yet (issue #2120 scaffold phase)")
+	resp, err := t.client.StopSession(ctx, &pb.StopSessionRequest{SessionId: in.SessionID})
+	if err != nil {
+		return nil, StopSessionOutput{}, toolError("StopSession", err)
+	}
+
+	return nil, StopSessionOutput{
+		SessionID: in.SessionID,
+		State:     sessionStateString(resp.GetSession().GetState()),
+	}, nil
 }

@@ -28,6 +28,7 @@ first pilot consumer.
 - [Identity and auth chaining](#identity-and-auth-chaining)
 - [Idempotency](#idempotency)
 - [Phasing](#phasing)
+- [`mcp`'s start_session: two RPCs, one tool (issue #2120)](#mcps-start_session-two-rpcs-one-tool-issue-2120)
 - [Open items](#open-items)
 
 ## Positioning
@@ -335,6 +336,28 @@ API lacks such a field — one reason it is not a consumer of this product).
 
 Milestone cuts are owned by `PRODUCT.md` / `product/03-roadmap.md`; this
 list is the architectural dependency order, not the roadmap.
+
+## `mcp`'s start_session: two RPCs, one tool (issue #2120)
+
+`mcp`'s `start_session` tool takes an optional `first_turn` field
+(issue #2120's Implementation section: "agent name, optional first turn,
+optional model override"), but `StartSessionRequest` (`protos/session.proto`,
+issue #2117) carries no such field — the RPC surface only ever grew a
+`StartSession` and a separate `SendTurn`. Rather than adding a first-turn
+field to the proto (which would special-case `start_session`'s first turn
+differently from every later one, for no real benefit — `SendTurn` already
+exists and does exactly this job), `start_session`'s handler
+(`mcp/tools/start_session.go`) calls `StartSession`, then, only if
+`first_turn` was given, calls `SendTurn` against the session it just
+created — two RPCs under one MCP tool call. This is a narrow, deliberate
+exception to "one tool per RPC, no more" (the issue's own Implementation
+section), justified because it is what lets an operator start a session
+and immediately queue its first turn in one Claude Code round-trip, which
+is the issue's stated intent. If `SendTurn` fails after `StartSession`
+already succeeded, the tool's error says so explicitly (session created,
+first turn not queued) rather than reading as if `start_session` failed
+outright — the session still exists and a caller should retry with
+`send_turn`, not `start_session`, against the returned `session_id`.
 
 ## Open items
 
