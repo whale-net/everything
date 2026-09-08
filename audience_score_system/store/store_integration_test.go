@@ -873,6 +873,60 @@ func TestVerdictStore_Append_TwiceYieldsTwoVersions_FirstRowUnchanged(t *testing
 	assert.True(t, history[0].Version < history[1].Version, "History must be ordered by version ascending")
 }
 
+func TestIdeaStore_ListByChannelWithStats_ReturnsCurrentVerdict(t *testing.T) {
+	ctx := context.Background()
+	s, _ := newStore(t)
+	ch, creator := setupChannel(t, ctx, s)
+
+	// Idea with no verdict
+	idea1, err := s.Ideas().Create(ctx, ch.ID, "Idea Without Verdict", creator.ID)
+	require.NoError(t, err)
+
+	// Idea with viable verdict
+	idea2, err := s.Ideas().Create(ctx, ch.ID, "Idea With Viable Verdict", creator.ID)
+	require.NoError(t, err)
+	_, err = s.Verdicts().Append(ctx, store.AppendVerdictInput{
+		IdeaID: idea2.ID, Verdict: store.VerdictViable, Reasoning: "viable", AuthorPersonID: creator.ID,
+	})
+	require.NoError(t, err)
+
+	// Idea with two verdicts (v1: not-viable, v2: needs-more-research) -> current should be needs-more-research
+	idea3, err := s.Ideas().Create(ctx, ch.ID, "Idea With Updated Verdict", creator.ID)
+	require.NoError(t, err)
+	_, err = s.Verdicts().Append(ctx, store.AppendVerdictInput{
+		IdeaID: idea3.ID, Verdict: store.VerdictNotViable, Reasoning: "v1 not viable", AuthorPersonID: creator.ID,
+	})
+	require.NoError(t, err)
+	_, err = s.Verdicts().Append(ctx, store.AppendVerdictInput{
+		IdeaID: idea3.ID, Verdict: store.VerdictNeedsMoreResearch, Reasoning: "v2 needs research", AuthorPersonID: creator.ID,
+	})
+	require.NoError(t, err)
+
+	summaries, truncated, err := s.Ideas().ListByChannelWithStats(ctx, ch.ID, nil, 50)
+	require.NoError(t, err)
+	assert.False(t, truncated)
+	require.Len(t, summaries, 3)
+
+	byID := make(map[uuid.UUID]store.IdeaSummary, len(summaries))
+	for _, sum := range summaries {
+		byID[sum.ID] = sum
+	}
+
+	sum1 := byID[idea1.ID]
+	assert.False(t, sum1.HasVerdict)
+	assert.Nil(t, sum1.CurrentVerdict)
+
+	sum2 := byID[idea2.ID]
+	assert.True(t, sum2.HasVerdict)
+	require.NotNil(t, sum2.CurrentVerdict)
+	assert.Equal(t, store.VerdictViable, *sum2.CurrentVerdict)
+
+	sum3 := byID[idea3.ID]
+	assert.True(t, sum3.HasVerdict)
+	require.NotNil(t, sum3.CurrentVerdict)
+	assert.Equal(t, store.VerdictNeedsMoreResearch, *sum3.CurrentVerdict, "must return the current (highest version) verdict")
+}
+
 // ── VerdictStore.Append's Source handling (migration 015, M4.1 FR5/NFR4) ───
 
 func TestVerdictStore_Append_SourceHuman_RoundTripsThroughGetByIDCurrentAndHistory(t *testing.T) {

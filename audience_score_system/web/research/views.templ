@@ -444,7 +444,7 @@ templ threadRelationScript() {
 }
 
 // ideaRow renders one store.IdeaSummary: title (linking to its
-// IdeaDetail page), note count, and "verdict recorded" / "none yet".
+// IdeaDetail page), note count, and verdict value glyph / "no verdict yet".
 templ ideaRow(ch store.Channel, idea store.IdeaSummary) {
 	<tr>
 		<td>
@@ -454,8 +454,8 @@ templ ideaRow(ch store.Channel, idea store.IdeaSummary) {
 		</td>
 		<td>{ strconv.Itoa(idea.NoteCount) }</td>
 		<td>
-			if idea.HasVerdict {
-				<span title="Verdict recorded" aria-label="Verdict recorded">🔖</span>
+			if idea.CurrentVerdict != nil {
+				<span title={ components.VerdictGlyphTitle(*idea.CurrentVerdict) } aria-label={ components.VerdictGlyphTitle(*idea.CurrentVerdict) }>{ components.VerdictGlyph(*idea.CurrentVerdict) }</span>
 			} else {
 				<span title="No verdict yet" aria-label="No verdict yet">{ components.NoVerdictGlyph }</span>
 			}
