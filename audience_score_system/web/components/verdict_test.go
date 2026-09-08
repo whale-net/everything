@@ -33,6 +33,10 @@ func TestVerdictGlyph_EveryDeclaredValue_MapsToDistinctNonEmptyGlyph(t *testing.
 		title := VerdictGlyphTitle(v)
 		assert.NotEmpty(t, title, "VerdictGlyphTitle(%q) must not be empty", v)
 	}
+
+	assert.Equal(t, "✅", VerdictGlyph(store.VerdictViable))
+	assert.Equal(t, "❌", VerdictGlyph(store.VerdictNotViable))
+	assert.Equal(t, "🔍", VerdictGlyph(store.VerdictNeedsMoreResearch))
 }
 
 // TestVerdictGlyph_NoVerdictGlyph_DistinctFromEveryKnownGlyph proves the

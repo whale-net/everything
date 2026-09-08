@@ -587,6 +587,20 @@ func TestHandleChannelIndex_RendersNoteCountVerdictPresence_AndUnattachedNotesSe
 	})
 	require.NoError(t, err)
 
+	ideaNotViable, err := s.store.Ideas().Create(ctx, ch.ID, "Idea Not Viable", creator.ID)
+	require.NoError(t, err)
+	_, err = s.store.Verdicts().Append(ctx, store.AppendVerdictInput{
+		IdeaID: ideaNotViable.ID, Verdict: store.VerdictNotViable, Reasoning: "not viable", AuthorPersonID: creator.ID,
+	})
+	require.NoError(t, err)
+
+	ideaNeedsMore, err := s.store.Ideas().Create(ctx, ch.ID, "Idea Needs More", creator.ID)
+	require.NoError(t, err)
+	_, err = s.store.Verdicts().Append(ctx, store.AppendVerdictInput{
+		IdeaID: ideaNeedsMore.ID, Verdict: store.VerdictNeedsMoreResearch, Reasoning: "needs more", AuthorPersonID: creator.ID,
+	})
+	require.NoError(t, err)
+
 	ideaNoVerdict, err := s.store.Ideas().Create(ctx, ch.ID, "Idea No Verdict", creator.ID)
 	require.NoError(t, err)
 
@@ -600,6 +614,8 @@ func TestHandleChannelIndex_RendersNoteCountVerdictPresence_AndUnattachedNotesSe
 	body := w.Body.String()
 
 	assert.Contains(t, body, ideaWithVerdict.Title)
+	assert.Contains(t, body, ideaNotViable.Title)
+	assert.Contains(t, body, ideaNeedsMore.Title)
 	assert.Contains(t, body, ideaNoVerdict.Title)
 	assert.Contains(t, body, unattached.Text, "the unattached note must render in its own section")
 
@@ -607,14 +623,15 @@ func TestHandleChannelIndex_RendersNoteCountVerdictPresence_AndUnattachedNotesSe
 	// title's row -- a crude but effective check that ListByChannelWithStats'
 	// count made it to the page.
 	assert.Regexp(t, `Idea With Verdict[\s\S]{0,400}>2<`, body, "note count for the two-note idea must render")
-	// FR31/FR32 (#2028): the verdict-presence indicator is a single glyph
-	// (with an accessible title/aria-label carrying the old text), never a
-	// badge/box. Scope the badge-absence check to the ideas table itself
-	// (between its own header row and closing tag) -- the page's
-	// unattached-notes section legitimately renders unrelated "badge
-	// badge-ghost"/"badge badge-success" Cited/Uncited indicators
-	// (citedBadge), which must not make this assertion a false negative.
-	assert.Contains(t, body, `title="Verdict recorded"`, "the idea with a verdict must show the verdict-recorded glyph's accessible title")
+	// The verdict status indicator is a single glyph indicating the verdict value
+	// (green check for viable, red x for not-viable, magnifying glass for needs-more-research)
+	// or no-verdict glyph when none yet recorded.
+	assert.Contains(t, body, `title="Viable"`, "the idea with a viable verdict must show the viable glyph's accessible title")
+	assert.Contains(t, body, components.VerdictGlyph(store.VerdictViable), "the idea with a viable verdict must render the viable glyph")
+	assert.Contains(t, body, `title="Not viable"`, "the idea with a not-viable verdict must show the not-viable glyph's accessible title")
+	assert.Contains(t, body, components.VerdictGlyph(store.VerdictNotViable), "the idea with a not-viable verdict must render the red x glyph")
+	assert.Contains(t, body, `title="Needs more research"`, "the idea with a needs-more-research verdict must show the needs-more-research glyph's accessible title")
+	assert.Contains(t, body, components.VerdictGlyph(store.VerdictNeedsMoreResearch), "the idea with a needs-more-research verdict must render the magnifying glass glyph")
 	assert.Contains(t, body, `title="No verdict yet"`, "the idea without a verdict must show the no-verdict glyph's accessible title")
 	assert.Contains(t, body, components.NoVerdictGlyph, "the idea without a verdict must render the shared no-verdict glyph")
 	ideasTableStart := strings.Index(body, "<th>Idea</th>")
