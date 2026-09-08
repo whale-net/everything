@@ -1,7 +1,7 @@
 """whagent-net agent-definition seeder (issue #2121): a
 libs/go/migrate.Seeder over whagent_net/config's agents.yaml."""
 
-load("@rules_go//go:def.bzl", "go_library")
+load("@rules_go//go:def.bzl", "go_library", "go_test")
 
 go_library(
     name = "seed",
@@ -12,5 +12,41 @@ go_library(
         "//whagent_net/config",
         "//whagent_net/llm",
         "//whagent_net/session",
+    ],
+)
+
+# Real-Postgres integration coverage (issue #2121's Testing section):
+# seeding creates rows, re-running is idempotent, a changed definition
+# mints a new version row and leaves the prior one intact, and an unserved
+# model (or an unreachable provider catalogue) fails the whole run before
+# any row is written. Deliberately NOT part of `bazel test //...` -- see
+# //libs/go/dbtest's README for the rationale behind each tag.
+#
+# Run it explicitly (requires a working Docker daemon):
+#   bazel test //whagent_net/migrate/seed:seed_integration_test --test_output=all
+go_test(
+    name = "seed_integration_test",
+    size = "large",
+    timeout = "long",
+    srcs = ["seed_integration_test.go"],
+    gotags = ["integration"],
+    tags = [
+        "external",
+        "integration",
+        "manual",
+        "no-cache",
+        "no-sandbox",
+        "requires-network",
+    ],
+    deps = [
+        ":seed",
+        "//libs/go/dbtest",
+        "//libs/go/migrate",
+        "//whagent_net/config",
+        "//whagent_net/llm",
+        "//whagent_net/migrate/schema",
+        "@com_github_jackc_pgx_v5//stdlib",
+        "@com_github_stretchr_testify//assert",
+        "@com_github_stretchr_testify//require",
     ],
 )

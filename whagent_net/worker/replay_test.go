@@ -31,6 +31,7 @@ import (
 	"go.temporal.io/sdk/worker"
 
 	"github.com/whale-net/everything/whagent_net/llm"
+	"github.com/whale-net/everything/whagent_net/worker/tools"
 )
 
 // Marker event field names for a workflow.GetVersion call, mirroring the
@@ -318,4 +319,102 @@ func TestSessionWorkflow_ReplayRecordedHistory_NoNonDeterminismError(t *testing.
 
 	err = replayer.ReplayWorkflowHistory(nil, b.build())
 	require.NoError(t, err, "the current SessionWorkflow code must replay a recorded run's history without a non-determinism error (NFR1/FR4)")
+}
+
+// TestSessionWorkflow_ReplayRecordedHistory_WithCapEnforcementAndToolDispatch_NoNonDeterminismError
+// is issue #2121's own NFR1 guard, complementing the test above rather
+// than replacing it: that fixture proves a history recorded BEFORE
+// "session-workflow-cap-enforcement"/"session-workflow-tool-dispatch"
+// existed (no markers for either) still replays under the current code
+// (both gates fall back to workflow.DefaultVersion, per GetVersion's
+// documented behavior for a changeID absent from history at its call
+// site) -- the backward direction NFR1 exists for. This fixture proves
+// the forward direction: a history recorded WITH both gates already at
+// version 1 -- the shape every session started after this task's deploy
+// actually has, including a real FR8/FR2 tool-call/tool-result round
+// trip -- also replays cleanly against the current code. Marker
+// placement mirrors workflow.go's actual call sites exactly:
+// "session-workflow-cap-enforcement" is recorded on the very first
+// decision of processTurn (attached to the same WorkflowTaskCompleted as
+// ActivityResolveAgentDefinition's scheduling, since workflow.GetVersion
+// itself never yields); "session-workflow-tool-dispatch" is recorded
+// immediately after BuildContext's activity completes, ahead of
+// ActivityListToolDefinitions -- see workflow.go's processTurn for the
+// exact sequence this fixture reproduces.
+func TestSessionWorkflow_ReplayRecordedHistory_WithCapEnforcementAndToolDispatch_NoNonDeterminismError(t *testing.T) {
+	dc := converter.GetDefaultDataConverter()
+	sessionID := testSessionID()
+
+	startInput, err := dc.ToPayloads(SessionWorkflowInput{SessionID: sessionID})
+	require.NoError(t, err)
+	signalPayload, err := dc.ToPayloads(SendTurnSignal{Input: "hello"})
+	require.NoError(t, err)
+
+	b := newHistoryFixtureBuilder()
+	b.started("SessionWorkflow", TaskQueue, startInput)
+
+	completedID := b.decision()
+	b.marker("session-workflow-status-transitions", 1, completedID)
+	b.activity(ActivityUpdateSessionStatus, UpdateSessionStatusResult{})
+
+	b.signal(SignalSendTurn, signalPayload)
+	b.decision()
+	b.activity(ActivityUpdateSessionStatus, UpdateSessionStatusResult{})
+
+	// processTurn's first act: workflow.GetVersion("session-workflow-cap-
+	// enforcement", ...) never yields, so its marker is recorded on the
+	// SAME decision that schedules ActivityResolveAgentDefinition.
+	completedID = b.decision()
+	b.marker("session-workflow-cap-enforcement", 1, completedID)
+	b.activity(ActivityResolveAgentDefinition, ResolveAgentDefinitionResult{Model: "replay-model"})
+
+	// evaluateCaps' "before" half (turn-1 usage) -- not capped, so
+	// processTurn continues.
+	b.decision()
+	b.activity(ActivitySumCost, SumCostResult{CostUSD: 0.01})
+
+	b.decision()
+	b.activity(ActivityBuildContext, BuildContextResult{EventIDs: []uuid.UUID{uuid.New()}})
+
+	// workflow.GetVersion("session-workflow-tool-dispatch", ...) is called
+	// right after BuildContext's Get() returns -- same "never yields"
+	// reasoning, so its marker is recorded on the decision that schedules
+	// ActivityListToolDefinitions.
+	completedID = b.decision()
+	b.marker("session-workflow-tool-dispatch", 1, completedID)
+	b.activity(ActivityListToolDefinitions, ListToolDefinitionsResult{
+		Tools: []llm.ToolDefinition{{Name: "search", Description: "search ASS", Parameters: nil}},
+	})
+
+	// The model responds with one tool call -- FR8's round trip.
+	b.decision()
+	b.activity(ActivityCallModel, CallModelResult{Response: llm.Response{
+		Message:   llm.Message{Role: llm.RoleAssistant, Content: ""},
+		ToolCalls: []llm.ToolCall{{ID: "call-1", Name: "search", Arguments: `{"query":"hello"}`}},
+	}})
+
+	// processTurn's per-tool-call dispatch loop -- one ActivityDispatchTool
+	// per entry of the model's ToolCalls (workflow.go).
+	b.decision()
+	b.activity(ActivityDispatchTool, DispatchToolResult{Result: tools.Result{
+		ToolCallID: "call-1", Name: "search", Content: "3 results found", IsError: false,
+	}})
+
+	b.decision()
+	b.activity(ActivityCommitTurn, CommitTurnResult{Done: false})
+
+	// evaluateCaps' "after" half -- still not capped.
+	b.decision()
+	b.activity(ActivitySumCost, SumCostResult{CostUSD: 0.02})
+
+	b.decision()
+	b.activity(ActivityUpdateSessionStatus, UpdateSessionStatusResult{})
+
+	b.openDecision()
+
+	replayer := worker.NewWorkflowReplayer()
+	replayer.RegisterWorkflow(SessionWorkflow)
+
+	err = replayer.ReplayWorkflowHistory(nil, b.build())
+	require.NoError(t, err, "the current SessionWorkflow code must replay a FRESH (post-#2121) history -- cap-enforcement and tool-dispatch both already at version 1, including a real tool-call/tool-result round trip -- without a non-determinism error (NFR1)")
 }

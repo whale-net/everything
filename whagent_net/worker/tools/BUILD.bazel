@@ -4,7 +4,7 @@ MCP server(s), carrying a per-server persona credential (FR10) and a
 deterministic idempotency key (FR11). See dispatch.go's package doc
 comment for the full contract."""
 
-load("@rules_go//go:def.bzl", "go_library")
+load("@rules_go//go:def.bzl", "go_library", "go_test")
 
 go_library(
     name = "tools",
@@ -22,5 +22,50 @@ go_library(
         "//whagent_net/llm",
         "//whagent_net/session",
         "@com_github_modelcontextprotocol_go_sdk//mcp",
+    ],
+)
+
+# Real-Postgres + real-HTTP-transport cross-domain integration test (issue
+# #2121's Testing section): this package's Dispatcher against a REAL
+# audience_score_system/mcp instance, built from that domain's own real
+# exported constructors -- the first test to exercise #2116 (ASS's
+# whagent-net caller-auth path) and #2118 (this package's dispatch path)
+# together. Deliberately NOT part of `bazel test //...` -- see
+# //libs/go/dbtest's README for the tag rationale.
+#
+# Run it explicitly (requires a working Docker daemon):
+#   bazel test //whagent_net/worker/tools:dispatch_cross_domain_integration_test --test_output=all
+go_test(
+    name = "dispatch_cross_domain_integration_test",
+    size = "large",
+    timeout = "long",
+    srcs = ["dispatch_cross_domain_integration_test.go"],
+    gotags = ["integration"],
+    tags = [
+        "external",
+        "integration",
+        "manual",
+        "no-cache",
+        "no-sandbox",
+        "requires-network",
+    ],
+    deps = [
+        ":tools",
+        "//audience_score_system/mcp/server",
+        "//audience_score_system/migrate/schema",
+        "//audience_score_system/store",
+        "//libs/go/dbtest",
+        "//libs/go/mcpauth",
+        "//libs/go/migrate",
+        "//libs/go/whagent",
+        "//whagent_net/api/persona",
+        "//whagent_net/llm",
+        "//whagent_net/migrate/schema",
+        "//whagent_net/session",
+        "@com_github_google_uuid//:uuid",
+        "@com_github_jackc_pgx_v5//stdlib",
+        "@com_github_modelcontextprotocol_go_sdk//mcp",
+        "@com_github_stretchr_testify//assert",
+        "@com_github_stretchr_testify//require",
     ],
 )

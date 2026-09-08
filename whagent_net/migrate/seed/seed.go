@@ -93,29 +93,42 @@ func Seeder() func(ctx context.Context, db *sql.DB) error {
 			catalogTTL,
 		)
 
-		// Pass 1: validate every entry's model against the provider
-		// catalogue before writing anything (this file's doc comment,
-		// "Config validation") -- a config with agent A's bad model must
-		// never leave agent B's good definition half-seeded.
-		for _, a := range agents {
-			supported, err := catalog.Supports(ctx, a.Model)
-			if err != nil {
-				return fmt.Errorf("seed: agent %q: check model %q against provider catalogue: %w", a.AgentID, a.Model, err)
-			}
-			if !supported {
-				return fmt.Errorf("seed: agent %q: model %q is not served by the configured provider", a.AgentID, a.Model)
-			}
-		}
-
-		// Pass 2: diff-and-insert each entry (this file's doc comment,
-		// "Versioning rule").
-		for _, a := range agents {
-			if err := seedOne(ctx, db, a); err != nil {
-				return fmt.Errorf("seed: agent %q: %w", a.AgentID, err)
-			}
-		}
-		return nil
+		return SeedAgents(ctx, db, agents, catalog)
 	}
+}
+
+// SeedAgents is Seeder's implementation, factored out over an explicit
+// agents list and catalog rather than reading config.Load() and the
+// environment itself -- the seam whagent_net/migrate/seed's Testing
+// phase (issue #2121) needs to exercise the version-diff/idempotency rule
+// and the model-catalogue validation rule directly (a config with an
+// unserved model, or a version-diff/re-run scenario), without needing a
+// real OpenRouter endpoint or a rebuild of the embedded agents.yaml for
+// every case. Seeder (above) is a thin wrapper: config.Load() plus a real
+// llm.Catalog constructed from the environment.
+func SeedAgents(ctx context.Context, db *sql.DB, agents []config.AgentDefinitionConfig, catalog *llm.Catalog) error {
+	// Pass 1: validate every entry's model against the provider
+	// catalogue before writing anything (this file's doc comment,
+	// "Config validation") -- a config with agent A's bad model must
+	// never leave agent B's good definition half-seeded.
+	for _, a := range agents {
+		supported, err := catalog.Supports(ctx, a.Model)
+		if err != nil {
+			return fmt.Errorf("seed: agent %q: check model %q against provider catalogue: %w", a.AgentID, a.Model, err)
+		}
+		if !supported {
+			return fmt.Errorf("seed: agent %q: model %q is not served by the configured provider", a.AgentID, a.Model)
+		}
+	}
+
+	// Pass 2: diff-and-insert each entry (this file's doc comment,
+	// "Versioning rule").
+	for _, a := range agents {
+		if err := seedOne(ctx, db, a); err != nil {
+			return fmt.Errorf("seed: agent %q: %w", a.AgentID, err)
+		}
+	}
+	return nil
 }
 
 func getEnv(key, def string) string {
