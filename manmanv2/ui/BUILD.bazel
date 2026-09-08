@@ -71,6 +71,7 @@ go_test(
         "handlers_sessions_live_test.go",
         "handlers_sgc_env_test.go",
         "handlers_sgc_test.go",
+        "handlers_sgc_update_ports_test.go",
         "main_test.go",
         "templ_render_test.go",
     ],
