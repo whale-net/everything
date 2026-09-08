@@ -20,10 +20,29 @@ go_library(
 
 go_test(
     name = "workshop_test",
-    srcs = ["orchestrator_test.go"],
+    srcs = [
+        "cache_client_test.go",
+        "nfr7_dependency_guard_test.go",
+        "orchestrator_test.go",
+    ],
+    # cache_client.go and orchestrator.go are listed here (in addition to being
+    # compiled into the embedded :workshop library) so TestNFR7_NoAWSSDKImport
+    # can locate and parse their import declarations via the Bazel runfiles
+    # manifest -- `bazel test`'s sandbox working directory does not contain the
+    # source tree, so a plain relative path doesn't work.
+    data = [
+        "cache_client.go",
+        "orchestrator.go",
+    ],
     embed = [":workshop"],
     deps = [
         "//manmanv2/host/rmq",
+        "//manmanv2/protos:manmanpb",
         "@com_github_stretchr_testify//assert",
+        "@com_github_stretchr_testify//require",
+        "@org_golang_google_grpc//:grpc",
+        "@org_golang_google_grpc//codes",
+        "@org_golang_google_grpc//status",
+        "@rules_go//go/runfiles",
     ],
 )
