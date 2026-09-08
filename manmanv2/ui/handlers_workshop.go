@@ -1092,3 +1092,45 @@ func (app *App) handlePresetsForGame(w http.ResponseWriter, r *http.Request) {
 
 	fmt.Fprintf(w, `</select>`)
 }
+
+// handleWorkshopBatchStatus renders the manual-reload batch-status view for
+// a Workshop collection add or batch create job (FR4, plan #2175).
+//
+// Scaffold stub: does not yet call GetBatchJob -- that wiring, plus the
+// per-item table content, land in the Implementation phase of #2179. This
+// stub only proves out the route, layout, and page skeleton.
+func (app *App) handleWorkshopBatchStatus(w http.ResponseWriter, r *http.Request) {
+	user := htmxauth.GetUser(r.Context())
+
+	batchJobIDStr := r.URL.Query().Get("batch_job_id")
+	if batchJobIDStr == "" {
+		http.Error(w, "batch_job_id required", http.StatusBadRequest)
+		return
+	}
+
+	if _, err := strconv.ParseInt(batchJobIDStr, 10, 64); err != nil {
+		http.Error(w, "Invalid batch_job_id", http.StatusBadRequest)
+		return
+	}
+
+	breadcrumbs := []components.Breadcrumb{
+		{Label: "Workshop", URL: "/workshop/library"},
+		{Label: "Batch Status", URL: "/workshop/batch-status"},
+	}
+	layoutData, err := app.buildTemplLayoutData(r, "Batch Job Status", "workshop", user, breadcrumbs)
+	if err != nil {
+		log.Printf("Error building layout data: %v", err)
+		http.Error(w, "Failed to build layout", http.StatusInternalServerError)
+		return
+	}
+
+	// TODO(#2179 Implementation): call app.grpc.GetBatchJob and populate
+	// Job/Items instead of rendering the "not found" placeholder.
+	data := pages.WorkshopBatchStatusPageData{
+		Layout: layoutData,
+		Job:    nil,
+		Items:  nil,
+	}
+
+	RenderTempl(w, r, "Batch Job Status", pages.WorkshopBatchStatus(data))
+}

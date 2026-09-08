@@ -50,6 +50,10 @@ service WorkshopService {
   // Content Cache — presigned-URL relay (host talks to S3 directly; control-api never proxies bytes)
   rpc GetCacheDownloadURL(GetCacheDownloadURLRequest) returns (GetCacheDownloadURLResponse);
   rpc GetCacheUploadURL(GetCacheUploadURLRequest) returns (GetCacheUploadURLResponse);
+
+  // Batch Job Management
+  rpc GetBatchJob(GetBatchJobRequest) returns (GetBatchJobResponse);
+  rpc ListBatchJobs(ListBatchJobsRequest) returns (ListBatchJobsResponse);
 }
 
 // ============================================================================
@@ -473,4 +477,55 @@ message GetCacheUploadURLResponse {
   string presigned_url = 2;
   int64 expires_at = 3;
   string s3_key = 4;
+}
+
+// ============================================================================
+// Batch Job Management RPCs
+// ============================================================================
+
+// WorkshopBatchJob is the header row for a batch operation (collection
+// bulk-add or mixed-format batch create) over the workshop_batch_jobs table
+// (#2176, plan #2175, FR4).
+message WorkshopBatchJob {
+  int64 batch_job_id = 1;
+  string job_type = 2;          // "collection_add" | "batch_create"
+  int64 game_id = 3;
+  int64 library_id = 4;
+  string source_input = 5;
+  string status = 6;
+  int32 total_items = 7;
+  int32 succeeded_items = 8;
+  int32 failed_items = 9;
+  int64 created_at = 10;        // Unix timestamp
+  int64 updated_at = 11;        // Unix timestamp
+}
+
+// BatchItemResult is the per-item outcome shared across the batch-create
+// (#2177), collection-add, and batch-status (this task) RPCs. Defined here
+// because this task landed first; #2177 should reuse this message rather
+// than defining a second copy when it lands.
+message BatchItemResult {
+  string raw_input = 1;
+  string workshop_id = 2;
+  int64 addon_id = 3;
+  string status = 4;         // "succeeded" | "failed"
+  string error_message = 5;
+}
+
+message GetBatchJobRequest {
+  int64 batch_job_id = 1;
+}
+
+message GetBatchJobResponse {
+  WorkshopBatchJob job = 1;
+  repeated BatchItemResult items = 2;
+}
+
+message ListBatchJobsRequest {
+  int64 game_id = 1;
+  int32 limit = 2;
+}
+
+message ListBatchJobsResponse {
+  repeated WorkshopBatchJob jobs = 1;
 }
