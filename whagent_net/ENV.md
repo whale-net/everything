@@ -114,3 +114,17 @@ database/Temporal/RabbitMQ/S3 client libraries this binary also uses).
 |----------|-----------|---------|-------------|
 | `PORT` | api | `50051` | gRPC listen port for `SessionService`. |
 | `GRPC_AUTH_MODE` | api | `none` | `none` or `oidc` (`//libs/go/grpcauth.AuthMode`). `none` injects dev claims for every call and logs a startup warning -- development only; every RPC still requires *some* claims (`handlers.RequireClaimsUnaryInterceptor`), so `none` is "skip token verification," never "skip authentication." |
+
+## `mcp` server (issue #2120)
+
+Read directly via `os.Getenv` in `whagent_net/mcp/main.go`. `mcp` is a
+pure facade over `api`'s `SessionService` -- these are the only two
+addresses it needs (plus the Identity variables above, which its
+`PassthroughVerifier`/`AuthMiddleware` use to reject a call before any
+tool handler runs, never to verify the token itself -- `api` remains the
+sole verification boundary per FR10).
+
+| Variable | Component | Default | Description |
+|----------|-----------|---------|-------------|
+| `WHAGENT_MCP_ADDR` | mcp | `:8082` | Listen address for `mcp`'s streamable-HTTP MCP surface (`GET /healthz` unauthenticated, `/` requiring a bearer token). |
+| `WHAGENT_API_URL` | mcp | *(required)* | `api`'s gRPC address -- the only outbound dependency this binary dials (see "Service wiring" above). |
