@@ -61,17 +61,26 @@
 // terminal outcome, made elsewhere (a follow-up cap-enforcement/terminal-
 // classification task), never originated by a domain server's response.
 //
-// Scaffold phase (this task): the file layout, BUILD deps
-// (//libs/go/whagent, whagent_net/api/persona), and Dispatcher/
-// DispatchInput/Result's fixed shapes are in place; Dispatch itself is a
-// stub. Implementation phase wires client.go/keys.go together into a real
-// Dispatch body per this doc comment.
+// Implementation phase (this task) complete: Dispatch below wires
+// client.go and keys.go together into the real body this file's doc
+// comment documents -- resolve target server (FR8), mint a per-server
+// credential (FR10), reserve/short-circuit on the idempotency key (FR11),
+// call out, and return the domain server's result verbatim (FR2). Wiring
+// Dispatch into SessionWorkflow's processTurn (the ExecuteActivity call
+// this package's doc comment describes activities.go eventually making)
+// is intentionally out of this task's scope -- see this task's Scope note
+// on issue #2118.
 package tools
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
+	"strings"
 
+	"github.com/modelcontextprotocol/go-sdk/mcp"
+
+	"github.com/whale-net/everything/libs/go/whagent"
 	"github.com/whale-net/everything/whagent_net/api/persona"
 	"github.com/whale-net/everything/whagent_net/llm"
 	"github.com/whale-net/everything/whagent_net/session"
@@ -140,12 +149,167 @@ type Dispatcher struct {
 
 // Dispatch routes in.Call to whichever entry of in.ToolSet exposes it
 // (FR8), mints a persona credential scoped to that one server (FR10),
-// derives and reserves in.Call's idempotency key (FR11) when the call
-// mutates state, and returns the domain server's result verbatim (FR2).
+// derives and reserves in.Call's idempotency key (FR11) before calling
+// out, and returns the domain server's result verbatim (FR2) -- see this
+// file's package doc comment for the full contract.
 //
-// Not implemented in this Scaffold-phase task (issue #2118) -- see this
-// file's package doc comment for the full contract Implementation phase
-// wires client.go and keys.go together to satisfy.
+// Order of operations mirrors this doc comment exactly: resolve the target
+// server and mint its credential (resolveTarget), reserve the idempotency
+// key -- short-circuiting to the ledger's recorded outcome on a retry
+// instead of re-dispatching the mutation -- then call out and record the
+// outcome. A transport failure (server unreachable, timeout) is returned
+// as a plain error with nothing recorded in the ledger, so a Temporal
+// retry of the same call re-derives the identical key (idempotencyKey is a
+// pure function of session/turn/call-index) and genuinely retries the
+// call; a tool result with the domain server's own IsError set is *not* an
+// error here -- it is returned as an ordinary Result, per FR2.
 func (d *Dispatcher) Dispatch(ctx context.Context, in DispatchInput) (Result, error) {
-	return Result{}, fmt.Errorf("tools: Dispatch not implemented (issue #2118 Implementation phase)")
+	if in.Session == nil {
+		return Result{}, fmt.Errorf("tools: DispatchInput.Session is nil")
+	}
+	if d.Issuer == nil {
+		return Result{}, fmt.Errorf("tools: Dispatcher.Issuer is nil")
+	}
+
+	serverURL, cs, err := resolveTarget(ctx, d.Issuer, in)
+	if err != nil {
+		return Result{}, err
+	}
+	defer cs.Close()
+
+	key := idempotencyKey(in.Session.SessionID.String(), in.Turn, in.CallIndex)
+
+	if d.Ledger != nil {
+		reservation, err := d.Ledger.Reserve(ctx, key, session.ToolCallReservation{
+			SessionID: in.Session.SessionID,
+			Turn:      in.Turn,
+			CallIndex: in.CallIndex,
+			Tool:      in.Call.Name,
+			ServerURL: serverURL,
+		})
+		if err != nil {
+			return Result{}, fmt.Errorf("tools: reserve idempotency key for call %q: %w", in.Call.Name, err)
+		}
+		if len(reservation.Outcome) > 0 {
+			// A prior attempt already dispatched and recorded this exact
+			// (session, turn, call_index) -- return its outcome verbatim
+			// rather than re-executing the mutation (FR11).
+			var cached Result
+			if err := json.Unmarshal(reservation.Outcome, &cached); err != nil {
+				return Result{}, fmt.Errorf("tools: decode cached outcome for call %q: %w", in.Call.Name, err)
+			}
+			return cached, nil
+		}
+	}
+
+	args, err := decodeArguments(in.Call.Arguments)
+	if err != nil {
+		return Result{}, fmt.Errorf("tools: decode arguments for call %q: %w", in.Call.Name, err)
+	}
+	// Every dispatched call carries idempotency_key as a top-level argument
+	// (FR11, LB4) -- Dispatch has no principled way to know which of a
+	// server's tools mutate state (that classification is the domain
+	// server's own, via whagent.IdempotencyKeyed), so this is attached
+	// unconditionally; a read-only tool's handler simply never looks at it.
+	args[whagent.IdempotencyKeyArgument] = key
+
+	callRes, err := CallTool(ctx, cs, in.Call.Name, args)
+	if err != nil {
+		// A transport failure -- distinct from a tool-level IsError result,
+		// which CallTool never turns into a Go error. Nothing was recorded
+		// in the ledger above, so a retry of this same call re-dispatches.
+		return Result{}, err
+	}
+
+	result := Result{
+		ToolCallID: in.Call.ID,
+		Name:       in.Call.Name,
+		Content:    resultContent(callRes),
+		IsError:    callRes.IsError,
+	}
+
+	if d.Ledger != nil {
+		outcome, err := json.Marshal(result)
+		if err != nil {
+			return Result{}, fmt.Errorf("tools: marshal outcome for call %q: %w", in.Call.Name, err)
+		}
+		if err := d.Ledger.RecordOutcome(ctx, key, outcome); err != nil {
+			return Result{}, fmt.Errorf("tools: record outcome for call %q: %w", in.Call.Name, err)
+		}
+	}
+
+	return result, nil
+}
+
+// resolveTarget finds which entry of in.ToolSet exposes in.Call.Name
+// (FR8), mints a persona credential scoped to exactly that one server
+// (FR10, keys.go's mintCredential), and returns an authenticated,
+// connected *mcp.ClientSession to it -- the caller owns the returned
+// session's lifecycle (Close). A call naming a tool no configured server
+// exposes returns an error before any CallTool is ever issued against any
+// server -- this is where FR8's "a tool the server does not expose is not
+// callable" is actually enforced. A credential is minted (and a
+// connection opened) for each server tried, in in.ToolSet order, and is
+// never reused across servers.
+func resolveTarget(ctx context.Context, issuer *persona.Issuer, in DispatchInput) (string, *mcp.ClientSession, error) {
+	for _, ref := range in.ToolSet {
+		token, err := mintCredential(ctx, issuer, in.Session, in.AgentID, ref.ServerURL)
+		if err != nil {
+			return "", nil, fmt.Errorf("tools: mint credential for %s: %w", ref.ServerURL, err)
+		}
+
+		cs, err := Connect(ctx, ref.ServerURL, token)
+		if err != nil {
+			return "", nil, fmt.Errorf("tools: connect to %s: %w", ref.ServerURL, err)
+		}
+
+		names, err := ListToolNames(ctx, cs)
+		if err != nil {
+			cs.Close()
+			return "", nil, fmt.Errorf("tools: list tools on %s: %w", ref.ServerURL, err)
+		}
+
+		if _, ok := names[in.Call.Name]; ok {
+			return ref.ServerURL, cs, nil
+		}
+		cs.Close()
+	}
+	return "", nil, fmt.Errorf("tools: call %q: no configured server exposes this tool", in.Call.Name)
+}
+
+// decodeArguments decodes a tool call's raw JSON arguments (llm.ToolCall.
+// Arguments) into the map CallTool's Arguments parameter expects, treating
+// an empty string as "no arguments" rather than a decode error -- a model
+// may request a zero-argument tool call.
+func decodeArguments(raw string) (map[string]any, error) {
+	args := map[string]any{}
+	if raw == "" {
+		return args, nil
+	}
+	if err := json.Unmarshal([]byte(raw), &args); err != nil {
+		return nil, err
+	}
+	if args == nil {
+		args = map[string]any{}
+	}
+	return args, nil
+}
+
+// resultContent flattens res's content blocks into Result.Content: M1's
+// domain servers (audience_score_system/mcp) return text content, so
+// joining every TextContent block's text (newline-separated) is enough for
+// now -- non-text content blocks (image/audio/embedded-resource) are
+// silently skipped rather than failing the whole call, since there is
+// nothing in Result's string-shaped Content field to put them in yet.
+func resultContent(res *mcp.CallToolResult) string {
+	if res == nil {
+		return ""
+	}
+	parts := make([]string, 0, len(res.Content))
+	for _, c := range res.Content {
+		if tc, ok := c.(*mcp.TextContent); ok {
+			parts = append(parts, tc.Text)
+		}
+	}
+	return strings.Join(parts, "\n")
 }
