@@ -108,6 +108,10 @@ func newScheduleTestStack(t *testing.T) *scheduleTestStack {
 	mux.HandleFunc("GET /channels/{id}/scripts/new", a.RequireSignedIn(sch.HandleNewScript))
 	mux.HandleFunc("POST /channels/{id}/scripts", a.RequireSignedIn(sch.HandleCreateScript))
 	mux.HandleFunc("GET /channels/{id}/scripts/{scriptID}", a.RequireSignedIn(sch.HandleScriptDetail))
+	// #2037 (FR16-FR19): the edit surface's mutating route, mirroring
+	// main.go's registration order/comment exactly (see main.go's
+	// setupRoutes, right below the GET detail route above).
+	mux.HandleFunc("POST /channels/{id}/scripts/{scriptID}", a.RequireSignedIn(sch.HandleUpdateScript))
 
 	return &scheduleTestStack{store: st, sessions: sessions, handlers: sch, router: mux, db: db}
 }

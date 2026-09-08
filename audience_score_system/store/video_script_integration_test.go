@@ -16,10 +16,12 @@ package store_test
 import (
 	"context"
 	"database/sql"
+	"sync"
 	"testing"
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5"
 	_ "github.com/jackc/pgx/v5/stdlib"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -588,4 +590,201 @@ func TestMigration010_ScheduleEntryBackfill_DerivesStrategyDropsUngroundable(t *
 		SELECT video_script_id FROM video_schedule_match WHERE synced_video_id = $1
 	`, video2.ID).Scan(&ungroundedMatchScriptID))
 	assert.Nil(t, ungroundedMatchScriptID, "a match on a dropped schedule_entry must keep video_script_id NULL, including an already-confirmed one (accepted data loss, FR45)")
+}
+
+// ── VideoScriptStore.UpdateContent (#2037, FR16/FR17, NFR2/LB4) ─────────────
+
+// TestVideoScriptStore_UpdateContent_ProposedUnpublished_UpdatesTitleAndBody
+// is the happy path: a proposed, unpublished script's title and body can be
+// overwritten.
+func TestVideoScriptStore_UpdateContent_ProposedUnpublished_UpdatesTitleAndBody(t *testing.T) {
+	ctx := context.Background()
+	s, _ := newStore(t)
+	ch, creator, _, verdict, strategy := setupVideoScriptChannel(t, ctx, s, "Update Happy Idea")
+	script := proposeVideoScript(t, ctx, s, ch, creator, verdict, strategy, "Update Happy Script")
+
+	err := s.VideoScripts().UpdateContent(ctx, script.ID, "Updated Title", "Updated body text", creator.ID, uuid.NewString())
+	require.NoError(t, err, "UpdateContent must accept a proposed, unpublished script (FR16)")
+
+	got, err := s.VideoScripts().GetByID(ctx, script.ID)
+	require.NoError(t, err)
+	assert.Equal(t, "Updated Title", got.Title)
+	assert.Equal(t, "Updated body text", got.ScriptText)
+	assert.Equal(t, store.VideoScriptStatusProposed, got.Status, "UpdateContent must never itself change status")
+}
+
+// TestVideoScriptStore_UpdateContent_DecidedStatuses_RejectedNoWrite proves
+// UpdateContent rejects every status other than proposed, writing nothing.
+// The Greenlit subtest is also the mirror load-bearing case the issue calls
+// out: isVideoScriptPublished ALONE would report false here (no match at
+// all exists), so only the status != 'proposed' half of the combined check
+// catches it -- proving that half is not redundant.
+func TestVideoScriptStore_UpdateContent_DecidedStatuses_RejectedNoWrite(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		prepare func(t *testing.T, ctx context.Context, s *store.Store, creator store.Person, scriptID uuid.UUID)
+	}{
+		{"Greenlit", func(t *testing.T, ctx context.Context, s *store.Store, creator store.Person, scriptID uuid.UUID) {
+			require.NoError(t, s.VideoScripts().Greenlight(ctx, scriptID, creator.ID))
+		}},
+		{"Denied", func(t *testing.T, ctx context.Context, s *store.Store, creator store.Person, scriptID uuid.UUID) {
+			require.NoError(t, s.VideoScripts().Deny(ctx, scriptID, creator.ID))
+		}},
+		{"Archived", func(t *testing.T, ctx context.Context, s *store.Store, creator store.Person, scriptID uuid.UUID) {
+			require.NoError(t, s.VideoScripts().Greenlight(ctx, scriptID, creator.ID))
+			require.NoError(t, s.VideoScripts().Archive(ctx, scriptID, creator.ID))
+		}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ctx := context.Background()
+			s, _ := newStore(t)
+			ch, creator, _, verdict, strategy := setupVideoScriptChannel(t, ctx, s, "Update Decided "+tc.name+" Idea")
+			script := proposeVideoScript(t, ctx, s, ch, creator, verdict, strategy, "Update Decided "+tc.name+" Script")
+			tc.prepare(t, ctx, s, creator, script.ID)
+
+			err := s.VideoScripts().UpdateContent(ctx, script.ID, "Should Not Apply", "should not apply body", creator.ID, uuid.NewString())
+			assert.ErrorIs(t, err, store.ErrVideoScriptDecided, "%s must reject UpdateContent (FR16/FR17)", tc.name)
+
+			got, err := s.VideoScripts().GetByID(ctx, script.ID)
+			require.NoError(t, err)
+			assert.NotEqual(t, "Should Not Apply", got.Title, "%s: UpdateContent must write nothing", tc.name)
+			assert.NotEqual(t, "should not apply body", got.ScriptText, "%s: UpdateContent must write nothing", tc.name)
+		})
+	}
+}
+
+// TestVideoScriptStore_UpdateContent_ProposedButPublishedViaConfirmedMatch_Rejected
+// is the load-bearing case status='proposed' ALONE would let through: a
+// script confirmed against a published video via MatchStore.Resolve (which
+// applies no status filter, store/match.go) never has its own status column
+// moved off 'proposed' -- only the isVideoScriptPublished half of the
+// combined check catches it.
+func TestVideoScriptStore_UpdateContent_ProposedButPublishedViaConfirmedMatch_Rejected(t *testing.T) {
+	ctx := context.Background()
+	s, db := newStore(t)
+	ch, creator, _, verdict, strategy := setupVideoScriptChannel(t, ctx, s, "Update Proposed Published Idea")
+	script := proposeVideoScript(t, ctx, s, ch, creator, verdict, strategy, "Update Proposed Published Script")
+
+	publishedAt := time.Now().Add(-time.Hour)
+	video := syncOneVideo(t, ctx, s, ch, "Update Proposed Published Video", &publishedAt)
+
+	var pendingMatchID uuid.UUID
+	require.NoError(t, db.Pool.QueryRow(ctx, `
+		INSERT INTO video_schedule_match (synced_video_id, video_script_id, confidence, state)
+		VALUES ($1, $2, 0.9, 'pending')
+		RETURNING id
+	`, video.ID, script.ID).Scan(&pendingMatchID))
+	require.NoError(t, s.Matches().Resolve(ctx, pendingMatchID, creator.ID, true, &script.ID),
+		"MatchStore.Resolve confirms against ANY video_script on the Channel, no status filter -- exactly the path that can leave a script published while its status still reads proposed")
+
+	preState, err := s.VideoScripts().GetByID(ctx, script.ID)
+	require.NoError(t, err)
+	require.Equal(t, store.VideoScriptStatusProposed, preState.Status, "confirming a match must never itself move status off proposed")
+
+	err = s.VideoScripts().UpdateContent(ctx, script.ID, "Should Not Apply", "should not apply body", creator.ID, uuid.NewString())
+	assert.ErrorIs(t, err, store.ErrVideoScriptDecided, "a still-proposed script whose match has published must be rejected -- status='proposed' alone would let this through")
+
+	got, err := s.VideoScripts().GetByID(ctx, script.ID)
+	require.NoError(t, err)
+	assert.NotEqual(t, "Should Not Apply", got.Title, "UpdateContent must write nothing")
+	assert.Equal(t, store.VideoScriptStatusProposed, got.Status)
+}
+
+// TestVideoScriptStore_UpdateContent_ConcurrentGreenlightRace_Atomic races a
+// Greenlight against an UpdateContent on the same script and asserts the
+// row lands in exactly one consistent state regardless of interleaving:
+// Greenlight always succeeds here (nothing else contends for the status
+// column), so the invariant under test is UpdateContent's own outcome --
+// if it reports success its content must be visible, if it reports
+// ErrVideoScriptDecided the original content must be untouched. Repeated
+// across many trials to shake out both possible orderings of the race.
+func TestVideoScriptStore_UpdateContent_ConcurrentGreenlightRace_Atomic(t *testing.T) {
+	ctx := context.Background()
+	s, _ := newStore(t)
+	ch, creator, _, verdict, strategy := setupVideoScriptChannel(t, ctx, s, "Update Race Idea")
+
+	const trials = 25
+	for i := 0; i < trials; i++ {
+		title := "Race Script"
+		script := proposeVideoScript(t, ctx, s, ch, creator, verdict, strategy, title)
+		newTitle := "Race Updated Title"
+		newBody := "race updated body"
+
+		var wg sync.WaitGroup
+		var greenlightErr, updateErr error
+		wg.Add(2)
+		go func() {
+			defer wg.Done()
+			greenlightErr = s.VideoScripts().Greenlight(ctx, script.ID, creator.ID)
+		}()
+		go func() {
+			defer wg.Done()
+			updateErr = s.VideoScripts().UpdateContent(ctx, script.ID, newTitle, newBody, creator.ID, uuid.NewString())
+		}()
+		wg.Wait()
+
+		require.NoError(t, greenlightErr, "trial %d: Greenlight only ever races against a content write here, never another status transition, so it must always succeed", i)
+
+		got, err := s.VideoScripts().GetByID(ctx, script.ID)
+		require.NoError(t, err)
+		assert.Equal(t, store.VideoScriptStatusGreenlit, got.Status, "trial %d: the row must always end up greenlit", i)
+
+		if updateErr == nil {
+			assert.Equal(t, newTitle, got.Title, "trial %d: UpdateContent reported success, so its write must be visible", i)
+			assert.Equal(t, newBody, got.ScriptText, "trial %d", i)
+		} else {
+			assert.ErrorIs(t, updateErr, store.ErrVideoScriptDecided, "trial %d: UpdateContent's only failure mode against a racing Greenlight is ErrVideoScriptDecided", i)
+			assert.Equal(t, title, got.Title, "trial %d: a decided script must never carry post-decision content -- UpdateContent must have written nothing", i)
+		}
+	}
+}
+
+// TestVideoScriptStore_UpdateContent_IdempotentReplay_NoopThenDifferentKeyUpdates
+// proves the per-scriptID replay contract: the SAME (scriptID,
+// idempotencyKey) pair is a no-op returning the current row unchanged --
+// even carrying different submitted content -- while a DIFFERENT key
+// performs a second real update.
+func TestVideoScriptStore_UpdateContent_IdempotentReplay_NoopThenDifferentKeyUpdates(t *testing.T) {
+	ctx := context.Background()
+	s, _ := newStore(t)
+	ch, creator, _, verdict, strategy := setupVideoScriptChannel(t, ctx, s, "Update Idempotent Idea")
+	script := proposeVideoScript(t, ctx, s, ch, creator, verdict, strategy, "Update Idempotent Script")
+
+	key1 := uuid.NewString()
+	require.NoError(t, s.VideoScripts().UpdateContent(ctx, script.ID, "First Title", "First body", creator.ID, key1))
+
+	got, err := s.VideoScripts().GetByID(ctx, script.ID)
+	require.NoError(t, err)
+	assert.Equal(t, "First Title", got.Title)
+	assert.Equal(t, "First body", got.ScriptText)
+
+	// Replay of the SAME key, even carrying different submitted content,
+	// must be a no-op returning the row exactly as it is.
+	err = s.VideoScripts().UpdateContent(ctx, script.ID, "Should Not Apply", "should not apply body", creator.ID, key1)
+	require.NoError(t, err, "a replayed idempotency key must not error")
+
+	got, err = s.VideoScripts().GetByID(ctx, script.ID)
+	require.NoError(t, err)
+	assert.Equal(t, "First Title", got.Title, "a replayed idempotency key must be a no-op, even with different submitted content")
+	assert.Equal(t, "First body", got.ScriptText)
+
+	// A DIFFERENT key with different content performs a second real update.
+	key2 := uuid.NewString()
+	require.NoError(t, s.VideoScripts().UpdateContent(ctx, script.ID, "Second Title", "Second body", creator.ID, key2))
+
+	got, err = s.VideoScripts().GetByID(ctx, script.ID)
+	require.NoError(t, err)
+	assert.Equal(t, "Second Title", got.Title, "a different idempotency key must perform a real second update")
+	assert.Equal(t, "Second body", got.ScriptText)
+}
+
+// TestVideoScriptStore_UpdateContent_UnknownScriptID_NotFound proves an
+// unknown scriptID surfaces the package's existing not-found error, not a
+// silent no-op success.
+func TestVideoScriptStore_UpdateContent_UnknownScriptID_NotFound(t *testing.T) {
+	ctx := context.Background()
+	s, _ := newStore(t)
+
+	err := s.VideoScripts().UpdateContent(ctx, uuid.New(), "Title", "Body", uuid.New(), "")
+	assert.ErrorIs(t, err, pgx.ErrNoRows, "an unknown scriptID must return pgx.ErrNoRows, not a silent success")
 }
