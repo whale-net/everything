@@ -114,10 +114,10 @@ func TestTryFetch_CacheHit(t *testing.T) {
 	destDir := filepath.Join(tmpDir, "sgc-1", "addon-123")
 
 	client := NewCacheClient(fake, 1, srv.Client())
-	hit, err := client.TryFetch(context.Background(), "123456789", "17000000", destDir)
+	result, err := client.TryFetch(context.Background(), "123456789", "17000000", destDir)
 
 	require.NoError(t, err)
-	assert.True(t, hit)
+	assert.True(t, result.Hit)
 
 	for name, content := range fileContents {
 		got, readErr := os.ReadFile(filepath.Join(destDir, name))
@@ -145,11 +145,11 @@ func TestTryFetch_CacheMiss(t *testing.T) {
 	destDir := filepath.Join(tmpDir, "sgc-1", "addon-123")
 
 	client := NewCacheClient(fake, 1, http.DefaultClient)
-	hit, err := client.TryFetch(context.Background(), "123456789", "17000000", destDir)
+	result, err := client.TryFetch(context.Background(), "123456789", "17000000", destDir)
 
 	// An ordinary miss (e.g. first-ever download) must not be treated as an error.
 	assert.NoError(t, err)
-	assert.False(t, hit)
+	assert.False(t, result.Hit)
 
 	_, statErr := os.Stat(destDir)
 	assert.True(t, os.IsNotExist(statErr), "destDir must not be created on a cache miss")
@@ -179,7 +179,7 @@ func TestTryFetch_S3Forbidden(t *testing.T) {
 	destDir := filepath.Join(tmpDir, "sgc-1", "addon-123")
 
 	client := NewCacheClient(fake, 1, srv.Client())
-	hit, err := client.TryFetch(context.Background(), "123456789", "17000000", destDir)
+	result, err := client.TryFetch(context.Background(), "123456789", "17000000", destDir)
 
 	// A stale/expired presigned URL must degrade to the SteamCMD fallback, not fail
 	// the install outright: hit == false with a non-nil error the caller can log and
@@ -188,7 +188,7 @@ func TestTryFetch_S3Forbidden(t *testing.T) {
 	// pins down the non-2xx status check specifically, not just "something failed".
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "403", "error should identify the non-2xx S3 response, not a downstream failure")
-	assert.False(t, hit)
+	assert.False(t, result.Hit)
 
 	_, statErr := os.Stat(destDir)
 	assert.True(t, os.IsNotExist(statErr), "destDir must be untouched on a non-2xx S3 response")
@@ -235,10 +235,10 @@ func TestTryFetch_InterruptedTransfer(t *testing.T) {
 	destDir := filepath.Join(tmpDir, "sgc-1", "addon-123")
 
 	client := NewCacheClient(fake, 1, srv.Client())
-	hit, err := client.TryFetch(context.Background(), "123456789", "17000000", destDir)
+	result, err := client.TryFetch(context.Background(), "123456789", "17000000", destDir)
 
 	require.Error(t, err)
-	assert.False(t, hit)
+	assert.False(t, result.Hit)
 
 	_, statErr := os.Stat(destDir)
 	assert.True(t, os.IsNotExist(statErr), "an interrupted transfer must leave no content at destDir")
@@ -264,11 +264,11 @@ func TestTryFetch_ControlAPIUnimplemented(t *testing.T) {
 	client := NewCacheClient(fake, 1, http.DefaultClient)
 
 	assert.NotPanics(t, func() {
-		hit, err := client.TryFetch(context.Background(), "123456789", "17000000", destDir)
+		result, err := client.TryFetch(context.Background(), "123456789", "17000000", destDir)
 		// Older control-api (or an unavailable relay) must degrade to the SteamCMD
 		// fallback: hit == false with the RPC error surfaced so the caller can log it
 		// as an expected deployment-skew case, never a crash.
-		assert.False(t, hit)
+		assert.False(t, result.Hit)
 		assert.Error(t, err)
 	})
 
@@ -310,10 +310,10 @@ func TestTryFetch_NFR6_ScrubsPresignedURLOnConnectionFailure(t *testing.T) {
 
 	fastFailClient := &http.Client{Timeout: 5 * time.Second}
 	client := NewCacheClient(fake, 1, fastFailClient)
-	hit, err := client.TryFetch(context.Background(), "123456789", "17000000", destDir)
+	result, err := client.TryFetch(context.Background(), "123456789", "17000000", destDir)
 
 	require.Error(t, err)
-	assert.False(t, hit)
+	assert.False(t, result.Hit)
 	assert.NotContains(t, err.Error(), secret, "the returned error must not embed the presigned URL's query string")
 	assert.NotContains(t, err.Error(), unreachableURL)
 	assert.NotContains(t, logs.String(), secret, "logs must never contain the presigned URL's query string")
