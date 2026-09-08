@@ -49,12 +49,37 @@ func RoutingKey(sessionID uuid.UUID, eventType string) string {
 // EventTypeAssistantMessage carry a message-shaped payload (see
 // whagent_net/worker/context.go's transcriptMessagePayload, the schema
 // every producer/consumer of these two types agrees on). Tool-call/
-// tool-result/summary/failure event types are added by the follow-up
-// tasks that first write them (tool dispatch, cap enforcement, terminal
-// classification -- ARCHITECTURE.md "Session workflow").
+// tool-result event types are added by the follow-up task that first
+// writes them (tool dispatch -- ARCHITECTURE.md "Session workflow").
+//
+// EventTypeCapped/EventTypeFailure (issue #2119) are the two terminal
+// transcript events FR6/FR7/FR2 describe: committed once, immediately
+// before the session's status write goes terminal, so a consumer can
+// react to "ran out"/"failed" differently from "finished" without
+// inspecting the session row. Both go through the same
+// TranscriptStore.AppendIfAbsent path every other event does (no new
+// store method) -- retry-safe the same way a re-invoked CommitTurn
+// activity is (session/turn_commit.go).
 const (
 	EventTypeUserMessage      = "user_message"
 	EventTypeAssistantMessage = "assistant_message"
+
+	// EventTypeCapped is committed when a session trips its turn cap
+	// (FR6) or cost cap (FR7). Payload carries which cap tripped
+	// (session.CapKind's wire value, "turns" or "cost") -- see
+	// whagent_net/worker/caps.go.
+	EventTypeCapped = "capped"
+
+	// EventTypeFailure is committed when a session ends `failed` (FR2).
+	// Payload carries the same error_category/error_detail GetSession
+	// reports (FR3) -- one classification, two surfaces, never two
+	// independently-derived answers. Never originated for a domain
+	// server's own `isError` tool result -- that stays an ordinary
+	// tool-result event (FR2's boundary; see
+	// whagent_net/worker/tools/dispatch.go's package doc comment,
+	// "isError is not a whagent-net failure"). See
+	// whagent_net/worker/classify.go.
+	EventTypeFailure = "failure"
 )
 
 // Event is the whagent-net LB1 record: the single definition of a

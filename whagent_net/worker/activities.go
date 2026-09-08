@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 
@@ -25,6 +26,14 @@ const (
 	ActivityCallModel              = "CallModel"
 	ActivityCommitTurn             = "CommitTurn"
 	ActivityUpdateSessionStatus    = "UpdateSessionStatus"
+	// ActivitySumCost and ActivityCommitTerminalEvent are issue #2119's two
+	// new activities -- FR7's cost-cap input (usage.go's UsageStore.SumCost,
+	// the running committed total, never a mutable counter) and the
+	// terminal transcript event a cap trip or failure commits before the
+	// session's status write goes terminal (FR6/FR7/FR2). See this file's
+	// SumCost/CommitTerminalEvent doc comments and caps.go/classify.go.
+	ActivitySumCost             = "SumCost"
+	ActivityCommitTerminalEvent = "CommitTerminalEvent"
 )
 
 // Activities groups the per-turn activities SessionWorkflow drives
@@ -299,4 +308,76 @@ func (a *Activities) UpdateSessionStatus(ctx context.Context, in UpdateSessionSt
 		return UpdateSessionStatusResult{}, fmt.Errorf("update session status: %w", err)
 	}
 	return UpdateSessionStatusResult{}, nil
+}
+
+// SumCostInput is SumCost's activity input.
+type SumCostInput struct {
+	SessionID uuid.UUID
+}
+
+// SumCostResult is SumCost's activity result.
+type SumCostResult struct {
+	// CostUSD is a.Store.Usage().SumCost's committed running total (LB6,
+	// FR7) -- includes every turn_usage row for the session, estimated or
+	// provider-reported alike (usage.go's TurnUsage.CostEstimated doc
+	// comment: "unknown cost is never treated as free").
+	CostUSD float64
+}
+
+// SumCost is FR7's cost-cap input activity: a fresh read of
+// a.Store.Usage().SumCost on every call, never a value cached in workflow
+// state (caps.go's package doc comment: "never a separately-mutated
+// counter"). SessionWorkflow calls this after each turn's CommitTurn,
+// then evaluates the result via caps.go's checkCaps.
+//
+// Not implemented in this Scaffold-phase task (issue #2119) -- caps.go's
+// package doc comment describes what Implementation phase wires in here
+// (a.Store.Usage().SumCost(ctx, in.SessionID), the same one-line read
+// ResolveAgentDefinition/CurrentAssignment already model for a
+// read-only activity).
+func (a *Activities) SumCost(ctx context.Context, in SumCostInput) (SumCostResult, error) {
+	if a.Store == nil {
+		return SumCostResult{}, fmt.Errorf("worker: Activities.Store is nil")
+	}
+	return SumCostResult{}, fmt.Errorf("worker: SumCost not implemented (issue #2119 Implementation phase)")
+}
+
+// CommitTerminalEventInput is CommitTerminalEvent's activity input.
+// EventType must be events.EventTypeCapped or events.EventTypeFailure
+// (events.go) -- this activity is the one commit path both terminal
+// events share, mirroring how CommitTurn is the one commit path every
+// per-turn model-response event shares.
+type CommitTerminalEventInput struct {
+	SessionID uuid.UUID
+	Turn      int
+	EventType string
+	Payload   json.RawMessage
+}
+
+// CommitTerminalEventResult is CommitTerminalEvent's activity result --
+// empty; the workflow only needs to know the commit succeeded before it
+// writes the session's terminal status.
+type CommitTerminalEventResult struct{}
+
+// CommitTerminalEvent commits the terminal transcript event a cap trip
+// (FR6/FR7) or a session failure (FR2) writes before the session's status
+// write goes terminal (issue body: "Tripping either cap writes its own
+// transcript event before the session goes terminal... It is committed
+// and published like any other event"). SessionWorkflow calls this before
+// updateSessionStatus's terminal write, never after -- a consumer reading
+// the transcript must be able to see why a session ended by the time
+// GetSession reports it as ended.
+//
+// Not implemented in this Scaffold-phase task (issue #2119) --
+// Implementation phase wires this through
+// a.Store.Transcript().AppendIfAbsent(ctx, in.SessionID, in.Turn,
+// in.EventType, in.Payload) (transcript.go): the same retry-safe,
+// publish-after-commit path (NFR2) every other transcript event already
+// uses, so a re-invoked activity (Temporal's at-least-once execution)
+// commits the terminal event exactly once rather than duplicating it.
+func (a *Activities) CommitTerminalEvent(ctx context.Context, in CommitTerminalEventInput) (CommitTerminalEventResult, error) {
+	if a.Store == nil {
+		return CommitTerminalEventResult{}, fmt.Errorf("worker: Activities.Store is nil")
+	}
+	return CommitTerminalEventResult{}, fmt.Errorf("worker: CommitTerminalEvent not implemented (issue #2119 Implementation phase)")
 }

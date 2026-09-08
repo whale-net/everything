@@ -7,6 +7,8 @@ go_library(
     name = "worker_lib",
     srcs = [
         "activities.go",
+        "caps.go",
+        "classify.go",
         "context.go",
         "main.go",
         "workflow.go",
