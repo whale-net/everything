@@ -316,6 +316,36 @@ go_test(
 # kept SELECTing the sgc_id column migration 014 dropped (SQLSTATE 42703 at
 # runtime, invisible to the mock-based suite). Same build-tag/target
 # conventions as server_port_range_integration_test above.
+# Real-Postgres coverage for WorkshopCacheRepository (#2181, plan #2175,
+# NFR4): UpsertCacheEntry's INSERT ... ON CONFLICT (cache_key) DO UPDATE ...
+# RETURNING converges duplicate and concurrent same-key writers on one row
+# instead of erroring, size_bytes is preserved across a nil-supplying
+# upsert, and UpsertHostPresence's ON CONFLICT (cache_entry_id, server_id)
+# does the same for host presence. Same build-tag/target conventions as
+# session_repository_integration_test above.
+go_test(
+    # keep
+    name = "workshop_cache_integration_test",
+    size = "large",
+    timeout = "long",
+    srcs = ["workshop_cache_integration_test.go"],
+    embed = [":postgres"],
+    gotags = ["integration"],
+    tags = [
+        "external",
+        "integration",
+        "manual",
+        "no-cache",
+        "no-sandbox",
+        "requires-network",
+    ],
+    deps = [
+        "//libs/go/dbtest",
+        "//manmanv2/models",
+        "@com_github_jackc_pgx_v5//pgxpool",
+    ],
+)
+
 go_test(
     name = "server_port_listalloc_integration_test",
     size = "large",

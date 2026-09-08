@@ -16,9 +16,15 @@ go_library(
     ],
 )
 
+# Includes cachekey_test.go: cache-key derivation coverage (#2181, plan
+# #2175, NFR1/NFR4) -- determinism, version/workshop-ID sensitivity, the
+# fixed (workshopID, contentVersion) signature that leaves no parameter slot
+# for host/SGC/deployment identity, and numeric-vs-string content-version
+# normalisation.
 go_test(
     name = "workshop_test",
     srcs = [
+        "cachekey_test.go",
         "entry_parser_test.go",
         "manager_test.go",
     ],

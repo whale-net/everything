@@ -141,6 +141,41 @@ go_test(
     ],
 )
 
+# Content-addressed Workshop cache schema (#2181, plan #2175): migration
+# round-trip + the NFR1/NFR2/FR9 information_schema assertions (no
+# sgc_id/deployment_id/server_id/library_id or valid_from/valid_to/
+# is_current column on workshop_cache_entries, and its only UNIQUE
+# constraint is on cache_key). Same build-tag/target conventions as
+# migration_038_integration_test.
+#
+# Run it explicitly (requires a working Docker daemon):
+#   bazel test //manmanv2/migrate:migration_040_integration_test --test_output=all
+go_test(
+    # keep
+    name = "migration_040_integration_test",
+    size = "large",
+    timeout = "long",
+    srcs = [
+        "main.go",
+        "migration_040_integration_test.go",
+    ],
+    embedsrcs = glob(["migrations/*.sql"]),
+    gotags = ["integration"],
+    tags = [
+        "external",
+        "integration",
+        "manual",
+        "no-cache",
+        "no-sandbox",
+        "requires-network",
+    ],
+    deps = [
+        "//libs/go/dbtest",
+        "//libs/go/migrate",
+        "@com_github_jackc_pgx_v5//stdlib",
+    ],
+)
+
 # Release metadata for migration job
 release_app(
     name = "control-migration",
