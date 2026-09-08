@@ -220,6 +220,19 @@ type WorkshopLibraryRepository interface {
 	DetectCircularReference(ctx context.Context, parentLibraryID, childLibraryID int64) (bool, error)
 }
 
+// WorkshopBatchJobRepository defines operations for batch-operation
+// persistence shared by Workshop collection bulk-add (FR1) and mixed-format
+// batch create (FR2/FR3): the batch job header plus its per-item outcomes.
+type WorkshopBatchJobRepository interface {
+	CreateBatchJob(ctx context.Context, job *manman.WorkshopBatchJob) (*manman.WorkshopBatchJob, error)
+	CreateBatchJobItems(ctx context.Context, batchJobID int64, items []*manman.WorkshopBatchJobItem) error
+	UpdateBatchJobItemResult(ctx context.Context, batchJobItemID int64, status string, addonID *int64, errorMessage *string) error
+	UpdateBatchJobStatus(ctx context.Context, batchJobID int64, status string, succeeded, failed int) error
+	GetBatchJob(ctx context.Context, batchJobID int64) (*manman.WorkshopBatchJob, error)
+	ListBatchJobItems(ctx context.Context, batchJobID int64) ([]*manman.WorkshopBatchJobItem, error)
+	ListBatchJobs(ctx context.Context, gameID int64, limit int) ([]*manman.WorkshopBatchJob, error)
+}
+
 // ErrPendingRestartExists is returned by PendingRestartRepository.Create when
 // a 'pending' record already exists for the target server_game_config_id --
 // the pending_restarts_one_pending_per_sgc unique partial index (migration
@@ -288,6 +301,7 @@ type Repository struct {
 	WorkshopAddons          WorkshopAddonRepository
 	WorkshopInstallations   WorkshopInstallationRepository
 	WorkshopLibraries       WorkshopLibraryRepository
+	WorkshopBatchJobs       WorkshopBatchJobRepository
 	AddonPathPresets        AddonPathPresetRepository
 	PendingRestarts         PendingRestartRepository
 	Actions                 interface{} // ActionRepository from postgres package

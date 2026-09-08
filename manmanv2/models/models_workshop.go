@@ -91,3 +91,37 @@ type WorkshopLibraryReference struct {
 	ChildLibraryID  int64     `db:"child_library_id"`
 	CreatedAt       time.Time `db:"created_at"`
 }
+
+// WorkshopBatchJob represents a batch operation (collection bulk-add or
+// mixed-format batch create) and its aggregate progress/outcome. NFR1/NFR2:
+// deliberately has no sgc_id or SGC-scoped uniqueness -- addon writes it
+// produces land in the library-scoped workshop_library_addons junction.
+type WorkshopBatchJob struct {
+	BatchJobID     int64     `db:"batch_job_id"`
+	JobType        string    `db:"job_type"` // "collection_add" | "batch_create"
+	GameID         int64     `db:"game_id"`
+	LibraryID      *int64    `db:"library_id"` // nil only if a job type is created without a library target
+	SourceInput    *string   `db:"source_input"`
+	Status         string    `db:"status"` // "pending" | "running" | "completed" | "completed_with_errors" | "failed"
+	TotalItems     int       `db:"total_items"`
+	SucceededItems int       `db:"succeeded_items"`
+	FailedItems    int       `db:"failed_items"`
+	CreatedAt      time.Time `db:"created_at"`
+	UpdatedAt      time.Time `db:"updated_at"`
+}
+
+// WorkshopBatchJobItem represents one line/entry of a batch job and its
+// per-item outcome (NFR5: schema shape that makes per-item atomicity
+// possible).
+type WorkshopBatchJobItem struct {
+	BatchJobItemID int64     `db:"batch_job_item_id"`
+	BatchJobID     int64     `db:"batch_job_id"`
+	RawInput       string    `db:"raw_input"`   // the line exactly as pasted, or the collection child id
+	WorkshopID     *string   `db:"workshop_id"` // populated once parsed
+	AddonID        *int64    `db:"addon_id"`    // populated on success
+	Status         string    `db:"status"`      // "pending" | "succeeded" | "failed"
+	ErrorMessage   *string   `db:"error_message"`
+	DisplayOrder   int       `db:"display_order"`
+	CreatedAt      time.Time `db:"created_at"`
+	UpdatedAt      time.Time `db:"updated_at"`
+}
