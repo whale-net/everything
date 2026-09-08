@@ -16,10 +16,11 @@ import (
 type ServerHandler struct {
 	repo          repository.ServerRepository
 	portRangeRepo repository.ServerPortRangeRepository
+	portRepo      repository.ServerPortRepository
 }
 
-func NewServerHandler(repo repository.ServerRepository, portRangeRepo repository.ServerPortRangeRepository) *ServerHandler {
-	return &ServerHandler{repo: repo, portRangeRepo: portRangeRepo}
+func NewServerHandler(repo repository.ServerRepository, portRangeRepo repository.ServerPortRangeRepository, portRepo repository.ServerPortRepository) *ServerHandler {
+	return &ServerHandler{repo: repo, portRangeRepo: portRangeRepo, portRepo: portRepo}
 }
 
 func (h *ServerHandler) ListServers(ctx context.Context, req *pb.ListServersRequest) (*pb.ListServersResponse, error) {
@@ -106,6 +107,41 @@ func (h *ServerHandler) UpdateServerAllowedPortRanges(ctx context.Context, req *
 	return &pb.UpdateServerAllowedPortRangesResponse{
 		Ranges: portRangesToProto(stored),
 	}, nil
+}
+
+// ListAllocatedPorts lists a server's port allocations (additive, task
+// #2098): a read-only projection of server_ports used by the UI's ports
+// editor for in-use warnings and random in-range generation. Guidance
+// only -- session-start allocation remains the correctness backstop
+// (Decision 7), and no write RPC exists because allocation happens only
+// inside session start (FR12 enforcement).
+func (h *ServerHandler) ListAllocatedPorts(ctx context.Context, req *pb.ListAllocatedPortsRequest) (*pb.ListAllocatedPortsResponse, error) {
+	if req.ServerId <= 0 {
+		return nil, status.Error(codes.InvalidArgument, "server_id is required")
+	}
+	if _, err := h.repo.Get(ctx, req.ServerId); err != nil {
+		return nil, status.Errorf(codes.NotFound, "server not found: %v", err)
+	}
+
+	ports, err := h.portRepo.ListAllocatedPorts(ctx, req.ServerId)
+	if err != nil {
+		return nil, status.Errorf(codes.Internal, "failed to list allocated ports: %v", err)
+	}
+
+	out := make([]*pb.AllocatedPort, 0, len(ports))
+	for _, p := range ports {
+		var sessionID int64
+		if p.SessionID != nil {
+			sessionID = *p.SessionID
+		}
+		out = append(out, &pb.AllocatedPort{
+			ServerId:  p.ServerID,
+			Port:      int32(p.Port),
+			Protocol:  p.Protocol,
+			SessionId: sessionID,
+		})
+	}
+	return &pb.ListAllocatedPortsResponse{Ports: out}, nil
 }
 
 // serverToProtoWithRanges is serverToProto plus the server's allowed

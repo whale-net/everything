@@ -62,6 +62,18 @@ func (f *fakeManManAPIClient) GetServer(ctx context.Context, in *manmanpb.GetSer
 	return &manmanpb.GetServerResponse{Server: f.server}, nil
 }
 
+// Task #2098 wires the SGC detail page to ListAllocatedPorts and
+// ListServerGameConfigs (FR13/FR14 guidance); these additive overrides
+// keep pre-existing detail-page tests compiling against the nil-embedded
+// interface without changing what they assert.
+func (f *fakeManManAPIClient) ListAllocatedPorts(ctx context.Context, in *manmanpb.ListAllocatedPortsRequest, opts ...grpc.CallOption) (*manmanpb.ListAllocatedPortsResponse, error) {
+	return &manmanpb.ListAllocatedPortsResponse{}, nil
+}
+
+func (f *fakeManManAPIClient) ListServerGameConfigs(ctx context.Context, in *manmanpb.ListServerGameConfigsRequest, opts ...grpc.CallOption) (*manmanpb.ListServerGameConfigsResponse, error) {
+	return &manmanpb.ListServerGameConfigsResponse{}, nil
+}
+
 func (f *fakeManManAPIClient) GetGameConfig(ctx context.Context, in *manmanpb.GetGameConfigRequest, opts ...grpc.CallOption) (*manmanpb.GetGameConfigResponse, error) {
 	// No GameConfig configured for these tests: handleSGCDetail tolerates
 	// this (gameConfig stays nil) and skips the Game/volumes/backup-config
