@@ -18,20 +18,40 @@
 // turn-count half; the cost half's SumCost read is a separate activity
 // call, see activities.go's SumCost).
 //
-// Scaffold phase (this task): capCheck's shape and defaultMaxTurns/
-// defaultMaxCostUSD are fixed; checkCaps itself is a stub. Implementation
-// phase fills in the real turns-then-cost evaluation order and wires this
-// function (plus activities.go's SumCost activity for the cost side)
-// into processTurn under a
-// workflow.GetVersion("session-workflow-cap-enforcement", ...) gate per
-// workflow.go's NFR1 doc comment.
+// Implementation phase (this task): checkCaps evaluates the real
+// turns-then-cost order documented below; workflow.go's processTurn calls
+// it twice per turn (evaluateCaps) -- once "before" (using the turn
+// count/cost already committed by prior turns, turn-1) and once "after"
+// (using this turn's own just-committed turn count/cost, turn) -- both
+// under the workflow.GetVersion("session-workflow-cap-enforcement", ...)
+// gate per workflow.go's NFR1 doc comment. See evaluateCaps' doc comment
+// in workflow.go for why the pre-check uses turn-1 rather than turn (the
+// turn that trips a cap must still be allowed to run once and produce its
+// own transcript event -- Testing phase's "ends capped... on the turn
+// that reaches the cap" case, not the turn before it).
 package main
 
 import (
-	"fmt"
+	"encoding/json"
 
 	"github.com/whale-net/everything/whagent_net/session"
 )
+
+// cappedEventPayload is EventTypeCapped's transcript-event payload (FR6/
+// FR7, events.go's EventTypeCapped doc comment): which cap tripped, using
+// session.CapKind's wire value ("turns" or "cost") -- the exact same value
+// UpdateStatus's cap_kind column stores, so a transcript reader and
+// GetSession never disagree about which cap ended the session.
+type cappedEventPayload struct {
+	CapKind session.CapKind `json:"cap_kind"`
+}
+
+// marshalCappedEvent is workflow.go's cappedTurn's payload-construction
+// step, pulled out here (rather than inlined) so cappedEventPayload's
+// field shape has exactly one write site.
+func marshalCappedEvent(capKind session.CapKind) (json.RawMessage, error) {
+	return json.Marshal(cappedEventPayload{CapKind: capKind})
+}
 
 // defaultMaxTurns and defaultMaxCostUSD are FR6/FR7's cap defaults
 // (ARCHITECTURE.md "Guardrails": "defaults 100 turns / $1"), applied when
@@ -59,12 +79,30 @@ type capCheck struct {
 // UsageStore.SumCost committed running total (never a mutable counter,
 // FR7).
 //
-// Not implemented in this Scaffold-phase task -- see this file's package
-// doc comment for what Implementation phase fills in, including the
-// documented check order (turns before cost) and the red/green discipline
-// the issue body's Testing section describes ("switch cost-cap evaluation
-// to an in-workflow mutable counter, observe the SumCost test go red,
-// revert").
+// Check order is turns before cost (documented here per the issue body's
+// Testing section): the turn cap is a pure integer comparison, independent
+// of whatever the cost read produced, so evaluating it first means a
+// turn-cap trip is reported correctly even in the degenerate case where
+// costSoFar is 0 because no turn has recorded any usage yet. At most one
+// cap is ever reported tripped per call (capCheck's doc comment) --
+// checkCaps returns on the first cap it finds, so a call where both caps
+// happen to be simultaneously exceeded still reports exactly CapKindTurns,
+// never both.
 func checkCaps(turn int, def session.AgentDefinition, costSoFar float64) (capCheck, error) {
-	return capCheck{}, fmt.Errorf("worker: checkCaps not implemented (issue #2119 Implementation phase)")
+	maxTurns := def.MaxTurns
+	if maxTurns == 0 {
+		maxTurns = defaultMaxTurns
+	}
+	maxCostUSD := def.MaxCostUSD
+	if maxCostUSD == 0 {
+		maxCostUSD = defaultMaxCostUSD
+	}
+
+	if turn >= maxTurns {
+		return capCheck{Capped: true, CapKind: session.CapKindTurns}, nil
+	}
+	if costSoFar >= maxCostUSD {
+		return capCheck{Capped: true, CapKind: session.CapKindCost}, nil
+	}
+	return capCheck{}, nil
 }
