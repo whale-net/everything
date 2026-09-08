@@ -160,6 +160,22 @@ Each released app gets published to GitHub Container Registry with multiple tags
 - `ghcr.io/OWNER/DOMAIN-APP:latest` (latest release)
 - `ghcr.io/OWNER/DOMAIN-APP:COMMIT_SHA` (commit-specific)
 
+## Native Image Push (Opt-In)
+
+By default, `build-app` pushes an app's built OCI image index via `bazel run
+//<pkg>:<app>_image_push` — rules_oci's generated bash script, which shells
+out to a vendored `crane` CLI binary and `jq` to read the index's digest and
+push it (see `tools/bazel/container_image.bzl`'s `oci_push` wiring).
+
+Setting `RELEASE_NATIVE_IMAGE_PUSH=true` switches `build-app` to push the
+same OCI layout directly via `go-containerregistry` (`pkg/v1/remote`) from
+inside `release_helper_go` instead — no bash, no external `crane`/`jq`
+binaries, consistent with how `finalize-app`'s registry retag already avoids
+shelling out (see `GHCRRetagReleaser` in
+`tools/release_helper_go/cmd/releaser_ghcr_retag.go`). This is opt-in
+(issue #2099) so it can be validated in CI before becoming the default —
+flip it on for a workflow run, or in `release-v2.yml`, to try it.
+
 ## Version Validation & Protection
 
 The release system includes robust version validation and protection:
