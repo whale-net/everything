@@ -293,42 +293,58 @@ func TestE2E_M41_ResearchWebSaveBrowse(t *testing.T) {
 		assert.Equal(t, verdict2ID, got2.History[1].ID)
 	})
 
-	// ── 5: FR2, FR9, FR5 -- browse agreement: the Idea detail page renders
-	// exactly the same version count, ordering, current selection, and
-	// source values get_viability_verdict's history reports ───────────────
+	// ── 5: FR2, FR4, FR9, FR5 -- browse agreement, split across the two
+	// pages #2034 introduced: the Idea page renders the CURRENT verdict
+	// ONLY (never the superseded reasoning inline), while the
+	// verdict-details page (GET .../verdicts) owns the full version
+	// count/ordering/source cross-check against get_viability_verdict's
+	// own history ─────────────────────────────────────────────────────────
 	t.Run("5_fr2_fr9_fr5_browse_agreement", func(t *testing.T) {
-		rec := w.get(creatorCookie, "/channels/"+ch.ID.String()+"/research/ideas/"+ideaID.String())
-		require.Equal(t, http.StatusOK, rec.Code, "body: %s", rec.Body.String())
-		body := rec.Body.String()
+		// FR4: the Idea page shows only the current (highest-version,
+		// agent-sourced) verdict -- its reasoning and source render, but
+		// the superseded human-sourced version's reasoning must not appear
+		// inline anymore.
+		ideaRec := w.get(creatorCookie, "/channels/"+ch.ID.String()+"/research/ideas/"+ideaID.String())
+		require.Equal(t, http.StatusOK, ideaRec.Code, "body: %s", ideaRec.Body.String())
+		ideaBody := ideaRec.Body.String()
 
-		assert.Contains(t, body, verdictReasoningHuman)
-		assert.Contains(t, body, verdictReasoningAgent)
-		assert.Contains(t, body, "Human")
-		assert.Contains(t, body, "Agent")
+		assert.Contains(t, ideaBody, verdictReasoningAgent, "the Idea page must show the CURRENT verdict's reasoning")
+		assert.Contains(t, ideaBody, "Agent", "the current verdict's source label must render")
+		assert.NotContains(t, ideaBody, verdictReasoningHuman, "FR4: the Idea page no longer inlines superseded verdict versions")
+		assert.Contains(t, ideaBody, "/channels/"+ch.ID.String()+"/research/ideas/"+ideaID.String()+"/verdicts", "the Idea page links out to the verdict-details page for history")
 
-		currentIdx := strings.Index(body, "Current")
-		historyIdx := strings.Index(body, "History")
-		require.Greater(t, currentIdx, 0)
-		require.Greater(t, historyIdx, 0)
-		assert.Less(t, currentIdx, historyIdx, `"Current" must render before the "History" heading`)
+		// The verdict-details page's default view (no ?version) resolves
+		// to the SAME current verdict -- same reasoning, same source, and
+		// still no superseded reasoning rendered inline.
+		verdictsRec := w.get(creatorCookie, "/channels/"+ch.ID.String()+"/research/ideas/"+ideaID.String()+"/verdicts")
+		require.Equal(t, http.StatusOK, verdictsRec.Code, "body: %s", verdictsRec.Body.String())
+		verdictsBody := verdictsRec.Body.String()
 
-		agentIdxOverall := strings.Index(body, verdictReasoningAgent)
-		require.Greater(t, agentIdxOverall, 0)
-		assert.Less(t, agentIdxOverall, historyIdx, "the current (highest-version, agent-sourced) verdict must render before the History heading")
+		assert.Contains(t, verdictsBody, "Current")
+		assert.Contains(t, verdictsBody, verdictReasoningAgent)
+		assert.NotContains(t, verdictsBody, verdictReasoningHuman, "the default (current) view must not also render the older version's reasoning")
 
-		historySection := body[historyIdx:]
-		idxHuman := strings.Index(historySection, verdictReasoningHuman)
-		idxAgent := strings.Index(historySection, verdictReasoningAgent)
-		require.Greater(t, idxHuman, 0, "the human version must render in the History section")
-		require.Greater(t, idxAgent, 0, "the agent version must render in the History section")
-		assert.Less(t, idxHuman, idxAgent, "History renders oldest-to-newest: human (v1) before agent (v2)")
+		// FR7's version-select lists every version, oldest-to-newest --
+		// matching get_viability_verdict's own len(History) == 2 exactly,
+		// never drifting from it.
+		v1Idx := strings.Index(verdictsBody, "Version 1")
+		v2Idx := strings.Index(verdictsBody, "Version 2")
+		require.Greater(t, v1Idx, 0, "the version select must list Version 1")
+		require.Greater(t, v2Idx, 0, "the version select must list Version 2")
+		assert.Less(t, v1Idx, v2Idx, "the version select lists versions oldest-to-newest")
 
-		// Exactly 2 versions total: "Version 1" appears once (history
-		// only), "Version 2" appears twice (once as Current, once as the
-		// last History entry) -- matching get_viability_verdict's own
-		// len(History) == 2 exactly, never drifting from it.
-		assert.Equal(t, 1, strings.Count(body, "Version 1"))
-		assert.Equal(t, 2, strings.Count(body, "Version 2"))
+		// FR7: selecting the older version (?version=1) renders ITS OWN
+		// reasoning and source -- the human-sourced v1 -- and not the
+		// current (agent-sourced) version's reasoning.
+		v1Rec := w.get(creatorCookie, "/channels/"+ch.ID.String()+"/research/ideas/"+ideaID.String()+"/verdicts?version=1")
+		require.Equal(t, http.StatusOK, v1Rec.Code, "body: %s", v1Rec.Body.String())
+		v1Body := v1Rec.Body.String()
+
+		assert.Contains(t, v1Body, verdictReasoningHuman, "?version=1 must render the human-sourced first version's reasoning")
+		assert.Contains(t, v1Body, "Human")
+		assert.NotContains(t, v1Body, verdictReasoningAgent, "selecting an older version must not also render the current version's reasoning")
+		assert.Contains(t, v1Body, "Version 1")
+		assert.NotContains(t, v1Body, "Current", "version 1 is not current, so its card must be labeled by version number, not \"Current\"")
 	})
 
 	// ── 6: FR1 -- unattached notes: an MCP-saved note with no Idea lists

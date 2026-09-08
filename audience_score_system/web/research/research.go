@@ -74,8 +74,17 @@
 //     FR33-FR35).
 //   - POST /channels/{id}/research/ideas/{ideaID}/verdicts --
 //     HandleSaveVerdict (FR4, FR6, FR7).
+//   - GET /channels/{id}/research/ideas/{ideaID}/verdicts --
+//     HandleVerdictDetail (#2034, FR4-FR9): the verdict-details page --
+//     see that handler's doc comment.
 //   - POST /channels/{id}/research/ideas/{ideaID}/video-scripts --
 //     HandleProposeVideoScript (#1915, FR1-FR5, NFR1-NFR3).
+//
+// #2034 (FR4-FR9) shrinks IdeaDetail's inline verdict section down to the
+// Idea's current verdict only and moves the full version history plus
+// each version's cited notes to this new GET .../verdicts page --
+// depended on #2028's shared components.VerdictGlyph landing first so
+// neither surface re-introduces the old text badge.
 package research
 
 import (
@@ -84,6 +93,7 @@ import (
 	"fmt"
 	"net/http"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -657,16 +667,12 @@ func (h *Handlers) renderIdeaDetail(w http.ResponseWriter, r *http.Request, pers
 		return
 	}
 
-	// History + Current are the identical pair of store.VerdictStore calls
-	// get_viability_verdict makes (mcp/tools/verdict.go), in the same
-	// order, so `web` and `mcp` can never disagree on which version is
-	// current.
-	history, err := h.store.Verdicts().History(ctx, ideaID)
-	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
-		return
-	}
-
+	// Current is the identical store.VerdictStore call get_viability_verdict
+	// makes, so `web` and `mcp` can never disagree on which version is
+	// current. Unlike before #2034, this page no longer loads History --
+	// the inline verdict section shows the current verdict ONLY (FR4); the
+	// full version history moved to the verdict-details page
+	// (renderVerdictDetail below), which loads History itself.
 	var current *store.Verdict
 	cv, err := h.store.Verdicts().Current(ctx, ideaID)
 	switch {
@@ -680,13 +686,19 @@ func (h *Handlers) renderIdeaDetail(w http.ResponseWriter, r *http.Request, pers
 		return
 	}
 
-	authorNames, err := h.verdictAuthorDisplayNames(ctx, history, current)
+	// history is passed as nil to each of these batched helpers below --
+	// FR4 shrinks this page to the current verdict only, so the union they
+	// resolve over is just current's own CitedResearchNoteIDs (see
+	// citedNoteIDUnion). The helpers themselves are untouched (and still
+	// take a history parameter) because renderVerdictDetail below reuses
+	// them unchanged for the verdict-details page.
+	authorNames, err := h.verdictAuthorDisplayNames(ctx, nil, current)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
 
-	citedNotes, err := h.citedResearchNotes(ctx, history, current)
+	citedNotes, err := h.citedResearchNotes(ctx, nil, current)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
@@ -696,7 +708,7 @@ func (h *Handlers) renderIdeaDetail(w http.ResponseWriter, r *http.Request, pers
 	// get_viability_verdict's resolveCitedNotes makes, over the identical
 	// id union citedNotes above was resolved from -- see
 	// retiredCitedResearchNotes's doc comment.
-	retiredNotes, err := h.retiredCitedResearchNotes(ctx, history, current)
+	retiredNotes, err := h.retiredCitedResearchNotes(ctx, nil, current)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
@@ -719,7 +731,7 @@ func (h *Handlers) renderIdeaDetail(w http.ResponseWriter, r *http.Request, pers
 	// ever appear as options (FR4). It is also FR15's relation-picker
 	// candidate universe on this page: every note across this Idea's own
 	// threads, grouped by thread in the view -- again no extra store call.
-	if err := components.Render(w, r, title, IdeaDetail(data, ch, idea, notes, relationsByNote, noteRefTargets, notesTruncated, threads, current, history, authorNames, citedNotes, retiredNotes, canWrite, form, verdictForm, activeStrategies, proposeForm)); err != nil {
+	if err := components.Render(w, r, title, IdeaDetail(data, ch, idea, notes, relationsByNote, noteRefTargets, notesTruncated, threads, current, authorNames, citedNotes, retiredNotes, canWrite, form, verdictForm, activeStrategies, proposeForm)); err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 	}
 }
@@ -1151,6 +1163,203 @@ func (h *Handlers) HandleSaveVerdict(w http.ResponseWriter, r *http.Request) {
 	}
 
 	http.Redirect(w, r, "/channels/"+channelID.String()+"/research/ideas/"+ideaID.String(), http.StatusSeeOther)
+}
+
+// HandleVerdictDetail serves GET
+// /channels/{id}/research/ideas/{ideaID}/verdicts (#2034, FR4-FR9): the
+// verdict-details page a link on IdeaDetail's now-shrunk inline verdict
+// section (FR5) points to whenever the Idea has at least one verdict.
+// Renders the Idea's current verdict prominently (FR6: value via
+// components.VerdictGlyph, reasoning, author, timestamp), a version-select
+// populated from EVERY version oldest-to-newest (FR7, a bookmarkable GET
+// query param -- no POST, no diff/comparison view per #1953's explicit
+// exclusion), the selected version's cited research notes (FR8, reusing
+// citedResearchNotes/retiredCitedResearchNotes exactly as verdictBody
+// does today), and an explicit 200 empty state for a verdict-less Idea
+// (FR9 -- VerdictStore.Current's pgx.ErrNoRows is NOT a missing page).
+//
+// HandleVerdictDetail's preamble is IDENTICAL to HandleIdeaDetail's --
+// resolve the signed-in Person; parse+load {id}'s Channel, 404 if
+// missing; store.CanRead, 403 if not a member; parse+load {ideaID}'s
+// Idea, 404 if missing or if it belongs to a different Channel (NFR4's
+// load-bearing cross-Channel guard) -- before handing off to
+// renderVerdictDetail.
+func (h *Handlers) HandleVerdictDetail(w http.ResponseWriter, r *http.Request) {
+	ctx := r.Context()
+	person := auth.PersonFromContext(ctx)
+	if person == nil {
+		http.Error(w, "not signed in", http.StatusUnauthorized)
+		return
+	}
+
+	channelID, err := uuid.Parse(r.PathValue("id"))
+	if err != nil {
+		http.Error(w, "invalid channel id", http.StatusBadRequest)
+		return
+	}
+
+	ch, err := h.store.Channels().GetByID(ctx, channelID)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			http.NotFound(w, r)
+			return
+		}
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	canRead, err := store.CanRead(ctx, h.store.Roles(), channelID, person.ID)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	if !canRead {
+		http.Error(w, "forbidden", http.StatusForbidden)
+		return
+	}
+
+	ideaID, err := uuid.Parse(r.PathValue("ideaID"))
+	if err != nil {
+		http.Error(w, "invalid idea id", http.StatusBadRequest)
+		return
+	}
+
+	idea, err := h.store.Ideas().GetByID(ctx, ideaID)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			http.NotFound(w, r)
+			return
+		}
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	// Same cross-Channel rule as HandleIdeaDetail's guard: an Idea that
+	// exists but under a different Channel than the path's {id} 404s
+	// exactly like an unknown Idea -- never 403, never rendered under the
+	// wrong Channel's URL.
+	if idea.ChannelID != channelID {
+		http.NotFound(w, r)
+		return
+	}
+
+	h.renderVerdictDetail(w, r, person, ch, idea)
+}
+
+// resolveSelectedVerdict implements FR7's version-select re-render: raw
+// (the "version" query param) names a store.Verdict.Version number, NOT a
+// verdict id -- so it is only ever looked up inside history, which
+// HandleVerdictDetail's caller already scoped to THIS idea's own
+// store.Verdicts().History(ctx, ideaID) call. That scoping is what makes
+// this structurally safe against NFR4's cross-Idea leak: a version number
+// that happens to identify a real verdict.Version value belonging to a
+// DIFFERENT Idea (e.g. that Idea has 3 versions and this one has 1, so
+// "?version=3" is a legitimate version number system-wide) can never match
+// an entry in THIS idea's own history slice, and therefore falls back to
+// current exactly like a plain out-of-range or non-numeric value -- one
+// fallback branch covers all three of FR7's negative cases. Never returns
+// an error and never renders; it only picks which store.Verdict the
+// caller renders.
+func resolveSelectedVerdict(r *http.Request, history []store.Verdict, current store.Verdict) store.Verdict {
+	raw := r.URL.Query().Get("version")
+	if raw == "" {
+		return current
+	}
+	n, err := strconv.Atoi(raw)
+	if err != nil {
+		return current
+	}
+	for _, v := range history {
+		if v.Version == n {
+			return v
+		}
+	}
+	return current
+}
+
+// renderVerdictDetail assembles and renders the verdict-details page
+// (FR6-FR9) once HandleVerdictDetail's preamble has resolved person, ch,
+// and idea -- mirroring renderIdeaDetail's split from HandleIdeaDetail so
+// a future re-render call site has ONE render path to reuse rather than
+// duplicating it.
+//
+// Loads History + Current, the identical pair of store.VerdictStore calls
+// get_viability_verdict and renderIdeaDetail's own Current call make, so
+// `web` never disagrees with `mcp` on which version is current. Current's
+// pgx.ErrNoRows (FR9) renders an explicit 200 empty state -- never a 404
+// or 500 -- with a link back to the Idea page.
+//
+// When at least one verdict exists, resolveSelectedVerdict resolves FR7's
+// "version" query param against history (falling back to current on
+// anything out-of-range, unparseable, or naming a verdict on a different
+// Idea -- see that func's doc comment for why that fallback is
+// structurally safe). authorNames is resolved across the WHOLE history in
+// one batched call (bounded regardless of version count, NFR
+// Performance) so every version's author is available regardless of which
+// one is selected; citedNotes/retiredNotes are resolved for the SELECTED
+// version ONLY (history passed as nil, current as &selected) -- FR8,
+// reusing citedResearchNotes/retiredCitedResearchNotes exactly as
+// renderIdeaDetail does, never a per-version or per-note query.
+func (h *Handlers) renderVerdictDetail(w http.ResponseWriter, r *http.Request, person *store.Person, ch store.Channel, idea store.Idea) {
+	ctx := r.Context()
+	ideaID := idea.ID
+	title := idea.Title + " verdict history"
+	data := components.LayoutData{Title: title, User: person}
+
+	var current *store.Verdict
+	cv, err := h.store.Verdicts().Current(ctx, ideaID)
+	switch {
+	case err == nil:
+		current = &cv
+	case errors.Is(err, pgx.ErrNoRows):
+		// FR9: zero verdicts is an explicit 200 empty state, never a 404 or
+		// 500.
+		if err := components.Render(w, r, title, VerdictDetail(data, ch, idea, nil, nil, nil, nil, nil, nil)); err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+		}
+		return
+	default:
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	// History is every version (including current) ordered oldest to
+	// newest -- FR7's version-select is populated directly from this
+	// slice.
+	history, err := h.store.Verdicts().History(ctx, ideaID)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	selected := resolveSelectedVerdict(r, history, *current)
+
+	// authorNames covers every version in history (not just selected) in
+	// ONE batched call, so switching the version-select never issues a new
+	// query.
+	authorNames, err := h.verdictAuthorDisplayNames(ctx, history, current)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	// citedNotes/retiredNotes resolve ONLY the selected version's citations
+	// (history passed as nil) -- FR8, one batched call per render
+	// regardless of how many versions this Idea has.
+	citedNotes, err := h.citedResearchNotes(ctx, nil, &selected)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	retiredNotes, err := h.retiredCitedResearchNotes(ctx, nil, &selected)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	if err := components.Render(w, r, title, VerdictDetail(data, ch, idea, history, &selected, current, authorNames, citedNotes, retiredNotes)); err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+	}
 }
 
 // proposeFormWithError returns a copy of form with Error set to msg,

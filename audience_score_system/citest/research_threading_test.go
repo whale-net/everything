@@ -37,6 +37,7 @@ package citest_test
 
 import (
 	"net/url"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -276,13 +277,22 @@ func TestE2E_ResearchThreading(t *testing.T) {
 		assert.Equal(t, "Verdict staleness note A", got.History[0].CitedResearchNotes[0].TextExcerpt, "the history entry must still return A's own text, unchanged")
 		assert.Contains(t, got.History[0].CitedResearchNotes[0].RetiredBy, "supersedes", "the history entry's citation of A must ALSO be marked superseded")
 
-		// Web: the same warning renders on the Idea detail page, for both
-		// the current verdict's citation and the history entry's citation
-		// -- i.e. it must appear (at least) twice.
+		// Web (#2034, FR4/FR8): the Idea page now renders the CURRENT
+		// verdict only, so its citation's staleness warning renders once
+		// there.
 		detailRec := w.get(creatorCookie, "/channels/"+ch.ID.String()+"/research/ideas/"+ideaID)
 		require.Equal(t, 200, detailRec.Code, "body: %s", detailRec.Body.String())
 		detailBody := detailRec.Body.String()
-		assert.GreaterOrEqual(t, strings.Count(detailBody, "Superseded"), 2, "the staleness warning must render once for the current verdict's citation and once for the history entry's")
+		assert.Equal(t, 1, strings.Count(detailBody, "Superseded"), "the current verdict's citation must surface its own staleness warning once on the Idea page")
+
+		// The history entry's OWN citation warning moved to the
+		// verdict-details page (GET .../verdicts) -- FR7's version-select
+		// resolves it via ?version=1, the older (needs-more-research)
+		// version that also cited A.
+		verdictsRec := w.get(creatorCookie, "/channels/"+ch.ID.String()+"/research/ideas/"+ideaID+"/verdicts?version="+strconv.Itoa(v1.Version))
+		require.Equal(t, 200, verdictsRec.Code, "body: %s", verdictsRec.Body.String())
+		verdictsBody := verdictsRec.Body.String()
+		assert.Contains(t, verdictsBody, "Superseded", "the history entry's citation must ALSO surface the staleness warning, on the verdict-details page")
 	})
 
 	// ── 5: FR11 -- relations on ordinary browse, no verdict involved ───────
