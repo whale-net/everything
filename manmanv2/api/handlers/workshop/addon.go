@@ -247,6 +247,51 @@ func (h *WorkshopServiceHandler) FetchAddonMetadata(ctx context.Context, req *pb
 	}, nil
 }
 
+// AddCollectionToLibrary resolves a Steam Workshop collection's current
+// membership and adds every item in it to a library in one action (FR1).
+// Validates the request's game/library/preset references, then delegates
+// resolution, batch-job persistence, and per-item processing -- including
+// partial-failure handling (NFR5) -- to
+// WorkshopManager.AddCollectionToLibrary. This is a one-time snapshot, not
+// a live sync (see collection.go).
+func (h *WorkshopServiceHandler) AddCollectionToLibrary(ctx context.Context, req *pb.AddCollectionToLibraryRequest) (*pb.AddCollectionToLibraryResponse, error) {
+	if req.GameId == 0 {
+		return nil, status.Error(codes.InvalidArgument, "game_id is required")
+	}
+	if req.CollectionInput == "" {
+		return nil, status.Error(codes.InvalidArgument, "collection_input is required")
+	}
+	if req.LibraryId != 0 {
+		if _, err := h.libraryRepo.Get(ctx, req.LibraryId); err != nil {
+			return nil, status.Errorf(codes.NotFound, "library %d not found: %v", req.LibraryId, err)
+		}
+	}
+	if req.PresetId != 0 {
+		if _, err := h.presetRepo.Get(ctx, req.PresetId); err != nil {
+			return nil, status.Errorf(codes.NotFound, "preset %d not found: %v", req.PresetId, err)
+		}
+	}
+
+	job, collectionAddonID, items, err := h.workshopManager.AddCollectionToLibrary(ctx, req.GameId, req.LibraryId, req.CollectionInput, req.PresetId)
+	if err != nil {
+		return nil, status.Errorf(codes.Internal, "failed to add collection to library: %v", err)
+	}
+
+	results := make([]*pb.BatchItemResult, len(items))
+	for i, item := range items {
+		results[i] = batchItemResultToProto(item)
+	}
+
+	return &pb.AddCollectionToLibraryResponse{
+		BatchJobId:        job.BatchJobID,
+		CollectionAddonId: collectionAddonID,
+		TotalItems:        int32(job.TotalItems),
+		SucceededItems:    int32(job.SucceededItems),
+		FailedItems:       int32(job.FailedItems),
+		Results:           results,
+	}, nil
+}
+
 // addonToProto converts a WorkshopAddon model to protobuf.
 // steam_app_id is read from metadata when available (legacy path for single-addon fetches).
 func addonToProto(addon *manman.WorkshopAddon) *pb.WorkshopAddon {

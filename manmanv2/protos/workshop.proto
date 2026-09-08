@@ -57,6 +57,7 @@ service WorkshopService {
 
   // Batch Operations
   rpc BatchCreateAddons(BatchCreateAddonsRequest) returns (BatchCreateAddonsResponse);
+  rpc AddCollectionToLibrary(AddCollectionToLibraryRequest) returns (AddCollectionToLibraryResponse);
 }
 
 // ============================================================================
@@ -551,4 +552,25 @@ message BatchCreateAddonsResponse {
   int32 succeeded_items = 3;
   int32 failed_items = 4;
   repeated BatchItemResult results = 5;
+}
+
+// AddCollectionToLibrary resolves a Steam Workshop collection's current
+// membership and adds every item in it to a library in one action (FR1). This
+// is a one-time snapshot, not a live sync: membership is captured once at
+// call time, and items added to the Steam collection afterwards are, by
+// design, never picked up by this RPC (see collection.go).
+message AddCollectionToLibraryRequest {
+  int64 game_id = 1;
+  int64 library_id = 2;
+  string collection_input = 3;  // raw numeric collection ID or a Workshop collection URL
+  int64 preset_id = 4;
+}
+
+message AddCollectionToLibraryResponse {
+  int64 batch_job_id = 1;
+  int64 collection_addon_id = 2;   // the collection's own addon row
+  int32 total_items = 3;
+  int32 succeeded_items = 4;
+  int32 failed_items = 5;
+  repeated BatchItemResult results = 6;
 }

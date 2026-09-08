@@ -50,6 +50,7 @@ type WorkshopManagerInterface interface {
 	CreateAddon(ctx context.Context, addon *manman.WorkshopAddon) (*manman.WorkshopAddon, error)
 	EnsureLibraryAddonsInstalled(ctx context.Context, sgcID int64) error
 	BatchCreateAddons(ctx context.Context, gameID, libraryID int64, entries string, presetID int64) (*manman.WorkshopBatchJob, []*manman.WorkshopBatchJobItem, error)
+	AddCollectionToLibrary(ctx context.Context, gameID, libraryID int64, collectionInput string, presetID int64) (*manman.WorkshopBatchJob, int64, []*manman.WorkshopBatchJobItem, error)
 }
 
 // WorkshopManager orchestrates workshop addon operations
