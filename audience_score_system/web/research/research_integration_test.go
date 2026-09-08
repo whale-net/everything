@@ -35,9 +35,13 @@
 // forged-POST 403 from a signed-in non-member (History left unchanged)
 // and a signed-out reject, invalid verdict/empty reasoning/cross-Channel
 // Idea rejections, cross-surface agreement between a human-sourced and an
-// agent-sourced version on the same Idea, and the save-verdict form's
-// citation multi-select scoping/hidden idempotency_key rendering; and
-// HandleProposeVideoScript (issue #1915, FR1-FR5/NFR1-NFR3): the FR1
+// agent-sourced version on the same Idea, and the save-verdict panel's
+// note-checkbox citation scoping/hidden idempotency_key rendering (#2035,
+// FR10-FR12: the panel is a collapsible sibling of the note list rather
+// than a standalone multi-select, a cited note id outside this Idea --
+// same-Channel or cross-Channel -- is rejected server-side, and the
+// panel's checked notes/reasoning survive a validation-error re-render);
+// and HandleProposeVideoScript (issue #1915, FR1-FR5/NFR1-NFR3): the FR1
 // render gate (a viable current verdict AND store.CanWrite) both positive
 // and negative, FR2's active-Strategy-only picker (excluding an inactive
 // Strategy and a different Channel's Strategy) and its empty-Channel
@@ -438,12 +442,10 @@ var idempotencyKeyPattern = regexp.MustCompile(`name="idempotency_key" value="([
 
 // citedNoteTextPattern matches ONLY views.templ's citedNoteBody's own text
 // paragraph (`<p class="text-sm">{ excerpt }</p>`) -- distinct from
-// noteBody's plain `<p>{ note.Text }</p>` (no class) and the save-verdict
-// form's citation multi-select `<option>` (which also renders a note's
-// FULL untruncated text as its label) -- so a truncation assertion can
-// scope to exactly the cited-notes-section renders and never be satisfied
-// by the SAME note's full text legitimately appearing elsewhere on the
-// same page.
+// noteBody's plain `<p>{ note.Text }</p>` (no class) -- so a truncation
+// assertion can scope to exactly the cited-notes-section renders and
+// never be satisfied by the SAME note's full text legitimately appearing
+// elsewhere on the same page (the research-note list).
 var citedNoteTextPattern = regexp.MustCompile(`<p class="text-sm">([^<]*)</p>`)
 
 // citedNoteExcerpts extracts every citedNoteBody text excerpt rendered
@@ -1116,8 +1118,8 @@ func TestHandleIdeaDetail_CurrentVerdictCitedNotes_TextSourceURLAndBadge(t *test
 
 	// Since #2034 (FR4) this page renders the current verdict ONLY, but
 	// each note's FULL text also legitimately appears earlier on the page
-	// (the plain research-note list, and the save-verdict form's citation
-	// multi-select) -- neither of which carries a Cited/Uncited badge.
+	// (the plain research-note list) -- which carries no Cited/Uncited
+	// badge of its own.
 	// Scope past the "Current" heading (which starts the verdict section,
 	// after both of those) so the FIRST occurrence found here is the
 	// verdict's own citedNoteBody entry, not an earlier one.
@@ -1183,10 +1185,9 @@ func TestHandleIdeaDetail_HistoryVerdictCitedNotes_NeverRenderOnIdeaPage(t *test
 
 	// Both notes legitimately still render elsewhere on the page (the
 	// plain research-note list lists every note on this Idea regardless
-	// of citation, and the save-verdict form's citation multi-select
-	// lists every note as an <option>) -- scope specifically to the
-	// verdict's OWN citedNoteBody entries (citedNoteExcerpts) so this
-	// can't be vacuously satisfied by either of those.
+	// of citation) -- scope specifically to the verdict's OWN
+	// citedNoteBody entries (citedNoteExcerpts) so this can't be
+	// vacuously satisfied by that.
 	excerpts := citedNoteExcerpts(body)
 	assert.Contains(t, excerpts, currentNote.Text, "current (v2) must render its own cited note in its Cited notes section")
 	assert.NotContains(t, excerpts, historyOnlyNote.Text, "FR4: v1's cited note, which current (v2) doesn't cite, must never render in a Cited notes section on the Idea page")
@@ -1224,7 +1225,7 @@ func TestHandleIdeaDetail_CitedNoteTextExceeding200Runes_TruncatedAtSharedBound(
 	excerpts := citedNoteExcerpts(body)
 	require.NotEmpty(t, excerpts, "the cited-notes section must render at least one citedNoteBody entry")
 	assert.Contains(t, excerpts, wantExcerpt, "the cited-notes section must render EXACTLY mcptools.Excerpt's output")
-	assert.NotContains(t, excerpts, longText, "the FULL untruncated note text must never appear as a citedNoteBody excerpt (it legitimately still appears elsewhere on the page: the research-note list and the save-verdict form's citation multi-select, neither of which this task truncates)")
+	assert.NotContains(t, excerpts, longText, "the FULL untruncated note text must never appear as a citedNoteBody excerpt (it legitimately still appears elsewhere on the page: the research-note list itself, which this task does not truncate)")
 }
 
 // TestHandleIdeaDetail_VerdictWithNoCitations_RendersNoCitedNotesSection
@@ -1378,7 +1379,7 @@ func TestHandleIdeaDetail_CitedNoteExcerpt_MatchesGetViabilityVerdictMCP(t *test
 	// (this fixture's note text is well over the bound), so this assertion
 	// couldn't be satisfied by accident via the untruncated full text.
 	assert.True(t, strings.HasSuffix(mcpExcerpt, "..."), "the fixture's note text exceeds the truncation bound, so the shared excerpt must be truncated")
-	assert.NotContains(t, excerpts, longText, "the FULL untruncated note text must never appear as a citedNoteBody excerpt (it legitimately still appears elsewhere on the page: the research-note list and the save-verdict form's citation multi-select)")
+	assert.NotContains(t, excerpts, longText, "the FULL untruncated note text must never appear as a citedNoteBody excerpt (it legitimately still appears elsewhere on the page: the research-note list itself)")
 }
 
 // ── FR10/FR16/NFR2 (#1944): superseded/excluded staleness warning on cited notes ──
@@ -1678,13 +1679,14 @@ func TestHandleIdeaDetail_FiftyOneNotes_TruncatedNoPagingControl(t *testing.T) {
 	require.Equal(t, http.StatusOK, w.Code, "body: %s", w.Body.String())
 	body := w.Body.String()
 
-	// Each of the 50 rendered notes appears THREE times: once in the note
-	// list itself, once as an <option> in the save-verdict form's citation
-	// multi-select (#1901, FR4), and once as a relation-picker candidate in
-	// the save-note form's thread group (#1945, FR15) -- all three
+	// Each of the 50 rendered notes appears TWICE: once in the note list
+	// itself (whose checkbox, #2035/FR11, carries the note's id as a
+	// value= attribute, never its text) and once as a relation-picker
+	// candidate in the save-note form's thread group (#1945, FR15) -- both
 	// populated from the SAME notes slice, no extra store call and no
-	// paging of its own.
-	assert.Equal(t, 150, strings.Count(body, "idea note "), "exactly 50 notes must render, each once in the list, once in the citation multi-select, and once in the relation picker")
+	// paging of its own. The standalone citation multi-select that used to
+	// contribute a third occurrence was removed by #2035/FR11.
+	assert.Equal(t, 100, strings.Count(body, "idea note "), "exactly 50 notes must render, each once in the list and once in the relation picker")
 	assert.Contains(t, body, "most recent", "a truncation note must appear")
 	// The Founder's save-note form (FR3, issue #1900) and save-verdict form
 	// (FR4, issue #1901) legitimately render two <form>s on this page now;
@@ -2652,6 +2654,35 @@ func TestHandleSaveVerdict_CitedNoteIDs_PopulatesExactlyThose(t *testing.T) {
 	assert.ElementsMatch(t, []uuid.UUID{note1.ID, note2.ID}, current.CitedResearchNoteIDs, "exactly the two submitted notes must be cited")
 }
 
+// TestHandleSaveVerdict_NoNotesChecked_RecordsNoCitations_NoError is
+// FR11's load-bearing "none checked" half of TestHandleSaveVerdict_
+// CitedNoteIDs_PopulatesExactlyThose above: submitting the panel with NO
+// citation checkboxes checked (cited_note_ids entirely absent from the
+// posted form, exactly like a browser that submits no unchecked
+// checkboxes at all) must still succeed and record a verdict with zero
+// citations -- never a 400, and never CitedResearchNoteIDs treated as
+// "unset"/nil in some way that would error downstream.
+func TestHandleSaveVerdict_NoNotesChecked_RecordsNoCitations_NoError(t *testing.T) {
+	ctx := context.Background()
+	s := newResearchTestStack(t)
+	ch, creator := s.setupChannel(t, ctx)
+	idea, err := s.store.Ideas().Create(ctx, ch.ID, "Idea One", creator.ID)
+	require.NoError(t, err)
+	_, err = s.store.Research().SaveNote(ctx, store.SaveNoteInput{ThreadTitle: "Research", ChannelID: ch.ID, IdeaID: &idea.ID, Text: "an available but unchecked note", AuthorPersonID: creator.ID})
+	require.NoError(t, err)
+
+	w := s.doVerdictForm(t, ch.ID, idea.ID, s.sessionCookie(t, ctx, creator.ID), url.Values{
+		"idempotency_key": {uuid.NewString()},
+		"verdict":         {string(store.VerdictViable)},
+		"reasoning":       {"no notes checked"},
+	})
+	require.Equal(t, http.StatusSeeOther, w.Code, "submitting with no cited_note_ids must not error, body: %s", w.Body.String())
+
+	current, err := s.store.Verdicts().Current(ctx, idea.ID)
+	require.NoError(t, err)
+	assert.Empty(t, current.CitedResearchNoteIDs, "no checkboxes checked must record zero citations")
+}
+
 // TestHandleSaveVerdict_CitedNoteFromDifferentIdea_BadRequest_NoRow is
 // FR4's load-bearing citation-ownership guard: a forged note ID belonging
 // to a DIFFERENT Idea must never end up in verdict_citation -- the whole
@@ -2676,6 +2707,41 @@ func TestHandleSaveVerdict_CitedNoteFromDifferentIdea_BadRequest_NoRow(t *testin
 	assert.Equal(t, http.StatusBadRequest, w.Code, "body: %s", w.Body.String())
 	assert.Contains(t, w.Body.String(), "invalid cited note selection")
 	assert.Empty(t, s.allVerdictHistory(t, ctx, ideaA.ID), "no verdict row may be written")
+}
+
+// TestHandleSaveVerdict_CitedNoteFromDifferentChannel_BadRequest_NoRow is
+// FR11's second load-bearing negative case (#2035): a forged note ID
+// belonging to an Idea on a COMPLETELY DIFFERENT Channel -- not just a
+// different Idea on the same Channel -- must be rejected the same way:
+// 400, nothing written, and no cross-Channel data (the note's own text)
+// leaked into the response. The checkbox-scoping presentation change
+// (#2035/FR11) never becomes the only enforcement -- HandleSaveVerdict's
+// GetByID + IdeaID comparison (research.go) is what actually rejects
+// this, identically regardless of whether the forged id names a note on
+// this Channel or another one entirely.
+func TestHandleSaveVerdict_CitedNoteFromDifferentChannel_BadRequest_NoRow(t *testing.T) {
+	ctx := context.Background()
+	s := newResearchTestStack(t)
+	chA, creatorA := s.setupChannel(t, ctx)
+	chB, creatorB := s.setupChannel(t, ctx)
+	ideaA, err := s.store.Ideas().Create(ctx, chA.ID, "Idea A", creatorA.ID)
+	require.NoError(t, err)
+	ideaB, err := s.store.Ideas().Create(ctx, chB.ID, "Idea B", creatorB.ID)
+	require.NoError(t, err)
+	noteOnB, err := s.store.Research().SaveNote(ctx, store.SaveNoteInput{ThreadTitle: "Research", ChannelID: chB.ID, IdeaID: &ideaB.ID, Text: "note on a different Channel entirely", AuthorPersonID: creatorB.ID})
+	require.NoError(t, err)
+
+	w := s.doVerdictForm(t, chA.ID, ideaA.ID, s.sessionCookie(t, ctx, creatorA.ID), url.Values{
+		"idempotency_key": {uuid.NewString()},
+		"verdict":         {string(store.VerdictViable)},
+		"reasoning":       {"cross-channel forged citation"},
+		"cited_note_ids":  {noteOnB.ID.String()},
+	})
+	assert.Equal(t, http.StatusBadRequest, w.Code, "body: %s", w.Body.String())
+	assert.Contains(t, w.Body.String(), "invalid cited note selection")
+	assert.NotContains(t, w.Body.String(), "note on a different Channel entirely", "no cross-Channel note data may leak into the response")
+	assert.Empty(t, s.allVerdictHistory(t, ctx, ideaA.ID), "no verdict row may be written")
+	assert.Empty(t, s.allVerdictHistory(t, ctx, ideaB.ID), "the other Channel's Idea must also be untouched")
 }
 
 // TestHandleSaveVerdict_SameIdempotencyKey_Twice_CreatesOneVersion is
@@ -2870,6 +2936,42 @@ func TestHandleSaveVerdict_CrossChannelIdea_NotFound_NoRow(t *testing.T) {
 	assert.Empty(t, s.allVerdictHistory(t, ctx, ideaOnB.ID))
 }
 
+// TestHandleSaveVerdict_MalformedChannelUUID_BadRequest and
+// TestHandleSaveVerdict_MalformedIdeaUUID_BadRequest are FR12/NFR1's
+// remaining authz-ordering cases (#2035): a malformed {id}/{ideaID} path
+// segment 400s from authorizeWrite's/HandleSaveVerdict's own uuid.Parse
+// calls, in the SAME order HandleIdeaDetail's GET already enforces
+// (TestHandleIdeaDetail_MalformedChannelUUID_BadRequest/
+// MalformedIdeaUUID_BadRequest) -- the panel re-layout changes nothing
+// about this ordering.
+func TestHandleSaveVerdict_MalformedChannelUUID_BadRequest(t *testing.T) {
+	ctx := context.Background()
+	s := newResearchTestStack(t)
+	ch, creator := s.setupChannel(t, ctx)
+	idea, err := s.store.Ideas().Create(ctx, ch.ID, "Idea One", creator.ID)
+	require.NoError(t, err)
+
+	w := s.doForm(t, "/channels/not-a-uuid/research/ideas/"+idea.ID.String()+"/verdicts", s.sessionCookie(t, ctx, creator.ID), url.Values{
+		"idempotency_key": {uuid.NewString()},
+		"verdict":         {string(store.VerdictViable)},
+		"reasoning":       {"malformed channel id"},
+	})
+	assert.Equal(t, http.StatusBadRequest, w.Code, "body: %s", w.Body.String())
+}
+
+func TestHandleSaveVerdict_MalformedIdeaUUID_BadRequest(t *testing.T) {
+	ctx := context.Background()
+	s := newResearchTestStack(t)
+	ch, creator := s.setupChannel(t, ctx)
+
+	w := s.doForm(t, "/channels/"+ch.ID.String()+"/research/ideas/not-a-uuid/verdicts", s.sessionCookie(t, ctx, creator.ID), url.Values{
+		"idempotency_key": {uuid.NewString()},
+		"verdict":         {string(store.VerdictViable)},
+		"reasoning":       {"malformed idea id"},
+	})
+	assert.Equal(t, http.StatusBadRequest, w.Code, "body: %s", w.Body.String())
+}
+
 // TestHandleSaveVerdict_CrossSurfaceAgreement_HumanVsAgentSource proves
 // FR5: a verdict written here (source = human) and an agent-sourced
 // version already on the same Idea (standing in for an MCP-authored
@@ -2930,13 +3032,50 @@ func TestHandleSaveVerdict_CrossSurfaceAgreement_HumanVsAgentSource(t *testing.T
 	assert.Contains(t, v1W.Body.String(), "Agent")
 }
 
+// TestHandleSaveVerdict_PanelSubmission_BumpsVersion_IdeaPageReflectsNewVerdict
+// is #2035's regression case: the re-layout (form -> collapsible panel,
+// multi-select -> note-list checkboxes) must not change what a successful
+// submission actually does -- it still appends a NEW version (never edits
+// v1 in place) and the redirect target's re-render (the Idea page) still
+// reflects the new current verdict's value and bumped version number.
+func TestHandleSaveVerdict_PanelSubmission_BumpsVersion_IdeaPageReflectsNewVerdict(t *testing.T) {
+	ctx := context.Background()
+	s := newResearchTestStack(t)
+	ch, creator := s.setupChannel(t, ctx)
+	idea, err := s.store.Ideas().Create(ctx, ch.ID, "Idea One", creator.ID)
+	require.NoError(t, err)
+	_, err = s.store.Verdicts().Append(ctx, store.AppendVerdictInput{
+		IdeaID: idea.ID, Verdict: store.VerdictNeedsMoreResearch, Reasoning: "v1 reasoning", AuthorPersonID: creator.ID, Source: store.VerdictSourceHuman,
+	})
+	require.NoError(t, err)
+	cookie := s.sessionCookie(t, ctx, creator.ID)
+
+	w := s.doVerdictForm(t, ch.ID, idea.ID, cookie, url.Values{
+		"idempotency_key": {uuid.NewString()},
+		"verdict":         {string(store.VerdictViable)},
+		"reasoning":       {"panel-submitted verdict"},
+	})
+	require.Equal(t, http.StatusSeeOther, w.Code, "body: %s", w.Body.String())
+
+	current, err := s.store.Verdicts().Current(ctx, idea.ID)
+	require.NoError(t, err)
+	assert.Equal(t, 2, current.Version, "the panel's POST must bump the version, never edit v1 in place")
+
+	follow := s.do(t, http.MethodGet, w.Header().Get("Location"), cookie)
+	require.Equal(t, http.StatusOK, follow.Code, "body: %s", follow.Body.String())
+	followBody := follow.Body.String()
+	assert.Contains(t, followBody, "panel-submitted verdict", "the Idea page's current-verdict section must reflect the new value")
+	assert.Contains(t, followBody, "Version 2", "the Idea page must show the bumped version number")
+}
+
 // ── Save-verdict form rendering (FR4, FR6, FR7) ─────────────────────────
 
-// TestSaveVerdictForm_MultiSelect_ListsExactlyThisIdeaNotes proves the
-// citation multi-select is populated ONLY from this page's own Idea's
-// notes -- a note belonging to a different Idea on the same Channel must
-// never appear as an option (or anywhere else on the page).
-func TestSaveVerdictForm_MultiSelect_ListsExactlyThisIdeaNotes(t *testing.T) {
+// TestIdeaDetail_CitationCheckboxes_ListExactlyThisIdeaNotes proves the
+// note list's citation checkboxes (#2035, FR11) are populated ONLY from
+// this page's own Idea's notes -- a note belonging to a different Idea on
+// the same Channel must never appear as a checkbox option (or anywhere
+// else on the page).
+func TestIdeaDetail_CitationCheckboxes_ListExactlyThisIdeaNotes(t *testing.T) {
 	ctx := context.Background()
 	s := newResearchTestStack(t)
 	ch, creator := s.setupChannel(t, ctx)
@@ -2957,6 +3096,82 @@ func TestSaveVerdictForm_MultiSelect_ListsExactlyThisIdeaNotes(t *testing.T) {
 	assert.Contains(t, body, `value="`+noteOnA.ID.String()+`"`, "idea A's own note must appear as a citation option")
 	assert.NotContains(t, body, `value="`+noteOnB.ID.String()+`"`, "idea B's note must never appear as a citation option on idea A's page")
 	assert.NotContains(t, body, "note on idea B", "idea B's note text must never render on idea A's page at all")
+}
+
+// TestSaveVerdictPanel_SiblingOfNoteList_CollapsedByDefault_SameRoute
+// proves FR10 (#2035): the save-verdict panel renders as a no-JS
+// <details>/<summary> disclosure, COLLAPSED by default on a plain GET (no
+// `open` attribute), as a SIBLING of the research-note list inside the
+// "Research notes" section -- never below the separate "Viability
+// verdict" section further down the page -- and it never introduces a
+// second/new route: exactly one <form> targets the existing POST
+// .../verdicts action.
+func TestSaveVerdictPanel_SiblingOfNoteList_CollapsedByDefault_SameRoute(t *testing.T) {
+	ctx := context.Background()
+	s := newResearchTestStack(t)
+	ch, creator := s.setupChannel(t, ctx)
+	idea, err := s.store.Ideas().Create(ctx, ch.ID, "Idea One", creator.ID)
+	require.NoError(t, err)
+	_, err = s.store.Research().SaveNote(ctx, store.SaveNoteInput{ThreadTitle: "Research", ChannelID: ch.ID, IdeaID: &idea.ID, Text: "a note in the list", AuthorPersonID: creator.ID})
+	require.NoError(t, err)
+
+	w := s.do(t, http.MethodGet, "/channels/"+ch.ID.String()+"/research/ideas/"+idea.ID.String(), s.sessionCookie(t, ctx, creator.ID))
+	require.Equal(t, http.StatusOK, w.Code, "body: %s", w.Body.String())
+	body := w.Body.String()
+
+	verdictAction := `action="/channels/` + ch.ID.String() + `/research/ideas/` + idea.ID.String() + `/verdicts"`
+	assert.Equal(t, 1, strings.Count(body, verdictAction), "exactly one form may target the verdicts route -- no new/second route")
+
+	// Collapsed by default: no `open` attribute on the panel's <details>.
+	assert.NotContains(t, body, `<details class="collapse collapse-arrow border border-base-300 bg-base-100" open`, "the save-verdict panel must render collapsed by default (FR10)")
+	assert.Contains(t, body, `<details class="collapse collapse-arrow border border-base-300 bg-base-100">`, "the save-verdict panel's collapsed <details> tag must render")
+
+	// Siblings inside the SAME "Research notes" section -- both the note
+	// list's own text and the panel's heading must fall between "Research
+	// notes" and the NEXT section ("Research threads"), proving the panel
+	// sits alongside the note list rather than below "Viability verdict"
+	// further down the page.
+	notesIdx := strings.Index(body, "Research notes")
+	threadsIdx := strings.Index(body, "Research threads")
+	require.Greater(t, notesIdx, 0)
+	require.Greater(t, threadsIdx, notesIdx)
+	notesSection := body[notesIdx:threadsIdx]
+	assert.Contains(t, notesSection, "a note in the list", "the note list must render inside the Research notes section")
+	assert.Contains(t, notesSection, "Save a viability verdict", "the save-verdict panel must render as a sibling inside the SAME Research notes section, not below Viability verdict")
+}
+
+// TestSaveVerdictPanel_ValidationFailure_PreservesCheckedNotesAndReasoning
+// proves FR11's load-bearing re-render contract (#2035): after a rejected
+// submission (missing verdict value), the panel re-renders EXPANDED
+// (form.Open, so the error is actually visible rather than collapsed
+// away) with the entered reasoning intact and EVERY previously-checked
+// note's checkbox re-checked -- exactly like the current form's other
+// field values already survive a validation-error re-render.
+func TestSaveVerdictPanel_ValidationFailure_PreservesCheckedNotesAndReasoning(t *testing.T) {
+	ctx := context.Background()
+	s := newResearchTestStack(t)
+	ch, creator := s.setupChannel(t, ctx)
+	idea, err := s.store.Ideas().Create(ctx, ch.ID, "Idea One", creator.ID)
+	require.NoError(t, err)
+	note1, err := s.store.Research().SaveNote(ctx, store.SaveNoteInput{ThreadTitle: "Research", ChannelID: ch.ID, IdeaID: &idea.ID, Text: "note one", AuthorPersonID: creator.ID})
+	require.NoError(t, err)
+	note2, err := s.store.Research().SaveNote(ctx, store.SaveNoteInput{ThreadTitle: "Research", ChannelID: ch.ID, IdeaID: &idea.ID, Text: "note two", AuthorPersonID: creator.ID})
+	require.NoError(t, err)
+
+	// verdict deliberately omitted -> "invalid verdict selection", 400.
+	w := s.doVerdictForm(t, ch.ID, idea.ID, s.sessionCookie(t, ctx, creator.ID), url.Values{
+		"idempotency_key": {uuid.NewString()},
+		"reasoning":       {"reasoning that must survive the re-render"},
+		"cited_note_ids":  {note1.ID.String(), note2.ID.String()},
+	})
+	require.Equal(t, http.StatusBadRequest, w.Code, "body: %s", w.Body.String())
+	body := w.Body.String()
+	assert.Contains(t, body, "invalid verdict selection")
+
+	assert.Contains(t, body, `<details class="collapse collapse-arrow border border-base-300 bg-base-100" open`, "the panel must re-render EXPANDED after a validation error, not collapsed with the error hidden inside")
+	assert.Contains(t, body, "reasoning that must survive the re-render", "the entered reasoning must survive the re-render")
+	assert.Contains(t, body, `value="`+note1.ID.String()+`" checked`, "note one's checkbox must be re-checked on the validation-error re-render")
+	assert.Contains(t, body, `value="`+note2.ID.String()+`" checked`, "note two's checkbox must be re-checked on the validation-error re-render")
 }
 
 // TestSaveVerdictForm_AbsentWithoutCanWrite documents the same reality
