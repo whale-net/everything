@@ -282,6 +282,31 @@ type AddonPathPresetRepository interface {
 	Delete(ctx context.Context, presetID int64) error
 }
 
+// WorkshopCacheRepository defines operations for the content-addressed
+// Workshop cache's identity and metadata (#2181, plan #2175, FR5/FR9).
+// GetCacheEntryByKey/UpsertCacheEntry key exclusively on cache_key (which
+// itself derives from workshop_id + content_version only, NFR1); no method
+// here accepts or filters by sgc_id, server_id, deployment_id, or
+// library_id (NFR2). Entries are append-only (FR9, not SCD2 -- see
+// AGENTS.md § SCD2): DeleteCacheEntry exists only for explicit Admin
+// eviction (FR12), never for the refresh/upsert path.
+type WorkshopCacheRepository interface {
+	GetCacheEntryByKey(ctx context.Context, cacheKey string) (*manman.WorkshopCacheEntry, error)
+	// UpsertCacheEntry is an idempotent insert-or-return-existing on
+	// cache_key: concurrent callers racing to cache the same
+	// (workshop_id, content_version) converge on one row instead of
+	// erroring (NFR4 foundation).
+	UpsertCacheEntry(ctx context.Context, entry *manman.WorkshopCacheEntry) (*manman.WorkshopCacheEntry, error)
+	ListCacheEntriesForWorkshopID(ctx context.Context, workshopID string) ([]*manman.WorkshopCacheEntry, error)
+	GetCacheEntry(ctx context.Context, cacheEntryID int64) (*manman.WorkshopCacheEntry, error)
+	TouchCacheEntryVerified(ctx context.Context, cacheEntryID int64, verifiedAt time.Time) error
+	// DeleteCacheEntry is the explicit Admin eviction path (FR12) -- there is
+	// no automatic garbage collection of superseded entries in this layer.
+	DeleteCacheEntry(ctx context.Context, cacheEntryID int64) error
+	UpsertHostPresence(ctx context.Context, cacheEntryID, serverID int64) error
+	ListHostPresence(ctx context.Context, cacheEntryID int64) ([]*manman.WorkshopCacheHostPresence, error)
+}
+
 // Repository aggregates all repository interfaces
 type Repository struct {
 	Servers                 ServerRepository
@@ -304,5 +329,6 @@ type Repository struct {
 	WorkshopBatchJobs       WorkshopBatchJobRepository
 	AddonPathPresets        AddonPathPresetRepository
 	PendingRestarts         PendingRestartRepository
+	WorkshopCache           WorkshopCacheRepository
 	Actions                 interface{} // ActionRepository from postgres package
 }
