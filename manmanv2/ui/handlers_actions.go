@@ -15,44 +15,14 @@ import (
 	manmanpb "github.com/whale-net/everything/manmanv2/protos"
 )
 
-// ActionsPageData holds data for the actions management page
-type ActionsPageData struct {
-	Title            string
-	Active           string
-	User             *htmxauth.UserInfo
-	DefinitionLevel  string // "game", "game_config", or "server_game_config"
-	EntityID         int64
-	EntityName       string // Name of the game/config/sgc for display
-	CurrentPath      string // Current URL path for building edit links
-	LocalActions     []*ActionWithFields
-	InheritedActions []*ActionWithFields
-	FieldTypes       []string
-	ButtonStyles     []string
-	IconOptions      []IconOption
-}
-
-// ActionWithFields combines action with its input fields
-type ActionWithFields struct {
-	Action  *manmanpb.ActionDefinition
-	Fields  []*FieldWithOptions
-	EditURL string // URL to edit this action at its definition level
-}
-
-// FieldWithOptions combines input field with its options
-type FieldWithOptions struct {
-	Field   *manmanpb.ActionInputField
-	Options []*manmanpb.ActionInputOption
-}
-
-// IconOption represents a Font Awesome icon choice
-type IconOption struct {
-	Class string
-	Label string
-}
+// ActionsPageData and the legacy HTML-fragment render path were removed:
+// the actions manage page is now rendered natively by pages.ActionsManage
+// from structured data (pages.ActionsManageData) -- see #2080 task #2091.
+// IconOption -> pages.ActionIconOption; ActionWithFields -> pages.ActionManageRow.
 
 // getIconOptions returns common Font Awesome icons for action buttons
-func getIconOptions() []IconOption {
-	return []IconOption{
+func getIconOptions() []pages.ActionIconOption {
+	return []pages.ActionIconOption{
 		{Class: "", Label: "None"},
 		{Class: "fa-play", Label: "Play"},
 		{Class: "fa-stop", Label: "Stop"},
@@ -134,10 +104,7 @@ func (app *App) handleGameActions(w http.ResponseWriter, r *http.Request) {
 
 	localActions, inheritedActions := app.categorizeActions(ctx, actions, "game", gameID, gameID, 0)
 
-	data := ActionsPageData{
-		Title:            "Manage Actions - " + game.Name,
-		Active:           "games",
-		User:             user,
+	manageData := pages.ActionsManageData{
 		DefinitionLevel:  "game",
 		EntityID:         gameID,
 		EntityName:       game.Name,
@@ -147,14 +114,6 @@ func (app *App) handleGameActions(w http.ResponseWriter, r *http.Request) {
 		FieldTypes:       []string{"text", "number", "select", "textarea", "checkbox", "radio", "email", "url"},
 		ButtonStyles:     []string{"primary", "secondary", "success", "danger", "warning", "info", "light", "dark"},
 		IconOptions:      getIconOptions(),
-	}
-
-	// Render the old template to HTML
-	var htmlBuf strings.Builder
-	if err := templates.ExecuteTemplate(&htmlBuf, "actions_manage_content", data); err != nil {
-		log.Printf("Error rendering actions template: %v", err)
-		http.Error(w, "Internal server error", http.StatusInternalServerError)
-		return
 	}
 
 	breadcrumbs := []components.Breadcrumb{
@@ -170,12 +129,7 @@ func (app *App) handleGameActions(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	pageData := pages.ActionsManagePageData{
-		Layout:      layoutData,
-		HTMLContent: htmlBuf.String(),
-	}
-
-	RenderTempl(w, r, "Manage Actions", pages.ActionsManage(pageData))
+	RenderTempl(w, r, "Manage Actions", pages.ActionsManage(layoutData, manageData))
 }
 
 // handleConfigActions displays the actions management page for a config
@@ -241,10 +195,7 @@ func (app *App) handleConfigActions(w http.ResponseWriter, r *http.Request) {
 	allActions := append(gameActions, configActions...)
 	localActions, inheritedActions := app.categorizeActions(ctx, allActions, "game_config", configID, config.GameId, configID)
 
-	data := ActionsPageData{
-		Title:            "Manage Actions - " + config.Name,
-		Active:           "games",
-		User:             user,
+	manageData := pages.ActionsManageData{
 		DefinitionLevel:  "game_config",
 		EntityID:         configID,
 		EntityName:       fmt.Sprintf("%s / %s", game.Name, config.Name),
@@ -254,14 +205,6 @@ func (app *App) handleConfigActions(w http.ResponseWriter, r *http.Request) {
 		FieldTypes:       []string{"text", "number", "select", "textarea", "checkbox", "radio", "email", "url"},
 		ButtonStyles:     []string{"primary", "secondary", "success", "danger", "warning", "info", "light", "dark"},
 		IconOptions:      getIconOptions(),
-	}
-
-	// Render the old template to HTML
-	var htmlBuf strings.Builder
-	if err := templates.ExecuteTemplate(&htmlBuf, "actions_manage_content", data); err != nil {
-		log.Printf("Error rendering actions template: %v", err)
-		http.Error(w, "Internal server error", http.StatusInternalServerError)
-		return
 	}
 
 	breadcrumbs := []components.Breadcrumb{
@@ -279,46 +222,27 @@ func (app *App) handleConfigActions(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	pageData := pages.ActionsManagePageData{
-		Layout:      layoutData,
-		HTMLContent: htmlBuf.String(),
-	}
-
-	RenderTempl(w, r, "Manage Actions", pages.ActionsManage(pageData))
+	RenderTempl(w, r, "Manage Actions", pages.ActionsManage(layoutData, manageData))
 }
 
 // handleSGCActions (SGC-level actions management, dispatched on a
 // "/sgcs/{id}/actions" URL prefix) was deleted in #1007: main.go's route
 // table only ever registers "/sgc/" (singular — see handleSGCRoutes),
-// never "/sgcs/", so this handler — and its only caller of the also-now-
-// deleted renderPage full-page legacy render path (templates.go) — was
-// unreachable dead code. See templates.go's package doc comment for the
-// full removal rationale.
+// never "/sgcs/", so this handler — and its only caller of the then-full-page
+// legacy render path (renderPage, formerly in templates.go, itself removed
+// alongside the last legacy template in #2080 task #2091) — was unreachable
+// dead code.
 
 // categorizeActions separates actions into local (defined at this level) and inherited (from parent levels)
-func (app *App) categorizeActions(ctx context.Context, actions []*manmanpb.ActionDefinition, currentLevel string, currentEntityID int64, gameID int64, configID int64) ([]*ActionWithFields, []*ActionWithFields) {
-	var local, inherited []*ActionWithFields
+func (app *App) categorizeActions(ctx context.Context, actions []*manmanpb.ActionDefinition, currentLevel string, currentEntityID int64, gameID int64, configID int64) ([]*pages.ActionManageRow, []*pages.ActionManageRow) {
+	var local, inherited []*pages.ActionManageRow
 
 	for _, action := range actions {
-		// Fetch fields for this action
-		actionDetail, fields, err := app.grpc.GetActionDefinition(ctx, action.ActionId)
+		// Fetch action details (also validates the action is still present)
+		actionDetail, _, err := app.grpc.GetActionDefinition(ctx, action.ActionId)
 		if err != nil {
 			log.Printf("Error fetching action details: %v", err)
 			continue
-		}
-
-		// Group fields with their options
-		fieldsWithOptions := make([]*FieldWithOptions, 0)
-		for _, field := range fields {
-			// Collect options for this field (filter from action detail if available)
-			options := make([]*manmanpb.ActionInputOption, 0)
-			// Note: GetActionDefinition doesn't return options, so we'll fetch them separately if needed
-			// For now, we'll work with what we have
-
-			fieldsWithOptions = append(fieldsWithOptions, &FieldWithOptions{
-				Field:   field,
-				Options: options,
-			})
 		}
 
 		// Build edit URL based on the action's definition level
@@ -332,17 +256,16 @@ func (app *App) categorizeActions(ctx context.Context, actions []*manmanpb.Actio
 			editURL = fmt.Sprintf("/games/%d/configs/%d/sgcs/%d/actions", gameID, configID, action.EntityId)
 		}
 
-		actionWithFields := &ActionWithFields{
+		actionRow := &pages.ActionManageRow{
 			Action:  actionDetail,
-			Fields:  fieldsWithOptions,
 			EditURL: editURL,
 		}
 
 		// Check if this action is defined at the current level
 		if action.DefinitionLevel == currentLevel && action.EntityId == currentEntityID {
-			local = append(local, actionWithFields)
+			local = append(local, actionRow)
 		} else {
-			inherited = append(inherited, actionWithFields)
+			inherited = append(inherited, actionRow)
 		}
 	}
 

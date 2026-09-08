@@ -89,6 +89,35 @@ go_test(
     deps = ["//manmanv2/models:models"],
 )
 
+# Real-Postgres coverage for the FR6 action edit round-trip (task #2091,
+# plan #2080): ActionRepository.Update must not wipe select/radio option
+# lists on rename-only edits and must apply deliberate option edits exactly.
+# Same build-tag/target conventions as pending_restart_integration_test.
+# Run explicitly (requires a working Docker daemon):
+#   bazel test //manmanv2/api/repository/postgres:action_integration_test --test_output=all
+go_test(
+    # keep
+    name = "action_integration_test",
+    size = "large",
+    timeout = "long",
+    srcs = ["action_integration_test.go"],
+    embed = [":postgres"],
+    gotags = ["integration"],
+    tags = [
+        "external",
+        "integration",
+        "manual",
+        "no-cache",
+        "no-sandbox",
+        "requires-network",
+    ],
+    deps = [
+        "//libs/go/dbtest",
+        "//manmanv2/models",
+        "@com_github_jackc_pgx_v5//pgxpool",
+    ],
+)
+
 # Real-Postgres coverage for PendingRestartRepository (#1729): the unique
 # partial index (pending_restarts_one_pending_per_sgc), the single
 # UPDATE...RETURNING atomicity of ClaimForSession/ExpireStalled, and the

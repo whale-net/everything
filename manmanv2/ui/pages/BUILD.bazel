@@ -29,6 +29,7 @@ go_test(
     size = "small",
     srcs = [
         "daisyui_migration_test.go",
+        "actions_manage_test.go",
         "server_detail_public_address_test.go",
         "sessions_deployment_row_test.go",
         "sessions_live_test.go",
