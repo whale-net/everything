@@ -69,6 +69,7 @@ go_test(
         "handlers_servers_update_address_test.go",
         "handlers_sessions_deployment_row_test.go",
         "handlers_sessions_live_test.go",
+        "handlers_sgc_env_pending_test.go",
         "handlers_sgc_env_test.go",
         "handlers_sgc_test.go",
         "handlers_sgc_update_ports_test.go",

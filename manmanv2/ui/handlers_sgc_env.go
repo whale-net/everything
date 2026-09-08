@@ -126,6 +126,48 @@ func (app *App) buildSGCEnvOverridesData(ctx context.Context, sgc *manmanpb.Serv
 	return data, envPatch, nil
 }
 
+// pendingEnvOverrideHint implements FR3's exact clearing rule (task
+// #2096): the pending hint is visible only while the deployment has an
+// active session AND the latest saved deployment-level env override edit
+// (patch updated_at) is newer than that session's start -- i.e. the
+// session's start command was built before the edit was saved, so it ran
+// values predating the edit. A start whose command build happened after
+// the save ran the newly saved values and clears the hint (session start
+// time is set when the start command is built, before the rendered env is
+// published). A start that began before the save -- however long it
+// keeps running -- therefore leaves the hint visible, and no active
+// session or no patch means there is nothing pending.
+// UI state only: derived entirely from existing patch timestamps +
+// session start times; no new write path (NFR3).
+func pendingEnvOverrideHint(patch *manmanpb.ConfigurationPatch, sessions []*manmanpb.Session) bool {
+	if patch == nil || patch.GetUpdatedAt() <= 0 {
+		return false
+	}
+	// The deployment's current start attempt: pending/starting/running
+	// sessions are starts whose command build already happened (start time
+	// is set at build time). Stopped/crashed/lost sessions are not starts
+	// that ran anything. Newest start wins if several are somehow active.
+	var activeStart int64
+	active := false
+	for _, s := range sessions {
+		switch s.GetStatus() {
+		case manman.SessionStatusPending, manman.SessionStatusStarting, manman.SessionStatusRunning:
+			if !active || s.GetStartedAt() > activeStart {
+				activeStart = s.GetStartedAt()
+				active = true
+			}
+		}
+	}
+	if !active {
+		return false
+	}
+	// At-or-newer, not strictly-newer: timestamps are Unix seconds, and a
+	// save landing in the same second as a start cannot be proven to have
+	// been built before that start's command build. Treating equality as
+	// "already run" could clear the hint prematurely, which FR3 forbids.
+	return patch.GetUpdatedAt() >= activeStart
+}
+
 // parsePropertiesContent parses properties-format patch content
 // (KEY=VALUE lines, blank lines and # comments skipped) into a map.
 // Invalid lines are tolerated on read: the layered view still renders the

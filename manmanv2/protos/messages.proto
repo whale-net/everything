@@ -197,6 +197,8 @@ message ConfigurationPatch {
   int64 volume_id = 7;  // Optional FK to game_config_volumes
   string path_override = 8;  // Optional relative path override
   int32 patch_order = 9;  // Application order (lower = earlier = lower priority)
+  int64 created_at = 10;  // Unix timestamp (persisted in DB, surfaced for env edit timing)
+  int64 updated_at = 11;  // Unix timestamp of the last saved edit
 }
 
 // PatchLayer shows one layer of configuration patches
