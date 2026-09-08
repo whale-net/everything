@@ -13,6 +13,23 @@ type WorkshopLibraryDetailPageData struct {
 	Games           []*manmanpb.Game
 	Addons          []*manmanpb.WorkshopAddon
 	AvailableAddons []*manmanpb.WorkshopAddon
+	Presets         []*manmanpb.GameAddonPathPreset
+
+	// BulkAddCollection* preserve the collection bulk-add form's state
+	// across a job-level failure (FR1, plan #2175) -- an unresolvable
+	// collection or missing game/library renders this page inline (rather
+	// than redirecting) with the error and the input echoed back, instead
+	// of discarding what the Server Manager typed.
+	BulkAddCollectionError string
+	BulkAddCollectionInput string
+
+	// BatchCreate* preserve the mixed-format batch-create form's state
+	// across a job-level failure (FR2/FR3, plan #2175), same rationale as
+	// BulkAddCollection* above. Per-line parse/lookup failures within an
+	// otherwise-successful batch are not job-level failures -- those are
+	// reported per-item on the batch-status view (FR3), not here.
+	BatchCreateError   string
+	BatchCreateEntries string
 }
 
 templ WorkshopLibraryDetail(data WorkshopLibraryDetailPageData) {
@@ -20,7 +37,7 @@ templ WorkshopLibraryDetail(data WorkshopLibraryDetailPageData) {
 		<style>
 			[x-cloak] { display: none !important; }
 		</style>
-		<div x-data="{ confirmDelete: false, editLib: false, filterAddons: '' }">
+		<div x-data="{ confirmDelete: false, editLib: false, filterAddons: '', showBulkAddCollection: false, showBatchCreate: false }">
 			<!-- Header with Breadcrumbs -->
 			<div class="flex flex-col md:flex-row justify-between items-start gap-4 mb-6">
 				<div>
@@ -38,9 +55,87 @@ templ WorkshopLibraryDetail(data WorkshopLibraryDetailPageData) {
 						<span class="text-sm text-base-content/60">{ fmt.Sprintf("%d addons", len(data.Addons)) }</span>
 					</div>
 				</div>
-				<div class="flex gap-2">
+				<div class="flex gap-2 flex-wrap">
+					<button @click="showBulkAddCollection = !showBulkAddCollection; showBatchCreate = false" class="btn btn-secondary">
+						<span x-text="showBulkAddCollection ? '✕ Cancel' : '+ Add Collection'">+ Add Collection</span>
+					</button>
+					<button @click="showBatchCreate = !showBatchCreate; showBulkAddCollection = false" class="btn btn-secondary">
+						<span x-text="showBatchCreate ? '✕ Cancel' : '+ Batch Create'">+ Batch Create</span>
+					</button>
 					<button @click="editLib = !editLib" class="btn btn-primary">Edit</button>
 				</div>
+			</div>
+			<!--
+				Bulk-add-collection and batch-create forms below have no slot in
+				the 51-workshop-library-detail wireframe (it predates FR1/FR2).
+				Placed here, directly under the header and above the existing
+				"Addons in Library"/"Add Addons" cards, following the same
+				toggle-button + card pattern workshop_library.templ already uses
+				for its "Add Addon"/"New Library" forms (FR1/FR2, plan #2175):
+				chrome-consistent with the existing add-addon affordance rather
+				than a wireframe restyle.
+			-->
+			<!-- Add Whole Collection (FR1) -->
+			<div x-show="showBulkAddCollection" x-cloak x-transition class="card bg-base-100 shadow-md border-2 border-primary/40 p-6 mb-6">
+				<div class="flex justify-between items-center mb-4 pb-4 border-b border-base-300">
+					<h3 class="text-lg font-semibold text-base-content">Add Whole Collection</h3>
+					<button @click="showBulkAddCollection = false" class="btn btn-secondary btn-sm">Cancel</button>
+				</div>
+				if data.BulkAddCollectionError != "" {
+					<div class="alert alert-error mb-4">{ data.BulkAddCollectionError }</div>
+				}
+				<form method="POST" action="/workshop/bulk-add-collection" class="space-y-4">
+					<input type="hidden" name="game_id" value={ fmt.Sprintf("%d", data.Library.GameId) }/>
+					<input type="hidden" name="library_id" value={ fmt.Sprintf("%d", data.Library.LibraryId) }/>
+					<div>
+						<label class="block text-sm font-medium text-base-content mb-2">Collection ID or Workshop URL</label>
+						<input type="text" name="collection_input" required value={ data.BulkAddCollectionInput } placeholder="e.g. 2947880477 or https://steamcommunity.com/sharedfiles/filedetails/?id=2947880477" class="input input-bordered w-full"/>
+					</div>
+					<div>
+						<label class="block text-sm font-medium text-base-content mb-2">Default Path Preset <span class="text-base-content/60 font-normal">(optional)</span></label>
+						<select name="preset_id" class="select select-bordered w-full">
+							<option value="">-- No preset --</option>
+							for _, preset := range data.Presets {
+								<option value={ fmt.Sprintf("%d", preset.PresetId) }>{ fmt.Sprintf("%s (%s)", preset.Name, preset.InstallationPath) }</option>
+							}
+						</select>
+					</div>
+					<p class="text-sm text-base-content/60">
+						This adds the collection's <strong>current</strong> items to this library once. It does not stay in sync — items added to the Steam collection afterward will not appear here automatically.
+					</p>
+					<button type="submit" class="btn btn-primary">Add Collection</button>
+				</form>
+			</div>
+			<!-- Batch Create Addons (FR2/FR3) -->
+			<div x-show="showBatchCreate" x-cloak x-transition class="card bg-base-100 shadow-md border-2 border-primary/40 p-6 mb-6">
+				<div class="flex justify-between items-center mb-4 pb-4 border-b border-base-300">
+					<h3 class="text-lg font-semibold text-base-content">Batch Create Addons</h3>
+					<button @click="showBatchCreate = false" class="btn btn-secondary btn-sm">Cancel</button>
+				</div>
+				if data.BatchCreateError != "" {
+					<div class="alert alert-error mb-4">{ data.BatchCreateError }</div>
+				}
+				<form method="POST" action="/workshop/batch-create-addons" class="space-y-4">
+					<input type="hidden" name="game_id" value={ fmt.Sprintf("%d", data.Library.GameId) }/>
+					<input type="hidden" name="library_id" value={ fmt.Sprintf("%d", data.Library.LibraryId) }/>
+					<div>
+						<label class="block text-sm font-medium text-base-content mb-2">Workshop IDs / URLs (one per line)</label>
+						<textarea name="entries" rows="6" required placeholder="2947880477&#10;https://steamcommunity.com/sharedfiles/filedetails/?id=3100488121" class="textarea textarea-bordered w-full font-mono text-sm">{ data.BatchCreateEntries }</textarea>
+					</div>
+					<div>
+						<label class="block text-sm font-medium text-base-content mb-2">Default Path Preset <span class="text-base-content/60 font-normal">(optional)</span></label>
+						<select name="preset_id" class="select select-bordered w-full">
+							<option value="">-- No preset --</option>
+							for _, preset := range data.Presets {
+								<option value={ fmt.Sprintf("%d", preset.PresetId) }>{ fmt.Sprintf("%s (%s)", preset.Name, preset.InstallationPath) }</option>
+							}
+						</select>
+					</div>
+					<p class="text-sm text-base-content/60">
+						Mix raw Workshop IDs and Workshop URLs freely, one per line — the format of each line is detected automatically.
+					</p>
+					<button type="submit" class="btn btn-primary">Create Addons</button>
+				</form>
 			</div>
 			<!-- Description -->
 			if data.Library.Description != "" {

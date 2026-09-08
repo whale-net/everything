@@ -194,6 +194,8 @@ var manmanv2RouteTable = []string{
 	"/workshop/api/available-addons",
 	"/workshop/api/available-libraries",
 	"/workshop/api/presets-for-game",
+	"/workshop/bulk-add-collection",
+	"/workshop/batch-create-addons",
 	"/sgc/1", // #1530/#1531/#1532: the deployment page itself
 	"/sgc/add-library",
 	"/sgc/remove-library",
