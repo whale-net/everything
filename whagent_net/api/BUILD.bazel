@@ -1,0 +1,42 @@
+"""whagent-net SessionService gRPC server (issue #2113)."""
+
+load("@rules_go//go:def.bzl", "go_binary", "go_library")
+load("//tools/bazel:release.bzl", "release_app")
+
+go_library(
+    name = "api_lib",
+    srcs = ["main.go"],
+    importpath = "github.com/whale-net/everything/whagent_net/api",
+    visibility = ["//visibility:private"],
+    deps = [
+        "//libs/go/db",
+        "//libs/go/grpcauth",
+        "//libs/go/logging",
+        "//whagent_net/api/handlers",
+        "//whagent_net/protos:whagentpb",
+        "//whagent_net/session",
+        "@io_opentelemetry_go_contrib_instrumentation_google_golang_org_grpc_otelgrpc//:otelgrpc",
+        "@org_golang_google_grpc//:grpc",
+        "@org_golang_google_grpc//reflection",
+    ],
+)
+
+go_binary(
+    name = "api",
+    embed = [":api_lib"],
+    visibility = ["//visibility:public"],
+)
+
+# Release metadata for the SessionService gRPC server (issue #2113). domain
+# "whagent-net" + name "api" matches the binary table in
+# whagent_net/README.md.
+release_app(
+    name = "api",
+    binary_name = ":api",
+    language = "go",
+    domain = "whagent-net",
+    description = "whagent-net SessionService gRPC server",
+    app_type = "external-api",
+    port = 50051,
+    replicas = 1,
+)

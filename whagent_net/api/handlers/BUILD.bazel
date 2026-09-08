@@ -1,0 +1,19 @@
+load("@rules_go//go:def.bzl", "go_library")
+
+go_library(
+    name = "handlers",
+    srcs = [
+        "auth.go",
+        "session.go",
+    ],
+    importpath = "github.com/whale-net/everything/whagent_net/api/handlers",
+    visibility = ["//visibility:public"],
+    deps = [
+        "//libs/go/grpcauth",
+        "//whagent_net/protos:whagentpb",
+        "//whagent_net/session",
+        "@org_golang_google_grpc//:grpc",
+        "@org_golang_google_grpc//codes",
+        "@org_golang_google_grpc//status",
+    ],
+)
