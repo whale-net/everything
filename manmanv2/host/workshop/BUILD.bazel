@@ -28,15 +28,19 @@ go_test(
         "orchestrator_test.go",
         "verify_test.go",
     ],
-    # cache_client.go and orchestrator.go are listed here (in addition to being
-    # compiled into the embedded :workshop library) so TestNFR7_NoAWSSDKImport
-    # can locate and parse their import declarations via the Bazel runfiles
-    # manifest -- `bazel test`'s sandbox working directory does not contain the
-    # source tree, so a plain relative path doesn't work.
-    data = [
-        "cache_client.go",
-        "orchestrator.go",
-    ],
+    # All non-test .go sources in this package (in addition to being compiled into
+    # the embedded :workshop library) are made available here via glob() so
+    # TestNFR7_NoAWSSDKImport can locate and parse their import declarations via the
+    # Bazel runfiles manifest -- `bazel test`'s sandbox working directory does not
+    # contain the source tree, so a plain relative path doesn't work. Using glob()
+    # instead of an explicit file list means a future source file added to this
+    # package (e.g. a new S3/cache-adjacent helper) is automatically covered by the
+    # guard the moment it exists, without anyone remembering to add it to a second
+    # list here.
+    data = glob(
+        ["*.go"],
+        exclude = ["*_test.go"],
+    ),
     embed = [":workshop"],
     deps = [
         "//libs/go/docker",
