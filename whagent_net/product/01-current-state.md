@@ -1,0 +1,28 @@
+# Current state
+
+Part of [`whagent_net/PRODUCT.md`](../PRODUCT.md). Architect's survey from discussion #2075 round 1, verbatim; file/package references are as of that survey (September 2026) and are the pointers a milestone's architect pass re-verifies, not guarantees.
+
+**Exists and is reusable**
+- **Temporal workflows in Go already exist.** `tools/app_registry/worker/release/workflow.go` (`ReleaseWorkflow`, activities, `testsuite.WorkflowTestSuite` tests), `worker/writeback/`, `worker/outbox/` (activity-side outbox drain), and ASS's `ChannelSyncWorkflow` (`audience_score_system/worker`). `libs/go/temporal` is bootstrap-only, but "whagent-net is the first in-repo Temporal workflow/activity codebase" (ARCHITECTURE.md) is wrong — copy app_registry's workflow-test shape. What *is* new: a long-lived, signal-per-turn workflow. Every existing workflow is one-shot or scheduled; nobody has yet handled workflow-code changes under open long-lived runs (`workflow.GetVersion` / worker versioning).
+- **S3 client exists**: `libs/go/s3` (aws-sdk-go-v2, S3-compatible endpoints, otel-instrumented), used by `manmanv2/log-processor/archiver` — which is a direct precedent for `whagent_net/archiver` (batch → gzip → S3 → index row in Postgres, retry/backoff, flush-on-terminal). Not in ARCHITECTURE.md's stack table; add it.
+- **OIDC-verifying gRPC interceptor exists**: `libs/go/grpcauth.NewServerInterceptors` verifies Keycloak JWTs via `coreos/go-oidc/v3` (issuer + audience, `realm_access.roles`) → `Claims{Subject, Roles, Audience}`; consumers: `app_registry/server`, `manmanv2/api`, `log-processor`, `leaflab/api`. Client side: `NewServiceAccountDialOption` (client_credentials) and `NewUserTokenDialOption` (forward a user's bearer). `KEYCLOAK.md` documents realm/client/audience-mapper setup. `htmxauth` uses the same `go-oidc` for browser sign-in. So `api` needs no new OIDC library.
+- **MCP**: `modelcontextprotocol/go-sdk v1.7.0` vendored; `audience_score_system/mcp` is a production Streamable-HTTP server with a tool registry, `PersonMiddleware`, and per-tool idempotency (`server/idempotency.go`, `IdempotencyKeyed` interface, JSON arg `idempotency_key`, guard keyed on `(tool, person_id, key, fingerprint)`).
+- **Event bus + SSE**: `libs/go/rmq`, `libs/go/htmxsse`; `tools/app_registry/events` (exchange name + `DeclareArgs()` shared by publisher and every consumer) is the pattern for a `whagent/events` exchange package. manmanv2 just did the same for status transitions (#1826, #2049).
+- **Compare-and-swap terminal status**: manmanv2 control-api/event-processor, landed this week (#2062, #2063) — the pattern ARCHITECTURE.md cites for the `sessions` row.
+- **Postgres/migrations**: `libs/go/db`, `libs/go/migrate`; ASS is the template (`migrate` job, `store/` package).
+
+**Exists and is in the way**
+- **ASS's MCP identity is not Keycloak.** `audience_score_system/mcp` authenticates an opaque `mcpauth` bearer bound to a `person_id` (ASS's Google-signed-in Person); `libs/go/mcpauth` is explicitly "the caller's identity comes from an already-established session, never a fresh verification against an external IdP". ARCHITECTURE.md's chain (`worker` forwards a Keycloak persona claim → domain MCP server) has no consumer that accepts it today. Somebody maps `(Keycloak sub, on-behalf-of)` → ASS Person; where that lives is LB3 + Q1.
+- **ASS's brief forbids a hosted agent loop.** `audience_score_system/PRODUCT.md` LB4 and non-goals: "MCP-only, no hosted agent loop, ever". C20 (research agent inside ASS's web UI) contradicts it. Needs an ASS amendment (`/project-manager:product 1562`) before C20 can be designed — Q1.
+- **ASS `web` has no RabbitMQ dependency and no SSE**; its sign-in is its own `web/auth` (Google OAuth), not `htmxauth`. Embedding with "live updates" (C19) means ASS gains RMQ credentials, or `embed` streams via `api` instead — Q7.
+- **"Agent" is already taken** in this repo for Claude Code plugin personas (`audience_score_system/plugin` researcher/analyst agents, `tools/project-manager/agents/*`). See Q3.
+
+**Genuinely missing**
+- **No LLM client of any kind** — no `openai-go`, no Anthropic SDK, no `chat/completions` caller anywhere in `go.mod`/`MODULE.bazel`/code. `github.com/openai/openai-go` is a new dep (go.mod + `MODULE.bazel` `use_repo`). It supports base-URL override and extra request fields, which OpenRouter needs for cost reporting (Q4).
+- **No production MCP *client* in Go.** `mcp.NewClient` + `StreamableClientTransport` appear only in ASS integration tests. `worker`'s tool dispatch is the first.
+- **No on-behalf-of / act claim anywhere.** `grpcauth.Claims` has no acting-for field; no Keycloak token-exchange usage. #1552 deferred this; it is now C9/C10's core.
+- **No `libs/go/whagent`**, no `whagent_net` code/BUILD/migrations; nothing half-built or reverted in this space (checked `git log -200`; #1552 is still an open `idea`).
+
+---
+
+*Producer's note: the open questions referenced above (Q1–Q8) were resolved in the discussion's round-1 answers (https://github.com/whale-net/everything/discussions/2075) and are reflected in the capability map, load-bearing decisions, and roadmap. In brief: Q1 — ASS amendment is an M3 prerequisite; Q2 — the `sub` → local identity map is owned by the consuming domain (C12); Q3 — "agent" means the definition, "session" the running thing, "preset" is not used; Q4 — cost is estimated and flagged, never fail-open (LB6); Q5 — the persona claim is whagent-minted (LB3); Q6 — the required role is a field on the agent definition (LB5); Q7 — host UIs subscribe to the exchange directly, `api.StreamEvents` is independent (LB7); Q8 — Temporal versioning under open long-lived runs is an M1 design-time NFR.*
