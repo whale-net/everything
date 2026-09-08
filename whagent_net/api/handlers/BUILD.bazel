@@ -4,7 +4,10 @@ go_library(
     name = "handlers",
     srcs = [
         "auth.go",
+        "send.go",
         "session.go",
+        "start.go",
+        "stop.go",
     ],
     importpath = "github.com/whale-net/everything/whagent_net/api/handlers",
     visibility = ["//visibility:public"],
@@ -14,6 +17,7 @@ go_library(
         "//whagent_net/protos:whagentpb",
         "//whagent_net/session",
         "@com_github_google_uuid//:uuid",
+        "@io_temporal_go_sdk//client",
         "@org_golang_google_grpc//:grpc",
         "@org_golang_google_grpc//codes",
         "@org_golang_google_grpc//status",

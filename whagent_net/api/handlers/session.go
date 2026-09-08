@@ -1,17 +1,24 @@
 // Package handlers implements whagent-net's SessionServiceServer
-// (whagent_net/protos/session.proto, issue #2113). Scaffold phase wired up
-// every RPC through the authenticated gRPC server (whagent_net/api/main.go,
-// auth.go) with every method returning codes.Unimplemented. Implementation
-// phase fills in this task's two read paths -- GetSession (FR3) and
-// ReadTranscript (FR2) -- against whagent_net/session.Store directly (no
-// Temporal round trip, ARCHITECTURE.md "Service boundary vs. package
-// boundary"). The three write RPCs (StartSession/SendTurn/StopSession) stay
-// UNIMPLEMENTED until the follow-up task that builds the SessionWorkflow
-// lands (#2117). ListSessions also stays UNIMPLEMENTED: the issue allows
-// either a minimal "list the caller's own sessions" implementation or
-// UNIMPLEMENTED, and session.SessionStore (#2109) exposes no by-subject
-// list query -- adding one would expand this task's scope beyond the two
-// named read paths, so UNIMPLEMENTED is the conservative choice here.
+// (whagent_net/protos/session.proto, issue #2113). Issue #2113's Scaffold
+// phase wired up every RPC through the authenticated gRPC server
+// (whagent_net/api/main.go, auth.go) with every method returning
+// codes.Unimplemented; its Implementation phase filled in the two read
+// paths -- GetSession (FR3) and ReadTranscript (FR2) -- against
+// whagent_net/session.Store directly (no Temporal round trip,
+// ARCHITECTURE.md "Service boundary vs. package boundary"). This file
+// (session.go) still owns the SessionServer type itself, those two read
+// RPCs, ListSessions, and the proto-mapping helpers every handler file
+// shares; the three write RPCs live in their own files per issue #2117's
+// Scaffold split: start.go (StartSession), send.go (SendTurn), stop.go
+// (StopSession) -- each is UNIMPLEMENTED until #2117's Implementation
+// phase fills it in against the Temporal client now wired onto
+// SessionServer (see NewSessionServer below) and the SessionWorkflow
+// #2114 built. ListSessions stays UNIMPLEMENTED regardless: the issue
+// allows either a minimal "list the caller's own sessions" implementation
+// or UNIMPLEMENTED, and session.SessionStore (#2109) exposes no
+// by-subject list query -- adding one would expand scope beyond any
+// named task's read/write paths, so UNIMPLEMENTED is the conservative
+// choice here.
 package handlers
 
 import (
@@ -23,6 +30,7 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/whale-net/everything/libs/go/grpcauth"
+	temporalclient "go.temporal.io/sdk/client"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/types/known/timestamppb"
@@ -36,10 +44,20 @@ const (
 	maxTranscriptLimit     = 500
 )
 
+// sessionWorkflowTaskQueue is the Temporal task queue StartSession starts
+// (and SendTurn/StopSession signal) SessionWorkflow executions on. Must
+// match whagent_net/worker/workflow.go's TaskQueue constant exactly --
+// duplicated rather than imported because that constant lives in a Go
+// `package main` (the worker binary), which nothing outside it can
+// import; kept here as the single place `api` itself needs the name.
+const sessionWorkflowTaskQueue = "whagent-net-session"
+
 // SessionServer implements pb.SessionServiceServer over a
 // *session.Store -- the same store package `worker` will import directly
 // (ARCHITECTURE.md "Service boundary vs. package boundary": no RPC hop
-// between api and worker).
+// between api and worker) -- plus a Temporal client (issue #2117's
+// Scaffold) the write RPCs (start.go/send.go/stop.go) use to start and
+// signal each session's SessionWorkflow (#2114).
 type SessionServer struct {
 	pb.UnimplementedSessionServiceServer
 
@@ -50,30 +68,37 @@ type SessionServer struct {
 	// this is what lets callerSubject reconstruct the full (iss, sub)
 	// identity pair a stored session.Subject is compared against.
 	issuer string
+	// temporalClient is the //libs/go/temporal-constructed client
+	// (main.go) StartSession/SendTurn/StopSession drive SessionWorkflow
+	// through. Unused by the two read RPCs (GetSession/ReadTranscript),
+	// which read the `sessions`/`transcript_event` tables directly and
+	// never round-trip through Temporal.
+	temporalClient temporalclient.Client
+	// taskQueue is the Temporal task queue to start/signal
+	// SessionWorkflow executions on.
+	taskQueue string
 }
 
 var _ pb.SessionServiceServer = (*SessionServer)(nil)
 
 // NewSessionServer returns a SessionServer backed by store, authenticating
-// callers against issuer (see SessionServer.issuer).
-func NewSessionServer(store *session.Store, issuer string) *SessionServer {
-	return &SessionServer{store: store, issuer: issuer}
-}
-
-// StartSession is UNIMPLEMENTED until the SessionWorkflow exists (follow-up
-// task to #2113 per whagent_net/ARCHITECTURE.md "Session workflow").
-func (s *SessionServer) StartSession(ctx context.Context, req *pb.StartSessionRequest) (*pb.StartSessionResponse, error) {
-	return nil, status.Error(codes.Unimplemented, "StartSession: session workflow not yet implemented")
-}
-
-// SendTurn is UNIMPLEMENTED until the SessionWorkflow exists.
-func (s *SessionServer) SendTurn(ctx context.Context, req *pb.SendTurnRequest) (*pb.SendTurnResponse, error) {
-	return nil, status.Error(codes.Unimplemented, "SendTurn: session workflow not yet implemented")
-}
-
-// StopSession is UNIMPLEMENTED until the SessionWorkflow exists.
-func (s *SessionServer) StopSession(ctx context.Context, req *pb.StopSessionRequest) (*pb.StopSessionResponse, error) {
-	return nil, status.Error(codes.Unimplemented, "StopSession: session workflow not yet implemented")
+// callers against issuer (see SessionServer.issuer) and starting/signalling
+// SessionWorkflow executions through temporalClient on taskQueue. An empty
+// taskQueue defaults to sessionWorkflowTaskQueue -- main.go passes
+// //libs/go/temporal's Config.TaskQueue (TEMPORAL_TASK_QUEUE) straight
+// through unchanged, mirroring whagent_net/worker/main.go's identical
+// "env value if set, else the package's own default" fallback for the
+// same setting on the other side of this same queue.
+func NewSessionServer(store *session.Store, issuer string, temporalClient temporalclient.Client, taskQueue string) *SessionServer {
+	if taskQueue == "" {
+		taskQueue = sessionWorkflowTaskQueue
+	}
+	return &SessionServer{
+		store:          store,
+		issuer:         issuer,
+		temporalClient: temporalClient,
+		taskQueue:      taskQueue,
+	}
 }
 
 // GetSession is this issue's Implementation-phase read path (FR3): reads

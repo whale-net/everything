@@ -20,6 +20,7 @@ import (
 	"github.com/whale-net/everything/libs/go/db"
 	"github.com/whale-net/everything/libs/go/grpcauth"
 	"github.com/whale-net/everything/libs/go/logging"
+	temporallib "github.com/whale-net/everything/libs/go/temporal"
 	"github.com/whale-net/everything/whagent_net/api/handlers"
 	"github.com/whale-net/everything/whagent_net/api/persona"
 	pb "github.com/whale-net/everything/whagent_net/protos"
@@ -104,7 +105,24 @@ func run() error {
 	// RPCs that will need a real events.PublisherInterface land with the
 	// SessionWorkflow (#2117).
 	store := session.New(pool, nil)
-	sessionServer := handlers.NewSessionServer(store, grpcOIDCIssuer)
+
+	// Temporal client (issue #2117's Scaffold): StartSession/SendTurn/
+	// StopSession (handlers/start.go, send.go, stop.go) start and signal
+	// each session's SessionWorkflow (#2114) through this same client --
+	// api never hosts a worker itself, it only ever dials the frontend.
+	// Dial connects eagerly (temporallib.NewClient's doc comment), so a
+	// non-nil error here means Temporal was unreachable at startup, same
+	// as the database connection above.
+	temporalCfg := temporallib.ConfigFromEnv()
+	logger.Info("connecting to temporal", "host_port", temporalCfg.HostPort, "namespace", temporalCfg.Namespace)
+	temporalClient, err := temporallib.NewClient(temporalCfg, temporallib.NewLogger("whagent-net-api"))
+	if err != nil {
+		return fmt.Errorf("connect to temporal: %w", err)
+	}
+	defer temporalClient.Close()
+	logger.Info("temporal connected")
+
+	sessionServer := handlers.NewSessionServer(store, grpcOIDCIssuer, temporalClient, temporalCfg.TaskQueue)
 
 	// Every SessionService RPC authenticates (ARCHITECTURE.md "Identity and
 	// auth chaining"; whagent_net/api/auth.go's requireClaims) -- unlike

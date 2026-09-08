@@ -15,14 +15,16 @@ Read via `//libs/go/db` (`api`, `worker`, `archiver`, `ui`) and
 
 ## Temporal
 
-Read via `//libs/go/temporal`'s `ConfigFromEnv` (`api` to start/signal
-workflows, `worker` to host them).
+Read via `//libs/go/temporal`'s `ConfigFromEnv` (`worker`, #2114, to host
+`SessionWorkflow`; `api`, #2117, to dial the same Temporal frontend and
+start/signal it -- `StartSession`/`SendTurn`/`StopSession`, never a worker
+itself).
 
 | Variable | Component | Default | Description |
 |----------|-----------|---------|-------------|
-| `TEMPORAL_HOST` | api, worker | — | Temporal frontend address. |
-| `TEMPORAL_NAMESPACE` | api, worker | — | Namespace. |
-| `TEMPORAL_TASK_QUEUE` | api, worker | — | Task queue for `SessionWorkflow`. |
+| `TEMPORAL_HOST` | api, worker | `localhost:7233` | Temporal frontend address. |
+| `TEMPORAL_NAMESPACE` | api, worker | `default` | Namespace. |
+| `TEMPORAL_TASK_QUEUE` | api, worker | `whagent-net-session` | Task queue `SessionWorkflow` and its activities run on. Unset on either side falls back to the same `"whagent-net-session"` default (`worker/workflow.go`'s `TaskQueue` const, duplicated in `api/handlers/session.go` as `sessionWorkflowTaskQueue` since a `worker` is `package main` and cannot be imported) -- only set this explicitly if running more than one `SessionWorkflow` task queue, and set it identically on both `api` and `worker`. |
 
 ## RabbitMQ (event bus)
 

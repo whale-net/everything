@@ -12,6 +12,7 @@ go_library(
         "//libs/go/db",
         "//libs/go/grpcauth",
         "//libs/go/logging",
+        "//libs/go/temporal",
         "//whagent_net/api/handlers",
         "//whagent_net/api/persona",
         "//whagent_net/protos:whagentpb",
