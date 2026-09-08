@@ -28,6 +28,7 @@ go_test(
     srcs = [
         "batch_test.go",
         "cachekey_test.go",
+        "collection_test.go",
         "entry_parser_test.go",
         "manager_test.go",
     ],
