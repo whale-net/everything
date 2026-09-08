@@ -168,6 +168,99 @@ client ultimately calls is `mcp`. So:
   this exact sequence across two independently constructed `web`-shaped and
   `mcp`-shaped server instances sharing one database.
 
+### MCP server: whagent-net authentication path (issue #2116, FR12)
+
+**Decision:** a second, fully independent caller-authentication path,
+mounted **alongside** — never built on top of, and never replacing — the
+`mcp_credential` path above. A whagent-net session presents a short-lived
+JWT signed by whagent-net's own key (`//libs/go/whagent`'s published
+contract, LB3/NFR4); `mcp` verifies it against whagent-net's JWKS and
+resolves its verified `(iss, sub)` on-behalf-of claim to an ASS `person_id`,
+auto-provisioning a `Person` the first time a given pair is seen. Both
+paths coexist on the exact same `mcp.Server`/mux — a Keycloak token, an
+ASS `mcp_credential`, or an unsigned claim can never satisfy the other
+path's verifier (NFR4).
+
+**The contract gap this path had to work around.** `//libs/go/whagent`
+publishes a `Middleware`/`HTTPMiddleware` pair meant to be mounted
+directly, but `Middleware` unconditionally rejects any call carrying no
+verified `Claim`, and `HTTPMiddleware` is the only sanctioned way to
+populate the private extra-key `Middleware` reads back off the request —
+there is no exported way to make either a no-op pass-through for a call
+that instead came in via `mcp_credential`. Mounting them verbatim in
+series alongside the existing chain would reject every `mcp_credential`
+call outright, exactly the "built on top of" failure mode FR12(a)
+forbids. `mcp/server/whagent_auth.go` instead:
+
+1. Routes each request's bearer token to exactly one of the two paths at
+   the HTTP layer (`DualAuthHTTPHandler`), keyed on token SHAPE: a
+   whagent Claim is always a three-segment, two-dot JWT compact
+   serialization; an ASS `mcp_credential` is always a 64-character hex
+   string with no dots — the two encodings never overlap, so this split
+   is exact, not probabilistic. Each branch is its own independent
+   `sdkauth.RequireBearerToken` instance.
+2. Calls `whagent.Verifier.Verify` directly (an equally-exported,
+   equally-documented entry point on the same published contract) rather
+   than `whagent.HTTPMiddleware`, building this file's own
+   `sdkauth.TokenInfo`/`Extra` marker instead of whagent's private one.
+3. `WhagentPersonMiddleware` (the MCP-protocol half, mounted so it runs
+   BEFORE `auth.go`'s `PersonMiddleware` — see `server.New`/`mcp/main.go`'s
+   construction order) reads that marker: present, it resolves `(iss, sub)`
+   to a `Person` (`store.PersonIdentityStore.FindOrCreateByIssSub`,
+   auto-provisioning on first sight) and places it on `ctx`; absent, it
+   calls `next` unchanged — `next` IS `PersonMiddleware`, which
+   authenticates the call exactly as it always has. The one coexistence
+   seam this composition needs is a single early check in
+   `PersonMiddleware` itself: if a `Person` is already on `ctx`, skip its
+   own `mcp_credential`-shaped resolution and call its own `next` directly,
+   rather than reinterpreting a whagent-routed call's `TokenInfo` as an ASS
+   credential and rejecting it. This check is a no-op for every call that
+   predates #2116 (nothing else ever placed a `Person` on `ctx` before
+   `PersonMiddleware` ran), so the existing path's own behavior is
+   unchanged for `mcp_credential` callers.
+
+This composition seam — not any change to `//libs/go/whagent`'s own
+contract — is what made the two paths coexist on the SDK's linear
+receiving-middleware chain. Worth revisiting on `//libs/go/whagent` itself
+if a second consuming domain hits the identical problem: an exported "is
+this call whagent-authenticated" predicate on `mcp.Request` would let a
+consumer skip the ASS-side `PersonMiddleware` amendment entirely.
+
+**`(iss, sub)` → `Person`, with auto-provisioning (FR12(b)).** Migration
+020's `person_oidc_identity` table is keyed on the **pair** `(iss, sub)` —
+never on `sub` alone, and never re-keyed off `person.google_subject` — so
+the same external subject under two different issuers resolves to two
+distinct Persons, and a future second issuer (e.g. Google itself, M3) is
+one more row-set rather than a schema re-key. `PersonIdentityStore.
+FindOrCreateByIssSub` (`store/person_identity.go`) auto-provisions an
+identity-key-only `Person` (`google_subject`/`email`/`display_name` all
+NULL — the whagent Claim carries none of FR10's profile attributes) the
+first time a pair is seen; migration 020 drops `person.google_subject`'s
+`NOT NULL` constraint (still `UNIQUE`) specifically to allow this, since it
+was ASS's only identity key until this task and a whagent-net-provisioned
+Person may never sign into `web`. Because the find-or-create spans two
+tables (`person`, `person_oidc_identity` — deliberately kept separate, see
+migration 020's SQL comment), it cannot be a single `ON CONFLICT` statement
+like `UpsertByGoogleSubject`'s; instead it opens a transaction, speculatively
+inserts both rows, and — if the identity-link insert loses a concurrent
+race for the exact same pair (`person_oidc_identity_iss_sub`'s unique
+index) — rolls back the whole transaction (discarding the speculative
+`Person` row) and re-resolves to the winner, so a concurrent first-sight
+race still creates exactly one `Person`.
+
+**FR11: one idempotency store, not one per auth path.** `store.
+Idempotency.Do`'s `(tool, personID, key)` guard (migration 002) is
+untouched by this task — both paths place their resolved `Person` on `ctx`
+via the exact same `withPerson`, so `registry.go`'s `RegisterWrite` never
+has to know which path authenticated a call. If the same human's calls
+via both paths ever resolve to the same `person_id`, that one guard
+already applies "at most once" correctly; see `mcp/server/
+whagent_auth_integration_test.go`'s FR11 test for how this is proven
+without a pre-linking flow (M1 has none, FR12(b)) — it auto-provisions a
+Person via the whagent identity store, then mints an `mcp_credential` for
+that exact `person_id`, and calls the same write tool with the same
+`idempotency_key` once via each path.
+
 ### MCP server: Channel-scoping and idempotency middleware
 
 Both wired into `mcp/server/registry.go`'s `RegisterRead`/`RegisterWrite`

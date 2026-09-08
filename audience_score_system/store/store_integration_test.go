@@ -2704,8 +2704,10 @@ func ptrInt64(v int64) *int64        { return &v }
 // 017 (research_thread's natural-key unique index, FR4, #1937), and again
 // for 018 (research_note.thread_id NOT NULL + idea_id drop, FR2 Stage 3/
 // NFR4, #1947), and again for 019 (video_script.edit_idempotency_key,
-// FR16-FR19, #2037), so the version assertion and table list below cover
-// all of them rather than any single one.
+// FR16-FR19, #2037), and again for 020 (person_oidc_identity +
+// person.google_subject NOT NULL drop, FR12(b), #2116), so the version
+// assertion and table list below cover all of them rather than any single
+// one.
 func TestMigrations_UpDownUp_LeavesNoOrphanObjects(t *testing.T) {
 	ctx := context.Background()
 	db := dbtest.NewPostgres(ctx, t, dbtest.Options{})
@@ -2722,7 +2724,7 @@ func TestMigrations_UpDownUp_LeavesNoOrphanObjects(t *testing.T) {
 	version, dirty, err := runner.Version()
 	require.NoError(t, err)
 	assert.False(t, dirty)
-	assert.Equal(t, uint(19), version, "highest migration in schema.Migrations is 019_video_script_edit_idempotency")
+	assert.Equal(t, uint(20), version, "highest migration in schema.Migrations is 020_person_oidc_identity")
 
 	for _, tbl := range []string{
 		"person", "channel", "channel_person", "channel_invite",
@@ -2740,6 +2742,7 @@ func TestMigrations_UpDownUp_LeavesNoOrphanObjects(t *testing.T) {
 		"outcome_bar",
 		"research_thread",
 		"research_note_relation",
+		"person_oidc_identity",
 	} {
 		var exists bool
 		require.NoError(t, db.Pool.QueryRow(ctx,
@@ -2747,6 +2750,15 @@ func TestMigrations_UpDownUp_LeavesNoOrphanObjects(t *testing.T) {
 		).Scan(&exists))
 		assert.True(t, exists, "table %s must exist after up/down/up", tbl)
 	}
+
+	// Migration 020's person.google_subject NOT NULL drop (FR12(b), #2116)
+	// must also survive the down/up cycle -- a down that forgot to restore
+	// NOT NULL (or an up that forgot to drop it again) would surface here.
+	var googleSubjectNullable string
+	require.NoError(t, db.Pool.QueryRow(ctx,
+		`SELECT is_nullable FROM information_schema.columns WHERE table_name = 'person' AND column_name = 'google_subject'`,
+	).Scan(&googleSubjectNullable))
+	assert.Equal(t, "YES", googleSubjectNullable, "person.google_subject must be nullable after up/down/up (migration 020 drops its NOT NULL for whagent-net auto-provisioning)")
 
 	// pacing_policy and schedule_entry are dropped outright by migration
 	// 013 (FR41/FR45, #1835) -- a down/up cycle must leave them gone, not

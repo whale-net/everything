@@ -18,7 +18,7 @@ discoverable by grepping the directory.
 | File | Read it for |
 |---|---|
 | Language: Go throughout (below, this file) | Why ASS is Go end to end, and the tradeoff accepted for M1 |
-| [`architecture/02-mcp-server.md`](architecture/02-mcp-server.md) | The `mcp` binary: SDK choice, YouTube client wiring, caller authentication (mcpauth/OAuth2), Channel-scoping + idempotency middleware, statelessness (LB4), observability |
+| [`architecture/02-mcp-server.md`](architecture/02-mcp-server.md) | The `mcp` binary: SDK choice, YouTube client wiring, caller authentication (mcpauth/OAuth2, plus the parallel whagent-net path, issue #2116/FR12), Channel-scoping + idempotency middleware, statelessness (LB4), observability |
 | [`architecture/03-component-map.md`](architecture/03-component-map.md) | The four binaries (`migrate`, `web`, `mcp`, `worker`) and Postgres, one table |
 | [`architecture/04-oauth-grants.md`](architecture/04-oauth-grants.md) | C1 sign-in vs. C2 Channel-connect, token storage, needs-reauth lifecycle, schedule creation at connect time |
 | [`architecture/05-nfr3-interface-allocation.md`](architecture/05-nfr3-interface-allocation.md) | What's web UI vs. MCP-only, and every amendment as capabilities shipped — start here for "is X reachable from MCP" |
