@@ -68,6 +68,13 @@ service WorkshopService {
   // host-manager caller treats as non-fatal (the cache read itself already
   // succeeded by the time this is called).
   rpc ReportCacheRead(ReportCacheReadRequest) returns (ReportCacheReadResponse);
+
+  // ListAddonCacheEntries gives an Admin fleet-wide visibility into a single
+  // addon's cache state -- every content-addressed entry, which hosts hold a
+  // copy, and how stale each entry's verification is -- in one call instead
+  // of querying hosts one at a time (FR10). Read-only: it must not create,
+  // touch, or verify anything.
+  rpc ListAddonCacheEntries(ListAddonCacheEntriesRequest) returns (ListAddonCacheEntriesResponse);
 }
 
 // ============================================================================
@@ -591,3 +598,39 @@ message ReportCacheReadRequest {
 }
 
 message ReportCacheReadResponse {}
+
+// ============================================================================
+// Admin Fleet-Wide Cache Visibility RPCs (FR10)
+// ============================================================================
+
+// WorkshopCacheHost is one host's presence record for a WorkshopCacheEntry:
+// it has held a copy of the entry's content since first_seen_at, and last
+// reported holding it at last_seen_at.
+message WorkshopCacheHost {
+  int64 server_id = 1;
+  string server_name = 2;
+  int64 first_seen_at = 3;   // Unix timestamp
+  int64 last_seen_at = 4;    // Unix timestamp
+}
+
+// WorkshopCacheEntry is one content-addressed cache entry for an addon,
+// together with every host known to hold a copy of it.
+message WorkshopCacheEntry {
+  int64 cache_entry_id = 1;
+  string workshop_id = 2;
+  string content_version = 3;   // the content address
+  string cache_key = 4;
+  string s3_key = 5;
+  int64 size_bytes = 6;
+  int64 last_verified_at = 7;   // Unix timestamp, 0 if never verified
+  int64 created_at = 8;
+  repeated WorkshopCacheHost hosts = 9;
+}
+
+message ListAddonCacheEntriesRequest {
+  int64 addon_id = 1;
+}
+
+message ListAddonCacheEntriesResponse {
+  repeated WorkshopCacheEntry entries = 1;
+}

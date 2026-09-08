@@ -254,3 +254,137 @@ func TestUpsertHostPresence_ConcurrentSameHostConverges(t *testing.T) {
 		t.Fatalf("expected exactly one presence row after %d concurrent same-host upserts, got %d", numWriters, len(presence))
 	}
 }
+
+// TestListCacheEntriesForWorkshopID_NewestFirstAndScopedToWorkshopID is
+// real-Postgres coverage for the FR10 fleet-visibility read path (#2185,
+// plan #2175): entries for a workshop_id come back ordered newest-first by
+// created_at (ties broken by cache_entry_id DESC, matching the query's
+// exact ORDER BY), and a different workshop_id's entries never leak into
+// the result -- something an in-memory fake's map iteration can't prove
+// the way a real ORDER BY against actual rows can.
+func TestListCacheEntriesForWorkshopID_NewestFirstAndScopedToWorkshopID(t *testing.T) {
+	pool := newWorkshopCacheTestDB(t)
+	ctx := context.Background()
+	repo := NewWorkshopCacheRepository(pool)
+
+	// Insert out of chronological order so a correct ORDER BY is actually
+	// exercised, not accidentally satisfied by insertion order.
+	insert := func(workshopID, contentVersion, cacheKey string, createdAt string) int64 {
+		var id int64
+		err := pool.QueryRow(ctx, `
+			INSERT INTO workshop_cache_entries (workshop_id, content_version, cache_key, s3_key, created_at)
+			VALUES ($1, $2, $3, $4, $5::timestamptz)
+			RETURNING cache_entry_id
+		`, workshopID, contentVersion, cacheKey, "workshop-cache/"+cacheKey+".tar", createdAt).Scan(&id)
+		if err != nil {
+			t.Fatalf("seed insert for %s: %v", cacheKey, err)
+		}
+		return id
+	}
+
+	// A different workshop_id's entry -- must never appear in the result.
+	insert("other-addon", "1", "ws/other-addon/1", "2024-01-05T00:00:00Z")
+
+	middleID := insert("target-addon", "v-middle", "ws/target-addon/v-middle", "2024-01-02T00:00:00Z")
+	newestID := insert("target-addon", "v-newest", "ws/target-addon/v-newest", "2024-01-03T00:00:00Z")
+	oldestID := insert("target-addon", "v-oldest", "ws/target-addon/v-oldest", "2024-01-01T00:00:00Z")
+
+	entries, err := repo.ListCacheEntriesForWorkshopID(ctx, "target-addon")
+	if err != nil {
+		t.Fatalf("ListCacheEntriesForWorkshopID: %v", err)
+	}
+	if len(entries) != 3 {
+		t.Fatalf("expected exactly 3 entries for target-addon, got %d", len(entries))
+	}
+
+	wantOrder := []int64{newestID, middleID, oldestID}
+	for i, e := range entries {
+		if e.CacheEntryID != wantOrder[i] {
+			t.Errorf("entries[%d].CacheEntryID = %d, want %d (newest-first order)", i, e.CacheEntryID, wantOrder[i])
+		}
+		if e.WorkshopID != "target-addon" {
+			t.Errorf("entries[%d].WorkshopID = %q, want %q (must not leak another workshop_id's entries)", i, e.WorkshopID, "target-addon")
+		}
+	}
+}
+
+// TestListHostPresenceForCacheEntryIDs_BatchedAcrossManyEntriesJoinsServerName
+// is real-Postgres coverage for the FR10 batched presence lookup itself
+// (#2185, plan #2175): a single ANY($1) call returns every entry's presence
+// keyed by cache_entry_id, each row carrying the joined servers.name (not
+// just a bare server_id), entries with no presence are simply absent from
+// the result map (not an error or an empty-slice placeholder), and an
+// empty input returns an empty map with no query at all -- exactly what
+// ListAddonCacheEntries relies on to avoid a per-entry fan-out that an
+// in-memory fake's map-based test double can't actually prove against real
+// SQL.
+func TestListHostPresenceForCacheEntryIDs_BatchedAcrossManyEntriesJoinsServerName(t *testing.T) {
+	pool := newWorkshopCacheTestDB(t)
+	ctx := context.Background()
+	repo := NewWorkshopCacheRepository(pool)
+
+	var hostA, hostB int64
+	if err := pool.QueryRow(ctx, `INSERT INTO servers (name) VALUES ('host-a') RETURNING server_id`).Scan(&hostA); err != nil {
+		t.Fatalf("seed host-a: %v", err)
+	}
+	if err := pool.QueryRow(ctx, `INSERT INTO servers (name) VALUES ('host-b') RETURNING server_id`).Scan(&hostB); err != nil {
+		t.Fatalf("seed host-b: %v", err)
+	}
+
+	entryWithTwoHosts, err := repo.UpsertCacheEntry(ctx, &manman.WorkshopCacheEntry{
+		WorkshopID: "111", ContentVersion: "1", CacheKey: "ws/111/1", S3Key: "workshop-cache/111/1.tar",
+	})
+	if err != nil {
+		t.Fatalf("UpsertCacheEntry entryWithTwoHosts: %v", err)
+	}
+	entryWithNoHosts, err := repo.UpsertCacheEntry(ctx, &manman.WorkshopCacheEntry{
+		WorkshopID: "222", ContentVersion: "1", CacheKey: "ws/222/1", S3Key: "workshop-cache/222/1.tar",
+	})
+	if err != nil {
+		t.Fatalf("UpsertCacheEntry entryWithNoHosts: %v", err)
+	}
+
+	if err := repo.UpsertHostPresence(ctx, entryWithTwoHosts.CacheEntryID, hostA); err != nil {
+		t.Fatalf("UpsertHostPresence hostA: %v", err)
+	}
+	if err := repo.UpsertHostPresence(ctx, entryWithTwoHosts.CacheEntryID, hostB); err != nil {
+		t.Fatalf("UpsertHostPresence hostB: %v", err)
+	}
+
+	result, err := repo.ListHostPresenceForCacheEntryIDs(ctx, []int64{entryWithTwoHosts.CacheEntryID, entryWithNoHosts.CacheEntryID})
+	if err != nil {
+		t.Fatalf("ListHostPresenceForCacheEntryIDs: %v", err)
+	}
+
+	presence, ok := result[entryWithTwoHosts.CacheEntryID]
+	if !ok {
+		t.Fatalf("expected an entry for cache_entry_id %d in the result map", entryWithTwoHosts.CacheEntryID)
+	}
+	if len(presence) != 2 {
+		t.Fatalf("expected 2 host-presence rows for entryWithTwoHosts, got %d", len(presence))
+	}
+	gotNames := map[string]bool{}
+	for _, p := range presence {
+		gotNames[p.ServerName] = true
+		if p.CacheEntryID != entryWithTwoHosts.CacheEntryID {
+			t.Errorf("presence row CacheEntryID = %d, want %d", p.CacheEntryID, entryWithTwoHosts.CacheEntryID)
+		}
+	}
+	if !gotNames["host-a"] || !gotNames["host-b"] {
+		t.Errorf("expected joined server names {host-a, host-b}, got %v", gotNames)
+	}
+
+	if _, ok := result[entryWithNoHosts.CacheEntryID]; ok {
+		t.Errorf("expected no map entry for a cache_entry_id with no presence rows, got one")
+	}
+
+	// An empty input must return an empty map with no query at all (the
+	// FR10 doc comment's explicit contract) rather than erroring.
+	empty, err := repo.ListHostPresenceForCacheEntryIDs(ctx, nil)
+	if err != nil {
+		t.Fatalf("ListHostPresenceForCacheEntryIDs(nil): %v", err)
+	}
+	if len(empty) != 0 {
+		t.Errorf("expected an empty map for an empty input, got %d entries", len(empty))
+	}
+}

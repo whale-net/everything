@@ -6,12 +6,15 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
 	"testing"
 	"time"
 
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/mock"
 	"github.com/whale-net/everything/libs/go/grpcauth"
 	"github.com/whale-net/everything/manmanv2/api/workshop"
 	manman "github.com/whale-net/everything/manmanv2/models"
@@ -76,10 +79,26 @@ type fakeCacheRepo struct {
 	upsertCalls int
 	getErr      error
 	upsertErr   error
+
+	// listErr, when set, makes ListCacheEntriesForWorkshopID fail -- used by
+	// ListAddonCacheEntries's Internal-on-list-failure path.
+	listErr error
+
+	// presenceByEntry/presenceErr/presenceCalls back
+	// ListHostPresenceForCacheEntryIDs: presenceCalls lets tests assert the
+	// FR10 batching contract (one call regardless of entry count) the way
+	// the real repository's ANY($1) query does, rather than fanning out one
+	// ListHostPresence call per entry.
+	presenceByEntry map[int64][]*manman.WorkshopCacheHostPresenceWithServer
+	presenceErr     error
+	presenceCalls   int
 }
 
 func newFakeCacheRepo() *fakeCacheRepo {
-	return &fakeCacheRepo{entries: map[string]*manman.WorkshopCacheEntry{}}
+	return &fakeCacheRepo{
+		entries:         map[string]*manman.WorkshopCacheEntry{},
+		presenceByEntry: map[int64][]*manman.WorkshopCacheHostPresenceWithServer{},
+	}
 }
 
 func (f *fakeCacheRepo) seed(entry *manman.WorkshopCacheEntry) *manman.WorkshopCacheEntry {
@@ -129,8 +148,31 @@ func (f *fakeCacheRepo) UpsertCacheEntry(_ context.Context, entry *manman.Worksh
 	return &out, nil
 }
 
-func (f *fakeCacheRepo) ListCacheEntriesForWorkshopID(_ context.Context, _ string) ([]*manman.WorkshopCacheEntry, error) {
-	return nil, nil
+// ListCacheEntriesForWorkshopID mirrors the real repository's documented
+// contract (workshop_cache.go): every entry for workshopID, newest-first by
+// CreatedAt (cache_entry_id descending as the tie-break), matching
+// ListCacheEntriesForWorkshopID's ORDER BY created_at DESC, cache_entry_id
+// DESC exactly.
+func (f *fakeCacheRepo) ListCacheEntriesForWorkshopID(_ context.Context, workshopID string) ([]*manman.WorkshopCacheEntry, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.listErr != nil {
+		return nil, f.listErr
+	}
+	var out []*manman.WorkshopCacheEntry
+	for _, e := range f.entries {
+		if e.WorkshopID == workshopID {
+			cp := *e
+			out = append(out, &cp)
+		}
+	}
+	sort.Slice(out, func(i, j int) bool {
+		if !out[i].CreatedAt.Equal(out[j].CreatedAt) {
+			return out[i].CreatedAt.After(out[j].CreatedAt)
+		}
+		return out[i].CacheEntryID > out[j].CacheEntryID
+	})
+	return out, nil
 }
 
 func (f *fakeCacheRepo) GetCacheEntry(_ context.Context, cacheEntryID int64) (*manman.WorkshopCacheEntry, error) {
@@ -167,6 +209,28 @@ func (f *fakeCacheRepo) UpsertHostPresence(_ context.Context, _, _ int64) error 
 
 func (f *fakeCacheRepo) ListHostPresence(_ context.Context, _ int64) ([]*manman.WorkshopCacheHostPresence, error) {
 	return nil, nil
+}
+
+// ListHostPresenceForCacheEntryIDs is the fake's counterpart to the real
+// repository's batched FR10 lookup: it records exactly how many times it
+// was invoked (presenceCalls) so TestListAddonCacheEntries_PresenceLookupIsBatched
+// can assert the handler makes one call regardless of how many entries it's
+// listing -- looping ListHostPresence per entry here would be exactly the
+// per-host, per-entry fan-out FR10 rules out.
+func (f *fakeCacheRepo) ListHostPresenceForCacheEntryIDs(_ context.Context, cacheEntryIDs []int64) (map[int64][]*manman.WorkshopCacheHostPresenceWithServer, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.presenceCalls++
+	if f.presenceErr != nil {
+		return nil, f.presenceErr
+	}
+	result := make(map[int64][]*manman.WorkshopCacheHostPresenceWithServer)
+	for _, id := range cacheEntryIDs {
+		if presence, ok := f.presenceByEntry[id]; ok {
+			result[id] = presence
+		}
+	}
+	return result, nil
 }
 
 func (f *fakeCacheRepo) entryCount() int {
@@ -597,6 +661,211 @@ func TestGetCacheUploadURL_PresignerFailure(t *testing.T) {
 	_, err := h.GetCacheUploadURL(hostCtx(testServerID), &pb.GetCacheUploadURLRequest{
 		ServerId: testServerID, WorkshopId: "1", ContentVersion: "1",
 	})
+	assertCode(t, err, codes.Internal)
+}
+
+// --- ListAddonCacheEntries (FR10) -------------------------------------------
+
+// newCacheListHandler builds a handler wired with the given cacheRepo and
+// addonRepo -- the two collaborators ListAddonCacheEntries's addon_id ->
+// workshop_id resolution plus batched entries/presence lookup depends on.
+func newCacheListHandler(repo *fakeCacheRepo, addonRepo *MockWorkshopAddonRepository) *WorkshopServiceHandler {
+	return &WorkshopServiceHandler{
+		cacheRepo: repo,
+		addonRepo: addonRepo,
+	}
+}
+
+// TestListAddonCacheEntries_MultipleVersionsNewestFirstWithHostSets is the
+// issue's core FR10 assertion: an addon with more than one cached version
+// gets every version back, newest-first, each carrying only its own host
+// set -- not the union across entries and not another entry's hosts.
+func TestListAddonCacheEntries_MultipleVersionsNewestFirstWithHostSets(t *testing.T) {
+	repo := newFakeCacheRepo()
+	addonRepo := new(MockWorkshopAddonRepository)
+	addonRepo.On("Get", mock.Anything, int64(42)).Return(&manman.WorkshopAddon{
+		AddonID:    42,
+		WorkshopID: "123456",
+	}, nil)
+
+	older := time.Now().Add(-48 * time.Hour)
+	newer := time.Now().Add(-1 * time.Hour)
+	sizeV1 := int64(1024)
+
+	v1 := repo.seed(&manman.WorkshopCacheEntry{
+		WorkshopID: "123456", ContentVersion: "v1",
+		CacheKey: "ws/123456/v1", S3Key: "workshop-cache/123456/v1.tar",
+		SizeBytes: &sizeV1, CreatedAt: older,
+	})
+	v2 := repo.seed(&manman.WorkshopCacheEntry{
+		WorkshopID: "123456", ContentVersion: "v2",
+		CacheKey: "ws/123456/v2", S3Key: "workshop-cache/123456/v2.tar",
+		CreatedAt: newer,
+	})
+
+	repo.presenceByEntry[v1.CacheEntryID] = []*manman.WorkshopCacheHostPresenceWithServer{
+		{CacheEntryID: v1.CacheEntryID, ServerID: 1, ServerName: "host-a"},
+	}
+	repo.presenceByEntry[v2.CacheEntryID] = []*manman.WorkshopCacheHostPresenceWithServer{
+		{CacheEntryID: v2.CacheEntryID, ServerID: 2, ServerName: "host-b"},
+		{CacheEntryID: v2.CacheEntryID, ServerID: 3, ServerName: "host-c"},
+	}
+
+	h := newCacheListHandler(repo, addonRepo)
+	resp, err := h.ListAddonCacheEntries(context.Background(), &pb.ListAddonCacheEntriesRequest{AddonId: 42})
+	if err != nil {
+		t.Fatalf("ListAddonCacheEntries: unexpected error: %v", err)
+	}
+	if len(resp.Entries) != 2 {
+		t.Fatalf("expected 2 entries, got %d", len(resp.Entries))
+	}
+
+	if resp.Entries[0].ContentVersion != "v2" {
+		t.Errorf("Entries[0].ContentVersion = %q, want %q (newest first)", resp.Entries[0].ContentVersion, "v2")
+	}
+	if resp.Entries[1].ContentVersion != "v1" {
+		t.Errorf("Entries[1].ContentVersion = %q, want %q", resp.Entries[1].ContentVersion, "v1")
+	}
+	if resp.Entries[1].SizeBytes != sizeV1 {
+		t.Errorf("Entries[1].SizeBytes = %d, want %d", resp.Entries[1].SizeBytes, sizeV1)
+	}
+
+	if len(resp.Entries[0].Hosts) != 2 {
+		t.Fatalf("expected v2 to carry exactly its own 2 hosts, got %d", len(resp.Entries[0].Hosts))
+	}
+	for _, host := range resp.Entries[0].Hosts {
+		if host.ServerName == "host-a" {
+			t.Errorf("v2's hosts must not include v1's host-a, got hosts: %+v", resp.Entries[0].Hosts)
+		}
+	}
+	if len(resp.Entries[1].Hosts) != 1 || resp.Entries[1].Hosts[0].ServerName != "host-a" {
+		t.Errorf("expected v1's hosts to be exactly [host-a], got %+v", resp.Entries[1].Hosts)
+	}
+
+	addonRepo.AssertExpectations(t)
+}
+
+// TestListAddonCacheEntries_NoCacheEntries_EmptyListNoError proves an addon
+// that resolves fine but has never been cached returns an empty list, not
+// an error -- the issue's explicit non-error-on-uncached-addon contract.
+func TestListAddonCacheEntries_NoCacheEntries_EmptyListNoError(t *testing.T) {
+	repo := newFakeCacheRepo()
+	addonRepo := new(MockWorkshopAddonRepository)
+	addonRepo.On("Get", mock.Anything, int64(7)).Return(&manman.WorkshopAddon{
+		AddonID:    7,
+		WorkshopID: "no-cache-entries",
+	}, nil)
+
+	h := newCacheListHandler(repo, addonRepo)
+	resp, err := h.ListAddonCacheEntries(context.Background(), &pb.ListAddonCacheEntriesRequest{AddonId: 7})
+	if err != nil {
+		t.Fatalf("ListAddonCacheEntries: unexpected error for an uncached addon: %v", err)
+	}
+	if resp.Entries == nil {
+		t.Error("Entries is nil, want a non-nil empty slice")
+	}
+	if len(resp.Entries) != 0 {
+		t.Errorf("Entries has %d items, want 0", len(resp.Entries))
+	}
+	// The empty-list path must not even attempt the presence lookup -- there
+	// are no cache_entry_ids to look up.
+	if repo.presenceCalls != 0 {
+		t.Errorf("ListHostPresenceForCacheEntryIDs was called %d times for an uncached addon, want 0", repo.presenceCalls)
+	}
+
+	addonRepo.AssertExpectations(t)
+}
+
+// TestListAddonCacheEntries_UnknownAddonID_NotFound proves an addon_id that
+// doesn't resolve surfaces as codes.NotFound, and never reaches the cache
+// repository at all.
+func TestListAddonCacheEntries_UnknownAddonID_NotFound(t *testing.T) {
+	repo := newFakeCacheRepo()
+	addonRepo := new(MockWorkshopAddonRepository)
+	addonRepo.On("Get", mock.Anything, int64(999)).Return(nil, assert.AnError)
+
+	h := newCacheListHandler(repo, addonRepo)
+	_, err := h.ListAddonCacheEntries(context.Background(), &pb.ListAddonCacheEntriesRequest{AddonId: 999})
+	assertCode(t, err, codes.NotFound)
+
+	if repo.presenceCalls != 0 {
+		t.Errorf("ListHostPresenceForCacheEntryIDs was called %d times for an unresolvable addon, want 0", repo.presenceCalls)
+	}
+	addonRepo.AssertExpectations(t)
+}
+
+// TestListAddonCacheEntries_MissingAddonID_InvalidArgument guards the
+// request-validation half of the RPC, same convention as every other
+// handler's `_id is required` check in this package.
+func TestListAddonCacheEntries_MissingAddonID_InvalidArgument(t *testing.T) {
+	h := newCacheListHandler(newFakeCacheRepo(), new(MockWorkshopAddonRepository))
+	_, err := h.ListAddonCacheEntries(context.Background(), &pb.ListAddonCacheEntriesRequest{})
+	assertCode(t, err, codes.InvalidArgument)
+}
+
+// TestListAddonCacheEntries_PresenceLookupIsBatched is the fan-out
+// regression the issue names explicitly: the presence lookup's call count
+// must not scale with the number of cache entries being listed -- one
+// batched call for N entries, never N calls.
+func TestListAddonCacheEntries_PresenceLookupIsBatched(t *testing.T) {
+	repo := newFakeCacheRepo()
+	addonRepo := new(MockWorkshopAddonRepository)
+	addonRepo.On("Get", mock.Anything, int64(1)).Return(&manman.WorkshopAddon{
+		AddonID:    1,
+		WorkshopID: "long-history",
+	}, nil)
+
+	const numEntries = 10
+	for i := 0; i < numEntries; i++ {
+		repo.seed(&manman.WorkshopCacheEntry{
+			WorkshopID:     "long-history",
+			ContentVersion: fmt.Sprintf("v%d", i),
+			CacheKey:       fmt.Sprintf("ws/long-history/v%d", i),
+			S3Key:          fmt.Sprintf("workshop-cache/long-history/v%d.tar", i),
+			CreatedAt:      time.Now().Add(time.Duration(-i) * time.Hour),
+		})
+	}
+
+	h := newCacheListHandler(repo, addonRepo)
+	resp, err := h.ListAddonCacheEntries(context.Background(), &pb.ListAddonCacheEntriesRequest{AddonId: 1})
+	if err != nil {
+		t.Fatalf("ListAddonCacheEntries: unexpected error: %v", err)
+	}
+	if len(resp.Entries) != numEntries {
+		t.Fatalf("expected %d entries, got %d", numEntries, len(resp.Entries))
+	}
+	if repo.presenceCalls != 1 {
+		t.Errorf("ListHostPresenceForCacheEntryIDs was called %d times for %d entries, want exactly 1 (batched, not per-entry)", repo.presenceCalls, numEntries)
+	}
+}
+
+// TestListAddonCacheEntries_ListFailure_Internal and
+// TestListAddonCacheEntries_PresenceFailure_Internal cover the two
+// repository-error paths: a failure listing entries, and a failure listing
+// their presence, both surface as codes.Internal rather than a partial or
+// panicking response.
+func TestListAddonCacheEntries_ListFailure_Internal(t *testing.T) {
+	repo := newFakeCacheRepo()
+	repo.listErr = errors.New("simulated list failure")
+	addonRepo := new(MockWorkshopAddonRepository)
+	addonRepo.On("Get", mock.Anything, int64(1)).Return(&manman.WorkshopAddon{AddonID: 1, WorkshopID: "123"}, nil)
+
+	h := newCacheListHandler(repo, addonRepo)
+	_, err := h.ListAddonCacheEntries(context.Background(), &pb.ListAddonCacheEntriesRequest{AddonId: 1})
+	assertCode(t, err, codes.Internal)
+}
+
+func TestListAddonCacheEntries_PresenceFailure_Internal(t *testing.T) {
+	repo := newFakeCacheRepo()
+	addonRepo := new(MockWorkshopAddonRepository)
+	addonRepo.On("Get", mock.Anything, int64(1)).Return(&manman.WorkshopAddon{AddonID: 1, WorkshopID: "123"}, nil)
+	repo.seed(&manman.WorkshopCacheEntry{
+		WorkshopID: "123", ContentVersion: "1", CacheKey: "ws/123/1", S3Key: "workshop-cache/123/1.tar",
+	})
+	repo.presenceErr = errors.New("simulated presence failure")
+
+	h := newCacheListHandler(repo, addonRepo)
+	_, err := h.ListAddonCacheEntries(context.Background(), &pb.ListAddonCacheEntriesRequest{AddonId: 1})
 	assertCode(t, err, codes.Internal)
 }
 

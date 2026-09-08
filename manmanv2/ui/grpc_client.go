@@ -651,6 +651,20 @@ func (c *ControlClient) ListBatchJobs(ctx context.Context, gameID int64, limit i
 	return resp.Jobs, nil
 }
 
+// ListAddonCacheEntries fetches every content-addressed cache entry for an
+// addon, newest-first, each with its full host-presence list (FR10, plan
+// #2175) -- the Admin fleet-wide Workshop cache visibility view. An addon
+// with no cached entries returns an empty slice, not an error.
+func (c *ControlClient) ListAddonCacheEntries(ctx context.Context, addonID int64) ([]*manmanpb.WorkshopCacheEntry, error) {
+	resp, err := c.workshop.ListAddonCacheEntries(ctx, &manmanpb.ListAddonCacheEntriesRequest{
+		AddonId: addonID,
+	})
+	if err != nil {
+		return nil, err
+	}
+	return resp.Entries, nil
+}
+
 // AddCollectionToLibrary resolves a Steam Workshop collection's current
 // membership and adds every item in it to a library in one action (FR1,
 // plan #2175). A returned error means a job-level failure (unresolvable

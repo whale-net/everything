@@ -160,3 +160,14 @@ type WorkshopCacheHostPresence struct {
 	FirstSeenAt  time.Time `db:"first_seen_at"`
 	LastSeenAt   time.Time `db:"last_seen_at"`
 }
+
+// WorkshopCacheHostPresenceWithServer is WorkshopCacheHostPresence joined
+// with the servers table for a display name (FR10's Admin visibility view --
+// see WorkshopCacheRepository.ListHostPresenceForCacheEntryIDs).
+type WorkshopCacheHostPresenceWithServer struct {
+	CacheEntryID int64     `db:"cache_entry_id"`
+	ServerID     int64     `db:"server_id"`
+	ServerName   string    `db:"server_name"`
+	FirstSeenAt  time.Time `db:"first_seen_at"`
+	LastSeenAt   time.Time `db:"last_seen_at"`
+}

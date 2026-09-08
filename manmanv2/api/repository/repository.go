@@ -305,6 +305,13 @@ type WorkshopCacheRepository interface {
 	DeleteCacheEntry(ctx context.Context, cacheEntryID int64) error
 	UpsertHostPresence(ctx context.Context, cacheEntryID, serverID int64) error
 	ListHostPresence(ctx context.Context, cacheEntryID int64) ([]*manman.WorkshopCacheHostPresence, error)
+	// ListHostPresenceForCacheEntryIDs is the FR10 fleet-visibility read path:
+	// one query for every entry's host presence, joined with the servers
+	// table for display names, keyed by cache_entry_id. Callers with a version
+	// history to render MUST use this instead of looping ListHostPresence per
+	// entry -- that loop is exactly the per-host, per-entry fan-out FR10 rules
+	// out, and the query count must not scale with entry count.
+	ListHostPresenceForCacheEntryIDs(ctx context.Context, cacheEntryIDs []int64) (map[int64][]*manman.WorkshopCacheHostPresenceWithServer, error)
 }
 
 // Repository aggregates all repository interfaces

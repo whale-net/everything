@@ -1344,3 +1344,63 @@ func (app *App) handleWorkshopBatchStatus(w http.ResponseWriter, r *http.Request
 
 	RenderTempl(w, r, "Batch Job Status", pages.WorkshopBatchStatus(data))
 }
+
+// handleWorkshopCache renders the Admin fleet-wide Workshop cache visibility
+// view for a single addon (FR10, plan #2175): every content-addressed cache
+// entry, which hosts hold a copy, and each entry's staleness -- from one
+// place, without querying hosts one at a time. Manual reload only, same M4
+// boundary as the batch-status view: no polling or SSE.
+func (app *App) handleWorkshopCache(w http.ResponseWriter, r *http.Request) {
+	user := htmxauth.GetUser(r.Context())
+	ctx := r.Context()
+
+	addonIDStr := r.URL.Query().Get("addon_id")
+	if addonIDStr == "" {
+		http.Error(w, "addon_id required", http.StatusBadRequest)
+		return
+	}
+
+	addonID, err := strconv.ParseInt(addonIDStr, 10, 64)
+	if err != nil {
+		http.Error(w, "Invalid addon_id", http.StatusBadRequest)
+		return
+	}
+
+	// Best-effort: an unresolvable addon name still renders the cache view
+	// (an addon_id-only title/breadcrumb) rather than failing the page --
+	// ListAddonCacheEntries below is the RPC that actually determines whether
+	// the addon exists.
+	addonName := "Addon " + addonIDStr
+	if addon, addonErr := app.grpc.GetWorkshopAddon(ctx, addonID); addonErr == nil && addon.Name != "" {
+		addonName = addon.Name
+	}
+
+	breadcrumbs := []components.Breadcrumb{
+		{Label: "Workshop", URL: "/workshop/library"},
+		{Label: addonName, URL: fmt.Sprintf("/workshop/addon?addon_id=%d", addonID)},
+		{Label: "Cache", URL: ""},
+	}
+	layoutData, err := app.buildTemplLayoutData(r, "Workshop Cache", "workshop", user, breadcrumbs)
+	if err != nil {
+		log.Printf("Error building layout data: %v", err)
+		http.Error(w, "Failed to build layout", http.StatusInternalServerError)
+		return
+	}
+
+	entries, err := app.grpc.ListAddonCacheEntries(ctx, addonID)
+	if err != nil {
+		// Unknown addon_id (control-api returns NotFound) renders the empty
+		// state rather than an error page, matching the batch-status view's
+		// precedent for a read-only lookup by id.
+		log.Printf("Error fetching workshop cache entries for addon %d: %v", addonID, err)
+		entries = nil
+	}
+
+	data := pages.WorkshopCachePageData{
+		Layout:  layoutData,
+		AddonID: addonID,
+		Entries: entries,
+	}
+
+	RenderTempl(w, r, "Workshop Cache", pages.WorkshopCache(data))
+}
