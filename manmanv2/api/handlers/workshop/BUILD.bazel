@@ -16,7 +16,6 @@ go_library(
     deps = [
         "//libs/go/grpcauth",
         "//libs/go/rmq",
-        "//libs/go/s3",
         "//manmanv2/models:models",
         "//manmanv2/api/repository",
         "//manmanv2/api/workshop",
@@ -29,9 +28,14 @@ go_library(
 
 go_test(
     name = "workshop_test",
-    srcs = ["workshop_test.go"],
+    srcs = [
+        "cache_test.go",
+        "workshop_test.go",
+    ],
     embed = [":workshop"],
     deps = [
+        "//libs/go/grpcauth",
+        "//manmanv2/api/workshop",
         "//manmanv2/models:models",
         "//manmanv2/protos:manmanpb",
         "@com_github_stretchr_testify//assert",

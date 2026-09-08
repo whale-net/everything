@@ -14,6 +14,20 @@ import (
 	"google.golang.org/grpc/status"
 )
 
+// cachePresigner is the narrow S3 presign surface GetCacheDownloadURL and
+// GetCacheUploadURL need -- exactly the two single-object presign methods,
+// nothing else (no Upload, Delete, Exists, etc). *s3lib.Client (wired in by
+// manmanv2/api/main.go) satisfies this. Declaring it here rather than
+// depending on *s3lib.Client directly lets cache_test.go substitute a fake
+// that records the exact key/ttl it was called with and can be made to fail
+// on demand, without dragging in real AWS SDK config/credentials or letting
+// a test accidentally reach for one of the concrete client's unrelated
+// methods.
+type cachePresigner interface {
+	PresignGetURL(ctx context.Context, key string, ttl time.Duration) (string, error)
+	PresignPutURL(ctx context.Context, key string, ttl time.Duration) (string, error)
+}
+
 // cacheURLTTL is NFR6's load-bearing constant: every presigned URL this
 // handler issues -- GET (GetCacheDownloadURL) or PUT (GetCacheUploadURL) --
 // expires in minutes, not hours. The existing backup flow's 1-hour TTL
