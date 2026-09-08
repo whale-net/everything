@@ -945,6 +945,23 @@ templ IdeaDetail(data components.LayoutData, ch store.Channel, idea store.Idea, 
 							@threadList(threads)
 						</div>
 
+						<div class="mt-6 border-t border-base-300 pt-4">
+							<h2 class="text-lg font-semibold">Viability verdict</h2>
+							if current == nil {
+								<p class="text-base-content/70 mt-2 text-sm">No verdict recorded yet.</p>
+							} else {
+								<div class="border border-base-300 rounded p-3 mt-2 bg-base-200/50">
+									<p class="text-xs uppercase font-bold tracking-wider text-base-content/60 mb-2">Current</p>
+									@verdictBody(*current, authorNames, citedNotes, retiredNotes)
+								</div>
+								<p class="mt-2">
+									<a href={ templ.URL("/channels/" + ch.ID.String() + "/research/ideas/" + idea.ID.String() + "/verdicts") } class="link link-primary text-sm">
+										View verdict history
+									</a>
+								</p>
+							}
+						</div>
+
 						if canWrite && (proposeForm.Error != "" || (current != nil && current.Verdict == store.VerdictViable)) {
 							<div class="mt-6 border-t border-base-300 pt-4">
 								<h2 class="text-lg font-semibold">Propose a video script</h2>
@@ -961,60 +978,40 @@ templ IdeaDetail(data components.LayoutData, ch store.Channel, idea store.Idea, 
 				</div>
 			</div>
 
-			<!-- Floating Trigger Button (mobile / portrait / 1080x1920 when minimized) -->
-			<button
-				id="verdict-floating-btn"
-				type="button"
-				class="verdict-floating-btn btn btn-primary shadow-2xl gap-2 z-40"
-				data-toggle-verdict-box
-				aria-label="Open viability verdict box"
-			>
-				<span>Viability verdict</span>
-				if current != nil {
-					<span title={ components.VerdictGlyphTitle(current.Verdict) }>{ components.VerdictGlyph(current.Verdict) }</span>
-				} else {
-					<span title="No verdict yet">{ components.NoVerdictGlyph }</span>
-				}
-			</button>
+			if canWrite {
+				<!-- Floating Trigger Button (mobile / portrait / 1080x1920 when minimized) -->
+				<button
+					id="verdict-floating-btn"
+					type="button"
+					class="verdict-floating-btn btn btn-primary shadow-2xl gap-2 z-40"
+					data-toggle-verdict-box
+					aria-label="Open save verdict box"
+				>
+					<span>Save verdict</span>
+					<span>✍️</span>
+				</button>
 
-			<!-- Verdict Section: Floating box on 1080x1920 portrait / Narrow sidebar on widescreen -->
-			<aside
-				id="verdict-panel"
-				class="verdict-floating-panel border border-base-300 bg-base-100 rounded-box p-4 xl:p-5"
-			>
-				<div class="flex items-center justify-between pb-2 mb-2 border-b border-base-300">
-					<h2 class="text-lg font-semibold">Viability verdict</h2>
-					<button
-						type="button"
-						class="verdict-minimize-btn btn btn-ghost btn-xs"
-						data-toggle-verdict-box
-						title="Minimize verdict box"
-						aria-label="Minimize verdict box"
-					>
-						✕
-					</button>
-				</div>
-
-				if current == nil {
-					<p class="text-base-content/70 mt-2 text-sm">No verdict recorded yet.</p>
-				} else {
-					<div class="border border-base-300 rounded p-3 mt-2 bg-base-200/50">
-						<p class="text-xs uppercase font-bold tracking-wider text-base-content/60 mb-2">Current</p>
-						@verdictBody(*current, authorNames, citedNotes, retiredNotes)
+				<!-- Save Verdict Section: Floating box on 1080x1920 portrait / Narrow sidebar on widescreen -->
+				<aside
+					id="verdict-panel"
+					class="verdict-floating-panel border border-base-300 bg-base-100 rounded-box p-4 xl:p-5"
+				>
+					<div class="flex items-center justify-between pb-2 mb-2 border-b border-base-300">
+						<h2 class="text-lg font-semibold">Save verdict</h2>
+						<button
+							type="button"
+							class="verdict-minimize-btn btn btn-ghost btn-xs"
+							data-toggle-verdict-box
+							title="Minimize verdict box"
+							aria-label="Minimize verdict box"
+						>
+							✕
+						</button>
 					</div>
-					<p class="mt-2">
-						<a href={ templ.URL("/channels/" + ch.ID.String() + "/research/ideas/" + idea.ID.String() + "/verdicts") } class="link link-primary text-sm">
-							View verdict history
-						</a>
-					</p>
-				}
 
-				if canWrite {
-					<div class="mt-4 pt-3 border-t border-base-300">
-						@saveVerdictPanel(ch, idea, verdictForm)
-					</div>
-				}
-			</aside>
+					@saveVerdictPanel(ch, idea, verdictForm)
+				</aside>
+			}
 		</div>
 		@noteIDCopyScript()
 		@verdictBoxScript()
