@@ -10,9 +10,14 @@ YouTube creator research/schedule/outcome tracking system, exposed over MCP.
   any ASS work.
 - [`README.md`](README.md) — What this domain is, the four binaries, local
   dev (Postgres + Temporal), how to run each via `bazel run`.
-- [`ARCHITECTURE.md`](ARCHITECTURE.md) — Component map (`web`, `mcp`,
-  `worker`, `migrate`, Postgres), the Go-throughout decision, and the NFR3
-  interface allocation (what's web UI vs. MCP-only).
+- [`ARCHITECTURE.md`](ARCHITECTURE.md) — Index + the Go-throughout decision
+  only; the actual sections (component map, MCP server, OAuth grants, NFR3
+  interface allocation, Temporal helper, data model) live one-per-file
+  under [`architecture/`](architecture/) — jump straight to the file you
+  need via `ARCHITECTURE.md`'s table. NFR3 interface allocation
+  (`architecture/05-nfr3-interface-allocation.md`) is what's web UI vs.
+  MCP-only: six UI-only surfaces as of issue #2039 (C1/C2/C3 OAuth-consent,
+  plus C18's edit slice, C20, C21), up from three.
 - [`ENV.md`](ENV.md) — All environment variables: `PG_DATABASE_URL`,
   `TEMPORAL_HOST`/`TEMPORAL_NAMESPACE`/`TEMPORAL_TASK_QUEUE`, log level,
   `web`'s Google OAuth sign-in vars (`ASS_GOOGLE_CLIENT_ID` etc., C1), and
