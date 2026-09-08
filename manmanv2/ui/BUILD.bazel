@@ -18,11 +18,10 @@ go_library(
         "handlers_workshop.go",
         "main.go",
         "templ_render.go",
-        "templates.go",
     ],
     embedsrcs = [
         "favicon.ico",
-    ] + glob(["templates/**/*.html"]),
+    ],
     importpath = "github.com/whale-net/everything/manmanv2/ui",
     visibility = ["//visibility:private"],
     deps = [
