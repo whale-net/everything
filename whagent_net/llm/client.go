@@ -244,7 +244,19 @@ func fromWireUsage(generationID string, usage openai.CompletionUsage) UsageRepor
 		CompletionTokens: usage.CompletionTokens,
 		GenerationID:     generationID,
 	}
-	if field, ok := usage.JSON.ExtraFields["cost"]; ok && field.Valid() {
+	// Deliberately does not gate on field.Valid(): openai-go's apijson
+	// decoder only marks an extra field "valid" when the containing
+	// struct declares a typed extra-value map to decode into.
+	// openai.CompletionUsage has none -- it only carries the untyped
+	// JSON.ExtraFields metadata map -- so every extra field it sees,
+	// including OpenRouter's "cost", is unconditionally decoded with
+	// status "invalid" even though the raw JSON value is present and
+	// well-formed. field.Valid() is therefore always false here and
+	// cannot be used to detect presence; map membership (ok) plus a
+	// check that the raw value isn't the JSON literal "null" (an
+	// explicit null, as opposed to an omitted field) is what actually
+	// distinguishes "provider supplied a cost" from "it didn't".
+	if field, ok := usage.JSON.ExtraFields["cost"]; ok && field.Raw() != "" && field.Raw() != "null" {
 		var costUSD float64
 		if err := json.Unmarshal([]byte(field.Raw()), &costUSD); err == nil {
 			cost := usdToMicros(costUSD)
