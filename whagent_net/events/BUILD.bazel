@@ -1,0 +1,16 @@
+load("@rules_go//go:def.bzl", "go_library")
+
+go_library(
+    name = "events",
+    srcs = [
+        "events.go",
+        "publisher.go",
+    ],
+    importpath = "github.com/whale-net/everything/whagent_net/events",
+    visibility = ["//visibility:public"],
+    deps = [
+        "//libs/go/rmq",
+        "@com_github_google_uuid//:uuid",
+        "@com_github_rabbitmq_amqp091_go//:amqp091-go",
+    ],
+)
