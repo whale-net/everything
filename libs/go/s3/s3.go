@@ -155,6 +155,23 @@ func (c *Client) PresignPutURL(ctx context.Context, key string, ttl time.Duratio
 	return req.URL, nil
 }
 
+// PresignGetURL generates a pre-signed GET URL for key against the primary
+// (internal) endpoint — mirrors PresignPutURL's endpoint choice: presigned
+// URL consumers (e.g. host-manager) are internal infrastructure that reach
+// S3 directly, and the signature must match the endpoint that handles the
+// request. Use PresignPublicGetURL instead when the consumer is external
+// and only the public endpoint is reachable.
+func (c *Client) PresignGetURL(ctx context.Context, key string, ttl time.Duration) (string, error) {
+	req, err := c.presign.PresignGetObject(ctx, &s3.GetObjectInput{
+		Bucket: aws.String(c.bucket),
+		Key:    aws.String(key),
+	}, s3.WithPresignExpires(ttl))
+	if err != nil {
+		return "", fmt.Errorf("failed to presign GET URL: %w", err)
+	}
+	return req.URL, nil
+}
+
 // noSeekReader wraps an io.Reader to prevent the AWS SDK from seeking it.
 type noSeekReader struct{ r io.Reader }
 
