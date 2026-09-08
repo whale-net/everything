@@ -625,6 +625,32 @@ func (c *ControlClient) DeleteLibrary(ctx context.Context, libraryID int64) erro
 	return err
 }
 
+// Batch job status methods (FR4, plan #2175)
+
+// GetBatchJob fetches a batch job header plus its per-item results, ordered
+// by display_order server-side so items render in paste order.
+func (c *ControlClient) GetBatchJob(ctx context.Context, batchJobID int64) (*manmanpb.WorkshopBatchJob, []*manmanpb.BatchItemResult, error) {
+	resp, err := c.workshop.GetBatchJob(ctx, &manmanpb.GetBatchJobRequest{
+		BatchJobId: batchJobID,
+	})
+	if err != nil {
+		return nil, nil, err
+	}
+	return resp.Job, resp.Items, nil
+}
+
+// ListBatchJobs returns the most recent batch jobs for a game, newest first.
+func (c *ControlClient) ListBatchJobs(ctx context.Context, gameID int64, limit int32) ([]*manmanpb.WorkshopBatchJob, error) {
+	resp, err := c.workshop.ListBatchJobs(ctx, &manmanpb.ListBatchJobsRequest{
+		GameId: gameID,
+		Limit:  limit,
+	})
+	if err != nil {
+		return nil, err
+	}
+	return resp.Jobs, nil
+}
+
 func (c *ControlClient) DeleteAddon(ctx context.Context, addonID int64) error {
 	_, err := c.workshop.DeleteAddon(ctx, &manmanpb.DeleteAddonRequest{
 		AddonId: addonID,

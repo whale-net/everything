@@ -16,13 +16,13 @@ import (
 	"github.com/whale-net/everything/libs/go/logging"
 	rmqlib "github.com/whale-net/everything/libs/go/rmq"
 	"github.com/whale-net/everything/libs/go/s3"
-	"go.opentelemetry.io/contrib/instrumentation/google.golang.org/grpc/otelgrpc"
 	"github.com/whale-net/everything/manmanv2/api/handlers"
 	workshophandler "github.com/whale-net/everything/manmanv2/api/handlers/workshop"
 	"github.com/whale-net/everything/manmanv2/api/repository/postgres"
 	"github.com/whale-net/everything/manmanv2/api/steam"
 	"github.com/whale-net/everything/manmanv2/api/workshop"
 	pb "github.com/whale-net/everything/manmanv2/protos"
+	"go.opentelemetry.io/contrib/instrumentation/google.golang.org/grpc/otelgrpc"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/reflection"
 )
@@ -51,7 +51,7 @@ func run() error {
 	rabbitmqURL := getEnv("RABBITMQ_URL", "amqp://guest:guest@localhost:5672/")
 	s3Bucket := getEnv("S3_BUCKET", "manman-logs")
 	s3Region := getEnv("S3_REGION", "us-east-1")
-	s3Endpoint := getEnv("S3_ENDPOINT", "")             // Optional: for S3-compatible storage (OVH, MinIO, etc.)
+	s3Endpoint := getEnv("S3_ENDPOINT", "")              // Optional: for S3-compatible storage (OVH, MinIO, etc.)
 	s3PublicEndpoint := getEnv("S3_PUBLIC_ENDPOINT", "") // Optional: public-facing endpoint for pre-signed URLs
 	s3AccessKey := getEnv("S3_ACCESS_KEY", "")           // Optional: for static credentials (MinIO, etc.)
 	s3SecretKey := getEnv("S3_SECRET_KEY", "")           // Optional: for static credentials (MinIO, etc.)
@@ -121,8 +121,8 @@ func run() error {
 
 	// Create gRPC server
 	grpcServer := grpc.NewServer(
-		grpc.MaxRecvMsgSize(10 * 1024 * 1024), // 10 MB
-		grpc.MaxSendMsgSize(10 * 1024 * 1024), // 10 MB
+		grpc.MaxRecvMsgSize(10*1024*1024), // 10 MB
+		grpc.MaxSendMsgSize(10*1024*1024), // 10 MB
 		grpc.StatsHandler(otelgrpc.NewServerHandler()),
 		grpc.ChainUnaryInterceptor(logging.NewUnaryServerLoggingInterceptor("grpc"), unaryInt),
 		grpc.ChainStreamInterceptor(logging.NewStreamServerLoggingInterceptor("grpc"), streamInt),
@@ -163,6 +163,7 @@ func run() error {
 		repo.ServerGameConfigs,
 		repo.AddonPathPresets,
 		repo.WorkshopCache,
+		repo.WorkshopBatchJobs,
 		workshopManager,
 		s3Client,
 	)

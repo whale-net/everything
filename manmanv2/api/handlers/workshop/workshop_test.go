@@ -3,6 +3,7 @@ package workshop
 import (
 	"context"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
@@ -213,6 +214,59 @@ func (m *MockWorkshopLibraryRepository) ListReferences(ctx context.Context, libr
 func (m *MockWorkshopLibraryRepository) DetectCircularReference(ctx context.Context, parentLibraryID, childLibraryID int64) (bool, error) {
 	args := m.Called(ctx, parentLibraryID, childLibraryID)
 	return args.Bool(0), args.Error(1)
+}
+
+// MockWorkshopBatchJobRepository is a mock implementation of
+// WorkshopBatchJobRepository (#2179, plan #2175, FR4).
+type MockWorkshopBatchJobRepository struct {
+	mock.Mock
+}
+
+func (m *MockWorkshopBatchJobRepository) CreateBatchJob(ctx context.Context, job *manman.WorkshopBatchJob) (*manman.WorkshopBatchJob, error) {
+	args := m.Called(ctx, job)
+	if args.Get(0) == nil {
+		return nil, args.Error(1)
+	}
+	return args.Get(0).(*manman.WorkshopBatchJob), args.Error(1)
+}
+
+func (m *MockWorkshopBatchJobRepository) CreateBatchJobItems(ctx context.Context, batchJobID int64, items []*manman.WorkshopBatchJobItem) error {
+	args := m.Called(ctx, batchJobID, items)
+	return args.Error(0)
+}
+
+func (m *MockWorkshopBatchJobRepository) UpdateBatchJobItemResult(ctx context.Context, batchJobItemID int64, status string, addonID *int64, errorMessage *string) error {
+	args := m.Called(ctx, batchJobItemID, status, addonID, errorMessage)
+	return args.Error(0)
+}
+
+func (m *MockWorkshopBatchJobRepository) UpdateBatchJobStatus(ctx context.Context, batchJobID int64, status string, succeeded, failed int) error {
+	args := m.Called(ctx, batchJobID, status, succeeded, failed)
+	return args.Error(0)
+}
+
+func (m *MockWorkshopBatchJobRepository) GetBatchJob(ctx context.Context, batchJobID int64) (*manman.WorkshopBatchJob, error) {
+	args := m.Called(ctx, batchJobID)
+	if args.Get(0) == nil {
+		return nil, args.Error(1)
+	}
+	return args.Get(0).(*manman.WorkshopBatchJob), args.Error(1)
+}
+
+func (m *MockWorkshopBatchJobRepository) ListBatchJobItems(ctx context.Context, batchJobID int64) ([]*manman.WorkshopBatchJobItem, error) {
+	args := m.Called(ctx, batchJobID)
+	if args.Get(0) == nil {
+		return nil, args.Error(1)
+	}
+	return args.Get(0).([]*manman.WorkshopBatchJobItem), args.Error(1)
+}
+
+func (m *MockWorkshopBatchJobRepository) ListBatchJobs(ctx context.Context, gameID int64, limit int) ([]*manman.WorkshopBatchJob, error) {
+	args := m.Called(ctx, gameID, limit)
+	if args.Get(0) == nil {
+		return nil, args.Error(1)
+	}
+	return args.Get(0).([]*manman.WorkshopBatchJob), args.Error(1)
 }
 
 // MockWorkshopManager is a mock implementation of WorkshopManager
@@ -1092,6 +1146,194 @@ func TestFetchAddonMetadata(t *testing.T) {
 			}
 
 			mockManager.AssertExpectations(t)
+		})
+	}
+}
+
+// TestGetBatchJob covers the GetBatchJob RPC (#2179, plan #2175, FR4):
+// items must reach the response in the order the repository returns them
+// (display_order is the repository's responsibility -- ListBatchJobItems
+// -- this test guards that the handler does not reorder or drop them), a
+// mixed-status job's aggregate counts must pass through unchanged, and an
+// unknown batch_job_id must surface as codes.NotFound.
+func TestGetBatchJob(t *testing.T) {
+	now := time.Now()
+
+	tests := []struct {
+		name          string
+		request       *pb.GetBatchJobRequest
+		mockSetup     func(*MockWorkshopBatchJobRepository)
+		expectedError codes.Code
+		checkResponse func(*testing.T, *pb.GetBatchJobResponse)
+	}{
+		{
+			name: "items returned in display_order, mixed-status counts pass through",
+			request: &pb.GetBatchJobRequest{
+				BatchJobId: 1,
+			},
+			mockSetup: func(m *MockWorkshopBatchJobRepository) {
+				libraryID := int64(9)
+				sourceInput := "collection paste"
+				m.On("GetBatchJob", mock.Anything, int64(1)).
+					Return(&manman.WorkshopBatchJob{
+						BatchJobID:     1,
+						JobType:        "batch_create",
+						GameID:         1,
+						LibraryID:      &libraryID,
+						SourceInput:    &sourceInput,
+						Status:         "completed_with_errors",
+						TotalItems:     3,
+						SucceededItems: 2,
+						FailedItems:    1,
+						CreatedAt:      now,
+						UpdatedAt:      now,
+					}, nil)
+
+				workshopID1 := "111"
+				addonID1 := int64(101)
+				errMsg := "workshop item not found"
+				m.On("ListBatchJobItems", mock.Anything, int64(1)).
+					Return([]*manman.WorkshopBatchJobItem{
+						{BatchJobItemID: 1, BatchJobID: 1, RawInput: "111", WorkshopID: &workshopID1, AddonID: &addonID1, Status: "succeeded", DisplayOrder: 0},
+						{BatchJobItemID: 2, BatchJobID: 1, RawInput: "222", Status: "failed", ErrorMessage: &errMsg, DisplayOrder: 1},
+						{BatchJobItemID: 3, BatchJobID: 1, RawInput: "333", Status: "succeeded", DisplayOrder: 2},
+					}, nil)
+			},
+			expectedError: codes.OK,
+			checkResponse: func(t *testing.T, resp *pb.GetBatchJobResponse) {
+				assert.NotNil(t, resp.Job)
+				assert.Equal(t, "completed_with_errors", resp.Job.Status)
+				assert.Equal(t, int32(3), resp.Job.TotalItems)
+				assert.Equal(t, int32(2), resp.Job.SucceededItems)
+				assert.Equal(t, int32(1), resp.Job.FailedItems)
+
+				if assert.Len(t, resp.Items, 3) {
+					assert.Equal(t, "111", resp.Items[0].RawInput)
+					assert.Equal(t, "succeeded", resp.Items[0].Status)
+					assert.Equal(t, "222", resp.Items[1].RawInput)
+					assert.Equal(t, "failed", resp.Items[1].Status)
+					assert.Equal(t, "workshop item not found", resp.Items[1].ErrorMessage)
+					assert.Equal(t, "333", resp.Items[2].RawInput)
+				}
+			},
+		},
+		{
+			name: "missing batch_job_id",
+			request: &pb.GetBatchJobRequest{
+				BatchJobId: 0,
+			},
+			mockSetup:     func(m *MockWorkshopBatchJobRepository) {},
+			expectedError: codes.InvalidArgument,
+		},
+		{
+			name: "unknown batch_job_id",
+			request: &pb.GetBatchJobRequest{
+				BatchJobId: 999,
+			},
+			mockSetup: func(m *MockWorkshopBatchJobRepository) {
+				m.On("GetBatchJob", mock.Anything, int64(999)).
+					Return(nil, assert.AnError)
+			},
+			expectedError: codes.NotFound,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			mockRepo := new(MockWorkshopBatchJobRepository)
+			tt.mockSetup(mockRepo)
+
+			handler := &WorkshopServiceHandler{
+				batchJobRepo: mockRepo,
+			}
+
+			resp, err := handler.GetBatchJob(context.Background(), tt.request)
+
+			if tt.expectedError != codes.OK {
+				assert.Error(t, err)
+				st, ok := status.FromError(err)
+				assert.True(t, ok)
+				assert.Equal(t, tt.expectedError, st.Code())
+			} else {
+				assert.NoError(t, err)
+				if tt.checkResponse != nil {
+					tt.checkResponse(t, resp)
+				}
+			}
+
+			mockRepo.AssertExpectations(t)
+		})
+	}
+}
+
+// TestListBatchJobs covers the ListBatchJobs RPC (#2179, plan #2175, FR4):
+// the requested limit reaches the repository, and jobs come back in the
+// order the repository returns them (newest-first is the repository's
+// ORDER BY -- this test guards that the handler passes that ordering
+// through unchanged rather than re-sorting or truncating).
+func TestListBatchJobs(t *testing.T) {
+	tests := []struct {
+		name          string
+		request       *pb.ListBatchJobsRequest
+		mockSetup     func(*MockWorkshopBatchJobRepository)
+		expectedError codes.Code
+		checkResponse func(*testing.T, *pb.ListBatchJobsResponse)
+	}{
+		{
+			name: "respects limit and preserves newest-first order",
+			request: &pb.ListBatchJobsRequest{
+				GameId: 1,
+				Limit:  2,
+			},
+			mockSetup: func(m *MockWorkshopBatchJobRepository) {
+				m.On("ListBatchJobs", mock.Anything, int64(1), 2).
+					Return([]*manman.WorkshopBatchJob{
+						{BatchJobID: 5, GameID: 1, JobType: "collection_add", Status: "completed"},
+						{BatchJobID: 4, GameID: 1, JobType: "batch_create", Status: "completed"},
+					}, nil)
+			},
+			expectedError: codes.OK,
+			checkResponse: func(t *testing.T, resp *pb.ListBatchJobsResponse) {
+				if assert.Len(t, resp.Jobs, 2) {
+					assert.Equal(t, int64(5), resp.Jobs[0].BatchJobId)
+					assert.Equal(t, int64(4), resp.Jobs[1].BatchJobId)
+				}
+			},
+		},
+		{
+			name: "missing game_id",
+			request: &pb.ListBatchJobsRequest{
+				Limit: 10,
+			},
+			mockSetup:     func(m *MockWorkshopBatchJobRepository) {},
+			expectedError: codes.InvalidArgument,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			mockRepo := new(MockWorkshopBatchJobRepository)
+			tt.mockSetup(mockRepo)
+
+			handler := &WorkshopServiceHandler{
+				batchJobRepo: mockRepo,
+			}
+
+			resp, err := handler.ListBatchJobs(context.Background(), tt.request)
+
+			if tt.expectedError != codes.OK {
+				assert.Error(t, err)
+				st, ok := status.FromError(err)
+				assert.True(t, ok)
+				assert.Equal(t, tt.expectedError, st.Code())
+			} else {
+				assert.NoError(t, err)
+				if tt.checkResponse != nil {
+					tt.checkResponse(t, resp)
+				}
+			}
+
+			mockRepo.AssertExpectations(t)
 		})
 	}
 }

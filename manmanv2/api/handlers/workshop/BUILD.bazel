@@ -4,6 +4,7 @@ go_library(
     name = "workshop",
     srcs = [
         "addon.go",
+        "batch_job.go",
         "cache.go",
         "handler.go",
         "installation.go",
@@ -16,10 +17,10 @@ go_library(
     deps = [
         "//libs/go/grpcauth",
         "//libs/go/rmq",
-        "//manmanv2/models:models",
         "//manmanv2/api/repository",
         "//manmanv2/api/workshop",
         "//manmanv2/host/rmq",
+        "//manmanv2/models",
         "//manmanv2/protos:manmanpb",
         "@org_golang_google_grpc//codes",
         "@org_golang_google_grpc//status",
@@ -36,7 +37,7 @@ go_test(
     deps = [
         "//libs/go/grpcauth",
         "//manmanv2/api/workshop",
-        "//manmanv2/models:models",
+        "//manmanv2/models",
         "//manmanv2/protos:manmanpb",
         "@com_github_stretchr_testify//assert",
         "@com_github_stretchr_testify//mock",

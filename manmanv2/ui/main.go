@@ -432,6 +432,7 @@ func (app *App) setupRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("/workshop/api/available-addons", app.auth.RequireAuthFunc(app.auth.WithAccessToken(app.handleAvailableAddons)))
 	mux.HandleFunc("/workshop/api/available-libraries", app.auth.RequireAuthFunc(app.auth.WithAccessToken(app.handleAvailableLibraries)))
 	mux.HandleFunc("/workshop/api/presets-for-game", app.auth.RequireAuthFunc(app.auth.WithAccessToken(app.handlePresetsForGame)))
+	mux.HandleFunc("/workshop/batch-status", app.auth.RequireAuthFunc(app.auth.WithAccessToken(app.handleWorkshopBatchStatus)))
 
 	// Protected routes - SGC detail
 	mux.HandleFunc("/sgc/", app.auth.RequireAuthFunc(app.auth.WithAccessToken(app.handleSGCRoutes)))

@@ -21,6 +21,7 @@ type WorkshopServiceHandler struct {
 	sgcRepo          repository.ServerGameConfigRepository
 	presetRepo       repository.AddonPathPresetRepository
 	cacheRepo        repository.WorkshopCacheRepository
+	batchJobRepo     repository.WorkshopBatchJobRepository
 	workshopManager  workshop.WorkshopManagerInterface
 	s3Client         cachePresigner
 }
@@ -33,6 +34,7 @@ func NewWorkshopServiceHandler(
 	sgcRepo repository.ServerGameConfigRepository,
 	presetRepo repository.AddonPathPresetRepository,
 	cacheRepo repository.WorkshopCacheRepository,
+	batchJobRepo repository.WorkshopBatchJobRepository,
 	workshopManager *workshop.WorkshopManager,
 	s3Client cachePresigner,
 ) *WorkshopServiceHandler {
@@ -43,6 +45,7 @@ func NewWorkshopServiceHandler(
 		sgcRepo:          sgcRepo,
 		presetRepo:       presetRepo,
 		cacheRepo:        cacheRepo,
+		batchJobRepo:     batchJobRepo,
 		workshopManager:  workshopManager,
 		s3Client:         s3Client,
 	}
