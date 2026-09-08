@@ -73,6 +73,29 @@ func Load() ([]AgentDefinitionConfig, error) {
 	return doc.Agents, nil
 }
 
+// RequiredRoles returns the deduplicated, non-empty RequiredRole values
+// across agents, in stable (first-seen) order. whagent_net/api/main.go
+// uses this to derive grpcauth.ServerConfig.DevRoles from the seeded
+// agent definitions instead of hand-listing service roles (issue #2154,
+// FR9) -- so a new agent definition with a new required_role stays
+// coverable under GRPC_AUTH_MODE=none without a main.go change. Pure, no
+// I/O, same shape as Validate.
+func RequiredRoles(agents []AgentDefinitionConfig) []string {
+	seen := make(map[string]struct{}, len(agents))
+	roles := make([]string, 0, len(agents))
+	for _, a := range agents {
+		if a.RequiredRole == "" {
+			continue
+		}
+		if _, dup := seen[a.RequiredRole]; dup {
+			continue
+		}
+		seen[a.RequiredRole] = struct{}{}
+		roles = append(roles, a.RequiredRole)
+	}
+	return roles
+}
+
 // Validate checks the shape-only rules Load can enforce without I/O: a
 // missing agent_id, a missing model, or a tool_set entry with an empty
 // server_url. The model-catalogue check (a model the configured OpenRouter

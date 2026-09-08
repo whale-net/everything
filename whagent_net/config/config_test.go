@@ -92,6 +92,42 @@ func TestValidate_FirstBadEntryReportedByIndex(t *testing.T) {
 	assert.Contains(t, err.Error(), "second-agent")
 }
 
+// TestRequiredRoles_DedupesAndSkipsEmpty proves RequiredRoles' two rules
+// directly (issue #2154, FR9): a required_role shared by more than one
+// agent appears exactly once in the result, and an agent with an empty
+// required_role contributes nothing -- so grpcauth.ServerConfig.DevRoles
+// (whagent_net/api/main.go) never carries a duplicate or a blank entry.
+func TestRequiredRoles_DedupesAndSkipsEmpty(t *testing.T) {
+	shared := validAgent()
+	shared.AgentID = "shared-a"
+	shared.RequiredRole = "whagent-shared-role"
+
+	sameRole := validAgent()
+	sameRole.AgentID = "shared-b"
+	sameRole.RequiredRole = "whagent-shared-role"
+
+	noRole := validAgent()
+	noRole.AgentID = "no-role"
+	noRole.RequiredRole = ""
+
+	roles := RequiredRoles([]AgentDefinitionConfig{shared, sameRole, noRole})
+	assert.Equal(t, []string{"whagent-shared-role"}, roles)
+}
+
+// TestRequiredRoles_RealAgentsYAML proves RequiredRoles generalizes past
+// hand-built fixtures to the real checked-in agents.yaml this package
+// embeds -- config.Load()'s result must include the seeded
+// audience-score-system-research agent's required_role, the same value
+// whagent_net/api/main_test.go's TestDevRolesCarrySeededRequiredRoles
+// asserts ends up in AuthModeNone's dev Claims.
+func TestRequiredRoles_RealAgentsYAML(t *testing.T) {
+	agents, err := Load()
+	require.NoError(t, err)
+
+	roles := RequiredRoles(agents)
+	assert.Contains(t, roles, "whagent-audience-score-system-research")
+}
+
 // TestLoad_EmbeddedAgentsYAML_ParsesAndValidates is a sanity check that
 // the real checked-in agents.yaml this package embeds is itself
 // well-formed -- Load fails loudly (per this package's doc comment) on a
