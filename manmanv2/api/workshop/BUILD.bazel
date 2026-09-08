@@ -3,6 +3,7 @@ load("@rules_go//go:def.bzl", "go_library", "go_test")
 go_library(
     name = "workshop",
     srcs = [
+        "batch.go",
         "cachekey.go",
         "entry_parser.go",
         "manager.go",
@@ -24,6 +25,7 @@ go_library(
 go_test(
     name = "workshop_test",
     srcs = [
+        "batch_test.go",
         "cachekey_test.go",
         "entry_parser_test.go",
         "manager_test.go",
@@ -35,4 +37,3 @@ go_test(
         "//manmanv2/models",
     ],
 )
-

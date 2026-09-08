@@ -147,6 +147,7 @@ func run() error {
 		repo.GameConfigVolumes,
 		repo.AddonPathPresets,
 		repo.Sessions,
+		repo.WorkshopBatchJobs,
 		steamClient,
 		rmqPublisher,
 	)

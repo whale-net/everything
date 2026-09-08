@@ -54,6 +54,9 @@ service WorkshopService {
   // Batch Job Management
   rpc GetBatchJob(GetBatchJobRequest) returns (GetBatchJobResponse);
   rpc ListBatchJobs(ListBatchJobsRequest) returns (ListBatchJobsResponse);
+
+  // Batch Operations
+  rpc BatchCreateAddons(BatchCreateAddonsRequest) returns (BatchCreateAddonsResponse);
 }
 
 // ============================================================================
@@ -501,9 +504,7 @@ message WorkshopBatchJob {
 }
 
 // BatchItemResult is the per-item outcome shared across the batch-create
-// (#2177), collection-add, and batch-status (this task) RPCs. Defined here
-// because this task landed first; #2177 should reuse this message rather
-// than defining a second copy when it lands.
+// (#2177), collection-add, and batch-status (#2179) RPCs. Defined once here.
 message BatchItemResult {
   string raw_input = 1;
   string workshop_id = 2;
@@ -528,4 +529,26 @@ message ListBatchJobsRequest {
 
 message ListBatchJobsResponse {
   repeated WorkshopBatchJob jobs = 1;
+}
+
+// ============================================================================
+// Batch Operation RPCs
+// ============================================================================
+
+// BatchCreateAddons takes a pasted block of mixed raw Workshop IDs and
+// Workshop URLs and creates an addon per valid entry, committing valid
+// entries even when some entries are invalid (FR2, FR3, NFR5).
+message BatchCreateAddonsRequest {
+  int64 game_id = 1;
+  int64 library_id = 2;  // target library; 0 = create addons without library attachment
+  string entries = 3;    // raw pasted block, one entry per line, mixed IDs and URLs
+  int64 preset_id = 4;   // path preset applied to every created addon
+}
+
+message BatchCreateAddonsResponse {
+  int64 batch_job_id = 1;
+  int32 total_items = 2;
+  int32 succeeded_items = 3;
+  int32 failed_items = 4;
+  repeated BatchItemResult results = 5;
 }
