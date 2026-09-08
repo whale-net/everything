@@ -3,6 +3,7 @@ package postgres
 import (
 	"context"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/jackc/pgx/v5"
@@ -203,6 +204,19 @@ func (r *ServerPortRepository) DeallocatePortsBySessionID(ctx context.Context, s
 }
 
 // AllocateMultiplePorts allocates multiple ports in a transaction
+//
+// FR12 enforcement (task #2097, plan #2080): a FRESH allocation outside
+// the server's configured allowed host-port ranges (where any exist for
+// the binding's protocol) is refused with a *PortOutOfRangeError -- the
+// same synchronous failure path a port conflict already takes, so an
+// out-of-range port can no longer start a "healthy" session that is
+// silently unreachable. The allowed ranges are read inside the same
+// transaction so the refusal is decided against one consistent snapshot
+// of ranges + allocations. Where no ranges exist for a protocol,
+// assignment is unconstrained (exactly the pre-038 behavior, SB-1.2).
+// Existing allocations are never re-checked here: they stay valid until
+// their session ends, so a range change takes effect at the next fresh
+// allocation (OQ5).
 func (r *ServerPortRepository) AllocateMultiplePorts(ctx context.Context, serverID int64, portBindings []*manman.PortBinding, sessionID int64) error {
 	// Start transaction
 	tx, err := r.db.Begin(ctx)
@@ -211,8 +225,19 @@ func (r *ServerPortRepository) AllocateMultiplePorts(ctx context.Context, server
 	}
 	defer tx.Rollback(ctx)
 
-	// Check all ports for availability first
+	// Allowed host-port ranges for this server, grouped by protocol.
+	// Empty per-protocol slices (and an entirely empty map) mean
+	// unconstrained for that protocol (SB-1.2).
+	allowedRanges, err := loadAllowedPortRanges(ctx, tx, serverID)
+	if err != nil {
+		return err
+	}
+
+	// Check all ports for range conformance and availability first
 	for _, binding := range portBindings {
+		if err := checkPortWithinAllowedRanges(allowedRanges, serverID, binding); err != nil {
+			return err
+		}
 		checkQuery := `
 			SELECT EXISTS(
 				SELECT 1 FROM server_ports
@@ -340,6 +365,90 @@ func containsHelper(s, substr string) bool {
 }
 
 // Error types (defined in server_port_test.go, duplicated here for implementation)
+
+// allowedPortRanges is the configured set of host-port ranges for one
+// server, grouped by protocol. A protocol absent from the map (or with an
+// empty slice) is unconstrained (SB-1.2).
+type allowedPortRanges map[string][]portRange
+
+type portRange struct {
+	start int32
+	end   int32
+}
+
+// loadAllowedPortRanges reads the server's configured allowed host-port
+// ranges (038_server_allowed_port_ranges) within the caller's transaction.
+type rangeQuerier interface {
+	Query(ctx context.Context, sql string, args ...any) (pgx.Rows, error)
+}
+
+func loadAllowedPortRanges(ctx context.Context, q rangeQuerier, serverID int64) (allowedPortRanges, error) {
+	rows, err := q.Query(ctx, `
+		SELECT start_port, end_port, protocol
+		FROM server_allowed_port_ranges
+		WHERE server_id = $1
+	`, serverID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	ranges := allowedPortRanges{}
+	for rows.Next() {
+		var start, end int32
+		var protocol string
+		if err := rows.Scan(&start, &end, &protocol); err != nil {
+			return nil, err
+		}
+		ranges[protocol] = append(ranges[protocol], portRange{start: start, end: end})
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return ranges, nil
+}
+
+// checkPortWithinAllowedRanges refuses a fresh binding whose host port
+// falls outside every configured range for its protocol. A protocol with
+// no configured ranges is unconstrained (SB-1.2).
+func checkPortWithinAllowedRanges(ranges allowedPortRanges, serverID int64, binding *manman.PortBinding) error {
+	rs := ranges[binding.Protocol]
+	if len(rs) == 0 {
+		return nil
+	}
+	for _, r := range rs {
+		if binding.HostPort >= r.start && binding.HostPort <= r.end {
+			return nil
+		}
+	}
+	summary := make([]string, 0, len(rs))
+	for _, r := range rs {
+		summary = append(summary, fmt.Sprintf("%d-%d", r.start, r.end))
+	}
+	return &PortOutOfRangeError{
+		ServerID:         serverID,
+		Port:             int(binding.HostPort),
+		Protocol:         binding.Protocol,
+		ConfiguredRanges: strings.Join(summary, ", "),
+	}
+}
+
+type PortOutOfRangeError struct {
+	ServerID         int64
+	Port             int
+	Protocol         string
+	ConfiguredRanges string
+}
+
+func (e *PortOutOfRangeError) Error() string {
+	return fmt.Sprintf("host port %d/%s on server %d is outside the configured allowed port ranges (%s)",
+		e.Port, e.Protocol, e.ServerID, e.ConfiguredRanges)
+}
+
+func IsPortOutOfRangeError(err error) bool {
+	_, ok := err.(*PortOutOfRangeError)
+	return ok
+}
 
 type PortConflictError struct {
 	ServerID     int64
