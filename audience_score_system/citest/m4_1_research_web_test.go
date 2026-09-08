@@ -451,11 +451,12 @@ func TestE2E_M41_ResearchWebSaveBrowse(t *testing.T) {
 		rec := w.get(creatorCookie, "/channels/"+ch.ID.String()+"/research/ideas/"+nfrIdea.ID.String())
 		require.Equal(t, http.StatusOK, rec.Code, "body: %s", rec.Body.String())
 		body := rec.Body.String()
-		// Each of the 50 rendered notes appears THREE times (once in the
-		// note list, once in the save-verdict form's citation multi-select,
-		// once in the save-note form's relation picker, mirroring
-		// research_integration_test.go's identical count).
-		assert.Equal(t, 150, strings.Count(body, "nfr2 note "), "exactly 50 notes must render")
+		// Each of the 50 rendered notes appears TWICE (once in the note
+		// list -- which now carries the save-verdict panel's citation
+		// checkbox inline, #2035 -- and once in the save-note form's
+		// relation picker), mirroring research_integration_test.go's
+		// identical count.
+		assert.Equal(t, 100, strings.Count(body, "nfr2 note "), "exactly 50 notes must render")
 		assert.Contains(t, body, "most recent", "a truncation note must appear")
 		assert.NotContains(t, strings.ToLower(body), "load more", "no load-more control may appear (NFR2)")
 
