@@ -1,0 +1,156 @@
+package main
+
+import (
+	"context"
+	"fmt"
+	"log/slog"
+	"os"
+	"os/signal"
+	"syscall"
+
+	"go.temporal.io/sdk/activity"
+	"go.temporal.io/sdk/worker"
+
+	"github.com/whale-net/everything/libs/go/db"
+	"github.com/whale-net/everything/libs/go/logging"
+	"github.com/whale-net/everything/libs/go/rmq"
+	temporallib "github.com/whale-net/everything/libs/go/temporal"
+	"github.com/whale-net/everything/whagent_net/events"
+	"github.com/whale-net/everything/whagent_net/llm"
+	"github.com/whale-net/everything/whagent_net/session"
+)
+
+func main() {
+	if err := run(); err != nil {
+		logging.Get("main").Error("fatal", "error", err)
+		os.Exit(1)
+	}
+}
+
+func run() error {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	logging.Configure(logging.Config{
+		ServiceName:   "whagent-net-worker",
+		Domain:        "whagent-net",
+		JSONFormat:    true,
+		EnableOTLP:    true,
+		EnableTracing: true,
+	})
+	defer logging.Shutdown(ctx) //nolint:errcheck
+	logger := logging.Get("main")
+
+	// Postgres, shared with api (ARCHITECTURE.md "Service boundary vs.
+	// package boundary": worker imports whagent_net/session directly, no
+	// RPC hop).
+	databaseURL := getEnv("PG_DATABASE_URL", "")
+	pool, err := db.NewPool(ctx, databaseURL)
+	if err != nil {
+		return fmt.Errorf("database: %w", err)
+	}
+	defer pool.Close()
+	logger.Info("database connected")
+
+	pub := initializePublisher(ctx, logger)
+	store := session.New(pool, pub)
+
+	// OpenRouter client (issue #2112) -- CallModel (activities.go) calls
+	// this on every turn. Constructed unconditionally: OPENROUTER_API_KEY
+	// is documented required in ENV.md, but startup itself does not
+	// validate it -- an empty/invalid key surfaces as a CallModel activity
+	// failure on the first turn, not a startup error, matching this
+	// worker's other soft-fail-at-startup dependencies (initializePublisher
+	// below).
+	llmClient := llm.NewClient(os.Getenv("OPENROUTER_API_KEY"), getEnv("OPENROUTER_BASE_URL", "https://openrouter.ai/api/v1"))
+
+	// Price table (LB6, ENV.md's WHAGENT_PRICE_TABLE_PATH) -- CommitTurn's
+	// resolveCost (activities.go) falls back to this only when the
+	// provider omits cost in its response (uncommon with
+	// usage.include=true, but not guaranteed for every model/provider
+	// combination on OpenRouter); left nil when unset rather than failing
+	// startup, since a process that only ever sees provider-reported cost
+	// never dereferences it.
+	var prices *llm.PriceTable
+	if priceTablePath := os.Getenv("WHAGENT_PRICE_TABLE_PATH"); priceTablePath != "" {
+		prices, err = llm.LoadPriceTable(priceTablePath)
+		if err != nil {
+			return fmt.Errorf("load price table: %w", err)
+		}
+	} else {
+		logger.Warn("WHAGENT_PRICE_TABLE_PATH not set; cost estimation will be unavailable if the provider ever omits usage cost")
+	}
+
+	// Temporal client + worker, via libs/go/temporal (NewWorker bootstrap).
+	temporalCfg := temporallib.ConfigFromEnv()
+	if temporalCfg.TaskQueue == "" {
+		temporalCfg.TaskQueue = TaskQueue
+	}
+	logger.Info("connecting to temporal", "host_port", temporalCfg.HostPort, "namespace", temporalCfg.Namespace, "task_queue", temporalCfg.TaskQueue)
+	temporalClient, err := temporallib.NewClient(temporalCfg, temporallib.NewLogger("whagent-net-worker"))
+	if err != nil {
+		return fmt.Errorf("connect to temporal: %w", err)
+	}
+	defer temporalClient.Close()
+
+	w := temporallib.NewWorker(temporalClient, temporalCfg.TaskQueue, worker.Options{})
+	w.RegisterWorkflow(SessionWorkflow)
+
+	acts := &Activities{Store: store, LLM: llmClient, Prices: prices}
+	w.RegisterActivityWithOptions(acts.ResolveAgentDefinition, activity.RegisterOptions{Name: ActivityResolveAgentDefinition})
+	w.RegisterActivityWithOptions(acts.BuildContext, activity.RegisterOptions{Name: ActivityBuildContext})
+	w.RegisterActivityWithOptions(acts.CallModel, activity.RegisterOptions{Name: ActivityCallModel})
+	w.RegisterActivityWithOptions(acts.CommitTurn, activity.RegisterOptions{Name: ActivityCommitTurn})
+	w.RegisterActivityWithOptions(acts.UpdateSessionStatus, activity.RegisterOptions{Name: ActivityUpdateSessionStatus})
+
+	done := make(chan error, 1)
+	go func() {
+		done <- w.Run(worker.InterruptCh())
+	}()
+
+	sigCh := make(chan os.Signal, 1)
+	signal.Notify(sigCh, os.Interrupt, syscall.SIGTERM)
+	select {
+	case <-sigCh:
+		logger.Info("shutting down gracefully")
+		cancel()
+	case err := <-done:
+		cancel()
+		return err
+	}
+	return <-done
+}
+
+// initializePublisher constructs the events.PublisherInterface
+// session.New's Transcript().Append publishes committed events onto (NFR2,
+// see whagent_net/session/transcript.go). Construction is non-fatal, same
+// as tools/app_registry/worker's initializePublisher: with RABBITMQ_URL
+// unset or the broker unreachable at startup, this returns nil and Append
+// silently skips the publish step.
+func initializePublisher(ctx context.Context, logger *slog.Logger) events.PublisherInterface {
+	brokerURL := getEnv("RABBITMQ_URL", "")
+	if brokerURL == "" {
+		logger.Info("RABBITMQ_URL not set; transcript events will not be published")
+		return nil
+	}
+
+	conn, err := rmq.NewConnectionFromURL(brokerURL)
+	if err != nil {
+		logger.Warn("failed to connect to RabbitMQ for event publishing; transcript events will not be published", "error", err)
+		return nil
+	}
+
+	pub, err := events.NewPublisher(conn)
+	if err != nil {
+		logger.Warn("failed to create event publisher; transcript events will not be published", "error", err)
+		return nil
+	}
+	return pub
+}
+
+func getEnv(key, def string) string {
+	if v := os.Getenv(key); v != "" {
+		return v
+	}
+	return def
+}

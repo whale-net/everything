@@ -21,6 +21,7 @@ first pilot consumer.
 - [Service boundary vs. package boundary](#service-boundary-vs-package-boundary)
 - [Event bus](#event-bus)
 - [Session workflow](#session-workflow)
+- [Workflow versioning (NFR1)](#workflow-versioning-nfr1)
 - [Domain-owned MCP servers and the tool contract](#domain-owned-mcp-servers-and-the-tool-contract)
 - [Guardrails](#guardrails)
 - [Embeddable session UI](#embeddable-session-ui)
@@ -155,6 +156,42 @@ never returns between turns. Per turn:
 Bounded tasks (~100 turns) are the target; Continue-As-New is deferred
 until that assumption changes. `parent_session_id` is set from day one so a
 session started via `mcp` by another session is an ordinary session.
+
+## Workflow versioning (NFR1)
+
+`SessionWorkflow` is long-lived and signal-per-turn (unlike every other
+in-repo workflow, which is one-shot or scheduled -- "Language and stack"
+above), so it is the first workflow in this repo that can have open runs
+spanning a worker deploy that changes its own code. Every behavior-changing
+edit to `SessionWorkflow` or `processTurn`'s control flow must go through
+`workflow.GetVersion`, from the first one onward, so a run already open
+across that deploy keeps replaying its recorded history correctly instead
+of hitting a non-determinism error.
+
+Convention (established in `whagent_net/worker/workflow.go`, issue #2114):
+one change ID per behavior-changing edit, named
+`session-workflow-<short-slug>`, added at the exact point the new branch
+diverges from old behavior:
+
+```go
+v := workflow.GetVersion(ctx, "session-workflow-<slug>", workflow.DefaultVersion, 1)
+if v >= 1 {
+    // new behavior
+} else {
+    // old behavior, preserved for any run already open when this change deployed
+}
+```
+
+`workflow.go`'s `updateSessionStatus` (change ID
+`session-workflow-status-transitions`) is the first real usage: the
+Scaffold-phase loop never wrote `sessions.status` at all, so
+Implementation phase's addition of that write is a genuine new branch, not
+just documentation. The next one lands with the follow-up tool-dispatch
+task, gating the `ExecuteActivity` calls it adds at `processTurn`'s
+tool-call dispatch step (`session-workflow-tool-dispatch`) -- see that
+function's comment in `workflow.go`. Every later task that changes
+`SessionWorkflow`/`processTurn`'s control flow inherits this convention
+rather than reinventing it.
 
 ## Domain-owned MCP servers and the tool contract
 
