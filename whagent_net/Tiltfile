@@ -43,7 +43,7 @@ print_startup_banner("whagent-net", namespace, platform)
 setup_dev_util(namespace)
 
 # PostgreSQL Database (the `session` store, LB1/LB2/LB5/LB6)
-db_info = setup_postgres(namespace, db_name='whagent_net')
+db_info = setup_postgres(namespace, db_name='whagent_net', resource_name='postgres-dev-whagent')
 pg_database_url = get_custom_or_default(
     'BUILD_POSTGRES_ENV',
     'PG_DATABASE_URL',
@@ -251,7 +251,7 @@ spec:
 
     k8s_resource(
         'whagent-net-migrate',
-        resource_deps=['postgres-dev'],
+        resource_deps=['postgres-dev-whagent'],
         labels=['whagent-net-infrastructure'],
     )
     print("🔄 Migration job configured (applies schema + seeds agent_definition)")

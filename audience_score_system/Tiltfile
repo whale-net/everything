@@ -45,7 +45,7 @@ print_startup_banner("Audience Score System", namespace, platform)
 
 setup_dev_util(namespace)
 
-db_info = setup_postgres(namespace, db_name='audience_score_system')
+db_info = setup_postgres(namespace, db_name='audience_score_system', resource_name='postgres-dev-ass')
 pg_database_url = get_custom_or_default(
     'BUILD_POSTGRES_ENV',
     'PG_DATABASE_URL',
@@ -151,7 +151,7 @@ spec:
 
     k8s_resource(
         'audience-score-system-migration',
-        resource_deps=['postgres-dev'],
+        resource_deps=['postgres-dev-ass'],
         labels=['audience-score-system-infrastructure'],
     )
     print("🔄 Migration job configured")
