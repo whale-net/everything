@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"net/http"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -32,6 +33,7 @@ type DownloadOrchestrator struct {
 	maxConcurrent   int
 	semaphore       chan struct{}
 	rmqPublisher    InstallationStatusPublisher
+	cacheClient     *CacheClient // S3 cache read fast path (#2183); nil-safe if workshopClient is nil
 
 	// In-progress download tracking to prevent duplicates
 	inProgressMutex     sync.RWMutex
@@ -86,6 +88,7 @@ func NewDownloadOrchestrator(
 		semaphore:           make(chan struct{}, maxConcurrent),
 		rmqPublisher:        rmqPublisher,
 		inProgressDownloads: make(map[int64]bool),
+		cacheClient:         NewCacheClient(workshopClient, serverID, http.DefaultClient),
 	}
 }
 
@@ -105,7 +108,8 @@ func (do *DownloadOrchestrator) HandleDownloadCommand(ctx context.Context, cmd *
 	// WorkshopManager.InstallAddon, which fans out to children instead of dispatching
 	// a download for the collection's own addon_id). Refuse rather than hand SteamCMD
 	// a collection ID it cannot download.
-	if addon, err := do.workshopClient.GetAddon(ctx, &pb.GetAddonRequest{AddonId: cmd.AddonID}); err == nil && addon.Addon != nil && addon.Addon.IsCollection {
+	addonResp, addonErr := do.workshopClient.GetAddon(ctx, &pb.GetAddonRequest{AddonId: cmd.AddonID})
+	if addonErr == nil && addonResp.Addon != nil && addonResp.Addon.IsCollection {
 		err := fmt.Errorf("addon %d is a Steam Workshop collection, not downloadable content", cmd.AddonID)
 		logger.Error("refusing to download collection addon", "error", err)
 		do.handleDownloadError(ctx, cmd.InstallationID, err)
@@ -127,6 +131,18 @@ func (do *DownloadOrchestrator) HandleDownloadCommand(ctx context.Context, cmd *
 
 	// Update status to downloading
 	do.publishStatus(ctx, cmd.InstallationID, InstallationStatusDownloading, 0, nil)
+
+	// Fast path (#2183): try to serve this install from the S3 Workshop cache before
+	// falling back to SteamCMD. A miss, an RPC error, an Unimplemented control-api, or any
+	// failure resolving/writing the install target all degrade silently to the existing
+	// SteamCMD flow below -- this is purely additive and must never fail the install itself.
+	if addonErr == nil && addonResp.Addon != nil {
+		if do.tryServeFromCache(ctx, cmd, addonResp.Addon, logger) {
+			logger.Info("served workshop addon from S3 cache, skipping SteamCMD download")
+			do.publishStatus(ctx, cmd.InstallationID, InstallationStatusInstalled, 100, nil)
+			return nil
+		}
+	}
 
 	// Build download container configuration with environment-aware naming
 	containerName := do.getDownloadContainerName(cmd.SGCID, cmd.AddonID)
@@ -635,6 +651,79 @@ func (do *DownloadOrchestrator) resolveInstallTarget(ctx context.Context, sgcID 
 	}
 
 	return installTarget{}, fmt.Errorf("no volume found for container path %s", containerPath)
+}
+
+// tryServeFromCache attempts to satisfy cmd entirely from the S3 Workshop cache via
+// CacheClient.TryFetch, using addon.LastUpdated (Steam's time_updated) as the content
+// version. It returns true only once the content has actually landed at the install
+// target; any failure at any step returns false so the caller falls back to the existing
+// SteamCMD download path unchanged.
+//
+// The object is always fetched into an addon-scoped staging directory rather than
+// directly into the (possibly shared) install target, then merged into place the same
+// way the SteamCMD path already does -- via copyDirectory for bind mounts or the busybox
+// helper container for named volumes -- so a cache hit can never wipe out other addons
+// that already share the same install directory.
+func (do *DownloadOrchestrator) tryServeFromCache(ctx context.Context, cmd *DownloadAddonCommand, addon *pb.WorkshopAddon, logger *slog.Logger) bool {
+	if do.cacheClient == nil {
+		return false
+	}
+
+	target, err := do.resolveInstallTarget(ctx, cmd.SGCID, cmd.InstallPath)
+	if err != nil {
+		logger.Warn("failed to resolve install target for workshop cache fast path, falling back to SteamCMD", "error", err)
+		return false
+	}
+
+	cacheSuffix := fmt.Sprintf("%d-%d", cmd.AddonID, time.Now().UnixNano())
+	cacheStagingInternal := filepath.Join(do.getSGCInternalDir(cmd.SGCID), ".workshop-cache-staging", cacheSuffix)
+	cacheStagingHost := filepath.Join(do.getSGCHostDir(cmd.SGCID), ".workshop-cache-staging", cacheSuffix)
+	if err := os.MkdirAll(filepath.Dir(cacheStagingInternal), 0777); err != nil {
+		logger.Warn("failed to create workshop cache staging directory, falling back to SteamCMD", "error", err)
+		return false
+	}
+	defer os.RemoveAll(cacheStagingInternal)
+
+	contentVersion := strconv.FormatInt(addon.LastUpdated, 10)
+	hit, err := do.cacheClient.TryFetch(ctx, cmd.WorkshopID, contentVersion, cacheStagingInternal)
+	if err != nil || !hit {
+		// CacheClient already logs the reason; a miss or transfer failure is the
+		// ordinary fallback path, not a defect in this flow.
+		return false
+	}
+
+	if target.isNamed {
+		destPath := target.ContainerPath
+		if target.RelPath != "" {
+			destPath = filepath.Join(destPath, target.RelPath)
+		}
+		copyCmd := fmt.Sprintf("mkdir -p %s && cp -r /tmp/workshop-cache-staging/. %s/", destPath, destPath)
+		helperConfig := docker.ContainerConfig{
+			Name:    fmt.Sprintf("workshop-cache-install-%s-%d-%d", do.environment, cmd.SGCID, cmd.AddonID),
+			Image:   "busybox:latest",
+			Command: []string{"sh", "-c", copyCmd},
+			Volumes: []string{
+				fmt.Sprintf("%s:/tmp/workshop-cache-staging", cacheStagingHost),
+				fmt.Sprintf("%s:%s", target.VolumeName, target.ContainerPath),
+			},
+		}
+		logger.Info("copying cached workshop content to named volume via helper container", "volume", target.VolumeName, "dest", destPath)
+		if err := do.runHelperContainer(ctx, helperConfig); err != nil {
+			logger.Warn("failed to copy cached workshop content into named volume, falling back to SteamCMD", "error", err)
+			return false
+		}
+		return true
+	}
+
+	if err := os.MkdirAll(target.BindPath, 0777); err != nil {
+		logger.Warn("failed to create install directory for workshop cache fast path, falling back to SteamCMD", "error", err)
+		return false
+	}
+	if err := do.copyDirectory(cacheStagingInternal, target.BindPath); err != nil {
+		logger.Warn("failed to copy cached workshop content to install path, falling back to SteamCMD", "error", err)
+		return false
+	}
+	return true
 }
 
 // runHelperContainer creates, starts, waits for, and removes a short-lived container.

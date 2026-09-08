@@ -58,6 +58,16 @@ service WorkshopService {
   // Batch Operations
   rpc BatchCreateAddons(BatchCreateAddonsRequest) returns (BatchCreateAddonsResponse);
   rpc AddCollectionToLibrary(AddCollectionToLibraryRequest) returns (AddCollectionToLibraryResponse);
+
+  // ReportCacheRead records that server_id successfully landed the object for
+  // cache_entry_id on disk (FR10's data source). Callers must invoke this only
+  // after the transfer completes and lands atomically -- a URL being issued is
+  // not the same as a copy landing. Additive RPC: older host-manager binaries
+  // that predate it simply never call it, and control-api predating it (or a
+  // relay that is otherwise unavailable) surfaces as Unimplemented, which the
+  // host-manager caller treats as non-fatal (the cache read itself already
+  // succeeded by the time this is called).
+  rpc ReportCacheRead(ReportCacheReadRequest) returns (ReportCacheReadResponse);
 }
 
 // ============================================================================
@@ -574,3 +584,10 @@ message AddCollectionToLibraryResponse {
   int32 failed_items = 5;
   repeated BatchItemResult results = 6;
 }
+
+message ReportCacheReadRequest {
+  int64 server_id = 1;
+  int64 cache_entry_id = 2;
+}
+
+message ReportCacheReadResponse {}
