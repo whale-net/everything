@@ -59,8 +59,8 @@ func TestMigration038_AppliesOnTopOfFullHistoryAndCreatesExpectedShape(t *testin
 	if err != nil {
 		t.Fatalf("LatestVersion: %v", err)
 	}
-	if latest != 38 {
-		t.Fatalf("expected the latest migration source version to be 38, got %d -- update this test if a newer migration has since landed", latest)
+	if latest != 39 {
+		t.Fatalf("expected the latest migration source version to be 39, got %d -- update this test if a newer migration has since landed", latest)
 	}
 
 	if err := runner.Up(); err != nil {
@@ -74,8 +74,8 @@ func TestMigration038_AppliesOnTopOfFullHistoryAndCreatesExpectedShape(t *testin
 	if dirty {
 		t.Fatalf("expected clean state after Up, got dirty")
 	}
-	if version != 38 {
-		t.Fatalf("expected version 38 after Up, got %d", version)
+	if version != 39 {
+		t.Fatalf("expected version 39 after Up, got %d", version)
 	}
 
 	// All columns of the PortRange shape (start/end/protocol) must exist.
@@ -172,20 +172,22 @@ func TestMigration038_DownThenUpPreservesExistingRowsAndRoundTrips(t *testing.T)
 		t.Fatalf("seed range: %v", err)
 	}
 
-	// Down exactly one step (table gone). Runner.Down() rolls back ALL
-	// migrations, which trips over pre-existing down-chain issues in
-	// unrelated early migrations -- one step is all this round-trip needs.
-	// The previous source version is 36 on branches without #2092's 037
-	// and 37 once that lands, so only assert we actually left 38.
-	if err := runner.Steps(-1); err != nil {
-		t.Fatalf("Steps(-1): %v", err)
+	// Roll back to exactly one below 038 (table gone). Runner.Down() rolls
+	// back ALL migrations, which trips over pre-existing down-chain issues
+	// in unrelated early migrations -- targeting 037 explicitly (rather
+	// than a relative Steps(-1) off of whatever the latest migration
+	// happens to be) is what keeps this round-trip testing 038's own down
+	// migration specifically, regardless of how many later migrations have
+	// since landed on top of it.
+	if err := runner.Migrate(37); err != nil {
+		t.Fatalf("Migrate(37) (rolling back 038): %v", err)
 	}
 	version, _, err := runner.Version()
 	if err != nil {
 		t.Fatalf("Version after down-step: %v", err)
 	}
-	if version == 38 {
-		t.Fatalf("expected version below 38 after down-step, got %d", version)
+	if version != 37 {
+		t.Fatalf("expected version 37 after Migrate(37), got %d", version)
 	}
 	var exists bool
 	if err := db.Pool.QueryRow(ctx,

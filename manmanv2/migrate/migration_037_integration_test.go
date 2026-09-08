@@ -69,8 +69,8 @@ func TestMigration037_SoftDeleteFKAndLosslessRoundTrip(t *testing.T) {
 	if err != nil {
 		t.Fatalf("LatestVersion: %v", err)
 	}
-	if latest != 38 {
-		t.Fatalf("expected the latest migration source version to be 38, got %d -- update this test if a newer migration has since landed", latest)
+	if latest != 39 {
+		t.Fatalf("expected the latest migration source version to be 39, got %d -- update this test if a newer migration has since landed", latest)
 	}
 
 	if err := runner.Up(); err != nil {
@@ -81,8 +81,8 @@ func TestMigration037_SoftDeleteFKAndLosslessRoundTrip(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Version: %v", err)
 	}
-	if dirty || version != 38 {
-		t.Fatalf("expected clean version 38 after Up, got version %d dirty=%v", version, dirty)
+	if dirty || version != 39 {
+		t.Fatalf("expected clean version 39 after Up, got version %d dirty=%v", version, dirty)
 	}
 
 	// deleted_at column present on action_definitions.
@@ -134,21 +134,23 @@ func TestMigration037_SoftDeleteFKAndLosslessRoundTrip(t *testing.T) {
 		t.Fatalf("soft-delete seeded definition: %v", err)
 	}
 
-	// 2. Round-trip: step down past the newest migration(s) and 037
-	// itself (so 037's lossless down actually runs even when a later
-	// migration has since landed), then re-apply to latest.
-	if err := runner.Steps(-2); err != nil {
-		t.Fatalf("Steps(-2): %v", err)
+	// 2. Round-trip: roll back to exactly one below 037 (rather than a
+	// relative Steps() count, which breaks every time another migration
+	// lands on top of 037), so 037's lossless down actually runs
+	// regardless of how many later migrations now exist, then re-apply to
+	// restore 037+038.
+	if err := runner.Migrate(36); err != nil {
+		t.Fatalf("Migrate(36) (rolling back 037): %v", err)
 	}
 	afterDown, dirty, err := runner.Version()
 	if err != nil {
 		t.Fatalf("Version after down-step: %v", err)
 	}
-	if dirty || afterDown >= 37 {
-		t.Fatalf("expected a lower version after down-step, got %d dirty=%v", afterDown, dirty)
+	if dirty || afterDown != 36 {
+		t.Fatalf("expected version 36 after Migrate(36), got %d dirty=%v", afterDown, dirty)
 	}
 	if err := runner.Migrate(38); err != nil {
-		t.Fatalf("Migrate(37): %v", err)
+		t.Fatalf("Migrate(38): %v", err)
 	}
 
 	// Lossless: the definition row survived (un-deleted) and its execution

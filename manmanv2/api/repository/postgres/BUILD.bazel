@@ -14,13 +14,14 @@ go_library(
         "pending_restart.go",
         "repository.go",
         "server.go",
-        "server_port_range.go",
         "server_capability.go",
         "server_port.go",
+        "server_port_range.go",
         "servergameconfig.go",
         "session.go",
         "strategy.go",
         "workshop_addon.go",
+        "workshop_batch_job.go",
         "workshop_installation.go",
         "workshop_library.go",
     ],
@@ -28,7 +29,7 @@ go_library(
     visibility = ["//manmanv2:__subpackages__"],
     deps = [
         "//manmanv2/api/repository",
-        "//manmanv2/models:models",
+        "//manmanv2/models",
         "@com_github_jackc_pgx_v5//:pgx",
         "@com_github_jackc_pgx_v5//pgconn",
         "@com_github_jackc_pgx_v5//pgxpool",
@@ -40,7 +41,7 @@ go_test(
     srcs = ["server_port_test.go"],
     embed = [":postgres"],
     deps = [
-        "//manmanv2/models:models",
+        "//manmanv2/models",
     ],
 )
 
@@ -49,7 +50,7 @@ go_test(
     srcs = ["workshop_addon_property_test.go"],
     embed = [":postgres"],
     deps = [
-        "//manmanv2/models:models",
+        "//manmanv2/models",
     ],
 )
 
@@ -58,7 +59,7 @@ go_test(
     srcs = ["workshop_installation_property_test.go"],
     embed = [":postgres"],
     deps = [
-        "//manmanv2/models:models",
+        "//manmanv2/models",
     ],
 )
 
@@ -67,7 +68,7 @@ go_test(
     srcs = ["workshop_library_property_test.go"],
     embed = [":postgres"],
     deps = [
-        "//manmanv2/models:models",
+        "//manmanv2/models",
     ],
 )
 
@@ -87,7 +88,7 @@ go_test(
         "workshop_library_property_test.go",
     ],
     embed = [":postgres"],
-    deps = ["//manmanv2/models:models"],
+    deps = ["//manmanv2/models"],
 )
 
 # Real-Postgres coverage for the FR6 action edit round-trip (task #2091,
@@ -263,6 +264,35 @@ go_test(
     size = "large",
     timeout = "long",
     srcs = ["server_port_range_integration_test.go"],
+    embed = [":postgres"],
+    gotags = ["integration"],
+    tags = [
+        "external",
+        "integration",
+        "manual",
+        "no-cache",
+        "no-sandbox",
+        "requires-network",
+    ],
+    deps = [
+        "//libs/go/dbtest",
+        "//manmanv2/models",
+        "@com_github_jackc_pgx_v5//pgxpool",
+    ],
+)
+
+# Real-Postgres coverage for WorkshopBatchJobRepository (task #2176, plan
+# #2175): aggregate-header CRUD, per-item creation/update, the
+# display_order ordering ListBatchJobItems relies on, and the NFR1/NFR2
+# shape guarantee (no sgc_id column on either new table) that only
+# information_schema can actually prove. Same build-tag/target conventions
+# as server_port_range_integration_test above.
+go_test(
+    # keep
+    name = "workshop_batch_job_integration_test",
+    size = "large",
+    timeout = "long",
+    srcs = ["workshop_batch_job_integration_test.go"],
     embed = [":postgres"],
     gotags = ["integration"],
     tags = [
