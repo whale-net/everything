@@ -66,7 +66,7 @@ func run() error {
 	logger.Info("database connected")
 
 	store := session.New(pool)
-	sessionServer := handlers.NewSessionServer(store)
+	sessionServer := handlers.NewSessionServer(store, grpcOIDCIssuer)
 
 	// Every SessionService RPC authenticates (ARCHITECTURE.md "Identity and
 	// auth chaining"; whagent_net/api/auth.go's requireClaims) -- unlike
