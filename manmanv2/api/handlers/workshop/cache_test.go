@@ -82,7 +82,12 @@ func (f *fakePresigner) Delete(_ context.Context, key string) error {
 	return nil
 }
 
-func (f *fakePresigner) PresignGetURL(_ context.Context, key string, ttl time.Duration) (string, error) {
+// PresignPublicGetURL implements cachePresigner's public-endpoint GET
+// method (FR6/FR7/FR9: GetCacheDownloadURL must presign against the public
+// endpoint host-manager can actually reach, not the internal-only
+// PresignGetURL). Call-recording behavior is unchanged from the
+// pre-rename PresignGetURL this replaces.
+func (f *fakePresigner) PresignPublicGetURL(_ context.Context, key string, ttl time.Duration) (string, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.getCalls = append(f.getCalls, presignCall{key: key, ttl: ttl})
@@ -92,7 +97,12 @@ func (f *fakePresigner) PresignGetURL(_ context.Context, key string, ttl time.Du
 	return fmt.Sprintf("https://cache-bucket.s3.example.com/%s?X-Amz-Signature=deadbeefdeadbeef&X-Amz-Expires=%d", key, int(ttl.Seconds())), nil
 }
 
-func (f *fakePresigner) PresignPutURL(_ context.Context, key string, ttl time.Duration) (string, error) {
+// PresignPublicPutURL implements cachePresigner's public-endpoint PUT
+// method (FR6/FR7/FR9: GetCacheUploadURL must presign against the public
+// endpoint host-manager can actually reach, not the internal-only
+// PresignPutURL). Call-recording behavior is unchanged from the
+// pre-rename PresignPutURL this replaces.
+func (f *fakePresigner) PresignPublicPutURL(_ context.Context, key string, ttl time.Duration) (string, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.putCalls = append(f.putCalls, presignCall{key: key, ttl: ttl})
@@ -385,6 +395,48 @@ func TestGetCacheDownloadURL_CacheHit(t *testing.T) {
 	}
 }
 
+// TestGetCacheDownloadURL_UsesPublicEndpointPresign pins the FR6/FR7/FR9
+// regression this issue exists to fix: GetCacheDownloadURL must invoke the
+// presigner's public-endpoint GET method (PresignPublicGetURL), the one
+// signed against Config.PublicEndpoint that a bare-metal host-manager can
+// actually reach, and not the internal-only PresignGetURL that
+// fakePresigner no longer even implements. Asserting getCalls was
+// incremented exactly once is only meaningful because fakePresigner has no
+// PresignGetURL method left to satisfy the old interface -- if the handler
+// called anything other than PresignPublicGetURL, this package would fail
+// to compile rather than this test merely failing, which is the point: the
+// fix is pinned by name, not just incidentally covered by the fake's
+// rename.
+func TestGetCacheDownloadURL_UsesPublicEndpointPresign(t *testing.T) {
+	repo := newFakeCacheRepo()
+	presigner := &fakePresigner{}
+	cacheKey := workshop.CacheKey("246810", "1")
+	s3Key := workshop.S3Key(cacheKey)
+	repo.seed(&manman.WorkshopCacheEntry{
+		WorkshopID: "246810", ContentVersion: "1", CacheKey: cacheKey, S3Key: s3Key,
+	})
+	h := newTestHandler(repo, presigner)
+
+	resp, err := h.GetCacheDownloadURL(hostCtx(testServerID), &pb.GetCacheDownloadURLRequest{
+		ServerId: testServerID, WorkshopId: "246810", ContentVersion: "1",
+	})
+	if err != nil {
+		t.Fatalf("GetCacheDownloadURL: unexpected error: %v", err)
+	}
+	if resp.PresignedUrl == "" {
+		t.Fatal("PresignedUrl is empty, want a URL on a cache hit")
+	}
+	if len(presigner.getCalls) != 1 {
+		t.Fatalf("PresignPublicGetURL was called %d times, want exactly 1", len(presigner.getCalls))
+	}
+	if got := presigner.getCalls[0].key; got != s3Key {
+		t.Errorf("PresignPublicGetURL key = %q, want %q", got, s3Key)
+	}
+	if len(presigner.putCalls) != 0 {
+		t.Errorf("PresignPublicPutURL was called %d times on a download, want 0", len(presigner.putCalls))
+	}
+}
+
 func TestGetCacheDownloadURL_CacheMiss(t *testing.T) {
 	repo := newFakeCacheRepo()
 	presigner := &fakePresigner{}
@@ -437,6 +489,39 @@ func TestGetCacheUploadURL_NewKey(t *testing.T) {
 	}
 	if repo.entryCount() != 1 {
 		t.Errorf("entryCount = %d, want 1 (entry should have been created)", repo.entryCount())
+	}
+}
+
+// TestGetCacheUploadURL_UsesPublicEndpointPresign pins the FR6/FR7/FR9
+// regression this issue exists to fix: GetCacheUploadURL must invoke the
+// presigner's public-endpoint PUT method (PresignPublicPutURL) -- the one
+// signed against Config.PublicEndpoint a bare-metal host-manager can
+// actually reach -- and not the internal-only PresignPutURL that
+// fakePresigner no longer implements. See
+// TestGetCacheDownloadURL_UsesPublicEndpointPresign's doc comment for why
+// this is pinned by name rather than left to the rename alone.
+func TestGetCacheUploadURL_UsesPublicEndpointPresign(t *testing.T) {
+	repo := newFakeCacheRepo()
+	presigner := &fakePresigner{}
+	h := newTestHandler(repo, presigner)
+
+	resp, err := h.GetCacheUploadURL(hostCtx(testServerID), &pb.GetCacheUploadURLRequest{
+		ServerId: testServerID, WorkshopId: "13579", ContentVersion: "2",
+	})
+	if err != nil {
+		t.Fatalf("GetCacheUploadURL: unexpected error: %v", err)
+	}
+	if resp.PresignedUrl == "" {
+		t.Fatal("PresignedUrl is empty, want a PUT URL")
+	}
+	if len(presigner.putCalls) != 1 {
+		t.Fatalf("PresignPublicPutURL was called %d times, want exactly 1", len(presigner.putCalls))
+	}
+	if got := presigner.putCalls[0].key; got != resp.S3Key {
+		t.Errorf("PresignPublicPutURL key = %q, want %q", got, resp.S3Key)
+	}
+	if len(presigner.getCalls) != 0 {
+		t.Errorf("PresignPublicGetURL was called %d times on an upload, want 0", len(presigner.getCalls))
 	}
 }
 
