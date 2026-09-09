@@ -111,10 +111,16 @@ func (wm *WorkshopManager) AddCollectionToLibrary(ctx context.Context, gameID, l
 	return createdJob, collectionAddon.AddonID, items, nil
 }
 
-// resolveCollectionAddon fetches the collection's own Steam metadata,
-// rejects a collectionInput that does not point at an actual Steam Workshop
-// collection, and reuses an existing (game_id, workshop_id) addon row for
-// the collection rather than creating a duplicate on a re-run.
+// resolveCollectionAddon fetches the collection's own Steam metadata and
+// reuses an existing (game_id, workshop_id) addon row for the collection
+// rather than creating a duplicate on a re-run. Classification of
+// collectionWorkshopID as an actual Steam Workshop collection is not this
+// function's job: it happens in GetCollectionDetails's result-code check
+// (Steam's file_type field is never populated on GetPublishedFileDetails
+// responses, so metadata.IsCollection can't be used for that), and
+// AddCollectionToLibrary already calls GetCollectionDetails before this
+// function runs, so a non-collection collectionInput is rejected as a
+// job-level error before this is ever reached.
 func (wm *WorkshopManager) resolveCollectionAddon(ctx context.Context, gameID int64, collectionWorkshopID string, presetID int64) (*manman.WorkshopAddon, error) {
 	if existing, err := wm.addonRepo.GetByWorkshopID(ctx, gameID, collectionWorkshopID, manman.PlatformTypeSteamWorkshop); err == nil && existing != nil {
 		return existing, nil
@@ -123,9 +129,6 @@ func (wm *WorkshopManager) resolveCollectionAddon(ctx context.Context, gameID in
 	metadata, err := wm.steamClient.GetWorkshopItemDetails(ctx, collectionWorkshopID)
 	if err != nil {
 		return nil, fmt.Errorf("failed to fetch collection %s metadata: %w", collectionWorkshopID, err)
-	}
-	if !metadata.IsCollection {
-		return nil, fmt.Errorf("workshop item %s is not a collection", collectionWorkshopID)
 	}
 
 	addon := &manman.WorkshopAddon{

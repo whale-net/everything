@@ -218,19 +218,36 @@ func TestAddCollectionToLibrary_UnresolvableCollectionLeavesNoRows(t *testing.T)
 
 // TestAddCollectionToLibrary_NotACollectionIsRejected covers the other
 // unresolvable-collection case: collection_input resolves to a real Workshop
-// item, but that item is not a collection.
+// item, but that item is not a collection. This is anchored on the
+// GetCollectionDetails-error gate (its Steam result-code check), not on
+// metadata.IsCollection -- resolveCollectionAddon no longer gates on
+// IsCollection at all, and GetCollectionDetails already runs (and fails)
+// before resolveCollectionAddon is ever reached. The mock's GetCollectionDetails
+// distinguishes "not a collection" (a real item exists for this ID) from
+// "collection not found" (no such ID at all), so this asserts the specific
+// failure mode rather than just "some error occurred".
 func TestAddCollectionToLibrary_NotACollectionIsRejected(t *testing.T) {
 	ctx := context.Background()
 	manager, addonRepo, _, batchJobRepo, steamClient := createTestBatchManager()
 
 	notACollectionID := "555555"
+	// IsCollection is irrelevant to this rejection now (real Steam never
+	// populates it), but is set false here to mirror what the real API
+	// actually returns for an individual item.
 	steamClient.items[notACollectionID] = &steam.WorkshopItemMetadata{
 		WorkshopID: notACollectionID, Title: "Just a Map", IsCollection: false, TimeUpdated: time.Now(),
 	}
+	// Deliberately absent from steamClient.collections: the mock's
+	// GetCollectionDetails reports this as "not a collection" (as opposed to
+	// "collection not found") precisely because it's a known item, mirroring
+	// Steam's real non-1 result code for an individual Workshop item.
 
 	job, _, _, err := manager.AddCollectionToLibrary(ctx, 1, 50, notACollectionID, 0)
 	if err == nil {
 		t.Fatal("expected an error when collection_input is not a collection, got nil")
+	}
+	if !strings.Contains(err.Error(), "is not a collection") {
+		t.Errorf("expected the GetCollectionDetails 'is not a collection' failure mode, got: %v", err)
 	}
 	if job != nil {
 		t.Errorf("expected no batch job returned, got %+v", job)
@@ -240,6 +257,61 @@ func TestAddCollectionToLibrary_NotACollectionIsRejected(t *testing.T) {
 	}
 	if len(batchJobRepo.jobs) != 0 {
 		t.Errorf("expected no batch job rows left behind, got %d", len(batchJobRepo.jobs))
+	}
+}
+
+// TestAddCollectionToLibrary_SucceedsDespiteUnpopulatedIsCollection is the
+// regression test for #2224: Steam's real GetPublishedFileDetails response
+// never populates file_type, so metadata.IsCollection is always false for
+// every real collection. This simulates exactly that -- IsCollection: false
+// on the collection's own metadata -- while GetCollectionDetails (Steam's
+// real collection-membership signal) reports a genuine non-empty child
+// list, and asserts AddCollectionToLibrary still succeeds end-to-end: job
+// completed, collection addon created, children attached. Before the fix,
+// resolveCollectionAddon's `!metadata.IsCollection` gate would have
+// rejected this with "is not a collection" even though Steam's own
+// GetCollectionDetails call had just confirmed it is one.
+func TestAddCollectionToLibrary_SucceedsDespiteUnpopulatedIsCollection(t *testing.T) {
+	ctx := context.Background()
+	manager, addonRepo, libraryRepo, _, steamClient := createTestBatchManager()
+
+	collectionID := "999999"
+	steamClient.items[collectionID] = &steam.WorkshopItemMetadata{
+		// This is the exact defect #2224 found: real Steam responses never
+		// set file_type, so IsCollection is always false here.
+		WorkshopID: collectionID, Title: "Map Collection", IsCollection: false, TimeUpdated: time.Now(),
+	}
+	steamClient.collections[collectionID] = []steam.CollectionItem{
+		{WorkshopID: "111111", Title: "Map 1"},
+		{WorkshopID: "222222", Title: "Map 2"},
+	}
+	steamClient.items["111111"] = &steam.WorkshopItemMetadata{WorkshopID: "111111", Title: "Map 1", FileSize: 1024, TimeUpdated: time.Now()}
+	steamClient.items["222222"] = &steam.WorkshopItemMetadata{WorkshopID: "222222", Title: "Map 2", FileSize: 2048, TimeUpdated: time.Now()}
+
+	libraryID := int64(50)
+	job, collectionAddonID, items, err := manager.AddCollectionToLibrary(ctx, 1, libraryID, collectionID, 0)
+	if err != nil {
+		t.Fatalf("AddCollectionToLibrary returned unexpected error despite a real GetCollectionDetails child list: %v", err)
+	}
+	if job.Status != "completed" {
+		t.Errorf("expected job status 'completed', got %s", job.Status)
+	}
+	if len(items) != 2 {
+		t.Fatalf("expected 2 items, got %d", len(items))
+	}
+
+	collectionAddon, err := addonRepo.Get(ctx, collectionAddonID)
+	if err != nil {
+		t.Fatalf("expected collection addon to exist: %v", err)
+	}
+	// The persisted collection addon row is still marked IsCollection: true
+	// (resolveCollectionAddon hardcodes this on the row it creates) even
+	// though Steam's metadata for it reported IsCollection: false.
+	if !collectionAddon.IsCollection {
+		t.Error("expected collection addon IsCollection true")
+	}
+	if len(libraryRepo.attachments[libraryID]) != 2 {
+		t.Errorf("expected 2 library attachments, got %d", len(libraryRepo.attachments[libraryID]))
 	}
 }
 
