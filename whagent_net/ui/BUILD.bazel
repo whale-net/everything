@@ -65,11 +65,20 @@ go_binary(
 # Testing section) added: FR2 owner-gating at the handler level,
 # NFR4/LB1's dedup/order fragment-builder unit tests, and an SSE handler
 # test that a published event produces exactly one swap.
+#
+# handlers_session_lifecycle_test.go (issue #2246's Testing section)
+# added: owner start/turn/stop reaching the right `api` call with the
+# right args, non-owner turns/stop refused both by the UI and at the
+# underlying `api` call, SendTurn's asynchrony (no read-back/poll),
+# PermissionDenied/FailedPrecondition inline-message mapping, and the
+# composer/stop-control rendering matrix (owner vs. non-owner, terminal
+# vs. non-terminal).
 go_test(
     name = "ui_test",
     size = "small",
     srcs = [
         "grpc_client_test.go",
+        "handlers_session_lifecycle_test.go",
         "handlers_session_live_test.go",
         "handlers_session_test.go",
         "main_test.go",
@@ -89,7 +98,9 @@ go_test(
         "@com_github_stretchr_testify//assert",
         "@com_github_stretchr_testify//require",
         "@org_golang_google_grpc//:grpc",
+        "@org_golang_google_grpc//codes",
         "@org_golang_google_grpc//metadata",
+        "@org_golang_google_grpc//status",
         "@org_golang_google_grpc//test/bufconn",
         "@org_golang_google_protobuf//types/known/timestamppb",
     ],
