@@ -29,6 +29,7 @@ go_test(
     name = "components_test",
     size = "small",
     srcs = [
+        "blade_test.go",
         "connect_address_test.go",
         "dashboard_test.go",
         "deployment_actions_test.go",
@@ -42,5 +43,6 @@ go_test(
         "//libs/go/htmxauth",
         "//libs/go/htmxui",
         "//manmanv2/protos:manmanpb",
+        "@com_github_a_h_templ//:templ",
     ],
 )
