@@ -58,6 +58,11 @@ var devSubject = session.Subject{Iss: testIssuer, Sub: "dev-user", Kind: session
 
 var otherSubject = session.Subject{Iss: testIssuer, Sub: "someone-else", Kind: session.SubjectKindHuman}
 
+// otherIssSameSub shares devSubject's `sub` but not its `iss` -- used to
+// prove LB2's rule that `iss` stays load-bearing in a control decision:
+// matching `sub` alone must never be enough.
+var otherIssSameSub = session.Subject{Iss: "https://other-issuer.example.com", Sub: devSubject.Sub, Kind: session.SubjectKindHuman}
+
 // newTestServer provisions an isolated Postgres via dbtest, applies
 // whagent-net's real embedded migrations, wires a *handlers.SessionServer
 // behind the same auth interceptor chain whagent_net/api/main.go uses (minus
@@ -118,13 +123,25 @@ func newTestServer(t *testing.T) (pb.SessionServiceClient, *session.Store) {
 }
 
 // createSession inserts a Session row owned by subject in status, ready for
-// a test to read back through the gRPC surface.
+// a test to read back through the gRPC surface. subject is used for both
+// Subject and OnBehalfOf -- the M1-default relationship the issue notes
+// ("on_behalf_of == subject for every row" today) -- see
+// createSessionWithSubjects for tests that need the two to differ.
 func createSession(t *testing.T, ctx context.Context, store *session.Store, subject session.Subject, status session.Status) *session.Session {
+	t.Helper()
+	return createSessionWithSubjects(t, ctx, store, subject, subject, status)
+}
+
+// createSessionWithSubjects inserts a Session row whose Subject and
+// OnBehalfOf are deliberately set independently -- the shape the canControl
+// tests below need to prove control is scoped to on_behalf_of and not
+// subject, rather than incidentally passing because the two are equal.
+func createSessionWithSubjects(t *testing.T, ctx context.Context, store *session.Store, subject, onBehalfOf session.Subject, status session.Status) *session.Session {
 	t.Helper()
 	sess := &session.Session{
 		SessionID:  uuid.New(),
 		Subject:    subject,
-		OnBehalfOf: subject,
+		OnBehalfOf: onBehalfOf,
 		AgentID:    "test-agent",
 		Model:      "test-model",
 		Status:     status,
@@ -153,30 +170,35 @@ func TestReadTranscript_NotFound(t *testing.T) {
 	assert.Equal(t, codes.NotFound, status.Code(err))
 }
 
-// TestGetSession_PermissionDenied proves a session belonging to a different
-// subject than the authenticated caller (devSubject, injected by
-// AuthModeNone) is PERMISSION_DENIED, not NOT_FOUND -- the row exists, the
-// caller just isn't allowed to see it.
-func TestGetSession_PermissionDenied(t *testing.T) {
+// TestGetSession_AnyAuthenticatedCallerMayReadAnySession proves FR2/C14:
+// a session belonging to a subject other than the authenticated caller
+// (devSubject, injected by AuthModeNone) is readable, not PERMISSION_DENIED
+// -- on-call viewers are the point -- and that the returned subject/
+// on_behalf_of are otherSubject's, unchanged, not silently rewritten to the
+// caller's own identity.
+func TestGetSession_AnyAuthenticatedCallerMayReadAnySession(t *testing.T) {
 	client, store := newTestServer(t)
 	sess := createSession(t, context.Background(), store, otherSubject, session.StatusRunning)
 
-	_, err := client.GetSession(context.Background(), &pb.GetSessionRequest{SessionId: sess.SessionID.String()})
+	resp, err := client.GetSession(context.Background(), &pb.GetSessionRequest{SessionId: sess.SessionID.String()})
 
-	require.Error(t, err)
-	assert.Equal(t, codes.PermissionDenied, status.Code(err))
+	require.NoError(t, err)
+	assert.Equal(t, otherSubject.Sub, resp.Session.Subject.Sub)
+	assert.Equal(t, otherSubject.Iss, resp.Session.Subject.Iss)
+	assert.Equal(t, otherSubject.Sub, resp.Session.OnBehalfOf.Sub)
+	assert.Equal(t, otherSubject.Iss, resp.Session.OnBehalfOf.Iss)
 }
 
-// TestReadTranscript_PermissionDenied is GetSession's PERMISSION_DENIED
-// proof, for ReadTranscript.
-func TestReadTranscript_PermissionDenied(t *testing.T) {
+// TestReadTranscript_AnyAuthenticatedCallerMayReadAnySession is
+// TestGetSession_AnyAuthenticatedCallerMayReadAnySession's proof for
+// ReadTranscript (FR2/C14).
+func TestReadTranscript_AnyAuthenticatedCallerMayReadAnySession(t *testing.T) {
 	client, store := newTestServer(t)
 	sess := createSession(t, context.Background(), store, otherSubject, session.StatusRunning)
 
 	_, err := client.ReadTranscript(context.Background(), &pb.ReadTranscriptRequest{SessionId: sess.SessionID.String()})
 
-	require.Error(t, err)
-	assert.Equal(t, codes.PermissionDenied, status.Code(err))
+	require.NoError(t, err)
 }
 
 // TestGetSession_MapsEachStoredStatusToTheMatchingProtoEnum proves all six
@@ -375,4 +397,99 @@ func TestReadTranscript_Pagination_ResumesWithNoGapAndNoDuplicate(t *testing.T) 
 			assert.Equal(t, allSeqs[i-1]+1, seq, "no gap between consecutive pages")
 		}
 	}
+}
+
+// The tests below prove canControl (FR1/C13): SendTurn/StopSession are
+// scoped to a session's on_behalf_of subject, never its subject, with iss
+// staying load-bearing (LB2). Every fixture here uses newTestServer's nil
+// Temporal client (see newTestServer's doc comment) -- deliberately: each
+// PERMISSION_DENIED case is rejected by canControl before either handler
+// ever touches s.temporalClient, and each "control is allowed" case below
+// uses a session already in a terminal status so the handler's own
+// terminal short-circuit (StopSession's idempotent-success return,
+// SendTurn's FAILED_PRECONDITION) is what proves the caller got past
+// canControl, again without needing a real Temporal signal.
+
+// TestSendTurn_PermissionDenied_DifferentSubject proves a caller who is
+// neither the session's subject nor its on_behalf_of subject cannot send a
+// turn.
+func TestSendTurn_PermissionDenied_DifferentSubject(t *testing.T) {
+	client, store := newTestServer(t)
+	sess := createSession(t, context.Background(), store, otherSubject, session.StatusRunning)
+
+	_, err := client.SendTurn(context.Background(), &pb.SendTurnRequest{SessionId: sess.SessionID.String(), Input: "hi"})
+
+	require.Error(t, err)
+	assert.Equal(t, codes.PermissionDenied, status.Code(err))
+}
+
+// TestStopSession_PermissionDenied_DifferentSubject is
+// TestSendTurn_PermissionDenied_DifferentSubject's proof for StopSession.
+func TestStopSession_PermissionDenied_DifferentSubject(t *testing.T) {
+	client, store := newTestServer(t)
+	sess := createSession(t, context.Background(), store, otherSubject, session.StatusRunning)
+
+	_, err := client.StopSession(context.Background(), &pb.StopSessionRequest{SessionId: sess.SessionID.String()})
+
+	require.Error(t, err)
+	assert.Equal(t, codes.PermissionDenied, status.Code(err))
+}
+
+// TestSendTurn_PermissionDenied_SameSubDifferentIss proves LB2: a caller
+// whose `sub` matches the session's on_behalf_of but whose `iss` does not
+// is still denied -- matching `sub` alone is never enough.
+func TestSendTurn_PermissionDenied_SameSubDifferentIss(t *testing.T) {
+	client, store := newTestServer(t)
+	sess := createSession(t, context.Background(), store, otherIssSameSub, session.StatusRunning)
+
+	_, err := client.SendTurn(context.Background(), &pb.SendTurnRequest{SessionId: sess.SessionID.String(), Input: "hi"})
+
+	require.Error(t, err)
+	assert.Equal(t, codes.PermissionDenied, status.Code(err))
+}
+
+// TestStopSession_PermissionDenied_SameSubDifferentIss is
+// TestSendTurn_PermissionDenied_SameSubDifferentIss's proof for
+// StopSession.
+func TestStopSession_PermissionDenied_SameSubDifferentIss(t *testing.T) {
+	client, store := newTestServer(t)
+	sess := createSession(t, context.Background(), store, otherIssSameSub, session.StatusRunning)
+
+	_, err := client.StopSession(context.Background(), &pb.StopSessionRequest{SessionId: sess.SessionID.String()})
+
+	require.Error(t, err)
+	assert.Equal(t, codes.PermissionDenied, status.Code(err))
+}
+
+// TestSendTurn_OnBehalfOfMatchButSubjectDoesNot_PassesControlCheck proves
+// the rule is on_behalf_of, not subject: devSubject controls a session
+// whose OnBehalfOf is devSubject but whose Subject is deliberately a
+// different, otherSubject -- constructed so the two are unequal, not
+// incidentally passing because they match. The session is created
+// already-terminal so a successful control check surfaces as
+// FAILED_PRECONDITION (not PERMISSION_DENIED, and without needing to
+// signal a real Temporal workflow) -- see this block's doc comment above.
+func TestSendTurn_OnBehalfOfMatchButSubjectDoesNot_PassesControlCheck(t *testing.T) {
+	client, store := newTestServer(t)
+	sess := createSessionWithSubjects(t, context.Background(), store, otherSubject, devSubject, session.StatusDone)
+
+	_, err := client.SendTurn(context.Background(), &pb.SendTurnRequest{SessionId: sess.SessionID.String(), Input: "hi"})
+
+	require.Error(t, err)
+	assert.Equal(t, codes.FailedPrecondition, status.Code(err), "must fail on the terminal-status check, not PermissionDenied -- proves canControl let devSubject through on on_behalf_of alone")
+}
+
+// TestStopSession_OnBehalfOfMatchButSubjectDoesNot_PassesControlCheck is
+// TestSendTurn_OnBehalfOfMatchButSubjectDoesNot_PassesControlCheck's proof
+// for StopSession: an already-terminal session's StopSession call succeeds
+// idempotently (never PermissionDenied) once the caller's on_behalf_of
+// matches, even though its subject does not.
+func TestStopSession_OnBehalfOfMatchButSubjectDoesNot_PassesControlCheck(t *testing.T) {
+	client, store := newTestServer(t)
+	sess := createSessionWithSubjects(t, context.Background(), store, otherSubject, devSubject, session.StatusDone)
+
+	resp, err := client.StopSession(context.Background(), &pb.StopSessionRequest{SessionId: sess.SessionID.String()})
+
+	require.NoError(t, err, "must succeed idempotently, not PermissionDenied -- proves canControl let devSubject through on on_behalf_of alone")
+	assert.Equal(t, pb.SessionState_SESSION_STATE_DONE, resp.Session.State)
 }
