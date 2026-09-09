@@ -38,6 +38,7 @@ go_test(
     deps = [
         "//libs/go/grpcauth",
         "//manmanv2/api/workshop",
+        "//manmanv2/host/rmq",
         "//manmanv2/models",
         "//manmanv2/protos:manmanpb",
         "@com_github_stretchr_testify//assert",

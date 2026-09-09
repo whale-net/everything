@@ -17,6 +17,7 @@ import (
 	"github.com/stretchr/testify/mock"
 	"github.com/whale-net/everything/libs/go/grpcauth"
 	"github.com/whale-net/everything/manmanv2/api/workshop"
+	hostrmq "github.com/whale-net/everything/manmanv2/host/rmq"
 	manman "github.com/whale-net/everything/manmanv2/models"
 	pb "github.com/whale-net/everything/manmanv2/protos"
 	"google.golang.org/grpc/codes"
@@ -92,12 +93,19 @@ type fakeCacheRepo struct {
 	presenceByEntry map[int64][]*manman.WorkshopCacheHostPresenceWithServer
 	presenceErr     error
 	presenceCalls   int
+
+	// hostPresence/hostPresenceErr back ListHostPresence, the single-entry
+	// lookup VerifyCacheEntry (#2186) uses to pick a host when server_id==0.
+	// Keyed on cache_entry_id, mirroring the real repository's contract.
+	hostPresence    map[int64][]*manman.WorkshopCacheHostPresence
+	hostPresenceErr error
 }
 
 func newFakeCacheRepo() *fakeCacheRepo {
 	return &fakeCacheRepo{
 		entries:         map[string]*manman.WorkshopCacheEntry{},
 		presenceByEntry: map[int64][]*manman.WorkshopCacheHostPresenceWithServer{},
+		hostPresence:    map[int64][]*manman.WorkshopCacheHostPresence{},
 	}
 }
 
@@ -207,8 +215,15 @@ func (f *fakeCacheRepo) UpsertHostPresence(_ context.Context, _, _ int64) error 
 	return nil
 }
 
-func (f *fakeCacheRepo) ListHostPresence(_ context.Context, _ int64) ([]*manman.WorkshopCacheHostPresence, error) {
-	return nil, nil
+// ListHostPresence backs VerifyCacheEntry's (#2186) server_id==0 host
+// selection: every server currently known to hold a copy of cacheEntryID.
+func (f *fakeCacheRepo) ListHostPresence(_ context.Context, cacheEntryID int64) ([]*manman.WorkshopCacheHostPresence, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.hostPresenceErr != nil {
+		return nil, f.hostPresenceErr
+	}
+	return f.hostPresence[cacheEntryID], nil
 }
 
 // ListHostPresenceForCacheEntryIDs is the fake's counterpart to the real
@@ -866,6 +881,291 @@ func TestListAddonCacheEntries_PresenceFailure_Internal(t *testing.T) {
 
 	h := newCacheListHandler(repo, addonRepo)
 	_, err := h.ListAddonCacheEntries(context.Background(), &pb.ListAddonCacheEntriesRequest{AddonId: 1})
+	assertCode(t, err, codes.Internal)
+}
+
+// --- VerifyCacheEntry (FR11) -------------------------------------------------
+
+// publishedCommand records one call into fakeRMQPublisher, so tests can
+// assert the exact exchange/routing key/body VerifyCacheEntry dispatched --
+// the issue's "publishes on the exact new routing key" and "nothing
+// published" assertions both depend on being able to observe this precisely.
+type publishedCommand struct {
+	exchange   string
+	routingKey string
+	body       interface{}
+}
+
+// fakeRMQPublisher is a minimal workshop.RMQPublisher test double: it never
+// touches a real broker, records every Publish call it receives, and can be
+// told to fail on demand so VerifyCacheEntry's dispatch-failure path is
+// exercised without a real broker outage being reproducible.
+type fakeRMQPublisher struct {
+	mu         sync.Mutex
+	calls      []publishedCommand
+	publishErr error
+}
+
+func (f *fakeRMQPublisher) Publish(_ context.Context, exchange, routingKey string, body interface{}) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.publishErr != nil {
+		return f.publishErr
+	}
+	f.calls = append(f.calls, publishedCommand{exchange: exchange, routingKey: routingKey, body: body})
+	return nil
+}
+
+func (f *fakeRMQPublisher) callCount() int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return len(f.calls)
+}
+
+// newVerifyHandler builds a handler wired with the collaborators
+// VerifyCacheEntry depends on: cacheRepo (entry lookup + host presence),
+// addonRepo (workshop_id -> steam_app_id resolution), and rmqPublisher (the
+// actual dispatch).
+func newVerifyHandler(repo *fakeCacheRepo, addonRepo *MockWorkshopAddonRepository, publisher *fakeRMQPublisher) *WorkshopServiceHandler {
+	return &WorkshopServiceHandler{
+		cacheRepo:    repo,
+		addonRepo:    addonRepo,
+		rmqPublisher: publisher,
+	}
+}
+
+const testSteamAppID = "440900"
+
+// seedVerifyAddon wires addonRepo to resolve workshopID to an addon carrying
+// testSteamAppID, the steam_app_id VerifyCacheEntry needs to actually run
+// SteamCMD on the host.
+func seedVerifyAddon(addonRepo *MockWorkshopAddonRepository, workshopID string) {
+	steamAppID := testSteamAppID
+	addonRepo.On("GetByWorkshopIDAnyGame", mock.Anything, workshopID).Return(&manman.WorkshopAddonWithGame{
+		WorkshopAddon: manman.WorkshopAddon{WorkshopID: workshopID},
+		SteamAppID:    &steamAppID,
+	}, nil)
+}
+
+// TestVerifyCacheEntry_ServerIDZero_PicksMostRecentlySeenHost is the issue's
+// core host-selection assertion: with no explicit server_id, the handler
+// dispatches to whichever host currently holding a copy was seen most
+// recently, publishing the command on that host's exact routing key with the
+// entry's workshop_id/content_version carried through.
+func TestVerifyCacheEntry_ServerIDZero_PicksMostRecentlySeenHost(t *testing.T) {
+	repo := newFakeCacheRepo()
+	addonRepo := new(MockWorkshopAddonRepository)
+	publisher := &fakeRMQPublisher{}
+
+	entry := repo.seed(&manman.WorkshopCacheEntry{
+		WorkshopID: "123456", ContentVersion: "v3",
+		CacheKey: "ws/123456/v3", S3Key: "workshop-cache/123456/v3.tar",
+	})
+	older := time.Now().Add(-2 * time.Hour)
+	newer := time.Now().Add(-1 * time.Minute)
+	repo.hostPresence[entry.CacheEntryID] = []*manman.WorkshopCacheHostPresence{
+		{CacheEntryID: entry.CacheEntryID, ServerID: 1, LastSeenAt: older},
+		{CacheEntryID: entry.CacheEntryID, ServerID: 2, LastSeenAt: newer},
+	}
+	seedVerifyAddon(addonRepo, entry.WorkshopID)
+
+	h := newVerifyHandler(repo, addonRepo, publisher)
+	resp, err := h.VerifyCacheEntry(context.Background(), &pb.VerifyCacheEntryRequest{CacheEntryId: entry.CacheEntryID})
+	if err != nil {
+		t.Fatalf("VerifyCacheEntry: unexpected error: %v", err)
+	}
+	if !resp.Dispatched {
+		t.Error("Dispatched = false, want true")
+	}
+	if resp.Status != "dispatched" {
+		t.Errorf("Status = %q, want %q", resp.Status, "dispatched")
+	}
+	if resp.ServerId != 2 {
+		t.Errorf("ServerId = %d, want 2 (most recently seen host)", resp.ServerId)
+	}
+
+	if publisher.callCount() != 1 {
+		t.Fatalf("expected exactly 1 publish call, got %d", publisher.callCount())
+	}
+	call := publisher.calls[0]
+	wantRoutingKey := "command.host.2.workshop.cache_verify"
+	if call.routingKey != wantRoutingKey {
+		t.Errorf("routingKey = %q, want %q", call.routingKey, wantRoutingKey)
+	}
+	if call.exchange != "manman" {
+		t.Errorf("exchange = %q, want %q", call.exchange, "manman")
+	}
+	cmd, ok := call.body.(*hostrmq.VerifyCacheEntryCommand)
+	if !ok {
+		t.Fatalf("published body is %T, want *hostrmq.VerifyCacheEntryCommand", call.body)
+	}
+	if cmd.CacheEntryID != entry.CacheEntryID {
+		t.Errorf("cmd.CacheEntryID = %d, want %d", cmd.CacheEntryID, entry.CacheEntryID)
+	}
+	if cmd.WorkshopID != entry.WorkshopID {
+		t.Errorf("cmd.WorkshopID = %q, want %q", cmd.WorkshopID, entry.WorkshopID)
+	}
+	if cmd.ContentVersion != entry.ContentVersion {
+		t.Errorf("cmd.ContentVersion = %q, want %q", cmd.ContentVersion, entry.ContentVersion)
+	}
+	if cmd.SteamAppID != testSteamAppID {
+		t.Errorf("cmd.SteamAppID = %q, want %q", cmd.SteamAppID, testSteamAppID)
+	}
+}
+
+// TestVerifyCacheEntry_ServerIDZero_NoHostAvailable is FR11's explicit
+// "no_host_available is a real, reportable state, not an error" contract:
+// when no host holds a copy, the handler must return a normal response
+// (Dispatched=false) rather than an error, and must not publish anything.
+func TestVerifyCacheEntry_ServerIDZero_NoHostAvailable(t *testing.T) {
+	repo := newFakeCacheRepo()
+	addonRepo := new(MockWorkshopAddonRepository)
+	publisher := &fakeRMQPublisher{}
+
+	entry := repo.seed(&manman.WorkshopCacheEntry{
+		WorkshopID: "654321", ContentVersion: "v1",
+		CacheKey: "ws/654321/v1", S3Key: "workshop-cache/654321/v1.tar",
+	})
+	// No entry in repo.hostPresence for this cache_entry_id -- nobody holds a copy.
+
+	h := newVerifyHandler(repo, addonRepo, publisher)
+	resp, err := h.VerifyCacheEntry(context.Background(), &pb.VerifyCacheEntryRequest{CacheEntryId: entry.CacheEntryID})
+	if err != nil {
+		t.Fatalf("VerifyCacheEntry: unexpected error when no host is available: %v", err)
+	}
+	if resp.Dispatched {
+		t.Error("Dispatched = true, want false when no host holds a copy")
+	}
+	if resp.Status != "no_host_available" {
+		t.Errorf("Status = %q, want %q", resp.Status, "no_host_available")
+	}
+	if publisher.callCount() != 0 {
+		t.Errorf("publish was called %d times, want 0 when no host is available", publisher.callCount())
+	}
+	// The addon/steam_app_id resolution is unnecessary work when nothing
+	// will be dispatched -- assert it never even ran.
+	addonRepo.AssertNotCalled(t, "GetByWorkshopIDAnyGame", mock.Anything, mock.Anything)
+}
+
+// TestVerifyCacheEntry_ExplicitServerID_HonoredEvenWithoutCopy proves an
+// Admin can deliberately target a specific host that does not currently hold
+// a copy -- the explicit choice is always honored (dispatched=true), unlike
+// the server_id==0 path which requires a copy to exist somewhere.
+func TestVerifyCacheEntry_ExplicitServerID_HonoredEvenWithoutCopy(t *testing.T) {
+	repo := newFakeCacheRepo()
+	addonRepo := new(MockWorkshopAddonRepository)
+	publisher := &fakeRMQPublisher{}
+
+	entry := repo.seed(&manman.WorkshopCacheEntry{
+		WorkshopID: "111222", ContentVersion: "v9",
+		CacheKey: "ws/111222/v9", S3Key: "workshop-cache/111222/v9.tar",
+	})
+	// Presence records a different host than the one explicitly requested --
+	// requestedServerID below holds no known copy.
+	repo.hostPresence[entry.CacheEntryID] = []*manman.WorkshopCacheHostPresence{
+		{CacheEntryID: entry.CacheEntryID, ServerID: 99, LastSeenAt: time.Now()},
+	}
+	seedVerifyAddon(addonRepo, entry.WorkshopID)
+
+	const requestedServerID = int64(7)
+	h := newVerifyHandler(repo, addonRepo, publisher)
+	resp, err := h.VerifyCacheEntry(context.Background(), &pb.VerifyCacheEntryRequest{
+		CacheEntryId: entry.CacheEntryID,
+		ServerId:     requestedServerID,
+	})
+	if err != nil {
+		t.Fatalf("VerifyCacheEntry: unexpected error: %v", err)
+	}
+	if !resp.Dispatched {
+		t.Error("Dispatched = false, want true -- an explicit server_id must always be honored")
+	}
+	if resp.ServerId != requestedServerID {
+		t.Errorf("ServerId = %d, want %d (the explicitly requested host)", resp.ServerId, requestedServerID)
+	}
+
+	if publisher.callCount() != 1 {
+		t.Fatalf("expected exactly 1 publish call, got %d", publisher.callCount())
+	}
+	wantRoutingKey := fmt.Sprintf("command.host.%d.workshop.cache_verify", requestedServerID)
+	if got := publisher.calls[0].routingKey; got != wantRoutingKey {
+		t.Errorf("routingKey = %q, want %q", got, wantRoutingKey)
+	}
+}
+
+// TestVerifyCacheEntry_UnknownCacheEntryID_NotFound proves an unresolvable
+// cache_entry_id surfaces as codes.NotFound and never reaches the presence
+// lookup, addon resolution, or publish step.
+func TestVerifyCacheEntry_UnknownCacheEntryID_NotFound(t *testing.T) {
+	repo := newFakeCacheRepo()
+	addonRepo := new(MockWorkshopAddonRepository)
+	publisher := &fakeRMQPublisher{}
+
+	h := newVerifyHandler(repo, addonRepo, publisher)
+	_, err := h.VerifyCacheEntry(context.Background(), &pb.VerifyCacheEntryRequest{CacheEntryId: 999999})
+	assertCode(t, err, codes.NotFound)
+
+	if publisher.callCount() != 0 {
+		t.Errorf("publish was called %d times for an unknown cache_entry_id, want 0", publisher.callCount())
+	}
+	addonRepo.AssertNotCalled(t, "GetByWorkshopIDAnyGame", mock.Anything, mock.Anything)
+}
+
+// TestVerifyCacheEntry_MissingCacheEntryID_InvalidArgument guards the
+// request-validation half of the RPC, same convention as every other
+// handler's `_id is required` check in this package.
+func TestVerifyCacheEntry_MissingCacheEntryID_InvalidArgument(t *testing.T) {
+	h := newVerifyHandler(newFakeCacheRepo(), new(MockWorkshopAddonRepository), &fakeRMQPublisher{})
+	_, err := h.VerifyCacheEntry(context.Background(), &pb.VerifyCacheEntryRequest{})
+	assertCode(t, err, codes.InvalidArgument)
+}
+
+// TestVerifyCacheEntry_NoSteamAppID_FailedPrecondition covers the case where
+// the cache entry's workshop_id cannot be resolved to an addon with a
+// steam_app_id -- the host has no way to actually run SteamCMD, so nothing
+// is published.
+func TestVerifyCacheEntry_NoSteamAppID_FailedPrecondition(t *testing.T) {
+	repo := newFakeCacheRepo()
+	addonRepo := new(MockWorkshopAddonRepository)
+	publisher := &fakeRMQPublisher{}
+
+	entry := repo.seed(&manman.WorkshopCacheEntry{
+		WorkshopID: "333444", ContentVersion: "v1",
+		CacheKey: "ws/333444/v1", S3Key: "workshop-cache/333444/v1.tar",
+	})
+	repo.hostPresence[entry.CacheEntryID] = []*manman.WorkshopCacheHostPresence{
+		{CacheEntryID: entry.CacheEntryID, ServerID: 5, LastSeenAt: time.Now()},
+	}
+	addonRepo.On("GetByWorkshopIDAnyGame", mock.Anything, entry.WorkshopID).Return(&manman.WorkshopAddonWithGame{
+		WorkshopAddon: manman.WorkshopAddon{WorkshopID: entry.WorkshopID},
+		SteamAppID:    nil,
+	}, nil)
+
+	h := newVerifyHandler(repo, addonRepo, publisher)
+	_, err := h.VerifyCacheEntry(context.Background(), &pb.VerifyCacheEntryRequest{CacheEntryId: entry.CacheEntryID})
+	assertCode(t, err, codes.FailedPrecondition)
+	if publisher.callCount() != 0 {
+		t.Errorf("publish was called %d times when no steam_app_id resolves, want 0", publisher.callCount())
+	}
+}
+
+// TestVerifyCacheEntry_PublishFailure_Internal covers the dispatch-failure
+// path: a broker error surfaces as codes.Internal.
+func TestVerifyCacheEntry_PublishFailure_Internal(t *testing.T) {
+	repo := newFakeCacheRepo()
+	addonRepo := new(MockWorkshopAddonRepository)
+	publisher := &fakeRMQPublisher{publishErr: errors.New("simulated broker failure")}
+
+	entry := repo.seed(&manman.WorkshopCacheEntry{
+		WorkshopID: "555666", ContentVersion: "v1",
+		CacheKey: "ws/555666/v1", S3Key: "workshop-cache/555666/v1.tar",
+	})
+	repo.hostPresence[entry.CacheEntryID] = []*manman.WorkshopCacheHostPresence{
+		{CacheEntryID: entry.CacheEntryID, ServerID: 5, LastSeenAt: time.Now()},
+	}
+	seedVerifyAddon(addonRepo, entry.WorkshopID)
+
+	h := newVerifyHandler(repo, addonRepo, publisher)
+	_, err := h.VerifyCacheEntry(context.Background(), &pb.VerifyCacheEntryRequest{CacheEntryId: entry.CacheEntryID})
 	assertCode(t, err, codes.Internal)
 }
 

@@ -92,6 +92,8 @@ go_test(
         "//manmanv2/protos:manmanpb",
         "//manmanv2/ui/components",
         "//manmanv2/ui/pages",
+        "@com_github_stretchr_testify//assert",
+        "@com_github_stretchr_testify//require",
         "@org_golang_google_grpc//:grpc",
     ],
 )
