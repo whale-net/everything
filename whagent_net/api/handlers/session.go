@@ -10,16 +10,15 @@
 // (SendTurn), stop.go (StopSession) -- and are real as of #2117's
 // Implementation phase: each drives the SessionWorkflow #2114 built,
 // through the Temporal client and model catalogue wired onto SessionServer
-// (see NewSessionServer below). ListSessions stays UNIMPLEMENTED: the issue
-// allows either a minimal "list the caller's own sessions" implementation
-// or UNIMPLEMENTED, and session.SessionStore (#2109) exposes no
-// by-subject list query -- adding one would expand scope beyond any
-// named task's read/write paths, so UNIMPLEMENTED is the conservative
-// choice here.
+// (see NewSessionServer below). ListSessions (FR3/C15, issue #2241) filters/
+// paginates over session.SessionStore.List, applying #2237's read-any-
+// session rule -- any authenticated caller may list any session, there is
+// no owner filter.
 package handlers
 
 import (
 	"context"
+	"errors"
 
 	"github.com/whale-net/everything/whagent_net/events"
 	"github.com/whale-net/everything/whagent_net/llm"
@@ -207,13 +206,57 @@ func (s *SessionServer) GetSession(ctx context.Context, req *pb.GetSessionReques
 	return &pb.GetSessionResponse{Session: sessionToProto(sess)}, nil
 }
 
-// ListSessions may be minimal in M1 per the issue body -- either list the
-// caller's own sessions or stay UNIMPLEMENTED. session.SessionStore
-// (#2109) has no by-subject list query, so implementing "the caller's own
-// sessions" here would mean adding one -- out of scope for this task's two
-// named read paths (GetSession, ReadTranscript). Stays UNIMPLEMENTED.
+// ListSessions returns sessions matching req's filters, keyset-paginated
+// (FR3/C15, issue #2241). Authorization follows #2237's read rule: any
+// authenticated caller (already guaranteed by RequireClaimsUnaryInterceptor
+// -- there is no anonymous path) may list any session, whoever started it --
+// there is no owner filter applied here, unlike GetSession/ReadTranscript's
+// pre-#2237 per-row check.
 func (s *SessionServer) ListSessions(ctx context.Context, req *pb.ListSessionsRequest) (*pb.ListSessionsResponse, error) {
-	return nil, status.Error(codes.Unimplemented, "ListSessions: not implemented in M1")
+	filter := session.SessionFilter{}
+	if req.AgentId != nil {
+		filter.AgentID = req.AgentId
+	}
+	if req.State != nil {
+		st := statusFromProto(*req.State)
+		filter.State = &st
+	}
+	if req.StartedByKind != nil {
+		sk := subjectKindFromProto(*req.StartedByKind)
+		filter.StartedByKind = &sk
+	}
+	if req.StartedAfter != nil {
+		t := req.StartedAfter.AsTime()
+		filter.StartedAfter = &t
+	}
+	if req.StartedBefore != nil {
+		t := req.StartedBefore.AsTime()
+		filter.StartedBefore = &t
+	}
+
+	page := session.SessionPage{
+		PageSize:  int(req.GetPageSize()),
+		PageToken: req.GetPageToken(),
+	}
+
+	sessions, pageInfo, err := s.store.Sessions().List(ctx, filter, page)
+	if err != nil {
+		if errors.Is(err, session.ErrInvalidPageToken) {
+			return nil, status.Error(codes.InvalidArgument, "invalid page_token")
+		}
+		return nil, status.Errorf(codes.Internal, "list sessions: %v", err)
+	}
+
+	pbSessions := make([]*pb.Session, len(sessions))
+	for i, sess := range sessions {
+		pbSessions[i] = sessionToProto(sess)
+	}
+
+	return &pb.ListSessionsResponse{
+		Sessions:      pbSessions,
+		NextPageToken: pageInfo.NextPageToken,
+		PrevPageToken: pageInfo.PrevPageToken,
+	}, nil
 }
 
 // ReadTranscript is a read path (FR2): pages through
@@ -435,5 +478,41 @@ func subjectKindToProto(k session.SubjectKind) pb.SubjectKind {
 		return pb.SubjectKind_SUBJECT_KIND_SERVICE
 	default:
 		return pb.SubjectKind_SUBJECT_KIND_UNSPECIFIED
+	}
+}
+
+// statusFromProto is statusToProto's inverse, for ListSessions' state
+// filter (FR3/C15). SESSION_STATE_UNSPECIFIED maps to the zero Status --
+// ListSessions never calls this unless req.State is set, so that case
+// does not arise in practice.
+func statusFromProto(st pb.SessionState) session.Status {
+	switch st {
+	case pb.SessionState_SESSION_STATE_RUNNING:
+		return session.StatusRunning
+	case pb.SessionState_SESSION_STATE_AWAITING_INPUT:
+		return session.StatusAwaitingInput
+	case pb.SessionState_SESSION_STATE_DONE:
+		return session.StatusDone
+	case pb.SessionState_SESSION_STATE_STOPPED:
+		return session.StatusStopped
+	case pb.SessionState_SESSION_STATE_FAILED:
+		return session.StatusFailed
+	case pb.SessionState_SESSION_STATE_CAPPED:
+		return session.StatusCapped
+	default:
+		return ""
+	}
+}
+
+// subjectKindFromProto is subjectKindToProto's inverse, for ListSessions'
+// started_by_kind filter (FR3/C15/NFR3).
+func subjectKindFromProto(k pb.SubjectKind) session.SubjectKind {
+	switch k {
+	case pb.SubjectKind_SUBJECT_KIND_HUMAN:
+		return session.SubjectKindHuman
+	case pb.SubjectKind_SUBJECT_KIND_SERVICE:
+		return session.SubjectKindService
+	default:
+		return ""
 	}
 }
