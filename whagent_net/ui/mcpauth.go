@@ -7,6 +7,7 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/whale-net/everything/libs/go/mcpauth"
+	"github.com/whale-net/everything/whagent_net/mcpidentity"
 )
 
 // mcpCallerResolver adapts `ui`'s existing Keycloak sign-in session
@@ -21,20 +22,45 @@ import (
 // NFR7's hard constraint is that the resolved identity is the operator's
 // LB2 (iss, sub) pair -- the same pair whagent_net/session.Subject and
 // sessions.subject_iss/subject_sub already use -- encoded as a single
-// opaque string, never a new whagent-net-only user/person id. The
-// Implementation phase fills this stub in to read app.auth's DB-backed
-// session (app.auth.CurrentUser) and encode (cfg.OIDCIssuer, user.Sub) via
-// a shared, unit-tested encode/decode helper importable by both `ui` and
-// `mcp` (see issue #2245's Implementation section) -- it must perform no
-// IdP call of its own (libs/go/mcpauth/resolver.go's CallerResolver
-// contract).
+// opaque string, never a new whagent-net-only user/person id. That
+// encoding lives in whagent_net/mcpidentity, a small package importable
+// by both `ui` (encodes, here) and `mcp` (decodes, a dependent task) so
+// the two sides cannot drift on the packed string's format.
 //
-// Scaffold stub (issue #2245): always reports not-resolved, so
-// `/authorize` always redirects to SignInURL until the Implementation
-// phase lands.
+// app.auth.CurrentUser reads app.auth's DB-backed session directly
+// (htmxauth.DBSessionManager.GetUserInfo -- a single `ui_sessions` SELECT
+// gated on `expires_at > NOW()`) exactly like RequireAuth's own session
+// check, so a missing, tampered, or expired session all surface here the
+// same way RequireAuth would reject them: CurrentUser returns an error and
+// this resolver reports not-resolved. Unlike WithAccessToken's
+// GetAccessToken, GetUserInfo never refreshes against Keycloak's token
+// endpoint -- see db_session.go's GetUserInfo vs. GetAccessToken -- so this
+// performs no IdP call of any kind, satisfying resolver.go's
+// CallerResolver contract.
+//
+// In AuthModeNone (local dev, no Keycloak), CurrentUser returns the fixed
+// dev user but cfg.OIDCIssuer is unset, so mcpidentity.Encode fails on the
+// empty iss and this resolver reports not-resolved -- deliberately: there
+// is no real (iss, sub) pair to reflect without a configured issuer, and
+// inventing one for dev mode would be exactly the kind of MCP-only
+// identity NFR7 rules out. The browser OAuth2 flow this resolver backs is
+// only exercised against a real Keycloak realm (AuthModeOIDC).
 func (app *App) mcpCallerResolver() mcpauth.CallerResolverFunc {
 	return func(r *http.Request) (string, bool) {
-		return "", false
+		user, err := app.auth.CurrentUser(r)
+		if err != nil {
+			return "", false
+		}
+
+		// app.oidcIssuer (cfg.OIDCIssuer verbatim) rather than any
+		// per-token claim -- see its doc comment on App for why this
+		// mirrors isSessionOwner's own choice; the operator only ever
+		// signs in against this one configured issuer.
+		identity, err := mcpidentity.Encode(app.oidcIssuer, user.Sub)
+		if err != nil {
+			return "", false
+		}
+		return identity, true
 	}
 }
 

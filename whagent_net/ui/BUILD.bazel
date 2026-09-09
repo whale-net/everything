@@ -34,6 +34,7 @@ go_library(
         "//libs/go/mcpauth",
         "//libs/go/rmq",
         "//whagent_net/events",
+        "//whagent_net/mcpidentity",
         "//whagent_net/protos:whagentpb",
         "//whagent_net/ui/components",
         "//whagent_net/ui/pages",

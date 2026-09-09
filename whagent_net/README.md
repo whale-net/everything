@@ -83,6 +83,38 @@ returns as soon as `api` has accepted and queued a turn, never once it has
 completed (FR1) -- follow up with `read_transcript` or `get_session` to see
 the result.
 
+### Browser-based sign-in (FR9)
+
+The `Authorization: Bearer <your Keycloak access token>` recipe above --
+copy a token out of band and paste it into your MCP client config -- still
+works and remains supported; nothing about it changed. FR9 (issue #2245)
+adds a second, interactive option for any MCP client that speaks standard
+OAuth2 authorization-code + PKCE (per the MCP spec's own auth
+requirements): `ui` hosts the authorization server, `mcp` is the protected
+resource, and Claude Code (or any other conformant client) walks the flow
+itself the first time you connect, no manual token copy required.
+
+Point your MCP client at `mcp`'s streamable-HTTP endpoint with no
+`Authorization` header at all -- an unauthenticated request there returns a
+`WWW-Authenticate` challenge naming `mcp`'s own protected-resource metadata
+(RFC 9728), which points at `ui` (`WHAGENT_UI_PUBLIC_URL`) as the
+authorization server. From there the client performs RFC 8414 discovery
+against `ui`, dynamically registers itself (RFC 7591, `POST /register`),
+and opens `ui`'s `/authorize` in a browser: if you're already signed in to
+`ui` it mints a credential immediately, otherwise it sends you to `/login`
+first (your normal Keycloak sign-in) and resumes `/authorize` once that
+completes. `POST /token` then exchanges the resulting code for the bearer
+credential the client uses on every subsequent `mcp` call -- functionally
+the same kind of token as the manual recipe's, just minted through a
+browser flow instead of a `curl`.
+
+The credential this mints resolves to your Keycloak `(iss, sub)` pair --
+the same identity `StartSession`'s `subject` already carries for a human
+operator (NFR7) -- never a separate whagent-net-only account. There is no
+credential expiry/refresh/rotation or revocation UI yet (out of scope for
+M2); a minted credential is valid until explicitly revoked via `mcpauth`'s
+store API.
+
 ## Agent definition config
 
 `whagent_net/config/agents.yaml` is the checked-in source of truth
