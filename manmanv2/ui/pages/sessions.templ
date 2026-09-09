@@ -384,121 +384,21 @@ templ DeploymentRowInner(data DeploymentRowData) {
 }
 
 // DeploymentsLiveRegion wraps the deployment table region with the #1726
-// SSE plumbing: hx-ext="sse" + sse-connect on the outer container (an
-// ancestor of every per-row sse-swap target, never itself a swap target --
-// see libs/go/htmxsse/README.md's "Critical for adopters" note: an
-// sse-connect element that gets swapped re-attaches its EventSource
-// listener before the reconnect can carry Last-Event-ID, breaking NFR2's
-// reconnect-baseline suppression), plus the Live/Not-Live indicator and
-// Reload affordance (NFR3), both siblings of -- not descendants of -- any
-// sse-swap element. Mirrors tools/app_registry/ui/pages/
-// promotion_details.templ's container/indicator/script shape; adapted here
-// for N per-row swap targets (one <tr> each) instead of that page's single
-// sse-swap div, so the inline script's "did content change" detector
-// observes the rendered <table> (every row lives under it) rather than one
-// specific swap element, while still excluding the indicator/reload
-// markup (rendered as siblings before the table) from what it observes.
+// SSE plumbing (NFR2/NFR3). The markup and inline script now live in
+// components.LiveRegion (lifted out here so Activity/FR15 can reuse the
+// same not-live indicator against its own SSE path and reload target
+// without a second copy of this script) -- this wrapper stays only to keep
+// the exported DeploymentsLiveRegion symbol handlers_sessions_live.go and
+// its tests already depend on, so nothing outside this file needs to
+// change call sites.
 templ DeploymentsLiveRegion(heartbeatIntervalMs int) {
-	<div
-		id="deployments-live-region"
-		hx-ext="sse"
-		sse-connect="/api/live/deployments"
-		data-heartbeat-ms={ fmt.Sprint(heartbeatIntervalMs) }
-	>
-		<div id="deployments-live-indicator" class="flex items-center gap-2 mb-2">
-			<div id="deployments-live-status" class="badge badge-success" title="SSE connection is healthy">Live</div>
-		</div>
-		<div id="deployments-reload-container" class="mb-2" style="display: none;">
-			<a href="/sessions" class="btn btn-sm btn-warning">Reload</a>
-		</div>
+	@components.LiveRegion(components.LiveRegionOptions{
+		SSEPath:             "/api/live/deployments",
+		HeartbeatIntervalMs: heartbeatIntervalMs,
+		ReloadHref:          "/sessions",
+	}) {
 		{ children... }
-	</div>
-	<script type="module">
-(function() {
-  const container = document.getElementById('deployments-live-region');
-  if (!container) return;
-
-  const indicator = document.getElementById('deployments-live-status');
-  const reloadContainer = document.getElementById('deployments-reload-container');
-  if (!indicator || !reloadContainer) return;
-
-  let isLive = true;
-  let lastEventTime = Date.now();
-  const heartbeatMs = parseInt(container.getAttribute('data-heartbeat-ms'), 10) || 30000;
-  let debounceTimeoutId = null;
-
-  container.addEventListener('htmx:sseOpen', () => {
-    cancelDebounce();
-    setLive(true);
-    lastEventTime = Date.now();
-  });
-
-  container.addEventListener('htmx:sseError', () => {
-    handleDisconnect();
-  });
-
-  container.addEventListener('htmx:sseClose', () => {
-    handleDisconnect();
-  });
-
-  // Any row swap (all rows live under this <table>, never the
-  // indicator/reload markup rendered above it) counts as a live signal --
-  // mirrors promotion_details.templ's single-swap-target MutationObserver,
-  // generalized to N per-row sse-swap targets under one table.
-  const table = container.querySelector('table');
-  if (table) {
-    const observer = new MutationObserver(() => {
-      lastEventTime = Date.now();
-      cancelDebounce();
-      setLive(true);
-    });
-    observer.observe(table, {
-      childList: true,
-      subtree: true,
-      characterData: true,
-      attributes: true
-    });
-  }
-
-  const heartbeatCheckInterval = setInterval(() => {
-    const timeSinceLastEvent = Date.now() - lastEventTime;
-    const timeoutThreshold = heartbeatMs * 2;
-    if (isLive && timeSinceLastEvent > timeoutThreshold) {
-      handleDisconnect();
-    }
-  }, 10000);
-
-  function handleDisconnect() {
-    if (debounceTimeoutId) return;
-    debounceTimeoutId = setTimeout(() => {
-      setLive(false);
-      debounceTimeoutId = null;
-    }, heartbeatMs);
-  }
-
-  function cancelDebounce() {
-    if (debounceTimeoutId) {
-      clearTimeout(debounceTimeoutId);
-      debounceTimeoutId = null;
-    }
-  }
-
-  function setLive(live) {
-    isLive = live;
-    if (live) {
-      indicator.textContent = 'Live';
-      indicator.className = 'badge badge-success';
-      indicator.title = 'SSE connection is healthy';
-      reloadContainer.style.display = 'none';
-    } else {
-      indicator.textContent = 'Not Live';
-      indicator.className = 'badge badge-warning';
-      indicator.title = 'SSE connection is not live - reload to resume updates';
-      reloadContainer.style.display = 'block';
-    }
-  }
-})();
-	</script>
+	}
 }
 
 templ GSCStatusTable(rows []DeploymentRowData) {

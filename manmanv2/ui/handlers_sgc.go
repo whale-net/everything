@@ -133,12 +133,20 @@ func (app *App) handleSGCDetail(w http.ResponseWriter, r *http.Request) {
 	// sessions and server already fetched above (NFR1: same source of
 	// truth as the session-detail page, no second RPC). server is nil
 	// when GetServer above failed; GetHostPublicAddress() on a nil
-	// *manmanpb.Server returns "" and ComputeConnectAddresses correctly
+	// *manmanpb.Server returns "" and BuildConnectAddressView correctly
 	// treats that as FR7's "unavailable" case rather than erroring.
+	//
+	// BuildConnectAddressView (components.ConnectAddressView) is the same
+	// derivation this handler used inline before -- lifted so the
+	// unavailable rule survives sgc_detail.templ's eventual retirement
+	// (issue #2268) -- unpacked into the pre-existing ConnectAddresses/
+	// ConnectAddressUnavailable fields below so pages.SGCDetailPageData
+	// and its tests need no field-shape change.
 	latestSession := components.LatestSession(sessions)
 	deploymentStatus := components.ComputeDeploymentStatus(latestSession)
-	connectAddresses := components.ComputeConnectAddresses(server.GetHostPublicAddress(), sgc.PortBindings)
-	connectAddressUnavailable := len(connectAddresses) == 0
+	connectAddressView := components.BuildConnectAddressView(server.GetHostPublicAddress(), sgc.PortBindings)
+	connectAddresses := connectAddressView.Addresses
+	connectAddressUnavailable := connectAddressView.Unavailable
 
 	// Fetch library attachments with computed paths
 	libraryAttachments, err := app.computeLibraryAttachments(ctx, sgcID, sgc.GameConfigId)

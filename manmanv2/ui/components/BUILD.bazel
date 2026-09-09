@@ -5,6 +5,7 @@ templ_library(
     name = "components",
     srcs = glob(["*.templ"]),
     go_srcs = [
+        "connect_address.go",
         "deployment_actions.go",
         "deployment_status.go",
         "restart_state.go",
@@ -27,10 +28,12 @@ go_test(
     name = "components_test",
     size = "small",
     srcs = [
+        "connect_address_test.go",
         "dashboard_test.go",
         "deployment_actions_test.go",
         "deployment_status_test.go",
         "layout_test.go",
+        "live_indicator_test.go",
         "restart_state_test.go",
     ],
     embed = [":components"],

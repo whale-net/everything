@@ -1,0 +1,151 @@
+package components
+
+import "fmt"
+
+// LiveRegionOptions parameterises LiveRegion for each caller.
+//
+// ReloadHref exists because the markup this was lifted from
+// (pages/sessions.templ's DeploymentsLiveRegion) hard-coded
+// <a href="/sessions">; Activity (FR15) needs the same indicator pointing
+// at its own path, so the reload target is now a parameter rather than a
+// literal.
+type LiveRegionOptions struct {
+	// SSEPath is the hx-ext="sse" container's sse-connect target, e.g.
+	// "/api/live/deployments".
+	SSEPath string
+	// HeartbeatIntervalMs is the resolved server heartbeat interval, in
+	// milliseconds, used for the Not-Live debounce: the client waits one
+	// heartbeat interval after htmx:sseError/htmx:sseClose (or a missed
+	// heartbeat) before flipping the indicator, so a single dropped beat
+	// doesn't flap it.
+	HeartbeatIntervalMs int
+	// ReloadHref is the page to reload when the connection goes stale;
+	// "/sessions" for the existing sessions-page caller.
+	ReloadHref string
+}
+
+// LiveRegion is the not-live indicator lifted out of
+// pages/sessions.templ's DeploymentsLiveRegion (#1726): hx-ext="sse" +
+// sse-connect on the outer container (an ancestor of every per-row
+// sse-swap target the caller renders via { children... }, never itself a
+// swap target -- see libs/go/htmxsse/README.md's "Critical for adopters"
+// note: an sse-connect element that gets swapped re-attaches its
+// EventSource listener before the reconnect can carry Last-Event-ID,
+// breaking the reconnect-baseline suppression callers rely on), plus the
+// Live/Not-Live badge and Reload affordance, both siblings of -- not
+// descendants of -- any sse-swap element the caller renders inside
+// { children... }.
+//
+// The IDs below ("deployments-live-region" etc.) are kept from the
+// sessions-page origin rather than parameterised, because they are only
+// ever queried by the inline script rendered alongside this component
+// (never by an external caller), and every LiveRegion instance renders
+// its own script scoped to its own container via getElementById lookups
+// inside an IIFE -- two LiveRegion instances on the same page would
+// collide on these IDs, but M5 has exactly one LiveRegion per page.
+//
+// NFR1 (htmxui candidate): this component is generic -- it knows nothing
+// manmanv2-specific beyond the SSE path/reload href callers pass in -- and
+// is written to be liftable into libs/go/htmxui unchanged.
+templ LiveRegion(opts LiveRegionOptions) {
+	<div
+		id="deployments-live-region"
+		hx-ext="sse"
+		sse-connect={ opts.SSEPath }
+		data-heartbeat-ms={ fmt.Sprint(opts.HeartbeatIntervalMs) }
+	>
+		<div id="deployments-live-indicator" class="flex items-center gap-2 mb-2">
+			<div id="deployments-live-status" class="badge badge-success" title="SSE connection is healthy">Live</div>
+		</div>
+		<div id="deployments-reload-container" class="mb-2" style="display: none;">
+			<a href={ templ.URL(opts.ReloadHref) } class="btn btn-sm btn-warning">Reload</a>
+		</div>
+		{ children... }
+	</div>
+	<script type="module">
+(function() {
+  const container = document.getElementById('deployments-live-region');
+  if (!container) return;
+
+  const indicator = document.getElementById('deployments-live-status');
+  const reloadContainer = document.getElementById('deployments-reload-container');
+  if (!indicator || !reloadContainer) return;
+
+  let isLive = true;
+  let lastEventTime = Date.now();
+  const heartbeatMs = parseInt(container.getAttribute('data-heartbeat-ms'), 10) || 30000;
+  let debounceTimeoutId = null;
+
+  container.addEventListener('htmx:sseOpen', () => {
+    cancelDebounce();
+    setLive(true);
+    lastEventTime = Date.now();
+  });
+
+  container.addEventListener('htmx:sseError', () => {
+    handleDisconnect();
+  });
+
+  container.addEventListener('htmx:sseClose', () => {
+    handleDisconnect();
+  });
+
+  // Any row swap (all rows live under this <table>, never the
+  // indicator/reload markup rendered above it) counts as a live signal --
+  // mirrors promotion_details.templ's single-swap-target MutationObserver,
+  // generalized to N per-row sse-swap targets under one table.
+  const table = container.querySelector('table');
+  if (table) {
+    const observer = new MutationObserver(() => {
+      lastEventTime = Date.now();
+      cancelDebounce();
+      setLive(true);
+    });
+    observer.observe(table, {
+      childList: true,
+      subtree: true,
+      characterData: true,
+      attributes: true
+    });
+  }
+
+  const heartbeatCheckInterval = setInterval(() => {
+    const timeSinceLastEvent = Date.now() - lastEventTime;
+    const timeoutThreshold = heartbeatMs * 2;
+    if (isLive && timeSinceLastEvent > timeoutThreshold) {
+      handleDisconnect();
+    }
+  }, 10000);
+
+  function handleDisconnect() {
+    if (debounceTimeoutId) return;
+    debounceTimeoutId = setTimeout(() => {
+      setLive(false);
+      debounceTimeoutId = null;
+    }, heartbeatMs);
+  }
+
+  function cancelDebounce() {
+    if (debounceTimeoutId) {
+      clearTimeout(debounceTimeoutId);
+      debounceTimeoutId = null;
+    }
+  }
+
+  function setLive(live) {
+    isLive = live;
+    if (live) {
+      indicator.textContent = 'Live';
+      indicator.className = 'badge badge-success';
+      indicator.title = 'SSE connection is healthy';
+      reloadContainer.style.display = 'none';
+    } else {
+      indicator.textContent = 'Not Live';
+      indicator.className = 'badge badge-warning';
+      indicator.title = 'SSE connection is not live - reload to resume updates';
+      reloadContainer.style.display = 'block';
+    }
+  }
+})();
+	</script>
+}
