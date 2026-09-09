@@ -21,3 +21,35 @@ go_test(
     srcs = ["s3_test.go"],
     embed = [":s3"],
 )
+
+# Finding #2225: nobody had exercised an actual PUT/GET against a presigned
+# URL -- the RPC-level fix (#2213) was verified, but the resulting URL was
+# never used to move real bytes. Real MinIO via testcontainers-go, same
+# build-tagged/manual pattern as
+# manmanv2/api/handlers:action_execution_integration_test.
+#
+# Run it explicitly (requires working Docker):
+#   bazel test //libs/go/s3:s3_integration_test --test_output=all
+go_test(
+    # keep
+    name = "s3_integration_test",
+    size = "large",
+    timeout = "long",
+    srcs = ["s3_integration_test.go"],
+    embed = [":s3"],
+    gotags = ["integration"],
+    tags = [
+        "external",
+        "integration",
+        "manual",
+        "no-cache",
+        "no-sandbox",
+        "requires-network",
+    ],
+    deps = [
+        "@com_github_aws_aws_sdk_go_v2//aws",
+        "@com_github_aws_aws_sdk_go_v2_service_s3//:s3",
+        "@com_github_testcontainers_testcontainers_go//:testcontainers-go",
+        "@com_github_testcontainers_testcontainers_go//wait",
+    ],
+)
