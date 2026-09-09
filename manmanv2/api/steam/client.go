@@ -17,6 +17,11 @@ import (
 type SteamWorkshopClient struct {
 	apiKey     string
 	httpClient *http.Client
+	// baseURL overrides the Steam API host for tests. Empty (the zero
+	// value returned by NewSteamWorkshopClient) means "use the real
+	// Steam API"; tests in this package may set it directly to point at
+	// an httptest.Server.
+	baseURL string
 }
 
 // WorkshopItemMetadata represents metadata for a workshop item
@@ -144,6 +149,9 @@ func (swc *SteamWorkshopClient) GetWorkshopItemDetails(ctx context.Context, work
 // GetCollectionDetails fetches all items in a collection
 func (swc *SteamWorkshopClient) GetCollectionDetails(ctx context.Context, collectionID string) ([]CollectionItem, error) {
 	apiURL := "https://api.steampowered.com/ISteamRemoteStorage/GetCollectionDetails/v1/"
+	if swc.baseURL != "" {
+		apiURL = swc.baseURL
+	}
 
 	data := url.Values{}
 	data.Set("collectioncount", "1")

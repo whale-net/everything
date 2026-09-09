@@ -3,8 +3,10 @@ package steam
 import (
 	"context"
 	"encoding/json"
+	"io"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"testing"
 	"time"
 
@@ -73,6 +75,82 @@ func TestGetCollectionDetails_Empty(t *testing.T) {
 	// Test that empty collection handling works
 	// The actual API call would fail with "collection not found"
 	assert.True(t, true)
+}
+
+// TestGetCollectionDetails_SendsNonEmptyBody guards against the regression
+// fixed in #2211: GetCollectionDetails previously built its outbound POST
+// with a nil body and set the (client-side-meaningless) PostForm field
+// instead, so Steam received a request with no body at all. This test
+// inspects the actual bytes the client sent on the wire, not just the
+// response it parses.
+func TestGetCollectionDetails_SendsNonEmptyBody(t *testing.T) {
+	const collectionID = "123456789"
+
+	var receivedBody string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		bodyBytes, err := io.ReadAll(r.Body)
+		if err != nil {
+			t.Errorf("failed to read request body: %v", err)
+		}
+		receivedBody = string(bodyBytes)
+		if receivedBody == "" {
+			t.Fatal("request body was empty; expected form-encoded collection request data")
+		}
+
+		response := map[string]interface{}{
+			"response": map[string]interface{}{
+				"collectiondetails": []map[string]interface{}{
+					{"children": []CollectionItem{}},
+				},
+			},
+		}
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(response)
+	}))
+	defer server.Close()
+
+	client := NewSteamWorkshopClient("test-key", 5*time.Second)
+	client.baseURL = server.URL
+
+	_, err := client.GetCollectionDetails(context.Background(), collectionID)
+	require.NoError(t, err)
+
+	form, err := url.ParseQuery(receivedBody)
+	require.NoError(t, err)
+	assert.Equal(t, "1", form.Get("collectioncount"))
+	assert.Equal(t, collectionID, form.Get("publishedfileids[0]"))
+}
+
+// TestGetCollectionDetails_ContentTypeHeaderSet is a regression guard for the
+// Content-Type header, which is easy to lose when touching the
+// request-building code alongside the body fix.
+func TestGetCollectionDetails_ContentTypeHeaderSet(t *testing.T) {
+	const collectionID = "987654321"
+
+	var receivedContentType string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		receivedContentType = r.Header.Get("Content-Type")
+		io.ReadAll(r.Body)
+
+		response := map[string]interface{}{
+			"response": map[string]interface{}{
+				"collectiondetails": []map[string]interface{}{
+					{"children": []CollectionItem{}},
+				},
+			},
+		}
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(response)
+	}))
+	defer server.Close()
+
+	client := NewSteamWorkshopClient("test-key", 5*time.Second)
+	client.baseURL = server.URL
+
+	_, err := client.GetCollectionDetails(context.Background(), collectionID)
+	require.NoError(t, err)
+
+	assert.Equal(t, "application/x-www-form-urlencoded", receivedContentType)
 }
 
 func TestRetryLogic(t *testing.T) {
