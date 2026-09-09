@@ -12,11 +12,14 @@ import (
 // place with no server round-trip.
 //
 // handleGames assembles Games from a constant number of fleet-wide list
-// calls (games, game configs, deployments, servers, live sessions) joined
+// calls (games, game configs, deployments, servers, sessions) joined
 // in the UI (NFR7) -- see handlers_games.go's doc comment on that join.
 // This template only renders what it is given and issues no request of
 // its own: expansion is a client-side disclosure of already-fetched data
-// (FR4), never a per-row fetch.
+// (FR4), never a per-row fetch. The one exception is the expanded row's
+// Customize control (#2272, FR6/FR11/FR12): it clones an already-rendered
+// <template> into the document rather than fetching anything, so it too
+// costs no request (see openDeploymentSettingsBlade below).
 type GamesPageData struct {
 	Layout components.LayoutData
 	Games  []GameRow
@@ -48,19 +51,43 @@ type GameRow struct {
 	// blank (AC2).
 	Connect components.ConnectAddressView
 
-	// Deployments and Configs populate the expanded row's Deployments
-	// and Configurations sections. This task (#2270) leaves them
-	// unpopulated -- the expanded container below renders clearly-marked
-	// empty sub-containers with stable ids -- so a follow-up task can
-	// fill each in additively without touching this page's shell.
-	Deployments []DeploymentRowView
-	Configs     []ConfigRowView
+	// Deployments populates the expanded row's Deployments section (#2272,
+	// FR6): one GameDeploymentRow per deployment of this game.
+	Deployments []GameDeploymentRow
+	// Configs populates the expanded row's Configurations section. This
+	// task (#2272) leaves it unpopulated -- the expanded container below
+	// renders a clearly-marked empty sub-container with a stable id -- so a
+	// follow-up task can fill it in additively without touching this page's
+	// shell.
+	Configs []ConfigRowView
 }
 
-// DeploymentRowView is a placeholder for the expanded row's Deployments
-// section. Stubbed by #2270; a follow-up task defines its fields and
-// rendering.
-type DeploymentRowView struct{}
+// GameDeploymentRow is one row of a game's expanded Deployments section
+// (#2272, FR6). Row is the shared pages.DeploymentRowData -- rendered
+// verbatim via DeploymentRow/DeploymentRowInner (#1627), the same
+// component /sessions renders each deployment with -- so Start/Stop/
+// Restart availability, the session-status badge, and the #1628
+// self-terminating row poll are reused unmodified rather than re-derived
+// (FR6's anti-drift requirement: this page must not be able to disagree
+// with /sessions about the same deployment's state). Connect, LogsURL, and
+// ActionsURL are additive: none of them feed back into Row's derivation.
+type GameDeploymentRow struct {
+	Row DeploymentRowData
+	// Connect is the shared connect-address view (#2268), same as the
+	// collapsed row's (FR5) -- never a blank; the shared unavailable state
+	// when unresolvable (AC2).
+	Connect components.ConnectAddressView
+	// LogsURL links out to this deployment's logs surface: the session
+	// detail page for its latest session (which also serves historical
+	// logs once the session has ended), or "" when the deployment has never
+	// had a session.
+	LogsURL string
+	// ActionsURL links out to the existing Actions surface for console
+	// commands (C23/M3, decision 8: not reshaped, not inlined, not a Config
+	// Editor tab) -- the config-level Actions management page, which also
+	// shows this deployment's inherited game-level actions.
+	ActionsURL string
+}
 
 // ConfigRowView is a placeholder for the expanded row's Configurations
 // section. Stubbed by #2270; a follow-up task defines its fields and
@@ -80,6 +107,30 @@ templ Games(data GamesPageData) {
 		<style>
 			[x-cloak] { display: none !important; }
 		</style>
+		<script>
+			// Deployment Settings blade opener (#2272, FR6/FR11/FR12): each
+			// deployment row carries a <template id="deployment-settings-blade-template-N">
+			// holding an already-rendered components.Blade instance (the
+			// blade shell -- its own content lands in a follow-up task) and
+			// a Customize button with data-open-blade-template="...-N"
+			// naming that template's id. A single delegated listener,
+			// rather than one per row, clones the matching template's
+			// content into the document on click. This is deliberately not
+			// an hx-get: opening
+			// the blade must cost no request (FR4/NFR7's "no fetch on
+			// expand" carried forward to "no fetch on Customize" too, since
+			// the shell has nothing server-side left to fetch yet), and
+			// cloning a <script>-bearing <template> via appendChild executes
+			// that script, which is what mounts Blade's own scrim/Escape/
+			// focus-trap behavior (see blade.templ's doc comment).
+			document.addEventListener('click', function(event) {
+				var trigger = event.target.closest('[data-open-blade-template]');
+				if (!trigger) return;
+				var tpl = document.getElementById(trigger.getAttribute('data-open-blade-template'));
+				if (!tpl) return;
+				document.body.appendChild(tpl.content.cloneNode(true));
+			});
+		</script>
 		@components.HeroHeader("Games", "Status and connect at a glance — expand a game for deployments, configurations, and workshop libraries") {
 			<a href="/games/new" class="btn bg-base-100 text-primary hover:bg-base-200 border-none shadow-md">
 				+ Create New Game
@@ -125,15 +176,89 @@ templ gameRow(row GameRow, startExpanded bool) {
 		</button>
 		<!--
 			Expanded row shell (FR4: at most one nested panel level).
-			Deployments, Configurations, and Workshop Libraries render
-			here, one clearly-marked empty container per section with a
-			stable id, so the follow-up task that fills them in is purely
-			additive to this shell.
+			Deployments (#2272, FR6), Configurations, and Workshop Libraries
+			render here. Configurations and Workshop Libraries are still
+			empty containers with stable ids for their own follow-up tasks,
+			purely additive to this shell.
 		-->
 		<div id={ fmt.Sprintf("game-expand-%d", row.GameID) } x-show="expanded" x-cloak class="border-t border-base-300 p-4 flex flex-col gap-4">
-			<div id={ fmt.Sprintf("game-deployments-%d", row.GameID) }></div>
+			<div id={ fmt.Sprintf("game-deployments-%d", row.GameID) }>
+				@deploymentsSection(row.Deployments)
+			</div>
 			<div id={ fmt.Sprintf("game-configs-%d", row.GameID) }></div>
 			<div id={ fmt.Sprintf("game-workshop-%d", row.GameID) }></div>
 		</div>
 	</div>
+}
+
+// deploymentsSection renders the expanded row's Deployments section (#2272,
+// FR6, AC1): every deployment of this game, or a muted empty state when it
+// has none. Deployments render inside a <table> even though this section is
+// otherwise card-based, because gameDeploymentRow's status/actions half is
+// literally DeploymentRow's own <tr> (#1627) -- reused, not
+// reimplemented -- and htmx's outerHTML swap on that <tr> (the #1628 row
+// poll, and the Start/Stop/Restart action responses) only parses correctly
+// with a real <table>/<tbody> ancestor providing table insertion-mode
+// context; a <div>-based swap target would silently drop the replacement
+// content.
+templ deploymentsSection(deployments []GameDeploymentRow) {
+	if len(deployments) == 0 {
+		<p class="text-sm text-base-content/60">No deployments yet.</p>
+	} else {
+		<div class="overflow-x-auto">
+			<table class="table table-sm">
+				<tbody>
+					for _, dep := range deployments {
+						@gameDeploymentRow(dep)
+					}
+				</tbody>
+			</table>
+		</div>
+	}
+}
+
+// gameDeploymentRow renders one Deployments-section entry: a name/connect/
+// link-outs/Customize header row, immediately followed by dep.Row rendered
+// via DeploymentRow(dep.Row) -- byte-identical to how /sessions renders the
+// same deployment (#1627), so Start/Stop/Restart availability and the
+// session-status badge cannot drift from /sessions (FR6). colspan matches
+// DeploymentRowInner's own four <td>s.
+templ gameDeploymentRow(dep GameDeploymentRow) {
+	<tr class="bg-base-200/40">
+		<td colspan="4">
+			<div class="flex flex-wrap justify-between items-center gap-3 py-1">
+				<div class="flex items-center gap-3">
+					<span class="font-medium text-sm">{ dep.Row.DisplayName }</span>
+					@components.ConnectAddressDisplay(dep.Connect)
+				</div>
+				<div class="flex items-center gap-3 text-xs">
+					if dep.LogsURL != "" {
+						<a href={ templ.URL(dep.LogsURL) } class="link link-primary">Logs</a>
+					} else {
+						<span class="text-base-content/40">No logs yet</span>
+					}
+					<a href={ templ.URL(dep.ActionsURL) } class="link link-primary">Actions</a>
+					<button
+						type="button"
+						data-open-blade-template={ fmt.Sprintf("deployment-settings-blade-template-%d", dep.Row.ServerGameConfigID) }
+						class="btn btn-outline btn-xs"
+					>
+						Customize
+					</button>
+				</div>
+			</div>
+			<template id={ fmt.Sprintf("deployment-settings-blade-template-%d", dep.Row.ServerGameConfigID) }>
+				@components.Blade(components.BladeData{
+					ID:       fmt.Sprintf("deployment-settings-blade-%d", dep.Row.ServerGameConfigID),
+					Title:    "Deployment Settings",
+					Subtitle: dep.Row.DisplayName,
+				}) {
+					<p class="text-sm text-base-content/70">
+						Port bindings and environment overrides editing land here in a follow-up task (FR11/FR12).
+					</p>
+				}
+			</template>
+		</td>
+	</tr>
+	@DeploymentRow(dep.Row)
 }
