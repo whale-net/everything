@@ -54,12 +54,19 @@ type GameRow struct {
 	// Deployments populates the expanded row's Deployments section (#2272,
 	// FR6): one GameDeploymentRow per deployment of this game.
 	Deployments []GameDeploymentRow
-	// Configs populates the expanded row's Configurations section. This
-	// task (#2272) leaves it unpopulated -- the expanded container below
-	// renders a clearly-marked empty sub-container with a stable id -- so a
-	// follow-up task can fill it in additively without touching this page's
-	// shell.
+
+	// Configs populates the expanded row's Configurations section (FR7,
+	// task #2273): every Game Config of this game, joined in the UI from
+	// data the page already fetched (NFR7) -- see buildGameRows in
+	// handlers_games.go.
 	Configs []ConfigRowView
+
+	// WorkshopLibraries populates the expanded row's read-only Workshop
+	// Libraries section (FR8, task #2273). See WorkshopLibraryRow's doc
+	// comment for a load-bearing note: handlers_games.go does not
+	// populate this from live data today (documented gap, not a silent
+	// omission -- see that comment for why).
+	WorkshopLibraries []WorkshopLibraryRow
 }
 
 // GameDeploymentRow is one row of a game's expanded Deployments section
@@ -89,10 +96,49 @@ type GameDeploymentRow struct {
 	ActionsURL string
 }
 
-// ConfigRowView is a placeholder for the expanded row's Configurations
-// section. Stubbed by #2270; a follow-up task defines its fields and
-// rendering.
-type ConfigRowView struct{}
+// ConfigRowView is one row in the expanded row's Configurations section
+// (FR7): every Game Config of the game, with the number of deployments
+// using it derived entirely from data the page already fetched (NFR7) --
+// no new aggregate field, no per-config query. Deliberately excludes a
+// port column (WD10): port_bindings live on ServerGameConfig (a
+// deployment), never on GameConfig -- see the ground-truth table on issue
+// #2273. Adding one here would be a defect, not a nicety.
+type ConfigRowView struct {
+	GameID          int64
+	ConfigID        int64
+	Name            string
+	Image           string
+	DeploymentCount int
+}
+
+// WorkshopLibraryRow is one row in the expanded row's read-only Workshop
+// Libraries section (FR8). It represents an attachment recorded in
+// today's SGC-scoped sgc_workshop_libraries data (C16) -- deliberately
+// still SGC-scoped, not Game-Config-scoped: that migration is LB6's to
+// make, and is M6 scope (C28), not M5's.
+//
+// Documented gap: handlers_games.go's handleGames does not populate this
+// field from live data today. Every existing RPC that reads
+// sgc_workshop_libraries (ListSGCLibraries, GetSGCLibraryAttachments)
+// requires a single sgc_id and errors on 0 -- there is no fleet-wide list
+// call for it, so wiring it for real would mean either a per-deployment
+// call (violates NFR7's constant-call-count bound, extended to this
+// task's sections) or a new endpoint (NFR4 forbids adding one silently in
+// this task). This mirrors NFR7's own named fallback for its game_id
+// filter: the fix is an additive, bounded fleet-wide read (e.g. sgc_id
+// == 0 meaning "all", the same convention ListInstallationsRequest
+// already uses), recorded as a Dependencies entry for a follow-up task,
+// not built here. gameWorkshopSection below and this type are written so
+// that follow-up is purely additive.
+type WorkshopLibraryRow struct {
+	LibraryID   int64
+	LibraryName string
+	ConfigName  string
+	// Target is the pre-formatted install target, e.g. "data ·
+	// valheim/maps/" (volume type + path) -- rendering never assembles
+	// this from raw volume/path fields itself.
+	Target string
+}
 
 // gameRowExpanded reports whether row should start expanded per
 // GamesPageData.ExpandGameID (A1): true only on an exact GameID match, so
@@ -175,18 +221,23 @@ templ gameRow(row GameRow, startExpanded bool) {
 			</span>
 		</button>
 		<!--
-			Expanded row shell (FR4: at most one nested panel level).
-			Deployments (#2272, FR6), Configurations, and Workshop Libraries
-			render here. Configurations and Workshop Libraries are still
-			empty containers with stable ids for their own follow-up tasks,
-			purely additive to this shell.
+			Expanded row shell (FR4: at most one nested panel level), each
+			section in its own stable-id container. Deployments (#2272,
+			FR6), Configurations (FR7), Workshop Libraries (FR8) and the
+			settings/danger footer (FR9) render for real here, from row
+			data already fetched on page load, never a fetch of their own.
 		-->
 		<div id={ fmt.Sprintf("game-expand-%d", row.GameID) } x-show="expanded" x-cloak class="border-t border-base-300 p-4 flex flex-col gap-4">
 			<div id={ fmt.Sprintf("game-deployments-%d", row.GameID) }>
 				@deploymentsSection(row.Deployments)
 			</div>
-			<div id={ fmt.Sprintf("game-configs-%d", row.GameID) }></div>
-			<div id={ fmt.Sprintf("game-workshop-%d", row.GameID) }></div>
+			<div id={ fmt.Sprintf("game-configs-%d", row.GameID) }>
+				@gameConfigsSection(row)
+			</div>
+			<div id={ fmt.Sprintf("game-workshop-%d", row.GameID) }>
+				@gameWorkshopSection(row)
+			</div>
+			@gameFooter(row)
 		</div>
 	</div>
 }
@@ -261,4 +312,131 @@ templ gameDeploymentRow(dep GameDeploymentRow) {
 		</td>
 	</tr>
 	@DeploymentRow(dep.Row)
+}
+
+// gameConfigsSection renders the Configurations section (FR7, task #2273):
+// every Game Config of this game with name, image, the number of
+// deployments using it, an Edit control opening the Config Editor blade,
+// and a link out to today's existing create-deployment flow. Renders
+// entirely from row.Configs -- no fetch of its own (FR4, NFR7).
+templ gameConfigsSection(row GameRow) {
+	<div class="border border-base-300 rounded-box overflow-hidden">
+		<div class="p-3 border-b border-base-300 bg-base-200">
+			<h3 class="font-semibold text-base-content">Configurations</h3>
+		</div>
+		if len(row.Configs) > 0 {
+			<div class="overflow-x-auto">
+				<table class="table table-sm">
+					<thead>
+						<tr>
+							<th scope="col">Name</th>
+							<th scope="col">Image</th>
+							<th scope="col">Deployments</th>
+							<th scope="col" class="text-right">Actions</th>
+						</tr>
+					</thead>
+					<tbody>
+						for _, cfg := range row.Configs {
+							<tr class="hover">
+								<td class="font-medium text-base-content">{ cfg.Name }</td>
+								<td class="font-mono text-sm">{ cfg.Image }</td>
+								<td>{ fmt.Sprintf("%d", cfg.DeploymentCount) }</td>
+								<td class="text-right space-x-2">
+									<!--
+										FR13: Edit opens the Config Editor blade, built
+										in a follow-up task against #2269's blade API
+										(components.BladeData/components.Blade). This task
+										only renders the trigger, no hx-get, no inline
+										form, since the blade's own content does not exist
+										yet; data-config-editor-trigger is the hook that
+										task wires a click handler to.
+									-->
+									<button
+										type="button"
+										class="btn btn-xs btn-secondary"
+										data-config-editor-trigger
+										data-config-id={ fmt.Sprintf("%d", cfg.ConfigID) }
+									>
+										Edit
+									</button>
+									<!--
+										WD7: a link out to today's existing create-deployment
+										flow (the Config Detail page's "Deploy to Server"
+										form), never an inline deploy-and-start composite.
+									-->
+									<a
+										href={ templ.URL(fmt.Sprintf("/games/%d/configs/%d", cfg.GameID, cfg.ConfigID)) }
+										class="btn btn-xs btn-success"
+									>
+										Deploy
+									</a>
+								</td>
+							</tr>
+						}
+					</tbody>
+				</table>
+			</div>
+		} else {
+			<p class="p-4 text-sm text-base-content/60">No configurations yet.</p>
+		}
+	</div>
+}
+
+// gameWorkshopSection renders the read-only Workshop Libraries section
+// (FR8, task #2273). LB6 guard: no attach, detach, or edit control --
+// this panel only reads, so M5 adds no new SGC-scoped attachment
+// assumption for LB6's eventual Game-Config-level migration to unwind.
+// See WorkshopLibraryRow's doc comment for why row.WorkshopLibraries is
+// not populated from live data today.
+templ gameWorkshopSection(row GameRow) {
+	<div class="border border-base-300 rounded-box overflow-hidden">
+		<div class="flex flex-col sm:flex-row sm:justify-between sm:items-center gap-2 p-3 border-b border-base-300 bg-base-200">
+			<h3 class="font-semibold text-base-content">Workshop Libraries</h3>
+			<span class="text-xs text-base-content/60">Libraries will be shared across configs and editable here in M6.</span>
+		</div>
+		if len(row.WorkshopLibraries) > 0 {
+			<div class="overflow-x-auto">
+				<table class="table table-sm">
+					<thead>
+						<tr>
+							<th scope="col">Library</th>
+							<th scope="col">Config</th>
+							<th scope="col">Install Target</th>
+						</tr>
+					</thead>
+					<tbody>
+						for _, lib := range row.WorkshopLibraries {
+							<tr class="hover">
+								<td class="text-base-content">{ lib.LibraryName }</td>
+								<td class="text-base-content">{ lib.ConfigName }</td>
+								<td class="font-mono text-sm">{ lib.Target }</td>
+							</tr>
+						}
+					</tbody>
+				</table>
+			</div>
+		} else {
+			<p class="p-4 text-sm text-base-content/60">No workshop libraries attached.</p>
+		}
+	</div>
+}
+
+// gameFooter renders the settings/danger footer (FR9, task #2273): links
+// out to the existing game settings/presets surface and the existing
+// delete-game surface (both on GameDetail, /games/{id}), with their
+// existing confirmation flows. The destructive action is never
+// reproduced inline here and gains no new one-click affordance -- see
+// GameDetail's Danger Zone (game_detail.templ) for the confirm-before-
+// delete gate this links to. Hard requirement: this must not make delete
+// more reachable than today's game-detail page (it is exactly as
+// reachable: one link to the same page, same confirm gate on it).
+templ gameFooter(row GameRow) {
+	<div class="flex gap-2 text-sm">
+		<a href={ templ.URL(fmt.Sprintf("/games/%d#settings-presets", row.GameID)) } class="btn btn-xs btn-secondary">
+			Game settings &amp; presets…
+		</a>
+		<a href={ templ.URL(fmt.Sprintf("/games/%d#danger-zone", row.GameID)) } class="btn btn-xs btn-error ml-auto">
+			Delete Game…
+		</a>
+	</div>
 }
