@@ -10,6 +10,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 	"net"
 	"net/http"
 	"os"
@@ -21,10 +22,12 @@ import (
 	"github.com/whale-net/everything/libs/go/db"
 	"github.com/whale-net/everything/libs/go/grpcauth"
 	"github.com/whale-net/everything/libs/go/logging"
+	"github.com/whale-net/everything/libs/go/rmq"
 	temporallib "github.com/whale-net/everything/libs/go/temporal"
 	"github.com/whale-net/everything/whagent_net/api/handlers"
 	"github.com/whale-net/everything/whagent_net/api/persona"
 	"github.com/whale-net/everything/whagent_net/config"
+	"github.com/whale-net/everything/whagent_net/events"
 	"github.com/whale-net/everything/whagent_net/llm"
 	pb "github.com/whale-net/everything/whagent_net/protos"
 	"github.com/whale-net/everything/whagent_net/session"
@@ -143,7 +146,15 @@ func run() error {
 	llmClient := llm.NewClient(os.Getenv("OPENROUTER_API_KEY"), getEnv("OPENROUTER_BASE_URL", "https://openrouter.ai/api/v1"))
 	catalog := llm.NewCatalog(llmClient, catalogTTL)
 
-	sessionServer := handlers.NewSessionServer(store, grpcOIDCIssuer, temporalClient, temporalCfg.TaskQueue, catalog)
+	// eventsConsumer is StreamEvents' (FR5/C17, issue #2239) per-process
+	// subscription onto the whagent/events exchange -- see
+	// initializeEventsConsumer's doc comment.
+	eventsConsumer := initializeEventsConsumer(logger)
+	if eventsConsumer != nil {
+		defer eventsConsumer.Close() //nolint:errcheck
+	}
+
+	sessionServer := handlers.NewSessionServer(store, grpcOIDCIssuer, temporalClient, temporalCfg.TaskQueue, catalog, eventsConsumer)
 
 	// agentDefs feeds DevRoles below: DevRoles matters only in
 	// AuthModeNone, where it makes the injected dev Claims carry every
@@ -221,6 +232,68 @@ func run() error {
 	}()
 
 	return <-done
+}
+
+// initializeEventsConsumer connects to RabbitMQ and declares/binds a
+// single per-process ephemeral queue on the whagent/events exchange (FR5/
+// C17, issue #2239's Scaffold), mirroring
+// tools/app_registry/ui/main.go's initializeSSEHub attach shape: declare
+// the exchange, then create a non-durable, auto-delete, server-named
+// queue via rmq.NewConsumerWithOpts(conn, "", false, true, 0, 0) and bind
+// it to every routing key ("#") the same way htmxsse.Hub.attach does
+// (libs/go/htmxsse/hub.go) -- one shared subscription, not one per
+// stream, so no StreamEvents call ever needs its own broker connection or
+// credentials (C17's whole point). handlers.SessionServer.StreamEvents
+// (stream.go) filters the shared queue's deliveries to a given call's
+// session in-process at Implementation time, the same way Hub's clients
+// each filter the shared feed to their own topic.
+//
+// Construction is non-fatal, matching worker/main.go's
+// initializePublisher: RABBITMQ_URL unset or the broker unreachable at
+// startup returns nil, and api still starts (NFR7) -- StreamEvents must
+// report UNAVAILABLE for a nil consumer rather than block.
+func initializeEventsConsumer(logger *slog.Logger) *rmq.Consumer {
+	brokerURL := getEnv("RABBITMQ_URL", "")
+	if brokerURL == "" {
+		logger.Info("RABBITMQ_URL not set; StreamEvents will be unavailable")
+		return nil
+	}
+
+	conn, err := rmq.NewConnectionFromURL(brokerURL)
+	if err != nil {
+		logger.Warn("failed to connect to RabbitMQ for StreamEvents; StreamEvents will be unavailable", "error", err)
+		return nil
+	}
+
+	ch, err := conn.Channel()
+	if err != nil {
+		logger.Warn("failed to open channel to declare events exchange; StreamEvents will be unavailable", "error", err)
+		conn.Close() //nolint:errcheck
+		return nil
+	}
+	kind, durable, autoDelete, internal, noWait, args := events.DeclareArgs()
+	err = ch.ExchangeDeclare(events.ExchangeName, kind, durable, autoDelete, internal, noWait, args)
+	ch.Close() //nolint:errcheck
+	if err != nil {
+		logger.Warn("failed to declare events exchange; StreamEvents will be unavailable", "error", err, "exchange", events.ExchangeName)
+		conn.Close() //nolint:errcheck
+		return nil
+	}
+
+	consumer, err := rmq.NewConsumerWithOpts(conn, "", false, true, 0, 0)
+	if err != nil {
+		logger.Warn("failed to create ephemeral queue for StreamEvents; StreamEvents will be unavailable", "error", err)
+		conn.Close() //nolint:errcheck
+		return nil
+	}
+	if err := consumer.BindExchange(events.ExchangeName, []string{"#"}); err != nil {
+		logger.Warn("failed to bind ephemeral queue to events exchange; StreamEvents will be unavailable", "error", err)
+		consumer.Close() //nolint:errcheck
+		return nil
+	}
+
+	logger.Info("bound ephemeral queue to events exchange for StreamEvents", "exchange", events.ExchangeName)
+	return consumer
 }
 
 func getEnv(key, def string) string {

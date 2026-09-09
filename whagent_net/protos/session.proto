@@ -68,6 +68,19 @@ service SessionService {
   // NOT_FOUND for an unknown session id. Authorization follows the same
   // rule as GetSession (any authenticated caller) -- see issue #2238.
   rpc GetSessionUsage(GetSessionUsageRequest) returns (GetSessionUsageResponse);
+
+  // StreamEvents is FR5/C17's server-streaming bridge over the
+  // `whagent/events` exchange (NFR4, LB7, issue #2239): a programmatic
+  // client follows a session's events live without ever holding RabbitMQ
+  // credentials itself. Backfills every already-committed event starting
+  // at `from_seq` (same semantics as ReadTranscript's pagination cursor),
+  // then tails the exchange, emitting strictly in `seq` order and
+  // deduplicating on `event_id` -- the same LB1 guarantee ReadTranscript's
+  // NEXT_FROM_SEQ resumption gives a polling client, but pushed. The
+  // stream ends once the session reaches a terminal status and its
+  // terminal event has been emitted. Reuses TranscriptEvent rather than a
+  // second event shape -- see this task's Scaffold note.
+  rpc StreamEvents(StreamEventsRequest) returns (stream TranscriptEvent);
 }
 
 // SessionState mirrors whagent_net/session.Status (#2109) as an explicit
@@ -265,4 +278,13 @@ message GetSessionUsageRequest {
 
 message GetSessionUsageResponse {
   SessionUsage usage = 1;
+}
+
+message StreamEventsRequest {
+  string session_id = 1;
+  // Inclusive, same semantics as ReadTranscriptRequest.from_seq: 0 (the
+  // default) streams from the beginning. A client reconnecting after a
+  // drop passes the last-seen seq + 1 here to resume with no gap or
+  // duplicate (FR5).
+  int64 from_seq = 2;
 }

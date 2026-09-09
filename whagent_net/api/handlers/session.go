@@ -28,6 +28,7 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/whale-net/everything/libs/go/grpcauth"
+	"github.com/whale-net/everything/libs/go/rmq"
 	temporalclient "go.temporal.io/sdk/client"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
@@ -102,20 +103,33 @@ type SessionServer struct {
 	// coverage in session_integration_test.go) -- main.go always
 	// constructs a real one.
 	catalog *llm.Catalog
+	// eventsConsumer is StreamEvents' (issue #2239) shared, per-process
+	// subscription onto the whagent/events exchange -- declared/bound
+	// once at api startup (main.go's initializeEventsConsumer), mirroring
+	// tools/app_registry/ui/main.go's initializeSSEHub attach shape,
+	// rather than per-stream, so no RPC call ever needs its own broker
+	// credentials or connection (C17). nil when RABBITMQ_URL is unset or
+	// the broker is unreachable at startup (same non-fatal-construction
+	// convention as worker/main.go's initializePublisher) -- StreamEvents
+	// must report UNAVAILABLE rather than block when this is nil. Unused
+	// by every other RPC.
+	eventsConsumer *rmq.Consumer
 }
 
 var _ pb.SessionServiceServer = (*SessionServer)(nil)
 
 // NewSessionServer returns a SessionServer backed by store, authenticating
 // callers against issuer (see SessionServer.issuer), starting/signalling
-// SessionWorkflow executions through temporalClient on taskQueue, and
-// checking StartSession's FR5 model_override against catalog. An empty
-// taskQueue defaults to sessionWorkflowTaskQueue -- main.go passes
-// //libs/go/temporal's Config.TaskQueue (TEMPORAL_TASK_QUEUE) straight
-// through unchanged, mirroring whagent_net/worker/main.go's identical
-// "env value if set, else the package's own default" fallback for the
-// same setting on the other side of this same queue.
-func NewSessionServer(store *session.Store, issuer string, temporalClient temporalclient.Client, taskQueue string, catalog *llm.Catalog) *SessionServer {
+// SessionWorkflow executions through temporalClient on taskQueue, checking
+// StartSession's FR5 model_override against catalog, and serving
+// StreamEvents (issue #2239) off eventsConsumer -- nil is fine (see
+// SessionServer.eventsConsumer). An empty taskQueue defaults to
+// sessionWorkflowTaskQueue -- main.go passes //libs/go/temporal's
+// Config.TaskQueue (TEMPORAL_TASK_QUEUE) straight through unchanged,
+// mirroring whagent_net/worker/main.go's identical "env value if set, else
+// the package's own default" fallback for the same setting on the other
+// side of this same queue.
+func NewSessionServer(store *session.Store, issuer string, temporalClient temporalclient.Client, taskQueue string, catalog *llm.Catalog, eventsConsumer *rmq.Consumer) *SessionServer {
 	if taskQueue == "" {
 		taskQueue = sessionWorkflowTaskQueue
 	}
@@ -125,6 +139,7 @@ func NewSessionServer(store *session.Store, issuer string, temporalClient tempor
 		temporalClient: temporalClient,
 		taskQueue:      taskQueue,
 		catalog:        catalog,
+		eventsConsumer: eventsConsumer,
 	}
 }
 

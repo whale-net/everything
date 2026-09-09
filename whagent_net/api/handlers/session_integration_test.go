@@ -83,13 +83,15 @@ func newTestServer(t *testing.T) (pb.SessionServiceClient, *session.Store) {
 	require.NoError(t, runner.Up(), "apply every migration from the real embedded schema")
 
 	store := session.New(db.Pool, nil)
-	// temporalClient/catalog are both nil: this file covers GetSession/
-	// ReadTranscript only (issue #2113's two read paths), neither of which
-	// touches SessionServer.temporalClient or SessionServer.catalog -- the
-	// write RPCs' own integration coverage (issue #2117's Testing phase)
+	// temporalClient/catalog/eventsConsumer are all nil: this file covers
+	// GetSession/ReadTranscript only (issue #2113's two read paths),
+	// neither of which touches SessionServer.temporalClient,
+	// SessionServer.catalog, or SessionServer.eventsConsumer -- the write
+	// RPCs' own integration coverage (issue #2117's Testing phase)
 	// constructs a real Temporal test environment and a stubbed catalogue
-	// instead.
-	sessionServer := handlers.NewSessionServer(store, testIssuer, nil, "", nil)
+	// instead, and StreamEvents' own coverage (issue #2239's Testing
+	// phase) constructs a real broker.
+	sessionServer := handlers.NewSessionServer(store, testIssuer, nil, "", nil, nil)
 
 	unaryAuth, streamAuth, err := grpcauth.NewServerInterceptors(ctx, grpcauth.ServerConfig{
 		Mode: grpcauth.AuthModeNone,
