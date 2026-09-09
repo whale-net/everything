@@ -45,6 +45,23 @@ contract those servers implement).
 
 ## Connecting Claude Code to `mcp`
 
+The easiest path is the bundled plugin (`whagent_net/plugin/user`, listed
+in the repo's marketplace as `whagent-net`, symlinked at
+`.agents/plugins/whagent-net`): `claude plugin install whagent-net` (or
+enable it from `/plugin`) wires up three MCP servers —
+`whagent-net-mcp-tilt` (local Tilt, `localhost:8082`),
+`whagent-net-mcp-dev`, and `whagent-net-mcp-prod` — each forwarding an
+`Authorization: Bearer` header, per `mcp/server/auth.go`'s
+`PassthroughVerifier`, which rejects any call with no bearer token even
+locally (Tilt's `GRPC_AUTH_MODE=none` only skips *verifying* the token at
+`api`, so the tilt entry ships a fixed placeholder). Set
+`WHAGENT_DEV_ACCESS_TOKEN`/`WHAGENT_PROD_ACCESS_TOKEN` in your shell to
+your own Keycloak access token for that environment before using the
+dev/prod servers — the dev/prod hostnames follow the same
+`[dev-]mcp.<domain-slug>.whalenet.<dev|app>` convention as
+`audience_score_system`'s plugin; confirm against this domain's actual
+ingress once it's deployed there.
+
 `mcp` (issue #2120) is a thin MCP facade over `api`'s `SessionService`:
 `start_session`, `send_turn`, `stop_session`, `get_session`, and
 `read_transcript` -- identical to what's available over gRPC (FR1/FR2/FR3),

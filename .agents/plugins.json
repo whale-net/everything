@@ -8,6 +8,9 @@
     },
     {
       "path": "audience_score_system/plugin/user"
+    },
+    {
+      "path": "whagent_net/plugin/user"
     }
   ]
 }
