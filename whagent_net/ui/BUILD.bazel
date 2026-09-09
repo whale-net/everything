@@ -1,0 +1,38 @@
+"""whagent-net standalone agent web UI (M2, issue #2236): scaffold only --
+Keycloak sign-in, the authenticated api client, and real pages land in
+later tasks under the same plan (#2233)."""
+
+load("@rules_go//go:def.bzl", "go_binary", "go_library")
+load("//tools/bazel:release.bzl", "release_app")
+
+go_library(
+    name = "ui_lib",
+    srcs = ["main.go"],
+    importpath = "github.com/whale-net/everything/whagent_net/ui",
+    visibility = ["//visibility:private"],
+    deps = [
+        "//libs/go/logging",
+        "@io_opentelemetry_go_contrib_instrumentation_net_http_otelhttp//:otelhttp",
+    ],
+)
+
+go_binary(
+    name = "whagent-net-ui",
+    embed = [":ui_lib"],
+    visibility = ["//visibility:public"],
+)
+
+# Release metadata for whagent-net's standalone agent web UI (issue #2236).
+# domain "whagent-net" + name "whagent-net-ui" mirrors //whagent_net/api:api's
+# release_app and manmanv2/ui's own release_app (app_type "external-api");
+# ingress fields left unset for now, per this task's Scaffold section.
+release_app(
+    name = "whagent-net-ui",
+    binary_name = ":whagent-net-ui",
+    language = "go",
+    domain = "whagent-net",
+    app_type = "external-api",
+    port = 8080,
+    replicas = 1,
+    description = "whagent-net standalone agent web UI",
+)
