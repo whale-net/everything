@@ -38,11 +38,17 @@ templ navItems(data LayoutData) {
 // userIdentityLabel bridges whagent-net ui's htmxauth.UserInfo to UserMenu's
 // plain-string IdentityLabel. A nil User (auth not wired up yet, or a
 // signed-out request) yields "", which UserMenu already renders as nothing.
+// Prefers Name, falling back to PreferredUsername when Name is empty (a
+// token missing the optional "name" claim still has "preferred_username") --
+// mirrors pages/index.templ's identityLabel.
 func userIdentityLabel(user *htmxauth.UserInfo) string {
 	if user == nil {
 		return ""
 	}
-	return user.Name
+	if user.Name != "" {
+		return user.Name
+	}
+	return user.PreferredUsername
 }
 
 // headerRight composes the shared htmxui.UserMenu into Shell's HeaderRight
