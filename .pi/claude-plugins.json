@@ -1,0 +1,11 @@
+{
+  "schemaVersion": 1,
+  "marketplaces": {
+    "everything-marketplace": {
+      "source": "whale-net/everything"
+    }
+  },
+  "plugins": {
+    "project-manager@everything-marketplace": {}
+  }
+}
