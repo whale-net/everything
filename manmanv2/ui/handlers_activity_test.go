@@ -346,3 +346,97 @@ func TestHandleActivity_EmptyAuthorizedSetHandledNotPanic(t *testing.T) {
 		t.Errorf("expected an empty History table for an empty authorized set, got body: %s", body)
 	}
 }
+
+// --- FR15 (#2277): correct as-of-load state and the not-live indicator,
+// with the stream never establishing ---
+//
+// handleActivity's first render always comes from a plain request (it never
+// depends on app.sseHub -- see its doc comment), so exercising it directly
+// here *is* the "stream never establishes" scenario: nothing about these
+// two tests' assertions changes whether or not a browser ever successfully
+// opens the /api/live/activity EventSource afterwards.
+
+// TestHandleActivity_SSEEnabled_CorrectDataAndLiveIndicatorPresent is the
+// FR15 headline test: with live updates enabled (app.sseHub set, a
+// fleet-wide topic to subscribe to), a fresh load still renders real
+// Live/History data *and* the not-live indicator infrastructure
+// (components.LiveRegion, #2268) that will tell the operator if the stream
+// never connects -- never a spinner or an empty table standing in for real
+// data, and never a stream-dependent render.
+func TestHandleActivity_SSEEnabled_CorrectDataAndLiveIndicatorPresent(t *testing.T) {
+	api := baseActivityFixture()
+	api.sessions = []*manmanpb.Session{
+		{SessionId: 1, ServerGameConfigId: 55, Status: "running", StartedAt: time.Now().Add(-2 * time.Hour).Unix()},
+		{SessionId: 2, ServerGameConfigId: 66, Status: "stopped", StartedAt: time.Now().Add(-1 * time.Hour).Unix(), EndedAt: time.Now().Unix()},
+	}
+
+	app := &App{grpc: &ControlClient{api: api}, sseHub: newTestHub()}
+	defer app.sseHub.Close()
+
+	req := httptest.NewRequest(http.MethodGet, "/activity", nil)
+	w := httptest.NewRecorder()
+	app.handleActivity(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d; body: %s", w.Code, http.StatusOK, w.Body.String())
+	}
+	body := w.Body.String()
+
+	// Correct as-of-load data: both the live and terminal sessions rendered
+	// for real, not a placeholder.
+	if !strings.Contains(body, "2h0m0s") {
+		t.Errorf("expected real Live table data (uptime 2h0m0s), got body: %s", body)
+	}
+	if !strings.Contains(body, "<td>stopped</td>") {
+		t.Errorf("expected real History table data (status stopped), got body: %s", body)
+	}
+	if strings.Contains(body, "Nothing is live right now") {
+		t.Errorf("Live table rendered its empty state despite a live session existing -- stream-dependent empty render, not as-of-load data: %s", body)
+	}
+
+	// The not-live indicator infrastructure (#2268's components.LiveRegion),
+	// wired at Activity's own SSE path and reload target (#2277) -- present
+	// on first render regardless of whether the stream ever connects.
+	if !strings.Contains(body, `sse-connect="/api/live/activity"`) {
+		t.Errorf("expected LiveRegion wired to sse-connect=\"/api/live/activity\", got body: %s", body)
+	}
+	// The bare href="/activity" substring alone is ambiguous (the page's own
+	// breadcrumb link also renders it via the same templ.URL(...) call), so
+	// assert on the Reload anchor's own class alongside it -- unique to
+	// LiveRegion's reload affordance.
+	if !strings.Contains(body, `href="/activity" class="btn btn-sm btn-warning"`) {
+		t.Errorf("expected LiveRegion's Reload affordance to target /activity (not /sessions), got body: %s", body)
+	}
+	if strings.Contains(body, `href="/sessions" class="btn btn-sm btn-warning"`) {
+		t.Errorf("expected no hard-coded /sessions Reload target left over from the sessions-page origin, got body: %s", body)
+	}
+	if !strings.Contains(body, `id="deployments-live-status"`) {
+		t.Errorf("expected the not-live indicator badge element to be present, got body: %s", body)
+	}
+}
+
+// TestHandleActivity_NoSSEHub_CorrectDataNoLiveMarkup covers the other half
+// of FR15's no-fallback constraint: when live updates are unavailable
+// altogether (app.sseHub nil, e.g. RABBITMQ_URL unset), the page still
+// renders its correct plain server-side snapshot -- stale data is never
+// presented as current -- with no live-connection markup pointed at a route
+// that can only ever 503 (ActivityPageData.LiveUpdatesEnabled's doc
+// comment).
+func TestHandleActivity_NoSSEHub_CorrectDataNoLiveMarkup(t *testing.T) {
+	api := baseActivityFixture()
+	api.sessions = []*manmanpb.Session{
+		{SessionId: 1, ServerGameConfigId: 55, Status: "running", StartedAt: time.Now().Add(-2 * time.Hour).Unix()},
+	}
+
+	code, body := renderActivityHTTP(t, api, "")
+	if code != http.StatusOK {
+		t.Fatalf("status = %d, want %d; body: %s", code, http.StatusOK, body)
+	}
+
+	if !strings.Contains(body, "2h0m0s") {
+		t.Errorf("expected real Live table data even with no SSE hub, got body: %s", body)
+	}
+	if strings.Contains(body, "sse-connect") {
+		t.Errorf("expected no sse-connect markup when app.sseHub is nil (nothing to stream from), got body: %s", body)
+	}
+}
