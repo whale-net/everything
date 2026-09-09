@@ -393,6 +393,13 @@ func (app *App) setupRoutes(mux *http.ServeMux) {
 
 	// Note: Log streaming endpoint is handled by handleSessionDetail which routes to handleSessionLogsStream
 
+	// Activity: fleet-wide Live now/History view (FR14, task #2271). A
+	// fresh top-level path -- no collision with "/sessions/", "/sgc/" or
+	// "/games/"'s catch-alls, so it carries none of those routes'
+	// longest-pattern-wins precedence concerns (see the "/sessions/
+	// deployments/" comment above for the shape of that bite).
+	mux.HandleFunc("/activity", app.auth.RequireAuthFunc(app.auth.WithAccessToken(app.handleActivity)))
+
 	// Protected routes - Games
 	mux.HandleFunc("/games", app.auth.RequireAuthFunc(app.auth.WithAccessToken(app.handleGames)))
 	mux.HandleFunc("/games/new", app.auth.RequireAuthFunc(app.auth.WithAccessToken(app.handleGameNew)))
