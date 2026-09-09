@@ -38,6 +38,10 @@ discussion: GitHub issue #1552.
 Planned, not yet built (M2+): `archiver/` (Postgres → S3 transcript
 archival and hot-tier retention), `ui/` (standalone agent UI).
 
+All four binaries share the `whagent-net` `release_app` domain and are
+composed into a deployable Helm chart via `//whagent_net:whagent_chart`
+(`helm-whagent-net-whagent-net`).
+
 Shared Go packages: `session/` (store), `config/` (the agent-definition
 seed source), `llm/` (the OpenRouter model client), `worker/tools/` (tool
 dispatch to domain-owned MCP servers), and `//libs/go/whagent` (the tool
@@ -194,3 +198,10 @@ bazel run //whagent_net/api:api           # SessionService gRPC + JWKS
 bazel run //whagent_net/worker:worker     # SessionWorkflow
 bazel run //whagent_net/mcp:mcp           # the Claude-Code-facing MCP surface
 ```
+
+**Build Helm chart**:
+
+```bash
+bazel build //whagent_net:whagent_chart
+```
+

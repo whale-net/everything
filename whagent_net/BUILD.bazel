@@ -1,7 +1,35 @@
 """whagent-net domain root."""
 
+load("//tools/bazel:release.bzl", "release_helm_chart")
+
 filegroup(
     name = "docs",
     srcs = glob(["*.md"]),
+    visibility = ["//visibility:public"],
+)
+
+# List of whagent-net app metadata targets for chart composition.
+# Composes all four M1 binaries (migrate, api, worker, mcp) into one
+# deployable chart.
+WHAGENT_NET_APPS = [
+    "//whagent_net/migrate:migrate_metadata",
+    "//whagent_net/api:api_metadata",
+    "//whagent_net/worker:worker_metadata",
+    "//whagent_net/mcp:mcp_metadata",
+]
+
+release_helm_chart(
+    name = "whagent_chart",
+    apps = WHAGENT_NET_APPS,
+    chart_name = "whagent-net",
+    domain = "whagent-net",
+    environment = "dev",
+    namespace = "whagent-net",
+    visibility = ["//visibility:public"],
+)
+
+alias(
+    name = "whagent_net_chart",
+    actual = ":whagent_chart",
     visibility = ["//visibility:public"],
 )
