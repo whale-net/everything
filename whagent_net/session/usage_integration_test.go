@@ -48,6 +48,58 @@ func TestUsageStore_SumCost_NoRows_ReturnsZero(t *testing.T) {
 	assert.Equal(t, 0.0, total)
 }
 
+// TestUsageStore_Summary_NoRows_ReturnsZero proves Summary's documented
+// zero-value contract for a session with no turn_usage rows: 0 turns used,
+// 0 cost, and cost_estimated false -- no special-casing, just COUNT/
+// COALESCE(SUM)/bool_or all degrading cleanly over zero rows.
+func TestUsageStore_Summary_NoRows_ReturnsZero(t *testing.T) {
+	ctx := context.Background()
+	s, _ := newStore(t)
+	sess := createTestSession(t, ctx, s)
+
+	summary, err := s.Usage().Summary(ctx, sess.SessionID)
+	require.NoError(t, err)
+	assert.Equal(t, 0, summary.TurnsUsed)
+	assert.Equal(t, 0.0, summary.CostUSD)
+	assert.False(t, summary.CostEstimated)
+}
+
+// TestUsageStore_Summary_MixedRows_TrueCountExactCostAnyEstimated proves
+// Summary over a mix of estimated and non-estimated rows returns the true
+// row count, the exact summed cost (full NUMERIC(12,6) precision -- FR4),
+// and cost_estimated true because at least one row is estimated, even
+// though most are not (NFR5: this must reflect "any row estimated", not
+// "all rows estimated" or "majority").
+//
+// This is also the test the issue's red/green instruction targets:
+// changing Summary's `bool_or` to `bool_and` must turn this test's
+// cost_estimated assertion red, since only one of the three rows here is
+// estimated.
+func TestUsageStore_Summary_MixedRows_TrueCountExactCostAnyEstimated(t *testing.T) {
+	ctx := context.Background()
+	s, _ := newStore(t)
+	sess := createTestSession(t, ctx, s)
+
+	require.NoError(t, s.Usage().RecordTurn(ctx, session.TurnUsage{
+		SessionID: sess.SessionID, Turn: 1, Model: "test-model",
+		PromptTokens: 100, CompletionTokens: 50, CostUSD: 0.010001, CostEstimated: false,
+	}))
+	require.NoError(t, s.Usage().RecordTurn(ctx, session.TurnUsage{
+		SessionID: sess.SessionID, Turn: 2, Model: "test-model",
+		PromptTokens: 200, CompletionTokens: 100, CostUSD: 0.020002, CostEstimated: false,
+	}))
+	require.NoError(t, s.Usage().RecordTurn(ctx, session.TurnUsage{
+		SessionID: sess.SessionID, Turn: 3, Model: "test-model",
+		PromptTokens: 300, CompletionTokens: 150, CostUSD: 0.030003, CostEstimated: true,
+	}))
+
+	summary, err := s.Usage().Summary(ctx, sess.SessionID)
+	require.NoError(t, err)
+	assert.Equal(t, 3, summary.TurnsUsed, "TurnsUsed must be the true committed row count")
+	assert.InDelta(t, 0.060006, summary.CostUSD, 0.0000001, "CostUSD must be the exact summed cost to full precision")
+	assert.True(t, summary.CostEstimated, "CostEstimated must be true when any summed row is estimated, even though only one of three rows here is")
+}
+
 // TestUsageStore_CostUSD_RejectsNullInsert proves cost_usd is a real NOT
 // NULL column (FR7: unknown cost is never zero and never null) -- a raw
 // INSERT with it explicitly NULL must be rejected.

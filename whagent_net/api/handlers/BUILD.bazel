@@ -56,7 +56,10 @@ go_test(
     name = "session_integration_test",
     size = "large",
     timeout = "long",
-    srcs = ["session_integration_test.go"],
+    srcs = [
+        "session_integration_test.go",
+        "usage_integration_test.go",
+    ],
     gotags = ["integration"],
     tags = [
         "external",
