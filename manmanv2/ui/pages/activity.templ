@@ -2,23 +2,21 @@ package pages
 
 import (
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/whale-net/everything/manmanv2/ui/components"
 )
 
-// ActivityPageData is the view-model for /activity (FR14, FR15, task
-// #2271): a fleet-wide, observation-only snapshot of what is running now
-// (Live) and what ran before (History). "Fleet-wide" means Live/History
-// are built on ListSessions's server-agnostic filters (live_only /
-// status_filter) against an explicitly-defined fleet-wide authorized set
-// (NFR10) -- never the server-scoped resolveScopedServerGameConfigs
-// derivation /sessions uses. See handlers_activity.go's handleActivity doc
-// comment for the authorized-set contract.
-//
-// Scaffold note (#2271): this is the page-structure skeleton. Live/History
-// population from ListSessions, the fleet-wide authorized-set definition
-// (NFR10), and filter-driven narrowing are Implementation-phase work.
+// ActivityPageData is the view-model for /activity (FR14, FR15, NFR10,
+// tasks #2271/#2277): a fleet-wide, observation-only snapshot of what is
+// running now (Live) and what ran before (History). "Fleet-wide" means
+// Live/History are built on ListSessions's server-agnostic filters
+// (live_only / status_filter) against an explicitly-defined fleet-wide
+// authorized set (NFR10) -- never the server-scoped
+// resolveScopedServerGameConfigs derivation /sessions uses. See
+// handlers_activity.go's buildActivityPageData/handleActivity doc comments
+// for the authorized-set contract.
 type ActivityPageData struct {
 	Live    []ActivityLiveRow
 	History []ActivityHistoryRow
@@ -28,6 +26,26 @@ type ActivityPageData struct {
 	// mean "no filter".
 	FilterGameID int64
 	FilterStatus string
+
+	// LiveTopics is the fleet-wide authorized set's deployment topics
+	// (FR15, NFR10, #2277) -- handlers_activity.go's buildActivityPageData
+	// derives this from the exact same sgcByID handleActivityLiveSSE
+	// (handlers_activity_live.go) subscribes to, so the page's sse-swap
+	// list and the stream's authorized set can never drift apart. Empty
+	// when the fleet-wide set is empty (a valid, handled state -- NFR10).
+	LiveTopics []string
+	// HeartbeatIntervalMs mirrors SessionsPageData's field of the same
+	// name (handlers_sessions.go's heartbeatIntervalMs) for the #1726/#2268
+	// Not-Live debounce, reused unchanged for Activity's own LiveRegion.
+	HeartbeatIntervalMs int
+	// LiveUpdatesEnabled is false when app.sseHub is nil (RABBITMQ_URL
+	// unset/unreachable, NFR3/NFR8) or LiveTopics is empty (nothing
+	// fleet-wide to stream). FR15: there is no polling fallback to degrade
+	// to here (unlike SessionsPageData's LiveUpdatesEnabled=false case), so
+	// when this is false the page renders its plain server-side snapshot
+	// with no live-connection markup at all -- never a stream pointed at a
+	// route that can only 503.
+	LiveUpdatesEnabled bool
 }
 
 // ActivityLiveRow is one row of the Live now table (FR14): a session
@@ -78,9 +96,56 @@ templ Activity(layout components.LayoutData, data ActivityPageData) {
 	@components.Layout(layout) {
 		@components.HeroHeader("Activity", "Fleet-wide view of what is running now and what ran before")
 		@ActivityFilters(data.FilterGameID, data.FilterStatus)
-		@ActivityLiveTable(data.Live)
-		@ActivityHistoryTable(data.History)
+		if data.LiveUpdatesEnabled {
+			@ActivityLiveRegion(data.HeartbeatIntervalMs) {
+				@ActivityLiveContent(data)
+			}
+		} else {
+			@ActivityLiveContent(data)
+		}
 	}
+}
+
+// ActivityLiveRegion wraps the Live/History tables with the FR15 SSE
+// plumbing (#2277), reusing components.LiveRegion (lifted out of
+// pages/sessions.templ's DeploymentsLiveRegion by #2268) against
+// Activity's own fleet-wide SSE path and reload target -- see
+// handlers_activity_live.go's handleActivityLiveSSE doc comment for the
+// fleet-wide topic/authorization-set contract this pairs with.
+templ ActivityLiveRegion(heartbeatIntervalMs int) {
+	@components.LiveRegion(components.LiveRegionOptions{
+		SSEPath:             "/api/live/activity",
+		HeartbeatIntervalMs: heartbeatIntervalMs,
+		ReloadHref:          "/activity",
+	}) {
+		{ children... }
+	}
+}
+
+// ActivityLiveContent is the sse-swap target wrapping both Live/History
+// tables (FR15). Unlike /sessions's per-row DeploymentRow targets, a
+// session moving live<->terminal moves it between these two tables rather
+// than updating one row in place, so the whole region -- not a single row
+// -- is the smallest correct swap unit here. sse-swap is set
+// unconditionally to the full fleet-wide topic list (data.LiveTopics,
+// comma-joined per htmx sse-ext's multi-event sse-swap syntax) so any
+// authorized deployment's status change re-renders both tables together.
+// ActivityLiveContentInner (below) is the exact same markup minus this
+// wrapper, rendered per delivery by handleActivityLiveSSE's fragment
+// (handlers_activity_live.go) so the two can never diverge -- mirrors
+// DeploymentRow/DeploymentRowInner's split in pages/sessions.templ.
+templ ActivityLiveContent(data ActivityPageData) {
+	<div id="activity-live-content" sse-swap={ strings.Join(data.LiveTopics, ",") }>
+		@ActivityLiveContentInner(data)
+	</div>
+}
+
+// ActivityLiveContentInner renders just the Live/History tables -- see
+// ActivityLiveContent's doc comment for why the whole region, not a
+// per-row fragment, is this feature's swap unit (FR15).
+templ ActivityLiveContentInner(data ActivityPageData) {
+	@ActivityLiveTable(data.Live)
+	@ActivityHistoryTable(data.History)
 }
 
 // ActivityFilters renders the game/status filter controls (round-trips

@@ -399,6 +399,14 @@ func (app *App) setupRoutes(mux *http.ServeMux) {
 	// longest-pattern-wins precedence concerns (see the "/sessions/
 	// deployments/" comment above for the shape of that bite).
 	mux.HandleFunc("/activity", app.auth.RequireAuthFunc(app.auth.WithAccessToken(app.handleActivity)))
+	// SSE route for Activity's fleet-wide live status (FR15, NFR10;
+	// handlers_activity_live.go, #2277). Option (b) of the issue's two
+	// choices: a sibling "/api/live/" route reusing app.sseHub and
+	// htmxsse.Handler with a fleet-wide topic derivation, rather than
+	// overloading "/api/live/deployments"'s server-scoped one. Wrapped with
+	// RequireAuthFunc only, never WithAccessToken -- same reason as
+	// "/api/live/deployments" above.
+	mux.HandleFunc("/api/live/activity", app.auth.RequireAuthFunc(app.handleActivityLiveSSE))
 
 	// Protected routes - Games
 	mux.HandleFunc("/games", app.auth.RequireAuthFunc(app.auth.WithAccessToken(app.handleGames)))

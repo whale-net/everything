@@ -4,11 +4,13 @@ import (
 	"context"
 	"log"
 	"net/http"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
 
 	"github.com/whale-net/everything/libs/go/htmxauth"
+	"github.com/whale-net/everything/manmanv2/events"
 	"github.com/whale-net/everything/manmanv2/ui/components"
 	"github.com/whale-net/everything/manmanv2/ui/pages"
 	manmanpb "github.com/whale-net/everything/manmanv2/protos"
@@ -142,8 +144,39 @@ func activitySessionDuration(session *manmanpb.Session) time.Duration {
 // Live/History slices -- a handled response, not a panic or error.
 func (app *App) handleActivity(w http.ResponseWriter, r *http.Request) {
 	user := htmxauth.GetUser(r.Context())
-	ctx := r.Context()
 
+	data := app.buildActivityPageData(r.Context(), r)
+	data.HeartbeatIntervalMs = heartbeatIntervalMs(app.config)
+	data.LiveUpdatesEnabled = app.sseHub != nil && len(data.LiveTopics) > 0
+
+	breadcrumbs := []components.Breadcrumb{
+		{Label: "Activity", URL: "/activity"},
+	}
+
+	layoutData, err := app.buildTemplLayoutData(r, "Activity", "Activity", user, breadcrumbs)
+	if err != nil {
+		log.Printf("Error building layout data: %v", err)
+		http.Error(w, "Internal server error", http.StatusInternalServerError)
+		return
+	}
+
+	if err := RenderTempl(w, r, "Activity", pages.Activity(layoutData, data)); err != nil {
+		log.Printf("Error rendering template: %v", err)
+		http.Error(w, "Internal server error", http.StatusInternalServerError)
+	}
+}
+
+// buildActivityPageData assembles ActivityPageData: the fleet-wide
+// authorized set (NFR10), the Live/History rows built from it, and the
+// fleet-wide live-topic set (FR15, #2277) that both handleActivity's own
+// LiveRegion wiring and handleActivityLiveSSE's subscription
+// (handlers_activity_live.go) derive from -- the same call, so the two can
+// never drift. Never returns an error: every upstream RPC failure degrades
+// to an empty/partial result with a WARNING log, mirroring
+// handleDashboardSessions's posture, so a single flaky call never blanks
+// the whole fleet-wide view (and never turns a live-fragment re-render,
+// which shares this function, into a stream-ending error).
+func (app *App) buildActivityPageData(ctx context.Context, r *http.Request) ActivityPageData {
 	var filterGameID int64
 	if gameIDStr := strings.TrimSpace(r.URL.Query().Get("game_id")); gameIDStr != "" {
 		if id, err := strconv.ParseInt(gameIDStr, 10, 64); err == nil {
@@ -253,26 +286,24 @@ func (app *App) handleActivity(w http.ResponseWriter, r *http.Request) {
 		})
 	}
 
-	data := ActivityPageData{
+	// LiveTopics (FR15, NFR10, #2277): the fleet-wide authorized set's
+	// deployment topics, in sorted order -- the same set
+	// handleActivityLiveSSE derives (handlers_activity_live.go) from this
+	// same sgcByID, so the page's sse-swap subscription and the stream's
+	// authorized set can never drift apart (the issue's explicit
+	// authorization-parity requirement). Sorted for a deterministic
+	// sse-swap attribute value, not for any hashing/security reason.
+	liveTopics := make([]string, 0, len(sgcByID))
+	for id := range sgcByID {
+		liveTopics = append(liveTopics, events.TopicForDeployment(id))
+	}
+	sort.Strings(liveTopics)
+
+	return ActivityPageData{
 		Live:         liveRows,
 		History:      historyRows,
 		FilterGameID: filterGameID,
 		FilterStatus: filterStatus,
-	}
-
-	breadcrumbs := []components.Breadcrumb{
-		{Label: "Activity", URL: "/activity"},
-	}
-
-	layoutData, err := app.buildTemplLayoutData(r, "Activity", "Activity", user, breadcrumbs)
-	if err != nil {
-		log.Printf("Error building layout data: %v", err)
-		http.Error(w, "Internal server error", http.StatusInternalServerError)
-		return
-	}
-
-	if err := RenderTempl(w, r, "Activity", pages.Activity(layoutData, data)); err != nil {
-		log.Printf("Error rendering template: %v", err)
-		http.Error(w, "Internal server error", http.StatusInternalServerError)
+		LiveTopics:   liveTopics,
 	}
 }

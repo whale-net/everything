@@ -51,20 +51,21 @@ func (app *App) handleDeploymentsLiveSSE(w http.ResponseWriter, r *http.Request)
 		log.Printf("WARNING: error fetching server configs for live deployment stream: %v", err)
 	}
 
-	if len(serverConfigs) == 0 {
-		// No selected-server scope or no SGCs in it: htmxsse.Handler panics
-		// on an empty topic list, so there is nothing to subscribe to.
-		// Degrade the same way an unavailable hub does (NFR8) rather than
-		// panic; the client's reconnect loop retries once a scope exists.
-		http.Error(w, "no deployments to stream for the selected server", http.StatusServiceUnavailable)
-		return
-	}
-
 	authorized := make(map[int64]struct{}, len(serverConfigs))
 	topics := make([]string, 0, len(serverConfigs))
 	for _, sgc := range serverConfigs {
 		authorized[sgc.ServerGameConfigId] = struct{}{}
 		topics = append(topics, events.TopicForDeployment(sgc.ServerGameConfigId))
+	}
+
+	// No selected-server scope or no SGCs in it: htmxsse.Handler panics on
+	// an empty topic list, so there is nothing to subscribe to. Degrade the
+	// same way an unavailable hub does (NFR8) rather than panic; the
+	// client's reconnect loop retries once a scope exists. Shared with
+	// handleActivityLiveSSE's fleet-wide derivation via requireLiveTopics
+	// (handlers_live_common.go, #2277) so this guard can't fork.
+	if !requireLiveTopics(w, topics, "no deployments to stream for the selected server") {
+		return
 	}
 
 	log.Printf("INFO: live deployment stream opened: %d topics", len(topics))
