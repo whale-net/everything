@@ -8,6 +8,7 @@ erDiagram
         bigserial board_id PK
         varchar   device_id UK
         varchar   name
+        bigint    region_id FK
         timestamptz registered_at
         timestamptz last_seen_at
     }
@@ -56,6 +57,14 @@ erDiagram
         text        description
         timestamptz created_at
         bigint      owner_leaflab_user_id FK
+    }
+
+    region_parent_history {
+        bigserial   history_id PK
+        bigint      region_id FK
+        bigint      parent_region_id FK
+        timestamptz valid_from
+        timestamptz valid_to
     }
 
     sensor_region_history {
@@ -124,6 +133,14 @@ erDiagram
         timestamptz valid_to
     }
 
+    board_region_history {
+        bigserial   history_id PK
+        bigint      board_id FK
+        bigint      region_id FK
+        timestamptz valid_from
+        timestamptz valid_to
+    }
+
     leaflab_user_role {
         bigserial   leaflab_user_role_id PK
         bigint      leaflab_user_id FK
@@ -149,6 +166,11 @@ erDiagram
     leaflab_user     ||--o{ board_owner_history  : "owns"
     leaflab_user     |o--o{ region               : "current owner"
     leaflab_user     ||--o{ leaflab_user_role    : "role grant history"
+    board            |o--o{ region               : "recorded region"
+    board            ||--o{ board_region_history : "recorded-region history"
+    region           ||--o{ board_region_history : "records"
+    region           ||--o{ region_parent_history: "parent history"
+    region           |o--o{ region_parent_history: "parent of (history)"
 ```
 
 Ownership (`leaflab_user`, `board_owner_history`, and the `owner_leaflab_user_id`
@@ -163,6 +185,18 @@ design (FR3, migration 016) -- board name is not an attribution dimension
 for any reading, matching `region.name`'s precedent under LB6. `NULL` means
 "no name set, display `device_id`"; non-empty is enforced in the API layer,
 not by a check constraint.
+
+Migration 017 adds the region hierarchy history and board recorded-region
+bookkeeping. `region_parent_history` (FR1) is SCD2 with one open row per
+region at all times -- migration 017 backfills exactly one open row per
+pre-existing region from its current `region.parent_region_id`. Unlike the
+other SCD2 tables, where "unset" is the *absence* of an open row, a region's
+top-level-ness must be a recorded state, so `parent_region_id` is nullable
+and `NULL` on an open row means "top-level region" -- ancestor walks
+terminate on a row, never on a missing one. `board.region_id` (nullable
+mirror column) plus `board_region_history` records which region a board sits
+in; both are bookkeeping only and never affect reading attribution (FR10) --
+readings snapshot `sensor.region_id`, never the board's.
 
 `leaflab_user_role` (FR10, migration 016) is leaflab-local role storage --
 it is never read from OIDC `realm_access.roles`. It is SCD2-shaped like
@@ -366,7 +400,7 @@ All SCD2 (Slowly Changing Dimension Type 2) history tables follow a uniform colu
 | `valid_from` | `TIMESTAMPTZ NOT NULL` | When this row became the current value |
 | `valid_to` | `TIMESTAMPTZ` | When it was superseded; `NULL` = still current |
 
-A partial index on `(sensor_id) WHERE valid_to IS NULL` makes "what is the current value?" queries O(1) on each history table.
+A partial index on each table's entity column (`<entity>_id WHERE valid_to IS NULL`) makes "what is the current value?" queries O(1) on each history table.
 
 SCD2 tables in this schema:
 
@@ -377,6 +411,15 @@ SCD2 tables in this schema:
 | `sensor_hw_history` | Sensor I2C address + mux path |
 | `board_owner_history` | Board ownership (`leaflab_user_id`) |
 | `leaflab_user_role` | leaflab-local role grants (e.g. `'admin'`) -- not OIDC-derived |
+| `region_parent_history` | Region hierarchy position (`parent_region_id`; `NULL` = top-level) |
+| `board_region_history` | Board recorded region (bookkeeping only, never attribution) |
+
+Two "unset" representations coexist deliberately. On most of these tables an
+unset value is the *absence of an open row* (`board.region_id`'s mirror
+column is NULL to match). `region_parent_history` is the exception: every
+region carries exactly one open row from the moment it exists (FR1), and
+top-level-ness is recorded as `parent_region_id IS NULL` on that row rather
+than left to a missing row.
 
 `device_config` is NOT SCD2 — it is an append-only event log keyed by `(board_id, version)`. The view `v_board_state_history` derives a SCD2-shaped representation from it using a window function.
 
