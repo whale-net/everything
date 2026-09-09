@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"fmt"
 	"net/http"
@@ -362,6 +363,292 @@ func TestHandleGames_ExpandParam(t *testing.T) {
 		assertRowExpanded(t, body, 2, false)
 		assertRowExpanded(t, body, 3, false)
 	})
+}
+
+// TestBuildGameRows_Deployments_ListsAllDeployments guards task #2272
+// (FR6, AC1): the expanded row's Deployments section lists every
+// deployment of that game, joined via game_config_id -> GameConfig.game_id
+// -- and, just as importantly, deployments belonging to a *different*
+// game must never leak into this game's Deployments list.
+func TestBuildGameRows_Deployments_ListsAllDeployments(t *testing.T) {
+	games := []*manmanpb.Game{
+		{GameId: 1, Name: "Alpha"},
+		{GameId: 2, Name: "Beta"},
+	}
+	configs := []*manmanpb.GameConfig{
+		{ConfigId: 10, GameId: 1, Name: "Alpha-Config-A"},
+		{ConfigId: 11, GameId: 1, Name: "Alpha-Config-B"},
+		{ConfigId: 20, GameId: 2, Name: "Beta-Config"},
+	}
+	deployments := []*manmanpb.ServerGameConfig{
+		{ServerGameConfigId: 100, ServerId: 1, GameConfigId: 10, Status: "active"},
+		{ServerGameConfigId: 101, ServerId: 1, GameConfigId: 11, Status: "active"},
+		{ServerGameConfigId: 200, ServerId: 1, GameConfigId: 20, Status: "active"},
+	}
+	servers := []*manmanpb.Server{{ServerId: 1, HostPublicAddress: "host-01"}}
+	sessions := []*manmanpb.Session{
+		{SessionId: 1, ServerGameConfigId: 100, StartedAt: 1000, Status: "running"},
+		{SessionId: 2, ServerGameConfigId: 101, StartedAt: 1000, Status: "stopped"},
+		{SessionId: 3, ServerGameConfigId: 200, StartedAt: 1000, Status: "running"},
+	}
+
+	rows := buildGameRows(games, configs, deployments, servers, sessions)
+
+	alpha := gameRowByID(t, rows, 1)
+	if len(alpha.Deployments) != 2 {
+		t.Fatalf("Alpha Deployments = %d rows, want 2 (100 and 101): %+v", len(alpha.Deployments), alpha.Deployments)
+	}
+	gotSGCIDs := map[int64]bool{}
+	for _, dep := range alpha.Deployments {
+		gotSGCIDs[dep.Row.ServerGameConfigID] = true
+		if dep.Row.ServerGameConfigID == 200 {
+			t.Errorf("Alpha's Deployments section contains SGC 200, which belongs to Beta (leaked across games)")
+		}
+	}
+	for _, want := range []int64{100, 101} {
+		if !gotSGCIDs[want] {
+			t.Errorf("Alpha Deployments missing SGC %d: got %+v", want, alpha.Deployments)
+		}
+	}
+
+	beta := gameRowByID(t, rows, 2)
+	if len(beta.Deployments) != 1 || beta.Deployments[0].Row.ServerGameConfigID != 200 {
+		t.Fatalf("Beta Deployments = %+v, want exactly [SGC 200]", beta.Deployments)
+	}
+}
+
+// TestBuildGameRows_Deployments_AntiDrift is FR6's central anti-drift
+// guard: the Games row's control availability must be identical to what
+// /sessions renders for the same deployment state. Both surfaces reuse
+// components.ComputeDeploymentActions(latest) verbatim (buildGameDeploymentRow
+// here, buildDeploymentRowData on /sessions), so this test drives both
+// paths -- buildGameRows and a direct components.ComputeDeploymentActions
+// call against the identical fixture session -- and asserts they agree,
+// across running, stopped, and every transitional/error state
+// ComputeDeploymentActions' own table documents (pending, starting,
+// stopping, crashed, lost, and no session at all).
+func TestBuildGameRows_Deployments_AntiDrift(t *testing.T) {
+	game := &manmanpb.Game{GameId: 1, Name: "Drift"}
+	config := &manmanpb.GameConfig{ConfigId: 10, GameId: 1, Name: "Cfg"}
+	servers := []*manmanpb.Server{{ServerId: 1, HostPublicAddress: "host-01"}}
+
+	cases := []struct {
+		name          string
+		sessionStatus string // "" means no session at all
+	}{
+		{"no session", ""},
+		{"pending", "pending"},
+		{"starting", "starting"},
+		{"running", "running"},
+		{"stopping", "stopping"},
+		{"stopped", "stopped"},
+		{"crashed", "crashed"},
+		{"lost", "lost"},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			deployment := &manmanpb.ServerGameConfig{ServerGameConfigId: 100, ServerId: 1, GameConfigId: 10, Status: "active"}
+			var sessions []*manmanpb.Session
+			var latest *manmanpb.Session
+			if tc.sessionStatus != "" {
+				latest = &manmanpb.Session{SessionId: 1, ServerGameConfigId: 100, StartedAt: 1000, Status: tc.sessionStatus}
+				sessions = append(sessions, latest)
+			}
+
+			rows := buildGameRows(
+				[]*manmanpb.Game{game},
+				[]*manmanpb.GameConfig{config},
+				[]*manmanpb.ServerGameConfig{deployment},
+				servers,
+				sessions,
+			)
+			row := gameRowByID(t, rows, 1)
+			if len(row.Deployments) != 1 {
+				t.Fatalf("Deployments = %d rows, want 1", len(row.Deployments))
+			}
+			got := row.Deployments[0].Row.Actions
+
+			// The independent, same-fixture derivation: exactly what
+			// buildDeploymentRowData computes for /sessions, called
+			// directly against the identical latest session.
+			want := components.ComputeDeploymentActions(latest)
+
+			if got != want {
+				t.Errorf("state %q: Games row Actions = %+v, /sessions-equivalent Actions = %+v (FR6 anti-drift violation)", tc.sessionStatus, got, want)
+			}
+
+			// End-to-end: render the row exactly as the page does
+			// (gameDeploymentRow -> DeploymentRow(dep.Row)) and confirm
+			// button presence matches want, not just the struct field.
+			var buf bytes.Buffer
+			if err := pages.DeploymentRow(row.Deployments[0].Row).Render(context.Background(), &buf); err != nil {
+				t.Fatalf("DeploymentRow.Render: %v", err)
+			}
+			html := buf.String()
+			if strings.Contains(html, ">Start<") != want.CanStart {
+				t.Errorf("state %q: rendered Start button presence = %v, want %v", tc.sessionStatus, strings.Contains(html, ">Start<"), want.CanStart)
+			}
+			if strings.Contains(html, ">Stop<") != want.CanStop {
+				t.Errorf("state %q: rendered Stop button presence = %v, want %v", tc.sessionStatus, strings.Contains(html, ">Stop<"), want.CanStop)
+			}
+			if strings.Contains(html, ">Restart<") != want.CanRestart {
+				t.Errorf("state %q: rendered Restart button presence = %v, want %v", tc.sessionStatus, strings.Contains(html, ">Restart<"), want.CanRestart)
+			}
+		})
+	}
+}
+
+// TestBuildGameRows_Deployments_RunStateUsesComputeDeploymentStatus guards
+// the ground-truth table: a deployment row's run state comes from
+// components.ComputeDeploymentStatus(latest session), never
+// ServerGameConfig.status -- including the case where SGC.status is
+// "inactive" but the latest session is running.
+func TestBuildGameRows_Deployments_RunStateUsesComputeDeploymentStatus(t *testing.T) {
+	games := []*manmanpb.Game{{GameId: 1, Name: "G"}}
+	configs := []*manmanpb.GameConfig{{ConfigId: 10, GameId: 1}}
+	deployments := []*manmanpb.ServerGameConfig{
+		{ServerGameConfigId: 100, ServerId: 1, GameConfigId: 10, Status: "inactive"},
+	}
+	servers := []*manmanpb.Server{{ServerId: 1, HostPublicAddress: "host-01"}}
+	sessions := []*manmanpb.Session{
+		{SessionId: 1, ServerGameConfigId: 100, StartedAt: 1000, Status: "running"},
+	}
+
+	rows := buildGameRows(games, configs, deployments, servers, sessions)
+	row := gameRowByID(t, rows, 1)
+	if len(row.Deployments) != 1 {
+		t.Fatalf("Deployments = %d rows, want 1", len(row.Deployments))
+	}
+	dep := row.Deployments[0]
+	if dep.Row.SGCStatus != "inactive" {
+		t.Fatalf("fixture setup: SGCStatus = %q, want inactive", dep.Row.SGCStatus)
+	}
+	if dep.Row.LatestSession == nil || components.ComputeDeploymentStatus(dep.Row.LatestSession) != components.DeploymentRunning {
+		t.Errorf("deployment with inactive SGC.status but a running latest session must show running: LatestSession = %+v", dep.Row.LatestSession)
+	}
+}
+
+// TestBuildGameRows_Deployments_ConnectAddress guards AC2: the expanded
+// row's per-deployment connect address matches the collapsed row's value
+// for the same deployment, and falls back to the shared unavailable state
+// (never a blank) when unresolvable.
+func TestBuildGameRows_Deployments_ConnectAddress(t *testing.T) {
+	games := []*manmanpb.Game{{GameId: 1, Name: "G"}}
+	configs := []*manmanpb.GameConfig{{ConfigId: 10, GameId: 1}}
+	deployments := []*manmanpb.ServerGameConfig{
+		{
+			ServerGameConfigId: 100, ServerId: 1, GameConfigId: 10,
+			PortBindings: []*manmanpb.PortBinding{{HostPort: 25565, Protocol: "TCP"}},
+		},
+	}
+	servers := []*manmanpb.Server{{ServerId: 1, HostPublicAddress: "host-01"}}
+	sessions := []*manmanpb.Session{
+		{SessionId: 1, ServerGameConfigId: 100, StartedAt: 1000, Status: "running"},
+	}
+
+	rows := buildGameRows(games, configs, deployments, servers, sessions)
+	row := gameRowByID(t, rows, 1)
+	dep := row.Deployments[0]
+
+	if dep.Connect.Unavailable || len(dep.Connect.Addresses) != 1 {
+		t.Fatalf("dep.Connect = %+v, want resolvable", dep.Connect)
+	}
+	if dep.Connect.Addresses[0].Address != row.Connect.Addresses[0].Address {
+		t.Errorf("expanded-row Connect %+v diverges from collapsed-row Connect %+v for the same deployment", dep.Connect, row.Connect)
+	}
+
+	// Unresolvable case: no host_public_address configured.
+	unresolvableServers := []*manmanpb.Server{{ServerId: 1, HostPublicAddress: ""}}
+	rows = buildGameRows(games, configs, deployments, unresolvableServers, sessions)
+	dep = gameRowByID(t, rows, 1).Deployments[0]
+	if !dep.Connect.Unavailable {
+		t.Errorf("unresolvable deployment Connect.Unavailable = false, want true (never a blank)")
+	}
+}
+
+// TestBuildGameRows_Deployments_LinkOuts guards the logs and Actions
+// link-outs: Actions renders as a link (decision 8: not reshaped, not
+// inlined, not a Config Editor tab), never an inlined panel, and a
+// deployment with a session gets a logs link while one with no session
+// yet does not claim to have one.
+func TestBuildGameRows_Deployments_LinkOuts(t *testing.T) {
+	games := []*manmanpb.Game{{GameId: 1, Name: "G"}}
+	configs := []*manmanpb.GameConfig{{ConfigId: 10, GameId: 1}}
+	deployments := []*manmanpb.ServerGameConfig{
+		{ServerGameConfigId: 100, ServerId: 1, GameConfigId: 10, Status: "active"},
+		{ServerGameConfigId: 101, ServerId: 1, GameConfigId: 10, Status: "active"},
+	}
+	servers := []*manmanpb.Server{{ServerId: 1, HostPublicAddress: "host-01"}}
+	sessions := []*manmanpb.Session{
+		{SessionId: 1, ServerGameConfigId: 100, StartedAt: 1000, Status: "running"},
+		// SGC 101 has never had a session.
+	}
+
+	rows := buildGameRows(games, configs, deployments, servers, sessions)
+	depByID := map[int64]pages.GameDeploymentRow{}
+	for _, dep := range gameRowByID(t, rows, 1).Deployments {
+		depByID[dep.Row.ServerGameConfigID] = dep
+	}
+
+	withSession := depByID[100]
+	if withSession.LogsURL == "" {
+		t.Errorf("deployment with a session has no LogsURL")
+	}
+	if withSession.ActionsURL == "" {
+		t.Errorf("deployment has no ActionsURL")
+	}
+
+	withoutSession := depByID[101]
+	if withoutSession.LogsURL != "" {
+		t.Errorf("deployment with no session has LogsURL = %q, want empty", withoutSession.LogsURL)
+	}
+
+	// Render the section and confirm Actions is an <a> link, never an
+	// inlined panel or button-triggered fragment swap.
+	var buf bytes.Buffer
+	if err := pages.Games(pages.GamesPageData{Games: []pages.GameRow{gameRowByID(t, rows, 1)}}).Render(context.Background(), &buf); err != nil {
+		t.Fatalf("Games.Render: %v", err)
+	}
+	html := buf.String()
+	if !strings.Contains(html, fmt.Sprintf(`href="%s"`, withSession.ActionsURL)) {
+		t.Errorf("Actions link-out for SGC 100 not found as an <a href> in rendered page")
+	}
+}
+
+// TestHandleGames_Deployments_NoAdditionalRequestOnExpand extends #2270's
+// NFR7 guard to this task's Deployments section: the section's data is
+// baked into the initial /games render (server + config name, connect
+// address, Actions availability all come from the same five fleet-wide
+// calls handleGames already makes), so a request carrying `expand` must
+// not change any RPC call count versus one without it -- expanding a row
+// remains a client-side disclosure, never a per-row fetch.
+func TestHandleGames_Deployments_NoAdditionalRequestOnExpand(t *testing.T) {
+	api := buildFakeGamesData(5)
+
+	code, _ := renderGamesHTTP(t, api, "/games")
+	if code != http.StatusOK {
+		t.Fatalf("status = %d, want 200", code)
+	}
+	baseline := map[string]int{}
+	for k, v := range api.calls {
+		baseline[k] = v
+	}
+
+	code, _ = renderGamesHTTP(t, api, "/games?expand=3")
+	if code != http.StatusOK {
+		t.Fatalf("status = %d, want 200", code)
+	}
+	for method, before := range baseline {
+		after := api.calls[method] - before
+		if after != baseline[method] {
+			// api.calls accumulates across both renderGamesHTTP calls, so
+			// the second render's own contribution must equal the first
+			// render's (i.e. issuing `expand` adds nothing beyond a normal
+			// render).
+			t.Errorf("%s: expand=3 render issued %d calls, non-expand render issued %d (expanding a row must add zero requests)", method, after, before)
+		}
+	}
 }
 
 // assertRowExpanded finds the game-row-<id> container and checks its
