@@ -1,6 +1,6 @@
 """whagent-net hot-to-cold transcript archiver (FR7, C18, issue #2244)."""
 
-load("@rules_go//go:def.bzl", "go_binary", "go_library")
+load("@rules_go//go:def.bzl", "go_binary", "go_library", "go_test")
 load("//tools/bazel:release.bzl", "release_app")
 
 go_library(
@@ -26,6 +26,51 @@ go_binary(
     name = "whagent-net-archiver",
     embed = [":archiver_lib"],
     visibility = ["//visibility:public"],
+)
+
+# Real Postgres + MinIO integration test for the archiver's selection,
+# write-order/crash-safety, and idempotency contracts (issue #2244's
+# Testing section) -- mirrors
+# //whagent_net/session:session_integration_test's shape (real embedded
+# schema via //libs/go/dbtest, real MinIO via testcontainers-go).
+# Deliberately NOT part of `bazel test //...` -- see //libs/go/dbtest's
+# README for the full rationale.
+#
+# Run it explicitly (requires a working Docker daemon):
+#   bazel test //whagent_net/archiver:archiver_integration_test --test_output=all
+go_test(
+    name = "archiver_integration_test",
+    size = "large",
+    timeout = "long",
+    srcs = ["archiver_integration_test.go"],
+    embed = [":archiver_lib"],
+    gotags = ["integration"],
+    tags = [
+        "external",
+        "integration",
+        "manual",
+        "no-cache",
+        "no-sandbox",
+        "requires-network",
+    ],
+    deps = [
+        "//libs/go/dbtest",
+        "//libs/go/logging",
+        "//libs/go/migrate",
+        "//libs/go/s3",
+        "//whagent_net/events",
+        "//whagent_net/migrate/schema",
+        "//whagent_net/session",
+        "@com_github_aws_aws_sdk_go_v2//aws",
+        "@com_github_aws_aws_sdk_go_v2_config//:config",
+        "@com_github_aws_aws_sdk_go_v2_service_s3//:s3",
+        "@com_github_google_uuid//:uuid",
+        "@com_github_jackc_pgx_v5//pgxpool",
+        "@com_github_jackc_pgx_v5//stdlib",
+        "@com_github_stretchr_testify//require",
+        "@com_github_testcontainers_testcontainers_go//:testcontainers-go",
+        "@com_github_testcontainers_testcontainers_go//wait",
+    ],
 )
 
 # Release metadata. domain "whagent-net" + name "whagent-net-archiver"
