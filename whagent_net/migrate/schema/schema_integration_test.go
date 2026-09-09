@@ -68,15 +68,15 @@ func TestMigration001_UpDownUp_LeavesCleanDatabaseAndIsRerunnable(t *testing.T) 
 
 	latest, err := runner.LatestVersion()
 	require.NoError(t, err)
-	require.Equal(t, uint(1), latest, "expected the latest migration source version to be 1 -- update this test if a later migration has since landed")
+	require.Equal(t, uint(2), latest, "expected the latest migration source version to be 2 -- update this test if a later migration has since landed")
 
-	// -- Up: every table must exist, version must land clean at 1 ----------
-	require.NoError(t, runner.Up(), "apply migration 001")
+	// -- Up: every table must exist, version must land clean at the latest --
+	require.NoError(t, runner.Up(), "apply all migrations")
 
 	version, dirty, err := runner.Version()
 	require.NoError(t, err)
 	assert.False(t, dirty)
-	assert.Equal(t, uint(1), version)
+	assert.Equal(t, uint(2), version)
 
 	for _, table := range everyTable {
 		assert.True(t, tableExists(t, ctx, db, table), "expected table %q to exist after Up()", table)
@@ -90,12 +90,12 @@ func TestMigration001_UpDownUp_LeavesCleanDatabaseAndIsRerunnable(t *testing.T) 
 	}
 
 	// -- Up again: re-runnable from the clean state -------------------------
-	require.NoError(t, runner.Up(), "re-apply migration 001 after Down() -- must be re-runnable")
+	require.NoError(t, runner.Up(), "re-apply all migrations after Down() -- must be re-runnable")
 
 	version, dirty, err = runner.Version()
 	require.NoError(t, err)
 	assert.False(t, dirty)
-	assert.Equal(t, uint(1), version)
+	assert.Equal(t, uint(2), version)
 
 	for _, table := range everyTable {
 		assert.True(t, tableExists(t, ctx, db, table), "expected table %q to exist again after the second Up()", table)
