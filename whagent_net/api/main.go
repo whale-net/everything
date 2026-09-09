@@ -23,6 +23,7 @@ import (
 	"github.com/whale-net/everything/libs/go/grpcauth"
 	"github.com/whale-net/everything/libs/go/logging"
 	"github.com/whale-net/everything/libs/go/rmq"
+	"github.com/whale-net/everything/libs/go/s3"
 	temporallib "github.com/whale-net/everything/libs/go/temporal"
 	"github.com/whale-net/everything/whagent_net/api/handlers"
 	"github.com/whale-net/everything/whagent_net/api/persona"
@@ -106,13 +107,25 @@ func run() error {
 		Handler: persona.NewMux(keySet),
 	}
 
+	// s3Client backs tier-transparent transcript reads (FR8, issue #2240):
+	// api is the only ReadTranscript-serving process, so it is the only
+	// caller that ever needs to hydrate an archived session -- see
+	// session.WithS3's doc comment. Construction is non-fatal, same
+	// pattern as initializeEventsConsumer below: WHAGENT_S3_BUCKET unset
+	// (the default) or the client failing to construct both leave
+	// s3Client nil, which session.New(..., session.WithS3(nil)) treats
+	// identically to omitting the option -- ReadTranscript still works for
+	// every session that hasn't been archived yet, it just can't hydrate
+	// the ones that have.
+	s3Client := initializeS3Client(ctx, logger)
+
 	// pub is nil: none of api's own writes go through Transcript().Append
 	// (NFR2's publish-on-commit path) -- StartSession only writes
 	// `sessions`/`session_agent` rows directly, never a transcript event.
 	// Transcript events are appended (and published) exclusively by
 	// `worker`'s CommitTurn activity, which constructs its own store with a
 	// real events.PublisherInterface (worker/main.go).
-	store := session.New(pool, nil)
+	store := session.New(pool, nil, session.WithS3(s3Client))
 
 	// Temporal client (issue #2117's Scaffold): StartSession/SendTurn/
 	// StopSession (handlers/start.go, send.go, stop.go) start and signal
@@ -296,6 +309,44 @@ func initializeEventsConsumer(logger *slog.Logger) *rmq.Consumer {
 
 	logger.Info("bound ephemeral queue to events exchange for StreamEvents", "exchange", events.ExchangeName)
 	return consumer
+}
+
+// initializeS3Client builds the S3 client session.WithS3 attaches to the
+// Store for tier-transparent transcript hydration (FR8, issue #2240).
+// Construction is non-fatal, matching initializeEventsConsumer above and
+// worker/main.go's initializePublisher: WHAGENT_S3_BUCKET unset returns
+// nil (no cold tier configured -- every session reads hot-only, which is
+// correct as long as nothing has been archived yet, and stays a graceful
+// degradation even after archiving starts, see session.WithS3's doc
+// comment), and a construction failure (bad credentials/endpoint) logs a
+// warning and also returns nil rather than failing api's startup.
+//
+// S3_ENDPOINT/S3_REGION/S3_ACCESS_KEY/S3_SECRET_KEY are the same
+// unprefixed variable names manmanv2/api and tools/app_registry use for
+// their own s3.Client construction (see ENV.md "S3 (cold tier)") --
+// WHAGENT_S3_BUCKET is the only whagent-net-specific one, since it is the
+// one setting that must differ from any other domain sharing the same S3
+// account/endpoint.
+func initializeS3Client(ctx context.Context, logger *slog.Logger) *s3.Client {
+	bucket := getEnv("WHAGENT_S3_BUCKET", "")
+	if bucket == "" {
+		logger.Info("WHAGENT_S3_BUCKET not set; archived transcripts will be unavailable (hot-tier reads still work)")
+		return nil
+	}
+
+	client, err := s3.NewClient(ctx, s3.Config{
+		Bucket:    bucket,
+		Region:    getEnv("S3_REGION", "us-east-1"),
+		Endpoint:  getEnv("S3_ENDPOINT", ""),
+		AccessKey: getEnv("S3_ACCESS_KEY", ""),
+		SecretKey: getEnv("S3_SECRET_KEY", ""),
+	})
+	if err != nil {
+		logger.Warn("failed to initialize S3 client; archived transcripts will be unavailable (hot-tier reads still work)", "error", err)
+		return nil
+	}
+	logger.Info("S3 client initialized for transcript archive hydration", "bucket", bucket)
+	return client
 }
 
 func getEnv(key, def string) string {

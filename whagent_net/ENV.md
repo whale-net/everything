@@ -44,11 +44,26 @@ the others via `//libs/go/htmxsse`).
 
 ## S3 (cold tier)
 
-Read by `archiver` (write) and `api` (hydrate archived transcripts).
+Read by `archiver` (write, FR7, not built yet) and `api` (hydrate archived
+transcripts, FR8, issue #2240). `api` builds its `//libs/go/s3` client in
+`initializeS3Client` (`whagent_net/api/main.go`) and attaches it to the
+`session.Store` via `session.WithS3` -- construction is non-fatal, same
+pattern as `RABBITMQ_URL`/`initializePublisher` above: `WHAGENT_S3_BUCKET`
+unset, or the client failing to construct, leaves transcript reads
+hot-only (`ReadTranscript` still works for every non-archived session; see
+`whagent_net/session/transcript.go`'s `TranscriptStore` doc comment).
+`S3_REGION`/`S3_ENDPOINT`/`S3_ACCESS_KEY`/`S3_SECRET_KEY` are the same
+unprefixed names `manmanv2/api` and `tools/app_registry` use for their own
+`s3.Client`s (see `libs/go/s3` `Config`) -- only the bucket is
+whagent-net-specific.
 
 | Variable | Component | Default | Description |
 |----------|-----------|---------|-------------|
-| `WHAGENT_S3_BUCKET` | archiver, api | — | Bucket for `sessions/{id}.jsonl`. |
+| `WHAGENT_S3_BUCKET` | archiver, api | — | Bucket for `sessions/{id}.jsonl.gz`. Unset disables the cold tier entirely: `archiver` never archives, `api` never hydrates (reads stay hot-only). |
+| `S3_REGION` | archiver, api | `us-east-1` | Region for the S3-compatible endpoint. |
+| `S3_ENDPOINT` | archiver, api | — | Custom S3 endpoint (e.g. MinIO, OVH); unset uses AWS's default endpoint resolution. |
+| `S3_ACCESS_KEY` | archiver, api | — | Static access key (e.g. for MinIO); unset falls back to the AWS SDK's default credential chain. |
+| `S3_SECRET_KEY` | archiver, api | — | Static secret key, paired with `S3_ACCESS_KEY`. |
 | `WHAGENT_TRANSCRIPT_TTL` | archiver | — | Hot-tier retention after a session is terminal. |
 
 ## LLM provider
