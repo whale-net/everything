@@ -3,12 +3,14 @@ package workshop
 import (
 	"context"
 	"fmt"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"regexp"
 	"time"
 
 	"github.com/whale-net/everything/libs/go/docker"
+	"github.com/whale-net/everything/manmanv2/host/rmq"
 )
 
 // VerifyResult reports whether the addon's Workshop source still matches the
@@ -212,4 +214,75 @@ func extractWorkshopContentVersion(acfContent, workshopID string) (string, bool)
 		}
 	}
 	return "", false
+}
+
+// HandleVerifyCacheEntryCommand processes an Admin's on-demand verify request for a single
+// cache entry, independent of any install (#2186, plan #2175 FR11). It reuses
+// VerifyWorkshopItem -- the exact primitive #2184 factored out of the install-time
+// verify/cache-refresh flow for this purpose -- rather than a second verify
+// implementation, and shares the orchestrator's install semaphore so a burst of
+// admin-triggered verifies cannot starve real installs.
+//
+// There is no dedicated reply message for this command (see
+// rmq.VerifyCacheEntryCommand's doc comment): the outcome is reported on the existing
+// status.host.<serverID>.workshop.cache key via publishWorkshopCacheStatus, the same
+// mechanism (and, for the unchanged case, the exact same event name) the install-time
+// flow already uses. On a changed result, the content SteamCMD just (re)synced during
+// this verify run is uploaded as a **new** cache entry via uploadToCache -- the same
+// upload primitive install-time refresh uses -- so the entry that was verified is never
+// deleted or overwritten (FR9).
+func (do *DownloadOrchestrator) HandleVerifyCacheEntryCommand(ctx context.Context, cmd *rmq.VerifyCacheEntryCommand) error {
+	logger := slog.With(
+		"cache_entry_id", cmd.CacheEntryID,
+		"workshop_id", cmd.WorkshopID,
+		"steam_app_id", cmd.SteamAppID,
+	)
+
+	// Share the install semaphore: a burst of admin-triggered verifies must not starve
+	// real installs (issue's explicit acceptance criterion), and VerifyWorkshopItem drives
+	// a SteamCMD container exactly like a real download does.
+	do.semaphore <- struct{}{}
+	defer func() { <-do.semaphore }()
+
+	logger.Info("starting admin-triggered workshop cache verify")
+
+	result, err := do.VerifyWorkshopItem(ctx, cmd.WorkshopID, cmd.SteamAppID, cmd.ContentVersion)
+	if err != nil {
+		// Unlike the install-time flow, there is no fallback path here (no install to
+		// complete via an ordinary download) -- surface the error so the caller can log
+		// it. No status is published: publishing would be the very completeness claim
+		// NFR4 forbids on failure.
+		logger.Warn("admin-triggered workshop verify failed", "error", err)
+		return fmt.Errorf("workshop cache verify failed: %w", err)
+	}
+
+	if !result.Changed {
+		logger.Info("admin-triggered verify: cache entry unchanged", "content_version", result.ContentVersion)
+		do.publishWorkshopCacheStatus(ctx, cmd.WorkshopID, result.ContentVersion, cmd.CacheEntryID, workshopCacheEventVerifiedUnchanged, 0)
+		return nil
+	}
+
+	logger.Info("admin-triggered verify: workshop source has changed, uploading refreshed cache entry", "content_version", result.ContentVersion)
+
+	// The content SteamCMD just (re)synced during the VerifyWorkshopItem run above lives
+	// at verifyInternalDir/steamapps/workshop/content/<steamAppID>/<workshopID> -- the
+	// same nested structure HandleDownloadCommand's steamContentDir extracts from after
+	// its own SteamCMD run (see buildVerifySteamCMDCommand's +force_install_dir).
+	verifyContentDir := filepath.Join(
+		do.getVerifyInternalDir(cmd.SteamAppID, cmd.WorkshopID),
+		"steamapps", "workshop", "content", cmd.SteamAppID, cmd.WorkshopID,
+	)
+	if _, statErr := os.Stat(verifyContentDir); statErr != nil {
+		// A changed manifest but no content on disk would be a SteamCMD surprise, not an
+		// admin-facing failure worth retrying automatically -- log and stop rather than
+		// uploading nothing as a "refreshed" entry.
+		logger.Warn("admin-triggered verify reported a change but found no content to upload", "content_dir", verifyContentDir, "error", statErr)
+		return nil
+	}
+
+	// changed=true selects the "refreshed" event name uploadToCache publishes on success,
+	// mirroring the install-time refresh path exactly (never "populated", which is
+	// reserved for a first-ever cache write).
+	do.uploadToCache(ctx, cmd.WorkshopID, verifyContentDir, result.ContentVersion, true, logger)
+	return nil
 }

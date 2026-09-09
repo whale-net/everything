@@ -183,6 +183,14 @@ type WorkshopAddonRepository interface {
 	Create(ctx context.Context, addon *manman.WorkshopAddon) (*manman.WorkshopAddon, error)
 	Get(ctx context.Context, addonID int64) (*manman.WorkshopAddon, error)
 	GetByWorkshopID(ctx context.Context, gameID int64, workshopID string, platformType string) (*manman.WorkshopAddon, error)
+	// GetByWorkshopIDAnyGame resolves a workshop_id to its addon without a
+	// known game_id (#2186, plan #2175 FR11): a WorkshopCacheEntry's identity
+	// is workshop_id + content_version only (NFR1, no game/addon linkage), so
+	// the on-demand verify RPC has nothing but workshop_id to resolve the
+	// addon's steam_app_id from. Returns (nil, nil) -- not an error -- if no
+	// addon owns this workshop_id, mirroring GetCacheEntryByKey's
+	// not-found convention.
+	GetByWorkshopIDAnyGame(ctx context.Context, workshopID string) (*manman.WorkshopAddonWithGame, error)
 	List(ctx context.Context, gameID *int64, includeDeprecated bool, limit, offset int) ([]*manman.WorkshopAddon, error)
 	ListByCollectionID(ctx context.Context, collectionID int64) ([]*manman.WorkshopAddon, error)
 	Update(ctx context.Context, addon *manman.WorkshopAddon) error

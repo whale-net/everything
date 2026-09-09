@@ -68,6 +68,19 @@ func (m *MockWorkshopAddonRepository) Delete(ctx context.Context, addonID int64)
 	return args.Error(0)
 }
 
+// GetByWorkshopIDAnyGame backs #2186's on-demand verify RPC (see
+// repository.go's WorkshopAddonRepository doc comment). Tests that don't
+// exercise VerifyCacheEntry never call .On(...) for it, so it's never
+// invoked -- only present so MockWorkshopAddonRepository keeps satisfying
+// the interface.
+func (m *MockWorkshopAddonRepository) GetByWorkshopIDAnyGame(ctx context.Context, workshopID string) (*manman.WorkshopAddonWithGame, error) {
+	args := m.Called(ctx, workshopID)
+	if args.Get(0) == nil {
+		return nil, args.Error(1)
+	}
+	return args.Get(0).(*manman.WorkshopAddonWithGame), args.Error(1)
+}
+
 // MockWorkshopInstallationRepository is a mock implementation of WorkshopInstallationRepository
 type MockWorkshopInstallationRepository struct {
 	mock.Mock

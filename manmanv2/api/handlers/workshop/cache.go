@@ -2,12 +2,14 @@ package workshop
 
 import (
 	"context"
+	"fmt"
 	"log/slog"
 	"strconv"
 	"time"
 
 	"github.com/whale-net/everything/libs/go/grpcauth"
 	"github.com/whale-net/everything/manmanv2/api/workshop"
+	hostrmq "github.com/whale-net/everything/manmanv2/host/rmq"
 	"github.com/whale-net/everything/manmanv2/models"
 	pb "github.com/whale-net/everything/manmanv2/protos"
 	"google.golang.org/grpc/codes"
@@ -279,4 +281,90 @@ func cacheEntryToProto(entry *manman.WorkshopCacheEntry, presence []*manman.Work
 		}
 	}
 	return pbEntry
+}
+
+// VerifyCacheEntry implements FR11: dispatch an on-demand SteamCMD verify of
+// a single cache entry against its Workshop source, independent of any
+// install. This RPC only decides *whether and where* to dispatch -- the
+// up-to-date/changed outcome is reported asynchronously by the host on the
+// existing status.host.*.workshop.cache key (#2184, WorkshopCacheStatusUpdate)
+// and is not part of this response (see the proto's rpc doc comment).
+func (h *WorkshopServiceHandler) VerifyCacheEntry(ctx context.Context, req *pb.VerifyCacheEntryRequest) (*pb.VerifyCacheEntryResponse, error) {
+	if req.CacheEntryId == 0 {
+		return nil, status.Error(codes.InvalidArgument, "cache_entry_id is required")
+	}
+
+	entry, err := h.cacheRepo.GetCacheEntry(ctx, req.CacheEntryId)
+	if err != nil {
+		slog.Warn("failed to look up workshop cache entry for verify", "cache_entry_id", req.CacheEntryId, "error", err)
+		return nil, status.Errorf(codes.Internal, "failed to look up cache entry: %v", err)
+	}
+	if entry == nil {
+		return nil, status.Errorf(codes.NotFound, "cache entry %d not found", req.CacheEntryId)
+	}
+
+	serverID := req.ServerId
+	if serverID == 0 {
+		// No explicit host: pick one that actually holds a copy, preferring
+		// the most recently seen -- the freshest presence row is the best
+		// signal of "still has it and is likely online". No host holding a
+		// copy is a real, reportable outcome (not an error): the Admin gets
+		// "no_host_available" back rather than a dispatch that can never
+		// land, and nothing is published.
+		presence, presenceErr := h.cacheRepo.ListHostPresence(ctx, req.CacheEntryId)
+		if presenceErr != nil {
+			slog.Warn("failed to list workshop cache host presence for verify", "cache_entry_id", req.CacheEntryId, "error", presenceErr)
+			return nil, status.Errorf(codes.Internal, "failed to list cache host presence: %v", presenceErr)
+		}
+
+		var chosen *manman.WorkshopCacheHostPresence
+		for _, p := range presence {
+			if chosen == nil || p.LastSeenAt.After(chosen.LastSeenAt) {
+				chosen = p
+			}
+		}
+		if chosen == nil {
+			slog.Info("no host holds a copy of workshop cache entry, cannot dispatch verify", "cache_entry_id", req.CacheEntryId)
+			return &pb.VerifyCacheEntryResponse{Dispatched: false, Status: "no_host_available"}, nil
+		}
+		serverID = chosen.ServerID
+	}
+	// An explicit server_id is always honored even if that host does not
+	// hold a copy -- an Admin may deliberately ask a specific host to fetch
+	// and verify from Steam directly. The choice is recorded in the log line
+	// below either way.
+
+	// The cache entry's identity is workshop_id + content_version only
+	// (NFR1) -- resolve the addon that owns this workshop_id to get the
+	// steam_app_id the host needs to actually run SteamCMD.
+	addon, err := h.addonRepo.GetByWorkshopIDAnyGame(ctx, entry.WorkshopID)
+	if err != nil {
+		slog.Warn("failed to resolve addon for workshop cache verify", "cache_entry_id", req.CacheEntryId, "workshop_id", entry.WorkshopID, "error", err)
+		return nil, status.Errorf(codes.Internal, "failed to resolve addon for cache entry: %v", err)
+	}
+	if addon == nil || addon.SteamAppID == nil || *addon.SteamAppID == "" {
+		slog.Warn("cannot resolve steam_app_id for workshop cache verify", "cache_entry_id", req.CacheEntryId, "workshop_id", entry.WorkshopID)
+		return nil, status.Errorf(codes.FailedPrecondition, "no addon with a steam_app_id owns workshop_id %s", entry.WorkshopID)
+	}
+
+	cmd := &hostrmq.VerifyCacheEntryCommand{
+		CacheEntryID:   entry.CacheEntryID,
+		WorkshopID:     entry.WorkshopID,
+		ContentVersion: entry.ContentVersion,
+		SteamAppID:     *addon.SteamAppID,
+	}
+	routingKey := fmt.Sprintf("command.host.%d.workshop.cache_verify", serverID)
+	if err := h.rmqPublisher.Publish(ctx, "manman", routingKey, cmd); err != nil {
+		slog.Warn("failed to publish workshop cache verify command", "cache_entry_id", req.CacheEntryId, "server_id", serverID, "error", err)
+		return nil, status.Errorf(codes.Internal, "failed to dispatch verify command: %v", err)
+	}
+
+	slog.Info("dispatched workshop cache verify command",
+		"cache_entry_id", req.CacheEntryId, "workshop_id", entry.WorkshopID, "server_id", serverID, "explicit_server_id", req.ServerId != 0)
+
+	return &pb.VerifyCacheEntryResponse{
+		Dispatched: true,
+		ServerId:   serverID,
+		Status:     "dispatched",
+	}, nil
 }

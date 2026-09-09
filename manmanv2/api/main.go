@@ -167,6 +167,7 @@ func run() error {
 		repo.WorkshopBatchJobs,
 		workshopManager,
 		s3Client,
+		rmqPublisher,
 	)
 	pb.RegisterWorkshopServiceServer(grpcServer, workshopHandler)
 

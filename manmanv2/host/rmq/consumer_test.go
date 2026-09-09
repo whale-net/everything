@@ -41,13 +41,14 @@ func newFakeCommandHandler() *fakeCommandHandler {
 type recordingCommandHandler struct {
 	mu sync.Mutex
 
-	startSession  *StartSessionCommand
-	stopSession   *StopSessionCommand
-	killSession   *KillSessionCommand
-	sendInput     *SendInputCommand
-	downloadAddon *DownloadAddonCommand
-	removeAddon   *RemoveAddonCommand
-	backup        *BackupCommand
+	startSession     *StartSessionCommand
+	stopSession      *StopSessionCommand
+	killSession      *KillSessionCommand
+	sendInput        *SendInputCommand
+	downloadAddon    *DownloadAddonCommand
+	removeAddon      *RemoveAddonCommand
+	backup           *BackupCommand
+	verifyCacheEntry *VerifyCacheEntryCommand
 
 	done chan struct{}
 }
@@ -104,6 +105,14 @@ func (f *recordingCommandHandler) HandleRemoveAddon(ctx context.Context, cmd *Re
 func (f *recordingCommandHandler) HandleBackup(ctx context.Context, cmd *BackupCommand) error {
 	f.mu.Lock()
 	f.backup = cmd
+	f.mu.Unlock()
+	f.done <- struct{}{}
+	return nil
+}
+
+func (f *recordingCommandHandler) HandleVerifyCacheEntry(ctx context.Context, cmd *VerifyCacheEntryCommand) error {
+	f.mu.Lock()
+	f.verifyCacheEntry = cmd
 	f.mu.Unlock()
 	f.done <- struct{}{}
 	return nil
@@ -216,6 +225,77 @@ func TestExistingRoutingKeys_StillRouteToExistingHandlers(t *testing.T) {
 	}
 }
 
+// TestVerifyCacheEntryRoutingKey_RoutesToVerifyHandler is the new-key half of
+// the #2186 NFR3 regression guard: the additive command.host.<serverID>.
+// workshop.cache_verify routing key dispatches to handleVerifyCacheEntry ->
+// HandleVerifyCacheEntry with the payload intact, asynchronously (mirroring
+// handleDownloadAddon/handleRemoveAddon's dispatch style for a
+// potentially-slow SteamCMD operation).
+func TestVerifyCacheEntryRoutingKey_RoutesToVerifyHandler(t *testing.T) {
+	handler := newRecordingCommandHandler()
+	c := &Consumer{handler: handler, serverID: 7}
+
+	body, err := json.Marshal(VerifyCacheEntryCommand{
+		CacheEntryID:   99,
+		WorkshopID:     "123456",
+		ContentVersion: "v3",
+		SteamAppID:     "440900",
+	})
+	if err != nil {
+		t.Fatalf("failed to marshal VerifyCacheEntryCommand: %v", err)
+	}
+
+	if err := c.handleVerifyCacheEntry(context.Background(), rmq.Message{
+		RoutingKey: "command.host.7.workshop.cache_verify",
+		Body:       body,
+	}); err != nil {
+		t.Fatalf("handleVerifyCacheEntry returned error: %v", err)
+	}
+
+	handler.waitForAsync(t, 1)
+
+	handler.mu.Lock()
+	defer handler.mu.Unlock()
+	if handler.verifyCacheEntry == nil {
+		t.Fatal("command.host.7.workshop.cache_verify did not reach HandleVerifyCacheEntry")
+	}
+	if handler.verifyCacheEntry.CacheEntryID != 99 {
+		t.Errorf("CacheEntryID = %d, want 99", handler.verifyCacheEntry.CacheEntryID)
+	}
+	if handler.verifyCacheEntry.WorkshopID != "123456" {
+		t.Errorf("WorkshopID = %q, want %q", handler.verifyCacheEntry.WorkshopID, "123456")
+	}
+	if handler.verifyCacheEntry.ContentVersion != "v3" {
+		t.Errorf("ContentVersion = %q, want %q", handler.verifyCacheEntry.ContentVersion, "v3")
+	}
+	if handler.verifyCacheEntry.SteamAppID != "440900" {
+		t.Errorf("SteamAppID = %q, want %q", handler.verifyCacheEntry.SteamAppID, "440900")
+	}
+}
+
+// TestVerifyCacheEntryRoutingKey_UnmarshalError_StillFailsSynchronously
+// mirrors TestHandleStopSession_UnmarshalError_StillFailsSynchronously for
+// the new key: a malformed body fails synchronously, before any dispatch.
+func TestVerifyCacheEntryRoutingKey_UnmarshalError_StillFailsSynchronously(t *testing.T) {
+	handler := newRecordingCommandHandler()
+	c := &Consumer{handler: handler, serverID: 7}
+
+	err := c.handleVerifyCacheEntry(context.Background(), rmq.Message{
+		RoutingKey: "command.host.7.workshop.cache_verify",
+		Body:       []byte("not valid json"),
+	})
+	if err == nil {
+		t.Fatal("expected handleVerifyCacheEntry to return an error for a malformed message body")
+	}
+
+	time.Sleep(50 * time.Millisecond)
+	handler.mu.Lock()
+	defer handler.mu.Unlock()
+	if handler.verifyCacheEntry != nil {
+		t.Fatal("HandleVerifyCacheEntry was invoked despite an unmarshal error")
+	}
+}
+
 func (f *fakeCommandHandler) HandleStartSession(ctx context.Context, cmd *StartSessionCommand) error {
 	return nil
 }
@@ -246,6 +326,10 @@ func (f *fakeCommandHandler) HandleDownloadAddon(ctx context.Context, cmd *Downl
 }
 
 func (f *fakeCommandHandler) HandleRemoveAddon(ctx context.Context, cmd *RemoveAddonCommand) error {
+	return nil
+}
+
+func (f *fakeCommandHandler) HandleVerifyCacheEntry(ctx context.Context, cmd *VerifyCacheEntryCommand) error {
 	return nil
 }
 

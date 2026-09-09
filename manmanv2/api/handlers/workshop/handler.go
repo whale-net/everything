@@ -24,6 +24,14 @@ type WorkshopServiceHandler struct {
 	batchJobRepo     repository.WorkshopBatchJobRepository
 	workshopManager  workshop.WorkshopManagerInterface
 	s3Client         cachePresigner
+	// rmqPublisher is the same fire-and-forget command-publish surface
+	// workshop.WorkshopManager already uses for workshop.download/remove
+	// (manmanv2/api/workshop/manager.go's RMQPublisher) -- VerifyCacheEntry
+	// (#2186, plan #2175 FR11) reuses it rather than the RPC-with-reply
+	// CommandPublisher (session start/stop), since there is no synchronous
+	// per-command reply here: the verify outcome arrives later on the
+	// existing status.host.*.workshop.cache key (#2184).
+	rmqPublisher workshop.RMQPublisher
 }
 
 // NewWorkshopServiceHandler creates a new WorkshopServiceHandler
@@ -37,6 +45,7 @@ func NewWorkshopServiceHandler(
 	batchJobRepo repository.WorkshopBatchJobRepository,
 	workshopManager *workshop.WorkshopManager,
 	s3Client cachePresigner,
+	rmqPublisher workshop.RMQPublisher,
 ) *WorkshopServiceHandler {
 	return &WorkshopServiceHandler{
 		addonRepo:        addonRepo,
@@ -48,6 +57,7 @@ func NewWorkshopServiceHandler(
 		batchJobRepo:     batchJobRepo,
 		workshopManager:  workshopManager,
 		s3Client:         s3Client,
+		rmqPublisher:     rmqPublisher,
 	}
 }
 
