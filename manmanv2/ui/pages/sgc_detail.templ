@@ -88,9 +88,12 @@ templ SGCDetail(data SGCDetailPageData) {
 			Status & Connect: the gamer-facing landing block (FR2, FR5, FR6,
 			FR7, FR12). Status and addresses are computed once by
 			handleSGCDetail via the components.ComputeDeploymentStatus /
-			components.ComputeConnectAddresses helpers (NFR1); this
+			components.BuildConnectAddressView helpers (NFR1); this
 			template does no status-string comparison or "%s:%d" address
-			building of its own.
+			building of its own. BuildConnectAddressView (issue #2268)
+			wraps components.ComputeConnectAddresses with the
+			ConnectAddressUnavailable derivation this page and
+			handlers_sgc.go still consume as separate fields.
 		-->
 		<div class="card bg-base-100 border border-base-300 shadow-sm mb-6">
 			<div class="card-body">
