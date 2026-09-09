@@ -13,6 +13,7 @@ go_library(
         "//libs/go/grpcauth",
         "//libs/go/logging",
         "//libs/go/rmq",
+        "//libs/go/s3",
         "//libs/go/temporal",
         "//whagent_net/api/handlers",
         "//whagent_net/api/persona",

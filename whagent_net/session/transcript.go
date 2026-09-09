@@ -1,16 +1,21 @@
 package session
 
 import (
+	"bufio"
+	"bytes"
+	"compress/gzip"
 	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"log/slog"
+	"sort"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 
+	"github.com/whale-net/everything/libs/go/s3"
 	"github.com/whale-net/everything/whagent_net/events"
 )
 
@@ -25,10 +30,17 @@ type TurnContext struct {
 }
 
 // TranscriptStore is the `transcript_event` table's repository interface.
-// The committed row, the RabbitMQ message body, and (later) the S3 jsonl
-// line are all the same `events.Event` record (LB1) -- there is exactly
-// one Go type for it, owned by whagent_net/events, and this store neither
-// defines nor accepts a parallel DTO.
+// The committed row, the RabbitMQ message body, and the S3 jsonl line are
+// all the same `events.Event` record (LB1) -- there is exactly one Go type
+// for it, owned by whagent_net/events, and this store neither defines nor
+// accepts a parallel DTO.
+//
+// Read and ReadByIDs are tier-transparent (FR8, issue #2240): both serve
+// from `transcript_event` first and only consult `transcript_archive` /
+// hydrate the archived S3 object when hot rows don't already answer the
+// call in full -- see transcriptStore's doc comment for the conditions and
+// //whagent_net/ARCHITECTURE.md "Transcript storage tiers" for the full
+// contract shared with FR7's archiver.
 type TranscriptStore interface {
 	// Append allocates the next per-session seq and inserts a new event in
 	// the same transaction, returning the committed events.Event (including
@@ -72,9 +84,19 @@ type TranscriptStore interface {
 // transcriptStore is the Postgres-backed TranscriptStore implementation.
 // pub may be nil (publisher disabled by config): Append then commits
 // exactly as if pub were always present, it simply skips the publish step.
+//
+// s3 may also be nil (issue #2240, FR8) -- "hot only", which is
+// `worker`'s configuration (session.New is never called WithS3 there):
+// Read/ReadByIDs still work exactly as before this task, they simply never
+// consult `transcript_archive`. A nil s3 with a `transcript_archive` row
+// present is not an error; it just means this particular store instance
+// has nothing to hydrate with, so it serves whatever hot has. Only `api`
+// (the sole ReadTranscript-serving process) is expected to construct its
+// Store WithS3.
 type transcriptStore struct {
 	pool *pgxpool.Pool
 	pub  events.PublisherInterface
+	s3   *s3.Client
 }
 
 var _ TranscriptStore = transcriptStore{}
@@ -256,7 +278,48 @@ func publish(ctx context.Context, pub events.PublisherInterface, ev events.Event
 // Read returns up to limit events for sessionID in seq order starting at
 // fromSeq (inclusive) -- the shape both plain pagination and
 // resume-from-seq rely on.
+//
+// Tier-transparent (FR8, issue #2240): hot rows are always read first. If
+// they already fill the page (len == limit) -- or limit <= 0, i.e. "no
+// cap", which hot alone can always answer authoritatively -- that is the
+// answer; no S3 call is ever made for a session that hasn't been archived,
+// or one that has but is still fully served by hot rows (archived-but-not-
+// yet-trimmed). Only when hot did NOT fill the page does Read consult
+// `transcript_archive`: no row there means hot's (possibly short) result
+// is the whole transcript, not an error. A row there but no S3 client
+// configured on this store falls back to hot-only (see transcriptStore's
+// doc comment on s3 -- this is `worker`'s normal case, not an error
+// either). Only with both a row and a client does Read hydrate the
+// archived object and merge it with hot in ascending seq order, hot
+// winning any duplicate seq (see mergeTiers).
 func (s transcriptStore) Read(ctx context.Context, sessionID uuid.UUID, fromSeq int64, limit int) ([]events.Event, error) {
+	hot, err := s.readHot(ctx, sessionID, fromSeq, limit)
+	if err != nil {
+		return nil, err
+	}
+	if limit <= 0 || len(hot) == limit {
+		return hot, nil
+	}
+
+	idx, err := (archiveStore{pool: s.pool}).Get(ctx, sessionID)
+	if err != nil {
+		return nil, fmt.Errorf("read transcript events: %w", err)
+	}
+	if idx == nil || s.s3 == nil {
+		return hot, nil
+	}
+
+	cold, err := s.hydrateArchive(ctx, sessionID, *idx)
+	if err != nil {
+		return nil, err
+	}
+	return mergeTiers(hot, cold, fromSeq, limit), nil
+}
+
+// readHot is Read's hot-tier-only query -- the same query Read has always
+// run, extracted so Read can call it once and separately decide whether
+// the cold tier needs consulting.
+func (s transcriptStore) readHot(ctx context.Context, sessionID uuid.UUID, fromSeq int64, limit int) ([]events.Event, error) {
 	rows, err := s.pool.Query(ctx, `
 		SELECT event_id, session_id, seq, turn, type, payload, committed_at
 		FROM transcript_event
@@ -283,14 +346,164 @@ func (s transcriptStore) Read(ctx context.Context, sessionID uuid.UUID, fromSeq 
 	return evs, nil
 }
 
+// hydrateArchive downloads and decodes idx's S3 object (the cold-object
+// contract: gzipped JSON Lines at idx.S3Key, one events.Event per line --
+// see ARCHITECTURE.md "Transcript storage tiers"). A download or decode
+// failure is logged at ERROR (the archive index row promised an object
+// that could not be read -- a genuine failure, not an expected condition;
+// AGENTS.md § Logging Levels) and returned as an error, never silently
+// swallowed into a truncated transcript.
+func (s transcriptStore) hydrateArchive(ctx context.Context, sessionID uuid.UUID, idx ArchiveIndex) ([]events.Event, error) {
+	data, err := s.s3.Download(ctx, idx.S3Key)
+	if err != nil {
+		slog.ErrorContext(ctx, "hydrate archived transcript: download failed",
+			"session_id", sessionID, "s3_bucket", idx.S3Bucket, "s3_key", idx.S3Key, "error", err)
+		return nil, fmt.Errorf("hydrate archived transcript for session %s: %w", sessionID, err)
+	}
+	cold, err := decodeArchiveObject(data)
+	if err != nil {
+		slog.ErrorContext(ctx, "hydrate archived transcript: decode failed",
+			"session_id", sessionID, "s3_bucket", idx.S3Bucket, "s3_key", idx.S3Key, "error", err)
+		return nil, fmt.Errorf("hydrate archived transcript for session %s: %w", sessionID, err)
+	}
+	return cold, nil
+}
+
+// decodeArchiveObject decodes a cold-object-contract body (gzipped JSON
+// Lines, one events.Event per line, ascending seq -- ARCHITECTURE.md
+// "Transcript storage tiers") into the events it holds, in file order.
+func decodeArchiveObject(gz []byte) ([]events.Event, error) {
+	zr, err := gzip.NewReader(bytes.NewReader(gz))
+	if err != nil {
+		return nil, fmt.Errorf("open gzip archive object: %w", err)
+	}
+	defer zr.Close()
+
+	var evs []events.Event
+	scanner := bufio.NewScanner(zr)
+	// Default bufio.Scanner token limit (64KiB) is too small for a
+	// transcript event whose payload is a large tool result; widen to
+	// 16MiB, matching this repo's other line-oriented decoders of
+	// arbitrarily large JSON payloads.
+	scanner.Buffer(make([]byte, 0, 64*1024), 16*1024*1024)
+	for scanner.Scan() {
+		line := scanner.Bytes()
+		if len(bytes.TrimSpace(line)) == 0 {
+			continue
+		}
+		var ev events.Event
+		if err := json.Unmarshal(line, &ev); err != nil {
+			return nil, fmt.Errorf("decode archive object line: %w", err)
+		}
+		evs = append(evs, ev)
+	}
+	if err := scanner.Err(); err != nil {
+		return nil, fmt.Errorf("scan archive object: %w", err)
+	}
+	return evs, nil
+}
+
+// mergeTiers combines hot and cold (each already ascending by seq --
+// readHot's ORDER BY seq and the cold-object contract's ascending seq,
+// respectively) into one ascending, duplicate-free sequence starting at
+// fromSeq and capped at limit (limit <= 0 means no cap). A seq present in
+// both is the same event (LB1) and is only ever emitted once, from hot --
+// the tier ReadTranscript/callers already trust for a session that hasn't
+// finished being trimmed yet.
+func mergeTiers(hot, cold []events.Event, fromSeq int64, limit int) []events.Event {
+	// cold covers the whole archived object (potentially back to seq 1);
+	// skip straight to fromSeq so the merge below never has to special-case
+	// a cold event older than what was actually requested.
+	ci := 0
+	for ci < len(cold) && cold[ci].Seq < fromSeq {
+		ci++
+	}
+
+	merged := make([]events.Event, 0, len(hot)+(len(cold)-ci))
+	hi := 0
+	for hi < len(hot) || ci < len(cold) {
+		switch {
+		case hi >= len(hot):
+			merged = append(merged, cold[ci])
+			ci++
+		case ci >= len(cold):
+			merged = append(merged, hot[hi])
+			hi++
+		case hot[hi].Seq < cold[ci].Seq:
+			merged = append(merged, hot[hi])
+			hi++
+		case hot[hi].Seq > cold[ci].Seq:
+			merged = append(merged, cold[ci])
+			ci++
+		default: // equal seq: hot wins, cold's copy of the same event is dropped
+			merged = append(merged, hot[hi])
+			hi++
+			ci++
+		}
+		if limit > 0 && len(merged) == limit {
+			return merged
+		}
+	}
+	return merged
+}
+
 // ReadByIDs returns eventIDs' rows in seq order -- an id with no matching
-// row is silently absent from the result, not an error. Empty/nil eventIDs
-// short-circuits to an empty result without a round trip.
+// row anywhere (hot or cold) is silently absent from the result, not an
+// error. Empty/nil eventIDs short-circuits to an empty result without a
+// round trip.
+//
+// Tier-transparent (FR8, issue #2240): reads hot first; only when at least
+// one requested id is still unaccounted for does it consult
+// `transcript_archive` and hydrate (same idx==nil / s.s3==nil "nothing to
+// hydrate with" fallback to hot-only as Read -- see Read's doc comment).
 func (s transcriptStore) ReadByIDs(ctx context.Context, sessionID uuid.UUID, eventIDs []uuid.UUID) ([]events.Event, error) {
 	if len(eventIDs) == 0 {
 		return nil, nil
 	}
 
+	hot, err := s.readByIDsHot(ctx, sessionID, eventIDs)
+	if err != nil {
+		return nil, err
+	}
+
+	wanted := make(map[uuid.UUID]struct{}, len(eventIDs))
+	for _, id := range eventIDs {
+		wanted[id] = struct{}{}
+	}
+	for _, ev := range hot {
+		delete(wanted, ev.EventID)
+	}
+	if len(wanted) == 0 {
+		return hot, nil
+	}
+
+	idx, err := (archiveStore{pool: s.pool}).Get(ctx, sessionID)
+	if err != nil {
+		return nil, fmt.Errorf("read transcript events by id: %w", err)
+	}
+	if idx == nil || s.s3 == nil {
+		return hot, nil
+	}
+
+	cold, err := s.hydrateArchive(ctx, sessionID, *idx)
+	if err != nil {
+		return nil, err
+	}
+
+	merged := append([]events.Event{}, hot...)
+	for _, ev := range cold {
+		if _, ok := wanted[ev.EventID]; ok {
+			merged = append(merged, ev)
+		}
+	}
+	sort.Slice(merged, func(i, j int) bool { return merged[i].Seq < merged[j].Seq })
+	return merged, nil
+}
+
+// readByIDsHot is ReadByIDs' hot-tier-only query -- the same query
+// ReadByIDs has always run, extracted so ReadByIDs can call it once and
+// separately decide whether the cold tier needs consulting.
+func (s transcriptStore) readByIDsHot(ctx context.Context, sessionID uuid.UUID, eventIDs []uuid.UUID) ([]events.Event, error) {
 	rows, err := s.pool.Query(ctx, `
 		SELECT event_id, session_id, seq, turn, type, payload, committed_at
 		FROM transcript_event

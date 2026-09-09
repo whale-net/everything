@@ -15,6 +15,7 @@ go_library(
     importpath = "github.com/whale-net/everything/whagent_net/session",
     visibility = ["//visibility:public"],
     deps = [
+        "//libs/go/s3",
         "//whagent_net/events",
         "@com_github_google_uuid//:uuid",
         "@com_github_jackc_pgx_v5//:pgx",
