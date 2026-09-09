@@ -109,6 +109,7 @@ func (swc *SteamWorkshopClient) GetWorkshopItemDetails(ctx context.Context, work
 		Response struct {
 			PublishedFileDetails []struct {
 				PublishedFileID string `json:"publishedfileid"`
+				Result          int    `json:"result"` // 1 = success, 9 = not found, other codes exist (e.g. banned/private)
 				Title           string `json:"title"`
 				Description     string `json:"file_description"`
 				FileSize        string `json:"file_size"`
@@ -123,11 +124,21 @@ func (swc *SteamWorkshopClient) GetWorkshopItemDetails(ctx context.Context, work
 	}
 
 	if len(result.Response.PublishedFileDetails) == 0 {
+		// Defensive fallback: Steam's GetPublishedFileDetails always returns exactly
+		// one entry per requested ID, so this shouldn't happen in practice, but keep
+		// the check cheap belt-and-suspenders.
 		return nil, fmt.Errorf("workshop item not found")
 	}
 
 	item := result.Response.PublishedFileDetails[0]
-	
+
+	// Steam always returns an entry for a requested ID, even when it doesn't exist -
+	// the per-entry "result" field (1 = success, 9 = not found, others e.g. banned/private)
+	// is what actually signals success vs. failure.
+	if item.Result != 1 {
+		return nil, fmt.Errorf("workshop item %s not found (steam result code %d)", workshopID, item.Result)
+	}
+
 	// Parse file size from string
 	var fileSize int64
 	if item.FileSize != "" {
