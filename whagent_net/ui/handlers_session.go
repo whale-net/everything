@@ -45,6 +45,21 @@ func (app *App) readTranscript(ctx context.Context, sessionID uuid.UUID, fromSeq
 	return views, resp.GetNextFromSeq(), nil
 }
 
+// readSession reads sessionID's current state through the api client and
+// converts it to components.SessionView (../convert.go). Shared by
+// handleSessionDetail (the initial full-page render) and
+// handlers_session_live.go's sessionTranscriptFragment.Render (re-read on
+// every SSE delivery, per NFR2/Implementation: "swaps transcript fragments
+// and the state badge on each SSE event") so the two paths can never
+// disagree about how a Session is projected for rendering.
+func (app *App) readSession(ctx context.Context, sessionID uuid.UUID) (components.SessionView, error) {
+	resp, err := app.session.Client().GetSession(ctx, &whagentpb.GetSessionRequest{SessionId: sessionID.String()})
+	if err != nil {
+		return components.SessionView{}, err
+	}
+	return sessionToView(resp.GetSession()), nil
+}
+
 // isSessionOwner reports whether user is the signed-in operator who may
 // control the session onBehalfOf identifies (FR2's read-only gating):
 // user's (iss, sub) equals onBehalfOf's, matched on the pair -- never sub
@@ -80,7 +95,7 @@ func (app *App) handleSessionDetail(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	sessResp, err := app.session.Client().GetSession(ctx, &whagentpb.GetSessionRequest{SessionId: sessionID.String()})
+	sessionView, err := app.readSession(ctx, sessionID)
 	if err != nil {
 		logger.Error("failed to get session", "session_id", sessionID, "error", err)
 		http.Error(w, "Internal server error", http.StatusInternalServerError)
@@ -95,7 +110,6 @@ func (app *App) handleSessionDetail(w http.ResponseWriter, r *http.Request) {
 	}
 
 	user := htmxauth.GetUser(ctx)
-	sessionView := sessionToView(sessResp.GetSession())
 
 	layoutData := components.LayoutData{
 		Title:  "Session " + sessionID.String(),
