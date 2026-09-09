@@ -319,6 +319,68 @@ authorization side, only on the identity side.
 
 ---
 
+## 10. Token exchange (RFC 8693): a client that mints tokens for other identities
+
+This is a different problem from everything above: instead of a client
+proving *its own* identity, here a confidential client authenticates as
+itself and asks Keycloak to mint a token asserting **someone else's**
+identity, by user id (`requested_subject`) — the mechanism
+`whagent_net/mcp` uses (issue #2249, `whagent_net/ARCHITECTURE.md`
+"`mcp`'s OAuth2 credential and RFC 8693 token exchange") to turn an
+already-resolved `(iss, sub)` pair into a real, verifiable Keycloak
+access token before calling a downstream API that only trusts
+Keycloak-signed tokens.
+
+**This is a materially bigger blast radius than a normal client** (step
+4): the credential that authenticates this client can mint a token as
+*any* user in the realm, not just describe the client's own permissions.
+Treat it accordingly — a dedicated client, never reused for anything
+else, with the secret held only by the one process that needs it
+(`whagent_net/ARCHITECTURE.md`'s NFR8 writeup has the full custody/
+rotation story for the `whagent_net/mcp` instance of this).
+
+### 10a. Create the client
+
+Same as step 4a (**Clients → Create client**, confidential, **Client
+authentication** on, **Service accounts roles** on, no standard/implicit
+flow needed) — but do not reuse an existing caller client. Give it a name
+that says what it's for (e.g. `whagent-net-mcp-token-exchange`), not the
+name of the service that happens to hold it.
+
+### 10b. Grant it token-exchange / impersonation permission
+
+In newer Keycloak versions this lives under the realm's **Client policies**
+/ fine-grained admin permissions (**Realm settings → User profile** is not
+it — look for **Permissions** on the client itself, or the realm-level
+**Authorization** tab, depending on your Keycloak version): enable
+permissions on the client, then create (or reuse) a client policy that
+allows this client's service account to exchange tokens for arbitrary
+users. Exact admin-console navigation drifts between Keycloak versions —
+search your version's docs for "token exchange" or "impersonation" if the
+above doesn't match what you see; the underlying grant this section
+configures does not change between versions, only where you click to
+enable it.
+
+### 10c. Verify with curl before touching application code
+
+```bash
+curl -s -X POST "$KEYCLOAK_URL/realms/$REALM/protocol/openid-connect/token" \
+  -d grant_type=urn:ietf:params:oauth:grant-type:token-exchange \
+  -d client_id=whagent-net-mcp-token-exchange \
+  -d client_secret=$CLIENT_SECRET \
+  -d requested_subject=$TARGET_USER_ID \
+  -d requested_token_type=urn:ietf:params:oauth:token-type:access_token
+```
+
+A successful exchange returns an ordinary OAuth2 token response
+(`access_token`, `token_type`, `expires_in`); decode `access_token` (step
+7's `jwt` one-liner) and confirm its `sub` claim is `$TARGET_USER_ID`, not
+this client's own service-account user. A `403`/`invalid_client` here
+means 10b's permission grant did not take — fix that before wiring up
+any application code, exactly like step 7's guidance for a normal client.
+
+---
+
 ## Applying this to a new service
 
 The checklist, stripped of the example:

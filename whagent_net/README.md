@@ -113,6 +113,17 @@ credential expiry/refresh/rotation or revocation UI yet (out of scope for
 M2); a minted credential is valid until explicitly revoked via `mcpauth`'s
 store API.
 
+Behind the scenes (issue #2249), `mcp` never forwards that credential to
+`api` as-is -- `api` verifies real Keycloak-signed JWTs only. Every call
+made with this credential is transparently exchanged for a short-lived,
+real Keycloak-signed JWT asserting your resolved `(iss, sub)` (RFC 8693,
+cached in memory per identity until shortly before it expires), so a
+session you start this way is indistinguishable downstream from one
+started with a manually-pasted token. See `ARCHITECTURE.md` "`mcp`'s
+OAuth2 credential and RFC 8693 token exchange" for the full design,
+including the secret-custody and rotation story for the confidential
+Keycloak client this uses.
+
 ## Agent definition config
 
 `whagent_net/config/agents.yaml` is the checked-in source of truth

@@ -8,11 +8,18 @@
 // talks to Temporal directly, and the only Postgres it ever touches
 // (optionally, FR9/issue #2249) is the mcp_credential table backing the
 // OAuth2 token-exchange path's mcpauth.CredentialStore -- see
-// initializeTokenExchange below.
+// initializeTokenExchange below. On that path, `mcp` also holds its own
+// confidential Keycloak client (WHAGENT_MCP_KEYCLOAK_*, ../ENV.md) with
+// token-exchange/impersonation rights, used to exchange a resolved
+// operator identity for a short-lived, real Keycloak-signed JWT (RFC
+// 8693, server/tokenexchange.go) before ever calling `api` -- `api`
+// itself verifies real Keycloak tokens only, so this is what makes the
+// two credential shapes indistinguishable downstream.
 package main
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"net/http"
@@ -99,15 +106,18 @@ func getEnv(key, def string) string {
 	return def
 }
 
-// tokenExchangeDeps holds the FR9 OAuth2 token-exchange path's optional
-// dependencies (issue #2249's Scaffold phase): a Postgres-backed
-// mcpauth.CredentialStore against the same mcp_credential table `ui`'s
-// mcpauth.Provider mints into (whagent_net/migrate/schema/migrations/
-// 004_mcpauth_credential, issue #2245), and mcp's own confidential-client
-// server.Exchanger. Neither is wired into the request path yet --
-// server/auth.go's PassthroughVerifier/AuthMiddleware are unchanged by
-// this task's Scaffold phase; a dependent Implementation-phase change
-// consumes both fields.
+// tokenExchangeDeps holds the FR9 OAuth2 token-exchange path's
+// dependencies (issue #2249): a Postgres-backed mcpauth.CredentialStore
+// against the same mcp_credential table `ui`'s mcpauth.Provider mints
+// into (whagent_net/migrate/schema/migrations/004_mcpauth_credential,
+// issue #2245), and mcp's own confidential-client server.Exchanger.
+// run() passes credentials into server.NewHTTPHandler (auth.go's
+// NewVerifier, the HTTP-layer classifier) and exchanger into server.New
+// (auth.go's AuthMiddleware, the MCP-protocol-layer exchange call) --
+// both fields are always consumed, though credentials may be nil (FR9
+// not configured) and exchanger may be constructed disabled (see
+// initializeTokenExchange's NFR8 fail-loud check for the one combination
+// that is instead a startup error).
 type tokenExchangeDeps struct {
 	pool        *pgxpool.Pool
 	credentials mcpauth.CredentialStore
@@ -122,13 +132,24 @@ func (d tokenExchangeDeps) Close() {
 }
 
 // initializeTokenExchange builds tokenExchangeDeps from cfg. Construction
-// is non-fatal throughout (mirrors whagent_net/ui/main.go's
-// initializeSSEHub degrade-and-log convention for every other optional
-// dependency in this binary): cfg.DatabaseURL unset, an unreachable
-// database, or a missing mcp_credential table all degrade to "OAuth2
-// credential path unavailable" rather than preventing `mcp` from
-// starting -- the manual-token recipe never depends on any of this.
-func initializeTokenExchange(ctx context.Context, cfg config, logger *slog.Logger) tokenExchangeDeps {
+// is non-fatal for the parts of FR9 that are purely optional (mirrors
+// whagent_net/ui/main.go's initializeSSEHub degrade-and-log convention
+// for every other optional dependency in this binary): cfg.DatabaseURL
+// unset, an unreachable database, or a missing mcp_credential table all
+// degrade to "OAuth2 credential path unavailable" rather than preventing
+// `mcp` from starting -- the manual-token recipe never depends on any of
+// this.
+//
+// NFR8's fail-loud requirement is the one exception: once a
+// mcpauth.CredentialStore is actually reachable, the OAuth2 path becomes
+// reachable too (server.NewVerifier routes any credential-shaped token
+// there regardless of whether an exchange can ever succeed), so running
+// with credentials configured but cfg.TokenExchange disabled would mean
+// every OAuth2-path call fails opaquely at Exchange time instead of at
+// startup. This function returns an error in exactly that combination --
+// run() below treats it as fatal -- rather than silently degrading like
+// every other case here.
+func initializeTokenExchange(ctx context.Context, cfg config, logger *slog.Logger) (tokenExchangeDeps, error) {
 	exchanger := server.NewKeycloakExchanger(cfg.TokenExchange)
 	if !cfg.TokenExchange.Enabled() {
 		logger.Warn("WHAGENT_MCP_KEYCLOAK_CLIENT_ID/WHAGENT_MCP_KEYCLOAK_CLIENT_SECRET/WHAGENT_MCP_KEYCLOAK_TOKEN_URL not fully set; FR9 OAuth2 token exchange unavailable (manual-token recipe still works)")
@@ -136,13 +157,13 @@ func initializeTokenExchange(ctx context.Context, cfg config, logger *slog.Logge
 
 	if cfg.DatabaseURL == "" {
 		logger.Warn("PG_DATABASE_URL not set; FR9 OAuth2 credential path unavailable (manual-token recipe still works)")
-		return tokenExchangeDeps{exchanger: exchanger}
+		return tokenExchangeDeps{exchanger: exchanger}, nil
 	}
 
 	pool, err := db.NewPool(ctx, cfg.DatabaseURL)
 	if err != nil {
 		logger.Warn("failed to connect to mcp_credential database; FR9 OAuth2 credential path unavailable (manual-token recipe still works)", "error", err)
-		return tokenExchangeDeps{exchanger: exchanger}
+		return tokenExchangeDeps{exchanger: exchanger}, nil
 	}
 
 	// NewCredentialStore preflights the mcp_credential table (the same
@@ -152,11 +173,20 @@ func initializeTokenExchange(ctx context.Context, cfg config, logger *slog.Logge
 	if err != nil {
 		logger.Warn("failed to initialize mcpauth credential store; FR9 OAuth2 credential path unavailable (manual-token recipe still works)", "error", err)
 		pool.Close()
-		return tokenExchangeDeps{exchanger: exchanger}
+		return tokenExchangeDeps{exchanger: exchanger}, nil
+	}
+
+	if !cfg.TokenExchange.Enabled() {
+		pool.Close()
+		return tokenExchangeDeps{}, errors.New(
+			"PG_DATABASE_URL is set (FR9 OAuth2 credential path reachable) but WHAGENT_MCP_KEYCLOAK_CLIENT_ID/" +
+				"WHAGENT_MCP_KEYCLOAK_CLIENT_SECRET/WHAGENT_MCP_KEYCLOAK_TOKEN_URL are not fully set (NFR8): " +
+				"either configure all three, or unset PG_DATABASE_URL to run manual-token-only",
+		)
 	}
 
 	logger.Info("mcpauth credential store initialized for the FR9 OAuth2 token-exchange path")
-	return tokenExchangeDeps{pool: pool, credentials: credentials, exchanger: exchanger}
+	return tokenExchangeDeps{pool: pool, credentials: credentials, exchanger: exchanger}, nil
 }
 
 func main() {
@@ -192,16 +222,25 @@ func run() error {
 	// boundary"). FR9 (issue #2249) is the one exception on the Postgres
 	// side: when cfg.DatabaseURL is set, initializeTokenExchange below
 	// probes the same mcp_credential table `ui`'s mcpauth.Provider mints
-	// into -- optional, non-fatal, and still wired to nothing in the
-	// request path as of this Scaffold-phase change (a dependent
-	// Implementation-phase change to auth.go is what actually routes a
-	// call through it). NewUserTokenDialOption(AuthModeOIDC) is unconditional
+	// into, and wires the OAuth2 path into both server.NewHTTPHandler
+	// (the HTTP-layer verifier, auth.go's NewVerifier) and server.New
+	// (the MCP-protocol-layer AuthMiddleware) below -- resolved and
+	// checked for the NFR8 fail-loud combination before anything else is
+	// constructed, so a misconfiguration is reported before `mcp` ever
+	// dials `api`. NewUserTokenDialOption(AuthModeOIDC) is unconditional
 	// (not read from GRPC_AUTH_MODE-style config): every call that reaches
 	// a tool handler already carries a bearer token on ctx (server/auth.go's
 	// AuthMiddleware rejects any call without one before a tool handler
-	// runs), so this dial option always forwards it, byte for byte, as the
-	// outbound call's own Authorization header -- the operator's identity,
-	// never a shared service account (FR10).
+	// runs, whichever path resolved it), so this dial option always
+	// forwards it, byte for byte, as the outbound call's own Authorization
+	// header -- the operator's identity, never a shared service account
+	// (FR10).
+	tex, err := initializeTokenExchange(ctx, cfg, logger)
+	if err != nil {
+		return err
+	}
+	defer tex.Close()
+
 	apiConn, err := grpcclient.NewClient(ctx, cfg.APIAddr, grpcauth.NewUserTokenDialOption(grpcauth.AuthModeOIDC))
 	if err != nil {
 		return fmt.Errorf("dial api at %s: %w", cfg.APIAddr, err)
@@ -210,15 +249,12 @@ func run() error {
 
 	client := pb.NewSessionServiceClient(apiConn.GetConnection())
 
-	srv := server.New()
+	srv := server.New(tex.exchanger)
 	tools.RegisterStartSession(srv, client)
 	tools.RegisterSendTurn(srv, client)
 	tools.RegisterStopSession(srv, client)
 	tools.RegisterGetSession(srv, client)
 	tools.RegisterReadTranscript(srv, client)
-
-	tex := initializeTokenExchange(ctx, cfg, logger)
-	defer tex.Close()
 
 	resourceMeta := server.ResourceMetadataConfig{
 		Resource:            cfg.MCPPublicURL,
@@ -228,7 +264,7 @@ func run() error {
 
 	httpServer := &http.Server{
 		Addr:         cfg.MCPAddr,
-		Handler:      otelhttp.NewHandler(server.NewHTTPHandler(srv, resourceMeta), "whagent-net-mcp"),
+		Handler:      otelhttp.NewHandler(server.NewHTTPHandler(srv, tex.credentials, resourceMeta), "whagent-net-mcp"),
 		ReadTimeout:  15 * time.Second,
 		WriteTimeout: 15 * time.Second,
 		IdleTimeout:  60 * time.Second,
