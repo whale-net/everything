@@ -1,0 +1,43 @@
+"""whagent-net hot-to-cold transcript archiver (FR7, C18, issue #2244)."""
+
+load("@rules_go//go:def.bzl", "go_binary", "go_library")
+load("//tools/bazel:release.bzl", "release_app")
+
+go_library(
+    name = "archiver_lib",
+    srcs = [
+        "archiver.go",
+        "main.go",
+    ],
+    importpath = "github.com/whale-net/everything/whagent_net/archiver",
+    visibility = ["//visibility:private"],
+    deps = [
+        "//libs/go/db",
+        "//libs/go/logging",
+        "//libs/go/s3",
+        "//whagent_net/session",
+        "@com_github_jackc_pgx_v5//pgxpool",
+    ],
+)
+
+go_binary(
+    name = "whagent-net-archiver",
+    embed = [":archiver_lib"],
+    visibility = ["//visibility:public"],
+)
+
+# Release metadata. domain "whagent-net" + name "whagent-net-archiver"
+# mirrors //whagent_net/ui:whagent-net-ui's release_app shape (issue
+# #2236's BUILD.bazel) rather than //whagent_net/worker:worker's bare
+# "worker" name -- this task's Scaffold section names the binary
+# "whagent-net-archiver" explicitly. app_type "worker": a long-running
+# background process with no port, same category as
+# //whagent_net/worker:worker.
+release_app(
+    name = "whagent-net-archiver",
+    binary_name = ":whagent-net-archiver",
+    language = "go",
+    domain = "whagent-net",
+    app_type = "worker",
+    description = "whagent-net transcript hot-to-cold archiver",
+)
