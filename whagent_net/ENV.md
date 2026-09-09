@@ -1,8 +1,10 @@
 # whagent-net — Environment Variables
 
 M1 shipped (issue #2121): `migrate`, `api`, `worker`, and `mcp` all read
-the variables below. `archiver` and `ui` (M2+) are not built yet — their
-rows are still forward-looking, per `AGENTS.md` § Maintaining Docs.
+the variables below. `ui` (M2, issue #2236) now exists too — see "`ui`
+(standalone agent web UI, issue #2236)" below for its own variables.
+`archiver` is not built yet — its rows are still forward-looking, per
+`AGENTS.md` § Maintaining Docs.
 
 ## Database
 
@@ -78,6 +80,7 @@ Read by `api` (token verification + authorization), `ui` and `mcp`
 | `WHAGENT_OIDC_ISSUER` | api, ui, mcp | — | Keycloak realm issuer URL. Also stamped as the on-behalf-of `SubjectIssuer` `worker` mints into every session's persona Claim (issue #2150) — it only needs to be non-empty; `whagent.Sign` carries no verification requirement on its value, only on its presence (`libs/go/whagent/sign.go`). `whagent_net/Tiltfile` defaults this to a fixed `dev-issuer` placeholder locally, overridable via a local `.env`. |
 | `WHAGENT_OIDC_CLIENT_ID` | ui, mcp | — | OIDC client for the interactive surfaces. |
 | `WHAGENT_OIDC_CLIENT_SECRET` | ui, mcp | — | Client secret. |
+| `WHAGENT_OIDC_REDIRECT_URI` | ui | `http://localhost:8080/auth/callback` | `ui`'s OIDC callback URL, registered with `WHAGENT_OIDC_CLIENT_ID` as a valid redirect URI in Keycloak. Mounted at `/auth/callback` regardless of this value's path (see "`ui`" below) — this only needs to match what Keycloak is configured to redirect back to. |
 | `WHAGENT_OIDC_AUDIENCE` | api | — | Expected audience on tokens presented to `api`. |
 
 ## Service wiring
@@ -130,3 +133,27 @@ sole verification boundary per FR10).
 |----------|-----------|---------|-------------|
 | `WHAGENT_MCP_ADDR` | mcp | `:8082` | Listen address for `mcp`'s streamable-HTTP MCP surface (`GET /healthz` unauthenticated, `/` requiring a bearer token). |
 | `WHAGENT_API_URL` | mcp | *(required)* | `api`'s gRPC address -- the only outbound dependency this binary dials (see "Service wiring" above). |
+
+## `ui` (standalone agent web UI, issue #2236)
+
+Read directly via `os.Getenv` in `whagent_net/ui/main.go`. `ui` requires
+Keycloak sign-in for every app route (NFR1: no whagent-net-specific
+login mechanism, no local user table) via `//libs/go/htmxauth`, and
+forwards the signed-in operator's own access token to `api` on every
+call (`//libs/go/grpcauth`) rather than a shared service account --
+mirrors `mcp`'s FR10 stance. `WHAGENT_OIDC_ISSUER`/`WHAGENT_OIDC_CLIENT_ID`/
+`WHAGENT_OIDC_CLIENT_SECRET`/`WHAGENT_OIDC_REDIRECT_URI` above are its
+Keycloak sign-in configuration; `WHAGENT_API_URL` above is `api`'s gRPC
+address, the only outbound dependency this binary dials; `PG_DATABASE_URL`
+(the "Database" section above) backs `ui`'s own DB-backed session store
+(`ui_sessions` table, via `htmxauth.NewDBSessionManager`) -- a distinct
+Postgres *table* from `whagent_net/session`'s domain tables even though it
+shares the same connection string, since `ui` never queries the domain
+tables directly, only through `api`'s gRPC surface.
+
+| Variable | Component | Default | Description |
+|----------|-----------|---------|-------------|
+| `WHAGENT_UI_ADDR` | ui | `:8080` | Listen address for `ui`'s HTTP surface (`GET /healthz` unauthenticated, every other route requiring a Keycloak session). |
+| `AUTH_MODE` | ui | `none` | `none` (dev-only synthetic `dev-user`, `//libs/go/htmxauth.AuthModeNone`) or `oidc` (real Keycloak sign-in, NFR1). Matches manmanv2/ui's and app-registry-ui's own literal `AUTH_MODE` name. |
+| `GRPC_AUTH_MODE` | ui | `none` | `none` or `oidc` (`//libs/go/grpcauth.AuthMode`) -- gates whether the operator's access token is actually forwarded to `api` on outbound calls. Should match `api`'s own `GRPC_AUTH_MODE` above. |
+| `SECRET_KEY` | ui | `dev-secret-key-change-in-production` | Encrypts `ui`'s DB-backed session store's access/refresh tokens. Matches manmanv2/ui's and app-registry-ui's own literal `SECRET_KEY` name; distinct from `WHAGENT_SIGNING_KEY` above (JWKS signing, a different purpose entirely). |

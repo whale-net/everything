@@ -1,18 +1,34 @@
-"""whagent-net standalone agent web UI (M2, issue #2236): scaffold only --
-Keycloak sign-in, the authenticated api client, and real pages land in
-later tasks under the same plan (#2233)."""
+"""whagent-net standalone agent web UI (M2, issue #2236): binary entrypoint,
+Keycloak sign-in, and the authenticated api client. Real session pages
+(FR1-FR4) land in later tasks under the same plan (#2233)."""
 
 load("@rules_go//go:def.bzl", "go_binary", "go_library")
 load("//tools/bazel:release.bzl", "release_app")
 
 go_library(
     name = "ui_lib",
-    srcs = ["main.go"],
+    srcs = [
+        "grpc_client.go",
+        "handlers.go",
+        "main.go",
+        "templ_render.go",
+    ],
     importpath = "github.com/whale-net/everything/whagent_net/ui",
     visibility = ["//visibility:private"],
     deps = [
+        "//libs/go/db",
+        "//libs/go/grpcauth",
+        "//libs/go/grpcclient",
+        "//libs/go/htmxauth",
+        "//libs/go/htmxbase",
+        "//libs/go/htmxui",
         "//libs/go/logging",
+        "//whagent_net/protos:whagentpb",
+        "//whagent_net/ui/components",
+        "//whagent_net/ui/pages",
+        "@com_github_a_h_templ//:templ",
         "@io_opentelemetry_go_contrib_instrumentation_net_http_otelhttp//:otelhttp",
+        "@org_golang_google_grpc//:grpc",
     ],
 )
 

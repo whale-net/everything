@@ -202,6 +202,11 @@ APPS = {
         'bazel_target': '//whagent_net/mcp:mcp_image_load',
         'image_name': 'whagent-net-mcp',
     },
+    'ui': {
+        'enabled_env': 'ENABLE_WHAGENT_NET_UI',
+        'bazel_target': '//whagent_net/ui:whagent-net-ui_image_load',
+        'image_name': 'whagent-net-ui',
+    },
 }
 
 # ===========================
@@ -468,6 +473,93 @@ spec:
     )
     print("🔌 mcp forwarded to http://localhost:8082 (streamable-HTTP MCP)")
 
+# ui: the standalone agent web UI (M2, issue #2236). Keycloak sign-in is
+# real (Authenticator.RequireAuth guards every app route), but AUTH_MODE
+# defaults to "none" here for local dev with no Keycloak realm running --
+# mirrors manmanv2's identical local-dev default (manmanv2/Tiltfile) and
+# api's own GRPC_AUTH_MODE="none" block above. Set AUTH_MODE=oidc plus the
+# WHAGENT_OIDC_* vars in a local .env to exercise a real sign-in flow
+# against a Keycloak instance of your own. RABBITMQ_URL is wired ahead of
+# actual use (ENV.md "RabbitMQ (event bus)" already documents `ui` as a
+# future htmxsse consumer, FR1-FR4) so no further Tiltfile change is
+# needed once that lands.
+if get_env_bool('ENABLE_WHAGENT_NET_UI', default='true'):
+    k8s_yaml(blob("""
+apiVersion: v1
+kind: Service
+metadata:
+  name: whagent-net-ui
+  namespace: {namespace}
+spec:
+  selector:
+    app: whagent-net-ui
+  ports:
+    - name: http
+      port: 8080
+      targetPort: 8080
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: whagent-net-ui
+  namespace: {namespace}
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: whagent-net-ui
+  template:
+    metadata:
+      labels:
+        app: whagent-net-ui
+    spec:
+      containers:
+      - name: ui
+        image: whagent-net-ui
+        ports:
+        - containerPort: 8080
+          name: http
+        env:
+        - name: WHAGENT_UI_ADDR
+          value: ":8080"
+        - name: AUTH_MODE
+          value: "none"
+        - name: GRPC_AUTH_MODE
+          value: "none"
+        - name: SECRET_KEY
+          value: "dev-secret-key"
+        - name: PG_DATABASE_URL
+          value: "{pg_database_url}"
+        - name: RABBITMQ_URL
+          value: "{rabbitmq_url}"
+        - name: WHAGENT_API_URL
+          value: "whagent-net-api.{namespace}.svc.cluster.local:50051"
+        - name: WHAGENT_OIDC_ISSUER
+          value: "{whagent_oidc_issuer}"
+        - name: OTEL_EXPORTER_OTLP_ENDPOINT
+          value: "{otel_endpoint}"
+""".format(
+        namespace=namespace,
+        pg_database_url=pg_database_url,
+        rabbitmq_url=rabbitmq_url,
+        whagent_oidc_issuer=whagent_oidc_issuer,
+        otel_endpoint=otel_endpoint,
+    )))
+
+    ui_deps = ['rabbitmq-vhost-setup']
+    if get_env_bool('ENABLE_WHAGENT_NET_MIGRATE', default='true'):
+        ui_deps.append('whagent-net-migrate')
+    if get_env_bool('ENABLE_WHAGENT_NET_API', default='true'):
+        ui_deps.append('whagent-net-api')
+
+    k8s_resource(
+        'whagent-net-ui',
+        resource_deps=ui_deps,
+        port_forwards=['8081:8080'],
+        labels=['whagent-net'],
+    )
+    print("🌐 ui forwarded to http://localhost:8081")
+
 # ===========================
 # Access Information
 # ===========================
@@ -482,6 +574,7 @@ print("  RabbitMQ Mgmt:   http://localhost:15672")
 print("  api (gRPC):      localhost:50054")
 print("  api (JWKS):      http://localhost:8090/.well-known/jwks.json")
 print("  mcp (MCP):       http://localhost:8082/")
+print("  ui:              http://localhost:8081/")
 print("="*60)
 
 print_footer_info('whagent-net')
