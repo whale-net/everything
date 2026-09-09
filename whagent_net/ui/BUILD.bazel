@@ -62,6 +62,7 @@ go_test(
     srcs = [
         "grpc_client_test.go",
         "main_test.go",
+        "mcpauth_test.go",
     ],
     embed = [":ui_lib"],
     deps = [
@@ -75,6 +76,48 @@ go_test(
         "@org_golang_google_grpc//:grpc",
         "@org_golang_google_grpc//metadata",
         "@org_golang_google_grpc//test/bufconn",
+    ],
+)
+
+# Real-Postgres coverage for mcpCallerResolver's tampered/expired/valid
+# session cases (issue #2245's Testing section) and the full
+# authorization-code + PKCE bootstrap round trip against the actually-
+# mounted Provider (discovery -> registration -> /authorize -> /token ->
+# a credential whose stored identity is the encoded (iss, sub) pair), plus
+# the "/authorize while signed out redirects to /login" case -- mirrors
+# audience_score_system/mcp/server/oauth_bootstrap_integration_test.go's
+# shape, reduced to the single-binary (authorization-server-only) case
+# this task builds. Deliberately NOT part of `bazel test //...` -- see
+# //libs/go/dbtest's README.
+#
+# Run it explicitly (requires a working Docker daemon):
+#   bazel test //whagent_net/ui:ui_integration_test --test_output=all
+go_test(
+    name = "ui_integration_test",
+    size = "large",
+    timeout = "long",
+    srcs = ["mcpauth_integration_test.go"],
+    embed = [":ui_lib"],
+    gotags = ["integration"],
+    tags = [
+        "external",
+        "integration",
+        "manual",
+        "no-cache",
+        "no-sandbox",
+        "requires-network",
+    ],
+    deps = [
+        "//libs/go/dbtest",
+        "//libs/go/htmxauth",
+        "//libs/go/mcpauth",
+        "//libs/go/migrate",
+        "//whagent_net/mcpidentity",
+        "//whagent_net/migrate/schema",
+        "@com_github_jackc_pgx_v5//pgxpool",
+        "@com_github_jackc_pgx_v5//stdlib",
+        "@com_github_stretchr_testify//assert",
+        "@com_github_stretchr_testify//require",
     ],
 )
 

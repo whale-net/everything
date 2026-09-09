@@ -1,4 +1,4 @@
-load("@rules_go//go:def.bzl", "go_library")
+load("@rules_go//go:def.bzl", "go_library", "go_test")
 
 # Encode/Decode for the (iss, sub) identity pair mcpauth's Provider
 # resolves a signed-in whagent-net operator to (NFR7, issue #2245) --
@@ -10,4 +10,16 @@ go_library(
     srcs = ["identity.go"],
     importpath = "github.com/whale-net/everything/whagent_net/mcpidentity",
     visibility = ["//visibility:public"],
+)
+
+# Pure-Go round-trip and malformed-input coverage (issue #2245's Testing
+# section) -- no database, no HTTP, runs as part of `bazel test //...`.
+go_test(
+    name = "mcpidentity_test",
+    srcs = ["identity_test.go"],
+    embed = [":mcpidentity"],
+    deps = [
+        "@com_github_stretchr_testify//assert",
+        "@com_github_stretchr_testify//require",
+    ],
 )
