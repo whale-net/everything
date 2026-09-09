@@ -1,0 +1,63 @@
+package components
+
+// Blade and BladeTabs are htmxui-liftability candidates (NFR1): the plan
+// names the Blade layer/scrim and the tab strip as the expected new
+// components for M5, written so they can be lifted into libs/go/htmxui
+// unchanged. Accordingly neither imports a manmanv2 domain type, references
+// a manmanv2 route string, or knows anything about deployments/configs --
+// everything domain-specific arrives as a BladeData/BladeTab field or as
+// children. They are scaffolded here in manmanv2/ui/components (not
+// libs/go/htmxui directly) only because #2269 is manmanv2-scoped groundwork
+// for M5's two blade tasks; the lift itself is a separate, later move, not
+// a rewrite.
+//
+// Scaffold note (#2269): this is the skeleton -- the scrim-click/Escape
+// dismissal, focus trap, and section-granularity dirty-tracking handlers
+// (FR10) are Implementation-phase work, not yet wired here.
+
+// Blade renders a single dismissible layer over the surface that launched
+// it (FR10, decision 6: never over another Blade -- callers are
+// responsible for opening at most one Blade at a time). children... is the
+// blade's body content, rendered inside the panel below the title/subtitle
+// header.
+templ Blade(data BladeData) {
+	<div id={ data.ID } class="fixed inset-0 z-40" data-blade role="presentation">
+		<div class="fixed inset-0 bg-black/40" data-blade-scrim aria-hidden="true"></div>
+		<div
+			class="fixed inset-y-0 right-0 z-50 w-full max-w-lg bg-base-100 shadow-xl overflow-y-auto"
+			role="dialog"
+			aria-modal="true"
+			aria-labelledby={ data.ID + "-title" }
+			data-blade-panel
+		>
+			<div class="px-6 py-4 border-b border-base-300">
+				<h2 id={ data.ID + "-title" } class="text-lg font-semibold">{ data.Title }</h2>
+				if data.Subtitle != "" {
+					<p class="text-sm opacity-70">{ data.Subtitle }</p>
+				}
+			</div>
+			<div class="p-6">
+				{ children... }
+			</div>
+		</div>
+	</div>
+}
+
+// BladeTabs renders the tab strip a Blade's body composes when it holds
+// multiple sections (FR13 fixes this structure for the Config Editor's
+// three tabs). activeID marks exactly one tab active by BladeTab.ID match;
+// an activeID with no matching tab renders no tab as active. Switching
+// tabs is a caller-owned behavior (e.g. an htmx swap of the panel body
+// scoped to stay inside this Blade) -- BladeTabs itself only renders the
+// strip markup.
+templ BladeTabs(tabs []BladeTab, activeID string) {
+	<div role="tablist" class="tabs tabs-bordered" data-blade-tabs>
+		for _, tab := range tabs {
+			if tab.ID == activeID {
+				<a role="tab" class="tab tab-active" data-blade-tab-id={ tab.ID } aria-selected="true">{ tab.Label }</a>
+			} else {
+				<a role="tab" class="tab" data-blade-tab-id={ tab.ID } aria-selected="false">{ tab.Label }</a>
+			}
+		}
+	</div>
+}
