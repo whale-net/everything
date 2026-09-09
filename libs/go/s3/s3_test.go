@@ -2,9 +2,13 @@ package s3
 
 import (
 	"context"
+	"errors"
+	"fmt"
 	"net/url"
 	"testing"
 	"time"
+
+	"github.com/aws/aws-sdk-go-v2/service/s3/types"
 )
 
 // TestPresignPublicGetURL covers issue #979/#983/#1101's PresignPublicGetURL
@@ -116,5 +120,62 @@ func TestPresignPublicGetURL_NoPublicEndpointConfigured(t *testing.T) {
 	}
 	if _, err := c.PresignPublicGetURL(context.Background(), "key", time.Minute); err == nil {
 		t.Error("expected an error with no public endpoint configured, got nil")
+	}
+}
+
+// TestIsNoSuchKey covers every detection branch IsNoSuchKey's doc comment
+// claims (manmanv2 #2187, FR12's "object already absent is a success"
+// eviction convergence): the two typed AWS SDK errors, the string-matching
+// fallback for S3-compatible endpoints that don't return one, an unrelated
+// error, and nil. cache_test.go's fakePresigner only ever drives the
+// string-fallback branch (it fakes the narrow cachePresigner interface, not
+// a real AWS SDK error), so the typed branches -- what a real S3 endpoint
+// actually returns -- have no coverage without this.
+//
+// Note the "typed" cases don't actually isolate the errors.As branch from
+// the string-fallback one below it: types.NotFound{}.Error() and
+// types.NoSuchKey{}.Error() both happen to start with their own type name
+// ("NotFound: ", "NoSuchKey: "), so the string fallback would also catch
+// them -- confirmed by deliberately deleting the errors.As checks and
+// observing these two cases stay green while the string-fallback-only cases
+// below go red. They're kept anyway to pin the real SDK types' actual
+// behavior (including through Delete's %w wrapping, which the string-only
+// cases don't exercise); the string-fallback cases are what carry the
+// red/green proof for this test.
+//
+// Also checks both typed cases survive being wrapped with %w the way
+// Delete's own fmt.Errorf("failed to delete from S3: %w", err) wraps them --
+// EvictCacheEntry's NoSuchKey convergence calls IsNoSuchKey on exactly that
+// wrapped error, never the raw SDK error, so a wrapping regression that
+// silently dropped %w down to %v would break real eviction convergence
+// without failing anywhere else in this repo.
+func TestIsNoSuchKey(t *testing.T) {
+	deleteWrap := func(err error) error {
+		return fmt.Errorf("failed to delete from S3: %w", err)
+	}
+
+	cases := []struct {
+		name string
+		err  error
+		want bool
+	}{
+		{"nil error", nil, false},
+		{"typed types.NotFound", &types.NotFound{}, true},
+		{"typed types.NoSuchKey", &types.NoSuchKey{}, true},
+		{"typed types.NotFound wrapped via Delete's %w", deleteWrap(&types.NotFound{}), true},
+		{"typed types.NoSuchKey wrapped via Delete's %w", deleteWrap(&types.NoSuchKey{}), true},
+		{"string-fallback NoSuchKey", errors.New("simulated: NoSuchKey: the specified key does not exist"), true},
+		{"string-fallback NotFound", errors.New("simulated: NotFound"), true},
+		{"string-fallback 404 status", errors.New("simulated: StatusCode: 404, RequestID: abc123"), true},
+		{"unrelated error", errors.New("simulated: connection refused"), false},
+		{"unrelated error wrapped via Delete's %w", deleteWrap(errors.New("simulated: access denied")), false},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := IsNoSuchKey(tc.err); got != tc.want {
+				t.Errorf("IsNoSuchKey(%v) = %v, want %v", tc.err, got, tc.want)
+			}
+		})
 	}
 }
