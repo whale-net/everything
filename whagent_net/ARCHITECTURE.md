@@ -321,16 +321,20 @@ category alone, without reading the transcript.
 ## Embeddable session UI
 
 Every web UI in this repo is Go + `templ` + htmx, so "a session component
-other UIs can embed" is a **Go package, not a JS bundle**. `embed` is
-imported by the host binary and mounted same-origin, so the host's existing
-authn (`htmxauth`, or `audience_score_system/web`'s own Google OAuth flow)
-applies unchanged. Live updates come from an `htmxsse.Hub` the host builds
-on `whagent/events`; `embed` renders fragments via `api` reads and swaps
-them on SSE. Hosts that have no SSE today (ASS `web` is form-POST-only)
-gain it only on the embedded routes.
-
-`whagent_net/ui` is `embed`'s first consumer so the component is proven
-before any other domain imports it.
+other UIs can embed" is a **Go package, not a JS bundle**. As of M2, that
+package does not exist yet: `whagent_net/ui/components` (e.g.
+`session.templ`, the session detail page's transcript/state-badge/composer
+component) renders in place, directly inside `ui`, with no `embed` package
+in between. Extraction of these components into a standalone `embed`
+package — imported by a host binary and mounted same-origin, so the host's
+existing authn (`htmxauth`, or `audience_score_system/web`'s own Google
+OAuth flow) applies unchanged — is deferred to M3/C19, when
+`audience_score_system/web` becomes the first other-domain consumer. Live
+updates already come from an `htmxsse.Hub` the host builds on
+`whagent/events` (LB7); at M3, `embed` renders fragments via `api` reads
+and swaps them on SSE the same way `ui` does today. Hosts that have no SSE
+today (ASS `web` is form-POST-only) will gain it only on the embedded
+routes.
 
 ## Identity and auth chaining
 

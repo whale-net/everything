@@ -5,10 +5,11 @@
 // whagent-net-specific login mechanism and no local user table -- and
 // every outbound call to `api` forwards that operator's own access token
 // (//libs/go/grpcauth), never a shared service account (mirrors `mcp`'s
-// FR10 stance, ARCHITECTURE.md "Identity and auth chaining"). Real
-// session pages (FR1-FR4) and the MCP OAuth2 provider (FR9) mount onto
-// what this task builds; today this binary only serves a placeholder
-// authenticated index page.
+// FR10 stance, ARCHITECTURE.md "Identity and auth chaining"). The session
+// detail page and its live transcript over an htmxsse.Hub (FR2, issue
+// #2242) are the first real page; lifecycle controls (FR1), the usage
+// panel (FR4), and the MCP OAuth2 provider (FR9) mount onto what this
+// task builds in later tasks under plan #2233.
 package main
 
 import (
@@ -26,7 +27,10 @@ import (
 	"github.com/whale-net/everything/libs/go/db"
 	"github.com/whale-net/everything/libs/go/grpcauth"
 	"github.com/whale-net/everything/libs/go/htmxauth"
+	"github.com/whale-net/everything/libs/go/htmxsse"
 	"github.com/whale-net/everything/libs/go/logging"
+	"github.com/whale-net/everything/libs/go/rmq"
+	"github.com/whale-net/everything/whagent_net/events"
 )
 
 // config holds `ui`'s configuration, loaded entirely from environment
@@ -78,6 +82,14 @@ type config struct {
 	// forwarded to `api` on outbound calls (grpcauth.NewUserTokenDialOption).
 	// Should match `api`'s own GRPC_AUTH_MODE (ENV.md "`api` server").
 	GRPCAuthMode string
+
+	// RabbitMQURL backs the live session detail page's htmxsse.Hub (FR2,
+	// NFR2, issue #2242) -- ENV.md's "RabbitMQ (event bus)" section
+	// already documents RABBITMQ_URL as applying to `ui`. Unset or an
+	// unreachable broker must not fail boot (NFR2's degrade-and-retry
+	// stance, mirrored from manmanv2/ui and tools/app_registry/ui's own
+	// initializeSSEHub) -- see initializeSSEHub's doc comment.
+	RabbitMQURL string
 }
 
 func loadConfig() config {
@@ -92,6 +104,7 @@ func loadConfig() config {
 		DatabaseURL:      getEnv("PG_DATABASE_URL", ""),
 		APIAddr:          getEnv("WHAGENT_API_URL", ""),
 		GRPCAuthMode:     strings.ToLower(getEnv("GRPC_AUTH_MODE", "none")),
+		RabbitMQURL:      getEnv("RABBITMQ_URL", ""),
 	}
 }
 
@@ -106,6 +119,19 @@ func getEnv(key, def string) string {
 type App struct {
 	auth    *htmxauth.Authenticator
 	session *SessionClient
+
+	// oidcIssuer is the signed-in operator's iss for FR2's read-only
+	// gating (isSessionOwner, handlers_session.go) -- cfg.OIDCIssuer
+	// verbatim, never a per-token claim; see isSessionOwner's doc comment
+	// for why.
+	oidcIssuer string
+
+	// sseHub backs the live session detail page (handlers_session_live.go,
+	// FR2/NFR2). nil when RabbitMQURL is unset or the broker was
+	// unreachable at startup (initializeSSEHub) -- handleSessionEvents
+	// degrades to 503 in that case rather than the whole binary failing
+	// to boot.
+	sseHub *htmxsse.Hub
 }
 
 // NewApp wires up Keycloak sign-in (NFR1) and the authenticated `api`
@@ -171,13 +197,60 @@ func NewApp(ctx context.Context, cfg config) (*App, error) {
 	}
 
 	return &App{
-		auth:    auth,
-		session: sessionClient,
+		auth:       auth,
+		session:    sessionClient,
+		oidcIssuer: cfg.OIDCIssuer,
+		sseHub:     initializeSSEHub(cfg),
 	}, nil
+}
+
+// initializeSSEHub dials RabbitMQ and builds the htmxsse.Hub backing the
+// live session detail page (FR2, NFR2, LB7, issue #2242). Mirrors
+// manmanv2/ui/main.go's initializeSSEHub (itself mirroring
+// tools/app_registry/ui/main.go's) and events.RoutingKey's scheme
+// (ARCHITECTURE.md "Event bus").
+//
+// RabbitMQURL unset or the broker unreachable must not prevent `ui` from
+// starting or serving any other route (NFR2's degrade-and-retry stance):
+// this returns nil in that case, logged as a WARNING, and
+// handleSessionEvents responds 503 so the client's reconnect loop
+// retries. Attach is lazy in htmxsse (Hub.Subscribe triggers it), so an
+// unreachable-but-configured broker already degrades correctly on its
+// own once a connection is returned here.
+func initializeSSEHub(cfg config) *htmxsse.Hub {
+	logger := logging.Get("main")
+
+	if cfg.RabbitMQURL == "" {
+		logger.Warn("RABBITMQ_URL not set; live session updates (/sessions/{id}/events) disabled")
+		return nil
+	}
+
+	conn, err := rmq.NewConnectionFromURL(cfg.RabbitMQURL)
+	if err != nil {
+		logger.Warn("failed to connect to RabbitMQ; live session updates (/sessions/{id}/events) disabled", "error", err)
+		return nil
+	}
+
+	// events.DeclareArgs() matches htmxsse.DefaultAttachFunc's own
+	// hardcoded declare call byte-for-byte (topic/durable=true/
+	// autoDelete=false/internal=false/noWait=false/args=nil) -- see
+	// events.go's doc comment -- so the library's default attach func is
+	// used directly rather than a local copy that could drift.
+	attachFunc := htmxsse.DefaultAttachFunc(events.ExchangeName, conn)
+
+	hubConfig := htmxsse.DefaultConfig()
+	hubConfig.ExchangeName = events.ExchangeName
+
+	return htmxsse.NewHub(attachFunc, hubConfig)
 }
 
 // Close releases this App's resources.
 func (app *App) Close() error {
+	if app.sseHub != nil {
+		if err := app.sseHub.Close(); err != nil {
+			logging.Get("main").Warn("error closing SSE hub", "error", err)
+		}
+	}
 	if app.session != nil {
 		return app.session.Close()
 	}
@@ -276,6 +349,12 @@ func (app *App) setupRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("/logout", app.auth.HandleLogout)
 
 	mux.HandleFunc("/", app.auth.RequireAuthFunc(app.auth.WithAccessToken(app.handleIndex)))
+
+	// Session detail (FR2, NFR2, NFR3, issue #2242): full page and its SSE
+	// stream. The SSE route is wrapped with RequireAuthFunc only, never
+	// WithAccessToken -- see handleSessionEvents' doc comment.
+	mux.HandleFunc("GET /sessions/{id}", app.auth.RequireAuthFunc(app.auth.WithAccessToken(app.handleSessionDetail)))
+	mux.HandleFunc("GET /sessions/{id}/events", app.auth.RequireAuthFunc(app.handleSessionEvents))
 }
 
 func handleHealthz(w http.ResponseWriter, r *http.Request) {

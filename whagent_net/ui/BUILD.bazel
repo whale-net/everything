@@ -1,6 +1,8 @@
 """whagent-net standalone agent web UI (M2, issue #2236): binary entrypoint,
-Keycloak sign-in, and the authenticated api client. Real session pages
-(FR1-FR4) land in later tasks under the same plan (#2233)."""
+Keycloak sign-in, and the authenticated api client. The session detail page
+and its live transcript (FR2, NFR2, NFR3, NFR4, issue #2242) are this
+package's other consumer; remaining FR1-FR4 pieces land in later tasks
+under the same plan (#2233)."""
 
 load("@rules_go//go:def.bzl", "go_binary", "go_library", "go_test")
 load("//tools/bazel:release.bzl", "release_app")
@@ -8,8 +10,11 @@ load("//tools/bazel:release.bzl", "release_app")
 go_library(
     name = "ui_lib",
     srcs = [
+        "convert.go",
         "grpc_client.go",
         "handlers.go",
+        "handlers_session.go",
+        "handlers_session_live.go",
         "main.go",
         "templ_render.go",
     ],
@@ -21,12 +26,17 @@ go_library(
         "//libs/go/grpcclient",
         "//libs/go/htmxauth",
         "//libs/go/htmxbase",
+        "//libs/go/htmxsse",
+        "//libs/go/htmxsse/templadapter",
         "//libs/go/htmxui",
         "//libs/go/logging",
+        "//libs/go/rmq",
+        "//whagent_net/events",
         "//whagent_net/protos:whagentpb",
         "//whagent_net/ui/components",
         "//whagent_net/ui/pages",
         "@com_github_a_h_templ//:templ",
+        "@com_github_google_uuid//:uuid",
         "@io_opentelemetry_go_contrib_instrumentation_net_http_otelhttp//:otelhttp",
         "@org_golang_google_grpc//:grpc",
     ],
@@ -42,23 +52,36 @@ go_binary(
 # redirect, /healthz reachable without a session, and the api client
 # forwarding the caller's own access token -- mirrors
 # manmanv2/ui/BUILD.bazel's ui_test target shape.
+#
+# handlers_session_test.go/handlers_session_live_test.go (issue #2242's
+# Testing section) added: FR2 owner-gating at the handler level,
+# NFR4/LB1's dedup/order fragment-builder unit tests, and an SSE handler
+# test that a published event produces exactly one swap.
 go_test(
     name = "ui_test",
     size = "small",
     srcs = [
         "grpc_client_test.go",
+        "handlers_session_live_test.go",
+        "handlers_session_test.go",
         "main_test.go",
     ],
     embed = [":ui_lib"],
     deps = [
         "//libs/go/grpcauth",
         "//libs/go/htmxauth",
+        "//libs/go/htmxsse",
+        "//libs/go/rmq",
+        "//whagent_net/events",
         "//whagent_net/protos:whagentpb",
+        "//whagent_net/ui/components",
+        "@com_github_google_uuid//:uuid",
         "@com_github_stretchr_testify//assert",
         "@com_github_stretchr_testify//require",
         "@org_golang_google_grpc//:grpc",
         "@org_golang_google_grpc//metadata",
         "@org_golang_google_grpc//test/bufconn",
+        "@org_golang_google_protobuf//types/known/timestamppb",
     ],
 )
 
