@@ -166,11 +166,18 @@ address, the only outbound dependency this binary dials; `PG_DATABASE_URL`
 (`ui_sessions` table, via `htmxauth.NewDBSessionManager`) -- a distinct
 Postgres *table* from `whagent_net/session`'s domain tables even though it
 shares the same connection string, since `ui` never queries the domain
-tables directly, only through `api`'s gRPC surface.
+tables directly, only through `api`'s gRPC surface. `ui` also hosts
+mcpauth's OAuth2 authorization-server front end (FR9/C27, issue #2245) --
+`WHAGENT_UI_PUBLIC_URL`/`WHAGENT_MCP_PUBLIC_URL` below configure it; it
+shares `PG_DATABASE_URL` too (`mcp_credential`/`mcp_oauth_client`/
+`mcp_auth_code` tables, `whagent_net/migrate/schema/migrations/
+004_mcpauth_credential`).
 
 | Variable | Component | Default | Description |
 |----------|-----------|---------|-------------|
 | `WHAGENT_UI_ADDR` | ui | `:8080` | Listen address for `ui`'s HTTP surface (`GET /healthz` unauthenticated, every other route requiring a Keycloak session). |
 | `AUTH_MODE` | ui | `none` | `none` (dev-only synthetic `dev-user`, `//libs/go/htmxauth.AuthModeNone`) or `oidc` (real Keycloak sign-in, NFR1). Matches manmanv2/ui's and app-registry-ui's own literal `AUTH_MODE` name. |
 | `GRPC_AUTH_MODE` | ui | `none` | `none` or `oidc` (`//libs/go/grpcauth.AuthMode`) -- gates whether the operator's access token is actually forwarded to `api` on outbound calls. Should match `api`'s own `GRPC_AUTH_MODE` above. |
+| `WHAGENT_UI_PUBLIC_URL` | ui | *(required)* | `ui`'s own externally-reachable base URL, e.g. `https://whagent.example.com` -- FR9/issue #2245's `mcpauth.ProviderConfig.Issuer`, the base every mcpauth endpoint URL `ui` advertises (`/authorize`, `/token`, `/register`, `/.well-known/oauth-authorization-server`) is built from. Mirrors `audience_score_system`'s `ASS_OAUTH_REDIRECT_BASE_URL` doubling as mcpauth's issuer (see `audience_score_system/ENV.md`). |
+| `WHAGENT_MCP_PUBLIC_URL` | ui | *(required)* | `mcp`'s own externally-reachable base URL -- FR9's `mcpauth.ProviderConfig.Resource`, the OAuth2 `resource` identifier both binaries must agree on exactly. Must be byte-identical to what `mcp` itself advertises in its own protected-resource metadata (a dependent task, issue #2245's Context section) -- a mismatch breaks an MCP client's RFC 9728 discovery chain. |
 | `SECRET_KEY` | ui | `dev-secret-key-change-in-production` | Encrypts `ui`'s DB-backed session store's access/refresh tokens. Matches manmanv2/ui's and app-registry-ui's own literal `SECRET_KEY` name; distinct from `WHAGENT_SIGNING_KEY` above (JWKS signing, a different purpose entirely). |
