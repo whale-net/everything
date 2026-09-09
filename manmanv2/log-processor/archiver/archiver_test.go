@@ -18,8 +18,9 @@ import (
 
 // mockS3Client implements a simple in-memory S3 for testing
 type mockS3Client struct {
-	storage map[string][]byte
-	mu      sync.RWMutex
+	storage     map[string][]byte
+	mu          sync.RWMutex
+	existsCalls int32
 }
 
 func newMockS3Client() *mockS3Client {
@@ -46,10 +47,15 @@ func (m *mockS3Client) Download(ctx context.Context, key string) ([]byte, error)
 }
 
 func (m *mockS3Client) Exists(ctx context.Context, key string) (bool, error) {
+	atomic.AddInt32(&m.existsCalls, 1)
 	m.mu.RLock()
 	defer m.mu.RUnlock()
 	_, exists := m.storage[key]
 	return exists, nil
+}
+
+func (m *mockS3Client) ExistsCallCount() int32 {
+	return atomic.LoadInt32(&m.existsCalls)
 }
 
 func (m *mockS3Client) Append(ctx context.Context, key string, data []byte, opts *s3.UploadOptions) error {
@@ -646,6 +652,130 @@ func TestUploadGivesUpAfterMaxRetries(t *testing.T) {
 	time.Sleep(50 * time.Millisecond)
 	if got2 := atomic.LoadInt32(&failing.attempts); got2 != got {
 		t.Errorf("archiver kept retrying past maxUploadRetries: attempts grew from %d to %d", got, got2)
+	}
+}
+
+// TestUploadWindowSkipsExistsCheckForFirstWrite is a regression test for
+// issue #1846 ("s3 head error, continues to persist"): a window with no
+// prior log_references row for its (sgc_id, minute_timestamp) is guaranteed
+// to be a first write, since every S3 write to a window's key is always
+// preceded by creating exactly such a row. Calling Exists() (HeadObject) in
+// that case was a guaranteed-404 round trip on the hot path -- every
+// session, every minute -- which is what produced the constant stream of
+// error-status trace spans reported in the issue. uploadWindow must skip
+// the HeadObject call entirely here and go straight to a fresh upload.
+func TestUploadWindowSkipsExistsCheckForFirstWrite(t *testing.T) {
+	sgcID := int64(20)
+	sessionID := int64(200)
+	minuteTimestamp := time.Date(2026, 9, 9, 18, 0, 0, 0, time.UTC)
+	s3Key := fmt.Sprintf("logs/sgc-%d/session-%d/2026/09/09/18/00.log.gz", sgcID, sessionID)
+
+	mockS3 := newMockS3Client()
+	repo := newMockLogRepo()
+
+	a := NewArchiver(mockS3, repo)
+	defer a.Close()
+
+	window := &MinuteWindow{
+		SGCID:           sgcID,
+		SessionID:       sessionID,
+		MinuteTimestamp: minuteTimestamp,
+		FirstLogTime:    minuteTimestamp.Add(1 * time.Second),
+		LastLogTime:     minuteTimestamp.Add(2 * time.Second),
+		LineCount:       1,
+	}
+	window.Buffer.WriteString("[stdout] first write, nothing to check\n")
+
+	if err := a.uploadWindow(context.Background(), window); err != nil {
+		t.Fatalf("uploadWindow failed: %v", err)
+	}
+
+	if calls := mockS3.ExistsCallCount(); calls != 0 {
+		t.Errorf("Exists() was called %d times for a guaranteed-first write, want 0", calls)
+	}
+
+	ctx := context.Background()
+	compressed, err := mockS3.Download(ctx, s3Key)
+	if err != nil {
+		t.Fatalf("failed to download uploaded window: %v", err)
+	}
+	data, err := decompressTestData(compressed)
+	if err != nil {
+		t.Fatalf("failed to decompress uploaded window: %v", err)
+	}
+	if !strings.Contains(string(data), "first write, nothing to check") {
+		t.Error("uploaded data is missing the window's log line")
+	}
+}
+
+// TestUploadWindowChecksExistsWhenPriorRecordExists confirms Exists() is
+// still called -- and its result respected -- when a log_references row
+// already exists for the window's (sgc_id, minute_timestamp), i.e. the case
+// where the S3 object might genuinely already be there and the append path
+// must be used.
+func TestUploadWindowChecksExistsWhenPriorRecordExists(t *testing.T) {
+	sgcID := int64(21)
+	sessionID := int64(201)
+	minuteTimestamp := time.Date(2026, 9, 9, 18, 1, 0, 0, time.UTC)
+	s3Key := fmt.Sprintf("logs/sgc-%d/session-%d/2026/09/09/18/01.log.gz", sgcID, sessionID)
+
+	mockS3 := newMockS3Client()
+	repo := newMockLogRepo()
+
+	a := NewArchiver(mockS3, repo)
+	defer a.Close()
+
+	// Seed a completed prior record plus the object it created, simulating
+	// an earlier successful upload for this same window key.
+	ctx := context.Background()
+	initial, err := compressTestData([]byte("[stdout] earlier line\n"))
+	if err != nil {
+		t.Fatalf("failed to compress seed data: %v", err)
+	}
+	if _, err := mockS3.Upload(ctx, s3Key, initial, nil); err != nil {
+		t.Fatalf("failed to seed S3 object: %v", err)
+	}
+	seedLogRef := &manman.LogReference{
+		SessionID:       sessionID,
+		SGCID:           &sgcID,
+		FilePath:        fmt.Sprintf("s3://%s/%s", mockS3.GetBucket(), s3Key),
+		MinuteTimestamp: &minuteTimestamp,
+		State:           manman.LogStateComplete,
+		CreatedAt:       time.Now().UTC().Add(-time.Hour),
+	}
+	if err := repo.Create(ctx, seedLogRef); err != nil {
+		t.Fatalf("failed to seed log reference: %v", err)
+	}
+	mockS3.existsCalls = 0 // reset the call the seed itself didn't make, for a clean assertion below
+
+	window := &MinuteWindow{
+		SGCID:           sgcID,
+		SessionID:       sessionID,
+		MinuteTimestamp: minuteTimestamp,
+		FirstLogTime:    minuteTimestamp.Add(45 * time.Second),
+		LastLogTime:     minuteTimestamp.Add(50 * time.Second),
+		LineCount:       1,
+	}
+	window.Buffer.WriteString("[stdout] appended line\n")
+
+	if err := a.uploadWindow(ctx, window); err != nil {
+		t.Fatalf("uploadWindow failed: %v", err)
+	}
+
+	if calls := mockS3.ExistsCallCount(); calls != 1 {
+		t.Errorf("Exists() was called %d times, want exactly 1 when a prior record exists", calls)
+	}
+
+	compressed, err := mockS3.Download(ctx, s3Key)
+	if err != nil {
+		t.Fatalf("failed to download uploaded window: %v", err)
+	}
+	data, err := decompressTestData(compressed)
+	if err != nil {
+		t.Fatalf("failed to decompress uploaded window: %v", err)
+	}
+	if !strings.Contains(string(data), "earlier line") || !strings.Contains(string(data), "appended line") {
+		t.Errorf("expected append to preserve both earlier and new data, got: %s", data)
 	}
 }
 
