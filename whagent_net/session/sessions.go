@@ -105,6 +105,42 @@ type Session struct {
 	UpdatedAt       time.Time
 }
 
+// SessionFilter is ListSessions' (FR3/C15) filter set, mirroring
+// ListSessionsRequest's optional fields one-for-one. A nil field means "no
+// filter on this column"; multiple set fields combine with AND. There is
+// no free-text or multi-column-sort field here -- deliberately out of
+// scope for M2 (issue #2241).
+type SessionFilter struct {
+	AgentID *string
+	State   *Status
+	// StartedByKind filters on the session's own subject_kind column
+	// (LB2/NFR3) -- there is no separate identity/display-name table to
+	// join against, in this task or anywhere in M2.
+	StartedByKind *SubjectKind
+	// StartedAfter is an inclusive lower bound on CreatedAt.
+	StartedAfter *time.Time
+	// StartedBefore is an exclusive upper bound on CreatedAt.
+	StartedBefore *time.Time
+}
+
+// SessionPage is List's paging input: PageSize (0 means "server default",
+// mirroring defaultTranscriptLimit/maxTranscriptLimit's shape in
+// api/handlers/session.go) and PageToken, an opaque cursor previously
+// returned as PageInfo.NextPageToken or PageInfo.PrevPageToken. An empty
+// PageToken starts from the first page.
+type SessionPage struct {
+	PageSize  int
+	PageToken string
+}
+
+// PageInfo is List's paging output: opaque cursors for the next/previous
+// page, each encoding a position in the (created_at DESC, session_id DESC)
+// keyset List orders by. Empty means there is no such page.
+type PageInfo struct {
+	NextPageToken string
+	PrevPageToken string
+}
+
 // SessionStore is the `sessions` table's repository interface.
 // UpdateStatus is a compare-and-swap on terminal writes -- the same
 // pattern as manmanv2 control-api/event-processor's
@@ -121,6 +157,13 @@ type SessionStore interface {
 	// compare-and-swap so a stale non-terminal write can never clobber a
 	// terminal status that already committed.
 	UpdateStatus(ctx context.Context, id uuid.UUID, status Status, terminal *TerminalReason) error
+	// List returns sessions matching filter, in (created_at DESC,
+	// session_id DESC) order, keyset-paginated per page (FR3/C15) --
+	// sessions from any subject, not just the caller's own (that
+	// visibility rule is enforced by the caller, api/handlers/session.go,
+	// not here). Scaffold: unimplemented skeleton, returns nil/zero-value/
+	// nil; the Implementation phase fills in the parameterized query.
+	List(ctx context.Context, filter SessionFilter, page SessionPage) ([]*Session, PageInfo, error)
 }
 
 // sessionStore is the Postgres-backed SessionStore implementation.
@@ -262,3 +305,12 @@ func (s sessionStore) UpdateStatus(ctx context.Context, id uuid.UUID, status Sta
 // terminal values, kept in one place so UpdateStatus's CAS predicate
 // cannot drift from IsTerminal's Go-side definition.
 const terminalStatusList = `'done', 'stopped', 'failed', 'capped'`
+
+// List is a Scaffold-phase skeleton (issue #2241): the Implementation
+// phase replaces this with a single parameterized query applying filter
+// in SQL (never an unbounded fetch filtered in Go), keyset-paginated on
+// (created_at DESC, session_id DESC) per SessionPage/PageInfo's doc
+// comments.
+func (s sessionStore) List(ctx context.Context, filter SessionFilter, page SessionPage) ([]*Session, PageInfo, error) {
+	return nil, PageInfo{}, nil
+}
