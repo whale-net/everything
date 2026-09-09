@@ -64,7 +64,7 @@ before any session row is written -- a separate in-process cache from
 | `WHAGENT_DEFAULT_MAX_TURNS` | api | `100` | Per-session turn cap default. |
 | `WHAGENT_DEFAULT_MAX_COST_USD` | api | `1` | Per-session cost cap default. |
 | `WHAGENT_MODEL_CATALOG_TTL` | worker, api | `5m` | How long `llm.Catalog` caches OpenRouter's model list (FR5) before refetching. |
-| `WHAGENT_PRICE_TABLE_PATH` | worker | *(required)* | Path to the per-model price table `llm.LoadPriceTable` reads (LB6: contents and source stay cheap to change -- a config file, not a code table). JSON object keyed on model id, e.g. `{"openai/gpt-4o": {"prompt_usd_per_million": 2.5, "completion_usd_per_million": 10}}`; read fresh on every call, so an edit takes effect without a code change. |
+| `WHAGENT_PRICE_TABLE_PATH` | worker | `/etc/whagent-net/prices.json` | Path to the per-model price table `llm.LoadPriceTable` reads (LB6: contents and source stay cheap to change -- a config file, not a code table). JSON object keyed on model id, e.g. `{"openai/gpt-4o": {"prompt_usd_per_million": 2.5, "completion_usd_per_million": 10}}`; read fresh on every call, so an edit takes effect without a code change. The default path is baked into the worker image at build time from the checked-in `//whagent_net/config:prices.json` (worker's BUILD.bazel `pkg_tar`/`additional_tars`, issue #2221) -- override to point at a mounted file instead (e.g. a ConfigMap) if prices need to change without a worker image rebuild/redeploy. |
 
 ## Identity (OIDC / Keycloak)
 

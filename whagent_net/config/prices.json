@@ -1,0 +1,6 @@
+{
+  "anthropic/claude-sonnet-4.5": {
+    "prompt_usd_per_million": 3.0,
+    "completion_usd_per_million": 15.0
+  }
+}

@@ -22,6 +22,12 @@ import (
 	"github.com/whale-net/everything/whagent_net/worker/tools"
 )
 
+// defaultPriceTablePath is WHAGENT_PRICE_TABLE_PATH's default (ENV.md,
+// issue #2221): where //whagent_net/worker's BUILD.bazel (pkg_tar +
+// additional_tars) bakes the checked-in //whagent_net/config:prices.json
+// into the worker image.
+const defaultPriceTablePath = "/etc/whagent-net/prices.json"
+
 func main() {
 	if err := run(); err != nil {
 		logging.Get("main").Error("fatal", "error", err)
@@ -70,17 +76,14 @@ func run() error {
 	// resolveCost (activities.go) falls back to this only when the
 	// provider omits cost in its response (uncommon with
 	// usage.include=true, but not guaranteed for every model/provider
-	// combination on OpenRouter); left nil when unset rather than failing
-	// startup, since a process that only ever sees provider-reported cost
-	// never dereferences it.
-	var prices *llm.PriceTable
-	if priceTablePath := os.Getenv("WHAGENT_PRICE_TABLE_PATH"); priceTablePath != "" {
-		prices, err = llm.LoadPriceTable(priceTablePath)
-		if err != nil {
-			return fmt.Errorf("load price table: %w", err)
-		}
-	} else {
-		logger.Warn("WHAGENT_PRICE_TABLE_PATH not set; cost estimation will be unavailable if the provider ever omits usage cost")
+	// combination on OpenRouter). Defaults to defaultPriceTablePath, which
+	// //whagent_net/worker's BUILD.bazel bakes into the image
+	// (config/prices.json via pkg_tar/additional_tars, issue #2221) --
+	// still overridable to a mounted/ConfigMap path, since LoadPriceTable
+	// re-reads it on every call regardless of where it points.
+	prices, err := llm.LoadPriceTable(getEnv("WHAGENT_PRICE_TABLE_PATH", defaultPriceTablePath))
+	if err != nil {
+		return fmt.Errorf("load price table: %w", err)
 	}
 
 	// Persona issuer + tool dispatcher (issue #2118/#2121; ARCHITECTURE.md

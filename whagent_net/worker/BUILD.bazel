@@ -1,6 +1,7 @@
 """whagent-net Temporal worker: SessionWorkflow + per-turn activities (issue #2114)."""
 
 load("@rules_go//go:def.bzl", "go_binary", "go_library", "go_test")
+load("@rules_pkg//:pkg.bzl", "pkg_tar")
 load("//tools/bazel:release.bzl", "release_app")
 
 go_library(
@@ -115,6 +116,20 @@ go_test(
     ],
 )
 
+# Bakes the default per-model price table (//whagent_net/config:prices.json,
+# issue #2221) into the worker image at a fixed path, mirroring
+# leaflab/emulator's scenarios_tar precedent: chosen over requiring a
+# ConfigMap/volume-mount so the image is self-contained and
+# WHAGENT_PRICE_TABLE_PATH (ENV.md) has a real default regardless of how
+# the container is launched (Tilt, argok8s, or a bare `docker run`).
+pkg_tar(
+    name = "prices_tar",
+    srcs = ["//whagent_net/config:prices_json"],
+    mode = "0644",
+    package_dir = "/etc/whagent-net",
+    visibility = ["//visibility:private"],
+)
+
 # Release metadata. domain "whagent-net" + name "worker" matches the binary
 # table in whagent_net/README.md. app_type "worker": a long-running
 # background process hosting SessionWorkflow, not an API (no port) and not
@@ -126,4 +141,5 @@ release_app(
     domain = "whagent-net",
     description = "whagent-net Temporal worker (SessionWorkflow)",
     app_type = "worker",
+    additional_tars = [":prices_tar"],
 )

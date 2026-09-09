@@ -1,5 +1,11 @@
 """whagent-net agent-definition seed config: agents.yaml + its Go decode/
-validate shape (issue #2121)."""
+validate shape (issue #2121). Also exports prices.json (issue #2221), a
+plain (non-embedded) data file worker's BUILD.bazel bakes into the worker
+image via pkg_tar/additional_tars -- unlike agents.yaml, prices.json must
+stay a real on-disk file (LB6: "contents and source stay cheap to
+change"), not go:embed, so llm.LoadPriceTable's every-call re-read still
+picks up an edit without a Go rebuild if the path is ever pointed at a
+mounted file instead."""
 
 load("@rules_go//go:def.bzl", "go_library", "go_test")
 
@@ -26,4 +32,15 @@ go_test(
         "@com_github_stretchr_testify//assert",
         "@com_github_stretchr_testify//require",
     ],
+)
+
+# Default per-model price table (issue #2221): baked into the worker image
+# at a fixed path by //whagent_net/worker's pkg_tar/additional_tars, so
+# WHAGENT_PRICE_TABLE_PATH has a real default (worker/main.go) instead of
+# nothing for argok8s's chart to point at. See prices.json's sibling doc
+# comment above and whagent_net/ENV.md.
+filegroup(
+    name = "prices_json",
+    srcs = ["prices.json"],
+    visibility = ["//whagent_net/worker:__pkg__"],
 )
