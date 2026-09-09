@@ -8,6 +8,7 @@ go_library(
         "session.go",
         "start.go",
         "stop.go",
+        "usage.go",
     ],
     importpath = "github.com/whale-net/everything/whagent_net/api/handlers",
     visibility = ["//visibility:public"],

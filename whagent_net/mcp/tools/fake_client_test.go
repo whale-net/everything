@@ -80,3 +80,10 @@ func (f *fakeSessionServiceClient) ReadTranscript(ctx context.Context, in *pb.Re
 	}
 	return f.readTranscriptFunc(ctx, in)
 }
+
+// GetSessionUsage has no matching tool yet (issue #2238 is the RPC's
+// read-path task; a UI/tool consumer is separate scope) -- any test that
+// reaches this is exercising a code path this package must never have.
+func (f *fakeSessionServiceClient) GetSessionUsage(context.Context, *pb.GetSessionUsageRequest, ...grpc.CallOption) (*pb.GetSessionUsageResponse, error) {
+	panic("fakeSessionServiceClient: GetSessionUsage called -- no whagent-net mcp tool forwards to this RPC")
+}
