@@ -10,7 +10,7 @@ This file is the canonical entry point for LeafLab's product scope. Start here, 
 | Capability map | [product/02-capability-map.md](product/02-capability-map.md) | To find the `Cn` a requirement traces to, or to see what is deliberately deferred |
 | Roadmap | [product/03-roadmap.md](product/03-roadmap.md) | Before designing a milestone — its outcome sentence, `Delivers`, `Must not foreclose`, and `FR budget` |
 
-Live milestone status is **not** in this file. It is tracked as `Ledger: M<n> → <status>` comments on the `Product: leaflab` tracking issue — see `tools/project-manager/CONVENTIONS.md` § Roadmap ledger.
+Live milestone status is **not** in this file. It is tracked as `Ledger: M<n> → <status>` comments on the [`Product: leaflab` tracking issue (#1491)](https://github.com/whale-net/everything/issues/1491) — see `tools/project-manager/CONVENTIONS.md` § Roadmap ledger.
 
 ---
 
