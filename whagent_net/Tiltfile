@@ -462,13 +462,21 @@ spec:
           value: ":8082"
         - name: WHAGENT_API_URL
           value: "whagent-net-api.{namespace}.svc.cluster.local:50051"
+        - name: WHAGENT_MCP_PUBLIC_URL
+          value: "http://localhost:8082"
+        - name: WHAGENT_UI_PUBLIC_URL
+          value: "http://localhost:8081"
+        - name: PG_DATABASE_URL
+          value: "{pg_database_url}"
         - name: OTEL_EXPORTER_OTLP_ENDPOINT
           value: "{otel_endpoint}"
-""".format(namespace=namespace, otel_endpoint=otel_endpoint)))
+""".format(namespace=namespace, pg_database_url=pg_database_url, otel_endpoint=otel_endpoint)))
 
     mcp_deps = []
     if get_env_bool('ENABLE_WHAGENT_NET_API', default='true'):
         mcp_deps.append('whagent-net-api')
+    if get_env_bool('ENABLE_WHAGENT_NET_MIGRATE', default='true'):
+        mcp_deps.append('whagent-net-migrate')
 
     k8s_resource(
         'whagent-net-mcp',

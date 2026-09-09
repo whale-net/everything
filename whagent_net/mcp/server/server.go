@@ -28,8 +28,16 @@ var Implementation = &mcp.Implementation{
 // call's context so it can be forwarded again, unchanged, to `api`. Holds
 // no state of its own -- statelessness lives entirely in `api` and its
 // store, never here.
-func New() *mcp.Server {
+//
+// exchanger backs AuthMiddleware's OAuth2/token-exchange branch (FR9,
+// issue #2249) -- main.go always constructs one (server.NewKeycloakExchanger),
+// even when TokenExchangeConfig.Enabled() is false, so this parameter is
+// never nil in production; a disabled exchanger simply errors if
+// AuthMiddleware ever tries to use it (which it never does unless
+// NewVerifier's credentials dependency is also configured -- see
+// NewHTTPHandler).
+func New(exchanger Exchanger) *mcp.Server {
 	srv := mcp.NewServer(Implementation, nil)
-	srv.AddReceivingMiddleware(AuthMiddleware)
+	srv.AddReceivingMiddleware(AuthMiddleware(exchanger))
 	return srv
 }

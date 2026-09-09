@@ -390,6 +390,63 @@ the on-behalf-of subject simply cannot control a session it didn't start.
 `whagent_net/api/handlers/session.go`'s `canControl` is the single place
 this control rule lives; no other handler re-derives it.
 
+**`mcp`'s OAuth2 credential and RFC 8693 token exchange (FR9,
+NFR7/NFR8, issues #2245/#2249).** `api` verifies real Keycloak-signed
+JWTs and nothing else — that verifier is unchanged by FR9
+(`libs/go/grpcauth`). `mcp` accepts a second credential shape alongside
+the manual Keycloak access token (`README.md` "Browser-based sign-in"):
+an opaque bearer credential `ui`'s own OAuth2 authorization-server front
+end (`libs/go/mcpauth.Provider`, mounted by `whagent_net/ui/mcpauth.go`)
+mints for an operator already signed in there. That credential resolves
+(via `mcpauth.CredentialStore.Verify`) to the operator's own real
+Keycloak `(iss, sub)` — packed into `mcpauth.CredentialStore`'s opaque
+`Identity` string by `whagent_net/mcpidentity.Encode`/`Decode`, the one
+place that packing happens (NFR7) — never a new whagent-net-only
+identity. Because `api` cannot verify that opaque credential directly,
+`mcp` (`whagent_net/mcp/server/auth.go`'s dual-path verifier,
+`tokenexchange.go`'s `KeycloakExchanger`) exchanges the resolved identity
+for a short-lived, real Keycloak-signed JWT — RFC 8693
+(`grant_type=urn:ietf:params:oauth:grant-type:token-exchange`,
+`requested_subject=<sub>`) against `mcp`'s own confidential Keycloak
+client — before ever calling `api`, exactly once per call not already
+covered by the in-memory, per-identity cache (never persisted, always
+refreshed shortly before the exchanged token's own expiry). The result:
+a session started through the browser/OAuth2 path is indistinguishable
+downstream from one started with a manually-pasted token — same
+`subject` shape for every rule above.
+
+This confidential client (`WHAGENT_MCP_KEYCLOAK_CLIENT_ID`/
+`WHAGENT_MCP_KEYCLOAK_CLIENT_SECRET`/`WHAGENT_MCP_KEYCLOAK_TOKEN_URL`,
+`ENV.md`) is deliberately **separate** from the
+`WHAGENT_OIDC_CLIENT_ID`/`WHAGENT_OIDC_CLIENT_SECRET` pair `ui` and `mcp`
+already hold for the manual-token recipe: that pair only ever verifies
+or forwards a token neither binary minted itself, while this one
+actively mints a new Keycloak-signed JWT asserting an arbitrary
+operator's identity. **NFR8 — secret custody and blast radius:**
+whatever process holds `WHAGENT_MCP_KEYCLOAK_CLIENT_SECRET` can mint a
+Keycloak-signed JWT as *any* operator who currently holds an active
+`ui` web-UI session — this is a materially larger blast radius than the
+manual-token recipe's client (which can never mint a token, only
+verify/forward one already minted by Keycloak itself) or than a leaked
+manual token (which is scoped to the one operator who pasted it). The
+secret is read from the environment only, provisioned as a Kubernetes
+secret (never checked in, never logged, never echoed in an error message
+— `tokenexchange.go`'s `errExchangeFailed`/`errExchangeDisabled` are the
+only errors `Exchange` returns, and neither varies with or embeds the
+request that produced it), and `mcp`'s own startup
+(`initializeTokenExchange`, `main.go`) refuses to boot with a reachable
+`mcp_credential` table but no exchange client configured (NFR8's
+fail-loud requirement) rather than let every OAuth2-path call fail
+opaquely at request time. **Rotation:** rotate
+`WHAGENT_MCP_KEYCLOAK_CLIENT_SECRET` by regenerating the client secret in
+Keycloak's admin console (the confidential client's **Credentials** tab)
+and updating the Kubernetes secret + redeploying `mcp` — there is no
+in-flight state to migrate (the exchange cache is in-memory only, and a
+credential in `mcp_credential` is independent of this secret entirely),
+so a rotation is a plain redeploy, not a data migration. Keycloak-side
+setup (granting this client token-exchange/impersonation rights) is
+documented in `libs/go/grpcauth/KEYCLOAK.md`'s token-exchange section.
+
 Chain: subject → `api` → `worker` → domain MCP server → domain API. A
 short-lived **whagent-signed JWT** (`sub` + `sub_iss` = the on-behalf-of
 subject and its issuer, exactly the session's stored shape; `act` =
