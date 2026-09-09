@@ -57,6 +57,17 @@ service SessionService {
   // encoded in TranscriptEvent's payload, not in this RPC's shape. Same
   // read-any-session access as GetSession -- no ownership check (FR2/C14).
   rpc ReadTranscript(ReadTranscriptRequest) returns (ReadTranscriptResponse);
+
+  // GetSessionUsage returns a session's turns-used-of-turn-cap and
+  // cost-used-of-cost-cap (FR4), derived the same way cap evaluation is:
+  // turns_used/cost_usd are summed from committed `turn_usage` rows
+  // (NFR5, never a running counter), turn_cap/cost_cap_usd come from the
+  // session's pinned agent_definition (caps.go's documented defaults when
+  // a definition field is zero-valued), and cost_estimated is true when
+  // any summed row's own cost was estimated rather than provider-reported.
+  // NOT_FOUND for an unknown session id. Authorization follows the same
+  // rule as GetSession (any authenticated caller) -- see issue #2238.
+  rpc GetSessionUsage(GetSessionUsageRequest) returns (GetSessionUsageResponse);
 }
 
 // SessionState mirrors whagent_net/session.Status (#2109) as an explicit
@@ -224,4 +235,34 @@ message ReadTranscriptResponse {
   // last event returned here -- no gap, no duplicate. Equal to the
   // request's from_seq when events is empty (nothing new to resume from).
   int64 next_from_seq = 2;
+}
+
+// SessionUsage is FR4's usage figures for a session: turns/cost used
+// against the caps the session's pinned agent_definition sets, both
+// derived by summing committed `turn_usage` rows (NFR5) -- never from a
+// counter mutated alongside them, the same rule cap evaluation follows
+// (whagent_net/worker/caps.go).
+message SessionUsage {
+  // COUNT(*) of committed turn_usage rows for the session.
+  int32 turns_used = 1;
+  // The session's pinned agent_definition's effective MaxTurns (caps.go's
+  // default applied when the definition's field is zero-valued).
+  int32 turn_cap = 2;
+  // COALESCE(SUM(cost_usd), 0) across the session's committed turn_usage
+  // rows, to full NUMERIC(12,6) precision.
+  double cost_usd = 3;
+  // The session's pinned agent_definition's effective MaxCostUSD (caps.go's
+  // default applied when the definition's field is zero-valued).
+  double cost_cap_usd = 4;
+  // True when any summed turn_usage row's cost was estimated (from tokens)
+  // rather than provider-reported.
+  bool cost_estimated = 5;
+}
+
+message GetSessionUsageRequest {
+  string session_id = 1;
+}
+
+message GetSessionUsageResponse {
+  SessionUsage usage = 1;
 }

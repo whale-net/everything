@@ -8,6 +8,7 @@ go_library(
         "session.go",
         "start.go",
         "stop.go",
+        "usage.go",
     ],
     importpath = "github.com/whale-net/everything/whagent_net/api/handlers",
     visibility = ["//visibility:public"],
@@ -55,7 +56,10 @@ go_test(
     name = "session_integration_test",
     size = "large",
     timeout = "long",
-    srcs = ["session_integration_test.go"],
+    srcs = [
+        "session_integration_test.go",
+        "usage_integration_test.go",
+    ],
     gotags = ["integration"],
     tags = [
         "external",
