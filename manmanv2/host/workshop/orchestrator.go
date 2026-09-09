@@ -35,7 +35,7 @@ type DockerContainerClient interface {
 	PullImage(ctx context.Context, imageRef string) error
 	RemoveContainer(ctx context.Context, containerID string, force bool) error
 	GetContainerStatus(ctx context.Context, containerID string) (*docker.ContainerStatus, error)
-	GetContainerLogs(ctx context.Context, containerID string, follow bool, tail string) (io.ReadCloser, error)
+	GetContainerLogs(ctx context.Context, containerID string, follow bool, tail string, since string, timestamps bool) (io.ReadCloser, error)
 }
 
 // DownloadOrchestrator manages workshop addon download container lifecycle within host manager
@@ -288,7 +288,7 @@ func (do *DownloadOrchestrator) HandleDownloadCommand(ctx context.Context, cmd *
 	// Monitor container logs for progress.
 	// Docker returns a multiplexed stream with 8-byte binary headers per message.
 	// We use stdcopy.StdCopy to demultiplex it before scanning for text lines.
-	logReader, err := do.dockerClient.GetContainerLogs(ctx, containerID, true, "all")
+	logReader, err := do.dockerClient.GetContainerLogs(ctx, containerID, true, "all", "", false)
 	if err != nil {
 		logger.Error("failed to get container logs", "error", err)
 		do.handleDownloadError(ctx, cmd.InstallationID, err)
