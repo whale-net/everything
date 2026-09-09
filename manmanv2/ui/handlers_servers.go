@@ -45,7 +45,7 @@ func (app *App) handleServers(w http.ResponseWriter, r *http.Request) {
 		{Label: "Servers", URL: "/servers"},
 	}
 
-	layoutData, err := app.buildTemplLayoutData(r, "Servers", "Servers", user, breadcrumbs)
+	layoutData, err := app.buildTemplLayoutData(r, "Servers", "Infrastructure", user, breadcrumbs)
 	if err != nil {
 		log.Printf("Error building layout data: %v", err)
 		http.Error(w, "Internal server error", http.StatusInternalServerError)
@@ -126,7 +126,7 @@ func (app *App) renderServerDetail(w http.ResponseWriter, r *http.Request, serve
 		{Label: resp.Server.Name, URL: ""},
 	}
 
-	layoutData, err := app.buildTemplLayoutData(r, resp.Server.Name, "Servers", user, breadcrumbs)
+	layoutData, err := app.buildTemplLayoutData(r, resp.Server.Name, "Infrastructure", user, breadcrumbs)
 	if err != nil {
 		log.Printf("Error building layout data: %v", err)
 		http.Error(w, "Internal server error", http.StatusInternalServerError)
