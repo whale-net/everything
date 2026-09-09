@@ -29,6 +29,7 @@ import (
 	"github.com/whale-net/everything/libs/go/htmxauth"
 	"github.com/whale-net/everything/libs/go/htmxsse"
 	"github.com/whale-net/everything/libs/go/logging"
+	"github.com/whale-net/everything/libs/go/mcpauth"
 	"github.com/whale-net/everything/libs/go/rmq"
 	"github.com/whale-net/everything/whagent_net/events"
 )
@@ -90,6 +91,23 @@ type config struct {
 	// stance, mirrored from manmanv2/ui and tools/app_registry/ui's own
 	// initializeSSEHub) -- see initializeSSEHub's doc comment.
 	RabbitMQURL string
+
+	// UIPublicURL is this binary's own externally-reachable base URL
+	// (e.g. https://whagent.example.com) -- FR9/issue #2245's
+	// mcpauth.ProviderConfig.Issuer, the base every mcpauth endpoint URL
+	// `ui` advertises (`/authorize`, `/token`, `/register`,
+	// `/.well-known/oauth-authorization-server`) is built from. Mirrors
+	// audience_score_system's ASS_OAUTH_REDIRECT_BASE_URL doubling as
+	// mcpauth's issuer (see audience_score_system/ENV.md).
+	UIPublicURL string
+
+	// MCPPublicURL is `mcp`'s own externally-reachable base URL -- FR9's
+	// mcpauth.ProviderConfig.Resource, the OAuth2 `resource` identifier.
+	// Must be byte-identical to what `mcp` itself advertises in its own
+	// protected-resource metadata (mcp's dependent task, issue #2245's
+	// Context section) -- a mismatch breaks an MCP client's RFC 9728
+	// discovery chain.
+	MCPPublicURL string
 }
 
 func loadConfig() config {
@@ -105,6 +123,8 @@ func loadConfig() config {
 		APIAddr:          getEnv("WHAGENT_API_URL", ""),
 		GRPCAuthMode:     strings.ToLower(getEnv("GRPC_AUTH_MODE", "none")),
 		RabbitMQURL:      getEnv("RABBITMQ_URL", ""),
+		UIPublicURL:      getEnv("WHAGENT_UI_PUBLIC_URL", ""),
+		MCPPublicURL:     getEnv("WHAGENT_MCP_PUBLIC_URL", ""),
 	}
 }
 
@@ -132,6 +152,16 @@ type App struct {
 	// degrades to 503 in that case rather than the whole binary failing
 	// to boot.
 	sseHub *htmxsse.Hub
+
+	// mcpProvider is mcpauth's OAuth2 authorization-server front end
+	// (FR9/C27, issue #2245) -- constructed in NewApp, mounted on this
+	// binary's mux in setupRoutes on unauthenticated routes (discovery
+	// metadata and dynamic client registration must be reachable before
+	// an MCP client has any credential at all). Its Resolver reads
+	// `ui`'s own Keycloak session (mcpCallerResolver, mcpauth.go) --
+	// `/authorize` mints a credential only once the operator is already
+	// signed in via app.auth.
+	mcpProvider *mcpauth.Provider
 }
 
 // NewApp wires up Keycloak sign-in (NFR1) and the authenticated `api`
@@ -154,6 +184,12 @@ func NewApp(ctx context.Context, cfg config) (*App, error) {
 	}
 	if cfg.APIAddr == "" {
 		return nil, fmt.Errorf("WHAGENT_API_URL is required")
+	}
+	if cfg.UIPublicURL == "" {
+		return nil, fmt.Errorf("WHAGENT_UI_PUBLIC_URL is required")
+	}
+	if cfg.MCPPublicURL == "" {
+		return nil, fmt.Errorf("WHAGENT_MCP_PUBLIC_URL is required")
 	}
 
 	pool, err := db.NewPool(ctx, cfg.DatabaseURL)
@@ -196,12 +232,25 @@ func NewApp(ctx context.Context, cfg config) (*App, error) {
 		return nil, fmt.Errorf("failed to connect to api at %s: %w", cfg.APIAddr, err)
 	}
 
-	return &App{
+	app := &App{
 		auth:       auth,
 		session:    sessionClient,
 		oidcIssuer: cfg.OIDCIssuer,
 		sseHub:     initializeSSEHub(cfg),
-	}, nil
+	}
+
+	// mcpauth.NewCredentialStore/NewPostgresClientRegistry/
+	// NewPostgresAuthCodeStore each preflight their own table (see
+	// whagent_net/migrate/schema/migrations/004_mcpauth_credential) and
+	// fail loudly, naming the table, if it hasn't been applied yet --
+	// exactly like htmxauth.NewDBSessionManager's ui_sessions probe above.
+	mcpProvider, err := setupMCPAuth(ctx, pool, cfg, app.mcpCallerResolver())
+	if err != nil {
+		return nil, fmt.Errorf("failed to initialize mcpauth provider: %w", err)
+	}
+	app.mcpProvider = mcpProvider
+
+	return app, nil
 }
 
 // initializeSSEHub dials RabbitMQ and builds the htmxsse.Hub backing the
@@ -347,6 +396,17 @@ func (app *App) setupRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("/auth/login", app.auth.HandleLogin) // alias: see doc comment above.
 	mux.HandleFunc("/auth/callback", app.auth.HandleCallback)
 	mux.HandleFunc("/logout", app.auth.HandleLogout)
+
+	// mcpauth's OAuth2 authorization-server endpoints (/authorize, /token,
+	// /register, and both discovery metadata documents, FR9/issue #2245)
+	// are registered directly on mux here, outside app.auth.RequireAuth --
+	// unlike "/", none of setupRoutes' other registrations wrap these in
+	// RequireAuthFunc, so there is no blanket auth middleware for Mount to
+	// be caught under. Discovery and dynamic client registration must be
+	// reachable before an MCP client has any credential at all; /authorize
+	// itself is where app.mcpProvider's own Resolver + SignInURL gate
+	// access to a signed-in operator, not RequireAuth.
+	app.mcpProvider.Mount(mux)
 
 	mux.HandleFunc("/", app.auth.RequireAuthFunc(app.auth.WithAccessToken(app.handleIndex)))
 

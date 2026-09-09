@@ -3,12 +3,16 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
 
+	"github.com/google/uuid"
+
 	"github.com/whale-net/everything/libs/go/htmxauth"
+	"github.com/whale-net/everything/libs/go/mcpauth"
 )
 
 // newTestOIDCAuthenticator builds a real *htmxauth.Authenticator in OIDC
@@ -53,6 +57,53 @@ func newTestOIDCAuthenticator(t *testing.T) *htmxauth.Authenticator {
 	return auth
 }
 
+// stubCredentialStore is a mcpauth.CredentialStore that never actually
+// mints/verifies anything -- newTestMCPProvider only needs a non-nil
+// CredentialStore to satisfy mcpauth.NewProvider's construction-time
+// validation (setupRoutes' route-table guard below never exercises
+// /token, so no method here needs to succeed).
+type stubCredentialStore struct{}
+
+func (stubCredentialStore) Mint(ctx context.Context, identity string) (string, mcpauth.Credential, error) {
+	return "", mcpauth.Credential{}, errors.New("stubCredentialStore: not implemented")
+}
+
+func (stubCredentialStore) Verify(ctx context.Context, rawToken string) (string, mcpauth.Credential, error) {
+	return "", mcpauth.Credential{}, errors.New("stubCredentialStore: not implemented")
+}
+
+func (stubCredentialStore) Revoke(ctx context.Context, id uuid.UUID, identity string) error {
+	return errors.New("stubCredentialStore: not implemented")
+}
+
+func (stubCredentialStore) List(ctx context.Context, identity string) ([]mcpauth.Credential, error) {
+	return nil, errors.New("stubCredentialStore: not implemented")
+}
+
+// newTestMCPProvider builds a real *mcpauth.Provider against loopback
+// issuer/resource URLs and a resolver that never resolves (mirrors this
+// scaffold's mcpCallerResolver stub, mcpauth.go), so setupRoutes' guard
+// test below exercises the actual Provider.Mount route registration
+// rather than a stand-in. Clients/AuthCodes are left at mcpauth's
+// in-memory defaults -- fine for this route-table guard, which only
+// checks whether each mcpauth path is reachable without a Keycloak
+// session, never a full authorization-code exchange.
+func newTestMCPProvider(t *testing.T) *mcpauth.Provider {
+	t.Helper()
+
+	p, err := mcpauth.NewProvider(mcpauth.ProviderConfig{
+		Issuer:      "http://localhost",
+		Resource:    "http://localhost:8082",
+		Resolver:    mcpauth.CallerResolverFunc(func(r *http.Request) (string, bool) { return "", false }),
+		Credentials: stubCredentialStore{},
+		SignInURL:   "/login",
+	})
+	if err != nil {
+		t.Fatalf("mcpauth.NewProvider: %v", err)
+	}
+	return p
+}
+
 // requestWasAuthBlocked reports whether a response is what
 // htmxauth.Authenticator.RequireAuth (or WithAccessToken) produces for an
 // unauthenticated request: a 401, or a redirect specifically to
@@ -77,25 +128,48 @@ func requestWasAuthBlocked(w *httptest.ResponseRecorder) bool {
 // requires deliberately editing this map -- that is the point (mirrors
 // manmanv2/ui/main_test.go's manmanv2PublicRoutes).
 var whagentPublicRoutes = map[string]bool{
-	"/healthz":       true,
-	"/login":         true,
-	"/auth/login":    true,
-	"/auth/callback": true,
-	"/logout":        true,
+	"/healthz":                              true,
+	"/login":                                true,
+	"/auth/login":                           true,
+	"/auth/callback":                        true,
+	"/logout":                               true,
+	"/.well-known/oauth-protected-resource": true,
+	"/.well-known/oauth-authorization-server": true,
+	"/register":  true,
+	"/authorize": true,
+	"/token":     true,
 }
 
 // whagentRouteTable mirrors every pattern setupRoutes registers in
-// main.go. "/" stands in for both the exact "/" route and any other
-// unclaimed path, since the catch-all pattern dispatches both there.
-var whagentRouteTable = []string{
-	// Public (must match whagentPublicRoutes exactly).
-	"/healthz",
-	"/login",
-	"/auth/login",
-	"/auth/callback",
-	"/logout",
+// main.go, paired with the method that actually reaches each one. "/"
+// stands in for both the exact "/" route and any other unclaimed path,
+// since the catch-all pattern dispatches both there.
+//
+// The mcpauth.Provider.Mount routes (FR9, issue #2245) need their real
+// method: "/register" and "/token" are registered as "POST <path>", and
+// Go's http.ServeMux (1.22+) falls through a method mismatch on an exact
+// pattern to a still-matching *broader* pattern rather than 405ing --
+// for these two paths that broader pattern is the "/" catch-all, wrapped
+// in RequireAuthFunc, so a GET against them would be (wrongly) reported
+// auth-blocked here. Using each route's real method avoids that mux
+// fallthrough entirely.
+var whagentRouteTable = []struct {
+	method string
+	path   string
+}{
+	// Public (path set must match whagentPublicRoutes exactly).
+	{http.MethodGet, "/healthz"},
+	{http.MethodGet, "/login"},
+	{http.MethodGet, "/auth/login"},
+	{http.MethodGet, "/auth/callback"},
+	{http.MethodGet, "/logout"},
+	{http.MethodGet, "/.well-known/oauth-protected-resource"},
+	{http.MethodGet, "/.well-known/oauth-authorization-server"},
+	{http.MethodPost, "/register"},
+	{http.MethodGet, "/authorize"},
+	{http.MethodPost, "/token"},
 	// Protected.
-	"/",
+	{http.MethodGet, "/"},
 }
 
 // TestSetupRoutes_OnlyExplicitPublicRoutesReachableUnauthenticated is the
@@ -103,24 +177,24 @@ var whagentRouteTable = []string{
 // redirect an unauthenticated caller to Keycloak sign-in (via
 // /auth/login), and every route in whagentPublicRoutes must not.
 func TestSetupRoutes_OnlyExplicitPublicRoutesReachableUnauthenticated(t *testing.T) {
-	app := &App{auth: newTestOIDCAuthenticator(t)}
+	app := &App{auth: newTestOIDCAuthenticator(t), mcpProvider: newTestMCPProvider(t)}
 	mux := http.NewServeMux()
 	app.setupRoutes(mux)
 
-	for _, path := range whagentRouteTable {
-		path := path
-		t.Run(path, func(t *testing.T) {
-			req := httptest.NewRequest(http.MethodGet, path, nil)
+	for _, route := range whagentRouteTable {
+		route := route
+		t.Run(route.method+" "+route.path, func(t *testing.T) {
+			req := httptest.NewRequest(route.method, route.path, nil)
 			w := httptest.NewRecorder()
 			mux.ServeHTTP(w, req)
 
 			blocked := requestWasAuthBlocked(w)
-			wantPublic := whagentPublicRoutes[path]
+			wantPublic := whagentPublicRoutes[route.path]
 			if wantPublic && blocked {
-				t.Errorf("public route %s was auth-blocked (status %d, Location %q) -- want it reachable without a session", path, w.Code, w.Header().Get("Location"))
+				t.Errorf("public route %s was auth-blocked (status %d, Location %q) -- want it reachable without a session", route.path, w.Code, w.Header().Get("Location"))
 			}
 			if !wantPublic && !blocked {
-				t.Errorf("protected route %s was NOT auth-blocked (status %d) -- want a redirect to /auth/login or a 401", path, w.Code)
+				t.Errorf("protected route %s was NOT auth-blocked (status %d) -- want a redirect to /auth/login or a 401", route.path, w.Code)
 			}
 		})
 	}
@@ -138,7 +212,7 @@ func TestSetupRoutes_OnlyExplicitPublicRoutesReachableUnauthenticated(t *testing
 // the handler ran unauthenticated instead of redirecting. Restoring the
 // RequireAuthFunc(WithAccessToken(...)) wrapping made it pass again.
 func TestSetupRoutes_UnauthenticatedIndexRequestRedirectsToLogin(t *testing.T) {
-	app := &App{auth: newTestOIDCAuthenticator(t)}
+	app := &App{auth: newTestOIDCAuthenticator(t), mcpProvider: newTestMCPProvider(t)}
 	mux := http.NewServeMux()
 	app.setupRoutes(mux)
 
@@ -159,7 +233,7 @@ func TestSetupRoutes_UnauthenticatedIndexRequestRedirectsToLogin(t *testing.T) {
 // health check and Tilt, which never present a Keycloak session.
 func TestHealthz_ReturnsOKWithoutSession(t *testing.T) {
 	mux := http.NewServeMux()
-	app := &App{}
+	app := &App{mcpProvider: newTestMCPProvider(t)}
 	app.setupRoutes(mux)
 
 	req := httptest.NewRequest(http.MethodGet, "/healthz", nil)

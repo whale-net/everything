@@ -536,6 +536,10 @@ spec:
           value: "whagent-net-api.{namespace}.svc.cluster.local:50051"
         - name: WHAGENT_OIDC_ISSUER
           value: "{whagent_oidc_issuer}"
+        - name: WHAGENT_UI_PUBLIC_URL
+          value: "http://localhost:8081"
+        - name: WHAGENT_MCP_PUBLIC_URL
+          value: "http://localhost:8082"
         - name: OTEL_EXPORTER_OTLP_ENDPOINT
           value: "{otel_endpoint}"
 """.format(
