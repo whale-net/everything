@@ -54,6 +54,14 @@ type GameFormData struct {
 // components.LatestSession / components.BuildConnectAddressView --
 // never ServerGameConfig.status, which is the unrelated active/inactive
 // lifecycle flag (FR5).
+//
+// Task #2272 (FR6) additionally builds each game's expanded-row
+// Deployments section from this same in-memory join: per-deployment
+// Start/Stop/Restart availability and the session-status badge reuse
+// components.ComputeDeploymentActions / pages.DeploymentRow verbatim (the
+// same derivation and markup buildDeploymentRowData/DeploymentRow render on
+// /sessions, #1627) so the two surfaces cannot drift on the same
+// deployment's state -- see buildGameDeploymentRow.
 func (app *App) handleGames(w http.ResponseWriter, r *http.Request) {
 	user := htmxauth.GetUser(r.Context())
 	ctx := r.Context()
@@ -85,10 +93,19 @@ func (app *App) handleGames(w http.ResponseWriter, r *http.Request) {
 		log.Printf("Warning: failed to fetch servers: %v", err)
 		servers = nil
 	}
-	liveSessions, err := app.grpc.ListSessions(ctx, true)
+	// liveOnly=false (task #2272): the collapsed row's rollup only ever
+	// needed a deployment's *live* session, but the expanded row's
+	// Deployments section (FR6) must feed components.ComputeDeploymentActions
+	// the same way buildDeploymentRowData does on /sessions -- which means
+	// knowing the latest session even for a stopped/crashed/lost deployment,
+	// not just a currently-live one, so Start/Restart availability doesn't
+	// silently go blank for every non-running row. Same call, same count
+	// (NFR7): only the filter argument changed, not the number of fleet-wide
+	// calls handleGames makes.
+	sessions, err := app.grpc.ListSessions(ctx, false)
 	if err != nil {
-		log.Printf("Warning: failed to fetch live sessions: %v", err)
-		liveSessions = nil
+		log.Printf("Warning: failed to fetch sessions: %v", err)
+		sessions = nil
 	}
 
 	// expand (spec amendment A1, migration task): an entry-point hint,
@@ -97,7 +114,7 @@ func (app *App) handleGames(w http.ResponseWriter, r *http.Request) {
 	// an error -- gameRowExpanded in games.templ does the stale check.
 	expandGameID, _ := strconv.ParseInt(strings.TrimSpace(r.URL.Query().Get("expand")), 10, 64)
 
-	rows := buildGameRows(games, configs, deployments, servers, liveSessions)
+	rows := buildGameRows(games, configs, deployments, servers, sessions)
 
 	breadcrumbs := []components.Breadcrumb{
 		{Label: "Games", URL: "/games"},
@@ -137,7 +154,7 @@ func buildGameRows(
 	configs []*manmanpb.GameConfig,
 	deployments []*manmanpb.ServerGameConfig,
 	servers []*manmanpb.Server,
-	liveSessions []*manmanpb.Session,
+	sessions []*manmanpb.Session,
 ) []pages.GameRow {
 	configByID := make(map[int64]*manmanpb.GameConfig, len(configs))
 	for _, c := range configs {
@@ -149,10 +166,10 @@ func buildGameRows(
 		serverByID[s.GetServerId()] = s
 	}
 
-	liveSessionsBySGC := make(map[int64][]*manmanpb.Session, len(liveSessions))
-	for _, s := range liveSessions {
+	sessionsBySGC := make(map[int64][]*manmanpb.Session, len(sessions))
+	for _, s := range sessions {
 		sgcID := s.GetServerGameConfigId()
-		liveSessionsBySGC[sgcID] = append(liveSessionsBySGC[sgcID], s)
+		sessionsBySGC[sgcID] = append(sessionsBySGC[sgcID], s)
 	}
 
 	deploymentsByGame := make(map[int64][]*manmanpb.ServerGameConfig)
@@ -177,26 +194,30 @@ func buildGameRows(
 
 		runState := components.DeploymentStopped
 		connect := components.ConnectAddressView{Unavailable: true}
+		deploymentRows := make([]pages.GameDeploymentRow, 0, len(gameDeployments))
 		for _, d := range gameDeployments {
-			latest := components.LatestSession(liveSessionsBySGC[d.GetServerGameConfigId()])
-			if components.ComputeDeploymentStatus(latest) != components.DeploymentRunning {
-				continue
-			}
-			runState = components.DeploymentRunning
-			if !connect.Unavailable {
-				continue
-			}
+			latest := components.LatestSession(sessionsBySGC[d.GetServerGameConfigId()])
 			server := serverByID[d.GetServerId()]
-			if view := components.BuildConnectAddressView(server.GetHostPublicAddress(), d.GetPortBindings()); !view.Unavailable {
-				connect = view
+			cfg := configByID[d.GetGameConfigId()]
+
+			if components.ComputeDeploymentStatus(latest) == components.DeploymentRunning {
+				runState = components.DeploymentRunning
+				if connect.Unavailable {
+					if view := components.BuildConnectAddressView(server.GetHostPublicAddress(), d.GetPortBindings()); !view.Unavailable {
+						connect = view
+					}
+				}
 			}
+
+			deploymentRows = append(deploymentRows, buildGameDeploymentRow(game, cfg, server, d, latest))
 		}
 
 		rows = append(rows, pages.GameRow{
-			GameID:   game.GetGameId(),
-			Name:     game.GetName(),
-			RunState: runState,
-			Connect:  connect,
+			GameID:      game.GetGameId(),
+			Name:        game.GetName(),
+			RunState:    runState,
+			Connect:     connect,
+			Deployments: deploymentRows,
 		})
 	}
 
@@ -211,6 +232,73 @@ func buildGameRows(
 	})
 
 	return rows
+}
+
+// buildGameDeploymentRow builds one row of a game's expanded Deployments
+// section (#2272, FR6). Row.Actions/Row.LatestSession/Row.SGCStatus/
+// Row.LiveSession are exactly the fields pages.DeploymentRow /
+// DeploymentRowInner (#1627) already know how to render Start/Stop/Restart
+// availability and the session-status badge from -- components.
+// ComputeDeploymentActions(latest) is called here directly (the same
+// function buildDeploymentRowData calls on /sessions), not re-derived, so
+// the two surfaces cannot independently disagree about a control's
+// availability for the same deployment state (FR6's anti-drift
+// requirement). Everything else on GameDeploymentRow (Connect, LogsURL,
+// ActionsURL, and DisplayName's "config on server" naming, FR2) is
+// additive to that reused derivation, never a substitute for it.
+//
+// liveSession mirrors the server-side live_only filter
+// (manmanv2/api/repository/postgres/session.go: status IN pending,
+// starting, running, stopping) so DeploymentRowInner's "View Live Session"
+// column renders the same way it would from a dedicated getLiveSession
+// call, without a second RPC.
+func buildGameDeploymentRow(game *manmanpb.Game, cfg *manmanpb.GameConfig, server *manmanpb.Server, d *manmanpb.ServerGameConfig, latest *manmanpb.Session) pages.GameDeploymentRow {
+	serverName := server.GetName()
+	if serverName == "" {
+		serverName = fmt.Sprintf("server %d", d.GetServerId())
+	}
+	configName := cfg.GetName()
+	if configName == "" {
+		configName = fmt.Sprintf("config %d", d.GetGameConfigId())
+	}
+	// "<config> on <server>" (FR2): this is the deployment's display name,
+	// distinct from buildDeploymentRowData's "<config> (<game>)" format on
+	// /sessions -- the game is already the context this row renders inside,
+	// so naming repeats the game here instead of the server would be
+	// redundant and less useful than knowing which server it's on.
+	displayName := fmt.Sprintf("%s on %s", configName, serverName)
+
+	var liveSession *manmanpb.Session
+	if latest != nil && (latest.GetStatus() == "running" || components.IsTransientStatus(latest.GetStatus())) {
+		liveSession = latest
+	}
+
+	var logsURL string
+	if latest != nil {
+		logsURL = fmt.Sprintf("/sessions/%d", latest.GetSessionId())
+	}
+
+	return pages.GameDeploymentRow{
+		Row: pages.DeploymentRowData{
+			ServerGameConfigID: d.GetServerGameConfigId(),
+			DisplayName:        displayName,
+			SGCStatus:          d.GetStatus(),
+			LatestSession:      latest,
+			LiveSession:        liveSession,
+			Actions:            components.ComputeDeploymentActions(latest),
+		},
+		Connect: components.BuildConnectAddressView(server.GetHostPublicAddress(), d.GetPortBindings()),
+		LogsURL: logsURL,
+		// The config-level Actions management page (C23/M3): the existing
+		// Actions surface FR6 links out to, per decision 8 (not reshaped,
+		// not inlined, not a Config Editor tab). There is no routed
+		// deployment-level (server_game_config) Actions page today --
+		// categorizeActions in handlers_actions.go builds that URL shape for
+		// display only, main.go never registers a handler for it -- so this
+		// links to the one that is actually routed and already shows this
+		// deployment's config-level (and inherited game-level) actions.
+		ActionsURL: fmt.Sprintf("/games/%d/configs/%d/actions", game.GetGameId(), cfg.GetConfigId()),
+	}
 }
 
 func (app *App) handleGameNew(w http.ResponseWriter, r *http.Request) {
