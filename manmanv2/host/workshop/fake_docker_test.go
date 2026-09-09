@@ -153,7 +153,7 @@ func (f *fakeDockerClient) GetContainerStatus(ctx context.Context, containerID s
 	return &docker.ContainerStatus{ContainerID: containerID, Running: false, ExitCode: rec.exitCode}, nil
 }
 
-func (f *fakeDockerClient) GetContainerLogs(ctx context.Context, containerID string, follow bool, tail string) (io.ReadCloser, error) {
+func (f *fakeDockerClient) GetContainerLogs(ctx context.Context, containerID string, follow bool, tail string, since string, timestamps bool) (io.ReadCloser, error) {
 	return io.NopCloser(strings.NewReader("")), nil
 }
 

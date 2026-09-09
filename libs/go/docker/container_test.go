@@ -3,6 +3,7 @@ package docker
 import (
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/docker/docker/api/types/mount"
 )
@@ -71,6 +72,72 @@ func TestVolumeMountTypeDetection(t *testing.T) {
 			}
 			if target != tt.expectedTarget {
 				t.Errorf("Target = %v, want %v", target, tt.expectedTarget)
+			}
+		})
+	}
+}
+
+func TestSplitLogTimestamp(t *testing.T) {
+	tests := []struct {
+		name        string
+		line        string
+		expectOK    bool
+		expectRest  string
+		expectedTS  string // RFC3339Nano, only checked when expectOK
+	}{
+		{
+			name:       "well-formed docker timestamp prefix",
+			line:       "2024-01-15T10:30:00.123456789Z hello world",
+			expectOK:   true,
+			expectRest: "hello world",
+			expectedTS: "2024-01-15T10:30:00.123456789Z",
+		},
+		{
+			name:       "empty message after timestamp",
+			line:       "2024-01-15T10:30:00.000000000Z ",
+			expectOK:   true,
+			expectRest: "",
+			expectedTS: "2024-01-15T10:30:00.000000000Z",
+		},
+		{
+			name:       "no timestamp prefix at all",
+			line:       "hello world",
+			expectOK:   false,
+			expectRest: "hello world",
+		},
+		{
+			name:       "too short to contain a timestamp",
+			line:       "short",
+			expectOK:   false,
+			expectRest: "short",
+		},
+		{
+			// Right length and a space in the right place, but not a valid
+			// RFC3339Nano timestamp — exercises the time.Parse failure path.
+			name:       "correct width and spacing but unparseable timestamp",
+			line:       strings.Repeat("x", len("2006-01-02T15:04:05.000000000Z")) + " message",
+			expectOK:   false,
+			expectRest: strings.Repeat("x", len("2006-01-02T15:04:05.000000000Z")) + " message",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			ts, rest, ok := SplitLogTimestamp(tt.line)
+			if ok != tt.expectOK {
+				t.Fatalf("ok = %v, want %v", ok, tt.expectOK)
+			}
+			if rest != tt.expectRest {
+				t.Errorf("rest = %q, want %q", rest, tt.expectRest)
+			}
+			if tt.expectOK {
+				want, err := time.Parse(time.RFC3339Nano, tt.expectedTS)
+				if err != nil {
+					t.Fatalf("bad test fixture: %v", err)
+				}
+				if !ts.Equal(want) {
+					t.Errorf("ts = %v, want %v", ts, want)
+				}
 			}
 		})
 	}
