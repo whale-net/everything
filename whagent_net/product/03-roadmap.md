@@ -14,7 +14,7 @@ Design-time notes (not FRs): Temporal workflow versioning discipline for open lo
 
 ### M2 — An operator can start a session and watch any session — live or long finished, whoever started it — from a standalone web UI
 
-Delivers: C10, C13, C14, C15, C16, C17, C18
+Delivers: C10, C13, C14, C15, C16, C17, C18, C27
 Must not foreclose: LB1, LB2, LB3, LB6, LB7 — the UI reads the LB1 record via the LB7 exchange (no private read path), and the cold tier stores that same record, so a finished session's transcript read from S3 is the record the live view showed; "started by" renders from LB2's subject columns without adding a UI-only identity notion; usage shows from LB6's per-turn rows rather than a counter; LB3 because C10 is the first time the persona JWT is minted for a service subject with no human behind it — same claim set; `sub` is the acting service subject when the caller acts for itself (LB2: `on_behalf_of` = `subject`), never a second claim shape for service sessions.
 Deliberately deferred: embedding in another domain's UI (C19 → M3); per-turn context view (C24 → Later); cross-session rollups (C25 → Later); parent/child session views (C21 → Later); agent definition authoring in the UI (not a mapped capability — definitions stay config-seeded per LB5 until someone asks). Pre-agreed over-budget cut, taken only if the design draft exceeds budget with every FR tracing correctly, in this order: C17 → M3 first (C14 already gives humans live following, and M3's host UI subscribes to the exchange directly per LB7, so nothing in M3 depends on C17), then C16 → Later. Never widen an FR to keep a capability in.
 FR budget: 12

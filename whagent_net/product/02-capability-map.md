@@ -23,6 +23,7 @@ C15 — An operator can list sessions and find one by agent, state, who started 
 C16 — A viewer can see how many turns and how much cost a session has used against its caps, and whether any of that cost is estimated.
 C17 — A programmatic client can follow a session's events live as they happen, without needing message-bus credentials.
 C18 — An operator can read a finished session's transcript long after it ended, once it has aged out of hot storage.
+C27 — An operator can connect their Claude Code MCP client to whagent-net by signing in once through the browser, instead of manually copying a Keycloak token into their MCP client config.
 
 ### Later
 C19 — A consumer-domain developer can embed the session component in their own Go web UI under their existing sign-in, with live updates driven from the domain's own event-bus subscription.
