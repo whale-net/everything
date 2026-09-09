@@ -40,6 +40,7 @@ go_library(
         "//whagent_net/mcpidentity",
         "//whagent_net/protos:whagentpb",
         "//whagent_net/ui/components",
+        "//whagent_net/ui/pages",
         "@com_github_a_h_templ//:templ",
         "@com_github_google_uuid//:uuid",
         "@com_github_jackc_pgx_v5//pgxpool",
