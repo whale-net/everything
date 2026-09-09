@@ -66,6 +66,8 @@ before any session row is written -- a separate in-process cache from
 | `WHAGENT_MODEL_CATALOG_TTL` | worker, api | `5m` | How long `llm.Catalog` caches OpenRouter's model list (FR5) before refetching. |
 | `WHAGENT_PRICE_TABLE_PATH` | worker | *(required)* | Path to the per-model price table `llm.LoadPriceTable` reads (LB6: contents and source stay cheap to change -- a config file, not a code table). JSON object keyed on model id, e.g. `{"openai/gpt-4o": {"prompt_usd_per_million": 2.5, "completion_usd_per_million": 10}}`; read fresh on every call, so an edit takes effect without a code change. |
 
+`WHAGENT_DEFAULT_MODEL` and `WHAGENT_PRICE_TABLE_PATH` are both still unread by any binary today -- every seeded agent in `config/agents.yaml` names its own model, and `start.go`'s only fallback is the per-session `model_override` (FR5). Once the default-model fallback and a checked-in price table are actually implemented, the intended values are: `WHAGENT_DEFAULT_MODEL=z-ai/glm-5.3-flash`, priced in the table at `{"z-ai/glm-5.3-flash": {"prompt_usd_per_million": 0.075, "completion_usd_per_million": 0.25}}`.
+
 ## Identity (OIDC / Keycloak)
 
 Read by `api` (token verification + authorization), `ui` and `mcp`
