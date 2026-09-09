@@ -428,11 +428,13 @@ func (app *App) setupRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("POST /sessions/{id}/turns", app.auth.RequireAuthFunc(app.auth.WithAccessToken(app.handleSendTurn)))
 	mux.HandleFunc("POST /sessions/{id}/stop", app.auth.RequireAuthFunc(app.auth.WithAccessToken(app.handleStopSession)))
 
-	// Session detail (FR2, NFR2, NFR3, issue #2242): full page and its SSE
-	// stream. The SSE route is wrapped with RequireAuthFunc only, never
-	// WithAccessToken -- see handleSessionEvents' doc comment.
+	// Session detail (FR2, NFR2, NFR3, NFR4, issue #2242/#2248): full page
+	// and its two SSE streams (transcript+state, usage panel). Both SSE
+	// routes are wrapped with RequireAuthFunc only, never WithAccessToken
+	// -- see handleSessionEvents' doc comment.
 	mux.HandleFunc("GET /sessions/{id}", app.auth.RequireAuthFunc(app.auth.WithAccessToken(app.handleSessionDetail)))
 	mux.HandleFunc("GET /sessions/{id}/events", app.auth.RequireAuthFunc(app.handleSessionEvents))
+	mux.HandleFunc("GET /sessions/{id}/usage-events", app.auth.RequireAuthFunc(app.handleSessionUsageEvents))
 }
 
 func handleHealthz(w http.ResponseWriter, r *http.Request) {

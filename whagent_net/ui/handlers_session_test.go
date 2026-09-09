@@ -59,6 +59,15 @@ func (f *fakeUISessionServer) ReadTranscript(ctx context.Context, req *whagentpb
 	return &whagentpb.ReadTranscriptResponse{Events: out, NextFromSeq: next}, nil
 }
 
+// GetSessionUsage is a fixed non-zero-cap stub (issue #2248's FR4 panel):
+// handleSessionDetail now reads usage on every render, so this fake must
+// implement the RPC for this file's owner-gating tests to reach handler
+// code at all -- this file's tests do not otherwise assert on the usage
+// panel's own rendered values.
+func (f *fakeUISessionServer) GetSessionUsage(ctx context.Context, req *whagentpb.GetSessionUsageRequest) (*whagentpb.GetSessionUsageResponse, error) {
+	return &whagentpb.GetSessionUsageResponse{Usage: &whagentpb.SessionUsage{TurnCap: 100, CostCapUsd: 1}}, nil
+}
+
 // newBufconnUISessionClient dials server over an in-memory bufconn
 // listener and wraps it in a *SessionClient, the same shape
 // grpc_client_test.go's newBufconnSessionClient uses -- generalized to

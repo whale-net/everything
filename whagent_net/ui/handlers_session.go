@@ -60,6 +60,23 @@ func (app *App) readSession(ctx context.Context, sessionID uuid.UUID) (component
 	return sessionToView(resp.GetSession()), nil
 }
 
+// readUsage reads sessionID's current turns/cost usage against its caps
+// through the api client (FR4, whagent_net/api/handlers/usage.go's
+// GetSessionUsage) and converts it to components.UsageView (../convert.go).
+// Shared by handleSessionDetail (the initial full-page render) and
+// handlers_session_usage_live.go's sessionUsageFragment.Render (re-read on
+// every usage-relevant SSE delivery, per NFR5: "re-reading the authoritative
+// summed figure is required -- do not increment a ... running total from
+// event payloads") so the two paths can never disagree about how a
+// SessionUsage is projected for rendering.
+func (app *App) readUsage(ctx context.Context, sessionID uuid.UUID) (components.UsageView, error) {
+	resp, err := app.session.Client().GetSessionUsage(ctx, &whagentpb.GetSessionUsageRequest{SessionId: sessionID.String()})
+	if err != nil {
+		return components.UsageView{}, err
+	}
+	return usageToView(resp.GetUsage()), nil
+}
+
 // isSessionOwner reports whether user is the signed-in operator who may
 // control the session onBehalfOf identifies (FR2's read-only gating):
 // user's (iss, sub) equals onBehalfOf's, matched on the pair -- never sub
@@ -77,14 +94,15 @@ func (app *App) isSessionOwner(user *htmxauth.UserInfo, onBehalfOf components.Su
 	return app.oidcIssuer == onBehalfOf.Iss && user.Sub == onBehalfOf.Sub
 }
 
-// handleSessionDetail is the session detail page (FR2, NFR2, NFR3, issue
-// #2242): any signed-in operator may open any session -- GetSession/
-// ReadTranscript both have no ownership check (session.proto's doc
-// comments, #2237) -- and watches it live over the SSE stream
-// handlers_session_live.go's handleSessionEvents serves. The composer/
-// stop-control slot renders only for the session's on-behalf-of subject
-// (isSessionOwner); every other signed-in operator gets the exact same
-// page with that slot entirely absent.
+// handleSessionDetail is the session detail page (FR2, NFR2, NFR3, NFR4,
+// issue #2242/#2248): any signed-in operator may open any session --
+// GetSession/ReadTranscript/GetSessionUsage all have no ownership check
+// (session.proto's doc comments, #2237/#2238) -- and watches it live over
+// the two SSE streams handlers_session_live.go's handleSessionEvents and
+// handlers_session_usage_live.go's handleSessionUsageEvents serve. The
+// composer/stop-control slot renders only for the session's on-behalf-of
+// subject (isSessionOwner); every other signed-in operator gets the exact
+// same page with that slot entirely absent.
 func (app *App) handleSessionDetail(w http.ResponseWriter, r *http.Request) {
 	logger := logging.Get("main")
 	ctx := r.Context()
@@ -109,6 +127,13 @@ func (app *App) handleSessionDetail(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	usageView, err := app.readUsage(ctx, sessionID)
+	if err != nil {
+		logger.Error("failed to get session usage", "session_id", sessionID, "error", err)
+		http.Error(w, "Internal server error", http.StatusInternalServerError)
+		return
+	}
+
 	user := htmxauth.GetUser(ctx)
 
 	layoutData := components.LayoutData{
@@ -118,11 +143,13 @@ func (app *App) handleSessionDetail(w http.ResponseWriter, r *http.Request) {
 	}
 
 	data := components.SessionDetailData{
-		Layout:  layoutData,
-		Session: sessionView,
-		Events:  transcriptEvents,
-		IsOwner: app.isSessionOwner(user, sessionView.OnBehalfOf),
-		Topics:  sessionEventTopics(sessionID, transcriptEvents),
+		Layout:      layoutData,
+		Session:     sessionView,
+		Events:      transcriptEvents,
+		Usage:       usageView,
+		IsOwner:     app.isSessionOwner(user, sessionView.OnBehalfOf),
+		Topics:      sessionEventTopics(sessionID, transcriptEvents),
+		UsageTopics: sessionUsageTopics(sessionID),
 	}
 
 	if err := RenderTempl(w, r, layoutData.Title, components.SessionDetail(data)); err != nil {

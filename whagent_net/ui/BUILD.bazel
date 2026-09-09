@@ -17,6 +17,7 @@ go_library(
         "handlers_session.go",
         "handlers_session_lifecycle.go",
         "handlers_session_live.go",
+        "handlers_session_usage_live.go",
         "handlers_sessions.go",
         "main.go",
         "mcpauth.go",
