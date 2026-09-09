@@ -80,8 +80,9 @@ func renderDashboardSessionsHTTP(t *testing.T, api *fakeDashboardAPIClient) stri
 // lists its SGC) and one whose lookup misses (server 2 has no SGCs known to
 // the handler, so sgcByID never gains an entry for its SGCID). Both must
 // still render a /sgc/{ServerGameConfigId} link, and the missed-enrichment
-// session must still fall back to the "SGC {id}" ServerName placeholder
-// the handler already had.
+// session must still fall back to a ServerName placeholder -- "Unknown
+// Server" (M5 C31 FR2 changed this from the earlier "SGC {id}" placeholder,
+// which exposed a raw SGC identifier in display text).
 func TestHandleDashboardSessions_SGCIDPopulatedEvenWhenEnrichmentMisses(t *testing.T) {
 	api := &fakeDashboardAPIClient{
 		sessions: []*manmanpb.Session{
@@ -113,12 +114,17 @@ func TestHandleDashboardSessions_SGCIDPopulatedEvenWhenEnrichmentMisses(t *testi
 	if !strings.Contains(body, `href="/sgc/77"`) {
 		t.Errorf("expected the enrichment-miss session's card to still link /sgc/77 (SGCID set directly from the session, not the enrichment lookup), got body: %s", body)
 	}
-	// The enrichment-miss session's ServerName falls back to "SGC 77" --
-	// proves the enrichment miss is real (not accidentally satisfied) and
-	// that the existing fallback path still renders correctly alongside
-	// the correct SGCID.
-	if !strings.Contains(body, "SGC 77") {
-		t.Errorf("expected the enrichment-miss session to render the existing ServerName fallback %q, got body: %s", "SGC 77", body)
+	// The enrichment-miss session's ServerName falls back to "Unknown
+	// Server" -- proves the enrichment miss is real (not accidentally
+	// satisfied) and that the fallback path still renders correctly
+	// alongside the correct SGCID. Per FR2 (M5 C31), the fallback no
+	// longer exposes the raw SGC identifier or "SGC" text in display text
+	// (it previously rendered "SGC 77").
+	if !strings.Contains(body, "Unknown Server") {
+		t.Errorf("expected the enrichment-miss session to render the ServerName fallback %q, got body: %s", "Unknown Server", body)
+	}
+	if strings.Contains(body, "SGC 77") {
+		t.Errorf("expected no raw SGC identifier or \"SGC\" text in display text (FR2), got body: %s", body)
 	}
 	if strings.Contains(body, `href="/sgc/0"`) {
 		t.Errorf("expected no zero-value SGCID link, got body: %s", body)
