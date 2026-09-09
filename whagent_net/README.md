@@ -34,9 +34,10 @@ discussion: GitHub issue #1552.
 | `api/` | `external-api` | Session service gRPC: start/send-turn/stop/get/list/read-transcript; publishes the JWKS every domain-owned MCP server verifies a `worker`-minted persona credential against. | `bazel run //whagent_net/api:api` |
 | `worker/` | `worker` | Temporal `SessionWorkflow` + activities: resolve agent definition, build context, list/attach tools (FR8), call the model, dispatch each requested tool call, commit the turn, enforce turn/cost caps. | `bazel run //whagent_net/worker:worker` |
 | `mcp/` | `external-api` | MCP surface over `api` — how Claude Code and other agents drive agents. | `bazel run //whagent_net/mcp:mcp` |
+| `ui/` | `external-api` | Standalone agent web UI (M2, issue #2236): Keycloak sign-in (NFR1) guards every app route, forwards the signed-in operator's own access token to `api` on every call (never a shared service account). No session-specific pages yet — a placeholder authenticated index page today; FR1-FR4 land the real pages. | `bazel run //whagent_net/ui:whagent-net-ui` |
 
 Planned, not yet built (M2+): `archiver/` (Postgres → S3 transcript
-archival and hot-tier retention), `ui/` (standalone agent UI).
+archival and hot-tier retention).
 
 Shared Go packages: `session/` (store), `config/` (the agent-definition
 seed source), `llm/` (the OpenRouter model client), `worker/tools/` (tool
@@ -149,16 +150,21 @@ per the milestone's own scope (`AGENTS.md` § Documentation Conventions).
 
 ## Local development
 
-Requires Postgres (`PG_DATABASE_URL`), Temporal (`TEMPORAL_HOST`),
-RabbitMQ (`RABBITMQ_URL`, `worker` only), an OpenRouter API key
-(`OPENROUTER_API_KEY`), and a whagent-net signing key
-(`WHAGENT_SIGNING_KEY`/`WHAGENT_SIGNING_KEY_ID`, `api` and `worker` both
-fail startup loudly without one) — see [`ENV.md`](ENV.md) for the
-complete variable set across all four binaries.
+Requires Postgres (`PG_DATABASE_URL`, also backs `ui`'s own DB-backed
+session store), Temporal (`TEMPORAL_HOST`), RabbitMQ (`RABBITMQ_URL`,
+`worker` only today), an OpenRouter API key (`OPENROUTER_API_KEY`), and a
+whagent-net signing key (`WHAGENT_SIGNING_KEY`/`WHAGENT_SIGNING_KEY_ID`,
+`api` and `worker` both fail startup loudly without one) — see
+[`ENV.md`](ENV.md) for the complete variable set across all five
+binaries.
 
-**Tilt** (`cd whagent_net && tilt up`) stands up all four binaries plus
+**Tilt** (`cd whagent_net && tilt up`) stands up all five binaries plus
 Postgres/Temporal/RabbitMQ, with a checked-in dev-only signing key —
-see `Tiltfile`. The seeded agent definition targets
+see `Tiltfile`. `ui` defaults to `AUTH_MODE=none` locally (no Keycloak
+realm required to click around), forwarded to
+[http://localhost:8081](http://localhost:8081) — set `AUTH_MODE=oidc`
+plus the `WHAGENT_OIDC_*` vars in a local `.env` to exercise a real
+Keycloak sign-in. The seeded agent definition targets
 `audience_score_system/mcp`, which has its own minimal Tiltfile
 (`cd audience_score_system && tilt up`, run alongside this one) wired
 with the matching whagent-net trust configuration
@@ -189,8 +195,9 @@ listing ("Unauthorized", #2151).
 terminals):
 
 ```bash
-bazel run //whagent_net/migrate:migrate   # applies migrations + seeds agent_definition
-bazel run //whagent_net/api:api           # SessionService gRPC + JWKS
-bazel run //whagent_net/worker:worker     # SessionWorkflow
-bazel run //whagent_net/mcp:mcp           # the Claude-Code-facing MCP surface
+bazel run //whagent_net/migrate:migrate       # applies migrations + seeds agent_definition
+bazel run //whagent_net/api:api               # SessionService gRPC + JWKS
+bazel run //whagent_net/worker:worker         # SessionWorkflow
+bazel run //whagent_net/mcp:mcp               # the Claude-Code-facing MCP surface
+bazel run //whagent_net/ui:whagent-net-ui     # the standalone agent web UI
 ```

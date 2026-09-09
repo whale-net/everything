@@ -24,6 +24,7 @@ release_helm_chart(
         "//whagent_net/api:api_metadata",
         "//whagent_net/worker:worker_metadata",
         "//whagent_net/mcp:mcp_metadata",
+        "//whagent_net/ui:whagent-net-ui_metadata",
     ],
     visibility = ["//visibility:public"],
 )
