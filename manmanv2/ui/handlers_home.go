@@ -168,7 +168,12 @@ func (app *App) handleDashboardSessions(w http.ResponseWriter, r *http.Request) 
 		}
 
 		if info.ServerName == "" {
-			info.ServerName = fmt.Sprintf("SGC %d", s.ServerGameConfigId)
+			// FR2 (M5 C31): no raw SGC identifier or "SGC" text in
+			// user-facing display text -- unlike GameName/ConfigName below,
+			// this fallback carries no non-identifying label to fall back
+			// to, so it degrades to "Unknown Server" rather than exposing
+			// the deployment id.
+			info.ServerName = "Unknown Server"
 		}
 		if info.GameName == "" {
 			info.GameName = "Unknown Game"
