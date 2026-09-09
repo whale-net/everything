@@ -4,17 +4,20 @@ go_library(
     name = "handlers",
     srcs = [
         "auth.go",
+        "broadcast.go",
         "send.go",
         "session.go",
         "start.go",
         "stop.go",
         "stream.go",
+        "stream_sequencer.go",
         "usage.go",
     ],
     importpath = "github.com/whale-net/everything/whagent_net/api/handlers",
     visibility = ["//visibility:public"],
     deps = [
         "//libs/go/grpcauth",
+        "//libs/go/logging",
         "//libs/go/rmq",
         "//whagent_net/events",
         "//whagent_net/llm",
@@ -29,28 +32,40 @@ go_library(
     ],
 )
 
-# Unit test for the RequireClaimsUnaryInterceptor/RequireClaimsStreamInterceptor
-# pair (issue #2113's Testing section: "Unauthenticated and bad-token calls to
-# every RPC are rejected by the interceptor before any handler runs"). No
-# Postgres/network dependency, so this runs as part of `bazel test //...`.
+# Unit tests: RequireClaimsUnaryInterceptor/RequireClaimsStreamInterceptor
+# (issue #2113's Testing section) and eventSequencer, StreamEvents' dedup-on-
+# event_id/order-on-seq merge stage (issue #2239's Testing section). Neither
+# needs Postgres/network, so this runs as part of `bazel test //...`.
 go_test(
     name = "handlers_test",
-    srcs = ["auth_test.go"],
+    srcs = [
+        "auth_test.go",
+        "stream_sequencer_test.go",
+    ],
+    embed = [":handlers"],
     deps = [
-        ":handlers",
         "//libs/go/grpcauth",
+        "//whagent_net/events",
+        "@com_github_google_uuid//:uuid",
+        "@com_github_stretchr_testify//assert",
+        "@com_github_stretchr_testify//require",
         "@org_golang_google_grpc//:grpc",
         "@org_golang_google_grpc//codes",
         "@org_golang_google_grpc//status",
     ],
 )
 
-# Real Postgres + real gRPC server integration test for GetSession/
-# ReadTranscript (issue #2113's Testing section: "Integration test over a
-# real gRPC server + //libs/go/dbtest Postgres covering the two read RPCs
-# end to end"). Deliberately NOT part of `bazel test //...` -- see
-# //libs/go/dbtest's README and whagent_net/session:session_integration_test
-# for the full rationale behind each tag and how to run a test like this one.
+# Real Postgres + real gRPC server integration coverage for the SessionService
+# read paths: GetSession/ReadTranscript (issue #2113's Testing section) and,
+# via a second real broker (testcontainers), StreamEvents (issue #2239's
+# Testing section -- see stream_events_integration_test.go's own doc comment
+# for what it proves). One target, same as whagent_net/session's own
+# multi-file *_integration_test.go convention -- stream_events_integration_test.go
+# shares session_integration_test.go's newTestServer/createSession/testIssuer/
+# devSubject fixtures, so both files must compile together. Deliberately NOT
+# part of `bazel test //...` -- see //libs/go/dbtest's README and
+# whagent_net/session:session_integration_test for the full rationale behind
+# each tag and how to run a test like this one.
 #
 # Run it explicitly (requires a working Docker daemon):
 #   bazel test //whagent_net/api/handlers:session_integration_test --test_output=all
@@ -60,6 +75,7 @@ go_test(
     timeout = "long",
     srcs = [
         "session_integration_test.go",
+        "stream_events_integration_test.go",
         "usage_integration_test.go",
     ],
     gotags = ["integration"],
@@ -76,6 +92,8 @@ go_test(
         "//libs/go/dbtest",
         "//libs/go/grpcauth",
         "//libs/go/migrate",
+        "//libs/go/rmq",
+        "//whagent_net/events",
         "//whagent_net/migrate/schema",
         "//whagent_net/protos:whagentpb",
         "//whagent_net/session",
@@ -83,6 +101,8 @@ go_test(
         "@com_github_jackc_pgx_v5//stdlib",
         "@com_github_stretchr_testify//assert",
         "@com_github_stretchr_testify//require",
+        "@com_github_testcontainers_testcontainers_go//:testcontainers-go",
+        "@com_github_testcontainers_testcontainers_go//wait",
         "@org_golang_google_grpc//:grpc",
         "@org_golang_google_grpc//codes",
         "@org_golang_google_grpc//credentials/insecure",

@@ -91,7 +91,7 @@ func newTestServer(t *testing.T) (pb.SessionServiceClient, *session.Store) {
 	// constructs a real Temporal test environment and a stubbed catalogue
 	// instead, and StreamEvents' own coverage (issue #2239's Testing
 	// phase) constructs a real broker.
-	sessionServer := handlers.NewSessionServer(store, testIssuer, nil, "", nil, nil)
+	sessionServer := handlers.NewSessionServer(ctx, store, testIssuer, nil, "", nil, nil)
 
 	unaryAuth, streamAuth, err := grpcauth.NewServerInterceptors(ctx, grpcauth.ServerConfig{
 		Mode: grpcauth.AuthModeNone,

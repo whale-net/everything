@@ -154,7 +154,7 @@ func run() error {
 		defer eventsConsumer.Close() //nolint:errcheck
 	}
 
-	sessionServer := handlers.NewSessionServer(store, grpcOIDCIssuer, temporalClient, temporalCfg.TaskQueue, catalog, eventsConsumer)
+	sessionServer := handlers.NewSessionServer(ctx, store, grpcOIDCIssuer, temporalClient, temporalCfg.TaskQueue, catalog, eventsConsumer)
 
 	// agentDefs feeds DevRoles below: DevRoles matters only in
 	// AuthModeNone, where it makes the injected dev Claims carry every
@@ -243,10 +243,12 @@ func run() error {
 // it to every routing key ("#") the same way htmxsse.Hub.attach does
 // (libs/go/htmxsse/hub.go) -- one shared subscription, not one per
 // stream, so no StreamEvents call ever needs its own broker connection or
-// credentials (C17's whole point). handlers.SessionServer.StreamEvents
-// (stream.go) filters the shared queue's deliveries to a given call's
-// session in-process at Implementation time, the same way Hub's clients
-// each filter the shared feed to their own topic.
+// credentials (C17's whole point). handlers.NewSessionServer registers a
+// fresh eventBroadcaster (broadcast.go) as the returned consumer's sole
+// message handler and starts consuming; handlers.SessionServer.StreamEvents
+// (stream.go) then only ever talks to that in-process broadcaster, never
+// this consumer directly, the same way htmxsse.Hub's clients each filter
+// the shared feed to their own topic rather than touching the transport.
 //
 // Construction is non-fatal, matching worker/main.go's
 // initializePublisher: RABBITMQ_URL unset or the broker unreachable at

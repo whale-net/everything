@@ -28,6 +28,7 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/whale-net/everything/libs/go/grpcauth"
+	"github.com/whale-net/everything/libs/go/logging"
 	"github.com/whale-net/everything/libs/go/rmq"
 	temporalclient "go.temporal.io/sdk/client"
 	"google.golang.org/grpc/codes"
@@ -114,6 +115,14 @@ type SessionServer struct {
 	// must report UNAVAILABLE rather than block when this is nil. Unused
 	// by every other RPC.
 	eventsConsumer *rmq.Consumer
+	// broadcaster is the in-process fan-out (broadcast.go) that turns
+	// eventsConsumer's single shared subscription into however many
+	// concurrent StreamEvents calls are tailing a session -- see
+	// eventBroadcaster's doc comment. Wired to eventsConsumer as
+	// eventsConsumer's sole handler and started, both by NewSessionServer
+	// below, exactly when eventsConsumer is non-nil; nil (and unused by
+	// StreamEvents, which checks eventsConsumer instead) otherwise.
+	broadcaster *eventBroadcaster
 }
 
 var _ pb.SessionServiceServer = (*SessionServer)(nil)
@@ -123,16 +132,40 @@ var _ pb.SessionServiceServer = (*SessionServer)(nil)
 // SessionWorkflow executions through temporalClient on taskQueue, checking
 // StartSession's FR5 model_override against catalog, and serving
 // StreamEvents (issue #2239) off eventsConsumer -- nil is fine (see
-// SessionServer.eventsConsumer). An empty taskQueue defaults to
-// sessionWorkflowTaskQueue -- main.go passes //libs/go/temporal's
-// Config.TaskQueue (TEMPORAL_TASK_QUEUE) straight through unchanged,
-// mirroring whagent_net/worker/main.go's identical "env value if set, else
-// the package's own default" fallback for the same setting on the other
-// side of this same queue.
-func NewSessionServer(store *session.Store, issuer string, temporalClient temporalclient.Client, taskQueue string, catalog *llm.Catalog, eventsConsumer *rmq.Consumer) *SessionServer {
+// SessionServer.eventsConsumer). When eventsConsumer is non-nil,
+// NewSessionServer registers a fresh eventBroadcaster as its sole handler
+// and starts it against ctx (rmq.Consumer.Start's doc comment: it launches
+// its own background goroutine and self-heals broker-side failures
+// forever, until ctx is cancelled -- so ctx here must be the server's own
+// run-scoped lifetime context, main.go's, never a per-request one). If
+// Start fails, eventsConsumer/broadcaster are both discarded (set nil) so
+// StreamEvents reports UNAVAILABLE rather than ever trying to read from a
+// consumer that never started -- the same non-fatal-construction
+// convention main.go's initializeEventsConsumer already applies to every
+// earlier setup failure (RABBITMQ_URL unset, connect failed, exchange
+// declare failed).
+//
+// An empty taskQueue defaults to sessionWorkflowTaskQueue -- main.go
+// passes //libs/go/temporal's Config.TaskQueue (TEMPORAL_TASK_QUEUE)
+// straight through unchanged, mirroring whagent_net/worker/main.go's
+// identical "env value if set, else the package's own default" fallback
+// for the same setting on the other side of this same queue.
+func NewSessionServer(ctx context.Context, store *session.Store, issuer string, temporalClient temporalclient.Client, taskQueue string, catalog *llm.Catalog, eventsConsumer *rmq.Consumer) *SessionServer {
 	if taskQueue == "" {
 		taskQueue = sessionWorkflowTaskQueue
 	}
+
+	var broadcaster *eventBroadcaster
+	if eventsConsumer != nil {
+		broadcaster = newEventBroadcaster()
+		eventsConsumer.RegisterHandler("#", broadcaster.HandleMessage)
+		if err := eventsConsumer.Start(ctx); err != nil {
+			logging.Get("streamevents").Warn("failed to start events consumer; StreamEvents will be unavailable", "error", err)
+			eventsConsumer = nil
+			broadcaster = nil
+		}
+	}
+
 	return &SessionServer{
 		store:          store,
 		issuer:         issuer,
@@ -140,6 +173,7 @@ func NewSessionServer(store *session.Store, issuer string, temporalClient tempor
 		taskQueue:      taskQueue,
 		catalog:        catalog,
 		eventsConsumer: eventsConsumer,
+		broadcaster:    broadcaster,
 	}
 }
 
