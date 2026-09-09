@@ -93,7 +93,12 @@ templ SGCDetail(data SGCDetailPageData) {
 			building of its own. BuildConnectAddressView (issue #2268)
 			wraps components.ComputeConnectAddresses with the
 			ConnectAddressUnavailable derivation this page and
-			handlers_sgc.go still consume as separate fields.
+			handlers_sgc.go still consume as separate fields. The address
+			list/unavailable markup itself is delegated to
+			components.ConnectAddressDisplay (its own doc comment) rather
+			than duplicated here; this template only owns the
+			running-vs-stopped reveal gating, per that component's
+			documented contract.
 		-->
 		<div class="card bg-base-100 border border-base-300 shadow-sm mb-6">
 			<div class="card-body">
@@ -102,29 +107,17 @@ templ SGCDetail(data SGCDetailPageData) {
 					@htmxui.Badge(deploymentStatusLabel(data.DeploymentStatus), statusBadgeVariant(string(data.DeploymentStatus)), htmxui.BadgeSizeMD, true, nil)
 				</div>
 				if data.ConnectAddressUnavailable {
-					<p class="text-sm text-base-content/60">Connect address unavailable — no public address configured for this host.</p>
+					@components.ConnectAddressDisplay(components.ConnectAddressView{Unavailable: true})
 				} else if data.DeploymentStatus == components.DeploymentRunning {
-					<ul class="space-y-1">
-						for _, addr := range data.ConnectAddresses {
-							<li class="flex items-center gap-2">
-								<code class="text-sm font-mono bg-base-200 text-base-content px-2 py-1 rounded">{ addr.Address }</code>
-								<span class="text-xs text-base-content/60">{ addr.Protocol }</span>
-							</li>
-						}
-					</ul>
+					@components.ConnectAddressDisplay(components.ConnectAddressView{Addresses: data.ConnectAddresses})
 				} else {
 					<div x-data="{ showConnectAddress: false }">
 						<button type="button" @click="showConnectAddress = !showConnectAddress" class="btn btn-secondary btn-sm">
 							<span x-text="showConnectAddress ? 'Hide last-known connect address' : 'Show last-known connect address'">Show last-known connect address</span>
 						</button>
-						<ul x-show="showConnectAddress" x-cloak class="space-y-1 mt-2">
-							for _, addr := range data.ConnectAddresses {
-								<li class="flex items-center gap-2">
-									<code class="text-sm font-mono bg-base-200 text-base-content px-2 py-1 rounded">{ addr.Address }</code>
-									<span class="text-xs text-base-content/60">{ addr.Protocol }</span>
-								</li>
-							}
-						</ul>
+						<div x-show="showConnectAddress" x-cloak class="mt-2">
+							@components.ConnectAddressDisplay(components.ConnectAddressView{Addresses: data.ConnectAddresses})
+						</div>
 					</div>
 				}
 			</div>
