@@ -5,6 +5,7 @@ templ_library(
     name = "components",
     srcs = glob(["*.templ"]),
     go_srcs = [
+        "connect_address.go",
         "deployment_actions.go",
         "deployment_status.go",
         "restart_state.go",
