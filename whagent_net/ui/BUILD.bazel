@@ -1,6 +1,8 @@
 """whagent-net standalone agent web UI (M2, issue #2236): binary entrypoint,
-Keycloak sign-in, and the authenticated api client. Real session pages
-(FR1-FR4) land in later tasks under the same plan (#2233)."""
+Keycloak sign-in, and the authenticated api client. The session detail page
+and its live transcript (FR2, NFR2, NFR3, NFR4, issue #2242) are this
+package's other consumer; remaining FR1-FR4 pieces land in later tasks
+under the same plan (#2233)."""
 
 load("@rules_go//go:def.bzl", "go_binary", "go_library", "go_test")
 load("//tools/bazel:release.bzl", "release_app")
@@ -8,8 +10,11 @@ load("//tools/bazel:release.bzl", "release_app")
 go_library(
     name = "ui_lib",
     srcs = [
+        "convert.go",
         "grpc_client.go",
         "handlers.go",
+        "handlers_session.go",
+        "handlers_session_live.go",
         "main.go",
         "templ_render.go",
     ],
@@ -21,12 +26,17 @@ go_library(
         "//libs/go/grpcclient",
         "//libs/go/htmxauth",
         "//libs/go/htmxbase",
+        "//libs/go/htmxsse",
+        "//libs/go/htmxsse/templadapter",
         "//libs/go/htmxui",
         "//libs/go/logging",
+        "//libs/go/rmq",
+        "//whagent_net/events",
         "//whagent_net/protos:whagentpb",
         "//whagent_net/ui/components",
         "//whagent_net/ui/pages",
         "@com_github_a_h_templ//:templ",
+        "@com_github_google_uuid//:uuid",
         "@io_opentelemetry_go_contrib_instrumentation_net_http_otelhttp//:otelhttp",
         "@org_golang_google_grpc//:grpc",
     ],
