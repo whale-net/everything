@@ -65,6 +65,7 @@ go_test(
         "handlers_deployment_actions_realtransport_test.go",
         "handlers_deployment_actions_test.go",
         "handlers_deployment_row_refresh_test.go",
+        "handlers_games_test.go",
         "handlers_home_test.go",
         "handlers_server_ports_test.go",
         "handlers_servers_update_address_test.go",
