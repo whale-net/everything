@@ -259,5 +259,17 @@ func (f sessionTranscriptFragment) Render(ctx context.Context, w io.Writer) erro
 		f.state.merge(ev)
 	}
 
-	return components.TranscriptList(f.state.events).Render(ctx, w)
+	// Re-read the session's current state on every delivery, not just the
+	// initial page render, so the state badge (and terminal-state banner)
+	// swap alongside the transcript instead of going stale until a manual
+	// refresh (Implementation: "swaps transcript fragments and the state
+	// badge on each SSE event"). A failure here is transient like every
+	// other error in this method -- no bytes written, previous content
+	// (including the previously rendered badge) stays on screen.
+	sessionView, err := f.app.readSession(grpcCtx, f.sessionID)
+	if err != nil {
+		return fmt.Errorf("read session %s: %w", f.sessionID, err)
+	}
+
+	return components.SessionLive(sessionView, f.state.events).Render(ctx, w)
 }

@@ -67,8 +67,13 @@ func (sm *SessionManager) RecoverOrphanedSessions(ctx context.Context, serverID 
 		}
 
 		if status.Running {
-			// Re-attach to running game container using logs API
-			logReader, err := sm.dockerClient.GetContainerLogs(ctx, game.ID, true, "all")
+			// Re-attach to running game container using logs API.
+			// since resumes from the last log checkpoint persisted before this
+			// restart, so already-delivered logs aren't replayed to RabbitMQ.
+			// An empty checkpoint (never persisted, e.g. first run after upgrade)
+			// falls back to replaying everything, matching prior behavior.
+			since := sm.readLogCheckpoint(sgcID)
+			logReader, err := sm.dockerClient.GetContainerLogs(ctx, game.ID, true, "all", since, true)
 			if err != nil {
 				slog.Warn("failed to get logs from running container, removing", "session_id", sessionID, "container_id", game.ID, "error", err)
 				_ = sm.dockerClient.StopContainer(ctx, game.ID, nil)

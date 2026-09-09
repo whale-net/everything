@@ -94,11 +94,11 @@ func stateBadgeVariant(state string) htmxui.BadgeVariant {
 }
 
 // stateBadge renders SessionView.State as an htmxui.Badge, with an
-// `id="session-state-badge"` so a future live status update
-// (handlers_session_live.go's fragment, once GetSession is polled
-// alongside the transcript) can target it as its own swap region -- out
-// of scope for this task; the id is reserved now so that follow-up does
-// not need to touch this markup.
+// `id="session-state-badge"` for readability/testability. It is rendered
+// inside SessionLive, the same element the SSE stream swaps as a whole
+// (../handlers_session_live.go's sessionTranscriptFragment re-reads the
+// session on every delivery and renders this alongside the transcript), so
+// it is never stale relative to the transcript it sits beside.
 templ stateBadge(state string) {
 	@htmxui.Badge(state, stateBadgeVariant(state), htmxui.BadgeSizeMD, true, templ.Attributes{"id": "session-state-badge"})
 }
@@ -130,32 +130,18 @@ func sessionTopicsAttr(topics []string) string {
 }
 
 // SessionDetail is the session detail page (FR2, NFR2, NFR3): initial
-// render from data.Events, then live via hx-ext="sse" bound to
+// render from data.Session/data.Events, then live via hx-ext="sse" bound to
 // /sessions/{id}/events (../handlers_session_live.go). The composer slot
 // (FR1) and usage slot (FR4) are empty, clearly-named mount points for
 // their own follow-up tasks -- this task never populates them beyond the
-// owner-gated placeholder comment.
+// owner-gated placeholder comment. The state badge and any terminal-state
+// banner are *inside* the swapped div (SessionLive), not here, so they
+// swap live alongside the transcript rather than only reflecting this
+// initial render.
 templ SessionDetail(data SessionDetailData) {
 	@Layout(data.Layout) {
-		<div class="flex items-center gap-3 mb-2">
-			<h1 class="text-2xl font-bold text-base-content">Session { data.Session.SessionID }</h1>
-			@stateBadge(data.Session.State)
-		</div>
+		<h1 class="text-2xl font-bold text-base-content mb-2">Session { data.Session.SessionID }</h1>
 		@startedByLine(data.Session)
-		if data.Session.State == "capped" && data.Session.CapKind != "" {
-			<p class="text-sm text-warning mb-2">Capped: { data.Session.CapKind }</p>
-		}
-		if data.Session.State == "failed" {
-			<p class="text-sm text-error mb-2">
-				Failed
-				if data.Session.ErrorCategory != "" {
-					({ data.Session.ErrorCategory })
-				}
-				if data.Session.ErrorDetail != "" {
-					: { data.Session.ErrorDetail }
-				}
-			</p>
-		}
 		if data.IsOwner {
 			<!-- FR1 (session lifecycle controls) mounts the turn composer and
 			     stop control here. A non-owner never reaches this branch, so
@@ -170,9 +156,38 @@ templ SessionDetail(data SessionDetailData) {
 			sse-connect={ fmt.Sprintf("/sessions/%s/events", data.Session.SessionID) }
 			sse-swap={ sessionTopicsAttr(data.Topics) }
 		>
-			@TranscriptList(data.Events)
+			@SessionLive(data.Session, data.Events)
 		</div>
 	}
+}
+
+// SessionLive renders the portion of the session detail page that swaps
+// live on every SSE delivery (FR2, Implementation: "swaps transcript
+// fragments and the state badge on each SSE event"): the state badge, an
+// optional terminal-state banner, and the transcript, in that order. Used
+// both for SessionDetail's initial render and, verbatim, by
+// ../handlers_session_live.go's sessionTranscriptFragment.Render for every
+// later delivery -- the two can never disagree about what a given
+// (session, events) pair renders as.
+templ SessionLive(session SessionView, evs []TranscriptEventView) {
+	<div class="flex items-center gap-3 mb-2">
+		@stateBadge(session.State)
+	</div>
+	if session.State == "capped" && session.CapKind != "" {
+		<p class="text-sm text-warning mb-2">Capped: { session.CapKind }</p>
+	}
+	if session.State == "failed" {
+		<p class="text-sm text-error mb-2">
+			Failed
+			if session.ErrorCategory != "" {
+				({ session.ErrorCategory })
+			}
+			if session.ErrorDetail != "" {
+				: { session.ErrorDetail }
+			}
+		</p>
+	}
+	@TranscriptList(evs)
 }
 
 // TranscriptList renders evs (already in seq order, LB1) as the

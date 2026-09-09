@@ -190,6 +190,10 @@ See the complete guide: [docs/RELEASE.md](docs/RELEASE.md)
 - **Build Issues**: Check [docs/CONFIGURATION.md](docs/CONFIGURATION.md) for Bazel settings
 - **Release Problems**: See [docs/RELEASE.md](docs/RELEASE.md) for release troubleshooting
 
+### Pi Agent Plugins
+
+The project-manager plugin (`/project-manager:*` commands) auto-installs for [pi](https://pi.dev) sessions in this repo via the committed [.pi/claude-plugins.json](.pi/claude-plugins.json) — no manual `/claude:plugin marketplace add` needed. Local overrides go in `.pi/claude-plugins.local.json` (gitignored).
+
 ### Repository Structure
 ```
 ├── manman/                # ManMan - Game server orchestration

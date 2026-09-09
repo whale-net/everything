@@ -27,6 +27,14 @@ const (
 	// The host's data directory should be mounted here. Exported so the workshop orchestrator
 	// can create volume directories under the same tree before spawning download containers.
 	InternalDataDir = "/var/lib/manman/sessions"
+
+	// logCheckpointFileName holds the RFC3339Nano resume point (one nanosecond
+	// past the last game container log line published to RabbitMQ) for an SGC.
+	// It lives under the SGC's data dir (bind-mounted from the host), so it
+	// survives host-manager restarts and lets RecoverOrphanedSessions resume
+	// from it via `since` instead of replaying a running container's entire
+	// log history.
+	logCheckpointFileName = ".last_log_ts"
 )
 
 // SessionManager manages the lifecycle of game server sessions
@@ -124,6 +132,72 @@ func (sm *SessionManager) getSGCHostDir(sgcID int64) string {
 		dirName = fmt.Sprintf("sgc-%s-%d", sm.environment, sgcID)
 	}
 	return filepath.Join(sm.hostDataDir, dirName)
+}
+
+// readLogCheckpoint returns the persisted resume point for an SGC's game
+// container — one nanosecond past the last log line published — formatted
+// for Docker's `since` log filter directly. Returns "" if no checkpoint has
+// been persisted (e.g. first recovery after upgrading to this feature), so
+// callers should treat that as "replay everything".
+func (sm *SessionManager) readLogCheckpoint(sgcID int64) string {
+	path := filepath.Join(sm.getSGCInternalDir(sgcID), logCheckpointFileName)
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return ""
+	}
+	ts := strings.TrimSpace(string(data))
+	if _, err := time.Parse(time.RFC3339Nano, ts); err != nil {
+		slog.Warn("ignoring unparseable log checkpoint", "sgc_id", sgcID, "error", err)
+		return ""
+	}
+	return ts
+}
+
+// writeLogCheckpoint persists the point to resume reading from on a future
+// recovery: one nanosecond past the last log line published for an SGC's game
+// container. Docker's `since` log filter is inclusive (it only drops lines
+// strictly before `since`), so storing the last-published timestamp itself
+// would cause that exact line to be replayed on every restart; storing it +1ns
+// makes `since` resolve to "everything after what we've already sent" instead.
+func (sm *SessionManager) writeLogCheckpoint(sgcID int64, ts time.Time) {
+	dir := sm.getSGCInternalDir(sgcID)
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		slog.Warn("failed to create sgc dir for log checkpoint", "sgc_id", sgcID, "error", err)
+		return
+	}
+	path := filepath.Join(dir, logCheckpointFileName)
+	tmpFile, err := os.CreateTemp(dir, logCheckpointFileName+".tmp-*")
+	if err != nil {
+		slog.Warn("failed to create temp file for log checkpoint", "sgc_id", sgcID, "error", err)
+		return
+	}
+	tmp := tmpFile.Name()
+	_, writeErr := tmpFile.WriteString(ts.Add(time.Nanosecond).UTC().Format(time.RFC3339Nano))
+	closeErr := tmpFile.Close()
+	if writeErr != nil || closeErr != nil {
+		slog.Warn("failed to write log checkpoint", "sgc_id", sgcID, "write_error", writeErr, "close_error", closeErr)
+		_ = os.Remove(tmp)
+		return
+	}
+	if err := os.Rename(tmp, path); err != nil {
+		slog.Warn("failed to rename log checkpoint into place", "sgc_id", sgcID, "error", err)
+		_ = os.Remove(tmp)
+	}
+}
+
+// clearLogCheckpoint removes any persisted log checkpoint for an SGC. Called
+// when a new game container is created for the SGC so that, if host-manager
+// crashes before the new container publishes (and checkpoints) its own first
+// log line, a later RecoverOrphanedSessions falls back to replaying that new
+// container's logs from the start rather than resuming from a checkpoint that
+// actually describes a prior, now-replaced container instance — which could
+// otherwise silently skip the new container's early logs under host clock
+// skew (e.g. an NTP step) across the crash/restart.
+func (sm *SessionManager) clearLogCheckpoint(sgcID int64) {
+	path := filepath.Join(sm.getSGCInternalDir(sgcID), logCheckpointFileName)
+	if err := os.Remove(path); err != nil && !os.IsNotExist(err) {
+		slog.Warn("failed to clear log checkpoint", "sgc_id", sgcID, "error", err)
+	}
 }
 
 // StartSession starts a new game server session
@@ -307,6 +381,12 @@ func (sm *SessionManager) StartSession(ctx context.Context, cmd *StartSessionCom
 	slog.Info("container created", "session_id", sessionID, "container_id", containerID)
 	state.GameContainerID = containerID
 
+	// Any checkpoint on disk describes a prior container instance for this SGC
+	// (or none at all) — never this brand-new one. Clear it before starting the
+	// container so a crash before this container's first checkpoint write can't
+	// leave a stale, unrelated checkpoint for RecoverOrphanedSessions to use.
+	sm.clearLogCheckpoint(sgcID)
+
 	// 6. Start game container
 	slog.Info("starting container", "session_id", sessionID, "container_id", containerID)
 	if err := sm.dockerClient.StartContainer(ctx, containerID); err != nil {
@@ -322,8 +402,10 @@ func (sm *SessionManager) StartSession(ctx context.Context, cmd *StartSessionCom
 	slog.Info("container started", "session_id", sessionID, "container_id", containerID)
 
 	// 7. Stream logs using Docker logs API (doesn't interfere with stdin during startup)
+	// timestamps=true so the log reader can persist a checkpoint of the last log
+	// emitted, letting a later restart re-attach without replaying already-sent logs.
 	slog.Info("starting log stream", "session_id", sessionID)
-	logReader, err := sm.dockerClient.GetContainerLogs(ctx, containerID, true, "all")
+	logReader, err := sm.dockerClient.GetContainerLogs(ctx, containerID, true, "all", "", true)
 	if err != nil {
 		slog.Error("failed to get container logs", "session_id", sessionID, "error", err)
 		sm.cleanupSession(ctx, state)
@@ -599,10 +681,34 @@ func (sm *SessionManager) startStreamReaderWithFormat(state *State, reader io.Re
 		var mu sync.Mutex
 		logBuffer := make([]string, 0, bufferSize)
 		sourceBuffer := make([]string, 0, bufferSize)
+		tsBuffer := make([]time.Time, 0, bufferSize) // parallel to logBuffer; zero value if unparseable
 		var stdoutCount, stderrCount, errorCount, warnCount int
 
-		// flushLogs snapshots and clears the buffer under the lock, then publishes.
+		// flushSeq serializes whole flushLogs executions. Both the 1s ticker and
+		// addMessage's shouldFlush path can call flushLogs, and without this,
+		// two concurrent calls could publish and checkpoint out of order — e.g.
+		// a smaller/faster batch's checkpoint write landing after a larger/
+		// slower batch's, regressing the on-disk checkpoint backwards and
+		// causing the skipped-over lines to replay on the next restart, or
+		// corrupting the checkpoint file via concurrent writers. This is
+		// separate from mu (which only guards the shared buffers) so a flush's
+		// publish/checkpoint I/O never blocks the reader goroutine from
+		// continuing to append new lines.
+		var flushSeq sync.Mutex
+
+		// flushLogs snapshots and clears the buffer under the lock, publishes each
+		// line, then persists a log checkpoint — but only up through the longest
+		// prefix of the batch that was actually handed to the publisher without
+		// error. This must run in that order (publish, THEN checkpoint) and must
+		// never jump past a failed line: RecoverOrphanedSessions resumes reading
+		// container logs from the checkpoint's `since` value, so checkpointing a
+		// line before confirming its publish attempt succeeded — or checkpointing
+		// past a line whose publish failed — would permanently drop that line the
+		// next time host-manager restarts and re-attaches.
 		flushLogs := func() {
+			flushSeq.Lock()
+			defer flushSeq.Unlock()
+
 			mu.Lock()
 			if len(logBuffer) == 0 {
 				mu.Unlock()
@@ -610,9 +716,11 @@ func (sm *SessionManager) startStreamReaderWithFormat(state *State, reader io.Re
 			}
 			logsCopy := append([]string(nil), logBuffer...)
 			sourcesCopy := append([]string(nil), sourceBuffer...)
+			tsCopy := append([]time.Time(nil), tsBuffer...)
 			sc, strc, ec, wc := stdoutCount, stderrCount, errorCount, warnCount
 			logBuffer = logBuffer[:0]
 			sourceBuffer = sourceBuffer[:0]
+			tsBuffer = tsBuffer[:0]
 			stdoutCount, stderrCount, errorCount, warnCount = 0, 0, 0, 0
 			mu.Unlock()
 
@@ -626,31 +734,53 @@ func (sm *SessionManager) startStreamReaderWithFormat(state *State, reader io.Re
 					"warnings", wc)
 			}
 
+			var checkpointTS time.Time
 			if sm.rmqPublisher != nil {
 				ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 				defer cancel()
+				failed := false
 				for i := range logsCopy {
 					if err := sm.rmqPublisher.PublishLog(ctx, state.SessionID, sourcesCopy[i], logsCopy[i]); err != nil {
 						slog.Warn("failed to publish log to RabbitMQ", "session_id", state.SessionID, "error", err)
+						failed = true
+						continue // best-effort: still attempt the rest of the batch
+					}
+					if !failed && !tsCopy[i].IsZero() {
+						checkpointTS = tsCopy[i] // only advance through the unbroken successful prefix
 					}
 				}
 			}
+
+			if !checkpointTS.IsZero() {
+				sm.writeLogCheckpoint(state.SGCID, checkpointTS)
+			}
 		}
 
-		addMessage := func(message, source string) {
+		addMessage := func(raw, source string) {
+			message := raw
+			var ts time.Time
+			if parsedTS, rest, ok := docker.SplitLogTimestamp(raw); ok {
+				message = rest
+				ts = parsedTS
+			}
+			isStderr := source == "stderr"
+			msgLower := strings.ToLower(message)
+			isError := strings.Contains(msgLower, "error") || strings.Contains(msgLower, "exception") || strings.Contains(msgLower, "fatal")
+			isWarn := strings.Contains(msgLower, "warn")
+
 			mu.Lock()
 			logBuffer = append(logBuffer, message)
+			tsBuffer = append(tsBuffer, ts)
 			sourceBuffer = append(sourceBuffer, source)
-			if source == "stderr" {
+			if isStderr {
 				stderrCount++
 			} else {
 				stdoutCount++
 			}
-			msgLower := strings.ToLower(message)
-			if strings.Contains(msgLower, "error") || strings.Contains(msgLower, "exception") || strings.Contains(msgLower, "fatal") {
+			if isError {
 				errorCount++
 			}
-			if strings.Contains(msgLower, "warn") {
+			if isWarn {
 				warnCount++
 			}
 			shouldFlush := len(logBuffer) >= bufferSize
