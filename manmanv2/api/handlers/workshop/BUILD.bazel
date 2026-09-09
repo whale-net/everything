@@ -4,6 +4,9 @@ go_library(
     name = "workshop",
     srcs = [
         "addon.go",
+        "batch.go",
+        "batch_job.go",
+        "cache.go",
         "handler.go",
         "installation.go",
         "library.go",
@@ -13,11 +16,13 @@ go_library(
     importpath = "github.com/whale-net/everything/manmanv2/api/handlers/workshop",
     visibility = ["//manmanv2/api:__subpackages__"],
     deps = [
+        "//libs/go/grpcauth",
         "//libs/go/rmq",
-        "//manmanv2/models:models",
+        "//libs/go/s3",
         "//manmanv2/api/repository",
         "//manmanv2/api/workshop",
         "//manmanv2/host/rmq",
+        "//manmanv2/models",
         "//manmanv2/protos:manmanpb",
         "@org_golang_google_grpc//codes",
         "@org_golang_google_grpc//status",
@@ -26,10 +31,18 @@ go_library(
 
 go_test(
     name = "workshop_test",
-    srcs = ["workshop_test.go"],
+    srcs = [
+        "batch_create_steam_regression_test.go",
+        "cache_test.go",
+        "workshop_test.go",
+    ],
     embed = [":workshop"],
     deps = [
-        "//manmanv2/models:models",
+        "//libs/go/grpcauth",
+        "//manmanv2/api/steam",
+        "//manmanv2/api/workshop",
+        "//manmanv2/host/rmq",
+        "//manmanv2/models",
         "//manmanv2/protos:manmanpb",
         "@com_github_stretchr_testify//assert",
         "@com_github_stretchr_testify//mock",

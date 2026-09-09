@@ -49,6 +49,8 @@ type WorkshopManagerInterface interface {
 	FetchMetadata(ctx context.Context, gameID int64, workshopID string) (*manman.WorkshopAddon, error)
 	CreateAddon(ctx context.Context, addon *manman.WorkshopAddon) (*manman.WorkshopAddon, error)
 	EnsureLibraryAddonsInstalled(ctx context.Context, sgcID int64) error
+	BatchCreateAddons(ctx context.Context, gameID, libraryID int64, entries string, presetID int64) (*manman.WorkshopBatchJob, []*manman.WorkshopBatchJobItem, error)
+	AddCollectionToLibrary(ctx context.Context, gameID, libraryID int64, collectionInput string, presetID int64) (*manman.WorkshopBatchJob, int64, []*manman.WorkshopBatchJobItem, error)
 }
 
 // WorkshopManager orchestrates workshop addon operations
@@ -62,6 +64,7 @@ type WorkshopManager struct {
 	volumeRepo       repository.GameConfigVolumeRepository
 	presetRepo       repository.AddonPathPresetRepository
 	sessionRepo      repository.SessionRepository
+	batchJobRepo     repository.WorkshopBatchJobRepository
 	steamClient      SteamClient
 	rmqPublisher     RMQPublisher
 }
@@ -77,6 +80,7 @@ func NewWorkshopManager(
 	volumeRepo repository.GameConfigVolumeRepository,
 	presetRepo repository.AddonPathPresetRepository,
 	sessionRepo repository.SessionRepository,
+	batchJobRepo repository.WorkshopBatchJobRepository,
 	steamClient SteamClient,
 	rmqPublisher RMQPublisher,
 ) *WorkshopManager {
@@ -90,6 +94,7 @@ func NewWorkshopManager(
 		volumeRepo:       volumeRepo,
 		presetRepo:       presetRepo,
 		sessionRepo:      sessionRepo,
+		batchJobRepo:     batchJobRepo,
 		steamClient:      steamClient,
 		rmqPublisher:     rmqPublisher,
 	}

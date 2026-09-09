@@ -625,6 +625,106 @@ func (c *ControlClient) DeleteLibrary(ctx context.Context, libraryID int64) erro
 	return err
 }
 
+// Batch job status methods (FR4, plan #2175)
+
+// GetBatchJob fetches a batch job header plus its per-item results, ordered
+// by display_order server-side so items render in paste order.
+func (c *ControlClient) GetBatchJob(ctx context.Context, batchJobID int64) (*manmanpb.WorkshopBatchJob, []*manmanpb.BatchItemResult, error) {
+	resp, err := c.workshop.GetBatchJob(ctx, &manmanpb.GetBatchJobRequest{
+		BatchJobId: batchJobID,
+	})
+	if err != nil {
+		return nil, nil, err
+	}
+	return resp.Job, resp.Items, nil
+}
+
+// ListBatchJobs returns the most recent batch jobs for a game, newest first.
+func (c *ControlClient) ListBatchJobs(ctx context.Context, gameID int64, limit int32) ([]*manmanpb.WorkshopBatchJob, error) {
+	resp, err := c.workshop.ListBatchJobs(ctx, &manmanpb.ListBatchJobsRequest{
+		GameId: gameID,
+		Limit:  limit,
+	})
+	if err != nil {
+		return nil, err
+	}
+	return resp.Jobs, nil
+}
+
+// ListAddonCacheEntries fetches every content-addressed cache entry for an
+// addon, newest-first, each with its full host-presence list (FR10, plan
+// #2175) -- the Admin fleet-wide Workshop cache visibility view. An addon
+// with no cached entries returns an empty slice, not an error.
+func (c *ControlClient) ListAddonCacheEntries(ctx context.Context, addonID int64) ([]*manmanpb.WorkshopCacheEntry, error) {
+	resp, err := c.workshop.ListAddonCacheEntries(ctx, &manmanpb.ListAddonCacheEntriesRequest{
+		AddonId: addonID,
+	})
+	if err != nil {
+		return nil, err
+	}
+	return resp.Entries, nil
+}
+
+// VerifyCacheEntry dispatches an Admin's on-demand SteamCMD verify of a single cache
+// entry, independent of any install (FR11, plan #2175, #2186). serverID == 0 lets
+// control-api pick a host that already holds a copy of the entry. The RPC only reports
+// whether/where dispatch happened -- the up-to-date/changed outcome is not part of this
+// response and only appears on the cache view's next manual reload.
+func (c *ControlClient) VerifyCacheEntry(ctx context.Context, cacheEntryID, serverID int64) (*manmanpb.VerifyCacheEntryResponse, error) {
+	return c.workshop.VerifyCacheEntry(ctx, &manmanpb.VerifyCacheEntryRequest{
+		CacheEntryId: cacheEntryID,
+		ServerId:     serverID,
+	})
+}
+
+// EvictCacheEntry evicts exactly one content-addressed Workshop cache entry
+// (FR12, plan #2175): control-api deletes the single S3 object at that
+// entry's key and its metadata row directly -- no host command, no
+// presigned-URL relay. There is no bulk/prefix form; callers must resolve
+// the specific cache_entry_id first (e.g. from ListAddonCacheEntries).
+func (c *ControlClient) EvictCacheEntry(ctx context.Context, cacheEntryID int64) (*manmanpb.EvictCacheEntryResponse, error) {
+	return c.workshop.EvictCacheEntry(ctx, &manmanpb.EvictCacheEntryRequest{
+		CacheEntryId: cacheEntryID,
+	})
+}
+
+// AddCollectionToLibrary resolves a Steam Workshop collection's current
+// membership and adds every item in it to a library in one action (FR1,
+// plan #2175). A returned error means a job-level failure (unresolvable
+// collection, missing game/library) -- a partial-failure result
+// (completed_with_errors) is still a nil error here and is reported via the
+// batch-status view (FR3), not as a UI-level error.
+func (c *ControlClient) AddCollectionToLibrary(ctx context.Context, gameID, libraryID int64, collectionInput string, presetID int64) (*manmanpb.AddCollectionToLibraryResponse, error) {
+	resp, err := c.workshop.AddCollectionToLibrary(ctx, &manmanpb.AddCollectionToLibraryRequest{
+		GameId:          gameID,
+		LibraryId:       libraryID,
+		CollectionInput: collectionInput,
+		PresetId:        presetID,
+	})
+	if err != nil {
+		return nil, err
+	}
+	return resp, nil
+}
+
+// BatchCreateAddons takes a pasted block of mixed raw Workshop IDs and
+// Workshop URLs and creates an addon per valid entry (FR2, plan #2175). As
+// with AddCollectionToLibrary, a returned error means a job-level failure;
+// per-entry parse/lookup failures are reported via the batch-status view
+// (FR3), not as a UI-level error.
+func (c *ControlClient) BatchCreateAddons(ctx context.Context, gameID, libraryID int64, entries string, presetID int64) (*manmanpb.BatchCreateAddonsResponse, error) {
+	resp, err := c.workshop.BatchCreateAddons(ctx, &manmanpb.BatchCreateAddonsRequest{
+		GameId:    gameID,
+		LibraryId: libraryID,
+		Entries:   entries,
+		PresetId:  presetID,
+	})
+	if err != nil {
+		return nil, err
+	}
+	return resp, nil
+}
+
 func (c *ControlClient) DeleteAddon(ctx context.Context, addonID int64) error {
 	_, err := c.workshop.DeleteAddon(ctx, &manmanpb.DeleteAddonRequest{
 		AddonId: addonID,

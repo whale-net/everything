@@ -15,11 +15,15 @@
 // Channel's outcome_bar with no schema of its own; plus research_thread
 // (migration 016, natural-key unique index added by migration 017, issue
 // #1937) -- FR3's discovery list and FR4's find-or-create half of
-// research-note threading (root plan #1934).
+// research-note threading (root plan #1934); plus person_oidc_identity
+// (migration 020, issue #2116, FR12(b)) -- the (iss, sub) -> Person
+// mapping the whagent-net authentication path resolves a verified whagent
+// Claim's on-behalf-of subject against, auto-provisioning on first sight,
+// kept deliberately separate from person.google_subject.
 //
 // Store is the single entry point, built over //libs/go/db's
 // *pgxpool.Pool. Its Persons/Channels/Roles/Invites/Ideas/Research/
-// Verdicts/Sync/Matches/Idempotency/Threads accessors
+// Verdicts/Sync/Matches/Idempotency/Threads/PersonIdentities accessors
 // hand back the per-entity Store implementations -- kept as separate
 // concrete types,
 // not all methods on Store itself, because e.g. PersonStore.GetByID and
@@ -135,3 +139,20 @@ func (s *Store) OutcomeBars() OutcomeBarStore { return outcomeBarStore{pool: s.p
 // counts and rate, classified against a caller-supplied outcome_bar row.
 // Performs no authorization itself -- see CalibrationStore's doc comment.
 func (s *Store) Calibration() CalibrationStore { return calibrationStore{pool: s.pool} }
+
+// Dashboard returns the DashboardStore implementation (issue #2038, C20,
+// FR23-FR26) -- the per-Channel recent-activity dashboard: windowed
+// activity counts and outcome trend over the trailing 24h/7d, in a
+// bounded number of queries regardless of how much a Channel has
+// accumulated. Performs no authorization itself -- see DashboardStore's
+// doc comment.
+func (s *Store) Dashboard() DashboardStore { return dashboardStore{pool: s.pool} }
+
+// PersonIdentities returns the PersonIdentityStore implementation
+// (migration 020, issue #2116, FR12(b)) -- the (iss, sub) -> Person
+// mapping the whagent-net authentication path resolves a verified whagent
+// Claim's on-behalf-of subject against, auto-provisioning on first sight.
+// Deliberately separate from Persons()/PersonStore.UpsertByGoogleSubject
+// -- see migration 020's header for why the two identity keys are not
+// merged or re-keyed off each other.
+func (s *Store) PersonIdentities() PersonIdentityStore { return personIdentityStore{pool: s.pool} }

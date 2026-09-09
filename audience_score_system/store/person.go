@@ -48,10 +48,15 @@ func (s personStore) UpsertByGoogleSubject(ctx context.Context, sub, email, disp
 	return p, created, nil
 }
 
+// GetByID COALESCEs google_subject, not just email/display_name: migration
+// 020 (issue #2116, FR12(b)) dropped google_subject's NOT NULL so a
+// whagent-net-auto-provisioned Person (no Google identity at all) can be
+// stored, so this read must tolerate a NULL there exactly like it already
+// tolerates NULL email/display_name.
 func (s personStore) GetByID(ctx context.Context, id uuid.UUID) (Person, error) {
 	var p Person
 	err := s.pool.QueryRow(ctx, `
-		SELECT id, google_subject, COALESCE(email, ''), COALESCE(display_name, ''), created_at
+		SELECT id, COALESCE(google_subject, ''), COALESCE(email, ''), COALESCE(display_name, ''), created_at
 		FROM person
 		WHERE id = $1
 	`, id).Scan(&p.ID, &p.GoogleSubject, &p.Email, &p.DisplayName, &p.CreatedAt)

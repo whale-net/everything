@@ -3,8 +3,10 @@ package steam
 import (
 	"context"
 	"encoding/json"
+	"io"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"testing"
 	"time"
 
@@ -20,17 +22,41 @@ func TestNewSteamWorkshopClient(t *testing.T) {
 	assert.Equal(t, 10*time.Second, client.httpClient.Timeout)
 }
 
+// TestGetWorkshopItemDetails_Success drives GetWorkshopItemDetails against a
+// real httptest server whose fixture mirrors Steam's actual response shape,
+// including "result":1 (the success code), so this pins the real decode
+// path -- not just the WorkshopItemMetadata struct -- against a regression
+// that would flip a valid item into a false-not-found (or vice versa).
 func TestGetWorkshopItemDetails_Success(t *testing.T) {
-	// For this test, we'll just verify the struct creation works
-	metadata := &WorkshopItemMetadata{
-		WorkshopID:   "123456",
-		Title:        "Test Workshop Item",
-		Description:  "A test workshop item",
-		FileSize:     1024000,
-		TimeUpdated:  time.Unix(1609459200, 0),
-		IsCollection: false,
-	}
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		response := map[string]interface{}{
+			"response": map[string]interface{}{
+				"result":       1,
+				"resultcount":  1,
+				"publishedfiledetails": []map[string]interface{}{
+					{
+						"publishedfileid":  "123456",
+						"result":           1,
+						"title":            "Test Workshop Item",
+						"file_description": "A test workshop item",
+						"file_size":        "1024000",
+						"time_updated":     1609459200,
+						"file_type":        0,
+					},
+				},
+			},
+		}
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(response)
+	}))
+	defer server.Close()
 
+	client := NewSteamWorkshopClient("test-key", 5*time.Second)
+	client.BaseURL = server.URL
+
+	metadata, err := client.GetWorkshopItemDetails(context.Background(), "123456")
+	require.NoError(t, err)
+	require.NotNil(t, metadata)
 	assert.Equal(t, "123456", metadata.WorkshopID)
 	assert.Equal(t, "Test Workshop Item", metadata.Title)
 	assert.Equal(t, "A test workshop item", metadata.Description)
@@ -51,10 +77,68 @@ func TestGetWorkshopItemDetails_Collection(t *testing.T) {
 	assert.True(t, metadata.IsCollection)
 }
 
+// TestGetWorkshopItemDetails_NotFound covers the defensive fallback: Steam's
+// GetPublishedFileDetails is not documented to ever return an empty
+// publishedfiledetails array for a single-ID request, but if it did, that
+// must still surface as an error rather than a panic (out-of-range index)
+// or a zero-value success.
 func TestGetWorkshopItemDetails_NotFound(t *testing.T) {
-	// Test that empty response handling works
-	// The actual API call would fail with "workshop item not found"
-	assert.True(t, true)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		response := map[string]interface{}{
+			"response": map[string]interface{}{
+				"result":               1,
+				"resultcount":          0,
+				"publishedfiledetails": []map[string]interface{}{},
+			},
+		}
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(response)
+	}))
+	defer server.Close()
+
+	client := NewSteamWorkshopClient("test-key", 5*time.Second)
+	client.BaseURL = server.URL
+
+	metadata, err := client.GetWorkshopItemDetails(context.Background(), "999999")
+	require.Error(t, err)
+	assert.Nil(t, metadata)
+}
+
+// TestGetWorkshopItemDetails_NotFoundResultCode is the FR3 regression test
+// (issue #2212 / finding #2209): Steam's GetPublishedFileDetails always
+// returns exactly one entry per requested ID, even for a nonexistent one --
+// the array is never empty for a single-ID request. The fixture here
+// mirrors the validator's live repro against Steam for a nonexistent ID:
+// a single entry with "result":9 ("not found") and every other field
+// blank. Before the fix, this decoded into a zero-value
+// WorkshopItemMetadata and was reported as a succeeded addon; the per-entry
+// "result" field must be inspected so this is reported as an error instead.
+func TestGetWorkshopItemDetails_NotFoundResultCode(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		response := map[string]interface{}{
+			"response": map[string]interface{}{
+				"result":      1,
+				"resultcount": 1,
+				"publishedfiledetails": []map[string]interface{}{
+					{
+						"publishedfileid": "999999999999999",
+						"result":          9,
+					},
+				},
+			},
+		}
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(response)
+	}))
+	defer server.Close()
+
+	client := NewSteamWorkshopClient("test-key", 5*time.Second)
+	client.BaseURL = server.URL
+
+	metadata, err := client.GetWorkshopItemDetails(context.Background(), "999999999999999")
+	require.Error(t, err, "a Steam result code other than 1 (success) must be reported as an error, not a zero-value success")
+	assert.Nil(t, metadata)
+	assert.Contains(t, err.Error(), "999999999999999")
 }
 
 func TestGetCollectionDetails_Success(t *testing.T) {
@@ -73,6 +157,172 @@ func TestGetCollectionDetails_Empty(t *testing.T) {
 	// Test that empty collection handling works
 	// The actual API call would fail with "collection not found"
 	assert.True(t, true)
+}
+
+// TestGetCollectionDetails_NotACollection is the regression test for #2224:
+// Steam's real GetPublishedFileDetails response never populates file_type,
+// so classification of "is this a collection" must come from
+// GetCollectionDetails's own per-entry result code instead. This fixture
+// mirrors Steam's real shape for a workshop ID that is not a collection --
+// result:9 and no "children" key at all (not just an empty/omitted
+// file_type) -- and asserts GetCollectionDetails returns an error.
+func TestGetCollectionDetails_NotACollection(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		response := map[string]interface{}{
+			"response": map[string]interface{}{
+				"collectiondetails": []map[string]interface{}{
+					{"result": 9},
+				},
+			},
+		}
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(response)
+	}))
+	defer server.Close()
+
+	client := NewSteamWorkshopClient("test-key", 5*time.Second)
+	client.BaseURL = server.URL
+
+	children, err := client.GetCollectionDetails(context.Background(), "123456")
+	require.Error(t, err, "a non-1 result code must be reported as \"not a collection\", not silently treated as an empty collection")
+	assert.Nil(t, children)
+	assert.Contains(t, err.Error(), "123456")
+}
+
+// TestGetCollectionDetails_GenuineCollection asserts the existing-coverage
+// success path (result:1, non-empty children) stays green under the new
+// result-code gate.
+func TestGetCollectionDetails_GenuineCollection(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		response := map[string]interface{}{
+			"response": map[string]interface{}{
+				"collectiondetails": []map[string]interface{}{
+					{
+						"result": 1,
+						"children": []map[string]interface{}{
+							{"publishedfileid": "111111", "title": "Item 1"},
+							{"publishedfileid": "222222", "title": "Item 2"},
+						},
+					},
+				},
+			},
+		}
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(response)
+	}))
+	defer server.Close()
+
+	client := NewSteamWorkshopClient("test-key", 5*time.Second)
+	client.BaseURL = server.URL
+
+	children, err := client.GetCollectionDetails(context.Background(), "999999")
+	require.NoError(t, err)
+	require.Len(t, children, 2)
+	assert.Equal(t, "111111", children[0].WorkshopID)
+	assert.Equal(t, "222222", children[1].WorkshopID)
+}
+
+// TestGetCollectionDetails_LegitimatelyEmptyCollection is the case a naive
+// "non-empty children means collection" fix would break: result:1 (Steam
+// confirms this genuinely is a collection) but with a zero-length children
+// array (the collection just has no members). This must still succeed with
+// zero children, not be reported as an error.
+func TestGetCollectionDetails_LegitimatelyEmptyCollection(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		response := map[string]interface{}{
+			"response": map[string]interface{}{
+				"collectiondetails": []map[string]interface{}{
+					{"result": 1, "children": []map[string]interface{}{}},
+				},
+			},
+		}
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(response)
+	}))
+	defer server.Close()
+
+	client := NewSteamWorkshopClient("test-key", 5*time.Second)
+	client.BaseURL = server.URL
+
+	children, err := client.GetCollectionDetails(context.Background(), "333333")
+	require.NoError(t, err)
+	assert.Len(t, children, 0)
+}
+
+// TestGetCollectionDetails_SendsNonEmptyBody guards against the regression
+// fixed in #2211: GetCollectionDetails previously built its outbound POST
+// with a nil body and set the (client-side-meaningless) PostForm field
+// instead, so Steam received a request with no body at all. This test
+// inspects the actual bytes the client sent on the wire, not just the
+// response it parses.
+func TestGetCollectionDetails_SendsNonEmptyBody(t *testing.T) {
+	const collectionID = "123456789"
+
+	var receivedBody string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		bodyBytes, err := io.ReadAll(r.Body)
+		if err != nil {
+			t.Errorf("failed to read request body: %v", err)
+		}
+		receivedBody = string(bodyBytes)
+		if receivedBody == "" {
+			t.Fatal("request body was empty; expected form-encoded collection request data")
+		}
+
+		response := map[string]interface{}{
+			"response": map[string]interface{}{
+				"collectiondetails": []map[string]interface{}{
+					{"result": 1, "children": []CollectionItem{}},
+				},
+			},
+		}
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(response)
+	}))
+	defer server.Close()
+
+	client := NewSteamWorkshopClient("test-key", 5*time.Second)
+	client.BaseURL = server.URL
+
+	_, err := client.GetCollectionDetails(context.Background(), collectionID)
+	require.NoError(t, err)
+
+	form, err := url.ParseQuery(receivedBody)
+	require.NoError(t, err)
+	assert.Equal(t, "1", form.Get("collectioncount"))
+	assert.Equal(t, collectionID, form.Get("publishedfileids[0]"))
+}
+
+// TestGetCollectionDetails_ContentTypeHeaderSet is a regression guard for the
+// Content-Type header, which is easy to lose when touching the
+// request-building code alongside the body fix.
+func TestGetCollectionDetails_ContentTypeHeaderSet(t *testing.T) {
+	const collectionID = "987654321"
+
+	var receivedContentType string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		receivedContentType = r.Header.Get("Content-Type")
+		io.ReadAll(r.Body)
+
+		response := map[string]interface{}{
+			"response": map[string]interface{}{
+				"collectiondetails": []map[string]interface{}{
+					{"result": 1, "children": []CollectionItem{}},
+				},
+			},
+		}
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(response)
+	}))
+	defer server.Close()
+
+	client := NewSteamWorkshopClient("test-key", 5*time.Second)
+	client.BaseURL = server.URL
+
+	_, err := client.GetCollectionDetails(context.Background(), collectionID)
+	require.NoError(t, err)
+
+	assert.Equal(t, "application/x-www-form-urlencoded", receivedContentType)
 }
 
 func TestRetryLogic(t *testing.T) {

@@ -236,6 +236,13 @@ func (app *App) handleSGCDetail(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Ports editor guidance (task #2098, FR13/FR14): the server's allowed
+	// host-port ranges plus the in-use set (allocated + sibling-saved),
+	// fetched through the public API. Auxiliary fetches degrade silently
+	// inside the builder (guidance weaker, never an error page), and a nil
+	// context renders the editor without the random affordance/warnings.
+	portContext := buildSGCPortContext(ctx, app.grpc.GetAPI(), sgc.ServerId, sgc.ServerGameConfigId)
+
 	pageData := pages.SGCDetailPageData{
 		Layout:                    layoutData,
 		SGC:                       sgc,
@@ -250,6 +257,25 @@ func (app *App) handleSGCDetail(w http.ResponseWriter, r *http.Request) {
 		DeploymentStatus:          deploymentStatus,
 		ConnectAddresses:          connectAddresses,
 		ConnectAddressUnavailable: connectAddressUnavailable,
+		PortContext:               portContext,
+	}
+
+	// Deployment Environment layered view (task #2090, FR1/FR2/FR4):
+	// template → deployment override → effective, read-only data for the
+	// section template. Failure is tolerated like the other optional
+	// sections: log a warning and omit the section (pageData stays nil).
+	if gameConfig != nil {
+		envData, envPatch, envErr := app.buildSGCEnvOverridesData(ctx, sgc, gameConfig)
+		if envErr != nil {
+			log.Printf("Warning: failed to build env overrides view for SGC %d: %v", sgcID, envErr)
+		} else {
+			// Pending-override hint (task #2096, FR3): visible only while a
+			// session is running and the latest saved override edit is newer
+			// than that session's start. Derived from the patch timestamps
+			// the API now surfaces plus the sessions already listed above.
+			envData.PendingEditHint = pendingEnvOverrideHint(envPatch, sessions)
+			pageData.EnvOverrides = &envData
+		}
 	}
 
 	RenderTempl(w, r, fmt.Sprintf("SGC %d", sgcID), pages.SGCDetail(pageData))

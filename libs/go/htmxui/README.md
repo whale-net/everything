@@ -19,8 +19,9 @@ primitives below exist here but are not yet adopted anywhere.
   `.HeaderRight` are app-owned `templ.Component` slots the caller supplies
   (nav item list, e.g. app-registry's `MisconfigBanner`, and top-right
   extras like manmanv2's `ServerSelector`, respectively); Shell hardcodes
-  none of them. `ShellData.Themes` drives the `ThemeSwitcher` mount and
-  `UserLabel` is plain display text — Shell has no dependency on
+  none of them. `ShellData.Themes` drives the `ThemeSwitcher` mount,
+  `UserLabel` is plain display text, and `ContainerClass` overrides the
+  default `max-w-4xl` wrapper for wide screens — Shell has no dependency on
   `//libs/go/htmxauth` or any auth-specific user type. See `ShellData`'s
   doc comment for the full app-owned/shared boundary.
 - **`ThemeSwitcher(themes []Theme)`** (`theme_switcher.templ`) — the

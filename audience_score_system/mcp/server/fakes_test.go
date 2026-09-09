@@ -25,6 +25,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/whale-net/everything/audience_score_system/store"
+	"github.com/whale-net/everything/libs/go/mcpauth"
 )
 
 // ── fake RoleStore ──────────────────────────────────────────────────────────
@@ -155,6 +156,78 @@ func (f fakePersonStore) GetByID(_ context.Context, id uuid.UUID) (store.Person,
 }
 
 var _ store.PersonStore = fakePersonStore{}
+
+// ── fake PersonIdentityStore ─────────────────────────────────────────────────
+
+// issSub is a (iss, sub) pair -- fakePersonIdentityStore's map key, keyed on
+// the pair exactly like the real store (migration 020) is, never on sub
+// alone.
+type issSub struct{ iss, sub string }
+
+// fakePersonIdentityStore implements store.PersonIdentityStore in memory --
+// enough to drive whagent_auth.go's WhagentPersonMiddleware without a real
+// database. If err is non-nil, FindOrCreateByIssSub always fails with it
+// (whagent_auth_test.go's rejection-on-store-error case).
+type fakePersonIdentityStore struct {
+	mu    sync.Mutex
+	byKey map[issSub]store.Person
+	err   error
+	calls int
+}
+
+func newFakePersonIdentityStore() *fakePersonIdentityStore {
+	return &fakePersonIdentityStore{byKey: map[issSub]store.Person{}}
+}
+
+func (f *fakePersonIdentityStore) FindOrCreateByIssSub(_ context.Context, iss, sub string) (store.Person, bool, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.calls++
+	if f.err != nil {
+		return store.Person{}, false, f.err
+	}
+	key := issSub{iss, sub}
+	if p, ok := f.byKey[key]; ok {
+		return p, false, nil
+	}
+	p := store.Person{ID: uuid.New()}
+	f.byKey[key] = p
+	return p, true, nil
+}
+
+var _ store.PersonIdentityStore = (*fakePersonIdentityStore)(nil)
+
+// ── fake mcpauth.CredentialStore ──────────────────────────────────────────────
+
+// fakeCredentialStore implements mcpauth.CredentialStore against a single
+// fixed valid token -- enough to drive whagent_auth.go's
+// DualAuthHTTPHandler's mcp_credential branch without a real database.
+// Mint/Revoke/List are not used by these tests.
+type fakeCredentialStore struct {
+	validToken string
+	identity   string
+}
+
+func (f fakeCredentialStore) Mint(context.Context, string) (string, mcpauth.Credential, error) {
+	return "", mcpauth.Credential{}, errors.New("fakeCredentialStore.Mint is not used by these tests")
+}
+
+func (f fakeCredentialStore) Verify(_ context.Context, rawToken string) (string, mcpauth.Credential, error) {
+	if rawToken == f.validToken {
+		return f.identity, mcpauth.Credential{Identity: f.identity}, nil
+	}
+	return "", mcpauth.Credential{}, mcpauth.ErrInvalidCredential
+}
+
+func (f fakeCredentialStore) Revoke(context.Context, uuid.UUID, string) error {
+	return errors.New("fakeCredentialStore.Revoke is not used by these tests")
+}
+
+func (f fakeCredentialStore) List(context.Context, string) ([]mcpauth.Credential, error) {
+	return nil, errors.New("fakeCredentialStore.List is not used by these tests")
+}
+
+var _ mcpauth.CredentialStore = fakeCredentialStore{}
 
 // ── test tool input/output types ─────────────────────────────────────────────
 

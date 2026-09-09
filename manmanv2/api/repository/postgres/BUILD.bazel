@@ -16,10 +16,13 @@ go_library(
         "server.go",
         "server_capability.go",
         "server_port.go",
+        "server_port_range.go",
         "servergameconfig.go",
         "session.go",
         "strategy.go",
         "workshop_addon.go",
+        "workshop_batch_job.go",
+        "workshop_cache.go",
         "workshop_installation.go",
         "workshop_library.go",
     ],
@@ -27,7 +30,7 @@ go_library(
     visibility = ["//manmanv2:__subpackages__"],
     deps = [
         "//manmanv2/api/repository",
-        "//manmanv2/models:models",
+        "//manmanv2/models",
         "@com_github_jackc_pgx_v5//:pgx",
         "@com_github_jackc_pgx_v5//pgconn",
         "@com_github_jackc_pgx_v5//pgxpool",
@@ -39,7 +42,7 @@ go_test(
     srcs = ["server_port_test.go"],
     embed = [":postgres"],
     deps = [
-        "//manmanv2/models:models",
+        "//manmanv2/models",
     ],
 )
 
@@ -48,7 +51,7 @@ go_test(
     srcs = ["workshop_addon_property_test.go"],
     embed = [":postgres"],
     deps = [
-        "//manmanv2/models:models",
+        "//manmanv2/models",
     ],
 )
 
@@ -57,7 +60,7 @@ go_test(
     srcs = ["workshop_installation_property_test.go"],
     embed = [":postgres"],
     deps = [
-        "//manmanv2/models:models",
+        "//manmanv2/models",
     ],
 )
 
@@ -66,7 +69,7 @@ go_test(
     srcs = ["workshop_library_property_test.go"],
     embed = [":postgres"],
     deps = [
-        "//manmanv2/models:models",
+        "//manmanv2/models",
     ],
 )
 
@@ -86,7 +89,104 @@ go_test(
         "workshop_library_property_test.go",
     ],
     embed = [":postgres"],
-    deps = ["//manmanv2/models:models"],
+    deps = ["//manmanv2/models"],
+)
+
+# Real-Postgres coverage for the FR6 action edit round-trip (task #2091,
+# plan #2080): ActionRepository.Update must not wipe select/radio option
+# lists on rename-only edits and must apply deliberate option edits exactly.
+# Same build-tag/target conventions as pending_restart_integration_test.
+# Run explicitly (requires a working Docker daemon):
+#   bazel test //manmanv2/api/repository/postgres:action_integration_test --test_output=all
+go_test(
+    # keep
+    name = "action_integration_test",
+    size = "large",
+    timeout = "long",
+    srcs = ["action_integration_test.go"],
+    embed = [":postgres"],
+    gotags = ["integration"],
+    tags = [
+        "external",
+        "integration",
+        "manual",
+        "no-cache",
+        "no-sandbox",
+        "requires-network",
+    ],
+    deps = [
+        "//libs/go/dbtest",
+        "//manmanv2/models",
+        "@com_github_jackc_pgx_v5//pgxpool",
+    ],
+)
+
+# Real-Postgres coverage for FR9/FR10 soft-delete (task #2092): Delete must
+# mark (not remove) the definition so action_executions history survives,
+# soft-deleted definitions vanish from listings/lookup, and re-creating at
+# the same (definition_level, entity_id, name) revives the row via both the
+# repository upsert (UI/API writer) and the seed scripts' ON CONFLICT
+# upsert. Same hand-written, build-tagged precedent as the other
+# integration targets in this package.
+#
+# Run it explicitly (requires a working Docker daemon):
+#   bazel test //manmanv2/api/repository/postgres:action_soft_delete_integration_test --test_output=all
+go_test(
+    # keep
+    name = "action_soft_delete_integration_test",
+    size = "large",
+    timeout = "long",
+    srcs = ["action_soft_delete_integration_test.go"],
+    embed = [":postgres"],
+    gotags = ["integration"],
+    tags = [
+        "external",
+        "integration",
+        "manual",
+        "no-cache",
+        "no-sandbox",
+        "requires-network",
+    ],
+    deps = [
+        "//libs/go/dbtest",
+        "//manmanv2/models",
+        "@com_github_jackc_pgx_v5//pgxpool",
+    ],
+)
+
+# Real-Postgres coverage for FR12's enforcement half (task #2097, plan
+# #2080): fresh host-port allocation outside the server's configured
+# allowed ranges must refuse on the same synchronous failure path as a
+# port conflict (PortOutOfRangeError), ranges constrain only their
+# protocol, a range-less server stays unconstrained (SB-1.2), and a range
+# change leaves existing allocations intact while binding the next fresh
+# one (OQ5). Gated behind `//go:build integration`, gazelle skips it when
+# scanning for go_test srcs; hand-written with the EXACT tag set from
+# //libs/go/dbtest:postgres_constraints_test.
+#
+# Run it explicitly (requires a working Docker daemon):
+#   bazel test //manmanv2/api/repository/postgres:server_port_enforcement_integration_test --test_output=all
+go_test(
+    # keep
+    name = "server_port_enforcement_integration_test",
+    size = "large",
+    timeout = "long",
+    srcs = ["server_port_enforcement_integration_test.go"],
+    embed = [":postgres"],
+    gotags = ["integration"],
+    tags = [
+        "external",
+        "integration",
+        "manual",
+        "no-cache",
+        "no-sandbox",
+        "requires-network",
+    ],
+    deps = [
+        "//libs/go/dbtest",
+        "//manmanv2/models",
+        "@com_github_jackc_pgx_v5//pgxpool",
+    ],
 )
 
 # Real-Postgres coverage for PendingRestartRepository (#1729): the unique
@@ -139,6 +239,118 @@ go_test(
     size = "large",
     timeout = "long",
     srcs = ["session_repository_integration_test.go"],
+    embed = [":postgres"],
+    gotags = ["integration"],
+    tags = [
+        "external",
+        "integration",
+        "manual",
+        "no-cache",
+        "no-sandbox",
+        "requires-network",
+    ],
+    deps = [
+        "//libs/go/dbtest",
+        "@com_github_jackc_pgx_v5//pgxpool",
+    ],
+)
+
+# Real-Postgres coverage for FR12's allowed host-port range store
+# (task #2095): replace-all semantics, first-class empty set
+# (unconstrained, SB-1.2), mixed protocols, malformed-range rejection.
+# Same build-tag/target conventions as action_integration_test above.
+go_test(
+    # keep
+    name = "server_port_range_integration_test",
+    size = "large",
+    timeout = "long",
+    srcs = ["server_port_range_integration_test.go"],
+    embed = [":postgres"],
+    gotags = ["integration"],
+    tags = [
+        "external",
+        "integration",
+        "manual",
+        "no-cache",
+        "no-sandbox",
+        "requires-network",
+    ],
+    deps = [
+        "//libs/go/dbtest",
+        "//manmanv2/models",
+        "@com_github_jackc_pgx_v5//pgxpool",
+    ],
+)
+
+# Real-Postgres coverage for WorkshopBatchJobRepository (task #2176, plan
+# #2175): aggregate-header CRUD, per-item creation/update, the
+# display_order ordering ListBatchJobItems relies on, and the NFR1/NFR2
+# shape guarantee (no sgc_id column on either new table) that only
+# information_schema can actually prove. Same build-tag/target conventions
+# as server_port_range_integration_test above.
+go_test(
+    # keep
+    name = "workshop_batch_job_integration_test",
+    size = "large",
+    timeout = "long",
+    srcs = ["workshop_batch_job_integration_test.go"],
+    embed = [":postgres"],
+    gotags = ["integration"],
+    tags = [
+        "external",
+        "integration",
+        "manual",
+        "no-cache",
+        "no-sandbox",
+        "requires-network",
+    ],
+    deps = [
+        "//libs/go/dbtest",
+        "//manmanv2/models",
+        "@com_github_jackc_pgx_v5//pgxpool",
+    ],
+)
+
+# Real-schema coverage for the server_ports allocation reads (task #2142,
+# plan #2080): ListAllocatedPorts / ListPortsBySessionID / GetPortAllocation
+# kept SELECTing the sgc_id column migration 014 dropped (SQLSTATE 42703 at
+# runtime, invisible to the mock-based suite). Same build-tag/target
+# conventions as server_port_range_integration_test above.
+# Real-Postgres coverage for WorkshopCacheRepository (#2181, plan #2175,
+# NFR4): UpsertCacheEntry's INSERT ... ON CONFLICT (cache_key) DO UPDATE ...
+# RETURNING converges duplicate and concurrent same-key writers on one row
+# instead of erroring, size_bytes is preserved across a nil-supplying
+# upsert, and UpsertHostPresence's ON CONFLICT (cache_entry_id, server_id)
+# does the same for host presence. Same build-tag/target conventions as
+# session_repository_integration_test above.
+go_test(
+    # keep
+    name = "workshop_cache_integration_test",
+    size = "large",
+    timeout = "long",
+    srcs = ["workshop_cache_integration_test.go"],
+    embed = [":postgres"],
+    gotags = ["integration"],
+    tags = [
+        "external",
+        "integration",
+        "manual",
+        "no-cache",
+        "no-sandbox",
+        "requires-network",
+    ],
+    deps = [
+        "//libs/go/dbtest",
+        "//manmanv2/models",
+        "@com_github_jackc_pgx_v5//pgxpool",
+    ],
+)
+
+go_test(
+    name = "server_port_listalloc_integration_test",
+    size = "large",
+    timeout = "long",
+    srcs = ["server_port_listalloc_integration_test.go"],
     embed = [":postgres"],
     gotags = ["integration"],
     tags = [

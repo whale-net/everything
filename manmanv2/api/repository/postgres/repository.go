@@ -18,14 +18,17 @@ func NewRepository(pool *pgxpool.Pool) *repository.Repository {
 		Backups:                 NewBackupRepository(pool),
 		BackupConfigs:           NewBackupConfigRepository(pool),
 		ServerPorts:             NewServerPortRepository(pool),
+		ServerPortRanges:        NewServerPortRangeRepository(pool),
 		ConfigurationStrategies: NewConfigurationStrategyRepository(pool),
 		ConfigurationPatches:    NewConfigurationPatchRepository(pool),
 		GameConfigVolumes:       NewGameConfigVolumeRepository(pool),
 		WorkshopAddons:          NewWorkshopAddonRepository(pool),
 		WorkshopInstallations:   NewWorkshopInstallationRepository(pool),
 		WorkshopLibraries:       NewWorkshopLibraryRepository(pool),
+		WorkshopBatchJobs:       NewWorkshopBatchJobRepository(pool),
 		AddonPathPresets:        NewAddonPathPresetRepository(pool),
 		PendingRestarts:         NewPendingRestartRepository(pool),
+		WorkshopCache:           NewWorkshopCacheRepository(pool),
 		Actions:                 NewActionRepository(pool),
 	}
 }

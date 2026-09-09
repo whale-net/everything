@@ -1,0 +1,10 @@
+load("//tools:templ.bzl", "templ_library")
+
+templ_library(
+    name = "pages",
+    srcs = glob(["*.templ"]),
+    visibility = ["//whagent_net/ui:__pkg__"],
+    deps = [
+        "//whagent_net/ui/components",
+    ],
+)

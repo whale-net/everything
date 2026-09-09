@@ -1,0 +1,290 @@
+syntax = "proto3";
+
+// whagent-net's SessionService: the gRPC service boundary described in
+// whagent_net/ARCHITECTURE.md "Service boundary vs. package boundary".
+// `mcp`, `ui`/`embed`, and any external gRPC client talk to this service;
+// `api` and `worker` share `whagent_net/session` directly (no RPC hop
+// between them). See issue #2113.
+package whagent.v1;
+
+option go_package = "github.com/whale-net/everything/whagent_net/protos;whagentpb";
+
+import "google/protobuf/timestamp.proto";
+
+// SessionService is whagent-net's session control-plane and transcript
+// read API (ARCHITECTURE.md "Component map": `whagent_net/api`). Every RPC
+// authenticates the caller's Keycloak OIDC token via //libs/go/grpcauth --
+// there is no anonymous path (see whagent_net/api/auth.go).
+//
+// The three write RPCs (StartSession, SendTurn, StopSession) are declared
+// here so the proto surface is settled once, but return UNIMPLEMENTED
+// until the follow-up task that builds the SessionWorkflow lands (#2113
+// Scaffold). GetSession and ReadTranscript are this task's read paths.
+service SessionService {
+  // StartSession creates a new session and starts its SessionWorkflow.
+  // UNIMPLEMENTED until the workflow exists.
+  rpc StartSession(StartSessionRequest) returns (StartSessionResponse);
+
+  // SendTurn signals the session's running workflow with a new turn.
+  // UNIMPLEMENTED until the workflow exists.
+  rpc SendTurn(SendTurnRequest) returns (SendTurnResponse);
+
+  // StopSession signals the session's workflow to stop, ending it in the
+  // `stopped` status. UNIMPLEMENTED until the workflow exists.
+  rpc StopSession(StopSessionRequest) returns (StopSessionResponse);
+
+  // GetSession returns a session's current state (FR3): one of the six
+  // SessionState values, plus -- for a session that has ended -- why: the
+  // CapKind for a capped session, or the ErrorCategory/detail for a failed
+  // one. Reads come from the `sessions` row (#2109), never the workflow
+  // directly. NOT_FOUND for an unknown session id. Any authenticated caller
+  // may read any session, whoever started or controls it (FR2/C14) -- there
+  // is no ownership check on a read, only on SendTurn/StopSession (FR1/C13).
+  rpc GetSession(GetSessionRequest) returns (GetSessionResponse);
+
+  // ListSessions may be minimal in M1 (no C15 capability yet): implement
+  // enough to list the caller's own sessions, or return UNIMPLEMENTED.
+  // Deliberately no filtering/search fields on the request.
+  rpc ListSessions(ListSessionsRequest) returns (ListSessionsResponse);
+
+  // ReadTranscript returns every transcript event for a session -- user
+  // turn, model message, tool call, tool result, and (for a failed
+  // session) the failure event -- in commit order (`seq`), both while the
+  // session is running and after it has ended (FR2). Paginated by
+  // `from_seq` + `limit`. A tool result a domain server returned with its
+  // own `is_error` flag set is transcribed as an ordinary tool-result
+  // event, never as the session failure event -- that distinction is
+  // encoded in TranscriptEvent's payload, not in this RPC's shape. Same
+  // read-any-session access as GetSession -- no ownership check (FR2/C14).
+  rpc ReadTranscript(ReadTranscriptRequest) returns (ReadTranscriptResponse);
+
+  // GetSessionUsage returns a session's turns-used-of-turn-cap and
+  // cost-used-of-cost-cap (FR4), derived the same way cap evaluation is:
+  // turns_used/cost_usd are summed from committed `turn_usage` rows
+  // (NFR5, never a running counter), turn_cap/cost_cap_usd come from the
+  // session's pinned agent_definition (caps.go's documented defaults when
+  // a definition field is zero-valued), and cost_estimated is true when
+  // any summed row's own cost was estimated rather than provider-reported.
+  // NOT_FOUND for an unknown session id. Authorization follows the same
+  // rule as GetSession (any authenticated caller) -- see issue #2238.
+  rpc GetSessionUsage(GetSessionUsageRequest) returns (GetSessionUsageResponse);
+
+  // StreamEvents is FR5/C17's server-streaming bridge over the
+  // `whagent/events` exchange (NFR4, LB7, issue #2239): a programmatic
+  // client follows a session's events live without ever holding RabbitMQ
+  // credentials itself. Backfills every already-committed event starting
+  // at `from_seq` (same semantics as ReadTranscript's pagination cursor),
+  // then tails the exchange, emitting strictly in `seq` order and
+  // deduplicating on `event_id` -- the same LB1 guarantee ReadTranscript's
+  // NEXT_FROM_SEQ resumption gives a polling client, but pushed. The
+  // stream ends once the session reaches a terminal status and its
+  // terminal event has been emitted. Reuses TranscriptEvent rather than a
+  // second event shape -- see this task's Scaffold note.
+  rpc StreamEvents(StreamEventsRequest) returns (stream TranscriptEvent);
+}
+
+// SessionState mirrors whagent_net/session.Status (#2109) as an explicit
+// proto enum -- never a free-text status string -- so a consumer of
+// GetSessionResponse can decide retry-vs-escalate without inspecting the
+// transcript (FR3).
+enum SessionState {
+  SESSION_STATE_UNSPECIFIED = 0;
+  SESSION_STATE_RUNNING = 1;
+  SESSION_STATE_AWAITING_INPUT = 2;
+  SESSION_STATE_DONE = 3;
+  SESSION_STATE_STOPPED = 4;
+  SESSION_STATE_FAILED = 5;
+  SESSION_STATE_CAPPED = 6;
+}
+
+// CapKind names which guardrail ended a session in SESSION_STATE_CAPPED
+// (ARCHITECTURE.md "Guardrails": default caps 100 turns / $1). Mirrors
+// whagent_net/session.CapKind.
+enum CapKind {
+  CAP_KIND_UNSPECIFIED = 0;
+  CAP_KIND_TURNS = 1;
+  CAP_KIND_COST = 2;
+}
+
+// ErrorCategory classifies a SESSION_STATE_FAILED session's terminal error
+// as safe to retry or not (FR3). Mirrors whagent_net/session.ErrorCategory.
+enum ErrorCategory {
+  ERROR_CATEGORY_UNSPECIFIED = 0;
+  ERROR_CATEGORY_RETRYABLE = 1;
+  ERROR_CATEGORY_NON_RETRYABLE = 2;
+}
+
+// SubjectKind distinguishes a human caller from a service account
+// (ARCHITECTURE.md "Identity and auth chaining"). Mirrors
+// whagent_net/session.SubjectKind.
+enum SubjectKind {
+  SUBJECT_KIND_UNSPECIFIED = 0;
+  SUBJECT_KIND_HUMAN = 1;
+  SUBJECT_KIND_SERVICE = 2;
+}
+
+// Subject is a (issuer, subject, kind) identity triple -- kept as three
+// real fields rather than one opaque string for the same reason
+// whagent_net/session.Subject is (a non-Keycloak issuer can be a subject
+// later without a schema/wire change).
+message Subject {
+  string iss = 1;
+  string sub = 2;
+  SubjectKind kind = 3;
+}
+
+// Session is the wire shape of a `sessions` control-plane row
+// (ARCHITECTURE.md "Three nouns"). In M1, on_behalf_of is always populated
+// identically to subject (LB2/NFR3) -- no delegated-caller path exists
+// yet.
+message Session {
+  string session_id = 1;
+  SessionState state = 2;
+  string agent_id = 3;
+  string model = 4;
+  Subject subject = 5;
+  Subject on_behalf_of = 6;
+  // Empty when this session has no parent.
+  string parent_session_id = 7;
+
+  // Terminal-reason fields (FR3): set only when state is the matching
+  // terminal value, left unset (not empty-string/zero-value) otherwise --
+  // callers must check has_cap_kind/has_error_category, never infer
+  // "no cap" from a zero enum value.
+  optional CapKind cap_kind = 8;
+  optional ErrorCategory error_category = 9;
+  optional string error_detail = 10;
+
+  google.protobuf.Timestamp created_at = 11;
+  google.protobuf.Timestamp updated_at = 12;
+}
+
+message GetSessionRequest {
+  string session_id = 1;
+}
+
+message GetSessionResponse {
+  Session session = 1;
+}
+
+message ListSessionsRequest {
+  int32 page_size = 1;
+  string page_token = 2;
+}
+
+message ListSessionsResponse {
+  repeated Session sessions = 1;
+  string next_page_token = 2;
+}
+
+message StartSessionRequest {
+  string agent_id = 1;
+  // Overrides the agent definition's default model when set.
+  optional string model_override = 2;
+  // Overrides the agent definition's default max-turns cap when set.
+  optional int32 max_turns_override = 3;
+  // Overrides the agent definition's default max-cost-usd cap when set.
+  optional double max_cost_usd_override = 4;
+  // Set when this session is started by another session (agent spawning
+  // an agent) -- ARCHITECTURE.md "Session workflow".
+  optional string parent_session_id = 5;
+  // The subject this session runs as, when the caller acts on behalf of
+  // someone else (a host UI starting a session for its signed-in user; a
+  // service account running a job for someone). Unset means "acting
+  // subject == on-behalf-of subject" (LB2/NFR3's M1 default).
+  Subject on_behalf_of = 6;
+}
+
+message StartSessionResponse {
+  Session session = 1;
+}
+
+message SendTurnRequest {
+  string session_id = 1;
+  string input = 2;
+}
+
+message SendTurnResponse {
+  Session session = 1;
+}
+
+message StopSessionRequest {
+  string session_id = 1;
+}
+
+message StopSessionResponse {
+  Session session = 1;
+}
+
+// TranscriptEvent is the wire shape of a `transcript_event` row (LB1):
+// event_id, seq, turn, type, payload -- exactly the fields FR2 requires so
+// a consumer never needs a second RPC to interpret an event. payload is
+// the event's JSON body verbatim (whagent_net/session.Event.Payload);
+// its shape is per-type and includes the domain server's own `isError`
+// flag for a tool-result event -- FR2's explicit distinction from the
+// session's own failure event, which is a different `type` value entirely
+// and is never originated by a domain server.
+message TranscriptEvent {
+  string event_id = 1;
+  int64 seq = 2;
+  int32 turn = 3;
+  string type = 4;
+  bytes payload = 5;
+  google.protobuf.Timestamp committed_at = 6;
+}
+
+message ReadTranscriptRequest {
+  string session_id = 1;
+  // Inclusive. 0 (the default) reads from the beginning.
+  int64 from_seq = 2;
+  // Server may cap this; 0 means "server default".
+  int32 limit = 3;
+}
+
+message ReadTranscriptResponse {
+  // In commit order (by seq), per FR2.
+  repeated TranscriptEvent events = 1;
+  // Pass back as from_seq on the next call to resume exactly after the
+  // last event returned here -- no gap, no duplicate. Equal to the
+  // request's from_seq when events is empty (nothing new to resume from).
+  int64 next_from_seq = 2;
+}
+
+// SessionUsage is FR4's usage figures for a session: turns/cost used
+// against the caps the session's pinned agent_definition sets, both
+// derived by summing committed `turn_usage` rows (NFR5) -- never from a
+// counter mutated alongside them, the same rule cap evaluation follows
+// (whagent_net/worker/caps.go).
+message SessionUsage {
+  // COUNT(*) of committed turn_usage rows for the session.
+  int32 turns_used = 1;
+  // The session's pinned agent_definition's effective MaxTurns (caps.go's
+  // default applied when the definition's field is zero-valued).
+  int32 turn_cap = 2;
+  // COALESCE(SUM(cost_usd), 0) across the session's committed turn_usage
+  // rows, to full NUMERIC(12,6) precision.
+  double cost_usd = 3;
+  // The session's pinned agent_definition's effective MaxCostUSD (caps.go's
+  // default applied when the definition's field is zero-valued).
+  double cost_cap_usd = 4;
+  // True when any summed turn_usage row's cost was estimated (from tokens)
+  // rather than provider-reported.
+  bool cost_estimated = 5;
+}
+
+message GetSessionUsageRequest {
+  string session_id = 1;
+}
+
+message GetSessionUsageResponse {
+  SessionUsage usage = 1;
+}
+
+message StreamEventsRequest {
+  string session_id = 1;
+  // Inclusive, same semantics as ReadTranscriptRequest.from_seq: 0 (the
+  // default) streams from the beginning. A client reconnecting after a
+  // drop passes the last-seen seq + 1 here to resume with no gap or
+  // duplicate (FR5).
+  int64 from_seq = 2;
+}

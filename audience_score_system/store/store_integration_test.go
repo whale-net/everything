@@ -873,6 +873,60 @@ func TestVerdictStore_Append_TwiceYieldsTwoVersions_FirstRowUnchanged(t *testing
 	assert.True(t, history[0].Version < history[1].Version, "History must be ordered by version ascending")
 }
 
+func TestIdeaStore_ListByChannelWithStats_ReturnsCurrentVerdict(t *testing.T) {
+	ctx := context.Background()
+	s, _ := newStore(t)
+	ch, creator := setupChannel(t, ctx, s)
+
+	// Idea with no verdict
+	idea1, err := s.Ideas().Create(ctx, ch.ID, "Idea Without Verdict", creator.ID)
+	require.NoError(t, err)
+
+	// Idea with viable verdict
+	idea2, err := s.Ideas().Create(ctx, ch.ID, "Idea With Viable Verdict", creator.ID)
+	require.NoError(t, err)
+	_, err = s.Verdicts().Append(ctx, store.AppendVerdictInput{
+		IdeaID: idea2.ID, Verdict: store.VerdictViable, Reasoning: "viable", AuthorPersonID: creator.ID,
+	})
+	require.NoError(t, err)
+
+	// Idea with two verdicts (v1: not-viable, v2: needs-more-research) -> current should be needs-more-research
+	idea3, err := s.Ideas().Create(ctx, ch.ID, "Idea With Updated Verdict", creator.ID)
+	require.NoError(t, err)
+	_, err = s.Verdicts().Append(ctx, store.AppendVerdictInput{
+		IdeaID: idea3.ID, Verdict: store.VerdictNotViable, Reasoning: "v1 not viable", AuthorPersonID: creator.ID,
+	})
+	require.NoError(t, err)
+	_, err = s.Verdicts().Append(ctx, store.AppendVerdictInput{
+		IdeaID: idea3.ID, Verdict: store.VerdictNeedsMoreResearch, Reasoning: "v2 needs research", AuthorPersonID: creator.ID,
+	})
+	require.NoError(t, err)
+
+	summaries, truncated, err := s.Ideas().ListByChannelWithStats(ctx, ch.ID, nil, 50)
+	require.NoError(t, err)
+	assert.False(t, truncated)
+	require.Len(t, summaries, 3)
+
+	byID := make(map[uuid.UUID]store.IdeaSummary, len(summaries))
+	for _, sum := range summaries {
+		byID[sum.ID] = sum
+	}
+
+	sum1 := byID[idea1.ID]
+	assert.False(t, sum1.HasVerdict)
+	assert.Nil(t, sum1.CurrentVerdict)
+
+	sum2 := byID[idea2.ID]
+	assert.True(t, sum2.HasVerdict)
+	require.NotNil(t, sum2.CurrentVerdict)
+	assert.Equal(t, store.VerdictViable, *sum2.CurrentVerdict)
+
+	sum3 := byID[idea3.ID]
+	assert.True(t, sum3.HasVerdict)
+	require.NotNil(t, sum3.CurrentVerdict)
+	assert.Equal(t, store.VerdictNeedsMoreResearch, *sum3.CurrentVerdict, "must return the current (highest version) verdict")
+}
+
 // ── VerdictStore.Append's Source handling (migration 015, M4.1 FR5/NFR4) ───
 
 func TestVerdictStore_Append_SourceHuman_RoundTripsThroughGetByIDCurrentAndHistory(t *testing.T) {
@@ -2649,8 +2703,11 @@ func ptrInt64(v int64) *int64        { return &v }
 // research_note_relation, FR1/FR2 Stage 1/FR6/FR7, #1936), and again for
 // 017 (research_thread's natural-key unique index, FR4, #1937), and again
 // for 018 (research_note.thread_id NOT NULL + idea_id drop, FR2 Stage 3/
-// NFR4, #1947), so the version assertion and table list below cover all
-// of them rather than any single one.
+// NFR4, #1947), and again for 019 (video_script.edit_idempotency_key,
+// FR16-FR19, #2037), and again for 020 (person_oidc_identity +
+// person.google_subject NOT NULL drop, FR12(b), #2116), so the version
+// assertion and table list below cover all of them rather than any single
+// one.
 func TestMigrations_UpDownUp_LeavesNoOrphanObjects(t *testing.T) {
 	ctx := context.Background()
 	db := dbtest.NewPostgres(ctx, t, dbtest.Options{})
@@ -2667,7 +2724,7 @@ func TestMigrations_UpDownUp_LeavesNoOrphanObjects(t *testing.T) {
 	version, dirty, err := runner.Version()
 	require.NoError(t, err)
 	assert.False(t, dirty)
-	assert.Equal(t, uint(18), version, "highest migration in schema.Migrations is 018_research_note_drop_idea_id")
+	assert.Equal(t, uint(20), version, "highest migration in schema.Migrations is 020_person_oidc_identity")
 
 	for _, tbl := range []string{
 		"person", "channel", "channel_person", "channel_invite",
@@ -2685,6 +2742,7 @@ func TestMigrations_UpDownUp_LeavesNoOrphanObjects(t *testing.T) {
 		"outcome_bar",
 		"research_thread",
 		"research_note_relation",
+		"person_oidc_identity",
 	} {
 		var exists bool
 		require.NoError(t, db.Pool.QueryRow(ctx,
@@ -2692,6 +2750,15 @@ func TestMigrations_UpDownUp_LeavesNoOrphanObjects(t *testing.T) {
 		).Scan(&exists))
 		assert.True(t, exists, "table %s must exist after up/down/up", tbl)
 	}
+
+	// Migration 020's person.google_subject NOT NULL drop (FR12(b), #2116)
+	// must also survive the down/up cycle -- a down that forgot to restore
+	// NOT NULL (or an up that forgot to drop it again) would surface here.
+	var googleSubjectNullable string
+	require.NoError(t, db.Pool.QueryRow(ctx,
+		`SELECT is_nullable FROM information_schema.columns WHERE table_name = 'person' AND column_name = 'google_subject'`,
+	).Scan(&googleSubjectNullable))
+	assert.Equal(t, "YES", googleSubjectNullable, "person.google_subject must be nullable after up/down/up (migration 020 drops its NOT NULL for whagent-net auto-provisioning)")
 
 	// pacing_policy and schedule_entry are dropped outright by migration
 	// 013 (FR41/FR45, #1835) -- a down/up cycle must leave them gone, not
@@ -2745,6 +2812,15 @@ func TestMigrations_UpDownUp_LeavesNoOrphanObjects(t *testing.T) {
 		`SELECT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name = 'research_note' AND column_name = 'thread_id')`,
 	).Scan(&hasThreadID))
 	assert.True(t, hasThreadID, "research_note.thread_id must exist after up/down/up")
+
+	// Migration 019's video_script.edit_idempotency_key column (FR16-FR19,
+	// #2037) must also survive the down/up cycle -- a down that forgot to
+	// drop it (or an up that forgot to re-add it) would surface here.
+	var hasEditIdempotencyKey bool
+	require.NoError(t, db.Pool.QueryRow(ctx,
+		`SELECT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name = 'video_script' AND column_name = 'edit_idempotency_key')`,
+	).Scan(&hasEditIdempotencyKey))
+	assert.True(t, hasEditIdempotencyKey, "video_script.edit_idempotency_key must exist after up/down/up")
 
 	// A fresh insert must succeed cleanly, proving indexes/constraints
 	// (e.g. the person.google_subject UNIQUE index) survived the

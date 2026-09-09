@@ -137,17 +137,23 @@ here.
 ## MCP (C4-C7, C9, C10: MCP server foundation)
 
 Read by `mcp`'s `main.go`. See `ARCHITECTURE.md`'s "MCP server: caller
-authentication" for how a caller authenticates — there is no MCP-specific
-client-secret variable here, because `mcp_credential` (migration 006,
-backed by `libs/go/mcpauth.CredentialStore`) stores only a SHA-256 hash,
-not a reversible secret. `mcpauth.NewCredentialStore` preflights this
-table at boot (a `SELECT 1 ... LIMIT 0` probe), so a missing migration 006
-now fails `mcp` at startup rather than at first bearer-token verification.
+authentication" for how an ASS-credentialed caller authenticates — there
+is no MCP-specific client-secret variable here, because `mcp_credential`
+(migration 006, backed by `libs/go/mcpauth.CredentialStore`) stores only a
+SHA-256 hash, not a reversible secret. `mcpauth.NewCredentialStore`
+preflights this table at boot (a `SELECT 1 ... LIMIT 0` probe), so a
+missing migration 006 now fails `mcp` at startup rather than at first
+bearer-token verification. See `ARCHITECTURE.md`'s "MCP server:
+whagent-net authentication path" (issue #2116, FR12) for the second,
+parallel path a whagent-net-authenticated caller uses instead, configured
+by `ASS_WHAGENT_JWKS_URL`/`ASS_WHAGENT_ISSUER` below.
 
 | Variable | Component | Default | Description |
 |----------|-----------|---------|--------------|
 | `ASS_MCP_ADDR` | mcp | `:8081` | HTTP listen address for the `mcp` binary (streamable HTTP transport). |
-| `ASS_MCP_PUBLIC_URL` | web, mcp | *(required)* | The externally reachable URL of the `mcp` server (issue #1646, FR12/NFR4) — the OAuth2 `resource` identifier both binaries must agree on exactly. `web` passes it as `mcpauth.ProviderConfig.Resource` when constructing its OAuth2 authorization server (see "Web" above); `mcp` passes the same value as `mcpauth.ProtectedResourceMetadataConfig.Resource` (`mcp/server.ResourceMetadataConfig.Resource`) — both the `resource` field its own `/.well-known/oauth-protected-resource` document advertises, and the base its `WWW-Authenticate: Bearer resource_metadata="..."` 401 challenge is built from (`mcpauth.ProtectedResourceMetadataURL`). A mismatch between the two binaries breaks MCP client discovery (RFC 9728), since the `resource` an MCP client requests a token for would no longer match the `resource` `mcp` actually serves. Both `web` and `mcp` fail fast at startup if unset. |
+| `ASS_MCP_PUBLIC_URL` | web, mcp | *(required)* | The externally reachable URL of the `mcp` server (issue #1646, FR12/NFR4) — the OAuth2 `resource` identifier both binaries must agree on exactly. `web` passes it as `mcpauth.ProviderConfig.Resource` when constructing its OAuth2 authorization server (see "Web" above); `mcp` passes the same value as `mcpauth.ProtectedResourceMetadataConfig.Resource` (`mcp/server.ResourceMetadataConfig.Resource`) — both the `resource` field its own `/.well-known/oauth-protected-resource` document advertises, and the base its `WWW-Authenticate: Bearer resource_metadata="..."` 401 challenge is built from (`mcpauth.ProtectedResourceMetadataURL`). A mismatch between the two binaries breaks MCP client discovery (RFC 9728), since the `resource` an MCP client requests a token for would no longer match the `resource` `mcp` actually serves. Both `web` and `mcp` fail fast at startup if unset. It also doubles as the `aud` (audience) every whagent-net Claim must carry (see `ASS_WHAGENT_ISSUER` below) — no separate audience variable is introduced. |
+| `ASS_WHAGENT_JWKS_URL` | mcp | *(optional)* | whagent-net's own JWKS endpoint, passed to `whagent.NewVerifier` (issue #2116, FR12) so `mcp` can verify a whagent-net-minted Claim (`//libs/go/whagent`) without any per-domain Keycloak token-exchange configuration (NFR4). Optional: when either this or `ASS_WHAGENT_ISSUER` is unset, `mcp` mounts only the pre-#2116 `mcp_credential` path (`server.NewHTTPHandler`) — exactly as it did before this task, so a deployment that has no whagent-net session to serve needs no configuration change. Setting both mounts the whagent-net path ALONGSIDE (never in place of) `mcp_credential` (`server.NewDualAuthHTTPHandler`, see `ARCHITECTURE.md`'s "MCP server: whagent-net authentication path"). |
+| `ASS_WHAGENT_ISSUER` | mcp | *(optional)* | whagent-net's own `iss` value — a Verifier rejects any Claim whose `iss` doesn't match this exactly, including a valid Keycloak token or an unsigned claim (NFR4). See `ASS_WHAGENT_JWKS_URL` above for when this path is mounted at all. |
 
 ## Postgres MCP (Claude Code plugin)
 

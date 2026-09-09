@@ -62,8 +62,7 @@ func buildHead() string {
 </style>
 <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/daisyui@5.6.18/daisyui.css">
 <style>%s</style>
-<style>%s</style>
-<script src="https://cdn.jsdelivr.net/npm/htmx.org@1.9.10/dist/ext/sse.js"></script>`, themeBootstrapScript, darkVariantDirective, htmxui.ThemesCSS, legacyClassShimCSS)
+<script src="https://cdn.jsdelivr.net/npm/htmx.org@1.9.10/dist/ext/sse.js"></script>`, themeBootstrapScript, darkVariantDirective, htmxui.ThemesCSS)
 }
 
 // themeBootstrapScript applies the operator's saved theme to <html> as
@@ -119,21 +118,11 @@ var themeBootstrapScript = fmt.Sprintf(`<script>
 // need no class-toggling JS of their own.
 const darkVariantDirective = `@custom-variant dark (&:where([data-theme="night"], [data-theme="oled"], [data-theme="night"] *, [data-theme="oled"] *));`
 
-// legacyClassShimCSS covers the one manmanStyles-era class name still
-// reachable today with no daisyUI equivalent: manmanv2/ui/templates/
-// actions_manage.html (the legacy html/template partial rendered by the
-// still-live handleGameActions/handleConfigActions handlers) uses
-// `btn-danger` for its delete/remove buttons. daisyUI's destructive
-// button variant is named `btn-error`, not `btn-danger`, so retiring
-// manmanStyles (the old templates.go CSS literal — see its removal in
-// this same change) would silently drop that button's color with no
-// daisyUI class picking it up. Every other manmanStyles class actually
-// reachable today (`.btn`, `.btn-primary`, `.btn-sm`, `.badge`,
-// `.badge-success`, `.badge-secondary`) shares its literal name with a
-// real daisyUI component class, so daisyUI styles those automatically
-// once loaded and needs no shim; unreachable manmanStyles classes
-// (`.card`, `.stat-card`, `.session-panel`, etc. — grepped against
-// pages/*.templ, components/*.templ, and actions_manage.html, no hits)
-// were deleted outright rather than carried forward.
-const legacyClassShimCSS = `.btn-danger { background-color: var(--color-error); color: var(--color-error-content); }
-.btn-danger:hover { filter: brightness(0.9); }`
+// legacyClassShimCSS (a .btn-danger -> daisyUI btn-error color shim for the
+// legacy actions_manage.html delete/remove buttons) was retired in #2080
+// task #2091: that template was the shim's last reachable user, and its
+// templ rework (pages/actions_manage.templ) uses daisyUI's own btn-error
+// class directly. Every other manmanStyles class actually reachable at
+// shim time (`.btn`, `.btn-primary`, `.btn-sm`, `.badge`, `.badge-success`,
+// `.badge-secondary`) shares its literal name with a real daisyUI component
+// class, so daisyUI styles those automatically once loaded.

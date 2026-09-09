@@ -42,6 +42,10 @@ func (m *mockAddonRepo) GetByWorkshopID(ctx context.Context, gameID int64, works
 	return nil, fmt.Errorf("addon not found")
 }
 
+func (m *mockAddonRepo) GetByWorkshopIDAnyGame(ctx context.Context, workshopID string) (*manman.WorkshopAddonWithGame, error) {
+	return nil, fmt.Errorf("not implemented")
+}
+
 func (m *mockAddonRepo) List(ctx context.Context, gameID *int64, includeDeprecated bool, limit, offset int) ([]*manman.WorkshopAddon, error) {
 	return nil, fmt.Errorf("not implemented")
 }
@@ -61,7 +65,11 @@ func (m *mockAddonRepo) Update(ctx context.Context, addon *manman.WorkshopAddon)
 }
 
 func (m *mockAddonRepo) Delete(ctx context.Context, addonID int64) error {
-	return fmt.Errorf("not implemented")
+	if _, ok := m.addons[addonID]; !ok {
+		return fmt.Errorf("addon not found")
+	}
+	delete(m.addons, addonID)
+	return nil
 }
 
 type mockInstallationRepo struct {
@@ -384,6 +392,7 @@ func createTestManager() (*WorkshopManager, *mockAddonRepo, *mockInstallationRep
 		volumeRepo,
 		nil, // presetRepo not needed for these tests
 		sessionRepo,
+		nil, // batchJobRepo not needed for these tests
 		nil, // steamClient not needed for these tests
 		rmqPublisher,
 	)
@@ -719,10 +728,22 @@ func (m *mockSteamClient) GetCollectionDetails(ctx context.Context, collectionID
 		return nil, fmt.Errorf("mock steam API error")
 	}
 	items, ok := m.collections[collectionID]
-	if !ok {
-		return nil, fmt.Errorf("collection not found")
+	if ok {
+		return items, nil
 	}
-	return items, nil
+	// Distinguish "not a collection" (a real Workshop item exists for this
+	// ID, just not a collection one -- mirrors Steam's real non-1 result
+	// code) from "collection not found" (no such Workshop ID at all), so
+	// tests can assert the right failure mode rather than only "some error
+	// occurred". This mirrors GetCollectionDetails's real result-code gate:
+	// classification of "is this a collection" no longer comes from
+	// WorkshopItemMetadata.IsCollection (Steam's real file_type is never
+	// populated), it comes from whether the ID has registered collection
+	// membership here.
+	if _, isItem := m.items[collectionID]; isItem {
+		return nil, fmt.Errorf("workshop item %s is not a collection (steam result code 9)", collectionID)
+	}
+	return nil, fmt.Errorf("collection not found")
 }
 
 // Feature: workshop-addon-management, Property 9: Addon Metadata Fetching

@@ -33,6 +33,269 @@ func newFakeCommandHandler() *fakeCommandHandler {
 	}
 }
 
+// recordingCommandHandler is a minimal CommandHandler fake that records which method was
+// invoked and with what command, for TestExistingRoutingKeys_StillRouteToExistingHandlers
+// -- the NFR3 regression guard (#2184) proving the pre-existing command.* routing keys
+// still dispatch to their original handler methods unchanged, now that a new,
+// additive-only status.host.*.workshop.cache key exists on the control-api side.
+type recordingCommandHandler struct {
+	mu sync.Mutex
+
+	startSession     *StartSessionCommand
+	stopSession      *StopSessionCommand
+	killSession      *KillSessionCommand
+	sendInput        *SendInputCommand
+	downloadAddon    *DownloadAddonCommand
+	removeAddon      *RemoveAddonCommand
+	backup           *BackupCommand
+	verifyCacheEntry *VerifyCacheEntryCommand
+
+	done chan struct{}
+}
+
+func newRecordingCommandHandler() *recordingCommandHandler {
+	return &recordingCommandHandler{done: make(chan struct{}, 16)}
+}
+
+func (f *recordingCommandHandler) HandleStartSession(ctx context.Context, cmd *StartSessionCommand) error {
+	f.mu.Lock()
+	f.startSession = cmd
+	f.mu.Unlock()
+	f.done <- struct{}{}
+	return nil
+}
+
+func (f *recordingCommandHandler) HandleStopSession(ctx context.Context, cmd *StopSessionCommand) error {
+	f.mu.Lock()
+	f.stopSession = cmd
+	f.mu.Unlock()
+	f.done <- struct{}{}
+	return nil
+}
+
+func (f *recordingCommandHandler) HandleKillSession(ctx context.Context, cmd *KillSessionCommand) error {
+	f.mu.Lock()
+	f.killSession = cmd
+	f.mu.Unlock()
+	return nil
+}
+
+func (f *recordingCommandHandler) HandleSendInput(ctx context.Context, cmd *SendInputCommand) error {
+	f.mu.Lock()
+	f.sendInput = cmd
+	f.mu.Unlock()
+	return nil
+}
+
+func (f *recordingCommandHandler) HandleDownloadAddon(ctx context.Context, cmd *DownloadAddonCommand) error {
+	f.mu.Lock()
+	f.downloadAddon = cmd
+	f.mu.Unlock()
+	return nil
+}
+
+func (f *recordingCommandHandler) HandleRemoveAddon(ctx context.Context, cmd *RemoveAddonCommand) error {
+	f.mu.Lock()
+	f.removeAddon = cmd
+	f.mu.Unlock()
+	f.done <- struct{}{}
+	return nil
+}
+
+func (f *recordingCommandHandler) HandleBackup(ctx context.Context, cmd *BackupCommand) error {
+	f.mu.Lock()
+	f.backup = cmd
+	f.mu.Unlock()
+	f.done <- struct{}{}
+	return nil
+}
+
+func (f *recordingCommandHandler) HandleVerifyCacheEntry(ctx context.Context, cmd *VerifyCacheEntryCommand) error {
+	f.mu.Lock()
+	f.verifyCacheEntry = cmd
+	f.mu.Unlock()
+	f.done <- struct{}{}
+	return nil
+}
+
+// waitForAsync blocks until n asynchronously-dispatched handlers (HandleStartSession,
+// HandleStopSession, HandleRemoveAddon, HandleBackup all run via `go func` in their
+// respective handleXxx wrappers) have completed, or fails the test on timeout.
+func (f *recordingCommandHandler) waitForAsync(t *testing.T, n int) {
+	t.Helper()
+	for i := 0; i < n; i++ {
+		select {
+		case <-f.done:
+		case <-time.After(time.Second):
+			t.Fatalf("timed out waiting for async handler dispatch %d/%d", i+1, n)
+		}
+	}
+}
+
+// TestExistingRoutingKeys_StillRouteToExistingHandlers is the NFR3 regression guard
+// (#2184): the new status.host.<serverID>.workshop.cache key is a brand new binding on
+// control-api's WorkshopCacheStatusConsumer, entirely separate from this host-side
+// Consumer. This proves that none of the pre-existing command.host.<serverID>.* routing
+// keys were renamed, repurposed, or had their dispatch changed by that addition -- each
+// one, dispatched through the exact handleXxx method NewConsumer registers it to (see
+// consumer.go's RegisterHandler calls), still reaches the correct CommandHandler method
+// with the payload intact.
+func TestExistingRoutingKeys_StillRouteToExistingHandlers(t *testing.T) {
+	handler := newRecordingCommandHandler()
+	c := &Consumer{handler: handler, serverID: 7}
+
+	mustMarshal := func(t *testing.T, v interface{}) []byte {
+		t.Helper()
+		body, err := json.Marshal(v)
+		if err != nil {
+			t.Fatalf("failed to marshal: %v", err)
+		}
+		return body
+	}
+
+	// command.host.7.session.start
+	startBody := mustMarshal(t, StartSessionCommand{SessionID: 1, SGCID: 2})
+	if err := c.handleStartSession(context.Background(), rmq.Message{RoutingKey: "command.host.7.session.start", Body: startBody}); err != nil {
+		t.Fatalf("handleStartSession returned error: %v", err)
+	}
+
+	// command.host.7.session.stop
+	stopBody := mustMarshal(t, StopSessionCommand{SessionID: 1, Force: true})
+	if err := c.handleStopSession(context.Background(), rmq.Message{RoutingKey: "command.host.7.session.stop", Body: stopBody}); err != nil {
+		t.Fatalf("handleStopSession returned error: %v", err)
+	}
+
+	// command.host.7.session.kill (synchronous dispatch)
+	killBody := mustMarshal(t, KillSessionCommand{SessionID: 1})
+	if err := c.handleKillSession(context.Background(), rmq.Message{RoutingKey: "command.host.7.session.kill", Body: killBody}); err != nil {
+		t.Fatalf("handleKillSession returned error: %v", err)
+	}
+
+	// command.host.7.session.send_input (synchronous dispatch)
+	sendInputBody := mustMarshal(t, SendInputCommand{SessionID: 1, Input: []byte("ping")})
+	if err := c.handleSendInput(context.Background(), rmq.Message{RoutingKey: "command.host.7.session.send_input", Body: sendInputBody}); err != nil {
+		t.Fatalf("handleSendInput returned error: %v", err)
+	}
+
+	// command.host.7.workshop.download (synchronous dispatch)
+	downloadBody := mustMarshal(t, DownloadAddonCommand{InstallationID: 1, WorkshopID: "987654321"})
+	if err := c.handleDownloadAddon(context.Background(), rmq.Message{RoutingKey: "command.host.7.workshop.download", Body: downloadBody}); err != nil {
+		t.Fatalf("handleDownloadAddon returned error: %v", err)
+	}
+
+	// command.host.7.workshop.remove
+	removeBody := mustMarshal(t, RemoveAddonCommand{InstallationID: 1, InstallationPath: "/data/mods"})
+	if err := c.handleRemoveAddon(context.Background(), rmq.Message{RoutingKey: "command.host.7.workshop.remove", Body: removeBody}); err != nil {
+		t.Fatalf("handleRemoveAddon returned error: %v", err)
+	}
+
+	// command.host.7.backup
+	backupBody := mustMarshal(t, BackupCommand{BackupID: 1, SGCID: 2})
+	if err := c.handleBackup(context.Background(), rmq.Message{RoutingKey: "command.host.7.backup", Body: backupBody}); err != nil {
+		t.Fatalf("handleBackup returned error: %v", err)
+	}
+
+	// start, stop, removeAddon, and backup all dispatch asynchronously (see their
+	// handleXxx doc comments); wait for all four before asserting.
+	handler.waitForAsync(t, 4)
+
+	handler.mu.Lock()
+	defer handler.mu.Unlock()
+
+	if handler.startSession == nil || handler.startSession.SessionID != 1 {
+		t.Error("command.host.7.session.start did not reach HandleStartSession with the expected payload")
+	}
+	if handler.stopSession == nil || handler.stopSession.SessionID != 1 {
+		t.Error("command.host.7.session.stop did not reach HandleStopSession with the expected payload")
+	}
+	if handler.killSession == nil || handler.killSession.SessionID != 1 {
+		t.Error("command.host.7.session.kill did not reach HandleKillSession with the expected payload")
+	}
+	if handler.sendInput == nil || string(handler.sendInput.Input) != "ping" {
+		t.Error("command.host.7.session.send_input did not reach HandleSendInput with the expected payload")
+	}
+	if handler.downloadAddon == nil || handler.downloadAddon.WorkshopID != "987654321" {
+		t.Error("command.host.7.workshop.download did not reach HandleDownloadAddon with the expected payload")
+	}
+	if handler.removeAddon == nil || handler.removeAddon.InstallationPath != "/data/mods" {
+		t.Error("command.host.7.workshop.remove did not reach HandleRemoveAddon with the expected payload")
+	}
+	if handler.backup == nil || handler.backup.BackupID != 1 {
+		t.Error("command.host.7.backup did not reach HandleBackup with the expected payload")
+	}
+}
+
+// TestVerifyCacheEntryRoutingKey_RoutesToVerifyHandler is the new-key half of
+// the #2186 NFR3 regression guard: the additive command.host.<serverID>.
+// workshop.cache_verify routing key dispatches to handleVerifyCacheEntry ->
+// HandleVerifyCacheEntry with the payload intact, asynchronously (mirroring
+// handleDownloadAddon/handleRemoveAddon's dispatch style for a
+// potentially-slow SteamCMD operation).
+func TestVerifyCacheEntryRoutingKey_RoutesToVerifyHandler(t *testing.T) {
+	handler := newRecordingCommandHandler()
+	c := &Consumer{handler: handler, serverID: 7}
+
+	body, err := json.Marshal(VerifyCacheEntryCommand{
+		CacheEntryID:   99,
+		WorkshopID:     "123456",
+		ContentVersion: "v3",
+		SteamAppID:     "440900",
+	})
+	if err != nil {
+		t.Fatalf("failed to marshal VerifyCacheEntryCommand: %v", err)
+	}
+
+	if err := c.handleVerifyCacheEntry(context.Background(), rmq.Message{
+		RoutingKey: "command.host.7.workshop.cache_verify",
+		Body:       body,
+	}); err != nil {
+		t.Fatalf("handleVerifyCacheEntry returned error: %v", err)
+	}
+
+	handler.waitForAsync(t, 1)
+
+	handler.mu.Lock()
+	defer handler.mu.Unlock()
+	if handler.verifyCacheEntry == nil {
+		t.Fatal("command.host.7.workshop.cache_verify did not reach HandleVerifyCacheEntry")
+	}
+	if handler.verifyCacheEntry.CacheEntryID != 99 {
+		t.Errorf("CacheEntryID = %d, want 99", handler.verifyCacheEntry.CacheEntryID)
+	}
+	if handler.verifyCacheEntry.WorkshopID != "123456" {
+		t.Errorf("WorkshopID = %q, want %q", handler.verifyCacheEntry.WorkshopID, "123456")
+	}
+	if handler.verifyCacheEntry.ContentVersion != "v3" {
+		t.Errorf("ContentVersion = %q, want %q", handler.verifyCacheEntry.ContentVersion, "v3")
+	}
+	if handler.verifyCacheEntry.SteamAppID != "440900" {
+		t.Errorf("SteamAppID = %q, want %q", handler.verifyCacheEntry.SteamAppID, "440900")
+	}
+}
+
+// TestVerifyCacheEntryRoutingKey_UnmarshalError_StillFailsSynchronously
+// mirrors TestHandleStopSession_UnmarshalError_StillFailsSynchronously for
+// the new key: a malformed body fails synchronously, before any dispatch.
+func TestVerifyCacheEntryRoutingKey_UnmarshalError_StillFailsSynchronously(t *testing.T) {
+	handler := newRecordingCommandHandler()
+	c := &Consumer{handler: handler, serverID: 7}
+
+	err := c.handleVerifyCacheEntry(context.Background(), rmq.Message{
+		RoutingKey: "command.host.7.workshop.cache_verify",
+		Body:       []byte("not valid json"),
+	})
+	if err == nil {
+		t.Fatal("expected handleVerifyCacheEntry to return an error for a malformed message body")
+	}
+
+	time.Sleep(50 * time.Millisecond)
+	handler.mu.Lock()
+	defer handler.mu.Unlock()
+	if handler.verifyCacheEntry != nil {
+		t.Fatal("HandleVerifyCacheEntry was invoked despite an unmarshal error")
+	}
+}
+
 func (f *fakeCommandHandler) HandleStartSession(ctx context.Context, cmd *StartSessionCommand) error {
 	return nil
 }
@@ -63,6 +326,10 @@ func (f *fakeCommandHandler) HandleDownloadAddon(ctx context.Context, cmd *Downl
 }
 
 func (f *fakeCommandHandler) HandleRemoveAddon(ctx context.Context, cmd *RemoveAddonCommand) error {
+	return nil
+}
+
+func (f *fakeCommandHandler) HandleVerifyCacheEntry(ctx context.Context, cmd *VerifyCacheEntryCommand) error {
 	return nil
 }
 

@@ -30,6 +30,18 @@ type SGCDetailPageData struct {
 	// ConnectAddressUnavailable is true when ComputeConnectAddresses
 	// returned no addresses (FR7), e.g. no host_public_address configured.
 	ConnectAddressUnavailable bool
+	// EnvOverrides drives the layered Environment section (task #2090,
+	// FR1/FR2/FR4), built by handleSGCDetail from the GameConfig env
+	// template plus the deployment's env_vars patches. nil renders no
+	// Environment section (e.g. GameConfig fetch failed).
+	EnvOverrides *SGCEnvOverridesData
+	// PortContext carries the ports editor's FR13/FR14 guidance data
+	// (task #2098): the server's allowed host-port ranges per protocol
+	// and the host ports already in use (allocated + sibling-saved),
+	// fetched through the public API by handleSGCDetail. nil renders the
+	// editor without warnings/random affordance (auxiliary fetches
+	// failed -- guidance degrades, never the page).
+	PortContext *SGCPortContext
 }
 
 type LibraryAttachment struct {
@@ -114,6 +126,15 @@ templ SGCDetail(data SGCDetailPageData) {
 				}
 			</div>
 		</div>
+		<!--
+			Deployment Environment (task #2090, FR1/FR2/FR4): layered
+			template→override→effective view with override CRUD. Built by
+			handleSGCDetail; nil renders no Environment section (e.g. the
+			GameConfig fetch failed).
+		-->
+		if data.EnvOverrides != nil {
+			@SGCEnvOverrides(*data.EnvOverrides)
+		}
 		<!-- SGC Info -->
 		<div x-data="{ editPorts: false }" class="card bg-base-100 border border-base-300 shadow-sm mb-6">
 			<div class="card-body">
@@ -171,15 +192,54 @@ templ SGCDetail(data SGCDetailPageData) {
 							x-cloak
 							x-data="{
 								ports: [],
+								portCtx: { ranges: {}, in_use: {} },
+								randomNotice: '',
 								addPort() { this.ports.push({ container_port: '', host_port: '', protocol: 'TCP' }) },
 								removePort(i) { this.ports.splice(i, 1) },
+								hasRanges(proto) { return (this.portCtx.ranges[proto] || []).length > 0 },
+								portWarning(pb) {
+									const hp = parseInt(pb.host_port)
+									if (!hp || hp < 1) return ''
+									const proto = pb.protocol || 'TCP'
+									if ((this.portCtx.in_use[proto] || []).includes(hp)) {
+										return 'Host port ' + hp + ' is already in use on this server.'
+									}
+									if (this.hasRanges(proto)) {
+										const inRange = (this.portCtx.ranges[proto] || []).some(r => hp >= r.start && hp <= r.end)
+										if (!inRange) return 'Host port ' + hp + ' is outside the configured allowed ranges.'
+									}
+									return ''
+								},
+								async randomPort(pb) {
+									const base = this.$el.dataset.randomPortBase
+									if (!base) return
+									const proto = pb.protocol || 'TCP'
+									this.randomNotice = ''
+									try {
+										const resp = await fetch(base + '?protocol=' + proto)
+										const body = await resp.json()
+										if (resp.ok && body.port) {
+											pb.host_port = String(body.port)
+										} else {
+											this.randomNotice = body.error || 'Random port generation failed.'
+										}
+									} catch (e) {
+										this.randomNotice = 'Random port generation failed.'
+									}
+								},
 								init() {
 									const dataStr = this.$el.dataset.portBindings;
 									const initial = dataStr ? JSON.parse(dataStr) : [];
 									this.ports = initial.map(pb => ({ container_port: pb.container_port, host_port: pb.host_port, protocol: pb.protocol }));
+									const ctxStr = this.$el.dataset.portContext;
+									this.portCtx = ctxStr ? JSON.parse(ctxStr) : { ranges: {}, in_use: {} };
 								}
 							}"
 							data-port-bindings={ templ.JSONString(data.SGC.PortBindings) }
+							if data.PortContext != nil {
+								data-port-context={ templ.JSONString(data.PortContext) }
+								data-random-port-base={ fmt.Sprintf("/sgc/%d/random-port", data.SGC.ServerGameConfigId) }
+							}
 							class="mt-2"
 						>
 							<form
@@ -188,8 +248,11 @@ templ SGCDetail(data SGCDetailPageData) {
 								x-on:submit="$event.target.port_bindings_json.value = JSON.stringify(ports.filter(p => p.container_port && p.host_port).map(p => ({ container_port: parseInt(p.container_port), host_port: parseInt(p.host_port), protocol: p.protocol })))"
 							>
 								<input type="hidden" name="port_bindings_json" value=""/>
+								if data.PortContext != nil {
+									<p x-show="randomNotice" x-cloak class="text-warning text-sm mb-2" data-testid="sgc-port-random-notice" x-text="randomNotice"></p>
+								}
 								<template x-for="(pb, idx) in ports" :key="idx">
-									<div class="flex gap-2 items-center mb-2">
+									<div class="flex gap-2 items-center mb-2 flex-wrap">
 										<input type="number" x-model="pb.container_port" min="1" max="65535" placeholder="Container Port" class="input input-bordered input-sm w-36 font-mono"/>
 										<span class="text-base-content/60">→</span>
 										<input type="number" x-model="pb.host_port" min="1" max="65535" placeholder="Host Port" class="input input-bordered input-sm w-36 font-mono"/>
@@ -197,7 +260,24 @@ templ SGCDetail(data SGCDetailPageData) {
 											<option value="TCP">TCP</option>
 											<option value="UDP">UDP</option>
 										</select>
+									if data.PortContext != nil {
+										<button
+												type="button"
+												x-on:click="randomPort(pb)"
+												class="btn btn-ghost btn-sm"
+												title="Pick a random allowed, unused host port"
+												data-testid="sgc-port-random"
+											>🎲</button>
+										}
 										<button type="button" x-on:click="removePort(idx)" class="btn btn-error btn-sm btn-square">×</button>
+										<p
+											if data.PortContext != nil {
+												x-show="portWarning(pb)"
+											}
+										class="w-full text-warning text-sm pl-1"
+										data-testid="sgc-port-warning"
+										x-text="portWarning(pb)"
+									></p>
 									</div>
 								</template>
 								<div class="flex gap-2 mt-2">

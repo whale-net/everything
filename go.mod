@@ -16,6 +16,7 @@ require (
 	github.com/jackc/pgx/v5 v5.9.2
 	github.com/moby/docker-image-spec v1.3.1
 	github.com/modelcontextprotocol/go-sdk v1.7.0
+	github.com/openai/openai-go/v2 v2.7.1
 	github.com/opencontainers/go-digest v1.0.0
 	github.com/opencontainers/image-spec v1.1.1
 	github.com/pkg/errors v0.9.1

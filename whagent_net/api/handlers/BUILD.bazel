@@ -1,0 +1,112 @@
+load("@rules_go//go:def.bzl", "go_library", "go_test")
+
+go_library(
+    name = "handlers",
+    srcs = [
+        "auth.go",
+        "broadcast.go",
+        "send.go",
+        "session.go",
+        "start.go",
+        "stop.go",
+        "stream.go",
+        "stream_sequencer.go",
+        "usage.go",
+    ],
+    importpath = "github.com/whale-net/everything/whagent_net/api/handlers",
+    visibility = ["//visibility:public"],
+    deps = [
+        "//libs/go/grpcauth",
+        "//libs/go/logging",
+        "//libs/go/rmq",
+        "//whagent_net/events",
+        "//whagent_net/llm",
+        "//whagent_net/protos:whagentpb",
+        "//whagent_net/session",
+        "@com_github_google_uuid//:uuid",
+        "@io_temporal_go_sdk//client",
+        "@org_golang_google_grpc//:grpc",
+        "@org_golang_google_grpc//codes",
+        "@org_golang_google_grpc//status",
+        "@org_golang_google_protobuf//types/known/timestamppb",
+    ],
+)
+
+# Unit tests: RequireClaimsUnaryInterceptor/RequireClaimsStreamInterceptor
+# (issue #2113's Testing section) and eventSequencer, StreamEvents' dedup-on-
+# event_id/order-on-seq merge stage (issue #2239's Testing section). Neither
+# needs Postgres/network, so this runs as part of `bazel test //...`.
+go_test(
+    name = "handlers_test",
+    srcs = [
+        "auth_test.go",
+        "stream_sequencer_test.go",
+    ],
+    embed = [":handlers"],
+    deps = [
+        "//libs/go/grpcauth",
+        "//whagent_net/events",
+        "@com_github_google_uuid//:uuid",
+        "@com_github_stretchr_testify//assert",
+        "@com_github_stretchr_testify//require",
+        "@org_golang_google_grpc//:grpc",
+        "@org_golang_google_grpc//codes",
+        "@org_golang_google_grpc//status",
+    ],
+)
+
+# Real Postgres + real gRPC server integration coverage for the SessionService
+# read paths: GetSession/ReadTranscript (issue #2113's Testing section) and,
+# via a second real broker (testcontainers), StreamEvents (issue #2239's
+# Testing section -- see stream_events_integration_test.go's own doc comment
+# for what it proves). One target, same as whagent_net/session's own
+# multi-file *_integration_test.go convention -- stream_events_integration_test.go
+# shares session_integration_test.go's newTestServer/createSession/testIssuer/
+# devSubject fixtures, so both files must compile together. Deliberately NOT
+# part of `bazel test //...` -- see //libs/go/dbtest's README and
+# whagent_net/session:session_integration_test for the full rationale behind
+# each tag and how to run a test like this one.
+#
+# Run it explicitly (requires a working Docker daemon):
+#   bazel test //whagent_net/api/handlers:session_integration_test --test_output=all
+go_test(
+    name = "session_integration_test",
+    size = "large",
+    timeout = "long",
+    srcs = [
+        "session_integration_test.go",
+        "stream_events_integration_test.go",
+        "usage_integration_test.go",
+    ],
+    gotags = ["integration"],
+    tags = [
+        "external",
+        "integration",
+        "manual",
+        "no-cache",
+        "no-sandbox",
+        "requires-network",
+    ],
+    deps = [
+        ":handlers",
+        "//libs/go/dbtest",
+        "//libs/go/grpcauth",
+        "//libs/go/migrate",
+        "//libs/go/rmq",
+        "//whagent_net/events",
+        "//whagent_net/migrate/schema",
+        "//whagent_net/protos:whagentpb",
+        "//whagent_net/session",
+        "@com_github_google_uuid//:uuid",
+        "@com_github_jackc_pgx_v5//stdlib",
+        "@com_github_stretchr_testify//assert",
+        "@com_github_stretchr_testify//require",
+        "@com_github_testcontainers_testcontainers_go//:testcontainers-go",
+        "@com_github_testcontainers_testcontainers_go//wait",
+        "@org_golang_google_grpc//:grpc",
+        "@org_golang_google_grpc//codes",
+        "@org_golang_google_grpc//credentials/insecure",
+        "@org_golang_google_grpc//status",
+        "@org_golang_google_grpc//test/bufconn",
+    ],
+)

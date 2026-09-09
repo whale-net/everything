@@ -432,6 +432,12 @@ func (app *App) setupRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("/workshop/api/available-addons", app.auth.RequireAuthFunc(app.auth.WithAccessToken(app.handleAvailableAddons)))
 	mux.HandleFunc("/workshop/api/available-libraries", app.auth.RequireAuthFunc(app.auth.WithAccessToken(app.handleAvailableLibraries)))
 	mux.HandleFunc("/workshop/api/presets-for-game", app.auth.RequireAuthFunc(app.auth.WithAccessToken(app.handlePresetsForGame)))
+	mux.HandleFunc("/workshop/batch-status", app.auth.RequireAuthFunc(app.auth.WithAccessToken(app.handleWorkshopBatchStatus)))
+	mux.HandleFunc("/workshop/cache", app.auth.RequireAuthFunc(app.auth.WithAccessToken(app.handleWorkshopCache)))
+	mux.HandleFunc("/workshop/cache/verify", app.auth.RequireAuthFunc(app.auth.WithAccessToken(app.handleWorkshopCacheVerify)))
+	mux.HandleFunc("/workshop/cache/evict", app.auth.RequireAuthFunc(app.auth.WithAccessToken(app.handleWorkshopCacheEvict)))
+	mux.HandleFunc("/workshop/bulk-add-collection", app.auth.RequireAuthFunc(app.auth.WithAccessToken(app.handleBulkAddCollection)))
+	mux.HandleFunc("/workshop/batch-create-addons", app.auth.RequireAuthFunc(app.auth.WithAccessToken(app.handleBatchCreateAddons)))
 
 	// Protected routes - SGC detail
 	mux.HandleFunc("/sgc/", app.auth.RequireAuthFunc(app.auth.WithAccessToken(app.handleSGCRoutes)))
@@ -460,6 +466,27 @@ func (app *App) handleSGCRoutes(w http.ResponseWriter, r *http.Request) {
 	if len(pathParts) >= 3 && pathParts[2] == "update-ports" {
 		app.handleSGCUpdatePorts(w, r, pathParts[1])
 		return
+	}
+	// /sgc/{id}/random-port (task #2098, FR13): one random in-range,
+	// not-in-use host port for the ports editor's random affordance.
+	if len(pathParts) >= 3 && pathParts[2] == "random-port" {
+		app.handleSGCRandomPort(w, r, pathParts[1])
+		return
+	}
+	// /sgc/{id}/env/set, /sgc/{id}/env/remove, /sgc/{id}/env/edit
+	// (task #2090: deployment-level environment overrides, FR2/FR4).
+	if len(pathParts) >= 4 && pathParts[2] == "env" {
+		switch pathParts[3] {
+		case "set":
+			app.handleSGCEnvSet(w, r, pathParts[1])
+			return
+		case "remove":
+			app.handleSGCEnvRemove(w, r, pathParts[1])
+			return
+		case "edit":
+			app.handleSGCEnvEdit(w, r, pathParts[1])
+			return
+		}
 	}
 	app.handleSGCDetail(w, r)
 }

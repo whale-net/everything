@@ -34,6 +34,20 @@ templ_library(
     ],
 )
 
+go_test(
+    name = "views_test",
+    size = "small",
+    srcs = ["views_test.go"],
+    embed = [":research"],
+    deps = [
+        "//audience_score_system/store",
+        "//audience_score_system/web/components",
+        "@com_github_google_uuid//:uuid",
+        "@com_github_stretchr_testify//assert",
+        "@com_github_stretchr_testify//require",
+    ],
+)
+
 # Postgres-backed handler coverage (Testing phase, issue #1899, milestone
 # M4.1 FR1/FR2/FR8/FR9/FR10/NFR2): HandleChannelIndex's Founder/Co-Creator/
 # Analyst read (same rows for all three) with non-member/unknown-Channel/

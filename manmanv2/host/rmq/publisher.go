@@ -83,3 +83,18 @@ func (p *Publisher) PublishBackupStatus(ctx context.Context, update *BackupStatu
 		"routing_key", routingKey)
 	return p.publisher.Publish(ctx, "manman", routingKey, update)
 }
+
+// PublishWorkshopCacheStatus publishes a Workshop verify/cache-refresh
+// outcome (#2184). New routing key, additive to the existing status.*
+// contract (NFR3) -- see WorkshopCacheStatusUpdate's doc comment.
+func (p *Publisher) PublishWorkshopCacheStatus(ctx context.Context, update *WorkshopCacheStatusUpdate) error {
+	routingKey := fmt.Sprintf("status.host.%d.workshop.cache", p.serverID)
+	slog.Info("publishing workshop cache status event",
+		"server_id", p.serverID,
+		"workshop_id", update.WorkshopID,
+		"content_version", update.ContentVersion,
+		"cache_entry_id", update.CacheEntryID,
+		"event", update.Event,
+		"routing_key", routingKey)
+	return p.publisher.Publish(ctx, "manman", routingKey, update)
+}

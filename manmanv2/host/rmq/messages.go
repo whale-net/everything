@@ -36,12 +36,22 @@ type ServerGameConfigMessage struct {
 }
 
 // StartSessionCommand represents a command to start a session
+//
+// RenderedEnv (FR5) is the server-side rendered effective environment:
+// the GameConfig env template merged with deployment-level overrides.
+// Presence semantics: nil/absent means "not rendered" -- the host falls
+// back to GameConfig.EnvTemplate; an empty (non-nil) map is present and
+// authoritative -- an intentionally empty env is honored, not replaced
+// by the template. Strictly additive (NFR2/LB1): no other field changes.
+// The json tag must NOT be omitempty: an empty-but-present map carries
+// meaning and must survive marshaling.
 type StartSessionCommand struct {
 	SessionID        int64                   `json:"session_id"`
 	SGCID            int64                   `json:"sgc_id"`
 	GameConfig       GameConfigMessage       `json:"game_config"`
 	ServerGameConfig ServerGameConfigMessage `json:"server_game_config"`
 	Force            bool                   `json:"force"`
+	RenderedEnv      map[string]string       `json:"rendered_env"`
 }
 
 // StopSessionCommand represents a command to stop a session
@@ -138,4 +148,38 @@ type BackupStatusUpdate struct {
 	SizeBytes    *int64  `json:"size_bytes,omitempty"`
 	Status       string  `json:"status"` // "completed" | "failed"
 	ErrorMessage *string `json:"error_message,omitempty"`
+}
+
+// WorkshopCacheStatusUpdate reports the outcome of an install-time Workshop
+// verify/cache-refresh cycle (#2184, plan #2175 FR8/FR9/FR10). Published on
+// the "status.host.<serverID>.workshop.cache" routing key, additive
+// alongside (never replacing) the existing installation-status publishing
+// above -- NFR3 forbids renaming a field, repurposing a routing key, or
+// changing the shape of DownloadAddonCommand/InstallationStatusUpdate for
+// existing consumers.
+type WorkshopCacheStatusUpdate struct {
+	ServerID       int64     `json:"server_id"`
+	WorkshopID     string    `json:"workshop_id"`
+	ContentVersion string    `json:"content_version"`
+	CacheEntryID   int64     `json:"cache_entry_id"`
+	Event          string    `json:"event"` // "verified_unchanged" | "refreshed" | "populated" | "present"
+	SizeBytes      int64     `json:"size_bytes,omitempty"`
+	VerifiedAt     time.Time `json:"verified_at"`
+}
+
+// VerifyCacheEntryCommand instructs the host-manager to run an on-demand
+// SteamCMD verify of a specific cache entry against its Workshop source,
+// independent of any install (#2186, plan #2175 FR11). Published on the new
+// "command.host.<serverID>.workshop.cache_verify" routing key, additive
+// alongside (never replacing) the existing workshop.download/workshop.remove
+// commands above -- NFR3 forbids renaming a field, repurposing a routing
+// key, or changing the shape of an existing command for existing consumers.
+// The result is reported asynchronously on the existing
+// "status.host.<serverID>.workshop.cache" key (#2184) via
+// WorkshopCacheStatusUpdate -- this command has no dedicated reply message.
+type VerifyCacheEntryCommand struct {
+	CacheEntryID   int64  `json:"cache_entry_id"`
+	WorkshopID     string `json:"workshop_id"`
+	ContentVersion string `json:"content_version"`
+	SteamAppID     string `json:"steam_app_id"`
 }

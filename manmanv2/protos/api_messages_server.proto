@@ -54,3 +54,41 @@ message DeleteServerRequest {
 }
 
 message DeleteServerResponse {}
+
+// UpdateServerAllowedPortRanges replaces the server's full set of allowed
+// host-port ranges (FR12, task #2095). Replace-all keeps the API simple and
+// matches the UI's read-modify-write flow; an empty set is first-class and
+// means unconstrained (SB-1.2). Save-time validation (overlap checks etc.)
+// is deliberately out of scope per root-plan Decision 7.
+message UpdateServerAllowedPortRangesRequest {
+  int64 server_id = 1;
+  repeated PortRange ranges = 2;
+}
+
+message UpdateServerAllowedPortRangesResponse {
+  repeated PortRange ranges = 1;
+}
+
+// AllocatedPort is one server_ports allocation row (FR13/FR14, task
+// #2098): a host port currently or previously allocated to a session on
+// a server. Read-only projection -- allocation happens only inside
+// session start (FR12 enforcement), so no write RPC exists for it.
+message AllocatedPort {
+  int64 server_id = 1;
+  int32 port = 2;
+  string protocol = 3;
+  int64 session_id = 4;  // 0 when the allocation has no session
+}
+
+// ListAllocatedPorts lists a server's port allocations (additive, task
+// #2098): the UI's ports editor uses it to warn about in-use host ports
+// and to avoid them when generating a random in-range port. Guidance
+// only -- session-start allocation remains the correctness backstop
+// (Decision 7).
+message ListAllocatedPortsRequest {
+  int64 server_id = 1;
+}
+
+message ListAllocatedPortsResponse {
+  repeated AllocatedPort ports = 1;
+}

@@ -19,6 +19,10 @@ type CommandHandler interface {
 	HandleDownloadAddon(ctx context.Context, cmd *DownloadAddonCommand) error
 	HandleRemoveAddon(ctx context.Context, cmd *RemoveAddonCommand) error
 	HandleBackup(ctx context.Context, cmd *BackupCommand) error
+	// HandleVerifyCacheEntry handles the additive cache_verify command (#2186, plan #2175
+	// FR11): an Admin's on-demand SteamCMD verify of a single cache entry, independent of
+	// any install. See VerifyCacheEntryCommand's doc comment for the full contract.
+	HandleVerifyCacheEntry(ctx context.Context, cmd *VerifyCacheEntryCommand) error
 }
 
 // Consumer consumes commands from RabbitMQ
@@ -46,6 +50,11 @@ func NewConsumer(conn *rmq.Connection, serverID int64, handler CommandHandler) (
 		fmt.Sprintf("command.host.%d.session.send_input", serverID),
 		fmt.Sprintf("command.host.%d.workshop.download", serverID),
 		fmt.Sprintf("command.host.%d.workshop.remove", serverID),
+		// cache_verify (#2186, plan #2175 FR11) is additive alongside the
+		// existing workshop.download/remove keys above (NFR3): a new binding,
+		// not a modification of an existing one. Handler wiring (CommandHandler
+		// method + dispatch) lands in the Implementation phase of #2186.
+		fmt.Sprintf("command.host.%d.workshop.cache_verify", serverID),
 		fmt.Sprintf("command.host.%d.backup", serverID),
 	}
 
@@ -69,6 +78,7 @@ func NewConsumer(conn *rmq.Connection, serverID int64, handler CommandHandler) (
 	downloadAddonKey := fmt.Sprintf("command.host.%d.workshop.download", serverID)
 	removeAddonKey := fmt.Sprintf("command.host.%d.workshop.remove", serverID)
 	backupKey := fmt.Sprintf("command.host.%d.backup", serverID)
+	verifyCacheEntryKey := fmt.Sprintf("command.host.%d.workshop.cache_verify", serverID)
 
 	consumer.RegisterHandler(startKey, c.handleStartSession)
 	consumer.RegisterHandler(stopKey, c.handleStopSession)
@@ -77,6 +87,7 @@ func NewConsumer(conn *rmq.Connection, serverID int64, handler CommandHandler) (
 	consumer.RegisterHandler(downloadAddonKey, c.handleDownloadAddon)
 	consumer.RegisterHandler(removeAddonKey, c.handleRemoveAddon)
 	consumer.RegisterHandler(backupKey, c.handleBackup)
+	consumer.RegisterHandler(verifyCacheEntryKey, c.handleVerifyCacheEntry)
 
 	return c, nil
 }
@@ -187,6 +198,29 @@ func (c *Consumer) handleRemoveAddon(ctx context.Context, msg rmq.Message) error
 			slog.Error("remove addon failed", "installation_id", cmd.InstallationID, "error", err)
 		} else {
 			slog.Info("command completed", "command", "remove_addon", "installation_id", cmd.InstallationID)
+		}
+	}()
+	return nil
+}
+
+// handleVerifyCacheEntry processes the additive cache_verify command (#2186, plan #2175
+// FR11). Run in a goroutine like handleDownloadAddon/handleRemoveAddon: a verify drives a
+// SteamCMD container (VerifyWorkshopItem) that can take a while, and QoS=1 means no other
+// message on this queue would be processable while it blocks. There is no reply message
+// for this command -- the outcome is reported asynchronously on the existing
+// status.host.<serverID>.workshop.cache key, so nothing here waits on it.
+func (c *Consumer) handleVerifyCacheEntry(ctx context.Context, msg rmq.Message) error {
+	var cmd VerifyCacheEntryCommand
+	if err := json.Unmarshal(msg.Body, &cmd); err != nil {
+		return fmt.Errorf("failed to unmarshal verify cache entry command: %w", err)
+	}
+	slog.Info("received command", "command", "verify_cache_entry", "cache_entry_id", cmd.CacheEntryID, "workshop_id", cmd.WorkshopID, "routing_key", msg.RoutingKey)
+
+	go func() {
+		if err := c.handler.HandleVerifyCacheEntry(context.Background(), &cmd); err != nil {
+			slog.Error("verify cache entry failed", "cache_entry_id", cmd.CacheEntryID, "error", err)
+		} else {
+			slog.Info("command completed", "command", "verify_cache_entry", "cache_entry_id", cmd.CacheEntryID)
 		}
 	}()
 	return nil

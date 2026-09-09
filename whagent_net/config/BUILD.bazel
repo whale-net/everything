@@ -1,0 +1,29 @@
+"""whagent-net agent-definition seed config: agents.yaml + its Go decode/
+validate shape (issue #2121)."""
+
+load("@rules_go//go:def.bzl", "go_library", "go_test")
+
+go_library(
+    name = "config",
+    srcs = ["config.go"],
+    embedsrcs = ["agents.yaml"],
+    importpath = "github.com/whale-net/everything/whagent_net/config",
+    visibility = ["//visibility:public"],
+    deps = [
+        "@in_gopkg_yaml_v3//:yaml_v3",
+    ],
+)
+
+# Pure-Go suite (issue #2121's Testing section): Validate's shape-only
+# rules (missing agent_id, duplicate agent_id, missing model, empty/
+# malformed tool_set) and a sanity check that the real checked-in
+# agents.yaml this package embeds parses and validates.
+go_test(
+    name = "config_test",
+    srcs = ["config_test.go"],
+    embed = [":config"],
+    deps = [
+        "@com_github_stretchr_testify//assert",
+        "@com_github_stretchr_testify//require",
+    ],
+)

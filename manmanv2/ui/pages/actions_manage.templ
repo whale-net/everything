@@ -1,16 +1,659 @@
 package pages
 
 import (
+	"fmt"
+
 	"github.com/whale-net/everything/manmanv2/ui/components"
+	manmanpb "github.com/whale-net/everything/manmanv2/protos"
 )
 
-type ActionsManagePageData struct {
-	Layout      components.LayoutData
-	HTMLContent string
+// Actions management page, reworked onto templ (#2080 task #2091, FR6/FR7).
+//
+// This replaces the legacy 809-line templates/actions_manage.html fragment
+// (rendered via templ.Raw) with native templ markup: structured data in,
+// daisyUI components out. The interactive form builder stays Alpine.js,
+// ported verbatim from the legacy template's actionManager() component --
+// the page itself is now type-checked templ instead of an opaque HTML blob.
+//
+// The edit round-trip fix (edit form loads existing input fields AND each
+// field's option lists, and update no longer wipes options) lands in the
+// implementation phase of #2091; this file already carries the option
+// rows in the form builder so that change only touches the edit payload.
+
+// ActionsManageData is the actions management page body's structured data
+// (rendered inside the standard layout by ActionsManage).
+type ActionsManageData struct {
+	DefinitionLevel  string // "game", "game_config", or "server_game_config"
+	EntityID         int64
+	EntityName       string
+	CurrentPath      string // URL path; edit links hang off it
+	LocalActions     []*ActionManageRow
+	InheritedActions []*ActionManageRow
+	FieldTypes       []string
+	ButtonStyles     []string
+	IconOptions      []ActionIconOption
 }
 
-templ ActionsManage(data ActionsManagePageData) {
-	@components.Layout(data.Layout) {
-		@templ.Raw(data.HTMLContent)
+// ActionManageRow is one action row on the manage page.
+type ActionManageRow struct {
+	Action  *manmanpb.ActionDefinition
+	EditURL string // only set for inherited actions: edit at definition level
+}
+
+// ActionIconOption is one Font Awesome icon choice for the icon select.
+type ActionIconOption struct {
+	Class string
+	Label string
+}
+
+// actionLevelLabel maps a definition level to its display badge text.
+func actionLevelLabel(level string) string {
+	switch level {
+	case "game":
+		return "Game"
+	case "game_config":
+		return "Config"
+	case "server_game_config":
+		return "SGC"
+	default:
+		return level
+	}
+}
+
+templ ActionsManage(layoutData components.LayoutData, data ActionsManageData) {
+	@components.Layout(layoutData) {
+		<div x-data="actionManager()" x-init="init()">
+			<div class="flex justify-between items-center mb-6">
+				<h1 class="text-2xl font-bold text-base-content">Manage Actions - { data.EntityName }</h1>
+				<button
+					type="button"
+					class="btn btn-primary btn-sm"
+					@click={ `showForm = true; editMode = false; resetForm()` }
+				>+ New Action</button>
+			</div>
+
+			<!-- Error/Success Messages -->
+			<div x-show="errorMessage" x-cloak class="mb-4 p-4 bg-error/10 border-l-4 border-error rounded text-sm text-base-content">
+				<strong>Error:</strong> <span x-text="errorMessage"></span>
+				<button type="button" class="btn btn-ghost btn-xs float-right" @click="errorMessage = ''">&times;</button>
+			</div>
+			<div x-show="successMessage" x-cloak class="mb-4 p-4 bg-success/10 border-l-4 border-success rounded text-sm text-base-content">
+				<strong>Success:</strong> <span x-text="successMessage"></span>
+				<button type="button" class="btn btn-ghost btn-xs float-right" @click="successMessage = ''">&times;</button>
+			</div>
+
+			<!-- Hidden target for HTMX script responses (edit-action event payloads) -->
+			<div id="htmx-script-target" class="hidden"></div>
+
+			<!-- Create/Edit Form (Inline, Expandable) -->
+			<div x-show="showForm" x-cloak class="mb-8">
+				<div class="card bg-base-100 border-2 border-success shadow-md">
+					<div class="flex justify-between items-center p-4 border-b border-base-300">
+						<div class="text-lg font-semibold text-base-content" x-text="editMode ? 'Edit Action' : 'Create New Action'"></div>
+						<button type="button" class="btn btn-ghost btn-sm" @click="closeForm()">Cancel</button>
+					</div>
+					<form @submit.prevent="submitForm()" class="card-body gap-6">
+
+						<!-- Basic Information -->
+						<div class="space-y-4">
+							<h3 class="text-base font-semibold text-base-content">Basic Information</h3>
+							<div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+								<div>
+									<label class="label"><span class="label-text">Name (unique identifier) *</span></label>
+									<input type="text" x-model="formData.name" pattern="[a-z0-9_]+" placeholder="e.g., save_world" required class="input input-bordered w-full"/>
+									<p class="text-xs text-base-content/60 mt-1">Lowercase letters, numbers, and underscores only</p>
+								</div>
+								<div>
+									<label class="label"><span class="label-text">Label (display name) *</span></label>
+									<input type="text" x-model="formData.label" placeholder="e.g., Save World" required class="input input-bordered w-full"/>
+								</div>
+							</div>
+							<div>
+								<label class="label"><span class="label-text">Description</span></label>
+								<textarea x-model="formData.description" rows="2" placeholder="Optional description of what this action does" class="textarea textarea-bordered w-full"></textarea>
+							</div>
+							<div>
+								<label class="label"><span class="label-text">Command Template *</span></label>
+								<textarea x-model="formData.command_template" rows="3" placeholder="e.g., say Hello or changelevel de_dust2" required class="textarea textarea-bordered w-full font-mono"></textarea>
+								<p class="text-xs text-base-content/60 mt-1">Use Go template syntax: <code>{ "{{ .field_name }}" }</code> as each input field's placeholder</p>
+							</div>
+						</div>
+
+						<!-- Display Settings -->
+						<div class="space-y-4">
+							<h3 class="text-base font-semibold text-base-content">Display Settings</h3>
+							<div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+								<div>
+									<label class="label"><span class="label-text">Group Name</span></label>
+									<input type="text" x-model="formData.group_name" placeholder="e.g., Server Control" class="input input-bordered w-full"/>
+									<p class="text-xs text-base-content/60 mt-1">Groups related actions together</p>
+								</div>
+								<div>
+									<label class="label"><span class="label-text">Display Order</span></label>
+									<input type="number" x-model.number="formData.display_order" min="0" placeholder="0" class="input input-bordered w-full"/>
+								</div>
+							</div>
+							<div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+								<div>
+									<label class="label"><span class="label-text">Button Style</span></label>
+									<select x-model="formData.button_style" class="select select-bordered w-full">
+										for _, style := range data.ButtonStyles {
+											<option value={ style }>{ style }</option>
+										}
+									</select>
+								</div>
+								<div>
+									<label class="label"><span class="label-text">Icon</span></label>
+									<select x-model="formData.icon" class="select select-bordered w-full">
+										for _, icon := range data.IconOptions {
+											<option value={ icon.Class }>{ icon.Label }</option>
+										}
+									</select>
+								</div>
+							</div>
+							<label class="label cursor-pointer justify-start gap-2">
+								<input type="checkbox" x-model="formData.enabled" class="checkbox checkbox-sm"/>
+								<span class="label-text">Enabled</span>
+							</label>
+							<p class="text-xs text-base-content/60 -mt-2">Disabled actions won't appear in session quick actions</p>
+						</div>
+
+						<!-- Confirmation Settings -->
+						<div class="space-y-4">
+							<h3 class="text-base font-semibold text-base-content">Confirmation Settings</h3>
+							<label class="label cursor-pointer justify-start gap-2">
+								<input type="checkbox" x-model="formData.requires_confirmation" class="checkbox checkbox-sm"/>
+								<span class="label-text">Require Confirmation</span>
+							</label>
+							<p class="text-xs text-base-content/60 -mt-2">Show a confirmation dialog before executing</p>
+							<div x-show="formData.requires_confirmation">
+								<label class="label"><span class="label-text">Confirmation Message</span></label>
+								<input type="text" x-model="formData.confirmation_message" placeholder="Are you sure you want to perform this action?" class="input input-bordered w-full"/>
+							</div>
+						</div>
+
+						<!-- Input Fields Builder -->
+						<div class="space-y-4">
+							<h3 class="text-base font-semibold text-base-content">Input Fields</h3>
+							<p class="text-sm text-base-content/60">Define input parameters that users must provide when executing this action.</p>
+
+							<template x-for="(field, index) in formData.input_fields" :key="index">
+								<div class="border border-base-300 rounded-lg p-4 mb-4 bg-base-200/50">
+									<div class="flex justify-between items-center mb-4">
+										<h4 class="font-semibold text-sm">Field <span x-text="index + 1"></span></h4>
+										<button type="button" class="btn btn-error btn-xs" @click="removeField(index)">Remove</button>
+									</div>
+
+									<div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+										<div>
+											<label class="label"><span class="label-text">Field Name (identifier) *</span></label>
+											<input type="text" x-model="field.name" pattern="[a-z0-9_]+" placeholder="e.g., message" required class="input input-bordered w-full font-mono"/>
+										</div>
+										<div>
+											<label class="label"><span class="label-text">Label *</span></label>
+											<input type="text" x-model="field.label" placeholder="e.g., Message" required class="input input-bordered w-full"/>
+										</div>
+									</div>
+									<div class="grid grid-cols-1 md:grid-cols-2 gap-4 mt-4">
+										<div>
+											<label class="label"><span class="label-text">Field Type *</span></label>
+											<select x-model="field.field_type" class="select select-bordered w-full">
+												for _, fieldType := range data.FieldTypes {
+													<option value={ fieldType }>{ fieldType }</option>
+												}
+											</select>
+										</div>
+										<div>
+											<label class="label"><span class="label-text">Display Order</span></label>
+											<input type="number" x-model.number="field.display_order" min="0" class="input input-bordered w-full"/>
+										</div>
+									</div>
+									<label class="label cursor-pointer justify-start gap-2 mt-2">
+										<input type="checkbox" x-model="field.required" class="checkbox checkbox-sm"/>
+										<span class="label-text">Required</span>
+									</label>
+									<div class="grid grid-cols-1 md:grid-cols-2 gap-4 mt-2">
+										<div>
+											<label class="label"><span class="label-text">Placeholder</span></label>
+											<input type="text" x-model="field.placeholder" class="input input-bordered w-full"/>
+										</div>
+										<div>
+											<label class="label"><span class="label-text">Default Value</span></label>
+											<input type="text" x-model="field.default_value" class="input input-bordered w-full"/>
+										</div>
+									</div>
+									<div class="mt-2">
+										<label class="label"><span class="label-text">Help Text</span></label>
+										<input type="text" x-model="field.help_text" placeholder="Optional help text shown below the field" class="input input-bordered w-full"/>
+									</div>
+
+									<!-- Type-specific fields -->
+									<div x-show="field.field_type === 'number'" class="grid grid-cols-1 md:grid-cols-2 gap-4 mt-4">
+										<div>
+											<label class="label"><span class="label-text">Min Value</span></label>
+											<input type="number" x-model.number="field.min_value" class="input input-bordered w-full"/>
+										</div>
+										<div>
+											<label class="label"><span class="label-text">Max Value</span></label>
+											<input type="number" x-model.number="field.max_value" class="input input-bordered w-full"/>
+										</div>
+									</div>
+
+									<div x-show="field.field_type === 'text' || field.field_type === 'textarea'" class="mt-4">
+										<div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+											<div>
+												<label class="label"><span class="label-text">Min Length</span></label>
+												<input type="number" x-model.number="field.min_length" min="0" class="input input-bordered w-full"/>
+											</div>
+											<div>
+												<label class="label"><span class="label-text">Max Length</span></label>
+												<input type="number" x-model.number="field.max_length" min="0" class="input input-bordered w-full"/>
+											</div>
+										</div>
+										<div class="mt-2">
+											<label class="label"><span class="label-text">Pattern (regex)</span></label>
+											<input type="text" x-model="field.pattern" placeholder="e.g., ^[A-Za-z0-9]+$" class="input input-bordered w-full font-mono"/>
+										</div>
+									</div>
+
+									<!-- Options for select/radio -->
+									<div x-show="field.field_type === 'select' || field.field_type === 'radio'" class="mt-4">
+										<h5 class="font-semibold text-sm mb-2">Options</h5>
+										<template x-for="(option, optIndex) in getOptionsForField(index)" :key="optIndex">
+											<div class="flex flex-wrap gap-2 mb-2 items-center">
+												<input type="text" x-model="option.value" placeholder="Value (for template)" class="input input-bordered input-sm flex-1 min-w-[8rem] font-mono"/>
+												<input type="text" x-model="option.label" placeholder="Label (display)" class="input input-bordered input-sm flex-1 min-w-[8rem]"/>
+												<label class="label cursor-pointer gap-1">
+													<input type="checkbox" x-model="option.is_default" class="checkbox checkbox-xs"/>
+													<span class="label-text text-xs">Default</span>
+												</label>
+												<button type="button" class="btn btn-error btn-xs" @click="removeOption(index, optIndex)">&times;</button>
+											</div>
+										</template>
+										<button type="button" class="btn btn-ghost btn-sm" @click="addOption(index)">+ Add Option</button>
+									</div>
+								</div>
+							</template>
+
+							<button type="button" class="btn btn-secondary btn-sm" @click="addField()">+ Add Input Field</button>
+						</div>
+
+						<!-- Form Actions -->
+						<div class="flex justify-end gap-2 pt-4 border-t border-base-300">
+							<button type="button" class="btn btn-ghost" @click="closeForm()">Cancel</button>
+							<button type="submit" class="btn btn-primary" :disabled="submitting">
+								<span x-show="!submitting" x-text="editMode ? 'Update Action' : 'Create Action'"></span>
+								<span x-show="submitting">Saving...</span>
+							</button>
+						</div>
+					</form>
+				</div>
+			</div>
+
+			<!-- Local Actions (Defined at this level) -->
+			<div class="card bg-base-100 border border-base-300 shadow-sm mb-6 overflow-hidden">
+				<div class="p-4 border-b border-base-300">
+					<h2 class="text-lg font-semibold text-base-content">Actions Defined at This Level</h2>
+				</div>
+				<div class="p-4">
+					if len(data.LocalActions) == 0 {
+						<p class="text-sm text-base-content/60">No actions defined at this level yet. Click "New Action" to create one.</p>
+					} else {
+						<div class="overflow-x-auto">
+							<table class="table">
+								<thead>
+									<tr>
+										<th>Name</th>
+										<th>Label</th>
+										<th>Group</th>
+										<th>Command Template</th>
+										<th>Enabled</th>
+										<th class="text-right">Actions</th>
+									</tr>
+								</thead>
+								<tbody>
+									for _, row := range data.LocalActions {
+										<tr class="hover">
+											<td><code class="font-mono text-sm">{ row.Action.Name }</code></td>
+											<td>
+												if row.Action.Icon != "" {
+													<i class={ row.Action.Icon }></i>
+												}
+												{ row.Action.Label }
+											</td>
+											<td>{ row.Action.GroupName }</td>
+											<td><code class="font-mono text-xs">{ row.Action.CommandTemplate }</code></td>
+											<td>
+												if row.Action.Enabled {
+													<span class="badge badge-success badge-soft">Yes</span>
+												} else {
+													<span class="badge badge-ghost">No</span>
+												}
+											</td>
+											<td class="text-right">
+												<div class="flex gap-1 justify-end">
+													<button
+														type="button"
+														class="btn btn-secondary btn-xs"
+														hx-get={ templ.URL(fmt.Sprintf("%s/edit/%d", data.CurrentPath, row.Action.ActionId)) }
+														hx-target="#htmx-script-target"
+														hx-swap="innerHTML"
+													>Edit</button>
+													<button type="button" class="btn btn-error btn-xs btn-ghost" @click={ fmt.Sprintf("deleteAction(%d, '%s')", row.Action.ActionId, row.Action.Label) }>Delete</button>
+												</div>
+											</td>
+										</tr>
+									}
+								</tbody>
+							</table>
+						</div>
+					}
+				</div>
+			</div>
+
+			<!-- Inherited Actions (From parent levels) -->
+			if len(data.InheritedActions) > 0 {
+				<div class="card bg-base-100 border border-base-300 shadow-sm mb-6 overflow-hidden">
+					<div class="p-4 border-b border-base-300">
+						<h2 class="text-lg font-semibold text-base-content">Inherited Actions (Read-Only)</h2>
+					</div>
+					<div class="p-4">
+						<p class="text-sm text-base-content/60 mb-4">
+							These actions are defined at parent levels and cannot be edited here. Click a row to edit at its definition level.
+						</p>
+						<div class="overflow-x-auto">
+							<table class="table">
+								<thead>
+									<tr>
+										<th>Name</th>
+										<th>Label</th>
+										<th>Level</th>
+										<th>Group</th>
+										<th>Command Template</th>
+										<th class="text-right">Action</th>
+									</tr>
+								</thead>
+								<tbody>
+									for _, row := range data.InheritedActions {
+										<tr class="hover opacity-60 hover:opacity-100 transition-opacity">
+											<td><code class="font-mono text-sm">{ row.Action.Name }</code></td>
+											<td>
+												if row.Action.Icon != "" {
+													<i class={ row.Action.Icon }></i>
+												}
+												{ row.Action.Label }
+											</td>
+											<td><span class="badge badge-info badge-soft">{ actionLevelLabel(row.Action.DefinitionLevel) }</span></td>
+											<td>{ row.Action.GroupName }</td>
+											<td><code class="font-mono text-xs">{ row.Action.CommandTemplate }</code></td>
+											<td class="text-right">
+												<a href={ templ.URL(row.EditURL) } class="btn btn-secondary btn-xs">Edit at Source</a>
+											</td>
+										</tr>
+									}
+								</tbody>
+							</table>
+						</div>
+					</div>
+				</div>
+			}
+
+			<!-- Alpine.js component (ported verbatim from the legacy template) -->
+			<script>
+				function actionManager() {
+					return {
+						showForm: false,
+						editMode: false,
+						submitting: false,
+						formData: {},
+						errorMessage: '',
+						successMessage: '',
+
+						init() {
+							this.resetForm();
+
+							// Listen for edit-action events from HTMX edit requests
+							window.addEventListener('edit-action', (event) => {
+								this.populateEditForm(event.detail);
+							});
+						},
+
+						resetForm() {
+							this.formData = {
+								action_id: 0,
+								name: '',
+								label: '',
+								description: '',
+								command_template: '',
+								display_order: 0,
+								group_name: '',
+								button_style: 'primary',
+								icon: '',
+								requires_confirmation: false,
+								confirmation_message: '',
+								enabled: true,
+								input_fields: [],
+							};
+						},
+
+						addField() {
+							this.formData.input_fields.push({
+								name: '',
+								label: '',
+								field_type: 'text',
+								required: false,
+								placeholder: '',
+								help_text: '',
+								default_value: '',
+								display_order: this.formData.input_fields.length,
+								pattern: '',
+								min_value: null,
+								max_value: null,
+								min_length: null,
+								max_length: null,
+								_options: [] // Local options array for this field
+							});
+						},
+
+						removeField(index) {
+							this.formData.input_fields.splice(index, 1);
+						},
+
+						getOptionsForField(fieldIndex) {
+							if (!this.formData.input_fields[fieldIndex]._options) {
+								this.formData.input_fields[fieldIndex]._options = [];
+							}
+							return this.formData.input_fields[fieldIndex]._options;
+						},
+
+						addOption(fieldIndex) {
+							if (!this.formData.input_fields[fieldIndex]._options) {
+								this.formData.input_fields[fieldIndex]._options = [];
+							}
+							this.formData.input_fields[fieldIndex]._options.push({
+								value: '',
+								label: '',
+								display_order: this.formData.input_fields[fieldIndex]._options.length,
+								is_default: false
+							});
+						},
+
+						removeOption(fieldIndex, optionIndex) {
+							this.formData.input_fields[fieldIndex]._options.splice(optionIndex, 1);
+						},
+
+						closeForm() {
+							this.showForm = false;
+							this.editMode = false;
+							this.resetForm();
+						},
+
+						populateEditForm(actionData) {
+							this.editMode = true;
+
+							// Populate basic fields
+							this.formData = {
+								action_id: actionData.action_id || 0,
+								name: actionData.name || '',
+								label: actionData.label || '',
+								description: actionData.description || '',
+								command_template: actionData.command_template || '',
+								display_order: actionData.display_order || 0,
+								group_name: actionData.group_name || '',
+								button_style: actionData.button_style || 'primary',
+								icon: actionData.icon || '',
+								requires_confirmation: actionData.requires_confirmation || false,
+								confirmation_message: actionData.confirmation_message || '',
+								enabled: actionData.enabled !== undefined ? actionData.enabled : true,
+								input_fields: []
+							};
+
+							// Populate input fields (including any option lists the
+							// edit payload carried) if available
+							if (actionData.input_fields && Array.isArray(actionData.input_fields)) {
+								this.formData.input_fields = actionData.input_fields.map(field => ({
+									name: field.name || '',
+									label: field.label || '',
+									field_type: field.field_type || 'text',
+									required: field.required || false,
+									placeholder: field.placeholder || '',
+									help_text: field.help_text || '',
+									default_value: field.default_value || '',
+									display_order: field.display_order || 0,
+									pattern: field.pattern || '',
+									min_value: field.min_value || null,
+									max_value: field.max_value || null,
+									min_length: field.min_length || null,
+									max_length: field.max_length || null,
+									_options: (field.options || []).map(option => ({
+										value: option.value || '',
+										label: option.label || '',
+										display_order: option.display_order || 0,
+										is_default: option.is_default || false
+									}))
+								}));
+							}
+
+							this.showForm = true;
+							this.errorMessage = '';
+							this.successMessage = '';
+							window.scrollTo({ top: 0, behavior: 'smooth' });
+						},
+
+						async deleteAction(actionId, actionLabel) {
+							if (!confirm(`Are you sure you want to delete the action "${actionLabel}"?`)) {
+								return;
+							}
+
+							this.errorMessage = '';
+							this.successMessage = '';
+
+							const formData = new FormData();
+							formData.append('operation', 'delete');
+							formData.append('action_id', actionId);
+
+							try {
+								const response = await fetch(window.location.pathname, {
+									method: 'POST',
+									body: formData
+								});
+
+								const data = await response.json();
+
+								if (!response.ok) {
+									this.errorMessage = data.error || 'Failed to delete action';
+									window.scrollTo({ top: 0, behavior: 'smooth' });
+									return;
+								}
+
+								this.successMessage = `Action "${actionLabel}" deleted successfully!`;
+								window.scrollTo({ top: 0, behavior: 'smooth' });
+
+								// Reload after a brief delay to show success message
+								setTimeout(() => window.location.reload(), 1500);
+							} catch (error) {
+								this.errorMessage = 'Error deleting action: ' + error.message;
+								window.scrollTo({ top: 0, behavior: 'smooth' });
+							}
+						},
+
+						async submitForm() {
+							this.submitting = true;
+
+							try {
+								// Build input_options array from field._options
+								const inputOptions = [];
+								this.formData.input_fields.forEach((field, fieldIndex) => {
+									if (field._options) {
+										field._options.forEach(option => {
+											inputOptions.push({
+												field_id: fieldIndex, // Temporary ID to link options to fields
+												value: option.value,
+												label: option.label,
+												display_order: option.display_order,
+												is_default: option.is_default
+											});
+										});
+									}
+								});
+
+								// Clean up fields (remove _options before sending)
+								const cleanFields = this.formData.input_fields.map(field => {
+									const { _options, ...cleanField } = field;
+									return cleanField;
+								});
+
+								const formData = new FormData();
+								formData.append('operation', this.editMode ? 'update' : 'create');
+								if (this.editMode) {
+									formData.append('action_id', this.formData.action_id);
+								}
+								formData.append('name', this.formData.name);
+								formData.append('label', this.formData.label);
+								formData.append('description', this.formData.description);
+								formData.append('command_template', this.formData.command_template);
+								formData.append('display_order', this.formData.display_order);
+								formData.append('group_name', this.formData.group_name);
+								formData.append('button_style', this.formData.button_style);
+								formData.append('icon', this.formData.icon);
+								formData.append('requires_confirmation', this.formData.requires_confirmation);
+								formData.append('confirmation_message', this.formData.confirmation_message);
+								formData.append('enabled', this.formData.enabled);
+								formData.append('input_fields', JSON.stringify(cleanFields));
+								formData.append('input_options', JSON.stringify(inputOptions));
+
+								this.errorMessage = '';
+								this.successMessage = '';
+
+								const response = await fetch(window.location.pathname, {
+									method: 'POST',
+									body: formData
+								});
+
+								const data = await response.json();
+
+								if (!response.ok) {
+									this.errorMessage = data.error || 'Failed to save action';
+									window.scrollTo({ top: 0, behavior: 'smooth' });
+									this.submitting = false;
+									return;
+								}
+
+								this.successMessage = this.editMode ? 'Action updated successfully!' : 'Action created successfully!';
+								this.closeForm();
+								window.scrollTo({ top: 0, behavior: 'smooth' });
+
+								// Reload after a brief delay to show success message
+								setTimeout(() => window.location.reload(), 1500);
+							} catch (error) {
+								this.errorMessage = 'Error saving action: ' + error.message;
+								window.scrollTo({ top: 0, behavior: 'smooth' });
+								this.submitting = false;
+							}
+						}
+					};
+				}
+			</script>
+		</div>
 	}
 }

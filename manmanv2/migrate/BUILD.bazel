@@ -23,6 +23,37 @@ go_binary(
 #
 # Run it explicitly (requires a working Docker daemon):
 #   bazel test //manmanv2/migrate:migration_036_integration_test --test_output=all
+# Same precedent as migration_036_integration_test for the FR9/FR10
+# migration (task #2092): real embedded migrations through the Runner.
+#
+# Run it explicitly (requires a working Docker daemon):
+#   bazel test //manmanv2/migrate:migration_037_integration_test --test_output=all
+go_test(
+    # keep
+    name = "migration_037_integration_test",
+    size = "large",
+    timeout = "long",
+    srcs = [
+        "main.go",
+        "migration_037_integration_test.go",
+    ],
+    embedsrcs = glob(["migrations/*.sql"]),
+    gotags = ["integration"],
+    tags = [
+        "external",
+        "integration",
+        "manual",
+        "no-cache",
+        "no-sandbox",
+        "requires-network",
+    ],
+    deps = [
+        "//libs/go/dbtest",
+        "//libs/go/migrate",
+        "@com_github_jackc_pgx_v5//stdlib",
+    ],
+)
+
 go_test(
     # keep
     name = "migration_036_integration_test",
@@ -31,6 +62,102 @@ go_test(
     srcs = [
         "main.go",
         "migration_036_integration_test.go",
+    ],
+    embedsrcs = glob(["migrations/*.sql"]),
+    gotags = ["integration"],
+    tags = [
+        "external",
+        "integration",
+        "manual",
+        "no-cache",
+        "no-sandbox",
+        "requires-network",
+    ],
+    deps = [
+        "//libs/go/dbtest",
+        "//libs/go/migrate",
+        "@com_github_jackc_pgx_v5//stdlib",
+    ],
+)
+
+# Server-level allowed host-port ranges (#2080 / #2095, FR12): migration
+# round-trip + constraint tests. Manual-tagged; run explicitly (requires a
+# working Docker daemon):
+#   bazel test //manmanv2/migrate:migration_038_integration_test --test_output=all
+go_test(
+    # keep
+    name = "migration_038_integration_test",
+    size = "large",
+    timeout = "long",
+    srcs = [
+        "main.go",
+        "migration_038_integration_test.go",
+    ],
+    embedsrcs = glob(["migrations/*.sql"]),
+    gotags = ["integration"],
+    tags = [
+        "external",
+        "integration",
+        "manual",
+        "no-cache",
+        "no-sandbox",
+        "requires-network",
+    ],
+    deps = [
+        "//libs/go/dbtest",
+        "//libs/go/migrate",
+        "@com_github_jackc_pgx_v5//stdlib",
+    ],
+)
+
+# Workshop batch-job persistence (#2175 / task #2176, NFR1/NFR2): migration
+# round-trip + constraint tests, plus the information_schema assertion that
+# neither new table carries an sgc_id column. Manual-tagged; run explicitly
+# (requires a working Docker daemon):
+#   bazel test //manmanv2/migrate:migration_039_integration_test --test_output=all
+go_test(
+    # keep
+    name = "migration_039_integration_test",
+    size = "large",
+    timeout = "long",
+    srcs = [
+        "main.go",
+        "migration_039_integration_test.go",
+    ],
+    embedsrcs = glob(["migrations/*.sql"]),
+    gotags = ["integration"],
+    tags = [
+        "external",
+        "integration",
+        "manual",
+        "no-cache",
+        "no-sandbox",
+        "requires-network",
+    ],
+    deps = [
+        "//libs/go/dbtest",
+        "//libs/go/migrate",
+        "@com_github_jackc_pgx_v5//stdlib",
+    ],
+)
+
+# Content-addressed Workshop cache schema (#2181, plan #2175): migration
+# round-trip + the NFR1/NFR2/FR9 information_schema assertions (no
+# sgc_id/deployment_id/server_id/library_id or valid_from/valid_to/
+# is_current column on workshop_cache_entries, and its only UNIQUE
+# constraint is on cache_key). Same build-tag/target conventions as
+# migration_038_integration_test.
+#
+# Run it explicitly (requires a working Docker daemon):
+#   bazel test //manmanv2/migrate:migration_040_integration_test --test_output=all
+go_test(
+    # keep
+    name = "migration_040_integration_test",
+    size = "large",
+    timeout = "long",
+    srcs = [
+        "main.go",
+        "migration_040_integration_test.go",
     ],
     embedsrcs = glob(["migrations/*.sql"]),
     gotags = ["integration"],

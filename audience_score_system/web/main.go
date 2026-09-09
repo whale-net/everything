@@ -478,12 +478,24 @@ func (a *app) setupRoutes(mux *http.ServeMux) {
 	// access is store.CanRead (three-tier, matching HandleList); the
 	// create POST is gated by store.CanWrite (Creator-or-Analyst,
 	// distinct from the Creator-tier store.CanApprove the mutating routes
-	// above use) -- see create.go's package-doc addendum. Script editing
-	// (FR16/FR17) is a separate follow-on task; these three routes are
-	// create/detail only.
+	// above use) -- see create.go's package-doc addendum.
+	//
+	// #2037 (FR16-FR19) adds the edit half: POST to the SAME
+	// /channels/{id}/scripts/{scriptID} path the GET detail route already
+	// owns -- Go's ServeMux dispatches by method+pattern, so this is a
+	// distinct registration, not a conflict, and keeps "one script, one
+	// URL" for both viewing and editing it (GET's own ?edit=1 query
+	// parameter switches the SAME page into edit mode; there is no
+	// separate .../edit path). Also gated by store.CanWrite, same tier as
+	// create -- the status/published freeze that actually decides WHEN an
+	// edit is allowed is enforced inside
+	// store.VideoScriptStore.UpdateContent itself, not by anything at this
+	// routing layer (see create.go's HandleUpdateScript/
+	// authorizeScriptWrite doc comments).
 	mux.HandleFunc("GET /channels/{id}/scripts/new", a.auth.RequireSignedIn(a.schedule.HandleNewScript))
 	mux.HandleFunc("POST /channels/{id}/scripts", a.auth.RequireSignedIn(a.schedule.HandleCreateScript))
 	mux.HandleFunc("GET /channels/{id}/scripts/{scriptID}", a.auth.RequireSignedIn(a.schedule.HandleScriptDetail))
+	mux.HandleFunc("POST /channels/{id}/scripts/{scriptID}", a.auth.RequireSignedIn(a.schedule.HandleUpdateScript))
 
 	// Protected: access management (M2: FR30/FR31/FR33, #1723). GET is
 	// Founder/Co-Creator only (store.CanInvite); the three mutating POSTs
@@ -510,6 +522,15 @@ func (a *app) setupRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("POST /channels/{id}/research/notes", a.auth.RequireSignedIn(a.research.HandleSaveNote))
 	mux.HandleFunc("POST /channels/{id}/research/ideas", a.auth.RequireSignedIn(a.research.HandleCreateIdea))
 	mux.HandleFunc("POST /channels/{id}/research/ideas/{ideaID}/verdicts", a.auth.RequireSignedIn(a.research.HandleSaveVerdict))
+	// GET on this SAME path pattern as the POST directly above (#2034,
+	// FR4-FR9): Go 1.22 ServeMux keys a registered pattern on its method
+	// PLUS its path, so "GET /channels/{id}/research/ideas/{ideaID}/verdicts"
+	// and "POST /channels/{id}/research/ideas/{ideaID}/verdicts" are two
+	// distinct patterns that neither shadows nor conflicts with the other --
+	// confirmed via `go doc net/http ServeMux.Handle`'s "patterns that differ
+	// only in method are not conflicting" rule; both are free to coexist on
+	// this identical path.
+	mux.HandleFunc("GET /channels/{id}/research/ideas/{ideaID}/verdicts", a.auth.RequireSignedIn(a.research.HandleVerdictDetail))
 	mux.HandleFunc("POST /channels/{id}/research/ideas/{ideaID}/video-scripts", a.auth.RequireSignedIn(a.research.HandleProposeVideoScript))
 
 	// Protected: milestone M4.3's read-only pending-matches browse page
@@ -668,11 +689,21 @@ func (a *app) handleChannelDetail(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// FR23-FR26 (issue #2038, C20): the recent-activity dashboard section
+	// below the connection-status card, computed against a single
+	// request-time now (UTC, consistent with how the rest of web formats
+	// timestamps) so both windows' boundaries are internally consistent.
+	activity, err := a.store.Dashboard().ChannelActivity(r.Context(), channelID, time.Now().UTC())
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+
 	data := components.LayoutData{
 		Title: ch.Title,
 		User:  person,
 	}
-	if err := renderTempl(w, r, ch.Title, pages.ChannelDetail(data, ch, canReconnect, canInvite)); err != nil {
+	if err := renderTempl(w, r, ch.Title, pages.ChannelDetail(data, ch, canReconnect, canInvite, activity)); err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 	}
 }

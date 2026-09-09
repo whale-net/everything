@@ -2,7 +2,8 @@ load("@rules_go//go:def.bzl", "go_library", "go_test")
 
 # Compile-only smoke target for the three net-new external Go deps M1
 # needs (Go MCP SDK, YouTube Data API v3, YouTube Analytics API v2) --
-# see ARCHITECTURE.md § MCP server. No product behavior; later M1 tasks
+# see ARCHITECTURE.md's architecture/02-mcp-server.md ("MCP server"). No
+# product behavior; later M1 tasks
 # (mcp, worker binaries) depend on these packages directly.
 go_library(
     name = "deps",

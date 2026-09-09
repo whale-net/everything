@@ -62,6 +62,15 @@ templ_library(
 # markers tell a later `bazel run //:gazelle` not to touch or remove this
 # rule.
 #
+# update_integration_test.go (#2037, FR16-FR19) extends this same go_test
+# with the edit surface's coverage: FR16's Founder/Analyst edit-and-rerender,
+# FR17's per-state (greenlit/denied/archived/published-while-proposed)
+# read-only render with the state-specific freeze indicator text plus
+# server-side enforcement of a forced POST, FR19's non-member/cross-Channel/
+# malformed-UUID/signed-out negatives and the Creator-who-greenlit
+# orthogonality case, and FR18/NFR2's replayed-edit-POST no-double-apply
+# case.
+#
 # Run it explicitly (requires a working Docker daemon):
 #   bazel test //audience_score_system/web/schedule:schedule_integration_test --test_output=all
 go_test(
@@ -72,6 +81,7 @@ go_test(
     srcs = [
         "create_integration_test.go",
         "schedule_integration_test.go",
+        "update_integration_test.go",
     ],
     embed = [":schedule"],
     gotags = ["integration"],

@@ -31,5 +31,5 @@ build --disk_cache=/home/<you>/.cache/bazel-disk-cache/everything
 # Configuration for the URL scheme (grpc(s):// or http(s)://) and auth options
 # CI uses via the setup-build-env action. Uncomment and fill in to enable:
 # build --remote_cache=grpcs://cache.example.com:443
-# build --remote_cache_header=Authorization=Basic <base64-user:password>
+# build --remote_cache_header=Authorization="Basic <base64-user:password>"
 # build --remote_upload_local_results=true

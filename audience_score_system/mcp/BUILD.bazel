@@ -18,6 +18,7 @@ go_library(
         "//libs/go/logging",
         "//libs/go/mcpauth",
         "//libs/go/temporal",
+        "//libs/go/whagent",
         "@io_opentelemetry_go_contrib_instrumentation_net_http_otelhttp//:otelhttp",
     ],
 )

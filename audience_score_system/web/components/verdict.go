@@ -28,7 +28,7 @@ const unknownVerdictGlyphTitle = "Unknown verdict"
 // default rather than silently reusing one of these.
 var verdictGlyphs = map[store.VerdictValue]string{
 	store.VerdictViable:            "✅",
-	store.VerdictNotViable:         "🚫",
+	store.VerdictNotViable:         "❌",
 	store.VerdictNeedsMoreResearch: "🔍",
 }
 

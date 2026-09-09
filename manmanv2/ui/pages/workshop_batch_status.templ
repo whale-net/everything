@@ -1,0 +1,96 @@
+package pages
+
+import (
+	"fmt"
+	"github.com/whale-net/everything/manmanv2/ui/components"
+	manmanpb "github.com/whale-net/everything/manmanv2/protos"
+)
+
+// WorkshopBatchStatusPageData backs the manual-reload batch-status view
+// (FR4, plan #2175). Job is nil when the batch job could not be found.
+//
+// Scaffold only: the handler (handleWorkshopBatchStatus in
+// manmanv2/ui/handlers_workshop.go) does not yet populate Job/Items from the
+// GetBatchJob RPC -- that wiring lands in the Implementation phase of #2179.
+type WorkshopBatchStatusPageData struct {
+	Layout components.LayoutData
+	Job    *manmanpb.WorkshopBatchJob
+	Items  []*manmanpb.BatchItemResult
+}
+
+templ WorkshopBatchStatus(data WorkshopBatchStatusPageData) {
+	@components.Layout(data.Layout) {
+		<div class="rounded-box p-6 md:p-8 mb-6 shadow-lg" style="background: linear-gradient(to bottom right, var(--color-primary), var(--color-secondary));">
+			<div class="flex flex-col md:flex-row justify-between items-start md:items-center gap-4">
+				<div class="text-primary-content">
+					<h1 class="text-2xl md:text-3xl font-bold mb-2">Batch Job Status</h1>
+					<p class="text-primary-content/80 text-sm">Per-item results for a Workshop collection add or batch create job</p>
+				</div>
+				<div class="flex flex-wrap gap-2">
+					<a href="/workshop/library" class="btn bg-primary-content/20 hover:bg-primary-content/30 text-primary-content border-primary-content/30">← Workshop Home</a>
+					<!-- FR4 scope boundary: manual reload only, no SSE/polling/hx-trigger. -->
+					<a
+						href="#"
+						onclick="window.location.reload(); return false;"
+						class="btn bg-base-100 hover:bg-base-200 text-primary border-none"
+					>Refresh</a>
+				</div>
+			</div>
+		</div>
+		if data.Job == nil {
+			<div class="text-center py-12 text-base-content/60">Batch job not found</div>
+		} else {
+			<div class="bg-base-100 rounded-box border border-base-300 p-5 mb-6">
+				<div class="grid grid-cols-2 md:grid-cols-4 gap-4 text-sm">
+					<div>
+						<div class="text-xs font-semibold text-base-content/60 uppercase tracking-wider mb-1">Type</div>
+						<div>{ data.Job.JobType }</div>
+					</div>
+					<div>
+						<div class="text-xs font-semibold text-base-content/60 uppercase tracking-wider mb-1">Status</div>
+						<div class="badge badge-soft">{ data.Job.Status }</div>
+					</div>
+					<div>
+						<div class="text-xs font-semibold text-base-content/60 uppercase tracking-wider mb-1">Total / Succeeded / Failed</div>
+						<div>{ fmt.Sprintf("%d / %d / %d", data.Job.TotalItems, data.Job.SucceededItems, data.Job.FailedItems) }</div>
+					</div>
+					<div>
+						<div class="text-xs font-semibold text-base-content/60 uppercase tracking-wider mb-1">Library</div>
+						<div>{ fmt.Sprintf("%d", data.Job.LibraryId) }</div>
+					</div>
+				</div>
+			</div>
+			<div class="bg-base-100 rounded-box border border-base-300 overflow-x-auto">
+				<table class="table">
+					<thead>
+						<tr>
+							<th>Input</th>
+							<th>Workshop ID</th>
+							<th>Addon</th>
+							<th>Status</th>
+							<th>Failure Reason</th>
+						</tr>
+					</thead>
+					<tbody>
+						for _, item := range data.Items {
+							<tr>
+								<td>{ item.RawInput }</td>
+								<td class="font-mono">{ item.WorkshopId }</td>
+								<td>
+									if item.Status == "succeeded" && item.AddonId != 0 {
+										<a href={ templ.URL(fmt.Sprintf("/workshop/addon?addon_id=%d", item.AddonId)) } class="link link-primary">{ fmt.Sprintf("%d", item.AddonId) }</a>
+									}
+								</td>
+								<td>{ item.Status }</td>
+								<td class="text-error">{ item.ErrorMessage }</td>
+							</tr>
+						}
+					</tbody>
+				</table>
+				if len(data.Items) == 0 {
+					<div class="text-center py-12 text-base-content/60">No items in this batch job</div>
+				}
+			</div>
+		}
+	}
+}

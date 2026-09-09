@@ -1,0 +1,78 @@
+package components
+
+import (
+	"github.com/whale-net/everything/libs/go/htmxauth"
+	"github.com/whale-net/everything/libs/go/htmxui"
+)
+
+// LayoutData carries Layout's page-level parameterisation. User is a plain
+// *htmxauth.UserInfo (not yet populated by any handler in this scaffold --
+// Keycloak sign-in lands in this task's Implementation section) so the
+// shell already knows how to render the signed-in operator's identity via
+// htmxui.UserMenu once auth is wired in.
+type LayoutData struct {
+	Title  string
+	Active string
+	User   *htmxauth.UserInfo
+}
+
+// navLink renders one nav entry, marking it active by exact label match.
+// Mirrors manmanv2/ui/components/layout.templ's navLink.
+templ navLink(href, label, active string) {
+	if active == label {
+		<li><a href={ templ.URL(href) } class="menu-active">{ label }</a></li>
+	} else {
+		<li><a href={ templ.URL(href) }>{ label }</a></li>
+	}
+}
+
+// navItems is whagent-net ui's own nav item list (htmxui.ShellData hardcodes
+// no nav of its own -- see Shell's doc comment). Just "Home" for now; the
+// session pages introduced by FR1-FR4 add their own entries here.
+templ navItems(data LayoutData) {
+	<ul class="menu menu-horizontal px-1">
+		@navLink("/", "Home", data.Active)
+	</ul>
+}
+
+// userIdentityLabel bridges whagent-net ui's htmxauth.UserInfo to UserMenu's
+// plain-string IdentityLabel. A nil User (auth not wired up yet, or a
+// signed-out request) yields "", which UserMenu already renders as nothing.
+// Prefers Name, falling back to PreferredUsername when Name is empty (a
+// token missing the optional "name" claim still has "preferred_username") --
+// mirrors pages/index.templ's identityLabel.
+func userIdentityLabel(user *htmxauth.UserInfo) string {
+	if user == nil {
+		return ""
+	}
+	if user.Name != "" {
+		return user.Name
+	}
+	return user.PreferredUsername
+}
+
+// headerRight composes the shared htmxui.UserMenu into Shell's HeaderRight
+// slot. LogoutHref is "/logout" -- the route name this task's
+// Implementation section registers (not manmanv2's "/auth/logout").
+templ headerRight(data LayoutData) {
+	@htmxui.UserMenu(htmxui.UserMenuData{
+		IdentityLabel: userIdentityLabel(data.User),
+		LogoutHref:    "/logout",
+	})
+}
+
+// Layout is whagent-net ui's chrome, built directly on htmxui.Shell:
+// navItems as Nav, headerRight (UserMenu) as HeaderRight, and
+// htmxui.Themes for the shared ThemeSwitcher mount.
+templ Layout(data LayoutData) {
+	@htmxui.Shell(htmxui.ShellData{
+		Title:       data.Title,
+		BrandLabel:  "whagent-net",
+		BrandHref:   "/",
+		Nav:         navItems(data),
+		HeaderRight: headerRight(data),
+		Themes:      htmxui.Themes,
+	}) {
+		{ children... }
+	}
+}

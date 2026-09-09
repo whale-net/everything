@@ -1,0 +1,30 @@
+"""whagent-net domain root."""
+
+load("//tools/bazel:release.bzl", "release_helm_chart")
+
+filegroup(
+    name = "docs",
+    srcs = glob(["*.md"]),
+    visibility = ["//visibility:public"],
+)
+
+# Composes all four M1 binaries (migrate, api, worker, mcp) into one
+# deployable chart, mirroring audience_score_system/BUILD.bazel's
+# ass_backend_chart (same four-binary shape: migration job + gRPC/MCP
+# external-apis + Temporal worker). domain "whagent-net" + chart_name
+# "whagent-net" produces the "helm-whagent-net-whagent-net" chart identity.
+release_helm_chart(
+    name = "whagent_net_chart",
+    chart_name = "whagent-net",
+    domain = "whagent-net",
+    namespace = "whagent-net",
+    environment = "dev",
+    apps = [
+        "//whagent_net/migrate:migrate_metadata",
+        "//whagent_net/api:api_metadata",
+        "//whagent_net/worker:worker_metadata",
+        "//whagent_net/mcp:mcp_metadata",
+        "//whagent_net/ui:whagent-net-ui_metadata",
+    ],
+    visibility = ["//visibility:public"],
+)

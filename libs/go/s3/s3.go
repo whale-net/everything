@@ -32,8 +32,17 @@ type Config struct {
 	Region         string
 	Endpoint       string // Optional: Custom S3 endpoint (e.g., for OVH, MinIO, DigitalOcean Spaces)
 	PublicEndpoint string // Optional: Public-facing endpoint for pre-signed URLs (if different from Endpoint)
-	AccessKey      string // Optional: Static access key (for MinIO, etc.)
-	SecretKey      string // Optional: Static secret key (for MinIO, etc.)
+	// PublicUsePathStyle controls the addressing style presignPublic uses
+	// (path-style <host>/<bucket>/<key> vs. virtual-hosted-style
+	// <bucket>.<host>/<key>). Zero value (false) preserves the original
+	// OVH-safe default -- OVH's production public endpoint rejects
+	// path-style requests outright (issue #1101). Local dev/Tilt MinIO has
+	// no MINIO_DOMAIN configured and only ever does path-style bucket
+	// routing, so it must set this true (issue #2225/#2227) or a direct PUT
+	// against the presigned URL fails with NoSuchBucket.
+	PublicUsePathStyle bool
+	AccessKey          string // Optional: Static access key (for MinIO, etc.)
+	SecretKey          string // Optional: Static secret key (for MinIO, etc.)
 }
 
 // NewClient creates a new S3 client
@@ -81,12 +90,17 @@ func NewClient(ctx context.Context, cfg Config) (*Client, error) {
 	s3c := s3.NewFromConfig(awsCfg, s3Opts...)
 
 	// If a public endpoint is configured, create a separate presign client using it.
-	// Public endpoints (e.g. OVH's cloud.ovh.us) require virtual-hosted style URLs, not
-	// path-style, so we do not inherit s3Opts here and explicitly leave UsePathStyle false.
+	// We deliberately do not inherit s3Opts here: the addressing style needed for the
+	// public endpoint is independent of the internal one and is controlled by
+	// Config.PublicUsePathStyle. OVH's production public endpoint (e.g. cloud.ovh.us)
+	// rejects path-style requests outright, so the default (false) is virtual-hosted
+	// style; local dev/Tilt MinIO has no MINIO_DOMAIN configured and only does
+	// path-style bucket routing, so it sets PublicUsePathStyle: true.
 	var presignPublic *s3.PresignClient
 	if cfg.PublicEndpoint != "" {
 		presignPublic = s3.NewPresignClient(s3.NewFromConfig(awsCfg, func(o *s3.Options) {
 			o.BaseEndpoint = aws.String(cfg.PublicEndpoint)
+			o.UsePathStyle = cfg.PublicUsePathStyle
 		}))
 	}
 
@@ -151,6 +165,23 @@ func (c *Client) PresignPutURL(ctx context.Context, key string, ttl time.Duratio
 	}, s3.WithPresignExpires(ttl))
 	if err != nil {
 		return "", fmt.Errorf("failed to presign PUT URL: %w", err)
+	}
+	return req.URL, nil
+}
+
+// PresignGetURL generates a pre-signed GET URL for key against the primary
+// (internal) endpoint — mirrors PresignPutURL's endpoint choice: presigned
+// URL consumers (e.g. host-manager) are internal infrastructure that reach
+// S3 directly, and the signature must match the endpoint that handles the
+// request. Use PresignPublicGetURL instead when the consumer is external
+// and only the public endpoint is reachable.
+func (c *Client) PresignGetURL(ctx context.Context, key string, ttl time.Duration) (string, error) {
+	req, err := c.presign.PresignGetObject(ctx, &s3.GetObjectInput{
+		Bucket: aws.String(c.bucket),
+		Key:    aws.String(key),
+	}, s3.WithPresignExpires(ttl))
+	if err != nil {
+		return "", fmt.Errorf("failed to presign GET URL: %w", err)
 	}
 	return req.URL, nil
 }
@@ -221,6 +252,32 @@ func (c *Client) Delete(ctx context.Context, key string) error {
 	return nil
 }
 
+// IsNoSuchKey reports whether err represents an S3 "no such key" / "not
+// found" condition -- the same detection Exists uses (typed
+// types.NotFound/types.NoSuchKey, plus a string-matching fallback for
+// S3-compatible endpoints that don't return a typed error), wrapped for
+// reuse via %w through Delete's error wrapping. Callers whose delete should
+// converge to success even when the object is already gone (e.g. workshop
+// cache eviction's FR12 "already absent is a success" rule) call this on a
+// failed Delete to decide whether to swallow the error.
+func IsNoSuchKey(err error) bool {
+	if err == nil {
+		return false
+	}
+	var notFound *types.NotFound
+	if errors.As(err, &notFound) {
+		return true
+	}
+	var noSuchKey *types.NoSuchKey
+	if errors.As(err, &noSuchKey) {
+		return true
+	}
+	errStr := err.Error()
+	return strings.Contains(errStr, "StatusCode: 404") ||
+		strings.Contains(errStr, "NotFound") ||
+		strings.Contains(errStr, "NoSuchKey")
+}
+
 // GetBucket returns the configured bucket name
 func (c *Client) GetBucket() string {
 	return c.bucket
@@ -251,6 +308,27 @@ func (c *Client) PresignPublicGetURL(ctx context.Context, key string, ttl time.D
 	}, s3.WithPresignExpires(ttl))
 	if err != nil {
 		return "", fmt.Errorf("failed to presign public GET URL: %w", err)
+	}
+	return req.URL, nil
+}
+
+// PresignPublicPutURL generates a pre-signed PUT URL for key, addressed via
+// the client's public endpoint (Config.PublicEndpoint) using presignPublic.
+// Mirrors PresignPublicGetURL's endpoint choice; see that method's doc for
+// why an external, credential-less consumer (e.g. host-manager, bare-metal
+// per manmanv2/README-HOST.md) needs this instead of PresignPutURL.
+// Returns an error if no public endpoint is configured.
+func (c *Client) PresignPublicPutURL(ctx context.Context, key string, ttl time.Duration) (string, error) {
+	if c.presignPublic == nil {
+		return "", errors.New("no public endpoint configured for presigned PUT URLs")
+	}
+	req, err := c.presignPublic.PresignPutObject(ctx, &s3.PutObjectInput{
+		Bucket:      aws.String(c.bucket),
+		Key:         aws.String(key),
+		ContentType: aws.String("application/gzip"),
+	}, s3.WithPresignExpires(ttl))
+	if err != nil {
+		return "", fmt.Errorf("failed to presign public PUT URL: %w", err)
 	}
 	return req.URL, nil
 }

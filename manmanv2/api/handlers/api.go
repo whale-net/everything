@@ -51,7 +51,7 @@ func NewAPIServer(repo *repository.Repository, s3Client *s3.Client, rmqConn *rmq
 
 	return &APIServer{
 		repo:                    repo,
-		serverHandler:           NewServerHandler(repo.Servers),
+		serverHandler:           NewServerHandler(repo.Servers, repo.ServerPortRanges, repo.ServerPorts),
 		gameHandler:             NewGameHandler(repo.Games),
 		gameConfigHandler:       NewGameConfigHandler(repo.GameConfigs),
 		serverGameConfigHandler: NewServerGameConfigHandler(repo.ServerGameConfigs, repo.ServerPorts),
@@ -95,6 +95,18 @@ func (s *APIServer) UpdateServer(ctx context.Context, req *pb.UpdateServerReques
 
 func (s *APIServer) DeleteServer(ctx context.Context, req *pb.DeleteServerRequest) (*pb.DeleteServerResponse, error) {
 	return s.serverHandler.DeleteServer(ctx, req)
+}
+
+// UpdateServerAllowedPortRanges replaces a server's allowed host-port
+// ranges (FR12, task #2095).
+func (s *APIServer) UpdateServerAllowedPortRanges(ctx context.Context, req *pb.UpdateServerAllowedPortRangesRequest) (*pb.UpdateServerAllowedPortRangesResponse, error) {
+	return s.serverHandler.UpdateServerAllowedPortRanges(ctx, req)
+}
+
+// ListAllocatedPorts lists a server's port allocations (additive, task
+// #2098; guidance-only read path for the UI's ports editor).
+func (s *APIServer) ListAllocatedPorts(ctx context.Context, req *pb.ListAllocatedPortsRequest) (*pb.ListAllocatedPortsResponse, error) {
+	return s.serverHandler.ListAllocatedPorts(ctx, req)
 }
 
 // Game RPCs

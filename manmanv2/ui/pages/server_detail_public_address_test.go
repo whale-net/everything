@@ -21,7 +21,7 @@ func TestServerDetail_PublicAddressSetRendersValueAndPrefillsForm(t *testing.T) 
 		Status:            "online",
 		HostPublicAddress: "game.example.com:27015",
 	}
-	body := renderPage(t, ServerDetail(components.LayoutData{Title: "Server"}, server, nil))
+	body := renderPage(t, ServerDetail(components.LayoutData{Title: "Server"}, server, nil, "", nil))
 
 	if !strings.Contains(body, "game.example.com:27015") {
 		t.Errorf("expected the current public address to render in the page body, got %q", body)
@@ -46,7 +46,7 @@ func TestServerDetail_PublicAddressUnsetRendersPlaceholderAndEmptyInput(t *testi
 		Status:            "offline",
 		HostPublicAddress: "",
 	}
-	body := renderPage(t, ServerDetail(components.LayoutData{Title: "Server"}, server, nil))
+	body := renderPage(t, ServerDetail(components.LayoutData{Title: "Server"}, server, nil, "", nil))
 
 	if !strings.Contains(body, "Not set") {
 		t.Errorf("expected a \"Not set\" placeholder when HostPublicAddress is empty, got %q", body)

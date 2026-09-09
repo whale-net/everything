@@ -1,11 +1,13 @@
 package workshop
 
 import (
+	"archive/tar"
 	"bufio"
 	"context"
 	"fmt"
 	"io"
 	"log/slog"
+	"net/http"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -18,11 +20,27 @@ import (
 	"github.com/whale-net/everything/libs/go/docker"
 	"github.com/whale-net/everything/manmanv2/host/rmq"
 	pb "github.com/whale-net/everything/manmanv2/protos"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 )
+
+// DockerContainerClient is the subset of *docker.Client this package drives directly
+// (download, verify, and helper-container lifecycles). Declaring it as an interface --
+// rather than depending on *docker.Client concretely -- lets tests substitute a fake
+// SteamCMD/docker double instead of requiring a live Docker daemon. *docker.Client already
+// implements this exactly, so callers construct DownloadOrchestrator exactly as before.
+type DockerContainerClient interface {
+	CreateContainer(ctx context.Context, config docker.ContainerConfig) (string, error)
+	StartContainer(ctx context.Context, containerID string) error
+	PullImage(ctx context.Context, imageRef string) error
+	RemoveContainer(ctx context.Context, containerID string, force bool) error
+	GetContainerStatus(ctx context.Context, containerID string) (*docker.ContainerStatus, error)
+	GetContainerLogs(ctx context.Context, containerID string, follow bool, tail string, since string, timestamps bool) (io.ReadCloser, error)
+}
 
 // DownloadOrchestrator manages workshop addon download container lifecycle within host manager
 type DownloadOrchestrator struct {
-	dockerClient    *docker.Client
+	dockerClient    DockerContainerClient
 	grpcClient      pb.ManManAPIClient
 	workshopClient  pb.WorkshopServiceClient
 	serverID        int64
@@ -32,6 +50,7 @@ type DownloadOrchestrator struct {
 	maxConcurrent   int
 	semaphore       chan struct{}
 	rmqPublisher    InstallationStatusPublisher
+	cacheClient     *CacheClient // S3 cache read fast path (#2183); nil-safe if workshopClient is nil
 
 	// In-progress download tracking to prevent duplicates
 	inProgressMutex     sync.RWMutex
@@ -42,6 +61,25 @@ type DownloadOrchestrator struct {
 type InstallationStatusPublisher interface {
 	PublishInstallationStatus(ctx context.Context, update *rmq.InstallationStatusUpdate) error
 }
+
+// WorkshopCachePublisher is the narrow publish surface the verify/cache-refresh flow
+// (#2184) needs. Kept separate from InstallationStatusPublisher -- rather than adding a
+// method to it -- so a caller (or test fake) that only wires up installation-status
+// publishing does not have to implement a method it never uses:
+// publishWorkshopCacheStatus type-asserts rmqPublisher against this interface and
+// degrades to a no-op when it isn't satisfied. *rmq.Publisher (host/main.go's real
+// wiring) implements both.
+type WorkshopCachePublisher interface {
+	PublishWorkshopCacheStatus(ctx context.Context, update *rmq.WorkshopCacheStatusUpdate) error
+}
+
+// Workshop cache status event names, mirrored from rmq.WorkshopCacheStatusUpdate's doc
+// comment (#2184, plan #2175 FR8/FR9/FR10).
+const (
+	workshopCacheEventVerifiedUnchanged = "verified_unchanged"
+	workshopCacheEventRefreshed         = "refreshed"
+	workshopCacheEventPopulated         = "populated"
+)
 
 // DownloadAddonCommand is received via RabbitMQ from control plane
 type DownloadAddonCommand struct {
@@ -64,7 +102,7 @@ const (
 
 // NewDownloadOrchestrator creates a new download orchestrator
 func NewDownloadOrchestrator(
-	dockerClient *docker.Client,
+	dockerClient DockerContainerClient,
 	grpcClient pb.ManManAPIClient,
 	workshopClient pb.WorkshopServiceClient,
 	serverID int64,
@@ -86,6 +124,7 @@ func NewDownloadOrchestrator(
 		semaphore:           make(chan struct{}, maxConcurrent),
 		rmqPublisher:        rmqPublisher,
 		inProgressDownloads: make(map[int64]bool),
+		cacheClient:         NewCacheClient(workshopClient, serverID, http.DefaultClient),
 	}
 }
 
@@ -105,7 +144,8 @@ func (do *DownloadOrchestrator) HandleDownloadCommand(ctx context.Context, cmd *
 	// WorkshopManager.InstallAddon, which fans out to children instead of dispatching
 	// a download for the collection's own addon_id). Refuse rather than hand SteamCMD
 	// a collection ID it cannot download.
-	if addon, err := do.workshopClient.GetAddon(ctx, &pb.GetAddonRequest{AddonId: cmd.AddonID}); err == nil && addon.Addon != nil && addon.Addon.IsCollection {
+	addonResp, addonErr := do.workshopClient.GetAddon(ctx, &pb.GetAddonRequest{AddonId: cmd.AddonID})
+	if addonErr == nil && addonResp.Addon != nil && addonResp.Addon.IsCollection {
 		err := fmt.Errorf("addon %d is a Steam Workshop collection, not downloadable content", cmd.AddonID)
 		logger.Error("refusing to download collection addon", "error", err)
 		do.handleDownloadError(ctx, cmd.InstallationID, err)
@@ -127,6 +167,38 @@ func (do *DownloadOrchestrator) HandleDownloadCommand(ctx context.Context, cmd *
 
 	// Update status to downloading
 	do.publishStatus(ctx, cmd.InstallationID, InstallationStatusDownloading, 0, nil)
+
+	// FR8/FR9 verify-then-cache-or-refresh sequence (#2184), replacing #2183's plain
+	// "cache-first, else download" ordering:
+	//
+	//  1. Ask VerifyWorkshopItem for the addon's *live* current content version.
+	//  2. Unchanged (FR8): ask control-api for a cache hit at that exact version and, if
+	//     present, serve it with no SteamCMD download at all -- the FR8 cost-saving claim.
+	//     A miss here (first-ever install, or a version never cached before) is the
+	//     ordinary fallthrough to the ordinary download+upload path below, not an error.
+	//  3/5. Changed, or a miss despite being unchanged: the code below falls through into
+	//     the pre-existing full SteamCMD download, and uploadToCache (called once that
+	//     download has landed content on disk) uploads it as a **new** cache entry --
+	//     never touching whatever entry existed under the addon's previous version (FR9).
+	//
+	// A verify failure (RPC/SteamCMD error) must never fail the install: resolveVerifyPlan
+	// reports changed=true in that case, which simply routes straight to the ordinary
+	// download path below with no cache read attempted.
+	haveAddon := addonErr == nil && addonResp.Addon != nil
+	var contentVersion string
+	var changed bool
+	if haveAddon {
+		contentVersion, changed = do.resolveVerifyPlan(ctx, cmd, addonResp.Addon, logger)
+
+		if !changed {
+			if cacheEntryID, hit := do.tryServeFromCache(ctx, cmd, contentVersion, logger); hit {
+				logger.Info("served workshop addon from S3 cache, skipping SteamCMD download", "content_version", contentVersion)
+				do.publishWorkshopCacheStatus(ctx, cmd.WorkshopID, contentVersion, cacheEntryID, workshopCacheEventVerifiedUnchanged, 0)
+				do.publishStatus(ctx, cmd.InstallationID, InstallationStatusInstalled, 100, nil)
+				return nil
+			}
+		}
+	}
 
 	// Build download container configuration with environment-aware naming
 	containerName := do.getDownloadContainerName(cmd.SGCID, cmd.AddonID)
@@ -382,6 +454,16 @@ func (do *DownloadOrchestrator) HandleDownloadCommand(ctx context.Context, cmd *
 		}
 	}
 
+	// FR9 write side: package the content that just landed at stagingDir and upload it as
+	// a **new** cache entry for (workshopID, contentVersion). This is best-effort with
+	// respect to the install that already succeeded above -- see uploadToCache's doc
+	// comment for why a failure here is only ever logged, never surfaced as an install
+	// error or followed by a status publish (NFR4: no presence row, no completeness claim
+	// on a failed upload).
+	if haveAddon {
+		do.uploadToCache(ctx, cmd.WorkshopID, stagingDir, contentVersion, changed, logger)
+	}
+
 	logger.Info("download completed successfully")
 	do.publishStatus(ctx, cmd.InstallationID, InstallationStatusInstalled, 100, nil)
 	return nil
@@ -635,6 +717,285 @@ func (do *DownloadOrchestrator) resolveInstallTarget(ctx context.Context, sgcID 
 	}
 
 	return installTarget{}, fmt.Errorf("no volume found for container path %s", containerPath)
+}
+
+// tryServeFromCache attempts to satisfy cmd entirely from the S3 Workshop cache via
+// CacheClient.TryFetch, for the exact contentVersion the caller has already resolved
+// (VerifyWorkshopItem's live-verified current version, per #2184 FR8 -- see
+// resolveVerifyPlan). It returns ok == true, with the entry's cache_entry_id, only once
+// the content has actually landed at the install target; any failure at any step returns
+// ok == false so the caller falls back to the existing SteamCMD download path unchanged.
+//
+// The object is always fetched into an addon-scoped staging directory rather than
+// directly into the (possibly shared) install target, then merged into place the same
+// way the SteamCMD path already does -- via copyDirectory for bind mounts or the busybox
+// helper container for named volumes -- so a cache hit can never wipe out other addons
+// that already share the same install directory.
+func (do *DownloadOrchestrator) tryServeFromCache(ctx context.Context, cmd *DownloadAddonCommand, contentVersion string, logger *slog.Logger) (cacheEntryID int64, ok bool) {
+	if do.cacheClient == nil {
+		return 0, false
+	}
+
+	target, err := do.resolveInstallTarget(ctx, cmd.SGCID, cmd.InstallPath)
+	if err != nil {
+		logger.Warn("failed to resolve install target for workshop cache fast path, falling back to SteamCMD", "error", err)
+		return 0, false
+	}
+
+	cacheSuffix := fmt.Sprintf("%d-%d", cmd.AddonID, time.Now().UnixNano())
+	cacheStagingInternal := filepath.Join(do.getSGCInternalDir(cmd.SGCID), ".workshop-cache-staging", cacheSuffix)
+	cacheStagingHost := filepath.Join(do.getSGCHostDir(cmd.SGCID), ".workshop-cache-staging", cacheSuffix)
+	if err := os.MkdirAll(filepath.Dir(cacheStagingInternal), 0777); err != nil {
+		logger.Warn("failed to create workshop cache staging directory, falling back to SteamCMD", "error", err)
+		return 0, false
+	}
+	defer os.RemoveAll(cacheStagingInternal)
+
+	fetch, err := do.cacheClient.TryFetch(ctx, cmd.WorkshopID, contentVersion, cacheStagingInternal)
+	if err != nil || !fetch.Hit {
+		// CacheClient already logs the reason; a miss or transfer failure is the
+		// ordinary fallback path, not a defect in this flow.
+		return 0, false
+	}
+
+	if target.isNamed {
+		destPath := target.ContainerPath
+		if target.RelPath != "" {
+			destPath = filepath.Join(destPath, target.RelPath)
+		}
+		copyCmd := fmt.Sprintf("mkdir -p %s && cp -r /tmp/workshop-cache-staging/. %s/", destPath, destPath)
+		helperConfig := docker.ContainerConfig{
+			Name:    fmt.Sprintf("workshop-cache-install-%s-%d-%d", do.environment, cmd.SGCID, cmd.AddonID),
+			Image:   "busybox:latest",
+			Command: []string{"sh", "-c", copyCmd},
+			Volumes: []string{
+				fmt.Sprintf("%s:/tmp/workshop-cache-staging", cacheStagingHost),
+				fmt.Sprintf("%s:%s", target.VolumeName, target.ContainerPath),
+			},
+		}
+		logger.Info("copying cached workshop content to named volume via helper container", "volume", target.VolumeName, "dest", destPath)
+		if err := do.runHelperContainer(ctx, helperConfig); err != nil {
+			logger.Warn("failed to copy cached workshop content into named volume, falling back to SteamCMD", "error", err)
+			return 0, false
+		}
+		return fetch.CacheEntryID, true
+	}
+
+	if err := os.MkdirAll(target.BindPath, 0777); err != nil {
+		logger.Warn("failed to create install directory for workshop cache fast path, falling back to SteamCMD", "error", err)
+		return 0, false
+	}
+	if err := do.copyDirectory(cacheStagingInternal, target.BindPath); err != nil {
+		logger.Warn("failed to copy cached workshop content to install path, falling back to SteamCMD", "error", err)
+		return 0, false
+	}
+	return fetch.CacheEntryID, true
+}
+
+// resolveVerifyPlan runs the FR8/FR9 live verify against the addon's Workshop source and
+// decides the content version this install should key its cache read/write against.
+//
+// A verify failure (RPC/SteamCMD error) must never fail the install (Testing: "verify
+// RPC/SteamCMD failure -> falls back to a plain download rather than failing the
+// install"): on failure this returns changed=true so the caller always falls straight
+// through to a full download with no cache read attempted, using the addon's last-known
+// control-api-synced version (addon.LastUpdated, Steam's time_updated) as its best-effort
+// content identity for the eventual cache write.
+func (do *DownloadOrchestrator) resolveVerifyPlan(ctx context.Context, cmd *DownloadAddonCommand, addon *pb.WorkshopAddon, logger *slog.Logger) (contentVersion string, changed bool) {
+	knownVersion := strconv.FormatInt(addon.LastUpdated, 10)
+
+	result, err := do.VerifyWorkshopItem(ctx, cmd.WorkshopID, cmd.SteamAppID, knownVersion)
+	if err != nil {
+		logger.Warn("workshop verify failed, falling back to a plain download", "error", err)
+		return knownVersion, true
+	}
+
+	version := result.ContentVersion
+	if version == "" {
+		version = knownVersion
+	}
+	return version, result.Changed
+}
+
+// publishWorkshopCacheStatus publishes a WorkshopCacheStatusUpdate (#2184) if rmqPublisher
+// also implements WorkshopCachePublisher, and is a silent no-op otherwise -- see
+// WorkshopCachePublisher's doc comment for why this is a type assertion rather than a
+// method on InstallationStatusPublisher.
+func (do *DownloadOrchestrator) publishWorkshopCacheStatus(ctx context.Context, workshopID, contentVersion string, cacheEntryID int64, event string, sizeBytes int64) {
+	publisher, ok := do.rmqPublisher.(WorkshopCachePublisher)
+	if !ok {
+		return
+	}
+	update := &rmq.WorkshopCacheStatusUpdate{
+		ServerID:       do.serverID,
+		WorkshopID:     workshopID,
+		ContentVersion: contentVersion,
+		CacheEntryID:   cacheEntryID,
+		Event:          event,
+		SizeBytes:      sizeBytes,
+		VerifiedAt:     time.Now().UTC(),
+	}
+	if err := publisher.PublishWorkshopCacheStatus(ctx, update); err != nil {
+		slog.Error("failed to publish workshop cache status", "workshop_id", workshopID, "event", event, "error", err)
+	}
+}
+
+// uploadToCache implements FR9's write side: package the content that just landed at
+// contentDir (an uncompressed tar, matching CacheClient's read-path expectation -- see
+// cache_client.go's cacheObjectFormat) and PUT it to the presigned URL for
+// (workshopID, contentVersion)'s cache entry, then publish the outcome on the workshop
+// cache status key so control-api can record the entry and this host's presence (FR10).
+//
+// Takes workshopID directly (rather than a *DownloadAddonCommand) so the admin-triggered
+// on-demand verify path (#2186, HandleVerifyCacheEntryCommand) can reuse this exact upload
+// primitive for its own "changed" result -- it has no DownloadAddonCommand of its own,
+// only a workshop_id/content_version pulled off the verify command.
+//
+// This is entirely best-effort with respect to the install that already succeeded by the
+// time this is called: NFR4 requires that "a failed upload leaves no presence row and no
+// claim that the entry is complete", so any failure here is logged and swallowed --
+// never surfaced as an install error, and critically never followed by a status publish,
+// since a publish is exactly the claim that must not be made on a failed upload. Two hosts
+// racing to upload the same (workshopID, contentVersion) both resolve the same
+// cache_entry_id/s3_key (control-api's GetCacheUploadURL, NFR4) and upload
+// byte-identical content, so the ordinary last-writer-wins semantics of an S3 PUT are
+// harmless here -- no distributed lock is used or needed (LB8).
+func (do *DownloadOrchestrator) uploadToCache(ctx context.Context, workshopID, contentDir, contentVersion string, changed bool, logger *slog.Logger) {
+	if do.workshopClient == nil {
+		return
+	}
+
+	tarPath, size, err := tarDirectory(contentDir)
+	if err != nil {
+		logger.Warn("failed to package workshop content for cache upload", "error", err)
+		return
+	}
+	defer os.Remove(tarPath)
+
+	uploadResp, err := do.workshopClient.GetCacheUploadURL(ctx, &pb.GetCacheUploadURLRequest{
+		ServerId:       do.serverID,
+		WorkshopId:     workshopID,
+		ContentVersion: contentVersion,
+	})
+	if err != nil {
+		if s, ok := status.FromError(err); ok && s.Code() == codes.Unimplemented {
+			// Older control-api or an unavailable relay: an expected deployment-skew
+			// case, not a genuine error. The install itself already succeeded.
+			logger.Info("control-api does not support workshop cache relay, skipping cache upload")
+		} else {
+			logger.Warn("failed to obtain workshop cache upload URL", "error", err)
+		}
+		return
+	}
+
+	if err := putFile(ctx, uploadResp.PresignedUrl, tarPath, size); err != nil {
+		// A stale/expired presigned URL (or any other transfer failure) must never fail
+		// the install, which already succeeded -- and, per NFR4, must not be followed by
+		// a status publish (no presence row, no completeness claim).
+		logger.Warn("workshop cache upload failed", "cache_entry_id", uploadResp.CacheEntryId, "error", scrubURL(err, uploadResp.PresignedUrl))
+		return
+	}
+
+	event := workshopCacheEventPopulated
+	if changed {
+		event = workshopCacheEventRefreshed
+	}
+	do.publishWorkshopCacheStatus(ctx, workshopID, contentVersion, uploadResp.CacheEntryId, event, size)
+	logger.Info("uploaded workshop content to cache", "cache_entry_id", uploadResp.CacheEntryId, "event", event, "size_bytes", size)
+}
+
+// tarDirectory packages srcDir into an uncompressed tar archive at a fresh temp file
+// (the wire format CacheClient.TryFetch's read path expects, see cache_client.go's
+// cacheObjectFormat) and returns its path and size. The caller owns removing the temp
+// file once done with it.
+func tarDirectory(srcDir string) (tarPath string, size int64, err error) {
+	tmpFile, err := os.CreateTemp("", "workshop-cache-upload-*.tar")
+	if err != nil {
+		return "", 0, fmt.Errorf("failed to create temp file for cache upload: %w", err)
+	}
+	defer tmpFile.Close()
+
+	tw := tar.NewWriter(tmpFile)
+	walkErr := filepath.Walk(srcDir, func(path string, info os.FileInfo, err error) error {
+		if err != nil {
+			return err
+		}
+		relPath, err := filepath.Rel(srcDir, path)
+		if err != nil {
+			return err
+		}
+		if relPath == "." {
+			return nil
+		}
+
+		hdr, err := tar.FileInfoHeader(info, "")
+		if err != nil {
+			return err
+		}
+		hdr.Name = filepath.ToSlash(relPath)
+		if err := tw.WriteHeader(hdr); err != nil {
+			return err
+		}
+		if info.IsDir() {
+			return nil
+		}
+
+		f, err := os.Open(path)
+		if err != nil {
+			return err
+		}
+		defer f.Close()
+		_, err = io.Copy(tw, f)
+		return err
+	})
+	if walkErr != nil {
+		tw.Close()
+		os.Remove(tmpFile.Name())
+		return "", 0, fmt.Errorf("failed to package %s: %w", srcDir, walkErr)
+	}
+	if err := tw.Close(); err != nil {
+		os.Remove(tmpFile.Name())
+		return "", 0, fmt.Errorf("failed to finalize tar archive: %w", err)
+	}
+
+	fi, err := os.Stat(tmpFile.Name())
+	if err != nil {
+		os.Remove(tmpFile.Name())
+		return "", 0, err
+	}
+	return tmpFile.Name(), fi.Size(), nil
+}
+
+// putFile uploads the file at localPath to presignedURL via HTTP PUT with a known
+// Content-Length, following the same pattern as manmanv2/host/backup.go's presigned S3
+// upload (GetBody set so the client can retry on HTTP/2 REFUSED_STREAM).
+func putFile(ctx context.Context, presignedURL, localPath string, size int64) error {
+	f, err := os.Open(localPath)
+	if err != nil {
+		return fmt.Errorf("failed to open packaged content for upload: %w", err)
+	}
+	defer f.Close()
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodPut, presignedURL, f)
+	if err != nil {
+		return fmt.Errorf("failed to build upload request: %w", err)
+	}
+	req.ContentLength = size
+	req.Header.Set("Content-Type", "application/x-tar")
+	req.GetBody = func() (io.ReadCloser, error) {
+		return os.Open(localPath)
+	}
+
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return fmt.Errorf("upload request failed: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return fmt.Errorf("upload returned HTTP %d", resp.StatusCode)
+	}
+	return nil
 }
 
 // runHelperContainer creates, starts, waits for, and removes a short-lived container.

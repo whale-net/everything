@@ -97,6 +97,18 @@ func (h *ConfigurationPatchHandler) ListConfigurationPatches(ctx context.Context
 }
 
 func patchToProto(p *manman.ConfigurationPatch) *pb.ConfigurationPatch {
+	// Saved-at timestamps (task #2096, FR3): surface the persisted
+	// created_at/updated_at so clients (the UI pending-override hint)
+	// can tell whether a session start's command build happened after
+	// the latest saved edit. A zero time (patch not built from a DB row)
+	// maps to 0 = unknown, so clients fail closed to "no hint".
+	var createdAt, updatedAt int64
+	if !p.CreatedAt.IsZero() {
+		createdAt = p.CreatedAt.Unix()
+	}
+	if !p.UpdatedAt.IsZero() {
+		updatedAt = p.UpdatedAt.Unix()
+	}
 	proto := &pb.ConfigurationPatch{
 		PatchId:     p.PatchID,
 		StrategyId:  p.StrategyID,
@@ -104,6 +116,8 @@ func patchToProto(p *manman.ConfigurationPatch) *pb.ConfigurationPatch {
 		EntityId:    p.EntityID,
 		PatchFormat: p.PatchFormat,
 		PatchOrder:  int32(p.PatchOrder),
+		CreatedAt:   createdAt,
+		UpdatedAt:   updatedAt,
 	}
 
 	if p.PatchContent != nil {

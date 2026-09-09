@@ -35,9 +35,13 @@
 // forged-POST 403 from a signed-in non-member (History left unchanged)
 // and a signed-out reject, invalid verdict/empty reasoning/cross-Channel
 // Idea rejections, cross-surface agreement between a human-sourced and an
-// agent-sourced version on the same Idea, and the save-verdict form's
-// citation multi-select scoping/hidden idempotency_key rendering; and
-// HandleProposeVideoScript (issue #1915, FR1-FR5/NFR1-NFR3): the FR1
+// agent-sourced version on the same Idea, and the save-verdict panel's
+// note-checkbox citation scoping/hidden idempotency_key rendering (#2035,
+// FR10-FR12: the panel is a collapsible sibling of the note list rather
+// than a standalone multi-select, a cited note id outside this Idea --
+// same-Channel or cross-Channel -- is rejected server-side, and the
+// panel's checked notes/reasoning survive a validation-error re-render);
+// and HandleProposeVideoScript (issue #1915, FR1-FR5/NFR1-NFR3): the FR1
 // render gate (a viable current verdict AND store.CanWrite) both positive
 // and negative, FR2's active-Strategy-only picker (excluding an inactive
 // Strategy and a different Channel's Strategy) and its empty-Channel
@@ -178,6 +182,7 @@ func newResearchTestStack(t *testing.T) *researchTestStack {
 	mux.HandleFunc("POST /channels/{id}/research/notes", a.RequireSignedIn(res.HandleSaveNote))
 	mux.HandleFunc("POST /channels/{id}/research/ideas", a.RequireSignedIn(res.HandleCreateIdea))
 	mux.HandleFunc("POST /channels/{id}/research/ideas/{ideaID}/verdicts", a.RequireSignedIn(res.HandleSaveVerdict))
+	mux.HandleFunc("GET /channels/{id}/research/ideas/{ideaID}/verdicts", a.RequireSignedIn(res.HandleVerdictDetail))
 	mux.HandleFunc("POST /channels/{id}/research/ideas/{ideaID}/video-scripts", a.RequireSignedIn(res.HandleProposeVideoScript))
 
 	return &researchTestStack{store: st, sessions: sessions, handlers: res, router: mux, db: db}
@@ -289,6 +294,7 @@ func (s *researchTestStack) tracedResearchStack(t *testing.T, ctx context.Contex
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /channels/{id}/research", a.RequireSignedIn(res.HandleChannelIndex))
 	mux.HandleFunc("GET /channels/{id}/research/ideas/{ideaID}", a.RequireSignedIn(res.HandleIdeaDetail))
+	mux.HandleFunc("GET /channels/{id}/research/ideas/{ideaID}/verdicts", a.RequireSignedIn(res.HandleVerdictDetail))
 
 	return &researchTestStack{store: st, sessions: sessions, handlers: res, router: mux, db: s.db}
 }
@@ -436,13 +442,11 @@ var idempotencyKeyPattern = regexp.MustCompile(`name="idempotency_key" value="([
 
 // citedNoteTextPattern matches ONLY views.templ's citedNoteBody's own text
 // paragraph (`<p class="text-sm">{ excerpt }</p>`) -- distinct from
-// noteBody's plain `<p>{ note.Text }</p>` (no class) and the save-verdict
-// form's citation multi-select `<option>` (which also renders a note's
-// FULL untruncated text as its label) -- so a truncation assertion can
-// scope to exactly the cited-notes-section renders and never be satisfied
-// by the SAME note's full text legitimately appearing elsewhere on the
-// same page.
-var citedNoteTextPattern = regexp.MustCompile(`<p class="text-sm">([^<]*)</p>`)
+// noteBody's plain `<p>{ note.Text }</p>` (no class) -- so a truncation
+// assertion can scope to exactly the cited-notes-section renders and
+// never be satisfied by the SAME note's full text legitimately appearing
+// elsewhere on the same page (the research-note list).
+var citedNoteTextPattern = regexp.MustCompile(`<p class="text-sm[^"]*">([^<]*)</p>`)
 
 // citedNoteExcerpts extracts every citedNoteBody text excerpt rendered
 // anywhere on the page (see citedNoteTextPattern).
@@ -583,6 +587,20 @@ func TestHandleChannelIndex_RendersNoteCountVerdictPresence_AndUnattachedNotesSe
 	})
 	require.NoError(t, err)
 
+	ideaNotViable, err := s.store.Ideas().Create(ctx, ch.ID, "Idea Not Viable", creator.ID)
+	require.NoError(t, err)
+	_, err = s.store.Verdicts().Append(ctx, store.AppendVerdictInput{
+		IdeaID: ideaNotViable.ID, Verdict: store.VerdictNotViable, Reasoning: "not viable", AuthorPersonID: creator.ID,
+	})
+	require.NoError(t, err)
+
+	ideaNeedsMore, err := s.store.Ideas().Create(ctx, ch.ID, "Idea Needs More", creator.ID)
+	require.NoError(t, err)
+	_, err = s.store.Verdicts().Append(ctx, store.AppendVerdictInput{
+		IdeaID: ideaNeedsMore.ID, Verdict: store.VerdictNeedsMoreResearch, Reasoning: "needs more", AuthorPersonID: creator.ID,
+	})
+	require.NoError(t, err)
+
 	ideaNoVerdict, err := s.store.Ideas().Create(ctx, ch.ID, "Idea No Verdict", creator.ID)
 	require.NoError(t, err)
 
@@ -596,6 +614,8 @@ func TestHandleChannelIndex_RendersNoteCountVerdictPresence_AndUnattachedNotesSe
 	body := w.Body.String()
 
 	assert.Contains(t, body, ideaWithVerdict.Title)
+	assert.Contains(t, body, ideaNotViable.Title)
+	assert.Contains(t, body, ideaNeedsMore.Title)
 	assert.Contains(t, body, ideaNoVerdict.Title)
 	assert.Contains(t, body, unattached.Text, "the unattached note must render in its own section")
 
@@ -603,14 +623,15 @@ func TestHandleChannelIndex_RendersNoteCountVerdictPresence_AndUnattachedNotesSe
 	// title's row -- a crude but effective check that ListByChannelWithStats'
 	// count made it to the page.
 	assert.Regexp(t, `Idea With Verdict[\s\S]{0,400}>2<`, body, "note count for the two-note idea must render")
-	// FR31/FR32 (#2028): the verdict-presence indicator is a single glyph
-	// (with an accessible title/aria-label carrying the old text), never a
-	// badge/box. Scope the badge-absence check to the ideas table itself
-	// (between its own header row and closing tag) -- the page's
-	// unattached-notes section legitimately renders unrelated "badge
-	// badge-ghost"/"badge badge-success" Cited/Uncited indicators
-	// (citedBadge), which must not make this assertion a false negative.
-	assert.Contains(t, body, `title="Verdict recorded"`, "the idea with a verdict must show the verdict-recorded glyph's accessible title")
+	// The verdict status indicator is a single glyph indicating the verdict value
+	// (green check for viable, red x for not-viable, magnifying glass for needs-more-research)
+	// or no-verdict glyph when none yet recorded.
+	assert.Contains(t, body, `title="Viable"`, "the idea with a viable verdict must show the viable glyph's accessible title")
+	assert.Contains(t, body, components.VerdictGlyph(store.VerdictViable), "the idea with a viable verdict must render the viable glyph")
+	assert.Contains(t, body, `title="Not viable"`, "the idea with a not-viable verdict must show the not-viable glyph's accessible title")
+	assert.Contains(t, body, components.VerdictGlyph(store.VerdictNotViable), "the idea with a not-viable verdict must render the red x glyph")
+	assert.Contains(t, body, `title="Needs more research"`, "the idea with a needs-more-research verdict must show the needs-more-research glyph's accessible title")
+	assert.Contains(t, body, components.VerdictGlyph(store.VerdictNeedsMoreResearch), "the idea with a needs-more-research verdict must render the magnifying glass glyph")
 	assert.Contains(t, body, `title="No verdict yet"`, "the idea without a verdict must show the no-verdict glyph's accessible title")
 	assert.Contains(t, body, components.NoVerdictGlyph, "the idea without a verdict must render the shared no-verdict glyph")
 	ideasTableStart := strings.Index(body, "<th>Idea</th>")
@@ -966,13 +987,27 @@ func TestHandleIdeaDetail_NoVerdict_RendersEmptySection_NotError(t *testing.T) {
 
 	w := s.do(t, http.MethodGet, "/channels/"+ch.ID.String()+"/research/ideas/"+idea.ID.String(), s.sessionCookie(t, ctx, creator.ID))
 	require.Equal(t, http.StatusOK, w.Code, "no verdict yet must render 200, never a 500, body: %s", w.Body.String())
-	assert.Contains(t, w.Body.String(), "No verdict recorded yet")
+	body := w.Body.String()
+	assert.Contains(t, body, "No verdict recorded yet")
+	// FR5: with zero verdicts, no link to the verdict-details page renders
+	// at all (no verdict section content beyond the empty-state line).
+	// "View verdict history" is the link's own text, distinct from the
+	// save-verdict form's POST action (which legitimately also targets
+	// the .../verdicts path and renders regardless of verdict count).
+	assert.NotContains(t, body, "View verdict history", "FR5: no link to the verdict-details page may render when the Idea has zero verdicts")
 }
 
-// TestHandleIdeaDetail_ThreeVerdictVersions_OldestToNewest_WithSource
-// covers FR9: all 3 versions render oldest-to-newest, each showing its
-// source, and the highest version renders as current.
-func TestHandleIdeaDetail_ThreeVerdictVersions_OldestToNewest_WithSource(t *testing.T) {
+// TestHandleIdeaDetail_ThreeVerdictVersions_ShowsCurrentOnly_NotOlderVersions
+// covers FR4 (#2034): with 3 verdict versions recorded, the Idea page
+// renders ONLY the current (highest-version) verdict's reasoning/source/
+// glyph -- v1's and v2's reasoning text must NOT appear anywhere on this
+// page (the full oldest-to-newest history moved to the verdict-details
+// page, FR7, covered separately by
+// TestHandleVerdictDetail_HistorySelect_ListsEveryVersionOldestToNewest
+// below). Before #2034 this page rendered the full inline history list;
+// this test's own git history is the deliberate-break/fix proof for that
+// regression -- see this task's Testing-phase status comment.
+func TestHandleIdeaDetail_ThreeVerdictVersions_ShowsCurrentOnly_NotOlderVersions(t *testing.T) {
 	ctx := context.Background()
 	s := newResearchTestStack(t)
 	ch, creator := s.setupChannel(t, ctx)
@@ -997,46 +1032,24 @@ func TestHandleIdeaDetail_ThreeVerdictVersions_OldestToNewest_WithSource(t *test
 	require.Equal(t, http.StatusOK, w.Code, "body: %s", w.Body.String())
 	body := w.Body.String()
 
-	assert.Contains(t, body, "reasoning v1")
-	assert.Contains(t, body, "reasoning v2")
-	assert.Contains(t, body, "reasoning v3")
+	assert.NotContains(t, body, "reasoning v1", "FR4: only the current verdict may render on the Idea page")
+	assert.NotContains(t, body, "reasoning v2", "FR4: only the current verdict may render on the Idea page")
+	assert.Contains(t, body, "reasoning v3", "the current (highest-version) verdict must still render")
 
-	// Current section renders v3 (the highest version) ahead of the
-	// "History" heading; History then lists all 3 versions oldest to
-	// newest, so v3's reasoning appears TWICE (once as current, once as
-	// the last history entry) while v1/v2 appear once, inside History.
-	currentIdx := strings.Index(body, "Current")
-	historyIdx := strings.Index(body, "History")
-	require.Greater(t, currentIdx, 0)
-	require.Greater(t, historyIdx, 0)
-	assert.Less(t, currentIdx, historyIdx, `"Current" must render before the "History" heading`)
+	// v1's source (Agent) is the SAME as v3's own source, so a plain
+	// Contains(body, "Agent") can't tell v1 leaking in from v3's own
+	// legitimate render -- count instead: v3's card must be the ONLY
+	// occurrence, never a second one from a leaked v1 history entry.
+	assert.Equal(t, 1, strings.Count(body, "Agent"), "the current verdict's own Agent source must render exactly once, never once more per leaked history entry")
+	assert.NotContains(t, body, "Human", "v2's Human source must never leak in -- v2 is not the current verdict")
 
-	firstV3Idx := strings.Index(body, "reasoning v3")
-	require.Greater(t, firstV3Idx, 0)
-	assert.Less(t, firstV3Idx, historyIdx, "the current verdict's reasoning (v3, the highest version) must render before the History heading")
+	// FR5: a link to the verdict-details page must be present whenever at
+	// least one verdict exists.
+	assert.Contains(t, body, `/channels/`+ch.ID.String()+`/research/ideas/`+idea.ID.String()+`/verdicts`, "FR5: a link to the verdict-details page must render whenever at least one verdict exists")
 
-	// Within the History section: v1 before v2 before v3 (oldest to
-	// newest).
-	historySection := body[historyIdx:]
-	idx1 := strings.Index(historySection, "reasoning v1")
-	idx2 := strings.Index(historySection, "reasoning v2")
-	idx3 := strings.Index(historySection, "reasoning v3")
-	require.Greater(t, idx1, 0, "v1 must render in the History section")
-	require.Greater(t, idx2, 0, "v2 must render in the History section")
-	require.Greater(t, idx3, 0, "v3 must render in the History section")
-	assert.Less(t, idx1, idx2, "v1 must render before v2 (oldest to newest)")
-	assert.Less(t, idx2, idx3, "v2 must render before v3 (oldest to newest)")
-
-	assert.Contains(t, body, "Agent", "an agent-sourced verdict must render its source")
-	assert.Contains(t, body, "Human", "a human-sourced verdict must render its source")
-
-	// FR31/FR32 (#2028): each verdict's status renders as a single glyph
-	// (via components.VerdictGlyph), never the old badge-warning/
-	// badge-error verdict box -- needs-more-research and not-viable are
-	// exactly the two verdict values whose old badge classes would appear
-	// here if the badge/box rendering had regressed.
-	assert.Contains(t, body, components.VerdictGlyph(store.VerdictNeedsMoreResearch), "v1's needs-more-research verdict must render its glyph")
-	assert.Contains(t, body, components.VerdictGlyph(store.VerdictNotViable), "v2's not-viable verdict must render its glyph")
+	// FR31/FR32 (#2028): the current verdict's status renders as a single
+	// glyph (via components.VerdictGlyph), never the old badge-warning/
+	// badge-error verdict box.
 	assert.Contains(t, body, components.VerdictGlyph(store.VerdictViable), "v3's viable verdict must render its glyph")
 	assert.NotContains(t, body, "badge badge-warning", "no verdict status may render as the old needs-more-research badge/box (FR31)")
 	assert.NotContains(t, body, "badge badge-error", "no verdict status may render as the old not-viable badge/box (FR31)")
@@ -1115,16 +1128,21 @@ func TestHandleIdeaDetail_CurrentVerdictCitedNotes_TextSourceURLAndBadge(t *test
 	require.Equal(t, http.StatusOK, w.Code, "body: %s", w.Body.String())
 	body := w.Body.String()
 
-	currentIdx := strings.Index(body, "Current")
-	historyIdx := strings.Index(body, "History")
-	require.Greater(t, currentIdx, 0)
-	require.Greater(t, historyIdx, currentIdx)
-	currentSection := body[currentIdx:historyIdx]
+	assert.Contains(t, body, "Cited notes", `current's verdict must render a "Cited notes" heading`)
+	assert.Contains(t, body, uncitedNote.Text)
+	assert.Contains(t, body, citedNote.Text)
+	assert.Contains(t, body, "https://example.com/verdict-citation")
 
-	assert.Contains(t, currentSection, "Cited notes", `current's verdict must render a "Cited notes" heading`)
-	assert.Contains(t, currentSection, uncitedNote.Text)
-	assert.Contains(t, currentSection, citedNote.Text)
-	assert.Contains(t, currentSection, "https://example.com/verdict-citation")
+	// Since #2034 (FR4) this page renders the current verdict ONLY, but
+	// each note's FULL text also legitimately appears earlier on the page
+	// (the plain research-note list) -- which carries no Cited/Uncited
+	// badge of its own.
+	// Scope past the "Current" heading (which starts the verdict section,
+	// after both of those) so the FIRST occurrence found here is the
+	// verdict's own citedNoteBody entry, not an earlier one.
+	currentIdx := strings.Index(body, "Current")
+	require.Greater(t, currentIdx, 0)
+	currentSection := body[currentIdx:]
 
 	uncitedIdx := strings.Index(currentSection, uncitedNote.Text)
 	citedIdx := strings.Index(currentSection, citedNote.Text)
@@ -1140,12 +1158,18 @@ func TestHandleIdeaDetail_CurrentVerdictCitedNotes_TextSourceURLAndBadge(t *test
 	assert.Contains(t, citedWindow, "Cited", "the note with a source_url must render the Cited badge in its own cited-notes entry")
 }
 
-// TestHandleIdeaDetail_HistoryVerdictCitedNotes_RenderedOnItsOwnVersionOnly
-// proves FR9's "for history entries too, not only current": a note cited
-// ONLY by an earlier (history-only) version must render inside the
-// History section but never inside Current's own section, which cites a
-// different note entirely.
-func TestHandleIdeaDetail_HistoryVerdictCitedNotes_RenderedOnItsOwnVersionOnly(t *testing.T) {
+// TestHandleIdeaDetail_HistoryVerdictCitedNotes_NeverRenderOnIdeaPage is
+// FR4's citation-scoped counterpart to
+// TestHandleIdeaDetail_ThreeVerdictVersions_ShowsCurrentOnly_NotOlderVersions
+// above: a note cited ONLY by an earlier (history-only) verdict version
+// must never appear anywhere on the Idea page at all -- since #2034 this
+// page resolves citations for the current verdict only (history passed as
+// nil to citedResearchNotes), so there is no "History" section left to
+// scope against. The per-version citation-switch behavior this test used
+// to cover moved to the verdict-details page's FR8 coverage,
+// TestHandleVerdictDetail_SelectingVersion_ShowsThatVersionsCitedNotes
+// below.
+func TestHandleIdeaDetail_HistoryVerdictCitedNotes_NeverRenderOnIdeaPage(t *testing.T) {
 	ctx := context.Background()
 	s := newResearchTestStack(t)
 	ch, creator := s.setupChannel(t, ctx)
@@ -1176,18 +1200,14 @@ func TestHandleIdeaDetail_HistoryVerdictCitedNotes_RenderedOnItsOwnVersionOnly(t
 	require.Equal(t, http.StatusOK, w.Code, "body: %s", w.Body.String())
 	body := w.Body.String()
 
-	currentIdx := strings.Index(body, "Current")
-	historyIdx := strings.Index(body, "History")
-	require.Greater(t, currentIdx, 0)
-	require.Greater(t, historyIdx, currentIdx)
-	currentSection := body[currentIdx:historyIdx]
-	historySection := body[historyIdx:]
-
-	assert.Contains(t, currentSection, currentNote.Text, "current (v2) must render its own cited note")
-	assert.NotContains(t, currentSection, historyOnlyNote.Text, "current (v2) must never render v1's cited note")
-
-	assert.Contains(t, historySection, historyOnlyNote.Text, "the History section must render v1's cited note against v1's own entry")
-	assert.Contains(t, historySection, currentNote.Text, "the History section must also render v2's cited note against v2's own entry (v2 appears in History too)")
+	// Both notes legitimately still render elsewhere on the page (the
+	// plain research-note list lists every note on this Idea regardless
+	// of citation) -- scope specifically to the verdict's OWN
+	// citedNoteBody entries (citedNoteExcerpts) so this can't be
+	// vacuously satisfied by that.
+	excerpts := citedNoteExcerpts(body)
+	assert.Contains(t, excerpts, currentNote.Text, "current (v2) must render its own cited note in its Cited notes section")
+	assert.NotContains(t, excerpts, historyOnlyNote.Text, "FR4: v1's cited note, which current (v2) doesn't cite, must never render in a Cited notes section on the Idea page")
 }
 
 // TestHandleIdeaDetail_CitedNoteTextExceeding200Runes_TruncatedAtSharedBound
@@ -1222,7 +1242,7 @@ func TestHandleIdeaDetail_CitedNoteTextExceeding200Runes_TruncatedAtSharedBound(
 	excerpts := citedNoteExcerpts(body)
 	require.NotEmpty(t, excerpts, "the cited-notes section must render at least one citedNoteBody entry")
 	assert.Contains(t, excerpts, wantExcerpt, "the cited-notes section must render EXACTLY mcptools.Excerpt's output")
-	assert.NotContains(t, excerpts, longText, "the FULL untruncated note text must never appear as a citedNoteBody excerpt (it legitimately still appears elsewhere on the page: the research-note list and the save-verdict form's citation multi-select, neither of which this task truncates)")
+	assert.NotContains(t, excerpts, longText, "the FULL untruncated note text must never appear as a citedNoteBody excerpt (it legitimately still appears elsewhere on the page: the research-note list itself, which this task does not truncate)")
 }
 
 // TestHandleIdeaDetail_VerdictWithNoCitations_RendersNoCitedNotesSection
@@ -1376,7 +1396,7 @@ func TestHandleIdeaDetail_CitedNoteExcerpt_MatchesGetViabilityVerdictMCP(t *test
 	// (this fixture's note text is well over the bound), so this assertion
 	// couldn't be satisfied by accident via the untruncated full text.
 	assert.True(t, strings.HasSuffix(mcpExcerpt, "..."), "the fixture's note text exceeds the truncation bound, so the shared excerpt must be truncated")
-	assert.NotContains(t, excerpts, longText, "the FULL untruncated note text must never appear as a citedNoteBody excerpt (it legitimately still appears elsewhere on the page: the research-note list and the save-verdict form's citation multi-select)")
+	assert.NotContains(t, excerpts, longText, "the FULL untruncated note text must never appear as a citedNoteBody excerpt (it legitimately still appears elsewhere on the page: the research-note list itself)")
 }
 
 // ── FR10/FR16/NFR2 (#1944): superseded/excluded staleness warning on cited notes ──
@@ -1555,11 +1575,15 @@ func TestHandleIdeaDetail_CitedNoteBothSupersededAndExcluded_RendersBothWarning(
 	assert.Contains(t, body, "Superseded and excluded", "a note retired by both relation types must render the combined label")
 }
 
-// TestHandleIdeaDetail_RetiredWarning_RenderedOnHistoryEntryToo proves the
-// warning renders for a history-only citation too, not just current -- the
-// note superseding a note cited ONLY by an earlier (history-only) verdict
-// version must still surface the warning against that history entry.
-func TestHandleIdeaDetail_RetiredWarning_RenderedOnHistoryEntryToo(t *testing.T) {
+// TestHandleVerdictDetail_RetiredWarning_RenderedOnSelectedOlderVersion is
+// FR8's retired-warning counterpart to
+// TestHandleIdeaDetail_HistoryVerdictCitedNotes_NeverRenderOnIdeaPage: since
+// #2034 moved version-history rendering off the Idea page (FR4) onto the
+// verdict-details page, this proves the warning still renders for a
+// history-only citation once its OWN version is selected there (FR7) --
+// the note superseding a note cited ONLY by an earlier (v1) verdict
+// version must surface the warning when v1 is selected.
+func TestHandleVerdictDetail_RetiredWarning_RenderedOnSelectedOlderVersion(t *testing.T) {
 	ctx := context.Background()
 	s := newResearchTestStack(t)
 	ch, creator := s.setupChannel(t, ctx)
@@ -1585,18 +1609,21 @@ func TestHandleIdeaDetail_RetiredWarning_RenderedOnHistoryEntryToo(t *testing.T)
 	})
 	require.NoError(t, err)
 
-	w := s.do(t, http.MethodGet, "/channels/"+ch.ID.String()+"/research/ideas/"+idea.ID.String(), s.sessionCookie(t, ctx, creator.ID))
-	require.Equal(t, http.StatusOK, w.Code, "body: %s", w.Body.String())
-	body := w.Body.String()
+	cookie := s.sessionCookie(t, ctx, creator.ID)
 
-	currentIdx := strings.Index(body, "Current")
-	historyIdx := strings.Index(body, "History")
-	require.Greater(t, currentIdx, 0)
-	require.Greater(t, historyIdx, currentIdx)
-	historySection := body[historyIdx:]
+	// Current (v2) cites nothing -- the warning/note must not appear by
+	// default.
+	currentW := s.doVerdictDetail(t, ch.ID, idea.ID, cookie, "")
+	require.Equal(t, http.StatusOK, currentW.Code, "body: %s", currentW.Body.String())
+	assert.NotContains(t, currentW.Body.String(), historyNote.Text, "v2 (current) cites nothing, so v1's note must not render by default")
 
-	assert.Contains(t, historySection, historyNote.Text)
-	assert.Contains(t, historySection, "Superseded", "the History section must render the warning against v1's own retired citation")
+	// Selecting v1 must render its own cited note plus the Superseded
+	// warning.
+	v1W := s.doVerdictDetail(t, ch.ID, idea.ID, cookie, "1")
+	require.Equal(t, http.StatusOK, v1W.Code, "body: %s", v1W.Body.String())
+	body := v1W.Body.String()
+	assert.Contains(t, body, historyNote.Text, "selecting v1 must render its own cited note")
+	assert.Contains(t, body, "Superseded", "selecting v1 must render the warning against its own retired citation")
 }
 
 // TestHandleIdeaDetail_RetiredWarningParity_MatchesGetViabilityVerdictMCP
@@ -1669,13 +1696,14 @@ func TestHandleIdeaDetail_FiftyOneNotes_TruncatedNoPagingControl(t *testing.T) {
 	require.Equal(t, http.StatusOK, w.Code, "body: %s", w.Body.String())
 	body := w.Body.String()
 
-	// Each of the 50 rendered notes appears THREE times: once in the note
-	// list itself, once as an <option> in the save-verdict form's citation
-	// multi-select (#1901, FR4), and once as a relation-picker candidate in
-	// the save-note form's thread group (#1945, FR15) -- all three
+	// Each of the 50 rendered notes appears TWICE: once in the note list
+	// itself (whose checkbox, #2035/FR11, carries the note's id as a
+	// value= attribute, never its text) and once as a relation-picker
+	// candidate in the save-note form's thread group (#1945, FR15) -- both
 	// populated from the SAME notes slice, no extra store call and no
-	// paging of its own.
-	assert.Equal(t, 150, strings.Count(body, "idea note "), "exactly 50 notes must render, each once in the list, once in the citation multi-select, and once in the relation picker")
+	// paging of its own. The standalone citation multi-select that used to
+	// contribute a third occurrence was removed by #2035/FR11.
+	assert.Equal(t, 100, strings.Count(body, "idea note "), "exactly 50 notes must render, each once in the list and once in the relation picker")
 	assert.Contains(t, body, "most recent", "a truncation note must appear")
 	// The Founder's save-note form (FR3, issue #1900) and save-verdict form
 	// (FR4, issue #1901) legitimately render two <form>s on this page now;
@@ -2513,6 +2541,18 @@ func (s *researchTestStack) doVerdictForm(t *testing.T, channelID, ideaID uuid.U
 	return s.doForm(t, "/channels/"+channelID.String()+"/research/ideas/"+ideaID.String()+"/verdicts", cookie, form)
 }
 
+// doVerdictDetail GETs the verdict-details page (#2034, FR6-FR9). version,
+// when non-empty, is passed through as the "version" query param (FR7's
+// version-select re-render) exactly as a real <select> submit would.
+func (s *researchTestStack) doVerdictDetail(t *testing.T, channelID, ideaID uuid.UUID, cookie *http.Cookie, version string) *httptest.ResponseRecorder {
+	t.Helper()
+	target := "/channels/" + channelID.String() + "/research/ideas/" + ideaID.String() + "/verdicts"
+	if version != "" {
+		target += "?version=" + version
+	}
+	return s.do(t, http.MethodGet, target, cookie)
+}
+
 // allVerdictHistory is a small helper mirroring allNotes above: every
 // viability_verdict version for ideaID, oldest to newest.
 func (s *researchTestStack) allVerdictHistory(t *testing.T, ctx context.Context, ideaID uuid.UUID) []store.Verdict {
@@ -2631,6 +2671,35 @@ func TestHandleSaveVerdict_CitedNoteIDs_PopulatesExactlyThose(t *testing.T) {
 	assert.ElementsMatch(t, []uuid.UUID{note1.ID, note2.ID}, current.CitedResearchNoteIDs, "exactly the two submitted notes must be cited")
 }
 
+// TestHandleSaveVerdict_NoNotesChecked_RecordsNoCitations_NoError is
+// FR11's load-bearing "none checked" half of TestHandleSaveVerdict_
+// CitedNoteIDs_PopulatesExactlyThose above: submitting the panel with NO
+// citation checkboxes checked (cited_note_ids entirely absent from the
+// posted form, exactly like a browser that submits no unchecked
+// checkboxes at all) must still succeed and record a verdict with zero
+// citations -- never a 400, and never CitedResearchNoteIDs treated as
+// "unset"/nil in some way that would error downstream.
+func TestHandleSaveVerdict_NoNotesChecked_RecordsNoCitations_NoError(t *testing.T) {
+	ctx := context.Background()
+	s := newResearchTestStack(t)
+	ch, creator := s.setupChannel(t, ctx)
+	idea, err := s.store.Ideas().Create(ctx, ch.ID, "Idea One", creator.ID)
+	require.NoError(t, err)
+	_, err = s.store.Research().SaveNote(ctx, store.SaveNoteInput{ThreadTitle: "Research", ChannelID: ch.ID, IdeaID: &idea.ID, Text: "an available but unchecked note", AuthorPersonID: creator.ID})
+	require.NoError(t, err)
+
+	w := s.doVerdictForm(t, ch.ID, idea.ID, s.sessionCookie(t, ctx, creator.ID), url.Values{
+		"idempotency_key": {uuid.NewString()},
+		"verdict":         {string(store.VerdictViable)},
+		"reasoning":       {"no notes checked"},
+	})
+	require.Equal(t, http.StatusSeeOther, w.Code, "submitting with no cited_note_ids must not error, body: %s", w.Body.String())
+
+	current, err := s.store.Verdicts().Current(ctx, idea.ID)
+	require.NoError(t, err)
+	assert.Empty(t, current.CitedResearchNoteIDs, "no checkboxes checked must record zero citations")
+}
+
 // TestHandleSaveVerdict_CitedNoteFromDifferentIdea_BadRequest_NoRow is
 // FR4's load-bearing citation-ownership guard: a forged note ID belonging
 // to a DIFFERENT Idea must never end up in verdict_citation -- the whole
@@ -2655,6 +2724,41 @@ func TestHandleSaveVerdict_CitedNoteFromDifferentIdea_BadRequest_NoRow(t *testin
 	assert.Equal(t, http.StatusBadRequest, w.Code, "body: %s", w.Body.String())
 	assert.Contains(t, w.Body.String(), "invalid cited note selection")
 	assert.Empty(t, s.allVerdictHistory(t, ctx, ideaA.ID), "no verdict row may be written")
+}
+
+// TestHandleSaveVerdict_CitedNoteFromDifferentChannel_BadRequest_NoRow is
+// FR11's second load-bearing negative case (#2035): a forged note ID
+// belonging to an Idea on a COMPLETELY DIFFERENT Channel -- not just a
+// different Idea on the same Channel -- must be rejected the same way:
+// 400, nothing written, and no cross-Channel data (the note's own text)
+// leaked into the response. The checkbox-scoping presentation change
+// (#2035/FR11) never becomes the only enforcement -- HandleSaveVerdict's
+// GetByID + IdeaID comparison (research.go) is what actually rejects
+// this, identically regardless of whether the forged id names a note on
+// this Channel or another one entirely.
+func TestHandleSaveVerdict_CitedNoteFromDifferentChannel_BadRequest_NoRow(t *testing.T) {
+	ctx := context.Background()
+	s := newResearchTestStack(t)
+	chA, creatorA := s.setupChannel(t, ctx)
+	chB, creatorB := s.setupChannel(t, ctx)
+	ideaA, err := s.store.Ideas().Create(ctx, chA.ID, "Idea A", creatorA.ID)
+	require.NoError(t, err)
+	ideaB, err := s.store.Ideas().Create(ctx, chB.ID, "Idea B", creatorB.ID)
+	require.NoError(t, err)
+	noteOnB, err := s.store.Research().SaveNote(ctx, store.SaveNoteInput{ThreadTitle: "Research", ChannelID: chB.ID, IdeaID: &ideaB.ID, Text: "note on a different Channel entirely", AuthorPersonID: creatorB.ID})
+	require.NoError(t, err)
+
+	w := s.doVerdictForm(t, chA.ID, ideaA.ID, s.sessionCookie(t, ctx, creatorA.ID), url.Values{
+		"idempotency_key": {uuid.NewString()},
+		"verdict":         {string(store.VerdictViable)},
+		"reasoning":       {"cross-channel forged citation"},
+		"cited_note_ids":  {noteOnB.ID.String()},
+	})
+	assert.Equal(t, http.StatusBadRequest, w.Code, "body: %s", w.Body.String())
+	assert.Contains(t, w.Body.String(), "invalid cited note selection")
+	assert.NotContains(t, w.Body.String(), "note on a different Channel entirely", "no cross-Channel note data may leak into the response")
+	assert.Empty(t, s.allVerdictHistory(t, ctx, ideaA.ID), "no verdict row may be written")
+	assert.Empty(t, s.allVerdictHistory(t, ctx, ideaB.ID), "the other Channel's Idea must also be untouched")
 }
 
 // TestHandleSaveVerdict_SameIdempotencyKey_Twice_CreatesOneVersion is
@@ -2849,12 +2953,51 @@ func TestHandleSaveVerdict_CrossChannelIdea_NotFound_NoRow(t *testing.T) {
 	assert.Empty(t, s.allVerdictHistory(t, ctx, ideaOnB.ID))
 }
 
+// TestHandleSaveVerdict_MalformedChannelUUID_BadRequest and
+// TestHandleSaveVerdict_MalformedIdeaUUID_BadRequest are FR12/NFR1's
+// remaining authz-ordering cases (#2035): a malformed {id}/{ideaID} path
+// segment 400s from authorizeWrite's/HandleSaveVerdict's own uuid.Parse
+// calls, in the SAME order HandleIdeaDetail's GET already enforces
+// (TestHandleIdeaDetail_MalformedChannelUUID_BadRequest/
+// MalformedIdeaUUID_BadRequest) -- the panel re-layout changes nothing
+// about this ordering.
+func TestHandleSaveVerdict_MalformedChannelUUID_BadRequest(t *testing.T) {
+	ctx := context.Background()
+	s := newResearchTestStack(t)
+	ch, creator := s.setupChannel(t, ctx)
+	idea, err := s.store.Ideas().Create(ctx, ch.ID, "Idea One", creator.ID)
+	require.NoError(t, err)
+
+	w := s.doForm(t, "/channels/not-a-uuid/research/ideas/"+idea.ID.String()+"/verdicts", s.sessionCookie(t, ctx, creator.ID), url.Values{
+		"idempotency_key": {uuid.NewString()},
+		"verdict":         {string(store.VerdictViable)},
+		"reasoning":       {"malformed channel id"},
+	})
+	assert.Equal(t, http.StatusBadRequest, w.Code, "body: %s", w.Body.String())
+}
+
+func TestHandleSaveVerdict_MalformedIdeaUUID_BadRequest(t *testing.T) {
+	ctx := context.Background()
+	s := newResearchTestStack(t)
+	ch, creator := s.setupChannel(t, ctx)
+
+	w := s.doForm(t, "/channels/"+ch.ID.String()+"/research/ideas/not-a-uuid/verdicts", s.sessionCookie(t, ctx, creator.ID), url.Values{
+		"idempotency_key": {uuid.NewString()},
+		"verdict":         {string(store.VerdictViable)},
+		"reasoning":       {"malformed idea id"},
+	})
+	assert.Equal(t, http.StatusBadRequest, w.Code, "body: %s", w.Body.String())
+}
+
 // TestHandleSaveVerdict_CrossSurfaceAgreement_HumanVsAgentSource proves
 // FR5: a verdict written here (source = human) and an agent-sourced
 // version already on the same Idea (standing in for an MCP-authored
 // version -- both call the IDENTICAL store.VerdictStore.Append, LB5) are
-// both visible via store.VerdictStore.Current/History AND on the
-// rendered Idea detail page, with "Human"/"Agent" labels matching each.
+// both visible via store.VerdictStore.Current/History. Since #2034 (FR4)
+// the Idea page itself renders the current (human) verdict only -- the
+// agent-sourced version is now visible via the verdict-details page
+// instead (FR6/FR7), asserted here too so this test still proves both
+// sources are reachable from the web surface, just via different pages.
 func TestHandleSaveVerdict_CrossSurfaceAgreement_HumanVsAgentSource(t *testing.T) {
 	ctx := context.Background()
 	s := newResearchTestStack(t)
@@ -2884,22 +3027,72 @@ func TestHandleSaveVerdict_CrossSurfaceAgreement_HumanVsAgentSource(t *testing.T
 	assert.Equal(t, agentV.ID, history[0].ID)
 	assert.Equal(t, store.VerdictSourceHuman, history[1].Source)
 
+	// FR4: the Idea page shows the current (human) verdict only.
 	detailW := s.do(t, http.MethodGet, "/channels/"+ch.ID.String()+"/research/ideas/"+idea.ID.String(), cookie)
 	require.Equal(t, http.StatusOK, detailW.Code, "body: %s", detailW.Body.String())
-	body := detailW.Body.String()
-	assert.Contains(t, body, "agent-authored reasoning")
-	assert.Contains(t, body, "human-authored reasoning")
-	assert.Contains(t, body, "Agent", "the agent-sourced version must render its source")
-	assert.Contains(t, body, "Human", "the human-sourced version must render its source")
+	detailBody := detailW.Body.String()
+	assert.Contains(t, detailBody, "human-authored reasoning")
+	assert.Contains(t, detailBody, "Human", "the current human-sourced version must render its source")
+	assert.NotContains(t, detailBody, "agent-authored reasoning", "FR4: the older agent-sourced version must not render on the Idea page")
+
+	// FR6/FR7: both sources are still reachable via the verdict-details
+	// page -- current (v2, human) by default, v1 (agent) via the version
+	// selector.
+	verdictsW := s.doVerdictDetail(t, ch.ID, idea.ID, cookie, "")
+	require.Equal(t, http.StatusOK, verdictsW.Code, "body: %s", verdictsW.Body.String())
+	assert.Contains(t, verdictsW.Body.String(), "human-authored reasoning")
+	assert.Contains(t, verdictsW.Body.String(), "Human")
+
+	v1W := s.doVerdictDetail(t, ch.ID, idea.ID, cookie, "1")
+	require.Equal(t, http.StatusOK, v1W.Code, "body: %s", v1W.Body.String())
+	assert.Contains(t, v1W.Body.String(), "agent-authored reasoning")
+	assert.Contains(t, v1W.Body.String(), "Agent")
+}
+
+// TestHandleSaveVerdict_PanelSubmission_BumpsVersion_IdeaPageReflectsNewVerdict
+// is #2035's regression case: the re-layout (form -> collapsible panel,
+// multi-select -> note-list checkboxes) must not change what a successful
+// submission actually does -- it still appends a NEW version (never edits
+// v1 in place) and the redirect target's re-render (the Idea page) still
+// reflects the new current verdict's value and bumped version number.
+func TestHandleSaveVerdict_PanelSubmission_BumpsVersion_IdeaPageReflectsNewVerdict(t *testing.T) {
+	ctx := context.Background()
+	s := newResearchTestStack(t)
+	ch, creator := s.setupChannel(t, ctx)
+	idea, err := s.store.Ideas().Create(ctx, ch.ID, "Idea One", creator.ID)
+	require.NoError(t, err)
+	_, err = s.store.Verdicts().Append(ctx, store.AppendVerdictInput{
+		IdeaID: idea.ID, Verdict: store.VerdictNeedsMoreResearch, Reasoning: "v1 reasoning", AuthorPersonID: creator.ID, Source: store.VerdictSourceHuman,
+	})
+	require.NoError(t, err)
+	cookie := s.sessionCookie(t, ctx, creator.ID)
+
+	w := s.doVerdictForm(t, ch.ID, idea.ID, cookie, url.Values{
+		"idempotency_key": {uuid.NewString()},
+		"verdict":         {string(store.VerdictViable)},
+		"reasoning":       {"panel-submitted verdict"},
+	})
+	require.Equal(t, http.StatusSeeOther, w.Code, "body: %s", w.Body.String())
+
+	current, err := s.store.Verdicts().Current(ctx, idea.ID)
+	require.NoError(t, err)
+	assert.Equal(t, 2, current.Version, "the panel's POST must bump the version, never edit v1 in place")
+
+	follow := s.do(t, http.MethodGet, w.Header().Get("Location"), cookie)
+	require.Equal(t, http.StatusOK, follow.Code, "body: %s", follow.Body.String())
+	followBody := follow.Body.String()
+	assert.Contains(t, followBody, "panel-submitted verdict", "the Idea page's current-verdict section must reflect the new value")
+	assert.Contains(t, followBody, "Version 2", "the Idea page must show the bumped version number")
 }
 
 // ── Save-verdict form rendering (FR4, FR6, FR7) ─────────────────────────
 
-// TestSaveVerdictForm_MultiSelect_ListsExactlyThisIdeaNotes proves the
-// citation multi-select is populated ONLY from this page's own Idea's
-// notes -- a note belonging to a different Idea on the same Channel must
-// never appear as an option (or anywhere else on the page).
-func TestSaveVerdictForm_MultiSelect_ListsExactlyThisIdeaNotes(t *testing.T) {
+// TestIdeaDetail_CitationCheckboxes_ListExactlyThisIdeaNotes proves the
+// note list's citation checkboxes (#2035, FR11) are populated ONLY from
+// this page's own Idea's notes -- a note belonging to a different Idea on
+// the same Channel must never appear as a checkbox option (or anywhere
+// else on the page).
+func TestIdeaDetail_CitationCheckboxes_ListExactlyThisIdeaNotes(t *testing.T) {
 	ctx := context.Background()
 	s := newResearchTestStack(t)
 	ch, creator := s.setupChannel(t, ctx)
@@ -2920,6 +3113,77 @@ func TestSaveVerdictForm_MultiSelect_ListsExactlyThisIdeaNotes(t *testing.T) {
 	assert.Contains(t, body, `value="`+noteOnA.ID.String()+`"`, "idea A's own note must appear as a citation option")
 	assert.NotContains(t, body, `value="`+noteOnB.ID.String()+`"`, "idea B's note must never appear as a citation option on idea A's page")
 	assert.NotContains(t, body, "note on idea B", "idea B's note text must never render on idea A's page at all")
+}
+
+// TestSaveVerdictPanel_SiblingOfNoteList_CollapsedByDefault_SameRoute
+// proves FR10 (#2035): the save-verdict panel renders as a no-JS
+// <details>/<summary> disclosure, COLLAPSED by default on a plain GET (no
+// `open` attribute), alongside the research-note list inside the
+// responsive layout container -- and it never introduces a second/new
+// route: exactly one <form> targets the existing POST .../verdicts action.
+func TestSaveVerdictPanel_SiblingOfNoteList_CollapsedByDefault_SameRoute(t *testing.T) {
+	ctx := context.Background()
+	s := newResearchTestStack(t)
+	ch, creator := s.setupChannel(t, ctx)
+	idea, err := s.store.Ideas().Create(ctx, ch.ID, "Idea One", creator.ID)
+	require.NoError(t, err)
+	_, err = s.store.Research().SaveNote(ctx, store.SaveNoteInput{ThreadTitle: "Research", ChannelID: ch.ID, IdeaID: &idea.ID, Text: "a note in the list", AuthorPersonID: creator.ID})
+	require.NoError(t, err)
+
+	w := s.do(t, http.MethodGet, "/channels/"+ch.ID.String()+"/research/ideas/"+idea.ID.String(), s.sessionCookie(t, ctx, creator.ID))
+	require.Equal(t, http.StatusOK, w.Code, "body: %s", w.Body.String())
+	body := w.Body.String()
+
+	verdictAction := `action="/channels/` + ch.ID.String() + `/research/ideas/` + idea.ID.String() + `/verdicts"`
+	assert.Equal(t, 1, strings.Count(body, verdictAction), "exactly one form may target the verdicts route -- no new/second route")
+
+	// Collapsed by default: no `open` attribute on the panel's <details>.
+	assert.NotContains(t, body, `<details class="collapse collapse-arrow border border-base-300 bg-base-100" open`, "the save-verdict panel must render collapsed by default (FR10)")
+	assert.Contains(t, body, `<details class="collapse collapse-arrow border border-base-300 bg-base-100">`, "the save-verdict panel's collapsed <details> tag must render")
+
+	// Sibling columns inside the responsive layout container: both the note
+	// list's own text and the panel's heading render within the layout
+	// container so the note list has full length and citations can be checked
+	// directly on the visible notes.
+	layoutIdx := strings.Index(body, "verdict-layout-container")
+	require.Greater(t, layoutIdx, 0, "the responsive layout container must render")
+	layoutSection := body[layoutIdx:]
+	assert.Contains(t, layoutSection, "a note in the list", "the note list must render inside the layout container")
+	assert.Contains(t, layoutSection, "Save a viability verdict", "the save-verdict panel must render inside the layout container")
+}
+
+// TestSaveVerdictPanel_ValidationFailure_PreservesCheckedNotesAndReasoning
+// proves FR11's load-bearing re-render contract (#2035): after a rejected
+// submission (missing verdict value), the panel re-renders EXPANDED
+// (form.Open, so the error is actually visible rather than collapsed
+// away) with the entered reasoning intact and EVERY previously-checked
+// note's checkbox re-checked -- exactly like the current form's other
+// field values already survive a validation-error re-render.
+func TestSaveVerdictPanel_ValidationFailure_PreservesCheckedNotesAndReasoning(t *testing.T) {
+	ctx := context.Background()
+	s := newResearchTestStack(t)
+	ch, creator := s.setupChannel(t, ctx)
+	idea, err := s.store.Ideas().Create(ctx, ch.ID, "Idea One", creator.ID)
+	require.NoError(t, err)
+	note1, err := s.store.Research().SaveNote(ctx, store.SaveNoteInput{ThreadTitle: "Research", ChannelID: ch.ID, IdeaID: &idea.ID, Text: "note one", AuthorPersonID: creator.ID})
+	require.NoError(t, err)
+	note2, err := s.store.Research().SaveNote(ctx, store.SaveNoteInput{ThreadTitle: "Research", ChannelID: ch.ID, IdeaID: &idea.ID, Text: "note two", AuthorPersonID: creator.ID})
+	require.NoError(t, err)
+
+	// verdict deliberately omitted -> "invalid verdict selection", 400.
+	w := s.doVerdictForm(t, ch.ID, idea.ID, s.sessionCookie(t, ctx, creator.ID), url.Values{
+		"idempotency_key": {uuid.NewString()},
+		"reasoning":       {"reasoning that must survive the re-render"},
+		"cited_note_ids":  {note1.ID.String(), note2.ID.String()},
+	})
+	require.Equal(t, http.StatusBadRequest, w.Code, "body: %s", w.Body.String())
+	body := w.Body.String()
+	assert.Contains(t, body, "invalid verdict selection")
+
+	assert.Contains(t, body, `<details class="collapse collapse-arrow border border-base-300 bg-base-100" open`, "the panel must re-render EXPANDED after a validation error, not collapsed with the error hidden inside")
+	assert.Contains(t, body, "reasoning that must survive the re-render", "the entered reasoning must survive the re-render")
+	assert.Contains(t, body, `value="`+note1.ID.String()+`" checked`, "note one's checkbox must be re-checked on the validation-error re-render")
+	assert.Contains(t, body, `value="`+note2.ID.String()+`" checked`, "note two's checkbox must be re-checked on the validation-error re-render")
 }
 
 // TestSaveVerdictForm_AbsentWithoutCanWrite documents the same reality
@@ -3009,6 +3273,451 @@ func TestSaveVerdictForm_ValidationFailure_RerendersWithSameIdempotencyKey(t *te
 }
 
 func strPtr(s string) *string { return &s }
+
+// ── HandleVerdictDetail (#2034, FR4-FR9) ────────────────────────────────
+//
+// The verdict-details page at GET .../verdicts. FR4/FR5's Idea-page-side
+// coverage lives above, alongside HandleIdeaDetail's own tests; this
+// section covers FR6 (current verdict prominent), FR7 (version-select,
+// oldest-to-newest, and its three negative/fallback cases), FR8 (the
+// selected version's own cited notes, including the retired-warning case
+// covered above by TestHandleVerdictDetail_RetiredWarning_
+// RenderedOnSelectedOlderVersion), FR9 (the zero-verdict empty state,
+// load-bearing per the issue's Testing section), NFR4's auth ordering
+// (identical to HandleIdeaDetail's), and a bounded-query-count proof as
+// version count grows.
+
+// TestHandleVerdictDetail_NoVerdicts_RendersEmptyState200_WithLinkBack is
+// FR9's load-bearing case: an Idea with ZERO verdicts must render an
+// explicit 200 empty state with a link back to the Idea page -- never a
+// 404 or 500 (store.VerdictStore.Current's pgx.ErrNoRows must be handled
+// as the empty state, not as a missing page). The status code is
+// asserted explicitly since 404/500 is exactly the regression this
+// guards against.
+func TestHandleVerdictDetail_NoVerdicts_RendersEmptyState200_WithLinkBack(t *testing.T) {
+	ctx := context.Background()
+	s := newResearchTestStack(t)
+	ch, creator := s.setupChannel(t, ctx)
+	idea, err := s.store.Ideas().Create(ctx, ch.ID, "Idea No Verdict", creator.ID)
+	require.NoError(t, err)
+
+	w := s.doVerdictDetail(t, ch.ID, idea.ID, s.sessionCookie(t, ctx, creator.ID), "")
+	require.Equal(t, http.StatusOK, w.Code, "FR9: zero verdicts must render 200, never 404 or 500, body: %s", w.Body.String())
+	body := w.Body.String()
+	assert.Contains(t, body, "No verdict recorded yet")
+	assert.Contains(t, body, `/channels/`+ch.ID.String()+`/research/ideas/`+idea.ID.String()+`"`, "the empty state must link back to the Idea page")
+}
+
+// TestHandleVerdictDetail_CurrentVerdict_RendersGlyphReasoningAuthorTimestamp
+// covers FR6: the details page renders the Idea's current verdict's value
+// (via components.VerdictGlyph), reasoning, author display name, and
+// timestamp.
+func TestHandleVerdictDetail_CurrentVerdict_RendersGlyphReasoningAuthorTimestamp(t *testing.T) {
+	ctx := context.Background()
+	s := newResearchTestStack(t)
+	ch, creator := s.setupChannel(t, ctx)
+	idea, err := s.store.Ideas().Create(ctx, ch.ID, "Idea FR6", creator.ID)
+	require.NoError(t, err)
+
+	v, err := s.store.Verdicts().Append(ctx, store.AppendVerdictInput{
+		IdeaID: idea.ID, Verdict: store.VerdictViable, Reasoning: "FR6 reasoning", AuthorPersonID: creator.ID, Source: store.VerdictSourceHuman,
+	})
+	require.NoError(t, err)
+
+	w := s.doVerdictDetail(t, ch.ID, idea.ID, s.sessionCookie(t, ctx, creator.ID), "")
+	require.Equal(t, http.StatusOK, w.Code, "body: %s", w.Body.String())
+	body := w.Body.String()
+
+	assert.Contains(t, body, components.VerdictGlyph(store.VerdictViable), "the current verdict's value must render as its glyph")
+	assert.Contains(t, body, "FR6 reasoning")
+	assert.Contains(t, body, "Creator", "the current verdict's author display name must render")
+	assert.Contains(t, body, v.CreatedAt.UTC().Format("2006-01-02 15:04 UTC"), "the current verdict's timestamp must render")
+}
+
+// TestHandleVerdictDetail_VersionSelect_ListsEveryVersionOldestToNewest
+// covers FR7: the version-select lists every version oldest-to-newest,
+// selecting an older version re-renders that version's reasoning/author/
+// timestamp in place of current's, and the response never renders both
+// versions' reasoning at once (i.e. no diff/comparison view, #1953's
+// explicit exclusion).
+func TestHandleVerdictDetail_VersionSelect_ListsEveryVersionOldestToNewest(t *testing.T) {
+	ctx := context.Background()
+	s := newResearchTestStack(t)
+	ch, creator := s.setupChannel(t, ctx)
+	idea, err := s.store.Ideas().Create(ctx, ch.ID, "Idea FR7", creator.ID)
+	require.NoError(t, err)
+
+	_, err = s.store.Verdicts().Append(ctx, store.AppendVerdictInput{
+		IdeaID: idea.ID, Verdict: store.VerdictNeedsMoreResearch, Reasoning: "fr7 reasoning v1", AuthorPersonID: creator.ID, Source: store.VerdictSourceAgent,
+	})
+	require.NoError(t, err)
+	_, err = s.store.Verdicts().Append(ctx, store.AppendVerdictInput{
+		IdeaID: idea.ID, Verdict: store.VerdictNotViable, Reasoning: "fr7 reasoning v2", AuthorPersonID: creator.ID, Source: store.VerdictSourceHuman,
+	})
+	require.NoError(t, err)
+	v3, err := s.store.Verdicts().Append(ctx, store.AppendVerdictInput{
+		IdeaID: idea.ID, Verdict: store.VerdictViable, Reasoning: "fr7 reasoning v3", AuthorPersonID: creator.ID, Source: store.VerdictSourceAgent,
+	})
+	require.NoError(t, err)
+	require.Equal(t, 3, v3.Version)
+
+	cookie := s.sessionCookie(t, ctx, creator.ID)
+
+	// Default (no "version" param): current (v3) renders; v1/v2 reasoning
+	// does not.
+	defaultW := s.doVerdictDetail(t, ch.ID, idea.ID, cookie, "")
+	require.Equal(t, http.StatusOK, defaultW.Code, "body: %s", defaultW.Body.String())
+	defaultBody := defaultW.Body.String()
+	assert.Contains(t, defaultBody, "fr7 reasoning v3")
+	assert.NotContains(t, defaultBody, "fr7 reasoning v1", "no diff/comparison view: only the selected (current) version's reasoning renders")
+	assert.NotContains(t, defaultBody, "fr7 reasoning v2", "no diff/comparison view: only the selected (current) version's reasoning renders")
+
+	// The version-select lists every version, oldest to newest.
+	idx1 := strings.Index(defaultBody, "Version 1")
+	idx2 := strings.Index(defaultBody, "Version 2")
+	idx3 := strings.Index(defaultBody, "Version 3")
+	require.Greater(t, idx1, 0, "the select must list version 1")
+	require.Greater(t, idx2, 0, "the select must list version 2")
+	require.Greater(t, idx3, 0, "the select must list version 3")
+	assert.Less(t, idx1, idx2, "versions must list oldest to newest")
+	assert.Less(t, idx2, idx3, "versions must list oldest to newest")
+
+	// Selecting v1 re-renders v1's own reasoning, not v3's -- and still no
+	// diff/comparison view (v3's reasoning must not also appear).
+	v1W := s.doVerdictDetail(t, ch.ID, idea.ID, cookie, "1")
+	require.Equal(t, http.StatusOK, v1W.Code, "body: %s", v1W.Body.String())
+	v1Body := v1W.Body.String()
+	assert.Contains(t, v1Body, "fr7 reasoning v1")
+	assert.NotContains(t, v1Body, "fr7 reasoning v3", "no diff/comparison view: selecting v1 must not also render v3's reasoning")
+	assert.Contains(t, v1Body, "Agent", "v1's own source must render")
+}
+
+// TestHandleVerdictDetail_SelectVersion_OutOfRange_FallsBackToCurrent is
+// one of FR7's three negative cases: a version number with no matching
+// entry in this Idea's own history must fall back to current -- never a
+// 500.
+func TestHandleVerdictDetail_SelectVersion_OutOfRange_FallsBackToCurrent(t *testing.T) {
+	ctx := context.Background()
+	s := newResearchTestStack(t)
+	ch, creator := s.setupChannel(t, ctx)
+	idea, err := s.store.Ideas().Create(ctx, ch.ID, "Idea FR7 Out Of Range", creator.ID)
+	require.NoError(t, err)
+	_, err = s.store.Verdicts().Append(ctx, store.AppendVerdictInput{
+		IdeaID: idea.ID, Verdict: store.VerdictViable, Reasoning: "only version", AuthorPersonID: creator.ID, Source: store.VerdictSourceHuman,
+	})
+	require.NoError(t, err)
+
+	w := s.doVerdictDetail(t, ch.ID, idea.ID, s.sessionCookie(t, ctx, creator.ID), "999")
+	require.Equal(t, http.StatusOK, w.Code, "an out-of-range version must fall back to current, never 500, body: %s", w.Body.String())
+	assert.Contains(t, w.Body.String(), "only version")
+}
+
+// TestHandleVerdictDetail_SelectVersion_NonNumeric_FallsBackToCurrent is
+// FR7's second negative case: an unparseable "version" value must also
+// fall back to current.
+func TestHandleVerdictDetail_SelectVersion_NonNumeric_FallsBackToCurrent(t *testing.T) {
+	ctx := context.Background()
+	s := newResearchTestStack(t)
+	ch, creator := s.setupChannel(t, ctx)
+	idea, err := s.store.Ideas().Create(ctx, ch.ID, "Idea FR7 Non Numeric", creator.ID)
+	require.NoError(t, err)
+	_, err = s.store.Verdicts().Append(ctx, store.AppendVerdictInput{
+		IdeaID: idea.ID, Verdict: store.VerdictViable, Reasoning: "only version", AuthorPersonID: creator.ID, Source: store.VerdictSourceHuman,
+	})
+	require.NoError(t, err)
+
+	w := s.doVerdictDetail(t, ch.ID, idea.ID, s.sessionCookie(t, ctx, creator.ID), "not-a-number")
+	require.Equal(t, http.StatusOK, w.Code, "a non-numeric version must fall back to current, never 500, body: %s", w.Body.String())
+	assert.Contains(t, w.Body.String(), "only version")
+}
+
+// TestHandleVerdictDetail_SelectVersion_CrossIdeaVersionNumber_FallsBackToCurrent_NeverLeaks
+// is FR7's third, load-bearing negative case: a version number that
+// legitimately identifies a real verdict belonging to a DIFFERENT Idea
+// must never render that other Idea's verdict here -- it falls back to
+// THIS Idea's own current, exactly like an out-of-range or non-numeric
+// value. ideaB has 3 versions (so "?version=3" is a real version number
+// system-wide); ideaA has only 1. Requesting ideaA's page with
+// "?version=3" must render ideaA's own current verdict, never ideaB's v3
+// reasoning.
+func TestHandleVerdictDetail_SelectVersion_CrossIdeaVersionNumber_FallsBackToCurrent_NeverLeaks(t *testing.T) {
+	ctx := context.Background()
+	s := newResearchTestStack(t)
+	ch, creator := s.setupChannel(t, ctx)
+	ideaA, err := s.store.Ideas().Create(ctx, ch.ID, "Idea A", creator.ID)
+	require.NoError(t, err)
+	ideaB, err := s.store.Ideas().Create(ctx, ch.ID, "Idea B", creator.ID)
+	require.NoError(t, err)
+
+	_, err = s.store.Verdicts().Append(ctx, store.AppendVerdictInput{
+		IdeaID: ideaA.ID, Verdict: store.VerdictViable, Reasoning: "ideaA current reasoning", AuthorPersonID: creator.ID, Source: store.VerdictSourceHuman,
+	})
+	require.NoError(t, err)
+
+	for i := 0; i < 3; i++ {
+		_, err = s.store.Verdicts().Append(ctx, store.AppendVerdictInput{
+			IdeaID: ideaB.ID, Verdict: store.VerdictViable, Reasoning: fmt.Sprintf("ideaB reasoning v%d SECRET", i+1), AuthorPersonID: creator.ID, Source: store.VerdictSourceHuman,
+		})
+		require.NoError(t, err)
+	}
+
+	w := s.doVerdictDetail(t, ch.ID, ideaA.ID, s.sessionCookie(t, ctx, creator.ID), "3")
+	require.Equal(t, http.StatusOK, w.Code, "a cross-Idea version number must fall back to current, never 500, body: %s", w.Body.String())
+	body := w.Body.String()
+	assert.Contains(t, body, "ideaA current reasoning", "must fall back to ideaA's own current verdict")
+	assert.NotContains(t, body, "SECRET", "must never render ANY of ideaB's verdicts")
+}
+
+// TestHandleVerdictDetail_SelectingVersion_ShowsThatVersionsCitedNotes
+// covers FR8: the cited notes rendered change with the selected version --
+// a note cited only by v1 appears when v1 is selected, and a DIFFERENT
+// note cited only by v2 (current) appears when v2 is selected (default),
+// never both at once.
+func TestHandleVerdictDetail_SelectingVersion_ShowsThatVersionsCitedNotes(t *testing.T) {
+	ctx := context.Background()
+	s := newResearchTestStack(t)
+	ch, creator := s.setupChannel(t, ctx)
+	idea, err := s.store.Ideas().Create(ctx, ch.ID, "Idea FR8", creator.ID)
+	require.NoError(t, err)
+
+	v1Note, err := s.store.Research().SaveNote(ctx, store.SaveNoteInput{ThreadTitle: "Research",
+		ChannelID: ch.ID, IdeaID: &idea.ID, Text: "note cited only by v1", AuthorPersonID: creator.ID,
+	})
+	require.NoError(t, err)
+	v2Note, err := s.store.Research().SaveNote(ctx, store.SaveNoteInput{ThreadTitle: "Research",
+		ChannelID: ch.ID, IdeaID: &idea.ID, Text: "note cited only by v2", AuthorPersonID: creator.ID,
+	})
+	require.NoError(t, err)
+
+	_, err = s.store.Verdicts().Append(ctx, store.AppendVerdictInput{
+		IdeaID: idea.ID, Verdict: store.VerdictNeedsMoreResearch, Reasoning: "v1 reasoning", AuthorPersonID: creator.ID, Source: store.VerdictSourceHuman,
+		CitedResearchNoteIDs: []uuid.UUID{v1Note.ID},
+	})
+	require.NoError(t, err)
+	_, err = s.store.Verdicts().Append(ctx, store.AppendVerdictInput{
+		IdeaID: idea.ID, Verdict: store.VerdictViable, Reasoning: "v2 reasoning", AuthorPersonID: creator.ID, Source: store.VerdictSourceHuman,
+		CitedResearchNoteIDs: []uuid.UUID{v2Note.ID},
+	})
+	require.NoError(t, err)
+
+	cookie := s.sessionCookie(t, ctx, creator.ID)
+
+	currentW := s.doVerdictDetail(t, ch.ID, idea.ID, cookie, "")
+	require.Equal(t, http.StatusOK, currentW.Code, "body: %s", currentW.Body.String())
+	currentExcerpts := citedNoteExcerpts(currentW.Body.String())
+	assert.Contains(t, currentExcerpts, v2Note.Text, "current (v2) must render its own cited note")
+	assert.NotContains(t, currentExcerpts, v1Note.Text, "current (v2) must not render v1's cited note")
+
+	v1W := s.doVerdictDetail(t, ch.ID, idea.ID, cookie, "1")
+	require.Equal(t, http.StatusOK, v1W.Code, "body: %s", v1W.Body.String())
+	v1Excerpts := citedNoteExcerpts(v1W.Body.String())
+	assert.Contains(t, v1Excerpts, v1Note.Text, "selecting v1 must render its own cited note")
+	assert.NotContains(t, v1Excerpts, v2Note.Text, "selecting v1 must not render v2's cited note")
+}
+
+// TestHandleVerdictDetail_MemberRoles_SeeSameRows proves all three
+// store.CanRead tiers see the verdict-details page identically, mirroring
+// TestHandleIdeaDetail_MemberRoles_SeeSameRows.
+func TestHandleVerdictDetail_MemberRoles_SeeSameRows(t *testing.T) {
+	ctx := context.Background()
+	s := newResearchTestStack(t)
+	ch, creator := s.setupChannel(t, ctx)
+	idea, err := s.store.Ideas().Create(ctx, ch.ID, "Idea One", creator.ID)
+	require.NoError(t, err)
+	_, err = s.store.Verdicts().Append(ctx, store.AppendVerdictInput{
+		IdeaID: idea.ID, Verdict: store.VerdictViable, Reasoning: "shared reasoning", AuthorPersonID: creator.ID, Source: store.VerdictSourceHuman,
+	})
+	require.NoError(t, err)
+
+	coCreator := s.newPerson(t, ctx, "co-creator")
+	require.NoError(t, s.store.Roles().AddRole(ctx, ch.ID, coCreator.ID, store.RoleCoCreator, creator.ID))
+	analyst := s.newPerson(t, ctx, "analyst")
+	require.NoError(t, s.store.Roles().AddRole(ctx, ch.ID, analyst.ID, store.RoleAnalyst, creator.ID))
+
+	for _, tc := range []struct {
+		name   string
+		person store.Person
+	}{
+		{"Founder", creator},
+		{"CoCreator", coCreator},
+		{"Analyst", analyst},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			w := s.doVerdictDetail(t, ch.ID, idea.ID, s.sessionCookie(t, ctx, tc.person.ID), "")
+			require.Equal(t, http.StatusOK, w.Code, "body: %s", w.Body.String())
+			assert.Contains(t, w.Body.String(), "shared reasoning")
+		})
+	}
+}
+
+func TestHandleVerdictDetail_NonMember_Forbidden(t *testing.T) {
+	ctx := context.Background()
+	s := newResearchTestStack(t)
+	ch, creator := s.setupChannel(t, ctx)
+	idea, err := s.store.Ideas().Create(ctx, ch.ID, "Idea One", creator.ID)
+	require.NoError(t, err)
+	outsider := s.newPerson(t, ctx, "outsider")
+
+	w := s.doVerdictDetail(t, ch.ID, idea.ID, s.sessionCookie(t, ctx, outsider.ID), "")
+	assert.Equal(t, http.StatusForbidden, w.Code)
+}
+
+func TestHandleVerdictDetail_UnknownChannel_NotFound(t *testing.T) {
+	ctx := context.Background()
+	s := newResearchTestStack(t)
+	ch, creator := s.setupChannel(t, ctx)
+	idea, err := s.store.Ideas().Create(ctx, ch.ID, "Idea One", creator.ID)
+	require.NoError(t, err)
+
+	w := s.doVerdictDetail(t, uuid.New(), idea.ID, s.sessionCookie(t, ctx, creator.ID), "")
+	assert.Equal(t, http.StatusNotFound, w.Code, "an unknown Channel must 404 before authorization runs, body: %s", w.Body.String())
+}
+
+// TestHandleVerdictDetail_NotSignedIn_Unauthorized mirrors
+// TestHandleIdeaDetail_NotSignedIn_Unauthorized: a direct call with no
+// Person in context must 401.
+func TestHandleVerdictDetail_NotSignedIn_Unauthorized(t *testing.T) {
+	ctx := context.Background()
+	s := newResearchTestStack(t)
+	ch, creator := s.setupChannel(t, ctx)
+	idea, err := s.store.Ideas().Create(ctx, ch.ID, "Idea One", creator.ID)
+	require.NoError(t, err)
+
+	req := httptest.NewRequest(http.MethodGet, "/channels/"+ch.ID.String()+"/research/ideas/"+idea.ID.String()+"/verdicts", nil)
+	req.SetPathValue("id", ch.ID.String())
+	req.SetPathValue("ideaID", idea.ID.String())
+	w := httptest.NewRecorder()
+	s.handlers.HandleVerdictDetail(w, req)
+
+	assert.Equal(t, http.StatusUnauthorized, w.Code)
+}
+
+func TestHandleVerdictDetail_MalformedChannelUUID_BadRequest(t *testing.T) {
+	ctx := context.Background()
+	s := newResearchTestStack(t)
+	_, creator := s.setupChannel(t, ctx)
+
+	w := s.do(t, http.MethodGet, "/channels/not-a-uuid/research/ideas/"+uuid.NewString()+"/verdicts", s.sessionCookie(t, ctx, creator.ID))
+	assert.Equal(t, http.StatusBadRequest, w.Code)
+}
+
+func TestHandleVerdictDetail_MalformedIdeaUUID_BadRequest(t *testing.T) {
+	ctx := context.Background()
+	s := newResearchTestStack(t)
+	ch, creator := s.setupChannel(t, ctx)
+
+	w := s.do(t, http.MethodGet, "/channels/"+ch.ID.String()+"/research/ideas/not-a-uuid/verdicts", s.sessionCookie(t, ctx, creator.ID))
+	assert.Equal(t, http.StatusBadRequest, w.Code)
+}
+
+func TestHandleVerdictDetail_UnknownIdea_NotFound(t *testing.T) {
+	ctx := context.Background()
+	s := newResearchTestStack(t)
+	ch, creator := s.setupChannel(t, ctx)
+
+	w := s.doVerdictDetail(t, ch.ID, uuid.New(), s.sessionCookie(t, ctx, creator.ID), "")
+	assert.Equal(t, http.StatusNotFound, w.Code)
+}
+
+// TestHandleVerdictDetail_CrossChannelIdea_NotFound is NFR4's load-bearing
+// guard, mirroring TestHandleIdeaDetail_CrossChannelIdea_NotFound: an
+// Idea that exists, but under a DIFFERENT Channel than the path's {id},
+// must 404 exactly like an unknown Idea -- never 403, never rendered
+// under the wrong Channel's URL.
+func TestHandleVerdictDetail_CrossChannelIdea_NotFound(t *testing.T) {
+	ctx := context.Background()
+	s := newResearchTestStack(t)
+	chA, creatorA := s.setupChannel(t, ctx)
+	chB, creatorB := s.setupChannel(t, ctx)
+	ideaOnB, err := s.store.Ideas().Create(ctx, chB.ID, "Idea On B", creatorB.ID)
+	require.NoError(t, err)
+	_, err = s.store.Verdicts().Append(ctx, store.AppendVerdictInput{
+		IdeaID: ideaOnB.ID, Verdict: store.VerdictViable, Reasoning: "idea B verdict reasoning", AuthorPersonID: creatorB.ID, Source: store.VerdictSourceHuman,
+	})
+	require.NoError(t, err)
+
+	w := s.doVerdictDetail(t, chA.ID, ideaOnB.ID, s.sessionCookie(t, ctx, creatorA.ID), "")
+	assert.Equal(t, http.StatusNotFound, w.Code, "an Idea belonging to a different Channel must 404, not render, body: %s", w.Body.String())
+	assert.NotContains(t, w.Body.String(), "idea B verdict reasoning", "the cross-Channel Idea's verdict must never render")
+}
+
+// TestHandleVerdictDetail_QueryCount_SelectedVersionCitationsOnly_
+// BoundedNotPerCitation proves the Performance requirement's bound on
+// THIS task's own added resolution -- verdictAuthorDisplayNames (dedup'd
+// by author) and citedResearchNotes/retiredCitedResearchNotes (resolved
+// for the SELECTED version only, history passed as nil) -- isolated from
+// store.VerdictStore.History's own pre-existing (M1, #1606) per-row
+// citedResearchNoteIDs query, which already scales with version count
+// independently of this task and is out of scope here.
+//
+// Both Ideas below have the IDENTICAL version count (4) and the SAME
+// single author, so History's own cost is equal on both sides; the ONLY
+// difference is whether versions carry citations at all. Citing an
+// overlapping pair of notes across every history-only version, while the
+// SELECTED (current) version cites nothing, must add ZERO extra
+// statements -- proving citedResearchNotes/retiredCitedResearchNotes
+// really do resolve the selected version's own citations only, never
+// unioning in history's. A second comparison then cites the SAME pair
+// from current itself, which must add exactly the two batched calls
+// (GetByIDs, RetiredNoteIDs) -- never one query per citation.
+func TestHandleVerdictDetail_QueryCount_SelectedVersionCitationsOnly_BoundedNotPerCitation(t *testing.T) {
+	ctx := context.Background()
+	s := newResearchTestStack(t)
+	ch, creator := s.setupChannel(t, ctx)
+
+	appendFourVersions := func(ideaID uuid.UUID, historyCites, currentCites []uuid.UUID) {
+		for i := 0; i < 3; i++ {
+			_, err := s.store.Verdicts().Append(ctx, store.AppendVerdictInput{
+				IdeaID: ideaID, Verdict: store.VerdictNeedsMoreResearch, Reasoning: fmt.Sprintf("history v%d", i+1), AuthorPersonID: creator.ID, Source: store.VerdictSourceHuman,
+				CitedResearchNoteIDs: historyCites,
+			})
+			require.NoError(t, err)
+		}
+		_, err := s.store.Verdicts().Append(ctx, store.AppendVerdictInput{
+			IdeaID: ideaID, Verdict: store.VerdictViable, Reasoning: "current v4", AuthorPersonID: creator.ID, Source: store.VerdictSourceHuman,
+			CitedResearchNoteIDs: currentCites,
+		})
+		require.NoError(t, err)
+	}
+
+	var noteIDs []uuid.UUID
+	for i := 0; i < 2; i++ {
+		n, err := s.store.Research().SaveNote(ctx, store.SaveNoteInput{ThreadTitle: "Research",
+			ChannelID: ch.ID, Text: fmt.Sprintf("shared pool note %d", i), AuthorPersonID: creator.ID,
+		})
+		require.NoError(t, err)
+		noteIDs = append(noteIDs, n.ID)
+	}
+
+	noCitationsIdea, err := s.store.Ideas().Create(ctx, ch.ID, "Idea No Citations", creator.ID)
+	require.NoError(t, err)
+	appendFourVersions(noCitationsIdea.ID, nil, nil)
+
+	historyOnlyCitationsIdea, err := s.store.Ideas().Create(ctx, ch.ID, "Idea History-Only Citations", creator.ID)
+	require.NoError(t, err)
+	appendFourVersions(historyOnlyCitationsIdea.ID, noteIDs, nil)
+
+	currentCitesIdea, err := s.store.Ideas().Create(ctx, ch.ID, "Idea Current Cites", creator.ID)
+	require.NoError(t, err)
+	appendFourVersions(currentCitesIdea.ID, nil, noteIDs)
+
+	countFor := func(ideaID uuid.UUID) int64 {
+		counter := &researchQueryCounter{}
+		traced := s.tracedResearchStack(t, ctx, counter)
+		w := traced.doVerdictDetail(t, ch.ID, ideaID, traced.sessionCookie(t, ctx, creator.ID), "")
+		require.Equal(t, http.StatusOK, w.Code, "body: %s", w.Body.String())
+		return counter.n
+	}
+
+	noCitationsN := countFor(noCitationsIdea.ID)
+	historyOnlyN := countFor(historyOnlyCitationsIdea.ID)
+	currentCitesN := countFor(currentCitesIdea.ID)
+
+	assert.Equal(t, noCitationsN, historyOnlyN,
+		"citations on history-only versions (never the selected/current one) must add ZERO extra queries -- citedResearchNotes/retiredCitedResearchNotes must resolve the selected version's own citations only; no-citations issued %d, history-only-citations issued %d", noCitationsN, historyOnlyN)
+	assert.Equal(t, noCitationsN+2, currentCitesN,
+		"citing 2 overlapping notes from the SELECTED (current) version must add exactly TWO additional statements (the batched GetByIDs plus the batched RetiredNoteIDs call) -- never one query per citation; no-citations issued %d, current-cites issued %d", noCitationsN, currentCitesN)
+}
 
 // ── HandleProposeVideoScript (#1915, FR1-FR5, NFR1-NFR3) ────────────────
 

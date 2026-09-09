@@ -13,6 +13,20 @@ type Server struct {
 	HostPublicAddress *string    `db:"host_public_address"`
 }
 
+// ServerAllowedPortRange is one allowed host-port range for a server
+// (FR12, migration 038 / task #2095). Reuses the wire PortRange shape
+// (start/end/protocol). Empty set for a server = host-port assignment is
+// unconstrained (today's behavior, SB-1.2); enforcement lives in the
+// allocation path (dependent task). ServerCapabilities.available_ports is
+// dormant and deliberately not built on.
+type ServerAllowedPortRange struct {
+	RangeID   int64  `db:"range_id"`
+	ServerID  int64  `db:"server_id"`
+	StartPort int32  `db:"start_port"`
+	EndPort   int32  `db:"end_port"`
+	Protocol  string `db:"protocol"` // 'TCP' | 'UDP'
+}
+
 // ServerCapability represents the resources available on a server
 type ServerCapability struct {
 	CapabilityID           int64      `db:"capability_id"`
@@ -25,12 +39,13 @@ type ServerCapability struct {
 	RecordedAt             *time.Time `db:"recorded_at"`
 }
 
-// ServerPort represents port allocation tracking at server level
+// ServerPort represents port allocation tracking at server level.
+// Session-scoped since migration 014_port_allocation_per_session dropped
+// the SGC-scoped sgc_id column (task #2142, plan #2080).
 type ServerPort struct {
 	ServerID    int64     `db:"server_id"`
 	Port        int       `db:"port"`
 	Protocol    string    `db:"protocol"`
-	SGCID       *int64    `db:"sgc_id"`
 	SessionID   *int64    `db:"session_id"`
 	AllocatedAt time.Time `db:"allocated_at"`
 }

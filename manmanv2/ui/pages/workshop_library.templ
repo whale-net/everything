@@ -12,6 +12,11 @@ type WorkshopLibraryPageData struct {
 	Libraries    []*manmanpb.WorkshopLibrary
 	RecentAddons []*manmanpb.WorkshopAddon
 	Addons       []*manmanpb.WorkshopAddon
+	// RecentBatchJobs is the newest few collection-add/batch-create jobs
+	// across all games shown on this page (FR4, plan #2175), so a Server
+	// Manager can reach the batch-status view without holding on to a
+	// batch_job_id.
+	RecentBatchJobs []*manmanpb.WorkshopBatchJob
 }
 
 templ WorkshopLibrary(data WorkshopLibraryPageData) {
@@ -133,6 +138,36 @@ templ WorkshopLibrary(data WorkshopLibraryPageData) {
 					<h3 class="text-lg font-semibold text-base-content mb-2">No libraries yet</h3>
 					<p class="text-base-content/60 mb-4">Create a library to organize your addons into reusable collections.</p>
 					<button @click="showCreateLibrary = true" class="btn btn-primary">Create Library</button>
+				</div>
+			}
+			<!-- Recent Batch Jobs Section -->
+			if len(data.RecentBatchJobs) > 0 {
+				<div class="flex justify-between items-center mb-4">
+					<h2 class="text-xl font-bold text-base-content">Recent Batch Jobs</h2>
+				</div>
+				<div class="bg-base-100 rounded-box border border-base-300 overflow-x-auto mb-8">
+					<table class="table">
+						<thead>
+							<tr>
+								<th>Type</th>
+								<th>Status</th>
+								<th>Total / Succeeded / Failed</th>
+								<th></th>
+							</tr>
+						</thead>
+						<tbody>
+							for _, job := range data.RecentBatchJobs {
+								<tr>
+									<td>{ job.JobType }</td>
+									<td><span class="badge badge-soft">{ job.Status }</span></td>
+									<td>{ fmt.Sprintf("%d / %d / %d", job.TotalItems, job.SucceededItems, job.FailedItems) }</td>
+									<td>
+										<a href={ templ.URL(fmt.Sprintf("/workshop/batch-status?batch_job_id=%d", job.BatchJobId)) } class="link link-primary">View →</a>
+									</td>
+								</tr>
+							}
+						</tbody>
+					</table>
 				</div>
 			}
 			<!-- Recent Addons Section -->

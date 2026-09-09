@@ -21,6 +21,9 @@ service ManManAPI {
   rpc CreateServer(CreateServerRequest) returns (CreateServerResponse);
   rpc UpdateServer(UpdateServerRequest) returns (UpdateServerResponse);
   rpc DeleteServer(DeleteServerRequest) returns (DeleteServerResponse);
+  // FR12 (task #2095): per-server allowed host-port ranges (replace-all).
+  rpc UpdateServerAllowedPortRanges(UpdateServerAllowedPortRangesRequest) returns (UpdateServerAllowedPortRangesResponse);
+  rpc ListAllocatedPorts(ListAllocatedPortsRequest) returns (ListAllocatedPortsResponse);
 
   // Game management
   rpc ListGames(ListGamesRequest) returns (ListGamesResponse);

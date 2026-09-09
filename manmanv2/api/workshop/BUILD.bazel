@@ -2,23 +2,40 @@ load("@rules_go//go:def.bzl", "go_library", "go_test")
 
 go_library(
     name = "workshop",
-    srcs = ["manager.go"],
+    srcs = [
+        "batch.go",
+        "cachekey.go",
+        "collection.go",
+        "entry_parser.go",
+        "manager.go",
+    ],
     importpath = "github.com/whale-net/everything/manmanv2/api/workshop",
     visibility = ["//visibility:public"],
     deps = [
-        "//manmanv2/models:models",
         "//manmanv2/api/repository",
         "//manmanv2/api/steam",
+        "//manmanv2/models",
     ],
 )
 
+# Includes cachekey_test.go: cache-key derivation coverage (#2181, plan
+# #2175, NFR1/NFR4) -- determinism, version/workshop-ID sensitivity, the
+# fixed (workshopID, contentVersion) signature that leaves no parameter slot
+# for host/SGC/deployment identity, and numeric-vs-string content-version
+# normalisation.
 go_test(
     name = "workshop_test",
-    srcs = ["manager_test.go"],
+    srcs = [
+        "batch_test.go",
+        "cachekey_test.go",
+        "collection_test.go",
+        "entry_parser_test.go",
+        "manager_test.go",
+    ],
     embed = [":workshop"],
     deps = [
-        "//manmanv2/models:models",
         "//manmanv2/api/repository",
         "//manmanv2/api/steam",
+        "//manmanv2/models",
     ],
 )

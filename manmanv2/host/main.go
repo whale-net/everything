@@ -242,6 +242,17 @@ func run() error {
 	return nil
 }
 
+// resolveSessionEnv returns the env map a session container should use and
+// which source supplied it: the top-level rendered_env when present (an empty
+// map is present and authoritative), otherwise the env template with source
+// "env_template_fallback" (FR5 presence semantics).
+func resolveSessionEnv(cmd *rmq.StartSessionCommand) (map[string]string, string) {
+	if cmd.RenderedEnv != nil {
+		return cmd.RenderedEnv, "rendered_env"
+	}
+	return cmd.GameConfig.EnvTemplate, "env_template_fallback"
+}
+
 // CommandHandlerImpl implements the CommandHandler interface
 type CommandHandlerImpl struct {
 	sessionManager       *session.SessionManager
@@ -263,8 +274,17 @@ func (h *CommandHandlerImpl) HandleStartSession(ctx context.Context, cmd *rmq.St
 		"volumes", len(cmd.GameConfig.Volumes),
 		"force", cmd.Force)
 	
-	env := make([]string, 0, len(cmd.GameConfig.EnvTemplate))
-	for k, v := range cmd.GameConfig.EnvTemplate {
+	// FR5: use the server-rendered env when present (an empty map is
+	// present and authoritative); fall back to the env template only when
+	// rendered_env is absent (nil) -- e.g. commands published by older APIs
+	// in the rollout window. Log which source was used so a silent fallback
+	// cannot masquerade as a rendered start.
+	envMap, envSource := resolveSessionEnv(cmd)
+	slog.Info("session environment source",
+		"session_id", cmd.SessionID, "env_source", envSource, "env_var_count", len(envMap))
+
+	env := make([]string, 0, len(envMap))
+	for k, v := range envMap {
 		env = append(env, fmt.Sprintf("%s=%s", k, v))
 	}
 
@@ -446,6 +466,19 @@ func (h *CommandHandlerImpl) HandleRemoveAddon(ctx context.Context, cmd *rmq.Rem
 		"addon_id", cmd.AddonID,
 		"installation_path", cmd.InstallationPath)
 	return h.downloadOrchestrator.HandleRemoveCommand(ctx, cmd)
+}
+
+// HandleVerifyCacheEntry handles an Admin's on-demand SteamCMD verify of a single
+// workshop cache entry, independent of any install (#2186, plan #2175 FR11). Delegates
+// directly to the download orchestrator's VerifyWorkshopItem-backed handler -- the same
+// reuse pattern HandleDownloadAddon/HandleRemoveAddon already follow for their own
+// orchestrator methods.
+func (h *CommandHandlerImpl) HandleVerifyCacheEntry(ctx context.Context, cmd *rmq.VerifyCacheEntryCommand) error {
+	slog.Info("processing verify cache entry command",
+		"cache_entry_id", cmd.CacheEntryID,
+		"workshop_id", cmd.WorkshopID,
+		"steam_app_id", cmd.SteamAppID)
+	return h.downloadOrchestrator.HandleVerifyCacheEntryCommand(ctx, cmd)
 }
 
 // initializeGRPCClient creates a gRPC client connection to the control API

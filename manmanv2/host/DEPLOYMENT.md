@@ -17,6 +17,14 @@ The host manager runs on **bare metal** (not in Kubernetes) because it needs dir
 
 3. **RabbitMQ accessible**: Either from Tilt (localhost:5672) or custom
 
+4. **Outbound HTTPS to S3**: The Workshop cache read/write path (`manmanv2/host/workshop/cache_client.go`)
+   fetches and refreshes cached addon content directly from S3 using short-lived presigned
+   URLs obtained from control-api — the host makes the actual GET/PUT itself, not
+   control-api. No standing AWS credentials or SDK live on the host (see NFR6/NFR7); the
+   host only needs outbound HTTPS reachability to the S3 endpoint the presigned URLs point
+   at. A host with no outbound internet access falls back to a normal SteamCMD download for
+   every install rather than failing.
+
 ## Architecture
 
 ```

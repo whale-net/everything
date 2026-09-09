@@ -12,13 +12,15 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
-// IdeaSummary is an Idea plus its research_note count and whether it has
-// at least one viability_verdict row yet -- exactly what list_ideas
-// (mcp/tools/research.go, issue #1577) renders.
+// IdeaSummary is an Idea plus its research_note count, whether it has
+// at least one viability_verdict row yet, and its current verdict value
+// if one exists -- exactly what list_ideas (mcp/tools/research.go, issue #1577)
+// and ChannelIndex (web/research/views.templ) render.
 type IdeaSummary struct {
 	Idea
-	NoteCount  int
-	HasVerdict bool
+	NoteCount      int
+	HasVerdict     bool
+	CurrentVerdict *VerdictValue
 }
 
 // IdeaStore covers `idea` (migration 002) -- the stable identity LB3
@@ -186,14 +188,15 @@ func (s ideaStore) ListByChannelWithStats(ctx context.Context, channelID uuid.UU
 		SELECT
 			i.id, i.channel_id, i.title, i.created_by_person_id, i.created_at,
 			COUNT(DISTINCT rn.id) AS note_count,
-			COUNT(DISTINCT vv.id) > 0 AS has_verdict
+			cv.id IS NOT NULL AS has_verdict,
+			cv.verdict
 		FROM idea i
 		LEFT JOIN research_thread rt ON rt.idea_id = i.id
 		LEFT JOIN research_note rn ON rn.thread_id = rt.id
-		LEFT JOIN viability_verdict vv ON vv.idea_id = i.id
+		LEFT JOIN v_current_verdict cv ON cv.idea_id = i.id
 		WHERE i.channel_id = $1
 		  AND ($2::timestamptz IS NULL OR i.created_at >= $2)
-		GROUP BY i.id
+		GROUP BY i.id, cv.id, cv.verdict
 		ORDER BY i.created_at
 		LIMIT $3
 	`, channelID, since, fetchLimit(limit))
@@ -205,7 +208,7 @@ func (s ideaStore) ListByChannelWithStats(ctx context.Context, channelID uuid.UU
 	var summaries []IdeaSummary
 	for rows.Next() {
 		var s2 IdeaSummary
-		if err := rows.Scan(&s2.ID, &s2.ChannelID, &s2.Title, &s2.CreatedByPersonID, &s2.CreatedAt, &s2.NoteCount, &s2.HasVerdict); err != nil {
+		if err := rows.Scan(&s2.ID, &s2.ChannelID, &s2.Title, &s2.CreatedByPersonID, &s2.CreatedAt, &s2.NoteCount, &s2.HasVerdict, &s2.CurrentVerdict); err != nil {
 			return nil, false, fmt.Errorf("scan idea with stats: %w", err)
 		}
 		summaries = append(summaries, s2)

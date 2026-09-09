@@ -17,6 +17,14 @@ import (
 type SteamWorkshopClient struct {
 	apiKey     string
 	httpClient *http.Client
+	// BaseURL overrides the Steam API host for tests, for both
+	// GetWorkshopItemDetails and GetCollectionDetails. Empty (the zero
+	// value returned by NewSteamWorkshopClient) means "use the real Steam
+	// API"; tests may set it directly (including from other packages, e.g.
+	// a handler-level regression test that wires a real SteamWorkshopClient
+	// against an httptest.Server) to point at a stand-in server, since this
+	// is exported purely as a test seam.
+	BaseURL string
 }
 
 // WorkshopItemMetadata represents metadata for a workshop item
@@ -54,6 +62,9 @@ func NewSteamWorkshopClient(apiKey string, timeout time.Duration) *SteamWorkshop
 // GetWorkshopItemDetails fetches metadata for a workshop item
 func (swc *SteamWorkshopClient) GetWorkshopItemDetails(ctx context.Context, workshopID string) (*WorkshopItemMetadata, error) {
 	apiURL := "https://api.steampowered.com/ISteamRemoteStorage/GetPublishedFileDetails/v1/"
+	if swc.BaseURL != "" {
+		apiURL = swc.BaseURL
+	}
 
 	data := url.Values{}
 	data.Set("itemcount", "1")
@@ -104,6 +115,7 @@ func (swc *SteamWorkshopClient) GetWorkshopItemDetails(ctx context.Context, work
 		Response struct {
 			PublishedFileDetails []struct {
 				PublishedFileID string `json:"publishedfileid"`
+				Result          int    `json:"result"` // 1 = success, 9 = not found, other codes exist (e.g. banned/private)
 				Title           string `json:"title"`
 				Description     string `json:"file_description"`
 				FileSize        string `json:"file_size"`
@@ -118,11 +130,21 @@ func (swc *SteamWorkshopClient) GetWorkshopItemDetails(ctx context.Context, work
 	}
 
 	if len(result.Response.PublishedFileDetails) == 0 {
+		// Defensive fallback: Steam's GetPublishedFileDetails always returns exactly
+		// one entry per requested ID, so this shouldn't happen in practice, but keep
+		// the check cheap belt-and-suspenders.
 		return nil, fmt.Errorf("workshop item not found")
 	}
 
 	item := result.Response.PublishedFileDetails[0]
-	
+
+	// Steam always returns an entry for a requested ID, even when it doesn't exist -
+	// the per-entry "result" field (1 = success, 9 = not found, others e.g. banned/private)
+	// is what actually signals success vs. failure.
+	if item.Result != 1 {
+		return nil, fmt.Errorf("workshop item %s not found (steam result code %d)", workshopID, item.Result)
+	}
+
 	// Parse file size from string
 	var fileSize int64
 	if item.FileSize != "" {
@@ -144,6 +166,9 @@ func (swc *SteamWorkshopClient) GetWorkshopItemDetails(ctx context.Context, work
 // GetCollectionDetails fetches all items in a collection
 func (swc *SteamWorkshopClient) GetCollectionDetails(ctx context.Context, collectionID string) ([]CollectionItem, error) {
 	apiURL := "https://api.steampowered.com/ISteamRemoteStorage/GetCollectionDetails/v1/"
+	if swc.BaseURL != "" {
+		apiURL = swc.BaseURL
+	}
 
 	data := url.Values{}
 	data.Set("collectioncount", "1")
@@ -155,13 +180,12 @@ func (swc *SteamWorkshopClient) GetCollectionDetails(ctx context.Context, collec
 	maxRetries := 3
 	for attempt := 0; attempt < maxRetries; attempt++ {
 		// Create a new request for each retry with the form data
-		formReq, reqErr := http.NewRequestWithContext(ctx, "POST", apiURL, nil)
+		formReq, reqErr := http.NewRequestWithContext(ctx, "POST", apiURL, strings.NewReader(data.Encode()))
 		if reqErr != nil {
 			return nil, fmt.Errorf("failed to create request: %w", reqErr)
 		}
 		formReq.Header.Set("Content-Type", "application/x-www-form-urlencoded")
-		formReq.PostForm = data
-		
+
 		resp, err = swc.httpClient.Do(formReq)
 		if err == nil && resp != nil && resp.StatusCode == http.StatusOK {
 			break
@@ -194,6 +218,7 @@ func (swc *SteamWorkshopClient) GetCollectionDetails(ctx context.Context, collec
 	var result struct {
 		Response struct {
 			CollectionDetails []struct {
+				Result   int              `json:"result"` // 1 = success/is a collection, 9 = not found / not a collection, others exist
 				Children []CollectionItem `json:"children"`
 			} `json:"collectiondetails"`
 		} `json:"response"`
@@ -204,8 +229,22 @@ func (swc *SteamWorkshopClient) GetCollectionDetails(ctx context.Context, collec
 	}
 
 	if len(result.Response.CollectionDetails) == 0 {
+		// Defensive fallback: Steam always returns exactly one collectiondetails
+		// entry per requested ID, so this shouldn't happen in practice.
 		return nil, fmt.Errorf("collection not found")
 	}
 
-	return result.Response.CollectionDetails[0].Children, nil
+	item := result.Response.CollectionDetails[0]
+
+	// Steam's per-entry "result" field is the authoritative "is this a
+	// collection" signal (item_type/file_type is never populated on the
+	// GetPublishedFileDetails side, so it can't be used for this). A result
+	// of 1 with an empty children array is a legitimate empty collection and
+	// must still succeed with zero children -- only a non-1 result code means
+	// "not a collection / not found".
+	if item.Result != 1 {
+		return nil, fmt.Errorf("workshop item %s is not a collection (steam result code %d)", collectionID, item.Result)
+	}
+
+	return item.Children, nil
 }

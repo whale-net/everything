@@ -1,0 +1,163 @@
+package pages
+
+import (
+	"fmt"
+
+	manmanpb "github.com/whale-net/everything/manmanv2/protos"
+)
+
+// Environment layered view (root plan #2080, FR1/FR2/FR4 -- task #2090).
+//
+// One row per env variable known to the deployment's environment:
+//   - TemplateValue: the GameConfig env template layer (inherited baseline).
+//   - OverrideValue: the deployment-level env override (nil = inherited).
+//   - EffectiveValue: what the next session start will actually use
+//     (template + deployment patches, per Option B in
+//     manmanv2/docs/DESIGN_SGC_ENV_OVERRIDES.md).
+//
+// The handler computes Layers; this template only renders what it is
+// given and posts edits back to the deployment's override endpoints
+// (all writes go through the public API -- NFR3).
+
+// EnvVarLayer is one env variable's layered view row.
+type EnvVarLayer struct {
+	Key            string
+	TemplateValue  string  // GameConfig env template value (may be empty)
+	OverrideValue  *string // deployment-level override; nil = inherited
+	EffectiveValue string  // what the next session start will use
+}
+
+// SGCEnvOverridesData drives the deployment Environment section.
+type SGCEnvOverridesData struct {
+	SGC    *manmanpb.ServerGameConfig
+	Layers []EnvVarLayer
+	// HasTemplateKeys reports whether the GameConfig env template
+	// defines any variables at all; false renders the empty-state nudge.
+	HasTemplateKeys bool
+	// PendingEditHint is true while a session is running and the latest
+	// saved deployment-level env override edit is newer than that
+	// session's start (task #2096, FR3): the saved edits have not been
+	// run by any session start yet. It clears only when a start whose
+	// command build happened after the save actually runs -- computed by
+	// the handler via pendingEnvOverrideHint, never by this template.
+	PendingEditHint bool
+}
+
+// envLayerOverridden reports whether a layer row is deployment-overridden.
+func envLayerOverridden(l EnvVarLayer) bool {
+	return l.OverrideValue != nil
+}
+
+templ SGCEnvOverrides(data SGCEnvOverridesData) {
+	<div class="card bg-base-100 border border-base-300 shadow-sm mb-6 overflow-hidden">
+		<div class="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-3 p-4 border-b border-base-300">
+			<h2 class="text-lg font-semibold text-base-content">Environment</h2>
+			<span class="text-xs text-base-content/60">
+				GameConfig template → deployment overrides → effective
+			</span>
+		</div>
+		if data.PendingEditHint {
+			<div role="alert" class="alert alert-info alert-soft mx-4 mt-4" data-testid="sgc-env-pending-hint">
+				<span class="text-sm text-base-content">
+					pending override edit applies on next session start
+				</span>
+			</div>
+		}
+		if len(data.Layers) == 0 {
+			<div class="p-6">
+				if !data.HasTemplateKeys {
+					<p class="text-sm text-base-content/60">
+						No environment variables defined. Add overrides below or define them on the GameConfig env template.
+					</p>
+				} else {
+					<p class="text-sm text-base-content/60">No environment variables to show.</p>
+				}
+			</div>
+		} else {
+			<div class="overflow-x-auto">
+				<table class="table">
+					<thead>
+						<tr>
+							<th>Variable</th>
+							<th>GameConfig template</th>
+							<th>Deployment override</th>
+							<th>Effective</th>
+							<th class="text-right">Actions</th>
+						</tr>
+					</thead>
+					<tbody>
+						for _, layer := range data.Layers {
+							<tr class="hover">
+								<td class="font-mono text-sm text-base-content">{ layer.Key }</td>
+								<td>
+									<code class="text-xs text-base-content/60">{ layer.TemplateValue }</code>
+								</td>
+								<td>
+									if envLayerOverridden(layer) {
+										<code class="text-xs text-base-content">{ *layer.OverrideValue }</code>
+									} else {
+										<span class="text-xs text-base-content/40">—</span>
+									}
+								</td>
+								<td>
+									<code class="text-xs text-base-content">{ layer.EffectiveValue }</code>
+									if envLayerOverridden(layer) {
+										<span class="badge badge-warning badge-soft badge-sm ml-2">overridden</span>
+									} else {
+										<span class="badge badge-ghost badge-sm ml-2">inherited</span>
+									}
+								</td>
+								<td class="text-right">
+									<div class="flex gap-1 justify-end">
+										<button
+											type="button"
+											class="btn btn-secondary btn-xs"
+											hx-get={ templ.URL(fmt.Sprintf("/sgc/%d/env/edit?key=%s", data.SGC.ServerGameConfigId, layer.Key)) }
+											hx-target="#sgc-env-editor"
+											hx-swap="innerHTML"
+										>Edit</button>
+										<form method="POST" action={ templ.URL(fmt.Sprintf("/sgc/%d/env/remove", data.SGC.ServerGameConfigId)) } class="inline">
+											<input type="hidden" name="key" value={ layer.Key }/>
+											<button type="submit" class="btn btn-error btn-xs btn-ghost">Remove</button>
+										</form>
+									</div>
+								</td>
+							</tr>
+						}
+					</tbody>
+				</table>
+			</div>
+		}
+		<div id="sgc-env-editor" class="p-4 border-t border-base-300">
+			<form method="POST" action={ templ.URL(fmt.Sprintf("/sgc/%d/env/set", data.SGC.ServerGameConfigId)) } class="flex flex-col sm:flex-row gap-2 items-start sm:items-center">
+				<input type="text" name="key" placeholder="VARIABLE_NAME" class="input input-bordered input-sm font-mono w-48" required/>
+				<input type="text" name="value" placeholder="override value" class="input input-bordered input-sm font-mono flex-1"/>
+				<button type="submit" class="btn btn-primary btn-sm">Save override</button>
+			</form>
+			<p class="text-xs text-base-content/60 mt-2">
+				Overrides apply at the next session start. Removing an override reverts the variable to the GameConfig template value.
+			</p>
+		</div>
+	</div>
+}
+
+// SGCEnvOverrideEditForm is the hx-swap fragment for editing one
+// override (GET /sgc/{id}/env/edit?key=NAME into #sgc-env-editor).
+templ SGCEnvOverrideEditForm(sgcID int64, key, value string) {
+	<form
+		method="POST"
+		action={ templ.URL(fmt.Sprintf("/sgc/%d/env/set", sgcID)) }
+		class="flex flex-col sm:flex-row gap-2 items-start sm:items-center"
+	>
+		<input type="hidden" name="key" value={ key }/>
+		<span class="font-mono text-sm text-base-content">{ key }</span>
+		<input
+			type="text"
+			name="value"
+			value={ value }
+			placeholder="override value"
+			class="input input-bordered input-sm font-mono flex-1"
+		/>
+		<button type="submit" class="btn btn-primary btn-sm">Save override</button>
+	</form>
+}

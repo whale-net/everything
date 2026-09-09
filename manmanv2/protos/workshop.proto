@@ -46,7 +46,54 @@ service WorkshopService {
   rpc ListAddonPathPresets(ListAddonPathPresetsRequest) returns (ListAddonPathPresetsResponse);
   rpc UpdateAddonPathPreset(UpdateAddonPathPresetRequest) returns (UpdateAddonPathPresetResponse);
   rpc DeleteAddonPathPreset(DeleteAddonPathPresetRequest) returns (DeleteAddonPathPresetResponse);
+
+  // Content Cache — presigned-URL relay (host talks to S3 directly; control-api never proxies bytes)
+  rpc GetCacheDownloadURL(GetCacheDownloadURLRequest) returns (GetCacheDownloadURLResponse);
+  rpc GetCacheUploadURL(GetCacheUploadURLRequest) returns (GetCacheUploadURLResponse);
+
+  // Batch Job Management
+  rpc GetBatchJob(GetBatchJobRequest) returns (GetBatchJobResponse);
+  rpc ListBatchJobs(ListBatchJobsRequest) returns (ListBatchJobsResponse);
+
+  // Batch Operations
+  rpc BatchCreateAddons(BatchCreateAddonsRequest) returns (BatchCreateAddonsResponse);
+  rpc AddCollectionToLibrary(AddCollectionToLibraryRequest) returns (AddCollectionToLibraryResponse);
+
+  // ReportCacheRead records that server_id successfully landed the object for
+  // cache_entry_id on disk (FR10's data source). Callers must invoke this only
+  // after the transfer completes and lands atomically -- a URL being issued is
+  // not the same as a copy landing. Additive RPC: older host-manager binaries
+  // that predate it simply never call it, and control-api predating it (or a
+  // relay that is otherwise unavailable) surfaces as Unimplemented, which the
+  // host-manager caller treats as non-fatal (the cache read itself already
+  // succeeded by the time this is called).
+  rpc ReportCacheRead(ReportCacheReadRequest) returns (ReportCacheReadResponse);
+
+  // ListAddonCacheEntries gives an Admin fleet-wide visibility into a single
+  // addon's cache state -- every content-addressed entry, which hosts hold a
+  // copy, and how stale each entry's verification is -- in one call instead
+  // of querying hosts one at a time (FR10). Read-only: it must not create,
+  // touch, or verify anything.
+  rpc ListAddonCacheEntries(ListAddonCacheEntriesRequest) returns (ListAddonCacheEntriesResponse);
+
+  // VerifyCacheEntry triggers an on-demand SteamCMD verify of a specific
+  // cache entry against its Workshop source, independent of any install
+  // (FR11). Dispatch is asynchronous: the RPC only reports whether a host was
+  // found to run the verify; the up-to-date/changed outcome arrives later on
+  // the existing status.host.*.workshop.cache key (#2184) and is not part of
+  // this response.
+  rpc VerifyCacheEntry(VerifyCacheEntryRequest) returns (VerifyCacheEntryResponse);
+
+  // EvictCacheEntry deletes exactly one content-addressed cache entry: its
+  // single S3 object and its workshop_cache_entries row (FR12). This is a
+  // control-plane action -- control-api holds the S3 credentials and deletes
+  // the object directly by exact key. It does not go through the
+  // presigned-URL relay and does not publish any host command. Sibling
+  // entries for the same addon, and every other addon/installation/library/
+  // batch-job row, are untouched.
+  rpc EvictCacheEntry(EvictCacheEntryRequest) returns (EvictCacheEntryResponse);
 }
+
 
 // ============================================================================
 // Domain Models
@@ -439,3 +486,200 @@ message DeleteAddonPathPresetRequest {
 }
 
 message DeleteAddonPathPresetResponse {}
+
+// ============================================================================
+// Content Cache RPCs (presigned-URL relay)
+// ============================================================================
+
+message GetCacheDownloadURLRequest {
+  int64 server_id = 1;
+  string workshop_id = 2;
+  string content_version = 3;
+}
+
+message GetCacheDownloadURLResponse {
+  bool cache_hit = 1;
+  int64 cache_entry_id = 2;
+  string presigned_url = 3;  // empty when cache_hit == false
+  int64 expires_at = 4;      // Unix timestamp
+  int64 size_bytes = 5;
+}
+
+message GetCacheUploadURLRequest {
+  int64 server_id = 1;
+  string workshop_id = 2;
+  string content_version = 3;
+}
+
+message GetCacheUploadURLResponse {
+  int64 cache_entry_id = 1;
+  string presigned_url = 2;
+  int64 expires_at = 3;
+  string s3_key = 4;
+}
+
+// ============================================================================
+// Batch Job Management RPCs
+// ============================================================================
+
+// WorkshopBatchJob is the header row for a batch operation (collection
+// bulk-add or mixed-format batch create) over the workshop_batch_jobs table
+// (#2176, plan #2175, FR4).
+message WorkshopBatchJob {
+  int64 batch_job_id = 1;
+  string job_type = 2;          // "collection_add" | "batch_create"
+  int64 game_id = 3;
+  int64 library_id = 4;
+  string source_input = 5;
+  string status = 6;
+  int32 total_items = 7;
+  int32 succeeded_items = 8;
+  int32 failed_items = 9;
+  int64 created_at = 10;        // Unix timestamp
+  int64 updated_at = 11;        // Unix timestamp
+}
+
+// BatchItemResult is the per-item outcome shared across the batch-create
+// (#2177), collection-add, and batch-status (#2179) RPCs. Defined once here.
+message BatchItemResult {
+  string raw_input = 1;
+  string workshop_id = 2;
+  int64 addon_id = 3;
+  string status = 4;         // "succeeded" | "failed"
+  string error_message = 5;
+}
+
+message GetBatchJobRequest {
+  int64 batch_job_id = 1;
+}
+
+message GetBatchJobResponse {
+  WorkshopBatchJob job = 1;
+  repeated BatchItemResult items = 2;
+}
+
+message ListBatchJobsRequest {
+  int64 game_id = 1;
+  int32 limit = 2;
+}
+
+message ListBatchJobsResponse {
+  repeated WorkshopBatchJob jobs = 1;
+}
+
+// ============================================================================
+// Batch Operation RPCs
+// ============================================================================
+
+// BatchCreateAddons takes a pasted block of mixed raw Workshop IDs and
+// Workshop URLs and creates an addon per valid entry, committing valid
+// entries even when some entries are invalid (FR2, FR3, NFR5).
+message BatchCreateAddonsRequest {
+  int64 game_id = 1;
+  int64 library_id = 2;  // target library; 0 = create addons without library attachment
+  string entries = 3;    // raw pasted block, one entry per line, mixed IDs and URLs
+  int64 preset_id = 4;   // path preset applied to every created addon
+}
+
+message BatchCreateAddonsResponse {
+  int64 batch_job_id = 1;
+  int32 total_items = 2;
+  int32 succeeded_items = 3;
+  int32 failed_items = 4;
+  repeated BatchItemResult results = 5;
+}
+
+// AddCollectionToLibrary resolves a Steam Workshop collection's current
+// membership and adds every item in it to a library in one action (FR1). This
+// is a one-time snapshot, not a live sync: membership is captured once at
+// call time, and items added to the Steam collection afterwards are, by
+// design, never picked up by this RPC (see collection.go).
+message AddCollectionToLibraryRequest {
+  int64 game_id = 1;
+  int64 library_id = 2;
+  string collection_input = 3;  // raw numeric collection ID or a Workshop collection URL
+  int64 preset_id = 4;
+}
+
+message AddCollectionToLibraryResponse {
+  int64 batch_job_id = 1;
+  int64 collection_addon_id = 2;   // the collection's own addon row
+  int32 total_items = 3;
+  int32 succeeded_items = 4;
+  int32 failed_items = 5;
+  repeated BatchItemResult results = 6;
+}
+
+message ReportCacheReadRequest {
+  int64 server_id = 1;
+  int64 cache_entry_id = 2;
+}
+
+message ReportCacheReadResponse {}
+
+// ============================================================================
+// Admin Fleet-Wide Cache Visibility RPCs (FR10)
+// ============================================================================
+
+// WorkshopCacheHost is one host's presence record for a WorkshopCacheEntry:
+// it has held a copy of the entry's content since first_seen_at, and last
+// reported holding it at last_seen_at.
+message WorkshopCacheHost {
+  int64 server_id = 1;
+  string server_name = 2;
+  int64 first_seen_at = 3;   // Unix timestamp
+  int64 last_seen_at = 4;    // Unix timestamp
+}
+
+// WorkshopCacheEntry is one content-addressed cache entry for an addon,
+// together with every host known to hold a copy of it.
+message WorkshopCacheEntry {
+  int64 cache_entry_id = 1;
+  string workshop_id = 2;
+  string content_version = 3;   // the content address
+  string cache_key = 4;
+  string s3_key = 5;
+  int64 size_bytes = 6;
+  int64 last_verified_at = 7;   // Unix timestamp, 0 if never verified
+  int64 created_at = 8;
+  repeated WorkshopCacheHost hosts = 9;
+}
+
+message ListAddonCacheEntriesRequest {
+  int64 addon_id = 1;
+}
+
+message ListAddonCacheEntriesResponse {
+  repeated WorkshopCacheEntry entries = 1;
+}
+
+// ============================================================================
+// Admin On-Demand Cache-Entry Verify RPC (FR11)
+// ============================================================================
+
+message VerifyCacheEntryRequest {
+  int64 cache_entry_id = 1;
+  int64 server_id = 2;   // host asked to run the verify; 0 = control-api picks a host that holds a copy
+}
+
+message VerifyCacheEntryResponse {
+  bool dispatched = 1;
+  int64 server_id = 2;
+  string status = 3;     // "dispatched" | "no_host_available"
+}
+
+// ============================================================================
+// Admin Manual Cache Eviction RPC (FR12)
+// ============================================================================
+
+// EvictCacheEntryRequest identifies exactly one content-addressed cache
+// entry to evict. There is no bulk/prefix form: eviction is always scoped to
+// a single cache_entry_id.
+message EvictCacheEntryRequest {
+  int64 cache_entry_id = 1;
+}
+
+message EvictCacheEntryResponse {
+  bool evicted = 1;
+  string s3_key = 2;
+}

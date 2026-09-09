@@ -140,6 +140,15 @@ type ServerPortRepository interface {
 	GetAvailablePortsInRange(ctx context.Context, serverID int64, protocol string, startPort, endPort, limit int) ([]int, error)
 }
 
+// ServerPortRangeRepository defines operations for a server's allowed
+// host-port ranges (FR12, task #2095). Replace is replace-all semantics:
+// the caller fetches the current set, modifies it, and stores the whole
+// set back; an empty slice clears all ranges (unconstrained, SB-1.2).
+type ServerPortRangeRepository interface {
+	List(ctx context.Context, serverID int64) ([]*manman.ServerAllowedPortRange, error)
+	Replace(ctx context.Context, serverID int64, ranges []*manman.ServerAllowedPortRange) ([]*manman.ServerAllowedPortRange, error)
+}
+
 // ConfigurationStrategyRepository defines operations for ConfigurationStrategy entities
 type ConfigurationStrategyRepository interface {
 	Create(ctx context.Context, strategy *manman.ConfigurationStrategy) (*manman.ConfigurationStrategy, error)
@@ -174,6 +183,14 @@ type WorkshopAddonRepository interface {
 	Create(ctx context.Context, addon *manman.WorkshopAddon) (*manman.WorkshopAddon, error)
 	Get(ctx context.Context, addonID int64) (*manman.WorkshopAddon, error)
 	GetByWorkshopID(ctx context.Context, gameID int64, workshopID string, platformType string) (*manman.WorkshopAddon, error)
+	// GetByWorkshopIDAnyGame resolves a workshop_id to its addon without a
+	// known game_id (#2186, plan #2175 FR11): a WorkshopCacheEntry's identity
+	// is workshop_id + content_version only (NFR1, no game/addon linkage), so
+	// the on-demand verify RPC has nothing but workshop_id to resolve the
+	// addon's steam_app_id from. Returns (nil, nil) -- not an error -- if no
+	// addon owns this workshop_id, mirroring GetCacheEntryByKey's
+	// not-found convention.
+	GetByWorkshopIDAnyGame(ctx context.Context, workshopID string) (*manman.WorkshopAddonWithGame, error)
 	List(ctx context.Context, gameID *int64, includeDeprecated bool, limit, offset int) ([]*manman.WorkshopAddon, error)
 	ListByCollectionID(ctx context.Context, collectionID int64) ([]*manman.WorkshopAddon, error)
 	Update(ctx context.Context, addon *manman.WorkshopAddon) error
@@ -209,6 +226,19 @@ type WorkshopLibraryRepository interface {
 	RemoveReference(ctx context.Context, parentLibraryID, childLibraryID int64) error
 	ListReferences(ctx context.Context, libraryID int64) ([]*manman.WorkshopLibrary, error)
 	DetectCircularReference(ctx context.Context, parentLibraryID, childLibraryID int64) (bool, error)
+}
+
+// WorkshopBatchJobRepository defines operations for batch-operation
+// persistence shared by Workshop collection bulk-add (FR1) and mixed-format
+// batch create (FR2/FR3): the batch job header plus its per-item outcomes.
+type WorkshopBatchJobRepository interface {
+	CreateBatchJob(ctx context.Context, job *manman.WorkshopBatchJob) (*manman.WorkshopBatchJob, error)
+	CreateBatchJobItems(ctx context.Context, batchJobID int64, items []*manman.WorkshopBatchJobItem) error
+	UpdateBatchJobItemResult(ctx context.Context, batchJobItemID int64, status string, addonID *int64, errorMessage *string) error
+	UpdateBatchJobStatus(ctx context.Context, batchJobID int64, status string, succeeded, failed int) error
+	GetBatchJob(ctx context.Context, batchJobID int64) (*manman.WorkshopBatchJob, error)
+	ListBatchJobItems(ctx context.Context, batchJobID int64) ([]*manman.WorkshopBatchJobItem, error)
+	ListBatchJobs(ctx context.Context, gameID int64, limit int) ([]*manman.WorkshopBatchJob, error)
 }
 
 // ErrPendingRestartExists is returned by PendingRestartRepository.Create when
@@ -260,6 +290,38 @@ type AddonPathPresetRepository interface {
 	Delete(ctx context.Context, presetID int64) error
 }
 
+// WorkshopCacheRepository defines operations for the content-addressed
+// Workshop cache's identity and metadata (#2181, plan #2175, FR5/FR9).
+// GetCacheEntryByKey/UpsertCacheEntry key exclusively on cache_key (which
+// itself derives from workshop_id + content_version only, NFR1); no method
+// here accepts or filters by sgc_id, server_id, deployment_id, or
+// library_id (NFR2). Entries are append-only (FR9, not SCD2 -- see
+// AGENTS.md § SCD2): DeleteCacheEntry exists only for explicit Admin
+// eviction (FR12), never for the refresh/upsert path.
+type WorkshopCacheRepository interface {
+	GetCacheEntryByKey(ctx context.Context, cacheKey string) (*manman.WorkshopCacheEntry, error)
+	// UpsertCacheEntry is an idempotent insert-or-return-existing on
+	// cache_key: concurrent callers racing to cache the same
+	// (workshop_id, content_version) converge on one row instead of
+	// erroring (NFR4 foundation).
+	UpsertCacheEntry(ctx context.Context, entry *manman.WorkshopCacheEntry) (*manman.WorkshopCacheEntry, error)
+	ListCacheEntriesForWorkshopID(ctx context.Context, workshopID string) ([]*manman.WorkshopCacheEntry, error)
+	GetCacheEntry(ctx context.Context, cacheEntryID int64) (*manman.WorkshopCacheEntry, error)
+	TouchCacheEntryVerified(ctx context.Context, cacheEntryID int64, verifiedAt time.Time) error
+	// DeleteCacheEntry is the explicit Admin eviction path (FR12) -- there is
+	// no automatic garbage collection of superseded entries in this layer.
+	DeleteCacheEntry(ctx context.Context, cacheEntryID int64) error
+	UpsertHostPresence(ctx context.Context, cacheEntryID, serverID int64) error
+	ListHostPresence(ctx context.Context, cacheEntryID int64) ([]*manman.WorkshopCacheHostPresence, error)
+	// ListHostPresenceForCacheEntryIDs is the FR10 fleet-visibility read path:
+	// one query for every entry's host presence, joined with the servers
+	// table for display names, keyed by cache_entry_id. Callers with a version
+	// history to render MUST use this instead of looping ListHostPresence per
+	// entry -- that loop is exactly the per-host, per-entry fan-out FR10 rules
+	// out, and the query count must not scale with entry count.
+	ListHostPresenceForCacheEntryIDs(ctx context.Context, cacheEntryIDs []int64) (map[int64][]*manman.WorkshopCacheHostPresenceWithServer, error)
+}
+
 // Repository aggregates all repository interfaces
 type Repository struct {
 	Servers                 ServerRepository
@@ -272,13 +334,16 @@ type Repository struct {
 	Backups                 BackupRepository
 	BackupConfigs           BackupConfigRepository
 	ServerPorts             ServerPortRepository
+	ServerPortRanges        ServerPortRangeRepository
 	ConfigurationStrategies ConfigurationStrategyRepository
 	ConfigurationPatches    ConfigurationPatchRepository
 	GameConfigVolumes       GameConfigVolumeRepository
 	WorkshopAddons          WorkshopAddonRepository
 	WorkshopInstallations   WorkshopInstallationRepository
 	WorkshopLibraries       WorkshopLibraryRepository
+	WorkshopBatchJobs       WorkshopBatchJobRepository
 	AddonPathPresets        AddonPathPresetRepository
 	PendingRestarts         PendingRestartRepository
+	WorkshopCache           WorkshopCacheRepository
 	Actions                 interface{} // ActionRepository from postgres package
 }

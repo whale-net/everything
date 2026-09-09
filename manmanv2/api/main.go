@@ -8,6 +8,7 @@ import (
 	"net"
 	"os"
 	"os/signal"
+	"strconv"
 	"syscall"
 	"time"
 
@@ -16,13 +17,13 @@ import (
 	"github.com/whale-net/everything/libs/go/logging"
 	rmqlib "github.com/whale-net/everything/libs/go/rmq"
 	"github.com/whale-net/everything/libs/go/s3"
-	"go.opentelemetry.io/contrib/instrumentation/google.golang.org/grpc/otelgrpc"
 	"github.com/whale-net/everything/manmanv2/api/handlers"
 	workshophandler "github.com/whale-net/everything/manmanv2/api/handlers/workshop"
 	"github.com/whale-net/everything/manmanv2/api/repository/postgres"
 	"github.com/whale-net/everything/manmanv2/api/steam"
 	"github.com/whale-net/everything/manmanv2/api/workshop"
 	pb "github.com/whale-net/everything/manmanv2/protos"
+	"go.opentelemetry.io/contrib/instrumentation/google.golang.org/grpc/otelgrpc"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/reflection"
 )
@@ -51,10 +52,15 @@ func run() error {
 	rabbitmqURL := getEnv("RABBITMQ_URL", "amqp://guest:guest@localhost:5672/")
 	s3Bucket := getEnv("S3_BUCKET", "manman-logs")
 	s3Region := getEnv("S3_REGION", "us-east-1")
-	s3Endpoint := getEnv("S3_ENDPOINT", "")             // Optional: for S3-compatible storage (OVH, MinIO, etc.)
+	s3Endpoint := getEnv("S3_ENDPOINT", "")              // Optional: for S3-compatible storage (OVH, MinIO, etc.)
 	s3PublicEndpoint := getEnv("S3_PUBLIC_ENDPOINT", "") // Optional: public-facing endpoint for pre-signed URLs
-	s3AccessKey := getEnv("S3_ACCESS_KEY", "")           // Optional: for static credentials (MinIO, etc.)
-	s3SecretKey := getEnv("S3_SECRET_KEY", "")           // Optional: for static credentials (MinIO, etc.)
+	// S3_PUBLIC_USE_PATH_STYLE: local dev/Tilt MinIO (no MINIO_DOMAIN) only
+	// does path-style bucket routing; OVH production stays on the
+	// vhost-style default (false) by leaving this unset. See
+	// libs/go/s3.Config.PublicUsePathStyle (issue #2225/#2227).
+	s3PublicUsePathStyle := getEnvBool("S3_PUBLIC_USE_PATH_STYLE", false)
+	s3AccessKey := getEnv("S3_ACCESS_KEY", "") // Optional: for static credentials (MinIO, etc.)
+	s3SecretKey := getEnv("S3_SECRET_KEY", "") // Optional: for static credentials (MinIO, etc.)
 	grpcAuthMode := getEnv("GRPC_AUTH_MODE", "none")
 	grpcOIDCIssuer := getEnv("GRPC_OIDC_ISSUER", "")
 	grpcOIDCClientID := getEnv("GRPC_OIDC_CLIENT_ID", "")
@@ -83,12 +89,13 @@ func run() error {
 	// Initialize S3 client
 	log.Println("Initializing S3 client...")
 	s3Client, err := s3.NewClient(ctx, s3.Config{
-		Bucket:         s3Bucket,
-		Region:         s3Region,
-		Endpoint:       s3Endpoint,
-		PublicEndpoint: s3PublicEndpoint,
-		AccessKey:      s3AccessKey,
-		SecretKey:      s3SecretKey,
+		Bucket:             s3Bucket,
+		Region:             s3Region,
+		Endpoint:           s3Endpoint,
+		PublicEndpoint:     s3PublicEndpoint,
+		PublicUsePathStyle: s3PublicUsePathStyle,
+		AccessKey:          s3AccessKey,
+		SecretKey:          s3SecretKey,
 	})
 	if err != nil {
 		return fmt.Errorf("failed to initialize S3 client: %w", err)
@@ -121,8 +128,8 @@ func run() error {
 
 	// Create gRPC server
 	grpcServer := grpc.NewServer(
-		grpc.MaxRecvMsgSize(10 * 1024 * 1024), // 10 MB
-		grpc.MaxSendMsgSize(10 * 1024 * 1024), // 10 MB
+		grpc.MaxRecvMsgSize(10*1024*1024), // 10 MB
+		grpc.MaxSendMsgSize(10*1024*1024), // 10 MB
 		grpc.StatsHandler(otelgrpc.NewServerHandler()),
 		grpc.ChainUnaryInterceptor(logging.NewUnaryServerLoggingInterceptor("grpc"), unaryInt),
 		grpc.ChainStreamInterceptor(logging.NewStreamServerLoggingInterceptor("grpc"), streamInt),
@@ -147,6 +154,7 @@ func run() error {
 		repo.GameConfigVolumes,
 		repo.AddonPathPresets,
 		repo.Sessions,
+		repo.WorkshopBatchJobs,
 		steamClient,
 		rmqPublisher,
 	)
@@ -162,7 +170,11 @@ func run() error {
 		repo.WorkshopLibraries,
 		repo.ServerGameConfigs,
 		repo.AddonPathPresets,
+		repo.WorkshopCache,
+		repo.WorkshopBatchJobs,
 		workshopManager,
+		s3Client,
+		rmqPublisher,
 	)
 	pb.RegisterWorkshopServiceServer(grpcServer, workshopHandler)
 
@@ -208,6 +220,30 @@ func run() error {
 		}
 	}()
 	log.Println("Session restart consumer started")
+
+	// Initialize workshop cache status consumer: consumes host-manager's install-time
+	// verify/cache-refresh outcomes (#2184, plan #2175 FR8/FR9/FR10) on the new
+	// status.host.*.workshop.cache routing key. Additive alongside (never replacing)
+	// workshopStatusHandler's existing status.workshop.installation.# consumption above,
+	// per NFR3.
+	log.Println("Setting up workshop cache status consumer...")
+	workshopCacheStatusConsumer, err := handlers.NewWorkshopCacheStatusConsumer(
+		repo.WorkshopCache,
+		rmqConn,
+		slog.Default(),
+	)
+	if err != nil {
+		return fmt.Errorf("failed to create workshop cache status consumer: %w", err)
+	}
+	defer workshopCacheStatusConsumer.Close()
+
+	// Start workshop cache status consumer in background
+	go func() {
+		if err := workshopCacheStatusConsumer.Start(ctx); err != nil {
+			log.Printf("Warning: Workshop cache status consumer stopped: %v", err)
+		}
+	}()
+	log.Println("Workshop cache status consumer started")
 
 	// Initialize pending restart reaper: the time-based stall bound for
 	// durable restart (#1732, Track B). Independent mechanism from the
@@ -259,6 +295,19 @@ func getEnv(key, defaultValue string) string {
 		return value
 	}
 	return defaultValue
+}
+
+func getEnvBool(key string, defaultValue bool) bool {
+	value := os.Getenv(key)
+	if value == "" {
+		return defaultValue
+	}
+	b, err := strconv.ParseBool(value)
+	if err != nil {
+		log.Printf("Warning: invalid bool for %s=%q, using default %v: %v", key, value, defaultValue, err)
+		return defaultValue
+	}
+	return b
 }
 
 func getEnvDuration(key string, defaultValue time.Duration) time.Duration {

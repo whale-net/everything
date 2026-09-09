@@ -3,6 +3,7 @@ package workshop
 import (
 	"context"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
@@ -65,6 +66,19 @@ func (m *MockWorkshopAddonRepository) GetByWorkshopID(ctx context.Context, gameI
 func (m *MockWorkshopAddonRepository) Delete(ctx context.Context, addonID int64) error {
 	args := m.Called(ctx, addonID)
 	return args.Error(0)
+}
+
+// GetByWorkshopIDAnyGame backs #2186's on-demand verify RPC (see
+// repository.go's WorkshopAddonRepository doc comment). Tests that don't
+// exercise VerifyCacheEntry never call .On(...) for it, so it's never
+// invoked -- only present so MockWorkshopAddonRepository keeps satisfying
+// the interface.
+func (m *MockWorkshopAddonRepository) GetByWorkshopIDAnyGame(ctx context.Context, workshopID string) (*manman.WorkshopAddonWithGame, error) {
+	args := m.Called(ctx, workshopID)
+	if args.Get(0) == nil {
+		return nil, args.Error(1)
+	}
+	return args.Get(0).(*manman.WorkshopAddonWithGame), args.Error(1)
 }
 
 // MockWorkshopInstallationRepository is a mock implementation of WorkshopInstallationRepository
@@ -215,6 +229,98 @@ func (m *MockWorkshopLibraryRepository) DetectCircularReference(ctx context.Cont
 	return args.Bool(0), args.Error(1)
 }
 
+// MockWorkshopBatchJobRepository is a mock implementation of
+// WorkshopBatchJobRepository (#2179, plan #2175, FR4).
+type MockWorkshopBatchJobRepository struct {
+	mock.Mock
+}
+
+func (m *MockWorkshopBatchJobRepository) CreateBatchJob(ctx context.Context, job *manman.WorkshopBatchJob) (*manman.WorkshopBatchJob, error) {
+	args := m.Called(ctx, job)
+	if args.Get(0) == nil {
+		return nil, args.Error(1)
+	}
+	return args.Get(0).(*manman.WorkshopBatchJob), args.Error(1)
+}
+
+func (m *MockWorkshopBatchJobRepository) CreateBatchJobItems(ctx context.Context, batchJobID int64, items []*manman.WorkshopBatchJobItem) error {
+	args := m.Called(ctx, batchJobID, items)
+	return args.Error(0)
+}
+
+func (m *MockWorkshopBatchJobRepository) UpdateBatchJobItemResult(ctx context.Context, batchJobItemID int64, status string, addonID *int64, errorMessage *string) error {
+	args := m.Called(ctx, batchJobItemID, status, addonID, errorMessage)
+	return args.Error(0)
+}
+
+func (m *MockWorkshopBatchJobRepository) UpdateBatchJobStatus(ctx context.Context, batchJobID int64, status string, succeeded, failed int) error {
+	args := m.Called(ctx, batchJobID, status, succeeded, failed)
+	return args.Error(0)
+}
+
+func (m *MockWorkshopBatchJobRepository) GetBatchJob(ctx context.Context, batchJobID int64) (*manman.WorkshopBatchJob, error) {
+	args := m.Called(ctx, batchJobID)
+	if args.Get(0) == nil {
+		return nil, args.Error(1)
+	}
+	return args.Get(0).(*manman.WorkshopBatchJob), args.Error(1)
+}
+
+func (m *MockWorkshopBatchJobRepository) ListBatchJobItems(ctx context.Context, batchJobID int64) ([]*manman.WorkshopBatchJobItem, error) {
+	args := m.Called(ctx, batchJobID)
+	if args.Get(0) == nil {
+		return nil, args.Error(1)
+	}
+	return args.Get(0).([]*manman.WorkshopBatchJobItem), args.Error(1)
+}
+
+func (m *MockWorkshopBatchJobRepository) ListBatchJobs(ctx context.Context, gameID int64, limit int) ([]*manman.WorkshopBatchJob, error) {
+	args := m.Called(ctx, gameID, limit)
+	if args.Get(0) == nil {
+		return nil, args.Error(1)
+	}
+	return args.Get(0).([]*manman.WorkshopBatchJob), args.Error(1)
+}
+
+// MockAddonPathPresetRepository is a mock implementation of AddonPathPresetRepository
+type MockAddonPathPresetRepository struct {
+	mock.Mock
+}
+
+func (m *MockAddonPathPresetRepository) Create(ctx context.Context, preset *manman.GameAddonPathPreset) (*manman.GameAddonPathPreset, error) {
+	args := m.Called(ctx, preset)
+	if args.Get(0) == nil {
+		return nil, args.Error(1)
+	}
+	return args.Get(0).(*manman.GameAddonPathPreset), args.Error(1)
+}
+
+func (m *MockAddonPathPresetRepository) Get(ctx context.Context, presetID int64) (*manman.GameAddonPathPreset, error) {
+	args := m.Called(ctx, presetID)
+	if args.Get(0) == nil {
+		return nil, args.Error(1)
+	}
+	return args.Get(0).(*manman.GameAddonPathPreset), args.Error(1)
+}
+
+func (m *MockAddonPathPresetRepository) ListByGame(ctx context.Context, gameID int64) ([]*manman.GameAddonPathPreset, error) {
+	args := m.Called(ctx, gameID)
+	if args.Get(0) == nil {
+		return nil, args.Error(1)
+	}
+	return args.Get(0).([]*manman.GameAddonPathPreset), args.Error(1)
+}
+
+func (m *MockAddonPathPresetRepository) Update(ctx context.Context, preset *manman.GameAddonPathPreset) error {
+	args := m.Called(ctx, preset)
+	return args.Error(0)
+}
+
+func (m *MockAddonPathPresetRepository) Delete(ctx context.Context, presetID int64) error {
+	args := m.Called(ctx, presetID)
+	return args.Error(0)
+}
+
 // MockWorkshopManager is a mock implementation of WorkshopManager
 type MockWorkshopManager struct {
 	mock.Mock
@@ -260,6 +366,155 @@ func (m *MockWorkshopManager) CreateAddon(ctx context.Context, addon *manman.Wor
 func (m *MockWorkshopManager) EnsureLibraryAddonsInstalled(ctx context.Context, sgcID int64) error {
 	args := m.Called(ctx, sgcID)
 	return args.Error(0)
+}
+
+func (m *MockWorkshopManager) BatchCreateAddons(ctx context.Context, gameID, libraryID int64, entries string, presetID int64) (*manman.WorkshopBatchJob, []*manman.WorkshopBatchJobItem, error) {
+	args := m.Called(ctx, gameID, libraryID, entries, presetID)
+	var job *manman.WorkshopBatchJob
+	if args.Get(0) != nil {
+		job = args.Get(0).(*manman.WorkshopBatchJob)
+	}
+	var items []*manman.WorkshopBatchJobItem
+	if args.Get(1) != nil {
+		items = args.Get(1).([]*manman.WorkshopBatchJobItem)
+	}
+	return job, items, args.Error(2)
+}
+
+func (m *MockWorkshopManager) AddCollectionToLibrary(ctx context.Context, gameID, libraryID int64, collectionInput string, presetID int64) (*manman.WorkshopBatchJob, int64, []*manman.WorkshopBatchJobItem, error) {
+	args := m.Called(ctx, gameID, libraryID, collectionInput, presetID)
+	var job *manman.WorkshopBatchJob
+	if args.Get(0) != nil {
+		job = args.Get(0).(*manman.WorkshopBatchJob)
+	}
+	var items []*manman.WorkshopBatchJobItem
+	if args.Get(2) != nil {
+		items = args.Get(2).([]*manman.WorkshopBatchJobItem)
+	}
+	return job, args.Get(1).(int64), items, args.Error(3)
+}
+
+// TestAddCollectionToLibrary tests the AddCollectionToLibrary RPC's request
+// validation and its delegation to WorkshopManager.AddCollectionToLibrary
+// (FR1, FR3): the handler validates game_id/library_id/preset_id and
+// otherwise treats partial per-item failure within the collection as a
+// normal (non-error) response, while a job-level error from the manager
+// (e.g. an unresolvable collection) surfaces as codes.Internal.
+func TestAddCollectionToLibrary(t *testing.T) {
+	tests := []struct {
+		name          string
+		request       *pb.AddCollectionToLibraryRequest
+		mockSetup     func(*MockWorkshopManager, *MockWorkshopLibraryRepository, *MockAddonPathPresetRepository)
+		expectedError codes.Code
+		checkResponse func(*testing.T, *pb.AddCollectionToLibraryResponse)
+	}{
+		{
+			name:          "missing game_id",
+			request:       &pb.AddCollectionToLibraryRequest{CollectionInput: "999999"},
+			mockSetup:     func(*MockWorkshopManager, *MockWorkshopLibraryRepository, *MockAddonPathPresetRepository) {},
+			expectedError: codes.InvalidArgument,
+		},
+		{
+			name:          "missing collection_input",
+			request:       &pb.AddCollectionToLibraryRequest{GameId: 1},
+			mockSetup:     func(*MockWorkshopManager, *MockWorkshopLibraryRepository, *MockAddonPathPresetRepository) {},
+			expectedError: codes.InvalidArgument,
+		},
+		{
+			name:    "library not found",
+			request: &pb.AddCollectionToLibraryRequest{GameId: 1, CollectionInput: "999999", LibraryId: 5},
+			mockSetup: func(m *MockWorkshopManager, l *MockWorkshopLibraryRepository, p *MockAddonPathPresetRepository) {
+				l.On("Get", mock.Anything, int64(5)).Return(nil, assert.AnError)
+			},
+			expectedError: codes.NotFound,
+		},
+		{
+			name:    "preset not found",
+			request: &pb.AddCollectionToLibraryRequest{GameId: 1, CollectionInput: "999999", PresetId: 9},
+			mockSetup: func(m *MockWorkshopManager, l *MockWorkshopLibraryRepository, p *MockAddonPathPresetRepository) {
+				p.On("Get", mock.Anything, int64(9)).Return(nil, assert.AnError)
+			},
+			expectedError: codes.NotFound,
+		},
+		{
+			name:    "manager-level error surfaces as Internal (e.g. unresolvable collection)",
+			request: &pb.AddCollectionToLibraryRequest{GameId: 1, CollectionInput: "000000"},
+			mockSetup: func(m *MockWorkshopManager, l *MockWorkshopLibraryRepository, p *MockAddonPathPresetRepository) {
+				m.On("AddCollectionToLibrary", mock.Anything, int64(1), int64(0), "000000", int64(0)).
+					Return(nil, int64(0), nil, assert.AnError)
+			},
+			expectedError: codes.Internal,
+		},
+		{
+			name:    "successful collection add with mixed per-item results",
+			request: &pb.AddCollectionToLibraryRequest{GameId: 1, CollectionInput: "999999", LibraryId: 5},
+			mockSetup: func(m *MockWorkshopManager, l *MockWorkshopLibraryRepository, p *MockAddonPathPresetRepository) {
+				l.On("Get", mock.Anything, int64(5)).Return(&manman.WorkshopLibrary{LibraryID: 5}, nil)
+				addonID := int64(10)
+				workshopID := "111111"
+				errMsg := "workshop item 404404: workshop item not found"
+				m.On("AddCollectionToLibrary", mock.Anything, int64(1), int64(5), "999999", int64(0)).
+					Return(&manman.WorkshopBatchJob{
+						BatchJobID:     2,
+						TotalItems:     2,
+						SucceededItems: 1,
+						FailedItems:    1,
+						Status:         "completed_with_errors",
+					}, int64(99), []*manman.WorkshopBatchJobItem{
+						{RawInput: "111111", WorkshopID: &workshopID, AddonID: &addonID, Status: "succeeded"},
+						{RawInput: "404404", Status: "failed", ErrorMessage: &errMsg},
+					}, nil)
+			},
+			expectedError: codes.OK,
+			checkResponse: func(t *testing.T, resp *pb.AddCollectionToLibraryResponse) {
+				assert.Equal(t, int64(2), resp.BatchJobId)
+				assert.Equal(t, int64(99), resp.CollectionAddonId)
+				assert.Equal(t, int32(2), resp.TotalItems)
+				assert.Equal(t, int32(1), resp.SucceededItems)
+				assert.Equal(t, int32(1), resp.FailedItems)
+				if assert.Len(t, resp.Results, 2) {
+					assert.Equal(t, "succeeded", resp.Results[0].Status)
+					assert.Equal(t, "111111", resp.Results[0].WorkshopId)
+					assert.Equal(t, int64(10), resp.Results[0].AddonId)
+					assert.Equal(t, "failed", resp.Results[1].Status)
+					assert.NotEmpty(t, resp.Results[1].ErrorMessage)
+				}
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			mockManager := new(MockWorkshopManager)
+			mockLibraryRepo := new(MockWorkshopLibraryRepository)
+			mockPresetRepo := new(MockAddonPathPresetRepository)
+			tt.mockSetup(mockManager, mockLibraryRepo, mockPresetRepo)
+
+			handler := &WorkshopServiceHandler{
+				workshopManager: mockManager,
+				libraryRepo:     mockLibraryRepo,
+				presetRepo:      mockPresetRepo,
+			}
+
+			resp, err := handler.AddCollectionToLibrary(context.Background(), tt.request)
+
+			if tt.expectedError != codes.OK {
+				assert.Error(t, err)
+				st, ok := status.FromError(err)
+				assert.True(t, ok)
+				assert.Equal(t, tt.expectedError, st.Code())
+			} else {
+				assert.NoError(t, err)
+				if tt.checkResponse != nil {
+					tt.checkResponse(t, resp)
+				}
+			}
+
+			mockManager.AssertExpectations(t)
+			mockLibraryRepo.AssertExpectations(t)
+			mockPresetRepo.AssertExpectations(t)
+		})
+	}
 }
 
 // TestInstallAddon tests the InstallAddon RPC
@@ -329,6 +584,116 @@ func TestInstallAddon(t *testing.T) {
 			}
 
 			mockManager.AssertExpectations(t)
+		})
+	}
+}
+
+// TestBatchCreateAddons tests the BatchCreateAddons RPC's request validation
+// and its delegation to WorkshopManager.BatchCreateAddons (FR2/FR3): the
+// handler validates game_id/library_id/preset_id and otherwise treats
+// partial per-item failure as a normal (non-error) response.
+func TestBatchCreateAddons(t *testing.T) {
+	tests := []struct {
+		name          string
+		request       *pb.BatchCreateAddonsRequest
+		mockSetup     func(*MockWorkshopManager, *MockWorkshopLibraryRepository, *MockAddonPathPresetRepository)
+		expectedError codes.Code
+		checkResponse func(*testing.T, *pb.BatchCreateAddonsResponse)
+	}{
+		{
+			name:          "missing game_id",
+			request:       &pb.BatchCreateAddonsRequest{Entries: "111111"},
+			mockSetup:     func(*MockWorkshopManager, *MockWorkshopLibraryRepository, *MockAddonPathPresetRepository) {},
+			expectedError: codes.InvalidArgument,
+		},
+		{
+			name:          "missing entries",
+			request:       &pb.BatchCreateAddonsRequest{GameId: 1},
+			mockSetup:     func(*MockWorkshopManager, *MockWorkshopLibraryRepository, *MockAddonPathPresetRepository) {},
+			expectedError: codes.InvalidArgument,
+		},
+		{
+			name:    "library not found",
+			request: &pb.BatchCreateAddonsRequest{GameId: 1, Entries: "111111", LibraryId: 5},
+			mockSetup: func(m *MockWorkshopManager, l *MockWorkshopLibraryRepository, p *MockAddonPathPresetRepository) {
+				l.On("Get", mock.Anything, int64(5)).Return(nil, assert.AnError)
+			},
+			expectedError: codes.NotFound,
+		},
+		{
+			name:    "preset not found",
+			request: &pb.BatchCreateAddonsRequest{GameId: 1, Entries: "111111", PresetId: 9},
+			mockSetup: func(m *MockWorkshopManager, l *MockWorkshopLibraryRepository, p *MockAddonPathPresetRepository) {
+				p.On("Get", mock.Anything, int64(9)).Return(nil, assert.AnError)
+			},
+			expectedError: codes.NotFound,
+		},
+		{
+			name:    "successful batch create with mixed per-item results",
+			request: &pb.BatchCreateAddonsRequest{GameId: 1, Entries: "111111\nbadline"},
+			mockSetup: func(m *MockWorkshopManager, l *MockWorkshopLibraryRepository, p *MockAddonPathPresetRepository) {
+				addonID := int64(10)
+				workshopID := "111111"
+				errMsg := "not a numeric Workshop ID or recognized Workshop URL"
+				m.On("BatchCreateAddons", mock.Anything, int64(1), int64(0), "111111\nbadline", int64(0)).
+					Return(&manman.WorkshopBatchJob{
+						BatchJobID:     1,
+						TotalItems:     2,
+						SucceededItems: 1,
+						FailedItems:    1,
+						Status:         "completed_with_errors",
+					}, []*manman.WorkshopBatchJobItem{
+						{RawInput: "111111", WorkshopID: &workshopID, AddonID: &addonID, Status: "succeeded"},
+						{RawInput: "badline", Status: "failed", ErrorMessage: &errMsg},
+					}, nil)
+			},
+			expectedError: codes.OK,
+			checkResponse: func(t *testing.T, resp *pb.BatchCreateAddonsResponse) {
+				assert.Equal(t, int64(1), resp.BatchJobId)
+				assert.Equal(t, int32(2), resp.TotalItems)
+				assert.Equal(t, int32(1), resp.SucceededItems)
+				assert.Equal(t, int32(1), resp.FailedItems)
+				if assert.Len(t, resp.Results, 2) {
+					assert.Equal(t, "succeeded", resp.Results[0].Status)
+					assert.Equal(t, "111111", resp.Results[0].WorkshopId)
+					assert.Equal(t, int64(10), resp.Results[0].AddonId)
+					assert.Equal(t, "failed", resp.Results[1].Status)
+					assert.NotEmpty(t, resp.Results[1].ErrorMessage)
+				}
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			mockManager := new(MockWorkshopManager)
+			mockLibraryRepo := new(MockWorkshopLibraryRepository)
+			mockPresetRepo := new(MockAddonPathPresetRepository)
+			tt.mockSetup(mockManager, mockLibraryRepo, mockPresetRepo)
+
+			handler := &WorkshopServiceHandler{
+				workshopManager: mockManager,
+				libraryRepo:     mockLibraryRepo,
+				presetRepo:      mockPresetRepo,
+			}
+
+			resp, err := handler.BatchCreateAddons(context.Background(), tt.request)
+
+			if tt.expectedError != codes.OK {
+				assert.Error(t, err)
+				st, ok := status.FromError(err)
+				assert.True(t, ok)
+				assert.Equal(t, tt.expectedError, st.Code())
+			} else {
+				assert.NoError(t, err)
+				if tt.checkResponse != nil {
+					tt.checkResponse(t, resp)
+				}
+			}
+
+			mockManager.AssertExpectations(t)
+			mockLibraryRepo.AssertExpectations(t)
+			mockPresetRepo.AssertExpectations(t)
 		})
 	}
 }
@@ -1092,6 +1457,194 @@ func TestFetchAddonMetadata(t *testing.T) {
 			}
 
 			mockManager.AssertExpectations(t)
+		})
+	}
+}
+
+// TestGetBatchJob covers the GetBatchJob RPC (#2179, plan #2175, FR4):
+// items must reach the response in the order the repository returns them
+// (display_order is the repository's responsibility -- ListBatchJobItems
+// -- this test guards that the handler does not reorder or drop them), a
+// mixed-status job's aggregate counts must pass through unchanged, and an
+// unknown batch_job_id must surface as codes.NotFound.
+func TestGetBatchJob(t *testing.T) {
+	now := time.Now()
+
+	tests := []struct {
+		name          string
+		request       *pb.GetBatchJobRequest
+		mockSetup     func(*MockWorkshopBatchJobRepository)
+		expectedError codes.Code
+		checkResponse func(*testing.T, *pb.GetBatchJobResponse)
+	}{
+		{
+			name: "items returned in display_order, mixed-status counts pass through",
+			request: &pb.GetBatchJobRequest{
+				BatchJobId: 1,
+			},
+			mockSetup: func(m *MockWorkshopBatchJobRepository) {
+				libraryID := int64(9)
+				sourceInput := "collection paste"
+				m.On("GetBatchJob", mock.Anything, int64(1)).
+					Return(&manman.WorkshopBatchJob{
+						BatchJobID:     1,
+						JobType:        "batch_create",
+						GameID:         1,
+						LibraryID:      &libraryID,
+						SourceInput:    &sourceInput,
+						Status:         "completed_with_errors",
+						TotalItems:     3,
+						SucceededItems: 2,
+						FailedItems:    1,
+						CreatedAt:      now,
+						UpdatedAt:      now,
+					}, nil)
+
+				workshopID1 := "111"
+				addonID1 := int64(101)
+				errMsg := "workshop item not found"
+				m.On("ListBatchJobItems", mock.Anything, int64(1)).
+					Return([]*manman.WorkshopBatchJobItem{
+						{BatchJobItemID: 1, BatchJobID: 1, RawInput: "111", WorkshopID: &workshopID1, AddonID: &addonID1, Status: "succeeded", DisplayOrder: 0},
+						{BatchJobItemID: 2, BatchJobID: 1, RawInput: "222", Status: "failed", ErrorMessage: &errMsg, DisplayOrder: 1},
+						{BatchJobItemID: 3, BatchJobID: 1, RawInput: "333", Status: "succeeded", DisplayOrder: 2},
+					}, nil)
+			},
+			expectedError: codes.OK,
+			checkResponse: func(t *testing.T, resp *pb.GetBatchJobResponse) {
+				assert.NotNil(t, resp.Job)
+				assert.Equal(t, "completed_with_errors", resp.Job.Status)
+				assert.Equal(t, int32(3), resp.Job.TotalItems)
+				assert.Equal(t, int32(2), resp.Job.SucceededItems)
+				assert.Equal(t, int32(1), resp.Job.FailedItems)
+
+				if assert.Len(t, resp.Items, 3) {
+					assert.Equal(t, "111", resp.Items[0].RawInput)
+					assert.Equal(t, "succeeded", resp.Items[0].Status)
+					assert.Equal(t, "222", resp.Items[1].RawInput)
+					assert.Equal(t, "failed", resp.Items[1].Status)
+					assert.Equal(t, "workshop item not found", resp.Items[1].ErrorMessage)
+					assert.Equal(t, "333", resp.Items[2].RawInput)
+				}
+			},
+		},
+		{
+			name: "missing batch_job_id",
+			request: &pb.GetBatchJobRequest{
+				BatchJobId: 0,
+			},
+			mockSetup:     func(m *MockWorkshopBatchJobRepository) {},
+			expectedError: codes.InvalidArgument,
+		},
+		{
+			name: "unknown batch_job_id",
+			request: &pb.GetBatchJobRequest{
+				BatchJobId: 999,
+			},
+			mockSetup: func(m *MockWorkshopBatchJobRepository) {
+				m.On("GetBatchJob", mock.Anything, int64(999)).
+					Return(nil, assert.AnError)
+			},
+			expectedError: codes.NotFound,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			mockRepo := new(MockWorkshopBatchJobRepository)
+			tt.mockSetup(mockRepo)
+
+			handler := &WorkshopServiceHandler{
+				batchJobRepo: mockRepo,
+			}
+
+			resp, err := handler.GetBatchJob(context.Background(), tt.request)
+
+			if tt.expectedError != codes.OK {
+				assert.Error(t, err)
+				st, ok := status.FromError(err)
+				assert.True(t, ok)
+				assert.Equal(t, tt.expectedError, st.Code())
+			} else {
+				assert.NoError(t, err)
+				if tt.checkResponse != nil {
+					tt.checkResponse(t, resp)
+				}
+			}
+
+			mockRepo.AssertExpectations(t)
+		})
+	}
+}
+
+// TestListBatchJobs covers the ListBatchJobs RPC (#2179, plan #2175, FR4):
+// the requested limit reaches the repository, and jobs come back in the
+// order the repository returns them (newest-first is the repository's
+// ORDER BY -- this test guards that the handler passes that ordering
+// through unchanged rather than re-sorting or truncating).
+func TestListBatchJobs(t *testing.T) {
+	tests := []struct {
+		name          string
+		request       *pb.ListBatchJobsRequest
+		mockSetup     func(*MockWorkshopBatchJobRepository)
+		expectedError codes.Code
+		checkResponse func(*testing.T, *pb.ListBatchJobsResponse)
+	}{
+		{
+			name: "respects limit and preserves newest-first order",
+			request: &pb.ListBatchJobsRequest{
+				GameId: 1,
+				Limit:  2,
+			},
+			mockSetup: func(m *MockWorkshopBatchJobRepository) {
+				m.On("ListBatchJobs", mock.Anything, int64(1), 2).
+					Return([]*manman.WorkshopBatchJob{
+						{BatchJobID: 5, GameID: 1, JobType: "collection_add", Status: "completed"},
+						{BatchJobID: 4, GameID: 1, JobType: "batch_create", Status: "completed"},
+					}, nil)
+			},
+			expectedError: codes.OK,
+			checkResponse: func(t *testing.T, resp *pb.ListBatchJobsResponse) {
+				if assert.Len(t, resp.Jobs, 2) {
+					assert.Equal(t, int64(5), resp.Jobs[0].BatchJobId)
+					assert.Equal(t, int64(4), resp.Jobs[1].BatchJobId)
+				}
+			},
+		},
+		{
+			name: "missing game_id",
+			request: &pb.ListBatchJobsRequest{
+				Limit: 10,
+			},
+			mockSetup:     func(m *MockWorkshopBatchJobRepository) {},
+			expectedError: codes.InvalidArgument,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			mockRepo := new(MockWorkshopBatchJobRepository)
+			tt.mockSetup(mockRepo)
+
+			handler := &WorkshopServiceHandler{
+				batchJobRepo: mockRepo,
+			}
+
+			resp, err := handler.ListBatchJobs(context.Background(), tt.request)
+
+			if tt.expectedError != codes.OK {
+				assert.Error(t, err)
+				st, ok := status.FromError(err)
+				assert.True(t, ok)
+				assert.Equal(t, tt.expectedError, st.Code())
+			} else {
+				assert.NoError(t, err)
+				if tt.checkResponse != nil {
+					tt.checkResponse(t, resp)
+				}
+			}
+
+			mockRepo.AssertExpectations(t)
 		})
 	}
 }

@@ -3,7 +3,9 @@ package handlers
 import (
 	"context"
 	"errors"
+	"fmt"
 	"log/slog"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -202,6 +204,21 @@ func (h *SessionHandler) StartSession(ctx context.Context, req *pb.StartSessionR
 		return nil, status.Errorf(codes.Internal, "failed to fetch game config: %v", err)
 	}
 
+	// FR5: render the effective environment from the SAME GameConfig snapshot
+	// that populates env_template, merged with deployment-level env_vars
+	// overrides (Option B, DESIGN_SGC_ENV_OVERRIDES.md). A render failure
+	// fails the start legibly here -- synchronous error, session marked
+	// crashed -- rather than publishing a template-only command.
+	renderedEnv, err := h.renderStartSessionEnv(ctx, sgc, gc)
+	if err != nil {
+		slog.Error("failed to render session environment", "session_id", session.SessionID, "sgc_id", sgc.SGCID, "error", err)
+		session.Status = manman.SessionStatusCrashed
+		if uerr := h.sessionRepo.Update(ctx, session); uerr != nil {
+			slog.Error("failed to mark session crashed after env render failure", "session_id", session.SessionID, "error", uerr)
+		}
+		return nil, status.Errorf(codes.Internal, "failed to render session environment: %v", err)
+	}
+
 	// If force=true, deallocate ports held by crashed/stopped sessions for this SGC
 	if internalForce {
 		// Find all terminal sessions (crashed, stopped, lost) for this SGC
@@ -260,7 +277,7 @@ func (h *SessionHandler) StartSession(ctx context.Context, req *pb.StartSessionR
 
 	// Publish start session command to RabbitMQ
 	if h.publisher != nil {
-		cmd := buildStartSessionCommand(session, sgc, gc, internalForce, volumes)
+		cmd := buildStartSessionCommand(session, sgc, gc, internalForce, volumes, renderedEnv)
 		// Short timeout: host manager replies immediately on receipt (work runs async).
 		if err := h.publisher.PublishStartSession(ctx, sgc.ServerID, cmd, 30*time.Second); err != nil {
 			slog.Warn("failed to publish start session command", "session_id", session.SessionID, "server_id", sgc.ServerID, "error", err)
@@ -495,8 +512,11 @@ func pendingRestartToProto(pr *manman.PendingRestart) *pb.PendingRestartState {
 	return state
 }
 
-// buildStartSessionCommand converts database models to RabbitMQ message format
-func buildStartSessionCommand(session *manman.Session, sgc *manman.ServerGameConfig, gc *manman.GameConfig, force bool, volumes []*manman.GameConfigVolume) map[string]interface{} {
+// buildStartSessionCommand converts database models to RabbitMQ message format.
+// renderedEnv is the server-rendered effective environment (FR5): non-nil is
+// published as top-level rendered_env and is authoritative for the host (even
+// when empty); nil is published as absent so the host falls back to env_template.
+func buildStartSessionCommand(session *manman.Session, sgc *manman.ServerGameConfig, gc *manman.GameConfig, force bool, volumes []*manman.GameConfigVolume, renderedEnv map[string]string) map[string]interface{} {
 	// Build game config message
 	commandArray := jsonbToStringArray(gc.Command)
 	slog.Info("building start session command",
@@ -540,13 +560,95 @@ func buildStartSessionCommand(session *manman.Session, sgc *manman.ServerGameCon
 		"port_bindings": convertPortBindingsToMessage(sgc.PortBindings),
 	}
 
-	return map[string]interface{}{
+	cmd := map[string]interface{}{
 		"session_id":         session.SessionID,
 		"sgc_id":             sgc.SGCID,
 		"game_config":        gameConfig,
 		"server_game_config": serverGameConfig,
 		"force":              force,
 	}
+	if renderedEnv != nil {
+		cmd["rendered_env"] = renderedEnv
+	}
+	return cmd
+}
+
+// renderStartSessionEnv fetches deployment-level env_vars overrides for this
+// deployment (game_config and server_game_config levels) and merges them over
+// the GameConfig env template fetched in this same request. Merge order (later
+// wins): env_template → game_config patches → server_game_config patches
+// (Option B in manmanv2/docs/DESIGN_SGC_ENV_OVERRIDES.md). The result is
+// always non-nil: an empty rendered env is authoritative-empty, not absent.
+func (h *SessionHandler) renderStartSessionEnv(ctx context.Context, sgc *manman.ServerGameConfig, gc *manman.GameConfig) (map[string]string, error) {
+	strategies, err := h.repo.ConfigurationStrategies.ListByGame(ctx, gc.GameID)
+	if err != nil {
+		return nil, fmt.Errorf("failed to list configuration strategies: %w", err)
+	}
+	envVarStrategies := make(map[int64]bool)
+	for _, s := range strategies {
+		if s.StrategyType == manman.StrategyTypeEnvVars {
+			envVarStrategies[s.StrategyID] = true
+		}
+	}
+
+	// Fetch patches per level (all strategies), keeping only env_vars-strategy
+	// patches, ordered by patch_order (lower = earlier = lower priority).
+	var contents []string
+	for _, level := range []struct {
+		name     string
+		entityID int64
+	}{{manman.PatchLevelGameConfig, gc.ConfigID}, {manman.PatchLevelServerGameConfig, sgc.SGCID}} {
+		levelName := level.name
+		patches, err := h.repo.ConfigurationPatches.List(ctx, nil, &levelName, &level.entityID)
+		if err != nil {
+			return nil, fmt.Errorf("failed to list %s env patches: %w", level.name, err)
+		}
+		sort.Slice(patches, func(i, j int) bool { return patches[i].PatchOrder < patches[j].PatchOrder })
+		for _, p := range patches {
+			if !envVarStrategies[p.StrategyID] {
+				continue
+			}
+			if p.PatchContent == nil {
+				continue
+			}
+			contents = append(contents, *p.PatchContent)
+		}
+	}
+
+	rendered, err := renderEffectiveEnv(jsonbToMap(gc.EnvTemplate), contents)
+	if err != nil {
+		return nil, err
+	}
+	slog.Debug("rendered session environment",
+		"sgc_id", sgc.SGCID,
+		"template_vars", len(jsonbToMap(gc.EnvTemplate)), "override_patches", len(contents), "rendered_vars", len(rendered))
+	return rendered, nil
+}
+
+// renderEffectiveEnv merges properties-format (KEY=VALUE lines) override patch
+// contents over the env template in order (later wins). Blank lines and #
+// comments are skipped; a line without "=" or with an empty key is a render
+// error (legible failure per FR5).
+func renderEffectiveEnv(envTemplate map[string]string, patchContents []string) (map[string]string, error) {
+	rendered := make(map[string]string, len(envTemplate))
+	for k, v := range envTemplate {
+		rendered[k] = v
+	}
+	for _, content := range patchContents {
+		for _, line := range strings.Split(content, "\n") {
+			line = strings.TrimSpace(line)
+			if line == "" || strings.HasPrefix(line, "#") {
+				continue
+			}
+			key, value, ok := strings.Cut(line, "=")
+			key = strings.TrimSpace(key)
+			if !ok || key == "" {
+				return nil, fmt.Errorf("invalid env override line %q: expected KEY=VALUE", line)
+			}
+			rendered[key] = strings.TrimSpace(value)
+		}
+	}
+	return rendered, nil
 }
 
 // convertPortBindingsToMessage converts JSONB port bindings to RabbitMQ message format

@@ -74,6 +74,11 @@ message Server {
   string environment = 5;  // Optional: deployment environment (dev, staging, prod, etc.)
   bool is_default = 6;  // True if this is the default server
   string host_public_address = 7;  // Optional: publicly reachable host address; empty when unset
+  // FR12 (task #2095): allowed host-port ranges for this server, reusing
+  // the PortRange shape additively. Empty = host-port assignment stays
+  // unconstrained (today's behavior, SB-1.2). Enforcement lives in the
+  // allocation path (dependent task), not here.
+  repeated PortRange allowed_port_ranges = 8;
 }
 
 // Game represents a game definition (e.g., Minecraft, Valheim)
@@ -192,6 +197,8 @@ message ConfigurationPatch {
   int64 volume_id = 7;  // Optional FK to game_config_volumes
   string path_override = 8;  // Optional relative path override
   int32 patch_order = 9;  // Application order (lower = earlier = lower priority)
+  int64 created_at = 10;  // Unix timestamp (persisted in DB, surfaced for env edit timing)
+  int64 updated_at = 11;  // Unix timestamp of the last saved edit
 }
 
 // PatchLayer shows one layer of configuration patches
