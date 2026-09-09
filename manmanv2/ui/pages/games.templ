@@ -3,68 +3,137 @@ package pages
 import (
 	"fmt"
 
-	manmanpb "github.com/whale-net/everything/manmanv2/protos"
+	"github.com/whale-net/everything/libs/go/htmxui"
 	"github.com/whale-net/everything/manmanv2/ui/components"
 )
 
-templ Games(layout components.LayoutData, games []*manmanpb.Game) {
-	@components.Layout(layout) {
-		@components.HeroHeader("Games", "Manage game configurations and deployments") {
+// GamesPageData drives the Games page's flat list (root plan #2266, task
+// #2270 -- FR4, FR5, NFR7, WD1, WD6): one row per game, expanding in
+// place with no server round-trip.
+//
+// handleGames assembles Games from a constant number of fleet-wide list
+// calls (games, game configs, deployments, servers, live sessions) joined
+// in the UI (NFR7) -- see handlers_games.go's doc comment on that join.
+// This template only renders what it is given and issues no request of
+// its own: expansion is a client-side disclosure of already-fetched data
+// (FR4), never a per-row fetch.
+type GamesPageData struct {
+	Layout components.LayoutData
+	Games  []GameRow
+	// ExpandGameID is an entry-point hint (spec amendment A1; the
+	// /sgc/<id> -> /games?expand=<game_id> migration task): the row for
+	// this game starts expanded on first render. Zero means none. An
+	// unknown or stale value (no matching GameRow) is silently ignored,
+	// never an error -- see gameRowExpanded below. Expanding or
+	// collapsing rows client-side never writes back to this or the URL:
+	// the page URL stays /games throughout (FR4).
+	ExpandGameID int64
+}
+
+// GameRow is one collapsed/expandable row (FR5). Deliberately excludes
+// player count and "last played" (WD1) and any aggregate rollup string
+// (WD6) -- those are documented, intentional divergences from
+// 90-v2-games, not gaps to fill in later.
+type GameRow struct {
+	GameID int64
+	Name   string
+	// RunState is the rollup across this game's deployments, derived
+	// from components.ComputeDeploymentStatus(components.LatestSession(...))
+	// per deployment -- never from ServerGameConfig.status, which is the
+	// active/inactive lifecycle flag and means something else entirely
+	// (see the ground-truth table on issue #2270).
+	RunState components.DeploymentStatus
+	// Connect is the shared connect-address view (#2268): a copyable
+	// host:port control, or the shared unavailable state -- never a
+	// blank (AC2).
+	Connect components.ConnectAddressView
+
+	// Deployments and Configs populate the expanded row's Deployments
+	// and Configurations sections. This task (#2270) leaves them
+	// unpopulated -- the expanded container below renders clearly-marked
+	// empty sub-containers with stable ids -- so a follow-up task can
+	// fill each in additively without touching this page's shell.
+	Deployments []DeploymentRowView
+	Configs     []ConfigRowView
+}
+
+// DeploymentRowView is a placeholder for the expanded row's Deployments
+// section. Stubbed by #2270; a follow-up task defines its fields and
+// rendering.
+type DeploymentRowView struct{}
+
+// ConfigRowView is a placeholder for the expanded row's Configurations
+// section. Stubbed by #2270; a follow-up task defines its fields and
+// rendering.
+type ConfigRowView struct{}
+
+// gameRowExpanded reports whether row should start expanded per
+// GamesPageData.ExpandGameID (A1): true only on an exact GameID match, so
+// a zero, unknown, or stale ExpandGameID matches nothing and the page
+// renders normally with no row expanded (never an error).
+func gameRowExpanded(data GamesPageData, row GameRow) bool {
+	return data.ExpandGameID != 0 && data.ExpandGameID == row.GameID
+}
+
+templ Games(data GamesPageData) {
+	@components.Layout(data.Layout) {
+		<style>
+			[x-cloak] { display: none !important; }
+		</style>
+		@components.HeroHeader("Games", "Status and connect at a glance — expand a game for deployments, configurations, and workshop libraries") {
 			<a href="/games/new" class="btn bg-base-100 text-primary hover:bg-base-200 border-none shadow-md">
 				+ Create New Game
 			</a>
 		}
-		if len(games) > 0 {
-			@components.Table() {
-				<thead>
-					<tr>
-						<th>Name</th>
-						<th>Steam App ID</th>
-						<th>Genre</th>
-						<th>Publisher</th>
-						<th>Tags</th>
-						<th class="text-right">Actions</th>
-					</tr>
-				</thead>
-				<tbody>
-					for _, game := range games {
-						<tr class="hover">
-							<td>
-								<a href={ templ.URL(fmt.Sprintf("/games/%d", game.GameId)) } class="link link-primary text-sm font-medium">
-									{ game.Name }
-								</a>
-							</td>
-							<td class="text-sm">{ game.SteamAppId }</td>
-							<td class="text-sm">
-								if game.Metadata != nil {
-									{ game.Metadata.Genre }
-								}
-							</td>
-							<td class="text-sm">
-								if game.Metadata != nil {
-									{ game.Metadata.Publisher }
-								}
-							</td>
-							<td>
-								<div class="flex flex-wrap gap-1">
-									if game.Metadata != nil {
-										for _, tag := range game.Metadata.Tags {
-											<span class="badge badge-neutral badge-soft badge-sm">
-												{ tag }
-											</span>
-										}
-									}
-								</div>
-							</td>
-							<td class="text-right text-sm font-medium">
-								<a href={ templ.URL(fmt.Sprintf("/games/%d", game.GameId)) } class="btn btn-primary btn-sm">View</a>
-							</td>
-						</tr>
-					}
-				</tbody>
-			}
+		if len(data.Games) > 0 {
+			<div class="flex flex-col gap-2">
+				for _, row := range data.Games {
+					@gameRow(row, gameRowExpanded(data, row))
+				}
+			</div>
 		} else {
 			@components.EmptyState("No games found", "Get started by creating your first game!", "Create Game", "/games/new")
 		}
 	}
+}
+
+// gameRow renders one flat-list row (FR5) with client-side-only
+// expansion (FR4): "expanded" is an Alpine.js flag toggled by clicking
+// the row header -- no hx-get, no per-row fetch, and the page URL never
+// changes. startExpanded seeds the Alpine state from
+// GamesPageData.ExpandGameID on first render only; subsequent
+// expand/collapse clicks are pure client state.
+templ gameRow(row GameRow, startExpanded bool) {
+	<div
+		id={ fmt.Sprintf("game-row-%d", row.GameID) }
+		x-data={ fmt.Sprintf("{ expanded: %t }", startExpanded) }
+		class="card bg-base-100 border border-base-300 shadow-sm overflow-hidden"
+	>
+		<button
+			type="button"
+			@click="expanded = !expanded"
+			class="w-full flex justify-between items-center gap-4 p-4 hover:bg-base-200 transition-colors text-left"
+		>
+			<span class="font-medium text-base-content">{ row.Name }</span>
+			<span class="flex items-center gap-3">
+				@htmxui.Badge(deploymentStatusLabel(row.RunState), statusBadgeVariant(string(row.RunState)), htmxui.BadgeSizeMD, true, nil)
+				@components.ConnectAddressDisplay(row.Connect)
+				<svg :class="expanded ? 'rotate-180' : ''" class="w-5 h-5 text-base-content/60 transition-transform shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+					<path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7"></path>
+				</svg>
+			</span>
+		</button>
+		<!--
+			Expanded row shell (FR4: at most one nested panel level).
+			Deployments, Configurations, and Workshop Libraries render
+			here, one clearly-marked empty container per section with a
+			stable id, so the follow-up task that fills them in is purely
+			additive to this shell.
+		-->
+		<div id={ fmt.Sprintf("game-expand-%d", row.GameID) } x-show="expanded" x-cloak class="border-t border-base-300 p-4 flex flex-col gap-4">
+			<div id={ fmt.Sprintf("game-deployments-%d", row.GameID) }></div>
+			<div id={ fmt.Sprintf("game-configs-%d", row.GameID) }></div>
+			<div id={ fmt.Sprintf("game-workshop-%d", row.GameID) }></div>
+		</div>
+	</div>
 }
