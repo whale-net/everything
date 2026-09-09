@@ -65,6 +65,28 @@ func statusConnectSection(t *testing.T, body string) string {
 	return body[start : start+end]
 }
 
+// assertDelegatesToConnectAddressDisplay asserts the section's address
+// markup came from components.ConnectAddressDisplay rather than a
+// hand-rolled duplicate (the defect the fix commit on this issue
+// corrected): the copy-address control and its title/icon only exist in
+// ConnectAddressDisplay's own template (connect_address.templ), so their
+// presence here proves the delegation actually happened. Matching only the
+// bare "host:port" text (as the assertions above already do) would still
+// pass against a hand-rolled <ul>/<li> that duplicated ConnectAddressDisplay's
+// output without calling it, which is exactly the gap this guards.
+func assertDelegatesToConnectAddressDisplay(t *testing.T, section string) {
+	t.Helper()
+	if !strings.Contains(section, `title="Copy connect address"`) {
+		t.Errorf("expected the address to render via components.ConnectAddressDisplay's copy control, got section %q", section)
+	}
+	if !strings.Contains(section, "⧉") {
+		t.Errorf("expected components.ConnectAddressDisplay's copy icon, got section %q", section)
+	}
+	if !strings.Contains(section, `onclick="__templ_copyConnectAddress_`) {
+		t.Errorf("expected the copy button wired to components.ConnectAddressDisplay's copyConnectAddress script, got section %q", section)
+	}
+}
+
 // --- 1. running + configured + one port binding ----------------------------
 
 func TestSGCDetail_RunningConfigured_AddressVisibleNoInteraction(t *testing.T) {
@@ -91,6 +113,7 @@ func TestSGCDetail_RunningConfigured_AddressVisibleNoInteraction(t *testing.T) {
 	if !strings.Contains(section, "Running") {
 		t.Errorf("expected the Running status label, got section %q", section)
 	}
+	assertDelegatesToConnectAddressDisplay(t, section)
 }
 
 // --- 2. running + configured + three port bindings --------------------------
@@ -117,6 +140,7 @@ func TestSGCDetail_RunningConfigured_MultipleAddresses(t *testing.T) {
 			t.Errorf("expected %q to render, got section %q", want, section)
 		}
 	}
+	assertDelegatesToConnectAddressDisplay(t, section)
 }
 
 // --- 3. stopped ("crashed") + configured address ----------------------------
@@ -155,6 +179,7 @@ func TestSGCDetail_StoppedConfigured_AddressGatedBehindReveal(t *testing.T) {
 	if !strings.Contains(section, "Show last-known connect address") {
 		t.Errorf("expected the reveal control's label, got section %q", section)
 	}
+	assertDelegatesToConnectAddressDisplay(t, section)
 }
 
 // --- 4. empty host_public_address (any status) -------------------------------
@@ -187,6 +212,9 @@ func TestSGCDetail_NoHostPublicAddress_RendersUnavailable(t *testing.T) {
 			}
 			if strings.Contains(section, "<code") {
 				t.Errorf("expected no address <code> element when unavailable, got section %q", section)
+			}
+			if strings.Contains(section, "Copy connect address") {
+				t.Errorf("expected no copy-address control when unavailable, got section %q", section)
 			}
 		})
 	}

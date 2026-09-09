@@ -1,10 +1,25 @@
 package components
 
 import (
+	"context"
+	"strings"
 	"testing"
 
 	manmanpb "github.com/whale-net/everything/manmanv2/protos"
 )
+
+// renderConnectAddressDisplay renders ConnectAddressDisplay directly
+// (mirrors renderLiveRegion in live_indicator_test.go), so this component's
+// own markup contract -- the copyable address control and the unavailable
+// message -- is guarded independently of any page that embeds it.
+func renderConnectAddressDisplay(t *testing.T, view ConnectAddressView) string {
+	t.Helper()
+	var buf strings.Builder
+	if err := ConnectAddressDisplay(view).Render(context.Background(), &buf); err != nil {
+		t.Fatalf("ConnectAddressDisplay render failed: %v", err)
+	}
+	return buf.String()
+}
 
 // TestBuildConnectAddressView covers the task's connect_address_test.go
 // table: resolvable address(es) yield Unavailable == false with the
@@ -83,5 +98,58 @@ func TestBuildConnectAddressView_GetServerFailureCollapsesToUnavailable(t *testi
 	}
 	if len(view.Addresses) != 0 {
 		t.Errorf("BuildConnectAddressView(GetServer-failure host, bindings).Addresses = %+v, want empty", view.Addresses)
+	}
+}
+
+// TestConnectAddressDisplay_RendersCopyableAddresses guards
+// ConnectAddressDisplay's own markup contract: each address renders as a
+// <code> element plus a copy control wired to the copyConnectAddress
+// script, not just the bare address/protocol text. This is the specific
+// markup sgc_detail.templ's fix commit started delegating to instead of
+// hand-rolling; a caller that reverted to a hand-rolled <ul>/<li> would
+// still match the address/protocol substrings sgc_detail_status_connect_test.go
+// asserts, but would never produce the copy button/script this test pins,
+// which is why that page-level test also asserts these markers (see
+// sgc_detail_status_connect_test.go).
+func TestConnectAddressDisplay_RendersCopyableAddresses(t *testing.T) {
+	html := renderConnectAddressDisplay(t, ConnectAddressView{
+		Addresses: []ConnectAddress{
+			{Address: "play.example.com:25565", Protocol: "TCP"},
+			{Address: "play.example.com:19132", Protocol: "UDP"},
+		},
+	})
+
+	for _, want := range []string{"play.example.com:25565", "play.example.com:19132"} {
+		if !strings.Contains(html, want) {
+			t.Errorf("expected %q to render, got %q", want, html)
+		}
+	}
+	if !strings.Contains(html, `title="Copy connect address"`) {
+		t.Errorf("expected a copy-address control, got %q", html)
+	}
+	if !strings.Contains(html, "⧉") {
+		t.Errorf("expected the copy icon, got %q", html)
+	}
+	if !strings.Contains(html, `onclick="__templ_copyConnectAddress_`) {
+		t.Errorf("expected the copy button wired to the copyConnectAddress script, got %q", html)
+	}
+	if strings.Contains(html, "Connect address unavailable") {
+		t.Errorf("expected no unavailable message when addresses are present, got %q", html)
+	}
+}
+
+// TestConnectAddressDisplay_Unavailable guards the unavailable branch:
+// no address markup or copy control renders, only the existing message.
+func TestConnectAddressDisplay_Unavailable(t *testing.T) {
+	html := renderConnectAddressDisplay(t, ConnectAddressView{Unavailable: true})
+
+	if !strings.Contains(html, "Connect address unavailable") {
+		t.Errorf("expected the unavailable message, got %q", html)
+	}
+	if strings.Contains(html, "<code") {
+		t.Errorf("expected no address <code> element when unavailable, got %q", html)
+	}
+	if strings.Contains(html, "Copy connect address") {
+		t.Errorf("expected no copy control when unavailable, got %q", html)
 	}
 }
