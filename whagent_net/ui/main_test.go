@@ -209,8 +209,8 @@ func TestSetupRoutes_OnlyExplicitPublicRoutesReachableUnauthenticated(t *testing
 //
 // Red/green discipline (verified by hand, then reverted): temporarily
 // registering "/" outside RequireAuthFunc/WithAccessToken in setupRoutes
-// (i.e. `mux.HandleFunc("/", app.handleIndex)`) made this test fail --
-// the handler ran unauthenticated instead of redirecting. Restoring the
+// (i.e. `mux.HandleFunc("/", app.handleSessionList)`) made this test fail
+// -- the handler ran unauthenticated instead of redirecting. Restoring the
 // RequireAuthFunc(WithAccessToken(...)) wrapping made it pass again.
 func TestSetupRoutes_UnauthenticatedIndexRequestRedirectsToLogin(t *testing.T) {
 	app := &App{auth: newTestOIDCAuthenticator(t), mcpProvider: newTestMCPProvider(t)}

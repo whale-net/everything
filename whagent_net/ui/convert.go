@@ -75,6 +75,45 @@ func subjectKindString(k whagentpb.SubjectKind) string {
 	}
 }
 
+// sessionStateFromString is sessionStateString's reverse (GET /sessions'
+// `state` filter, FR3/C15, issue #2247): ok is false for any string other
+// than the six lowercase state values sessionStateString emits -- callers
+// treat "" (unset) as a separate case before ever calling this, so
+// "unspecified" is deliberately not a recognized input here.
+func sessionStateFromString(s string) (state whagentpb.SessionState, ok bool) {
+	switch s {
+	case "running":
+		return whagentpb.SessionState_SESSION_STATE_RUNNING, true
+	case "awaiting_input":
+		return whagentpb.SessionState_SESSION_STATE_AWAITING_INPUT, true
+	case "done":
+		return whagentpb.SessionState_SESSION_STATE_DONE, true
+	case "stopped":
+		return whagentpb.SessionState_SESSION_STATE_STOPPED, true
+	case "failed":
+		return whagentpb.SessionState_SESSION_STATE_FAILED, true
+	case "capped":
+		return whagentpb.SessionState_SESSION_STATE_CAPPED, true
+	default:
+		return whagentpb.SessionState_SESSION_STATE_UNSPECIFIED, false
+	}
+}
+
+// subjectKindFromString is subjectKindString's reverse (GET /sessions'
+// `started_by_kind` filter, FR3/NFR3, issue #2247): ok is false for any
+// string other than "human"/"service" -- see sessionStateFromString's doc
+// comment for why "" and "unspecified" are both rejected here.
+func subjectKindFromString(s string) (kind whagentpb.SubjectKind, ok bool) {
+	switch s {
+	case "human":
+		return whagentpb.SubjectKind_SUBJECT_KIND_HUMAN, true
+	case "service":
+		return whagentpb.SubjectKind_SUBJECT_KIND_SERVICE, true
+	default:
+		return whagentpb.SubjectKind_SUBJECT_KIND_UNSPECIFIED, false
+	}
+}
+
 // subjectToView converts s to components.SubjectView. A nil s (should be
 // unreachable -- Session.subject/on_behalf_of are always populated,
 // session.proto's doc comment) renders as the zero SubjectView rather
