@@ -39,6 +39,7 @@ var everyTable = []string{
 	"turn_usage",
 	"session_agent",
 	"tool_call_idempotency",
+	"ui_sessions",
 }
 
 func tableExists(t *testing.T, ctx context.Context, db *dbtest.Postgres, table string) bool {
@@ -68,7 +69,7 @@ func TestMigration001_UpDownUp_LeavesCleanDatabaseAndIsRerunnable(t *testing.T) 
 
 	latest, err := runner.LatestVersion()
 	require.NoError(t, err)
-	require.Equal(t, uint(4), latest, "expected the latest migration source version to be 4 (001_initial_schema + 002_transcript_archive, issue #2240 + 003_sessions_list_index, issue #2241 + 004_mcpauth_credential, issue #2245) -- update this test if a later migration has since landed")
+	require.Equal(t, uint(5), latest, "expected the latest migration source version to be 5 (001_initial_schema + 002_transcript_archive, issue #2240 + 003_sessions_list_index, issue #2241 + 004_mcpauth_credential, issue #2245 + 005_ui_sessions, issue #2288) -- update this test if a later migration has since landed")
 
 	// -- Up: every table must exist, version must land clean at the latest --
 	require.NoError(t, runner.Up(), "apply every migration")
@@ -76,11 +77,19 @@ func TestMigration001_UpDownUp_LeavesCleanDatabaseAndIsRerunnable(t *testing.T) 
 	version, dirty, err := runner.Version()
 	require.NoError(t, err)
 	assert.False(t, dirty)
-	assert.Equal(t, uint(4), version)
+	assert.Equal(t, uint(5), version)
 
 	for _, table := range everyTable {
 		assert.True(t, tableExists(t, ctx, db, table), "expected table %q to exist after Up()", table)
 	}
+
+	// 005_ui_sessions (issue #2288): confirm the expires_at index landed
+	// alongside the table, not just the table itself.
+	var hasUISessionsExpiresAtIndex bool
+	require.NoError(t, db.Pool.QueryRow(ctx, `
+		SELECT EXISTS (SELECT 1 FROM pg_indexes WHERE tablename = 'ui_sessions' AND indexname = 'idx_ui_sessions_expires_at')
+	`).Scan(&hasUISessionsExpiresAtIndex))
+	assert.True(t, hasUISessionsExpiresAtIndex, "expected idx_ui_sessions_expires_at to exist after Up()")
 
 	// -- Down: every table must be gone, not just some of them -------------
 	require.NoError(t, runner.Down(), "roll back every migration")
@@ -95,7 +104,7 @@ func TestMigration001_UpDownUp_LeavesCleanDatabaseAndIsRerunnable(t *testing.T) 
 	version, dirty, err = runner.Version()
 	require.NoError(t, err)
 	assert.False(t, dirty)
-	assert.Equal(t, uint(4), version)
+	assert.Equal(t, uint(5), version)
 
 	for _, table := range everyTable {
 		assert.True(t, tableExists(t, ctx, db, table), "expected table %q to exist again after the second Up()", table)
