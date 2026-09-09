@@ -276,6 +276,49 @@ the filter switched to **realm roles**.
 
 ---
 
+## 9. Service accounts: telling them apart from human callers
+
+A service running behind `grpcauth` (e.g. whagent-net's `api`, FR6/#2243)
+sometimes needs to know, per call, whether the caller is a human or a
+Keycloak client-credentials service account -- not just *which* client/role
+it holds. `grpcauth.Claims` carries this as two additive fields populated by
+`oidcVerifier.Verify` (`auth.go`):
+
+| Field | Source claim | What it is |
+|---|---|---|
+| `Claims.ClientID` | `azp` (falls back to `client_id`) | The client the token was issued to -- set on every token, human or service account. |
+| `Claims.IsServiceAccount` | `preferred_username` | `true` iff `preferred_username` starts with `service-account-`. |
+
+**The rule, and why it's reliable:** every service account Keycloak attaches
+to a confidential client (step 4a, "Service accounts roles") gets a Keycloak
+*user* named `service-account-<client-id>` -- Keycloak's own fixed naming,
+not something you configure. A token minted for that user's
+`client_credentials` grant carries that name in `preferred_username`, and no
+human user can be named this way (Keycloak reserves the prefix). This is the
+*only* signal available on the token itself: there is no separate token
+type, scope, or claim, and `ClientID` alone is not enough, since a human
+caller's token has one too (whichever client the human authenticated
+through).
+
+`grpcauth.Claims.IsServiceAccount` is what a handler should branch on --
+never `ClientID` presence -- exactly as `whagent_net/api/handlers/session.go`'s
+`callerSubject` does to pick `SubjectKindService` vs. `SubjectKindHuman`
+(FR6/#2243). `AuthModeNone`'s injected dev Claims never set
+`IsServiceAccount` (it defaults `false`), so local/Tilt development without a
+real Keycloak always looks like a human caller -- there is no dev-mode way to
+locally exercise a service-account-classified call short of running against
+a real `oidc`-mode Keycloak (see `whagent_net/README.md` § "Client
+credentials (service accounts)" for how one service documents that path).
+
+**Role checks are identical either way.** A service account's realm role
+still needs the same "Filter by realm roles" assignment as step 4c, just to
+the client's own service account user (**Service accounts roles** tab, not a
+separate human-vs-service role) -- `grpcauth` reads `realm_access.roles`
+regardless of who the caller is, so there is no special-casing needed on the
+authorization side, only on the identity side.
+
+---
+
 ## Applying this to a new service
 
 The checklist, stripped of the example:
