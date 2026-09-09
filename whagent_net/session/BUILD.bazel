@@ -4,6 +4,7 @@ go_library(
     name = "session",
     srcs = [
         "agentdef.go",
+        "archive.go",
         "idempotency.go",
         "session.go",
         "sessions.go",

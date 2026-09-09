@@ -23,8 +23,9 @@ import (
 )
 
 // Store is the pgx-backed repository over `sessions`, `transcript_event`,
-// `turn_context`, `turn_usage`, `agent_definition`, `session_agent`, and
-// `tool_call_idempotency` (migration 001, issue #2109).
+// `turn_context`, `turn_usage`, `agent_definition`, `session_agent`,
+// `tool_call_idempotency` (migration 001, issue #2109), and
+// `transcript_archive` (migration 002, issue #2240).
 type Store struct {
 	pool *pgxpool.Pool
 	pub  events.PublisherInterface
@@ -56,3 +57,8 @@ func (s *Store) Usage() UsageStore { return usageStore{pool: s.pool} }
 // Idempotency returns the IdempotencyLedger implementation
 // (idempotency.go, LB4).
 func (s *Store) Idempotency() IdempotencyLedger { return idempotencyLedgerStore{pool: s.pool} }
+
+// Archive returns the ArchiveStore implementation (archive.go, issue
+// #2240, FR8/LB1): the `transcript_archive` cold-tier index FR7's archiver
+// writes and Transcript()'s tier-transparent Read consults.
+func (s *Store) Archive() ArchiveStore { return archiveStore{pool: s.pool} }

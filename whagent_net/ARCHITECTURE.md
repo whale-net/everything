@@ -111,11 +111,45 @@ neither classic queues nor streams are queryable by session. So:
 | Tier | Store | Role |
 |---|---|---|
 | **Bus** | RabbitMQ exchange `whagent/events` | Every transcript event, published on commit. Consumers each bind their own TTL'd queue: UI SSE hubs, the archiver, metrics, future programmatic subscribers. Never the system of record. |
-| **Hot** | Postgres `transcript_events` | Append-only. Serves `ReadTranscript` and the worker's context build. Retention = TTL. |
-| **Cold** | S3 `sessions/{id}.jsonl` | Written by `archiver` once a session is terminal and past TTL; hot-tier bodies trimmed, index row keeps the pointer. `ReadTranscript` hydrates from S3 transparently. |
+| **Hot** | Postgres `transcript_event` | Append-only. Serves `ReadTranscript` and the worker's context build. Retention = TTL. |
+| **Cold** | S3 `sessions/{session_id}.jsonl.gz` | Written by `archiver` once a session is terminal and past TTL; hot-tier bodies trimmed, index row (`transcript_archive`) keeps the pointer. `ReadTranscript` hydrates from S3 transparently. |
 
 Postgres is the queryable tier because it already exists in every domain;
 adding a second query engine for transcripts is not justified at this scale.
+
+### Cold-object contract (FR8/FR7, issue #2240)
+
+This is the interop contract between `session`'s tier-transparent reader
+(issue #2240, this task) and `archiver` (FR7, a later task): both agree on
+the exact object shape without either owning the other's code.
+
+- **Index row:** `transcript_archive` (migration 002), one row per archived
+  session — `session_id` (PK, `REFERENCES sessions`), `s3_bucket`, `s3_key`,
+  `event_count`/`min_seq`/`max_seq` (let a reader sanity-check what it
+  downloads without opening it), `archived_at`, and `hot_trimmed_at`
+  (`NULL` until `archiver` trims the session's hot rows — written by
+  `archiver`, read by nobody until that task lands). Append-only-ish, like
+  `transcript_event` — explicitly **not** SCD2 (a session is archived at
+  most once; `hot_trimmed_at` is the one field ever revised after insert).
+  A row existing here is itself the "hydrate from S3" signal — readers
+  never consult `hot_trimmed_at` to decide whether to hydrate.
+- **Object key:** `sessions/{session_id}.jsonl.gz`.
+- **Object body:** gzip-compressed JSON Lines, one `whagent_net/events.Event`
+  per line (`event_id`, `session_id`, `seq`, `turn`, `type`, `payload`,
+  `committed_at` — LB1's single record definition, the same JSON shape as
+  the Postgres row and the bus message), in ascending `seq`, covering
+  exactly `[min_seq, max_seq]` with `event_count` lines. Never summarized,
+  reshaped, or dropped (LB1) — the cold copy is byte-for-byte the same
+  events the hot tier held, not a derived digest.
+- **Read-side merge:** `TranscriptStore.Read` (`session/transcript.go`)
+  serves from `transcript_event` first; when the requested range is not
+  fully satisfied from hot rows and a `transcript_archive` row exists, it
+  hydrates the object via `//libs/go/s3`, decodes it, and merges hot +
+  cold in ascending `seq` with hot rows winning on a duplicate `seq` (the
+  same event committed to both tiers is emitted once, never twice). No
+  archive row and no hot rows is an empty result, not an error; an archive
+  row whose object is missing is an `Internal` error (ERROR-level log),
+  never a silently truncated transcript.
 
 ## Service boundary vs. package boundary
 
