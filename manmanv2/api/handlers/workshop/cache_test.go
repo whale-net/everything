@@ -33,10 +33,21 @@ type presignCall struct {
 	ttl time.Duration
 }
 
+// deleteCall records one call into fakePresigner.Delete, so tests can assert
+// exactly which key was deleted and that no other key was ever touched --
+// the FR12 blast-radius assertion.
+type deleteCall struct {
+	key string
+}
+
 // fakePresigner is the cachePresigner test double the issue's Testing
 // section asks for: it never touches real S3, records every call it
 // receives, and can be told to fail on demand so the handler's error path
-// is exercised without a real presign failure being reproducible.
+// is exercised without a real presign failure being reproducible. It also
+// backs EvictCacheEntry's tests (FR12): deleteCalls records every Delete
+// invocation exactly, and deleteErr/deleteNoSuchKey let a test drive the
+// object-delete-fails and object-already-absent paths without a real S3
+// error being reproducible.
 type fakePresigner struct {
 	mu sync.Mutex
 
@@ -45,6 +56,30 @@ type fakePresigner struct {
 
 	getErr error
 	putErr error
+
+	deleteCalls     []deleteCall
+	deleteErr       error
+	deleteNoSuchKey bool
+}
+
+// noSuchKeyErr is a fakePresigner.Delete failure that s3lib.IsNoSuchKey
+// recognizes via its string-matching fallback (the same fallback the real
+// libs/go/s3.IsNoSuchKey uses for S3-compatible endpoints that don't return
+// a typed error), so tests can drive the "object already absent" path
+// without depending on the real AWS SDK's typed NoSuchKey error.
+var errSimulatedNoSuchKey = errors.New("simulated: NoSuchKey: the specified key does not exist")
+
+func (f *fakePresigner) Delete(_ context.Context, key string) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.deleteCalls = append(f.deleteCalls, deleteCall{key: key})
+	if f.deleteNoSuchKey {
+		return errSimulatedNoSuchKey
+	}
+	if f.deleteErr != nil {
+		return f.deleteErr
+	}
+	return nil
 }
 
 func (f *fakePresigner) PresignGetURL(_ context.Context, key string, ttl time.Duration) (string, error) {
@@ -99,6 +134,11 @@ type fakeCacheRepo struct {
 	// Keyed on cache_entry_id, mirroring the real repository's contract.
 	hostPresence    map[int64][]*manman.WorkshopCacheHostPresence
 	hostPresenceErr error
+
+	// deleteCacheEntryErr, when set, makes DeleteCacheEntry fail -- backs
+	// EvictCacheEntry's "row delete fails after the object is already gone"
+	// regression test.
+	deleteCacheEntryErr error
 }
 
 func newFakeCacheRepo() *fakeCacheRepo {
@@ -199,12 +239,21 @@ func (f *fakeCacheRepo) TouchCacheEntryVerified(_ context.Context, _ int64, _ ti
 	return nil
 }
 
+// DeleteCacheEntry mirrors the real repository's row delete plus the
+// ON DELETE CASCADE on workshop_cache_host_presence (migration 040): removing
+// an entry also removes its presence rows here, so
+// TestEvictCacheEntry_RemovesOnlyItsOwnPresenceRows can assert sibling
+// entries' presence survives untouched.
 func (f *fakeCacheRepo) DeleteCacheEntry(_ context.Context, cacheEntryID int64) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	if f.deleteCacheEntryErr != nil {
+		return f.deleteCacheEntryErr
+	}
 	for k, e := range f.entries {
 		if e.CacheEntryID == cacheEntryID {
 			delete(f.entries, k)
+			delete(f.presenceByEntry, cacheEntryID)
 			return nil
 		}
 	}
@@ -1167,6 +1216,239 @@ func TestVerifyCacheEntry_PublishFailure_Internal(t *testing.T) {
 	h := newVerifyHandler(repo, addonRepo, publisher)
 	_, err := h.VerifyCacheEntry(context.Background(), &pb.VerifyCacheEntryRequest{CacheEntryId: entry.CacheEntryID})
 	assertCode(t, err, codes.Internal)
+}
+
+
+// --- EvictCacheEntry (FR12) --------------------------------------------------
+
+// seedThreeVersions seeds three cache entries for the same workshop_id --
+// three distinct content versions of one addon -- plus a presence row for
+// each, so eviction tests can assert the blast radius is exactly the one
+// targeted entry and nothing else: not sibling rows, not sibling presence,
+// not another workshop_id's row (FR12's core assertion).
+func seedThreeVersions(repo *fakeCacheRepo) (v1, v2, v3 *manman.WorkshopCacheEntry) {
+	v1 = repo.seed(&manman.WorkshopCacheEntry{
+		WorkshopID: "123456", ContentVersion: "v1", CacheKey: "ws/123456/v1", S3Key: "workshop-cache/123456/v1.tar",
+	})
+	v2 = repo.seed(&manman.WorkshopCacheEntry{
+		WorkshopID: "123456", ContentVersion: "v2", CacheKey: "ws/123456/v2", S3Key: "workshop-cache/123456/v2.tar",
+	})
+	v3 = repo.seed(&manman.WorkshopCacheEntry{
+		WorkshopID: "123456", ContentVersion: "v3", CacheKey: "ws/123456/v3", S3Key: "workshop-cache/123456/v3.tar",
+	})
+	repo.presenceByEntry[v1.CacheEntryID] = []*manman.WorkshopCacheHostPresenceWithServer{{CacheEntryID: v1.CacheEntryID, ServerID: 1, ServerName: "host-a"}}
+	repo.presenceByEntry[v2.CacheEntryID] = []*manman.WorkshopCacheHostPresenceWithServer{{CacheEntryID: v2.CacheEntryID, ServerID: 2, ServerName: "host-b"}}
+	repo.presenceByEntry[v3.CacheEntryID] = []*manman.WorkshopCacheHostPresenceWithServer{{CacheEntryID: v3.CacheEntryID, ServerID: 3, ServerName: "host-c"}}
+	return v1, v2, v3
+}
+
+// TestEvictCacheEntry_DeletesExactlyOneObjectAndRow is the issue's core FR12
+// assertion: evicting one of three versions of the same addon issues exactly
+// one Delete call, for exactly that entry's exact s3_key, and leaves the
+// other two rows (and, implicitly, their objects -- never touched by any
+// Delete call) fully intact.
+func TestEvictCacheEntry_DeletesExactlyOneObjectAndRow(t *testing.T) {
+	repo := newFakeCacheRepo()
+	presigner := &fakePresigner{}
+	v1, v2, v3 := seedThreeVersions(repo)
+	h := newTestHandler(repo, presigner)
+
+	resp, err := h.EvictCacheEntry(context.Background(), &pb.EvictCacheEntryRequest{CacheEntryId: v2.CacheEntryID})
+	if err != nil {
+		t.Fatalf("EvictCacheEntry: unexpected error: %v", err)
+	}
+	if !resp.Evicted {
+		t.Error("Evicted = false, want true")
+	}
+	if resp.S3Key != v2.S3Key {
+		t.Errorf("S3Key = %q, want %q", resp.S3Key, v2.S3Key)
+	}
+
+	if len(presigner.deleteCalls) != 1 {
+		t.Fatalf("expected exactly 1 Delete call, got %d: %+v", len(presigner.deleteCalls), presigner.deleteCalls)
+	}
+	if got := presigner.deleteCalls[0].key; got != v2.S3Key {
+		t.Errorf("Delete key = %q, want exact key %q", got, v2.S3Key)
+	}
+
+	if e, _ := repo.GetCacheEntry(context.Background(), v2.CacheEntryID); e != nil {
+		t.Errorf("evicted entry %d still present after eviction", v2.CacheEntryID)
+	}
+
+	// The other two versions' rows are untouched.
+	if e, _ := repo.GetCacheEntry(context.Background(), v1.CacheEntryID); e == nil {
+		t.Errorf("sibling entry %d was removed, want it untouched", v1.CacheEntryID)
+	}
+	if e, _ := repo.GetCacheEntry(context.Background(), v3.CacheEntryID); e == nil {
+		t.Errorf("sibling entry %d was removed, want it untouched", v3.CacheEntryID)
+	}
+	if repo.entryCount() != 2 {
+		t.Errorf("entryCount = %d, want 2 (only the targeted entry removed)", repo.entryCount())
+	}
+}
+
+// TestEvictCacheEntry_RemovesOnlyItsOwnPresenceRows guards the presence-row
+// half of FR12's blast radius: the evicted entry's presence rows are gone
+// (cascade), sibling entries' presence rows remain.
+func TestEvictCacheEntry_RemovesOnlyItsOwnPresenceRows(t *testing.T) {
+	repo := newFakeCacheRepo()
+	presigner := &fakePresigner{}
+	v1, v2, v3 := seedThreeVersions(repo)
+	h := newTestHandler(repo, presigner)
+
+	if _, err := h.EvictCacheEntry(context.Background(), &pb.EvictCacheEntryRequest{CacheEntryId: v2.CacheEntryID}); err != nil {
+		t.Fatalf("EvictCacheEntry: unexpected error: %v", err)
+	}
+
+	if _, ok := repo.presenceByEntry[v2.CacheEntryID]; ok {
+		t.Errorf("presence rows for evicted entry %d still present", v2.CacheEntryID)
+	}
+	if _, ok := repo.presenceByEntry[v1.CacheEntryID]; !ok {
+		t.Errorf("presence rows for sibling entry %d were removed, want them untouched", v1.CacheEntryID)
+	}
+	if _, ok := repo.presenceByEntry[v3.CacheEntryID]; !ok {
+		t.Errorf("presence rows for sibling entry %d were removed, want them untouched", v3.CacheEntryID)
+	}
+}
+
+// TestEvictCacheEntry_NoSuchKey_TreatedAsSuccess covers the issue's explicit
+// convergence rule: an object already absent from S3 is a success, not an
+// error, and the row is still removed.
+func TestEvictCacheEntry_NoSuchKey_TreatedAsSuccess(t *testing.T) {
+	repo := newFakeCacheRepo()
+	presigner := &fakePresigner{deleteNoSuchKey: true}
+	entry := repo.seed(&manman.WorkshopCacheEntry{
+		WorkshopID: "1", ContentVersion: "1", CacheKey: "ws/1/1", S3Key: "workshop-cache/1/1.tar",
+	})
+	h := newTestHandler(repo, presigner)
+
+	resp, err := h.EvictCacheEntry(context.Background(), &pb.EvictCacheEntryRequest{CacheEntryId: entry.CacheEntryID})
+	if err != nil {
+		t.Fatalf("EvictCacheEntry: unexpected error on NoSuchKey: %v", err)
+	}
+	if !resp.Evicted {
+		t.Error("Evicted = false, want true on a NoSuchKey convergence")
+	}
+	if e, _ := repo.GetCacheEntry(context.Background(), entry.CacheEntryID); e != nil {
+		t.Error("row still present after a NoSuchKey eviction, want it removed")
+	}
+}
+
+// TestEvictCacheEntry_S3DeleteError_RowLeftInPlace_RetrySucceeds is the
+// ordering regression the issue calls out by name: if the object delete
+// fails, the row must be left in place (recoverable by retrying), not
+// removed alongside a still-live object nothing could ever find again. A
+// second attempt, once S3 cooperates, must then converge successfully.
+func TestEvictCacheEntry_S3DeleteError_RowLeftInPlace_RetrySucceeds(t *testing.T) {
+	repo := newFakeCacheRepo()
+	presigner := &fakePresigner{deleteErr: errors.New("simulated S3 delete failure")}
+	entry := repo.seed(&manman.WorkshopCacheEntry{
+		WorkshopID: "1", ContentVersion: "1", CacheKey: "ws/1/1", S3Key: "workshop-cache/1/1.tar",
+	})
+	h := newTestHandler(repo, presigner)
+
+	_, err := h.EvictCacheEntry(context.Background(), &pb.EvictCacheEntryRequest{CacheEntryId: entry.CacheEntryID})
+	assertCode(t, err, codes.Internal)
+	if e, _ := repo.GetCacheEntry(context.Background(), entry.CacheEntryID); e == nil {
+		t.Fatal("row was removed after a failed S3 delete, want it left in place for retry")
+	}
+
+	// Retry, now that S3 cooperates.
+	presigner.deleteErr = nil
+	resp, err := h.EvictCacheEntry(context.Background(), &pb.EvictCacheEntryRequest{CacheEntryId: entry.CacheEntryID})
+	if err != nil {
+		t.Fatalf("EvictCacheEntry retry: unexpected error: %v", err)
+	}
+	if !resp.Evicted {
+		t.Error("Evicted = false on retry, want true")
+	}
+	if e, _ := repo.GetCacheEntry(context.Background(), entry.CacheEntryID); e != nil {
+		t.Error("row still present after a successful retry, want it removed")
+	}
+	if len(presigner.deleteCalls) != 2 {
+		t.Errorf("expected 2 Delete calls (failed attempt + retry), got %d", len(presigner.deleteCalls))
+	}
+}
+
+// TestEvictCacheEntry_RowDeleteFails_ObjectAlreadyGone covers the other
+// error half: once the object is confirmed gone, a row-delete failure must
+// still surface as an error (not a silent partial success) even though the
+// object side of the operation already succeeded.
+func TestEvictCacheEntry_RowDeleteFails_ObjectAlreadyGone(t *testing.T) {
+	repo := newFakeCacheRepo()
+	presigner := &fakePresigner{}
+	entry := repo.seed(&manman.WorkshopCacheEntry{
+		WorkshopID: "1", ContentVersion: "1", CacheKey: "ws/1/1", S3Key: "workshop-cache/1/1.tar",
+	})
+	repo.deleteCacheEntryErr = errors.New("simulated row delete failure")
+	h := newTestHandler(repo, presigner)
+
+	_, err := h.EvictCacheEntry(context.Background(), &pb.EvictCacheEntryRequest{CacheEntryId: entry.CacheEntryID})
+	assertCode(t, err, codes.Internal)
+	if len(presigner.deleteCalls) != 1 {
+		t.Errorf("expected exactly 1 Delete call, got %d", len(presigner.deleteCalls))
+	}
+}
+
+// TestEvictCacheEntry_UnknownID_NotFound proves an unknown cache_entry_id
+// surfaces as codes.NotFound and never reaches S3 at all -- no Delete call
+// for an id that doesn't resolve to a real entry.
+func TestEvictCacheEntry_UnknownID_NotFound(t *testing.T) {
+	repo := newFakeCacheRepo()
+	presigner := &fakePresigner{}
+	h := newTestHandler(repo, presigner)
+
+	_, err := h.EvictCacheEntry(context.Background(), &pb.EvictCacheEntryRequest{CacheEntryId: 999})
+	assertCode(t, err, codes.NotFound)
+	if len(presigner.deleteCalls) != 0 {
+		t.Errorf("Delete was called %d times for an unknown cache_entry_id, want 0", len(presigner.deleteCalls))
+	}
+}
+
+// TestEvictCacheEntry_MissingID_InvalidArgument guards the request
+// validation, same convention as every other handler's `_id is required`
+// check in this package.
+func TestEvictCacheEntry_MissingID_InvalidArgument(t *testing.T) {
+	h := newTestHandler(newFakeCacheRepo(), &fakePresigner{})
+	_, err := h.EvictCacheEntry(context.Background(), &pb.EvictCacheEntryRequest{})
+	assertCode(t, err, codes.InvalidArgument)
+}
+
+// TestEvictCacheEntry_NeverIssuesPrefixOrBulkDelete is the FR12
+// blast-radius regression pinned by name: fakePresigner.Delete only ever
+// receives a single, fully-qualified object key (never a prefix, glob, or a
+// call carrying more than one key) across every eviction path exercised
+// above. cachePresigner's Delete signature itself (one key, one call) rules
+// out a bulk/multi-object delete API from ever being reachable here; this
+// asserts the handler never even constructs something prefix-shaped.
+func TestEvictCacheEntry_NeverIssuesPrefixOrBulkDelete(t *testing.T) {
+	repo := newFakeCacheRepo()
+	presigner := &fakePresigner{}
+	v1, v2, v3 := seedThreeVersions(repo)
+	h := newTestHandler(repo, presigner)
+
+	for _, id := range []int64{v1.CacheEntryID, v2.CacheEntryID, v3.CacheEntryID} {
+		if _, err := h.EvictCacheEntry(context.Background(), &pb.EvictCacheEntryRequest{CacheEntryId: id}); err != nil {
+			t.Fatalf("EvictCacheEntry(%d): unexpected error: %v", id, err)
+		}
+	}
+
+	if len(presigner.deleteCalls) != 3 {
+		t.Fatalf("expected exactly 3 Delete calls (one per entry), got %d", len(presigner.deleteCalls))
+	}
+	seen := map[string]bool{}
+	for _, call := range presigner.deleteCalls {
+		if call.key == "" {
+			t.Error("Delete called with an empty key")
+		}
+		if strings.HasSuffix(call.key, "/") || strings.Contains(call.key, "*") {
+			t.Errorf("Delete key %q looks like a prefix/wildcard, want a single object key", call.key)
+		}
+		if seen[call.key] {
+			t.Errorf("Delete called twice with the same key %q", call.key)
+		}
+		seen[call.key] = true
+	}
 }
 
 // --- shared assertion helper ------------------------------------------------

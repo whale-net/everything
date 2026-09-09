@@ -238,6 +238,32 @@ func (c *Client) Delete(ctx context.Context, key string) error {
 	return nil
 }
 
+// IsNoSuchKey reports whether err represents an S3 "no such key" / "not
+// found" condition -- the same detection Exists uses (typed
+// types.NotFound/types.NoSuchKey, plus a string-matching fallback for
+// S3-compatible endpoints that don't return a typed error), wrapped for
+// reuse via %w through Delete's error wrapping. Callers whose delete should
+// converge to success even when the object is already gone (e.g. workshop
+// cache eviction's FR12 "already absent is a success" rule) call this on a
+// failed Delete to decide whether to swallow the error.
+func IsNoSuchKey(err error) bool {
+	if err == nil {
+		return false
+	}
+	var notFound *types.NotFound
+	if errors.As(err, &notFound) {
+		return true
+	}
+	var noSuchKey *types.NoSuchKey
+	if errors.As(err, &noSuchKey) {
+		return true
+	}
+	errStr := err.Error()
+	return strings.Contains(errStr, "StatusCode: 404") ||
+		strings.Contains(errStr, "NotFound") ||
+		strings.Contains(errStr, "NoSuchKey")
+}
+
 // GetBucket returns the configured bucket name
 func (c *Client) GetBucket() string {
 	return c.bucket

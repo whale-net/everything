@@ -435,6 +435,7 @@ func (app *App) setupRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("/workshop/batch-status", app.auth.RequireAuthFunc(app.auth.WithAccessToken(app.handleWorkshopBatchStatus)))
 	mux.HandleFunc("/workshop/cache", app.auth.RequireAuthFunc(app.auth.WithAccessToken(app.handleWorkshopCache)))
 	mux.HandleFunc("/workshop/cache/verify", app.auth.RequireAuthFunc(app.auth.WithAccessToken(app.handleWorkshopCacheVerify)))
+	mux.HandleFunc("/workshop/cache/evict", app.auth.RequireAuthFunc(app.auth.WithAccessToken(app.handleWorkshopCacheEvict)))
 	mux.HandleFunc("/workshop/bulk-add-collection", app.auth.RequireAuthFunc(app.auth.WithAccessToken(app.handleBulkAddCollection)))
 	mux.HandleFunc("/workshop/batch-create-addons", app.auth.RequireAuthFunc(app.auth.WithAccessToken(app.handleBatchCreateAddons)))
 

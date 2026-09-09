@@ -677,6 +677,17 @@ func (c *ControlClient) VerifyCacheEntry(ctx context.Context, cacheEntryID, serv
 	})
 }
 
+// EvictCacheEntry evicts exactly one content-addressed Workshop cache entry
+// (FR12, plan #2175): control-api deletes the single S3 object at that
+// entry's key and its metadata row directly -- no host command, no
+// presigned-URL relay. There is no bulk/prefix form; callers must resolve
+// the specific cache_entry_id first (e.g. from ListAddonCacheEntries).
+func (c *ControlClient) EvictCacheEntry(ctx context.Context, cacheEntryID int64) (*manmanpb.EvictCacheEntryResponse, error) {
+	return c.workshop.EvictCacheEntry(ctx, &manmanpb.EvictCacheEntryRequest{
+		CacheEntryId: cacheEntryID,
+	})
+}
+
 // AddCollectionToLibrary resolves a Steam Workshop collection's current
 // membership and adds every item in it to a library in one action (FR1,
 // plan #2175). A returned error means a job-level failure (unresolvable
