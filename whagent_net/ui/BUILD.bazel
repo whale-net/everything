@@ -75,6 +75,13 @@ go_binary(
 # PermissionDenied/FailedPrecondition inline-message mapping, and the
 # composer/stop-control rendering matrix (owner vs. non-owner, terminal
 # vs. non-terminal).
+#
+# handlers_sessions_test.go (issue #2247's Testing section) added:
+# GET /sessions' filter-to-ListSessionsRequest mapping (unset filters
+# omitted, started_by_kind=service round-trips), next/prev pagination
+# round-tripping back to the original page with the pagination controls
+# absent at the correct end, and NFR3's "started by" rendering for a
+# service-started session and a session started by another user.
 go_test(
     name = "ui_test",
     size = "small",
@@ -83,6 +90,7 @@ go_test(
         "handlers_session_lifecycle_test.go",
         "handlers_session_live_test.go",
         "handlers_session_test.go",
+        "handlers_sessions_test.go",
         "main_test.go",
         "mcpauth_test.go",
     ],
