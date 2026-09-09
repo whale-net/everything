@@ -20,8 +20,10 @@ to end (issue #2121). `migrate`, `api`, `worker`, and `mcp` all exist and
 build; `whagent_net/config/agents.yaml` seeds one real agent definition
 (`audience-score-system-research`) targeting `audience_score_system/mcp`.
 Deferred to M2/Later per the roadmap: the `archiver` (C18), `ui`/`embed`
-(C13–C16), `StreamEvents` (C17), a service-account caller path (C10), and
-whagent-side `allowed_tools` enforcement (C22). The product brief
+(C13–C16), `StreamEvents` (C17), and whagent-side `allowed_tools`
+enforcement (C22). A service-account caller (C10) can now start, send
+turns to, and stop a session exactly as a human operator can (FR6/#2243) —
+see "Client credentials (service accounts)" below. The product brief
 (`PRODUCT.md`) is produced by `/project-manager:product`; milestones are
 then specced with `/project-manager:design --milestone M<n>`. Origin
 discussion: GitHub issue #1552.
@@ -147,6 +149,57 @@ Realm configuration itself (creating the role, the group, and granting
 it) is **manual** in this repo today — there is no in-repo Keycloak
 realm-config-as-code for whagent-net, so this section is the deliverable
 per the milestone's own scope (`AGENTS.md` § Documentation Conventions).
+
+**A service-account caller (FR6/#2243) needs the same role, granted the
+same way, just to a different Keycloak principal:** the client's own
+**service account user**, not a human group. `grpcauth` reads
+`realm_access.roles` regardless of who the token was issued to
+(`libs/go/grpcauth/KEYCLOAK.md` § "Service accounts"), so `StartSession`'s
+`hasRole` check is identical for a human operator and a service account —
+grant `whagent-audience-score-system-research` on the caller client's
+**Service accounts roles** tab (KEYCLOAK.md § 4c) instead of via a group,
+and everything else in this section applies unchanged.
+
+## Client credentials (service accounts)
+
+A Keycloak client-credentials caller (a scheduler, another service — no
+human present) drives `SessionService` exactly as a human operator does:
+`StartSession` writes `subject`/`on_behalf_of` with `kind = service`
+(`on_behalf_of = subject`, since a service account acting on its own
+credential acts for itself), the same `required_role` check gates it (see
+above), and only that same service account — or whoever matches its
+`on_behalf_of` — may later `SendTurn`/`StopSession` on the resulting
+session (`canControl`, `ARCHITECTURE.md` "Identity and auth chaining").
+
+Obtain a token the non-interactive way (`libs/go/grpcauth/KEYCLOAK.md` §
+7's `curl` recipe, `grant_type=client_credentials`) and call `api` or `mcp`
+with it exactly as the cross-domain smoke check below does with a bearer
+token — there is no separate service-account API surface. Note that FR9's
+OAuth2 browser flow (`ui`/`mcp`'s interactive sign-in, once built) does
+**not** apply here: a service account has no browser to redirect, and never
+authenticates through it — `grant_type=client_credentials` is the only
+grant a service-account caller ever uses.
+
+```bash
+TOKEN=$(curl -s -X POST "$KEYCLOAK_TOKEN_URL" \
+  -d grant_type=client_credentials \
+  -d client_id="$WHAGENT_TEST_CLIENT_ID" \
+  -d client_secret="$WHAGENT_TEST_CLIENT_SECRET" | jq -r .access_token)
+
+grpcurl -plaintext -H "authorization: Bearer $TOKEN" \
+  -d '{"agent_id": "audience-score-system-research"}' \
+  localhost:50054 whagent.v1.SessionService/StartSession
+```
+
+This requires a real Keycloak realm (`GRPC_AUTH_MODE=oidc`) — the checked-in
+Tiltfile runs `api` with `GRPC_AUTH_MODE=none`, which always injects a fixed
+human-looking dev caller (`grpcauth.Claims.IsServiceAccount` defaults
+`false`) and so cannot locally exercise this path end to end (see
+`libs/go/grpcauth/KEYCLOAK.md` § "Service accounts"). M2 proves this path
+against a **test** service-account client (`WHAGENT_TEST_CLIENT_ID`/
+`WHAGENT_TEST_CLIENT_SECRET` above are placeholders for whatever that test
+credential is named once a shared dev Keycloak realm exists) — no real
+scheduler integrates with whagent-net yet.
 
 ## Local development
 

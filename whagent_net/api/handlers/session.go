@@ -313,10 +313,13 @@ func (s *SessionServer) ReadTranscript(ctx context.Context, req *pb.ReadTranscri
 
 // callerSubject reconstructs the authenticated caller's session.Subject
 // from the grpcauth.Claims RequireClaimsUnaryInterceptor already
-// guarantees are present by the time any handler runs. Kind defaults to
-// SubjectKindHuman: grpcauth.Claims carries no field distinguishing a
-// human caller from a service account yet (same M1 gap the issue's
-// Authentication section notes for on_behalf_of).
+// guarantees are present by the time any handler runs. Kind is derived from
+// claims.IsServiceAccount (FR6/#2243) -- grpcauth classifies a Keycloak
+// client-credentials caller from its token's preferred_username
+// (libs/go/grpcauth/KEYCLOAK.md § "Service accounts") -- rather than
+// hardcoded to SubjectKindHuman: a human token's IsServiceAccount is always
+// false, so this is a strict widening of what StartSession can record, not
+// a behavior change for existing human callers.
 func (s *SessionServer) callerSubject(ctx context.Context) (session.Subject, error) {
 	claims, ok := grpcauth.ClaimsFromContext(ctx)
 	if !ok {
@@ -328,10 +331,14 @@ func (s *SessionServer) callerSubject(ctx context.Context) (session.Subject, err
 		// ownership check instead of an auth wiring bug.
 		return session.Subject{}, status.Error(codes.Unauthenticated, "authentication required")
 	}
+	kind := session.SubjectKindHuman
+	if claims.IsServiceAccount {
+		kind = session.SubjectKindService
+	}
 	return session.Subject{
 		Iss:  s.issuer,
 		Sub:  claims.Subject,
-		Kind: session.SubjectKindHuman,
+		Kind: kind,
 	}, nil
 }
 
