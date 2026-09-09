@@ -131,22 +131,26 @@ func sessionTopicsAttr(topics []string) string {
 
 // SessionDetail is the session detail page (FR2, NFR2, NFR3): initial
 // render from data.Session/data.Events, then live via hx-ext="sse" bound to
-// /sessions/{id}/events (../handlers_session_live.go). The composer slot
-// (FR1) and usage slot (FR4) are empty, clearly-named mount points for
-// their own follow-up tasks -- this task never populates them beyond the
-// owner-gated placeholder comment. The state badge and any terminal-state
-// banner are *inside* the swapped div (SessionLive), not here, so they
-// swap live alongside the transcript rather than only reflecting this
-// initial render.
+// /sessions/{id}/events (../handlers_session_live.go). The composer/stop
+// slot (FR1, issue #2246) is filled with OwnerControls only inside the
+// data.IsOwner branch -- a non-owner's response contains this branch, and
+// therefore any composer/stop markup, nowhere at all. The usage slot (FR4)
+// remains an empty mount point for its own follow-up task. The state badge
+// and any terminal-state banner are *inside* the swapped div (SessionLive),
+// not here, so they swap live alongside the transcript rather than only
+// reflecting this initial render.
 templ SessionDetail(data SessionDetailData) {
 	@Layout(data.Layout) {
 		<h1 class="text-2xl font-bold text-base-content mb-2">Session { data.Session.SessionID }</h1>
 		@startedByLine(data.Session)
 		if data.IsOwner {
-			<!-- FR1 (session lifecycle controls) mounts the turn composer and
-			     stop control here. A non-owner never reaches this branch, so
-			     no composer/stop markup exists in their response at all. -->
-			<div id="composer-slot" class="mb-4"></div>
+			<!-- FR1 (session lifecycle controls, issue #2246): the turn
+			     composer and stop control. A non-owner never reaches this
+			     branch, so no composer/stop markup exists in their response
+			     at all. -->
+			<div id="composer-slot" class="mb-4">
+				@OwnerControls(data.Session.SessionID, data.Session.State)
+			</div>
 		}
 		<!-- FR4 (usage panel) mounts here. -->
 		<div id="usage-slot" class="mb-4"></div>
@@ -188,6 +192,105 @@ templ SessionLive(session SessionView, evs []TranscriptEventView) {
 		</p>
 	}
 	@TranscriptList(evs)
+}
+
+// isTerminalSessionState reports whether state is one of the four
+// terminal SessionState values (sessionStateString's lowercase
+// convention, ../convert.go) -- a session in any of these has no running
+// SessionWorkflow left to signal (whagent_net/api/handlers/stop.go's
+// StopSession doc comment), so FR1's stop control has nothing left to do
+// for the owner and is omitted entirely rather than rendered disabled.
+func isTerminalSessionState(state string) bool {
+	switch state {
+	case "done", "stopped", "failed", "capped":
+		return true
+	default:
+		return false
+	}
+}
+
+// composerFormID/stopControlID are the fixed element ids Composer's and
+// StopControl's own hx-target self-swap depend on --
+// ../handlers_session_lifecycle.go's handleSendTurn/handleStopSession
+// render these same templs (or StopControlAbsent) back as the swap
+// payload, so the id here and the id in the response fragment can never
+// drift apart.
+const (
+	composerFormID = "turn-composer"
+	stopControlID  = "stop-control"
+)
+
+// OwnerControls is FR1's composer/stop-control slot content (issue
+// #2246), mounted into SessionDetail's owner-only composer-slot div. The
+// stop control is omitted for an already-terminal session
+// (isTerminalSessionState); the composer is always rendered so a race
+// (the session turns terminal between page load and submit) still gets a
+// real inline error from handleSendTurn rather than a control that
+// silently vanished mid-typing.
+templ OwnerControls(sessionID string, state string) {
+	@Composer(sessionID, "")
+	if !isTerminalSessionState(state) {
+		@StopControl(sessionID, "")
+	}
+}
+
+// Composer is FR1's turn-composer form (issue #2246): POSTs to
+// /sessions/{id}/turns and swaps itself (hx-target="this",
+// hx-swap="outerHTML") with whatever handleSendTurn renders back -- an
+// empty, enabled Composer on success. SendTurn is asynchronous by
+// contract (session.proto's SendTurn doc comment: the call returns once
+// the turn is accepted, not once it completes), so there is nothing more
+// to show here on success -- the turn's actual output surfaces through
+// the live transcript (SessionLive), never through this form. A failed
+// submission (e.g. FailedPrecondition for a terminal session) re-renders
+// this same form with errMsg inline instead (FR1's "Error surfacing").
+templ Composer(sessionID string, errMsg string) {
+	<form
+		id={ composerFormID }
+		hx-post={ fmt.Sprintf("/sessions/%s/turns", sessionID) }
+		hx-target="this"
+		hx-swap="outerHTML"
+		class="flex flex-col gap-2 mb-2"
+	>
+		if errMsg != "" {
+			<div role="alert" class="alert alert-error mb-2">{ errMsg }</div>
+		}
+		<textarea name="input" class="textarea textarea-bordered w-full" placeholder="Send a message" required></textarea>
+		@htmxui.Button(htmxui.ButtonPrimary, htmxui.ButtonSizeMD, false, templ.Attributes{"type": "submit"}) {
+			Send
+		}
+	</form>
+}
+
+// StopControl is FR1's stop control (issue #2246): POSTs to
+// /sessions/{id}/stop and swaps its own `#stop-control` wrapper with
+// whatever handleStopSession renders back -- StopControlAbsent on success
+// (the control has nothing left to do once the session is stopped, so it
+// disappears entirely rather than rendering disabled -- mirrors
+// isTerminalSessionState's "omitted, not disabled" stance), or itself
+// again carrying errMsg inline on failure.
+templ StopControl(sessionID string, errMsg string) {
+	<div id={ stopControlID }>
+		if errMsg != "" {
+			<div role="alert" class="alert alert-error mb-2">{ errMsg }</div>
+		}
+		<form
+			hx-post={ fmt.Sprintf("/sessions/%s/stop", sessionID) }
+			hx-target={ "#" + stopControlID }
+			hx-swap="outerHTML"
+		>
+			@htmxui.Button(htmxui.ButtonError, htmxui.ButtonSizeMD, false, templ.Attributes{"type": "submit"}) {
+				Stop
+			}
+		</form>
+	</div>
+}
+
+// StopControlAbsent is handleStopSession's success-swap payload: the same
+// `#stop-control` id with no button inside, so a second click has nothing
+// left to act on (StopControl's doc comment).
+templ StopControlAbsent() {
+	<div id={ stopControlID }></div>
 }
 
 // TranscriptList renders evs (already in seq order, LB1) as the

@@ -7,9 +7,10 @@
 // (//libs/go/grpcauth), never a shared service account (mirrors `mcp`'s
 // FR10 stance, ARCHITECTURE.md "Identity and auth chaining"). The session
 // detail page and its live transcript over an htmxsse.Hub (FR2, issue
-// #2242) are the first real page; lifecycle controls (FR1), the usage
-// panel (FR4), and the MCP OAuth2 provider (FR9) mount onto what this
-// task builds in later tasks under plan #2233.
+// #2242), and the ownership-gated start/turn/stop lifecycle controls
+// (FR1, issue #2246), are the real pages so far; the usage panel (FR4)
+// and the MCP OAuth2 provider (FR9) mount onto what this task builds in
+// later tasks under plan #2233.
 package main
 
 import (
@@ -409,6 +410,17 @@ func (app *App) setupRoutes(mux *http.ServeMux) {
 	app.mcpProvider.Mount(mux)
 
 	mux.HandleFunc("/", app.auth.RequireAuthFunc(app.auth.WithAccessToken(app.handleIndex)))
+
+	// Session lifecycle controls (FR1, issue #2246): start form, turn
+	// composer, stop control. Registered ahead of "GET /sessions/{id}"
+	// below -- Go 1.22 ServeMux's exact-literal-over-wildcard precedence
+	// means "/sessions/new" always wins over "/sessions/{id}" regardless
+	// of registration order, but the two are still grouped here so the
+	// whole session route family reads top-to-bottom as one block.
+	mux.HandleFunc("GET /sessions/new", app.auth.RequireAuthFunc(app.auth.WithAccessToken(app.handleNewSession)))
+	mux.HandleFunc("POST /sessions", app.auth.RequireAuthFunc(app.auth.WithAccessToken(app.handleStartSession)))
+	mux.HandleFunc("POST /sessions/{id}/turns", app.auth.RequireAuthFunc(app.auth.WithAccessToken(app.handleSendTurn)))
+	mux.HandleFunc("POST /sessions/{id}/stop", app.auth.RequireAuthFunc(app.auth.WithAccessToken(app.handleStopSession)))
 
 	// Session detail (FR2, NFR2, NFR3, issue #2242): full page and its SSE
 	// stream. The SSE route is wrapped with RequireAuthFunc only, never

@@ -1,8 +1,9 @@
 """whagent-net standalone agent web UI (M2, issue #2236): binary entrypoint,
 Keycloak sign-in, and the authenticated api client. The session detail page
-and its live transcript (FR2, NFR2, NFR3, NFR4, issue #2242) are this
-package's other consumer; remaining FR1-FR4 pieces land in later tasks
-under the same plan (#2233)."""
+and its live transcript (FR2, NFR2, NFR3, NFR4, issue #2242), and the
+ownership-gated start/turn/stop lifecycle controls (FR1, issue #2246), are
+this package's other consumers; remaining FR4/FR9 pieces land in later
+tasks under the same plan (#2233)."""
 
 load("@rules_go//go:def.bzl", "go_binary", "go_library", "go_test")
 load("//tools/bazel:release.bzl", "release_app")
@@ -14,6 +15,7 @@ go_library(
         "grpc_client.go",
         "handlers.go",
         "handlers_session.go",
+        "handlers_session_lifecycle.go",
         "handlers_session_live.go",
         "main.go",
         "mcpauth.go",
@@ -43,6 +45,8 @@ go_library(
         "@com_github_jackc_pgx_v5//pgxpool",
         "@io_opentelemetry_go_contrib_instrumentation_net_http_otelhttp//:otelhttp",
         "@org_golang_google_grpc//:grpc",
+        "@org_golang_google_grpc//codes",
+        "@org_golang_google_grpc//status",
     ],
 )
 

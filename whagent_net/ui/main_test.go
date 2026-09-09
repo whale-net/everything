@@ -170,6 +170,7 @@ var whagentRouteTable = []struct {
 	{http.MethodPost, "/token"},
 	// Protected.
 	{http.MethodGet, "/"},
+	{http.MethodGet, "/sessions/new"},
 }
 
 // TestSetupRoutes_OnlyExplicitPublicRoutesReachableUnauthenticated is the
