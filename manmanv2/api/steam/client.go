@@ -17,6 +17,11 @@ import (
 type SteamWorkshopClient struct {
 	apiKey     string
 	httpClient *http.Client
+	// baseURL overrides the Steam API host for tests. Empty (the zero
+	// value returned by NewSteamWorkshopClient) means "use the real
+	// Steam API"; tests in this package may set it directly to point at
+	// an httptest.Server.
+	baseURL string
 }
 
 // WorkshopItemMetadata represents metadata for a workshop item
@@ -144,6 +149,9 @@ func (swc *SteamWorkshopClient) GetWorkshopItemDetails(ctx context.Context, work
 // GetCollectionDetails fetches all items in a collection
 func (swc *SteamWorkshopClient) GetCollectionDetails(ctx context.Context, collectionID string) ([]CollectionItem, error) {
 	apiURL := "https://api.steampowered.com/ISteamRemoteStorage/GetCollectionDetails/v1/"
+	if swc.baseURL != "" {
+		apiURL = swc.baseURL
+	}
 
 	data := url.Values{}
 	data.Set("collectioncount", "1")
@@ -155,13 +163,12 @@ func (swc *SteamWorkshopClient) GetCollectionDetails(ctx context.Context, collec
 	maxRetries := 3
 	for attempt := 0; attempt < maxRetries; attempt++ {
 		// Create a new request for each retry with the form data
-		formReq, reqErr := http.NewRequestWithContext(ctx, "POST", apiURL, nil)
+		formReq, reqErr := http.NewRequestWithContext(ctx, "POST", apiURL, strings.NewReader(data.Encode()))
 		if reqErr != nil {
 			return nil, fmt.Errorf("failed to create request: %w", reqErr)
 		}
 		formReq.Header.Set("Content-Type", "application/x-www-form-urlencoded")
-		formReq.PostForm = data
-		
+
 		resp, err = swc.httpClient.Do(formReq)
 		if err == nil && resp != nil && resp.StatusCode == http.StatusOK {
 			break
