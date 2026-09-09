@@ -27,9 +27,18 @@ import (
 // fail on demand, without dragging in real AWS SDK config/credentials or
 // letting a test accidentally reach for one of the concrete client's
 // unrelated methods.
+//
+// Public-endpoint variants only (FR6/FR7/FR9): the internal-endpoint
+// PresignGetURL/PresignPutURL are for callers that reach S3 directly from
+// inside the cluster network. Host-manager runs on bare metal
+// (manmanv2/README-HOST.md) and cannot resolve or route to that internal
+// endpoint, so both cache RPCs must presign against Config.PublicEndpoint
+// via PresignPublicGetURL/PresignPublicPutURL -- the same public-endpoint
+// mechanism App Registry's ResolveBinaryURL already relies on in production
+// (tools/app_registry/server/handlers/artifact.go).
 type cachePresigner interface {
-	PresignGetURL(ctx context.Context, key string, ttl time.Duration) (string, error)
-	PresignPutURL(ctx context.Context, key string, ttl time.Duration) (string, error)
+	PresignPublicGetURL(ctx context.Context, key string, ttl time.Duration) (string, error)
+	PresignPublicPutURL(ctx context.Context, key string, ttl time.Duration) (string, error)
 	// Delete deletes exactly the single object at key -- never a prefix,
 	// never a bulk/multi-object delete (FR12 blast-radius rule).
 	Delete(ctx context.Context, key string) error
@@ -105,8 +114,10 @@ func (h *WorkshopServiceHandler) GetCacheDownloadURL(ctx context.Context, req *p
 	}
 
 	// Scoped to exactly this one object key -- never a prefix, never
-	// bucket-wide, never a static credential (NFR6).
-	presignedURL, err := h.s3Client.PresignGetURL(ctx, entry.S3Key, cacheURLTTL)
+	// bucket-wide, never a static credential (NFR6). Signed against the
+	// public endpoint (FR6/FR7): host-manager runs on bare metal and cannot
+	// reach control-api's internal S3 endpoint.
+	presignedURL, err := h.s3Client.PresignPublicGetURL(ctx, entry.S3Key, cacheURLTTL)
 	if err != nil {
 		slog.Warn("failed to presign workshop cache download URL", "cache_entry_id", entry.CacheEntryID, "cache_key", cacheKey, "server_id", req.ServerId, "error", err)
 		return nil, status.Errorf(codes.Internal, "failed to generate presigned URL: %v", err)
@@ -163,8 +174,10 @@ func (h *WorkshopServiceHandler) GetCacheUploadURL(ctx context.Context, req *pb.
 	}
 
 	// Scoped to exactly this one object key -- never a prefix, never
-	// bucket-wide, never a static credential (NFR6).
-	presignedURL, err := h.s3Client.PresignPutURL(ctx, entry.S3Key, cacheURLTTL)
+	// bucket-wide, never a static credential (NFR6). Signed against the
+	// public endpoint (FR9/FR7): host-manager runs on bare metal and cannot
+	// reach control-api's internal S3 endpoint.
+	presignedURL, err := h.s3Client.PresignPublicPutURL(ctx, entry.S3Key, cacheURLTTL)
 	if err != nil {
 		slog.Warn("failed to presign workshop cache upload URL", "cache_entry_id", entry.CacheEntryID, "cache_key", cacheKey, "server_id", req.ServerId, "error", err)
 		return nil, status.Errorf(codes.Internal, "failed to generate presigned URL: %v", err)

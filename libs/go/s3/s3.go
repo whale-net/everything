@@ -298,6 +298,27 @@ func (c *Client) PresignPublicGetURL(ctx context.Context, key string, ttl time.D
 	return req.URL, nil
 }
 
+// PresignPublicPutURL generates a pre-signed PUT URL for key, addressed via
+// the client's public endpoint (Config.PublicEndpoint) using presignPublic.
+// Mirrors PresignPublicGetURL's endpoint choice; see that method's doc for
+// why an external, credential-less consumer (e.g. host-manager, bare-metal
+// per manmanv2/README-HOST.md) needs this instead of PresignPutURL.
+// Returns an error if no public endpoint is configured.
+func (c *Client) PresignPublicPutURL(ctx context.Context, key string, ttl time.Duration) (string, error) {
+	if c.presignPublic == nil {
+		return "", errors.New("no public endpoint configured for presigned PUT URLs")
+	}
+	req, err := c.presignPublic.PresignPutObject(ctx, &s3.PutObjectInput{
+		Bucket:      aws.String(c.bucket),
+		Key:         aws.String(key),
+		ContentType: aws.String("application/gzip"),
+	}, s3.WithPresignExpires(ttl))
+	if err != nil {
+		return "", fmt.Errorf("failed to presign public PUT URL: %w", err)
+	}
+	return req.URL, nil
+}
+
 // Exists checks if an object exists in S3
 func (c *Client) Exists(ctx context.Context, key string) (bool, error) {
 	_, err := c.s3Client.HeadObject(ctx, &s3.HeadObjectInput{
