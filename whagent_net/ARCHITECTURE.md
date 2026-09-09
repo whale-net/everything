@@ -128,11 +128,11 @@ object shape without either owning the other's code.
   `event_count`/`min_seq`/`max_seq` (let a reader sanity-check what it
   downloads without opening it), `archived_at`, and `hot_trimmed_at`
   (`NULL` until `archiver` trims the session's hot rows — written by
-  `archiver`, read by nobody until that task lands). Append-only-ish, like
-  `transcript_event` — explicitly **not** SCD2 (a session is archived at
-  most once; `hot_trimmed_at` is the one field ever revised after insert).
-  A row existing here is itself the "hydrate from S3" signal — readers
-  never consult `hot_trimmed_at` to decide whether to hydrate.
+  `archiver` (issue #2244)). Append-only-ish, like `transcript_event` —
+  explicitly **not** SCD2 (a session is archived at most once;
+  `hot_trimmed_at` is the one field ever revised after insert). A row
+  existing here is itself the "hydrate from S3" signal — readers never
+  consult `hot_trimmed_at` to decide whether to hydrate.
 - **Object key:** `sessions/{session_id}.jsonl.gz`.
 - **Object body:** gzip-compressed JSON Lines, one `whagent_net/events.Event`
   per line (`event_id`, `session_id`, `seq`, `turn`, `type`, `payload`,

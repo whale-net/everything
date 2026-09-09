@@ -15,7 +15,9 @@ go_library(
         "//libs/go/db",
         "//libs/go/logging",
         "//libs/go/s3",
+        "//whagent_net/events",
         "//whagent_net/session",
+        "@com_github_google_uuid//:uuid",
         "@com_github_jackc_pgx_v5//pgxpool",
     ],
 )

@@ -166,6 +166,20 @@ type SessionStore interface {
 	// visibility rule is enforced by the caller, api/handlers/session.go,
 	// not here).
 	List(ctx context.Context, filter SessionFilter, page SessionPage) ([]*Session, PageInfo, error)
+	// ListArchiveEligible is FR7's archiver selection query (issue #2244):
+	// up to limit session IDs, ordered by updated_at ascending (oldest
+	// first), that are either (a) terminal (Status.IsTerminal()) with
+	// updated_at -- the compare-and-swap terminal write UpdateStatus
+	// performs, used here as the terminal timestamp -- older than
+	// olderThan and no `transcript_archive` row yet, or (b) already have a
+	// `transcript_archive` row whose hot_trimmed_at is still NULL, i.e. a
+	// prior archiver attempt uploaded and committed the index row but
+	// crashed before trimming. (b) is included regardless of olderThan so
+	// a crashed-mid-archive session is picked back up on the very next
+	// scan rather than waiting out the TTL again; RunOnce (archiver.go)
+	// tells the two cases apart via ArchiveStore.Get and does not re-upload
+	// in case (b) -- see this task's Implementation section.
+	ListArchiveEligible(ctx context.Context, olderThan time.Time, limit int) ([]uuid.UUID, error)
 }
 
 // sessionStore is the Postgres-backed SessionStore implementation.
@@ -307,6 +321,44 @@ func (s sessionStore) UpdateStatus(ctx context.Context, id uuid.UUID, status Sta
 // terminal values, kept in one place so UpdateStatus's CAS predicate
 // cannot drift from IsTerminal's Go-side definition.
 const terminalStatusList = `'done', 'stopped', 'failed', 'capped'`
+
+// ListArchiveEligible implements SessionStore.ListArchiveEligible (see
+// that doc comment for the two cases this query unions): a LEFT JOIN
+// against transcript_archive distinguishes "never archived" (ta.session_id
+// IS NULL, gated on updated_at < olderThan) from "archived but not yet
+// trimmed" (ta.session_id IS NOT NULL AND ta.hot_trimmed_at IS NULL,
+// ungated on olderThan -- a crash-recovery resume, not a fresh selection).
+func (s sessionStore) ListArchiveEligible(ctx context.Context, olderThan time.Time, limit int) ([]uuid.UUID, error) {
+	rows, err := s.pool.Query(ctx, `
+		SELECT s.session_id
+		FROM sessions s
+		LEFT JOIN transcript_archive ta ON ta.session_id = s.session_id
+		WHERE s.status IN (`+terminalStatusList+`)
+		  AND (
+		        (ta.session_id IS NULL AND s.updated_at < $1)
+		     OR (ta.session_id IS NOT NULL AND ta.hot_trimmed_at IS NULL)
+		      )
+		ORDER BY s.updated_at ASC
+		LIMIT $2
+	`, olderThan, limit)
+	if err != nil {
+		return nil, fmt.Errorf("list archive-eligible sessions: %w", err)
+	}
+	defer rows.Close()
+
+	var ids []uuid.UUID
+	for rows.Next() {
+		var id uuid.UUID
+		if err := rows.Scan(&id); err != nil {
+			return nil, fmt.Errorf("list archive-eligible sessions: scan: %w", err)
+		}
+		ids = append(ids, id)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("list archive-eligible sessions: %w", err)
+	}
+	return ids, nil
+}
 
 // defaultSessionListPageSize and maxSessionListPageSize bound List's page
 // size (FR3/C15's pagination), the same shape as api/handlers/session.go's

@@ -79,7 +79,23 @@ type TranscriptStore interface {
 	// activity overwrites with the same deterministically-recomputed list
 	// rather than erroring on the primary key.
 	SaveTurnContext(ctx context.Context, tc TurnContext) error
+	// TrimHot deletes every transcript_event row for sessionID -- the
+	// final "trim the hot tier" step of FR7's archiver write-order
+	// contract (issue #2244). This is the crash-safety invariant enforced
+	// in code, not just proven by a Testing-phase red/green check: TrimHot
+	// itself refuses to delete anything for a session with no committed
+	// transcript_archive row, returning ErrNoArchiveIndex, so a caller
+	// that (by ordering bug) trims before committing the index can never
+	// delete the only copy of that session's transcript. Safe to call
+	// again for an already-trimmed session -- deletes zero rows, not an
+	// error. Returns the number of rows deleted, for logging only.
+	TrimHot(ctx context.Context, sessionID uuid.UUID) (int64, error)
 }
+
+// ErrNoArchiveIndex is returned by TrimHot when sessionID has no
+// transcript_archive row -- see TrimHot's doc comment for why this check
+// exists and where it is enforced.
+var ErrNoArchiveIndex = errors.New("no transcript_archive index row for session; refusing to trim hot tier")
 
 // transcriptStore is the Postgres-backed TranscriptStore implementation.
 // pub may be nil (publisher disabled by config): Append then commits
@@ -360,7 +376,7 @@ func (s transcriptStore) hydrateArchive(ctx context.Context, sessionID uuid.UUID
 			"session_id", sessionID, "s3_bucket", idx.S3Bucket, "s3_key", idx.S3Key, "error", err)
 		return nil, fmt.Errorf("hydrate archived transcript for session %s: %w", sessionID, err)
 	}
-	cold, err := decodeArchiveObject(data)
+	cold, err := DecodeArchiveObject(data)
 	if err != nil {
 		slog.ErrorContext(ctx, "hydrate archived transcript: decode failed",
 			"session_id", sessionID, "s3_bucket", idx.S3Bucket, "s3_key", idx.S3Key, "error", err)
@@ -369,10 +385,16 @@ func (s transcriptStore) hydrateArchive(ctx context.Context, sessionID uuid.UUID
 	return cold, nil
 }
 
-// decodeArchiveObject decodes a cold-object-contract body (gzipped JSON
+// DecodeArchiveObject decodes a cold-object-contract body (gzipped JSON
 // Lines, one events.Event per line, ascending seq -- ARCHITECTURE.md
 // "Transcript storage tiers") into the events it holds, in file order.
-func decodeArchiveObject(gz []byte) ([]events.Event, error) {
+// Exported (issue #2244): whagent_net/archiver's post-upload verification
+// step re-reads the object it just wrote and decodes it through this exact
+// function -- the same decode path Read/hydrateArchive use -- rather than
+// a second, potentially-drifting implementation, so "verified" actually
+// means "the real reader can decode this object", not just "some parser
+// agrees with itself".
+func DecodeArchiveObject(gz []byte) ([]events.Event, error) {
 	zr, err := gzip.NewReader(bytes.NewReader(gz))
 	if err != nil {
 		return nil, fmt.Errorf("open gzip archive object: %w", err)
@@ -547,4 +569,29 @@ func (s transcriptStore) SaveTurnContext(ctx context.Context, tc TurnContext) er
 		return fmt.Errorf("save turn context: %w", err)
 	}
 	return nil
+}
+
+// TrimHot implements TranscriptStore.TrimHot. The existence check and the
+// delete deliberately run as two separate statements rather than one
+// `DELETE ... WHERE session_id IN (SELECT ... FROM transcript_archive)`:
+// that phrasing would make "no archive row" and "archive row exists but
+// session has zero hot rows already" both delete zero rows and look
+// identical, which is exactly the distinction this guard exists to
+// preserve (the former must error; the latter must not).
+func (s transcriptStore) TrimHot(ctx context.Context, sessionID uuid.UUID) (int64, error) {
+	var exists bool
+	if err := s.pool.QueryRow(ctx, `
+		SELECT EXISTS (SELECT 1 FROM transcript_archive WHERE session_id = $1)
+	`, sessionID).Scan(&exists); err != nil {
+		return 0, fmt.Errorf("trim hot transcript: check archive index: %w", err)
+	}
+	if !exists {
+		return 0, ErrNoArchiveIndex
+	}
+
+	tag, err := s.pool.Exec(ctx, `DELETE FROM transcript_event WHERE session_id = $1`, sessionID)
+	if err != nil {
+		return 0, fmt.Errorf("trim hot transcript: %w", err)
+	}
+	return tag.RowsAffected(), nil
 }
