@@ -17,9 +17,10 @@ import (
 )
 
 // StopSession signals the session's running SessionWorkflow to stop.
-// NOT_FOUND for an unknown session id; PERMISSION_DENIED for a session
-// belonging to a different subject than the caller. Stopping an
-// already-terminal session is idempotent: it succeeds without re-signalling
+// NOT_FOUND for an unknown session id; PERMISSION_DENIED when the caller is
+// not the session's on_behalf_of subject (canControl -- FR1/C13; there is
+// no admin override in M1). Stopping an already-terminal session is
+// idempotent: it succeeds without re-signalling
 // (there is no running workflow left to signal -- SessionWorkflow already
 // exited when it wrote a terminal status) and never overwrites the
 // session's existing terminal reason.
@@ -41,8 +42,8 @@ func (s *SessionServer) StopSession(ctx context.Context, req *pb.StopSessionRequ
 	if err != nil {
 		return nil, err
 	}
-	if !subjectsEqual(sess.Subject, caller) {
-		return nil, status.Error(codes.PermissionDenied, "session belongs to a different subject")
+	if !canControl(sess, caller) {
+		return nil, status.Error(codes.PermissionDenied, "control is scoped to the session's on-behalf-of subject")
 	}
 
 	if sess.Status.IsTerminal() {

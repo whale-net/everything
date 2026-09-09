@@ -128,10 +128,14 @@ func NewSessionServer(store *session.Store, issuer string, temporalClient tempor
 	}
 }
 
-// GetSession is this issue's Implementation-phase read path (FR3): reads
-// the `sessions` row (session.Store.Sessions().GetByID) and maps it to a
-// Session proto -- NOT_FOUND for an unknown session id, PERMISSION_DENIED
-// for a session belonging to a different subject than the caller.
+// GetSession is a read path (FR3): reads the `sessions` row
+// (session.Store.Sessions().GetByID) and maps it to a Session proto --
+// NOT_FOUND for an unknown session id. Any authenticated caller may read
+// any session, whoever started or controls it (FR2/C14: on-call viewers are
+// the point) -- there is no ownership check here, only the
+// RequireClaimsUnaryInterceptor-enforced requirement that the caller be
+// authenticated at all. See canControl for the (unrelated, stricter) rule
+// that gates SendTurn/StopSession.
 func (s *SessionServer) GetSession(ctx context.Context, req *pb.GetSessionRequest) (*pb.GetSessionResponse, error) {
 	id, err := uuid.Parse(req.GetSessionId())
 	if err != nil {
@@ -146,14 +150,11 @@ func (s *SessionServer) GetSession(ctx context.Context, req *pb.GetSessionReques
 		return nil, status.Error(codes.NotFound, "session not found")
 	}
 
-	caller, err := s.callerSubject(ctx)
-	if err != nil {
-		return nil, err
-	}
-	if !subjectsEqual(sess.Subject, caller) {
-		return nil, status.Error(codes.PermissionDenied, "session belongs to a different subject")
-	}
-
+	// Read access is unconditional for any authenticated caller (FR2/C14) --
+	// callerSubject is not even consulted here. RequireClaimsUnaryInterceptor
+	// already rejected any call with no claims before this handler ran, so
+	// there is no anonymous read path despite the absence of an explicit
+	// check.
 	return &pb.GetSessionResponse{Session: sessionToProto(sess)}, nil
 }
 
@@ -166,12 +167,13 @@ func (s *SessionServer) ListSessions(ctx context.Context, req *pb.ListSessionsRe
 	return nil, status.Error(codes.Unimplemented, "ListSessions: not implemented in M1")
 }
 
-// ReadTranscript is this issue's Implementation-phase read path (FR2):
-// pages through session.Store.Transcript().Read in commit order (seq),
-// mapping each Event to a TranscriptEvent proto. Works identically for a
-// running or ended session -- Read has no status filter, it just returns
-// whatever has been committed so far. NOT_FOUND/PERMISSION_DENIED follow
-// the same rules as GetSession.
+// ReadTranscript is a read path (FR2): pages through
+// session.Store.Transcript().Read in commit order (seq), mapping each
+// Event to a TranscriptEvent proto. Works identically for a running or
+// ended session -- Read has no status filter, it just returns whatever has
+// been committed so far. NOT_FOUND follows the same rule as GetSession; so
+// does the absence of any ownership check -- any authenticated caller may
+// read any session's transcript (FR2/C14), see GetSession's doc comment.
 func (s *SessionServer) ReadTranscript(ctx context.Context, req *pb.ReadTranscriptRequest) (*pb.ReadTranscriptResponse, error) {
 	id, err := uuid.Parse(req.GetSessionId())
 	if err != nil {
@@ -184,14 +186,6 @@ func (s *SessionServer) ReadTranscript(ctx context.Context, req *pb.ReadTranscri
 	}
 	if sess == nil {
 		return nil, status.Error(codes.NotFound, "session not found")
-	}
-
-	caller, err := s.callerSubject(ctx)
-	if err != nil {
-		return nil, err
-	}
-	if !subjectsEqual(sess.Subject, caller) {
-		return nil, status.Error(codes.PermissionDenied, "session belongs to a different subject")
 	}
 
 	limit := int(req.GetLimit())
@@ -253,6 +247,22 @@ func (s *SessionServer) callerSubject(ctx context.Context) (session.Subject, err
 // metadata about the identity rather than part of it.
 func subjectsEqual(a, b session.Subject) bool {
 	return a.Iss == b.Iss && a.Sub == b.Sub
+}
+
+// canControl reports whether caller may send turns to or stop sess (FR1/
+// C13). Control is scoped to sess.OnBehalfOf, never sess.Subject: a caller
+// controls a session when it is (or is acting for) the on-behalf-of
+// subject the session runs as, regardless of which identity actually
+// started it -- e.g. a service account starting a session on a user's
+// behalf records that user as OnBehalfOf, and it is the user, not the
+// service account's own identity, who can subsequently send turns or stop
+// it. Reads have no such check at all (see GetSession/ReadTranscript) --
+// this is deliberately the only place a control decision is made, so no
+// later UI/MCP task re-derives it. There is no admin override in M1: a
+// caller who is neither the session's on-behalf-of subject nor started it
+// simply cannot control it.
+func canControl(sess *session.Session, caller session.Subject) bool {
+	return subjectsEqual(sess.OnBehalfOf, caller)
 }
 
 // hasRole reports whether required is present in roles (FR9's role check:

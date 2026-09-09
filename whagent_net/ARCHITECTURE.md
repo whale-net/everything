@@ -303,6 +303,22 @@ non-Keycloak identity (an ASS Person is keyed on Google `sub`) be an
 on-behalf-of subject later without a schema change; C8's role check
 applies to the *acting* subject.
 
+**Read vs. control are two different rules, not one ownership check
+(#2237).** `SessionService`'s two read RPCs (`GetSession`, `ReadTranscript`)
+apply no ownership check at all — any authenticated caller may read any
+session, whoever started or controls it (FR2/C14: on-call viewers are the
+point). The two write RPCs that act on a running session (`SendTurn`,
+`StopSession`) are gated on `on_behalf_of`, never `subject` — a caller may
+control a session only when it *is* (or is acting for) the session's
+`on_behalf_of` `(iss, sub)` pair (FR1/C13), matched on both fields per LB2
+(same `sub` under a different `iss` does not control). `on_behalf_of ==
+subject` for every M1 row, so this is behavior-preserving on existing data
+while being the correct rule once a caller acts on behalf of someone else.
+There is no admin override in M1 — a caller that is neither the acting nor
+the on-behalf-of subject simply cannot control a session it didn't start.
+`whagent_net/api/handlers/session.go`'s `canControl` is the single place
+this control rule lives; no other handler re-derives it.
+
 Chain: subject → `api` → `worker` → domain MCP server → domain API. A
 short-lived **whagent-signed JWT** (`sub` + `sub_iss` = the on-behalf-of
 subject and its issuer, exactly the session's stored shape; `act` =

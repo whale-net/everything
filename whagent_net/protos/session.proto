@@ -37,8 +37,9 @@ service SessionService {
   // SessionState values, plus -- for a session that has ended -- why: the
   // CapKind for a capped session, or the ErrorCategory/detail for a failed
   // one. Reads come from the `sessions` row (#2109), never the workflow
-  // directly. NOT_FOUND for an unknown session id; PERMISSION_DENIED for a
-  // session belonging to a different subject.
+  // directly. NOT_FOUND for an unknown session id. Any authenticated caller
+  // may read any session, whoever started or controls it (FR2/C14) -- there
+  // is no ownership check on a read, only on SendTurn/StopSession (FR1/C13).
   rpc GetSession(GetSessionRequest) returns (GetSessionResponse);
 
   // ListSessions may be minimal in M1 (no C15 capability yet): implement
@@ -53,7 +54,8 @@ service SessionService {
   // `from_seq` + `limit`. A tool result a domain server returned with its
   // own `is_error` flag set is transcribed as an ordinary tool-result
   // event, never as the session failure event -- that distinction is
-  // encoded in TranscriptEvent's payload, not in this RPC's shape.
+  // encoded in TranscriptEvent's payload, not in this RPC's shape. Same
+  // read-any-session access as GetSession -- no ownership check (FR2/C14).
   rpc ReadTranscript(ReadTranscriptRequest) returns (ReadTranscriptResponse);
 }
 

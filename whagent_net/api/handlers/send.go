@@ -18,10 +18,11 @@ import (
 
 // SendTurn signals the session's running SessionWorkflow with the
 // operator's turn input. NOT_FOUND for an unknown session id;
-// PERMISSION_DENIED for a session belonging to a different subject than the
-// caller; FAILED_PRECONDITION for a session that has already reached a
-// terminal status (done/stopped/failed/capped) -- there is no running
-// workflow left to signal.
+// PERMISSION_DENIED when the caller is not the session's on_behalf_of
+// subject (canControl -- FR1/C13; there is no admin override in M1);
+// FAILED_PRECONDITION for a session that has already reached a terminal
+// status (done/stopped/failed/capped) -- there is no running workflow left
+// to signal.
 func (s *SessionServer) SendTurn(ctx context.Context, req *pb.SendTurnRequest) (*pb.SendTurnResponse, error) {
 	id, err := uuid.Parse(req.GetSessionId())
 	if err != nil {
@@ -40,8 +41,8 @@ func (s *SessionServer) SendTurn(ctx context.Context, req *pb.SendTurnRequest) (
 	if err != nil {
 		return nil, err
 	}
-	if !subjectsEqual(sess.Subject, caller) {
-		return nil, status.Error(codes.PermissionDenied, "session belongs to a different subject")
+	if !canControl(sess, caller) {
+		return nil, status.Error(codes.PermissionDenied, "control is scoped to the session's on-behalf-of subject")
 	}
 
 	if sess.Status.IsTerminal() {
