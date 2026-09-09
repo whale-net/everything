@@ -74,6 +74,8 @@ go_test(
     size = "large",
     timeout = "long",
     srcs = [
+        "fake_temporal_test.go",
+        "service_account_integration_test.go",
         "session_integration_test.go",
         "stream_events_integration_test.go",
         "usage_integration_test.go",
@@ -103,6 +105,7 @@ go_test(
         "@com_github_stretchr_testify//require",
         "@com_github_testcontainers_testcontainers_go//:testcontainers-go",
         "@com_github_testcontainers_testcontainers_go//wait",
+        "@io_temporal_go_sdk//client",
         "@org_golang_google_grpc//:grpc",
         "@org_golang_google_grpc//codes",
         "@org_golang_google_grpc//credentials/insecure",

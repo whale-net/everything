@@ -22,7 +22,10 @@ go_library(
 
 go_test(
     name = "grpcauth_test",
-    srcs = ["interceptors_test.go"],
+    srcs = [
+        "auth_test.go",
+        "interceptors_test.go",
+    ],
     embed = [":grpcauth"],
     deps = [
         "@org_golang_google_grpc//codes",
