@@ -215,10 +215,10 @@ func TestBuildListSessionsRequest_InvalidFilterIsBadRequest(t *testing.T) {
 	require.Nil(t, server.lastReq, "ListSessions must not be called for an invalid filter")
 }
 
-// newFixtureSession builds a minimal, valid Session for the pagination/
+// newFixtureListSession builds a minimal, valid Session for the pagination/
 // rendering tests below: id, a fixed agent, RUNNING state, and
 // createdAt/subject/onBehalfOf as given.
-func newFixtureSession(id string, createdAt time.Time, onBehalfOf *whagentpb.Subject) *whagentpb.Session {
+func newFixtureListSession(id string, createdAt time.Time, onBehalfOf *whagentpb.Subject) *whagentpb.Session {
 	ts := timestamppb.New(createdAt)
 	return &whagentpb.Session{
 		SessionId:  id,
@@ -241,7 +241,7 @@ func TestHandleSessionList_PaginationRoundTrip(t *testing.T) {
 
 	var sessions []*whagentpb.Session
 	for i := 0; i < 5; i++ {
-		sessions = append(sessions, newFixtureSession(uuid.New().String(), base.Add(time.Duration(i)*time.Hour), human))
+		sessions = append(sessions, newFixtureListSession(uuid.New().String(), base.Add(time.Duration(i)*time.Hour), human))
 	}
 
 	server := &fakeSessionListServer{sessions: sessions, pageSize: 2}
@@ -321,8 +321,8 @@ func TestHandleSessionList_StartedByRendering(t *testing.T) {
 	service := &whagentpb.Subject{Iss: "https://issuer.example.com", Sub: "svc-worker", Kind: whagentpb.SubjectKind_SUBJECT_KIND_SERVICE}
 	otherUser := &whagentpb.Subject{Iss: "https://issuer.example.com", Sub: "someone-else", Kind: whagentpb.SubjectKind_SUBJECT_KIND_HUMAN}
 
-	serviceSession := newFixtureSession("session-service", now, service)
-	otherUserSession := newFixtureSession("session-other-user", now.Add(-time.Hour), otherUser)
+	serviceSession := newFixtureListSession("session-service", now, service)
+	otherUserSession := newFixtureListSession("session-other-user", now.Add(-time.Hour), otherUser)
 
 	server := &fakeSessionListServer{sessions: []*whagentpb.Session{serviceSession, otherUserSession}}
 	app := newSessionListTestApp(t, server)
