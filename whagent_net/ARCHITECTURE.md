@@ -69,7 +69,7 @@ several UIs at once, and any consuming domain gets those semantics for free.
 | RabbitMQ | `//libs/go/rmq`, `//libs/go/htmxsse` | `htmxsse.Hub` + `DefaultAttachFunc` for SSE fan-out; reference implementation `tools/app_registry/ui/main.go` `initializeSSEHub`. |
 | Web UI | `//libs/go/htmxbase`, `//libs/go/htmxui`, `//libs/go/htmxauth` | Go + `templ` + htmx + daisyUI, CDN-pinned, no Node — the convention every UI in this repo follows. |
 | MCP | `github.com/modelcontextprotocol/go-sdk` | Precedent: `audience_score_system/mcp` (first Go MCP server in the repo, so #1552's "would be the first" note is stale). Auth via `//libs/go/mcpauth`. |
-| gRPC auth | `//libs/go/grpcauth` | Already verifies Keycloak OIDC (`coreos/go-oidc/v3`; `Claims{Subject, Roles, Audience}`; user-token and service-account dial options). The only gap is the on-behalf-of claim — see [Identity](#identity-and-auth-chaining). |
+| gRPC auth | `//libs/go/grpcauth` | Verifies Keycloak OIDC (`coreos/go-oidc/v3`; `Claims{Subject, Roles, Audience, ClientID, IsServiceAccount}`; user-token and service-account dial options). `IsServiceAccount` (FR6/#2243) is what `api` derives a session's `subject`/`on_behalf_of` `kind` from — see [Identity](#identity-and-auth-chaining). |
 | LLM client | `openai/openai-go` (candidate; architect to verify) | Serving is via **OpenRouter**, which is OpenAI-wire-compatible — the Anthropic SDK does not target it. One client with a base-URL override covers every OpenRouter model; a future second provider is another base URL, not an abstraction layer. |
 | Identity | Keycloak (OIDC) | Humans and service accounts alike — see [Identity](#identity-and-auth-chaining). |
 
@@ -353,7 +353,22 @@ is always populated — it equals the acting subject whenever a caller acts
 for itself, whatever its kind. Keeping `iss` a real column is what lets a
 non-Keycloak identity (an ASS Person is keyed on Google `sub`) be an
 on-behalf-of subject later without a schema change; C8's role check
-applies to the *acting* subject.
+applies to the *acting* subject, identically for a human or a service
+account — `api`'s `StartSession` runs the same `required_role` check
+either way (FR6/#2243), never a service-specific branch.
+
+**Kind (FR6/#2243).** `grpcauth.Claims.IsServiceAccount` (derived from a
+Keycloak client-credentials token's `preferred_username`, see
+`libs/go/grpcauth/KEYCLOAK.md` § "Service accounts") is what
+`callerSubject` (`whagent_net/api/handlers/session.go`) maps to
+`SubjectKindService` vs. `SubjectKindHuman` when it reconstructs the
+acting subject — the only place kind is decided. `StartSession` then
+writes `on_behalf_of = subject` as usual (M1's caller-acts-for-itself
+default, above), so a service account's session records `kind = service`
+on both columns with no other code path aware of the distinction —
+`worker`'s claim-minting and tool-dispatch paths (`api/persona`,
+`worker/tools/dispatch.go`) carry no service-specific branch (LB3): the
+stored `on_behalf_of.kind` is the only thing that differs.
 
 **Read vs. control are two different rules, not one ownership check
 (#2237).** `SessionService`'s two read RPCs (`GetSession`, `ReadTranscript`)
