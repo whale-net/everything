@@ -19,6 +19,7 @@ import (
 	"encoding/json"
 	"net"
 	"testing"
+	"time"
 
 	"github.com/google/uuid"
 	_ "github.com/jackc/pgx/v5/stdlib"
@@ -29,6 +30,7 @@ import (
 	"google.golang.org/grpc/credentials/insecure"
 	"google.golang.org/grpc/status"
 	"google.golang.org/grpc/test/bufconn"
+	"google.golang.org/protobuf/types/known/timestamppb"
 
 	"github.com/whale-net/everything/libs/go/dbtest"
 	"github.com/whale-net/everything/libs/go/grpcauth"
@@ -147,6 +149,26 @@ func createSessionWithSubjects(t *testing.T, ctx context.Context, store *session
 		AgentID:    "test-agent",
 		Model:      "test-model",
 		Status:     status,
+	}
+	require.NoError(t, store.Sessions().Create(ctx, sess))
+	return sess
+}
+
+// createSessionWith is createSession plus a mutate hook applied to the
+// fixture before Create, for ListSessions tests (issue #2241) that need to
+// control agent_id/subject.Kind rather than just subject/status.
+func createSessionWith(t *testing.T, ctx context.Context, store *session.Store, mutate func(*session.Session)) *session.Session {
+	t.Helper()
+	sess := &session.Session{
+		SessionID:  uuid.New(),
+		Subject:    devSubject,
+		OnBehalfOf: devSubject,
+		AgentID:    "test-agent",
+		Model:      "test-model",
+		Status:     session.StatusRunning,
+	}
+	if mutate != nil {
+		mutate(sess)
 	}
 	require.NoError(t, store.Sessions().Create(ctx, sess))
 	return sess
@@ -494,4 +516,149 @@ func TestStopSession_OnBehalfOfMatchButSubjectDoesNot_PassesControlCheck(t *test
 
 	require.NoError(t, err, "must succeed idempotently, not PermissionDenied -- proves canControl let devSubject through on on_behalf_of alone")
 	assert.Equal(t, pb.SessionState_SESSION_STATE_DONE, resp.Session.State)
+}
+
+// TestListSessions_ReturnsSessionsFromAnySubject proves ListSessions
+// applies #2237's read-any-session rule (FR3/C15, issue #2241): a session
+// belonging to a subject other than the caller (devSubject, injected by
+// AuthModeNone) still appears -- there is no owner filter, unlike
+// GetSession/ReadTranscript's pre-#2237 per-row PERMISSION_DENIED check.
+func TestListSessions_ReturnsSessionsFromAnySubject(t *testing.T) {
+	client, store := newTestServer(t)
+	ctx := context.Background()
+
+	mine := createSession(t, ctx, store, devSubject, session.StatusRunning)
+	someoneElses := createSession(t, ctx, store, otherSubject, session.StatusRunning)
+
+	resp, err := client.ListSessions(ctx, &pb.ListSessionsRequest{})
+	require.NoError(t, err)
+
+	ids := make([]string, len(resp.Sessions))
+	for i, s := range resp.Sessions {
+		ids[i] = s.SessionId
+	}
+	assert.Contains(t, ids, mine.SessionID.String())
+	assert.Contains(t, ids, someoneElses.SessionID.String(), "a session started by a different subject must still be listed -- #2237's read-any-session rule")
+}
+
+// TestListSessions_FiltersMapCorrectly proves each of ListSessionsRequest's
+// filter fields (agent_id, state, started_by_kind, started_after/before)
+// maps through to SessionStore.List and back out correctly (FR3/C15).
+func TestListSessions_FiltersMapCorrectly(t *testing.T) {
+	client, store := newTestServer(t)
+	ctx := context.Background()
+
+	wantAgent := createSessionWith(t, ctx, store, func(sess *session.Session) { sess.AgentID = "target-agent" })
+	createSessionWith(t, ctx, store, func(sess *session.Session) { sess.AgentID = "other-agent" })
+
+	t.Run("agent_id", func(t *testing.T) {
+		agentID := "target-agent"
+		resp, err := client.ListSessions(ctx, &pb.ListSessionsRequest{AgentId: &agentID})
+		require.NoError(t, err)
+		require.Len(t, resp.Sessions, 1)
+		assert.Equal(t, wantAgent.SessionID.String(), resp.Sessions[0].SessionId)
+		assert.Equal(t, "target-agent", resp.Sessions[0].AgentId)
+	})
+
+	t.Run("state", func(t *testing.T) {
+		running := createSessionWith(t, ctx, store, nil)
+		done := createSessionWith(t, ctx, store, nil)
+		require.NoError(t, store.Sessions().UpdateStatus(ctx, done.SessionID, session.StatusDone, nil))
+
+		state := pb.SessionState_SESSION_STATE_DONE
+		resp, err := client.ListSessions(ctx, &pb.ListSessionsRequest{State: &state})
+		require.NoError(t, err)
+		var ids []string
+		for _, s := range resp.Sessions {
+			ids = append(ids, s.SessionId)
+		}
+		assert.Contains(t, ids, done.SessionID.String())
+		assert.NotContains(t, ids, running.SessionID.String())
+	})
+
+	t.Run("started_by_kind", func(t *testing.T) {
+		service := createSessionWith(t, ctx, store, func(sess *session.Session) {
+			sess.Subject.Kind = session.SubjectKindService
+			sess.OnBehalfOf.Kind = session.SubjectKindService
+		})
+		human := createSessionWith(t, ctx, store, nil)
+
+		kind := pb.SubjectKind_SUBJECT_KIND_SERVICE
+		resp, err := client.ListSessions(ctx, &pb.ListSessionsRequest{StartedByKind: &kind})
+		require.NoError(t, err)
+		var ids []string
+		for _, s := range resp.Sessions {
+			ids = append(ids, s.SessionId)
+		}
+		assert.Contains(t, ids, service.SessionID.String())
+		assert.NotContains(t, ids, human.SessionID.String())
+	})
+
+	t.Run("started_after and started_before", func(t *testing.T) {
+		// created_at is DB-assigned NOW() -- bracket a wide enough window
+		// around "now" that every session created in this test falls
+		// strictly inside it, then narrow to a window entirely in the
+		// future to prove the filter actually excludes rows.
+		now := time.Now().UTC()
+		sess := createSessionWith(t, ctx, store, nil)
+
+		after := now.Add(-time.Hour)
+		resp, err := client.ListSessions(ctx, &pb.ListSessionsRequest{StartedAfter: timestamppb.New(after)})
+		require.NoError(t, err)
+		var ids []string
+		for _, s := range resp.Sessions {
+			ids = append(ids, s.SessionId)
+		}
+		assert.Contains(t, ids, sess.SessionID.String())
+
+		future := now.Add(time.Hour)
+		resp, err = client.ListSessions(ctx, &pb.ListSessionsRequest{StartedAfter: timestamppb.New(future)})
+		require.NoError(t, err)
+		assert.Empty(t, resp.Sessions, "started_after in the future must exclude every session created just now")
+
+		resp, err = client.ListSessions(ctx, &pb.ListSessionsRequest{StartedBefore: timestamppb.New(after)})
+		require.NoError(t, err)
+		ids = nil
+		for _, s := range resp.Sessions {
+			ids = append(ids, s.SessionId)
+		}
+		assert.NotContains(t, ids, sess.SessionID.String(), "started_before an hour ago must exclude a session created just now")
+	})
+}
+
+// TestListSessions_PageSizeClamping proves ListSessions' page_size is
+// server-clamped (FR3/C15, mirroring ReadTranscript's default/max shape):
+// requesting far more than the server maximum still returns at most the
+// server's own cap, with next_page_token set to prove more rows remain.
+func TestListSessions_PageSizeClamping(t *testing.T) {
+	client, store := newTestServer(t)
+	ctx := context.Background()
+
+	// session.maxSessionListPageSize is unexported (deliberately -- API
+	// callers configure page_size, not the cap itself); 205 rows is that
+	// constant's documented value (200) plus a safety margin, so this test
+	// keeps working unchanged if the constant is retuned within reason.
+	const seeded = 205
+	for i := 0; i < seeded; i++ {
+		createSessionWith(t, ctx, store, nil)
+	}
+
+	hugePageSize := int32(100000)
+	resp, err := client.ListSessions(ctx, &pb.ListSessionsRequest{PageSize: hugePageSize})
+	require.NoError(t, err)
+
+	assert.LessOrEqual(t, len(resp.Sessions), 200, "page_size must be clamped to the server maximum, not honored verbatim")
+	assert.NotEmpty(t, resp.NextPageToken, "more rows remain past the clamped page, so next_page_token must be set")
+}
+
+// TestListSessions_InvalidPageToken_ReturnsInvalidArgument proves a
+// tampered/malformed page_token surfaces as codes.InvalidArgument over the
+// real gRPC surface -- session.ErrInvalidPageToken's handler-side mapping
+// -- never a panic and never a silent full-list fallback.
+func TestListSessions_InvalidPageToken_ReturnsInvalidArgument(t *testing.T) {
+	client, _ := newTestServer(t)
+
+	_, err := client.ListSessions(context.Background(), &pb.ListSessionsRequest{PageToken: "not-a-real-token"})
+	require.Error(t, err)
+	assert.Equal(t, codes.InvalidArgument, status.Code(err))
 }
