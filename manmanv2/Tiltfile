@@ -282,6 +282,8 @@ spec:
           value: "{s3_endpoint}"
         - name: S3_PUBLIC_ENDPOINT
           value: "{s3_public_endpoint}"
+        - name: S3_PUBLIC_USE_PATH_STYLE
+          value: "{s3_public_use_path_style}"
         - name: S3_ACCESS_KEY
           value: "{s3_access_key}"
         - name: S3_SECRET_KEY
@@ -296,6 +298,13 @@ spec:
         rabbitmq_url=rabbitmq_url,
         s3_endpoint=s3_endpoint,
         s3_public_endpoint=os.environ.get('S3_PUBLIC_ENDPOINT', 'http://host.docker.internal:9000'),
+        # Local dev MinIO (tools/tilt/minio.tilt) has no MINIO_DOMAIN
+        # configured and only ever does path-style bucket routing, so
+        # default to path-style here. A deployment overriding
+        # S3_PUBLIC_ENDPOINT to a real OVH-style endpoint (e.g. via
+        # BUILD_MINIO_ENV=custom) can also override this to 'false'
+        # (issue #2225/#2227).
+        s3_public_use_path_style=os.environ.get('S3_PUBLIC_USE_PATH_STYLE', 'true'),
         s3_access_key=s3_access_key,
         s3_secret_key=s3_secret_key,
         s3_bucket=s3_bucket,
