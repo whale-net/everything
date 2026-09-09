@@ -37,9 +37,7 @@ discussion: GitHub issue #1552.
 | `worker/` | `worker` | Temporal `SessionWorkflow` + activities: resolve agent definition, build context, list/attach tools (FR8), call the model, dispatch each requested tool call, commit the turn, enforce turn/cost caps. | `bazel run //whagent_net/worker:worker` |
 | `mcp/` | `external-api` | MCP surface over `api` — how Claude Code and other agents drive agents. | `bazel run //whagent_net/mcp:mcp` |
 | `ui/` | `external-api` | Standalone agent web UI (M2, issue #2236): Keycloak sign-in (NFR1) guards every app route, forwards the signed-in operator's own access token to `api` on every call (never a shared service account). No session-specific pages yet — a placeholder authenticated index page today; FR1-FR4 land the real pages. | `bazel run //whagent_net/ui:whagent-net-ui` |
-
-Planned, not yet built (M2+): `archiver/` (Postgres → S3 transcript
-archival and hot-tier retention).
+| `archiver/` | `worker` | Hot-to-cold transcript archiver (FR7/C18, issue #2244): periodically batches a terminal session's transcript out of Postgres past `WHAGENT_TRANSCRIPT_TTL`, gzips and uploads it to S3, commits the `transcript_archive` index row, and only then trims the hot-tier rows. | `bazel run //whagent_net/archiver:whagent-net-archiver` |
 
 Shared Go packages: `session/` (store), `config/` (the agent-definition
 seed source), `llm/` (the OpenRouter model client), `worker/tools/` (tool
@@ -240,12 +238,14 @@ session store), Temporal (`TEMPORAL_HOST`), RabbitMQ (`RABBITMQ_URL`,
 `worker` only today), an OpenRouter API key (`OPENROUTER_API_KEY`), and a
 whagent-net signing key (`WHAGENT_SIGNING_KEY`/`WHAGENT_SIGNING_KEY_ID`,
 `api` and `worker` both fail startup loudly without one) — see
-[`ENV.md`](ENV.md) for the complete variable set across all five
-binaries.
+[`ENV.md`](ENV.md) for the complete variable set across every binary.
 
-**Tilt** (`cd whagent_net && tilt up`) stands up all five binaries plus
-Postgres/Temporal/RabbitMQ, with a checked-in dev-only signing key —
-see `Tiltfile`. `ui` defaults to `AUTH_MODE=none` locally (no Keycloak
+**Tilt** (`cd whagent_net && tilt up`) stands up `migrate`/`api`/`worker`/
+`mcp`/`ui` plus Postgres/Temporal/RabbitMQ, with a checked-in dev-only
+signing key — see `Tiltfile`. `archiver` is wired there too but disabled
+by default (no local S3-compatible storage in this Tiltfile yet; see its
+`Tiltfile` comment for how to enable it against a MinIO of your own).
+`ui` defaults to `AUTH_MODE=none` locally (no Keycloak
 realm required to click around), forwarded to
 [http://localhost:8081](http://localhost:8081) — set `AUTH_MODE=oidc`
 plus the `WHAGENT_OIDC_*` vars in a local `.env` to exercise a real

@@ -94,7 +94,7 @@ Programmatic integrators need `GetSession` (is it done? waiting on me?),
 | `whagent_net/session` | Go package + migrations | Store: `sessions`, `transcript_events` (append-only — explicitly **not** SCD2), idempotency ledger, agent definition assignment (SCD2, `valid_from`/`valid_to`). Publishes every committed event to the `whagent/events` exchange. Transparent S3 hydration on cold reads. |
 | `whagent_net/api` | gRPC service, `external-api` | Session service facade: `StartSession`, `SendTurn`, `StopSession`, `GetSession`, `ListSessions`, `ReadTranscript`, `StreamEvents` (FR5/C17, issue #2239) — a server-streaming bridge over the exchange so programmatic clients never need RabbitMQ credentials. Writes signal the Temporal workflow; reads go to `session` directly. Mirrors `manmanv2/control-api`. |
 | `whagent_net/worker` | Temporal worker, `worker` | `SessionWorkflow` (one per session, long-lived, signal-per-turn) + activities: resolve agent definition → build context → LLM call → dispatch tool calls to domain MCP servers → commit turn → publish. Imports `session` directly. |
-| `whagent_net/archiver` | RMQ consumer + retention job, `worker` | Postgres → S3 when a session is terminal and past TTL; trims hot-tier bodies; leaves an index row with the S3 pointer. The one new stateful deployable the tiering adds. |
+| `whagent_net/archiver` | Periodic scan + retention job, `worker` | Postgres → S3 when a session is terminal and past TTL (FR7/C18, issue #2244); trims hot-tier bodies; leaves an index row with the S3 pointer. Selects by polling `sessions`/`transcript_archive` on `WHAGENT_ARCHIVER_SCAN_INTERVAL`, not by consuming `whagent/events` — a session's terminal transition is a row write (`sessions.updated_at`), not something the archiver needs a bus message to discover. The one new stateful deployable the tiering adds. |
 | `whagent_net/mcp` | MCP server, `external-api` | `start_session`, `send_turn`, `get_session`, `read_transcript` over `api`. Phase-1 test surface (Claude Code drives it directly) and, later, how agents spawn agents. Same `web` + `mcp` sibling shape as `audience_score_system`. |
 | `whagent_net/embed` | Go package | The shareable UI component: `templ` session components (transcript, turn composer, session list) + `embed.Mount(mux, apiClient, sseHub, opts)` registering fragment + SSE routes under a host-chosen prefix + a persona-mapping hook. Cross-app primitives only, per `libs/go/htmxui`'s rule. |
 | `whagent_net/ui` | Web UI, `external-api` | Standalone agent UI: session list, session view, "run an agent" form, view any session. `htmxui.Shell` + `embed` + an `htmxsse.Hub` on `whagent/events`. First consumer of `embed`; first *clean* `htmxui` adopter. |
@@ -120,19 +120,19 @@ adding a second query engine for transcripts is not justified at this scale.
 ### Cold-object contract (FR8/FR7, issue #2240)
 
 This is the interop contract between `session`'s tier-transparent reader
-(issue #2240, this task) and `archiver` (FR7, a later task): both agree on
-the exact object shape without either owning the other's code.
+(issue #2240) and `archiver` (FR7, issue #2244): both agree on the exact
+object shape without either owning the other's code.
 
 - **Index row:** `transcript_archive` (migration 002), one row per archived
   session — `session_id` (PK, `REFERENCES sessions`), `s3_bucket`, `s3_key`,
   `event_count`/`min_seq`/`max_seq` (let a reader sanity-check what it
   downloads without opening it), `archived_at`, and `hot_trimmed_at`
   (`NULL` until `archiver` trims the session's hot rows — written by
-  `archiver`, read by nobody until that task lands). Append-only-ish, like
-  `transcript_event` — explicitly **not** SCD2 (a session is archived at
-  most once; `hot_trimmed_at` is the one field ever revised after insert).
-  A row existing here is itself the "hydrate from S3" signal — readers
-  never consult `hot_trimmed_at` to decide whether to hydrate.
+  `archiver` (issue #2244)). Append-only-ish, like `transcript_event` —
+  explicitly **not** SCD2 (a session is archived at most once;
+  `hot_trimmed_at` is the one field ever revised after insert). A row
+  existing here is itself the "hydrate from S3" signal — readers never
+  consult `hot_trimmed_at` to decide whether to hydrate.
 - **Object key:** `sessions/{session_id}.jsonl.gz`.
 - **Object body:** gzip-compressed JSON Lines, one `whagent_net/events.Event`
   per line (`event_id`, `session_id`, `seq`, `turn`, `type`, `payload`,

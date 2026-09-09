@@ -110,7 +110,7 @@ func archiveObjectKey(sessionID uuid.UUID) string {
 
 // uploadArchiveObject writes evs to client at sessionID's documented key as
 // gzipped JSON Lines, one events.Event per line -- exactly the format
-// decodeArchiveObject (transcript.go) expects to read back.
+// DecodeArchiveObject (transcript.go) expects to read back.
 func uploadArchiveObject(t *testing.T, ctx context.Context, client *s3.Client, sessionID uuid.UUID, evs []events.Event) {
 	t.Helper()
 	var buf bytes.Buffer

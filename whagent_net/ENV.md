@@ -1,10 +1,10 @@
 # whagent-net — Environment Variables
 
 M1 shipped (issue #2121): `migrate`, `api`, `worker`, and `mcp` all read
-the variables below. `ui` (M2, issue #2236) now exists too — see "`ui`
-(standalone agent web UI, issue #2236)" below for its own variables.
-`archiver` is not built yet — its rows are still forward-looking, per
-`AGENTS.md` § Maintaining Docs.
+the variables below. `ui` (M2, issue #2236) and `archiver` (M2, FR7/C18,
+issue #2244) now exist too — see "`ui` (standalone agent web UI, issue
+#2236)" below for `ui`'s own variables, and "S3 (cold tier)" and
+"Archiver scan/batch (issue #2244)" below for `archiver`'s.
 
 ## Database
 
@@ -31,20 +31,23 @@ itself).
 ## RabbitMQ (event bus)
 
 Read via `//libs/go/rmq` (`worker` publishes; `api` (`StreamEvents`, FR5/C17,
-issue #2239), `archiver`, `ui`, and any `embed` host consume -- `api` via a
+issue #2239), `ui`, and any `embed` host consume -- `api` via a
 raw `rmq.Consumer` (`whagent_net/api/main.go`'s `initializeEventsConsumer`),
-the others via `//libs/go/htmxsse`).
+the others via `//libs/go/htmxsse`). `archiver` (issue #2244) is not a
+consumer here -- it selects archivable sessions by periodically polling
+`sessions`/`transcript_archive` directly (see "Archiver scan/batch"
+below), not by watching the bus.
 
 | Variable | Component | Default | Description |
 |----------|-----------|---------|-------------|
-| `RABBITMQ_URL` | worker, api, archiver, ui | — | Broker URL (`amqp://` or `amqps://`). Exchange name `whagent/events` is fixed. Unset disables publishing on `worker` (`whagent_net/session`'s transcript append path still commits, it just skips the publish step -- see `whagent_net/events`, issue #2111) and disables `StreamEvents` on `api` (the RPC reports `UNAVAILABLE` instead of blocking; `api` itself still starts, same non-fatal-construction convention as `worker`'s publisher). |
-| `RABBITMQ_SSL_VERIFY` | worker, api, archiver, ui | `true` | For `amqps://` URLs only: set to `false` to skip server certificate verification (dev/test only). Read by `//libs/go/rmq`. |
-| `RABBITMQ_CA_CERT_PATH` | worker, api, archiver, ui | — | For `amqps://` URLs only: path to a custom CA certificate file. Read by `//libs/go/rmq`. |
-| `RABBITMQ_TLS_SERVER_NAME` | worker, api, archiver, ui | — | For `amqps://` URLs only: server name for certificate verification, for when the connection URL's host differs from the certificate's. Read by `//libs/go/rmq`. |
+| `RABBITMQ_URL` | worker, api, ui | — | Broker URL (`amqp://` or `amqps://`). Exchange name `whagent/events` is fixed. Unset disables publishing on `worker` (`whagent_net/session`'s transcript append path still commits, it just skips the publish step -- see `whagent_net/events`, issue #2111) and disables `StreamEvents` on `api` (the RPC reports `UNAVAILABLE` instead of blocking; `api` itself still starts, same non-fatal-construction convention as `worker`'s publisher). |
+| `RABBITMQ_SSL_VERIFY` | worker, api, ui | `true` | For `amqps://` URLs only: set to `false` to skip server certificate verification (dev/test only). Read by `//libs/go/rmq`. |
+| `RABBITMQ_CA_CERT_PATH` | worker, api, ui | — | For `amqps://` URLs only: path to a custom CA certificate file. Read by `//libs/go/rmq`. |
+| `RABBITMQ_TLS_SERVER_NAME` | worker, api, ui | — | For `amqps://` URLs only: server name for certificate verification, for when the connection URL's host differs from the certificate's. Read by `//libs/go/rmq`. |
 
 ## S3 (cold tier)
 
-Read by `archiver` (write, FR7, not built yet) and `api` (hydrate archived
+Read by `archiver` (write, FR7, issue #2244) and `api` (hydrate archived
 transcripts, FR8, issue #2240). `api` builds its `//libs/go/s3` client in
 `initializeS3Client` (`whagent_net/api/main.go`) and attaches it to the
 `session.Store` via `session.WithS3` -- construction is non-fatal, same
@@ -52,19 +55,32 @@ pattern as `RABBITMQ_URL`/`initializePublisher` above: `WHAGENT_S3_BUCKET`
 unset, or the client failing to construct, leaves transcript reads
 hot-only (`ReadTranscript` still works for every non-archived session; see
 `whagent_net/session/transcript.go`'s `TranscriptStore` doc comment).
-`S3_REGION`/`S3_ENDPOINT`/`S3_ACCESS_KEY`/`S3_SECRET_KEY` are the same
-unprefixed names `manmanv2/api` and `tools/app_registry` use for their own
-`s3.Client`s (see `libs/go/s3` `Config`) -- only the bucket is
-whagent-net-specific.
+`archiver` has no such fallback -- it has nothing to archive to without a
+bucket, so `WHAGENT_S3_BUCKET` unset or the client failing to construct
+both fail its startup loudly (`whagent_net/archiver/main.go`), unlike
+`api`'s graceful degradation. `S3_REGION`/`S3_ENDPOINT`/`S3_ACCESS_KEY`/
+`S3_SECRET_KEY` are the same unprefixed names `manmanv2/api` and
+`tools/app_registry` use for their own `s3.Client`s (see `libs/go/s3`
+`Config`) -- only the bucket is whagent-net-specific.
 
 | Variable | Component | Default | Description |
 |----------|-----------|---------|-------------|
-| `WHAGENT_S3_BUCKET` | archiver, api | — | Bucket for `sessions/{id}.jsonl.gz`. Unset disables the cold tier entirely: `archiver` never archives, `api` never hydrates (reads stay hot-only). |
+| `WHAGENT_S3_BUCKET` | archiver, api | — | Bucket for `sessions/{id}.jsonl.gz`. Unset disables the cold tier for `api` (reads stay hot-only); required for `archiver` (fails startup). |
 | `S3_REGION` | archiver, api | `us-east-1` | Region for the S3-compatible endpoint. |
 | `S3_ENDPOINT` | archiver, api | — | Custom S3 endpoint (e.g. MinIO, OVH); unset uses AWS's default endpoint resolution. |
 | `S3_ACCESS_KEY` | archiver, api | — | Static access key (e.g. for MinIO); unset falls back to the AWS SDK's default credential chain. |
 | `S3_SECRET_KEY` | archiver, api | — | Static secret key, paired with `S3_ACCESS_KEY`. |
-| `WHAGENT_TRANSCRIPT_TTL` | archiver | — | Hot-tier retention after a session is terminal. |
+| `WHAGENT_TRANSCRIPT_TTL` | archiver | `168h` (7 days) | Hot-tier retention after a session is terminal (`sessions.updated_at`, the compare-and-swap terminal write) before it becomes eligible for archival. |
+
+## Archiver scan/batch (issue #2244)
+
+Read directly via `os.Getenv` in `whagent_net/archiver/main.go`
+(`ConfigFromEnv`, `whagent_net/archiver/archiver.go`).
+
+| Variable | Component | Default | Description |
+|----------|-----------|---------|-------------|
+| `WHAGENT_ARCHIVER_SCAN_INTERVAL` | archiver | `5m` | How often `archiver` polls for newly-eligible sessions (terminal, past `WHAGENT_TRANSCRIPT_TTL`, no `transcript_archive` row yet). |
+| `WHAGENT_ARCHIVER_BATCH_SIZE` | archiver | `50` | Maximum number of eligible sessions archived per scan, so one tick never tries an unbounded backlog in one pass. |
 
 ## LLM provider
 

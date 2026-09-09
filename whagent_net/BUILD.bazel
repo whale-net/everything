@@ -8,11 +8,12 @@ filegroup(
     visibility = ["//visibility:public"],
 )
 
-# Composes all four M1 binaries (migrate, api, worker, mcp) into one
-# deployable chart, mirroring audience_score_system/BUILD.bazel's
-# ass_backend_chart (same four-binary shape: migration job + gRPC/MCP
-# external-apis + Temporal worker). domain "whagent-net" + chart_name
-# "whagent-net" produces the "helm-whagent-net-whagent-net" chart identity.
+# Composes the M1 binaries (migrate, api, worker, mcp), M2's ui, and now
+# archiver (FR7, C18, issue #2244) into one deployable chart, mirroring
+# audience_score_system/BUILD.bazel's ass_backend_chart's migration-job +
+# gRPC/MCP external-apis + Temporal-worker shape. domain "whagent-net" +
+# chart_name "whagent-net" produces the "helm-whagent-net-whagent-net"
+# chart identity.
 release_helm_chart(
     name = "whagent_net_chart",
     chart_name = "whagent-net",
@@ -25,6 +26,7 @@ release_helm_chart(
         "//whagent_net/worker:worker_metadata",
         "//whagent_net/mcp:mcp_metadata",
         "//whagent_net/ui:whagent-net-ui_metadata",
+        "//whagent_net/archiver:whagent-net-archiver_metadata",
     ],
     visibility = ["//visibility:public"],
 )
