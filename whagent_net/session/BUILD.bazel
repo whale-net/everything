@@ -23,6 +23,21 @@ go_library(
     ],
 )
 
+# Pure unit test for List's opaque page_token encoding (issue #2241,
+# FR3/C15): encodeSessionCursor/decodeSessionCursor round-trip both
+# directions, and a malformed/tampered token is ErrInvalidPageToken, never
+# a panic. No Postgres/network dependency, so this runs as part of
+# `bazel test //...` -- unlike session_integration_test below, which
+# exercises List itself against a real database.
+go_test(
+    name = "session_test",
+    srcs = ["sessions_test.go"],
+    embed = [":session"],
+    deps = [
+        "@com_github_google_uuid//:uuid",
+    ],
+)
+
 # Real Postgres integration test for the whole session store package
 # (issue #2109's Testing section): migration 001 up/down/re-up reversibility
 # is covered separately (//whagent_net/migrate/schema:schema_integration_test);

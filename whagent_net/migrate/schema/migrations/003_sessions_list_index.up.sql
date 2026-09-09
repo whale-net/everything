@@ -1,4 +1,4 @@
--- 002_sessions_list_index: supports ListSessions (FR3/C15, issue #2241).
+-- 003_sessions_list_index: supports ListSessions (FR3/C15, issue #2241).
 -- idx_sessions_created_at_id backs both the default (created_at DESC,
 -- session_id DESC) ordering and the keyset predicate SessionStore.List
 -- applies for pagination -- session_id is the tie-breaker because
