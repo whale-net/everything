@@ -14,14 +14,6 @@ import (
 	manmanpb "github.com/whale-net/everything/manmanv2/protos"
 )
 
-// GamesPageData holds data for the games list page
-type GamesPageData struct {
-	Title  string
-	Active string
-	User   *htmxauth.UserInfo
-	Games  []*manmanpb.Game
-}
-
 // GameDetailPageData holds data for game detail page
 type GameDetailPageData struct {
 	Title       string
@@ -43,17 +35,41 @@ type GameFormData struct {
 	User *htmxauth.UserInfo
 }
 
+// handleGames renders the Games page's flat list (root plan #2266, task
+// #2270 -- FR4, FR5, NFR7, WD1, WD6). The real fleet-wide join across
+// games, game configs, deployments, servers, and live sessions (NFR7's
+// "constant number of calls" bound, run-state rollup, and connect
+// address derivation) is #2270's Implementation-phase work; this
+// scaffold wires the `expand` query parameter through and renders a
+// GameRow shell per game so pages.Games has a stable, compiling contract
+// to build on.
 func (app *App) handleGames(w http.ResponseWriter, r *http.Request) {
 	user := htmxauth.GetUser(r.Context())
 	ctx := r.Context()
-	
+
 	games, err := app.grpc.ListGames(ctx)
 	if err != nil {
 		log.Printf("Error fetching games: %v", err)
 		http.Error(w, "Failed to fetch games", http.StatusInternalServerError)
 		return
 	}
-	
+
+	// expand (spec amendment A1, migration task): an entry-point hint,
+	// not persisted page state. Absent, non-numeric, or stale (no
+	// matching game) all resolve to 0 / "expand nothing" and are never
+	// an error -- gameRowExpanded in games.templ does the stale check.
+	expandGameID, _ := strconv.ParseInt(strings.TrimSpace(r.URL.Query().Get("expand")), 10, 64)
+
+	rows := make([]pages.GameRow, 0, len(games))
+	for _, game := range games {
+		rows = append(rows, pages.GameRow{
+			GameID:   game.GameId,
+			Name:     game.Name,
+			RunState: components.DeploymentStopped,
+			Connect:  components.ConnectAddressView{Unavailable: true},
+		})
+	}
+
 	breadcrumbs := []components.Breadcrumb{
 		{Label: "Games", URL: "/games"},
 	}
@@ -65,7 +81,13 @@ func (app *App) handleGames(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if err := RenderTempl(w, r, "Games", pages.Games(layoutData, games)); err != nil {
+	data := pages.GamesPageData{
+		Layout:       layoutData,
+		Games:        rows,
+		ExpandGameID: expandGameID,
+	}
+
+	if err := RenderTempl(w, r, "Games", pages.Games(data)); err != nil {
 		log.Printf("Error rendering template: %v", err)
 		http.Error(w, "Internal server error", http.StatusInternalServerError)
 	}
