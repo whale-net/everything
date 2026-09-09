@@ -1,0 +1,182 @@
+package components
+
+// Blade and BladeTabs are htmxui-liftability candidates (NFR1): the plan
+// names the Blade layer/scrim and the tab strip as the expected new
+// components for M5, written so they can be lifted into libs/go/htmxui
+// unchanged. Accordingly neither imports a manmanv2 domain type, references
+// a manmanv2 route string, or knows anything about deployments/configs --
+// everything domain-specific arrives as a BladeData/BladeTab field or as
+// children. They are scaffolded here in manmanv2/ui/components (not
+// libs/go/htmxui directly) only because #2269 is manmanv2-scoped groundwork
+// for M5's two blade tasks; the lift itself is a separate, later move, not
+// a rewrite.
+//
+// Implementation note (#2269): the interaction script below (scrim
+// click/Escape dismissal, focus trap, section-granularity dirty-tracking)
+// is plain vanilla JS scoped by getElementById(data.ID), mirroring
+// live_indicator.templ's LiveRegion pattern -- not Alpine.js. htmxui itself
+// has no Alpine dependency (see theme_switcher.templ), and Blade must stay
+// liftable unchanged into htmxui, so it cannot assume a consuming app has
+// Alpine loaded (manmanv2's other pages do, via htmxbase, but that is a
+// manmanv2-side choice, not a Blade requirement).
+
+// Blade renders a single dismissible layer over the surface that launched
+// it (FR10, decision 6: never over another Blade -- callers are
+// responsible for opening at most one Blade at a time). children... is the
+// blade's body content, rendered inside the panel below the title/subtitle
+// header.
+//
+// Dismissal (scrim click or Escape) is guarded by section-granularity
+// dirty-tracking (FR10): any descendant marked
+// data-blade-section + data-blade-dirty="true" makes dismissal prompt for
+// confirmation before the blade closes; a section that never sets itself
+// dirty (e.g. an FR11-style per-key-commit section) never triggers a
+// prompt. A section owns its own data-blade-dirty value -- it sets
+// "true" on its first accumulated edit and clears it back to "false" (or
+// removes the attribute) on successful Save; Blade only reads it at
+// dismissal time, it never writes it.
+//
+// Opening/closing never re-renders or re-fetches the surface underneath
+// (FR10, and the reason FR4's client-side expansion state exists): this
+// script only ever touches the blade's own subtree (removing it from the
+// DOM on dismiss) plus the launching control's focus -- it never issues a
+// request or touches an htmx swap target outside itself, so the
+// underlying document (and therefore its scroll position and expansion
+// state) is simply never disturbed. There is deliberately no scroll
+// save/restore machinery here: that would only be needed to compensate for
+// a re-render that must not be happening in the first place.
+templ Blade(data BladeData) {
+	<div id={ data.ID } class="fixed inset-0 z-40" data-blade role="presentation">
+		<div class="fixed inset-0 bg-black/40" data-blade-scrim aria-hidden="true"></div>
+		<div
+			class="fixed inset-y-0 right-0 z-50 w-full max-w-lg bg-base-100 shadow-xl overflow-y-auto"
+			role="dialog"
+			aria-modal="true"
+			aria-labelledby={ data.ID + "-title" }
+			if data.Subtitle != "" {
+				aria-describedby={ data.ID + "-subtitle" }
+			}
+			tabindex="-1"
+			data-blade-panel
+		>
+			<div class="px-6 py-4 border-b border-base-300">
+				<h2 id={ data.ID + "-title" } class="text-lg font-semibold">{ data.Title }</h2>
+				if data.Subtitle != "" {
+					<p id={ data.ID + "-subtitle" } class="text-sm opacity-70">{ data.Subtitle }</p>
+				}
+			</div>
+			<div class="p-6">
+				{ children... }
+			</div>
+		</div>
+	</div>
+	<script data-blade-id={ data.ID }>
+(function() {
+  // data-blade-id (read off this very <script> element, not interpolated
+  // into the script body) is how the dynamic per-instance id gets in here
+  // -- templ text interpolation inside a <script> body is HTML-escaped
+  // text, not a JS-safe value, so the id travels as an attribute instead
+  // (same reason live_indicator.templ's heartbeat interval travels via
+  // data-heartbeat-ms rather than being spliced into its script body).
+  // This also means a plain <script> (not type="module"), since
+  // document.currentScript is always null inside a module script.
+  const self = document.currentScript;
+  const bladeId = self && self.getAttribute('data-blade-id');
+  const root = bladeId && document.getElementById(bladeId);
+  if (!root) return;
+
+  const scrim = root.querySelector('[data-blade-scrim]');
+  const panel = root.querySelector('[data-blade-panel]');
+  if (!scrim || !panel) return;
+
+  // The element focused immediately before this Blade mounted is the
+  // "launching control" (FR10): focus returns there on dismiss.
+  const launcher = document.activeElement;
+
+  function focusableElements() {
+    const nodes = panel.querySelectorAll(
+      'a[href], button:not([disabled]), textarea:not([disabled]), input:not([disabled]), select:not([disabled]), [tabindex]:not([tabindex="-1"])'
+    );
+    return Array.prototype.filter.call(nodes, (el) => el.offsetParent !== null);
+  }
+
+  function dirtySections() {
+    return root.querySelectorAll('[data-blade-section][data-blade-dirty="true"]');
+  }
+
+  function cleanup() {
+    document.removeEventListener('keydown', onKeydown, true);
+  }
+
+  function dismiss() {
+    if (dirtySections().length > 0) {
+      const discard = window.confirm(
+        'This section has unsaved changes. Discard them and close?'
+      );
+      if (!discard) return;
+    }
+    cleanup();
+    root.remove();
+    if (launcher && typeof launcher.focus === 'function') {
+      launcher.focus();
+    }
+  }
+
+  function trapFocus(event) {
+    if (event.key !== 'Tab') return;
+    const focusables = focusableElements();
+    if (focusables.length === 0) {
+      event.preventDefault();
+      panel.focus();
+      return;
+    }
+    const first = focusables[0];
+    const last = focusables[focusables.length - 1];
+    if (event.shiftKey && document.activeElement === first) {
+      event.preventDefault();
+      last.focus();
+    } else if (!event.shiftKey && document.activeElement === last) {
+      event.preventDefault();
+      first.focus();
+    }
+  }
+
+  function onKeydown(event) {
+    if (event.key === 'Escape' || event.key === 'Esc') {
+      event.stopPropagation();
+      dismiss();
+      return;
+    }
+    trapFocus(event);
+  }
+
+  scrim.addEventListener('click', dismiss);
+  // Capture phase: this Blade is the only one ever open at a time (FR10,
+  // decision 6), but capture keeps Escape/Tab handling scoped ahead of any
+  // other document-level listener a caller's own page script installs.
+  document.addEventListener('keydown', onKeydown, true);
+
+  const initial = focusableElements()[0];
+  (initial || panel).focus();
+})();
+	</script>
+}
+
+// BladeTabs renders the tab strip a Blade's body composes when it holds
+// multiple sections (FR13 fixes this structure for the Config Editor's
+// three tabs). activeID marks exactly one tab active by BladeTab.ID match;
+// an activeID with no matching tab renders no tab as active. Switching
+// tabs is a caller-owned behavior (e.g. an htmx swap of the panel body
+// scoped to stay inside this Blade) -- BladeTabs itself only renders the
+// strip markup.
+templ BladeTabs(tabs []BladeTab, activeID string) {
+	<div role="tablist" class="tabs tabs-bordered" data-blade-tabs>
+		for _, tab := range tabs {
+			if tab.ID == activeID {
+				<a role="tab" class="tab tab-active" data-blade-tab-id={ tab.ID } aria-selected="true">{ tab.Label }</a>
+			} else {
+				<a role="tab" class="tab" data-blade-tab-id={ tab.ID } aria-selected="false">{ tab.Label }</a>
+			}
+		}
+	</div>
+}
