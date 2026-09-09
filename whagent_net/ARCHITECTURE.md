@@ -237,7 +237,12 @@ event, so consumers can react to "ran out" differently from "finished".
 Cap evaluation always reads `UsageStore.SumCost`'s committed running total,
 never a separately-mutated counter, and the turn cap/cost cap check itself
 (`whagent_net/worker/caps.go`'s `checkCaps`) is agent-definition-level only
-in M1 — there is no per-session cap override.
+in M1 — there is no per-session cap override. The `GetSessionUsage` read
+path (`whagent_net/api/handlers/usage.go`, backed by
+`UsageStore.Summary`) sums the same `turn_usage` rows `SumCost` does — one
+COUNT/COALESCE(SUM)/bool_or query, not a separately-mutated counter — so a
+client reading usage never sees a figure that could diverge from what cap
+evaluation itself used to decide `capped`.
 
 There is no human-approval gate for tool calls (non-goal for now).
 
