@@ -309,15 +309,45 @@ func (c *Client) RemoveNetwork(ctx context.Context, networkID string) error {
 	return c.cli.NetworkRemove(ctx, networkID)
 }
 
-// GetContainerLogs returns the logs from a container
-func (c *Client) GetContainerLogs(ctx context.Context, containerID string, follow bool, tail string) (io.ReadCloser, error) {
+// GetContainerLogs returns the logs from a container.
+//
+// since, if non-empty, is passed through to the Docker Engine API's `since`
+// log filter (Unix timestamp or RFC3339) so only logs emitted at or after
+// that point are returned — used to avoid replaying already-delivered logs
+// when re-attaching to a container after a restart. Pass "" for no filter.
+//
+// timestamps, if true, has Docker prefix each returned log line with its
+// RFC3339Nano timestamp (see docker.SplitLogTimestamp for parsing it back out).
+func (c *Client) GetContainerLogs(ctx context.Context, containerID string, follow bool, tail string, since string, timestamps bool) (io.ReadCloser, error) {
 	options := container.LogsOptions{
 		ShowStdout: true,
 		ShowStderr: true,
 		Follow:     follow,
 		Tail:       tail,
+		Since:      since,
+		Timestamps: timestamps,
 	}
 	return c.cli.ContainerLogs(ctx, containerID, options)
+}
+
+// dockerLogTimestampLen is the width of the fixed-precision RFC3339Nano
+// timestamp Docker prefixes to each log line when Timestamps: true is set,
+// e.g. "2024-01-15T10:30:00.123456789Z".
+const dockerLogTimestampLen = len("2006-01-02T15:04:05.000000000Z")
+
+// SplitLogTimestamp splits a log line that was read with timestamps=true
+// (see GetContainerLogs) into its emission time and the remaining message.
+// ok is false if line doesn't start with a recognizable Docker log timestamp,
+// in which case rest is returned unchanged.
+func SplitLogTimestamp(line string) (ts time.Time, rest string, ok bool) {
+	if len(line) < dockerLogTimestampLen+1 || line[dockerLogTimestampLen] != ' ' {
+		return time.Time{}, line, false
+	}
+	parsed, err := time.Parse(time.RFC3339Nano, line[:dockerLogTimestampLen])
+	if err != nil {
+		return time.Time{}, line, false
+	}
+	return parsed, line[dockerLogTimestampLen+1:], true
 }
 
 // AttachToContainer attaches to a running container for stdin input only.
