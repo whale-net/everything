@@ -156,16 +156,30 @@ database/Temporal/RabbitMQ/S3 client libraries this binary also uses).
 ## `mcp` server (issue #2120)
 
 Read directly via `os.Getenv` in `whagent_net/mcp/main.go`. `mcp` is a
-pure facade over `api`'s `SessionService` -- these are the only two
-addresses it needs (plus the Identity variables above, which its
+pure facade over `api`'s `SessionService` -- `WHAGENT_MCP_ADDR`/
+`WHAGENT_API_URL` are the only two addresses the manual-token recipe
+needs (plus the Identity variables above, which its
 `PassthroughVerifier`/`AuthMiddleware` use to reject a call before any
 tool handler runs, never to verify the token itself -- `api` remains the
-sole verification boundary per FR10).
+sole verification boundary per FR10). The rest of this table (FR9, issue
+#2249) is additive and entirely optional: unset, `mcp` behaves exactly as
+it did before that issue -- no RFC 9728 discovery endpoint, no
+`mcp_credential` probe, no OAuth2 token-exchange path -- and the
+manual-token recipe above keeps working end to end regardless (see
+`whagent_net/mcp/server/transport.go`'s `NewHTTPHandler` and
+`whagent_net/mcp/main.go`'s `initializeTokenExchange`, both non-fatal on
+a missing value, mirroring `ui`'s `initializeSSEHub` convention).
 
 | Variable | Component | Default | Description |
 |----------|-----------|---------|-------------|
 | `WHAGENT_MCP_ADDR` | mcp | `:8082` | Listen address for `mcp`'s streamable-HTTP MCP surface (`GET /healthz` unauthenticated, `/` requiring a bearer token). |
 | `WHAGENT_API_URL` | mcp | *(required)* | `api`'s gRPC address -- the only outbound dependency this binary dials (see "Service wiring" above). |
+| `WHAGENT_MCP_PUBLIC_URL` | mcp | — | This binary's own externally reachable base URL -- must be byte-identical to `ui`'s own `WHAGENT_MCP_PUBLIC_URL` (above, "`ui`" section) -- the RFC 9728 `resource` this binary advertises at `/.well-known/oauth-protected-resource`. Unset skips serving that endpoint entirely; a mismatch with `ui`'s value silently breaks an MCP client's discovery instead. |
+| `WHAGENT_UI_PUBLIC_URL` | mcp | — | `ui`'s own externally reachable base URL (matches `ui`'s own `WHAGENT_UI_PUBLIC_URL`) -- the OAuth2 authorization server issuer this binary's RFC 9728 metadata names. Unset alongside `WHAGENT_MCP_PUBLIC_URL` above also skips serving that endpoint. |
+| `PG_DATABASE_URL` | mcp | — | Backs a `mcpauth.CredentialStore` against the same `mcp_credential` table `ui`'s OAuth2 provider mints into (the "Database" section above; `whagent_net/migrate/schema/migrations/004_mcpauth_credential`, issue #2245). Unset, unreachable, or a missing table all degrade to "OAuth2 credential path unavailable" (logged at `WARNING`), never a failed boot. |
+| `WHAGENT_MCP_KEYCLOAK_CLIENT_ID` | mcp | — | `mcp`'s own confidential Keycloak client id for the RFC 8693 token exchange (NFR8) -- distinct from `WHAGENT_OIDC_CLIENT_ID` above, which only ever verifies or forwards a token, never mints one. A dependent Implementation-phase change to this issue adds a full secret-custody writeup (what holding this secret lets a process do, and the rotation procedure) to `ARCHITECTURE.md` § "Identity and auth chaining". |
+| `WHAGENT_MCP_KEYCLOAK_CLIENT_SECRET` | mcp | — | Secret for `WHAGENT_MCP_KEYCLOAK_CLIENT_ID`. Never checked in, never logged, never echoed in an error (NFR8) -- provisioned as a Kubernetes secret. |
+| `WHAGENT_MCP_KEYCLOAK_TOKEN_URL` | mcp | — | Keycloak's token endpoint URL for the realm `WHAGENT_OIDC_ISSUER` names, e.g. `https://keycloak.example.com/realms/whagent/protocol/openid-connect/token` -- where the RFC 8693 `grant_type=urn:ietf:params:oauth:grant-type:token-exchange` request is sent. |
 
 ## `ui` (standalone agent web UI, issue #2236)
 

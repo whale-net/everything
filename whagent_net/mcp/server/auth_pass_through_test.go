@@ -111,7 +111,7 @@ func newTestMCPServer(t *testing.T, client pb.SessionServiceClient) string {
 	srv := server.New()
 	tools.RegisterGetSession(srv, client)
 
-	ts := httptest.NewServer(server.NewHTTPHandler(srv))
+	ts := httptest.NewServer(server.NewHTTPHandler(srv, server.ResourceMetadataConfig{}))
 	t.Cleanup(ts.Close)
 	return ts.URL
 }

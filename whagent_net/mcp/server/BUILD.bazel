@@ -8,12 +8,14 @@ go_library(
     srcs = [
         "auth.go",
         "server.go",
+        "tokenexchange.go",
         "transport.go",
     ],
     importpath = "github.com/whale-net/everything/whagent_net/mcp/server",
     visibility = ["//visibility:public"],
     deps = [
         "//libs/go/grpcauth",
+        "//libs/go/mcpauth",
         "@com_github_modelcontextprotocol_go_sdk//auth",
         "@com_github_modelcontextprotocol_go_sdk//mcp",
     ],
