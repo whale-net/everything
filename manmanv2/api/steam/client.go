@@ -155,13 +155,12 @@ func (swc *SteamWorkshopClient) GetCollectionDetails(ctx context.Context, collec
 	maxRetries := 3
 	for attempt := 0; attempt < maxRetries; attempt++ {
 		// Create a new request for each retry with the form data
-		formReq, reqErr := http.NewRequestWithContext(ctx, "POST", apiURL, nil)
+		formReq, reqErr := http.NewRequestWithContext(ctx, "POST", apiURL, strings.NewReader(data.Encode()))
 		if reqErr != nil {
 			return nil, fmt.Errorf("failed to create request: %w", reqErr)
 		}
 		formReq.Header.Set("Content-Type", "application/x-www-form-urlencoded")
-		formReq.PostForm = data
-		
+
 		resp, err = swc.httpClient.Do(formReq)
 		if err == nil && resp != nil && resp.StatusCode == http.StatusOK {
 			break
