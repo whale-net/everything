@@ -92,7 +92,7 @@ Programmatic integrators need `GetSession` (is it done? waiting on me?),
 | Component | Kind | Role |
 |---|---|---|
 | `whagent_net/session` | Go package + migrations | Store: `sessions`, `transcript_events` (append-only — explicitly **not** SCD2), idempotency ledger, agent definition assignment (SCD2, `valid_from`/`valid_to`). Publishes every committed event to the `whagent/events` exchange. Transparent S3 hydration on cold reads. |
-| `whagent_net/api` | gRPC service, `external-api` | Session service facade: `StartSession`, `SendTurn`, `StopSession`, `GetSession`, `ListSessions`, `ReadTranscript`, and (optional, v1+) `StreamEvents` — a server-streaming bridge over the exchange so programmatic clients never need RabbitMQ credentials. Writes signal the Temporal workflow; reads go to `session` directly. Mirrors `manmanv2/control-api`. |
+| `whagent_net/api` | gRPC service, `external-api` | Session service facade: `StartSession`, `SendTurn`, `StopSession`, `GetSession`, `ListSessions`, `ReadTranscript`, `StreamEvents` (FR5/C17, issue #2239) — a server-streaming bridge over the exchange so programmatic clients never need RabbitMQ credentials. Writes signal the Temporal workflow; reads go to `session` directly. Mirrors `manmanv2/control-api`. |
 | `whagent_net/worker` | Temporal worker, `worker` | `SessionWorkflow` (one per session, long-lived, signal-per-turn) + activities: resolve agent definition → build context → LLM call → dispatch tool calls to domain MCP servers → commit turn → publish. Imports `session` directly. |
 | `whagent_net/archiver` | RMQ consumer + retention job, `worker` | Postgres → S3 when a session is terminal and past TTL; trims hot-tier bodies; leaves an index row with the S3 pointer. The one new stateful deployable the tiering adds. |
 | `whagent_net/mcp` | MCP server, `external-api` | `start_session`, `send_turn`, `get_session`, `read_transcript` over `api`. Phase-1 test surface (Claude Code drives it directly) and, later, how agents spawn agents. Same `web` + `mcp` sibling shape as `audience_score_system`. |
@@ -139,6 +139,19 @@ Payloads are the same event records committed to `transcript_events`
 worker publishes *after* commit, from the activity, so a retry can
 re-publish but never publish an uncommitted event; consumers must tolerate
 duplicates (event IDs are stable).
+
+`api`'s `StreamEvents` RPC (FR5/C17, issue #2239) is a programmatic
+consumer of this same exchange: at startup `api` declares the exchange and
+binds one shared, per-process ephemeral queue to it (`"#"`, mirroring
+`tools/app_registry/ui/main.go`'s `initializeSSEHub` attach shape) — never
+a queue per stream, so no client of the RPC ever needs its own broker
+connection or credentials. A `StreamEvents` call backfills from
+`session.TranscriptStore.Read` starting at the request's `from_seq`, then
+tails the shared queue's deliveries filtered to that session's routing
+keys, emitting strictly in `seq` order and deduplicating on `event_id`
+(NFR4/LB1) across the backfill/tail handoff the same way a polling
+`ReadTranscript` client's `next_from_seq` cursor does, just pushed instead
+of polled.
 
 ## Session workflow
 
@@ -416,13 +429,6 @@ outright — the session still exists and a caller should retry with
 
 - **Front door for humans before Phase 2**: `mcp` from Claude Code is the
   v1 answer; Slack via `friendly_computing_machine` is plausible later.
-- **`StreamEvents`**: resolved **v1+ / M2** (C17) — a deliberate M1
-  deferral, not an open question. `api`'s RPC surface stays
-  `StartSession`/`SendTurn`/`StopSession`/`GetSession`/`ListSessions`/
-  `ReadTranscript` through M1; a server-streaming bridge over
-  `whagent/events` is a second consumer of the exchange to operate and
-  isn't required for M1's outcome sentence (an operator can already poll
-  `read_transcript`).
 - **Context budgeting strategy** (summarization vs. truncation, when to
   write summary events): worker-internal, defer to the milestone that
   first hits the budget.
