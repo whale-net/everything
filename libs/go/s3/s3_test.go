@@ -29,18 +29,21 @@ import (
 // hand an external consumer a working, time-limited link.
 func TestPresignPublicGetURL(t *testing.T) {
 	cases := []struct {
-		name           string
-		publicEndpoint string
-		bucket         string
-		key            string
-		wantHost       string
-		wantPath       string
+		name               string
+		publicEndpoint     string
+		publicUsePathStyle bool
+		bucket             string
+		key                string
+		wantScheme         string
+		wantHost           string
+		wantPath           string
 	}{
 		{
 			name:           "trailing slash on endpoint is normalized",
 			publicEndpoint: "https://s3.example.com/",
 			bucket:         "release-tools-bucket",
 			key:            "release_helper_go/v1.2.3/release_helper_go-linux-amd64",
+			wantScheme:     "https",
 			wantHost:       "release-tools-bucket.s3.example.com",
 			wantPath:       "/release_helper_go/v1.2.3/release_helper_go-linux-amd64",
 		},
@@ -49,6 +52,7 @@ func TestPresignPublicGetURL(t *testing.T) {
 			publicEndpoint: "https://s3.example.com",
 			bucket:         "release-tools-bucket",
 			key:            "release_helper_go/v1.2.3/checksums.txt",
+			wantScheme:     "https",
 			wantHost:       "release-tools-bucket.s3.example.com",
 			wantPath:       "/release_helper_go/v1.2.3/checksums.txt",
 		},
@@ -57,18 +61,36 @@ func TestPresignPublicGetURL(t *testing.T) {
 			publicEndpoint: "https://s3.example.com",
 			bucket:         "bucket",
 			key:            "a/b/c/d.txt",
+			wantScheme:     "https",
 			wantHost:       "bucket.s3.example.com",
 			wantPath:       "/a/b/c/d.txt",
+		},
+		{
+			// Local dev/Tilt MinIO (issue #2225/#2227): no MINIO_DOMAIN
+			// configured, so the endpoint host is the bucket route, and the
+			// bucket name must appear as the first path segment instead of
+			// as a subdomain -- the opposite assertion of the vhost-style
+			// cases above, so both styles have explicit coverage and can't
+			// silently regress into each other.
+			name:               "PublicUsePathStyle true against bare-IP endpoint produces path-style URL",
+			publicEndpoint:     "http://127.0.0.1:9000",
+			publicUsePathStyle: true,
+			bucket:             "workshop-cache-bucket",
+			key:                "workshop-cache/123456/789.tar",
+			wantScheme:         "http",
+			wantHost:           "127.0.0.1:9000",
+			wantPath:           "/workshop-cache-bucket/workshop-cache/123456/789.tar",
 		},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			c, err := NewClient(context.Background(), Config{
-				Bucket:         tc.bucket,
-				Region:         "us-east-1",
-				PublicEndpoint: tc.publicEndpoint,
-				AccessKey:      "test-access-key",
-				SecretKey:      "test-secret-key",
+				Bucket:             tc.bucket,
+				Region:             "us-east-1",
+				PublicEndpoint:     tc.publicEndpoint,
+				PublicUsePathStyle: tc.publicUsePathStyle,
+				AccessKey:          "test-access-key",
+				SecretKey:          "test-secret-key",
 			})
 			if err != nil {
 				t.Fatalf("NewClient: %v", err)
@@ -83,11 +105,11 @@ func TestPresignPublicGetURL(t *testing.T) {
 			if err != nil {
 				t.Fatalf("PresignPublicGetURL returned unparseable URL %q: %v", got, err)
 			}
-			if u.Scheme != "https" {
-				t.Errorf("scheme = %q, want %q", u.Scheme, "https")
+			if u.Scheme != tc.wantScheme {
+				t.Errorf("scheme = %q, want %q", u.Scheme, tc.wantScheme)
 			}
 			if u.Host != tc.wantHost {
-				t.Errorf("host = %q, want %q (virtual-hosted-style, not path-style)", u.Host, tc.wantHost)
+				t.Errorf("host = %q, want %q", u.Host, tc.wantHost)
 			}
 			if u.Path != tc.wantPath {
 				t.Errorf("path = %q, want %q", u.Path, tc.wantPath)
@@ -135,18 +157,21 @@ func TestPresignPublicGetURL_NoPublicEndpointConfigured(t *testing.T) {
 // available at all before this method existed.
 func TestPresignPublicPutURL(t *testing.T) {
 	cases := []struct {
-		name           string
-		publicEndpoint string
-		bucket         string
-		key            string
-		wantHost       string
-		wantPath       string
+		name               string
+		publicEndpoint     string
+		publicUsePathStyle bool
+		bucket             string
+		key                string
+		wantScheme         string
+		wantHost           string
+		wantPath           string
 	}{
 		{
 			name:           "trailing slash on endpoint is normalized",
 			publicEndpoint: "https://s3.example.com/",
 			bucket:         "workshop-cache-bucket",
 			key:            "workshop-cache/123456/789.tar",
+			wantScheme:     "https",
 			wantHost:       "workshop-cache-bucket.s3.example.com",
 			wantPath:       "/workshop-cache/123456/789.tar",
 		},
@@ -155,6 +180,7 @@ func TestPresignPublicPutURL(t *testing.T) {
 			publicEndpoint: "https://s3.example.com",
 			bucket:         "workshop-cache-bucket",
 			key:            "workshop-cache/555/3.tar",
+			wantScheme:     "https",
 			wantHost:       "workshop-cache-bucket.s3.example.com",
 			wantPath:       "/workshop-cache/555/3.tar",
 		},
@@ -163,18 +189,33 @@ func TestPresignPublicPutURL(t *testing.T) {
 			publicEndpoint: "https://s3.example.com",
 			bucket:         "bucket",
 			key:            "a/b/c/d.tar",
+			wantScheme:     "https",
 			wantHost:       "bucket.s3.example.com",
 			wantPath:       "/a/b/c/d.tar",
+		},
+		{
+			// Mirrors TestPresignPublicGetURL's path-style case: local
+			// dev/Tilt MinIO (#2225/#2227) needs the bucket as the first
+			// path segment, not a subdomain.
+			name:               "PublicUsePathStyle true against bare-IP endpoint produces path-style URL",
+			publicEndpoint:     "http://127.0.0.1:9000",
+			publicUsePathStyle: true,
+			bucket:             "workshop-cache-bucket",
+			key:                "workshop-cache/123456/789.tar",
+			wantScheme:         "http",
+			wantHost:           "127.0.0.1:9000",
+			wantPath:           "/workshop-cache-bucket/workshop-cache/123456/789.tar",
 		},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			c, err := NewClient(context.Background(), Config{
-				Bucket:         tc.bucket,
-				Region:         "us-east-1",
-				PublicEndpoint: tc.publicEndpoint,
-				AccessKey:      "test-access-key",
-				SecretKey:      "test-secret-key",
+				Bucket:             tc.bucket,
+				Region:             "us-east-1",
+				PublicEndpoint:     tc.publicEndpoint,
+				PublicUsePathStyle: tc.publicUsePathStyle,
+				AccessKey:          "test-access-key",
+				SecretKey:          "test-secret-key",
 			})
 			if err != nil {
 				t.Fatalf("NewClient: %v", err)
@@ -189,8 +230,8 @@ func TestPresignPublicPutURL(t *testing.T) {
 			if err != nil {
 				t.Fatalf("PresignPublicPutURL returned unparseable URL %q: %v", got, err)
 			}
-			if u.Scheme != "https" {
-				t.Errorf("scheme = %q, want %q", u.Scheme, "https")
+			if u.Scheme != tc.wantScheme {
+				t.Errorf("scheme = %q, want %q", u.Scheme, tc.wantScheme)
 			}
 			if u.Host != tc.wantHost {
 				t.Errorf("host = %q, want %q (public endpoint, not the internal one)", u.Host, tc.wantHost)

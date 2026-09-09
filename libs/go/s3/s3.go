@@ -32,8 +32,17 @@ type Config struct {
 	Region         string
 	Endpoint       string // Optional: Custom S3 endpoint (e.g., for OVH, MinIO, DigitalOcean Spaces)
 	PublicEndpoint string // Optional: Public-facing endpoint for pre-signed URLs (if different from Endpoint)
-	AccessKey      string // Optional: Static access key (for MinIO, etc.)
-	SecretKey      string // Optional: Static secret key (for MinIO, etc.)
+	// PublicUsePathStyle controls the addressing style presignPublic uses
+	// (path-style <host>/<bucket>/<key> vs. virtual-hosted-style
+	// <bucket>.<host>/<key>). Zero value (false) preserves the original
+	// OVH-safe default -- OVH's production public endpoint rejects
+	// path-style requests outright (issue #1101). Local dev/Tilt MinIO has
+	// no MINIO_DOMAIN configured and only ever does path-style bucket
+	// routing, so it must set this true (issue #2225/#2227) or a direct PUT
+	// against the presigned URL fails with NoSuchBucket.
+	PublicUsePathStyle bool
+	AccessKey          string // Optional: Static access key (for MinIO, etc.)
+	SecretKey          string // Optional: Static secret key (for MinIO, etc.)
 }
 
 // NewClient creates a new S3 client
@@ -81,12 +90,17 @@ func NewClient(ctx context.Context, cfg Config) (*Client, error) {
 	s3c := s3.NewFromConfig(awsCfg, s3Opts...)
 
 	// If a public endpoint is configured, create a separate presign client using it.
-	// Public endpoints (e.g. OVH's cloud.ovh.us) require virtual-hosted style URLs, not
-	// path-style, so we do not inherit s3Opts here and explicitly leave UsePathStyle false.
+	// We deliberately do not inherit s3Opts here: the addressing style needed for the
+	// public endpoint is independent of the internal one and is controlled by
+	// Config.PublicUsePathStyle. OVH's production public endpoint (e.g. cloud.ovh.us)
+	// rejects path-style requests outright, so the default (false) is virtual-hosted
+	// style; local dev/Tilt MinIO has no MINIO_DOMAIN configured and only does
+	// path-style bucket routing, so it sets PublicUsePathStyle: true.
 	var presignPublic *s3.PresignClient
 	if cfg.PublicEndpoint != "" {
 		presignPublic = s3.NewPresignClient(s3.NewFromConfig(awsCfg, func(o *s3.Options) {
 			o.BaseEndpoint = aws.String(cfg.PublicEndpoint)
+			o.UsePathStyle = cfg.PublicUsePathStyle
 		}))
 	}
 

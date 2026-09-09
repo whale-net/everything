@@ -8,6 +8,7 @@ import (
 	"net"
 	"os"
 	"os/signal"
+	"strconv"
 	"syscall"
 	"time"
 
@@ -53,8 +54,13 @@ func run() error {
 	s3Region := getEnv("S3_REGION", "us-east-1")
 	s3Endpoint := getEnv("S3_ENDPOINT", "")              // Optional: for S3-compatible storage (OVH, MinIO, etc.)
 	s3PublicEndpoint := getEnv("S3_PUBLIC_ENDPOINT", "") // Optional: public-facing endpoint for pre-signed URLs
-	s3AccessKey := getEnv("S3_ACCESS_KEY", "")           // Optional: for static credentials (MinIO, etc.)
-	s3SecretKey := getEnv("S3_SECRET_KEY", "")           // Optional: for static credentials (MinIO, etc.)
+	// S3_PUBLIC_USE_PATH_STYLE: local dev/Tilt MinIO (no MINIO_DOMAIN) only
+	// does path-style bucket routing; OVH production stays on the
+	// vhost-style default (false) by leaving this unset. See
+	// libs/go/s3.Config.PublicUsePathStyle (issue #2225/#2227).
+	s3PublicUsePathStyle := getEnvBool("S3_PUBLIC_USE_PATH_STYLE", false)
+	s3AccessKey := getEnv("S3_ACCESS_KEY", "") // Optional: for static credentials (MinIO, etc.)
+	s3SecretKey := getEnv("S3_SECRET_KEY", "") // Optional: for static credentials (MinIO, etc.)
 	grpcAuthMode := getEnv("GRPC_AUTH_MODE", "none")
 	grpcOIDCIssuer := getEnv("GRPC_OIDC_ISSUER", "")
 	grpcOIDCClientID := getEnv("GRPC_OIDC_CLIENT_ID", "")
@@ -83,12 +89,13 @@ func run() error {
 	// Initialize S3 client
 	log.Println("Initializing S3 client...")
 	s3Client, err := s3.NewClient(ctx, s3.Config{
-		Bucket:         s3Bucket,
-		Region:         s3Region,
-		Endpoint:       s3Endpoint,
-		PublicEndpoint: s3PublicEndpoint,
-		AccessKey:      s3AccessKey,
-		SecretKey:      s3SecretKey,
+		Bucket:             s3Bucket,
+		Region:             s3Region,
+		Endpoint:           s3Endpoint,
+		PublicEndpoint:     s3PublicEndpoint,
+		PublicUsePathStyle: s3PublicUsePathStyle,
+		AccessKey:          s3AccessKey,
+		SecretKey:          s3SecretKey,
 	})
 	if err != nil {
 		return fmt.Errorf("failed to initialize S3 client: %w", err)
@@ -288,6 +295,19 @@ func getEnv(key, defaultValue string) string {
 		return value
 	}
 	return defaultValue
+}
+
+func getEnvBool(key string, defaultValue bool) bool {
+	value := os.Getenv(key)
+	if value == "" {
+		return defaultValue
+	}
+	b, err := strconv.ParseBool(value)
+	if err != nil {
+		log.Printf("Warning: invalid bool for %s=%q, using default %v: %v", key, value, defaultValue, err)
+		return defaultValue
+	}
+	return b
 }
 
 func getEnvDuration(key string, defaultValue time.Duration) time.Duration {
