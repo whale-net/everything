@@ -159,6 +159,96 @@ func TestGetCollectionDetails_Empty(t *testing.T) {
 	assert.True(t, true)
 }
 
+// TestGetCollectionDetails_NotACollection is the regression test for #2224:
+// Steam's real GetPublishedFileDetails response never populates file_type,
+// so classification of "is this a collection" must come from
+// GetCollectionDetails's own per-entry result code instead. This fixture
+// mirrors Steam's real shape for a workshop ID that is not a collection --
+// result:9 and no "children" key at all (not just an empty/omitted
+// file_type) -- and asserts GetCollectionDetails returns an error.
+func TestGetCollectionDetails_NotACollection(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		response := map[string]interface{}{
+			"response": map[string]interface{}{
+				"collectiondetails": []map[string]interface{}{
+					{"result": 9},
+				},
+			},
+		}
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(response)
+	}))
+	defer server.Close()
+
+	client := NewSteamWorkshopClient("test-key", 5*time.Second)
+	client.BaseURL = server.URL
+
+	children, err := client.GetCollectionDetails(context.Background(), "123456")
+	require.Error(t, err, "a non-1 result code must be reported as \"not a collection\", not silently treated as an empty collection")
+	assert.Nil(t, children)
+	assert.Contains(t, err.Error(), "123456")
+}
+
+// TestGetCollectionDetails_GenuineCollection asserts the existing-coverage
+// success path (result:1, non-empty children) stays green under the new
+// result-code gate.
+func TestGetCollectionDetails_GenuineCollection(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		response := map[string]interface{}{
+			"response": map[string]interface{}{
+				"collectiondetails": []map[string]interface{}{
+					{
+						"result": 1,
+						"children": []map[string]interface{}{
+							{"publishedfileid": "111111", "title": "Item 1"},
+							{"publishedfileid": "222222", "title": "Item 2"},
+						},
+					},
+				},
+			},
+		}
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(response)
+	}))
+	defer server.Close()
+
+	client := NewSteamWorkshopClient("test-key", 5*time.Second)
+	client.BaseURL = server.URL
+
+	children, err := client.GetCollectionDetails(context.Background(), "999999")
+	require.NoError(t, err)
+	require.Len(t, children, 2)
+	assert.Equal(t, "111111", children[0].WorkshopID)
+	assert.Equal(t, "222222", children[1].WorkshopID)
+}
+
+// TestGetCollectionDetails_LegitimatelyEmptyCollection is the case a naive
+// "non-empty children means collection" fix would break: result:1 (Steam
+// confirms this genuinely is a collection) but with a zero-length children
+// array (the collection just has no members). This must still succeed with
+// zero children, not be reported as an error.
+func TestGetCollectionDetails_LegitimatelyEmptyCollection(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		response := map[string]interface{}{
+			"response": map[string]interface{}{
+				"collectiondetails": []map[string]interface{}{
+					{"result": 1, "children": []map[string]interface{}{}},
+				},
+			},
+		}
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(response)
+	}))
+	defer server.Close()
+
+	client := NewSteamWorkshopClient("test-key", 5*time.Second)
+	client.BaseURL = server.URL
+
+	children, err := client.GetCollectionDetails(context.Background(), "333333")
+	require.NoError(t, err)
+	assert.Len(t, children, 0)
+}
+
 // TestGetCollectionDetails_SendsNonEmptyBody guards against the regression
 // fixed in #2211: GetCollectionDetails previously built its outbound POST
 // with a nil body and set the (client-side-meaningless) PostForm field
@@ -182,7 +272,7 @@ func TestGetCollectionDetails_SendsNonEmptyBody(t *testing.T) {
 		response := map[string]interface{}{
 			"response": map[string]interface{}{
 				"collectiondetails": []map[string]interface{}{
-					{"children": []CollectionItem{}},
+					{"result": 1, "children": []CollectionItem{}},
 				},
 			},
 		}
@@ -217,7 +307,7 @@ func TestGetCollectionDetails_ContentTypeHeaderSet(t *testing.T) {
 		response := map[string]interface{}{
 			"response": map[string]interface{}{
 				"collectiondetails": []map[string]interface{}{
-					{"children": []CollectionItem{}},
+					{"result": 1, "children": []CollectionItem{}},
 				},
 			},
 		}

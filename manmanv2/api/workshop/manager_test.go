@@ -728,10 +728,22 @@ func (m *mockSteamClient) GetCollectionDetails(ctx context.Context, collectionID
 		return nil, fmt.Errorf("mock steam API error")
 	}
 	items, ok := m.collections[collectionID]
-	if !ok {
-		return nil, fmt.Errorf("collection not found")
+	if ok {
+		return items, nil
 	}
-	return items, nil
+	// Distinguish "not a collection" (a real Workshop item exists for this
+	// ID, just not a collection one -- mirrors Steam's real non-1 result
+	// code) from "collection not found" (no such Workshop ID at all), so
+	// tests can assert the right failure mode rather than only "some error
+	// occurred". This mirrors GetCollectionDetails's real result-code gate:
+	// classification of "is this a collection" no longer comes from
+	// WorkshopItemMetadata.IsCollection (Steam's real file_type is never
+	// populated), it comes from whether the ID has registered collection
+	// membership here.
+	if _, isItem := m.items[collectionID]; isItem {
+		return nil, fmt.Errorf("workshop item %s is not a collection (steam result code 9)", collectionID)
+	}
+	return nil, fmt.Errorf("collection not found")
 }
 
 // Feature: workshop-addon-management, Property 9: Addon Metadata Fetching
