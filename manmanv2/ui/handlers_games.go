@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log"
 	"net/http"
+	"sort"
 	"strconv"
 	"strings"
 
@@ -36,13 +37,23 @@ type GameFormData struct {
 }
 
 // handleGames renders the Games page's flat list (root plan #2266, task
-// #2270 -- FR4, FR5, NFR7, WD1, WD6). The real fleet-wide join across
-// games, game configs, deployments, servers, and live sessions (NFR7's
-// "constant number of calls" bound, run-state rollup, and connect
-// address derivation) is #2270's Implementation-phase work; this
-// scaffold wires the `expand` query parameter through and renders a
-// GameRow shell per game so pages.Games has a stable, compiling contract
-// to build on.
+// #2270 -- FR4, FR5, NFR7, WD1, WD6).
+//
+// Data assembly is a constant number (five) of fleet-wide list calls --
+// games, game configs, deployments (server game configs), servers, and
+// live sessions -- joined in the UI. NFR7 requires this count not grow
+// with the number of games, configs, or deployments rendered: no call is
+// issued inside a per-game or per-deployment loop, and expanding a row
+// client-side (FR4, in games.templ) issues no additional request.
+//
+// The join: a deployment's game_config_id resolves to a GameConfig,
+// whose game_id resolves to a Game (ServerGameConfig itself carries no
+// game_id -- see the ground-truth table on issue #2270). Run-state and
+// connect-address are then rolled up per game from that game's
+// deployments, using components.ComputeDeploymentStatus /
+// components.LatestSession / components.BuildConnectAddressView --
+// never ServerGameConfig.status, which is the unrelated active/inactive
+// lifecycle flag (FR5).
 func (app *App) handleGames(w http.ResponseWriter, r *http.Request) {
 	user := htmxauth.GetUser(r.Context())
 	ctx := r.Context()
@@ -54,21 +65,39 @@ func (app *App) handleGames(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// 0 = no game_id / server_id filter, i.e. fleet-wide (see
+	// ListGameConfigsRequest.game_id / ListServerGameConfigsRequest.server_id
+	// doc comments in manmanv2/protos/api_messages_game.proto and
+	// messages.proto; the same 0-means-all convention handleGameDetail
+	// already relies on for SGC counts).
+	configs, err := app.grpc.ListGameConfigs(ctx, 0)
+	if err != nil {
+		log.Printf("Warning: failed to fetch game configs: %v", err)
+		configs = nil
+	}
+	deployments, err := app.grpc.ListServerGameConfigs(ctx, 0)
+	if err != nil {
+		log.Printf("Warning: failed to fetch deployments: %v", err)
+		deployments = nil
+	}
+	servers, err := app.grpc.ListServers(ctx)
+	if err != nil {
+		log.Printf("Warning: failed to fetch servers: %v", err)
+		servers = nil
+	}
+	liveSessions, err := app.grpc.ListSessions(ctx, true)
+	if err != nil {
+		log.Printf("Warning: failed to fetch live sessions: %v", err)
+		liveSessions = nil
+	}
+
 	// expand (spec amendment A1, migration task): an entry-point hint,
 	// not persisted page state. Absent, non-numeric, or stale (no
 	// matching game) all resolve to 0 / "expand nothing" and are never
 	// an error -- gameRowExpanded in games.templ does the stale check.
 	expandGameID, _ := strconv.ParseInt(strings.TrimSpace(r.URL.Query().Get("expand")), 10, 64)
 
-	rows := make([]pages.GameRow, 0, len(games))
-	for _, game := range games {
-		rows = append(rows, pages.GameRow{
-			GameID:   game.GameId,
-			Name:     game.Name,
-			RunState: components.DeploymentStopped,
-			Connect:  components.ConnectAddressView{Unavailable: true},
-		})
-	}
+	rows := buildGameRows(games, configs, deployments, servers, liveSessions)
 
 	breadcrumbs := []components.Breadcrumb{
 		{Label: "Games", URL: "/games"},
@@ -91,6 +120,97 @@ func (app *App) handleGames(w http.ResponseWriter, r *http.Request) {
 		log.Printf("Error rendering template: %v", err)
 		http.Error(w, "Internal server error", http.StatusInternalServerError)
 	}
+}
+
+// buildGameRows performs the UI-side join (NFR7) from the five fleet-wide
+// list results into one pages.GameRow per game. It issues no RPCs itself
+// -- all data is already in memory -- so it can be exercised directly by
+// tests without a fake gRPC client.
+//
+// ServerGameConfig carries no game_id (only GameConfig does), so a
+// deployment resolves to a game via its game_config_id -> GameConfig.game_id.
+// A deployment whose game_config_id has no matching GameConfig (e.g. the
+// config was deleted after the deployment was created) is skipped -- it
+// cannot be attributed to any game.
+func buildGameRows(
+	games []*manmanpb.Game,
+	configs []*manmanpb.GameConfig,
+	deployments []*manmanpb.ServerGameConfig,
+	servers []*manmanpb.Server,
+	liveSessions []*manmanpb.Session,
+) []pages.GameRow {
+	configByID := make(map[int64]*manmanpb.GameConfig, len(configs))
+	for _, c := range configs {
+		configByID[c.GetConfigId()] = c
+	}
+
+	serverByID := make(map[int64]*manmanpb.Server, len(servers))
+	for _, s := range servers {
+		serverByID[s.GetServerId()] = s
+	}
+
+	liveSessionsBySGC := make(map[int64][]*manmanpb.Session, len(liveSessions))
+	for _, s := range liveSessions {
+		sgcID := s.GetServerGameConfigId()
+		liveSessionsBySGC[sgcID] = append(liveSessionsBySGC[sgcID], s)
+	}
+
+	deploymentsByGame := make(map[int64][]*manmanpb.ServerGameConfig)
+	for _, d := range deployments {
+		cfg, ok := configByID[d.GetGameConfigId()]
+		if !ok {
+			continue
+		}
+		gameID := cfg.GetGameId()
+		deploymentsByGame[gameID] = append(deploymentsByGame[gameID], d)
+	}
+
+	rows := make([]pages.GameRow, 0, len(games))
+	for _, game := range games {
+		gameDeployments := deploymentsByGame[game.GetGameId()]
+		// Sorted so connect-address selection below (first running
+		// deployment with a resolvable address) is deterministic
+		// regardless of the RPC's own return order.
+		sort.Slice(gameDeployments, func(i, j int) bool {
+			return gameDeployments[i].GetServerGameConfigId() < gameDeployments[j].GetServerGameConfigId()
+		})
+
+		runState := components.DeploymentStopped
+		connect := components.ConnectAddressView{Unavailable: true}
+		for _, d := range gameDeployments {
+			latest := components.LatestSession(liveSessionsBySGC[d.GetServerGameConfigId()])
+			if components.ComputeDeploymentStatus(latest) != components.DeploymentRunning {
+				continue
+			}
+			runState = components.DeploymentRunning
+			if !connect.Unavailable {
+				continue
+			}
+			server := serverByID[d.GetServerId()]
+			if view := components.BuildConnectAddressView(server.GetHostPublicAddress(), d.GetPortBindings()); !view.Unavailable {
+				connect = view
+			}
+		}
+
+		rows = append(rows, pages.GameRow{
+			GameID:   game.GetGameId(),
+			Name:     game.GetName(),
+			RunState: runState,
+			Connect:  connect,
+		})
+	}
+
+	// Deterministic sort (task #2270): by name, tie-broken by game_id, so
+	// two operators loading the page see the same order regardless of
+	// ListGames' own return order.
+	sort.Slice(rows, func(i, j int) bool {
+		if rows[i].Name != rows[j].Name {
+			return rows[i].Name < rows[j].Name
+		}
+		return rows[i].GameID < rows[j].GameID
+	})
+
+	return rows
 }
 
 func (app *App) handleGameNew(w http.ResponseWriter, r *http.Request) {
