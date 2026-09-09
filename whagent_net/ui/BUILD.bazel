@@ -2,7 +2,7 @@
 Keycloak sign-in, and the authenticated api client. Real session pages
 (FR1-FR4) land in later tasks under the same plan (#2233)."""
 
-load("@rules_go//go:def.bzl", "go_binary", "go_library")
+load("@rules_go//go:def.bzl", "go_binary", "go_library", "go_test")
 load("//tools/bazel:release.bzl", "release_app")
 
 go_library(
@@ -36,6 +36,30 @@ go_binary(
     name = "whagent-net-ui",
     embed = [":ui_lib"],
     visibility = ["//visibility:public"],
+)
+
+# Testing phase (issue #2236's Testing section): unauthenticated app-route
+# redirect, /healthz reachable without a session, and the api client
+# forwarding the caller's own access token -- mirrors
+# manmanv2/ui/BUILD.bazel's ui_test target shape.
+go_test(
+    name = "ui_test",
+    size = "small",
+    srcs = [
+        "grpc_client_test.go",
+        "main_test.go",
+    ],
+    embed = [":ui_lib"],
+    deps = [
+        "//libs/go/grpcauth",
+        "//libs/go/htmxauth",
+        "//whagent_net/protos:whagentpb",
+        "@com_github_stretchr_testify//assert",
+        "@com_github_stretchr_testify//require",
+        "@org_golang_google_grpc//:grpc",
+        "@org_golang_google_grpc//metadata",
+        "@org_golang_google_grpc//test/bufconn",
+    ],
 )
 
 # Release metadata for whagent-net's standalone agent web UI (issue #2236).
