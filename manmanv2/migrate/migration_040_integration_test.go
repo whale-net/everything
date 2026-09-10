@@ -263,19 +263,23 @@ func TestMigration040_DownThenUpRoundTrips(t *testing.T) {
 		t.Fatalf("seed cache entry: %v", err)
 	}
 
-	// Down exactly one step (tables gone). Runner.Down() rolls back ALL
-	// migrations, which trips over pre-existing down-chain issues in
-	// unrelated early migrations -- one step is all this round-trip needs
-	// (same rationale as migration_038_integration_test.go).
-	if err := runner.Steps(-1); err != nil {
-		t.Fatalf("Steps(-1): %v", err)
+	// Roll back to exactly version 39 (one before this migration), by
+	// target version rather than a relative Steps(-1) off of whatever the
+	// latest migration happens to be -- same rationale as
+	// migration_038_integration_test.go/migration_039_integration_test.go/
+	// migration_041_integration_test.go. A relative Steps(-1) would instead
+	// undo whatever migration is current HEAD (e.g. 041 once it lands),
+	// leaving 040's own tables in place and this test passing for the
+	// wrong reason.
+	if err := runner.Migrate(39); err != nil {
+		t.Fatalf("Migrate(39) (rolling back 040): %v", err)
 	}
 	version, _, err := runner.Version()
 	if err != nil {
-		t.Fatalf("Version after down-step: %v", err)
+		t.Fatalf("Version after rollback: %v", err)
 	}
-	if version == 41 {
-		t.Fatalf("expected version below 41 after down-step, got %d", version)
+	if version != 39 {
+		t.Fatalf("expected version 39 after Migrate(39), got %d", version)
 	}
 	for _, table := range []string{"workshop_cache_entries", "workshop_cache_host_presence"} {
 		var exists bool
