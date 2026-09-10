@@ -218,13 +218,23 @@ def release_app(name, binary_name = None, language = None, domain = None, descri
     if not base_label.startswith("//") and not base_label.startswith(":"):
         base_label = ":" + base_label
 
-    # Image name uses domain-app format (e.g., "demo-hello-python"). If
-    # effective_name already carries the domain prefix (e.g. an app whose
-    # permanent name predates this convention), don't prefix it again --
-    # app identity (effective_name) is not something callers can rename to
-    # fix this, so the macro has to tolerate the already-prefixed case.
-    already_prefixed = domain and effective_name.startswith(domain + "-")
-    image_name = effective_name if (already_prefixed or not domain) else (domain + "-" + effective_name)
+    # Image name uses domain-app format (e.g., "demo-hello-python"), computed
+    # unconditionally: this MUST stay in lockstep with release_helper_go's
+    # AppMetadata.FullName() (tools/release_helper_go/cmd/metadata.go), which
+    # does the same Domain+"-"+Name concatenation with no tolerance for an
+    # already-prefixed Name. A prior version of this macro special-cased
+    # "effective_name already starts with domain-" to avoid double-prefixing
+    # whagent-net-ui/-archiver, without making the same exception on the
+    # FullName() side -- that desynced the two computations for every OTHER
+    # domain whose apps are, by longstanding convention, named with the
+    # domain prefix (leaflab-api, leaflab-ui, leaflab-emulator, manmanv2-ui),
+    # breaking their `tilt up` and release pipeline even though nothing
+    # about their own naming had changed (#2385, #2404). whagent-net-ui and
+    # -archiver were fixed properly instead, by renaming release_app's name
+    # to the short form ("ui"/"archiver") -- do the same for any future app
+    # whose name would otherwise collide with its own domain prefix, rather
+    # than special-casing this macro again.
+    image_name = (domain + "-" + effective_name) if domain else effective_name
     image_target_ref = None
 
     if is_container_app:
