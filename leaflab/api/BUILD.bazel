@@ -150,6 +150,7 @@ go_test(
     timeout = "long",
     srcs = [
         "migration_016_integration_test.go",
+        "migration_017_integration_test.go",
         "repository_integration_test.go",
         "testdb_integration_test.go",
     ],
