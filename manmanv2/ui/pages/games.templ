@@ -61,12 +61,11 @@ type GameRow struct {
 	// handlers_games.go.
 	Configs []ConfigRowView
 
-	// WorkshopLibraries populates the expanded row's read-only Workshop
-	// Libraries section (FR8, task #2273). See WorkshopLibraryRow's doc
-	// comment for a load-bearing note: handlers_games.go does not
-	// populate this from live data today (documented gap, not a silent
-	// omission -- see that comment for why).
-	WorkshopLibraries []WorkshopLibraryRow
+	// Workshop Libraries no longer populates a GameRow field (task #2367):
+	// the section became a lazily-fetched fragment (pages.WorkshopPanelData,
+	// workshop_panel.templ) keyed by GameID alone, fetched on first expand
+	// rather than joined at page load -- see gameWorkshopPlaceholder's doc
+	// comment below for why.
 }
 
 // GameDeploymentRow is one row of a game's expanded Deployments section
@@ -109,35 +108,6 @@ type ConfigRowView struct {
 	Name            string
 	Image           string
 	DeploymentCount int
-}
-
-// WorkshopLibraryRow is one row in the expanded row's read-only Workshop
-// Libraries section (FR8). It represents an attachment recorded in
-// today's SGC-scoped sgc_workshop_libraries data (C16) -- deliberately
-// still SGC-scoped, not Game-Config-scoped: that migration is LB6's to
-// make, and is M6 scope (C28), not M5's.
-//
-// Documented gap: handlers_games.go's handleGames does not populate this
-// field from live data today. Every existing RPC that reads
-// sgc_workshop_libraries (ListSGCLibraries, GetSGCLibraryAttachments)
-// requires a single sgc_id and errors on 0 -- there is no fleet-wide list
-// call for it, so wiring it for real would mean either a per-deployment
-// call (violates NFR7's constant-call-count bound, extended to this
-// task's sections) or a new endpoint (NFR4 forbids adding one silently in
-// this task). This mirrors NFR7's own named fallback for its game_id
-// filter: the fix is an additive, bounded fleet-wide read (e.g. sgc_id
-// == 0 meaning "all", the same convention ListInstallationsRequest
-// already uses), recorded as a Dependencies entry for a follow-up task,
-// not built here. gameWorkshopSection below and this type are written so
-// that follow-up is purely additive.
-type WorkshopLibraryRow struct {
-	LibraryID   int64
-	LibraryName string
-	ConfigName  string
-	// Target is the pre-formatted install target, e.g. "data ·
-	// valheim/maps/" (volume type + path) -- rendering never assembles
-	// this from raw volume/path fields itself.
-	Target string
 }
 
 // gameRowExpanded reports whether row should start expanded per
@@ -239,9 +209,12 @@ templ gameRow(row GameRow, startExpanded bool) {
 		<!--
 			Expanded row shell (FR4: at most one nested panel level), each
 			section in its own stable-id container. Deployments (#2272,
-			FR6), Configurations (FR7), Workshop Libraries (FR8) and the
-			settings/danger footer (FR9) render for real here, from row
-			data already fetched on page load, never a fetch of their own.
+			FR6), Configurations (FR7), and the settings/danger footer
+			(FR9) render for real here, from row data already fetched on
+			page load, never a fetch of their own. Workshop Libraries
+			(#2367, FR8/FR9/FR10) is the one exception: it is a lazily
+			fetched fragment (gameWorkshopPlaceholder's doc comment below
+			explains why).
 		-->
 		<div id={ fmt.Sprintf("game-expand-%d", row.GameID) } x-show="expanded" x-cloak class="border-t border-base-300 p-4 flex flex-col gap-4">
 			<div id={ fmt.Sprintf("game-deployments-%d", row.GameID) }>
@@ -250,8 +223,13 @@ templ gameRow(row GameRow, startExpanded bool) {
 			<div id={ fmt.Sprintf("game-configs-%d", row.GameID) }>
 				@gameConfigsSection(row)
 			</div>
-			<div id={ fmt.Sprintf("game-workshop-%d", row.GameID) }>
-				@gameWorkshopSection(row)
+			<div
+				id={ fmt.Sprintf("game-workshop-%d", row.GameID) }
+				hx-get={ fmt.Sprintf("/games/%d/workshop-panel", row.GameID) }
+				hx-trigger="revealed"
+				hx-swap="innerHTML"
+			>
+				@gameWorkshopPlaceholder()
 			</div>
 			@gameFooter(row)
 		</div>
@@ -424,42 +402,38 @@ templ gameConfigsSection(row GameRow) {
 	</div>
 }
 
-// gameWorkshopSection renders the read-only Workshop Libraries section
-// (FR8, task #2273). LB6 guard: no attach, detach, or edit control --
-// this panel only reads, so M5 adds no new SGC-scoped attachment
-// assumption for LB6's eventual Game-Config-level migration to unwind.
-// See WorkshopLibraryRow's doc comment for why row.WorkshopLibraries is
-// not populated from live data today.
-templ gameWorkshopSection(row GameRow) {
+// gameWorkshopPlaceholder renders the expanded row's Workshop Libraries
+// section shell before its data has loaded (task #2367, FR8/FR9/FR10 --
+// editable GC-level attach/detach, replacing M5's read-only SGC-scoped
+// panel and its "coming soon: shared across configs" note, now removed).
+//
+// Unlike Deployments (FR6) and Configurations (FR7), this section's data
+// is not part of handleGames' own join: GetGameConfigLibraryAttachments
+// and ListGameConfigLibraries both require a single config_id (no
+// sgc_id==0-style "all" filter exists for either), so populating every
+// row's libraries at page load would cost two RPCs per GameConfig
+// rendered -- growing with fleet size, which is exactly what NFR7
+// (carried over from M5, task #2270 -- see
+// TestHandleGames_NFR7_ConstantCallCount) forbids for handleGames.
+//
+// Instead the parent div (see gameRow above) carries
+// hx-trigger="revealed": htmx's IntersectionObserver-backed trigger fires
+// once, the first time the element actually gets a layout box. Since
+// Alpine's x-show hides the whole expanded-row shell with display:none
+// (see [x-cloak] above) until a row is expanded, this placeholder --
+// though already present in the initial page HTML -- is never observed
+// as revealed, and so triggers no request, until a Server Manager
+// actually expands that row. This is the same "pay for it only once
+// interacted with" shape the Deployment Settings blade's environment tab
+// already uses (#2274), applied without needing a <template> clone since
+// this section is not behind a separate open action the way the blade
+// is.
+templ gameWorkshopPlaceholder() {
 	<div class="border border-base-300 rounded-box overflow-hidden">
-		<div class="flex flex-col sm:flex-row sm:justify-between sm:items-center gap-2 p-3 border-b border-base-300 bg-base-200">
+		<div class="p-3 border-b border-base-300 bg-base-200">
 			<h3 class="font-semibold text-base-content">Workshop Libraries</h3>
-			<span class="text-xs text-base-content/60">Libraries will be shared across configs and editable here in M6.</span>
 		</div>
-		if len(row.WorkshopLibraries) > 0 {
-			<div class="overflow-x-auto">
-				<table class="table table-sm">
-					<thead>
-						<tr>
-							<th scope="col">Library</th>
-							<th scope="col">Config</th>
-							<th scope="col">Install Target</th>
-						</tr>
-					</thead>
-					<tbody>
-						for _, lib := range row.WorkshopLibraries {
-							<tr class="hover">
-								<td class="text-base-content">{ lib.LibraryName }</td>
-								<td class="text-base-content">{ lib.ConfigName }</td>
-								<td class="font-mono text-sm">{ lib.Target }</td>
-							</tr>
-						}
-					</tbody>
-				</table>
-			</div>
-		} else {
-			<p class="p-4 text-sm text-base-content/60">No workshop libraries attached.</p>
-		}
+		<p class="p-4 text-sm text-base-content/60">Loading workshop libraries…</p>
 	</div>
 }
 

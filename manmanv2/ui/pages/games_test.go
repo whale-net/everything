@@ -6,14 +6,23 @@ import (
 )
 
 // This file guards task #2273 (root plan #2266): the expanded game row's
-// Configurations (FR7), read-only Workshop Libraries (FR8), and
-// settings/danger footer (FR9) sections. It renders gameConfigsSection,
-// gameWorkshopSection, and gameFooter directly against hand-built GameRow
-// fixtures -- these three are unexported templ funcs in this package, so
+// Configurations (FR7) and settings/danger footer (FR9) sections. It
+// renders gameConfigsSection and gameFooter directly against hand-built
+// GameRow fixtures -- these are unexported templ funcs in this package, so
 // no HTTP round trip or handler wiring is needed to guard their markup;
 // handlers_games_test.go (package main) separately guards buildGameRows'
 // join (FR7's per-config deployment count, no cross-game leakage) and
 // NFR7's constant-call-count bound.
+//
+// The read-only Workshop Libraries section (FR8, task #2273) this file
+// used to also guard (gameWorkshopSection, LB6's "no attach/detach/edit
+// control" assertion) retired with task #2367: M6 makes that panel
+// editable (FR10), directly contradicting LB6's read-only guard, and its
+// data became a lazily-fetched fragment (pages.WorkshopPanelData,
+// workshop_panel.templ) rather than a GameRow field -- see
+// gameWorkshopPlaceholder's doc comment in games.templ. Its coverage now
+// lives in handlers_games_libraries_test.go (package main), which can
+// exercise the real attach/detach handlers the fragment's forms post to.
 //
 // mutation-tested (verified red, by hand, then reverted): adding a
 // <th>Port</th> column and a { fmt.Sprintf("%d", 0) } port cell to
@@ -104,64 +113,21 @@ func TestGameConfigsSection_WD7_DeployIsLinkNotForm(t *testing.T) {
 	}
 }
 
-// --- Workshop Libraries section (FR8, LB6 guard, WD5) -----------------------
+// --- Workshop Libraries placeholder (task #2367, FR8/FR9/FR10) -------------
 
-func TestGameWorkshopSection_FR8_ListsLibrariesAndM6Note(t *testing.T) {
-	row := GameRow{
-		GameID: 1,
-		WorkshopLibraries: []WorkshopLibraryRow{
-			{LibraryID: 1, LibraryName: "Better Maps", ConfigName: "Survival", Target: "data · valheim/maps/"},
-		},
+// TestGameWorkshopPlaceholder_NoM5ComingSoonNote guards FR10: the M5
+// "coming soon: shared across configs" note must be gone. The real
+// editable panel content (attach/detach controls, the inheritance copy)
+// is a lazily-fetched fragment now -- see handlers_games_libraries_test.go
+// (package main) for that coverage -- so this placeholder-shell test only
+// guards what games.templ itself still renders synchronously.
+func TestGameWorkshopPlaceholder_NoM5ComingSoonNote(t *testing.T) {
+	body := renderPage(t, gameWorkshopPlaceholder())
+	if strings.Contains(body, "shared across configs and editable here in M6") {
+		t.Errorf("Workshop Libraries placeholder must not contain the retired M5 note, got: %s", body)
 	}
-	body := renderPage(t, gameWorkshopSection(row))
-
-	for _, want := range []string{"Better Maps", "Survival", "data · valheim/maps/"} {
-		if !strings.Contains(body, want) {
-			t.Errorf("Workshop Libraries section missing %q, got: %s", want, body)
-		}
-	}
-	if !strings.Contains(body, "shared across configs and editable here in M6") {
-		t.Errorf("Workshop Libraries section missing the visible M6 note, got: %s", body)
-	}
-}
-
-func TestGameWorkshopSection_EmptyState(t *testing.T) {
-	body := renderPage(t, gameWorkshopSection(GameRow{GameID: 1}))
-	if !strings.Contains(body, "No workshop libraries attached.") {
-		t.Errorf("expected empty-state text for a game with no workshop libraries, got: %s", body)
-	}
-	// The M6 note is visible even with an empty list.
-	if !strings.Contains(body, "shared across configs and editable here in M6") {
-		t.Errorf("Workshop Libraries empty state must still show the M6 note, got: %s", body)
-	}
-}
-
-// TestGameWorkshopSection_LB6_NoAttachDetachEditControl is the load-bearing
-// negative assertion: the panel only reads, so M5 must add no attach,
-// detach, or edit control, and must issue no request to the retained
-// /sgc/add-library or /sgc/remove-library routes (A2). Checked against a
-// populated row -- an empty section trivially has no controls, which
-// would not catch a regression that added a control only when there is
-// data to act on.
-func TestGameWorkshopSection_LB6_NoAttachDetachEditControl(t *testing.T) {
-	row := GameRow{
-		GameID: 1,
-		WorkshopLibraries: []WorkshopLibraryRow{
-			{LibraryID: 1, LibraryName: "Better Maps", ConfigName: "Survival", Target: "data · valheim/maps/"},
-		},
-	}
-	body := renderPage(t, gameWorkshopSection(row))
-
-	if strings.Contains(body, "<form") {
-		t.Errorf("Workshop Libraries section must not contain a <form> (LB6: read-only), got: %s", body)
-	}
-	if strings.Contains(body, "<button") {
-		t.Errorf("Workshop Libraries section must not contain a <button> -- no attach/detach/edit control (LB6), got: %s", body)
-	}
-	for _, forbidden := range []string{"/sgc/add-library", "/sgc/remove-library"} {
-		if strings.Contains(body, forbidden) {
-			t.Errorf("Workshop Libraries section must not reference retained route %q (LB6/A2), got: %s", forbidden, body)
-		}
+	if strings.Contains(body, "coming soon") {
+		t.Errorf("Workshop Libraries placeholder must not contain any 'coming soon' text, got: %s", body)
 	}
 }
 
@@ -190,22 +156,19 @@ func TestGameFooter_FR9_LinksOutNoInlineDelete(t *testing.T) {
 
 // --- FR2 terminology, across all three sections -----------------------------
 
-// TestGamesSections_FR2_NoSGCTerminology guards FR2 across all three
-// sections this task owns, including the Workshop Libraries panel's M6
-// note, which must say "Deployment"/"Game Config", never "SGC".
+// TestGamesSections_FR2_NoSGCTerminology guards FR2 across the sections
+// this task owns, including the Workshop Libraries placeholder, which
+// must say "Deployment"/"Game Config", never "SGC".
 func TestGamesSections_FR2_NoSGCTerminology(t *testing.T) {
 	row := GameRow{
 		GameID: 1,
 		Configs: []ConfigRowView{
 			fixtureConfigRow(1, 10, "Survival", "itzg/minecraft-server:latest", 2),
 		},
-		WorkshopLibraries: []WorkshopLibraryRow{
-			{LibraryID: 1, LibraryName: "Better Maps", ConfigName: "Survival", Target: "data · valheim/maps/"},
-		},
 	}
 
 	body := renderPage(t, gameConfigsSection(row)) +
-		renderPage(t, gameWorkshopSection(row)) +
+		renderPage(t, gameWorkshopPlaceholder()) +
 		renderPage(t, gameFooter(row))
 
 	lower := strings.ToLower(body)
