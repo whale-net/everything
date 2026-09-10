@@ -26,7 +26,7 @@ import (
 // there because service registration -- not just the interceptor -- was
 // also under test).
 func TestDevRolesCarrySeededRequiredRoles(t *testing.T) {
-	agentDefs, err := config.Load()
+	_, agentDefs, err := config.Load()
 	require.NoError(t, err)
 
 	unaryAuth, _, err := grpcauth.NewServerInterceptors(context.Background(), grpcauth.ServerConfig{

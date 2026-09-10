@@ -88,7 +88,27 @@ func (s *SessionServer) StartSession(ctx context.Context, req *pb.StartSessionRe
 	// never mutated. A model the configured provider does not serve fails
 	// here, before any session row exists, mirroring FR9's fail-closed
 	// shape -- it must never surface later as a first-turn LLM error.
-	resolvedModel := def.Model
+	//
+	// def.Model and def.ModelDefinitionID are mutually exclusive
+	// (migration 006's CHECK constraint; session.AgentDefinition's doc
+	// comment): when ModelDefinitionID is set, sessions.model still needs
+	// a concrete model id, resolved from the referenced model_definition
+	// row -- the sessions table has no model_definition_id column of its
+	// own (LB2/NFR3's session shape is fixed at what M1 needs; a session
+	// records what model it actually used, not how that was decided).
+	var resolvedModel string
+	if def.Model != nil {
+		resolvedModel = *def.Model
+	} else {
+		modelDef, err := s.store.ModelDefinitions().GetByID(ctx, *def.ModelDefinitionID)
+		if err != nil {
+			return nil, status.Errorf(codes.Internal, "get model definition: %v", err)
+		}
+		if modelDef == nil {
+			return nil, status.Errorf(codes.Internal, "model definition %s not found (referenced by agent %q)", *def.ModelDefinitionID, agentID)
+		}
+		resolvedModel = modelDef.Model
+	}
 	var modelOverride *string
 	if req.ModelOverride != nil {
 		requested := req.GetModelOverride()

@@ -33,6 +33,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/google/uuid"
 	_ "github.com/jackc/pgx/v5/stdlib"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -108,19 +109,22 @@ func agent(id, model string) config.AgentDefinitionConfig {
 }
 
 // definitionRow is one agent_definition row's diffable columns, for
-// assertions below.
+// assertions below. Model is nullable (migration 006): a row seeded from
+// a model_definition reference has Model nil and ModelDefinitionID set,
+// the exact inverse of a row seeded with a direct model.
 type definitionRow struct {
-	Version      int
-	Model        string
-	MaxTurns     int
-	MaxCostUSD   float64
-	RequiredRole *string
+	Version           int
+	Model             *string
+	ModelDefinitionID *uuid.UUID
+	MaxTurns          int
+	MaxCostUSD        float64
+	RequiredRole      *string
 }
 
 func readVersions(t *testing.T, ctx context.Context, db *sql.DB, agentID string) []definitionRow {
 	t.Helper()
 	rows, err := db.QueryContext(ctx, `
-		SELECT version, model, max_turns, max_cost_usd, required_role
+		SELECT version, model, model_definition_id, max_turns, max_cost_usd, required_role
 		FROM agent_definition WHERE agent_id = $1 ORDER BY version
 	`, agentID)
 	require.NoError(t, err)
@@ -129,11 +133,32 @@ func readVersions(t *testing.T, ctx context.Context, db *sql.DB, agentID string)
 	var out []definitionRow
 	for rows.Next() {
 		var r definitionRow
-		require.NoError(t, rows.Scan(&r.Version, &r.Model, &r.MaxTurns, &r.MaxCostUSD, &r.RequiredRole))
+		require.NoError(t, rows.Scan(&r.Version, &r.Model, &r.ModelDefinitionID, &r.MaxTurns, &r.MaxCostUSD, &r.RequiredRole))
 		out = append(out, r)
 	}
 	require.NoError(t, rows.Err())
 	return out
+}
+
+// modelDefinitionRow is one model_definition row's diffable columns.
+type modelDefinitionRow struct {
+	ID       uuid.UUID
+	Name     string
+	Model    string
+	Provider json.RawMessage
+}
+
+func readModelDefinition(t *testing.T, ctx context.Context, db *sql.DB, name string) *modelDefinitionRow {
+	t.Helper()
+	var r modelDefinitionRow
+	err := db.QueryRowContext(ctx, `
+		SELECT id, name, model, provider FROM model_definition WHERE name = $1
+	`, name).Scan(&r.ID, &r.Name, &r.Model, &r.Provider)
+	if err == sql.ErrNoRows { //nolint:errorlint // database/sql documents this exact sentinel, never wrapped
+		return nil
+	}
+	require.NoError(t, err)
+	return &r
 }
 
 // TestSeedAgents_CreatesDefinitionRows proves seeding from a config list
@@ -147,12 +172,13 @@ func TestSeedAgents_CreatesDefinitionRows(t *testing.T) {
 		agent("agent-a", "anthropic/claude-3.5-sonnet"),
 		agent("agent-b", "openai/gpt-4o"),
 	}
-	require.NoError(t, seed.SeedAgents(ctx, db, agents, catalog))
+	require.NoError(t, seed.SeedAgents(ctx, db, nil, agents, catalog))
 
 	rowsA := readVersions(t, ctx, db, "agent-a")
 	require.Len(t, rowsA, 1)
 	assert.Equal(t, 1, rowsA[0].Version)
-	assert.Equal(t, "anthropic/claude-3.5-sonnet", rowsA[0].Model)
+	require.NotNil(t, rowsA[0].Model)
+	assert.Equal(t, "anthropic/claude-3.5-sonnet", *rowsA[0].Model)
 
 	rowsB := readVersions(t, ctx, db, "agent-b")
 	require.Len(t, rowsB, 1)
@@ -167,9 +193,9 @@ func TestSeedAgents_ReRunIsIdempotent(t *testing.T) {
 	catalog := newTestCatalog(t, []string{"anthropic/claude-3.5-sonnet"})
 
 	agents := []config.AgentDefinitionConfig{agent("agent-a", "anthropic/claude-3.5-sonnet")}
-	require.NoError(t, seed.SeedAgents(ctx, db, agents, catalog))
-	require.NoError(t, seed.SeedAgents(ctx, db, agents, catalog))
-	require.NoError(t, seed.SeedAgents(ctx, db, agents, catalog))
+	require.NoError(t, seed.SeedAgents(ctx, db, nil, agents, catalog))
+	require.NoError(t, seed.SeedAgents(ctx, db, nil, agents, catalog))
+	require.NoError(t, seed.SeedAgents(ctx, db, nil, agents, catalog))
 
 	rows := readVersions(t, ctx, db, "agent-a")
 	assert.Len(t, rows, 1, "re-running the seeder against an unchanged config must not mint new version rows")
@@ -186,11 +212,11 @@ func TestSeedAgents_ChangedDefinition_MintsNewVersion_PriorVersionIntact(t *test
 	catalog := newTestCatalog(t, []string{"anthropic/claude-3.5-sonnet"})
 
 	v1 := agent("agent-a", "anthropic/claude-3.5-sonnet")
-	require.NoError(t, seed.SeedAgents(ctx, db, []config.AgentDefinitionConfig{v1}, catalog))
+	require.NoError(t, seed.SeedAgents(ctx, db, nil, []config.AgentDefinitionConfig{v1}, catalog))
 
 	v2 := v1
 	v2.MaxTurns = 50
-	require.NoError(t, seed.SeedAgents(ctx, db, []config.AgentDefinitionConfig{v2}, catalog))
+	require.NoError(t, seed.SeedAgents(ctx, db, nil, []config.AgentDefinitionConfig{v2}, catalog))
 
 	rows := readVersions(t, ctx, db, "agent-a")
 	require.Len(t, rows, 2, "a changed definition must mint a NEW version row, not edit the existing one")
@@ -200,7 +226,7 @@ func TestSeedAgents_ChangedDefinition_MintsNewVersion_PriorVersionIntact(t *test
 	assert.Equal(t, 50, rows[1].MaxTurns)
 
 	// A third seed with v2 unchanged must not mint a version 3.
-	require.NoError(t, seed.SeedAgents(ctx, db, []config.AgentDefinitionConfig{v2}, catalog))
+	require.NoError(t, seed.SeedAgents(ctx, db, nil, []config.AgentDefinitionConfig{v2}, catalog))
 	rows = readVersions(t, ctx, db, "agent-a")
 	assert.Len(t, rows, 2, "re-running with the latest version's config unchanged must stay idempotent at that version")
 }
@@ -219,7 +245,7 @@ func TestSeedAgents_UnservedModel_FailsLoudly_NoHalfRow(t *testing.T) {
 		agent("agent-good", "anthropic/claude-3.5-sonnet"),
 		agent("agent-bad", "openai/not-served"),
 	}
-	err := seed.SeedAgents(ctx, db, agents, catalog)
+	err := seed.SeedAgents(ctx, db, nil, agents, catalog)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "agent-bad")
 	assert.Contains(t, err.Error(), "not served")
@@ -238,7 +264,84 @@ func TestSeedAgents_CatalogueFetchFailure_FailsLoudly(t *testing.T) {
 	catalog := llm.NewCatalog(llm.NewClient("test-api-key", "http://127.0.0.1:1/unreachable"), time.Minute)
 
 	agents := []config.AgentDefinitionConfig{agent("agent-a", "anthropic/claude-3.5-sonnet")}
-	err := seed.SeedAgents(ctx, db, agents, catalog)
+	err := seed.SeedAgents(ctx, db, nil, agents, catalog)
 	require.Error(t, err)
 	assert.Empty(t, readVersions(t, ctx, db, "agent-a"))
+}
+
+// TestSeedAgents_ModelDefinition_CreatesRowAndResolvesFK proves an agent
+// naming model_definition (not model) gets a model_definition row seeded
+// with its provider preferences, and its agent_definition row's
+// model_definition_id resolves to that row -- model stays NULL.
+func TestSeedAgents_ModelDefinition_CreatesRowAndResolvesFK(t *testing.T) {
+	ctx := context.Background()
+	db, _ := newTestDB(t)
+	catalog := newTestCatalog(t, []string{"anthropic/claude-sonnet-4.5"})
+
+	allowFallbacks := false
+	modelDefs := []config.ModelDefinitionConfig{{
+		Name:  "sonnet-together-only",
+		Model: "anthropic/claude-sonnet-4.5",
+		Provider: config.ProviderPreferencesConfig{
+			Only:           []string{"together"},
+			AllowFallbacks: &allowFallbacks,
+		},
+	}}
+	a := agent("agent-a", "")
+	a.ModelDefinition = "sonnet-together-only"
+
+	require.NoError(t, seed.SeedAgents(ctx, db, modelDefs, []config.AgentDefinitionConfig{a}, catalog))
+
+	modelDefRow := readModelDefinition(t, ctx, db, "sonnet-together-only")
+	require.NotNil(t, modelDefRow)
+	assert.Equal(t, "anthropic/claude-sonnet-4.5", modelDefRow.Model)
+	assert.JSONEq(t, `{"only":["together"],"allow_fallbacks":false}`, string(modelDefRow.Provider))
+
+	rows := readVersions(t, ctx, db, "agent-a")
+	require.Len(t, rows, 1)
+	assert.Nil(t, rows[0].Model, "an agent seeded via model_definition must leave the model column NULL")
+	require.NotNil(t, rows[0].ModelDefinitionID)
+	assert.Equal(t, modelDefRow.ID, *rows[0].ModelDefinitionID)
+}
+
+// TestSeedAgents_ModelDefinition_ReRunIsIdempotent proves re-running with
+// an unchanged model_definitions + agents config produces zero new rows
+// in either table -- mirrors TestSeedAgents_ReRunIsIdempotent for the
+// model_definition path.
+func TestSeedAgents_ModelDefinition_ReRunIsIdempotent(t *testing.T) {
+	ctx := context.Background()
+	db, _ := newTestDB(t)
+	catalog := newTestCatalog(t, []string{"anthropic/claude-sonnet-4.5"})
+
+	modelDefs := []config.ModelDefinitionConfig{{Name: "sonnet-default", Model: "anthropic/claude-sonnet-4.5"}}
+	a := agent("agent-a", "")
+	a.ModelDefinition = "sonnet-default"
+	agents := []config.AgentDefinitionConfig{a}
+
+	require.NoError(t, seed.SeedAgents(ctx, db, modelDefs, agents, catalog))
+	require.NoError(t, seed.SeedAgents(ctx, db, modelDefs, agents, catalog))
+	require.NoError(t, seed.SeedAgents(ctx, db, modelDefs, agents, catalog))
+
+	rows := readVersions(t, ctx, db, "agent-a")
+	assert.Len(t, rows, 1, "re-running against an unchanged model_definitions + agents config must not mint new agent_definition rows")
+}
+
+// TestSeedAgents_ModelDefinitionUnservedModel_FailsLoudly_NoHalfRow proves
+// a model_definitions entry naming an unserved model fails the whole run
+// before writing any row -- including the model_definition table itself.
+func TestSeedAgents_ModelDefinitionUnservedModel_FailsLoudly_NoHalfRow(t *testing.T) {
+	ctx := context.Background()
+	db, _ := newTestDB(t)
+	catalog := newTestCatalog(t, []string{"anthropic/claude-3.5-sonnet"}) // "openai/not-served" deliberately absent
+
+	modelDefs := []config.ModelDefinitionConfig{{Name: "bad-def", Model: "openai/not-served"}}
+	a := agent("agent-good", "anthropic/claude-3.5-sonnet")
+
+	err := seed.SeedAgents(ctx, db, modelDefs, []config.AgentDefinitionConfig{a}, catalog)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "bad-def")
+	assert.Contains(t, err.Error(), "not served")
+
+	assert.Nil(t, readModelDefinition(t, ctx, db, "bad-def"), "a bad model_definitions entry must fail before ANY row is written")
+	assert.Empty(t, readVersions(t, ctx, db, "agent-good"))
 }

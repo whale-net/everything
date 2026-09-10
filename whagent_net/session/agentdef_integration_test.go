@@ -12,11 +12,13 @@ import (
 	"github.com/whale-net/everything/whagent_net/session"
 )
 
+func strPtr(s string) *string { return &s }
+
 func newTestAgentDefinition(agentID string, version int) *session.AgentDefinition {
 	return &session.AgentDefinition{
 		AgentID:  agentID,
 		Version:  version,
-		Model:    "test-model",
+		Model:    strPtr("test-model"),
 		ToolSet:  []session.ToolServerRef{{ServerURL: "https://mcp.example.com/research"}},
 		MaxTurns: 100,
 	}
@@ -35,31 +37,34 @@ func TestAgentDefinitionStore_Upsert_GetLatest_GetVersion_RoundTrip(t *testing.T
 	assert.False(t, def1.CreatedAt.IsZero())
 
 	def2 := newTestAgentDefinition("research-agent", 2)
-	def2.Model = "test-model-v2"
+	def2.Model = strPtr("test-model-v2")
 	require.NoError(t, s.AgentDefinitions().Upsert(ctx, def2))
 
 	latest, err := s.AgentDefinitions().GetLatest(ctx, "research-agent")
 	require.NoError(t, err)
 	require.NotNil(t, latest)
 	assert.Equal(t, 2, latest.Version)
-	assert.Equal(t, "test-model-v2", latest.Model)
+	require.NotNil(t, latest.Model)
+	assert.Equal(t, "test-model-v2", *latest.Model)
 
 	v1, err := s.AgentDefinitions().GetVersion(ctx, "research-agent", 1)
 	require.NoError(t, err)
 	require.NotNil(t, v1)
-	assert.Equal(t, "test-model", v1.Model)
+	require.NotNil(t, v1.Model)
+	assert.Equal(t, "test-model", *v1.Model)
 
 	// Re-upsert version 1 with a different model -- created_at must be
 	// unchanged (the doc comment's "replace every column except
 	// created_at" promise).
 	replacement := newTestAgentDefinition("research-agent", 1)
-	replacement.Model = "test-model-replaced"
+	replacement.Model = strPtr("test-model-replaced")
 	require.NoError(t, s.AgentDefinitions().Upsert(ctx, replacement))
 	assert.Equal(t, def1.CreatedAt.UTC(), replacement.CreatedAt.UTC(), "re-upserting an existing (agent_id, version) must keep the original created_at")
 
 	reread, err := s.AgentDefinitions().GetVersion(ctx, "research-agent", 1)
 	require.NoError(t, err)
-	assert.Equal(t, "test-model-replaced", reread.Model)
+	require.NotNil(t, reread.Model)
+	assert.Equal(t, "test-model-replaced", *reread.Model)
 }
 
 // TestAgentDefinitionStore_GetLatest_UnknownAgent_ReturnsNilNotError proves

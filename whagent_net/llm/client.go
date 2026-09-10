@@ -7,10 +7,11 @@
 // provider (OpenRouter) and a base-URL swap covers the foreseeable
 // need"): there is exactly one Client type here, never a provider
 // interface. Request.Provider (OpenRouter's own upstream-provider
-// routing, ENV.md's OPENROUTER_PROVIDER_ONLY) does not revisit that
-// non-goal -- it restricts which of OpenRouter's upstream inference
-// vendors may serve a call, OpenRouter itself remains the only LLM
-// provider this package speaks to.
+// routing, session.ModelDefinition's `provider` column resolved by
+// worker/activities.go) does not revisit that non-goal -- it restricts
+// which of OpenRouter's upstream inference vendors may serve a call,
+// OpenRouter itself remains the only LLM provider this package speaks
+// to.
 package llm
 
 import (
@@ -84,16 +85,77 @@ type Request struct {
 	Provider *ProviderPreferences
 }
 
-// ProviderPreferences is OpenRouter's per-request "provider" object,
-// scoped here to the one field whagent-net needs: Only. See Request's
-// Provider doc comment for why this is not the multi-provider
-// abstraction ARCHITECTURE.md's "Open items" lists as a non-goal.
+// ProviderPreferences is OpenRouter's per-request "provider" object
+// (https://openrouter.ai/docs/features/provider-routing), carried through
+// verbatim field-for-field. See Request's Provider doc comment for why
+// this is not the multi-provider abstraction ARCHITECTURE.md's "Open
+// items" lists as a non-goal. whagent_net/session.ProviderPreferences is
+// the identical shape for `model_definition`'s stored routing
+// preferences (session package doc comment on why it's not just this
+// type reused); worker/activities.go converts one into the other when
+// resolving an agent definition's effective model.
 type ProviderPreferences struct {
 	// Only restricts routing to exactly these OpenRouter provider slugs
 	// (e.g. "together", "fireworks") instead of OpenRouter's default
 	// behavior of routing across its entire pool for the requested
-	// model. Empty means no restriction.
+	// model.
 	Only []string
+	// Ignore excludes these provider slugs from the routing pool.
+	Ignore []string
+	// Order ranks providers to try, in order, before falling back to the
+	// rest of the (possibly Only/Ignore-restricted) pool -- see
+	// AllowFallbacks to disable that fallback entirely.
+	Order []string
+	// Quantizations restricts routing to providers serving one of these
+	// quantization levels (e.g. "fp8", "int4").
+	Quantizations []string
+	// Sort is OpenRouter's routing sort strategy: "price", "throughput",
+	// or "latency". Empty leaves OpenRouter's default.
+	Sort string
+	// AllowFallbacks, when non-nil, overrides OpenRouter's default of
+	// true: false means fail the call rather than fall back outside
+	// Order/Only once those providers are unavailable.
+	AllowFallbacks *bool
+	// RequireParameters, when non-nil true, restricts routing to
+	// providers that support every parameter this request sets.
+	RequireParameters *bool
+	// DataCollection is "allow" or "deny", controlling whether OpenRouter
+	// may route to providers that may log/train on the request. Empty
+	// leaves OpenRouter's default.
+	DataCollection string
+}
+
+// toWire converts p into the JSON object OpenRouter's "provider" request
+// field expects, omitting every unset field so an empty ProviderPreferences
+// produces an empty (and thus omitted, see Complete) object rather than a
+// wire payload full of empty arrays/strings.
+func (p *ProviderPreferences) toWire() map[string]any {
+	out := make(map[string]any, 8)
+	if len(p.Only) > 0 {
+		out["only"] = p.Only
+	}
+	if len(p.Ignore) > 0 {
+		out["ignore"] = p.Ignore
+	}
+	if len(p.Order) > 0 {
+		out["order"] = p.Order
+	}
+	if len(p.Quantizations) > 0 {
+		out["quantizations"] = p.Quantizations
+	}
+	if p.Sort != "" {
+		out["sort"] = p.Sort
+	}
+	if p.AllowFallbacks != nil {
+		out["allow_fallbacks"] = *p.AllowFallbacks
+	}
+	if p.RequireParameters != nil {
+		out["require_parameters"] = *p.RequireParameters
+	}
+	if p.DataCollection != "" {
+		out["data_collection"] = p.DataCollection
+	}
+	return out
 }
 
 // Response is one turn's LLM call result: the model's message, any tool
@@ -142,8 +204,10 @@ func (c *Client) Complete(ctx context.Context, req Request) (Response, error) {
 	// worker asks for provider usage/cost reporting opportunistically
 	// never suffices, so this is not gated on anything caller-supplied.
 	opts := []option.RequestOption{option.WithJSONSet("usage.include", true)}
-	if req.Provider != nil && len(req.Provider.Only) > 0 {
-		opts = append(opts, option.WithJSONSet("provider.only", req.Provider.Only))
+	if req.Provider != nil {
+		if wire := req.Provider.toWire(); len(wire) > 0 {
+			opts = append(opts, option.WithJSONSet("provider", wire))
+		}
 	}
 
 	resp, err := c.oa.Chat.Completions.New(ctx, params, opts...)

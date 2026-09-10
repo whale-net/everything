@@ -91,11 +91,24 @@ to check a requested `model_override` against the provider catalogue (FR5)
 before any session row is written -- a separate in-process cache from
 `worker`'s, since the two are different binaries sharing no memory.
 
+OpenRouter's own upstream-provider routing (restricting/ranking/excluding
+which of OpenRouter's inference vendors may serve a call -- `only`,
+`ignore`, `order`, `quantizations`, `sort`, `allow_fallbacks`,
+`require_parameters`, `data_collection`, per
+[OpenRouter's provider routing](https://openrouter.ai/docs/features/provider-routing))
+is not an env var: it is configured per agent definition via the
+`model_definition` table (`whagent_net/session/modeldef.go`,
+`config/agents.yaml`'s `model_definitions`), not here -- see
+`ARCHITECTURE.md`'s "Component map" for `model_definition`. This is
+unrelated to `OPENROUTER_BASE_URL` below -- OpenRouter remains the only
+LLM provider whagent-net talks to; `model_definition` only narrows which
+of *its* upstream inference vendors may serve a call, and does so
+per-agent rather than process-wide.
+
 | Variable | Component | Default | Description |
 |----------|-----------|---------|-------------|
 | `OPENROUTER_API_KEY` | worker, api | *(required)* | OpenRouter API key. |
 | `OPENROUTER_BASE_URL` | worker, api | `https://openrouter.ai/api/v1` | OpenAI-compatible base URL; swapping it is how a second provider would be introduced. |
-| `OPENROUTER_PROVIDER_ONLY` | worker | — | Comma-separated list of OpenRouter upstream-provider slugs (e.g. `together,fireworks`) to restrict `CallModel`'s routing to, per [OpenRouter's provider routing](https://openrouter.ai/docs/features/provider-routing) `provider.only`. Unset leaves OpenRouter's default full-pool routing in place. This is not the "second provider" `OPENROUTER_BASE_URL` refers to above -- OpenRouter remains the only LLM provider whagent-net talks to; this only narrows which of *its* upstream inference vendors may serve a call. |
 | `WHAGENT_DEFAULT_MODEL` | worker, api | — | Model used when neither agent definition nor session specifies one. |
 | `WHAGENT_DEFAULT_MAX_TURNS` | api | `100` | Per-session turn cap default. |
 | `WHAGENT_DEFAULT_MAX_COST_USD` | api | `1` | Per-session cost cap default. |

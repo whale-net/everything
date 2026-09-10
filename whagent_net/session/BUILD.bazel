@@ -6,6 +6,7 @@ go_library(
         "agentdef.go",
         "archive.go",
         "idempotency.go",
+        "modeldef.go",
         "session.go",
         "sessions.go",
         "transcript.go",
@@ -60,6 +61,7 @@ go_test(
     srcs = [
         "agentdef_integration_test.go",
         "idempotency_integration_test.go",
+        "modeldef_integration_test.go",
         "sessions_integration_test.go",
         "store_integration_test.go",
         "transcript_archive_integration_test.go",
