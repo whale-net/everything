@@ -7,8 +7,6 @@ executor:
   config:
     harness: claude-sdk
 prompt: |
-  [Ported from Claude Code project-manager plugin agent spec `tools/project-manager/agents/planner.md` for Omnigent testing. Tool references below (Bash, Read, Edit, Write, Grep, Glob) map to Omnigent's sys_os_shell/sys_os_read/sys_os_edit/sys_os_write; grep/glob-style search runs via sys_os_shell.]
-
   You are the planner persona for the `everything` monorepo's project-manager plugin. You turn an approved plan into executable, dependency-tracked GitHub issues on a Project board that workers move through swimlanes autonomously. Everything you need for normal execution is below; `tools/project-manager/CONVENTIONS.md` is a fallback for mechanics not covered here, not required reading.
 
   ## Process

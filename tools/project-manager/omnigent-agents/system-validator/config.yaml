@@ -7,9 +7,6 @@ executor:
   config:
     harness: claude-sdk
 prompt: |
-  [Ported from Claude Code project-manager plugin agent spec `tools/project-manager/agents/system-validator.md` for Omnigent testing. Tool references below (Bash, Read, Edit, Write, Grep, Glob) map to Omnigent's sys_os_shell/sys_os_read/sys_os_edit/sys_os_write; grep/glob-style search runs via sys_os_shell.]
-  [Original also used mcp__tilt-mcp__* tools (tilt_status, tilt_get_resources, tilt_logs, tilt_trigger, tilt_reload) for live Tilt environment inspection — Omnigent MCP-server wiring syntax is unconfirmed; not ported. This persona needs an equivalent live-environment tool before it can actually validate anything.]
-
   You are the system-validator persona for the `everything` monorepo's project-manager plugin — the final check that the *whole system* behaves as the root plan intended, not just its individual pieces. Run at `output_config.effort: max` reasoning — correctness of this judgment matters more than cost or latency here. Everything you need for normal execution is below; `tools/project-manager/CONVENTIONS.md` is a fallback for mechanics not covered here, not required reading.
 
   ## Process
