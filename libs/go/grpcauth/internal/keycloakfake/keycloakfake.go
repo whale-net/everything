@@ -21,6 +21,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"strings"
 	"sync"
 	"time"
@@ -90,6 +91,14 @@ type Server struct {
 	authorizeCalls int
 	tokenCalls     int
 	revokeCalls    int
+
+	// lastAuthorizeQuery/lastTokenForm capture the most recent /authorize
+	// query string and /token form body, so tests can assert PKCE
+	// correlation (the code_verifier sent to /token hashes, S256, to the
+	// code_challenge sent to /authorize) and that redirect_uri is always
+	// the caller-configured value, never something request-supplied.
+	lastAuthorizeQuery url.Values
+	lastTokenForm      url.Values
 
 	signingKey *ecdsa.PrivateKey
 }
@@ -202,6 +211,26 @@ func (s *Server) RevokeCalls() int {
 	return s.revokeCalls
 }
 
+// LastAuthorizeQuery returns the query string of the most recent /authorize
+// request, or nil if /authorize has never been called. Used to assert PKCE's
+// code_challenge/code_challenge_method and redirect_uri actually arrived as
+// sent.
+func (s *Server) LastAuthorizeQuery() url.Values {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.lastAuthorizeQuery
+}
+
+// LastTokenForm returns the parsed form body of the most recent /token
+// request, or nil if /token has never been called. Used to assert the
+// code_verifier sent on exchange correlates with the code_challenge sent on
+// authorize, and that redirect_uri on exchange matches the configured value.
+func (s *Server) LastTokenForm() url.Values {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.lastTokenForm
+}
+
 // --- token minting -------------------------------------------------------
 
 // accessTokenClaims is the subset of Keycloak access-token claims this fake
@@ -300,6 +329,7 @@ func (s *Server) handleDiscovery(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handleAuthorize(w http.ResponseWriter, r *http.Request) {
 	s.mu.Lock()
 	s.authorizeCalls++
+	s.lastAuthorizeQuery = r.URL.Query()
 	code := s.authorizationCode
 	s.mu.Unlock()
 
@@ -319,8 +349,11 @@ func (s *Server) handleAuthorize(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleToken(w http.ResponseWriter, r *http.Request) {
+	_ = r.ParseForm()
+
 	s.mu.Lock()
 	s.tokenCalls++
+	s.lastTokenForm = r.Form
 	mode := s.tokenMode
 	refreshToken := s.nextRefreshToken
 	subject := s.subject
