@@ -54,6 +54,28 @@ type ServerGameConfigRepository interface {
 	GetSGCLibraryAttachments(ctx context.Context, sgcID int64) ([]*manman.SGCWorkshopLibrary, error)
 }
 
+// GameConfigWorkshopLibraryRepository defines operations for the GC-level
+// Workshop library attachment table (M6 #2361, plan #2359) and the FR12
+// conflicts the SGC->GC backfill surfaces. sgc_workshop_libraries remains
+// authoritative for deploy-time resolution until the dependent retirement
+// task cuts over (NFR1) -- this repository is purely additive.
+type GameConfigWorkshopLibraryRepository interface {
+	ListLibraries(ctx context.Context, configID int64) ([]*manman.WorkshopLibrary, error)
+	ListAttachments(ctx context.Context, configID int64) ([]*manman.GameConfigWorkshopLibrary, error)
+	AddLibrary(ctx context.Context, configID, libraryID int64, presetID, volumeID *int64, installationPathOverride *string) error
+	RemoveLibrary(ctx context.Context, configID, libraryID int64) error
+	ListUnresolvedConflicts(ctx context.Context) ([]*manman.WorkshopLibraryMigrationConflict, error)
+	GetConflictForConfig(ctx context.Context, configID int64) (*manman.WorkshopLibraryMigrationConflict, error)
+	// ResolveConflict writes the resulting attachment set into
+	// gameconfig_workshop_libraries and stamps resolved_at/resolution in one
+	// transaction: "union" inserts every candidate library (one
+	// representative override variant per library_id), "override" inserts
+	// only keepLibraryID and discards the rest. Resolving an already-resolved
+	// conflict is rejected (FR12, Out of scope: no other resolution shape
+	// exists in M6).
+	ResolveConflict(ctx context.Context, conflictID int64, resolution string, keepLibraryID *int64) error
+}
+
 // SessionFilters defines filters for session queries
 type SessionFilters struct {
 	SGCID         *int64
@@ -324,26 +346,27 @@ type WorkshopCacheRepository interface {
 
 // Repository aggregates all repository interfaces
 type Repository struct {
-	Servers                 ServerRepository
-	Games                   GameRepository
-	GameConfigs             GameConfigRepository
-	ServerGameConfigs       ServerGameConfigRepository
-	Sessions                SessionRepository
-	ServerCapabilities      ServerCapabilityRepository
-	LogReferences           LogReferenceRepository
-	Backups                 BackupRepository
-	BackupConfigs           BackupConfigRepository
-	ServerPorts             ServerPortRepository
-	ServerPortRanges        ServerPortRangeRepository
-	ConfigurationStrategies ConfigurationStrategyRepository
-	ConfigurationPatches    ConfigurationPatchRepository
-	GameConfigVolumes       GameConfigVolumeRepository
-	WorkshopAddons          WorkshopAddonRepository
-	WorkshopInstallations   WorkshopInstallationRepository
-	WorkshopLibraries       WorkshopLibraryRepository
-	WorkshopBatchJobs       WorkshopBatchJobRepository
-	AddonPathPresets        AddonPathPresetRepository
-	PendingRestarts         PendingRestartRepository
-	WorkshopCache           WorkshopCacheRepository
-	Actions                 interface{} // ActionRepository from postgres package
+	Servers                     ServerRepository
+	Games                       GameRepository
+	GameConfigs                 GameConfigRepository
+	ServerGameConfigs           ServerGameConfigRepository
+	GameConfigWorkshopLibraries GameConfigWorkshopLibraryRepository
+	Sessions                    SessionRepository
+	ServerCapabilities          ServerCapabilityRepository
+	LogReferences               LogReferenceRepository
+	Backups                     BackupRepository
+	BackupConfigs               BackupConfigRepository
+	ServerPorts                 ServerPortRepository
+	ServerPortRanges            ServerPortRangeRepository
+	ConfigurationStrategies     ConfigurationStrategyRepository
+	ConfigurationPatches        ConfigurationPatchRepository
+	GameConfigVolumes           GameConfigVolumeRepository
+	WorkshopAddons              WorkshopAddonRepository
+	WorkshopInstallations       WorkshopInstallationRepository
+	WorkshopLibraries           WorkshopLibraryRepository
+	WorkshopBatchJobs           WorkshopBatchJobRepository
+	AddonPathPresets            AddonPathPresetRepository
+	PendingRestarts             PendingRestartRepository
+	WorkshopCache               WorkshopCacheRepository
+	Actions                     interface{} // ActionRepository from postgres package
 }

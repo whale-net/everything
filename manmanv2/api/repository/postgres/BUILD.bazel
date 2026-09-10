@@ -8,6 +8,7 @@ go_library(
         "backup.go",
         "game.go",
         "gameconfig.go",
+        "gameconfig_workshop_library.go",
         "gameconfigvolume.go",
         "log_reference.go",
         "patch.go",
