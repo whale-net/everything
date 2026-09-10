@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"fmt"
 	"log"
 	"net/http"
@@ -32,13 +33,28 @@ func (app *App) handleGameConfigEditor(w http.ResponseWriter, r *http.Request, g
 	}
 }
 
-// handleGameConfigEditorGet fetches the GameConfig and its volumes and
-// renders the blade fragment directly (pages.ConfigEditor(...).Render),
-// never through RenderTempl's full-page htmxbase layout -- see
-// pages.ConfigEditorData's doc comment for why this must stay a bare
-// fragment. Mirrors handleDeploymentRowFragment's rendering shape in
-// handlers_deployment_actions.go.
+// handleGameConfigEditorGet renders the blade fragment on a fresh open,
+// Basics active -- see renderConfigEditorBlade for the actual fetch/render
+// shared with every Volumes assign/edit/remove route (#2363,
+// handlers_config_editor_volumes.go), which re-render the same way but
+// with Volumes active.
 func (app *App) handleGameConfigEditorGet(w http.ResponseWriter, r *http.Request, gameIDStr, configIDStr string) {
+	app.renderConfigEditorBlade(w, r, gameIDStr, configIDStr, "basics")
+}
+
+// renderConfigEditorBlade fetches the GameConfig and its volumes (each with
+// its current backup-config assignment, FR14/FR15) and renders the blade
+// fragment directly (pages.ConfigEditor(...).Render), never through
+// RenderTempl's full-page htmxbase layout -- see pages.ConfigEditorData's
+// doc comment for why this must stay a bare fragment. Mirrors
+// handleDeploymentRowFragment's rendering shape in
+// handlers_deployment_actions.go.
+//
+// activeTab lets a caller land the re-render on whichever tab makes sense:
+// "basics" for a fresh open, "volumes" for every Volumes assign/edit/remove
+// route (#2363) so a save on that tab never bounces the user back to
+// Basics.
+func (app *App) renderConfigEditorBlade(w http.ResponseWriter, r *http.Request, gameIDStr, configIDStr, activeTab string) {
 	gameID, err := strconv.ParseInt(gameIDStr, 10, 64)
 	if err != nil {
 		http.Error(w, "Invalid game ID", http.StatusBadRequest)
@@ -72,9 +88,9 @@ func (app *App) handleGameConfigEditorGet(w http.ResponseWriter, r *http.Request
 		Image:         config.Image,
 		ArgsTemplate:  config.ArgsTemplate,
 		EnvVars:       sortedConfigEditorEnvVars(config.EnvTemplate),
-		Volumes:       toConfigEditorVolumes(volumes),
+		Volumes:       app.toConfigEditorVolumes(ctx, volumes),
 		Dirty:         false,
-		ActiveTab:     "basics",
+		ActiveTab:     activeTab,
 		BackupLinkURL: fmt.Sprintf("/games/%d/configs/%d", gameID, configID),
 	}
 
@@ -141,7 +157,7 @@ func (app *App) handleGameConfigEditorSave(w http.ResponseWriter, r *http.Reques
 			Image:         image,
 			ArgsTemplate:  argsTemplate,
 			EnvVars:       sortedConfigEditorEnvVars(envTemplate),
-			Volumes:       toConfigEditorVolumes(volumes),
+			Volumes:       app.toConfigEditorVolumes(ctx, volumes),
 			Errors:        errs,
 			Dirty:         true,
 			ActiveTab:     "basics",
@@ -245,22 +261,45 @@ func parseConfigEditorEnvRows(keys, values []string) map[string]string {
 }
 
 // toConfigEditorVolumes converts GameConfigVolume protos to the Volumes
-// tab's read-only view (WD4): all six fields, nothing else, no derived
-// aggregate.
-func toConfigEditorVolumes(volumes []*manmanpb.GameConfigVolume) []pages.ConfigEditorVolume {
+// tab's view: the six WD4 fields plus, per volume, its current
+// backup-config assignment if any (FR14/FR15, #2363). One ListBackupConfigs
+// call per volume -- mirrors handleGameConfigDetail's own
+// volumes-then-backup-configs loop in handlers_games.go, which already
+// accepts the same N+1 shape for the standalone surface at the same scale
+// (a config's volume count).
+func (app *App) toConfigEditorVolumes(ctx context.Context, volumes []*manmanpb.GameConfigVolume) []pages.ConfigEditorVolume {
 	if len(volumes) == 0 {
 		return nil
 	}
 	rows := make([]pages.ConfigEditorVolume, 0, len(volumes))
 	for _, v := range volumes {
-		rows = append(rows, pages.ConfigEditorVolume{
+		row := pages.ConfigEditorVolume{
+			VolumeID:      v.VolumeId,
 			Name:          v.Name,
 			Description:   v.Description,
 			ContainerPath: v.ContainerPath,
 			HostSubpath:   v.HostSubpath,
 			ReadOnly:      v.ReadOnly,
 			VolumeType:    v.VolumeType,
-		})
+		}
+
+		cfgs, err := app.grpc.ListBackupConfigs(ctx, v.VolumeId)
+		if err != nil {
+			log.Printf("Warning: failed to fetch backup configs for volume %d: %v", v.VolumeId, err)
+		} else if len(cfgs) > 0 {
+			// Only the first is surfaced as "the" assignment even if a
+			// volume somehow carries more than one (see
+			// ConfigEditorVolume's doc comment in config_editor.templ) --
+			// the rest stay reachable via the standalone surface (NFR4).
+			row.Backup = &pages.ConfigEditorVolumeBackup{
+				BackupConfigID: cfgs[0].BackupConfigId,
+				CadenceMinutes: cfgs[0].CadenceMinutes,
+				BackupPath:     cfgs[0].BackupPath,
+				Enabled:        cfgs[0].Enabled,
+			}
+		}
+
+		rows = append(rows, row)
 	}
 	return rows
 }

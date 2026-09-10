@@ -683,11 +683,22 @@ func (app *App) handleGameConfigDetail(w http.ResponseWriter, r *http.Request, g
 				if actionOrVolumeID == "create" {
 					app.handleGameConfigVolumeCreate(w, r, gameIDStr, configIDStr)
 					return
-				} else {
-					// Assume it's a volume_id for delete
-					app.handleGameConfigVolumeDelete(w, r, gameIDStr, configIDStr, actionOrVolumeID)
+				}
+				if len(pathParts) > 6 && pathParts[6] == "backup-config" {
+					// /games/{id}/configs/{config_id}/volumes/{volume_id}/backup-config/{assign|edit|remove}
+					// (FR14/FR15, #2363: Config Editor Volumes tab inline
+					// backup-config assign/edit/remove -- see
+					// handlers_config_editor_volumes.go.)
+					action := ""
+					if len(pathParts) > 7 {
+						action = pathParts[7]
+					}
+					app.handleConfigEditorVolumeBackupConfig(w, r, gameIDStr, configIDStr, actionOrVolumeID, action)
 					return
 				}
+				// Assume it's a volume_id for delete
+				app.handleGameConfigVolumeDelete(w, r, gameIDStr, configIDStr, actionOrVolumeID)
+				return
 			} else {
 				// POST to /games/{id}/configs/{config_id}/volumes (create)
 				if r.Method == http.MethodPost {
