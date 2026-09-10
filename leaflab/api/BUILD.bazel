@@ -129,10 +129,12 @@ release_app(
 )
 
 # Real-Postgres integration coverage for ListBoardsWithState (#1497),
-# ListSensorDetailsForBoard/GetBoardIdentity (#1498), and migration 016's
-# board.name / leaflab_user_role / sensor corrective-push schema (#1759) --
-# see repository_integration_test.go's and migration_016_integration_test.go's
-# doc comments plus //libs/go/dbtest's README for how to run it.
+# ListSensorDetailsForBoard/GetBoardIdentity (#1498), migration 016's
+# board.name / leaflab_user_role / sensor corrective-push schema (#1759),
+# migration 017's region_parent_history / board_region_history SCD2 tables
+# (#2311), and migration 018's historical region roll-up in
+# v_sensor_reading_enriched (#2313) -- see the files' doc comments plus
+# //libs/go/dbtest's README for how to run it.
 #
 # Gazelle does not generate this target: both source files are gated behind
 # `//go:build integration`, which gazelle skips when scanning for go_test
@@ -151,6 +153,7 @@ go_test(
     srcs = [
         "migration_016_integration_test.go",
         "migration_017_integration_test.go",
+        "migration_018_integration_test.go",
         "repository_integration_test.go",
         "testdb_integration_test.go",
     ],
