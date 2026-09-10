@@ -1,0 +1,19 @@
+load("@rules_go//go:def.bzl", "go_library")
+
+# The Postgres-backed implementation of the DomainResolver-shaped
+# interfaces whagent_net/mcp/server and whagent_net/mcp/tools each declare
+# (issue #2427, FR7). Lives outside those two packages specifically
+# because it depends on whagent_net/session -- see mcpdomain.go's package
+# doc and mcp/server/deps_test.go + mcp/tools/deps_test.go's
+# TestBUILD_NoStoreOrTemporalDependency, which forbid exactly that
+# dependency in mcp's own packages.
+go_library(
+    name = "mcpdomain",
+    srcs = ["mcpdomain.go"],
+    importpath = "github.com/whale-net/everything/whagent_net/mcpdomain",
+    visibility = ["//visibility:public"],
+    deps = [
+        "//whagent_net/session",
+        "@com_github_google_uuid//:uuid",
+    ],
+)

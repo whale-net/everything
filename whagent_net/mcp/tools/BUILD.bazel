@@ -9,6 +9,7 @@ go_library(
     name = "tools",
     srcs = [
         "convert.go",
+        "domain.go",
         "errors.go",
         "get_session.go",
         "read_transcript.go",

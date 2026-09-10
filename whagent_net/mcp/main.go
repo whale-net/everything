@@ -6,15 +6,24 @@
 // tool call is a pass-through RPC to `api`, authenticated as the
 // operator who made it, never a shared service account (FR10). It never
 // talks to Temporal directly, and the only Postgres it ever touches
-// (optionally, FR9/issue #2249) is the mcp_credential table backing the
-// OAuth2 token-exchange path's mcpauth.CredentialStore -- see
-// initializeTokenExchange below. On that path, `mcp` also holds its own
-// confidential Keycloak client (WHAGENT_MCP_KEYCLOAK_*, ../ENV.md) with
-// token-exchange/impersonation rights, used to exchange a resolved
-// operator identity for a short-lived, real Keycloak-signed JWT (RFC
-// 8693, server/tokenexchange.go) before ever calling `api` -- `api`
-// itself verifies real Keycloak tokens only, so this is what makes the
-// two credential shapes indistinguishable downstream.
+// (optionally, FR9/issue #2249) is against the same database `ui`'s
+// mcpauth.Provider and whagent_net/session already use: the
+// mcp_credential table backing the OAuth2 token-exchange path's
+// mcpauth.CredentialStore, and (issue #2427, FR7) the agent_definition/
+// session_agent tables backing whagent_net/mcpdomain.Resolver's
+// DomainResolver implementation -- see initializeTokenExchange below.
+// mcp/server and mcp/tools -- the packages every tool handler and the
+// HTTP/MCP-protocol wiring actually live in -- still never import
+// whagent_net/session or pgx directly (deps_test.go's
+// TestBUILD_NoStoreOrTemporalDependency in each); this binary's own
+// main.go is the one place both concrete Postgres-backed
+// implementations are constructed. On the OAuth2 path, `mcp` also holds
+// its own confidential Keycloak client (WHAGENT_MCP_KEYCLOAK_*,
+// ../ENV.md) with token-exchange/impersonation rights, used to exchange
+// a resolved operator identity for a short-lived, real Keycloak-signed
+// JWT (RFC 8693, server/tokenexchange.go) before ever calling `api` --
+// `api` itself verifies real Keycloak tokens only, so this is what makes
+// the two credential shapes indistinguishable downstream.
 package main
 
 import (
@@ -36,7 +45,9 @@ import (
 	"github.com/whale-net/everything/libs/go/grpcclient"
 	"github.com/whale-net/everything/libs/go/logging"
 	"github.com/whale-net/everything/libs/go/mcpauth"
+	"github.com/whale-net/everything/whagent_net/mcpdomain"
 	pb "github.com/whale-net/everything/whagent_net/protos"
+	"github.com/whale-net/everything/whagent_net/session"
 
 	"github.com/whale-net/everything/whagent_net/mcp/server"
 	"github.com/whale-net/everything/whagent_net/mcp/tools"
@@ -118,10 +129,23 @@ func getEnv(key, def string) string {
 // not configured) and exchanger may be constructed disabled (see
 // initializeTokenExchange's NFR8 fail-loud check for the one combination
 // that is instead a startup error).
+//
+// domainResolver (issue #2427, FR7) piggybacks on this same struct purely
+// because it is constructed against the same pool, at the same point in
+// startup, as credentials -- not because it is part of FR9's OAuth2 path.
+// It is held here, unconsumed, deliberately: this task is purely
+// additive (no tool handler or middleware calls DomainForAgent/
+// DomainForSession yet), so run() does not thread it into server.New or
+// any tools.RegisterX call below. Wiring an actual call at tool-dispatch
+// time -- and therefore deciding where domainResolver's consumer actually
+// lives -- is issue #2427's dependent "dispatch-time rewiring" task; may
+// be nil exactly when credentials is (cfg.DatabaseURL unset or the pool
+// unreachable).
 type tokenExchangeDeps struct {
-	pool        *pgxpool.Pool
-	credentials mcpauth.CredentialStore
-	exchanger   server.Exchanger
+	pool           *pgxpool.Pool
+	credentials    mcpauth.CredentialStore
+	exchanger      server.Exchanger
+	domainResolver *mcpdomain.Resolver
 }
 
 // Close releases pool, if initializeTokenExchange opened one.
@@ -186,7 +210,17 @@ func initializeTokenExchange(ctx context.Context, cfg config, logger *slog.Logge
 	}
 
 	logger.Info("mcpauth credential store initialized for the FR9 OAuth2 token-exchange path")
-	return tokenExchangeDeps{pool: pool, credentials: credentials, exchanger: exchanger}, nil
+
+	// domainResolver (issue #2427, FR7) is constructed against the same
+	// pool credentials just was -- see tokenExchangeDeps' doc comment for
+	// why it is held here unconsumed rather than threaded into
+	// server.New/tools.RegisterX below. Unlike mcpauth.NewCredentialStore,
+	// session.New/AgentDefinitions perform no preflight query of their
+	// own, so there is nothing further to degrade on here: the pool
+	// already proved reachable immediately above.
+	domainResolver := mcpdomain.New(session.New(pool, nil).AgentDefinitions())
+
+	return tokenExchangeDeps{pool: pool, credentials: credentials, exchanger: exchanger, domainResolver: domainResolver}, nil
 }
 
 func main() {
