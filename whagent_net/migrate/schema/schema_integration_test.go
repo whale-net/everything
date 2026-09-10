@@ -41,6 +41,8 @@ var everyTable = []string{
 	"tool_call_idempotency",
 	"ui_sessions",
 	"model_definition",
+	"grpcauth_delegated_grant",
+	"grpcauth_grant_index",
 }
 
 func tableExists(t *testing.T, ctx context.Context, db *dbtest.Postgres, table string) bool {
@@ -70,7 +72,7 @@ func TestMigration001_UpDownUp_LeavesCleanDatabaseAndIsRerunnable(t *testing.T) 
 
 	latest, err := runner.LatestVersion()
 	require.NoError(t, err)
-	require.Equal(t, uint(7), latest, "expected the latest migration source version to be 7 (001_initial_schema + 002_transcript_archive, issue #2240 + 003_sessions_list_index, issue #2241 + 004_mcpauth_credential, issue #2245 + 005_ui_sessions, issue #2288 + 006_model_definition + 007_agent_definition_domain, issue #2424) -- update this test if a later migration has since landed")
+	require.Equal(t, uint(8), latest, "expected the latest migration source version to be 8 (001_initial_schema + 002_transcript_archive, issue #2240 + 003_sessions_list_index, issue #2241 + 004_mcpauth_credential, issue #2245 + 005_ui_sessions, issue #2288 + 006_model_definition + 007_agent_definition_domain, issue #2424 + 008_delegated_grant, issue #2426) -- update this test if a later migration has since landed")
 
 	// -- Up: every table must exist, version must land clean at the latest --
 	require.NoError(t, runner.Up(), "apply every migration")
@@ -78,7 +80,7 @@ func TestMigration001_UpDownUp_LeavesCleanDatabaseAndIsRerunnable(t *testing.T) 
 	version, dirty, err := runner.Version()
 	require.NoError(t, err)
 	assert.False(t, dirty)
-	assert.Equal(t, uint(7), version)
+	assert.Equal(t, uint(8), version)
 
 	for _, table := range everyTable {
 		assert.True(t, tableExists(t, ctx, db, table), "expected table %q to exist after Up()", table)
@@ -105,7 +107,7 @@ func TestMigration001_UpDownUp_LeavesCleanDatabaseAndIsRerunnable(t *testing.T) 
 	version, dirty, err = runner.Version()
 	require.NoError(t, err)
 	assert.False(t, dirty)
-	assert.Equal(t, uint(7), version)
+	assert.Equal(t, uint(8), version)
 
 	for _, table := range everyTable {
 		assert.True(t, tableExists(t, ctx, db, table), "expected table %q to exist again after the second Up()", table)
@@ -182,4 +184,19 @@ func TestMigration001_SchemaContract(t *testing.T) {
 	// delegated-grant key from.
 	_, nullable = nullableColumn(t, ctx, db, "agent_definition", "domain")
 	assert.Equal(t, "NO", nullable, "agent_definition.domain must be NOT NULL (issue #2424 FR1)")
+
+	// migration 008 (issue #2426 FR10/FR13): grpcauth_delegated_grant and
+	// grpcauth_grant_index's column shapes are the actual schema contract
+	// libs/go/grpcauth/pgstore and libs/go/grpcauth/grantindex check --
+	// see delegatedgrant_integration_test.go's round-trip tests in this
+	// same package for the deeper "these tables actually work with those
+	// packages" proof; this is just the column-shape guard.
+	for _, col := range []string{"subject", "grant_key", "token_material", "status", "created_at", "updated_at"} {
+		_, nullable := nullableColumn(t, ctx, db, "grpcauth_delegated_grant", col)
+		assert.Equal(t, "NO", nullable, "grpcauth_delegated_grant.%s must be NOT NULL (issue #2426, pgstore's schema contract)", col)
+	}
+	for _, col := range []string{"subject_iss", "subject_sub", "domain", "preferred_username", "granted_at"} {
+		_, nullable := nullableColumn(t, ctx, db, "grpcauth_grant_index", col)
+		assert.Equal(t, "NO", nullable, "grpcauth_grant_index.%s must be NOT NULL (issue #2426, grantindex's schema contract)", col)
+	}
 }

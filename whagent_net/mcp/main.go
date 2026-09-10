@@ -5,16 +5,27 @@
 // ARCHITECTURE.md "Service boundary vs. package boundary") -- every
 // tool call is a pass-through RPC to `api`, authenticated as the
 // operator who made it, never a shared service account (FR10). It never
-// talks to Temporal directly, and the only Postgres it ever touches
-// (optionally, FR9/issue #2249) is the mcp_credential table backing the
-// OAuth2 token-exchange path's mcpauth.CredentialStore -- see
-// initializeTokenExchange below. On that path, `mcp` also holds its own
-// confidential Keycloak client (WHAGENT_MCP_KEYCLOAK_*, ../ENV.md) with
-// token-exchange/impersonation rights, used to exchange a resolved
-// operator identity for a short-lived, real Keycloak-signed JWT (RFC
-// 8693, server/tokenexchange.go) before ever calling `api` -- `api`
-// itself verifies real Keycloak tokens only, so this is what makes the
-// two credential shapes indistinguishable downstream.
+// talks to Temporal directly, and every Postgres table it ever touches
+// (always optionally, gated on PG_DATABASE_URL) is reached only from this
+// package (package main) -- never from mcp/server or mcp/tools, per
+// issue #2120's TestBUILD_NoStoreOrTemporalDependency in each of those
+// packages. Today that is: the mcp_credential table backing the FR9/
+// issue #2249 OAuth2 token-exchange path's mcpauth.CredentialStore -- see
+// initializeTokenExchange below -- and, purely additively as of issue
+// #2426 (not yet on any request path), the grpcauth_delegated_grant/
+// grpcauth_grant_index tables backing //whagent_net/delegatedgrant's
+// Store/Index (see initializeDelegatedGrant, delegatedgrant.go). On the
+// FR9 path, `mcp` also holds its own confidential Keycloak client
+// (WHAGENT_MCP_KEYCLOAK_*, ../ENV.md) with token-exchange/impersonation
+// rights, used to exchange a resolved operator identity for a
+// short-lived, real Keycloak-signed JWT (RFC 8693,
+// server/tokenexchange.go) before ever calling `api` -- `api` itself
+// verifies real Keycloak tokens only, so this is what makes the two
+// credential shapes indistinguishable downstream. Issue #2426's own
+// shared confidential client (WHAGENT_GRANT_*, distinct from both
+// WHAGENT_MCP_KEYCLOAK_* above and WHAGENT_OIDC_CLIENT_ID/_SECRET) is a
+// third, unrelated Keycloak client -- see delegatedgrant.go's doc
+// comment and NFR5.
 package main
 
 import (
@@ -36,6 +47,7 @@ import (
 	"github.com/whale-net/everything/libs/go/grpcclient"
 	"github.com/whale-net/everything/libs/go/logging"
 	"github.com/whale-net/everything/libs/go/mcpauth"
+	"github.com/whale-net/everything/whagent_net/delegatedgrant"
 	pb "github.com/whale-net/everything/whagent_net/protos"
 
 	"github.com/whale-net/everything/whagent_net/mcp/server"
@@ -82,6 +94,28 @@ type config struct {
 	// doc comment) -- WHAGENT_MCP_KEYCLOAK_CLIENT_ID/
 	// WHAGENT_MCP_KEYCLOAK_CLIENT_SECRET/WHAGENT_MCP_KEYCLOAK_TOKEN_URL.
 	TokenExchange server.TokenExchangeConfig
+
+	// OIDCIssuer is the Keycloak realm issuer (WHAGENT_OIDC_ISSUER,
+	// ../ENV.md "Identity") -- read here (not previously part of this
+	// binary's own config struct) solely as the realm the shared
+	// delegated-grant client (GrantClientID etc. below) lives in, per
+	// //whagent_net/delegatedgrant.Config.Issuer.
+	OIDCIssuer string
+
+	// GrantClientID/GrantClientSecret/GrantRedirectURI/GrantEncryptionKey
+	// configure the single shared confidential Keycloak client
+	// //whagent_net/delegatedgrant.Build constructs (issue #2426,
+	// FR10/FR13/NFR5/NFR6 of plan #2421) -- WHAGENT_GRANT_CLIENT_ID/
+	// _CLIENT_SECRET/_REDIRECT_URI/_ENCRYPTION_KEY (../ENV.md). Distinct
+	// from TokenExchange above (a different confidential client, a
+	// different purpose -- RFC 8693 impersonation exchange, removed by a
+	// dependent task rather than reused here). Purely additive: nothing
+	// built from these is on any request path yet (see
+	// initializeDelegatedGrant's doc comment).
+	GrantClientID      string
+	GrantClientSecret  string
+	GrantRedirectURI   string
+	GrantEncryptionKey string
 }
 
 func loadConfig() config {
@@ -96,6 +130,11 @@ func loadConfig() config {
 			ClientSecret:  os.Getenv("WHAGENT_MCP_KEYCLOAK_CLIENT_SECRET"),
 			TokenEndpoint: os.Getenv("WHAGENT_MCP_KEYCLOAK_TOKEN_URL"),
 		},
+		OIDCIssuer:         os.Getenv("WHAGENT_OIDC_ISSUER"),
+		GrantClientID:      os.Getenv("WHAGENT_GRANT_CLIENT_ID"),
+		GrantClientSecret:  os.Getenv("WHAGENT_GRANT_CLIENT_SECRET"),
+		GrantRedirectURI:   os.Getenv("WHAGENT_GRANT_REDIRECT_URI"),
+		GrantEncryptionKey: os.Getenv("WHAGENT_GRANT_ENCRYPTION_KEY"),
 	}
 }
 
@@ -118,10 +157,23 @@ func getEnv(key, def string) string {
 // not configured) and exchanger may be constructed disabled (see
 // initializeTokenExchange's NFR8 fail-loud check for the one combination
 // that is instead a startup error).
+//
+// grant (issue #2426, FR10/FR13/NFR5/NFR6) is unrelated to FR9's
+// token-exchange path -- it just happens to share this struct and this
+// binary's one Postgres pool, since both are optional Postgres-backed
+// composition-root wiring gated on the same PG_DATABASE_URL. It is
+// purely additive today (see initializeDelegatedGrant's doc comment):
+// nothing in run() consumes it yet, unlike credentials/exchanger above.
+// Kept here, in package main, rather than passed into mcp/server or
+// mcp/tools -- see those packages' own TestBUILD_NoStoreOrTemporalDependency
+// (issue #2120) -- so a dependent task's call site is the first thing
+// that plumbs it across that boundary, deliberately, via the small
+// domain-neutral interface FR7 describes, never this concrete struct.
 type tokenExchangeDeps struct {
 	pool        *pgxpool.Pool
 	credentials mcpauth.CredentialStore
 	exchanger   server.Exchanger
+	grant       delegatedgrant.Components
 }
 
 // Close releases pool, if initializeTokenExchange opened one.
@@ -166,6 +218,19 @@ func initializeTokenExchange(ctx context.Context, cfg config, logger *slog.Logge
 		return tokenExchangeDeps{exchanger: exchanger}, nil
 	}
 
+	// Delegated-grant wiring (issue #2426) is unrelated to FR9's
+	// credential/exchange path below -- see tokenExchangeDeps' doc
+	// comment for why it shares this pool and this function anyway. A
+	// partial misconfiguration here is fatal (initializeDelegatedGrant's
+	// own doc comment); ErrNotConfigured degrades to a WARNING and a
+	// zero-value Components, same as every other optional dependency in
+	// this function.
+	grant, err := initializeDelegatedGrant(ctx, cfg, pool, logger)
+	if err != nil {
+		pool.Close()
+		return tokenExchangeDeps{}, err
+	}
+
 	// NewCredentialStore preflights the mcp_credential table (the same
 	// migration `ui`'s mcpauth.Provider requires, issue #2245) before
 	// returning.
@@ -186,7 +251,7 @@ func initializeTokenExchange(ctx context.Context, cfg config, logger *slog.Logge
 	}
 
 	logger.Info("mcpauth credential store initialized for the FR9 OAuth2 token-exchange path")
-	return tokenExchangeDeps{pool: pool, credentials: credentials, exchanger: exchanger}, nil
+	return tokenExchangeDeps{pool: pool, credentials: credentials, exchanger: exchanger, grant: grant}, nil
 }
 
 func main() {

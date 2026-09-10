@@ -39,7 +39,10 @@ go_test(
     name = "schema_integration_test",
     size = "large",
     timeout = "long",
-    srcs = ["schema_integration_test.go"],
+    srcs = [
+        "delegatedgrant_integration_test.go",
+        "schema_integration_test.go",
+    ],
     gotags = ["integration"],
     tags = [
         "external",
@@ -52,6 +55,9 @@ go_test(
     deps = [
         ":schema",
         "//libs/go/dbtest",
+        "//libs/go/grpcauth",
+        "//libs/go/grpcauth/grantindex",
+        "//libs/go/grpcauth/pgstore",
         "//libs/go/migrate",
         "@com_github_jackc_pgx_v5//stdlib",
         "@com_github_stretchr_testify//assert",
