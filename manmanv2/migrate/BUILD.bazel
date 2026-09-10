@@ -176,6 +176,40 @@ go_test(
     ],
 )
 
+# Host drain state (#2360, manmanv2 M6, C29 groundwork): migration
+# round-trip + constraint tests -- default backfill onto pre-existing rows,
+# the drain_state CHECK, and that this stays a plain mutable-dimension
+# column set (no valid_from/valid_to). Same build-tag/target conventions as
+# migration_038_integration_test.
+#
+# Run it explicitly (requires a working Docker daemon):
+#   bazel test //manmanv2/migrate:migration_041_integration_test --test_output=all
+go_test(
+    # keep
+    name = "migration_041_integration_test",
+    size = "large",
+    timeout = "long",
+    srcs = [
+        "main.go",
+        "migration_041_integration_test.go",
+    ],
+    embedsrcs = glob(["migrations/*.sql"]),
+    gotags = ["integration"],
+    tags = [
+        "external",
+        "integration",
+        "manual",
+        "no-cache",
+        "no-sandbox",
+        "requires-network",
+    ],
+    deps = [
+        "//libs/go/dbtest",
+        "//libs/go/migrate",
+        "@com_github_jackc_pgx_v5//stdlib",
+    ],
+)
+
 # Release metadata for migration job
 release_app(
     name = "control-migration",

@@ -346,6 +346,34 @@ go_test(
     ],
 )
 
+# Real-Postgres coverage for ServerRepository's drain-state surface (#2360,
+# manmanv2 M6, C29 groundwork): SetDrainState round-trips all three states,
+# Get/List surface the new columns, and ListByDrainState filters correctly.
+# Same build-tag/target conventions as server_port_range_integration_test
+# above.
+go_test(
+    # keep
+    name = "server_drain_integration_test",
+    size = "large",
+    timeout = "long",
+    srcs = ["server_drain_integration_test.go"],
+    embed = [":postgres"],
+    gotags = ["integration"],
+    tags = [
+        "external",
+        "integration",
+        "manual",
+        "no-cache",
+        "no-sandbox",
+        "requires-network",
+    ],
+    deps = [
+        "//libs/go/dbtest",
+        "//manmanv2/models",
+        "@com_github_jackc_pgx_v5//pgxpool",
+    ],
+)
+
 go_test(
     name = "server_port_listalloc_integration_test",
     size = "large",
