@@ -5,6 +5,7 @@ go_library(
     srcs = [
         "auth.go",
         "credentials.go",
+        "delegatedgrant.go",
         "fakestore.go",
         "grant.go",
         "grantcrypto.go",
