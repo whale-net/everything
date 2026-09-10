@@ -20,6 +20,11 @@ type ServerRepository interface {
 	UpdateLastSeen(ctx context.Context, serverID int64, lastSeen time.Time) error
 	ListStaleServers(ctx context.Context, thresholdSeconds int) ([]*manman.Server, error)
 	MarkServersOffline(ctx context.Context, serverIDs []int64) error
+	// SetDrainState/ListByDrainState: host drain state (#2360, manmanv2 M6,
+	// C29 groundwork). Inert here -- no cordon enforcement or eviction yet.
+	// ListByDrainState is used by the dependent eviction task.
+	SetDrainState(ctx context.Context, serverID int64, state string, requestedAt *time.Time) error
+	ListByDrainState(ctx context.Context, state string) ([]*manman.Server, error)
 }
 
 // GameRepository defines operations for Game entities

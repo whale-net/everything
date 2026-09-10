@@ -110,6 +110,28 @@ func (m *mockServerRepository) MarkServersOffline(ctx context.Context, serverIDs
 	return nil
 }
 
+func (m *mockServerRepository) SetDrainState(ctx context.Context, serverID int64, state string, requestedAt *time.Time) error {
+	for _, server := range m.servers {
+		if server.ServerID == serverID {
+			server.DrainState = state
+			server.DrainRequestedAt = requestedAt
+			return nil
+		}
+	}
+	return pgx.ErrNoRows
+}
+
+func (m *mockServerRepository) ListByDrainState(ctx context.Context, state string) ([]*manman.Server, error) {
+	var servers []*manman.Server
+	for _, server := range m.servers {
+		if server.DrainState == state {
+			serverCopy := *server
+			servers = append(servers, &serverCopy)
+		}
+	}
+	return servers, nil
+}
+
 // mockCapabilityRepository is a mock implementation of ServerCapabilityRepository
 type mockCapabilityRepository struct {
 	capabilities map[int64]*manman.ServerCapability
