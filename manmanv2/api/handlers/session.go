@@ -169,6 +169,23 @@ func (h *SessionHandler) StartSession(ctx context.Context, req *pb.StartSessionR
 		slog.Info("force start requested", "sgc_id", req.ServerGameConfigId, "active_sessions_invalidated", len(activeSessions))
 	}
 
+	// Fetch ServerGameConfig to get server ID and deployment details. Fetched
+	// before the session row is created (below) so a cordon rejection
+	// (#2364, FR3) leaves no orphaned pending session behind.
+	sgc, err := h.sgcRepo.Get(ctx, req.ServerGameConfigId)
+	if err != nil {
+		slog.Warn("failed to fetch server game config for start", "sgc_id", req.ServerGameConfigId, "error", err)
+		return nil, status.Errorf(codes.Internal, "failed to fetch server game config: %v", err)
+	}
+
+	// Cordon (#2364, FR3/FR4): a deployment pinned to a draining/drained
+	// host cannot be started -- covers both a fresh Start and a restart
+	// dispatched back onto the same host, since deployments are host-pinned
+	// and StartSession never reselects a host.
+	if err := assertHostSchedulable(ctx, h.repo.Servers, sgc.ServerID); err != nil {
+		return nil, err
+	}
+
 	// Create session in database
 	session := &manman.Session{
 		SGCID:  req.ServerGameConfigId,
@@ -188,13 +205,6 @@ func (h *SessionHandler) StartSession(ctx context.Context, req *pb.StartSessionR
 		if err := h.sessionRepo.StopOtherSessionsForSGC(ctx, session.SessionID, req.ServerGameConfigId); err != nil {
 			slog.Warn("failed to invalidate other sessions for SGC", "sgc_id", req.ServerGameConfigId, "session_id", session.SessionID, "error", err)
 		}
-	}
-
-	// Fetch ServerGameConfig to get server ID and deployment details
-	sgc, err := h.sgcRepo.Get(ctx, req.ServerGameConfigId)
-	if err != nil {
-		slog.Warn("failed to fetch server game config for start", "sgc_id", req.ServerGameConfigId, "session_id", session.SessionID, "error", err)
-		return nil, status.Errorf(codes.Internal, "failed to fetch server game config: %v", err)
 	}
 
 	// Fetch GameConfig to get game details
@@ -350,9 +360,18 @@ func (h *SessionHandler) StopSession(ctx context.Context, req *pb.StopSessionReq
 // first and recording second would reintroduce exactly the lost-intent
 // window FR9 exists to close (pod dies between the two).
 func (h *SessionHandler) RestartDeployment(ctx context.Context, req *pb.RestartDeploymentRequest) (*pb.RestartDeploymentResponse, error) {
-	if _, err := h.sgcRepo.Get(ctx, req.ServerGameConfigId); err != nil {
+	sgc, err := h.sgcRepo.Get(ctx, req.ServerGameConfigId)
+	if err != nil {
 		slog.Warn("restart requested for unknown server game config", "sgc_id", req.ServerGameConfigId, "error", err)
 		return nil, status.Errorf(codes.NotFound, "server game config not found: %v", err)
+	}
+
+	// Cordon (#2364, FR3): a deployment pinned to a draining/drained host
+	// cannot be restarted back onto it -- checked before any live-session
+	// lookup, pending_restarts row, or Stop dispatch, whether or not a live
+	// session currently gates the restart.
+	if err := assertHostSchedulable(ctx, h.repo.Servers, sgc.ServerID); err != nil {
+		return nil, err
 	}
 
 	live, err := h.getLiveSessionForSGC(ctx, req.ServerGameConfigId)

@@ -54,7 +54,7 @@ func NewAPIServer(repo *repository.Repository, s3Client *s3.Client, rmqConn *rmq
 		serverHandler:           NewServerHandler(repo.Servers, repo.ServerPortRanges, repo.ServerPorts),
 		gameHandler:             NewGameHandler(repo.Games),
 		gameConfigHandler:       NewGameConfigHandler(repo.GameConfigs),
-		serverGameConfigHandler: NewServerGameConfigHandler(repo.ServerGameConfigs, repo.ServerPorts),
+		serverGameConfigHandler: NewServerGameConfigHandler(repo.ServerGameConfigs, repo.ServerPorts, repo.Servers),
 		sessionHandler:          NewSessionHandler(repo, commandPublisher, workshopManager, restartStallTimeout),
 		registrationHandler:     NewRegistrationHandler(repo.Servers, repo.ServerCapabilities),
 		validationHandler:       NewValidationHandler(repo.Servers, repo.GameConfigs),

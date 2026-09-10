@@ -10,6 +10,7 @@ go_library(
         "backup_config.go",
         "command_publisher.go",
         "converters.go",
+        "drain_cordon.go",
         "game.go",
         "gameconfig.go",
         "logs.go",
