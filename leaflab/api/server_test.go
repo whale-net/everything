@@ -268,6 +268,12 @@ type fakeRepository struct {
 	// order -- tests assert on this to prove a refused attempt (denied,
 	// unknown region, or no-op) issues no write at all.
 	setBoardRegionCalls []setBoardRegionCall
+
+	// -- #2316: GetRegionTree (FR6) fixture --
+
+	// regionTreeRows maps a root_region_id (0 = whole forest) to the rows
+	// GetRegionTree returns for it.
+	regionTreeRows map[int64][]RegionTreeRow
 }
 
 // reassignedOwner is one recorded fakeRepository.ReassignBoardOwner call.
@@ -338,6 +344,7 @@ func newFakeRepository() *fakeRepository {
 		boardRegions:          map[int64]int64{},
 		boardRegionNames:      map[int64]string{},
 		sensorRegions:         map[int64][]SensorRegionRow{},
+		regionTreeRows:        map[int64][]RegionTreeRow{},
 	}
 }
 
@@ -611,6 +618,19 @@ func (f *fakeRepository) SetBoardRegion(_ context.Context, boardID int64, region
 
 func (f *fakeRepository) ListSensorRegionsForBoard(_ context.Context, boardID int64) ([]SensorRegionRow, error) {
 	return f.sensorRegions[boardID], nil
+}
+
+// -- #2316: GetRegionTree (FR6 region tree view) stub -------------------------
+
+// regionTreeRows backs GetRegionTree's fixture: the exact rows a real
+// Repository.GetRegionTree call would return (unordered, direct counts
+// only) for a given root_region_id (0 = whole forest). A root_region_id
+// absent here returns pgx.ErrNoRows at unit-test fidelity only when the
+// test also expects the handler's GetRegionIdentity existence check to
+// fire first -- the handler checks existence before calling this, so the
+// fake mirrors the real method's shape without re-implementing the CTE.
+func (f *fakeRepository) GetRegionTree(_ context.Context, rootRegionID int64) ([]RegionTreeRow, error) {
+	return f.regionTreeRows[rootRegionID], nil
 }
 
 // fakePublisher is an in-memory configPublisher double: Publish always
@@ -2202,4 +2222,95 @@ func TestReparentRegion_AdminBypass_Succeeds(t *testing.T) {
 	require.NotNil(t, repo.regions[1].OwnerLeaflabUserID,
 		"an accepted re-parent also leaves ownership untouched (FR3)")
 	assert.Equal(t, int64(1), *repo.regions[1].OwnerLeaflabUserID)
+}
+
+// -- #2316: GetRegionTree (FR6) unit tests ------------------------------------
+//
+// These test the handler's tree assembly against the fake repository: the
+// fake returns the unordered rows with direct counts a real
+// Repository.GetRegionTree would, and the handler must hang children off
+// parents, sort siblings alphabetically (FR6), and fold descendant direct
+// counts into each node's inclusive count. The fake also exercises the
+// drill-down shape (a single anchor row whose parent is outside the set).
+//
+// The SQL itself (recursive CTE bounding, open sensor_region_history
+// aggregation) is integration-tested coverage, not unit-testable here.
+
+// TestGetRegionTree_Assembly_OrderingAndCounts: a two-level tree with
+// alphabetically shuffled rows verifies sibling ordering, parent-child
+// attachment, only-count vs inclusive-count, and that a leaf's inclusive
+// count equals its direct count.
+func TestGetRegionTree_Assembly_OrderingAndCounts(t *testing.T) {
+	repo := newFakeRepository()
+	repo.users["viewer-sub"] = 1
+	seedFakeRegion(repo, 1, "zoo", 0, 1)
+	seedFakeRegion(repo, 2, "apple", 1, 1)
+	seedFakeRegion(repo, 3, "mango", 1, 1)
+	repo.regionTreeRows[0] = []RegionTreeRow{
+		{RegionID: 3, ParentRegionID: int64Ptr(1), Name: "mango", SensorCount: 4},
+		{RegionID: 1, ParentRegionID: nil, Name: "zoo", SensorCount: 2},
+		{RegionID: 2, ParentRegionID: int64Ptr(1), Name: "apple", SensorCount: 0},
+	}
+	srv := newOwnershipTestServer(repo, &fakePublisher{})
+
+	resp, err := srv.GetRegionTree(claimsCtx("viewer-sub"), &pb.GetRegionTreeRequest{RootRegionId: 0})
+	require.NoError(t, err)
+	require.Len(t, resp.Regions, 1)
+
+	root := resp.Regions[0]
+	assert.Equal(t, int64(1), root.RegionId)
+	assert.Equal(t, "zoo", root.Name)
+	assert.Equal(t, int64(2), root.SensorCount)
+	// inclusive = zoo(2) + apple(0) + mango(4)
+	assert.Equal(t, int64(6), root.InclusiveSensorCount)
+
+	require.Len(t, root.Children, 2)
+	// Alphabetical sibling order, not row order (FR6).
+	assert.Equal(t, "apple", root.Children[0].Name)
+	assert.Equal(t, "mango", root.Children[1].Name)
+	assert.Equal(t, int64(0), root.Children[0].SensorCount)
+	assert.Equal(t, int64(0), root.Children[0].InclusiveSensorCount,
+		"a leaf's inclusive count equals its own direct count")
+	assert.Equal(t, int64(4), root.Children[1].SensorCount)
+	assert.Equal(t, int64(4), root.Children[1].InclusiveSensorCount)
+}
+
+// TestGetRegionTree_DrillDown_SubtreeOnlyAndNotFound: a non-zero
+// root_region_id returns that region as the single top node with counts
+// folded over only its own subtree, and an unknown root is codes.NotFound.
+func TestGetRegionTree_DrillDown_SubtreeOnlyAndNotFound(t *testing.T) {
+	repo := newFakeRepository()
+	repo.users["viewer-sub"] = 1
+	seedFakeRegion(repo, 1, "root", 0, 1)
+	seedFakeRegion(repo, 2, "child", 1, 1)
+	seedFakeRegion(repo, 5, "other-tree", 0, 1)
+	repo.regionTreeRows[0] = []RegionTreeRow{
+		{RegionID: 1, ParentRegionID: nil, Name: "root", SensorCount: 1},
+		{RegionID: 2, ParentRegionID: int64Ptr(1), Name: "child", SensorCount: 3},
+		{RegionID: 5, ParentRegionID: nil, Name: "other-tree", SensorCount: 9},
+	}
+	// Drill-down rows: only the subtree (the parent is outside the set).
+	repo.regionTreeRows[1] = []RegionTreeRow{
+		{RegionID: 1, ParentRegionID: nil, Name: "root", SensorCount: 1},
+		{RegionID: 2, ParentRegionID: int64Ptr(1), Name: "child", SensorCount: 3},
+	}
+	srv := newOwnershipTestServer(repo, &fakePublisher{})
+
+	resp, err := srv.GetRegionTree(claimsCtx("viewer-sub"), &pb.GetRegionTreeRequest{RootRegionId: 1})
+	require.NoError(t, err)
+	require.Len(t, resp.Regions, 1)
+	assert.Equal(t, "root", resp.Regions[0].Name)
+	assert.Equal(t, int64(4), resp.Regions[0].InclusiveSensorCount,
+		"drill-down counts fold only the drilled-into subtree")
+	assert.Empty(t, resp.Regions[0].Children[0].Children,
+		"the drill-down response contains only the drilled-into subtree")
+
+	// Unknown root region: NotFound.
+	_, err = srv.GetRegionTree(claimsCtx("viewer-sub"), &pb.GetRegionTreeRequest{RootRegionId: 999})
+	require.Error(t, err)
+	assert.Equal(t, codes.NotFound, status.Code(err))
+}
+
+func int64Ptr(v int64) *int64 {
+	return &v
 }

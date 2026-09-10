@@ -89,6 +89,13 @@ service LeafLabAPI {
   // placements are deliberately independent (see SetBoardRegionResponse
   // for what the caller gets back to drive FR11's nudge).
   rpc SetBoardRegion(SetBoardRegionRequest) returns (SetBoardRegionResponse);
+
+  // M3: view the region tree with drill-down (FR6). Returns the whole
+  // current forest (root_region_id = 0) or the subtree rooted at one
+  // region, each node carrying its sensor counts resolved over the
+  // CURRENT tree (v_region_path semantics) from CURRENT placements (open
+  // sensor_region_history rows). Siblings are ordered alphabetically.
+  rpc GetRegionTree(GetRegionTreeRequest) returns (GetRegionTreeResponse);
 }
 
 // ReportingState classifies a board or sensor by recency of its most recent
@@ -440,4 +447,37 @@ message BoardSensorRegion {
   string sensor_name = 2;
   optional int64 region_id = 3;
   string region_name = 4;
+}
+
+// -- M3: region tree view with drill-down (FR6) -------------------------------
+
+message GetRegionTreeRequest {
+  // 0 = the whole forest (every top-level region and its descendants).
+  // Non-zero = drill down into that region's subtree only (FR6); the node
+  // for root_region_id itself is returned as the response's single top
+  // element. Unknown region_id is codes.NotFound.
+  int64 root_region_id = 1;
+}
+
+// RegionTreeNode is one region in the tree view. Nesting depth is unbounded
+// (FR3); children are ordered alphabetically by name. Both counts come from
+// CURRENT placement (open sensor_region_history rows) resolved over the
+// CURRENT tree -- this is a current-state view, deliberately not historical
+// (FR4 left v_region_path unchanged for exactly this consumer).
+message RegionTreeNode {
+  int64 region_id = 1;
+  string name = 2;
+  // Child regions, alphabetically ordered by name.
+  repeated RegionTreeNode children = 3;
+  // Sensors currently placed in this region only (not descendants).
+  int64 sensor_count = 4;
+  // Sensors currently placed in this region or any of its descendants.
+  int64 inclusive_sensor_count = 5;
+}
+
+message GetRegionTreeResponse {
+  // Top-level nodes of the requested view: every top-level region
+  // (alphabetically ordered) when the request drilled into nothing, or the
+  // single drilled-into region when root_region_id was non-zero.
+  repeated RegionTreeNode regions = 1;
 }

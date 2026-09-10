@@ -132,8 +132,10 @@ release_app(
 # ListSensorDetailsForBoard/GetBoardIdentity (#1498), migration 016's
 # board.name / leaflab_user_role / sensor corrective-push schema (#1759),
 # migration 017's region_parent_history / board_region_history SCD2 tables
-# (#2311), and migration 018's historical region roll-up in
-# v_sensor_reading_enriched (#2313) -- see the files' doc comments plus
+# (#2311), migration 018's historical region roll-up in
+# v_sensor_reading_enriched (#2313), the M3 region lifecycle repository
+# methods and handlers (#2312), and the M3 region tree view with drill-down
+# and sensor counts (#2316) -- see the files' doc comments plus
 # //libs/go/dbtest's README for how to run it.
 #
 # Gazelle does not generate this target: both source files are gated behind
@@ -157,6 +159,7 @@ go_test(
         "migration_018_integration_test.go",
         "placement_integration_test.go",
         "region_lifecycle_integration_test.go",
+        "region_tree_integration_test.go",
         "repository_integration_test.go",
         "testdb_integration_test.go",
     ],

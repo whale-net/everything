@@ -1510,3 +1510,69 @@ func (r *Repository) SetBoardRegion(ctx context.Context, boardID int64, regionID
 	}
 	return nil
 }
+
+// -- #2316: GetRegionTree's data access (FR6 region tree view) ---------------
+
+// RegionTreeRow is one region of the requested subtree (or the whole
+// forest) with its DIRECT sensor count -- sensors currently placed in that
+// region only, from open sensor_region_history rows. The inclusive count
+// (region + descendants) is computed by the caller over the assembled
+// tree, not here.
+type RegionTreeRow struct {
+	RegionID       int64
+	ParentRegionID *int64
+	Name           string
+	SensorCount    int64
+}
+
+// GetRegionTree returns every region of the current tree with each
+// region's direct sensor count: the whole forest when rootRegionID is 0,
+// otherwise the subtree rooted at rootRegionID (drill-down, FR6).
+//
+// The subtree is bounded by a recursive CTE over region.parent_region_id --
+// the same current-parent walk v_region_path performs (FR4 deliberately
+// left v_region_path unchanged; this is a current-state view). Sensor
+// counts aggregate open sensor_region_history rows (valid_to IS NULL),
+// i.e. CURRENT placement only -- a sensor's unplaced state is the absence
+// of an open row, so it contributes to no region's count.
+//
+// Sibling ordering (alphabetical by name, FR6) is deliberately NOT done
+// here: rows are returned unordered and the server assembles the tree,
+// sorts siblings, and computes inclusive counts in one pass.
+func (r *Repository) GetRegionTree(ctx context.Context, rootRegionID int64) ([]RegionTreeRow, error) {
+	rows, err := r.db.Query(ctx, `
+		WITH RECURSIVE subtree AS (
+			SELECT region_id, parent_region_id, name
+			FROM region
+			WHERE ($1 = 0 AND parent_region_id IS NULL) OR region_id = $1
+			UNION ALL
+			SELECT rg.region_id, rg.parent_region_id, rg.name
+			FROM region rg
+			JOIN subtree st ON rg.parent_region_id = st.region_id
+		),
+		counts AS (
+			SELECT srh.region_id, COUNT(*) AS sensor_count
+			FROM sensor_region_history srh
+			WHERE srh.valid_to IS NULL
+			GROUP BY srh.region_id
+		)
+		SELECT st.region_id, st.parent_region_id, st.name,
+		       COALESCE(c.sensor_count, 0)::BIGINT
+		FROM subtree st
+		LEFT JOIN counts c ON c.region_id = st.region_id
+	`, rootRegionID)
+	if err != nil {
+		return nil, fmt.Errorf("query region tree (root %d): %w", rootRegionID, err)
+	}
+	defer rows.Close()
+
+	var regions []RegionTreeRow
+	for rows.Next() {
+		var row RegionTreeRow
+		if err := rows.Scan(&row.RegionID, &row.ParentRegionID, &row.Name, &row.SensorCount); err != nil {
+			return nil, fmt.Errorf("scan region tree row: %w", err)
+		}
+		regions = append(regions, row)
+	}
+	return regions, rows.Err()
+}
