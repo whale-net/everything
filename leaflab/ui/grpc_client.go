@@ -227,3 +227,44 @@ func (c *LeafLabClient) ReparentRegion(ctx context.Context, regionID, parentRegi
 	}
 	return resp, nil
 }
+
+// PlaceSensor places a sensor in a region (FR7), whether the sensor had a
+// prior placement (assign) or not (move): PlaceSensor is the only placement
+// write, and the API rejects unassigning outright (region_id is required,
+// > 0). The write is an ordinary Postgres write (LB2): it never waits on,
+// or is gated by, a device round trip, and is visible to the very next
+// GetBoardDetail. Failures (unknown sensor/region, non-owner, region_id <=
+// 0) come back as gRPC statuses on the wrapped error -- the direct
+// errors.As GRPCStatus() extraction placementWriteErrorMessage uses (see
+// handlers_boards.go) still sees the original, unrewritten status.
+func (c *LeafLabClient) PlaceSensor(ctx context.Context, sensorID, regionID int64) (*leaflabapipb.PlaceSensorResponse, error) {
+	resp, err := c.api.PlaceSensor(ctx, &leaflabapipb.PlaceSensorRequest{
+		SensorId: sensorID,
+		RegionId: regionID,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("failed to place sensor %d: %w", sensorID, err)
+	}
+	return resp, nil
+}
+
+// SetBoardRegion records, changes, or clears the region a board is
+// physically located in (FR10). regionID nil clears the recorded region;
+// there is no "region_id = 0" sentinel on the wire. Bookkeeping only
+// server-side: the write never touches sensor placement or reading
+// attribution (FR10) -- this UI's FR11 nudge is likewise display-only.
+// The response carries the board's post-write recorded region plus every
+// sensor with its current placement (the FR11 nudge input); no-op refusals
+// (recording the already-recorded region, clearing an unrecorded board)
+// come back as codes.FailedPrecondition on the wrapped error.
+func (c *LeafLabClient) SetBoardRegion(ctx context.Context, boardID int64, regionID *int64) (*leaflabapipb.SetBoardRegionResponse, error) {
+	req := &leaflabapipb.SetBoardRegionRequest{BoardId: boardID}
+	if regionID != nil {
+		req.RegionId = regionID
+	}
+	resp, err := c.api.SetBoardRegion(ctx, req)
+	if err != nil {
+		return nil, fmt.Errorf("failed to set recorded region for board %d: %w", boardID, err)
+	}
+	return resp, nil
+}
