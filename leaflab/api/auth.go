@@ -34,6 +34,12 @@ var authenticatedMethods = map[string]bool{
 	"/leaflab.api.v1.LeafLabAPI/ReassignBoardOwner":      true,
 	"/leaflab.api.v1.LeafLabAPI/ClearBoardOwner":         true,
 	"/leaflab.api.v1.LeafLabAPI/ListUsers":               true,
+	// M3 region lifecycle (#2312): FR1-FR3, FR5. Authentication is NFR2's
+	// floor (a signed-in user); per-write authorization (region owner or
+	// admin bypass) is authorizeRegionWrite's job inside the handlers.
+	"/leaflab.api.v1.LeafLabAPI/CreateRegion":   true,
+	"/leaflab.api.v1.LeafLabAPI/RenameRegion":   true,
+	"/leaflab.api.v1.LeafLabAPI/ReparentRegion": true,
 }
 
 // selectiveUnaryInterceptor routes calls to authenticatedMethods through

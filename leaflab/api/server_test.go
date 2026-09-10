@@ -208,6 +208,37 @@ type fakeRepository struct {
 	// sensor's UNIQUE(board_id, name) constraint (see repository.go's
 	// ErrSensorNameConflict doc comment) without a real database.
 	renameConflictSensors map[int64]bool
+
+	// -- #2312: M3 region lifecycle (FR1-FR3, FR5) fixtures/recorders --
+
+	// regions maps a region_id to its current-value identity -- the fake's
+	// stand-in for the region table's name/parent_region_id/
+	// owner_leaflab_user_id columns. A region_id absent here does not exist
+	// (GetRegionIdentity returns pgx.ErrNoRows), exactly like a fresh
+	// region table. The fake keeps ParentRegionID and OwnerLeaflabUserID in
+	// sync on its own writes (Create/Reparent), mirroring the real
+	// repository's invariant that the mirror column and the open history
+	// row never diverge.
+	regions map[int64]RegionIdentity
+	// nextRegionID hands out region_ids for CreateRegion, BIGSERIAL-style.
+	nextRegionID int64
+	// createdRegions records every successful CreateRegion call, in order,
+	// including the parent pointer and owner the repository received --
+	// tests assert on this to prove the creating user became the owner
+	// (FR1/NFR2) and that a denied call issues no write.
+	createdRegions []createdRegion
+	// renamedRegions records every successful RenameRegion call, in order.
+	renamedRegions []renamedRegion
+	// reparentedRegions records every successful ReparentRegion call, in
+	// order -- proving a rejected re-parent (cycle, unknown parent, no-op)
+	// issues no write at all, and an accepted one closes-and-opens exactly
+	// one history row (the row bookkeeping itself is the real repository's
+	// contract, covered against real Postgres by the integration tests).
+	reparentedRegions []reparentedRegion
+	// cycleCheckCalls counts ReparentCreatesCycle invocations -- a cycle-
+	// free re-parent must still have consulted the walk (and a no-op
+	// rejection must never have reached the repository at all).
+	cycleCheckCalls int
 }
 
 // reassignedOwner is one recorded fakeRepository.ReassignBoardOwner call.
@@ -221,6 +252,25 @@ type reassignedOwner struct {
 type renamedSensor struct {
 	sensorID int64
 	name     string
+}
+
+// createdRegion is one recorded fakeRepository.CreateRegion call.
+type createdRegion struct {
+	name           string
+	parentRegionID *int64
+	ownerUserID    int64
+}
+
+// renamedRegion is one recorded fakeRepository.RenameRegion call.
+type renamedRegion struct {
+	regionID int64
+	name     string
+}
+
+// reparentedRegion is one recorded fakeRepository.ReparentRegion call.
+type reparentedRegion struct {
+	regionID          int64
+	newParentRegionID *int64
 }
 
 // claimedBoard is one recorded fakeRepository.ClaimBoard call that actually
@@ -246,6 +296,7 @@ func newFakeRepository() *fakeRepository {
 		existingUsers:         map[int64]bool{},
 		sensorBoards:          map[int64]int64{},
 		renameConflictSensors: map[int64]bool{},
+		regions:               map[int64]RegionIdentity{},
 	}
 }
 
@@ -400,6 +451,73 @@ func (f *fakeRepository) RenameSensor(_ context.Context, sensorID int64, name st
 	}
 	f.renamedSensors = append(f.renamedSensors, renamedSensor{sensorID: sensorID, name: name})
 	return nil
+}
+
+// -- #2312: M3 region lifecycle (FR1-FR3, FR5) repositoryStore methods --
+// The fake mirrors the real Repository's per-method contracts at unit-test
+// fidelity: GetRegionIdentity's pgx.ErrNoRows for unknown ids, CreateRegion's
+// transactional region-row-plus-initial-history-row shape (collapsed here to
+// one map write, since the fake has no separate history table to diverge
+// from), and unconditional writes for Rename/Reparent (the handlers own
+// every existence/cycle check before calling them, exactly like the real
+// methods).
+
+func (f *fakeRepository) GetRegionIdentity(_ context.Context, regionID int64) (RegionIdentity, error) {
+	region, ok := f.regions[regionID]
+	if !ok {
+		return RegionIdentity{}, pgx.ErrNoRows
+	}
+	region.RegionID = regionID
+	return region, nil
+}
+
+func (f *fakeRepository) CreateRegion(_ context.Context, name string, parentRegionID *int64, ownerUserID int64) (int64, error) {
+	f.nextRegionID++
+	regionID := f.nextRegionID
+	ownerID := ownerUserID
+	f.regions[regionID] = RegionIdentity{Name: name, ParentRegionID: parentRegionID, OwnerLeaflabUserID: &ownerID}
+	f.createdRegions = append(f.createdRegions, createdRegion{name: name, parentRegionID: parentRegionID, ownerUserID: ownerUserID})
+	return regionID, nil
+}
+
+func (f *fakeRepository) RenameRegion(_ context.Context, regionID int64, name string) error {
+	f.renamedRegions = append(f.renamedRegions, renamedRegion{regionID: regionID, name: name})
+	if region, ok := f.regions[regionID]; ok {
+		region.Name = name
+		f.regions[regionID] = region
+	}
+	return nil
+}
+
+func (f *fakeRepository) ReparentRegion(_ context.Context, regionID int64, newParentRegionID *int64) error {
+	f.reparentedRegions = append(f.reparentedRegions, reparentedRegion{regionID: regionID, newParentRegionID: newParentRegionID})
+	if region, ok := f.regions[regionID]; ok {
+		region.ParentRegionID = newParentRegionID
+		f.regions[regionID] = region
+	}
+	return nil
+}
+
+func (f *fakeRepository) ReparentCreatesCycle(_ context.Context, regionID, newParentRegionID int64) (bool, error) {
+	f.cycleCheckCalls++
+	// Walk the fake's current mirror pointers upward from the prospective
+	// parent -- the same walk the real repository's recursive CTE performs
+	// against region.parent_region_id.
+	cur := newParentRegionID
+	for depth := 0; depth < 1000; depth++ {
+		if cur == regionID {
+			return true, nil
+		}
+		region, ok := f.regions[cur]
+		if !ok {
+			return false, nil
+		}
+		if region.ParentRegionID == nil {
+			return false, nil
+		}
+		cur = *region.ParentRegionID
+	}
+	return false, nil
 }
 
 // fakePublisher is an in-memory configPublisher double: Publish always

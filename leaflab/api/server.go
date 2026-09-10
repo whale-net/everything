@@ -8,6 +8,7 @@ import (
 	"regexp"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"github.com/jackc/pgx/v5"
 	configpb "github.com/whale-net/everything/firmware/proto/config"
@@ -93,6 +94,17 @@ type repositoryStore interface {
 	// close-and-open plus the NFR4 counter reset, one transaction; see
 	// repository.go's doc comment.
 	RenameSensor(ctx context.Context, sensorID int64, name string) error
+	// The following five methods back the M3 region lifecycle RPCs (#2312:
+	// FR1-FR3, FR5) -- GetRegionIdentity (existence/ownership reads and the
+	// parent-existence check), CreateRegion (region row + initial open
+	// region_parent_history row, one transaction), RenameRegion,
+	// ReparentRegion (SCD2 close-and-open + mirror update, one
+	// transaction), and ReparentCreatesCycle (FR5's ancestor walk).
+	GetRegionIdentity(ctx context.Context, regionID int64) (RegionIdentity, error)
+	CreateRegion(ctx context.Context, name string, parentRegionID *int64, ownerUserID int64) (int64, error)
+	RenameRegion(ctx context.Context, regionID int64, name string) error
+	ReparentRegion(ctx context.Context, regionID int64, newParentRegionID *int64) error
+	ReparentCreatesCycle(ctx context.Context, regionID, newParentRegionID int64) (bool, error)
 }
 
 // configPublisher is the one *rmq.Publisher method PushDeviceConfig calls,
@@ -243,6 +255,57 @@ func (s *LeafLabAPIServer) requireAdmin(ctx context.Context) (callerUserID int64
 		return 0, status.Error(codes.PermissionDenied, "caller does not hold the admin role")
 	}
 	return callerUserID, nil
+}
+
+// authorizeRegionWrite returns nil iff the caller may write to the given
+// region (M3 NFR2): its current owner, or an admin acting on the owner's
+// behalf out-of-band (the product brief's admin-bypass pattern -- unlike
+// authorizeBoardWrite, whose no-admin-exception rule is M2 FR5's, not this
+// milestone's; region/placement edits are exactly the writes NFR2 lets an
+// admin perform for an owner who asks for help). A region whose
+// owner_leaflab_user_id is NULL (pre-M3 legacy rows; CreateRegion always
+// sets the owner, FR1) has no owner to match, so only the admin bypass
+// passes -- a signed-in non-admin is codes.PermissionDenied. A region_id
+// that does not exist never reaches this helper: handlers resolve existence
+// first via GetRegionIdentity (codes.NotFound), so "unknown" is
+// distinguishable from "not yours", same ordering as RenameBoard.
+// Re-parenting never changes ownership, so this helper's verdict is
+// identical for every write on a given region.
+func (s *LeafLabAPIServer) authorizeRegionWrite(ctx context.Context, region RegionIdentity) error {
+	callerUserID, err := s.callerUserID(ctx)
+	if err != nil {
+		return err
+	}
+
+	if region.OwnerLeaflabUserID != nil && *region.OwnerLeaflabUserID == callerUserID {
+		return nil
+	}
+
+	isAdmin, err := s.repo.HasRole(ctx, callerUserID, adminRole)
+	if err != nil {
+		return status.Errorf(codes.Internal, "check admin role: %v", err)
+	}
+	if isAdmin {
+		return nil
+	}
+	return status.Errorf(codes.PermissionDenied, "caller does not own region %d", region.RegionID)
+}
+
+// validateRegionName enforces the one rule region.name's column
+// (VARCHAR(255), 001_initial_schema.up.sql) plus the M2 name-validation
+// precedent put on region names: non-empty after trimming, and at most 255
+// *characters* (Postgres counts VARCHAR length in characters, not bytes --
+// hence the rune count, not a byte count). No uniqueness rule across
+// regions (matches RenameBoard's decided non-goal; two sibling regions may
+// share a name).
+func validateRegionName(name string) error {
+	if strings.TrimSpace(name) == "" {
+		return fmt.Errorf("name must not be empty")
+	}
+	if utf8.RuneCountInString(name) > maxRegionNameLen {
+		return fmt.Errorf("name must be at most %d characters", maxRegionNameLen)
+	}
+	return nil
 }
 
 func (s *LeafLabAPIServer) PushDeviceConfig(ctx context.Context, req *pb.PushDeviceConfigRequest) (*pb.PushDeviceConfigResponse, error) {
@@ -820,4 +883,159 @@ func (s *LeafLabAPIServer) ListUsers(ctx context.Context, _ *pb.ListUsersRequest
 
 	s.logger.Info("users listed", "count", len(users))
 	return &pb.ListUsersResponse{Users: users}, nil
+}
+
+// -- M3 region lifecycle (FR1-FR3, FR5, NFR2) --------------------------------
+
+// CreateRegion creates a region owned by the calling user from the moment it
+// exists (FR1, NFR2), with an optional parent (0 = top-level), and writes
+// the region's initial open region_parent_history row in the same
+// transaction as the region row itself (FR1) -- every region has at least
+// one open history row from the moment it exists, never only from its first
+// re-parent.
+//
+// No cycle is possible at creation (nothing can point at a region that does
+// not exist yet), so there is deliberately no cycle check on this path. The
+// parent-existence check (codes.NotFound) is deliberately NOT an ownership
+// check: reads and tree-structure navigation are unscoped by ownership (M2
+// FR5 read precedent), so any signed-in user may nest a new region under any
+// existing one -- that creates a region they own, it does not edit anyone
+// else's. No device round trip is involved or awaited (LB2/NFR1): this is a
+// pure Postgres write, visible to the next read immediately.
+func (s *LeafLabAPIServer) CreateRegion(ctx context.Context, req *pb.CreateRegionRequest) (*pb.CreateRegionResponse, error) {
+	callerUserID, err := s.callerUserID(ctx)
+	if err != nil {
+		return nil, err
+	}
+
+	if err := validateRegionName(req.Name); err != nil {
+		return nil, status.Error(codes.InvalidArgument, err.Error())
+	}
+
+	var parentRegionID *int64
+	if req.ParentRegionId != 0 {
+		if _, err := s.repo.GetRegionIdentity(ctx, req.ParentRegionId); err != nil {
+			if errors.Is(err, pgx.ErrNoRows) {
+				return nil, status.Errorf(codes.NotFound, "parent region %d not found", req.ParentRegionId)
+			}
+			return nil, status.Errorf(codes.Internal, "get parent region: %v", err)
+		}
+		parentRegionID = &req.ParentRegionId
+	}
+
+	regionID, err := s.repo.CreateRegion(ctx, req.Name, parentRegionID, callerUserID)
+	if err != nil {
+		return nil, status.Errorf(codes.Internal, "create region: %v", err)
+	}
+
+	s.logger.Info("region created",
+		"region_id", regionID,
+		"name", req.Name,
+		"parent_region_id", req.ParentRegionId,
+		"leaflab_user_id", callerUserID)
+	return &pb.CreateRegionResponse{RegionId: regionID}, nil
+}
+
+// RenameRegion renames a region (FR2): forward-looking only, since names are
+// current-value with no history table (repository.RenameRegion's doc
+// comment) -- past readings' attribution and display are unaffected.
+// Existence is checked first (codes.NotFound), then authorizeRegionWrite
+// (owner, or admin acting on the owner's behalf -- NFR2), then validation;
+// same ordering as RenameBoard, so an unknown region_id is distinguishable
+// from an unowned one and a denied caller's request reaches no write. Pure
+// Postgres write, no device round trip (LB2/NFR1).
+func (s *LeafLabAPIServer) RenameRegion(ctx context.Context, req *pb.RenameRegionRequest) (*pb.RenameRegionResponse, error) {
+	region, err := s.repo.GetRegionIdentity(ctx, req.RegionId)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return nil, status.Errorf(codes.NotFound, "region %d not found", req.RegionId)
+		}
+		return nil, status.Errorf(codes.Internal, "get region identity: %v", err)
+	}
+
+	if err := s.authorizeRegionWrite(ctx, region); err != nil {
+		return nil, err
+	}
+
+	if err := validateRegionName(req.Name); err != nil {
+		return nil, status.Error(codes.InvalidArgument, err.Error())
+	}
+
+	if err := s.repo.RenameRegion(ctx, req.RegionId, req.Name); err != nil {
+		return nil, status.Errorf(codes.Internal, "rename region: %v", err)
+	}
+
+	s.logger.Info("region renamed", "region_id", req.RegionId, "name", req.Name)
+	return &pb.RenameRegionResponse{}, nil
+}
+
+// ReparentRegion changes a region's parent (FR3), including to no parent (0
+// = top-level). SCD2 close-and-open on region_parent_history plus the
+// region.parent_region_id mirror update happen in the repository's single
+// transaction (repository.ReparentRegion's doc comment); the region's whole
+// subtree moves with it by construction, and no descendant row is touched.
+//
+// Ordering: existence (NotFound) -> authorization (owner or admin, NFR2) ->
+// parent existence (NotFound) -> cycle rejection (FR5, FailedPrecondition)
+// -> write. Re-parenting a region under its own current parent (or
+// re-parenting a top-level region to top-level) is refused like
+// ReassignBoardOwner's reassign-to-current-owner: it would churn the history
+// with a zero-length interval without changing anything. Pure Postgres
+// write, no device round trip (LB2/NFR1); ownership is untouched by a
+// re-parent.
+func (s *LeafLabAPIServer) ReparentRegion(ctx context.Context, req *pb.ReparentRegionRequest) (*pb.ReparentRegionResponse, error) {
+	region, err := s.repo.GetRegionIdentity(ctx, req.RegionId)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return nil, status.Errorf(codes.NotFound, "region %d not found", req.RegionId)
+		}
+		return nil, status.Errorf(codes.Internal, "get region identity: %v", err)
+	}
+
+	if err := s.authorizeRegionWrite(ctx, region); err != nil {
+		return nil, err
+	}
+
+	var newParentRegionID *int64
+	if req.ParentRegionId != 0 {
+		if _, err := s.repo.GetRegionIdentity(ctx, req.ParentRegionId); err != nil {
+			if errors.Is(err, pgx.ErrNoRows) {
+				return nil, status.Errorf(codes.NotFound, "parent region %d not found", req.ParentRegionId)
+			}
+			return nil, status.Errorf(codes.Internal, "get parent region: %v", err)
+		}
+		newParentRegionID = &req.ParentRegionId
+	}
+
+	// FR5: parent = self, or any descendant, is an error rather than a
+	// silent cycle. The ancestor walk is a single recursive CTE round trip
+	// (repository.ReparentCreatesCycle's doc comment); it also catches the
+	// parent = self case, since the walk's seed row is the parent itself.
+	if newParentRegionID != nil {
+		createsCycle, err := s.repo.ReparentCreatesCycle(ctx, req.RegionId, *newParentRegionID)
+		if err != nil {
+			return nil, status.Errorf(codes.Internal, "check re-parent for cycle: %v", err)
+		}
+		if createsCycle {
+			return nil, status.Errorf(codes.FailedPrecondition,
+				"region %d cannot be re-parented under region %d: the new parent is the region itself or one of its descendants",
+				req.RegionId, *newParentRegionID)
+		}
+		if region.ParentRegionID != nil && *region.ParentRegionID == *newParentRegionID {
+			return nil, status.Errorf(codes.FailedPrecondition,
+				"region %d is already a child of region %d", req.RegionId, *newParentRegionID)
+		}
+	} else if region.ParentRegionID == nil {
+		return nil, status.Error(codes.FailedPrecondition, "region is already top-level")
+	}
+
+	if err := s.repo.ReparentRegion(ctx, req.RegionId, newParentRegionID); err != nil {
+		return nil, status.Errorf(codes.Internal, "reparent region: %v", err)
+	}
+
+	s.logger.Info("region re-parented",
+		"region_id", req.RegionId,
+		"previous_parent_region_id", region.ParentRegionID,
+		"new_parent_region_id", newParentRegionID)
+	return &pb.ReparentRegionResponse{}, nil
 }

@@ -1052,3 +1052,209 @@ func (r *Repository) ListUsers(ctx context.Context) ([]LeafLabUserRow, error) {
 	}
 	return result, rows.Err()
 }
+
+// -- M3 region lifecycle repository methods ----------------------------------
+// CreateRegion/RenameRegion/ReparentRegion back server.go's three region
+// lifecycle RPCs (#2312: FR1-FR3, FR5). Region ownership is region's plain
+// nullable owner_leaflab_user_id column (013_ownership.up.sql) -- current
+// value only, no history table, unlike board ownership's board_owner_history:
+// no M3 capability reassigns or transfers a region, so there is no history
+// to preserve and the column alone is the whole ownership state (FR1: set at
+// creation, never changed afterward; re-parenting does not touch it).
+
+// maxRegionNameLen mirrors region.name's VARCHAR(255) constraint
+// (001_initial_schema.up.sql). Postgres counts VARCHAR length in characters,
+// not bytes, so the handler-side check must too (utf8 rune count) -- a
+// multi-byte name that fits 255 characters is legal, and a byte-count check
+// would wrongly reject it.
+const maxRegionNameLen = 255
+
+// RegionIdentity is a region's current-value state, the region-lifecycle
+// analog of BoardIdentity. OwnerLeaflabUserID is nil when the region
+// predates M3's create path (migration 013 added the column nullable;
+// pre-existing regions were never assigned an owner -- only an admin may
+// write such a region, per NFR2's owner-plus-admin-bypass rule).
+// ParentRegionID is nil for a top-level region (the mirror column's NULL is
+// meaningful state, mirrored by the open region_parent_history row).
+type RegionIdentity struct {
+	RegionID           int64
+	Name               string
+	ParentRegionID     *int64
+	OwnerLeaflabUserID *int64
+}
+
+// GetRegionIdentity returns a region's current-value state, or
+// pgx.ErrNoRows (unwrapped, so callers can errors.Is against it directly)
+// when region_id is unknown.
+func (r *Repository) GetRegionIdentity(ctx context.Context, regionID int64) (RegionIdentity, error) {
+	var (
+		ri       RegionIdentity
+		parentID *int64
+	)
+	err := r.db.QueryRow(ctx, `
+		SELECT name, parent_region_id, owner_leaflab_user_id
+		FROM region
+		WHERE region_id = $1
+	`, regionID).Scan(&ri.Name, &parentID, &ri.OwnerLeaflabUserID)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return RegionIdentity{}, err
+		}
+		return RegionIdentity{}, fmt.Errorf("get region identity for %d: %w", regionID, err)
+	}
+	ri.RegionID = regionID
+	ri.ParentRegionID = parentID
+	return ri, nil
+}
+
+// CreateRegion inserts the region row (owned by ownerUserID from the moment
+// it exists -- FR1/NFR2: a new region is never left ownerless) and its
+// initial open region_parent_history row, in one transaction: every region
+// has at least one open history row from the moment it exists, never only
+// from its first re-parent. parentRegionID may be nil (top-level region --
+// a recorded NULL parent on the open history row, not an absent row).
+//
+// No cycle is possible at creation (the new region_id is not yet known to
+// any other row), so there is deliberately no cycle check here -- that is
+// ReparentRegion's job (FR5). Callers (server.go's CreateRegion RPC) are
+// responsible for the non-empty/length name check and the parent-existence
+// check before calling this; the parent-region FK is the backstop for a
+// parent deleted concurrently after the check (a 23503 that surfaces as a
+// plain wrapped error, not a sentinel).
+func (r *Repository) CreateRegion(ctx context.Context, name string, parentRegionID *int64, ownerUserID int64) (int64, error) {
+	tx, err := r.db.Begin(ctx)
+	if err != nil {
+		return 0, fmt.Errorf("begin create region tx: %w", err)
+	}
+	defer tx.Rollback(ctx) //nolint:errcheck // no-op once Commit succeeds
+
+	var regionID int64
+	if err := tx.QueryRow(ctx, `
+		INSERT INTO region (parent_region_id, name, owner_leaflab_user_id)
+		VALUES ($1, $2, $3)
+		RETURNING region_id
+	`, parentRegionID, name, ownerUserID).Scan(&regionID); err != nil {
+		return 0, fmt.Errorf("insert region: %w", err)
+	}
+
+	if _, err := tx.Exec(ctx, `
+		INSERT INTO region_parent_history (region_id, parent_region_id)
+		VALUES ($1, $2)
+	`, regionID, parentRegionID); err != nil {
+		return 0, fmt.Errorf("insert initial region_parent_history row for region %d: %w", regionID, err)
+	}
+
+	if err := tx.Commit(ctx); err != nil {
+		return 0, fmt.Errorf("commit create region tx: %w", err)
+	}
+	return regionID, nil
+}
+
+// RenameRegion sets a region's name directly (FR2). A plain current-value
+// UPDATE against region.name -- no history table: region.name is not an
+// attribution dimension for any reading (names are resolved at read time
+// from the current tree; past readings roll up under the region's
+// history-resolved ancestor chain, never its name), so it follows
+// board.name's precedent under LB6. This is deliberately different from
+// RenameSensor's sensor_name_history SCD2 extension. Enforces no uniqueness
+// and no format restriction here; callers are responsible for the non-empty
+// and 255-character checks (CreateRegion/RenameRegion RPCs in server.go)
+// and for confirming regionID exists first -- an UPDATE against an unknown
+// region_id affects zero rows and returns no error.
+func (r *Repository) RenameRegion(ctx context.Context, regionID int64, name string) error {
+	if _, err := r.db.Exec(ctx, `UPDATE region SET name = $2 WHERE region_id = $1`, regionID, name); err != nil {
+		return fmt.Errorf("rename region %d: %w", regionID, err)
+	}
+	return nil
+}
+
+// ReparentRegion changes a region's parent (FR3): plain SCD2 close-and-open
+// on region_parent_history -- close the currently-open row, open a new one
+// for the new parent -- plus the mirror-column UPDATE on
+// region.parent_region_id, all in one transaction (per AGENTS.md section
+// SCD2's close-and-open pattern; the mirror column and the history must
+// never be observable out of sync). No immutability trigger: the API is the
+// only writer of both, and migration 017 is deliberately trigger-free.
+//
+// newParentRegionID may be nil (top-level: the open row records a NULL
+// parent -- recorded state, not an absence). Descendant rows are untouched:
+// every descendant's parent_region_id already points at its own immediate
+// parent, so a subtree relocates atomically by construction (FR3).
+// Callers (server.go's ReparentRegion RPC) are responsible for the
+// existence, authorization, and cycle checks (FR5) before calling this --
+// this method performs the close-and-open plus mirror update
+// unconditionally. Re-parenting never touches region.owner_leaflab_user_id.
+func (r *Repository) ReparentRegion(ctx context.Context, regionID int64, newParentRegionID *int64) error {
+	tx, err := r.db.Begin(ctx)
+	if err != nil {
+		return fmt.Errorf("begin reparent region %d tx: %w", regionID, err)
+	}
+	defer tx.Rollback(ctx) //nolint:errcheck // no-op once Commit succeeds
+
+	if _, err := tx.Exec(ctx, `
+		UPDATE region_parent_history SET valid_to = NOW()
+		WHERE region_id = $1 AND valid_to IS NULL
+	`, regionID); err != nil {
+		return fmt.Errorf("close open region_parent_history row for region %d: %w", regionID, err)
+	}
+
+	if _, err := tx.Exec(ctx, `
+		INSERT INTO region_parent_history (region_id, parent_region_id)
+		VALUES ($1, $2)
+	`, regionID, newParentRegionID); err != nil {
+		return fmt.Errorf("open region_parent_history row for region %d: %w", regionID, err)
+	}
+
+	if _, err := tx.Exec(ctx, `
+		UPDATE region SET parent_region_id = $2 WHERE region_id = $1
+	`, regionID, newParentRegionID); err != nil {
+		return fmt.Errorf("sync region.parent_region_id for region %d: %w", regionID, err)
+	}
+
+	if err := tx.Commit(ctx); err != nil {
+		return fmt.Errorf("commit reparent region %d tx: %w", regionID, err)
+	}
+	return nil
+}
+
+// reparentCycleDepthCap bounds the ancestor walk in ReparentCreatesCycle.
+// FR3 allows unbounded nesting depth, so no legitimate tree reaches this;
+// the cap only guarantees termination if corrupt data ever contained a
+// parent-pointer cycle despite FR5's rejection (the CTE would otherwise
+// walk it forever).
+const reparentCycleDepthCap = 10000
+
+// ReparentCreatesCycle reports whether re-parenting regionID under
+// newParentRegionID would create a cycle (FR5): that is, whether
+// newParentRegionID is regionID itself or any of regionID's descendants --
+// equivalently, whether walking the current tree upward from
+// newParentRegionID reaches regionID. The walk reads the current mirror
+// column (region.parent_region_id), which every write path keeps in sync
+// with the open history row; walking the open history rows would be
+// equivalent but no safer, and region's existing parent-pointer index
+// (idx_region_parent_region_id) answers each hop.
+//
+// One recursive CTE, one round trip -- not a Go-side loop of per-hop queries
+// (FR3 allows unbounded depth; the CTE's depth guard reparentCycleDepthCap
+// exists only to terminate on corrupt data). Callers map true to
+// codes.FailedPrecondition (ReparentRegion RPC in server.go).
+func (r *Repository) ReparentCreatesCycle(ctx context.Context, regionID, newParentRegionID int64) (bool, error) {
+	var createsCycle bool
+	err := r.db.QueryRow(ctx, `
+		WITH RECURSIVE walk AS (
+			SELECT region_id, parent_region_id, 0 AS depth
+			FROM region
+			WHERE region_id = $2
+			UNION ALL
+			SELECT r.region_id, r.parent_region_id, w.depth + 1
+			FROM region r
+			JOIN walk w ON r.region_id = w.parent_region_id
+			WHERE w.depth < $3
+		)
+		SELECT EXISTS(SELECT 1 FROM walk WHERE region_id = $1)
+	`, regionID, newParentRegionID, reparentCycleDepthCap).Scan(&createsCycle)
+	if err != nil {
+		return false, fmt.Errorf("walk ancestors from region %d for cycle check against region %d: %w", newParentRegionID, regionID, err)
+	}
+	return createsCycle, nil
+}
