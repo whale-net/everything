@@ -381,6 +381,41 @@ any application code, exactly like step 7's guidance for a normal client.
 
 ---
 
+## 11. Delegated grants (offline_access): browser consent for a client that acts later
+
+This is the setup behind `DelegatedGrantSource` (`delegatedgrant.go`,
+`delegatedgrant_authcode.go`): a one-time browser authorization-code + PKCE
+consent flow that requests `offline_access`, ending in a refresh token this
+package's `Store` persists so a confidential client can act as that subject
+later without another browser round trip.
+
+**The one setting people miss:** requesting the `offline_access` scope is not
+enough by itself. If Keycloak's token response comes back with no
+`refresh_token` at all,
+`CompleteAuthorization` fails with `ErrAuthorizationNoRefreshToken` — check,
+in order:
+
+1. **Client authentication: On** (step 4a) — offline tokens are only issued
+   to confidential clients.
+2. **Standard flow: checked** on this client (unlike the machine-to-machine
+   clients in step 4a, this one *does* need the browser login flow enabled).
+3. **Client scopes** tab → the client has the built-in `offline_access`
+   client scope assigned (Keycloak ships it as an optional scope on new
+   clients by default; if someone removed it, or your realm's default client
+   scope set doesn't include it, add it back as an optional or default
+   scope).
+4. The user actually completed consent for that scope — if **Consent
+   Required** is on for this client and the grantor didn't check the
+   "Offline access" consent checkbox, Keycloak silently drops the refresh
+   token from the response instead of erroring.
+
+Redirect URI is allow-listed on the Keycloak client (**Settings → Valid
+redirect URIs**) and must exactly match `DelegatedGrantConfig.RedirectURI` —
+this package never sends a redirect URI Keycloak wasn't already told to
+expect (NFR5).
+
+---
+
 ## Applying this to a new service
 
 The checklist, stripped of the example:
