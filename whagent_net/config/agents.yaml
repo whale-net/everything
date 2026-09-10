@@ -13,6 +13,11 @@
 # Each `agents` entry's shape mirrors whagent_net/session.AgentDefinition
 # (agentdef.go) minus `version`/`created_at`, which the seeder derives:
 #   - agent_id:       stable identifier sessions pin to (session_agent.agent_id)
+#   - domain:         the one AGENTS.md Domains-table domain this definition
+#                      belongs to (e.g. `audience_score_system`, `manmanv2`) --
+#                      required (config.Validate rejects a missing/empty
+#                      value); the sole input whagent_net/grantkey.ForDomain
+#                      derives a delegated-grant key from (issue #2424 FR1/FR4)
 #   - model:          an OpenRouter-served model id (llm.Catalog.Supports checks
 #                      this at StartSession time, api/handlers/start.go) --
 #                      exactly one of `model` / `model_definition` is required.
@@ -51,6 +56,7 @@
 
 agents:
   - agent_id: audience-score-system-research
+    domain: audience_score_system
     model: anthropic/claude-sonnet-4.5
     tool_set:
       # In-cluster Tilt/deploy address for audience_score_system/mcp
