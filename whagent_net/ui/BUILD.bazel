@@ -168,16 +168,11 @@ go_test(
 )
 
 # Release metadata for whagent-net's standalone agent web UI (issue #2236).
-# domain "whagent-net" + name "ui" mirrors //whagent_net/api:api's
+# domain "whagent-net" + name "whagent-net-ui" mirrors //whagent_net/api:api's
 # release_app and manmanv2/ui's own release_app (app_type "external-api");
 # ingress fields left unset for now, per this task's Scaffold section.
-# name is "ui" (not "whagent-net-ui") because release_app's image-naming
-# logic already prefixes with domain (domain + "-" + name); passing the
-# already domain-prefixed name here double-prefixed the image to
-# whagent-net-whagent-net-ui (issue #2339). binary_name still points at
-# the go_binary target below, which keeps its long name.
 release_app(
-    name = "ui",
+    name = "whagent-net-ui",
     binary_name = ":whagent-net-ui",
     language = "go",
     domain = "whagent-net",
