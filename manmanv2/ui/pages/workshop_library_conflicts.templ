@@ -1,6 +1,8 @@
 package pages
 
 import (
+	"fmt"
+
 	"github.com/whale-net/everything/manmanv2/ui/components"
 )
 
@@ -14,6 +16,13 @@ import (
 type WorkshopLibraryConflictsPageData struct {
 	Layout    components.LayoutData
 	Conflicts []ConflictViewData
+	// ResolutionError surfaces a rejected /workshop/conflicts/resolve
+	// submission inline (a stale/already-resolved conflict's
+	// FailedPrecondition, or a client that bypassed the override radio
+	// group's required attribute) -- issue #2368's Logging note: this is
+	// expected control flow, not a 500, so it renders as a normal alert
+	// rather than an error page. Empty means the page loaded cleanly.
+	ResolutionError string
 }
 
 // ConflictViewData is one WorkshopLibraryMigrationConflict rendered for
@@ -42,19 +51,14 @@ type ConflictCandidateViewData struct {
 
 // WorkshopLibraryConflictsPage is the FR12/US6 resolution surface: for
 // each unresolved conflict, which candidate libraries came from which
-// deployments, and (once the Implementation phase fills them in) the
-// union/override controls to resolve it.
-//
-// Scaffold note (#2368): this renders the read side against real
-// ListLibraryMigrationConflicts data -- one card per conflict naming every
-// candidate's library and source deployment. The union/override
-// resolution controls are a TODO for the Implementation phase (see
-// conflictCard's doc comment); POST "/workshop/conflicts/resolve"
-// (handleResolveLibraryMigrationConflict) is registered in main.go as a
-// placeholder in the meantime.
+// deployments, and the union/override controls to resolve it
+// (conflictCard).
 templ WorkshopLibraryConflictsPage(data WorkshopLibraryConflictsPageData) {
 	@components.Layout(data.Layout) {
 		@components.HeroHeader("Library Migration Conflicts", "SGC-level Workshop library attachments that disagreed when migrated to GameConfig level -- choose union or override for each") {
+		}
+		if data.ResolutionError != "" {
+			<div role="alert" class="alert alert-warning mb-4">{ data.ResolutionError }</div>
 		}
 		if len(data.Conflicts) == 0 {
 			<div class="bg-base-100 rounded-box border border-base-300 p-12 text-center">
@@ -72,16 +76,27 @@ templ WorkshopLibraryConflictsPage(data WorkshopLibraryConflictsPageData) {
 	}
 }
 
-// conflictCard renders one conflict: its GameConfig, and one row per
-// candidate naming the library and the deployment it came from (FR12's
-// acceptance criterion 1 -- nothing is silently dropped or guessed).
+// conflictCard renders one conflict: its GameConfig, one row per candidate
+// naming the library and the deployment it came from (FR12's acceptance
+// criterion 1 -- nothing is silently dropped or guessed), and the
+// union/override resolution controls (acceptance criterion 2). Exactly
+// two forms are rendered -- no third option, matching #2359's Out of
+// scope note.
 //
-// TODO(#2368 Implementation phase): union/override resolution controls.
-// Union posts resolution="union" (no keep_library_id); override requires
-// an explicit keep_library_id choice among this conflict's candidates and
-// must make the discard of the others explicit before submitting -- no
-// third option, and an override with no selection must never silently
-// submit (issue #2368's Testing section).
+// Union posts resolution="union" with no keep_library_id: every candidate
+// library becomes the GameConfig's attached set, so it discards nothing
+// and needs no confirmation.
+//
+// Override requires picking exactly one candidate via a native radio
+// group (name="keep_library_id", each option `required`) -- submitting
+// with nothing selected is rejected client-side by the browser before any
+// request is sent (issue #2368's Testing section: "override with no
+// selection ... never silently submitted"). The submit button's
+// `onclick="return confirm(...)"` states plainly that every other
+// candidate is discarded, matching the plain-`<form>` confirm precedent
+// used elsewhere for destructive actions (e.g. config_detail.templ's
+// "Delete this volume?"), since this page's forms are plain POSTs rather
+// than htmx (no hx-confirm available).
 templ conflictCard(conflict ConflictViewData) {
 	<div class="card bg-base-100 border border-base-300 shadow-sm p-4">
 		<div class="flex justify-between items-center mb-3">
@@ -90,9 +105,10 @@ templ conflictCard(conflict ConflictViewData) {
 				<p class="text-sm text-base-content/60">{ conflict.GameName }</p>
 			</div>
 		</div>
-		<table class="table table-sm">
+		<table class="table table-sm mb-4">
 			<thead>
 				<tr>
+					<th></th>
 					<th>Library</th>
 					<th>Source deployment</th>
 				</tr>
@@ -100,11 +116,47 @@ templ conflictCard(conflict ConflictViewData) {
 			<tbody>
 				for _, candidate := range conflict.Candidates {
 					<tr>
-						<td>{ candidate.LibraryName }</td>
+						<td>
+							<input
+								type="radio"
+								form={ fmt.Sprintf("override-form-%d", conflict.ConflictID) }
+								name="keep_library_id"
+								value={ fmt.Sprintf("%d", candidate.LibraryID) }
+								id={ fmt.Sprintf("keep-%d-%d", conflict.ConflictID, candidate.LibraryID) }
+								required
+								class="radio radio-sm"
+							/>
+						</td>
+						<td>
+							<label for={ fmt.Sprintf("keep-%d-%d", conflict.ConflictID, candidate.LibraryID) }>{ candidate.LibraryName }</label>
+						</td>
 						<td>{ candidate.DeploymentName }</td>
 					</tr>
 				}
 			</tbody>
 		</table>
+		<div class="flex flex-wrap items-center gap-3">
+			<form method="POST" action="/workshop/conflicts/resolve">
+				<input type="hidden" name="conflict_id" value={ fmt.Sprintf("%d", conflict.ConflictID) }/>
+				<input type="hidden" name="resolution" value="union"/>
+				<button type="submit" class="btn btn-primary btn-sm">
+					Union -- attach all { fmt.Sprintf("%d", len(conflict.Candidates)) } candidates
+				</button>
+			</form>
+			<form id={ fmt.Sprintf("override-form-%d", conflict.ConflictID) } method="POST" action="/workshop/conflicts/resolve">
+				<input type="hidden" name="conflict_id" value={ fmt.Sprintf("%d", conflict.ConflictID) }/>
+				<input type="hidden" name="resolution" value="override"/>
+				<button
+					type="submit"
+					onclick="return confirm('This keeps only the selected library and discards every other candidate library for this GameConfig. Continue?')"
+					class="btn btn-outline btn-error btn-sm"
+				>
+					Override -- keep only the selected library
+				</button>
+			</form>
+		</div>
+		<p class="text-xs text-base-content/60 mt-2">
+			Union attaches every candidate library above. Override keeps only the library you select and discards the rest for this GameConfig.
+		</p>
 	</div>
 }

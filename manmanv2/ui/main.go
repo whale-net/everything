@@ -465,8 +465,8 @@ func (app *App) setupRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("/workshop/batch-create-addons", app.auth.RequireAuthFunc(app.auth.WithAccessToken(app.handleBatchCreateAddons)))
 	// FR12/US6 conflict resolution (task #2368): the Server-Manager-facing
 	// half of the SGC->GameConfig library migration (#2365 shipped
-	// detection). handleResolveLibraryMigrationConflict is a scaffold
-	// placeholder -- see its doc comment (handlers_workshop_conflicts.go).
+	// detection). See handlers_workshop_conflicts.go's doc comments for
+	// the union/override resolution shape.
 	mux.HandleFunc("/workshop/conflicts", app.auth.RequireAuthFunc(app.auth.WithAccessToken(app.handleWorkshopLibraryConflicts)))
 	mux.HandleFunc("/workshop/conflicts/resolve", app.auth.RequireAuthFunc(app.auth.WithAccessToken(app.handleResolveLibraryMigrationConflict)))
 

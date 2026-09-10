@@ -5,6 +5,10 @@ import (
 	"fmt"
 	"log"
 	"net/http"
+	"strconv"
+
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 
 	"github.com/whale-net/everything/libs/go/htmxauth"
 	manmanpb "github.com/whale-net/everything/manmanv2/protos"
@@ -18,11 +22,18 @@ import (
 // candidate's library and source deployment resolved to names -- a Server
 // Manager cannot choose sensibly from bare ids (issue #2368's
 // Implementation note).
-//
-// Scaffold note (#2368): this is the read path. Resolution
-// (handleResolveLibraryMigrationConflict below) is a placeholder the
-// Implementation phase fills in.
 func (app *App) handleWorkshopLibraryConflicts(w http.ResponseWriter, r *http.Request) {
+	app.renderWorkshopLibraryConflicts(w, r, "")
+}
+
+// renderWorkshopLibraryConflicts does the actual list-and-render work
+// behind handleWorkshopLibraryConflicts, plus an optional resolutionError
+// banner -- handleResolveLibraryMigrationConflict re-renders this same
+// page with that set rather than a bare error page when a submission is
+// rejected (issue #2368's Logging note: a stale/already-resolved
+// conflict, or an override missing its keep_library_id, is expected
+// control flow, not a 500).
+func (app *App) renderWorkshopLibraryConflicts(w http.ResponseWriter, r *http.Request, resolutionError string) {
 	user := htmxauth.GetUser(r.Context())
 	ctx := r.Context()
 
@@ -62,8 +73,9 @@ func (app *App) handleWorkshopLibraryConflicts(w http.ResponseWriter, r *http.Re
 	}
 
 	pageData := pages.WorkshopLibraryConflictsPageData{
-		Layout:    layoutData,
-		Conflicts: views,
+		Layout:          layoutData,
+		Conflicts:       views,
+		ResolutionError: resolutionError,
 	}
 
 	if err := RenderTempl(w, r, "Library Migration Conflicts", pages.WorkshopLibraryConflictsPage(pageData)); err != nil {
@@ -147,16 +159,76 @@ func (app *App) resolveConflictDeploymentName(ctx context.Context, sgcID int64, 
 
 // handleResolveLibraryMigrationConflict is the FR12 union/override
 // resolution endpoint, registered at POST "/workshop/conflicts/resolve".
+// It backs conflictCard's two forms (pages/workshop_library_conflicts.templ):
+// one posts resolution="union" with no keep_library_id, the other posts
+// resolution="override" plus a keep_library_id chosen from a `required`
+// native radio group -- no third resolution shape exists (#2359's Out of
+// scope note).
 //
-// Scaffold placeholder (#2368): the Implementation phase wires the actual
-// form submission (parsing conflict_id/resolution/keep_library_id, calling
-// ControlClient.ResolveLibraryMigrationConflict, and surfacing a stale/
-// already-resolved submission's FailedPrecondition as a clear user-facing
-// message rather than a 500 -- issue #2368's Logging note: that is expected
-// control flow, not an ERROR-level failure) and redirects back to
-// "/workshop/conflicts" on success. The route is registered now so
-// conflictCard's future resolution controls (pages/workshop_library_conflicts.templ)
-// have a stable target to submit to.
+// A malformed request (missing/non-numeric conflict_id, an unrecognized
+// resolution value, or a non-numeric keep_library_id) is a client bug --
+// the templ forms never produce one -- and is rejected 400 rather than
+// rendered inline. An override with no keep_library_id at all is
+// different: the radio group's `required` attribute should have stopped
+// it client-side, but a client that bypassed that (no JS, hand-crafted
+// POST) reaches here, so it renders the same friendly re-prompt as a
+// FailedPrecondition rather than a raw 400 (issue #2368's Testing
+// section: "never silently submitted", not "never handled gracefully").
+//
+// A FailedPrecondition (the conflict was already resolved, e.g. two tabs
+// racing) or InvalidArgument (a keep_library_id that isn't actually one of
+// this conflict's candidates) from the API is expected control flow, not
+// a system failure (issue #2368's Logging note) -- both re-render
+// "/workshop/conflicts" with the API's message as an inline banner
+// instead of a 500. Anything else is a genuine failure and does 500.
 func (app *App) handleResolveLibraryMigrationConflict(w http.ResponseWriter, r *http.Request) {
-	http.Error(w, "Not implemented yet -- Implementation phase of #2368", http.StatusNotImplemented)
+	if r.Method != http.MethodPost {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	if err := r.ParseForm(); err != nil {
+		http.Error(w, "Invalid form submission", http.StatusBadRequest)
+		return
+	}
+
+	conflictID, err := strconv.ParseInt(r.FormValue("conflict_id"), 10, 64)
+	if err != nil {
+		http.Error(w, "Invalid conflict_id", http.StatusBadRequest)
+		return
+	}
+
+	resolution := r.FormValue("resolution")
+	if resolution != "union" && resolution != "override" {
+		http.Error(w, fmt.Sprintf("resolution must be \"union\" or \"override\", got %q", resolution), http.StatusBadRequest)
+		return
+	}
+
+	var keepLibraryID int64
+	if resolution == "override" {
+		keepLibraryIDStr := r.FormValue("keep_library_id")
+		if keepLibraryIDStr == "" {
+			app.renderWorkshopLibraryConflicts(w, r, "Choose a library to keep before submitting an override.")
+			return
+		}
+		keepLibraryID, err = strconv.ParseInt(keepLibraryIDStr, 10, 64)
+		if err != nil {
+			http.Error(w, "Invalid keep_library_id", http.StatusBadRequest)
+			return
+		}
+	}
+
+	ctx := r.Context()
+	if err := app.grpc.ResolveLibraryMigrationConflict(ctx, conflictID, resolution, keepLibraryID); err != nil {
+		if st, ok := status.FromError(err); ok && (st.Code() == codes.FailedPrecondition || st.Code() == codes.InvalidArgument) {
+			log.Printf("Rejected conflict %d resolution (%s): %v", conflictID, resolution, err)
+			app.renderWorkshopLibraryConflicts(w, r, st.Message())
+			return
+		}
+		log.Printf("Error resolving library migration conflict %d: %v", conflictID, err)
+		http.Error(w, "Failed to resolve library migration conflict", http.StatusInternalServerError)
+		return
+	}
+
+	http.Redirect(w, r, "/workshop/conflicts", http.StatusSeeOther)
 }
