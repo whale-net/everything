@@ -1,0 +1,81 @@
+package pages
+
+import (
+	"github.com/whale-net/everything/libs/go/htmxui"
+	manmanpb "github.com/whale-net/everything/manmanv2/protos"
+	"github.com/whale-net/everything/manmanv2/ui/components"
+)
+
+// Infrastructure is the M6 fleet host list (FR1/FR2, C29): every host in
+// the fleet with its drain state, eventually replacing /servers as the
+// nav-facing surface (the nav swap and /servers redirect are the dependent
+// navigation/disposition task, not this one -- see this task's "Design
+// note" above navItems' Infrastructure entry in components/layout.templ).
+//
+// Scaffold phase (#2369): renders the FR2 floor only -- host name plus a
+// drain-state badge, the explicitly acceptable minimum per the issue body.
+// Landing in the Implementation phase of this same issue: health/resource
+// indicators bounded by NFR5 (Server.status, last_seen,
+// host_public_address, ListAllocatedPorts, server_capabilities), the FR3
+// drain / FR4 undrain one-click actions (posting through
+// handleInfrastructureAction below), search/filter, and manual-refresh
+// handling for the transient "draining" state.
+templ Infrastructure(layout components.LayoutData, servers []*manmanpb.Server) {
+	@components.Layout(layout) {
+		@components.HeroHeader("Infrastructure", "Every host in the fleet, with its current drain state")
+		if len(servers) > 0 {
+			@components.Table() {
+				<thead>
+					<tr>
+						<th>Name</th>
+						<th>Drain State</th>
+					</tr>
+				</thead>
+				<tbody>
+					for _, server := range servers {
+						<tr class="hover">
+							<td class="text-sm font-medium text-base-content">{ server.Name }</td>
+							<td>
+								@htmxui.Badge(drainStateLabel(server.DrainState), statusBadgeVariant(drainStateVariant(server.DrainState)), htmxui.BadgeSizeSM, true, nil)
+							</td>
+						</tr>
+					}
+				</tbody>
+			}
+		} else {
+			@components.EmptyState(
+				"No hosts found",
+				"Hosts will appear here when they register with the control plane.",
+				"",
+				"",
+			)
+		}
+	}
+}
+
+// drainStateLabel renders Server.drain_state (#2360) as display text.
+// The field is empty for hosts that existed before drain_state was
+// introduced -- those are schedulable, so an empty value renders as such
+// rather than blank.
+func drainStateLabel(state string) string {
+	if state == "" {
+		return "schedulable"
+	}
+	return state
+}
+
+// drainStateVariant maps drain_state to the shared status-badge vocabulary
+// (statusBadgeVariant/components.StatusBadgeVariant), not a new colour
+// table: schedulable reads as "success" (fully in service), draining as
+// "warning" (in-flight transition, FR2's transient state), drained as
+// "danger" (out of service).
+func drainStateVariant(state string) string {
+	switch state {
+	case "draining":
+		return "warning"
+	case "drained":
+		return "danger"
+	default:
+		return "success"
+	}
+}
