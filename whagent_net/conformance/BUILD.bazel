@@ -1,0 +1,11 @@
+load("@rules_go//go:def.bzl", "go_test")
+
+# Tiltfile wiring conformance test for whagent-net (issue #2341).
+go_test(
+    name = "conformance_test",
+    srcs = ["tiltfile_test.go"],
+    data = [
+        "//whagent_net:build_file",
+        "//whagent_net:tiltfile",
+    ],
+)
