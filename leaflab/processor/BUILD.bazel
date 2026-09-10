@@ -63,6 +63,7 @@ go_test(
     timeout = "long",
     srcs = [
         "convergence_integration_test.go",
+        "placement_integration_test.go",
         "testdb_integration_test.go",
     ],
     embed = [":processor_lib"],
@@ -76,12 +77,16 @@ go_test(
         "requires-network",
     ],
     deps = [
+        "//firmware/proto:configpb",
+        "//firmware/proto:firmwarepb",
         "//leaflab/migrate/schema",
         "//libs/go/dbtest",
         "//libs/go/migrate",
+        "//libs/go/rmq",
         "@com_github_jackc_pgx_v5//:pgx",
         "@com_github_jackc_pgx_v5//pgxpool",
         "@com_github_jackc_pgx_v5//stdlib",
+        "@org_golang_google_protobuf//proto",
     ],
 )
 
