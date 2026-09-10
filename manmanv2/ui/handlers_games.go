@@ -153,8 +153,9 @@ func (app *App) handleGames(w http.ResponseWriter, r *http.Request) {
 // It also populates each row's Configs (FR7, task #2273): every
 // GameConfig of that game, with a deployment count derived from the same
 // deployments slice already joined above -- no new call, no per-config
-// query (NFR7). row.WorkshopLibraries (FR8) is deliberately left
-// unpopulated here -- see pages.WorkshopLibraryRow's doc comment for why.
+// query (NFR7). The Workshop Libraries panel (FR8/FR9/FR10, task #2367)
+// is deliberately not part of this join at all -- it is a lazily-fetched
+// fragment now, see pages.WorkshopPanelData's doc comment for why.
 func buildGameRows(
 	games []*manmanpb.Game,
 	configs []*manmanpb.GameConfig,
@@ -437,6 +438,13 @@ func (app *App) handleGameDetail(w http.ResponseWriter, r *http.Request) {
 		case "actions":
 			app.handleGameActions(w, r)
 			return
+		case "workshop-panel":
+			// GET /games/{id}/workshop-panel (task #2367, FR8/FR9/FR10):
+			// the lazily-fetched Workshop Libraries panel fragment -- see
+			// gameWorkshopPlaceholder's doc comment in games.templ and
+			// handlers_games_libraries.go.
+			app.handleGameWorkshopPanel(w, r, gameIDStr)
+			return
 		case "presets":
 			// Handle preset routes: /games/{id}/presets/create or /games/{id}/presets/{preset_id}/delete
 			if len(pathParts) > 3 {
@@ -703,6 +711,27 @@ func (app *App) handleGameConfigDetail(w http.ResponseWriter, r *http.Request, g
 				// POST to /games/{id}/configs/{config_id}/volumes (create)
 				if r.Method == http.MethodPost {
 					app.handleGameConfigVolumeCreate(w, r, gameIDStr, configIDStr)
+					return
+				}
+			}
+		case "libraries":
+			// GC-level Workshop library routes (task #2367, FR8/FR9):
+			//   GET  /games/{id}/configs/{config_id}/libraries/available
+			//   POST /games/{id}/configs/{config_id}/libraries/add
+			//   POST /games/{id}/configs/{config_id}/libraries/{library_id}/remove
+			// See handlers_games_libraries.go.
+			if len(pathParts) > 5 {
+				sub := pathParts[5]
+				if sub == "available" {
+					app.handleGameConfigAvailableLibraries(w, r, gameIDStr, configIDStr)
+					return
+				}
+				if sub == "add" {
+					app.handleGameConfigLibraryAdd(w, r, gameIDStr, configIDStr)
+					return
+				}
+				if len(pathParts) > 6 && pathParts[6] == "remove" {
+					app.handleGameConfigLibraryRemove(w, r, gameIDStr, configIDStr, sub)
 					return
 				}
 			}

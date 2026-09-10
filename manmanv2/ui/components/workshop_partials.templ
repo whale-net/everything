@@ -119,6 +119,57 @@ templ SGCAvailableLibraries(sgcID int64, libraries []*EnrichedLibrary, presets [
 	}
 }
 
+// GameConfigAvailableLibraries renders the attach picker for the Games
+// page's GC-level Workshop Libraries panel (task #2367, FR8): the
+// GameConfig-scoped counterpart to SGCAvailableLibraries above, reusing
+// its lookup shape (handleSGCAvailableLibraries's filter-by-attached,
+// filter-by-query logic, repointed at GameConfig scope --
+// handleGameConfigAvailableLibraries in manmanv2/ui). Unlike
+// SGCAvailableLibraries' plain-POST form (a standalone page's own full
+// navigation), this picker is itself an htmx fragment swapped into the
+// Workshop Libraries panel (workshop_panel.templ), so its Add submits via
+// hx-post targeting the whole panel (#game-workshop-{gameID}) -- the same
+// swap target the panel's own detach buttons use -- rather than a plain
+// form navigation that would replace the entire page with a bare
+// fragment response.
+templ GameConfigAvailableLibraries(gameID, configID int64, libraries []*EnrichedLibrary) {
+	if len(libraries) > 0 {
+		for _, lib := range libraries {
+			<div class="flex items-start gap-3 p-3 border-b border-base-300 last:border-b-0 hover:bg-base-200/50 transition-colors">
+				<div class="flex-1 min-w-0">
+					<div class="font-medium text-base-content mb-1">{ lib.Name }</div>
+					if lib.Description != "" {
+						<div class="text-sm text-base-content/60 mb-2">{ lib.Description }</div>
+					}
+					if lib.PresetName != "" {
+						<div class="text-xs text-base-content/50">
+							Preset: { lib.PresetName } → { lib.PresetPath }
+						</div>
+					}
+				</div>
+				<form
+					hx-post={ fmt.Sprintf("/games/%d/configs/%d/libraries/add", gameID, configID) }
+					hx-target={ fmt.Sprintf("#game-workshop-%d", gameID) }
+					hx-swap="innerHTML"
+					class="flex-shrink-0"
+				>
+					<input type="hidden" name="library_id" value={ formatInt64(lib.LibraryId) }/>
+					if lib.PresetId != 0 {
+						<input type="hidden" name="preset_id" value={ formatInt64(lib.PresetId) }/>
+					}
+					<button type="submit" class="btn btn-primary btn-sm">
+						Add
+					</button>
+				</form>
+			</div>
+		}
+	} else {
+		<div class="text-center py-8 text-sm text-base-content/60">
+			No available libraries found.
+		</div>
+	}
+}
+
 func formatFileSize(bytes int64) string {
 	mb := float64(bytes) / 1048576.0
 	return fmt.Sprintf("%.1f MB", mb)

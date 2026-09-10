@@ -1,0 +1,146 @@
+package pages
+
+import (
+	"fmt"
+)
+
+// WorkshopPanelData drives the Games page's per-game Workshop Libraries
+// panel fragment (task #2367, FR8/FR9/FR10): every non-conflicting
+// GameConfig of a game, GC-scoped attach/detach controls (FR8/FR9), and a
+// pointer to the conflict-resolution surface (#2368) for any GameConfig
+// with an unresolved SGC->GC migration conflict (FR12).
+//
+// This is deliberately never populated as part of handleGames' own
+// NFR7-bounded fleet-wide join (see gameWorkshopPlaceholder in
+// games.templ for why): GetGameConfigLibraryAttachments/
+// ListGameConfigLibraries only accept a single config_id, so populating
+// this at page load would add two RPCs per GameConfig rendered, growing
+// with fleet size -- exactly what NFR7 (carried over from M5, task
+// #2270) forbids for handleGames itself. Instead the panel is a real,
+// lazily-fetched fragment (GET /games/{gameID}/workshop-panel), the same
+// "no call until interacted with" shape the Deployments section's
+// Customize blade already uses for its environment tab (#2274) -- see
+// this file's handler, handleGameWorkshopPanel (handlers_games_libraries.go).
+type WorkshopPanelData struct {
+	GameID   int64
+	Sections []ConfigWorkshopSection
+}
+
+// ConfigWorkshopSection is one GameConfig's Workshop Libraries subsection
+// within the panel (FR8/FR9): attach and detach act at this GameConfig's
+// scope, never a deployment's, so a single attach or detach here changes
+// what every deployment of this configuration inherits (US5).
+type ConfigWorkshopSection struct {
+	ConfigID   int64
+	ConfigName string
+	// HasConflict is true when this GameConfig has an unresolved SGC->GC
+	// migration conflict (FR12, #2361's backfill). Libraries is never
+	// populated in that case -- the section renders a pointer to the
+	// conflict-resolution surface (#2368) instead of a silently-empty
+	// list (issue #2367's guard).
+	HasConflict bool
+	Libraries   []WorkshopLibraryRow
+}
+
+// WorkshopLibraryRow is one attached library row within a
+// ConfigWorkshopSection (FR8).
+type WorkshopLibraryRow struct {
+	LibraryID   int64
+	LibraryName string
+	// Target is the resolved install path: the attachment's own path
+	// override, else its overriding preset's path, else the library's
+	// own default preset's path, in that order -- "" when none resolves.
+	Target string
+}
+
+// WorkshopPanel renders the panel fragment: the FR8/FR9 inheritance copy
+// once, then one workshopConfigSection per GameConfig. Rendered directly
+// (not through RenderTempl's full-page layout) by both the lazy GET and
+// every attach/detach POST's re-render, exactly like
+// pages.ConfigEditor's fragment convention (see ConfigEditorData's doc
+// comment).
+templ WorkshopPanel(data WorkshopPanelData) {
+	<div class="flex flex-col gap-3">
+		<p class="text-xs text-base-content/60">
+			Attaching a library here applies it to every deployment of this configuration; detaching removes it from all of them.
+		</p>
+		if len(data.Sections) == 0 {
+			<p class="text-sm text-base-content/60">No configurations yet.</p>
+		} else {
+			for _, section := range data.Sections {
+				@workshopConfigSection(data.GameID, section)
+			}
+		}
+	</div>
+}
+
+// workshopConfigSection renders one GameConfig's attach/detach subsection.
+// An unresolved conflict (FR12) always wins over rendering Libraries --
+// see ConfigWorkshopSection.HasConflict's doc comment.
+templ workshopConfigSection(gameID int64, section ConfigWorkshopSection) {
+	<div class="border border-base-300 rounded-box overflow-hidden" data-workshop-config-section data-config-id={ fmt.Sprintf("%d", section.ConfigID) }>
+		<div class="flex flex-col sm:flex-row sm:justify-between sm:items-center gap-2 p-3 border-b border-base-300 bg-base-200">
+			<h4 class="font-medium text-base-content text-sm">{ section.ConfigName }</h4>
+			if !section.HasConflict {
+				<button
+					type="button"
+					class="btn btn-xs btn-secondary"
+					data-workshop-add-library-trigger
+					hx-get={ fmt.Sprintf("/games/%d/configs/%d/libraries/available", gameID, section.ConfigID) }
+					hx-target={ fmt.Sprintf("#workshop-available-%d", section.ConfigID) }
+					hx-swap="innerHTML"
+				>
+					+ Add Library
+				</button>
+			}
+		</div>
+		if section.HasConflict {
+			<!--
+				FR12 pointer: this GameConfig's SGCs disagreed during the
+				SGC->GC backfill (#2361) and the conflict is still
+				unresolved. The resolution flow itself (union/override) is
+				#2368's surface, not this one, see that issue's "Entry
+				points" note, which names this banner as its Games-page
+				entry point.
+			-->
+			<div class="p-3 text-sm text-warning flex items-center gap-2" data-workshop-conflict-banner>
+				<span>⚠</span>
+				<span>This configuration has an unresolved Workshop library migration conflict. Resolve it before managing libraries here.</span>
+			</div>
+		} else {
+			<div id={ fmt.Sprintf("workshop-available-%d", section.ConfigID) }></div>
+			if len(section.Libraries) > 0 {
+				<div class="overflow-x-auto">
+					<table class="table table-sm">
+						<thead>
+							<tr>
+								<th scope="col">Library</th>
+								<th scope="col">Install Target</th>
+								<th scope="col" class="text-right">Actions</th>
+							</tr>
+						</thead>
+						<tbody>
+							for _, lib := range section.Libraries {
+								<tr class="hover">
+									<td class="text-base-content">{ lib.LibraryName }</td>
+									<td class="font-mono text-sm">{ lib.Target }</td>
+									<td class="text-right">
+										<form
+											hx-post={ fmt.Sprintf("/games/%d/configs/%d/libraries/%d/remove", gameID, section.ConfigID, lib.LibraryID) }
+											hx-target={ fmt.Sprintf("#game-workshop-%d", gameID) }
+											hx-swap="innerHTML"
+										>
+											<button type="submit" class="btn btn-xs btn-error">Remove</button>
+										</form>
+									</td>
+								</tr>
+							}
+						</tbody>
+					</table>
+				</div>
+			} else {
+				<p class="p-3 text-sm text-base-content/60">No workshop libraries attached.</p>
+			}
+		}
+	</div>
+}
