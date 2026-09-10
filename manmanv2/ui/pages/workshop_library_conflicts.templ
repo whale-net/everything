@@ -1,0 +1,110 @@
+package pages
+
+import (
+	"github.com/whale-net/everything/manmanv2/ui/components"
+)
+
+// WorkshopLibraryConflictsPageData backs the SGC->GameConfig library
+// migration conflict resolution page (FR12, US6, task #2368), registered
+// at "/workshop/conflicts". Every unresolved conflict from
+// ListLibraryMigrationConflicts (#2365) is rendered here so a Server
+// Manager can choose union or override -- see #2359's Out of scope note
+// for why those are the only two resolutions and there is no third,
+// per-item manual merge option.
+type WorkshopLibraryConflictsPageData struct {
+	Layout    components.LayoutData
+	Conflicts []ConflictViewData
+}
+
+// ConflictViewData is one WorkshopLibraryMigrationConflict rendered for
+// resolution: which GameConfig it belongs to, and per candidate, which
+// library and which deployment attached it -- a Server Manager cannot
+// choose sensibly from library names alone (issue #2368's Implementation
+// note).
+type ConflictViewData struct {
+	ConflictID int64
+	ConfigID   int64
+	ConfigName string
+	GameName   string
+	Candidates []ConflictCandidateViewData
+}
+
+// ConflictCandidateViewData is one (library, deployment) pair contributing
+// to a conflict -- resolved from WorkshopLibraryMigrationConflictCandidate's
+// (library_id, sgc_id) pair by handleWorkshopLibraryConflicts
+// (handlers_workshop_conflicts.go) so this page never renders a bare id.
+type ConflictCandidateViewData struct {
+	LibraryID      int64
+	LibraryName    string
+	SGCID          int64
+	DeploymentName string // "<config> on <server>", matching games.templ's naming (FR2)
+}
+
+// WorkshopLibraryConflictsPage is the FR12/US6 resolution surface: for
+// each unresolved conflict, which candidate libraries came from which
+// deployments, and (once the Implementation phase fills them in) the
+// union/override controls to resolve it.
+//
+// Scaffold note (#2368): this renders the read side against real
+// ListLibraryMigrationConflicts data -- one card per conflict naming every
+// candidate's library and source deployment. The union/override
+// resolution controls are a TODO for the Implementation phase (see
+// conflictCard's doc comment); POST "/workshop/conflicts/resolve"
+// (handleResolveLibraryMigrationConflict) is registered in main.go as a
+// placeholder in the meantime.
+templ WorkshopLibraryConflictsPage(data WorkshopLibraryConflictsPageData) {
+	@components.Layout(data.Layout) {
+		@components.HeroHeader("Library Migration Conflicts", "SGC-level Workshop library attachments that disagreed when migrated to GameConfig level -- choose union or override for each") {
+		}
+		if len(data.Conflicts) == 0 {
+			<div class="bg-base-100 rounded-box border border-base-300 p-12 text-center">
+				<div class="text-6xl mb-4">✅</div>
+				<h3 class="text-lg font-semibold text-base-content mb-2">No unresolved conflicts</h3>
+				<p class="text-base-content/60">Every GameConfig's migrated Workshop library set is settled.</p>
+			</div>
+		} else {
+			<div class="flex flex-col gap-4">
+				for _, conflict := range data.Conflicts {
+					@conflictCard(conflict)
+				}
+			</div>
+		}
+	}
+}
+
+// conflictCard renders one conflict: its GameConfig, and one row per
+// candidate naming the library and the deployment it came from (FR12's
+// acceptance criterion 1 -- nothing is silently dropped or guessed).
+//
+// TODO(#2368 Implementation phase): union/override resolution controls.
+// Union posts resolution="union" (no keep_library_id); override requires
+// an explicit keep_library_id choice among this conflict's candidates and
+// must make the discard of the others explicit before submitting -- no
+// third option, and an override with no selection must never silently
+// submit (issue #2368's Testing section).
+templ conflictCard(conflict ConflictViewData) {
+	<div class="card bg-base-100 border border-base-300 shadow-sm p-4">
+		<div class="flex justify-between items-center mb-3">
+			<div>
+				<h3 class="font-semibold text-base-content">{ conflict.ConfigName }</h3>
+				<p class="text-sm text-base-content/60">{ conflict.GameName }</p>
+			</div>
+		</div>
+		<table class="table table-sm">
+			<thead>
+				<tr>
+					<th>Library</th>
+					<th>Source deployment</th>
+				</tr>
+			</thead>
+			<tbody>
+				for _, candidate := range conflict.Candidates {
+					<tr>
+						<td>{ candidate.LibraryName }</td>
+						<td>{ candidate.DeploymentName }</td>
+					</tr>
+				}
+			</tbody>
+		</table>
+	</div>
+}

@@ -53,6 +53,17 @@ func (app *App) handleWorkshopPage(w http.ResponseWriter, r *http.Request) {
 
 	panels := app.buildWorkshopLibraryPanels(ctx, games, libraries, addons)
 
+	// FR12/US6 discoverability banner (task #2368): count only, not the
+	// full resolved candidate list -- workshopConflictBanner just needs
+	// "how many", so this avoids the per-candidate GetLibrary/
+	// GetServerGameConfig resolution buildConflictViews does for the
+	// dedicated "/workshop/conflicts" page.
+	conflicts, err := app.grpc.ListLibraryMigrationConflicts(ctx)
+	if err != nil {
+		log.Printf("Error listing library migration conflicts: %v", err)
+		conflicts = nil
+	}
+
 	// Recent batch jobs (mirrors handleWorkshopLibrary's RecentBatchJobs,
 	// see that doc comment for why this is a bounded per-game loop rather
 	// than a single fleet-wide call): lets a Server Manager reach the
@@ -90,12 +101,13 @@ func (app *App) handleWorkshopPage(w http.ResponseWriter, r *http.Request) {
 	}
 
 	pageData := pages.WorkshopPageData{
-		Layout:          layoutData,
-		Games:           games,
-		Libraries:       libraries,
-		Addons:          addons,
-		LibraryPanels:   panels,
-		RecentBatchJobs: recentBatchJobs,
+		Layout:                  layoutData,
+		Games:                   games,
+		Libraries:               libraries,
+		Addons:                  addons,
+		LibraryPanels:           panels,
+		RecentBatchJobs:         recentBatchJobs,
+		UnresolvedConflictCount: len(conflicts),
 	}
 
 	if err := RenderTempl(w, r, "Workshop", pages.WorkshopPage(pageData)); err != nil {
