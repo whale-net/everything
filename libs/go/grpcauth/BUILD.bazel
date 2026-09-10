@@ -8,6 +8,7 @@ go_library(
         "delegatedgrant.go",
         "delegatedgrant_authcode.go",
         "delegatedgrant_token.go",
+        "delegatedgrant_revoke.go",
         "fakestore.go",
         "grant.go",
         "grantcrypto.go",
@@ -36,6 +37,7 @@ go_test(
     srcs = [
         "auth_test.go",
         "delegatedgrant_authcode_test.go",
+        "delegatedgrant_revoke_test.go",
         "delegatedgrant_test.go",
         "delegatedgrant_token_test.go",
         "fakestore_test.go",
@@ -51,4 +53,3 @@ go_test(
         "@org_golang_google_grpc//status",
     ],
 )
-

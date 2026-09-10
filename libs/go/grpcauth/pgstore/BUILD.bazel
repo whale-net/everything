@@ -2,7 +2,10 @@ load("@rules_go//go:def.bzl", "go_library", "go_test")
 
 go_library(
     name = "pgstore",
-    srcs = ["pgstore.go"],
+    srcs = [
+        "pgstore.go",
+        "revoke.go",
+    ],
     importpath = "github.com/whale-net/everything/libs/go/grpcauth/pgstore",
     visibility = ["//visibility:public"],
     deps = [
@@ -51,5 +54,6 @@ go_test(
     ],
     deps = [
         "//libs/go/dbtest",
+        "//libs/go/grpcauth/internal/keycloakfake",
     ],
 )

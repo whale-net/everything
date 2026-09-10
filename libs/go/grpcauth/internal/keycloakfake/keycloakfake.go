@@ -106,7 +106,36 @@ type Server struct {
 	// vs. another's -- FR13/NFR3).
 	lastRefreshToken string
 
+	// lastRevokeRequest records the most recent /revoke call's form values
+	// and client authentication, so a test can assert what
+	// RevokeRefreshToken actually sent (RFC 7009's token/token_type_hint
+	// plus client credentials) without the fake having to enforce any of
+	// it itself.
+	lastRevokeRequest RevokeRequest
+
 	signingKey *ecdsa.PrivateKey
+}
+
+// RevokeRequest is a snapshot of the most recent /revoke call this fake
+// received, for test assertions (see Server.LastRevokeRequest).
+type RevokeRequest struct {
+	// Called is false until /revoke has been hit at least once; all other
+	// fields are zero-valued until then.
+	Called bool
+
+	// Token is the RFC 7009 "token" form parameter.
+	Token string
+
+	// TokenTypeHint is the RFC 7009 "token_type_hint" form parameter.
+	TokenTypeHint string
+
+	// ClientID and ClientSecret are the HTTP Basic auth credentials sent
+	// with the request, if any. BasicAuthPresent is false if the request
+	// carried no Basic auth header at all (distinguishing "no client
+	// credentials sent" from "sent empty credentials").
+	ClientID         string
+	ClientSecret     string
+	BasicAuthPresent bool
 }
 
 // New starts a fake Keycloak realm. Defaults: ModeSuccess for both token and
@@ -243,6 +272,15 @@ func (s *Server) LastRefreshToken() string {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return s.lastRefreshToken
+}
+
+// LastRevokeRequest returns a snapshot of the most recent /revoke call this
+// fake received (zero value, Called == false, if /revoke has never been
+// hit).
+func (s *Server) LastRevokeRequest() RevokeRequest {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.lastRevokeRequest
 }
 
 // --- token minting -------------------------------------------------------
@@ -396,9 +434,20 @@ func (s *Server) handleToken(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleRevoke(w http.ResponseWriter, r *http.Request) {
+	_ = r.ParseForm()
+	clientID, clientSecret, basicAuthOK := r.BasicAuth()
+
 	s.mu.Lock()
 	s.revokeCalls++
 	mode := s.revokeMode
+	s.lastRevokeRequest = RevokeRequest{
+		Called:           true,
+		Token:            r.PostFormValue("token"),
+		TokenTypeHint:    r.PostFormValue("token_type_hint"),
+		ClientID:         clientID,
+		ClientSecret:     clientSecret,
+		BasicAuthPresent: basicAuthOK,
+	}
 	s.mu.Unlock()
 
 	if !writeModeResponse(w, mode) {
