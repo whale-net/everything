@@ -16,6 +16,7 @@ type VolumeMountMessage struct {
 	HostSubpath   string            `json:"host_subpath,omitempty"`
 	VolumeType    string            `json:"volume_type,omitempty"`
 	Options       map[string]string `json:"options,omitempty"`
+	IsEnabled     bool              `json:"is_enabled"`
 }
 
 // GameConfigMessage represents game configuration details
