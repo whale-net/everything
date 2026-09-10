@@ -267,6 +267,71 @@ func TestSGCNonPageRoutes_NotSwallowedByRedirect(t *testing.T) {
 	}
 }
 
+// fakeAddLibraryWorkshopClient is a minimal WorkshopServiceClient fake for
+// TestAddLibraryForm_StillPostsSuccessfully below: it overrides only
+// AddLibraryToSGC, the one RPC handleAddLibraryToSGC (handlers_sgc.go,
+// untouched by this task per amendment A2) reaches, and records the request
+// it received so the test can assert the form's fields were parsed and
+// forwarded correctly, not just that some 2xx/3xx came back.
+type fakeAddLibraryWorkshopClient struct {
+	manmanpb.WorkshopServiceClient
+	gotReq *manmanpb.AddLibraryToSGCRequest
+}
+
+func (f *fakeAddLibraryWorkshopClient) AddLibraryToSGC(ctx context.Context, in *manmanpb.AddLibraryToSGCRequest, opts ...grpc.CallOption) (*manmanpb.AddLibraryToSGCResponse, error) {
+	f.gotReq = in
+	return &manmanpb.AddLibraryToSGCResponse{}, nil
+}
+
+// TestAddLibraryForm_StillPostsSuccessfully is the Testing-phase checklist
+// item that guards the A2 hazard directly (see this task's issue body):
+// components/workshop_partials.templ's "Add" button posts a plain (non-
+// htmx) form to "/sgc/add-library" -- exactly the fields that template
+// emits (sgc_id, library_id, preset_id; volume_id and
+// installation_path_override are optional and omitted here, mirroring the
+// template, which never renders them). This proves the retained route
+// still dispatches to handleAddLibraryToSGC and that handler still
+// completes the RPC and redirects, rather than the route having been
+// quietly broken (wrong method dispatch, a swallowed pattern, or a
+// signature mismatch against the now-thinner handlers_sgc.go) by this
+// task's heavy edits to that file.
+func TestAddLibraryForm_StillPostsSuccessfully(t *testing.T) {
+	workshop := &fakeAddLibraryWorkshopClient{}
+	auth, err := htmxauth.NewAuthenticator(context.Background(), htmxauth.Config{
+		Mode:          htmxauth.AuthModeNone,
+		SessionSecret: "redirect-test-secret-at-least-32-bytes-long",
+		SessionName:   "manmanv2_ui_redirect_test_session",
+	})
+	if err != nil {
+		t.Fatalf("NewAuthenticator: %v", err)
+	}
+	app := &App{
+		auth: auth,
+		grpc: &ControlClient{api: &fakeRedirectAPIClient{}, workshop: workshop},
+	}
+	mux := http.NewServeMux()
+	app.setupRoutes(mux)
+
+	form := "sgc_id=42&library_id=7&preset_id=3"
+	req := httptest.NewRequest(http.MethodPost, "/sgc/add-library", strings.NewReader(form))
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	w := httptest.NewRecorder()
+	mux.ServeHTTP(w, req)
+
+	if w.Code != http.StatusSeeOther {
+		t.Fatalf("status = %d, want %d (form POST succeeds and redirects back to the deployment)", w.Code, http.StatusSeeOther)
+	}
+	if loc := w.Header().Get("Location"); loc != "/sgc/42" {
+		t.Errorf("Location = %q, want /sgc/42 -- handleAddLibraryToSGC's own redirect target is untouched by this task (A2)", loc)
+	}
+	if workshop.gotReq == nil {
+		t.Fatalf("AddLibraryToSGC was never called")
+	}
+	if workshop.gotReq.GetSgcId() != 42 || workshop.gotReq.GetLibraryId() != 7 || workshop.gotReq.GetPresetId() != 3 {
+		t.Errorf("AddLibraryToSGCRequest = %+v, want sgc_id=42 library_id=7 preset_id=3", workshop.gotReq)
+	}
+}
+
 // setupRoutesRegisteredPatterns parses manmanv2/ui/main.go's AST (via the
 // Bazel runfiles manifest, same technique as
 // nfr5_bulk_env_write_guard_test.go and
