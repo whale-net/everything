@@ -9,6 +9,7 @@ go_library(
         "handlers_activity.go",
         "handlers_activity_live.go",
         "handlers_backup.go",
+        "handlers_config_editor.go",
         "handlers_deployment_actions.go",
         "handlers_deployment_settings.go",
         "handlers_games.go",
