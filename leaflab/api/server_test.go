@@ -208,6 +208,26 @@ type fakeRepository struct {
 	// sensor's UNIQUE(board_id, name) constraint (see repository.go's
 	// ErrSensorNameConflict doc comment) without a real database.
 	renameConflictSensors map[int64]bool
+
+	// -- #2315: SetBoardRegion (FR10 board recorded region) fixtures --
+
+	// existingRegions is the set of region_ids RegionExists recognizes -- a
+	// region_id absent here is unknown, standing in for a real region row
+	// (the unknown-region check maps to codes.NotFound in server.go).
+	existingRegions map[int64]bool
+	// boardRegions maps a board_id to its currently recorded region_id
+	// (the mirror board.region_id); a board_id absent here is unrecorded.
+	boardRegions map[int64]int64
+	// boardRegionNames maps a region_id to its display name, backing
+	// GetCurrentBoardRegion's regionName return.
+	boardRegionNames map[int64]string
+	// sensorRegions backs ListSensorRegionsForBoard's fixture (the FR11
+	// nudge snapshot), keyed by board_id.
+	sensorRegions map[int64][]SensorRegionRow
+	// setBoardRegionCalls records every successful SetBoardRegion call, in
+	// order -- tests assert on this to prove a refused attempt (denied,
+	// unknown region, or no-op) issues no write at all.
+	setBoardRegionCalls []setBoardRegionCall
 }
 
 // reassignedOwner is one recorded fakeRepository.ReassignBoardOwner call.
@@ -246,6 +266,10 @@ func newFakeRepository() *fakeRepository {
 		existingUsers:         map[int64]bool{},
 		sensorBoards:          map[int64]int64{},
 		renameConflictSensors: map[int64]bool{},
+		existingRegions:       map[int64]bool{},
+		boardRegions:          map[int64]int64{},
+		boardRegionNames:      map[int64]string{},
+		sensorRegions:         map[int64][]SensorRegionRow{},
 	}
 }
 
@@ -400,6 +424,47 @@ func (f *fakeRepository) RenameSensor(_ context.Context, sensorID int64, name st
 	}
 	f.renamedSensors = append(f.renamedSensors, renamedSensor{sensorID: sensorID, name: name})
 	return nil
+}
+
+// -- #2315: SetBoardRegion (FR10 board recorded region) stubs ----------------
+
+// boardRegions maps a board_id to its recorded region (the mirror-column
+// stand-in). A board_id absent here has no recorded region -- the absence of
+// an open board_region_history row.
+func (f *fakeRepository) RegionExists(_ context.Context, regionID int64) (bool, error) {
+	return f.existingRegions[regionID], nil
+}
+
+func (f *fakeRepository) GetCurrentBoardRegion(_ context.Context, boardID int64) (*int64, string, error) {
+	id, ok := f.boardRegions[boardID]
+	if !ok {
+		return nil, "", nil
+	}
+	return &id, f.boardRegionNames[id], nil
+}
+
+// setBoardRegionCall is one recorded fakeRepository.SetBoardRegion call
+// that actually wrote -- a refused attempt (unauthorized, unknown region,
+// or a no-op refusal) is never appended here, so tests can prove FR10's
+// "no sensor placement writes" at the repository boundary.
+type setBoardRegionCall struct {
+	boardID  int64
+	regionID *int64
+}
+
+func (f *fakeRepository) SetBoardRegion(_ context.Context, boardID int64, regionID *int64) error {
+	if regionID != nil {
+		id := *regionID
+		f.boardRegions[boardID] = id
+	} else {
+		delete(f.boardRegions, boardID)
+	}
+	f.setBoardRegionCalls = append(f.setBoardRegionCalls, setBoardRegionCall{boardID: boardID, regionID: regionID})
+	return nil
+}
+
+func (f *fakeRepository) ListSensorRegionsForBoard(_ context.Context, boardID int64) ([]SensorRegionRow, error) {
+	return f.sensorRegions[boardID], nil
 }
 
 // fakePublisher is an in-memory configPublisher double: Publish always

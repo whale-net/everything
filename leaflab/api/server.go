@@ -93,6 +93,15 @@ type repositoryStore interface {
 	// close-and-open plus the NFR4 counter reset, one transaction; see
 	// repository.go's doc comment.
 	RenameSensor(ctx context.Context, sensorID int64, name string) error
+	// The following four methods back SetBoardRegion (#2315: FR10 board
+	// recorded region, bookkeeping only). RegionExists and
+	// GetCurrentBoardRegion are the unknown-region and no-op checks;
+	// SetBoardRegion is the write path; ListSensorRegionsForBoard is the
+	// read-only FR11 nudge snapshot in the response.
+	RegionExists(ctx context.Context, regionID int64) (bool, error)
+	GetCurrentBoardRegion(ctx context.Context, boardID int64) (*int64, string, error)
+	SetBoardRegion(ctx context.Context, boardID int64, regionID *int64) error
+	ListSensorRegionsForBoard(ctx context.Context, boardID int64) ([]SensorRegionRow, error)
 }
 
 // configPublisher is the one *rmq.Publisher method PushDeviceConfig calls,
@@ -243,6 +252,43 @@ func (s *LeafLabAPIServer) requireAdmin(ctx context.Context) (callerUserID int64
 		return 0, status.Error(codes.PermissionDenied, "caller does not hold the admin role")
 	}
 	return callerUserID, nil
+}
+
+// authorizeBoardWriteWithAdminBypass returns nil iff the caller is boardID's
+// current owner OR holds an open 'admin' grant (NFR2: "a user edits regions,
+// sensors, and boards they own; an admin can act on any owner's behalf
+// out-of-band"). This is the M3 variant of authorizeBoardWrite: the
+// product brief's admin-bypass pattern applies to region and placement
+// writes, which M2's board-write helper deliberately did not model.
+//
+// An unowned board is codes.PermissionDenied even for an admin -- there is
+// no owner to act on behalf of, matching authorizeBoardWrite's unowned-board
+// handling; the admin bypass only widens who may write to an *owned* board.
+func (s *LeafLabAPIServer) authorizeBoardWriteWithAdminBypass(ctx context.Context, boardID int64) (callerUserID int64, err error) {
+	callerUserID, err = s.callerUserID(ctx)
+	if err != nil {
+		return 0, err
+	}
+
+	ownerID, owned, err := s.repo.GetCurrentBoardOwner(ctx, boardID)
+	if err != nil {
+		return 0, status.Errorf(codes.Internal, "get board owner: %v", err)
+	}
+	if !owned {
+		return 0, status.Errorf(codes.PermissionDenied, "board %d is unowned -- claim it before writing to it", boardID)
+	}
+	if ownerID == callerUserID {
+		return callerUserID, nil
+	}
+
+	isAdmin, err := s.repo.HasRole(ctx, callerUserID, adminRole)
+	if err != nil {
+		return 0, status.Errorf(codes.Internal, "check admin role: %v", err)
+	}
+	if isAdmin {
+		return callerUserID, nil
+	}
+	return 0, status.Error(codes.PermissionDenied, "caller does not own this board")
 }
 
 func (s *LeafLabAPIServer) PushDeviceConfig(ctx context.Context, req *pb.PushDeviceConfigRequest) (*pb.PushDeviceConfigResponse, error) {
@@ -820,4 +866,119 @@ func (s *LeafLabAPIServer) ListUsers(ctx context.Context, _ *pb.ListUsersRequest
 
 	s.logger.Info("users listed", "count", len(users))
 	return &pb.ListUsersResponse{Users: users}, nil
+}
+
+// SetBoardRegion records, changes, or clears the region a board is
+// physically located in (FR10). Bookkeeping only: the write touches only
+// board.region_id (mirror) and board_region_history (SCD2 close-and-open,
+// one transaction -- repository.SetBoardRegion) and never touches sensor
+// placement (sensor.region_id / sensor_region_history) or reading
+// attribution (FR10; readings snapshot sensor.region_id, never the board's).
+//
+// Authz is NFR2's per-owner write enforcement with the admin-bypass
+// pattern: the board's current owner, or an admin acting on the owner's
+// behalf out-of-band. authorizeBoardWriteWithAdminBypass, not
+// authorizeBoardWrite -- M3's region/placement writes carry the admin
+// bypass that M2's board-write helper deliberately did not model. An
+// unowned board is PermissionDenied even for an admin (no owner to act on
+// behalf of).
+//
+// Existence is checked first (GetBoardIdentity, NotFound on pgx.ErrNoRows),
+// same precedence as RenameBoard: authorizeBoardWriteWithAdminBypass's
+// unowned case cannot distinguish "unowned" from "unknown board", so the
+// existence check must precede it.
+//
+// The region-existence check (RegionExists, NotFound) runs only when
+// recording a region -- a clear has no region_id to check. Postgres' FK on
+// board_region_history.region_id (migration 017, ON DELETE RESTRICT) is the
+// backstop if a region is deleted between this check and the write; that
+// surfaces as codes.Internal, the ordinary wrapped-error path.
+//
+// No-op writes are refused rather than churned (FailedPrecondition):
+// recording the region the board is already recorded in, or clearing when
+// no region is recorded, would otherwise add a zero-length interval to
+// board_region_history. Same no-op-refusal precedent as
+// ReassignBoardOwner/ClearBoardOwner; SetBoardRegionResponse carries the
+// post-write state either way, so the UI's FR11 nudge fires only when the
+// recorded region actually changed.
+//
+// The response carries the board's sensors with their current placements,
+// read after the write (ListSensorRegionsForBoard) -- read-only input for
+// FR11's non-blocking nudge, which lives in the UI (#2318): the system
+// never moves a sensor automatically (FR10).
+func (s *LeafLabAPIServer) SetBoardRegion(ctx context.Context, req *pb.SetBoardRegionRequest) (*pb.SetBoardRegionResponse, error) {
+	if _, err := s.repo.GetBoardIdentity(ctx, req.BoardId); err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return nil, status.Errorf(codes.NotFound, "board %d not found", req.BoardId)
+		}
+		return nil, status.Errorf(codes.Internal, "get board identity: %v", err)
+	}
+
+	if _, err := s.authorizeBoardWriteWithAdminBypass(ctx, req.BoardId); err != nil {
+		return nil, err
+	}
+
+	if req.RegionId != nil {
+		exists, err := s.repo.RegionExists(ctx, *req.RegionId)
+		if err != nil {
+			return nil, status.Errorf(codes.Internal, "check region: %v", err)
+		}
+		if !exists {
+			return nil, status.Errorf(codes.NotFound, "region %d not found", *req.RegionId)
+		}
+	}
+
+	currentRegionID, _, err := s.repo.GetCurrentBoardRegion(ctx, req.BoardId)
+	if err != nil {
+		return nil, status.Errorf(codes.Internal, "get current recorded region: %v", err)
+	}
+	if req.RegionId == nil && currentRegionID == nil {
+		return nil, status.Errorf(codes.FailedPrecondition, "board %d has no recorded region", req.BoardId)
+	}
+	if req.RegionId != nil && currentRegionID != nil && *req.RegionId == *currentRegionID {
+		return nil, status.Errorf(codes.FailedPrecondition,
+			"board %d is already recorded in region %d", req.BoardId, *req.RegionId)
+	}
+
+	if err := s.repo.SetBoardRegion(ctx, req.BoardId, req.RegionId); err != nil {
+		return nil, status.Errorf(codes.Internal, "set board region: %v", err)
+	}
+
+	// Post-write state for the response. GetCurrentBoardRegion cannot miss
+	// here for a set (the row was just committed); a clear on a board that
+	// genuinely had no region is refused above, so a nil result after a
+	// successful call is exactly the cleared state.
+	regionID, regionName, err := s.repo.GetCurrentBoardRegion(ctx, req.BoardId)
+	if err != nil {
+		return nil, status.Errorf(codes.Internal, "read recorded region back: %v", err)
+	}
+	sensorRows, err := s.repo.ListSensorRegionsForBoard(ctx, req.BoardId)
+	if err != nil {
+		return nil, status.Errorf(codes.Internal, "list sensor regions: %v", err)
+	}
+
+	sensors := make([]*pb.BoardSensorRegion, 0, len(sensorRows))
+	for _, r := range sensorRows {
+		sensors = append(sensors, &pb.BoardSensorRegion{
+			SensorId:   r.SensorID,
+			SensorName: r.SensorName,
+			RegionId:   r.RegionID,
+			RegionName: r.RegionName,
+		})
+	}
+
+	resp := &pb.SetBoardRegionResponse{
+		BoardId:    req.BoardId,
+		RegionId:   regionID,
+		RegionName: regionName,
+		Sensors:    sensors,
+	}
+	if req.RegionId != nil {
+		s.logger.Info("board recorded region set",
+			"board_id", req.BoardId, "region_id", *req.RegionId, "sensors", len(sensors))
+	} else {
+		s.logger.Info("board recorded region cleared",
+			"board_id", req.BoardId, "previous_region_id", currentRegionID, "sensors", len(sensors))
+	}
+	return resp, nil
 }

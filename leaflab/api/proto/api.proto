@@ -58,6 +58,13 @@ service LeafLabAPI {
 
   // Admin: the user list the reassign picker selects from (FR11, FR12).
   rpc ListUsers(ListUsersRequest) returns (ListUsersResponse);
+
+  // Record, change, or clear the region a board is physically located in
+  // (FR10). Bookkeeping only: this never touches sensor placement or
+  // reading attribution -- a board's recorded region and its sensors'
+  // placements are deliberately independent (see SetBoardRegionResponse
+  // for what the caller gets back to drive FR11's nudge).
+  rpc SetBoardRegion(SetBoardRegionRequest) returns (SetBoardRegionResponse);
 }
 
 // ReportingState classifies a board or sensor by recency of its most recent
@@ -311,4 +318,45 @@ message ListUsersRequest {}
 
 message ListUsersResponse {
   repeated LeafLabUser users = 1;
+}
+
+// -- M3: board recorded region (FR10) -----------------------------------------
+
+message SetBoardRegionRequest {
+  int64 board_id = 1;
+  // The region to record the board as physically located in. Leave unset to
+  // clear the recorded region: a board's un-recorded state is the absence of
+  // an open board_region_history row, with the mirror column board.region_id
+  // NULL to match (migration 017) -- there is no "region_id = 0" sentinel.
+  // Recording the region the board is already recorded in, or clearing one
+  // that is not recorded, is codes.FailedPrecondition rather than a silent
+  // no-op -- same no-op-refusal precedent as ReassignBoardOwner/
+  // ClearBoardOwner, so the history never gains a zero-length interval.
+  optional int64 region_id = 2;
+}
+
+message SetBoardRegionResponse {
+  int64 board_id = 1;
+  // The board's recorded region as of after this write; unset when the
+  // board has no recorded region (i.e. the request cleared it).
+  optional int64 region_id = 2;
+  // Display name of the recorded region. Empty when region_id is unset.
+  string region_name = 3;
+  // The board's sensors with their current placements, read after the
+  // write. Read-only snapshot for FR11's nudge: the UI compares these
+  // against the newly-recorded region and suggests which placements might
+  // need moving -- the system never moves any sensor automatically (FR10:
+  // changing a board's recorded region never changes sensor placement or
+  // reading attribution).
+  repeated BoardSensorRegion sensors = 4;
+}
+
+// BoardSensorRegion is one of a board's sensors plus the region that sensor
+// is currently placed in (FR11 nudge input). region_id is unset when the
+// sensor is unplaced; region_name is empty in that case.
+message BoardSensorRegion {
+  int64 sensor_id = 1;
+  string sensor_name = 2;
+  optional int64 region_id = 3;
+  string region_name = 4;
 }
