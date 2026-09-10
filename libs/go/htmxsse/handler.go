@@ -4,11 +4,13 @@ import (
 	"bytes"
 	"crypto/sha256"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"log"
 	"net/http"
 	"sort"
 	"strings"
+	"time"
 )
 
 // Fragment is a function that produces a fragment for a connection and topic.
@@ -37,6 +39,28 @@ func Handler(hub *Hub, topics []string, fragment Fragment) http.HandlerFunc {
 	sort.Strings(sortedTopics)
 
 	return func(w http.ResponseWriter, r *http.Request) {
+		// This stream can legitimately stay open far longer than any
+		// server-wide http.Server.WriteTimeout a consumer sets for its
+		// ordinary (non-streaming) routes -- net/http applies that
+		// timeout as a hard deadline on the underlying connection, which
+		// silently kills this handler's later writes (heartbeat, live
+		// event) even though every individual Write below is small and
+		// fast (#2337/#2340: whagent_net/ui's 15s WriteTimeout killed the
+		// stream before any live event could be delivered). Disabling the
+		// write deadline here, once, is the single reusable fix point for
+		// every htmxsse.Handler consumer (whagent_net/ui,
+		// tools/app_registry/ui, manmanv2/ui all set a server-wide
+		// WriteTimeout the same way) rather than requiring each consumer
+		// to duplicate this before calling Handler.
+		//
+		// http.ErrNotSupported is expected and ignored: it's what
+		// httptest.NewRecorder() (used throughout handler_test.go) returns
+		// for a ResponseWriter that doesn't sit on a real net.Conn, not a
+		// real failure.
+		if err := http.NewResponseController(w).SetWriteDeadline(time.Time{}); err != nil && !errors.Is(err, http.ErrNotSupported) {
+			log.Printf("htmxsse: failed to disable write deadline: %v", err)
+		}
+
 		// Set SSE response headers
 		w.Header().Set("Content-Type", "text/event-stream")
 		w.Header().Set("Cache-Control", "no-cache")
