@@ -45,25 +45,24 @@ type GameConfigRepository interface {
 	Delete(ctx context.Context, configID int64) error
 }
 
-// ServerGameConfigRepository defines operations for ServerGameConfig entities
+// ServerGameConfigRepository defines operations for ServerGameConfig entities.
+// SGC-scoped library attachment (AddLibrary/RemoveLibrary/ListLibraries/
+// GetSGCLibraryAttachments) retired with sgc_workshop_libraries (M6 #2370,
+// plan #2359, NFR1) -- see GameConfigWorkshopLibraryRepository below for the
+// GC-scoped replacement.
 type ServerGameConfigRepository interface {
 	Create(ctx context.Context, sgc *manman.ServerGameConfig) (*manman.ServerGameConfig, error)
 	Get(ctx context.Context, sgcID int64) (*manman.ServerGameConfig, error)
 	List(ctx context.Context, serverID *int64, limit, offset int) ([]*manman.ServerGameConfig, error)
 	Update(ctx context.Context, sgc *manman.ServerGameConfig) error
 	Delete(ctx context.Context, sgcID int64) error
-
-	AddLibrary(ctx context.Context, sgcID, libraryID int64, presetID, volumeID *int64, installationPathOverride *string) error
-	RemoveLibrary(ctx context.Context, sgcID, libraryID int64) error
-	ListLibraries(ctx context.Context, sgcID int64) ([]*manman.WorkshopLibrary, error)
-	GetSGCLibraryAttachments(ctx context.Context, sgcID int64) ([]*manman.SGCWorkshopLibrary, error)
 }
 
 // GameConfigWorkshopLibraryRepository defines operations for the GC-level
 // Workshop library attachment table (M6 #2361, plan #2359) and the FR12
-// conflicts the SGC->GC backfill surfaces. sgc_workshop_libraries remains
-// authoritative for deploy-time resolution until the dependent retirement
-// task cuts over (NFR1) -- this repository is purely additive.
+// conflicts the SGC->GC backfill surfaces. This is the sole resolution path
+// for deploy-time library resolution since sgc_workshop_libraries was
+// retired (M6 #2370, NFR1).
 type GameConfigWorkshopLibraryRepository interface {
 	ListLibraries(ctx context.Context, configID int64) ([]*manman.WorkshopLibrary, error)
 	ListAttachments(ctx context.Context, configID int64) ([]*manman.GameConfigWorkshopLibrary, error)

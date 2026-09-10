@@ -397,10 +397,14 @@ func (app *App) handleSessionDetail(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 
-		// Fetch workshop libraries and installations
-		libraries, err = app.grpc.ListSGCLibraries(ctx, sessionResp.Session.ServerGameConfigId)
-		if err != nil {
-			log.Printf("Warning: failed to list SGC libraries for session detail: %v", err)
+		// Fetch workshop libraries (GC-scoped, M6 #2370, NFR1) and installations
+		if sgc != nil && sgc.GameConfigId != 0 {
+			libraries, err = app.grpc.ListGameConfigLibraries(ctx, sgc.GameConfigId)
+			if err != nil {
+				log.Printf("Warning: failed to list GameConfig libraries for session detail: %v", err)
+				libraries = []*manmanpb.WorkshopLibrary{}
+			}
+		} else {
 			libraries = []*manmanpb.WorkshopLibrary{}
 		}
 		installations, err = app.grpc.ListWorkshopInstallations(ctx, sessionResp.Session.ServerGameConfigId)

@@ -67,22 +67,11 @@ type WorkshopLibrary struct {
 	UpdatedAt   time.Time `db:"updated_at"`
 }
 
-// SGCWorkshopLibrary represents a library attached to an SGC with optional overrides
-type SGCWorkshopLibrary struct {
-	SGCID                    int64     `db:"sgc_id"`
-	LibraryID                int64     `db:"library_id"`
-	PresetID                 *int64    `db:"preset_id"`
-	VolumeID                 *int64    `db:"volume_id"`
-	InstallationPathOverride *string   `db:"installation_path_override"`
-	CreatedAt                time.Time `db:"created_at"`
-}
-
 // GameConfigWorkshopLibrary represents a library attached to a GameConfig
-// (GC-scoped attachment, M6 #2361, plan #2359) with the same optional
-// overrides SGCWorkshopLibrary carries. This is the target shape SGC-scoped
-// attachment is being retired in favor of (NFR1) -- sgc_workshop_libraries
-// remains authoritative for deploy-time resolution until the dependent
-// retirement task cuts over.
+// (GC-scoped attachment, M6 #2361, plan #2359). This is the sole
+// library-attachment shape since the SGC-scoped equivalent
+// (SGCWorkshopLibrary, backed by sgc_workshop_libraries) retired (M6 #2370,
+// NFR1).
 type GameConfigWorkshopLibrary struct {
 	ConfigID                 int64     `db:"config_id"`
 	LibraryID                int64     `db:"library_id"`

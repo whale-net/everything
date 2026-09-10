@@ -162,22 +162,6 @@ func (m *mockSGCRepo) Delete(ctx context.Context, sgcID int64) error {
 	return fmt.Errorf("not implemented")
 }
 
-func (m *mockSGCRepo) AddLibrary(ctx context.Context, sgcID, libraryID int64, presetID, volumeID *int64, installationPathOverride *string) error {
-	return fmt.Errorf("not implemented")
-}
-
-func (m *mockSGCRepo) RemoveLibrary(ctx context.Context, sgcID, libraryID int64) error {
-	return fmt.Errorf("not implemented")
-}
-
-func (m *mockSGCRepo) GetSGCLibraryAttachments(ctx context.Context, sgcID int64) ([]*manman.SGCWorkshopLibrary, error) {
-	return nil, nil
-}
-
-func (m *mockSGCRepo) ListLibraries(ctx context.Context, sgcID int64) ([]*manman.WorkshopLibrary, error) {
-	return nil, nil
-}
-
 type mockGameConfigRepo struct {
 	gameConfigs map[int64]*manman.GameConfig
 }

@@ -88,12 +88,8 @@ func (f *fakeWorkshopServiceClient) ListInstallations(ctx context.Context, in *m
 	return &manmanpb.ListInstallationsResponse{}, nil
 }
 
-func (f *fakeWorkshopServiceClient) ListSGCLibraries(ctx context.Context, in *manmanpb.ListSGCLibrariesRequest, opts ...grpc.CallOption) (*manmanpb.ListSGCLibrariesResponse, error) {
-	return &manmanpb.ListSGCLibrariesResponse{}, nil
-}
-
-func (f *fakeWorkshopServiceClient) GetSGCLibraryAttachments(ctx context.Context, in *manmanpb.GetSGCLibraryAttachmentsRequest, opts ...grpc.CallOption) (*manmanpb.GetSGCLibraryAttachmentsResponse, error) {
-	return &manmanpb.GetSGCLibraryAttachmentsResponse{}, nil
+func (f *fakeWorkshopServiceClient) ListGameConfigLibraries(ctx context.Context, in *manmanpb.ListGameConfigLibrariesRequest, opts ...grpc.CallOption) (*manmanpb.ListGameConfigLibrariesResponse, error) {
+	return &manmanpb.ListGameConfigLibrariesResponse{}, nil
 }
 
 // newTestApp builds an App wired to fake gRPC clients. Since this test

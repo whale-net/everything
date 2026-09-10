@@ -61,11 +61,9 @@ type WorkshopManager struct {
 	sgcRepo          repository.ServerGameConfigRepository
 	gameRepo         repository.GameRepository
 	gameConfigRepo   repository.GameConfigRepository
-	// gcLibraryRepo backs ResolveGameConfigLibraryAddons below (M6 #2365,
-	// plan #2359) -- the GC-scoped resolution primitive. sgcRepo.ListLibraries
-	// (via EnsureLibraryAddonsInstalled) remains the authoritative,
-	// actually-wired resolution path until the dependent orchestrator-cutover
-	// task retires it (NFR1).
+	// gcLibraryRepo backs ResolveGameConfigLibraryAddons below (M6 #2365/#2370,
+	// plan #2359) -- the GC-scoped resolution primitive, and sole resolution
+	// path driving installs since sgc_workshop_libraries was retired (NFR1).
 	gcLibraryRepo repository.GameConfigWorkshopLibraryRepository
 	volumeRepo    repository.GameConfigVolumeRepository
 	presetRepo    repository.AddonPathPresetRepository
@@ -332,22 +330,19 @@ func (wm *WorkshopManager) FetchMetadata(ctx context.Context, gameID int64, work
 	return addon, nil
 }
 
-// EnsureLibraryAddonsInstalled pre-installs all addons from libraries attached to an SGC.
+// EnsureLibraryAddonsInstalled pre-installs all addons inherited from the deployment's
+// GameConfig-level library attachments (M6 #2370, plan #2359). Resolution is GC-scoped:
+// sgc_workshop_libraries is retired (NFR1), so every deployment of a GameConfig resolves
+// through that GameConfig's attachments via ResolveGameConfigLibraryAddons, not its own.
 // It collects all unique addon IDs (recursively via library references), triggers installs
 // for any not yet installed, and polls until they complete or timeout.
 // Returns nil even if some installs fail — failures are visible in the UI.
 func (wm *WorkshopManager) EnsureLibraryAddonsInstalled(ctx context.Context, sgcID int64) error {
-	// 1. List libraries attached to this SGC
-	libraries, err := wm.sgcRepo.ListLibraries(ctx, sgcID)
+	// 1. Resolve the addon set inherited from the deployment's GameConfig-level libraries
+	addonIDs, err := wm.ResolveGameConfigLibraryAddons(ctx, sgcID)
 	if err != nil {
-		return fmt.Errorf("failed to list SGC libraries: %w", err)
+		return fmt.Errorf("failed to resolve game config library addons: %w", err)
 	}
-	if len(libraries) == 0 {
-		return nil
-	}
-
-	// 2. BFS collect all unique addon IDs from all libraries (including nested references)
-	addonIDs := wm.resolveAddonIDsFromLibraries(ctx, libraries)
 
 	if len(addonIDs) == 0 {
 		return nil
@@ -450,18 +445,13 @@ func (wm *WorkshopManager) resolveAddonIDsFromLibraries(ctx context.Context, lib
 
 // ResolveGameConfigLibraryAddons resolves the addon set a deployment (SGC)
 // inherits from its GameConfig's GC-level Workshop library attachments (M6
-// #2365, FR8/FR9) -- the GC-scoped counterpart to
-// EnsureLibraryAddonsInstalled's SGC-scoped resolution above, sharing the
-// same BFS-over-references logic via resolveAddonIDsFromLibraries. Because
-// every deployment of a GameConfig resolves through this helper, a single
-// GC-level detach (RemoveLibraryFromGameConfig) changes what every one of
-// them returns with no per-deployment write (FR9).
-//
-// Ship unused: wiring this into the actual install path is the dependent
-// orchestrator-cutover task. sgcRepo.ListLibraries (via
-// EnsureLibraryAddonsInstalled) remains the sole resolution path actually
-// driving installs until that cutover lands (NFR1) -- calling this today has
-// no observable effect on any deployment.
+// #2365/#2370, FR8/FR9) -- the sole resolution path driving installs since
+// sgc_workshop_libraries was retired (NFR1), shared by
+// EnsureLibraryAddonsInstalled above via the same BFS-over-references logic
+// in resolveAddonIDsFromLibraries. Because every deployment of a GameConfig
+// resolves through this helper, a single GC-level detach
+// (RemoveLibraryFromGameConfig) changes what every one of them returns with
+// no per-deployment write (FR9).
 func (wm *WorkshopManager) ResolveGameConfigLibraryAddons(ctx context.Context, sgcID int64) (map[int64]struct{}, error) {
 	sgc, err := wm.sgcRepo.Get(ctx, sgcID)
 	if err != nil {
