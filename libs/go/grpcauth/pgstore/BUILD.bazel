@@ -16,6 +16,10 @@ go_test(
     name = "pgstore_test",
     srcs = ["pgstore_test.go"],
     embed = [":pgstore"],
+    deps = [
+        "//libs/go/grpcauth",
+        "@com_github_jackc_pgx_v5//pgxpool",
+    ],
 )
 
 # Real-Postgres tests (genuine round trip, ciphertext-at-rest, and
