@@ -8,6 +8,7 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/whale-net/everything/libs/go/s3"
 	"github.com/whale-net/everything/whagent_net/events"
 	"github.com/whale-net/everything/whagent_net/llm"
 	"github.com/whale-net/everything/whagent_net/session"
@@ -79,6 +80,12 @@ type Activities struct {
 	// full contract. May be nil in a dev/test process that never
 	// exercises DispatchTool, same as Prices above.
 	Dispatcher *tools.Dispatcher
+	// S3 is the cold-tier client RunArchiveBatch (archive.go) writes
+	// through (WHAGENT_S3_BUCKET, ENV.md "S3 (cold tier)") -- may be nil
+	// when unset, in which case main.go never registers ArchiveWorkflow/
+	// the archive schedule at all (RunArchiveBatch never runs without it,
+	// so a nil check there is only a defensive second guard).
+	S3 *s3.Client
 }
 
 // ResolveAgentDefinitionResult is ResolveAgentDefinition's activity result.

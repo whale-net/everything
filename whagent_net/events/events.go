@@ -3,7 +3,7 @@
 // publisher and consumer agrees on. This is a dedicated, tiny package
 // (modelled on tools/app_registry/events) rather than living inside a
 // binary's implementation, because every process that touches the bus --
-// worker (publish), archiver, ui, and any embed host (consume) -- must
+// worker (publish), ui, and any embed host (consume) -- must
 // agree on the exact exchange name, routing-key shape, and declare
 // arguments; centralizing them here prevents 406 PRECONDITION_FAILED from
 // argument drift and keeps the routing-key format out of call sites.
@@ -43,7 +43,7 @@ func RoutingKey(sessionID uuid.UUID, eventType string) string {
 // producer/consumer of a `transcript_event` row agrees on -- centralized
 // here for the same reason ExchangeName/RoutingKey are (a free-text
 // column with no DB-level enum, so drift between the worker that writes it
-// and any later reader, e.g. archiver/ui/mcp, must be prevented by sharing
+// and any later reader, e.g. ui/mcp, must be prevented by sharing
 // one Go definition rather than by convention alone). whagent_net/worker
 // is the first writer (issue #2114): EventTypeUserMessage/
 // EventTypeAssistantMessage carry a message-shaped payload (see

@@ -1,14 +1,16 @@
 # whagent-net — Environment Variables
 
 M1 shipped (issue #2121): `migrate`, `api`, `worker`, and `mcp` all read
-the variables below. `ui` (M2, issue #2236) and `archiver` (M2, FR7/C18,
-issue #2244) now exist too — see "`ui` (standalone agent web UI, issue
-#2236)" below for `ui`'s own variables, and "S3 (cold tier)" and
-"Archiver scan/batch (issue #2244)" below for `archiver`'s.
+the variables below. `ui` (M2, issue #2236) now exists too — see "`ui`
+(standalone agent web UI, issue #2236)" below for its own variables.
+Hot-to-cold transcript archival (M2, FR7/C18, issue #2244) is not a
+separate binary — it runs as a Temporal-scheduled workflow inside
+`worker` (`worker/archive.go`) — see "S3 (cold tier)" and "Archive
+schedule (issue #2244)" below for its variables, both read by `worker`.
 
 ## Database
 
-Read via `//libs/go/db` (`api`, `worker`, `archiver`, `ui`) and
+Read via `//libs/go/db` (`api`, `worker`, `ui`) and
 `//libs/go/migrate` (`migrate`).
 
 | Variable | Component | Default | Description |
@@ -33,10 +35,10 @@ itself).
 Read via `//libs/go/rmq` (`worker` publishes; `api` (`StreamEvents`, FR5/C17,
 issue #2239), `ui`, and any `embed` host consume -- `api` via a
 raw `rmq.Consumer` (`whagent_net/api/main.go`'s `initializeEventsConsumer`),
-the others via `//libs/go/htmxsse`). `archiver` (issue #2244) is not a
-consumer here -- it selects archivable sessions by periodically polling
-`sessions`/`transcript_archive` directly (see "Archiver scan/batch"
-below), not by watching the bus.
+the others via `//libs/go/htmxsse`). `worker`'s archive schedule (issue
+#2244) is not a consumer here -- it selects archivable sessions by
+periodically polling `sessions`/`transcript_archive` directly (see
+"Archive schedule" below), not by watching the bus.
 
 | Variable | Component | Default | Description |
 |----------|-----------|---------|-------------|
@@ -47,7 +49,8 @@ below), not by watching the bus.
 
 ## S3 (cold tier)
 
-Read by `archiver` (write, FR7, issue #2244) and `api` (hydrate archived
+Read by `worker` (write, via its `ArchiveWorkflow`/`RunArchiveBatch`,
+FR7, issue #2244, `worker/archive.go`) and `api` (hydrate archived
 transcripts, FR8, issue #2240). `api` builds its `//libs/go/s3` client in
 `initializeS3Client` (`whagent_net/api/main.go`) and attaches it to the
 `session.Store` via `session.WithS3` -- construction is non-fatal, same
@@ -55,32 +58,34 @@ pattern as `RABBITMQ_URL`/`initializePublisher` above: `WHAGENT_S3_BUCKET`
 unset, or the client failing to construct, leaves transcript reads
 hot-only (`ReadTranscript` still works for every non-archived session; see
 `whagent_net/session/transcript.go`'s `TranscriptStore` doc comment).
-`archiver` has no such fallback -- it has nothing to archive to without a
-bucket, so `WHAGENT_S3_BUCKET` unset or the client failing to construct
-both fail its startup loudly (`whagent_net/archiver/main.go`), unlike
-`api`'s graceful degradation. `S3_REGION`/`S3_ENDPOINT`/`S3_ACCESS_KEY`/
-`S3_SECRET_KEY` are the same unprefixed names `manmanv2/api` and
-`tools/app_registry` use for their own `s3.Client`s (see `libs/go/s3`
-`Config`) -- only the bucket is whagent-net-specific.
+`worker` builds its own `//libs/go/s3` client the same non-fatal way
+(`initializeS3Client`, `whagent_net/worker/main.go`): `WHAGENT_S3_BUCKET`
+unset, or the client failing to construct, simply means `worker` never
+registers `ArchiveWorkflow` or its Temporal Schedule at all -- there is no
+separate archiver binary to fail startup loudly the way one used to.
+`S3_REGION`/`S3_ENDPOINT`/`S3_ACCESS_KEY`/`S3_SECRET_KEY` are the same
+unprefixed names `manmanv2/api` and `tools/app_registry` use for their own
+`s3.Client`s (see `libs/go/s3` `Config`) -- only the bucket is
+whagent-net-specific.
 
 | Variable | Component | Default | Description |
 |----------|-----------|---------|-------------|
-| `WHAGENT_S3_BUCKET` | archiver, api | — | Bucket for `sessions/{id}.jsonl.gz`. Unset disables the cold tier for `api` (reads stay hot-only); required for `archiver` (fails startup). |
-| `S3_REGION` | archiver, api | `us-east-1` | Region for the S3-compatible endpoint. |
-| `S3_ENDPOINT` | archiver, api | — | Custom S3 endpoint (e.g. MinIO, OVH); unset uses AWS's default endpoint resolution. |
-| `S3_ACCESS_KEY` | archiver, api | — | Static access key (e.g. for MinIO); unset falls back to the AWS SDK's default credential chain. |
-| `S3_SECRET_KEY` | archiver, api | — | Static secret key, paired with `S3_ACCESS_KEY`. |
-| `WHAGENT_TRANSCRIPT_TTL` | archiver | `168h` (7 days) | Hot-tier retention after a session is terminal (`sessions.updated_at`, the compare-and-swap terminal write) before it becomes eligible for archival. |
+| `WHAGENT_S3_BUCKET` | worker, api | — | Bucket for `sessions/{id}.jsonl.gz`. Unset disables the cold tier for `api` (reads stay hot-only) and disables `worker`'s archive schedule entirely (no fatal startup error either way). |
+| `S3_REGION` | worker, api | `us-east-1` | Region for the S3-compatible endpoint. |
+| `S3_ENDPOINT` | worker, api | — | Custom S3 endpoint (e.g. MinIO, OVH); unset uses AWS's default endpoint resolution. |
+| `S3_ACCESS_KEY` | worker, api | — | Static access key (e.g. for MinIO); unset falls back to the AWS SDK's default credential chain. |
+| `S3_SECRET_KEY` | worker, api | — | Static secret key, paired with `S3_ACCESS_KEY`. |
+| `WHAGENT_TRANSCRIPT_TTL` | worker | `168h` (7 days) | Hot-tier retention after a session is terminal (`sessions.updated_at`, the compare-and-swap terminal write) before it becomes eligible for archival. |
 
-## Archiver scan/batch (issue #2244)
+## Archive schedule (issue #2244)
 
-Read directly via `os.Getenv` in `whagent_net/archiver/main.go`
-(`ConfigFromEnv`, `whagent_net/archiver/archiver.go`).
+Read directly via `os.Getenv` in `whagent_net/worker/main.go`
+(`ArchiveConfigFromEnv`/`ArchiveInterval`, `whagent_net/worker/archive.go`).
 
 | Variable | Component | Default | Description |
 |----------|-----------|---------|-------------|
-| `WHAGENT_ARCHIVER_SCAN_INTERVAL` | archiver | `5m` | How often `archiver` polls for newly-eligible sessions (terminal, past `WHAGENT_TRANSCRIPT_TTL`, no `transcript_archive` row yet). |
-| `WHAGENT_ARCHIVER_BATCH_SIZE` | archiver | `50` | Maximum number of eligible sessions archived per scan, so one tick never tries an unbounded backlog in one pass. |
+| `WHAGENT_ARCHIVE_INTERVAL` | worker | `5m` | How often the Temporal Schedule (`ArchiveScheduleID`) fires `ArchiveWorkflow`, which scans for newly-eligible sessions (terminal, past `WHAGENT_TRANSCRIPT_TTL`, no `transcript_archive` row yet). |
+| `WHAGENT_ARCHIVE_BATCH_SIZE` | worker | `50` | Maximum number of eligible sessions archived per scheduled run, so one run never tries an unbounded backlog in one pass. |
 
 ## LLM provider
 
