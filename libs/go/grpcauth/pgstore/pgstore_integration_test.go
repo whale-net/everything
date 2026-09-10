@@ -12,18 +12,25 @@
 // libs/go/dbtest. Each test creates the expected
 // grpcauth_delegated_grant-shaped table itself (no shipped migration --
 // FR13; see pgstore.go's package doc for the schema contract).
+//
+// The Revoker-hook tests (issue #2388) additionally exercise a real
+// *grpcauth.DelegatedGrantSource wired to internal/keycloakfake as
+// StoreConfig.Revoker, since that is the production wiring a consuming
+// domain uses -- not a hand-rolled test double for the Revoker interface.
 package pgstore
 
 import (
 	"bytes"
 	"context"
 	"errors"
+	"log/slog"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/whale-net/everything/libs/go/dbtest"
 	"github.com/whale-net/everything/libs/go/grpcauth"
+	"github.com/whale-net/everything/libs/go/grpcauth/internal/keycloakfake"
 )
 
 // grantSchema is a self-contained copy of the schema contract documented in
@@ -441,5 +448,297 @@ func TestGrantStore_UnrecognizedStatusValue_RefusesToGuess(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "not-a-real-status") {
 		t.Fatalf("error = %q, want it to name the unrecognized status value", err.Error())
+	}
+}
+
+// --- Revoker hook (issue #2388): best-effort RFC 7009 remote revocation ---
+
+// captureLogs redirects the package-level slog default to a buffer for the
+// duration of the calling test, restoring the previous default on cleanup --
+// mirrors libs/go/grpcauth's own captureLogs (delegatedgrant_revoke_test.go)
+// and manmanv2/host/workshop/cache_client_test.go's, used here to assert the
+// WARNING line Revoke logs on a remote-revocation failure via an injected
+// handler rather than by string-scraping stdout.
+func captureLogs(t *testing.T) *bytes.Buffer {
+	t.Helper()
+	buf := &bytes.Buffer{}
+	original := slog.Default()
+	slog.SetDefault(slog.New(slog.NewTextHandler(buf, nil)))
+	t.Cleanup(func() { slog.SetDefault(original) })
+	return buf
+}
+
+// newRevoker builds a *grpcauth.DelegatedGrantSource wired to fake's
+// endpoints verbatim (NFR4: never a live Keycloak) -- the production
+// implementation of pgstore.Revoker a consuming domain wires via
+// StoreConfig.Revoker (see delegatedgrant_revoke.go).
+func newRevoker(t *testing.T, fake *keycloakfake.Server) *grpcauth.DelegatedGrantSource {
+	t.Helper()
+	src, err := grpcauth.NewDelegatedGrantSource(context.Background(), grpcauth.DelegatedGrantConfig{
+		Issuer:       fake.URL,
+		ClientID:     "test-client",
+		ClientSecret: "test-client-secret",
+		RedirectURI:  "https://example.invalid/callback",
+		Store:        grpcauth.NewFakeStore(), // unused here; DelegatedGrantConfig.Validate requires a non-nil Store
+		Endpoints: grpcauth.Endpoints{
+			Authorization: fake.URL + "/authorize",
+			Token:         fake.URL + "/token",
+			Revocation:    fake.URL + "/revoke",
+		},
+	})
+	if err != nil {
+		t.Fatalf("grpcauth.NewDelegatedGrantSource: %v", err)
+	}
+	return src
+}
+
+// TestGrantStore_Revoker_LocalWriteAndRemoteCall asserts Revoke, with a
+// Revoker configured, performs the local write (TokenMaterial afterwards
+// returns ErrGrantRevoked) AND drives exactly one remote RFC 7009 call.
+func TestGrantStore_Revoker_LocalWriteAndRemoteCall(t *testing.T) {
+	ctx := context.Background()
+	fake, err := keycloakfake.New()
+	if err != nil {
+		t.Fatalf("keycloakfake.New: %v", err)
+	}
+	t.Cleanup(fake.Close)
+
+	db := dbtest.NewPostgres(ctx, t, dbtest.Options{Schema: grantSchema})
+	store, err := NewGrantStore(ctx, StoreConfig{
+		Pool:          db.Pool,
+		EncryptionKey: testKey(),
+		Revoker:       newRevoker(t, fake),
+	})
+	if err != nil {
+		t.Fatalf("NewGrantStore: %v", err)
+	}
+
+	if err := store.Persist(ctx, "revoker-alice", "grant-1", grpcauth.TokenMaterial{RefreshToken: "rt-revoker-alice", ObtainedAt: time.Now()}); err != nil {
+		t.Fatalf("Persist: %v", err)
+	}
+
+	if err := store.Revoke(ctx, "revoker-alice", "grant-1"); err != nil {
+		t.Fatalf("Revoke: %v", err)
+	}
+
+	if got := fake.RevokeCalls(); got != 1 {
+		t.Fatalf("RevokeCalls() = %d, want 1", got)
+	}
+	if _, err := store.TokenMaterial(ctx, "revoker-alice", "grant-1"); !errors.Is(err, grpcauth.ErrGrantRevoked) {
+		t.Fatalf("TokenMaterial after Revoke: err = %v, want ErrGrantRevoked", err)
+	}
+}
+
+// TestGrantStore_Revoker_RemoteFailure_LocalWriteStillAppliesAndWarns
+// asserts that when the fake's /revoke returns 500, Revoke still returns
+// nil, the status column is still revoked, and a WARNING (never an ERROR)
+// was logged -- proving local revocation is independent of the remote
+// call's outcome.
+func TestGrantStore_Revoker_RemoteFailure_LocalWriteStillAppliesAndWarns(t *testing.T) {
+	ctx := context.Background()
+	fake, err := keycloakfake.New()
+	if err != nil {
+		t.Fatalf("keycloakfake.New: %v", err)
+	}
+	t.Cleanup(fake.Close)
+	fake.SetRevokeMode(keycloakfake.ModeServerError)
+
+	db := dbtest.NewPostgres(ctx, t, dbtest.Options{Schema: grantSchema})
+	store, err := NewGrantStore(ctx, StoreConfig{
+		Pool:          db.Pool,
+		EncryptionKey: testKey(),
+		Revoker:       newRevoker(t, fake),
+	})
+	if err != nil {
+		t.Fatalf("NewGrantStore: %v", err)
+	}
+	if err := store.Persist(ctx, "revoker-bob", "grant-1", grpcauth.TokenMaterial{RefreshToken: "rt-revoker-bob", ObtainedAt: time.Now()}); err != nil {
+		t.Fatalf("Persist: %v", err)
+	}
+
+	logs := captureLogs(t)
+	if err := store.Revoke(ctx, "revoker-bob", "grant-1"); err != nil {
+		t.Fatalf("Revoke with failing remote revocation: err = %v, want nil (best-effort must never fail the call)", err)
+	}
+
+	status, err := store.Status(ctx, "revoker-bob", "grant-1")
+	if err != nil {
+		t.Fatalf("Status: %v", err)
+	}
+	if status != grpcauth.GrantStatusRevoked {
+		t.Fatalf("Status = %q, want %q (local write must still apply on remote failure)", status, grpcauth.GrantStatusRevoked)
+	}
+
+	if !strings.Contains(logs.String(), "level=WARN") {
+		t.Fatalf("no WARNING logged for remote revocation failure; log:\n%s", logs.String())
+	}
+	if strings.Contains(logs.String(), "level=ERROR") {
+		t.Fatalf("remote revocation failure logged at ERROR, want WARNING only (AGENTS.md logging levels); log:\n%s", logs.String())
+	}
+	if strings.Contains(logs.String(), "rt-revoker-bob") {
+		t.Fatalf("WARNING log contains the refresh token (NFR1); log:\n%s", logs.String())
+	}
+}
+
+// TestGrantStore_Revoker_RemoteUnreachable_LocalWriteStillAppliesAndWarns is
+// TestGrantStore_Revoker_RemoteFailure_LocalWriteStillAppliesAndWarns's
+// connection-refused variant: the fake is closed before Revoke is called,
+// so the remote call fails as a transport error rather than a non-2xx
+// response.
+func TestGrantStore_Revoker_RemoteUnreachable_LocalWriteStillAppliesAndWarns(t *testing.T) {
+	ctx := context.Background()
+	fake, err := keycloakfake.New()
+	if err != nil {
+		t.Fatalf("keycloakfake.New: %v", err)
+	}
+	revoker := newRevoker(t, fake)
+	fake.Close() // unreachable from here on: connection refused
+
+	db := dbtest.NewPostgres(ctx, t, dbtest.Options{Schema: grantSchema})
+	store, err := NewGrantStore(ctx, StoreConfig{
+		Pool:          db.Pool,
+		EncryptionKey: testKey(),
+		Revoker:       revoker,
+	})
+	if err != nil {
+		t.Fatalf("NewGrantStore: %v", err)
+	}
+	if err := store.Persist(ctx, "revoker-carol", "grant-1", grpcauth.TokenMaterial{RefreshToken: "rt-revoker-carol", ObtainedAt: time.Now()}); err != nil {
+		t.Fatalf("Persist: %v", err)
+	}
+
+	logs := captureLogs(t)
+	if err := store.Revoke(ctx, "revoker-carol", "grant-1"); err != nil {
+		t.Fatalf("Revoke with unreachable remote: err = %v, want nil", err)
+	}
+
+	status, err := store.Status(ctx, "revoker-carol", "grant-1")
+	if err != nil {
+		t.Fatalf("Status: %v", err)
+	}
+	if status != grpcauth.GrantStatusRevoked {
+		t.Fatalf("Status = %q, want %q", status, grpcauth.GrantStatusRevoked)
+	}
+	if !strings.Contains(logs.String(), "level=WARN") {
+		t.Fatalf("no WARNING logged for an unreachable remote; log:\n%s", logs.String())
+	}
+}
+
+// TestGrantStore_Revoker_Nil_UnchangedBehaviour asserts that with
+// StoreConfig.Revoker left nil (the #2387 default), Revoke's local write
+// still happens and returns no error -- this task is additive and does not
+// change existing behaviour.
+func TestGrantStore_Revoker_Nil_UnchangedBehaviour(t *testing.T) {
+	ctx := context.Background()
+	store, _ := newTestStore(ctx, t) // Revoker left nil
+
+	if err := store.Persist(ctx, "revoker-dave", "grant-1", grpcauth.TokenMaterial{RefreshToken: "rt-revoker-dave", ObtainedAt: time.Now()}); err != nil {
+		t.Fatalf("Persist: %v", err)
+	}
+	if err := store.Revoke(ctx, "revoker-dave", "grant-1"); err != nil {
+		t.Fatalf("Revoke: %v", err)
+	}
+	if _, err := store.TokenMaterial(ctx, "revoker-dave", "grant-1"); !errors.Is(err, grpcauth.ErrGrantRevoked) {
+		t.Fatalf("TokenMaterial after Revoke: err = %v, want ErrGrantRevoked", err)
+	}
+}
+
+// TestGrantStore_Revoker_AlreadyRevoked_IdempotentNoAdditionalRemoteCall
+// asserts a second Revoke of an already-revoked grant is idempotent (no
+// error) and makes no additional remote call, since the grant is no longer
+// active by the time readActiveRefreshToken looks for a token to revoke.
+func TestGrantStore_Revoker_AlreadyRevoked_IdempotentNoAdditionalRemoteCall(t *testing.T) {
+	ctx := context.Background()
+	fake, err := keycloakfake.New()
+	if err != nil {
+		t.Fatalf("keycloakfake.New: %v", err)
+	}
+	t.Cleanup(fake.Close)
+
+	db := dbtest.NewPostgres(ctx, t, dbtest.Options{Schema: grantSchema})
+	store, err := NewGrantStore(ctx, StoreConfig{
+		Pool:          db.Pool,
+		EncryptionKey: testKey(),
+		Revoker:       newRevoker(t, fake),
+	})
+	if err != nil {
+		t.Fatalf("NewGrantStore: %v", err)
+	}
+	if err := store.Persist(ctx, "revoker-erin", "grant-1", grpcauth.TokenMaterial{RefreshToken: "rt-revoker-erin", ObtainedAt: time.Now()}); err != nil {
+		t.Fatalf("Persist: %v", err)
+	}
+
+	if err := store.Revoke(ctx, "revoker-erin", "grant-1"); err != nil {
+		t.Fatalf("Revoke (first): %v", err)
+	}
+	if got := fake.RevokeCalls(); got != 1 {
+		t.Fatalf("RevokeCalls() after first Revoke = %d, want 1", got)
+	}
+
+	if err := store.Revoke(ctx, "revoker-erin", "grant-1"); err != nil {
+		t.Fatalf("Revoke (second, already revoked): %v", err)
+	}
+	if got := fake.RevokeCalls(); got != 1 {
+		t.Fatalf("RevokeCalls() after second Revoke = %d, want still 1 (already-revoked grant must not remote-revoke again)", got)
+	}
+}
+
+// TestGrantStore_Revoker_FR6_CallerAgnosticRevokeStillHolds asserts FR6's
+// caller-agnostic revoke semantics are unchanged with a Revoker in place:
+// Revoke(bob2, s1) remote-revokes exactly bob2/s1's token and leaves bob2's
+// other grant and a different subject's grant untouched.
+func TestGrantStore_Revoker_FR6_CallerAgnosticRevokeStillHolds(t *testing.T) {
+	ctx := context.Background()
+	fake, err := keycloakfake.New()
+	if err != nil {
+		t.Fatalf("keycloakfake.New: %v", err)
+	}
+	t.Cleanup(fake.Close)
+
+	db := dbtest.NewPostgres(ctx, t, dbtest.Options{Schema: grantSchema})
+	store, err := NewGrantStore(ctx, StoreConfig{
+		Pool:          db.Pool,
+		EncryptionKey: testKey(),
+		Revoker:       newRevoker(t, fake),
+	})
+	if err != nil {
+		t.Fatalf("NewGrantStore: %v", err)
+	}
+
+	if err := store.Persist(ctx, "revoker-alice2", "s1", grpcauth.TokenMaterial{RefreshToken: "rt-alice2-s1", ObtainedAt: time.Now()}); err != nil {
+		t.Fatalf("Persist alice2/s1: %v", err)
+	}
+	if err := store.Persist(ctx, "revoker-bob2", "s1", grpcauth.TokenMaterial{RefreshToken: "rt-bob2-s1", ObtainedAt: time.Now()}); err != nil {
+		t.Fatalf("Persist bob2/s1: %v", err)
+	}
+	if err := store.Persist(ctx, "revoker-bob2", "s2", grpcauth.TokenMaterial{RefreshToken: "rt-bob2-s2", ObtainedAt: time.Now()}); err != nil {
+		t.Fatalf("Persist bob2/s2: %v", err)
+	}
+
+	if err := store.Revoke(ctx, "revoker-bob2", "s1"); err != nil {
+		t.Fatalf("Revoke(bob2, s1): %v", err)
+	}
+
+	if got := fake.RevokeCalls(); got != 1 {
+		t.Fatalf("RevokeCalls() = %d, want 1 (only bob2/s1's token should be remote-revoked)", got)
+	}
+	if _, err := store.TokenMaterial(ctx, "revoker-bob2", "s1"); !errors.Is(err, grpcauth.ErrGrantRevoked) {
+		t.Fatalf("TokenMaterial(bob2, s1) after revoke: err = %v, want ErrGrantRevoked", err)
+	}
+
+	bob2S2Status, err := store.Status(ctx, "revoker-bob2", "s2")
+	if err != nil {
+		t.Fatalf("Status(bob2, s2): %v", err)
+	}
+	if bob2S2Status != grpcauth.GrantStatusActive {
+		t.Fatalf("Status(bob2, s2) = %q, want %q (untouched by revoking s1)", bob2S2Status, grpcauth.GrantStatusActive)
+	}
+
+	alice2S1Status, err := store.Status(ctx, "revoker-alice2", "s1")
+	if err != nil {
+		t.Fatalf("Status(alice2, s1): %v", err)
+	}
+	if alice2S1Status != grpcauth.GrantStatusActive {
+		t.Fatalf("Status(alice2, s1) = %q, want %q (a different subject's grant must be untouched)", alice2S1Status, grpcauth.GrantStatusActive)
 	}
 }

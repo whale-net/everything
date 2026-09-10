@@ -37,6 +37,7 @@ go_test(
     srcs = [
         "auth_test.go",
         "delegatedgrant_authcode_test.go",
+        "delegatedgrant_revoke_test.go",
         "delegatedgrant_test.go",
         "delegatedgrant_token_test.go",
         "fakestore_test.go",
@@ -52,4 +53,3 @@ go_test(
         "@org_golang_google_grpc//status",
     ],
 )
-

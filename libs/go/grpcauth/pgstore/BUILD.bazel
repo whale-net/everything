@@ -54,5 +54,6 @@ go_test(
     ],
     deps = [
         "//libs/go/dbtest",
+        "//libs/go/grpcauth/internal/keycloakfake",
     ],
 )
