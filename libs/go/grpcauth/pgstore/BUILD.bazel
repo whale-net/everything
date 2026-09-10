@@ -41,7 +41,10 @@ go_test(
     name = "pgstore_integration_test",
     size = "large",
     timeout = "long",
-    srcs = ["pgstore_integration_test.go"],
+    srcs = [
+        "lifecycle_integration_test.go",
+        "pgstore_integration_test.go",
+    ],
     embed = [":pgstore"],
     gotags = ["integration"],
     tags = [
