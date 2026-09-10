@@ -129,6 +129,14 @@ Status moves `drafted → reconciled → merged`, one comment per transition, wr
 
 Same rule as the roadmap ledger: the **last** `Amendment: <slug> →` comment on the issue wins; no such comment for a slug means that amendment hasn't reached that stage yet.
 
+**Out-of-band adoptions.** Not every change to committed behavior comes from the drafted → reconciled loop above — a hand-applied fix or a small correction made directly against a domain sometimes moves the ground truth ahead of the spec before anyone opens `/project-manager:product`. Rather than let that drift silently, whoever makes (or notices) the change posts the ledger comment immediately, entering the lifecycle at a later stage instead of at `drafted` since there is nothing left to draft or reconcile:
+
+```
+Amendment: <slug> → adopted-but-pending-amendment (<link-or-none>)
+```
+
+This status means "already true, spec not yet caught up" — it is not itself a merge; the committed files still need editing to match. It resolves the same way any other amendment does: `/project-manager:product`'s amendment step (SKILL.md step 8) checks for outstanding `adopted-but-pending-amendment` entries before drafting anything and bundles them into whatever it is amending, closing each with the usual terminal `Amendment: <slug> → merged (#<pr-number>)` comment. If 3 or more are outstanding with no unrelated amendment to piggyback on, that count is itself the trigger to run `/project-manager:product <issue-number>` and fold them in — the ledger never carries more than 2 pending adoptions at once.
+
 ### When a milestone re-balloons
 
 Occasionally a single milestone's own design pass turns out to be product-sized again — the outcome sentence was right but the behavior needed to reach it wasn't as small as it looked. `/project-manager:design` step 0 flags this the same way it flags a fresh request: past roughly 20 FRs, it recommends running `/project-manager:product` on the milestone's draft instead of pushing the design through oversized. Because a product maps 1:1 to a domain, that recommendation only cleanly applies when the milestone genuinely spans a new domain-sized subsystem; if it's still one domain, splitting into an additional milestone of the existing brief is usually the better fix rather than nesting a second product under it. Either way this is a recommendation, not a block — the user decides.
