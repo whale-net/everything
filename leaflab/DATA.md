@@ -431,11 +431,11 @@ Nine plain views (prefixed `v_`) expose the schema to downstream consumers (Graf
 
 | View | Cardinality | Purpose |
 |---|---|---|
-| `v_region_path` | 1 row / region | Recursive region hierarchy with `path_ids[]`, `path_names[]`, `path_name` |
+| `v_region_path` | 1 row / region | Recursive region hierarchy with `path_ids[]`, `path_names[]`, `path_name`. **Current tree only** — the FR6 tree/drill-down view consumes it; reading roll-up uses the historical walk instead (see `v_sensor_reading_enriched`) |
 | `v_sensor_current` | 1 row / sensor | Current state: name, type, chip, board, region path |
 | `v_board_state_history` | 1 row / accepted config | SCD2-shaped board config history (valid_from / valid_to) |
 | `v_board_state_current` | 1 row / board | Current accepted device config per board |
-| `v_sensor_reading_enriched` | 1 row / reading | **Workhorse**: reading + sensor + region path + config metadata |
+| `v_sensor_reading_enriched` | 1 row / reading | **Workhorse**: reading + sensor + region path as of `recorded_at` + config metadata. Region path walks `region_parent_history` at each ancestor step, so re-parenting a region does not change roll-up of pre-existing readings (FR4, migration 018) |
 | `v_sensor_reading_with_plant` | 1 row / (reading × active plant) | Plant and plant_type slices; readings without plants appear with NULL plant fields |
 | `v_sensor_reading_with_config_debug` | 1 row / reading | `v_sensor_reading_enriched` + full `device_config.config_json` (debug) |
 | `v_sensor_last_reading` | 1 row / sensor | Each sensor's latest `recorded_at`, via a `LATERAL ... ORDER BY recorded_at DESC LIMIT 1` that uses `idx_sensor_reading_sensor_id` — O(1) per sensor instead of scanning the hypertable |
@@ -443,7 +443,7 @@ Nine plain views (prefixed `v_`) expose the schema to downstream consumers (Graf
 
 ### Temporal accuracy
 
-- **Region** is historically accurate: `sensor_reading.region_id` is snapshotted at insert, so the views join the snapshot — not the sensor's current region.
+- **Region** is historically accurate: `sensor_reading.region_id` is snapshotted at insert, so the views join the snapshot — not the sensor's current region — and the region path (ancestor chain) is resolved by walking `region_parent_history` filtered to `valid_from <= recorded_at AND (valid_to IS NULL OR valid_to > recorded_at)` at each step. Re-parenting a region never changes the roll-up of readings recorded before the re-parent. Readings recorded before `region_parent_history` existed (migration 017's backfill) resolve to their snapshot region alone, without ancestors.
 - **Config version** is historically accurate: `sensor_reading.config_version` is stamped at insert from the in-memory cache.
 - **Sensor name** is the *current* name from `sensor_name_history WHERE valid_to IS NULL`. For dashboards showing live or recent data this is almost always correct; for strict point-in-time name lookups query `sensor_name_history` directly.
 - **Plant** is resolved at query time: plants active in the reading's snapshot region at `recorded_at`.
