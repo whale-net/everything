@@ -296,7 +296,16 @@ templ gameDeploymentRow(dep GameDeploymentRow) {
 			<div class="flex flex-wrap justify-between items-center gap-3 py-1">
 				<div class="flex items-center gap-3">
 					<span class="font-medium text-sm">{ dep.Row.DisplayName }</span>
-					@components.ConnectAddressDisplay(dep.Connect)
+					<!--
+						AC4: this span is the stable target a successful ports
+						Save (#2275, handleDeploymentSettingsPortsSave) swaps
+						out of band via DeploymentConnectAddressOOB, so the
+						recomputed connect address shows up here without
+						re-fetching anything else on this page (FR10).
+					-->
+					<span id={ DeploymentConnectAddressID(dep.Row.ServerGameConfigID) }>
+						@components.ConnectAddressDisplay(dep.Connect)
+					</span>
 				</div>
 				<div class="flex items-center gap-3 text-xs">
 					if dep.LogsURL != "" {
@@ -323,12 +332,16 @@ templ gameDeploymentRow(dep GameDeploymentRow) {
 					<!--
 						#2274, FR11: the environment section, lazily fetched (see
 						DeploymentSettingsEnvPlaceholder's doc comment) rather than
-						pre-rendered here. Port bindings (FR12) are a separate,
-						later task (#2275) that adds an accumulating section
-						alongside this one in the same blade; see the split note
-						on issue #2274.
+						pre-rendered here.
+						#2275, FR12: the ports section, alongside it: an
+						*accumulating* section (unlike env's per-key commits),
+						which is why #2269's Blade dismissal can prompt for this
+						blade at all (FR10's section-granularity rule). See the
+						split note on issue #2274 and deployment_settings.templ's
+						file doc comment.
 					-->
 					@DeploymentSettingsEnvPlaceholder(dep.Row.ServerGameConfigID)
+					@DeploymentSettingsPortsPlaceholder(dep.Row.ServerGameConfigID)
 				}
 			</template>
 		</td>
