@@ -190,7 +190,7 @@ v_sensor_reading_with_plant    — reading × active plants at recorded_at (may 
 v_sensor_reading_with_config_debug — reading + full config_json (debug)
 ```
 
-The enriched view uses `sensor_reading.region_id` (the insert-time snapshot), not the sensor's current region — reads are historically accurate for region even when sensors move.
+The enriched view uses `sensor_reading.region_id` (the insert-time snapshot), not the sensor's current region — reads are historically accurate for region even when sensors move. Its region path (ancestor chain) is resolved by walking `region_parent_history` as of the reading's `recorded_at` (migration 018, FR4): re-parenting a region never changes the roll-up of readings recorded before the re-parent. `v_region_path` keeps resolving the current tree — that stays correct for current-state consumers like the region tree view (FR6).
 
 See [DATA.md](DATA.md#analytical-views) for the full view reference and example queries.
 

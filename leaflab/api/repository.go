@@ -1258,3 +1258,155 @@ func (r *Repository) ReparentCreatesCycle(ctx context.Context, regionID, newPare
 	}
 	return createsCycle, nil
 }
+
+// -- M3 board recorded region (FR10) -------------------------------------------
+// #2315: SetBoardRegion's data access. Bookkeeping only -- these methods
+// write only board.region_id and board_region_history and never touch
+// sensor placement (sensor.region_id / sensor_region_history) or reading
+// attribution; see server.go's SetBoardRegion RPC doc comment.
+
+// RegionExists reports whether regionID names a region row --
+// SetBoardRegion's unknown-region check (an unknown region_id maps to
+// codes.NotFound in server.go rather than a Postgres FK violation as a
+// plain wrapped error).
+func (r *Repository) RegionExists(ctx context.Context, regionID int64) (bool, error) {
+	var exists bool
+	err := r.db.QueryRow(ctx, `
+		SELECT EXISTS(SELECT 1 FROM region WHERE region_id = $1)
+	`, regionID).Scan(&exists)
+	if err != nil {
+		return false, fmt.Errorf("check region %d exists: %w", regionID, err)
+	}
+	return exists, nil
+}
+
+// GetCurrentBoardRegion returns a board's recorded region and its name.
+// ok=false means the board has no recorded region -- the absence of an open
+// board_region_history row, with the mirror column board.region_id NULL to
+// match (migration 017); it is never expressed as a sentinel region id.
+// Reads via the valid_to IS NULL predicate backed by
+// idx_board_region_history_current. Used by server.go both for the no-op
+// refusal check before the write and to build SetBoardRegionResponse's
+// post-write region fields.
+func (r *Repository) GetCurrentBoardRegion(ctx context.Context, boardID int64) (regionID *int64, regionName string, err error) {
+	var name *string
+	err = r.db.QueryRow(ctx, `
+		SELECT brh.region_id, r.name
+		FROM board_region_history brh
+		LEFT JOIN region r ON r.region_id = brh.region_id
+		WHERE brh.board_id = $1 AND brh.valid_to IS NULL
+	`, boardID).Scan(&regionID, &name)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return nil, "", nil
+		}
+		return nil, "", fmt.Errorf("get current recorded region for board %d: %w", boardID, err)
+	}
+	if name != nil {
+		regionName = *name
+	}
+	return regionID, regionName, nil
+}
+
+// SensorRegionRow is one of a board's sensors plus the region that sensor is
+// currently placed in, for SetBoardRegionResponse's FR11 nudge snapshot.
+// RegionID is nil when the sensor is unplaced; RegionName is empty in that
+// case. Read-only: never written by this package's board-region path (FR10).
+type SensorRegionRow struct {
+	SensorID   int64
+	SensorName string
+	RegionID   *int64
+	RegionName string
+}
+
+// ListSensorRegionsForBoard returns every sensor recorded for the board
+// (FR6 precedent -- no filtering by recency or config membership) with the
+// region it is currently placed in, for SetBoardRegionResponse's FR11 nudge
+// snapshot. Reads via v_sensor_current (migration 012), which already
+// resolves the sensor_name_history SCD2 join and the region name -- the
+// same precedent ListSensorDetailsForBoard follows. Purely a read: this
+// deliberately runs even when the write was a no-op refusal path and never
+// implies any placement change.
+func (r *Repository) ListSensorRegionsForBoard(ctx context.Context, boardID int64) ([]SensorRegionRow, error) {
+	rows, err := r.db.Query(ctx, `
+		SELECT
+			sc.sensor_id,
+			COALESCE(sc.sensor_name, ''),
+			sc.region_id,
+			COALESCE(sc.region_name, '')
+		FROM v_sensor_current sc
+		WHERE sc.board_id = $1
+		ORDER BY sc.sensor_id
+	`, boardID)
+	if err != nil {
+		return nil, fmt.Errorf("list sensor regions for board %d: %w", boardID, err)
+	}
+	defer rows.Close()
+
+	var sensors []SensorRegionRow
+	for rows.Next() {
+		var s SensorRegionRow
+		if err := rows.Scan(&s.SensorID, &s.SensorName, &s.RegionID, &s.RegionName); err != nil {
+			return nil, fmt.Errorf("scan sensor region row: %w", err)
+		}
+		sensors = append(sensors, s)
+	}
+	return sensors, rows.Err()
+}
+
+// SetBoardRegion writes a board's recorded region (FR10): closes the
+// currently-open board_region_history row, opens one for the new region,
+// and syncs the mirror column board.region_id -- all in one transaction,
+// per AGENTS.md section SCD2's close-and-open pattern.
+//
+// regionID == nil clears the recorded region: it closes the open history
+// row (if any) and sets the mirror column to NULL, opening no new row -- a
+// board's un-recorded state is the absence of an open row, per migration
+// 017. This mirrors ClearBoardOwner's close-without-reopen shape.
+//
+// Bookkeeping only (FR10): this is the only board-region write, and it
+// writes only board.region_id and board_region_history. It never touches
+// sensor.region_id, sensor_region_history, or any reading -- changing a
+// board's recorded region must never change sensor placement or reading
+// attribution.
+//
+// Callers (server.go's SetBoardRegion RPC) are responsible for the
+// unknown-board and unknown-region checks and the no-op refusal (setting
+// the already-recorded region, or clearing a region that is not recorded)
+// before calling this -- this method performs the close-and-open
+// unconditionally, mirroring ReassignBoardOwner's tx shape.
+func (r *Repository) SetBoardRegion(ctx context.Context, boardID int64, regionID *int64) error {
+	tx, err := r.db.Begin(ctx)
+	if err != nil {
+		return fmt.Errorf("begin set board region tx for board %d: %w", boardID, err)
+	}
+	defer tx.Rollback(ctx) //nolint:errcheck // no-op once Commit succeeds
+
+	if _, err := tx.Exec(ctx, `
+		UPDATE board_region_history SET valid_to = NOW()
+		WHERE board_id = $1 AND valid_to IS NULL
+	`, boardID); err != nil {
+		return fmt.Errorf("close open board_region_history row for board %d: %w", boardID, err)
+	}
+
+	// Open a new row only when recording a region; a clear closes without
+	// re-opening (see doc comment above).
+	if regionID != nil {
+		if _, err := tx.Exec(ctx, `
+			INSERT INTO board_region_history (board_id, region_id) VALUES ($1, $2)
+		`, boardID, *regionID); err != nil {
+			return fmt.Errorf("insert board_region_history row for board %d: %w", boardID, err)
+		}
+	}
+
+	if _, err := tx.Exec(ctx, `
+		UPDATE board SET region_id = $2 WHERE board_id = $1
+	`, boardID, regionID); err != nil {
+		return fmt.Errorf("sync board.region_id mirror for board %d: %w", boardID, err)
+	}
+
+	if err := tx.Commit(ctx); err != nil {
+		return fmt.Errorf("commit set board region tx for board %d: %w", boardID, err)
+	}
+	return nil
+}

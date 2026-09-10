@@ -320,6 +320,8 @@ spec:
           value: "none"
         - name: TEMPORAL_HOST
           value: "{temporal_host}"
+        - name: RABBITMQ_URL
+          value: "{rabbitmq_url}"
         - name: OPENROUTER_API_KEY
           value: "{openrouter_api_key}"
         - name: WHAGENT_ISSUER
@@ -338,6 +340,7 @@ spec:
         namespace=namespace,
         pg_database_url=pg_database_url,
         temporal_host=temporal_host,
+        rabbitmq_url=rabbitmq_url,
         openrouter_api_key=os.environ.get('OPENROUTER_API_KEY', ''),
         whagent_signing_key_id=whagent_signing_key_id,
         whagent_signing_key=whagent_signing_key_yaml,
@@ -421,6 +424,39 @@ spec:
 
 # mcp: the Claude-Code-facing MCP surface, a thin facade over api's
 # SessionService (README.md "Connecting Claude Code to `mcp`").
+#
+# mcp's OAuth2 credential path (mcp_credential table + RFC 8693 Keycloak
+# token exchange, issue #2249) is opt-in here, mirroring archiver's
+# "disabled by default, would otherwise crash-loop" precedent below:
+# PG_DATABASE_URL alone makes the mcp_credential table reachable but
+# leaves WHAGENT_MCP_KEYCLOAK_CLIENT_ID/_CLIENT_SECRET/_TOKEN_URL unset,
+# and main.go's initializeTokenExchange treats that exact combination as
+# a fatal NFR8 fail-loud error (by design -- see its doc comment), not a
+# WARNING-and-degrade like every other partial-config case. Once the
+# 004_mcpauth_credential migration is applied, every fresh mcp pod would
+# otherwise CrashLoopBackOff indefinitely. There is also no local
+# Keycloak realm running in this Tiltfile at all (see `ui`'s comment
+# below: AUTH_MODE defaults to "none" for the identical reason), so real
+# out-of-the-box OAuth2 isn't achievable here regardless of how these
+# vars are set. Set ENABLE_WHAGENT_NET_MCP_OAUTH=true plus
+# WHAGENT_MCP_KEYCLOAK_CLIENT_ID/_CLIENT_SECRET/_TOKEN_URL (pointed at a
+# Keycloak realm of your own) in a local .env to exercise the OAuth2
+# credential path; the manual-token recipe (README.md) works
+# unconditionally either way.
+mcp_oauth_env_lines = []
+if get_env_bool('ENABLE_WHAGENT_NET_MCP_OAUTH', default='false'):
+    mcp_oauth_env_lines = [
+        '        - name: PG_DATABASE_URL',
+        '          value: "{}"'.format(pg_database_url),
+        '        - name: WHAGENT_MCP_KEYCLOAK_CLIENT_ID',
+        '          value: "{}"'.format(os.environ.get('WHAGENT_MCP_KEYCLOAK_CLIENT_ID', '')),
+        '        - name: WHAGENT_MCP_KEYCLOAK_CLIENT_SECRET',
+        '          value: "{}"'.format(os.environ.get('WHAGENT_MCP_KEYCLOAK_CLIENT_SECRET', '')),
+        '        - name: WHAGENT_MCP_KEYCLOAK_TOKEN_URL',
+        '          value: "{}"'.format(os.environ.get('WHAGENT_MCP_KEYCLOAK_TOKEN_URL', '')),
+    ]
+mcp_oauth_env = ('\n' + '\n'.join(mcp_oauth_env_lines)) if mcp_oauth_env_lines else ''
+
 if get_env_bool('ENABLE_WHAGENT_NET_MCP', default='true'):
     k8s_yaml(blob("""
 apiVersion: v1
@@ -465,12 +501,10 @@ spec:
         - name: WHAGENT_MCP_PUBLIC_URL
           value: "http://localhost:8082"
         - name: WHAGENT_UI_PUBLIC_URL
-          value: "http://localhost:8081"
-        - name: PG_DATABASE_URL
-          value: "{pg_database_url}"
+          value: "http://localhost:8081"{mcp_oauth_env}
         - name: OTEL_EXPORTER_OTLP_ENDPOINT
           value: "{otel_endpoint}"
-""".format(namespace=namespace, pg_database_url=pg_database_url, otel_endpoint=otel_endpoint)))
+""".format(namespace=namespace, otel_endpoint=otel_endpoint, mcp_oauth_env=mcp_oauth_env)))
 
     mcp_deps = []
     if get_env_bool('ENABLE_WHAGENT_NET_API', default='true'):
