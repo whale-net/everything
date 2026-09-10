@@ -1,8 +1,9 @@
 package pages
 
 import (
+	"fmt"
+
 	"github.com/whale-net/everything/libs/go/htmxui"
-	manmanpb "github.com/whale-net/everything/manmanv2/protos"
 	"github.com/whale-net/everything/manmanv2/ui/components"
 )
 
@@ -12,31 +13,79 @@ import (
 // navigation/disposition task, not this one -- see this task's "Design
 // note" above navItems' Infrastructure entry in components/layout.templ).
 //
-// Scaffold phase (#2369): renders the FR2 floor only -- host name plus a
-// drain-state badge, the explicitly acceptable minimum per the issue body.
-// Landing in the Implementation phase of this same issue: health/resource
-// indicators bounded by NFR5 (Server.status, last_seen,
-// host_public_address, ListAllocatedPorts, server_capabilities), the FR3
-// drain / FR4 undrain one-click actions (posting through
-// handleInfrastructureAction below), search/filter, and manual-refresh
-// handling for the transient "draining" state.
-templ Infrastructure(layout components.LayoutData, servers []*manmanpb.Server) {
+// Implementation phase (#2369): the FR2 floor (host name + drain-state
+// badge) plus health indicators bounded by NFR5 (Server.status,
+// last_seen, host_public_address, ListAllocatedPorts -- server_capabilities
+// is deliberately not surfaced here: the API exposes no RPC to read a
+// server's persisted ServerCapability row today, and adding one would be
+// the new backend data path NFR5 rules out for this task), the FR3 drain /
+// FR4 undrain one-click actions (posting through handleInfrastructureAction),
+// and the FR2 transient "draining" state, which settles to "drained" on a
+// manual page refresh -- no new live transport (NFR5), no SSE/polling.
+templ Infrastructure(layout components.LayoutData, hosts []*InfrastructureHost) {
 	@components.Layout(layout) {
-		@components.HeroHeader("Infrastructure", "Every host in the fleet, with its current drain state")
-		if len(servers) > 0 {
+		<div class="flex justify-between items-center mb-2">
+			@components.HeroHeader("Infrastructure", "Every host in the fleet, with its current drain state and health")
+			<a href="/infrastructure" class="btn btn-secondary btn-sm">Refresh</a>
+		</div>
+		<p class="text-xs text-base-content/60 mb-6">
+			A host that just started draining still shows "draining" here until its running sessions finish stopping -- use Refresh to check on progress; this page does not update itself live.
+		</p>
+		if len(hosts) > 0 {
 			@components.Table() {
 				<thead>
 					<tr>
 						<th>Name</th>
 						<th>Drain State</th>
+						<th>Status</th>
+						<th>Last Seen</th>
+						<th>Public Address</th>
+						<th>Allocated Ports</th>
+						<th class="text-right">Actions</th>
 					</tr>
 				</thead>
 				<tbody>
-					for _, server := range servers {
+					for _, host := range hosts {
 						<tr class="hover">
-							<td class="text-sm font-medium text-base-content">{ server.Name }</td>
+							<td class="text-sm font-medium text-base-content">{ host.Server.Name }</td>
 							<td>
-								@htmxui.Badge(drainStateLabel(server.DrainState), statusBadgeVariant(drainStateVariant(server.DrainState)), htmxui.BadgeSizeSM, true, nil)
+								@htmxui.Badge(drainStateLabel(host.Server.DrainState), statusBadgeVariant(drainStateVariant(host.Server.DrainState)), htmxui.BadgeSizeSM, true, nil)
+							</td>
+							<td>
+								@htmxui.Badge(host.Server.Status, statusBadgeVariant(serverStatusVariant(host.Server.Status)), htmxui.BadgeSizeSM, true, nil)
+							</td>
+							<td class="text-sm">{ timeAgo(host.Server.LastSeen) }</td>
+							<td class="text-sm">
+								if host.Server.HostPublicAddress == "" {
+									Not reported
+								} else {
+									{ host.Server.HostPublicAddress }
+								}
+							</td>
+							<td class="text-sm">{ allocatedPortsSummary(host.AllocatedPorts) }</td>
+							<td class="text-right text-sm font-medium">
+								<div class="flex justify-end gap-2">
+									if canDrain(host.Server.DrainState) {
+										<form method="POST" action={ templ.URL(fmt.Sprintf("/infrastructure/%d/drain", host.Server.ServerId)) }>
+											@htmxui.Button(htmxui.ButtonWarning, htmxui.ButtonSizeSM, false, templ.Attributes{
+												"type":       "submit",
+												"hx-confirm": drainConfirmMessage(host.Server.Name),
+											}) {
+												Drain
+											}
+										</form>
+									}
+									if canUndrain(host.Server.DrainState) {
+										<form method="POST" action={ templ.URL(fmt.Sprintf("/infrastructure/%d/undrain", host.Server.ServerId)) }>
+											@htmxui.Button(htmxui.ButtonSuccess, htmxui.ButtonSizeSM, false, templ.Attributes{
+												"type":       "submit",
+												"hx-confirm": undrainConfirmMessage(host.Server.Name),
+											}) {
+												Undrain
+											}
+										</form>
+									}
+								</div>
 							</td>
 						</tr>
 					}
@@ -50,32 +99,5 @@ templ Infrastructure(layout components.LayoutData, servers []*manmanpb.Server) {
 				"",
 			)
 		}
-	}
-}
-
-// drainStateLabel renders Server.drain_state (#2360) as display text.
-// The field is empty for hosts that existed before drain_state was
-// introduced -- those are schedulable, so an empty value renders as such
-// rather than blank.
-func drainStateLabel(state string) string {
-	if state == "" {
-		return "schedulable"
-	}
-	return state
-}
-
-// drainStateVariant maps drain_state to the shared status-badge vocabulary
-// (statusBadgeVariant/components.StatusBadgeVariant), not a new colour
-// table: schedulable reads as "success" (fully in service), draining as
-// "warning" (in-flight transition, FR2's transient state), drained as
-// "danger" (out of service).
-func drainStateVariant(state string) string {
-	switch state {
-	case "draining":
-		return "warning"
-	case "drained":
-		return "danger"
-	default:
-		return "success"
 	}
 }

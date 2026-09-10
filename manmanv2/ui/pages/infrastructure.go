@@ -1,0 +1,87 @@
+package pages
+
+import (
+	"fmt"
+
+	manmanpb "github.com/whale-net/everything/manmanv2/protos"
+)
+
+// InfrastructureHost is the Infrastructure page's per-host view model
+// (task #2369, manmanv2 M6, FR2). It exists because the health
+// indicators the issue calls for -- allocated ports -- come from a
+// separate RPC (ListAllocatedPorts) than the Server itself, and the page
+// data needs somewhere to carry that per-host fan-out result. AllocatedPorts
+// is nil (not an empty non-nil slice) when the fetch failed or a host has
+// none; the FR2 floor (name + drain state) never depends on it.
+type InfrastructureHost struct {
+	Server         *manmanpb.Server
+	AllocatedPorts []*manmanpb.AllocatedPort
+}
+
+// drainStateLabel renders Server.drain_state (#2360) as display text.
+// The field is empty for hosts that existed before drain_state was
+// introduced -- those are schedulable, so an empty value renders as such
+// rather than blank.
+func drainStateLabel(state string) string {
+	if state == "" {
+		return "schedulable"
+	}
+	return state
+}
+
+// drainStateVariant maps drain_state to the shared status-badge vocabulary
+// (statusBadgeVariant/components.StatusBadgeVariant), not a new colour
+// table: schedulable reads as "success" (fully in service), draining as
+// "warning" (in-flight transition, FR2's transient state), drained as
+// "danger" (out of service).
+func drainStateVariant(state string) string {
+	switch state {
+	case "draining":
+		return "warning"
+	case "drained":
+		return "danger"
+	default:
+		return "success"
+	}
+}
+
+// canDrain reports whether the Drain action (FR3) should be offered for a
+// host's current drain state. Only a schedulable host can be drained --
+// draining and drained hosts already have an in-flight or completed drain,
+// so Drain and Undrain are mutually exclusive per host state.
+func canDrain(state string) bool {
+	return state == "" || state == "schedulable"
+}
+
+// canUndrain reports whether the Undrain action (FR4) should be offered.
+// Per the issue body, undrain is offered for a "drained/draining" host --
+// draining is included so an Admin who changes their mind mid-drain is not
+// stuck waiting for eviction to finish before they can back out.
+func canUndrain(state string) bool {
+	return state == "draining" || state == "drained"
+}
+
+// drainConfirmMessage is FR3's confirm-affordance copy (US2): the Admin
+// must be told the one action both stops new placement AND stops every
+// session currently running on the host, not just that it "drains" it.
+func drainConfirmMessage(hostName string) string {
+	return fmt.Sprintf("Drain %s? This stops new placement on this host and stops every session currently running on it.", hostName)
+}
+
+// undrainConfirmMessage is FR4's confirm-affordance copy: it must state
+// plainly that undraining does not restart anything that was drain-stopped
+// -- a Server Manager restarts manually if wanted.
+func undrainConfirmMessage(hostName string) string {
+	return fmt.Sprintf("Undrain %s? This does not restart anything that was stopped by draining -- restart deployments manually if wanted.", hostName)
+}
+
+// allocatedPortsSummary renders a host's FR2 allocated-ports health
+// indicator, bounded by NFR5 (ListAllocatedPorts already exists; this adds
+// no new collection). Nil/empty renders as "not reported" per the issue's
+// explicit floor for hosts with no such data.
+func allocatedPortsSummary(ports []*manmanpb.AllocatedPort) string {
+	if len(ports) == 0 {
+		return "None allocated"
+	}
+	return fmt.Sprintf("%d port(s) allocated", len(ports))
+}
