@@ -9,9 +9,7 @@ import (
 	"testing"
 
 	"github.com/whale-net/everything/libs/go/htmxauth"
-	manmanpb "github.com/whale-net/everything/manmanv2/protos"
 	"github.com/whale-net/everything/manmanv2/ui/components"
-	"github.com/whale-net/everything/manmanv2/ui/pages"
 )
 
 func TestFaviconRoute(t *testing.T) {
@@ -44,9 +42,17 @@ func TestFaviconRoute(t *testing.T) {
 // /sgc/{id} is the same authenticated OIDC session flow as Admin's and
 // Server Manager's, no token/query-param bypass exists, nothing on the
 // deployment page varies by identity (there is no role model in this
-// codebase today), no deployments-index route or nav entry exists, and the
+// codebase today), no deployments-index nav entry exists, and the
 // status/connect-address block is never served stale from a cache header or
 // a background poll.
+//
+// Note (#2279): "/sgc/{id}" itself retired to a redirect (FR16) -- it no
+// longer renders deployment content at all, for anyone, authenticated or
+// not -- and "/deployments"/"/deployments/<id>" now exist as dedicated
+// routes (amendment A3) rather than falling through to "/". The
+// route-existence assertions below were updated for that; the
+// auth/no-bypass/no-nav-entry guards they sit alongside were not, and still
+// hold.
 //
 // Red/green discipline (verified by hand, then reverted):
 //   - Temporarily moving "/sgc/" in setupRoutes outside RequireAuthFunc (so
@@ -55,12 +61,6 @@ func TestFaviconRoute(t *testing.T) {
 //     "/sgc/1" subcase fail (the handler ran unauthenticated and panicked
 //     reaching the nil test gRPC client, rather than being redirected
 //     before ever reaching it); reverting restored green.
-//   - Temporarily adding `mux.HandleFunc("/deployments",
-//     app.auth.RequireAuthFunc(app.auth.WithAccessToken(app.handleSGCRoutes)))`
-//     to setupRoutes made TestNoDeploymentListingRouteOrNavEntry's
-//     "/deployments" subcase fail ("/deployments" resolved to its own new
-//     pattern instead of falling through to the "/" catch-all); removing it
-//     restored green.
 
 // newTestOIDCAuthenticator builds a real *htmxauth.Authenticator in OIDC
 // mode against a throwaway discovery server, so these guard tests exercise
@@ -196,10 +196,12 @@ var manmanv2RouteTable = []string{
 	"/workshop/api/presets-for-game",
 	"/workshop/bulk-add-collection",
 	"/workshop/batch-create-addons",
-	"/sgc/1", // #1530/#1531/#1532: the deployment page itself
+	"/sgc/1", // #1530-#1532's deployment page; retired to a redirect by #2279 (FR16) -- still its own auth-gated route
 	"/sgc/add-library",
 	"/sgc/remove-library",
 	"/sgc/api/available-libraries",
+	"/deployments",   // #2279 amendment A3: deployment-first name for "/sgc/"'s redirect
+	"/deployments/1", // #2279 amendment A3: deployment-first name for "/sgc/<id>"'s redirect
 	"/backup-configs/create",
 	"/backup-configs/1",
 	"/api/dashboard-summary",
@@ -293,104 +295,32 @@ func TestSGCDetailRoute_TokenQueryParamAndBearerHeaderDoNotBypassAuth(t *testing
 	}
 }
 
-// sgcStatusAndSessionRegion isolates the "Status & Connect" and "Session
-// history" cards together from the rest of the (much larger) SGCDetail
-// page. Mirrors pages/sgc_detail_status_connect_test.go's
-// statusConnectSection and pages/sgc_detail_sessions_test.go's
-// sessionHistorySection -- both unexported to package pages, so this is a
-// same-purpose, same-anchor duplicate rather than a shared import.
-func sgcStatusAndSessionRegion(t *testing.T, body string) string {
-	t.Helper()
-	start := strings.Index(body, "Status &amp; Connect")
-	if start < 0 {
-		t.Fatalf("expected a 'Status & Connect' heading in rendered body, got %q", body)
-	}
-	end := strings.Index(body[start:], "Danger Zone: intentionally kept")
-	if end < 0 {
-		t.Fatalf("expected a Danger Zone marker after the Status & Connect / Session history cards, got %q", body)
-	}
-	return body[start : start+end]
-}
-
-func renderSGCDetailPage(t *testing.T, data pages.SGCDetailPageData) string {
-	t.Helper()
-	var buf strings.Builder
-	if err := pages.SGCDetail(data).Render(context.Background(), &buf); err != nil {
-		t.Fatalf("render failed: %v", err)
-	}
-	return buf.String()
-}
-
-// 4. No persona branching (NFR2).
-func TestSGCDetail_NoPersonaBranchingInStatusConnectAndSessionHistory(t *testing.T) {
-	sgc := &manmanpb.ServerGameConfig{
-		ServerGameConfigId: 42,
-		Status:             "active",
-		PortBindings: []*manmanpb.PortBinding{
-			{ContainerPort: 25565, HostPort: 25565, Protocol: "TCP"},
-		},
-	}
-	server := &manmanpb.Server{ServerId: 1, Name: "Alpha", HostPublicAddress: "play.example.com"}
-	sessions := []*manmanpb.Session{{SessionId: 1, StartedAt: 100, Status: "running"}}
-
-	latest := components.LatestSession(sessions)
-	status := components.ComputeDeploymentStatus(latest)
-	addrs := components.ComputeConnectAddresses(server.GetHostPublicAddress(), sgc.GetPortBindings())
-
-	buildData := func(user *htmxauth.UserInfo) pages.SGCDetailPageData {
-		return pages.SGCDetailPageData{
-			Layout:                    components.LayoutData{Title: "SGC", User: user},
-			SGC:                       sgc,
-			Server:                    server,
-			Sessions:                  sessions,
-			DeploymentStatus:          status,
-			ConnectAddresses:          addrs,
-			ConnectAddressUnavailable: len(addrs) == 0,
-		}
-	}
-
-	gamer := &htmxauth.UserInfo{Sub: "gamer-1", PreferredUsername: "gamer", Name: "Gamer One", Roles: []string{}}
-	admin := &htmxauth.UserInfo{Sub: "admin-1", PreferredUsername: "admin", Name: "Admin One", Roles: []string{"admin", "server-manager"}}
-
-	gamerRegion := sgcStatusAndSessionRegion(t, renderSGCDetailPage(t, buildData(gamer)))
-	adminRegion := sgcStatusAndSessionRegion(t, renderSGCDetailPage(t, buildData(admin)))
-
-	if gamerRegion != adminRegion {
-		t.Fatalf("status/connect-address/session-history regions differ by identity -- there is no role model in this codebase today, so this page must render identically regardless of who is looking at it.\ngamer region:\n%s\nadmin region:\n%s", gamerRegion, adminRegion)
-	}
-}
-
-// 5. No deployment listing (FR11).
-func TestNoDeploymentListingRouteOrNavEntry(t *testing.T) {
+// 4. Deployment-first routes exist, but there is still no nav entry (task
+// #2279, FR16/A3; NFR9 -- this task changes no nav). Before #2279,
+// "/deployments" and "/deployments/" had no dedicated registration at all
+// and fell through to the "/" catch-all -- that was itself a guard
+// (TestNoDeploymentListingRouteOrNavEntry, superseded by this test), which
+// #2279 deliberately inverts: FR16/A3 requires "/deployments" and
+// "/deployments/<id>" to exist now, as the deployment-first names for the
+// two retired "/sgc/..." pages (handlers_redirects_test.go covers their
+// actual redirect behaviour in full). What has NOT changed is that no nav
+// link points at them -- this task adds redirects, not a new nav-visible
+// surface.
+func TestDeploymentsRouteExistsWithNoNavEntry(t *testing.T) {
 	app := &App{auth: newTestOIDCAuthenticator(t)}
 	mux := http.NewServeMux()
 	app.setupRoutes(mux)
 
-	// "/deployments", "/deployments/", and "/sgc" (no trailing slash) have
-	// no dedicated registration in setupRoutes -- so this checks the
-	// *pattern* http.ServeMux (1.22+) would dispatch each of them to, via
-	// mux.Handler, rather than executing a handler. That is deliberate: an
-	// unauthenticated probe (see requestWasAuthBlocked elsewhere in this
-	// file) can't distinguish "no distinct route exists" from "a distinct
-	// route exists but is also behind RequireAuthFunc" -- both redirect to
-	// login identically -- so it would not go red if a
-	// `mux.HandleFunc("/deployments", ...)` registration were added (the
-	// red/green case this guards). Resolving the pattern directly does:
-	// "/deployments" and "/deployments/" must still resolve to "/" (the
-	// registered catch-all subtree pattern, which every unclaimed path
-	// falls through to -- not a not-found route, not a deployments-index
-	// route), and "/sgc" must resolve to "/sgc/" (the existing
-	// per-deployment detail route, not a distinct listing pattern).
 	for _, tc := range []struct{ path, wantPattern string }{
-		{"/deployments", "/"},
-		{"/deployments/", "/"},
+		{"/deployments", "/deployments"},
+		{"/deployments/", "/deployments/"},
 		{"/sgc", "/sgc/"},
 	} {
 		t.Run(tc.path, func(t *testing.T) {
 			req := httptest.NewRequest(http.MethodGet, tc.path, nil)
 			_, pattern := mux.Handler(req)
 			if pattern != tc.wantPattern {
-				t.Errorf("expected %s to dispatch to pattern %q, got %q -- a different pattern here means a deployments-index route now exists", tc.path, tc.wantPattern, pattern)
+				t.Errorf("expected %s to dispatch to pattern %q, got %q", tc.path, tc.wantPattern, pattern)
 			}
 		})
 	}
@@ -404,54 +334,5 @@ func TestNoDeploymentListingRouteOrNavEntry(t *testing.T) {
 		if strings.Contains(nav, needle) {
 			t.Errorf("expected no deployments-index nav entry in components.Layout's emitted nav, found %q", needle)
 		}
-	}
-}
-
-// 6. Freshness (NFR3): no stale-cache header on the rendered response, and
-// no background-poll trigger on the status/connect-address region.
-func TestSGCDetailPage_NoStaleCacheHeaderOnRender(t *testing.T) {
-	data := pages.SGCDetailPageData{
-		Layout: components.LayoutData{Title: "SGC 1"},
-		SGC:    &manmanpb.ServerGameConfig{ServerGameConfigId: 1, Status: "active"},
-	}
-
-	req := httptest.NewRequest(http.MethodGet, "/sgc/1", nil)
-	w := httptest.NewRecorder()
-	if err := RenderTempl(w, req, "SGC 1", pages.SGCDetail(data)); err != nil {
-		t.Fatalf("RenderTempl failed: %v", err)
-	}
-
-	if cc := w.Header().Get("Cache-Control"); cc != "" {
-		t.Errorf("expected no Cache-Control header on the deployment page response (NFR3: status/address must be page-load-fresh, not stale-cacheable), got %q", cc)
-	}
-}
-
-func TestSGCDetail_StatusConnectRegionHasNoBackgroundPollTrigger(t *testing.T) {
-	sgc := &manmanpb.ServerGameConfig{
-		ServerGameConfigId: 1,
-		Status:             "active",
-		PortBindings: []*manmanpb.PortBinding{
-			{ContainerPort: 25565, HostPort: 25565, Protocol: "TCP"},
-		},
-	}
-	server := &manmanpb.Server{ServerId: 1, Name: "Alpha", HostPublicAddress: "play.example.com"}
-	sessions := []*manmanpb.Session{{SessionId: 1, StartedAt: 100, Status: "running"}}
-	latest := components.LatestSession(sessions)
-	status := components.ComputeDeploymentStatus(latest)
-	addrs := components.ComputeConnectAddresses(server.GetHostPublicAddress(), sgc.GetPortBindings())
-
-	data := pages.SGCDetailPageData{
-		Layout:                    components.LayoutData{Title: "SGC"},
-		SGC:                       sgc,
-		Server:                    server,
-		Sessions:                  sessions,
-		DeploymentStatus:          status,
-		ConnectAddresses:          addrs,
-		ConnectAddressUnavailable: len(addrs) == 0,
-	}
-
-	region := sgcStatusAndSessionRegion(t, renderSGCDetailPage(t, data))
-	if strings.Contains(region, `hx-trigger="every`) {
-		t.Errorf("expected no hx-trigger=\"every ...\" background poll on the status/connect-address region (NFR3), got %q", region)
 	}
 }

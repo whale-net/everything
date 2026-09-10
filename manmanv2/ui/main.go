@@ -454,11 +454,31 @@ func (app *App) setupRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("/workshop/bulk-add-collection", app.auth.RequireAuthFunc(app.auth.WithAccessToken(app.handleBulkAddCollection)))
 	mux.HandleFunc("/workshop/batch-create-addons", app.auth.RequireAuthFunc(app.auth.WithAccessToken(app.handleBatchCreateAddons)))
 
-	// Protected routes - SGC detail
+	// Protected routes - SGC detail. The "/sgc/" and "/sgc/<id>" pages
+	// themselves retired (task #2279, FR16): handleSGCRoutes' fallback now
+	// redirects rather than rendering a page (see its doc comment below).
+	// The three routes below are NOT pages -- FR16's disposition list
+	// governs pages only (FR3), and amendment A2 is explicit that these
+	// stay exactly as they are: /sgc/add-library is still reachable from
+	// the shared Workshop component (workshop_partials.templ), and
+	// /sgc/remove-library, /sgc/api/available-libraries become dead code
+	// once sgc_detail.templ is gone but are deliberately left in place
+	// rather than removed (they retire in M6). Do not fold these into the
+	// retirement.
 	mux.HandleFunc("/sgc/", app.auth.RequireAuthFunc(app.auth.WithAccessToken(app.handleSGCRoutes)))
 	mux.HandleFunc("/sgc/add-library", app.auth.RequireAuthFunc(app.auth.WithAccessToken(app.handleAddLibraryToSGC)))
 	mux.HandleFunc("/sgc/remove-library", app.auth.RequireAuthFunc(app.auth.WithAccessToken(app.handleSGCRemoveLibrary)))
 	mux.HandleFunc("/sgc/api/available-libraries", app.auth.RequireAuthFunc(app.auth.WithAccessToken(app.handleSGCAvailableLibraries)))
+
+	// Deployment-first redirect routes (task #2279, amendment A3): the new
+	// deployment-first names for the two retired SGC pages above. Both
+	// carry the identical redirect behaviour as their "/sgc/..." equivalent
+	// (handlers_deployment_redirects.go) -- registered under their own
+	// prefix, distinct from "/api/deployments/" (handleDeploymentRowFragment)
+	// and from the existing "/sgc/" and "/games/" catch-alls, per
+	// main.go:384-392's precedence note above.
+	mux.HandleFunc("/deployments", app.auth.RequireAuthFunc(app.auth.WithAccessToken(app.handleDeploymentsListRedirect)))
+	mux.HandleFunc("/deployments/", app.auth.RequireAuthFunc(app.auth.WithAccessToken(app.handleDeploymentDetailRedirectRoute)))
 
 	// Protected routes - Deployment Settings blade lazy fetch (task
 	// #2274, FR11/FR2). Deliberately a separate top-level prefix, not
@@ -478,7 +498,15 @@ func (app *App) setupRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("/api/dashboard-sessions", app.auth.RequireAuthFunc(app.auth.WithAccessToken(app.handleDashboardSessions)))
 }
 
-// handleSGCRoutes dispatches /sgc/* routes
+// handleSGCRoutes dispatches /sgc/* routes. The write endpoints nested
+// under /sgc/{id}/... below are untouched by #2279's page retirement -- the
+// Deployment Settings blade's env writes
+// (pages/deployment_settings.templ) still post to /sgc/{id}/env/set and
+// /sgc/{id}/env/remove, so this dispatch table must keep working exactly as
+// it did before. Only the fallback case -- no recognized sub-path, i.e. the
+// bare "/sgc/" list or a bare "/sgc/{id}" detail request -- changed: it used
+// to render a page (handleSGCDetail) and now redirects
+// (handlers_deployment_redirects.go), per FR16 and amendment A1.
 func (app *App) handleSGCRoutes(w http.ResponseWriter, r *http.Request) {
 	pathParts := strings.Split(strings.Trim(r.URL.Path, "/"), "/")
 	// /sgc/{id}/backup/trigger
@@ -512,7 +540,15 @@ func (app *App) handleSGCRoutes(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
-	app.handleSGCDetail(w, r)
+	// Fallback: no recognized action sub-path. A bare "/sgc/" (no id
+	// segment) is the retired deployment-list page; "/sgc/{id}" with
+	// nothing else after it is the retired SGC detail page. Both redirect
+	// now (FR16, A1) instead of rendering.
+	if len(pathParts) < 2 || pathParts[1] == "" {
+		app.handleDeploymentsListRedirect(w, r)
+		return
+	}
+	app.handleSGCDetailRedirect(w, r, pathParts[1])
 }
 
 func (app *App) handleHealth(w http.ResponseWriter, r *http.Request) {
