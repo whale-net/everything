@@ -23,16 +23,13 @@
 // stops at "the minted credential's stored identity is correct", never
 // exercising an MCP tool call.
 //
-// ui_sessions here is a self-contained schema literal, not whagent-net's
-// own migration -- because whagent-net doesn't have one yet (see
-// Scope note: whagent_net has no ui_sessions migration...). This mirrors
-// libs/go/htmxauth's own db_session_integration_test.go, whose doc
-// comment explains why dbtest's README asks integration tests to keep
-// schema self-contained: no dependency on migrations from other packages.
-// mcp_credential/mcp_oauth_client/mcp_auth_code, by contrast, ARE
-// whagent-net's own migration (004_mcpauth_credential, this task's own
-// Scaffold work) and are applied from the real embedded schema below, not
-// a hand-copied literal.
+// ui_sessions, mcp_credential/mcp_oauth_client/mcp_auth_code are all
+// whagent-net's own migrations (005_ui_sessions, issue #2288;
+// 004_mcpauth_credential, issue #2245) and are applied from the real
+// embedded schema below -- unlike libs/go/htmxauth's own
+// db_session_integration_test.go, which predates whagent-net having a
+// ui_sessions migration of its own and so still keeps a self-contained
+// literal.
 package main
 
 import (
@@ -64,23 +61,6 @@ import (
 	"github.com/whale-net/everything/whagent_net/migrate/schema"
 )
 
-// uiSessionsSchema is byte-for-byte the same shape
-// libs/go/htmxauth/db_session_integration_test.go's own literal uses --
-// the exact column set db_session.go's SetUserInfo INSERT / GetUserInfo
-// SELECT rely on. See this file's package doc for why it's self-contained
-// rather than sourced from a whagent-net migration.
-const uiSessionsSchema = `
-	CREATE TABLE ui_sessions (
-		session_id       TEXT        PRIMARY KEY,
-		user_info        JSONB       NOT NULL DEFAULT '{}',
-		access_token     TEXT        NOT NULL,
-		refresh_token    TEXT        NOT NULL,
-		token_expires_at TIMESTAMPTZ NOT NULL,
-		created_at       TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-		expires_at       TIMESTAMPTZ NOT NULL
-	);
-`
-
 // mcpAuthTestStack bundles a fully wired *App (real DB-backed
 // htmxauth.Authenticator + a real mcpauth.Provider constructed exactly
 // like setupMCPAuth/NewApp do in production) mounted on a real
@@ -96,10 +76,10 @@ type mcpAuthTestStack struct {
 
 // newMCPAuthTestStack provisions a throwaway Postgres (dbtest), applies
 // whagent-net's real embedded migrations (schema.Migrations -- including
-// 004_mcpauth_credential, this task's own mcp_credential/
-// mcp_oauth_client/mcp_auth_code tables) plus the self-contained
-// ui_sessions literal above, then builds an *App exactly the way NewApp
-// does: a real *htmxauth.Authenticator in OIDC mode (against a throwaway
+// 004_mcpauth_credential's mcp_credential/mcp_oauth_client/mcp_auth_code
+// tables and 005_ui_sessions's ui_sessions table), then builds an *App
+// exactly the way NewApp does: a real *htmxauth.Authenticator in OIDC mode
+// (against a throwaway
 // discovery server -- see newTestOIDCAuthenticator's doc comment for why
 // AuthModeNone cannot stand in here) and a real *mcpauth.Provider via
 // setupMCPAuth, mounted via app.setupRoutes on an httptest.Server.
@@ -121,9 +101,6 @@ func newMCPAuthTestStack(t *testing.T) *mcpAuthTestStack {
 
 	runner := migrate.NewRunner(sqlDB, schema.Migrations, schema.Dir)
 	require.NoError(t, runner.Up(), "apply every migration from whagent-net's real embedded schema")
-
-	_, err = db.Pool.Exec(ctx, uiSessionsSchema)
-	require.NoError(t, err, "create the self-contained ui_sessions table")
 
 	var discoveryServer *httptest.Server
 	discoveryServer = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
