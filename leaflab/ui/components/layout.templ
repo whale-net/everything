@@ -25,14 +25,16 @@ type LayoutData struct {
 
 // nav is leaflab-ui's app-owned nav item list (FR1a — htmxui.Shell
 // hardcodes no nav of its own, see htmxui.ShellData's doc comment).
-// "Boards" links to the boards list screen (#1502). "Admin" links to the
-// admin ownership screen (#1777: FR11-FR14) and renders only when isAdmin
-// is true — see LayoutData.IsAdmin's doc comment for why hiding it here is
-// presentation only.
+// "Boards" links to the boards list screen (#1502). "Regions" links to the
+// regions screen (#2317: FR6 tree with drill-down, FR1-FR3 create/rename/
+// re-parent). "Admin" links to the admin ownership screen (#1777: FR11-FR14)
+// and renders only when isAdmin is true — see LayoutData.IsAdmin's doc
+// comment for why hiding it here is presentation only.
 templ nav(isAdmin bool) {
 	<ul class="menu menu-horizontal px-1">
 		<li><a href="/">Home</a></li>
 		<li><a href="/boards">Boards</a></li>
+		<li><a href="/regions">Regions</a></li>
 		if isAdmin {
 			<li><a href="/admin/boards">Admin</a></li>
 		}

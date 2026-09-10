@@ -28,6 +28,9 @@ leaflab/ui/
 | `/boards` | Boards list | FR4, FR5 — every board, reporting state. |
 | `/boards/{board_id}` | Board detail | FR6-FR9 — sensors, claim, rename, reading history. |
 | `/sensors/{sensor_id}/history` | Sensor reading history | FR9. |
+| `/regions` | Regions | M3 FR6 — the whole region forest from `GetRegionTree` (siblings alphabetical, per-region "sensors here only" and "sensors here or below" counts), FR1 create form (name + optional parent picker, top-level default), and per-region rename/re-parent controls. Server-rendered; no live refresh. |
+| `/regions/{region_id}` | Region drill-down | M3 FR6 — one region's subtree from `GetRegionTree`, same controls. A malformed or unknown region_id gets a real 404. |
+| `POST /regions/create`, `POST /regions/{region_id}/rename`, `POST /regions/{region_id}/reparent` | (form targets) | M3 FR1-FR3, FR5 — POST-redirect-GET back to the submitting page; failures (including FR5's cycle rejection, surfaced as the API's own `FailedPrecondition` message) ride back as a `?error=` query parameter and render as the action-error banner. Owner authz is enforced server-side by the backing RPCs (NFR2) — the forms render for every region and the API rejects non-owner writes. |
 | `/admin/boards` | Admin ownership | FR11-FR14 — **admin-only**: lists every currently-owned board and lets an admin reassign or clear its ownership. The "Admin" nav link is hidden for a non-admin (presentation only); the real gate is `requireAdmin` on `leaflab-api`'s `ListOwnedBoards`/`ReassignBoardOwner`/`ClearBoardOwner`/`ListUsers` RPCs — a non-admin reaching this route directly gets a 403-style page (`pages.AdminForbidden`), and calling the RPCs directly (bypassing this UI) is denied server-side regardless of what this UI shows. Admin-only mistake-correction, not a self-service release action (C25 boundary) — there is no "release my board" affordance anywhere in this UI. |
 
 ## Auth (FR1, FR3, NFR3)
