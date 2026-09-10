@@ -9,15 +9,19 @@ import (
 	"strings"
 
 	manmanpb "github.com/whale-net/everything/manmanv2/protos"
+	"github.com/whale-net/everything/manmanv2/ui/components"
 	"github.com/whale-net/everything/manmanv2/ui/pages"
 )
 
-// Deployment Settings blade -- environment half (root plan #2266, task
-// #2274: FR11, NFR5, WD3, WD9). This file assembles the blade's
-// environment section (pages.DeploymentSettingsData) and answers its one
-// UI-only route -- everything it writes through still goes via
-// handlers_sgc_env.go's shipped per-key handleSGCEnvSet/handleSGCEnvRemove
-// (NFR3: no wire-contract change, NFR4: no new API surface).
+// Deployment Settings blade -- environment (root plan #2266, task #2274:
+// FR11, NFR5, WD3, WD9) and ports (task #2275: FR12, the accumulating
+// half of FR10, WD10). This file assembles both of the blade's sections
+// (pages.DeploymentSettingsData for env, pages.DeploymentSettingsPortsData
+// for ports) and answers their UI-only routes. Env writes still go via
+// handlers_sgc_env.go's shipped per-key handleSGCEnvSet/handleSGCEnvRemove;
+// ports writes go via the shipped UpdateServerGameConfig write path
+// (handlers_sgc.go's handleSGCUpdatePorts uses the same call) -- NFR3: no
+// wire-contract change, NFR4: no new API surface either section adds.
 
 // buildDeploymentSettingsData assembles the Deployment Settings blade's
 // environment section: buildSGCEnvOverridesData's layering (reused, not
@@ -99,7 +103,154 @@ func (app *App) handleDeploymentSettingsRoutes(w http.ResponseWriter, r *http.Re
 		app.handleDeploymentSettingsEnv(w, r, pathParts[1])
 		return
 	}
+	// /deployment-settings/{id}/ports/save (FR12's one explicit Save --
+	// checked before the bare "ports" branch below since both share
+	// pathParts[2] == "ports").
+	if len(pathParts) >= 4 && pathParts[2] == "ports" && pathParts[3] == "save" {
+		app.handleDeploymentSettingsPortsSave(w, r, pathParts[1])
+		return
+	}
+	// /deployment-settings/{id}/ports (lazy load, mirrors the env branch
+	// above)
+	if len(pathParts) >= 3 && pathParts[2] == "ports" {
+		app.handleDeploymentSettingsPorts(w, r, pathParts[1])
+		return
+	}
 	http.NotFound(w, r)
+}
+
+// buildDeploymentSettingsPortsData assembles the blade's ports section
+// (FR12): the deployment's current bindings plus the FR13/FR14 guidance
+// surface, reused unchanged from buildSGCPortContext
+// (handlers_sgc_ports_guidance.go, task #2098) -- this renders that
+// guidance, it does not re-derive it.
+func (app *App) buildDeploymentSettingsPortsData(ctx context.Context, sgc *manmanpb.ServerGameConfig) pages.DeploymentSettingsPortsData {
+	return pages.DeploymentSettingsPortsData{
+		SGCID:        sgc.GetServerGameConfigId(),
+		PortBindings: sgc.GetPortBindings(),
+		PortContext:  buildSGCPortContext(ctx, app.grpc.GetAPI(), sgc.GetServerId(), sgc.GetServerGameConfigId()),
+	}
+}
+
+// handleDeploymentSettingsPorts answers the blade's lazy ports-section
+// fetch (FR12): GET /deployment-settings/{id}/ports, fired once by
+// games.templ's DeploymentSettingsPortsPlaceholder (hx-trigger="load"),
+// the same lazy-fetch shape handleDeploymentSettingsEnv already uses for
+// the env section (NFR7: no per-deployment fetch at Games-page render
+// time).
+func (app *App) handleDeploymentSettingsPorts(w http.ResponseWriter, r *http.Request, sgcIDStr string) {
+	sgcID, err := strconv.ParseInt(sgcIDStr, 10, 64)
+	if err != nil || sgcID <= 0 {
+		http.Error(w, "Invalid SGC ID", http.StatusBadRequest)
+		return
+	}
+
+	ctx := r.Context()
+	sgc, err := app.fetchSGC(ctx, sgcID)
+	if err != nil {
+		http.Error(w, "SGC not found", http.StatusNotFound)
+		return
+	}
+
+	data := app.buildDeploymentSettingsPortsData(ctx, sgc)
+	w.Header().Set("Content-Type", "text/html")
+	if err := pages.DeploymentSettingsPortsSection(data).Render(ctx, w); err != nil {
+		log.Printf("Error rendering deployment settings ports fragment: %v", err)
+	}
+}
+
+// handleDeploymentSettingsPortsSave answers the blade's explicit ports
+// Save (FR12): POST /deployment-settings/{id}/ports/save, the section's
+// only write -- the whole accumulated binding array in one
+// UpdateServerGameConfig call with update_paths=["port_bindings"], the
+// same shipped write path handleSGCUpdatePorts (handlers_sgc.go) uses.
+// NFR5's no-bulk rule is about the env section, not this one: one array
+// field, one call is the intended shape for ports, not a bulk-write
+// violation.
+//
+// On success the response is a clean fragment (Dirty: false, so
+// data-blade-dirty goes back to "false" -- FR10 stops prompting on
+// dismiss) plus an out-of-band swap of the Games page's connect-address
+// display for this deployment (AC4). This handler adds no validation
+// authority of its own (FR12): it saves whatever was submitted and lets
+// the API's existing save-time checks be the backstop.
+//
+// On failure the response re-renders the section with the operator's
+// just-submitted bindings preserved, still marked Dirty (so FR10 keeps
+// prompting), plus an inline error -- entered bindings are never dropped.
+func (app *App) handleDeploymentSettingsPortsSave(w http.ResponseWriter, r *http.Request, sgcIDStr string) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	sgcID, err := strconv.ParseInt(sgcIDStr, 10, 64)
+	if err != nil || sgcID <= 0 {
+		http.Error(w, "Invalid SGC ID", http.StatusBadRequest)
+		return
+	}
+	if err := r.ParseForm(); err != nil {
+		http.Error(w, "Invalid form data", http.StatusBadRequest)
+		return
+	}
+
+	portBindings, err := parsePortBindingsJSON(r.FormValue("port_bindings_json"))
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+
+	ctx := r.Context()
+	sgc, err := app.fetchSGC(ctx, sgcID)
+	if err != nil {
+		http.Error(w, "SGC not found", http.StatusNotFound)
+		return
+	}
+
+	_, updateErr := app.grpc.UpdateServerGameConfig(ctx, &manmanpb.UpdateServerGameConfigRequest{
+		ServerGameConfigId: sgcID,
+		PortBindings:       portBindings,
+		UpdatePaths:        []string{"port_bindings"},
+	})
+	if updateErr != nil {
+		log.Printf("Error updating port bindings for sgc %d via deployment settings: %v", sgcID, updateErr)
+		data := pages.DeploymentSettingsPortsData{
+			SGCID:        sgcID,
+			PortBindings: portBindings,
+			PortContext:  buildSGCPortContext(ctx, app.grpc.GetAPI(), sgc.GetServerId(), sgcID),
+			Error:        "Failed to save port bindings. Your entered bindings are unchanged below.",
+			Dirty:        true,
+		}
+		w.Header().Set("Content-Type", "text/html")
+		if err := pages.DeploymentSettingsPortsSection(data).Render(ctx, w); err != nil {
+			log.Printf("Error re-rendering deployment settings ports fragment: %v", err)
+		}
+		return
+	}
+
+	data := pages.DeploymentSettingsPortsData{
+		SGCID:        sgcID,
+		PortBindings: portBindings,
+		PortContext:  buildSGCPortContext(ctx, app.grpc.GetAPI(), sgc.GetServerId(), sgcID),
+	}
+	w.Header().Set("Content-Type", "text/html")
+	if err := pages.DeploymentSettingsPortsSection(data).Render(ctx, w); err != nil {
+		log.Printf("Error rendering deployment settings ports fragment: %v", err)
+	}
+
+	// AC4: recompute the connect address from the newly saved bindings and
+	// swap it into the Games page row out of band. A GetServer failure here
+	// degrades to no swap (the section's own primary swap above already
+	// landed) -- never an error response for a save that already
+	// succeeded.
+	serverResp, err := app.grpc.GetAPI().GetServer(ctx, &manmanpb.GetServerRequest{ServerId: sgc.GetServerId()})
+	if err != nil {
+		log.Printf("Warning: failed to fetch server %d for connect-address recompute: %v", sgc.GetServerId(), err)
+		return
+	}
+	view := components.BuildConnectAddressView(serverResp.GetServer().GetHostPublicAddress(), portBindings)
+	if err := pages.DeploymentConnectAddressOOB(sgcID, view).Render(ctx, w); err != nil {
+		log.Printf("Error rendering connect-address OOB swap: %v", err)
+	}
 }
 
 // handleDeploymentSettingsEnv answers the Deployment Settings blade's lazy

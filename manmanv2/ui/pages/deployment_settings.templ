@@ -2,40 +2,63 @@ package pages
 
 import (
 	"fmt"
+
+	manmanpb "github.com/whale-net/everything/manmanv2/protos"
+	"github.com/whale-net/everything/manmanv2/ui/components"
 )
 
-// Deployment Settings blade -- environment half (root plan #2266, task
-// #2274 -- FR11, NFR5, WD3, WD9). Serves AC3.
+// Deployment Settings blade -- environment + ports (root plan #2266,
+// tasks #2274 -- FR11, NFR5, WD3, WD9 -- and #2275 -- FR12, the
+// accumulating half of FR10, WD10). Serves AC3 and AC4.
 //
-// This is the FR11-only half of the blade #2269 built the shell for
-// (components.Blade/components.BladeData): the ports half (FR12) is a
-// separate, later task (#2275) that shares the same blade but is an
-// *accumulating* section with its own blade-level Save -- see the split
-// note on issue #2274. This file only ever renders the env section, and
-// that section is per-key-commit: every write below lands through
-// handlers_sgc_env.go's shipped handleSGCEnvSet/handleSGCEnvRemove (the
-// same endpoints the standalone SGC page's Environment section already
-// uses, sgc_env_overrides.templ), just with hx-post/hx-swap wiring
-// instead of a full-page redirect so the blade never navigates the
-// underlying Games page away (FR10: opening/closing a Blade never
-// re-fetches the surface underneath).
+// This file renders both sections #2269's blade shell
+// (components.Blade/components.BladeData) holds: env (below,
+// DeploymentSettingsEnvSection) and ports (DeploymentSettingsPortsSection,
+// further down). They have deliberately different save semantics -- see
+// the split note on issue #2274, quoted again here because it is the
+// reason the two sections' dirty-tracking looks so different side by
+// side: env commits per key on its own action and so is *never* dirty
+// (WD9); ports accumulate a whole binding array client-side and commit it
+// in one explicit Save, so it *is* the section that can make #2269's
+// Blade dismissal prompt fire (FR10's section-granularity rule exists
+// because of exactly this asymmetry). Do not "simplify" by promoting
+// either section's dirty state to a blade-level flag -- that would make
+// dismissing the blade prompt over the *env* table too, regressing WD9.
 //
-// NFR5/LB4: there is no blade-level multi-key Save for this section and
+// Env section (FR11): every write lands through handlers_sgc_env.go's
+// shipped handleSGCEnvSet/handleSGCEnvRemove (the same endpoints the
+// standalone SGC page's Environment section already uses,
+// sgc_env_overrides.templ), just with hx-post/hx-swap wiring instead of a
+// full-page redirect so the blade never navigates the underlying Games
+// page away (FR10: opening/closing a Blade never re-fetches the surface
+// underneath).
+//
+// NFR5/LB4: there is no blade-level multi-key Save for the env section and
 // therefore no accumulated request that could ever carry more than one
-// key -- every <form> below posts exactly one key. See
+// key -- every <form> in that section posts exactly one key. See
 // handlers_sgc_env_test.go's grep-style NFR5 assertion and this package's
-// deployment_settings_test.go for the request-shape guard.
+// deployment_settings_test.go for the request-shape guard. NFR5's no-bulk
+// rule is about env specifically -- the ports section's single
+// whole-array Save below is the *intended* shape for FR12, not a
+// violation of it (ports are one array field; one call carrying the whole
+// array is the shipped write path, not a bulk-write of several
+// independent values the way per-key env overrides would be).
 //
-// WD9: no Save/Cancel pair renders anywhere in this section -- per-key
+// WD9: no Save/Cancel pair renders anywhere in the env section -- per-key
 // commits leave nothing to accumulate, so there is nothing to prompt a
-// blade dismissal over. The section below is registered with #2269's
+// blade dismissal over. That section is registered with #2269's
 // per-section dirty-tracking API (data-blade-section="env") but its
 // data-blade-dirty is a static "false", never flipped by any script --
-// this section's own JS never runs (there is none): it is pure
+// the env section's own JS never runs (there is none): it is pure
 // hx-post/hx-swap in-place refresh.
 //
 // WD3: deliberately no "Extra Addons" section here (per-deployment extra
 // addons depend on the GC-level library model -> M6/C28). Do not add one.
+//
+// WD10: port bindings live on this blade, not on the Config Editor --
+// `port_bindings` is a ServerGameConfig (deployment) property, not a
+// GameConfig one, so the Config Editor's Config-scoped blade has no Ports
+// tab (documented, intentional divergence from `92-v2-config-edit`).
 
 // DeploymentSettingsData drives the blade's environment section.
 // DisplayName is FR2's "<config> on <server>" naming -- the same value
@@ -234,4 +257,211 @@ templ deploymentSettingsEnvRow(sgcID int64, layer EnvVarLayer) {
 			}
 		</td>
 	</tr>
+}
+
+// DeploymentSettingsPortsData drives the blade's port-bindings section
+// (FR12). PortBindings is the section's current binding set -- server
+// truth on the initial lazy load and on a successful Save, or the
+// operator's just-submitted (but rejected) bindings on a failed Save, so
+// a backend rejection never drops what the operator entered. PortContext
+// carries the shipped FR13/FR14 guidance (buildSGCPortContext,
+// handlers_sgc_ports_guidance.go) -- nil when the auxiliary fetches
+// degraded, same posture that function's other caller (handleSGCDetail)
+// already takes (guidance renders weaker, never an error page). Error and
+// Dirty are both zero-value except on the fragment a failed Save
+// re-renders: Error surfaces the rejection, Dirty keeps the section
+// registered as dirty with #2269's Blade so dismissing still prompts.
+type DeploymentSettingsPortsData struct {
+	SGCID        int64
+	PortBindings []*manmanpb.PortBinding
+	PortContext  *SGCPortContext
+	Error        string
+	Dirty        bool
+}
+
+// DeploymentSettingsPortsSectionID is the one stable container id the
+// initial placeholder (DeploymentSettingsPortsPlaceholder) and every
+// hx-swap response (the lazy GET and every Save response, success or
+// failure) share -- mirrors DeploymentSettingsEnvSectionID's role for the
+// env section.
+func DeploymentSettingsPortsSectionID(sgcID int64) string {
+	return fmt.Sprintf("deployment-settings-ports-%d", sgcID)
+}
+
+// portsDirtyAttr renders DeploymentSettingsPortsData.Dirty as the
+// data-blade-dirty attribute's initial value. Alpine's own
+// :data-blade-dirty binding (below) takes over reactively the instant the
+// section mounts and on every subsequent edit; this is only the
+// pre-Alpine/SSR-visible value, kept in sync with Dirty for the same
+// reason DeploymentSettingsEnvSection renders a static "false" --
+// something has to be true before any script runs.
+func portsDirtyAttr(dirty bool) string {
+	if dirty {
+		return "true"
+	}
+	return "false"
+}
+
+// portsAlpineState builds the section's x-data object: an accumulating
+// client-side ports array (FR12 -- edits never hit the network until an
+// explicit Save), the FR13/FR14 guidance context read off this element's
+// own data-port-context/data-port-bindings attributes at init, and a
+// dirty flag any edit (add, remove, or an in-place field change) flips to
+// true. dirty seeds from DeploymentSettingsPortsData.Dirty so a failed
+// Save's re-rendered fragment keeps tracking as dirty rather than
+// resetting to clean under the operator.
+//
+// Deliberately no random-port-generation affordance here (unlike
+// sgc_detail.templ's ports editor): that endpoint lives at
+// /sgc/{id}/random-port, and embedding that URL in a Games-page-adjacent
+// fragment would put a "sgc" literal in markup FR2 governs (see
+// DeploymentSettingsEnvPlaceholder's doc comment on why its own fetch
+// target avoids the /sgc/ prefix for the same reason). FR12 only requires
+// reusing the guidance surface's ranges/in-use data, not the random-pick
+// convenience -- this section renders warnings from that same guidance
+// data but leaves random-pick to the standalone SGC page.
+func portsAlpineState(dirty bool) string {
+	return fmt.Sprintf(`{
+		ports: [],
+		portCtx: { ranges: {}, in_use: {} },
+		dirty: %t,
+		addPort() { this.ports.push({ container_port: '', host_port: '', protocol: 'TCP' }); this.dirty = true },
+		removePort(i) { this.ports.splice(i, 1); this.dirty = true },
+		markDirty() { this.dirty = true },
+		hasRanges(proto) { return (this.portCtx.ranges[proto] || []).length > 0 },
+		portWarning(pb) {
+			const hp = parseInt(pb.host_port)
+			if (!hp || hp < 1) return ''
+			const proto = pb.protocol || 'TCP'
+			if ((this.portCtx.in_use[proto] || []).includes(hp)) {
+				return 'Host port ' + hp + ' is already in use on this server.'
+			}
+			if (this.hasRanges(proto)) {
+				const inRange = (this.portCtx.ranges[proto] || []).some(r => hp >= r.start && hp <= r.end)
+				if (!inRange) return 'Host port ' + hp + ' is outside the configured allowed ranges.'
+			}
+			return ''
+		},
+		init() {
+			const dataStr = this.$el.dataset.portBindings
+			const initial = dataStr ? JSON.parse(dataStr) : []
+			this.ports = initial.map(pb => ({ container_port: pb.container_port, host_port: pb.host_port, protocol: pb.protocol }))
+			const ctxStr = this.$el.dataset.portContext
+			this.portCtx = ctxStr ? JSON.parse(ctxStr) : { ranges: {}, in_use: {} }
+		}
+	}`, dirty)
+}
+
+// DeploymentSettingsPortsPlaceholder is the blade body's second section
+// (alongside DeploymentSettingsEnvPlaceholder), cloned zero-cost with the
+// rest of the blade shell (#2272's data-open-blade-template click
+// handler) -- fetching guidance data for every deployment row at
+// Games-page render time would grow the page's call count with the
+// number of deployments rendered, which NFR7 forbids, so this placeholder
+// fires its own hx-get once the clone lands in the document
+// (hx-trigger="load"), same shape as the env placeholder.
+templ DeploymentSettingsPortsPlaceholder(sgcID int64) {
+	<div
+		id={ DeploymentSettingsPortsSectionID(sgcID) }
+		data-blade-section="ports"
+		data-blade-dirty="false"
+		data-testid="deployment-settings-ports"
+		hx-get={ templ.URL(fmt.Sprintf("/deployment-settings/%d/ports", sgcID)) }
+		hx-trigger="load"
+		hx-swap="outerHTML"
+	>
+		<p class="text-sm text-base-content/60">Loading port bindings…</p>
+	</div>
+}
+
+// DeploymentSettingsPortsSection renders the real, editable ports section
+// (FR12): an accumulating list of container/host/protocol rows (Alpine
+// state, portsAlpineState) with inline FR13/FR14 guidance warnings, and
+// one explicit Save that posts the whole accumulated array in a single
+// hx-post (NFR5 is about env, not this -- see the file doc comment). The
+// initial lazy load, every failed-Save re-render, and every successful
+// Save response all render this same templ, so the section's markup can
+// never drift between those states.
+//
+// FR12's "no new validation authority" requirement is structural here:
+// portWarning (portsAlpineState) only ever renders text via x-text, it
+// never disables the Save button or blocks form submission -- a binding
+// the guidance flags as unusual still saves if the backend accepts it.
+templ DeploymentSettingsPortsSection(data DeploymentSettingsPortsData) {
+	<div
+		id={ DeploymentSettingsPortsSectionID(data.SGCID) }
+		data-blade-section="ports"
+		data-blade-dirty={ portsDirtyAttr(data.Dirty) }
+		data-testid="deployment-settings-ports"
+		x-data={ portsAlpineState(data.Dirty) }
+		:data-blade-dirty="dirty ? 'true' : 'false'"
+		data-port-bindings={ templ.JSONString(data.PortBindings) }
+		if data.PortContext != nil {
+			data-port-context={ templ.JSONString(data.PortContext) }
+		}
+	>
+		<div class="flex justify-between items-center mb-3">
+			<h3 class="text-sm font-semibold text-base-content">Port Bindings</h3>
+		</div>
+		if data.Error != "" {
+			<div role="alert" class="alert alert-error alert-soft mb-3" data-testid="deployment-settings-ports-error">
+				<span class="text-sm">{ data.Error }</span>
+			</div>
+		}
+		<form
+			hx-post={ templ.URL(fmt.Sprintf("/deployment-settings/%d/ports/save", data.SGCID)) }
+			hx-target={ "#" + DeploymentSettingsPortsSectionID(data.SGCID) }
+			hx-swap="outerHTML"
+			x-on:submit="$event.target.port_bindings_json.value = JSON.stringify(ports.filter(p => p.container_port && p.host_port).map(p => ({ container_port: parseInt(p.container_port), host_port: parseInt(p.host_port), protocol: p.protocol })))"
+		>
+			<input type="hidden" name="port_bindings_json" value=""/>
+			<p x-show="ports.length === 0" class="text-sm text-base-content/60 mb-2">No port bindings configured.</p>
+			<template x-for="(pb, idx) in ports" :key="idx">
+				<div class="flex gap-2 items-center mb-2 flex-wrap" data-testid="deployment-settings-ports-row">
+					<input type="number" x-model="pb.container_port" x-on:input="markDirty()" min="1" max="65535" placeholder="Container Port" class="input input-bordered input-sm w-32 font-mono"/>
+					<span class="text-base-content/60">→</span>
+					<input type="number" x-model="pb.host_port" x-on:input="markDirty()" min="1" max="65535" placeholder="Host Port" class="input input-bordered input-sm w-32 font-mono"/>
+					<select x-model="pb.protocol" x-on:change="markDirty()" class="select select-bordered select-sm">
+						<option value="TCP">TCP</option>
+						<option value="UDP">UDP</option>
+					</select>
+					<button type="button" x-on:click="removePort(idx)" class="btn btn-error btn-sm btn-square">×</button>
+					<p
+						x-show="portWarning(pb)"
+						class="w-full text-warning text-sm pl-1"
+						data-testid="deployment-settings-ports-warning"
+						x-text="portWarning(pb)"
+					></p>
+				</div>
+			</template>
+			<div class="flex gap-2 mt-2">
+				<button type="button" x-on:click="addPort()" class="btn btn-neutral btn-sm" data-testid="deployment-settings-ports-add">+ Add Port Binding</button>
+				<button type="submit" class="btn btn-success btn-sm" data-testid="deployment-settings-ports-save">Save</button>
+			</div>
+		</form>
+	</div>
+}
+
+// DeploymentConnectAddressID is the stable id the Games page's expanded
+// Deployments-section row (games.templ's gameDeploymentRow) wraps its
+// connect-address display in. AC4: a successful ports Save recomputes the
+// connect address from the newly saved bindings and swaps it into this
+// element out of band (DeploymentConnectAddressOOB) alongside this
+// section's own primary swap, so the underlying Games page row reflects
+// the new binding without a page reload or a re-fetch of anything else on
+// that page (FR10).
+func DeploymentConnectAddressID(sgcID int64) string {
+	return fmt.Sprintf("deployment-connect-%d", sgcID)
+}
+
+// DeploymentConnectAddressOOB renders that out-of-band replacement:
+// htmx swaps it into place wherever DeploymentConnectAddressID(sgcID)
+// already exists in the document. If it does not (the blade was opened
+// some other way, or the id was never rendered there), the oob swap is
+// simply a no-op -- it never errors a Save response that already
+// succeeded.
+templ DeploymentConnectAddressOOB(sgcID int64, view components.ConnectAddressView) {
+	<span id={ DeploymentConnectAddressID(sgcID) } hx-swap-oob="true">
+		@components.ConnectAddressDisplay(view)
+	</span>
 }
