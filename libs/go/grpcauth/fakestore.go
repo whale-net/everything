@@ -2,7 +2,6 @@ package grpcauth
 
 import (
 	"context"
-	"errors"
 	"sync"
 )
 
@@ -68,30 +67,83 @@ func (f *FakeStore) SetFailure(err error) {
 
 // Persist implements Store.
 func (f *FakeStore) Persist(ctx context.Context, subject, grant string, material TokenMaterial) error {
-	// TODO(implementation): store material, reset status to active.
-	return errors.New("grpcauth: FakeStore.Persist not implemented")
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.calls.Persist++
+	if f.failErr != nil {
+		return f.failErr
+	}
+	key := fakeGrantKey{subject: subject, grant: grant}
+	f.grants[key] = &fakeGrant{status: GrantStatusActive, material: material}
+	return nil
 }
 
 // TokenMaterial implements Store.
 func (f *FakeStore) TokenMaterial(ctx context.Context, subject, grant string) (TokenMaterial, error) {
-	// TODO(implementation): status check first, then return material.
-	return TokenMaterial{}, errors.New("grpcauth: FakeStore.TokenMaterial not implemented")
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.calls.TokenMaterial++
+	if f.failErr != nil {
+		return TokenMaterial{}, f.failErr
+	}
+	g, ok := f.grants[fakeGrantKey{subject: subject, grant: grant}]
+	if !ok {
+		return TokenMaterial{}, ErrGrantNotFound
+	}
+	switch g.status {
+	case GrantStatusRevoked:
+		return TokenMaterial{}, ErrGrantRevoked
+	case GrantStatusNeedsReauth:
+		return TokenMaterial{}, ErrGrantNeedsReauth
+	}
+	return g.material, nil
 }
 
 // Status implements Store.
 func (f *FakeStore) Status(ctx context.Context, subject, grant string) (GrantStatus, error) {
-	// TODO(implementation): plain read, ErrGrantNotFound for unknown keys.
-	return "", errors.New("grpcauth: FakeStore.Status not implemented")
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.calls.Status++
+	if f.failErr != nil {
+		return "", f.failErr
+	}
+	g, ok := f.grants[fakeGrantKey{subject: subject, grant: grant}]
+	if !ok {
+		return "", ErrGrantNotFound
+	}
+	return g.status, nil
 }
 
 // MarkNeedsReauth implements Store.
 func (f *FakeStore) MarkNeedsReauth(ctx context.Context, subject, grant string) error {
-	// TODO(implementation): unconditional transition to needs_reauth.
-	return errors.New("grpcauth: FakeStore.MarkNeedsReauth not implemented")
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.calls.MarkNeedsReauth++
+	if f.failErr != nil {
+		return f.failErr
+	}
+	key := fakeGrantKey{subject: subject, grant: grant}
+	g, ok := f.grants[key]
+	if !ok {
+		return ErrGrantNotFound
+	}
+	g.status = GrantStatusNeedsReauth
+	return nil
 }
 
 // Revoke implements Store.
 func (f *FakeStore) Revoke(ctx context.Context, subject, grant string) error {
-	// TODO(implementation): unconditional transition to revoked.
-	return errors.New("grpcauth: FakeStore.Revoke not implemented")
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.calls.Revoke++
+	if f.failErr != nil {
+		return f.failErr
+	}
+	key := fakeGrantKey{subject: subject, grant: grant}
+	g, ok := f.grants[key]
+	if !ok {
+		return ErrGrantNotFound
+	}
+	g.status = GrantStatusRevoked
+	return nil
 }
