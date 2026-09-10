@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log/slog"
 	"net/http"
 	"strings"
 	"time"
@@ -15,6 +16,38 @@ import (
 // defaultHTTPTimeout bounds discovery and (in later tasks) token/revocation
 // calls when the caller does not supply its own HTTPClient.
 const defaultHTTPTimeout = 15 * time.Second
+
+// offlineAccessScope is always present in the resolved scope set (FR1):
+// without it Keycloak does not issue a refresh token usable for
+// non-interactive refresh (#2386).
+const offlineAccessScope = "offline_access"
+
+// Delegated-grant config validation errors. Each is distinct so a caller (or
+// a table test) can tell which field was missing without string matching.
+var (
+	// ErrConfigIssuerRequired is returned when Issuer is empty and Endpoints
+	// is not fully populated, so there is nothing to discover from.
+	ErrConfigIssuerRequired = errors.New("grpcauth: DelegatedGrantConfig.Issuer is required when Endpoints is not fully populated")
+
+	// ErrConfigClientIDRequired is returned when ClientID is empty.
+	ErrConfigClientIDRequired = errors.New("grpcauth: DelegatedGrantConfig.ClientID is required")
+
+	// ErrConfigClientSecretRequired is returned when ClientSecret is empty.
+	// FR14 requires a confidential client; this package offers no
+	// public-client (no-secret) mode.
+	ErrConfigClientSecretRequired = errors.New("grpcauth: DelegatedGrantConfig.ClientSecret is required")
+
+	// ErrConfigRedirectURIRequired is returned when RedirectURI is empty.
+	ErrConfigRedirectURIRequired = errors.New("grpcauth: DelegatedGrantConfig.RedirectURI is required")
+
+	// ErrConfigStoreRequired is returned when Store is nil.
+	ErrConfigStoreRequired = errors.New("grpcauth: DelegatedGrantConfig.Store is required")
+
+	// ErrConfigEncryptionKeySize is returned when EncryptionKey is set but is
+	// not exactly GrantKeySize bytes. It reports only the expected size,
+	// never any part of the supplied key (NFR1).
+	ErrConfigEncryptionKeySize = fmt.Errorf("grpcauth: DelegatedGrantConfig.EncryptionKey must be %d bytes when set", GrantKeySize)
+)
 
 // Endpoints is the set of Keycloak URLs the delegated-grant flow talks to.
 // Either supplied verbatim by the caller (this is how tests point the flow
@@ -62,8 +95,7 @@ type DelegatedGrantConfig struct {
 
 	// ClientSecret is the confidential client's secret (FR14). Never
 	// logged, printed, or included in an error (NFR1) -- see
-	// DelegatedGrantConfig's String()/LogValue(), added in the
-	// Implementation phase of this task.
+	// DelegatedGrantConfig's String()/LogValue().
 	ClientSecret string
 
 	// RedirectURI is the caller-supplied redirect URI, allow-listed on the
@@ -73,8 +105,9 @@ type DelegatedGrantConfig struct {
 	RedirectURI string
 
 	// Scopes are the OAuth2 scopes requested. offline_access is always
-	// added if the caller omits it (FR1); see the Implementation phase for
-	// that logic. Left as supplied by the scaffold.
+	// added if the caller omits it (FR1) -- see resolvedScopes, applied by
+	// NewDelegatedGrantSource. This field itself holds only what the caller
+	// supplied; use DelegatedGrantSource.Scopes() for the resolved set.
 	Scopes []string
 
 	// Endpoints, when fully populated (see Endpoints.fullyPopulated), is
@@ -99,15 +132,67 @@ type DelegatedGrantConfig struct {
 }
 
 // Validate reports whether cfg is usable, checking required fields ahead of
-// any network call.
-//
-// TODO(implementation): reject empty Issuer (when Endpoints is not fully
-// populated), empty ClientID, empty ClientSecret (confidential client is
-// required -- FR14; no public-client mode is offered), empty RedirectURI,
-// nil Store, and an EncryptionKey that is set but not exactly GrantKeySize
-// bytes. See this task's Implementation phase.
+// any network call. Returned errors never embed ClientSecret or
+// EncryptionKey (NFR1); see String()/LogValue() for the same guarantee on
+// %v/log output.
 func (c DelegatedGrantConfig) Validate() error {
+	if !c.Endpoints.fullyPopulated() && c.Issuer == "" {
+		return ErrConfigIssuerRequired
+	}
+	if c.ClientID == "" {
+		return ErrConfigClientIDRequired
+	}
+	if c.ClientSecret == "" {
+		return ErrConfigClientSecretRequired
+	}
+	if c.RedirectURI == "" {
+		return ErrConfigRedirectURIRequired
+	}
+	if c.Store == nil {
+		return ErrConfigStoreRequired
+	}
+	if c.EncryptionKey != nil && len(c.EncryptionKey) != GrantKeySize {
+		return ErrConfigEncryptionKeySize
+	}
 	return nil
+}
+
+// String redacts ClientSecret and EncryptionKey so an accidental %v/%s of a
+// DelegatedGrantConfig (in a log line or error) cannot leak them (NFR1).
+func (c DelegatedGrantConfig) String() string {
+	return fmt.Sprintf(
+		"DelegatedGrantConfig{Issuer:%q ClientID:%q ClientSecret:%s RedirectURI:%q Scopes:%v Endpoints:%+v EncryptionKey:%s}",
+		c.Issuer, c.ClientID, redactedPlaceholder(c.ClientSecret), c.RedirectURI, c.Scopes, c.Endpoints, redactedPlaceholder(string(c.EncryptionKey)),
+	)
+}
+
+// LogValue implements slog.LogValuer so slog.Any("config", cfg) (or an
+// accidental %v inside a structured log call) redacts ClientSecret and
+// EncryptionKey the same way String() does (NFR1).
+func (c DelegatedGrantConfig) LogValue() slog.Value {
+	return slog.StringValue(c.String())
+}
+
+// redactedPlaceholder returns "(unset)" for an empty secret and "(redacted)"
+// for a non-empty one, so log output can distinguish "not configured" from
+// "configured, value withheld" without ever revealing the value itself.
+func redactedPlaceholder(secret string) string {
+	if secret == "" {
+		return "(unset)"
+	}
+	return "(redacted)"
+}
+
+// resolvedScopes returns scopes with offline_access present exactly once
+// (FR1): appended if the caller omitted it, left alone (not duplicated) if
+// already present.
+func resolvedScopes(scopes []string) []string {
+	for _, s := range scopes {
+		if s == offlineAccessScope {
+			return scopes
+		}
+	}
+	return append(append([]string{}, scopes...), offlineAccessScope)
 }
 
 // DelegatedGrantSource is the constructed, endpoint-resolved handle for one
@@ -127,6 +212,13 @@ type DelegatedGrantSource struct {
 // discovery against cfg.Issuer.
 func (s *DelegatedGrantSource) Endpoints() Endpoints {
 	return s.endpoints
+}
+
+// Scopes returns the resolved OAuth2 scope set this source requests --
+// cfg.Scopes plus offline_access (FR1), added if the caller omitted it and
+// never duplicated if present.
+func (s *DelegatedGrantSource) Scopes() []string {
+	return s.oauth2Cfg.Scopes
 }
 
 // NewDelegatedGrantSource validates cfg, resolves its Keycloak endpoints
@@ -156,6 +248,8 @@ func NewDelegatedGrantSource(ctx context.Context, cfg DelegatedGrantConfig) (*De
 		endpoints = discovered
 	}
 
+	scopes := resolvedScopes(cfg.Scopes)
+
 	return &DelegatedGrantSource{
 		cfg:       cfg,
 		endpoints: endpoints,
@@ -163,7 +257,7 @@ func NewDelegatedGrantSource(ctx context.Context, cfg DelegatedGrantConfig) (*De
 			ClientID:     cfg.ClientID,
 			ClientSecret: cfg.ClientSecret,
 			RedirectURL:  cfg.RedirectURI,
-			Scopes:       cfg.Scopes,
+			Scopes:       scopes,
 			Endpoint: oauth2.Endpoint{
 				AuthURL:  endpoints.Authorization,
 				TokenURL: endpoints.Token,
