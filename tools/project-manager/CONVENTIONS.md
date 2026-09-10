@@ -129,6 +129,24 @@ Status moves `drafted → reconciled → merged`, one comment per transition, wr
 
 Same rule as the roadmap ledger: the **last** `Amendment: <slug> →` comment on the issue wins; no such comment for a slug means that amendment hasn't reached that stage yet.
 
+### Keeping ledgers readable
+
+Both ledgers are append-only by design (§ Roadmap ledger, § Amendment ledger above) — nothing is ever deleted or edited, so a long-lived tracking issue accumulates every past status comment forever. When a writer posts a new `Ledger: M<n> →` or `Amendment: <slug> →` comment, it should also minimize the comment it supersedes, using GitHub's `minimizeComment` GraphQL mutation with classifier `OUTDATED`:
+
+```bash
+# node_id of the comment being superseded
+gh api repos/OWNER/REPO/issues/comments/<comment-id> --jq .node_id
+
+gh api graphql -f query='
+mutation($id: ID!) {
+  minimizeComment(input: {subjectId: $id, classifier: OUTDATED}) {
+    minimizedComment { isMinimized }
+  }
+}' -f id="<node-id-from-above>"
+```
+
+Minimizing only collapses the comment in the GitHub UI — it does not delete or edit it, so the append-only audit trail and race-safety guarantees above are unaffected. This is a readability nicety, not a correctness requirement: a writer that skips it doesn't break ledger reconstruction (readers already take the **last** matching comment), but a tracking issue that's been through several milestones reads far better with superseded lines collapsed.
+
 ### When a milestone re-balloons
 
 Occasionally a single milestone's own design pass turns out to be product-sized again — the outcome sentence was right but the behavior needed to reach it wasn't as small as it looked. `/project-manager:design` step 0 flags this the same way it flags a fresh request: past roughly 20 FRs, it recommends running `/project-manager:product` on the milestone's draft instead of pushing the design through oversized. Because a product maps 1:1 to a domain, that recommendation only cleanly applies when the milestone genuinely spans a new domain-sized subsystem; if it's still one domain, splitting into an additional milestone of the existing brief is usually the better fix rather than nesting a second product under it. Either way this is a recommendation, not a block — the user decides.
