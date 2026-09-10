@@ -125,6 +125,8 @@ func startSessionEnvHarness(t *testing.T) (*SessionHandler, *MockSessionRepo, *M
 		ConfigurationPatches:    patchRepo,
 		ServerPorts:             &MockServerPortRepo{},
 		GameConfigVolumes:       &MockGameConfigVolumeRepo{},
+		// MockSGCRepo.Get always pins ServerID 1 (#2364 cordon guard).
+		Servers: newMockCordonServerRepo(1),
 	}
 
 	h := &SessionHandler{

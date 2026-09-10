@@ -305,6 +305,8 @@ func TestStartSessionLifecycle(t *testing.T) {
 	patchRepo := &MockPatchRepo{}
 	serverPortRepo := &MockServerPortRepo{}
 	volumeRepo := &MockGameConfigVolumeRepo{}
+	// MockSGCRepo.Get always pins ServerID 1 (#2364 cordon guard).
+	serverRepo := newMockCordonServerRepo(1)
 
 	repo := &repository.Repository{
 		Sessions:                sessionRepo,
@@ -314,6 +316,7 @@ func TestStartSessionLifecycle(t *testing.T) {
 		ConfigurationPatches:    patchRepo,
 		ServerPorts:             serverPortRepo,
 		GameConfigVolumes:       volumeRepo,
+		Servers:                 serverRepo,
 	}
 
 	h := &SessionHandler{
@@ -390,6 +393,48 @@ func TestStartSessionLifecycle(t *testing.T) {
 			t.Errorf("Expected status pending, got %s", resp.Session.Status)
 		}
 	})
+
+	// Cordon (#2364, FR3): a deployment pinned to a draining/drained host
+	// cannot be started, and a blocked start must leave no orphaned pending
+	// session behind.
+	for _, state := range []string{manman.ServerDrainStateDraining, manman.ServerDrainStateDrained} {
+		t.Run("Sad path: "+state+" host rejects start, no session created", func(t *testing.T) {
+			sessionRepo.sessions = nil
+			sessionRepo.created = nil
+			serverRepo.servers[1].DrainState = state
+
+			req := &pb.StartSessionRequest{ServerGameConfigId: sgcID}
+			resp, err := h.StartSession(context.Background(), req)
+			if err == nil {
+				t.Fatalf("expected error, got nil (resp=%+v)", resp)
+			}
+			st, ok := status.FromError(err)
+			if !ok || st.Code() != codes.FailedPrecondition {
+				t.Errorf("expected FailedPrecondition, got %v", err)
+			}
+			if len(sessionRepo.created) != 0 {
+				t.Fatalf("expected no session to be created, got %d", len(sessionRepo.created))
+			}
+		})
+	}
+
+	t.Run("Happy path: start succeeds again after undrain", func(t *testing.T) {
+		sessionRepo.sessions = nil
+		sessionRepo.created = nil
+		serverRepo.servers[1].DrainState = manman.ServerDrainStateSchedulable
+
+		req := &pb.StartSessionRequest{ServerGameConfigId: sgcID}
+		resp, err := h.StartSession(context.Background(), req)
+		if err != nil {
+			t.Fatalf("expected no error, got %v", err)
+		}
+		if resp.Session.Status != manman.SessionStatusPending {
+			t.Errorf("expected status pending, got %s", resp.Session.Status)
+		}
+		if len(sessionRepo.created) != 1 {
+			t.Fatalf("expected new session to be created, got %d", len(sessionRepo.created))
+		}
+	})
 }
 
 const restartTestStallTimeout = 30 * time.Second
@@ -422,6 +467,8 @@ func newRestartDeploymentHandler(sessions []*manman.Session, sgcRepo *MockSGCRep
 		ServerPorts:             serverPortRepo,
 		GameConfigVolumes:       volumeRepo,
 		PendingRestarts:         pendingRepo,
+		// MockSGCRepo.Get always pins ServerID 1 (#2364 cordon guard).
+		Servers: newMockCordonServerRepo(1),
 	}
 
 	h := &SessionHandler{
@@ -612,6 +659,75 @@ func TestRestartDeploymentDispatchHalf(t *testing.T) {
 		}
 		if len(pendingRepo.createCalls) != 0 {
 			t.Fatalf("expected zero PendingRestarts.Create calls, got %d", len(pendingRepo.createCalls))
+		}
+	})
+
+	// Cordon (#2364, FR3): a deployment pinned to a draining/drained host
+	// cannot be restarted back onto it -- covers both the live-session
+	// (deferred Stop-then-Start) and no-live-session (inline Start) paths.
+	for _, state := range []string{manman.ServerDrainStateDraining, manman.ServerDrainStateDrained} {
+		t.Run(state+" host, live session: rejected, no stop dispatched, no pending_restarts row", func(t *testing.T) {
+			liveSession := &manman.Session{SessionID: 1, SGCID: sgcID, Status: manman.SessionStatusRunning}
+			pendingRepo := &MockPendingRestartRepo{}
+			h, sessionRepo := newRestartDeploymentHandler([]*manman.Session{liveSession}, nil, pendingRepo)
+			h.repo.Servers.(*MockCordonServerRepo).servers[1].DrainState = state
+
+			resp, err := h.RestartDeployment(context.Background(), &pb.RestartDeploymentRequest{ServerGameConfigId: sgcID})
+			if err == nil {
+				t.Fatalf("expected error, got nil (resp=%+v)", resp)
+			}
+			if resp != nil {
+				t.Fatalf("expected nil response on error, got %+v", resp)
+			}
+			st, ok := status.FromError(err)
+			if !ok || st.Code() != codes.FailedPrecondition {
+				t.Errorf("expected FailedPrecondition, got %v", err)
+			}
+			if len(pendingRepo.createCalls) != 0 {
+				t.Fatalf("expected zero PendingRestarts.Create calls, got %d", len(pendingRepo.createCalls))
+			}
+			if len(sessionRepo.updated) != 0 {
+				t.Fatalf("expected zero Stop dispatches, got %d session updates", len(sessionRepo.updated))
+			}
+		})
+
+		t.Run(state+" host, no live session: rejected, no inline start", func(t *testing.T) {
+			pendingRepo := &MockPendingRestartRepo{}
+			h, sessionRepo := newRestartDeploymentHandler(nil, nil, pendingRepo)
+			h.repo.Servers.(*MockCordonServerRepo).servers[1].DrainState = state
+
+			resp, err := h.RestartDeployment(context.Background(), &pb.RestartDeploymentRequest{ServerGameConfigId: sgcID})
+			if err == nil {
+				t.Fatalf("expected error, got nil (resp=%+v)", resp)
+			}
+			st, ok := status.FromError(err)
+			if !ok || st.Code() != codes.FailedPrecondition {
+				t.Errorf("expected FailedPrecondition, got %v", err)
+			}
+			if len(sessionRepo.created) != 0 {
+				t.Fatalf("expected zero sessions created, got %d", len(sessionRepo.created))
+			}
+			if len(pendingRepo.createCalls) != 0 {
+				t.Fatalf("expected zero PendingRestarts.Create calls, got %d", len(pendingRepo.createCalls))
+			}
+		})
+	}
+
+	t.Run("restart succeeds again after undrain", func(t *testing.T) {
+		liveSession := &manman.Session{SessionID: 1, SGCID: sgcID, Status: manman.SessionStatusRunning}
+		pendingRepo := &MockPendingRestartRepo{}
+		h, _ := newRestartDeploymentHandler([]*manman.Session{liveSession}, nil, pendingRepo)
+		h.repo.Servers.(*MockCordonServerRepo).servers[1].DrainState = manman.ServerDrainStateSchedulable
+
+		resp, err := h.RestartDeployment(context.Background(), &pb.RestartDeploymentRequest{ServerGameConfigId: sgcID})
+		if err != nil {
+			t.Fatalf("expected no error, got %v", err)
+		}
+		if resp.StoppingSession == nil {
+			t.Fatal("expected stopping_session to be populated")
+		}
+		if len(pendingRepo.createCalls) != 1 {
+			t.Fatalf("expected exactly one PendingRestarts.Create call, got %d", len(pendingRepo.createCalls))
 		}
 	})
 }
