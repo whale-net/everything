@@ -270,9 +270,14 @@ func TestBoardDetail_NoAutoRefreshMarkup(t *testing.T) {
 }
 
 // TestBoardDetail_NoPollIntervalRegionText guards the "Do not display"
-// section: no poll-interval or region/location text appears anywhere on
-// the page. Unlike boards.templ's equivalent, "Owner" text is expected on
-// this page since #1765 added an explicit owner cell to the header -- see
+// section: no poll-interval or region/location text appears anywhere in the
+// board detail content. The ban is scoped to the page's <main> content, not
+// the whole document: #2317 added a global "Regions" nav item to the shared
+// chrome (components/layout.templ), which every page renders and which says
+// nothing about this board's location -- the original guard was about the
+// board detail content itself not displaying region/location data. Unlike
+// boards.templ's equivalent, "Owner" text is expected on this page since
+// #1765 added an explicit owner cell to the header -- see
 // TestBoardDetail_Owner_* below for that coverage.
 func TestBoardDetail_NoPollIntervalRegionText(t *testing.T) {
 	sensors := []*leaflabapipb.SensorDetail{
@@ -290,9 +295,16 @@ func TestBoardDetail_NoPollIntervalRegionText(t *testing.T) {
 	resp := boardDetailResp(1, "leaflab-aaaaaaaaaaaa", "", false, nil, sensors)
 	body := renderPage(t, BoardDetail(layoutData(), resp, nil, ""))
 
+	mainStart := strings.Index(body, "<main")
+	mainEnd := strings.Index(body, "</main>")
+	if mainStart < 0 || mainEnd <= mainStart {
+		t.Fatalf("could not locate the board detail main content in the rendered page: %q", body)
+	}
+	mainContent := body[mainStart:mainEnd]
+
 	for _, banned := range []string{"poll interval", "Poll Interval", "Region", "Location"} {
-		if strings.Contains(body, banned) {
-			t.Errorf("expected no %q text on the board detail page, got %q", banned, body)
+		if strings.Contains(mainContent, banned) {
+			t.Errorf("expected no %q text in the board detail main content, got %q", banned, mainContent)
 		}
 	}
 }

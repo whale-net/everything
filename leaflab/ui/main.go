@@ -293,6 +293,20 @@ func (app *App) setupRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("/admin/boards", app.auth.RequireAuthFunc(app.auth.WithAccessToken(app.handleAdminBoards)))
 	mux.HandleFunc("POST /admin/boards/{board_id}/reassign", app.auth.RequireAuthFunc(app.auth.WithAccessToken(app.handleReassignBoardOwner)))
 	mux.HandleFunc("POST /admin/boards/{board_id}/clear", app.auth.RequireAuthFunc(app.auth.WithAccessToken(app.handleClearBoardOwner)))
+	// handleRegions/handleRegionDetail (#2317: FR6) -- the regions screen:
+	// the whole forest at "/regions", one region's subtree at
+	// "/regions/{region_id}" (drill-down). Both renders are exactly what
+	// GetRegionTree returned, counts included, nothing recomputed locally.
+	// handleCreateRegion/handleRenameRegion/handleReparentRegion (#2317:
+	// FR1, FR2, FR3, FR5) -- the three write paths' POST targets. Owner
+	// authz is enforced server-side by the backing RPCs (NFR2); RegionTreeNode
+	// carries no ownership signal, so this UI adds no local ownership check
+	// and renders the forms for every region.
+	mux.HandleFunc("/regions", app.auth.RequireAuthFunc(app.auth.WithAccessToken(app.handleRegions)))
+	mux.HandleFunc("/regions/{region_id}", app.auth.RequireAuthFunc(app.auth.WithAccessToken(app.handleRegionDetail)))
+	mux.HandleFunc("POST /regions/create", app.auth.RequireAuthFunc(app.auth.WithAccessToken(app.handleCreateRegion)))
+	mux.HandleFunc("POST /regions/{region_id}/rename", app.auth.RequireAuthFunc(app.auth.WithAccessToken(app.handleRenameRegion)))
+	mux.HandleFunc("POST /regions/{region_id}/reparent", app.auth.RequireAuthFunc(app.auth.WithAccessToken(app.handleReparentRegion)))
 }
 
 func (app *App) handleHealth(w http.ResponseWriter, r *http.Request) {

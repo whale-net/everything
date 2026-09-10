@@ -162,3 +162,68 @@ func (c *LeafLabClient) ListUsers(ctx context.Context) (*leaflabapipb.ListUsersR
 	}
 	return resp, nil
 }
+
+// -- M3: region management (#2317) -------------------------------------------
+
+// GetRegionTree fetches the region tree view (FR6): the whole forest of
+// top-level regions (alphabetically ordered) when rootRegionID is 0, or the
+// subtree rooted at rootRegionID alone when non-zero (drill-down). Children
+// arrive alphabetically ordered; both sensor counts (here only / here or
+// below) are the API's CURRENT-placement numbers, rendered verbatim -- the
+// UI recomputes neither. The error is returned wrapped with %w so a caller's
+// status.FromError(err) still sees the underlying gRPC status (e.g.
+// codes.NotFound for an unknown root_region_id, codes.Unauthenticated for a
+// rejected token).
+func (c *LeafLabClient) GetRegionTree(ctx context.Context, rootRegionID int64) (*leaflabapipb.GetRegionTreeResponse, error) {
+	resp, err := c.api.GetRegionTree(ctx, &leaflabapipb.GetRegionTreeRequest{RootRegionId: rootRegionID})
+	if err != nil {
+		return nil, fmt.Errorf("failed to get region tree (root %d): %w", rootRegionID, err)
+	}
+	return resp, nil
+}
+
+// CreateRegion creates a region owned by the calling user (FR1), nested
+// under parentRegionID when non-zero or top-level when 0. The created
+// region's ID comes back for drill-down navigation; failures (empty name,
+// unknown parent) come back as gRPC statuses on the wrapped error --
+// status.FromError(err) still sees them.
+func (c *LeafLabClient) CreateRegion(ctx context.Context, name string, parentRegionID int64) (*leaflabapipb.CreateRegionResponse, error) {
+	resp, err := c.api.CreateRegion(ctx, &leaflabapipb.CreateRegionRequest{
+		Name:           name,
+		ParentRegionId: parentRegionID,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("failed to create region: %w", err)
+	}
+	return resp, nil
+}
+
+// RenameRegion renames a region the calling user owns (FR2, forward-looking
+// only). Authorization is enforced server-side (NFR2); a non-owner's call
+// comes back as codes.PermissionDenied on the wrapped error.
+func (c *LeafLabClient) RenameRegion(ctx context.Context, regionID int64, name string) (*leaflabapipb.RenameRegionResponse, error) {
+	resp, err := c.api.RenameRegion(ctx, &leaflabapipb.RenameRegionRequest{
+		RegionId: regionID,
+		Name:     name,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("failed to rename region %d: %w", regionID, err)
+	}
+	return resp, nil
+}
+
+// ReparentRegion re-parents a region (FR3), including to top-level when
+// parentRegionID is 0. A re-parent into the region itself or one of its
+// descendants is rejected server-side as codes.FailedPrecondition (FR5) on
+// the wrapped error -- the UI surfaces that message rather than pre-filtering
+// picker options, so the API stays the single cycle-enforcement point.
+func (c *LeafLabClient) ReparentRegion(ctx context.Context, regionID, parentRegionID int64) (*leaflabapipb.ReparentRegionResponse, error) {
+	resp, err := c.api.ReparentRegion(ctx, &leaflabapipb.ReparentRegionRequest{
+		RegionId:       regionID,
+		ParentRegionId: parentRegionID,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("failed to re-parent region %d: %w", regionID, err)
+	}
+	return resp, nil
+}
