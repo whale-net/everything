@@ -223,6 +223,34 @@ link is the documented manual fallback while not-live.
 it at a route that would only 503. The #1628 per-row poll remains the
 update path in that case, unchanged.
 
+## Workshop Top-Level Page (M6, #2362)
+
+`GET /workshop` (`handleWorkshopPage`, `handlers_workshop_page.go`) is the
+redesigned Workshop top-level page: the one place a Server Manager manages
+Workshop content fleet-wide (US8, FR6/FR7). It is additive to the
+pre-existing sub-routes below -- registering `/workshop` does not remove or
+redirect `/workshop/library` or any other `/workshop/*` route; the nav
+entry swap and `/workshop/library` redirect land in a dependent
+navigation/disposition task.
+
+`pages.WorkshopPage` (`pages/workshop.templ`) renders inside the shared M5
+nav shell (`components.Layout`) and, once the Implementation phase of
+#2362 lands, integrates the following fleet-scale actions as Blade layers
+over the page rather than separate navigations:
+
+| Route | Handler | Purpose |
+|-------|---------|---------|
+| `/workshop/create-library`, `/workshop/update-library`, `/workshop/delete-library` | `handlers_workshop.go` | Library create/update/delete |
+| `/workshop/add-addon-to-library`, `/workshop/remove-addon-from-library`, `/workshop/add-library-reference`, `/workshop/remove-library-reference` | `handlers_workshop.go` | Addon/reference management |
+| `/workshop/bulk-add-collection` | `handleBulkAddCollection` | FR7 collection-add (C33) |
+| `/workshop/batch-create-addons` | `handleBatchCreateAddons` | FR7 batch-addon-create (C34) |
+| `/workshop/batch-status` | `handleWorkshopBatchStatus` | Shared progress surface for both batch flows above |
+| `/workshop/cache`, `/workshop/cache/verify`, `/workshop/cache/evict` | `handlers_workshop.go` | FR7 cache-backed install (C35) |
+| `/workshop/search`, `/workshop/fetch-metadata`, `/workshop/create-addon` | `handlers_workshop.go` | Addon search/create |
+
+GC-level library attachment (FR10) is deliberately not part of this page --
+it lands on the Games page panel in its own task.
+
 ## Documentation
 
 - **[ARCHITECTURE.md](ARCHITECTURE.md)** - System architecture and patterns

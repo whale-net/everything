@@ -425,6 +425,12 @@ func (app *App) setupRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("/servers/", app.auth.RequireAuthFunc(app.auth.WithAccessToken(app.handleServerDetail)))
 
 	// Protected routes - Workshop
+	// "/workshop" (task #2362, FR6/FR7): the redesigned top-level page --
+	// additive alongside every route below it. It does not replace
+	// "/workshop/library" or shadow any "/workshop/*" sub-route (NFR6);
+	// the nav swap and "/workshop/library" redirect are the dependent
+	// navigation/disposition task's job, not this one's.
+	mux.HandleFunc("/workshop", app.auth.RequireAuthFunc(app.auth.WithAccessToken(app.handleWorkshopPage)))
 	mux.HandleFunc("/workshop/library", app.auth.RequireAuthFunc(app.auth.WithAccessToken(app.handleWorkshopLibrary)))
 	mux.HandleFunc("/workshop/search", app.auth.RequireAuthFunc(app.auth.WithAccessToken(app.handleWorkshopSearch)))
 	mux.HandleFunc("/workshop/addon", app.auth.RequireAuthFunc(app.auth.WithAccessToken(app.handleWorkshopAddonDetail)))
