@@ -155,6 +155,35 @@ func (r *PendingRestartRepository) ExpireStalled(ctx context.Context, now time.T
 	return expired, rows.Err()
 }
 
+// CancelForSGCs is drain eviction's FR18 cancellation (#2366): it moves
+// every 'pending' record for sgcIDs to 'failed' with reason, the same
+// terminal transition MarkFailed performs, so it needs no new status value
+// and GetLatestBySGCIDs' visibility-window trim already applies to it
+// unchanged. Deliberately only 'pending' -- a 'started' record has already
+// been claimed by SessionRestartConsumer and its deferred Start may already
+// be in flight, so there is nothing left here to cancel.
+//
+// Callers must commit this before dispatching the evicted session's Stop
+// (see ServerHandler.DrainServer): ClaimForSession's claim is a single
+// UPDATE ... WHERE status='pending', so a terminal status that arrives
+// before this cancellation lands would still be claimable.
+func (r *PendingRestartRepository) CancelForSGCs(ctx context.Context, sgcIDs []int64, reason string) (int, error) {
+	if len(sgcIDs) == 0 {
+		return 0, nil
+	}
+
+	query := `
+		UPDATE pending_restarts
+		SET status = 'failed', failure_reason = $2, resolved_at = COALESCE(resolved_at, NOW())
+		WHERE server_game_config_id = ANY($1) AND status = 'pending'
+	`
+	tag, err := r.db.Exec(ctx, query, sgcIDs, reason)
+	if err != nil {
+		return 0, err
+	}
+	return int(tag.RowsAffected()), nil
+}
+
 // GetLatestBySGCIDs returns the latest pending_restarts record per SGC,
 // excluding records resolved more than pendingRestartVisibilityWindow ago
 // (FR12, #1735 -- see that constant's doc comment). Unresolved records

@@ -57,7 +57,7 @@ func TestListAllocatedPorts_MapsAllocations(t *testing.T) {
 			{ServerID: 8, Port: 1, Protocol: "TCP", SessionID: nil},
 		},
 	}
-	handler := NewServerHandler(repo, nil, portRepo)
+	handler := NewServerHandler(repo, nil, portRepo, nil, nil, nil)
 
 	resp, err := handler.ListAllocatedPorts(context.Background(), &pb.ListAllocatedPortsRequest{ServerId: 7})
 	if err != nil {
@@ -80,7 +80,7 @@ func TestListAllocatedPorts_MapsAllocations(t *testing.T) {
 }
 
 func TestListAllocatedPorts_InvalidServerID_InvalidArgument(t *testing.T) {
-	handler := NewServerHandler(newMockServerRepository(), nil, &mockServerPortRepository{})
+	handler := NewServerHandler(newMockServerRepository(), nil, &mockServerPortRepository{}, nil, nil, nil)
 	_, err := handler.ListAllocatedPorts(context.Background(), &pb.ListAllocatedPortsRequest{ServerId: 0})
 	if status.Code(err) != codes.InvalidArgument {
 		t.Errorf("code = %v, want InvalidArgument", status.Code(err))
@@ -88,7 +88,7 @@ func TestListAllocatedPorts_InvalidServerID_InvalidArgument(t *testing.T) {
 }
 
 func TestListAllocatedPorts_UnknownServer_NotFound(t *testing.T) {
-	handler := NewServerHandler(newMockServerRepository(), nil, &mockServerPortRepository{})
+	handler := NewServerHandler(newMockServerRepository(), nil, &mockServerPortRepository{}, nil, nil, nil)
 	_, err := handler.ListAllocatedPorts(context.Background(), &pb.ListAllocatedPortsRequest{ServerId: 42})
 	if status.Code(err) != codes.NotFound {
 		t.Errorf("code = %v, want NotFound", status.Code(err))

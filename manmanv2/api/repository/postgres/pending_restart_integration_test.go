@@ -24,6 +24,7 @@ import (
 
 	"github.com/whale-net/everything/libs/go/dbtest"
 	"github.com/whale-net/everything/manmanv2/api/repository"
+	"github.com/whale-net/everything/manmanv2/models"
 )
 
 // pendingRestartSchema mirrors 001_initial_schema.up.sql's servers, games,
@@ -478,5 +479,162 @@ func TestGetLatestBySGCIDs_VisibilityWindowExcludesOldResolved(t *testing.T) {
 	}
 	if got, ok := latest[sgcRecent]; !ok || got.PendingRestartID != recRecent.PendingRestartID {
 		t.Fatalf("expected the recently-resolved record to be included, got %+v (present=%v)", got, ok)
+	}
+}
+
+// TestCancelForSGCs_MovesMatchingPendingRecordsToTerminalState proves
+// #2366/FR18 item 1: CancelForSGCs moves every 'pending' record for the
+// given SGCs to a terminal ('failed', reusing MarkFailed's semantics per
+// this method's doc comment) state with the given reason, and reports how
+// many rows it moved.
+func TestCancelForSGCs_MovesMatchingPendingRecordsToTerminalState(t *testing.T) {
+	pool := newPendingRestartTestDB(t)
+	ctx := context.Background()
+	repo := NewPendingRestartRepository(pool)
+
+	sgcA := seedSGC(t, pool, "a")
+	sessionA := seedSession(t, pool, sgcA)
+	recA, err := repo.Create(ctx, sgcA, sessionA, time.Now().Add(time.Hour))
+	if err != nil {
+		t.Fatalf("Create A: %v", err)
+	}
+
+	sgcB := seedSGC(t, pool, "b")
+	sessionB := seedSession(t, pool, sgcB)
+	recB, err := repo.Create(ctx, sgcB, sessionB, time.Now().Add(time.Hour))
+	if err != nil {
+		t.Fatalf("Create B: %v", err)
+	}
+
+	cancelled, err := repo.CancelForSGCs(ctx, []int64{sgcA, sgcB}, "host 1 draining")
+	if err != nil {
+		t.Fatalf("CancelForSGCs: %v", err)
+	}
+	if cancelled != 2 {
+		t.Fatalf("expected 2 rows cancelled, got %d", cancelled)
+	}
+
+	latest, err := repo.GetLatestBySGCIDs(ctx, []int64{sgcA, sgcB})
+	if err != nil {
+		t.Fatalf("GetLatestBySGCIDs: %v", err)
+	}
+	for sgcID, rec := range map[int64]*manman.PendingRestart{sgcA: recA, sgcB: recB} {
+		got, ok := latest[sgcID]
+		if !ok {
+			t.Fatalf("expected an entry for sgc %d", sgcID)
+		}
+		if got.PendingRestartID != rec.PendingRestartID {
+			t.Fatalf("expected the same record for sgc %d, got PendingRestartID=%d", sgcID, got.PendingRestartID)
+		}
+		if got.Status != "failed" {
+			t.Fatalf("expected sgc %d's record to be moved to 'failed', got %q", sgcID, got.Status)
+		}
+		if got.FailureReason == nil || *got.FailureReason != "host 1 draining" {
+			t.Fatalf("expected sgc %d's failure_reason to be the drain reason, got %v", sgcID, got.FailureReason)
+		}
+		if got.ResolvedAt == nil {
+			t.Fatalf("expected sgc %d's resolved_at to be set", sgcID)
+		}
+	}
+}
+
+// TestCancelForSGCs_NoOpForNonMatchingSGCs proves #2366/FR18 item 2:
+// CancelForSGCs for an SGC with no 'pending' record (unknown SGC, or an SGC
+// whose record is already 'started'/terminal) is a no-op -- it returns 0
+// and leaves other SGCs' records untouched.
+func TestCancelForSGCs_NoOpForNonMatchingSGCs(t *testing.T) {
+	pool := newPendingRestartTestDB(t)
+	ctx := context.Background()
+	repo := NewPendingRestartRepository(pool)
+
+	// sgcStarted already had its pending restart claimed -- CancelForSGCs
+	// must not touch a 'started' record; there is nothing left to cancel.
+	sgcStarted := seedSGC(t, pool, "started")
+	sessionStarted := seedSession(t, pool, sgcStarted)
+	recStarted, err := repo.Create(ctx, sgcStarted, sessionStarted, time.Now().Add(time.Hour))
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	if _, err := repo.ClaimForSession(ctx, sessionStarted); err != nil {
+		t.Fatalf("ClaimForSession: %v", err)
+	}
+
+	// sgcUnknown has no pending_restarts row at all.
+	sgcUnknown := seedSGC(t, pool, "unknown")
+
+	cancelled, err := repo.CancelForSGCs(ctx, []int64{sgcStarted, sgcUnknown}, "host 1 draining")
+	if err != nil {
+		t.Fatalf("CancelForSGCs: %v", err)
+	}
+	if cancelled != 0 {
+		t.Fatalf("expected 0 rows cancelled for non-matching SGCs, got %d", cancelled)
+	}
+
+	latest, err := repo.GetLatestBySGCIDs(ctx, []int64{sgcStarted, sgcUnknown})
+	if err != nil {
+		t.Fatalf("GetLatestBySGCIDs: %v", err)
+	}
+	if got, ok := latest[sgcStarted]; !ok || got.PendingRestartID != recStarted.PendingRestartID || got.Status != "started" {
+		t.Fatalf("expected sgcStarted's record to remain 'started' and untouched, got %+v (present=%v)", got, ok)
+	}
+	if _, ok := latest[sgcUnknown]; ok {
+		t.Fatalf("expected no entry for sgcUnknown")
+	}
+}
+
+// TestCancelForSGCs_IdempotentSecondCallIsNoOp proves #2366/FR18 item 3:
+// calling CancelForSGCs twice for the same SGCs is idempotent -- the first
+// call cancels the pending record, the second call finds nothing left in
+// 'pending' state and returns 0 without erroring or double-cancelling.
+func TestCancelForSGCs_IdempotentSecondCallIsNoOp(t *testing.T) {
+	pool := newPendingRestartTestDB(t)
+	ctx := context.Background()
+	repo := NewPendingRestartRepository(pool)
+
+	sgcID := seedSGC(t, pool, "a")
+	sessionID := seedSession(t, pool, sgcID)
+	rec, err := repo.Create(ctx, sgcID, sessionID, time.Now().Add(time.Hour))
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+
+	first, err := repo.CancelForSGCs(ctx, []int64{sgcID}, "host 1 draining")
+	if err != nil {
+		t.Fatalf("first CancelForSGCs: %v", err)
+	}
+	if first != 1 {
+		t.Fatalf("expected first call to cancel 1 row, got %d", first)
+	}
+
+	second, err := repo.CancelForSGCs(ctx, []int64{sgcID}, "host 1 draining")
+	if err != nil {
+		t.Fatalf("second CancelForSGCs: %v", err)
+	}
+	if second != 0 {
+		t.Fatalf("expected second call to be a no-op (0 rows), got %d", second)
+	}
+
+	latest, err := repo.GetLatestBySGCIDs(ctx, []int64{sgcID})
+	if err != nil {
+		t.Fatalf("GetLatestBySGCIDs: %v", err)
+	}
+	if got, ok := latest[sgcID]; !ok || got.PendingRestartID != rec.PendingRestartID || got.Status != "failed" {
+		t.Fatalf("expected the record to remain 'failed' after the second call, got %+v (present=%v)", got, ok)
+	}
+}
+
+// TestCancelForSGCs_EmptyInputIsNoOp proves the empty-slice short-circuit:
+// CancelForSGCs with no SGCs does nothing and does not query the DB.
+func TestCancelForSGCs_EmptyInputIsNoOp(t *testing.T) {
+	pool := newPendingRestartTestDB(t)
+	ctx := context.Background()
+	repo := NewPendingRestartRepository(pool)
+
+	cancelled, err := repo.CancelForSGCs(ctx, nil, "host 1 draining")
+	if err != nil {
+		t.Fatalf("expected no error for empty input, got: %v", err)
+	}
+	if cancelled != 0 {
+		t.Fatalf("expected 0 for empty input, got %d", cancelled)
 	}
 }
