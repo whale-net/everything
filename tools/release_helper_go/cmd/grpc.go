@@ -16,6 +16,7 @@ type RegistryClients struct {
 	conn     *grpcclient.Client
 	App      pb.AppRegistryClient
 	Artifact pb.ArtifactRegistryClient
+	Release  pb.ReleaseRegistryClient
 }
 
 // Close closes the underlying gRPC connection.
@@ -66,6 +67,7 @@ func NewRegistryClients(ctx context.Context) (*RegistryClients, error) {
 		conn:     conn,
 		App:      pb.NewAppRegistryClient(c),
 		Artifact: pb.NewArtifactRegistryClient(c),
+		Release:  pb.NewReleaseRegistryClient(c),
 	}, nil
 }
 
@@ -75,9 +77,13 @@ type AppRegistryClientFactory func(ctx context.Context) (pb.AppRegistryClient, f
 // ArtifactRegistryClientFactory creates an ArtifactRegistryClient and a cleanup func.
 type ArtifactRegistryClientFactory func(ctx context.Context) (pb.ArtifactRegistryClient, func() error, error)
 
+// ReleaseRegistryClientFactory creates a ReleaseRegistryClient and a cleanup func.
+type ReleaseRegistryClientFactory func(ctx context.Context) (pb.ReleaseRegistryClient, func() error, error)
+
 var (
 	defaultAppRegistryClientFactory      AppRegistryClientFactory      = realAppRegistryClientFactory
 	defaultArtifactRegistryClientFactory ArtifactRegistryClientFactory = realArtifactRegistryClientFactory
+	defaultReleaseRegistryClientFactory  ReleaseRegistryClientFactory  = realReleaseRegistryClientFactory
 )
 
 func realAppRegistryClientFactory(ctx context.Context) (pb.AppRegistryClient, func() error, error) {
@@ -96,6 +102,14 @@ func realArtifactRegistryClientFactory(ctx context.Context) (pb.ArtifactRegistry
 	return clients.Artifact, clients.Close, nil
 }
 
+func realReleaseRegistryClientFactory(ctx context.Context) (pb.ReleaseRegistryClient, func() error, error) {
+	clients, err := NewRegistryClients(ctx)
+	if err != nil {
+		return nil, nil, err
+	}
+	return clients.Release, clients.Close, nil
+}
+
 // NewAppRegistryClient constructs an AppRegistryClient using the active factory.
 func NewAppRegistryClient(ctx context.Context) (pb.AppRegistryClient, func() error, error) {
 	return defaultAppRegistryClientFactory(ctx)
@@ -104,6 +118,11 @@ func NewAppRegistryClient(ctx context.Context) (pb.AppRegistryClient, func() err
 // NewArtifactRegistryClient constructs an ArtifactRegistryClient using the active factory.
 func NewArtifactRegistryClient(ctx context.Context) (pb.ArtifactRegistryClient, func() error, error) {
 	return defaultArtifactRegistryClientFactory(ctx)
+}
+
+// NewReleaseRegistryClient constructs a ReleaseRegistryClient using the active factory.
+func NewReleaseRegistryClient(ctx context.Context) (pb.ReleaseRegistryClient, func() error, error) {
+	return defaultReleaseRegistryClientFactory(ctx)
 }
 
 // withAppRegistryClient overrides the AppRegistryClient factory in tests.
@@ -123,6 +142,16 @@ func withArtifactRegistryClient(client pb.ArtifactRegistryClient, fn func()) {
 		return client, func() error { return nil }, nil
 	}
 	defer func() { defaultArtifactRegistryClientFactory = old }()
+	fn()
+}
+
+// withReleaseRegistryClient overrides the ReleaseRegistryClient factory in tests.
+func withReleaseRegistryClient(client pb.ReleaseRegistryClient, fn func()) {
+	old := defaultReleaseRegistryClientFactory
+	defaultReleaseRegistryClientFactory = func(ctx context.Context) (pb.ReleaseRegistryClient, func() error, error) {
+		return client, func() error { return nil }, nil
+	}
+	defer func() { defaultReleaseRegistryClientFactory = old }()
 	fn()
 }
 
@@ -424,4 +453,44 @@ func (f *FakeArtifactRegistryClient) ResolveBinaryURL(ctx context.Context, in *p
 		return f.ResolveBinaryURLFn(ctx, in, opts...)
 	}
 	return &pb.ResolveBinaryURLResponse{}, nil
+}
+
+// FakeReleaseRegistryClient is an in-memory test implementation of
+// pb.ReleaseRegistryClient. Only NotifyBuildComplete (release_helper's
+// notify-build path) carries Fn/calls plumbing today -- the read methods
+// return zero values so the fake satisfies the full interface without
+// every other test in this package needing to mock five more methods.
+type FakeReleaseRegistryClient struct {
+	NotifyBuildCompleteFn func(ctx context.Context, in *pb.NotifyBuildCompleteRequest, opts ...grpc.CallOption) (*pb.NotifyBuildCompleteResponse, error)
+
+	NotifyBuildCompleteCalls []*pb.NotifyBuildCompleteRequest
+}
+
+// NewFakeReleaseRegistryClient creates a new FakeReleaseRegistryClient.
+func NewFakeReleaseRegistryClient() *FakeReleaseRegistryClient {
+	return &FakeReleaseRegistryClient{}
+}
+
+func (f *FakeReleaseRegistryClient) TriggerRelease(ctx context.Context, in *pb.TriggerReleaseRequest, opts ...grpc.CallOption) (*pb.TriggerReleaseResponse, error) {
+	return &pb.TriggerReleaseResponse{}, nil
+}
+
+func (f *FakeReleaseRegistryClient) GetRelease(ctx context.Context, in *pb.GetReleaseRequest, opts ...grpc.CallOption) (*pb.GetReleaseResponse, error) {
+	return &pb.GetReleaseResponse{}, nil
+}
+
+func (f *FakeReleaseRegistryClient) ListReleases(ctx context.Context, in *pb.ListReleasesRequest, opts ...grpc.CallOption) (*pb.ListReleasesResponse, error) {
+	return &pb.ListReleasesResponse{}, nil
+}
+
+func (f *FakeReleaseRegistryClient) ListReleaseAttempts(ctx context.Context, in *pb.ListReleaseAttemptsRequest, opts ...grpc.CallOption) (*pb.ListReleaseAttemptsResponse, error) {
+	return &pb.ListReleaseAttemptsResponse{}, nil
+}
+
+func (f *FakeReleaseRegistryClient) NotifyBuildComplete(ctx context.Context, in *pb.NotifyBuildCompleteRequest, opts ...grpc.CallOption) (*pb.NotifyBuildCompleteResponse, error) {
+	f.NotifyBuildCompleteCalls = append(f.NotifyBuildCompleteCalls, in)
+	if f.NotifyBuildCompleteFn != nil {
+		return f.NotifyBuildCompleteFn(ctx, in, opts...)
+	}
+	return &pb.NotifyBuildCompleteResponse{Signaled: true}, nil
 }

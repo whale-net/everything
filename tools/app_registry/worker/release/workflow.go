@@ -166,6 +166,36 @@ type BuildStatus struct {
 	Detail    string
 }
 
+// SignalBuildCompleted is the workflow signal NotifyBuildComplete (see
+// server/handlers/release.go) delivers onto a running ReleaseWorkflow
+// execution: the release-v2 build job reporting its own run's terminal
+// state via release_helper notify-build, so the workflow can skip
+// PollBuild's polling loop. PollBuild remains the fallback for a
+// notification that never arrives -- see awaitBuildCompletion.
+const SignalBuildCompleted = "build-completed"
+
+// BuildCompletedSignal is SignalBuildCompleted's payload: the same
+// terminal outcome PollBuild would have reported, handed over by the
+// build job instead. The server side (server/handlers/release.go's
+// NotifyBuildComplete) constructs this exact type so the default data
+// converter round-trips it across the service boundary -- keep the two
+// sides in sync.
+type BuildCompletedSignal struct {
+	// GitHubRunID is the notifying GHA Actions run's id. The workflow
+	// ignores a signal whose id doesn't match the DispatchBuild-started
+	// run's BuildRef.RunID (or that is empty) -- a stale notification from
+	// some other run must not decide this workflow's build outcome. Empty
+	// is treated as "unverifiable, trust the notify" rather than ignored,
+	// so a future caller without a run id still works.
+	GitHubRunID string
+	// Succeeded is the build run's terminal outcome -- same meaning as
+	// BuildStatus.Succeeded.
+	Succeeded bool
+	// Detail is a human-readable one-liner, threaded into the same
+	// recordFailure/verify paths as BuildStatus.Detail.
+	Detail string
+}
+
 // VerifyResult is VerifyPublished's outcome: whether every target in the
 // batch reached published/succeeded (FR12's "same registry-visible end
 // state as v1"), and which ones didn't.
@@ -289,8 +319,7 @@ func WorkflowID(targets []ReleaseTarget) string {
 
 // defaultActivityOptions applies to every activity ReleaseWorkflow executes
 // except PollBuild, which needs a much longer StartToCloseTimeout since a
-// GitHub Actions run can take many minutes -- see the PollBuild call site
-// below.
+// GitHub Actions run can take many minutes -- see pollBuildActivityOptions.
 var defaultActivityOptions = workflow.ActivityOptions{
 	StartToCloseTimeout: 30 * time.Second,
 	RetryPolicy: &temporal.RetryPolicy{
@@ -298,7 +327,10 @@ var defaultActivityOptions = workflow.ActivityOptions{
 	},
 }
 
-// pollBuildActivityOptions applies only to PollBuild.
+// pollBuildActivityOptions applies only to PollBuild -- which now runs
+// inside awaitBuildCompletion (raced against NotifyBuildComplete's signal
+// rather than being the sole decider) but keeps the same long
+// StartToCloseTimeout for the polling-loop fallback.
 var pollBuildActivityOptions = workflow.ActivityOptions{
 	StartToCloseTimeout: 30 * time.Minute,
 	RetryPolicy: &temporal.RetryPolicy{
@@ -330,10 +362,13 @@ var finalizePublishActivityOptions = workflow.ActivityOptions{
 // RecordResolvedPlan, issue #906 -- see that activity's doc comment; only
 // called when ResolvePlan actually returns RawJSON, so it does not
 // interpose an extra dispatch on a test double or future ResolvePlan
-// implementation that omits it), then DispatchBuild, then PollBuild, then
-// VerifyPublished, then RecordTargetState once per target -- in that exact
-// order, matching the dispatch sequence worker/release/workflow_test.go
-// (Testing phase) asserts against. A failure at any step before
+// implementation that omits it), then DispatchBuild, then
+// awaitBuildCompletion (NotifyBuildComplete's build-completed signal raced
+// against the PollBuild activity -- signal first when it arrives, poll as
+// the fallback), then VerifyPublished, then RecordTargetState once per
+// target -- in that exact order, matching the dispatch sequence
+// worker/release/workflow_test.go (Testing phase) asserts against. A
+// failure at any step before
 // RecordTargetState still causes every target to be recorded failed (via
 // the recordFailure branch below)
 // rather than left stuck in whatever state ResolvePlan/DispatchBuild left
@@ -369,6 +404,15 @@ func ReleaseWorkflow(ctx workflow.Context, in ReleaseWorkflowInput) (ReleaseWork
 	if err != nil {
 		return recordFailure(ctx, in, fmt.Errorf("resolve plan: %w", err))
 	}
+	// Stamp the release run id onto the resolved plan before dispatching:
+	// production ResolvePlan (plan.go) shells out to release_helper plan
+	// and its PlanResult JSON carries no release-run identity, so without
+	// this stamp DispatchBuild's same-run check-before-dispatch and
+	// SetBuildRef persistence (both keyed on plan.ReleaseRunID) were dead
+	// in production, and the release-v2 dispatch carried no release_run_id
+	// input for NotifyBuildComplete to signal back with. Deterministic
+	// local data change -- no activity, no I/O.
+	plan.ReleaseRunID = in.ReleaseRunID
 	if len(plan.RawJSON) > 0 {
 		// See RecordResolvedPlan's doc comment (issue #906): stamp the now-
 		// resolved plan onto release_run.resolved_plan before proceeding.
@@ -387,7 +431,7 @@ func ReleaseWorkflow(ctx workflow.Context, in ReleaseWorkflowInput) (ReleaseWork
 		return recordFailure(ctx, in, fmt.Errorf("dispatch build: %w", err))
 	}
 
-	buildStatus, err := pollBuild(workflow.WithActivityOptions(ctx, pollBuildActivityOptions), buildRef)
+	buildStatus, err := awaitBuildCompletion(ctx, buildRef)
 	if err != nil {
 		return recordFailure(ctx, in, fmt.Errorf("poll build: %w", err))
 	}
@@ -503,7 +547,7 @@ func digestOverrides(targets []ReleaseTarget) map[string]string {
 	return out
 }
 
-// The checkApproval/resolvePlan/dispatchBuild/pollBuild/verifyPublished/
+// The checkApproval/resolvePlan/dispatchBuild/verifyPublished/
 // recordTargetState helpers below all call workflow.ExecuteActivity by the
 // Activity* name constants (see this file's "Activity name constants"
 // section) rather than a Go method value, keeping ReleaseWorkflow's
@@ -532,10 +576,63 @@ func dispatchBuild(ctx workflow.Context, plan ResolvedPlan, digests map[string]s
 	return ref, err
 }
 
-func pollBuild(ctx workflow.Context, ref BuildRef) (BuildStatus, error) {
+// awaitBuildCompletion decides the build outcome by racing NotifyBuild-
+// Complete's signal (the notify half) against the PollBuild activity (the
+// poll half): the signal usually arrives long before the poll loop would
+// notice the run finished, so it wins and cancels the poll activity; when
+// no notification arrives (endpoint down, notify job skipped, an older
+// release-v2 revision, ...) PollBuild keeps polling exactly as before and
+// its result decides. Either way the returned BuildStatus is what the rest
+// of ReleaseWorkflow already consumed, so the split is invisible to the
+// finalize/verify/record steps.
+//
+// Determinism: everything here is workflow code -- the signal channel is
+// registered deterministically, the poll future is deterministic, and the
+// only branching is on received data, so replay is stable. A signal that
+// arrives after the poll decided is simply never read again (no-ops in
+// Temporal); a stale signal (GitHubRunID mismatch) is ignored and the
+// selector keeps waiting -- see BuildCompletedSignal.GitHubRunID.
+func awaitBuildCompletion(ctx workflow.Context, ref BuildRef) (BuildStatus, error) {
+	// The poll runs under its own activity options (long StartToClose for
+	// the polling loop -- see pollBuildActivityOptions) in a cancellable
+	// child context, so the signal path can stop it the moment the notify
+	// arrives instead of letting a pointless poll keep running.
+	pollCtx, cancelPoll := workflow.WithCancel(workflow.WithActivityOptions(ctx, pollBuildActivityOptions))
+	pollFuture := workflow.ExecuteActivity(pollCtx, ActivityPollBuild, ref)
+	signalCh := workflow.GetSignalChannel(ctx, SignalBuildCompleted)
+
 	var status BuildStatus
-	err := workflow.ExecuteActivity(ctx, ActivityPollBuild, ref).Get(ctx, &status)
-	return status, err
+	var statusErr error
+	decided := false
+	for !decided {
+		sel := workflow.NewSelector(ctx)
+		sel.AddFuture(pollFuture, func(f workflow.Future) {
+			if gerr := f.Get(ctx, &status); gerr != nil {
+				statusErr = gerr
+			}
+			decided = true
+		})
+		sel.AddReceive(signalCh, func(c workflow.ReceiveChannel, more bool) {
+			var sig BuildCompletedSignal
+			if !c.Receive(ctx, &sig) {
+				return
+			}
+			if sig.GitHubRunID != "" && sig.GitHubRunID != ref.RunID {
+				// Stale signal from a different run -- ignore it and keep
+				// waiting (the loop re-selects; the channel may still hold
+				// a matching signal behind this one).
+				return
+			}
+			status = BuildStatus{Succeeded: sig.Succeeded, Detail: sig.Detail}
+			decided = true
+		})
+		sel.Select(ctx)
+	}
+	// Stop the poll on the signal path (cancelling an already-completed
+	// activity future is a no-op on the poll path, so this is unconditional
+	// rather than tracked per branch).
+	cancelPoll()
+	return status, statusErr
 }
 
 func finalizePublish(ctx workflow.Context, plan ResolvedPlan, ref BuildRef) (FinalizeResult, error) {

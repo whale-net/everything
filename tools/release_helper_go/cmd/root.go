@@ -55,6 +55,7 @@ func NewRootCmd() *cobra.Command {
 		newBuildReleaseCmd(),
 		newFinalizeAppCmd(),
 		newFinalizeChartCmd(),
+		newNotifyBuildCmd(),
 		newCreateCombinedGithubReleaseCmd(),
 		newManifestSetCmd(),
 		newReadChartLockfileCmd(),

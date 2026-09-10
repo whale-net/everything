@@ -4,7 +4,9 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"log/slog"
+	"strconv"
 	"strings"
 
 	"github.com/whale-net/everything/libs/go/logging"
@@ -230,6 +232,102 @@ func (s *ReleaseServer) TriggerRelease(ctx context.Context, req *pb.TriggerRelea
 		ReleaseRunId:       created.ReleaseRunID,
 		TemporalWorkflowId: created.TemporalWorkflowID,
 	}, nil
+}
+
+// NotifyBuildComplete delivers the build job's own terminal state onto the
+// running ReleaseWorkflow (the notify half of the pipeline's notify-vs-poll
+// split, see worker/release/awaitBuildCompletion): release-v2.yml's notify
+// job calls release_helper notify-build with the app-registry-builder
+// client credentials the build job already holds, and this handler signals
+// the release run's Temporal workflow with release.SignalBuildCompleted so
+// ReleaseWorkflow can proceed to FinalizePublish immediately instead of
+// waiting for PollBuild's polling loop. Polling remains the fallback for a
+// notification that never arrives, so a notify failure is never fatal to
+// the release itself.
+//
+// Authorization mirrors every other build-job-side write (AssertApps,
+// RecordBuild, BeginPublishBatch, ...): auth.Require(ctx, auth.RoleBuilder)
+// -- the same app-registry-builder role, no new role (see ARCHITECTURE.md
+// "Authorization"). The workflow-identity lookup deliberately goes through
+// the API (not a direct DB read): the release run's TemporalWorkflowID was
+// persisted by TriggerRelease on this same service, and repo reads here
+// keep "the API is the write path" one-seam discipline of this server.
+func (s *ReleaseServer) NotifyBuildComplete(ctx context.Context, req *pb.NotifyBuildCompleteRequest) (*pb.NotifyBuildCompleteResponse, error) {
+	if err := auth.Require(ctx, auth.RoleBuilder); err != nil {
+		return nil, err
+	}
+	if req.GetReleaseRunId() == "" {
+		return nil, status.Error(codes.InvalidArgument, "release_run_id is required")
+	}
+	if s.temporal == nil {
+		// Unreachable in a real deployment (server/main.go always provides
+		// a client); tests that exercise this handler's signal path supply
+		// a fake. Kept explicit rather than silently no-op-ing so a
+		// misconfigured server can't strand notify-build's caller.
+		return nil, status.Error(codes.FailedPrecondition, "temporal client not configured")
+	}
+
+	run, _, err := s.repo.ReleaseRuns().GetReleaseRun(ctx, req.GetReleaseRunId())
+	if err != nil {
+		return nil, mapRepoErr(err)
+	}
+	if run.TemporalWorkflowID == "" {
+		return nil, status.Errorf(codes.FailedPrecondition, "release run %s has no Temporal workflow id", run.ReleaseRunID)
+	}
+	// Cross-check the notifier against the dispatch PersistBuildRef
+	// recorded, when that stamp is present (it is on every machine-
+	// dispatched run since the release_run_id dispatch input landed): a
+	// notification claiming a different Actions run's outcome must not
+	// decide this release. build_ref_run_id being empty (e.g. the
+	// SetBuildRef write failed on an older revision) skips the check --
+	// the workflow still ignores a mismatched run id on its own side (see
+	// BuildCompletedSignal.GitHubRunID). github_run_id 0/absent means the
+	// caller could not identify its run -- treated as unverifiable and
+	// passed through rather than rejected, matching the workflow's own
+	// empty-id stance.
+	notifyRunID := ""
+	if req.GetGithubRunId() != 0 {
+		notifyRunID = strconv.FormatInt(req.GetGithubRunId(), 10)
+	}
+	if run.BuildRefRunID != "" && notifyRunID != "" && notifyRunID != run.BuildRefRunID {
+		return nil, status.Errorf(codes.FailedPrecondition,
+			"notify run id %s does not match release run %s's dispatched build run %s",
+			notifyRunID, run.ReleaseRunID, run.BuildRefRunID)
+	}
+
+	detail := req.GetDetail()
+	if detail == "" {
+		detail = fmt.Sprintf("run %d notified build completion via NotifyBuildComplete", req.GetGithubRunId())
+	}
+	signal := release.BuildCompletedSignal{
+		GitHubRunID: notifyRunID,
+		Succeeded:   req.GetSucceeded(),
+		Detail:      detail,
+	}
+	if serr := s.temporal.SignalWorkflow(ctx, run.TemporalWorkflowID, "", release.SignalBuildCompleted, signal); serr != nil {
+		var notFound *serviceerror.NotFound
+		if errors.As(serr, &notFound) {
+			// The workflow execution is unknown to Temporal -- already
+			// completed (a poll had already decided, or the run finished
+			// between the build job and this call) or a stale id. Polling
+			// remains the correctness fallback, so this is an informational
+			// no-op for the notify job, not an error it should retry.
+			releaseLog.Info("notify build complete: workflow execution not found; poll fallback owns the outcome",
+				slog.String("release_run_id", run.ReleaseRunID),
+				slog.String("workflow_id", run.TemporalWorkflowID),
+				slog.String("github_run_id", notifyRunID),
+			)
+			return &pb.NotifyBuildCompleteResponse{Signaled: false}, nil
+		}
+		return nil, status.Errorf(codes.Internal, "signal release workflow %s: %v", run.TemporalWorkflowID, serr)
+	}
+	releaseLog.Info("notify build complete: signalled release workflow",
+		slog.String("release_run_id", run.ReleaseRunID),
+		slog.String("workflow_id", run.TemporalWorkflowID),
+		slog.String("github_run_id", notifyRunID),
+		slog.Bool("succeeded", req.GetSucceeded()),
+	)
+	return &pb.NotifyBuildCompleteResponse{Signaled: true}, nil
 }
 
 // rejectIfAlreadyReleasing implements FR5's fast-fail check: it returns

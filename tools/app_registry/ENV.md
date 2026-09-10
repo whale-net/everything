@@ -189,7 +189,7 @@ placement rationale:
 |---|---|---|---|
 | `vars.APP_REGISTRY_ADDRESS` | Repository variable | `APP_REGISTRY_ADDRESS` | both |
 | `vars.APP_REGISTRY_AUTH_TOKEN_URL` | Repository variable | `GRPC_AUTH_TOKEN_URL` | both |
-| `vars.APP_REGISTRY_BUILDER_ENV` | Repository variable | `GRPC_AUTH_CLIENT_ID=app-registry-builder-<value>`, falls back to `dev` when unset | `release.yml` recording steps, plus (AR-7f) "Build helm charts with versioning" |
+| `vars.APP_REGISTRY_BUILDER_ENV` | Repository variable | `GRPC_AUTH_CLIENT_ID=app-registry-builder-<value>`, falls back to `dev` when unset | `release.yml` recording steps, (AR-7f) "Build helm charts with versioning", `release-v2.yml`'s notify-temporal job (`NotifyBuildComplete`) |
 | `secrets.APP_REGISTRY_BUILDER_CLIENT_SECRET` | Repository secret | `GRPC_AUTH_CLIENT_SECRET` | `release.yml` recording steps, plus (AR-7f) "Build helm charts with versioning" |
 | `secrets.APP_REGISTRY_PROMOTER_CLIENT_SECRET` | Environment secret, one per GitHub Environment (e.g. `promotion-dev`/`promotion-prod`) | `GRPC_AUTH_CLIENT_SECRET` (`GRPC_AUTH_CLIENT_ID=app-registry-promoter-<registry_environment>`) | `promote.yml` only |
 

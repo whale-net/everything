@@ -126,3 +126,39 @@ message ListReleaseAttemptsResponse {
   repeated GetReleaseResponse releases = 1;
   PageResponse page = 2;
 }
+
+// NotifyBuildCompleteRequest reports one GHA release build run's terminal
+// state (see ReleaseRegistry.NotifyBuildComplete). Sent by release_helper
+// notify-build from release-v2.yml's notify job, holding that job's
+// app-registry-builder client credentials.
+message NotifyBuildCompleteRequest {
+  // release_run_id identifies which Temporal ReleaseWorkflow execution to
+  // signal: the release_run row the originating TriggerRelease persisted.
+  // Required -- release-v2 dispatches machine-triggered runs with this id
+  // (DispatchBuild's release_run_id workflow_dispatch input); a human/bot
+  // fallback dispatch without one is expected to skip notify-build client-
+  // side, so this always identifies a live Temporal run.
+  string release_run_id = 1;
+  // github_run_id is the notifying GHA Actions run's id (github.RunID in
+  // the workflow). The handler cross-checks it against release_run's
+  // build_ref_run_id when that has already been persisted, so a stale
+  // notification from a different run cannot poison a live one.
+  int64 github_run_id = 2;
+  // succeeded is the build run's terminal outcome -- the workflow treats
+  // this exactly like PollBuild's BuildStatus.Succeeded (finalization on
+  // true, recordFailure on false).
+  bool succeeded = 3;
+  // detail is a human-readable one-liner for release_run_target's
+  // error_detail / release-run UI (e.g. "run 1234567 conclusion=success").
+  // Optional; the handler supplies a default when empty.
+  string detail = 4;
+}
+
+message NotifyBuildCompleteResponse {
+  // signaled is true when the SignalWorkflow call reached the Temporal
+  // ReleaseWorkflow execution. A false value means the release run's
+  // workflow is unknown to Temporal (already completed, wrong id, or no
+  // Temporal configured) -- the notify job treats this as an informational
+  // no-op (polling remains the correctness fallback) rather than an error.
+  bool signaled = 1;
+}
