@@ -85,11 +85,23 @@ type Activities struct {
 type ResolveAgentDefinitionResult struct {
 	Definition session.AgentDefinition
 	// Model is the effective model for this turn (FR5): the session's
-	// ModelOverride when set, else Definition.Model. Resolved here (rather
-	// than left for a later step to compute) because it needs the same
-	// fresh, never-cached session/definition reads this activity already
-	// does -- a separate activity would just re-read both rows again.
+	// ModelOverride when set, else Definition.Model or (when
+	// Definition.ModelDefinitionID is set instead) the referenced
+	// model_definition row's Model. Resolved here (rather than left for a
+	// later step to compute) because it needs the same fresh, never-cached
+	// session/definition reads this activity already does -- a separate
+	// activity would just re-read both rows again.
 	Model string
+	// Provider is the OpenRouter provider-routing preferences that go with
+	// Model, resolved from Definition.ModelDefinitionID's model_definition
+	// row (converted from session.ProviderPreferences to
+	// llm.ProviderPreferences -- see that type's doc comment for why the
+	// two packages each carry their own copy of this shape). Nil when
+	// Definition names a model directly, or when the session's
+	// ModelOverride replaced the model_definition-resolved model --  a
+	// caller-supplied override model has no routing preferences of its
+	// own to inherit.
+	Provider *llm.ProviderPreferences
 }
 
 // ResolveAgentDefinition is per-turn activity #1 (ARCHITECTURE.md "Session
@@ -130,12 +142,58 @@ func (a *Activities) ResolveAgentDefinition(ctx context.Context, sessionID uuid.
 		return ResolveAgentDefinitionResult{}, fmt.Errorf("resolve agent definition: session %s not found", sessionID)
 	}
 
-	model := def.Model
+	model, provider, err := resolveModel(ctx, a.Store, *def)
+	if err != nil {
+		return ResolveAgentDefinitionResult{}, fmt.Errorf("resolve agent definition: %w", err)
+	}
 	if sess.ModelOverride != nil && *sess.ModelOverride != "" {
 		model = *sess.ModelOverride
+		provider = nil
 	}
 
-	return ResolveAgentDefinitionResult{Definition: *def, Model: model}, nil
+	return ResolveAgentDefinitionResult{Definition: *def, Model: model, Provider: provider}, nil
+}
+
+// resolveModel resolves def's effective model and OpenRouter
+// provider-routing preferences (before any FR5 session ModelOverride is
+// applied -- see ResolveAgentDefinition, the only caller): def.Model
+// directly when set, or def.ModelDefinitionID's referenced model_definition
+// row otherwise -- exactly one of the two is set, per AgentDefinition's
+// doc comment.
+func resolveModel(ctx context.Context, store *session.Store, def session.AgentDefinition) (string, *llm.ProviderPreferences, error) {
+	if def.ModelDefinitionID == nil {
+		if def.Model == nil {
+			return "", nil, fmt.Errorf("agent definition %s v%d has neither model nor model_definition_id set", def.AgentID, def.Version)
+		}
+		return *def.Model, nil, nil
+	}
+
+	modelDef, err := store.ModelDefinitions().GetByID(ctx, *def.ModelDefinitionID)
+	if err != nil {
+		return "", nil, fmt.Errorf("get model definition %s: %w", *def.ModelDefinitionID, err)
+	}
+	if modelDef == nil {
+		return "", nil, fmt.Errorf("model definition %s not found (referenced by agent definition %s v%d)", *def.ModelDefinitionID, def.AgentID, def.Version)
+	}
+	return modelDef.Model, toLLMProviderPreferences(modelDef.Provider), nil
+}
+
+// toLLMProviderPreferences converts session.ProviderPreferences (a
+// model_definition row's stored routing preferences) into
+// llm.ProviderPreferences (the wire client's identical shape) -- the one
+// call site that needs both packages, per each type's doc comment on why
+// they are not the same Go type.
+func toLLMProviderPreferences(p session.ProviderPreferences) *llm.ProviderPreferences {
+	return &llm.ProviderPreferences{
+		Only:              p.Only,
+		Ignore:            p.Ignore,
+		Order:             p.Order,
+		Quantizations:     p.Quantizations,
+		Sort:              p.Sort,
+		AllowFallbacks:    p.AllowFallbacks,
+		RequireParameters: p.RequireParameters,
+		DataCollection:    p.DataCollection,
+	}
 }
 
 // CallModelInput is CallModel's activity input. EventIDs is the ordered
@@ -150,7 +208,10 @@ type CallModelInput struct {
 	SessionID uuid.UUID
 	Turn      int
 	Model     string
-	EventIDs  []uuid.UUID
+	// Provider is ResolveAgentDefinitionResult.Provider, forwarded
+	// verbatim into llm.Request.Provider -- see that field's doc comment.
+	Provider *llm.ProviderPreferences
+	EventIDs []uuid.UUID
 	// Tools is what the model may call this turn (FR8) -- llm.Request.Tools
 	// verbatim, so an empty/nil Tools produces the identical
 	// no-tools-attached request this activity has always sent (issue
@@ -199,7 +260,7 @@ func (a *Activities) CallModel(ctx context.Context, in CallModelInput) (CallMode
 		return CallModelResult{}, fmt.Errorf("call model: decode context events: %w", err)
 	}
 
-	resp, err := a.LLM.Complete(ctx, llm.Request{Model: in.Model, Messages: messages, Tools: in.Tools})
+	resp, err := a.LLM.Complete(ctx, llm.Request{Model: in.Model, Messages: messages, Tools: in.Tools, Provider: in.Provider})
 	if err != nil {
 		return CallModelResult{}, fmt.Errorf("call model: %w", err)
 	}

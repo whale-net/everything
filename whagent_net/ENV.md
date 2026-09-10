@@ -91,6 +91,20 @@ to check a requested `model_override` against the provider catalogue (FR5)
 before any session row is written -- a separate in-process cache from
 `worker`'s, since the two are different binaries sharing no memory.
 
+OpenRouter's own upstream-provider routing (restricting/ranking/excluding
+which of OpenRouter's inference vendors may serve a call -- `only`,
+`ignore`, `order`, `quantizations`, `sort`, `allow_fallbacks`,
+`require_parameters`, `data_collection`, per
+[OpenRouter's provider routing](https://openrouter.ai/docs/features/provider-routing))
+is not an env var: it is configured per agent definition via the
+`model_definition` table (`whagent_net/session/modeldef.go`,
+`config/agents.yaml`'s `model_definitions`), not here -- see
+`ARCHITECTURE.md`'s "Component map" for `model_definition`. This is
+unrelated to `OPENROUTER_BASE_URL` below -- OpenRouter remains the only
+LLM provider whagent-net talks to; `model_definition` only narrows which
+of *its* upstream inference vendors may serve a call, and does so
+per-agent rather than process-wide.
+
 | Variable | Component | Default | Description |
 |----------|-----------|---------|-------------|
 | `OPENROUTER_API_KEY` | worker, api | *(required)* | OpenRouter API key. |

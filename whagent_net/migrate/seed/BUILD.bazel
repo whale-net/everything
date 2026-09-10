@@ -12,6 +12,7 @@ go_library(
         "//whagent_net/config",
         "//whagent_net/llm",
         "//whagent_net/session",
+        "@com_github_google_uuid//:uuid",
     ],
 )
 
@@ -45,6 +46,7 @@ go_test(
         "//whagent_net/config",
         "//whagent_net/llm",
         "//whagent_net/migrate/schema",
+        "@com_github_google_uuid//:uuid",
         "@com_github_jackc_pgx_v5//stdlib",
         "@com_github_stretchr_testify//assert",
         "@com_github_stretchr_testify//require",

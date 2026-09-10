@@ -10,11 +10,17 @@
 # latest seeded version (see seed.go's package doc comment for the exact
 # diff-and-insert rule).
 #
-# Each entry's shape mirrors whagent_net/session.AgentDefinition
+# Each `agents` entry's shape mirrors whagent_net/session.AgentDefinition
 # (agentdef.go) minus `version`/`created_at`, which the seeder derives:
 #   - agent_id:       stable identifier sessions pin to (session_agent.agent_id)
 #   - model:          an OpenRouter-served model id (llm.Catalog.Supports checks
-#                      this at StartSession time, api/handlers/start.go)
+#                      this at StartSession time, api/handlers/start.go) --
+#                      exactly one of `model` / `model_definition` is required.
+#   - model_definition: names a `model_definitions` entry below (its `name`)
+#                      instead of a model id directly -- preferred over `model`
+#                      when set, resolved at CallModel time
+#                      (worker/activities.go) to that entry's model plus
+#                      OpenRouter provider-routing preferences.
 #   - tool_set:       one or more {server_url, allowed_tools} pairs
 #                      (session.ToolServerRef) -- allowed_tools: null means
 #                      "whatever the server exposes" (whagent-side filtering
@@ -27,6 +33,21 @@
 #                      StartSession handler) -- see whagent_net/README.md
 #                      "Keycloak role" for how to grant it (Implementation
 #                      phase closes out that doc section)
+#
+# `model_definitions` entries (session.ModelDefinition, upserted into the
+# `model_definition` table by `name` -- NOT versioned/SCD2 like
+# `agent_definition`, see session/modeldef.go's ModelDefinitionStore doc
+# comment) let more than one agent share the same model + OpenRouter
+# provider-routing bundle instead of repeating it per agent:
+#   - name:            stable identifier `agents[].model_definition` references
+#   - model:            an OpenRouter-served model id, same rule as `model` above
+#   - provider:         OpenRouter's provider-routing object
+#                       (https://openrouter.ai/docs/features/provider-routing) --
+#                       any of only/ignore/order/quantizations/sort/
+#                       allow_fallbacks/require_parameters/data_collection,
+#                       all optional (session.ProviderPreferences)
+#
+# model_definitions: []   # none seeded yet -- see this file's doc comment above
 
 agents:
   - agent_id: audience-score-system-research

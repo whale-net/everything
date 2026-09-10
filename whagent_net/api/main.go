@@ -177,7 +177,7 @@ func run() error {
 	// failing fails api's startup the same loud way it already fails
 	// migrate/worker's seeder (whagent_net/migrate/seed.Seeder) -- never
 	// silently falling back to no DevRoles.
-	agentDefs, err := config.Load()
+	_, agentDefs, err := config.Load()
 	if err != nil {
 		return fmt.Errorf("config: %w", err)
 	}

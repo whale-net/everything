@@ -25,8 +25,8 @@ import (
 
 // Store is the pgx-backed repository over `sessions`, `transcript_event`,
 // `turn_context`, `turn_usage`, `agent_definition`, `session_agent`,
-// `tool_call_idempotency` (migration 001, issue #2109), and
-// `transcript_archive` (migration 002, issue #2240).
+// `tool_call_idempotency` (migration 001, issue #2109), `transcript_archive`
+// (migration 002, issue #2240), and `model_definition` (migration 006).
 type Store struct {
 	pool *pgxpool.Pool
 	pub  events.PublisherInterface
@@ -74,6 +74,11 @@ func (s *Store) Transcript() TranscriptStore {
 // AgentDefinitions returns the AgentDefinitionStore implementation
 // (agentdef.go, LB5/NFR6).
 func (s *Store) AgentDefinitions() AgentDefinitionStore { return agentDefinitionStore{pool: s.pool} }
+
+// ModelDefinitions returns the ModelDefinitionStore implementation
+// (modeldef.go): the `model_definition` table an AgentDefinition may
+// reference via ModelDefinitionID instead of naming a model directly.
+func (s *Store) ModelDefinitions() ModelDefinitionStore { return modelDefinitionStore{pool: s.pool} }
 
 // Usage returns the UsageStore implementation (usage.go, LB6).
 func (s *Store) Usage() UsageStore { return usageStore{pool: s.pool} }

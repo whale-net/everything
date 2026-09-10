@@ -28,7 +28,7 @@ func testAgentDefinition(agentID string, version, maxTurns int, maxCostUSD float
 	return &session.AgentDefinition{
 		AgentID:    agentID,
 		Version:    version,
-		Model:      "test-model",
+		Model:      strPtr2("test-model"),
 		ToolSet:    []session.ToolServerRef{{ServerURL: "https://mcp.example.com/research"}},
 		MaxTurns:   maxTurns,
 		MaxCostUSD: maxCostUSD,

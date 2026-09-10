@@ -40,6 +40,7 @@ var everyTable = []string{
 	"session_agent",
 	"tool_call_idempotency",
 	"ui_sessions",
+	"model_definition",
 }
 
 func tableExists(t *testing.T, ctx context.Context, db *dbtest.Postgres, table string) bool {
@@ -69,7 +70,7 @@ func TestMigration001_UpDownUp_LeavesCleanDatabaseAndIsRerunnable(t *testing.T) 
 
 	latest, err := runner.LatestVersion()
 	require.NoError(t, err)
-	require.Equal(t, uint(5), latest, "expected the latest migration source version to be 5 (001_initial_schema + 002_transcript_archive, issue #2240 + 003_sessions_list_index, issue #2241 + 004_mcpauth_credential, issue #2245 + 005_ui_sessions, issue #2288) -- update this test if a later migration has since landed")
+	require.Equal(t, uint(6), latest, "expected the latest migration source version to be 6 (001_initial_schema + 002_transcript_archive, issue #2240 + 003_sessions_list_index, issue #2241 + 004_mcpauth_credential, issue #2245 + 005_ui_sessions, issue #2288 + 006_model_definition) -- update this test if a later migration has since landed")
 
 	// -- Up: every table must exist, version must land clean at the latest --
 	require.NoError(t, runner.Up(), "apply every migration")
@@ -77,7 +78,7 @@ func TestMigration001_UpDownUp_LeavesCleanDatabaseAndIsRerunnable(t *testing.T) 
 	version, dirty, err := runner.Version()
 	require.NoError(t, err)
 	assert.False(t, dirty)
-	assert.Equal(t, uint(5), version)
+	assert.Equal(t, uint(6), version)
 
 	for _, table := range everyTable {
 		assert.True(t, tableExists(t, ctx, db, table), "expected table %q to exist after Up()", table)
@@ -104,7 +105,7 @@ func TestMigration001_UpDownUp_LeavesCleanDatabaseAndIsRerunnable(t *testing.T) 
 	version, dirty, err = runner.Version()
 	require.NoError(t, err)
 	assert.False(t, dirty)
-	assert.Equal(t, uint(5), version)
+	assert.Equal(t, uint(6), version)
 
 	for _, table := range everyTable {
 		assert.True(t, tableExists(t, ctx, db, table), "expected table %q to exist again after the second Up()", table)

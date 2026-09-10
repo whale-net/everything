@@ -28,15 +28,24 @@ type ToolServerRef struct {
 // inherits unless overridden (FR5/FR6/FR7, FR9's required_role).
 // (AgentID, Version) is the primary key -- versions are never mutated in
 // place, only inserted.
+//
+// Exactly one of Model and ModelDefinitionID is set (migration 006's
+// agent_definition_model_xor_model_definition CHECK constraint;
+// config.Validate enforces the identical rule pre-seed). When
+// ModelDefinitionID is set, it is preferred: the effective model and
+// OpenRouter provider-routing preferences are resolved from the
+// referenced model_definition row (worker/activities.go's
+// ResolveAgentDefinition), not from Model, which is NULL in that case.
 type AgentDefinition struct {
-	AgentID      string
-	Version      int
-	Model        string
-	ToolSet      []ToolServerRef
-	MaxTurns     int
-	MaxCostUSD   float64
-	RequiredRole *string
-	CreatedAt    time.Time
+	AgentID           string
+	Version           int
+	Model             *string
+	ModelDefinitionID *uuid.UUID
+	ToolSet           []ToolServerRef
+	MaxTurns          int
+	MaxCostUSD        float64
+	RequiredRole      *string
+	CreatedAt         time.Time
 }
 
 // SessionAgent is a `session_agent` row (LB5/NFR6): the SCD2 history of
@@ -79,13 +88,13 @@ type agentDefinitionStore struct{ pool *pgxpool.Pool }
 
 var _ AgentDefinitionStore = agentDefinitionStore{}
 
-const agentDefinitionColumns = `agent_id, version, model, tool_set, max_turns, max_cost_usd, required_role, created_at`
+const agentDefinitionColumns = `agent_id, version, model, model_definition_id, tool_set, max_turns, max_cost_usd, required_role, created_at`
 
 func scanAgentDefinition(row pgx.Row) (*AgentDefinition, error) {
 	var def AgentDefinition
 	var toolSet json.RawMessage
 	if err := row.Scan(
-		&def.AgentID, &def.Version, &def.Model, &toolSet,
+		&def.AgentID, &def.Version, &def.Model, &def.ModelDefinitionID, &toolSet,
 		&def.MaxTurns, &def.MaxCostUSD, &def.RequiredRole, &def.CreatedAt,
 	); err != nil {
 		return nil, err
@@ -142,16 +151,17 @@ func (s agentDefinitionStore) Upsert(ctx context.Context, def *AgentDefinition) 
 	}
 
 	err = s.pool.QueryRow(ctx, `
-		INSERT INTO agent_definition (agent_id, version, model, tool_set, max_turns, max_cost_usd, required_role)
-		VALUES ($1, $2, $3, $4, $5, $6, $7)
+		INSERT INTO agent_definition (agent_id, version, model, model_definition_id, tool_set, max_turns, max_cost_usd, required_role)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
 		ON CONFLICT (agent_id, version) DO UPDATE SET
 			model = EXCLUDED.model,
+			model_definition_id = EXCLUDED.model_definition_id,
 			tool_set = EXCLUDED.tool_set,
 			max_turns = EXCLUDED.max_turns,
 			max_cost_usd = EXCLUDED.max_cost_usd,
 			required_role = EXCLUDED.required_role
 		RETURNING created_at
-	`, def.AgentID, def.Version, def.Model, toolSet, def.MaxTurns, def.MaxCostUSD, def.RequiredRole).Scan(&def.CreatedAt)
+	`, def.AgentID, def.Version, def.Model, def.ModelDefinitionID, toolSet, def.MaxTurns, def.MaxCostUSD, def.RequiredRole).Scan(&def.CreatedAt)
 	if err != nil {
 		return fmt.Errorf("upsert agent definition: %w", err)
 	}
