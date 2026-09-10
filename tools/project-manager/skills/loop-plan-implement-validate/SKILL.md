@@ -19,7 +19,7 @@ This is a convenience wrapper, not a new mechanic: it doesn't touch GitHub state
 
 - `--max-subagents <N>` — forwarded verbatim to `/project-manager:implement`'s own `--max-subagents` on every iteration. Defaults to 4 (matching `implement`'s own default).
 - `--planner-model <model>` — forwarded verbatim to `/project-manager:plan`'s own `--planner-model`, used only on the first iteration (task breakdown doesn't repeat). Defaults to `opus`.
-- `--max-iterations <N>` — safety cap on `implement`↔`validate` cycles before stopping and reporting the plan stuck rather than looping forever. Defaults to 5. A well-scoped plan should converge in 1-2 cycles; hitting the cap points at findings that keep recurring rather than a slow plan.
+- `--max-iterations <N>` — safety cap on `implement`↔`validate` cycles before stopping and reporting the plan stuck rather than looping forever. Defaults to 3. A well-scoped plan should converge in 1-2 cycles; hitting the cap points at findings that keep recurring rather than a slow plan.
 
 ## Steps
 
