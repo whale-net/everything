@@ -302,7 +302,18 @@ By default, sessions are stored in an encrypted gorilla/sessions cookie. This wo
 
 ### Setup
 
-1. Apply migration `032_ui_sessions` to create the `ui_sessions` table.
+1. Wire `htmxauth.Migrations` into your domain's `migrate/main.go` alongside
+   your own migrations, instead of copying the `ui_sessions` table DDL into
+   your own migrations directory:
+
+   ```go
+   migrate.RunCLI(migrations, "migrations",
+       migrate.WithSource("htmxauth", htmxauth.Migrations, "migrations"))
+   ```
+
+   See `libs/go/migrate`'s README ("Shared library migrations") for why
+   `WithSource` tracks `htmxauth.Migrations` in its own dedicated table
+   instead of merging it into your domain's own migration sequence.
 2. Set `PG_DATABASE_URL`.
 3. Use `NewAuthenticatorWithDB` instead of `NewAuthenticator`:
 

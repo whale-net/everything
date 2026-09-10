@@ -34,6 +34,7 @@ import (
 
 	"github.com/whale-net/everything/libs/go/dbtest"
 	"github.com/whale-net/everything/libs/go/grpcauth"
+	"github.com/whale-net/everything/libs/go/htmxauth"
 	"github.com/whale-net/everything/libs/go/migrate"
 	"github.com/whale-net/everything/tools/app_registry/migrate/schema"
 	"github.com/whale-net/everything/tools/app_registry/server/auth"
@@ -53,10 +54,11 @@ func authedCtx() context.Context {
 	})
 }
 
-// newTestRegistry starts a real Postgres container, applies the real
-// App Registry migrations (migrate/schema.Migrations, the same embed.FS the
-// migration binary runs), and returns a Registry plus the raw pool for
-// fixture setup / assertions.
+// newTestRegistry starts a real Postgres container, applies htmxauth's
+// bundled ui_sessions migration plus the real App Registry migrations --
+// the same sources the migration binary applies via migrate.WithSource, see
+// migrate/main.go -- and returns a Registry plus the raw pool for fixture
+// setup / assertions.
 func newTestRegistry(t *testing.T) (*Registry, *pgxpool.Pool) {
 	t.Helper()
 	ctx := context.Background()
@@ -68,6 +70,12 @@ func newTestRegistry(t *testing.T) (*Registry, *pgxpool.Pool) {
 		t.Fatalf("open database/sql handle for migration runner: %v", err)
 	}
 	defer sqlDB.Close()
+
+	if err := migrate.ApplySource(sqlDB, migrate.Source{
+		Name: "htmxauth", FS: htmxauth.Migrations, Dir: "migrations",
+	}); err != nil {
+		t.Fatalf("apply htmxauth migrations: %v", err)
+	}
 
 	runner := migrate.NewRunner(sqlDB, schema.Migrations, schema.Dir)
 	if err := runner.Up(); err != nil {
