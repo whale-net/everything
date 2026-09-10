@@ -43,6 +43,16 @@ type fakeGuidanceManManAPIClient struct {
 	sgcs         []*manmanpb.ServerGameConfig
 	sgcByID      map[int64]*manmanpb.ServerGameConfig
 	listAllocReq []*manmanpb.ListAllocatedPortsRequest
+
+	// updateSGCErr, updateSGCReqs: task #2275's deployment-settings ports
+	// Save tests (handlers_deployment_settings_test.go) reuse this same
+	// fixture rather than standing up a second one -- see that file's doc
+	// comment on why. updateSGCErr forces the failure branch (a backend
+	// save-time rejection); nil (the zero value) leaves the shipped
+	// UpdateServerGameConfig write path succeeding, mirroring
+	// fakePortsManManAPIClient (handlers_sgc_update_ports_test.go).
+	updateSGCErr  error
+	updateSGCReqs []*manmanpb.UpdateServerGameConfigRequest
 }
 
 func (f *fakeGuidanceManManAPIClient) GetServer(ctx context.Context, in *manmanpb.GetServerRequest, opts ...grpc.CallOption) (*manmanpb.GetServerResponse, error) {
@@ -72,6 +82,23 @@ func (f *fakeGuidanceManManAPIClient) GetServerGameConfig(ctx context.Context, i
 		return &manmanpb.GetServerGameConfigResponse{Config: sgc}, nil
 	}
 	return nil, errors.New("not found")
+}
+
+// UpdateServerGameConfig records the request (so tests can assert on the
+// shipped write path's exact shape -- update_paths, port_bindings) and,
+// absent updateSGCErr, mirrors fakePortsManManAPIClient's success
+// behavior: echo back a config carrying whatever bindings were submitted.
+func (f *fakeGuidanceManManAPIClient) UpdateServerGameConfig(ctx context.Context, in *manmanpb.UpdateServerGameConfigRequest, opts ...grpc.CallOption) (*manmanpb.UpdateServerGameConfigResponse, error) {
+	f.updateSGCReqs = append(f.updateSGCReqs, in)
+	if f.updateSGCErr != nil {
+		return nil, f.updateSGCErr
+	}
+	return &manmanpb.UpdateServerGameConfigResponse{
+		Config: &manmanpb.ServerGameConfig{
+			ServerGameConfigId: in.GetServerGameConfigId(),
+			PortBindings:       in.GetPortBindings(),
+		},
+	}, nil
 }
 
 func guidanceServer() *manmanpb.Server {

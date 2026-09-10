@@ -2,8 +2,10 @@ package main
 
 import (
 	"context"
+	"errors"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"strings"
 	"testing"
 
@@ -405,5 +407,247 @@ func TestBuildDeploymentSettingsData_FR2_DisplayName(t *testing.T) {
 	}
 	if data2.DisplayName != "config 3 on server 2" {
 		t.Errorf("fallback DisplayName = %q, want %q", data2.DisplayName, "config 3 on server 2")
+	}
+}
+
+// --- Ports section (task #2275: FR12, the accumulating half of FR10,
+// WD10) -----------------------------------------------------------------
+//
+// deploymentSettingsPortsTestApp wraps fakeGuidanceManManAPIClient
+// (handlers_sgc_ports_guidance_test.go, task #2098) rather than standing
+// up a fourth fixture in this file: FR12 requires reusing the shipped
+// guidance surface unchanged, and that file's fixture is exactly what its
+// own tests already exercise for ranges/allocated/sibling bindings.
+// UpdateServerGameConfig was added to that fixture (see its own doc
+// comment) specifically so these tests can share it instead of
+// re-deriving the guidance data a second time.
+func deploymentSettingsPortsTestApp(api *fakeGuidanceManManAPIClient) *App {
+	return &App{grpc: &ControlClient{api: api}}
+}
+
+// postDeploymentSettingsPortsSave posts to the blade's one explicit Save
+// (POST /deployment-settings/{id}/ports/save), exactly as
+// deployment_settings.templ's ports form does: a single
+// port_bindings_json field carrying the whole accumulated array.
+func postDeploymentSettingsPortsSave(t *testing.T, app *App, sgcID, bindingsJSON string) *httptest.ResponseRecorder {
+	t.Helper()
+	form := url.Values{"port_bindings_json": {bindingsJSON}}
+	req := httptest.NewRequest(http.MethodPost, "/deployment-settings/"+sgcID+"/ports/save", strings.NewReader(form.Encode()))
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	req.Header.Set("HX-Request", "true")
+	w := httptest.NewRecorder()
+	app.handleDeploymentSettingsPortsSave(w, req, sgcID)
+	return w
+}
+
+// TestHandleDeploymentSettingsPortsSave_WritePath is the load-bearing
+// write-path test: saving issues exactly one UpdateServerGameConfig call
+// with update_paths == ["port_bindings"] -- asserted explicitly, since an
+// empty update_paths takes a different branch server-side -- carrying the
+// whole submitted array, and the response comes back clean (no
+// data-blade-dirty="true"), so FR10 stops prompting on dismiss.
+func TestHandleDeploymentSettingsPortsSave_WritePath(t *testing.T) {
+	api := newGuidanceAPI()
+	app := deploymentSettingsPortsTestApp(api)
+
+	w := postDeploymentSettingsPortsSave(t, app, "7", `[{"container_port":25565,"host_port":25580,"protocol":"TCP"}]`)
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200; body: %s", w.Code, w.Body.String())
+	}
+
+	if len(api.updateSGCReqs) != 1 {
+		t.Fatalf("UpdateServerGameConfig calls = %d, want exactly 1", len(api.updateSGCReqs))
+	}
+	req := api.updateSGCReqs[0]
+	if got := req.GetUpdatePaths(); len(got) != 1 || got[0] != "port_bindings" {
+		t.Errorf(`update_paths = %v, want exactly ["port_bindings"]`, got)
+	}
+	if req.GetServerGameConfigId() != 7 {
+		t.Errorf("ServerGameConfigId = %d, want 7", req.GetServerGameConfigId())
+	}
+	if got := req.GetPortBindings(); len(got) != 1 || got[0].GetHostPort() != 25580 || got[0].GetContainerPort() != 25565 || got[0].GetProtocol() != "TCP" {
+		t.Errorf("PortBindings = %v, want exactly the submitted binding", got)
+	}
+
+	body := w.Body.String()
+	if strings.Contains(body, `data-blade-dirty="true"`) {
+		t.Errorf("expected the section to come back clean after a successful Save, got %q", body)
+	}
+	if !strings.Contains(body, `data-blade-section="ports" data-blade-dirty="false"`) {
+		t.Errorf("expected the never-dirty-after-save marker, got %q", body)
+	}
+}
+
+// TestHandleDeploymentSettingsPortsSave_ConnectAddressRecompute guards
+// AC4: a successful Save swaps the recomputed connect address into the
+// Games page row out of band, derived from the newly saved bindings (not
+// the pre-save ones).
+func TestHandleDeploymentSettingsPortsSave_ConnectAddressRecompute(t *testing.T) {
+	api := newGuidanceAPI()
+	api.server.HostPublicAddress = "play.example.com"
+	app := deploymentSettingsPortsTestApp(api)
+
+	w := postDeploymentSettingsPortsSave(t, app, "7", `[{"container_port":25565,"host_port":25599,"protocol":"TCP"}]`)
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200; body: %s", w.Code, w.Body.String())
+	}
+	body := w.Body.String()
+	if !strings.Contains(body, `id="deployment-connect-7"`) {
+		t.Fatalf("expected the connect-address OOB swap's target id, got %q", body)
+	}
+	if !strings.Contains(body, `hx-swap-oob="true"`) {
+		t.Errorf("expected an out-of-band swap (AC4), got %q", body)
+	}
+	if !strings.Contains(body, "play.example.com:25599") {
+		t.Errorf("expected the recomputed address from the newly saved binding, got %q", body)
+	}
+}
+
+// TestHandleDeploymentSettingsPortsSave_Failure_PreservesBindingsAndDirty
+// guards the failure path: a backend save-time rejection is surfaced as an
+// error without losing the operator's entered bindings, and the section
+// stays marked dirty (FR10 keeps prompting on dismiss).
+func TestHandleDeploymentSettingsPortsSave_Failure_PreservesBindingsAndDirty(t *testing.T) {
+	api := newGuidanceAPI()
+	api.updateSGCErr = errors.New("port already allocated")
+	app := deploymentSettingsPortsTestApp(api)
+
+	w := postDeploymentSettingsPortsSave(t, app, "7", `[{"container_port":25565,"host_port":25599,"protocol":"TCP"}]`)
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200 (re-rendered fragment, not an error page); body: %s", w.Code, w.Body.String())
+	}
+	body := w.Body.String()
+	if !strings.Contains(body, `data-testid="deployment-settings-ports-error"`) {
+		t.Errorf("expected an inline error, got %q", body)
+	}
+	if !strings.Contains(body, `data-blade-section="ports" data-blade-dirty="true"`) {
+		t.Errorf("expected the section to stay dirty after a rejected Save (FR10 keeps prompting), got %q", body)
+	}
+	// The operator's just-submitted binding must survive verbatim in the
+	// re-rendered fragment's data-port-bindings attribute -- never dropped.
+	// templ.JSONString's output is HTML-attribute-escaped (&#34; not "),
+	// so the assertion matches the escaped form actually served.
+	if !strings.Contains(body, `&#34;host_port&#34;:25599`) {
+		t.Errorf("expected the rejected binding to survive in the re-rendered fragment, got %q", body)
+	}
+}
+
+// TestHandleDeploymentSettingsPortsSave_NoClientSideValidationAuthority
+// guards FR12's "no new validation authority" rule end to end: a binding
+// the guidance surface would flag (host port 25566 is already allocated
+// per newGuidanceAPI's fixture) is still saved successfully when the
+// backend accepts it -- this handler never rejects on its own.
+func TestHandleDeploymentSettingsPortsSave_NoClientSideValidationAuthority(t *testing.T) {
+	api := newGuidanceAPI()
+	app := deploymentSettingsPortsTestApp(api)
+
+	w := postDeploymentSettingsPortsSave(t, app, "7", `[{"container_port":25565,"host_port":25566,"protocol":"TCP"}]`)
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200; body: %s", w.Code, w.Body.String())
+	}
+	if len(api.updateSGCReqs) != 1 {
+		t.Fatalf("expected the backend-accepted save to go through, got %d update calls", len(api.updateSGCReqs))
+	}
+	body := w.Body.String()
+	if strings.Contains(body, `data-testid="deployment-settings-ports-error"`) {
+		t.Errorf("expected no client-side rejection of a guidance-flagged-but-backend-accepted binding, got %q", body)
+	}
+}
+
+// TestHandleDeploymentSettingsPorts_GET_GuidanceSurface guards the lazy
+// load's reuse of the shipped FR13/FR14 guidance (handlers_sgc_ports_
+// guidance.go's buildSGCPortContext, unchanged here): allowed ranges,
+// already-allocated ports, and sibling deployments' bindings on the same
+// server all come through in the rendered context, sourced from
+// newGuidanceAPI's fixture.
+func TestHandleDeploymentSettingsPorts_GET_GuidanceSurface(t *testing.T) {
+	api := newGuidanceAPI()
+	app := deploymentSettingsPortsTestApp(api)
+
+	req := httptest.NewRequest(http.MethodGet, "/deployment-settings/7/ports", nil)
+	w := httptest.NewRecorder()
+	app.handleDeploymentSettingsPorts(w, req, "7")
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200; body: %s", w.Code, w.Body.String())
+	}
+	body := w.Body.String()
+	// templ.JSONString's output is HTML-attribute-escaped (&#34; not "),
+	// so these match the escaped form actually served, not raw JSON.
+	// Allowed ranges (guidanceServer): TCP 25565-25570, UDP 27015-27020.
+	for _, want := range []string{`&#34;start&#34;:25565`, `&#34;end&#34;:25570`, `&#34;start&#34;:27015`, `&#34;end&#34;:27020`} {
+		if !strings.Contains(body, want) {
+			t.Errorf("expected allowed-range guidance %q, got %q", want, body)
+		}
+	}
+	// Already-allocated (newGuidanceAPI.allocated): TCP 25566.
+	if !strings.Contains(body, "25566") {
+		t.Errorf("expected the already-allocated port to appear in guidance, got %q", body)
+	}
+	// Sibling deployment (SGC 8, same server) saved binding: TCP 30000.
+	// SGC 7's own binding (25565) must be excluded from "in use" -- editing
+	// a deployment's own bindings must not flag them against itself.
+	if !strings.Contains(body, "30000") {
+		t.Errorf("expected the sibling deployment's saved binding to appear in guidance, got %q", body)
+	}
+	// The deployment's own current bindings render too.
+	if !strings.Contains(body, `&#34;host_port&#34;:25565`) {
+		t.Errorf("expected the deployment's own current binding to render, got %q", body)
+	}
+}
+
+// TestDeploymentSettingsPorts_FR2_NoRawSGCInDisplayText guards FR2 across
+// both the lazy-load fragment and a post-Save fragment: no "SGC" or
+// "server game config" (case-insensitive) anywhere the ports section
+// renders as display text.
+func TestDeploymentSettingsPorts_FR2_NoRawSGCInDisplayText(t *testing.T) {
+	api := newGuidanceAPI()
+	app := deploymentSettingsPortsTestApp(api)
+
+	getW := httptest.NewRecorder()
+	app.handleDeploymentSettingsPorts(getW, httptest.NewRequest(http.MethodGet, "/deployment-settings/7/ports", nil), "7")
+	saveW := postDeploymentSettingsPortsSave(t, app, "7", `[{"container_port":25565,"host_port":25580,"protocol":"TCP"}]`)
+
+	for name, w := range map[string]*httptest.ResponseRecorder{"GET": getW, "Save": saveW} {
+		lower := strings.ToLower(w.Body.String())
+		if strings.Contains(lower, "sgc") {
+			t.Errorf("%s response: expected no raw SGC identifier in display text (FR2), got %q", name, w.Body.String())
+		}
+		if strings.Contains(lower, "server game config") {
+			t.Errorf(`%s response: expected no "server game config" in display text (FR2), got %q`, name, w.Body.String())
+		}
+	}
+}
+
+// TestHandleDeploymentSettingsRoutes_PortsDispatch guards main.go's route
+// wiring (NFR4: UI-only dispatch, no new API surface) for both the ports
+// lazy-load and the ports Save branch -- the Save branch is checked before
+// the bare "ports" branch in handleDeploymentSettingsRoutes since both
+// share pathParts[2] == "ports", so this also guards that they don't
+// shadow each other.
+func TestHandleDeploymentSettingsRoutes_PortsDispatch(t *testing.T) {
+	api := newGuidanceAPI()
+	app := deploymentSettingsPortsTestApp(api)
+
+	getReq := httptest.NewRequest(http.MethodGet, "/deployment-settings/7/ports", nil)
+	getW := httptest.NewRecorder()
+	app.handleDeploymentSettingsRoutes(getW, getReq)
+	if getW.Code != http.StatusOK {
+		t.Fatalf("GET dispatch: status = %d, want 200; body: %s", getW.Code, getW.Body.String())
+	}
+	if strings.Contains(getW.Body.String(), "Loading port bindings") {
+		t.Errorf("GET dispatch: expected the real section, not the placeholder, got %q", getW.Body.String())
+	}
+
+	form := url.Values{"port_bindings_json": {`[{"container_port":25565,"host_port":25580,"protocol":"TCP"}]`}}
+	saveReq := httptest.NewRequest(http.MethodPost, "/deployment-settings/7/ports/save", strings.NewReader(form.Encode()))
+	saveReq.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	saveW := httptest.NewRecorder()
+	app.handleDeploymentSettingsRoutes(saveW, saveReq)
+	if saveW.Code != http.StatusOK {
+		t.Fatalf("Save dispatch: status = %d, want 200; body: %s", saveW.Code, saveW.Body.String())
+	}
+	if len(api.updateSGCReqs) != 1 {
+		t.Fatalf("Save dispatch: expected the Save branch to be reached (not the bare ports branch), got %d update calls", len(api.updateSGCReqs))
 	}
 }
