@@ -1366,14 +1366,7 @@ func (app *App) handleWorkshopCache(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Best-effort: an unresolvable addon name still renders the cache view
-	// (an addon_id-only title/breadcrumb) rather than failing the page --
-	// ListAddonCacheEntries below is the RPC that actually determines whether
-	// the addon exists.
-	addonName := "Addon " + addonIDStr
-	if addon, addonErr := app.grpc.GetWorkshopAddon(ctx, addonID); addonErr == nil && addon.Name != "" {
-		addonName = addon.Name
-	}
+	addonName, entries := app.loadWorkshopCacheViewData(ctx, addonID)
 
 	breadcrumbs := []components.Breadcrumb{
 		{Label: "Workshop", URL: "/workshop/library"},
@@ -1385,15 +1378,6 @@ func (app *App) handleWorkshopCache(w http.ResponseWriter, r *http.Request) {
 		log.Printf("Error building layout data: %v", err)
 		http.Error(w, "Failed to build layout", http.StatusInternalServerError)
 		return
-	}
-
-	entries, err := app.grpc.ListAddonCacheEntries(ctx, addonID)
-	if err != nil {
-		// Unknown addon_id (control-api returns NotFound) renders the empty
-		// state rather than an error page, matching the batch-status view's
-		// precedent for a read-only lookup by id.
-		log.Printf("Error fetching workshop cache entries for addon %d: %v", addonID, err)
-		entries = nil
 	}
 
 	data := pages.WorkshopCachePageData{
@@ -1410,13 +1394,79 @@ func (app *App) handleWorkshopCache(w http.ResponseWriter, r *http.Request) {
 	RenderTempl(w, r, "Workshop Cache", pages.WorkshopCache(data))
 }
 
+// loadWorkshopCacheViewData gathers the two RPC-backed pieces both the
+// full-page cache view (handleWorkshopCache) and the Cache Blade
+// (handleWorkshopCacheBlade, handleWorkshopCacheVerify/Evict's HX-Request
+// branch -- task #2362, FR7 C35) need: a best-effort addon display name and
+// its cache entries. Addon name resolution failure never fails the caller
+// (see handleWorkshopCache's original doc comment) -- ListAddonCacheEntries
+// is the RPC that actually determines whether the addon exists.
+func (app *App) loadWorkshopCacheViewData(ctx context.Context, addonID int64) (addonName string, entries []*manmanpb.WorkshopCacheEntry) {
+	addonName = fmt.Sprintf("Addon %d", addonID)
+	if addon, addonErr := app.grpc.GetWorkshopAddon(ctx, addonID); addonErr == nil && addon.Name != "" {
+		addonName = addon.Name
+	}
+
+	var err error
+	entries, err = app.grpc.ListAddonCacheEntries(ctx, addonID)
+	if err != nil {
+		// Unknown addon_id (control-api returns NotFound) renders the empty
+		// state rather than an error page, matching the batch-status view's
+		// precedent for a read-only lookup by id.
+		log.Printf("Error fetching workshop cache entries for addon %d: %v", addonID, err)
+		entries = nil
+	}
+	return addonName, entries
+}
+
+// handleWorkshopCacheBlade renders the Cache Blade fragment (task #2362,
+// FR7 C35) opened via hx-get from the Workshop top-level page's Cache
+// section -- the same data as handleWorkshopCache, but as a bare
+// components.Blade fragment (pages.WorkshopCacheBlade.Render) rather than a
+// full-page navigation to "/workshop/cache", matching
+// handleGameConfigEditorGet's fragment-rendering shape.
+func (app *App) handleWorkshopCacheBlade(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	ctx := r.Context()
+
+	addonIDStr := r.URL.Query().Get("addon_id")
+	addonID, err := strconv.ParseInt(addonIDStr, 10, 64)
+	if err != nil {
+		http.Error(w, "Invalid addon_id", http.StatusBadRequest)
+		return
+	}
+
+	addonName, entries := app.loadWorkshopCacheViewData(ctx, addonID)
+
+	data := pages.WorkshopCacheBladeData{
+		AddonID:   addonID,
+		AddonName: addonName,
+		Entries:   entries,
+	}
+
+	w.Header().Set("Content-Type", "text/html")
+	if err := pages.WorkshopCacheBlade(data).Render(ctx, w); err != nil {
+		log.Printf("Error rendering Cache Blade for addon %d: %v", addonID, err)
+	}
+}
+
 // handleWorkshopCacheVerify dispatches an Admin's on-demand SteamCMD verify of a single
 // cache entry (FR11, plan #2175, #2186). Dispatch is fire-and-forget from this handler's
 // perspective -- the up-to-date/changed outcome is not part of the RPC response and only
 // appears on the cache view's next manual reload (same M4 boundary as the rest of this
-// view: no polling/SSE). The redirect carries the dispatch outcome as a query param so
-// the cache page can render it as an inline banner rather than a toast, and so a
-// no_host_available result renders as a clear message rather than an error page.
+// view: no polling/SSE).
+//
+// Two response shapes, chosen by the "HX-Request" header (task #2362, FR7
+// C35): the plain-POST full-page form on "/workshop/cache" (workshop_cache.templ,
+// no HX-Request header) keeps its pre-existing redirect-with-query-param
+// behavior unchanged (NFR6); the Cache Blade's hx-post form
+// (WorkshopCacheBladeBody, "/workshop") instead renders the updated blade
+// body fragment directly, so the outcome banner and the reloaded entries
+// list land in place without navigating off "/workshop".
 func (app *App) handleWorkshopCacheVerify(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
@@ -1439,12 +1489,17 @@ func (app *App) handleWorkshopCacheVerify(w http.ResponseWriter, r *http.Request
 		return
 	}
 
+	isHTMX := r.Header.Get("HX-Request") == "true"
 	redirectURL := fmt.Sprintf("/workshop/cache?addon_id=%d", addonID)
 
 	// serverID 0: let control-api pick a host that already holds a copy (FR11).
 	resp, err := app.grpc.VerifyCacheEntry(ctx, cacheEntryID, 0)
 	if err != nil {
 		log.Printf("Error dispatching workshop cache verify for cache_entry_id %d: %v", cacheEntryID, err)
+		if isHTMX {
+			app.renderWorkshopCacheBladeBody(w, r, addonID, "error", 0, "")
+			return
+		}
 		http.Redirect(w, r, redirectURL+"&verify_status=error", http.StatusSeeOther)
 		return
 	}
@@ -1452,20 +1507,56 @@ func (app *App) handleWorkshopCacheVerify(w http.ResponseWriter, r *http.Request
 	if !resp.Dispatched {
 		// no_host_available is a real, reportable outcome, not an error (issue: "renders
 		// as a clear inline message, not an error toast").
+		if isHTMX {
+			app.renderWorkshopCacheBladeBody(w, r, addonID, resp.Status, 0, "")
+			return
+		}
 		http.Redirect(w, r, redirectURL+"&verify_status="+resp.Status, http.StatusSeeOther)
 		return
 	}
 
+	if isHTMX {
+		app.renderWorkshopCacheBladeBody(w, r, addonID, "dispatched", resp.ServerId, "")
+		return
+	}
 	http.Redirect(w, r, fmt.Sprintf("%s&verify_status=dispatched&verify_server_id=%d", redirectURL, resp.ServerId), http.StatusSeeOther)
+}
+
+// renderWorkshopCacheBladeBody re-loads the Cache Blade's data and renders
+// WorkshopCacheBladeBody directly (task #2362, FR7 C35) -- the HX-Request
+// response shape for handleWorkshopCacheVerify/handleWorkshopCacheEvict,
+// swapped into the Blade in place of workshopCacheBladeBodyID (see that
+// const's doc comment).
+func (app *App) renderWorkshopCacheBladeBody(w http.ResponseWriter, r *http.Request, addonID int64, verifyState string, verifyServerID int64, evictError string) {
+	ctx := r.Context()
+	_, entries := app.loadWorkshopCacheViewData(ctx, addonID)
+
+	data := pages.WorkshopCacheBladeData{
+		AddonID:        addonID,
+		Entries:        entries,
+		VerifyState:    verifyState,
+		VerifyServerID: verifyServerID,
+		EvictError:     evictError,
+	}
+
+	w.Header().Set("Content-Type", "text/html")
+	if err := pages.WorkshopCacheBladeBody(data).Render(ctx, w); err != nil {
+		log.Printf("Error rendering Cache Blade body for addon %d: %v", addonID, err)
+	}
 }
 
 // handleWorkshopCacheEvict implements FR12's UI entry point: Admin manual
 // eviction of exactly one content-addressed cache entry, submitted from the
-// confirmation step on workshop_cache.templ that names the specific content
+// confirmation step on workshop_cache.templ (or the Cache Blade's
+// hx-post equivalent, task #2362 FR7 C35) that names the specific content
 // version being evicted (the destructive scope is exactly one version, and
 // the confirmation makes that unambiguous before the request is sent).
-// Redirects back to the cache view for the same addon so the evicted row
-// disappears on the reloaded list while every sibling version remains.
+//
+// Same "HX-Request" response-shape split as handleWorkshopCacheVerify: the
+// plain-POST full-page form keeps its redirect-back-to-"/workshop/cache"
+// behavior (NFR6); the Cache Blade's hx-post form gets the updated blade
+// body rendered directly, so the evicted row disappears without navigating
+// off "/workshop".
 func (app *App) handleWorkshopCacheEvict(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
@@ -1481,6 +1572,8 @@ func (app *App) handleWorkshopCacheEvict(w http.ResponseWriter, r *http.Request)
 		return
 	}
 
+	isHTMX := r.Header.Get("HX-Request") == "true"
+
 	cacheEntryID, err := strconv.ParseInt(r.FormValue("cache_entry_id"), 10, 64)
 	if err != nil {
 		http.Error(w, "Invalid cache_entry_id", http.StatusBadRequest)
@@ -1489,9 +1582,17 @@ func (app *App) handleWorkshopCacheEvict(w http.ResponseWriter, r *http.Request)
 
 	if _, err := app.grpc.EvictCacheEntry(ctx, cacheEntryID); err != nil {
 		log.Printf("Error evicting workshop cache entry %d: %v", cacheEntryID, err)
+		if isHTMX {
+			app.renderWorkshopCacheBladeBody(w, r, addonID, "", 0, "Could not evict this cache entry. Please try again.")
+			return
+		}
 		http.Error(w, "Failed to evict cache entry", http.StatusInternalServerError)
 		return
 	}
 
+	if isHTMX {
+		app.renderWorkshopCacheBladeBody(w, r, addonID, "", 0, "")
+		return
+	}
 	http.Redirect(w, r, fmt.Sprintf("/workshop/cache?addon_id=%d", addonID), http.StatusSeeOther)
 }

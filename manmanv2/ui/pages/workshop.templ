@@ -1,0 +1,513 @@
+package pages
+
+import (
+	"fmt"
+
+	"github.com/whale-net/everything/manmanv2/ui/components"
+	manmanpb "github.com/whale-net/everything/manmanv2/protos"
+)
+
+// WorkshopPageData drives the redesigned Workshop top-level page (root
+// plan #2359, task #2362 -- FR6/FR7). This is the one place a Server
+// Manager manages Workshop content fleet-wide (US8): library
+// create/update/delete, addon/reference management, and the FR7
+// fleet-scale actions -- collection-add (C33), batch-addon-create (C34),
+// and cache-backed install (C35) -- are all reachable and executable from
+// here without navigating away (collection-add/batch-create/cache-backed
+// install; library management is reachable but, matching
+// workshop_library_detail.templ's existing precedent, its own forms are
+// plain POSTs that hand off to the pre-existing "/workshop/library-detail"
+// page rather than staying on "/workshop" -- see workshopLibraryPanel's
+// doc comment).
+type WorkshopPageData struct {
+	Layout components.LayoutData
+	Games  []*manmanpb.Game
+	// Libraries is every library across every game -- LibraryPanels below
+	// is built 1:1 from this slice, in the same order.
+	Libraries []*manmanpb.WorkshopLibrary
+	// Addons is every addon across every game: the page's Cache section
+	// addon picker and the collection-add/batch-create Blades' available
+	// context both read from this one already-fetched list.
+	Addons []*manmanpb.WorkshopAddon
+	// LibraryPanels holds one WorkshopLibraryPanelData per entry of
+	// Libraries (handlers_workshop_page.go's buildWorkshopLibraryPanels),
+	// pre-rendered into a <template> per library at the bottom of this
+	// page so opening a library's Manage Blade costs no further request.
+	LibraryPanels []WorkshopLibraryPanelData
+	// RecentBatchJobs mirrors WorkshopLibraryPageData's field of the same
+	// name (workshop_library.templ) -- the newest few collection-add/
+	// batch-create jobs across all games, so a Server Manager can reach
+	// the batch-status view without holding on to a batch_job_id.
+	RecentBatchJobs []*manmanpb.WorkshopBatchJob
+}
+
+// WorkshopLibraryPanelData backs one library's Manage Blade (FR6): the
+// addons currently in it, the same game's other addons available to add,
+// its child libraries (nested references), and the same game's other
+// libraries available to include as a reference. See
+// buildWorkshopLibraryPanels (handlers_workshop_page.go) for how this is
+// assembled entirely from data the page already fetches, so opening the
+// Blade itself costs no request.
+type WorkshopLibraryPanelData struct {
+	Library            *manmanpb.WorkshopLibrary
+	GameName           string
+	Addons             []*manmanpb.WorkshopAddon
+	AvailableAddons    []*manmanpb.WorkshopAddon
+	ChildLibraries     []*manmanpb.WorkshopLibrary
+	AvailableLibraries []*manmanpb.WorkshopLibrary
+}
+
+func gameNameByID(games []*manmanpb.Game, gameID int64) string {
+	for _, g := range games {
+		if g.GameId == gameID {
+			return g.Name
+		}
+	}
+	return ""
+}
+
+// WorkshopPage is the redesigned Workshop top-level page (FR6/FR7),
+// registered at "/workshop" (handlers_workshop_page.go). It is additive:
+// the pre-existing /workshop/library page and every /workshop/* sub-route
+// (handlers_workshop.go, pages/workshop_library.templ and friends) are
+// untouched and stay reachable (NFR6) until the dependent
+// navigation/disposition task swaps the nav entry and adds the redirect.
+//
+// Deliberately excludes GC-level library attachment (FR10) -- that lands
+// on the Games page panel in its own task, not here.
+//
+// Collection-add (C33) and batch-addon-create (C34) render as page-level
+// Blades opened with zero request (the pre-rendered <template> +
+// data-open-blade-template click pattern games.templ's Customize blade
+// established -- see workshopBladeOpenerScript below); cache-backed
+// install (C35) opens its Blade via a real hx-get (its data -- cache
+// entries for a chosen addon -- isn't known until an addon is picked, so
+// it cannot be pre-rendered the way the other two can), matching the
+// Config Editor blade's hx-get/hx-swap="beforeend" shape. Terminology
+// throughout stays deployment-first (NFR2): a ServerGameConfig is a
+// "deployment", never "SGC" or "server game config" (see games.templ /
+// activity.templ for the M5-settled wording) -- this page has no
+// deployment-level content at all, so in practice that means never
+// introducing "SGC" text, not translating existing text.
+templ WorkshopPage(data WorkshopPageData) {
+	@components.Layout(data.Layout) {
+		<style>
+			[x-cloak] { display: none !important; }
+		</style>
+		@workshopBladeOpenerScript()
+		<div x-data="{ showCreateLibrary: false, showAddAddon: false }">
+			@components.HeroHeader("Workshop", "Manage libraries, addons, and cache fleet-wide") {
+				<a href="/workshop/search" class="btn bg-primary-content/20 hover:bg-primary-content/30 text-primary-content border-primary-content/30">Search</a>
+				<button type="button" data-open-blade-template="workshop-collection-add-blade-template" class="btn bg-primary-content/20 hover:bg-primary-content/30 text-primary-content border-primary-content/30">+ Add Collection</button>
+				<button type="button" data-open-blade-template="workshop-batch-create-blade-template" class="btn bg-primary-content/20 hover:bg-primary-content/30 text-primary-content border-primary-content/30">+ Batch Create</button>
+				<button @click="showCreateLibrary = !showCreateLibrary" class="btn bg-base-100 hover:bg-base-200 text-primary border-none">
+					<span x-text="showCreateLibrary ? '✕ Cancel' : '+ New Library'">+ New Library</span>
+				</button>
+			}
+			<!-- Create Library -->
+			<div x-show="showCreateLibrary" x-cloak x-transition class="card bg-base-100 shadow-md border-2 border-primary/40 p-6 mb-6">
+				<div class="flex justify-between items-center mb-4 pb-4 border-b border-base-300">
+					<h3 class="text-lg font-semibold text-base-content">Create New Library</h3>
+					<button @click="showCreateLibrary = false" class="btn btn-secondary btn-sm">Cancel</button>
+				</div>
+				<form method="POST" action="/workshop/create-library" class="space-y-4">
+					<div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+						<div>
+							<label class="block text-sm font-medium text-base-content mb-2">Game *</label>
+							<select name="game_id" required class="select select-bordered w-full">
+								for _, game := range data.Games {
+									<option value={ fmt.Sprintf("%d", game.GameId) }>{ game.Name }</option>
+								}
+							</select>
+						</div>
+						<div>
+							<label class="block text-sm font-medium text-base-content mb-2">Name *</label>
+							<input type="text" name="name" required placeholder="e.g., Essential Maps" class="input input-bordered w-full"/>
+						</div>
+					</div>
+					<div>
+						<label class="block text-sm font-medium text-base-content mb-2">Description</label>
+						<input type="text" name="description" placeholder="Optional" class="input input-bordered w-full"/>
+					</div>
+					<button type="submit" class="btn btn-primary">Create Library</button>
+				</form>
+			</div>
+			<!-- Libraries -->
+			<div id="workshop-libraries" class="mb-8">
+				<div class="flex justify-between items-center mb-4">
+					<h2 class="text-xl font-bold text-base-content">Libraries <span class="text-sm font-normal text-base-content/60">({ fmt.Sprintf("%d", len(data.Libraries)) })</span></h2>
+				</div>
+				@workshopLibraryList(data)
+			</div>
+			<!-- Cache -->
+			<div id="workshop-cache" class="mb-8">
+				<h2 class="text-xl font-bold text-base-content mb-4">Cache</h2>
+				<div class="bg-base-100 rounded-box border border-base-300 p-5">
+					<p class="text-sm text-base-content/60 mb-4">Fleet-wide cache entries, hosts, and staleness for an addon -- pick an addon to inspect, verify, or evict a cached copy.</p>
+					if len(data.Addons) > 0 {
+						<div class="flex flex-wrap gap-2 items-end mb-4">
+							<div class="flex-1 min-w-48">
+								<label class="block text-sm font-medium text-base-content mb-2">Addon</label>
+								<select id="workshop-cache-addon-select" name="addon_id" class="select select-bordered w-full">
+									for _, addon := range data.Addons {
+										<option value={ fmt.Sprintf("%d", addon.AddonId) }>{ addon.Name }</option>
+									}
+								</select>
+							</div>
+							<button
+								type="button"
+								hx-get="/workshop/cache-blade"
+								hx-include="#workshop-cache-addon-select"
+								hx-target="body"
+								hx-swap="beforeend"
+								class="btn btn-primary"
+							>View Cache</button>
+						</div>
+					} else {
+						<p class="text-sm text-base-content/60 mb-4">No addons yet -- fetch one from Steam Workshop below.</p>
+					}
+					<!-- Addon search/create (part of C35's bullet: search for or fetch
+					an addon before its cache can be inspected) -->
+					<div class="border-t border-base-300 pt-4">
+						<button @click="showAddAddon = !showAddAddon" class="btn btn-secondary btn-sm">
+							<span x-text="showAddAddon ? '✕ Cancel' : '+ Fetch Addon from Steam Workshop'">+ Fetch Addon from Steam Workshop</span>
+						</button>
+						<div x-show="showAddAddon" x-cloak x-transition class="mt-4">
+							<form hx-post="/workshop/fetch-metadata" hx-target="#workshop-add-addon-result" hx-swap="innerHTML" class="grid grid-cols-1 md:grid-cols-4 gap-4">
+								<div>
+									<label class="block text-sm font-medium text-base-content mb-2">Game</label>
+									<select name="game_id" required class="select select-bordered w-full">
+										for _, game := range data.Games {
+											<option value={ fmt.Sprintf("%d", game.GameId) }>{ game.Name }</option>
+										}
+									</select>
+								</div>
+								<div>
+									<label class="block text-sm font-medium text-base-content mb-2">Workshop ID</label>
+									<input type="text" name="workshop_id" required placeholder="e.g., 2938285337" class="input input-bordered w-full"/>
+								</div>
+								<div>
+									<label class="block text-sm font-medium text-base-content mb-2">Platform</label>
+									<select name="platform_type" required class="select select-bordered w-full">
+										<option value="steam_workshop">Steam Workshop</option>
+									</select>
+								</div>
+								<div class="flex items-end">
+									<button type="submit" class="w-full btn btn-primary">Fetch</button>
+								</div>
+							</form>
+							<div id="workshop-add-addon-result" class="mt-4"></div>
+						</div>
+					</div>
+				</div>
+			</div>
+			<!-- Recent Batch Jobs -->
+			if len(data.RecentBatchJobs) > 0 {
+				<div class="mb-8">
+					<h2 class="text-xl font-bold text-base-content mb-4">Recent Batch Jobs</h2>
+					<div class="bg-base-100 rounded-box border border-base-300 overflow-x-auto">
+						<table class="table">
+							<thead>
+								<tr>
+									<th>Type</th>
+									<th>Status</th>
+									<th>Total / Succeeded / Failed</th>
+									<th></th>
+								</tr>
+							</thead>
+							<tbody>
+								for _, job := range data.RecentBatchJobs {
+									<tr>
+										<td>{ job.JobType }</td>
+										<td><span class="badge badge-soft">{ job.Status }</span></td>
+										<td>{ fmt.Sprintf("%d / %d / %d", job.TotalItems, job.SucceededItems, job.FailedItems) }</td>
+										<td>
+											<a href={ templ.URL(fmt.Sprintf("/workshop/batch-status?batch_job_id=%d", job.BatchJobId)) } class="link link-primary">View →</a>
+										</td>
+									</tr>
+								}
+							</tbody>
+						</table>
+					</div>
+				</div>
+			}
+		</div>
+		<!-- Page-level Blade templates: collection-add and batch-create are
+		pre-rendered with zero request (their only inputs, Libraries and
+		Games, are already on the page); each library's Manage Blade is
+		pre-rendered per WorkshopLibraryPanelData for the same reason. -->
+		<template id="workshop-collection-add-blade-template">
+			@components.Blade(components.BladeData{
+				ID:       "workshop-collection-add-blade",
+				Title:    "Add Collection to Library",
+				Subtitle: "FR7 -- adds a Steam collection's current items in one action",
+			}) {
+				@workshopCollectionAddForm(data.Libraries, data.Games)
+			}
+		</template>
+		<template id="workshop-batch-create-blade-template">
+			@components.Blade(components.BladeData{
+				ID:       "workshop-batch-create-blade",
+				Title:    "Batch Create Addons",
+				Subtitle: "FR7 -- mixed raw Workshop IDs and Workshop URLs, one per line",
+			}) {
+				@workshopBatchCreateForm(data.Libraries, data.Games)
+			}
+		</template>
+		for _, panel := range data.LibraryPanels {
+			<template id={ fmt.Sprintf("workshop-library-blade-template-%d", panel.Library.LibraryId) }>
+				@components.Blade(components.BladeData{
+					ID:       fmt.Sprintf("workshop-library-blade-%d", panel.Library.LibraryId),
+					Title:    panel.Library.Name,
+					Subtitle: panel.GameName,
+				}) {
+					@workshopLibraryPanel(panel)
+				}
+			</template>
+		}
+	}
+}
+
+// workshopBladeOpenerScript is games.templ's data-open-blade-template
+// click delegate (see gameRow's doc comment there for the full rationale:
+// cloning an already-rendered <template> costs no request, and
+// appendChild -- not innerHTML -- is what makes the cloned <script> in
+// Blade actually execute, mounting its scrim/Escape/focus-trap behavior).
+// Duplicated here rather than shared: each page that uses this pattern
+// owns its own copy today (games.templ is the only other one), matching
+// that existing precedent rather than introducing a new shared-script
+// module in this task.
+script workshopBladeOpenerScript() {
+	document.addEventListener('click', function(event) {
+		var trigger = event.target.closest('[data-open-blade-template]');
+		if (!trigger) return;
+		var tpl = document.getElementById(trigger.getAttribute('data-open-blade-template'));
+		if (!tpl) return;
+		var fragment = tpl.content.cloneNode(true);
+		var bladeRoot = fragment.querySelector('[data-blade]');
+		document.body.appendChild(fragment);
+		if (bladeRoot && window.htmx) {
+			window.htmx.process(bladeRoot);
+		}
+	});
+}
+
+// workshopLibraryList renders the Libraries flat list (FR6): one row per
+// library with a Manage control that opens that library's pre-rendered
+// Blade (workshopLibraryPanel below) -- no per-row fetch, mirroring
+// games.templ's flat-list-with-in-place-expansion convention referenced
+// by this task's design note, adapted to a Blade rather than inline
+// expansion since a library's management surface (addons, references,
+// update/delete) is substantial enough to warrant its own layer.
+templ workshopLibraryList(data WorkshopPageData) {
+	if len(data.LibraryPanels) > 0 {
+		<div class="flex flex-col gap-2">
+			for _, panel := range data.LibraryPanels {
+				<div class="card bg-base-100 border border-base-300 shadow-sm p-4 flex flex-row justify-between items-center gap-4">
+					<div class="min-w-0">
+						<div class="font-medium text-base-content truncate">{ panel.Library.Name }</div>
+						<div class="text-sm text-base-content/60 truncate">
+							{ panel.GameName } · { fmt.Sprintf("%d addons", len(panel.Addons)) }
+							if panel.Library.Description != "" {
+								· { panel.Library.Description }
+							}
+						</div>
+					</div>
+					<button type="button" data-open-blade-template={ fmt.Sprintf("workshop-library-blade-template-%d", panel.Library.LibraryId) } class="btn btn-primary btn-sm flex-shrink-0">Manage</button>
+				</div>
+			}
+		</div>
+	} else {
+		<div class="bg-base-100 rounded-box border border-base-300 p-12 text-center">
+			<div class="text-6xl mb-4">📚</div>
+			<h3 class="text-lg font-semibold text-base-content mb-2">No libraries yet</h3>
+			<p class="text-base-content/60">Create a library to organize your addons into reusable collections.</p>
+		</div>
+	}
+}
+
+// workshopCollectionAddForm is the FR7 collection-add (C33) Blade body: a
+// Library picker (this page is not scoped to one library, unlike
+// workshop_library_detail.templ's identical form) plus the same
+// collection_input field, targeting the existing
+// /workshop/bulk-add-collection handler unchanged (issue: "target them
+// from this page's controls rather than duplicating their logic"). The
+// Library select's onchange keeps the hidden game_id input in sync via
+// each <option>'s data-game-id (set from the library's own GameId) --
+// bulk-add-collection's contract requires both fields even though
+// game_id is fully determined by the chosen library.
+//
+// Deliberately omits the path-preset select workshop_library_detail.templ's
+// form has: presets are scoped to a single game, and this page has not
+// pre-fetched them for every game the Library picker can select (avoiding
+// a per-game preset fetch keeps this Blade's own render request-free, see
+// WorkshopPage's doc comment) -- preset_id is optional server-side, so the
+// submitted collection simply lands with no default path preset, settable
+// afterward from "/workshop/library-detail".
+templ workshopCollectionAddForm(libraries []*manmanpb.WorkshopLibrary, games []*manmanpb.Game) {
+	<form method="POST" action="/workshop/bulk-add-collection" class="space-y-4">
+		<div>
+			<label class="block text-sm font-medium text-base-content mb-2">Library *</label>
+			<select name="library_id" required onchange="this.form.game_id.value=this.selectedOptions[0].dataset.gameId" class="select select-bordered w-full">
+				<option value="">-- Select library --</option>
+				for _, lib := range libraries {
+					<option value={ fmt.Sprintf("%d", lib.LibraryId) } data-game-id={ fmt.Sprintf("%d", lib.GameId) }>{ fmt.Sprintf("%s (%s)", lib.Name, gameNameByID(games, lib.GameId)) }</option>
+				}
+			</select>
+		</div>
+		<input type="hidden" name="game_id" value=""/>
+		<div>
+			<label class="block text-sm font-medium text-base-content mb-2">Collection ID or Workshop URL *</label>
+			<input type="text" name="collection_input" required placeholder="e.g. 2947880477 or https://steamcommunity.com/sharedfiles/filedetails/?id=2947880477" class="input input-bordered w-full"/>
+		</div>
+		<p class="text-sm text-base-content/60">
+			This adds the collection's <strong>current</strong> items to the selected library once. It does not stay in sync — items added to the Steam collection afterward will not appear here automatically. Submitting hands off to the batch-status view for per-item results.
+		</p>
+		<button type="submit" class="btn btn-primary">Add Collection</button>
+	</form>
+}
+
+// workshopBatchCreateForm is the FR7 batch-addon-create (C34) Blade body,
+// the batch-create sibling of workshopCollectionAddForm above -- same
+// Library-picker-plus-hidden-game_id shape, targeting the existing
+// /workshop/batch-create-addons handler unchanged.
+templ workshopBatchCreateForm(libraries []*manmanpb.WorkshopLibrary, games []*manmanpb.Game) {
+	<form method="POST" action="/workshop/batch-create-addons" class="space-y-4">
+		<div>
+			<label class="block text-sm font-medium text-base-content mb-2">Library *</label>
+			<select name="library_id" required onchange="this.form.game_id.value=this.selectedOptions[0].dataset.gameId" class="select select-bordered w-full">
+				<option value="">-- Select library --</option>
+				for _, lib := range libraries {
+					<option value={ fmt.Sprintf("%d", lib.LibraryId) } data-game-id={ fmt.Sprintf("%d", lib.GameId) }>{ fmt.Sprintf("%s (%s)", lib.Name, gameNameByID(games, lib.GameId)) }</option>
+				}
+			</select>
+		</div>
+		<input type="hidden" name="game_id" value=""/>
+		<div>
+			<label class="block text-sm font-medium text-base-content mb-2">Workshop IDs / URLs (one per line) *</label>
+			<textarea name="entries" rows="6" required placeholder="2947880477&#10;https://steamcommunity.com/sharedfiles/filedetails/?id=3100488121" class="textarea textarea-bordered w-full font-mono text-sm"></textarea>
+		</div>
+		<p class="text-sm text-base-content/60">
+			Mix raw Workshop IDs and Workshop URLs freely, one per line — the format of each line is detected automatically. Submitting hands off to the batch-status view for per-item results.
+		</p>
+		<button type="submit" class="btn btn-primary">Create Addons</button>
+	</form>
+}
+
+// workshopLibraryPanel is one library's Manage Blade body (FR6): addon and
+// library-reference management, plus rename/update and delete. Every form
+// below is a plain POST to its existing handler (handlers_workshop.go),
+// reused unchanged rather than duplicated (issue: "target them from this
+// page's controls rather than duplicating their logic") -- each of those
+// handlers redirects on success (e.g. to "/workshop/library-detail"),
+// which is a real page navigation. That is intentional and not held to
+// FR7's "no navigation to another page" rule: acceptance criterion 2
+// scopes that rule to collection-add/batch-create/cache-backed install
+// only: library management's own criterion (3) only requires it be
+// reachable from this page, which a pre-rendered Blade whose forms POST to
+// the same handlers workshop_library_detail.templ already uses satisfies.
+templ workshopLibraryPanel(panel WorkshopLibraryPanelData) {
+	<div class="space-y-6">
+		if panel.Library.Description != "" {
+			<p class="text-sm text-base-content/70">{ panel.Library.Description }</p>
+		}
+		<div>
+			<h3 class="text-sm font-semibold text-base-content mb-2">Rename / Update</h3>
+			<form method="POST" action="/workshop/update-library" class="space-y-2">
+				<input type="hidden" name="library_id" value={ fmt.Sprintf("%d", panel.Library.LibraryId) }/>
+				<input type="hidden" name="game_id" value={ fmt.Sprintf("%d", panel.Library.GameId) }/>
+				<input type="text" name="name" value={ panel.Library.Name } required class="input input-bordered input-sm w-full"/>
+				<textarea name="description" rows="2" class="textarea textarea-bordered textarea-sm w-full">{ panel.Library.Description }</textarea>
+				<button type="submit" class="btn btn-sm btn-success">Save</button>
+			</form>
+		</div>
+		<div>
+			<h3 class="text-sm font-semibold text-base-content mb-2">Addons in Library ({ fmt.Sprintf("%d", len(panel.Addons)) })</h3>
+			if len(panel.Addons) > 0 {
+				<div class="divide-y divide-base-300">
+					for _, addon := range panel.Addons {
+						<div class="flex justify-between items-center py-2">
+							<span class="text-sm text-base-content">{ addon.Name }</span>
+							<form method="POST" action="/workshop/remove-addon-from-library">
+								<input type="hidden" name="library_id" value={ fmt.Sprintf("%d", panel.Library.LibraryId) }/>
+								<input type="hidden" name="addon_id" value={ fmt.Sprintf("%d", addon.AddonId) }/>
+								<button type="submit" class="btn btn-xs btn-error">Remove</button>
+							</form>
+						</div>
+					}
+				</div>
+			} else {
+				<p class="text-sm text-base-content/60">No addons in this library</p>
+			}
+		</div>
+		<div x-data="{ filterAddons: '' }">
+			<h3 class="text-sm font-semibold text-base-content mb-2">Add Addons</h3>
+			if len(panel.AvailableAddons) > 0 {
+				<input type="text" x-model="filterAddons" placeholder="Filter addons..." class="input input-bordered input-sm w-full mb-2"/>
+				<div class="space-y-1 max-h-56 overflow-y-auto">
+					for _, addon := range panel.AvailableAddons {
+						<div x-show={ fmt.Sprintf("filterAddons === '' || '%s'.toLowerCase().includes(filterAddons.toLowerCase())", addon.Name) } class="flex justify-between items-center py-1">
+							<span class="text-sm text-base-content">{ addon.Name }</span>
+							<form method="POST" action="/workshop/add-addon-to-library">
+								<input type="hidden" name="library_id" value={ fmt.Sprintf("%d", panel.Library.LibraryId) }/>
+								<input type="hidden" name="addon_id" value={ fmt.Sprintf("%d", addon.AddonId) }/>
+								<button type="submit" class="btn btn-xs btn-primary">Add</button>
+							</form>
+						</div>
+					}
+				</div>
+			} else {
+				<p class="text-sm text-base-content/60">No available addons</p>
+			}
+		</div>
+		<div>
+			<h3 class="text-sm font-semibold text-base-content mb-2">Included Libraries ({ fmt.Sprintf("%d", len(panel.ChildLibraries)) })</h3>
+			if len(panel.ChildLibraries) > 0 {
+				<div class="divide-y divide-base-300">
+					for _, child := range panel.ChildLibraries {
+						<div class="flex justify-between items-center py-2">
+							<span class="text-sm text-base-content">{ child.Name }</span>
+							<form method="POST" action="/workshop/remove-library-reference">
+								<input type="hidden" name="parent_library_id" value={ fmt.Sprintf("%d", panel.Library.LibraryId) }/>
+								<input type="hidden" name="child_library_id" value={ fmt.Sprintf("%d", child.LibraryId) }/>
+								<button type="submit" class="btn btn-xs btn-error">Remove</button>
+							</form>
+						</div>
+					}
+				</div>
+			} else {
+				<p class="text-sm text-base-content/60">No included libraries</p>
+			}
+		</div>
+		<div>
+			<h3 class="text-sm font-semibold text-base-content mb-2">Include Another Library</h3>
+			if len(panel.AvailableLibraries) > 0 {
+				<div class="space-y-1 max-h-56 overflow-y-auto">
+					for _, lib := range panel.AvailableLibraries {
+						<div class="flex justify-between items-center py-1">
+							<span class="text-sm text-base-content">{ lib.Name }</span>
+							<form method="POST" action="/workshop/add-library-reference">
+								<input type="hidden" name="parent_library_id" value={ fmt.Sprintf("%d", panel.Library.LibraryId) }/>
+								<input type="hidden" name="child_library_id" value={ fmt.Sprintf("%d", lib.LibraryId) }/>
+								<button type="submit" class="btn btn-xs btn-primary">Include</button>
+							</form>
+						</div>
+					}
+				</div>
+			} else {
+				<p class="text-sm text-base-content/60">No other libraries available to include</p>
+			}
+		</div>
+		<div x-data="{ confirmDelete: false }" class="border-t border-error/40 pt-4">
+			<button x-show="!confirmDelete" @click="confirmDelete = true" class="btn btn-error btn-sm">Delete Library</button>
+			<div x-show="confirmDelete" x-cloak class="flex gap-2 items-center">
+				<span class="text-sm text-error font-medium">Are you sure?</span>
+				<form method="POST" action="/workshop/delete-library" class="inline">
+					<input type="hidden" name="library_id" value={ fmt.Sprintf("%d", panel.Library.LibraryId) }/>
+					<button type="submit" class="btn btn-error btn-sm">Yes, Delete</button>
+				</form>
+				<button @click="confirmDelete = false" class="btn btn-secondary btn-sm">Cancel</button>
+			</div>
+		</div>
+	</div>
+}
