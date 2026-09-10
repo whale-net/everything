@@ -144,6 +144,31 @@ func signToken(t *testing.T, priv *ecdsa.PrivateKey, issuer, audience, subject s
 	return raw
 }
 
+// --- allowlist membership -------------------------------------------------
+
+// TestAuthenticatedMethods_PlaceSensorAndSetBoardRegionPresent is #2403's
+// direct regression guard: PlaceSensor and SetBoardRegion were added to
+// api.proto and server.go for M3 placement (FR7, FR9, FR10, FR11) but never
+// joined authenticatedMethods, so both RPCs silently skipped the grpcauth
+// interceptor and always returned Unauthenticated. Table-driven so a future
+// write RPC missing from the map fails the same way, without hand-maintaining
+// a parallel list.
+func TestAuthenticatedMethods_PlaceSensorAndSetBoardRegionPresent(t *testing.T) {
+	tests := []struct {
+		method string
+	}{
+		{"/leaflab.api.v1.LeafLabAPI/PlaceSensor"},
+		{"/leaflab.api.v1.LeafLabAPI/SetBoardRegion"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.method, func(t *testing.T) {
+			if !authenticatedMethods[tt.method] {
+				t.Fatalf("%s is missing from authenticatedMethods -- it will skip the grpcauth interceptor and always return Unauthenticated", tt.method)
+			}
+		})
+	}
+}
+
 // --- GRPC_AUTH_MODE=none -----------------------------------------------
 
 // TestSelectiveUnary_AuthModeNone_EveryRPCSucceedsWithoutCredential proves

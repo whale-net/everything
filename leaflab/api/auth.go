@@ -40,6 +40,11 @@ var authenticatedMethods = map[string]bool{
 	"/leaflab.api.v1.LeafLabAPI/CreateRegion":   true,
 	"/leaflab.api.v1.LeafLabAPI/RenameRegion":   true,
 	"/leaflab.api.v1.LeafLabAPI/ReparentRegion": true,
+	// M3 placement (#2312, fixed by #2403): FR7, FR9, FR10, FR11. These two
+	// were left out of the original M3 allowlist change, so both RPCs skipped
+	// this interceptor entirely and always returned Unauthenticated.
+	"/leaflab.api.v1.LeafLabAPI/PlaceSensor":    true,
+	"/leaflab.api.v1.LeafLabAPI/SetBoardRegion": true,
 }
 
 // selectiveUnaryInterceptor routes calls to authenticatedMethods through
