@@ -63,6 +63,13 @@ type Activities struct {
 	Store *session.Store
 	// LLM is the OpenRouter client (issue #2112) CallModel calls.
 	LLM *llm.Client
+	// ProviderOnly restricts every CallModel call to these OpenRouter
+	// upstream-provider slugs (ENV.md's OPENROUTER_PROVIDER_ONLY,
+	// llm.ProviderPreferences.Only) instead of OpenRouter's default
+	// full-pool routing. Nil/empty (the default) leaves routing
+	// unrestricted -- CallModel only sets llm.Request.Provider when this
+	// is non-empty.
+	ProviderOnly []string
 	// Prices is the per-model price table (WHAGENT_PRICE_TABLE_PATH,
 	// ENV.md) CommitTurn uses to estimate cost when the provider omits it
 	// (LB6/FR7). May be nil in a dev/test process that never exercises
@@ -199,7 +206,12 @@ func (a *Activities) CallModel(ctx context.Context, in CallModelInput) (CallMode
 		return CallModelResult{}, fmt.Errorf("call model: decode context events: %w", err)
 	}
 
-	resp, err := a.LLM.Complete(ctx, llm.Request{Model: in.Model, Messages: messages, Tools: in.Tools})
+	var provider *llm.ProviderPreferences
+	if len(a.ProviderOnly) > 0 {
+		provider = &llm.ProviderPreferences{Only: a.ProviderOnly}
+	}
+
+	resp, err := a.LLM.Complete(ctx, llm.Request{Model: in.Model, Messages: messages, Tools: in.Tools, Provider: provider})
 	if err != nil {
 		return CallModelResult{}, fmt.Errorf("call model: %w", err)
 	}

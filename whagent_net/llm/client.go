@@ -6,7 +6,11 @@
 // standing product non-goal (ARCHITECTURE.md "Open items" -- "one
 // provider (OpenRouter) and a base-URL swap covers the foreseeable
 // need"): there is exactly one Client type here, never a provider
-// interface.
+// interface. Request.Provider (OpenRouter's own upstream-provider
+// routing, ENV.md's OPENROUTER_PROVIDER_ONLY) does not revisit that
+// non-goal -- it restricts which of OpenRouter's upstream inference
+// vendors may serve a call, OpenRouter itself remains the only LLM
+// provider this package speaks to.
 package llm
 
 import (
@@ -68,6 +72,28 @@ type Request struct {
 	Model    string
 	Messages []Message
 	Tools    []ToolDefinition
+	// Provider restricts which of OpenRouter's upstream inference
+	// providers may serve this call, per OpenRouter's provider-routing
+	// API (https://openrouter.ai/docs/features/provider-routing). Nil
+	// (the common case) leaves OpenRouter's default full-pool routing in
+	// place. This is unrelated to the client.go package doc's "provider
+	// abstraction" non-goal: OpenRouter itself remains the only LLM
+	// provider whagent-net talks to -- Only names OpenRouter's own
+	// upstream inference vendors (e.g. "Together", "Fireworks") for the
+	// requested model, not a second LLM provider.
+	Provider *ProviderPreferences
+}
+
+// ProviderPreferences is OpenRouter's per-request "provider" object,
+// scoped here to the one field whagent-net needs: Only. See Request's
+// Provider doc comment for why this is not the multi-provider
+// abstraction ARCHITECTURE.md's "Open items" lists as a non-goal.
+type ProviderPreferences struct {
+	// Only restricts routing to exactly these OpenRouter provider slugs
+	// (e.g. "together", "fireworks") instead of OpenRouter's default
+	// behavior of routing across its entire pool for the requested
+	// model. Empty means no restriction.
+	Only []string
 }
 
 // Response is one turn's LLM call result: the model's message, any tool
@@ -115,7 +141,12 @@ func (c *Client) Complete(ctx context.Context, req Request) (Response, error) {
 	// usage.include=true unconditionally, on every call (LB6/FR7): the
 	// worker asks for provider usage/cost reporting opportunistically
 	// never suffices, so this is not gated on anything caller-supplied.
-	resp, err := c.oa.Chat.Completions.New(ctx, params, option.WithJSONSet("usage.include", true))
+	opts := []option.RequestOption{option.WithJSONSet("usage.include", true)}
+	if req.Provider != nil && len(req.Provider.Only) > 0 {
+		opts = append(opts, option.WithJSONSet("provider.only", req.Provider.Only))
+	}
+
+	resp, err := c.oa.Chat.Completions.New(ctx, params, opts...)
 	if err != nil {
 		return Response{}, fmt.Errorf("llm: chat completion: %w", err)
 	}

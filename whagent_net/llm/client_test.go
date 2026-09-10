@@ -152,6 +152,56 @@ func TestComplete_RequestsUsageIncludeRegardlessOfCallerRequest(t *testing.T) {
 	}
 }
 
+func TestComplete_ProviderOnly(t *testing.T) {
+	stub := &stubTransport{body: completeFixture}
+	client := newStubClient(stub)
+
+	req := Request{
+		Model:    "openai/gpt-4o",
+		Messages: []Message{{Role: RoleUser, Content: "what is the weather"}},
+		Provider: &ProviderPreferences{Only: []string{"together", "fireworks"}},
+	}
+	if _, err := client.Complete(context.Background(), req); err != nil {
+		t.Fatalf("Complete: %v", err)
+	}
+
+	provider, ok := stub.lastBody["provider"].(map[string]any)
+	if !ok {
+		t.Fatalf("request body had no \"provider\" object: %#v", stub.lastBody)
+	}
+	only, ok := provider["only"].([]any)
+	if !ok || len(only) != 2 || only[0] != "together" || only[1] != "fireworks" {
+		t.Fatalf("request body provider.only = %#v, want [together fireworks]", provider["only"])
+	}
+}
+
+func TestComplete_NoProvider_OmitsProviderField(t *testing.T) {
+	for name, req := range map[string]Request{
+		"nil Provider": {
+			Model:    "openai/gpt-4o",
+			Messages: []Message{{Role: RoleUser, Content: "hi"}},
+		},
+		"Provider with empty Only": {
+			Model:    "openai/gpt-4o",
+			Messages: []Message{{Role: RoleUser, Content: "hi"}},
+			Provider: &ProviderPreferences{},
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			stub := &stubTransport{body: completeFixture}
+			client := newStubClient(stub)
+
+			if _, err := client.Complete(context.Background(), req); err != nil {
+				t.Fatalf("Complete: %v", err)
+			}
+
+			if _, ok := stub.lastBody["provider"]; ok {
+				t.Fatalf("request body had a \"provider\" object, want none: %#v", stub.lastBody)
+			}
+		})
+	}
+}
+
 func TestComplete_ParsesResponse(t *testing.T) {
 	stub := &stubTransport{body: completeFixture}
 	client := newStubClient(stub)

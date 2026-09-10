@@ -6,6 +6,7 @@ import (
 	"log/slog"
 	"os"
 	"os/signal"
+	"strings"
 	"syscall"
 
 	"go.temporal.io/sdk/activity"
@@ -66,6 +67,12 @@ func run() error {
 	// below).
 	llmClient := llm.NewClient(os.Getenv("OPENROUTER_API_KEY"), getEnv("OPENROUTER_BASE_URL", "https://openrouter.ai/api/v1"))
 
+	// Restricts CallModel's OpenRouter routing to specific upstream
+	// providers instead of OpenRouter's default full-pool routing
+	// (ENV.md's OPENROUTER_PROVIDER_ONLY, llm.ProviderPreferences.Only).
+	// Unset (the common case) leaves routing unrestricted.
+	providerOnly := splitCommaList(os.Getenv("OPENROUTER_PROVIDER_ONLY"))
+
 	// Price table (LB6, ENV.md's WHAGENT_PRICE_TABLE_PATH) -- CommitTurn's
 	// resolveCost (activities.go) falls back to this only when the
 	// provider omits cost in its response (uncommon with
@@ -116,7 +123,7 @@ func run() error {
 	w := temporallib.NewWorker(temporalClient, temporalCfg.TaskQueue, worker.Options{})
 	w.RegisterWorkflow(SessionWorkflow)
 
-	acts := &Activities{Store: store, LLM: llmClient, Prices: prices, Dispatcher: dispatcher}
+	acts := &Activities{Store: store, LLM: llmClient, ProviderOnly: providerOnly, Prices: prices, Dispatcher: dispatcher}
 	w.RegisterActivityWithOptions(acts.ResolveAgentDefinition, activity.RegisterOptions{Name: ActivityResolveAgentDefinition})
 	w.RegisterActivityWithOptions(acts.BuildContext, activity.RegisterOptions{Name: ActivityBuildContext})
 	w.RegisterActivityWithOptions(acts.CallModel, activity.RegisterOptions{Name: ActivityCallModel})
@@ -186,4 +193,21 @@ func getEnv(key, def string) string {
 		return v
 	}
 	return def
+}
+
+// splitCommaList parses a comma-separated env var (e.g.
+// OPENROUTER_PROVIDER_ONLY) into its trimmed, non-empty entries. An unset
+// or blank v returns nil, not an empty-but-non-nil slice, so callers that
+// check len() treat "unset" and "empty" identically.
+func splitCommaList(v string) []string {
+	if v == "" {
+		return nil
+	}
+	var out []string
+	for _, part := range strings.Split(v, ",") {
+		if trimmed := strings.TrimSpace(part); trimmed != "" {
+			out = append(out, trimmed)
+		}
+	}
+	return out
 }
