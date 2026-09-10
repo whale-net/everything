@@ -320,6 +320,8 @@ spec:
           value: "none"
         - name: TEMPORAL_HOST
           value: "{temporal_host}"
+        - name: RABBITMQ_URL
+          value: "{rabbitmq_url}"
         - name: OPENROUTER_API_KEY
           value: "{openrouter_api_key}"
         - name: WHAGENT_ISSUER
@@ -338,6 +340,7 @@ spec:
         namespace=namespace,
         pg_database_url=pg_database_url,
         temporal_host=temporal_host,
+        rabbitmq_url=rabbitmq_url,
         openrouter_api_key=os.environ.get('OPENROUTER_API_KEY', ''),
         whagent_signing_key_id=whagent_signing_key_id,
         whagent_signing_key=whagent_signing_key_yaml,
