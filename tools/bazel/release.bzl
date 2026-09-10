@@ -218,8 +218,13 @@ def release_app(name, binary_name = None, language = None, domain = None, descri
     if not base_label.startswith("//") and not base_label.startswith(":"):
         base_label = ":" + base_label
 
-    # Image name uses domain-app format (e.g., "demo-hello-python")
-    image_name = (domain + "-" + effective_name) if domain else effective_name
+    # Image name uses domain-app format (e.g., "demo-hello-python"). If
+    # effective_name already carries the domain prefix (e.g. an app whose
+    # permanent name predates this convention), don't prefix it again --
+    # app identity (effective_name) is not something callers can rename to
+    # fix this, so the macro has to tolerate the already-prefixed case.
+    already_prefixed = domain and effective_name.startswith(domain + "-")
+    image_name = effective_name if (already_prefixed or not domain) else (domain + "-" + effective_name)
     image_target_ref = None
 
     if is_container_app:
