@@ -293,7 +293,7 @@ flowchart TD
 
 ---
 
-## Config Push & Region Assignment
+## Config Push & Sensor Placement
 
 ```mermaid
 sequenceDiagram
@@ -314,9 +314,21 @@ sequenceDiagram
     Processor->>DB: UpsertSensor per descriptor
     MQTT->>Processor: leaflab.<id>.config.ack
     Processor->>DB: AckDeviceConfig (accepted=true)
-    Processor->>DB: ApplyConfigRegions\n  UPDATE sensor.region_id\n  close + open sensor_region_history rows
     Processor->>Processor: cache.SetConfigVersion(device, version)
 ```
+
+**Placement is written only by `PlaceSensor` (FR7, NFR4).**
+`leaflab/api/repository.go`'s `PlaceSensor` is the sole writer of
+`sensor.region_id` and `sensor_region_history`: an ordinary Postgres
+transaction (SCD2 close-and-open plus the mirror update), never gated on
+the board being online or acknowledging anything (LB2), owner-authorized
+(NFR2), and idempotent — re-placing a sensor in the region it already
+occupies writes no history row. `SensorConfig.region_id` stays on the wire
+but the device ignores it (NFR3, `firmware/proto/config.proto`) and the
+processor's config-ack handler never writes placement from it: a push or
+ack carrying any region value leaves placement history untouched. A
+placement change therefore takes effect for subsequent readings with no
+device round trip — see Reading Write Path below.
 
 **API composes the full desired sensor list (FR8).** Before the `publish`
 step above, `leaflab-api`'s `PushDeviceConfig` (`leaflab/api/server.go`) is
@@ -343,12 +355,19 @@ for the same DB state.
 flowchart LR
     Device -->|SensorReading proto| MQTT
     MQTT -->|leaflab.id.sensor.name| Processor
-    Processor --> Cache{sensor in\ncache?}
+    Processor --> Cache{sensor_id in\ncache?}
     Cache -- hit --> Insert
     Cache -- miss --> DB_lookup[GetSensor from DB]
     DB_lookup --> Insert
-    Insert[InsertReading\nsensor_id, region_id snapshot\nconfig_version stamp\nrecorded_at = NOW] --> TimescaleDB
+    Insert[InsertReading\nsensor_id, value, config_version stamp\nregion_id = SELECT s.region_id\nFROM sensor -- current placement\nrecorded_at = NOW] --> TimescaleDB
 ```
+
+The reading's `region_id` is resolved from `sensor.region_id` inside the
+same `INSERT ... SELECT` that writes the row (FR8/FR9) — the sensor's
+**current** placement at insert time, not a manifest-time cached value. A
+`PlaceSensor` move therefore attributes every subsequent reading to the new
+region immediately; readings written before the move keep the region they
+were stamped with. The `SensorCache` resolves `sensor_id` only.
 
 ---
 

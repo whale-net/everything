@@ -87,13 +87,18 @@ type repositoryStore interface {
 	LeafLabUserExists(ctx context.Context, leaflabUserID int64) (bool, error)
 	ListUsers(ctx context.Context) ([]LeafLabUserRow, error)
 	// GetBoardIDForSensor resolves sensor_id -> board_id so RenameSensor
-	// (FR4) can authorize the write via authorizeBoardWrite before touching
-	// sensor_name_history.
+	// (FR4) and PlaceSensor (FR7) can authorize the write via
+	// authorizeBoardWrite before touching sensor_name_history or placement.
 	GetBoardIDForSensor(ctx context.Context, sensorID int64) (int64, bool, error)
 	// RenameSensor is RenameSensor's own write path (FR4) -- SCD2
 	// close-and-open plus the NFR4 counter reset, one transaction; see
 	// repository.go's doc comment.
 	RenameSensor(ctx context.Context, sensorID int64, name string) error
+	// PlaceSensor is PlaceSensor's own write path (FR7, NFR4) -- SCD2
+	// close-and-open on sensor_region_history plus the sensor.region_id
+	// mirror, one transaction; the sole placement writer. See
+	// repository.go's doc comment.
+	PlaceSensor(ctx context.Context, sensorID, regionID int64) error
 	// The following five methods back the M3 region lifecycle RPCs (#2312:
 	// FR1-FR3, FR5) -- GetRegionIdentity (existence/ownership reads and the
 	// parent-existence check), CreateRegion (region row + initial open
@@ -786,6 +791,51 @@ func (s *LeafLabAPIServer) RenameSensor(ctx context.Context, req *pb.RenameSenso
 
 	s.logger.Info("sensor renamed", "sensor_id", req.SensorId, "board_id", boardID)
 	return &pb.RenameSensorResponse{}, nil
+}
+
+// PlaceSensor places a sensor in a region (FR7). Resolves sensor_id ->
+// board_id (GetBoardIDForSensor) then authorizeBoardWrite (NFR2): only the
+// sensor's board's current owner may place it, and an unowned board is
+// codes.PermissionDenied identically to a non-owner (FR5/FR6 -- no admin
+// exception here, same as every other write this milestone gates through
+// authorizeBoardWrite).
+//
+// Writes directly to Postgres and never waits on, or is gated by, a device
+// round trip (LB2): the placement is visible on the very next GetBoardDetail
+// and stamps every subsequent reading, regardless of whether the board is
+// online. This RPC deliberately issues no config push -- a DeviceConfig
+// carrying region_id stays on the wire (the device ignores it, NFR3) but
+// its ack never writes placement (NFR4): PlaceSensor is the sole writer of
+// sensor.region_id / sensor_region_history.
+func (s *LeafLabAPIServer) PlaceSensor(ctx context.Context, req *pb.PlaceSensorRequest) (*pb.PlaceSensorResponse, error) {
+	if req.RegionId <= 0 {
+		return nil, status.Error(codes.InvalidArgument, "region_id must identify an existing region")
+	}
+
+	boardID, ok, err := s.repo.GetBoardIDForSensor(ctx, req.SensorId)
+	if err != nil {
+		return nil, status.Errorf(codes.Internal, "get board for sensor: %v", err)
+	}
+	if !ok {
+		return nil, status.Errorf(codes.NotFound, "sensor %d not found", req.SensorId)
+	}
+
+	if _, err := s.authorizeBoardWrite(ctx, boardID); err != nil {
+		return nil, err
+	}
+
+	if err := s.repo.PlaceSensor(ctx, req.SensorId, req.RegionId); err != nil {
+		if errors.Is(err, ErrRegionNotFound) {
+			return nil, status.Errorf(codes.NotFound, "region %d not found", req.RegionId)
+		}
+		if errors.Is(err, ErrSensorNotFound) {
+			return nil, status.Errorf(codes.NotFound, "sensor %d not found", req.SensorId)
+		}
+		return nil, status.Errorf(codes.Internal, "place sensor: %v", err)
+	}
+
+	s.logger.Info("sensor placed", "sensor_id", req.SensorId, "region_id", req.RegionId, "board_id", boardID)
+	return &pb.PlaceSensorResponse{}, nil
 }
 
 // ListOwnedBoards returns every currently-owned board and its owner (FR11).

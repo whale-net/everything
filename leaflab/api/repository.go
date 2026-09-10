@@ -664,6 +664,106 @@ func (r *Repository) RenameSensor(ctx context.Context, sensorID int64, name stri
 	return nil
 }
 
+// ErrRegionNotFound is returned by PlaceSensor when the requested region_id
+// does not exist -- surfaced by server.go's PlaceSensor RPC as
+// codes.NotFound, never a raw 500. The FK constraints on sensor.region_id
+// and sensor_region_history.region_id would also reject the write, but the
+// explicit check inside the placement transaction fails before any row is
+// touched and maps cleanly to a user-facing error.
+var ErrRegionNotFound = errors.New("region not found")
+
+// ErrSensorNotFound is returned by PlaceSensor when the requested sensor_id
+// does not exist. The server-side GetBoardIDForSensor lookup already 404s
+// unknown sensors before authorization, so this only fires for a sensor
+// that disappears between that check and the write (there is no sensor
+// delete path today, so in practice it is unreachable -- it exists so the
+// write path itself never silently no-ops).
+var ErrSensorNotFound = errors.New("sensor not found")
+
+// PlaceSensor assigns sensorID to regionID (FR7) -- whether or not the
+// sensor already had a placement -- or moves it. Sole placement writer
+// (NFR4): leaflab-processor's device-config ack path never creates or
+// closes a sensor_region_history row and never touches sensor.region_id,
+// no matter what region value a DeviceConfig carried on the wire.
+//
+// SCD2 close-and-open on sensor_region_history plus the sensor.region_id
+// mirror update, all in one transaction per AGENTS.md § SCD2 -- a reader
+// never sees a sensor whose mirror column and open history row disagree.
+// Close-then-insert means a move is recorded as [old region → closed] +
+// [new region → open]; a first placement has nothing to close, so the
+// UPDATE simply affects zero rows.
+//
+// Idempotent: placing a sensor into the region it already occupies writes
+// nothing at all (no new history row), matching UpsertSensorLabel's
+// same-value no-op precedent -- a repeated UI submit must not fabricate a
+// placement "move" in the history. The check reads sensor.region_id, the
+// mirror every reader (and every reading insert) resolves from.
+//
+// Never issues a device round trip (LB2) -- this is a pure Postgres write;
+// the placement is visible to the next reading insert immediately, not
+// after a board reboot or config ack.
+func (r *Repository) PlaceSensor(ctx context.Context, sensorID, regionID int64) error {
+	tx, err := r.db.Begin(ctx)
+	if err != nil {
+		return fmt.Errorf("begin place sensor %d tx: %w", sensorID, err)
+	}
+	defer tx.Rollback(ctx) //nolint:errcheck // no-op once Commit succeeds
+
+	// The region must exist. Checked inside the transaction rather than
+	// trusting the FK to catch it, so an unknown region surfaces as
+	// ErrRegionNotFound (codes.NotFound) instead of a raw 23503.
+	var regionExists bool
+	if err := tx.QueryRow(ctx, `
+		SELECT EXISTS(SELECT 1 FROM region WHERE region_id = $1)
+	`, regionID).Scan(&regionExists); err != nil {
+		return fmt.Errorf("check region %d exists: %w", regionID, err)
+	}
+	if !regionExists {
+		return ErrRegionNotFound
+	}
+
+	// Current mirror value: both the idempotency check and the
+	// sensor-must-exist guard (no sensor row -> nothing to place).
+	var currentRegion *int64
+	if err := tx.QueryRow(ctx, `
+		SELECT region_id FROM sensor WHERE sensor_id = $1
+	`, sensorID).Scan(&currentRegion); err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return ErrSensorNotFound
+		}
+		return fmt.Errorf("read current placement for sensor %d: %w", sensorID, err)
+	}
+	if currentRegion != nil && *currentRegion == regionID {
+		return nil // already placed in regionID -- no write
+	}
+
+	// Close any open history row for this sensor (no-op when the sensor had
+	// no placement yet).
+	if _, err := tx.Exec(ctx, `
+		UPDATE sensor_region_history SET valid_to = NOW()
+		WHERE sensor_id = $1 AND valid_to IS NULL
+	`, sensorID); err != nil {
+		return fmt.Errorf("close open sensor_region_history row for sensor %d: %w", sensorID, err)
+	}
+
+	if _, err := tx.Exec(ctx, `
+		INSERT INTO sensor_region_history (sensor_id, region_id) VALUES ($1, $2)
+	`, sensorID, regionID); err != nil {
+		return fmt.Errorf("insert sensor_region_history row for sensor %d: %w", sensorID, err)
+	}
+
+	if _, err := tx.Exec(ctx, `
+		UPDATE sensor SET region_id = $2 WHERE sensor_id = $1
+	`, sensorID, regionID); err != nil {
+		return fmt.Errorf("sync sensor.region_id for sensor %d: %w", sensorID, err)
+	}
+
+	if err := tx.Commit(ctx); err != nil {
+		return fmt.Errorf("commit place sensor %d tx: %w", sensorID, err)
+	}
+	return nil
+}
+
 // GetBoardIDForSensor resolves a sensor_id to its owning board_id. ok=false
 // means no sensor with that ID exists.
 func (r *Repository) GetBoardIDForSensor(ctx context.Context, sensorID int64) (int64, bool, error) {

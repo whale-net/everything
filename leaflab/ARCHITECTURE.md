@@ -72,7 +72,7 @@ Flash: `bazel run   //leaflab/sensorboard:flash -- /dev/ttyUSB0`
 - Sensor logical name in MQTT topics and manifest
 - Enabled/disabled per sensor
 - Poll interval per sensor
-- Region assignment (stored server-side; firmware forwards `region_id` to the processor)
+- Region assignment (`region_id` stays on the wire, but the device ignores it — placement is written server-side by `leaflab-api`'s `PlaceSensor` RPC directly against Postgres, never by the config push/ack path)
 
 Config is persisted to NVS and loaded on boot — no reflash needed to add sensors or change names. See [`MQTT.md`](MQTT.md) for the full config flow.
 
@@ -133,7 +133,7 @@ FirmwarePublisher.HandleConfigMessage():
 | `leaflab.<dev>.manifest` | Upsert board, upsert sensors (hw-address or name keyed), populate sensor cache |
 | `leaflab.<dev>.sensor.<name>` | Cache lookup → insert `sensor_reading` row with config_version stamp |
 | `leaflab.<dev>.config` | Decode `DeviceConfig`, persist as JSONB to `device_config` table |
-| `leaflab.<dev>.config.ack` | On accept: apply region assignments, update config version cache |
+| `leaflab.<dev>.config.ack` | Mark accepted, update config version cache — never a placement write (NFR4: `PlaceSensor` is the sole writer of `sensor.region_id` / `sensor_region_history`) |
 
 ---
 
@@ -162,7 +162,7 @@ All three `*_history` tables are SCD-2 using the uniform `valid_from` / `valid_t
 
 - **`sensor` is a stable dimension anchor.** A rename via `DeviceConfig` closes the old `sensor_name_history` row and opens a new one — the `sensor_id` (and all reading history) is unchanged. Continuity of data across renames is the primary reason the sensor table exists as a separate entity rather than denormalizing into readings.
 
-- **`sensor.region_id` is a current-value cache.** `sensor_region_history` records every assignment with open/closed intervals (`valid_to IS NULL` means current). Historical readings carry a snapshotted `region_id` at insert time, so location is preserved even when the sensor moves.
+- **`sensor.region_id` is a current-value cache.** `sensor_region_history` records every assignment with open/closed intervals (`valid_to IS NULL` means current). Historical readings carry a snapshotted `region_id` at insert time, so location is preserved even when the sensor moves. The sole writer of both is `leaflab-api`'s `PlaceSensor` (FR7) — the device-config ack path never writes placement (NFR4).
 
 - **`sensor.mux_path` is JSONB.** Supports arbitrary-depth mux cascades (`[]` = direct on root bus, `[{muxAddress, muxChannel}, ...]` ordered outer→inner). A functional unique index on `(board_id, i2c_address, sensor_type_id, mux_path::text)` prevents duplicates.
 

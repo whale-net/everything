@@ -19,14 +19,21 @@ import (
 type SensorRepository interface {
 	UpsertBoard(ctx context.Context, deviceID string) (int64, error)
 	UpsertSensorType(ctx context.Context, name, unit string) (int64, error)
-	UpsertSensor(ctx context.Context, boardID, sensorTypeID int64, name, unit string, hw *HardwareAddress) (int64, *int64, error)
+	// UpsertSensor upserts a sensor row and returns its sensor_id. It never
+	// writes or returns placement: readings resolve region_id from the
+	// sensor row itself at insert time (see InsertReading), so the manifest
+	// path has no region data to carry.
+	UpsertSensor(ctx context.Context, boardID, sensorTypeID int64, name, unit string, hw *HardwareAddress) (int64, error)
 	UpsertSensorLabel(ctx context.Context, sensorID int64, name string) error
 	UpsertSensorHWHistory(ctx context.Context, sensorID int64, hw *HardwareAddress) error
 	GetSensor(ctx context.Context, deviceID, sensorName string) (SensorInfo, bool, error)
-	InsertReading(ctx context.Context, sensorID int64, regionID *int64, value float64, valid bool, uptimeS uint32, recordedAt time.Time, configVersion *int64) error
+	// InsertReading writes the reading row. The reading's region_id is
+	// resolved from sensor.region_id at insert time -- the sensor's current
+	// placement (FR8/FR9) -- not from a manifest-time cache, so a PlaceSensor
+	// move attributes subsequent readings immediately.
+	InsertReading(ctx context.Context, sensorID int64, value float64, valid bool, uptimeS uint32, recordedAt time.Time, configVersion *int64) error
 	UpsertDeviceConfig(ctx context.Context, boardID int64, version int64, configJSON []byte) error
 	AckDeviceConfig(ctx context.Context, boardID int64, version int64, accepted bool, reason string) error
-	ApplyConfigRegions(ctx context.Context, boardID int64, version int64) error
 	SetSensorChipID(ctx context.Context, sensorID int64, chipModel string) error
 	IsKnownChipAddress(ctx context.Context, chipModel string, i2cAddress uint32) (bool, error)
 
@@ -162,7 +169,7 @@ func (h *MessageHandler) handleManifest(ctx context.Context, deviceID string, bo
 			}
 		}
 
-		sensorID, regionID, err := h.repo.UpsertSensor(ctx, boardID, sensorTypeID, sd.Name, sd.Unit, hw)
+		sensorID, err := h.repo.UpsertSensor(ctx, boardID, sensorTypeID, sd.Name, sd.Unit, hw)
 		if err != nil {
 			h.logger.Error("failed to upsert sensor", "name", sd.Name, "err", err)
 			if firstErr == nil {
@@ -209,14 +216,13 @@ func (h *MessageHandler) handleManifest(ctx context.Context, deviceID string, bo
 			}
 		}
 
-		h.cache.Set(deviceID, sd.Name, SensorInfo{SensorID: sensorID, RegionID: regionID})
+		h.cache.Set(deviceID, sd.Name, SensorInfo{SensorID: sensorID})
 		h.logger.Info("sensor registered",
 			"device_id", deviceID,
 			"sensor", sd.Name,
 			"type", typeName,
 			"unit", sd.Unit,
 			"sensor_id", sensorID,
-			"region_id", regionID,
 			"i2c_address", sd.I2CAddress,
 			"mux_address", sd.MuxAddress,
 			"mux_channel", sd.MuxChannel,
@@ -249,6 +255,15 @@ func (h *MessageHandler) priorSensorNames(ctx context.Context, boardID int64) (m
 }
 
 // handleSensorReading writes a reading row.
+//
+// FR8/FR9: the reading's region_id is resolved from sensor.region_id at
+// insert time (inside InsertReading, via the same INSERT ... SELECT), i.e.
+// the sensor's *current* placement in Postgres -- not a manifest-time cache
+// entry. A PlaceSensor move therefore attributes every subsequent reading
+// to the new region immediately, with no board reboot or config ack in
+// between; readings written before the move keep the region they were
+// stamped with (snapshot at insert). The cache's job here is sensor_id
+// resolution only.
 func (h *MessageHandler) handleSensorReading(ctx context.Context, deviceID, sensorName string, body []byte) error {
 	info, ok := h.cache.Get(deviceID, sensorName)
 	if !ok {
@@ -280,7 +295,6 @@ func (h *MessageHandler) handleSensorReading(ctx context.Context, deviceID, sens
 	if err := h.repo.InsertReading(
 		ctx,
 		info.SensorID,
-		info.RegionID,
 		float64(reading.Value),
 		true,
 		reading.UptimeMs/1000,
@@ -331,8 +345,15 @@ func (h *MessageHandler) handleConfigPush(ctx context.Context, deviceID string, 
 	return nil
 }
 
-// handleConfigAck records the device's ack for a config push.
-// On acceptance, applies region assignments and updates the config version cache.
+// handleConfigAck records the device's ack for a config push and, on
+// acceptance, updates the config version cache.
+//
+// NFR4/M3: the ack is never a placement write. SensorConfig.region_id stays
+// present on the wire (the device ignores it), but no region value carried
+// by a pushed or acked config ever creates or closes a sensor_region_history
+// row or touches sensor.region_id -- leaflab-api's PlaceSensor is the sole
+// placement writer, so a placement change takes effect for subsequent
+// readings without any device round trip.
 func (h *MessageHandler) handleConfigAck(ctx context.Context, deviceID string, body []byte) error {
 	var ack configpb.DeviceConfigAck
 	if err := proto.Unmarshal(body, &ack); err != nil {
@@ -349,9 +370,6 @@ func (h *MessageHandler) handleConfigAck(ctx context.Context, deviceID string, b
 		return err
 	}
 	if ack.Accepted {
-		if err := h.repo.ApplyConfigRegions(ctx, boardID, int64(ack.AppliedVersion)); err != nil {
-			h.logger.Warn("failed to apply config regions", "device_id", deviceID, "version", ack.AppliedVersion, "err", err)
-		}
 		h.cache.SetConfigVersion(deviceID, int64(ack.AppliedVersion))
 		h.logger.Info("device_config acked", "device_id", deviceID, "version", ack.AppliedVersion)
 	} else {

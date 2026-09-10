@@ -209,6 +209,15 @@ type fakeRepository struct {
 	// ErrSensorNameConflict doc comment) without a real database.
 	renameConflictSensors map[int64]bool
 
+	// placedSensors records every successful PlaceSensor call, in order --
+	// tests assert on this to prove a refused placement (unauthorized,
+	// unknown sensor or region) issues no write at all.
+	placedSensors []placedSensor
+	// placeMissingRegions marks region_ids whose PlaceSensor call should
+	// return ErrRegionNotFound, standing in for a region row that does not
+	// exist (server.go maps it to codes.NotFound) without a real database.
+	placeMissingRegions map[int64]bool
+
 	// -- #2312: M3 region lifecycle (FR1-FR3, FR5) fixtures/recorders --
 
 	// regions maps a region_id to its current-value identity -- the fake's
@@ -274,6 +283,13 @@ type renamedSensor struct {
 	name     string
 }
 
+// placedSensor is one recorded fakeRepository.PlaceSensor call that actually
+// wrote (a refused placement is never appended here).
+type placedSensor struct {
+	sensorID int64
+	regionID int64
+}
+
 // createdRegion is one recorded fakeRepository.CreateRegion call.
 type createdRegion struct {
 	name           string
@@ -316,6 +332,7 @@ func newFakeRepository() *fakeRepository {
 		existingUsers:         map[int64]bool{},
 		sensorBoards:          map[int64]int64{},
 		renameConflictSensors: map[int64]bool{},
+		placeMissingRegions:   map[int64]bool{},
 		regions:               map[int64]RegionIdentity{},
 		existingRegions:       map[int64]bool{},
 		boardRegions:          map[int64]int64{},
@@ -474,6 +491,17 @@ func (f *fakeRepository) RenameSensor(_ context.Context, sensorID int64, name st
 		return ErrSensorNameConflict
 	}
 	f.renamedSensors = append(f.renamedSensors, renamedSensor{sensorID: sensorID, name: name})
+	return nil
+}
+
+// PlaceSensor mirrors production PlaceSensor's ErrRegionNotFound contract:
+// a region_id marked in placeMissingRegions refuses with no write, exactly
+// like a real missing region row would.
+func (f *fakeRepository) PlaceSensor(_ context.Context, sensorID, regionID int64) error {
+	if f.placeMissingRegions[regionID] {
+		return ErrRegionNotFound
+	}
+	f.placedSensors = append(f.placedSensors, placedSensor{sensorID: sensorID, regionID: regionID})
 	return nil
 }
 
