@@ -7,6 +7,7 @@ go_library(
         "batch.go",
         "batch_job.go",
         "cache.go",
+        "gameconfig.go",
         "handler.go",
         "installation.go",
         "library.go",
