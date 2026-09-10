@@ -5,6 +5,7 @@ go_library(
     srcs = [
         "auth.go",
         "credentials.go",
+        "delegatedgrant.go",
         "fakestore.go",
         "grant.go",
         "grantcrypto.go",
@@ -29,6 +30,7 @@ go_test(
     name = "grpcauth_test",
     srcs = [
         "auth_test.go",
+        "delegatedgrant_test.go",
         "fakestore_test.go",
         "grantcrypto_test.go",
         "granterrors_test.go",
@@ -36,6 +38,7 @@ go_test(
     ],
     embed = [":grpcauth"],
     deps = [
+        "//libs/go/grpcauth/internal/keycloakfake",
         "@org_golang_google_grpc//codes",
         "@org_golang_google_grpc//metadata",
         "@org_golang_google_grpc//status",
