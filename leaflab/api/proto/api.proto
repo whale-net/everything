@@ -188,6 +188,14 @@ message BoardWithState {
   string board_name = 5;
   bool owned_by_caller = 6;
   LeafLabUser owner = 7;
+  // M3 additions (FR12): the board's recorded region (FR10) -- where the
+  // board is physically located, as written by SetBoardRegion. Recorded via
+  // the open board_region_history row; there is no region_id = 0 sentinel,
+  // so recorded_region_id is unset when the board has no recorded region
+  // and recorded_region_name is empty in that case. Current-state only,
+  // deliberately independent of where the board's sensors are placed.
+  optional int64 recorded_region_id = 8;
+  string recorded_region_name = 9;
 }
 
 message GetBoardDetailRequest {
@@ -205,6 +213,12 @@ message GetBoardDetailResponse {
   string board_name = 4;
   bool owned_by_caller = 5;
   LeafLabUser owner = 6;
+  // M3 additions (FR12): the board's recorded region (FR10), same fields
+  // and semantics as BoardWithState.recorded_region_id/name -- unset when
+  // the board has no recorded region (the absence of an open
+  // board_region_history row; no region_id = 0 sentinel).
+  optional int64 recorded_region_id = 7;
+  string recorded_region_name = 8;
 }
 
 // SensorDetail describes one sensor on a board, including its most recent
@@ -219,6 +233,14 @@ message SensorDetail {
   // (unset) is what makes REPORTING_STATE_NEVER_REPORTED unambiguous, rather
   // than relying on a zero-valued LatestReading.
   LatestReading latest_reading = 6;
+  // M3 additions (FR12): the region this sensor is currently placed in,
+  // from CURRENT placement (the open sensor_region_history row). Same shape
+  // as BoardSensorRegion's region fields: region_id is unset when the
+  // sensor is unplaced and region_name is empty in that case -- a sensor's
+  // unplaced state is the absence of an open placement row, never a
+  // sentinel region id.
+  optional int64 region_id = 7;
+  string region_name = 8;
 }
 
 // LatestReading is a sensor's most recent reading. `valid` is carried through

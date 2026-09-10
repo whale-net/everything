@@ -112,3 +112,17 @@ func roughDuration(d time.Duration) string {
 		return fmt.Sprintf("%d days", days)
 	}
 }
+
+// boardDetailRecordedRegionID returns the recorded_region_id field of a
+// GetBoardDetailResponse, nil-safely for the load-error render path
+// (pages.BoardDetail renders the recorded-region card even when resp is
+// nil -- BoardHeader already renders from a nil resp the same way, via
+// generated getters; recorded_region_id needs the nil *int64 preserved, so
+// a getter (which would flatten it to a 0 sentinel -- there is no
+// region_id = 0, absence is nil) can't be used here).
+func boardDetailRecordedRegionID(resp *leaflabapipb.GetBoardDetailResponse) *int64 {
+	if resp == nil {
+		return nil
+	}
+	return resp.RecordedRegionId
+}

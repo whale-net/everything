@@ -168,11 +168,14 @@ func (r *Repository) ListBoardsWithState(ctx context.Context) ([]BoardWithReadin
 		SELECT
 			v.board_id, v.device_id, v.last_reading_at,
 			b.name,
-			boh.leaflab_user_id, u.display_name, u.preferred_username, u.email
+			boh.leaflab_user_id, u.display_name, u.preferred_username, u.email,
+			brh.region_id, COALESCE(br.name, '')
 		FROM v_board_last_reading v
 		JOIN board b ON b.board_id = v.board_id
 		LEFT JOIN board_owner_history boh ON boh.board_id = v.board_id AND boh.valid_to IS NULL
 		LEFT JOIN leaflab_user u ON u.leaflab_user_id = boh.leaflab_user_id
+		LEFT JOIN board_region_history brh ON brh.board_id = v.board_id AND brh.valid_to IS NULL
+		LEFT JOIN region br ON br.region_id = brh.region_id
 		ORDER BY v.board_id
 	`)
 	if err != nil {
@@ -190,7 +193,8 @@ func (r *Repository) ListBoardsWithState(ctx context.Context) ([]BoardWithReadin
 			email             *string
 		)
 		if err := rows.Scan(&b.BoardID, &b.DeviceID, &b.LastReadingAt, &b.BoardName,
-			&ownerID, &displayName, &preferredUsername, &email); err != nil {
+			&ownerID, &displayName, &preferredUsername, &email,
+			&b.RecordedRegionID, &b.RecordedRegionName); err != nil {
 			return nil, fmt.Errorf("scan board with state: %w", err)
 		}
 		b.Owner = ownerRowFromScan(ownerID, displayName, preferredUsername, email)
@@ -204,12 +208,21 @@ func (r *Repository) ListBoardsWithState(ctx context.Context) ([]BoardWithReadin
 // is nil when the board has no name (FR3 — caller falls back to DeviceID).
 // Owner is nil when the board is unowned — never a sentinel user id.
 // LastReadingAt is nil when the board has no readings.
+//
+// M3 additions (#2318, FR12): the board's current recorded region (FR10),
+// read from the open board_region_history row (#2315's read shape).
+// RecordedRegionID is nil when the board has no recorded region -- the
+// absence of an open row, never a sentinel region id -- and
+// RecordedRegionName is empty in that case.
 type BoardWithReadingRow struct {
 	BoardID       int64
 	DeviceID      string
 	LastReadingAt *time.Time
 	BoardName     *string
 	Owner         *OwnerRow
+
+	RecordedRegionID   *int64
+	RecordedRegionName string
 }
 
 // OwnerRow is the repository-side projection of a board's current owner,
@@ -256,16 +269,21 @@ func (r *Repository) GetBoardIdentity(ctx context.Context, boardID int64) (Board
 		displayName       *string
 		preferredUsername *string
 		email             *string
+		recordedRegionID  *int64
 	)
 	err := r.db.QueryRow(ctx, `
 		SELECT
 			b.device_id, b.name,
-			boh.leaflab_user_id, u.display_name, u.preferred_username, u.email
+			boh.leaflab_user_id, u.display_name, u.preferred_username, u.email,
+			brh.region_id, COALESCE(br.name, '')
 		FROM board b
 		LEFT JOIN board_owner_history boh ON boh.board_id = b.board_id AND boh.valid_to IS NULL
 		LEFT JOIN leaflab_user u ON u.leaflab_user_id = boh.leaflab_user_id
+		LEFT JOIN board_region_history brh ON brh.board_id = b.board_id AND brh.valid_to IS NULL
+		LEFT JOIN region br ON br.region_id = brh.region_id
 		WHERE b.board_id = $1
-	`, boardID).Scan(&bi.DeviceID, &bi.BoardName, &ownerID, &displayName, &preferredUsername, &email)
+	`, boardID).Scan(&bi.DeviceID, &bi.BoardName, &ownerID, &displayName, &preferredUsername, &email,
+		&recordedRegionID, &bi.RecordedRegionName)
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			return BoardIdentity{}, err
@@ -273,16 +291,23 @@ func (r *Repository) GetBoardIdentity(ctx context.Context, boardID int64) (Board
 		return BoardIdentity{}, fmt.Errorf("get board identity for %d: %w", boardID, err)
 	}
 	bi.Owner = ownerRowFromScan(ownerID, displayName, preferredUsername, email)
+	bi.RecordedRegionID = recordedRegionID
 	return bi, nil
 }
 
 // BoardIdentity is a board's device_id plus M2's read-side ownership fields
 // (#1765). BoardName is nil when the board has no name (FR3 — caller falls
 // back to DeviceID). Owner is nil when the board is unowned.
+// M3 additions (#2318, FR12): the board's current recorded region (FR10),
+// same read shape and unset-when-absent semantics as
+// BoardWithReadingRow's recorded-region fields.
 type BoardIdentity struct {
 	DeviceID  string
 	BoardName *string
 	Owner     *OwnerRow
+
+	RecordedRegionID   *int64
+	RecordedRegionName string
 }
 
 // ListSensorDetailsForBoard returns every sensor recorded for a board (FR6 —
@@ -295,8 +320,10 @@ type BoardIdentity struct {
 // join to the current open row and joins sensor_type — re-deriving that by
 // hand here would duplicate logic that already exists. Readings come
 // directly from sensor_reading, not the heavier v_sensor_reading_enriched,
-// whose device_config/region joins are dead weight here (no region or
-// location is shown in M1).
+// whose device_config/region joins are dead weight here (FR12's region
+// display reads the sensor's CURRENT placement straight off
+// v_sensor_current, not the reading-level enriched view -- reading
+// attribution history is not this screen's concern).
 //
 // This is one query for the board's sensors plus a LATERAL "most recent
 // reading" join per sensor row — not one query per sensor — since boards
@@ -318,7 +345,9 @@ func (r *Repository) ListSensorDetailsForBoard(ctx context.Context, boardID int6
 			sc.sensor_type_name,
 			lr.value,
 			lr.recorded_at,
-			lr.valid
+			lr.valid,
+			sc.region_id,
+			COALESCE(sc.region_name, '')
 		FROM v_sensor_current sc
 		LEFT JOIN LATERAL (
 			SELECT sr.value, sr.recorded_at, sr.valid
@@ -346,6 +375,8 @@ func (r *Repository) ListSensorDetailsForBoard(ctx context.Context, boardID int6
 			&s.LatestValue,
 			&s.LatestRecordedAt,
 			&s.LatestValid,
+			&s.RegionID,
+			&s.RegionName,
 		); err != nil {
 			return nil, fmt.Errorf("scan sensor detail: %w", err)
 		}
@@ -357,6 +388,12 @@ func (r *Repository) ListSensorDetailsForBoard(ctx context.Context, boardID int6
 // SensorDetailRow is one sensor plus its most recent reading, if it has
 // ever reported one. LatestValue/LatestRecordedAt/LatestValid are nil
 // together exactly when the sensor has no readings at all.
+//
+// M3 additions (#2318, FR12): the sensor's currently-placed region, read
+// straight off v_sensor_current (the same source ListSensorRegionsForBoard
+// uses for SetBoardRegionResponse's nudge snapshot). RegionID is nil when
+// the sensor is unplaced -- the absence of an open sensor_region_history
+// row -- and RegionName is empty in that case.
 type SensorDetailRow struct {
 	SensorID       int64
 	SensorName     string
@@ -366,6 +403,9 @@ type SensorDetailRow struct {
 	LatestValue      *float64
 	LatestRecordedAt *time.Time
 	LatestValid      *bool
+
+	RegionID   *int64
+	RegionName string
 }
 
 // SensorExists reports whether a sensor with the given ID has ever been registered.

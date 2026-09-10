@@ -9,6 +9,25 @@ import (
 	"github.com/whale-net/everything/libs/go/htmxui"
 )
 
+// BoardRegionNudge is FR11's non-blocking "review sensor placements" notice
+// (#2318): what a board's recorded region just changed to, and that board's
+// sensors with their current placements. The system never moves a sensor
+// automatically (FR10) -- this struct is display input only, built by the
+// handlers from SetBoardRegionResponse's post-write snapshot (HTMX path) or
+// a freshly re-read GetBoardDetail (no-JS redirect path, where the write
+// response no longer exists).
+type BoardRegionNudge struct {
+	// The region the board is now recorded in; empty when the recorded
+	// region was cleared.
+	NewRegionName string
+	// True when the change was a clear (recorded region removed), false for
+	// a set/change.
+	Cleared bool
+	// The board's sensors with their current placements (BoardSensorRegion:
+	// region_id unset / region_name empty when a sensor is unplaced).
+	Sensors []*leaflabapipb.BoardSensorRegion
+}
+
 // BoardDetail is the board detail screen (#1503: FR6, FR7, NFR1; #1765
 // added the name/owner header and Claim button; #1767 added the
 // owner-only inline rename control, factored into BoardHeader below) --
@@ -33,11 +52,31 @@ import (
 // succeeded; only the claim attempt failed. Empty when the page was
 // reached by a normal navigation, not a post-claim redirect.
 //
+// regionErr carries a failed set/clear of the board's recorded region
+// (#2318, FR10) back onto the page the same way -- the no-JS fallback of
+// handleSetBoardRegion's POST-redirect-GET path renders it as the region
+// card's inline action error. Empty on a normal navigation.
+//
+// regionNudge, when non-nil, renders FR11's non-blocking notice above the
+// region card: the recorded region just changed, and the notice lists the
+// board's sensors with their current placements so the user can review
+// whether any should move -- the system never moves them itself. Only a
+// completed region change (via handleSetBoardRegion's redirect) sets it;
+// a normal navigation renders no nudge.
+//
+// allRegions is every region flattened out of the full region forest
+// (pages.FlattenRegions by the handler), the option source for the place/
+// move pickers and the recorded-region picker. Best-effort: a forest-load
+// failure leaves it empty, which renders the pickers as a "No regions yet"
+// hint rather than failing the page.
+//
 // NFR1: this page has no hx-trigger polling interval, no sse-connect, and
 // no WebSocket -- data reflects the last page load or navigation only. Do
 // not add any of those here; see the task issue's NFR1 section and the
-// render test guarding it.
-templ BoardDetail(data components.LayoutData, resp *leaflabapipb.GetBoardDetailResponse, loadErr error, claimErr string) {
+// render test guarding it. (The hx-post forms below swap fragments in
+// response to explicit user submissions -- the same mechanism the rename
+// controls already use -- not a live-refresh mechanism.)
+templ BoardDetail(data components.LayoutData, resp *leaflabapipb.GetBoardDetailResponse, loadErr error, claimErr, regionErr string, regionNudge *BoardRegionNudge, allRegions []*leaflabapipb.RegionTreeNode) {
 	@components.Layout(data) {
 		@BoardHeader(resp.GetBoardId(), resp.GetDeviceId(), resp.GetBoardName(), resp.GetOwnedByCaller(), "")
 		<div class="mb-4">@boardOwnerCell(resp.GetBoardId(), resp.GetOwnedByCaller(), resp.GetOwner())</div>
@@ -46,6 +85,7 @@ templ BoardDetail(data components.LayoutData, resp *leaflabapipb.GetBoardDetailR
 				<span>{ claimErr }</span>
 			</div>
 		}
+		@BoardRegionCard(resp.GetBoardId(), resp.GetOwnedByCaller(), boardDetailRecordedRegionID(resp), resp.GetRecordedRegionName(), allRegions, regionNudge, regionErr)
 		if loadErr != nil {
 			<div role="alert" class="alert alert-error shadow-md">
 				<span>Failed to load board detail from leaflab-api: { loadErr.Error() }</span>
@@ -57,7 +97,7 @@ templ BoardDetail(data components.LayoutData, resp *leaflabapipb.GetBoardDetailR
 				</div>
 			</div>
 		} else {
-			@htmxui.Card(nil, sensorsTable(resp.GetBoardId(), resp.GetDeviceId(), resp.GetOwnedByCaller(), resp.GetSensors()), nil, nil)
+			@htmxui.Card(nil, sensorsTable(resp.GetBoardId(), resp.GetDeviceId(), resp.GetOwnedByCaller(), resp.GetSensors(), allRegions), nil, nil)
 		}
 	}
 }
@@ -103,6 +143,155 @@ templ BoardHeader(boardID int64, deviceID, boardName string, ownedByCaller bool,
 	</div>
 }
 
+// BoardRegionCard is the board detail screen's recorded-region card
+// (#2318: FR10, FR11, FR12): the board's current recorded region, the
+// owner-only set/change and clear controls, and -- after a completed
+// change -- FR11's non-blocking review notice (nudge) listing the board's
+// sensors with their current placements.
+//
+// Factored out so handleSetBoardRegion can re-render exactly this fragment
+// via HTMX after a set/change/clear attempt, the same way BoardHeader
+// serves handleRenameBoard: the forms target "#board-region-card" with
+// hx-swap="outerHTML", swapping only this card (and its nudge), never the
+// sensors table or the rest of the page. Every outcome -- success,
+// rejection, or the post-write refresh -- renders from freshly observed
+// state: on the HTMX path the handlers pass what SetBoardRegionResponse
+// and a fresh GetBoardDetail actually returned, never an assumed success.
+//
+// recordedRegionID is nil when the board has no recorded region (the
+// absence of an open board_region_history row -- there is no region_id = 0
+// sentinel, so the nil pointer is the "unset" signal, never a zero id);
+// recordedRegionName is empty in that case.
+//
+// actionErr, when non-empty, is a failed set/change/clear attempt's message,
+// rendered inline and never gated on ownedByCaller -- the same rule
+// BoardHeader applies to renameErr (the error must survive the re-render
+// even when the failed write means ownedByCaller just flipped false).
+//
+// Hiding the controls for a non-owner (ownedByCaller == false) is
+// presentation only, matching BoardHeader's rename form: the enforcement
+// point is the SetBoardRegion RPC's own owner-or-admin check (NFR2), not
+// this check -- and the admin-bypass path the RPC deliberately supports
+// stays available out-of-band (no dedicated admin surface in M3).
+templ BoardRegionCard(boardID int64, ownedByCaller bool, recordedRegionID *int64, recordedRegionName string, allRegions []*leaflabapipb.RegionTreeNode, nudge *BoardRegionNudge, actionErr string) {
+	<div id="board-region-card">
+		if actionErr != "" {
+			<div role="alert" class="alert alert-warning shadow-md mb-2">
+				<span>{ actionErr }</span>
+			</div>
+		}
+		if nudge != nil {
+			@boardRegionNudgeNotice(nudge)
+		}
+		<div class="card bg-base-100 border border-base-300 shadow-sm mb-4">
+			<div class="card-body py-4">
+				<h2 class="card-title text-base">Recorded region</h2>
+				if recordedRegionID == nil {
+					<p class="text-sm text-base-content/60">No recorded region.</p>
+				} else {
+					<p class="text-sm">Recorded in <span class="font-medium">{ recordedRegionName }</span>.</p>
+				}
+				if ownedByCaller {
+					<div class="flex flex-wrap items-center gap-2">
+						if len(allRegions) > 0 {
+							@boardRegionSetForm(boardID, recordedRegionID, allRegions)
+							if recordedRegionID != nil {
+								@boardRegionClearForm(boardID)
+							}
+						} else {
+							<span class="text-sm text-base-content/60">No regions yet — <a href="/regions" class="link">create one</a> to record where this board sits.</span>
+						}
+					</div>
+					<p class="text-xs text-base-content/60 mt-1">Bookkeeping only: recording or clearing a region never moves this board's sensors.</p>
+				}
+			</div>
+		</div>
+	</div>
+}
+
+// boardRegionSetForm is FR10's set/change control: a picker of every region
+// (the currently-recorded one preselected) posting to
+// "/boards/{board_id}/region". Submitting without changing the picker
+// records the already-recorded region, which the API refuses as
+// codes.FailedPrecondition -- surfaced verbatim in this card's action error
+// (the same deliberate no-pre-filtering trade the regions screen's
+// re-parent picker makes), never silently swallowed.
+templ boardRegionSetForm(boardID int64, recordedRegionID *int64, allRegions []*leaflabapipb.RegionTreeNode) {
+	<form
+		hx-post={ fmt.Sprintf("/boards/%d/region", boardID) }
+		hx-target="#board-region-card"
+		hx-swap="outerHTML"
+		class="flex items-center gap-1"
+	>
+		<select name="region_id" class="select select-bordered select-sm">
+			for _, n := range allRegions {
+				if recordedRegionID != nil && n.GetRegionId() == *recordedRegionID {
+					<option value={ fmt.Sprintf("%d", n.GetRegionId()) } selected>{ n.GetName() }</option>
+				} else {
+					<option value={ fmt.Sprintf("%d", n.GetRegionId()) }>{ n.GetName() }</option>
+				}
+			}
+		</select>
+		<button type="submit" class="btn btn-sm btn-primary">Record region</button>
+	</form>
+}
+
+// boardRegionClearForm is FR10's clear control, rendered only when a region
+// is recorded -- the API refuses clearing an unrecorded board, so the
+// button only exists when there is something to clear. Posts the same
+// route with clear=1 (a board's un-recorded state is the absence of an
+// open board_region_history row; there is no region_id = 0 sentinel to
+// send).
+templ boardRegionClearForm(boardID int64) {
+	<form
+		hx-post={ fmt.Sprintf("/boards/%d/region", boardID) }
+		hx-target="#board-region-card"
+		hx-swap="outerHTML"
+		class="flex items-center"
+	>
+		<input type="hidden" name="clear" value="1"/>
+		<button type="submit" class="btn btn-sm btn-ghost">Clear</button>
+	</form>
+}
+
+// boardRegionNudgeNotice renders FR11's non-blocking review notice: what
+// the recorded region just changed to, and the board's sensors with their
+// current placements -- straight from the SetBoardRegionResponse (HTMX
+// path) or a fresh GetBoardDetail (redirect path). role="status" (not
+// "alert") and the info variant keep it non-blocking: it interrupts
+// nothing, forces no acknowledgement, and never moves a sensor (FR10/LB5)
+// -- it only suggests the user review the placements listed below it.
+templ boardRegionNudgeNotice(nudge *BoardRegionNudge) {
+	<div role="status" class="alert alert-info shadow-md mb-4">
+		<div class="text-sm">
+			<p class="font-medium">
+				if nudge.Cleared {
+					Recorded region cleared.
+				} else {
+					Recorded region changed to “{ nudge.NewRegionName }”.
+				}
+			</p>
+			if len(nudge.Sensors) == 0 {
+				<p>This board has no sensors — nothing to review.</p>
+			} else {
+				<p>Review whether these sensors' placements should also move:</p>
+				<ul class="list-disc list-inside">
+					for _, s := range nudge.Sensors {
+						<li>
+							{ s.GetSensorName() } —
+							if s.RegionId == nil {
+								<span class="italic">unplaced</span>
+							} else {
+								{ s.GetRegionName() }
+							}
+						</li>
+					}
+				</ul>
+			}
+		</div>
+	</div>
+}
+
 // renameBoardForm is the owner-only inline rename control (FR3). Prefilled
 // with the board's current name; an unnamed board (boardName == "") shows
 // an empty field with device_id as the placeholder, per the task issue's
@@ -141,16 +330,18 @@ templ renameBoardForm(boardID int64, boardName, deviceID, renameErr string) {
 // sensor_history.templ doc comment), so this link is that page's only
 // source for its board/name/unit chrome.
 //
-// ownedByCaller gates the FR4 inline rename control (#1770) -- forwarded
-// straight through from GetBoardDetailResponse.owned_by_caller, the same
-// signal boardOwnerCell already renders the Claim button from.
-templ sensorsTable(boardID int64, deviceID string, ownedByCaller bool, sensors []*leaflabapipb.SensorDetail) {
+// The Region column (#2318, FR12) shows each sensor's currently-placed
+// region (FR12), verbatim from the API -- plus, when ownedByCaller, the
+// FR7 place/move control (region picker). allRegions is the pickers'
+// option source (see BoardDetail's doc comment).
+templ sensorsTable(boardID int64, deviceID string, ownedByCaller bool, sensors []*leaflabapipb.SensorDetail, allRegions []*leaflabapipb.RegionTreeNode) {
 	<div class="overflow-x-auto">
 		<table class="table">
 			<thead>
 				<tr>
 					<th>Sensor</th>
 					<th>Type</th>
+					<th>Region</th>
 					<th>State</th>
 					<th>Latest Reading</th>
 					<th></th>
@@ -158,7 +349,7 @@ templ sensorsTable(boardID int64, deviceID string, ownedByCaller bool, sensors [
 			</thead>
 			<tbody>
 				for _, sensor := range sensors {
-					@SensorRow(boardID, deviceID, ownedByCaller, sensor, "")
+					@SensorRow(boardID, deviceID, ownedByCaller, sensor, allRegions, "", "")
 				}
 			</tbody>
 		</table>
@@ -166,19 +357,29 @@ templ sensorsTable(boardID int64, deviceID string, ownedByCaller bool, sensors [
 }
 
 // SensorRow renders one sensor's table row, including the FR4 inline
-// rename control when ownedByCaller. Exported (unlike sensorsTable) so
-// handlers_rename.go's handleRenameSensor can re-render a single row after
-// a rename attempt -- success or failure -- mirroring manmanv2/ui's
+// rename control when ownedByCaller and (#2318, FR7) the Region column:
+// the sensor's currently-placed region, plus the owner-only place/move
+// picker. Exported (unlike sensorsTable) so handleRenameSensor and
+// handlePlaceSensor can re-render a single row after a rename or place/
+// move attempt -- success or failure -- mirroring manmanv2/ui's
 // renderDeploymentRow/DeploymentRow fragment pattern: hx-target="this
-// row's id"/hx-swap="outerHTML" on renameSensorForm below lets htmx swap
-// the row in place with no full-page reload.
+// row's id"/hx-swap="outerHTML" on the forms below lets htmx swap the row
+// in place with no full-page reload.
 //
 // renameErr is empty on a normal table render (sensorsTable's call site
 // above) and carries a human-readable message inline, next to the sensor
 // name, when the most recent rename attempt against this row failed
 // (InvalidArgument/PermissionDenied/FailedPrecondition/NotFound -- never a
-// bare 500).
-templ SensorRow(boardID int64, deviceID string, ownedByCaller bool, sensor *leaflabapipb.SensorDetail, renameErr string) {
+// bare 500). placementErr carries a failed place/move attempt's message
+// the same way, inline in the Region cell -- deliberately rendered
+// regardless of ownedByCaller, since the failed attempt means the row may
+// be re-rendering for someone who is not the owner (the same rule
+// BoardHeader applies to renameErr).
+//
+// allRegions is the pickers' option source (FlattenRegions of the full
+// forest, best-effort -- empty renders a "No regions yet" hint instead of
+// the picker, never a page failure).
+templ SensorRow(boardID int64, deviceID string, ownedByCaller bool, sensor *leaflabapipb.SensorDetail, allRegions []*leaflabapipb.RegionTreeNode, renameErr, placementErr string) {
 	<tr id={ fmt.Sprintf("sensor-row-%d", sensor.GetSensorId()) } class="hover">
 		<td>
 			<div class="flex flex-col gap-1">
@@ -192,12 +393,80 @@ templ SensorRow(boardID int64, deviceID string, ownedByCaller bool, sensor *leaf
 			</div>
 		</td>
 		<td>{ sensor.GetSensorTypeName() }</td>
+		<td>@sensorRegionCell(boardID, ownedByCaller, sensor, allRegions, placementErr)</td>
 		<td>@htmxui.Badge(boardStateLabel(sensor.GetReportingState()), boardStateVariant(sensor.GetReportingState()), htmxui.BadgeSizeSM, true, nil)</td>
 		<td>@sensorReadingCell(sensor)</td>
 		<td class="text-right">
 			<a href={ templ.URL(sensorHistoryHref(boardID, deviceID, sensor)) } class="btn btn-ghost btn-sm">History</a>
 		</td>
 	</tr>
+}
+
+// sensorRegionCell is the Region column's content (#2318, FR12/FR7): the
+// sensor's current region as the API supplied it (region_name, or an
+// em-dash when region_id is unset -- a sensor's unplaced state is the
+// absence of an open placement row, never a sentinel id), the owner-only
+// place/move picker, and any failed place/move attempt's inline message.
+// boardID flows straight into the picker's hidden field (see
+// placeSensorForm's doc comment for why it rides along). The region
+// name renders for every viewer; the picker is presentation-gated on
+// ownedByCaller exactly like the rename control in this row's first cell
+// -- the enforcement point is the PlaceSensor RPC's own owner check
+// (NFR2), not this one.
+templ sensorRegionCell(boardID int64, ownedByCaller bool, sensor *leaflabapipb.SensorDetail, allRegions []*leaflabapipb.RegionTreeNode, placementErr string) {
+	<div class="flex flex-col gap-1">
+		if sensor.RegionId == nil {
+			<span class="text-base-content/40">—</span>
+		} else {
+			<span>{ sensor.GetRegionName() }</span>
+		}
+		if ownedByCaller {
+			if len(allRegions) > 0 {
+				@placeSensorForm(boardID, sensor, allRegions)
+			} else {
+				<span class="text-xs text-base-content/60">No regions yet</span>
+			}
+		}
+		if placementErr != "" {
+			<span class="text-xs text-error">{ placementErr }</span>
+		}
+	</div>
+}
+
+// placeSensorForm is FR7's place/move control (#2318): a picker of every
+// region (the sensor's currently-placed one preselected) posting to
+// "/sensors/{sensor_id}/place". One control serves both assign (unplaced
+// sensor) and move (already-placed sensor) -- PlaceSensor is the only
+// placement write either way, and unassigning is not part of the RPC.
+// board_id rides along as a hidden field -- the RPC itself only needs
+// sensor_id and region_id, but handlePlaceSensor's HTMX row re-render
+// needs board_id to re-fetch the board's detail, and there is no other way
+// for a per-row POST to hand it back to the handler (the same reason
+// renameSensorForm carries board_id and device_id; the row's remaining
+// context -- device id, reading, state -- comes from the fresh
+// GetBoardDetail, not this form). Submitting without changing the picker
+// re-places the sensor in its current region -- the API writes a new open
+// placement interval, which is PlaceSensor's documented behavior, not
+// this form's concern.
+templ placeSensorForm(boardID int64, sensor *leaflabapipb.SensorDetail, allRegions []*leaflabapipb.RegionTreeNode) {
+	<form
+		hx-post={ fmt.Sprintf("/sensors/%d/place", sensor.GetSensorId()) }
+		hx-target={ fmt.Sprintf("#sensor-row-%d", sensor.GetSensorId()) }
+		hx-swap="outerHTML"
+		class="flex items-center gap-1"
+	>
+		<input type="hidden" name="board_id" value={ fmt.Sprintf("%d", boardID) }/>
+		<select name="region_id" class="select select-bordered select-xs">
+			for _, n := range allRegions {
+				if sensor.RegionId != nil && n.GetRegionId() == *sensor.RegionId {
+					<option value={ fmt.Sprintf("%d", n.GetRegionId()) } selected>{ n.GetName() }</option>
+				} else {
+					<option value={ fmt.Sprintf("%d", n.GetRegionId()) }>{ n.GetName() }</option>
+				}
+			}
+		</select>
+		<button type="submit" class="btn btn-xs">Place</button>
+	</form>
 }
 
 // renameSensorForm is the FR4 inline rename control (#1770), rendered only

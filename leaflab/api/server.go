@@ -507,6 +507,8 @@ func (s *LeafLabAPIServer) ListBoardsWithState(ctx context.Context, _ *pb.ListBo
 		if r.LastReadingAt != nil {
 			bw.LastReadingAt = timestamppb.New(*r.LastReadingAt)
 		}
+		bw.RecordedRegionId = r.RecordedRegionID
+		bw.RecordedRegionName = r.RecordedRegionName
 		boards = append(boards, bw)
 	}
 
@@ -569,17 +571,21 @@ func (s *LeafLabAPIServer) GetBoardDetail(ctx context.Context, req *pb.GetBoardD
 				Valid:      *r.LatestValid,
 			}
 		}
+		sd.RegionId = r.RegionID
+		sd.RegionName = r.RegionName
 		sensors = append(sensors, sd)
 	}
 
 	s.logger.Info("board detail listed", "board_id", req.BoardId, "sensor_count", len(sensors))
 	return &pb.GetBoardDetailResponse{
-		BoardId:       req.BoardId,
-		DeviceId:      identity.DeviceID,
-		Sensors:       sensors,
-		BoardName:     boardNameOrEmpty(identity.BoardName),
-		Owner:         ownerToProto(identity.Owner),
-		OwnedByCaller: identity.Owner != nil && identity.Owner.LeafLabUserID == callerUserID,
+		BoardId:            req.BoardId,
+		DeviceId:           identity.DeviceID,
+		Sensors:            sensors,
+		BoardName:          boardNameOrEmpty(identity.BoardName),
+		Owner:              ownerToProto(identity.Owner),
+		OwnedByCaller:      identity.Owner != nil && identity.Owner.LeafLabUserID == callerUserID,
+		RecordedRegionId:   identity.RecordedRegionID,
+		RecordedRegionName: identity.RecordedRegionName,
 	}, nil
 }
 
