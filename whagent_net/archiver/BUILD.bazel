@@ -73,15 +73,17 @@ go_test(
     ],
 )
 
-# Release metadata. domain "whagent-net" + name "whagent-net-archiver"
-# mirrors //whagent_net/ui:whagent-net-ui's release_app shape (issue
-# #2236's BUILD.bazel) rather than //whagent_net/worker:worker's bare
-# "worker" name -- this task's Scaffold section names the binary
-# "whagent-net-archiver" explicitly. app_type "worker": a long-running
-# background process with no port, same category as
+# Release metadata. domain "whagent-net" + name "archiver" matches
+# //whagent_net/worker:worker's bare-name convention. app_type "worker": a
+# long-running background process with no port, same category as
 # //whagent_net/worker:worker.
+# name is "archiver" (not "whagent-net-archiver") because release_app's
+# image-naming logic already prefixes with domain (domain + "-" + name);
+# passing the already domain-prefixed name here double-prefixed the image
+# to whagent-net-whagent-net-archiver (issue #2339). binary_name still
+# points at the go_binary target below, which keeps its long name.
 release_app(
-    name = "whagent-net-archiver",
+    name = "archiver",
     binary_name = ":whagent-net-archiver",
     language = "go",
     domain = "whagent-net",
