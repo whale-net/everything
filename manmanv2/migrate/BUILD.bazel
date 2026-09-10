@@ -248,6 +248,42 @@ go_test(
     ],
 )
 
+# Drop sgc_workshop_libraries (M6 #2370, plan #2359): migration round-trip,
+# the unresolved-conflict guard (both the refusal when a GameConfig has an
+# unresolved conflict with no GC-level attachments yet, and the two carve-
+# outs -- conflict resolved, or GC-level attachments already exist despite
+# an unresolved conflict), and that the down migration recreates
+# sgc_workshop_libraries empty (schema rollback, not a data restore). Same
+# build-tag/target conventions as migration_042_integration_test.
+#
+# Run it explicitly (requires a working Docker daemon):
+#   bazel test //manmanv2/migrate:migration_043_integration_test --test_output=all
+go_test(
+    # keep
+    name = "migration_043_integration_test",
+    size = "large",
+    timeout = "long",
+    srcs = [
+        "main.go",
+        "migration_043_integration_test.go",
+    ],
+    embedsrcs = glob(["migrations/*.sql"]),
+    gotags = ["integration"],
+    tags = [
+        "external",
+        "integration",
+        "manual",
+        "no-cache",
+        "no-sandbox",
+        "requires-network",
+    ],
+    deps = [
+        "//libs/go/dbtest",
+        "//libs/go/migrate",
+        "@com_github_jackc_pgx_v5//stdlib",
+    ],
+)
+
 # Release metadata for migration job
 release_app(
     name = "control-migration",

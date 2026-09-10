@@ -1627,3 +1627,102 @@ func TestFetchMetadata(t *testing.T) {
 		})
 	}
 }
+
+// TestEnsureLibraryAddonsInstalled_FR13_OneOffLayeredWithGCLibrary is the FR13
+// regression the issue's Testing section calls out by name (M6 #2370, plan
+// #2359): a deployment with a one-off `workshop_installations` addon --
+// installed directly on that one SGC, never through any library -- AND an
+// addon inherited from its GameConfig's GC-level library attachment must end
+// up with *both* installed, layered: the pre-existing one-off installation is
+// neither dropped nor duplicated, and the GC-level library's addon gets its
+// own new installation alongside it.
+func TestEnsureLibraryAddonsInstalled_FR13_OneOffLayeredWithGCLibrary(t *testing.T) {
+	ctx := context.Background()
+
+	const gameID = int64(1)
+	const gameConfigID = int64(10)
+	const sgcID = int64(20)
+	const libA = int64(1)
+	const libAddonID = int64(500)    // inherited via the GC-level library
+	const oneOffAddonID = int64(600) // installed directly on this SGC, not via any library
+	const oneOffInstallationID = int64(1)
+
+	addonRepo := &mockAddonRepo{addons: make(map[int64]*manman.WorkshopAddon)}
+	libPath := "addons/lib"
+	addonRepo.addons[libAddonID] = &manman.WorkshopAddon{
+		AddonID: libAddonID, GameID: gameID, WorkshopID: "111", InstallationPath: &libPath,
+	}
+	addonRepo.nextID = libAddonID
+
+	installationRepo := &mockInstallationRepo{
+		installations: make(map[string]*manman.WorkshopInstallation),
+		installByID:   make(map[int64]*manman.WorkshopInstallation),
+	}
+	// Pre-existing one-off install: a row in workshop_installations created
+	// directly for this SGC (e.g. via the install/remove/reset routes), not
+	// through any library attachment -- exactly the FR13 "one-off addon" case.
+	oneOffInstall := &manman.WorkshopInstallation{
+		InstallationID: oneOffInstallationID, SGCID: sgcID, AddonID: oneOffAddonID,
+		Status: manman.InstallationStatusInstalled, InstallationPath: "addons/oneoff",
+	}
+	installationRepo.installations[fmt.Sprintf("%d-%d", sgcID, oneOffAddonID)] = oneOffInstall
+	installationRepo.installByID[oneOffInstallationID] = oneOffInstall
+	installationRepo.nextID = oneOffInstallationID
+
+	sgcRepo := &mockSGCRepo{sgcs: map[int64]*manman.ServerGameConfig{
+		sgcID: {SGCID: sgcID, GameConfigID: gameConfigID, ServerID: 1},
+	}}
+	gameRepo := &mockGameRepo{games: map[int64]*manman.Game{gameID: {GameID: gameID, Name: "Test Game"}}}
+	volumeRepo := &mockVolumeRepo{volumes: map[int64][]*manman.GameConfigVolume{
+		gameConfigID: {{ContainerPath: "/data", VolumeType: "bind"}},
+	}}
+	rmqPublisher := &mockRMQPublisher{}
+
+	gcLibraryRepo := &fakeGCLibraryRepoForResolve{
+		librariesByConfig: map[int64][]*manman.WorkshopLibrary{
+			gameConfigID: {{LibraryID: libA}},
+		},
+	}
+	libraryRepo := &fakeLibraryRepoForResolve{
+		addonsByLibrary: map[int64][]*manman.WorkshopAddonWithGame{
+			libA: {{WorkshopAddon: manman.WorkshopAddon{AddonID: libAddonID}}},
+		},
+	}
+
+	manager := NewWorkshopManager(
+		addonRepo, installationRepo, libraryRepo, sgcRepo, gameRepo, nil,
+		gcLibraryRepo, volumeRepo, nil, nil, nil, nil, rmqPublisher,
+	)
+
+	if err := manager.EnsureLibraryAddonsInstalled(ctx, sgcID); err != nil {
+		t.Fatalf("EnsureLibraryAddonsInstalled: %v", err)
+	}
+
+	// The GC-level library's addon must now have its own installation.
+	libInst, err := installationRepo.GetBySGCAndAddon(ctx, sgcID, libAddonID)
+	if err != nil {
+		t.Fatalf("expected an installation for GC-level library addon %d, got error: %v", libAddonID, err)
+	}
+	if libInst.AddonID != libAddonID {
+		t.Errorf("library installation has wrong addon ID: got %d, want %d", libInst.AddonID, libAddonID)
+	}
+
+	// The pre-existing one-off installation must be untouched: same
+	// installation ID, same status -- neither dropped nor duplicated.
+	oneOffAfter, err := installationRepo.GetBySGCAndAddon(ctx, sgcID, oneOffAddonID)
+	if err != nil {
+		t.Fatalf("one-off installation for addon %d disappeared: %v", oneOffAddonID, err)
+	}
+	if oneOffAfter.InstallationID != oneOffInstallationID {
+		t.Errorf("one-off installation was duplicated: got installation_id %d, want the original %d", oneOffAfter.InstallationID, oneOffInstallationID)
+	}
+	if oneOffAfter.Status != manman.InstallationStatusInstalled {
+		t.Errorf("one-off installation status changed: got %q, want %q", oneOffAfter.Status, manman.InstallationStatusInstalled)
+	}
+
+	// Exactly two installations total: the untouched one-off, and the new
+	// GC-level library one -- layered, not merged or deduplicated into one.
+	if len(installationRepo.installByID) != 2 {
+		t.Fatalf("expected exactly 2 installations (one-off + GC-level library), got %d: %+v", len(installationRepo.installByID), installationRepo.installByID)
+	}
+}
