@@ -106,6 +106,14 @@ func (f *fakeLifecycleSessionServer) StopSession(ctx context.Context, req *whage
 	return &whagentpb.StopSessionResponse{Session: f.session}, nil
 }
 
+// GetSessionUsage is a fixed non-zero-cap stub (mirrors
+// handlers_session_test.go's fakeUISessionServer): renderSessionDetail
+// (via handlers_session.go's readUsage) now always fetches usage for the
+// live panel, and this fake otherwise has no notion of usage at all.
+func (f *fakeLifecycleSessionServer) GetSessionUsage(ctx context.Context, req *whagentpb.GetSessionUsageRequest) (*whagentpb.GetSessionUsageResponse, error) {
+	return &whagentpb.GetSessionUsageResponse{Usage: &whagentpb.SessionUsage{TurnCap: 100, CostCapUsd: 1}}, nil
+}
+
 // newLifecycleTestApp builds an *App wired to server over bufconn, in
 // AuthModeNone (dev-user, Sub "dev-user"), mirroring
 // handlers_session_test.go's setup so ownership can be driven purely by

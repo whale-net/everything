@@ -156,6 +156,20 @@ func sessionToView(sess *whagentpb.Session) components.SessionView {
 	return view
 }
 
+// usageToView converts u to components.UsageView (FR4). A nil u (should be
+// unreachable -- GetSessionUsageResponse.usage is always populated,
+// session.proto's doc comment) renders as the zero UsageView -- "0 / 0",
+// not a panic -- rather than crashing the fragment.
+func usageToView(u *whagentpb.SessionUsage) components.UsageView {
+	return components.UsageView{
+		TurnsUsed:     u.GetTurnsUsed(),
+		TurnCap:       u.GetTurnCap(),
+		CostUsedUSD:   u.GetCostUsd(),
+		CostCapUSD:    u.GetCostCapUsd(),
+		CostEstimated: u.GetCostEstimated(),
+	}
+}
+
 // transcriptEventToView converts one whagentpb.TranscriptEvent to
 // components.TranscriptEventView (FR2's exact field set: event_id, seq,
 // turn, type, payload, committed_at).

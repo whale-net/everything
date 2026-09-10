@@ -57,6 +57,12 @@ type SessionDetailData struct {
 	Layout  LayoutData
 	Session SessionView
 	Events  []TranscriptEventView
+	// Usage is FR4's initial-render usage figures (../handlers_session.go's
+	// readUsage) -- the same GetSessionUsage-backed value
+	// ../handlers_session_usage_live.go's sessionUsageFragment re-reads on
+	// every live update, so the two can never disagree about how a
+	// SessionUsage is projected for rendering.
+	Usage UsageView
 
 	// IsOwner gates the composer/stop-control slot (LB2's (iss,sub) match
 	// against Session.OnBehalfOf, computed by the handler -- never here).
@@ -71,6 +77,11 @@ type SessionDetailData struct {
 	// through here so the sse-swap attribute below can never drift from
 	// what handleSessionEvents actually subscribes to.
 	Topics []string
+
+	// UsageTopics is the usage panel's own, narrower htmxsse topic set
+	// (../handlers_session_usage_live.go's sessionUsageTopics) -- see that
+	// function's doc comment for why it is not simply Topics reused.
+	UsageTopics []string
 }
 
 // stateBadgeVariant maps a SessionView.State string onto htmxui's generic
@@ -134,11 +145,18 @@ func sessionTopicsAttr(topics []string) string {
 // /sessions/{id}/events (../handlers_session_live.go). The composer/stop
 // slot (FR1, issue #2246) is filled with OwnerControls only inside the
 // data.IsOwner branch -- a non-owner's response contains this branch, and
-// therefore any composer/stop markup, nowhere at all. The usage slot (FR4)
-// remains an empty mount point for its own follow-up task. The state badge
-// and any terminal-state banner are *inside* the swapped div (SessionLive),
-// not here, so they swap live alongside the transcript rather than only
+// therefore any composer/stop markup, nowhere at all. The state badge and
+// any terminal-state banner are *inside* the swapped div (SessionLive), not
+// here, so they swap live alongside the transcript rather than only
 // reflecting this initial render.
+//
+// The usage panel (FR4, issue #2248) is its own SSE-connected region,
+// separate from #transcript's, deliberately: htmx's SSE extension swaps an
+// element with the literal data payload of the named event it is listening
+// for, so two differently-rendered regions cannot share one topic's
+// delivery without an out-of-band swap this codebase does not otherwise use
+// (see ../handlers_session_usage_live.go's doc comment) -- a second,
+// narrower-topic SSE connection is the simpler, more explicit alternative.
 templ SessionDetail(data SessionDetailData) {
 	@Layout(data.Layout) {
 		<h1 class="text-2xl font-bold text-base-content mb-2">Session { data.Session.SessionID }</h1>
@@ -152,8 +170,15 @@ templ SessionDetail(data SessionDetailData) {
 				@OwnerControls(data.Session.SessionID, data.Session.State)
 			</div>
 		}
-		<!-- FR4 (usage panel) mounts here. -->
-		<div id="usage-slot" class="mb-4"></div>
+		<div
+			id="usage-slot"
+			class="mb-4"
+			hx-ext="sse"
+			sse-connect={ fmt.Sprintf("/sessions/%s/usage-events", data.Session.SessionID) }
+			sse-swap={ sessionTopicsAttr(data.UsageTopics) }
+		>
+			@SessionUsage(data.Session, data.Usage)
+		</div>
 		<div
 			id="transcript"
 			hx-ext="sse"

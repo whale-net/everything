@@ -1,0 +1,73 @@
+package components
+
+import "fmt"
+
+// UsageView is a plain rendering-ready projection of whagentpb.SessionUsage
+// (FR4, ../handlers_session.go's readUsage): turns/cost used against the
+// caps the session's pinned agent_definition sets, both summed fresh from
+// committed turn_usage rows on every read (NFR5) -- never a running counter
+// mutated alongside them. Zero-valued for a session with no committed
+// turns, which is exactly what GetSessionUsage itself returns in that case
+// (COUNT(*)/COALESCE(SUM(...),0)), so no special-casing is needed here to
+// render "0 / cap" / "$0.00 / cap" rather than an empty panel.
+type UsageView struct {
+	TurnsUsed     int32
+	TurnCap       int32
+	CostUsedUSD   float64
+	CostCapUSD    float64
+	// CostEstimated is true when any summed turn_usage row's cost was
+	// estimated from tokens rather than provider-reported (LB6) -- the
+	// panel must say so visibly whenever this is true, not only via a
+	// tooltip (SessionUsage's doc comment).
+	CostEstimated bool
+}
+
+// usageCapLabel names which cap tripped a capped session, for the kind
+// SessionUsage's own turns/cost row is about -- "" when the session isn't
+// capped or a different cap tripped it. session.CapKind (from GetSession,
+// threaded through SessionView) is the source of truth here, never
+// usage.TurnsUsed==usage.TurnCap or similar inference from the usage
+// figures alone: a session can be marked capped by the worker before its
+// last turn_usage row's commit is visible to a concurrent GetSessionUsage
+// read (the two are separate RPCs, not one transaction), so the figures
+// and the state can transiently disagree on exactly what "tripped" looks
+// like numerically.
+func usageCapLabel(session SessionView, kind string) string {
+	if session.State == "capped" && session.CapKind == kind {
+		return "Capped: " + kind
+	}
+	return ""
+}
+
+// SessionUsage renders FR4's usage panel: turns-used-of-turn-cap and
+// cost-used-of-cost-cap as "used / cap", the estimated-cost flag (LB6)
+// visible in the cost row itself whenever usage.CostEstimated is true, and
+// -- for an already-capped session -- which cap tripped. Used both for
+// SessionDetail's initial render and, verbatim, by
+// ../handlers_session_usage_live.go's sessionUsageFragment.Render for every
+// later live update, so the two can never disagree about what a given
+// (session, usage) pair renders as (mirrors SessionLive's own doc comment
+// for the transcript/state badge).
+templ SessionUsage(session SessionView, usage UsageView) {
+	<div id="usage-panel" class="stats stats-vertical sm:stats-horizontal shadow bg-base-200">
+		<div class="stat">
+			<div class="stat-title">Turns</div>
+			<div class="stat-value text-lg">{ fmt.Sprintf("%d / %d", usage.TurnsUsed, usage.TurnCap) }</div>
+			if label := usageCapLabel(session, "turns"); label != "" {
+				<div class="stat-desc text-warning">{ label }</div>
+			}
+		</div>
+		<div class="stat">
+			<div class="stat-title">Cost</div>
+			<div class="stat-value text-lg">{ fmt.Sprintf("$%.2f / $%.2f", usage.CostUsedUSD, usage.CostCapUSD) }</div>
+			<div class="stat-desc">
+				if usage.CostEstimated {
+					<span class="text-warning">Includes estimated cost</span>
+				}
+				if label := usageCapLabel(session, "cost"); label != "" {
+					<span class="text-warning ml-2">{ label }</span>
+				}
+			</div>
+		</div>
+	</div>
+}

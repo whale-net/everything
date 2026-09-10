@@ -17,6 +17,7 @@ go_library(
         "handlers_session.go",
         "handlers_session_lifecycle.go",
         "handlers_session_live.go",
+        "handlers_session_usage_live.go",
         "handlers_sessions.go",
         "main.go",
         "mcpauth.go",
@@ -82,6 +83,13 @@ go_binary(
 # round-tripping back to the original page with the pagination controls
 # absent at the correct end, and NFR3's "started by" rendering for a
 # service-started session and a session started by another user.
+#
+# handlers_session_usage_live_test.go (issue #2248's Testing section)
+# added: FR4/NFR5's SSE live-path coverage for the usage panel -- a
+# published usage-relevant event produces exactly one swap reflecting the
+# re-read figure, and a duplicate re-publish of the same event_id changes
+# no number (reuses fakeLiveTransport/newLiveTestHub/
+# waitForLiveHandlerRegistered from handlers_session_live_test.go).
 go_test(
     name = "ui_test",
     size = "small",
@@ -90,6 +98,7 @@ go_test(
         "handlers_session_lifecycle_test.go",
         "handlers_session_live_test.go",
         "handlers_session_test.go",
+        "handlers_session_usage_live_test.go",
         "handlers_sessions_test.go",
         "main_test.go",
         "mcpauth_test.go",
