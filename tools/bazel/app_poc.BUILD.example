@@ -1,0 +1,375 @@
+# =============================================================================
+# POC: manman-v2 apps using composable app building blocks
+#
+# This file is NOT a real BUILD file — it demonstrates the building-block
+# pattern for each manman-v2 app. Each app assembles only the blocks it needs.
+# =============================================================================
+
+load("//tools/bazel:container_image.bzl", "multiplatform_image")
+load(
+    "//tools/bazel:app.bzl",
+    "app_deploy",
+    "app_health",
+    "app_image",
+    "app_ingress",
+    "app_manifest",
+    "app_openapi",
+    "app_resource",
+)
+
+# =============================================================================
+# control-api: external gRPC API with ingress
+#
+# Blocks: image + deploy + ingress
+# =============================================================================
+
+multiplatform_image(
+    name = "control-api_image",
+    binary = ":control-api",
+    image_name = "manmanv2-control-api",
+    language = "go",
+    registry = "ghcr.io",
+    repository = "whale-net",
+)
+
+app_image(
+    name = "control-api_image_ref",
+    image_target = ":control-api_image",
+    repo_name = "manmanv2-control-api",
+)
+
+app_deploy(
+    name = "control-api_deploy",
+    app_type = "external-api",
+    port = 50051,
+    replicas = 2,
+)
+
+app_manifest(
+    name = "control-api_metadata",
+    app_name = "control-api",
+    binary_target = ":control-api",
+    domain = "manmanv2",
+    language = "go",
+    description = "ManMan control plane API (gRPC)",
+    components = [
+        ":control-api_image_ref",
+        ":control-api_deploy",
+    ],
+    tags = ["release-metadata"],
+    visibility = ["//visibility:public"],
+)
+
+
+# =============================================================================
+# event-processor: worker (no port, no ingress, no service)
+#
+# Blocks: image + deploy
+# =============================================================================
+
+multiplatform_image(
+    name = "event-processor_image",
+    binary = ":event-processor",
+    image_name = "manmanv2-event-processor",
+    language = "go",
+    registry = "ghcr.io",
+    repository = "whale-net",
+)
+
+app_image(
+    name = "event-processor_image_ref",
+    image_target = ":event-processor_image",
+    repo_name = "manmanv2-event-processor",
+)
+
+app_deploy(
+    name = "event-processor_deploy",
+    app_type = "worker",
+    replicas = 1,
+)
+
+app_manifest(
+    name = "event-processor_metadata",
+    app_name = "event-processor",
+    binary_target = ":event-processor",
+    domain = "manmanv2",
+    language = "go",
+    description = "ManMan event processor (RabbitMQ consumer, DB sync)",
+    components = [
+        ":event-processor_image_ref",
+        ":event-processor_deploy",
+    ],
+    tags = ["release-metadata"],
+    visibility = ["//visibility:public"],
+)
+
+
+# =============================================================================
+# control-migration: one-shot job
+#
+# Blocks: image + deploy (job type, nothing else)
+# =============================================================================
+
+multiplatform_image(
+    name = "control-migration_image",
+    binary = ":control-migration",
+    image_name = "manmanv2-control-migration",
+    language = "go",
+    registry = "ghcr.io",
+    repository = "whale-net",
+)
+
+app_image(
+    name = "control-migration_image_ref",
+    image_target = ":control-migration_image",
+    repo_name = "manmanv2-control-migration",
+)
+
+app_deploy(
+    name = "control-migration_deploy",
+    app_type = "job",
+)
+
+app_manifest(
+    name = "control-migration_metadata",
+    app_name = "control-migration",
+    binary_target = ":control-migration",
+    domain = "manmanv2",
+    language = "go",
+    description = "ManMan control plane database migration runner",
+    components = [
+        ":control-migration_image_ref",
+        ":control-migration_deploy",
+    ],
+    tags = ["release-metadata"],
+    visibility = ["//visibility:public"],
+)
+
+
+# =============================================================================
+# log-processor: internal API (cluster-only)
+#
+# Blocks: image + deploy
+# No ingress block — can't accidentally expose it.
+# =============================================================================
+
+multiplatform_image(
+    name = "log-processor_image",
+    binary = ":log-processor",
+    image_name = "manmanv2-log-processor",
+    language = "go",
+    registry = "ghcr.io",
+    repository = "whale-net",
+)
+
+app_image(
+    name = "log-processor_image_ref",
+    image_target = ":log-processor_image",
+    repo_name = "manmanv2-log-processor",
+)
+
+app_deploy(
+    name = "log-processor_deploy",
+    app_type = "internal-api",
+    port = 50053,
+    replicas = 1,
+)
+
+app_manifest(
+    name = "log-processor_metadata",
+    app_name = "log-processor",
+    binary_target = ":log-processor",
+    domain = "manmanv2",
+    language = "go",
+    description = "Real-time log streaming and S3 archival service with gRPC API",
+    components = [
+        ":log-processor_image_ref",
+        ":log-processor_deploy",
+    ],
+    tags = ["release-metadata"],
+    visibility = ["//visibility:public"],
+)
+
+
+# =============================================================================
+# manmanv2-ui: external API with ingress + TLS
+#
+# Blocks: image + deploy + ingress
+# Ingress is a separate block — only plugged in for external APIs.
+# =============================================================================
+
+multiplatform_image(
+    name = "manmanv2-ui_image",
+    binary = ":manmanv2-ui",
+    image_name = "manmanv2-manmanv2-ui",
+    language = "go",
+    registry = "ghcr.io",
+    repository = "whale-net",
+)
+
+app_image(
+    name = "manmanv2-ui_image_ref",
+    image_target = ":manmanv2-ui_image",
+    repo_name = "manmanv2-manmanv2-ui",
+)
+
+app_deploy(
+    name = "manmanv2-ui_deploy",
+    app_type = "external-api",
+    port = 8000,
+    replicas = 1,
+)
+
+app_ingress(
+    name = "manmanv2-ui_ingress",
+    host = "manman.whalenet.dev",
+    tls_secret = "manmanv2-tls",
+)
+
+app_manifest(
+    name = "manmanv2-ui_metadata",
+    app_name = "manmanv2-ui",
+    binary_target = ":manmanv2-ui",
+    domain = "manmanv2",
+    language = "go",
+    description = "HTMX-based management interface for ManManV2 control plane",
+    components = [
+        ":manmanv2-ui_image_ref",
+        ":manmanv2-ui_deploy",
+        ":manmanv2-ui_ingress",
+    ],
+    tags = ["release-metadata"],
+    visibility = ["//visibility:public"],
+)
+
+
+# =============================================================================
+# HYPOTHETICAL: manman worker with steamcmd + custom resources
+#
+# Blocks: image (with additional_tars) + deploy + resource
+# =============================================================================
+
+multiplatform_image(
+    name = "worker_image",
+    binary = "//manman/src/worker:worker",
+    image_name = "manman-worker",
+    language = "python",
+    registry = "ghcr.io",
+    repository = "whale-net",
+    env = {
+        "APP_NAME": "worker",
+        "APP_DOMAIN": "manman",
+        "APP_TYPE": "worker",
+    },
+    cmd = ["start"],
+    additional_tars = ["//tools/steamcmd:steamcmd_layers"],
+)
+
+app_image(
+    name = "worker_image_ref",
+    image_target = ":worker_image",
+    repo_name = "manman-worker",
+)
+
+app_deploy(
+    name = "worker_deploy",
+    app_type = "worker",
+    replicas = 1,
+    args = ["start"],
+)
+
+app_resource(
+    name = "worker_resources",
+    requests_cpu = "200m",
+    requests_memory = "512Mi",
+    limits_cpu = "500m",
+    limits_memory = "1Gi",
+)
+
+app_manifest(
+    name = "worker_metadata",
+    app_name = "worker",
+    binary_target = "//manman/src/worker:worker",
+    domain = "manman",
+    language = "python",
+    description = "Background worker with SteamCMD and custom resource limits",
+    components = [
+        ":worker_image_ref",
+        ":worker_deploy",
+        ":worker_resources",
+    ],
+    tags = ["release-metadata"],
+    visibility = ["//visibility:public"],
+)
+
+
+# =============================================================================
+# HYPOTHETICAL: FastAPI app — full block set
+#
+# Blocks: image + deploy + ingress + health + openapi
+# =============================================================================
+
+# (Assume openapi_spec rule already created ":experience-api_openapi_spec")
+
+multiplatform_image(
+    name = "experience-api_image",
+    binary = "//manman/src/host/api/experience:experience_api",
+    image_name = "manman-experience-api",
+    language = "python",
+    registry = "ghcr.io",
+    repository = "whale-net",
+    env = {
+        "APP_NAME": "experience-api",
+        "APP_DOMAIN": "manman",
+        "APP_TYPE": "external-api",
+    },
+    cmd = ["start-experience-api"],
+)
+
+app_image(
+    name = "experience-api_image_ref",
+    image_target = ":experience-api_image",
+    repo_name = "manman-experience-api",
+)
+
+app_deploy(
+    name = "experience-api_deploy",
+    app_type = "external-api",
+    port = 8000,
+    replicas = 1,
+    args = ["start-experience-api"],
+)
+
+app_ingress(
+    name = "experience-api_ingress",
+    host = "experience.manman.local",
+    tls_secret = "manman-tls",
+)
+
+app_health(
+    name = "experience-api_health",
+    path = "/health",
+)
+
+app_openapi(
+    name = "experience-api_openapi",
+    spec_target = ":experience-api_openapi_spec",
+)
+
+app_manifest(
+    name = "experience-api_metadata",
+    app_name = "experience-api",
+    binary_target = "//manman/src/host/api/experience:experience_api",
+    domain = "manman",
+    language = "python",
+    description = "Experience API service",
+    components = [
+        ":experience-api_image_ref",
+        ":experience-api_deploy",
+        ":experience-api_ingress",
+        ":experience-api_health",
+        ":experience-api_openapi",
+    ],
+    tags = ["release-metadata"],
+    visibility = ["//visibility:public"],
+)
