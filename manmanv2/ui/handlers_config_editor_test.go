@@ -44,6 +44,15 @@ func (f *fakeConfigEditorAPIClient) ListGameConfigVolumes(ctx context.Context, i
 	return &manmanpb.ListGameConfigVolumesResponse{Volumes: f.volumes}, nil
 }
 
+// ListBackupConfigs backs toConfigEditorVolumes' per-volume backup-config
+// lookup (FR14/FR15, #2363). None of this file's fixtures assign a backup
+// config to a volume, so this always returns empty -- see
+// handlers_config_editor_volumes_test.go for the assign/edit/remove
+// coverage itself.
+func (f *fakeConfigEditorAPIClient) ListBackupConfigs(ctx context.Context, in *manmanpb.ListBackupConfigsRequest, opts ...grpc.CallOption) (*manmanpb.ListBackupConfigsResponse, error) {
+	return &manmanpb.ListBackupConfigsResponse{}, nil
+}
+
 func (f *fakeConfigEditorAPIClient) UpdateGameConfig(ctx context.Context, in *manmanpb.UpdateGameConfigRequest, opts ...grpc.CallOption) (*manmanpb.UpdateGameConfigResponse, error) {
 	f.updateReqs = append(f.updateReqs, in)
 	f.config.Name = in.Name
@@ -306,11 +315,11 @@ func TestConfigEditorGet_FR2_NoRawSGCInDisplayText(t *testing.T) {
 	}
 }
 
-// TestConfigEditorGet_VolumesReadOnly guards WD4's negative assertion end
-// to end through the handler: all six GameConfigVolume fields render,
-// there is no add/edit/remove control, and the backup link-out plus M6
-// note are present.
-func TestConfigEditorGet_VolumesReadOnly(t *testing.T) {
+// TestConfigEditorGet_VolumesEditable guards WD4's still-live half (all six
+// GameConfigVolume fields render, backup link-out present) plus #2363's
+// FR14: an unassigned volume renders an inline Assign control end to end
+// through the handler, and the stale M5/M6 read-only note is gone.
+func TestConfigEditorGet_VolumesEditable(t *testing.T) {
 	api := newConfigEditorFixtures()
 	app := configEditorTestApp(api)
 
@@ -319,18 +328,21 @@ func TestConfigEditorGet_VolumesReadOnly(t *testing.T) {
 	app.handleGameConfigEditor(w, req, "1", "3")
 
 	body := w.Body.String()
-	for _, want := range []string{"world", "World data", "/data", "world", "No", "bind"} {
+	for _, want := range []string{"world", "World data", "/data", "bind", "Read-write"} {
 		if !strings.Contains(body, want) {
 			t.Errorf("expected volume field %q to render, got %q", want, body)
 		}
 	}
-	if strings.Contains(body, "editable here in M6") == false {
-		t.Errorf("expected the M6 note, got %q", body)
+	if strings.Contains(body, "editable here in M6") {
+		t.Errorf("expected the stale M5/M6 note to be gone (#2363), got %q", body)
 	}
 	if !strings.Contains(body, "Manage backups") {
 		t.Errorf("expected the backup link-out, got %q", body)
 	}
-	if strings.Contains(body, "data-volume-add") || strings.Contains(body, "data-volume-edit") || strings.Contains(body, "data-volume-remove") || strings.Contains(body, "data-volume-backup-schedule") {
-		t.Errorf("expected no add/edit/remove control and no inline backup-schedule control in Volumes (WD4), got %q", body)
+	if !strings.Contains(body, "data-volume-backup-assign-form") {
+		t.Errorf("expected an inline assign control for the unassigned fixture volume (FR14), got %q", body)
+	}
+	if strings.Contains(body, "data-volume-backup-edit-form") || strings.Contains(body, "data-volume-backup-remove-form") {
+		t.Errorf("expected no edit/remove control for an unassigned volume, got %q", body)
 	}
 }

@@ -9,6 +9,9 @@ import (
 	"github.com/whale-net/everything/tools/app_registry/server/auth"
 	"github.com/whale-net/everything/tools/app_registry/server/repository"
 	"github.com/whale-net/everything/tools/app_registry/server/repository/fake"
+	"github.com/whale-net/everything/tools/app_registry/worker/release"
+	"go.temporal.io/api/serviceerror"
+	"go.temporal.io/sdk/client"
 	"google.golang.org/grpc/codes"
 )
 
@@ -423,5 +426,206 @@ func TestListReleaseAttempts_OwnerFilter(t *testing.T) {
 	}
 	if len(resp.Releases) != 1 || resp.Releases[0].ReleaseRunId != first.ReleaseRunId {
 		t.Fatalf("expected exactly [%s] for demo-svc, got %+v", first.ReleaseRunId, resp.Releases)
+	}
+}
+
+// fakeTemporalSignal captures one SignalWorkflow call's identity payload.
+type fakeTemporalSignal struct {
+	WorkflowID string
+	RunID      string
+	SignalName string
+	Arg        interface{}
+}
+
+// fakeTemporal is a client.Client whose only implemented method is
+// SignalWorkflow -- everything else (ExecuteWorkflow, CancelWorkflow, ...)
+// would call through the embedded nil interface and panic, which is the
+// point: NotifyBuildComplete must not call anything else, and any test that
+// makes it would panic loudly rather than silently pass. (Same shape as
+// whagent_net/api/handlers' fake temporal client.)
+type fakeTemporal struct {
+	client.Client
+	signals []fakeTemporalSignal
+	err     error
+}
+
+func (f *fakeTemporal) SignalWorkflow(ctx context.Context, workflowID, runID, signalName string, arg interface{}) error {
+	if f.err != nil {
+		return f.err
+	}
+	f.signals = append(f.signals, fakeTemporalSignal{
+		WorkflowID: workflowID,
+		RunID:      runID,
+		SignalName: signalName,
+		Arg:        arg,
+	})
+	return nil
+}
+
+// notifyFixture seeds a release run (TemporalWorkflowID set, one target)
+// and returns the server wired to a recording fakeTemporal, the fake
+// registry (for SetBuildRef), and the generated release_run_id.
+func notifyFixture(t *testing.T) (*ReleaseServer, repository.Registry, *fakeTemporal, string) {
+	t.Helper()
+	repo := fake.New()
+	temporal := &fakeTemporal{}
+	srv := NewReleaseServer(repo, temporal)
+
+	created, _, err := repo.ReleaseRuns().CreateReleaseRun(context.Background(), repository.ReleaseRun{
+		TriggeredBy:        "test-user",
+		RequestedScope:     "demo",
+		TemporalWorkflowID: "release-workflow-1",
+	}, []repository.ReleaseRunTarget{{
+		OwnerFullName: "demo-svc",
+		Kind:          repository.ArtifactKindImage,
+	}})
+	if err != nil {
+		t.Fatalf("seed release run: %v", err)
+	}
+	return srv, repo, temporal, created.ReleaseRunID
+}
+
+func notifyReq(releaseRunID string, githubRunID int64, succeeded bool, detail string) *pb.NotifyBuildCompleteRequest {
+	return &pb.NotifyBuildCompleteRequest{
+		ReleaseRunId: releaseRunID,
+		GithubRunId:  githubRunID,
+		Succeeded:    succeeded,
+		Detail:       detail,
+	}
+}
+
+// TestNotifyBuildComplete_Authorization mirrors authz_test.go's pattern:
+// NotifyBuildComplete requires exactly the builder role every other
+// build-job-side write already requires -- no new role.
+func TestNotifyBuildComplete_Authorization(t *testing.T) {
+	srv, _, _, runID := notifyFixture(t)
+
+	t.Run("correct role allowed", func(t *testing.T) {
+		srv2, _, _, runID2 := notifyFixture(t)
+		resp, err := srv2.NotifyBuildComplete(ctxWithRoles(auth.RoleBuilder), notifyReq(runID2, 42, true, ""))
+		if err != nil {
+			t.Fatalf("expected builder to be allowed, got %v", err)
+		}
+		if !resp.Signaled {
+			t.Fatalf("expected Signaled=true on the happy path")
+		}
+	})
+
+	t.Run("wrong role is PermissionDenied", func(t *testing.T) {
+		_, err := srv.NotifyBuildComplete(ctxWithRoles(auth.RolePromoterDev), notifyReq(runID, 42, true, ""))
+		requireCode(t, err, codes.PermissionDenied, "NotifyBuildComplete")
+	})
+}
+
+// TestNotifyBuildComplete_Validation pins the request validation order:
+// a missing release_run_id is InvalidArgument, and the nil-temporal guard
+// is FailedPrecondition (a server misconfiguration, not the caller's or
+// the workflow's fault).
+func TestNotifyBuildComplete_Validation(t *testing.T) {
+	srv, _, _, runID := notifyFixture(t)
+
+	if _, err := srv.NotifyBuildComplete(ctxWithRoles(auth.RoleBuilder), notifyReq("", 42, true, "")); err != nil {
+		requireCode(t, err, codes.InvalidArgument, "NotifyBuildComplete")
+	}
+
+	srvNoTemporal, _ := newReleaseFixture()
+	_, err := srvNoTemporal.NotifyBuildComplete(ctxWithRoles(auth.RoleBuilder), notifyReq(runID, 42, true, ""))
+	requireCode(t, err, codes.FailedPrecondition, "NotifyBuildComplete (nil temporal client)")
+}
+
+// TestNotifyBuildComplete_UnknownReleaseRun pins NotFound for a
+// release_run_id that doesn't exist (mapRepoErr's ErrNotFound mapping).
+func TestNotifyBuildComplete_UnknownReleaseRun(t *testing.T) {
+	srv, _, _, _ := notifyFixture(t)
+
+	_, err := srv.NotifyBuildComplete(ctxWithRoles(auth.RoleBuilder), notifyReq("does-not-exist", 42, true, ""))
+	requireCode(t, err, codes.NotFound, "NotifyBuildComplete")
+}
+
+// TestNotifyBuildComplete_SignalsWorkflow pins the success path: the
+// handler resolves the run, cross-checks the run id against the
+// persisted build_ref, and signals the run's TemporalWorkflowID with
+// release.SignalBuildCompleted carrying release.BuildCompletedSignal.
+func TestNotifyBuildComplete_SignalsWorkflow(t *testing.T) {
+	srv, repo, temporal, runID := notifyFixture(t)
+	if err := repo.ReleaseRuns().SetBuildRef(context.Background(), runID, "410", "https://run/410"); err != nil {
+		t.Fatalf("SetBuildRef: %v", err)
+	}
+
+	// github_run_id 0 is normalized to "" (unverifiable, passed through)
+	// and an empty detail falls back to the handler's default line.
+	resp, err := srv.NotifyBuildComplete(ctxWithRoles(auth.RoleBuilder), notifyReq(runID, 0, true, ""))
+	if err != nil {
+		t.Fatalf("NotifyBuildComplete: %v", err)
+	}
+	if !resp.Signaled {
+		t.Fatalf("expected Signaled=true")
+	}
+	if len(temporal.signals) != 1 {
+		t.Fatalf("expected exactly 1 SignalWorkflow call, got %d", len(temporal.signals))
+	}
+	sig := temporal.signals[0]
+	if sig.WorkflowID != "release-workflow-1" || sig.RunID != "" || sig.SignalName != release.SignalBuildCompleted {
+		t.Fatalf("unexpected signal identity: %+v", sig)
+	}
+	payload, ok := sig.Arg.(release.BuildCompletedSignal)
+	if !ok {
+		t.Fatalf("expected BuildCompletedSignal payload, got %T", sig.Arg)
+	}
+	if payload.GitHubRunID != "" || !payload.Succeeded {
+		t.Fatalf("unexpected payload: %+v", payload)
+	}
+	if payload.Detail != "run 0 notified build completion via NotifyBuildComplete" {
+		t.Fatalf("expected default detail line, got %q", payload.Detail)
+	}
+
+	// An explicit github_run_id matching the persisted build_ref is
+	// threaded through, and an explicit detail wins over the default.
+	temporal.signals = nil
+	resp, err = srv.NotifyBuildComplete(ctxWithRoles(auth.RoleBuilder), notifyReq(runID, 410, false, "build job reported failure"))
+	if err != nil {
+		t.Fatalf("NotifyBuildComplete (explicit run id): %v", err)
+	}
+	if !resp.Signaled {
+		t.Fatalf("expected Signaled=true for the matching run id")
+	}
+	payload = temporal.signals[0].Arg.(release.BuildCompletedSignal)
+	if payload.GitHubRunID != "410" || payload.Succeeded || payload.Detail != "build job reported failure" {
+		t.Fatalf("unexpected payload: %+v", payload)
+	}
+}
+
+// TestNotifyBuildComplete_RunIDMismatch pins the stale-notification
+// defense: a notification claiming a DIFFERENT Actions run's outcome than
+// the one PersistBuildRef recorded must be rejected (FailedPrecondition),
+// not signaled.
+func TestNotifyBuildComplete_RunIDMismatch(t *testing.T) {
+	srv, repo, temporal, runID := notifyFixture(t)
+	if err := repo.ReleaseRuns().SetBuildRef(context.Background(), runID, "410", "https://run/410"); err != nil {
+		t.Fatalf("SetBuildRef: %v", err)
+	}
+
+	_, err := srv.NotifyBuildComplete(ctxWithRoles(auth.RoleBuilder), notifyReq(runID, 411, true, ""))
+	requireCode(t, err, codes.FailedPrecondition, "NotifyBuildComplete (run id mismatch)")
+	if len(temporal.signals) != 0 {
+		t.Fatalf("a mismatched notification must not reach SignalWorkflow, got %d calls", len(temporal.signals))
+	}
+}
+
+// TestNotifyBuildComplete_WorkflowNotFound pins the informational no-op:
+// when Temporal doesn't know the workflow execution (already completed, or
+// a stale id), the response is Signaled=false with NO error -- the notify
+// job must not treat that as a failure and PollRun's polling remains the
+// correctness fallback.
+func TestNotifyBuildComplete_WorkflowNotFound(t *testing.T) {
+	srv, _, temporal, runID := notifyFixture(t)
+	temporal.err = serviceerror.NewNotFound("workflow execution not found")
+
+	resp, err := srv.NotifyBuildComplete(ctxWithRoles(auth.RoleBuilder), notifyReq(runID, 42, true, ""))
+	if err != nil {
+		t.Fatalf("expected NotFound to be swallowed as Signaled=false, got %v", err)
+	}
+	if resp.Signaled {
+		t.Fatalf("expected Signaled=false when the workflow execution is unknown")
 	}
 }

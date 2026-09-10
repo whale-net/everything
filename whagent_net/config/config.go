@@ -73,6 +73,15 @@ type ModelDefinitionConfig struct {
 // whagent_net/migrate/seed's package doc comment for the version-diff
 // rule).
 //
+// Domain is required (Validate rejects a missing or empty value, issue
+// #2424 FR1): the one domain this agent definition belongs to. Every
+// tool_set entry below is understood to belong to that same domain, by
+// construction -- ToolServerRefConfig carries no domain field of its own,
+// and there is no "spans more than one domain" rule to enforce, because
+// there is only ever one Domain per definition to begin with. Domain is
+// the sole input whagent_net/grantkey.ForDomain may derive a
+// delegated-grant key from (FR4).
+//
 // Exactly one of Model and ModelDefinition is set (Validate enforces
 // this): Model names an OpenRouter model id directly, with OpenRouter's
 // default full-pool routing; ModelDefinition instead names a
@@ -81,6 +90,7 @@ type ModelDefinitionConfig struct {
 // entry, not from Model (which stays empty in that case).
 type AgentDefinitionConfig struct {
 	AgentID         string                `yaml:"agent_id"`
+	Domain          string                `yaml:"domain"`
 	Model           string                `yaml:"model"`
 	ModelDefinition string                `yaml:"model_definition"`
 	ToolSet         []ToolServerRefConfig `yaml:"tool_set"`
@@ -165,6 +175,15 @@ func Validate(modelDefs []ModelDefinitionConfig, agents []AgentDefinitionConfig)
 			return fmt.Errorf("agents[%d]: duplicate agent_id %q", i, a.AgentID)
 		}
 		seen[a.AgentID] = struct{}{}
+
+		// FR1 (issue #2424): domain is required on every entry -- it is
+		// the sole input whagent_net/grantkey.ForDomain may derive a
+		// delegated-grant key from, so an unset domain must fail here,
+		// as a config error, rather than surface later as a seeded row
+		// with no usable grant key.
+		if a.Domain == "" {
+			return fmt.Errorf("agent %q: domain is required", a.AgentID)
+		}
 
 		// Exactly one of model / model_definition -- see
 		// AgentDefinitionConfig's doc comment.

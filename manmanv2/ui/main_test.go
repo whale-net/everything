@@ -172,6 +172,7 @@ var manmanv2RouteTable = []string{
 	"/servers",
 	"/servers/6",
 	"/servers/6/update-address", // #1528 FR4: host connect-address edit
+	"/workshop",                 // #2362 M6: redesigned Workshop top-level page
 	"/workshop/library",
 	"/workshop/search",
 	"/workshop/addon",

@@ -7,9 +7,10 @@ import (
 )
 
 // Guards task #2276's Config Editor blade markup contract (FR13, the
-// Config-Editor half of FR10, NFR5, WD4, WD10): these tests pin what
-// #2269's Blade + BladeTabs render for this section, independent of the
-// handler wiring covered by handlers_config_editor_test.go.
+// Config-Editor half of FR10, NFR5, WD4, WD10) and task #2363's Volumes
+// tab (FR14, FR15): these tests pin what #2269's Blade + BladeTabs render
+// for this section, independent of the handler wiring covered by
+// handlers_config_editor_test.go / handlers_config_editor_volumes_test.go.
 
 func renderConfigEditor(t *testing.T, data ConfigEditorData) string {
 	t.Helper()
@@ -28,7 +29,7 @@ func baseConfigEditorData() ConfigEditorData {
 		Image:         "itzg/minecraft-server",
 		ArgsTemplate:  "--nogui",
 		EnvVars:       []ConfigEditorEnvVar{{Key: "MAX_PLAYERS", Value: "10"}},
-		Volumes:       []ConfigEditorVolume{{Name: "world", Description: "World data", ContainerPath: "/data", HostSubpath: "world", ReadOnly: true, VolumeType: "bind"}},
+		Volumes:       []ConfigEditorVolume{{VolumeID: 9, Name: "world", Description: "World data", ContainerPath: "/data", HostSubpath: "world", ReadOnly: true, VolumeType: "bind"}},
 		Dirty:         false,
 		ActiveTab:     "basics",
 		BackupLinkURL: "/games/1/configs/3",
@@ -69,24 +70,24 @@ func TestConfigEditor_Decision8_NoActionsTab(t *testing.T) {
 	}
 }
 
-// TestConfigEditor_VolumesReadOnly_AllSixFields guards WD4: all six
-// GameConfigVolume fields render for each volume row, plus the backup
-// link-out and the "editable here in M6" note.
-func TestConfigEditor_VolumesReadOnly_AllSixFields(t *testing.T) {
+// TestConfigEditor_Volumes_AllSixFieldsRender guards WD4's still-live half:
+// all six GameConfigVolume fields render for each volume row, plus the
+// backup link-out (NFR4, #2363: the M6 read-only note itself is gone --
+// see TestConfigEditor_Volumes_AssignControlWhenUnassigned below for what
+// replaced it).
+func TestConfigEditor_Volumes_AllSixFieldsRender(t *testing.T) {
 	body := renderConfigEditor(t, baseConfigEditorData())
 
-	for _, want := range []string{"world", "World data", "/data", "Yes", "bind"} {
+	for _, want := range []string{"world", "World data", "/data", "bind"} {
 		if !strings.Contains(body, want) {
 			t.Errorf("expected volume field %q to render, got %q", want, body)
 		}
 	}
-	if got := strings.Count(body, ">world<"); got != 1 {
-		// Name column renders "world" exactly once; HostSubpath also "world"
-		// but rendered without surrounding tags matching this exact pattern.
-		t.Logf("name cell count = %d (informational)", got)
+	if !strings.Contains(body, "Read-only") {
+		t.Errorf("expected the read-only flag to render, got %q", body)
 	}
-	if !strings.Contains(body, "editable here in M6") {
-		t.Errorf("expected the M6 note, got %q", body)
+	if strings.Contains(body, "editable here in M6") {
+		t.Errorf("expected the stale M5/M6 note to be gone (#2363), got %q", body)
 	}
 	if !strings.Contains(body, `href="/games/1/configs/3"`) {
 		t.Errorf("expected the backup link-out to BackupLinkURL, got %q", body)
@@ -96,30 +97,59 @@ func TestConfigEditor_VolumesReadOnly_AllSixFields(t *testing.T) {
 	}
 }
 
-// TestConfigEditor_VolumesReadOnly_NoWriteControls is WD4's negative
-// assertion: no add/edit/remove control and no inline backup-schedule
-// control render anywhere in the Volumes panel.
-func TestConfigEditor_VolumesReadOnly_NoWriteControls(t *testing.T) {
-	body := renderConfigEditor(t, baseConfigEditorData())
+// TestConfigEditor_Volumes_AssignControlWhenUnassigned guards FR14: a
+// volume with no Backup assignment renders an inline Assign control
+// (targeting the .../backup-config/assign route), not Edit/Remove.
+func TestConfigEditor_Volumes_AssignControlWhenUnassigned(t *testing.T) {
+	data := baseConfigEditorData()
+	data.Volumes[0].Backup = nil
+	body := renderConfigEditor(t, data)
 
-	volStart := strings.Index(body, `data-blade-tab-panel="volumes"`)
-	if volStart == -1 {
-		t.Fatalf("expected a volumes tab panel, got %q", body)
+	if !strings.Contains(body, "data-volume-backup-assign-form") {
+		t.Errorf("expected an assign form for an unassigned volume, got %q", body)
 	}
-	// The Volumes panel div is the last thing before the blade's shared
-	// <script> tag (which is not part of the panel's own markup, and whose
-	// comments/JS would otherwise false-match substrings like "Edit" inside
-	// "Config Editor" or "Editor blade") -- scope strictly to the panel.
-	scriptStart := strings.Index(body[volStart:], "<script")
-	if scriptStart == -1 {
-		t.Fatalf("expected a trailing <script> tag after the Volumes panel, got %q", body)
+	if !strings.Contains(body, `/games/1/configs/3/volumes/9/backup-config/assign`) {
+		t.Errorf("expected the assign form to post to the volume's assign route, got %q", body)
 	}
-	volumesPanel := body[volStart : volStart+scriptStart]
+	if strings.Contains(body, "data-volume-backup-edit-form") || strings.Contains(body, "data-volume-backup-remove-form") {
+		t.Errorf("expected no edit/remove controls for an unassigned volume, got %q", body)
+	}
+}
 
-	for _, unwanted := range []string{"<button", "<input", "<form", "btn-error", "Add Volume", ">Edit<", ">Remove<", ">Delete<", "Backup schedule", "schedule"} {
-		if strings.Contains(volumesPanel, unwanted) {
-			t.Errorf("expected no write control (%q) in the Volumes panel (WD4), got %q", unwanted, volumesPanel)
-		}
+// TestConfigEditor_Volumes_EditAndRemoveControlsWhenAssigned guards
+// FR14/FR15: a volume with a Backup assignment renders inline Edit and
+// Remove controls, seeded with the current assignment's values, not the
+// Assign control.
+func TestConfigEditor_Volumes_EditAndRemoveControlsWhenAssigned(t *testing.T) {
+	data := baseConfigEditorData()
+	data.Volumes[0].Backup = &ConfigEditorVolumeBackup{
+		BackupConfigID: 42,
+		CadenceMinutes: 1440,
+		BackupPath:     "saves",
+		Enabled:        true,
+	}
+	body := renderConfigEditor(t, data)
+
+	if !strings.Contains(body, "data-volume-backup-edit-form") {
+		t.Errorf("expected an edit form for an assigned volume, got %q", body)
+	}
+	if !strings.Contains(body, `/games/1/configs/3/volumes/9/backup-config/edit`) {
+		t.Errorf("expected the edit form to post to the volume's edit route, got %q", body)
+	}
+	if !strings.Contains(body, `value="saves"`) {
+		t.Errorf("expected the current backup path to seed the edit form, got %q", body)
+	}
+	if !strings.Contains(body, `value="42"`) {
+		t.Errorf("expected the backup_config_id to be carried in the edit form, got %q", body)
+	}
+	if !strings.Contains(body, "data-volume-backup-remove-form") {
+		t.Errorf("expected a remove form for an assigned volume, got %q", body)
+	}
+	if !strings.Contains(body, `/games/1/configs/3/volumes/9/backup-config/remove`) {
+		t.Errorf("expected the remove form to post to the volume's remove route, got %q", body)
+	}
+	if strings.Contains(body, "data-volume-backup-assign-form") {
+		t.Errorf("expected no assign control for an already-assigned volume, got %q", body)
 	}
 }
 
@@ -218,8 +248,7 @@ func TestConfigEditor_FR13_EmptyArgsTemplateRenders(t *testing.T) {
 }
 
 // TestConfigEditor_FR2_NoRawSGCInDisplayText guards FR2: no "SGC" or
-// "server game config" (case-insensitive) anywhere in the rendered blade,
-// including the Volumes M6 note.
+// "server game config" (case-insensitive) anywhere in the rendered blade.
 func TestConfigEditor_FR2_NoRawSGCInDisplayText(t *testing.T) {
 	body := renderConfigEditor(t, baseConfigEditorData())
 	lower := strings.ToLower(body)

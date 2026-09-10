@@ -50,6 +50,141 @@ func cacheEntryVerifiedLabel(lastVerifiedAt int64) string {
 	return "verified " + timeAgo(lastVerifiedAt)
 }
 
+// WorkshopCacheBladeData backs the Cache Blade rendered over the Workshop
+// top-level page (root plan #2359, task #2362 -- FR7, C35): the same
+// fleet-wide cache visibility as WorkshopCachePageData above, but as a
+// components.Blade fragment opened via hx-get from "/workshop" rather than
+// a full-page navigation to "/workshop/cache" (acceptance criterion 2 --
+// cache-backed install must be executable from "/workshop" with no
+// navigation away). AddonName is resolved by the handler the same
+// best-effort way handleWorkshopCache resolves it for the breadcrumb.
+type WorkshopCacheBladeData struct {
+	AddonID        int64
+	AddonName      string
+	Entries        []*manmanpb.WorkshopCacheEntry
+	VerifyState    string
+	VerifyServerID int64
+	// EvictError carries a just-failed evict's message back into the blade
+	// body (handleWorkshopCacheEvict's HX-Request branch) -- distinct from
+	// VerifyState/VerifyServerID, which only ever describe a verify
+	// dispatch outcome.
+	EvictError string
+}
+
+// workshopCacheBladeBodyID is the DOM id both the initial WorkshopCacheBlade
+// open and every subsequent verify/evict hx-post response target: verify
+// and evict swap only this inner div (hx-swap="outerHTML"), never the
+// surrounding components.Blade shell/script, so the Blade's scrim/Escape/
+// focus-trap mount (see blade.templ's doc comment) never re-runs on a
+// verify/evict round trip.
+const workshopCacheBladeBodyID = "workshop-cache-blade-body"
+
+// WorkshopCacheBlade is the Cache Blade shell, opened via hx-get to
+// "/workshop/cache-blade?addon_id=..." (hx-target="body"
+// hx-swap="beforeend", the same zero-pre-render pattern the Config Editor
+// blade uses -- see handleGameConfigEditorGet's doc comment) from the
+// Workshop top-level page's Cache section.
+templ WorkshopCacheBlade(data WorkshopCacheBladeData) {
+	@components.Blade(components.BladeData{
+		ID:    "workshop-cache-blade",
+		Title: "Cache: " + data.AddonName,
+	}) {
+		@WorkshopCacheBladeBody(data)
+	}
+}
+
+// WorkshopCacheBladeBody is the Blade's swappable inner content: the same
+// verify-outcome banners and cache-entries table as the full-page
+// WorkshopCache view, but with hx-post verify/evict forms that swap this
+// div in place (see workshopCacheBladeBodyID's doc comment) instead of the
+// plain-POST full-page-redirect forms WorkshopCache above uses -- exported
+// so handleWorkshopCacheVerify/handleWorkshopCacheEvict can render it
+// directly as an HX-Request response, without going through WorkshopCache's
+// full-page Layout wrapper.
+templ WorkshopCacheBladeBody(data WorkshopCacheBladeData) {
+	<div id={ workshopCacheBladeBodyID }>
+		if data.VerifyState == "dispatched" {
+			<div class="alert alert-success mb-4">
+				<span>Verify dispatched to server { fmt.Sprintf("%d", data.VerifyServerID) }. The up-to-date/changed outcome will appear here after the next reload.</span>
+			</div>
+		}
+		if data.VerifyState == "no_host_available" {
+			<div class="alert alert-info mb-4">
+				<span>No host currently holds a copy of this entry, so the verify could not be dispatched.</span>
+			</div>
+		}
+		if data.VerifyState == "error" {
+			<div class="alert alert-warning mb-4">
+				<span>Could not dispatch the verify request. Please try again.</span>
+			</div>
+		}
+		if data.EvictError != "" {
+			<div class="alert alert-warning mb-4">
+				<span>{ data.EvictError }</span>
+			</div>
+		}
+		<div class="bg-base-100 rounded-box border border-base-300 overflow-x-auto">
+			<table class="table">
+				<thead>
+					<tr>
+						<th>Content Address</th>
+						<th>Size</th>
+						<th>Created</th>
+						<th>Last Verified</th>
+						<th>Hosts</th>
+						<th></th>
+					</tr>
+				</thead>
+				<tbody>
+					for _, entry := range data.Entries {
+						<tr>
+							<td class="font-mono text-xs">{ entry.ContentVersion }</td>
+							<td>{ cacheEntrySize(entry.SizeBytes) }</td>
+							<td class="text-sm">{ timeAgo(entry.CreatedAt) } <span class="text-base-content/60">({ formatTime(entry.CreatedAt) })</span></td>
+							<td class="text-sm">{ cacheEntryVerifiedLabel(entry.LastVerifiedAt) }</td>
+							<td>
+								if len(entry.Hosts) == 0 {
+									<span class="text-xs text-base-content/60">No hosts reported</span>
+								}
+								for _, host := range entry.Hosts {
+									<div class="text-xs">
+										<span class="font-medium">{ host.ServerName }</span>
+										<span class="text-base-content/60">— last seen { timeAgo(host.LastSeenAt) }</span>
+									</div>
+								}
+							</td>
+							<td>
+								<div class="flex gap-2 items-center justify-end">
+									<form hx-post="/workshop/cache/verify" hx-target={ "#" + workshopCacheBladeBodyID } hx-swap="outerHTML">
+										<input type="hidden" name="addon_id" value={ fmt.Sprintf("%d", data.AddonID) }/>
+										<input type="hidden" name="cache_entry_id" value={ fmt.Sprintf("%d", entry.CacheEntryId) }/>
+										<button type="submit" class="btn btn-xs btn-outline">Verify now</button>
+									</form>
+									<div x-data="{ confirmEvict: false }" class="flex gap-2 items-center justify-end">
+										<button x-show="!confirmEvict" @click="confirmEvict = true" class="btn btn-error btn-xs">Evict</button>
+										<div x-show="confirmEvict" x-cloak class="flex gap-2 items-center">
+											<span class="text-xs text-error font-medium">Evict { entry.ContentVersion }?</span>
+											<form hx-post="/workshop/cache/evict" hx-target={ "#" + workshopCacheBladeBodyID } hx-swap="outerHTML" class="inline">
+												<input type="hidden" name="addon_id" value={ fmt.Sprintf("%d", data.AddonID) }/>
+												<input type="hidden" name="cache_entry_id" value={ fmt.Sprintf("%d", entry.CacheEntryId) }/>
+												<button type="submit" class="btn btn-error btn-xs">Yes, Evict</button>
+											</form>
+											<button @click="confirmEvict = false" class="btn btn-secondary btn-xs">Cancel</button>
+										</div>
+									</div>
+								</div>
+							</td>
+						</tr>
+					}
+				</tbody>
+			</table>
+			if len(data.Entries) == 0 {
+				<div class="text-center py-12 text-base-content/60">No cache entries for this addon</div>
+			}
+		</div>
+	</div>
+}
+
 templ WorkshopCache(data WorkshopCachePageData) {
 	@components.Layout(data.Layout) {
 		<div class="rounded-box p-6 md:p-8 mb-6 shadow-lg" style="background: linear-gradient(to bottom right, var(--color-primary), var(--color-secondary));">

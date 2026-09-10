@@ -23,8 +23,29 @@ type AppMetadata struct {
 	BazelTarget string `json:"bazel_target,omitempty"`
 }
 
-// FullName returns the canonical "domain-name" identifier.
-func (m AppMetadata) FullName() string { return m.Domain + "-" + m.Name }
+// FullName returns the canonical "domain-name" identifier: RepoName, exactly
+// as release.bzl (or discover_fast.go's mirror of the same formula) computed
+// it into the manifest, for any AppMetadata built from real Bazel discovery
+// (ListAllApps). This must never independently re-derive Domain+"-"+Name for
+// that case -- doing so is what let this method's own computation drift out
+// of sync with release.bzl's when #2343 changed the latter's formula without
+// changing this one, breaking image resolution for every app whose naming
+// didn't fit the new tolerance (#2385, #2404).
+//
+// Falls back to a naive concatenation when RepoName is empty. AppMetadataFromInputs
+// (below) -- the bazel-free path the App Registry worker's ResolvePlan
+// activity uses in production (tools/app_registry/worker/release/plan.go) --
+// now threads RepoName through from the App Registry's own record (App.
+// ImageRepository), so this fallback should no longer be hit there in
+// practice. It remains for callers with no such source available, chiefly
+// hand-built test fixtures -- do not remove it as dead code on that basis
+// alone.
+func (m AppMetadata) FullName() string {
+	if m.RepoName != "" {
+		return m.RepoName
+	}
+	return m.Domain + "-" + m.Name
+}
 
 // determineArtifactKind returns the ArtifactKind protobuf enum for an application.
 func determineArtifactKind(meta AppMetadata) pb.ArtifactKind {
@@ -144,19 +165,25 @@ func ListAllApps(bazel BazelRunner, _ FileSystem, workspaceRoot string) ([]AppMe
 // AppMetadataInput is one app's identity as supplied directly by a caller
 // that has already resolved its target list against a source of truth
 // other than `bazel query` (e.g. App Registry's own App rows) -- see
-// AppMetadataFromInputs.
+// AppMetadataFromInputs. RepoName is optional: a caller that already knows
+// the app's real repo name (e.g. worker/release/plan.go's ResolvePlan,
+// which has it via the App Registry's own App.ImageRepository) should
+// supply it, so FullName() reads the authoritative value instead of
+// falling back to a re-derived one. Empty is only expected from callers
+// with no such source (chiefly hand-built test fixtures).
 type AppMetadataInput struct {
-	Domain  string `json:"domain"`
-	Name    string `json:"name"`
-	AppType string `json:"app_type"`
+	Domain   string `json:"domain"`
+	Name     string `json:"name"`
+	AppType  string `json:"app_type"`
+	RepoName string `json:"repo_name,omitempty"`
 }
 
 // AppMetadataFromInputs builds []AppMetadata directly from inputs, with no
 // bazel query/cquery call -- the bazel-free counterpart to ListAllApps for a
 // caller (tools/app_registry/worker/release/plan.go's ResolvePlan) that
 // already has an explicit, pre-validated target list and only needs
-// Domain/Name/AppType (FullName() and determineArtifactKind's only inputs
-// for an explicit --apps list -- see this file's ListAllApps/plan.go's
+// Domain/Name/AppType/RepoName (FullName() and determineArtifactKind's only
+// inputs for an explicit --apps list -- see this file's ListAllApps/plan.go's
 // assignVersions). BazelTarget is left empty: it is only consumed by
 // buildPlanResult's GHA matrix `bazel_target` field and the OpenAPI-spec
 // plumbing, neither of which ResolvePlan's shell-out reads back (it only
@@ -165,9 +192,10 @@ func AppMetadataFromInputs(inputs []AppMetadataInput) []AppMetadata {
 	out := make([]AppMetadata, 0, len(inputs))
 	for _, in := range inputs {
 		out = append(out, AppMetadata{AppManifest: &appmetapb.AppManifest{
-			Domain:  in.Domain,
-			Name:    in.Name,
-			AppType: in.AppType,
+			Domain:   in.Domain,
+			Name:     in.Name,
+			AppType:  in.AppType,
+			RepoName: in.RepoName,
 		}})
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].FullName() < out[j].FullName() })

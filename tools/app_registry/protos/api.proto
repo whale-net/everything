@@ -162,8 +162,9 @@ service PromotionRegistry {
 // triggering a release builds/publishes artifacts, it does not deploy to an
 // environment, so it does not belong on PromotionRegistry's environment-
 // scoped surface.
-// Role: promoter (writes -- same check Promote already requires, FR4/NFR5,
-// no new role), any (reads).
+// Role: promoter (TriggerRelease -- same check Promote already requires,
+// FR4/NFR5, no new role), builder (NotifyBuildComplete -- the build job's
+// own credential reports its run's terminal state), any (reads).
 // ============================================================================
 service ReleaseRegistry {
   // Dedup-checks the batch against any already-non-terminal release
@@ -180,6 +181,18 @@ service ReleaseRegistry {
   // most-recent-first, paginated. See ListReleaseAttemptsRequest's doc
   // comment for how this differs from ListReleases.
   rpc ListReleaseAttempts(ListReleaseAttemptsRequest) returns (ListReleaseAttemptsResponse);
+
+  // Builder-authenticated build-completion notification (the signal half
+  // of the release pipeline's notify-vs-poll split): the release-v2 GHA
+  // build job (via release_helper notify-build, holding its
+  // app-registry-builder-* client credentials) reports its run's terminal
+  // state so the Temporal ReleaseWorkflow can proceed immediately instead
+  // of waiting for PollBuild's polling loop. Polling remains the fallback
+  // for a notification that never arrives. Role:
+  // app-registry-builder (server/auth.RoleBuilder) -- the same builder
+  // role every other build-job-side write (AssertApps, RecordBuild,
+  // BeginPublishBatch, ...) requires, no new role.
+  rpc NotifyBuildComplete(NotifyBuildCompleteRequest) returns (NotifyBuildCompleteResponse);
 }
 
 // ============================================================================

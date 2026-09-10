@@ -61,8 +61,8 @@ func TestMigration041_AppliesOnTopOfFullHistoryAndDefaultsExistingRows(t *testin
 	if err != nil {
 		t.Fatalf("LatestVersion: %v", err)
 	}
-	if latest != 41 {
-		t.Fatalf("expected the latest migration source version to be 41, got %d -- update this test if a newer migration has since landed", latest)
+	if latest != 42 {
+		t.Fatalf("expected the latest migration source version to be 42, got %d -- update this test if a newer migration has since landed", latest)
 	}
 
 	// Apply every migration up through 040, seed a servers row *before* 041
@@ -79,7 +79,7 @@ func TestMigration041_AppliesOnTopOfFullHistoryAndDefaultsExistingRows(t *testin
 	}
 
 	if err := runner.Up(); err != nil {
-		t.Fatalf("Up (applying migration 041): %v", err)
+		t.Fatalf("Up (applying migration 041 and every later migration): %v", err)
 	}
 
 	version, dirty, err := runner.Version()
@@ -89,8 +89,8 @@ func TestMigration041_AppliesOnTopOfFullHistoryAndDefaultsExistingRows(t *testin
 	if dirty {
 		t.Fatalf("expected clean state after Up, got dirty")
 	}
-	if version != 41 {
-		t.Fatalf("expected version 41 after Up, got %d", version)
+	if version != 42 {
+		t.Fatalf("expected version 42 after Up, got %d", version)
 	}
 
 	var drainState string

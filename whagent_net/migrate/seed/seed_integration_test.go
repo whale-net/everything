@@ -98,6 +98,7 @@ func newTestCatalog(t *testing.T, served []string) *llm.Catalog {
 func agent(id, model string) config.AgentDefinitionConfig {
 	return config.AgentDefinitionConfig{
 		AgentID: id,
+		Domain:  "test-domain",
 		Model:   model,
 		ToolSet: []config.ToolServerRefConfig{
 			{ServerURL: "http://mcp.example.com:8081/", AllowedTools: nil},
@@ -114,6 +115,7 @@ func agent(id, model string) config.AgentDefinitionConfig {
 // the exact inverse of a row seeded with a direct model.
 type definitionRow struct {
 	Version           int
+	Domain            string
 	Model             *string
 	ModelDefinitionID *uuid.UUID
 	MaxTurns          int
@@ -124,7 +126,7 @@ type definitionRow struct {
 func readVersions(t *testing.T, ctx context.Context, db *sql.DB, agentID string) []definitionRow {
 	t.Helper()
 	rows, err := db.QueryContext(ctx, `
-		SELECT version, model, model_definition_id, max_turns, max_cost_usd, required_role
+		SELECT version, domain, model, model_definition_id, max_turns, max_cost_usd, required_role
 		FROM agent_definition WHERE agent_id = $1 ORDER BY version
 	`, agentID)
 	require.NoError(t, err)
@@ -133,7 +135,7 @@ func readVersions(t *testing.T, ctx context.Context, db *sql.DB, agentID string)
 	var out []definitionRow
 	for rows.Next() {
 		var r definitionRow
-		require.NoError(t, rows.Scan(&r.Version, &r.Model, &r.ModelDefinitionID, &r.MaxTurns, &r.MaxCostUSD, &r.RequiredRole))
+		require.NoError(t, rows.Scan(&r.Version, &r.Domain, &r.Model, &r.ModelDefinitionID, &r.MaxTurns, &r.MaxCostUSD, &r.RequiredRole))
 		out = append(out, r)
 	}
 	require.NoError(t, rows.Err())
@@ -183,6 +185,55 @@ func TestSeedAgents_CreatesDefinitionRows(t *testing.T) {
 	rowsB := readVersions(t, ctx, db, "agent-b")
 	require.Len(t, rowsB, 1)
 	assert.Equal(t, 1, rowsB[0].Version)
+}
+
+// TestSeedAgents_PopulatesDomain proves seeding from config populates
+// agent_definition.domain (issue #2424 FR1) -- the sole input
+// whagent_net/grantkey.ForDomain may derive a delegated-grant key from.
+func TestSeedAgents_PopulatesDomain(t *testing.T) {
+	ctx := context.Background()
+	db, _ := newTestDB(t)
+	catalog := newTestCatalog(t, []string{"anthropic/claude-3.5-sonnet"})
+
+	a := agent("agent-a", "anthropic/claude-3.5-sonnet")
+	a.Domain = "audience_score_system"
+	require.NoError(t, seed.SeedAgents(ctx, db, nil, []config.AgentDefinitionConfig{a}, catalog))
+
+	rows := readVersions(t, ctx, db, "agent-a")
+	require.Len(t, rows, 1)
+	assert.Equal(t, "audience_score_system", rows[0].Domain)
+}
+
+// TestSeedAgents_RealAgentsYAML_MigrationBackfillLeavesNoNullOrEmptyDomain
+// seeds the real embedded config/agents.yaml (config.Load, not the
+// agent() test helper) against a freshly migrated database and proves
+// migration 007's backfill plus this seeding path leave zero
+// agent_definition rows with a NULL or empty-string domain.
+func TestSeedAgents_RealAgentsYAML_MigrationBackfillLeavesNoNullOrEmptyDomain(t *testing.T) {
+	ctx := context.Background()
+	db, _ := newTestDB(t)
+
+	modelDefs, agents, err := config.Load()
+	require.NoError(t, err)
+
+	served := make([]string, 0, len(agents))
+	for _, a := range agents {
+		if a.Model != "" {
+			served = append(served, a.Model)
+		}
+	}
+	for _, md := range modelDefs {
+		served = append(served, md.Model)
+	}
+	catalog := newTestCatalog(t, served)
+
+	require.NoError(t, seed.SeedAgents(ctx, db, modelDefs, agents, catalog))
+
+	var badCount int
+	require.NoError(t, db.QueryRowContext(ctx, `
+		SELECT count(*) FROM agent_definition WHERE domain IS NULL OR domain = ''
+	`).Scan(&badCount))
+	assert.Zero(t, badCount, "every agent_definition row (migration backfill + real agents.yaml seeding) must carry a non-empty domain")
 }
 
 // TestSeedAgents_ReRunIsIdempotent proves re-running SeedAgents with an

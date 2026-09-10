@@ -95,6 +95,39 @@ func TestActivities_ResolvePlan_WorkspaceRootUnset_UsesScratchDir(t *testing.T) 
 	require.NotContains(t, joined, "--apps=demo-hello-go")
 }
 
+// TestActivities_ResolvePlan_PassesRepoNameFromRegistry is the direct
+// regression test for the fix threading App.ImageRepository's repo_name
+// segment through to --apps-metadata: before this, appMetadataInput never
+// carried RepoName, leaving release_helper_go's AppMetadata.FullName() to
+// re-derive Domain+"-"+Name itself -- exactly the duplication that let
+// #2385/#2404 happen in the first place. leaflab-api is deliberately the
+// domain-prefixed case (RepoName "leaflab-api" under domain "leaflab", the
+// same shape #2404 broke) to prove the real repo_name flows through
+// unmodified rather than being recomputed.
+func TestActivities_ResolvePlan_PassesRepoNameFromRegistry(t *testing.T) {
+	repo := newTestRegistry(t)
+	_, err := repo.Reconcile(context.Background(), []*appmetapb.AppManifest{
+		{
+			Domain: "leaflab", Name: "api", AppType: "internal-api",
+			DeployUnit: appmetapb.DeployUnit_DEPLOY_UNIT_CHART,
+			Registry:   "ghcr.io", Organization: "whale-net", RepoName: "leaflab-api",
+		},
+	}, nil, repository.ReconcileSource{DiscoveredAt: 1}, false)
+	require.NoError(t, err)
+
+	bin, argsFile := writeFakePlanBinary(t, `{"versions":{"leaflab-api":"v1.0.0"}}`)
+	a := &Activities{Registry: repo, PlanBinaryPath: bin}
+
+	_, err = runResolvePlan(t, a, []ReleaseTarget{
+		{OwnerFullName: "leaflab-api", Kind: repository.ArtifactKindImage},
+	})
+	require.NoError(t, err)
+
+	args := readFakeArgs(t, argsFile)
+	joined := strings.Join(args, " ")
+	require.Contains(t, joined, `"repo_name":"leaflab-api"`, "must pass the App Registry's real repo_name through, not leave it to be re-derived")
+}
+
 // TestActivities_ResolvePlan_ChartTarget_LooksUpChartMetadata mirrors the
 // image case for a chart target.
 func TestActivities_ResolvePlan_ChartTarget_LooksUpChartMetadata(t *testing.T) {
