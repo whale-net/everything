@@ -475,14 +475,14 @@ Each task issue gets its own branch and, once pushed, its own small reviewable P
 3. **Creating a task's branch and its worktree** (only on the first phase dispatched for that task, after the lookup above turns up nothing — later phases reuse the branch/worktree already created), entirely inside a dedicated worktree — this never touches the shared checkout:
    ```sh
    git fetch origin main
-   git worktree add .claude/worktrees/<task-issue-number> -b pm-<root-issue-number>/<task-issue-number>-<slug> <parent>
+   git worktree add .claude/worktrees/<task-issue-number> -b pm-<root-issue-number>/<task-issue-number>-<slug> <fork-point>
    ```
-   `<parent>` is:
-   - `main`, if none of the task's `Depends on:` issues have an open branch yet.
-   - That dependency's branch (`pm-<root-issue-number>/<dep-issue-number>-<dep-slug>`), if exactly one does.
+   `<fork-point>` is:
+   - `origin/main`, if none of the task's `Depends on:` issues have an open branch yet — a task targeting trunk always forks off the freshly fetched `origin/main`, never the shared checkout's local `main` ref: the fetch above only advances `origin/main`, and local `main` drifts out of date as soon as anything else lands on trunk (another plan's continuous merge, a human push), so a branch forked off it starts behind trunk and spends its life resolving conflicts that don't exist against the real base. That task's `<parent>` for step 5's PR base is `main` — a PR base is always a branch name, never an `origin/<name>` ref.
+   - That dependency's branch (`pm-<root-issue-number>/<dep-issue-number>-<dep-slug>`), if exactly one does — here `<fork-point>` and `<parent>` are the same branch.
    - Any one dependency's branch, if more than one does — then also pull in the rest, inside the new worktree, before dispatching the worker: `git -C .claude/worktrees/<task-issue-number> merge --no-edit pm-<root-issue-number>/<other-dep-issue-number>-<other-dep-slug>` for each additional dependency. If this merge conflicts, resolve it per the division of responsibility above before dispatching the worker — an unresolved conflict must never be handed to a worker to sort out.
 
-   `git worktree add -b <branch> <path> <parent>` creates the branch and its dedicated working directory in one step. Unlike checking out `<parent>` in the shared checkout first (the old approach), this never leaves the shared checkout sitting on a task branch mid-operation — so two candidates' branches can be created concurrently without racing each other, and a crash mid-creation leaves the shared checkout untouched. Task branches aren't pushed or given a PR at creation time; `mergepush` is what pushes each one and opens its PR, in step 5, once it's actually ready to integrate.
+   `git worktree add -b <branch> <path> <fork-point>` creates the branch and its dedicated working directory in one step. Unlike checking out `<fork-point>` in the shared checkout first (the old approach), this never leaves the shared checkout sitting on a task branch mid-operation — so two candidates' branches can be created concurrently without racing each other, and a crash mid-creation leaves the shared checkout untouched. Task branches aren't pushed or given a PR at creation time; `mergepush` is what pushes each one and opens its PR, in step 5, once it's actually ready to integrate.
 
 4. **Per-phase commits** happen inside the worktree exactly as described in § Worker lifecycle below (`scaffold:`, `feat:`, `test:` commits on the task's own branch).
 
