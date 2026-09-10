@@ -86,15 +86,16 @@ func (h *HardwareAddress) muxHops() []MuxHop {
 // name/unit — preserving sensor_id (and thus reading history) across renames.
 // Falls back to the UNIQUE(board_id, name) upsert.
 //
-// Returns the sensor_id and current region_id (nil if unset).
-func (r *Repository) UpsertSensor(ctx context.Context, boardID, sensorTypeID int64, name, unit string, hw *HardwareAddress) (int64, *int64, error) {
+// Returns the sensor_id. It never writes placement and does not return
+// region: readings resolve region_id from the sensor row itself at insert
+// time (see InsertReading), so the manifest path carries no region data.
+func (r *Repository) UpsertSensor(ctx context.Context, boardID, sensorTypeID int64, name, unit string, hw *HardwareAddress) (int64, error) {
 	if hw != nil && hw.I2CAddress > 0 {
 		muxJSON, err := json.Marshal(hw.muxHops())
 		if err != nil {
-			return 0, nil, fmt.Errorf("marshal mux_path: %w", err)
+			return 0, fmt.Errorf("marshal mux_path: %w", err)
 		}
 		var sensorID int64
-		var regionID *int64
 		err = r.db.QueryRow(ctx, `
 			UPDATE sensor
 			SET name = $3, unit = $5
@@ -102,13 +103,13 @@ func (r *Repository) UpsertSensor(ctx context.Context, boardID, sensorTypeID int
 			  AND sensor_type_id = $4
 			  AND i2c_address    = $2
 			  AND mux_path       = $6::jsonb
-			RETURNING sensor_id, region_id
-		`, boardID, hw.I2CAddress, name, sensorTypeID, unit, muxJSON).Scan(&sensorID, &regionID)
+			RETURNING sensor_id
+		`, boardID, hw.I2CAddress, name, sensorTypeID, unit, muxJSON).Scan(&sensorID)
 		if err == nil {
-			return sensorID, regionID, nil // found by hardware address
+			return sensorID, nil // found by hardware address
 		}
 		if !errors.Is(err, pgx.ErrNoRows) {
-			return 0, nil, fmt.Errorf("hw-address lookup for sensor %q on board %d: %w", name, boardID, err)
+			return 0, fmt.Errorf("hw-address lookup for sensor %q on board %d: %w", name, boardID, err)
 		}
 		// ErrNoRows: no existing row for this hw address — fall through to name upsert.
 	}
@@ -121,11 +122,10 @@ func (r *Repository) UpsertSensor(ctx context.Context, boardID, sensorTypeID int
 		var err error
 		muxJSON, err = json.Marshal(hw.muxHops())
 		if err != nil {
-			return 0, nil, fmt.Errorf("marshal mux_path: %w", err)
+			return 0, fmt.Errorf("marshal mux_path: %w", err)
 		}
 	}
 	var sensorID int64
-	var regionID *int64
 	err := r.db.QueryRow(ctx, `
 		INSERT INTO sensor (board_id, sensor_type_id, name, unit, i2c_address, mux_path, registered_at)
 		VALUES ($1, $2, $3, $4, $5, $6::jsonb, NOW())
@@ -137,12 +137,12 @@ func (r *Repository) UpsertSensor(ctx context.Context, boardID, sensorTypeID int
 			        WHEN EXCLUDED.i2c_address IS NOT NULL THEN EXCLUDED.mux_path
 			        ELSE sensor.mux_path
 			    END
-		RETURNING sensor_id, region_id
-	`, boardID, sensorTypeID, name, unit, i2cAddr, muxJSON).Scan(&sensorID, &regionID)
+		RETURNING sensor_id
+	`, boardID, sensorTypeID, name, unit, i2cAddr, muxJSON).Scan(&sensorID)
 	if err != nil {
-		return 0, nil, fmt.Errorf("upsert sensor %q on board %d: %w", name, boardID, err)
+		return 0, fmt.Errorf("upsert sensor %q on board %d: %w", name, boardID, err)
 	}
-	return sensorID, regionID, nil
+	return sensorID, nil
 }
 
 // UpsertSensorLabel records a name in sensor_name_history.
@@ -179,15 +179,17 @@ func (r *Repository) UpsertSensorLabel(ctx context.Context, sensorID int64, name
 }
 
 // GetSensor returns the SensorInfo for a specific device+sensor name, or
-// (zero, false) if not found. Used for cache-miss recovery.
+// (zero, false) if not found. Used for cache-miss recovery. Region is not
+// part of the result: readings resolve it from the sensor row at insert
+// time (see InsertReading).
 func (r *Repository) GetSensor(ctx context.Context, deviceID, sensorName string) (SensorInfo, bool, error) {
 	var info SensorInfo
 	err := r.db.QueryRow(ctx, `
-		SELECT s.sensor_id, s.region_id
+		SELECT s.sensor_id
 		FROM sensor s
 		JOIN board b ON b.board_id = s.board_id
 		WHERE b.device_id = $1 AND s.name = $2
-	`, deviceID, sensorName).Scan(&info.SensorID, &info.RegionID)
+	`, deviceID, sensorName).Scan(&info.SensorID)
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			return SensorInfo{}, false, nil
@@ -201,7 +203,7 @@ func (r *Repository) GetSensor(ctx context.Context, deviceID, sensorName string)
 // returns them as a map of device_id → sensor_name → SensorInfo.
 func (r *Repository) LoadSensorCache(ctx context.Context) (map[string]map[string]SensorInfo, error) {
 	rows, err := r.db.Query(ctx, `
-		SELECT b.device_id, s.name, s.sensor_id, s.region_id
+		SELECT b.device_id, s.name, s.sensor_id
 		FROM sensor s
 		JOIN board b ON b.board_id = s.board_id
 	`)
@@ -214,7 +216,7 @@ func (r *Repository) LoadSensorCache(ctx context.Context) (map[string]map[string
 	for rows.Next() {
 		var deviceID, sensorName string
 		var info SensorInfo
-		if err := rows.Scan(&deviceID, &sensorName, &info.SensorID, &info.RegionID); err != nil {
+		if err := rows.Scan(&deviceID, &sensorName, &info.SensorID); err != nil {
 			return nil, fmt.Errorf("scan sensor row: %w", err)
 		}
 		if out[deviceID] == nil {
@@ -286,96 +288,6 @@ func (r *Repository) UpsertSensorHWHistory(ctx context.Context, sensorID int64, 
 		INSERT INTO sensor_hw_history (sensor_id, mux_path) VALUES ($1, $2::jsonb)
 	`, sensorID, muxJSON); err != nil {
 		return fmt.Errorf("insert hw history for sensor %d: %w", sensorID, err)
-	}
-	return nil
-}
-
-// ApplyConfigRegions applies region_id assignments from an accepted config.
-// For each SensorConfig entry with region_id > 0, finds the matching sensor
-// by (board_id, i2c_address, mux_path), updates sensor.region_id, and records
-// the change in sensor_region_history (SCD-2: close old open row, insert new).
-func (r *Repository) ApplyConfigRegions(ctx context.Context, boardID, version int64) error {
-	var configJSON []byte
-	err := r.db.QueryRow(ctx, `
-		SELECT config_json FROM device_config WHERE board_id = $1 AND version = $2
-	`, boardID, version).Scan(&configJSON)
-	if err != nil {
-		return fmt.Errorf("get config for region apply board=%d v=%d: %w", boardID, version, err)
-	}
-
-	var cfg configpb.DeviceConfig
-	if err := protojson.Unmarshal(configJSON, &cfg); err != nil {
-		return fmt.Errorf("unmarshal config for region apply: %w", err)
-	}
-
-	for _, sc := range cfg.Sensors {
-		if sc.RegionId == 0 {
-			continue
-		}
-		hops := make([]MuxHop, len(sc.MuxPath))
-		for i, hop := range sc.MuxPath {
-			hops[i] = MuxHop{MuxAddress: hop.MuxAddress, MuxChannel: hop.MuxChannel}
-		}
-		muxJSON, err := json.Marshal(hops)
-		if err != nil {
-			return fmt.Errorf("marshal mux_path for region apply: %w", err)
-		}
-
-		newRegionID := int64(sc.RegionId)
-
-		// Read current assignment before updating so we can detect changes.
-		// For multi-virtual chips (SHT3x, CCS811) the same i2c_address+mux_path
-		// can map to multiple sensor rows with different sensor_type_id — include
-		// the sensor type in the lookup to disambiguate.
-		var sensorID int64
-		var oldRegionID *int64
-		typeName := sensorTypeNameFromConfig(sc.SensorType)
-		var lookupErr error
-		if typeName != "" {
-			lookupErr = r.db.QueryRow(ctx, `
-				SELECT s.sensor_id, s.region_id FROM sensor s
-				JOIN sensor_type st ON st.sensor_type_id = s.sensor_type_id
-				WHERE s.board_id = $1 AND s.i2c_address = $2 AND s.mux_path = $3::jsonb
-				  AND st.name = $4
-			`, boardID, sc.I2CAddress, muxJSON, typeName).Scan(&sensorID, &oldRegionID)
-		} else {
-			lookupErr = r.db.QueryRow(ctx, `
-				SELECT sensor_id, region_id FROM sensor
-				WHERE board_id = $1 AND i2c_address = $2 AND mux_path = $3::jsonb
-			`, boardID, sc.I2CAddress, muxJSON).Scan(&sensorID, &oldRegionID)
-		}
-		if errors.Is(lookupErr, pgx.ErrNoRows) {
-			continue // sensor not yet registered — skip silently
-		}
-		if lookupErr != nil {
-			return fmt.Errorf("find sensor for region apply i2c=0x%02x board=%d: %w", sc.I2CAddress, boardID, lookupErr)
-		}
-
-		// Skip if region is unchanged.
-		if oldRegionID != nil && *oldRegionID == newRegionID {
-			continue
-		}
-
-		if _, err := r.db.Exec(ctx, `
-			UPDATE sensor SET region_id = $2 WHERE sensor_id = $1
-		`, sensorID, newRegionID); err != nil {
-			return fmt.Errorf("set region for sensor %d: %w", sensorID, err)
-		}
-
-		// Close any open history row for this sensor.
-		if _, err := r.db.Exec(ctx, `
-			UPDATE sensor_region_history SET valid_to = NOW()
-			WHERE sensor_id = $1 AND valid_to IS NULL
-		`, sensorID); err != nil {
-			return fmt.Errorf("close region history for sensor %d: %w", sensorID, err)
-		}
-
-		// Record the new assignment.
-		if _, err := r.db.Exec(ctx, `
-			INSERT INTO sensor_region_history (sensor_id, region_id) VALUES ($1, $2)
-		`, sensorID, newRegionID); err != nil {
-			return fmt.Errorf("insert region history for sensor %d: %w", sensorID, err)
-		}
 	}
 	return nil
 }
@@ -475,26 +387,33 @@ func (r *Repository) SetSensorChipID(ctx context.Context, sensorID int64, chipMo
 	return nil
 }
 
-// sensorTypeNameFromConfig converts a proto SensorType to the sensor_type.name
-// used in the DB. Returns "" for UNKNOWN (single-virtual chips like BH1750).
-func sensorTypeNameFromConfig(t firmwarepb.SensorType) string {
-	raw := t.String()
-	name, ok := strings.CutPrefix(raw, "SENSOR_TYPE_")
-	if !ok || name == "UNKNOWN" {
-		return ""
-	}
-	return strings.ToLower(name)
-}
-
 // InsertReading writes a sensor_reading row.
 // configVersion is nil when no config has been accepted for this device yet.
-func (r *Repository) InsertReading(ctx context.Context, sensorID int64, regionID *int64, value float64, valid bool, uptimeS uint32, recordedAt time.Time, configVersion *int64) error {
-	_, err := r.db.Exec(ctx, `
+//
+// FR8/FR9: the reading's region_id is resolved from sensor.region_id inside
+// this same INSERT ... SELECT -- the sensor row's *current* placement in
+// Postgres -- rather than from a manifest-time cache entry, so a
+// leaflab-api PlaceSensor move attributes every subsequent reading to the
+// new region immediately, with no board reboot or config ack in between.
+// Readings written before the move keep the region they were stamped with
+// (snapshot at insert). The lookup rides the sensor's primary key, so it
+// adds no extra round trip to the write.
+func (r *Repository) InsertReading(ctx context.Context, sensorID int64, value float64, valid bool, uptimeS uint32, recordedAt time.Time, configVersion *int64) error {
+	tag, err := r.db.Exec(ctx, `
 		INSERT INTO sensor_reading (sensor_id, region_id, value, valid, uptime_s, recorded_at, config_version)
-		VALUES ($1, $2, $3, $4, $5, $6, $7)
-	`, sensorID, regionID, value, valid, uptimeS, recordedAt, configVersion)
+		SELECT $1, s.region_id, $2, $3, $4, $5, $6
+		FROM sensor s
+		WHERE s.sensor_id = $1
+	`, sensorID, value, valid, uptimeS, recordedAt, configVersion)
 	if err != nil {
 		return fmt.Errorf("insert reading for sensor %d: %w", sensorID, err)
+	}
+	// The SELECT matched no sensor row, so nothing was inserted. Sensors are
+	// never deleted (ON DELETE RESTRICT everywhere, no delete path), so this
+	// means the cached sensor_id referred to a row that does not exist --
+	// fail loudly rather than silently dropping the reading.
+	if tag.RowsAffected() == 0 {
+		return fmt.Errorf("insert reading for sensor %d: sensor row not found (stale cache entry?)", sensorID)
 	}
 	return nil
 }
@@ -573,10 +492,11 @@ func (r *Repository) ListSensorInventoryForBoard(ctx context.Context, boardID in
 	return inventory, rows.Err()
 }
 
-// sensorTypeFromDBName is the inverse of sensorTypeNameFromConfig -- mirrors
-// leaflab/api/repository.go's own sensorTypeFromName exactly, so
-// ListSensorInventoryForBoard resolves the same firmwarepb.SensorType value
-// leaflab-api's copy would for the same sensor_type.name row.
+// sensorTypeFromDBName converts a sensor_type.name DB value to its
+// firmwarepb.SensorType -- mirrors leaflab/api/repository.go's own
+// sensorTypeFromName exactly, so ListSensorInventoryForBoard resolves the
+// same firmwarepb.SensorType value leaflab-api's copy would for the same
+// sensor_type.name row.
 func sensorTypeFromDBName(name string) firmwarepb.SensorType {
 	v, ok := firmwarepb.SensorType_value["SENSOR_TYPE_"+strings.ToUpper(name)]
 	if !ok {

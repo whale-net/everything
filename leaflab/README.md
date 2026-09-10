@@ -155,7 +155,7 @@ erDiagram
 
 Key design decisions:
 - `sensor` is a stable dimension anchor — rename via config closes the old `sensor_name_history` row, opens new; `sensor_id` and reading history are unchanged
-- `sensor.region_id` is a current-value cache; `sensor_region_history` records every assignment (SCD-2, `valid_from`/`valid_to`)
+- `sensor.region_id` is a current-value cache; `sensor_region_history` records every assignment (SCD-2, `valid_from`/`valid_to`). Both are written only by `leaflab-api`'s `PlaceSensor` RPC — the device-config ack path never writes placement
 - `sensor_reading.region_id` is snapshotted at insert so historical location is preserved when sensors move
 - `sensor_reading.config_version` records which `DeviceConfig` was active at write time
 - `sensor.mux_path` is JSONB supporting arbitrary mux cascade depth

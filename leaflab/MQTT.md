@@ -132,7 +132,7 @@ on routing key parts:
 | `leaflab.<device>.manifest` | decode `DeviceManifest`, upsert board + sensors |
 | `leaflab.<device>.sensor.<name>` | decode `SensorReading`, write to TimescaleDB |
 | `leaflab.<device>.config` | decode `DeviceConfig`, persist JSONB to `device_config` |
-| `leaflab.<device>.config.ack` | decode `DeviceConfigAck`, mark accepted, apply regions |
+| `leaflab.<device>.config.ack` | decode `DeviceConfigAck`, mark accepted, update config version cache (placement is never written from the ack — `PlaceSensor` is the sole placement writer) |
 
 ## Corrective config push (FR9 / NFR4)
 

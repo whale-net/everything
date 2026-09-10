@@ -46,6 +46,15 @@ service LeafLabAPI {
   // Rename a sensor on a board the calling user owns (FR4).
   rpc RenameSensor(RenameSensorRequest) returns (RenameSensorResponse);
 
+  // Place a sensor in a region (FR7): assigns a placement (whether or not
+  // the sensor had one) or moves it. An ordinary Postgres write -- never
+  // gated on the board being online or acknowledging a config (LB2). Sole
+  // writer of sensor.region_id / sensor_region_history (NFR4): the
+  // device-config ack path never writes placement, so the placement change
+  // is visible to subsequent readings immediately, with no device round
+  // trip.
+  rpc PlaceSensor(PlaceSensorRequest) returns (PlaceSensorResponse);
+
   // Admin: list every currently-owned board and its current owner (FR11).
   rpc ListOwnedBoards(ListOwnedBoardsRequest) returns (ListOwnedBoardsResponse);
 
@@ -277,6 +286,16 @@ message RenameSensorRequest {
 }
 
 message RenameSensorResponse {}
+
+message PlaceSensorRequest {
+  int64 sensor_id = 1;
+  // Region to place the sensor in. Required (> 0); a region_id that does
+  // not exist is codes.NotFound. Unassigning (clearing a placement) is not
+  // part of this RPC.
+  int64 region_id = 2;
+}
+
+message PlaceSensorResponse {}
 
 // OwnedBoard is one row of the admin ownership list (FR11): a board's
 // identity plus its current owner.
