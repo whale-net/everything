@@ -460,6 +460,15 @@ func (app *App) setupRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("/sgc/remove-library", app.auth.RequireAuthFunc(app.auth.WithAccessToken(app.handleSGCRemoveLibrary)))
 	mux.HandleFunc("/sgc/api/available-libraries", app.auth.RequireAuthFunc(app.auth.WithAccessToken(app.handleSGCAvailableLibraries)))
 
+	// Protected routes - Deployment Settings blade lazy fetch (task
+	// #2274, FR11/FR2). Deliberately a separate top-level prefix, not
+	// nested under /sgc/: this URL is embedded directly in the Games
+	// page's initial render (the blade's placeholder,
+	// pages.DeploymentSettingsEnvPlaceholder's hx-get), and FR2 forbids
+	// "SGC" appearing in any display text that page renders -- including
+	// a URL a user could read in devtools.
+	mux.HandleFunc("/deployment-settings/", app.auth.RequireAuthFunc(app.auth.WithAccessToken(app.handleDeploymentSettingsRoutes)))
+
 	// Backup config management
 	mux.HandleFunc("/backup-configs/create", app.auth.RequireAuthFunc(app.auth.WithAccessToken(app.handleBackupConfigCreate)))
 	mux.HandleFunc("/backup-configs/", app.auth.RequireAuthFunc(app.auth.WithAccessToken(app.handleBackupConfigDelete)))

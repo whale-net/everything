@@ -10,6 +10,7 @@ go_library(
         "handlers_activity_live.go",
         "handlers_backup.go",
         "handlers_deployment_actions.go",
+        "handlers_deployment_settings.go",
         "handlers_games.go",
         "handlers_home.go",
         "handlers_live_common.go",
@@ -70,6 +71,7 @@ go_test(
         "handlers_deployment_actions_realtransport_test.go",
         "handlers_deployment_actions_test.go",
         "handlers_deployment_row_refresh_test.go",
+        "handlers_deployment_settings_test.go",
         "handlers_games_test.go",
         "handlers_home_test.go",
         "handlers_server_ports_test.go",
@@ -85,8 +87,19 @@ go_test(
         "handlers_workshop_bulk_test.go",
         "handlers_workshop_cache_test.go",
         "main_test.go",
+        "nfr5_bulk_env_write_guard_test.go",
         "templ_render_test.go",
     ],
+    # All non-test .go sources in this package are made available here via
+    # glob() so TestNFR5_NoBulkSGCEnvOverridesSymbolExists can locate and
+    # parse their function declarations via the Bazel runfiles manifest
+    # (`bazel test`'s sandbox working directory does not contain the source
+    # tree, so a plain relative path doesn't work) -- same technique as
+    # manmanv2/host/workshop/nfr7_dependency_guard_test.go's import guard.
+    data = glob(
+        ["*.go"],
+        exclude = ["*_test.go"],
+    ),
     embed = [":ui_lib"],
     deps = [
         "//libs/go/grpcauth",
@@ -101,6 +114,7 @@ go_test(
         "@com_github_stretchr_testify//assert",
         "@com_github_stretchr_testify//require",
         "@org_golang_google_grpc//:grpc",
+        "@rules_go//go/runfiles",
     ],
 )
 

@@ -154,27 +154,43 @@ templ Games(data GamesPageData) {
 			[x-cloak] { display: none !important; }
 		</style>
 		<script>
-			// Deployment Settings blade opener (#2272, FR6/FR11/FR12): each
+			// Deployment Settings blade opener (#2272/#2274, FR6/FR11/FR12): each
 			// deployment row carries a <template id="deployment-settings-blade-template-N">
 			// holding an already-rendered components.Blade instance (the
-			// blade shell -- its own content lands in a follow-up task) and
-			// a Customize button with data-open-blade-template="...-N"
-			// naming that template's id. A single delegated listener,
-			// rather than one per row, clones the matching template's
-			// content into the document on click. This is deliberately not
-			// an hx-get: opening
-			// the blade must cost no request (FR4/NFR7's "no fetch on
-			// expand" carried forward to "no fetch on Customize" too, since
-			// the shell has nothing server-side left to fetch yet), and
-			// cloning a <script>-bearing <template> via appendChild executes
-			// that script, which is what mounts Blade's own scrim/Escape/
+			// blade shell) and a Customize button with
+			// data-open-blade-template="...-N" naming that template's id. A
+			// single delegated listener, rather than one per row, clones the
+			// matching template's content into the document on click. This
+			// is deliberately not an hx-get: opening the blade shell itself
+			// must cost no request (FR4/NFR7's "no fetch on expand" carried
+			// forward to "no fetch on Customize" too), and cloning a
+			// <script>-bearing <template> via appendChild executes that
+			// script, which is what mounts Blade's own scrim/Escape/
 			// focus-trap behavior (see blade.templ's doc comment).
+			//
+			// The blade's *body* is a different story (#2274, FR11): its
+			// layered-environment content is per-deployment data that would
+			// grow the Games page's call count with the number of
+			// deployments rendered if fetched at page load (NFR7), so it is
+			// not pre-rendered into the cloned template. Instead the cloned
+			// subtree carries its own hx-get (DeploymentSettingsEnvPlaceholder,
+			// hx-trigger="load"), and since this clone lands in the document
+			// via plain DOM appendChild rather than an htmx swap, htmx never
+			// sees it unless told to -- htmx.process(bladeRoot) below is that
+			// one explicit call, scoped to just the newly inserted blade
+			// (root captured from the fragment before it is moved into the
+			// document, so the reference stays valid after appendChild).
 			document.addEventListener('click', function(event) {
 				var trigger = event.target.closest('[data-open-blade-template]');
 				if (!trigger) return;
 				var tpl = document.getElementById(trigger.getAttribute('data-open-blade-template'));
 				if (!tpl) return;
-				document.body.appendChild(tpl.content.cloneNode(true));
+				var fragment = tpl.content.cloneNode(true);
+				var bladeRoot = fragment.querySelector('[data-blade]');
+				document.body.appendChild(fragment);
+				if (bladeRoot && window.htmx) {
+					window.htmx.process(bladeRoot);
+				}
 			});
 		</script>
 		@components.HeroHeader("Games", "Status and connect at a glance — expand a game for deployments, configurations, and workshop libraries") {
@@ -304,9 +320,15 @@ templ gameDeploymentRow(dep GameDeploymentRow) {
 					Title:    "Deployment Settings",
 					Subtitle: dep.Row.DisplayName,
 				}) {
-					<p class="text-sm text-base-content/70">
-						Port bindings and environment overrides editing land here in a follow-up task (FR11/FR12).
-					</p>
+					<!--
+						#2274, FR11: the environment section, lazily fetched (see
+						DeploymentSettingsEnvPlaceholder's doc comment) rather than
+						pre-rendered here. Port bindings (FR12) are a separate,
+						later task (#2275) that adds an accumulating section
+						alongside this one in the same blade; see the split note
+						on issue #2274.
+					-->
+					@DeploymentSettingsEnvPlaceholder(dep.Row.ServerGameConfigID)
 				}
 			</template>
 		</td>
