@@ -9,14 +9,14 @@
     },
     "whagent-net-mcp-dev": {
       "type": "http",
-      "url": "https://dev-mcp.whagent.whalenet.dev",
+      "url": "https://dev-mcp.whagent-net.whalenet.dev",
       "headers": {
         "Authorization": "Bearer ${WHAGENT_DEV_ACCESS_TOKEN}"
       }
     },
     "whagent-net-mcp-prod": {
       "type": "http",
-      "url": "https://mcp.whagent.whalenet.app",
+      "url": "https://mcp.whagent-net.whalenet.dev",
       "headers": {
         "Authorization": "Bearer ${WHAGENT_PROD_ACCESS_TOKEN}"
       }
