@@ -315,6 +315,17 @@ func (app *App) handleSGCEnvSet(w http.ResponseWriter, r *http.Request, sgcIDStr
 		}
 	}
 
+	// The Deployment Settings blade's env section (#2274, FR11) posts
+	// here via hx-post rather than a plain form submit, so it can commit
+	// per-key without navigating the underlying Games page away (FR10).
+	// An HX-Request renders the refreshed fragment in place; the
+	// standalone SGC page's own (non-htmx) form keeps its existing
+	// full-page redirect unchanged.
+	if r.Header.Get("HX-Request") == "true" {
+		app.renderDeploymentSettingsEnvFragment(w, r, sgc, gc)
+		return
+	}
+
 	http.Redirect(w, r, fmt.Sprintf("/sgc/%d", sgcID), http.StatusSeeOther)
 }
 
@@ -360,6 +371,10 @@ func (app *App) handleSGCEnvRemove(w http.ResponseWriter, r *http.Request, sgcID
 	}
 	if envPatch == nil {
 		// Nothing to remove; the view is already fully inherited.
+		if r.Header.Get("HX-Request") == "true" {
+			app.renderDeploymentSettingsEnvFragment(w, r, sgc, gc)
+			return
+		}
 		http.Redirect(w, r, fmt.Sprintf("/sgc/%d", sgcID), http.StatusSeeOther)
 		return
 	}
@@ -388,6 +403,14 @@ func (app *App) handleSGCEnvRemove(w http.ResponseWriter, r *http.Request, sgcID
 			http.Error(w, "Failed to remove override", http.StatusInternalServerError)
 			return
 		}
+	}
+
+	// Same HX-Request branch as handleSGCEnvSet above (#2274, FR11): the
+	// blade's env section refreshes in place, the standalone SGC page's
+	// plain form keeps its existing full-page redirect.
+	if r.Header.Get("HX-Request") == "true" {
+		app.renderDeploymentSettingsEnvFragment(w, r, sgc, gc)
+		return
 	}
 
 	http.Redirect(w, r, fmt.Sprintf("/sgc/%d", sgcID), http.StatusSeeOther)

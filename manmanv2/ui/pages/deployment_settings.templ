@@ -1,0 +1,237 @@
+package pages
+
+import (
+	"fmt"
+)
+
+// Deployment Settings blade -- environment half (root plan #2266, task
+// #2274 -- FR11, NFR5, WD3, WD9). Serves AC3.
+//
+// This is the FR11-only half of the blade #2269 built the shell for
+// (components.Blade/components.BladeData): the ports half (FR12) is a
+// separate, later task (#2275) that shares the same blade but is an
+// *accumulating* section with its own blade-level Save -- see the split
+// note on issue #2274. This file only ever renders the env section, and
+// that section is per-key-commit: every write below lands through
+// handlers_sgc_env.go's shipped handleSGCEnvSet/handleSGCEnvRemove (the
+// same endpoints the standalone SGC page's Environment section already
+// uses, sgc_env_overrides.templ), just with hx-post/hx-swap wiring
+// instead of a full-page redirect so the blade never navigates the
+// underlying Games page away (FR10: opening/closing a Blade never
+// re-fetches the surface underneath).
+//
+// NFR5/LB4: there is no blade-level multi-key Save for this section and
+// therefore no accumulated request that could ever carry more than one
+// key -- every <form> below posts exactly one key. See
+// handlers_sgc_env_test.go's grep-style NFR5 assertion and this package's
+// deployment_settings_test.go for the request-shape guard.
+//
+// WD9: no Save/Cancel pair renders anywhere in this section -- per-key
+// commits leave nothing to accumulate, so there is nothing to prompt a
+// blade dismissal over. The section below is registered with #2269's
+// per-section dirty-tracking API (data-blade-section="env") but its
+// data-blade-dirty is a static "false", never flipped by any script --
+// this section's own JS never runs (there is none): it is pure
+// hx-post/hx-swap in-place refresh.
+//
+// WD3: deliberately no "Extra Addons" section here (per-deployment extra
+// addons depend on the GC-level library model -> M6/C28). Do not add one.
+
+// DeploymentSettingsData drives the blade's environment section.
+// DisplayName is FR2's "<config> on <server>" naming -- the same value
+// games.templ's gameDeploymentRow already uses as the Blade's own
+// Subtitle, so this fragment never needs (and never renders) a raw SGC
+// identifier.
+type DeploymentSettingsData struct {
+	SGCID        int64
+	DisplayName  string
+	EnvOverrides SGCEnvOverridesData
+}
+
+// DeploymentSettingsEnvSectionID is the one stable container id shared by
+// the placeholder games.templ renders when the blade first opens
+// (DeploymentSettingsEnvPlaceholder, no data fetched yet) and every
+// hx-swap response this section's own forms (and
+// handlers_sgc_env.go's per-key handlers, when called with an HX-Request
+// header) target -- so a set/remove response always finds the element it
+// is replacing.
+func DeploymentSettingsEnvSectionID(sgcID int64) string {
+	return fmt.Sprintf("deployment-settings-env-%d", sgcID)
+}
+
+// DeploymentSettingsEnvPlaceholder is the blade body games.templ embeds
+// inside the Customize button's cloned <template> (#2272): cloning that
+// template costs no request (games.templ's data-open-blade-template
+// click handler only ever does a DOM clone), but computing this
+// deployment's layered environment does need a request -- fetching it for
+// every deployment row at Games-page render time would grow the page's
+// call count with the number of deployments rendered, which NFR7
+// forbids. So this placeholder's own hx-get (hx-trigger="load") is the
+// one request that actually happens, and it only fires once the click
+// handler clones this node into the document and calls htmx.process on
+// it -- never at page load.
+//
+// The fetch target is /deployment-settings/{id}/env, deliberately not nested
+// under the shipped /sgc/{id}/... prefix the write-path endpoints below
+// use: this placeholder is part of the Games page's own initial render,
+// and FR2 forbids "SGC" in any display text that page renders -- a URL
+// literal in the markup counts (see handlers_deployment_settings.go's
+// handleDeploymentSettingsRoutes for the matching route).
+templ DeploymentSettingsEnvPlaceholder(sgcID int64) {
+	<div
+		id={ DeploymentSettingsEnvSectionID(sgcID) }
+		data-blade-section="env"
+		data-blade-dirty="false"
+		data-testid="deployment-settings-env"
+		hx-get={ templ.URL(fmt.Sprintf("/deployment-settings/%d/env", sgcID)) }
+		hx-trigger="load"
+		hx-swap="outerHTML"
+	>
+		<p class="text-sm text-base-content/60">Loading environment…</p>
+	</div>
+}
+
+// DeploymentSettingsEnvSection renders the real, data-backed environment
+// section: one row per pages.EnvVarLayer (reusing buildSGCEnvOverridesData's
+// layering, not re-derived here), an inline per-row override
+// Save/Remove, and an add-a-variable form -- every one of them a
+// single-key hx-post targeting this same section's id, hx-swap="outerHTML"
+// (NFR5: one key per request, never a batch). Both the initial lazy load
+// (GET /sgc/{id}/deployment-settings/env) and every subsequent per-key
+// commit response render this same templ, so the section's markup can
+// never drift between "just opened" and "just edited".
+templ DeploymentSettingsEnvSection(data DeploymentSettingsData) {
+	<div
+		id={ DeploymentSettingsEnvSectionID(data.SGCID) }
+		data-blade-section="env"
+		data-blade-dirty="false"
+		data-testid="deployment-settings-env"
+	>
+		<div class="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-2 mb-3">
+			<h3 class="text-sm font-semibold text-base-content">Environment</h3>
+			<span class="text-xs text-base-content/60">
+				GameConfig template → deployment override → effective
+			</span>
+		</div>
+		if data.EnvOverrides.PendingEditHint {
+			<div role="alert" class="alert alert-info alert-soft mb-3" data-testid="deployment-settings-env-pending-hint">
+				<span class="text-sm text-base-content">
+					pending override edit applies on next session start
+				</span>
+			</div>
+		}
+		if len(data.EnvOverrides.Layers) == 0 {
+			<p class="text-sm text-base-content/60 mb-3">
+				if !data.EnvOverrides.HasTemplateKeys {
+					No environment variables defined. Add a deployment-only variable below or define them on the GameConfig env template.
+				} else {
+					No environment variables to show.
+				}
+			</p>
+		} else {
+			<div class="overflow-x-auto mb-3">
+				<table class="table table-sm">
+					<thead>
+						<tr>
+							<th>Variable</th>
+							<th>GameConfig template</th>
+							<th>Deployment override</th>
+							<th>Effective</th>
+							<th class="text-right">Remove</th>
+						</tr>
+					</thead>
+					<tbody>
+						for _, layer := range data.EnvOverrides.Layers {
+							@deploymentSettingsEnvRow(data.SGCID, layer)
+						}
+					</tbody>
+				</table>
+			</div>
+		}
+		<!--
+			Add a deployment-only variable (FR11): commits via the same
+			per-key /env/set endpoint every row's own Save form below
+			posts to, not a second write path, and not accumulated with
+			any other edit (NFR5, WD9).
+		-->
+		<form
+			hx-post={ templ.URL(fmt.Sprintf("/sgc/%d/env/set", data.SGCID)) }
+			hx-target={ "#" + DeploymentSettingsEnvSectionID(data.SGCID) }
+			hx-swap="outerHTML"
+			class="flex flex-col sm:flex-row gap-2 items-start sm:items-center"
+		>
+			<input type="text" name="key" placeholder="VARIABLE_NAME" class="input input-bordered input-sm font-mono w-48" required/>
+			<input type="text" name="value" placeholder="override value" class="input input-bordered input-sm font-mono flex-1"/>
+			<button type="submit" class="btn btn-primary btn-sm">Add override</button>
+		</form>
+	</div>
+}
+
+// envLayerOverrideInputValue is the row's override input's prefill: the
+// current override value verbatim (whatever buildSGCEnvOverridesData
+// parsed it as -- properties parsing trims, so a value saved with
+// leading/trailing whitespace prefills trimmed, same as it rendered; this
+// section surfaces that truth rather than re-presenting an un-trimmed
+// value as if it had been saved that way), or empty for an inherited
+// (not yet overridden) row.
+func envLayerOverrideInputValue(l EnvVarLayer) string {
+	if l.OverrideValue == nil {
+		return ""
+	}
+	return *l.OverrideValue
+}
+
+// deploymentSettingsEnvRow is one layered-environment row: template value,
+// an always-editable override input that commits on its own Save
+// (single-key hx-post to /env/set), the effective value with its
+// inherited/overridden badge, and a Remove form only when this row is
+// actually overridden (present per buildSGCEnvOverridesData's absent-vs-
+// empty distinction, not merely non-empty -- an override saved as the
+// empty string still renders as overridden here and Remove still appears).
+templ deploymentSettingsEnvRow(sgcID int64, layer EnvVarLayer) {
+	<tr class="hover">
+		<td class="font-mono text-sm text-base-content">{ layer.Key }</td>
+		<td>
+			<code class="text-xs text-base-content/60">{ layer.TemplateValue }</code>
+		</td>
+		<td>
+			<form
+				hx-post={ templ.URL(fmt.Sprintf("/sgc/%d/env/set", sgcID)) }
+				hx-target={ "#" + DeploymentSettingsEnvSectionID(sgcID) }
+				hx-swap="outerHTML"
+				class="flex gap-1 items-center"
+			>
+				<input type="hidden" name="key" value={ layer.Key }/>
+				<input
+					type="text"
+					name="value"
+					value={ envLayerOverrideInputValue(layer) }
+					placeholder="override value"
+					class="input input-bordered input-xs font-mono w-32"
+				/>
+				<button type="submit" class="btn btn-primary btn-xs">Save</button>
+			</form>
+		</td>
+		<td>
+			<code class="text-xs text-base-content">{ layer.EffectiveValue }</code>
+			if envLayerOverridden(layer) {
+				<span class="badge badge-warning badge-soft badge-sm ml-2">overridden</span>
+			} else {
+				<span class="badge badge-ghost badge-sm ml-2">inherited</span>
+			}
+		</td>
+		<td class="text-right">
+			if envLayerOverridden(layer) {
+				<form
+					hx-post={ templ.URL(fmt.Sprintf("/sgc/%d/env/remove", sgcID)) }
+					hx-target={ "#" + DeploymentSettingsEnvSectionID(sgcID) }
+					hx-swap="outerHTML"
+					class="inline"
+				>
+					<input type="hidden" name="key" value={ layer.Key }/>
+					<button type="submit" class="btn btn-error btn-xs btn-ghost">Remove</button>
+				</form>
+			}
+		</td>
+	</tr>
+}

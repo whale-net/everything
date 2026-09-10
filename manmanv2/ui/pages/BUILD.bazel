@@ -41,6 +41,7 @@ go_test(
         "sgc_detail_sessions_test.go",
         "sgc_detail_status_connect_test.go",
         "sgc_env_overrides_test.go",
+        "deployment_settings_test.go",
     ],
     embed = [":pages"],
     deps = [
