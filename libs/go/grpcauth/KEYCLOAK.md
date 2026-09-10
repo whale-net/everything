@@ -389,6 +389,41 @@ consent flow that requests `offline_access`, ending in a refresh token this
 package's `Store` persists so a confidential client can act as that subject
 later without another browser round trip.
 
+**Confidential client, not public (FR14).** Client authentication On (step
+4a) is required here for a different reason than step 10's token-exchange
+client: a server-side web app minting a server-persisted credential has
+somewhere to hold a secret, unlike `#1183`'s CLI-redirect device flow, which
+redirects back into a process with no place to keep one. Keycloak also
+simply refuses to issue offline tokens to a public client, but the design
+reason above is why this client should be confidential even where Keycloak
+wouldn't itself enforce it.
+
+**Each consuming domain registers its own client.** Same "one Keycloak
+client per caller identity" principle as step 4, applied to a browser-facing
+client instead of a machine-to-machine one: every domain that wants this
+flow creates its **own** client with its own redirect URI(s), rather than
+multiple domains sharing one client whose redirect-URI allow-list
+accumulates entries for all of them. Splitting here buys the same property
+step 4 does — a problem with one domain's client (a leaked secret, a
+misconfigured redirect URI) does not widen to every other domain using this
+flow.
+
+**The redirect-URI allow-list is a security control, not a configuration
+convenience (NFR5).** Keycloak refusing to redirect anywhere outside
+**Settings → Valid redirect URIs** is what stops an attacker-supplied
+`redirect_uri` from ever completing the exchange — treat that list with the
+same care you'd give a secret, not as a value to loosen "just for now"
+during testing.
+
+**Refresh-token rotation is assumed enabled for this client (FR13).** This
+package's non-interactive refresh path expects Keycloak to issue a new
+refresh token on every refresh and writes it back before returning the
+access token; this is Keycloak's own default and the more defensible
+setting for a confidential client, so leave it on unless you have a
+specific reason not to. Disabling rotation does not break this package, but
+it gives up the security property rotation buys for nothing this package
+needs in exchange.
+
 **The one setting people miss:** requesting the `offline_access` scope is not
 enough by itself. If Keycloak's token response comes back with no
 `refresh_token` at all,
@@ -414,6 +449,13 @@ redirect URIs**) and must exactly match `DelegatedGrantConfig.RedirectURI` —
 this package never sends a redirect URI Keycloak wasn't already told to
 expect (NFR5).
 
+See ["Applying this to a new service"](#applying-this-to-a-new-service) for
+the full per-service checklist this section fits into: this section replaces
+that checklist's step 4 (per-caller-client creation) for a delegated-grant
+client specifically. Steps 1–3 and 5–10 apply unchanged, including step 5's
+audience mapper — an access token minted through this flow still needs to
+carry the right `aud` for whatever downstream service actually consumes it.
+
 ---
 
 ## Applying this to a new service
@@ -437,6 +479,11 @@ The checklist, stripped of the example:
 9. Verify with the curl in step 7 **before** touching application code.
 10. Enforce in handlers, and write a test that asserts the *low*-privilege role
     is **rejected** — the negative test is the one that proves the boundary.
+
+**Setting up a delegated-grant client instead** (browser consent for a
+client that acts non-interactively later, not a per-request caller
+identity)? Use [section 11](#11-delegated-grants-offline_access-browser-consent-for-a-client-that-acts-later)'s
+checklist for step 4 above — the rest of this list still applies unchanged.
 
 ## Related
 
