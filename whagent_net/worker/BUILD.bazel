@@ -7,6 +7,7 @@ go_library(
     name = "worker_lib",
     srcs = [
         "activities.go",
+        "archive.go",
         "caps.go",
         "classify.go",
         "context.go",
@@ -19,6 +20,7 @@ go_library(
         "//libs/go/db",
         "//libs/go/logging",
         "//libs/go/rmq",
+        "//libs/go/s3",
         "//libs/go/temporal",
         "//whagent_net/api/persona",
         "//whagent_net/events",
@@ -28,6 +30,7 @@ go_library(
         "@com_github_google_uuid//:uuid",
         "@io_temporal_go_api//enums/v1:enums",
         "@io_temporal_go_sdk//activity",
+        "@io_temporal_go_sdk//client",
         "@io_temporal_go_sdk//log",
         "@io_temporal_go_sdk//temporal",
         "@io_temporal_go_sdk//worker",

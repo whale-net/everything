@@ -176,9 +176,9 @@ type SessionStore interface {
 	// prior archiver attempt uploaded and committed the index row but
 	// crashed before trimming. (b) is included regardless of olderThan so
 	// a crashed-mid-archive session is picked back up on the very next
-	// scan rather than waiting out the TTL again; RunOnce (archiver.go)
-	// tells the two cases apart via ArchiveStore.Get and does not re-upload
-	// in case (b) -- see this task's Implementation section.
+	// scan rather than waiting out the TTL again; RunArchiveBatch
+	// (whagent_net/worker/archive.go) tells the two cases apart via
+	// ArchiveStore.Get and does not re-upload in case (b).
 	ListArchiveEligible(ctx context.Context, olderThan time.Time, limit int) ([]uuid.UUID, error)
 }
 

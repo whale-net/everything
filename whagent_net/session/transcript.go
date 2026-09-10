@@ -388,10 +388,11 @@ func (s transcriptStore) hydrateArchive(ctx context.Context, sessionID uuid.UUID
 // DecodeArchiveObject decodes a cold-object-contract body (gzipped JSON
 // Lines, one events.Event per line, ascending seq -- ARCHITECTURE.md
 // "Transcript storage tiers") into the events it holds, in file order.
-// Exported (issue #2244): whagent_net/archiver's post-upload verification
-// step re-reads the object it just wrote and decodes it through this exact
-// function -- the same decode path Read/hydrateArchive use -- rather than
-// a second, potentially-drifting implementation, so "verified" actually
+// Exported (issue #2244): whagent_net/worker's archive.go post-upload
+// verification step re-reads the object it just wrote and decodes it
+// through this exact function -- the same decode path Read/hydrateArchive
+// use -- rather than a second, potentially-drifting implementation, so
+// "verified" actually
 // means "the real reader can decode this object", not just "some parser
 // agrees with itself".
 func DecodeArchiveObject(gz []byte) ([]events.Event, error) {

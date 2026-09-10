@@ -3,8 +3,9 @@
 #
 # migrate (job, runs the agent-definition seeder per whagent_net/migrate/
 # seed's package doc comment) + api (SessionService gRPC + JWKS) + worker
-# (Temporal SessionWorkflow) + mcp (the Claude-Code-facing MCP surface) +
-# archiver (FR7/C18, issue #2244: hot-to-cold transcript archival), with
+# (Temporal SessionWorkflow, plus a Temporal-scheduled hot-to-cold
+# transcript archive workflow when WHAGENT_S3_BUCKET is set -- FR7/C18,
+# worker/archive.go) + mcp (the Claude-Code-facing MCP surface), with
 # Postgres, Temporal, and RabbitMQ dependencies -- follows
 # tools/app_registry/Tiltfile's raw-k8s_yaml-blob shape (same three
 # infrastructure dependencies), not manmanv2's Helm-chart path.
@@ -207,11 +208,6 @@ APPS = {
         'bazel_target': '//whagent_net/ui:whagent-net-ui_image_load',
         'image_name': 'whagent-net-ui',
     },
-    'archiver': {
-        'enabled_env': 'ENABLE_WHAGENT_NET_ARCHIVER',
-        'bazel_target': '//whagent_net/archiver:whagent-net-archiver_image_load',
-        'image_name': 'whagent-net-archiver',
-    },
 }
 
 # ===========================
@@ -362,7 +358,16 @@ spec:
 
 # worker: the long-lived SessionWorkflow + per-turn activities, including
 # tool dispatch (issue #2121) against whatever domain-owned MCP server(s)
-# the resolved agent definition's tool_set names.
+# the resolved agent definition's tool_set names. Also hosts the
+# hot-to-cold transcript archive workflow (FR7/C18, worker/archive.go) on
+# a Temporal schedule -- worker registers/schedules it only when
+# WHAGENT_S3_BUCKET is non-empty (initializeS3Client's non-fatal
+# construction, main.go), so it stays inert by default here: this
+# Tiltfile has no local S3-compatible storage wired up yet (contrast
+# manmanv2/Tiltfile's deploy_minio). Set WHAGENT_S3_BUCKET/S3_ENDPOINT/
+# S3_ACCESS_KEY/S3_SECRET_KEY in a local .env (pointed at a MinIO instance
+# of your own) to exercise it locally -- no separate enable flag needed,
+# unlike the removed standalone archiver binary this replaced.
 if get_env_bool('ENABLE_WHAGENT_NET_WORKER', default='true'):
     k8s_yaml(blob("""
 apiVersion: apps/v1
@@ -398,6 +403,22 @@ spec:
           value: "{whagent_signing_key_id}"
         - name: WHAGENT_SIGNING_KEY
           value: "{whagent_signing_key}"
+        - name: WHAGENT_S3_BUCKET
+          value: "{whagent_s3_bucket}"
+        - name: S3_REGION
+          value: "{s3_region}"
+        - name: S3_ENDPOINT
+          value: "{s3_endpoint}"
+        - name: S3_ACCESS_KEY
+          value: "{s3_access_key}"
+        - name: S3_SECRET_KEY
+          value: "{s3_secret_key}"
+        - name: WHAGENT_TRANSCRIPT_TTL
+          value: "{whagent_transcript_ttl}"
+        - name: WHAGENT_ARCHIVE_INTERVAL
+          value: "{whagent_archive_interval}"
+        - name: WHAGENT_ARCHIVE_BATCH_SIZE
+          value: "{whagent_archive_batch_size}"
         - name: OTEL_EXPORTER_OTLP_ENDPOINT
           value: "{otel_endpoint}"
 """.format(
@@ -408,6 +429,14 @@ spec:
         openrouter_api_key=os.environ.get('OPENROUTER_API_KEY', ''),
         whagent_signing_key_id=whagent_signing_key_id,
         whagent_signing_key=whagent_signing_key_yaml,
+        whagent_s3_bucket=os.environ.get('WHAGENT_S3_BUCKET', ''),
+        s3_region=os.environ.get('S3_REGION', 'us-east-1'),
+        s3_endpoint=os.environ.get('S3_ENDPOINT', ''),
+        s3_access_key=os.environ.get('S3_ACCESS_KEY', ''),
+        s3_secret_key=os.environ.get('S3_SECRET_KEY', ''),
+        whagent_transcript_ttl=os.environ.get('WHAGENT_TRANSCRIPT_TTL', '168h'),
+        whagent_archive_interval=os.environ.get('WHAGENT_ARCHIVE_INTERVAL', '5m'),
+        whagent_archive_batch_size=os.environ.get('WHAGENT_ARCHIVE_BATCH_SIZE', '50'),
         otel_endpoint=otel_endpoint,
     )))
 
@@ -426,10 +455,9 @@ spec:
 # SessionService (README.md "Connecting Claude Code to `mcp`").
 #
 # mcp's OAuth2 credential path (mcp_credential table + RFC 8693 Keycloak
-# token exchange, issue #2249) is opt-in here, mirroring archiver's
-# "disabled by default, would otherwise crash-loop" precedent below:
-# PG_DATABASE_URL alone makes the mcp_credential table reachable but
-# leaves WHAGENT_MCP_KEYCLOAK_CLIENT_ID/_CLIENT_SECRET/_TOKEN_URL unset,
+# token exchange, issue #2249) is opt-in here: PG_DATABASE_URL alone makes
+# the mcp_credential table reachable but leaves
+# WHAGENT_MCP_KEYCLOAK_CLIENT_ID/_CLIENT_SECRET/_TOKEN_URL unset,
 # and main.go's initializeTokenExchange treats that exact combination as
 # a fatal NFR8 fail-loud error (by design -- see its doc comment), not a
 # WARNING-and-degrade like every other partial-config case. Once the
@@ -610,82 +638,6 @@ spec:
         labels=['whagent-net'],
     )
     print("🌐 ui forwarded to http://localhost:8081")
-
-# archiver: FR7/C18's hot-to-cold transcript archiver (issue #2244) --
-# periodically archives terminal sessions past WHAGENT_TRANSCRIPT_TTL to
-# S3, then trims their hot-tier rows. Disabled by default (unlike every
-# other binary above): this Tiltfile has no local S3-compatible storage
-# wired up yet (contrast manmanv2/Tiltfile's deploy_minio), and
-# main.go's WHAGENT_S3_BUCKET requirement (archiver.go's doc comment: the
-# archiver has nothing to do without a cold tier) means it would
-# otherwise crash-loop out of the box. Set ENABLE_WHAGENT_NET_ARCHIVER=true
-# plus WHAGENT_S3_BUCKET/S3_ENDPOINT/S3_ACCESS_KEY/S3_SECRET_KEY in a local
-# .env (pointed at a MinIO instance of your own) to exercise it locally.
-if get_env_bool('ENABLE_WHAGENT_NET_ARCHIVER', default='false'):
-    k8s_yaml(blob("""
-apiVersion: apps/v1
-kind: Deployment
-metadata:
-  name: whagent-net-archiver
-  namespace: {namespace}
-spec:
-  replicas: 1
-  selector:
-    matchLabels:
-      app: whagent-net-archiver
-  template:
-    metadata:
-      labels:
-        app: whagent-net-archiver
-    spec:
-      containers:
-      - name: archiver
-        image: whagent-net-archiver
-        env:
-        - name: PG_DATABASE_URL
-          value: "{pg_database_url}"
-        - name: WHAGENT_S3_BUCKET
-          value: "{whagent_s3_bucket}"
-        - name: S3_REGION
-          value: "{s3_region}"
-        - name: S3_ENDPOINT
-          value: "{s3_endpoint}"
-        - name: S3_ACCESS_KEY
-          value: "{s3_access_key}"
-        - name: S3_SECRET_KEY
-          value: "{s3_secret_key}"
-        - name: WHAGENT_TRANSCRIPT_TTL
-          value: "{whagent_transcript_ttl}"
-        - name: WHAGENT_ARCHIVER_SCAN_INTERVAL
-          value: "{whagent_archiver_scan_interval}"
-        - name: WHAGENT_ARCHIVER_BATCH_SIZE
-          value: "{whagent_archiver_batch_size}"
-        - name: OTEL_EXPORTER_OTLP_ENDPOINT
-          value: "{otel_endpoint}"
-""".format(
-        namespace=namespace,
-        pg_database_url=pg_database_url,
-        whagent_s3_bucket=os.environ.get('WHAGENT_S3_BUCKET', ''),
-        s3_region=os.environ.get('S3_REGION', 'us-east-1'),
-        s3_endpoint=os.environ.get('S3_ENDPOINT', ''),
-        s3_access_key=os.environ.get('S3_ACCESS_KEY', ''),
-        s3_secret_key=os.environ.get('S3_SECRET_KEY', ''),
-        whagent_transcript_ttl=os.environ.get('WHAGENT_TRANSCRIPT_TTL', '168h'),
-        whagent_archiver_scan_interval=os.environ.get('WHAGENT_ARCHIVER_SCAN_INTERVAL', '5m'),
-        whagent_archiver_batch_size=os.environ.get('WHAGENT_ARCHIVER_BATCH_SIZE', '50'),
-        otel_endpoint=otel_endpoint,
-    )))
-
-    archiver_deps = []
-    if get_env_bool('ENABLE_WHAGENT_NET_MIGRATE', default='true'):
-        archiver_deps.append('whagent-net-migrate')
-
-    k8s_resource(
-        'whagent-net-archiver',
-        resource_deps=archiver_deps,
-        labels=['whagent-net'],
-    )
-    print("🗄️  archiver configured (disabled by default -- see Tiltfile comment)")
 
 # ===========================
 # Access Information

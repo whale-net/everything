@@ -19,9 +19,11 @@ and read its transcript — the milestone's outcome sentence, exercised end
 to end (issue #2121). `migrate`, `api`, `worker`, and `mcp` all exist and
 build; `whagent_net/config/agents.yaml` seeds one real agent definition
 (`audience-score-system-research`) targeting `audience_score_system/mcp`.
-Deferred to M2/Later per the roadmap: the `archiver` (C18), `ui`/`embed`
-(C13–C16), `StreamEvents` (C17), and whagent-side `allowed_tools`
-enforcement (C22). A service-account caller (C10) can now start, send
+Deferred to M2/Later per the roadmap: transcript archival (C18, now a
+Temporal-scheduled workflow inside `worker` rather than a separate
+binary — see `worker/archive.go`), `ui`/`embed` (C13–C16), `StreamEvents`
+(C17), and whagent-side `allowed_tools` enforcement (C22). A
+service-account caller (C10) can now start, send
 turns to, and stop a session exactly as a human operator can (FR6/#2243) —
 see "Client credentials (service accounts)" below. The product brief
 (`PRODUCT.md`) is produced by `/project-manager:product`; milestones are
@@ -34,10 +36,9 @@ discussion: GitHub issue #1552.
 |--------|----------|-----------------|-------------|
 | `migrate/` | `job` | Applies `session` store migrations, then seeds `agent_definition` from `config/agents.yaml` (see "Agent definition config" below). | `bazel run //whagent_net/migrate:migrate` |
 | `api/` | `external-api` | Session service gRPC: start/send-turn/stop/get/list/read-transcript; publishes the JWKS every domain-owned MCP server verifies a `worker`-minted persona credential against. | `bazel run //whagent_net/api:api` |
-| `worker/` | `worker` | Temporal `SessionWorkflow` + activities: resolve agent definition, build context, list/attach tools (FR8), call the model, dispatch each requested tool call, commit the turn, enforce turn/cost caps. | `bazel run //whagent_net/worker:worker` |
+| `worker/` | `worker` | Temporal `SessionWorkflow` + activities: resolve agent definition, build context, list/attach tools (FR8), call the model, dispatch each requested tool call, commit the turn, enforce turn/cost caps. Also hosts `ArchiveWorkflow` (FR7/C18, issue #2244, `worker/archive.go`): a Temporal Schedule periodically batches a terminal session's transcript out of Postgres past `WHAGENT_TRANSCRIPT_TTL`, gzips and uploads it to S3, commits the `transcript_archive` index row, and only then trims the hot-tier rows — registered only when `WHAGENT_S3_BUCKET` is set; there is no separate archiver binary. | `bazel run //whagent_net/worker:worker` |
 | `mcp/` | `external-api` | MCP surface over `api` — how Claude Code and other agents drive agents. | `bazel run //whagent_net/mcp:mcp` |
 | `ui/` | `external-api` | Standalone agent web UI (M2, issue #2236): Keycloak sign-in (NFR1) guards every app route, forwards the signed-in operator's own access token to `api` on every call (never a shared service account). A signed-in operator can start a session, watch its live transcript, send follow-up turns, and stop it (FR1/FR2, issues #2242/#2246) — a second way to drive a session alongside Claude Code/`mcp` and raw gRPC, going through the exact same `api` SessionService either way. Turn/stop controls are ownership-gated: only the session's `on_behalf_of` subject sees or can use them (LB2/NFR3). FR4's usage panel is the remaining piece. | `bazel run //whagent_net/ui:whagent-net-ui` |
-| `archiver/` | `worker` | Hot-to-cold transcript archiver (FR7/C18, issue #2244): periodically batches a terminal session's transcript out of Postgres past `WHAGENT_TRANSCRIPT_TTL`, gzips and uploads it to S3, commits the `transcript_archive` index row, and only then trims the hot-tier rows. | `bazel run //whagent_net/archiver:whagent-net-archiver` |
 
 Shared Go packages: `session/` (store), `config/` (the agent-definition
 seed source), `llm/` (the OpenRouter model client), `worker/tools/` (tool
@@ -270,9 +271,10 @@ whagent-net signing key (`WHAGENT_SIGNING_KEY`/`WHAGENT_SIGNING_KEY_ID`,
 
 **Tilt** (`cd whagent_net && tilt up`) stands up `migrate`/`api`/`worker`/
 `mcp`/`ui` plus Postgres/Temporal/RabbitMQ, with a checked-in dev-only
-signing key — see `Tiltfile`. `archiver` is wired there too but disabled
-by default (no local S3-compatible storage in this Tiltfile yet; see its
-`Tiltfile` comment for how to enable it against a MinIO of your own).
+signing key — see `Tiltfile`. `worker`'s transcript archive schedule
+stays inert by default (no local S3-compatible storage in this Tiltfile
+yet; set `WHAGENT_S3_BUCKET`/`S3_ENDPOINT`/`S3_ACCESS_KEY`/`S3_SECRET_KEY`
+in a local `.env`, pointed at a MinIO of your own, to exercise it).
 `ui` defaults to `AUTH_MODE=none` locally (no Keycloak
 realm required to click around), forwarded to
 [http://localhost:8081](http://localhost:8081) — set `AUTH_MODE=oidc`
