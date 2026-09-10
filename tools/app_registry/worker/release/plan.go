@@ -84,9 +84,31 @@ type planCLIResult struct {
 // positionally coupled" boundary as planCLIResult above, not an import of
 // the CLI-oriented package.
 type appMetadataInput struct {
-	Domain  string `json:"domain"`
-	Name    string `json:"name"`
-	AppType string `json:"app_type"`
+	Domain   string `json:"domain"`
+	Name     string `json:"name"`
+	AppType  string `json:"app_type"`
+	RepoName string `json:"repo_name,omitempty"`
+}
+
+// repoNameFromImageRepository extracts the trailing repo_name segment from
+// an App's ImageRepository ("registry/organization/repo_name", built by
+// postgres/app.go's imageRepository() from the app's own reconciled
+// manifest) -- the authoritative value release.bzl computed for this app,
+// so appMetadataInput can pass it through instead of leaving
+// release_helper_go's AppMetadata.FullName() to re-derive Domain+"-"+Name
+// itself (see that method's doc comment for why re-deriving it is what
+// caused #2385/#2404). Splitting on the last "/" is safe: none of
+// registry/organization/repo_name legitimately contains "/" (see migration
+// 008's backfill comment, which relies on the same invariant via
+// split_part). Returns "" if ImageRepository is empty (e.g. an
+// unreconciled or non-image app), leaving AppMetadata.FullName() to fall
+// back to its own naive concatenation.
+func repoNameFromImageRepository(imageRepository string) string {
+	idx := strings.LastIndex(imageRepository, "/")
+	if idx < 0 {
+		return ""
+	}
+	return imageRepository[idx+1:]
 }
 
 type chartMetadataInput struct {
@@ -148,7 +170,7 @@ func (a *Activities) ResolvePlan(ctx context.Context, targets []ReleaseTarget) (
 				}
 				return ResolvedPlan{}, fmt.Errorf("resolve plan: look up app %q: %w", t.OwnerFullName, err)
 			}
-			appsMetadata = append(appsMetadata, appMetadataInput{Domain: app.Domain, Name: app.Name, AppType: app.AppType})
+			appsMetadata = append(appsMetadata, appMetadataInput{Domain: app.Domain, Name: app.Name, AppType: app.AppType, RepoName: repoNameFromImageRepository(app.ImageRepository)})
 		case repository.ArtifactKindChart:
 			chart, err := a.Registry.Apps().GetChartByFullName(ctx, t.OwnerFullName)
 			if err != nil {
