@@ -1,0 +1,80 @@
+package pages
+
+import (
+	"github.com/whale-net/everything/manmanv2/ui/components"
+)
+
+// WorkshopPageData drives the redesigned Workshop top-level page (root
+// plan #2359, task #2362 -- FR6/FR7). This is the one place a Server
+// Manager manages Workshop content fleet-wide (US8): library
+// create/update/delete, addon/reference management, and the FR7
+// fleet-scale actions -- collection-add (C33), batch-addon-create (C34),
+// and cache-backed install (C35) -- must all be reachable and executable
+// from here without navigating away.
+//
+// Scaffold only: this struct and WorkshopPage below are the page's
+// skeleton. Full data assembly (libraries, addons, batch jobs, cache
+// stats) and the FR7 Blade-layer flows land in the Implementation phase
+// of this same task.
+type WorkshopPageData struct {
+	Layout components.LayoutData
+}
+
+// WorkshopPage is the redesigned Workshop top-level page (FR6/FR7),
+// registered at "/workshop" (handlers_workshop_page.go). It is additive:
+// the pre-existing /workshop/library page and every /workshop/* sub-route
+// (handlers_workshop.go, pages/workshop_library.templ and friends) are
+// untouched and stay reachable (NFR6) until the dependent
+// navigation/disposition task swaps the nav entry and adds the redirect.
+//
+// Deliberately excludes GC-level library attachment (FR10) -- that lands
+// on the Games page panel in its own task, not here.
+//
+// This is a scaffold skeleton: library management, FR7 collection-add
+// (C33), batch-addon-create (C34), and cache-backed install (C35) each
+// render as a Blade layer over this page in the Implementation phase
+// (components/blade.templ), matching M5's pattern (see games.templ's
+// Customize blade for the shape) -- never a separate full-page
+// navigation. Terminology throughout must stay deployment-first (NFR2):
+// a ServerGameConfig is a "deployment", never "SGC" or "server game
+// config" (see games.templ / activity.templ for the M5-settled wording).
+templ WorkshopPage(data WorkshopPageData) {
+	@components.Layout(data.Layout) {
+		@components.HeroHeader("Workshop", "Manage libraries, addons, and cache fleet-wide")
+		<div id="workshop-libraries" class="mb-6">
+			<!--
+				Implementation TODO (FR6): library list + open/create/update/delete,
+				addon/reference management: target the existing handlers rather
+				than duplicating their logic:
+				/workshop/create-library, /workshop/update-library,
+				/workshop/delete-library, /workshop/add-addon-to-library,
+				/workshop/remove-addon-from-library, /workshop/add-library-reference,
+				/workshop/remove-library-reference.
+			-->
+		</div>
+		<div id="workshop-collection-add" class="mb-6">
+			<!--
+				Implementation TODO (FR7, C33): Blade layer over
+				/workshop/bulk-add-collection (handleBulkAddCollection), with
+				progress via /workshop/batch-status
+				(pages/workshop_batch_status.templ).
+			-->
+		</div>
+		<div id="workshop-batch-create" class="mb-6">
+			<!--
+				Implementation TODO (FR7, C34): Blade layer over
+				/workshop/batch-create-addons (handleBatchCreateAddons), sharing
+				the same /workshop/batch-status progress surface.
+			-->
+		</div>
+		<div id="workshop-cache" class="mb-6">
+			<!--
+				Implementation TODO (FR7, C35): cache surface:
+				/workshop/cache, /workshop/cache/verify, /workshop/cache/evict
+				(pages/workshop_cache.templ), plus addon search/create
+				(/workshop/search, /workshop/fetch-metadata,
+				/workshop/create-addon).
+			-->
+		</div>
+	}
+}

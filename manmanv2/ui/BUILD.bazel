@@ -24,6 +24,7 @@ go_library(
         "handlers_sgc_env.go",
         "handlers_sgc_ports_guidance.go",
         "handlers_workshop.go",
+        "handlers_workshop_page.go",
         "main.go",
         "templ_render.go",
     ],
