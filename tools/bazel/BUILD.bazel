@@ -4,6 +4,7 @@ package(default_visibility = ["//visibility:public"])
 
 exports_files([
     "container_image.bzl",
+    "pex_binary.bzl",
     "platforms.bzl",
     "pytest.bzl",
     "release.bzl",

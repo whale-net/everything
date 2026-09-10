@@ -1,0 +1,25 @@
+load("//tools/bazel:pex_binary.bzl", "py_scie_binary")
+load("//tools/bazel:release.bzl", "release_app")
+
+# Single-file native executable (pex --scie eager) -- see
+# //tools/bazel:pex_binary.bzl for how this works and its constraints.
+py_scie_binary(
+    name = "hello-cli",
+    entry_point = "main:run",
+    srcs = ["main.py"],
+    visibility = ["//visibility:public"],
+)
+
+# Publishes this as an app_registry "cli" binary artifact -- built and
+# published per-platform via bazel build --platforms=//tools:linux_{x86_64,arm64},
+# never deployed to K8s (deploy_unit defaults to "none" for app_type "cli").
+# Mirrors //tools/release_helper_go's release_app call, binary_name here just
+# points at a pex scie instead of a go_binary.
+release_app(
+    name = "hello-cli",
+    app_type = "cli",
+    binary_name = ":hello-cli",
+    description = "Single-file Python CLI demo built via pex --scie eager (see //tools/bazel:pex_binary.bzl)",
+    domain = "demo",
+    language = "python",
+)
