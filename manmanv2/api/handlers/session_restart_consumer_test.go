@@ -550,6 +550,53 @@ func TestHandleStatusUpdate_NonRetryableErrorFailsImmediately(t *testing.T) {
 	}
 }
 
+// TestHandleStatusUpdate_CordonRejectionFailsImmediately covers #2364: a
+// drain cordon rejection is also a codes.FailedPrecondition (same as the
+// commit-race error the retry loop exists to absorb), but it must be
+// treated as terminal -- one StartSession attempt, immediately marked
+// failed with the drain-specific reason -- never spun through the retry
+// budget.
+func TestHandleStatusUpdate_CordonRejectionFailsImmediately(t *testing.T) {
+	gatingSessionID := int64(42)
+	sgcID := int64(7)
+	repo := &fakePendingRestartRepo{
+		pending: map[int64]*manman.PendingRestart{
+			gatingSessionID: {
+				PendingRestartID:   1,
+				ServerGameConfigID: sgcID,
+				GatingSessionID:    gatingSessionID,
+				Status:             manman.PendingRestartStatusPending,
+			},
+		},
+	}
+	cordonErr := &cordonError{serverID: 9, serverName: "gameserver-9", drainState: manman.ServerDrainStateDraining}
+	starter := &fakeDeferredStarter{err: cordonErr}
+	h, _ := newTestConsumer(repo, starter)
+
+	err := h.handleStatusUpdate(context.Background(), rmq.Message{
+		Body: statusUpdateBody(t, gatingSessionID, manman.SessionStatusStopped),
+	})
+	if err != nil {
+		t.Fatalf("expected nil error, got %v", err)
+	}
+
+	if got := starter.callCount(); got != 1 {
+		t.Fatalf("expected exactly 1 StartSession call (cordon rejection is terminal, not retried), got %d", got)
+	}
+	if repo.failedCall == nil {
+		t.Fatal("expected MarkFailed to be called")
+	}
+	if repo.failedCall.pendingRestartID != 1 {
+		t.Errorf("expected MarkFailed pendingRestartID 1, got %d", repo.failedCall.pendingRestartID)
+	}
+	if !strings.Contains(repo.failedCall.reason, "gameserver-9") {
+		t.Errorf("expected MarkFailed reason to name the cordoned host, got %q", repo.failedCall.reason)
+	}
+	if repo.startedCall != nil {
+		t.Errorf("expected MarkStarted not to be called, got %+v", repo.startedCall)
+	}
+}
+
 // TestHandleStatusUpdate_FirstAttemptSuccessNoRetryLog covers the unchanged
 // common case: no FailedPrecondition ever occurs, so there is no
 // retry-related WARNING log alongside the ordinary MarkStarted/INFO path.
