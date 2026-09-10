@@ -11,6 +11,11 @@ type Server struct {
 	LastSeen          *time.Time `db:"last_seen"`
 	IsDefault         bool       `db:"is_default"`
 	HostPublicAddress *string    `db:"host_public_address"`
+	// DrainState/DrainRequestedAt: host drain state (#2360, manmanv2 M6,
+	// C29 groundwork). Inert here -- no cordon enforcement or eviction
+	// yet, just the persisted transitions via DrainServer/UndrainServer.
+	DrainState       string     `db:"drain_state"`
+	DrainRequestedAt *time.Time `db:"drain_requested_at"`
 }
 
 // ServerAllowedPortRange is one allowed host-port range for a server

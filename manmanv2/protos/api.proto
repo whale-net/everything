@@ -24,6 +24,10 @@ service ManManAPI {
   // FR12 (task #2095): per-server allowed host-port ranges (replace-all).
   rpc UpdateServerAllowedPortRanges(UpdateServerAllowedPortRangesRequest) returns (UpdateServerAllowedPortRangesResponse);
   rpc ListAllocatedPorts(ListAllocatedPortsRequest) returns (ListAllocatedPortsResponse);
+  // Host drain state (#2360, manmanv2 M6, C29 groundwork). Inert here --
+  // no cordon enforcement or eviction yet.
+  rpc DrainServer(DrainServerRequest) returns (DrainServerResponse);
+  rpc UndrainServer(UndrainServerRequest) returns (UndrainServerResponse);
 
   // Game management
   rpc ListGames(ListGamesRequest) returns (ListGamesResponse);

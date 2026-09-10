@@ -69,6 +69,31 @@ message UpdateServerAllowedPortRangesResponse {
   repeated PortRange ranges = 1;
 }
 
+// DrainServer transitions a host to "draining" (#2360, manmanv2 M6, C29
+// groundwork). Inert in this task: sets drain_state and
+// drain_requested_at only -- no cordon enforcement, no eviction (those
+// land in dependent tasks). Idempotent: draining an already-draining or
+// already-drained host is a successful no-op change. No reason field
+// and no audit trail beyond the existing slog.Info (FR3).
+message DrainServerRequest {
+  int64 server_id = 1;
+}
+
+message DrainServerResponse {
+  Server server = 1;
+}
+
+// UndrainServer returns a host to "schedulable" and clears
+// drain_requested_at. Never restarts anything (FR4). Idempotent:
+// undraining an already-schedulable host is a successful no-op change.
+message UndrainServerRequest {
+  int64 server_id = 1;
+}
+
+message UndrainServerResponse {
+  Server server = 1;
+}
+
 // AllocatedPort is one server_ports allocation row (FR13/FR14, task
 // #2098): a host port currently or previously allocated to a session on
 // a server. Read-only projection -- allocation happens only inside
