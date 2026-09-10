@@ -109,6 +109,16 @@ func (s *APIServer) ListAllocatedPorts(ctx context.Context, req *pb.ListAllocate
 	return s.serverHandler.ListAllocatedPorts(ctx, req)
 }
 
+// DrainServer/UndrainServer: host drain state (#2360, manmanv2 M6, C29
+// groundwork). Inert here -- no cordon enforcement or eviction yet.
+func (s *APIServer) DrainServer(ctx context.Context, req *pb.DrainServerRequest) (*pb.DrainServerResponse, error) {
+	return s.serverHandler.DrainServer(ctx, req)
+}
+
+func (s *APIServer) UndrainServer(ctx context.Context, req *pb.UndrainServerRequest) (*pb.UndrainServerResponse, error) {
+	return s.serverHandler.UndrainServer(ctx, req)
+}
+
 // Game RPCs
 func (s *APIServer) ListGames(ctx context.Context, req *pb.ListGamesRequest) (*pb.ListGamesResponse, error) {
 	return s.gameHandler.ListGames(ctx, req)
