@@ -5,7 +5,12 @@ go_library(
     srcs = [
         "auth.go",
         "credentials.go",
+        "fakestore.go",
+        "grant.go",
+        "grantcrypto.go",
+        "granterrors.go",
         "interceptors.go",
+        "store.go",
     ],
     importpath = "github.com/whale-net/everything/libs/go/grpcauth",
     visibility = ["//visibility:public"],
