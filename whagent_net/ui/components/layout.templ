@@ -27,11 +27,12 @@ templ navLink(href, label, active string) {
 }
 
 // navItems is whagent-net ui's own nav item list (htmxui.ShellData hardcodes
-// no nav of its own -- see Shell's doc comment). "New session" (FR1, issue
-// #2246) is the first session-page nav entry; FR2-FR4 add their own here.
+// no nav of its own -- see Shell's doc comment). "Sessions" (issue #2247)
+// is also the authenticated landing page ("/"), and "New session" (FR1,
+// issue #2246) is the other session-page nav entry; FR4 adds its own here.
 templ navItems(data LayoutData) {
 	<ul class="menu menu-horizontal px-1">
-		@navLink("/", "Home", data.Active)
+		@navLink("/sessions", "Sessions", data.Active)
 		@navLink("/sessions/new", "New session", data.Active)
 	</ul>
 }

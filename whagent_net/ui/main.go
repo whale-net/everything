@@ -7,10 +7,11 @@
 // (//libs/go/grpcauth), never a shared service account (mirrors `mcp`'s
 // FR10 stance, ARCHITECTURE.md "Identity and auth chaining"). The session
 // detail page and its live transcript over an htmxsse.Hub (FR2, issue
-// #2242), and the ownership-gated start/turn/stop lifecycle controls
-// (FR1, issue #2246), are the real pages so far; the usage panel (FR4)
-// and the MCP OAuth2 provider (FR9) mount onto what this task builds in
-// later tasks under plan #2233.
+// #2242), the ownership-gated start/turn/stop lifecycle controls (FR1,
+// issue #2246), and the filtered/paginated session list (FR3/C15, issue
+// #2247) that is also the authenticated landing page, are the real pages
+// so far; the usage panel (FR4) and the MCP OAuth2 provider (FR9) mount
+// onto what this task builds in later tasks under plan #2233.
 package main
 
 import (
@@ -409,7 +410,12 @@ func (app *App) setupRoutes(mux *http.ServeMux) {
 	// access to a signed-in operator, not RequireAuth.
 	app.mcpProvider.Mount(mux)
 
-	mux.HandleFunc("/", app.auth.RequireAuthFunc(app.auth.WithAccessToken(app.handleIndex)))
+	// Session list (FR3/C15, NFR3, issue #2247): the authenticated landing
+	// page, mounted at both "/" and "/sessions" -- replacing issue #2236's
+	// placeholder index -- so a bare sign-in and an explicit nav click both
+	// land here.
+	mux.HandleFunc("/", app.auth.RequireAuthFunc(app.auth.WithAccessToken(app.handleSessionList)))
+	mux.HandleFunc("GET /sessions", app.auth.RequireAuthFunc(app.auth.WithAccessToken(app.handleSessionList)))
 
 	// Session lifecycle controls (FR1, issue #2246): start form, turn
 	// composer, stop control. Registered ahead of "GET /sessions/{id}"

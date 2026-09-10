@@ -1,9 +1,10 @@
 """whagent-net standalone agent web UI (M2, issue #2236): binary entrypoint,
 Keycloak sign-in, and the authenticated api client. The session detail page
-and its live transcript (FR2, NFR2, NFR3, NFR4, issue #2242), and the
-ownership-gated start/turn/stop lifecycle controls (FR1, issue #2246), are
-this package's other consumers; remaining FR4/FR9 pieces land in later
-tasks under the same plan (#2233)."""
+and its live transcript (FR2, NFR2, NFR3, NFR4, issue #2242), the
+ownership-gated start/turn/stop lifecycle controls (FR1, issue #2246), and
+the filtered/paginated session list that is also the authenticated landing
+page (FR3, C15, NFR3, issue #2247), are this package's other consumers;
+remaining FR4/FR9 pieces land in later tasks under the same plan (#2233)."""
 
 load("@rules_go//go:def.bzl", "go_binary", "go_library", "go_test")
 load("//tools/bazel:release.bzl", "release_app")
@@ -13,10 +14,10 @@ go_library(
     srcs = [
         "convert.go",
         "grpc_client.go",
-        "handlers.go",
         "handlers_session.go",
         "handlers_session_lifecycle.go",
         "handlers_session_live.go",
+        "handlers_sessions.go",
         "main.go",
         "mcpauth.go",
         "templ_render.go",
@@ -47,6 +48,7 @@ go_library(
         "@org_golang_google_grpc//:grpc",
         "@org_golang_google_grpc//codes",
         "@org_golang_google_grpc//status",
+        "@org_golang_google_protobuf//types/known/timestamppb",
     ],
 )
 
@@ -73,6 +75,13 @@ go_binary(
 # PermissionDenied/FailedPrecondition inline-message mapping, and the
 # composer/stop-control rendering matrix (owner vs. non-owner, terminal
 # vs. non-terminal).
+#
+# handlers_sessions_test.go (issue #2247's Testing section) added:
+# GET /sessions' filter-to-ListSessionsRequest mapping (unset filters
+# omitted, started_by_kind=service round-trips), next/prev pagination
+# round-tripping back to the original page with the pagination controls
+# absent at the correct end, and NFR3's "started by" rendering for a
+# service-started session and a session started by another user.
 go_test(
     name = "ui_test",
     size = "small",
@@ -81,6 +90,7 @@ go_test(
         "handlers_session_lifecycle_test.go",
         "handlers_session_live_test.go",
         "handlers_session_test.go",
+        "handlers_sessions_test.go",
         "main_test.go",
         "mcpauth_test.go",
     ],

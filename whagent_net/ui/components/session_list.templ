@@ -1,0 +1,285 @@
+package components
+
+import (
+	"net/url"
+
+	"github.com/whale-net/everything/libs/go/htmxui"
+)
+
+// SessionListTimeFormat matches HTML's <input type="datetime-local">
+// value format ("2006-01-02T15:04"), interpreted as UTC -- mirrors
+// tools/app_registry/ui/handlers_deployments.go's asOfQueryFormat/parseAsOf
+// convention. Exported so ../handlers_sessions.go parses started_after/
+// started_before with the exact same layout this file renders into the
+// two datetime-local inputs -- a single definition, never two that could
+// drift.
+const SessionListTimeFormat = "2006-01-02T15:04"
+
+// sessionListStateOptions is GET /sessions' `state` filter's option set --
+// sessionStateString's (../convert.go) six lowercase values verbatim, in
+// SessionState enum declaration order. "Any state" (unset) is rendered
+// separately, not as a seventh option here.
+var sessionListStateOptions = []string{
+	"running", "awaiting_input", "done", "stopped", "failed", "capped",
+}
+
+// sessionListStartedByKindOptions is GET /sessions' `started_by_kind`
+// filter's option set -- subjectKindString's (../convert.go) two
+// non-"unspecified" values.
+var sessionListStartedByKindOptions = []string{"human", "service"}
+
+// SessionListFilters carries GET /sessions' filter query-string values
+// exactly as submitted (FR3/C15, issue #2247) -- each is the empty string
+// when unset. ../handlers_sessions.go is the only place these are
+// validated and converted into whagentpb.ListSessionsRequest's typed
+// optional fields; this package never imports whagentpb (convert.go's
+// stance: the rendering layer stays proto-free).
+type SessionListFilters struct {
+	AgentID string
+	// State is one of sessionListStateOptions, or "" (unset).
+	State string
+	// StartedByKind is one of sessionListStartedByKindOptions, or ""
+	// (unset).
+	StartedByKind string
+	// StartedAfter/StartedBefore are SessionListTimeFormat, or "" (unset).
+	StartedAfter  string
+	StartedBefore string
+}
+
+// SessionListPageData carries SessionList/SessionListResults' page-level
+// parameterisation (FR3/C15, NFR3, issue #2247).
+type SessionListPageData struct {
+	Layout  LayoutData
+	Filters SessionListFilters
+
+	// Sessions is the current page's rows. Never used on its own to
+	// detect "no results" vs. "api unavailable" -- FetchError's presence
+	// is that signal (see its doc comment), so a zero-length Sessions
+	// with FetchError == "" unambiguously means "no results for these
+	// filters".
+	Sessions []SessionView
+
+	// HasPrev/HasNext gate the pagination controls (Implementation:
+	// "disabled at the ends rather than producing an empty page") --
+	// computed by the handler from ListSessionsResponse's
+	// prev_page_token/next_page_token presence, never inferred here from
+	// len(Sessions).
+	HasPrev, HasNext             bool
+	PrevPageToken, NextPageToken string
+
+	// FetchError is non-empty when ListSessions itself failed (api
+	// unavailable) -- distinct from a successful call returning zero
+	// rows (Implementation: "Empty and error states are explicit").
+	FetchError string
+}
+
+// sessionListQuery builds a GET /sessions query string carrying f's
+// filters plus pageToken -- ListSessionsRequest.PageToken is a single
+// opaque field that drives both directions (session.proto's doc comment),
+// so the same builder produces both the Previous link (pageToken =
+// data.PrevPageToken) and the Next link (pageToken = data.NextPageToken).
+// A filter-form submission never carries a page_token (sessionListFilterForm
+// has no hidden page_token field), so changing any filter always starts
+// back at page one.
+func sessionListQuery(f SessionListFilters, pageToken string) string {
+	q := url.Values{}
+	if f.AgentID != "" {
+		q.Set("agent_id", f.AgentID)
+	}
+	if f.State != "" {
+		q.Set("state", f.State)
+	}
+	if f.StartedByKind != "" {
+		q.Set("started_by_kind", f.StartedByKind)
+	}
+	if f.StartedAfter != "" {
+		q.Set("started_after", f.StartedAfter)
+	}
+	if f.StartedBefore != "" {
+		q.Set("started_before", f.StartedBefore)
+	}
+	if pageToken != "" {
+		q.Set("page_token", pageToken)
+	}
+	if encoded := q.Encode(); encoded != "" {
+		return "/sessions?" + encoded
+	}
+	return "/sessions"
+}
+
+// SessionList is GET /sessions' full page (FR3/C15, NFR3, issue #2247):
+// the authenticated landing page (replacing issue #2236's placeholder
+// index), the filter form, and the results fragment. The filter form and
+// pagination controls inside SessionListResults both hx-get back to this
+// same route targeting #session-list-results -- see ../handlers_sessions.go's
+// handleSessionList doc comment for the full request/response split.
+templ SessionList(data SessionListPageData) {
+	@Layout(data.Layout) {
+		<h1 class="text-2xl font-bold text-base-content mb-4">Sessions</h1>
+		@sessionListFilterForm(data.Filters)
+		<div id="session-list-results">
+			@SessionListResults(data)
+		</div>
+	}
+}
+
+// sessionListFilterForm renders GET /sessions' five FR3 filters as a
+// single GET form: hx-get back to /sessions targeting #session-list-
+// results, hx-push-url so a filtered view is linkable/bookmarkable and
+// survives a reload (Implementation). No search input, no sortable column
+// headers (M2 scope boundary, issue #2247's Context) -- this is the whole
+// filter surface.
+templ sessionListFilterForm(f SessionListFilters) {
+	<form
+		class="flex flex-wrap items-end gap-3 mb-4"
+		hx-get="/sessions"
+		hx-target="#session-list-results"
+		hx-swap="innerHTML"
+		hx-push-url="true"
+	>
+		<div class="form-control">
+			<label class="label label-text text-xs" for="agent_id">Agent</label>
+			<input type="text" id="agent_id" name="agent_id" class="input input-sm input-bordered" value={ f.AgentID }/>
+		</div>
+		<div class="form-control">
+			<label class="label label-text text-xs" for="state">State</label>
+			<select id="state" name="state" class="select select-sm select-bordered">
+				<option value="">Any state</option>
+				for _, opt := range sessionListStateOptions {
+					if opt == f.State {
+						<option value={ opt } selected>{ opt }</option>
+					} else {
+						<option value={ opt }>{ opt }</option>
+					}
+				}
+			</select>
+		</div>
+		<div class="form-control">
+			<label class="label label-text text-xs" for="started_by_kind">Started by</label>
+			<select id="started_by_kind" name="started_by_kind" class="select select-sm select-bordered">
+				<option value="">Any</option>
+				for _, opt := range sessionListStartedByKindOptions {
+					if opt == f.StartedByKind {
+						<option value={ opt } selected>{ opt }</option>
+					} else {
+						<option value={ opt }>{ opt }</option>
+					}
+				}
+			</select>
+		</div>
+		<div class="form-control">
+			<label class="label label-text text-xs" for="started_after">Started after (UTC)</label>
+			<input type="datetime-local" id="started_after" name="started_after" class="input input-sm input-bordered" value={ f.StartedAfter }/>
+		</div>
+		<div class="form-control">
+			<label class="label label-text text-xs" for="started_before">Started before (UTC)</label>
+			<input type="datetime-local" id="started_before" name="started_before" class="input input-sm input-bordered" value={ f.StartedBefore }/>
+		</div>
+		@htmxui.Button(htmxui.ButtonPrimary, htmxui.ButtonSizeSM, false, templ.Attributes{"type": "submit"}) {
+			Filter
+		}
+	</form>
+}
+
+// SessionListResults is the swap target every filter-form submission and
+// pagination click replaces wholesale (Implementation: "filter changes and
+// paging are HTMX fragment swaps against the same handler") -- exported so
+// ../handlers_sessions.go's HX-Request branch can render it directly,
+// without SessionList's surrounding layout/filter-form chrome.
+templ SessionListResults(data SessionListPageData) {
+	if data.FetchError != "" {
+		<div class="alert alert-error mb-4" role="alert">Failed to load sessions: { data.FetchError }</div>
+	} else if len(data.Sessions) == 0 {
+		<div class="text-base-content/60 py-8">No sessions match these filters.</div>
+	} else {
+		<div class="overflow-x-auto">
+			<table class="table table-sm">
+				<thead>
+					<tr>
+						<th>Session</th>
+						<th>Agent</th>
+						<th>State</th>
+						<th>Started</th>
+						<th>Started by</th>
+					</tr>
+				</thead>
+				<tbody>
+					for _, sess := range data.Sessions {
+						@sessionListRow(sess)
+					}
+				</tbody>
+			</table>
+		</div>
+	}
+	@sessionListPagination(data)
+}
+
+// sessionListRow renders one session's row: the id (linked to the detail
+// page, issue #2242), agent, state badge, started-at, and "started by"
+// (NFR3, no display-name lookup -- see sessionListStartedByCell's doc
+// comment).
+templ sessionListRow(sess SessionView) {
+	<tr>
+		<td><a class="link link-primary font-mono text-sm" href={ templ.URL("/sessions/" + sess.SessionID) }>{ sess.SessionID }</a></td>
+		<td>{ sess.AgentID }</td>
+		<td>@sessionListStateBadge(sess.State)</td>
+		<td class="text-sm">{ sess.CreatedAt.Format("2006-01-02 15:04:05 UTC") }</td>
+		<td>@sessionListStartedByCell(sess)</td>
+	</tr>
+}
+
+// sessionListStateBadge renders sess.State via the exact htmxui.Badge +
+// stateBadgeVariant mapping session.templ's stateBadge (the detail page's
+// state badge) uses -- the same component and colour semantics, per issue
+// #2247's Implementation: "state badge (shared with the detail page's
+// badge component)". It deliberately omits stateBadge's
+// `id="session-state-badge"`: that id exists for the detail page's single
+// SSE-swapped badge (session.templ's doc comment) and would collide
+// across this table's many rows.
+templ sessionListStateBadge(state string) {
+	@htmxui.Badge(state, stateBadgeVariant(state), htmxui.BadgeSizeSM, true, nil)
+}
+
+// sessionListStartedByCell renders NFR3's "started by" identity directly
+// from Session.OnBehalfOf/Kind -- no display-name table, no UI-local
+// identity model, mirroring session.templ's startedByLine (the detail
+// page's fuller version of the same rule) but compact enough for a table
+// cell.
+templ sessionListStartedByCell(sess SessionView) {
+	<span class="font-mono text-xs">{ sess.OnBehalfOf.Sub }</span>
+	<span class="badge badge-ghost badge-xs align-middle ml-1">{ sess.OnBehalfOf.Kind }</span>
+}
+
+// sessionListPagination renders the Previous/Next controls
+// (Implementation: "disabled at the ends rather than producing an empty
+// page"). Both live links hx-get back to /sessions targeting
+// #session-list-results -- the exact same fragment swap the filter form
+// uses -- and hx-push-url so a paged-to view is itself linkable/reload-safe.
+templ sessionListPagination(data SessionListPageData) {
+	<div class="flex justify-between items-center mt-4">
+		if data.HasPrev {
+			<a
+				class="btn btn-sm"
+				href={ templ.URL(sessionListQuery(data.Filters, data.PrevPageToken)) }
+				hx-get={ sessionListQuery(data.Filters, data.PrevPageToken) }
+				hx-target="#session-list-results"
+				hx-swap="innerHTML"
+				hx-push-url="true"
+			>Previous</a>
+		} else {
+			<span class="btn btn-sm btn-disabled" aria-disabled="true">Previous</span>
+		}
+		if data.HasNext {
+			<a
+				class="btn btn-sm"
+				href={ templ.URL(sessionListQuery(data.Filters, data.NextPageToken)) }
+				hx-get={ sessionListQuery(data.Filters, data.NextPageToken) }
+				hx-target="#session-list-results"
+				hx-swap="innerHTML"
+				hx-push-url="true"
+			>Next</a>
+		} else {
+			<span class="btn btn-sm btn-disabled" aria-disabled="true">Next</span>
+		}
+	</div>
+}
