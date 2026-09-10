@@ -201,6 +201,20 @@ This is a plain current-state table, not SCD2 (AGENTS.md § SCD2) — a
 grant's history is its status transitions (`GrantStatus`), not versioned
 rows.
 
+**Listing grants — the `grpcauth/grantindex` reference implementation
+(FR12).** `grpcauth.Store` deliberately has no "list grants for a subject"
+method (see `store.go`'s own doc comment). A consuming domain that needs
+that listing depends on the separate `//libs/go/grpcauth/grantindex`
+`go_library` target instead, alongside — not instead of — `pgstore`; like
+`pgstore`, core `//libs/go/grpcauth` carries no pgx/Postgres dependency, and
+no migration ships with `grantindex` either (FR13) — the consuming domain
+owns and applies its own migration matching `grantindex`'s documented table
+shape before calling `grantindex.New`. It is a pure existence index with no
+status column: every caller reads live status from `grpcauth.Store.Status`
+instead, so `grantindex` and `pgstore` never need syncing. See the package
+doc comment in `grantindex/grantindex.go` for the full schema contract and
+hard semantics.
+
 **Encryption key.** `StoreConfig.EncryptionKey` (and, if you construct one
 directly, `DelegatedGrantConfig.EncryptionKey`) is a 32-byte AES-256-GCM key
 — the same shape as `audience_score_system`'s

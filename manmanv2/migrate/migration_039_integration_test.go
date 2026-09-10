@@ -60,12 +60,12 @@ func TestMigration039_AppliesOnTopOfFullHistoryAndCreatesExpectedShape(t *testin
 	if err != nil {
 		t.Fatalf("LatestVersion: %v", err)
 	}
-	if latest != 40 {
-		t.Fatalf("expected the latest migration source version to be 40, got %d -- update this test if a newer migration has since landed", latest)
+	if latest != 42 {
+		t.Fatalf("expected the latest migration source version to be 42, got %d -- update this test if a newer migration has since landed", latest)
 	}
 
 	if err := runner.Up(); err != nil {
-		t.Fatalf("Up (applying every migration through 040): %v", err)
+		t.Fatalf("Up (applying every migration through 042): %v", err)
 	}
 
 	version, dirty, err := runner.Version()
@@ -75,8 +75,8 @@ func TestMigration039_AppliesOnTopOfFullHistoryAndCreatesExpectedShape(t *testin
 	if dirty {
 		t.Fatalf("expected clean state after Up, got dirty")
 	}
-	if version != 40 {
-		t.Fatalf("expected version 40 after Up, got %d", version)
+	if version != 42 {
+		t.Fatalf("expected version 42 after Up, got %d", version)
 	}
 
 	// All documented columns of both tables must exist.

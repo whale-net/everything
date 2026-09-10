@@ -4,7 +4,9 @@ import (
 	"context"
 	"encoding/base64"
 	"fmt"
+	"log/slog"
 	"strconv"
+	"time"
 
 	"github.com/whale-net/everything/manmanv2/api/repository"
 	manman "github.com/whale-net/everything/manmanv2/models"
@@ -246,12 +248,69 @@ func (h *ServerHandler) DeleteServer(ctx context.Context, req *pb.DeleteServerRe
 	return &pb.DeleteServerResponse{}, nil
 }
 
+// DrainServer transitions a host to "draining" (#2360, manmanv2 M6, C29
+// groundwork). Inert here: it only flips drain_state and stamps
+// drain_requested_at -- no cordon enforcement, no eviction.
+// TODO(#eviction-task): hook cordon enforcement / session eviction in here
+// once the dependent task lands.
+// Idempotent: draining an already-draining or already-drained host is a
+// successful no-op change, not an error. No reason field, no audit trail
+// beyond the slog.Info below (FR3).
+func (h *ServerHandler) DrainServer(ctx context.Context, req *pb.DrainServerRequest) (*pb.DrainServerResponse, error) {
+	if req.ServerId <= 0 {
+		return nil, status.Error(codes.InvalidArgument, "server_id is required")
+	}
+	if _, err := h.repo.Get(ctx, req.ServerId); err != nil {
+		return nil, status.Errorf(codes.NotFound, "server not found: %v", err)
+	}
+
+	requestedAt := time.Now()
+	if err := h.repo.SetDrainState(ctx, req.ServerId, manman.ServerDrainStateDraining, &requestedAt); err != nil {
+		return nil, status.Errorf(codes.Internal, "failed to drain server: %v", err)
+	}
+
+	server, err := h.repo.Get(ctx, req.ServerId)
+	if err != nil {
+		return nil, status.Errorf(codes.Internal, "failed to reload drained server: %v", err)
+	}
+
+	slog.Info("server drained", "server_id", req.ServerId)
+
+	return &pb.DrainServerResponse{Server: serverToProto(server)}, nil
+}
+
+// UndrainServer returns a host to "schedulable" and clears
+// drain_requested_at. Never restarts anything (FR4). Idempotent:
+// undraining an already-schedulable host is a successful no-op change.
+func (h *ServerHandler) UndrainServer(ctx context.Context, req *pb.UndrainServerRequest) (*pb.UndrainServerResponse, error) {
+	if req.ServerId <= 0 {
+		return nil, status.Error(codes.InvalidArgument, "server_id is required")
+	}
+	if _, err := h.repo.Get(ctx, req.ServerId); err != nil {
+		return nil, status.Errorf(codes.NotFound, "server not found: %v", err)
+	}
+
+	if err := h.repo.SetDrainState(ctx, req.ServerId, manman.ServerDrainStateSchedulable, nil); err != nil {
+		return nil, status.Errorf(codes.Internal, "failed to undrain server: %v", err)
+	}
+
+	server, err := h.repo.Get(ctx, req.ServerId)
+	if err != nil {
+		return nil, status.Errorf(codes.Internal, "failed to reload undrained server: %v", err)
+	}
+
+	slog.Info("server undrained", "server_id", req.ServerId)
+
+	return &pb.UndrainServerResponse{Server: serverToProto(server)}, nil
+}
+
 func serverToProto(s *manman.Server) *pb.Server {
 	pbServer := &pb.Server{
-		ServerId:  s.ServerID,
-		Name:      s.Name,
-		Status:    s.Status,
-		IsDefault: s.IsDefault,
+		ServerId:   s.ServerID,
+		Name:       s.Name,
+		Status:     s.Status,
+		IsDefault:  s.IsDefault,
+		DrainState: s.DrainState,
 	}
 
 	if s.LastSeen != nil {
@@ -264,6 +323,10 @@ func serverToProto(s *manman.Server) *pb.Server {
 
 	if s.HostPublicAddress != nil {
 		pbServer.HostPublicAddress = *s.HostPublicAddress
+	}
+
+	if s.DrainRequestedAt != nil {
+		pbServer.DrainRequestedAt = s.DrainRequestedAt.Unix()
 	}
 
 	return pbServer

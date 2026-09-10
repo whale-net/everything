@@ -425,6 +425,12 @@ func (app *App) setupRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("/servers/", app.auth.RequireAuthFunc(app.auth.WithAccessToken(app.handleServerDetail)))
 
 	// Protected routes - Workshop
+	// "/workshop" (task #2362, FR6/FR7): the redesigned top-level page --
+	// additive alongside every route below it. It does not replace
+	// "/workshop/library" or shadow any "/workshop/*" sub-route (NFR6);
+	// the nav swap and "/workshop/library" redirect are the dependent
+	// navigation/disposition task's job, not this one's.
+	mux.HandleFunc("/workshop", app.auth.RequireAuthFunc(app.auth.WithAccessToken(app.handleWorkshopPage)))
 	mux.HandleFunc("/workshop/library", app.auth.RequireAuthFunc(app.auth.WithAccessToken(app.handleWorkshopLibrary)))
 	mux.HandleFunc("/workshop/search", app.auth.RequireAuthFunc(app.auth.WithAccessToken(app.handleWorkshopSearch)))
 	mux.HandleFunc("/workshop/addon", app.auth.RequireAuthFunc(app.auth.WithAccessToken(app.handleWorkshopAddonDetail)))
@@ -449,6 +455,10 @@ func (app *App) setupRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("/workshop/api/presets-for-game", app.auth.RequireAuthFunc(app.auth.WithAccessToken(app.handlePresetsForGame)))
 	mux.HandleFunc("/workshop/batch-status", app.auth.RequireAuthFunc(app.auth.WithAccessToken(app.handleWorkshopBatchStatus)))
 	mux.HandleFunc("/workshop/cache", app.auth.RequireAuthFunc(app.auth.WithAccessToken(app.handleWorkshopCache)))
+	// Cache Blade fragment (task #2362, FR7 C35): opened via hx-get from
+	// "/workshop" so cache-backed install is executable without navigating
+	// to "/workshop/cache" (see handleWorkshopCacheBlade's doc comment).
+	mux.HandleFunc("/workshop/cache-blade", app.auth.RequireAuthFunc(app.auth.WithAccessToken(app.handleWorkshopCacheBlade)))
 	mux.HandleFunc("/workshop/cache/verify", app.auth.RequireAuthFunc(app.auth.WithAccessToken(app.handleWorkshopCacheVerify)))
 	mux.HandleFunc("/workshop/cache/evict", app.auth.RequireAuthFunc(app.auth.WithAccessToken(app.handleWorkshopCacheEvict)))
 	mux.HandleFunc("/workshop/bulk-add-collection", app.auth.RequireAuthFunc(app.auth.WithAccessToken(app.handleBulkAddCollection)))

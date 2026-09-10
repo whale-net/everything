@@ -59,6 +59,27 @@ func (c *ControlClient) ListServers(ctx context.Context) ([]*manmanpb.Server, er
 	return resp.Servers, nil
 }
 
+// DrainServer transitions a host to "draining" (#2360, manmanv2 M6, C29
+// groundwork). Inert server-side in this task -- no cordon enforcement or
+// eviction happens as a result of this call.
+func (c *ControlClient) DrainServer(ctx context.Context, serverID int64) (*manmanpb.Server, error) {
+	resp, err := c.api.DrainServer(ctx, &manmanpb.DrainServerRequest{ServerId: serverID})
+	if err != nil {
+		return nil, fmt.Errorf("failed to drain server: %w", err)
+	}
+	return resp.Server, nil
+}
+
+// UndrainServer returns a host to "schedulable" and clears
+// drain_requested_at. Never restarts anything (FR4).
+func (c *ControlClient) UndrainServer(ctx context.Context, serverID int64) (*manmanpb.Server, error) {
+	resp, err := c.api.UndrainServer(ctx, &manmanpb.UndrainServerRequest{ServerId: serverID})
+	if err != nil {
+		return nil, fmt.Errorf("failed to undrain server: %w", err)
+	}
+	return resp.Server, nil
+}
+
 // ListGames retrieves all games
 func (c *ControlClient) ListGames(ctx context.Context) ([]*manmanpb.Game, error) {
 	resp, err := c.api.ListGames(ctx, &manmanpb.ListGamesRequest{
@@ -992,6 +1013,26 @@ func (c *ControlClient) ListBackupConfigs(ctx context.Context, volumeID int64) (
 func (c *ControlClient) CreateBackupConfig(ctx context.Context, volumeID int64, cadenceMinutes int32, backupPath string, enabled bool) (*manmanpb.BackupConfig, error) {
 	resp, err := c.api.CreateBackupConfig(ctx, &manmanpb.CreateBackupConfigRequest{
 		VolumeId:       volumeID,
+		CadenceMinutes: cadenceMinutes,
+		BackupPath:     backupPath,
+		Enabled:        enabled,
+	})
+	if err != nil {
+		return nil, err
+	}
+	return resp.Config, nil
+}
+
+// UpdateBackupConfig updates a BackupConfig's volume-level settings (FR14,
+// #2363): cadence, backup path, enabled. There is no volume_id field here
+// deliberately -- the API handler's UpdateBackupConfig never accepts one
+// (manmanv2/api/handlers/backup_config.go), since BackupConfig.VolumeID is
+// set once at creation and never reassigned (see ConfigEditorVolume's doc
+// comment in manmanv2/ui/pages/config_editor.templ for why that also means
+// "assign" and "create" are the same operation in this schema).
+func (c *ControlClient) UpdateBackupConfig(ctx context.Context, backupConfigID int64, cadenceMinutes int32, backupPath string, enabled bool) (*manmanpb.BackupConfig, error) {
+	resp, err := c.api.UpdateBackupConfig(ctx, &manmanpb.UpdateBackupConfigRequest{
+		BackupConfigId: backupConfigID,
 		CadenceMinutes: cadenceMinutes,
 		BackupPath:     backupPath,
 		Enabled:        enabled,

@@ -110,6 +110,29 @@ The registry-state check `VerifyPublished` performs is unchanged — only
 where its comparison version comes from changed, and it is now the
 authoritative, not the sole, per-target gate.
 
+**Updated again for the notify-vs-poll completion split (`NotifyBuildComplete`).**
+How the workflow learns the GHA build run finished used to be polling-only:
+`PollBuild` (a 30-minute-timeout activity with retries) called the GitHub API
+every few seconds until the run's overall `conclusion` was set. The build job
+itself always knows when it finished, though, so it now says so first: a final
+`notify-temporal` job in `release-v2.yml` calls `release_helper_go notify-build`
+(-> `ReleaseRegistry.NotifyBuildComplete`, a builder-role RPC — the job already
+holds the `app-registry-builder` credentials) which signals the release run's
+Temporal workflow with `release.SignalBuildCompleted`.
+`ReleaseWorkflow.awaitBuildCompletion` (`worker/release/workflow.go`) races the
+two: the signal decides immediately when it arrives (poll activity cancelled),
+and polling stays the correctness fallback when it doesn't — e.g. the notify
+job is skipped, or the notification is for a different Actions run than the
+one the workflow dispatched (both sides check the run id: the handler against
+`release_run.build_ref_run_id`, the workflow against the signal's
+`GitHubRunID`; a notification with no run id is treated as unverifiable and
+trusted on the workflow side). The notification is strictly best-effort: the
+GHA job is `continue-on-error`, `Signaled=false` (workflow already completed
+or unknown to Temporal) is a success response, and a run dispatched without a
+`release_run_id` input (the manual/bot fallback path) skips notify entirely —
+polling alone must remain sufficient for a release to complete, so the
+notification can accelerate but never gate.
+
 **This needs no new tables either.** `build` is already the run aggregate
 (`(workflow_run_id, workflow_attempt)` unique); the artifact rows in
 `allocated`/`publishing`/`published`/`failed` are its children. So:

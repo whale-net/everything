@@ -223,6 +223,46 @@ link is the documented manual fallback while not-live.
 it at a route that would only 503. The #1628 per-row poll remains the
 update path in that case, unchanged.
 
+## Workshop Top-Level Page (M6, #2362)
+
+`GET /workshop` (`handleWorkshopPage`, `handlers_workshop_page.go`) is the
+redesigned Workshop top-level page: the one place a Server Manager manages
+Workshop content fleet-wide (US8, FR6/FR7). It is additive to the
+pre-existing sub-routes below -- registering `/workshop` does not remove or
+redirect `/workshop/library` or any other `/workshop/*` route; the nav
+entry swap and `/workshop/library` redirect land in a dependent
+navigation/disposition task.
+
+`pages.WorkshopPage` (`pages/workshop.templ`) renders inside the shared M5
+nav shell (`components.Layout`) and integrates the following fleet-scale
+actions, each targeting its pre-existing handler unchanged rather than
+duplicating any logic:
+
+| Route | Handler | Purpose | On this page |
+|-------|---------|---------|---------------|
+| `/workshop/create-library` | `handleCreateLibrary` | Create a library | Toggle form in the page header |
+| `/workshop/update-library`, `/workshop/delete-library` | `handlers_workshop.go` | Library update/delete | Per-library Manage Blade |
+| `/workshop/add-addon-to-library`, `/workshop/remove-addon-from-library`, `/workshop/add-library-reference`, `/workshop/remove-library-reference` | `handlers_workshop.go` | Addon/reference management | Per-library Manage Blade |
+| `/workshop/bulk-add-collection` | `handleBulkAddCollection` | FR7 collection-add (C33) | Page-level "+ Add Collection" Blade, zero-request open |
+| `/workshop/batch-create-addons` | `handleBatchCreateAddons` | FR7 batch-addon-create (C34) | Page-level "+ Batch Create" Blade, zero-request open |
+| `/workshop/batch-status` | `handleWorkshopBatchStatus` | Shared progress surface for both batch flows above | Linked from "Recent Batch Jobs" and from a successful collection-add/batch-create submit |
+| `/workshop/cache-blade` | `handleWorkshopCacheBlade` | FR7 cache-backed install (C35) | Cache Blade, opened via hx-get for a chosen addon |
+| `/workshop/cache/verify`, `/workshop/cache/evict` | `handlers_workshop.go` | Verify/evict a cache entry | Cache Blade's hx-post forms swap the blade body in place (no navigation) -- the pre-existing plain-POST full-page behavior on `/workshop/cache` is unchanged (NFR6), gated on the `HX-Request` header |
+| `/workshop/search`, `/workshop/fetch-metadata`, `/workshop/create-addon` | `handlers_workshop.go` | Addon search/create | Search links out; fetch-metadata is an inline form in the Cache section |
+
+Each library's Manage Blade (`workshopLibraryPanel`) and the two
+collection-add/batch-create Blades are pre-rendered into `<template>`
+elements at the bottom of the page and opened via the same
+`data-open-blade-template` click delegate `games.templ`'s per-deployment
+Customize blade uses (see `workshopBladeOpenerScript`'s doc comment) --
+opening them costs no request. The Cache Blade is the one exception: its
+data (cache entries for a chosen addon) isn't known until an addon is
+picked, so it opens via a real `hx-get` to `/workshop/cache-blade`,
+matching the Config Editor blade's `hx-get`/`hx-swap="beforeend"` shape.
+
+GC-level library attachment (FR10) is deliberately not part of this page --
+it lands on the Games page panel in its own task.
+
 ## Documentation
 
 - **[ARCHITECTURE.md](ARCHITECTURE.md)** - System architecture and patterns

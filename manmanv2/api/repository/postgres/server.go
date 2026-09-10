@@ -4,6 +4,7 @@ import (
 	"context"
 	"time"
 
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/whale-net/everything/manmanv2/models"
 )
@@ -16,11 +17,35 @@ func NewServerRepository(db *pgxpool.Pool) *ServerRepository {
 	return &ServerRepository{db: db}
 }
 
+// serverSelectColumns is the column list shared by every SELECT below,
+// including drain_state/drain_requested_at (#2360, manmanv2 M6).
+const serverSelectColumns = `server_id, name, status, last_seen, is_default, host_public_address, drain_state, drain_requested_at`
+
+// scanServer scans a row produced by a query selecting serverSelectColumns.
+func scanServer(row pgx.Row) (*manman.Server, error) {
+	server := &manman.Server{}
+	err := row.Scan(
+		&server.ServerID,
+		&server.Name,
+		&server.Status,
+		&server.LastSeen,
+		&server.IsDefault,
+		&server.HostPublicAddress,
+		&server.DrainState,
+		&server.DrainRequestedAt,
+	)
+	if err != nil {
+		return nil, err
+	}
+	return server, nil
+}
+
 func (r *ServerRepository) Create(ctx context.Context, name string) (*manman.Server, error) {
 	server := &manman.Server{
-		Name:      name,
-		Status:    manman.ServerStatusOffline,
-		IsDefault: false, // Will be set after checking if first server
+		Name:       name,
+		Status:     manman.ServerStatusOffline,
+		IsDefault:  false, // Will be set after checking if first server
+		DrainState: manman.ServerDrainStateSchedulable,
 	}
 
 	// Check if this will be the first server
@@ -56,51 +81,23 @@ func (r *ServerRepository) Create(ctx context.Context, name string) (*manman.Ser
 }
 
 func (r *ServerRepository) Get(ctx context.Context, serverID int64) (*manman.Server, error) {
-	server := &manman.Server{}
-
 	query := `
-		SELECT server_id, name, status, last_seen, is_default, host_public_address
+		SELECT ` + serverSelectColumns + `
 		FROM servers
 		WHERE server_id = $1
 	`
 
-	err := r.db.QueryRow(ctx, query, serverID).Scan(
-		&server.ServerID,
-		&server.Name,
-		&server.Status,
-		&server.LastSeen,
-		&server.IsDefault,
-		&server.HostPublicAddress,
-	)
-	if err != nil {
-		return nil, err
-	}
-
-	return server, nil
+	return scanServer(r.db.QueryRow(ctx, query, serverID))
 }
 
 func (r *ServerRepository) GetByName(ctx context.Context, name string) (*manman.Server, error) {
-	server := &manman.Server{}
-
 	query := `
-		SELECT server_id, name, status, last_seen, is_default, host_public_address
+		SELECT ` + serverSelectColumns + `
 		FROM servers
 		WHERE name = $1
 	`
 
-	err := r.db.QueryRow(ctx, query, name).Scan(
-		&server.ServerID,
-		&server.Name,
-		&server.Status,
-		&server.LastSeen,
-		&server.IsDefault,
-		&server.HostPublicAddress,
-	)
-	if err != nil {
-		return nil, err
-	}
-
-	return server, nil
+	return scanServer(r.db.QueryRow(ctx, query, name))
 }
 
 func (r *ServerRepository) List(ctx context.Context, limit, offset int) ([]*manman.Server, error) {
@@ -109,7 +106,7 @@ func (r *ServerRepository) List(ctx context.Context, limit, offset int) ([]*manm
 	}
 
 	query := `
-		SELECT server_id, name, status, last_seen, is_default, host_public_address
+		SELECT ` + serverSelectColumns + `
 		FROM servers
 		ORDER BY server_id
 		LIMIT $1 OFFSET $2
@@ -123,15 +120,7 @@ func (r *ServerRepository) List(ctx context.Context, limit, offset int) ([]*manm
 
 	var servers []*manman.Server
 	for rows.Next() {
-		server := &manman.Server{}
-		err := rows.Scan(
-			&server.ServerID,
-			&server.Name,
-			&server.Status,
-			&server.LastSeen,
-			&server.IsDefault,
-			&server.HostPublicAddress,
-		)
+		server, err := scanServer(rows)
 		if err != nil {
 			return nil, err
 		}
@@ -186,7 +175,7 @@ func (r *ServerRepository) UpdateLastSeen(ctx context.Context, serverID int64, l
 
 func (r *ServerRepository) ListStaleServers(ctx context.Context, thresholdSeconds int) ([]*manman.Server, error) {
 	query := `
-		SELECT server_id, name, status, last_seen, is_default, host_public_address
+		SELECT ` + serverSelectColumns + `
 		FROM servers
 		WHERE status = $1
 		  AND last_seen < NOW() - INTERVAL '1 second' * $2
@@ -201,15 +190,51 @@ func (r *ServerRepository) ListStaleServers(ctx context.Context, thresholdSecond
 
 	var servers []*manman.Server
 	for rows.Next() {
-		server := &manman.Server{}
-		err := rows.Scan(
-			&server.ServerID,
-			&server.Name,
-			&server.Status,
-			&server.LastSeen,
-			&server.IsDefault,
-			&server.HostPublicAddress,
-		)
+		server, err := scanServer(rows)
+		if err != nil {
+			return nil, err
+		}
+		servers = append(servers, server)
+	}
+
+	return servers, rows.Err()
+}
+
+// SetDrainState transitions a server's drain state (#2360, manmanv2 M6,
+// C29 groundwork). Inert here -- callers (DrainServer/UndrainServer
+// handlers) are the only writers; no cordon enforcement or eviction
+// happens as a side effect of this write.
+func (r *ServerRepository) SetDrainState(ctx context.Context, serverID int64, state string, requestedAt *time.Time) error {
+	query := `
+		UPDATE servers
+		SET drain_state = $2, drain_requested_at = $3
+		WHERE server_id = $1
+		RETURNING server_id
+	`
+
+	var returnedID int64
+	return r.db.QueryRow(ctx, query, serverID, state, requestedAt).Scan(&returnedID)
+}
+
+// ListByDrainState lists servers currently in the given drain state.
+// Used by the dependent eviction task (#2360, manmanv2 M6).
+func (r *ServerRepository) ListByDrainState(ctx context.Context, state string) ([]*manman.Server, error) {
+	query := `
+		SELECT ` + serverSelectColumns + `
+		FROM servers
+		WHERE drain_state = $1
+		ORDER BY server_id
+	`
+
+	rows, err := r.db.Query(ctx, query, state)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var servers []*manman.Server
+	for rows.Next() {
+		server, err := scanServer(rows)
 		if err != nil {
 			return nil, err
 		}
@@ -236,28 +261,14 @@ func (r *ServerRepository) MarkServersOffline(ctx context.Context, serverIDs []i
 
 // GetDefaultServer returns the default server
 func (r *ServerRepository) GetDefaultServer(ctx context.Context) (*manman.Server, error) {
-	server := &manman.Server{}
-
 	query := `
-		SELECT server_id, name, status, last_seen, is_default, host_public_address
+		SELECT ` + serverSelectColumns + `
 		FROM servers
 		WHERE is_default = TRUE
 		LIMIT 1
 	`
 
-	err := r.db.QueryRow(ctx, query).Scan(
-		&server.ServerID,
-		&server.Name,
-		&server.Status,
-		&server.LastSeen,
-		&server.IsDefault,
-		&server.HostPublicAddress,
-	)
-	if err != nil {
-		return nil, err
-	}
-
-	return server, nil
+	return scanServer(r.db.QueryRow(ctx, query))
 }
 
 // SetDefaultServer clears all default flags and sets the specified server as default
