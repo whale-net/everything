@@ -7,6 +7,7 @@ go_library(
         "batch.go",
         "batch_job.go",
         "cache.go",
+        "gameconfig.go",
         "handler.go",
         "installation.go",
         "library.go",
@@ -34,11 +35,13 @@ go_test(
     srcs = [
         "batch_create_steam_regression_test.go",
         "cache_test.go",
+        "gameconfig_test.go",
         "workshop_test.go",
     ],
     embed = [":workshop"],
     deps = [
         "//libs/go/grpcauth",
+        "//manmanv2/api/repository",
         "//manmanv2/api/steam",
         "//manmanv2/api/workshop",
         "//manmanv2/host/rmq",

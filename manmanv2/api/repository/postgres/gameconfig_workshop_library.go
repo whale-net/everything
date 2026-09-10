@@ -111,6 +111,11 @@ func (r *GameConfigWorkshopLibraryRepository) RemoveLibrary(ctx context.Context,
 	return err
 }
 
+// ListUnresolvedConflicts returns every unresolved conflict with its
+// Candidates populated via one follow-up query keyed on the fetched
+// conflict_ids (not a per-conflict loop) -- the FR12 resolution UI/RPC needs
+// candidates on every entry it lists, and this keeps that from scaling
+// query count with conflict count.
 func (r *GameConfigWorkshopLibraryRepository) ListUnresolvedConflicts(ctx context.Context) ([]*manman.WorkshopLibraryMigrationConflict, error) {
 	query := `
 		SELECT conflict_id, config_id, detected_at, resolved_at, resolution, resolved_library_id
@@ -126,6 +131,7 @@ func (r *GameConfigWorkshopLibraryRepository) ListUnresolvedConflicts(ctx contex
 	defer rows.Close()
 
 	var conflicts []*manman.WorkshopLibraryMigrationConflict
+	conflictIDs := make([]int64, 0)
 	for rows.Next() {
 		c := &manman.WorkshopLibraryMigrationConflict{}
 		if err := rows.Scan(
@@ -139,9 +145,60 @@ func (r *GameConfigWorkshopLibraryRepository) ListUnresolvedConflicts(ctx contex
 			return nil, err
 		}
 		conflicts = append(conflicts, c)
+		conflictIDs = append(conflictIDs, c.ConflictID)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	if len(conflicts) == 0 {
+		return conflicts, nil
 	}
 
-	return conflicts, rows.Err()
+	candidatesByConflict, err := r.listCandidatesByConflictIDs(ctx, conflictIDs)
+	if err != nil {
+		return nil, err
+	}
+	for _, c := range conflicts {
+		c.Candidates = candidatesByConflict[c.ConflictID]
+	}
+
+	return conflicts, nil
+}
+
+// ListConflictCandidates returns conflictID's candidates regardless of
+// resolved state (see interface doc comment).
+func (r *GameConfigWorkshopLibraryRepository) ListConflictCandidates(ctx context.Context, conflictID int64) ([]*manman.WorkshopLibraryMigrationConflictCandidate, error) {
+	byConflict, err := r.listCandidatesByConflictIDs(ctx, []int64{conflictID})
+	if err != nil {
+		return nil, err
+	}
+	return byConflict[conflictID], nil
+}
+
+func (r *GameConfigWorkshopLibraryRepository) listCandidatesByConflictIDs(ctx context.Context, conflictIDs []int64) (map[int64][]*manman.WorkshopLibraryMigrationConflictCandidate, error) {
+	query := `
+		SELECT conflict_id, library_id, sgc_id
+		FROM workshop_library_migration_conflict_candidates
+		WHERE conflict_id = ANY($1)
+		ORDER BY conflict_id, library_id, sgc_id
+	`
+
+	rows, err := r.db.Query(ctx, query, conflictIDs)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	byConflict := make(map[int64][]*manman.WorkshopLibraryMigrationConflictCandidate)
+	for rows.Next() {
+		cand := &manman.WorkshopLibraryMigrationConflictCandidate{}
+		if err := rows.Scan(&cand.ConflictID, &cand.LibraryID, &cand.SGCID); err != nil {
+			return nil, err
+		}
+		byConflict[cand.ConflictID] = append(byConflict[cand.ConflictID], cand)
+	}
+
+	return byConflict, rows.Err()
 }
 
 // GetConflictForConfig returns configID's unresolved conflict, or (nil, nil)

@@ -33,6 +33,7 @@ import (
 	"github.com/whale-net/everything/libs/go/logging"
 	"github.com/whale-net/everything/libs/go/mcpauth"
 	"github.com/whale-net/everything/libs/go/rmq"
+	"github.com/whale-net/everything/whagent_net/delegatedgrant"
 	"github.com/whale-net/everything/whagent_net/events"
 )
 
@@ -110,6 +111,20 @@ type config struct {
 	// Context section) -- a mismatch breaks an MCP client's RFC 9728
 	// discovery chain.
 	MCPPublicURL string
+
+	// GrantClientID/GrantClientSecret/GrantRedirectURI/GrantEncryptionKey
+	// configure the single shared confidential Keycloak client
+	// //whagent_net/delegatedgrant.Build constructs (issue #2426,
+	// FR10/FR13/NFR5/NFR6 of plan #2421) -- WHAGENT_GRANT_CLIENT_ID/
+	// _CLIENT_SECRET/_REDIRECT_URI/_ENCRYPTION_KEY (../ENV.md). Distinct
+	// from OIDCClientID/OIDCClientSecret above, which only ever verify or
+	// forward a token, never mint one (NFR5). Purely additive: nothing
+	// built from these is on any request path yet (see
+	// initializeDelegatedGrant's doc comment).
+	GrantClientID      string
+	GrantClientSecret  string
+	GrantRedirectURI   string
+	GrantEncryptionKey string
 }
 
 func loadConfig() config {
@@ -127,6 +142,11 @@ func loadConfig() config {
 		RabbitMQURL:      getEnv("RABBITMQ_URL", ""),
 		UIPublicURL:      getEnv("WHAGENT_UI_PUBLIC_URL", ""),
 		MCPPublicURL:     getEnv("WHAGENT_MCP_PUBLIC_URL", ""),
+
+		GrantClientID:      getEnv("WHAGENT_GRANT_CLIENT_ID", ""),
+		GrantClientSecret:  getEnv("WHAGENT_GRANT_CLIENT_SECRET", ""),
+		GrantRedirectURI:   getEnv("WHAGENT_GRANT_REDIRECT_URI", ""),
+		GrantEncryptionKey: getEnv("WHAGENT_GRANT_ENCRYPTION_KEY", ""),
 	}
 }
 
@@ -164,6 +184,15 @@ type App struct {
 	// `/authorize` mints a credential only once the operator is already
 	// signed in via app.auth.
 	mcpProvider *mcpauth.Provider
+
+	// grant is the shared DelegatedGrantSource/Store/Index triple (issue
+	// #2426, FR10/FR13/NFR5/NFR6) initializeDelegatedGrant constructs.
+	// Zero-valued (every field nil) when WHAGENT_GRANT_*/WHAGENT_OIDC_ISSUER
+	// are not configured -- see initializeDelegatedGrant's doc comment.
+	// Purely additive today: nothing in this binary reads it yet -- a
+	// dependent task swaps setupMCPAuth's /authorize handling onto
+	// grant.Source (FR9).
+	grant delegatedgrant.Components
 }
 
 // NewApp wires up Keycloak sign-in (NFR1) and the authenticated `api`
@@ -251,6 +280,17 @@ func NewApp(ctx context.Context, cfg config) (*App, error) {
 		return nil, fmt.Errorf("failed to initialize mcpauth provider: %w", err)
 	}
 	app.mcpProvider = mcpProvider
+
+	// Purely additive (issue #2426): constructs the shared delegated-grant
+	// triple but wires it onto nothing yet -- see
+	// initializeDelegatedGrant's doc comment. Non-fatal only when the
+	// feature is entirely unconfigured; a partial configuration is a
+	// fatal startup error.
+	grant, err := initializeDelegatedGrant(ctx, cfg, pool, logging.Get("main"))
+	if err != nil {
+		return nil, fmt.Errorf("failed to initialize delegated-grant client: %w", err)
+	}
+	app.grant = grant
 
 	return app, nil
 }

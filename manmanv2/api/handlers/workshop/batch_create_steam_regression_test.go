@@ -200,6 +200,7 @@ func TestBatchCreateAddons_MixedBatchSteamNotFoundRegression(t *testing.T) {
 		nil, // sgcRepo not needed
 		nil, // gameRepo not needed
 		nil, // gameConfigRepo not needed
+		nil, // gcLibraryRepo not needed
 		nil, // volumeRepo not needed
 		nil, // presetRepo not needed
 		nil, // sessionRepo not needed

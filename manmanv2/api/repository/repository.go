@@ -69,8 +69,16 @@ type GameConfigWorkshopLibraryRepository interface {
 	ListAttachments(ctx context.Context, configID int64) ([]*manman.GameConfigWorkshopLibrary, error)
 	AddLibrary(ctx context.Context, configID, libraryID int64, presetID, volumeID *int64, installationPathOverride *string) error
 	RemoveLibrary(ctx context.Context, configID, libraryID int64) error
+	// ListUnresolvedConflicts returns every unresolved conflict with its
+	// Candidates already populated -- callers must not loop
+	// ListConflictCandidates per conflict to build a full listing.
 	ListUnresolvedConflicts(ctx context.Context) ([]*manman.WorkshopLibraryMigrationConflict, error)
 	GetConflictForConfig(ctx context.Context, configID int64) (*manman.WorkshopLibraryMigrationConflict, error)
+	// ListConflictCandidates returns conflictID's candidates regardless of
+	// whether the conflict is resolved -- resolving a conflict does not
+	// delete its candidate rows. Used to validate an "override" resolution's
+	// keep_library_id before calling ResolveConflict.
+	ListConflictCandidates(ctx context.Context, conflictID int64) ([]*manman.WorkshopLibraryMigrationConflictCandidate, error)
 	// ResolveConflict writes the resulting attachment set into
 	// gameconfig_workshop_libraries and stamps resolved_at/resolution in one
 	// transaction: "union" inserts every candidate library (one

@@ -448,6 +448,25 @@ so a rotation is a plain redeploy, not a data migration. Keycloak-side
 setup (granting this client token-exchange/impersonation rights) is
 documented in `libs/go/grpcauth/KEYCLOAK.md`'s token-exchange section.
 
+**In migration to `DelegatedGrantSource` (plan #2421).** The
+impersonation-exchange design above is being replaced: instead of a
+shared confidential client minting a JWT for *any* currently-signed-in
+operator, each operator completes a one-time, per-domain browser
+consent (`libs/go/grpcauth.DelegatedGrantSource`, `offline_access`) whose
+resulting refresh token is persisted per `(subject, domain-derived grant
+key)` — so a compromised secret alone can no longer mint a credential for
+an operator who has never personally consented for that domain (plan
+#2421's NFR1). Issue #2426 (FR10/FR13/NFR5/NFR6) is purely additive
+infrastructure for this: `//whagent_net/delegatedgrant` constructs the
+one shared `DelegatedGrantSource` + `libs/go/grpcauth/pgstore`-backed
+`Store` (`grpcauth_delegated_grant` table) + `libs/go/grpcauth/grantindex`
+-backed bookkeeping index (`grpcauth_grant_index` table) both `ui` and
+`mcp` hold, per `ENV.md`'s "Delegated grant" section — but neither
+request path described above has swapped onto it yet; that is a
+dependent task (FR8/FR9). Once it has, this whole subsection (the
+opaque `mcpauth` credential, RFC 8693 exchange, and
+`WHAGENT_MCP_KEYCLOAK_*`) is retired, not left dormant (FR19).
+
 Chain: subject → `api` → `worker` → domain MCP server → domain API. A
 short-lived **whagent-signed JWT** (`sub` + `sub_iss` = the on-behalf-of
 subject and its issuer, exactly the session's stored shape; `act` =

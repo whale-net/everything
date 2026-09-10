@@ -105,6 +105,11 @@ type WorkshopLibraryMigrationConflict struct {
 	ResolvedAt        *time.Time `db:"resolved_at"`
 	Resolution        *string    `db:"resolution"` // "union" | "override"
 	ResolvedLibraryID *int64     `db:"resolved_library_id"`
+	// Candidates is populated by GameConfigWorkshopLibraryRepository.ListUnresolvedConflicts
+	// (a second query joined in Go, not scanned from this table) so the FR12
+	// resolution UI/RPC can show exactly which SGCs disagreed and on what
+	// without a separate round trip.
+	Candidates []*WorkshopLibraryMigrationConflictCandidate `db:"-"`
 }
 
 // WorkshopLibraryMigrationConflictCandidate is one (library_id, sgc_id) pair
