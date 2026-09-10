@@ -77,6 +77,46 @@ type SGCWorkshopLibrary struct {
 	CreatedAt                time.Time `db:"created_at"`
 }
 
+// GameConfigWorkshopLibrary represents a library attached to a GameConfig
+// (GC-scoped attachment, M6 #2361, plan #2359) with the same optional
+// overrides SGCWorkshopLibrary carries. This is the target shape SGC-scoped
+// attachment is being retired in favor of (NFR1) -- sgc_workshop_libraries
+// remains authoritative for deploy-time resolution until the dependent
+// retirement task cuts over.
+type GameConfigWorkshopLibrary struct {
+	ConfigID                 int64     `db:"config_id"`
+	LibraryID                int64     `db:"library_id"`
+	PresetID                 *int64    `db:"preset_id"`
+	VolumeID                 *int64    `db:"volume_id"`
+	InstallationPathOverride *string   `db:"installation_path_override"`
+	CreatedAt                time.Time `db:"created_at"`
+}
+
+// WorkshopLibraryMigrationConflict records that a GameConfig's SGCs
+// disagreed on their attached Workshop library set (or on override columns
+// for the same library_id) when the SGC->GC backfill ran (FR12, M6 #2361).
+// ResolvedAt/Resolution/ResolvedLibraryID are nil/empty until a Server
+// Manager resolves the conflict via
+// GameConfigWorkshopLibraryRepository.ResolveConflict.
+type WorkshopLibraryMigrationConflict struct {
+	ConflictID        int64      `db:"conflict_id"`
+	ConfigID          int64      `db:"config_id"`
+	DetectedAt        time.Time  `db:"detected_at"`
+	ResolvedAt        *time.Time `db:"resolved_at"`
+	Resolution        *string    `db:"resolution"` // "union" | "override"
+	ResolvedLibraryID *int64     `db:"resolved_library_id"`
+}
+
+// WorkshopLibraryMigrationConflictCandidate is one (library_id, sgc_id) pair
+// contributing to a WorkshopLibraryMigrationConflict -- the source SGC and
+// the library it attached, so the resolution UI can show exactly which SGCs
+// disagreed and on what.
+type WorkshopLibraryMigrationConflictCandidate struct {
+	ConflictID int64 `db:"conflict_id"`
+	LibraryID  int64 `db:"library_id"`
+	SGCID      int64 `db:"sgc_id"`
+}
+
 // WorkshopLibraryAddon represents the junction between libraries and addons
 type WorkshopLibraryAddon struct {
 	LibraryID    int64     `db:"library_id"`
