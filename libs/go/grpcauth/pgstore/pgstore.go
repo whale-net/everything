@@ -32,7 +32,9 @@ import (
 	"errors"
 	"fmt"
 	"regexp"
+	"time"
 
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/whale-net/everything/libs/go/grpcauth"
@@ -120,10 +122,6 @@ type StoreConfig struct {
 // TableName, SubjectColumn, GrantColumn, MaterialColumn, StatusColumn, and
 // (if set) SubjectCast are then validated as safe SQL identifiers before any
 // query is ever built — mirrors libs/go/mcpauth.NewCredentialStore.
-//
-// The five grpcauth.Store methods on the returned value are scaffolded
-// stubs; see the "## Implementation" section of issue #2387 for the
-// authoritative spec each TODO comment below summarizes.
 func NewGrantStore(ctx context.Context, cfg StoreConfig) (grpcauth.Store, error) {
 	if cfg.Pool == nil {
 		return nil, errors.New("grpcauth/pgstore: StoreConfig.Pool is required")
@@ -180,64 +178,169 @@ type grantStore struct {
 // compile-time conformance assertion.
 var _ grpcauth.Store = (*grantStore)(nil)
 
-// errNotImplemented tags every scaffolded method below. Implementation
-// phase replaces each body and removes this sentinel from that method.
-var errNotImplemented = errors.New("grpcauth/pgstore: not implemented")
+// subjectPlaceholder renders "$<paramNum>[::<SubjectCast>]" for use as a
+// bound-parameter value in generated SQL — mirrors
+// mcpauth.pgxCredentialStore.identityPlaceholder's cast handling.
+func (s *grantStore) subjectPlaceholder(paramNum int) string {
+	if s.cfg.SubjectCast == "" {
+		return fmt.Sprintf("$%d", paramNum)
+	}
+	return fmt.Sprintf("$%d::%s", paramNum, s.cfg.SubjectCast)
+}
+
+// subjectWhere renders "<SubjectColumn> = $<paramNum>[::<SubjectCast>]" for
+// use in a WHERE clause.
+func (s *grantStore) subjectWhere(paramNum int) string {
+	return fmt.Sprintf("%s = %s", s.cfg.SubjectColumn, s.subjectPlaceholder(paramNum))
+}
+
+// setStatus is the shared implementation behind MarkNeedsReauth and Revoke:
+// both are an unconditional status write keyed by the explicit
+// (subject, grant) pair, with no restriction tying the caller to that
+// subject and no row deletion — only the persisted status column changes.
+// A missing row is reported as grpcauth.ErrGrantNotFound rather than a
+// silent no-op, so callers can distinguish "nothing to do" from "no such
+// grant".
+func (s *grantStore) setStatus(ctx context.Context, op, subject, grant string, status grpcauth.GrantStatus) error {
+	query := fmt.Sprintf(`
+		UPDATE %s SET %s = $3, updated_at = NOW()
+		WHERE %s AND %s = $2
+	`, s.cfg.TableName, s.cfg.StatusColumn, s.subjectWhere(1), s.cfg.GrantColumn)
+
+	tag, err := s.cfg.Pool.Exec(ctx, query, subject, grant, status.String())
+	if err != nil {
+		return grpcauth.NewTransientError(op, err)
+	}
+	if tag.RowsAffected() == 0 {
+		return grpcauth.ErrGrantNotFound
+	}
+	return nil
+}
 
 // Persist implements grpcauth.Store.
 //
-// TODO(Implementation phase): encrypt material.RefreshToken with
-// grpcauth.Encrypt(cfg.EncryptionKey, ...) inside this method — NFR2:
-// library-enforced, caller code never handles plaintext/ciphertext bytes on
-// the storage path — then upsert on (subject, grant): overwrite the
-// material column, set status = 'active', bump updated_at. This single
-// statement must serve initial consent (FR2), re-consent (FR11 — clears
-// needs_reauth in the same write) and refresh write-back (FR13). Wrap
-// unexpected pgx failures in grpcauth.NewTransientError.
+// material.RefreshToken is encrypted with grpcauth.Encrypt inside this
+// method — NFR2: library-enforced, caller code never handles ciphertext on
+// the storage path — then written with a single upsert on (subject, grant):
+// overwrite the material column, set status = active, bump updated_at. This
+// one statement serves initial consent (FR2), re-consent (FR11 — clears any
+// needs_reauth in the same write) and refresh write-back (FR13), since it
+// always resets status to active regardless of what it was before.
 func (s *grantStore) Persist(ctx context.Context, subject, grant string, material grpcauth.TokenMaterial) error {
-	return fmt.Errorf("grpcauth/pgstore: Persist: %w", errNotImplemented)
+	ciphertext, err := grpcauth.Encrypt(s.cfg.EncryptionKey, []byte(material.RefreshToken))
+	if err != nil {
+		return fmt.Errorf("grpcauth/pgstore: Persist: encrypt: %w", err)
+	}
+
+	query := fmt.Sprintf(`
+		INSERT INTO %s (%s, %s, %s, %s, updated_at)
+		VALUES (%s, $2, $3, $4, NOW())
+		ON CONFLICT (%s, %s) DO UPDATE SET
+			%s = EXCLUDED.%s,
+			%s = EXCLUDED.%s,
+			updated_at = NOW()
+	`,
+		s.cfg.TableName, s.cfg.SubjectColumn, s.cfg.GrantColumn, s.cfg.MaterialColumn, s.cfg.StatusColumn,
+		s.subjectPlaceholder(1),
+		s.cfg.SubjectColumn, s.cfg.GrantColumn,
+		s.cfg.MaterialColumn, s.cfg.MaterialColumn,
+		s.cfg.StatusColumn, s.cfg.StatusColumn,
+	)
+
+	if _, err := s.cfg.Pool.Exec(ctx, query, subject, grant, ciphertext, grpcauth.GrantStatusActive.String()); err != nil {
+		return grpcauth.NewTransientError("Persist", err)
+	}
+	return nil
 }
 
 // TokenMaterial implements grpcauth.Store.
 //
-// TODO(Implementation phase): read the status column FIRST; if revoked ->
-// grpcauth.ErrGrantRevoked, if needs_reauth -> grpcauth.ErrGrantNeedsReauth
-// — in both cases WITHOUT decrypting anything and without any Keycloak
-// call (mirrors mcpauth.Verify's RevokedAt == nil check). Only for active
-// does it decrypt (grpcauth.Decrypt) and return material. A missing row
-// (pgx.ErrNoRows) -> grpcauth.ErrGrantNotFound.
+// It reads the status and (still-encrypted) material columns together in a
+// single round trip, then branches on status BEFORE ever calling
+// grpcauth.Decrypt: revoked/needs_reauth return their sentinel error with
+// the fetched ciphertext simply discarded, unexamined — no decrypt attempt
+// and no Keycloak call, mirroring mcpauth.Verify's RevokedAt == nil check.
+// Only status == active proceeds to decrypt and return material. A missing
+// row is grpcauth.ErrGrantNotFound.
 func (s *grantStore) TokenMaterial(ctx context.Context, subject, grant string) (grpcauth.TokenMaterial, error) {
-	return grpcauth.TokenMaterial{}, fmt.Errorf("grpcauth/pgstore: TokenMaterial: %w", errNotImplemented)
+	query := fmt.Sprintf(`
+		SELECT %s, %s, updated_at
+		FROM %s
+		WHERE %s AND %s = $2
+	`, s.cfg.StatusColumn, s.cfg.MaterialColumn, s.cfg.TableName, s.subjectWhere(1), s.cfg.GrantColumn)
+
+	var status string
+	var ciphertext []byte
+	var updatedAt time.Time
+	err := s.cfg.Pool.QueryRow(ctx, query, subject, grant).Scan(&status, &ciphertext, &updatedAt)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return grpcauth.TokenMaterial{}, grpcauth.ErrGrantNotFound
+		}
+		return grpcauth.TokenMaterial{}, grpcauth.NewTransientError("TokenMaterial", err)
+	}
+
+	switch grpcauth.GrantStatus(status) {
+	case grpcauth.GrantStatusRevoked:
+		return grpcauth.TokenMaterial{}, grpcauth.ErrGrantRevoked
+	case grpcauth.GrantStatusNeedsReauth:
+		return grpcauth.TokenMaterial{}, grpcauth.ErrGrantNeedsReauth
+	case grpcauth.GrantStatusActive:
+		// fall through: only the active case decrypts and returns material.
+	default:
+		// A row with a status outside the three defined values indicates
+		// corruption or a schema/version mismatch, not a normal grant
+		// state — refuse to guess rather than treating it as active.
+		return grpcauth.TokenMaterial{}, fmt.Errorf("grpcauth/pgstore: TokenMaterial: persisted status %q is not a recognized grpcauth.GrantStatus", status)
+	}
+
+	plaintext, err := grpcauth.Decrypt(s.cfg.EncryptionKey, ciphertext)
+	if err != nil {
+		return grpcauth.TokenMaterial{}, fmt.Errorf("grpcauth/pgstore: TokenMaterial: decrypt: %w", err)
+	}
+
+	return grpcauth.TokenMaterial{RefreshToken: string(plaintext), ObtainedAt: updatedAt}, nil
 }
 
 // Status implements grpcauth.Store.
 //
-// TODO(Implementation phase): a distinct cheap plain read of the status
-// column only; no decrypt, no fetch of the material column, no Keycloak
-// call (FR10) — the same persisted column TokenMaterial consults, so there
-// is exactly one definition of the state. A missing row (pgx.ErrNoRows) ->
+// A distinct, cheap plain read of the status column only — no decrypt, no
+// fetch of the material column, no Keycloak call (FR10). It is the exact
+// same persisted column TokenMaterial consults, so there is exactly one
+// definition of grant state, not two that could drift. A missing row is
 // grpcauth.ErrGrantNotFound.
 func (s *grantStore) Status(ctx context.Context, subject, grant string) (grpcauth.GrantStatus, error) {
-	return "", fmt.Errorf("grpcauth/pgstore: Status: %w", errNotImplemented)
+	query := fmt.Sprintf(`
+		SELECT %s FROM %s WHERE %s AND %s = $2
+	`, s.cfg.StatusColumn, s.cfg.TableName, s.subjectWhere(1), s.cfg.GrantColumn)
+
+	var status string
+	if err := s.cfg.Pool.QueryRow(ctx, query, subject, grant).Scan(&status); err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return "", grpcauth.ErrGrantNotFound
+		}
+		return "", grpcauth.NewTransientError("Status", err)
+	}
+	return grpcauth.GrantStatus(status), nil
 }
 
 // MarkNeedsReauth implements grpcauth.Store.
 //
-// TODO(Implementation phase): set status = 'needs_reauth' for
-// (subject, grant); the row and its history are retained, never deleted
-// (FR8). A missing row (pgx.ErrNoRows) -> grpcauth.ErrGrantNotFound.
+// Sets status = needs_reauth for (subject, grant); the row and its history
+// are retained, never deleted (FR8). A missing row is
+// grpcauth.ErrGrantNotFound.
 func (s *grantStore) MarkNeedsReauth(ctx context.Context, subject, grant string) error {
-	return fmt.Errorf("grpcauth/pgstore: MarkNeedsReauth: %w", errNotImplemented)
+	return s.setStatus(ctx, "MarkNeedsReauth", subject, grant, grpcauth.GrantStatusNeedsReauth)
 }
 
 // Revoke implements grpcauth.Store.
 //
-// TODO(Implementation phase): set status = 'revoked' unconditionally, keyed
-// by the explicit (subject, grant) pair, with NO restriction tying the
-// caller to that subject (FR6) — revoking one grant must not affect any
-// other grant of the same subject (FR5). A missing row (pgx.ErrNoRows) ->
-// grpcauth.ErrGrantNotFound. This task's Revoke is local-write only; the
+// Sets status = revoked unconditionally, keyed by the explicit
+// (subject, grant) pair, with NO restriction tying the caller to that
+// subject (FR6) — revoking one grant does not touch any other grant of the
+// same subject (FR5), since the WHERE clause is scoped to that one key. A
+// missing row is grpcauth.ErrGrantNotFound. This is local-write only; the
 // best-effort RFC 7009 remote revocation call is a follow-up task.
 func (s *grantStore) Revoke(ctx context.Context, subject, grant string) error {
-	return fmt.Errorf("grpcauth/pgstore: Revoke: %w", errNotImplemented)
+	return s.setStatus(ctx, "Revoke", subject, grant, grpcauth.GrantStatusRevoked)
 }
