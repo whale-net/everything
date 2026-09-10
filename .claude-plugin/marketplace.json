@@ -28,6 +28,11 @@
       "name": "leaflab-data",
       "description": "Postgres MCP access (crystaldba postgres-mcp) to the LeafLab database across tilt/dev/prod",
       "source": "./leaflab/plugin/data"
+    },
+    {
+      "name": "whagent-net",
+      "description": "Streamable-HTTP MCP access to whagent-net's Agent API (start_session/send_turn/stop_session/get_session/read_transcript) across tilt/dev/prod",
+      "source": "./whagent_net/plugin/user"
     }
   ]
 }
