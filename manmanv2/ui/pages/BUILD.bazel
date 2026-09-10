@@ -29,6 +29,7 @@ go_test(
     size = "small",
     srcs = [
         "activity_test.go",
+        "config_editor_test.go",
         "daisyui_migration_test.go",
         "games_test.go",
         "server_port_ranges_test.go",

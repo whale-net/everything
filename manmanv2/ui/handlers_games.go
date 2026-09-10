@@ -669,6 +669,12 @@ func (app *App) handleGameConfigDetail(w http.ResponseWriter, r *http.Request, g
 		case "actions":
 			app.handleConfigActions(w, r)
 			return
+		case "editor":
+			// Config Editor blade (#2276, FR13): GET fetches the blade
+			// fragment, POST validates and saves. See
+			// handlers_config_editor.go.
+			app.handleGameConfigEditor(w, r, gameIDStr, configIDStr)
+			return
 		case "volumes":
 			// Handle volume routes
 			if len(pathParts) > 5 {

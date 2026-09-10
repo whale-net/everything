@@ -365,19 +365,26 @@ templ gameConfigsSection(row GameRow) {
 								<td>{ fmt.Sprintf("%d", cfg.DeploymentCount) }</td>
 								<td class="text-right space-x-2">
 									<!--
-										FR13: Edit opens the Config Editor blade, built
-										in a follow-up task against #2269's blade API
-										(components.BladeData/components.Blade). This task
-										only renders the trigger, no hx-get, no inline
-										form, since the blade's own content does not exist
-										yet; data-config-editor-trigger is the hook that
-										task wires a click handler to.
+										FR13 (#2276): Edit opens the Config Editor blade.
+										The blade's own content (Basics/Environment/
+										Volumes) is not already in hand the way the
+										Deployments section's Customize blade shell is
+										(only Name/Image/DeploymentCount got fetched for
+										this row), so this is a real hx-get rather than a
+										zero-cost pre-rendered template clone, see
+										pages.ConfigEditorData's doc comment. htmx appends
+										the returned blade fragment to the end of body;
+										data-config-editor-trigger stays as the stable
+										test/automation hook #2273 introduced.
 									-->
 									<button
 										type="button"
 										class="btn btn-xs btn-secondary"
 										data-config-editor-trigger
 										data-config-id={ fmt.Sprintf("%d", cfg.ConfigID) }
+										hx-get={ fmt.Sprintf("/games/%d/configs/%d/editor", cfg.GameID, cfg.ConfigID) }
+										hx-target="body"
+										hx-swap="beforeend"
 									>
 										Edit
 									</button>
