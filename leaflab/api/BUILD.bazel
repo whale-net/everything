@@ -149,6 +149,7 @@ go_test(
     size = "large",
     timeout = "long",
     srcs = [
+        "board_region_integration_test.go",
         "migration_016_integration_test.go",
         "migration_017_integration_test.go",
         "repository_integration_test.go",
@@ -168,9 +169,13 @@ go_test(
         "//leaflab/api/proto:leaflabapipb",
         "//leaflab/migrate/schema",
         "//libs/go/dbtest",
+        "//libs/go/grpcauth",
         "//libs/go/migrate",
         "@com_github_jackc_pgx_v5//pgconn",
         "@com_github_jackc_pgx_v5//pgxpool",
         "@com_github_jackc_pgx_v5//stdlib",
+        "@com_github_stretchr_testify//require",
+        "@org_golang_google_grpc//codes",
+        "@org_golang_google_grpc//status",
     ],
 )
