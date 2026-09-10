@@ -202,9 +202,10 @@ func resolvedScopes(scopes []string) []string {
 // #2386) off this type; this task ships only the type, its constructor, and
 // endpoint resolution.
 type DelegatedGrantSource struct {
-	cfg       DelegatedGrantConfig
-	endpoints Endpoints
-	oauth2Cfg oauth2.Config
+	cfg        DelegatedGrantConfig
+	endpoints  Endpoints
+	oauth2Cfg  oauth2.Config
+	httpClient *http.Client
 }
 
 // Endpoints returns the Keycloak endpoints this source resolved at
@@ -251,8 +252,9 @@ func NewDelegatedGrantSource(ctx context.Context, cfg DelegatedGrantConfig) (*De
 	scopes := resolvedScopes(cfg.Scopes)
 
 	return &DelegatedGrantSource{
-		cfg:       cfg,
-		endpoints: endpoints,
+		cfg:        cfg,
+		endpoints:  endpoints,
+		httpClient: httpClient,
 		oauth2Cfg: oauth2.Config{
 			ClientID:     cfg.ClientID,
 			ClientSecret: cfg.ClientSecret,

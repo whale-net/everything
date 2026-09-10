@@ -100,6 +100,12 @@ type Server struct {
 	lastAuthorizeQuery url.Values
 	lastTokenForm      url.Values
 
+	// lastRefreshToken is the refresh_token form value the /token endpoint
+	// most recently received, letting tests assert which refresh token an
+	// accessor actually sent (rotated vs. original, or the right subject's
+	// vs. another's -- FR13/NFR3).
+	lastRefreshToken string
+
 	signingKey *ecdsa.PrivateKey
 }
 
@@ -231,6 +237,14 @@ func (s *Server) LastTokenForm() url.Values {
 	return s.lastTokenForm
 }
 
+// LastRefreshToken returns the refresh_token form value the /token endpoint
+// most recently received (empty if /token has never been called).
+func (s *Server) LastRefreshToken() string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.lastRefreshToken
+}
+
 // --- token minting -------------------------------------------------------
 
 // accessTokenClaims is the subset of Keycloak access-token claims this fake
@@ -350,10 +364,12 @@ func (s *Server) handleAuthorize(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) handleToken(w http.ResponseWriter, r *http.Request) {
 	_ = r.ParseForm()
+	receivedRefreshToken := r.PostFormValue("refresh_token")
 
 	s.mu.Lock()
 	s.tokenCalls++
 	s.lastTokenForm = r.Form
+	s.lastRefreshToken = receivedRefreshToken
 	mode := s.tokenMode
 	refreshToken := s.nextRefreshToken
 	subject := s.subject
