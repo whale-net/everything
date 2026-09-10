@@ -1,4 +1,4 @@
-load("@rules_go//go:def.bzl", "go_library")
+load("@rules_go//go:def.bzl", "go_library", "go_test")
 
 # The Postgres-backed implementation of the DomainResolver-shaped
 # interfaces whagent_net/mcp/server and whagent_net/mcp/tools each declare
@@ -15,5 +15,58 @@ go_library(
     deps = [
         "//whagent_net/session",
         "@com_github_google_uuid//:uuid",
+    ],
+)
+
+# Pure unit test against a hand-rolled session.AgentDefinitionStore fake
+# (issue #2427's Testing section): proves Resolver's own not-found mapping
+# and transport-error passthrough independently of Postgres, so it runs as
+# part of `bazel test //...` -- unlike mcpdomain_integration_test below.
+go_test(
+    name = "mcpdomain_test",
+    srcs = ["mcpdomain_test.go"],
+    embed = [":mcpdomain"],
+    deps = [
+        "//whagent_net/session",
+        "@com_github_google_uuid//:uuid",
+        "@com_github_stretchr_testify//assert",
+        "@com_github_stretchr_testify//require",
+    ],
+)
+
+# Real Postgres integration test (issue #2427's Testing section): spins up
+# a throwaway database via dbtest, applies whagent-net's own real embedded
+# migrations, and exercises Resolver against a real whagent_net/session.Store
+# end to end -- including the "session's recorded assignment wins over a
+# newer version with a different domain" case that a fake store can't
+# meaningfully prove. Deliberately NOT part of `bazel test //...` -- see
+# //libs/go/dbtest's README for the full rationale.
+#
+# Run it explicitly (requires a working Docker daemon):
+#   bazel test //whagent_net/mcpdomain:mcpdomain_integration_test --test_output=all
+go_test(
+    name = "mcpdomain_integration_test",
+    size = "large",
+    timeout = "long",
+    srcs = ["mcpdomain_integration_test.go"],
+    gotags = ["integration"],
+    tags = [
+        "external",
+        "integration",
+        "manual",
+        "no-cache",
+        "no-sandbox",
+        "requires-network",
+    ],
+    deps = [
+        ":mcpdomain",
+        "//libs/go/dbtest",
+        "//libs/go/migrate",
+        "//whagent_net/migrate/schema",
+        "//whagent_net/session",
+        "@com_github_google_uuid//:uuid",
+        "@com_github_jackc_pgx_v5//stdlib",
+        "@com_github_stretchr_testify//assert",
+        "@com_github_stretchr_testify//require",
     ],
 )

@@ -32,6 +32,7 @@ go_test(
         "deps_test.go",
         "errors_test.go",
         "fake_client_test.go",
+        "fake_domain_resolver_test.go",
         "get_session_test.go",
         "read_transcript_test.go",
         "registration_test.go",
