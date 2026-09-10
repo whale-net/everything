@@ -29,6 +29,9 @@ go_test(
     name = "grpcauth_test",
     srcs = [
         "auth_test.go",
+        "fakestore_test.go",
+        "grantcrypto_test.go",
+        "granterrors_test.go",
         "interceptors_test.go",
     ],
     embed = [":grpcauth"],
