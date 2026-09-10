@@ -1,0 +1,49 @@
+load("@rules_go//go:def.bzl", "go_library", "go_test")
+
+go_library(
+    name = "grantindex",
+    srcs = ["grantindex.go"],
+    importpath = "github.com/whale-net/everything/libs/go/grpcauth/grantindex",
+    visibility = ["//visibility:public"],
+    deps = [
+        "@com_github_jackc_pgx_v5//pgxpool",
+    ],
+)
+
+go_test(
+    name = "grantindex_test",
+    srcs = ["grantindex_test.go"],
+    embed = [":grantindex"],
+)
+
+# Real-Postgres tests (genuine round trip and cross-subject/cross-domain
+# isolation backed by actual SQL rather than an in-memory fake). Gated
+# behind `//go:build integration`, gazelle skips it when scanning for
+# go_test srcs; this go_test is hand-written with EXACTLY the tag set from
+# //libs/go/grpcauth/pgstore:pgstore_integration_test and
+# //libs/go/dbtest:postgres_constraints_test (see those packages'
+# BUILD.bazel/README.md for why each tag is required). `# keep` marker
+# tells a later `bazel run //:gazelle` not to touch or remove this rule.
+#
+# Run it explicitly (requires a working Docker daemon):
+#   bazel test //libs/go/grpcauth/grantindex:grantindex_integration_test --test_tag_filters=-manual --test_output=all
+go_test(
+    # keep
+    name = "grantindex_integration_test",
+    size = "large",
+    timeout = "long",
+    srcs = ["grantindex_integration_test.go"],
+    embed = [":grantindex"],
+    gotags = ["integration"],
+    tags = [
+        "external",
+        "integration",
+        "manual",
+        "no-cache",
+        "no-sandbox",
+        "requires-network",
+    ],
+    deps = [
+        "//libs/go/dbtest",
+    ],
+)
