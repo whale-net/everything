@@ -8,6 +8,7 @@ go_library(
         "delegatedgrant.go",
         "delegatedgrant_authcode.go",
         "delegatedgrant_token.go",
+        "delegatedgrant_revoke.go",
         "fakestore.go",
         "grant.go",
         "grantcrypto.go",

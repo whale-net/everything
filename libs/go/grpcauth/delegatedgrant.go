@@ -8,6 +8,7 @@ import (
 	"log/slog"
 	"net/http"
 	"strings"
+	"sync"
 	"time"
 
 	"golang.org/x/oauth2"
@@ -206,6 +207,12 @@ type DelegatedGrantSource struct {
 	endpoints  Endpoints
 	oauth2Cfg  oauth2.Config
 	httpClient *http.Client
+
+	// missingRevocationWarnOnce guards the "no revocation_endpoint" log
+	// line RevokeRefreshToken emits (see delegatedgrant_revoke.go) so a
+	// storm of revokes against a source with no advertised
+	// revocation_endpoint logs once, not per call.
+	missingRevocationWarnOnce sync.Once
 }
 
 // Endpoints returns the Keycloak endpoints this source resolved at

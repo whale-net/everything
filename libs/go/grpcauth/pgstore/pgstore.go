@@ -1,8 +1,10 @@
 // Package pgstore is the pgx-backed reference implementation of
 // grpcauth.Store (issue #2387), living in its own sub-package so core
-// grpcauth (libs/go/grpcauth) keeps zero Postgres/pgx dependency. Local-write
-// semantics only — the best-effort RFC 7009 remote revocation call is a
-// follow-up task.
+// grpcauth (libs/go/grpcauth) keeps zero Postgres/pgx dependency. Revoke's
+// local write always happens; a best-effort RFC 7009 remote revocation call
+// (issue #2388, see revoke.go) additionally fires when StoreConfig.Revoker
+// is configured, without pgstore itself gaining any OIDC/Keycloak
+// dependency.
 //
 // # Schema contract
 //
@@ -112,6 +114,14 @@ type StoreConfig struct {
 	// library-enforced (NFR2): no exported pgstore API accepts or returns
 	// ciphertext, and no caller-side encrypt/decrypt call is required.
 	EncryptionKey []byte
+
+	// Revoker is the optional best-effort RFC 7009 hook Revoke uses for
+	// remote token revocation (see revoke.go). Nil by default, so a caller
+	// that does not set it gets exactly the local-write-only behaviour
+	// this package shipped with before that hook existed. pgstore never
+	// imports an OIDC/Keycloak client itself -- a caller wires in its own
+	// implementation (e.g. a *grpcauth.DelegatedGrantSource).
+	Revoker Revoker
 }
 
 // NewGrantStore constructs a grpcauth.Store backed by cfg.Pool and the
@@ -333,14 +343,6 @@ func (s *grantStore) MarkNeedsReauth(ctx context.Context, subject, grant string)
 	return s.setStatus(ctx, "MarkNeedsReauth", subject, grant, grpcauth.GrantStatusNeedsReauth)
 }
 
-// Revoke implements grpcauth.Store.
-//
-// Sets status = revoked unconditionally, keyed by the explicit
-// (subject, grant) pair, with NO restriction tying the caller to that
-// subject (FR6) — revoking one grant does not touch any other grant of the
-// same subject (FR5), since the WHERE clause is scoped to that one key. A
-// missing row is grpcauth.ErrGrantNotFound. This is local-write only; the
-// best-effort RFC 7009 remote revocation call is a follow-up task.
-func (s *grantStore) Revoke(ctx context.Context, subject, grant string) error {
-	return s.setStatus(ctx, "Revoke", subject, grant, grpcauth.GrantStatusRevoked)
-}
+// Revoke implements grpcauth.Store. See revoke.go for the full
+// implementation, which additionally drives the best-effort RFC 7009 remote
+// revocation call (FR13) when cfg.Revoker is configured.
