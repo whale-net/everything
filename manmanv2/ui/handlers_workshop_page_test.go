@@ -31,10 +31,12 @@ import (
 
 // fakeWorkshopPageClient embeds the nil WorkshopServiceClient interface and
 // overrides only the RPCs handleWorkshopPage's (and handleWorkshopLibrary's)
-// call graphs reach: ListAddons, ListLibraries, ListBatchJobs, and the
+// call graphs reach: ListAddons, ListLibraries, ListBatchJobs, the
 // per-library pair buildWorkshopLibraryPanels uses (GetLibraryAddons,
-// GetChildLibraries). Any other call panics on the nil embedded interface,
-// same pattern as handlers_workshop_bulk_test.go's fakeBulkWorkshopClient.
+// GetChildLibraries), and ListLibraryMigrationConflicts (task #2368's
+// UnresolvedConflictCount banner, reached by every handleWorkshopPage
+// call). Any other call panics on the nil embedded interface, same pattern
+// as handlers_workshop_bulk_test.go's fakeBulkWorkshopClient.
 type fakeWorkshopPageClient struct {
 	manmanpb.WorkshopServiceClient
 
@@ -70,6 +72,10 @@ func (f *fakeWorkshopPageClient) GetLibraryAddons(ctx context.Context, in *manma
 
 func (f *fakeWorkshopPageClient) GetChildLibraries(ctx context.Context, in *manmanpb.GetChildLibrariesRequest, opts ...grpc.CallOption) (*manmanpb.GetChildLibrariesResponse, error) {
 	return &manmanpb.GetChildLibrariesResponse{Libraries: f.childLibraries[in.LibraryId]}, nil
+}
+
+func (f *fakeWorkshopPageClient) ListLibraryMigrationConflicts(ctx context.Context, in *manmanpb.ListLibraryMigrationConflictsRequest, opts ...grpc.CallOption) (*manmanpb.ListLibraryMigrationConflictsResponse, error) {
+	return &manmanpb.ListLibraryMigrationConflictsResponse{}, nil
 }
 
 // fakeWorkshopPageAPIClient embeds the nil ManManAPIClient interface and

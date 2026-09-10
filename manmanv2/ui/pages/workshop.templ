@@ -39,6 +39,13 @@ type WorkshopPageData struct {
 	// batch-create jobs across all games, so a Server Manager can reach
 	// the batch-status view without holding on to a batch_job_id.
 	RecentBatchJobs []*manmanpb.WorkshopBatchJob
+	// UnresolvedConflictCount is the FR12/US6 discoverability surface
+	// (task #2368, #2359's "reachable without out-of-band knowledge"
+	// acceptance criterion): the count of unresolved SGC->GameConfig
+	// library migration conflicts (ListLibraryMigrationConflicts, #2365).
+	// A banner only renders when this is > 0 -- see workshopConflictBanner
+	// below.
+	UnresolvedConflictCount int
 }
 
 // WorkshopLibraryPanelData backs one library's Manage Blade (FR6): the
@@ -104,6 +111,7 @@ templ WorkshopPage(data WorkshopPageData) {
 					<span x-text="showCreateLibrary ? '✕ Cancel' : '+ New Library'">+ New Library</span>
 				</button>
 			}
+			@workshopConflictBanner(data.UnresolvedConflictCount)
 			<!-- Create Library -->
 			<div x-show="showCreateLibrary" x-cloak x-transition class="card bg-base-100 shadow-md border-2 border-primary/40 p-6 mb-6">
 				<div class="flex justify-between items-center mb-4 pb-4 border-b border-base-300">
@@ -265,6 +273,33 @@ templ WorkshopPage(data WorkshopPageData) {
 				}
 			</template>
 		}
+	}
+}
+
+// conflictBannerLabel is workshopConflictBanner's text, computed in Go
+// rather than composed with an inline templ if/text mix so pluralization
+// stays a single, testable string.
+func conflictBannerLabel(count int) string {
+	plural := "s"
+	if count == 1 {
+		plural = ""
+	}
+	return fmt.Sprintf("%d unresolved Workshop library migration conflict%s -- a Server Manager must choose union or override for each.", count, plural)
+}
+
+// workshopConflictBanner is the FR12/US6 discoverability entry point (task
+// #2368, #2359's "reachable without out-of-band knowledge" acceptance
+// criterion): a plain banner linking to "/workshop/conflicts" when
+// unresolved SGC->GameConfig library migration conflicts exist, rendered
+// nowhere when count is 0 -- games.templ's per-GameConfig conflict pointer
+// (#2359's FR10 task) is the other, more-specific entry point; this one is
+// fleet-wide and does not depend on that task having landed.
+templ workshopConflictBanner(count int) {
+	if count > 0 {
+		<div class="alert alert-warning mb-6">
+			<span>{ conflictBannerLabel(count) }</span>
+			<a href="/workshop/conflicts" class="btn btn-sm btn-warning">Resolve →</a>
+		</div>
 	}
 }
 
