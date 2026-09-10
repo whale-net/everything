@@ -57,6 +57,30 @@ type fakeLeafLabAPIClient struct {
 
 	renameSensorResp *leaflabapipb.RenameSensorResponse
 	renameSensorErr  error
+
+	// -- #2317: region management fixtures --
+	// GetRegionTree fixtures are keyed by the request's root_region_id:
+	// handleRegionDetail makes two calls (the drilled subtree, then the full
+	// forest for the pickers) and a test must be able to answer them
+	// differently. A root with neither fixture fails loudly (NotFound) so a
+	// handler path the test did not anticipate shows up as a rendered error
+	// banner rather than a silently-empty tree. Every call's root_region_id
+	// is recorded for call-order assertions.
+	regionTreeByRoot    map[int64]*leaflabapipb.GetRegionTreeResponse
+	regionTreeErrByRoot map[int64]error
+	regionTreeRoots     []int64
+
+	createRegionResp *leaflabapipb.CreateRegionResponse
+	createRegionErr  error
+	createdRegionReq *leaflabapipb.CreateRegionRequest
+
+	renameRegionResp *leaflabapipb.RenameRegionResponse
+	renameRegionErr  error
+	renamedRegionReq *leaflabapipb.RenameRegionRequest
+
+	reparentRegionResp  *leaflabapipb.ReparentRegionResponse
+	reparentRegionErr   error
+	reparentedRegionReq *leaflabapipb.ReparentRegionRequest
 }
 
 func (f *fakeLeafLabAPIClient) ListBoardsWithState(ctx context.Context, in *leaflabapipb.ListBoardsWithStateRequest, opts ...grpc.CallOption) (*leaflabapipb.ListBoardsWithStateResponse, error) {
@@ -150,6 +174,52 @@ func (f *fakeLeafLabAPIClient) RenameSensor(ctx context.Context, in *leaflabapip
 		return f.renameSensorResp, nil
 	}
 	return &leaflabapipb.RenameSensorResponse{}, nil
+}
+
+// -- #2317: region management fakes -------------------------------------
+
+func (f *fakeLeafLabAPIClient) GetRegionTree(ctx context.Context, in *leaflabapipb.GetRegionTreeRequest, opts ...grpc.CallOption) (*leaflabapipb.GetRegionTreeResponse, error) {
+	f.regionTreeRoots = append(f.regionTreeRoots, in.GetRootRegionId())
+	if err, ok := f.regionTreeErrByRoot[in.GetRootRegionId()]; ok {
+		return nil, err
+	}
+	if resp, ok := f.regionTreeByRoot[in.GetRootRegionId()]; ok {
+		return resp, nil
+	}
+	return nil, status.Errorf(codes.NotFound, "fakeLeafLabAPIClient: no GetRegionTree fixture for root_region_id %d", in.GetRootRegionId())
+}
+
+func (f *fakeLeafLabAPIClient) CreateRegion(ctx context.Context, in *leaflabapipb.CreateRegionRequest, opts ...grpc.CallOption) (*leaflabapipb.CreateRegionResponse, error) {
+	f.createdRegionReq = in
+	if f.createRegionErr != nil {
+		return nil, f.createRegionErr
+	}
+	if f.createRegionResp != nil {
+		return f.createRegionResp, nil
+	}
+	return &leaflabapipb.CreateRegionResponse{}, nil
+}
+
+func (f *fakeLeafLabAPIClient) RenameRegion(ctx context.Context, in *leaflabapipb.RenameRegionRequest, opts ...grpc.CallOption) (*leaflabapipb.RenameRegionResponse, error) {
+	f.renamedRegionReq = in
+	if f.renameRegionErr != nil {
+		return nil, f.renameRegionErr
+	}
+	if f.renameRegionResp != nil {
+		return f.renameRegionResp, nil
+	}
+	return &leaflabapipb.RenameRegionResponse{}, nil
+}
+
+func (f *fakeLeafLabAPIClient) ReparentRegion(ctx context.Context, in *leaflabapipb.ReparentRegionRequest, opts ...grpc.CallOption) (*leaflabapipb.ReparentRegionResponse, error) {
+	f.reparentedRegionReq = in
+	if f.reparentRegionErr != nil {
+		return nil, f.reparentRegionErr
+	}
+	if f.reparentRegionResp != nil {
+		return f.reparentRegionResp, nil
+	}
+	return &leaflabapipb.ReparentRegionResponse{}, nil
 }
 
 // TestHandleBoards_RendersBoardsFromAPI covers the happy path: handleBoards
