@@ -49,13 +49,20 @@ func NewAPIServer(repo *repository.Repository, s3Client *s3.Client, rmqConn *rmq
 		}()
 	}
 
+	// sessionHandler is constructed first so ServerHandler can be given it
+	// as the SessionStopper DrainServer's eviction loop (#2366, FR3) calls
+	// through -- eviction must dispatch stops via the exact same
+	// SessionHandler.StopSession path a manual stop uses, never a second
+	// implementation.
+	sessionHandler := NewSessionHandler(repo, commandPublisher, workshopManager, restartStallTimeout)
+
 	return &APIServer{
 		repo:                    repo,
-		serverHandler:           NewServerHandler(repo.Servers, repo.ServerPortRanges, repo.ServerPorts),
+		serverHandler:           NewServerHandler(repo.Servers, repo.ServerPortRanges, repo.ServerPorts, repo.Sessions, repo.PendingRestarts, sessionHandler),
 		gameHandler:             NewGameHandler(repo.Games),
 		gameConfigHandler:       NewGameConfigHandler(repo.GameConfigs),
 		serverGameConfigHandler: NewServerGameConfigHandler(repo.ServerGameConfigs, repo.ServerPorts, repo.Servers),
-		sessionHandler:          NewSessionHandler(repo, commandPublisher, workshopManager, restartStallTimeout),
+		sessionHandler:          sessionHandler,
 		registrationHandler:     NewRegistrationHandler(repo.Servers, repo.ServerCapabilities),
 		validationHandler:       NewValidationHandler(repo.Servers, repo.GameConfigs),
 		logsHandler:             NewLogsHandler(repo.LogReferences, s3Client),

@@ -314,6 +314,19 @@ type PendingRestartRepository interface {
 	// GetLatestBySGCIDs returns the current non-resolved-or-recently-resolved
 	// state per SGC for the operator-facing read path (FR12).
 	GetLatestBySGCIDs(ctx context.Context, sgcIDs []int64) (map[int64]*manman.PendingRestart, error)
+	// CancelForSGCs moves every 'pending' record for the given SGCs to a
+	// terminal state with reason, and returns how many rows it moved
+	// (#2366, FR18: drain eviction cancels the pending restart for every
+	// deployment it evicts, before the evicted session's Stop reaches a
+	// terminal status, so SessionRestartConsumer never claims it). Reuses
+	// MarkFailed's 'failed' terminal state rather than inventing a
+	// 'cancelled' status the schema doesn't otherwise express -- the reason
+	// string is what distinguishes a drain cancellation from an ordinary
+	// failed restart for an operator reading it back. A no-op (0, nil) for
+	// SGCs with no 'pending' record is expected, not an error, and calling
+	// it twice for the same SGCs is idempotent -- the second call simply
+	// matches no rows.
+	CancelForSGCs(ctx context.Context, sgcIDs []int64, reason string) (int, error)
 }
 
 // AddonPathPresetRepository defines operations for game addon path presets
