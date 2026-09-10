@@ -11,8 +11,10 @@
 // issue #2120's TestBUILD_NoStoreOrTemporalDependency in each of those
 // packages. Today that is: the mcp_credential table backing the FR9/
 // issue #2249 OAuth2 token-exchange path's mcpauth.CredentialStore -- see
-// initializeTokenExchange below -- and, purely additively as of issue
-// #2426 (not yet on any request path), the grpcauth_delegated_grant/
+// initializeTokenExchange below -- the agent_definition/session_agent
+// tables backing whagent_net/mcpdomain.Resolver's DomainResolver
+// implementation (issue #2427, FR7) -- and, purely additively as of
+// issue #2426 (not yet on any request path), the grpcauth_delegated_grant/
 // grpcauth_grant_index tables backing //whagent_net/delegatedgrant's
 // Store/Index (see initializeDelegatedGrant, delegatedgrant.go). On the
 // FR9 path, `mcp` also holds its own confidential Keycloak client
@@ -48,7 +50,9 @@ import (
 	"github.com/whale-net/everything/libs/go/logging"
 	"github.com/whale-net/everything/libs/go/mcpauth"
 	"github.com/whale-net/everything/whagent_net/delegatedgrant"
+	"github.com/whale-net/everything/whagent_net/mcpdomain"
 	pb "github.com/whale-net/everything/whagent_net/protos"
+	"github.com/whale-net/everything/whagent_net/session"
 
 	"github.com/whale-net/everything/whagent_net/mcp/server"
 	"github.com/whale-net/everything/whagent_net/mcp/tools"
@@ -158,6 +162,18 @@ func getEnv(key, def string) string {
 // initializeTokenExchange's NFR8 fail-loud check for the one combination
 // that is instead a startup error).
 //
+// domainResolver (issue #2427, FR7) piggybacks on this same struct purely
+// because it is constructed against the same pool, at the same point in
+// startup, as credentials -- not because it is part of FR9's OAuth2 path.
+// It is held here, unconsumed, deliberately: this task is purely
+// additive (no tool handler or middleware calls DomainForAgent/
+// DomainForSession yet), so run() does not thread it into server.New or
+// any tools.RegisterX call below. Wiring an actual call at tool-dispatch
+// time -- and therefore deciding where domainResolver's consumer actually
+// lives -- is issue #2427's dependent "dispatch-time rewiring" task; may
+// be nil exactly when credentials is (cfg.DatabaseURL unset or the pool
+// unreachable).
+//
 // grant (issue #2426, FR10/FR13/NFR5/NFR6) is unrelated to FR9's
 // token-exchange path -- it just happens to share this struct and this
 // binary's one Postgres pool, since both are optional Postgres-backed
@@ -170,10 +186,11 @@ func getEnv(key, def string) string {
 // that plumbs it across that boundary, deliberately, via the small
 // domain-neutral interface FR7 describes, never this concrete struct.
 type tokenExchangeDeps struct {
-	pool        *pgxpool.Pool
-	credentials mcpauth.CredentialStore
-	exchanger   server.Exchanger
-	grant       delegatedgrant.Components
+	pool           *pgxpool.Pool
+	credentials    mcpauth.CredentialStore
+	exchanger      server.Exchanger
+	domainResolver *mcpdomain.Resolver
+	grant          delegatedgrant.Components
 }
 
 // Close releases pool, if initializeTokenExchange opened one.
@@ -251,7 +268,17 @@ func initializeTokenExchange(ctx context.Context, cfg config, logger *slog.Logge
 	}
 
 	logger.Info("mcpauth credential store initialized for the FR9 OAuth2 token-exchange path")
-	return tokenExchangeDeps{pool: pool, credentials: credentials, exchanger: exchanger, grant: grant}, nil
+
+	// domainResolver (issue #2427, FR7) is constructed against the same
+	// pool credentials just was -- see tokenExchangeDeps' doc comment for
+	// why it is held here unconsumed rather than threaded into
+	// server.New/tools.RegisterX below. Unlike mcpauth.NewCredentialStore,
+	// session.New/AgentDefinitions perform no preflight query of their
+	// own, so there is nothing further to degrade on here: the pool
+	// already proved reachable immediately above.
+	domainResolver := mcpdomain.New(session.New(pool, nil).AgentDefinitions())
+
+	return tokenExchangeDeps{pool: pool, credentials: credentials, exchanger: exchanger, domainResolver: domainResolver, grant: grant}, nil
 }
 
 func main() {
