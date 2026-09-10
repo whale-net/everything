@@ -17,6 +17,7 @@ func strPtr(s string) *string { return &s }
 func newTestAgentDefinition(agentID string, version int) *session.AgentDefinition {
 	return &session.AgentDefinition{
 		AgentID:  agentID,
+		Domain:   "test-domain",
 		Version:  version,
 		Model:    strPtr("test-model"),
 		ToolSet:  []session.ToolServerRef{{ServerURL: "https://mcp.example.com/research"}},
@@ -65,6 +66,37 @@ func TestAgentDefinitionStore_Upsert_GetLatest_GetVersion_RoundTrip(t *testing.T
 	require.NoError(t, err)
 	require.NotNil(t, reread.Model)
 	assert.Equal(t, "test-model-replaced", *reread.Model)
+}
+
+// TestAgentDefinitionStore_Domain_RoundTripsThroughGetVersion proves an
+// AgentDefinition written with a Domain (issue #2424 FR1) round-trips
+// through GetVersion unchanged, and that CurrentAssignment -> GetVersion
+// (the exact path worker/activities.go's ResolveAgentDefinition walks to
+// find the grant key's input, FR4) resolves a non-empty Domain.
+func TestAgentDefinitionStore_Domain_RoundTripsThroughGetVersion(t *testing.T) {
+	ctx := context.Background()
+	s, _ := newStore(t)
+	sess := createTestSession(t, ctx, s)
+
+	def := newTestAgentDefinition("domain-agent", 1)
+	def.Domain = "audience_score_system"
+	require.NoError(t, s.AgentDefinitions().Upsert(ctx, def))
+
+	got, err := s.AgentDefinitions().GetVersion(ctx, "domain-agent", 1)
+	require.NoError(t, err)
+	require.NotNil(t, got)
+	assert.Equal(t, "audience_score_system", got.Domain)
+
+	require.NoError(t, s.AgentDefinitions().AssignToSession(ctx, sess.SessionID, "domain-agent", 1))
+	assignment, err := s.AgentDefinitions().CurrentAssignment(ctx, sess.SessionID)
+	require.NoError(t, err)
+	require.NotNil(t, assignment)
+
+	resolved, err := s.AgentDefinitions().GetVersion(ctx, assignment.AgentID, assignment.AgentVersion)
+	require.NoError(t, err)
+	require.NotNil(t, resolved)
+	assert.NotEmpty(t, resolved.Domain, "CurrentAssignment -> GetVersion must resolve a non-empty Domain")
+	assert.Equal(t, "audience_score_system", resolved.Domain)
 }
 
 // TestAgentDefinitionStore_GetLatest_UnknownAgent_ReturnsNilNotError proves

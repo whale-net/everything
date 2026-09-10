@@ -217,6 +217,13 @@ func appManifestFromRule(pkg string, r *build.Rule) (AppMetadata, error) {
 		Language:          r.AttrString("language"),
 		Registry:          attrStringOr(r, "registry", "ghcr.io"),
 		Organization:      attrStringOr(r, "organization", "whale-net"),
+		// Mirrors release.bzl's release_app() image_name/repo_name formula
+		// (tools/bazel/release.bzl) -- this fast path reads BUILD.bazel
+		// attrs directly instead of going through the real app_metadata
+		// Bazel rule, so it can't just read the value Bazel computed the
+		// way the normal cquery-discovery path does (AppMetadata.FullName()
+		// reads RepoName off that rule's output). If release.bzl's naming
+		// formula ever changes, this line must change with it.
 		RepoName:          domain + "-" + effectiveName,
 		Version:           attrStringOr(r, "version", "latest"),
 		BinaryTarget:      binaryTarget,

@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
@@ -22,6 +23,21 @@ import (
 // signature. The bodies here are never reached: OnActivity's mock
 // intercepts the call before the registered function runs.
 func registerActivityStubs(env *testsuite.TestWorkflowEnvironment) {
+	registerActivityStubsWithPoll(env, func(ctx context.Context, ref BuildRef) (BuildStatus, error) {
+		return BuildStatus{}, nil
+	})
+}
+
+// registerActivityStubsWithPoll is registerActivityStubs with the PollBuild
+// stub swapped for pollFn -- the notify-vs-poll tests need a poll that
+// BLOCKS (mimicking a long-running Actions run) so the build-completed
+// signal can win the race, which OnActivity mocks cannot express (a mock
+// Return fires immediately, deciding the race before the signal can).
+// Blocking on ctx.Done() inside pollFn is what makes the signal path
+// observable: the workflow's cancelPoll (see awaitBuildCompletion) cancels
+// the activity context, the stub returns ctx.Err(), and the testsuite's
+// cancellation delivery finishes the activity exactly like a real one.
+func registerActivityStubsWithPoll(env *testsuite.TestWorkflowEnvironment, pollFn func(ctx context.Context, ref BuildRef) (BuildStatus, error)) {
 	env.RegisterActivityWithOptions(func(ctx context.Context, releaseRunID string) (bool, error) {
 		return true, nil
 	}, activity.RegisterOptions{Name: ActivityCheckApproval})
@@ -34,9 +50,7 @@ func registerActivityStubs(env *testsuite.TestWorkflowEnvironment) {
 	env.RegisterActivityWithOptions(func(ctx context.Context, plan ResolvedPlan, digests map[string]string) (BuildRef, error) {
 		return BuildRef{}, nil
 	}, activity.RegisterOptions{Name: ActivityDispatchBuild})
-	env.RegisterActivityWithOptions(func(ctx context.Context, ref BuildRef) (BuildStatus, error) {
-		return BuildStatus{}, nil
-	}, activity.RegisterOptions{Name: ActivityPollBuild})
+	env.RegisterActivityWithOptions(pollFn, activity.RegisterOptions{Name: ActivityPollBuild})
 	env.RegisterActivityWithOptions(func(ctx context.Context, plan ResolvedPlan, ref BuildRef) (FinalizeResult, error) {
 		return FinalizeResult{Succeeded: true}, nil
 	}, activity.RegisterOptions{Name: ActivityFinalizePublish})
@@ -450,4 +464,210 @@ func TestReleaseWorkflow_FinalizeTargetNoEntry_FallsThroughToVerifyPublished(t *
 	require.Equal(t, repository.ReleaseRunTargetStateFailed, got.Targets[0].State,
 		"a target with no FinalizeResult.Targets entry must be decided by VerifyPublished's real result, not auto-succeeded")
 	require.Equal(t, "no published artifact found", got.Targets[0].ErrorDetail)
+}
+
+// blockingPoll returns a PollBuild stub that mimics a long-running Actions
+// build: it never reports a terminal state on its own -- it only returns
+// when the activity context is cancelled (exactly what
+// awaitBuildCompletion's signal path does via cancelPoll). Blocking on
+// ctx.Done() inside pollFn is what makes the signal path observable: the
+// workflow's cancellation delivers to the activity context the same way it
+// would to a real activity, and without it the tests below would hang
+// (proving the poll alone cannot decide while the signal hasn't arrived).
+func blockingPoll(pollStarted chan<- struct{}) func(ctx context.Context, ref BuildRef) (BuildStatus, error) {
+	return func(ctx context.Context, ref BuildRef) (BuildStatus, error) {
+		close(pollStarted)
+		<-ctx.Done()
+		return BuildStatus{}, ctx.Err()
+	}
+}
+
+// TestReleaseWorkflow_SignalBeatsPoll proves the notify half of the
+// notify-vs-poll split: a build-completed signal (NotifyBuildComplete,
+// delivered while PollBuild is still polling a "long-running" run) decides
+// the build outcome immediately -- the poll activity is cancelled and the
+// workflow proceeds to finalize/verify/record exactly as a poll-success
+// would have. This is the race's winning path; the fallback (no signal,
+// poll decides) is already covered by every other test in this file.
+func TestReleaseWorkflow_SignalBeatsPoll(t *testing.T) {
+	ts := testsuite.WorkflowTestSuite{}
+	env := ts.NewTestWorkflowEnvironment()
+
+	pollStarted := make(chan struct{})
+	registerActivityStubsWithPoll(env, blockingPoll(pollStarted))
+
+	in := ReleaseWorkflowInput{ReleaseRunID: "run-10", Targets: []ReleaseTarget{testTarget()}}
+	rawJSON := []byte(`{"build_id":"10101010-1010-1010-1010-101010101010","version":"v1.0.1"}`)
+	plan := ResolvedPlan{ReleaseRunID: "run-10", Versions: map[string]string{testTarget().key(): "v1.0.1"}, RawJSON: rawJSON}
+	ref := BuildRef{ReleaseRunID: "run-10", RunID: "410"}
+
+	// PollBuild is NOT given an OnActivity expectation: its registered
+	// stub blocks forever (until the signal path cancels it), which is the
+	// whole point -- if the workflow still waited for the poll instead of
+	// honoring the signal, this test would time out rather than pass.
+	env.OnActivity(ActivityCheckApproval, mock.Anything, "run-10").Return(true, nil).Once()
+	env.OnActivity(ActivityResolvePlan, mock.Anything, in.Targets).Return(plan, nil).Once()
+	env.OnActivity(ActivityRecordResolvedPlan, mock.Anything, "run-10", rawJSON).Return(nil).Once()
+	env.OnActivity(ActivityDispatchBuild, mock.Anything, plan, map[string]string{}).Return(ref, nil).Once()
+	env.OnActivity(ActivityFinalizePublish, mock.Anything, plan, ref).Return(FinalizeResult{Succeeded: true}, nil).Once()
+	env.OnActivity(ActivityVerifyPublished, mock.Anything, "run-10", mock.Anything).Return(VerifyResult{AllPublished: true}, nil).Once()
+	env.OnActivity(ActivityRecordTargetState, mock.Anything, "run-10", testTarget(), repository.ReleaseRunTargetStateSucceeded, "10101010-1010-1010-1010-101010101010", "").
+		Return(nil).Once()
+
+	// Deliver the notification once the workflow is parked in
+	// awaitBuildCompletion (poll started, nothing else to do).
+	env.RegisterDelayedCallback(func() {
+		env.SignalWorkflow(SignalBuildCompleted, BuildCompletedSignal{
+			GitHubRunID: "410",
+			Succeeded:   true,
+			Detail:      "run 410 conclusion=success",
+		})
+	}, time.Millisecond)
+
+	env.ExecuteWorkflow(ReleaseWorkflow, in)
+
+	require.True(t, env.IsWorkflowCompleted())
+	require.NoError(t, env.GetWorkflowError())
+
+	var got ReleaseWorkflowResult
+	require.NoError(t, env.GetWorkflowResult(&got))
+	require.Len(t, got.Targets, 1)
+	require.Equal(t, repository.ReleaseRunTargetStateSucceeded, got.Targets[0].State,
+		"the signal must decide the build outcome (and the poll must not have needed to finish)")
+}
+
+// TestReleaseWorkflow_SignalFailure_RecordsFailed proves the signal path
+// carries failure exactly like PollBuild's Succeeded=false does: the
+// workflow routes to recordFailure with the signal's detail.
+func TestReleaseWorkflow_SignalFailure_RecordsFailed(t *testing.T) {
+	ts := testsuite.WorkflowTestSuite{}
+	env := ts.NewTestWorkflowEnvironment()
+
+	pollStarted := make(chan struct{})
+	registerActivityStubsWithPoll(env, blockingPoll(pollStarted))
+
+	in := ReleaseWorkflowInput{ReleaseRunID: "run-11", Targets: []ReleaseTarget{testTarget()}}
+	plan := ResolvedPlan{ReleaseRunID: "run-11", Versions: map[string]string{testTarget().key(): "v1.0.1"}}
+	ref := BuildRef{ReleaseRunID: "run-11", RunID: "411"}
+
+	env.OnActivity(ActivityCheckApproval, mock.Anything, "run-11").Return(true, nil).Once()
+	env.OnActivity(ActivityResolvePlan, mock.Anything, in.Targets).Return(plan, nil).Once()
+	env.OnActivity(ActivityDispatchBuild, mock.Anything, plan, map[string]string{}).Return(ref, nil).Once()
+	env.OnActivity(ActivityFinalizePublish, mock.Anything, mock.Anything, mock.Anything).Return(FinalizeResult{}, nil).Maybe()
+	env.OnActivity(ActivityVerifyPublished, mock.Anything, mock.Anything, mock.Anything).Return(VerifyResult{}, nil).Maybe()
+	// recordFailure reports the wrapped cause, so the recorded detail is
+	// "build did not succeed: <signal detail>" -- not the bare signal line.
+	env.OnActivity(ActivityRecordTargetState, mock.Anything, "run-11", testTarget(), repository.ReleaseRunTargetStateFailed, "", "build did not succeed: run 411 conclusion=failure").
+		Return(nil).Once()
+
+	env.RegisterDelayedCallback(func() {
+		env.SignalWorkflow(SignalBuildCompleted, BuildCompletedSignal{
+			GitHubRunID: "411",
+			Succeeded:   false,
+			Detail:      "run 411 conclusion=failure",
+		})
+	}, time.Millisecond)
+
+	env.ExecuteWorkflow(ReleaseWorkflow, in)
+
+	require.True(t, env.IsWorkflowCompleted())
+	require.Error(t, env.GetWorkflowError(), "a not-succeeded build must fail the workflow exactly as PollBuild's failure branch does")
+
+	// GetWorkflowResult is deliberately not asserted here: recordFailure
+	// returns the cause as the workflow error, which GetWorkflowResult
+	// surfaces identically -- the per-target outcome is pinned by the
+	// RecordTargetState expectation above.
+}
+
+// TestReleaseWorkflow_StaleSignalIgnored proves the stale-signal guard: a
+// build-completed signal whose GitHubRunID doesn't match the dispatched
+// run's BuildRef.RunID (a notification from some OTHER Actions run -- e.g.
+// a retry after the first dispatch died) is ignored, and the workflow keeps
+// waiting until either a matching signal or the poll decides. Here a
+// matching signal arrives after the stale one and must be the decider.
+func TestReleaseWorkflow_StaleSignalIgnored(t *testing.T) {
+	ts := testsuite.WorkflowTestSuite{}
+	env := ts.NewTestWorkflowEnvironment()
+
+	pollStarted := make(chan struct{})
+	registerActivityStubsWithPoll(env, blockingPoll(pollStarted))
+
+	in := ReleaseWorkflowInput{ReleaseRunID: "run-12", Targets: []ReleaseTarget{testTarget()}}
+	rawJSON := []byte(`{"build_id":"12121212-1212-1212-1212-121212121212","version":"v1.0.1"}`)
+	plan := ResolvedPlan{ReleaseRunID: "run-12", Versions: map[string]string{testTarget().key(): "v1.0.1"}, RawJSON: rawJSON}
+	ref := BuildRef{ReleaseRunID: "run-12", RunID: "412"}
+
+	env.OnActivity(ActivityCheckApproval, mock.Anything, "run-12").Return(true, nil).Once()
+	env.OnActivity(ActivityResolvePlan, mock.Anything, in.Targets).Return(plan, nil).Once()
+	env.OnActivity(ActivityRecordResolvedPlan, mock.Anything, "run-12", rawJSON).Return(nil).Once()
+	env.OnActivity(ActivityDispatchBuild, mock.Anything, plan, map[string]string{}).Return(ref, nil).Once()
+	env.OnActivity(ActivityFinalizePublish, mock.Anything, plan, ref).Return(FinalizeResult{Succeeded: true}, nil).Once()
+	env.OnActivity(ActivityVerifyPublished, mock.Anything, "run-12", mock.Anything).Return(VerifyResult{AllPublished: true}, nil).Once()
+	env.OnActivity(ActivityRecordTargetState, mock.Anything, "run-12", testTarget(), repository.ReleaseRunTargetStateSucceeded, "12121212-1212-1212-1212-121212121212", "").
+		Return(nil).Once()
+
+	// A stale signal first (wrong run id), then the matching one. The
+	// stale one must be skipped, not decide.
+	env.RegisterDelayedCallback(func() {
+		env.SignalWorkflow(SignalBuildCompleted, BuildCompletedSignal{
+			GitHubRunID: "999999",
+			Succeeded:   false,
+			Detail:      "run 999999 conclusion=failure (stale)",
+		})
+	}, time.Millisecond)
+	env.RegisterDelayedCallback(func() {
+		env.SignalWorkflow(SignalBuildCompleted, BuildCompletedSignal{
+			GitHubRunID: "412",
+			Succeeded:   true,
+			Detail:      "run 412 conclusion=success",
+		})
+	}, 2*time.Millisecond)
+
+	env.ExecuteWorkflow(ReleaseWorkflow, in)
+
+	require.True(t, env.IsWorkflowCompleted())
+	require.NoError(t, env.GetWorkflowError())
+
+	var got ReleaseWorkflowResult
+	require.NoError(t, env.GetWorkflowResult(&got))
+	require.Len(t, got.Targets, 1)
+	require.Equal(t, repository.ReleaseRunTargetStateSucceeded, got.Targets[0].State,
+		"a stale signal from a different run must be ignored; the matching signal must decide")
+}
+
+// TestReleaseWorkflow_SignalArrivesLate_PollDecides proves the poll half of
+// the split stays authoritative when no notification ever arrives: with a
+// poll that finishes normally (and no signal at all), the workflow follows
+// the poll result -- the pre-notify behavior, unchanged. (A signal that
+// arrives only AFTER the poll decided is equivalent to no signal for the
+// workflow: an undelivered signal is a no-op in Temporal.)
+func TestReleaseWorkflow_SignalArrivesLate_PollDecides(t *testing.T) {
+	ts := testsuite.WorkflowTestSuite{}
+	env := ts.NewTestWorkflowEnvironment()
+	registerActivityStubs(env)
+
+	in := ReleaseWorkflowInput{ReleaseRunID: "run-13", Targets: []ReleaseTarget{testTarget()}}
+	rawJSON := []byte(`{"build_id":"13131313-1313-1313-1313-131313131313","version":"v1.0.1"}`)
+	plan := ResolvedPlan{ReleaseRunID: "run-13", Versions: map[string]string{testTarget().key(): "v1.0.1"}, RawJSON: rawJSON}
+	ref := BuildRef{ReleaseRunID: "run-13", RunID: "413"}
+
+	env.OnActivity(ActivityCheckApproval, mock.Anything, "run-13").Return(true, nil).Once()
+	env.OnActivity(ActivityResolvePlan, mock.Anything, in.Targets).Return(plan, nil).Once()
+	env.OnActivity(ActivityRecordResolvedPlan, mock.Anything, "run-13", rawJSON).Return(nil).Once()
+	env.OnActivity(ActivityDispatchBuild, mock.Anything, plan, map[string]string{}).Return(ref, nil).Once()
+	env.OnActivity(ActivityPollBuild, mock.Anything, ref).Return(BuildStatus{Succeeded: true, Detail: "run 413 conclusion=success"}, nil).Once()
+	env.OnActivity(ActivityFinalizePublish, mock.Anything, plan, ref).Return(FinalizeResult{Succeeded: true}, nil).Once()
+	env.OnActivity(ActivityVerifyPublished, mock.Anything, "run-13", mock.Anything).Return(VerifyResult{AllPublished: true}, nil).Once()
+	env.OnActivity(ActivityRecordTargetState, mock.Anything, "run-13", testTarget(), repository.ReleaseRunTargetStateSucceeded, "13131313-1313-1313-1313-131313131313", "").
+		Return(nil).Once()
+
+	env.ExecuteWorkflow(ReleaseWorkflow, in)
+
+	require.True(t, env.IsWorkflowCompleted())
+	require.NoError(t, env.GetWorkflowError())
+
+	var got ReleaseWorkflowResult
+	require.NoError(t, env.GetWorkflowResult(&got))
+	require.Len(t, got.Targets, 1)
+	require.Equal(t, repository.ReleaseRunTargetStateSucceeded, got.Targets[0].State)
 }

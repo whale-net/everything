@@ -16,6 +16,7 @@ import (
 func validAgent() AgentDefinitionConfig {
 	return AgentDefinitionConfig{
 		AgentID: "test-agent",
+		Domain:  "test-domain",
 		Model:   "anthropic/claude-3.5-sonnet",
 		ToolSet: []ToolServerRefConfig{
 			{ServerURL: "http://mcp.example.com:8081/", AllowedTools: nil},
@@ -46,6 +47,30 @@ func TestValidate_DuplicateAgentID_FailsLoudly(t *testing.T) {
 	err := Validate(nil, []AgentDefinitionConfig{agent, other})
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "duplicate agent_id")
+}
+
+// TestValidate_MissingDomain_FailsLoudly proves an entry with no `domain`
+// key fails Validate as a config error (issue #2424 FR1) -- never
+// deferred to seed time.
+func TestValidate_MissingDomain_FailsLoudly(t *testing.T) {
+	agent := validAgent()
+	agent.Domain = ""
+
+	err := Validate(nil, []AgentDefinitionConfig{agent})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "domain is required")
+}
+
+// TestValidate_EmptyStringDomain_FailsLoudly mirrors the missing-key case
+// for a `domain: ""` entry -- both must fail identically since Go's yaml
+// decode leaves both as the empty string.
+func TestValidate_EmptyStringDomain_FailsLoudly(t *testing.T) {
+	agent := validAgent()
+	agent.Domain = ""
+
+	err := Validate(nil, []AgentDefinitionConfig{agent})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "domain is required")
 }
 
 func TestValidate_MissingModelAndModelDefinition_FailsLoudly(t *testing.T) {
@@ -191,6 +216,7 @@ func TestLoad_EmbeddedAgentsYAML_ParsesAndValidates(t *testing.T) {
 
 	for _, a := range agents {
 		assert.NotEmpty(t, a.AgentID)
+		assert.NotEmpty(t, a.Domain, "agent %q must carry a non-empty domain", a.AgentID)
 		assert.True(t, a.Model != "" || a.ModelDefinition != "", "agent %q must name a model or model_definition", a.AgentID)
 		assert.NotEmpty(t, a.ToolSet)
 		for _, ref := range a.ToolSet {

@@ -29,6 +29,15 @@ name: Release v2
 #     `github.triggering_actor`). This workflow declares no other
 #     trigger, so it never fires on any event release.yml itself
 #     responds to (FR3).
+#
+# Build-completion notification: the final notify-temporal job forwards
+# this run's terminal state to App Registry's NotifyBuildComplete RPC
+# (release_helper notify-build) so the Temporal ReleaseWorkflow proceeds
+# without waiting for PollBuild's polling loop -- polling remains the
+# fallback (see worker/release/awaitBuildCompletion). The job is strictly
+# best-effort (continue-on-error, and a no-op for fallback dispatches
+# without a release_run_id input): it must never change the run's own
+# conclusion, which is exactly what PollBuild reports on.
 
 on:
   workflow_dispatch:
@@ -75,6 +84,10 @@ on:
         default: ''
       build_ref:
         description: 'Git commit SHA (or branch/tag) this run should check out and build, overriding the branch tip at dispatch time. FR9-FR11 (issue #923): App Registry''s Temporal DispatchBuild resolves app_build_log''s current-pointer row to pin a release to the exact commit ci.yml''s reconcile job last processed, and passes it here -- GitHub''s workflow_dispatch `ref` field itself must stay a branch/tag (it 422s on a raw commit SHA, even one that is genuinely a branch''s tip), so this workflow always dispatches against the branch and checks out build_ref explicitly instead. Leave empty to build the branch tip at dispatch time (falls back to github.sha).'
+        required: false
+        default: ''
+      release_run_id:
+        description: 'App Registry release_run id identifying the Temporal ReleaseWorkflow execution this dispatch belongs to, forwarded verbatim by DispatchBuild. release-v2''s notify job passes it to release_helper notify-build so the builder job can signal that workflow via NotifyBuildComplete the moment the build finishes (instead of leaving it to PollBuild''s fallback loop). Leave empty for manual/bot fallback dispatches with no release run behind them -- notify skips and polling decides.'
         required: false
         default: ''
 
@@ -689,3 +702,74 @@ jobs:
           ARGS=(summary --matrix '${{ needs.plan-release.outputs.release-matrix }}' --version "${{ needs.plan-release.outputs.version }}" --event-type workflow_dispatch --repository-owner "${{ github.repository_owner }}")
           [[ "${{ github.event.inputs.dry_run }}" == "true" ]] && ARGS+=(--dry-run)
           "$RELEASE_HELPER" "${ARGS[@]}" >> "$GITHUB_STEP_SUMMARY"
+
+  # Notify the Temporal ReleaseWorkflow that this build finished (the notify
+  # half of the pipeline's notify-vs-poll split, see
+  # tools/app_registry/worker/release/workflow.go's awaitBuildCompletion):
+  # forwards this run's terminal state to App Registry's builder-
+  # authenticated NotifyBuildComplete RPC via release_helper notify-build,
+  # which signals the release run's Temporal workflow so it proceeds to
+  # finalize/verify immediately instead of waiting for PollBuild's polling
+  # loop. Polling remains the fallback for a notification that never
+  # arrives, so this job is best-effort: notify-build treats "workflow not
+  # found" as an informational no-op, and --release-run-id empty (the
+  # manual/bot fallback dispatch path) skips the call entirely. The notify
+  # job reuses the same app-registry-builder-<env> client credentials the
+  # build job already holds, so the RPC's builder-role check passes.
+  notify-temporal:
+    name: Notify Temporal Release Workflow
+    runs-on: ubuntu-latest
+    needs: [authorize-trigger, plan-release, build-release-artifacts, build-release-tools]
+    if: needs.authorize-trigger.result == 'success' && always()
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v7
+        with:
+          ref: ${{ github.event.inputs.build_ref || github.sha }}
+
+      - name: Download release tools
+        id: download-tools
+        continue-on-error: true
+        uses: ./.github/actions/download-release-tools
+        with:
+          source: ${{ needs.build-release-tools.outputs.source || 'published' }}
+          target_env: ${{ vars.APP_REGISTRY_BUILDER_ENV || 'dev' }}
+        env:
+          APP_REGISTRY_ADDRESS: ${{ vars.APP_REGISTRY_ADDRESS }}
+          GRPC_AUTH_TOKEN_URL: ${{ vars.APP_REGISTRY_AUTH_TOKEN_URL }}
+          GRPC_AUTH_CLIENT_ID: app-registry-builder-${{ vars.APP_REGISTRY_BUILDER_ENV || 'dev' }}
+          GRPC_AUTH_CLIENT_SECRET: ${{ secrets.APP_REGISTRY_BUILDER_CLIENT_SECRET }}
+
+      - name: Notify Temporal release workflow
+        # Best-effort by design: a notify failure must never change the
+        # run's own conclusion -- PollBuild's fallback polls the OVERALL
+        # run conclusion, so a failed notify job would flip a successful
+        # build's outcome to failure on the Temporal side.
+        continue-on-error: true
+        if: steps.download-tools.outcome == 'success'
+        env:
+          APP_REGISTRY_ADDRESS: ${{ vars.APP_REGISTRY_ADDRESS }}
+          GRPC_AUTH_TOKEN_URL: ${{ vars.APP_REGISTRY_AUTH_TOKEN_URL }}
+          GRPC_AUTH_CLIENT_ID: app-registry-builder-${{ vars.APP_REGISTRY_BUILDER_ENV || 'dev' }}
+          GRPC_AUTH_CLIENT_SECRET: ${{ secrets.APP_REGISTRY_BUILDER_CLIENT_SECRET }}
+        run: |
+          # Map this run's job results onto notify-build's --status, using
+          # GitHub's own job-result vocabulary (needs.<job>.result):
+          # "skipped" counts as success -- GitHub itself concludes a run
+          # successful when jobs are skipped (nothing to build), and
+          # PollBuild's fallback would report the same, so the notify
+          # signal must not contradict it.
+          PLAN_RESULT="${{ needs.plan-release.result }}"
+          BUILD_RESULT="${{ needs.build-release-artifacts.result }}"
+          case "${PLAN_RESULT}/${BUILD_RESULT}" in
+            success/success|success/skipped) STATUS=success ;;
+            success/cancelled)               STATUS=cancelled ;;
+            *)                               STATUS=failure ;;
+          esac
+          ARGS=(notify-build --run-id "${{ github.run_id }}" --status "$STATUS")
+          if [[ -n "${{ github.event.inputs.release_run_id || '' }}" ]]; then
+            ARGS+=(--release-run-id "${{ github.event.inputs.release_run_id }}")
+          fi
+          ARGS+=(--detail "plan-release=${PLAN_RESULT} build-release-artifacts=${BUILD_RESULT}; run ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}")
+          "$RELEASE_HELPER" "${ARGS[@]}"
+
