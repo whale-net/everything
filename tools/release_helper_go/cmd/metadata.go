@@ -25,14 +25,20 @@ type AppMetadata struct {
 
 // FullName returns the canonical "domain-name" identifier: RepoName, exactly
 // as release.bzl (or discover_fast.go's mirror of the same formula) computed
-// it into the manifest. This must never independently re-derive
-// Domain+"-"+Name -- doing so is what let this method's own computation
-// drift out of sync with release.bzl's when #2343 changed the latter's
-// formula without changing this one, breaking image resolution for every
-// app whose naming didn't fit the new tolerance (#2385, #2404). Falls back
-// to a naive concatenation only for callers -- chiefly hand-built test
-// fixtures -- that construct an AppManifest without going through real
-// Bazel discovery and so never populate RepoName.
+// it into the manifest, for any AppMetadata built from real Bazel discovery
+// (ListAllApps). This must never independently re-derive Domain+"-"+Name for
+// that case -- doing so is what let this method's own computation drift out
+// of sync with release.bzl's when #2343 changed the latter's formula without
+// changing this one, breaking image resolution for every app whose naming
+// didn't fit the new tolerance (#2385, #2404).
+//
+// Falls back to a naive concatenation when RepoName is empty. This is not
+// just a test-fixture affordance: AppMetadataFromInputs (below) -- the
+// bazel-free path the App Registry worker's ResolvePlan activity uses in
+// production (tools/app_registry/worker/release/plan.go) -- constructs
+// AppMetadata from a Domain/Name/AppType triple with no RepoName, and relies
+// on this fallback to reproduce the same value release.bzl would have
+// computed. Do not remove this branch as dead/test-only code.
 func (m AppMetadata) FullName() string {
 	if m.RepoName != "" {
 		return m.RepoName
