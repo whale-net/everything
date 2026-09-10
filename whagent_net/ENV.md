@@ -135,6 +135,49 @@ Read by `api` (token verification + authorization), `ui` and `mcp`
 | `WHAGENT_OIDC_REDIRECT_URI` | ui | `http://localhost:8080/auth/callback` | `ui`'s OIDC callback URL, registered with `WHAGENT_OIDC_CLIENT_ID` as a valid redirect URI in Keycloak. Mounted at `/auth/callback` regardless of this value's path (see "`ui`" below) — this only needs to match what Keycloak is configured to redirect back to. |
 | `WHAGENT_OIDC_AUDIENCE` | api | — | Expected audience on tokens presented to `api`. |
 
+## Delegated grant (issue #2426, plan #2421)
+
+Read by `ui` and `mcp` (`//whagent_net/delegatedgrant.Build`, called from
+each binary's own `main.go`) to construct the single shared confidential
+Keycloak client, `libs/go/grpcauth/pgstore`-backed `Store`
+(`grpcauth_delegated_grant` table, `whagent_net/migrate/schema/
+migrations/008_delegated_grant`), and `libs/go/grpcauth/grantindex`-backed
+bookkeeping index (`grpcauth_grant_index`, same migration) that plan
+#2421 migrates `whagent_net` onto. **Purely additive as of issue #2426:**
+`ui`'s `/authorize` still mints an opaque `mcpauth` credential and `mcp`
+still exchanges via `WHAGENT_MCP_KEYCLOAK_*` above — nothing reads or
+writes either new table yet. A dependent task swaps both request paths
+onto this wiring (FR8/FR9).
+
+**NFR5: one shared client, not one per domain.** Every variable below
+configures a *single* confidential Keycloak client used as the caller
+identity by both `ui` and `mcp` — unlike `WHAGENT_MCP_KEYCLOAK_*` above
+(mcp's own, separate client) or a per-consuming-domain client
+(`KEYCLOAK.md`'s usual "one client per caller identity" principle, § 11):
+domain isolation for this flow is carried entirely by the grant key
+derived from `AgentDefinition.Domain` (`//whagent_net/grantkey`, FR4), not
+by provisioning a separate Keycloak client per domain. Both binaries must
+be configured with the *same* `WHAGENT_GRANT_CLIENT_ID`/
+`WHAGENT_GRANT_CLIENT_SECRET`/`WHAGENT_GRANT_REDIRECT_URI`/
+`WHAGENT_GRANT_ENCRYPTION_KEY` values.
+
+Every variable below is either unset on both binaries together (the
+`whagent_net/Tiltfile` local-dev default — construction degrades to a
+`WARNING` log and a nil `Components`, mirroring `WHAGENT_MCP_KEYCLOAK_*`'s
+own degrade precedent above) or set on both together — a *partial*
+configuration (e.g. every variable but `WHAGENT_GRANT_CLIENT_SECRET`) is a
+fatal startup error naming the missing variable, on both binaries: see
+`//whagent_net/delegatedgrant`'s `Build` doc comment for why a partial
+configuration is never allowed to silently construct a client that would
+only fail at its first real token call.
+
+| Variable | Component | Default | Description |
+|----------|-----------|---------|-------------|
+| `WHAGENT_GRANT_CLIENT_ID` | ui, mcp | — | The one shared confidential client's id in Keycloak (same realm as `WHAGENT_OIDC_ISSUER` above). Distinct from `WHAGENT_OIDC_CLIENT_ID` (which only ever verifies or forwards a token) and from `WHAGENT_MCP_KEYCLOAK_CLIENT_ID` (`mcp`'s own RFC 8693 token-exchange client, being retired by this same plan). See `KEYCLOAK.md` § 11 for the Keycloak-side client setup this requires (confidential, `offline_access` scope, refresh-token rotation enabled). |
+| `WHAGENT_GRANT_CLIENT_SECRET` | ui, mcp | — | Secret for `WHAGENT_GRANT_CLIENT_ID`. Never checked in, never logged, never echoed in an error (NFR5) — provisioned as a Kubernetes secret, identically on both binaries. |
+| `WHAGENT_GRANT_REDIRECT_URI` | ui, mcp | — | The browser-consent redirect URI, allow-listed on `WHAGENT_GRANT_CLIENT_ID` in Keycloak (NFR5's redirect-URI-as-security-control, `KEYCLOAK.md` § 11). Only `ui`'s dependent-task `/authorize` handler (FR9) ever actually redirects a browser here — `mcp` reads the same value solely because `grpcauth.DelegatedGrantConfig.RedirectURI` is a required field regardless of whether a given holder ever drives the interactive leg. |
+| `WHAGENT_GRANT_ENCRYPTION_KEY` | ui, mcp | — | Secret, SHA-256-hashed into `pgstore`'s required 32-byte AES-256-GCM key encrypting `grpcauth_delegated_grant.token_material` at rest — mirrors `audience_score_system`'s `ASS_TOKEN_ENCRYPTION_KEY` derivation (`audience_score_system/ENV.md`). Must be identical on both binaries — a mismatch means whichever binary didn't mint a grant's ciphertext cannot decrypt it. Never checked in, never logged, never echoed in an error. |
+
 ## Service wiring
 
 | Variable | Component | Default | Description |
@@ -200,6 +243,12 @@ a missing value, mirroring `ui`'s `initializeSSEHub` convention).
 | `WHAGENT_MCP_KEYCLOAK_CLIENT_SECRET` | mcp | — | Secret for `WHAGENT_MCP_KEYCLOAK_CLIENT_ID`. Never checked in, never logged, never echoed in an error (NFR8) -- provisioned as a Kubernetes secret. |
 | `WHAGENT_MCP_KEYCLOAK_TOKEN_URL` | mcp | — | Keycloak's token endpoint URL for the realm `WHAGENT_OIDC_ISSUER` names, e.g. `https://keycloak.example.com/realms/whagent/protocol/openid-connect/token` -- where the RFC 8693 `grant_type=urn:ietf:params:oauth:grant-type:token-exchange` request is sent. |
 
+`PG_DATABASE_URL` above also gates issue #2426's purely-additive
+delegated-grant wiring (`main.go`'s `initializeDelegatedGrant`, reusing
+the same pool the FR9 credential store above opened) -- see "Delegated
+grant (issue #2426, plan #2421)" above for the four `WHAGENT_GRANT_*`
+variables it also needs.
+
 ## `ui` (standalone agent web UI, issue #2236)
 
 Read directly via `os.Getenv` in `whagent_net/ui/main.go`. `ui` requires
@@ -220,7 +269,10 @@ mcpauth's OAuth2 authorization-server front end (FR9/C27, issue #2245) --
 `WHAGENT_UI_PUBLIC_URL`/`WHAGENT_MCP_PUBLIC_URL` below configure it; it
 shares `PG_DATABASE_URL` too (`mcp_credential`/`mcp_oauth_client`/
 `mcp_auth_code` tables, `whagent_net/migrate/schema/migrations/
-004_mcpauth_credential`).
+004_mcpauth_credential`). `PG_DATABASE_URL` also backs issue #2426's
+purely-additive delegated-grant wiring (`main.go`'s
+`initializeDelegatedGrant`) -- see "Delegated grant (issue #2426, plan
+#2421)" above for the four `WHAGENT_GRANT_*` variables it needs.
 
 | Variable | Component | Default | Description |
 |----------|-----------|---------|-------------|
