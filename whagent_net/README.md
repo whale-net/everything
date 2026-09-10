@@ -38,7 +38,7 @@ discussion: GitHub issue #1552.
 | `api/` | `external-api` | Session service gRPC: start/send-turn/stop/get/list/read-transcript; publishes the JWKS every domain-owned MCP server verifies a `worker`-minted persona credential against. | `bazel run //whagent_net/api:api` |
 | `worker/` | `worker` | Temporal `SessionWorkflow` + activities: resolve agent definition, build context, list/attach tools (FR8), call the model, dispatch each requested tool call, commit the turn, enforce turn/cost caps. Also hosts `ArchiveWorkflow` (FR7/C18, issue #2244, `worker/archive.go`): a Temporal Schedule periodically batches a terminal session's transcript out of Postgres past `WHAGENT_TRANSCRIPT_TTL`, gzips and uploads it to S3, commits the `transcript_archive` index row, and only then trims the hot-tier rows — registered only when `WHAGENT_S3_BUCKET` is set; there is no separate archiver binary. | `bazel run //whagent_net/worker:worker` |
 | `mcp/` | `external-api` | MCP surface over `api` — how Claude Code and other agents drive agents. | `bazel run //whagent_net/mcp:mcp` |
-| `ui/` | `external-api` | Standalone agent web UI (M2, issue #2236): Keycloak sign-in (NFR1) guards every app route, forwards the signed-in operator's own access token to `api` on every call (never a shared service account). A signed-in operator can start a session, watch its live transcript, send follow-up turns, and stop it (FR1/FR2, issues #2242/#2246) — a second way to drive a session alongside Claude Code/`mcp` and raw gRPC, going through the exact same `api` SessionService either way. Turn/stop controls are ownership-gated: only the session's `on_behalf_of` subject sees or can use them (LB2/NFR3). FR4's usage panel is the remaining piece. | `bazel run //whagent_net/ui:whagent-net-ui` |
+| `ui/` | `external-api` | Standalone agent web UI (M2, issue #2236): Keycloak sign-in (NFR1) guards every app route, forwards the signed-in operator's own access token to `api` on every call (never a shared service account). A signed-in operator can start a session, watch its live transcript, send follow-up turns, and stop it (FR1/FR2, issues #2242/#2246) — a second way to drive a session alongside Claude Code/`mcp` and raw gRPC, going through the exact same `api` SessionService either way. Turn/stop controls are ownership-gated: only the session's `on_behalf_of` subject sees or can use them (LB2/NFR3). FR4's usage panel is the remaining piece. | `bazel run //whagent_net/ui:ui` |
 
 Shared Go packages: `session/` (store), `config/` (the agent-definition
 seed source), `llm/` (the OpenRouter model client), `worker/tools/` (tool
@@ -314,5 +314,5 @@ bazel run //whagent_net/migrate:migrate       # applies migrations + seeds agent
 bazel run //whagent_net/api:api               # SessionService gRPC + JWKS
 bazel run //whagent_net/worker:worker         # SessionWorkflow
 bazel run //whagent_net/mcp:mcp               # the Claude-Code-facing MCP surface
-bazel run //whagent_net/ui:whagent-net-ui     # the standalone agent web UI
+bazel run //whagent_net/ui:ui                 # the standalone agent web UI
 ```

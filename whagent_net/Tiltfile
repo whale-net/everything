@@ -205,7 +205,7 @@ APPS = {
     },
     'ui': {
         'enabled_env': 'ENABLE_WHAGENT_NET_UI',
-        'bazel_target': '//whagent_net/ui:whagent-net-ui_image_load',
+        'bazel_target': '//whagent_net/ui:ui_image_load',
         'image_name': 'whagent-net-ui',
     },
 }

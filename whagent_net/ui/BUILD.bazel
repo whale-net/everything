@@ -54,7 +54,7 @@ go_library(
 )
 
 go_binary(
-    name = "whagent-net-ui",
+    name = "ui",
     embed = [":ui_lib"],
     visibility = ["//visibility:public"],
 )
@@ -168,12 +168,19 @@ go_test(
 )
 
 # Release metadata for whagent-net's standalone agent web UI (issue #2236).
-# domain "whagent-net" + name "whagent-net-ui" mirrors //whagent_net/api:api's
-# release_app and manmanv2/ui's own release_app (app_type "external-api");
-# ingress fields left unset for now, per this task's Scaffold section.
+# domain "whagent-net" + name "ui" mirrors //whagent_net/api:api's
+# release_app (app_type "external-api"); ingress fields left unset for now,
+# per this task's Scaffold section.
+#
+# name is "ui", not "whagent-net-ui": release_app's image_name already
+# prepends the domain ("whagent-net" + "ui" -> "whagent-net-ui" image), and
+# AppMetadata.FullName() in tools/release_helper_go does the same
+# Domain+"-"+Name concatenation unconditionally (no already-prefixed guard).
+# A name that already carries the domain prefix here double-prefixes at
+# release time -- see the bug this fixed.
 release_app(
-    name = "whagent-net-ui",
-    binary_name = ":whagent-net-ui",
+    name = "ui",
+    binary_name = ":ui",
     language = "go",
     domain = "whagent-net",
     app_type = "external-api",
