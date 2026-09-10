@@ -54,6 +54,7 @@ import (
 	"regexp"
 	"time"
 
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
@@ -134,10 +135,6 @@ type Index struct {
 	cfg  Config
 }
 
-// errNotImplemented tags every scaffolded method below. Implementation
-// phase replaces each body and removes this sentinel from that method.
-var errNotImplemented = errors.New("grpcauth/grantindex: not implemented")
-
 // New constructs an *Index backed by pool and the table/column names in
 // cfg (defaults applied for anything left zero-valued).
 //
@@ -191,31 +188,98 @@ func New(pool *pgxpool.Pool, cfg Config) (*Index, error) {
 	return &Index{pool: pool, cfg: cfg}, nil
 }
 
-// Record implements an idempotent upsert of e on the primary key
-// (subject_iss, subject_sub, domain).
-//
-// TODO(Implementation phase): re-consent for an already-recorded domain
-// must not error -- ON CONFLICT (subject_iss, subject_sub, domain) DO
-// NOTHING (granted_at is never bumped on re-record; preferred_username is
-// a write-once snapshot, not refreshed either -- see the package doc
-// comment's "preferred_username is a captured snapshot" section).
+// Record is an idempotent upsert of e on the primary key
+// (subject_iss, subject_sub, domain): ON CONFLICT DO NOTHING, so re-consent
+// for an already-recorded domain does not error, does not duplicate the
+// row, and does not bump granted_at or overwrite preferred_username --
+// both are write-once snapshots (see the package doc comment's "preferred_
+// username is a captured snapshot" section).
 func (i *Index) Record(ctx context.Context, e Entry) error {
-	return fmt.Errorf("grpcauth/grantindex: Record: %w", errNotImplemented)
+	query := fmt.Sprintf(`
+		INSERT INTO %s (%s, %s, %s, %s)
+		VALUES ($1, $2, $3, $4)
+		ON CONFLICT (%s, %s, %s) DO NOTHING
+	`,
+		i.cfg.TableName, i.cfg.SubjectIssColumn, i.cfg.SubjectSubColumn, i.cfg.DomainColumn, i.cfg.PreferredUsernameColumn,
+		i.cfg.SubjectIssColumn, i.cfg.SubjectSubColumn, i.cfg.DomainColumn,
+	)
+
+	if _, err := i.pool.Exec(ctx, query, e.SubjectIss, e.SubjectSub, e.Domain, e.PreferredUsername); err != nil {
+		return fmt.Errorf("grpcauth/grantindex: Record: %w", err)
+	}
+	return nil
 }
 
-// ListBySubject implements a read of every Entry recorded for
-// (subjectIss, subjectSub), across all domains.
-//
-// TODO(Implementation phase): must never return another subject's rows --
-// filter strictly on (subject_iss, subject_sub).
+// ListBySubject reads every Entry recorded for (subjectIss, subjectSub),
+// across all domains. Filters strictly on that pair, so it never returns
+// another subject's rows.
 func (i *Index) ListBySubject(ctx context.Context, subjectIss, subjectSub string) ([]Entry, error) {
-	return nil, fmt.Errorf("grpcauth/grantindex: ListBySubject: %w", errNotImplemented)
+	query := fmt.Sprintf(`
+		SELECT %s, %s, %s, %s, %s
+		FROM %s
+		WHERE %s = $1 AND %s = $2
+		ORDER BY %s
+	`,
+		i.cfg.SubjectIssColumn, i.cfg.SubjectSubColumn, i.cfg.DomainColumn, i.cfg.PreferredUsernameColumn, i.cfg.GrantedAtColumn,
+		i.cfg.TableName,
+		i.cfg.SubjectIssColumn, i.cfg.SubjectSubColumn,
+		i.cfg.DomainColumn,
+	)
+
+	rows, err := i.pool.Query(ctx, query, subjectIss, subjectSub)
+	if err != nil {
+		return nil, fmt.Errorf("grpcauth/grantindex: ListBySubject: %w", err)
+	}
+	defer rows.Close()
+
+	entries, err := scanEntries(rows)
+	if err != nil {
+		return nil, fmt.Errorf("grpcauth/grantindex: ListBySubject: %w", err)
+	}
+	return entries, nil
 }
 
-// ListAll implements a read of every recorded Entry across every subject
-// and domain, ordered deterministically by (preferred_username, domain).
-//
-// TODO(Implementation phase): implement the ordered SELECT.
+// ListAll reads every recorded Entry across every subject and domain,
+// ordered deterministically by (preferred_username, domain).
 func (i *Index) ListAll(ctx context.Context) ([]Entry, error) {
-	return nil, fmt.Errorf("grpcauth/grantindex: ListAll: %w", errNotImplemented)
+	query := fmt.Sprintf(`
+		SELECT %s, %s, %s, %s, %s
+		FROM %s
+		ORDER BY %s, %s
+	`,
+		i.cfg.SubjectIssColumn, i.cfg.SubjectSubColumn, i.cfg.DomainColumn, i.cfg.PreferredUsernameColumn, i.cfg.GrantedAtColumn,
+		i.cfg.TableName,
+		i.cfg.PreferredUsernameColumn, i.cfg.DomainColumn,
+	)
+
+	rows, err := i.pool.Query(ctx, query)
+	if err != nil {
+		return nil, fmt.Errorf("grpcauth/grantindex: ListAll: %w", err)
+	}
+	defer rows.Close()
+
+	entries, err := scanEntries(rows)
+	if err != nil {
+		return nil, fmt.Errorf("grpcauth/grantindex: ListAll: %w", err)
+	}
+	return entries, nil
+}
+
+// scanEntries drains rows into a []Entry in column order
+// (subject_iss, subject_sub, domain, preferred_username, granted_at) --
+// shared by ListBySubject and ListAll, whose SELECT column lists are
+// identical.
+func scanEntries(rows pgx.Rows) ([]Entry, error) {
+	var entries []Entry
+	for rows.Next() {
+		var e Entry
+		if err := rows.Scan(&e.SubjectIss, &e.SubjectSub, &e.Domain, &e.PreferredUsername, &e.GrantedAt); err != nil {
+			return nil, err
+		}
+		entries = append(entries, e)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return entries, nil
 }
