@@ -7,16 +7,10 @@
       }
     },
     "whagent-net-mcp-dev": {
-      "serverUrl": "https://dev-mcp.whagent-net.whalenet.dev",
-      "headers": {
-        "Authorization": "Bearer ${WHAGENT_DEV_ACCESS_TOKEN}"
-      }
+      "serverUrl": "https://dev-mcp.whagent-net.whalenet.dev"
     },
     "whagent-net-mcp-prod": {
-      "serverUrl": "https://mcp.whagent-net.whalenet.dev",
-      "headers": {
-        "Authorization": "Bearer ${WHAGENT_PROD_ACCESS_TOKEN}"
-      }
+      "serverUrl": "https://mcp.whagent-net.whalenet.dev"
     }
   }
 }

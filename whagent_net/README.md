@@ -52,17 +52,26 @@ in the repo's marketplace as `whagent-net`, symlinked at
 `.agents/plugins/whagent-net`): `claude plugin install whagent-net` (or
 enable it from `/plugin`) wires up three MCP servers —
 `whagent-net-mcp-tilt` (local Tilt, `localhost:8082`),
-`whagent-net-mcp-dev`, and `whagent-net-mcp-prod` — each forwarding an
-`Authorization: Bearer` header, per `mcp/server/auth.go`'s
-`PassthroughVerifier`, which rejects any call with no bearer token even
-locally (Tilt's `GRPC_AUTH_MODE=none` only skips *verifying* the token at
-`api`, so the tilt entry ships a fixed placeholder). Set
-`WHAGENT_DEV_ACCESS_TOKEN`/`WHAGENT_PROD_ACCESS_TOKEN` in your shell to
-your own Keycloak access token for that environment before using the
-dev/prod servers — the dev/prod hostnames follow the same
+`whagent-net-mcp-dev`, and `whagent-net-mcp-prod`.
+
+`whagent-net-mcp-tilt` forwards a fixed `Authorization: Bearer dev-local`
+placeholder, per `mcp/server/auth.go`'s `PassthroughVerifier`, which
+rejects any call with no bearer token even locally (Tilt's
+`GRPC_AUTH_MODE=none` only skips *verifying* the token at `api`, hence the
+placeholder). `whagent-net-mcp-dev` and `whagent-net-mcp-prod` ship with no
+`Authorization` header at all — both environments have FR9's OAuth2 path
+(below) configured, so your MCP client discovers it automatically and
+walks you through a browser sign-in the first time you connect; no token
+to copy or env var to set. The dev/prod hostnames follow the same
 `[dev-]mcp.<domain-slug>.whalenet.<dev|app>` convention as
-`audience_score_system`'s plugin; confirm against this domain's actual
-ingress once it's deployed there.
+`audience_score_system`'s plugin.
+
+If you'd rather use a manually-obtained bearer token against dev/prod
+instead (e.g. scripting/CI, or a client that doesn't speak MCP OAuth2),
+add an `Authorization: Bearer <token>` header back to that server's entry
+in your own `.mcp.json` — the manual-token recipe below still works
+unconditionally on every environment; the plugin just no longer assumes
+you want it by default.
 
 `mcp` (issue #2120) is a thin MCP facade over `api`'s `SessionService`:
 `start_session`, `send_turn`, `stop_session`, `get_session`, and
@@ -91,6 +100,12 @@ Add it to Claude Code's MCP config (`claude mcp add` or your
   }
 }
 ```
+
+For a service-account/CI caller (no human, no browser), mint that token
+with `whagent_net/scripts/kc-token.sh` (client_credentials grant against a
+confidential Keycloak client with "Service accounts roles" enabled --
+`libs/go/grpcauth/KEYCLOAK.md` step 4), e.g.
+`export WHAGENT_DEV_ACCESS_TOKEN="$(WHAGENT_KC_TOKEN_URL=... WHAGENT_KC_CLIENT_ID=... WHAGENT_KC_CLIENT_SECRET=... whagent_net/scripts/kc-token.sh)"`.
 
 `start_session`'s optional `first_turn` field sends that turn as soon as
 the session has started (two RPC calls under the hood --
