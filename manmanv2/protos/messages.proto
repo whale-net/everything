@@ -79,6 +79,10 @@ message Server {
   // unconstrained (today's behavior, SB-1.2). Enforcement lives in the
   // allocation path (dependent task), not here.
   repeated PortRange allowed_port_ranges = 8;
+  // Host drain state (#2360, manmanv2 M6, C29 groundwork). Inert here --
+  // no cordon enforcement or eviction yet, just the persisted state.
+  string drain_state = 9;  // "schedulable" | "draining" | "drained"
+  int64 drain_requested_at = 10;  // Unix timestamp (seconds since epoch), 0 if unset
 }
 
 // Game represents a game definition (e.g., Minecraft, Valheim)

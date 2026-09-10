@@ -41,6 +41,11 @@ const (
 	ServerStatusOnline  = "online"
 	ServerStatusOffline = "offline"
 
+	// Host drain state (#2360, manmanv2 M6, C29 groundwork).
+	ServerDrainStateSchedulable = "schedulable"
+	ServerDrainStateDraining    = "draining"
+	ServerDrainStateDrained     = "drained"
+
 	SGCStatusActive   = "active"
 	SGCStatusInactive = "inactive"
 
