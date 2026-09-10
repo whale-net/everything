@@ -881,6 +881,81 @@ func (c *ControlClient) GetSGCLibraryAttachments(ctx context.Context, sgcID int6
 	return resp.Attachments, nil
 }
 
+// GameConfig-Library management methods (M6 #2365, plan #2359) -- the
+// GC-scoped counterpart to the SGC-Library methods above, so the
+// Games-panel and conflict-resolution UI tasks can call the new RPCs.
+// Additive alongside the SGC-scoped methods (NFR1).
+
+func (c *ControlClient) AddLibraryToGameConfig(ctx context.Context, configID, libraryID, presetID, volumeID int64, pathOverride string) error {
+	_, err := c.workshop.AddLibraryToGameConfig(ctx, &manmanpb.AddLibraryToGameConfigRequest{
+		ConfigId:                 configID,
+		LibraryId:                libraryID,
+		PresetId:                 presetID,
+		VolumeId:                 volumeID,
+		InstallationPathOverride: pathOverride,
+	})
+	if err != nil {
+		return fmt.Errorf("failed to add library to game config: %w", err)
+	}
+	return nil
+}
+
+func (c *ControlClient) RemoveLibraryFromGameConfig(ctx context.Context, configID, libraryID int64) error {
+	_, err := c.workshop.RemoveLibraryFromGameConfig(ctx, &manmanpb.RemoveLibraryFromGameConfigRequest{
+		ConfigId:  configID,
+		LibraryId: libraryID,
+	})
+	if err != nil {
+		return fmt.Errorf("failed to remove library from game config: %w", err)
+	}
+	return nil
+}
+
+func (c *ControlClient) ListGameConfigLibraries(ctx context.Context, configID int64) ([]*manmanpb.WorkshopLibrary, error) {
+	resp, err := c.workshop.ListGameConfigLibraries(ctx, &manmanpb.ListGameConfigLibrariesRequest{
+		ConfigId: configID,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("failed to list game config libraries: %w", err)
+	}
+	return resp.Libraries, nil
+}
+
+func (c *ControlClient) GetGameConfigLibraryAttachments(ctx context.Context, configID int64) ([]*manmanpb.GameConfigWorkshopLibrary, error) {
+	resp, err := c.workshop.GetGameConfigLibraryAttachments(ctx, &manmanpb.GetGameConfigLibraryAttachmentsRequest{
+		ConfigId: configID,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("failed to get game config library attachments: %w", err)
+	}
+	return resp.Attachments, nil
+}
+
+// ListLibraryMigrationConflicts lists every unresolved SGC->GC backfill
+// conflict (FR12) for the resolution UI.
+func (c *ControlClient) ListLibraryMigrationConflicts(ctx context.Context) ([]*manmanpb.WorkshopLibraryMigrationConflict, error) {
+	resp, err := c.workshop.ListLibraryMigrationConflicts(ctx, &manmanpb.ListLibraryMigrationConflictsRequest{})
+	if err != nil {
+		return nil, fmt.Errorf("failed to list library migration conflicts: %w", err)
+	}
+	return resp.Conflicts, nil
+}
+
+// ResolveLibraryMigrationConflict applies a union or override resolution to
+// an SGC->GC backfill conflict (FR12). keepLibraryID is only meaningful
+// (and required) when resolution == "override".
+func (c *ControlClient) ResolveLibraryMigrationConflict(ctx context.Context, conflictID int64, resolution string, keepLibraryID int64) error {
+	_, err := c.workshop.ResolveLibraryMigrationConflict(ctx, &manmanpb.ResolveLibraryMigrationConflictRequest{
+		ConflictId:    conflictID,
+		Resolution:    resolution,
+		KeepLibraryId: keepLibraryID,
+	})
+	if err != nil {
+		return fmt.Errorf("failed to resolve library migration conflict: %w", err)
+	}
+	return nil
+}
+
 // Path Preset Management
 
 func (c *ControlClient) CreateAddonPathPreset(ctx context.Context, gameID int64, name, description, installationPath string) (*manmanpb.GameAddonPathPreset, error) {

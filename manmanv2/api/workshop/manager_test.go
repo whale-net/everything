@@ -389,6 +389,7 @@ func createTestManager() (*WorkshopManager, *mockAddonRepo, *mockInstallationRep
 		sgcRepo,
 		gameRepo,
 		gameConfigRepo,
+		nil, // gcLibraryRepo not needed for these tests
 		volumeRepo,
 		nil, // presetRepo not needed for these tests
 		sessionRepo,

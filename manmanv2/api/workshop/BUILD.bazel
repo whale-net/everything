@@ -30,6 +30,7 @@ go_test(
         "cachekey_test.go",
         "collection_test.go",
         "entry_parser_test.go",
+        "gclibrary_resolve_test.go",
         "manager_test.go",
     ],
     embed = [":workshop"],
