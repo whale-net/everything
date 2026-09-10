@@ -1,6 +1,7 @@
 package main
 
 import (
+	"errors"
 	"net/http"
 	"net/url"
 	"strconv"
@@ -280,9 +281,22 @@ func parseOptionalRegionID(raw string) (int64, error) {
 // the caller can act on. Anything else (transport/Internal) falls back to
 // the raw error text rather than hiding it, consistent with
 // renameSensorErrorMessage's fallback.
+//
+// The status is extracted with a direct errors.As against the
+// GRPCStatus() *status.Status interface -- NOT status.FromError/Convert:
+// LeafLabClient wraps every RPC error with %w, and grpc >=1.60's FromError
+// answers a wrapped status with a clone whose message it rewrites to the
+// full err.Error() text ("failed to ... region N: rpc error: ..."), so the
+// API's own message would never surface. errors.As on the same interface
+// grpc's FromError uses internally hands back the original, unrewritten
+// status instead.
 func regionWriteErrorMessage(err error) string {
-	st, ok := status.FromError(err)
-	if !ok {
+	var gs interface{ GRPCStatus() *status.Status }
+	if !errors.As(err, &gs) {
+		return "Region change failed: " + err.Error()
+	}
+	st := gs.GRPCStatus()
+	if st == nil {
 		return "Region change failed: " + err.Error()
 	}
 	switch st.Code() {
