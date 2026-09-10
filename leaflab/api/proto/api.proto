@@ -59,6 +59,21 @@ service LeafLabAPI {
   // Admin: the user list the reassign picker selects from (FR11, FR12).
   rpc ListUsers(ListUsersRequest) returns (ListUsersResponse);
 
+  // M3: create a region (FR1) owned by the calling user from the moment it
+  // exists, with an optional parent (0 = top-level). Writes the region row
+  // and its initial open region_parent_history row in the same transaction.
+  rpc CreateRegion(CreateRegionRequest) returns (CreateRegionResponse);
+
+  // M3: rename a region (FR2). Forward-looking only -- names are
+  // current-value (no history table), so past reading attribution is never
+  // affected.
+  rpc RenameRegion(RenameRegionRequest) returns (RenameRegionResponse);
+
+  // M3: re-parent a region (FR3), 0 parent = make it top-level. Moves the
+  // region's whole subtree by construction. Self/descendant parents are
+  // rejected with codes.FailedPrecondition (FR5), never a silent cycle.
+  rpc ReparentRegion(ReparentRegionRequest) returns (ReparentRegionResponse);
+
   // Record, change, or clear the region a board is physically located in
   // (FR10). Bookkeeping only: this never touches sensor placement or
   // reading attribution -- a board's recorded region and its sensors'
@@ -319,6 +334,53 @@ message ListUsersRequest {}
 message ListUsersResponse {
   repeated LeafLabUser users = 1;
 }
+
+// -- M3 region lifecycle (FR1-FR3, FR5, NFR2) --------------------------------
+
+message CreateRegionRequest {
+  // Non-empty, at most 255 characters (region.name is VARCHAR(255)). No
+  // uniqueness rule across regions -- sibling-region uniqueness is a
+  // non-goal, same as board renames in M2.
+  string name = 1;
+  // Optional parent region. 0 = top-level region (a recorded NULL parent in
+  // region_parent_history, not an absent row). Non-zero must name an
+  // existing region (codes.NotFound otherwise). A cycle is impossible at
+  // creation -- the new region does not exist yet, so nothing can point at
+  // it. The creating user becomes the region's owner (FR1, NFR2); the
+  // parent's own ownership is deliberately not checked (reads and
+  // tree-structure navigation are unscoped by ownership, per the M2 FR5
+  // read precedent -- creating a child under another user's region creates
+  // a region you own, it does not edit theirs).
+  int64 parent_region_id = 2;
+}
+
+message CreateRegionResponse {
+  // The created region's ID, for the UI's drill-down navigation (#2317).
+  int64 region_id = 1;
+}
+
+message RenameRegionRequest {
+  int64 region_id = 1;
+  // Non-empty, at most 255 characters. Forward-looking only (FR2): names
+  // are current-value with no history table, so no past reading's
+  // attribution or display changes.
+  string name = 2;
+}
+
+message RenameRegionResponse {}
+
+message ReparentRegionRequest {
+  int64 region_id = 1;
+  // The region's new parent. 0 = top-level (NULL parent, recorded state on
+  // the open region_parent_history row). The region's whole subtree moves
+  // with it by construction: descendants' own parent pointers are untouched
+  // (FR3). parent_region_id = region_id, or any of region_id's descendants,
+  // is rejected with codes.FailedPrecondition (FR5) -- never a silent
+  // cycle.
+  int64 parent_region_id = 2;
+}
+
+message ReparentRegionResponse {}
 
 // -- M3: board recorded region (FR10) -----------------------------------------
 

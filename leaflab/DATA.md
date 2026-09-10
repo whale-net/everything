@@ -178,7 +178,13 @@ references on `region` and `plant`) is created in M1 but written by nothing
 but interactive sign-in — no row exists in any of these until FR2/C25 land.
 `plant` is omitted from the diagram above along with `plant_type` (existing
 gap, reconciled in M4 per `leaflab/product/03-roadmap.md`), but it gains the
-same nullable `owner_leaflab_user_id FK` as `region`.
+same nullable `owner_leaflab_user_id FK` as `region`. From M3, the
+region-lifecycle API (`CreateRegion`) is the second writer of one of these:
+it sets `region.owner_leaflab_user_id` to the creating user at creation
+(FR1 — a new region is never ownerless). `region.owner_leaflab_user_id` is
+a plain current-value column with no history table: no M3 capability
+transfers a region, and re-parenting never touches it. Pre-M3 regions keep
+a NULL owner (only an admin may write them).
 
 `board.name` is a plain current-value column, not a history table, by
 design (FR3, migration 016) -- board name is not an attribution dimension

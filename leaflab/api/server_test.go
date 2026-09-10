@@ -209,6 +209,37 @@ type fakeRepository struct {
 	// ErrSensorNameConflict doc comment) without a real database.
 	renameConflictSensors map[int64]bool
 
+	// -- #2312: M3 region lifecycle (FR1-FR3, FR5) fixtures/recorders --
+
+	// regions maps a region_id to its current-value identity -- the fake's
+	// stand-in for the region table's name/parent_region_id/
+	// owner_leaflab_user_id columns. A region_id absent here does not exist
+	// (GetRegionIdentity returns pgx.ErrNoRows), exactly like a fresh
+	// region table. The fake keeps ParentRegionID and OwnerLeaflabUserID in
+	// sync on its own writes (Create/Reparent), mirroring the real
+	// repository's invariant that the mirror column and the open history
+	// row never diverge.
+	regions map[int64]RegionIdentity
+	// nextRegionID hands out region_ids for CreateRegion, BIGSERIAL-style.
+	nextRegionID int64
+	// createdRegions records every successful CreateRegion call, in order,
+	// including the parent pointer and owner the repository received --
+	// tests assert on this to prove the creating user became the owner
+	// (FR1/NFR2) and that a denied call issues no write.
+	createdRegions []createdRegion
+	// renamedRegions records every successful RenameRegion call, in order.
+	renamedRegions []renamedRegion
+	// reparentedRegions records every successful ReparentRegion call, in
+	// order -- proving a rejected re-parent (cycle, unknown parent, no-op)
+	// issues no write at all, and an accepted one closes-and-opens exactly
+	// one history row (the row bookkeeping itself is the real repository's
+	// contract, covered against real Postgres by the integration tests).
+	reparentedRegions []reparentedRegion
+	// cycleCheckCalls counts ReparentCreatesCycle invocations -- a cycle-
+	// free re-parent must still have consulted the walk (and a no-op
+	// rejection must never have reached the repository at all).
+	cycleCheckCalls int
+
 	// -- #2315: SetBoardRegion (FR10 board recorded region) fixtures --
 
 	// existingRegions is the set of region_ids RegionExists recognizes -- a
@@ -243,6 +274,25 @@ type renamedSensor struct {
 	name     string
 }
 
+// createdRegion is one recorded fakeRepository.CreateRegion call.
+type createdRegion struct {
+	name           string
+	parentRegionID *int64
+	ownerUserID    int64
+}
+
+// renamedRegion is one recorded fakeRepository.RenameRegion call.
+type renamedRegion struct {
+	regionID int64
+	name     string
+}
+
+// reparentedRegion is one recorded fakeRepository.ReparentRegion call.
+type reparentedRegion struct {
+	regionID          int64
+	newParentRegionID *int64
+}
+
 // claimedBoard is one recorded fakeRepository.ClaimBoard call that actually
 // opened a new ownership row (an already-owned refusal is never appended
 // here).
@@ -266,6 +316,7 @@ func newFakeRepository() *fakeRepository {
 		existingUsers:         map[int64]bool{},
 		sensorBoards:          map[int64]int64{},
 		renameConflictSensors: map[int64]bool{},
+		regions:               map[int64]RegionIdentity{},
 		existingRegions:       map[int64]bool{},
 		boardRegions:          map[int64]int64{},
 		boardRegionNames:      map[int64]string{},
@@ -424,6 +475,73 @@ func (f *fakeRepository) RenameSensor(_ context.Context, sensorID int64, name st
 	}
 	f.renamedSensors = append(f.renamedSensors, renamedSensor{sensorID: sensorID, name: name})
 	return nil
+}
+
+// -- #2312: M3 region lifecycle (FR1-FR3, FR5) repositoryStore methods --
+// The fake mirrors the real Repository's per-method contracts at unit-test
+// fidelity: GetRegionIdentity's pgx.ErrNoRows for unknown ids, CreateRegion's
+// transactional region-row-plus-initial-history-row shape (collapsed here to
+// one map write, since the fake has no separate history table to diverge
+// from), and unconditional writes for Rename/Reparent (the handlers own
+// every existence/cycle check before calling them, exactly like the real
+// methods).
+
+func (f *fakeRepository) GetRegionIdentity(_ context.Context, regionID int64) (RegionIdentity, error) {
+	region, ok := f.regions[regionID]
+	if !ok {
+		return RegionIdentity{}, pgx.ErrNoRows
+	}
+	region.RegionID = regionID
+	return region, nil
+}
+
+func (f *fakeRepository) CreateRegion(_ context.Context, name string, parentRegionID *int64, ownerUserID int64) (int64, error) {
+	f.nextRegionID++
+	regionID := f.nextRegionID
+	ownerID := ownerUserID
+	f.regions[regionID] = RegionIdentity{Name: name, ParentRegionID: parentRegionID, OwnerLeaflabUserID: &ownerID}
+	f.createdRegions = append(f.createdRegions, createdRegion{name: name, parentRegionID: parentRegionID, ownerUserID: ownerUserID})
+	return regionID, nil
+}
+
+func (f *fakeRepository) RenameRegion(_ context.Context, regionID int64, name string) error {
+	f.renamedRegions = append(f.renamedRegions, renamedRegion{regionID: regionID, name: name})
+	if region, ok := f.regions[regionID]; ok {
+		region.Name = name
+		f.regions[regionID] = region
+	}
+	return nil
+}
+
+func (f *fakeRepository) ReparentRegion(_ context.Context, regionID int64, newParentRegionID *int64) error {
+	f.reparentedRegions = append(f.reparentedRegions, reparentedRegion{regionID: regionID, newParentRegionID: newParentRegionID})
+	if region, ok := f.regions[regionID]; ok {
+		region.ParentRegionID = newParentRegionID
+		f.regions[regionID] = region
+	}
+	return nil
+}
+
+func (f *fakeRepository) ReparentCreatesCycle(_ context.Context, regionID, newParentRegionID int64) (bool, error) {
+	f.cycleCheckCalls++
+	// Walk the fake's current mirror pointers upward from the prospective
+	// parent -- the same walk the real repository's recursive CTE performs
+	// against region.parent_region_id.
+	cur := newParentRegionID
+	for depth := 0; depth < 1000; depth++ {
+		if cur == regionID {
+			return true, nil
+		}
+		region, ok := f.regions[cur]
+		if !ok {
+			return false, nil
+		}
+		if region.ParentRegionID == nil {
+			return false, nil
+		}
+		cur = *region.ParentRegionID
+	}
+	return false, nil
 }
 
 // -- #2315: SetBoardRegion (FR10 board recorded region) stubs ----------------
@@ -1673,4 +1791,387 @@ func TestRenameSensor_NoPublish(t *testing.T) {
 	_, err := srv.RenameSensor(claimsCtx("owner-sub"), &pb.RenameSensorRequest{SensorId: 10, Name: "soil-moisture-2"})
 	require.NoError(t, err)
 	assert.Empty(t, pub.published)
+}
+
+// -- M3 region lifecycle tests (FR1-FR3, FR5, NFR2, #2312) -------------------
+//
+// Same fence-test pattern as the M2 ownership tests above: handlers called
+// directly against a fakeRepository/fakePublisher with caller identity
+// injected via claimsCtx. The fake mirrors the real repository's per-method
+// contracts (see the fake's M3 section); the real-SQL contracts the fake
+// collapses (initial history row, SCD2 close-and-open, mirror-column sync,
+// the recursive-CTE cycle walk) are covered against real Postgres by the
+// integration tests in region_lifecycle_integration_test.go.
+
+// seedFakeRegion inserts a region into the fake's in-memory region table --
+// the region-lifecycle analog of seeding repo.boardIdentity directly in the
+// M2 tests. parentID/ownerUserID may be 0: 0 parent = top-level, 0 owner =
+// a pre-M3 legacy row with a NULL owner (only the admin bypass may write
+// such a region, per authorizeRegionWrite's NFR2 rule).
+func seedFakeRegion(repo *fakeRepository, id int64, name string, parentID, ownerUserID int64) int64 {
+	region := RegionIdentity{Name: name}
+	if parentID != 0 {
+		parent := parentID
+		region.ParentRegionID = &parent
+	}
+	if ownerUserID != 0 {
+		owner := ownerUserID
+		region.OwnerLeaflabUserID = &owner
+	}
+	repo.regions[id] = region
+	return id
+}
+
+// TestCreateRegion_SetsCallerAsOwner is FR1/NFR2: the creating user becomes
+// the region's owner from the moment it exists (a new region is never left
+// ownerless), the optional parent is passed through (0 = top-level, recorded
+// as a nil pointer, not 0), and a pure Postgres write never publishes a
+// device config (LB2).
+func TestCreateRegion_SetsCallerAsOwner(t *testing.T) {
+	repo := newFakeRepository()
+	repo.users["owner-sub"] = 1
+	seedFakeRegion(repo, 50, "greenhouse-a", 0, 0)
+	pub := &fakePublisher{}
+	srv := newOwnershipTestServer(repo, pub)
+
+	t.Run("top-level region records a nil parent and the caller as owner", func(t *testing.T) {
+		resp, err := srv.CreateRegion(claimsCtx("owner-sub"), &pb.CreateRegionRequest{Name: "shelf-1"})
+		require.NoError(t, err)
+		assert.Equal(t, int64(1), resp.RegionId)
+		require.Len(t, repo.createdRegions, 1)
+		assert.Equal(t, createdRegion{name: "shelf-1", parentRegionID: nil, ownerUserID: 1}, repo.createdRegions[0])
+		assert.Empty(t, pub.published, "a region write never publishes a device config")
+	})
+
+	t.Run("nested region records its existing parent", func(t *testing.T) {
+		_, err := srv.CreateRegion(claimsCtx("owner-sub"), &pb.CreateRegionRequest{Name: "shelf-2", ParentRegionId: 50})
+		require.NoError(t, err)
+		require.Len(t, repo.createdRegions, 2)
+		require.NotNil(t, repo.createdRegions[1].parentRegionID)
+		assert.Equal(t, int64(50), *repo.createdRegions[1].parentRegionID)
+		assert.Equal(t, int64(1), repo.createdRegions[1].ownerUserID, "the creating user owns the nested region too (FR1)")
+	})
+}
+
+// TestCreateRegion_UnknownParent_NotFound_NoWrite: a non-zero parent_region_id
+// must name an existing region (codes.NotFound otherwise), and the failed
+// create must issue no write at all.
+func TestCreateRegion_UnknownParent_NotFound_NoWrite(t *testing.T) {
+	repo := newFakeRepository()
+	repo.users["owner-sub"] = 1
+	srv := newOwnershipTestServer(repo, &fakePublisher{})
+
+	_, err := srv.CreateRegion(claimsCtx("owner-sub"), &pb.CreateRegionRequest{Name: "orphan", ParentRegionId: 999})
+	require.Error(t, err)
+	assert.Equal(t, codes.NotFound, status.Code(err))
+	assert.Empty(t, repo.createdRegions)
+}
+
+// TestCreateRegion_NameValidation pins validateRegionName's contract on the
+// create path: empty/whitespace rejected, names over 255 characters rejected
+// (VARCHAR(255) counts characters, not bytes -- hence a 255-rune multibyte
+// name is legal while a 256-rune one is not), and every rejection issues no
+// write.
+func TestCreateRegion_NameValidation(t *testing.T) {
+	tests := []struct {
+		name string
+		in   string
+		ok   bool
+	}{
+		{"empty", "", false},
+		{"whitespace only", "   \t\n", false},
+		{"255 multibyte runes fits VARCHAR(255)", strings.Repeat("北", 255), true},
+		{"256 runes is one too many", strings.Repeat("北", 256), false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			repo := newFakeRepository()
+			repo.users["owner-sub"] = 1
+			srv := newOwnershipTestServer(repo, &fakePublisher{})
+
+			resp, err := srv.CreateRegion(claimsCtx("owner-sub"), &pb.CreateRegionRequest{Name: tt.in})
+			if tt.ok {
+				require.NoError(t, err)
+				assert.NotZero(t, resp.RegionId)
+				assert.Len(t, repo.createdRegions, 1)
+			} else {
+				require.Error(t, err)
+				assert.Equal(t, codes.InvalidArgument, status.Code(err))
+				assert.Empty(t, repo.createdRegions)
+			}
+		})
+	}
+}
+
+// TestRenameRegion_Owner_Succeeds is NFR2's happy path: the region's owner
+// renames it, the repository receives exactly that write, and no publish is
+// issued.
+func TestRenameRegion_Owner_Succeeds(t *testing.T) {
+	repo := newFakeRepository()
+	repo.users["owner-sub"] = 1
+	seedFakeRegion(repo, 10, "garden", 0, 1)
+	pub := &fakePublisher{}
+	srv := newOwnershipTestServer(repo, pub)
+
+	_, err := srv.RenameRegion(claimsCtx("owner-sub"), &pb.RenameRegionRequest{RegionId: 10, Name: "market garden"})
+	require.NoError(t, err)
+	require.Len(t, repo.renamedRegions, 1)
+	assert.Equal(t, renamedRegion{regionID: 10, name: "market garden"}, repo.renamedRegions[0])
+	assert.Empty(t, pub.published, "a region write never publishes a device config")
+}
+
+// TestRenameRegion_NonOwner_PermissionDenied_NoWrite is NFR2: an
+// authenticated non-owner is denied and the write never reaches the
+// repository.
+func TestRenameRegion_NonOwner_PermissionDenied_NoWrite(t *testing.T) {
+	repo := newFakeRepository()
+	repo.users["owner-sub"] = 1
+	repo.users["other-sub"] = 2
+	seedFakeRegion(repo, 10, "garden", 0, 1)
+	srv := newOwnershipTestServer(repo, &fakePublisher{})
+
+	_, err := srv.RenameRegion(claimsCtx("other-sub"), &pb.RenameRegionRequest{RegionId: 10, Name: "hijacked"})
+	require.Error(t, err)
+	assert.Equal(t, codes.PermissionDenied, status.Code(err))
+	assert.Empty(t, repo.renamedRegions)
+}
+
+// TestRenameRegion_AdminBypass_Succeeds is NFR2's admin bypass, deliberately
+// unlike boards' M2 FR5 rule (TestRenameBoard_AdminRole_NoBypass_
+// PermissionDenied): region/placement edits are exactly the writes NFR2 lets
+// an admin perform on an owner's behalf, so an admin may rename a region
+// they do not own.
+func TestRenameRegion_AdminBypass_Succeeds(t *testing.T) {
+	repo := newFakeRepository()
+	repo.users["owner-sub"] = 1
+	repo.users["admin-sub"] = 2
+	repo.admins[2] = true
+	seedFakeRegion(repo, 10, "garden", 0, 1)
+	srv := newOwnershipTestServer(repo, &fakePublisher{})
+
+	_, err := srv.RenameRegion(claimsCtx("admin-sub", "admin"), &pb.RenameRegionRequest{RegionId: 10, Name: "admin-renamed"})
+	require.NoError(t, err)
+	require.Len(t, repo.renamedRegions, 1)
+	assert.Equal(t, renamedRegion{regionID: 10, name: "admin-renamed"}, repo.renamedRegions[0])
+}
+
+// TestRenameRegion_LegacyNullOwner_AdminOnly covers the pre-M3 legacy shape:
+// a region whose owner_leaflab_user_id is NULL has no owner to match, so a
+// signed-in non-admin is PermissionDenied while the admin bypass still
+// passes (authorizeRegionWrite's NFR2 rule for ownerless regions).
+func TestRenameRegion_LegacyNullOwner_AdminOnly(t *testing.T) {
+	repo := newFakeRepository()
+	repo.users["some-sub"] = 1
+	repo.users["admin-sub"] = 2
+	repo.admins[2] = true
+	seedFakeRegion(repo, 10, "legacy", 0, 0) // NULL owner
+	srv := newOwnershipTestServer(repo, &fakePublisher{})
+
+	_, err := srv.RenameRegion(claimsCtx("some-sub"), &pb.RenameRegionRequest{RegionId: 10, Name: "no"})
+	require.Error(t, err)
+	assert.Equal(t, codes.PermissionDenied, status.Code(err))
+	assert.Empty(t, repo.renamedRegions)
+
+	_, err = srv.RenameRegion(claimsCtx("admin-sub", "admin"), &pb.RenameRegionRequest{RegionId: 10, Name: "yes"})
+	require.NoError(t, err)
+	assert.Len(t, repo.renamedRegions, 1)
+}
+
+// TestRenameRegion_UnknownRegion_NotFound_NoWrite: existence is checked
+// before authorization, so an unknown region_id is distinguishable from an
+// unowned one (same ordering as RenameBoard).
+func TestRenameRegion_UnknownRegion_NotFound_NoWrite(t *testing.T) {
+	repo := newFakeRepository()
+	repo.users["some-sub"] = 1
+	srv := newOwnershipTestServer(repo, &fakePublisher{})
+
+	_, err := srv.RenameRegion(claimsCtx("some-sub"), &pb.RenameRegionRequest{RegionId: 999, Name: "ghost"})
+	require.Error(t, err)
+	assert.Equal(t, codes.NotFound, status.Code(err))
+	assert.Empty(t, repo.renamedRegions)
+}
+
+// TestRenameRegion_EmptyName_InvalidArgument_NoWrite: name validation runs
+// after authorization, and neither an empty nor a whitespace-only name
+// reaches the repository.
+func TestRenameRegion_EmptyName_InvalidArgument_NoWrite(t *testing.T) {
+	for _, name := range []string{"", "   ", "\t\n"} {
+		t.Run(fmt.Sprintf("%q", name), func(t *testing.T) {
+			repo := newFakeRepository()
+			repo.users["owner-sub"] = 1
+			seedFakeRegion(repo, 10, "garden", 0, 1)
+			srv := newOwnershipTestServer(repo, &fakePublisher{})
+
+			_, err := srv.RenameRegion(claimsCtx("owner-sub"), &pb.RenameRegionRequest{RegionId: 10, Name: name})
+			require.Error(t, err)
+			assert.Equal(t, codes.InvalidArgument, status.Code(err))
+			assert.Empty(t, repo.renamedRegions)
+		})
+	}
+}
+
+// TestReparentRegion_CycleRejection_SelfDescendantDeepChain is FR5's unit
+// contract, over the fake's own mirror-pointer walk (the same walk the real
+// repository's recursive CTE performs): re-parenting a region under itself,
+// under its direct child, or under any deeper descendant is rejected with
+// codes.FailedPrecondition -- never a silent cycle -- and none of the
+// rejected attempts reach the repository.
+//
+// Fixture tree: 1 -> 2 -> 3 -> 4 -> 5 (1 is the root, 5 the deepest leaf).
+func TestReparentRegion_CycleRejection_SelfDescendantDeepChain(t *testing.T) {
+	tests := []struct {
+		name      string
+		regionID  int64
+		newParent int64
+	}{
+		{"self", 1, 1},
+		{"direct child", 1, 2},
+		{"deep chain end", 1, 5},
+		{"mid-chain region under its own deep descendant", 2, 5},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			repo := newFakeRepository()
+			repo.users["owner-sub"] = 1
+			seedFakeRegion(repo, 1, "root", 0, 1)
+			seedFakeRegion(repo, 2, "level-2", 1, 1)
+			seedFakeRegion(repo, 3, "level-3", 2, 1)
+			seedFakeRegion(repo, 4, "level-4", 3, 1)
+			seedFakeRegion(repo, 5, "level-5", 4, 1)
+			srv := newOwnershipTestServer(repo, &fakePublisher{})
+
+			_, err := srv.ReparentRegion(claimsCtx("owner-sub"), &pb.ReparentRegionRequest{
+				RegionId:       tt.regionID,
+				ParentRegionId: tt.newParent,
+			})
+			require.Error(t, err)
+			assert.Equal(t, codes.FailedPrecondition, status.Code(err))
+			assert.Empty(t, repo.reparentedRegions,
+				"a cycle-rejected re-parent must issue no write at all")
+		})
+	}
+}
+
+// TestReparentRegion_NonCycle_Succeeds covers the FR3 happy paths: a region
+// moves under an unrelated branch (the whole subtree moves with it by
+// construction -- descendants' own pointers are untouched, which the fake's
+// per-region map makes visible), to a new top-level home, and back to
+// top-level (recorded as a nil parent, never 0). A cycle-free re-parent must
+// actually consult the cycle walk (cycleCheckCalls == 1), and no publish is
+// ever issued.
+func TestReparentRegion_NonCycle_Succeeds(t *testing.T) {
+	repo := newFakeRepository()
+	repo.users["owner-sub"] = 1
+	seedFakeRegion(repo, 1, "tree-a-root", 0, 1)
+	seedFakeRegion(repo, 2, "tree-a-child", 1, 1)
+	seedFakeRegion(repo, 3, "tree-b-root", 0, 1)
+	seedFakeRegion(repo, 4, "tree-b-child", 3, 1)
+	pub := &fakePublisher{}
+	srv := newOwnershipTestServer(repo, pub)
+
+	// tree-a-child moves under tree-b-root: unrelated branch, no cycle.
+	_, err := srv.ReparentRegion(claimsCtx("owner-sub"), &pb.ReparentRegionRequest{RegionId: 2, ParentRegionId: 3})
+	require.NoError(t, err)
+	require.Len(t, repo.reparentedRegions, 1)
+	require.NotNil(t, repo.reparentedRegions[0].newParentRegionID)
+	assert.Equal(t, int64(3), *repo.reparentedRegions[0].newParentRegionID)
+	assert.Equal(t, 1, repo.cycleCheckCalls, "a cycle-free re-parent must consult the ancestor walk")
+	require.NotNil(t, repo.regions[2].ParentRegionID)
+	assert.Equal(t, int64(3), *repo.regions[2].ParentRegionID, "the fake's mirror pointer moved with the write")
+	assert.Empty(t, pub.published, "a region write never publishes a device config")
+
+	// ...and back to top-level: recorded as a nil parent, not a 0.
+	_, err = srv.ReparentRegion(claimsCtx("owner-sub"), &pb.ReparentRegionRequest{RegionId: 2})
+	require.NoError(t, err)
+	require.Len(t, repo.reparentedRegions, 2)
+	assert.Nil(t, repo.reparentedRegions[1].newParentRegionID,
+		"top-level must be recorded as a nil parent, not a pointer to 0")
+}
+
+// TestReparentRegion_NoOpRejections_NoWrite: re-parenting under the current
+// parent (or a top-level region to top-level) would churn the history with a
+// zero-length interval without changing anything, so both are refused like
+// ReassignBoardOwner's reassign-to-current-owner -- and neither rejected
+// attempt reaches the repository's write path.
+func TestReparentRegion_NoOpRejections_NoWrite(t *testing.T) {
+	t.Run("under current parent", func(t *testing.T) {
+		repo := newFakeRepository()
+		repo.users["owner-sub"] = 1
+		seedFakeRegion(repo, 1, "parent", 0, 1)
+		seedFakeRegion(repo, 2, "child", 1, 1)
+		srv := newOwnershipTestServer(repo, &fakePublisher{})
+
+		_, err := srv.ReparentRegion(claimsCtx("owner-sub"), &pb.ReparentRegionRequest{RegionId: 2, ParentRegionId: 1})
+		require.Error(t, err)
+		assert.Equal(t, codes.FailedPrecondition, status.Code(err))
+		assert.Empty(t, repo.reparentedRegions)
+	})
+
+	t.Run("top-level to top-level", func(t *testing.T) {
+		repo := newFakeRepository()
+		repo.users["owner-sub"] = 1
+		seedFakeRegion(repo, 1, "root", 0, 1)
+		srv := newOwnershipTestServer(repo, &fakePublisher{})
+
+		_, err := srv.ReparentRegion(claimsCtx("owner-sub"), &pb.ReparentRegionRequest{RegionId: 1})
+		require.Error(t, err)
+		assert.Equal(t, codes.FailedPrecondition, status.Code(err))
+		assert.Empty(t, repo.reparentedRegions)
+	})
+}
+
+// TestReparentRegion_UnknownParent_NotFound_NoWrite: a non-zero
+// parent_region_id must name an existing region, checked before the cycle
+// walk, and the failed re-parent issues no write.
+func TestReparentRegion_UnknownParent_NotFound_NoWrite(t *testing.T) {
+	repo := newFakeRepository()
+	repo.users["owner-sub"] = 1
+	seedFakeRegion(repo, 1, "root", 0, 1)
+	srv := newOwnershipTestServer(repo, &fakePublisher{})
+
+	_, err := srv.ReparentRegion(claimsCtx("owner-sub"), &pb.ReparentRegionRequest{RegionId: 1, ParentRegionId: 999})
+	require.Error(t, err)
+	assert.Equal(t, codes.NotFound, status.Code(err))
+	assert.Empty(t, repo.reparentedRegions)
+}
+
+// TestReparentRegion_NonOwner_PermissionDenied_NoWrite is NFR2 for the
+// re-parent path: a non-owner is denied, no write is issued, and --
+// implicitly -- the region's ownership is untouched by the failed attempt
+// (re-parenting never changes ownership, FR3).
+func TestReparentRegion_NonOwner_PermissionDenied_NoWrite(t *testing.T) {
+	repo := newFakeRepository()
+	repo.users["owner-sub"] = 1
+	repo.users["other-sub"] = 2
+	seedFakeRegion(repo, 1, "root", 0, 1)
+	seedFakeRegion(repo, 2, "other-root", 0, 2)
+	srv := newOwnershipTestServer(repo, &fakePublisher{})
+
+	_, err := srv.ReparentRegion(claimsCtx("other-sub"), &pb.ReparentRegionRequest{RegionId: 1, ParentRegionId: 2})
+	require.Error(t, err)
+	assert.Equal(t, codes.PermissionDenied, status.Code(err))
+	assert.Empty(t, repo.reparentedRegions)
+	require.NotNil(t, repo.regions[1].OwnerLeaflabUserID,
+		"a rejected re-parent leaves the region's ownership untouched")
+	assert.Equal(t, int64(1), *repo.regions[1].OwnerLeaflabUserID)
+}
+
+// TestReparentRegion_AdminBypass_Succeeds is NFR2's admin bypass on the
+// re-parent path: an admin may re-parent a region they do not own.
+func TestReparentRegion_AdminBypass_Succeeds(t *testing.T) {
+	repo := newFakeRepository()
+	repo.users["owner-sub"] = 1
+	repo.users["admin-sub"] = 2
+	repo.admins[2] = true
+	seedFakeRegion(repo, 1, "owner-root", 0, 1)
+	seedFakeRegion(repo, 2, "admin-root", 0, 2)
+	srv := newOwnershipTestServer(repo, &fakePublisher{})
+
+	_, err := srv.ReparentRegion(claimsCtx("admin-sub", "admin"), &pb.ReparentRegionRequest{RegionId: 1, ParentRegionId: 2})
+	require.NoError(t, err)
+	require.Len(t, repo.reparentedRegions, 1)
+	assert.Equal(t, int64(2), *repo.reparentedRegions[0].newParentRegionID)
+	require.NotNil(t, repo.regions[1].OwnerLeaflabUserID,
+		"an accepted re-parent also leaves ownership untouched (FR3)")
+	assert.Equal(t, int64(1), *repo.regions[1].OwnerLeaflabUserID)
 }

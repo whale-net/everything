@@ -253,6 +253,23 @@ a board it doesn't own). Both are SCD2 close-and-open (reassign) or
 close-only (clear) against `board_owner_history`, same as every other
 write to that table — never an in-place `UPDATE` of `leaflab_user_id`.
 
+M3's region lifecycle RPCs (`CreateRegion`, `RenameRegion`, `ReparentRegion`)
+add a second per-owner write chokepoint, `authorizeRegionWrite`
+(`leaflab/api/server.go`), and it DOES consult the admin role: NFR2 lets an
+admin perform region/placement edits on an owner's behalf out-of-band (the
+product brief's admin-bypass pattern), so a region write succeeds for the
+region's current `owner_leaflab_user_id` or an open-'admin'-grant holder.
+This is M3 NFR2's rule, deliberately unlike `authorizeBoardWrite`'s
+M2-FR5 no-exception rule. `CreateRegion` needs no fence beyond
+authentication: the creating user becomes the region's owner at creation,
+and nesting a new region under another user's region creates a region you
+own — it edits no one else's (the parent-existence check is a read, and
+reads stay unscoped by ownership). Regions whose owner column is NULL
+(pre-M3 rows) have no owner to match, so only the admin bypass passes.
+Re-parenting never changes ownership, and the cycle check (parent = self
+or a descendant → `codes.FailedPrecondition`) runs after authorization, via
+a single recursive-CTE ancestor walk (`Repository.ReparentCreatesCycle`).
+
 Reads are deliberately **not** scoped by ownership (FR5): every signed-in
 user still reads every board, sensor, and reading through
 `ListBoardsWithState`/`GetBoardDetail`/`GetSensorReadingHistory`/

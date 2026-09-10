@@ -15,20 +15,18 @@
 
 ## What's authenticated (NFR2)
 
-Through M1, only the three read RPCs M1 adds require a valid, correctly-audienced
-access token when `GRPC_AUTH_MODE=oidc`:
-
-- `ListBoardsWithState`
-- `GetBoardDetail`
-- `GetSensorReadingHistory`
-
-`PushDeviceConfig`, `GetDeviceConfig`, and `ListBoards` predate M1 and remain
-unauthenticated regardless of `GRPC_AUTH_MODE`, so the operator's existing
-`grpcurl`-based config-push path (`leaflab/scripts/push-config.sh`) keeps
-working unchanged in every environment. **M2 brings these three inside the
-fence** — do not treat their current exemption as permanent. The allowlist
-lives in `leaflab/api/auth.go` (`authenticatedMethods`); it is not derived
-from `libs/go/grpcauth`, which has no per-method policy (see
+Every RPC in `api.proto` requires a valid, correctly-audienced access token
+when `GRPC_AUTH_MODE=oidc`. M1 fenced only its three read RPCs
+(`ListBoardsWithState`, `GetBoardDetail`, `GetSensorReadingHistory`) and M2
+brought the legacy three (`PushDeviceConfig`, `GetDeviceConfig`,
+`ListBoards`) plus the ownership screen inside the fence — the operator's
+`grpcurl`-based config-push path (`leaflab/scripts/push-config.sh`) needs a
+token under OIDC mode (under Tilt's `GRPC_AUTH_MODE=none` it keeps working
+unchanged). M3's region lifecycle RPCs (`CreateRegion`, `RenameRegion`,
+`ReparentRegion`) are fenced the same way. A newly added RPC defaults to
+unauthenticated unless it is deliberately listed. The allowlist lives in
+`leaflab/api/auth.go` (`authenticatedMethods`); it is not derived from
+`libs/go/grpcauth`, which has no per-method policy (see
 `leaflab/api/auth.go`'s doc comment for why that library is not extended).
 
 ### Two OIDC clients
