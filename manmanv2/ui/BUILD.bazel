@@ -91,6 +91,7 @@ go_test(
         "handlers_workshop_batch_status_test.go",
         "handlers_workshop_bulk_test.go",
         "handlers_workshop_cache_test.go",
+        "handlers_workshop_page_test.go",
         "main_test.go",
         "nfr5_bulk_env_write_guard_test.go",
         "templ_render_test.go",
