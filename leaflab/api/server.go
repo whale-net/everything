@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log/slog"
 	"regexp"
+	"sort"
 	"strings"
 	"time"
 	"unicode/utf8"
@@ -114,6 +115,9 @@ type repositoryStore interface {
 	GetCurrentBoardRegion(ctx context.Context, boardID int64) (*int64, string, error)
 	SetBoardRegion(ctx context.Context, boardID int64, regionID *int64) error
 	ListSensorRegionsForBoard(ctx context.Context, boardID int64) ([]SensorRegionRow, error)
+	// GetRegionTree backs GetRegionTree (#2316: FR6 tree view with
+	// drill-down). Read-only; see repository.GetRegionTree.
+	GetRegionTree(ctx context.Context, rootRegionID int64) ([]RegionTreeRow, error)
 }
 
 // configPublisher is the one *rmq.Publisher method PushDeviceConfig calls,
@@ -1199,4 +1203,98 @@ func (s *LeafLabAPIServer) SetBoardRegion(ctx context.Context, req *pb.SetBoardR
 			"board_id", req.BoardId, "previous_region_id", currentRegionID, "sensors", len(sensors))
 	}
 	return resp, nil
+}
+
+// -- M3 region tree view (FR6, #2316) ----------------------------------------
+
+// GetRegionTree returns the region tree with drill-down (FR6): the whole
+// forest (root_region_id = 0) or the subtree rooted at one region, each
+// node carrying the count of sensors currently placed in that region only
+// and the count placed in that region or any descendant -- both from
+// CURRENT placement (open sensor_region_history rows) resolved over the
+// CURRENT tree (v_region_path semantics; FR4 deliberately left that view
+// untouched because this is a current-state, not historical, consumer).
+//
+// This is a read: like every M2/M3 read path it is unscoped by ownership
+// (any signed-in user may view the tree), and no device round trip is
+// involved (LB2/NFR1). Siblings are ordered alphabetically by name; the
+// inclusive counts are computed server-side from the direct counts the
+// repository returns. No live updates (per FR6 and the M3 out-of-scope
+// list): the caller re-issues the RPC to refresh.
+func (s *LeafLabAPIServer) GetRegionTree(ctx context.Context, req *pb.GetRegionTreeRequest) (*pb.GetRegionTreeResponse, error) {
+	if req.RootRegionId != 0 {
+		if _, err := s.repo.GetRegionIdentity(ctx, req.RootRegionId); err != nil {
+			if errors.Is(err, pgx.ErrNoRows) {
+				return nil, status.Errorf(codes.NotFound, "region %d not found", req.RootRegionId)
+			}
+			return nil, status.Errorf(codes.Internal, "get region identity: %v", err)
+		}
+	}
+
+	rows, err := s.repo.GetRegionTree(ctx, req.RootRegionId)
+	if err != nil {
+		return nil, status.Errorf(codes.Internal, "get region tree: %v", err)
+	}
+
+	// Assemble the forest: index rows by id, hang children off their
+	// parents, and sort siblings alphabetically (FR6). A drill-down
+	// anchor row's parent is outside the returned set, so it becomes the
+	// single top-level node.
+	nodes := make(map[int64]*pb.RegionTreeNode, len(rows))
+	var roots []*pb.RegionTreeNode
+	for _, r := range rows {
+		nodes[r.RegionID] = &pb.RegionTreeNode{
+			RegionId:             r.RegionID,
+			Name:                 r.Name,
+			SensorCount:          r.SensorCount,
+			InclusiveSensorCount: r.SensorCount, // seed; descendant counts folded in below
+		}
+	}
+	for _, r := range rows {
+		node := nodes[r.RegionID]
+		parent, ok := nodes[safeDeref(r.ParentRegionID)]
+		if !ok {
+			roots = append(roots, node)
+			continue
+		}
+		parent.Children = append(parent.Children, node)
+	}
+	sortTreeNodes(roots)
+
+	// Inclusive counts: fold each subtree's total up into its parent,
+	// bottom-up per sibling group. The seed above put each node's own
+	// direct count in InclusiveSensorCount; the fold adds descendants'.
+	var foldInclusive func(node *pb.RegionTreeNode)
+	foldInclusive = func(node *pb.RegionTreeNode) {
+		for _, child := range node.Children {
+			foldInclusive(child)
+			node.InclusiveSensorCount += child.InclusiveSensorCount
+		}
+	}
+	for _, root := range roots {
+		foldInclusive(root)
+	}
+
+	s.logger.Info("region tree fetched",
+		"root_region_id", req.RootRegionId, "regions", len(rows), "roots", len(roots))
+	return &pb.GetRegionTreeResponse{Regions: roots}, nil
+}
+
+// safeDeref returns *p, or 0 when p is nil -- a nil parent_region_id
+// (top-level region) must not index the node map as key 0, which no real
+// region occupies (region IDs are sequence-assigned positive integers).
+func safeDeref(p *int64) int64 {
+	if p == nil {
+		return 0
+	}
+	return *p
+}
+
+// sortTreeNodes sorts each sibling group alphabetically by name (FR6),
+// recursively.
+func sortTreeNodes(nodes []*pb.RegionTreeNode) {
+	sort.Slice(nodes, func(i, j int) bool { return nodes[i].Name < nodes[j].Name })
+	for _, n := range nodes {
+		sortTreeNodes(n.Children)
+	}
 }
