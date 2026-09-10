@@ -223,7 +223,11 @@ role this milestone uses is `'admin'`, which gates the admin ownership RPCs
 (`ListOwnedBoards`, `ReassignBoardOwner`, `ClearBoardOwner`, `ListUsers`) via
 `LeafLabAPIServer.requireAdmin` in `leaflab/api/server.go`. It grants no
 board-write access beyond those RPCs — `authorizeBoardWrite` never consults
-it (FR5 has no admin exception).
+it (FR5 has no admin exception). From M3 it additionally unlocks region
+writes (`CreateRegion`'s fence is authentication alone; `RenameRegion` and
+`ReparentRegion` go through `authorizeRegionWrite`): an admin may rename or
+re-parent any region on its owner's behalf out-of-band (NFR2's admin-bypass
+pattern), including regions with no owner set.
 
 **Bootstrap: how the first admin comes to exist.** After this milestone's
 migrations run, at least one user always holds `'admin'`, with no

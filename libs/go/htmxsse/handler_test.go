@@ -1,6 +1,7 @@
 package htmxsse
 
 import (
+	"bufio"
 	"context"
 	"fmt"
 	"net/http"
@@ -687,6 +688,93 @@ func TestFR1_SubscriptionReleaseOnCancellation(t *testing.T) {
 	subsCountAfter := len(h.subscribers["topic-a"]) + len(h.subscribers["topic-b"])
 	h.mu.RUnlock()
 	require.Equal(t, 0, subsCountAfter)
+}
+
+// TestWriteDeadlineSurvivesServerWriteTimeout is a regression test for
+// #2337/#2340: whagent_net/ui's (and other htmxsse consumers') http.Server
+// set a server-wide WriteTimeout, which net/http applies as a hard deadline
+// on the underlying connection counted from when the response started --
+// not per Write. That silently killed every SSE stream shortly after
+// connect, before a heartbeat or live event could ever be delivered, even
+// though httptest.NewRecorder()-based tests above never caught it (a
+// ResponseRecorder doesn't sit on a real net.Conn, so it can't enforce a
+// write deadline at all).
+//
+// This test uses a real listening httptest.Server with a short
+// WriteTimeout to reproduce the defect end-to-end, and asserts the stream
+// keeps delivering events well past that deadline -- proving
+// Handler's http.NewResponseController(w).SetWriteDeadline(time.Time{})
+// call is effective.
+func TestWriteDeadlineSurvivesServerWriteTimeout(t *testing.T) {
+	fakeTransport := &fakeTransport{}
+	attachFunc := func(ctx context.Context) (Transport, error) {
+		return fakeTransport, nil
+	}
+
+	config := DefaultConfig()
+	config.HeartbeatInterval = 50 * time.Millisecond
+	h := NewHub(attachFunc, config)
+	defer h.Close()
+
+	fragment := func(r *http.Request, topic string) ([]byte, error) {
+		return []byte(`{"state": "ok"}`), nil
+	}
+
+	handler := Handler(h, []string{"topic-a"}, fragment)
+
+	mux := http.NewServeMux()
+	mux.HandleFunc("/events", handler)
+
+	srv := httptest.NewUnstartedServer(mux)
+	writeTimeout := 100 * time.Millisecond
+	// Reproduces whagent_net/ui's (and manmanv2/ui's, tools/app_registry/ui's)
+	// real-world server config: a short WriteTimeout that would previously
+	// kill this stream well before the assertions below run.
+	srv.Config.WriteTimeout = writeTimeout
+	srv.Start()
+	defer srv.Close()
+
+	resp, err := http.Get(srv.URL + "/events")
+	require.NoError(t, err)
+	defer resp.Body.Close()
+
+	lines := make(chan string, 64)
+	readErrs := make(chan error, 1)
+	go func() {
+		scanner := bufio.NewScanner(resp.Body)
+		for scanner.Scan() {
+			lines <- scanner.Text()
+		}
+		readErrs <- scanner.Err()
+		close(lines)
+	}()
+
+	start := time.Now()
+	overallTimeout := time.After(2 * time.Second)
+
+	for {
+		select {
+		case line, ok := <-lines:
+			if !ok {
+				elapsed := time.Since(start)
+				select {
+				case err := <-readErrs:
+					t.Fatalf("SSE connection closed after %v (WriteTimeout=%v) before delivering an event past the deadline: %v", elapsed, writeTimeout, err)
+				default:
+					t.Fatalf("SSE connection closed after %v (WriteTimeout=%v) before delivering an event past the deadline", elapsed, writeTimeout)
+				}
+			}
+			if strings.HasPrefix(line, "event:") && time.Since(start) > writeTimeout {
+				// An event (the periodic heartbeat keepalive, absent any
+				// live event) was successfully read strictly after the
+				// server's WriteTimeout elapsed -- the connection survived
+				// past the point it would previously have been killed.
+				return
+			}
+		case <-overallTimeout:
+			t.Fatal("timed out waiting for an SSE event past the server's WriteTimeout")
+		}
+	}
 }
 
 // Fake tickers for testing

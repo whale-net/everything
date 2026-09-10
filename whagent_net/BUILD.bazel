@@ -8,6 +8,21 @@ filegroup(
     visibility = ["//visibility:public"],
 )
 
+filegroup(
+    name = "tiltfile",
+    srcs = ["Tiltfile"],
+    visibility = ["//whagent_net/conformance:__pkg__"],
+)
+
+# This BUILD.bazel itself, as text data for //whagent_net/conformance's
+# Tiltfile conformance test (issue #2341) -- used only to locate this
+# directory as a data-staging root, not asserted on directly.
+filegroup(
+    name = "build_file",
+    srcs = ["BUILD.bazel"],
+    visibility = ["//whagent_net/conformance:__pkg__"],
+)
+
 # Composes the M1 binaries (migrate, api, worker, mcp), M2's ui, and now
 # archiver (FR7, C18, issue #2244) into one deployable chart, mirroring
 # audience_score_system/BUILD.bazel's ass_backend_chart's migration-job +
