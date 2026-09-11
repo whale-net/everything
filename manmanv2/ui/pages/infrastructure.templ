@@ -1,0 +1,103 @@
+package pages
+
+import (
+	"fmt"
+
+	"github.com/whale-net/everything/libs/go/htmxui"
+	"github.com/whale-net/everything/manmanv2/ui/components"
+)
+
+// Infrastructure is the M6 fleet host list (FR1/FR2, C29): every host in
+// the fleet with its drain state, eventually replacing /servers as the
+// nav-facing surface (the nav swap and /servers redirect are the dependent
+// navigation/disposition task, not this one -- see this task's "Design
+// note" above navItems' Infrastructure entry in components/layout.templ).
+//
+// Implementation phase (#2369): the FR2 floor (host name + drain-state
+// badge) plus health indicators bounded by NFR5 (Server.status,
+// last_seen, host_public_address, ListAllocatedPorts -- server_capabilities
+// is deliberately not surfaced here: the API exposes no RPC to read a
+// server's persisted ServerCapability row today, and adding one would be
+// the new backend data path NFR5 rules out for this task), the FR3 drain /
+// FR4 undrain one-click actions (posting through handleInfrastructureAction),
+// and the FR2 transient "draining" state, which settles to "drained" on a
+// manual page refresh -- no new live transport (NFR5), no SSE/polling.
+templ Infrastructure(layout components.LayoutData, hosts []*InfrastructureHost) {
+	@components.Layout(layout) {
+		<div class="flex justify-between items-center mb-2">
+			@components.HeroHeader("Infrastructure", "Every host in the fleet, with its current drain state and health")
+			<a href="/infrastructure" class="btn btn-secondary btn-sm">Refresh</a>
+		</div>
+		<p class="text-xs text-base-content/60 mb-6">
+			A host that just started draining still shows "draining" here until its running sessions finish stopping -- use Refresh to check on progress; this page does not update itself live.
+		</p>
+		if len(hosts) > 0 {
+			@components.Table() {
+				<thead>
+					<tr>
+						<th>Name</th>
+						<th>Drain State</th>
+						<th>Status</th>
+						<th>Last Seen</th>
+						<th>Public Address</th>
+						<th>Allocated Ports</th>
+						<th class="text-right">Actions</th>
+					</tr>
+				</thead>
+				<tbody>
+					for _, host := range hosts {
+						<tr class="hover">
+							<td class="text-sm font-medium text-base-content">{ host.Server.Name }</td>
+							<td>
+								@htmxui.Badge(drainStateLabel(host.Server.DrainState), statusBadgeVariant(drainStateVariant(host.Server.DrainState)), htmxui.BadgeSizeSM, true, nil)
+							</td>
+							<td>
+								@htmxui.Badge(host.Server.Status, statusBadgeVariant(serverStatusVariant(host.Server.Status)), htmxui.BadgeSizeSM, true, nil)
+							</td>
+							<td class="text-sm">{ timeAgo(host.Server.LastSeen) }</td>
+							<td class="text-sm">
+								if host.Server.HostPublicAddress == "" {
+									Not reported
+								} else {
+									{ host.Server.HostPublicAddress }
+								}
+							</td>
+							<td class="text-sm">{ allocatedPortsSummary(host.AllocatedPorts) }</td>
+							<td class="text-right text-sm font-medium">
+								<div class="flex justify-end gap-2">
+									if canDrain(host.Server.DrainState) {
+										<form method="POST" action={ templ.URL(fmt.Sprintf("/infrastructure/%d/drain", host.Server.ServerId)) }>
+											@htmxui.Button(htmxui.ButtonWarning, htmxui.ButtonSizeSM, false, templ.Attributes{
+												"type":       "submit",
+												"hx-confirm": drainConfirmMessage(host.Server.Name),
+											}) {
+												Drain
+											}
+										</form>
+									}
+									if canUndrain(host.Server.DrainState) {
+										<form method="POST" action={ templ.URL(fmt.Sprintf("/infrastructure/%d/undrain", host.Server.ServerId)) }>
+											@htmxui.Button(htmxui.ButtonSuccess, htmxui.ButtonSizeSM, false, templ.Attributes{
+												"type":       "submit",
+												"hx-confirm": undrainConfirmMessage(host.Server.Name),
+											}) {
+												Undrain
+											}
+										</form>
+									}
+								</div>
+							</td>
+						</tr>
+					}
+				</tbody>
+			}
+		} else {
+			@components.EmptyState(
+				"No hosts found",
+				"Hosts will appear here when they register with the control plane.",
+				"",
+				"",
+			)
+		}
+	}
+}

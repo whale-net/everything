@@ -263,6 +263,30 @@ matching the Config Editor blade's `hx-get`/`hx-swap="beforeend"` shape.
 GC-level library attachment (FR10) is deliberately not part of this page --
 it lands on the Games page panel in its own task.
 
+## Infrastructure Page (M6, #2369)
+
+`GET /infrastructure` (`handleInfrastructure`, `handlers_infrastructure.go`)
+is the redesigned fleet host list (FR1/FR2, C29): every host with its
+current drain state, plus health indicators bounded by NFR5
+(`Server.status`, `last_seen`, `host_public_address`, allocated ports via
+`ListAllocatedPorts`). It is additive alongside the pre-existing `/servers`
+and `/servers/<id>` routes -- neither is modified or redirected here; the
+nav entry swap and `/servers` redirect are a dependent
+navigation/disposition task.
+
+`pages.Infrastructure` (`pages/infrastructure.templ`) renders inside the
+shared M5 nav shell and posts host actions to the `/infrastructure/{id}/*`
+routes below, all handled by `handleInfrastructureAction`:
+
+| Route | Purpose |
+|-------|---------|
+| `/infrastructure/{id}/drain` | FR3: one-click drain -- stops new placement onto the host AND stops every session currently running on it (`DrainServer`) |
+| `/infrastructure/{id}/undrain` | FR4: one-click undrain -- returns the host to schedulable; never restarts anything the drain stopped (`UndrainServer`) |
+
+A `draining` host renders that state until a manual page refresh shows it
+has settled to `drained` (FR2) -- there is no live transport (SSE/polling)
+behind this page (NFR5).
+
 ## Documentation
 
 - **[ARCHITECTURE.md](ARCHITECTURE.md)** - System architecture and patterns

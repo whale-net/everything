@@ -424,6 +424,13 @@ func (app *App) setupRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("/servers", app.auth.RequireAuthFunc(app.auth.WithAccessToken(app.handleServers)))
 	mux.HandleFunc("/servers/", app.auth.RequireAuthFunc(app.auth.WithAccessToken(app.handleServerDetail)))
 
+	// Protected routes - Infrastructure (#2369, M6 FR1/FR2/FR3/FR4, C29):
+	// additive alongside /servers above -- does not replace or redirect it
+	// (NFR6). The nav swap and /servers redirect are the dependent
+	// navigation/disposition task.
+	mux.HandleFunc("/infrastructure", app.auth.RequireAuthFunc(app.auth.WithAccessToken(app.handleInfrastructure)))
+	mux.HandleFunc("/infrastructure/", app.auth.RequireAuthFunc(app.auth.WithAccessToken(app.handleInfrastructureAction)))
+
 	// Protected routes - Workshop
 	// "/workshop" (task #2362, FR6/FR7): the redesigned top-level page --
 	// additive alongside every route below it. It does not replace
