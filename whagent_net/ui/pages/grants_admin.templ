@@ -4,13 +4,12 @@
 // grant pages render through the same GrantRow-taking function" -- rather
 // than a divergent grant-list render path for admins.
 //
-// Scaffold stub (issue #2433): grantsTable's current per-row revoke form
-// targets POST /grants/revoke with only the row's domain (the self-
-// service page's session-derived-subject shape, grants.templ). The
-// Implementation phase generalizes that form to target
-// POST /admin/grants/revoke with the row's own subject as well, since an
-// admin revoke -- unlike self-service -- must name a target operator that
-// is never the caller's own session subject.
+// grantsTable's per-row revoke form targets POST /admin/grants/revoke
+// with the row's own subject_sub as well as its domain (GrantRow.
+// SubjectSub, ../handlers_grants_admin.go's buildAdminGrantRows) --
+// unlike the self-service page's form (grants.templ), which never
+// includes a subject at all, an admin revoke must name a target operator
+// that is never the caller's own session subject.
 package pages
 
 import (
@@ -38,6 +37,6 @@ templ GrantsAdmin(data GrantsAdminData) {
 		if data.Error != "" {
 			<div role="alert" class="alert alert-error mb-4">{ data.Error }</div>
 		}
-		@grantsTable(data.Rows)
+		@grantsTable(data.Rows, "/admin/grants/revoke")
 	}
 }

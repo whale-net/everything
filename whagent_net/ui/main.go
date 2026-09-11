@@ -125,6 +125,18 @@ type config struct {
 	GrantClientSecret  string
 	GrantRedirectURI   string
 	GrantEncryptionKey string
+
+	// GrantAdminRole is the Keycloak realm role name that gates
+	// FR14/FR15's admin all-operators grant list and revoke page (issue
+	// #2433). Checked fresh on every request against
+	// app.auth.GetAccessToken(r)'s roles (NFR3) -- never
+	// htmxauth.GetUser(ctx).Roles, which caches at sign-in for the full
+	// 24h session TTL (see handlers_grants_admin.go's package doc
+	// comment). Realm-side creation/assignment of this role is
+	// deployment/runbook work, not coded here (out of scope on #2421).
+	// Left empty, the admin page 403s for everyone -- there is no
+	// "everyone is admin" default.
+	GrantAdminRole string
 }
 
 func loadConfig() config {
@@ -147,6 +159,7 @@ func loadConfig() config {
 		GrantClientSecret:  getEnv("WHAGENT_GRANT_CLIENT_SECRET", ""),
 		GrantRedirectURI:   getEnv("WHAGENT_GRANT_REDIRECT_URI", ""),
 		GrantEncryptionKey: getEnv("WHAGENT_GRANT_ENCRYPTION_KEY", ""),
+		GrantAdminRole:     getEnv("WHAGENT_GRANT_ADMIN_ROLE", ""),
 	}
 }
 
@@ -193,6 +206,12 @@ type App struct {
 	// dependent task swaps setupMCPAuth's /authorize handling onto
 	// grant.Source (FR9).
 	grant delegatedgrant.Components
+
+	// adminRole is cfg.GrantAdminRole verbatim -- the realm role name
+	// handleGrantsAdmin/handleGrantsAdminRevoke's fresh-role gate checks
+	// for (FR15/NFR3, issue #2433). Empty means the admin page is
+	// unreachable to everyone, not "everyone is admin".
+	adminRole string
 }
 
 // NewApp wires up Keycloak sign-in (NFR1) and the authenticated `api`
@@ -268,6 +287,7 @@ func NewApp(ctx context.Context, cfg config) (*App, error) {
 		session:    sessionClient,
 		oidcIssuer: cfg.OIDCIssuer,
 		sseHub:     initializeSSEHub(cfg),
+		adminRole:  cfg.GrantAdminRole,
 	}
 
 	// mcpauth.NewCredentialStore/NewPostgresClientRegistry/

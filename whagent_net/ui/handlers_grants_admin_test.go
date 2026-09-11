@@ -1,22 +1,28 @@
 package main
 
 import (
+	"context"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/require"
+
+	"github.com/whale-net/everything/libs/go/grpcauth"
+	"github.com/whale-net/everything/whagent_net/delegatedgrant"
 )
 
-// This file guards issue #2433's Scaffold section: GET /admin/grants and
-// POST /admin/grants/revoke are reachable, wired through the real auth
-// middleware (devModeAuthenticator, shared with handlers_session_test.go
-// and handlers_grants_test.go), and compile against the real
-// pages.GrantsAdmin/GrantsAdminData shapes. The Implementation phase's
-// Testing section (FR14/FR15/NFR3/NFR4/NFR7) replaces these with the full
-// admin-gate/live-status/revoke-scoping/audit-log coverage described in
-// the issue.
+// This file carries route/render-level sanity checks for GET /admin/grants
+// and POST /admin/grants/revoke, wired through the real auth middleware
+// (devModeAuthenticator, shared with handlers_session_test.go and
+// handlers_grants_test.go -- AuthModeNone, so isGrantsAdmin's dev-mode
+// bypass applies and every request here is treated as admin). The
+// Testing phase (FR14/FR15/NFR3/NFR4/NFR7) adds the full admin-gate
+// (adminRoleGranted, exercised directly against hand-built access
+// tokens rather than through this dev-mode bypass), live-status,
+// revoke-scoping, and audit-log coverage described in the issue.
 
 // TestHandleGrantsAdmin_RendersPageStub is a scaffold-level sanity check:
 // GET /admin/grants renders the page shell with today's (always-empty,
@@ -65,12 +71,36 @@ func TestHandleGrantsAdminRevoke_RequiresSubjectSub(t *testing.T) {
 	require.Equal(t, http.StatusBadRequest, w.Code)
 }
 
-// TestHandleGrantsAdminRevoke_RedirectsOnValidFields is a scaffold-level
-// sanity check: a POST with both fields present redirects back to
-// /admin/grants (the scaffold's whole revoke behavior today -- no store
-// call is made yet, see handleGrantsAdminRevoke's doc comment).
-func TestHandleGrantsAdminRevoke_RedirectsOnValidFields(t *testing.T) {
+// TestHandleGrantsAdminRevoke_UnconfiguredStoreIs503 proves a POST with
+// both fields present, but no delegated-grant store configured on this
+// deployment (initializeDelegatedGrant's degrade path), 503s rather than
+// pretending to succeed.
+func TestHandleGrantsAdminRevoke_UnconfiguredStoreIs503(t *testing.T) {
 	app := &App{auth: devModeAuthenticator(t)}
+	wrapped := app.auth.RequireAuthFunc(app.handleGrantsAdminRevoke)
+
+	req := httptest.NewRequest(http.MethodPost, "/admin/grants/revoke", strings.NewReader("domain=audience_score_system&subject_sub=operator-a"))
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	w := httptest.NewRecorder()
+	wrapped(w, req)
+
+	require.Equal(t, http.StatusServiceUnavailable, w.Code)
+}
+
+// TestHandleGrantsAdminRevoke_RedirectsOnValidFields proves a POST naming
+// a real (subject, domain) pair the store holds is revoked and redirects
+// back to /admin/grants.
+func TestHandleGrantsAdminRevoke_RedirectsOnValidFields(t *testing.T) {
+	store := grpcauth.NewFakeStore()
+	subjectKey, err := grantSubjectKey(testIssuer, "operator-a")
+	require.NoError(t, err)
+	require.NoError(t, store.Persist(context.Background(), subjectKey, "audience_score_system", grpcauth.TokenMaterial{RefreshToken: "rt", ObtainedAt: time.Now()}))
+
+	app := &App{
+		auth:       devModeAuthenticator(t),
+		oidcIssuer: testIssuer,
+		grant:      delegatedgrant.Components{Store: store},
+	}
 	wrapped := app.auth.RequireAuthFunc(app.handleGrantsAdminRevoke)
 
 	req := httptest.NewRequest(http.MethodPost, "/admin/grants/revoke", strings.NewReader("domain=audience_score_system&subject_sub=operator-a"))
@@ -80,4 +110,8 @@ func TestHandleGrantsAdminRevoke_RedirectsOnValidFields(t *testing.T) {
 
 	require.Equal(t, http.StatusSeeOther, w.Code)
 	require.Equal(t, "/admin/grants", w.Header().Get("Location"))
+
+	status, err := store.Status(context.Background(), subjectKey, "audience_score_system")
+	require.NoError(t, err)
+	require.Equal(t, grpcauth.GrantStatusRevoked, status)
 }
