@@ -1,0 +1,8 @@
+-- Reverses 009_mcpauth_cutover.up.sql structurally only. This down
+-- migration CANNOT restore deleted mcp_credential or mcp_auth_code rows --
+-- the up migration deletes them, and a delete is not reversible by a down
+-- migration. Nothing else changes schema shape in the up migration, so
+-- there is nothing to structurally undo here either; this file exists so
+-- the migration chain has a paired down file, per this domain's migration
+-- convention (every NNN_name.up.sql has a NNN_name.down.sql), not because
+-- rollback recovers lost credentials.

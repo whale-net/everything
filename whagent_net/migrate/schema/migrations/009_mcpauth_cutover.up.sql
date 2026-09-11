@@ -1,0 +1,29 @@
+-- FR11/NFR8 (issue #2434, plan #2421): the cutover. This is the last
+-- behavior-changing migration in the plan -- it must land after #2428
+-- (consent flow), #2430 (dispatch-time grant acquisition, impersonation
+-- token exchange removed), and #2431 (mid-call reauth) are already on
+-- trunk, so every operator has a working re-consent path the moment their
+-- existing opaque mcpauth credential stops working.
+--
+-- Scaffolded here; the actual invalidation statements land in this
+-- migration during Implementation, once the design review on #2428
+-- settles whether mcp_oauth_client (RFC 7591 client registrations, not
+-- credentials) is left untouched or also touched by this cutover -- see
+-- this file's Implementation-phase revision for that decision, stated
+-- explicitly either way.
+--
+-- Planned shape (Implementation phase fills this in):
+--   * DELETE every row from mcp_credential -- every opaque credential
+--     minted through the pre-cutover impersonation-backed path stops
+--     resolving to an identity, full stop. No revoked_at soft-delete: the
+--     rows are gone, not merely marked, because NFR8 forbids any
+--     coexistence window a soft-delete could be mistaken for.
+--   * DELETE every row from mcp_auth_code -- any authorization code
+--     issued before cutover but not yet exchanged for a credential must
+--     not be allowed to complete after cutover.
+--   * mcp_oauth_client is NOT touched by default (RFC 7591 client
+--     registrations, not credentials) unless #2428's design review
+--     concludes otherwise.
+--
+-- No feature flag, environment toggle, or coexistence gating (NFR8) --
+-- this statement is unconditional once it lands.
