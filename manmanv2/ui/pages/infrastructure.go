@@ -13,9 +13,30 @@ import (
 // data needs somewhere to carry that per-host fan-out result. AllocatedPorts
 // is nil (not an empty non-nil slice) when the fetch failed or a host has
 // none; the FR2 floor (name + drain state) never depends on it.
+//
+// ManageOpen/PortsNotice/PortsEdit (task #2372, M6 navigation/disposition)
+// back the per-host "Manage" panel folded into this page when
+// pages/server_detail.templ retired -- see this file's serverStatusVariant
+// doc comment and ServerPortRangesSection's doc comment for why that
+// capability moved here rather than disappearing (NFR6).
 type InfrastructureHost struct {
 	Server         *manmanpb.Server
 	AllocatedPorts []*manmanpb.AllocatedPort
+
+	// ManageOpen is true when this host's "Manage" <details> panel (public
+	// address edit + allowed port ranges) should render open on page load:
+	// either the request carried "?manage=<this host's id>" (FR16's
+	// /servers/<id> redirect target, preserving the identifier -- see
+	// handlers_navigation_redirects.go) or a ports/address action just
+	// round-tripped through this host and needs its panel to stay open to
+	// show the result.
+	ManageOpen bool
+	// PortsNotice/PortsEdit mirror ServerPortRangesSection's own
+	// parameters, populated only for the one host handleServerPortRangeEdit
+	// (handlers_server_ports.go) is currently editing; every other host's
+	// values are the zero value ("" / nil).
+	PortsNotice string
+	PortsEdit   *manmanpb.PortRange
 }
 
 // drainStateLabel renders Server.drain_state (#2360) as display text.
@@ -73,6 +94,20 @@ func drainConfirmMessage(hostName string) string {
 // -- a Server Manager restarts manually if wanted.
 func undrainConfirmMessage(hostName string) string {
 	return fmt.Sprintf("Undrain %s? This does not restart anything that was stopped by draining -- restart deployments manually if wanted.", hostName)
+}
+
+// serverStatusVariant maps Server.status to the shared status-badge
+// vocabulary. Moved here from the retired pages/servers.templ (task #2372,
+// M6 navigation/disposition) -- this page is now its sole caller.
+func serverStatusVariant(status string) string {
+	switch status {
+	case "online":
+		return "success"
+	case "offline":
+		return "secondary"
+	default:
+		return "secondary"
+	}
 }
 
 // allocatedPortsSummary renders a host's FR2 allocated-ports health

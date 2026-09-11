@@ -14,6 +14,15 @@ import (
 // All writes go through the public API (UpdateServerAllowedPortRanges,
 // replace-all semantics) per NFR3; guidance/shape checks live here only
 // (Decision 7: no save-time API validation beyond basics).
+//
+// Routed since task #2372 (M6 navigation/disposition) via
+// "/infrastructure/{id}/ports/..." (handlers_infrastructure.go's
+// handleInfrastructureAction dispatcher) rather than the retired
+// "/servers/{id}/ports/..." -- these handler names and signatures are
+// unchanged from before that task; only their registration and the
+// renderer/redirect target they call changed (pages/server_detail.templ
+// retired, folded into pages/infrastructure.templ's per-host Manage
+// panel).
 
 // parsePortRangeInput validates the start/end/protocol form trio.
 // Returns (range, "") on success or (nil, message) on invalid input.
@@ -93,8 +102,9 @@ func (app *App) handleServerPortRangeRemove(w http.ResponseWriter, r *http.Reque
 	app.handleServerPortRangeChange(w, r, serverIDStr, true)
 }
 
-// handleServerPortRangeEdit handles GET /servers/{id}/ports/edit by
-// rendering the detail page with the matching row in edit mode.
+// handleServerPortRangeEdit handles GET /infrastructure/{id}/ports/edit by
+// re-rendering the Infrastructure list with the matching host's Manage
+// panel open and its allowed-port-ranges row in edit mode.
 func (app *App) handleServerPortRangeEdit(w http.ResponseWriter, r *http.Request, serverIDStr string) {
 	if r.Method != http.MethodGet {
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
@@ -109,7 +119,7 @@ func (app *App) handleServerPortRangeEdit(w http.ResponseWriter, r *http.Request
 	if orig == nil {
 		notice = "Invalid range to edit."
 	}
-	app.renderServerDetail(w, r, serverID, notice, orig)
+	app.renderInfrastructure(w, r, serverID, notice, orig)
 }
 
 // handleServerPortRangeChange performs the shared add/edit/remove flow:
@@ -168,5 +178,5 @@ func (app *App) handleServerPortRangeChange(w http.ResponseWriter, r *http.Reque
 		return
 	}
 
-	http.Redirect(w, r, fmt.Sprintf("/servers/%d#allowed-port-ranges", serverID), http.StatusSeeOther)
+	http.Redirect(w, r, infrastructureManageRedirectTarget(serverID), http.StatusSeeOther)
 }

@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"log"
 	"net/http"
-	"sort"
 	"strconv"
 	"strings"
 
@@ -14,19 +13,6 @@ import (
 	"github.com/whale-net/everything/manmanv2/ui/components"
 	"github.com/whale-net/everything/manmanv2/ui/pages"
 )
-
-// WorkshopLibraryPageData holds data for workshop library home page
-type WorkshopLibraryPageData struct {
-	Title          string
-	Active         string
-	User           *htmxauth.UserInfo
-	Games          []*manmanpb.Game
-	Addons         []*manmanpb.WorkshopAddon
-	RecentAddons   []*manmanpb.WorkshopAddon
-	Libraries      []*manmanpb.WorkshopLibrary
-	Servers        []*manmanpb.Server
-	SelectedServer *manmanpb.Server
-}
 
 // WorkshopSearchPageData holds data for workshop search page
 type WorkshopSearchPageData struct {
@@ -84,84 +70,12 @@ type WorkshopInstallationsPageData struct {
 	AvailableLibraries []*manmanpb.WorkshopLibrary
 }
 
-func (app *App) handleWorkshopLibrary(w http.ResponseWriter, r *http.Request) {
-	user := htmxauth.GetUser(r.Context())
-	ctx := r.Context()
-
-	games, err := app.grpc.ListGames(ctx)
-	if err != nil {
-		log.Printf("Error fetching games: %v", err)
-		http.Error(w, "Failed to fetch games", http.StatusInternalServerError)
-		return
-	}
-
-	addons, err := app.grpc.ListWorkshopAddons(ctx, 0, 200, 0)
-	if err != nil {
-		log.Printf("Error fetching addons: %v", err)
-		http.Error(w, "Failed to fetch addons", http.StatusInternalServerError)
-		return
-	}
-
-	libraries, err := app.grpc.ListLibraries(ctx, 200, 0, 0)
-	if err != nil {
-		log.Printf("Error fetching libraries: %v", err)
-		http.Error(w, "Failed to fetch libraries", http.StatusInternalServerError)
-		return
-	}
-
-	// Sort addons by UpdatedAt descending for recent addons
-	sorted := make([]*manmanpb.WorkshopAddon, len(addons))
-	copy(sorted, addons)
-	sort.Slice(sorted, func(i, j int) bool {
-		return sorted[i].UpdatedAt > sorted[j].UpdatedAt
-	})
-	recentAddons := sorted
-	if len(recentAddons) > 8 {
-		recentAddons = recentAddons[:8]
-	}
-
-	// Recent batch jobs (FR4, plan #2175): ListBatchJobs is scoped to a
-	// single game_id, so gather the latest few per game shown on this page
-	// and merge -- batch_job_id is assigned in creation order, so sorting by
-	// it descending is equivalent to newest-first across games without a
-	// second timestamp comparison.
-	var recentBatchJobs []*manmanpb.WorkshopBatchJob
-	for _, game := range games {
-		jobs, err := app.grpc.ListBatchJobs(ctx, game.GameId, 5)
-		if err != nil {
-			log.Printf("Error fetching batch jobs for game %d: %v", game.GameId, err)
-			continue
-		}
-		recentBatchJobs = append(recentBatchJobs, jobs...)
-	}
-	sort.Slice(recentBatchJobs, func(i, j int) bool {
-		return recentBatchJobs[i].BatchJobId > recentBatchJobs[j].BatchJobId
-	})
-	if len(recentBatchJobs) > 8 {
-		recentBatchJobs = recentBatchJobs[:8]
-	}
-
-	breadcrumbs := []components.Breadcrumb{
-		{Label: "Workshop", URL: "/workshop/library"},
-	}
-	layoutData, err := app.buildTemplLayoutData(r, "Workshop Library", "workshop", user, breadcrumbs)
-	if err != nil {
-		log.Printf("Error building layout data: %v", err)
-		http.Error(w, "Failed to build layout", http.StatusInternalServerError)
-		return
-	}
-
-	pageData := pages.WorkshopLibraryPageData{
-		Layout:          layoutData,
-		Games:           games,
-		Libraries:       libraries,
-		RecentAddons:    recentAddons,
-		Addons:          addons,
-		RecentBatchJobs: recentBatchJobs,
-	}
-
-	RenderTempl(w, r, "Workshop Library", pages.WorkshopLibrary(pageData))
-}
+// Note: handleWorkshopLibrary (the "/workshop/library" page's own handler,
+// pages.WorkshopLibraryPageData/pages.WorkshopLibrary) retired along with
+// pages/workshop_library.templ by task #2372 (M6 navigation/disposition,
+// FR16) -- "/workshop/library" now redirects to "/workshop"
+// (handlers_navigation_redirects.go), which fully absorbed this page's
+// functionality (task #2362).
 
 func (app *App) handleWorkshopSearch(w http.ResponseWriter, r *http.Request) {
 	user := htmxauth.GetUser(r.Context())
@@ -196,7 +110,7 @@ func (app *App) handleWorkshopSearch(w http.ResponseWriter, r *http.Request) {
 	}
 
 	breadcrumbs := []components.Breadcrumb{
-		{Label: "Workshop", URL: "/workshop/library"},
+		{Label: "Workshop", URL: "/workshop"},
 		{Label: "Search", URL: "/workshop/search"},
 	}
 	layoutData, err := app.buildTemplLayoutData(r, "Workshop Search", "workshop", user, breadcrumbs)
@@ -299,7 +213,7 @@ func (app *App) handleWorkshopAddonDetail(w http.ResponseWriter, r *http.Request
 	}
 
 	breadcrumbs := []components.Breadcrumb{
-		{Label: "Workshop", URL: "/workshop/library"},
+		{Label: "Workshop", URL: "/workshop"},
 		{Label: "Addons", URL: "/workshop/search?type=addon"},
 		{Label: addonName, URL: ""},
 	}
@@ -797,7 +711,7 @@ func (app *App) handleDeleteAddon(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	http.Redirect(w, r, "/workshop/library", http.StatusSeeOther)
+	http.Redirect(w, r, "/workshop", http.StatusSeeOther)
 }
 
 // loadWorkshopLibraryDetailData gathers the data needed to render the
@@ -877,7 +791,7 @@ func (app *App) handleLibraryDetail(w http.ResponseWriter, r *http.Request) {
 	}
 
 	breadcrumbs := []components.Breadcrumb{
-		{Label: "Workshop", URL: "/workshop/library"},
+		{Label: "Workshop", URL: "/workshop"},
 		{Label: library.Name, URL: ""},
 	}
 	layoutData, err := app.buildTemplLayoutData(r, library.Name, "workshop", user, breadcrumbs)
@@ -918,7 +832,7 @@ func (app *App) renderWorkshopLibraryDetailWithFormState(w http.ResponseWriter, 
 	}
 
 	breadcrumbs := []components.Breadcrumb{
-		{Label: "Workshop", URL: "/workshop/library"},
+		{Label: "Workshop", URL: "/workshop"},
 		{Label: library.Name, URL: ""},
 	}
 	layoutData, err := app.buildTemplLayoutData(r, library.Name, "workshop", user, breadcrumbs)
@@ -1114,7 +1028,7 @@ func (app *App) handleDeleteLibrary(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	http.Redirect(w, r, "/workshop/library", http.StatusSeeOther)
+	http.Redirect(w, r, "/workshop", http.StatusSeeOther)
 }
 
 func (app *App) handleAddAddonToLibrary(w http.ResponseWriter, r *http.Request) {
@@ -1310,7 +1224,7 @@ func (app *App) handleWorkshopBatchStatus(w http.ResponseWriter, r *http.Request
 	}
 
 	breadcrumbs := []components.Breadcrumb{
-		{Label: "Workshop", URL: "/workshop/library"},
+		{Label: "Workshop", URL: "/workshop"},
 		{Label: "Batch Status", URL: "/workshop/batch-status"},
 	}
 	layoutData, err := app.buildTemplLayoutData(r, "Batch Job Status", "workshop", user, breadcrumbs)
@@ -1369,7 +1283,7 @@ func (app *App) handleWorkshopCache(w http.ResponseWriter, r *http.Request) {
 	addonName, entries := app.loadWorkshopCacheViewData(ctx, addonID)
 
 	breadcrumbs := []components.Breadcrumb{
-		{Label: "Workshop", URL: "/workshop/library"},
+		{Label: "Workshop", URL: "/workshop"},
 		{Label: addonName, URL: fmt.Sprintf("/workshop/addon?addon_id=%d", addonID)},
 		{Label: "Cache", URL: ""},
 	}

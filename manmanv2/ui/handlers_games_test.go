@@ -24,7 +24,8 @@ import (
 // silent RPC-count blowup at real fleet size.
 //
 // fakeGamesAPIClient is scoped to handleGames' call graph: ListGames,
-// ListGameConfigs, ListServerGameConfigs, ListServers, ListSessions. Any
+// ListGameConfigs, ListServerGameConfigs, ListServers, ListSessions,
+// ListPendingRestarts. Any
 // call to an un-overridden ManManAPIClient method panics on the nil
 // embedded interface, deliberately -- see handlers_sgc_test.go's
 // fakeManManAPIClient / handlers_home_test.go's fakeDashboardAPIClient for
@@ -37,6 +38,13 @@ type fakeGamesAPIClient struct {
 	deployments []*manmanpb.ServerGameConfig
 	servers     []*manmanpb.Server
 	sessions    []*manmanpb.Session
+
+	// pendingRestartStates backs ListPendingRestarts' positive path (task
+	// #2372's validation gap: every other test in this file leaves this nil,
+	// which only ever exercises the "no restart record" branch -- see
+	// TestHandleGames_RestartStateBadge_RendersOnDeploymentRow below for the
+	// case that actually populates it).
+	pendingRestartStates []*manmanpb.PendingRestartState
 
 	calls map[string]int
 }
@@ -68,6 +76,19 @@ func (f *fakeGamesAPIClient) ListServers(ctx context.Context, in *manmanpb.ListS
 func (f *fakeGamesAPIClient) ListSessions(ctx context.Context, in *manmanpb.ListSessionsRequest, opts ...grpc.CallOption) (*manmanpb.ListSessionsResponse, error) {
 	f.calls["ListSessions"]++
 	return &manmanpb.ListSessionsResponse{Sessions: f.sessions}, nil
+}
+
+// ListPendingRestarts backs handleGames' FR12/#1735 batched restart-state
+// fetch (task #2372's retained-capability verification). This fake never
+// models an in-flight/failed/expired pending_restarts row (that is
+// restart_state_test.go's job) -- it always reports "no restart record" for
+// every requested sgc, matching control-api's own contract for a caller
+// that queries any sgc set, and, critically, returns a non-nil response so
+// handleGames' for _, state := range resp.States loop has something to
+// range over instead of dereferencing a nil resp.
+func (f *fakeGamesAPIClient) ListPendingRestarts(ctx context.Context, in *manmanpb.ListPendingRestartsRequest, opts ...grpc.CallOption) (*manmanpb.ListPendingRestartsResponse, error) {
+	f.calls["ListPendingRestarts"]++
+	return &manmanpb.ListPendingRestartsResponse{States: f.pendingRestartStates}, nil
 }
 
 // buildFakeGamesData constructs n games, each with one config and one
@@ -153,7 +174,7 @@ func TestHandleGames_NFR7_ConstantCallCount(t *testing.T) {
 		t.Fatalf("20-game render status = %d, want 200", code)
 	}
 
-	wantMethods := []string{"ListGames", "ListGameConfigs", "ListServerGameConfigs", "ListServers", "ListSessions"}
+	wantMethods := []string{"ListGames", "ListGameConfigs", "ListServerGameConfigs", "ListServers", "ListSessions", "ListPendingRestarts"}
 	for _, method := range wantMethods {
 		if small.calls[method] != large.calls[method] {
 			t.Errorf("%s call count grew with fleet size: 2 games -> %d calls, 20 games -> %d calls (NFR7 requires a constant count)", method, small.calls[method], large.calls[method])
@@ -167,6 +188,59 @@ func TestHandleGames_NFR7_ConstantCallCount(t *testing.T) {
 	}
 	if len(large.calls) != len(wantMethods) {
 		t.Errorf("large.calls = %+v, want exactly the %d known methods (an extra call key would mean an unexpected RPC was added, e.g. for Configurations or Workshop Libraries)", large.calls, len(wantMethods))
+	}
+}
+
+// TestHandleGames_RestartStateBadge_RendersOnDeploymentRow is task #2372's
+// own validation gap closed: every other test in this file leaves
+// fakeGamesAPIClient's ListPendingRestarts returning an empty response, so
+// none of them ever exercised the badge's positive path -- they prove the
+// batched call happens (NFR7's exact-method-set/call-count checks above),
+// not that a real pending-restart entry actually threads through
+// buildGameRows/buildGameDeploymentRow into the rendered Games page
+// (FR17's retained-capability clause: the restart-state badge, one of the
+// two capabilities /sessions's retirement must not drop). A deployment
+// with a "pending" PendingRestartState must render components.RestartBadge's
+// "Restarting" label on its Deployments row.
+//
+// Red this by hand: comment out buildGameDeploymentRow's
+// `RestartState: restartState` line (handlers_games.go) -- this test fails
+// (no "Restarting" text in the rendered body) while
+// TestHandleGames_NFR7_ConstantCallCount keeps passing unchanged, since
+// that test only counts calls and never inspects rendered content. That gap
+// is exactly what let the original defect (the call happening but never
+// reaching the template) ship unnoticed. Verified red/green by hand;
+// reverted to green before commit.
+func TestHandleGames_RestartStateBadge_RendersOnDeploymentRow(t *testing.T) {
+	const sgcID = int64(100)
+	api := &fakeGamesAPIClient{
+		calls:   map[string]int{},
+		games:   []*manmanpb.Game{{GameId: 1, Name: "Restart Game"}},
+		configs: []*manmanpb.GameConfig{{ConfigId: 10, GameId: 1, Name: "Config"}},
+		deployments: []*manmanpb.ServerGameConfig{
+			{ServerGameConfigId: sgcID, ServerId: 1, GameConfigId: 10, Status: "active"},
+		},
+		servers: []*manmanpb.Server{{ServerId: 1, HostPublicAddress: "host-01"}},
+		sessions: []*manmanpb.Session{
+			{SessionId: 1, ServerGameConfigId: sgcID, StartedAt: 1000, Status: "stopping"},
+		},
+		pendingRestartStates: []*manmanpb.PendingRestartState{
+			{
+				ServerGameConfigId: sgcID,
+				PendingRestartId:   7,
+				Status:             "pending",
+				GatingSessionId:    1,
+				CreatedAtUnix:      1000,
+			},
+		},
+	}
+
+	code, body := renderGamesHTTP(t, api, "/games")
+	if code != http.StatusOK {
+		t.Fatalf("status = %d, want 200; body: %s", code, body)
+	}
+	if !strings.Contains(body, "Restarting") {
+		t.Errorf("expected the restart-state badge (\"Restarting\") to render on the deployment row for a pending restart, got none in body: %s", body)
 	}
 }
 
@@ -205,7 +279,7 @@ func TestBuildGameRows_RunStateRollup(t *testing.T) {
 		{SessionId: 2, ServerGameConfigId: 101, StartedAt: 1000, Status: "running"},
 	}
 
-	rows := buildGameRows(games, configs, deployments, servers, sessions)
+	rows := buildGameRows(games, configs, deployments, servers, sessions, nil)
 	if len(rows) != 1 {
 		t.Fatalf("len(rows) = %d, want 1", len(rows))
 	}
@@ -220,6 +294,7 @@ func TestBuildGameRows_RunStateRollup(t *testing.T) {
 		[]*manmanpb.ServerGameConfig{{ServerGameConfigId: 200, ServerId: 1, GameConfigId: 20, Status: "active"}},
 		servers,
 		[]*manmanpb.Session{{SessionId: 3, ServerGameConfigId: 200, StartedAt: 1000, Status: "stopped"}},
+		nil,
 	)
 	if allStopped[0].RunState != components.DeploymentStopped {
 		t.Errorf("RunState = %q, want %q for an all-stopped game", allStopped[0].RunState, components.DeploymentStopped)
@@ -259,7 +334,7 @@ func TestBuildGameRows_ConnectAddress(t *testing.T) {
 		{SessionId: 2, ServerGameConfigId: 200, StartedAt: 1000, Status: "running"},
 	}
 
-	rows := buildGameRows(games, configs, deployments, servers, sessions)
+	rows := buildGameRows(games, configs, deployments, servers, sessions, nil)
 
 	want := components.BuildConnectAddressView("host-01", deployments[0].PortBindings)
 	got := gameRowByID(t, rows, 1).Connect
@@ -292,7 +367,7 @@ func TestBuildGameRows_DeterministicSort(t *testing.T) {
 		{4, 3, 2, 1},
 		{3, 1, 4, 2},
 	} {
-		rows := buildGameRows(makeGames(order), nil, nil, nil, nil)
+		rows := buildGameRows(makeGames(order), nil, nil, nil, nil, nil)
 		got := make([]int64, len(rows))
 		for i, r := range rows {
 			got[i] = r.GameID
@@ -338,7 +413,7 @@ func TestBuildGameRows_FR7_ConfigsPerGameWithDeploymentCount(t *testing.T) {
 		{SessionId: 3, ServerGameConfigId: 200, StartedAt: 1000, Status: "running"},
 	}
 
-	rows := buildGameRows(games, configs, deployments, servers, sessions)
+	rows := buildGameRows(games, configs, deployments, servers, sessions, nil)
 
 	alpha := gameRowByID(t, rows, 1)
 	if len(alpha.Configs) != 2 {
@@ -474,7 +549,7 @@ func TestBuildGameRows_Deployments_ListsAllDeployments(t *testing.T) {
 		{SessionId: 3, ServerGameConfigId: 200, StartedAt: 1000, Status: "running"},
 	}
 
-	rows := buildGameRows(games, configs, deployments, servers, sessions)
+	rows := buildGameRows(games, configs, deployments, servers, sessions, nil)
 
 	alpha := gameRowByID(t, rows, 1)
 	if len(alpha.Deployments) != 2 {
@@ -544,6 +619,7 @@ func TestBuildGameRows_Deployments_AntiDrift(t *testing.T) {
 				[]*manmanpb.ServerGameConfig{deployment},
 				servers,
 				sessions,
+				nil,
 			)
 			row := gameRowByID(t, rows, 1)
 			if len(row.Deployments) != 1 {
@@ -597,7 +673,7 @@ func TestBuildGameRows_Deployments_RunStateUsesComputeDeploymentStatus(t *testin
 		{SessionId: 1, ServerGameConfigId: 100, StartedAt: 1000, Status: "running"},
 	}
 
-	rows := buildGameRows(games, configs, deployments, servers, sessions)
+	rows := buildGameRows(games, configs, deployments, servers, sessions, nil)
 	row := gameRowByID(t, rows, 1)
 	if len(row.Deployments) != 1 {
 		t.Fatalf("Deployments = %d rows, want 1", len(row.Deployments))
@@ -629,7 +705,7 @@ func TestBuildGameRows_Deployments_ConnectAddress(t *testing.T) {
 		{SessionId: 1, ServerGameConfigId: 100, StartedAt: 1000, Status: "running"},
 	}
 
-	rows := buildGameRows(games, configs, deployments, servers, sessions)
+	rows := buildGameRows(games, configs, deployments, servers, sessions, nil)
 	row := gameRowByID(t, rows, 1)
 	dep := row.Deployments[0]
 
@@ -642,7 +718,7 @@ func TestBuildGameRows_Deployments_ConnectAddress(t *testing.T) {
 
 	// Unresolvable case: no host_public_address configured.
 	unresolvableServers := []*manmanpb.Server{{ServerId: 1, HostPublicAddress: ""}}
-	rows = buildGameRows(games, configs, deployments, unresolvableServers, sessions)
+	rows = buildGameRows(games, configs, deployments, unresolvableServers, sessions, nil)
 	dep = gameRowByID(t, rows, 1).Deployments[0]
 	if !dep.Connect.Unavailable {
 		t.Errorf("unresolvable deployment Connect.Unavailable = false, want true (never a blank)")
@@ -667,7 +743,7 @@ func TestBuildGameRows_Deployments_LinkOuts(t *testing.T) {
 		// SGC 101 has never had a session.
 	}
 
-	rows := buildGameRows(games, configs, deployments, servers, sessions)
+	rows := buildGameRows(games, configs, deployments, servers, sessions, nil)
 	depByID := map[int64]pages.GameDeploymentRow{}
 	for _, dep := range gameRowByID(t, rows, 1).Deployments {
 		depByID[dep.Row.ServerGameConfigID] = dep

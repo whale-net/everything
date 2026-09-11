@@ -50,23 +50,28 @@ templ navLink(href, label, active string) {
 // the previous themeManagement() script's manual mobile-menu-button
 // toggle is retired along with the rest of that script.
 //
-// The six entries below and their order are amendment A4 to M5's FR1
-// (https://github.com/whale-net/everything/issues/2266#issuecomment-5605995958):
-// Dashboard · Games · Activity · Infrastructure · Sessions · Workshop.
-// FR1 as originally written dropped Sessions, which would have left
-// /sessions (retained by FR16 for #1726's live-row indicator and #1712's
-// restart-state badge) reachable only by typed URL. Sessions is removed
-// again in M6 when C31 phase 2 retires the page itself. "Servers" is
-// relabeled "Infrastructure" here (C29 → M6) with its target unchanged at
-// /servers — the page itself is untouched by this task.
+// The five entries below and their order are the M6 disposition (task
+// #2372, root plan #2359 FR1/FR6): Dashboard · Games · Activity ·
+// Infrastructure · Workshop (manmanv2/docs/DESIGN_UI_REDESIGN.md line 26).
+// This supersedes amendment A4's six-entry interim list
+// (https://github.com/whale-net/everything/issues/2266#issuecomment-5605995958),
+// which kept a "Sessions" entry only because /sessions was still a live
+// page pending this milestone (FR17's #1726 live-row indicator and #1712
+// restart-state badge) -- both capabilities are now served from Activity
+// (components.LiveRegion) and Games (pages.DeploymentRowInner's
+// RestartBadge) respectively, so the Sessions entry is dropped for good;
+// /sessions itself now redirects to /activity (handlers_navigation_redirects.go).
+// "Servers" is relabeled "Infrastructure" and repointed at /infrastructure
+// (C29 → M6, task #2369's replacement page); "Workshop" is repointed at
+// /workshop (task #2362's replacement page) in place of the retired
+// /workshop/library.
 templ navItems(data LayoutData) {
 	<ul class="menu menu-horizontal hidden lg:flex px-1">
 		@navLink("/", "Dashboard", data.Active)
 		@navLink("/games", "Games", data.Active)
 		@navLink("/activity", "Activity", data.Active)
-		@navLink("/servers", "Infrastructure", data.Active)
-		@navLink("/sessions", "Sessions", data.Active)
-		@navLink("/workshop/library", "Workshop", data.Active)
+		@navLink("/infrastructure", "Infrastructure", data.Active)
+		@navLink("/workshop", "Workshop", data.Active)
 	</ul>
 	<div class="dropdown lg:hidden">
 		<div tabindex="0" role="button" class="btn btn-ghost btn-sm" aria-label="Open menu">
@@ -78,9 +83,8 @@ templ navItems(data LayoutData) {
 			@navLink("/", "Dashboard", data.Active)
 			@navLink("/games", "Games", data.Active)
 			@navLink("/activity", "Activity", data.Active)
-			@navLink("/servers", "Infrastructure", data.Active)
-			@navLink("/sessions", "Sessions", data.Active)
-			@navLink("/workshop/library", "Workshop", data.Active)
+			@navLink("/infrastructure", "Infrastructure", data.Active)
+			@navLink("/workshop", "Workshop", data.Active)
 			<li class="menu-title">Server</li>
 			@MobileServerSelector(data.Servers, data.SelectedServer)
 		</ul>

@@ -54,10 +54,15 @@ Type-safe, component-based UI built with Go + templ + HTMX + Tailwind CSS.
 
 ## One-Click Deployment Actions (M2, C21)
 
-The `/sessions` list renders a "Game Server Containers (GSCs) Status" table
-(`pages.GSCStatusTable`/`pages.DeploymentRow`) with Start/Stop/Restart
-controls directly on each row -- no navigation to a detail page is required
-for any of the three actions.
+The Games page (`pages/games.templ`, `GET /games`) renders each deployment
+as a `pages.DeploymentRow` (`pages/deployment_row.templ`) with Start/Stop/
+Restart controls directly on each row -- no navigation to a detail page is
+required for any of the three actions. (`DeploymentRow` originally lived on
+the `/sessions` list page's own "Game Server Containers (GSCs) Status"
+table; that page retired to a redirect onto `/activity` in M6 (#2372,
+FR17), but `DeploymentRow` itself moved to its own file rather than
+retiring -- it is still reached from Games and the action/refresh endpoints
+below.)
 
 **Endpoints** (`manmanv2/ui/handlers_deployment_actions.go`):
 
@@ -156,13 +161,12 @@ so it is unit-testable independent of template rendering.
 (`manmanv2/ui/grpc_client.go`) wraps control-api's `ListPendingRestarts` RPC,
 which takes every rendered SGC id in one call -- never a per-row RPC. Both
 row-building paths populate `pages.DeploymentRowData.RestartState` from it:
-`handleSessions` (`handlers_sessions.go`, the full-page render) and
+`handleGames` (`handlers_games.go`, the Games page's full-page render) and
 `buildDeploymentRowData` (`handlers_deployment_actions.go`, the single-SGC
-path shared by the #1628 poll, the three action endpoints, and -- via
-`handleDeploymentsLiveSSE` -- the #1724 SSE fragment). A `ListPendingRestarts`
-failure is not fatal to the row/page: it logs at WARNING and leaves
-`RestartState` nil, the same degradation posture as the live-session
-fallback above.
+path shared by the #1628 poll and the three action endpoints). A
+`ListPendingRestarts` failure is not fatal to the row/page: it logs at
+WARNING and leaves `RestartState` nil, the same degradation posture as the
+live-session fallback above.
 
 **Terminal states age out**: control-api's `GetLatestBySGCIDs`
 (`manmanv2/api/repository/postgres/pending_restart.go`) excludes a resolved
@@ -182,56 +186,73 @@ documents.
 `pending_restarts` -- that stays entirely on control-api's `RestartDeployment`
 handler and its consumer/reaper.
 
-## Live Row Updates over SSE (#1726)
+## Live Row Updates over SSE (#1726) -- historical, superseded by Activity's fleet-wide live region
 
-`/sessions` opens one SSE connection (`GET /api/live/deployments`, the
-`handleDeploymentsLiveSSE` handler in `handlers_sessions_live.go`, #1724)
-that keeps every visible deployment row current with no reload -- including
-rows in a transient status and rows another user's action changed. The
-initial server-side render of the GSC status table is unaffected by whether
-that connection succeeds (it always renders the freshest data the page
-handler already fetched); the SSE connection only keeps it current
-afterward.
+`GET /api/live/deployments` (`handleDeploymentsLiveSSE` in
+`handlers_sessions_live.go`, #1724) originally kept the `/sessions` list
+page's per-row live status current with no reload, via a server-scoped
+`hx-ext="sse"` region (`components.LiveRegion`, then still named
+`pages.DeploymentsLiveRegion`) wrapping each `pages.DeploymentRow`. Task
+#2372 (M6 navigation/disposition, FR17) retired that page to a redirect
+onto `/activity`; the route, its handler, and `resolveScopedServerGameConfigs`
+(the shared per-server topic-set derivation `handlers_sessions.go` and
+`handlers_sessions_live.go` both still reference) remain registered and
+functional, but nothing renders a page that connects to them today. The
+Games page, this capability's nearest living relative, does not use SSE for
+its own `pages.DeploymentRow` instances -- it relies solely on the #1628
+self-terminating poll below.
 
-**Markup shape** (`pages.DeploymentsLiveRegion`/`pages.DeploymentRow` in
-`pages/sessions.templ`): the table is wrapped in one ancestor `<div
-hx-ext="sse" sse-connect="/api/live/deployments">` -- never itself a swap
-target, per `libs/go/htmxsse/README.md`'s reconnect-baseline note -- and
-each `<tr id="deployment-row-{sgcID}">` carries `sse-swap="deployment.
-{sgcID}"` (`events.TopicForDeployment`), matching the routing key
-`handleDeploymentsLiveSSE` publishes on. A row rendered via the #1628
-self-terminating poll (`GET /api/deployments/{sgcID}/row`) or any of the
-Start/Stop/Restart action endpoints re-renders through the same
-`pages.DeploymentRow`, so it always carries `sse-swap` too and never drops
-out of the live stream.
+FR17's "live-row indicator" retained-capability requirement is served
+instead by Activity's own fleet-wide live region: see "Fleet-Wide Live
+Status (Activity, #2277)" below, which reuses the same underlying
+`components.LiveRegion` component this section's markup was lifted out of.
 
-**Live / Not Live indicator**: a badge and hidden "Reload" link (both
-outside the swapped rows, inside the same `hx-ext="sse"` container) flip to
-"Not Live" after one heartbeat interval (`MANMANV2_SSE_HEARTBEAT_INTERVAL`,
-passed to the page as `data-heartbeat-ms`) with no `htmx:sseOpen`/row
-update -- covering both an explicit `htmx:sseError`/`htmx:sseClose` and a
-silently stalled connection (no event within `2 * heartbeatMs`). The
-debounce avoids flapping the indicator on a single dropped beat. Reconnect
-itself is the browser's native `EventSource` retry, driven by the interval
-`htmxsse` advertises -- there is no hand-rolled reconnect loop; the Reload
-link is the documented manual fallback while not-live.
+**Self-terminating poll (#1628, unaffected by the above)**: a
+`pages.DeploymentRow` whose latest session is in a transient status
+(`pending`, `starting`, `stopping`) carries `hx-trigger="every 3s"`/
+`hx-get="/api/deployments/{sgcID}/row"`/`hx-target="this"`/
+`hx-swap="outerHTML"` regardless of which page rendered it. Because the
+poll's own response is itself a freshly-rendered `pages.DeploymentRow`, a
+row that has settled (`running`, `stopped`, `crashed`, `lost`) comes back
+with no `hx-trigger` at all and the polling loop stops on its own -- no
+client-side timer bookkeeping required. This is Games' only live-freshness
+mechanism for its own rows today.
+
+## Fleet-Wide Live Status (Activity, #2277)
+
+`/activity` (`handleActivity`/`handleActivityLiveSSE`,
+`handlers_activity.go`/`handlers_activity_live.go`) is FR17's actual
+"live-row indicator" home: `pages.ActivityLiveRegion` wraps the Live now/
+History tables in `components.LiveRegion` (`SSEPath: "/api/live/activity"`)
+-- the same shared component `pages.DeploymentsLiveRegion` (deleted along
+with `/sessions`'s retirement, task #2372) used to wrap, factored out by
+#2268 for exactly this reuse. See that component's own doc comment
+(`manmanv2/ui/components/live_indicator.templ`) for the Live/Not-Live badge
+and Reload-affordance contract, unchanged from the retired call site. Unlike
+`/sessions`'s per-row swap targets, Activity's swap unit is the whole
+Live/History region (`pages.ActivityLiveContent`): a session moving
+live↔terminal moves it between the two tables rather than updating one row
+in place.
 
 **When live updates are unavailable** (`app.sseHub == nil` -- no
-`RABBITMQ_URL`, or the broker was unreachable at startup, see `ENV.md`):
-`SessionsPageData.LiveUpdatesEnabled` is `false` and the page omits the
-`hx-ext="sse"`/`sse-connect`/indicator markup entirely rather than pointing
-it at a route that would only 503. The #1628 per-row poll remains the
-update path in that case, unchanged.
+`RABBITMQ_URL`, or the broker was unreachable at startup, see `ENV.md`, or
+the fleet-wide authorized set is empty): `ActivityPageData.LiveUpdatesEnabled`
+is `false` and the page omits the `hx-ext="sse"`/`sse-connect`/indicator
+markup entirely rather than pointing it at a route that would only 503 --
+unlike `/sessions`'s degradation, Activity has no per-row poll fallback to
+drop to (FR15): it just renders its server-side snapshot.
 
 ## Workshop Top-Level Page (M6, #2362)
 
 `GET /workshop` (`handleWorkshopPage`, `handlers_workshop_page.go`) is the
 redesigned Workshop top-level page: the one place a Server Manager manages
-Workshop content fleet-wide (US8, FR6/FR7). It is additive to the
-pre-existing sub-routes below -- registering `/workshop` does not remove or
-redirect `/workshop/library` or any other `/workshop/*` route; the nav
-entry swap and `/workshop/library` redirect land in a dependent
-navigation/disposition task.
+Workshop content fleet-wide (US8, FR6/FR7), and (since task #2372, M6
+navigation/disposition, FR16) the nav-facing surface `/workshop/library`
+redirects onto -- that page (`pages/workshop_library.templ`) is gone,
+fully absorbed by this one (task #2362). Every other `/workshop/*`
+sub-route below is unaffected -- this page targets each pre-existing
+handler unchanged rather than duplicating any logic, and NFR6 requires
+every one of them to keep working exactly as before.
 
 `pages.WorkshopPage` (`pages/workshop.templ`) renders inside the shared M5
 nav shell (`components.Layout`) and integrates the following fleet-scale
@@ -269,10 +290,11 @@ it lands on the Games page panel in its own task.
 is the redesigned fleet host list (FR1/FR2, C29): every host with its
 current drain state, plus health indicators bounded by NFR5
 (`Server.status`, `last_seen`, `host_public_address`, allocated ports via
-`ListAllocatedPorts`). It is additive alongside the pre-existing `/servers`
-and `/servers/<id>` routes -- neither is modified or redirected here; the
-nav entry swap and `/servers` redirect are a dependent
-navigation/disposition task.
+`ListAllocatedPorts`). Since task #2372 (M6 navigation/disposition, FR16),
+`/servers` and `/servers/<id>` redirect here -- the latter preserves the
+host id as `?manage=<id>`, opening that host's "Manage" panel (see below);
+Infrastructure has no per-host route of its own, so a query param plays
+the role `/games?expand=<id>` does for the retired `/sgc/<id>` (#2279).
 
 `pages.Infrastructure` (`pages/infrastructure.templ`) renders inside the
 shared M5 nav shell and posts host actions to the `/infrastructure/{id}/*`
@@ -282,10 +304,22 @@ routes below, all handled by `handleInfrastructureAction`:
 |-------|---------|
 | `/infrastructure/{id}/drain` | FR3: one-click drain -- stops new placement onto the host AND stops every session currently running on it (`DrainServer`) |
 | `/infrastructure/{id}/undrain` | FR4: one-click undrain -- returns the host to schedulable; never restarts anything the drain stopped (`UndrainServer`) |
+| `/infrastructure/{id}/update-address` | Task #2372: edit/clear the host's public connect address (`UpdateServer`, #1528 field-mask contract) -- folded in from the retired `pages/server_detail.templ` |
+| `/infrastructure/{id}/ports/set`, `/ports/remove`, `/ports/edit` | Task #2372: allowed host-port range add/edit/remove (FR12, task #2095, `handlers_server_ports.go`) -- folded in from the same retired page |
 
 A `draining` host renders that state until a manual page refresh shows it
 has settled to `drained` (FR2) -- there is no live transport (SSE/polling)
 behind this page (NFR5).
+
+**Per-host Manage panel (task #2372)**: each row has a "Manage" `<details>`
+disclosure (`id="host-manage-{id}"`) holding the public-address edit form
+and `pages.ServerPortRangesSection` (`pages/server_port_ranges.templ`).
+`#2369`'s Infrastructure page did not fold this capability in on its own,
+so #2372 did, to avoid a regression once `/servers/<id>`'s dedicated page
+retired (NFR6) -- see `pages.InfrastructureHost`'s doc comment. The panel
+opens on load when the request carries `?manage=<id>` (the `/servers/<id>`
+redirect target) or when a ports/address action just round-tripped through
+that host (`infrastructureManageRedirectTarget`, `handlers_infrastructure.go`).
 
 ## Documentation
 

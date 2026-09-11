@@ -108,13 +108,33 @@ func (app *App) handleGames(w http.ResponseWriter, r *http.Request) {
 		sessions = nil
 	}
 
+	// FR12/#1735, verified present here by task #2372 (M6 navigation/
+	// disposition, FR17's retained-capability clause -- the restart-state
+	// badge must survive /sessions's retirement, and this fleet-wide render
+	// had never actually populated it despite pages.DeploymentRowInner
+	// already knowing how to render it): one batched ListPendingRestarts RPC
+	// for every deployment on the page, not a per-row call -- same shape as
+	// the retired handleSessions and buildDeploymentRowData
+	// (handlers_deployment_actions.go). A failure here must not fail the
+	// page; rows just render without the restart badge (same degradation
+	// posture as every other optional fetch above).
+	sgcIDs := make([]int64, len(deployments))
+	for i, d := range deployments {
+		sgcIDs[i] = d.GetServerGameConfigId()
+	}
+	restartStates, err := app.grpc.ListPendingRestarts(ctx, sgcIDs)
+	if err != nil {
+		log.Printf("Warning: failed to list pending restarts: %v", err)
+		restartStates = nil
+	}
+
 	// expand (spec amendment A1, migration task): an entry-point hint,
 	// not persisted page state. Absent, non-numeric, or stale (no
 	// matching game) all resolve to 0 / "expand nothing" and are never
 	// an error -- gameRowExpanded in games.templ does the stale check.
 	expandGameID, _ := strconv.ParseInt(strings.TrimSpace(r.URL.Query().Get("expand")), 10, 64)
 
-	rows := buildGameRows(games, configs, deployments, servers, sessions)
+	rows := buildGameRows(games, configs, deployments, servers, sessions, restartStates)
 
 	breadcrumbs := []components.Breadcrumb{
 		{Label: "Games", URL: "/games"},
@@ -162,6 +182,7 @@ func buildGameRows(
 	deployments []*manmanpb.ServerGameConfig,
 	servers []*manmanpb.Server,
 	sessions []*manmanpb.Session,
+	restartStates map[int64]*manmanpb.PendingRestartState,
 ) []pages.GameRow {
 	configByID := make(map[int64]*manmanpb.GameConfig, len(configs))
 	for _, c := range configs {
@@ -233,7 +254,7 @@ func buildGameRows(
 				}
 			}
 
-			deploymentRows = append(deploymentRows, buildGameDeploymentRow(game, cfg, server, d, latest))
+			deploymentRows = append(deploymentRows, buildGameDeploymentRow(game, cfg, server, d, latest, restartStates[d.GetServerGameConfigId()]))
 		}
 
 		gameConfigs := configsByGame[game.GetGameId()]
@@ -297,7 +318,14 @@ func buildGameRows(
 // starting, running, stopping) so DeploymentRowInner's "View Live Session"
 // column renders the same way it would from a dedicated getLiveSession
 // call, without a second RPC.
-func buildGameDeploymentRow(game *manmanpb.Game, cfg *manmanpb.GameConfig, server *manmanpb.Server, d *manmanpb.ServerGameConfig, latest *manmanpb.Session) pages.GameDeploymentRow {
+//
+// restartState is this deployment's entry (if any) from handleGames' one
+// batched ListPendingRestarts call -- Row.RestartState feeds
+// DeploymentRowInner's components.RestartBadge exactly like
+// buildDeploymentRowData does, so the badge (FR17's retained-capability
+// requirement, verified by task #2372 to have been missing here) renders
+// on Games too, not just on the #1628 poll/action-endpoint path.
+func buildGameDeploymentRow(game *manmanpb.Game, cfg *manmanpb.GameConfig, server *manmanpb.Server, d *manmanpb.ServerGameConfig, latest *manmanpb.Session, restartState *manmanpb.PendingRestartState) pages.GameDeploymentRow {
 	serverName := server.GetName()
 	if serverName == "" {
 		serverName = fmt.Sprintf("server %d", d.GetServerId())
@@ -331,6 +359,7 @@ func buildGameDeploymentRow(game *manmanpb.Game, cfg *manmanpb.GameConfig, serve
 			LatestSession:      latest,
 			LiveSession:        liveSession,
 			Actions:            components.ComputeDeploymentActions(latest),
+			RestartState:       restartState,
 		},
 		Connect: components.BuildConnectAddressView(server.GetHostPublicAddress(), d.GetPortBindings()),
 		LogsURL: logsURL,

@@ -34,7 +34,6 @@ go_test(
         "games_test.go",
         "server_port_ranges_test.go",
         "actions_manage_test.go",
-        "server_detail_public_address_test.go",
         "sessions_deployment_row_test.go",
         "sessions_live_test.go",
         "sgc_env_overrides_test.go",

@@ -385,21 +385,9 @@ func TestDeploymentRow_RestartState_ByteStableAcrossRenders(t *testing.T) {
 	}
 }
 
-// --- 9. GSCStatusTable loops rows and includes an Actions header -----------
-
-func TestGSCStatusTable_RendersAllRowsWithActionsHeader(t *testing.T) {
-	latestRunning := &manmanpb.Session{SessionId: 7, ServerGameConfigId: 20, Status: "running"}
-	latestStopped := &manmanpb.Session{SessionId: 8, ServerGameConfigId: 21, Status: "stopped"}
-	rows := []DeploymentRowData{
-		buildDeploymentRowData(20, "Theta", "active", latestRunning, latestRunning, ""),
-		buildDeploymentRowData(21, "Iota", "active", latestStopped, nil, ""),
-	}
-	body := renderPage(t, GSCStatusTable(rows))
-
-	if !strings.Contains(body, "<th>Actions</th>") {
-		t.Errorf("expected an Actions column header, got body %q", body)
-	}
-	if !strings.Contains(body, `id="`+rowID(20)+`"`) || !strings.Contains(body, `id="`+rowID(21)+`"`) {
-		t.Errorf("expected both rows to render with their own stable ids, got body %q", body)
-	}
-}
+// Note: GSCStatusTable (the /sessions list page's own table wrapper) and
+// its "loops rows and includes an Actions header" coverage retired along
+// with pages/sessions.templ (task #2372, M6 navigation/disposition, FR17)
+// -- DeploymentRow/DeploymentRowInner above are the surviving shared piece,
+// now reached only via pages/games.templ's gameDeploymentRow and the
+// #1627/#1628 action/refresh endpoints.
