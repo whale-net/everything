@@ -4,6 +4,7 @@ import (
 	"fmt"
 
 	"github.com/whale-net/everything/libs/go/htmxui"
+	manmanpb "github.com/whale-net/everything/manmanv2/protos"
 	"github.com/whale-net/everything/manmanv2/ui/components"
 )
 
@@ -22,7 +23,14 @@ import (
 // FR4 undrain one-click actions (posting through handleInfrastructureAction),
 // and the FR2 transient "draining" state, which settles to "drained" on a
 // manual page refresh -- no new live transport (NFR5), no SSE/polling.
-templ Infrastructure(layout components.LayoutData, hosts []*InfrastructureHost) {
+// Infrastructure additionally renders the fleet-wide status summary
+// (#2371, manmanv2 M6, FR5/NFR5): one row per game with its running-over-
+// total deployment count across every host in the fleet. It is a
+// point-in-time snapshot computed fresh on every request -- the single
+// Refresh control above (shared with the host list) reloads it too; there
+// is no separate refresh affordance and no live transport backing it
+// (NFR5).
+templ Infrastructure(layout components.LayoutData, hosts []*InfrastructureHost, fleetStatus []*manmanpb.FleetGameStatus) {
 	@components.Layout(layout) {
 		<div class="flex justify-between items-center mb-2">
 			@components.HeroHeader("Infrastructure", "Every host in the fleet, with its current drain state and health")
@@ -31,6 +39,39 @@ templ Infrastructure(layout components.LayoutData, hosts []*InfrastructureHost) 
 		<p class="text-xs text-base-content/60 mb-6">
 			A host that just started draining still shows "draining" here until its running sessions finish stopping -- use Refresh to check on progress; this page does not update itself live.
 		</p>
+		<div class="mb-8">
+			<h2 class="text-lg font-semibold text-base-content mb-2">Fleet Status</h2>
+			<p class="text-xs text-base-content/60 mb-2">
+				Running deployments over total deployments per game, across every host -- a point-in-time snapshot, refreshed by the Refresh control above.
+			</p>
+			if len(fleetStatus) > 0 {
+				@components.Table() {
+					<thead>
+						<tr>
+							<th>Game</th>
+							<th>Running / Total</th>
+						</tr>
+					</thead>
+					<tbody>
+						for _, g := range fleetStatus {
+							<tr class="hover">
+								<td class="text-sm font-medium text-base-content">{ g.GameName }</td>
+								<td>
+									@htmxui.Badge(fleetStatusLabel(g.RunningCount, g.TotalCount), statusBadgeVariant(fleetStatusVariant(g.RunningCount, g.TotalCount)), htmxui.BadgeSizeSM, true, nil)
+								</td>
+							</tr>
+						}
+					</tbody>
+				}
+			} else {
+				@components.EmptyState(
+					"No games found",
+					"Fleet status will appear here once games exist.",
+					"",
+					"",
+				)
+			}
+		</div>
 		if len(hosts) > 0 {
 			@components.Table() {
 				<thead>

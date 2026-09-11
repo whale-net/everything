@@ -349,6 +349,10 @@ func (m *mockSessionRepo) StopOtherSessionsForSGC(ctx context.Context, sessionID
 	return fmt.Errorf("not implemented")
 }
 
+func (m *mockSessionRepo) CountRunningDeploymentsByGame(ctx context.Context) ([]*manman.FleetGameStatus, error) {
+	return nil, fmt.Errorf("not implemented")
+}
+
 // Helper function to create a test WorkshopManager with mocks
 func createTestManager() (*WorkshopManager, *mockAddonRepo, *mockInstallationRepo, *mockSGCRepo, *mockGameConfigRepo, *mockVolumeRepo, *mockSessionRepo, *mockRMQPublisher) {
 	addonRepo := &mockAddonRepo{addons: make(map[int64]*manman.WorkshopAddon)}

@@ -112,6 +112,33 @@ func (h *SessionHandler) ListSessions(ctx context.Context, req *pb.ListSessionsR
 	}, nil
 }
 
+// GetFleetStatusSummary serves the Infrastructure page's fleet-wide status
+// summary (#2371, manmanv2 M6, FR5/NFR5): a point-in-time running-over-total
+// deployment count per game, computed fresh from existing
+// ServerGameConfig/Session data via a single aggregate query
+// (CountRunningDeploymentsByGame) -- never cached, never pushed, and never
+// backed by any new collection. A failed aggregate query is the one thing
+// this read path logs, at Error.
+func (h *SessionHandler) GetFleetStatusSummary(ctx context.Context, req *pb.GetFleetStatusSummaryRequest) (*pb.GetFleetStatusSummaryResponse, error) {
+	results, err := h.sessionRepo.CountRunningDeploymentsByGame(ctx)
+	if err != nil {
+		slog.Error("failed to compute fleet status summary", "error", err)
+		return nil, status.Errorf(codes.Internal, "failed to compute fleet status summary: %v", err)
+	}
+
+	games := make([]*pb.FleetGameStatus, len(results))
+	for i, r := range results {
+		games[i] = &pb.FleetGameStatus{
+			GameId:       r.GameID,
+			GameName:     r.GameName,
+			TotalCount:   r.TotalCount,
+			RunningCount: r.RunningCount,
+		}
+	}
+
+	return &pb.GetFleetStatusSummaryResponse{Games: games}, nil
+}
+
 func (h *SessionHandler) GetSession(ctx context.Context, req *pb.GetSessionRequest) (*pb.GetSessionResponse, error) {
 	session, err := h.sessionRepo.Get(ctx, req.SessionId)
 	if err != nil {

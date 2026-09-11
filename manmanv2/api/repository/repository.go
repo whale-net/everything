@@ -115,6 +115,17 @@ type SessionRepository interface {
 	UpdateSessionEndIfStatus(ctx context.Context, sessionID int64, expectedStatus string, newStatus string, endedAt time.Time, exitCode *int) (updated bool, err error)
 	GetStaleSessions(ctx context.Context, threshold time.Duration) ([]*manman.Session, error)
 	StopOtherSessionsForSGC(ctx context.Context, sessionID int64, sgcID int64) error
+	// CountRunningDeploymentsByGame is the fleet-wide status summary
+	// aggregate (#2371, manmanv2 M6, FR5/NFR5): one row per game (games with
+	// zero deployments included, as 0/0), ordered by game name, computed in
+	// a single query -- never one query per game. For each ServerGameConfig
+	// (deployment) belonging to the game across every host, "total" counts
+	// the deployment regardless of whether a session was ever started for
+	// it; "running" counts it only if its most recent Session (by
+	// session_id) has status "running" -- a deployment with no session at
+	// all, or whose most recent session is pending/starting/stopping/
+	// stopped/crashed/lost/completed, does not count toward running.
+	CountRunningDeploymentsByGame(ctx context.Context) ([]*manman.FleetGameStatus, error)
 }
 
 // ServerCapabilityRepository defines operations for ServerCapability entities

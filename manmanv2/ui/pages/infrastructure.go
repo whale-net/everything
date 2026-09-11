@@ -85,3 +85,30 @@ func allocatedPortsSummary(ports []*manmanpb.AllocatedPort) string {
 	}
 	return fmt.Sprintf("%d port(s) allocated", len(ports))
 }
+
+// fleetStatusLabel renders a FleetGameStatus row's running/total deployment
+// counts (#2371, manmanv2 M6, FR5) as "running/total" -- the running-count-
+// over-total-count proxy this task uses in place of literal player counts
+// (see the issue's "Scope note carried from the spec").
+func fleetStatusLabel(runningCount, totalCount int32) string {
+	return fmt.Sprintf("%d / %d", runningCount, totalCount)
+}
+
+// fleetStatusVariant maps a FleetGameStatus row onto the shared status-badge
+// vocabulary (statusBadgeVariant): a game with no deployments anywhere in
+// the fleet reads as "secondary" (neutral, not a problem), every deployment
+// running reads as "success", none running (but at least one deployment
+// exists) reads as "danger", and a partial running/total reads as
+// "warning" -- a genuinely different state from either extreme.
+func fleetStatusVariant(runningCount, totalCount int32) string {
+	if totalCount == 0 {
+		return "secondary"
+	}
+	if runningCount == totalCount {
+		return "success"
+	}
+	if runningCount == 0 {
+		return "danger"
+	}
+	return "warning"
+}

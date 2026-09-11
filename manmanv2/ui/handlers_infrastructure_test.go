@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -34,6 +35,11 @@ type fakeInfrastructureAPIClient struct {
 	undrainCalls []int64
 	drainResult  *manmanpb.Server
 	undrainResult *manmanpb.Server
+
+	// fleetStatus/fleetStatusErr back GetFleetStatusSummary for the FR5/NFR5
+	// summary tests below (#2371).
+	fleetStatus    []*manmanpb.FleetGameStatus
+	fleetStatusErr error
 }
 
 func newFakeInfrastructureAPIClient() *fakeInfrastructureAPIClient {
@@ -67,6 +73,13 @@ func (f *fakeInfrastructureAPIClient) UndrainServer(ctx context.Context, in *man
 		result = &manmanpb.Server{ServerId: in.GetServerId(), DrainState: "schedulable"}
 	}
 	return &manmanpb.UndrainServerResponse{Server: result}, nil
+}
+
+func (f *fakeInfrastructureAPIClient) GetFleetStatusSummary(ctx context.Context, in *manmanpb.GetFleetStatusSummaryRequest, opts ...grpc.CallOption) (*manmanpb.GetFleetStatusSummaryResponse, error) {
+	if f.fleetStatusErr != nil {
+		return nil, f.fleetStatusErr
+	}
+	return &manmanpb.GetFleetStatusSummaryResponse{Games: f.fleetStatus}, nil
 }
 
 func (f *fakeInfrastructureAPIClient) GetServer(ctx context.Context, in *manmanpb.GetServerRequest, opts ...grpc.CallOption) (*manmanpb.GetServerResponse, error) {
@@ -334,6 +347,64 @@ func TestServersAndServerDetail_StillReturn200(t *testing.T) {
 	app.handleServerDetail(w, req)
 	if w.Code != http.StatusOK {
 		t.Fatalf("/servers/1 status = %d, want 200; body: %s", w.Code, w.Body.String())
+	}
+}
+
+// TestHandleInfrastructure_FleetStatusSummary_RendersRunningOverTotal
+// covers the fleet-wide status summary (#2371, manmanv2 M6, FR5/NFR5): one
+// row per game with "running / total", including a zero-deployment game
+// rendered as 0/0 rather than omitted.
+func TestHandleInfrastructure_FleetStatusSummary_RendersRunningOverTotal(t *testing.T) {
+	api := newFakeInfrastructureAPIClient()
+	api.fleetStatus = []*manmanpb.FleetGameStatus{
+		{GameId: 1, GameName: "Valheim", TotalCount: 3, RunningCount: 1},
+		{GameId: 2, GameName: "Minecraft", TotalCount: 0, RunningCount: 0},
+	}
+
+	code, body := renderInfrastructureHTTP(t, api, "/infrastructure")
+	if code != http.StatusOK {
+		t.Fatalf("status = %d, want 200; body: %s", code, body)
+	}
+
+	for _, want := range []string{"Valheim", "Minecraft", "1 / 3", "0 / 0"} {
+		if !strings.Contains(body, want) {
+			t.Errorf("rendered page missing fleet status content %q: %s", want, body)
+		}
+	}
+}
+
+// TestHandleInfrastructure_FleetStatusSummary_QueryFailureDegradesGracefully
+// covers the NFR5-adjacent failure path: a failed aggregate query must not
+// fail the whole Infrastructure page (same degrade-not-fail convention as
+// the per-host allocated-ports fetch), and the host list must still render.
+func TestHandleInfrastructure_FleetStatusSummary_QueryFailureDegradesGracefully(t *testing.T) {
+	api := newFakeInfrastructureAPIClient()
+	api.servers = []*manmanpb.Server{{ServerId: 1, Name: "host-alpha"}}
+	api.fleetStatusErr = errors.New("db unavailable")
+
+	code, body := renderInfrastructureHTTP(t, api, "/infrastructure")
+	if code != http.StatusOK {
+		t.Fatalf("status = %d, want 200 (a fleet status query failure must not fail the whole page); body: %s", code, body)
+	}
+	if !strings.Contains(body, "host-alpha") {
+		t.Errorf("rendered page missing host list after fleet status query failure: %s", body)
+	}
+}
+
+// TestHandleInfrastructure_ManualRefreshControlPresent covers NFR5's manual-
+// refresh requirement: the page must offer an explicit refresh control (no
+// new SSE/websocket/polling backs the fleet status summary or the host
+// list -- both are refreshed by this one control reloading the page).
+func TestHandleInfrastructure_ManualRefreshControlPresent(t *testing.T) {
+	api := newFakeInfrastructureAPIClient()
+	api.fleetStatus = []*manmanpb.FleetGameStatus{{GameId: 1, GameName: "Valheim", TotalCount: 1, RunningCount: 1}}
+
+	code, body := renderInfrastructureHTTP(t, api, "/infrastructure")
+	if code != http.StatusOK {
+		t.Fatalf("status = %d, want 200; body: %s", code, body)
+	}
+	if !strings.Contains(body, `href="/infrastructure"`) || !strings.Contains(body, ">Refresh<") {
+		t.Errorf("rendered page missing manual-refresh control: %s", body)
 	}
 }
 
