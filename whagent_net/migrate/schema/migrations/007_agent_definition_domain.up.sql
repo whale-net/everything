@@ -12,17 +12,21 @@
 --
 -- Backfill-then-NOT-NULL in the same migration (rather than a separate
 -- follow-up) so there is never a window where agent_definition can hold a
--- NULL domain: the one existing seeded row
--- (agent_id = 'audience-score-system-research') backfills to
--- audience_score_system, matching config/agents.yaml's domain value for
--- that entry and audience_score_system/'s own directory name.
+-- NULL domain. Backfills every pre-existing row, not just the one
+-- config/agents.yaml currently seeds (agent_id = 'audience-score-system-
+-- research') -- agent_definition is a real table, not a config mirror, so
+-- a long-lived environment's database can hold rows config never
+-- described (a stale manual-test row, an experiment never cleaned up,
+-- etc.); filtering the UPDATE by agent_id leaves any such row NULL and
+-- fails the ALTER COLUMN below with a dirty migration. audience_score_system
+-- is a safe default for every row here because it is the only domain that
+-- has ever existed prior to this migration.
 ALTER TABLE agent_definition
     ADD COLUMN domain TEXT;
 
 UPDATE agent_definition
     SET domain = 'audience_score_system'
-    WHERE agent_id = 'audience-score-system-research'
-      AND domain IS NULL;
+    WHERE domain IS NULL;
 
 ALTER TABLE agent_definition
     ALTER COLUMN domain SET NOT NULL;
