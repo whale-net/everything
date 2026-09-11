@@ -161,15 +161,23 @@ be configured with the *same* `WHAGENT_GRANT_CLIENT_ID`/
 `WHAGENT_GRANT_CLIENT_SECRET`/`WHAGENT_GRANT_REDIRECT_URI`/
 `WHAGENT_GRANT_ENCRYPTION_KEY` values.
 
-Every variable below is either unset on both binaries together (the
-`whagent_net/Tiltfile` local-dev default — construction degrades to a
-`WARNING` log and a nil `Components`) or set on both together — a
-*partial* configuration (e.g. every variable but
-`WHAGENT_GRANT_CLIENT_SECRET`) is a fatal startup error naming the
-missing variable, on both binaries: see `//whagent_net/delegatedgrant`'s
-`Build` doc comment for why a partial configuration is never allowed to
-silently construct a client that would only fail at its first real token
-call.
+The four `WHAGENT_GRANT_*` variables below are what must be either unset
+on both binaries together (the `whagent_net/Tiltfile` local-dev default —
+construction degrades to a `WARNING` log and a nil `Components`) or set
+on both together — a *partial* configuration among just these four (e.g.
+every one but `WHAGENT_GRANT_CLIENT_SECRET`) is a fatal startup error
+naming the missing variable, on both binaries: see
+`//whagent_net/delegatedgrant`'s `Build` doc comment for why a partial
+configuration is never allowed to silently construct a client that would
+only fail at its first real token call.
+
+`WHAGENT_OIDC_ISSUER` (above) becomes a required fifth field only once at
+least one `WHAGENT_GRANT_*` variable is set — it is *not* itself part of
+the on/off signal, since it already serves an unrelated, pre-existing
+purpose on `ui`/`api`/`worker` (issue #2150) and is therefore set on `ui`
+in `whagent_net/Tiltfile`'s local-dev default independent of whether this
+feature is configured (`//whagent_net/delegatedgrant.Config.unset` checks
+only the four `WHAGENT_GRANT_*` fields for exactly this reason).
 
 | Variable | Component | Default | Description |
 |----------|-----------|---------|-------------|
