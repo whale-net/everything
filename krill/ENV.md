@@ -6,11 +6,21 @@ once it exists.
 
 ## Database
 
-Read via `//libs/go/db` (`api`) and `//libs/go/migrate` (`migrate`).
+Read via `//libs/go/db` (`api`) and `//libs/go/migrate` (`migrate`, which
+falls back to the discrete `DB_*` vars below if `PG_DATABASE_URL` is unset
+-- see `libs/go/migrate/README.md`).
 
 | Variable | Component | Default | Description |
 |----------|-----------|---------|-------------|
 | `PG_DATABASE_URL` | migrate, api | *(required)* | PostgreSQL connection string. `migrate` applies `krill/migrate/schema/migrations` (starting with `001_scope`) and then seeds the one `scope` row (LB1, NFR2) -- see `migrate/seed`'s package doc comment. `api` uses this to construct its connection pool (`libs/go/db.NewPool`), which `/healthz` pings on every request. |
+| `DB_HOST` | migrate | `localhost` | Used only when `PG_DATABASE_URL` is unset. |
+| `DB_PORT` | migrate | `5432` | Used only when `PG_DATABASE_URL` is unset. |
+| `DB_USER` | migrate | `postgres` | Used only when `PG_DATABASE_URL` is unset. |
+| `DB_PASSWORD` | migrate | `""` | Used only when `PG_DATABASE_URL` is unset. |
+| `DB_NAME` | migrate | `postgres` | Used only when `PG_DATABASE_URL` is unset. |
+| `DB_SSL_MODE` | migrate | `disable` | Used only when `PG_DATABASE_URL` is unset. |
+| `MIGRATE_AUTO_DOWN` | migrate | `false` | Allow the default run to auto-migrate DOWN when the DB is ahead of this image's migrations (e.g. after a rollback), instead of failing loudly. See `libs/go/migrate/README.md` "Rollback detection" -- a standing switch, not scoped to one rollback. |
+| `MIGRATE_BYPASS_VERSION` | migrate | off | Ceiling, not a target: if the DB is ahead of this image's migrations but at or below this version, leave the schema as-is (no migration runs). |
 
 krill's forge coordinates (`repo_full_name`, `default_branch`) are **not**
 environment-driven -- `migrate/seed` seeds them explicitly as constants
