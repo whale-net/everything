@@ -27,11 +27,24 @@ import (
 	"github.com/whale-net/everything/whagent_net/mcpidentity"
 )
 
-// dispatchLogger is this package's structured logger (whagent_net/mcp/
-// tools), used only by acquireGrantToken's ErrGrantNeedsReauth branch
-// below -- issue #2431's mid-call reauth handling is the sole reason this
-// package needs a logger at all today.
-var dispatchLogger = logging.Get("whagent_net/mcp/tools")
+// dispatchLoggerName is this package's structured-logger name
+// (whagent_net/mcp/tools), used only by acquireGrantToken's
+// ErrGrantNeedsReauth branch below -- issue #2431's mid-call reauth
+// handling is the sole reason this package needs a logger at all today.
+//
+// Deliberately NOT a package-level `var dispatchLogger =
+// logging.Get(...)`: logging.Get returns slog.Default().With(...), and a
+// package-level var would freeze that Default() snapshot at package
+// initialization time -- before any test's slog.SetDefault(...) call
+// could ever take effect, making the WARNING-level/structured-field
+// assertion issue #2431's Testing section calls for unwritable against
+// this package's actual logger. Calling logging.Get(dispatchLoggerName)
+// fresh at each log site instead (see below) costs one extra allocation
+// on the (rare, human-intervention-needed) ErrGrantNeedsReauth path and
+// keeps output identical in production, while letting a test observe
+// slog.Default() as it stands at the moment the log line is actually
+// emitted.
+const dispatchLoggerName = "whagent_net/mcp/tools"
 
 // resolveGrantTokenForAgent is start_session's dispatch-time sequence:
 // resolve agentID's domain via DomainForAgent (FR7), then acquire a
@@ -129,7 +142,7 @@ func acquireGrantToken(ctx context.Context, grant GrantSource, identity mcpident
 		if errors.Is(err, grpcauth.ErrGrantNeedsReauth) {
 			reauthErr := newReauthRequiredError(domain, err)
 			if reauthedDomain, ok := reauthDomain(reauthErr); ok {
-				dispatchLogger.WarnContext(ctx, "delegated grant needs re-consent; failing call, not retrying or substituting",
+				logging.Get(dispatchLoggerName).WarnContext(ctx, "delegated grant needs re-consent; failing call, not retrying or substituting",
 					"domain", reauthedDomain, "subject", identity.Sub)
 			}
 			return ctx, reauthErr
