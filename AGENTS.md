@@ -190,5 +190,6 @@ Beyond the standard `bug`/`enhancement`/`chore`/etc. and the project-manager plu
 | `leaflab/` | Plant monitoring firmware and data pipeline | [TOC](leaflab/TOC.md) |
 | `audience_score_system/` | YouTube creator research/schedule/outcome tracking system, MCP-exposed (Go) | [TOC](audience_score_system/TOC.md) |
 | `whagent_net/` | whagent-net — Temporal-backed AI agent framework: session service, transcript store, MCP surface, embeddable session UI (Go) | [TOC](whagent_net/TOC.md) |
+| `krill/` | krill — spec-of-record and work-tracking substrate for agent swarms | [TOC](krill/TOC.md) |
 | `demo/` | Example applications — see individual READMEs | — |
 | `generated/` | Auto-generated OpenAPI clients — do not edit manually | — |
