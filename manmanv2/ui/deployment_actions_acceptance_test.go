@@ -23,11 +23,25 @@ import (
 // call graph), this file drives a real http.ServeMux built from
 // (*App).setupRoutes -- the same construction main_test.go uses -- so every
 // test here exercises the actual route registration, auth wrapping, and
-// handler wiring a browser would hit against /sessions. The per-task suites
-// stay as regression guards for their own layer; this suite guards the
-// composed behavior a Server Manager actually gets, so a future refactor
-// that splits the layers differently still has one place proving C21 works
-// end to end.
+// handler wiring a browser would hit. The per-task suites stay as
+// regression guards for their own layer; this suite guards the composed
+// behavior a Server Manager actually gets, so a future refactor that splits
+// the layers differently still has one place proving C21 works end to end.
+//
+// Since #2372 (M6 navigation/disposition), GET /sessions redirects to
+// /activity and no longer renders deployment rows -- the FR16/FR17-compliant
+// replacement page for this capability is /games?expand=<gameID>, which
+// renders the exact same DeploymentRow/DeploymentRowInner markup (see
+// handlers_games.go's buildGameDeploymentRow / pages/games.templ's
+// gameDeploymentRow). Every GET assertion in this file that used to target
+// /sessions?server_id=... now targets /games?expand=<acceptanceGameID>
+// instead; the fake's ListGames/ListGameConfigs additions below exist only
+// to give handleGames' UI-side join something to resolve every addSGC'd
+// deployment to (one fixed game/config pair shared by every test in this
+// file -- what game or config a deployment belongs to is not what this
+// suite guards). The POST action endpoints (/sessions/deployments/<id>/
+// start|stop|restart) are unchanged: #2372 retained them as action routes,
+// only the page routes moved.
 //
 // fakeAcceptanceAPIClient is stateful, not fixed-response: StartSession
 // creates a session in "pending" (StopSession moves the live session to
@@ -114,6 +128,18 @@ func isLiveAcceptanceStatus(status string) bool {
 	}
 }
 
+// acceptanceGameID/acceptanceConfigID are the one fixed Game/GameConfig
+// every addSGC'd deployment in this file resolves to via handleGames' UI-
+// side join (buildGameRows in handlers_games.go) -- see the file header
+// comment above for why a single shared game/config is enough for this
+// suite. acceptanceConfigID deliberately matches ServerGameConfig's
+// zero-value GameConfigId (addSGC never sets it), so every SGC this file
+// creates resolves without each test having to wire up its own config.
+const (
+	acceptanceGameID   = 1
+	acceptanceConfigID = 0
+)
+
 type fakeAcceptanceAPIClient struct {
 	manmanpb.ManManAPIClient
 
@@ -195,6 +221,23 @@ func (f *fakeAcceptanceAPIClient) ListServers(ctx context.Context, in *manmanpb.
 	defer f.mu.Unlock()
 	return &manmanpb.ListServersResponse{Servers: []*manmanpb.Server{
 		{ServerId: f.serverID, Name: "Acceptance Server", Status: "online"},
+	}}, nil
+}
+
+// ListGames and ListGameConfigs back handleGames' UI-side join (#2372's
+// /games retargeting -- see the file header comment): one fixed game and
+// one fixed config, shared by every addSGC'd deployment in this file, so
+// every deployment resolves to a game and none get silently skipped by
+// buildGameRows' "no matching GameConfig" rule.
+func (f *fakeAcceptanceAPIClient) ListGames(ctx context.Context, in *manmanpb.ListGamesRequest, opts ...grpc.CallOption) (*manmanpb.ListGamesResponse, error) {
+	return &manmanpb.ListGamesResponse{Games: []*manmanpb.Game{
+		{GameId: acceptanceGameID, Name: "Acceptance Game"},
+	}}, nil
+}
+
+func (f *fakeAcceptanceAPIClient) ListGameConfigs(ctx context.Context, in *manmanpb.ListGameConfigsRequest, opts ...grpc.CallOption) (*manmanpb.ListGameConfigsResponse, error) {
+	return &manmanpb.ListGameConfigsResponse{Configs: []*manmanpb.GameConfig{
+		{ConfigId: acceptanceConfigID, GameId: acceptanceGameID, Name: "Acceptance Config"},
 	}}, nil
 }
 
@@ -439,7 +482,7 @@ func TestFR1_StartOfferedOnlyOnStoppedCrashedLost(t *testing.T) {
 	api.seedSession(sgcLost, "lost")
 	// sgcNever: never started, no session seeded.
 
-	w := doGet(mux, "/sessions?server_id=1")
+	w := doGet(mux, fmt.Sprintf("/games?expand=%d", acceptanceGameID))
 	if w.Code != http.StatusOK {
 		t.Fatalf("status = %d, want 200; body: %s", w.Code, w.Body.String())
 	}
@@ -516,7 +559,7 @@ func TestFR3_StopOfferedOnlyWithLiveRunningSession(t *testing.T) {
 	api.seedSession(sgcCrashed, "crashed")
 	api.seedSession(sgcLost, "lost")
 
-	body := doGet(mux, "/sessions?server_id=1").Body.String()
+	body := doGet(mux, fmt.Sprintf("/games?expand=%d", acceptanceGameID)).Body.String()
 
 	runningSection := deploymentRowSection(t, body, sgcRunning)
 	if !strings.Contains(runningSection, ">Stop<") {
@@ -539,7 +582,7 @@ func TestFR4_StopConfirmsThenStops(t *testing.T) {
 	api.addSGC(sgcID)
 	api.seedSession(sgcID, "running")
 
-	listBody := doGet(mux, "/sessions?server_id=1").Body.String()
+	listBody := doGet(mux, fmt.Sprintf("/games?expand=%d", acceptanceGameID)).Body.String()
 	section := deploymentRowSection(t, listBody, sgcID)
 	if !strings.Contains(section, `@click="confirmStop = true"`) {
 		t.Fatalf("expected the click-to-reveal Stop confirm gate, got %q", section)
@@ -583,7 +626,7 @@ func TestFR5_RestartOfferedOnRunningCrashedLost(t *testing.T) {
 	api.seedSession(sgcLost, "lost")
 	api.seedSession(sgcStopped, "stopped")
 
-	body := doGet(mux, "/sessions?server_id=1").Body.String()
+	body := doGet(mux, fmt.Sprintf("/games?expand=%d", acceptanceGameID)).Body.String()
 
 	for _, id := range []int64{sgcRunning, sgcCrashed, sgcLost} {
 		section := deploymentRowSection(t, body, id)
@@ -766,7 +809,7 @@ func TestNFR_StartHasNoConfirmation(t *testing.T) {
 	api.addSGC(sgcRunning)
 	api.seedSession(sgcRunning, "running")
 
-	body := doGet(mux, "/sessions?server_id=1").Body.String()
+	body := doGet(mux, fmt.Sprintf("/games?expand=%d", acceptanceGameID)).Body.String()
 
 	crashedSection := deploymentRowSection(t, body, sgcCrashed)
 	if !strings.Contains(crashedSection, ">Start<") {
@@ -804,7 +847,7 @@ func TestNFR_StartHasNoConfirmation(t *testing.T) {
 }
 
 // TestNFR_AllActionsReachableFromListWithoutDetailPage asserts every action
-// control on /sessions posts directly to a /sessions/deployments/...
+// control on /games posts directly to a /sessions/deployments/...
 // endpoint -- never to a /sgc/{id} or /sessions/{id} detail-page route --
 // so no one-click action requires first navigating away from the list.
 func TestNFR_AllActionsReachableFromListWithoutDetailPage(t *testing.T) {
@@ -821,12 +864,12 @@ func TestNFR_AllActionsReachableFromListWithoutDetailPage(t *testing.T) {
 	api.addSGC(sgcStopped)
 	api.seedSession(sgcStopped, "stopped")
 
-	body := doGet(mux, "/sessions?server_id=1").Body.String()
+	body := doGet(mux, fmt.Sprintf("/games?expand=%d", acceptanceGameID)).Body.String()
 
 	hxPostRe := regexp.MustCompile(`hx-post="([^"]+)"`)
 	matches := hxPostRe.FindAllStringSubmatch(body, -1)
 	if len(matches) == 0 {
-		t.Fatalf("expected at least one hx-post action target on /sessions, found none")
+		t.Fatalf("expected at least one hx-post action target on /games, found none")
 	}
 	for _, m := range matches {
 		target := m[1]

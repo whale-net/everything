@@ -24,7 +24,8 @@ import (
 // silent RPC-count blowup at real fleet size.
 //
 // fakeGamesAPIClient is scoped to handleGames' call graph: ListGames,
-// ListGameConfigs, ListServerGameConfigs, ListServers, ListSessions. Any
+// ListGameConfigs, ListServerGameConfigs, ListServers, ListSessions,
+// ListPendingRestarts. Any
 // call to an un-overridden ManManAPIClient method panics on the nil
 // embedded interface, deliberately -- see handlers_sgc_test.go's
 // fakeManManAPIClient / handlers_home_test.go's fakeDashboardAPIClient for
@@ -68,6 +69,19 @@ func (f *fakeGamesAPIClient) ListServers(ctx context.Context, in *manmanpb.ListS
 func (f *fakeGamesAPIClient) ListSessions(ctx context.Context, in *manmanpb.ListSessionsRequest, opts ...grpc.CallOption) (*manmanpb.ListSessionsResponse, error) {
 	f.calls["ListSessions"]++
 	return &manmanpb.ListSessionsResponse{Sessions: f.sessions}, nil
+}
+
+// ListPendingRestarts backs handleGames' FR12/#1735 batched restart-state
+// fetch (task #2372's retained-capability verification). This fake never
+// models an in-flight/failed/expired pending_restarts row (that is
+// restart_state_test.go's job) -- it always reports "no restart record" for
+// every requested sgc, matching control-api's own contract for a caller
+// that queries any sgc set, and, critically, returns a non-nil response so
+// handleGames' for _, state := range resp.States loop has something to
+// range over instead of dereferencing a nil resp.
+func (f *fakeGamesAPIClient) ListPendingRestarts(ctx context.Context, in *manmanpb.ListPendingRestartsRequest, opts ...grpc.CallOption) (*manmanpb.ListPendingRestartsResponse, error) {
+	f.calls["ListPendingRestarts"]++
+	return &manmanpb.ListPendingRestartsResponse{}, nil
 }
 
 // buildFakeGamesData constructs n games, each with one config and one
@@ -153,7 +167,7 @@ func TestHandleGames_NFR7_ConstantCallCount(t *testing.T) {
 		t.Fatalf("20-game render status = %d, want 200", code)
 	}
 
-	wantMethods := []string{"ListGames", "ListGameConfigs", "ListServerGameConfigs", "ListServers", "ListSessions"}
+	wantMethods := []string{"ListGames", "ListGameConfigs", "ListServerGameConfigs", "ListServers", "ListSessions", "ListPendingRestarts"}
 	for _, method := range wantMethods {
 		if small.calls[method] != large.calls[method] {
 			t.Errorf("%s call count grew with fleet size: 2 games -> %d calls, 20 games -> %d calls (NFR7 requires a constant count)", method, small.calls[method], large.calls[method])
