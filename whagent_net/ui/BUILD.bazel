@@ -116,6 +116,7 @@ go_test(
     srcs = [
         "delegatedgrant_test.go",
         "grpc_client_test.go",
+        "handlers_consent_gate_test.go",
         "handlers_consent_test.go",
         "handlers_consent_unauth_test.go",
         "handlers_grants_test.go",

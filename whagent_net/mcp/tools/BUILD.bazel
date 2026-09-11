@@ -23,6 +23,7 @@ go_library(
     visibility = ["//visibility:public"],
     deps = [
         "//libs/go/grpcauth",
+        "//libs/go/logging",
         "//whagent_net/grantkey",
         "//whagent_net/mcpidentity",
         "//whagent_net/protos:whagentpb",
@@ -35,6 +36,7 @@ go_test(
     name = "tools_test",
     srcs = [
         "deps_test.go",
+        "dispatch_reauth_test.go",
         "dispatch_test.go",
         "errors_test.go",
         "fake_client_test.go",

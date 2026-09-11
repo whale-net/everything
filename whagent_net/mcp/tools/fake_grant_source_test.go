@@ -20,6 +20,25 @@ import (
 	"github.com/whale-net/everything/libs/go/grpcauth"
 )
 
+// newFakeGrantSourceNeedsReauth returns a fakeGrantSource whose TokenSource
+// always fails with grpcauth.ErrGrantNeedsReauth (issue #2431's mid-call
+// reauth-handling coverage), wrapped the same shape
+// libs/go/grpcauth/delegatedgrant_token.go's own Token method wraps it
+// ("grant %q rejected by keycloak") so a test exercises the same
+// errors.Is(err, grpcauth.ErrGrantNeedsReauth) chain dispatch.go's
+// acquireGrantToken sees from a real DelegatedGrantSource, not a
+// hand-rolled stand-in. Every call is still recorded in .calls (the
+// embedded fakeGrantSource's normal bookkeeping), so a test can assert
+// GrantSource.TokenSource was asked for exactly one (subject, grant) pair
+// -- no retry (FR18).
+func newFakeGrantSourceNeedsReauth() *fakeGrantSource {
+	return &fakeGrantSource{
+		tokenFunc: func(_ context.Context, _, grant string) (*oauth2.Token, error) {
+			return nil, fmt.Errorf("grpcauth: grant %q rejected by keycloak: %w", grant, grpcauth.ErrGrantNeedsReauth)
+		},
+	}
+}
+
 // fakeTokenSourceCall records one TokenSource(subject, grant) call.
 type fakeTokenSourceCall struct {
 	subject string
