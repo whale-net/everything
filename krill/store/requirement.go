@@ -50,7 +50,7 @@ func (s requirementStore) Create(ctx context.Context, scopeID, featureID uuid.UU
 	}
 	defer tx.Rollback(ctx)
 
-	exists, err := currentRowExists(ctx, tx, "feature", featureID)
+	exists, err := currentRowExists(ctx, tx, "feature", featureID, scopeID)
 	if err != nil {
 		return Requirement{}, err
 	}

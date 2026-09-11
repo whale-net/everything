@@ -51,7 +51,7 @@ func (s featureStore) Create(ctx context.Context, scopeID, featureSetID uuid.UUI
 	}
 	defer tx.Rollback(ctx)
 
-	exists, err := currentRowExists(ctx, tx, "feature_set", featureSetID)
+	exists, err := currentRowExists(ctx, tx, "feature_set", featureSetID, scopeID)
 	if err != nil {
 		return Feature{}, err
 	}
