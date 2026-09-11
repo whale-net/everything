@@ -12,7 +12,6 @@ go_library(
         "installation.go",
         "library.go",
         "preset.go",
-        "sgc.go",
     ],
     importpath = "github.com/whale-net/everything/manmanv2/api/handlers/workshop",
     visibility = ["//manmanv2/api:__subpackages__"],

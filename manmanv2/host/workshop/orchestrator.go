@@ -1149,32 +1149,45 @@ func copyFile(src, dst string) error {
 	return os.Chmod(dst, srcInfo.Mode())
 }
 
-// EnsureLibraryAddonsInstalled downloads all library addons for an SGC before session start (blocking)
+// EnsureLibraryAddonsInstalled downloads all library addons for a deployment before session
+// start (blocking). Resolution is GameConfig-scoped (M6 #2370, plan #2359): every deployment
+// of a GameConfig resolves through that GameConfig's library attachments, not its own SGC-scoped
+// ones (sgc_workshop_libraries is retired, NFR1).
 // Returns when all downloads complete or when context is cancelled
 func (do *DownloadOrchestrator) EnsureLibraryAddonsInstalled(ctx context.Context, sgcID int64, heartbeatFn func()) error {
 	logger := slog.With("sgc_id", sgcID)
 	logger.Info("ensuring library addons are installed")
 
-	// Fetch library attachments (includes installation_path_override and preset_id per library)
-	attachmentsResp, err := do.workshopClient.GetSGCLibraryAttachments(ctx, &pb.GetSGCLibraryAttachmentsRequest{
-		SgcId: sgcID,
+	// Resolve the deployment's GameConfig -- library attachments are read at GC scope.
+	sgcResp, err := do.grpcClient.GetServerGameConfig(ctx, &pb.GetServerGameConfigRequest{
+		ServerGameConfigId: sgcID,
 	})
 	if err != nil {
-		logger.Error("failed to get SGC library attachments", "error", err)
-		return fmt.Errorf("failed to get SGC library attachments: %w", err)
+		logger.Error("failed to get SGC", "error", err)
+		return fmt.Errorf("failed to get SGC %d: %w", sgcID, err)
+	}
+	configID := sgcResp.Config.GameConfigId
+
+	// Fetch library attachments (includes installation_path_override and preset_id per library)
+	attachmentsResp, err := do.workshopClient.GetGameConfigLibraryAttachments(ctx, &pb.GetGameConfigLibraryAttachmentsRequest{
+		ConfigId: configID,
+	})
+	if err != nil {
+		logger.Error("failed to get GameConfig library attachments", "config_id", configID, "error", err)
+		return fmt.Errorf("failed to get GameConfig library attachments: %w", err)
 	}
 
 	if len(attachmentsResp.Attachments) == 0 {
-		logger.Info("no libraries attached to SGC, skipping addon downloads")
+		logger.Info("no libraries attached to GameConfig, skipping addon downloads", "config_id", configID)
 		return nil
 	}
 
 	// Fetch library defaults (includes library's default preset_id)
-	librariesResp, err := do.workshopClient.ListSGCLibraries(ctx, &pb.ListSGCLibrariesRequest{
-		SgcId: sgcID,
+	librariesResp, err := do.workshopClient.ListGameConfigLibraries(ctx, &pb.ListGameConfigLibrariesRequest{
+		ConfigId: configID,
 	})
 	if err != nil {
-		logger.Warn("failed to list SGC libraries for defaults, proceeding without library presets", "error", err)
+		logger.Warn("failed to list GameConfig libraries for defaults, proceeding without library presets", "error", err)
 	}
 
 	// Build map: libraryID → library default preset_id
@@ -1197,7 +1210,7 @@ func (do *DownloadOrchestrator) EnsureLibraryAddonsInstalled(ctx context.Context
 	for _, att := range attachmentsResp.Attachments {
 		opts := libraryOverrides{
 			pathOverride: att.InstallationPathOverride,
-			presetID:     att.PresetId, // SGC attachment override
+			presetID:     att.PresetId, // GC attachment override
 			volumeID:     att.VolumeId,
 		}
 		if opts.presetID == 0 {
@@ -1206,7 +1219,7 @@ func (do *DownloadOrchestrator) EnsureLibraryAddonsInstalled(ctx context.Context
 		libraryOpts[att.LibraryId] = opts
 	}
 
-	logger.Info("found libraries attached to SGC", "count", len(attachmentsResp.Attachments))
+	logger.Info("found libraries attached to GameConfig", "config_id", configID, "count", len(attachmentsResp.Attachments))
 
 	// Collect all unique addons from all libraries (including nested references).
 	// Track the overrides that apply to each addon (inherited from the top-level library attachment).
@@ -1221,7 +1234,7 @@ func (do *DownloadOrchestrator) EnsureLibraryAddonsInstalled(ctx context.Context
 
 	type queueItem struct {
 		libraryID    int64
-		pathOverride string // inherited from the top-level SGC library attachment
+		pathOverride string // inherited from the top-level GC library attachment
 		presetID     int64  // effective preset (attachment override or library default)
 		volumeID     int64  // which volume to install into
 	}

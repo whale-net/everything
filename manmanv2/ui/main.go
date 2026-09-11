@@ -480,18 +480,14 @@ func (app *App) setupRoutes(mux *http.ServeMux) {
 	// Protected routes - SGC detail. The "/sgc/" and "/sgc/<id>" pages
 	// themselves retired (task #2279, FR16): handleSGCRoutes' fallback now
 	// redirects rather than rendering a page (see its doc comment below).
-	// The three routes below are NOT pages -- FR16's disposition list
-	// governs pages only (FR3), and amendment A2 is explicit that these
-	// stay exactly as they are: /sgc/add-library is still reachable from
-	// the shared Workshop component (workshop_partials.templ), and
-	// /sgc/remove-library, /sgc/api/available-libraries become dead code
-	// once sgc_detail.templ is gone but are deliberately left in place
-	// rather than removed (they retire in M6). Do not fold these into the
-	// retirement.
+	// The three SGC-scoped library routes that used to be registered here
+	// (/sgc/add-library, /sgc/remove-library, /sgc/api/available-libraries)
+	// retired with sgc_workshop_libraries (M6 #2370, NFR1): library
+	// attachment is now managed from the Games page panel (#2367). Any
+	// stale request to those paths now falls through to the "/sgc/"
+	// catch-all below and redirects there via handleSGCRoutes' fallback
+	// rather than 404ing.
 	mux.HandleFunc("/sgc/", app.auth.RequireAuthFunc(app.auth.WithAccessToken(app.handleSGCRoutes)))
-	mux.HandleFunc("/sgc/add-library", app.auth.RequireAuthFunc(app.auth.WithAccessToken(app.handleAddLibraryToSGC)))
-	mux.HandleFunc("/sgc/remove-library", app.auth.RequireAuthFunc(app.auth.WithAccessToken(app.handleSGCRemoveLibrary)))
-	mux.HandleFunc("/sgc/api/available-libraries", app.auth.RequireAuthFunc(app.auth.WithAccessToken(app.handleSGCAvailableLibraries)))
 
 	// Deployment-first redirect routes (task #2279, amendment A3): the new
 	// deployment-first names for the two retired SGC pages above. Both

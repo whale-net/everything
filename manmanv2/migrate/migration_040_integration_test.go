@@ -115,12 +115,17 @@ func TestMigration040_AppliesOnTopOfFullHistoryAndCreatesExpectedShape(t *testin
 	if err != nil {
 		t.Fatalf("LatestVersion: %v", err)
 	}
-	if latest != 42 {
-		t.Fatalf("expected the latest migration source version to be 42, got %d -- update this test if a newer migration has since landed", latest)
+	if latest != 43 {
+		t.Fatalf("expected the latest migration source version to be 43, got %d -- update this test if a newer migration has since landed", latest)
 	}
 
-	if err := runner.Up(); err != nil {
-		t.Fatalf("Up (applying every migration through 042): %v", err)
+	// Target version 40 explicitly rather than Up() (which now also
+	// applies 041-043) -- same rationale as the other migration
+	// integration tests' use of Migrate(N) over a relative Up() call:
+	// this test is about migration 040 specifically, not "whatever the
+	// latest migration happens to be".
+	if err := runner.Migrate(40); err != nil {
+		t.Fatalf("Migrate(40) (applying every migration through 040): %v", err)
 	}
 
 	version, dirty, err := runner.Version()
@@ -128,10 +133,10 @@ func TestMigration040_AppliesOnTopOfFullHistoryAndCreatesExpectedShape(t *testin
 		t.Fatalf("Version: %v", err)
 	}
 	if dirty {
-		t.Fatalf("expected clean state after Up, got dirty")
+		t.Fatalf("expected clean state after Migrate(40), got dirty")
 	}
-	if version != 42 {
-		t.Fatalf("expected version 42 after Up, got %d", version)
+	if version != 40 {
+		t.Fatalf("expected version 40 after Migrate(40), got %d", version)
 	}
 
 	for _, col := range requiredCacheEntryColumns {

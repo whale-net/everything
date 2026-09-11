@@ -229,106 +229,33 @@ func TestDeploymentsRoutes_MirrorSGCRedirects(t *testing.T) {
 	})
 }
 
-// TestSGCNonPageRoutes_NotSwallowedByRedirect is the A2 regression test:
+// TestSGCLibraryRoutes_RetiredIntoRedirect is this task's (M6 #2370, NFR1)
+// replacement for the old A2 regression guard (TestSGCNonPageRoutes_
+// NotSwallowedByRedirect / TestAddLibraryForm_StillPostsSuccessfully):
 // "/sgc/add-library", "/sgc/remove-library" and
-// "/sgc/api/available-libraries" are registered directly in setupRoutes as
-// their own mux patterns, more specific than the "/sgc/" subtree pattern
-// handleSGCRoutes owns -- they must keep dispatching to their own
-// handlers, never falling into handleSGCRoutes' new redirect fallback. A
-// GET against each (all three require either POST or a query param they
-// don't have here) reaching that route's own validation error rather than
-// a 301 is what proves the mux didn't swallow it into the redirect.
-func TestSGCNonPageRoutes_NotSwallowedByRedirect(t *testing.T) {
+// "/sgc/api/available-libraries" no longer have their own mux
+// registrations -- library attachment retired to GC scope, managed from
+// the Games page panel (#2367) -- so a request to any of them now falls
+// through to the "/sgc/" catch-all's redirect fallback (handleSGCRoutes ->
+// handleSGCDetailRedirect) instead of 404ing or dispatching to a
+// since-removed handler.
+func TestSGCLibraryRoutes_RetiredIntoRedirect(t *testing.T) {
 	_, mux := newRedirectTestApp(t, &fakeRedirectAPIClient{})
 
-	cases := []struct {
-		path       string
-		wantStatus int
-	}{
-		// POST-only handlers: a GET must hit their own 405, not the
-		// redirect's 301.
-		{"/sgc/add-library", http.StatusMethodNotAllowed},
-		{"/sgc/remove-library", http.StatusMethodNotAllowed},
-		// GET handler requiring sgc_id: no query param must hit its own
-		// 400, not the redirect's 301.
-		{"/sgc/api/available-libraries", http.StatusBadRequest},
-	}
-
-	for _, tc := range cases {
-		t.Run(tc.path, func(t *testing.T) {
-			w := doRedirectGet(mux, tc.path)
-			if w.Code == http.StatusMovedPermanently {
-				t.Fatalf("%s was redirected (301 to %q) -- the /sgc/ catch-all swallowed a more specific retained route (A2 regression)", tc.path, w.Header().Get("Location"))
+	for _, path := range []string{
+		"/sgc/add-library",
+		"/sgc/remove-library",
+		"/sgc/api/available-libraries",
+	} {
+		t.Run(path, func(t *testing.T) {
+			w := doRedirectGet(mux, path)
+			if w.Code != http.StatusMovedPermanently {
+				t.Fatalf("%s status = %d, want %d (redirected via the /sgc/ catch-all, not 404)", path, w.Code, http.StatusMovedPermanently)
 			}
-			if w.Code != tc.wantStatus {
-				t.Errorf("%s status = %d, want %d (its own handler's validation error)", tc.path, w.Code, tc.wantStatus)
+			if loc := w.Header().Get("Location"); loc != "/games" {
+				t.Errorf("%s Location = %q, want /games", path, loc)
 			}
 		})
-	}
-}
-
-// fakeAddLibraryWorkshopClient is a minimal WorkshopServiceClient fake for
-// TestAddLibraryForm_StillPostsSuccessfully below: it overrides only
-// AddLibraryToSGC, the one RPC handleAddLibraryToSGC (handlers_sgc.go,
-// untouched by this task per amendment A2) reaches, and records the request
-// it received so the test can assert the form's fields were parsed and
-// forwarded correctly, not just that some 2xx/3xx came back.
-type fakeAddLibraryWorkshopClient struct {
-	manmanpb.WorkshopServiceClient
-	gotReq *manmanpb.AddLibraryToSGCRequest
-}
-
-func (f *fakeAddLibraryWorkshopClient) AddLibraryToSGC(ctx context.Context, in *manmanpb.AddLibraryToSGCRequest, opts ...grpc.CallOption) (*manmanpb.AddLibraryToSGCResponse, error) {
-	f.gotReq = in
-	return &manmanpb.AddLibraryToSGCResponse{}, nil
-}
-
-// TestAddLibraryForm_StillPostsSuccessfully is the Testing-phase checklist
-// item that guards the A2 hazard directly (see this task's issue body):
-// components/workshop_partials.templ's "Add" button posts a plain (non-
-// htmx) form to "/sgc/add-library" -- exactly the fields that template
-// emits (sgc_id, library_id, preset_id; volume_id and
-// installation_path_override are optional and omitted here, mirroring the
-// template, which never renders them). This proves the retained route
-// still dispatches to handleAddLibraryToSGC and that handler still
-// completes the RPC and redirects, rather than the route having been
-// quietly broken (wrong method dispatch, a swallowed pattern, or a
-// signature mismatch against the now-thinner handlers_sgc.go) by this
-// task's heavy edits to that file.
-func TestAddLibraryForm_StillPostsSuccessfully(t *testing.T) {
-	workshop := &fakeAddLibraryWorkshopClient{}
-	auth, err := htmxauth.NewAuthenticator(context.Background(), htmxauth.Config{
-		Mode:          htmxauth.AuthModeNone,
-		SessionSecret: "redirect-test-secret-at-least-32-bytes-long",
-		SessionName:   "manmanv2_ui_redirect_test_session",
-	})
-	if err != nil {
-		t.Fatalf("NewAuthenticator: %v", err)
-	}
-	app := &App{
-		auth: auth,
-		grpc: &ControlClient{api: &fakeRedirectAPIClient{}, workshop: workshop},
-	}
-	mux := http.NewServeMux()
-	app.setupRoutes(mux)
-
-	form := "sgc_id=42&library_id=7&preset_id=3"
-	req := httptest.NewRequest(http.MethodPost, "/sgc/add-library", strings.NewReader(form))
-	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
-	w := httptest.NewRecorder()
-	mux.ServeHTTP(w, req)
-
-	if w.Code != http.StatusSeeOther {
-		t.Fatalf("status = %d, want %d (form POST succeeds and redirects back to the deployment)", w.Code, http.StatusSeeOther)
-	}
-	if loc := w.Header().Get("Location"); loc != "/sgc/42" {
-		t.Errorf("Location = %q, want /sgc/42 -- handleAddLibraryToSGC's own redirect target is untouched by this task (A2)", loc)
-	}
-	if workshop.gotReq == nil {
-		t.Fatalf("AddLibraryToSGC was never called")
-	}
-	if workshop.gotReq.GetSgcId() != 42 || workshop.gotReq.GetLibraryId() != 7 || workshop.gotReq.GetPresetId() != 3 {
-		t.Errorf("AddLibraryToSGCRequest = %+v, want sgc_id=42 library_id=7 preset_id=3", workshop.gotReq)
 	}
 }
 
