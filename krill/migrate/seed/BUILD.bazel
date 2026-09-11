@@ -1,7 +1,7 @@
 """krill scope seeder (issue #2487): a libs/go/migrate.Seeder that ensures
 the one `scope` row (LB1) exists."""
 
-load("@rules_go//go:def.bzl", "go_library")
+load("@rules_go//go:def.bzl", "go_library", "go_test")
 
 go_library(
     name = "seed",
@@ -10,8 +10,35 @@ go_library(
     visibility = ["//visibility:public"],
 )
 
-# seed_integration_test.go (real-Postgres idempotency proof, issue #2487's
-# Testing section: "seeding twice yields exactly one scope row with the
-# expected forge coordinates") lands as part of this task's Testing phase,
-# mirroring whagent_net/migrate/seed/BUILD.bazel's go_test target -- not
-# declared here yet since the file doesn't exist.
+# Real-Postgres integration coverage (issue #2487's Testing section):
+# seeding creates the one expected scope row, re-running is idempotent, and
+# a re-run never clobbers an operator's later edit to the row. Deliberately
+# NOT part of `bazel test //...` -- see //libs/go/dbtest's README for the
+# rationale behind each tag.
+#
+# Run it explicitly (requires a working Docker daemon):
+#   bazel test //krill/migrate/seed:seed_integration_test --test_output=all
+go_test(
+    name = "seed_integration_test",
+    size = "large",
+    timeout = "long",
+    srcs = ["seed_integration_test.go"],
+    gotags = ["integration"],
+    tags = [
+        "external",
+        "integration",
+        "manual",
+        "no-cache",
+        "no-sandbox",
+        "requires-network",
+    ],
+    deps = [
+        ":seed",
+        "//krill/migrate/schema",
+        "//libs/go/dbtest",
+        "//libs/go/migrate",
+        "@com_github_jackc_pgx_v5//stdlib",
+        "@com_github_stretchr_testify//assert",
+        "@com_github_stretchr_testify//require",
+    ],
+)
