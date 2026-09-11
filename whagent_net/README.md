@@ -157,6 +157,35 @@ OAuth2 credential and RFC 8693 token exchange" for the full design,
 including the secret-custody and rotation story for the confidential
 Keycloak client this uses.
 
+### Cutover: pre-existing mcpauth credentials invalidated (FR11)
+
+The plan #2421 rolled out (per-domain delegated-grant consent replacing
+Keycloak-token impersonation for the browser-OAuth2 path above) ends with a
+one-time, single-deploy cutover migration (`009_mcpauth_cutover`, issue
+#2434). On that deploy:
+
+- **Every opaque `mcpauth` credential minted before cutover stops working,
+  immediately and permanently.** The migration deletes every row from
+  `mcp_credential` and `mcp_auth_code` outright — not a revoke, not a
+  time-boxed grace period, no feature flag gating it (NFR8). There is
+  nothing to re-enable and nothing to wait out.
+- **Every operator who used the browser-OAuth2 sign-in path before cutover
+  must redo consent, once per domain they use**, through the `/mcp/consent`
+  flow (issue #2428) — reconnecting the MCP client re-triggers `/authorize`,
+  which now routes to that consent screen rather than minting a credential
+  outright. There is no session-based or grace-period shortcut around this.
+- **RFC 7591 client registrations (`mcp_oauth_client`) are left alone** —
+  a registration identifies the MCP client software itself, not an
+  operator's authority, so it carries nothing FR11 needs to invalidate; the
+  client does not need to re-register, only the operator needs to
+  re-consent.
+- **Unaffected:** the manual-token path (pasting a Keycloak access token
+  directly) and the `client_credentials` service-account path — neither
+  ever depended on `mcp_credential`.
+- The migration's `.down.sql` is structural only — it cannot restore
+  deleted credentials. Rolling back does not undo this cutover for any
+  operator who already lost access; the only way back is re-consent.
+
 ## Agent definition config
 
 `whagent_net/config/agents.yaml` is the checked-in source of truth
