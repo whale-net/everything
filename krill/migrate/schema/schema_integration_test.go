@@ -111,12 +111,16 @@ func columnNames(t *testing.T, ctx context.Context, db *dbtest.Postgres, table s
 // axis's entity model. Shared by the 002 tests below.
 var specTables = []string{"product", "feature_set", "feature", "requirement", "load_bearing_decision", "persona", "non_goal"}
 
-// TestMigration001_UpDownUp_LeavesCleanDatabaseAndIsRerunnable proves
-// migration 001's whole lifecycle: Up() creates `scope`, Down() drops it (a
-// clean database), and Up() again succeeds a second time from that clean
-// state -- migration 001 is re-runnable through //libs/go/migrate, not a
-// one-shot script.
-func TestMigration001_UpDownUp_LeavesCleanDatabaseAndIsRerunnable(t *testing.T) {
+// TestMigrations_UpDownUp_LeavesCleanDatabaseAndIsRerunnable proves the
+// whole migration set's lifecycle through the latest migration currently
+// embedded (003_session, issue #2489): Up() creates every table including
+// `krill_session`, Down() drops all of them (a clean database), and Up()
+// again succeeds a second time from that clean state -- the migration set
+// is re-runnable through //libs/go/migrate, not a one-shot script. The
+// hardcoded latest-version assertion below must be bumped whenever a new
+// migration lands (it was 1 for 001_scope alone, issue #2487; it is 3 now
+// that 002_spec_entities and 003_session, issue #2489, have both landed).
+func TestMigrations_UpDownUp_LeavesCleanDatabaseAndIsRerunnable(t *testing.T) {
 	ctx := context.Background()
 	db := dbtest.NewPostgres(ctx, t, dbtest.Options{})
 
@@ -128,32 +132,35 @@ func TestMigration001_UpDownUp_LeavesCleanDatabaseAndIsRerunnable(t *testing.T) 
 
 	latest, err := runner.LatestVersion()
 	require.NoError(t, err)
-	require.Equal(t, uint(2), latest, "expected the latest migration source version to be 2 (001_scope #2487 + 002_spec_entities #2488) -- update this test if a later migration has since landed")
+	require.Equal(t, uint(3), latest, "expected the latest migration source version to be 3 (001_scope, 002_spec_entities, 003_session) -- update this test if a later migration has since landed")
 
-	// -- Up: scope must exist, version must land clean at the latest --
-	require.NoError(t, runner.Up(), "apply migration 001")
+	// -- Up: scope and krill_session must exist, version must land clean at the latest --
+	require.NoError(t, runner.Up(), "apply migrations 001-003")
 
 	version, dirty, err := runner.Version()
 	require.NoError(t, err)
 	assert.False(t, dirty)
-	assert.Equal(t, uint(2), version)
+	assert.Equal(t, uint(3), version)
 
 	assert.True(t, tableExists(t, ctx, db, "scope"), "expected table \"scope\" to exist after Up()")
+	assert.True(t, tableExists(t, ctx, db, "krill_session"), "expected table \"krill_session\" to exist after Up() (003_session, issue #2489)")
 
-	// -- Down: scope must be gone -------------------------------------------
-	require.NoError(t, runner.Down(), "roll back migration 001")
+	// -- Down: every table must be gone -------------------------------------
+	require.NoError(t, runner.Down(), "roll back every migration")
 
 	assert.False(t, tableExists(t, ctx, db, "scope"), "expected table \"scope\" to be dropped after Down() -- a clean database")
+	assert.False(t, tableExists(t, ctx, db, "krill_session"), "expected table \"krill_session\" to be dropped after Down() -- a clean database")
 
 	// -- Up again: re-runnable from the clean state --------------------------
-	require.NoError(t, runner.Up(), "re-apply migration 001 after Down() -- must be re-runnable")
+	require.NoError(t, runner.Up(), "re-apply every migration after Down() -- must be re-runnable")
 
 	version, dirty, err = runner.Version()
 	require.NoError(t, err)
 	assert.False(t, dirty)
-	assert.Equal(t, uint(2), version)
+	assert.Equal(t, uint(3), version)
 
 	assert.True(t, tableExists(t, ctx, db, "scope"), "expected table \"scope\" to exist again after the second Up()")
+	assert.True(t, tableExists(t, ctx, db, "krill_session"), "expected table \"krill_session\" to exist again after the second Up()")
 }
 
 // TestMigration001_SchemaContract asserts the specific column shapes and
@@ -220,10 +227,14 @@ func TestMigration001_SchemaContract(t *testing.T) {
 }
 
 // TestMigration002_UpDownUp_LeavesCleanDatabaseAndIsRerunnable proves
-// migration 002's (issue #2488) whole lifecycle on top of 001: Up() creates
-// every spec table, Down() rolls all the way back to a clean database (no
-// `scope`, no spec tables), and Up() again succeeds a second time from that
-// clean state.
+// migration 002's (issue #2488) spec tables survive a full up/down/up
+// roundtrip cleanly, on top of whatever else has landed since -- runner.Up()
+// always migrates to the latest embedded version (not pinned to 2), so this
+// checks LatestVersion() dynamically rather than hardcoding 2 the way
+// TestMigrations_UpDownUp_LeavesCleanDatabaseAndIsRerunnable above must
+// (that one is the "combined, always-latest" contract and is expected to be
+// edited each time a migration lands; this one only cares that 002's own
+// tables round-trip correctly regardless of what else is now latest).
 func TestMigration002_UpDownUp_LeavesCleanDatabaseAndIsRerunnable(t *testing.T) {
 	ctx := context.Background()
 	db := dbtest.NewPostgres(ctx, t, dbtest.Options{})
@@ -234,13 +245,16 @@ func TestMigration002_UpDownUp_LeavesCleanDatabaseAndIsRerunnable(t *testing.T) 
 
 	runner := migrate.NewRunner(sqlDB, schema.Migrations, schema.Dir)
 
+	latest, err := runner.LatestVersion()
+	require.NoError(t, err)
+
 	// -- Up: every spec table plus scope must exist --------------------------
-	require.NoError(t, runner.Up(), "apply migrations 001 and 002")
+	require.NoError(t, runner.Up(), "apply every migration through the latest")
 
 	version, dirty, err := runner.Version()
 	require.NoError(t, err)
 	assert.False(t, dirty)
-	assert.Equal(t, uint(2), version)
+	assert.Equal(t, latest, version)
 
 	assert.True(t, tableExists(t, ctx, db, "scope"), "expected table \"scope\" to exist after Up()")
 	for _, table := range specTables {
@@ -248,7 +262,7 @@ func TestMigration002_UpDownUp_LeavesCleanDatabaseAndIsRerunnable(t *testing.T) 
 	}
 
 	// -- Down: everything must be gone, a clean database ---------------------
-	require.NoError(t, runner.Down(), "roll back migrations 002 and 001")
+	require.NoError(t, runner.Down(), "roll back every migration")
 
 	assert.False(t, tableExists(t, ctx, db, "scope"), "expected table \"scope\" to be dropped after Down()")
 	for _, table := range specTables {
@@ -256,12 +270,12 @@ func TestMigration002_UpDownUp_LeavesCleanDatabaseAndIsRerunnable(t *testing.T) 
 	}
 
 	// -- Up again: re-runnable from the clean state --------------------------
-	require.NoError(t, runner.Up(), "re-apply migrations 001 and 002 after Down() -- must be re-runnable")
+	require.NoError(t, runner.Up(), "re-apply every migration after Down() -- must be re-runnable")
 
 	version, dirty, err = runner.Version()
 	require.NoError(t, err)
 	assert.False(t, dirty)
-	assert.Equal(t, uint(2), version)
+	assert.Equal(t, latest, version)
 
 	for _, table := range specTables {
 		assert.True(t, tableExists(t, ctx, db, table), "expected table %q to exist again after the second Up()", table)
@@ -379,9 +393,11 @@ func TestMigration002_SchemaContract(t *testing.T) {
 // display-number column (LB2's trap -- "C4", "FR7", "LB3" are rendered, never
 // persisted), and no fourth parallel table or join table was introduced for
 // parentage (LB2 -- "never an array, never a join table"). Asserted
-// structurally: the public schema's table set is exactly what migrations 001
-// and 002 create (plus golang-migrate's own bookkeeping table), and no spec
-// table has a column matching a display-number-shaped name.
+// structurally: the public schema's table set is exactly what every landed
+// migration creates (runner.Up() always migrates to latest -- krill_session
+// from 003_session, issue #2489, is included below for that reason) plus
+// golang-migrate's own bookkeeping table, and no spec table has a column
+// matching a display-number-shaped name.
 func TestMigration002_NoDisplayNumberColumnsOrJoinTables(t *testing.T) {
 	ctx := context.Background()
 	db := dbtest.NewPostgres(ctx, t, dbtest.Options{})
@@ -411,9 +427,9 @@ func TestMigration002_NoDisplayNumberColumnsOrJoinTables(t *testing.T) {
 	require.NoError(t, rows.Err())
 	rows.Close()
 
-	expected := append([]string{"schema_migrations", "scope"}, specTables...)
+	expected := append([]string{"schema_migrations", "scope", "krill_session"}, specTables...)
 	sort.Strings(expected)
-	assert.Equal(t, expected, tables, "the public schema must contain exactly scope + the seven spec tables + golang-migrate's schema_migrations -- no fourth parallel table (e.g. \"capability\") and no join/bridge table for parentage (LB2)")
+	assert.Equal(t, expected, tables, "the public schema must contain exactly scope + the seven spec tables + krill_session (003_session, issue #2489) + golang-migrate's schema_migrations -- no fourth parallel table (e.g. \"capability\") and no join/bridge table for parentage (LB2)")
 
 	// No display-number-shaped column on any spec table -- LB2's own
 	// vocabulary for the trap this guards against.
@@ -426,4 +442,50 @@ func TestMigration002_NoDisplayNumberColumnsOrJoinTables(t *testing.T) {
 			}
 		}
 	}
+}
+
+// TestMigration003_SchemaContract asserts 003_session's krill_session
+// column shapes (issue #2489's Testing section): all six subject columns
+// (acting_iss/acting_sub/acting_kind, on_behalf_of_iss/on_behalf_of_sub/
+// on_behalf_of_kind, LB4) are NOT NULL, whagent_session_id is nullable
+// (correlation only -- a human/OAuth2 caller has none), and scope_id is
+// NOT NULL and FK-backed (LB1).
+func TestMigration003_SchemaContract(t *testing.T) {
+	ctx := context.Background()
+	db := dbtest.NewPostgres(ctx, t, dbtest.Options{})
+
+	sqlDB, err := sql.Open("pgx", db.ConnString)
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = sqlDB.Close() })
+
+	runner := migrate.NewRunner(sqlDB, schema.Migrations, schema.Dir)
+	require.NoError(t, runner.Up())
+
+	for _, col := range []string{
+		"scope_id",
+		"acting_iss", "acting_sub", "acting_kind",
+		"on_behalf_of_iss", "on_behalf_of_sub", "on_behalf_of_kind",
+	} {
+		_, nullable := nullableColumn(t, ctx, db, "krill_session", col)
+		assert.Equal(t, "NO", nullable, "krill_session.%s must be NOT NULL (LB1/LB4)", col)
+	}
+
+	_, nullable := nullableColumn(t, ctx, db, "krill_session", "whagent_session_id")
+	assert.Equal(t, "YES", nullable, "krill_session.whagent_session_id must be nullable -- a human/OAuth2 caller has no whagent claim")
+
+	_, nullable = nullableColumn(t, ctx, db, "krill_session", "created_at")
+	assert.Equal(t, "NO", nullable, "krill_session.created_at must be NOT NULL")
+
+	// scope_id must actually be FK-enforced against scope(id), not merely
+	// NOT NULL -- an insert against a nonexistent scope must fail.
+	_, err = db.Pool.Exec(ctx, `
+		INSERT INTO krill_session (
+			scope_id, acting_iss, acting_sub, acting_kind,
+			on_behalf_of_iss, on_behalf_of_sub, on_behalf_of_kind
+		) VALUES (
+			gen_random_uuid(), 'https://issuer.example.com', 'someone', 'human',
+			'https://issuer.example.com', 'someone', 'human'
+		)
+	`)
+	assert.Error(t, err, "krill_session.scope_id must be FK-enforced against scope(id)")
 }
