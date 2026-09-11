@@ -1,0 +1,36 @@
+load("@rules_go//go:def.bzl", "go_library")
+
+# pgx-based repository over //libs/go/db for krill's spec axis (migration
+# 002, issue #2488, M1): Product -> FeatureSet -> Feature -> {FR, NFR},
+# FeatureSet -> LoadBearingDecision, and the product-level Persona/NonGoal
+# entities the same task settles. Store layer only -- no HTTP surface
+# lands here (a separate task). See krill/ARCHITECTURE.md's "Capability
+# map entries, personas, and non-goals" section for how a capability-map
+# entry (`Cn`) resolves onto Feature with no schema of its own.
+#
+# Write path in this task is Create + current-value reads only --
+# supersession (the close-and-open write LB3 requires) is a later "amend"
+# task's scope; this schema's shape already supports it (see migration
+# 002's comments).
+go_library(
+    name = "store",
+    srcs = [
+        "decision.go",
+        "errors.go",
+        "feature.go",
+        "featureset.go",
+        "models.go",
+        "nongoal.go",
+        "persona.go",
+        "product.go",
+        "requirement.go",
+        "store.go",
+    ],
+    importpath = "github.com/whale-net/everything/krill/store",
+    visibility = ["//visibility:public"],
+    deps = [
+        "@com_github_google_uuid//:uuid",
+        "@com_github_jackc_pgx_v5//:pgx",
+        "@com_github_jackc_pgx_v5//pgxpool",
+    ],
+)
