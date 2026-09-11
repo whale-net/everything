@@ -12,6 +12,9 @@ load("@rules_go//go:def.bzl", "go_library", "go_test")
 # supersession (the close-and-open write LB3 requires) is a later "amend"
 # task's scope; this schema's shape already supports it (see migration
 # 002's comments).
+#
+# session.go (issue #2489, FR3) is the `init` primitive: mints a
+# krill-native session id and records the two LB4 subjects.
 go_library(
     name = "store",
     srcs = [
@@ -24,6 +27,7 @@ go_library(
         "persona.go",
         "product.go",
         "requirement.go",
+        "session.go",
         "store.go",
     ],
     importpath = "github.com/whale-net/everything/krill/store",

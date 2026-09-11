@@ -187,18 +187,48 @@ milestone never collide on a migration version:
 | Version | Contents | Task |
 |---------|----------|------|
 | `001` | `scope` | #2487 |
-| `002` | Spec entities (Product/FeatureSet/Feature/FR/NFR/LoadBearingDecision/Persona/NonGoal) | This task (#2488) |
-| `003` | `session` (FR3's `init` gate) | Later M1 task |
+| `002` | Spec entities (Product/FeatureSet/Feature/FR/NFR/LoadBearingDecision/Persona/NonGoal) | #2488 |
+| `003` | `session` (FR3's `init` gate) | #2489 |
 | `004` | Milestone reference + association (FR17) | Later M1 task |
 | `005` | Pointer artifact (FR20) | Later M1 task |
 
+## `krill_session` and the two session ids (FR3, #2489)
+
+Migration `003` adds `krill_session`, the row FR3's `init` primitive
+writes and the write gate (a later task in #2489) reads. Two identifiers
+matter here and must never be confused:
+
+- **`krill_session.id`** — krill's own session identifier, a surrogate
+  UUID minted by Postgres (`DEFAULT gen_random_uuid()`) every time `init`
+  is called. This is the id the write gate requires on every mutating
+  call this milestone exposes.
+- **`libs/go/whagent`'s `Claim.WhagentSessionID`** — a *different*
+  session concept, scoped to a whagent-net agent run. `init` records it
+  on `krill_session.whagent_session_id` only when the call arrives
+  through the whagent-net verifier, purely as a correlation field. It is
+  nullable (a human/OAuth2 caller has none), it is never used as or in
+  place of `krill_session.id`, and a whagent-authenticated call still
+  gets its own, distinct krill session id.
+
+`krill_session` also carries `acting_*`/`on_behalf_of_*` — two
+`(iss, sub, kind)` triples (LB4, mirroring `whagent_net`'s LB2 and
+`libs/go/whagent`'s `Claim` shape verbatim), both `NOT NULL`. When a
+caller acts for itself the two triples are written identically; the
+store layer (`krill/store/session.go`) never infers this — every caller
+of `InitSession` passes both explicitly. The table is append-only, not
+SCD2 (LB3): M1 ships only `init`, no update path over a session row.
+
 ## Open items
 
-- No HTTP or MCP surface over the spec entity model yet — `krill/store`
-  is store-layer only (issue #2488); `api` still exposes nothing beyond
-  `/healthz`.
+- No HTTP surface over the spec entity model yet — `krill/store`'s
+  Product/FeatureSet/Feature/FR/NFR/LoadBearingDecision/Persona/NonGoal
+  entities are store-layer only (issue #2488); the entity write API is a
+  separate task (#2490).
 - No supersession/amend write path yet — `krill/store` ships `Create` and
   current-value reads only (see "The spec entity model" above).
+- `init` (FR3, #2489) and the write-only gate (`api/handlers/session.go`,
+  `api/handlers/gate.go`) are wired up, but no write route uses the gate
+  yet — none of #2490/#2492/#2493/#2496 exist yet to wrap.
 - No MCP surface yet — `krill/plugin/` is a placeholder only.
 - No auth (NFR1's two-front-door pattern) wired up yet — `api` has no
   authenticated route to gate.
