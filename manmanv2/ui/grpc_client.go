@@ -80,6 +80,18 @@ func (c *ControlClient) UndrainServer(ctx context.Context, serverID int64) (*man
 	return resp.Server, nil
 }
 
+// GetFleetStatusSummary retrieves the fleet-wide per-game running/total
+// deployment snapshot for the Infrastructure page (#2371, manmanv2 M6,
+// FR5/NFR5). Point-in-time only -- callers refresh it themselves (page load
+// or manual refresh), this method never caches or polls.
+func (c *ControlClient) GetFleetStatusSummary(ctx context.Context) ([]*manmanpb.FleetGameStatus, error) {
+	resp, err := c.api.GetFleetStatusSummary(ctx, &manmanpb.GetFleetStatusSummaryRequest{})
+	if err != nil {
+		return nil, fmt.Errorf("failed to get fleet status summary: %w", err)
+	}
+	return resp.Games, nil
+}
+
 // ListGames retrieves all games
 func (c *ControlClient) ListGames(ctx context.Context) ([]*manmanpb.Game, error) {
 	resp, err := c.api.ListGames(ctx, &manmanpb.ListGamesRequest{

@@ -69,6 +69,17 @@ func (app *App) renderInfrastructure(w http.ResponseWriter, r *http.Request, man
 		hosts = append(hosts, host)
 	}
 
+	// The fleet status summary (#2371, FR5/NFR5) is a second, independent
+	// read from the same page load -- a failure here degrades to an empty
+	// summary section rather than failing the whole page, same as the
+	// per-host allocated-ports fetch above. It is the one thing on this
+	// read path worth logging at Error: an aggregate query failing is a
+	// genuine backend problem, not expected control flow.
+	fleetStatus, err := app.grpc.GetFleetStatusSummary(ctx)
+	if err != nil {
+		slog.Error("failed to get fleet status summary", "error", err)
+	}
+
 	breadcrumbs := []components.Breadcrumb{
 		{Label: "Infrastructure", URL: "/infrastructure"},
 	}
@@ -80,7 +91,7 @@ func (app *App) renderInfrastructure(w http.ResponseWriter, r *http.Request, man
 		return
 	}
 
-	if err := RenderTempl(w, r, "Infrastructure", pages.Infrastructure(layoutData, hosts)); err != nil {
+	if err := RenderTempl(w, r, "Infrastructure", pages.Infrastructure(layoutData, hosts, fleetStatus)); err != nil {
 		log.Printf("Error rendering template: %v", err)
 		http.Error(w, "Internal server error", http.StatusInternalServerError)
 	}
