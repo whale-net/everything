@@ -454,36 +454,22 @@ spec:
 # mcp: the Claude-Code-facing MCP surface, a thin facade over api's
 # SessionService (README.md "Connecting Claude Code to `mcp`").
 #
-# mcp's OAuth2 credential path (mcp_credential table + RFC 8693 Keycloak
-# token exchange, issue #2249) is opt-in here: PG_DATABASE_URL alone makes
-# the mcp_credential table reachable but leaves
-# WHAGENT_MCP_KEYCLOAK_CLIENT_ID/_CLIENT_SECRET/_TOKEN_URL unset,
-# and main.go's initializeTokenExchange treats that exact combination as
-# a fatal NFR8 fail-loud error (by design -- see its doc comment), not a
-# WARNING-and-degrade like every other partial-config case. Once the
-# 004_mcpauth_credential migration is applied, every fresh mcp pod would
-# otherwise CrashLoopBackOff indefinitely. There is also no local
-# Keycloak realm running in this Tiltfile at all (see `ui`'s comment
-# below: AUTH_MODE defaults to "none" for the identical reason), so real
-# out-of-the-box OAuth2 isn't achievable here regardless of how these
-# vars are set. Set ENABLE_WHAGENT_NET_MCP_OAUTH=true plus
-# WHAGENT_MCP_KEYCLOAK_CLIENT_ID/_CLIENT_SECRET/_TOKEN_URL (pointed at a
-# Keycloak realm of your own) in a local .env to exercise the OAuth2
-# credential path; the manual-token recipe (README.md) works
-# unconditionally either way.
-mcp_oauth_env_lines = []
-if get_env_bool('ENABLE_WHAGENT_NET_MCP_OAUTH', default='false'):
-    mcp_oauth_env_lines = [
-        '        - name: PG_DATABASE_URL',
-        '          value: "{}"'.format(pg_database_url),
-        '        - name: WHAGENT_MCP_KEYCLOAK_CLIENT_ID',
-        '          value: "{}"'.format(os.environ.get('WHAGENT_MCP_KEYCLOAK_CLIENT_ID', '')),
-        '        - name: WHAGENT_MCP_KEYCLOAK_CLIENT_SECRET',
-        '          value: "{}"'.format(os.environ.get('WHAGENT_MCP_KEYCLOAK_CLIENT_SECRET', '')),
-        '        - name: WHAGENT_MCP_KEYCLOAK_TOKEN_URL',
-        '          value: "{}"'.format(os.environ.get('WHAGENT_MCP_KEYCLOAK_TOKEN_URL', '')),
-    ]
-mcp_oauth_env = ('\n' + '\n'.join(mcp_oauth_env_lines)) if mcp_oauth_env_lines else ''
+# mcp's browser-OAuth2 identity-resolution path (mcp_credential table,
+# issue #2249) and its delegated-grant token acquisition (issue #2426/
+# #2430, WHAGENT_GRANT_*/PG_DATABASE_URL, ENV.md "`mcp` server") are both
+# left entirely unwired here, same as `ui`'s WHAGENT_GRANT_* below and its
+# AUTH_MODE="none" default: there is no local Keycloak realm running in
+# this Tiltfile at all (see `ui`'s comment below), so neither path is
+# exercisable out of the box regardless of how these vars are set.
+# initializeAuthDeps (whagent_net/mcp/main.go) treats every combination of
+# these vars being unset as a non-fatal degrade -- the manual-token recipe
+# (README.md) works unconditionally either way. Set PG_DATABASE_URL plus
+# the WHAGENT_GRANT_*/WHAGENT_OIDC_ISSUER vars in a local .env (pointed at
+# a Keycloak realm and Postgres instance of your own) to exercise either
+# path locally. FR19 (issue #2430) deleted the RFC 8693 impersonation
+# token-exchange path (server/tokenexchange.go, WHAGENT_MCP_KEYCLOAK_*)
+# this Tiltfile used to opt into via an ENABLE_WHAGENT_NET_MCP_OAUTH flag
+# -- there is nothing left to gate here.
 
 if get_env_bool('ENABLE_WHAGENT_NET_MCP', default='true'):
     k8s_yaml(blob("""
@@ -529,10 +515,10 @@ spec:
         - name: WHAGENT_MCP_PUBLIC_URL
           value: "http://localhost:8082"
         - name: WHAGENT_UI_PUBLIC_URL
-          value: "http://localhost:8081"{mcp_oauth_env}
+          value: "http://localhost:8081"
         - name: OTEL_EXPORTER_OTLP_ENDPOINT
           value: "{otel_endpoint}"
-""".format(namespace=namespace, otel_endpoint=otel_endpoint, mcp_oauth_env=mcp_oauth_env)))
+""".format(namespace=namespace, otel_endpoint=otel_endpoint)))
 
     mcp_deps = []
     if get_env_bool('ENABLE_WHAGENT_NET_API', default='true'):

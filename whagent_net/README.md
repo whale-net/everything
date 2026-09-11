@@ -141,21 +141,39 @@ browser flow instead of a `curl`.
 
 The credential this mints resolves to your Keycloak `(iss, sub)` pair --
 the same identity `StartSession`'s `subject` already carries for a human
-operator (NFR7) -- never a separate whagent-net-only account. There is no
-credential expiry/refresh/rotation or revocation UI yet (out of scope for
-M2); a minted credential is valid until explicitly revoked via `mcpauth`'s
-store API.
+operator -- never a separate whagent-net-only account.
 
-Behind the scenes (issue #2249), `mcp` never forwards that credential to
-`api` as-is -- `api` verifies real Keycloak-signed JWTs only. Every call
-made with this credential is transparently exchanged for a short-lived,
-real Keycloak-signed JWT asserting your resolved `(iss, sub)` (RFC 8693,
-cached in memory per identity until shortly before it expires), so a
-session you start this way is indistinguishable downstream from one
-started with a manually-pasted token. See `ARCHITECTURE.md` "`mcp`'s
-OAuth2 credential and RFC 8693 token exchange" for the full design,
-including the secret-custody and rotation story for the confidential
-Keycloak client this uses.
+**One-time per-domain consent (FR2/FR3, issue #2428).** `api` verifies
+real Keycloak-signed JWTs only, and `mcp` never forwards this opaque
+credential to it as-is -- but `mcp` no longer mints a working JWT itself
+either. The first time you (or your MCP client) reach a given domain's
+agent, `ui` walks you through a one-time browser consent naming that
+domain (`GET`/`POST /mcp/consent?domain=<d>`, requesting `offline_access`)
+before anything is minted. Completing consent for one domain grants
+standing access to that domain only -- reaching a *different* domain's
+agent later triggers a fresh consent for it, and there is no shortcut
+around this for an already-signed-in `ui` session. From then on, each
+call `mcp` makes on your behalf resolves the call's target domain and
+acquires a working, real Keycloak-signed JWT from that domain's grant at
+dispatch time (never cached beyond the single call), so a session you
+start this way is indistinguishable downstream from one started with a
+manually-pasted token. See `ARCHITECTURE.md` "Identity and auth
+chaining" for the full design, including what a compromised secret can
+and cannot do under this design (NFR1/NFR2).
+
+If Keycloak ever rejects your stored grant for a domain mid-session
+(rare -- e.g. a refresh token Keycloak stopped honoring), the affected
+call fails naming that domain rather than failing opaquely; redoing
+consent for that one domain (above) restores access the next time you
+access it (FR18).
+
+**Revoking access.** `GET /grants` lists your own per-domain grants and
+lets you revoke any one individually -- revoking takes effect
+immediately, on the very next call. An operator holding the designated
+admin realm role can additionally reach `GET /admin/grants` to view and
+revoke *any* operator's grants (e.g. for offboarding or a compromised
+session) -- see `ARCHITECTURE.md` "Identity and auth chaining" for both
+pages' authorization rules.
 
 ### Cutover: pre-existing mcpauth credentials invalidated (FR11)
 
@@ -194,9 +212,24 @@ every `migrate` run — config-driven seeding, but `agent_definition` stays
 a real, versioned table (LB5/NFR6), never a config-lookup shortcut: the
 seeder never edits a version already pinned to a session in place, it
 only inserts a new one when a config entry's fields (`model`, `tool_set`,
-`max_turns`, `max_cost_usd`, `required_role`) drift from the latest
-seeded version. Re-running the seeder with an unchanged config is a
-no-op. Before writing anything, the seeder also checks every entry's
+`max_turns`, `max_cost_usd`, `required_role`, `domain`) drift from the
+latest seeded version. Re-running the seeder with an unchanged config is
+a no-op.
+
+**`domain` is a required key on every entry (FR1, issue #2424).** It
+names the one `AGENTS.md` Domains-table domain (e.g.
+`audience_score_system`) this agent definition's whole `tool_set` belongs
+to — every entry under one definition is understood to belong to that
+same domain, by construction; there is no per-`tool_set`-entry domain
+field and no "spans more than one domain" case to validate against. An
+entry with `domain` missing or empty fails `config.Validate` before
+`migrate` writes anything. This is the value the per-domain consent flow
+above names to an operator, and the only input `//whagent_net/grantkey`
+is ever allowed to derive a delegated-grant key from (FR4) — parsing
+`agent_id`, `required_role`, or a `tool_set` entry's `server_url` to
+infer a domain is forbidden.
+
+Before writing anything, the seeder also checks every entry's
 `model` against the configured OpenRouter provider's live catalogue
 (`OPENROUTER_API_KEY`/`OPENROUTER_BASE_URL`, see `ENV.md`) — an unserved
 model fails the whole `migrate` run loudly rather than writing a

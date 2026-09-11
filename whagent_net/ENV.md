@@ -143,16 +143,16 @@ Keycloak client, `libs/go/grpcauth/pgstore`-backed `Store`
 (`grpcauth_delegated_grant` table, `whagent_net/migrate/schema/
 migrations/008_delegated_grant`), and `libs/go/grpcauth/grantindex`-backed
 bookkeeping index (`grpcauth_grant_index`, same migration) that plan
-#2421 migrates `whagent_net` onto. **Purely additive as of issue #2426:**
-`ui`'s `/authorize` still mints an opaque `mcpauth` credential and `mcp`
-still exchanges via `WHAGENT_MCP_KEYCLOAK_*` above — nothing reads or
-writes either new table yet. A dependent task swaps both request paths
-onto this wiring (FR8/FR9).
+#2421 migrates `whagent_net` onto. **Live as of issue #2430 (FR8):**
+`ui`'s `/authorize` drives the per-domain consent flow
+(`handlers_consent.go`) and `mcp` acquires every call's working token
+from this wiring at tool-dispatch time (`mcp/tools/dispatch.go`) — the
+opaque `mcpauth`-credential-plus-RFC-8693-exchange path this replaced is
+gone (`WHAGENT_MCP_KEYCLOAK_*`, deleted, see "`mcp` server" below).
 
 **NFR5: one shared client, not one per domain.** Every variable below
 configures a *single* confidential Keycloak client used as the caller
-identity by both `ui` and `mcp` — unlike `WHAGENT_MCP_KEYCLOAK_*` above
-(mcp's own, separate client) or a per-consuming-domain client
+identity by both `ui` and `mcp` — unlike a per-consuming-domain client
 (`KEYCLOAK.md`'s usual "one client per caller identity" principle, § 11):
 domain isolation for this flow is carried entirely by the grant key
 derived from `AgentDefinition.Domain` (`//whagent_net/grantkey`, FR4), not
@@ -163,17 +163,17 @@ be configured with the *same* `WHAGENT_GRANT_CLIENT_ID`/
 
 Every variable below is either unset on both binaries together (the
 `whagent_net/Tiltfile` local-dev default — construction degrades to a
-`WARNING` log and a nil `Components`, mirroring `WHAGENT_MCP_KEYCLOAK_*`'s
-own degrade precedent above) or set on both together — a *partial*
-configuration (e.g. every variable but `WHAGENT_GRANT_CLIENT_SECRET`) is a
-fatal startup error naming the missing variable, on both binaries: see
-`//whagent_net/delegatedgrant`'s `Build` doc comment for why a partial
-configuration is never allowed to silently construct a client that would
-only fail at its first real token call.
+`WARNING` log and a nil `Components`) or set on both together — a
+*partial* configuration (e.g. every variable but
+`WHAGENT_GRANT_CLIENT_SECRET`) is a fatal startup error naming the
+missing variable, on both binaries: see `//whagent_net/delegatedgrant`'s
+`Build` doc comment for why a partial configuration is never allowed to
+silently construct a client that would only fail at its first real token
+call.
 
 | Variable | Component | Default | Description |
 |----------|-----------|---------|-------------|
-| `WHAGENT_GRANT_CLIENT_ID` | ui, mcp | — | The one shared confidential client's id in Keycloak (same realm as `WHAGENT_OIDC_ISSUER` above). Distinct from `WHAGENT_OIDC_CLIENT_ID` (which only ever verifies or forwards a token) and from `WHAGENT_MCP_KEYCLOAK_CLIENT_ID` (`mcp`'s own RFC 8693 token-exchange client, being retired by this same plan). See `KEYCLOAK.md` § 11 for the Keycloak-side client setup this requires (confidential, `offline_access` scope, refresh-token rotation enabled). |
+| `WHAGENT_GRANT_CLIENT_ID` | ui, mcp | — | The one shared confidential client's id in Keycloak (same realm as `WHAGENT_OIDC_ISSUER` above). Distinct from `WHAGENT_OIDC_CLIENT_ID` (which only ever verifies or forwards a token) — there is no longer a separate `mcp`-only token-exchange client (that mechanism was deleted, see "`mcp` server" below). See `KEYCLOAK.md` § 11 for the Keycloak-side client setup this requires (confidential, `offline_access` scope, refresh-token rotation enabled). |
 | `WHAGENT_GRANT_CLIENT_SECRET` | ui, mcp | — | Secret for `WHAGENT_GRANT_CLIENT_ID`. Never checked in, never logged, never echoed in an error (NFR5) — provisioned as a Kubernetes secret, identically on both binaries. |
 | `WHAGENT_GRANT_REDIRECT_URI` | ui, mcp | — | The browser-consent redirect URI, allow-listed on `WHAGENT_GRANT_CLIENT_ID` in Keycloak (NFR5's redirect-URI-as-security-control, `KEYCLOAK.md` § 11). Must be `ui`'s own `GET /mcp/consent/callback` route (issue #2428's `handleMCPConsentCallback`, `WHAGENT_UI_PUBLIC_URL` + `/mcp/consent/callback`) — the only place a browser is ever redirected back to after `BeginAuthorization`. `mcp` reads the same value solely because `grpcauth.DelegatedGrantConfig.RedirectURI` is a required field regardless of whether a given holder ever drives the interactive leg. |
 | `WHAGENT_GRANT_ENCRYPTION_KEY` | ui, mcp | — | Secret, SHA-256-hashed into `pgstore`'s required 32-byte AES-256-GCM key encrypting `grpcauth_delegated_grant.token_material` at rest — mirrors `audience_score_system`'s `ASS_TOKEN_ENCRYPTION_KEY` derivation (`audience_score_system/ENV.md`). Must be identical on both binaries — a mismatch means whichever binary didn't mint a grant's ciphertext cannot decrypt it. Never checked in, never logged, never echoed in an error. |
@@ -225,13 +225,18 @@ needs (plus the Identity variables above, which its
 `PassthroughVerifier`/`AuthMiddleware` use to reject a call before any
 tool handler runs, never to verify the token itself -- `api` remains the
 sole verification boundary per FR10). The rest of this table (FR9, issue
-#2249) is additive and entirely optional: unset, `mcp` behaves exactly as
-it did before that issue -- no RFC 9728 discovery endpoint, no
-`mcp_credential` probe, no OAuth2 token-exchange path -- and the
-manual-token recipe above keeps working end to end regardless (see
-`whagent_net/mcp/server/transport.go`'s `NewHTTPHandler` and
-`whagent_net/mcp/main.go`'s `initializeTokenExchange`, both non-fatal on
-a missing value, mirroring `ui`'s `initializeSSEHub` convention).
+#2249; FR7/FR8, issue #2430) is additive and entirely optional: unset,
+`mcp` behaves as it did before either issue -- no RFC 9728 discovery
+endpoint, no `mcp_credential` probe, no delegated-grant acquisition -- and
+the manual-token recipe above keeps working end to end regardless (see
+`whagent_net/mcp/server/transport.go`'s `NewHTTPHandler`, non-fatal on a
+missing value, mirroring `ui`'s `initializeSSEHub` convention). There is
+no longer a separate `mcp`-only Keycloak client or RFC 8693 token
+exchange -- `WHAGENT_MCP_KEYCLOAK_CLIENT_ID`/`_CLIENT_SECRET`/`_TOKEN_URL`
+and `main.go`'s `initializeTokenExchange` were deleted by issue #2430
+(FR19) along with `server/tokenexchange.go`; a working credential for the
+browser-OAuth2 path now comes exclusively from the shared
+`WHAGENT_GRANT_*` delegated-grant wiring below.
 
 | Variable | Component | Default | Description |
 |----------|-----------|---------|-------------|
@@ -239,16 +244,7 @@ a missing value, mirroring `ui`'s `initializeSSEHub` convention).
 | `WHAGENT_API_URL` | mcp | *(required)* | `api`'s gRPC address -- the only outbound dependency this binary dials (see "Service wiring" above). |
 | `WHAGENT_MCP_PUBLIC_URL` | mcp | — | This binary's own externally reachable base URL -- must be byte-identical to `ui`'s own `WHAGENT_MCP_PUBLIC_URL` (above, "`ui`" section) -- the RFC 9728 `resource` this binary advertises at `/.well-known/oauth-protected-resource`. Unset skips serving that endpoint entirely; a mismatch with `ui`'s value silently breaks an MCP client's discovery instead. |
 | `WHAGENT_UI_PUBLIC_URL` | mcp | — | `ui`'s own externally reachable base URL (matches `ui`'s own `WHAGENT_UI_PUBLIC_URL`) -- the OAuth2 authorization server issuer this binary's RFC 9728 metadata names. Unset alongside `WHAGENT_MCP_PUBLIC_URL` above also skips serving that endpoint. |
-| `PG_DATABASE_URL` | mcp | — | Backs a `mcpauth.CredentialStore` against the same `mcp_credential` table `ui`'s OAuth2 provider mints into (the "Database" section above; `whagent_net/migrate/schema/migrations/004_mcpauth_credential`, issue #2245). Unset, unreachable, or a missing table all degrade to "OAuth2 credential path unavailable" (logged at `WARNING`), never a failed boot -- **except** the one NFR8 combination below: reachable + table present but `WHAGENT_MCP_KEYCLOAK_CLIENT_ID`/`_CLIENT_SECRET`/`_TOKEN_URL` not fully set, which fails the boot loudly instead (`main.go`'s `initializeTokenExchange`), since that combination would otherwise make the OAuth2 path reachable while every exchange on it fails opaquely at request time. `whagent_net/Tiltfile` leaves this and the three `WHAGENT_MCP_KEYCLOAK_*` vars below unset by default for exactly this reason (that NFR8 combination is otherwise the Tiltfile's default) -- set `ENABLE_WHAGENT_NET_MCP_OAUTH=true` plus the three vars in a local `.env` to opt in. |
-| `WHAGENT_MCP_KEYCLOAK_CLIENT_ID` | mcp | — | `mcp`'s own confidential Keycloak client id for the RFC 8693 token exchange (NFR8) -- distinct from `WHAGENT_OIDC_CLIENT_ID` above, which only ever verifies or forwards a token, never mints one. See `ARCHITECTURE.md` § "Identity and auth chaining" ("`mcp`'s OAuth2 credential and RFC 8693 token exchange") for the full secret-custody writeup (what holding this secret lets a process do, and the rotation procedure). |
-| `WHAGENT_MCP_KEYCLOAK_CLIENT_SECRET` | mcp | — | Secret for `WHAGENT_MCP_KEYCLOAK_CLIENT_ID`. Never checked in, never logged, never echoed in an error (NFR8) -- provisioned as a Kubernetes secret. |
-| `WHAGENT_MCP_KEYCLOAK_TOKEN_URL` | mcp | — | Keycloak's token endpoint URL for the realm `WHAGENT_OIDC_ISSUER` names, e.g. `https://keycloak.example.com/realms/whagent/protocol/openid-connect/token` -- where the RFC 8693 `grant_type=urn:ietf:params:oauth:grant-type:token-exchange` request is sent. |
-
-`PG_DATABASE_URL` above also gates issue #2426's purely-additive
-delegated-grant wiring (`main.go`'s `initializeDelegatedGrant`, reusing
-the same pool the FR9 credential store above opened) -- see "Delegated
-grant (issue #2426, plan #2421)" above for the four `WHAGENT_GRANT_*`
-variables it also needs.
+| `PG_DATABASE_URL` | mcp | — | Backs a `mcpauth.CredentialStore` against the same `mcp_credential` table `ui`'s OAuth2 provider mints into (the "Database" section above; `whagent_net/migrate/schema/migrations/004_mcpauth_credential`, issue #2245). Also gates issue #2426's delegated-grant wiring (`main.go`'s `initializeDelegatedGrant`, reusing the same pool) -- see "Delegated grant (issue #2426, plan #2421)" above for the four `WHAGENT_GRANT_*` variables that also needs. Unset, unreachable, or a missing table all degrade to "OAuth2 credential path unavailable" (logged at `WARNING`), never a failed boot. |
 
 ## `ui` (standalone agent web UI, issue #2236)
 
