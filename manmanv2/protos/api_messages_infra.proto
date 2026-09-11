@@ -123,3 +123,37 @@ message DeploymentEstimate {
   int32 estimated_cpu_millicores = 2;
   repeated int32 allocated_ports = 3;
 }
+
+// ============================================================================
+// Fleet Status Summary RPC (#2371, manmanv2 M6, FR5/NFR5)
+// ============================================================================
+
+// GetFleetStatusSummaryRequest has no filters: the Infrastructure page
+// always renders the whole fleet (US4) -- there is no per-server or
+// per-game scoping for this RPC.
+message GetFleetStatusSummaryRequest {}
+
+message GetFleetStatusSummaryResponse {
+  // One entry per game that exists, ordered by game name. A game with zero
+  // deployments anywhere in the fleet is still included, as 0/0 -- it is
+  // not omitted from the list.
+  repeated FleetGameStatus games = 1;
+}
+
+// FleetGameStatus is a point-in-time snapshot (NFR5) -- computed fresh on
+// every call from existing ServerGameConfig/Session data, never cached or
+// pushed. There is no live transport backing this message.
+message FleetGameStatus {
+  int64 game_id = 1;
+  string game_name = 2;
+  // total_count = the number of ServerGameConfig rows (deployments) that
+  // exist for this game across every host in the fleet, regardless of
+  // whether a session was ever started for them.
+  int32 total_count = 3;
+  // running_count = the subset of total_count whose most recent Session
+  // (by session_id) has status "running". A deployment with no session at
+  // all, or whose most recent session is pending/starting/stopping/
+  // stopped/crashed/lost/completed, does not count toward running_count --
+  // only a session that is actually running does.
+  int32 running_count = 4;
+}

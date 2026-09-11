@@ -43,3 +43,19 @@ type ServerGameConfig struct {
 	PortBindings JSONB  `db:"port_bindings"`
 	Status       string `db:"status"`
 }
+
+// FleetGameStatus is the per-game row of the fleet-wide status summary
+// (#2371, manmanv2 M6, FR5/NFR5): a point-in-time running-over-total
+// deployment count across every host in the fleet, computed from existing
+// ServerGameConfig/Session data. See
+// SessionRepository.CountRunningDeploymentsByGame for the exact
+// running/total definitions this carries -- this struct is deliberately a
+// plain aggregate result, not a persisted row (no db tags needed beyond
+// documentation, since it is built from a GROUP BY, not scanned 1:1 from a
+// table).
+type FleetGameStatus struct {
+	GameID       int64
+	GameName     string
+	TotalCount   int32
+	RunningCount int32
+}

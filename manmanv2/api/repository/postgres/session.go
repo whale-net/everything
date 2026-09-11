@@ -301,6 +301,56 @@ func (r *SessionRepository) UpdateSessionEndIfStatus(ctx context.Context, sessio
 	return err == nil, err
 }
 
+// CountRunningDeploymentsByGame is the fleet-wide status summary aggregate
+// (#2371, manmanv2 M6, FR5/NFR5) -- see the SessionRepository interface doc
+// for the exact running/total definitions. One aggregate query: games LEFT
+// JOIN game_configs LEFT JOIN server_game_configs (so a game with zero
+// deployments still appears, as 0/0) with a LATERAL subselect resolving
+// each deployment's most-recent session (by session_id, not started_at, so
+// a session that was created but never started still counts as "most
+// recent" over an older, already-ended one).
+func (r *SessionRepository) CountRunningDeploymentsByGame(ctx context.Context) ([]*manman.FleetGameStatus, error) {
+	query := `
+		SELECT
+			g.game_id,
+			g.name,
+			COUNT(sgc.sgc_id) AS total_count,
+			COUNT(*) FILTER (WHERE latest.status = $1) AS running_count
+		FROM games g
+		LEFT JOIN game_configs gc ON gc.game_id = g.game_id
+		LEFT JOIN server_game_configs sgc ON sgc.game_config_id = gc.config_id
+		LEFT JOIN LATERAL (
+			SELECT s.status
+			FROM sessions s
+			WHERE s.sgc_id = sgc.sgc_id
+			ORDER BY s.session_id DESC
+			LIMIT 1
+		) latest ON true
+		GROUP BY g.game_id, g.name
+		ORDER BY g.name
+	`
+
+	rows, err := r.db.Query(ctx, query, manman.SessionStatusRunning)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var results []*manman.FleetGameStatus
+	for rows.Next() {
+		var totalCount, runningCount int64
+		fgs := &manman.FleetGameStatus{}
+		if err := rows.Scan(&fgs.GameID, &fgs.GameName, &totalCount, &runningCount); err != nil {
+			return nil, err
+		}
+		fgs.TotalCount = int32(totalCount)
+		fgs.RunningCount = int32(runningCount)
+		results = append(results, fgs)
+	}
+
+	return results, rows.Err()
+}
+
 func (r *SessionRepository) GetStaleSessions(ctx context.Context, threshold time.Duration) ([]*manman.Session, error) {
 	query := `
 		SELECT session_id, sgc_id, started_at, ended_at, exit_code, status, created_at, updated_at

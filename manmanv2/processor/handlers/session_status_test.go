@@ -233,6 +233,10 @@ func (f *fakeSessionRepository) StopOtherSessionsForSGC(ctx context.Context, ses
 	return nil
 }
 
+func (f *fakeSessionRepository) CountRunningDeploymentsByGame(ctx context.Context) ([]*manman.FleetGameStatus, error) {
+	return nil, nil
+}
+
 // fakeServerPortRepository implements repository.ServerPortRepository,
 // recording DeallocatePortsBySessionID calls (the only method Handle
 // exercises for terminal transitions); everything else is a no-op stub.

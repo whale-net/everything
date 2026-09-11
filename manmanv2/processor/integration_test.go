@@ -265,6 +265,10 @@ func (m *MockSessionRepository) StopOtherSessionsForSGC(ctx context.Context, ses
 	return nil
 }
 
+func (m *MockSessionRepository) CountRunningDeploymentsByGame(ctx context.Context) ([]*manman.FleetGameStatus, error) {
+	return nil, nil
+}
+
 // NotFoundError represents an entity not found error
 type NotFoundError struct {
 	ID   int64

@@ -218,6 +218,12 @@ func (s *APIServer) ListPendingRestarts(ctx context.Context, req *pb.ListPending
 	return s.sessionHandler.ListPendingRestarts(ctx, req)
 }
 
+// GetFleetStatusSummary serves the Infrastructure page's fleet-wide status
+// summary (#2371, manmanv2 M6, FR5/NFR5).
+func (s *APIServer) GetFleetStatusSummary(ctx context.Context, req *pb.GetFleetStatusSummaryRequest) (*pb.GetFleetStatusSummaryResponse, error) {
+	return s.sessionHandler.GetFleetStatusSummary(ctx, req)
+}
+
 // Registration RPCs
 func (s *APIServer) RegisterServer(ctx context.Context, req *pb.RegisterServerRequest) (*pb.RegisterServerResponse, error) {
 	return s.registrationHandler.RegisterServer(ctx, req)

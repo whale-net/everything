@@ -40,6 +40,18 @@ type MockSessionRepo struct {
 	// order, shared with MockPendingRestartRepo so tests can assert
 	// record-then-dispatch ordering explicitly rather than just presence.
 	opLog *[]string
+
+	// fleetStatus/fleetStatusErr back CountRunningDeploymentsByGame for
+	// TestGetFleetStatusSummary (#2371).
+	fleetStatus    []*manman.FleetGameStatus
+	fleetStatusErr error
+}
+
+func (m *MockSessionRepo) CountRunningDeploymentsByGame(ctx context.Context) ([]*manman.FleetGameStatus, error) {
+	if m.fleetStatusErr != nil {
+		return nil, m.fleetStatusErr
+	}
+	return m.fleetStatus, nil
 }
 
 func (m *MockSessionRepo) ListWithFilters(ctx context.Context, filters *repository.SessionFilters, limit, offset int) ([]*manman.Session, error) {
@@ -743,6 +755,65 @@ func newListPendingRestartsHandler(pendingRepo *MockPendingRestartRepo) *Session
 		repo:                repo,
 		pendingRestartsRepo: pendingRepo,
 	}
+}
+
+func newFleetStatusHandler(sessionRepo *MockSessionRepo) *SessionHandler {
+	repo := &repository.Repository{Sessions: sessionRepo}
+	return &SessionHandler{
+		repo:        repo,
+		sessionRepo: sessionRepo,
+	}
+}
+
+// TestGetFleetStatusSummary covers the RPC handler (#2371, manmanv2 M6,
+// FR5/NFR5): it must pass the aggregate's rows through as
+// FleetGameStatus messages field-for-field, and turn an aggregate query
+// failure into an Internal error rather than a partial/zero-value
+// response.
+func TestGetFleetStatusSummary(t *testing.T) {
+	t.Run("passes aggregate rows through unchanged", func(t *testing.T) {
+		sessionRepo := &MockSessionRepo{
+			fleetStatus: []*manman.FleetGameStatus{
+				{GameID: 1, GameName: "Valheim", TotalCount: 3, RunningCount: 1},
+				{GameID: 2, GameName: "Minecraft", TotalCount: 0, RunningCount: 0},
+			},
+		}
+		h := newFleetStatusHandler(sessionRepo)
+
+		resp, err := h.GetFleetStatusSummary(context.Background(), &pb.GetFleetStatusSummaryRequest{})
+		if err != nil {
+			t.Fatalf("expected no error, got %v", err)
+		}
+		if len(resp.Games) != 2 {
+			t.Fatalf("expected 2 games, got %d: %+v", len(resp.Games), resp.Games)
+		}
+
+		byID := map[int64]*pb.FleetGameStatus{}
+		for _, g := range resp.Games {
+			byID[g.GameId] = g
+		}
+		valheim := byID[1]
+		if valheim == nil || valheim.GameName != "Valheim" || valheim.TotalCount != 3 || valheim.RunningCount != 1 {
+			t.Errorf("unexpected Valheim row: %+v", valheim)
+		}
+		minecraft := byID[2]
+		if minecraft == nil || minecraft.GameName != "Minecraft" || minecraft.TotalCount != 0 || minecraft.RunningCount != 0 {
+			t.Errorf("expected zero-deployment game to be included as 0/0, got: %+v", minecraft)
+		}
+	})
+
+	t.Run("aggregate query failure returns Internal error", func(t *testing.T) {
+		sessionRepo := &MockSessionRepo{fleetStatusErr: errors.New("db unavailable")}
+		h := newFleetStatusHandler(sessionRepo)
+
+		_, err := h.GetFleetStatusSummary(context.Background(), &pb.GetFleetStatusSummaryRequest{})
+		if err == nil {
+			t.Fatal("expected an error when the aggregate query fails")
+		}
+		if status.Code(err) != codes.Internal {
+			t.Fatalf("expected codes.Internal, got %v", status.Code(err))
+		}
+	})
 }
 
 func TestListPendingRestarts(t *testing.T) {
