@@ -104,11 +104,18 @@ type WorkshopLibraryMigrationConflict struct {
 // WorkshopLibraryMigrationConflictCandidate is one (library_id, sgc_id) pair
 // contributing to a WorkshopLibraryMigrationConflict -- the source SGC and
 // the library it attached, so the resolution UI can show exactly which SGCs
-// disagreed and on what.
+// disagreed and on what. PresetID/VolumeID/InstallationPathOverride are
+// denormalized from sgc_workshop_libraries at conflict-detection time (M6
+// #2361's backfill) rather than re-derived at resolution time, because
+// resolution (GameConfigWorkshopLibraryRepository.ResolveConflict) can
+// happen after sgc_workshop_libraries is dropped (M6 #2370, NFR1).
 type WorkshopLibraryMigrationConflictCandidate struct {
-	ConflictID int64 `db:"conflict_id"`
-	LibraryID  int64 `db:"library_id"`
-	SGCID      int64 `db:"sgc_id"`
+	ConflictID               int64   `db:"conflict_id"`
+	LibraryID                int64   `db:"library_id"`
+	SGCID                    int64   `db:"sgc_id"`
+	PresetID                 *int64  `db:"preset_id"`
+	VolumeID                 *int64  `db:"volume_id"`
+	InstallationPathOverride *string `db:"installation_path_override"`
 }
 
 // WorkshopLibraryAddon represents the junction between libraries and addons

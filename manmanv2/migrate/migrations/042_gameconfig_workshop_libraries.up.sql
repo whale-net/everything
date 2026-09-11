@@ -47,10 +47,23 @@ CREATE INDEX IF NOT EXISTS idx_workshop_library_migration_conflicts_unresolved
     ON workshop_library_migration_conflicts(config_id)
     WHERE resolved_at IS NULL;
 
+-- preset_id/volume_id/installation_path_override are denormalized onto this
+-- table at detection time (statement 3 below), rather than re-derived from
+-- sgc_workshop_libraries at resolution time, because resolution
+-- (GameConfigWorkshopLibraryRepository.ResolveConflict, dependent task
+-- #2368) can happen after sgc_workshop_libraries is dropped (043, NFR1) --
+-- 043's own guard explicitly permits an unresolved conflict to survive the
+-- drop as long as its GameConfig already has some gameconfig_workshop_libraries
+-- rows (see 043's comment). Deriving these at resolution time would mean
+-- ResolveConflict joins a table that may no longer exist; capturing them
+-- here means resolution never needs sgc_workshop_libraries at all.
 CREATE TABLE IF NOT EXISTS workshop_library_migration_conflict_candidates (
-    conflict_id BIGINT NOT NULL REFERENCES workshop_library_migration_conflicts(conflict_id) ON DELETE CASCADE,
-    library_id  BIGINT NOT NULL REFERENCES workshop_libraries(library_id) ON DELETE CASCADE,
-    sgc_id      BIGINT NOT NULL,
+    conflict_id                BIGINT NOT NULL REFERENCES workshop_library_migration_conflicts(conflict_id) ON DELETE CASCADE,
+    library_id                 BIGINT NOT NULL REFERENCES workshop_libraries(library_id) ON DELETE CASCADE,
+    sgc_id                     BIGINT NOT NULL,
+    preset_id                  BIGINT NULL REFERENCES game_addon_path_presets(preset_id) ON DELETE SET NULL,
+    volume_id                  BIGINT NULL REFERENCES game_config_volumes(volume_id) ON DELETE SET NULL,
+    installation_path_override TEXT   NULL,
     PRIMARY KEY (conflict_id, library_id, sgc_id)
 );
 
@@ -151,8 +164,8 @@ WHERE cs.distinct_signature_count > 1
 -- override variant" ends up recorded: two SGCs attaching the same
 -- library_id with different overrides are, by construction, two different
 -- sgc_id rows, so both appear as separate candidates.
-INSERT INTO workshop_library_migration_conflict_candidates (conflict_id, library_id, sgc_id)
-SELECT c.conflict_id, swl.library_id, swl.sgc_id
+INSERT INTO workshop_library_migration_conflict_candidates (conflict_id, library_id, sgc_id, preset_id, volume_id, installation_path_override)
+SELECT c.conflict_id, swl.library_id, swl.sgc_id, swl.preset_id, swl.volume_id, swl.installation_path_override
 FROM workshop_library_migration_conflicts c
 JOIN server_game_configs sgc ON sgc.game_config_id = c.config_id
 JOIN sgc_workshop_libraries swl ON swl.sgc_id = sgc.sgc_id

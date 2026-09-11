@@ -12,9 +12,17 @@
 // pieces of manmanv2/migrate/migrations/042_gameconfig_workshop_libraries.up.sql
 // this test needs, per dbtest's README ("Options.Schema should be
 // self-contained DDL -- do not depend on another package's migrations").
-// sgc_workshop_libraries.sgc_id and workshop_library_migration_conflict_candidates.sgc_id
-// deliberately carry no FK here, matching the real migration (SGC scope is
-// being retired, not a first-class parent this layer depends on).
+// workshop_library_migration_conflict_candidates.sgc_id deliberately carries
+// no FK here, matching the real migration (SGC scope is being retired, not a
+// first-class parent this layer depends on).
+//
+// sgc_workshop_libraries is deliberately absent from this schema (#2466,
+// plan #2359): it is dropped in migration 043 (NFR1), and 043's own guard
+// permits an unresolved conflict to survive that drop, so ResolveConflict
+// must never depend on that table existing -- omitting it here is what
+// makes TestGameConfigWorkshopLibrary_ResolveConflict_* an honest regression
+// test for that, rather than one that would pass only because the table
+// happened to still be present.
 package postgres
 
 import (
@@ -50,16 +58,6 @@ const gameConfigWorkshopLibrarySchema = `
 		updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
 	);
 
-	CREATE TABLE sgc_workshop_libraries (
-		sgc_id BIGINT NOT NULL,
-		library_id BIGINT NOT NULL REFERENCES workshop_libraries(library_id) ON DELETE CASCADE,
-		preset_id BIGINT,
-		volume_id BIGINT,
-		installation_path_override TEXT,
-		created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
-		PRIMARY KEY (sgc_id, library_id)
-	);
-
 	CREATE TABLE gameconfig_workshop_libraries (
 		config_id BIGINT NOT NULL REFERENCES game_configs(config_id) ON DELETE CASCADE,
 		library_id BIGINT NOT NULL REFERENCES workshop_libraries(library_id) ON DELETE CASCADE,
@@ -83,6 +81,9 @@ const gameConfigWorkshopLibrarySchema = `
 		conflict_id BIGINT NOT NULL REFERENCES workshop_library_migration_conflicts(conflict_id) ON DELETE CASCADE,
 		library_id BIGINT NOT NULL REFERENCES workshop_libraries(library_id) ON DELETE CASCADE,
 		sgc_id BIGINT NOT NULL,
+		preset_id BIGINT,
+		volume_id BIGINT,
+		installation_path_override TEXT,
 		PRIMARY KEY (conflict_id, library_id, sgc_id)
 	);
 `
@@ -134,23 +135,16 @@ func seedGCWLConflict(ctx context.Context, t *testing.T, pool *pgxpool.Pool, con
 
 func seedGCWLCandidate(ctx context.Context, t *testing.T, pool *pgxpool.Pool, conflictID, libraryID, sgcID int64, presetID, volumeID *int64, installationPathOverride *string) {
 	t.Helper()
+	// preset_id/volume_id/installation_path_override are denormalized onto
+	// the candidate row itself (migration 042, #2466) rather than looked up
+	// from sgc_workshop_libraries at resolution time -- see this file's
+	// header comment for why that table is absent from this schema
+	// entirely.
 	if _, err := pool.Exec(ctx,
-		`INSERT INTO workshop_library_migration_conflict_candidates (conflict_id, library_id, sgc_id) VALUES ($1, $2, $3)`,
-		conflictID, libraryID, sgcID,
+		`INSERT INTO workshop_library_migration_conflict_candidates (conflict_id, library_id, sgc_id, preset_id, volume_id, installation_path_override) VALUES ($1, $2, $3, $4, $5, $6)`,
+		conflictID, libraryID, sgcID, presetID, volumeID, installationPathOverride,
 	); err != nil {
 		t.Fatalf("seed candidate (conflict=%d, library=%d, sgc=%d): %v", conflictID, libraryID, sgcID, err)
-	}
-	// ResolveConflict's candidate_repr join reads the actual attachment row
-	// from sgc_workshop_libraries -- a real deployment always has one for
-	// every candidate (the backfill only records candidates it read from
-	// there), so tests must seed it too.
-	if _, err := pool.Exec(ctx,
-		`INSERT INTO sgc_workshop_libraries (sgc_id, library_id, preset_id, volume_id, installation_path_override)
-		 VALUES ($1, $2, $3, $4, $5)
-		 ON CONFLICT (sgc_id, library_id) DO NOTHING`,
-		sgcID, libraryID, presetID, volumeID, installationPathOverride,
-	); err != nil {
-		t.Fatalf("seed sgc_workshop_libraries for candidate (sgc=%d, library=%d): %v", sgcID, libraryID, err)
 	}
 }
 
