@@ -16,6 +16,7 @@ go_library(
         "delegatedgrant.go",
         "grpc_client.go",
         "handlers_consent.go",
+        "handlers_grants.go",
         "handlers_session.go",
         "handlers_session_lifecycle.go",
         "handlers_session_live.go",
@@ -96,6 +97,12 @@ go_binary(
 # re-read figure, and a duplicate re-publish of the same event_id changes
 # no number (reuses fakeLiveTransport/newLiveTestHub/
 # waitForLiveHandlerRegistered from handlers_session_live_test.go).
+#
+# handlers_grants_test.go (issue #2432's Scaffold section) added:
+# route-reachability/render sanity checks for GET /grants and POST
+# /grants/revoke -- the Implementation phase's Testing section (FR16/
+# FR17/NFR4/NFR7) replaces these with the full scoped-listing/live-status/
+# revoke-scoping/audit-log coverage the issue describes.
 go_test(
     name = "ui_test",
     size = "small",
@@ -104,6 +111,7 @@ go_test(
         "grpc_client_test.go",
         "handlers_consent_test.go",
         "handlers_consent_unauth_test.go",
+        "handlers_grants_test.go",
         "handlers_session_lifecycle_test.go",
         "handlers_session_live_test.go",
         "handlers_session_test.go",
@@ -115,12 +123,14 @@ go_test(
     embed = [":ui_lib"],
     deps = [
         "//libs/go/grpcauth",
+        "//libs/go/grpcauth/grantindex",
         "//libs/go/htmxauth",
         "//libs/go/htmxsse",
         "//libs/go/mcpauth",
         "//libs/go/rmq",
         "//whagent_net/delegatedgrant",
         "//whagent_net/events",
+        "//whagent_net/grantkey",
         "//whagent_net/mcpidentity",
         "//whagent_net/protos:whagentpb",
         "//whagent_net/ui/components",

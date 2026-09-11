@@ -519,6 +519,13 @@ func (app *App) setupRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /sessions/{id}", app.auth.RequireAuthFunc(app.auth.WithAccessToken(app.handleSessionDetail)))
 	mux.HandleFunc("GET /sessions/{id}/events", app.auth.RequireAuthFunc(app.handleSessionEvents))
 	mux.HandleFunc("GET /sessions/{id}/usage-events", app.auth.RequireAuthFunc(app.handleSessionUsageEvents))
+
+	// Self-service per-domain grant list and revoke page (FR16/FR17, issue
+	// #2432): app.grant.Store/Index is intentionally NOT threaded through
+	// WithAccessToken -- neither handler calls `api`, so no outbound
+	// forwarded token is needed here.
+	mux.HandleFunc("GET /grants", app.auth.RequireAuthFunc(app.handleGrants))
+	mux.HandleFunc("POST /grants/revoke", app.auth.RequireAuthFunc(app.handleGrantsRevoke))
 }
 
 func handleHealthz(w http.ResponseWriter, r *http.Request) {

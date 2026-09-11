@@ -171,6 +171,8 @@ var whagentRouteTable = []struct {
 	// Protected.
 	{http.MethodGet, "/"},
 	{http.MethodGet, "/sessions/new"},
+	{http.MethodGet, "/grants"},
+	{http.MethodPost, "/grants/revoke"},
 }
 
 // TestSetupRoutes_OnlyExplicitPublicRoutesReachableUnauthenticated is the
