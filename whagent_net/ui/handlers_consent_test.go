@@ -43,31 +43,26 @@ import (
 	"github.com/whale-net/everything/libs/go/grpcauth"
 	"github.com/whale-net/everything/libs/go/htmxauth"
 	"github.com/whale-net/everything/whagent_net/delegatedgrant"
-	"github.com/whale-net/everything/whagent_net/mcpidentity"
 )
 
 // testConsentOIDCIssuer is the fixed app.oidcIssuer every test below uses.
 // AuthModeNone's dev user (htmxauth.Authenticator.CurrentUser) always
-// resolves Sub "dev-user" -- see devUserEncodedSubject below for the
-// composite handleMCPConsentConfirm/handleMCPConsentCallback derive from
-// the pair.
+// resolves Sub "dev-user" -- see devUserSub below.
 const testConsentOIDCIssuer = "https://keycloak.example.test/realms/whagent"
 
-// devUserEncodedSubject is exactly what handleMCPConsentConfirm computes
-// as `subject` (mcpidentity.Encode(app.oidcIssuer, user.Sub)) for
+// devUserSub is exactly what handleMCPConsentConfirm passes as `subject`
+// (user.Sub, the raw Keycloak `sub` claim -- never the
+// mcpidentity-encoded iss|sub composite, see handlers_consent.go's
+// comments and issue #2428 comment
+// https://github.com/whale-net/everything/issues/2428#issuecomment-5630520687
+// for why: grpcauth.CompleteAuthorization compares this literally against
+// the `sub` claim the token exchange actually authenticates, which for
+// any real Keycloak realm is always this raw, per-user value) for
 // AuthModeNone's fixed dev user -- the value every test below expects
 // grpcauth.Store to persist under, and the value handleMCPConsentCallback's
 // own bound-to-session check re-derives to compare against
 // pending.Subject.
-var devUserEncodedSubject = mustEncode(testConsentOIDCIssuer, "dev-user")
-
-func mustEncode(iss, sub string) string {
-	encoded, err := mcpidentity.Encode(iss, sub)
-	if err != nil {
-		panic(err)
-	}
-	return encoded
-}
+const devUserSub = "dev-user"
 
 // --- fakeGrantIdP: a local, minimal fake authorization server ------------
 
@@ -319,7 +314,7 @@ func TestMCPConsent_InvalidDomain_Rejected(t *testing.T) {
 func TestMCPConsent_ActiveGrantForDifferentDomain_StillRequiresConsent(t *testing.T) {
 	fake := newFakeGrantIdP(t)
 	store := grpcauth.NewFakeStore()
-	require.NoError(t, store.Persist(context.Background(), devUserEncodedSubject, "audience_score_system", grpcauth.TokenMaterial{RefreshToken: "already-granted"}))
+	require.NoError(t, store.Persist(context.Background(), devUserSub, "audience_score_system", grpcauth.TokenMaterial{RefreshToken: "already-granted"}))
 
 	app := newConsentTestApp(t, fake, store)
 	mux := consentMux(app)
@@ -340,7 +335,7 @@ func TestMCPConsent_ActiveGrantForDifferentDomain_StillRequiresConsent(t *testin
 func TestMCPConsent_ActiveGrantForSameDomain_StillRequiresConsent(t *testing.T) {
 	fake := newFakeGrantIdP(t)
 	store := grpcauth.NewFakeStore()
-	require.NoError(t, store.Persist(context.Background(), devUserEncodedSubject, "audience_score_system", grpcauth.TokenMaterial{RefreshToken: "already-granted"}))
+	require.NoError(t, store.Persist(context.Background(), devUserSub, "audience_score_system", grpcauth.TokenMaterial{RefreshToken: "already-granted"}))
 
 	app := newConsentTestApp(t, fake, store)
 	mux := consentMux(app)
@@ -384,7 +379,7 @@ func driveConsentAuthorize(t *testing.T, authURL string) (code, state string) {
 // pairing).
 func TestConsentRoundTrip_MatchingGrantSubject_PersistsActiveGrant(t *testing.T) {
 	fake := newFakeGrantIdP(t)
-	fake.SetSubject(devUserEncodedSubject)
+	fake.SetSubject(devUserSub)
 	store := grpcauth.NewFakeStore()
 	app := newConsentTestApp(t, fake, store)
 	mux := consentMux(app)
@@ -417,7 +412,7 @@ func TestConsentRoundTrip_MatchingGrantSubject_PersistsActiveGrant(t *testing.T)
 	require.Equal(t, http.StatusFound, callbackW.Code, "body: %s", callbackW.Body.String())
 	assert.Equal(t, "/sessions/42", callbackW.Header().Get("Location"), "must return to return_to on success")
 
-	status, err := store.Status(context.Background(), devUserEncodedSubject, "audience_score_system")
+	status, err := store.Status(context.Background(), devUserSub, "audience_score_system")
 	require.NoError(t, err)
 	assert.Equal(t, grpcauth.GrantStatusActive, status)
 }
@@ -432,23 +427,24 @@ func TestConsentRoundTrip_MatchingGrantSubject_PersistsActiveGrant(t *testing.T)
 // client (WHAGENT_GRANT_CLIENT_ID) and `ui`'s own sign-in client
 // (WHAGENT_OIDC_CLIENT_ID) issue the *same* `sub` for the same
 // already-signed-in operator. That per-user raw value is exactly
-// AuthModeNone's fixed dev user's Sub, "dev-user" -- deliberately NOT
-// devUserEncodedSubject (the mcpidentity-encoded `iss|sub` composite
-// handleMCPConsentConfirm passes as BeginAuthorization's `subject`
-// argument for its own, separate purpose: keying grpcauth.Store so `ui`
-// and `mcp` -- a future dependent task -- agree on one subject string,
-// issue body's Implementation section).
+// AuthModeNone's fixed dev user's Sub, devUserSub ("dev-user").
 //
-// If this fails, it demonstrates that handleMCPConsentConfirm's `subject`
-// argument to BeginAuthorization can never satisfy
-// CompleteAuthorization's own identity check (delegatedgrant_authcode.go
-// step 4: the exchanged token's real `sub` claim must equal
-// pending.Subject) against any real Keycloak realm, because no realm
-// mints a `sub` equal to an `iss|sub` composite string for an ordinary
-// user login.
+// This test previously failed (see issue #2428 comment
+// https://github.com/whale-net/everything/issues/2428#issuecomment-5630520687):
+// handleMCPConsentConfirm used to pass mcpidentity.Encode(app.oidcIssuer,
+// user.Sub) -- an iss|sub composite, meant for the unrelated
+// mcpauth.CredentialStore identity format (whagent_net/mcpidentity's own
+// package doc) -- as BeginAuthorization's `subject` argument. No real
+// Keycloak realm ever mints a `sub` claim equal to that composite for an
+// ordinary user login, so CompleteAuthorization's identity check
+// (delegatedgrant_authcode.go step 4: the exchanged token's real `sub`
+// claim must equal pending.Subject) could never succeed outside this
+// test's own permissive fake. The fix: handleMCPConsentConfirm/Callback
+// now pass the raw user.Sub -- see handlers_consent.go's comments on the
+// same lines.
 func TestConsentRoundTrip_RealisticCrossClientSubject_MustSucceed(t *testing.T) {
 	fake := newFakeGrantIdP(t)
-	fake.SetSubject("dev-user") // the real, raw Keycloak sub AuthModeNone's dev user carries -- same value every client in the realm would see for this user.
+	fake.SetSubject(devUserSub) // the real, raw Keycloak sub AuthModeNone's dev user carries -- same value every client in the realm would see for this user.
 	store := grpcauth.NewFakeStore()
 	app := newConsentTestApp(t, fake, store)
 	mux := consentMux(app)
@@ -475,7 +471,7 @@ func TestConsentRoundTrip_RealisticCrossClientSubject_MustSucceed(t *testing.T) 
 		"consent must succeed for the operator's own real (same-realm, cross-client) sub, not just when the grant IdP happens to echo back the mcpidentity-encoded composite verbatim; got body: %s", callbackW.Body.String())
 	assert.Equal(t, "/sessions/42", callbackW.Header().Get("Location"))
 
-	status, err := store.Status(context.Background(), devUserEncodedSubject, "audience_score_system")
+	status, err := store.Status(context.Background(), devUserSub, "audience_score_system")
 	require.NoError(t, err)
 	assert.Equal(t, grpcauth.GrantStatusActive, status)
 }
@@ -484,7 +480,7 @@ func TestConsentRoundTrip_RealisticCrossClientSubject_MustSucceed(t *testing.T) 
 
 func TestConsentRoundTrip_ConsentForOneDomain_LeavesOtherDomainAbsent(t *testing.T) {
 	fake := newFakeGrantIdP(t)
-	fake.SetSubject(devUserEncodedSubject)
+	fake.SetSubject(devUserSub)
 	store := grpcauth.NewFakeStore()
 	app := newConsentTestApp(t, fake, store)
 	mux := consentMux(app)
@@ -507,11 +503,11 @@ func TestConsentRoundTrip_ConsentForOneDomain_LeavesOtherDomainAbsent(t *testing
 
 	assert.Equal(t, grpcauth.FakeStoreCalls{Persist: 1}, store.Calls(), "exactly one grant must be created")
 
-	assStatus, err := store.Status(context.Background(), devUserEncodedSubject, "audience_score_system")
+	assStatus, err := store.Status(context.Background(), devUserSub, "audience_score_system")
 	require.NoError(t, err)
 	assert.Equal(t, grpcauth.GrantStatusActive, assStatus)
 
-	_, err = store.Status(context.Background(), devUserEncodedSubject, "manmanv2")
+	_, err = store.Status(context.Background(), devUserSub, "manmanv2")
 	assert.ErrorIs(t, err, grpcauth.ErrGrantNotFound, "consenting to one domain must not create a grant for any other domain")
 }
 
@@ -519,7 +515,7 @@ func TestConsentRoundTrip_ConsentForOneDomain_LeavesOtherDomainAbsent(t *testing
 
 func TestConsentCallback_StateMismatch_PersistsNothing(t *testing.T) {
 	fake := newFakeGrantIdP(t)
-	fake.SetSubject(devUserEncodedSubject)
+	fake.SetSubject(devUserSub)
 	store := grpcauth.NewFakeStore()
 	app := newConsentTestApp(t, fake, store)
 	mux := consentMux(app)
@@ -546,7 +542,7 @@ func TestConsentCallback_StateMismatch_PersistsNothing(t *testing.T) {
 
 func TestConsentCallback_KeycloakErrorResponse_PersistsNothing(t *testing.T) {
 	fake := newFakeGrantIdP(t)
-	fake.SetSubject(devUserEncodedSubject)
+	fake.SetSubject(devUserSub)
 	store := grpcauth.NewFakeStore()
 	app := newConsentTestApp(t, fake, store)
 	mux := consentMux(app)

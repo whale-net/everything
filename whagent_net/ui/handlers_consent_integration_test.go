@@ -15,23 +15,21 @@
 // This file's go_test target (BUILD.bazel's ui_integration_test) also
 // compiles handlers_consent_test.go into this same test binary, reusing
 // its fakeGrantIdP/consentMux/newConsentTestApp-adjacent helpers and
-// devUserEncodedSubject/testConsentOIDCIssuer constants rather than
-// duplicating them -- deliberately not main_test.go too (its
+// devUserSub/testConsentOIDCIssuer constants rather than duplicating them
+// -- deliberately not main_test.go too (its
 // newTestMCPProvider/newTestOIDCAuthenticator/requestWasAuthBlocked are
 // unrelated to anything either consent test file exercises, per
 // consentMux's own doc comment).
 //
-// These tests deliberately configure fakeGrantIdP (handlers_consent_test.go)
-// to return devUserEncodedSubject as the grant token's `sub` claim -- the
-// grpcauth-contract-satisfying case handlers_consent_test.go's
-// TestConsentRoundTrip_MatchingGrantSubject_PersistsActiveGrant already
-// isolates -- rather than re-driving
-// TestConsentRoundTrip_RealisticCrossClientSubject_MustSucceed's failing,
-// realistic-subject case here too. That failure (subject mismatch against
-// any real Keycloak realm) is an implementation defect independent of, and
-// already fully documented by, the unit test; duplicating it here would
-// only prevent this file from ever reaching the FR12 write path it exists
-// to cover.
+// These tests configure fakeGrantIdP (handlers_consent_test.go) to return
+// devUserSub -- AuthModeNone's fixed dev user's raw Keycloak `sub` claim,
+// the only value handleMCPConsentConfirm's BeginAuthorization call can
+// ever satisfy CompleteAuthorization's identity check with against any
+// real Keycloak realm (see handlers_consent.go's comments and
+// TestConsentRoundTrip_RealisticCrossClientSubject_MustSucceed, issue
+// #2428 comment
+// https://github.com/whale-net/everything/issues/2428#issuecomment-5630520687)
+// -- as the grant token's `sub` claim.
 package main
 
 import (
@@ -50,7 +48,6 @@ import (
 	"github.com/whale-net/everything/libs/go/grpcauth/grantindex"
 	"github.com/whale-net/everything/libs/go/htmxauth"
 	"github.com/whale-net/everything/whagent_net/delegatedgrant"
-	"github.com/whale-net/everything/whagent_net/mcpidentity"
 )
 
 // grantIndexSchema is a self-contained copy of the schema contract
@@ -141,18 +138,22 @@ func driveFullConsent(t *testing.T, mux *http.ServeMux, domain string) *httptest
 // issue #2428's Testing section: "Successful consent writes exactly one
 // grantindex row with the operator's preferred_username" -- and its
 // sibling bullet, "The operator's (iss, sub) written by `ui` matches what
-// whagent_net/mcpidentity round-trips" (verified directly below via
-// mcpidentity.Decode against the row grantindex.ListBySubject reads back).
+// whagent_net/mcpidentity round-trips": recordConsentBookkeeping
+// (handlers_consent.go) writes (app.oidcIssuer, pending.Subject) directly
+// -- pending.Subject already being the raw Keycloak `sub`, never an
+// mcpidentity-encoded composite (see handlers_consent.go's comments) --
+// so the row this test reads back is checked against
+// (testConsentOIDCIssuer, devUserSub) directly, with no decode step
+// needed.
 func TestConsentCallback_SuccessfulConsent_RecordsExactlyOneGrantIndexRow(t *testing.T) {
 	fake := newFakeGrantIdP(t)
-	fake.SetSubject(devUserEncodedSubject)
+	fake.SetSubject(devUserSub)
 	app, idx := newConsentIndexTestApp(t, fake)
 	mux := consentMux(app)
 
 	driveFullConsent(t, mux, "audience_score_system")
 
-	wantIss, wantSub, err := mcpidentity.Decode(devUserEncodedSubject)
-	require.NoError(t, err)
+	wantIss, wantSub := testConsentOIDCIssuer, devUserSub
 
 	entries, err := idx.ListBySubject(context.Background(), wantIss, wantSub)
 	require.NoError(t, err)
@@ -172,15 +173,14 @@ func TestConsentCallback_SuccessfulConsent_RecordsExactlyOneGrantIndexRow(t *tes
 // handlers rather than calling Record directly.
 func TestConsentCallback_ReConsentForSameDomain_UpsertsWithoutDuplicateOrError(t *testing.T) {
 	fake := newFakeGrantIdP(t)
-	fake.SetSubject(devUserEncodedSubject)
+	fake.SetSubject(devUserSub)
 	app, idx := newConsentIndexTestApp(t, fake)
 	mux := consentMux(app)
 
 	driveFullConsent(t, mux, "audience_score_system")
 	driveFullConsent(t, mux, "audience_score_system")
 
-	wantIss, wantSub, err := mcpidentity.Decode(devUserEncodedSubject)
-	require.NoError(t, err)
+	wantIss, wantSub := testConsentOIDCIssuer, devUserSub
 
 	entries, err := idx.ListBySubject(context.Background(), wantIss, wantSub)
 	require.NoError(t, err)
@@ -193,15 +193,14 @@ func TestConsentCallback_ReConsentForSameDomain_UpsertsWithoutDuplicateOrError(t
 // or overwritten row.
 func TestConsentCallback_ConsentForTwoDomains_RecordsBothIndependently(t *testing.T) {
 	fake := newFakeGrantIdP(t)
-	fake.SetSubject(devUserEncodedSubject)
+	fake.SetSubject(devUserSub)
 	app, idx := newConsentIndexTestApp(t, fake)
 	mux := consentMux(app)
 
 	driveFullConsent(t, mux, "audience_score_system")
 	driveFullConsent(t, mux, "manmanv2")
 
-	wantIss, wantSub, err := mcpidentity.Decode(devUserEncodedSubject)
-	require.NoError(t, err)
+	wantIss, wantSub := testConsentOIDCIssuer, devUserSub
 
 	entries, err := idx.ListBySubject(context.Background(), wantIss, wantSub)
 	require.NoError(t, err)

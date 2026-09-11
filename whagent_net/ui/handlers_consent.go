@@ -50,7 +50,6 @@ import (
 	"github.com/whale-net/everything/libs/go/htmxauth"
 	"github.com/whale-net/everything/libs/go/logging"
 	"github.com/whale-net/everything/whagent_net/grantkey"
-	"github.com/whale-net/everything/whagent_net/mcpidentity"
 	"github.com/whale-net/everything/whagent_net/ui/components"
 	"github.com/whale-net/everything/whagent_net/ui/pages"
 )
@@ -185,11 +184,21 @@ func (app *App) authorizeConsentGate(next http.Handler) http.Handler {
 			return
 		}
 
-		subject, err := mcpidentity.Encode(app.oidcIssuer, user.Sub)
-		if err != nil {
-			next.ServeHTTP(w, r)
-			return
-		}
+		// subject is the operator's raw Keycloak `sub` claim, never the
+		// mcpidentity-encoded iss|sub composite (issue #2428 comment
+		// https://github.com/whale-net/everything/issues/2428#issuecomment-5630520687):
+		// grpcauth.CompleteAuthorization compares this literally against
+		// the `sub` claim the token exchange actually authenticates
+		// (libs/go/grpcauth/delegatedgrant_authcode.go step 4), which for
+		// any real Keycloak realm is the plain per-user value, never a
+		// composite. mcpidentity.Encode exists for a different subsystem
+		// entirely (the identity packed into a mcpauth.CredentialStore
+		// row, whagent_net/mcpidentity's own package doc) -- reusing it
+		// here was the defect. FR9's "ui and mcp agree on the subject
+		// string" still holds: both resolve the same raw `sub` from the
+		// same single-issuer deployment (app.oidcIssuer), so no encoding
+		// is needed to keep them in agreement.
+		subject := user.Sub
 
 		grant, err := grantkey.ForDomain(app.defaultDomain)
 		if err != nil {
@@ -287,12 +296,13 @@ func (app *App) handleMCPConsentConfirm(w http.ResponseWriter, r *http.Request) 
 		http.Redirect(w, r, "/login", http.StatusFound)
 		return
 	}
-	subject, err := mcpidentity.Encode(app.oidcIssuer, user.Sub)
-	if err != nil {
-		logger.Error("handleMCPConsentConfirm: failed to encode subject identity", "error", err)
-		http.Error(w, "Internal server error", http.StatusInternalServerError)
-		return
-	}
+	// subject is the operator's raw Keycloak `sub` claim -- see
+	// authorizeConsentGate's comment on the same line for why this must
+	// never be the mcpidentity-encoded iss|sub composite:
+	// grpcauth.CompleteAuthorization will reject anything else against a
+	// real Keycloak realm (issue #2428 comment
+	// https://github.com/whale-net/everything/issues/2428#issuecomment-5630520687).
+	subject := user.Sub
 
 	authURL, pending, err := app.grant.Source.BeginAuthorization(ctx, subject, grant)
 	if err != nil {
@@ -342,8 +352,12 @@ func (app *App) handleMCPConsentCallback(w http.ResponseWriter, r *http.Request)
 		http.Redirect(w, r, "/login", http.StatusFound)
 		return
 	}
-	subject, err := mcpidentity.Encode(app.oidcIssuer, user.Sub)
-	if err != nil || subject != pending.Subject {
+	// subject is the operator's raw Keycloak `sub` claim (see
+	// handleMCPConsentConfirm's comment on the same line) -- pending.Subject
+	// was populated from that same raw value, never the mcpidentity-encoded
+	// composite.
+	subject := user.Sub
+	if subject != pending.Subject {
 		// Bound-to-session check (this task's Open Question note): a
 		// pending authorization only ever completes under the exact ui
 		// session that started it -- never under a different signed-in
@@ -391,6 +405,12 @@ func (app *App) handleMCPConsentCallback(w http.ResponseWriter, r *http.Request)
 // already-successful consent (the delegated grant itself, via
 // CompleteAuthorization's Store.Persist, is already durable) -- a missing
 // bookkeeping row degrades FR14/FR16's display, not access.
+//
+// pending.Subject is the operator's raw Keycloak `sub` claim (see
+// handleMCPConsentConfirm's comment), not an mcpidentity-encoded
+// composite, so no decode step is needed here -- app.oidcIssuer supplies
+// the issuer half directly, since this deployment (and grpcauth.Store's
+// key, pending.Subject itself) is always scoped to that one issuer.
 func (app *App) recordConsentBookkeeping(ctx context.Context, pending pendingConsent) {
 	logger := logging.Get("main")
 
@@ -398,11 +418,7 @@ func (app *App) recordConsentBookkeeping(ctx context.Context, pending pendingCon
 		return
 	}
 
-	iss, sub, err := mcpidentity.Decode(pending.Subject)
-	if err != nil {
-		logger.Error("mcp consent: failed to decode subject for bookkeeping index", "error", err)
-		return
-	}
+	iss, sub := app.oidcIssuer, pending.Subject
 
 	preferredUsername := ""
 	if info := htmxauth.GetUser(ctx); info != nil {
