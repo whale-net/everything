@@ -24,6 +24,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/gorilla/sessions"
 	"go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp"
 
 	"github.com/whale-net/everything/libs/go/db"
@@ -125,6 +126,17 @@ type config struct {
 	GrantClientSecret  string
 	GrantRedirectURI   string
 	GrantEncryptionKey string
+
+	// DefaultDomain (WHAGENT_UI_DEFAULT_DOMAIN) is the one
+	// AgentDefinition.Domain (issue #2424's FR1) authorizeConsentGate
+	// (handlers_consent.go, issue #2428) requires the operator have an
+	// active delegated grant for before /authorize mints an MCP-client
+	// credential -- see that file's package doc comment for why this is a
+	// single configured domain rather than a live multi-domain chooser.
+	// Left empty, the gate is a no-op (matches every other
+	// WHAGENT_GRANT_*-gated degrade path in this binary): required only
+	// once a deployment actually onboards this consent flow.
+	DefaultDomain string
 }
 
 func loadConfig() config {
@@ -147,6 +159,7 @@ func loadConfig() config {
 		GrantClientSecret:  getEnv("WHAGENT_GRANT_CLIENT_SECRET", ""),
 		GrantRedirectURI:   getEnv("WHAGENT_GRANT_REDIRECT_URI", ""),
 		GrantEncryptionKey: getEnv("WHAGENT_GRANT_ENCRYPTION_KEY", ""),
+		DefaultDomain:      getEnv("WHAGENT_UI_DEFAULT_DOMAIN", ""),
 	}
 }
 
@@ -182,17 +195,30 @@ type App struct {
 	// an MCP client has any credential at all). Its Resolver reads
 	// `ui`'s own Keycloak session (mcpCallerResolver, mcpauth.go) --
 	// `/authorize` mints a credential only once the operator is already
-	// signed in via app.auth.
+	// signed in via app.auth, and (issue #2428) only once
+	// authorizeConsentGate (run()) is satisfied, since it wraps this
+	// binary's whole mux rather than being registered as its own route.
 	mcpProvider *mcpauth.Provider
 
 	// grant is the shared DelegatedGrantSource/Store/Index triple (issue
 	// #2426, FR10/FR13/NFR5/NFR6) initializeDelegatedGrant constructs.
 	// Zero-valued (every field nil) when WHAGENT_GRANT_*/WHAGENT_OIDC_ISSUER
 	// are not configured -- see initializeDelegatedGrant's doc comment.
-	// Purely additive today: nothing in this binary reads it yet -- a
-	// dependent task swaps setupMCPAuth's /authorize handling onto
-	// grant.Source (FR9).
+	// Read by handlers_consent.go's consent flow (issue #2428, FR9) --
+	// authorizeConsentGate's degrade-to-no-op path for an unconfigured
+	// deployment.
 	grant delegatedgrant.Components
+
+	// defaultDomain is cfg.DefaultDomain verbatim -- the one domain
+	// authorizeConsentGate (handlers_consent.go, issue #2428) gates
+	// /authorize on. Empty disables that gate entirely.
+	defaultDomain string
+
+	// consentStore is the signed, httpOnly cookie store
+	// handlers_consent.go's savePendingConsent/loadPendingConsent round-trip
+	// a pendingConsent through between DelegatedGrantSource.
+	// BeginAuthorization and its Keycloak-redirect callback (issue #2428).
+	consentStore *sessions.CookieStore
 }
 
 // NewApp wires up Keycloak sign-in (NFR1) and the authenticated `api`
@@ -264,10 +290,12 @@ func NewApp(ctx context.Context, cfg config) (*App, error) {
 	}
 
 	app := &App{
-		auth:       auth,
-		session:    sessionClient,
-		oidcIssuer: cfg.OIDCIssuer,
-		sseHub:     initializeSSEHub(cfg),
+		auth:          auth,
+		session:       sessionClient,
+		oidcIssuer:    cfg.OIDCIssuer,
+		sseHub:        initializeSSEHub(cfg),
+		defaultDomain: cfg.DefaultDomain,
+		consentStore:  newConsentStore(cfg.SessionSecret),
 	}
 
 	// mcpauth.NewCredentialStore/NewPostgresClientRegistry/
@@ -386,9 +414,16 @@ func run() error {
 	mux := http.NewServeMux()
 	app.setupRoutes(mux)
 
+	// authorizeConsentGate wraps the whole mux, outside routing, rather than
+	// being registered as its own mux pattern: mcpauth.Provider.Mount above
+	// already claims the exact "GET /authorize" pattern, and net/http's
+	// ServeMux panics on a duplicate registration of the same pattern -- see
+	// handlers_consent.go's package doc comment for the full reasoning.
+	var handler http.Handler = app.authorizeConsentGate(mux)
+
 	httpServer := &http.Server{
 		Addr:         cfg.Addr,
-		Handler:      otelhttp.NewHandler(mux, "whagent-net-ui"),
+		Handler:      otelhttp.NewHandler(handler, "whagent-net-ui"),
 		ReadTimeout:  15 * time.Second,
 		WriteTimeout: 15 * time.Second,
 		IdleTimeout:  60 * time.Second,
@@ -449,6 +484,15 @@ func (app *App) setupRoutes(mux *http.ServeMux) {
 	// itself is where app.mcpProvider's own Resolver + SignInURL gate
 	// access to a signed-in operator, not RequireAuth.
 	app.mcpProvider.Mount(mux)
+
+	// Per-domain delegated-grant consent (FR2/FR3/FR5/FR6/FR9/FR12, issue
+	// #2428): the standalone entry point (handlers_consent.go's package doc
+	// comment). Requires a signed-in operator like every other app route --
+	// unlike the mcpauth endpoints above, these are `ui`'s own pages, not
+	// an OAuth2 authorization-server surface an MCP client hits directly.
+	mux.HandleFunc("GET /mcp/consent", app.auth.RequireAuthFunc(app.handleMCPConsent))
+	mux.HandleFunc("POST /mcp/consent", app.auth.RequireAuthFunc(app.handleMCPConsentConfirm))
+	mux.HandleFunc("GET /mcp/consent/callback", app.auth.RequireAuthFunc(app.handleMCPConsentCallback))
 
 	// Session list (FR3/C15, NFR3, issue #2247): the authenticated landing
 	// page, mounted at both "/" and "/sessions" -- replacing issue #2236's
