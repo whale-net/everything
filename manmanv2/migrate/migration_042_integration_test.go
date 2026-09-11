@@ -224,7 +224,7 @@ func TestMigration042_AppliesOnTopOfFullHistoryAndCreatesExpectedShape(t *testin
 			t.Fatalf("expected column %s on workshop_library_migration_conflicts", col)
 		}
 	}
-	for _, col := range []string{"conflict_id", "library_id", "sgc_id"} {
+	for _, col := range []string{"conflict_id", "library_id", "sgc_id", "preset_id", "volume_id", "installation_path_override"} {
 		if !columnExists042(ctx, t, db, "workshop_library_migration_conflict_candidates", col) {
 			t.Fatalf("expected column %s on workshop_library_migration_conflict_candidates", col)
 		}
@@ -450,6 +450,43 @@ func TestMigration042_BackfillSameLibraryDifferentOverrideConflict(t *testing.T)
 			t.Fatalf("expected candidate (library_id=%d, sgc_id=%d), got %v", pair[0], pair[1], candidates)
 		}
 	}
+
+	// #2466: installation_path_override (and preset_id/volume_id) must be
+	// denormalized onto the candidate row itself at detection time -- the
+	// only source ResolveConflict has left once sgc_workshop_libraries is
+	// dropped (043, NFR1).
+	overrideBySGC := candidateOverridesBySGC(ctx, t, db, conflictID)
+	if got := overrideBySGC[sgc1]; got == nil || *got != "/opt/variant-a" {
+		t.Fatalf("expected sgc1's candidate row to carry installation_path_override=/opt/variant-a, got %v", got)
+	}
+	if got := overrideBySGC[sgc2]; got == nil || *got != "/opt/variant-b" {
+		t.Fatalf("expected sgc2's candidate row to carry installation_path_override=/opt/variant-b, got %v", got)
+	}
+}
+
+// candidateOverridesBySGC returns conflictID's candidate rows'
+// installation_path_override, keyed by sgc_id.
+func candidateOverridesBySGC(ctx context.Context, t *testing.T, db *dbtest.Postgres, conflictID int64) map[int64]*string {
+	t.Helper()
+	rows, err := db.Pool.Query(ctx, `SELECT sgc_id, installation_path_override FROM workshop_library_migration_conflict_candidates WHERE conflict_id = $1`, conflictID)
+	if err != nil {
+		t.Fatalf("query candidate overrides for conflict %d: %v", conflictID, err)
+	}
+	defer rows.Close()
+
+	bySGC := map[int64]*string{}
+	for rows.Next() {
+		var sgcID int64
+		var override *string
+		if err := rows.Scan(&sgcID, &override); err != nil {
+			t.Fatalf("scan candidate override row: %v", err)
+		}
+		bySGC[sgcID] = override
+	}
+	if err := rows.Err(); err != nil {
+		t.Fatalf("iterate candidate overrides: %v", err)
+	}
+	return bySGC
 }
 
 // TestMigration042_BackfillLoneAttachingSGCIsNotAConflict covers the

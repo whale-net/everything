@@ -177,7 +177,7 @@ func (r *GameConfigWorkshopLibraryRepository) ListConflictCandidates(ctx context
 
 func (r *GameConfigWorkshopLibraryRepository) listCandidatesByConflictIDs(ctx context.Context, conflictIDs []int64) (map[int64][]*manman.WorkshopLibraryMigrationConflictCandidate, error) {
 	query := `
-		SELECT conflict_id, library_id, sgc_id
+		SELECT conflict_id, library_id, sgc_id, preset_id, volume_id, installation_path_override
 		FROM workshop_library_migration_conflict_candidates
 		WHERE conflict_id = ANY($1)
 		ORDER BY conflict_id, library_id, sgc_id
@@ -192,7 +192,7 @@ func (r *GameConfigWorkshopLibraryRepository) listCandidatesByConflictIDs(ctx co
 	byConflict := make(map[int64][]*manman.WorkshopLibraryMigrationConflictCandidate)
 	for rows.Next() {
 		cand := &manman.WorkshopLibraryMigrationConflictCandidate{}
-		if err := rows.Scan(&cand.ConflictID, &cand.LibraryID, &cand.SGCID); err != nil {
+		if err := rows.Scan(&cand.ConflictID, &cand.LibraryID, &cand.SGCID, &cand.PresetID, &cand.VolumeID, &cand.InstallationPathOverride); err != nil {
 			return nil, err
 		}
 		byConflict[cand.ConflictID] = append(byConflict[cand.ConflictID], cand)
@@ -278,13 +278,18 @@ func (r *GameConfigWorkshopLibraryRepository) ResolveConflict(ctx context.Contex
 	// candidate_repr: one representative attachment row per distinct
 	// library_id among the conflict's candidates, sourced from that
 	// library_id's lowest sgc_id (a stable, deterministic pick among
-	// disagreeing override variants).
+	// disagreeing override variants). preset_id/volume_id/
+	// installation_path_override are read directly off
+	// workshop_library_migration_conflict_candidates -- denormalized there at
+	// conflict-detection time (migration 042) -- rather than joined from
+	// sgc_workshop_libraries, which may already be dropped (043, NFR1) by the
+	// time an unresolved conflict actually gets resolved (043's guard
+	// explicitly permits that).
 	_, err = tx.Exec(ctx, `
 		WITH candidate_repr AS (
 			SELECT DISTINCT ON (cc.library_id)
-				cc.library_id, swl.preset_id, swl.volume_id, swl.installation_path_override
+				cc.library_id, cc.preset_id, cc.volume_id, cc.installation_path_override
 			FROM workshop_library_migration_conflict_candidates cc
-			JOIN sgc_workshop_libraries swl ON swl.sgc_id = cc.sgc_id AND swl.library_id = cc.library_id
 			WHERE cc.conflict_id = $1
 			ORDER BY cc.library_id, cc.sgc_id
 		)
