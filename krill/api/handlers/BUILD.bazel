@@ -3,7 +3,10 @@
 this milestone passes through. product.go/featureset.go/feature.go/
 requirement.go/decision.go (issue #2490, FR1/FR2/FR4) are the entity
 create/attach endpoints; types.go is their shared request-decoding and
-error-mapping surface."""
+error-mapping surface. slice.go (issue #2491, FR5-FR9) is the read-only
+HTTP surface over //krill/slice's four scoped-slice granularities -- thin
+adapters only, no business logic; see slice.go's package doc comment.
+None of slice.go's routes carry the write-only session gate."""
 
 load("@rules_go//go:def.bzl", "go_library", "go_test")
 
@@ -17,11 +20,13 @@ go_library(
         "product.go",
         "requirement.go",
         "session.go",
+        "slice.go",
         "types.go",
     ],
     importpath = "github.com/whale-net/everything/krill/api/handlers",
     visibility = ["//visibility:public"],
     deps = [
+        "//krill/slice",
         "//krill/store",
         "@com_github_google_uuid//:uuid",
         "@com_github_jackc_pgx_v5//pgconn",
