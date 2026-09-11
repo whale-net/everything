@@ -33,9 +33,11 @@ template inference"), since M1 runs against exactly one repo/scope.
 |----------|-----------|---------|-------------|
 | `KRILL_API_ADDR` | api | `:8080` | Address `api`'s HTTP surface listens on. |
 
-`api` exposes `/healthz` only in this task -- a live database connectivity
-check, not a static 200 (`krill/api/main.go`'s doc comment). No spec
-endpoints exist yet.
+`api` exposes `/healthz` (a live database connectivity check, not a static
+200 -- `krill/api/main.go`'s doc comment), `POST /sessions/init` (FR3), and
+the M1 entity write endpoints (FR1/FR2/FR4, issue #2490) -- see
+`krill/README.md`'s Endpoints table. No new configuration was added for the
+write endpoints; they read the same `PG_DATABASE_URL` pool as `/healthz`.
 
 ## Telemetry
 

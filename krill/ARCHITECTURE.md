@@ -14,8 +14,8 @@ that drives what gets built next.
         ▲
         │
    ┌────┴────┐
-   │   api   │  external-api: /healthz (live DB ping) only, no spec endpoints
-   └─────────┘
+   │   api   │  external-api: /healthz, /sessions/init, and the M1 entity
+   └─────────┘  write API (issue #2490 — create/attach only, no reads yet)
 ```
 
 `migrate` and `api` each get their own Postgres connection
@@ -27,9 +27,9 @@ and `api` today.
 
 `krill/store` (issue #2488) is the pgx-based repository over migration
 002's spec tables — a library, not a binary, so it does not appear in the
-component map above. `api` does not import it yet: this task is store
-layer only, per its own scope ("no HTTP surface — that is a separate
-task"). Nothing in `krill/api/routes.go` changes here.
+component map above. `api` imports it as of issue #2490
+(`krill/api/routes.go`'s `store.New(pool)`), behind the entity create/
+attach handlers described in "`init` and the write gate" below.
 
 ## The spec entity model (LB2/LB3, issue #2488)
 
@@ -244,23 +244,28 @@ resolves that session's two subjects and scope onto the request context
 (`SessionFromContext`) for the wrapped handler to read. It rejects with
 401 on a missing header, a malformed id, or an id `GetSession` cannot
 find. `RequireSession` covers exactly six endpoints across this
-milestone — entity creates (FR1, FR2, issue #2490), LB attach (FR4, issue
-#2490), amend (FR12, issue #2493), import (FR16, issue #2492), and
-pointer-issue create (FR20, issue #2496) — and no read path, including
-FR21's live C3 query: none of those handlers exist yet, so no route in
-this task's `routes.go` is actually wrapped with it yet.
+milestone — entity creates (FR1, FR2), LB attach (FR4), amend (FR12,
+issue #2493), import (FR16, issue #2492), and pointer-issue create (FR20,
+issue #2496) — and no read path, including FR21's live C3 query. The
+entity creates and LB attach are wired in `routes.go` as of issue #2490
+(`api/handlers/product.go`, `featureset.go`, `feature.go`,
+`requirement.go`, `decision.go`); amend/import/pointer-issue-create remain
+unwired until their own tasks land.
 
 ## Open items
 
-- No HTTP surface over the spec entity model yet — `krill/store`'s
-  Product/FeatureSet/Feature/FR/NFR/LoadBearingDecision/Persona/NonGoal
-  entities are store-layer only (issue #2488); the entity write API is a
-  separate task (#2490).
+- The HTTP surface over the spec entity model covers create/attach only
+  (issue #2490: `POST /products`, `/feature-sets`, `/features`,
+  `/requirements`, `/load-bearing-decisions`, each behind
+  `RequireSession`) — no read path yet (FR5-FR9, FR11, FR21) and no
+  surface at all yet for Persona/NonGoal (`krill/store`'s `PersonaStore`/
+  `NonGoalStore` are store-layer only, issue #2488).
 - No supersession/amend write path yet — `krill/store` ships `Create` and
   current-value reads only (see "The spec entity model" above).
 - `init` (FR3, #2489) and the write-only gate (`api/handlers/session.go`,
-  `api/handlers/gate.go`) are wired up, but no write route uses the gate
-  yet — none of #2490/#2492/#2493/#2496 exist yet to wrap.
+  `api/handlers/gate.go`) cover entity creates and LB attach as of #2490;
+  amend (#2493), import (#2492), and pointer-issue create (#2496) remain
+  unwired until their own tasks land.
 - No MCP surface yet — `krill/plugin/` is a placeholder only.
 - No auth wired up on `api` — `POST /sessions/init` and every future write
   endpoint on this binary trust caller-asserted identity (see "`init` and

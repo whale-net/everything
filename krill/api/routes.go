@@ -11,14 +11,24 @@ import (
 )
 
 // setupRoutes registers krill's HTTP surface. /healthz and `init` (FR3,
-// issue #2489) are the only routes as of this task -- no spec entity write
-// endpoints exist yet (those land in #2490/#2492/#2493/#2496, each of
-// which wraps its handler with handlers.RequireSession).
+// issue #2489) are ungated; every entity create/attach endpoint below
+// (issue #2490, FR1/FR2/FR4) is wrapped with handlers.RequireSession
+// (gate.go) -- no write path is reachable without a session minted by
+// `init`. Amend (FR12), import (FR16), and pointer-issue create (FR20) are
+// later tasks' routes, not added here.
 func setupRoutes(mux *http.ServeMux, pool *pgxpool.Pool) {
 	sessions := store.NewSessionStore(pool)
+	entities := store.New(pool)
+	gate := handlers.RequireSession(sessions)
 
 	mux.HandleFunc("/healthz", handleHealthz(pool))
 	mux.HandleFunc("POST /sessions/init", handlers.InitSessionHandler(sessions))
+
+	mux.Handle("POST /products", gate(handlers.CreateProductHandler(entities.Products())))
+	mux.Handle("POST /feature-sets", gate(handlers.CreateFeatureSetHandler(entities.FeatureSets())))
+	mux.Handle("POST /features", gate(handlers.CreateFeatureHandler(entities.Features())))
+	mux.Handle("POST /requirements", gate(handlers.CreateRequirementHandler(entities.Requirements())))
+	mux.Handle("POST /load-bearing-decisions", gate(handlers.AttachLoadBearingDecisionHandler(entities.Decisions())))
 }
 
 // handleHealthz reports ok only if a live Postgres ping succeeds -- a
