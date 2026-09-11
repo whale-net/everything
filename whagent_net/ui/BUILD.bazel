@@ -17,6 +17,7 @@ go_library(
         "grpc_client.go",
         "handlers_consent.go",
         "handlers_grants.go",
+        "handlers_grants_admin.go",
         "handlers_session.go",
         "handlers_session_lifecycle.go",
         "handlers_session_live.go",
@@ -103,6 +104,12 @@ go_binary(
 # /grants/revoke -- the Implementation phase's Testing section (FR16/
 # FR17/NFR4/NFR7) replaces these with the full scoped-listing/live-status/
 # revoke-scoping/audit-log coverage the issue describes.
+#
+# handlers_grants_admin_test.go (issue #2433's Scaffold section) added:
+# route-reachability/render sanity checks for GET /admin/grants and POST
+# /admin/grants/revoke -- the Implementation phase's Testing section
+# (FR14/FR15/NFR3/NFR4/NFR7) replaces these with the full admin-gate/
+# live-status/revoke-scoping/audit-log coverage the issue describes.
 go_test(
     name = "ui_test",
     size = "small",
@@ -112,6 +119,7 @@ go_test(
         "handlers_consent_test.go",
         "handlers_consent_unauth_test.go",
         "handlers_grants_test.go",
+        "handlers_grants_admin_test.go",
         "handlers_session_lifecycle_test.go",
         "handlers_session_live_test.go",
         "handlers_session_test.go",
@@ -136,6 +144,7 @@ go_test(
         "//whagent_net/ui/components",
         "@com_github_go_jose_go_jose_v4//:go-jose",
         "@com_github_google_uuid//:uuid",
+        "@com_github_gorilla_sessions//:sessions",
         "@com_github_jackc_pgx_v5//pgxpool",
         "@com_github_stretchr_testify//assert",
         "@com_github_stretchr_testify//require",

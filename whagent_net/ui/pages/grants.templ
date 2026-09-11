@@ -27,6 +27,17 @@ type GrantRow struct {
 	Domain        string
 	Status        string
 	GrantedAt     time.Time
+
+	// SubjectSub identifies the operator this row belongs to (the
+	// grantindex.Entry.SubjectSub the row was built from, ../
+	// handlers_grants_admin.go's buildAdminGrantRows). Only the admin
+	// page (issue #2433) needs this -- an admin revoke targets a
+	// *different* operator than the caller, so grantsTable's revoke form
+	// must be able to name one. Left empty by the self-service page
+	// (../handlers_grants.go's buildGrantRows): its revoke form never
+	// needs a subject at all, since the subject there is always the
+	// signed-in caller (FR16/FR17).
+	SubjectSub string
 }
 
 // Raw grpcauth.GrantStatus string values GrantRow.Status carries, plus
@@ -63,14 +74,22 @@ type GrantsData struct {
 }
 
 // grantsTable renders rows -- and only rows -- per FR13's shared-render-
-// shape requirement (see this file's package doc comment). Each
+// shape requirement (see this file's package doc comment), against
+// revokeAction (the self-service page's "/grants/revoke" or the admin
+// page's "/admin/grants/revoke", ../pages/grants_admin.templ). Each
 // not-yet-revoked row gets its own inline revoke control, reusing
 // libs/go/htmxui.Confirm for the confirmation step (FR17's "do not add a
-// new confirm component here") wrapped in a per-row <form> posting only
-// that row's domain -- never a subject, per ../handlers_grants.go's
-// handleGrantsRevoke doc comment. An already-revoked row shows no revoke
-// control at all (there is nothing left to revoke).
-templ grantsTable(rows []GrantRow) {
+// new confirm component here") wrapped in a per-row <form> posting that
+// row's domain -- plus, when the row carries one (row.SubjectSub, the
+// admin page's case), the row's own subject_sub, since an admin revoke
+// must name a target operator that is never the caller's own session
+// subject (../handlers_grants_admin.go's handleGrantsAdminRevoke). The
+// self-service page's rows never set SubjectSub, so its form never
+// includes one -- the subject there is always the signed-in caller
+// (FR16/FR17, ../handlers_grants.go's handleGrantsRevoke doc comment). An
+// already-revoked row shows no revoke control at all (there is nothing
+// left to revoke).
+templ grantsTable(rows []GrantRow, revokeAction string) {
 	if len(rows) == 0 {
 		<p class="opacity-70">You have not granted access to any domain yet.</p>
 	} else {
@@ -91,8 +110,11 @@ templ grantsTable(rows []GrantRow) {
 						<td>{ statusLabel(row.Status) }</td>
 						<td>
 							if row.Status != statusRevoked {
-								<form method="post" action="/grants/revoke">
+								<form method="post" action={ templ.URL(revokeAction) }>
 									<input type="hidden" name="domain" value={ row.Domain }/>
+									if row.SubjectSub != "" {
+										<input type="hidden" name="subject_sub" value={ row.SubjectSub }/>
+									}
 									@htmxui.Confirm(htmxui.ConfirmProps{
 										Intent:      htmxui.ConfirmDestructive,
 										Summary:     "Revoking " + row.Domain + " takes effect immediately -- you will need to consent again to use it.",
@@ -118,6 +140,6 @@ templ Grants(data GrantsData) {
 		if data.Error != "" {
 			<div role="alert" class="alert alert-error mb-4">{ data.Error }</div>
 		}
-		@grantsTable(data.Rows)
+		@grantsTable(data.Rows, "/grants/revoke")
 	}
 }

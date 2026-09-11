@@ -127,6 +127,18 @@ type config struct {
 	GrantRedirectURI   string
 	GrantEncryptionKey string
 
+	// GrantAdminRole is the Keycloak realm role name that gates
+	// FR14/FR15's admin all-operators grant list and revoke page (issue
+	// #2433). Checked fresh on every request against
+	// app.auth.GetAccessToken(r)'s roles (NFR3) -- never
+	// htmxauth.GetUser(ctx).Roles, which caches at sign-in for the full
+	// 24h session TTL (see handlers_grants_admin.go's package doc
+	// comment). Realm-side creation/assignment of this role is
+	// deployment/runbook work, not coded here (out of scope on #2421).
+	// Left empty, the admin page 403s for everyone -- there is no
+	// "everyone is admin" default.
+	GrantAdminRole string
+
 	// DefaultDomain (WHAGENT_UI_DEFAULT_DOMAIN) is the one
 	// AgentDefinition.Domain (issue #2424's FR1) authorizeConsentGate
 	// (handlers_consent.go, issue #2428) requires the operator have an
@@ -159,6 +171,7 @@ func loadConfig() config {
 		GrantClientSecret:  getEnv("WHAGENT_GRANT_CLIENT_SECRET", ""),
 		GrantRedirectURI:   getEnv("WHAGENT_GRANT_REDIRECT_URI", ""),
 		GrantEncryptionKey: getEnv("WHAGENT_GRANT_ENCRYPTION_KEY", ""),
+		GrantAdminRole:     getEnv("WHAGENT_GRANT_ADMIN_ROLE", ""),
 		DefaultDomain:      getEnv("WHAGENT_UI_DEFAULT_DOMAIN", ""),
 	}
 }
@@ -208,6 +221,12 @@ type App struct {
 	// authorizeConsentGate's degrade-to-no-op path for an unconfigured
 	// deployment.
 	grant delegatedgrant.Components
+
+	// adminRole is cfg.GrantAdminRole verbatim -- the realm role name
+	// handleGrantsAdmin/handleGrantsAdminRevoke's fresh-role gate checks
+	// for (FR15/NFR3, issue #2433). Empty means the admin page is
+	// unreachable to everyone, not "everyone is admin".
+	adminRole string
 
 	// defaultDomain is cfg.DefaultDomain verbatim -- the one domain
 	// authorizeConsentGate (handlers_consent.go, issue #2428) gates
@@ -294,6 +313,7 @@ func NewApp(ctx context.Context, cfg config) (*App, error) {
 		session:       sessionClient,
 		oidcIssuer:    cfg.OIDCIssuer,
 		sseHub:        initializeSSEHub(cfg),
+		adminRole:     cfg.GrantAdminRole,
 		defaultDomain: cfg.DefaultDomain,
 		consentStore:  newConsentStore(cfg.SessionSecret),
 	}
@@ -526,6 +546,16 @@ func (app *App) setupRoutes(mux *http.ServeMux) {
 	// forwarded token is needed here.
 	mux.HandleFunc("GET /grants", app.auth.RequireAuthFunc(app.handleGrants))
 	mux.HandleFunc("POST /grants/revoke", app.auth.RequireAuthFunc(app.handleGrantsRevoke))
+
+	// Admin all-operators grant list and revoke page (FR14/FR15/NFR3, issue
+	// #2433): app.grant.Store/Index is intentionally NOT threaded through
+	// WithAccessToken here either -- neither handler calls `api`. The
+	// admin-role gate itself (Implementation phase) still needs a freshly
+	// refreshed access token, read via app.auth.GetAccessToken(r) directly
+	// inside the handler -- never htmxauth.GetUser(ctx)'s cached Roles, see
+	// handlers_grants_admin.go's package doc comment (NFR3).
+	mux.HandleFunc("GET /admin/grants", app.auth.RequireAuthFunc(app.handleGrantsAdmin))
+	mux.HandleFunc("POST /admin/grants/revoke", app.auth.RequireAuthFunc(app.handleGrantsAdminRevoke))
 }
 
 func handleHealthz(w http.ResponseWriter, r *http.Request) {
