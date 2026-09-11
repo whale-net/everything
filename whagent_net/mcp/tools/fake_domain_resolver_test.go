@@ -30,10 +30,18 @@ var errFakeDomainNotFound = fmt.Errorf("fakeDomainResolver: not found")
 
 // fakeDomainResolver implements this package's own DomainResolver
 // interface (domain.go) against two plain maps, keyed by agent id and
-// session id respectively.
+// session id respectively. agentCalls/sessionCalls record, in order,
+// every id each method was actually invoked with -- issue #2430's Testing
+// section requires proving DomainForAgent is never called for the
+// session-keyed tools (send_turn/stop_session/get_session/
+// read_transcript), which a plain lookup-miss alone can't distinguish
+// from "called but not found".
 type fakeDomainResolver struct {
 	agentDomains   map[string]string
 	sessionDomains map[string]string
+
+	agentCalls   []string
+	sessionCalls []string
 }
 
 var _ DomainResolver = (*fakeDomainResolver)(nil)
@@ -46,6 +54,7 @@ func newFakeDomainResolver() *fakeDomainResolver {
 }
 
 func (f *fakeDomainResolver) DomainForAgent(_ context.Context, agentID string) (string, error) {
+	f.agentCalls = append(f.agentCalls, agentID)
 	domain, ok := f.agentDomains[agentID]
 	if !ok {
 		return "", fmt.Errorf("%w: agent id %q", errFakeDomainNotFound, agentID)
@@ -54,6 +63,7 @@ func (f *fakeDomainResolver) DomainForAgent(_ context.Context, agentID string) (
 }
 
 func (f *fakeDomainResolver) DomainForSession(_ context.Context, sessionID string) (string, error) {
+	f.sessionCalls = append(f.sessionCalls, sessionID)
 	domain, ok := f.sessionDomains[sessionID]
 	if !ok {
 		return "", fmt.Errorf("%w: session id %q", errFakeDomainNotFound, sessionID)
