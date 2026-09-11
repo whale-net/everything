@@ -1,0 +1,44 @@
+-- FR11/NFR8 (issue #2434, plan #2421): the cutover. This is the last
+-- behavior-changing migration in the plan -- it must land after #2428
+-- (consent flow), #2430 (dispatch-time grant acquisition, impersonation
+-- token exchange removed), and #2431 (mid-call reauth) are already on
+-- trunk, so every operator has a working re-consent path the moment their
+-- existing opaque mcpauth credential stops working.
+--
+-- Implementation-phase decision on mcp_oauth_client (issue #2434's Scope
+-- bullet 1): #2428's design review (see its comment thread,
+-- https://github.com/whale-net/everything/issues/2428) never revisited
+-- this question -- it resolved a different open question (domain does not
+-- ride RFC 8707 resource/OAuth scope) and never proposed touching client
+-- registrations. Per this issue's own conservative default, mcp_oauth_client
+-- is LEFT UNTOUCHED: rows there are RFC 7591 dynamic client registrations
+-- (which MCP client software minted itself, once, to identify itself to
+-- this authorization server), not credentials that carry any operator's
+-- impersonation-backed authority. Deleting them would force every MCP
+-- client (not every operator) to re-register before it could even reach
+-- the consent screen this cutover routes operators to -- churn with no
+-- FR11 benefit, since a client registration alone grants no access to
+-- anything.
+--
+-- mcp_credential and mcp_auth_code, by contrast, are exactly the rows
+-- FR11 targets: every one was minted (mcp_credential) or is a pending,
+-- not-yet-exchanged step toward minting (mcp_auth_code) through the
+-- pre-cutover opaque mcpauth path this plan replaces with delegated-grant
+-- consent (#2428/#2430). Deleting them, unconditionally, is the cutover.
+--
+-- DELETE, not an UPDATE setting revoked_at: mcp_credential already has a
+-- revoked_at column (migration 004) for the ordinary one-at-a-time
+-- revocation path, but a soft-delete here would leave rows behind that
+-- could be mistaken for a coexistence/grace-period design -- exactly what
+-- NFR8 forbids. The rows are gone, not merely marked.
+DELETE FROM mcp_credential;
+
+-- Any authorization code issued before cutover but not yet exchanged for
+-- a credential (POST /token never called, or called after this
+-- migration runs) must not be allowed to complete after cutover -- an
+-- in-flight pre-cutover authorization completing post-cutover would mint
+-- exactly the credential this migration is deleting the rest of.
+DELETE FROM mcp_auth_code;
+
+-- No feature flag, environment toggle, or coexistence gating (NFR8) --
+-- both statements above are unconditional.
