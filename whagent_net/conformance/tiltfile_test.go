@@ -99,94 +99,16 @@ func TestTiltfile_APIWorkerUIShareRabbitMQURL(t *testing.T) {
 	}
 }
 
-// TestTiltfile_MCPOAuthEnvGatedBehindFlag is a regression test for issue
-// #2342 (FR9): whagent-net-mcp's PG_DATABASE_URL and the three
-// WHAGENT_MCP_KEYCLOAK_* vars must only be wired when
-// ENABLE_WHAGENT_NET_MCP_OAUTH is truthy, never unconditionally in the
-// static deployment blob. main.go's initializeAuthDeps (formerly
-// initializeTokenExchange) historically treated "DB reachable +
-// mcp_credential table present + token-exchange config incomplete" as a
-// fatal NFR8 fail-loud error by design -- setting
-// PG_DATABASE_URL unconditionally while leaving the Keycloak vars unset
-// (the prior Tiltfile default) crash-loops every fresh mcp pod once the
-// 004_mcpauth_credential migration is applied (validation finding #2338,
-// part (b)).
-func TestTiltfile_MCPOAuthEnvGatedBehindFlag(t *testing.T) {
-	tf := mustReadFile(t, "Tiltfile")
-
-	// The gate must be evaluated exactly once, defaulting to disabled --
-	// if this default ever flips to 'true' (or the gate is removed), mcp
-	// goes back to crash-looping by default.
-	gateRe := regexp.MustCompile(
-		`(?m)^if get_env_bool\('ENABLE_WHAGENT_NET_MCP_OAUTH', default='false'\):$`)
-	gates := gateRe.FindAllString(tf, -1)
-	if len(gates) != 1 {
-		t.Fatalf("expected exactly 1 top-level `if get_env_bool('ENABLE_WHAGENT_NET_MCP_OAUTH', "+
-			"default='false'):` guard in the Tiltfile, found %d", len(gates))
-	}
-
-	// Everything the gate populates (mcp_oauth_env_lines) must appear
-	// between the gate and the next top-level statement -- if one of the
-	// gated vars leaks outside the gated block, this capture won't
-	// contain it and the presence check below will catch it.
-	gateBlockRe := regexp.MustCompile(
-		`(?ms)^if get_env_bool\('ENABLE_WHAGENT_NET_MCP_OAUTH', default='false'\):\n(.*?)\n(?:^\S|\z)`)
-	m := gateBlockRe.FindStringSubmatch(tf)
-	if m == nil {
-		t.Fatal("could not extract the ENABLE_WHAGENT_NET_MCP_OAUTH gate's body -- check the regex " +
-			"against the Tiltfile's current structure")
-	}
-	gatedBody := m[1]
-
-	gatedNames := []string{
-		"PG_DATABASE_URL",
-		"WHAGENT_MCP_KEYCLOAK_CLIENT_ID",
-		"WHAGENT_MCP_KEYCLOAK_CLIENT_SECRET",
-		"WHAGENT_MCP_KEYCLOAK_TOKEN_URL",
-	}
-	for _, name := range gatedNames {
-		wantLine := "name: " + name
-		if !strings.Contains(gatedBody, wantLine) {
-			t.Errorf("ENABLE_WHAGENT_NET_MCP_OAUTH gate body does not set %q -- "+
-				"expected a `- name: %s` line inside the gated block", name, name)
-		}
-	}
-
-	// The mcp deployment's k8s_yaml(blob(...).format(...)) block must
-	// consume the gate's output via the {mcp_oauth_env} placeholder, fed
-	// from the same mcp_oauth_env binding -- not a hardcoded value. Note
-	// this block is matched from the raw, unevaluated Tiltfile source, so
-	// {mcp_oauth_env} still appears as a literal placeholder here (unlike
-	// PG_DATABASE_URL, this name is unique to mcp: api/worker/ui set it
-	// too, so a whole-file occurrence count would false-positive on their
-	// unrelated, legitimate uses).
-	blockRe := regexp.MustCompile(`(?s)k8s_yaml\(blob\(""".*?"""\.format\(.*?\)\)\)`)
-	blocks := blockRe.FindAllString(tf, -1)
-	var mcpBlock string
-	for _, b := range blocks {
-		if strings.Contains(b, "app: whagent-net-mcp\n") {
-			mcpBlock = b
-			break
-		}
-	}
-	if mcpBlock == "" {
-		t.Fatal("did not find whagent-net-mcp's k8s_yaml(blob(...).format(...)) deployment block")
-	}
-	for _, name := range gatedNames {
-		wantLine := "name: " + name
-		if strings.Contains(mcpBlock, wantLine) {
-			t.Errorf("whagent-net-mcp's static deployment blob hardcodes `- name: %s` directly -- "+
-				"it must only be set via the ENABLE_WHAGENT_NET_MCP_OAUTH gate's {mcp_oauth_env} "+
-				"placeholder, never unconditionally (that combination fatally crash-loops mcp per "+
-				"NFR8, issue #2342)", name)
-		}
-	}
-	if !strings.Contains(mcpBlock, "{mcp_oauth_env}") {
-		t.Error("whagent-net-mcp's deployment block does not reference the {mcp_oauth_env} placeholder -- " +
-			"PG_DATABASE_URL/Keycloak vars must be injected via the opt-in gate, not hardcoded")
-	}
-	if !strings.Contains(mcpBlock, "mcp_oauth_env=mcp_oauth_env") {
-		t.Error("whagent-net-mcp's deployment block's .format(...) call does not pass " +
-			"mcp_oauth_env=mcp_oauth_env -- the {mcp_oauth_env} placeholder must be fed from the gate's output")
-	}
-}
+// TestTiltfile_MCPOAuthEnvGatedBehindFlag (issue #2342/FR9) used to prove
+// whagent-net-mcp's PG_DATABASE_URL and the three WHAGENT_MCP_KEYCLOAK_*
+// vars were only wired behind an ENABLE_WHAGENT_NET_MCP_OAUTH flag, since
+// the RFC 8693 impersonation-exchange path they configured
+// (main.go's then initializeTokenExchange) fatally crash-looped mcp on a
+// partial config. Issue #2430 (FR19, plan #2421) deleted that exchange
+// path -- server/tokenexchange.go, WHAGENT_MCP_KEYCLOAK_*, and the gate
+// itself -- entirely, not left dormant: current initializeAuthDeps never
+// treats any combination of its inputs as fatal in this way, so there is
+// nothing left for a regression test to protect here. See
+// whagent_net/ENV.md's "`mcp` server" section and ARCHITECTURE.md's
+// "Identity and auth chaining" for the delegated-grant path that replaced
+// it.
