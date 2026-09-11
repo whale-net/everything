@@ -482,6 +482,16 @@ func (app *App) setupRoutes(mux *http.ServeMux) {
 	// forwarded token is needed here.
 	mux.HandleFunc("GET /grants", app.auth.RequireAuthFunc(app.handleGrants))
 	mux.HandleFunc("POST /grants/revoke", app.auth.RequireAuthFunc(app.handleGrantsRevoke))
+
+	// Admin all-operators grant list and revoke page (FR14/FR15/NFR3, issue
+	// #2433): app.grant.Store/Index is intentionally NOT threaded through
+	// WithAccessToken here either -- neither handler calls `api`. The
+	// admin-role gate itself (Implementation phase) still needs a freshly
+	// refreshed access token, read via app.auth.GetAccessToken(r) directly
+	// inside the handler -- never htmxauth.GetUser(ctx)'s cached Roles, see
+	// handlers_grants_admin.go's package doc comment (NFR3).
+	mux.HandleFunc("GET /admin/grants", app.auth.RequireAuthFunc(app.handleGrantsAdmin))
+	mux.HandleFunc("POST /admin/grants/revoke", app.auth.RequireAuthFunc(app.handleGrantsAdminRevoke))
 }
 
 func handleHealthz(w http.ResponseWriter, r *http.Request) {
