@@ -1,0 +1,13 @@
+"""whagent-net's split-out PRODUCT.md sections (Current state, Capability
+map, Roadmap) -- see ../PRODUCT.md's index table. Exposed as a filegroup,
+mirroring ../BUILD.bazel's own `docs` filegroup for the top-level `*.md`
+set, so a consumer outside this domain (krill/importer's parser fixture,
+issue #2492's Testing section) can depend on these files as Bazel `data`
+without a hand-copied fixture.
+"""
+
+filegroup(
+    name = "docs",
+    srcs = glob(["*.md"]),
+    visibility = ["//visibility:public"],
+)

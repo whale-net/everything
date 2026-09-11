@@ -69,7 +69,7 @@ func (s milestoneStore) GetOrCreateRef(ctx context.Context, scopeID, productID u
 	}
 	defer tx.Rollback(ctx)
 
-	exists, err := currentRowExists(ctx, tx, "product", productID)
+	exists, err := currentRowExists(ctx, tx, "product", productID, scopeID)
 	if err != nil {
 		return MilestoneRef{}, err
 	}

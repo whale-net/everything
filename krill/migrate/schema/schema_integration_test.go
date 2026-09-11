@@ -21,6 +21,7 @@ import (
 	"sort"
 	"testing"
 
+	"github.com/google/uuid"
 	_ "github.com/jackc/pgx/v5/stdlib"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -113,13 +114,15 @@ var specTables = []string{"product", "feature_set", "feature", "requirement", "l
 
 // TestMigrations_UpDownUp_LeavesCleanDatabaseAndIsRerunnable proves the
 // whole migration set's lifecycle through the latest migration currently
-// embedded (003_session, issue #2489): Up() creates every table including
-// `krill_session`, Down() drops all of them (a clean database), and Up()
-// again succeeds a second time from that clean state -- the migration set
-// is re-runnable through //libs/go/migrate, not a one-shot script. The
-// hardcoded latest-version assertion below must be bumped whenever a new
-// migration lands (it was 1 for 001_scope alone, issue #2487; it is 3 now
-// that 002_spec_entities and 003_session, issue #2489, have both landed).
+// embedded (004_milestone_assoc, issue #2492): Up() creates every table
+// including `krill_session`, `milestone_ref`, and `entity_milestone`,
+// Down() drops all of them (a clean database), and Up() again succeeds a
+// second time from that clean state -- the migration set is re-runnable
+// through //libs/go/migrate, not a one-shot script. The hardcoded
+// latest-version assertion below must be bumped whenever a new migration
+// lands (it was 1 for 001_scope alone, issue #2487; it is 4 now that
+// 002_spec_entities, 003_session, and 004_milestone_assoc, issue #2492,
+// have all landed).
 func TestMigrations_UpDownUp_LeavesCleanDatabaseAndIsRerunnable(t *testing.T) {
 	ctx := context.Background()
 	db := dbtest.NewPostgres(ctx, t, dbtest.Options{})
@@ -132,24 +135,28 @@ func TestMigrations_UpDownUp_LeavesCleanDatabaseAndIsRerunnable(t *testing.T) {
 
 	latest, err := runner.LatestVersion()
 	require.NoError(t, err)
-	require.Equal(t, uint(3), latest, "expected the latest migration source version to be 3 (001_scope, 002_spec_entities, 003_session) -- update this test if a later migration has since landed")
+	require.Equal(t, uint(4), latest, "expected the latest migration source version to be 4 (001_scope, 002_spec_entities, 003_session, 004_milestone_assoc) -- update this test if a later migration has since landed")
 
-	// -- Up: scope and krill_session must exist, version must land clean at the latest --
-	require.NoError(t, runner.Up(), "apply migrations 001-003")
+	// -- Up: scope, krill_session, and the milestone tables must exist, version must land clean at the latest --
+	require.NoError(t, runner.Up(), "apply migrations 001-004")
 
 	version, dirty, err := runner.Version()
 	require.NoError(t, err)
 	assert.False(t, dirty)
-	assert.Equal(t, uint(3), version)
+	assert.Equal(t, uint(4), version)
 
 	assert.True(t, tableExists(t, ctx, db, "scope"), "expected table \"scope\" to exist after Up()")
 	assert.True(t, tableExists(t, ctx, db, "krill_session"), "expected table \"krill_session\" to exist after Up() (003_session, issue #2489)")
+	assert.True(t, tableExists(t, ctx, db, "milestone_ref"), "expected table \"milestone_ref\" to exist after Up() (004_milestone_assoc, issue #2492)")
+	assert.True(t, tableExists(t, ctx, db, "entity_milestone"), "expected table \"entity_milestone\" to exist after Up() (004_milestone_assoc, issue #2492)")
 
 	// -- Down: every table must be gone -------------------------------------
 	require.NoError(t, runner.Down(), "roll back every migration")
 
 	assert.False(t, tableExists(t, ctx, db, "scope"), "expected table \"scope\" to be dropped after Down() -- a clean database")
 	assert.False(t, tableExists(t, ctx, db, "krill_session"), "expected table \"krill_session\" to be dropped after Down() -- a clean database")
+	assert.False(t, tableExists(t, ctx, db, "milestone_ref"), "expected table \"milestone_ref\" to be dropped after Down() -- a clean database")
+	assert.False(t, tableExists(t, ctx, db, "entity_milestone"), "expected table \"entity_milestone\" to be dropped after Down() -- a clean database")
 
 	// -- Up again: re-runnable from the clean state --------------------------
 	require.NoError(t, runner.Up(), "re-apply every migration after Down() -- must be re-runnable")
@@ -157,10 +164,12 @@ func TestMigrations_UpDownUp_LeavesCleanDatabaseAndIsRerunnable(t *testing.T) {
 	version, dirty, err = runner.Version()
 	require.NoError(t, err)
 	assert.False(t, dirty)
-	assert.Equal(t, uint(3), version)
+	assert.Equal(t, uint(4), version)
 
 	assert.True(t, tableExists(t, ctx, db, "scope"), "expected table \"scope\" to exist again after the second Up()")
 	assert.True(t, tableExists(t, ctx, db, "krill_session"), "expected table \"krill_session\" to exist again after the second Up()")
+	assert.True(t, tableExists(t, ctx, db, "milestone_ref"), "expected table \"milestone_ref\" to exist again after the second Up()")
+	assert.True(t, tableExists(t, ctx, db, "entity_milestone"), "expected table \"entity_milestone\" to exist again after the second Up()")
 }
 
 // TestMigration001_SchemaContract asserts the specific column shapes and
@@ -427,9 +436,9 @@ func TestMigration002_NoDisplayNumberColumnsOrJoinTables(t *testing.T) {
 	require.NoError(t, rows.Err())
 	rows.Close()
 
-	expected := append([]string{"schema_migrations", "scope", "krill_session"}, specTables...)
+	expected := append([]string{"schema_migrations", "scope", "krill_session", "milestone_ref", "entity_milestone"}, specTables...)
 	sort.Strings(expected)
-	assert.Equal(t, expected, tables, "the public schema must contain exactly scope + the seven spec tables + krill_session (003_session, issue #2489) + golang-migrate's schema_migrations -- no fourth parallel table (e.g. \"capability\") and no join/bridge table for parentage (LB2)")
+	assert.Equal(t, expected, tables, "the public schema must contain exactly scope + the seven spec tables + krill_session (003_session, issue #2489) + milestone_ref + entity_milestone (004_milestone_assoc, issue #2492) + golang-migrate's schema_migrations -- no fourth parallel table (e.g. \"capability\") and no join/bridge table for parentage (LB2)")
 
 	// No display-number-shaped column on any spec table -- LB2's own
 	// vocabulary for the trap this guards against.
@@ -488,4 +497,104 @@ func TestMigration003_SchemaContract(t *testing.T) {
 		)
 	`)
 	assert.Error(t, err, "krill_session.scope_id must be FK-enforced against scope(id)")
+}
+
+// TestMigration004_SchemaContract guards LB6's own stated trap (migration
+// 004_milestone_assoc.up.sql's "LB6 -- an association, never a second
+// parent" comment, issue #2492): `milestone_ref` must carry no status
+// column and no milepebble breakdown or other authoring field -- those are
+// M3's (C13, C28) -- and no spec entity table (`feature`, `requirement`,
+// `load_bearing_decision`) may have acquired a `milestone_id` column. It
+// also asserts the shape the importer and MilestoneStore depend on:
+// scope_id NOT NULL on both new tables (LB1), the milestone_ref
+// (scope_id, product_id, name) uniqueness that makes GetOrCreateRef
+// idempotent, the entity_milestone (entity_id, milestone_id) uniqueness
+// that makes AddAssociation idempotent, and milestone_id's real FK to
+// milestone_ref(id).
+func TestMigration004_SchemaContract(t *testing.T) {
+	ctx := context.Background()
+	db := dbtest.NewPostgres(ctx, t, dbtest.Options{})
+
+	sqlDB, err := sql.Open("pgx", db.ConnString)
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = sqlDB.Close() })
+
+	runner := migrate.NewRunner(sqlDB, schema.Migrations, schema.Dir)
+	require.NoError(t, runner.Up())
+
+	// -- LB6's trap: no status/milepebble/authoring surface on milestone_ref --
+	milestoneRefCols := columnNames(t, ctx, db, "milestone_ref")
+	for _, forbidden := range []string{"status", "milepebble", "milepebble_id", "state", "author", "authored_by", "authored_at"} {
+		assert.NotContains(t, milestoneRefCols, forbidden,
+			"milestone_ref must not carry a %q column -- status/milepebbles/authoring fields are M3's (C13, C28), not M1's (LB6's own note)", forbidden)
+	}
+	assert.ElementsMatch(t, []string{"id", "scope_id", "product_id", "name", "created_at"}, milestoneRefCols,
+		"milestone_ref must be exactly the bare reference shape LB6 specifies -- no more, no less")
+
+	// -- LB6's trap, other direction: no spec entity table may have grown a milestone_id column --
+	for _, table := range []string{"feature", "requirement", "load_bearing_decision"} {
+		assert.NotContains(t, columnNames(t, ctx, db, table), "milestone_id",
+			"%s must never carry a milestone_id column -- the delivery axis is the entity_milestone association table, never a second parent column on a spec entity (LB6)", table)
+	}
+
+	nullableColumn := func(t *testing.T, ctx context.Context, db *dbtest.Postgres, table, column string) (dataType, nullable string) {
+		t.Helper()
+		require.NoError(t, db.Pool.QueryRow(ctx, `
+			SELECT data_type, is_nullable FROM information_schema.columns
+			WHERE table_name = $1 AND column_name = $2
+		`, table, column).Scan(&dataType, &nullable))
+		return dataType, nullable
+	}
+
+	for _, table := range []string{"milestone_ref", "entity_milestone"} {
+		_, nullable := nullableColumn(t, ctx, db, table, "scope_id")
+		assert.Equal(t, "NO", nullable, "%s.scope_id must be NOT NULL (LB1)", table)
+	}
+
+	// -- milestone_ref(scope_id, product_id, name) uniqueness: GetOrCreateRef's idempotency key --
+	var productID uuid.UUID
+	require.NoError(t, db.Pool.QueryRow(ctx, `
+		INSERT INTO scope (repo_full_name, default_branch) VALUES ('dup/dup-004', 'main') RETURNING id
+	`).Scan(&productID)) // reuse productID var for scopeID first, reassigned below
+	scopeID := productID
+	require.NoError(t, db.Pool.QueryRow(ctx, `
+		INSERT INTO product (scope_id, name, vision) VALUES ($1, 'p', 'v') RETURNING id
+	`, scopeID).Scan(&productID))
+
+	_, err = db.Pool.Exec(ctx, `
+		INSERT INTO milestone_ref (scope_id, product_id, name) VALUES ($1, $2, 'M1')
+	`, scopeID, productID)
+	require.NoError(t, err)
+	_, err = db.Pool.Exec(ctx, `
+		INSERT INTO milestone_ref (scope_id, product_id, name) VALUES ($1, $2, 'M1')
+	`, scopeID, productID)
+	assert.Error(t, err, "a second milestone_ref row for the same (scope_id, product_id, name) must violate the UNIQUE constraint GetOrCreateRef relies on")
+
+	var milestoneID uuid.UUID
+	require.NoError(t, db.Pool.QueryRow(ctx, `
+		SELECT id FROM milestone_ref WHERE scope_id = $1 AND product_id = $2 AND name = 'M1'
+	`, scopeID, productID).Scan(&milestoneID))
+
+	var featureSetID, featureID uuid.UUID
+	require.NoError(t, db.Pool.QueryRow(ctx, `
+		INSERT INTO feature_set (scope_id, product_id, name) VALUES ($1, $2, 'fs') RETURNING id
+	`, scopeID, productID).Scan(&featureSetID))
+	require.NoError(t, db.Pool.QueryRow(ctx, `
+		INSERT INTO feature (scope_id, feature_set_id, name) VALUES ($1, $2, 'f') RETURNING id
+	`, scopeID, featureSetID).Scan(&featureID))
+
+	_, err = db.Pool.Exec(ctx, `
+		INSERT INTO entity_milestone (scope_id, entity_id, milestone_id) VALUES ($1, $2, $3)
+	`, scopeID, featureID, milestoneID)
+	require.NoError(t, err)
+	_, err = db.Pool.Exec(ctx, `
+		INSERT INTO entity_milestone (scope_id, entity_id, milestone_id) VALUES ($1, $2, $3)
+	`, scopeID, featureID, milestoneID)
+	assert.Error(t, err, "a second entity_milestone row for the same (entity_id, milestone_id) must violate the UNIQUE constraint AddAssociation relies on")
+
+	// -- milestone_id is a real DB-enforced FK, unlike every parent link in migration 002 --
+	_, err = db.Pool.Exec(ctx, `
+		INSERT INTO entity_milestone (scope_id, entity_id, milestone_id) VALUES ($1, $2, gen_random_uuid())
+	`, scopeID, featureID)
+	assert.Error(t, err, "entity_milestone.milestone_id must be FK-enforced against milestone_ref(id)")
 }
