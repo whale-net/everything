@@ -461,9 +461,26 @@ infrastructure for this: `//whagent_net/delegatedgrant` constructs the
 one shared `DelegatedGrantSource` + `libs/go/grpcauth/pgstore`-backed
 `Store` (`grpcauth_delegated_grant` table) + `libs/go/grpcauth/grantindex`
 -backed bookkeeping index (`grpcauth_grant_index` table) both `ui` and
-`mcp` hold, per `ENV.md`'s "Delegated grant" section — but neither
-request path described above has swapped onto it yet; that is a
-dependent task (FR8/FR9). Once it has, this whole subsection (the
+`mcp` hold, per `ENV.md`'s "Delegated grant" section.
+
+Issue #2428 (FR2/FR3/FR5/FR6/FR9, the write half of FR12) lands `ui`'s
+side of the consent flow: `whagent_net/ui/handlers_consent.go`'s
+`GET`/`POST /mcp/consent(?domain=<d>)` route drives
+`BeginAuthorization`/`CompleteAuthorization` for an explicit domain and
+records the FR12 bookkeeping index entry on success, and
+`authorizeConsentGate` wraps `GET /authorize` (`ui`'s mcpauth-hosted
+OAuth2 endpoint for the MCP client) with a prerequisite that the operator
+hold an active grant for `WHAGENT_UI_DEFAULT_DOMAIN` before a credential
+is minted. That gate is deliberately domain-agnostic at the OAuth layer
+rather than resource/scope-driven: `libs/go/mcpauth` is domain-agnostic by
+design (its own "zero domain-specific types" NFR) and `mcp`'s RFC 9728
+resource identifier is one single, instance-wide URL, not one per domain
+— per-domain resolution happens later, at MCP tool-dispatch time via
+`agent_id` (FR7, below). See the `#2421` issue comment #2428 posted
+before implementation for the full investigation. `mcp`'s own per-call
+token acquisition (FR8, issue #2430) has not swapped onto this wiring
+yet — `tokenexchange.go`'s RFC 8693 exchange below is still the live path
+for that half until it does. Once it has, this whole subsection (the
 opaque `mcpauth` credential, RFC 8693 exchange, and
 `WHAGENT_MCP_KEYCLOAK_*`) is retired, not left dormant (FR19).
 
