@@ -65,12 +65,14 @@ func newReauthRequiredError(domain string, cause error) error {
 	return &reauthRequiredError{domain: domain, cause: cause}
 }
 
-// Error names domain explicitly, so an operator reading the tool-call
-// failure in their transcript (mcp.AddTool's doc comment: a returned error's
-// own message IS what the operator sees) knows exactly which domain needs
-// re-consent -- not an opaque "auth failed".
+// Error names domain explicitly and points at the standalone per-domain
+// consent route (issue #2428's GET /mcp/consent?domain=<d>, mounted on
+// `ui`) so an operator reading the tool-call failure in their transcript
+// (mcp.AddTool's doc comment: a returned error's own message IS what the
+// operator sees) has both what happened and exactly where to go to fix
+// it -- not an opaque "auth failed".
 func (e *reauthRequiredError) Error() string {
-	return fmt.Sprintf("domain %q needs re-consent (grant rejected by Keycloak): %s", e.domain, e.cause)
+	return fmt.Sprintf("domain %q needs re-consent (grant rejected by Keycloak); complete consent again at GET /mcp/consent?domain=%s: %s", e.domain, e.domain, e.cause)
 }
 
 // Unwrap exposes cause so errors.Is(err, grpcauth.ErrGrantNeedsReauth) still

@@ -23,6 +23,7 @@ go_library(
     visibility = ["//visibility:public"],
     deps = [
         "//libs/go/grpcauth",
+        "//libs/go/logging",
         "//whagent_net/grantkey",
         "//whagent_net/mcpidentity",
         "//whagent_net/protos:whagentpb",
