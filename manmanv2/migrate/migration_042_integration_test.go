@@ -131,8 +131,8 @@ func migrateTo41ThenSeedAndApply42(ctx context.Context, t *testing.T, db *dbtest
 	if err != nil {
 		t.Fatalf("LatestVersion: %v", err)
 	}
-	if latest != 42 {
-		t.Fatalf("expected the latest migration source version to be 42, got %d -- update this test if a newer migration has since landed", latest)
+	if latest != 43 {
+		t.Fatalf("expected the latest migration source version to be 43, got %d -- update this test if a newer migration has since landed", latest)
 	}
 
 	if err := runner.Migrate(41); err != nil {
@@ -195,18 +195,23 @@ func TestMigration042_AppliesOnTopOfFullHistoryAndCreatesExpectedShape(t *testin
 	sqlDB := openMigrateTestDB042(t, db)
 
 	runner := migrate.NewRunner(sqlDB, migrations, "migrations")
-	if err := runner.Up(); err != nil {
-		t.Fatalf("Up (applying every migration through 042): %v", err)
+	// Target version 42 explicitly rather than Up() (which now also
+	// applies 043) -- same rationale as the other migration integration
+	// tests' use of Migrate(N) over a relative Up()/Steps() call: this
+	// test is about migration 042 specifically, not "whatever the latest
+	// migration happens to be".
+	if err := runner.Migrate(42); err != nil {
+		t.Fatalf("Migrate(42) (applying every migration through 042): %v", err)
 	}
 	version, dirty, err := runner.Version()
 	if err != nil {
 		t.Fatalf("Version: %v", err)
 	}
 	if dirty {
-		t.Fatalf("expected clean state after Up, got dirty")
+		t.Fatalf("expected clean state after Migrate(42), got dirty")
 	}
 	if version != 42 {
-		t.Fatalf("expected version 42 after Up, got %d", version)
+		t.Fatalf("expected version 42 after Migrate(42), got %d", version)
 	}
 
 	for _, col := range []string{"config_id", "library_id", "preset_id", "volume_id", "installation_path_override", "created_at"} {
@@ -623,11 +628,16 @@ func TestMigration042_DownDropsThreeTablesLeavesSGCIntact(t *testing.T) {
 		t.Fatalf("seed server: %v", err)
 	}
 
-	// One step down: exactly migration 042 rolls back (same rationale as
-	// migration_040_integration_test.go -- Runner.Down() unwinds the whole
-	// history and trips over unrelated early down-chain issues).
-	if err := runner.Steps(-1); err != nil {
-		t.Fatalf("Steps(-1): %v", err)
+	// Roll back to exactly version 41 (one before this migration), by
+	// target version rather than a relative Steps(-1) off of whatever the
+	// latest migration happens to be -- same rationale as
+	// migration_038_integration_test.go/migration_039_integration_test.go/
+	// migration_040_integration_test.go/migration_041_integration_test.go.
+	// A relative Steps(-1) would instead undo whatever migration is
+	// current HEAD (043 once it landed), leaving 042's own tables in
+	// place and this test passing for the wrong reason.
+	if err := runner.Migrate(41); err != nil {
+		t.Fatalf("Migrate(41) (rolling back 042): %v", err)
 	}
 	version, dirty, err := runner.Version()
 	if err != nil {
@@ -636,8 +646,8 @@ func TestMigration042_DownDropsThreeTablesLeavesSGCIntact(t *testing.T) {
 	if dirty {
 		t.Fatalf("expected clean state after down-step, got dirty")
 	}
-	if version == 42 {
-		t.Fatalf("expected version below 42 after down-step, got %d", version)
+	if version != 41 {
+		t.Fatalf("expected version 41 after Migrate(41), got %d", version)
 	}
 
 	for _, table := range []string{

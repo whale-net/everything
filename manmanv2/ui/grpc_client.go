@@ -834,57 +834,11 @@ func (c *ControlClient) UpdateAddon(ctx context.Context, addonID int64, name, de
 	return resp.Addon, nil
 }
 
-// SGC-Library management methods
-
-func (c *ControlClient) AddLibraryToSGC(ctx context.Context, sgcID, libraryID, presetID, volumeID int64, pathOverride string) error {
-	_, err := c.workshop.AddLibraryToSGC(ctx, &manmanpb.AddLibraryToSGCRequest{
-		SgcId:                    sgcID,
-		LibraryId:                libraryID,
-		PresetId:                 presetID,
-		VolumeId:                 volumeID,
-		InstallationPathOverride: pathOverride,
-	})
-	if err != nil {
-		return fmt.Errorf("failed to add library to SGC: %w", err)
-	}
-	return nil
-}
-
-func (c *ControlClient) ListSGCLibraries(ctx context.Context, sgcID int64) ([]*manmanpb.WorkshopLibrary, error) {
-	resp, err := c.workshop.ListSGCLibraries(ctx, &manmanpb.ListSGCLibrariesRequest{
-		SgcId: sgcID,
-	})
-	if err != nil {
-		return nil, fmt.Errorf("failed to list SGC libraries: %w", err)
-	}
-	return resp.Libraries, nil
-}
-
-func (c *ControlClient) RemoveLibraryFromSGC(ctx context.Context, sgcID, libraryID int64) error {
-	_, err := c.workshop.RemoveLibraryFromSGC(ctx, &manmanpb.RemoveLibraryFromSGCRequest{
-		SgcId:     sgcID,
-		LibraryId: libraryID,
-	})
-	if err != nil {
-		return fmt.Errorf("failed to remove library from SGC: %w", err)
-	}
-	return nil
-}
-
-func (c *ControlClient) GetSGCLibraryAttachments(ctx context.Context, sgcID int64) ([]*manmanpb.SGCWorkshopLibrary, error) {
-	resp, err := c.workshop.GetSGCLibraryAttachments(ctx, &manmanpb.GetSGCLibraryAttachmentsRequest{
-		SgcId: sgcID,
-	})
-	if err != nil {
-		return nil, fmt.Errorf("failed to get SGC library attachments: %w", err)
-	}
-	return resp.Attachments, nil
-}
-
-// GameConfig-Library management methods (M6 #2365, plan #2359) -- the
-// GC-scoped counterpart to the SGC-Library methods above, so the
-// Games-panel and conflict-resolution UI tasks can call the new RPCs.
-// Additive alongside the SGC-scoped methods (NFR1).
+// GameConfig-Library management methods (M6 #2365/#2370, plan #2359). The
+// prior SGC-Library methods (AddLibraryToSGC/ListSGCLibraries/
+// RemoveLibraryFromSGC/GetSGCLibraryAttachments) retired with
+// sgc_workshop_libraries (NFR1); these are the sole library-attachment
+// methods now.
 
 func (c *ControlClient) AddLibraryToGameConfig(ctx context.Context, configID, libraryID, presetID, volumeID int64, pathOverride string) error {
 	_, err := c.workshop.AddLibraryToGameConfig(ctx, &manmanpb.AddLibraryToGameConfigRequest{

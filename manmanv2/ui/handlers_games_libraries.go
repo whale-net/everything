@@ -28,9 +28,11 @@ import (
 //	POST /games/{gameID}/configs/{configID}/libraries/add
 //	POST /games/{gameID}/configs/{configID}/libraries/{libraryID}/remove
 //
-// NFR6 guard: none of this touches /sgc/add-library, /sgc/remove-library,
-// or /sgc/api/available-libraries -- those stay exactly as they are until
-// the dependent retirement task (#2370) cuts over.
+// NFR6 guard: none of this touches this panel's own routes above.
+// /sgc/add-library, /sgc/remove-library, and /sgc/api/available-libraries
+// -- the SGC-scoped routes this panel replaces -- retired with
+// sgc_workshop_libraries (M6 #2370, NFR1); stale requests to those paths
+// now redirect via the "/sgc/" catch-all instead of dispatching anywhere.
 
 // buildWorkshopPanelData assembles one game's Workshop Libraries panel
 // (FR8/FR9/FR10): every GameConfig of the game, each either flagged with
