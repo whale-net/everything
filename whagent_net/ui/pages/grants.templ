@@ -1,0 +1,81 @@
+// FR16/FR13 (issue #2432, plan #2421): the self-service per-domain grant
+// list and revoke page. GrantRow and grantsTable are the "shared render
+// shape" the issue calls for: a plain data type with no whagent_net-
+// specific fields, and a render function that takes only that type, so a
+// later admin page (#TBD, FR14) reuses grantsTable directly against a
+// different data source (every operator's grants, not just the signed-in
+// one's) instead of duplicating the table markup.
+package pages
+
+import (
+	"time"
+
+	"github.com/whale-net/everything/whagent_net/ui/components"
+)
+
+// GrantRow is one rendered row of a delegated-grant list (FR13's shared
+// render shape). No whagent_net-specific fields: Domain is the raw
+// grantkey.ForDomain-derived string, Status is a plain display string
+// derived from grpcauth.GrantStatus, never the GrantStatus type itself, so
+// this package (and any future htmxui extraction) carries no grpcauth
+// import.
+type GrantRow struct {
+	OperatorLabel string
+	Domain        string
+	Status        string
+	GrantedAt     time.Time
+}
+
+// GrantsData carries the self-service grants page's page-level
+// parameterisation (FR16, issue #2432).
+type GrantsData struct {
+	Layout components.LayoutData
+	Rows   []GrantRow
+	Error  string
+}
+
+// grantsTable renders rows -- and only rows -- per FR13's shared-render-
+// shape requirement (see this file's package doc comment).
+//
+// Scaffold stub (issue #2432): the per-row revoke control, and the
+// libs/go/htmxui.Confirm-backed confirmation step in front of it (FR17;
+// do not add a new confirm component here -- reuse Confirm), land in the
+// Implementation phase.
+templ grantsTable(rows []GrantRow) {
+	if len(rows) == 0 {
+		<p class="opacity-70">You have not granted access to any domain yet.</p>
+	} else {
+		<table class="table">
+			<thead>
+				<tr>
+					<th>Operator</th>
+					<th>Domain</th>
+					<th>Status</th>
+				</tr>
+			</thead>
+			<tbody>
+				for _, row := range rows {
+					<tr>
+						<td>{ row.OperatorLabel }</td>
+						<td>{ row.Domain }</td>
+						<td>{ row.Status }</td>
+					</tr>
+				}
+			</tbody>
+		</table>
+	}
+}
+
+// Grants is FR16's self-service per-domain grant list + revoke page (GET
+// /grants, issue #2432): lists only the signed-in operator's own grants
+// (../handlers_grants.go's handleGrants takes the subject from the
+// session, never from a query parameter or form field).
+templ Grants(data GrantsData) {
+	@components.Layout(data.Layout) {
+		<h1 class="text-2xl font-bold text-base-content mb-4">My grants</h1>
+		if data.Error != "" {
+			<div role="alert" class="alert alert-error mb-4">{ data.Error }</div>
+		}
+		@grantsTable(data.Rows)
+	}
+}

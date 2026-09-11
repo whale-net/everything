@@ -15,6 +15,7 @@ go_library(
         "convert.go",
         "delegatedgrant.go",
         "grpc_client.go",
+        "handlers_grants.go",
         "handlers_session.go",
         "handlers_session_lifecycle.go",
         "handlers_session_live.go",
@@ -92,12 +93,19 @@ go_binary(
 # re-read figure, and a duplicate re-publish of the same event_id changes
 # no number (reuses fakeLiveTransport/newLiveTestHub/
 # waitForLiveHandlerRegistered from handlers_session_live_test.go).
+#
+# handlers_grants_test.go (issue #2432's Scaffold section) added:
+# route-reachability/render sanity checks for GET /grants and POST
+# /grants/revoke -- the Implementation phase's Testing section (FR16/
+# FR17/NFR4/NFR7) replaces these with the full scoped-listing/live-status/
+# revoke-scoping/audit-log coverage the issue describes.
 go_test(
     name = "ui_test",
     size = "small",
     srcs = [
         "delegatedgrant_test.go",
         "grpc_client_test.go",
+        "handlers_grants_test.go",
         "handlers_session_lifecycle_test.go",
         "handlers_session_live_test.go",
         "handlers_session_test.go",
