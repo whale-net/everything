@@ -1,0 +1,17 @@
+"""krill scope seeder (issue #2487): a libs/go/migrate.Seeder that ensures
+the one `scope` row (LB1) exists."""
+
+load("@rules_go//go:def.bzl", "go_library")
+
+go_library(
+    name = "seed",
+    srcs = ["seed.go"],
+    importpath = "github.com/whale-net/everything/krill/migrate/seed",
+    visibility = ["//visibility:public"],
+)
+
+# seed_integration_test.go (real-Postgres idempotency proof, issue #2487's
+# Testing section: "seeding twice yields exactly one scope row with the
+# expected forge coordinates") lands as part of this task's Testing phase,
+# mirroring whagent_net/migrate/seed/BUILD.bazel's go_test target -- not
+# declared here yet since the file doesn't exist.

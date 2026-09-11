@@ -1,0 +1,39 @@
+"""krill HTTP server (issue #2487): /healthz + DB connectivity check only,
+no spec endpoints yet."""
+
+load("@rules_go//go:def.bzl", "go_binary", "go_library")
+load("//tools/bazel:release.bzl", "release_app")
+
+go_library(
+    name = "api_lib",
+    srcs = [
+        "main.go",
+        "routes.go",
+    ],
+    importpath = "github.com/whale-net/everything/krill/api",
+    visibility = ["//visibility:private"],
+    deps = [
+        "//libs/go/db",
+        "//libs/go/logging",
+        "@com_github_jackc_pgx_v5//pgxpool",
+        "@io_opentelemetry_go_contrib_instrumentation_net_http_otelhttp//:otelhttp",
+    ],
+)
+
+go_binary(
+    name = "api",
+    embed = [":api_lib"],
+    visibility = ["//visibility:public"],
+)
+
+# Release metadata. domain "krill" + name "api" matches the binary table in
+# krill/README.md.
+release_app(
+    name = "api",
+    binary_name = ":api",
+    language = "go",
+    domain = "krill",
+    description = "krill HTTP server (/healthz today; spec-slice query surface once the entity model lands)",
+    app_type = "external-api",
+    port = 8080,
+)

@@ -1,0 +1,7 @@
+{
+  "name": "krill",
+  "description": "Claude Code plugin for krill, the spec-of-record and work-tracking substrate for agent swarms. MCP server entries land once krill/mcp exists (issue #2487 is domain scaffolding only) -- see krill/TOC.md.",
+  "author": {
+    "name": "whale_net"
+  }
+}

@@ -1,0 +1,23 @@
+load("@rules_go//go:def.bzl", "go_library")
+
+# Embeds the real golang-migrate SQL so both the migration binary
+# (//krill/migrate) and anything else that needs the real schema apply the
+# exact same schema instead of maintaining separate copies. See schema.go
+# for why the embed directive uses "all:migrations" instead of a "*.sql"
+# glob.
+#
+# schema_test.go (embed-resolves sanity check) and
+# schema_integration_test.go (real-Postgres up/down/up proof, issue #2487's
+# Testing section) land as part of this task's Testing phase, mirroring
+# whagent_net/migrate/schema/BUILD.bazel's go_test targets -- not declared
+# here yet since the files don't exist.
+go_library(
+    name = "schema",
+    srcs = ["schema.go"],
+    embedsrcs = glob(
+        ["migrations/*"],
+        allow_empty = True,
+    ),
+    importpath = "github.com/whale-net/everything/krill/migrate/schema",
+    visibility = ["//visibility:public"],
+)
