@@ -164,3 +164,31 @@ type NonGoal struct {
 	ValidFrom  time.Time
 	ValidTo    *time.Time
 }
+
+// MilestoneRef is one row of `milestone_ref` (migration 004, issue #2492,
+// FR17, LB6) -- a bare reference to an `M<n>` identifier a source document
+// names. Deliberately thin: no status, no milepebble breakdown, no
+// authoring fields -- those are M3's (C13, C28); see migration
+// 004_milestone_assoc.up.sql's LB6 note. Single parent: Product.ID. Not
+// SCD2 (LB3) -- see that migration's comment for why.
+type MilestoneRef struct {
+	ID        uuid.UUID
+	ScopeID   uuid.UUID
+	ProductID uuid.UUID
+	Name      string // the bare "M<n>" identifier, e.g. "M1"
+	CreatedAt time.Time
+}
+
+// EntityMilestone is one row of `entity_milestone` (migration 004) -- the
+// delivery-axis association LB6 specifies, keyed `(entity_id,
+// milestone_id)`. EntityID is a spec entity's immutable `id` (to date,
+// always a Feature.ID for a `Cn` citation or a LoadBearingDecision.ID for
+// an `LBn` citation) -- never a `milestone_id` column added to that
+// entity's own table. Not SCD2 (LB3).
+type EntityMilestone struct {
+	ID          uuid.UUID
+	ScopeID     uuid.UUID
+	EntityID    uuid.UUID
+	MilestoneID uuid.UUID
+	CreatedAt   time.Time
+}

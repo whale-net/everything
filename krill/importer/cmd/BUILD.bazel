@@ -1,0 +1,25 @@
+load("@rules_go//go:def.bzl", "go_binary", "go_library")
+
+# The importer's runnable entrypoint (issue #2492): a Swarm Operator-run,
+# one-time CLI, not a deployed service -- it is deliberately not wired into
+# //krill:krill_chart (compare //krill/migrate and //krill/api, both of
+# which are). Run it with:
+#   bazel run //krill/importer/cmd:import -- --path krill --session-id <uuid>
+go_library(
+    name = "import_lib",
+    srcs = ["main.go"],
+    importpath = "github.com/whale-net/everything/krill/importer/cmd",
+    visibility = ["//visibility:private"],
+    deps = [
+        "//krill/importer",
+        "//krill/store",
+        "//libs/go/db",
+        "@com_github_google_uuid//:uuid",
+    ],
+)
+
+go_binary(
+    name = "import",
+    embed = [":import_lib"],
+    visibility = ["//visibility:public"],
+)

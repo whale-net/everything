@@ -22,6 +22,7 @@ go_library(
         "errors.go",
         "feature.go",
         "featureset.go",
+        "milestone.go",
         "models.go",
         "nongoal.go",
         "persona.go",

@@ -1,8 +1,11 @@
 # krill — Environment Variables
 
 M1 scaffolding (issue #2487) ships two binaries: `migrate` and `api`. Both
-read the variables below. `mcp` (later M1 tasks) will get its own section
-once it exists.
+read the variables below. `krill/importer/cmd`'s `import` CLI (issue
+#2492) reads `PG_DATABASE_URL` too (via a `--database-url` flag that
+defaults to it), but is not a deployed binary and takes its other inputs
+(`--path`, `--session-id`) as flags -- see `krill/README.md`'s Binaries
+table. `mcp` (later M1 tasks) will get its own section once it exists.
 
 ## Database
 
