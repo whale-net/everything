@@ -195,20 +195,23 @@ milestone never collide on a migration version:
 ## `krill_session` and the two session ids (FR3, #2489)
 
 Migration `003` adds `krill_session`, the row FR3's `init` primitive
-writes and the write gate (a later task in #2489) reads. Two identifiers
-matter here and must never be confused:
+writes and the write gate (`api/handlers/gate.go`, this task) reads. Two
+identifiers matter here and must never be confused:
 
 - **`krill_session.id`** — krill's own session identifier, a surrogate
   UUID minted by Postgres (`DEFAULT gen_random_uuid()`) every time `init`
   is called. This is the id the write gate requires on every mutating
   call this milestone exposes.
 - **`libs/go/whagent`'s `Claim.WhagentSessionID`** — a *different*
-  session concept, scoped to a whagent-net agent run. `init` records it
-  on `krill_session.whagent_session_id` only when the call arrives
-  through the whagent-net verifier, purely as a correlation field. It is
+  session concept, scoped to a whagent-net agent run, recorded on
+  `krill_session.whagent_session_id` purely as a correlation field. It is
   nullable (a human/OAuth2 caller has none), it is never used as or in
   place of `krill_session.id`, and a whagent-authenticated call still
-  gets its own, distinct krill session id.
+  gets its own, distinct krill session id. **In M1, `init` takes this
+  value as-is from the request body** — `api` mounts no whagent-verifier
+  middleware to extract it from a verified `Claim` (see "`init` and the
+  write gate" below for why) — so it is only as trustworthy as every
+  other field `init` accepts in this milestone.
 
 `krill_session` also carries `acting_*`/`on_behalf_of_*` — two
 `(iss, sub, kind)` triples (LB4, mirroring `whagent_net`'s LB2 and
@@ -217,6 +220,35 @@ caller acts for itself the two triples are written identically; the
 store layer (`krill/store/session.go`) never infers this — every caller
 of `InitSession` passes both explicitly. The table is append-only, not
 SCD2 (LB3): M1 ships only `init`, no update path over a session row.
+
+## `init` and the write gate (FR3, #2489, Implementation phase)
+
+`api` now exposes `POST /sessions/init` (`api/handlers/session.go`),
+wired in `routes.go`: a caller posts its acting and on-behalf-of `(iss,
+sub, kind)` triples (and, optionally, a `whagent_session_id` correlation
+value) and gets back the krill-native session id `InitSession` minted.
+**`init` is intentionally unauthenticated in M1** — no bearer-token
+verification is mounted on the `api` binary (see "No auth wired up on
+`api`" below); `init` trusts the caller's asserted identity fields rather
+than re-deriving them from a verified credential. This is a deliberate M1
+boundary, not an oversight: NFR1's two-front-door pattern (`mcpauth` +
+`libs/go/whagent`) is scoped entirely to the separate `krill/mcp` binary
+(issue #2494), which never touches `krill_session` — `api`'s HTTP surface
+has no equivalent front door in this milestone.
+
+`api/handlers/gate.go` is the write gate every mutating endpoint in this
+milestone passes through (FR3's "write-only" clause): `RequireSession`
+wraps a handler, requires the `X-Krill-Session-Id` header to name a row
+`init` actually minted (via `SessionStore.GetSession`), and — on success —
+resolves that session's two subjects and scope onto the request context
+(`SessionFromContext`) for the wrapped handler to read. It rejects with
+401 on a missing header, a malformed id, or an id `GetSession` cannot
+find. `RequireSession` covers exactly six endpoints across this
+milestone — entity creates (FR1, FR2, issue #2490), LB attach (FR4, issue
+#2490), amend (FR12, issue #2493), import (FR16, issue #2492), and
+pointer-issue create (FR20, issue #2496) — and no read path, including
+FR21's live C3 query: none of those handlers exist yet, so no route in
+this task's `routes.go` is actually wrapped with it yet.
 
 ## Open items
 
@@ -230,5 +262,7 @@ SCD2 (LB3): M1 ships only `init`, no update path over a session row.
   `api/handlers/gate.go`) are wired up, but no write route uses the gate
   yet — none of #2490/#2492/#2493/#2496 exist yet to wrap.
 - No MCP surface yet — `krill/plugin/` is a placeholder only.
-- No auth (NFR1's two-front-door pattern) wired up yet — `api` has no
-  authenticated route to gate.
+- No auth wired up on `api` — `POST /sessions/init` and every future write
+  endpoint on this binary trust caller-asserted identity (see "`init` and
+  the write gate" above); only `krill/mcp` (issue #2494) gets NFR1's
+  two-front-door pattern, and only for the read-only spec surface.

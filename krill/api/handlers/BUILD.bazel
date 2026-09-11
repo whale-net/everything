@@ -1,0 +1,21 @@
+"""krill api's HTTP handler layer. session.go (issue #2489, FR3) is the
+`init` endpoint; gate.go is the write-only gate every mutating endpoint in
+this milestone passes through."""
+
+load("@rules_go//go:def.bzl", "go_library")
+
+# gate_test.go / session_test.go land in the Testing phase (issue #2489's
+# "Testing" section) -- this target is library-only until then.
+go_library(
+    name = "handlers",
+    srcs = [
+        "gate.go",
+        "session.go",
+    ],
+    importpath = "github.com/whale-net/everything/krill/api/handlers",
+    visibility = ["//visibility:public"],
+    deps = [
+        "//krill/store",
+        "@com_github_google_uuid//:uuid",
+    ],
+)

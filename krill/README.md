@@ -14,7 +14,14 @@ milestone hangs off. No spec entities exist yet — that is later M1 work.
 | Binary | Target | Type | Description |
 |--------|--------|------|-------------|
 | `migrate` | `//krill/migrate` | job | Applies `krill/migrate/schema/migrations` and seeds the one `scope` row with this repo's forge coordinates (LB1, NFR2). |
-| `api` | `//krill/api` | external-api | HTTP server; `/healthz` (a live DB ping) only in this task. No spec endpoints yet. |
+| `api` | `//krill/api` | external-api | HTTP server; `/healthz` (a live DB ping) and `POST /sessions/init` (FR3's `init` primitive, issue #2489). No spec entity write endpoints yet. |
+
+## Endpoints
+
+| Endpoint | Description |
+|----------|-------------|
+| `GET /healthz` | Live DB connectivity check. Never gated. |
+| `POST /sessions/init` | Mints a krill-native session id (FR3). Body: `{"scope_id": "<uuid>", "acting": {"iss", "sub", "kind"}, "on_behalf_of": {"iss", "sub", "kind"}, "whagent_session_id": "<optional string>"}`; `kind` is `human` or `service`. Returns `{"session_id": "<uuid>"}`. Every write endpoint added by a later M1 task (#2490/#2492/#2493/#2496) requires the resulting id on an `X-Krill-Session-Id` header (`api/handlers/gate.go`'s `RequireSession`) — see `ARCHITECTURE.md` "`init` and the write gate" for why `init` itself takes the caller's identity fields as-is rather than verifying a bearer credential. |
 
 ## Local development
 

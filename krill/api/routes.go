@@ -5,12 +5,20 @@ import (
 	"net/http"
 
 	"github.com/jackc/pgx/v5/pgxpool"
+
+	"github.com/whale-net/everything/krill/api/handlers"
+	"github.com/whale-net/everything/krill/store"
 )
 
-// setupRoutes registers krill's HTTP surface. No spec endpoints exist yet
-// (see main.go's doc comment) -- /healthz is the only route.
+// setupRoutes registers krill's HTTP surface. /healthz and `init` (FR3,
+// issue #2489) are the only routes as of this task -- no spec entity write
+// endpoints exist yet (those land in #2490/#2492/#2493/#2496, each of
+// which wraps its handler with handlers.RequireSession).
 func setupRoutes(mux *http.ServeMux, pool *pgxpool.Pool) {
+	sessions := store.NewSessionStore(pool)
+
 	mux.HandleFunc("/healthz", handleHealthz(pool))
+	mux.HandleFunc("POST /sessions/init", handlers.InitSessionHandler(sessions))
 }
 
 // handleHealthz reports ok only if a live Postgres ping succeeds -- a
