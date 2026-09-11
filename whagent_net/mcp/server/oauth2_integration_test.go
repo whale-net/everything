@@ -1,18 +1,20 @@
 package server_test
 
-// Integration coverage for issue #2249's FR9 OAuth2 path -- modeled on
-// audience_score_system/mcp/server/oauth_bootstrap_integration_test.go,
-// scoped to what this task (the resource-server half) actually owns: a
-// real streamable-HTTP mcp.Client against a real server.NewHTTPHandler,
-// a real (fake-Postgres-backed) mcpauth.CredentialStore.Verify call, a
-// real RFC 8693 HTTP request/response against a fake Keycloak token
-// endpoint (server.KeycloakExchanger), and a real (bufconn) gRPC call
-// into a fake `api`. It does not stand up #2245's authorization-server
-// side (`ui`'s mcpauth.Provider/browser sign-in) -- that belongs to that
-// task's own Testing phase -- so credentials here are minted directly
-// into fakeOAuthCredentialStore rather than through a real /authorize ->
-// /token exchange; everything downstream of "an operator already holds a
-// live mcpauth credential" is exercised for real.
+// Integration coverage for issue #2249's FR9 OAuth2 identity-resolution
+// path, updated by issue #2430's FR7/FR8/FR19 (RFC 8693 impersonation
+// exchange and its tokenexchange.go cache are gone -- token acquisition
+// now goes through GrantSource at tool-dispatch time): a real
+// streamable-HTTP mcp.Client against a real server.NewHTTPHandler, a real
+// (fake-Postgres-backed) mcpauth.CredentialStore.Verify call, a fake
+// DomainResolver/GrantSource standing in for whagent_net/mcpdomain.Resolver
+// and //whagent_net/delegatedgrant's real, Postgres/Keycloak-backed
+// implementations, and a real (bufconn) gRPC call into a fake `api`. It
+// does not stand up #2245's authorization-server side (`ui`'s
+// mcpauth.Provider/browser sign-in) -- that belongs to that task's own
+// Testing phase -- so credentials here are minted directly into
+// fakeOAuthCredentialStore rather than through a real /authorize -> /token
+// exchange; everything downstream of "an operator already holds a live
+// mcpauth credential" is exercised for real.
 import (
 	"context"
 	"crypto/rand"
@@ -30,7 +32,9 @@ import (
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"golang.org/x/oauth2"
 
+	"github.com/whale-net/everything/libs/go/grpcauth"
 	"github.com/whale-net/everything/libs/go/mcpauth"
 	"github.com/whale-net/everything/whagent_net/mcp/server"
 	"github.com/whale-net/everything/whagent_net/mcp/tools"
@@ -108,37 +112,69 @@ func (f *fakeOAuthCredentialStore) List(context.Context, string) ([]mcpauth.Cred
 
 var _ mcpauth.CredentialStore = (*fakeOAuthCredentialStore)(nil)
 
-// ── fake Keycloak token endpoint ─────────────────────────────────────────
+// ── fake tools.DomainResolver / tools.GrantSource ─────────────────────────
 
-// newFakeKeycloakTokenEndpoint stands up an httptest.Server implementing
-// just enough of Keycloak's RFC 8693 token endpoint for
-// server.KeycloakExchanger to talk to: it mints a deterministic JWT-shaped
-// string embedding requested_subject (so a test can assert exactly whose
-// identity api ends up seeing) and counts requests, so cache-reuse can be
-// asserted the same way tokenexchange_test.go does.
-func newFakeKeycloakTokenEndpoint(t *testing.T) (url string, hits func() int) {
-	t.Helper()
-	var mu sync.Mutex
-	var n int
-	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		require.NoError(t, r.ParseForm())
-		assert.Equal(t, "urn:ietf:params:oauth:grant-type:token-exchange", r.FormValue("grant_type"))
-		sub := r.FormValue("requested_subject")
-		require.NotEmpty(t, sub)
+// fakeIntegrationDomainResolver implements tools.DomainResolver against a
+// single fixed domain -- this file's own copy, distinct from the tools
+// package's own unexported fakeDomainResolver (fake_domain_resolver_test.go),
+// which this package cannot import.
+type fakeIntegrationDomainResolver struct {
+	domain string
+}
 
-		mu.Lock()
-		n++
-		count := n
-		mu.Unlock()
+func (f *fakeIntegrationDomainResolver) DomainForAgent(context.Context, string) (string, error) {
+	return f.domain, nil
+}
 
-		w.Header().Set("Content-Type", "application/json")
-		_ = json.NewEncoder(w).Encode(map[string]any{
-			"access_token": fmt.Sprintf("keycloak-issued.exchanged-for-%s.call-%d", sub, count),
-			"expires_in":   300,
-		})
-	}))
-	t.Cleanup(ts.Close)
-	return ts.URL, func() int { mu.Lock(); defer mu.Unlock(); return n }
+func (f *fakeIntegrationDomainResolver) DomainForSession(context.Context, string) (string, error) {
+	return f.domain, nil
+}
+
+var _ tools.DomainResolver = (*fakeIntegrationDomainResolver)(nil)
+
+// fakeIntegrationGrantCall records one TokenSource(subject, grant) call.
+type fakeIntegrationGrantCall struct {
+	subject string
+	grant   string
+}
+
+// fakeIntegrationGrantSource implements tools.GrantSource, recording every
+// (subject, grant) pair it was asked for, in order, and backing every
+// resulting GrantTokenSource.Token call with either a fixed access token
+// or a fixed error. Deliberately caches nothing (NFR7): each TokenSource
+// call is independent, exactly like grpcauth.DelegatedGrantSource's own
+// contract.
+type fakeIntegrationGrantSource struct {
+	mu       sync.Mutex
+	token    string
+	tokenErr error
+	calls    []fakeIntegrationGrantCall
+}
+
+func (f *fakeIntegrationGrantSource) TokenSource(subject, grant string) grpcauth.GrantTokenSource {
+	f.mu.Lock()
+	f.calls = append(f.calls, fakeIntegrationGrantCall{subject: subject, grant: grant})
+	f.mu.Unlock()
+	return fakeIntegrationTokenSource{source: f}
+}
+
+func (f *fakeIntegrationGrantSource) callCount() int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return len(f.calls)
+}
+
+var _ tools.GrantSource = (*fakeIntegrationGrantSource)(nil)
+
+type fakeIntegrationTokenSource struct {
+	source *fakeIntegrationGrantSource
+}
+
+func (t fakeIntegrationTokenSource) Token(context.Context) (*oauth2.Token, error) {
+	if t.source.tokenErr != nil {
+		return nil, t.source.tokenErr
+	}
+	return &oauth2.Token{AccessToken: t.source.token}, nil
 }
 
 // ── shared MCP-client plumbing ────────────────────────────────────────────
@@ -161,36 +197,32 @@ func callGetSession(t *testing.T, mcpURL, bearer string) (*mcp.CallToolResult, e
 	})
 }
 
+// integrationDomain is the fixed domain fakeIntegrationDomainResolver
+// resolves every agent id/session id to in this file's tests -- a
+// grantkey.ForDomain-valid value (lowercase, digits, underscore, hyphen).
+const integrationDomain = "audience_score_system"
+
 // oauth2Stack bundles one fully wired `mcp` instance (real
-// server.NewHTTPHandler/server.New/server.NewKeycloakExchanger, a fake
-// api backend, a fake Keycloak token endpoint, and an in-memory
-// mcpauth.CredentialStore) for this file's tests to drive.
+// server.NewHTTPHandler/server.New, a fake api backend, an in-memory
+// mcpauth.CredentialStore, and fake DomainResolver/GrantSource doubles)
+// for this file's tests to drive.
 type oauth2Stack struct {
 	url         string
 	fake        *fakeSessionServer
 	credentials *fakeOAuthCredentialStore
-	tokenHits   func() int
+	grant       *fakeIntegrationGrantSource
 }
 
 func newOAuth2Stack(t *testing.T) *oauth2Stack {
 	t.Helper()
 	fake, client := newFakeBackend(t) // auth_pass_through_test.go's helper, same package
 
-	tokenURL, hits := newFakeKeycloakTokenEndpoint(t)
-	exchanger := server.NewKeycloakExchanger(server.TokenExchangeConfig{
-		ClientID:      "mcp-confidential-client",
-		ClientSecret:  "mcp-token-exchange-secret",
-		TokenEndpoint: tokenURL,
-	})
-
 	credentials := newFakeOAuthCredentialStore()
+	domainResolver := &fakeIntegrationDomainResolver{domain: integrationDomain}
+	grant := &fakeIntegrationGrantSource{token: "delegated-grant-token-xyz"}
 
-	srv := server.New(exchanger)
-	// nil domainResolver/grant: this suite exercises FR9's OAuth2
-	// identity-resolution/exchange path only, never FR7/FR8's
-	// dispatch-time resolution -- get_session's call method does not use
-	// either yet (issue #2430's Scaffold phase is injection only).
-	tools.RegisterGetSession(srv, client, nil, nil)
+	srv := server.New()
+	tools.RegisterGetSession(srv, client, domainResolver, grant)
 
 	// httptest.NewUnstartedServer to learn the listen address before
 	// building the handler, exactly like the audience_score_system model
@@ -208,7 +240,7 @@ func newOAuth2Stack(t *testing.T) *oauth2Stack {
 	ts.Config = &http.Server{Handler: handler}
 	ts.Start()
 
-	return &oauth2Stack{url: mcpURL, fake: fake, credentials: credentials, tokenHits: hits}
+	return &oauth2Stack{url: mcpURL, fake: fake, credentials: credentials, grant: grant}
 }
 
 // ── discovery ─────────────────────────────────────────────────────────────
@@ -254,12 +286,15 @@ func TestOAuth2_Discovery_UnauthenticatedRequestPointsAtOwnProtectedResourceMeta
 
 // ── credential -> tool call ────────────────────────────────────────────────
 
-// TestOAuth2_MintedCredential_ToolCallExchangesForKeycloakJWT drives
-// "credential -> MCP tool call -> api sees a Keycloak-verified caller
-// whose (iss, sub) is the operator's": the credential minted for a real
-// (iss, sub) pair, presented as the bearer token, must reach api carrying
-// a jwt embedding that exact sub -- never the opaque credential itself.
-func TestOAuth2_MintedCredential_ToolCallExchangesForKeycloakJWT(t *testing.T) {
+// TestOAuth2_MintedCredential_ToolCallAcquiresDelegatedGrantToken drives
+// "credential -> MCP tool call -> api sees a token acquired via
+// GrantSource": the credential minted for a real (iss, sub) pair,
+// presented as the bearer token, must resolve to that operator's raw
+// Keycloak sub (never the mcpidentity-encoded iss|sub composite --
+// whagent_net/ui/handlers_consent.go's authorizeConsentGate documents why)
+// as GrantSource.TokenSource's subject, and the resulting access token
+// -- never the opaque credential itself -- is what reaches api.
+func TestOAuth2_MintedCredential_ToolCallAcquiresDelegatedGrantToken(t *testing.T) {
 	stack := newOAuth2Stack(t)
 
 	const iss = "https://keycloak.example.test/realms/whagent"
@@ -270,26 +305,30 @@ func TestOAuth2_MintedCredential_ToolCallExchangesForKeycloakJWT(t *testing.T) {
 	require.NoError(t, err)
 	require.False(t, res.IsError, "unexpected tool error")
 
+	require.Len(t, stack.grant.calls, 1)
+	assert.Equal(t, fakeIntegrationGrantCall{subject: sub, grant: integrationDomain}, stack.grant.calls[0],
+		"GrantSource must be keyed on the operator's raw sub and the resolved domain, never the mcpidentity-encoded composite")
+
 	headers := stack.fake.recordedAuthHeaders()
 	require.Len(t, headers, 1)
-	assert.Contains(t, headers[0], "exchanged-for-"+sub, "api must see a JWT the fake Keycloak endpoint minted for the operator's own sub")
+	assert.Equal(t, "Bearer delegated-grant-token-xyz", headers[0], "api must see the token GrantSource acquired, never the opaque credential itself")
 	assert.NotContains(t, headers[0], token, "the opaque mcpauth credential itself must never reach api")
 
 	// Red/green (verified by hand, then reverted): temporarily changing
-	// AuthMiddleware's OAuth2 branch to forward the raw presented
-	// credential (identity.sub, or the opaque token itself) instead of
-	// exchanger.Exchange's result made the "Contains(...,
-	// exchanged-for-...)" assertion above fail -- api recorded the raw
-	// value instead of a Keycloak-minted jwt. Reverting restored it to
+	// AuthMiddleware/dispatch.go to forward the raw presented credential
+	// (or identity.Sub itself) instead of grant.TokenSource(...).Token's
+	// result made the "Bearer delegated-grant-token-xyz" assertion above
+	// fail -- api recorded the raw value instead. Reverting restored it to
 	// green.
 }
 
-// TestOAuth2_MintedCredential_ExchangeCachedAcrossCalls proves the cache
-// (already unit-tested against KeycloakExchanger directly in
-// tokenexchange_test.go) is actually wired through the full stack: two
-// tool calls for the same identity must hit the fake Keycloak endpoint
-// exactly once.
-func TestOAuth2_MintedCredential_ExchangeCachedAcrossCalls(t *testing.T) {
+// TestOAuth2_MintedCredential_EachToolCallAcquiresTokenFresh_NoLocalCache
+// is NFR7's own requirement, proved through the full stack: two tool
+// calls for the identical identity must call GrantSource.TokenSource
+// twice -- mcp introduces no cache of its own on top of
+// grpcauth.DelegatedGrantSource, which already re-reads its Store on
+// every call (libs/go/grpcauth's GrantTokenSource doc comment).
+func TestOAuth2_MintedCredential_EachToolCallAcquiresTokenFresh_NoLocalCache(t *testing.T) {
 	stack := newOAuth2Stack(t)
 	token := stack.credentials.mint(t, "https://keycloak.example.test/realms/whagent", "operator-sub-cache")
 
@@ -298,10 +337,27 @@ func TestOAuth2_MintedCredential_ExchangeCachedAcrossCalls(t *testing.T) {
 	_, err = callGetSession(t, stack.url, token)
 	require.NoError(t, err)
 
-	assert.Equal(t, 1, stack.tokenHits(), "two tool calls for the same identity must exchange exactly once, reusing the cache")
-	headers := stack.fake.recordedAuthHeaders()
-	require.Len(t, headers, 2)
-	assert.Equal(t, headers[0], headers[1], "both calls must forward the identical cached exchange result")
+	assert.Equal(t, 2, stack.grant.callCount(), "two tool calls for the same identity must acquire a token twice -- mcp must never cache one of its own (NFR7)")
+}
+
+// TestOAuth2_MintedCredential_NoGrantForDomain_FailsNamingDomain covers
+// FR8's "no grant at all" case: GrantSource returning ErrGrantNotFound
+// must fail the tool call, naming the domain, and never fall back to any
+// other credential path.
+func TestOAuth2_MintedCredential_NoGrantForDomain_FailsNamingDomain(t *testing.T) {
+	stack := newOAuth2Stack(t)
+	stack.grant.tokenErr = fmt.Errorf("grpcauth: token material for grant %q: %w", integrationDomain, grpcauth.ErrGrantNotFound)
+	token := stack.credentials.mint(t, "https://keycloak.example.test/realms/whagent", "operator-sub-no-grant")
+
+	res, err := callGetSession(t, stack.url, token)
+	require.NoError(t, err, "a dispatch-time acquisition failure is a tool error, not a transport error")
+	require.True(t, res.IsError)
+	require.NotEmpty(t, res.Content)
+	text, ok := res.Content[0].(*mcp.TextContent)
+	require.True(t, ok)
+	assert.Contains(t, text.Text, integrationDomain, "the failure must name the domain the operator needs to consent for")
+
+	assert.Empty(t, stack.fake.recordedAuthHeaders(), "api must never be reached when no working credential was acquired")
 }
 
 // TestOAuth2_RevokedCredential_Rejected covers the revoked-credential case
@@ -314,6 +370,7 @@ func TestOAuth2_RevokedCredential_Rejected(t *testing.T) {
 	_, err := callGetSession(t, stack.url, token)
 	require.Error(t, err, "a revoked mcpauth credential must be rejected before any tool handler runs")
 	assert.Empty(t, stack.fake.recordedAuthHeaders(), "api must never be reached for a revoked credential")
+	assert.Empty(t, stack.grant.calls, "GrantSource must never be consulted for a rejected credential")
 }
 
 // TestOAuth2_GarbageCredential_Rejected covers a credential-shaped token
@@ -332,9 +389,10 @@ func TestOAuth2_GarbageCredential_Rejected(t *testing.T) {
 // task's regression requirement, the OAuth2-configured mirror of
 // auth_pass_through_test.go's own coverage (which proves the same thing
 // with NO OAuth2 configuration present at all): with a real
-// mcpauth.CredentialStore and a real Exchanger both wired in, a manual
-// (non-credential-shaped) bearer token must still be forwarded byte for
-// byte, completely bypassing the credential store and the exchanger.
+// mcpauth.CredentialStore and real DomainResolver/GrantSource doubles all
+// wired in, a manual (non-credential-shaped) bearer token must still be
+// forwarded byte for byte, completely bypassing the credential store and
+// dispatch-time resolution.
 func TestOAuth2_ManualTokenPath_StillWorksWithOAuth2Configured(t *testing.T) {
 	stack := newOAuth2Stack(t)
 
@@ -345,6 +403,6 @@ func TestOAuth2_ManualTokenPath_StillWorksWithOAuth2Configured(t *testing.T) {
 
 	headers := stack.fake.recordedAuthHeaders()
 	require.Len(t, headers, 1)
-	assert.Equal(t, "Bearer "+manualToken, headers[0], "the manual-token path must forward the operator's own token byte for byte, never touching the exchanger")
-	assert.Equal(t, 0, stack.tokenHits(), "a manual-token call must never hit the Keycloak token-exchange endpoint")
+	assert.Equal(t, "Bearer "+manualToken, headers[0], "the manual-token path must forward the operator's own token byte for byte, never touching dispatch-time resolution")
+	assert.Empty(t, stack.grant.calls, "a manual-token call must never consult GrantSource")
 }

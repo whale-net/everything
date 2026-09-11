@@ -103,9 +103,10 @@ func TestTiltfile_APIWorkerUIShareRabbitMQURL(t *testing.T) {
 // #2342 (FR9): whagent-net-mcp's PG_DATABASE_URL and the three
 // WHAGENT_MCP_KEYCLOAK_* vars must only be wired when
 // ENABLE_WHAGENT_NET_MCP_OAUTH is truthy, never unconditionally in the
-// static deployment blob. main.go's initializeTokenExchange treats "DB
-// reachable + mcp_credential table present + token-exchange config
-// incomplete" as a fatal NFR8 fail-loud error by design -- setting
+// static deployment blob. main.go's initializeAuthDeps (formerly
+// initializeTokenExchange) historically treated "DB reachable +
+// mcp_credential table present + token-exchange config incomplete" as a
+// fatal NFR8 fail-loud error by design -- setting
 // PG_DATABASE_URL unconditionally while leaving the Keycloak vars unset
 // (the prior Tiltfile default) crash-loops every fresh mcp pod once the
 // 004_mcpauth_credential migration is applied (validation finding #2338,

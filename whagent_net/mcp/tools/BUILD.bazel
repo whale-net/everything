@@ -9,6 +9,7 @@ go_library(
     name = "tools",
     srcs = [
         "convert.go",
+        "dispatch.go",
         "domain.go",
         "errors.go",
         "get_session.go",
@@ -22,6 +23,8 @@ go_library(
     visibility = ["//visibility:public"],
     deps = [
         "//libs/go/grpcauth",
+        "//whagent_net/grantkey",
+        "//whagent_net/mcpidentity",
         "//whagent_net/protos:whagentpb",
         "@com_github_modelcontextprotocol_go_sdk//mcp",
         "@org_golang_google_grpc//status",

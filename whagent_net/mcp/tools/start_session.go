@@ -34,10 +34,10 @@ type StartSessionOutput struct {
 // one per gRPC RPC, no more").
 //
 // domainResolver/grant are FR7/FR8's dispatch-time resolution seams
-// (domain.go, grant.go), injected here by issue #2430's Scaffold phase.
-// call does not use them yet -- resolving in.AgentID's domain and
-// acquiring a token via grant.TokenSource before forwarding is this same
-// issue's Implementation phase.
+// (domain.go, grant.go): call resolves in.AgentID's domain and acquires a
+// token via grant.TokenSource before forwarding (dispatch.go's
+// resolveGrantTokenForAgent), for the browser-OAuth2 path only -- see
+// dispatch.go's own doc comment for the manual-token-path no-op case.
 type startSessionTool struct {
 	client         pb.SessionServiceClient
 	domainResolver DomainResolver
@@ -59,16 +59,23 @@ func RegisterStartSession(srv *mcp.Server, client pb.SessionServiceClient, domai
 // first_turn" -- StartSessionRequest carries no first-turn field of its
 // own, so this is two RPC calls under the hood, not one; see
 // ../../ARCHITECTURE.md "Open items" for the recorded decision). The
-// caller's bearer token travels on ctx exactly as
-// ../server/auth.go's AuthMiddleware placed it there -- grpcauth's user
-// token dial option (main.go) reads it back off ctx for both calls, so
-// both reach api as the same operator identity. If SendTurn fails after
+// caller's bearer token travels on ctx -- either placed there directly by
+// ../server/auth.go's AuthMiddleware (the manual-token path), or acquired
+// just above via resolveGrantTokenForAgent (the browser-OAuth2 path,
+// FR7/FR8) -- grpcauth's user token dial option (main.go) reads it back
+// off ctx for both calls, so both reach api as the same operator identity.
+// If SendTurn fails after
 // StartSession already succeeded, the error says so explicitly (the
 // session was created, but its first turn was not queued) rather than
 // looking like start_session failed outright -- an operator seeing this
 // should retry with send_turn against the returned session_id, not
 // start_session again.
 func (t *startSessionTool) call(ctx context.Context, req *mcp.CallToolRequest, in StartSessionInput) (*mcp.CallToolResult, StartSessionOutput, error) {
+	ctx, err := resolveGrantTokenForAgent(ctx, t.domainResolver, t.grant, in.AgentID)
+	if err != nil {
+		return nil, StartSessionOutput{}, err
+	}
+
 	startReq := &pb.StartSessionRequest{AgentId: in.AgentID}
 	if in.ModelOverride != "" {
 		startReq.ModelOverride = &in.ModelOverride

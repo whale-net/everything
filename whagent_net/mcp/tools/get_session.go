@@ -34,10 +34,11 @@ type GetSessionOutput struct {
 // pass-through to.
 //
 // domainResolver/grant are FR7/FR8's dispatch-time resolution seams
-// (domain.go, grant.go), injected here by issue #2430's Scaffold phase.
-// call does not use them yet -- resolving in.SessionID's domain via
-// DomainForSession and acquiring a token via grant.TokenSource before
-// forwarding is this same issue's Implementation phase.
+// (domain.go, grant.go): call resolves in.SessionID's domain via
+// DomainForSession and acquires a token via grant.TokenSource before
+// forwarding (dispatch.go's resolveGrantTokenForSession), for the
+// browser-OAuth2 path only -- see dispatch.go's own doc comment for the
+// manual-token-path no-op case.
 type getSessionTool struct {
 	client         pb.SessionServiceClient
 	domainResolver DomainResolver
@@ -53,14 +54,22 @@ func RegisterGetSession(srv *mcp.Server, client pb.SessionServiceClient, domainR
 	}, t.call)
 }
 
-// call wires get_session to t.client.GetSession, mapping
-// pb.GetSessionResponse's optional cap_kind/error_category/error_detail
-// fields onto GetSessionOutput -- present only when the underlying
-// pointer on the *pb.Session itself is non-nil (proto3 `optional`
-// presence), never a zero-value substitute -- and forwarding the
-// caller's bearer token via ctx exactly as ../server/auth.go's
-// AuthMiddleware placed it there.
+// call resolves in.SessionID's domain and acquires a token (dispatch.go's
+// resolveGrantTokenForSession, FR7/FR8) before wiring get_session to
+// t.client.GetSession, mapping pb.GetSessionResponse's optional
+// cap_kind/error_category/error_detail fields onto GetSessionOutput --
+// present only when the underlying pointer on the *pb.Session itself is
+// non-nil (proto3 `optional` presence), never a zero-value substitute --
+// and forwarding the caller's bearer token via ctx exactly as
+// ../server/auth.go's AuthMiddleware placed it there (the manual-token
+// path) or as resolveGrantTokenForSession acquired it (the browser-OAuth2
+// path).
 func (t *getSessionTool) call(ctx context.Context, req *mcp.CallToolRequest, in GetSessionInput) (*mcp.CallToolResult, GetSessionOutput, error) {
+	ctx, err := resolveGrantTokenForSession(ctx, t.domainResolver, t.grant, in.SessionID)
+	if err != nil {
+		return nil, GetSessionOutput{}, err
+	}
+
 	resp, err := t.client.GetSession(ctx, &pb.GetSessionRequest{SessionId: in.SessionID})
 	if err != nil {
 		return nil, GetSessionOutput{}, toolError("GetSession", err)

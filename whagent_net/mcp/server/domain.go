@@ -17,7 +17,7 @@ import "context"
 // whagent_net/mcpdomain.Resolver is the only production implementation,
 // constructed exclusively at whagent_net/mcp/main.go's composition root,
 // exactly like this package's own mcpauth.CredentialStore usage (see
-// auth.go's NewVerifier and main.go's initializeTokenExchange).
+// auth.go's NewVerifier and main.go's initializeAuthDeps).
 //
 // A caller resolving "not found" (an unknown agent id or session id) gets
 // a distinguishable error from a transport/database failure -- see

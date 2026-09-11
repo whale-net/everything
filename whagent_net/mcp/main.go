@@ -10,31 +10,30 @@
 // package (package main) -- never from mcp/server or mcp/tools, per
 // issue #2120's TestBUILD_NoStoreOrTemporalDependency in each of those
 // packages. Today that is: the mcp_credential table backing the FR9/
-// issue #2249 OAuth2 token-exchange path's mcpauth.CredentialStore -- see
-// initializeTokenExchange below -- the agent_definition/session_agent
+// issue #2249 OAuth2 identity-resolution path's mcpauth.CredentialStore
+// -- see initializeAuthDeps below -- the agent_definition/session_agent
 // tables backing whagent_net/mcpdomain.Resolver's DomainResolver
 // implementation (issue #2427, FR7) -- and the grpcauth_delegated_grant/
 // grpcauth_grant_index tables backing //whagent_net/delegatedgrant's
-// Store/Index (see initializeDelegatedGrant, delegatedgrant.go), injected
-// into every tool as of issue #2430's Scaffold phase but not yet called
-// at tool-dispatch time (that is issue #2430's own Implementation phase).
-// On the
-// FR9 path, `mcp` also holds its own confidential Keycloak client
-// (WHAGENT_MCP_KEYCLOAK_*, ../ENV.md) with token-exchange/impersonation
-// rights, used to exchange a resolved operator identity for a
-// short-lived, real Keycloak-signed JWT (RFC 8693,
-// server/tokenexchange.go) before ever calling `api` -- `api` itself
-// verifies real Keycloak tokens only, so this is what makes the two
-// credential shapes indistinguishable downstream. Issue #2426's own
-// shared confidential client (WHAGENT_GRANT_*, distinct from both
-// WHAGENT_MCP_KEYCLOAK_* above and WHAGENT_OIDC_CLIENT_ID/_SECRET) is a
-// third, unrelated Keycloak client -- see delegatedgrant.go's doc
-// comment and NFR5.
+// Store/Index (see initializeDelegatedGrant, delegatedgrant.go).
+//
+// `mcp` mints nothing of its own for the browser-OAuth2/FR9 path: as of
+// issue #2430 (FR7/FR8/FR19), a resolved operator identity is exchanged
+// for a working credential exclusively via the shared
+// //whagent_net/delegatedgrant.Components.Source's
+// TokenSource(subject, grant).Token(ctx), called at tool-dispatch time
+// (../mcp/tools' RegisterXxx handlers) once a call's target domain is
+// known -- never at auth-middleware time, and never via RFC 8693
+// impersonation exchange (server/tokenexchange.go, WHAGENT_MCP_KEYCLOAK_*,
+// deleted by this same issue, not left dormant). Issue #2426's shared
+// confidential client (WHAGENT_GRANT_*, distinct from
+// WHAGENT_OIDC_CLIENT_ID/_SECRET) is what that TokenSource call
+// ultimately authenticates against -- see delegatedgrant.go's doc comment
+// and NFR5.
 package main
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"log/slog"
 	"net/http"
@@ -91,15 +90,9 @@ type config struct {
 	// at startup for the FR9 OAuth2 path (PG_DATABASE_URL, the same
 	// mcp_credential table #2245's migration created and `ui`'s
 	// mcpauth.Provider already mints into). Left empty disables the
-	// OAuth2 credential path entirely (initializeTokenExchange) -- the
+	// OAuth2 credential path entirely (initializeAuthDeps) -- the
 	// manual-token recipe never depends on it.
 	DatabaseURL string
-
-	// TokenExchange is mcp's own confidential-client settings for the
-	// RFC 8693 Keycloak token exchange (NFR8, server.TokenExchangeConfig's
-	// doc comment) -- WHAGENT_MCP_KEYCLOAK_CLIENT_ID/
-	// WHAGENT_MCP_KEYCLOAK_CLIENT_SECRET/WHAGENT_MCP_KEYCLOAK_TOKEN_URL.
-	TokenExchange server.TokenExchangeConfig
 
 	// OIDCIssuer is the Keycloak realm issuer (WHAGENT_OIDC_ISSUER,
 	// ../ENV.md "Identity") -- read here (not previously part of this
@@ -113,11 +106,12 @@ type config struct {
 	// //whagent_net/delegatedgrant.Build constructs (issue #2426,
 	// FR10/FR13/NFR5/NFR6 of plan #2421) -- WHAGENT_GRANT_CLIENT_ID/
 	// _CLIENT_SECRET/_REDIRECT_URI/_ENCRYPTION_KEY (../ENV.md). Distinct
-	// from TokenExchange above (a different confidential client, a
-	// different purpose -- RFC 8693 impersonation exchange, removed by a
-	// dependent task rather than reused here). Purely additive: nothing
-	// built from these is on any request path yet (see
-	// initializeDelegatedGrant's doc comment).
+	// from WHAGENT_OIDC_CLIENT_ID/_SECRET (which only ever verifies or
+	// forwards a token, never mints one). This is now `mcp`'s only
+	// token-acquisition path for the browser-OAuth2 identity-resolution
+	// case (issue #2430, FR8) -- the RFC 8693 impersonation exchange it
+	// replaced held its own, separate confidential-client settings, since
+	// deleted along with tokenexchange.go.
 	GrantClientID      string
 	GrantClientSecret  string
 	GrantRedirectURI   string
@@ -126,16 +120,11 @@ type config struct {
 
 func loadConfig() config {
 	return config{
-		MCPAddr:      getEnv("WHAGENT_MCP_ADDR", ":8082"),
-		APIAddr:      os.Getenv("WHAGENT_API_URL"),
-		MCPPublicURL: os.Getenv("WHAGENT_MCP_PUBLIC_URL"),
-		UIPublicURL:  os.Getenv("WHAGENT_UI_PUBLIC_URL"),
-		DatabaseURL:  os.Getenv("PG_DATABASE_URL"),
-		TokenExchange: server.TokenExchangeConfig{
-			ClientID:      os.Getenv("WHAGENT_MCP_KEYCLOAK_CLIENT_ID"),
-			ClientSecret:  os.Getenv("WHAGENT_MCP_KEYCLOAK_CLIENT_SECRET"),
-			TokenEndpoint: os.Getenv("WHAGENT_MCP_KEYCLOAK_TOKEN_URL"),
-		},
+		MCPAddr:            getEnv("WHAGENT_MCP_ADDR", ":8082"),
+		APIAddr:            os.Getenv("WHAGENT_API_URL"),
+		MCPPublicURL:       os.Getenv("WHAGENT_MCP_PUBLIC_URL"),
+		UIPublicURL:        os.Getenv("WHAGENT_UI_PUBLIC_URL"),
+		DatabaseURL:        os.Getenv("PG_DATABASE_URL"),
 		OIDCIssuer:         os.Getenv("WHAGENT_OIDC_ISSUER"),
 		GrantClientID:      os.Getenv("WHAGENT_GRANT_CLIENT_ID"),
 		GrantClientSecret:  os.Getenv("WHAGENT_GRANT_CLIENT_SECRET"),
@@ -151,106 +140,82 @@ func getEnv(key, def string) string {
 	return def
 }
 
-// tokenExchangeDeps holds the FR9 OAuth2 token-exchange path's
-// dependencies (issue #2249): a Postgres-backed mcpauth.CredentialStore
-// against the same mcp_credential table `ui`'s mcpauth.Provider mints
-// into (whagent_net/migrate/schema/migrations/004_mcpauth_credential,
-// issue #2245), and mcp's own confidential-client server.Exchanger.
+// authDeps holds every optional Postgres-backed composition-root
+// dependency `mcp` gates on PG_DATABASE_URL: a Postgres-backed
+// mcpauth.CredentialStore against the same mcp_credential table `ui`'s
+// mcpauth.Provider mints into (whagent_net/migrate/schema/migrations/
+// 004_mcpauth_credential, issue #2245, FR9's OAuth2 identity-resolution
+// path), whagent_net/mcpdomain.Resolver's DomainResolver implementation
+// (issue #2427, FR7), and //whagent_net/delegatedgrant's
+// Store/Index/DelegatedGrantSource triple (issue #2426, FR10/FR13/NFR5/
+// NFR6). All three share this one struct and this one pool purely because
+// they are constructed at the same point in startup against the same
+// optional dependency -- not because they are otherwise related.
+//
 // run() passes credentials into server.NewHTTPHandler (auth.go's
-// NewVerifier, the HTTP-layer classifier) and exchanger into server.New
-// (auth.go's AuthMiddleware, the MCP-protocol-layer exchange call) --
-// both fields are always consumed, though credentials may be nil (FR9
-// not configured) and exchanger may be constructed disabled (see
-// initializeTokenExchange's NFR8 fail-loud check for the one combination
-// that is instead a startup error).
+// NewVerifier, the HTTP-layer classifier), and domainResolver/grant.Source
+// into every tools.RegisterX call (issue #2430, FR7/FR8): *mcpdomain.Resolver
+// satisfies tools.DomainResolver and *grpcauth.DelegatedGrantSource
+// satisfies tools.GrantSource, both structurally (domain.go/grant.go) --
+// passed as those small domain-neutral interfaces, never this concrete
+// struct or the whagent_net/delegatedgrant/whagent_net/mcpdomain packages
+// themselves, which is what mcp/server's and mcp/tools' own
+// TestBUILD_NoStoreOrTemporalDependency (issue #2120) protects. Each tool
+// handler now calls DomainForAgent/DomainForSession -> grantkey.ForDomain
+// -> TokenSource(subject, grant).Token(ctx) at dispatch time for the
+// browser-OAuth2 path (mcp/tools' resolveGrantTokenForAgent/
+// resolveGrantTokenForSession) -- this is FR8's sole token-acquisition
+// path; there is no RFC 8693 impersonation exchange left to fall back to
+// (FR19, tokenexchange.go deleted).
 //
-// domainResolver (issue #2427, FR7) piggybacks on this same struct purely
-// because it is constructed against the same pool, at the same point in
-// startup, as credentials -- not because it is part of FR9's OAuth2 path.
-// run() (issue #2430's Scaffold phase) now threads it into every
-// tools.RegisterX call below, where *mcpdomain.Resolver satisfies
-// tools.DomainResolver structurally (domain.go) -- but no tool handler
-// calls DomainForAgent/DomainForSession yet; wiring that actual
-// dispatch-time call sequence is issue #2430's own Implementation phase.
-// May be nil exactly when credentials is (cfg.DatabaseURL unset or the
-// pool unreachable).
-//
-// grant (issue #2426, FR10/FR13/NFR5/NFR6) is unrelated to FR9's
-// token-exchange path -- it just happens to share this struct and this
-// binary's one Postgres pool, since both are optional Postgres-backed
-// composition-root wiring gated on the same PG_DATABASE_URL. run()
-// (issue #2430's Scaffold phase) now threads grant.Source into every
-// tools.RegisterX call below, where *grpcauth.DelegatedGrantSource
-// satisfies tools.GrantSource structurally (grant.go) -- but no tool
-// handler calls TokenSource yet; wiring the actual dispatch-time
-// acquisition (and replacing tokenexchange.go's exchange-based
-// acquisition with it) is issue #2430's own Implementation phase. Passed
-// as the small domain-neutral interfaces FR7/FR8 describe, never this
-// concrete struct or the whagent_net/delegatedgrant/whagent_net/mcpdomain
-// packages themselves -- mcp/server's and mcp/tools' own
-// TestBUILD_NoStoreOrTemporalDependency (issue #2120) is what that
-// protects.
-type tokenExchangeDeps struct {
+// domainResolver/credentials may be nil exactly when cfg.DatabaseURL is
+// unset or the pool is unreachable; grant is then also its zero value.
+type authDeps struct {
 	pool           *pgxpool.Pool
 	credentials    mcpauth.CredentialStore
-	exchanger      server.Exchanger
 	domainResolver *mcpdomain.Resolver
 	grant          delegatedgrant.Components
 }
 
-// Close releases pool, if initializeTokenExchange opened one.
-func (d tokenExchangeDeps) Close() {
+// Close releases pool, if initializeAuthDeps opened one.
+func (d authDeps) Close() {
 	if d.pool != nil {
 		d.pool.Close()
 	}
 }
 
-// initializeTokenExchange builds tokenExchangeDeps from cfg. Construction
-// is non-fatal for the parts of FR9 that are purely optional (mirrors
-// whagent_net/ui/main.go's initializeSSEHub degrade-and-log convention
-// for every other optional dependency in this binary): cfg.DatabaseURL
-// unset, an unreachable database, or a missing mcp_credential table all
-// degrade to "OAuth2 credential path unavailable" rather than preventing
-// `mcp` from starting -- the manual-token recipe never depends on any of
-// this.
-//
-// NFR8's fail-loud requirement is the one exception: once a
-// mcpauth.CredentialStore is actually reachable, the OAuth2 path becomes
-// reachable too (server.NewVerifier routes any credential-shaped token
-// there regardless of whether an exchange can ever succeed), so running
-// with credentials configured but cfg.TokenExchange disabled would mean
-// every OAuth2-path call fails opaquely at Exchange time instead of at
-// startup. This function returns an error in exactly that combination --
-// run() below treats it as fatal -- rather than silently degrading like
-// every other case here.
-func initializeTokenExchange(ctx context.Context, cfg config, logger *slog.Logger) (tokenExchangeDeps, error) {
-	exchanger := server.NewKeycloakExchanger(cfg.TokenExchange)
-	if !cfg.TokenExchange.Enabled() {
-		logger.Warn("WHAGENT_MCP_KEYCLOAK_CLIENT_ID/WHAGENT_MCP_KEYCLOAK_CLIENT_SECRET/WHAGENT_MCP_KEYCLOAK_TOKEN_URL not fully set; FR9 OAuth2 token exchange unavailable (manual-token recipe still works)")
-	}
-
+// initializeAuthDeps builds authDeps from cfg. Construction is entirely
+// non-fatal (mirrors whagent_net/ui/main.go's initializeSSEHub
+// degrade-and-log convention for every other optional dependency in this
+// binary), except a *partially* configured delegated-grant client, which
+// initializeDelegatedGrant itself treats as fatal (see its own doc
+// comment for why): cfg.DatabaseURL unset, an unreachable database, or a
+// missing mcp_credential table all degrade to "OAuth2 credential path
+// unavailable" rather than preventing `mcp` from starting -- the
+// manual-token recipe never depends on any of this.
+func initializeAuthDeps(ctx context.Context, cfg config, logger *slog.Logger) (authDeps, error) {
 	if cfg.DatabaseURL == "" {
 		logger.Warn("PG_DATABASE_URL not set; FR9 OAuth2 credential path unavailable (manual-token recipe still works)")
-		return tokenExchangeDeps{exchanger: exchanger}, nil
+		return authDeps{}, nil
 	}
 
 	pool, err := db.NewPool(ctx, cfg.DatabaseURL)
 	if err != nil {
 		logger.Warn("failed to connect to mcp_credential database; FR9 OAuth2 credential path unavailable (manual-token recipe still works)", "error", err)
-		return tokenExchangeDeps{exchanger: exchanger}, nil
+		return authDeps{}, nil
 	}
 
 	// Delegated-grant wiring (issue #2426) is unrelated to FR9's
-	// credential/exchange path below -- see tokenExchangeDeps' doc
-	// comment for why it shares this pool and this function anyway. A
-	// partial misconfiguration here is fatal (initializeDelegatedGrant's
-	// own doc comment); ErrNotConfigured degrades to a WARNING and a
-	// zero-value Components, same as every other optional dependency in
-	// this function.
+	// credential path below -- see authDeps' doc comment for why it
+	// shares this pool and this function anyway. A partial
+	// misconfiguration here is fatal (initializeDelegatedGrant's own doc
+	// comment); ErrNotConfigured degrades to a WARNING and a zero-value
+	// Components, same as every other optional dependency in this
+	// function.
 	grant, err := initializeDelegatedGrant(ctx, cfg, pool, logger)
 	if err != nil {
 		pool.Close()
-		return tokenExchangeDeps{}, err
+		return authDeps{}, err
 	}
 
 	// NewCredentialStore preflights the mcp_credential table (the same
@@ -260,30 +225,19 @@ func initializeTokenExchange(ctx context.Context, cfg config, logger *slog.Logge
 	if err != nil {
 		logger.Warn("failed to initialize mcpauth credential store; FR9 OAuth2 credential path unavailable (manual-token recipe still works)", "error", err)
 		pool.Close()
-		return tokenExchangeDeps{exchanger: exchanger}, nil
+		return authDeps{grant: grant}, nil
 	}
 
-	if !cfg.TokenExchange.Enabled() {
-		pool.Close()
-		return tokenExchangeDeps{}, errors.New(
-			"PG_DATABASE_URL is set (FR9 OAuth2 credential path reachable) but WHAGENT_MCP_KEYCLOAK_CLIENT_ID/" +
-				"WHAGENT_MCP_KEYCLOAK_CLIENT_SECRET/WHAGENT_MCP_KEYCLOAK_TOKEN_URL are not fully set (NFR8): " +
-				"either configure all three, or unset PG_DATABASE_URL to run manual-token-only",
-		)
-	}
-
-	logger.Info("mcpauth credential store initialized for the FR9 OAuth2 token-exchange path")
+	logger.Info("mcpauth credential store initialized for the FR9 OAuth2 identity-resolution path")
 
 	// domainResolver (issue #2427, FR7) is constructed against the same
-	// pool credentials just was -- see tokenExchangeDeps' doc comment for
-	// why it is held here unconsumed rather than threaded into
-	// server.New/tools.RegisterX below. Unlike mcpauth.NewCredentialStore,
+	// pool credentials just was. Unlike mcpauth.NewCredentialStore,
 	// session.New/AgentDefinitions perform no preflight query of their
 	// own, so there is nothing further to degrade on here: the pool
 	// already proved reachable immediately above.
 	domainResolver := mcpdomain.New(session.New(pool, nil).AgentDefinitions())
 
-	return tokenExchangeDeps{pool: pool, credentials: credentials, exchanger: exchanger, domainResolver: domainResolver, grant: grant}, nil
+	return authDeps{pool: pool, credentials: credentials, domainResolver: domainResolver, grant: grant}, nil
 }
 
 func main() {
@@ -317,26 +271,26 @@ func run() error {
 	// to Temporal, and its only outbound RPC dependency is api's own
 	// gRPC address (ARCHITECTURE.md "Service boundary vs. package
 	// boundary"). FR9 (issue #2249) is the one exception on the Postgres
-	// side: when cfg.DatabaseURL is set, initializeTokenExchange below
-	// probes the same mcp_credential table `ui`'s mcpauth.Provider mints
-	// into, and wires the OAuth2 path into both server.NewHTTPHandler
-	// (the HTTP-layer verifier, auth.go's NewVerifier) and server.New
-	// (the MCP-protocol-layer AuthMiddleware) below -- resolved and
-	// checked for the NFR8 fail-loud combination before anything else is
-	// constructed, so a misconfiguration is reported before `mcp` ever
-	// dials `api`. NewUserTokenDialOption(AuthModeOIDC) is unconditional
-	// (not read from GRPC_AUTH_MODE-style config): every call that reaches
-	// a tool handler already carries a bearer token on ctx (server/auth.go's
-	// AuthMiddleware rejects any call without one before a tool handler
-	// runs, whichever path resolved it), so this dial option always
-	// forwards it, byte for byte, as the outbound call's own Authorization
-	// header -- the operator's identity, never a shared service account
-	// (FR10).
-	tex, err := initializeTokenExchange(ctx, cfg, logger)
+	// side: when cfg.DatabaseURL is set, initializeAuthDeps below probes
+	// the same mcp_credential table `ui`'s mcpauth.Provider mints into,
+	// and wires the OAuth2 identity-resolution path into
+	// server.NewHTTPHandler (the HTTP-layer verifier, auth.go's
+	// NewVerifier) -- resolved before anything else is constructed, so a
+	// misconfiguration is reported before `mcp` ever dials `api`.
+	// NewUserTokenDialOption(AuthModeOIDC) is unconditional (not read from
+	// GRPC_AUTH_MODE-style config): every call that reaches a tool handler
+	// already carries a bearer token on ctx -- either forwarded byte for
+	// byte by the manual-token path, or acquired at tool-dispatch time via
+	// GrantSource for the browser-OAuth2 path (issue #2430, FR7/FR8;
+	// server/auth.go's AuthMiddleware rejects any call carrying neither
+	// before a tool handler runs) -- so this dial option always forwards
+	// it as the outbound call's own Authorization header -- the operator's
+	// identity, never a shared service account (FR10).
+	auth, err := initializeAuthDeps(ctx, cfg, logger)
 	if err != nil {
 		return err
 	}
-	defer tex.Close()
+	defer auth.Close()
 
 	apiConn, err := grpcclient.NewClient(ctx, cfg.APIAddr, grpcauth.NewUserTokenDialOption(grpcauth.AuthModeOIDC))
 	if err != nil {
@@ -346,23 +300,27 @@ func run() error {
 
 	client := pb.NewSessionServiceClient(apiConn.GetConnection())
 
-	srv := server.New(tex.exchanger)
-	// tex.domainResolver (issue #2427, FR7) and tex.grant.Source (issue
-	// #2426, FR8) are threaded into every tool here as this task's
-	// (#2430) Scaffold phase: *mcpdomain.Resolver and
-	// *grpcauth.DelegatedGrantSource each satisfy tools.DomainResolver/
+	srv := server.New()
+	// auth.domainResolver (issue #2427, FR7) and auth.grant.Source (issue
+	// #2426, FR8) are threaded into every tool here: *mcpdomain.Resolver
+	// and *grpcauth.DelegatedGrantSource each satisfy tools.DomainResolver/
 	// tools.GrantSource structurally (domain.go/grant.go's doc comments),
 	// with no adapter and no direct import of mcpdomain/delegatedgrant
-	// from mcp/tools itself. No tool handler calls either yet -- wiring
-	// the actual dispatch-time DomainForAgent/DomainForSession ->
-	// grantkey.ForDomain -> TokenSource(subject, grant).Token(ctx)
-	// sequence, and removing tokenexchange.go's exchange-based
-	// acquisition it replaces, is this same issue's Implementation phase.
-	tools.RegisterStartSession(srv, client, tex.domainResolver, tex.grant.Source)
-	tools.RegisterSendTurn(srv, client, tex.domainResolver, tex.grant.Source)
-	tools.RegisterStopSession(srv, client, tex.domainResolver, tex.grant.Source)
-	tools.RegisterGetSession(srv, client, tex.domainResolver, tex.grant.Source)
-	tools.RegisterReadTranscript(srv, client, tex.domainResolver, tex.grant.Source)
+	// from mcp/tools itself. Each tool's call() resolves the domain the
+	// call actually targets and acquires a token via GrantSource at
+	// dispatch time for the browser-OAuth2 path only (issue #2430's
+	// Implementation phase; see mcp/tools' resolveGrantTokenForAgent/
+	// resolveGrantTokenForSession) -- both may be nil (cfg.DatabaseURL
+	// unset), which those dispatch-time helpers treat identically to
+	// "no identity resolved", since a nil domainResolver/grant is only
+	// ever consulted when an Identity is actually on ctx, and mcp/server's
+	// NewVerifier never produces one without a reachable
+	// mcpauth.CredentialStore in the first place.
+	tools.RegisterStartSession(srv, client, auth.domainResolver, auth.grant.Source)
+	tools.RegisterSendTurn(srv, client, auth.domainResolver, auth.grant.Source)
+	tools.RegisterStopSession(srv, client, auth.domainResolver, auth.grant.Source)
+	tools.RegisterGetSession(srv, client, auth.domainResolver, auth.grant.Source)
+	tools.RegisterReadTranscript(srv, client, auth.domainResolver, auth.grant.Source)
 
 	resourceMeta := server.ResourceMetadataConfig{
 		Resource:            cfg.MCPPublicURL,
@@ -372,7 +330,7 @@ func run() error {
 
 	httpServer := &http.Server{
 		Addr:         cfg.MCPAddr,
-		Handler:      otelhttp.NewHandler(server.NewHTTPHandler(srv, tex.credentials, resourceMeta), "whagent-net-mcp"),
+		Handler:      otelhttp.NewHandler(server.NewHTTPHandler(srv, auth.credentials, resourceMeta), "whagent-net-mcp"),
 		ReadTimeout:  15 * time.Second,
 		WriteTimeout: 15 * time.Second,
 		IdleTimeout:  60 * time.Second,

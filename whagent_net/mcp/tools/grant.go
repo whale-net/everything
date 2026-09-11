@@ -25,11 +25,12 @@ package tools
 // -- ../server already depends on it directly today (auth.go's
 // grpcauth.WithUserToken).
 //
-// This task's Scaffold phase only injects GrantSource into each
-// RegisterXxx call (main.go) and stores it on each tool struct; no
-// handler calls TokenSource yet -- that dispatch-time call sequence
-// (DomainForAgent/DomainForSession -> grantkey.ForDomain -> TokenSource(
-// subject, grant).Token(ctx)) is this same issue's Implementation phase.
+// dispatch.go's resolveGrantTokenForAgent/resolveGrantTokenForSession run
+// the actual dispatch-time call sequence (DomainForAgent/DomainForSession
+// -> grantkey.ForDomain -> TokenSource(subject, grant).Token(ctx)) --
+// subject is always identity.Sub, the operator's raw Keycloak `sub` claim
+// resolved by ../server/auth.go's AuthMiddleware, never grant, agentID,
+// sessionID, or anything else the request itself carries (NFR2).
 import "github.com/whale-net/everything/libs/go/grpcauth"
 
 type GrantSource interface {
