@@ -158,22 +158,26 @@ var manmanv2RouteTable = []string{
 	// Protected.
 	"/select-server",
 	"/",
-	"/sessions",
+	"/sessions", // #2372 M6: retired to a redirect onto /activity (FR17) -- still its own auth-gated route
 	"/sessions/42",
 	"/sessions/start",
 	"/api/sessions/check-active",
 	"/api/sessions/historical-logs",
 	"/api/sessions/42",
+	"/activity", // #2271/#2277 M5: fleet-wide Live now/History view
 	"/games",
 	"/games/new",
 	"/games/create",
 	"/games/42",
 	"/docs/config-strategies",
-	"/servers",
-	"/servers/6",
-	"/servers/6/update-address", // #1528 FR4: host connect-address edit
-	"/workshop",                 // #2362 M6: redesigned Workshop top-level page
-	"/workshop/library",
+	"/servers",                  // #2372 M6: retired to a redirect onto /infrastructure (FR16) -- still its own auth-gated route
+	"/servers/6",                // #2372 M6: ditto, preserving the host id as "?manage=6"
+	"/servers/6/update-address", // #1528 FR4: host connect-address edit; #2372 M6 folded this into /infrastructure/6/update-address, so this probe now also resolves via the "/servers/" redirect catch-all
+	"/infrastructure",           // #2369 M6: redesigned Infrastructure fleet host list
+	"/infrastructure/6",
+	"/infrastructure/6/update-address", // #2372 M6: folded in from the retired /servers/{id}/update-address
+	"/workshop",                        // #2362 M6: redesigned Workshop top-level page
+	"/workshop/library",                // #2372 M6: retired to a redirect onto /workshop (FR16) -- still its own auth-gated route
 	"/workshop/search",
 	"/workshop/addon",
 	"/workshop/library-detail",

@@ -8,10 +8,8 @@ import (
 )
 
 // Infrastructure is the M6 fleet host list (FR1/FR2, C29): every host in
-// the fleet with its drain state, eventually replacing /servers as the
-// nav-facing surface (the nav swap and /servers redirect are the dependent
-// navigation/disposition task, not this one -- see this task's "Design
-// note" above navItems' Infrastructure entry in components/layout.templ).
+// the fleet with its drain state, now the nav-facing surface FR16
+// (task #2372) redirects /servers and /servers/<id> onto.
 //
 // Implementation phase (#2369): the FR2 floor (host name + drain-state
 // badge) plus health indicators bounded by NFR5 (Server.status,
@@ -22,6 +20,13 @@ import (
 // FR4 undrain one-click actions (posting through handleInfrastructureAction),
 // and the FR2 transient "draining" state, which settles to "drained" on a
 // manual page refresh -- no new live transport (NFR5), no SSE/polling.
+//
+// Task #2372 (M6 navigation/disposition) additionally folds in each host's
+// public-address edit and allowed-port-ranges management (formerly
+// pages/server_detail.templ, retired by this task) as a per-row "Manage"
+// disclosure -- see hostManagePanel below and ServerPortRangesSection's
+// doc comment for why: #2369 did not fold that capability in, so this task
+// keeps it reachable rather than let it regress (NFR6).
 templ Infrastructure(layout components.LayoutData, hosts []*InfrastructureHost) {
 	@components.Layout(layout) {
 		<div class="flex justify-between items-center mb-2">
@@ -46,7 +51,7 @@ templ Infrastructure(layout components.LayoutData, hosts []*InfrastructureHost) 
 				</thead>
 				<tbody>
 					for _, host := range hosts {
-						<tr class="hover">
+						<tr id={ fmt.Sprintf("host-row-%d", host.Server.ServerId) } class="hover">
 							<td class="text-sm font-medium text-base-content">{ host.Server.Name }</td>
 							<td>
 								@htmxui.Badge(drainStateLabel(host.Server.DrainState), statusBadgeVariant(drainStateVariant(host.Server.DrainState)), htmxui.BadgeSizeSM, true, nil)
@@ -85,9 +90,11 @@ templ Infrastructure(layout components.LayoutData, hosts []*InfrastructureHost) 
 											}
 										</form>
 									}
+									<a href={ templ.URL(fmt.Sprintf("/infrastructure?manage=%d#host-manage-%d", host.Server.ServerId, host.Server.ServerId)) } class="btn btn-secondary btn-sm">Manage</a>
 								</div>
 							</td>
 						</tr>
+						@hostManagePanel(host)
 					}
 				</tbody>
 			}
@@ -100,4 +107,51 @@ templ Infrastructure(layout components.LayoutData, hosts []*InfrastructureHost) 
 			)
 		}
 	}
+}
+
+// hostManagePanel renders one host's collapsible "Manage" row: public
+// address edit (posting to handleInfrastructureUpdateAddress) plus the
+// allowed-port-ranges card (ServerPortRangesSection). Task #2372 (M6
+// navigation/disposition) added this when pages/server_detail.templ
+// retired -- see Infrastructure's doc comment above for why the
+// capability moved here instead of disappearing (NFR6).
+//
+// A plain HTML <details open?=...> is used rather than any client script:
+// host.ManageOpen (server-computed from the "?manage=<id>" query param FR16's
+// /servers/<id> redirect target sets, or from a ports/address action just
+// having round-tripped through this host) is the only thing that opens it,
+// so a host with no query param and no just-completed action renders
+// collapsed by default, keeping this page's normal (no manage state) render
+// identical to before this task.
+templ hostManagePanel(host *InfrastructureHost) {
+	<tr>
+		<td colspan="7" class="bg-base-200/40 p-0">
+			<details id={ fmt.Sprintf("host-manage-%d", host.Server.ServerId) } open?={ host.ManageOpen } class="p-4">
+				<summary class="cursor-pointer text-sm font-medium text-base-content/70">Manage { host.Server.Name }</summary>
+				<div class="mt-4 max-w-2xl">
+					<div class="card bg-base-100 border border-base-300 shadow-sm mb-4">
+						<div class="card-body">
+							<h3 class="text-sm font-semibold text-base-content mb-2">Public Address</h3>
+							<form method="POST" action={ templ.URL(fmt.Sprintf("/infrastructure/%d/update-address", host.Server.ServerId)) } class="flex flex-col gap-2 max-w-md">
+								<label for={ fmt.Sprintf("host_public_address_%d", host.Server.ServerId) } class="block text-sm font-medium text-base-content">Edit Public Address</label>
+								<input
+									type="text"
+									id={ fmt.Sprintf("host_public_address_%d", host.Server.ServerId) }
+									name="host_public_address"
+									value={ host.Server.HostPublicAddress }
+									placeholder="e.g., game.example.com:27015"
+									class="input input-bordered w-full"
+								/>
+								<p class="text-xs text-base-content/60">Leave blank to clear.</p>
+								<div>
+									<button type="submit" class="btn btn-success btn-sm">Save Public Address</button>
+								</div>
+							</form>
+						</div>
+					</div>
+					@ServerPortRangesSection(host.Server, host.PortsNotice, host.PortsEdit, "/infrastructure")
+				</div>
+			</details>
+		</td>
+	</tr>
 }

@@ -205,7 +205,7 @@ func TestBuildGameRows_RunStateRollup(t *testing.T) {
 		{SessionId: 2, ServerGameConfigId: 101, StartedAt: 1000, Status: "running"},
 	}
 
-	rows := buildGameRows(games, configs, deployments, servers, sessions)
+	rows := buildGameRows(games, configs, deployments, servers, sessions, nil)
 	if len(rows) != 1 {
 		t.Fatalf("len(rows) = %d, want 1", len(rows))
 	}
@@ -220,6 +220,7 @@ func TestBuildGameRows_RunStateRollup(t *testing.T) {
 		[]*manmanpb.ServerGameConfig{{ServerGameConfigId: 200, ServerId: 1, GameConfigId: 20, Status: "active"}},
 		servers,
 		[]*manmanpb.Session{{SessionId: 3, ServerGameConfigId: 200, StartedAt: 1000, Status: "stopped"}},
+		nil,
 	)
 	if allStopped[0].RunState != components.DeploymentStopped {
 		t.Errorf("RunState = %q, want %q for an all-stopped game", allStopped[0].RunState, components.DeploymentStopped)
@@ -259,7 +260,7 @@ func TestBuildGameRows_ConnectAddress(t *testing.T) {
 		{SessionId: 2, ServerGameConfigId: 200, StartedAt: 1000, Status: "running"},
 	}
 
-	rows := buildGameRows(games, configs, deployments, servers, sessions)
+	rows := buildGameRows(games, configs, deployments, servers, sessions, nil)
 
 	want := components.BuildConnectAddressView("host-01", deployments[0].PortBindings)
 	got := gameRowByID(t, rows, 1).Connect
@@ -292,7 +293,7 @@ func TestBuildGameRows_DeterministicSort(t *testing.T) {
 		{4, 3, 2, 1},
 		{3, 1, 4, 2},
 	} {
-		rows := buildGameRows(makeGames(order), nil, nil, nil, nil)
+		rows := buildGameRows(makeGames(order), nil, nil, nil, nil, nil)
 		got := make([]int64, len(rows))
 		for i, r := range rows {
 			got[i] = r.GameID
@@ -338,7 +339,7 @@ func TestBuildGameRows_FR7_ConfigsPerGameWithDeploymentCount(t *testing.T) {
 		{SessionId: 3, ServerGameConfigId: 200, StartedAt: 1000, Status: "running"},
 	}
 
-	rows := buildGameRows(games, configs, deployments, servers, sessions)
+	rows := buildGameRows(games, configs, deployments, servers, sessions, nil)
 
 	alpha := gameRowByID(t, rows, 1)
 	if len(alpha.Configs) != 2 {
@@ -474,7 +475,7 @@ func TestBuildGameRows_Deployments_ListsAllDeployments(t *testing.T) {
 		{SessionId: 3, ServerGameConfigId: 200, StartedAt: 1000, Status: "running"},
 	}
 
-	rows := buildGameRows(games, configs, deployments, servers, sessions)
+	rows := buildGameRows(games, configs, deployments, servers, sessions, nil)
 
 	alpha := gameRowByID(t, rows, 1)
 	if len(alpha.Deployments) != 2 {
@@ -544,6 +545,7 @@ func TestBuildGameRows_Deployments_AntiDrift(t *testing.T) {
 				[]*manmanpb.ServerGameConfig{deployment},
 				servers,
 				sessions,
+				nil,
 			)
 			row := gameRowByID(t, rows, 1)
 			if len(row.Deployments) != 1 {
@@ -597,7 +599,7 @@ func TestBuildGameRows_Deployments_RunStateUsesComputeDeploymentStatus(t *testin
 		{SessionId: 1, ServerGameConfigId: 100, StartedAt: 1000, Status: "running"},
 	}
 
-	rows := buildGameRows(games, configs, deployments, servers, sessions)
+	rows := buildGameRows(games, configs, deployments, servers, sessions, nil)
 	row := gameRowByID(t, rows, 1)
 	if len(row.Deployments) != 1 {
 		t.Fatalf("Deployments = %d rows, want 1", len(row.Deployments))
@@ -629,7 +631,7 @@ func TestBuildGameRows_Deployments_ConnectAddress(t *testing.T) {
 		{SessionId: 1, ServerGameConfigId: 100, StartedAt: 1000, Status: "running"},
 	}
 
-	rows := buildGameRows(games, configs, deployments, servers, sessions)
+	rows := buildGameRows(games, configs, deployments, servers, sessions, nil)
 	row := gameRowByID(t, rows, 1)
 	dep := row.Deployments[0]
 
@@ -642,7 +644,7 @@ func TestBuildGameRows_Deployments_ConnectAddress(t *testing.T) {
 
 	// Unresolvable case: no host_public_address configured.
 	unresolvableServers := []*manmanpb.Server{{ServerId: 1, HostPublicAddress: ""}}
-	rows = buildGameRows(games, configs, deployments, unresolvableServers, sessions)
+	rows = buildGameRows(games, configs, deployments, unresolvableServers, sessions, nil)
 	dep = gameRowByID(t, rows, 1).Deployments[0]
 	if !dep.Connect.Unavailable {
 		t.Errorf("unresolvable deployment Connect.Unavailable = false, want true (never a blank)")
@@ -667,7 +669,7 @@ func TestBuildGameRows_Deployments_LinkOuts(t *testing.T) {
 		// SGC 101 has never had a session.
 	}
 
-	rows := buildGameRows(games, configs, deployments, servers, sessions)
+	rows := buildGameRows(games, configs, deployments, servers, sessions, nil)
 	depByID := map[int64]pages.GameDeploymentRow{}
 	for _, dep := range gameRowByID(t, rows, 1).Deployments {
 		depByID[dep.Row.ServerGameConfigID] = dep

@@ -313,28 +313,146 @@ func TestHandleInfrastructure_NoSGCTerminology(t *testing.T) {
 	}
 }
 
-// TestServersAndServerDetail_StillReturn200 is the NFR6 regression check:
-// /servers and /servers/<id> must keep working, unmodified by this task's
-// additive /infrastructure routes.
-func TestServersAndServerDetail_StillReturn200(t *testing.T) {
-	api := newFakeInfrastructureAPIClient()
-	api.servers = []*manmanpb.Server{{ServerId: 1, Name: "host-alpha", DrainState: "draining"}}
+// Note: /servers and /servers/<id> retired to redirects onto /infrastructure
+// by task #2372 (M6 navigation/disposition, FR16) -- see
+// handlers_redirects_test.go for that coverage. This file's own NFR6
+// regression check against the old pages (previously
+// TestServersAndServerDetail_StillReturn200) no longer applies now that
+// this task deliberately changed that behavior.
 
+// TestHandleInfrastructure_ManageQueryParam_OpensThatHostsPanel covers task
+// #2372's "?manage=<id>" contract (FR16's /servers/<id> redirect target,
+// preserving the identifier): the named host's row renders its Manage
+// panel open (public address + allowed port ranges), and no other host's
+// panel does.
+func TestHandleInfrastructure_ManageQueryParam_OpensThatHostsPanel(t *testing.T) {
+	api := newFakeInfrastructureAPIClient()
+	api.servers = []*manmanpb.Server{
+		{ServerId: 1, Name: "host-alpha", HostPublicAddress: "alpha.example.com:27015"},
+		{ServerId: 2, Name: "host-beta"},
+	}
+
+	code, body := renderInfrastructureHTTP(t, api, "/infrastructure?manage=1")
+	if code != http.StatusOK {
+		t.Fatalf("status = %d, want 200; body: %s", code, body)
+	}
+
+	if !strings.Contains(body, `id="host-manage-1"`) || !strings.Contains(body, `id="host-manage-2"`) {
+		t.Fatalf("expected both hosts' Manage panels to render, got: %s", body)
+	}
+	openIdx := strings.Index(body, `id="host-manage-1"`)
+	closedIdx := strings.Index(body, `id="host-manage-2"`)
+	// host-manage-1's <details> must carry the "open" attribute; host-manage-2's must not.
+	openTagEnd := strings.Index(body[openIdx:], ">")
+	if !strings.Contains(body[openIdx:openIdx+openTagEnd], " open") {
+		t.Errorf("expected host-manage-1's <details> to render open, got: %s", body[openIdx:openIdx+openTagEnd])
+	}
+	closedTagEnd := strings.Index(body[closedIdx:], ">")
+	if strings.Contains(body[closedIdx:closedIdx+closedTagEnd], " open") {
+		t.Errorf("expected host-manage-2's <details> to render closed, got: %s", body[closedIdx:closedIdx+closedTagEnd])
+	}
+	if !strings.Contains(body, "alpha.example.com:27015") {
+		t.Errorf("expected host-alpha's public address to render in its Manage panel, got: %s", body)
+	}
+}
+
+// TestHandleInfrastructureUpdateAddress_SendsFieldMask guards #1528's
+// clear-via-field-mask contract (per #1527), now served from
+// "/infrastructure/{id}/update-address" (moved here from the retired
+// handleServerUpdateAddress by task #2372): both a non-empty and an empty
+// submitted value must send update_paths == ["host_public_address"] on the
+// outgoing UpdateServerRequest, so an empty submission clears the field via
+// the mask rather than falling back to update-all semantics.
+func TestHandleInfrastructureUpdateAddress_SendsFieldMask(t *testing.T) {
+	cases := []struct {
+		name        string
+		submitted   string
+		wantAddress string
+	}{
+		{name: "non-empty value", submitted: "game.example.com:27015", wantAddress: "game.example.com:27015"},
+		{name: "empty value clears", submitted: "", wantAddress: ""},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			var gotReq *manmanpb.UpdateServerRequest
+			api := &stubInfrastructureUpdateServerClient{
+				updateServerFunc: func(ctx context.Context, in *manmanpb.UpdateServerRequest, opts ...grpc.CallOption) (*manmanpb.UpdateServerResponse, error) {
+					gotReq = in
+					return &manmanpb.UpdateServerResponse{}, nil
+				},
+			}
+			app := &App{grpc: &ControlClient{api: api}}
+
+			form := "host_public_address=" + tc.submitted
+			req := httptest.NewRequest(http.MethodPost, "/infrastructure/6/update-address", strings.NewReader(form))
+			req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+			w := httptest.NewRecorder()
+
+			app.handleInfrastructureUpdateAddress(w, req, "6")
+
+			if w.Code != http.StatusSeeOther {
+				t.Fatalf("status = %d, want %d; body = %s", w.Code, http.StatusSeeOther, w.Body.String())
+			}
+			if got, want := w.Header().Get("Location"), "/infrastructure?manage=6#host-manage-6"; got != want {
+				t.Errorf("Location = %q, want %q", got, want)
+			}
+
+			if gotReq == nil {
+				t.Fatalf("expected UpdateServer to be called")
+			}
+			if gotReq.ServerId != 6 {
+				t.Errorf("ServerId = %d, want 6", gotReq.ServerId)
+			}
+			if gotReq.HostPublicAddress != tc.wantAddress {
+				t.Errorf("HostPublicAddress = %q, want %q", gotReq.HostPublicAddress, tc.wantAddress)
+			}
+			wantPaths := []string{"host_public_address"}
+			if len(gotReq.UpdatePaths) != len(wantPaths) || gotReq.UpdatePaths[0] != wantPaths[0] {
+				t.Errorf("UpdatePaths = %v, want %v", gotReq.UpdatePaths, wantPaths)
+			}
+		})
+	}
+}
+
+// TestHandleInfrastructureUpdateAddress_RejectsNonPost guards NFR2/FR10-
+// adjacent hygiene: this handler must only accept POST, not silently accept
+// a GET that could be triggered by a prefetch or a stray link.
+func TestHandleInfrastructureUpdateAddress_RejectsNonPost(t *testing.T) {
+	called := false
+	api := &stubInfrastructureUpdateServerClient{
+		updateServerFunc: func(ctx context.Context, in *manmanpb.UpdateServerRequest, opts ...grpc.CallOption) (*manmanpb.UpdateServerResponse, error) {
+			called = true
+			return &manmanpb.UpdateServerResponse{}, nil
+		},
+	}
 	app := &App{grpc: &ControlClient{api: api}}
 
-	req := httptest.NewRequest(http.MethodGet, "/servers", nil)
+	req := httptest.NewRequest(http.MethodGet, "/infrastructure/6/update-address", nil)
 	w := httptest.NewRecorder()
-	app.handleServers(w, req)
-	if w.Code != http.StatusOK {
-		t.Fatalf("/servers status = %d, want 200; body: %s", w.Code, w.Body.String())
-	}
 
-	req = httptest.NewRequest(http.MethodGet, "/servers/1", nil)
-	w = httptest.NewRecorder()
-	app.handleServerDetail(w, req)
-	if w.Code != http.StatusOK {
-		t.Fatalf("/servers/1 status = %d, want 200; body: %s", w.Code, w.Body.String())
+	app.handleInfrastructureUpdateAddress(w, req, "6")
+
+	if w.Code != http.StatusMethodNotAllowed {
+		t.Errorf("status = %d, want %d", w.Code, http.StatusMethodNotAllowed)
 	}
+	if called {
+		t.Errorf("expected UpdateServer not to be called for a GET request")
+	}
+}
+
+// stubInfrastructureUpdateServerClient embeds the (nil)
+// manmanpb.ManManAPIClient interface so it satisfies the full interface
+// without implementing every RPC -- only updateServerFunc is exercised by
+// the tests above; any other method call would nil-panic, the desired
+// failure mode for an unexpected call.
+type stubInfrastructureUpdateServerClient struct {
+	manmanpb.ManManAPIClient
+	updateServerFunc func(ctx context.Context, in *manmanpb.UpdateServerRequest, opts ...grpc.CallOption) (*manmanpb.UpdateServerResponse, error)
+}
+
+func (s *stubInfrastructureUpdateServerClient) UpdateServer(ctx context.Context, in *manmanpb.UpdateServerRequest, opts ...grpc.CallOption) (*manmanpb.UpdateServerResponse, error) {
+	return s.updateServerFunc(ctx, in, opts...)
 }
 
 // rowSection isolates the <tr>...</tr> block containing hostName's table

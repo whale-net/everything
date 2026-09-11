@@ -55,9 +55,9 @@ Backend / platform work implied by the proposal screens:
 |----------------------|---------------|
 | Connect address (`public_ip:port`) per deployment, copyable; shown on game rows | **No public IP anywhere in the system.** Host manager must report it; API must expose it. Biggest blocker. |
 | Player counts (`4/10`) and aggregate game status ("2 running") | No player telemetry or per-game rollup endpoint; needs verification/instrumentation. |
-| Ports editable on the Game Config (Config Editor "Ports — new") | Ports are not editable via UI/API; set by `scripts/load-*-config.sh`. |
+| Ports editable on the Game Config (Config Editor "Ports — new") | **Shipped (M3).** Config Editor's Ports tab (`manmanv2/ui/pages/config_editor.templ`) edits `port_bindings` on the deployment directly (WD10). |
 | Start/Stop directly on a deployment row; Restart on a crashed game | Start is a separate sessions flow today; no deploy-and-start composite; no one-click restart. |
-| Per-deployment env overrides (Deployment Settings) | Accepted design, unbuilt — see DESIGN_SGC_ENV_OVERRIDES.md work plan. |
+| Per-deployment env overrides (Deployment Settings) | **Shipped (M3).** The Deployment Settings blade (`manmanv2/ui/pages/deployment_settings.templ`) renders the env-override layer stack per DESIGN_SGC_ENV_OVERRIDES.md's accepted Option B design. |
 | GC-level libraries + per-deployment extra addons | Schema/API change (libraries are SGC-level today); not covered by any work plan yet. |
 | Library/addon install-target picker (volume + path, preset-backed) | Install target is implicit today; presets exist but aren't wired into attach flows. |
 | Volume backup config inline on the volume (Config Editor) | Backups exist as separate backup-configs; UI/API reshaping assumed. |
@@ -82,9 +82,49 @@ Backend / platform work implied by the proposal screens:
   config or deployment settings change (prompt to restart? badge for
   "config drift"?). Related open question in the env-overrides doc.
 - **Migration path**: current 19 pages → new IA (which pages die, which
-  redirect); nothing planned yet.
+  redirect) -- **resolved for the Infrastructure/Workshop/Sessions slice by
+  task #2372 (M6 navigation/disposition)**; see "M6 disposition" below.
+  Every other pre-redesign page not named there is unaffected.
 - **Collapsed game rows** show a one-line summary; exact summary
   content (players vs address vs last-played) not settled.
+
+## M6 disposition (task #2372, root plan #2359 FR16/FR17)
+
+The nav is now exactly decision 4's five-entry IA -- **Dashboard · Games ·
+Activity · Infrastructure · Workshop** -- with no "Sessions" entry (the
+interim six-entry list, amendment A4 to M5's FR1, is superseded now that
+`/sessions` itself redirects; see `manmanv2/ui/components/layout.templ`'s
+`navItems`). Every pre-redesign URL below permanently redirects (301) to
+its replacement, per the shipped M5 pattern
+(`manmanv2/ui/handlers_deployment_redirects.go`, task #2279):
+
+| Retired URL | Redirects to | Replacement page |
+|---|---|---|
+| `/servers` | `/infrastructure` | Infrastructure (task #2369) |
+| `/servers/<id>` | `/infrastructure?manage=<id>` | Infrastructure's per-host "Manage" panel (no dedicated per-host route exists, so the id is carried as a query param, mirroring `/sgc/<id>` → `/games?expand=<id>`, #2279) |
+| `/workshop/library` | `/workshop` | The redesigned Workshop top-level page (task #2362), which fully absorbed it |
+| `/sessions` | `/activity` | Activity (task #2271, M5) |
+
+**Not retired, deliberately**: `/sessions/<id>` (the session detail/log
+viewer page) and its sub-routes -- both Activity and Games link directly to
+it, and reshaping it is still the "Session detail" TBD item above ("M6/C31
+phase 2", not this task). `/workshop/cache` and every other `/workshop/*`
+sub-route -- only `/workshop/library` was fully superseded by `/workshop`;
+the rest remain either standalone-and-still-supported (`/workshop/cache`,
+explicitly kept per its own NFR6 clause) or action endpoints the new
+Workshop page itself targets.
+
+**Capability carried forward, not dropped**: host public-address edit and
+allowed-port-range management (`pages/server_detail.templ`, the page
+`/servers/<id>` used to render) folded into Infrastructure's per-host
+Manage panel rather than disappearing -- #2369 had not folded this in, so
+#2372 did (NFR6). FR17's two named retained capabilities -- the live-row
+indicator and the restart-state badge -- were verified already present on
+Activity (`components.LiveRegion`) and Games (`pages.DeploymentRowInner`'s
+`components.RestartBadge`) respectively; the latter was rendering but never
+actually fed data on the Games page's own full-render path
+(`handlers_games.go`'s `buildGameRows`), a gap #2372 closed rather than
+assumed away.
 
 ## Wireframe fidelity caveats
 

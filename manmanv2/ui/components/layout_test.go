@@ -140,19 +140,18 @@ func TestLayout_RendersNavItemsServerSelectorAndLogoutAffordance(t *testing.T) {
 	body := renderLayout(t, data)
 
 	// No Active label set above, so every nav item renders in its plain
-	// (non-active) form. Amendment A4
-	// (https://github.com/whale-net/everything/issues/2266#issuecomment-5605995958)
-	// to FR1: Dashboard · Games · Activity · Infrastructure · Sessions ·
-	// Workshop -- "Servers" is relabeled "Infrastructure" (target unchanged
-	// at /servers, C29 → M6) and Sessions is retained (removed again in M6
-	// when C31 phase 2 retires /sessions itself).
+	// (non-active) form. M6 disposition (task #2372): Dashboard · Games ·
+	// Activity · Infrastructure · Workshop -- "Servers" is relabeled
+	// "Infrastructure" and repointed at /infrastructure (C29 → M6), the
+	// "Sessions" entry (amendment A4's interim six-entry list) is dropped
+	// now that /sessions retires, and "Workshop" is repointed at /workshop
+	// (task #2362's replacement page) in place of /workshop/library.
 	wantNavItems := []string{
 		`<li><a href="/">Dashboard</a></li>`,
 		`<li><a href="/games">Games</a></li>`,
 		`<li><a href="/activity">Activity</a></li>`,
-		`<li><a href="/servers">Infrastructure</a></li>`,
-		`<li><a href="/sessions">Sessions</a></li>`,
-		`<li><a href="/workshop/library">Workshop</a></li>`,
+		`<li><a href="/infrastructure">Infrastructure</a></li>`,
+		`<li><a href="/workshop">Workshop</a></li>`,
 	}
 	for _, want := range wantNavItems {
 		if got := strings.Count(body, want); got != 2 {
@@ -262,16 +261,18 @@ func TestLayout_NilUserOmitsLogoutAffordance(t *testing.T) {
 	}
 }
 
-// TestLayout_NavAmendmentA4_ExactOrderAndLabels is the direct amendment-A4
-// guard (https://github.com/whale-net/everything/issues/2266#issuecomment-5605995958):
-// both nav renderings (wide menu, narrow dropdown) must contain exactly the
-// six amended entries -- Dashboard · Games · Activity · Infrastructure ·
-// Sessions · Workshop -- in that order, with no more and no fewer. Unlike
+// TestLayout_NavAmendmentA4_ExactOrderAndLabels is the direct M6 IA guard
+// (task #2372, root plan #2359 FR1/FR6): both nav renderings (wide menu,
+// narrow dropdown) must contain exactly the five M6 entries -- Dashboard ·
+// Games · Activity · Infrastructure · Workshop -- in that order, with no
+// more and no fewer. Unlike
 // TestLayout_RendersNavItemsServerSelectorAndLogoutAffordance (which checks
 // each entry's presence/count independently), this test also asserts
 // relative order within each <ul>, and asserts the old "Servers" label is
-// entirely gone (C29 relabeled it "Infrastructure"; the /servers target is
-// unchanged).
+// entirely gone (C29 relabeled it "Infrastructure") and no "Sessions" entry
+// survives (dropped for good in M6, superseding amendment A4's interim
+// six-entry list:
+// https://github.com/whale-net/everything/issues/2266#issuecomment-5605995958).
 //
 // Red/green (verified by hand): temporarily reordering navItems in
 // layout.templ to put Infrastructure before Activity made this test fail
@@ -285,9 +286,8 @@ func TestLayout_NavAmendmentA4_ExactOrderAndLabels(t *testing.T) {
 		`<li><a href="/">Dashboard</a></li>`,
 		`<li><a href="/games">Games</a></li>`,
 		`<li><a href="/activity">Activity</a></li>`,
-		`<li><a href="/servers">Infrastructure</a></li>`,
-		`<li><a href="/sessions">Sessions</a></li>`,
-		`<li><a href="/workshop/library">Workshop</a></li>`,
+		`<li><a href="/infrastructure">Infrastructure</a></li>`,
+		`<li><a href="/workshop">Workshop</a></li>`,
 	}
 
 	// Split the rendered body at the boundary between the wide menu and the
@@ -310,30 +310,33 @@ func TestLayout_NavAmendmentA4_ExactOrderAndLabels(t *testing.T) {
 				t.Fatalf("%s: expected nav item %q, got %q", name, want, section)
 			}
 			if idx <= lastIdx {
-				t.Errorf("%s: expected nav order Dashboard · Games · Activity · Infrastructure · Sessions · Workshop, %q appeared out of order in %q", name, want, section)
+				t.Errorf("%s: expected nav order Dashboard · Games · Activity · Infrastructure · Workshop, %q appeared out of order in %q", name, want, section)
 			}
 			lastIdx = idx
 		}
-		// Exactly six <li><a ...>...</a></li> nav-link entries per section
+		// Exactly five <li><a ...>...</a></li> nav-link entries per section
 		// (the mobile section also carries the "Server" menu-title li and
 		// the MobileServerSelector's own <li>, which don't match this
 		// pattern) -- guards against a stray extra entry.
-		if got := strings.Count(section, `<li><a href="`); got != 6 {
-			t.Errorf("%s: expected exactly 6 nav link entries, got %d in %q", name, got, section)
+		if got := strings.Count(section, `<li><a href="`); got != 5 {
+			t.Errorf("%s: expected exactly 5 nav link entries, got %d in %q", name, got, section)
 		}
 	}
 
 	if strings.Contains(body, `>Servers<`) {
 		t.Errorf("expected the old \"Servers\" label to be gone (relabeled \"Infrastructure\", C29), got %q", body)
 	}
+	if strings.Contains(body, `>Sessions<`) {
+		t.Errorf("expected no \"Sessions\" nav entry (dropped in M6, task #2372), got %q", body)
+	}
 }
 
-// TestLayout_NavActiveStateForEachAmendedTarget covers the six amended nav
+// TestLayout_NavActiveStateForEachAmendedTarget covers the five M6 nav
 // targets' active-state marking (navLink's exact-label match), including
-// Activity -- the one genuinely new target this task adds a nav entry for.
-// A prior version of this suite only asserted active-state for Dashboard;
-// this extends coverage to prove data.Active reaches every entry, not just
-// the one pre-existing case.
+// Activity -- the one genuinely new target amendment A4 added a nav entry
+// for. A prior version of this suite only asserted active-state for
+// Dashboard; this extends coverage to prove data.Active reaches every
+// entry, not just the one pre-existing case.
 func TestLayout_NavActiveStateForEachAmendedTarget(t *testing.T) {
 	cases := []struct {
 		active     string
@@ -342,9 +345,8 @@ func TestLayout_NavActiveStateForEachAmendedTarget(t *testing.T) {
 		{"Dashboard", `<li><a href="/" class="menu-active">Dashboard</a></li>`},
 		{"Games", `<li><a href="/games" class="menu-active">Games</a></li>`},
 		{"Activity", `<li><a href="/activity" class="menu-active">Activity</a></li>`},
-		{"Infrastructure", `<li><a href="/servers" class="menu-active">Infrastructure</a></li>`},
-		{"Sessions", `<li><a href="/sessions" class="menu-active">Sessions</a></li>`},
-		{"Workshop", `<li><a href="/workshop/library" class="menu-active">Workshop</a></li>`},
+		{"Infrastructure", `<li><a href="/infrastructure" class="menu-active">Infrastructure</a></li>`},
+		{"Workshop", `<li><a href="/workshop" class="menu-active">Workshop</a></li>`},
 	}
 	for _, c := range cases {
 		body := renderLayout(t, LayoutData{Title: "Dashboard", Active: c.active})
@@ -359,7 +361,7 @@ func TestLayout_NavActiveStateForEachAmendedTarget(t *testing.T) {
 // display text (case-insensitive), across every value of data.Active so no
 // active-state branch of navLink accidentally introduces it.
 func TestLayout_NavContainsNoSGCTerminology(t *testing.T) {
-	for _, active := range []string{"", "Dashboard", "Games", "Activity", "Infrastructure", "Sessions", "Workshop"} {
+	for _, active := range []string{"", "Dashboard", "Games", "Activity", "Infrastructure", "Workshop"} {
 		body := renderLayout(t, LayoutData{Title: "Dashboard", Active: active})
 		lower := strings.ToLower(body)
 		if strings.Contains(lower, "sgc") || strings.Contains(lower, "server game config") {

@@ -363,7 +363,10 @@ func (app *App) setupRoutes(mux *http.ServeMux) {
 
 	// Protected routes - Home/Dashboard
 	mux.HandleFunc("/", app.auth.RequireAuthFunc(app.auth.WithAccessToken(app.handleHome)))
-	mux.HandleFunc("/sessions", app.auth.RequireAuthFunc(app.auth.WithAccessToken(app.handleSessions)))
+	// "/sessions" retired to a redirect onto "/activity" (task #2372, FR17)
+	// -- "/sessions/" (the detail page and its sub-routes) is untouched;
+	// see handlers_navigation_redirects.go's doc comment for why.
+	mux.HandleFunc("/sessions", app.auth.RequireAuthFunc(app.auth.WithAccessToken(app.handleSessionsRedirect)))
 	mux.HandleFunc("/sessions/", app.auth.RequireAuthFunc(app.auth.WithAccessToken(app.handleSessionDetail)))
 	// Registered ahead of (and more specific than) the "/sessions/" catch-all
 	// above: Go's ServeMux dispatches on longest-matching-pattern, so
@@ -420,25 +423,32 @@ func (app *App) setupRoutes(mux *http.ServeMux) {
 	// Documentation routes
 	mux.HandleFunc("/docs/config-strategies", app.auth.RequireAuthFunc(app.auth.WithAccessToken(app.handleConfigStrategiesDocs)))
 
-	// Protected routes - Servers
-	mux.HandleFunc("/servers", app.auth.RequireAuthFunc(app.auth.WithAccessToken(app.handleServers)))
-	mux.HandleFunc("/servers/", app.auth.RequireAuthFunc(app.auth.WithAccessToken(app.handleServerDetail)))
+	// Protected routes - Servers: retired to redirects onto Infrastructure
+	// (task #2372, FR16) -- "/servers/<id>" preserves the host id as
+	// "?manage=<id>" (Infrastructure has no per-host route of its own); see
+	// handlers_navigation_redirects.go's doc comment.
+	mux.HandleFunc("/servers", app.auth.RequireAuthFunc(app.auth.WithAccessToken(app.handleServersRedirect)))
+	mux.HandleFunc("/servers/", app.auth.RequireAuthFunc(app.auth.WithAccessToken(app.handleServerDetailRedirect)))
 
 	// Protected routes - Infrastructure (#2369, M6 FR1/FR2/FR3/FR4, C29):
-	// additive alongside /servers above -- does not replace or redirect it
-	// (NFR6). The nav swap and /servers redirect are the dependent
-	// navigation/disposition task.
+	// now the nav-facing surface "/servers" redirects onto (task #2372,
+	// FR16). "/infrastructure/{id}/update-address" and
+	// "/infrastructure/{id}/ports/*" (task #2372) fold in the host
+	// public-address and allowed-port-ranges management that
+	// pages/server_detail.templ used to own, before that page retired --
+	// see pages.InfrastructureHost's doc comment.
 	mux.HandleFunc("/infrastructure", app.auth.RequireAuthFunc(app.auth.WithAccessToken(app.handleInfrastructure)))
 	mux.HandleFunc("/infrastructure/", app.auth.RequireAuthFunc(app.auth.WithAccessToken(app.handleInfrastructureAction)))
 
 	// Protected routes - Workshop
-	// "/workshop" (task #2362, FR6/FR7): the redesigned top-level page --
-	// additive alongside every route below it. It does not replace
-	// "/workshop/library" or shadow any "/workshop/*" sub-route (NFR6);
-	// the nav swap and "/workshop/library" redirect are the dependent
-	// navigation/disposition task's job, not this one's.
+	// "/workshop" (task #2362, FR6/FR7): the redesigned top-level page.
+	// "/workshop/library" retired to a redirect onto it (task #2372, FR16)
+	// -- every other "/workshop/*" sub-route below stays exactly as
+	// registered (NFR6); see handlers_navigation_redirects.go's doc
+	// comment for why "/workshop/library" is the one Workshop entry point
+	// that redirects.
 	mux.HandleFunc("/workshop", app.auth.RequireAuthFunc(app.auth.WithAccessToken(app.handleWorkshopPage)))
-	mux.HandleFunc("/workshop/library", app.auth.RequireAuthFunc(app.auth.WithAccessToken(app.handleWorkshopLibrary)))
+	mux.HandleFunc("/workshop/library", app.auth.RequireAuthFunc(app.auth.WithAccessToken(app.handleWorkshopLibraryRedirect)))
 	mux.HandleFunc("/workshop/search", app.auth.RequireAuthFunc(app.auth.WithAccessToken(app.handleWorkshopSearch)))
 	mux.HandleFunc("/workshop/addon", app.auth.RequireAuthFunc(app.auth.WithAccessToken(app.handleWorkshopAddonDetail)))
 	mux.HandleFunc("/workshop/library-detail", app.auth.RequireAuthFunc(app.auth.WithAccessToken(app.handleLibraryDetail)))

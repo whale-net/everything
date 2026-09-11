@@ -18,12 +18,6 @@ import (
 	manmanpb "github.com/whale-net/everything/manmanv2/protos"
 )
 
-// SGCDisplayInfo holds a server game config ID and a human-readable label for dropdowns.
-type SGCDisplayInfo = pages.SGCDisplayInfo
-
-// SessionsPageData holds data for the sessions list page.
-type SessionsPageData = pages.SessionsPageData
-
 // SessionDetailPageData holds data for a single session.
 type SessionDetailPageData struct {
 	Title         string
@@ -89,219 +83,15 @@ func heartbeatIntervalMs(config *Config) int {
 	return int(config.SSEHeartbeatInterval.Milliseconds())
 }
 
-func (app *App) handleSessions(w http.ResponseWriter, r *http.Request) {
-	user := htmxauth.GetUser(r.Context())
-
-	liveOnly := r.URL.Query().Get("live_only") == "1"
-	statusFilter := strings.TrimSpace(r.URL.Query().Get("status"))
-	serverGameConfigIDStr := strings.TrimSpace(r.URL.Query().Get("server_game_config_id"))
-	startError := strings.TrimSpace(r.URL.Query().Get("start_error"))
-	showForce := r.URL.Query().Get("show_force") == "1"
-	forceSGCID := r.URL.Query().Get("sgc_id")
-
-	ctx := r.Context()
-
-	// Fetch all servers to build layout data
-	servers, err := app.grpc.ListServers(ctx)
-	if err != nil {
-		log.Printf("Error fetching servers: %v", err)
-		servers = []*manmanpb.Server{}
-	}
-
-	// Determine the selected server (query param server_id > cookie >
-	// default) and its authorized ServerGameConfigs via the helper shared
-	// with handleDeploymentsLiveSSE (handlers_sessions_live.go, #1724) --
-	// see resolveScopedServerGameConfigs's doc comment.
-	selectedServerID, serverConfigs, err := app.resolveScopedServerGameConfigs(ctx, r, servers)
-	if err != nil {
-		log.Printf("Error fetching server configs: %v", err)
-		serverConfigs = nil
-	}
-
-	// Build session list request
-	req := &manmanpb.ListSessionsRequest{
-		PageSize: 100,
-		LiveOnly: liveOnly,
-	}
-
-	if statusFilter != "" {
-		req.StatusFilter = splitCSV(statusFilter)
-	}
-
-	if serverGameConfigIDStr != "" {
-		serverGameConfigID, err := strconv.ParseInt(serverGameConfigIDStr, 10, 64)
-		if err != nil {
-			http.Error(w, "Invalid server_game_config_id", http.StatusBadRequest)
-			return
-		}
-		req.ServerGameConfigId = serverGameConfigID
-	}
-
-	// Always scope to selected server
-	if selectedServerID > 0 {
-		req.ServerId = selectedServerID
-	}
-
-	sessions, err := app.grpc.ListSessionsWithFilters(ctx, req)
-	if err != nil {
-		log.Printf("Error fetching sessions: %v", err)
-		http.Error(w, "Failed to fetch sessions", http.StatusInternalServerError)
-		return
-	}
-
-	// serverConfigs and selectedServerID were already resolved above via
-	// resolveScopedServerGameConfigs.
-	var selectedServerStatus string
-	var liveSessionByConfig map[int64]*manmanpb.Session
-	if selectedServerID > 0 {
-		for _, server := range servers {
-			if server.ServerId == selectedServerID {
-				selectedServerStatus = server.Status
-				break
-			}
-		}
-
-		liveReq := &manmanpb.ListSessionsRequest{
-			ServerId: selectedServerID,
-			LiveOnly: true,
-			PageSize: 100,
-		}
-		liveSessions, err := app.grpc.ListSessionsWithFilters(ctx, liveReq)
-		if err != nil {
-			log.Printf("Error fetching live sessions: %v", err)
-		} else {
-			liveSessionByConfig = make(map[int64]*manmanpb.Session, len(liveSessions))
-			for _, session := range liveSessions {
-				liveSessionByConfig[session.ServerGameConfigId] = session
-			}
-		}
-	}
-
-	// Resolve display names for SGCs: "ConfigName (GameName)"
-	var sgcOptions []SGCDisplayInfo
-	sgcDisplayNames := make(map[int64]string)
-	for _, sgc := range serverConfigs {
-		displayName := fmt.Sprintf("SGC %d", sgc.ServerGameConfigId)
-		gc, err := app.grpc.GetGameConfig(ctx, sgc.GameConfigId)
-		if err == nil {
-			game, err := app.grpc.GetGame(ctx, gc.GameId)
-			if err == nil {
-				displayName = fmt.Sprintf("%s (%s)", gc.Name, game.Name)
-			} else {
-				displayName = gc.Name
-			}
-		}
-		sgcOptions = append(sgcOptions, SGCDisplayInfo{
-			ServerGameConfigId: sgc.ServerGameConfigId,
-			DisplayName:        displayName,
-		})
-		sgcDisplayNames[sgc.ServerGameConfigId] = displayName
-	}
-
-	// Build DeploymentRows from each SGC's *latest* session, not the
-	// live-only liveSessionByConfig fetch above -- a stopped/crashed/lost
-	// deployment has no live session but still needs a row with Start/
-	// Restart available. Deliberately not reusing the page's own
-	// `sessions` slice either: it is shaped by the user's status/
-	// live_only/server_game_config_id filters and would silently
-	// mis-derive the latest session whenever a filter is applied.
-	var deploymentRows []pages.DeploymentRowData
-	if selectedServerID > 0 {
-		allReq := &manmanpb.ListSessionsRequest{
-			ServerId: selectedServerID,
-			PageSize: 200,
-		}
-		allSessions, err := app.grpc.ListSessionsWithFilters(ctx, allReq)
-		if err != nil {
-			log.Printf("Error fetching all sessions for deployment rows: %v", err)
-			allSessions = nil
-		}
-		sessionsBySGC := make(map[int64][]*manmanpb.Session, len(serverConfigs))
-		for _, session := range allSessions {
-			sessionsBySGC[session.ServerGameConfigId] = append(sessionsBySGC[session.ServerGameConfigId], session)
-		}
-		deploymentRows = make([]pages.DeploymentRowData, 0, len(serverConfigs))
-		for _, sgc := range serverConfigs {
-			latest := components.LatestSession(sessionsBySGC[sgc.ServerGameConfigId])
-			deploymentRows = append(deploymentRows, pages.DeploymentRowData{
-				ServerGameConfigID: sgc.ServerGameConfigId,
-				DisplayName:        sgcDisplayNames[sgc.ServerGameConfigId],
-				SGCStatus:          sgc.Status,
-				LatestSession:      latest,
-				LiveSession:        liveSessionByConfig[sgc.ServerGameConfigId],
-				Actions:            components.ComputeDeploymentActions(latest),
-			})
-		}
-
-		// FR12/#1735: one batched ListPendingRestarts RPC for every rendered
-		// SGC, not a per-row call. A failure here must not fail the page --
-		// rows just render without the restart badge (same degradation
-		// posture as the live-session fallback above).
-		sgcIDs := make([]int64, len(serverConfigs))
-		for i, sgc := range serverConfigs {
-			sgcIDs[i] = sgc.ServerGameConfigId
-		}
-		restartStates, err := app.grpc.ListPendingRestarts(ctx, sgcIDs)
-		if err != nil {
-			log.Printf("Warning: failed to list pending restarts: %v", err)
-		} else {
-			for i := range deploymentRows {
-				deploymentRows[i].RestartState = restartStates[deploymentRows[i].ServerGameConfigID]
-			}
-		}
-	}
-
-	var startWarning string
-	if selectedServerID > 0 && selectedServerStatus != "" && selectedServerStatus != "online" {
-		startWarning = "Selected server is offline. Starting a session may fail."
-	}
-
-	data := SessionsPageData{
-		Sessions:     sessions,
-		LiveOnly:     liveOnly,
-		StatusFilter: statusFilter,
-		ServerGameConfigID: serverGameConfigIDStr,
-		ServerConfigs: serverConfigs,
-		SGCOptions:   sgcOptions,
-		SGCDisplayNames: sgcDisplayNames,
-		SelectedServerID: strconv.FormatInt(selectedServerID, 10),
-		StartWarning: startWarning,
-		StartError: startError,
-		ShowForce:    showForce,
-		ForceSGCID:   forceSGCID,
-		LiveSessionByConfig: liveSessionByConfig,
-		DeploymentRows:      deploymentRows,
-		// #1726: heartbeat interval drives the client-side Not-Live
-		// debounce; LiveUpdatesEnabled mirrors handleDeploymentsLiveSSE's
-		// own app.sseHub nil check (handlers_sessions_live.go) so the page
-		// never renders live-connection markup for a route that would
-		// only ever 503. app.config is nil in some handler-level tests that
-		// construct *App directly without going through NewApp (e.g.
-		// deployment_actions_acceptance_test.go) -- those all leave sseHub
-		// nil too, so LiveUpdatesEnabled is already false and
-		// HeartbeatIntervalMs is unused by the page in that case; guard the
-		// dereference rather than require every such test to populate a
-		// full Config just to read one duration.
-		HeartbeatIntervalMs: heartbeatIntervalMs(app.config),
-		LiveUpdatesEnabled:  app.sseHub != nil,
-	}
-
-	breadcrumbs := []components.Breadcrumb{
-		{Label: "Sessions", URL: "/sessions"},
-	}
-
-	layoutData, err := app.buildTemplLayoutData(r, "Sessions", "Sessions", user, breadcrumbs)
-	if err != nil {
-		log.Printf("Error building layout data: %v", err)
-		http.Error(w, "Internal server error", http.StatusInternalServerError)
-		return
-	}
-
-	if err := RenderTempl(w, r, "Sessions", pages.Sessions(layoutData, data)); err != nil {
-		log.Printf("Error rendering template: %v", err)
-		http.Error(w, "Internal server error", http.StatusInternalServerError)
-	}
-}
+// Note: handleSessions (the "/sessions" list page's own handler,
+// SessionsPageData/SGCDisplayInfo, and splitCSV, which only it used)
+// retired along with pages/sessions.templ's Sessions() templ by task #2372
+// (M6 navigation/disposition, FR17) -- "/sessions" now redirects to
+// "/activity" (handlers_navigation_redirects.go). resolveScopedServerGameConfigs
+// and heartbeatIntervalMs above survive unchanged: both are still called by
+// handlers_sessions_live.go's handleDeploymentsLiveSSE
+// (/api/live/deployments, an SSE action endpoint independent of the
+// retired list page) and handlers_activity.go respectively.
 
 func (app *App) handleSessionDetail(w http.ResponseWriter, r *http.Request) {
 	user := htmxauth.GetUser(r.Context())
@@ -449,7 +239,10 @@ func (app *App) handleSessionStop(w http.ResponseWriter, r *http.Request, sessio
 		return
 	}
 
-	redirectURL := "/sessions"
+	// Redirects to /activity, not /sessions -- the list page retired to a
+	// redirect onto Activity itself (task #2372, FR17); pointing here
+	// directly avoids chaining through that redirect a second time.
+	redirectURL := "/activity"
 	if r.Header.Get("HX-Request") != "" {
 		w.Header().Set("HX-Redirect", redirectURL)
 		w.WriteHeader(http.StatusOK)
@@ -668,18 +461,6 @@ func (app *App) handleCheckActiveSession(w http.ResponseWriter, r *http.Request)
 </div>`
 
 	w.Write([]byte(warningHTML))
-}
-
-func splitCSV(value string) []string {
-	parts := strings.Split(value, ",")
-	var result []string
-	for _, part := range parts {
-		clean := strings.TrimSpace(part)
-		if clean != "" {
-			result = append(result, clean)
-		}
-	}
-	return result
 }
 
 // handleSessionLogsStream streams logs for a session via Server-Sent Events (SSE)

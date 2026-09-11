@@ -242,19 +242,8 @@ func TestHandleWorkshopPage_NoSGCTerminology(t *testing.T) {
 	}
 }
 
-// --- NFR6: the pre-existing "/workshop/library" page still works -----------
-
-func TestHandleWorkshopLibrary_StillRendersOK(t *testing.T) {
-	workshop, api := buildFakeWorkshopPageData()
-	app := newWorkshopPageTestApp(workshop, api)
-	req := httptest.NewRequest(http.MethodGet, "/workshop/library", nil)
-	w := httptest.NewRecorder()
-	app.handleWorkshopLibrary(w, req)
-
-	if w.Code != http.StatusOK {
-		t.Fatalf("status = %d, want %d; body: %s", w.Code, http.StatusOK, w.Body.String())
-	}
-	if !strings.Contains(w.Body.String(), "Essential Maps") {
-		t.Errorf("expected the fetched library to appear in the rendered page, got: %s", w.Body.String())
-	}
-}
+// Note: "/workshop/library" retired to a redirect onto "/workshop" by task
+// #2372 (M6 navigation/disposition, FR16) -- see handlers_redirects_test.go
+// for that coverage. The NFR6 "still works" guard this file previously
+// carried (TestHandleWorkshopLibrary_StillRendersOK) no longer applies now
+// that this task deliberately changed that behavior.
