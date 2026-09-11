@@ -1,0 +1,42 @@
+// FR14/FR13 (issue #2433, plan #2421): the admin all-operators grant list
+// and revoke page. Reuses grants.templ's GrantRow type and grantsTable
+// render function directly -- FR13's "no new shared component" and "both
+// grant pages render through the same GrantRow-taking function" -- rather
+// than a divergent grant-list render path for admins.
+//
+// grantsTable's per-row revoke form targets POST /admin/grants/revoke
+// with the row's own subject_sub as well as its domain (GrantRow.
+// SubjectSub, ../handlers_grants_admin.go's buildAdminGrantRows) --
+// unlike the self-service page's form (grants.templ), which never
+// includes a subject at all, an admin revoke must name a target operator
+// that is never the caller's own session subject.
+package pages
+
+import (
+	"github.com/whale-net/everything/whagent_net/ui/components"
+)
+
+// GrantsAdminData carries the admin grants page's page-level
+// parameterisation (FR14, issue #2433). Deliberately mirrors GrantsData's
+// shape (grants.templ) rather than embedding it: the two pages' Rows come
+// from different sources (grantindex.ListAll vs. ListBySubject, #2425)
+// even though the rendered row shape (GrantRow) is identical.
+type GrantsAdminData struct {
+	Layout components.LayoutData
+	Rows   []GrantRow
+	Error  string
+}
+
+// GrantsAdmin is FR14's admin all-operators grant list + revoke page (GET
+// /admin/grants, issue #2433): lists every operator's grants
+// (../handlers_grants_admin.go's handleGrantsAdmin), reachable only to an
+// operator holding the designated admin realm role (FR15, NFR3).
+templ GrantsAdmin(data GrantsAdminData) {
+	@components.Layout(data.Layout) {
+		<h1 class="text-2xl font-bold text-base-content mb-4">All operator grants</h1>
+		if data.Error != "" {
+			<div role="alert" class="alert alert-error mb-4">{ data.Error }</div>
+		}
+		@grantsTable(data.Rows, "/admin/grants/revoke")
+	}
+}
