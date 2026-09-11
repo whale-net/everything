@@ -321,23 +321,33 @@ authorization side, only on the identity side.
 
 ## 10. Token exchange (RFC 8693): a client that mints tokens for other identities
 
+**`whagent_net` no longer uses this (plan #2421, FR19).** Through issue
+#2249 it used exactly this mechanism (`whagent_net/mcp/server/tokenexchange.go`'s
+`KeycloakExchanger`) to turn an already-resolved `(iss, sub)` pair into a
+real, verifiable Keycloak access token before calling `api`. Issue #2430
+deleted that code and replaced it with per-domain delegated grants
+(§ 11 below, `libs/go/grpcauth.DelegatedGrantSource`) — the realm no
+longer needs this section's admin permission grant (10b) enabled for
+`whagent_net`'s sake, and no other consumer in this repo uses it either
+(a repo-wide grep for `KeycloakExchanger`/`requested_subject`/RFC 8693's
+grant-type string turns up no other live caller as of this writing).
+This section is kept as generic reference documentation for the
+mechanism itself, in case a future service has a genuine need for
+one-client-mints-for-arbitrary-identity — not because anything in this
+repo currently depends on it.
+
 This is a different problem from everything above: instead of a client
 proving *its own* identity, here a confidential client authenticates as
 itself and asks Keycloak to mint a token asserting **someone else's**
-identity, by user id (`requested_subject`) — the mechanism
-`whagent_net/mcp` uses (issue #2249, `whagent_net/ARCHITECTURE.md`
-"`mcp`'s OAuth2 credential and RFC 8693 token exchange") to turn an
-already-resolved `(iss, sub)` pair into a real, verifiable Keycloak
-access token before calling a downstream API that only trusts
-Keycloak-signed tokens.
+identity, by user id (`requested_subject`) — the general RFC 8693
+mechanism, unrelated to any specific service's use of it.
 
 **This is a materially bigger blast radius than a normal client** (step
 4): the credential that authenticates this client can mint a token as
 *any* user in the realm, not just describe the client's own permissions.
 Treat it accordingly — a dedicated client, never reused for anything
-else, with the secret held only by the one process that needs it
-(`whagent_net/ARCHITECTURE.md`'s NFR8 writeup has the full custody/
-rotation story for the `whagent_net/mcp` instance of this).
+else, with the secret held only by the one process that needs it, read
+from the environment only, never logged, never echoed in an error.
 
 ### 10a. Create the client
 
@@ -455,6 +465,67 @@ that checklist's step 4 (per-caller-client creation) for a delegated-grant
 client specifically. Steps 1–3 and 5–10 apply unchanged, including step 5's
 audience mapper — an access token minted through this flow still needs to
 carry the right `aud` for whatever downstream service actually consumes it.
+
+### 11a. Realm-side runbook: `whagent_net`'s shared grant client + admin role (plan #2421)
+
+This is deployment/runbook work, not a coded FR (plan #2421's own "Out of
+scope" list names exactly this) — `whagent_net/ARCHITECTURE.md`'s
+"Identity and auth chaining" section and `whagent_net/ENV.md`'s
+"Delegated grant" section document the *code* that consumes what this
+runbook creates; nothing here is enforced by a test.
+
+**1. One shared client, deliberately not one per domain (NFR5).**
+`whagent_net` is a **named exception** to this file's usual "one client
+per caller identity" principle (step 3/§ 11's "each consuming domain
+registers its own client"): create exactly **one** confidential client
+(e.g. `whagent-net-grant`) for the whole deployment, following § 11's
+setup above (Client authentication On, Standard flow checked, no service
+accounts flow needed — this is browser-facing) — not one per
+`AgentDefinition.Domain` (`audience_score_system`, a future `manmanv2`,
+etc.). Domain isolation for this flow is carried entirely by the grant
+key derived from `AgentDefinition.Domain` (FR4/NFR2,
+`//whagent_net/grantkey`), not by Keycloak client boundaries — see
+`ARCHITECTURE.md`'s NFR2/NFR5 writeup for why that's a deliberate,
+reviewed trade-off, not an oversight of this file's usual rule.
+
+2. **Enable `offline_access`.** Confirm this client's **Client scopes**
+   tab carries the built-in `offline_access` scope (assigned by default
+   on a new client; add it back if your realm's default scope set
+   removed it) — § 11's "the one setting people miss" checklist applies
+   here unchanged.
+3. **Redirect URI.** Allow-list exactly `ui`'s `GET
+   /mcp/consent/callback` route (`WHAGENT_UI_PUBLIC_URL` +
+   `/mcp/consent/callback`) under **Settings → Valid redirect URIs** —
+   this must be byte-identical to `WHAGENT_GRANT_REDIRECT_URI`
+   (`whagent_net/ENV.md`).
+4. **Credentials.** Copy the client secret into
+   `WHAGENT_GRANT_CLIENT_SECRET` (Kubernetes secret, identically on both
+   `ui` and `mcp` — `WHAGENT_GRANT_CLIENT_ID`/`_REDIRECT_URI`/
+   `_ENCRYPTION_KEY` must also match on both binaries, per `ENV.md`).
+5. **Audience mapper.** Same as step 4d above — an access token minted
+   through this client still needs to carry `api`'s audience for `api`
+   to accept it once forwarded.
+
+**Admin realm role (FR14/FR15/NFR3, gates issue #2433's `/admin/grants`
+page).**
+
+1. **Realm roles** → **Create role** → name it (e.g.
+   `whagent-grants-admin`, following this file's `whagent-`-prefix
+   convention for realm-global names).
+2. Grant it to specific operators via a **group** (§ 5: "Humans get roles
+   via groups, never individually") — create or reuse an admin group,
+   add the role to its **Role mapping**, add the intended admins to the
+   group. There is deliberately no "everyone is admin" default: an
+   operator with no group membership simply cannot reach the page.
+3. Set `WHAGENT_GRANT_ADMIN_ROLE` (`ui`, `ENV.md`) to the exact role name
+   from step 1 — left unset, the admin page 403s for every operator, so
+   this variable and the role's existence are both required together.
+4. Verify the same way step 7 above does: obtain a token for a group
+   member and confirm the role name appears in `realm_access.roles`.
+   `ui`'s own check (`ARCHITECTURE.md`'s NFR3 writeup) reads this off a
+   freshly-refreshed access token on every request, not a cached
+   snapshot, so revoking group membership takes effect on the very next
+   request rather than up to a day later.
 
 ---
 

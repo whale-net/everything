@@ -391,98 +391,182 @@ the on-behalf-of subject simply cannot control a session it didn't start.
 `whagent_net/api/handlers/session.go`'s `canControl` is the single place
 this control rule lives; no other handler re-derives it.
 
-**`mcp`'s OAuth2 credential and RFC 8693 token exchange (FR9,
-NFR7/NFR8, issues #2245/#2249).** `api` verifies real Keycloak-signed
-JWTs and nothing else — that verifier is unchanged by FR9
-(`libs/go/grpcauth`). `mcp` accepts a second credential shape alongside
-the manual Keycloak access token (`README.md` "Browser-based sign-in"):
-an opaque bearer credential `ui`'s own OAuth2 authorization-server front
-end (`libs/go/mcpauth.Provider`, mounted by `whagent_net/ui/mcpauth.go`)
-mints for an operator already signed in there. That credential resolves
-(via `mcpauth.CredentialStore.Verify`) to the operator's own real
-Keycloak `(iss, sub)` — packed into `mcpauth.CredentialStore`'s opaque
-`Identity` string by `whagent_net/mcpidentity.Encode`/`Decode`, the one
-place that packing happens (NFR7) — never a new whagent-net-only
-identity. Because `api` cannot verify that opaque credential directly,
-`mcp` (`whagent_net/mcp/server/auth.go`'s dual-path verifier,
-`tokenexchange.go`'s `KeycloakExchanger`) exchanges the resolved identity
-for a short-lived, real Keycloak-signed JWT — RFC 8693
-(`grant_type=urn:ietf:params:oauth:grant-type:token-exchange`,
-`requested_subject=<sub>`) against `mcp`'s own confidential Keycloak
-client — before ever calling `api`, exactly once per call not already
-covered by the in-memory, per-identity cache (never persisted, always
-refreshed shortly before the exchanged token's own expiry). The result:
-a session started through the browser/OAuth2 path is indistinguishable
-downstream from one started with a manually-pasted token — same
-`subject` shape for every rule above.
+**`mcp`'s delegated-grant credential acquisition (FR7/FR8/FR9, plan
+#2421).** `api` verifies real Keycloak-signed JWTs and nothing else —
+that verifier is unchanged by this design (`libs/go/grpcauth`). `mcp`
+accepts a second credential shape alongside the manual Keycloak access
+token (`README.md` "Browser-based sign-in"): an opaque bearer credential
+`ui`'s own OAuth2 authorization-server front end (`libs/go/mcpauth.Provider`,
+mounted by `whagent_net/ui/mcpauth.go`) mints for an operator already
+signed in there. That credential resolves (via
+`mcpauth.CredentialStore.Verify`) to the operator's own real Keycloak
+`(iss, sub)` — packed into `mcpauth.CredentialStore`'s opaque `Identity`
+string by `whagent_net/mcpidentity.Encode`/`Decode`, the one place that
+packing happens — never a new whagent-net-only identity.
 
-This confidential client (`WHAGENT_MCP_KEYCLOAK_CLIENT_ID`/
-`WHAGENT_MCP_KEYCLOAK_CLIENT_SECRET`/`WHAGENT_MCP_KEYCLOAK_TOKEN_URL`,
-`ENV.md`) is deliberately **separate** from the
-`WHAGENT_OIDC_CLIENT_ID`/`WHAGENT_OIDC_CLIENT_SECRET` pair `ui` and `mcp`
-already hold for the manual-token recipe: that pair only ever verifies
-or forwards a token neither binary minted itself, while this one
-actively mints a new Keycloak-signed JWT asserting an arbitrary
-operator's identity. **NFR8 — secret custody and blast radius:**
-whatever process holds `WHAGENT_MCP_KEYCLOAK_CLIENT_SECRET` can mint a
-Keycloak-signed JWT as *any* operator who currently holds an active
-`ui` web-UI session — this is a materially larger blast radius than the
-manual-token recipe's client (which can never mint a token, only
-verify/forward one already minted by Keycloak itself) or than a leaked
-manual token (which is scoped to the one operator who pasted it). The
-secret is read from the environment only, provisioned as a Kubernetes
-secret (never checked in, never logged, never echoed in an error message
-— `tokenexchange.go`'s `errExchangeFailed`/`errExchangeDisabled` are the
-only errors `Exchange` returns, and neither varies with or embeds the
-request that produced it), and `mcp`'s own startup
-(`initializeTokenExchange`, `main.go`) refuses to boot with a reachable
-`mcp_credential` table but no exchange client configured (NFR8's
-fail-loud requirement) rather than let every OAuth2-path call fail
-opaquely at request time. **Rotation:** rotate
-`WHAGENT_MCP_KEYCLOAK_CLIENT_SECRET` by regenerating the client secret in
-Keycloak's admin console (the confidential client's **Credentials** tab)
-and updating the Kubernetes secret + redeploying `mcp` — there is no
-in-flight state to migrate (the exchange cache is in-memory only, and a
-credential in `mcp_credential` is independent of this secret entirely),
-so a rotation is a plain redeploy, not a data migration. Keycloak-side
-setup (granting this client token-exchange/impersonation rights) is
-documented in `libs/go/grpcauth/KEYCLOAK.md`'s token-exchange section.
+Because `api` cannot verify that opaque credential directly, a *working*
+Keycloak-signed JWT still has to come from somewhere — but `mcp` no
+longer mints one itself. `whagent_net/mcp/server/auth.go`'s
+`AuthMiddleware` places the resolved `(iss, sub)` on ctx
+(`mcpidentity.ContextWithIdentity`) and stops there: it exchanges or
+mints nothing (issue #2430 deleted `server/tokenexchange.go`'s
+`KeycloakExchanger` and its RFC 8693 impersonation-exchange call
+entirely, not left dormant — FR19). Acquisition happens later, at
+MCP tool-dispatch time (`whagent_net/mcp/tools/dispatch.go`), once a
+call's target domain is actually known — `AuthMiddleware` has no notion
+of "which domain" for any given call, since that requires the request's
+own `agent_id`/`session_id`, which only a tool handler has parsed (FR7):
 
-**In migration to `DelegatedGrantSource` (plan #2421).** The
-impersonation-exchange design above is being replaced: instead of a
-shared confidential client minting a JWT for *any* currently-signed-in
-operator, each operator completes a one-time, per-domain browser
-consent (`libs/go/grpcauth.DelegatedGrantSource`, `offline_access`) whose
-resulting refresh token is persisted per `(subject, domain-derived grant
-key)` — so a compromised secret alone can no longer mint a credential for
-an operator who has never personally consented for that domain (plan
-#2421's NFR1). Issue #2426 (FR10/FR13/NFR5/NFR6) is purely additive
-infrastructure for this: `//whagent_net/delegatedgrant` constructs the
-one shared `DelegatedGrantSource` + `libs/go/grpcauth/pgstore`-backed
-`Store` (`grpcauth_delegated_grant` table) + `libs/go/grpcauth/grantindex`
--backed bookkeeping index (`grpcauth_grant_index` table) both `ui` and
-`mcp` hold, per `ENV.md`'s "Delegated grant" section.
+- `start_session` resolves the target domain via `DomainForAgent(ctx,
+  agentID)` (backed by the chosen `AgentDefinition.Domain`, FR1/#2424);
+  every other tool (`send_turn`/`stop_session`/`get_session`/
+  `read_transcript`) resolves it via `DomainForSession(ctx, sessionID)`,
+  backed by that session's already-recorded agent-definition assignment
+  — never a domain re-derived from a fresh `agent_id` on every call.
+- The resolved domain becomes a grant key via `whagent_net/grantkey.ForDomain`
+  — the *only* permitted derivation (FR4): the grant key for domain `d`
+  is `d` itself, once validated as well-formed. Deriving one from
+  `agent_id`, `required_role`, or `tool_set[].server_url` is forbidden.
+- `dispatch.go`'s `acquireGrantToken` calls `grant.TokenSource(identity.Sub,
+  grantKey).Token(ctx)` (`libs/go/grpcauth.DelegatedGrantSource`, keyed
+  on the operator's raw Keycloak `sub`, never the mcpidentity-encoded
+  composite) to obtain a real, working access token — re-read from
+  `Store` on every call, never cached here or anywhere else (FR8:
+  `tokenexchange.go`'s in-memory per-identity cache is gone, not
+  replaced with a new one).
+- A domain with no active grant (`grpcauth.ErrGrantNotFound`) or a
+  revoked one (`ErrGrantRevoked`) fails the call outright — there is no
+  fallback to any other credential path.
 
-Issue #2428 (FR2/FR3/FR5/FR6/FR9, the write half of FR12) lands `ui`'s
-side of the consent flow: `whagent_net/ui/handlers_consent.go`'s
-`GET`/`POST /mcp/consent(?domain=<d>)` route drives
-`BeginAuthorization`/`CompleteAuthorization` for an explicit domain and
-records the FR12 bookkeeping index entry on success, and
+The result is the same as before: a session started through the
+browser/OAuth2 path is indistinguishable downstream from one started
+with a manually-pasted token — same `subject` shape for every rule
+above — just acquired through a domain-scoped grant instead of an
+impersonation exchange.
+
+**One-time per-domain consent (FR2/FR3/FR5/FR6, issue #2428).** The
+token a `TokenSource` call above resolves only exists once the operator
+has completed a one-time, per-domain browser consent:
+`whagent_net/ui/handlers_consent.go`'s `GET`/`POST
+/mcp/consent(?domain=<d>)` drives `DelegatedGrantSource.BeginAuthorization`/
+`CompleteAuthorization` (requesting `offline_access`) for one explicit
+domain and records a bookkeeping-index entry (FR12, `grantindex`) on
+success — this route never infers or guesses a domain itself.
 `authorizeConsentGate` wraps `GET /authorize` (`ui`'s mcpauth-hosted
 OAuth2 endpoint for the MCP client) with a prerequisite that the operator
 hold an active grant for `WHAGENT_UI_DEFAULT_DOMAIN` before a credential
-is minted. That gate is deliberately domain-agnostic at the OAuth layer
-rather than resource/scope-driven: `libs/go/mcpauth` is domain-agnostic by
-design (its own "zero domain-specific types" NFR) and `mcp`'s RFC 9728
-resource identifier is one single, instance-wide URL, not one per domain
-— per-domain resolution happens later, at MCP tool-dispatch time via
-`agent_id` (FR7, below). See the `#2421` issue comment #2428 posted
-before implementation for the full investigation. `mcp`'s own per-call
-token acquisition (FR8, issue #2430) has not swapped onto this wiring
-yet — `tokenexchange.go`'s RFC 8693 exchange below is still the live path
-for that half until it does. Once it has, this whole subsection (the
-opaque `mcpauth` credential, RFC 8693 exchange, and
-`WHAGENT_MCP_KEYCLOAK_*`) is retired, not left dormant (FR19).
+is minted — deliberately domain-agnostic at the OAuth layer rather than
+resource/scope-driven: `libs/go/mcpauth` is domain-agnostic by design
+(its own "zero domain-specific types" NFR) and `mcp`'s RFC 9728 resource
+identifier is one single, instance-wide URL, not one per domain —
+per-domain resolution happens later, at dispatch time (above). Consent
+for domain `D` grants standing access to `D` only (FR3): an operator who
+has only consented for `audience_score_system` cannot reach `manmanv2`'s
+agent without separately consenting for it, and there is no
+session-based shortcut around this for an already-`ui`-authenticated
+operator (FR6) — accessing a new domain for the first time is routed
+through this same flow at the moment of first access (FR5), never at
+`ui` sign-in.
+
+**Mid-call reauth (FR18, issue #2431).** A stored refresh token can stop
+working after it had been working (Keycloak rejects it in a way only
+re-consent fixes) — `acquireGrantToken` detects this distinctly
+(`errors.Is(err, grpcauth.ErrGrantNeedsReauth)`) and returns a
+`reauthRequiredError` naming the domain, rather than a plain acquisition
+failure, whether the failing call is `start_session`'s initial connect
+or an existing session's mid-call dispatch. No retry is attempted and no
+other grant is substituted — the operator is routed back through the
+consent flow above for that domain specifically, the next time they
+access it through `ui`. Logged at WARNING (this is a genuine deviation
+needing a human, not an ERROR — the system itself behaved correctly).
+
+**Self-service and admin grant lists (FR14–FR17, issues #2432/#2433).**
+`GET /grants` (`whagent_net/ui/handlers_grants.go`) lists the signed-in
+operator's own delegated grants with a live per-domain status read
+(`grpcauth.Store.Status`, never the bookkeeping index, which carries no
+status column of its own — FR12) and lets them revoke any one
+individually (`POST /grants/revoke`); it never shows another operator's
+grants (FR16). `GET /admin/grants` (`handlers_grants_admin.go`) is the
+equivalent for every operator's grants, reachable only to an operator
+whose token carries the `WHAGENT_GRANT_ADMIN_ROLE` realm role (FR14/FR15)
+— checked against the roles on a freshly-refreshed access token
+(`htmxauth.DBSessionManager.GetAccessToken`), never the 24h-cached
+`htmxauth.GetUser(ctx).Roles` snapshot, so a revoked admin role stops
+working on the very next request rather than up to a day later (NFR3).
+Both revoke actions are scoped to exactly one `(subject, grant)` pair
+(FR17) and take effect immediately — there is no cache for a revoke to
+race against (FR8/NFR7).
+
+**NFR2 — domain isolation is a property of whagent_net's own dispatch
+code, not of the Keycloak JWT.** The underlying Keycloak-signed JWT
+`TokenSource(...).Token(ctx)` returns is not scope-narrowed by which
+grant produced it — nothing at the IdP layer or in `grpcauth` itself
+prevents a JWT obtained via domain A's grant from being technically
+usable against domain B's `required_role` check if it were ever
+forwarded there. The guarantee this design makes is **structural
+correctness of whagent_net's own grant→domain routing**: FR4's grant key
+ties one grant to exactly one domain, and no code path in `mcp` ever
+resolves or forwards a grant for any domain other than the one the
+current call (above) is actually targeting — there is no code path that
+accepts a caller-supplied or mismatched grant/domain pair. This is
+**not** a claim that the JWT itself is cryptographically restricted to
+one domain; it is a claim about what whagent_net's dispatch code will
+and will not do with the JWT it obtains.
+
+**NFR1 — what compromising a secret alone can and cannot do.** No single
+secret held by `mcp` or `ui` — including `WHAGENT_GRANT_CLIENT_SECRET`,
+the one shared confidential client's secret (NFR5, below) — can mint a
+working credential for an operator who has not personally completed that
+domain's consent; it only lets a holder refresh already-consented,
+still-active grants it can otherwise reach. This is a materially smaller
+blast radius than the removed impersonation-exchange design, whose
+equivalent secret could mint a JWT as *any* operator currently signed
+into `ui`, for any domain, without that operator ever having consented
+to anything.
+
+**NFR5 — one shared client, not one per domain.**
+`WHAGENT_GRANT_CLIENT_ID`/`_CLIENT_SECRET`/`_REDIRECT_URI`/
+`_ENCRYPTION_KEY` (`ENV.md`) configure a *single* confidential Keycloak
+client used as the caller identity by both `ui` and `mcp` — distinct
+from `WHAGENT_OIDC_CLIENT_ID`/`_CLIENT_SECRET` (which only ever verifies
+or forwards a token neither binary minted itself) and unlike
+`KEYCLOAK.md`'s usual "one client per caller identity" principle: domain
+isolation for this flow is carried entirely by the grant key derived
+from `AgentDefinition.Domain` (FR4/NFR2 above), not by provisioning a
+separate Keycloak client per domain. The secret is read from the
+environment only, provisioned as a Kubernetes secret, never checked in,
+never logged, never echoed in an error. See
+`libs/go/grpcauth/KEYCLOAK.md` § 11 (and its whagent-net-specific runbook
+subsection) for the Keycloak-side client and admin-role setup this
+requires.
+
+**NFR6 — why the grant index is not a local identity store.** "No new
+local identity table" means no new whagent-net-only *user/account*
+identity, not "no new table": grant lookups still key on Keycloak `(iss,
+sub)` plus domain (FR4) — nothing here mints, verifies, or stores a
+whagent-net-local notion of "who this operator is" that could drift from
+Keycloak. FR12's bookkeeping index (`grantindex`,
+`(subject_iss, subject_sub, domain, preferred_username, granted_at)`) is
+compatible with this: it is a pure existence index over
+already-Keycloak-resolved identities, written once at successful consent
+and never updated afterward — it carries no status column (every render
+reads live status from `grpcauth.Store.Status` instead, so this index
+and `grpcauth`'s own store never need to be kept in sync), and its one
+non-identity field (`preferred_username`) is a captured display-only
+snapshot, not a live lookup, since the admin page has no way to
+re-derive another operator's username later.
+
+**Cutover (FR11/NFR8, issue #2434).** Migration `009_mcpauth_cutover` is
+a single, one-time deploy: every row in `mcp_credential`/`mcp_auth_code`
+is deleted outright (not revoked, not time-boxed), so every
+previously-minted opaque `mcpauth` credential stops working immediately
+and permanently, and every operator who used the browser-OAuth2 path
+before cutover must redo the per-domain consent above to regain access.
+There is no feature flag, dual-read, or coexistence window between the
+old and new paths. RFC 7591 client registrations (`mcp_oauth_client`)
+are left alone — a registration identifies the MCP client software, not
+an operator's authority. See `README.md` "Cutover" for the full
+operator-facing runbook note.
 
 Chain: subject → `api` → `worker` → domain MCP server → domain API. A
 short-lived **whagent-signed JWT** (`sub` + `sub_iss` = the on-behalf-of
