@@ -88,6 +88,13 @@ service ManManAPI {
   // Validation
   rpc ValidateDeployment(ValidateDeploymentRequest) returns (ValidateDeploymentResponse);
 
+  // Fleet status summary (#2371, manmanv2 M6, FR5/NFR5): a point-in-time
+  // running/total deployment-count snapshot per game across the whole
+  // fleet, computed from existing ServerGameConfig/Session data. No new
+  // collection, no live transport -- refreshed only when this RPC is
+  // called (page load or manual refresh).
+  rpc GetFleetStatusSummary(GetFleetStatusSummaryRequest) returns (GetFleetStatusSummaryResponse);
+
   // Configuration strategy management
   rpc CreateConfigurationStrategy(CreateConfigurationStrategyRequest) returns (CreateConfigurationStrategyResponse);
   rpc ListConfigurationStrategies(ListConfigurationStrategiesRequest) returns (ListConfigurationStrategiesResponse);
