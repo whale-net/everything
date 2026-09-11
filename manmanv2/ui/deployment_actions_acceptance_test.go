@@ -390,6 +390,27 @@ func doGet(mux *http.ServeMux, path string) *httptest.ResponseRecorder {
 	return w
 }
 
+// deploymentRowSection isolates a single deployment row's rendered markup
+// (from its `id="deployment-row-<sgcID>"` opening tag to the closing
+// </tr>), mirroring handlers_sgc_test.go's statusConnectSection/
+// sessionHistorySection helpers of the same shape. Relocated here from the
+// now-deleted handlers_sessions_deployment_row_test.go (#2372 retired
+// handleSessions along with /sessions's page render) since this file is
+// its only remaining consumer.
+func deploymentRowSection(t *testing.T, body string, sgcID int64) string {
+	t.Helper()
+	marker := fmt.Sprintf(`id="deployment-row-%d"`, sgcID)
+	start := strings.Index(body, marker)
+	if start < 0 {
+		t.Fatalf("expected a deployment row with %q in rendered body, got %q", marker, body)
+	}
+	end := strings.Index(body[start:], "</tr>")
+	if end < 0 {
+		t.Fatalf("expected a closing </tr> after the deployment row, got %q", body[start:])
+	}
+	return body[start : start+end]
+}
+
 func doPost(mux *http.ServeMux, path string, htmx bool) *httptest.ResponseRecorder {
 	req := httptest.NewRequest(http.MethodPost, path, nil)
 	if htmx {

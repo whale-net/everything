@@ -62,3 +62,14 @@ func timeAgo(timestamp int64) string {
 		return fmt.Sprintf("%d days ago", days)
 	}
 }
+
+// formatTime was previously defined in the now-deleted server_detail.templ
+// (#2372 retired that page) but is still used by session_detail.templ and
+// workshop_cache.templ, so it lives here alongside the package's other
+// shared display-formatting helpers.
+func formatTime(timestamp int64) string {
+	if timestamp == 0 {
+		return "-"
+	}
+	return fmt.Sprintf("%d", timestamp)
+}
