@@ -39,6 +39,13 @@ type fakeGamesAPIClient struct {
 	servers     []*manmanpb.Server
 	sessions    []*manmanpb.Session
 
+	// pendingRestartStates backs ListPendingRestarts' positive path (task
+	// #2372's validation gap: every other test in this file leaves this nil,
+	// which only ever exercises the "no restart record" branch -- see
+	// TestHandleGames_RestartStateBadge_RendersOnDeploymentRow below for the
+	// case that actually populates it).
+	pendingRestartStates []*manmanpb.PendingRestartState
+
 	calls map[string]int
 }
 
@@ -81,7 +88,7 @@ func (f *fakeGamesAPIClient) ListSessions(ctx context.Context, in *manmanpb.List
 // range over instead of dereferencing a nil resp.
 func (f *fakeGamesAPIClient) ListPendingRestarts(ctx context.Context, in *manmanpb.ListPendingRestartsRequest, opts ...grpc.CallOption) (*manmanpb.ListPendingRestartsResponse, error) {
 	f.calls["ListPendingRestarts"]++
-	return &manmanpb.ListPendingRestartsResponse{}, nil
+	return &manmanpb.ListPendingRestartsResponse{States: f.pendingRestartStates}, nil
 }
 
 // buildFakeGamesData constructs n games, each with one config and one
@@ -181,6 +188,59 @@ func TestHandleGames_NFR7_ConstantCallCount(t *testing.T) {
 	}
 	if len(large.calls) != len(wantMethods) {
 		t.Errorf("large.calls = %+v, want exactly the %d known methods (an extra call key would mean an unexpected RPC was added, e.g. for Configurations or Workshop Libraries)", large.calls, len(wantMethods))
+	}
+}
+
+// TestHandleGames_RestartStateBadge_RendersOnDeploymentRow is task #2372's
+// own validation gap closed: every other test in this file leaves
+// fakeGamesAPIClient's ListPendingRestarts returning an empty response, so
+// none of them ever exercised the badge's positive path -- they prove the
+// batched call happens (NFR7's exact-method-set/call-count checks above),
+// not that a real pending-restart entry actually threads through
+// buildGameRows/buildGameDeploymentRow into the rendered Games page
+// (FR17's retained-capability clause: the restart-state badge, one of the
+// two capabilities /sessions's retirement must not drop). A deployment
+// with a "pending" PendingRestartState must render components.RestartBadge's
+// "Restarting" label on its Deployments row.
+//
+// Red this by hand: comment out buildGameDeploymentRow's
+// `RestartState: restartState` line (handlers_games.go) -- this test fails
+// (no "Restarting" text in the rendered body) while
+// TestHandleGames_NFR7_ConstantCallCount keeps passing unchanged, since
+// that test only counts calls and never inspects rendered content. That gap
+// is exactly what let the original defect (the call happening but never
+// reaching the template) ship unnoticed. Verified red/green by hand;
+// reverted to green before commit.
+func TestHandleGames_RestartStateBadge_RendersOnDeploymentRow(t *testing.T) {
+	const sgcID = int64(100)
+	api := &fakeGamesAPIClient{
+		calls:   map[string]int{},
+		games:   []*manmanpb.Game{{GameId: 1, Name: "Restart Game"}},
+		configs: []*manmanpb.GameConfig{{ConfigId: 10, GameId: 1, Name: "Config"}},
+		deployments: []*manmanpb.ServerGameConfig{
+			{ServerGameConfigId: sgcID, ServerId: 1, GameConfigId: 10, Status: "active"},
+		},
+		servers: []*manmanpb.Server{{ServerId: 1, HostPublicAddress: "host-01"}},
+		sessions: []*manmanpb.Session{
+			{SessionId: 1, ServerGameConfigId: sgcID, StartedAt: 1000, Status: "stopping"},
+		},
+		pendingRestartStates: []*manmanpb.PendingRestartState{
+			{
+				ServerGameConfigId: sgcID,
+				PendingRestartId:   7,
+				Status:             "pending",
+				GatingSessionId:    1,
+				CreatedAtUnix:      1000,
+			},
+		},
+	}
+
+	code, body := renderGamesHTTP(t, api, "/games")
+	if code != http.StatusOK {
+		t.Fatalf("status = %d, want 200; body: %s", code, body)
+	}
+	if !strings.Contains(body, "Restarting") {
+		t.Errorf("expected the restart-state badge (\"Restarting\") to render on the deployment row for a pending restart, got none in body: %s", body)
 	}
 }
 
