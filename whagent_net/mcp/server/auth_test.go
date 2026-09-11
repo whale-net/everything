@@ -1,17 +1,24 @@
 package server
 
 // Pure-Go coverage for auth.go's dual-path verifier and middleware (issue
-// #2249's Testing section): isCredentialShaped's exact shape split,
-// NewVerifier's classification of an opaque mcpauth credential vs.
-// everything else (including the nil-credentials degrade-to-pre-FR9
-// behavior), and AuthMiddleware's two forwarding branches -- all against
-// fakeCredentialStore/fakeExchanger (below), never a real database or
-// Keycloak. newFakeGRPCBackend proves what actually reaches a gRPC call's
-// wire metadata, mirroring auth_pass_through_test.go's own
-// fakeSessionServer/newFakeBackend one level down (that file cannot be
-// reused directly here: it lives in package server_test, and these tests
-// need this package's unexported identityExtraKey/tokenExtraKey/
-// resolvedIdentity to build fixtures).
+// #2249's Testing section, updated by issue #2430's Testing section):
+// isCredentialShaped's exact shape split, NewVerifier's classification of
+// an opaque mcpauth credential vs. everything else (including the
+// nil-credentials degrade-to-pre-FR9 behavior), and AuthMiddleware's two
+// forwarding branches -- all against fakeCredentialStore (below), never a
+// real database or Keycloak. newFakeGRPCBackend proves what actually
+// reaches a gRPC call's wire metadata for the manual-token path, mirroring
+// auth_pass_through_test.go's own fakeSessionServer/newFakeBackend one
+// level down (that file cannot be reused directly here: it lives in
+// package server_test, and these tests need this package's unexported
+// identityExtraKey/tokenExtraKey/resolvedIdentity to build fixtures). The
+// browser-OAuth2 path no longer forwards any bearer token at middleware
+// time at all (issue #2430, FR7/FR8/FR19 -- RFC 8693 impersonation
+// exchange and its tokenexchange.go cache are gone): its own coverage
+// below asserts directly against mcpidentity.FromContext instead of a
+// gRPC round trip, since resolving that identity into a working
+// credential is dispatch-time work this package no longer does
+// (../tools/dispatch.go, a dependent task).
 import (
 	"context"
 	"errors"
@@ -92,29 +99,6 @@ func (f *fakeCredentialStore) List(context.Context, string) ([]mcpauth.Credentia
 }
 
 var _ mcpauth.CredentialStore = (*fakeCredentialStore)(nil)
-
-// ── fake Exchanger ───────────────────────────────────────────────────────
-
-// fakeExchanger implements Exchanger, recording every (iss, sub) pair it
-// was asked to exchange and returning either a fixed jwt or a fixed error.
-type fakeExchanger struct {
-	mu    sync.Mutex
-	jwt   string
-	err   error
-	calls []identityKey
-}
-
-func (f *fakeExchanger) Exchange(_ context.Context, iss, sub string) (string, error) {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	f.calls = append(f.calls, identityKey{iss: iss, sub: sub})
-	if f.err != nil {
-		return "", f.err
-	}
-	return f.jwt, nil
-}
-
-var _ Exchanger = (*fakeExchanger)(nil)
 
 // hexToken returns a 64-character lowercase hex string (isCredentialShaped's
 // exact shape) built by repeating r -- deterministic and readable in test
@@ -251,62 +235,63 @@ func TestAuthMiddleware_NoTokenInfo_RejectsBeforeNextRuns(t *testing.T) {
 				called = true
 				return nil, nil
 			})
-			_, err := AuthMiddleware(&fakeExchanger{})(next)(context.Background(), "tools/call", tc.req)
+			_, err := AuthMiddleware()(next)(context.Background(), "tools/call", tc.req)
 			require.Error(t, err)
 			assert.False(t, called, "next must never run for a call carrying no bearer-derived identity")
 		})
 	}
 }
 
-func TestAuthMiddleware_OAuth2Path_ExchangesIdentityAndForwardsResultToAPI(t *testing.T) {
+// TestAuthMiddleware_OAuth2Path_PlacesResolvedIdentityOnContext_NeverAToken
+// is issue #2430's replacement for this task's original
+// exchange-and-forward coverage (git history): AuthMiddleware no longer
+// mints or forwards anything for the browser-OAuth2 path -- it places the
+// already-decoded (iss, sub) on ctx via mcpidentity.ContextWithIdentity
+// for a tool handler to resolve into a working credential later
+// (../tools/dispatch.go, FR7/FR8), and forwards no bearer token of its
+// own at all. The second half of this proves the "no token" half
+// directly against a real gRPC call: grpcauth.NewUserTokenDialOption
+// (the same dial option main.go uses) refuses to send any RPC at all when
+// ctx carries no user token, so next's own attempted call fails before
+// ever reaching api -- distinguishing "no token" from "an empty token
+// forwarded".
+//
+// Red/green (verified by hand, then reverted): reintroducing a call to
+// grpcauth.WithUserToken on this branch (forwarding identity.sub, or any
+// other value, as if it were a real bearer token) made the gRPC call
+// below succeed and reach api instead of failing before ever dialing it.
+// Reverting restored it to green.
+func TestAuthMiddleware_OAuth2Path_PlacesResolvedIdentityOnContext_NeverAToken(t *testing.T) {
+	const iss = "https://keycloak.example.test/realms/whagent"
+	const sub = "operator-sub-1"
+
 	fake, client := newFakeGRPCBackend(t)
-	exchanger := &fakeExchanger{jwt: "exchanged-jwt-xyz"}
 
+	var gotIdentity mcpidentity.Identity
+	var hadIdentity bool
+	var rpcErr error
 	next := mcp.MethodHandler(func(ctx context.Context, method string, req mcp.Request) (mcp.Result, error) {
-		_, err := client.GetSession(ctx, &pb.GetSessionRequest{SessionId: "sess-1"})
-		return nil, err
-	})
-
-	req := requestWithExtra(&mcp.RequestExtra{TokenInfo: &sdkauth.TokenInfo{
-		Extra: map[string]any{identityExtraKey: resolvedIdentity{iss: "https://keycloak.example.test/realms/whagent", sub: "operator-sub-1"}},
-	}})
-
-	_, err := AuthMiddleware(exchanger)(next)(context.Background(), "tools/call", req)
-	require.NoError(t, err)
-
-	require.Len(t, exchanger.calls, 1)
-	assert.Equal(t, identityKey{iss: "https://keycloak.example.test/realms/whagent", sub: "operator-sub-1"}, exchanger.calls[0])
-
-	headers := fake.recordedAuthHeaders()
-	require.Len(t, headers, 1)
-	assert.Equal(t, "Bearer exchanged-jwt-xyz", headers[0], "api must see the EXCHANGED jwt, never the opaque credential or the raw identity")
-
-	// Red/green (verified by hand, then reverted): changing this branch to
-	// forward identity.sub (or the raw presented credential) directly --
-	// skipping exchanger.Exchange entirely -- made this assertion fail
-	// (api recorded something other than "Bearer exchanged-jwt-xyz").
-	// Reverting restored it to green.
-}
-
-func TestAuthMiddleware_OAuth2Path_ExchangeFailure_RejectsWithoutCallingNext(t *testing.T) {
-	exchanger := &fakeExchanger{err: errors.New("token endpoint unreachable")}
-	var called bool
-	next := mcp.MethodHandler(func(ctx context.Context, method string, req mcp.Request) (mcp.Result, error) {
-		called = true
+		gotIdentity, hadIdentity = mcpidentity.FromContext(ctx)
+		_, rpcErr = client.GetSession(ctx, &pb.GetSessionRequest{SessionId: "sess-1"})
 		return nil, nil
 	})
+
 	req := requestWithExtra(&mcp.RequestExtra{TokenInfo: &sdkauth.TokenInfo{
-		Extra: map[string]any{identityExtraKey: resolvedIdentity{iss: "iss", sub: "sub"}},
+		Extra: map[string]any{identityExtraKey: resolvedIdentity{iss: iss, sub: sub}},
 	}})
 
-	_, err := AuthMiddleware(exchanger)(next)(context.Background(), "tools/call", req)
-	require.Error(t, err)
-	assert.False(t, called, "a failed exchange must reject the call outright, never fall back to another path")
+	_, err := AuthMiddleware()(next)(context.Background(), "tools/call", req)
+	require.NoError(t, err, "AuthMiddleware itself must not reject this call -- resolving the credential is dispatch-time work, not middleware work")
+
+	require.True(t, hadIdentity, "a tool handler must see the resolved identity on ctx")
+	assert.Equal(t, mcpidentity.Identity{Iss: iss, Sub: sub}, gotIdentity)
+
+	require.Error(t, rpcErr, "with no bearer token on ctx, the gRPC dial option must refuse to send the RPC at all")
+	assert.Empty(t, fake.recordedAuthHeaders(), "api must never be reached for a call carrying only a resolved identity and no acquired token")
 }
 
 func TestAuthMiddleware_ManualPath_ForwardsRawTokenToAPIUnchanged(t *testing.T) {
 	fake, client := newFakeGRPCBackend(t)
-	exchanger := &fakeExchanger{} // must never be consulted on this path
 
 	next := mcp.MethodHandler(func(ctx context.Context, method string, req mcp.Request) (mcp.Result, error) {
 		_, err := client.GetSession(ctx, &pb.GetSessionRequest{SessionId: "sess-1"})
@@ -316,10 +301,9 @@ func TestAuthMiddleware_ManualPath_ForwardsRawTokenToAPIUnchanged(t *testing.T) 
 		Extra: map[string]any{tokenExtraKey: "operator-raw-keycloak-token"},
 	}})
 
-	_, err := AuthMiddleware(exchanger)(next)(context.Background(), "tools/call", req)
+	_, err := AuthMiddleware()(next)(context.Background(), "tools/call", req)
 	require.NoError(t, err)
 
-	assert.Empty(t, exchanger.calls, "the manual-token path must never call the exchanger")
 	headers := fake.recordedAuthHeaders()
 	require.Len(t, headers, 1)
 	assert.Equal(t, "Bearer operator-raw-keycloak-token", headers[0])
@@ -334,37 +318,32 @@ func TestAuthMiddleware_ManualPath_EmptyToken_Rejected(t *testing.T) {
 	req := requestWithExtra(&mcp.RequestExtra{TokenInfo: &sdkauth.TokenInfo{
 		Extra: map[string]any{tokenExtraKey: ""},
 	}})
-	_, err := AuthMiddleware(&fakeExchanger{})(next)(context.Background(), "tools/call", req)
+	_, err := AuthMiddleware()(next)(context.Background(), "tools/call", req)
 	require.Error(t, err)
 	assert.False(t, called)
 }
 
-// TestAuthMiddleware_APIRejection_PropagatesIdenticallyOnBothPaths is this
-// task's "role parity" coverage: an operator who fails some api-side check
-// (modeled here as a fixed gRPC error api's GetSession returns -- api
-// itself is unchanged by this task) must see that exact rejection
-// regardless of which auth path resolved their identity. AuthMiddleware
-// must never translate, wrap, or otherwise vary next's error by path.
-func TestAuthMiddleware_APIRejection_PropagatesIdenticallyOnBothPaths(t *testing.T) {
+// TestAuthMiddleware_APIRejection_PropagatesUnchanged is this task's
+// (issue #2249, updated by #2430) invariant that AuthMiddleware never
+// translates, wraps, or otherwise varies next's own returned error --
+// modeled here as a fixed error next returns directly, since the
+// browser-OAuth2 path no longer reaches api by itself at middleware time
+// at all (that is dispatch-time work, ../tools/dispatch.go).
+func TestAuthMiddleware_APIRejection_PropagatesUnchanged(t *testing.T) {
 	wantErr := status.Error(codes.PermissionDenied, "missing required_role for this agent")
-
-	fake, client := newFakeGRPCBackend(t)
-	fake.getSessionFn = func(*pb.GetSessionRequest) (*pb.GetSessionResponse, error) { return nil, wantErr }
-
 	next := mcp.MethodHandler(func(ctx context.Context, method string, req mcp.Request) (mcp.Result, error) {
-		_, err := client.GetSession(ctx, &pb.GetSessionRequest{SessionId: "sess-1"})
-		return nil, err
+		return nil, wantErr
 	})
 
 	manualReq := requestWithExtra(&mcp.RequestExtra{TokenInfo: &sdkauth.TokenInfo{
 		Extra: map[string]any{tokenExtraKey: "operator-raw-token"},
 	}})
-	_, manualErr := AuthMiddleware(&fakeExchanger{})(next)(context.Background(), "tools/call", manualReq)
+	_, manualErr := AuthMiddleware()(next)(context.Background(), "tools/call", manualReq)
 
 	oauthReq := requestWithExtra(&mcp.RequestExtra{TokenInfo: &sdkauth.TokenInfo{
 		Extra: map[string]any{identityExtraKey: resolvedIdentity{iss: "iss", sub: "sub"}},
 	}})
-	_, oauthErr := AuthMiddleware(&fakeExchanger{jwt: "exchanged-jwt"})(next)(context.Background(), "tools/call", oauthReq)
+	_, oauthErr := AuthMiddleware()(next)(context.Background(), "tools/call", oauthReq)
 
 	require.Error(t, manualErr)
 	require.Error(t, oauthErr)

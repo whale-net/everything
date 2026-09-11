@@ -12,12 +12,18 @@
 // pair has to be packed into one string somehow; this package is the one
 // place that packing happens, so `ui` (whagent_net/ui/mcpauth.go's
 // CallerResolver, which encodes the signed-in operator's own (iss, sub))
-// and `mcp` (a dependent task's verification middleware, which decodes an
+// and `mcp` (whagent_net/mcp/server/auth.go's NewVerifier, which decodes an
 // already-verified credential's identity back) cannot drift apart on the
 // format.
+//
+// It also carries that same (iss, sub) pair across the one other package
+// boundary within `mcp` that needs it unpacked (Identity/ContextWithIdentity/
+// FromContext below, issue #2430) -- see Identity's own doc comment for why
+// that lives here rather than in mcp/server or mcp/tools directly.
 package mcpidentity
 
 import (
+	"context"
 	"fmt"
 	"strings"
 )
@@ -65,4 +71,53 @@ func Decode(encoded string) (iss, sub string, err error) {
 		return "", "", fmt.Errorf("mcpidentity: malformed encoded identity (empty iss or sub): %q", encoded)
 	}
 	return iss, sub, nil
+}
+
+// Identity is a resolved (iss, sub) pair carried on a context.Context
+// between whagent_net/mcp/server's AuthMiddleware (the producer, for the
+// browser-OAuth2 credential path only -- issue #2430, FR7/FR8) and
+// whagent_net/mcp/tools' dispatch-time handlers (the consumer). It is
+// deliberately not this package's packed single-string encoding
+// (Encode/Decode above): that format exists solely for
+// mcpauth.CredentialStore/mcpauth.AuthCodeStore's Identity column (NFR7),
+// an unrelated persistence concern, whereas this type never leaves process
+// memory.
+//
+// mcp/server and mcp/tools are otherwise deliberately decoupled -- neither
+// imports the other (see mcp/tools/domain.go and mcp/tools/grant.go's own
+// doc comments for why the DomainResolver/GrantSource seams are duplicated
+// interface literals rather than shared types) -- so this context-carrying
+// pair lives here, in the one small dependency-free package both already
+// import, mirroring libs/go/grpcauth's own
+// ClaimsFromContext/ContextWithClaims/WithUserToken pattern for crossing
+// an analogous package boundary.
+type Identity struct {
+	Iss string
+	Sub string
+}
+
+// identityContextKey is the unexported context key ContextWithIdentity/
+// FromContext use.
+type identityContextKey struct{}
+
+// ContextWithIdentity returns a context carrying id. AuthMiddleware calls
+// this exactly once, for the browser-OAuth2 path only -- the manual-token
+// path (a real bearer token forwarded byte for byte) never carries an
+// Identity, by design (see FromContext's doc comment).
+func ContextWithIdentity(ctx context.Context, id Identity) context.Context {
+	return context.WithValue(ctx, identityContextKey{}, id)
+}
+
+// FromContext retrieves the Identity ContextWithIdentity placed on ctx, if
+// any. A tool handler's absence check (the second return value) is exactly
+// how it distinguishes the two auth paths at dispatch time (issue #2430's
+// FR7/FR8 sequence): present means the browser-OAuth2 path, so the handler
+// must resolve a domain and acquire a token via GrantSource before
+// forwarding; absent means the manual-token path, where AuthMiddleware
+// already placed a real, usable bearer token on ctx directly (grpcauth.
+// WithUserToken) and no further resolution is needed or possible (there is
+// no caller identity here for a GrantSource lookup to key off of).
+func FromContext(ctx context.Context) (Identity, bool) {
+	id, ok := ctx.Value(identityContextKey{}).(Identity)
+	return id, ok
 }

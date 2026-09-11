@@ -66,8 +66,8 @@ type Config struct {
 // unset reports whether every field of cfg is empty -- the "feature not
 // configured at all" case, which Build treats as a non-fatal
 // ErrNotConfigured (see its doc comment) rather than an error, mirroring
-// mcp/server.TokenExchangeConfig's own Enabled()/degrade precedent for
-// this repo's other optional confidential-client wiring.
+// this repo's other optional confidential-client wiring's own
+// enabled()/degrade precedent (e.g. mcp/server.ResourceMetadataConfig.enabled).
 func (cfg Config) unset() bool {
 	return cfg.Issuer == "" && cfg.ClientID == "" && cfg.ClientSecret == "" && cfg.RedirectURI == "" && cfg.EncryptionKeySecret == ""
 }
@@ -125,10 +125,10 @@ func redactedPlaceholder(secret string) string {
 // ErrNotConfigured is returned by Build when cfg is entirely unset (see
 // Config.unset's doc comment). Both `ui` and `mcp`'s main.go treat this as
 // non-fatal (skip, WARNING-log, leave the delegated-grant wiring absent)
-// -- mirroring mcp/server.TokenExchangeConfig's own degrade precedent --
-// not as a startup failure, since local dev (whagent_net/Tiltfile) leaves
-// these variables unset by default exactly like WHAGENT_MCP_KEYCLOAK_*
-// (../ENV.md's "`mcp` server" section).
+// -- mirroring `mcp`'s own mcpauth.CredentialStore degrade precedent
+// (main.go's initializeAuthDeps, PG_DATABASE_URL unset) -- not as a
+// startup failure, since local dev (whagent_net/Tiltfile) leaves these
+// variables unset by default (../ENV.md's "`mcp` server" section).
 var ErrNotConfigured = errors.New("delegatedgrant: not configured (every WHAGENT_GRANT_*/WHAGENT_OIDC_ISSUER variable is unset)")
 
 // Components is the constructed triple Build returns: the shared

@@ -67,7 +67,7 @@ func (cfg ResourceMetadataConfig) enabled() bool {
 // store) does.
 //
 // credentials may be nil (FR9 not configured, e.g. PG_DATABASE_URL
-// unset, main.go's initializeTokenExchange) -- NewVerifier(nil)
+// unset, main.go's initializeAuthDeps) -- NewVerifier(nil)
 // reproduces this package's pre-FR9 behavior exactly (issue #2249's
 // Testing section, "the manual-token path still works end to end with no
 // OAuth2 configuration present at all").

@@ -108,14 +108,16 @@ func newFakeBackend(t *testing.T) (*fakeSessionServer, pb.SessionServiceClient) 
 // hosted by httptest.Server.
 func newTestMCPServer(t *testing.T, client pb.SessionServiceClient) string {
 	t.Helper()
-	// nil Exchanger/credentials: this suite covers the manual-token path
-	// only (issue #2120's original coverage) -- FR9's OAuth2 path (issue
-	// #2249) has its own dedicated test file. A nil Exchanger is safe
-	// here because AuthMiddleware only ever calls it on the OAuth2
-	// branch, which nil credentials in NewHTTPHandler below never routes
-	// a call onto.
-	srv := server.New(nil)
-	tools.RegisterGetSession(srv, client)
+	// nil credentials: this suite covers the manual-token path only
+	// (issue #2120's original coverage) -- FR9's OAuth2 path (issue
+	// #2249) has its own dedicated test file.
+	srv := server.New()
+	// nil domainResolver/grant: this suite exercises the manual-token
+	// identity pass-through path only, which never carries a resolved
+	// mcpidentity.Identity on ctx -- dispatch.go's resolveGrantTokenForXxx
+	// is a no-op whenever that's true (issue #2430), so get_session's
+	// call method never consults either nil interface here.
+	tools.RegisterGetSession(srv, client, nil, nil)
 
 	ts := httptest.NewServer(server.NewHTTPHandler(srv, nil, server.ResourceMetadataConfig{}))
 	t.Cleanup(ts.Close)

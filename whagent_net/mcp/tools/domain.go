@@ -4,12 +4,13 @@ import "context"
 
 // DomainResolver is this package's own copy of
 // ../server/domain.go's identical interface literal: the domain-
-// resolution seam a tool handler will eventually need at dispatch time
-// (issue #2427, FR7) to resolve the domain an agent id or session id
-// belongs to (whagent_net/session.AgentDefinition.Domain, issue #2424's
-// FR1), without this package ever importing whagent_net/session or
-// talking to Postgres directly (deps_test.go's
-// TestBUILD_NoStoreOrTemporalDependency, pinned by issue #2120).
+// resolution seam dispatch.go's resolveGrantTokenForAgent/
+// resolveGrantTokenForSession use (issue #2430, FR7) to resolve the
+// domain an agent id or session id belongs to (whagent_net/session.
+// AgentDefinition.Domain, issue #2424's FR1), without this package ever
+// importing whagent_net/session or talking to Postgres directly
+// (deps_test.go's TestBUILD_NoStoreOrTemporalDependency, pinned by issue
+// #2120).
 //
 // Duplicated here rather than imported from ../server (or a shared third
 // package) because Go interfaces are structural: whagent_net/mcpdomain.Resolver
@@ -19,17 +20,10 @@ import "context"
 // trivially green with zero import surface added for an interface this
 // small.
 //
-// A fake in-memory implementation for dependent tasks' tests lives
-// alongside fake_client_test.go once a task actually calls this interface
-// -- issue #2427's Testing section reserves adding it for that point,
-// since no tool handler calls this interface yet (see below).
-//
-// This task (#2427) is purely additive: DomainResolver is declared and
-// whagent_net/mcpdomain.Resolver -- the Postgres-backed implementation --
-// is constructed and held at whagent_net/mcp/main.go's composition root,
-// but no tool handler in this package calls it yet. Wiring an actual call
-// at tool-dispatch time is issue #2427's dependent "dispatch-time
-// rewiring" task.
+// fake_domain_resolver_test.go is the in-memory double dispatch.go's own
+// tests (and every tool's) drive this interface against -- never a real
+// Postgres-backed whagent_net/mcpdomain.Resolver, which is constructed
+// exclusively at whagent_net/mcp/main.go's composition root.
 type DomainResolver interface {
 	// DomainForAgent resolves agentID's current AgentDefinition and
 	// returns its Domain.
