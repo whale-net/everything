@@ -63,18 +63,29 @@ type Config struct {
 	EncryptionKeySecret string
 }
 
-// unset reports whether every field of cfg is empty -- the "feature not
-// configured at all" case, which Build treats as a non-fatal
-// ErrNotConfigured (see its doc comment) rather than an error, mirroring
-// this repo's other optional confidential-client wiring's own
-// enabled()/degrade precedent (e.g. mcp/server.ResourceMetadataConfig.enabled).
+// unset reports whether the delegated-grant feature was requested at all --
+// true only when every WHAGENT_GRANT_* field is empty. cfg.Issuer
+// (WHAGENT_OIDC_ISSUER) is deliberately excluded from this conjunction: that
+// variable is shared with unrelated, pre-existing uses on `ui`/`api`/`worker`
+// (issue #2150) and is therefore set independent of whether this feature is
+// configured -- `ui`'s whagent_net/Tiltfile sets WHAGENT_OIDC_ISSUER while
+// leaving every WHAGENT_GRANT_* var unset, which is a valid "not requested"
+// case, not a partial configuration (#2486). When unset() is true, Build
+// treats it as a non-fatal ErrNotConfigured (see its doc comment) rather
+// than an error, mirroring this repo's other optional confidential-client
+// wiring's own enabled()/degrade precedent (e.g.
+// mcp/server.ResourceMetadataConfig.enabled).
 func (cfg Config) unset() bool {
-	return cfg.Issuer == "" && cfg.ClientID == "" && cfg.ClientSecret == "" && cfg.RedirectURI == "" && cfg.EncryptionKeySecret == ""
+	return cfg.ClientID == "" && cfg.ClientSecret == "" && cfg.RedirectURI == "" && cfg.EncryptionKeySecret == ""
 }
 
 // missing names which of cfg's required fields are empty, for Build's
 // fail-loud partial-configuration error -- names only the env var,
-// never any field's *value* (NFR5).
+// never any field's *value* (NFR5). Only ever consulted once unset() is
+// false, i.e. once the caller has already signaled intent to use the
+// feature via at least one WHAGENT_GRANT_* var -- at that point Issuer
+// (WHAGENT_OIDC_ISSUER) becomes a required field again, alongside the
+// four WHAGENT_GRANT_* vars.
 func (cfg Config) missing() []string {
 	var m []string
 	if cfg.Issuer == "" {
@@ -123,13 +134,17 @@ func redactedPlaceholder(secret string) string {
 }
 
 // ErrNotConfigured is returned by Build when cfg is entirely unset (see
-// Config.unset's doc comment). Both `ui` and `mcp`'s main.go treat this as
-// non-fatal (skip, WARNING-log, leave the delegated-grant wiring absent)
-// -- mirroring `mcp`'s own mcpauth.CredentialStore degrade precedent
-// (main.go's initializeAuthDeps, PG_DATABASE_URL unset) -- not as a
-// startup failure, since local dev (whagent_net/Tiltfile) leaves these
-// variables unset by default (../ENV.md's "`mcp` server" section).
-var ErrNotConfigured = errors.New("delegatedgrant: not configured (every WHAGENT_GRANT_*/WHAGENT_OIDC_ISSUER variable is unset)")
+// Config.unset's doc comment) -- every WHAGENT_GRANT_* variable is unset,
+// regardless of WHAGENT_OIDC_ISSUER. Both `ui` and `mcp`'s main.go treat
+// this as non-fatal (skip, WARNING-log, leave the delegated-grant wiring
+// absent) -- mirroring `mcp`'s own mcpauth.CredentialStore degrade
+// precedent (main.go's initializeAuthDeps, PG_DATABASE_URL unset) -- not
+// as a startup failure, since local dev (whagent_net/Tiltfile) leaves
+// every WHAGENT_GRANT_* variable unset by default for both binaries
+// (../ENV.md's "Delegated grant" section), even though WHAGENT_OIDC_ISSUER
+// itself is set there for `ui`/`api`/`worker`'s unrelated, pre-existing
+// purpose (issue #2150).
+var ErrNotConfigured = errors.New("delegatedgrant: not configured (every WHAGENT_GRANT_* variable is unset)")
 
 // Components is the constructed triple Build returns: the shared
 // DelegatedGrantSource (also wired as pgstore's RFC 7009 Revoker, FR13),
@@ -193,7 +208,7 @@ func Build(ctx context.Context, cfg Config, pool *pgxpool.Pool) (Components, err
 	}
 	if missing := cfg.missing(); len(missing) > 0 {
 		return Components{}, fmt.Errorf(
-			"delegatedgrant: partially configured, missing %v -- set every WHAGENT_GRANT_*/WHAGENT_OIDC_ISSUER variable together, or none of them",
+			"delegatedgrant: partially configured, missing %v -- set every WHAGENT_GRANT_* variable (plus WHAGENT_OIDC_ISSUER) together once any WHAGENT_GRANT_* variable is set, or leave every WHAGENT_GRANT_* variable unset",
 			missing,
 		)
 	}

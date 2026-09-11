@@ -75,3 +75,24 @@ func TestInitializeDelegatedGrant_EntirelyUnset_DegradesWithoutError(t *testing.
 		t.Fatalf("expected a zero-value Components, got %+v", components)
 	}
 }
+
+// TestInitializeDelegatedGrant_OIDCIssuerSetGrantVarsUnset_DegradesWithoutError
+// is the composition-root-level regression test for #2486's crash-loop:
+// it reproduces `ui`'s exact whagent_net/Tiltfile production combination --
+// WHAGENT_OIDC_ISSUER set (issue #2150's unrelated, pre-existing purpose),
+// every WHAGENT_GRANT_* variable unset -- and proves it degrades the same
+// way as the entirely-unset case above (zero-value Components, nil error),
+// rather than falling into the loud partial-configuration path.
+func TestInitializeDelegatedGrant_OIDCIssuerSetGrantVarsUnset_DegradesWithoutError(t *testing.T) {
+	cfg := config{OIDCIssuer: "https://keycloak.example/realms/whale-net"}
+
+	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+	components, err := initializeDelegatedGrant(context.Background(), cfg, &pgxpool.Pool{}, logger)
+
+	if err != nil {
+		t.Fatalf("expected no error when WHAGENT_OIDC_ISSUER is set but every WHAGENT_GRANT_* variable is unset, got %v", err)
+	}
+	if components.Source != nil || components.Store != nil || components.Index != nil {
+		t.Fatalf("expected a zero-value Components, got %+v", components)
+	}
+}

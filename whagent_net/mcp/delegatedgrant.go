@@ -30,7 +30,7 @@ import (
 // not left dormant (FR19).
 func initializeDelegatedGrant(ctx context.Context, cfg config, pool *pgxpool.Pool, logger *slog.Logger) (delegatedgrant.Components, error) {
 	if pool == nil {
-		logger.Warn("PG_DATABASE_URL not set; delegated-grant client unavailable (not yet on any request path, issue #2426)")
+		logger.Warn("PG_DATABASE_URL not set; delegated-grant client unavailable (FR8's per-call token acquisition, issue #2430)")
 		return delegatedgrant.Components{}, nil
 	}
 
@@ -45,12 +45,12 @@ func initializeDelegatedGrant(ctx context.Context, cfg config, pool *pgxpool.Poo
 	components, err := delegatedgrant.Build(ctx, grantCfg, pool)
 	if err != nil {
 		if errors.Is(err, delegatedgrant.ErrNotConfigured) {
-			logger.Warn("WHAGENT_GRANT_*/WHAGENT_OIDC_ISSUER not configured; delegated-grant client unavailable (not yet on any request path, issue #2426)", "config", grantCfg)
+			logger.Warn("WHAGENT_GRANT_* not configured; delegated-grant client unavailable (FR8's per-call token acquisition, issue #2430)", "config", grantCfg)
 			return delegatedgrant.Components{}, nil
 		}
 		return delegatedgrant.Components{}, err
 	}
 
-	logger.Info("delegated-grant client constructed (FR10/FR13, not yet on any request path)", "config", grantCfg)
+	logger.Info("delegated-grant client constructed (FR10/FR13, live on FR8's per-call token acquisition, issue #2430)", "config", grantCfg)
 	return components, nil
 }

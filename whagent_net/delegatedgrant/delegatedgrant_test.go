@@ -33,6 +33,21 @@ func TestBuild_EntirelyUnset_ReturnsErrNotConfigured(t *testing.T) {
 	require.ErrorIs(t, err, ErrNotConfigured)
 }
 
+// TestBuild_OnlyIssuerSet_ReturnsErrNotConfigured is the direct
+// unit-level regression test for #2486's root cause: `ui`'s
+// whagent_net/Tiltfile sets WHAGENT_OIDC_ISSUER for an unrelated,
+// pre-existing purpose (issue #2150) while leaving every WHAGENT_GRANT_*
+// variable unset by design. Config.unset() must treat that combination as
+// "not requested at all" (ErrNotConfigured), not as a partial
+// configuration -- Issuer alone being set must never trigger Build's
+// fail-loud partial-configuration error.
+func TestBuild_OnlyIssuerSet_ReturnsErrNotConfigured(t *testing.T) {
+	cfg := Config{Issuer: "https://keycloak.example/realms/whale-net"}
+
+	_, err := Build(context.Background(), cfg, nil)
+	require.ErrorIs(t, err, ErrNotConfigured)
+}
+
 // TestBuild_ClientSecretUnset_ErrorsLoudly is issue #2426's Testing
 // section item verbatim: "a construction test ... asserting the
 // config-from-env path errors loudly when the client secret is unset ...

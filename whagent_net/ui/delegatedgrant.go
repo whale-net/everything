@@ -21,10 +21,10 @@ import (
 // including a *partially* configured client -- see
 // delegatedgrant.Build's doc comment for why.
 //
-// This wiring is purely additive (issue #2426's scope): `ui`'s
-// /authorize handler (setupMCPAuth above) still mints an opaque mcpauth
-// credential today; nothing built here is on that request path yet --
-// see #2426's Scope for the dependent task that swaps it over (FR9).
+// Live as of issue #2430 (FR8/FR9): `ui`'s /authorize handler
+// (handlers_consent.go) drives the per-domain consent flow through the
+// Components this builds -- the opaque mcpauth-credential path it
+// previously minted unconditionally is gone.
 func initializeDelegatedGrant(ctx context.Context, cfg config, pool *pgxpool.Pool, logger *slog.Logger) (delegatedgrant.Components, error) {
 	grantCfg := delegatedgrant.Config{
 		Issuer:              cfg.OIDCIssuer,
@@ -37,12 +37,12 @@ func initializeDelegatedGrant(ctx context.Context, cfg config, pool *pgxpool.Poo
 	components, err := delegatedgrant.Build(ctx, grantCfg, pool)
 	if err != nil {
 		if errors.Is(err, delegatedgrant.ErrNotConfigured) {
-			logger.Warn("WHAGENT_GRANT_*/WHAGENT_OIDC_ISSUER not configured; delegated-grant client unavailable (not yet on any request path, issue #2426)", "config", grantCfg)
+			logger.Warn("WHAGENT_GRANT_* not configured; delegated-grant client unavailable (FR9's /authorize consent flow, issue #2430)", "config", grantCfg)
 			return delegatedgrant.Components{}, nil
 		}
 		return delegatedgrant.Components{}, err
 	}
 
-	logger.Info("delegated-grant client constructed (FR10/FR13, not yet on any request path)", "config", grantCfg)
+	logger.Info("delegated-grant client constructed (FR10/FR13, live on FR9's /authorize consent flow, issue #2430)", "config", grantCfg)
 	return components, nil
 }
