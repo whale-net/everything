@@ -43,13 +43,21 @@ type ReadTranscriptOutput struct {
 
 // readTranscriptTool holds the SessionService client this tool is a
 // pass-through to.
+//
+// domainResolver/grant are FR7/FR8's dispatch-time resolution seams
+// (domain.go, grant.go), injected here by issue #2430's Scaffold phase.
+// call does not use them yet -- resolving in.SessionID's domain via
+// DomainForSession and acquiring a token via grant.TokenSource before
+// forwarding is this same issue's Implementation phase.
 type readTranscriptTool struct {
-	client pb.SessionServiceClient
+	client         pb.SessionServiceClient
+	domainResolver DomainResolver
+	grant          GrantSource
 }
 
 // RegisterReadTranscript registers the read_transcript tool on srv.
-func RegisterReadTranscript(srv *mcp.Server, client pb.SessionServiceClient) {
-	t := &readTranscriptTool{client: client}
+func RegisterReadTranscript(srv *mcp.Server, client pb.SessionServiceClient, domainResolver DomainResolver, grant GrantSource) {
+	t := &readTranscriptTool{client: client, domainResolver: domainResolver, grant: grant}
 	mcp.AddTool(srv, &mcp.Tool{
 		Name:        "read_transcript",
 		Description: "Read a whagent-net session's transcript events in commit order, paginated by from_seq/limit (FR2). Works for a running or ended session.",

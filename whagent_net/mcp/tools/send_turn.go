@@ -26,13 +26,21 @@ type SendTurnOutput struct {
 
 // sendTurnTool holds the SessionService client this tool is a
 // pass-through to.
+//
+// domainResolver/grant are FR7/FR8's dispatch-time resolution seams
+// (domain.go, grant.go), injected here by issue #2430's Scaffold phase.
+// call does not use them yet -- resolving in.SessionID's domain via
+// DomainForSession and acquiring a token via grant.TokenSource before
+// forwarding is this same issue's Implementation phase.
 type sendTurnTool struct {
-	client pb.SessionServiceClient
+	client         pb.SessionServiceClient
+	domainResolver DomainResolver
+	grant          GrantSource
 }
 
 // RegisterSendTurn registers the send_turn tool on srv.
-func RegisterSendTurn(srv *mcp.Server, client pb.SessionServiceClient) {
-	t := &sendTurnTool{client: client}
+func RegisterSendTurn(srv *mcp.Server, client pb.SessionServiceClient, domainResolver DomainResolver, grant GrantSource) {
+	t := &sendTurnTool{client: client, domainResolver: domainResolver, grant: grant}
 	mcp.AddTool(srv, &mcp.Tool{
 		Name:        "send_turn",
 		Description: "Send a turn to a running whagent-net session. Returns once the turn is accepted and queued -- it does NOT wait for the turn to complete. Use read_transcript or get_session to observe the result.",

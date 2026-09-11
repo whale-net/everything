@@ -32,13 +32,21 @@ type StartSessionOutput struct {
 // startSessionTool holds the SessionService client this tool is a
 // pass-through to (issue #2120's Implementation section, "Tools --
 // one per gRPC RPC, no more").
+//
+// domainResolver/grant are FR7/FR8's dispatch-time resolution seams
+// (domain.go, grant.go), injected here by issue #2430's Scaffold phase.
+// call does not use them yet -- resolving in.AgentID's domain and
+// acquiring a token via grant.TokenSource before forwarding is this same
+// issue's Implementation phase.
 type startSessionTool struct {
-	client pb.SessionServiceClient
+	client         pb.SessionServiceClient
+	domainResolver DomainResolver
+	grant          GrantSource
 }
 
 // RegisterStartSession registers the start_session tool on srv.
-func RegisterStartSession(srv *mcp.Server, client pb.SessionServiceClient) {
-	t := &startSessionTool{client: client}
+func RegisterStartSession(srv *mcp.Server, client pb.SessionServiceClient, domainResolver DomainResolver, grant GrantSource) {
+	t := &startSessionTool{client: client, domainResolver: domainResolver, grant: grant}
 	mcp.AddTool(srv, &mcp.Tool{
 		Name:        "start_session",
 		Description: "Start a new whagent-net agent session, optionally sending its first turn. Returns once the session has started -- see send_turn for how a later turn's completion is observed.",

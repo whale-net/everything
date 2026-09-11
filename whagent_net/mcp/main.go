@@ -13,10 +13,12 @@
 // issue #2249 OAuth2 token-exchange path's mcpauth.CredentialStore -- see
 // initializeTokenExchange below -- the agent_definition/session_agent
 // tables backing whagent_net/mcpdomain.Resolver's DomainResolver
-// implementation (issue #2427, FR7) -- and, purely additively as of
-// issue #2426 (not yet on any request path), the grpcauth_delegated_grant/
+// implementation (issue #2427, FR7) -- and the grpcauth_delegated_grant/
 // grpcauth_grant_index tables backing //whagent_net/delegatedgrant's
-// Store/Index (see initializeDelegatedGrant, delegatedgrant.go). On the
+// Store/Index (see initializeDelegatedGrant, delegatedgrant.go), injected
+// into every tool as of issue #2430's Scaffold phase but not yet called
+// at tool-dispatch time (that is issue #2430's own Implementation phase).
+// On the
 // FR9 path, `mcp` also holds its own confidential Keycloak client
 // (WHAGENT_MCP_KEYCLOAK_*, ../ENV.md) with token-exchange/impersonation
 // rights, used to exchange a resolved operator identity for a
@@ -165,26 +167,29 @@ func getEnv(key, def string) string {
 // domainResolver (issue #2427, FR7) piggybacks on this same struct purely
 // because it is constructed against the same pool, at the same point in
 // startup, as credentials -- not because it is part of FR9's OAuth2 path.
-// It is held here, unconsumed, deliberately: this task is purely
-// additive (no tool handler or middleware calls DomainForAgent/
-// DomainForSession yet), so run() does not thread it into server.New or
-// any tools.RegisterX call below. Wiring an actual call at tool-dispatch
-// time -- and therefore deciding where domainResolver's consumer actually
-// lives -- is issue #2427's dependent "dispatch-time rewiring" task; may
-// be nil exactly when credentials is (cfg.DatabaseURL unset or the pool
-// unreachable).
+// run() (issue #2430's Scaffold phase) now threads it into every
+// tools.RegisterX call below, where *mcpdomain.Resolver satisfies
+// tools.DomainResolver structurally (domain.go) -- but no tool handler
+// calls DomainForAgent/DomainForSession yet; wiring that actual
+// dispatch-time call sequence is issue #2430's own Implementation phase.
+// May be nil exactly when credentials is (cfg.DatabaseURL unset or the
+// pool unreachable).
 //
 // grant (issue #2426, FR10/FR13/NFR5/NFR6) is unrelated to FR9's
 // token-exchange path -- it just happens to share this struct and this
 // binary's one Postgres pool, since both are optional Postgres-backed
-// composition-root wiring gated on the same PG_DATABASE_URL. It is
-// purely additive today (see initializeDelegatedGrant's doc comment):
-// nothing in run() consumes it yet, unlike credentials/exchanger above.
-// Kept here, in package main, rather than passed into mcp/server or
-// mcp/tools -- see those packages' own TestBUILD_NoStoreOrTemporalDependency
-// (issue #2120) -- so a dependent task's call site is the first thing
-// that plumbs it across that boundary, deliberately, via the small
-// domain-neutral interface FR7 describes, never this concrete struct.
+// composition-root wiring gated on the same PG_DATABASE_URL. run()
+// (issue #2430's Scaffold phase) now threads grant.Source into every
+// tools.RegisterX call below, where *grpcauth.DelegatedGrantSource
+// satisfies tools.GrantSource structurally (grant.go) -- but no tool
+// handler calls TokenSource yet; wiring the actual dispatch-time
+// acquisition (and replacing tokenexchange.go's exchange-based
+// acquisition with it) is issue #2430's own Implementation phase. Passed
+// as the small domain-neutral interfaces FR7/FR8 describe, never this
+// concrete struct or the whagent_net/delegatedgrant/whagent_net/mcpdomain
+// packages themselves -- mcp/server's and mcp/tools' own
+// TestBUILD_NoStoreOrTemporalDependency (issue #2120) is what that
+// protects.
 type tokenExchangeDeps struct {
 	pool           *pgxpool.Pool
 	credentials    mcpauth.CredentialStore
@@ -342,11 +347,22 @@ func run() error {
 	client := pb.NewSessionServiceClient(apiConn.GetConnection())
 
 	srv := server.New(tex.exchanger)
-	tools.RegisterStartSession(srv, client)
-	tools.RegisterSendTurn(srv, client)
-	tools.RegisterStopSession(srv, client)
-	tools.RegisterGetSession(srv, client)
-	tools.RegisterReadTranscript(srv, client)
+	// tex.domainResolver (issue #2427, FR7) and tex.grant.Source (issue
+	// #2426, FR8) are threaded into every tool here as this task's
+	// (#2430) Scaffold phase: *mcpdomain.Resolver and
+	// *grpcauth.DelegatedGrantSource each satisfy tools.DomainResolver/
+	// tools.GrantSource structurally (domain.go/grant.go's doc comments),
+	// with no adapter and no direct import of mcpdomain/delegatedgrant
+	// from mcp/tools itself. No tool handler calls either yet -- wiring
+	// the actual dispatch-time DomainForAgent/DomainForSession ->
+	// grantkey.ForDomain -> TokenSource(subject, grant).Token(ctx)
+	// sequence, and removing tokenexchange.go's exchange-based
+	// acquisition it replaces, is this same issue's Implementation phase.
+	tools.RegisterStartSession(srv, client, tex.domainResolver, tex.grant.Source)
+	tools.RegisterSendTurn(srv, client, tex.domainResolver, tex.grant.Source)
+	tools.RegisterStopSession(srv, client, tex.domainResolver, tex.grant.Source)
+	tools.RegisterGetSession(srv, client, tex.domainResolver, tex.grant.Source)
+	tools.RegisterReadTranscript(srv, client, tex.domainResolver, tex.grant.Source)
 
 	resourceMeta := server.ResourceMetadataConfig{
 		Resource:            cfg.MCPPublicURL,

@@ -115,7 +115,12 @@ func newTestMCPServer(t *testing.T, client pb.SessionServiceClient) string {
 	// branch, which nil credentials in NewHTTPHandler below never routes
 	// a call onto.
 	srv := server.New(nil)
-	tools.RegisterGetSession(srv, client)
+	// nil domainResolver/grant: this suite exercises the manual-token
+	// identity pass-through path only (see the Exchanger comment above),
+	// never FR7/FR8's dispatch-time resolution -- get_session's call
+	// method does not use either yet (issue #2430's Scaffold phase is
+	// injection only).
+	tools.RegisterGetSession(srv, client, nil, nil)
 
 	ts := httptest.NewServer(server.NewHTTPHandler(srv, nil, server.ResourceMetadataConfig{}))
 	t.Cleanup(ts.Close)

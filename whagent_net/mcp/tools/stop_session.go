@@ -23,13 +23,21 @@ type StopSessionOutput struct {
 
 // stopSessionTool holds the SessionService client this tool is a
 // pass-through to.
+//
+// domainResolver/grant are FR7/FR8's dispatch-time resolution seams
+// (domain.go, grant.go), injected here by issue #2430's Scaffold phase.
+// call does not use them yet -- resolving in.SessionID's domain via
+// DomainForSession and acquiring a token via grant.TokenSource before
+// forwarding is this same issue's Implementation phase.
 type stopSessionTool struct {
-	client pb.SessionServiceClient
+	client         pb.SessionServiceClient
+	domainResolver DomainResolver
+	grant          GrantSource
 }
 
 // RegisterStopSession registers the stop_session tool on srv.
-func RegisterStopSession(srv *mcp.Server, client pb.SessionServiceClient) {
-	t := &stopSessionTool{client: client}
+func RegisterStopSession(srv *mcp.Server, client pb.SessionServiceClient, domainResolver DomainResolver, grant GrantSource) {
+	t := &stopSessionTool{client: client, domainResolver: domainResolver, grant: grant}
 	mcp.AddTool(srv, &mcp.Tool{
 		Name:        "stop_session",
 		Description: "Stop a running whagent-net session, ending it in the 'stopped' state.",

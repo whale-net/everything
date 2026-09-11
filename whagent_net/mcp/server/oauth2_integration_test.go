@@ -186,7 +186,11 @@ func newOAuth2Stack(t *testing.T) *oauth2Stack {
 	credentials := newFakeOAuthCredentialStore()
 
 	srv := server.New(exchanger)
-	tools.RegisterGetSession(srv, client)
+	// nil domainResolver/grant: this suite exercises FR9's OAuth2
+	// identity-resolution/exchange path only, never FR7/FR8's
+	// dispatch-time resolution -- get_session's call method does not use
+	// either yet (issue #2430's Scaffold phase is injection only).
+	tools.RegisterGetSession(srv, client, nil, nil)
 
 	// httptest.NewUnstartedServer to learn the listen address before
 	// building the handler, exactly like the audience_score_system model
