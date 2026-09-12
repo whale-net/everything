@@ -1,0 +1,85 @@
+load("@rules_go//go:def.bzl", "go_library", "go_test")
+
+# pgx-based repository over //libs/go/db for krill's spec axis (migration
+# 002, issue #2488, M1): Product -> FeatureSet -> Feature -> {FR, NFR},
+# FeatureSet -> LoadBearingDecision, and the product-level Persona/NonGoal
+# entities the same task settles. Store layer only -- no HTTP surface
+# lands here (a separate task). See krill/ARCHITECTURE.md's "Capability
+# map entries, personas, and non-goals" section for how a capability-map
+# entry (`Cn`) resolves onto Feature with no schema of its own.
+#
+# Write path in this task is Create + current-value reads only --
+# supersession (the close-and-open write LB3 requires) is a later "amend"
+# task's scope; this schema's shape already supports it (see migration
+# 002's comments).
+go_library(
+    name = "store",
+    srcs = [
+        "decision.go",
+        "errors.go",
+        "feature.go",
+        "featureset.go",
+        "models.go",
+        "nongoal.go",
+        "persona.go",
+        "product.go",
+        "requirement.go",
+        "store.go",
+    ],
+    importpath = "github.com/whale-net/everything/krill/store",
+    visibility = ["//visibility:public"],
+    deps = [
+        "@com_github_google_uuid//:uuid",
+        "@com_github_jackc_pgx_v5//:pgx",
+        "@com_github_jackc_pgx_v5//pgxpool",
+    ],
+)
+
+# Real Postgres integration test for the whole store package: creating one
+# of each entity kind (LB2 surrogate ids, LB1 scope_id), scope-qualified
+# uniqueness per entity, parent-not-found rejection per child entity (LB2
+# parentage, store-enforced), a LoadBearingDecision attaching to and reading
+# back from its FeatureSet (FR4/C2), the capability-map decision (an FR's
+# feature_id resolving to a real Feature row), and position rewrite leaving
+# sibling surrogate ids untouched -- all against migration 002's real
+# embedded SQL (//krill/migrate/schema), not a hand-copied schema.
+# Deliberately NOT part of `bazel test //...` -- see //libs/go/dbtest's
+# README for the full rationale behind each tag and how to run tests like
+# this one.
+#
+# Run it explicitly (requires a working Docker daemon):
+#   bazel test //krill/store:store_integration_test --test_output=all
+go_test(
+    name = "store_integration_test",
+    size = "large",
+    timeout = "long",
+    srcs = [
+        "decision_integration_test.go",
+        "feature_integration_test.go",
+        "featureset_integration_test.go",
+        "nongoal_integration_test.go",
+        "persona_integration_test.go",
+        "product_integration_test.go",
+        "requirement_integration_test.go",
+        "store_integration_test.go",
+    ],
+    gotags = ["integration"],
+    tags = [
+        "external",
+        "integration",
+        "manual",
+        "no-cache",
+        "no-sandbox",
+        "requires-network",
+    ],
+    deps = [
+        ":store",
+        "//krill/migrate/schema",
+        "//libs/go/dbtest",
+        "//libs/go/migrate",
+        "@com_github_google_uuid//:uuid",
+        "@com_github_jackc_pgx_v5//stdlib",
+        "@com_github_stretchr_testify//assert",
+        "@com_github_stretchr_testify//require",
+    ],
+)
