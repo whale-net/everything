@@ -26,8 +26,13 @@ type ToolServerRef struct {
 // AgentDefinition is an `agent_definition` row (LB5/NFR6): a named,
 // role-shaped tool set plus the model and guardrail defaults a session
 // inherits unless overridden (FR5/FR6/FR7, FR9's required_role).
-// (AgentID, Version) is the primary key -- versions are never mutated in
-// place, only inserted.
+// ID is the surrogate primary key (migration 009): a single stable handle
+// for one row, so callers, logs, and any future FK never need to repeat
+// both AgentID and Version to name one. AgentID remains the stable,
+// human-authored business key (agents.yaml, MCP tool inputs, UI filters --
+// LB5/NFR6); (AgentID, Version) stays UNIQUE at the database layer, it is
+// just no longer the primary key. Versions are never mutated in place,
+// only inserted.
 //
 // Exactly one of Model and ModelDefinitionID is set (migration 006's
 // agent_definition_model_xor_model_definition CHECK constraint;
@@ -46,6 +51,7 @@ type ToolServerRef struct {
 // all -- it still gets whatever ToolSet is configured for it, just without
 // a cross-domain grant key derived or checked.
 type AgentDefinition struct {
+	ID                uuid.UUID
 	AgentID           string
 	Scope             *string
 	Version           int
@@ -98,13 +104,13 @@ type agentDefinitionStore struct{ pool *pgxpool.Pool }
 
 var _ AgentDefinitionStore = agentDefinitionStore{}
 
-const agentDefinitionColumns = `agent_id, scope, version, model, model_definition_id, tool_set, max_turns, max_cost_usd, required_role, created_at`
+const agentDefinitionColumns = `id, agent_id, scope, version, model, model_definition_id, tool_set, max_turns, max_cost_usd, required_role, created_at`
 
 func scanAgentDefinition(row pgx.Row) (*AgentDefinition, error) {
 	var def AgentDefinition
 	var toolSet json.RawMessage
 	if err := row.Scan(
-		&def.AgentID, &def.Scope, &def.Version, &def.Model, &def.ModelDefinitionID, &toolSet,
+		&def.ID, &def.AgentID, &def.Scope, &def.Version, &def.Model, &def.ModelDefinitionID, &toolSet,
 		&def.MaxTurns, &def.MaxCostUSD, &def.RequiredRole, &def.CreatedAt,
 	); err != nil {
 		return nil, err
@@ -151,9 +157,9 @@ func (s agentDefinitionStore) GetVersion(ctx context.Context, agentID string, ve
 }
 
 // Upsert inserts (AgentID, Version) or, on conflict, replaces every column
-// except created_at (a replace of an already-seeded definition keeps its
-// original creation time rather than bumping it). Fills in CreatedAt on
-// def either way.
+// except id and created_at (a replace of an already-seeded definition
+// keeps its original surrogate id and creation time rather than minting a
+// new one). Fills in ID and CreatedAt on def either way.
 func (s agentDefinitionStore) Upsert(ctx context.Context, def *AgentDefinition) error {
 	toolSet, err := json.Marshal(def.ToolSet)
 	if err != nil {
@@ -171,8 +177,8 @@ func (s agentDefinitionStore) Upsert(ctx context.Context, def *AgentDefinition) 
 			max_turns = EXCLUDED.max_turns,
 			max_cost_usd = EXCLUDED.max_cost_usd,
 			required_role = EXCLUDED.required_role
-		RETURNING created_at
-	`, def.AgentID, def.Scope, def.Version, def.Model, def.ModelDefinitionID, toolSet, def.MaxTurns, def.MaxCostUSD, def.RequiredRole).Scan(&def.CreatedAt)
+		RETURNING id, created_at
+	`, def.AgentID, def.Scope, def.Version, def.Model, def.ModelDefinitionID, toolSet, def.MaxTurns, def.MaxCostUSD, def.RequiredRole).Scan(&def.ID, &def.CreatedAt)
 	if err != nil {
 		return fmt.Errorf("upsert agent definition: %w", err)
 	}
