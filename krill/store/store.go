@@ -6,7 +6,8 @@ import "github.com/jackc/pgx/v5/pgxpool"
 // `feature`, `requirement`, `load_bearing_decision`, `persona`, and
 // `non_goal` (migration 002), `milestone_ref` and `entity_milestone`
 // (migration 004, issue #2492), `scope` (migration 001, read-only here),
-// and `pointer_artifact` (migration 005, issue #2496). Built over
+// `pointer_artifact` (migration 005, issue #2496), and `design_session`
+// and `revision_event` (migration 006, issue #2542). Built over
 // //libs/go/db's *pgxpool.Pool,
 // mirroring audience_score_system/store.Store's shape: a thin holder whose
 // accessors hand back per-entity Store implementations, kept as separate
@@ -65,3 +66,11 @@ func (s *Store) Scopes() ScopeStore { return scopeStore{pool: s.pool} }
 
 // PointerArtifacts returns the PointerArtifactStore implementation.
 func (s *Store) PointerArtifacts() PointerArtifactStore { return pointerArtifactStore{pool: s.pool} }
+
+// DesignSessions returns the DesignSessionStore implementation (migration
+// 006, issue #2542).
+func (s *Store) DesignSessions() DesignSessionStore { return designSessionStore{pool: s.pool} }
+
+// RevisionEvents returns the RevisionEventStore implementation (migration
+// 006, issue #2542).
+func (s *Store) RevisionEvents() RevisionEventStore { return revisionEventStore{pool: s.pool} }

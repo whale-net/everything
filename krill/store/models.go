@@ -210,6 +210,122 @@ type Scope struct {
 	UpdatedAt          time.Time
 }
 
+// EventType discriminates a revision_event's round kind (migration 006,
+// issue #2542, FR2) -- `revision_event.event_type`'s CHECK constraint,
+// closed at exactly these five values. See DesignSession's doc comment
+// for why FR8's opening submission is deliberately not a sixth value
+// here.
+type EventType string
+
+const (
+	EventTypeDraft          EventType = "draft"
+	EventTypeReconciliation EventType = "reconciliation"
+	EventTypeAnswer         EventType = "answer"
+	EventTypeSignoff        EventType = "signoff"
+	EventTypeRuling         EventType = "ruling"
+)
+
+// EntityDeltaChange discriminates the kind of change one entry of a
+// revision_event's entity_deltas names -- `created` or `updated` only, no
+// `deleted` (migration 006's comment: M1's entity model has no
+// delete/retire operation, and no M2 FR retracts a proposed entity).
+type EntityDeltaChange string
+
+const (
+	EntityDeltaChangeCreated EntityDeltaChange = "created"
+	EntityDeltaChangeUpdated EntityDeltaChange = "updated"
+)
+
+// SignoffStatus is FR4's closed signoff outcome -- `revision_event.
+// signoff_status`'s CHECK constraint. There is no free-text alternative:
+// FR4 is explicit that a signoff does not accept free text in place of
+// this enum.
+type SignoffStatus string
+
+const (
+	SignoffStatusApproved         SignoffStatus = "approved"
+	SignoffStatusChangesRequested SignoffStatus = "changes_requested"
+)
+
+// EntityDelta is one entry of a revision_event's entity_deltas JSONB
+// array (migration 006, FR2) -- one entity a round touched, the kind of
+// change, and a one-line human summary.
+type EntityDelta struct {
+	EntityID    uuid.UUID         `json:"entity_id"`
+	Change      EntityDeltaChange `json:"change"`
+	SummaryLine string            `json:"summary_line"`
+}
+
+// OpenQuestionsDelta is a revision_event's open_questions_delta JSONB
+// object (migration 006, FR2) -- the open question ids a round opened and
+// resolved, by id.
+type OpenQuestionsDelta struct {
+	Opened   []string `json:"opened"`
+	Resolved []string `json:"resolved"`
+}
+
+// DesignSession is one row of `design_session` (migration 006, issue
+// #2542, FR1/FR8) -- the longer-lived container a session's
+// revision_event rounds accumulate under. Single parent: Product.ID.
+//
+// DesignSession is explicitly NOT KrillSession/Session (session.go,
+// migration 003): a Session is the write-gate row FR3's `init` mints per
+// mutating call, with one fixed acting/on-behalf-of pair; a DesignSession
+// spans many separate Session-gated calls, from potentially different
+// actors, over its lifetime. See krill/ARCHITECTURE.md's "design_session
+// vs krill_session" section.
+type DesignSession struct {
+	ID                     uuid.UUID
+	ScopeID                uuid.UUID
+	ProductID              uuid.UUID
+	OpeningSubmission      string
+	OpenedByKrillSessionID SessionID
+	CreatedAt              time.Time
+}
+
+// NewRevisionEvent is the caller-supplied shape RevisionEventStore.Append
+// (revision_event.go) inserts (migration 006, issue #2542, FR2-FR4). The
+// store layer never infers ScopeID or either identity triple from
+// SessionID -- every caller passes them explicitly, matching session.go's
+// InitSession contract ("the store layer never infers this -- every
+// caller passes both explicitly").
+type NewRevisionEvent struct {
+	ScopeID            uuid.UUID
+	SessionID          uuid.UUID
+	Acting             Subject
+	OnBehalfOf         Subject
+	EventType          EventType
+	EntityDeltas       []EntityDelta
+	OpenQuestionsDelta OpenQuestionsDelta
+	// VerifiedAgainst must be non-nil for EventTypeDraft/
+	// EventTypeReconciliation and nil otherwise (FR3) -- Append validates
+	// this in Go as well as the DDL CHECK, so a caller gets a named error
+	// rather than a raw Postgres constraint violation.
+	VerifiedAgainst *string
+	// SignoffStatus must be non-nil for EventTypeSignoff and nil
+	// otherwise (FR4) -- same double-enforcement as VerifiedAgainst.
+	SignoffStatus *SignoffStatus
+}
+
+// RevisionEvent is one row of `revision_event` (migration 006, issue
+// #2542, FR2-FR4, NFR1) -- one round of a DesignSession, append-only.
+// NFR1: there is no Update/Delete/Amend anywhere on RevisionEventStore --
+// a RevisionEvent, once Appended, is never mutated.
+type RevisionEvent struct {
+	ID                 uuid.UUID
+	ScopeID            uuid.UUID
+	SessionID          uuid.UUID
+	SeqNo              int
+	Acting             Subject
+	OnBehalfOf         Subject
+	EventType          EventType
+	EntityDeltas       []EntityDelta
+	OpenQuestionsDelta OpenQuestionsDelta
+	VerifiedAgainst    *string
+	SignoffStatus      *SignoffStatus
+	CreatedAt          time.Time
+}
+
 // PointerArtifact is one row of `pointer_artifact` (migration 005, issue
 // #2496, FR20, C9) -- the thin GitHub issue krill creates to stand in for
 // a Product now that the spec itself lives in krill instead of a file.

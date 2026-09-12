@@ -19,6 +19,7 @@ go_library(
     srcs = [
         "amend.go",
         "decision.go",
+        "design_session.go",
         "errors.go",
         "feature.go",
         "featureset.go",
@@ -30,6 +31,7 @@ go_library(
         "pointer.go",
         "product.go",
         "requirement.go",
+        "revision_event.go",
         "scope.go",
         "session.go",
         "slice.go",
