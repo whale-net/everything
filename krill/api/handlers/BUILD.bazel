@@ -41,8 +41,11 @@ go_library(
 
 # Unit tests for InitSessionHandler (session.go), RequireSession (gate.go),
 # the entity create/attach handlers (issue #2489's and #2490's Testing
-# sections), and the four slice query endpoints (slice.go, issue #2491's
-# Testing section). fakeSessionStore/fake entity stores stand in for
+# sections), the four slice query endpoints (slice.go, issue #2491's
+# Testing section), and the two amend endpoints (amend_test.go, issue
+# #2493's Testing section: gated like every other write path, calls
+# AmendStore with the path's {id} and the body's name/body unchanged).
+# fakeSessionStore/fake entity stores/fakeAmendStore stand in for
 # krill/store's interfaces, so none of this needs Postgres/network and it
 # runs as part of `bazel test //...`. slice_internal_test.go is package
 # handlers (white-box, needs the unexported sliceQueryFunc/handle);
@@ -50,6 +53,7 @@ go_library(
 go_test(
     name = "handlers_test",
     srcs = [
+        "amend_test.go",
         "decision_test.go",
         "entity_test_helpers_test.go",
         "fake_entity_store_test.go",

@@ -168,3 +168,76 @@ go_test(
         "@com_github_stretchr_testify//require",
     ],
 )
+
+# Real Postgres integration test for AmendStore (amend.go, issue #2493's
+# Testing section): amending a Requirement or a LoadBearingDecision closes
+# exactly one row and inserts exactly one new current row under the same
+# surrogate id (LB2), a sibling entity is never touched by an amendment,
+# and an amend of an unknown id is rejected (ErrNotFound) without writing
+# anything. Deliberately NOT part of `bazel test //...` -- see
+# //libs/go/dbtest's README for the full rationale.
+#
+# Run it explicitly (requires a working Docker daemon):
+#   bazel test //krill/store:amend_integration_test --test_output=all
+go_test(
+    name = "amend_integration_test",
+    size = "large",
+    timeout = "long",
+    srcs = ["amend_integration_test.go"],
+    gotags = ["integration"],
+    tags = [
+        "external",
+        "integration",
+        "manual",
+        "no-cache",
+        "no-sandbox",
+        "requires-network",
+    ],
+    deps = [
+        ":store",
+        "//krill/migrate/schema",
+        "//libs/go/dbtest",
+        "//libs/go/migrate",
+        "@com_github_google_uuid//:uuid",
+        "@com_github_jackc_pgx_v5//stdlib",
+        "@com_github_stretchr_testify//assert",
+        "@com_github_stretchr_testify//require",
+    ],
+)
+
+# Real Postgres integration test for HistoryStore (history.go, issue
+# #2493's Testing section): an as-of read between two amendments returns
+# the version current at that point (not the latest), an as-of read before
+# an entity's first revision (or of an id that never existed) is
+# not-found, and the version list returns every revision oldest-first with
+# correct supersession timestamps -- for both Requirement (FR and NFR) and
+# LoadBearingDecision. Deliberately NOT part of `bazel test //...` -- see
+# //libs/go/dbtest's README for the full rationale.
+#
+# Run it explicitly (requires a working Docker daemon):
+#   bazel test //krill/store:history_integration_test --test_output=all
+go_test(
+    name = "history_integration_test",
+    size = "large",
+    timeout = "long",
+    srcs = ["history_integration_test.go"],
+    gotags = ["integration"],
+    tags = [
+        "external",
+        "integration",
+        "manual",
+        "no-cache",
+        "no-sandbox",
+        "requires-network",
+    ],
+    deps = [
+        ":store",
+        "//krill/migrate/schema",
+        "//libs/go/dbtest",
+        "//libs/go/migrate",
+        "@com_github_google_uuid//:uuid",
+        "@com_github_jackc_pgx_v5//stdlib",
+        "@com_github_stretchr_testify//assert",
+        "@com_github_stretchr_testify//require",
+    ],
+)
