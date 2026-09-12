@@ -61,13 +61,7 @@ release_app(
     # Service port so audience_score_system (and any other domain) can
     # actually reach it in-cluster to verify a whagent-net-issued JWT
     # (argok8s#200).
-    #
-    # Temporarily disabled: the release pipeline's currently-deployed
-    # release_helper_go build doesn't know about additional_ports yet, so
-    # `build-release` fails with `unknown field "additional_ports"` when
-    # parsing this app's metadata. Re-apply once the release tool has been
-    # rebuilt from a commit that includes it (follow-up PR).
-    # additional_ports = [8090],
+    additional_ports = [8090],
     app_type = "external-api",
     binary_name = ":api",
     description = "whagent-net SessionService gRPC server",
