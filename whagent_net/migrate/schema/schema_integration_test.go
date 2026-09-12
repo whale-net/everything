@@ -202,3 +202,46 @@ func TestMigration001_SchemaContract(t *testing.T) {
 		assert.Equal(t, "NO", nullable, "grpcauth_grant_index.%s must be NOT NULL (issue #2426, grantindex's schema contract)", col)
 	}
 }
+
+// TestMigration007_BackfillsEveryPreExistingRow_NotJustTheKnownOne proves
+// migration 007 (agent_definition.domain) doesn't dirty when
+// agent_definition already holds a row config/agents.yaml never described
+// (e.g. a manual-test row from a long-lived environment like dev) --
+// migration 007's original backfill only matched
+// agent_id = 'audience-score-system-research', so any other row was left
+// with a NULL domain and failed the immediately-following
+// ALTER COLUMN ... SET NOT NULL, dirtying the migration.
+func TestMigration007_BackfillsEveryPreExistingRow_NotJustTheKnownOne(t *testing.T) {
+	ctx := context.Background()
+	db := dbtest.NewPostgres(ctx, t, dbtest.Options{})
+
+	sqlDB, err := sql.Open("pgx", db.ConnString)
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = sqlDB.Close() })
+
+	runner := migrate.NewRunner(sqlDB, schema.Migrations, schema.Dir)
+
+	// Land at version 6 -- right before 007 adds `domain` -- and insert a
+	// row with an agent_id the real config has never used, simulating a
+	// stray row a long-lived database (dev) can accumulate that a fresh
+	// test database never would.
+	require.NoError(t, runner.Migrate(6))
+	_, err = sqlDB.ExecContext(ctx, `
+		INSERT INTO agent_definition (agent_id, version, model, tool_set, max_turns, max_cost_usd)
+		VALUES ('some-orphaned-test-agent', 1, 'anthropic/claude-3.5-sonnet', '[]', 100, 1.0)
+	`)
+	require.NoError(t, err)
+
+	require.NoError(t, runner.Migrate(9), "007 must not dirty even with a pre-existing row outside its hardcoded agent_id")
+
+	version, dirty, err := runner.Version()
+	require.NoError(t, err)
+	assert.False(t, dirty)
+	assert.Equal(t, uint(9), version)
+
+	var domain string
+	require.NoError(t, sqlDB.QueryRowContext(ctx, `
+		SELECT domain FROM agent_definition WHERE agent_id = 'some-orphaned-test-agent'
+	`).Scan(&domain))
+	assert.Equal(t, "audience_score_system", domain, "the orphaned row must be backfilled too, not just the one agent_id 007 originally hardcoded")
+}

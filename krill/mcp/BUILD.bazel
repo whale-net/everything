@@ -1,0 +1,43 @@
+"""krill's MCP spec surface (FR10/NFR1, issue #2494): the two-front-door
+MCP server exposing the FR5-FR9 scoped-slice query at /mcp/spec."""
+
+load("@rules_go//go:def.bzl", "go_binary", "go_library")
+load("//tools/bazel:release.bzl", "release_app")
+
+go_library(
+    name = "mcp_lib",
+    srcs = ["main.go"],
+    importpath = "github.com/whale-net/everything/krill/mcp",
+    visibility = ["//visibility:private"],
+    deps = [
+        "//krill/mcp/server",
+        "//krill/mcp/tools",
+        "//krill/slice",
+        "//krill/store",
+        "//libs/go/db",
+        "//libs/go/logging",
+        "//libs/go/mcpauth",
+        "//libs/go/whagent",
+        "@com_github_google_uuid//:uuid",
+        "@io_opentelemetry_go_contrib_instrumentation_net_http_otelhttp//:otelhttp",
+    ],
+)
+
+go_binary(
+    name = "mcp",
+    embed = [":mcp_lib"],
+    visibility = ["//visibility:public"],
+)
+
+# Release metadata. domain "krill" + name "mcp" produces the "krill-mcp"
+# image/app identity. external-api: MCP-capable clients (human via mcpauth,
+# agent via whagent-net) reach this over ingress, same category as `api`.
+release_app(
+    name = "mcp",
+    binary_name = ":mcp",
+    language = "go",
+    domain = "krill",
+    description = "krill MCP spec surface: FR5-FR9 scoped-slice query (feature-set/feature/requirement/product) over MCP, behind the mcpauth + whagent-net two-front-door auth pattern",
+    app_type = "external-api",
+    port = 8080,
+)

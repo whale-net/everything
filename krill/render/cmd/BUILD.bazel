@@ -1,0 +1,25 @@
+load("@rules_go//go:def.bzl", "go_binary", "go_library")
+
+# The renderer's runnable entrypoint (issue #2495, FR13): a Swarm
+# Operator-run CLI, not a deployed service -- it is deliberately not wired
+# into //krill:krill_chart (compare //krill/migrate and //krill/api, both
+# of which are), same shape as //krill/importer/cmd. Run it with:
+#   bazel run //krill/render/cmd:render -- --product krill --out krill/
+go_library(
+    name = "render_lib",
+    srcs = ["main.go"],
+    importpath = "github.com/whale-net/everything/krill/render/cmd",
+    visibility = ["//visibility:private"],
+    deps = [
+        "//krill/render",
+        "//krill/store",
+        "//libs/go/db",
+        "@com_github_google_uuid//:uuid",
+    ],
+)
+
+go_binary(
+    name = "render",
+    embed = [":render_lib"],
+    visibility = ["//visibility:public"],
+)

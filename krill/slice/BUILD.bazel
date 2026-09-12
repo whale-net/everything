@@ -1,0 +1,59 @@
+load("@rules_go//go:def.bzl", "go_library", "go_test")
+
+# krill's C3 scoped-slice query (FR5-FR9, issue #2491): four granularities
+# -- GetFeatureSetSlice, GetFeatureSlice, GetRequirementSlice,
+# GetProductSlice -- assembled from //krill/store into one typed,
+# self-describing Document (LB7). Read-only, no `init`/session gate (FR3
+# is write-only). //krill/api/handlers is the HTTP surface over this
+# package; a later milestone's MCP tool wraps it too, per LB7.
+go_library(
+    name = "slice",
+    srcs = [
+        "document.go",
+        "query.go",
+    ],
+    importpath = "github.com/whale-net/everything/krill/slice",
+    visibility = ["//visibility:public"],
+    deps = [
+        "//krill/store",
+        "@com_github_google_uuid//:uuid",
+    ],
+)
+
+# Real-Postgres integration coverage (issue #2491's Testing section): FR5's
+# sibling-FeatureSet decision-scoping negative case, FR6's sibling-Feature
+# exclusion, FR7's single-entity read, FR8's whole-Product read (with its
+# own cross-scope negative case), FR9's schema_version/EntityRef coverage
+# across all four granularities, and a not-found check per granularity.
+# Deliberately NOT part of `bazel test //...` -- see //libs/go/dbtest's
+# README for the rationale behind each tag.
+#
+# Run it explicitly (requires a working Docker daemon):
+#   bazel test //krill/slice:query_integration_test --test_output=all
+go_test(
+    name = "query_integration_test",
+    size = "large",
+    timeout = "long",
+    srcs = ["query_integration_test.go"],
+    gotags = ["integration"],
+    tags = [
+        "external",
+        "integration",
+        "manual",
+        "no-cache",
+        "no-sandbox",
+        "requires-network",
+    ],
+    deps = [
+        ":slice",
+        "//krill/migrate/schema",
+        "//krill/store",
+        "//libs/go/dbtest",
+        "//libs/go/migrate",
+        "@com_github_google_uuid//:uuid",
+        "@com_github_jackc_pgx_v5//pgxpool",
+        "@com_github_jackc_pgx_v5//stdlib",
+        "@com_github_stretchr_testify//assert",
+        "@com_github_stretchr_testify//require",
+    ],
+)

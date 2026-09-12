@@ -123,26 +123,27 @@ type EnvFromEntry struct {
 
 // AppConfig represents the configuration for a single app in values.yaml
 type AppConfig struct {
-	Type          string               `yaml:"type"`
-	Domain        string               `yaml:"domain,omitempty"` // App domain for grouping
-	Image         string               `yaml:"image"`
-	ImageTag      string               `yaml:"imageTag"`
-	CommitSha     string               `yaml:"commitSha,omitempty"` // Git commit SHA
-	Port          int                  `yaml:"port,omitempty"`
-	Replicas      int                  `yaml:"replicas"`
-	Resources     ValuesResourceConfig `yaml:"resources"`
-	HealthCheck   *HealthCheckConfig   `yaml:"healthCheck,omitempty"`
-	Command       []string             `yaml:"command,omitempty"`
-	Args          []string             `yaml:"args,omitempty"`
-	Env           map[string]string    `yaml:"env,omitempty"`
+	Type            string               `yaml:"type"`
+	Domain          string               `yaml:"domain,omitempty"` // App domain for grouping
+	Image           string               `yaml:"image"`
+	ImageTag        string               `yaml:"imageTag"`
+	CommitSha       string               `yaml:"commitSha,omitempty"` // Git commit SHA
+	Port            int                  `yaml:"port,omitempty"`
+	AdditionalPorts []int                `yaml:"additionalPorts,omitempty"`
+	Replicas        int                  `yaml:"replicas"`
+	Resources       ValuesResourceConfig `yaml:"resources"`
+	HealthCheck     *HealthCheckConfig   `yaml:"healthCheck,omitempty"`
+	Command         []string             `yaml:"command,omitempty"`
+	Args            []string             `yaml:"args,omitempty"`
+	Env             map[string]string    `yaml:"env,omitempty"`
 	// SecretEnv holds env vars sourced via valueFrom.secretKeyRef.
 	// Each entry renders as a separate - name:/valueFrom:/secretKeyRef: block.
-	SecretEnv     []SecretEnvEntry     `yaml:"secretEnv,omitempty"`
+	SecretEnv []SecretEnvEntry `yaml:"secretEnv,omitempty"`
 	// EnvFrom holds bulk env-var sources (secretRef / configMapRef) rendered
 	// under the container's envFrom field.
-	EnvFrom       []EnvFromEntry       `yaml:"envFrom,omitempty"`
-	ExposeIngress bool                 `yaml:"exposeIngress,omitempty"` // For internal-api: expose via ingress for debugging
-	Ingress       *AppIngressConfig    `yaml:"ingress,omitempty"`       // Per-app ingress config
+	EnvFrom       []EnvFromEntry    `yaml:"envFrom,omitempty"`
+	ExposeIngress bool              `yaml:"exposeIngress,omitempty"` // For internal-api: expose via ingress for debugging
+	Ingress       *AppIngressConfig `yaml:"ingress,omitempty"`       // Per-app ingress config
 }
 
 // AppIngressConfig represents per-app ingress configuration
@@ -489,18 +490,24 @@ func (c *Composer) buildAppConfig(app *AppMetadata) (AppConfig, error) {
 		port = 8000
 	}
 
+	var additionalPorts []int
+	for _, p := range app.AdditionalPorts {
+		additionalPorts = append(additionalPorts, int(p))
+	}
+
 	config := AppConfig{
-		Type:          appType.String(),
-		Domain:        app.Domain, // Add domain from metadata
-		Image:         GetImage(app),
-		ImageTag:      GetImageTag(app),
-		CommitSha:     "", // TODO: Add commit SHA from build metadata
-		Port:          port,
-		Replicas:      replicas,
-		Resources:     resources.ToValuesFormat(),
-		Command:       app.Command, // Use command from metadata
-		Args:          app.Args,    // Use args from metadata
-		ExposeIngress: false,       // Default to false for internal-api (can be overridden in values.yaml)
+		Type:            appType.String(),
+		Domain:          app.Domain, // Add domain from metadata
+		Image:           GetImage(app),
+		ImageTag:        GetImageTag(app),
+		CommitSha:       "", // TODO: Add commit SHA from build metadata
+		Port:            port,
+		AdditionalPorts: additionalPorts,
+		Replicas:        replicas,
+		Resources:       resources.ToValuesFormat(),
+		Command:         app.Command, // Use command from metadata
+		Args:            app.Args,    // Use args from metadata
+		ExposeIngress:   false,       // Default to false for internal-api (can be overridden in values.yaml)
 	}
 
 	// Add health check for APIs based on metadata or defaults
@@ -671,6 +678,20 @@ func (w *YAMLWriter) WriteList(key string, items []string) {
 	w.indent -= 2
 }
 
+// WriteIntList writes a list of integers
+func (w *YAMLWriter) WriteIntList(key string, items []int) {
+	if len(items) == 0 {
+		return
+	}
+	w.WriteKey(key)
+	w.indent += 2
+	for _, item := range items {
+		prefix := strings.Repeat(" ", w.indent)
+		fmt.Fprintf(w.f, "%s- %d\n", prefix, item)
+	}
+	w.indent -= 2
+}
+
 // WriteMap writes a map of string key-value pairs
 func (w *YAMLWriter) WriteMap(key string, m map[string]string) {
 	if len(m) == 0 {
@@ -774,6 +795,7 @@ func writeValuesYAML(f *os.File, data ValuesData) error {
 			w.WriteString("commitSha", app.CommitSha)
 		}
 		w.WriteIntIf("port", app.Port, app.Port > 0)
+		w.WriteIntList("additionalPorts", app.AdditionalPorts)
 		w.WriteInt("replicas", app.Replicas)
 
 		// Resources
