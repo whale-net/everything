@@ -162,6 +162,21 @@ type config struct {
 	// -- there is no unsigned or symmetric fallback mode.
 	LinkAssertSigningKey   string
 	LinkAssertSigningKeyID string
+
+	// ASSLinkURL (WHAGENT_UI_ASS_LINK_URL, issue #2596) is ASS `web`'s
+	// public base URL -- the redirect target handleLinkASSStart carries
+	// FR2's minted assertion to. This is a gap in the root plan's spec:
+	// FR2 never names how `ui` learns that URL, so this task introduces
+	// the variable; it must never be folded into any existing variable.
+	//
+	// Unlike LinkAssertSigningKey/LinkAssertSigningKeyID above, this is
+	// optional and degrades non-fatally -- `ui`'s prevailing convention
+	// for non-secret optional config (WHAGENT_GRANT_*, WHAGENT_S3_BUCKET).
+	// Left empty: FR1's action is not rendered on /grants, and
+	// POST /link/ass answers a plain "link flow not configured" response
+	// rather than a 500 or a redirect to an empty host. This is what
+	// makes the feature safe to land ahead of ASS's own endpoint (#2600).
+	ASSLinkURL string
 }
 
 func loadConfig() config {
@@ -189,6 +204,8 @@ func loadConfig() config {
 
 		LinkAssertSigningKey:   getEnv("WHAGENT_UI_SIGNING_KEY", ""),
 		LinkAssertSigningKeyID: getEnv("WHAGENT_UI_SIGNING_KEY_ID", ""),
+
+		ASSLinkURL: getEnv("WHAGENT_UI_ASS_LINK_URL", ""),
 	}
 }
 
@@ -261,6 +278,15 @@ type App struct {
 	// helper (#B, a later task) calls its Mint method. Always non-nil:
 	// NewApp fails startup loudly rather than leaving this nil (NFR1).
 	linkAssertKey *linkassert.Key
+
+	// assLinkURL is cfg.ASSLinkURL verbatim (WHAGENT_UI_ASS_LINK_URL,
+	// issue #2596) -- ASS `web`'s public base URL, read by
+	// handlers_link.go's handleLinkASSStart. Empty means the flow is
+	// inert: FR1's action is not rendered on /grants and POST /link/ass
+	// answers "not configured" rather than 500 or a redirect to an empty
+	// host. Unlike linkAssertKey above, NewApp never fails startup over
+	// this being empty (NFR1 is scoped to the signing key, not this var).
+	assLinkURL string
 }
 
 // NewApp wires up Keycloak sign-in (NFR1) and the authenticated `api`
@@ -348,6 +374,7 @@ func NewApp(ctx context.Context, cfg config) (*App, error) {
 		defaultScope:  cfg.DefaultScope,
 		consentStore:  newConsentStore(cfg.SessionSecret),
 		linkAssertKey: linkAssertKey,
+		assLinkURL:    cfg.ASSLinkURL,
 	}
 
 	// mcpauth.NewCredentialStore/NewPostgresClientRegistry/
@@ -583,6 +610,13 @@ func (app *App) setupRoutes(mux *http.ServeMux) {
 	// forwarded token is needed here.
 	mux.HandleFunc("GET /grants", app.auth.RequireAuthFunc(app.handleGrants))
 	mux.HandleFunc("POST /grants/revoke", app.auth.RequireAuthFunc(app.handleGrantsRevoke))
+
+	// Explicit, Operator-initiated "Link ASS identity" action (FR1/FR2/
+	// FR10/FR13/NFR2, issue #2596): both routes sit behind
+	// app.auth.RequireAuthFunc only -- there is no API, gRPC, or
+	// token-authenticated path to either (FR13).
+	mux.HandleFunc("POST /link/ass", app.auth.RequireAuthFunc(app.handleLinkASSStart))
+	mux.HandleFunc("GET /link/ass/result", app.auth.RequireAuthFunc(app.handleLinkASSResult))
 
 	// Admin all-operators grant list and revoke page (FR14/FR15/NFR3, issue
 	// #2433): app.grant.Store/Index is intentionally NOT threaded through

@@ -1,0 +1,36 @@
+package pages
+
+import (
+	"github.com/whale-net/everything/whagent_net/ui/components"
+)
+
+// LinkASSResultData carries LinkASSResult's page-level parameterisation
+// (FR10, issue #2596). Outcome is the raw outcome value ASS `web`'s
+// redirect back to GET /link/ass/result carries -- resolved by
+// ../handlers_link.go's handleLinkASSResult, never parsed by this page
+// itself.
+//
+// Scaffold phase: Outcome is rendered verbatim. Implementation phase
+// replaces this with the four distinct FR10 messages (linked / already
+// linked / conflict / rejected assertion) plus a generic failure for an
+// unrecognized or absent value -- see #2600 for the exact query-parameter
+// contract to mirror.
+type LinkASSResultData struct {
+	Layout  components.LayoutData
+	Outcome string
+}
+
+// LinkASSResult is FR10's outcome page (issue #2596): the page ASS `web`
+// redirects the Operator's browser back to once handleLinkASSStart's
+// assertion has been consumed. See LinkASSResultData's doc comment for
+// this task's scaffold-vs-implementation split.
+templ LinkASSResult(data LinkASSResultData) {
+	@components.Layout(data.Layout) {
+		<h1 class="text-2xl font-bold text-base-content mb-4">Link ASS identity</h1>
+		if data.Outcome == "" {
+			<p class="opacity-70">No outcome to display yet.</p>
+		} else {
+			<p>{ data.Outcome }</p>
+		}
+	}
+}
