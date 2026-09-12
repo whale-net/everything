@@ -14,13 +14,16 @@ import (
 
 // setupRoutes registers krill's HTTP surface. /healthz, `init` (FR3, issue
 // #2489), the four scoped-slice query endpoints (FR5-FR9, issue #2491),
-// and the history endpoints below (FR11, issue #2493) are ungated; every
-// entity create/attach endpoint (issue #2490, FR1/FR2/FR4), the two amend
-// endpoints below (FR12, issue #2493), and the pointer-artifact create
-// endpoint (issue #2496, FR20) are wrapped with handlers.RequireSession
-// (gate.go) -- no write path is reachable without a session minted by
-// `init`. Read paths never require a session (root plan issue #2485).
-// Import (FR16) is a later task's route, not added here.
+// the history endpoints below (FR11, issue #2493), and GET
+// /design-sessions/{id} (issue #2543) are ungated; every entity
+// create/attach endpoint (issue #2490, FR1/FR2/FR4), the two amend
+// endpoints below (FR12, issue #2493), the pointer-artifact create
+// endpoint (issue #2496, FR20), and POST /design-sessions and POST
+// /design-sessions/{id}/revision-events (issue #2543, FR1-FR4/FR8) are
+// wrapped with handlers.RequireSession (gate.go) -- no write path is
+// reachable without a session minted by `init`. Read paths never require a
+// session (root plan issue #2485). Import (FR16) is a later task's route,
+// not added here.
 //
 // githubToken is KRILL_GITHUB_TOKEN (see main.go's config/../ENV.md) --
 // threaded through to //krill/forge.GitHubClient, the one dependency
@@ -40,6 +43,10 @@ func setupRoutes(mux *http.ServeMux, pool *pgxpool.Pool, githubToken string) {
 	mux.Handle("POST /requirements", gate(handlers.CreateRequirementHandler(entities.Requirements())))
 	mux.Handle("POST /load-bearing-decisions", gate(handlers.AttachLoadBearingDecisionHandler(entities.Decisions())))
 	mux.Handle("POST /pointer-artifacts", gate(handlers.CreatePointerArtifactHandler(entities.Products(), entities.Scopes(), entities.PointerArtifacts(), forgeClient)))
+
+	mux.Handle("POST /design-sessions", gate(handlers.OpenDesignSessionHandler(entities.DesignSessions())))
+	mux.HandleFunc("GET /design-sessions/{id}", handlers.GetDesignSessionHandler(entities.DesignSessions(), entities.RevisionEvents()))
+	mux.Handle("POST /design-sessions/{id}/revision-events", gate(handlers.AppendRevisionEventHandler(entities.RevisionEvents())))
 
 	mux.Handle("POST /requirements/{id}/amend", gate(handlers.AmendRequirementHandler(entities.Amend())))
 	mux.Handle("POST /load-bearing-decisions/{id}/amend", gate(handlers.AmendLoadBearingDecisionHandler(entities.Amend())))
