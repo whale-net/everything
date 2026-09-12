@@ -194,7 +194,7 @@ milestone never collide on a migration version:
 | `001` | `scope` | #2487 |
 | `002` | Spec entities (Product/FeatureSet/Feature/FR/NFR/LoadBearingDecision/Persona/NonGoal) | #2488 |
 | `003` | `session` (FR3's `init` gate) | #2489 |
-| `004` | Milestone reference + association (FR17) | Later M1 task |
+| `004` | Milestone reference + association (FR17) | #2492 |
 | `005` | Pointer artifact (FR20) | Later M1 task |
 
 ## `krill_session` and the two session ids (FR3, #2489)
@@ -299,6 +299,78 @@ need and no single entity's `*Store` owns on its own — one query per
 entity kind rather than one query per sibling, regardless of how many
 FeatureSets or Features exist beneath the requested id.
 
+## The markdown importer and the delivery-axis association (FR16, FR17, issue #2492)
+
+`krill/importer` (a library) and `krill/importer/cmd` (its runnable
+entrypoint, `bazel run //krill/importer/cmd:import -- --path <dir>
+--session-id <uuid>`) are the one-way markdown importer LB5 and PRODUCT.md's
+C8 describe: it parses a `PRODUCT.md` + `product/*.md` doc set (the layout
+`tools/project-manager/CONVENTIONS.md` § Layout defines) into
+`krill/store`'s spec entities and prints FR16's entity-id report.
+
+**This is the only code path in `krill/` that ever parses a committed
+markdown document back into entities (LB5, FR15) — `krill/importer/
+importer.go`'s package doc states this explicitly and names FR15.** A
+future renderer (FR13, a separate task) only ever writes markdown from
+krill's entities; neither it nor anything else in this tree reads a
+committed doc the other direction. Within the importer itself, `parse.go`
+never touches `krill/store` — it is a pure text-to-`ParsedProduct` function,
+safe to run against a document this milestone does not import (see the
+Testing section's `whagent_net` parse-fixture use) — and `write.go` is the
+only file that calls a `Create`/`GetOrCreateRef` method, so a parse failure
+never leaves a partial product behind.
+
+**Gating.** Import is one of the six write paths `api/handlers.
+RequireSession`'s doc comment names (FR3), but it is a CLI entrypoint, not
+an HTTP handler, so it cannot literally wrap itself in that middleware.
+`importer.Import` performs the same check directly against
+`store.SessionStore.GetSession` (`requireSession` in `importer.go`) before
+parsing or writing anything, and writes into the session's own `ScopeID` —
+a caller with no valid krill session cannot import regardless of which
+front door it comes through.
+
+**Where a capability-map entry, a persona, and a non-goal land.** Personas
+and non-goals map directly onto `persona`/`non_goal` under the imported
+`Product` (issue #2488's decision). A capability-map entry (`Cn`) becomes a
+`Feature`, grouped under a `FeatureSet` named for its bucket (`Now`,
+`Next`, `Later`) — the bucket is a delivery-axis grouping, not a spec-axis
+one, but a `FeatureSet` has to be *something* and "which bucket a
+capability was in" is the only grouping the source document offers.
+Load-bearing decisions have no natural bucket of their own, so the importer
+gives every imported product one synthetic `FeatureSet` named "Load-bearing
+decisions" (`loadBearingFeatureSetName` in `write.go`) to hold them,
+created once per product and reused on a second import — never guessed
+per-entry from which capability an `LBn`'s prose happens to mention.
+
+**Milestone references and the delivery-axis association (LB6).** For each
+`### M<n> — ...` roadmap heading, the importer resolves (creating on first
+reference) a `milestone_ref` row scoped to `(scope, product, "M<n>")` via
+`MilestoneStore.GetOrCreateRef`, then, for every capability id in that
+milestone's own `Delivers:` line and every decision id in its own `Must not
+foreclose:` line, adds one `entity_milestone` row via
+`MilestoneStore.AddAssociation` — `(Feature.ID or LoadBearingDecision.ID,
+milestone_ref.ID)`. Both methods are upserts (`ON CONFLICT DO NOTHING`), so
+importing the same document twice does not duplicate either table. A
+`Delivers:`/`Must not foreclose:` line's trailing prose explanation (e.g.
+krill's own "— all seven, each for its own reason:" continuation) is never
+scanned for ids — only the token list before the first dash on that same
+line counts, so a continuation line's own cross-references to other
+capabilities or decisions are never mistaken for this milestone's own list.
+See migration `004_milestone_assoc.up.sql`'s LB6 note for the schema side
+of this: `milestone_ref` carries only the bare `M<n>` identifier — no
+status, no milepebbles, no authoring surface (those are M3's, C13/C28) —
+and `entity_milestone` is the association, never a `milestone_id` column on
+`feature` or `load_bearing_decision`.
+
+**Fail loudly on an undefined milestone (FR17).** Beyond the per-milestone
+`Delivers:`/`Must not foreclose:` pass, the importer scans the whole
+roadmap document for every bare `M<n>` token — heading, prose, anywhere —
+and returns a non-zero-exit error naming any token with no corresponding
+`### M<n>` heading in that same document. This is what "the source names a
+milestone its own roadmap section never defines" (the issue's own phrasing)
+resolves to: a document is well-formed on this axis exactly when every
+`M<n>` it mentions is also a milestone it defines.
+
 ## Open items
 
 - The HTTP surface over the spec entity model covers create/attach only
@@ -316,8 +388,10 @@ FeatureSets or Features exist beneath the requested id.
   `krill/slice/document.go`'s `EntityRef` doc comment).
 - `init` (FR3, #2489) and the write-only gate (`api/handlers/session.go`,
   `api/handlers/gate.go`) cover entity creates and LB attach as of #2490;
-  amend (#2493), import (#2492), and pointer-issue create (#2496) remain
-  unwired until their own tasks land.
+  amend (#2493) and pointer-issue create (#2496) remain unwired until
+  their own tasks land. Import (#2492) is gated too, but as a CLI
+  entrypoint checking the session directly against the store rather than
+  through this HTTP middleware (see "The markdown importer" above).
 - No MCP surface yet — `krill/plugin/` is a placeholder only; a later
   milestone's MCP tool wraps `krill/slice` directly, per LB7.
 - No auth wired up on `api` — `POST /sessions/init`, every future write
@@ -325,3 +399,7 @@ FeatureSets or Features exist beneath the requested id.
   identity or are unauthenticated (see "`init` and the write gate"
   above); only `krill/mcp` (issue #2494) gets NFR1's two-front-door
   pattern, and only for the read-only spec surface.
+- No renderer yet (FR13, a separate task) — the importer's report (FR16)
+  is the only reflection of an imported product's entities back to a
+  human today; nothing regenerates `PRODUCT.md`/`product/*.md` from
+  `krill/store` yet.

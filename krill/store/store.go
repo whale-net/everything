@@ -4,7 +4,8 @@ import "github.com/jackc/pgx/v5/pgxpool"
 
 // Store is the pgx-backed repository over `product`, `feature_set`,
 // `feature`, `requirement`, `load_bearing_decision`, `persona`, and
-// `non_goal` (migration 002). Built over //libs/go/db's *pgxpool.Pool,
+// `non_goal` (migration 002), plus `milestone_ref` and `entity_milestone`
+// (migration 004, issue #2492). Built over //libs/go/db's *pgxpool.Pool,
 // mirroring audience_score_system/store.Store's shape: a thin holder whose
 // accessors hand back per-entity Store implementations, kept as separate
 // concrete types because e.g. ProductStore.GetCurrentByID and
@@ -44,3 +45,6 @@ func (s *Store) NonGoals() NonGoalStore { return nonGoalStore{pool: s.pool} }
 // krill/slice's query layer needs on top of the per-entity accessors
 // above (see slice.go's doc comment).
 func (s *Store) Slices() SliceStore { return sliceStore{pool: s.pool} }
+
+// Milestones returns the MilestoneStore implementation.
+func (s *Store) Milestones() MilestoneStore { return milestoneStore{pool: s.pool} }
