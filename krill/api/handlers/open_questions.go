@@ -13,17 +13,40 @@ import (
 	"github.com/whale-net/everything/krill/store"
 )
 
-// openQuestionWire is the wire shape of one store.OpenQuestion.
-type openQuestionWire struct {
+// OpenQuestionWire is the wire shape of one store.OpenQuestion.
+type OpenQuestionWire struct {
 	QuestionID    string `json:"question_id"`
 	Text          string `json:"text"`
 	Blocking      bool   `json:"blocking"`
 	OpenedAtSeqNo int    `json:"opened_at_seq_no"`
 }
 
-// listOpenQuestionsResponse is ListOpenQuestionsHandler's response body.
-type listOpenQuestionsResponse struct {
-	OpenQuestions []openQuestionWire `json:"open_questions"`
+// ListOpenQuestionsResponse is ListOpenQuestionsHandler's response body.
+// Exported (issue #2547) so krill/mcp/tools' list_open_questions tool
+// returns this exact value -- built by the same NewListOpenQuestionsResponse
+// this handler calls -- rather than a second, MCP-local projection of the
+// same data (LB7).
+type ListOpenQuestionsResponse struct {
+	OpenQuestions []OpenQuestionWire `json:"open_questions"`
+}
+
+// NewListOpenQuestionsResponse builds a ListOpenQuestionsResponse from
+// questions, applying the same onlyBlocking filter ListOpenQuestionsHandler
+// applies for its `?blocking=true` query parameter.
+func NewListOpenQuestionsResponse(questions []store.OpenQuestion, onlyBlocking bool) ListOpenQuestionsResponse {
+	out := make([]OpenQuestionWire, 0, len(questions))
+	for _, q := range questions {
+		if onlyBlocking && !q.Blocking {
+			continue
+		}
+		out = append(out, OpenQuestionWire{
+			QuestionID:    q.QuestionID,
+			Text:          q.Text,
+			Blocking:      q.Blocking,
+			OpenedAtSeqNo: q.OpenedAtSeqNo,
+		})
+	}
+	return ListOpenQuestionsResponse{OpenQuestions: out}
 }
 
 // ListOpenQuestionsHandler returns the derived open-question view (FR6):
@@ -53,19 +76,6 @@ func ListOpenQuestionsHandler(designSessions store.DesignSessionStore, events st
 
 		onlyBlocking := r.URL.Query().Get("blocking") == "true"
 
-		out := make([]openQuestionWire, 0, len(questions))
-		for _, q := range questions {
-			if onlyBlocking && !q.Blocking {
-				continue
-			}
-			out = append(out, openQuestionWire{
-				QuestionID:    q.QuestionID,
-				Text:          q.Text,
-				Blocking:      q.Blocking,
-				OpenedAtSeqNo: q.OpenedAtSeqNo,
-			})
-		}
-
-		writeJSON(w, http.StatusOK, listOpenQuestionsResponse{OpenQuestions: out})
+		writeJSON(w, http.StatusOK, NewListOpenQuestionsResponse(questions, onlyBlocking))
 	}
 }

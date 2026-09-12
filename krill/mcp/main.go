@@ -1,13 +1,19 @@
-// Command mcp is krill's FR10/NFR1 spec surface: the only MCP-capable way
-// any harness (Claude Code today) reaches the FR5-FR9 scoped-slice query
-// (//krill/slice) with no krill-specific harness code. See
-// ../ARCHITECTURE.md "The MCP spec surface" for the two-front-door design
-// this mirrors from audience_score_system/mcp and whagent_net/mcp.
+// Command mcp is krill's MCP surface: the only MCP-capable way any harness
+// (Claude Code today) reaches the FR5-FR9 scoped-slice query
+// (//krill/slice) and, as of issue #2547, the FR1-FR10 design-session
+// surface (//krill/mcp/tools' design.go), with no krill-specific harness
+// code. See ../ARCHITECTURE.md "The MCP spec surface" and "The
+// design-session MCP surface" for the two-front-door design this mirrors
+// from audience_score_system/mcp and whagent_net/mcp.
 //
-// `mcp` mounts its spec-scoped tool surface at /mcp/spec
-// (server/transport.go's specMountPath) -- its own pre-filtered endpoint,
-// distinct from the future work-axis surface (M4, no endpoint exists for
-// it yet, root plan issue #2485's roadmap).
+// `mcp` mounts two pre-filtered tool surfaces, each on its own *mcp.Server
+// and its own mount point (server/transport.go's specMountPath and
+// designMountPath): the FR5-FR8 read-only spec surface at /mcp/spec
+// (unchanged since M1), and this task's FR1-FR10 design-session surface
+// (three write tools, three read tools) at /mcp/design -- distinct from
+// the future work-axis surface (M4, no endpoint exists for it yet, root
+// plan issue #2485's roadmap). Both front doors (mcpauth/human,
+// whagent-net/agent) apply to both mounts identically.
 package main
 
 import (
@@ -115,11 +121,24 @@ func run() error {
 	}
 	defer pool.Close()
 
-	querier := slice.NewQuerier(store.New(pool))
+	entities := store.New(pool)
+	sessions := store.NewSessionStore(pool)
+	querier := slice.NewQuerier(entities)
 
-	srv := server.New()
-	reg := server.NewRegistry(srv)
-	tools.RegisterAll(reg, querier)
+	// Two *mcp.Server instances, one per mount (server/transport.go's
+	// specMountPath and designMountPath) -- registering a tool is a
+	// per-server operation (mcp.AddTool), so the only way to guarantee the
+	// FR1-FR10 write tools this task adds can never end up reachable from
+	// specMountPath is to never register them on the same *mcp.Server that
+	// backs it. tools.RegisterAll (FR5-FR8, read-only) is unchanged;
+	// tools.RegisterDesignAll (this task) is new.
+	specSrv := server.New()
+	specReg := server.NewRegistry(specSrv)
+	tools.RegisterAll(specReg, querier)
+
+	designSrv := server.New()
+	designReg := server.NewRegistry(designSrv)
+	tools.RegisterDesignAll(designReg, entities, sessions, querier)
 
 	// The mcpauth (human) front door's CredentialStore preflights the
 	// consuming domain's credential table at boot -- exactly like
@@ -140,7 +159,7 @@ func run() error {
 	resourceMeta := server.ResourceMetadataConfig{
 		Resource:            cfg.MCPPublicURL,
 		AuthorizationServer: cfg.OAuthIssuer,
-		ResourceName:        "krill spec MCP",
+		ResourceName:        "krill MCP",
 	}
 
 	// Mount the agent (whagent-net) front door ALONGSIDE the mcpauth one
@@ -155,13 +174,14 @@ func run() error {
 		if err != nil {
 			return fmt.Errorf("whagent verifier: %w", err)
 		}
-		srv.AddReceivingMiddleware(server.WhagentPersonaMiddleware())
-		handler = server.NewDualAuthHTTPHandler(srv, credentials, server.WhagentAuthConfig{
+		specSrv.AddReceivingMiddleware(server.WhagentPersonaMiddleware())
+		designSrv.AddReceivingMiddleware(server.WhagentPersonaMiddleware())
+		handler = server.NewDualAuthHTTPHandler(specSrv, designSrv, credentials, server.WhagentAuthConfig{
 			Verifier: whagentVerifier,
 			Audience: cfg.MCPPublicURL,
 		}, resourceMeta)
 	} else {
-		handler = server.NewHTTPHandler(srv, credentials, resourceMeta)
+		handler = server.NewHTTPHandler(specSrv, designSrv, credentials, resourceMeta)
 	}
 
 	httpServer := &http.Server{

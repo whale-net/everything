@@ -6,12 +6,17 @@ load("@rules_go//go:def.bzl", "go_library")
 
 go_library(
     name = "tools",
-    srcs = ["slice.go"],
+    srcs = [
+        "design.go",
+        "slice.go",
+    ],
     importpath = "github.com/whale-net/everything/krill/mcp/tools",
     visibility = ["//visibility:public"],
     deps = [
+        "//krill/api/handlers",
         "//krill/mcp/server",
         "//krill/slice",
+        "//krill/store",
         "@com_github_google_jsonschema_go//jsonschema",
         "@com_github_google_uuid//:uuid",
         "@com_github_modelcontextprotocol_go_sdk//mcp",

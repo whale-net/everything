@@ -43,19 +43,22 @@ type proposeEntitiesRequest struct {
 	Proposals       []mediatedProposalRequest `json:"proposals"`
 }
 
-// proposedEntityWire is the wire shape of one store.ProposedEntity.
-type proposedEntityWire struct {
+// ProposedEntityWire is the wire shape of one store.ProposedEntity.
+type ProposedEntityWire struct {
 	Kind string `json:"kind"`
 	ID   string `json:"id"`
 }
 
-// proposeEntitiesResponse is ProposeEntitiesHandler's 201 response body:
+// ProposeEntitiesResponse is ProposeEntitiesHandler's 201 response body:
 // the new revision_event's id/seq_no, plus every created entity's kind and
-// id, in request order.
-type proposeEntitiesResponse struct {
+// id, in request order. Exported (issue #2547) so krill/mcp/tools'
+// propose_entities tool returns this exact value -- built by the same
+// NewProposeEntitiesResponse this handler calls -- rather than a second,
+// MCP-local projection of the same data (LB7).
+type ProposeEntitiesResponse struct {
 	RevisionEventID string               `json:"revision_event_id"`
 	SeqNo           int                  `json:"seq_no"`
-	Entities        []proposedEntityWire `json:"entities"`
+	Entities        []ProposedEntityWire `json:"entities"`
 }
 
 // ProposeEntitiesHandler returns the mediated-intake endpoint (FR9, FR10,
@@ -115,7 +118,7 @@ func ProposeEntitiesHandler(mediated store.MediatedWriteStore) http.HandlerFunc 
 				writeJSONError(w, http.StatusBadRequest, fmt.Sprintf("proposals[%d]: exactly one of parent_id/parent_proposal_index must be set", i))
 				return
 			case p.ParentID != nil:
-				parentID, err := parseUUIDField(fmt.Sprintf("proposals[%d].parent_id", i), *p.ParentID)
+				parentID, err := ParseUUIDField(fmt.Sprintf("proposals[%d].parent_id", i), *p.ParentID)
 				if err != nil {
 					writeJSONError(w, http.StatusBadRequest, err.Error())
 					return
@@ -152,16 +155,24 @@ func ProposeEntitiesHandler(mediated store.MediatedWriteStore) http.HandlerFunc 
 			return
 		}
 
-		out := make([]proposedEntityWire, len(entities))
-		for i, e := range entities {
-			out[i] = proposedEntityWire{Kind: string(e.Kind), ID: e.ID.String()}
-		}
+		writeJSON(w, http.StatusCreated, NewProposeEntitiesResponse(ev, entities))
+	}
+}
 
-		writeJSON(w, http.StatusCreated, proposeEntitiesResponse{
-			RevisionEventID: ev.ID.String(),
-			SeqNo:           ev.SeqNo,
-			Entities:        out,
-		})
+// NewProposeEntitiesResponse builds a ProposeEntitiesResponse from a
+// MediatedWriteStore.ProposeEntities call's return values. Exported (issue
+// #2547) so krill/mcp/tools' propose_entities tool builds its response the
+// same way this handler does (LB7).
+func NewProposeEntitiesResponse(ev store.RevisionEvent, entities []store.ProposedEntity) ProposeEntitiesResponse {
+	out := make([]ProposedEntityWire, len(entities))
+	for i, e := range entities {
+		out[i] = ProposedEntityWire{Kind: string(e.Kind), ID: e.ID.String()}
+	}
+
+	return ProposeEntitiesResponse{
+		RevisionEventID: ev.ID.String(),
+		SeqNo:           ev.SeqNo,
+		Entities:        out,
 	}
 }
 

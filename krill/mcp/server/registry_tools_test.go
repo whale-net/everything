@@ -39,16 +39,19 @@ var expectedSpecSurfaceToolNames = []string{
 }
 
 // TestRegistry_SpecSurface_RegistersExactlyTheFourReadTools_NoWriteTool
-// mirrors ../main.go's full tool registration (tools.RegisterAll, the same
-// call `mcp` wires at boot) against a *slice.Querier over a bare
-// *store.Store (nil pool), then lists the live registry's tools by name
-// over a real in-memory MCP client/server connection
-// (mcp.NewInMemoryTransports). Asserting the registered set is EXACTLY
-// these four names -- not merely that they're present -- is what makes
-// this a genuine negative test: server.Registry (registry.go) exposes only
-// RegisterRead, so there is no RegisterWrite call this task could
-// accidentally wire in the first place, and this proves nothing else
-// slipped onto reg by any other path either.
+// mirrors ../main.go's full tool registration for the SPEC surface only
+// (tools.RegisterAll against specSrv/specReg, the same call `mcp` wires at
+// boot) against a *slice.Querier over a bare *store.Store (nil pool), then
+// lists that one registry's tools by name over a real in-memory MCP
+// client/server connection (mcp.NewInMemoryTransports). Asserting the
+// registered set is EXACTLY these four names -- not merely that they're
+// present -- is what makes this a genuine negative test: this test never
+// calls tools.RegisterDesignAll or server.RegisterWrite (registry.go,
+// issue #2547) against this reg at all, so it proves the spec surface
+// specifically stays exactly these four read tools even though
+// RegisterWrite now exists elsewhere in this package for the design-session
+// surface's own *mcp.Server (registered separately in main.go, and covered
+// by krill/mcp/tools/design_test.go, not this file).
 func TestRegistry_SpecSurface_RegistersExactlyTheFourReadTools_NoWriteTool(t *testing.T) {
 	ctx := context.Background()
 	querier := slice.NewQuerier(store.New(nil))

@@ -1,6 +1,6 @@
 // This file (issue #2543, FR2-FR4, FR7's write half) is the append-
 // RevisionEvent HTTP surface -- AppendRevisionEventHandler -- plus the wire
-// types (revisionEventWire and friends) design_session.go's
+// types (RevisionEventWire and friends) design_session.go's
 // GetDesignSessionHandler reuses to render a session's ordered event log.
 package handlers
 
@@ -52,17 +52,18 @@ type appendRevisionEventRequest struct {
 	SignoffStatus      *string                   `json:"signoff_status"`
 }
 
-// revisionEventCreatedResponse is AppendRevisionEventHandler's response
+// RevisionEventCreatedResponse is AppendRevisionEventHandler's response
 // body: the new event's id and its store-allocated seq_no -- never a
 // caller-supplied value (RevisionEventStore.Append allocates seq_no under
-// its own row lock).
-type revisionEventCreatedResponse struct {
+// its own row lock). Exported (issue #2547) so krill/mcp/tools'
+// append_revision_event tool returns this exact value (LB7).
+type RevisionEventCreatedResponse struct {
 	ID    string `json:"id"`
 	SeqNo int    `json:"seq_no"`
 }
 
 // validEventTypes enumerates FR2's five closed event_type values -- the
-// same set migration 008's CHECK constraint declares. parseEventType
+// same set migration 008's CHECK constraint declares. ParseEventType
 // rejects any value outside this set before AppendRevisionEventHandler ever
 // calls RevisionEventStore.Append, so an unrecognized event_type surfaces
 // as a 400 with a named message rather than reaching a raw Postgres
@@ -76,8 +77,8 @@ var validEventTypes = map[store.EventType]bool{
 	store.EventTypeRuling:         true,
 }
 
-// parseEventType validates raw against validEventTypes.
-func parseEventType(raw string) (store.EventType, error) {
+// ParseEventType validates raw against validEventTypes.
+func ParseEventType(raw string) (store.EventType, error) {
 	et := store.EventType(raw)
 	if !validEventTypes[et] {
 		return "", fmt.Errorf("event_type: unrecognized value %q", raw)
@@ -112,7 +113,7 @@ func AppendRevisionEventHandler(events store.RevisionEventStore) http.HandlerFun
 			return
 		}
 
-		eventType, err := parseEventType(req.EventType)
+		eventType, err := ParseEventType(req.EventType)
 		if err != nil {
 			writeJSONError(w, http.StatusBadRequest, err.Error())
 			return
@@ -120,7 +121,7 @@ func AppendRevisionEventHandler(events store.RevisionEventStore) http.HandlerFun
 
 		entityDeltas := make([]store.EntityDelta, len(req.EntityDeltas))
 		for i, d := range req.EntityDeltas {
-			entityID, err := parseUUIDField(fmt.Sprintf("entity_deltas[%d].entity_id", i), d.EntityID)
+			entityID, err := ParseUUIDField(fmt.Sprintf("entity_deltas[%d].entity_id", i), d.EntityID)
 			if err != nil {
 				writeJSONError(w, http.StatusBadRequest, err.Error())
 				return
@@ -167,7 +168,7 @@ func AppendRevisionEventHandler(events store.RevisionEventStore) http.HandlerFun
 			return
 		}
 
-		writeJSON(w, http.StatusCreated, revisionEventCreatedResponse{ID: ev.ID.String(), SeqNo: ev.SeqNo})
+		writeJSON(w, http.StatusCreated, RevisionEventCreatedResponse{ID: ev.ID.String(), SeqNo: ev.SeqNo})
 	}
 }
 
@@ -190,58 +191,58 @@ func writeRevisionEventError(w http.ResponseWriter, err error) {
 	}
 }
 
-// subjectWire is the wire shape of a store.Subject -- shared by
-// revisionEventWire's Acting/OnBehalfOf fields.
-type subjectWire struct {
+// SubjectWire is the wire shape of a store.Subject -- shared by
+// RevisionEventWire's Acting/OnBehalfOf fields.
+type SubjectWire struct {
 	Iss  string `json:"iss"`
 	Sub  string `json:"sub"`
 	Kind string `json:"kind"`
 }
 
-func toSubjectWire(s store.Subject) subjectWire {
-	return subjectWire{Iss: s.Iss, Sub: s.Sub, Kind: string(s.Kind)}
+func ToSubjectWire(s store.Subject) SubjectWire {
+	return SubjectWire{Iss: s.Iss, Sub: s.Sub, Kind: string(s.Kind)}
 }
 
-// entityDeltaWire is the wire shape of one store.EntityDelta.
-type entityDeltaWire struct {
+// EntityDeltaWire is the wire shape of one store.EntityDelta.
+type EntityDeltaWire struct {
 	EntityID    string `json:"entity_id"`
 	Change      string `json:"change"`
 	SummaryLine string `json:"summary_line"`
 }
 
-// openQuestionOpenedWire is the wire shape of one store.OpenQuestionOpened.
-type openQuestionOpenedWire struct {
+// OpenQuestionOpenedWire is the wire shape of one store.OpenQuestionOpened.
+type OpenQuestionOpenedWire struct {
 	QuestionID string `json:"question_id"`
 	Blocking   bool   `json:"blocking"`
 	Text       string `json:"text"`
 }
 
-// openQuestionsDeltaWire is the wire shape of a store.OpenQuestionsDelta.
-type openQuestionsDeltaWire struct {
-	Opened   []openQuestionOpenedWire `json:"opened"`
+// OpenQuestionsDeltaWire is the wire shape of a store.OpenQuestionsDelta.
+type OpenQuestionsDeltaWire struct {
+	Opened   []OpenQuestionOpenedWire `json:"opened"`
 	Resolved []string                 `json:"resolved"`
 }
 
-// revisionEventWire is the wire shape of one store.RevisionEvent -- used by
+// RevisionEventWire is the wire shape of one store.RevisionEvent -- used by
 // design_session.go's GetDesignSessionHandler to render a session's ordered
 // revision_events list, with both identity triples included (FR2).
-type revisionEventWire struct {
+type RevisionEventWire struct {
 	ID                 string                 `json:"id"`
 	SeqNo              int                    `json:"seq_no"`
-	Acting             subjectWire            `json:"acting"`
-	OnBehalfOf         subjectWire            `json:"on_behalf_of"`
+	Acting             SubjectWire            `json:"acting"`
+	OnBehalfOf         SubjectWire            `json:"on_behalf_of"`
 	EventType          string                 `json:"event_type"`
-	EntityDeltas       []entityDeltaWire      `json:"entity_deltas"`
-	OpenQuestionsDelta openQuestionsDeltaWire `json:"open_questions_delta"`
+	EntityDeltas       []EntityDeltaWire      `json:"entity_deltas"`
+	OpenQuestionsDelta OpenQuestionsDeltaWire `json:"open_questions_delta"`
 	VerifiedAgainst    *string                `json:"verified_against,omitempty"`
 	SignoffStatus      *string                `json:"signoff_status,omitempty"`
 	CreatedAt          time.Time              `json:"created_at"`
 }
 
-func toRevisionEventWire(ev store.RevisionEvent) revisionEventWire {
-	deltas := make([]entityDeltaWire, len(ev.EntityDeltas))
+func ToRevisionEventWire(ev store.RevisionEvent) RevisionEventWire {
+	deltas := make([]EntityDeltaWire, len(ev.EntityDeltas))
 	for i, d := range ev.EntityDeltas {
-		deltas[i] = entityDeltaWire{
+		deltas[i] = EntityDeltaWire{
 			EntityID:    d.EntityID.String(),
 			Change:      string(d.Change),
 			SummaryLine: d.SummaryLine,
@@ -254,19 +255,19 @@ func toRevisionEventWire(ev store.RevisionEvent) revisionEventWire {
 		signoffStatus = &s
 	}
 
-	opened := make([]openQuestionOpenedWire, len(ev.OpenQuestionsDelta.Opened))
+	opened := make([]OpenQuestionOpenedWire, len(ev.OpenQuestionsDelta.Opened))
 	for i, o := range ev.OpenQuestionsDelta.Opened {
-		opened[i] = openQuestionOpenedWire{QuestionID: o.QuestionID, Blocking: o.Blocking, Text: o.Text}
+		opened[i] = OpenQuestionOpenedWire{QuestionID: o.QuestionID, Blocking: o.Blocking, Text: o.Text}
 	}
 
-	return revisionEventWire{
+	return RevisionEventWire{
 		ID:           ev.ID.String(),
 		SeqNo:        ev.SeqNo,
-		Acting:       toSubjectWire(ev.Acting),
-		OnBehalfOf:   toSubjectWire(ev.OnBehalfOf),
+		Acting:       ToSubjectWire(ev.Acting),
+		OnBehalfOf:   ToSubjectWire(ev.OnBehalfOf),
 		EventType:    string(ev.EventType),
 		EntityDeltas: deltas,
-		OpenQuestionsDelta: openQuestionsDeltaWire{
+		OpenQuestionsDelta: OpenQuestionsDeltaWire{
 			Opened:   opened,
 			Resolved: ev.OpenQuestionsDelta.Resolved,
 		},

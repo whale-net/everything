@@ -48,7 +48,7 @@ func AmendRequirementHandler(amend store.AmendStore) http.HandlerFunc {
 			writeJSONError(w, http.StatusBadRequest, fmt.Sprintf("invalid request body: %v", err))
 			return
 		}
-		if err := requireNonEmpty("name", req.Name); err != nil {
+		if err := RequireNonEmpty("name", req.Name); err != nil {
 			writeJSONError(w, http.StatusBadRequest, err.Error())
 			return
 		}
@@ -59,7 +59,7 @@ func AmendRequirementHandler(amend store.AmendStore) http.HandlerFunc {
 			return
 		}
 
-		writeJSON(w, http.StatusOK, idResponse{ID: requirement.ID.String()})
+		writeJSON(w, http.StatusOK, IDResponse{ID: requirement.ID.String()})
 	}
 }
 
@@ -88,7 +88,7 @@ func AmendLoadBearingDecisionHandler(amend store.AmendStore) http.HandlerFunc {
 			writeJSONError(w, http.StatusBadRequest, fmt.Sprintf("invalid request body: %v", err))
 			return
 		}
-		if err := requireNonEmpty("name", req.Name); err != nil {
+		if err := RequireNonEmpty("name", req.Name); err != nil {
 			writeJSONError(w, http.StatusBadRequest, err.Error())
 			return
 		}
@@ -99,6 +99,6 @@ func AmendLoadBearingDecisionHandler(amend store.AmendStore) http.HandlerFunc {
 			return
 		}
 
-		writeJSON(w, http.StatusOK, idResponse{ID: decision.ID.String()})
+		writeJSON(w, http.StatusOK, IDResponse{ID: decision.ID.String()})
 	}
 }

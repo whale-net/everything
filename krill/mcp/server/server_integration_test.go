@@ -52,9 +52,9 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	"github.com/whale-net/everything/krill/migrate/schema"
 	"github.com/whale-net/everything/krill/mcp/server"
 	"github.com/whale-net/everything/krill/mcp/tools"
+	"github.com/whale-net/everything/krill/migrate/schema"
 	"github.com/whale-net/everything/krill/slice"
 	"github.com/whale-net/everything/krill/store"
 	"github.com/whale-net/everything/libs/go/dbtest"
@@ -191,11 +191,20 @@ type testServer struct{ url string }
 func newTestDualAuthServer(t *testing.T, querier *slice.Querier, credentials mcpauth.CredentialStore, verifier *whagent.Verifier) *testServer {
 	t.Helper()
 
-	srv := server.New()
-	reg := server.NewRegistry(srv)
-	tools.RegisterAll(reg, querier)
+	specSrv := server.New()
+	specReg := server.NewRegistry(specSrv)
+	tools.RegisterAll(specReg, querier)
 
-	handler := server.NewDualAuthHTTPHandler(srv, credentials, server.WhagentAuthConfig{
+	// This file's own coverage (its doc comment) is scoped to specMountPath
+	// -- the FR5-FR8 spec surface's two-front-door round trip. designSrv
+	// below has no design-session tool registered: it exists only so
+	// server.NewDualAuthHTTPHandler's two-mount signature (issue #2547) is
+	// satisfied here, at /mcp/design, alongside specSrv. See
+	// krill/mcp/tools/design_test.go (this task's Testing phase) for the
+	// design-session surface's own end-to-end coverage.
+	designSrv := server.New()
+
+	handler := server.NewDualAuthHTTPHandler(specSrv, designSrv, credentials, server.WhagentAuthConfig{
 		Verifier: verifier,
 		Audience: testWhagentAudience,
 	}, server.ResourceMetadataConfig{})

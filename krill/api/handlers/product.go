@@ -38,11 +38,11 @@ func CreateProductHandler(products store.ProductStore) http.HandlerFunc {
 			return
 		}
 
-		if err := requireNonEmpty("name", req.Name); err != nil {
+		if err := RequireNonEmpty("name", req.Name); err != nil {
 			writeJSONError(w, http.StatusBadRequest, err.Error())
 			return
 		}
-		if err := requireNonEmpty("vision", req.Vision); err != nil {
+		if err := RequireNonEmpty("vision", req.Vision); err != nil {
 			writeJSONError(w, http.StatusBadRequest, err.Error())
 			return
 		}
@@ -53,6 +53,6 @@ func CreateProductHandler(products store.ProductStore) http.HandlerFunc {
 			return
 		}
 
-		writeJSON(w, http.StatusCreated, idResponse{ID: product.ID.String()})
+		writeJSON(w, http.StatusCreated, IDResponse{ID: product.ID.String()})
 	}
 }
