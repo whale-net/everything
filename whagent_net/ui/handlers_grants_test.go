@@ -12,10 +12,14 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"google.golang.org/grpc"
 
 	"github.com/whale-net/everything/libs/go/grpcauth"
 	"github.com/whale-net/everything/libs/go/grpcauth/grantindex"
 	"github.com/whale-net/everything/whagent_net/delegatedgrant"
+	"github.com/whale-net/everything/whagent_net/ui/pages"
+
+	whagentpb "github.com/whale-net/everything/whagent_net/protos"
 )
 
 // This file guards issue #2432's Implementation-phase Testing section:
@@ -70,10 +74,10 @@ func TestHandleGrants_RendersPageStub(t *testing.T) {
 	require.Contains(t, w.Body.String(), "My grants")
 }
 
-// TestHandleGrantsRevoke_RequiresDomain is a scaffold-level sanity check:
-// a POST with no domain field is rejected with 400 before any store call
+// TestHandleGrantsRevoke_RequiresScope is a scaffold-level sanity check:
+// a POST with no scope field is rejected with 400 before any store call
 // is made.
-func TestHandleGrantsRevoke_RequiresDomain(t *testing.T) {
+func TestHandleGrantsRevoke_RequiresScope(t *testing.T) {
 	app := &App{auth: devModeAuthenticator(t)}
 	wrapped := app.auth.RequireAuthFunc(app.handleGrantsRevoke)
 
@@ -85,13 +89,12 @@ func TestHandleGrantsRevoke_RequiresDomain(t *testing.T) {
 	require.Equal(t, http.StatusBadRequest, w.Code)
 }
 
-// TestHandleGrantsRevoke_RedirectsOnValidDomain proves a POST for a
+// TestHandleGrantsRevoke_RedirectsOnValidScope proves a POST for a
 // domain the signed-in (dev-mode) operator actually holds a grant for
 // revokes it and redirects back to /grants.
-func TestHandleGrantsRevoke_RedirectsOnValidDomain(t *testing.T) {
+func TestHandleGrantsRevoke_RedirectsOnValidScope(t *testing.T) {
 	store := grpcauth.NewFakeStore()
-	subjectKey, err := grantSubjectKey(testIssuer, "dev-user")
-	require.NoError(t, err)
+	subjectKey := grantSubjectKey(testIssuer, "dev-user")
 	require.NoError(t, store.Persist(context.Background(), subjectKey, "audience_score_system", grpcauth.TokenMaterial{RefreshToken: "rt", ObtainedAt: time.Now()}))
 
 	app := &App{
@@ -101,7 +104,7 @@ func TestHandleGrantsRevoke_RedirectsOnValidDomain(t *testing.T) {
 	}
 	wrapped := app.auth.RequireAuthFunc(app.handleGrantsRevoke)
 
-	req := httptest.NewRequest(http.MethodPost, "/grants/revoke", strings.NewReader("domain=audience_score_system"))
+	req := httptest.NewRequest(http.MethodPost, "/grants/revoke", strings.NewReader("scope=audience_score_system"))
 	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 	w := httptest.NewRecorder()
 	wrapped(w, req)
@@ -125,8 +128,7 @@ func TestHandleGrantsRevoke_RedirectsOnValidDomain(t *testing.T) {
 // victim's row.
 func TestHandleGrantsRevoke_TamperedSubjectIsIgnored(t *testing.T) {
 	store := grpcauth.NewFakeStore()
-	victimKey, err := grantSubjectKey(testIssuer, "victim-sub")
-	require.NoError(t, err)
+	victimKey := grantSubjectKey(testIssuer, "victim-sub")
 	require.NoError(t, store.Persist(context.Background(), victimKey, "audience_score_system", grpcauth.TokenMaterial{RefreshToken: "rt", ObtainedAt: time.Now()}))
 
 	app := &App{
@@ -136,7 +138,7 @@ func TestHandleGrantsRevoke_TamperedSubjectIsIgnored(t *testing.T) {
 	}
 	wrapped := app.auth.RequireAuthFunc(app.handleGrantsRevoke)
 
-	form := "domain=audience_score_system&subject=victim-sub&sub=victim-sub"
+	form := "scope=audience_score_system&subject=victim-sub&sub=victim-sub"
 	req := httptest.NewRequest(http.MethodPost, "/grants/revoke", strings.NewReader(form))
 	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 	w := httptest.NewRecorder()
@@ -153,6 +155,59 @@ func TestHandleGrantsRevoke_TamperedSubjectIsIgnored(t *testing.T) {
 	assert.Equal(t, grpcauth.GrantStatusActive, victimStatus, "victim's grant must be untouched by a tampered request")
 }
 
+// fakeScopeLister is a scopeLister backed by a fixed response/error, so a
+// test can drive availableScopesForGrant without a real gRPC connection to
+// `api`.
+type fakeScopeLister struct {
+	scopes []string
+	err    error
+}
+
+func (f *fakeScopeLister) ListAgentDefinitionScopes(_ context.Context, _ *whagentpb.ListAgentDefinitionScopesRequest, _ ...grpc.CallOption) (*whagentpb.ListAgentDefinitionScopesResponse, error) {
+	if f.err != nil {
+		return nil, f.err
+	}
+	return &whagentpb.ListAgentDefinitionScopesResponse{Scopes: f.scopes}, nil
+}
+
+// TestAvailableScopesForGrant_ExcludesActiveScope proves a scope the
+// operator already actively holds is excluded from the available list.
+func TestAvailableScopesForGrant_ExcludesActiveScope(t *testing.T) {
+	client := &fakeScopeLister{scopes: []string{"audience_score_system", "manmanv2"}}
+	rows := []pages.GrantRow{{Scope: "audience_score_system", Status: "active"}}
+
+	available := availableScopesForGrant(context.Background(), client, rows, discardLogger())
+	assert.Equal(t, []string{"manmanv2"}, available)
+}
+
+// TestAvailableScopesForGrant_IncludesNeedsReauthScope proves a scope the
+// operator's grant needs re-auth for is still offered -- that operator
+// does need to consent again.
+func TestAvailableScopesForGrant_IncludesNeedsReauthScope(t *testing.T) {
+	client := &fakeScopeLister{scopes: []string{"audience_score_system"}}
+	rows := []pages.GrantRow{{Scope: "audience_score_system", Status: "needs_reauth"}}
+
+	available := availableScopesForGrant(context.Background(), client, rows, discardLogger())
+	assert.Equal(t, []string{"audience_score_system"}, available)
+}
+
+// TestAvailableScopesForGrant_NilClientReturnsNil proves a nil client (no
+// session RPC client configured) degrades to no available scopes rather
+// than a panic.
+func TestAvailableScopesForGrant_NilClientReturnsNil(t *testing.T) {
+	available := availableScopesForGrant(context.Background(), nil, nil, discardLogger())
+	assert.Nil(t, available)
+}
+
+// TestAvailableScopesForGrant_RPCErrorDegradesToEmpty proves a failure
+// calling the RPC degrades to an empty list rather than failing the whole
+// /grants page.
+func TestAvailableScopesForGrant_RPCErrorDegradesToEmpty(t *testing.T) {
+	client := &fakeScopeLister{err: assert.AnError}
+	available := availableScopesForGrant(context.Background(), client, nil, discardLogger())
+	assert.Empty(t, available)
+}
+
 // TestBuildGrantRows_ScopedToSubject is FR16's core scoping guarantee at
 // the row-building layer: operator A's rows never include operator B's
 // entries, even for the identical domain.
@@ -160,10 +215,8 @@ func TestBuildGrantRows_ScopedToSubject(t *testing.T) {
 	store := grpcauth.NewFakeStore()
 	ctx := context.Background()
 
-	aKey, err := grantSubjectKey(testIssuer, "operator-a")
-	require.NoError(t, err)
-	bKey, err := grantSubjectKey(testIssuer, "operator-b")
-	require.NoError(t, err)
+	aKey := grantSubjectKey(testIssuer, "operator-a")
+	bKey := grantSubjectKey(testIssuer, "operator-b")
 	require.NoError(t, store.Persist(ctx, aKey, "audience_score_system", grpcauth.TokenMaterial{RefreshToken: "rt", ObtainedAt: time.Now()}))
 	require.NoError(t, store.Persist(ctx, bKey, "audience_score_system", grpcauth.TokenMaterial{RefreshToken: "rt", ObtainedAt: time.Now()}))
 
@@ -176,7 +229,7 @@ func TestBuildGrantRows_ScopedToSubject(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, rowsA, 1)
 	assert.Equal(t, "alice", rowsA[0].OperatorLabel)
-	assert.Equal(t, "audience_score_system", rowsA[0].Domain)
+	assert.Equal(t, "audience_score_system", rowsA[0].Scope)
 
 	for _, row := range rowsA {
 		assert.NotEqual(t, "bob", row.OperatorLabel, "operator A's rows must never include operator B's grant")
@@ -191,8 +244,7 @@ func TestBuildGrantRows_StatusIsLiveNeverFromIndex(t *testing.T) {
 	store := grpcauth.NewFakeStore()
 	ctx := context.Background()
 
-	subjectKey, err := grantSubjectKey(testIssuer, "operator-a")
-	require.NoError(t, err)
+	subjectKey := grantSubjectKey(testIssuer, "operator-a")
 	require.NoError(t, store.Persist(ctx, subjectKey, "manmanv2", grpcauth.TokenMaterial{RefreshToken: "rt", ObtainedAt: time.Now()}))
 
 	index := &fakeGrantIndex{entries: []grantindex.Entry{
@@ -223,10 +275,8 @@ func TestRevokeGrant_FR17ScopedToExactlyOnePair(t *testing.T) {
 	store := grpcauth.NewFakeStore()
 	ctx := context.Background()
 
-	aKey, err := grantSubjectKey(testIssuer, "operator-a")
-	require.NoError(t, err)
-	bKey, err := grantSubjectKey(testIssuer, "operator-b")
-	require.NoError(t, err)
+	aKey := grantSubjectKey(testIssuer, "operator-a")
+	bKey := grantSubjectKey(testIssuer, "operator-b")
 	require.NoError(t, store.Persist(ctx, aKey, "audience_score_system", grpcauth.TokenMaterial{RefreshToken: "rt", ObtainedAt: time.Now()}))
 	require.NoError(t, store.Persist(ctx, aKey, "manmanv2", grpcauth.TokenMaterial{RefreshToken: "rt", ObtainedAt: time.Now()}))
 	require.NoError(t, store.Persist(ctx, bKey, "audience_score_system", grpcauth.TokenMaterial{RefreshToken: "rt", ObtainedAt: time.Now()}))
@@ -255,12 +305,11 @@ func TestRevokeGrant_NFR7EffectiveWithoutRestart(t *testing.T) {
 	store := grpcauth.NewFakeStore()
 	ctx := context.Background()
 
-	subjectKey, err := grantSubjectKey(testIssuer, "operator-a")
-	require.NoError(t, err)
+	subjectKey := grantSubjectKey(testIssuer, "operator-a")
 	require.NoError(t, store.Persist(ctx, subjectKey, "audience_score_system", grpcauth.TokenMaterial{RefreshToken: "rt", ObtainedAt: time.Now()}))
 
 	// Prove the grant is usable before revoke, in the same process.
-	_, err = store.TokenMaterial(ctx, subjectKey, "audience_score_system")
+	_, err := store.TokenMaterial(ctx, subjectKey, "audience_score_system")
 	require.NoError(t, err)
 
 	require.NoError(t, revokeGrant(ctx, store, testIssuer, "operator-a", "audience_score_system", discardLogger()))
@@ -277,8 +326,7 @@ func TestRevokeGrant_LogsExactlyOneINFORecord(t *testing.T) {
 	store := grpcauth.NewFakeStore()
 	ctx := context.Background()
 
-	subjectKey, err := grantSubjectKey(testIssuer, "operator-a")
-	require.NoError(t, err)
+	subjectKey := grantSubjectKey(testIssuer, "operator-a")
 	require.NoError(t, store.Persist(ctx, subjectKey, "audience_score_system", grpcauth.TokenMaterial{RefreshToken: "rt", ObtainedAt: time.Now()}))
 
 	var buf bytes.Buffer
@@ -296,4 +344,33 @@ func TestRevokeGrant_LogsExactlyOneINFORecord(t *testing.T) {
 	assert.Contains(t, output, "audience_score_system")
 	assert.NotContains(t, output, "level=WARN")
 	assert.NotContains(t, output, "level=ERROR")
+}
+
+// TestRevokeGrant_MatchesRealConsentSubjectKey is a regression test for
+// the bug where grantSubjectKey mcpidentity-encoded (iss, sub) into the
+// store's subject key while the real consent flow
+// (handlers_consent.go's handleMCPConsentConfirm -> BeginAuthorization ->
+// CompleteAuthorization -> Store.Persist) and mcp/tools/dispatch.go's
+// TokenSource lookup both key the store on the raw, unencoded Keycloak
+// `sub` claim -- so a self-service revoke could never find the row it was
+// supposed to revoke. This test persists directly under the raw sub, the
+// way CompleteAuthorization actually does, rather than going through
+// grantSubjectKey to seed the fixture (unlike the tests above), so it
+// would have caught that drift.
+func TestRevokeGrant_MatchesRealConsentSubjectKey(t *testing.T) {
+	store := grpcauth.NewFakeStore()
+	ctx := context.Background()
+
+	const rawSub = "operator-a"
+	require.NoError(t, store.Persist(ctx, rawSub, "audience_score_system", grpcauth.TokenMaterial{RefreshToken: "rt", ObtainedAt: time.Now()}))
+
+	status, err := store.Status(ctx, grantSubjectKey(testIssuer, rawSub), "audience_score_system")
+	require.NoError(t, err, "grantSubjectKey must resolve to the same key the real consent flow persists under")
+	assert.Equal(t, grpcauth.GrantStatusActive, status)
+
+	require.NoError(t, revokeGrant(ctx, store, testIssuer, rawSub, "audience_score_system", discardLogger()))
+
+	status, err = store.Status(ctx, rawSub, "audience_score_system")
+	require.NoError(t, err)
+	assert.Equal(t, grpcauth.GrantStatusRevoked, status, "revokeGrant must revoke the row the real consent flow actually wrote")
 }

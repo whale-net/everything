@@ -7,22 +7,29 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/whale-net/everything/krill/api/handlers"
+	"github.com/whale-net/everything/krill/forge"
 	"github.com/whale-net/everything/krill/slice"
 	"github.com/whale-net/everything/krill/store"
 )
 
 // setupRoutes registers krill's HTTP surface. /healthz, `init` (FR3, issue
-// #2489), and the four scoped-slice query endpoints (FR5-FR9, issue #2491)
-// are ungated; every entity create/attach endpoint below (issue #2490,
-// FR1/FR2/FR4) is wrapped with handlers.RequireSession (gate.go) -- no
-// write path is reachable without a session minted by `init`. Read paths
-// never require a session (root plan issue #2485). Amend (FR12), import
-// (FR16), and pointer-issue create (FR20) are later tasks' routes, not
-// added here.
-func setupRoutes(mux *http.ServeMux, pool *pgxpool.Pool) {
+// #2489), the four scoped-slice query endpoints (FR5-FR9, issue #2491),
+// and the history endpoints below (FR11, issue #2493) are ungated; every
+// entity create/attach endpoint (issue #2490, FR1/FR2/FR4), the two amend
+// endpoints below (FR12, issue #2493), and the pointer-artifact create
+// endpoint (issue #2496, FR20) are wrapped with handlers.RequireSession
+// (gate.go) -- no write path is reachable without a session minted by
+// `init`. Read paths never require a session (root plan issue #2485).
+// Import (FR16) is a later task's route, not added here.
+//
+// githubToken is KRILL_GITHUB_TOKEN (see main.go's config/../ENV.md) --
+// threaded through to //krill/forge.GitHubClient, the one dependency
+// POST /pointer-artifacts has that no other route in this binary does.
+func setupRoutes(mux *http.ServeMux, pool *pgxpool.Pool, githubToken string) {
 	sessions := store.NewSessionStore(pool)
 	entities := store.New(pool)
 	gate := handlers.RequireSession(sessions)
+	forgeClient := &forge.GitHubClient{Token: githubToken}
 
 	mux.HandleFunc("/healthz", handleHealthz(pool))
 	mux.HandleFunc("POST /sessions/init", handlers.InitSessionHandler(sessions))
@@ -32,6 +39,15 @@ func setupRoutes(mux *http.ServeMux, pool *pgxpool.Pool) {
 	mux.Handle("POST /features", gate(handlers.CreateFeatureHandler(entities.Features())))
 	mux.Handle("POST /requirements", gate(handlers.CreateRequirementHandler(entities.Requirements())))
 	mux.Handle("POST /load-bearing-decisions", gate(handlers.AttachLoadBearingDecisionHandler(entities.Decisions())))
+	mux.Handle("POST /pointer-artifacts", gate(handlers.CreatePointerArtifactHandler(entities.Products(), entities.Scopes(), entities.PointerArtifacts(), forgeClient)))
+
+	mux.Handle("POST /requirements/{id}/amend", gate(handlers.AmendRequirementHandler(entities.Amend())))
+	mux.Handle("POST /load-bearing-decisions/{id}/amend", gate(handlers.AmendLoadBearingDecisionHandler(entities.Amend())))
+
+	mux.HandleFunc("GET /requirements/{id}/as-of", handlers.GetRequirementAsOfHandler(entities.History()))
+	mux.HandleFunc("GET /requirements/{id}/versions", handlers.ListRequirementVersionsHandler(entities.History()))
+	mux.HandleFunc("GET /load-bearing-decisions/{id}/as-of", handlers.GetLoadBearingDecisionAsOfHandler(entities.History()))
+	mux.HandleFunc("GET /load-bearing-decisions/{id}/versions", handlers.ListLoadBearingDecisionVersionsHandler(entities.History()))
 
 	querier := slice.NewQuerier(entities)
 	handlers.NewSlice(querier).Register(mux)

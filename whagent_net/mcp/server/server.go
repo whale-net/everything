@@ -27,7 +27,7 @@ var Implementation = &mcp.Implementation{
 // (auth.go) wired to place the caller's bearer token or resolved identity
 // onto every tool call's context -- either forwarded again, unchanged, to
 // `api` (the manual-token path), or resolved into a working credential at
-// tool-dispatch time via ../tools' DomainResolver/GrantSource seams (the
+// tool-dispatch time via ../tools' ScopeResolver/GrantSource seams (the
 // browser-OAuth2 path, issue #2430's FR7/FR8). Holds no state of its own
 // -- statelessness lives entirely in `api` and its store, never here.
 func New() *mcp.Server {

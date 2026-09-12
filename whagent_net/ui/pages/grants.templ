@@ -1,4 +1,4 @@
-// FR16/FR13 (issue #2432, plan #2421): the self-service per-domain grant
+// FR16/FR13 (issue #2432, plan #2421): the self-service per-scope grant
 // list and revoke page. GrantRow and grantsTable are the "shared render
 // shape" the issue calls for: a plain data type with no whagent_net-
 // specific fields, and a render function that takes only that type, so a
@@ -8,6 +8,7 @@
 package pages
 
 import (
+	"net/url"
 	"time"
 
 	"github.com/whale-net/everything/libs/go/htmxui"
@@ -15,8 +16,8 @@ import (
 )
 
 // GrantRow is one rendered row of a delegated-grant list (FR13's shared
-// render shape). No whagent_net-specific fields: Domain is the raw
-// grantkey.ForDomain-derived string, Status is a plain display string
+// render shape). No whagent_net-specific fields: Scope is the raw
+// grantkey.ForScope-derived string, Status is a plain display string
 // derived from grpcauth.GrantStatus (its own String() value, e.g.
 // "active"/"needs_reauth"/"revoked", or "unknown" for the defensive
 // index-without-a-store-row edge case -- see ../handlers_grants.go's
@@ -24,7 +25,7 @@ import (
 // (and any future htmxui extraction) carries no grpcauth import.
 type GrantRow struct {
 	OperatorLabel string
-	Domain        string
+	Scope        string
 	Status        string
 	GrantedAt     time.Time
 
@@ -70,7 +71,25 @@ func statusLabel(status string) string {
 type GrantsData struct {
 	Layout components.LayoutData
 	Rows   []GrantRow
-	Error  string
+
+	// AvailableScopes lists every configured grant-scope
+	// (../handlers_grants.go's availableScopesForGrant) the signed-in
+	// operator does not already hold an active grant for. Rendered as a
+	// list of clickable /mcp/consent?scope=<s> links, so starting a new
+	// consent never requires hand-typing that URL (handlers_consent.go's
+	// standalone entry point). Sorted, deduplicated -- see
+	// AgentDefinitionStore.ListScopes' contract. Empty renders no section
+	// at all.
+	AvailableScopes []string
+
+	Error string
+}
+
+// scopeConsentURL builds the standalone consent route's URL for scope
+// (handlers_consent.go's GET /mcp/consent?scope=<s>), URL-encoding scope
+// rather than concatenating it raw.
+func scopeConsentURL(scope string) templ.SafeURL {
+	return templ.URL("/mcp/consent?" + url.Values{"scope": {scope}}.Encode())
 }
 
 // grantsTable renders rows -- and only rows -- per FR13's shared-render-
@@ -80,7 +99,7 @@ type GrantsData struct {
 // not-yet-revoked row gets its own inline revoke control, reusing
 // libs/go/htmxui.Confirm for the confirmation step (FR17's "do not add a
 // new confirm component here") wrapped in a per-row <form> posting that
-// row's domain -- plus, when the row carries one (row.SubjectSub, the
+// row's scope -- plus, when the row carries one (row.SubjectSub, the
 // admin page's case), the row's own subject_sub, since an admin revoke
 // must name a target operator that is never the caller's own session
 // subject (../handlers_grants_admin.go's handleGrantsAdminRevoke). The
@@ -91,13 +110,13 @@ type GrantsData struct {
 // left to revoke).
 templ grantsTable(rows []GrantRow, revokeAction string) {
 	if len(rows) == 0 {
-		<p class="opacity-70">You have not granted access to any domain yet.</p>
+		<p class="opacity-70">You have not granted access to any scope yet.</p>
 	} else {
 		<table class="table">
 			<thead>
 				<tr>
 					<th>Operator</th>
-					<th>Domain</th>
+					<th>Scope</th>
 					<th>Status</th>
 					<th></th>
 				</tr>
@@ -106,18 +125,18 @@ templ grantsTable(rows []GrantRow, revokeAction string) {
 				for _, row := range rows {
 					<tr>
 						<td>{ row.OperatorLabel }</td>
-						<td>{ row.Domain }</td>
+						<td>{ row.Scope }</td>
 						<td>{ statusLabel(row.Status) }</td>
 						<td>
 							if row.Status != statusRevoked {
 								<form method="post" action={ templ.URL(revokeAction) }>
-									<input type="hidden" name="domain" value={ row.Domain }/>
+									<input type="hidden" name="scope" value={ row.Scope }/>
 									if row.SubjectSub != "" {
 										<input type="hidden" name="subject_sub" value={ row.SubjectSub }/>
 									}
 									@htmxui.Confirm(htmxui.ConfirmProps{
 										Intent:      htmxui.ConfirmDestructive,
-										Summary:     "Revoking " + row.Domain + " takes effect immediately -- you will need to consent again to use it.",
+										Summary:     "Revoking " + row.Scope + " takes effect immediately -- you will need to consent again to use it.",
 										SubmitLabel: "Revoke",
 									}, templ.Attributes{})
 								</form>
@@ -130,7 +149,7 @@ templ grantsTable(rows []GrantRow, revokeAction string) {
 	}
 }
 
-// Grants is FR16's self-service per-domain grant list + revoke page (GET
+// Grants is FR16's self-service per-scope grant list + revoke page (GET
 // /grants, issue #2432): lists only the signed-in operator's own grants
 // (../handlers_grants.go's handleGrants takes the subject from the
 // session, never from a query parameter or form field).
@@ -141,5 +160,16 @@ templ Grants(data GrantsData) {
 			<div role="alert" class="alert alert-error mb-4">{ data.Error }</div>
 		}
 		@grantsTable(data.Rows, "/grants/revoke")
+		if len(data.AvailableScopes) > 0 {
+			<h2 class="text-xl font-bold text-base-content mt-8 mb-2">Available grants</h2>
+			<p class="opacity-70 mb-4">Scopes configured on this deployment you have not yet granted access to.</p>
+			<ul class="flex flex-col gap-2">
+				for _, scope := range data.AvailableScopes {
+					<li>
+						<a class="btn btn-sm btn-primary" href={ scopeConsentURL(scope) }>Grant { scope }</a>
+					</li>
+				}
+			</ul>
+		}
 	}
 }

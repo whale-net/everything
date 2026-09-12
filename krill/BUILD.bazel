@@ -12,13 +12,14 @@ filegroup(
 # whagent_net/BUILD.bazel / audience_score_system/BUILD.bazel's shape.
 # domain "krill" + chart_name "krill" produces the "helm-krill-krill" chart
 # identity. `migrate` (job) + `api` (external HTTP: /healthz + DB
-# connectivity check only, no spec endpoints yet -- issue #2487). Later M1
-# tasks append `//krill/mcp:mcp_metadata` once that binary exists.
+# connectivity check only, no spec endpoints yet -- issue #2487) + `mcp`
+# (external HTTP: the FR10/NFR1 spec surface at /mcp/spec, issue #2494).
 release_helm_chart(
     name = "krill_chart",
     apps = [
         "//krill/migrate:migrate_metadata",
         "//krill/api:api_metadata",
+        "//krill/mcp:mcp_metadata",
     ],
     chart_name = "krill",
     domain = "krill",

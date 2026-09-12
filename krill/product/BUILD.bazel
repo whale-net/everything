@@ -1,0 +1,13 @@
+"""krill's split-out PRODUCT.md sections (Current state, Capability map,
+Roadmap) -- see ../PRODUCT.md's index table. Exposed as a filegroup,
+mirroring whagent_net/product/BUILD.bazel's own `docs` filegroup, so a
+consumer outside this domain (krill/conformance's self-hosting round-trip
+test, issue #2497) can depend on these files as Bazel `data` -- the real
+committed files, not a hand-copied fixture.
+"""
+
+filegroup(
+    name = "docs",
+    srcs = glob(["*.md"]),
+    visibility = ["//visibility:public"],
+)

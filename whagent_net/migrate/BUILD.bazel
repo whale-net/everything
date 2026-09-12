@@ -9,7 +9,6 @@ go_library(
     deps = [
         "//libs/go/migrate",
         "//whagent_net/migrate/schema",
-        "//whagent_net/migrate/seed",
     ],
 )
 

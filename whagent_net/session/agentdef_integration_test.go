@@ -17,7 +17,7 @@ func strPtr(s string) *string { return &s }
 func newTestAgentDefinition(agentID string, version int) *session.AgentDefinition {
 	return &session.AgentDefinition{
 		AgentID:  agentID,
-		Domain:   "test-domain",
+		Scope:    strPtr("test-scope"),
 		Version:  version,
 		Model:    strPtr("test-model"),
 		ToolSet:  []session.ToolServerRef{{ServerURL: "https://mcp.example.com/research"}},
@@ -68,26 +68,27 @@ func TestAgentDefinitionStore_Upsert_GetLatest_GetVersion_RoundTrip(t *testing.T
 	assert.Equal(t, "test-model-replaced", *reread.Model)
 }
 
-// TestAgentDefinitionStore_Domain_RoundTripsThroughGetVersion proves an
-// AgentDefinition written with a Domain (issue #2424 FR1) round-trips
+// TestAgentDefinitionStore_Scope_RoundTripsThroughGetVersion proves an
+// AgentDefinition written with a Scope (issue #2424 FR1) round-trips
 // through GetVersion unchanged, and that CurrentAssignment -> GetVersion
 // (the exact path worker/activities.go's ResolveAgentDefinition walks to
-// find the grant key's input, FR4) resolves a non-empty Domain.
-func TestAgentDefinitionStore_Domain_RoundTripsThroughGetVersion(t *testing.T) {
+// find the grant key's input, FR4) resolves a non-empty Scope.
+func TestAgentDefinitionStore_Scope_RoundTripsThroughGetVersion(t *testing.T) {
 	ctx := context.Background()
 	s, _ := newStore(t)
 	sess := createTestSession(t, ctx, s)
 
-	def := newTestAgentDefinition("domain-agent", 1)
-	def.Domain = "audience_score_system"
+	def := newTestAgentDefinition("scope-agent", 1)
+	def.Scope = strPtr("audience_score_system")
 	require.NoError(t, s.AgentDefinitions().Upsert(ctx, def))
 
-	got, err := s.AgentDefinitions().GetVersion(ctx, "domain-agent", 1)
+	got, err := s.AgentDefinitions().GetVersion(ctx, "scope-agent", 1)
 	require.NoError(t, err)
 	require.NotNil(t, got)
-	assert.Equal(t, "audience_score_system", got.Domain)
+	require.NotNil(t, got.Scope)
+	assert.Equal(t, "audience_score_system", *got.Scope)
 
-	require.NoError(t, s.AgentDefinitions().AssignToSession(ctx, sess.SessionID, "domain-agent", 1))
+	require.NoError(t, s.AgentDefinitions().AssignToSession(ctx, sess.SessionID, "scope-agent", 1))
 	assignment, err := s.AgentDefinitions().CurrentAssignment(ctx, sess.SessionID)
 	require.NoError(t, err)
 	require.NotNil(t, assignment)
@@ -95,8 +96,54 @@ func TestAgentDefinitionStore_Domain_RoundTripsThroughGetVersion(t *testing.T) {
 	resolved, err := s.AgentDefinitions().GetVersion(ctx, assignment.AgentID, assignment.AgentVersion)
 	require.NoError(t, err)
 	require.NotNil(t, resolved)
-	assert.NotEmpty(t, resolved.Domain, "CurrentAssignment -> GetVersion must resolve a non-empty Domain")
-	assert.Equal(t, "audience_score_system", resolved.Domain)
+	require.NotNil(t, resolved.Scope, "CurrentAssignment -> GetVersion must resolve a non-nil Scope")
+	assert.Equal(t, "audience_score_system", *resolved.Scope)
+}
+
+// TestAgentDefinitionStore_NilScope_RoundTripsThroughGetVersion proves an
+// AgentDefinition written with no Scope at all round-trips as nil, not as
+// an empty string or an error -- the "no delegated-grant scoping" case
+// this field's nullability exists for.
+func TestAgentDefinitionStore_NilScope_RoundTripsThroughGetVersion(t *testing.T) {
+	ctx := context.Background()
+	s, _ := newStore(t)
+
+	def := newTestAgentDefinition("scopeless-agent", 1)
+	def.Scope = nil
+	require.NoError(t, s.AgentDefinitions().Upsert(ctx, def))
+
+	got, err := s.AgentDefinitions().GetVersion(ctx, "scopeless-agent", 1)
+	require.NoError(t, err)
+	require.NotNil(t, got)
+	assert.Nil(t, got.Scope)
+}
+
+// TestAgentDefinitionStore_ListScopes_DistinctSortedExcludingNull proves
+// ListScopes returns every distinct non-null Scope, sorted alphabetically,
+// deduplicated across agent_id/version, with no null-scope row surfaced.
+func TestAgentDefinitionStore_ListScopes_DistinctSortedExcludingNull(t *testing.T) {
+	ctx := context.Background()
+	s, _ := newStore(t)
+
+	manman := newTestAgentDefinition("agent-manman", 1)
+	manman.Scope = strPtr("manmanv2")
+	require.NoError(t, s.AgentDefinitions().Upsert(ctx, manman))
+
+	ass1 := newTestAgentDefinition("agent-ass", 1)
+	ass1.Scope = strPtr("audience_score_system")
+	require.NoError(t, s.AgentDefinitions().Upsert(ctx, ass1))
+
+	ass2 := newTestAgentDefinition("agent-ass-2", 1)
+	ass2.Scope = strPtr("audience_score_system")
+	require.NoError(t, s.AgentDefinitions().Upsert(ctx, ass2))
+
+	scopeless := newTestAgentDefinition("agent-scopeless", 1)
+	scopeless.Scope = nil
+	require.NoError(t, s.AgentDefinitions().Upsert(ctx, scopeless))
+
+	scopes, err := s.AgentDefinitions().ListScopes(ctx)
+	require.NoError(t, err)
+	assert.Equal(t, []string{"audience_score_system", "manmanv2"}, scopes)
 }
 
 // TestAgentDefinitionStore_GetLatest_UnknownAgent_ReturnsNilNotError proves

@@ -6,6 +6,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/a-h/templ"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -30,7 +31,7 @@ func TestGrants_RendersRowsFromPlainData(t *testing.T) {
 	granted := time.Date(2026, 1, 2, 0, 0, 0, 0, time.UTC)
 	body := renderGrants(t, GrantsData{
 		Rows: []GrantRow{
-			{OperatorLabel: "alice", Domain: "audience_score_system", Status: "active", GrantedAt: granted},
+			{OperatorLabel: "alice", Scope: "audience_score_system", Status: "active", GrantedAt: granted},
 		},
 	})
 
@@ -38,7 +39,7 @@ func TestGrants_RendersRowsFromPlainData(t *testing.T) {
 	assert.Contains(t, body, "audience_score_system")
 	assert.Contains(t, body, "Active")
 	assert.Contains(t, body, `action="/grants/revoke"`)
-	assert.Contains(t, body, `name="domain"`)
+	assert.Contains(t, body, `name="scope"`)
 	assert.Contains(t, body, `value="audience_score_system"`)
 }
 
@@ -47,7 +48,7 @@ func TestGrants_RendersRowsFromPlainData(t *testing.T) {
 func TestGrants_RevokedRowHasNoRevokeControl(t *testing.T) {
 	body := renderGrants(t, GrantsData{
 		Rows: []GrantRow{
-			{OperatorLabel: "alice", Domain: "manmanv2", Status: "revoked", GrantedAt: time.Now()},
+			{OperatorLabel: "alice", Scope: "manmanv2", Status: "revoked", GrantedAt: time.Now()},
 		},
 	})
 
@@ -58,7 +59,7 @@ func TestGrants_RevokedRowHasNoRevokeControl(t *testing.T) {
 // TestGrants_EmptyRowsRendersPlaceholder guards the zero-grants case.
 func TestGrants_EmptyRowsRendersPlaceholder(t *testing.T) {
 	body := renderGrants(t, GrantsData{})
-	assert.Contains(t, body, "You have not granted access to any domain yet.")
+	assert.Contains(t, body, "You have not granted access to any scope yet.")
 }
 
 // TestGrants_RendersPageError guards GrantsData.Error's rendering (the
@@ -66,6 +67,31 @@ func TestGrants_EmptyRowsRendersPlaceholder(t *testing.T) {
 func TestGrants_RendersPageError(t *testing.T) {
 	body := renderGrants(t, GrantsData{Error: "Delegated-grant management is not configured on this deployment."})
 	assert.Contains(t, body, "Delegated-grant management is not configured on this deployment.")
+}
+
+// TestGrants_RendersAvailableScopesAsClickableLinks proves an available
+// scope renders as a link to the standalone consent route -- so starting
+// a new consent never requires hand-typing /mcp/consent?scope=<s>.
+func TestGrants_RendersAvailableScopesAsClickableLinks(t *testing.T) {
+	body := renderGrants(t, GrantsData{AvailableScopes: []string{"audience_score_system"}})
+
+	assert.Contains(t, body, "Available grants")
+	assert.Contains(t, body, `href="/mcp/consent?scope=audience_score_system"`)
+	assert.Contains(t, body, "Grant audience_score_system")
+}
+
+// TestGrants_NoAvailableScopesOmitsSection guards the common case (nothing
+// left to grant, or delegated-grant unconfigured): no "Available grants"
+// section renders at all.
+func TestGrants_NoAvailableScopesOmitsSection(t *testing.T) {
+	body := renderGrants(t, GrantsData{})
+	assert.NotContains(t, body, "Available grants")
+}
+
+// TestScopeConsentURL_EncodesScope proves the consent link URL-encodes its
+// scope rather than concatenating it raw.
+func TestScopeConsentURL_EncodesScope(t *testing.T) {
+	assert.Equal(t, templ.SafeURL("/mcp/consent?scope=a+b"), scopeConsentURL("a b"))
 }
 
 // TestStatusLabel_MapsKnownStatuses guards statusLabel's mapping without

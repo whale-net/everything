@@ -74,6 +74,19 @@ service SessionService {
   // rule as GetSession (any authenticated caller) -- see issue #2238.
   rpc GetSessionUsage(GetSessionUsageRequest) returns (GetSessionUsageResponse);
 
+  // ListAgentDefinitionScopes returns every distinct grant-scope
+  // configured across all agent_definition rows
+  // (whagent_net/session.AgentDefinition.Scope, issue #2424 FR1/FR4) --
+  // the full set of scopes an operator could ever need to consent to via
+  // the delegated-grant consent flow (`ui`'s GET /mcp/consent?scope=<s>,
+  // issue #2428), not scoped to any one agent_id, version, or session.
+  // Backs `ui`'s self-service /grants page (issue #2432) offering a
+  // clickable consent link per scope instead of requiring a hand-typed
+  // URL. Any authenticated caller may call this -- scope names carry no
+  // secret material, mirroring the read-any rule GetSession/ListSessions
+  // already establish (#2237).
+  rpc ListAgentDefinitionScopes(ListAgentDefinitionScopesRequest) returns (ListAgentDefinitionScopesResponse);
+
   // StreamEvents is FR5/C17's server-streaming bridge over the
   // `whagent/events` exchange (NFR4, LB7, issue #2239): a programmatic
   // client follows a session's events live without ever holding RabbitMQ
@@ -297,6 +310,14 @@ message GetSessionUsageRequest {
 
 message GetSessionUsageResponse {
   SessionUsage usage = 1;
+}
+
+message ListAgentDefinitionScopesRequest {}
+
+message ListAgentDefinitionScopesResponse {
+  // Sorted alphabetically, deduplicated -- whagent_net/session.
+  // AgentDefinitionStore.ListScopes' contract.
+  repeated string scopes = 1;
 }
 
 message StreamEventsRequest {

@@ -73,10 +73,10 @@ func TestHandleGrantsAdmin_RendersPageStub(t *testing.T) {
 	require.Contains(t, w.Body.String(), "All operator grants")
 }
 
-// TestHandleGrantsAdminRevoke_RequiresDomain is a scaffold-level sanity
-// check: a POST missing the domain field is rejected with 400 before any
+// TestHandleGrantsAdminRevoke_RequiresScope is a scaffold-level sanity
+// check: a POST missing the scope field is rejected with 400 before any
 // store call exists to make.
-func TestHandleGrantsAdminRevoke_RequiresDomain(t *testing.T) {
+func TestHandleGrantsAdminRevoke_RequiresScope(t *testing.T) {
 	app := &App{auth: devModeAuthenticator(t)}
 	wrapped := app.auth.RequireAuthFunc(app.handleGrantsAdminRevoke)
 
@@ -96,7 +96,7 @@ func TestHandleGrantsAdminRevoke_RequiresSubjectSub(t *testing.T) {
 	app := &App{auth: devModeAuthenticator(t)}
 	wrapped := app.auth.RequireAuthFunc(app.handleGrantsAdminRevoke)
 
-	req := httptest.NewRequest(http.MethodPost, "/admin/grants/revoke", strings.NewReader("domain=audience_score_system"))
+	req := httptest.NewRequest(http.MethodPost, "/admin/grants/revoke", strings.NewReader("scope=audience_score_system"))
 	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 	w := httptest.NewRecorder()
 	wrapped(w, req)
@@ -112,7 +112,7 @@ func TestHandleGrantsAdminRevoke_UnconfiguredStoreIs503(t *testing.T) {
 	app := &App{auth: devModeAuthenticator(t)}
 	wrapped := app.auth.RequireAuthFunc(app.handleGrantsAdminRevoke)
 
-	req := httptest.NewRequest(http.MethodPost, "/admin/grants/revoke", strings.NewReader("domain=audience_score_system&subject_sub=operator-a"))
+	req := httptest.NewRequest(http.MethodPost, "/admin/grants/revoke", strings.NewReader("scope=audience_score_system&subject_sub=operator-a"))
 	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 	w := httptest.NewRecorder()
 	wrapped(w, req)
@@ -125,8 +125,7 @@ func TestHandleGrantsAdminRevoke_UnconfiguredStoreIs503(t *testing.T) {
 // back to /admin/grants.
 func TestHandleGrantsAdminRevoke_RedirectsOnValidFields(t *testing.T) {
 	store := grpcauth.NewFakeStore()
-	subjectKey, err := grantSubjectKey(testIssuer, "operator-a")
-	require.NoError(t, err)
+	subjectKey := grantSubjectKey(testIssuer, "operator-a")
 	require.NoError(t, store.Persist(context.Background(), subjectKey, "audience_score_system", grpcauth.TokenMaterial{RefreshToken: "rt", ObtainedAt: time.Now()}))
 
 	app := &App{
@@ -136,7 +135,7 @@ func TestHandleGrantsAdminRevoke_RedirectsOnValidFields(t *testing.T) {
 	}
 	wrapped := app.auth.RequireAuthFunc(app.handleGrantsAdminRevoke)
 
-	req := httptest.NewRequest(http.MethodPost, "/admin/grants/revoke", strings.NewReader("domain=audience_score_system&subject_sub=operator-a"))
+	req := httptest.NewRequest(http.MethodPost, "/admin/grants/revoke", strings.NewReader("scope=audience_score_system&subject_sub=operator-a"))
 	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 	w := httptest.NewRecorder()
 	wrapped(w, req)
@@ -360,7 +359,7 @@ func TestHandleGrantsAdminRevoke_NonAdminForbidden(t *testing.T) {
 	}
 	wrapped := app.auth.RequireAuthFunc(app.handleGrantsAdminRevoke)
 
-	req := httptest.NewRequest(http.MethodPost, "/admin/grants/revoke", strings.NewReader("domain=audience_score_system&subject_sub=operator-a"))
+	req := httptest.NewRequest(http.MethodPost, "/admin/grants/revoke", strings.NewReader("scope=audience_score_system&subject_sub=operator-a"))
 	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 	req = requestWithForgedSession(t, req, "non-admin-operator", buildFakeAccessToken(t, []string{"some-other-role"}))
 	w := httptest.NewRecorder()
@@ -378,7 +377,7 @@ func TestHandleGrantsAdminRevoke_AdminPassesGate(t *testing.T) {
 	app := &App{auth: newGrantsAdminGateTestAuthenticator(t), adminRole: grantsAdminTestRole}
 	wrapped := app.auth.RequireAuthFunc(app.handleGrantsAdminRevoke)
 
-	req := httptest.NewRequest(http.MethodPost, "/admin/grants/revoke", strings.NewReader("domain=audience_score_system&subject_sub=operator-a"))
+	req := httptest.NewRequest(http.MethodPost, "/admin/grants/revoke", strings.NewReader("scope=audience_score_system&subject_sub=operator-a"))
 	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 	req = requestWithForgedSession(t, req, "admin-operator", buildFakeAccessToken(t, []string{grantsAdminTestRole}))
 	w := httptest.NewRecorder()
@@ -407,10 +406,8 @@ func TestBuildAdminGrantRows_MultipleOperators(t *testing.T) {
 	store := grpcauth.NewFakeStore()
 	ctx := context.Background()
 
-	aKey, err := grantSubjectKey(testIssuer, "operator-a")
-	require.NoError(t, err)
-	bKey, err := grantSubjectKey(testIssuer, "operator-b")
-	require.NoError(t, err)
+	aKey := grantSubjectKey(testIssuer, "operator-a")
+	bKey := grantSubjectKey(testIssuer, "operator-b")
 	require.NoError(t, store.Persist(ctx, aKey, "audience_score_system", grpcauth.TokenMaterial{RefreshToken: "rt", ObtainedAt: time.Now()}))
 	require.NoError(t, store.Persist(ctx, bKey, "manmanv2", grpcauth.TokenMaterial{RefreshToken: "rt", ObtainedAt: time.Now()}))
 
@@ -425,7 +422,7 @@ func TestBuildAdminGrantRows_MultipleOperators(t *testing.T) {
 
 	byUsername := map[string]string{}
 	for _, row := range rows {
-		byUsername[row.OperatorLabel] = row.Domain
+		byUsername[row.OperatorLabel] = row.Scope
 	}
 	assert.Equal(t, "audience_score_system", byUsername["alice"])
 	assert.Equal(t, "manmanv2", byUsername["bob"])
@@ -439,8 +436,7 @@ func TestBuildAdminGrantRows_StatusIsLiveNeverFromIndex(t *testing.T) {
 	store := grpcauth.NewFakeStore()
 	ctx := context.Background()
 
-	subjectKey, err := grantSubjectKey(testIssuer, "operator-a")
-	require.NoError(t, err)
+	subjectKey := grantSubjectKey(testIssuer, "operator-a")
 	require.NoError(t, store.Persist(ctx, subjectKey, "manmanv2", grpcauth.TokenMaterial{RefreshToken: "rt", ObtainedAt: time.Now()}))
 
 	index := &fakeGrantIndexAll{entries: []grantindex.Entry{
@@ -470,10 +466,8 @@ func TestRevokeGrantAsAdmin_FR17ScopedToExactlyOnePair(t *testing.T) {
 	store := grpcauth.NewFakeStore()
 	ctx := context.Background()
 
-	aKey, err := grantSubjectKey(testIssuer, "operator-a")
-	require.NoError(t, err)
-	bKey, err := grantSubjectKey(testIssuer, "operator-b")
-	require.NoError(t, err)
+	aKey := grantSubjectKey(testIssuer, "operator-a")
+	bKey := grantSubjectKey(testIssuer, "operator-b")
 	require.NoError(t, store.Persist(ctx, aKey, "audience_score_system", grpcauth.TokenMaterial{RefreshToken: "rt", ObtainedAt: time.Now()}))
 	require.NoError(t, store.Persist(ctx, aKey, "manmanv2", grpcauth.TokenMaterial{RefreshToken: "rt", ObtainedAt: time.Now()}))
 	require.NoError(t, store.Persist(ctx, bKey, "audience_score_system", grpcauth.TokenMaterial{RefreshToken: "rt", ObtainedAt: time.Now()}))
@@ -501,11 +495,10 @@ func TestRevokeGrantAsAdmin_NFR7EffectiveWithoutRestart(t *testing.T) {
 	store := grpcauth.NewFakeStore()
 	ctx := context.Background()
 
-	subjectKey, err := grantSubjectKey(testIssuer, "operator-a")
-	require.NoError(t, err)
+	subjectKey := grantSubjectKey(testIssuer, "operator-a")
 	require.NoError(t, store.Persist(ctx, subjectKey, "audience_score_system", grpcauth.TokenMaterial{RefreshToken: "rt", ObtainedAt: time.Now()}))
 
-	_, err = store.TokenMaterial(ctx, subjectKey, "audience_score_system")
+	_, err := store.TokenMaterial(ctx, subjectKey, "audience_score_system")
 	require.NoError(t, err)
 
 	require.NoError(t, revokeGrantAsAdmin(ctx, store, testIssuer, "admin-operator", "operator-a", "audience_score_system", discardLogger()))
@@ -524,8 +517,7 @@ func TestRevokeGrantAsAdmin_LogsExactlyOneINFORecordWithAdminAndTarget(t *testin
 	store := grpcauth.NewFakeStore()
 	ctx := context.Background()
 
-	subjectKey, err := grantSubjectKey(testIssuer, "operator-a")
-	require.NoError(t, err)
+	subjectKey := grantSubjectKey(testIssuer, "operator-a")
 	require.NoError(t, store.Persist(ctx, subjectKey, "audience_score_system", grpcauth.TokenMaterial{RefreshToken: "rt", ObtainedAt: time.Now()}))
 
 	var buf bytes.Buffer

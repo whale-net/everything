@@ -1,30 +1,36 @@
 # krill — Architecture
 
 This document covers what exists after M1's domain scaffolding (issue
-#2487), spec entity model (issue #2488), and scoped-slice query (issue
-#2491). See [`PRODUCT.md`](PRODUCT.md) for vision, personas, load-bearing
-decisions, and the milestone roadmap that drives what gets built next.
+#2487), spec entity model (issue #2488), scoped-slice query (issue
+#2491), the markdown importer (issue #2492), the MCP spec surface (issue
+#2494), and the doc renderer (issue #2495). See
+[`PRODUCT.md`](PRODUCT.md) for vision, personas, load-bearing decisions,
+and the milestone roadmap that drives what gets built next.
 
 ## Component map (as of this task)
 
 ```
                  ┌───────────┐
    Postgres  ◄───│  migrate  │  job: applies schema, seeds `scope` (LB1/NFR2)
-   (scope)        └───────────┘
-        ▲
-        │
-   ┌────┴────┐
-   │   api   │  external-api: /healthz, /sessions/init, the M1 entity
-   └─────────┘  write API (issue #2490 — create/attach only), and the
-                FR5-FR9 scoped-slice query surface (issue #2491, read-only)
+   (scope)   ▲    └───────────┘
+        │    │
+   ┌────┴────┐    ┌───────────┐
+   │   api   │    │    mcp    │  external-api: the FR10/NFR1 spec surface --
+   └─────────┘    └───────────┘  /mcp/spec, the same FR5-FR9 slice query as
+        ▲              ▲         `api`'s /slices/... routes, over MCP
+        │              │
+   external-api: /healthz, /sessions/init, the M1 entity write API (issue
+   #2490 — create/attach only), and the FR5-FR9 scoped-slice query surface
+   (issue #2491, read-only, also reachable via `api`'s own HTTP routes)
 ```
 
-`migrate` and `api` each get their own Postgres connection
+`migrate`, `api`, and `mcp` each get their own Postgres connection
 (`PG_DATABASE_URL`, `//libs/go/db` / `//libs/go/migrate` — see `ENV.md`).
-There is no `mcp` binary yet; `krill/plugin/` exists as a placeholder
-directory for its future Claude Code plugin entries (see README.md
-"Claude Code plugin"), and `//krill:krill_chart` only bundles `migrate`
-and `api` today.
+`krill/plugin/` now carries `mcp`'s Claude Code plugin entries (`.mcp.json`
+/ `mcp_config.json`, issue #2494) rather than being a placeholder, plus a
+companion `plugin/data/` "-data" plugin for direct Postgres access to the
+same database (see README.md "Claude Code plugin"), and
+`//krill:krill_chart` bundles all three binaries.
 
 `krill/store` (issue #2488) is the pgx-based repository over migration
 002's spec tables — a library, not a binary, so it does not appear in the
@@ -102,7 +108,8 @@ Every one of those seven tables shares one shape:
 explicitly out of scope; `krill/store` ships `Create` and current-value
 reads only. The schema already supports the write path — every column a
 supersession needs is present — but no store method performs one yet.
-That is a later "amend" task.
+That is a later "amend" task (issue #2493, see "Amend and as-of history
+reads" below).
 
 ## Capability map entries, personas, and non-goals (issue #2488)
 
@@ -195,7 +202,7 @@ milestone never collide on a migration version:
 | `002` | Spec entities (Product/FeatureSet/Feature/FR/NFR/LoadBearingDecision/Persona/NonGoal) | #2488 |
 | `003` | `session` (FR3's `init` gate) | #2489 |
 | `004` | Milestone reference + association (FR17) | #2492 |
-| `005` | Pointer artifact (FR20) | Later M1 task |
+| `005` | Pointer artifact (FR20) | #2496 |
 
 ## `krill_session` and the two session ids (FR3, #2489)
 
@@ -254,8 +261,10 @@ issue #2493), import (FR16, issue #2492), and pointer-issue create (FR20,
 issue #2496) — and no read path, including FR21's live C3 query. The
 entity creates and LB attach are wired in `routes.go` as of issue #2490
 (`api/handlers/product.go`, `featureset.go`, `feature.go`,
-`requirement.go`, `decision.go`); amend/import/pointer-issue-create remain
-unwired until their own tasks land.
+`requirement.go`, `decision.go`); amend is wired as of this task (issue
+#2493, `api/handlers/amend.go` — see "Amend and as-of history reads"
+below); import/pointer-issue-create remain unwired until their own tasks
+land.
 
 ## The scoped-slice query (LB7, issue #2491)
 
@@ -298,6 +307,78 @@ cross-table joins (`ListRequirementsByFeatureSet`,
 need and no single entity's `*Store` owns on its own — one query per
 entity kind rather than one query per sibling, regardless of how many
 FeatureSets or Features exist beneath the requested id.
+
+## The MCP spec surface (FR10/NFR1, issue #2494)
+
+`krill/mcp` exposes the FR5-FR9 scoped-slice query (`krill/slice.Querier`,
+above) over MCP, so any MCP-capable harness (Claude Code today) reaches
+it with no krill-specific harness code -- FR10's own wording. It mirrors
+the two-front-door pattern already shipped in `audience_score_system/mcp`
+and `whagent_net/mcp` rather than inventing a third shape.
+
+**One mount point, four thin-wrapper tools.** `krill/mcp/tools/slice.go`
+registers `get_feature_set_slice` (FR5), `get_feature_slice` (FR6),
+`get_requirement_slice` (FR7), and `get_product_slice` (FR8) — each takes
+a single surrogate id (LB2) and calls the matching `slice.Querier` method
+directly, returning its `slice.Document` **unchanged**. This is LB7's
+"M1's MCP tool is a thin wrapper over it, not the thing itself" applied
+literally: no tool file defines its own output struct, so the MCP
+response and `api`'s own `GET /slices/...` HTTP response are the same
+Go value serialized twice, never two independently-maintained shapes that
+could silently drift. All four tools are mounted at `krill/mcp/server`'s
+`specMountPath` (`/mcp/spec`) — its own pre-filtered endpoint, following
+`whagent_net`'s `/mcp/readonly` vs `/mcp/ops` split
+(`whagent_net/ARCHITECTURE.md` "Domain-owned MCP servers and the tool
+contract"): the future work-axis surface (M4) gets its own mount
+(`/mcp/work`, not built yet) rather than every granularity ever landing on
+bare `/`. No write tool is registered on this endpoint in M1 — there is
+no `RegisterWrite` in `krill/mcp/server` at all, unlike
+`audience_score_system/mcp/server/registry.go`'s `RegisterRead`/
+`RegisterWrite` pair; write tools are out of scope until a later
+milestone actually needs one.
+
+**Two front doors, one mount point, authorized by persona (NFR1).**
+`krill/mcp/server/auth.go` (mcpauth/human) and `whagent_auth.go`
+(whagent-net/agent) are structured identically to
+`audience_score_system/mcp/server`'s own `auth.go`/`whagent_auth.go`
+split — `DualAuthHTTPHandler` routes each request to exactly one door by
+bearer-token *shape* (a whagent Claim is always a three-segment JWT; an
+mcpauth credential is always a 64-character hex string with no dots),
+never by trial-and-error against both verifiers. The one deliberate
+departure from that precedent: NFR1 authorizes by **persona** (Swarm
+Operator / Requirement Contributor / Agent — `krill/PRODUCT.md`'s
+Personas section), not by individual identity, so there is no
+`store.Person`/`PersonStore` anywhere in `krill/mcp` — `server.Persona`
+is the only identity-shaped value either middleware ever places on
+context. Today that resolution is fixed, not looked up: the mcpauth door
+always resolves `PersonaSwarmOperator`, the whagent door always resolves
+`PersonaAgent`. This is not an oversight — `PRODUCT.md` is explicit that
+"The Requirement Contributor exists in the model and in permissions from
+M1, but has no unmediated path into krill until C12 lands in M2", so
+there is no second human persona for M1's mcpauth door to distinguish,
+and a whagent Claim never carries a human profile to resolve further
+(`//libs/go/whagent`'s FR10). `krill/mcp/server/registry.go`'s
+`RegisterRead` requires only that *some* Persona resolved before a tool
+handler runs — none of the four FR5-FR8 tools is persona-sensitive, so
+there is no per-tool allow-list yet either; that is expected to change
+once the work-axis surface (M4) lands a persona-restricted tool.
+
+**No migration for the mcpauth door yet.** `libs/go/mcpauth.NewCredentialStore`
+preflights a `mcp_credential`-shaped table at boot, exactly like
+`audience_score_system`'s migration 006 and `whagent_net`'s migration
+004 — krill has not shipped the equivalent migration (no slot for it
+exists in the "Migration numbering (M1)" table above, since this task
+predates deciding where it lands). Rather than fail `mcp` at boot
+entirely (which would also break the agent door, which does not need
+Postgres at all), `krill/mcp/main.go` degrades: a failed
+`NewCredentialStore` call logs a warning and substitutes
+`rejectingCredentialStore`, a `CredentialStore` of last resort whose every
+method fails with the same opaque error `mcpauth.TokenVerifier` already
+produces for a revoked credential — so a caller presenting an
+mcpauth-shaped token against a not-yet-migrated deployment gets a clean
+401, never a panic on a nil interface. The agent door is unaffected
+either way. Adding that migration and a real mint/revoke flow for the
+mcpauth door is a follow-up, not part of this task's scope.
 
 ## The markdown importer and the delivery-axis association (FR16, FR17, issue #2492)
 
@@ -371,35 +452,321 @@ milestone its own roadmap section never defines" (the issue's own phrasing)
 resolves to: a document is well-formed on this axis exactly when every
 `M<n>` it mentions is also a milestone it defines.
 
+## Amend and as-of history reads (FR11, FR12, issue #2493)
+
+`krill/store/amend.go` (write) and `krill/store/history.go` (read) are the
+SCD2 supersession pair `AGENTS.md`'s "SCD2" section describes, applied to
+the two entity kinds this task scopes for amendment: `Requirement` (FR/NFR)
+and `LoadBearingDecision`. No new migration lands with this task — every
+column both files need was already present in migration 002 (see "What
+this task does not build" above, now resolved).
+
+**Amend (`AmendStore`, FR12) is the close-and-open write**, exactly the two
+statements `AGENTS.md` names:
+
+```sql
+UPDATE <table> SET valid_to = NOW() WHERE id = $1 AND valid_to IS NULL;
+INSERT INTO <table> (id, ..., scope_id) VALUES ($1, ..., $scope);
+```
+
+`AmendRequirement`/`AmendLoadBearingDecision` first `SELECT ... FOR UPDATE`
+the current row inside the same transaction as the close-and-open pair —
+this locks it for the transaction's duration so a concurrent amend of the
+same `id` cannot race the `UPDATE` or the `(id) WHERE valid_to IS NULL`
+partial unique index both amend and Create rely on. The new row carries
+the closed row's `id`, `scope_id`, parent id (`feature_id` /
+`feature_set_id`), `kind` (Requirement only), and `position` forward
+unchanged — an amend replaces `name`/`body` only, never a parent id
+(reparenting stays the separate, still-unbuilt operation store/decision.go's
+`Create` doc comment describes) and never `position` (so no sibling's
+rendered display number moves, per LB2). The surrogate `id` is never
+reissued (LB2) and no sibling row of any kind is read or written by an
+amend — only the one entity's own current-and-then-superseded rows.
+
+**History reads (`HistoryStore`, FR11)** are the read side, over the same
+two tables:
+
+- **As-of** (`GetRequirementAsOf` / `GetLoadBearingDecisionAsOf`) is
+  `AGENTS.md`'s "Value at time T" query verbatim:
+  `WHERE id = $1 AND valid_from <= $2 AND (valid_to IS NULL OR valid_to > $2)`.
+  Returns `ErrNotFound` if `asOf` predates the entity's first revision (or
+  `id` never existed) — there is no row satisfying the interval in that
+  case, never a zero-value success.
+- **Version list** (`ListRequirementVersions` /
+  `ListLoadBearingDecisionVersions`) returns every revision sharing `id`,
+  oldest first (`ORDER BY valid_from`) — every prior version's own
+  `ValidFrom`/`ValidTo` is exactly what a caller needs to see what
+  superseded what, and when.
+
+Neither `AmendStore` nor `HistoryStore` reads or writes anything beyond
+`requirement`/`load_bearing_decision` — no other entity kind (Product,
+FeatureSet, Feature, Persona, NonGoal) is amendable or as-of-readable in
+this milestone.
+
+**As-of slice assembly (`krill/slice`).** Every one of C3's four
+granularities (`GetFeatureSetSlice`, `GetFeatureSlice`,
+`GetRequirementSlice`, `GetProductSlice`, issue #2491) has an `*AsOf` twin
+(`GetFeatureSetSliceAsOf`, ..., `krill/slice/query.go`) that assembles the
+same `Document` shape as of a past `asOf` instead of today: every
+`Requirement`/`LoadBearingDecision` in the result is read through
+`HistoryStore` (the revision current at `asOf`, not the latest), and any
+entity whose first revision postdates `asOf` is dropped from the
+assembly rather than reported at its current contents. `Product`,
+`FeatureSet`, and `Feature` have no write path that supersedes a row yet
+(no other entity kind is amendable, per the paragraph above), so for
+those three "as of `asOf`" reduces to "had it been created by `asOf`"
+(`entityExistedAsOf`) — the current row is their only revision, and a
+top-level `*AsOf` call whose own entity postdates `asOf` returns
+`store.ErrNotFound`, exactly like `HistoryStore`'s own not-found
+semantics. `EntityRef.RevisionID` (`krill/slice/document.go`) is the
+"as-of revisions" metadata PRODUCT.md's LB7 describes — an `*AsOf`
+assembly's entities simply carry a historical row's `RevisionID` instead
+of today's current row's. No new HTTP route exists for this yet — the
+capability lives at the `slice.Querier` layer only, for a later task's
+surface to wire up if needed.
+
+**HTTP surface.** `krill/api/handlers/amend.go` wraps `AmendStore` behind
+`RequireSession` (`routes.go`: `POST /requirements/{id}/amend`,
+`POST /load-bearing-decisions/{id}/amend`) — one of this milestone's write
+paths, exactly like entity create/attach. `krill/api/handlers/history.go`
+wraps `HistoryStore` with no session gate at all (`GET
+/requirements/{id}/as-of?at=<RFC3339>`, `GET /requirements/{id}/versions`,
+and the `load-bearing-decisions` equivalents) — FR11 is a read path, and
+read paths never require `init` (root plan issue #2485), exactly like
+`krill/slice`'s four granularities.
+## The doc renderer (FR13-FR15, NFR3, issue #2495)
+
+`krill/render` (a library) and `krill/render/cmd` (its runnable entrypoint,
+`bazel run //krill/render/cmd:render -- --product krill --out krill/`) are
+the mirror image of `krill/importer`: they project a Product's current spec
+back out to `PRODUCT.md` + `product/*.md` (the same layout the importer
+reads), and never the other direction.
+
+**FR15/LB5 -- structurally one-way.** `render.Render` takes a `Source`
+interface (`render.go`) whose every method is a read (`GetProductSlice`,
+`ListPersonas`, `ListNonGoals`, `ListMilestoneRefs`,
+`ListMilestoneAssociations`) -- there is no write method anywhere in that
+interface, and `render.go` itself never imports anything capable of calling
+one. `store_source.go`'s `StoreSource` is the only file in the package that
+holds a `*store.Store` (which does expose `Create`); it exists solely to
+adapt one into a `Source`, so a caller wiring up `krill/render/cmd` can only
+ever hand `Render` the narrow read surface, never the concrete store.
+
+**FR14 -- citations are computed at render time, never stored.** `Cn`
+(a Feature) and `LBn` (a LoadBearingDecision) are both numbered by
+`numberByOrder`, a 1-based index over whatever order `krill/store`'s own
+queries already return -- `position` then `name` (see "The spec entity
+model" above). Nothing in `krill/render` reads or writes a display-number
+column, because none exists. A `LoadBearingDecision.Name` occasionally
+carries a stale citation baked in by the importer's own parsing (it keeps
+a decision's whole source title line, `LB1 — ...`, as `Name`) --
+`cleanDecisionTitle` strips that leading token before the renderer
+re-prefixes it with the freshly computed number, so a renumber is never
+masked by what the importer happened to store.
+
+**Milestones are reconstructed from associations, never authored.**
+`renderMilestones` enumerates a product's `milestone_ref` rows
+(`MilestoneStore.ListRefsByProduct`, added by this task alongside the
+renderer) and, per milestone, resolves its `entity_milestone` rows against
+the already-numbered Feature/Decision sets to rebuild `Delivers:` and
+`Must not foreclose:` lines. This carries no milestone title, outcome
+sentence, or FR budget -- migration 004 stores none of those (see "The
+markdown importer" above), so a milestone's rendered entry is deliberately
+thinner than a hand-authored roadmap section until a later milestone (M3,
+C13/C28) adds an authoring surface.
+
+**NFR3 -- the generated-doc carve-out.** `/AGENTS.md` § Documentation
+Conventions now carries a "Generated-doc carve-out" naming
+`PRODUCT.md`/`product/*` as non-hand-editable once a domain's brief lives
+in krill, and every file `krill/render` writes carries a `GENERATED by
+krill/render` header (`render.GeneratedMarker`) naming the entity and the
+render revision it came from, mirroring that carve-out at the point of
+editing.
+
+**What the renderer does not do.** It renders only the product doc set
+(`ARCHITECTURE.md`/`README.md`/`ENV.md`/`TOC.md` stay hand-written, per
+krill's own permanent non-goal). It renders no `Requirement` (FR/NFR):
+the product brief layout has zero FRs by design (`tools/project-manager/
+CONVENTIONS.md` § Product brief & milestones), so `slice.Document`'s
+`Requirements` field is read by `GetProductSlice` but never rendered here.
+
+## The GitHub pointer artifact (FR20, C9, issue #2496)
+
+`krill/forge` and `krill/store/pointer.go` implement FR20: `POST
+/pointer-artifacts` (`krill/api/handlers/pointer.go`) mints krill's one
+thin GitHub issue for a Product, so this repo's own "Part of #\<n\>"
+cross-linking convention keeps working once a Product's spec lives in
+krill's entity model instead of a markdown file.
+
+**One artifact per Product, not one per PR/commit/conversation.** Despite
+`pointer_artifact`'s columns reading like a per-cross-link record at first
+glance, this task settles the opposite design: krill creates exactly one
+GitHub issue per Product (`pointer_artifact_product_idx`, migration 005,
+is a UNIQUE index on `product_id`) and then gets out of the way — the
+issue's own number is what a PR body, a commit message, or a conversation
+references afterward, through GitHub's ordinary mechanics, with **no
+further krill involvement and no per-reference row**. This matches C20
+("krill does not own branch or PR lifecycle... stores references only"):
+there is no branch name, PR number, commit SHA, or conversation URL column
+anywhere in migration 005 — see that migration's own comment for the full
+reasoning. `pointer_artifact.kind` discriminates the artifact's own shape
+(today, always `"github_issue"`), the same one-column-not-two-tables
+precedent as `requirement.kind`/`non_goal.kind`, not what has since
+referenced the issue.
+
+**`scope.pointer_issue_number` is the system of record; `pointer_artifact`
+is the audit trail.** LB1 already put the forge coordinates
+(`repo_full_name`, `default_branch`, `pointer_issue_number`) on `scope`,
+not on any entity row (migrations/001_scope.up.sql). `PointerArtifactStore
+.Create` (`krill/store/pointer.go`) writes both in one transaction: the
+`pointer_artifact` row (who created it — both LB4 subjects, always
+recorded, unlike every other M1 create endpoint — and when) and
+`scope.pointer_issue_number` (what the current coordinate actually is).
+The two can never observably diverge for the reason above: at most one
+pointer issue is ever minted per Product in M1's one-Product-per-scope
+shape.
+
+**Order of operations avoids minting a spurious issue on a caller
+error.** `CreatePointerArtifactHandler` reads back the target Product and
+rejects an unknown or cross-scope `product_id` with 400 *before* ever
+calling `krill/forge.Client.CreateIssue` — unlike every entity create
+handler, this one's store call is not the first fallible step, because its
+side effect (a real, human-visible GitHub issue) is not one a rejected
+request should still cause.
+
+**`krill/forge` is intentionally the smallest possible client.**
+`forge.Client` has exactly one method, `CreateIssue`; `GitHubClient`
+authenticates with a plain bearer token (`KRILL_GITHUB_TOKEN`, see
+`ENV.md`), not a full GitHub App installation-token flow like
+`tools/app_registry/worker/release`'s `GitHubDispatcher` — that
+machinery exists to dispatch and poll CI workflow runs repeatedly; FR20
+needs exactly one write, ever, per Product.
+
+**Retrievable from the whole-product slice (FR8).** `krill/slice`'s
+`GetProductSlice` is the only one of the four granularities that populates
+`Document.PointerArtifacts` (`krill/slice/query.go`) — a pointer
+artifact's single parent is the Product itself, never a FeatureSet or
+Feature, so it is unreachable from `GetFeatureSetSlice`/`GetFeatureSlice`/
+`GetRequirementSlice` the way a FeatureSet-scoped LoadBearingDecision is.
+`PointerArtifactEntity` (`krill/slice/document.go`) embeds only `ID`, not
+the `EntityRef`/`RevisionID` pair every other slice entity carries —
+`pointer_artifact` is not SCD2 (LB3), so there is no revision to expose.
+
+## The design skill's live milestone read (FR21, root plan issue #2485)
+
+FR21 is M1's one concrete self-hosting *consumer*: `/project-manager:design
+--milestone`'s milestone-read step (`tools/project-manager/skills/design/
+SKILL.md` step 2, and `tools/project-manager/agents/producer.md`'s
+"Milestone-scoped intake") reads `<domain>/product/03-roadmap.md` for every
+domain except krill's own — for krill, that step instead calls krill's own
+`get_product_slice` MCP tool (FR8, whole-product granularity — the same
+tool `krill/mcp/tools/slice.go` registers for FR5-FR9, issue #2494) over
+the MCP spec surface, ungated by `init` (a read, same as every FR5-FR9/FR11
+call — see "`init` and the write gate" above). See
+`tools/project-manager/CONVENTIONS.md` "krill's own milestone read is live,
+every other domain's is a file" for why this is a narrow, deliberate
+exception rather than the start of migrating every domain's read off the
+file.
+
+**Resolving krill's own Product id.** FR5-FR9's tools take a surrogate id,
+not a name — there is no "find a Product by name" tool in M1. The design
+skill resolves krill's own live Product id through its own FR20/C9 pointer
+artifact (see "The GitHub pointer artifact" above): the one GitHub issue
+titled `Product: krill` whose body carries `krill id \`<uuid>\``. This is
+exactly what FR20 exists for — keeping GitHub-side cross-referencing
+working once a Product's spec lives in krill's entity model rather than a
+file — used here for the read direction instead of the cross-linking
+direction FR20's own doc comment (`krill/forge/github.go`) describes. Until
+krill's own brief (FR16-FR19, issue #2497) has actually been imported into
+a reachable krill instance and a pointer artifact minted for it, this
+lookup has nothing to resolve; standing up and importing into that instance
+is an operational step, not something this task's code does (`AGENTS.md`:
+"Do not patch production environments").
+
+**Known gap: no live per-milestone filter (M3's C13/C28).** `get_product_
+slice` returns every current `FeatureSet`/`Feature`/`Requirement`/
+`LoadBearingDecision` under krill's Product — it does not, and cannot yet,
+filter to just the one milestone being designed. That filter needs
+`entity_milestone`/`milestone_ref` (see "The markdown importer and the
+delivery-axis association" above), which today is read only by
+`krill/render`'s direct `Source` interface (`krill/render/store_source.go`)
+against `*krill/store.Store` directly — never over MCP, and never through
+FR5-FR9's `slice.Document`, which carries no milestone field at all
+(`krill/slice/document.go`). Authoring and exposing that delivery-axis
+query is explicitly M3's (C13 authors the cut, C28 exposes status) — M1
+"can hold and render milestones that arrived inside an imported document...
+holding is not planning" (`krill/product/03-roadmap.md`'s M1 LB6 note).
+The design skill therefore treats the live call's result as this
+milestone's spec *context* (a superset — every capability/decision in the
+product, not a pre-filtered `Delivers:`/`Must not foreclose:` list), and
+still consults `krill/product/03-roadmap.md`'s headings (structure only,
+not content) to confirm which `M<n>` exists. Architect's own Load-bearing
+check (architect.md § Process) still reads the committed file directly for
+the authoritative `Must not foreclose` list on every milestone draft, krill
+included, so this gap does not leave that check unguarded.
+
+**Failure mode.** An unreachable krill MCP server, or no pointer artifact
+to resolve a Product id from, is a **loud, named stop** — "krill's spec MCP
+surface is unreachable; cannot read krill's own milestone roadmap live" —
+never a silent fallback to reading `krill/product/03-roadmap.md`. A quiet
+fallback would leave M1's self-hosting loop unexercised, which is the
+failure FR21 exists to prevent (root plan issue #2485).
+
+**Tested at the `slice.Querier` level (LB7).** `krill/conformance/
+design_milestone_query_integration_test.go` proves the *data* half of this
+read path against a real Postgres holding krill's own imported brief
+(#2497's fixture): `GetProductSlice` for krill's own Product surfaces the
+same capability descriptions a given milestone's committed `Delivers:`
+line names, and a nonexistent/unreachable Product id surfaces a clear,
+non-nil, named error rather than an empty or silently-wrong result. Per
+LB7 ("M1's MCP tool is a thin wrapper over it, not the thing itself" —
+`krill/mcp/tools/slice.go`), testing `slice.Querier` directly exercises the
+same code the MCP tool wraps; the MCP wire protocol itself (auth, byte-
+identical JSON shape) is already covered by issue #2494's own tests. The
+domain-branch decision in `SKILL.md`/`producer.md` itself (krill →
+live call, every other domain → file) is verified by diff review, per root
+plan issue #2485's own acceptance criteria, not by an automated test —
+`tools/project-manager` ships no Bazel targets to run one against.
+
 ## Open items
 
-- The HTTP surface over the spec entity model covers create/attach only
-  (issue #2490: `POST /products`, `/feature-sets`, `/features`,
-  `/requirements`, `/load-bearing-decisions`, each behind
-  `RequireSession`) — no surface at all yet for Persona/NonGoal
-  (`krill/store`'s `PersonaStore`/`NonGoalStore` are store-layer only,
-  issue #2488). FR5-FR9's read path now exists (issue #2491, see "The
-  scoped-slice query" above); FR11 and FR21 remain open.
-- No supersession/amend write path yet — `krill/store` ships `Create` and
-  current-value reads only (see "The spec entity model" above).
-- No as-of (historical) slice read yet — `krill/slice`'s four
-  granularities always read current (`valid_to IS NULL`) rows; reading a
-  slice as of a past revision is a later history task's scope (see
-  `krill/slice/document.go`'s `EntityRef` doc comment).
+- The HTTP surface over the spec entity model covers create/attach, amend,
+  and history reads (issue #2490: `POST /products`, `/feature-sets`,
+  `/features`, `/requirements`, `/load-bearing-decisions`; issue #2493:
+  `POST /requirements/{id}/amend`, `POST
+  /load-bearing-decisions/{id}/amend`, `GET /requirements/{id}/as-of`,
+  `GET /requirements/{id}/versions`, and the `load-bearing-decisions`
+  equivalents) — no surface at all yet for Persona/NonGoal (`krill/store`'s
+  `PersonaStore`/`NonGoalStore` are store-layer only, issue #2488), and no
+  amend/history surface for Product, FeatureSet, or Feature (issue #2493
+  scopes FR11/FR12 to Requirement and LoadBearingDecision only). FR5-FR9's
+  read path exists (issue #2491, see "The scoped-slice query" above); FR21
+  wires `/project-manager:design --milestone`'s krill-domain read to it
+  (issue #2500, see "The design skill's live milestone read" above) —
+  still open: a live, MCP-exposed way to filter that read to just one
+  milestone's own `Delivers`/`Must not foreclose` entities (M3's C13/C28).
+- `krill/slice`'s four granularities each have an as-of assembly twin now
+  (issue #2493, see "As-of slice assembly" above) — but no HTTP route
+  exposes them yet (`krill/api/handlers/slice.go` still wires only the
+  current-row four); that surface, and any MCP tool built over it, remain
+  open for a later task.
 - `init` (FR3, #2489) and the write-only gate (`api/handlers/session.go`,
-  `api/handlers/gate.go`) cover entity creates and LB attach as of #2490;
-  amend (#2493) and pointer-issue create (#2496) remain unwired until
-  their own tasks land. Import (#2492) is gated too, but as a CLI
-  entrypoint checking the session directly against the store rather than
-  through this HTTP middleware (see "The markdown importer" above).
-- No MCP surface yet — `krill/plugin/` is a placeholder only; a later
-  milestone's MCP tool wraps `krill/slice` directly, per LB7.
+  `api/handlers/gate.go`) cover entity creates and LB attach as of #2490,
+  and amend as of #2493 (`api/handlers/amend.go`), and pointer-issue
+  create as of #2496 (`api/handlers/pointer.go`) — every write path this
+  milestone defines is now wired. Import (#2492) is gated too, but as a
+  CLI entrypoint checking the session directly against the store rather
+  than through this HTTP middleware (see "The markdown importer" above).
+- `krill/mcp` (issue #2494) now exists and wraps `krill/slice` directly,
+  per LB7 (see "The MCP spec surface" above) — its mcpauth (human) front
+  door still has no migration to back it, and degrades to reject-all
+  until one lands (see that section's last paragraph).
 - No auth wired up on `api` — `POST /sessions/init`, every future write
   endpoint, and the FR5-FR9 slice routes all trust caller-asserted
   identity or are unauthenticated (see "`init` and the write gate"
   above); only `krill/mcp` (issue #2494) gets NFR1's two-front-door
   pattern, and only for the read-only spec surface.
-- No renderer yet (FR13, a separate task) — the importer's report (FR16)
-  is the only reflection of an imported product's entities back to a
-  human today; nothing regenerates `PRODUCT.md`/`product/*.md` from
-  `krill/store` yet.
+- The renderer (`krill/render`, issue #2495) covers FR13-FR15/NFR3 as of
+  this task; see "The doc renderer" above. No hook or schedule triggers it
+  automatically yet — `bazel run //krill/render/cmd:render` is a manual,
+  Swarm-Operator-run step, same shape as the importer.

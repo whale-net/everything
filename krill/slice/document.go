@@ -21,9 +21,10 @@ const SchemaVersion = "1"
 // EntityRef is the surrogate id + as-of revision every entity embeds
 // (FR9): ID is the entity's immutable identity (LB2), stable across every
 // supersession; RevisionID is the exact SCD2 row this entity's fields
-// were read from -- the current row today, since query.go only ever reads
-// `valid_to IS NULL` rows (an as-of read is the history task's later
-// responsibility, per this milestone's issue #2491 scope note).
+// were read from -- the current row for query.go's four Get*Slice
+// methods, or the row that was current at a past instant for their
+// Get*SliceAsOf twins (issue #2493, backed by krill/store's HistoryStore
+// -- see krill/ARCHITECTURE.md's "As-of slice assembly" section).
 type EntityRef struct {
 	ID         uuid.UUID `json:"id"`
 	RevisionID uuid.UUID `json:"revision_id"`
@@ -81,14 +82,30 @@ type DecisionEntity struct {
 	Position     int       `json:"position"`
 }
 
+// PointerArtifactEntity is one PointerArtifact's slice payload (issue
+// #2496, FR20) -- the thin GitHub issue krill created for the Product this
+// slice belongs to. Unlike every *Entity type above, it embeds only ID
+// (no EntityRef/RevisionID): store.PointerArtifact is not SCD2 (LB3), so
+// there is no revision concept to carry -- see store/models.go's doc
+// comment on store.PointerArtifact.
+type PointerArtifactEntity struct {
+	ID          uuid.UUID `json:"id"`
+	ProductID   uuid.UUID `json:"product_id"`
+	Kind        string    `json:"kind"`
+	IssueNumber int       `json:"issue_number"`
+	IssueURL    string    `json:"issue_url"`
+}
+
 // Document is the one typed, self-describing shape every granularity in
 // this package returns (FR5-FR9, LB7). Its shape does not vary by
 // granularity -- a single-Requirement slice (GetRequirementSlice, FR7)
 // and a whole-Product slice (GetProductSlice, FR8) are the same Document
 // type with different populated extents: FR7 leaves every field but
-// Requirements empty, FR8 populates all five. Do not add a
-// per-granularity response type "for convenience" -- see this package's
-// doc comment.
+// Requirements empty, FR8 populates all six (including PointerArtifacts,
+// issue #2496, FR20 -- the only granularity that does, since a pointer
+// artifact's single parent is the Product itself, never a FeatureSet or
+// Feature). Do not add a per-granularity response type "for convenience"
+// -- see this package's doc comment.
 //
 // A field being empty (nil slice, nil *ProductEntity) means "not part of
 // this granularity's extent," never "queried and found none" -- e.g.
@@ -98,9 +115,10 @@ type DecisionEntity struct {
 type Document struct {
 	SchemaVersion string `json:"schema_version"`
 
-	Product      *ProductEntity      `json:"product,omitempty"`
-	FeatureSets  []FeatureSetEntity  `json:"feature_sets,omitempty"`
-	Features     []FeatureEntity     `json:"features,omitempty"`
-	Requirements []RequirementEntity `json:"requirements,omitempty"`
-	Decisions    []DecisionEntity    `json:"decisions,omitempty"`
+	Product          *ProductEntity          `json:"product,omitempty"`
+	FeatureSets      []FeatureSetEntity      `json:"feature_sets,omitempty"`
+	Features         []FeatureEntity         `json:"features,omitempty"`
+	Requirements     []RequirementEntity     `json:"requirements,omitempty"`
+	Decisions        []DecisionEntity        `json:"decisions,omitempty"`
+	PointerArtifacts []PointerArtifactEntity `json:"pointer_artifacts,omitempty"`
 }

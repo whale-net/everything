@@ -5,9 +5,9 @@
 // requires one shared confidential Keycloak client used as the caller
 // identity by both binaries (KEYCLOAK.md's "one client per caller
 // identity" principle, applied here to whagent_net as a whole rather
-// than per-domain: domain isolation is carried entirely by the grant key,
+// than per-scope: scope isolation is carried entirely by the grant key,
 // //whagent_net/grantkey (FR4), not by provisioning a separate Keycloak
-// client per domain).
+// client per scope).
 //
 // This is purely additive wiring (issue #2426's scope): nothing built
 // here is on any request path yet. A dependent task swaps `mcp`'s

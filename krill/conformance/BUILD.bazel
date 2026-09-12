@@ -1,0 +1,67 @@
+load("@rules_go//go:def.bzl", "go_test")
+
+# krill's self-hosting round-trip proof (issue #2497, FR18/FR19): import
+# krill's own committed brief through //krill/importer, render the imported
+# Product back through //krill/render, and prove every FR16-reported
+# entity is present in the rendered output -- keyed by entity id, never by
+# diffing rendered text against the original document. Only krill's own
+# brief is imported here; whagent_net's adoption is C27/M2 and stays out of
+# scope (see roundtrip_integration_test.go's package doc). Deliberately NOT
+# part of `bazel test //...` -- see //libs/go/dbtest's README for the
+# rationale behind each tag below.
+#
+# design_milestone_query_integration_test.go (issue #2500, FR21) shares
+# this target and its testEnv/krillDocsRoot helpers: it proves the
+# live-consumer half of M1's self-hosting proof -- that
+# slice.Querier.GetProductSlice (FR8), the call the design skill's
+# krill-domain branch makes, surfaces the same capability content a
+# milestone's committed Delivers line names, and fails loud and named
+# rather than silently empty when the Product it's asked for does not
+# exist. See krill/ARCHITECTURE.md "The design skill's live milestone read
+# (FR21)".
+#
+# Run the round-trip tests explicitly (requires a working Docker daemon):
+#   bazel test //krill/conformance:roundtrip_integration_test --test_output=all
+#
+# Regenerate the checked-in FR16 report artifact (testdata/fr16_report.txt)
+# with `bazel run`, not `bazel test` -- see
+# TestGenerateFR16ReportArtifact's doc comment for why:
+#   bazel run //krill/conformance:roundtrip_integration_test \
+#     --test_env=KRILL_CAPTURE_REPORT=1 --test_filter=TestGenerateFR16ReportArtifact
+go_test(
+    name = "roundtrip_integration_test",
+    size = "large",
+    timeout = "long",
+    srcs = [
+        "design_milestone_query_integration_test.go",
+        "roundtrip_integration_test.go",
+    ],
+    data = [
+        "//krill:docs",
+        "//krill/product:docs",
+    ] + glob(["testdata/**"]),
+    gotags = ["integration"],
+    tags = [
+        "external",
+        "integration",
+        "manual",
+        "no-cache",
+        "no-sandbox",
+        "requires-network",
+    ],
+    deps = [
+        "//krill/importer",
+        "//krill/migrate/schema",
+        "//krill/render",
+        "//krill/slice",
+        "//krill/store",
+        "//libs/go/dbtest",
+        "//libs/go/migrate",
+        "@com_github_google_uuid//:uuid",
+        "@com_github_jackc_pgx_v5//pgxpool",
+        "@com_github_jackc_pgx_v5//stdlib",
+        "@com_github_stretchr_testify//assert",
+        "@com_github_stretchr_testify//require",
+        "@rules_go//go/runfiles",
+    ],
+)

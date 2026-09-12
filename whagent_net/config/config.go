@@ -1,24 +1,17 @@
-// Package config is whagent-net's checked-in agent-definition seed
-// source (issue #2121, LB5/NFR6; ARCHITECTURE.md "Domain-owned MCP
-// servers and the tool contract"): agents.yaml (embedded below, so the
-// binary carries its own seed data rather than reading a mounted path at
-// runtime -- mirrors firmware/sensor/catalog's chips.yaml precedent) plus
-// the Go shape Load decodes it into. whagent_net/migrate/seed consumes
-// this package's Load to build the migrate.Seeder libs/go/migrate.
-// WithSeeder registers (whagent_net/migrate/main.go).
+// Package config documents whagent-net's agent-definition row shape
+// (issue #2121, LB5/NFR6; ARCHITECTURE.md "Domain-owned MCP servers and
+// the tool contract"): agents.yaml (embedded below, so the binary carries
+// its own copy rather than reading a mounted path at runtime -- mirrors
+// firmware/sensor/catalog's chips.yaml precedent) plus the Go shape Load
+// decodes it into. There is no automatic seeder consuming Load into the
+// database (see whagent_net/README.md "Agent definition config" for the
+// manual insert example) -- whagent_net/api/main.go's own use of Load is
+// the only production caller today, for RequiredRoles/DevRoles below.
 //
-// # Scaffold status (this task)
-//
-// Load and Validate below are real, not stubs: parsing/shape-checking a
-// config file is pure and I/O-free, the same reasoning
-// whagent_net/worker/caps.go's checkCaps documents for why a pure
-// function ships whole in Scaffold even while the I/O-touching seeder
-// this package feeds (whagent_net/migrate/seed.Seeder) stays a stub until
-// Implementation. Validate's model-catalogue check (an unserved model
-// must fail the seeder loudly per this task's Testing section) is
-// deliberately NOT done here -- checking a model against
-// llm.Catalog.Supports is a network call, so that half of validation
-// belongs in the seeder (an I/O step), not this pure package.
+// Load and Validate check the config's shape only, no I/O: the
+// model-catalogue check (an unserved model, checked against
+// llm.Catalog.Supports, a network call) is deliberately not done here --
+// there is currently no caller that performs it.
 package config
 
 import (
@@ -55,8 +48,8 @@ type ProviderPreferencesConfig struct {
 
 // ModelDefinitionConfig is agents.yaml's top-level model_definitions entry
 // shape -- decodes into whagent_net/session.ModelDefinition minus
-// ID/CreatedAt, which the seeder derives (Upsert resolves ID by Name; see
-// whagent_net/migrate/seed's package doc comment). A named, reusable
+// ID/CreatedAt, which whoever inserts the row assigns (see
+// whagent_net/README.md "Agent definition config"). A named, reusable
 // model + provider-routing bundle an AgentDefinitionConfig can reference
 // by name (AgentDefinitionConfig.ModelDefinition) instead of naming a
 // model directly, so more than one agent can share identical routing
@@ -69,18 +62,20 @@ type ModelDefinitionConfig struct {
 
 // AgentDefinitionConfig is agents.yaml's per-agent entry shape -- decodes
 // into whagent_net/session.AgentDefinition minus Version/CreatedAt, which
-// the seeder derives (see agents.yaml's own doc comment and
-// whagent_net/migrate/seed's package doc comment for the version-diff
-// rule).
+// whoever inserts the row assigns (see whagent_net/README.md "Agent
+// definition config" for the version-diff rule a manual insert must
+// preserve).
 //
-// Domain is required (Validate rejects a missing or empty value, issue
-// #2424 FR1): the one domain this agent definition belongs to. Every
-// tool_set entry below is understood to belong to that same domain, by
-// construction -- ToolServerRefConfig carries no domain field of its own,
-// and there is no "spans more than one domain" rule to enforce, because
-// there is only ever one Domain per definition to begin with. Domain is
-// the sole input whagent_net/grantkey.ForDomain may derive a
-// delegated-grant key from (FR4).
+// Scope is optional: the one grant-scope this agent definition belongs
+// to, when set. Every tool_set entry below is understood to belong to
+// that same scope, by construction -- ToolServerRefConfig carries no
+// scope field of its own, and there is no "spans more than one scope"
+// rule to enforce, because there is only ever one Scope per definition to
+// begin with. Scope is the sole input whagent_net/grantkey.ForScope may
+// derive a delegated-grant key from (FR4). Left unset, the agent
+// definition carries no delegated-grant scoping at all -- it still runs
+// with whatever ToolSet is configured below, just without a cross-domain
+// grant key derived or checked.
 //
 // Exactly one of Model and ModelDefinition is set (Validate enforces
 // this): Model names an OpenRouter model id directly, with OpenRouter's
@@ -90,7 +85,7 @@ type ModelDefinitionConfig struct {
 // entry, not from Model (which stays empty in that case).
 type AgentDefinitionConfig struct {
 	AgentID         string                `yaml:"agent_id"`
-	Domain          string                `yaml:"domain"`
+	Scope           *string               `yaml:"scope,omitempty"`
 	Model           string                `yaml:"model"`
 	ModelDefinition string                `yaml:"model_definition"`
 	ToolSet         []ToolServerRefConfig `yaml:"tool_set"`
@@ -107,9 +102,8 @@ type document struct {
 
 // Load parses the embedded agents.yaml and validates every entry (see
 // Validate) before returning -- a malformed config file fails Load
-// itself, before whagent_net/migrate/seed.Seeder ever opens a database
-// transaction (this task's Testing section: "fails the seeder loudly
-// rather than writing a half-row").
+// itself, before whagent_net/api/main.go's config.Load call (the sole
+// production caller today) can derive DevRoles from it.
 func Load() ([]ModelDefinitionConfig, []AgentDefinitionConfig, error) {
 	var doc document
 	if err := yaml.Unmarshal(agentsYAML, &doc); err != nil {
@@ -149,8 +143,7 @@ func RequiredRoles(agents []AgentDefinitionConfig) []string {
 // model_definitions entry, or a tool_set entry with an empty server_url.
 // The model-catalogue check (a model the configured OpenRouter provider
 // does not serve) is deliberately not here -- see this package's doc
-// comment -- and is whagent_net/migrate/seed.Seeder's job (Implementation
-// phase).
+// comment.
 func Validate(modelDefs []ModelDefinitionConfig, agents []AgentDefinitionConfig) error {
 	modelDefNames := make(map[string]struct{}, len(modelDefs))
 	for i, md := range modelDefs {
@@ -176,13 +169,13 @@ func Validate(modelDefs []ModelDefinitionConfig, agents []AgentDefinitionConfig)
 		}
 		seen[a.AgentID] = struct{}{}
 
-		// FR1 (issue #2424): domain is required on every entry -- it is
-		// the sole input whagent_net/grantkey.ForDomain may derive a
-		// delegated-grant key from, so an unset domain must fail here,
-		// as a config error, rather than surface later as a seeded row
-		// with no usable grant key.
-		if a.Domain == "" {
-			return fmt.Errorf("agent %q: domain is required", a.AgentID)
+		// Scope is optional, but when present it must not be blank --
+		// it is the sole input whagent_net/grantkey.ForScope may derive
+		// a delegated-grant key from, so a set-but-empty scope must fail
+		// here, as a config error, rather than surface later as a
+		// seeded row with no usable grant key.
+		if a.Scope != nil && *a.Scope == "" {
+			return fmt.Errorf("agent %q: scope, if set, must not be empty", a.AgentID)
 		}
 
 		// Exactly one of model / model_definition -- see

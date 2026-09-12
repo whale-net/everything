@@ -139,16 +139,16 @@ type config struct {
 	// "everyone is admin" default.
 	GrantAdminRole string
 
-	// DefaultDomain (WHAGENT_UI_DEFAULT_DOMAIN) is the one
-	// AgentDefinition.Domain (issue #2424's FR1) authorizeConsentGate
+	// DefaultScope (WHAGENT_UI_DEFAULT_SCOPE) is the one
+	// AgentDefinition.Scope (issue #2424's FR1) authorizeConsentGate
 	// (handlers_consent.go, issue #2428) requires the operator have an
 	// active delegated grant for before /authorize mints an MCP-client
 	// credential -- see that file's package doc comment for why this is a
-	// single configured domain rather than a live multi-domain chooser.
+	// single configured scope rather than a live multi-scope chooser.
 	// Left empty, the gate is a no-op (matches every other
 	// WHAGENT_GRANT_*-gated degrade path in this binary): required only
 	// once a deployment actually onboards this consent flow.
-	DefaultDomain string
+	DefaultScope string
 }
 
 func loadConfig() config {
@@ -172,7 +172,7 @@ func loadConfig() config {
 		GrantRedirectURI:   getEnv("WHAGENT_GRANT_REDIRECT_URI", ""),
 		GrantEncryptionKey: getEnv("WHAGENT_GRANT_ENCRYPTION_KEY", ""),
 		GrantAdminRole:     getEnv("WHAGENT_GRANT_ADMIN_ROLE", ""),
-		DefaultDomain:      getEnv("WHAGENT_UI_DEFAULT_DOMAIN", ""),
+		DefaultScope:       getEnv("WHAGENT_UI_DEFAULT_SCOPE", ""),
 	}
 }
 
@@ -228,10 +228,10 @@ type App struct {
 	// unreachable to everyone, not "everyone is admin".
 	adminRole string
 
-	// defaultDomain is cfg.DefaultDomain verbatim -- the one domain
+	// defaultScope is cfg.DefaultScope verbatim -- the one scope
 	// authorizeConsentGate (handlers_consent.go, issue #2428) gates
 	// /authorize on. Empty disables that gate entirely.
-	defaultDomain string
+	defaultScope string
 
 	// consentStore is the signed, httpOnly cookie store
 	// handlers_consent.go's savePendingConsent/loadPendingConsent round-trip
@@ -314,7 +314,7 @@ func NewApp(ctx context.Context, cfg config) (*App, error) {
 		oidcIssuer:    cfg.OIDCIssuer,
 		sseHub:        initializeSSEHub(cfg),
 		adminRole:     cfg.GrantAdminRole,
-		defaultDomain: cfg.DefaultDomain,
+		defaultScope: cfg.DefaultScope,
 		consentStore:  newConsentStore(cfg.SessionSecret),
 	}
 

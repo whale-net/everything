@@ -17,8 +17,9 @@ the component map and design decisions.
 themselves against `audience_score_system`'s MCP server from Claude Code,
 and read its transcript — the milestone's outcome sentence, exercised end
 to end (issue #2121). `migrate`, `api`, `worker`, and `mcp` all exist and
-build; `whagent_net/config/agents.yaml` seeds one real agent definition
-(`audience-score-system-research`) targeting `audience_score_system/mcp`.
+build; `whagent_net/config/agents.yaml` documents one real agent definition
+(`audience-score-system-research`) targeting `audience_score_system/mcp` —
+see "Agent definition config" below for how it gets inserted.
 Deferred to M2/Later per the roadmap: transcript archival (C18, now a
 Temporal-scheduled workflow inside `worker` rather than a separate
 binary — see `worker/archive.go`), `ui`/`embed` (C13–C16), `StreamEvents`
@@ -34,14 +35,14 @@ discussion: GitHub issue #1552.
 
 | Binary | app_type | Responsibility | `bazel run` |
 |--------|----------|-----------------|-------------|
-| `migrate/` | `job` | Applies `session` store migrations, then seeds `agent_definition` from `config/agents.yaml` (see "Agent definition config" below). | `bazel run //whagent_net/migrate:migrate` |
+| `migrate/` | `job` | Applies `session` store migrations only — `agent_definition`/`model_definition` rows are inserted by hand (see "Agent definition config" below). | `bazel run //whagent_net/migrate:migrate` |
 | `api/` | `external-api` | Session service gRPC: start/send-turn/stop/get/list/read-transcript; publishes the JWKS every domain-owned MCP server verifies a `worker`-minted persona credential against. | `bazel run //whagent_net/api:api` |
 | `worker/` | `worker` | Temporal `SessionWorkflow` + activities: resolve agent definition, build context, list/attach tools (FR8), call the model, dispatch each requested tool call, commit the turn, enforce turn/cost caps. Also hosts `ArchiveWorkflow` (FR7/C18, issue #2244, `worker/archive.go`): a Temporal Schedule periodically batches a terminal session's transcript out of Postgres past `WHAGENT_TRANSCRIPT_TTL`, gzips and uploads it to S3, commits the `transcript_archive` index row, and only then trims the hot-tier rows — registered only when `WHAGENT_S3_BUCKET` is set; there is no separate archiver binary. | `bazel run //whagent_net/worker:worker` |
 | `mcp/` | `external-api` | MCP surface over `api` — how Claude Code and other agents drive agents. | `bazel run //whagent_net/mcp:mcp` |
 | `ui/` | `external-api` | Standalone agent web UI (M2, issue #2236): Keycloak sign-in (NFR1) guards every app route, forwards the signed-in operator's own access token to `api` on every call (never a shared service account). A signed-in operator can start a session, watch its live transcript, send follow-up turns, and stop it (FR1/FR2, issues #2242/#2246) — a second way to drive a session alongside Claude Code/`mcp` and raw gRPC, going through the exact same `api` SessionService either way. Turn/stop controls are ownership-gated: only the session's `on_behalf_of` subject sees or can use them (LB2/NFR3). FR4's usage panel is the remaining piece. | `bazel run //whagent_net/ui:ui` |
 
 Shared Go packages: `session/` (store), `config/` (the agent-definition
-seed source), `llm/` (the OpenRouter model client), `worker/tools/` (tool
+reference config), `llm/` (the OpenRouter model client), `worker/tools/` (tool
 dispatch to domain-owned MCP servers), and `//libs/go/whagent` (the tool
 contract those servers implement).
 
@@ -206,47 +207,64 @@ one-time, single-deploy cutover migration (`009_mcpauth_cutover`, issue
 
 ## Agent definition config
 
-`whagent_net/config/agents.yaml` is the checked-in source of truth
-`whagent_net/migrate/seed` upserts into the `agent_definition` table on
-every `migrate` run — config-driven seeding, but `agent_definition` stays
-a real, versioned table (LB5/NFR6), never a config-lookup shortcut: the
-seeder never edits a version already pinned to a session in place, it
-only inserts a new one when a config entry's fields (`model`, `tool_set`,
-`max_turns`, `max_cost_usd`, `required_role`, `domain`) drift from the
-latest seeded version. Re-running the seeder with an unchanged config is
-a no-op.
+`whagent_net/config/agents.yaml` documents the row shape for
+`agent_definition` (and, if used, `model_definition`) — see that file's
+own doc comment for the exact field meanings. There is no seeder:
+`migrate` only applies schema migrations, and a human inserts these rows
+directly, by hand, against Postgres. `agent_definition` stays a real,
+versioned table (LB5/NFR6), never a config-lookup shortcut — never edit a
+version already pinned to a session in place; insert a new version
+instead whenever a definition's fields (`model`, `tool_set`, `max_turns`,
+`max_cost_usd`, `required_role`, `scope`) change.
 
-**`domain` is a required key on every entry (FR1, issue #2424).** It
-names the one `AGENTS.md` Domains-table domain (e.g.
-`audience_score_system`) this agent definition's whole `tool_set` belongs
-to — every entry under one definition is understood to belong to that
-same domain, by construction; there is no per-`tool_set`-entry domain
-field and no "spans more than one domain" case to validate against. An
-entry with `domain` missing or empty fails `config.Validate` before
-`migrate` writes anything. This is the value the per-domain consent flow
-above names to an operator, and the only input `//whagent_net/grantkey`
-is ever allowed to derive a delegated-grant key from (FR4) — parsing
-`agent_id`, `required_role`, or a `tool_set` entry's `server_url` to
-infer a domain is forbidden.
+**`scope` is optional (migration 009/010).** When set, it names the one
+grant-scope (often, but not required to be, an `AGENTS.md` Domains-table
+domain, e.g. `audience_score_system`) this agent definition's whole
+`tool_set` belongs to — every entry under one definition is understood to
+belong to that same scope, by construction; there is no per-`tool_set`-
+entry scope field and no "spans more than one scope" case to validate
+against. It is the only input `whagent_net/grantkey.ForScope` is ever
+allowed to derive a delegated-grant key from (FR4) — parsing `agent_id`,
+`required_role`, or a `tool_set` entry's `server_url` to infer a scope is
+forbidden. Left unset, the agent definition carries no delegated-grant
+scoping at all — it still runs with whatever `tool_set` is configured.
 
-Before writing anything, the seeder also checks every entry's
-`model` against the configured OpenRouter provider's live catalogue
-(`OPENROUTER_API_KEY`/`OPENROUTER_BASE_URL`, see `ENV.md`) — an unserved
-model fails the whole `migrate` run loudly rather than writing a
-half-seeded table, so `migrate` needs outbound network access to
-OpenRouter even in local dev.
+For example, to insert the `audience-score-system-research` definition
+`agents.yaml` documents, as version 1:
 
-To add or change a seeded agent definition, edit `agents.yaml` and
-re-run `migrate` (`bazel run //whagent_net/migrate:migrate`, or the Tilt
-job below) — see that file's own doc comment for the exact field shape.
+```sql
+INSERT INTO agent_definition
+  (agent_id, scope, version, model, tool_set, max_turns, max_cost_usd, required_role)
+VALUES (
+  'audience-score-system-research',
+  'audience_score_system',
+  1,
+  'anthropic/claude-sonnet-4.5',
+  '[{"server_url": "http://audience-score-system-mcp.audience-score-system-local-dev.svc.cluster.local:8081/", "allowed_tools": null}]',
+  100,
+  1.0,
+  'whagent-audience-score-system-research'
+);
+```
+
+`version` is `1` for a brand-new `agent_id`, or `(current max version for
+that agent_id) + 1` when changing an existing definition — never an
+`UPDATE` of an existing row (`id` gets its own surrogate default and
+needs no value here). `tool_set` is a JSON array of
+`{server_url, allowed_tools}` objects (`allowed_tools: null` means
+"whatever the server exposes"). To route through a `model_definitions`
+entry instead of naming `model` directly, insert into `model_definition`
+first (upsert by `name`, not versioned) and reference its `id` via
+`model_definition_id` — exactly one of `model` / `model_definition_id` is
+set per `agent_definition` row.
 
 ## Keycloak role
 
 FR9's authorization check (`api`'s `StartSession` handler) requires the
-acting subject to hold the seeded agent definition's `required_role` — a
+acting subject to hold the agent definition's `required_role` — a
 **realm role** (`libs/go/grpcauth/KEYCLOAK.md`'s "Gotcha 1": `grpcauth`
 reads `realm_access.roles` only, never a client role) checked against
-`grpcauth.Claims.Roles`. The seeded `audience-score-system-research`
+`grpcauth.Claims.Roles`. The `audience-score-system-research`
 definition (`config/agents.yaml`) requires:
 
 ```
@@ -356,17 +374,18 @@ in a local `.env`, pointed at a MinIO of your own, to exercise it).
 realm required to click around), forwarded to
 [http://localhost:8081](http://localhost:8081) — set `AUTH_MODE=oidc`
 plus the `WHAGENT_OIDC_*` vars in a local `.env` to exercise a real
-Keycloak sign-in. The seeded agent definition targets
+Keycloak sign-in. `agents.yaml`'s documented agent definition targets
 `audience_score_system/mcp`, which has its own minimal Tiltfile
 (`cd audience_score_system && tilt up`, run alongside this one) wired
 with the matching whagent-net trust configuration
 (`ASS_WHAGENT_JWKS_URL`/`ASS_WHAGENT_ISSUER`).
 
 **Cross-domain smoke check** (issue #2155). After both Tiltfiles are up,
-confirm the FR8 cross-domain tool-dispatch path is wired correctly end
-to end without needing a full Claude Code MCP client — `api`'s
-SessionService is a plain gRPC service (reflection enabled), so
-`grpcurl` reaches it directly:
+and after you've inserted the `audience-score-system-research`
+`agent_definition` row per "Agent definition config" above, confirm the
+FR8 cross-domain tool-dispatch path is wired correctly end to end without
+needing a full Claude Code MCP client — `api`'s SessionService is a plain
+gRPC service (reflection enabled), so `grpcurl` reaches it directly:
 
 ```bash
 SESSION_ID=$(grpcurl -plaintext -d '{"agent_id": "audience-score-system-research"}' \
@@ -387,7 +406,7 @@ listing ("Unauthorized", #2151).
 terminals):
 
 ```bash
-bazel run //whagent_net/migrate:migrate       # applies migrations + seeds agent_definition
+bazel run //whagent_net/migrate:migrate       # applies migrations (agent_definition is populated by hand, see above)
 bazel run //whagent_net/api:api               # SessionService gRPC + JWKS
 bazel run //whagent_net/worker:worker         # SessionWorkflow
 bazel run //whagent_net/mcp:mcp               # the Claude-Code-facing MCP surface

@@ -55,6 +55,9 @@ import (
 // README asks integration tests to keep schema self-contained rather than
 // importing another package's migrations, mirroring
 // grantindex_integration_test.go's own grantIndexSchema constant.
+// The domain column keeps its grantindex-library-default name (the
+// library is domain-neutral and configured, not renamed by this repo) --
+// it is populated with this deployment's scope values.
 const grantIndexSchema = `
 	CREATE TABLE grpcauth_grant_index (
 		subject_iss        TEXT        NOT NULL,
@@ -111,11 +114,11 @@ func newConsentIndexTestApp(t *testing.T, fake *fakeGrantIdP) (*App, *grantindex
 // hit -> GET /mcp/consent/callback round trip and returns the callback's
 // response, failing the test unless it completed successfully (302 to
 // return_to).
-func driveFullConsent(t *testing.T, mux *http.ServeMux, domain string) *httptest.ResponseRecorder {
+func driveFullConsent(t *testing.T, mux *http.ServeMux, scope string) *httptest.ResponseRecorder {
 	t.Helper()
 
 	confirmReq := httptest.NewRequest(http.MethodPost, "/mcp/consent", strings.NewReader(url.Values{
-		"domain":    {domain},
+		"scope":     {scope},
 		"return_to": {"/sessions/42"},
 	}.Encode()))
 	confirmReq.Header.Set("Content-Type", "application/x-www-form-urlencoded")
@@ -166,12 +169,12 @@ func TestConsentCallback_SuccessfulConsent_RecordsExactlyOneGrantIndexRow(t *tes
 	assert.Equal(t, "developer", entry.PreferredUsername, "must capture the consenting operator's own preferred_username (AuthModeNone's fixed dev user)")
 }
 
-// TestConsentCallback_ReConsentForSameDomain_UpsertsWithoutDuplicateOrError
-// is issue #2428's Testing section: "a second consent for the same domain
+// TestConsentCallback_ReConsentForSameScope_UpsertsWithoutDuplicateOrError
+// is issue #2428's Testing section: "a second consent for the same scope
 // does not duplicate or error" -- grantindex.Record's ON CONFLICT DO
 // NOTHING contract (FR12), exercised end to end through the real HTTP
 // handlers rather than calling Record directly.
-func TestConsentCallback_ReConsentForSameDomain_UpsertsWithoutDuplicateOrError(t *testing.T) {
+func TestConsentCallback_ReConsentForSameScope_UpsertsWithoutDuplicateOrError(t *testing.T) {
 	fake := newFakeGrantIdP(t)
 	fake.SetSubject(devUserSub)
 	app, idx := newConsentIndexTestApp(t, fake)
@@ -184,14 +187,14 @@ func TestConsentCallback_ReConsentForSameDomain_UpsertsWithoutDuplicateOrError(t
 
 	entries, err := idx.ListBySubject(context.Background(), wantIss, wantSub)
 	require.NoError(t, err)
-	assert.Len(t, entries, 1, "re-consenting for an already-recorded domain must not duplicate the grantindex row")
+	assert.Len(t, entries, 1, "re-consenting for an already-recorded scope must not duplicate the grantindex row")
 }
 
-// TestConsentCallback_ConsentForTwoDomains_RecordsBothIndependently proves
-// FR3's per-domain scoping holds for the bookkeeping index too: consenting
-// for two different domains records two independent rows, not one shared
+// TestConsentCallback_ConsentForTwoScopes_RecordsBothIndependently proves
+// FR3's per-scope scoping holds for the bookkeeping index too: consenting
+// for two different scopes records two independent rows, not one shared
 // or overwritten row.
-func TestConsentCallback_ConsentForTwoDomains_RecordsBothIndependently(t *testing.T) {
+func TestConsentCallback_ConsentForTwoScopes_RecordsBothIndependently(t *testing.T) {
 	fake := newFakeGrantIdP(t)
 	fake.SetSubject(devUserSub)
 	app, idx := newConsentIndexTestApp(t, fake)
@@ -206,10 +209,10 @@ func TestConsentCallback_ConsentForTwoDomains_RecordsBothIndependently(t *testin
 	require.NoError(t, err)
 	require.Len(t, entries, 2)
 
-	domains := map[string]bool{}
+	scopes := map[string]bool{}
 	for _, e := range entries {
-		domains[e.Domain] = true
+		scopes[e.Domain] = true
 	}
-	assert.True(t, domains["audience_score_system"])
-	assert.True(t, domains["manmanv2"])
+	assert.True(t, scopes["audience_score_system"])
+	assert.True(t, scopes["manmanv2"])
 }

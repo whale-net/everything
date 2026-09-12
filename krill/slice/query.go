@@ -2,7 +2,9 @@ package slice
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"time"
 
 	"github.com/google/uuid"
 
@@ -94,8 +96,13 @@ func (q *Querier) GetRequirementSlice(ctx context.Context, requirementID uuid.UU
 	}, nil
 }
 
-// GetProductSlice is FR8: every FeatureSet, Feature, FR, NFR, and
-// LoadBearingDecision beneath the Product, in one call.
+// GetProductSlice is FR8: every FeatureSet, Feature, FR, NFR,
+// LoadBearingDecision, and PointerArtifact (issue #2496, FR20) beneath the
+// Product, in one call. PointerArtifacts is the one field only this
+// granularity ever populates -- a pointer artifact's single parent is the
+// Product itself (store/pointer.go), so it is never reachable from
+// GetFeatureSetSlice/GetFeatureSlice/GetRequirementSlice the way a
+// FeatureSet-scoped Decision is.
 func (q *Querier) GetProductSlice(ctx context.Context, productID uuid.UUID) (Document, error) {
 	product, err := q.store.Products().GetCurrentByID(ctx, productID)
 	if err != nil {
@@ -122,6 +129,175 @@ func (q *Querier) GetProductSlice(ctx context.Context, productID uuid.UUID) (Doc
 		return Document{}, fmt.Errorf("list decisions by product: %w", err)
 	}
 
+	pointerArtifacts, err := q.store.PointerArtifacts().ListByProduct(ctx, productID)
+	if err != nil {
+		return Document{}, fmt.Errorf("list pointer_artifacts by product: %w", err)
+	}
+
+	productEntity := toProductEntity(product)
+	return Document{
+		SchemaVersion:    SchemaVersion,
+		Product:          &productEntity,
+		FeatureSets:      toFeatureSetEntities(featureSets),
+		Features:         toFeatureEntities(features),
+		Requirements:     toRequirementEntities(requirements),
+		Decisions:        toDecisionEntities(decisions),
+		PointerArtifacts: toPointerArtifactEntities(pointerArtifacts),
+	}, nil
+}
+
+// -- as-of assembly (FR11 x FR5-FR8, issue #2493) ------------------------
+//
+// Each granularity above has an *AsOf twin below: the same shape of
+// Document, assembled from the revisions that were current at asOf
+// instead of today. This is what closes #2493's own Testing bullet ("a
+// slice query at a past as-of assembles from the historical revisions,
+// and its as-of revisions metadata reflects them") -- "as-of revisions
+// metadata" is EntityRef.RevisionID (see document.go), which already
+// carries whichever row a Document's entities were read from; these
+// methods just make that row a historical one instead of always today's.
+//
+// Requirement and LoadBearingDecision are the only two kinds
+// krill/store/amend.go can amend (issue #2493) -- Product, FeatureSet, and
+// Feature have no write path that supersedes a row yet (see
+// krill/ARCHITECTURE.md's "Open items"), so their current row is their
+// only revision ever. For those three, "as of asOf" therefore reduces to
+// "had it been created by asOf" (entityExistedAsOf), never a historical
+// re-read. For Requirement/LoadBearingDecision, it is a real historical
+// re-read through krill/store's HistoryStore (issue #2493) -- the exact
+// revision that was current at asOf, and never-existed-yet entities are
+// dropped rather than reported as their current revision.
+
+// entityExistedAsOf reports whether an entity whose current row's
+// ValidFrom is validFrom had already been created by asOf.
+func entityExistedAsOf(validFrom, asOf time.Time) bool {
+	return !validFrom.After(asOf)
+}
+
+// GetFeatureSetSliceAsOf is GetFeatureSetSlice assembled as of asOf.
+func (q *Querier) GetFeatureSetSliceAsOf(ctx context.Context, featureSetID uuid.UUID, asOf time.Time) (Document, error) {
+	featureSet, err := q.store.FeatureSets().GetCurrentByID(ctx, featureSetID)
+	if err != nil {
+		return Document{}, fmt.Errorf("get feature_set: %w", err)
+	}
+	if !entityExistedAsOf(featureSet.ValidFrom, asOf) {
+		return Document{}, fmt.Errorf("%w: feature_set id %s as of %s", store.ErrNotFound, featureSetID, asOf)
+	}
+
+	features, err := q.store.Features().ListCurrentByFeatureSet(ctx, featureSetID)
+	if err != nil {
+		return Document{}, fmt.Errorf("list features by feature_set: %w", err)
+	}
+	features = filterFeaturesExistedAsOf(features, asOf)
+
+	requirements, err := q.store.Slices().ListRequirementsByFeatureSet(ctx, featureSetID)
+	if err != nil {
+		return Document{}, fmt.Errorf("list requirements by feature_set: %w", err)
+	}
+	requirements, err = q.requirementsAsOf(ctx, requirements, asOf)
+	if err != nil {
+		return Document{}, err
+	}
+
+	decisions, err := q.store.Decisions().ListCurrentByFeatureSet(ctx, featureSetID)
+	if err != nil {
+		return Document{}, fmt.Errorf("list decisions by feature_set: %w", err)
+	}
+	decisions, err = q.decisionsAsOf(ctx, decisions, asOf)
+	if err != nil {
+		return Document{}, err
+	}
+
+	return Document{
+		SchemaVersion: SchemaVersion,
+		FeatureSets:   []FeatureSetEntity{toFeatureSetEntity(featureSet)},
+		Features:      toFeatureEntities(features),
+		Requirements:  toRequirementEntities(requirements),
+		Decisions:     toDecisionEntities(decisions),
+	}, nil
+}
+
+// GetFeatureSliceAsOf is GetFeatureSlice assembled as of asOf.
+func (q *Querier) GetFeatureSliceAsOf(ctx context.Context, featureID uuid.UUID, asOf time.Time) (Document, error) {
+	feature, err := q.store.Features().GetCurrentByID(ctx, featureID)
+	if err != nil {
+		return Document{}, fmt.Errorf("get feature: %w", err)
+	}
+	if !entityExistedAsOf(feature.ValidFrom, asOf) {
+		return Document{}, fmt.Errorf("%w: feature id %s as of %s", store.ErrNotFound, featureID, asOf)
+	}
+
+	requirements, err := q.store.Requirements().ListCurrentByFeature(ctx, featureID)
+	if err != nil {
+		return Document{}, fmt.Errorf("list requirements by feature: %w", err)
+	}
+	requirements, err = q.requirementsAsOf(ctx, requirements, asOf)
+	if err != nil {
+		return Document{}, err
+	}
+
+	return Document{
+		SchemaVersion: SchemaVersion,
+		Features:      []FeatureEntity{toFeatureEntity(feature)},
+		Requirements:  toRequirementEntities(requirements),
+	}, nil
+}
+
+// GetRequirementSliceAsOf is GetRequirementSlice assembled as of asOf --
+// FR7 read through krill/store's HistoryStore (issue #2493) instead of
+// the current row.
+func (q *Querier) GetRequirementSliceAsOf(ctx context.Context, requirementID uuid.UUID, asOf time.Time) (Document, error) {
+	requirement, err := q.store.History().GetRequirementAsOf(ctx, requirementID, asOf)
+	if err != nil {
+		return Document{}, fmt.Errorf("get requirement as of %s: %w", asOf, err)
+	}
+
+	return Document{
+		SchemaVersion: SchemaVersion,
+		Requirements:  []RequirementEntity{toRequirementEntity(requirement)},
+	}, nil
+}
+
+// GetProductSliceAsOf is GetProductSlice assembled as of asOf.
+func (q *Querier) GetProductSliceAsOf(ctx context.Context, productID uuid.UUID, asOf time.Time) (Document, error) {
+	product, err := q.store.Products().GetCurrentByID(ctx, productID)
+	if err != nil {
+		return Document{}, fmt.Errorf("get product: %w", err)
+	}
+	if !entityExistedAsOf(product.ValidFrom, asOf) {
+		return Document{}, fmt.Errorf("%w: product id %s as of %s", store.ErrNotFound, productID, asOf)
+	}
+
+	featureSets, err := q.store.FeatureSets().ListCurrentByProduct(ctx, productID)
+	if err != nil {
+		return Document{}, fmt.Errorf("list feature_sets by product: %w", err)
+	}
+	featureSets = filterFeatureSetsExistedAsOf(featureSets, asOf)
+
+	features, err := q.store.Slices().ListFeaturesByProduct(ctx, productID)
+	if err != nil {
+		return Document{}, fmt.Errorf("list features by product: %w", err)
+	}
+	features = filterFeaturesExistedAsOf(features, asOf)
+
+	requirements, err := q.store.Slices().ListRequirementsByProduct(ctx, productID)
+	if err != nil {
+		return Document{}, fmt.Errorf("list requirements by product: %w", err)
+	}
+	requirements, err = q.requirementsAsOf(ctx, requirements, asOf)
+	if err != nil {
+		return Document{}, err
+	}
+
+	decisions, err := q.store.Slices().ListDecisionsByProduct(ctx, productID)
+	if err != nil {
+		return Document{}, fmt.Errorf("list decisions by product: %w", err)
+	}
+	decisions, err = q.decisionsAsOf(ctx, decisions, asOf)
+	if err != nil {
+		return Document{}, err
+	}
+
 	productEntity := toProductEntity(product)
 	return Document{
 		SchemaVersion: SchemaVersion,
@@ -131,6 +307,66 @@ func (q *Querier) GetProductSlice(ctx context.Context, productID uuid.UUID) (Doc
 		Requirements:  toRequirementEntities(requirements),
 		Decisions:     toDecisionEntities(decisions),
 	}, nil
+}
+
+// requirementsAsOf re-reads every id in current through
+// krill/store's HistoryStore at asOf, dropping any id that had not been
+// created yet (HistoryStore's ErrNotFound) rather than keeping its
+// current-row contents -- a requirement listed by ListRequirementsBy* is
+// always today's set, which is a superset of what existed at a past asOf.
+func (q *Querier) requirementsAsOf(ctx context.Context, current []store.Requirement, asOf time.Time) ([]store.Requirement, error) {
+	result := make([]store.Requirement, 0, len(current))
+	for _, r := range current {
+		historical, err := q.store.History().GetRequirementAsOf(ctx, r.ID, asOf)
+		if errors.Is(err, store.ErrNotFound) {
+			continue
+		}
+		if err != nil {
+			return nil, fmt.Errorf("get requirement %s as of %s: %w", r.ID, asOf, err)
+		}
+		result = append(result, historical)
+	}
+	return result, nil
+}
+
+// decisionsAsOf mirrors requirementsAsOf for LoadBearingDecision.
+func (q *Querier) decisionsAsOf(ctx context.Context, current []store.LoadBearingDecision, asOf time.Time) ([]store.LoadBearingDecision, error) {
+	result := make([]store.LoadBearingDecision, 0, len(current))
+	for _, d := range current {
+		historical, err := q.store.History().GetLoadBearingDecisionAsOf(ctx, d.ID, asOf)
+		if errors.Is(err, store.ErrNotFound) {
+			continue
+		}
+		if err != nil {
+			return nil, fmt.Errorf("get load_bearing_decision %s as of %s: %w", d.ID, asOf, err)
+		}
+		result = append(result, historical)
+	}
+	return result, nil
+}
+
+// filterFeatureSetsExistedAsOf drops any FeatureSet not yet created by
+// asOf -- see entityExistedAsOf.
+func filterFeatureSetsExistedAsOf(featureSets []store.FeatureSet, asOf time.Time) []store.FeatureSet {
+	out := make([]store.FeatureSet, 0, len(featureSets))
+	for _, fs := range featureSets {
+		if entityExistedAsOf(fs.ValidFrom, asOf) {
+			out = append(out, fs)
+		}
+	}
+	return out
+}
+
+// filterFeaturesExistedAsOf drops any Feature not yet created by asOf --
+// see entityExistedAsOf.
+func filterFeaturesExistedAsOf(features []store.Feature, asOf time.Time) []store.Feature {
+	out := make([]store.Feature, 0, len(features))
+	for _, f := range features {
+		if entityExistedAsOf(f.ValidFrom, asOf) {
+			out = append(out, f)
+		}
+	}
+	return out
 }
 
 // -- store.* -> *Entity conversions --------------------------------------
@@ -213,6 +449,24 @@ func toDecisionEntities(decisions []store.LoadBearingDecision) []DecisionEntity 
 	entities := make([]DecisionEntity, len(decisions))
 	for i, d := range decisions {
 		entities[i] = toDecisionEntity(d)
+	}
+	return entities
+}
+
+func toPointerArtifactEntity(p store.PointerArtifact) PointerArtifactEntity {
+	return PointerArtifactEntity{
+		ID:          p.ID,
+		ProductID:   p.ProductID,
+		Kind:        p.Kind,
+		IssueNumber: p.IssueNumber,
+		IssueURL:    p.IssueURL,
+	}
+}
+
+func toPointerArtifactEntities(artifacts []store.PointerArtifact) []PointerArtifactEntity {
+	entities := make([]PointerArtifactEntity, len(artifacts))
+	for i, p := range artifacts {
+		entities[i] = toPointerArtifactEntity(p)
 	}
 	return entities
 }
