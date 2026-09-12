@@ -32,6 +32,7 @@ type fakeAgentDefinitionStore struct {
 	upsertFunc            func(ctx context.Context, def *session.AgentDefinition) error
 	assignToSessionFunc   func(ctx context.Context, sessionID uuid.UUID, agentID string, version int) error
 	currentAssignmentFunc func(ctx context.Context, sessionID uuid.UUID) (*session.SessionAgent, error)
+	listScopesFunc        func(ctx context.Context) ([]string, error)
 }
 
 var _ session.AgentDefinitionStore = (*fakeAgentDefinitionStore)(nil)
@@ -69,6 +70,13 @@ func (f *fakeAgentDefinitionStore) CurrentAssignment(ctx context.Context, sessio
 		panic("fakeAgentDefinitionStore: CurrentAssignment called but no currentAssignmentFunc set")
 	}
 	return f.currentAssignmentFunc(ctx, sessionID)
+}
+
+func (f *fakeAgentDefinitionStore) ListScopes(ctx context.Context) ([]string, error) {
+	if f.listScopesFunc == nil {
+		panic("fakeAgentDefinitionStore: ListScopes called but no listScopesFunc set")
+	}
+	return f.listScopesFunc(ctx)
 }
 
 var errTransport = errors.New("boom: connection reset")

@@ -15,12 +15,15 @@ import (
 	"net/http"
 	"strings"
 
+	"google.golang.org/grpc"
+
 	"github.com/whale-net/everything/libs/go/grpcauth"
 	"github.com/whale-net/everything/libs/go/grpcauth/grantindex"
 	"github.com/whale-net/everything/libs/go/htmxauth"
 	"github.com/whale-net/everything/libs/go/logging"
 	"github.com/whale-net/everything/whagent_net/grantkey"
 	"github.com/whale-net/everything/whagent_net/mcpidentity"
+	whagentpb "github.com/whale-net/everything/whagent_net/protos"
 	"github.com/whale-net/everything/whagent_net/ui/components"
 	"github.com/whale-net/everything/whagent_net/ui/pages"
 )
@@ -35,9 +38,24 @@ type grantIndexLister interface {
 
 var _ grantIndexLister = (*grantindex.Index)(nil)
 
+// scopeLister is the subset of whagentpb.SessionServiceClient
+// availableScopesForGrant needs, declared locally (mirroring
+// grantIndexLister above) so a test can substitute a fake instead of a
+// real gRPC connection.
+type scopeLister interface {
+	ListAgentDefinitionScopes(ctx context.Context, in *whagentpb.ListAgentDefinitionScopesRequest, opts ...grpc.CallOption) (*whagentpb.ListAgentDefinitionScopesResponse, error)
+}
+
 // grantUnknownStatus is the one GrantRow.Status value grpcauth.GrantStatus
 // itself never produces -- see buildGrantRows' ErrGrantNotFound branch.
 const grantUnknownStatus = "unknown"
+
+// grantStatusActive mirrors grpcauth.GrantStatusActive.String() -- the
+// value buildGrantRows sets GrantRow.Status to for a live active grant
+// (see GrantRow's own doc comment on why this package never imports
+// grpcauth.GrantStatus itself). availableScopesForGrant uses this to
+// exclude a scope the operator already actively holds.
+const grantStatusActive = "active"
 
 // grantSubjectKey packs (iss, sub) into the single opaque string
 // grpcauth.Store's "subject" parameter holds, reusing
@@ -119,6 +137,47 @@ func buildGrantRows(ctx context.Context, index grantIndexLister, store grpcauth.
 	return rows, nil
 }
 
+// availableScopesForGrant lists every configured grant-scope
+// (whagentpb.ListAgentDefinitionScopes, backed by session.
+// AgentDefinitionStore.ListScopes) the signed-in operator does not
+// already hold an active grant for -- extending FR16's self-service page
+// so an operator can start a brand-new consent by clicking a link here
+// instead of hand-typing /mcp/consent?scope=<s> (handlers_consent.go's
+// only entry point until now). rows is the same slice buildGrantRows just
+// produced for this operator; a scope with an active row is excluded, but
+// one with needs_reauth/revoked is still offered (that operator does need
+// to consent again). client nil (no session RPC client configured, e.g. a
+// test) degrades to no available scopes, not a panic. A failure calling
+// the RPC degrades to an empty slice (logged at WARNING, AGENTS.md's
+// "system had to adjust to keep going") rather than failing the whole
+// /grants page -- the granted-rows table above is unaffected either way.
+func availableScopesForGrant(ctx context.Context, client scopeLister, rows []pages.GrantRow, logger *slog.Logger) []string {
+	if client == nil {
+		return nil
+	}
+
+	resp, err := client.ListAgentDefinitionScopes(ctx, &whagentpb.ListAgentDefinitionScopesRequest{})
+	if err != nil {
+		logger.Warn("failed to list agent definition scopes for /grants", "error", err)
+		return nil
+	}
+
+	active := make(map[string]bool, len(rows))
+	for _, row := range rows {
+		if row.Status == grantStatusActive {
+			active[row.Scope] = true
+		}
+	}
+
+	available := make([]string, 0, len(resp.GetScopes()))
+	for _, scope := range resp.GetScopes() {
+		if !active[scope] {
+			available = append(available, scope)
+		}
+	}
+	return available
+}
+
 // revokeGrant performs FR17's single-(subject, grant)-pair revoke:
 // grantkey.ForScope(scope) validates/derives the grant key, then
 // store.Revoke(ctx, subject, grantKey) unconditionally revokes exactly
@@ -186,6 +245,12 @@ func (app *App) handleGrants(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		data.Rows = rows
+
+		var sessionClient scopeLister
+		if app.session != nil {
+			sessionClient = app.session.Client()
+		}
+		data.AvailableScopes = availableScopesForGrant(ctx, sessionClient, rows, logger)
 	}
 
 	if err := RenderTempl(w, r, data.Layout.Title, pages.Grants(data)); err != nil {

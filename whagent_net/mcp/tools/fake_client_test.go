@@ -81,6 +81,13 @@ func (f *fakeSessionServiceClient) ReadTranscript(ctx context.Context, in *pb.Re
 	return f.readTranscriptFunc(ctx, in)
 }
 
+// ListAgentDefinitionScopes has no matching tool -- like ListSessions
+// above, any test that reaches this is exercising a code path this
+// package must never have.
+func (f *fakeSessionServiceClient) ListAgentDefinitionScopes(context.Context, *pb.ListAgentDefinitionScopesRequest, ...grpc.CallOption) (*pb.ListAgentDefinitionScopesResponse, error) {
+	panic("fakeSessionServiceClient: ListAgentDefinitionScopes called -- no whagent-net mcp tool forwards to this RPC")
+}
+
 // GetSessionUsage has no matching tool yet (issue #2238 is the RPC's
 // read-path task; a UI/tool consumer is separate scope) -- any test that
 // reaches this is exercising a code path this package must never have.

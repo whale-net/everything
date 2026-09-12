@@ -3,6 +3,7 @@ load("@rules_go//go:def.bzl", "go_library", "go_test")
 go_library(
     name = "handlers",
     srcs = [
+        "agent_definition.go",
         "auth.go",
         "broadcast.go",
         "send.go",
@@ -74,6 +75,7 @@ go_test(
     size = "large",
     timeout = "long",
     srcs = [
+        "agent_definition_scopes_integration_test.go",
         "fake_temporal_test.go",
         "service_account_integration_test.go",
         "session_integration_test.go",

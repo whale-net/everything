@@ -96,6 +96,15 @@ type AgentDefinitionStore interface {
 	// CurrentAssignment returns the session's open (ValidTo nil)
 	// session_agent row.
 	CurrentAssignment(ctx context.Context, sessionID uuid.UUID) (*SessionAgent, error)
+	// ListScopes returns every distinct non-null Scope value across all
+	// agent_definition rows (every agent_id and version), sorted
+	// alphabetically -- the full set of grant-scopes an operator could
+	// ever need to consent to (whagent_net/grantkey.ForScope's input),
+	// not scoped to any one agent_id, version, or session. Backs `api`'s
+	// ListAgentDefinitionScopes RPC, which `ui`'s self-service /grants
+	// page (issue #2432) uses to offer a clickable consent link instead
+	// of requiring a hand-typed /mcp/consent?scope=<s> URL.
+	ListScopes(ctx context.Context) ([]string, error)
 }
 
 // agentDefinitionStore is the Postgres-backed AgentDefinitionStore
@@ -137,6 +146,31 @@ func (s agentDefinitionStore) GetLatest(ctx context.Context, agentID string) (*A
 		return nil, fmt.Errorf("get latest agent definition: %w", err)
 	}
 	return def, nil
+}
+
+// ListScopes returns every distinct non-null scope value, sorted
+// alphabetically -- see the interface doc comment above.
+func (s agentDefinitionStore) ListScopes(ctx context.Context) ([]string, error) {
+	rows, err := s.pool.Query(ctx, `
+		SELECT DISTINCT scope FROM agent_definition WHERE scope IS NOT NULL ORDER BY scope
+	`)
+	if err != nil {
+		return nil, fmt.Errorf("list agent definition scopes: %w", err)
+	}
+	defer rows.Close()
+
+	var scopes []string
+	for rows.Next() {
+		var scope string
+		if err := rows.Scan(&scope); err != nil {
+			return nil, fmt.Errorf("scan agent definition scope: %w", err)
+		}
+		scopes = append(scopes, scope)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("list agent definition scopes: %w", err)
+	}
+	return scopes, nil
 }
 
 // GetVersion returns nil (not an error) when (agentID, version) does not
