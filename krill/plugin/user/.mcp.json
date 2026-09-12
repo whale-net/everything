@@ -13,7 +13,7 @@
     },
     "krill-mcp-prod": {
       "type": "http",
-      "url": "https://mcp.krill.whalenet.dev/mcp/spec"
+      "url": "https://mcp.krill.whalenet.app/mcp/spec"
     }
   }
 }
