@@ -393,7 +393,7 @@ func TestImport_SecondImportSamePathAndScope_RefusesBeforeParsing_WritesNothing(
 // TestImport_DifferentDocSetSameScope_BothComplete proves Testing item 6:
 // importing a *different* doc set into a scope that already has a
 // completed import still works, because import_completion is keyed on
-// (scope_id, product_id), not scope_id alone (migration 007's "Keyed by
+// (scope_id, product_id), not scope_id alone (migration 009's "Keyed by
 // (scope_id, product_id)" comment) -- a bare scope-level flag would
 // wrongly block this second, distinct product's import.
 func TestImport_DifferentDocSetSameScope_BothComplete(t *testing.T) {

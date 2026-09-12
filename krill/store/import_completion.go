@@ -12,16 +12,16 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
-// ImportCompletion is one row of `import_completion` (migration 007,
+// ImportCompletion is one row of `import_completion` (migration 009,
 // issue #2548, FR12, NFR3) -- the one-time, one-way marker recording that
 // a `whagent_net`-style import for a given (scope, product) pair has
 // completed. Plain, append-only fact row -- not SCD2 (LB3) -- see
-// migration 007_import_completion.up.sql's boundary comment: there is no
+// migration 009_import_completion.up.sql's boundary comment: there is no
 // "current row" distinction here, and no update path.
 //
 // SourcePath is recorded for the audit trail only (NFR3) -- nothing in
 // krill ever reads it back to open a file. See this type's one intended
-// consumer, the report/audit output, and migration 007's column comment.
+// consumer, the report/audit output, and migration 009's column comment.
 type ImportCompletion struct {
 	ID             uuid.UUID
 	ScopeID        uuid.UUID
@@ -39,9 +39,9 @@ type ImportCompletion struct {
 // refusal, not a retry.
 var ErrAlreadyComplete = errors.New("krill/store: import already complete for this scope and product")
 
-// ImportCompletionStore covers `import_completion` (migration 007, issue
+// ImportCompletionStore covers `import_completion` (migration 009, issue
 // #2548, FR12, NFR3). Keyed by (scope_id, product_id), not scope_id
-// alone -- see migration 007's comment for why: FR12 reads as a
+// alone -- see migration 009's comment for why: FR12 reads as a
 // scope-level flag, but keying on the product as well is strictly safer
 // under M1's one-Product-per-scope shape and does not wrongly block a
 // second product's import into the same scope later.

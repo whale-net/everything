@@ -556,7 +556,7 @@ resolves to: a document is well-formed on this axis exactly when every
 
 ### One-time import completion and re-import refusal (M2's FR12, NFR3, issue #2548)
 
-Migration `007_import_completion` adds `import_completion`, the one-time,
+Migration `009_import_completion` adds `import_completion`, the one-time,
 one-way marker FR12 requires (root plan issue #2539's M2 FR12 — distinct
 from, and numbered independently of, M1's own FR12 in "Amend and as-of
 history reads" below; FR/NFR numbers are scoped to the milestone/plan that
@@ -570,7 +570,7 @@ in `importer.go`. The check is keyed on `source_path`, not `product_id`,
 because the target Product does not exist (and its id is not known) until
 after `Parse` and `write()` run; `MarkComplete`'s own row is still keyed on
 `(scope_id, product_id)` because that is the pair FR12 actually needs to
-be unique, per migration 007's "Keyed by (scope_id, product_id)" comment.
+be unique, per migration 009's "Keyed by (scope_id, product_id)" comment.
 
 There is no un-complete verb and no update path on `import_completion` —
 `MarkComplete` on an already-complete pair returns `store.
