@@ -298,16 +298,21 @@ jobs:
         # Shutdown Bazel server to prevent hanging
         bazel shutdown
 
-  # Container-backed database tests - real Postgres via libs/go/dbtest
+  # Container-backed integration tests - real Postgres via libs/go/dbtest,
+  # plus real MinIO via testcontainers-go (e.g. //libs/go/s3:s3_integration_test).
   #
   # These targets are tagged `manual`, so `bazel test //...` (the Test job above)
   # deliberately skips them and stays green on a machine with no Docker daemon.
   # That means nothing runs them unless a job like this one names them explicitly.
   # See libs/go/dbtest/README.md.
   #
-  # Targets are discovered by querying for tests that depend on //libs/go/dbtest,
-  # rather than hardcoding a list, so a new dbtest-backed test is covered the
-  # moment it is written. Runs in parallel with the test jobs above.
+  # Postgres-backed targets are discovered by querying for tests that depend on
+  # //libs/go/dbtest, rather than hardcoding a list, so a new dbtest-backed test
+  # is covered the moment it is written. MinIO-backed tests have no equivalent
+  # shared library to key a dependency query on (each test starts its own
+  # container via testcontainers-go directly), so they're unioned in by label
+  # below; add a new one there when it's written. Runs in parallel with the
+  # test jobs above.
   #
   # On pull_request, this is further narrowed to only the targets affected by
   # the diff against main (release_helper's `changed-targets`), since this
@@ -345,13 +350,13 @@ jobs:
         # Uses --config=ci (defined in .bazelrc with --noimplicit_deps) and
         # --universe_scope to accelerate target discovery.
         SCOPE='//libs/... + //tools/... + //manmanv2/... + //audience_score_system/...'
-        CANDIDATES="tests($SCOPE) intersect rdeps($SCOPE, //libs/go/dbtest:dbtest)"
+        CANDIDATES="(tests($SCOPE) intersect rdeps($SCOPE, //libs/go/dbtest:dbtest)) union //libs/go/s3:s3_integration_test"
         ALL_TARGETS=$(bazel query \
           --config=ci \
           --universe_scope=//... \
           "$CANDIDATES" \
           | tr '\n' ' ')
-        echo "All dbtest-backed targets: ${ALL_TARGETS:-<none>}"
+        echo "All container-backed integration targets: ${ALL_TARGETS:-<none>}"
         echo "::endgroup::"
 
         # An empty result means the query broke, not that there is no work:
@@ -359,7 +364,7 @@ jobs:
         # here is the point — a silently-empty run would report this job green
         # while testing nothing.
         if [ -z "${ALL_TARGETS// /}" ]; then
-          echo "::error::No dbtest-backed test targets found. The discovery query is broken - it should always match at least //libs/go/dbtest:postgres_constraints_test."
+          echo "::error::No container-backed integration test targets found. The discovery query is broken - it should always match at least //libs/go/dbtest:postgres_constraints_test."
           exit 1
         fi
 
@@ -392,7 +397,7 @@ jobs:
         fi
 
         if [ -z "${TARGETS// /}" ]; then
-          echo "No dbtest-backed targets affected by this change; skipping."
+          echo "No container-backed integration targets affected by this change; skipping."
           exit 0
         fi
 
