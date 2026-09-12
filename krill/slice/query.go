@@ -96,8 +96,13 @@ func (q *Querier) GetRequirementSlice(ctx context.Context, requirementID uuid.UU
 	}, nil
 }
 
-// GetProductSlice is FR8: every FeatureSet, Feature, FR, NFR, and
-// LoadBearingDecision beneath the Product, in one call.
+// GetProductSlice is FR8: every FeatureSet, Feature, FR, NFR,
+// LoadBearingDecision, and PointerArtifact (issue #2496, FR20) beneath the
+// Product, in one call. PointerArtifacts is the one field only this
+// granularity ever populates -- a pointer artifact's single parent is the
+// Product itself (store/pointer.go), so it is never reachable from
+// GetFeatureSetSlice/GetFeatureSlice/GetRequirementSlice the way a
+// FeatureSet-scoped Decision is.
 func (q *Querier) GetProductSlice(ctx context.Context, productID uuid.UUID) (Document, error) {
 	product, err := q.store.Products().GetCurrentByID(ctx, productID)
 	if err != nil {
@@ -124,14 +129,20 @@ func (q *Querier) GetProductSlice(ctx context.Context, productID uuid.UUID) (Doc
 		return Document{}, fmt.Errorf("list decisions by product: %w", err)
 	}
 
+	pointerArtifacts, err := q.store.PointerArtifacts().ListByProduct(ctx, productID)
+	if err != nil {
+		return Document{}, fmt.Errorf("list pointer_artifacts by product: %w", err)
+	}
+
 	productEntity := toProductEntity(product)
 	return Document{
-		SchemaVersion: SchemaVersion,
-		Product:       &productEntity,
-		FeatureSets:   toFeatureSetEntities(featureSets),
-		Features:      toFeatureEntities(features),
-		Requirements:  toRequirementEntities(requirements),
-		Decisions:     toDecisionEntities(decisions),
+		SchemaVersion:    SchemaVersion,
+		Product:          &productEntity,
+		FeatureSets:      toFeatureSetEntities(featureSets),
+		Features:         toFeatureEntities(features),
+		Requirements:     toRequirementEntities(requirements),
+		Decisions:        toDecisionEntities(decisions),
+		PointerArtifacts: toPointerArtifactEntities(pointerArtifacts),
 	}, nil
 }
 
@@ -438,6 +449,24 @@ func toDecisionEntities(decisions []store.LoadBearingDecision) []DecisionEntity 
 	entities := make([]DecisionEntity, len(decisions))
 	for i, d := range decisions {
 		entities[i] = toDecisionEntity(d)
+	}
+	return entities
+}
+
+func toPointerArtifactEntity(p store.PointerArtifact) PointerArtifactEntity {
+	return PointerArtifactEntity{
+		ID:          p.ID,
+		ProductID:   p.ProductID,
+		Kind:        p.Kind,
+		IssueNumber: p.IssueNumber,
+		IssueURL:    p.IssueURL,
+	}
+}
+
+func toPointerArtifactEntities(artifacts []store.PointerArtifact) []PointerArtifactEntity {
+	entities := make([]PointerArtifactEntity, len(artifacts))
+	for i, p := range artifacts {
+		entities[i] = toPointerArtifactEntity(p)
 	}
 	return entities
 }

@@ -1,0 +1,26 @@
+load("@rules_go//go:def.bzl", "go_library", "go_test")
+
+# krill's minimal GitHub forge client (issue #2496, FR20, C9): creates the
+# one thin pointer issue this milestone needs. See github.go's package doc
+# comment for why this is not a full GitHub App installation-token client
+# (tools/app_registry/worker/release's GitHubDispatcher precedent) -- one
+# write, one bearer token, no lifecycle ownership (C20).
+go_library(
+    name = "forge",
+    srcs = ["github.go"],
+    importpath = "github.com/whale-net/everything/krill/forge",
+    visibility = ["//visibility:public"],
+)
+
+# Unit tests for GitHubClient.CreateIssue (faked via httptest.Server -- no
+# real network call) and IssueContent's title/body assertions (issue
+# #2496's Testing section). Runs as part of `bazel test //...`.
+go_test(
+    name = "forge_test",
+    srcs = ["github_test.go"],
+    embed = [":forge"],
+    deps = [
+        "@com_github_stretchr_testify//assert",
+        "@com_github_stretchr_testify//require",
+    ],
+)

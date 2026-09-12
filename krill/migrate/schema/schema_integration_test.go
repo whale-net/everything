@@ -114,15 +114,16 @@ var specTables = []string{"product", "feature_set", "feature", "requirement", "l
 
 // TestMigrations_UpDownUp_LeavesCleanDatabaseAndIsRerunnable proves the
 // whole migration set's lifecycle through the latest migration currently
-// embedded (004_milestone_assoc, issue #2492): Up() creates every table
-// including `krill_session`, `milestone_ref`, and `entity_milestone`,
-// Down() drops all of them (a clean database), and Up() again succeeds a
-// second time from that clean state -- the migration set is re-runnable
-// through //libs/go/migrate, not a one-shot script. The hardcoded
-// latest-version assertion below must be bumped whenever a new migration
-// lands (it was 1 for 001_scope alone, issue #2487; it is 4 now that
-// 002_spec_entities, 003_session, and 004_milestone_assoc, issue #2492,
-// have all landed).
+// embedded (005_pointer_artifact, issue #2496): Up() creates every table
+// including `krill_session`, `milestone_ref`, `entity_milestone`, and
+// `pointer_artifact`, Down() drops all of them (a clean database), and
+// Up() again succeeds a second time from that clean state -- the
+// migration set is re-runnable through //libs/go/migrate, not a one-shot
+// script. The hardcoded latest-version assertion below must be bumped
+// whenever a new migration lands (it was 1 for 001_scope alone, issue
+// #2487; it is 5 now that 002_spec_entities, 003_session,
+// 004_milestone_assoc, and 005_pointer_artifact, issue #2496, have all
+// landed).
 func TestMigrations_UpDownUp_LeavesCleanDatabaseAndIsRerunnable(t *testing.T) {
 	ctx := context.Background()
 	db := dbtest.NewPostgres(ctx, t, dbtest.Options{})
@@ -135,20 +136,21 @@ func TestMigrations_UpDownUp_LeavesCleanDatabaseAndIsRerunnable(t *testing.T) {
 
 	latest, err := runner.LatestVersion()
 	require.NoError(t, err)
-	require.Equal(t, uint(4), latest, "expected the latest migration source version to be 4 (001_scope, 002_spec_entities, 003_session, 004_milestone_assoc) -- update this test if a later migration has since landed")
+	require.Equal(t, uint(5), latest, "expected the latest migration source version to be 5 (001_scope, 002_spec_entities, 003_session, 004_milestone_assoc, 005_pointer_artifact) -- update this test if a later migration has since landed")
 
-	// -- Up: scope, krill_session, and the milestone tables must exist, version must land clean at the latest --
-	require.NoError(t, runner.Up(), "apply migrations 001-004")
+	// -- Up: scope, krill_session, the milestone tables, and pointer_artifact must exist, version must land clean at the latest --
+	require.NoError(t, runner.Up(), "apply migrations 001-005")
 
 	version, dirty, err := runner.Version()
 	require.NoError(t, err)
 	assert.False(t, dirty)
-	assert.Equal(t, uint(4), version)
+	assert.Equal(t, uint(5), version)
 
 	assert.True(t, tableExists(t, ctx, db, "scope"), "expected table \"scope\" to exist after Up()")
 	assert.True(t, tableExists(t, ctx, db, "krill_session"), "expected table \"krill_session\" to exist after Up() (003_session, issue #2489)")
 	assert.True(t, tableExists(t, ctx, db, "milestone_ref"), "expected table \"milestone_ref\" to exist after Up() (004_milestone_assoc, issue #2492)")
 	assert.True(t, tableExists(t, ctx, db, "entity_milestone"), "expected table \"entity_milestone\" to exist after Up() (004_milestone_assoc, issue #2492)")
+	assert.True(t, tableExists(t, ctx, db, "pointer_artifact"), "expected table \"pointer_artifact\" to exist after Up() (005_pointer_artifact, issue #2496)")
 
 	// -- Down: every table must be gone -------------------------------------
 	require.NoError(t, runner.Down(), "roll back every migration")
@@ -157,6 +159,7 @@ func TestMigrations_UpDownUp_LeavesCleanDatabaseAndIsRerunnable(t *testing.T) {
 	assert.False(t, tableExists(t, ctx, db, "krill_session"), "expected table \"krill_session\" to be dropped after Down() -- a clean database")
 	assert.False(t, tableExists(t, ctx, db, "milestone_ref"), "expected table \"milestone_ref\" to be dropped after Down() -- a clean database")
 	assert.False(t, tableExists(t, ctx, db, "entity_milestone"), "expected table \"entity_milestone\" to be dropped after Down() -- a clean database")
+	assert.False(t, tableExists(t, ctx, db, "pointer_artifact"), "expected table \"pointer_artifact\" to be dropped after Down() -- a clean database")
 
 	// -- Up again: re-runnable from the clean state --------------------------
 	require.NoError(t, runner.Up(), "re-apply every migration after Down() -- must be re-runnable")
@@ -164,12 +167,13 @@ func TestMigrations_UpDownUp_LeavesCleanDatabaseAndIsRerunnable(t *testing.T) {
 	version, dirty, err = runner.Version()
 	require.NoError(t, err)
 	assert.False(t, dirty)
-	assert.Equal(t, uint(4), version)
+	assert.Equal(t, uint(5), version)
 
 	assert.True(t, tableExists(t, ctx, db, "scope"), "expected table \"scope\" to exist again after the second Up()")
 	assert.True(t, tableExists(t, ctx, db, "krill_session"), "expected table \"krill_session\" to exist again after the second Up()")
 	assert.True(t, tableExists(t, ctx, db, "milestone_ref"), "expected table \"milestone_ref\" to exist again after the second Up()")
 	assert.True(t, tableExists(t, ctx, db, "entity_milestone"), "expected table \"entity_milestone\" to exist again after the second Up()")
+	assert.True(t, tableExists(t, ctx, db, "pointer_artifact"), "expected table \"pointer_artifact\" to exist again after the second Up()")
 }
 
 // TestMigration001_SchemaContract asserts the specific column shapes and
@@ -436,9 +440,9 @@ func TestMigration002_NoDisplayNumberColumnsOrJoinTables(t *testing.T) {
 	require.NoError(t, rows.Err())
 	rows.Close()
 
-	expected := append([]string{"schema_migrations", "scope", "krill_session", "milestone_ref", "entity_milestone"}, specTables...)
+	expected := append([]string{"schema_migrations", "scope", "krill_session", "milestone_ref", "entity_milestone", "pointer_artifact"}, specTables...)
 	sort.Strings(expected)
-	assert.Equal(t, expected, tables, "the public schema must contain exactly scope + the seven spec tables + krill_session (003_session, issue #2489) + milestone_ref + entity_milestone (004_milestone_assoc, issue #2492) + golang-migrate's schema_migrations -- no fourth parallel table (e.g. \"capability\") and no join/bridge table for parentage (LB2)")
+	assert.Equal(t, expected, tables, "the public schema must contain exactly scope + the seven spec tables + krill_session (003_session, issue #2489) + milestone_ref + entity_milestone (004_milestone_assoc, issue #2492) + pointer_artifact (005_pointer_artifact, issue #2496) + golang-migrate's schema_migrations -- no fourth parallel table (e.g. \"capability\") and no join/bridge table for parentage (LB2)")
 
 	// No display-number-shaped column on any spec table -- LB2's own
 	// vocabulary for the trap this guards against.
@@ -597,4 +601,109 @@ func TestMigration004_SchemaContract(t *testing.T) {
 		INSERT INTO entity_milestone (scope_id, entity_id, milestone_id) VALUES ($1, $2, gen_random_uuid())
 	`, scopeID, featureID)
 	assert.Error(t, err, "entity_milestone.milestone_id must be FK-enforced against milestone_ref(id)")
+}
+
+// TestMigration005_SchemaContract asserts 005_pointer_artifact's own
+// boundary calls (issue #2496, FR20, C9): scope_id NOT NULL with a real
+// DB-enforced FK (LB1), a `kind` CHECK constraint rejecting anything but
+// "github_issue", every LB4 subject column NOT NULL, a UNIQUE index on
+// product_id (at most one pointer issue per Product), and -- C20's one
+// recorded condition -- no branch-name, PR-number, commit-SHA, or
+// conversation-URL-shaped column anywhere on the table.
+func TestMigration005_SchemaContract(t *testing.T) {
+	ctx := context.Background()
+	db := dbtest.NewPostgres(ctx, t, dbtest.Options{})
+
+	sqlDB, err := sql.Open("pgx", db.ConnString)
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = sqlDB.Close() })
+
+	runner := migrate.NewRunner(sqlDB, schema.Migrations, schema.Dir)
+	require.NoError(t, runner.Up())
+
+	// -- Not SCD2 (LB3): no valid_from/valid_to columns -----------------------
+	cols := columnNames(t, ctx, db, "pointer_artifact")
+	assert.NotContains(t, cols, "valid_from", "pointer_artifact must not be SCD2 (LB3) -- it is a plain fact table")
+	assert.NotContains(t, cols, "valid_to", "pointer_artifact must not be SCD2 (LB3) -- it is a plain fact table")
+
+	// -- C20: no branch-name-derived or PR/commit/conversation-shaped column --
+	for _, forbidden := range []string{
+		"branch", "branch_name", "pr_number", "pull_request_number",
+		"commit_sha", "conversation_url", "conversation_id",
+	} {
+		assert.NotContains(t, cols, forbidden, "pointer_artifact must not carry a %q column -- C20: krill stores references only, never branch/PR/commit/conversation-derived state", forbidden)
+	}
+
+	// -- scope_id: NOT NULL, real DB-enforced FK (LB1) ------------------------
+	dataType, nullable := nullableColumn(t, ctx, db, "pointer_artifact", "scope_id")
+	assert.Equal(t, "NO", nullable, "pointer_artifact.scope_id must be NOT NULL (LB1)")
+	assert.Equal(t, "uuid", dataType, "pointer_artifact.scope_id must be a plain uuid column")
+	assert.True(t, hasForeignKeyTo(t, ctx, db, "pointer_artifact", "scope"), "pointer_artifact.scope_id must carry a real DB-enforced FK to scope(id) (LB1)")
+
+	// -- product_id: NOT NULL, plain uuid, NOT a DB-enforced FK (LB2 parentage) --
+	dataType, nullable = nullableColumn(t, ctx, db, "pointer_artifact", "product_id")
+	assert.Equal(t, "NO", nullable, "pointer_artifact.product_id must be NOT NULL")
+	assert.Equal(t, "uuid", dataType, "pointer_artifact.product_id must be a plain uuid column, never an array (LB2 parentage)")
+	assert.False(t, hasForeignKeyTo(t, ctx, db, "pointer_artifact", "product"), "pointer_artifact.product_id must NOT carry a DB-enforced FK to product -- LB2 parentage is store-layer-enforced only, same as every migration 002 child table")
+
+	// -- LB4: every subject column NOT NULL -----------------------------------
+	for _, col := range []string{
+		"created_by_acting_iss", "created_by_acting_sub", "created_by_acting_kind",
+		"created_by_on_behalf_of_iss", "created_by_on_behalf_of_sub", "created_by_on_behalf_of_kind",
+	} {
+		_, nullable := nullableColumn(t, ctx, db, "pointer_artifact", col)
+		assert.Equal(t, "NO", nullable, "pointer_artifact.%s must be NOT NULL (LB4 -- both subjects always recorded)", col)
+	}
+
+	_, nullable = nullableColumn(t, ctx, db, "pointer_artifact", "issue_number")
+	assert.Equal(t, "NO", nullable, "pointer_artifact.issue_number must be NOT NULL")
+	_, nullable = nullableColumn(t, ctx, db, "pointer_artifact", "issue_url")
+	assert.Equal(t, "NO", nullable, "pointer_artifact.issue_url must be NOT NULL")
+
+	// -- kind CHECK constraint: only "github_issue" is accepted ---------------
+	var scopeID uuid.UUID
+	require.NoError(t, db.Pool.QueryRow(ctx, `
+		INSERT INTO scope (repo_full_name, default_branch) VALUES ('pointer-check/repo', 'main') RETURNING id
+	`).Scan(&scopeID))
+	var productID uuid.UUID
+	require.NoError(t, db.Pool.QueryRow(ctx, `
+		INSERT INTO product (scope_id, name, vision) VALUES ($1, 'P', 'V') RETURNING id
+	`, scopeID).Scan(&productID))
+
+	_, err = db.Pool.Exec(ctx, `
+		INSERT INTO pointer_artifact (
+			scope_id, product_id, kind, issue_number, issue_url,
+			created_by_acting_iss, created_by_acting_sub, created_by_acting_kind,
+			created_by_on_behalf_of_iss, created_by_on_behalf_of_sub, created_by_on_behalf_of_kind
+		) VALUES (
+			$1, $2, 'not_github_issue', 1, 'https://example.com/issues/1',
+			'iss', 'sub', 'human', 'iss', 'sub', 'human'
+		)
+	`, scopeID, productID)
+	assert.Error(t, err, "pointer_artifact.kind must reject a value other than \"github_issue\" (CHECK constraint)")
+
+	// -- pointer_artifact_product_idx: at most one pointer artifact per Product --
+	_, err = db.Pool.Exec(ctx, `
+		INSERT INTO pointer_artifact (
+			scope_id, product_id, issue_number, issue_url,
+			created_by_acting_iss, created_by_acting_sub, created_by_acting_kind,
+			created_by_on_behalf_of_iss, created_by_on_behalf_of_sub, created_by_on_behalf_of_kind
+		) VALUES (
+			$1, $2, 1, 'https://example.com/issues/1',
+			'iss', 'sub', 'human', 'iss', 'sub', 'human'
+		)
+	`, scopeID, productID)
+	require.NoError(t, err)
+
+	_, err = db.Pool.Exec(ctx, `
+		INSERT INTO pointer_artifact (
+			scope_id, product_id, issue_number, issue_url,
+			created_by_acting_iss, created_by_acting_sub, created_by_acting_kind,
+			created_by_on_behalf_of_iss, created_by_on_behalf_of_sub, created_by_on_behalf_of_kind
+		) VALUES (
+			$1, $2, 2, 'https://example.com/issues/2',
+			'iss', 'sub', 'human', 'iss', 'sub', 'human'
+		)
+	`, scopeID, productID)
+	assert.Error(t, err, "a second pointer_artifact row for the same product_id must violate pointer_artifact_product_idx's UNIQUE constraint")
 }

@@ -192,3 +192,44 @@ type EntityMilestone struct {
 	MilestoneID uuid.UUID
 	CreatedAt   time.Time
 }
+
+// Scope is one row of `scope` (migration 001, issue #2487, LB1) -- the
+// forge-coordinate row every other table's scope_id hangs off. Plain
+// mutable config, not SCD2 (see migrations/001_scope.up.sql's boundary
+// comment) -- ScopeStore (scope.go) exposes only a read, never a CRUD
+// surface (ARCHITECTURE.md's "The scope table" section: "no UI exposes
+// it"); PointerArtifactStore.Create (issue #2496, FR20) is the one
+// exception, writing PointerIssueNumber directly in its own transaction
+// once a pointer issue is minted.
+type Scope struct {
+	ID                 uuid.UUID
+	RepoFullName       string
+	DefaultBranch      string
+	PointerIssueNumber *int
+	CreatedAt          time.Time
+	UpdatedAt          time.Time
+}
+
+// PointerArtifact is one row of `pointer_artifact` (migration 005, issue
+// #2496, FR20, C9) -- the thin GitHub issue krill creates to stand in for
+// a Product now that the spec itself lives in krill instead of a file.
+// Single parent: Product.ID. Not SCD2 (LB3) -- see migration
+// 005_pointer_artifact.up.sql's boundary comment. Kind is a discriminator
+// on the artifact's own shape (today, always "github_issue") -- it does
+// not describe what has since referenced the created issue; see that same
+// migration comment for why no PR/commit/conversation-shaped column
+// exists here (C20).
+type PointerArtifact struct {
+	ID          uuid.UUID
+	ScopeID     uuid.UUID
+	ProductID   uuid.UUID
+	Kind        string
+	IssueNumber int
+	IssueURL    string
+	// CreatedByActing/CreatedByOnBehalfOf are the two LB4 subjects
+	// (mirrors krill_session's acting/on_behalf_of triples) attributing
+	// who minted this pointer issue and on whose behalf.
+	CreatedByActing     Subject
+	CreatedByOnBehalfOf Subject
+	CreatedAt           time.Time
+}

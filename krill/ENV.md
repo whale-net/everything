@@ -38,10 +38,19 @@ template inference"), since M1 runs against exactly one repo/scope.
 | `KRILL_API_ADDR` | api | `:8080` | Address `api`'s HTTP surface listens on. |
 
 `api` exposes `/healthz` (a live database connectivity check, not a static
-200 -- `krill/api/main.go`'s doc comment), `POST /sessions/init` (FR3), and
-the M1 entity write endpoints (FR1/FR2/FR4, issue #2490) -- see
+200 -- `krill/api/main.go`'s doc comment), `POST /sessions/init` (FR3), the
+M1 entity write endpoints (FR1/FR2/FR4, issue #2490), and the
+pointer-artifact create endpoint (FR20, issue #2496) -- see
 `krill/README.md`'s Endpoints table. No new configuration was added for the
-write endpoints; they read the same `PG_DATABASE_URL` pool as `/healthz`.
+FR1/FR2/FR4 write endpoints; they read the same `PG_DATABASE_URL` pool as
+`/healthz`. `POST /pointer-artifacts` is the one exception -- see "Forge"
+below for the one extra variable it reads.
+
+## Forge (pointer-artifact create, issue #2496, FR20)
+
+| Variable | Component | Default | Description |
+|----------|-----------|---------|-------------|
+| `KRILL_GITHUB_TOKEN` | api | `""` | Bearer token `//krill/forge.GitHubClient` sends when creating a Product's thin pointer issue (`POST /pointer-artifacts`). Needs "Issues: write" on the scope's `repo_full_name` (a fine-grained PAT or GitHub App installation token is enough — no GitHub App credential set like `tools/app_registry`'s `GitHubDispatcherConfig` is needed for this one write). Unset leaves every other endpoint unaffected; only `POST /pointer-artifacts` fails (a GitHub 401) if it is missing or invalid. |
 
 ## `mcp` server (FR10/NFR1, issue #2494)
 
