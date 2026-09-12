@@ -1,6 +1,6 @@
 {
   "name": "krill",
-  "description": "Claude Code plugin for krill, the spec-of-record and work-tracking substrate for agent swarms. MCP server entries land once krill/mcp exists (issue #2487 is domain scaffolding only) -- see krill/TOC.md.",
+  "description": "Streamable-HTTP MCP access to krill's FR10/NFR1 spec surface (feature-set/feature/requirement/product slice query) across tilt/dev/prod.",
   "author": {
     "name": "whale_net"
   }

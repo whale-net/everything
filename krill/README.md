@@ -16,6 +16,7 @@ milestone hangs off. No spec entities exist yet — that is later M1 work.
 | `migrate` | `//krill/migrate` | job | Applies `krill/migrate/schema/migrations` and seeds the one `scope` row with this repo's forge coordinates (LB1, NFR2). |
 | `api` | `//krill/api` | external-api | HTTP server; `/healthz` (a live DB ping), `POST /sessions/init` (FR3's `init` primitive, issue #2489), the M1 entity write API (FR1/FR2/FR4, issue #2490), and the FR5-FR9 scoped-slice query surface (`GET /slices/{feature-sets,features,requirements,products}/{id}`, issue #2491). |
 | `import` | `//krill/importer/cmd` | CLI (not deployed) | The one-way markdown importer (FR16, FR17, issue #2492): parses a `PRODUCT.md` + `product/*.md` doc set into `krill/store`'s spec entities and prints the entity-id report. Gated on a valid `init` session, same as every other write path. Run with `bazel run //krill/importer/cmd:import -- --path <dir> --session-id <uuid>`. See `ARCHITECTURE.md` "The markdown importer and the delivery-axis association". |
+| `mcp` | `//krill/mcp` | external-api | krill's FR10/NFR1 spec surface: the FR5-FR9 scoped-slice query over MCP at `/mcp/spec`, behind the mcpauth (human) + whagent-net (agent) two-front-door auth pattern. See "MCP spec surface" below. |
 
 ## Endpoints
 
@@ -81,11 +82,41 @@ See [`ENV.md`](ENV.md) for every environment variable `migrate` and `api`
 read, and [`ARCHITECTURE.md`](ARCHITECTURE.md) for the component map and
 the `scope` table's design rationale.
 
+## MCP spec surface (FR10/NFR1, issue #2494)
+
+`mcp` exposes the FR5-FR9 scoped-slice query over MCP at `/mcp/spec` --
+any MCP-capable harness (Claude Code today) reaches it with no
+krill-specific harness code. Every tool is a thin wrapper over
+`krill/slice`'s query layer (LB7): it returns `slice.Document` unchanged,
+never a bespoke per-tool projection.
+
+| Tool | Wraps | Description |
+|------|-------|-------------|
+| `get_feature_set_slice` | `slice.Querier.GetFeatureSetSlice` (FR5) | A FeatureSet, its Features, their FRs/NFRs, and only the LoadBearingDecisions attached to that FeatureSet. |
+| `get_feature_slice` | `slice.Querier.GetFeatureSlice` (FR6) | A Feature and its FRs/NFRs. |
+| `get_requirement_slice` | `slice.Querier.GetRequirementSlice` (FR7) | A single FR or NFR by surrogate id alone. |
+| `get_product_slice` | `slice.Querier.GetProductSlice` (FR8) | Every FeatureSet, Feature, FR, NFR, and LoadBearingDecision beneath a Product. |
+
+Every tool takes `{"id": "<uuid>"}` -- the surrogate id (LB2) of the
+entity to slice from. None is gated by `init`/session (FR3's gate is
+write-only); every call still requires an authenticated persona (see
+below). No write tool is registered on this endpoint in M1.
+
+**Auth (NFR1)** -- both front doors mounted at `/mcp/spec`, each
+independently env-gated (see `ENV.md`), authorized by **persona** (Swarm
+Operator / Requirement Contributor / Agent), never individual identity:
+
+- human callers via `//libs/go/mcpauth` (OAuth2-capable) -- resolves to
+  `PersonaSwarmOperator` in M1 (see `krill/mcp/server/auth.go`'s doc
+  comment for why no second human persona is distinguished yet);
+- agent callers via the `//libs/go/whagent` verifier -- resolves to
+  `PersonaAgent` unconditionally.
+
+See `ARCHITECTURE.md` "The MCP spec surface" for the full design.
+
 ## Claude Code plugin
 
-`plugin/user/` is the Claude Code plugin layout this domain will expose
-MCP tools through, mirroring `whagent_net/plugin` /
-`audience_score_system/plugin`. It is a placeholder in this task — no MCP
-server exists yet, so no MCP entries are registered here. A later M1 task
-adds `krill/mcp` and wires `plugin/user/.mcp.json` / `mcp_config.json` to
-it.
+`plugin/user/` is the Claude Code plugin layout this domain exposes MCP
+tools through, mirroring `whagent_net/plugin` / `audience_score_system/plugin`:
+`.mcp.json` / `mcp_config.json` register `krill-mcp-tilt` (local Tilt,
+`http://localhost:8084/mcp/spec`), `krill-mcp-dev`, and `krill-mcp-prod`.
