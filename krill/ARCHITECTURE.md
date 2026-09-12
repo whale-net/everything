@@ -27,9 +27,10 @@ and the milestone roadmap that drives what gets built next.
 `migrate`, `api`, and `mcp` each get their own Postgres connection
 (`PG_DATABASE_URL`, `//libs/go/db` / `//libs/go/migrate` — see `ENV.md`).
 `krill/plugin/` now carries `mcp`'s Claude Code plugin entries (`.mcp.json`
-/ `mcp_config.json`, issue #2494) rather than being a placeholder (see
-README.md "Claude Code plugin"), and `//krill:krill_chart` bundles all
-three binaries.
+/ `mcp_config.json`, issue #2494) rather than being a placeholder, plus a
+companion `plugin/data/` "-data" plugin for direct Postgres access to the
+same database (see README.md "Claude Code plugin"), and
+`//krill:krill_chart` bundles all three binaries.
 
 `krill/store` (issue #2488) is the pgx-based repository over migration
 002's spec tables — a library, not a binary, so it does not appear in the

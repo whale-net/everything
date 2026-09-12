@@ -11,6 +11,9 @@
     },
     {
       "path": "whagent_net/plugin/user"
+    },
+    {
+      "path": "krill/plugin/user"
     }
   ]
 }

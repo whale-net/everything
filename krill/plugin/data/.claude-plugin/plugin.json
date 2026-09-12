@@ -1,0 +1,7 @@
+{
+  "name": "krill-data",
+  "description": "Postgres MCP access (crystaldba postgres-mcp) to the krill database across tilt/dev/prod",
+  "author": {
+    "name": "whale_net"
+  }
+}

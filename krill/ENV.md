@@ -78,6 +78,28 @@ degrades that door to reject every call (`main.go`'s
 `rejectingCredentialStore`), rather than failing to boot; the agent front
 door never depends on it.
 
+## Postgres MCP (Claude Code plugin)
+
+`.mcp.json` at the plugin root (`krill/plugin/data/.mcp.json`, symlinked to
+`.agents/plugins/krill-data` — see `.claude-plugin/marketplace.json`)
+wires up three read-restricted (`--access-mode=restricted`) crystaldba
+`postgres-mcp` servers via `uvx`, one per environment, following
+`tools/app_registry` / `audience_score_system/plugin/data`'s identical
+plugin pattern:
+
+| Server | Connection |
+|---|---|
+| `krill-pg-tilt` | Hardcoded to the local default (`postgres://postgres:password@localhost:5432/krill`) — not a secret |
+| `krill-pg-dev` | `KRILL_DEV_DATABASE_URI` (shell env var, not set by default) |
+| `krill-pg-prod` | `KRILL_PROD_DATABASE_URI` (shell env var, not set by default) |
+
+These are separate from `PG_DATABASE_URL` above (which `migrate`/`api`/
+`mcp` read) so that tilt, dev, and prod can be queried side by side from
+the same Claude Code session without swapping a single variable. This is
+also separate from the `krill` plugin (`krill/plugin/user`), which gives
+streamable-HTTP MCP access to `mcp`'s own FR5-FR9 slice query tools rather
+than direct Postgres access.
+
 ## Telemetry
 
 Read via `//libs/go/logging` (`api`, `mcp`).
