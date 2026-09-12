@@ -3,6 +3,18 @@
     "agentsync-mcp": {
       "command": "bazel",
       "args": ["run", "--noshow_progress", "//tools/agentsync-mcp:agentsync-mcp-server"]
+    },
+    "krill-mcp-tilt": {
+      "serverUrl": "http://localhost:8084/mcp/spec",
+      "headers": {
+        "Authorization": "Bearer dev-local"
+      }
+    },
+    "krill-mcp-dev": {
+      "serverUrl": "https://dev-mcp.krill.whalenet.dev/mcp/spec"
+    },
+    "krill-mcp-prod": {
+      "serverUrl": "https://mcp.krill.whalenet.dev/mcp/spec"
     }
   }
 }
