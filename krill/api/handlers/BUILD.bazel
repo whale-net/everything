@@ -65,6 +65,7 @@ go_test(
         "feature_test.go",
         "featureset_test.go",
         "gate_test.go",
+        "pointer_test.go",
         "product_test.go",
         "requirement_test.go",
         "session_test.go",

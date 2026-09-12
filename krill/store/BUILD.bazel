@@ -243,3 +243,44 @@ go_test(
         "@com_github_stretchr_testify//require",
     ],
 )
+
+# Real Postgres integration test for PointerArtifactStore (pointer.go, issue
+# #2496's Testing section): Create attaches to a Product and mirrors the
+# minted issue number onto scope.pointer_issue_number (LB1) in the same
+# transaction, LB2 parentage rejection for an unknown Product,
+# pointer_artifact_product_idx's at-most-one-per-Product rejection, and the
+# issue's own FR8 proof -- a created pointer artifact appears in its own
+# Product's whole-product slice (//krill/slice) and never in another
+# scope's. This is its own target (not folded into store_integration_test)
+# because it is the one PointerArtifactStore test that also needs
+# //krill/slice. Deliberately NOT part of `bazel test //...` -- see
+# //libs/go/dbtest's README for the full rationale.
+#
+# Run it explicitly (requires a working Docker daemon):
+#   bazel test //krill/store:pointer_integration_test --test_output=all
+go_test(
+    name = "pointer_integration_test",
+    size = "large",
+    timeout = "long",
+    srcs = ["pointer_integration_test.go"],
+    gotags = ["integration"],
+    tags = [
+        "external",
+        "integration",
+        "manual",
+        "no-cache",
+        "no-sandbox",
+        "requires-network",
+    ],
+    deps = [
+        ":store",
+        "//krill/migrate/schema",
+        "//krill/slice",
+        "//libs/go/dbtest",
+        "//libs/go/migrate",
+        "@com_github_google_uuid//:uuid",
+        "@com_github_jackc_pgx_v5//stdlib",
+        "@com_github_stretchr_testify//assert",
+        "@com_github_stretchr_testify//require",
+    ],
+)
