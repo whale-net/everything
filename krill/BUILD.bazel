@@ -13,13 +13,16 @@ filegroup(
 # domain "krill" + chart_name "krill" produces the "helm-krill-krill" chart
 # identity. `migrate` (job) + `api` (external HTTP: /healthz + DB
 # connectivity check only, no spec endpoints yet -- issue #2487) + `mcp`
-# (external HTTP: the FR10/NFR1 spec surface at /mcp/spec, issue #2494).
+# (external HTTP: the FR10/NFR1 spec surface at /mcp/spec, issue #2494) +
+# `ui` (external HTTP: the barebones Keycloak sign-in shell backing
+# mcpauth's `/authorize` SignInURL -- see krill/ui/main.go's package doc).
 release_helm_chart(
     name = "krill_chart",
     apps = [
         "//krill/migrate:migrate_metadata",
         "//krill/api:api_metadata",
         "//krill/mcp:mcp_metadata",
+        "//krill/ui:ui_metadata",
     ],
     chart_name = "krill",
     domain = "krill",

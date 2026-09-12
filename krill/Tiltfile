@@ -75,6 +75,11 @@ APPS = {
         'bazel_target': '//krill/mcp:mcp_image_load',
         'image_name': 'krill-mcp',
     },
+    'ui': {
+        'enabled_env': 'ENABLE_KRILL_UI',
+        'bazel_target': '//krill/ui:ui_image_load',
+        'image_name': 'krill-ui',
+    },
 }
 
 # ===========================
@@ -191,9 +196,9 @@ spec:
 # mcpauth + whagent-net two-front-door pattern (../ARCHITECTURE.md "The
 # MCP spec surface"). Both front doors are independently env-gated; local
 # dev leaves KRILL_MCP_WHAGENT_JWKS_URL/KRILL_MCP_WHAGENT_ISSUER unset
-# (agent door disabled) and PG_DATABASE_URL points at the same Postgres
-# `api` uses, so the mcpauth door degrades to reject-all until that
-# migration exists (mcp/main.go's rejectingCredentialStore).
+# (agent door disabled). KRILL_MCP_OAUTH_ISSUER points at `ui` (below) --
+# migration 006_mcpauth_credential now backs the mcpauth door for real,
+# but `/authorize` itself is served by `ui`, not `mcp`.
 if get_env_bool('ENABLE_KRILL_MCP', default='true'):
     k8s_yaml(blob("""
 apiVersion: v1
@@ -235,6 +240,10 @@ spec:
           value: ":8080"
         - name: PG_DATABASE_URL
           value: "{pg_database_url}"
+        - name: KRILL_MCP_PUBLIC_URL
+          value: "http://localhost:8084"
+        - name: KRILL_MCP_OAUTH_ISSUER
+          value: "http://localhost:8085"
         - name: OTEL_EXPORTER_OTLP_ENDPOINT
           value: "{otel_endpoint}"
 """.format(
@@ -255,6 +264,83 @@ spec:
     )
     print("🔌 mcp forwarded to http://localhost:8084/mcp/spec")
 
+# ui: krill's barebones operator web UI (krill/ui/main.go) -- exists
+# solely to give mcpauth's `/authorize` endpoint a SignInURL to redirect
+# a not-yet-signed-in caller to. Keycloak sign-in is real
+# (Authenticator.RequireAuth guards the one app route), but AUTH_MODE
+# defaults to "none" here for local dev with no Keycloak realm running,
+# same precedent as whagent_net/Tiltfile's own `ui` block -- set
+# AUTH_MODE=oidc plus KRILL_OIDC_* in a local .env to exercise a real
+# sign-in flow against a Keycloak instance of your own.
+if get_env_bool('ENABLE_KRILL_UI', default='true'):
+    k8s_yaml(blob("""
+apiVersion: v1
+kind: Service
+metadata:
+  name: krill-ui
+  namespace: {namespace}
+spec:
+  selector:
+    app: krill-ui
+  ports:
+    - name: http
+      port: 8080
+      targetPort: 8080
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: krill-ui
+  namespace: {namespace}
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: krill-ui
+  template:
+    metadata:
+      labels:
+        app: krill-ui
+    spec:
+      containers:
+      - name: ui
+        image: krill-ui
+        ports:
+        - containerPort: 8080
+          name: http
+        env:
+        - name: KRILL_UI_ADDR
+          value: ":8080"
+        - name: AUTH_MODE
+          value: "none"
+        - name: SECRET_KEY
+          value: "dev-secret-key"
+        - name: PG_DATABASE_URL
+          value: "{pg_database_url}"
+        - name: KRILL_UI_PUBLIC_URL
+          value: "http://localhost:8085"
+        - name: KRILL_MCP_PUBLIC_URL
+          value: "http://localhost:8084"
+        - name: OTEL_EXPORTER_OTLP_ENDPOINT
+          value: "{otel_endpoint}"
+""".format(
+        namespace=namespace,
+        pg_database_url=pg_database_url,
+        otel_endpoint=otel_endpoint,
+    )))
+
+    ui_deps = []
+    if get_env_bool('ENABLE_KRILL_MIGRATE', default='true'):
+        ui_deps.append('krill-migrate')
+
+    k8s_resource(
+        'krill-ui',
+        resource_deps=ui_deps,
+        port_forwards=['8085:8080'],
+        labels=['krill'],
+    )
+    print("🔌 ui forwarded to http://localhost:8085")
+
 # ===========================
 # Access Information
 # ===========================
@@ -265,10 +351,11 @@ print("="*60)
 print("  PostgreSQL:      localhost:5432 (user: postgres, pass: password)")
 print("  api (HTTP):      http://localhost:8083/healthz")
 print("  mcp (HTTP):      http://localhost:8084/mcp/spec")
+print("  ui  (HTTP):      http://localhost:8085")
 print("="*60)
 
 print_footer_info('krill')
 
 print("\n🚀 Quick Start:")
-print("  1. tilt up                # Start migrate + api + mcp (this)")
+print("  1. tilt up                # Start migrate + api + mcp + ui (this)")
 print("  2. curl http://localhost:8083/healthz")
