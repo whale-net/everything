@@ -12,9 +12,10 @@ import (
 )
 
 // Querier assembles Document values from krill/store -- the one place
-// FR5-FR8's four granularities are implemented, so the later MCP tool
-// (LB7, "M1's MCP tool is a thin wrapper over it, not the thing itself")
-// has one call to wrap per granularity instead of a bespoke join each.
+// FR5-FR8's four M1 granularities (plus M2's fifth, GetEntitySetSlice,
+// issue #2544) are implemented, so the later MCP tool (LB7, "M1's MCP tool
+// is a thin wrapper over it, not the thing itself") has one call to wrap
+// per granularity instead of a bespoke join each.
 //
 // Not gated by `init`/session (FR3 is write-only; read paths never
 // require it -- see PRODUCT.md and root plan issue #2485).
@@ -143,6 +144,68 @@ func (q *Querier) GetProductSlice(ctx context.Context, productID uuid.UUID) (Doc
 		Requirements:     toRequirementEntities(requirements),
 		Decisions:        toDecisionEntities(decisions),
 		PointerArtifacts: toPointerArtifactEntities(pointerArtifacts),
+	}, nil
+}
+
+// GetEntitySetSlice is FR5 (M2, issue #2544): assembles a Document from an
+// explicit, heterogeneous set of entity ids -- the fifth granularity, and
+// the one whose membership is not a subtree of the spec tree the way the
+// four above are (a FeatureSet's Features, a Product's whole chain, ...).
+// It takes the id set as given; it does not know about design sessions and
+// never reads `revision_event` itself -- resolving *which* ids belong to
+// one design session is entirely its caller's job (see
+// krill/api/handlers/session_slice.go, which reads RevisionEventStore.
+// ListBySession and unions every entity_delta's EntityID before calling
+// this). That keeps this package free of any dependency on M2's session
+// tables, exactly as it is already free of `krill_session` (see this
+// type's own doc comment).
+//
+// Live-state query over current rows, not a replay. This always reads
+// each id's *current* row (SliceStore's ListFeatureSetsCurrentByIDs/
+// ListFeaturesCurrentByIDs/ListRequirementsCurrentByIDs/
+// ListDecisionsCurrentByIDs, all `= ANY($1)` current-row reads below) --
+// never the row that was current as of whatever revision event last
+// touched that id. Do not route this through HistoryStore or the *AsOf
+// twins above: FR5 (M2) is explicit that "the current draft" means today's
+// live state, not a historical replay.
+//
+// An id in entityIDs that matches no current row of any kind is skipped,
+// not an error -- the set is heterogeneous by construction (it may span
+// FeatureSet, Feature, Requirement, and LoadBearingDecision ids all in one
+// call, per the four kinds a design session's entity_deltas can name). An
+// empty entityIDs returns an empty Document with SchemaVersion still
+// populated, not an error.
+func (q *Querier) GetEntitySetSlice(ctx context.Context, entityIDs []uuid.UUID) (Document, error) {
+	if len(entityIDs) == 0 {
+		return Document{SchemaVersion: SchemaVersion}, nil
+	}
+
+	featureSets, err := q.store.Slices().ListFeatureSetsCurrentByIDs(ctx, entityIDs)
+	if err != nil {
+		return Document{}, fmt.Errorf("list feature_sets by ids: %w", err)
+	}
+
+	features, err := q.store.Slices().ListFeaturesCurrentByIDs(ctx, entityIDs)
+	if err != nil {
+		return Document{}, fmt.Errorf("list features by ids: %w", err)
+	}
+
+	requirements, err := q.store.Slices().ListRequirementsCurrentByIDs(ctx, entityIDs)
+	if err != nil {
+		return Document{}, fmt.Errorf("list requirements by ids: %w", err)
+	}
+
+	decisions, err := q.store.Slices().ListDecisionsCurrentByIDs(ctx, entityIDs)
+	if err != nil {
+		return Document{}, fmt.Errorf("list decisions by ids: %w", err)
+	}
+
+	return Document{
+		SchemaVersion: SchemaVersion,
+		FeatureSets:   toFeatureSetEntities(featureSets),
+		Features:      toFeatureEntities(features),
+		Requirements:  toRequirementEntities(requirements),
+		Decisions:     toDecisionEntities(decisions),
 	}, nil
 }
 

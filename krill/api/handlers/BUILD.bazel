@@ -17,7 +17,9 @@ design_session.go/revision_event.go (issue #2543, FR1-FR4/FR8) are the
 DesignSession/RevisionEvent HTTP surface: both POST endpoints are gated,
 GET /design-sessions/{id} is not; revision_event.go also owns the
 Subject/EntityDelta/OpenQuestionsDelta wire types design_session.go's
-GetDesignSessionHandler reuses."""
+GetDesignSessionHandler reuses. session_slice.go (issue #2544, krill M2,
+FR5) is the HTTP surface over //krill/slice's fifth granularity,
+GetEntitySetSlice -- also ungated."""
 
 load("@rules_go//go:def.bzl", "go_library", "go_test")
 
@@ -36,6 +38,7 @@ go_library(
         "requirement.go",
         "revision_event.go",
         "session.go",
+        "session_slice.go",
         "slice.go",
         "types.go",
     ],
@@ -55,12 +58,14 @@ go_library(
 # sections), the four slice query endpoints (slice.go, issue #2491's
 # Testing section), the two amend endpoints (amend_test.go, issue #2493's
 # Testing section: gated like every other write path, calls AmendStore with
-# the path's {id} and the body's name/body unchanged), and the DesignSession/
+# the path's {id} and the body's name/body unchanged), the DesignSession/
 # RevisionEvent HTTP surface (design_session_test.go/revision_event_test.go,
 # issue #2543's Testing section: both POST endpoints gated, GET
 # /design-sessions/{id} not, FR3/FR4's conditional-presence rules mapped to
-# 400). fakeSessionStore/fake entity stores/fakeAmendStore/
-# fakeDesignSessionStore/fakeRevisionEventStore stand in for krill/store's
+# 400), and SessionSlice's union-and-dedupe logic (session_slice_test.go,
+# issue #2544's Testing section). fakeSessionStore/fake entity stores/
+# fakeAmendStore/fakeDesignSessionStore/fakeRevisionEventStore/
+# fakeEntitySetQuerier stand in for krill/store's (and krill/slice's)
 # interfaces, so none of this needs Postgres/network and it runs as part of
 # `bazel test //...`. slice_internal_test.go is package handlers (white-box,
 # needs the unexported sliceQueryFunc/handle); everything else here is
@@ -74,6 +79,7 @@ go_test(
         "entity_test_helpers_test.go",
         "fake_design_session_store_test.go",
         "fake_entity_store_test.go",
+        "fake_session_slice_stores_test.go",
         "fake_session_store_test.go",
         "feature_test.go",
         "featureset_test.go",
@@ -82,6 +88,7 @@ go_test(
         "product_test.go",
         "requirement_test.go",
         "revision_event_test.go",
+        "session_slice_test.go",
         "session_test.go",
         "slice_internal_test.go",
         "slice_test.go",

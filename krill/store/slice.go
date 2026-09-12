@@ -50,6 +50,33 @@ type SliceStore interface {
 	// owning FeatureSet's Position and Name, then LoadBearingDecision
 	// Position and Name.
 	ListDecisionsByProduct(ctx context.Context, productID uuid.UUID) ([]LoadBearingDecision, error)
+
+	// ListFeatureSetsCurrentByIDs, ListFeaturesCurrentByIDs,
+	// ListRequirementsCurrentByIDs, and ListDecisionsCurrentByIDs back
+	// krill/slice's GetEntitySetSlice (FR5, M2, issue #2544): the one
+	// granularity whose membership is an explicit, heterogeneous set of
+	// ids rather than a subtree, so it resolves that set by kind with one
+	// `= ANY($1)` query per kind instead of one query per id -- same
+	// discipline as every other method on this interface. An id in ids
+	// that has no current row of that kind is simply absent from the
+	// result; that is never an error at this layer (GetEntitySetSlice
+	// treats "no current row of any kind" as skip-not-error).
+
+	// ListFeatureSetsCurrentByIDs returns the current row for every id in
+	// ids that still has a current `feature_set` row.
+	ListFeatureSetsCurrentByIDs(ctx context.Context, ids []uuid.UUID) ([]FeatureSet, error)
+
+	// ListFeaturesCurrentByIDs returns the current row for every id in ids
+	// that still has a current `feature` row.
+	ListFeaturesCurrentByIDs(ctx context.Context, ids []uuid.UUID) ([]Feature, error)
+
+	// ListRequirementsCurrentByIDs returns the current row for every id in
+	// ids that still has a current `requirement` row.
+	ListRequirementsCurrentByIDs(ctx context.Context, ids []uuid.UUID) ([]Requirement, error)
+
+	// ListDecisionsCurrentByIDs returns the current row for every id in
+	// ids that still has a current `load_bearing_decision` row.
+	ListDecisionsCurrentByIDs(ctx context.Context, ids []uuid.UUID) ([]LoadBearingDecision, error)
 }
 
 type sliceStore struct{ pool *pgxpool.Pool }
@@ -152,6 +179,123 @@ func (s sliceStore) ListDecisionsByProduct(ctx context.Context, productID uuid.U
 	`, productID)
 	if err != nil {
 		return nil, fmt.Errorf("list decisions by product: %w", err)
+	}
+	defer rows.Close()
+
+	var decisions []LoadBearingDecision
+	for rows.Next() {
+		d, err := scanLoadBearingDecision(rows)
+		if err != nil {
+			return nil, fmt.Errorf("scan load_bearing_decision: %w", err)
+		}
+		decisions = append(decisions, d)
+	}
+	return decisions, rows.Err()
+}
+
+// uniqueUUIDs deduplicates ids, mirroring
+// audience_score_system/store/research.go's GetByIDs precedent -- a
+// caller (GetEntitySetSlice) may pass a raw union of several revision
+// events' entity_deltas without pre-deduplicating itself.
+func uniqueUUIDs(ids []uuid.UUID) []uuid.UUID {
+	seen := make(map[uuid.UUID]struct{}, len(ids))
+	unique := make([]uuid.UUID, 0, len(ids))
+	for _, id := range ids {
+		if _, ok := seen[id]; ok {
+			continue
+		}
+		seen[id] = struct{}{}
+		unique = append(unique, id)
+	}
+	return unique
+}
+
+func (s sliceStore) ListFeatureSetsCurrentByIDs(ctx context.Context, ids []uuid.UUID) ([]FeatureSet, error) {
+	if len(ids) == 0 {
+		return nil, nil
+	}
+	rows, err := s.pool.Query(ctx, `
+		SELECT `+featureSetColumns+`
+		FROM feature_set
+		WHERE id = ANY($1) AND valid_to IS NULL
+	`, uniqueUUIDs(ids))
+	if err != nil {
+		return nil, fmt.Errorf("list feature_sets by ids: %w", err)
+	}
+	defer rows.Close()
+
+	var featureSets []FeatureSet
+	for rows.Next() {
+		fs, err := scanFeatureSet(rows)
+		if err != nil {
+			return nil, fmt.Errorf("scan feature_set: %w", err)
+		}
+		featureSets = append(featureSets, fs)
+	}
+	return featureSets, rows.Err()
+}
+
+func (s sliceStore) ListFeaturesCurrentByIDs(ctx context.Context, ids []uuid.UUID) ([]Feature, error) {
+	if len(ids) == 0 {
+		return nil, nil
+	}
+	rows, err := s.pool.Query(ctx, `
+		SELECT `+featureColumns+`
+		FROM feature
+		WHERE id = ANY($1) AND valid_to IS NULL
+	`, uniqueUUIDs(ids))
+	if err != nil {
+		return nil, fmt.Errorf("list features by ids: %w", err)
+	}
+	defer rows.Close()
+
+	var features []Feature
+	for rows.Next() {
+		f, err := scanFeature(rows)
+		if err != nil {
+			return nil, fmt.Errorf("scan feature: %w", err)
+		}
+		features = append(features, f)
+	}
+	return features, rows.Err()
+}
+
+func (s sliceStore) ListRequirementsCurrentByIDs(ctx context.Context, ids []uuid.UUID) ([]Requirement, error) {
+	if len(ids) == 0 {
+		return nil, nil
+	}
+	rows, err := s.pool.Query(ctx, `
+		SELECT `+requirementColumns+`
+		FROM requirement
+		WHERE id = ANY($1) AND valid_to IS NULL
+	`, uniqueUUIDs(ids))
+	if err != nil {
+		return nil, fmt.Errorf("list requirements by ids: %w", err)
+	}
+	defer rows.Close()
+
+	var requirements []Requirement
+	for rows.Next() {
+		r, err := scanRequirement(rows)
+		if err != nil {
+			return nil, fmt.Errorf("scan requirement: %w", err)
+		}
+		requirements = append(requirements, r)
+	}
+	return requirements, rows.Err()
+}
+
+func (s sliceStore) ListDecisionsCurrentByIDs(ctx context.Context, ids []uuid.UUID) ([]LoadBearingDecision, error) {
+	if len(ids) == 0 {
+		return nil, nil
+	}
+	rows, err := s.pool.Query(ctx, `
+		SELECT `+loadBearingDecisionColumns+`
+		FROM load_bearing_decision
+		WHERE id = ANY($1) AND valid_to IS NULL
+	`, uniqueUUIDs(ids))
+	if err != nil {
+		return nil, fmt.Errorf("list load_bearing_decisions by ids: %w", err)
 	}
 	defer rows.Close()
 

@@ -110,6 +110,16 @@ func newFakeRevisionEventStore() *fakeRevisionEventStore {
 	return &fakeRevisionEventStore{events: make(map[uuid.UUID][]store.RevisionEvent)}
 }
 
+// seed appends events directly into the fake, bypassing Append (and its
+// FR3/FR4 validation) -- used by session_slice_test.go (issue #2544), which
+// needs known events already in place and does not exercise Append's own
+// validation rules.
+func (f *fakeRevisionEventStore) seed(sessionID uuid.UUID, events ...store.RevisionEvent) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.events[sessionID] = append(f.events[sessionID], events...)
+}
+
 func (f *fakeRevisionEventStore) Append(ctx context.Context, e store.NewRevisionEvent) (store.RevisionEvent, error) {
 	f.gotEvent = e
 	if f.appendErr != nil {
