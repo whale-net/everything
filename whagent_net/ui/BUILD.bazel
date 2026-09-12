@@ -48,6 +48,7 @@ go_library(
         "//whagent_net/mcpidentity",
         "//whagent_net/protos:whagentpb",
         "//whagent_net/ui/components",
+        "//whagent_net/ui/linkassert",
         "//whagent_net/ui/pages",
         "@com_github_a_h_templ//:templ",
         "@com_github_google_uuid//:uuid",
