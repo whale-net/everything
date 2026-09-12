@@ -72,7 +72,7 @@ func TestMigration001_UpDownUp_LeavesCleanDatabaseAndIsRerunnable(t *testing.T) 
 
 	latest, err := runner.LatestVersion()
 	require.NoError(t, err)
-	require.Equal(t, uint(9), latest, "expected the latest migration source version to be 9 (001_initial_schema + 002_transcript_archive, issue #2240 + 003_sessions_list_index, issue #2241 + 004_mcpauth_credential, issue #2245 + 005_ui_sessions, issue #2288 + 006_model_definition + 007_agent_definition_domain, issue #2424 + 008_delegated_grant, issue #2426 + 009_mcpauth_cutover, issue #2434) -- update this test if a later migration has since landed")
+	require.Equal(t, uint(10), latest, "expected the latest migration source version to be 10 (001_initial_schema + 002_transcript_archive, issue #2240 + 003_sessions_list_index, issue #2241 + 004_mcpauth_credential, issue #2245 + 005_ui_sessions, issue #2288 + 006_model_definition + 007_agent_definition_domain, issue #2424 + 008_delegated_grant, issue #2426 + 009_mcpauth_cutover, issue #2434 + 010_agent_definition_surrogate_key) -- update this test if a later migration has since landed")
 
 	// -- Up: every table must exist, version must land clean at the latest --
 	require.NoError(t, runner.Up(), "apply every migration")
@@ -80,7 +80,7 @@ func TestMigration001_UpDownUp_LeavesCleanDatabaseAndIsRerunnable(t *testing.T) 
 	version, dirty, err := runner.Version()
 	require.NoError(t, err)
 	assert.False(t, dirty)
-	assert.Equal(t, uint(9), version)
+	assert.Equal(t, uint(10), version)
 
 	for _, table := range everyTable {
 		assert.True(t, tableExists(t, ctx, db, table), "expected table %q to exist after Up()", table)
@@ -107,7 +107,7 @@ func TestMigration001_UpDownUp_LeavesCleanDatabaseAndIsRerunnable(t *testing.T) 
 	version, dirty, err = runner.Version()
 	require.NoError(t, err)
 	assert.False(t, dirty)
-	assert.Equal(t, uint(9), version)
+	assert.Equal(t, uint(10), version)
 
 	for _, table := range everyTable {
 		assert.True(t, tableExists(t, ctx, db, table), "expected table %q to exist again after the second Up()", table)

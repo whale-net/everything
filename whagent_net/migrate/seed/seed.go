@@ -292,8 +292,28 @@ type latestRow struct {
 // (agent_id, version) pair -- see this package's doc comment). nameToID
 // resolves a.ModelDefinition (if set) to the model_definition row
 // seedModelDefinitions already wrote.
+//
+// The read-latest-then-insert-next-version pair runs inside one
+// transaction, serialized per agent_id by a Postgres advisory lock
+// (pg_advisory_xact_lock, auto-released at commit/rollback): without it,
+// two concurrent `migrate` invocations against the same dev database --
+// e.g. Tilt re-triggering the migrate job while a prior run is still in
+// flight -- can both read "latest version N" before either has inserted
+// N+1, then race each other on the (agent_id, version) uniqueness
+// invariant instead of the second simply waiting for the first and
+// re-reading its result.
 func seedOne(ctx context.Context, db *sql.DB, a config.AgentDefinitionConfig, nameToID map[string]uuid.UUID) error {
-	existing, found, err := latestAgentDefinition(ctx, db, a.AgentID)
+	tx, err := db.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("begin tx: %w", err)
+	}
+	defer tx.Rollback() //nolint:errcheck // no-op once Commit has succeeded
+
+	if _, err := tx.ExecContext(ctx, `SELECT pg_advisory_xact_lock(hashtext($1))`, a.AgentID); err != nil {
+		return fmt.Errorf("acquire seed lock: %w", err)
+	}
+
+	existing, found, err := latestAgentDefinition(ctx, tx, a.AgentID)
 	if err != nil {
 		return fmt.Errorf("read latest version: %w", err)
 	}
@@ -336,26 +356,28 @@ func seedOne(ctx context.Context, db *sql.DB, a config.AgentDefinitionConfig, na
 		return fmt.Errorf("marshal tool_set: %w", err)
 	}
 
-	if _, err := db.ExecContext(ctx, `
+	if _, err := tx.ExecContext(ctx, `
 		INSERT INTO agent_definition (agent_id, domain, version, model, model_definition_id, tool_set, max_turns, max_cost_usd, required_role)
 		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
 	`, a.AgentID, a.Domain, nextVersion, model, modelDefID, toolSetJSON, a.MaxTurns, a.MaxCostUSD, role); err != nil {
 		return fmt.Errorf("insert version %d: %w", nextVersion, err)
 	}
-	return nil
+	return tx.Commit()
 }
 
 // latestAgentDefinition reads the highest-Version agent_definition row for
 // agentID -- mirrors whagent_net/session/agentdef.go's GetLatest query,
-// over *sql.DB (this package's Seeder signature) rather than
-// *pgxpool.Pool (session.AgentDefinitionStore's), since
+// over *sql.Tx (seedOne's per-agent_id advisory-locked transaction)
+// rather than *pgxpool.Pool (session.AgentDefinitionStore's), since
 // libs/go/migrate.Seeder's type is func(ctx, *sql.DB) error, the same raw
 // database/sql handle every other domain's WithSeeder-registered seeder
-// in this repo receives (e.g. firmware/sensor/catalog.Seeder).
-func latestAgentDefinition(ctx context.Context, db *sql.DB, agentID string) (latestRow, bool, error) {
+// in this repo receives (e.g. firmware/sensor/catalog.Seeder) -- seedOne
+// opens its own *sql.Tx on that *sql.DB so the read and the later insert
+// are one atomic, advisory-locked unit.
+func latestAgentDefinition(ctx context.Context, tx *sql.Tx, agentID string) (latestRow, bool, error) {
 	var row latestRow
 	var toolSetJSON []byte
-	err := db.QueryRowContext(ctx, `
+	err := tx.QueryRowContext(ctx, `
 		SELECT version, domain, model, model_definition_id, tool_set, max_turns, max_cost_usd, required_role
 		FROM agent_definition
 		WHERE agent_id = $1
