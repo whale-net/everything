@@ -169,10 +169,7 @@ func buildAdminGrantRows(ctx context.Context, index grantIndexAllLister, store g
 			return nil, err
 		}
 
-		subjectKey, err := grantSubjectKey(iss, e.SubjectSub)
-		if err != nil {
-			return nil, err
-		}
+		subjectKey := grantSubjectKey(iss, e.SubjectSub)
 
 		status, statusErr := store.Status(ctx, subjectKey, grantKey)
 		display := grantUnknownStatus
@@ -213,10 +210,7 @@ func revokeGrantAsAdmin(ctx context.Context, store grpcauth.Store, iss, adminSub
 	if err != nil {
 		return err
 	}
-	subjectKey, err := grantSubjectKey(iss, targetSub)
-	if err != nil {
-		return err
-	}
+	subjectKey := grantSubjectKey(iss, targetSub)
 	if err := store.Revoke(ctx, subjectKey, grantKey); err != nil {
 		return err
 	}

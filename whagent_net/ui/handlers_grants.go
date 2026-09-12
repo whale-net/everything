@@ -22,7 +22,6 @@ import (
 	"github.com/whale-net/everything/libs/go/htmxauth"
 	"github.com/whale-net/everything/libs/go/logging"
 	"github.com/whale-net/everything/whagent_net/grantkey"
-	"github.com/whale-net/everything/whagent_net/mcpidentity"
 	whagentpb "github.com/whale-net/everything/whagent_net/protos"
 	"github.com/whale-net/everything/whagent_net/ui/components"
 	"github.com/whale-net/everything/whagent_net/ui/pages"
@@ -57,21 +56,23 @@ const grantUnknownStatus = "unknown"
 // exclude a scope the operator already actively holds.
 const grantStatusActive = "active"
 
-// grantSubjectKey packs (iss, sub) into the single opaque string
-// grpcauth.Store's "subject" parameter holds, reusing
-// whagent_net/mcpidentity's existing (iss, sub) packing --
-// whagent_net/ui/mcpauth.go's CallerResolver already encodes the exact
-// same signed-in-operator pair the same way for mcpauth's Identity
-// column. This is deliberate, not incidental: FR9's still-pending
-// /authorize swap (issue #2421) must derive the identical subject key for
-// BeginAuthorization/Persist that this page reads back via Status/Revoke,
-// or a self-service revoke here would silently target a key
-// TokenSource(...).Token(ctx) never actually looks up. Introducing a
-// second (iss, sub) packing format for the same underlying pair, instead
-// of reusing mcpidentity, is exactly the drift that package's own doc
-// comment warns against.
-func grantSubjectKey(iss, sub string) (string, error) {
-	return mcpidentity.Encode(iss, sub)
+// grantSubjectKey is grpcauth.Store's "subject" parameter for a signed-in
+// operator: the operator's raw Keycloak `sub` claim, unencoded. This is
+// NOT whagent_net/mcpidentity's (iss, sub) packing -- that format exists
+// solely for mcpauth.CredentialStore/AuthCodeStore's Identity column (an
+// unrelated persistence concern, see mcpidentity's package doc comment)
+// and was previously (incorrectly) reused here, which meant this page's
+// Status/Revoke calls targeted a subject key that handleMCPConsentConfirm's
+// BeginAuthorization/Persist call (subject = user.Sub, see that handler's
+// own comment) and mcp/tools/dispatch.go's TokenSource(identity.Sub, ...)
+// never actually write to or look up -- silently breaking both the status
+// display and self-service revoke for every real grant. iss is accepted
+// (and unused) only so call sites keep passing the same (iss, sub) pair
+// they use elsewhere on this page; this deployment is always scoped to
+// exactly one issuer (app.oidcIssuer), so the subject key never needs to
+// carry it.
+func grantSubjectKey(_, sub string) string {
+	return sub
 }
 
 // buildGrantRows lists iss/sub's own grant-index entries (grantindex.
@@ -93,10 +94,7 @@ func buildGrantRows(ctx context.Context, index grantIndexLister, store grpcauth.
 		return nil, err
 	}
 
-	subjectKey, err := grantSubjectKey(iss, sub)
-	if err != nil {
-		return nil, err
-	}
+	subjectKey := grantSubjectKey(iss, sub)
 
 	rows := make([]pages.GrantRow, 0, len(entries))
 	for _, e := range entries {
@@ -191,10 +189,7 @@ func revokeGrant(ctx context.Context, store grpcauth.Store, iss, sub, scope stri
 	if err != nil {
 		return err
 	}
-	subjectKey, err := grantSubjectKey(iss, sub)
-	if err != nil {
-		return err
-	}
+	subjectKey := grantSubjectKey(iss, sub)
 	if err := store.Revoke(ctx, subjectKey, grantKey); err != nil {
 		return err
 	}
