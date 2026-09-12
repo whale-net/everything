@@ -21,9 +21,10 @@ const SchemaVersion = "1"
 // EntityRef is the surrogate id + as-of revision every entity embeds
 // (FR9): ID is the entity's immutable identity (LB2), stable across every
 // supersession; RevisionID is the exact SCD2 row this entity's fields
-// were read from -- the current row today, since query.go only ever reads
-// `valid_to IS NULL` rows (an as-of read is the history task's later
-// responsibility, per this milestone's issue #2491 scope note).
+// were read from -- the current row for query.go's four Get*Slice
+// methods, or the row that was current at a past instant for their
+// Get*SliceAsOf twins (issue #2493, backed by krill/store's HistoryStore
+// -- see krill/ARCHITECTURE.md's "As-of slice assembly" section).
 type EntityRef struct {
 	ID         uuid.UUID `json:"id"`
 	RevisionID uuid.UUID `json:"revision_id"`

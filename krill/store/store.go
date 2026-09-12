@@ -48,3 +48,12 @@ func (s *Store) Slices() SliceStore { return sliceStore{pool: s.pool} }
 
 // Milestones returns the MilestoneStore implementation.
 func (s *Store) Milestones() MilestoneStore { return milestoneStore{pool: s.pool} }
+
+// Amend returns the AmendStore implementation -- the SCD2 close-and-open
+// write path (FR12, issue #2493) for Requirement and LoadBearingDecision.
+func (s *Store) Amend() AmendStore { return amendStore{pool: s.pool} }
+
+// History returns the HistoryStore implementation -- as-of reads and
+// version lists (FR11, issue #2493) for Requirement and
+// LoadBearingDecision.
+func (s *Store) History() HistoryStore { return historyStore{pool: s.pool} }

@@ -144,3 +144,36 @@ func (f *fakeDecisionStore) GetCurrentByID(ctx context.Context, id uuid.UUID) (s
 func (f *fakeDecisionStore) ListCurrentByFeatureSet(ctx context.Context, featureSetID uuid.UUID) ([]store.LoadBearingDecision, error) {
 	return nil, nil
 }
+
+// fakeAmendStore backs amend_test.go (issue #2493's Testing section) --
+// records the last AmendRequirement/AmendLoadBearingDecision call's
+// arguments so a test can assert the gate reached (or never reached) the
+// store, without needing a real Postgres (that is
+// krill/store/amend_integration_test.go's job).
+type fakeAmendStore struct {
+	amendErr error
+
+	gotRequirementID   uuid.UUID
+	gotRequirementName string
+	gotRequirementBody *string
+
+	gotDecisionID   uuid.UUID
+	gotDecisionName string
+	gotDecisionBody *string
+}
+
+func (f *fakeAmendStore) AmendRequirement(ctx context.Context, id uuid.UUID, name string, body *string) (store.Requirement, error) {
+	f.gotRequirementID, f.gotRequirementName, f.gotRequirementBody = id, name, body
+	if f.amendErr != nil {
+		return store.Requirement{}, f.amendErr
+	}
+	return store.Requirement{ID: id, Name: name, Body: body}, nil
+}
+
+func (f *fakeAmendStore) AmendLoadBearingDecision(ctx context.Context, id uuid.UUID, name string, body *string) (store.LoadBearingDecision, error) {
+	f.gotDecisionID, f.gotDecisionName, f.gotDecisionBody = id, name, body
+	if f.amendErr != nil {
+		return store.LoadBearingDecision{}, f.amendErr
+	}
+	return store.LoadBearingDecision{ID: id, Name: name, Body: body}, nil
+}
