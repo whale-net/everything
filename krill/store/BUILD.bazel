@@ -375,6 +375,54 @@ go_test(
     data = ["import_completion.go"],
 )
 
+# Real Postgres integration test for MediatedWriteStore (mediated.go, issue
+# #2546's Testing section): a Feature+two-Requirements proposal (one via
+# ParentID, two via ParentProposalIndex) creates all three and exactly one
+# revision_event naming them all "created" (NFR2); a proposal whose last item
+# has an invalid parent leaves zero entities and zero revision_event rows
+# behind, verified by direct row counts; a property-style multi-batch check
+# that every id ProposeEntities returns appears in some revision_event's
+# entity_deltas; acting == on-behalf-of rejected with no rows written
+# (FR10); acting != on-behalf-of stored distinctly and read back via
+# ListBySession; FR9's whole-product-slice visibility with no signoff event
+# anywhere in the session; scope_id on both entity rows and the event coming
+# from the proposal, never elsewhere; and the FR8->FR9 seam tying a session's
+# opening_submission to its mediated-created entities via one session_id.
+# Its own target (not folded into design_session_integration_test) because
+# it is the one test needing the full Product -> FeatureSet -> Feature chain
+# alongside DesignSession/RevisionEvent, plus //krill/slice for FR9.
+# Deliberately NOT part of `bazel test //...` -- see //libs/go/dbtest's
+# README for the full rationale.
+#
+# Run it explicitly (requires a working Docker daemon):
+#   bazel test //krill/store:mediated_integration_test --test_output=all
+go_test(
+    name = "mediated_integration_test",
+    size = "large",
+    timeout = "long",
+    srcs = ["mediated_integration_test.go"],
+    gotags = ["integration"],
+    tags = [
+        "external",
+        "integration",
+        "manual",
+        "no-cache",
+        "no-sandbox",
+        "requires-network",
+    ],
+    deps = [
+        ":store",
+        "//krill/migrate/schema",
+        "//krill/slice",
+        "//libs/go/dbtest",
+        "//libs/go/migrate",
+        "@com_github_google_uuid//:uuid",
+        "@com_github_jackc_pgx_v5//stdlib",
+        "@com_github_stretchr_testify//assert",
+        "@com_github_stretchr_testify//require",
+    ],
+)
+
 go_test(
     name = "pointer_integration_test",
     size = "large",
