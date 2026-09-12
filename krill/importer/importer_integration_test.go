@@ -43,6 +43,15 @@ import (
 	"github.com/whale-net/everything/libs/go/migrate"
 )
 
+// testSourceRevision is the placeholder commit SHA every Import call in
+// this file passes for its now-required sourceRevision argument (FR12,
+// NFR3, issue #2548) -- this file's own tests are not about what value
+// that argument carries, only that it is recorded and that a second
+// Import for the same path refuses; see
+// import_completion_integration_test.go and this file's own
+// FR12-specific cases for coverage of the value itself.
+const testSourceRevision = "test-fixture-revision"
+
 // testEnv is a migrated Postgres database plus a minted krill session (FR3)
 // ready to pass to importer.Import, mirroring
 // krill/store/session_integration_test.go's newTestSessionStore.
@@ -99,7 +108,7 @@ func TestImport_EverySectionKind_LandsAsEntityAndAppearsInReport(t *testing.T) {
 	ctx := context.Background()
 	env := newTestEnv(t)
 
-	report, err := importer.Import(ctx, env.store, env.sessions, env.sessionID, "testdata/valid")
+	report, err := importer.Import(ctx, env.store, env.sessions, env.sessionID, "testdata/valid", testSourceRevision)
 	require.NoError(t, err)
 
 	byKindAndSourceID := map[string]*importer.ReportEntry{}
@@ -150,7 +159,7 @@ func TestImport_MustNotForeclose_ProducesOneAssociationRowPerCitedDecision(t *te
 	ctx := context.Background()
 	env := newTestEnv(t)
 
-	report, err := importer.Import(ctx, env.store, env.sessions, env.sessionID, "testdata/valid")
+	report, err := importer.Import(ctx, env.store, env.sessions, env.sessionID, "testdata/valid", testSourceRevision)
 	require.NoError(t, err)
 
 	var milestoneID uuid.UUID
@@ -191,7 +200,7 @@ func TestImport_UndefinedMilestoneReference_FailsLoudlyNamingIt(t *testing.T) {
 	ctx := context.Background()
 	env := newTestEnv(t)
 
-	report, err := importer.Import(ctx, env.store, env.sessions, env.sessionID, "testdata/undefined_milestone")
+	report, err := importer.Import(ctx, env.store, env.sessions, env.sessionID, "testdata/undefined_milestone", testSourceRevision)
 	require.Error(t, err, "importing a document that references an undefined milestone must fail")
 	assert.Nil(t, report)
 	assert.Contains(t, err.Error(), "M2", "the error must name the undefined milestone (M2), not fail silently or vaguely")
@@ -211,26 +220,30 @@ func TestImport_UndefinedMilestoneReference_FailsLoudlyNamingIt(t *testing.T) {
 // duplicate" (migration 004_milestone_assoc.up.sql's comment,
 // MilestoneStore.GetOrCreateRef's doc comment).
 //
-// The second Import call here fails -- testdata/valid's Product name
-// collides with the first call's under migration 002's
-// product_scope_name_current_idx (scope-qualified uniqueness, LB1), and
-// Product creation is write()'s very first statement, so the second call
-// never reaches any entity write, milestone_ref included. That failure is
-// exactly why no duplicate can appear: cmd/main.go's own doc comment
-// states the importer is "a Swarm Operator-triggered, one-time write", and
-// re-running it against an already-imported Product safely refusing rather
-// than silently duplicating is the correct shape for that one-time
-// contract. What this test actually pins down is the row count after both
-// calls: exactly one milestone_ref row for (scope, product, "M1"), never
-// two.
+// The second Import call here fails -- FR12's pre-parse refusal check
+// (importer.go's refuseIfAlreadyImported, issue #2548) sees that
+// "testdata/valid" already has an import_completion row for this scope
+// from the first call and refuses with importer.ErrAlreadyImported before
+// Parse or write() ever run a second time, so the second call never
+// reaches any entity write, milestone_ref included. (Before #2548,
+// testdata/valid's Product name colliding with the first call's under
+// migration 002's product_scope_name_current_idx, scope-qualified
+// uniqueness LB1, was what stopped the second call at write()'s first
+// statement instead -- FR12's guard now fires earlier than that, for the
+// same reason: cmd/main.go's own doc comment states the importer is "a
+// Swarm Operator-triggered, one-time write", and refusing a second run
+// against an already-imported path rather than silently duplicating is
+// the correct shape for that one-time contract.) What this test actually
+// pins down is the row count after both calls: exactly one milestone_ref
+// row for (scope, product, "M1"), never two.
 func TestImport_TwiceSameSession_DoesNotDuplicateMilestoneRef(t *testing.T) {
 	ctx := context.Background()
 	env := newTestEnv(t)
 
-	_, err := importer.Import(ctx, env.store, env.sessions, env.sessionID, "testdata/valid")
+	_, err := importer.Import(ctx, env.store, env.sessions, env.sessionID, "testdata/valid", testSourceRevision)
 	require.NoError(t, err, "first import must succeed")
 
-	_, err = importer.Import(ctx, env.store, env.sessions, env.sessionID, "testdata/valid")
+	_, err = importer.Import(ctx, env.store, env.sessions, env.sessionID, "testdata/valid", testSourceRevision)
 	// Whether or not a future amend/reimport flow changes this call to
 	// succeed, the row-count assertion below is what the acceptance
 	// criterion actually requires; record today's behavior so a change is

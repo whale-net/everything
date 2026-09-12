@@ -15,7 +15,7 @@ milestone hangs off. No spec entities exist yet — that is later M1 work.
 |--------|--------|------|-------------|
 | `migrate` | `//krill/migrate` | job | Applies `krill/migrate/schema/migrations` and seeds the one `scope` row with this repo's forge coordinates (LB1, NFR2). |
 | `api` | `//krill/api` | external-api | HTTP server; `/healthz` (a live DB ping), `POST /sessions/init` (FR3's `init` primitive, issue #2489), the M1 entity write API (FR1/FR2/FR4, issue #2490), the FR5-FR9 scoped-slice query surface (`GET /slices/{feature-sets,features,requirements,products}/{id}`, issue #2491), and the pointer-artifact create endpoint (`POST /pointer-artifacts`, FR20, issue #2496). |
-| `import` | `//krill/importer/cmd` | CLI (not deployed) | The one-way markdown importer (FR16, FR17, issue #2492): parses a `PRODUCT.md` + `product/*.md` doc set into `krill/store`'s spec entities and prints the entity-id report. Gated on a valid `init` session, same as every other write path. Run with `bazel run //krill/importer/cmd:import -- --path <dir> --session-id <uuid>`. See `ARCHITECTURE.md` "The markdown importer and the delivery-axis association". |
+| `import` | `//krill/importer/cmd` | CLI (not deployed) | The one-way markdown importer (FR16, FR17, issue #2492): parses a `PRODUCT.md` + `product/*.md` doc set into `krill/store`'s spec entities and prints the entity-id report. Gated on a valid `init` session, same as every other write path. Records a one-time, one-way `import_completion` marker after a successful run and refuses a second import for the same path before parsing (FR12, NFR3, issue #2548). Run with `bazel run //krill/importer/cmd:import -- --path <dir> --session-id <uuid> --source-revision <sha>`. See `ARCHITECTURE.md` "The markdown importer and the delivery-axis association". |
 | `mcp` | `//krill/mcp` | external-api | krill's FR10/NFR1 spec surface: the FR5-FR9 scoped-slice query over MCP at `/mcp/spec`, behind the mcpauth (human) + whagent-net (agent) two-front-door auth pattern. See "MCP spec surface" below. |
 | `ui` | `//krill/ui` | external-api | Barebones Keycloak sign-in shell: gives mcpauth's `/authorize` endpoint (mounted here) a `SignInURL` to redirect a not-yet-signed-in caller to, so the human front door above can actually mint a credential end to end. No session list, no spec browsing -- a real web UI is deferred (`PRODUCT.md`'s C19, "Later"). See "The mcpauth sign-in shell" below. |
 
@@ -71,8 +71,17 @@ SESSION_ID=$(curl -s -X POST http://localhost:8080/sessions/init \
   -d '{"scope_id":"<scope-uuid>","acting":{"iss":"local","sub":"me","kind":"human"},"on_behalf_of":{"iss":"local","sub":"me","kind":"human"}}' \
   | jq -r .session_id)
 PG_DATABASE_URL=postgres://postgres:password@localhost:5432/krill?sslmode=disable \
-  bazel run //krill/importer/cmd:import -- --path krill --session-id "$SESSION_ID"
+  bazel run //krill/importer/cmd:import -- --path krill --session-id "$SESSION_ID" \
+  --source-revision "$(git rev-parse HEAD)"
 ```
+
+`--source-revision` is required (FR12, NFR3, issue #2548): the commit SHA
+`--path` was imported from, recorded on the `import_completion` row for
+the audit trail only -- krill does not shell out to git itself, so the
+caller supplies it. A second `import` run for a `--path` already recorded
+as complete for the resolved session's scope refuses before parsing
+anything; see `ARCHITECTURE.md` "The markdown importer and the
+delivery-axis association" for the one-time, one-way guarantee.
 
 Or bring up the whole domain (Postgres + migrate + api) via Tilt:
 

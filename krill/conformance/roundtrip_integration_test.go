@@ -61,6 +61,14 @@ import (
 	"github.com/whale-net/everything/libs/go/migrate"
 )
 
+// testSourceRevision mirrors krill/importer/importer_integration_test.go's
+// constant of the same name: a placeholder commit SHA for every
+// importer.Import call's now-required sourceRevision argument (FR12,
+// NFR3, issue #2548). This package's tests are shared by
+// roundtrip_integration_test.go and design_milestone_query_integration_test.go
+// (same target -- see BUILD.bazel).
+const testSourceRevision = "test-fixture-revision"
+
 // testEnv mirrors krill/importer/importer_integration_test.go's helper of
 // the same name: a migrated, throwaway Postgres database plus a minted
 // krill session (FR3), ready to pass to importer.Import.
@@ -169,7 +177,7 @@ func TestRoundTrip_KrillOwnBrief_EveryFR16EntityPresentInRenderedOutput(t *testi
 	env := newTestEnv(t)
 	root := krillDocsRoot(t)
 
-	report, err := importer.Import(ctx, env.store, env.sessions, env.sessionID, root)
+	report, err := importer.Import(ctx, env.store, env.sessions, env.sessionID, root, testSourceRevision)
 	require.NoError(t, err, "importing krill's own committed brief must succeed")
 	require.Equal(t, "krill", report.ProductName, "must import krill's own brief, never a different domain's (whagent_net is explicitly out of scope -- C27/M2)")
 	require.NotEmpty(t, report.Entries, "expected krill's own brief to produce at least one entity of each kind")
@@ -348,7 +356,7 @@ func TestRoundTrip_RenderTwice_ProducesIdenticalOutput(t *testing.T) {
 	env := newTestEnv(t)
 	root := krillDocsRoot(t)
 
-	report, err := importer.Import(ctx, env.store, env.sessions, env.sessionID, root)
+	report, err := importer.Import(ctx, env.store, env.sessions, env.sessionID, root, testSourceRevision)
 	require.NoError(t, err)
 
 	src := render.NewStoreSource(env.store)
@@ -398,7 +406,7 @@ func TestGenerateFR16ReportArtifact(t *testing.T) {
 	env := newTestEnv(t)
 	root := krillDocsRoot(t)
 
-	report, err := importer.Import(ctx, env.store, env.sessions, env.sessionID, root)
+	report, err := importer.Import(ctx, env.store, env.sessions, env.sessionID, root, testSourceRevision)
 	require.NoError(t, err)
 
 	out := filepath.Join(workspaceRoot, "krill", "conformance", "testdata", "fr16_report.txt")
