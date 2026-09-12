@@ -14,7 +14,7 @@ milestone hangs off. No spec entities exist yet — that is later M1 work.
 | Binary | Target | Type | Description |
 |--------|--------|------|-------------|
 | `migrate` | `//krill/migrate` | job | Applies `krill/migrate/schema/migrations` and seeds the one `scope` row with this repo's forge coordinates (LB1, NFR2). |
-| `api` | `//krill/api` | external-api | HTTP server; `/healthz` (a live DB ping), `POST /sessions/init` (FR3's `init` primitive, issue #2489), and the M1 entity write API (FR1/FR2/FR4, issue #2490). |
+| `api` | `//krill/api` | external-api | HTTP server; `/healthz` (a live DB ping), `POST /sessions/init` (FR3's `init` primitive, issue #2489), the M1 entity write API (FR1/FR2/FR4, issue #2490), and the FR5-FR9 scoped-slice query surface (`GET /slices/{feature-sets,features,requirements,products}/{id}`, issue #2491). |
 
 ## Endpoints
 
@@ -27,12 +27,21 @@ milestone hangs off. No spec entities exist yet — that is later M1 work.
 | `POST /features` | Creates a Feature under a FeatureSet (FR2). Body: `{"feature_set_id", "name", "description"?}`. Gated. Returns `{"id": "<uuid>"}`. |
 | `POST /requirements` | Creates an FR or NFR under a Feature (FR2). Body: `{"feature_id", "kind": "FR"\|"NFR", "name", "body"?}`. Gated. Returns `{"id": "<uuid>"}`. |
 | `POST /load-bearing-decisions` | Attaches a Load-Bearing Decision to the FeatureSet it constrains (FR4) — not a Product, not a Feature (C2). Body: `{"feature_set_id", "name", "body"?}`. Gated. Returns `{"id": "<uuid>"}`. |
+| `GET /slices/feature-sets/{id}` | Returns the FR5 scoped slice: a FeatureSet, its Features, their FRs/NFRs, and only the LoadBearingDecisions attached to that FeatureSet. Never gated (read-only). |
+| `GET /slices/features/{id}` | Returns the FR6 scoped slice: a Feature and its FRs/NFRs. Never gated. |
+| `GET /slices/requirements/{id}` | Returns the FR7 scoped slice: a single FR or NFR by surrogate id. Never gated. |
+| `GET /slices/products/{id}` | Returns the FR8 scoped slice: every FeatureSet, Feature, FR, NFR, and LoadBearingDecision beneath a Product. Never gated. |
 
 Every gated endpoint above:
 - requires `X-Krill-Session-Id` (`api/handlers/gate.go`'s `RequireSession`) — rejects with 401 if missing/unknown;
 - takes exactly one parent reference as a request field (never a list) — an unrecognized extra field is rejected with 400 (strict JSON decoding);
 - writes `scope_id` from the session's scope (LB1) — never a client-supplied field;
 - rejects a nonexistent or cross-scope parent with 400, and a scope-qualified duplicate name with 409 (never a 500 for either).
+
+The four `GET /slices/...` endpoints above are read-only and carry no
+`RequireSession` gate (FR3's `init` gate is write-only) — see
+`ARCHITECTURE.md` "The scoped-slice query" for the shared `slice.Document`
+response shape (FR9) all four return.
 
 ## Local development
 
@@ -48,6 +57,10 @@ PG_DATABASE_URL=postgres://postgres:password@localhost:5432/krill?sslmode=disabl
 PG_DATABASE_URL=postgres://postgres:password@localhost:5432/krill?sslmode=disable \
   bazel run //krill/api
 curl http://localhost:8080/healthz
+
+# Read a scoped spec slice (FR5-FR9) -- same call shape for all four
+# granularities, only the path segment and id change:
+curl http://localhost:8080/slices/products/<product-id>
 ```
 
 Or bring up the whole domain (Postgres + migrate + api) via Tilt:

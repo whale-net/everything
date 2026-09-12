@@ -1,9 +1,9 @@
 # krill — Architecture
 
 This document covers what exists after M1's domain scaffolding (issue
-#2487) and spec entity model (issue #2488). See [`PRODUCT.md`](PRODUCT.md)
-for vision, personas, load-bearing decisions, and the milestone roadmap
-that drives what gets built next.
+#2487), spec entity model (issue #2488), and scoped-slice query (issue
+#2491). See [`PRODUCT.md`](PRODUCT.md) for vision, personas, load-bearing
+decisions, and the milestone roadmap that drives what gets built next.
 
 ## Component map (as of this task)
 
@@ -14,8 +14,9 @@ that drives what gets built next.
         ▲
         │
    ┌────┴────┐
-   │   api   │  external-api: /healthz, /sessions/init, and the M1 entity
-   └─────────┘  write API (issue #2490 — create/attach only, no reads yet)
+   │   api   │  external-api: /healthz, /sessions/init, the M1 entity
+   └─────────┘  write API (issue #2490 — create/attach only), and the
+                FR5-FR9 scoped-slice query surface (issue #2491, read-only)
 ```
 
 `migrate` and `api` each get their own Postgres connection
@@ -30,6 +31,10 @@ and `api` today.
 component map above. `api` imports it as of issue #2490
 (`krill/api/routes.go`'s `store.New(pool)`), behind the entity create/
 attach handlers described in "`init` and the write gate" below.
+`krill/slice` (issue #2491) is the query layer built on top of `krill/store`,
+and `krill/api/handlers` is the HTTP surface over `krill/slice` — both
+also wired into `api` via `krill/api/routes.go` (see "The scoped-slice
+query" section below).
 
 ## The spec entity model (LB2/LB3, issue #2488)
 
@@ -252,22 +257,71 @@ entity creates and LB attach are wired in `routes.go` as of issue #2490
 `requirement.go`, `decision.go`); amend/import/pointer-issue-create remain
 unwired until their own tasks land.
 
+## The scoped-slice query (LB7, issue #2491)
+
+`krill/slice` implements FR5-FR9 — the C3 scoped query — over
+`krill/store`'s spec entity model. `krill/api/handlers` is the HTTP
+surface over it, wired into `api`'s mux in `routes.go`.
+
+**One document type, four granularities.** `slice.Document` (`document.go`)
+is the single typed, self-describing shape every granularity returns:
+
+- `GetFeatureSetSlice` (FR5) — a FeatureSet, its Features, their FRs/NFRs,
+  and *only* the LoadBearingDecisions attached to that FeatureSet — never
+  the product-wide decision list.
+- `GetFeatureSlice` (FR6) — a Feature and its FRs/NFRs, nothing else.
+- `GetRequirementSlice` (FR7) — a single FR or NFR by surrogate id alone.
+- `GetProductSlice` (FR8) — every FeatureSet, Feature, FR, NFR, and
+  LoadBearingDecision beneath a Product, in one call.
+
+`Document` does not vary by granularity (FR9): it carries an explicit
+`schema_version` (`slice.SchemaVersion`), and every included entity embeds
+an `EntityRef` — its surrogate id (LB2) and the as-of revision (SCD2
+`revision_id`) it was assembled from. A granularity that doesn't reach a
+given entity kind simply leaves that field of `Document` empty; there is
+no second response type. **This is the payload M4's claim will later
+enrich (LB7)** — not a UI response shape, and not something a later task
+should fork into a per-consumer projection. Display numbers are
+deliberately absent from `Document` today; if a later consumer needs one,
+it is computed at assembly time from a sibling's `Position`, never read
+from a stored column (LB2) — see `document.go`'s comment on
+`ProductEntity.Position` for where that boundary is written down.
+
+**Read-only, no `init` gate.** None of the four query methods or their
+HTTP routes check `session` — FR3's `init` gate is write-only, and read
+paths never require it (root plan issue #2485). `krill/store`'s existing
+`ListCurrentBy*`/`GetCurrentByID` methods cover three of the four
+granularities directly; `krill/store/slice.go`'s `SliceStore` adds the
+cross-table joins (`ListRequirementsByFeatureSet`,
+`ListFeaturesByProduct`, `ListRequirementsByProduct`,
+`ListDecisionsByProduct`) that `GetFeatureSetSlice` and `GetProductSlice`
+need and no single entity's `*Store` owns on its own — one query per
+entity kind rather than one query per sibling, regardless of how many
+FeatureSets or Features exist beneath the requested id.
+
 ## Open items
 
 - The HTTP surface over the spec entity model covers create/attach only
   (issue #2490: `POST /products`, `/feature-sets`, `/features`,
   `/requirements`, `/load-bearing-decisions`, each behind
-  `RequireSession`) — no read path yet (FR5-FR9, FR11, FR21) and no
-  surface at all yet for Persona/NonGoal (`krill/store`'s `PersonaStore`/
-  `NonGoalStore` are store-layer only, issue #2488).
+  `RequireSession`) — no surface at all yet for Persona/NonGoal
+  (`krill/store`'s `PersonaStore`/`NonGoalStore` are store-layer only,
+  issue #2488). FR5-FR9's read path now exists (issue #2491, see "The
+  scoped-slice query" above); FR11 and FR21 remain open.
 - No supersession/amend write path yet — `krill/store` ships `Create` and
   current-value reads only (see "The spec entity model" above).
+- No as-of (historical) slice read yet — `krill/slice`'s four
+  granularities always read current (`valid_to IS NULL`) rows; reading a
+  slice as of a past revision is a later history task's scope (see
+  `krill/slice/document.go`'s `EntityRef` doc comment).
 - `init` (FR3, #2489) and the write-only gate (`api/handlers/session.go`,
   `api/handlers/gate.go`) cover entity creates and LB attach as of #2490;
   amend (#2493), import (#2492), and pointer-issue create (#2496) remain
   unwired until their own tasks land.
-- No MCP surface yet — `krill/plugin/` is a placeholder only.
-- No auth wired up on `api` — `POST /sessions/init` and every future write
-  endpoint on this binary trust caller-asserted identity (see "`init` and
-  the write gate" above); only `krill/mcp` (issue #2494) gets NFR1's
-  two-front-door pattern, and only for the read-only spec surface.
+- No MCP surface yet — `krill/plugin/` is a placeholder only; a later
+  milestone's MCP tool wraps `krill/slice` directly, per LB7.
+- No auth wired up on `api` — `POST /sessions/init`, every future write
+  endpoint, and the FR5-FR9 slice routes all trust caller-asserted
+  identity or are unauthenticated (see "`init` and the write gate"
+  above); only `krill/mcp` (issue #2494) gets NFR1's two-front-door
+  pattern, and only for the read-only spec surface.

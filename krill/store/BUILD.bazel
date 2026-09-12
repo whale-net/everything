@@ -28,6 +28,7 @@ go_library(
         "product.go",
         "requirement.go",
         "session.go",
+        "slice.go",
         "store.go",
     ],
     importpath = "github.com/whale-net/everything/krill/store",

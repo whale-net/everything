@@ -39,3 +39,8 @@ func (s *Store) Personas() PersonaStore { return personaStore{pool: s.pool} }
 
 // NonGoals returns the NonGoalStore implementation.
 func (s *Store) NonGoals() NonGoalStore { return nonGoalStore{pool: s.pool} }
+
+// Slices returns the SliceStore implementation -- the cross-table reads
+// krill/slice's query layer needs on top of the per-entity accessors
+// above (see slice.go's doc comment).
+func (s *Store) Slices() SliceStore { return sliceStore{pool: s.pool} }

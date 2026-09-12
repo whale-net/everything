@@ -1,9 +1,9 @@
-// Command api is krill's HTTP surface. This scaffold (issue #2487) stands
-// up the binary, its config, and /healthz only -- a live database
-// connectivity check, not a static 200 -- so the chart, Tiltfile, and
-// image build are exercised from this task onward. No spec endpoints
-// exist yet; those land once krill's entity model does (M1's later
-// tasks).
+// Command api is krill's HTTP surface. The original scaffold (issue
+// #2487) stood up the binary, its config, and /healthz only -- a live
+// database connectivity check, not a static 200 -- so the chart,
+// Tiltfile, and image build were exercised from that task onward. Issue
+// #2491 adds the first spec endpoints: the four scoped-slice query
+// granularities (FR5-FR9) over //krill/slice, wired in routes.go.
 package main
 
 import (
