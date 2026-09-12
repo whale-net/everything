@@ -24,6 +24,13 @@ func renderGrants(t *testing.T, data GrantsData) string {
 	return buf.String()
 }
 
+func renderGrantsAdmin(t *testing.T, data GrantsAdminData) string {
+	t.Helper()
+	var buf strings.Builder
+	require.NoError(t, GrantsAdmin(data).Render(context.Background(), &buf))
+	return buf.String()
+}
+
 // TestGrants_RendersRowsFromPlainData proves the table renders every
 // field of a plain GrantRow, and offers a revoke control for a
 // not-yet-revoked row.
@@ -43,9 +50,10 @@ func TestGrants_RendersRowsFromPlainData(t *testing.T) {
 	assert.Contains(t, body, `value="audience_score_system"`)
 }
 
-// TestGrants_RevokedRowHasNoRevokeControl proves an already-revoked row
-// offers no revoke form -- there is nothing left to revoke.
-func TestGrants_RevokedRowHasNoRevokeControl(t *testing.T) {
+// TestGrants_RevokedRowHasNoRevokeControlAndOffersRegrant proves an
+// already-revoked row offers no revoke form -- there is nothing left to
+// revoke -- and instead offers a Re-grant link on the self-service page.
+func TestGrants_RevokedRowHasNoRevokeControlAndOffersRegrant(t *testing.T) {
 	body := renderGrants(t, GrantsData{
 		Rows: []GrantRow{
 			{OperatorLabel: "alice", Scope: "manmanv2", Status: "revoked", GrantedAt: time.Now()},
@@ -54,6 +62,23 @@ func TestGrants_RevokedRowHasNoRevokeControl(t *testing.T) {
 
 	assert.Contains(t, body, "Revoked")
 	assert.NotContains(t, body, `action="/grants/revoke"`)
+	assert.Contains(t, body, "Re-grant")
+	assert.Contains(t, body, `href="/mcp/consent?scope=manmanv2"`)
+}
+
+// TestGrantsAdmin_RevokedRowHasNoRevokeOrRegrant proves an already-revoked
+// row on the admin page offers neither revoke nor re-grant (an admin cannot
+// consent on behalf of another operator).
+func TestGrantsAdmin_RevokedRowHasNoRevokeOrRegrant(t *testing.T) {
+	body := renderGrantsAdmin(t, GrantsAdminData{
+		Rows: []GrantRow{
+			{OperatorLabel: "alice", Scope: "manmanv2", Status: "revoked", GrantedAt: time.Now(), SubjectSub: "sub-123"},
+		},
+	})
+
+	assert.Contains(t, body, "Revoked")
+	assert.NotContains(t, body, `action="/admin/grants/revoke"`)
+	assert.NotContains(t, body, "Re-grant")
 }
 
 // TestGrants_EmptyRowsRendersPlaceholder guards the zero-grants case.

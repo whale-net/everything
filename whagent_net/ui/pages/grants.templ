@@ -107,7 +107,8 @@ func scopeConsentURL(scope string) templ.SafeURL {
 // includes one -- the subject there is always the signed-in caller
 // (FR16/FR17, ../handlers_grants.go's handleGrantsRevoke doc comment). An
 // already-revoked row shows no revoke control at all (there is nothing
-// left to revoke).
+// left to revoke); on the self-service page it instead offers a Re-grant
+// action to initiate consent again for that scope.
 templ grantsTable(rows []GrantRow, revokeAction string) {
 	if len(rows) == 0 {
 		<p class="opacity-70">You have not granted access to any scope yet.</p>
@@ -140,6 +141,8 @@ templ grantsTable(rows []GrantRow, revokeAction string) {
 										SubmitLabel: "Revoke",
 									}, templ.Attributes{})
 								</form>
+							} else if row.SubjectSub == "" && revokeAction == "/grants/revoke" {
+								<a class="btn btn-sm btn-primary" href={ scopeConsentURL(row.Scope) }>Re-grant</a>
 							}
 						</td>
 					</tr>
