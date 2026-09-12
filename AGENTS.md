@@ -57,12 +57,6 @@ bazel query 'attr(name, foo, //...)'              # find by attribute
 
 **When to break out of Bazel:** Only use raw shell commands, `go` tooling, or direct interpreters when a task explicitly requires it (e.g. interacting with a live process, running a one-off script with no BUILD target, or debugging a Bazel configuration issue itself).
 
-## ⚠️ Critical: Cross-Compilation
-
-Before touching image builds, platform targets, or container tooling: read [`docs/DOCKER.md`](docs/DOCKER.md).
-
-This repo uses true cross-compilation for ARM64. Breakage is **silent at build time** and only fails at runtime. If `image-integration` tests fail, **do not merge**.
-
 ## Documentation Conventions
 
 Each domain follows a standard file set. Use these as your primary reference before searching.
