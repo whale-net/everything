@@ -1,8 +1,9 @@
 # whagent-net Tiltfile
 # Local development environment for whagent-net (issue #2121, M1 close-out).
 #
-# migrate (job, runs the agent-definition seeder per whagent_net/migrate/
-# seed's package doc comment) + api (SessionService gRPC + JWKS) + worker
+# migrate (job, applies schema migrations only -- agent_definition rows
+# are inserted by hand, see whagent_net/README.md "Agent definition
+# config") + api (SessionService gRPC + JWKS) + worker
 # (Temporal SessionWorkflow, plus a Temporal-scheduled hot-to-cold
 # transcript archive workflow when WHAGENT_S3_BUCKET is set -- FR7/C18,
 # worker/archive.go) + mcp (the Claude-Code-facing MCP surface), with
@@ -220,12 +221,9 @@ build_images_from_apps(APPS, watch_paths, platform)
 # Kubernetes Deployments
 # ===========================
 
-# migrate: applies 001_initial_schema then runs the agent-definition
-# seeder (whagent_net/migrate/seed) -- OPENROUTER_API_KEY/
-# OPENROUTER_BASE_URL are needed here too: the seeder validates
-# agents.yaml's model against the live OpenRouter catalogue before
-# writing any row (this file's Seeder doc comment, "Config validation"),
-# so this job needs outbound network access to OpenRouter even in dev.
+# migrate: applies 001_initial_schema and later migrations only --
+# agent_definition/model_definition rows are inserted by hand (see
+# whagent_net/README.md "Agent definition config"), not seeded here.
 if get_env_bool('ENABLE_WHAGENT_NET_MIGRATE', default='true'):
     k8s_yaml(blob("""
 apiVersion: batch/v1
@@ -247,12 +245,9 @@ spec:
         env:
         - name: PG_DATABASE_URL
           value: "{pg_database_url}"
-        - name: OPENROUTER_API_KEY
-          value: "{openrouter_api_key}"
 """.format(
         namespace=namespace,
         pg_database_url=pg_database_url,
-        openrouter_api_key=os.environ.get('OPENROUTER_API_KEY', ''),
     )))
 
     k8s_resource(
@@ -260,7 +255,7 @@ spec:
         resource_deps=['postgres-dev-whagent'],
         labels=['whagent-net-infrastructure'],
     )
-    print("🔄 Migration job configured (applies schema + seeds agent_definition)")
+    print("🔄 Migration job configured (applies schema migrations)")
 
 # api: SessionService gRPC (start/send-turn/stop/get/read-transcript) +
 # the JWKS endpoint (WHAGENT_JWKS_ADDR) domain-owned MCP servers
@@ -648,4 +643,4 @@ print("\n🚀 Quick Start:")
 print("  1. tilt up                              # Start migrate + api + worker + mcp (this)")
 print("  2. cd audience_score_system && tilt up  # Cross-domain tool target (issue #2121)")
 print("  3. Add mcp to Claude Code's MCP config (README.md \"Connecting Claude Code to mcp\")")
-print("  4. start_session against the seeded agent_id (whagent_net/config/agents.yaml)")
+print("  4. start_session against an agent_id you've inserted (see whagent_net/config/agents.yaml and README.md \"Agent definition config\")")

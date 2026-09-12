@@ -1,17 +1,18 @@
-# whagent-net agent-definition seed config (issue #2121, LB5/NFR6).
+# whagent-net agent-definition reference config (issue #2121, LB5/NFR6).
 #
-# This is the checked-in source of truth `whagent_net/migrate/seed`
-# (config.go's Load, seed.go's Seeder) upserts into the `agent_definition`
-# table on every `migrate` run -- config-driven seeding, never a UI, but
-# `agent_definition` stays a real versioned table (AGENTS.md "SCD2";
-# ARCHITECTURE.md "Domain-owned MCP servers and the tool contract"): the
-# seeder never edits a version already pinned to a session in place, it
-# only ever inserts a new one when a definition's fields drift from the
-# latest seeded version (see seed.go's package doc comment for the exact
-# diff-and-insert rule).
+# This documents the row shape for `agent_definition`/`model_definition`
+# (decoded via config.go's Load, and consumed by whagent_net/api/main.go
+# for RequiredRoles/DevRoles) -- but it is not automatically loaded into
+# either table. A human inserts these rows by hand; see
+# whagent_net/README.md "Agent definition config" for a worked SQL
+# example. `agent_definition` stays a real versioned table (AGENTS.md
+# "SCD2"; ARCHITECTURE.md "Domain-owned MCP servers and the tool
+# contract"): never edit a version already pinned to a session in place,
+# only ever insert a new one when a definition's fields change.
 #
 # Each `agents` entry's shape mirrors whagent_net/session.AgentDefinition
-# (agentdef.go) minus `version`/`created_at`, which the seeder derives:
+# (agentdef.go) minus `version`/`created_at`, which whoever inserts the row
+# assigns:
 #   - agent_id:       stable identifier sessions pin to (session_agent.agent_id)
 #   - scope:          the one grant-scope this definition belongs to (often,
 #                      but not required to be, an AGENTS.md Domains-table
@@ -56,7 +57,7 @@
 #                       allow_fallbacks/require_parameters/data_collection,
 #                       all optional (session.ProviderPreferences)
 #
-# model_definitions: []   # none seeded yet -- see this file's doc comment above
+# model_definitions: []   # none defined yet -- see this file's doc comment above
 
 agents:
   - agent_id: audience-score-system-research

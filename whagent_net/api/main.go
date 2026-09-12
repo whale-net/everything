@@ -171,12 +171,11 @@ func run() error {
 
 	// agentDefs feeds DevRoles below: DevRoles matters only in
 	// AuthModeNone, where it makes the injected dev Claims carry every
-	// seeded agent's required_role instead of grpcauth's generic default
-	// of ["admin"] (which matches none of them) -- see FR9/issue #2154 and
-	// tools/app_registry/server/main.go's identical precedent. This load
-	// failing fails api's startup the same loud way it already fails
-	// migrate/worker's seeder (whagent_net/migrate/seed.Seeder) -- never
-	// silently falling back to no DevRoles.
+	// configured agent's required_role instead of grpcauth's generic
+	// default of ["admin"] (which matches none of them) -- see FR9/issue
+	// #2154 and tools/app_registry/server/main.go's identical precedent.
+	// This load failing fails api's startup loudly rather than silently
+	// falling back to no DevRoles.
 	_, agentDefs, err := config.Load()
 	if err != nil {
 		return fmt.Errorf("config: %w", err)
