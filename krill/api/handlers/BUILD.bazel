@@ -6,17 +6,23 @@ create/attach endpoints; types.go is their shared request-decoding and
 error-mapping surface. slice.go (issue #2491, FR5-FR9) is the read-only
 HTTP surface over //krill/slice's four scoped-slice granularities -- thin
 adapters only, no business logic; see slice.go's package doc comment.
-None of slice.go's routes carry the write-only session gate."""
+amend.go (issue #2493, FR12) is the SCD2 supersession write endpoints for
+Requirement and LoadBearingDecision, gated like every other write endpoint;
+history.go (issue #2493, FR11) is the as-of/version-list read endpoints
+over the same two entity kinds. Neither slice.go's nor history.go's routes
+carry the write-only session gate."""
 
 load("@rules_go//go:def.bzl", "go_library", "go_test")
 
 go_library(
     name = "handlers",
     srcs = [
+        "amend.go",
         "decision.go",
         "feature.go",
         "featureset.go",
         "gate.go",
+        "history.go",
         "product.go",
         "requirement.go",
         "session.go",

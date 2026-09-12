@@ -8,20 +8,21 @@ load("@rules_go//go:def.bzl", "go_library", "go_test")
 # map entries, personas, and non-goals" section for how a capability-map
 # entry (`Cn`) resolves onto Feature with no schema of its own.
 #
-# Write path in this task is Create + current-value reads only --
-# supersession (the close-and-open write LB3 requires) is a later "amend"
-# task's scope; this schema's shape already supports it (see migration
-# 002's comments).
-#
 # session.go (issue #2489, FR3) is the `init` primitive: mints a
-# krill-native session id and records the two LB4 subjects.
+# krill-native session id and records the two LB4 subjects. amend.go
+# (issue #2493, FR12) is the SCD2 close-and-open supersession write path
+# for Requirement and LoadBearingDecision; history.go (issue #2493, FR11)
+# is its read side -- as-of reads and version lists over the same two
+# entity kinds.
 go_library(
     name = "store",
     srcs = [
+        "amend.go",
         "decision.go",
         "errors.go",
         "feature.go",
         "featureset.go",
+        "history.go",
         "milestone.go",
         "models.go",
         "nongoal.go",

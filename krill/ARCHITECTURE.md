@@ -102,7 +102,8 @@ Every one of those seven tables shares one shape:
 explicitly out of scope; `krill/store` ships `Create` and current-value
 reads only. The schema already supports the write path — every column a
 supersession needs is present — but no store method performs one yet.
-That is a later "amend" task.
+That is a later "amend" task (issue #2493, see "Amend and as-of history
+reads" below).
 
 ## Capability map entries, personas, and non-goals (issue #2488)
 
@@ -254,8 +255,10 @@ issue #2493), import (FR16, issue #2492), and pointer-issue create (FR20,
 issue #2496) — and no read path, including FR21's live C3 query. The
 entity creates and LB attach are wired in `routes.go` as of issue #2490
 (`api/handlers/product.go`, `featureset.go`, `feature.go`,
-`requirement.go`, `decision.go`); amend/import/pointer-issue-create remain
-unwired until their own tasks land.
+`requirement.go`, `decision.go`); amend is wired as of this task (issue
+#2493, `api/handlers/amend.go` — see "Amend and as-of history reads"
+below); import/pointer-issue-create remain unwired until their own tasks
+land.
 
 ## The scoped-slice query (LB7, issue #2491)
 
@@ -371,27 +374,94 @@ milestone its own roadmap section never defines" (the issue's own phrasing)
 resolves to: a document is well-formed on this axis exactly when every
 `M<n>` it mentions is also a milestone it defines.
 
+## Amend and as-of history reads (FR11, FR12, issue #2493)
+
+`krill/store/amend.go` (write) and `krill/store/history.go` (read) are the
+SCD2 supersession pair `AGENTS.md`'s "SCD2" section describes, applied to
+the two entity kinds this task scopes for amendment: `Requirement` (FR/NFR)
+and `LoadBearingDecision`. No new migration lands with this task — every
+column both files need was already present in migration 002 (see "What
+this task does not build" above, now resolved).
+
+**Amend (`AmendStore`, FR12) is the close-and-open write**, exactly the two
+statements `AGENTS.md` names:
+
+```sql
+UPDATE <table> SET valid_to = NOW() WHERE id = $1 AND valid_to IS NULL;
+INSERT INTO <table> (id, ..., scope_id) VALUES ($1, ..., $scope);
+```
+
+`AmendRequirement`/`AmendLoadBearingDecision` first `SELECT ... FOR UPDATE`
+the current row inside the same transaction as the close-and-open pair —
+this locks it for the transaction's duration so a concurrent amend of the
+same `id` cannot race the `UPDATE` or the `(id) WHERE valid_to IS NULL`
+partial unique index both amend and Create rely on. The new row carries
+the closed row's `id`, `scope_id`, parent id (`feature_id` /
+`feature_set_id`), `kind` (Requirement only), and `position` forward
+unchanged — an amend replaces `name`/`body` only, never a parent id
+(reparenting stays the separate, still-unbuilt operation store/decision.go's
+`Create` doc comment describes) and never `position` (so no sibling's
+rendered display number moves, per LB2). The surrogate `id` is never
+reissued (LB2) and no sibling row of any kind is read or written by an
+amend — only the one entity's own current-and-then-superseded rows.
+
+**History reads (`HistoryStore`, FR11)** are the read side, over the same
+two tables:
+
+- **As-of** (`GetRequirementAsOf` / `GetLoadBearingDecisionAsOf`) is
+  `AGENTS.md`'s "Value at time T" query verbatim:
+  `WHERE id = $1 AND valid_from <= $2 AND (valid_to IS NULL OR valid_to > $2)`.
+  Returns `ErrNotFound` if `asOf` predates the entity's first revision (or
+  `id` never existed) — there is no row satisfying the interval in that
+  case, never a zero-value success.
+- **Version list** (`ListRequirementVersions` /
+  `ListLoadBearingDecisionVersions`) returns every revision sharing `id`,
+  oldest first (`ORDER BY valid_from`) — every prior version's own
+  `ValidFrom`/`ValidTo` is exactly what a caller needs to see what
+  superseded what, and when.
+
+Neither `AmendStore` nor `HistoryStore` reads or writes anything beyond
+`requirement`/`load_bearing_decision` — no other entity kind (Product,
+FeatureSet, Feature, Persona, NonGoal) is amendable or as-of-readable in
+this milestone.
+
+**HTTP surface.** `krill/api/handlers/amend.go` wraps `AmendStore` behind
+`RequireSession` (`routes.go`: `POST /requirements/{id}/amend`,
+`POST /load-bearing-decisions/{id}/amend`) — one of this milestone's write
+paths, exactly like entity create/attach. `krill/api/handlers/history.go`
+wraps `HistoryStore` with no session gate at all (`GET
+/requirements/{id}/as-of?at=<RFC3339>`, `GET /requirements/{id}/versions`,
+and the `load-bearing-decisions` equivalents) — FR11 is a read path, and
+read paths never require `init` (root plan issue #2485), exactly like
+`krill/slice`'s four granularities.
+
 ## Open items
 
-- The HTTP surface over the spec entity model covers create/attach only
-  (issue #2490: `POST /products`, `/feature-sets`, `/features`,
-  `/requirements`, `/load-bearing-decisions`, each behind
-  `RequireSession`) — no surface at all yet for Persona/NonGoal
-  (`krill/store`'s `PersonaStore`/`NonGoalStore` are store-layer only,
-  issue #2488). FR5-FR9's read path now exists (issue #2491, see "The
-  scoped-slice query" above); FR11 and FR21 remain open.
-- No supersession/amend write path yet — `krill/store` ships `Create` and
-  current-value reads only (see "The spec entity model" above).
-- No as-of (historical) slice read yet — `krill/slice`'s four
-  granularities always read current (`valid_to IS NULL`) rows; reading a
-  slice as of a past revision is a later history task's scope (see
-  `krill/slice/document.go`'s `EntityRef` doc comment).
+- The HTTP surface over the spec entity model covers create/attach, amend,
+  and history reads (issue #2490: `POST /products`, `/feature-sets`,
+  `/features`, `/requirements`, `/load-bearing-decisions`; issue #2493:
+  `POST /requirements/{id}/amend`, `POST
+  /load-bearing-decisions/{id}/amend`, `GET /requirements/{id}/as-of`,
+  `GET /requirements/{id}/versions`, and the `load-bearing-decisions`
+  equivalents) — no surface at all yet for Persona/NonGoal (`krill/store`'s
+  `PersonaStore`/`NonGoalStore` are store-layer only, issue #2488), and no
+  amend/history surface for Product, FeatureSet, or Feature (issue #2493
+  scopes FR11/FR12 to Requirement and LoadBearingDecision only). FR5-FR9's
+  read path exists (issue #2491, see "The scoped-slice query" above); FR21
+  remains open.
+- No as-of (historical) *slice* read yet — `krill/slice`'s four
+  granularities always read current (`valid_to IS NULL`) rows; issue
+  #2493's as-of read (see "Amend and as-of history reads" above) is a
+  single-entity (`Requirement`/`LoadBearingDecision`) read, not a
+  `slice.Document` assembled as of a past revision — that remains open if
+  a later task needs it.
 - `init` (FR3, #2489) and the write-only gate (`api/handlers/session.go`,
-  `api/handlers/gate.go`) cover entity creates and LB attach as of #2490;
-  amend (#2493) and pointer-issue create (#2496) remain unwired until
-  their own tasks land. Import (#2492) is gated too, but as a CLI
-  entrypoint checking the session directly against the store rather than
-  through this HTTP middleware (see "The markdown importer" above).
+  `api/handlers/gate.go`) cover entity creates and LB attach as of #2490,
+  and amend as of #2493 (`api/handlers/amend.go`); pointer-issue create
+  (#2496) remains unwired until its own task lands. Import (#2492) is
+  gated too, but as a CLI entrypoint checking the session directly against
+  the store rather than through this HTTP middleware (see "The markdown
+  importer" above).
 - No MCP surface yet — `krill/plugin/` is a placeholder only; a later
   milestone's MCP tool wraps `krill/slice` directly, per LB7.
 - No auth wired up on `api` — `POST /sessions/init`, every future write

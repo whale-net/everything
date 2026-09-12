@@ -22,8 +22,11 @@ const SchemaVersion = "1"
 // (FR9): ID is the entity's immutable identity (LB2), stable across every
 // supersession; RevisionID is the exact SCD2 row this entity's fields
 // were read from -- the current row today, since query.go only ever reads
-// `valid_to IS NULL` rows (an as-of read is the history task's later
-// responsibility, per this milestone's issue #2491 scope note).
+// `valid_to IS NULL` rows. Issue #2493 (FR11) added a single-entity as-of
+// read (`krill/store/history.go`) for Requirement and LoadBearingDecision,
+// but no granularity here assembles a whole slice.Document as of a past
+// revision -- that remains open (see krill/ARCHITECTURE.md's "Amend and
+// as-of history reads" open item) if a later task ever needs it.
 type EntityRef struct {
 	ID         uuid.UUID `json:"id"`
 	RevisionID uuid.UUID `json:"revision_id"`
