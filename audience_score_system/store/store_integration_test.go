@@ -2705,9 +2705,9 @@ func ptrInt64(v int64) *int64        { return &v }
 // for 018 (research_note.thread_id NOT NULL + idea_id drop, FR2 Stage 3/
 // NFR4, #1947), and again for 019 (video_script.edit_idempotency_key,
 // FR16-FR19, #2037), and again for 020 (person_oidc_identity +
-// person.google_subject NOT NULL drop, FR12(b), #2116), so the version
-// assertion and table list below cover all of them rather than any single
-// one.
+// person.google_subject NOT NULL drop, FR12(b), #2116), and again for 021
+// (link_assertion_consumption, FR3/NFR1, #2597), so the version assertion
+// and table list below cover all of them rather than any single one.
 func TestMigrations_UpDownUp_LeavesNoOrphanObjects(t *testing.T) {
 	ctx := context.Background()
 	db := dbtest.NewPostgres(ctx, t, dbtest.Options{})
@@ -2724,7 +2724,7 @@ func TestMigrations_UpDownUp_LeavesNoOrphanObjects(t *testing.T) {
 	version, dirty, err := runner.Version()
 	require.NoError(t, err)
 	assert.False(t, dirty)
-	assert.Equal(t, uint(20), version, "highest migration in schema.Migrations is 020_person_oidc_identity")
+	assert.Equal(t, uint(21), version, "highest migration in schema.Migrations is 021_link_assertion_ledger")
 
 	for _, tbl := range []string{
 		"person", "channel", "channel_person", "channel_invite",
@@ -2743,6 +2743,7 @@ func TestMigrations_UpDownUp_LeavesNoOrphanObjects(t *testing.T) {
 		"research_thread",
 		"research_note_relation",
 		"person_oidc_identity",
+		"link_assertion_consumption",
 	} {
 		var exists bool
 		require.NoError(t, db.Pool.QueryRow(ctx,
