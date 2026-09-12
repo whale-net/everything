@@ -1,0 +1,28 @@
+"""krill domain root."""
+
+load("//tools/bazel:release.bzl", "release_helm_chart")
+
+filegroup(
+    name = "docs",
+    srcs = glob(["*.md"]),
+    visibility = ["//visibility:public"],
+)
+
+# Composes M1's binaries into one deployable chart, mirroring
+# whagent_net/BUILD.bazel / audience_score_system/BUILD.bazel's shape.
+# domain "krill" + chart_name "krill" produces the "helm-krill-krill" chart
+# identity. `migrate` (job) + `api` (external HTTP: /healthz + DB
+# connectivity check only, no spec endpoints yet -- issue #2487). Later M1
+# tasks append `//krill/mcp:mcp_metadata` once that binary exists.
+release_helm_chart(
+    name = "krill_chart",
+    apps = [
+        "//krill/migrate:migrate_metadata",
+        "//krill/api:api_metadata",
+    ],
+    chart_name = "krill",
+    domain = "krill",
+    environment = "dev",
+    namespace = "krill",
+    visibility = ["//visibility:public"],
+)

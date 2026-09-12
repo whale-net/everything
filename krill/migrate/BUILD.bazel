@@ -1,0 +1,31 @@
+load("@rules_go//go:def.bzl", "go_binary", "go_library")
+load("//tools/bazel:release.bzl", "release_app")
+
+go_library(
+    name = "migrate_lib",
+    srcs = ["main.go"],
+    importpath = "github.com/whale-net/everything/krill/migrate",
+    visibility = ["//visibility:private"],
+    deps = [
+        "//krill/migrate/schema",
+        "//krill/migrate/seed",
+        "//libs/go/migrate",
+    ],
+)
+
+go_binary(
+    name = "migrate",
+    embed = [":migrate_lib"],
+    visibility = ["//visibility:public"],
+)
+
+# Release metadata for the migration job (issue #2487). domain "krill" +
+# name "migrate" matches the binary table in krill/README.md.
+release_app(
+    name = "migrate",
+    binary_name = ":migrate",
+    language = "go",
+    domain = "krill",
+    description = "krill database migration runner and scope-row seeder",
+    app_type = "job",
+)
