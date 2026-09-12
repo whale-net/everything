@@ -118,6 +118,34 @@ func TestAgentDefinitionStore_NilScope_RoundTripsThroughGetVersion(t *testing.T)
 	assert.Nil(t, got.Scope)
 }
 
+// TestAgentDefinitionStore_ListScopes_DistinctSortedExcludingNull proves
+// ListScopes returns every distinct non-null Scope, sorted alphabetically,
+// deduplicated across agent_id/version, with no null-scope row surfaced.
+func TestAgentDefinitionStore_ListScopes_DistinctSortedExcludingNull(t *testing.T) {
+	ctx := context.Background()
+	s, _ := newStore(t)
+
+	manman := newTestAgentDefinition("agent-manman", 1)
+	manman.Scope = strPtr("manmanv2")
+	require.NoError(t, s.AgentDefinitions().Upsert(ctx, manman))
+
+	ass1 := newTestAgentDefinition("agent-ass", 1)
+	ass1.Scope = strPtr("audience_score_system")
+	require.NoError(t, s.AgentDefinitions().Upsert(ctx, ass1))
+
+	ass2 := newTestAgentDefinition("agent-ass-2", 1)
+	ass2.Scope = strPtr("audience_score_system")
+	require.NoError(t, s.AgentDefinitions().Upsert(ctx, ass2))
+
+	scopeless := newTestAgentDefinition("agent-scopeless", 1)
+	scopeless.Scope = nil
+	require.NoError(t, s.AgentDefinitions().Upsert(ctx, scopeless))
+
+	scopes, err := s.AgentDefinitions().ListScopes(ctx)
+	require.NoError(t, err)
+	assert.Equal(t, []string{"audience_score_system", "manmanv2"}, scopes)
+}
+
 // TestAgentDefinitionStore_GetLatest_UnknownAgent_ReturnsNilNotError proves
 // GetLatest's documented "no rows -> nil, nil" contract.
 func TestAgentDefinitionStore_GetLatest_UnknownAgent_ReturnsNilNotError(t *testing.T) {

@@ -8,6 +8,7 @@
 package pages
 
 import (
+	"net/url"
 	"time"
 
 	"github.com/whale-net/everything/libs/go/htmxui"
@@ -70,7 +71,25 @@ func statusLabel(status string) string {
 type GrantsData struct {
 	Layout components.LayoutData
 	Rows   []GrantRow
-	Error  string
+
+	// AvailableScopes lists every configured grant-scope
+	// (../handlers_grants.go's availableScopesForGrant) the signed-in
+	// operator does not already hold an active grant for. Rendered as a
+	// list of clickable /mcp/consent?scope=<s> links, so starting a new
+	// consent never requires hand-typing that URL (handlers_consent.go's
+	// standalone entry point). Sorted, deduplicated -- see
+	// AgentDefinitionStore.ListScopes' contract. Empty renders no section
+	// at all.
+	AvailableScopes []string
+
+	Error string
+}
+
+// scopeConsentURL builds the standalone consent route's URL for scope
+// (handlers_consent.go's GET /mcp/consent?scope=<s>), URL-encoding scope
+// rather than concatenating it raw.
+func scopeConsentURL(scope string) templ.SafeURL {
+	return templ.URL("/mcp/consent?" + url.Values{"scope": {scope}}.Encode())
 }
 
 // grantsTable renders rows -- and only rows -- per FR13's shared-render-
@@ -141,5 +160,16 @@ templ Grants(data GrantsData) {
 			<div role="alert" class="alert alert-error mb-4">{ data.Error }</div>
 		}
 		@grantsTable(data.Rows, "/grants/revoke")
+		if len(data.AvailableScopes) > 0 {
+			<h2 class="text-xl font-bold text-base-content mt-8 mb-2">Available grants</h2>
+			<p class="opacity-70 mb-4">Scopes configured on this deployment you have not yet granted access to.</p>
+			<ul class="flex flex-col gap-2">
+				for _, scope := range data.AvailableScopes {
+					<li>
+						<a class="btn btn-sm btn-primary" href={ scopeConsentURL(scope) }>Grant { scope }</a>
+					</li>
+				}
+			</ul>
+		}
 	}
 }

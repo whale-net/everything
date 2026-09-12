@@ -12,10 +12,14 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"google.golang.org/grpc"
 
 	"github.com/whale-net/everything/libs/go/grpcauth"
 	"github.com/whale-net/everything/libs/go/grpcauth/grantindex"
 	"github.com/whale-net/everything/whagent_net/delegatedgrant"
+	"github.com/whale-net/everything/whagent_net/ui/pages"
+
+	whagentpb "github.com/whale-net/everything/whagent_net/protos"
 )
 
 // This file guards issue #2432's Implementation-phase Testing section:
@@ -151,6 +155,59 @@ func TestHandleGrantsRevoke_TamperedSubjectIsIgnored(t *testing.T) {
 	victimStatus, err := store.Status(context.Background(), victimKey, "audience_score_system")
 	require.NoError(t, err)
 	assert.Equal(t, grpcauth.GrantStatusActive, victimStatus, "victim's grant must be untouched by a tampered request")
+}
+
+// fakeScopeLister is a scopeLister backed by a fixed response/error, so a
+// test can drive availableScopesForGrant without a real gRPC connection to
+// `api`.
+type fakeScopeLister struct {
+	scopes []string
+	err    error
+}
+
+func (f *fakeScopeLister) ListAgentDefinitionScopes(_ context.Context, _ *whagentpb.ListAgentDefinitionScopesRequest, _ ...grpc.CallOption) (*whagentpb.ListAgentDefinitionScopesResponse, error) {
+	if f.err != nil {
+		return nil, f.err
+	}
+	return &whagentpb.ListAgentDefinitionScopesResponse{Scopes: f.scopes}, nil
+}
+
+// TestAvailableScopesForGrant_ExcludesActiveScope proves a scope the
+// operator already actively holds is excluded from the available list.
+func TestAvailableScopesForGrant_ExcludesActiveScope(t *testing.T) {
+	client := &fakeScopeLister{scopes: []string{"audience_score_system", "manmanv2"}}
+	rows := []pages.GrantRow{{Scope: "audience_score_system", Status: "active"}}
+
+	available := availableScopesForGrant(context.Background(), client, rows, discardLogger())
+	assert.Equal(t, []string{"manmanv2"}, available)
+}
+
+// TestAvailableScopesForGrant_IncludesNeedsReauthScope proves a scope the
+// operator's grant needs re-auth for is still offered -- that operator
+// does need to consent again.
+func TestAvailableScopesForGrant_IncludesNeedsReauthScope(t *testing.T) {
+	client := &fakeScopeLister{scopes: []string{"audience_score_system"}}
+	rows := []pages.GrantRow{{Scope: "audience_score_system", Status: "needs_reauth"}}
+
+	available := availableScopesForGrant(context.Background(), client, rows, discardLogger())
+	assert.Equal(t, []string{"audience_score_system"}, available)
+}
+
+// TestAvailableScopesForGrant_NilClientReturnsNil proves a nil client (no
+// session RPC client configured) degrades to no available scopes rather
+// than a panic.
+func TestAvailableScopesForGrant_NilClientReturnsNil(t *testing.T) {
+	available := availableScopesForGrant(context.Background(), nil, nil, discardLogger())
+	assert.Nil(t, available)
+}
+
+// TestAvailableScopesForGrant_RPCErrorDegradesToEmpty proves a failure
+// calling the RPC degrades to an empty list rather than failing the whole
+// /grants page.
+func TestAvailableScopesForGrant_RPCErrorDegradesToEmpty(t *testing.T) {
+	client := &fakeScopeLister{err: assert.AnError}
+	available := availableScopesForGrant(context.Background(), client, nil, discardLogger())
+	assert.Empty(t, available)
 }
 
 // TestBuildGrantRows_ScopedToSubject is FR16's core scoping guarantee at

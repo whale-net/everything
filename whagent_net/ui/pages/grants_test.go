@@ -6,6 +6,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/a-h/templ"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -66,6 +67,31 @@ func TestGrants_EmptyRowsRendersPlaceholder(t *testing.T) {
 func TestGrants_RendersPageError(t *testing.T) {
 	body := renderGrants(t, GrantsData{Error: "Delegated-grant management is not configured on this deployment."})
 	assert.Contains(t, body, "Delegated-grant management is not configured on this deployment.")
+}
+
+// TestGrants_RendersAvailableScopesAsClickableLinks proves an available
+// scope renders as a link to the standalone consent route -- so starting
+// a new consent never requires hand-typing /mcp/consent?scope=<s>.
+func TestGrants_RendersAvailableScopesAsClickableLinks(t *testing.T) {
+	body := renderGrants(t, GrantsData{AvailableScopes: []string{"audience_score_system"}})
+
+	assert.Contains(t, body, "Available grants")
+	assert.Contains(t, body, `href="/mcp/consent?scope=audience_score_system"`)
+	assert.Contains(t, body, "Grant audience_score_system")
+}
+
+// TestGrants_NoAvailableScopesOmitsSection guards the common case (nothing
+// left to grant, or delegated-grant unconfigured): no "Available grants"
+// section renders at all.
+func TestGrants_NoAvailableScopesOmitsSection(t *testing.T) {
+	body := renderGrants(t, GrantsData{})
+	assert.NotContains(t, body, "Available grants")
+}
+
+// TestScopeConsentURL_EncodesScope proves the consent link URL-encodes its
+// scope rather than concatenating it raw.
+func TestScopeConsentURL_EncodesScope(t *testing.T) {
+	assert.Equal(t, templ.SafeURL("/mcp/consent?scope=a+b"), scopeConsentURL("a b"))
 }
 
 // TestStatusLabel_MapsKnownStatuses guards statusLabel's mapping without

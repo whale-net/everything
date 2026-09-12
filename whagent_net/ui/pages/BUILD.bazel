@@ -21,6 +21,7 @@ go_test(
     srcs = ["grants_test.go"],
     embed = [":pages"],
     deps = [
+        "@com_github_a_h_templ//:templ",
         "@com_github_stretchr_testify//assert",
         "@com_github_stretchr_testify//require",
     ],
