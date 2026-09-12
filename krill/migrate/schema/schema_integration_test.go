@@ -114,17 +114,20 @@ var specTables = []string{"product", "feature_set", "feature", "requirement", "l
 
 // TestMigrations_UpDownUp_LeavesCleanDatabaseAndIsRerunnable proves the
 // whole migration set's lifecycle through the latest migration currently
-// embedded (007_ui_sessions, mcpauth auth-flow gap): Up() creates every
+// embedded (008_design_session, krill M2 issue #2542): Up() creates every
 // table including `krill_session`, `milestone_ref`, `entity_milestone`,
 // `pointer_artifact`, `mcp_credential`/`mcp_oauth_client`/`mcp_auth_code`,
-// and `ui_sessions`, Down() drops all of them (a clean database), and
-// Up() again succeeds a second time from that clean state -- the
-// migration set is re-runnable through //libs/go/migrate, not a one-shot
-// script. The hardcoded latest-version assertion below must be bumped
-// whenever a new migration lands (it was 1 for 001_scope alone, issue
-// #2487; it is 7 now that 002_spec_entities, 003_session,
-// 004_milestone_assoc, 005_pointer_artifact, 006_mcpauth_credential, and
-// 007_ui_sessions have all landed).
+// `ui_sessions`, and `design_session`/`revision_event`, Down() drops all
+// of them (a clean database), and Up() again succeeds a second time from
+// that clean state -- the migration set is re-runnable through
+// //libs/go/migrate, not a one-shot script. The hardcoded latest-version
+// assertion below must be bumped whenever a new migration lands (it was 1
+// for 001_scope alone, issue #2487; it is 8 now that 002_spec_entities,
+// 003_session, 004_milestone_assoc, 005_pointer_artifact,
+// 006_mcpauth_credential, 007_ui_sessions, and 008_design_session have
+// all landed -- 008 rather than 006 because 006/007 were already claimed
+// by the mcpauth auth-flow gap work by the time this task's migration
+// merged; see ARCHITECTURE.md's "Migration numbering (M2)" table).
 func TestMigrations_UpDownUp_LeavesCleanDatabaseAndIsRerunnable(t *testing.T) {
 	ctx := context.Background()
 	db := dbtest.NewPostgres(ctx, t, dbtest.Options{})
@@ -137,17 +140,17 @@ func TestMigrations_UpDownUp_LeavesCleanDatabaseAndIsRerunnable(t *testing.T) {
 
 	latest, err := runner.LatestVersion()
 	require.NoError(t, err)
-	require.Equal(t, uint(7), latest, "expected the latest migration source version to be 7 (001_scope, 002_spec_entities, 003_session, 004_milestone_assoc, 005_pointer_artifact, 006_mcpauth_credential, 007_ui_sessions) -- update this test if a later migration has since landed")
+	require.Equal(t, uint(8), latest, "expected the latest migration source version to be 8 (001_scope, 002_spec_entities, 003_session, 004_milestone_assoc, 005_pointer_artifact, 006_mcpauth_credential, 007_ui_sessions, 008_design_session) -- update this test if a later migration has since landed")
 
 	// -- Up: scope, krill_session, the milestone tables, pointer_artifact,
-	// the mcpauth tables, and ui_sessions must exist, version must land
-	// clean at the latest --
-	require.NoError(t, runner.Up(), "apply migrations 001-007")
+	// the mcpauth tables, ui_sessions, and design_session/revision_event
+	// must exist, version must land clean at the latest --
+	require.NoError(t, runner.Up(), "apply migrations 001-008")
 
 	version, dirty, err := runner.Version()
 	require.NoError(t, err)
 	assert.False(t, dirty)
-	assert.Equal(t, uint(7), version)
+	assert.Equal(t, uint(8), version)
 
 	assert.True(t, tableExists(t, ctx, db, "scope"), "expected table \"scope\" to exist after Up()")
 	assert.True(t, tableExists(t, ctx, db, "krill_session"), "expected table \"krill_session\" to exist after Up() (003_session, issue #2489)")
@@ -158,6 +161,8 @@ func TestMigrations_UpDownUp_LeavesCleanDatabaseAndIsRerunnable(t *testing.T) {
 	assert.True(t, tableExists(t, ctx, db, "mcp_oauth_client"), "expected table \"mcp_oauth_client\" to exist after Up() (006_mcpauth_credential)")
 	assert.True(t, tableExists(t, ctx, db, "mcp_auth_code"), "expected table \"mcp_auth_code\" to exist after Up() (006_mcpauth_credential)")
 	assert.True(t, tableExists(t, ctx, db, "ui_sessions"), "expected table \"ui_sessions\" to exist after Up() (007_ui_sessions)")
+	assert.True(t, tableExists(t, ctx, db, "design_session"), "expected table \"design_session\" to exist after Up() (008_design_session, issue #2542)")
+	assert.True(t, tableExists(t, ctx, db, "revision_event"), "expected table \"revision_event\" to exist after Up() (008_design_session, issue #2542)")
 
 	// -- Down: every table must be gone -------------------------------------
 	require.NoError(t, runner.Down(), "roll back every migration")
@@ -171,6 +176,8 @@ func TestMigrations_UpDownUp_LeavesCleanDatabaseAndIsRerunnable(t *testing.T) {
 	assert.False(t, tableExists(t, ctx, db, "mcp_oauth_client"), "expected table \"mcp_oauth_client\" to be dropped after Down() -- a clean database")
 	assert.False(t, tableExists(t, ctx, db, "mcp_auth_code"), "expected table \"mcp_auth_code\" to be dropped after Down() -- a clean database")
 	assert.False(t, tableExists(t, ctx, db, "ui_sessions"), "expected table \"ui_sessions\" to be dropped after Down() -- a clean database")
+	assert.False(t, tableExists(t, ctx, db, "design_session"), "expected table \"design_session\" to be dropped after Down() -- a clean database")
+	assert.False(t, tableExists(t, ctx, db, "revision_event"), "expected table \"revision_event\" to be dropped after Down() -- a clean database")
 
 	// -- Up again: re-runnable from the clean state --------------------------
 	require.NoError(t, runner.Up(), "re-apply every migration after Down() -- must be re-runnable")
@@ -178,7 +185,7 @@ func TestMigrations_UpDownUp_LeavesCleanDatabaseAndIsRerunnable(t *testing.T) {
 	version, dirty, err = runner.Version()
 	require.NoError(t, err)
 	assert.False(t, dirty)
-	assert.Equal(t, uint(7), version)
+	assert.Equal(t, uint(8), version)
 
 	assert.True(t, tableExists(t, ctx, db, "scope"), "expected table \"scope\" to exist again after the second Up()")
 	assert.True(t, tableExists(t, ctx, db, "krill_session"), "expected table \"krill_session\" to exist again after the second Up()")
@@ -189,6 +196,8 @@ func TestMigrations_UpDownUp_LeavesCleanDatabaseAndIsRerunnable(t *testing.T) {
 	assert.True(t, tableExists(t, ctx, db, "mcp_oauth_client"), "expected table \"mcp_oauth_client\" to exist again after the second Up()")
 	assert.True(t, tableExists(t, ctx, db, "mcp_auth_code"), "expected table \"mcp_auth_code\" to exist again after the second Up()")
 	assert.True(t, tableExists(t, ctx, db, "ui_sessions"), "expected table \"ui_sessions\" to exist again after the second Up()")
+	assert.True(t, tableExists(t, ctx, db, "design_session"), "expected table \"design_session\" to exist again after the second Up()")
+	assert.True(t, tableExists(t, ctx, db, "revision_event"), "expected table \"revision_event\" to exist again after the second Up()")
 }
 
 // TestMigration001_SchemaContract asserts the specific column shapes and
@@ -457,10 +466,10 @@ func TestMigration002_NoDisplayNumberColumnsOrJoinTables(t *testing.T) {
 
 	expected := append([]string{
 		"schema_migrations", "scope", "krill_session", "milestone_ref", "entity_milestone", "pointer_artifact",
-		"mcp_credential", "mcp_oauth_client", "mcp_auth_code", "ui_sessions",
+		"mcp_credential", "mcp_oauth_client", "mcp_auth_code", "ui_sessions", "design_session", "revision_event",
 	}, specTables...)
 	sort.Strings(expected)
-	assert.Equal(t, expected, tables, "the public schema must contain exactly scope + the seven spec tables + krill_session (003_session, issue #2489) + milestone_ref + entity_milestone (004_milestone_assoc, issue #2492) + pointer_artifact (005_pointer_artifact, issue #2496) + mcp_credential/mcp_oauth_client/mcp_auth_code (006_mcpauth_credential) + ui_sessions (007_ui_sessions) + golang-migrate's schema_migrations -- no fourth parallel table (e.g. \"capability\") and no join/bridge table for parentage (LB2)")
+	assert.Equal(t, expected, tables, "the public schema must contain exactly scope + the seven spec tables + krill_session (003_session, issue #2489) + milestone_ref + entity_milestone (004_milestone_assoc, issue #2492) + pointer_artifact (005_pointer_artifact, issue #2496) + mcp_credential/mcp_oauth_client/mcp_auth_code (006_mcpauth_credential) + ui_sessions (007_ui_sessions) + design_session/revision_event (008_design_session, issue #2542) + golang-migrate's schema_migrations -- no fourth parallel table (e.g. \"capability\") and no join/bridge table for parentage (LB2)")
 
 	// No display-number-shaped column on any spec table -- LB2's own
 	// vocabulary for the trap this guards against.
