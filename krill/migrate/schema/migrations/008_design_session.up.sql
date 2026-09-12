@@ -1,4 +1,4 @@
--- 006_design_session (issue #2542, krill M2, FR1-FR4/NFR1): the storage
+-- 008_design_session (issue #2542, krill M2, FR1-FR4/NFR1): the storage
 -- foundation for a recorded design session -- `design_session`, the
 -- longer-lived container a session's rounds accumulate under, and
 -- `revision_event`, the append-only log of those rounds.

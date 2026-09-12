@@ -1,5 +1,5 @@
 // This file (issue #2542, krill M2, FR1/FR8) is DesignSessionStore --
-// `design_session`'s (migration 006) accessor.
+// `design_session`'s (migration 008) accessor.
 package store
 
 import (
@@ -12,10 +12,10 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
-// DesignSessionStore covers `design_session` (migration 006) -- the
+// DesignSessionStore covers `design_session` (migration 008) -- the
 // longer-lived container FR2's revision_event rounds accumulate under.
 // Single parent: Product.ID. Not SCD2 (LB3) -- see migration
-// 006_design_session.up.sql's boundary comment; a DesignSession's mutable
+// 008_design_session.up.sql's boundary comment; a DesignSession's mutable
 // state is entirely derived from its RevisionEventStore log, never stored
 // back onto this row.
 type DesignSessionStore interface {

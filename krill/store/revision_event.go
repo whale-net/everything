@@ -1,5 +1,5 @@
 // This file (issue #2542, krill M2, FR2-FR4, NFR1) is RevisionEventStore
-// -- `revision_event`'s (migration 006) accessor.
+// -- `revision_event`'s (migration 008) accessor.
 package store
 
 import (
@@ -13,7 +13,7 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
-// RevisionEventStore covers `revision_event` (migration 006) -- the
+// RevisionEventStore covers `revision_event` (migration 008) -- the
 // append-only round log FR2 defines. NFR1 is a hard acceptance criterion,
 // not a nicety: there is no Update, no Delete, and no Amend method
 // anywhere on this interface, and none may be added later without
@@ -37,7 +37,7 @@ type RevisionEventStore interface {
 	//
 	// Append validates FR3's VerifiedAgainst and FR4's SignoffStatus
 	// conditional-presence rules in Go, in addition to the DDL CHECK
-	// constraints migration 006 declares, so a caller gets a named error
+	// constraints migration 008 declares, so a caller gets a named error
 	// rather than a raw Postgres constraint violation.
 	Append(ctx context.Context, e NewRevisionEvent) (RevisionEvent, error)
 
@@ -66,7 +66,7 @@ const revisionEventColumns = `id, scope_id, session_id, seq_no, ` +
 var ErrInvalidRevisionEvent = errors.New("krill/store: invalid revision event")
 
 // validateNewRevisionEvent enforces, in Go, the same conditional-presence
-// rules migration 006's DDL CHECK constraints declare (FR3, FR4), plus
+// rules migration 008's DDL CHECK constraints declare (FR3, FR4), plus
 // FR2's entity_deltas.change enum, which has no DDL-level CHECK (JSONB
 // contents aren't constrained by the schema) and so is enforced here only.
 func validateNewRevisionEvent(e NewRevisionEvent) error {

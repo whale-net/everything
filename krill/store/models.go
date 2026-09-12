@@ -210,7 +210,7 @@ type Scope struct {
 	UpdatedAt          time.Time
 }
 
-// EventType discriminates a revision_event's round kind (migration 006,
+// EventType discriminates a revision_event's round kind (migration 008,
 // issue #2542, FR2) -- `revision_event.event_type`'s CHECK constraint,
 // closed at exactly these five values. See DesignSession's doc comment
 // for why FR8's opening submission is deliberately not a sixth value
@@ -227,7 +227,7 @@ const (
 
 // EntityDeltaChange discriminates the kind of change one entry of a
 // revision_event's entity_deltas names -- `created` or `updated` only, no
-// `deleted` (migration 006's comment: M1's entity model has no
+// `deleted` (migration 008's comment: M1's entity model has no
 // delete/retire operation, and no M2 FR retracts a proposed entity).
 type EntityDeltaChange string
 
@@ -248,7 +248,7 @@ const (
 )
 
 // EntityDelta is one entry of a revision_event's entity_deltas JSONB
-// array (migration 006, FR2) -- one entity a round touched, the kind of
+// array (migration 008, FR2) -- one entity a round touched, the kind of
 // change, and a one-line human summary.
 type EntityDelta struct {
 	EntityID    uuid.UUID         `json:"entity_id"`
@@ -257,14 +257,14 @@ type EntityDelta struct {
 }
 
 // OpenQuestionsDelta is a revision_event's open_questions_delta JSONB
-// object (migration 006, FR2) -- the open question ids a round opened and
+// object (migration 008, FR2) -- the open question ids a round opened and
 // resolved, by id.
 type OpenQuestionsDelta struct {
 	Opened   []string `json:"opened"`
 	Resolved []string `json:"resolved"`
 }
 
-// DesignSession is one row of `design_session` (migration 006, issue
+// DesignSession is one row of `design_session` (migration 008, issue
 // #2542, FR1/FR8) -- the longer-lived container a session's
 // revision_event rounds accumulate under. Single parent: Product.ID.
 //
@@ -284,7 +284,7 @@ type DesignSession struct {
 }
 
 // NewRevisionEvent is the caller-supplied shape RevisionEventStore.Append
-// (revision_event.go) inserts (migration 006, issue #2542, FR2-FR4). The
+// (revision_event.go) inserts (migration 008, issue #2542, FR2-FR4). The
 // store layer never infers ScopeID or either identity triple from
 // SessionID -- every caller passes them explicitly, matching session.go's
 // InitSession contract ("the store layer never infers this -- every
@@ -307,7 +307,7 @@ type NewRevisionEvent struct {
 	SignoffStatus *SignoffStatus
 }
 
-// RevisionEvent is one row of `revision_event` (migration 006, issue
+// RevisionEvent is one row of `revision_event` (migration 008, issue
 // #2542, FR2-FR4, NFR1) -- one round of a DesignSession, append-only.
 // NFR1: there is no Update/Delete/Amend anywhere on RevisionEventStore --
 // a RevisionEvent, once Appended, is never mutated.

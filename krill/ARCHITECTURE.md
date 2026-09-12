@@ -220,17 +220,20 @@ milestone never collide on a migration version:
 
 ## Migration numbering (M2)
 
-Assigned up front in issue #2542 so parallel tasks under M2 never collide
-on a migration version:
+Assigned up front in issue #2542, but M1's own mcpauth-auth-flow-gap work
+(`006_mcpauth_credential`, `007_ui_sessions` above) landed on `main` first
+and claimed `006`/`007` before M2's tasks merged -- M2 renumbers to the
+next free slots so parallel tasks under M2 never collide on a migration
+version:
 
 | Version | Contents | Task |
 |---------|----------|------|
-| `006` | `design_session` + `revision_event` (FR1-FR4, NFR1) | #2542 |
-| `007` | Import-completion marker (FR12) | filed separately on this plan |
+| `008` | `design_session` + `revision_event` (FR1-FR4, NFR1) | #2542 |
+| `009` | Import-completion marker (FR12) | filed separately on this plan |
 
 ## `design_session` vs `krill_session` (FR1, FR8, #2542)
 
-M2's `design_session` (migration `006`) is the single most confusable
+M2's `design_session` (migration `008`) is the single most confusable
 thing in this milestone relative to M1's `krill_session` (migration `003`)
 -- write this down explicitly, mirroring "`krill_session` and the two
 session ids" below:
@@ -259,7 +262,7 @@ be wrong the moment a session's second round is written by a different
 actor than its first.
 
 `design_session` is append-only, not SCD2 (LB3) -- migration
-`006_design_session.up.sql`'s comment: M2 ships no update path over this
+`008_design_session.up.sql`'s comment: M2 ships no update path over this
 row, and its mutable state (how many rounds it has seen, what those rounds
 said) is entirely derived from its `revision_event` log, never written
 back onto the `design_session` row itself.
