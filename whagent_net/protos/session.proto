@@ -122,6 +122,7 @@ enum CapKind {
   CAP_KIND_UNSPECIFIED = 0;
   CAP_KIND_TURNS = 1;
   CAP_KIND_COST = 2;
+  CAP_KIND_TOOL_ITERATIONS = 3;
 }
 
 // ErrorCategory classifies a SESSION_STATE_FAILED session's terminal error

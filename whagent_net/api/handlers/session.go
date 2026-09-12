@@ -461,6 +461,8 @@ func capKindToProto(ck session.CapKind) pb.CapKind {
 		return pb.CapKind_CAP_KIND_TURNS
 	case session.CapKindCost:
 		return pb.CapKind_CAP_KIND_COST
+	case session.CapKindToolIterations:
+		return pb.CapKind_CAP_KIND_TOOL_ITERATIONS
 	default:
 		return pb.CapKind_CAP_KIND_UNSPECIFIED
 	}

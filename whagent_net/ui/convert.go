@@ -44,6 +44,8 @@ func capKindString(k whagentpb.CapKind) string {
 		return "turns"
 	case whagentpb.CapKind_CAP_KIND_COST:
 		return "cost"
+	case whagentpb.CapKind_CAP_KIND_TOOL_ITERATIONS:
+		return "tool_iterations"
 	default:
 		return "unspecified"
 	}

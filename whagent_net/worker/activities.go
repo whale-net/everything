@@ -49,6 +49,15 @@ const (
 	// activities' doc comments below.
 	ActivityListToolDefinitions = "ListToolDefinitions"
 	ActivityDispatchTool        = "DispatchTool"
+
+	// ActivityCommitToolLoopIteration is the inner tool-call loop's own
+	// activity ("add the inner tool loop"): commits one non-final loop
+	// iteration's assistant-message event (the response that requested more
+	// tool calls) and resolves that iteration's own cost/token usage, so
+	// processTurn (workflow.go) can fold it into the turn's single
+	// turn_usage row once the loop's final iteration commits via
+	// ActivityCommitTurn. See that activity's doc comment below.
+	ActivityCommitToolLoopIteration = "CommitToolLoopIteration"
 )
 
 // Activities groups the per-turn activities SessionWorkflow drives
@@ -287,9 +296,24 @@ type CommitTurnInput struct {
 	// EventIDs is BuildContext's selected list, carried through so a real
 	// implementation can correlate the turn's context with what actually
 	// got committed if it ever needs to (informational only -- CommitTurn
-	// does not re-read these rows).
+	// does not re-read these rows). For a turn that looped ("add the inner
+	// tool loop"), this is the LAST BuildContext call's list -- the context
+	// the turn's final response actually saw -- not the turn's original one.
 	EventIDs []uuid.UUID
 	Response llm.Response
+
+	// PriorPromptTokens/PriorCompletionTokens/PriorCostUSD/
+	// PriorCostEstimated aggregate every earlier loop iteration's usage
+	// within this same turn (ActivityCommitToolLoopIteration's results,
+	// accumulated by processTurn) -- added into this turn's single
+	// turn_usage row below so a turn that loops still records its FULL
+	// cost/token total, not just the final iteration's own usage. Zero
+	// value for a turn that never loops, making this fully backward
+	// compatible with a turn that has always made exactly one model call.
+	PriorPromptTokens     int64
+	PriorCompletionTokens int64
+	PriorCostUSD          float64
+	PriorCostEstimated    bool
 }
 
 // CommitTurnResult is processTurn's (workflow.go) per-turn result --
@@ -366,6 +390,10 @@ func (a *Activities) CommitTurn(ctx context.Context, in CommitTurnInput) (Commit
 		generationID = &genID
 	}
 
+	// Fold in every earlier loop iteration's usage (CommitTurnInput's doc
+	// comment): a turn that never looped has all four Prior* fields at
+	// their zero value, so this is exactly this call's own cost/tokens,
+	// unchanged from before "add the inner tool loop".
 	_, err = a.Store.CommitTurn(ctx, session.CommitTurnParams{
 		SessionID: in.SessionID,
 		Turn:      in.Turn,
@@ -373,10 +401,10 @@ func (a *Activities) CommitTurn(ctx context.Context, in CommitTurnInput) (Commit
 		Payload:   payload,
 		Usage: session.TurnUsage{
 			Model:            in.Model,
-			PromptTokens:     in.Response.Usage.PromptTokens,
-			CompletionTokens: in.Response.Usage.CompletionTokens,
-			CostUSD:          cost.Float64(),
-			CostEstimated:    estimated,
+			PromptTokens:     in.Response.Usage.PromptTokens + in.PriorPromptTokens,
+			CompletionTokens: in.Response.Usage.CompletionTokens + in.PriorCompletionTokens,
+			CostUSD:          cost.Float64() + in.PriorCostUSD,
+			CostEstimated:    estimated || in.PriorCostEstimated,
 			GenerationID:     generationID,
 		},
 	})
@@ -387,7 +415,78 @@ func (a *Activities) CommitTurn(ctx context.Context, in CommitTurnInput) (Commit
 	return CommitTurnResult{Done: false}, nil
 }
 
-// resolveCost is CommitTurn's cost-resolution step (FR7/LB6): the
+// CommitToolLoopIterationInput is CommitToolLoopIteration's activity input.
+type CommitToolLoopIterationInput struct {
+	SessionID uuid.UUID
+	Turn      int
+	// Iteration is this non-final loop iteration's 0-based index within the
+	// turn (workflow.go's processTurn) -- assistantMessageEventType's input
+	// (context.go).
+	Iteration int
+	// Model is the same effective model CallModel used, same role as
+	// CommitTurnInput.Model.
+	Model string
+	// Response is this iteration's model response -- always carries
+	// ToolCalls (processTurn only reaches this activity when the model
+	// requested more tool calls; a response with none is this turn's FINAL
+	// iteration, committed via ActivityCommitTurn instead, never this one).
+	Response llm.Response
+}
+
+// CommitToolLoopIterationResult is CommitToolLoopIteration's activity
+// result: this iteration's own usage, for processTurn to accumulate and
+// fold into the turn's single turn_usage row (CommitTurnInput's Prior*
+// fields) once the loop's final iteration commits.
+type CommitToolLoopIterationResult struct {
+	PromptTokens     int64
+	CompletionTokens int64
+	CostUSD          float64
+	CostEstimated    bool
+}
+
+// CommitToolLoopIteration is the inner tool-call loop's per-iteration
+// commit step ("add the inner tool loop", ActivityCommitToolLoopIteration's
+// doc comment): appends in.Response's message as a transcript event under
+// assistantMessageEventType(in.Iteration) -- context.go's doc comment on
+// why this never collides with the turn's final EventTypeAssistantMessage
+// event -- via AppendIfAbsent, the same retry-safe path CommitTerminalEvent
+// and DispatchTool's own two events already use, then resolves this
+// iteration's own cost via the same resolveCost CommitTurn uses. Unlike
+// CommitTurn, this never writes a turn_usage row itself: this iteration's
+// usage is only ever recorded once, folded into the turn's single
+// turn_usage row when the loop's final iteration commits via
+// ActivityCommitTurn (CommitTurnInput's Prior* fields) -- committing a
+// second, per-iteration usage row here would double the turn's `turns_used`
+// count in usage.go's UsageSummary/GetSessionUsage, which counts turn_usage
+// rows, not model calls.
+func (a *Activities) CommitToolLoopIteration(ctx context.Context, in CommitToolLoopIterationInput) (CommitToolLoopIterationResult, error) {
+	if a.Store == nil {
+		return CommitToolLoopIterationResult{}, fmt.Errorf("worker: Activities.Store is nil")
+	}
+
+	payload, err := marshalMessagePayload(in.Response.Message)
+	if err != nil {
+		return CommitToolLoopIterationResult{}, fmt.Errorf("commit tool loop iteration: marshal model response: %w", err)
+	}
+	if _, err := a.Store.Transcript().AppendIfAbsent(ctx, in.SessionID, in.Turn, assistantMessageEventType(in.Iteration), payload); err != nil {
+		return CommitToolLoopIterationResult{}, fmt.Errorf("commit tool loop iteration: commit message event: %w", err)
+	}
+
+	cost, estimated, err := resolveCost(a.Prices, in.Response.Usage, in.Model)
+	if err != nil {
+		return CommitToolLoopIterationResult{}, fmt.Errorf("commit tool loop iteration: resolve cost: %w", err)
+	}
+
+	return CommitToolLoopIterationResult{
+		PromptTokens:     in.Response.Usage.PromptTokens,
+		CompletionTokens: in.Response.Usage.CompletionTokens,
+		CostUSD:          cost.Float64(),
+		CostEstimated:    estimated,
+	}, nil
+}
+
+// resolveCost is CommitTurn's (and, per model call, CommitToolLoopIteration's)
+// cost-resolution step (FR7/LB6): the
 // provider-reported cost when usage supplies one, otherwise an estimate
 // from prices (FR7's fail-open guard against a silent zero/free cost when
 // neither is available). Safe to call with a nil prices whenever
@@ -584,9 +683,11 @@ type DispatchToolInput struct {
 	AgentID string
 	ToolSet []session.ToolServerRef
 	// Turn and CallIndex are tools.DispatchInput's idempotency-key
-	// derivation inputs (FR11) -- CallIndex is this call's 0-based
-	// position within modelResult.Response.ToolCalls, stable across an
-	// activity retry of the same call.
+	// derivation inputs (FR11) -- CallIndex is a running count across the
+	// whole turn (context.go's toolCallEventType doc comment: turn-scoped,
+	// not reset per model response, since "add the inner tool loop" made a
+	// turn capable of more than one), stable across an activity retry of
+	// the same call.
 	Turn      int
 	CallIndex int
 	// Call is the model-requested tool call (llm.ToolCall,

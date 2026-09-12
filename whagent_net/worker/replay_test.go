@@ -418,3 +418,116 @@ func TestSessionWorkflow_ReplayRecordedHistory_WithCapEnforcementAndToolDispatch
 	err = replayer.ReplayWorkflowHistory(nil, b.build())
 	require.NoError(t, err, "the current SessionWorkflow code must replay a FRESH (post-#2121) history -- cap-enforcement and tool-dispatch both already at version 1, including a real tool-call/tool-result round trip -- without a non-determinism error (NFR1)")
 }
+
+// TestSessionWorkflow_ReplayRecordedHistory_WithToolLoop_NoNonDeterminismError
+// is "add the inner tool loop"'s own NFR1 guard, complementing the two
+// fixtures above the same way #2121's complemented #2114's: this one proves
+// the FORWARD direction for "session-workflow-tool-loop" -- a history
+// recorded WITH that gate already at version 1, one non-final loop
+// iteration (a tool call dispatched and its intermediate assistant message
+// committed via ActivityCommitToolLoopIteration, a cost-cap re-check via a
+// second ActivitySumCost read, then context rebuilt and the model called
+// again) followed by a final, tool-call-free response that commits the
+// turn -- also replays cleanly against the current code. Marker placement
+// mirrors workflow.go's actual call site: "session-workflow-tool-loop" is
+// recorded immediately after the turn's first CallModel activity completes
+// (GetVersion never yields), so its marker lands on the same
+// WorkflowTaskCompleted that schedules the first ActivityDispatchTool call
+// of the loop this fixture then walks through.
+func TestSessionWorkflow_ReplayRecordedHistory_WithToolLoop_NoNonDeterminismError(t *testing.T) {
+	dc := converter.GetDefaultDataConverter()
+	sessionID := testSessionID()
+
+	startInput, err := dc.ToPayloads(SessionWorkflowInput{SessionID: sessionID})
+	require.NoError(t, err)
+	signalPayload, err := dc.ToPayloads(SendTurnSignal{Input: "hello"})
+	require.NoError(t, err)
+
+	b := newHistoryFixtureBuilder()
+	b.started("SessionWorkflow", TaskQueue, startInput)
+
+	completedID := b.decision()
+	b.marker("session-workflow-status-transitions", 1, completedID)
+	b.activity(ActivityUpdateSessionStatus, UpdateSessionStatusResult{})
+
+	b.signal(SignalSendTurn, signalPayload)
+	b.decision()
+	b.activity(ActivityUpdateSessionStatus, UpdateSessionStatusResult{})
+
+	completedID = b.decision()
+	b.marker("session-workflow-cap-enforcement", 1, completedID)
+	b.activity(ActivityResolveAgentDefinition, ResolveAgentDefinitionResult{Model: "replay-model"})
+
+	// evaluateCaps' "before" half.
+	b.decision()
+	b.activity(ActivitySumCost, SumCostResult{CostUSD: 0})
+
+	b.decision()
+	b.activity(ActivityBuildContext, BuildContextResult{EventIDs: []uuid.UUID{uuid.New()}})
+
+	completedID = b.decision()
+	b.marker("session-workflow-tool-dispatch", 1, completedID)
+	b.activity(ActivityListToolDefinitions, ListToolDefinitionsResult{
+		Tools: []llm.ToolDefinition{{Name: "search", Description: "search ASS", Parameters: nil}},
+	})
+
+	// The turn's first model call requests a tool call -- this is what
+	// makes the loop run at all.
+	b.decision()
+	b.activity(ActivityCallModel, CallModelResult{Response: llm.Response{
+		Message:   llm.Message{Role: llm.RoleAssistant, Content: ""},
+		ToolCalls: []llm.ToolCall{{ID: "call-1", Name: "search", Arguments: `{"query":"hello"}`}},
+	}})
+
+	// "session-workflow-tool-loop"'s marker lands here, on the decision that
+	// schedules the loop's first ActivityDispatchTool call (GetVersion never
+	// yields -- this doc comment's own reasoning above).
+	completedID = b.decision()
+	b.marker("session-workflow-tool-loop", 1, completedID)
+	b.activity(ActivityDispatchTool, DispatchToolResult{Result: tools.Result{
+		ToolCallID: "call-1", Name: "search", Content: "3 results found", IsError: false,
+	}})
+
+	// This non-final iteration's own commit -- ActivityCommitToolLoopIteration,
+	// never ActivityCommitTurn (that only ever runs once, for the turn's
+	// FINAL response, below).
+	b.decision()
+	b.activity(ActivityCommitToolLoopIteration, CommitToolLoopIterationResult{
+		PromptTokens: 12, CompletionTokens: 4, CostUSD: 0.01,
+	})
+
+	// The loop's own cost-cap re-check reads SumCost once, lazily, the
+	// first time any iteration commits (workflow.go's baseCostReady).
+	b.decision()
+	b.activity(ActivitySumCost, SumCostResult{CostUSD: 0.02})
+
+	// Context rebuilt so the next CallModel sees this iteration's own
+	// message and tool result.
+	b.decision()
+	b.activity(ActivityBuildContext, BuildContextResult{EventIDs: []uuid.UUID{uuid.New(), uuid.New()}})
+
+	// The loop's second model call carries no more tool calls -- this ends
+	// the loop and makes this the turn's final response.
+	b.decision()
+	b.activity(ActivityCallModel, CallModelResult{Response: llm.Response{
+		Message: llm.Message{Role: llm.RoleAssistant, Content: "3 results found, here they are"},
+	}})
+
+	b.decision()
+	b.activity(ActivityCommitTurn, CommitTurnResult{Done: false})
+
+	// evaluateCaps' "after" half -- still not capped.
+	b.decision()
+	b.activity(ActivitySumCost, SumCostResult{CostUSD: 0.05})
+
+	b.decision()
+	b.activity(ActivityUpdateSessionStatus, UpdateSessionStatusResult{})
+
+	b.openDecision()
+
+	replayer := worker.NewWorkflowReplayer()
+	replayer.RegisterWorkflow(SessionWorkflow)
+
+	err = replayer.ReplayWorkflowHistory(nil, b.build())
+	require.NoError(t, err, "the current SessionWorkflow code must replay a FRESH (post-\"add the inner tool loop\") history -- session-workflow-tool-loop already at version 1, including a real multi-model-call loop iteration -- without a non-determinism error (NFR1)")
+}

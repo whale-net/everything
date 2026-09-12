@@ -65,6 +65,14 @@ func registerActivityStubs(env *testsuite.TestWorkflowEnvironment) {
 	env.RegisterActivityWithOptions(func(ctx context.Context, in DispatchToolInput) (DispatchToolResult, error) {
 		return DispatchToolResult{}, nil
 	}, activity.RegisterOptions{Name: ActivityDispatchTool})
+	// CommitToolLoopIteration ("add the inner tool loop") is only ever
+	// invoked when a turn's inner loop actually runs a non-final iteration,
+	// but is registered here too so any test that exercises it can rely on
+	// this helper alone, the same reasoning ListToolDefinitions/DispatchTool
+	// above already follow.
+	env.RegisterActivityWithOptions(func(ctx context.Context, in CommitToolLoopIterationInput) (CommitToolLoopIterationResult, error) {
+		return CommitToolLoopIterationResult{}, nil
+	}, activity.RegisterOptions{Name: ActivityCommitToolLoopIteration})
 }
 
 func testSessionID() uuid.UUID {

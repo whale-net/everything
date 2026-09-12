@@ -57,8 +57,9 @@ func (s Status) IsTerminal() bool {
 type CapKind string
 
 const (
-	CapKindTurns CapKind = "turns"
-	CapKindCost  CapKind = "cost"
+	CapKindTurns          CapKind = "turns"
+	CapKindCost           CapKind = "cost"
+	CapKindToolIterations CapKind = "tool_iterations"
 )
 
 // ErrorCategory classifies a failed session's terminal error as safe to

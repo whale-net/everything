@@ -42,6 +42,8 @@ func capKindString(k pb.CapKind) string {
 		return "turns"
 	case pb.CapKind_CAP_KIND_COST:
 		return "cost"
+	case pb.CapKind_CAP_KIND_TOOL_ITERATIONS:
+		return "tool_iterations"
 	default:
 		return "unspecified"
 	}
