@@ -21,5 +21,11 @@ spec:
       port: {{ $app.port }}
       targetPort: {{ $app.port }}
       name: http
+    {{- range $app.additionalPorts }}
+    - protocol: TCP
+      port: {{ . }}
+      targetPort: {{ . }}
+      name: extra-{{ . }}
+    {{- end }}
 {{- end }}
 {{- end }}

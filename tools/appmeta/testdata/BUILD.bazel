@@ -32,6 +32,7 @@ filegroup(
 app_metadata(
     name = "fixture-app_metadata",
     testonly = True,
+    additional_ports = [9090],
     app_name = "fixture-app",
     app_type = "external-api",
     args = [

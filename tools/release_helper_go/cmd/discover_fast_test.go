@@ -134,6 +134,7 @@ release_app(
     registry = "custom.registry",
     organization = "my-org",
     port = 8080,
+    additional_ports = [8090, 9090],
     replicas = 3,
     health_check_enabled = True,
     health_check_path = "/healthz",
@@ -159,6 +160,9 @@ release_app(
 	app := apps[0].AppManifest
 	if app.Port != 8080 || app.Replicas != 3 {
 		t.Errorf("Port/Replicas = %d/%d, want 8080/3", app.Port, app.Replicas)
+	}
+	if len(app.AdditionalPorts) != 2 || app.AdditionalPorts[0] != 8090 || app.AdditionalPorts[1] != 9090 {
+		t.Errorf("AdditionalPorts = %v, want [8090 9090]", app.AdditionalPorts)
 	}
 	if app.HealthCheck == nil || !app.HealthCheck.Enabled || app.HealthCheck.Path != "/healthz" {
 		t.Errorf("HealthCheck = %+v, want enabled=true path=/healthz", app.HealthCheck)

@@ -100,6 +100,12 @@ message AppManifest {
   int32 replicas = 32;
   repeated string command = 33;
   repeated string args = 34;
+  // Extra container/Service ports beyond `port` (e.g. a second HTTP listener
+  // serving a different protocol from the same process, such as
+  // whagent-net-api's JWKS endpoint alongside its gRPC port). Each entry gets
+  // its own containerPort/Service port named "extra-<port>" -- see
+  // tools/helm/templates/{deployment,service}.yaml.tmpl.
+  repeated int32 additional_ports = 35;
 
   HealthCheck health_check = 40;
   Ingress ingress = 41;
