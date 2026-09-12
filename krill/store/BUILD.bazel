@@ -310,6 +310,63 @@ go_test(
 #
 # Run it explicitly (requires a working Docker daemon):
 #   bazel test //krill/store:pointer_integration_test --test_output=all
+# Real Postgres integration test for ImportCompletionStore
+# (import_completion.go, issue #2548's Testing section): MarkComplete
+# writing a row and IsComplete resolving it back, a second MarkComplete for
+# the same (scope, product) rejected without overwriting the first row
+# (ErrAlreadyComplete), IsComplete on an unimported product returning
+# false/nil rather than an error, and MarkComplete against an unknown
+# product_id rejected (ErrNotFound, LB2 parentage) with nothing written.
+# Deliberately NOT part of `bazel test //...` -- see //libs/go/dbtest's
+# README for the full rationale.
+#
+# Run it explicitly (requires a working Docker daemon):
+#   bazel test //krill/store:import_completion_integration_test --test_output=all
+go_test(
+    name = "import_completion_integration_test",
+    size = "large",
+    timeout = "long",
+    srcs = ["import_completion_integration_test.go"],
+    gotags = ["integration"],
+    tags = [
+        "external",
+        "integration",
+        "manual",
+        "no-cache",
+        "no-sandbox",
+        "requires-network",
+    ],
+    deps = [
+        ":store",
+        "//krill/migrate/schema",
+        "//libs/go/dbtest",
+        "//libs/go/migrate",
+        "@com_github_google_uuid//:uuid",
+        "@com_github_jackc_pgx_v5//pgxpool",
+        "@com_github_jackc_pgx_v5//stdlib",
+        "@com_github_stretchr_testify//assert",
+        "@com_github_stretchr_testify//require",
+    ],
+)
+
+# NFR3 structural check (issue #2548's Testing item 8): SourcePath is
+# recorded for the audit trail only (import_completion.go's own doc
+# comment) -- nothing in this package ever opens the file it names. No
+# database needed: this reads the package's own source file back
+# (declared as `data` below) and asserts the absence of any
+# os.Open/os.ReadFile/ioutil.ReadFile call, so a future change that adds a
+# file-read keyed on SourcePath is caught without Docker or Postgres. Part
+# of `bazel test //...` (no "manual"/"integration" tag) -- as of this
+# change, a repo-wide grep confirms import_completion.go and
+# krill/importer/importer.go are the only two files that reference
+# SourcePath at all; see importer's own
+# TestNFR3_ImporterSourceNeverOpensSourcePath for the other half.
+go_test(
+    name = "import_completion_nfr3_test",
+    srcs = ["import_completion_nfr3_test.go"],
+    data = ["import_completion.go"],
+)
+
 go_test(
     name = "pointer_integration_test",
     size = "large",
