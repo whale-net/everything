@@ -554,6 +554,34 @@ milestone its own roadmap section never defines" (the issue's own phrasing)
 resolves to: a document is well-formed on this axis exactly when every
 `M<n>` it mentions is also a milestone it defines.
 
+### One-time import completion and re-import refusal (M2's FR12, NFR3, issue #2548)
+
+Migration `009_import_completion` adds `import_completion`, the one-time,
+one-way marker FR12 requires (root plan issue #2539's M2 FR12 — distinct
+from, and numbered independently of, M1's own FR12 in "Amend and as-of
+history reads" below; FR/NFR numbers are scoped to the milestone/plan that
+defines them, not globally unique across `krill/`'s history). After an
+import completes, `krill/importer.Import` records `(scope_id, product_id)`
+as complete via `store.ImportCompletionStore.MarkComplete`; before parsing
+anything, it checks `ListByScope` for a prior completion whose
+`source_path` matches the requested `--path` and refuses
+(`importer.ErrAlreadyImported`) if one exists — `refuseIfAlreadyImported`
+in `importer.go`. The check is keyed on `source_path`, not `product_id`,
+because the target Product does not exist (and its id is not known) until
+after `Parse` and `write()` run; `MarkComplete`'s own row is still keyed on
+`(scope_id, product_id)` because that is the pair FR12 actually needs to
+be unique, per migration 009's "Keyed by (scope_id, product_id)" comment.
+
+There is no un-complete verb and no update path on `import_completion` —
+`MarkComplete` on an already-complete pair returns `store.
+ErrAlreadyComplete` rather than overwriting `completed_at` or
+`source_revision`; a genuine re-import is a deliberate future operation,
+not a flag flip. NFR3's one-way guarantee: `source_path` and
+`source_revision` are recorded for the audit trail only — nothing in
+`krill/` ever opens `source_path` back off disk after an import completes,
+and the caller (not krill) supplies `source_revision` (`--source-revision`
+on `krill/importer/cmd`) so krill never shells out to git.
+
 ## Amend and as-of history reads (FR11, FR12, issue #2493)
 
 `krill/store/amend.go` (write) and `krill/store/history.go` (read) are the

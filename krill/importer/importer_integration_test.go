@@ -18,6 +18,35 @@
 //     repo) parses cleanly as a read-only fixture -- parse-and-report only,
 //     never imported (that is C27/M2 and out of scope here).
 //
+// FR12/NFR3-specific cases (issue #2548's Testing section, items 4-7):
+//   - a full Import records an import_completion row naming the Product,
+//     path, and supplied revision
+//     (TestImport_RecordsImportCompletionRowNamingProductPathAndRevision);
+//   - a second Import against the same path and scope refuses before
+//     parsing and writes no rows
+//     (TestImport_SecondImportSamePathAndScope_RefusesBeforeParsing_WritesNothing,
+//     and TestImport_TwiceSameSession_DoesNotDuplicateMilestoneRef above,
+//     tightened by #2548 to assert the refusal directly rather than merely
+//     logging it);
+//   - importing a *different* doc set into the same scope still works,
+//     because import_completion is keyed on (scope, product), not scope
+//     alone (TestImport_DifferentDocSetSameScope_BothComplete);
+//   - item 7's regression check, on `--force`: krill/conformance's own
+//     self-import tests (roundtrip_integration_test.go,
+//     design_milestone_query_integration_test.go) and this file's own
+//     tests were checked directly -- every one calls newTestEnv(t) (a
+//     fresh, throwaway Postgres database via dbtest.NewPostgres) exactly
+//     once per test function and calls Import at most once against it,
+//     except the two tests here that deliberately import twice to prove
+//     FR12's refusal (TestImport_TwiceSameSession_DoesNotDuplicateMilestoneRef
+//     and TestImport_SecondImportSamePathAndScope_RefusesBeforeParsing_WritesNothing),
+//     which are exactly what FR12 requires to fail, not a case `--force`
+//     would need to unblock. No krill test imports the same path twice
+//     into one database expecting *success*, so no `--force` escape hatch
+//     was added to krill/importer/cmd -- see this file's own doc comment
+//     citing #2548 above for where that decision would be revisited if a
+//     future conformance flow ever needs one.
+//
 // Run it explicitly (requires a working Docker daemon):
 //
 //	bazel test //krill/importer:importer_integration_test --test_output=all
@@ -42,6 +71,15 @@ import (
 	"github.com/whale-net/everything/libs/go/dbtest"
 	"github.com/whale-net/everything/libs/go/migrate"
 )
+
+// testSourceRevision is the placeholder commit SHA every Import call in
+// this file passes for its now-required sourceRevision argument (FR12,
+// NFR3, issue #2548) -- this file's own tests are not about what value
+// that argument carries, only that it is recorded and that a second
+// Import for the same path refuses; see
+// import_completion_integration_test.go and this file's own
+// FR12-specific cases for coverage of the value itself.
+const testSourceRevision = "test-fixture-revision"
 
 // testEnv is a migrated Postgres database plus a minted krill session (FR3)
 // ready to pass to importer.Import, mirroring
@@ -99,7 +137,7 @@ func TestImport_EverySectionKind_LandsAsEntityAndAppearsInReport(t *testing.T) {
 	ctx := context.Background()
 	env := newTestEnv(t)
 
-	report, err := importer.Import(ctx, env.store, env.sessions, env.sessionID, "testdata/valid")
+	report, err := importer.Import(ctx, env.store, env.sessions, env.sessionID, "testdata/valid", testSourceRevision)
 	require.NoError(t, err)
 
 	byKindAndSourceID := map[string]*importer.ReportEntry{}
@@ -150,7 +188,7 @@ func TestImport_MustNotForeclose_ProducesOneAssociationRowPerCitedDecision(t *te
 	ctx := context.Background()
 	env := newTestEnv(t)
 
-	report, err := importer.Import(ctx, env.store, env.sessions, env.sessionID, "testdata/valid")
+	report, err := importer.Import(ctx, env.store, env.sessions, env.sessionID, "testdata/valid", testSourceRevision)
 	require.NoError(t, err)
 
 	var milestoneID uuid.UUID
@@ -191,7 +229,7 @@ func TestImport_UndefinedMilestoneReference_FailsLoudlyNamingIt(t *testing.T) {
 	ctx := context.Background()
 	env := newTestEnv(t)
 
-	report, err := importer.Import(ctx, env.store, env.sessions, env.sessionID, "testdata/undefined_milestone")
+	report, err := importer.Import(ctx, env.store, env.sessions, env.sessionID, "testdata/undefined_milestone", testSourceRevision)
 	require.Error(t, err, "importing a document that references an undefined milestone must fail")
 	assert.Nil(t, report)
 	assert.Contains(t, err.Error(), "M2", "the error must name the undefined milestone (M2), not fail silently or vaguely")
@@ -211,31 +249,32 @@ func TestImport_UndefinedMilestoneReference_FailsLoudlyNamingIt(t *testing.T) {
 // duplicate" (migration 004_milestone_assoc.up.sql's comment,
 // MilestoneStore.GetOrCreateRef's doc comment).
 //
-// The second Import call here fails -- testdata/valid's Product name
-// collides with the first call's under migration 002's
-// product_scope_name_current_idx (scope-qualified uniqueness, LB1), and
-// Product creation is write()'s very first statement, so the second call
-// never reaches any entity write, milestone_ref included. That failure is
-// exactly why no duplicate can appear: cmd/main.go's own doc comment
-// states the importer is "a Swarm Operator-triggered, one-time write", and
-// re-running it against an already-imported Product safely refusing rather
-// than silently duplicating is the correct shape for that one-time
-// contract. What this test actually pins down is the row count after both
-// calls: exactly one milestone_ref row for (scope, product, "M1"), never
-// two.
+// The second Import call here fails -- FR12's pre-parse refusal check
+// (importer.go's refuseIfAlreadyImported, issue #2548) sees that
+// "testdata/valid" already has an import_completion row for this scope
+// from the first call and refuses with importer.ErrAlreadyImported before
+// Parse or write() ever run a second time, so the second call never
+// reaches any entity write, milestone_ref included. (Before #2548,
+// testdata/valid's Product name colliding with the first call's under
+// migration 002's product_scope_name_current_idx, scope-qualified
+// uniqueness LB1, was what stopped the second call at write()'s first
+// statement instead -- FR12's guard now fires earlier than that, for the
+// same reason: cmd/main.go's own doc comment states the importer is "a
+// Swarm Operator-triggered, one-time write", and refusing a second run
+// against an already-imported path rather than silently duplicating is
+// the correct shape for that one-time contract.) What this test actually
+// pins down is the row count after both calls: exactly one milestone_ref
+// row for (scope, product, "M1"), never two.
 func TestImport_TwiceSameSession_DoesNotDuplicateMilestoneRef(t *testing.T) {
 	ctx := context.Background()
 	env := newTestEnv(t)
 
-	_, err := importer.Import(ctx, env.store, env.sessions, env.sessionID, "testdata/valid")
+	_, err := importer.Import(ctx, env.store, env.sessions, env.sessionID, "testdata/valid", testSourceRevision)
 	require.NoError(t, err, "first import must succeed")
 
-	_, err = importer.Import(ctx, env.store, env.sessions, env.sessionID, "testdata/valid")
-	// Whether or not a future amend/reimport flow changes this call to
-	// succeed, the row-count assertion below is what the acceptance
-	// criterion actually requires; record today's behavior so a change is
-	// a deliberate, visible diff rather than a silent regression.
-	t.Logf("second Import call returned: %v", err)
+	_, err = importer.Import(ctx, env.store, env.sessions, env.sessionID, "testdata/valid", testSourceRevision)
+	require.Error(t, err, "a second Import for the same (scope, path) must refuse, not silently re-run")
+	assert.ErrorIs(t, err, importer.ErrAlreadyImported)
 
 	products, err := env.store.Products().ListCurrentByScope(ctx, env.scopeID)
 	require.NoError(t, err)
@@ -296,4 +335,107 @@ func TestParse_WhagentNetFixture_ParsesWithoutImporting(t *testing.T) {
 	}
 	assert.NotEmpty(t, parsed.Buckets, "expected whagent_net's Now/Next/Later capability buckets to parse")
 	assert.NotEmpty(t, parsed.Milestones, "expected whagent_net's M1-M3 roadmap headings to parse")
+}
+
+// TestImport_RecordsImportCompletionRowNamingProductPathAndRevision proves
+// Testing item 4: a full Import run against a fixture doc set records an
+// import_completion row naming the Product it imported, the path it was
+// imported from, and the caller-supplied revision.
+func TestImport_RecordsImportCompletionRowNamingProductPathAndRevision(t *testing.T) {
+	ctx := context.Background()
+	env := newTestEnv(t)
+
+	report, err := importer.Import(ctx, env.store, env.sessions, env.sessionID, "testdata/valid", testSourceRevision)
+	require.NoError(t, err)
+
+	completions, err := env.store.ImportCompletions().ListByScope(ctx, env.scopeID)
+	require.NoError(t, err)
+	require.Len(t, completions, 1, "expected exactly one import_completion row after one successful Import")
+	assert.Equal(t, report.ProductID, completions[0].ProductID, "the completion row must name the Product Import actually created")
+	assert.Equal(t, "testdata/valid", completions[0].SourcePath)
+	assert.Equal(t, testSourceRevision, completions[0].SourceRevision)
+
+	got, ok, err := env.store.ImportCompletions().IsComplete(ctx, env.scopeID, report.ProductID)
+	require.NoError(t, err)
+	assert.True(t, ok, "IsComplete must report true for the (scope, product) Import just completed")
+	assert.Equal(t, completions[0].ID, got.ID)
+}
+
+// TestImport_SecondImportSamePathAndScope_RefusesBeforeParsing_WritesNothing
+// proves Testing item 5 directly, at the row-count level
+// TestImport_TwiceSameSession_DoesNotDuplicateMilestoneRef does not itself
+// check: a second Import against the same path and scope refuses with
+// importer.ErrAlreadyImported before Parse ever runs, and every entity
+// table Import writes to is untouched by the second call -- not merely
+// "no new milestone_ref row", every row count from the first Import must
+// be identical after the second.
+func TestImport_SecondImportSamePathAndScope_RefusesBeforeParsing_WritesNothing(t *testing.T) {
+	ctx := context.Background()
+	env := newTestEnv(t)
+
+	_, err := importer.Import(ctx, env.store, env.sessions, env.sessionID, "testdata/valid", testSourceRevision)
+	require.NoError(t, err, "first import must succeed")
+
+	before := countEntityRows(ctx, t, env.pool)
+
+	_, err = importer.Import(ctx, env.store, env.sessions, env.sessionID, "testdata/valid", testSourceRevision)
+	require.Error(t, err, "a second Import for an already-imported (scope, path) must refuse")
+	assert.ErrorIs(t, err, importer.ErrAlreadyImported)
+
+	after := countEntityRows(ctx, t, env.pool)
+	assert.Equal(t, before, after, "a refused second Import must write no rows to any entity table Import's write() touches")
+
+	completions, err := env.store.ImportCompletions().ListByScope(ctx, env.scopeID)
+	require.NoError(t, err)
+	assert.Len(t, completions, 1, "a refused second Import must not insert a second import_completion row")
+}
+
+// TestImport_DifferentDocSetSameScope_BothComplete proves Testing item 6:
+// importing a *different* doc set into a scope that already has a
+// completed import still works, because import_completion is keyed on
+// (scope_id, product_id), not scope_id alone (migration 009's "Keyed by
+// (scope_id, product_id)" comment) -- a bare scope-level flag would
+// wrongly block this second, distinct product's import.
+func TestImport_DifferentDocSetSameScope_BothComplete(t *testing.T) {
+	ctx := context.Background()
+	env := newTestEnv(t)
+
+	first, err := importer.Import(ctx, env.store, env.sessions, env.sessionID, "testdata/valid", testSourceRevision)
+	require.NoError(t, err, "first import must succeed")
+
+	second, err := importer.Import(ctx, env.store, env.sessions, env.sessionID, "testdata/valid_second", testSourceRevision)
+	require.NoError(t, err, "importing a different doc set into the same scope must not be blocked by the first product's completion")
+	assert.NotEqual(t, first.ProductID, second.ProductID, "the two doc sets must have become two distinct Products")
+
+	completions, err := env.store.ImportCompletions().ListByScope(ctx, env.scopeID)
+	require.NoError(t, err)
+	require.Len(t, completions, 2, "both imports must each record their own import_completion row")
+
+	gotPaths := map[string]bool{}
+	gotProducts := map[uuid.UUID]bool{}
+	for _, c := range completions {
+		gotPaths[c.SourcePath] = true
+		gotProducts[c.ProductID] = true
+	}
+	assert.True(t, gotPaths["testdata/valid"])
+	assert.True(t, gotPaths["testdata/valid_second"])
+	assert.True(t, gotProducts[first.ProductID])
+	assert.True(t, gotProducts[second.ProductID])
+}
+
+// countEntityRows returns the row count of every table Import's write()
+// path can insert into, keyed by table name -- used by
+// TestImport_SecondImportSamePathAndScope_RefusesBeforeParsing_WritesNothing
+// to prove a refused Import writes to none of them, not merely to the one
+// table (milestone_ref) the pre-#2548 test above already checked.
+func countEntityRows(ctx context.Context, t *testing.T, pool *pgxpool.Pool) map[string]int {
+	t.Helper()
+	tables := []string{"product", "persona", "non_goal", "feature_set", "load_bearing_decision", "feature", "milestone_ref", "entity_milestone"}
+	counts := make(map[string]int, len(tables))
+	for _, table := range tables {
+		var n int
+		require.NoError(t, pool.QueryRow(ctx, "SELECT count(*) FROM "+table).Scan(&n))
+		counts[table] = n
+	}
+	return counts
 }

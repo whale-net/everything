@@ -63,7 +63,7 @@ func TestDesignMilestoneQuery_LiveProductSlice_CarriesMilestonesCitedContent(t *
 	env := newTestEnv(t)
 	root := krillDocsRoot(t)
 
-	report, err := importer.Import(ctx, env.store, env.sessions, env.sessionID, root)
+	report, err := importer.Import(ctx, env.store, env.sessions, env.sessionID, root, testSourceRevision)
 	require.NoError(t, err, "importing krill's own committed brief must succeed")
 
 	// Independently re-parse the same committed doc set the importer just

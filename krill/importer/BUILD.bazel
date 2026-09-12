@@ -70,3 +70,19 @@ go_test(
         "@rules_go//go/runfiles",
     ],
 )
+
+# NFR3 structural check (issue #2548's Testing item 8): the pre-parse
+# refusal check (importer.go's refuseIfAlreadyImported) compares
+# SourcePath, it never opens the file it names. No database needed: this
+# reads this package's own source file back (declared as `data` below) and
+# asserts the absence of any os.Open/os.ReadFile/ioutil.ReadFile call, so a
+# future change that adds a file-read keyed on SourcePath is caught
+# without Docker or Postgres. Part of `bazel test //...` (no
+# "manual"/"integration" tag) -- see krill/store's own
+# TestNFR3_ImportCompletionSourceNeverOpensAFile for the other file that
+# references SourcePath.
+go_test(
+    name = "importer_nfr3_test",
+    srcs = ["importer_nfr3_test.go"],
+    data = ["importer.go"],
+)
