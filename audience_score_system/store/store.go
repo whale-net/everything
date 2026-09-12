@@ -19,7 +19,11 @@
 // (migration 020, issue #2116, FR12(b)) -- the (iss, sub) -> Person
 // mapping the whagent-net authentication path resolves a verified whagent
 // Claim's on-behalf-of subject against, auto-provisioning on first sight,
-// kept deliberately separate from person.google_subject.
+// kept deliberately separate from person.google_subject; plus
+// link_assertion_consumption (migration 021, issue #2597, FR3/NFR1) -- the
+// single-use ledger, keyed on jti, that makes an FR2 link assertion usable
+// exactly once, deliberately a separate table from mcp_auth_code (see
+// migration 021's header).
 //
 // Store is the single entry point, built over //libs/go/db's
 // *pgxpool.Pool. Its Persons/Channels/Roles/Invites/Ideas/Research/
@@ -156,3 +160,10 @@ func (s *Store) Dashboard() DashboardStore { return dashboardStore{pool: s.pool}
 // -- see migration 020's header for why the two identity keys are not
 // merged or re-keyed off each other.
 func (s *Store) PersonIdentities() PersonIdentityStore { return personIdentityStore{pool: s.pool} }
+
+// LinkAssertions returns the LinkAssertionStore implementation (migration
+// 021, issue #2597, FR3/NFR1) -- the single-use consumption ledger that
+// makes an FR2 link assertion usable exactly once, keyed on the
+// assertion's jti. Performs no verification of the assertion itself --
+// see LinkAssertionStore's doc comment.
+func (s *Store) LinkAssertions() LinkAssertionStore { return linkAssertionStore{pool: s.pool} }
