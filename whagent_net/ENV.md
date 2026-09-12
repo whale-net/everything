@@ -195,15 +195,40 @@ only the four `WHAGENT_GRANT_*` fields for exactly this reason).
 
 ## Persona claim issuance (trust root, issue #2115)
 
-`api` owns whagent-net's signing key(s) and publishes the public JWKS
-(`whagent_net/api/persona`, read directly via `os.Getenv` like the `api`
-server variables below). `worker` (#2118) reads the *same* signing-key
-variables — `WHAGENT_ISSUER`/`WHAGENT_SIGNING_KEY`/`WHAGENT_SIGNING_KEY_ID`
-— to construct its own `persona.Issuer` and mint each tool call's claim
-in-process (see `ARCHITECTURE.md` "Identity and auth chaining" §
-"Issuance mechanism"); there is no RPC between the two. `api` never falls
-back to an unsigned or symmetric mode — it fails startup loudly when the
-active key is missing or unparseable.
+whagent-net has **two independent signing/JWKS surfaces**, each with its
+own key, own env vars, and own rotation posture (NFR6, issue #2595) — not
+one shared key with a single owner:
+
+- **`api`/`worker`'s persona-credential key** (this section) — mints the
+  per-tool-call `whagent.Claim` every agent action carries (LB3, FR10).
+  `api` owns this key and publishes its public JWKS
+  (`whagent_net/api/persona`, read directly via `os.Getenv` like the `api`
+  server variables below). `worker` (#2118) reads the *same* signing-key
+  variables — `WHAGENT_ISSUER`/`WHAGENT_SIGNING_KEY`/`WHAGENT_SIGNING_KEY_ID`
+  — to construct its own `persona.Issuer` and mint each tool call's claim
+  in-process (see `ARCHITECTURE.md` "Identity and auth chaining" §
+  "Issuance mechanism"); there is no RPC between the two. `api` never
+  falls back to an unsigned or symmetric mode — it fails startup loudly
+  when the active key is missing or unparseable. Rotation has a grace
+  period: `WHAGENT_SIGNING_KEYS_ADDITIONAL` keeps a retired key published
+  in JWKS until every token it signed has expired.
+- **`ui`'s link-assertion key** (`WHAGENT_UI_SIGNING_KEY`/
+  `WHAGENT_UI_SIGNING_KEY_ID`, see "`ui` (standalone agent web UI, issue
+  #2236)" below) — a separate, purpose-built key `ui` holds and mints
+  with itself for FR2's one-time browser-identity handshake
+  (`whagent_net/ui/linkassert`), distinct key material and distinct k8s
+  secret from the persona-credential key above; never interchangeable
+  with it, and nothing in `ui` reads `WHAGENT_SIGNING_KEY` or in
+  `api`/`worker` reads `WHAGENT_UI_SIGNING_KEY`. `ui` is the more
+  externally-exposed of the two binaries (already holding
+  `WHAGENT_OIDC_CLIENT_SECRET`, `WHAGENT_GRANT_CLIENT_SECRET`,
+  `WHAGENT_GRANT_ENCRYPTION_KEY`, and `SECRET_KEY`, none of which are
+  asymmetric signing keys), so this key follows the persona key's
+  fail-loud-at-startup discipline rather than `ui`'s own prevailing
+  optional-config convention. Rotation is a **hard cutover** — no
+  grace-period ledger: a link assertion signed moments before a rotation
+  simply fails verification like any other stale one, and the Operator
+  re-clicks the linking action to get a freshly-signed one.
 
 | Variable | Component | Default | Description |
 |----------|-----------|---------|-------------|
@@ -288,3 +313,5 @@ purely-additive delegated-grant wiring (`main.go`'s
 | `WHAGENT_MCP_PUBLIC_URL` | ui | *(required)* | `mcp`'s own externally-reachable base URL -- FR9's `mcpauth.ProviderConfig.Resource`, the OAuth2 `resource` identifier both binaries must agree on exactly. Must be byte-identical to what `mcp` itself advertises in its own protected-resource metadata (a dependent task, issue #2245's Context section) -- a mismatch breaks an MCP client's RFC 9728 discovery chain. |
 | `SECRET_KEY` | ui | `dev-secret-key-change-in-production` | Encrypts `ui`'s DB-backed session store's access/refresh tokens, and (issue #2428) the short-lived, httpOnly cookie `handlers_consent.go`'s `pendingConsent` round-trips through between `BeginAuthorization` and its Keycloak-redirect callback. Matches manmanv2/ui's and app-registry-ui's own literal `SECRET_KEY` name; distinct from `WHAGENT_SIGNING_KEY` above (JWKS signing, a different purpose entirely). |
 | `WHAGENT_UI_DEFAULT_SCOPE` | ui | — | The one `AgentDefinition.Scope` (issue #2424's FR1, nullable as of migration 010) `authorizeConsentGate` (`handlers_consent.go`, issue #2428) requires an active delegated grant for before `/authorize` mints an MCP-client credential — see that file's package doc comment for why this is a single configured scope rather than a live multi-scope chooser (`ui` has no `agent_definition`-listing API to build one from; that table stays behind `api`'s gRPC surface per `ARCHITECTURE.md`). Unset disables the `/authorize` gate entirely (the standalone `GET /mcp/consent?scope=<d>` route, issue #2428, is unaffected either way). |
+| `WHAGENT_UI_SIGNING_KEY` | ui | *(required)* | PEM-encoded PKCS8 asymmetric private signing key for `ui`'s own FR2 link-assertion key (`whagent_net/ui/linkassert.Key`, issue #2595) — the browser-identity handshake FR1/FR2's flow mints and ASS `web` verifies. Never checked in. Distinct key material from `WHAGENT_SIGNING_KEY` above — see "Persona claim issuance" above for why this is a second, independent signing surface rather than a reuse. `ui` fails startup loudly when this is missing or unparseable; there is no unsigned or symmetric fallback mode. |
+| `WHAGENT_UI_SIGNING_KEY_ID` | ui | *(required)* | The JWKS `kid` for `WHAGENT_UI_SIGNING_KEY` — what a verifier (e.g. ASS `web`'s `link.Verifier`) uses to select the matching public key served at `GET {WHAGENT_UI_PUBLIC_URL}/.well-known/jwks.json`. Rotation is a hard cutover (no `WHAGENT_SIGNING_KEYS_ADDITIONAL`-equivalent grace-period ledger) — see "Persona claim issuance" above. |

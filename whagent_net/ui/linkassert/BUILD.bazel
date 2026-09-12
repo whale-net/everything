@@ -10,10 +10,21 @@ go_library(
     srcs = ["linkassert.go"],
     importpath = "github.com/whale-net/everything/whagent_net/ui/linkassert",
     visibility = ["//whagent_net/ui:__subpackages__"],
+    deps = [
+        "//libs/go/whagent",
+        "@com_github_go_jose_go_jose_v4//:go-jose",
+        "@com_github_go_jose_go_jose_v4//jwt",
+        "@com_github_google_uuid//:uuid",
+    ],
 )
 
 go_test(
     name = "linkassert_test",
     srcs = ["linkassert_test.go"],
     embed = [":linkassert"],
+    deps = [
+        "//libs/go/whagent",
+        "@com_github_go_jose_go_jose_v4//:go-jose",
+        "@com_github_go_jose_go_jose_v4//jwt",
+    ],
 )

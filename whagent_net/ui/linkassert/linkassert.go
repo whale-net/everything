@@ -32,17 +32,26 @@
 // attacker mint a valid assertion for any (iss, sub) pair, not just their
 // own -- the signature check is the entire safeguard behind FR5's human
 // confirmation.
-//
-// Scaffold phase (this task): types and function signatures only, every
-// body returns errNotImplemented. Implementation phase fills in LoadKey's
-// PEM parsing, Mint's claim/signing, and JWKSHandler's response body.
 package linkassert
 
 import (
+	"crypto"
+	"crypto/ecdsa"
+	"crypto/ed25519"
+	"crypto/rsa"
+	"crypto/x509"
+	"encoding/json"
+	"encoding/pem"
 	"errors"
 	"fmt"
 	"net/http"
 	"time"
+
+	"github.com/go-jose/go-jose/v4"
+	"github.com/go-jose/go-jose/v4/jwt"
+	"github.com/google/uuid"
+
+	"github.com/whale-net/everything/libs/go/whagent"
 )
 
 // JWKSPath is the fixed, unauthenticated well-known path this package's
@@ -51,57 +60,192 @@ import (
 // app.auth.RequireAuthFunc.
 const JWKSPath = "/.well-known/jwks.json"
 
-// errNotImplemented tags every scaffolded function/method below.
-// Implementation phase replaces each body and removes this sentinel from
-// that function.
-var errNotImplemented = errors.New("linkassert: not implemented")
-
 // Key is the loaded PKCS8 asymmetric private key `ui` signs link
 // assertions with, plus its kid. Exactly one active key -- see the
 // package doc comment's Rotation section.
 type Key struct {
-	// TODO(Implementation phase): the parsed crypto.Signer and its kid.
+	signer crypto.Signer
+	kid    string
 }
 
-// LoadKey parses pem as a PEM-encoded PKCS8 asymmetric private key (same
-// parse path persona.LoadKeySet uses: x509.ParsePKCS8PrivateKey) and pairs
-// it with kid.
-//
-// TODO(Implementation phase): reject empty/unparseable pem and empty kid
-// -- never fall back to a symmetric or unsigned mode. Mirrors
-// persona.parsePrivateKeyPEM's validation, not persona.LoadKeySet's
-// broader env-config shape (this package takes the two values directly,
-// see ../main.go's config-loading block).
-func LoadKey(pem, kid string) (*Key, error) {
-	return nil, fmt.Errorf("linkassert: LoadKey: %w", errNotImplemented)
+// LoadKey parses pemStr as a PEM-encoded PKCS8 asymmetric private key
+// (same parse path persona.LoadKeySet uses: x509.ParsePKCS8PrivateKey)
+// and pairs it with kid. Returns an error -- never a usable Key -- for an
+// empty pemStr or kid, non-PEM garbage, a PEM block that isn't PKCS8, or
+// a symmetric/HMAC secret (which never parses as PKCS8 in the first
+// place); never falls back to a symmetric or unsigned mode.
+func LoadKey(pemStr, kid string) (*Key, error) {
+	if pemStr == "" {
+		return nil, errors.New("linkassert: no signing key configured (WHAGENT_UI_SIGNING_KEY) -- ui never falls back to an unsigned or symmetric mode")
+	}
+	if kid == "" {
+		return nil, errors.New("linkassert: WHAGENT_UI_SIGNING_KEY_ID is required alongside WHAGENT_UI_SIGNING_KEY")
+	}
+
+	block, _ := pem.Decode([]byte(pemStr))
+	if block == nil {
+		return nil, errors.New("linkassert: WHAGENT_UI_SIGNING_KEY is not a valid PEM block")
+	}
+
+	key, err := x509.ParsePKCS8PrivateKey(block.Bytes)
+	if err != nil {
+		return nil, fmt.Errorf("linkassert: WHAGENT_UI_SIGNING_KEY: parsing PKCS8 private key: %w", err)
+	}
+	signer, ok := key.(crypto.Signer)
+	if !ok {
+		return nil, fmt.Errorf("linkassert: WHAGENT_UI_SIGNING_KEY: key type %T does not implement crypto.Signer", key)
+	}
+
+	// Confirms the algorithm now, at load time, rather than surfacing an
+	// unsupported-key-type error only on the first Mint call.
+	if _, err := signatureAlgorithmFor(signer.Public()); err != nil {
+		return nil, fmt.Errorf("linkassert: WHAGENT_UI_SIGNING_KEY: %w", err)
+	}
+
+	return &Key{signer: signer, kid: kid}, nil
 }
 
-// Mint returns a signed compact JWS asserting that subject (issued by
-// subjectIssuer, the Operator's Keycloak issuer) is who they claim to be,
-// for consumption at returnURL. The token carries exactly: `iss` (=
-// issuer, `ui`'s own WHAGENT_UI_PUBLIC_URL), `sub` and `sub_iss` (=
-// subject, subjectIssuer), a fresh random `jti`, `exp` = now +
-// whagent.DefaultTTL, `iat`, and the return URL -- nothing from
-// whagent.Claim's Actor/WhagentSessionID shape.
-//
-// TODO(Implementation phase): mint via go-jose directly against k's
-// signer (not //libs/go/whagent.Signer.Mint -- see the package doc
-// comment for why), with a fresh jti per call and exp computed from
-// whagent.DefaultTTL, referenced as that constant rather than a locally
-// re-declared 5 minutes.
+// assertionClaims is the JWT claim shape Mint produces: exactly iss, sub,
+// sub_iss, jti, exp, iat, and return_url -- nothing from whagent.Claim's
+// Actor/WhagentSessionID shape (this is a browser-identity handshake, not
+// a tool-call session credential).
+type assertionClaims struct {
+	jwt.Claims
+
+	// SubjectIssuer is the Operator's Keycloak issuer (the on-behalf-of
+	// subject's iss), mirroring whagent.Claim's "sub_iss" field name.
+	SubjectIssuer string `json:"sub_iss"`
+
+	// ReturnURL is where the receiving surface sends the Operator's
+	// browser back to once the handshake completes.
+	ReturnURL string `json:"return_url"`
+}
+
+// Mint returns a signed compact JWS carrying exactly: `iss` (= issuer,
+// `ui`'s own WHAGENT_UI_PUBLIC_URL), `sub` and `sub_iss` (= subject,
+// subjectIssuer -- the Operator's Keycloak (iss, sub) pair), a fresh
+// random `jti`, `exp` = now + whagent.DefaultTTL, `iat`, and returnURL.
+// Signed directly against k's key via go-jose (never
+// //libs/go/whagent.Signer.Mint -- see the package doc comment for why),
+// so the result carries none of whagent.Claim's Actor/session fields.
 func (k *Key) Mint(issuer, subject, subjectIssuer, returnURL string, now time.Time) (string, error) {
-	return "", fmt.Errorf("linkassert: Mint: %w", errNotImplemented)
+	if issuer == "" {
+		return "", errors.New("linkassert: Mint requires a non-empty issuer")
+	}
+	if subject == "" {
+		return "", errors.New("linkassert: Mint requires a non-empty subject")
+	}
+	if subjectIssuer == "" {
+		return "", errors.New("linkassert: Mint requires a non-empty subjectIssuer")
+	}
+	if returnURL == "" {
+		return "", errors.New("linkassert: Mint requires a non-empty returnURL")
+	}
+
+	alg, err := signatureAlgorithmFor(k.signer.Public())
+	if err != nil {
+		return "", fmt.Errorf("linkassert: Mint: %w", err)
+	}
+
+	signer, err := jose.NewSigner(
+		jose.SigningKey{Algorithm: alg, Key: k.signer},
+		(&jose.SignerOptions{}).WithType("JWT").WithHeader("kid", k.kid),
+	)
+	if err != nil {
+		return "", fmt.Errorf("linkassert: Mint: constructing signer: %w", err)
+	}
+
+	claims := assertionClaims{
+		Claims: jwt.Claims{
+			Issuer:   issuer,
+			Subject:  subject,
+			Expiry:   jwt.NewNumericDate(now.Add(whagent.DefaultTTL)),
+			IssuedAt: jwt.NewNumericDate(now),
+			ID:       uuid.NewString(),
+		},
+		SubjectIssuer: subjectIssuer,
+		ReturnURL:     returnURL,
+	}
+
+	token, err := jwt.Signed(signer).Claims(claims).Serialize()
+	if err != nil {
+		return "", fmt.Errorf("linkassert: Mint: signing claim: %w", err)
+	}
+	return token, nil
 }
 
-// JWKSHandler serves k's public JWKS document -- public-key-only, modelled
-// on persona.JWKSHandler.
-//
-// TODO(Implementation phase): serve k's single active public key as a
-// JWKS document on GET/HEAD, mirroring persona.JWKSHandler's
-// method-not-allowed handling for anything else. Must remain reachable
-// without an authenticated session -- see ../main.go's route registration.
+// jwks returns k's public JWKS document -- public-key-only, modelled on
+// persona.JWKSHandler; k.signer.Public() is the only key material ever
+// touched here, so no private JWK parameter (`d`, `p`, `q`, ...) can
+// appear in the output.
+func (k *Key) jwks() (jose.JSONWebKeySet, error) {
+	alg, err := signatureAlgorithmFor(k.signer.Public())
+	if err != nil {
+		return jose.JSONWebKeySet{}, err
+	}
+	return jose.JSONWebKeySet{
+		Keys: []jose.JSONWebKey{
+			{
+				Key:       k.signer.Public(),
+				KeyID:     k.kid,
+				Algorithm: string(alg),
+				Use:       "sig",
+			},
+		},
+	}, nil
+}
+
+// JWKSHandler serves k's public JWKS document -- public-key-only,
+// modelled on persona.JWKSHandler. Must remain reachable without an
+// authenticated session (see ../main.go's route registration, which
+// never wraps this in app.auth.RequireAuthFunc).
 func JWKSHandler(k *Key) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		http.Error(w, errNotImplemented.Error(), http.StatusNotImplemented)
+		if r.Method != http.MethodGet && r.Method != http.MethodHead {
+			w.Header().Set("Allow", "GET, HEAD")
+			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+			return
+		}
+
+		set, err := k.jwks()
+		if err != nil {
+			http.Error(w, "jwks unavailable", http.StatusInternalServerError)
+			return
+		}
+
+		w.Header().Set("Content-Type", "application/json")
+		if r.Method == http.MethodHead {
+			return
+		}
+		_ = json.NewEncoder(w).Encode(set)
 	})
+}
+
+// signatureAlgorithmFor picks the go-jose signature algorithm that
+// matches pub's key type. A deliberate local copy of
+// whagent.signatureAlgorithmFor's logic (that function is unexported, and
+// this package intentionally never imports whagent.Signer -- see the
+// package doc comment) rather than a shared helper extracted into
+// //libs/go/whagent, which would widen that package's published surface
+// for a single internal helper.
+func signatureAlgorithmFor(pub crypto.PublicKey) (jose.SignatureAlgorithm, error) {
+	switch key := pub.(type) {
+	case ed25519.PublicKey:
+		return jose.EdDSA, nil
+	case *ecdsa.PublicKey:
+		switch key.Curve.Params().BitSize {
+		case 256:
+			return jose.ES256, nil
+		case 384:
+			return jose.ES384, nil
+		case 521:
+			return jose.ES512, nil
+		default:
+			return "", fmt.Errorf("linkassert: unsupported ECDSA curve bit size %d", key.Curve.Params().BitSize)
+		}
+	case *rsa.PublicKey:
+		return jose.RS256, nil
+	default:
+		return "", fmt.Errorf("linkassert: unsupported asymmetric public key type %T", pub)
+	}
 }

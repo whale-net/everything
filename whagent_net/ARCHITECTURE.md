@@ -598,14 +598,41 @@ agent acting *as the signed-in ASS user* against ASS's own MCP tools) is
 the first concrete exercise of this. This is a load-bearing decision for
 the product brief.
 
-**Issuance mechanism (issue #2115).** `api` owns the signing key(s) and
-publishes the public JWKS: `whagent_net/api/persona`'s `KeySet`/
-`LoadKeySet` load the active asymmetric signing key (plus any retired keys
-kept only for JWKS publication during a rotation window) from config/
-secret — never checked in, never a symmetric fallback, fatal at startup
-if unconfigured — and `JWKSHandler`/`NewMux` serve them at the fixed
-`/.well-known/jwks.json` path over a small `net/http` mux alongside `api`'s
-gRPC surface.
+**Issuance mechanism (issue #2115, corrected by issue #2595/NFR6).**
+whagent-net has **two independent signing/JWKS surfaces**, not one shared
+key with a single owner — each with its own key, `ENV.md` entry, and
+rotation posture:
+
+- **`api`'s persona-credential key** (this subsection) — mints the
+  per-tool-call `whagent.Claim` every agent action carries (LB3, FR10).
+  `api` owns this key and publishes its public JWKS:
+  `whagent_net/api/persona`'s `KeySet`/`LoadKeySet` load the active
+  asymmetric signing key (plus any retired keys kept only for JWKS
+  publication during a rotation window) from config/secret — never
+  checked in, never a symmetric fallback, fatal at startup if
+  unconfigured — and `JWKSHandler`/`NewMux` serve them at the fixed
+  `/.well-known/jwks.json` path over a small `net/http` mux alongside
+  `api`'s gRPC surface. Rotation has a grace period
+  (`WHAGENT_SIGNING_KEYS_ADDITIONAL`).
+- **`ui`'s link-assertion key** (issue #2595) — `ui` is a second,
+  independently-custodied signing/JWKS surface: `whagent_net/ui/linkassert`
+  holds a purpose-built asymmetric key (`WHAGENT_UI_SIGNING_KEY`/
+  `WHAGENT_UI_SIGNING_KEY_ID`, `ENV.md` "Persona claim issuance") and
+  serves its own public JWKS at the same fixed `/.well-known/jwks.json`
+  path, alongside `ui`'s own HTTP surface — distinct key material and a
+  distinct k8s secret from `api`'s key above, never interchangeable with
+  it. `ui` is the more externally-exposed of the two binaries (already
+  holding `WHAGENT_OIDC_CLIENT_SECRET`, `WHAGENT_GRANT_CLIENT_SECRET`,
+  `WHAGENT_GRANT_ENCRYPTION_KEY`, and `SECRET_KEY`, none of which are
+  asymmetric signing keys). This key mints FR2's short-lived link
+  assertion (`linkassert.Key.Mint`) for the browser-identity handshake
+  that lets an Operator link their whagent-net Keycloak identity to an
+  existing identity on another domain (e.g. ASS) — a narrower claim shape
+  than `whagent.Claim`, with no `Actor`/session fields, and deliberately
+  not minted from the persona-credential key above (see the root plan's
+  FR2 for the rejected alternatives). Rotation is a **hard cutover** — no
+  grace-period ledger, unlike the persona key's
+  `WHAGENT_SIGNING_KEYS_ADDITIONAL`.
 
 Minting itself happens **in `worker`'s own process**, not over an RPC to
 `api`: `worker` is configured with the identical signing-key material (the
