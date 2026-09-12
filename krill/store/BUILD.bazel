@@ -24,6 +24,7 @@ go_library(
         "feature.go",
         "featureset.go",
         "history.go",
+        "import_completion.go",
         "milestone.go",
         "models.go",
         "nongoal.go",
@@ -42,6 +43,7 @@ go_library(
     deps = [
         "@com_github_google_uuid//:uuid",
         "@com_github_jackc_pgx_v5//:pgx",
+        "@com_github_jackc_pgx_v5//pgconn",
         "@com_github_jackc_pgx_v5//pgxpool",
     ],
 )
