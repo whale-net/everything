@@ -30,7 +30,7 @@ func TestGrants_RendersRowsFromPlainData(t *testing.T) {
 	granted := time.Date(2026, 1, 2, 0, 0, 0, 0, time.UTC)
 	body := renderGrants(t, GrantsData{
 		Rows: []GrantRow{
-			{OperatorLabel: "alice", Domain: "audience_score_system", Status: "active", GrantedAt: granted},
+			{OperatorLabel: "alice", Scope: "audience_score_system", Status: "active", GrantedAt: granted},
 		},
 	})
 
@@ -38,7 +38,7 @@ func TestGrants_RendersRowsFromPlainData(t *testing.T) {
 	assert.Contains(t, body, "audience_score_system")
 	assert.Contains(t, body, "Active")
 	assert.Contains(t, body, `action="/grants/revoke"`)
-	assert.Contains(t, body, `name="domain"`)
+	assert.Contains(t, body, `name="scope"`)
 	assert.Contains(t, body, `value="audience_score_system"`)
 }
 
@@ -47,7 +47,7 @@ func TestGrants_RendersRowsFromPlainData(t *testing.T) {
 func TestGrants_RevokedRowHasNoRevokeControl(t *testing.T) {
 	body := renderGrants(t, GrantsData{
 		Rows: []GrantRow{
-			{OperatorLabel: "alice", Domain: "manmanv2", Status: "revoked", GrantedAt: time.Now()},
+			{OperatorLabel: "alice", Scope: "manmanv2", Status: "revoked", GrantedAt: time.Now()},
 		},
 	})
 
@@ -58,7 +58,7 @@ func TestGrants_RevokedRowHasNoRevokeControl(t *testing.T) {
 // TestGrants_EmptyRowsRendersPlaceholder guards the zero-grants case.
 func TestGrants_EmptyRowsRendersPlaceholder(t *testing.T) {
 	body := renderGrants(t, GrantsData{})
-	assert.Contains(t, body, "You have not granted access to any domain yet.")
+	assert.Contains(t, body, "You have not granted access to any scope yet.")
 }
 
 // TestGrants_RendersPageError guards GrantsData.Error's rendering (the

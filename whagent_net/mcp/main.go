@@ -12,7 +12,7 @@
 // packages. Today that is: the mcp_credential table backing the FR9/
 // issue #2249 OAuth2 identity-resolution path's mcpauth.CredentialStore
 // -- see initializeAuthDeps below -- the agent_definition/session_agent
-// tables backing whagent_net/mcpdomain.Resolver's DomainResolver
+// tables backing whagent_net/mcpscope.Resolver's ScopeResolver
 // implementation (issue #2427, FR7) -- and the grpcauth_delegated_grant/
 // grpcauth_grant_index tables backing //whagent_net/delegatedgrant's
 // Store/Index (see initializeDelegatedGrant, delegatedgrant.go).
@@ -22,7 +22,7 @@
 // for a working credential exclusively via the shared
 // //whagent_net/delegatedgrant.Components.Source's
 // TokenSource(subject, grant).Token(ctx), called at tool-dispatch time
-// (../mcp/tools' RegisterXxx handlers) once a call's target domain is
+// (../mcp/tools' RegisterXxx handlers) once a call's target scope is
 // known -- never at auth-middleware time, and never via RFC 8693
 // impersonation exchange (server/tokenexchange.go, WHAGENT_MCP_KEYCLOAK_*,
 // deleted by this same issue, not left dormant). Issue #2426's shared
@@ -51,7 +51,7 @@ import (
 	"github.com/whale-net/everything/libs/go/logging"
 	"github.com/whale-net/everything/libs/go/mcpauth"
 	"github.com/whale-net/everything/whagent_net/delegatedgrant"
-	"github.com/whale-net/everything/whagent_net/mcpdomain"
+	"github.com/whale-net/everything/whagent_net/mcpscope"
 	pb "github.com/whale-net/everything/whagent_net/protos"
 	"github.com/whale-net/everything/whagent_net/session"
 
@@ -145,7 +145,7 @@ func getEnv(key, def string) string {
 // mcpauth.CredentialStore against the same mcp_credential table `ui`'s
 // mcpauth.Provider mints into (whagent_net/migrate/schema/migrations/
 // 004_mcpauth_credential, issue #2245, FR9's OAuth2 identity-resolution
-// path), whagent_net/mcpdomain.Resolver's DomainResolver implementation
+// path), whagent_net/mcpscope.Resolver's ScopeResolver implementation
 // (issue #2427, FR7), and //whagent_net/delegatedgrant's
 // Store/Index/DelegatedGrantSource triple (issue #2426, FR10/FR13/NFR5/
 // NFR6). All three share this one struct and this one pool purely because
@@ -153,27 +153,27 @@ func getEnv(key, def string) string {
 // optional dependency -- not because they are otherwise related.
 //
 // run() passes credentials into server.NewHTTPHandler (auth.go's
-// NewVerifier, the HTTP-layer classifier), and domainResolver/grant.Source
-// into every tools.RegisterX call (issue #2430, FR7/FR8): *mcpdomain.Resolver
-// satisfies tools.DomainResolver and *grpcauth.DelegatedGrantSource
-// satisfies tools.GrantSource, both structurally (domain.go/grant.go) --
-// passed as those small domain-neutral interfaces, never this concrete
-// struct or the whagent_net/delegatedgrant/whagent_net/mcpdomain packages
+// NewVerifier, the HTTP-layer classifier), and scopeResolver/grant.Source
+// into every tools.RegisterX call (issue #2430, FR7/FR8): *mcpscope.Resolver
+// satisfies tools.ScopeResolver and *grpcauth.DelegatedGrantSource
+// satisfies tools.GrantSource, both structurally (scope.go/grant.go) --
+// passed as those small scope-neutral interfaces, never this concrete
+// struct or the whagent_net/delegatedgrant/whagent_net/mcpscope packages
 // themselves, which is what mcp/server's and mcp/tools' own
 // TestBUILD_NoStoreOrTemporalDependency (issue #2120) protects. Each tool
-// handler now calls DomainForAgent/DomainForSession -> grantkey.ForDomain
+// handler now calls ScopeForAgent/ScopeForSession -> grantkey.ForScope
 // -> TokenSource(subject, grant).Token(ctx) at dispatch time for the
 // browser-OAuth2 path (mcp/tools' resolveGrantTokenForAgent/
 // resolveGrantTokenForSession) -- this is FR8's sole token-acquisition
 // path; there is no RFC 8693 impersonation exchange left to fall back to
 // (FR19, tokenexchange.go deleted).
 //
-// domainResolver/credentials may be nil exactly when cfg.DatabaseURL is
+// scopeResolver/credentials may be nil exactly when cfg.DatabaseURL is
 // unset or the pool is unreachable; grant is then also its zero value.
 type authDeps struct {
 	pool           *pgxpool.Pool
 	credentials    mcpauth.CredentialStore
-	domainResolver *mcpdomain.Resolver
+	scopeResolver *mcpscope.Resolver
 	grant          delegatedgrant.Components
 }
 
@@ -230,14 +230,14 @@ func initializeAuthDeps(ctx context.Context, cfg config, logger *slog.Logger) (a
 
 	logger.Info("mcpauth credential store initialized for the FR9 OAuth2 identity-resolution path")
 
-	// domainResolver (issue #2427, FR7) is constructed against the same
+	// scopeResolver (issue #2427, FR7) is constructed against the same
 	// pool credentials just was. Unlike mcpauth.NewCredentialStore,
 	// session.New/AgentDefinitions perform no preflight query of their
 	// own, so there is nothing further to degrade on here: the pool
 	// already proved reachable immediately above.
-	domainResolver := mcpdomain.New(session.New(pool, nil).AgentDefinitions())
+	scopeResolver := mcpscope.New(session.New(pool, nil).AgentDefinitions())
 
-	return authDeps{pool: pool, credentials: credentials, domainResolver: domainResolver, grant: grant}, nil
+	return authDeps{pool: pool, credentials: credentials, scopeResolver: scopeResolver, grant: grant}, nil
 }
 
 func main() {
@@ -301,26 +301,26 @@ func run() error {
 	client := pb.NewSessionServiceClient(apiConn.GetConnection())
 
 	srv := server.New()
-	// auth.domainResolver (issue #2427, FR7) and auth.grant.Source (issue
-	// #2426, FR8) are threaded into every tool here: *mcpdomain.Resolver
-	// and *grpcauth.DelegatedGrantSource each satisfy tools.DomainResolver/
-	// tools.GrantSource structurally (domain.go/grant.go's doc comments),
-	// with no adapter and no direct import of mcpdomain/delegatedgrant
-	// from mcp/tools itself. Each tool's call() resolves the domain the
+	// auth.scopeResolver (issue #2427, FR7) and auth.grant.Source (issue
+	// #2426, FR8) are threaded into every tool here: *mcpscope.Resolver
+	// and *grpcauth.DelegatedGrantSource each satisfy tools.ScopeResolver/
+	// tools.GrantSource structurally (scope.go/grant.go's doc comments),
+	// with no adapter and no direct import of mcpscope/delegatedgrant
+	// from mcp/tools itself. Each tool's call() resolves the scope the
 	// call actually targets and acquires a token via GrantSource at
 	// dispatch time for the browser-OAuth2 path only (issue #2430's
 	// Implementation phase; see mcp/tools' resolveGrantTokenForAgent/
 	// resolveGrantTokenForSession) -- both may be nil (cfg.DatabaseURL
 	// unset), which those dispatch-time helpers treat identically to
-	// "no identity resolved", since a nil domainResolver/grant is only
+	// "no identity resolved", since a nil scopeResolver/grant is only
 	// ever consulted when an Identity is actually on ctx, and mcp/server's
 	// NewVerifier never produces one without a reachable
 	// mcpauth.CredentialStore in the first place.
-	tools.RegisterStartSession(srv, client, auth.domainResolver, auth.grant.Source)
-	tools.RegisterSendTurn(srv, client, auth.domainResolver, auth.grant.Source)
-	tools.RegisterStopSession(srv, client, auth.domainResolver, auth.grant.Source)
-	tools.RegisterGetSession(srv, client, auth.domainResolver, auth.grant.Source)
-	tools.RegisterReadTranscript(srv, client, auth.domainResolver, auth.grant.Source)
+	tools.RegisterStartSession(srv, client, auth.scopeResolver, auth.grant.Source)
+	tools.RegisterSendTurn(srv, client, auth.scopeResolver, auth.grant.Source)
+	tools.RegisterStopSession(srv, client, auth.scopeResolver, auth.grant.Source)
+	tools.RegisterGetSession(srv, client, auth.scopeResolver, auth.grant.Source)
+	tools.RegisterReadTranscript(srv, client, auth.scopeResolver, auth.grant.Source)
 
 	resourceMeta := server.ResourceMetadataConfig{
 		Resource:            cfg.MCPPublicURL,

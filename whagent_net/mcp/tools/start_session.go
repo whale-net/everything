@@ -33,20 +33,20 @@ type StartSessionOutput struct {
 // pass-through to (issue #2120's Implementation section, "Tools --
 // one per gRPC RPC, no more").
 //
-// domainResolver/grant are FR7/FR8's dispatch-time resolution seams
-// (domain.go, grant.go): call resolves in.AgentID's domain and acquires a
+// scopeResolver/grant are FR7/FR8's dispatch-time resolution seams
+// (scope.go, grant.go): call resolves in.AgentID's scope and acquires a
 // token via grant.TokenSource before forwarding (dispatch.go's
 // resolveGrantTokenForAgent), for the browser-OAuth2 path only -- see
 // dispatch.go's own doc comment for the manual-token-path no-op case.
 type startSessionTool struct {
 	client         pb.SessionServiceClient
-	domainResolver DomainResolver
+	scopeResolver ScopeResolver
 	grant          GrantSource
 }
 
 // RegisterStartSession registers the start_session tool on srv.
-func RegisterStartSession(srv *mcp.Server, client pb.SessionServiceClient, domainResolver DomainResolver, grant GrantSource) {
-	t := &startSessionTool{client: client, domainResolver: domainResolver, grant: grant}
+func RegisterStartSession(srv *mcp.Server, client pb.SessionServiceClient, scopeResolver ScopeResolver, grant GrantSource) {
+	t := &startSessionTool{client: client, scopeResolver: scopeResolver, grant: grant}
 	mcp.AddTool(srv, &mcp.Tool{
 		Name:        "start_session",
 		Description: "Start a new whagent-net agent session, optionally sending its first turn. Returns once the session has started -- see send_turn for how a later turn's completion is observed.",
@@ -71,7 +71,7 @@ func RegisterStartSession(srv *mcp.Server, client pb.SessionServiceClient, domai
 // should retry with send_turn against the returned session_id, not
 // start_session again.
 func (t *startSessionTool) call(ctx context.Context, req *mcp.CallToolRequest, in StartSessionInput) (*mcp.CallToolResult, StartSessionOutput, error) {
-	ctx, err := resolveGrantTokenForAgent(ctx, t.domainResolver, t.grant, in.AgentID)
+	ctx, err := resolveGrantTokenForAgent(ctx, t.scopeResolver, t.grant, in.AgentID)
 	if err != nil {
 		return nil, StartSessionOutput{}, err
 	}

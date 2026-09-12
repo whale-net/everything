@@ -28,18 +28,18 @@ import (
 // registerAll wires every whagent-net mcp tool (main.go's own registration
 // list, mirrored here) onto srv against client. This test's own subject is
 // the registered tool set's shape (names/descriptions/schemas/RPC parity),
-// not FR7/FR8's dispatch-time resolution -- domainResolver/grant are fed
+// not FR7/FR8's dispatch-time resolution -- scopeResolver/grant are fed
 // harmless fakes here purely so RegisterXxx compiles; nothing in this file
 // exercises them.
 func registerAll(srv *mcp.Server, client pb.SessionServiceClient) {
-	domainResolver := newFakeDomainResolver()
+	scopeResolver := newFakeScopeResolver()
 	grant := &fakeGrantSource{}
 
-	RegisterStartSession(srv, client, domainResolver, grant)
-	RegisterSendTurn(srv, client, domainResolver, grant)
-	RegisterStopSession(srv, client, domainResolver, grant)
-	RegisterGetSession(srv, client, domainResolver, grant)
-	RegisterReadTranscript(srv, client, domainResolver, grant)
+	RegisterStartSession(srv, client, scopeResolver, grant)
+	RegisterSendTurn(srv, client, scopeResolver, grant)
+	RegisterStopSession(srv, client, scopeResolver, grant)
+	RegisterGetSession(srv, client, scopeResolver, grant)
+	RegisterReadTranscript(srv, client, scopeResolver, grant)
 }
 
 // listRegisteredTools connects a real in-memory mcp.Client to srv and

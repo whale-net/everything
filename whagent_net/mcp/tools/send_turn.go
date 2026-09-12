@@ -27,28 +27,28 @@ type SendTurnOutput struct {
 // sendTurnTool holds the SessionService client this tool is a
 // pass-through to.
 //
-// domainResolver/grant are FR7/FR8's dispatch-time resolution seams
-// (domain.go, grant.go): call resolves in.SessionID's domain via
-// DomainForSession and acquires a token via grant.TokenSource before
+// scopeResolver/grant are FR7/FR8's dispatch-time resolution seams
+// (scope.go, grant.go): call resolves in.SessionID's scope via
+// ScopeForSession and acquires a token via grant.TokenSource before
 // forwarding (dispatch.go's resolveGrantTokenForSession), for the
 // browser-OAuth2 path only -- see dispatch.go's own doc comment for the
 // manual-token-path no-op case.
 type sendTurnTool struct {
 	client         pb.SessionServiceClient
-	domainResolver DomainResolver
+	scopeResolver ScopeResolver
 	grant          GrantSource
 }
 
 // RegisterSendTurn registers the send_turn tool on srv.
-func RegisterSendTurn(srv *mcp.Server, client pb.SessionServiceClient, domainResolver DomainResolver, grant GrantSource) {
-	t := &sendTurnTool{client: client, domainResolver: domainResolver, grant: grant}
+func RegisterSendTurn(srv *mcp.Server, client pb.SessionServiceClient, scopeResolver ScopeResolver, grant GrantSource) {
+	t := &sendTurnTool{client: client, scopeResolver: scopeResolver, grant: grant}
 	mcp.AddTool(srv, &mcp.Tool{
 		Name:        "send_turn",
 		Description: "Send a turn to a running whagent-net session. Returns once the turn is accepted and queued -- it does NOT wait for the turn to complete. Use read_transcript or get_session to observe the result.",
 	}, t.call)
 }
 
-// call resolves in.SessionID's domain and acquires a token before
+// call resolves in.SessionID's scope and acquires a token before
 // forwarding to t.client.SendTurn (dispatch.go's
 // resolveGrantTokenForSession, FR7/FR8) -- otherwise a direct pass-through,
 // no other business logic -- forwarding the caller's bearer token via ctx
@@ -61,7 +61,7 @@ func RegisterSendTurn(srv *mcp.Server, client pb.SessionServiceClient, domainRes
 // JSON-only rendering) so that "not completed yet" reads as text, not
 // just as an omission an operator could miss.
 func (t *sendTurnTool) call(ctx context.Context, req *mcp.CallToolRequest, in SendTurnInput) (*mcp.CallToolResult, SendTurnOutput, error) {
-	ctx, err := resolveGrantTokenForSession(ctx, t.domainResolver, t.grant, in.SessionID)
+	ctx, err := resolveGrantTokenForSession(ctx, t.scopeResolver, t.grant, in.SessionID)
 	if err != nil {
 		return nil, SendTurnOutput{}, err
 	}

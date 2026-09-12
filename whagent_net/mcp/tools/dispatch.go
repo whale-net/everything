@@ -1,4 +1,4 @@
-// Dispatch-time domain resolution and delegated-grant token acquisition
+// Dispatch-time scope resolution and delegated-grant token acquisition
 // (issue #2430, FR7/FR8): the sequence every tool's call() runs before
 // ever forwarding a request to `api`, replacing RFC 8693 impersonation
 // exchange (removed, FR19) with DelegatedGrantSource-backed acquisition.
@@ -8,12 +8,21 @@
 // Identity (whagent_net/mcpidentity.FromContext) -- placed there by
 // ../server/auth.go's AuthMiddleware for the browser-OAuth2 path only.
 // Absent (the manual-token path: a real bearer token is already on ctx,
-// forwarded byte for byte) means both are a no-op -- domainResolver and
+// forwarded byte for byte) means both are a no-op -- scopeResolver and
 // grant are never consulted, and ctx is returned unchanged. This is also
 // why every pre-existing unit test in this package (constructed against a
-// plain context.Background(), with domainResolver/grant left nil) keeps
+// plain context.Background(), with scopeResolver/grant left nil) keeps
 // passing unmodified: there is no Identity on that ctx, so nothing here
 // ever touches the nil interfaces.
+//
+// A resolved-but-nil Scope (AgentDefinition.Scope unset) is also a no-op,
+// distinct from the no-Identity case above: the operator IS authenticated,
+// but the target agent definition carries no delegated-grant scoping at
+// all, so there is nothing to derive a grant key from or acquire a token
+// for -- ctx is returned unchanged and the call proceeds with whatever
+// credential path it already had (the manual-token path's forwarded
+// bearer token, if any). This is "no scoping", not "no permissions": the
+// agent still runs with its own configured tool_set either way.
 package tools
 
 import (
@@ -47,44 +56,50 @@ import (
 const dispatchLoggerName = "whagent_net/mcp/tools"
 
 // resolveGrantTokenForAgent is start_session's dispatch-time sequence:
-// resolve agentID's domain via DomainForAgent (FR7), then acquire a
+// resolve agentID's scope via ScopeForAgent (FR7), then acquire a
 // working credential for it (FR8). See this file's doc comment for the
-// manual-token-path no-op case.
-func resolveGrantTokenForAgent(ctx context.Context, domainResolver DomainResolver, grant GrantSource, agentID string) (context.Context, error) {
+// manual-token-path and nil-scope no-op cases.
+func resolveGrantTokenForAgent(ctx context.Context, scopeResolver ScopeResolver, grant GrantSource, agentID string) (context.Context, error) {
 	identity, ok := mcpidentity.FromContext(ctx)
 	if !ok {
 		return ctx, nil
 	}
 
-	domain, err := domainResolver.DomainForAgent(ctx, agentID)
+	scope, err := scopeResolver.ScopeForAgent(ctx, agentID)
 	if err != nil {
-		return ctx, fmt.Errorf("resolve domain for agent %q: %w", agentID, err)
+		return ctx, fmt.Errorf("resolve scope for agent %q: %w", agentID, err)
 	}
-	return acquireGrantToken(ctx, grant, identity, domain)
+	if scope == nil {
+		return ctx, nil
+	}
+	return acquireGrantToken(ctx, grant, identity, *scope)
 }
 
 // resolveGrantTokenForSession is send_turn/stop_session/get_session/
 // read_transcript's dispatch-time sequence: resolve sessionID's
-// already-recorded agent-definition assignment's domain via
-// DomainForSession (FR7, never a domain re-derived from a fresh agent_id
+// already-recorded agent-definition assignment's scope via
+// ScopeForSession (FR7, never a scope re-derived from a fresh agent_id
 // parsed off the request), then acquire a working credential for it
-// (FR8). See this file's doc comment for the manual-token-path no-op
-// case.
-func resolveGrantTokenForSession(ctx context.Context, domainResolver DomainResolver, grant GrantSource, sessionID string) (context.Context, error) {
+// (FR8). See this file's doc comment for the manual-token-path and
+// nil-scope no-op cases.
+func resolveGrantTokenForSession(ctx context.Context, scopeResolver ScopeResolver, grant GrantSource, sessionID string) (context.Context, error) {
 	identity, ok := mcpidentity.FromContext(ctx)
 	if !ok {
 		return ctx, nil
 	}
 
-	domain, err := domainResolver.DomainForSession(ctx, sessionID)
+	scope, err := scopeResolver.ScopeForSession(ctx, sessionID)
 	if err != nil {
-		return ctx, fmt.Errorf("resolve domain for session %q: %w", sessionID, err)
+		return ctx, fmt.Errorf("resolve scope for session %q: %w", sessionID, err)
 	}
-	return acquireGrantToken(ctx, grant, identity, domain)
+	if scope == nil {
+		return ctx, nil
+	}
+	return acquireGrantToken(ctx, grant, identity, *scope)
 }
 
-// acquireGrantToken derives domain's grant key (whagent_net/grantkey.
-// ForDomain, FR4 -- the *only* permitted derivation) and acquires a
+// acquireGrantToken derives scope's grant key (whagent_net/grantkey.
+// ForScope, FR4 -- the *only* permitted derivation) and acquires a
 // working access token for (identity.Sub, grantKey) via
 // grant.TokenSource(...).Token(ctx) -- never identity.Iss, per the
 // subject-key convention whagent_net/ui/handlers_consent.go's
@@ -96,17 +111,21 @@ func resolveGrantTokenForSession(ctx context.Context, domainResolver DomainResol
 // exists for a different, unrelated concern -- mcpauth.CredentialStore's
 // Identity column, mcpidentity's own package doc).
 //
-// A domain with no active grant (grpcauth.ErrGrantNotFound), or one whose
+// Only called once a scope has already been resolved as non-nil by the
+// caller -- see resolveGrantTokenForAgent/resolveGrantTokenForSession's
+// nil-scope no-op branches above.
+//
+// A scope with no active grant (grpcauth.ErrGrantNotFound), or one whose
 // stored refresh token was revoked (ErrGrantRevoked), fails here rather
 // than falling back to any other credential path (NFR2) -- and that
 // sentinel's wrapped error text already names grantKey
 // (delegatedgrant_token.go's own fmt.Errorf wrapping), which for
-// whagent-net is domain itself (grantkey.ForDomain's doc comment: "the
-// grant key for domain d is d itself, once validated"), so an operator
-// reading the failure knows exactly which domain to consent for.
+// whagent-net is scope itself (grantkey.ForScope's doc comment: "the
+// grant key for scope s is s itself, once validated"), so an operator
+// reading the failure knows exactly which scope to consent for.
 //
 // ErrGrantNeedsReauth is handled distinctly (issue #2431, FR18): rather
-// than the plain domain-naming wrap above, it is translated into a
+// than the plain scope-naming wrap above, it is translated into a
 // reauthRequiredError (errors.go) -- its own type, still satisfying
 // errors.Is(err, grpcauth.ErrGrantNeedsReauth) via Unwrap, so a caller
 // that needs to distinguish "no grant at all"/"revoked" from "grant
@@ -118,12 +137,12 @@ func resolveGrantTokenForSession(ctx context.Context, domainResolver DomainResol
 // detection needs to live, at initial connect and mid-session alike. No
 // retry is attempted (TokenSource is called exactly once here), no other
 // grant is substituted, and no credential path other than the one
-// resolved domain's delegated grant is ever consulted -- the function
+// resolved scope's delegated grant is ever consulted -- the function
 // simply returns once TokenSource has answered, success or failure.
 // Logged at WARNING (this package's own convention, AGENTS.md's logging
 // levels table): the operation did not complete and needs a human, but
 // the system itself is behaving correctly -- not an ERROR. The log line
-// carries domain and the operator's subject in structured fields and
+// carries scope and the operator's subject in structured fields and
 // nothing else off cause (no refresh token, no client secret ever
 // reaches this function to log in the first place).
 //
@@ -131,23 +150,23 @@ func resolveGrantTokenForSession(ctx context.Context, domainResolver DomainResol
 // grant.TokenSource(...).Token(ctx) re-reads the underlying Store on
 // every call, by contract (libs/go/grpcauth's GrantTokenSource doc
 // comment) -- this function introduces no cache of its own on top of it.
-func acquireGrantToken(ctx context.Context, grant GrantSource, identity mcpidentity.Identity, domain string) (context.Context, error) {
-	grantKey, err := grantkey.ForDomain(domain)
+func acquireGrantToken(ctx context.Context, grant GrantSource, identity mcpidentity.Identity, scope string) (context.Context, error) {
+	grantKey, err := grantkey.ForScope(scope)
 	if err != nil {
-		return ctx, fmt.Errorf("derive grant key for domain %q: %w", domain, err)
+		return ctx, fmt.Errorf("derive grant key for scope %q: %w", scope, err)
 	}
 
 	tok, err := grant.TokenSource(identity.Sub, grantKey).Token(ctx)
 	if err != nil {
 		if errors.Is(err, grpcauth.ErrGrantNeedsReauth) {
-			reauthErr := newReauthRequiredError(domain, err)
-			if reauthedDomain, ok := reauthDomain(reauthErr); ok {
+			reauthErr := newReauthRequiredError(scope, err)
+			if reauthedScope, ok := reauthScope(reauthErr); ok {
 				logging.Get(dispatchLoggerName).WarnContext(ctx, "delegated grant needs re-consent; failing call, not retrying or substituting",
-					"domain", reauthedDomain, "subject", identity.Sub)
+					"scope", reauthedScope, "subject", identity.Sub)
 			}
 			return ctx, reauthErr
 		}
-		return ctx, fmt.Errorf("acquire delegated-grant token for domain %q: %w", domain, err)
+		return ctx, fmt.Errorf("acquire delegated-grant token for scope %q: %w", scope, err)
 	}
 
 	return grpcauth.WithUserToken(ctx, tok.AccessToken), nil

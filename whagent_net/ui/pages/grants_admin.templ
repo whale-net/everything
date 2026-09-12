@@ -5,7 +5,7 @@
 // than a divergent grant-list render path for admins.
 //
 // grantsTable's per-row revoke form targets POST /admin/grants/revoke
-// with the row's own subject_sub as well as its domain (GrantRow.
+// with the row's own subject_sub as well as its scope (GrantRow.
 // SubjectSub, ../handlers_grants_admin.go's buildAdminGrantRows) --
 // unlike the self-service page's form (grants.templ), which never
 // includes a subject at all, an admin revoke must name a target operator

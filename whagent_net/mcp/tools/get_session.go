@@ -33,28 +33,28 @@ type GetSessionOutput struct {
 // getSessionTool holds the SessionService client this tool is a
 // pass-through to.
 //
-// domainResolver/grant are FR7/FR8's dispatch-time resolution seams
-// (domain.go, grant.go): call resolves in.SessionID's domain via
-// DomainForSession and acquires a token via grant.TokenSource before
+// scopeResolver/grant are FR7/FR8's dispatch-time resolution seams
+// (scope.go, grant.go): call resolves in.SessionID's scope via
+// ScopeForSession and acquires a token via grant.TokenSource before
 // forwarding (dispatch.go's resolveGrantTokenForSession), for the
 // browser-OAuth2 path only -- see dispatch.go's own doc comment for the
 // manual-token-path no-op case.
 type getSessionTool struct {
 	client         pb.SessionServiceClient
-	domainResolver DomainResolver
+	scopeResolver ScopeResolver
 	grant          GrantSource
 }
 
 // RegisterGetSession registers the get_session tool on srv.
-func RegisterGetSession(srv *mcp.Server, client pb.SessionServiceClient, domainResolver DomainResolver, grant GrantSource) {
-	t := &getSessionTool{client: client, domainResolver: domainResolver, grant: grant}
+func RegisterGetSession(srv *mcp.Server, client pb.SessionServiceClient, scopeResolver ScopeResolver, grant GrantSource) {
+	t := &getSessionTool{client: client, scopeResolver: scopeResolver, grant: grant}
 	mcp.AddTool(srv, &mcp.Tool{
 		Name:        "get_session",
 		Description: "Get a whagent-net session's current state, and -- for an ended session -- why it ended (FR3).",
 	}, t.call)
 }
 
-// call resolves in.SessionID's domain and acquires a token (dispatch.go's
+// call resolves in.SessionID's scope and acquires a token (dispatch.go's
 // resolveGrantTokenForSession, FR7/FR8) before wiring get_session to
 // t.client.GetSession, mapping pb.GetSessionResponse's optional
 // cap_kind/error_category/error_detail fields onto GetSessionOutput --
@@ -65,7 +65,7 @@ func RegisterGetSession(srv *mcp.Server, client pb.SessionServiceClient, domainR
 // path) or as resolveGrantTokenForSession acquired it (the browser-OAuth2
 // path).
 func (t *getSessionTool) call(ctx context.Context, req *mcp.CallToolRequest, in GetSessionInput) (*mcp.CallToolResult, GetSessionOutput, error) {
-	ctx, err := resolveGrantTokenForSession(ctx, t.domainResolver, t.grant, in.SessionID)
+	ctx, err := resolveGrantTokenForSession(ctx, t.scopeResolver, t.grant, in.SessionID)
 	if err != nil {
 		return nil, GetSessionOutput{}, err
 	}
