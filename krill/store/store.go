@@ -4,8 +4,10 @@ import "github.com/jackc/pgx/v5/pgxpool"
 
 // Store is the pgx-backed repository over `product`, `feature_set`,
 // `feature`, `requirement`, `load_bearing_decision`, `persona`, and
-// `non_goal` (migration 002), plus `milestone_ref` and `entity_milestone`
-// (migration 004, issue #2492). Built over //libs/go/db's *pgxpool.Pool,
+// `non_goal` (migration 002), `milestone_ref` and `entity_milestone`
+// (migration 004, issue #2492), `scope` (migration 001, read-only here),
+// and `pointer_artifact` (migration 005, issue #2496). Built over
+// //libs/go/db's *pgxpool.Pool,
 // mirroring audience_score_system/store.Store's shape: a thin holder whose
 // accessors hand back per-entity Store implementations, kept as separate
 // concrete types because e.g. ProductStore.GetCurrentByID and
@@ -57,3 +59,9 @@ func (s *Store) Amend() AmendStore { return amendStore{pool: s.pool} }
 // version lists (FR11, issue #2493) for Requirement and
 // LoadBearingDecision.
 func (s *Store) History() HistoryStore { return historyStore{pool: s.pool} }
+
+// Scopes returns the ScopeStore implementation.
+func (s *Store) Scopes() ScopeStore { return scopeStore{pool: s.pool} }
+
+// PointerArtifacts returns the PointerArtifactStore implementation.
+func (s *Store) PointerArtifacts() PointerArtifactStore { return pointerArtifactStore{pool: s.pool} }

@@ -10,7 +10,9 @@ amend.go (issue #2493, FR12) is the SCD2 supersession write endpoints for
 Requirement and LoadBearingDecision, gated like every other write endpoint;
 history.go (issue #2493, FR11) is the as-of/version-list read endpoints
 over the same two entity kinds. Neither slice.go's nor history.go's routes
-carry the write-only session gate."""
+carry the write-only session gate. pointer.go (issue #2496, FR20) is the
+pointer-artifact create endpoint -- the one handler in this package that
+calls out to //krill/forge before it ever touches //krill/store."""
 
 load("@rules_go//go:def.bzl", "go_library", "go_test")
 
@@ -23,6 +25,7 @@ go_library(
         "featureset.go",
         "gate.go",
         "history.go",
+        "pointer.go",
         "product.go",
         "requirement.go",
         "session.go",
@@ -32,6 +35,7 @@ go_library(
     importpath = "github.com/whale-net/everything/krill/api/handlers",
     visibility = ["//visibility:public"],
     deps = [
+        "//krill/forge",
         "//krill/slice",
         "//krill/store",
         "@com_github_google_uuid//:uuid",

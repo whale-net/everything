@@ -1,7 +1,8 @@
 """krill HTTP server: /healthz + DB connectivity check (issue #2487), the
 `init` session endpoint (issue #2489, FR3), the M1 entity write API
-(issue #2490, FR1/FR2/FR4 -- create/attach only), and the scoped-slice
-query surface (FR5-FR9, issue #2491)."""
+(issue #2490, FR1/FR2/FR4 -- create/attach only), the scoped-slice query
+surface (FR5-FR9, issue #2491), and the pointer-artifact create endpoint
+(issue #2496, FR20)."""
 
 load("@rules_go//go:def.bzl", "go_binary", "go_library")
 load("//tools/bazel:release.bzl", "release_app")
@@ -16,6 +17,7 @@ go_library(
     visibility = ["//visibility:private"],
     deps = [
         "//krill/api/handlers",
+        "//krill/forge",
         "//krill/slice",
         "//krill/store",
         "//libs/go/db",

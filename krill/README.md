@@ -14,7 +14,7 @@ milestone hangs off. No spec entities exist yet — that is later M1 work.
 | Binary | Target | Type | Description |
 |--------|--------|------|-------------|
 | `migrate` | `//krill/migrate` | job | Applies `krill/migrate/schema/migrations` and seeds the one `scope` row with this repo's forge coordinates (LB1, NFR2). |
-| `api` | `//krill/api` | external-api | HTTP server; `/healthz` (a live DB ping), `POST /sessions/init` (FR3's `init` primitive, issue #2489), the M1 entity write API (FR1/FR2/FR4, issue #2490), and the FR5-FR9 scoped-slice query surface (`GET /slices/{feature-sets,features,requirements,products}/{id}`, issue #2491). |
+| `api` | `//krill/api` | external-api | HTTP server; `/healthz` (a live DB ping), `POST /sessions/init` (FR3's `init` primitive, issue #2489), the M1 entity write API (FR1/FR2/FR4, issue #2490), the FR5-FR9 scoped-slice query surface (`GET /slices/{feature-sets,features,requirements,products}/{id}`, issue #2491), and the pointer-artifact create endpoint (`POST /pointer-artifacts`, FR20, issue #2496). |
 | `import` | `//krill/importer/cmd` | CLI (not deployed) | The one-way markdown importer (FR16, FR17, issue #2492): parses a `PRODUCT.md` + `product/*.md` doc set into `krill/store`'s spec entities and prints the entity-id report. Gated on a valid `init` session, same as every other write path. Run with `bazel run //krill/importer/cmd:import -- --path <dir> --session-id <uuid>`. See `ARCHITECTURE.md` "The markdown importer and the delivery-axis association". |
 | `mcp` | `//krill/mcp` | external-api | krill's FR10/NFR1 spec surface: the FR5-FR9 scoped-slice query over MCP at `/mcp/spec`, behind the mcpauth (human) + whagent-net (agent) two-front-door auth pattern. See "MCP spec surface" below. |
 
@@ -29,10 +29,11 @@ milestone hangs off. No spec entities exist yet — that is later M1 work.
 | `POST /features` | Creates a Feature under a FeatureSet (FR2). Body: `{"feature_set_id", "name", "description"?}`. Gated. Returns `{"id": "<uuid>"}`. |
 | `POST /requirements` | Creates an FR or NFR under a Feature (FR2). Body: `{"feature_id", "kind": "FR"\|"NFR", "name", "body"?}`. Gated. Returns `{"id": "<uuid>"}`. |
 | `POST /load-bearing-decisions` | Attaches a Load-Bearing Decision to the FeatureSet it constrains (FR4) — not a Product, not a Feature (C2). Body: `{"feature_set_id", "name", "body"?}`. Gated. Returns `{"id": "<uuid>"}`. |
+| `POST /pointer-artifacts` | Creates krill's one thin GitHub pointer issue for a Product (FR20, C9) — so existing PR/commit/conversation cross-linking keeps working now that the spec lives in krill instead of a file. Body: `{"product_id"}`. Gated. Creates the issue via `//krill/forge.GitHubClient` (`KRILL_GITHUB_TOKEN`, see `ENV.md`) against the caller's scope's `repo_full_name`, records it as a `pointer_artifact` row (both LB4 subjects always recorded), and mirrors the issue number onto `scope.pointer_issue_number` (LB1). Rejects a product that already has one with 409 (`pointer_artifact_product_idx`). Returns `{"id": "<uuid>", "issue_number": <int>, "issue_url": "<string>"}`. Retrievable afterward through `GET /slices/products/{id}`'s `pointer_artifacts` field (FR8). |
 | `GET /slices/feature-sets/{id}` | Returns the FR5 scoped slice: a FeatureSet, its Features, their FRs/NFRs, and only the LoadBearingDecisions attached to that FeatureSet. Never gated (read-only). |
 | `GET /slices/features/{id}` | Returns the FR6 scoped slice: a Feature and its FRs/NFRs. Never gated. |
 | `GET /slices/requirements/{id}` | Returns the FR7 scoped slice: a single FR or NFR by surrogate id. Never gated. |
-| `GET /slices/products/{id}` | Returns the FR8 scoped slice: every FeatureSet, Feature, FR, NFR, and LoadBearingDecision beneath a Product. Never gated. |
+| `GET /slices/products/{id}` | Returns the FR8 scoped slice: every FeatureSet, Feature, FR, NFR, LoadBearingDecision, and PointerArtifact beneath a Product. Never gated. |
 
 Every gated endpoint above:
 - requires `X-Krill-Session-Id` (`api/handlers/gate.go`'s `RequireSession`) — rejects with 401 if missing/unknown;
