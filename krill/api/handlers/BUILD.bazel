@@ -53,20 +53,26 @@ go_library(
 # Unit tests for InitSessionHandler (session.go), RequireSession (gate.go),
 # the entity create/attach handlers (issue #2489's and #2490's Testing
 # sections), the four slice query endpoints (slice.go, issue #2491's
-# Testing section), and the two amend endpoints (amend_test.go, issue
-# #2493's Testing section: gated like every other write path, calls
-# AmendStore with the path's {id} and the body's name/body unchanged).
-# fakeSessionStore/fake entity stores/fakeAmendStore stand in for
-# krill/store's interfaces, so none of this needs Postgres/network and it
-# runs as part of `bazel test //...`. slice_internal_test.go is package
-# handlers (white-box, needs the unexported sliceQueryFunc/handle);
-# everything else here is package handlers_test (black-box).
+# Testing section), the two amend endpoints (amend_test.go, issue #2493's
+# Testing section: gated like every other write path, calls AmendStore with
+# the path's {id} and the body's name/body unchanged), and the DesignSession/
+# RevisionEvent HTTP surface (design_session_test.go/revision_event_test.go,
+# issue #2543's Testing section: both POST endpoints gated, GET
+# /design-sessions/{id} not, FR3/FR4's conditional-presence rules mapped to
+# 400). fakeSessionStore/fake entity stores/fakeAmendStore/
+# fakeDesignSessionStore/fakeRevisionEventStore stand in for krill/store's
+# interfaces, so none of this needs Postgres/network and it runs as part of
+# `bazel test //...`. slice_internal_test.go is package handlers (white-box,
+# needs the unexported sliceQueryFunc/handle); everything else here is
+# package handlers_test (black-box).
 go_test(
     name = "handlers_test",
     srcs = [
         "amend_test.go",
         "decision_test.go",
+        "design_session_test.go",
         "entity_test_helpers_test.go",
+        "fake_design_session_store_test.go",
         "fake_entity_store_test.go",
         "fake_session_store_test.go",
         "feature_test.go",
@@ -75,6 +81,7 @@ go_test(
         "pointer_test.go",
         "product_test.go",
         "requirement_test.go",
+        "revision_event_test.go",
         "session_test.go",
         "slice_internal_test.go",
         "slice_test.go",
