@@ -1,0 +1,53 @@
+Import report: krill (product 82626f21-2a2e-4b76-8535-ea2a626c9534)
+  [persona   ] Swarm Operator Swarm Operator                                               -> 95e6150e-737e-48dc-9760-c0381e1a6bf0
+  [persona   ] Requirement Contributor Requirement Contributor                                      -> 4d671cc0-7da9-4a3d-9330-5509ab608133
+  [persona   ] Agent  Agent                                                        -> 446999dd-2841-4a97-bb3c-abe7959d8b1e
+  [non_goal  ] Writing code Writing code                                                 -> 72a92a8e-3b0b-4285-9435-852ab9677b56
+  [non_goal  ] Being a general-purpose issue tracker for humans Being a general-purpose issue tracker for humans             -> 4769858b-f1a3-42e4-af87-66c4eddface1
+  [non_goal  ] Pluggable storage backends Pluggable storage backends                                   -> 04d7addc-6767-4f9e-b37f-77060dcdd119
+  [non_goal  ] Owning git Owning git                                                   -> d3ab10c2-4521-4969-9353-04f26fe58827
+  [non_goal  ] Orchestrating or dispatching agents Orchestrating or dispatching agents                          -> 73a6e35c-4eac-4091-a49e-73e2606ed05f
+  [non_goal  ] Rendering anything but the product doc set Rendering anything but the product doc set                   -> 2414fabf-1bfe-4cd5-81a8-8bccf7ce2d2d
+  [non_goal  ] A web UI A web UI                                                     -> 5a6e839b-1045-4b3c-bb30-bebfafaa4d25
+  [non_goal  ] Owning branch and PR lifecycle Owning branch and PR lifecycle                               -> 41ac1f9e-e26c-4174-b441-5125151bd972
+  [non_goal  ] Multi-repo / multi-tenant use Multi-repo / multi-tenant use                                -> 28a09a2b-9127-427a-ab2a-95796625871a
+  [decision  ] LB1    LB1 — Scope is a surrogate key, and it is on every row fr…   -> 03c49fef-2e02-4485-877f-e78899a774c9
+  [decision  ] LB2    LB2 — Entity identity: immutable surrogate ids, and displ…   -> 14655111-68bd-482b-bd0d-3fb97239f470
+  [decision  ] LB3    LB3 — SCD2 is the spec axis's mutation pattern; the work …   -> 44b51836-415a-4797-9aac-d979f2831ca1
+  [decision  ] LB4    LB4 — Every mutation records two subjects, in the shape a…   -> 0a279480-b0ed-4196-a35f-d2a8eda26034
+  [decision  ] LB5    LB5 — Krill owns an FR's identity; committed docs are one…   -> de54e91d-b8c4-487e-a9b9-fa3be24e9e5d
+  [decision  ] LB6    LB6 — The delivery axis is an association, never a second…   -> 2bd9b61e-52f8-4ba2-877e-a0fa4ba1feb1
+  [decision  ] LB7    LB7 — The scoped slice is one versioned document, and it …   -> 134f4e81-8dd5-4a79-af95-6a92f2abc01d
+  [capability] C1     A Requirement Contributor can record a product's spec as st… -> a647c884-1a05-4f64-b6bb-1a5a8a472a11
+  [capability] C2     A Requirement Contributor can attach a load-bearing decisio… -> 1ffe190e-2fb0-4a08-ba17-1bfde5518884
+  [capability] C3     An Agent can ask krill for exactly the spec slice its work … -> f17cc09e-d394-437c-9a53-9c90a5f2d738
+  [capability] C4     An Agent can do that from whatever harness it is running un… -> dc8df82d-8297-4b93-b244-5f0c73e04d24
+  [capability] C5     A Requirement Contributor can see what any requirement or d… -> b2269975-8dd7-4c18-85f2-545fd14b40f6
+  [capability] C6     A Requirement Contributor can amend a shipped spec by super… -> 04bbb001-039e-4b26-87d3-8fb953d8efbb
+  [capability] C7     Anyone can read a product's current spec as generated, read… -> 42544dcb-62f3-4b00-946d-a253c5a46225
+  [capability] C8     A Swarm Operator can import an existing markdown-specified … -> fdcba3ff-894f-436a-a035-fd8becaf7e43
+  [capability] C9     A human can cross-link a PR, commit, or conversation to a k… -> d75c97e8-62cb-4964-87c7-76e61c88787e
+  [capability] C10    A Requirement Contributor and an Agent can hold a design se… -> f6a4285f-c842-47a8-b1e6-35f8cc6e1795
+  [capability] C11    Anyone can query what is still open in a design session —…   -> d67b1d0a-6a72-420d-b89c-9b5b66ec6537
+  [capability] C12    A Requirement Contributor can submit an idea or user story … -> c0ec949d-c0f3-4810-b800-bc69fe62a95e
+  [capability] C13    A Requirement Contributor can cut a product's spec into shi… -> 77479315-2d86-459e-b87e-d7ea09df7400
+  [capability] C14    An Agent can claim an available task and receive a payload … -> 5f0c359b-8e41-4f34-a0a6-ebd3806701dc
+  [capability] C15    An Agent can report what happened on a run without knowing … -> a4b6ed68-17be-401e-ac31-841247f6c268
+  [capability] C16    An ephemeral Agent can be picked up on any host and resume … -> 503515fe-0393-4bbd-bce4-8e7da0b3075b
+  [capability] C17    A Swarm Operator can answer "what is claimed, what is stuck… -> 6e594484-a32c-4e1b-907c-9b1fc22697de
+  [capability] C18    A Swarm Operator can intervene on a stuck or thrashing task… -> 6584c331-ca5f-45f4-b098-5771b0666bec
+  [capability] C25    Any persona can record scope they noticed but are not actin… -> d2795434-97ef-4407-827a-59f3a09d9e51
+  [capability] C26    A Swarm Operator can leave a swarm running unattended.       -> 9555cd48-98c8-4709-b4cb-854afc48aef2
+  [capability] C27    A Swarm Operator can bring in a product krill did not autho… -> 1a88acf9-9cd5-45b6-9929-c6f28957a859
+  [capability] C28    A Requirement Contributor can see, from krill alone, what i… -> 1c6f30fc-2427-48a6-a56e-03cae3142071
+  [capability] C19    Any persona can use krill through a web UI, with that UI's … -> 48df47aa-9ee3-42ce-9098-29fe7cc28447
+  [capability] C20    An Agent can have krill own the branch and PR lifecycle for… -> e277654f-4aaf-4f43-9df5-ce5f9f0b4077
+  [capability] C21    A Swarm Operator can be told when a product's spec in krill… -> 0e305025-5367-4b26-9e48-eace73d388db
+  [capability] C22    A Swarm Operator can run products from a second repository … -> 600877eb-85e8-4ceb-9348-88438b2e2d26
+  [capability] C23    A Requirement Contributor can record a decision that spans … -> 50c4f61f-d365-409e-806f-f4a113bc33be
+  [capability] C24    A Swarm Operator can attribute an action to a specific agen… -> dce6e095-147f-4048-b852-4ba67566acac
+  [milestone ] M1     An Agent can pull exactly the spec slice its task touches o… -> 92f82a07-9888-4481-9b9e-c526a54b3688
+  [milestone ] M2     A Requirement Contributor can bring an idea to krill in pla… -> 32697396-b8bb-410f-b268-2ab7744eb592
+  [milestone ] M3     A Requirement Contributor can cut a krill product into ship… -> c3964586-6962-43c6-8902-96782b8ba9eb
+  [milestone ] M4     An Agent can claim a task from krill, get everything it nee… -> a120c5b0-eef3-446c-86a4-cb192b2d88ff
+  [milestone ] M5     A Swarm Operator can leave the swarm running unattended and… -> 1993b613-6c9d-493c-8572-0878dedfbd96
