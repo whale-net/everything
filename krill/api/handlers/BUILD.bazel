@@ -1,0 +1,39 @@
+"""krill api's HTTP handler layer. session.go (issue #2489, FR3) is the
+`init` endpoint; gate.go is the write-only gate every mutating endpoint in
+this milestone passes through."""
+
+load("@rules_go//go:def.bzl", "go_library", "go_test")
+
+go_library(
+    name = "handlers",
+    srcs = [
+        "gate.go",
+        "session.go",
+    ],
+    importpath = "github.com/whale-net/everything/krill/api/handlers",
+    visibility = ["//visibility:public"],
+    deps = [
+        "//krill/store",
+        "@com_github_google_uuid//:uuid",
+    ],
+)
+
+# Unit tests for InitSessionHandler (session.go) and RequireSession (gate.go)
+# -- issue #2489's Testing section. fakeSessionStore stands in for
+# store.SessionStore, so none of this needs Postgres/network and it runs as
+# part of `bazel test //...`.
+go_test(
+    name = "handlers_test",
+    srcs = [
+        "fake_session_store_test.go",
+        "gate_test.go",
+        "session_test.go",
+    ],
+    embed = [":handlers"],
+    deps = [
+        "//krill/store",
+        "@com_github_google_uuid//:uuid",
+        "@com_github_stretchr_testify//assert",
+        "@com_github_stretchr_testify//require",
+    ],
+)

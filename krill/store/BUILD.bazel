@@ -12,6 +12,9 @@ load("@rules_go//go:def.bzl", "go_library", "go_test")
 # supersession (the close-and-open write LB3 requires) is a later "amend"
 # task's scope; this schema's shape already supports it (see migration
 # 002's comments).
+#
+# session.go (issue #2489, FR3) is the `init` primitive: mints a
+# krill-native session id and records the two LB4 subjects.
 go_library(
     name = "store",
     srcs = [
@@ -24,6 +27,7 @@ go_library(
         "persona.go",
         "product.go",
         "requirement.go",
+        "session.go",
         "store.go",
     ],
     importpath = "github.com/whale-net/everything/krill/store",
@@ -78,6 +82,45 @@ go_test(
         "//libs/go/dbtest",
         "//libs/go/migrate",
         "@com_github_google_uuid//:uuid",
+        "@com_github_jackc_pgx_v5//stdlib",
+        "@com_github_stretchr_testify//assert",
+        "@com_github_stretchr_testify//require",
+    ],
+)
+
+# Real Postgres integration test for SessionStore (session.go, issue #2489's
+# Testing section): InitSession's LB4 dual-subject population (self-acting
+# identical triples, agent-on-behalf-of-agent distinct triples), the
+# whagent_session_id correlation field (populated-and-distinct-from-the-
+# minted-id, and nullable for a human/OAuth2 caller), and GetSession's
+# found/not-found paths -- all against krill's real embedded schema
+# (//krill/migrate/schema), not a hand-copied one. Deliberately NOT part of
+# `bazel test //...` -- see //libs/go/dbtest's README for the full rationale
+# behind each tag and how to run tests like this one.
+#
+# Run it explicitly (requires a working Docker daemon):
+#   bazel test //krill/store:session_integration_test --test_output=all
+go_test(
+    name = "session_integration_test",
+    size = "large",
+    timeout = "long",
+    srcs = ["session_integration_test.go"],
+    gotags = ["integration"],
+    tags = [
+        "external",
+        "integration",
+        "manual",
+        "no-cache",
+        "no-sandbox",
+        "requires-network",
+    ],
+    deps = [
+        ":store",
+        "//krill/migrate/schema",
+        "//libs/go/dbtest",
+        "//libs/go/migrate",
+        "@com_github_google_uuid//:uuid",
+        "@com_github_jackc_pgx_v5//pgxpool",
         "@com_github_jackc_pgx_v5//stdlib",
         "@com_github_stretchr_testify//assert",
         "@com_github_stretchr_testify//require",
