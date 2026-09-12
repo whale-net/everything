@@ -93,6 +93,43 @@ See [`ENV.md`](ENV.md) for every environment variable `migrate` and `api`
 read, and [`ARCHITECTURE.md`](ARCHITECTURE.md) for the component map and
 the `scope` table's design rationale.
 
+## Importing whagent_net's brief (FR11, issue #2549)
+
+whagent_net's product brief (`whagent_net/PRODUCT.md` + `whagent_net/product/*.md`)
+already follows the layout `krill/importer` parses. An Operator/Admin runs
+the same `import` CLI described above, pointed at `whagent_net` instead of
+`krill`:
+
+```sh
+SESSION_ID=$(curl -s -X POST http://localhost:8080/sessions/init \
+  -d '{"scope_id":"<scope-uuid>","acting":{"iss":"local","sub":"me","kind":"human"},"on_behalf_of":{"iss":"local","sub":"me","kind":"human"}}' \
+  | jq -r .session_id)
+PG_DATABASE_URL=postgres://postgres:password@localhost:5432/krill?sslmode=disable \
+  bazel run //krill/importer/cmd:import -- --path whagent_net --session-id "$SESSION_ID" \
+  --source-revision "$(git rev-parse HEAD)"
+```
+
+This is a one-pass, one-time import (FR12, NFR3, issue #2548): a second run
+against the same `--path` for the same session's scope refuses before
+parsing anything.
+
+**Expected report shape.** The printed report has two parts:
+
+1. One line per entity created, exactly as the M1 self-import prints
+   (`[<kind>] <source id> <name> -> <entity id>`) -- one for every persona,
+   load-bearing decision, non-goal, capability, and milestone
+   `whagent_net`'s brief defines.
+2. A trailing **Coverage** section (FR11): a per-source-file count of
+   recognized-but-unmapped items. `0` everywhere is the expected result for
+   `whagent_net`'s current brief -- confirmation that nothing was lost in
+   the import. A non-zero count fails the command (non-zero exit) unless
+   rerun with `--allow-unmapped`, which downgrades it to a logged WARNING
+   and proceeds anyway; never mistake a partial import for a complete one
+   by rerunning with that flag out of habit.
+
+See `ARCHITECTURE.md` "The markdown importer" for why `whagent_net` is the
+first product krill holds that krill did not author.
+
 ## MCP spec surface (FR10/NFR1, issue #2494)
 
 `mcp` exposes the FR5-FR9 scoped-slice query over MCP at `/mcp/spec` --
