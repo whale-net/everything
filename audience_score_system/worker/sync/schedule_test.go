@@ -8,6 +8,7 @@ import (
 	"time"
 
 	enumspb "go.temporal.io/api/enums/v1"
+	"go.temporal.io/api/serviceerror"
 
 	"github.com/google/uuid"
 	"github.com/stretchr/testify/require"
@@ -93,6 +94,16 @@ type fakeScheduleHandle struct {
 }
 
 func (h *fakeScheduleHandle) GetID() string { return h.id }
+
+// Describe always reports not-found: this fake models the "already
+// exists" case entirely through Create's own ErrScheduleAlreadyRunning
+// return (see createErrByID/existingByID above), the way UpsertSchedule's
+// pre-Describe-check behavior used to work, so every test here still
+// exercises the same Create-then-fallback-to-Update path regardless of
+// UpsertSchedule now checking existence via Describe first.
+func (h *fakeScheduleHandle) Describe(_ context.Context) (*client.ScheduleDescription, error) {
+	return nil, &serviceerror.NotFound{}
+}
 
 func (h *fakeScheduleHandle) Delete(_ context.Context) error {
 	h.owner.deleteCalls = append(h.owner.deleteCalls, h.id)
