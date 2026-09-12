@@ -125,8 +125,7 @@ func TestHandleGrantsAdminRevoke_UnconfiguredStoreIs503(t *testing.T) {
 // back to /admin/grants.
 func TestHandleGrantsAdminRevoke_RedirectsOnValidFields(t *testing.T) {
 	store := grpcauth.NewFakeStore()
-	subjectKey, err := grantSubjectKey(testIssuer, "operator-a")
-	require.NoError(t, err)
+	subjectKey := grantSubjectKey(testIssuer, "operator-a")
 	require.NoError(t, store.Persist(context.Background(), subjectKey, "audience_score_system", grpcauth.TokenMaterial{RefreshToken: "rt", ObtainedAt: time.Now()}))
 
 	app := &App{
@@ -407,10 +406,8 @@ func TestBuildAdminGrantRows_MultipleOperators(t *testing.T) {
 	store := grpcauth.NewFakeStore()
 	ctx := context.Background()
 
-	aKey, err := grantSubjectKey(testIssuer, "operator-a")
-	require.NoError(t, err)
-	bKey, err := grantSubjectKey(testIssuer, "operator-b")
-	require.NoError(t, err)
+	aKey := grantSubjectKey(testIssuer, "operator-a")
+	bKey := grantSubjectKey(testIssuer, "operator-b")
 	require.NoError(t, store.Persist(ctx, aKey, "audience_score_system", grpcauth.TokenMaterial{RefreshToken: "rt", ObtainedAt: time.Now()}))
 	require.NoError(t, store.Persist(ctx, bKey, "manmanv2", grpcauth.TokenMaterial{RefreshToken: "rt", ObtainedAt: time.Now()}))
 
@@ -439,8 +436,7 @@ func TestBuildAdminGrantRows_StatusIsLiveNeverFromIndex(t *testing.T) {
 	store := grpcauth.NewFakeStore()
 	ctx := context.Background()
 
-	subjectKey, err := grantSubjectKey(testIssuer, "operator-a")
-	require.NoError(t, err)
+	subjectKey := grantSubjectKey(testIssuer, "operator-a")
 	require.NoError(t, store.Persist(ctx, subjectKey, "manmanv2", grpcauth.TokenMaterial{RefreshToken: "rt", ObtainedAt: time.Now()}))
 
 	index := &fakeGrantIndexAll{entries: []grantindex.Entry{
@@ -470,10 +466,8 @@ func TestRevokeGrantAsAdmin_FR17ScopedToExactlyOnePair(t *testing.T) {
 	store := grpcauth.NewFakeStore()
 	ctx := context.Background()
 
-	aKey, err := grantSubjectKey(testIssuer, "operator-a")
-	require.NoError(t, err)
-	bKey, err := grantSubjectKey(testIssuer, "operator-b")
-	require.NoError(t, err)
+	aKey := grantSubjectKey(testIssuer, "operator-a")
+	bKey := grantSubjectKey(testIssuer, "operator-b")
 	require.NoError(t, store.Persist(ctx, aKey, "audience_score_system", grpcauth.TokenMaterial{RefreshToken: "rt", ObtainedAt: time.Now()}))
 	require.NoError(t, store.Persist(ctx, aKey, "manmanv2", grpcauth.TokenMaterial{RefreshToken: "rt", ObtainedAt: time.Now()}))
 	require.NoError(t, store.Persist(ctx, bKey, "audience_score_system", grpcauth.TokenMaterial{RefreshToken: "rt", ObtainedAt: time.Now()}))
@@ -501,11 +495,10 @@ func TestRevokeGrantAsAdmin_NFR7EffectiveWithoutRestart(t *testing.T) {
 	store := grpcauth.NewFakeStore()
 	ctx := context.Background()
 
-	subjectKey, err := grantSubjectKey(testIssuer, "operator-a")
-	require.NoError(t, err)
+	subjectKey := grantSubjectKey(testIssuer, "operator-a")
 	require.NoError(t, store.Persist(ctx, subjectKey, "audience_score_system", grpcauth.TokenMaterial{RefreshToken: "rt", ObtainedAt: time.Now()}))
 
-	_, err = store.TokenMaterial(ctx, subjectKey, "audience_score_system")
+	_, err := store.TokenMaterial(ctx, subjectKey, "audience_score_system")
 	require.NoError(t, err)
 
 	require.NoError(t, revokeGrantAsAdmin(ctx, store, testIssuer, "admin-operator", "operator-a", "audience_score_system", discardLogger()))
@@ -524,8 +517,7 @@ func TestRevokeGrantAsAdmin_LogsExactlyOneINFORecordWithAdminAndTarget(t *testin
 	store := grpcauth.NewFakeStore()
 	ctx := context.Background()
 
-	subjectKey, err := grantSubjectKey(testIssuer, "operator-a")
-	require.NoError(t, err)
+	subjectKey := grantSubjectKey(testIssuer, "operator-a")
 	require.NoError(t, store.Persist(ctx, subjectKey, "audience_score_system", grpcauth.TokenMaterial{RefreshToken: "rt", ObtainedAt: time.Now()}))
 
 	var buf bytes.Buffer

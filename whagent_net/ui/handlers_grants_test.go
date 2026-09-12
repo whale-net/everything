@@ -94,8 +94,7 @@ func TestHandleGrantsRevoke_RequiresScope(t *testing.T) {
 // revokes it and redirects back to /grants.
 func TestHandleGrantsRevoke_RedirectsOnValidScope(t *testing.T) {
 	store := grpcauth.NewFakeStore()
-	subjectKey, err := grantSubjectKey(testIssuer, "dev-user")
-	require.NoError(t, err)
+	subjectKey := grantSubjectKey(testIssuer, "dev-user")
 	require.NoError(t, store.Persist(context.Background(), subjectKey, "audience_score_system", grpcauth.TokenMaterial{RefreshToken: "rt", ObtainedAt: time.Now()}))
 
 	app := &App{
@@ -129,8 +128,7 @@ func TestHandleGrantsRevoke_RedirectsOnValidScope(t *testing.T) {
 // victim's row.
 func TestHandleGrantsRevoke_TamperedSubjectIsIgnored(t *testing.T) {
 	store := grpcauth.NewFakeStore()
-	victimKey, err := grantSubjectKey(testIssuer, "victim-sub")
-	require.NoError(t, err)
+	victimKey := grantSubjectKey(testIssuer, "victim-sub")
 	require.NoError(t, store.Persist(context.Background(), victimKey, "audience_score_system", grpcauth.TokenMaterial{RefreshToken: "rt", ObtainedAt: time.Now()}))
 
 	app := &App{
@@ -217,10 +215,8 @@ func TestBuildGrantRows_ScopedToSubject(t *testing.T) {
 	store := grpcauth.NewFakeStore()
 	ctx := context.Background()
 
-	aKey, err := grantSubjectKey(testIssuer, "operator-a")
-	require.NoError(t, err)
-	bKey, err := grantSubjectKey(testIssuer, "operator-b")
-	require.NoError(t, err)
+	aKey := grantSubjectKey(testIssuer, "operator-a")
+	bKey := grantSubjectKey(testIssuer, "operator-b")
 	require.NoError(t, store.Persist(ctx, aKey, "audience_score_system", grpcauth.TokenMaterial{RefreshToken: "rt", ObtainedAt: time.Now()}))
 	require.NoError(t, store.Persist(ctx, bKey, "audience_score_system", grpcauth.TokenMaterial{RefreshToken: "rt", ObtainedAt: time.Now()}))
 
@@ -248,8 +244,7 @@ func TestBuildGrantRows_StatusIsLiveNeverFromIndex(t *testing.T) {
 	store := grpcauth.NewFakeStore()
 	ctx := context.Background()
 
-	subjectKey, err := grantSubjectKey(testIssuer, "operator-a")
-	require.NoError(t, err)
+	subjectKey := grantSubjectKey(testIssuer, "operator-a")
 	require.NoError(t, store.Persist(ctx, subjectKey, "manmanv2", grpcauth.TokenMaterial{RefreshToken: "rt", ObtainedAt: time.Now()}))
 
 	index := &fakeGrantIndex{entries: []grantindex.Entry{
@@ -280,10 +275,8 @@ func TestRevokeGrant_FR17ScopedToExactlyOnePair(t *testing.T) {
 	store := grpcauth.NewFakeStore()
 	ctx := context.Background()
 
-	aKey, err := grantSubjectKey(testIssuer, "operator-a")
-	require.NoError(t, err)
-	bKey, err := grantSubjectKey(testIssuer, "operator-b")
-	require.NoError(t, err)
+	aKey := grantSubjectKey(testIssuer, "operator-a")
+	bKey := grantSubjectKey(testIssuer, "operator-b")
 	require.NoError(t, store.Persist(ctx, aKey, "audience_score_system", grpcauth.TokenMaterial{RefreshToken: "rt", ObtainedAt: time.Now()}))
 	require.NoError(t, store.Persist(ctx, aKey, "manmanv2", grpcauth.TokenMaterial{RefreshToken: "rt", ObtainedAt: time.Now()}))
 	require.NoError(t, store.Persist(ctx, bKey, "audience_score_system", grpcauth.TokenMaterial{RefreshToken: "rt", ObtainedAt: time.Now()}))
@@ -312,12 +305,11 @@ func TestRevokeGrant_NFR7EffectiveWithoutRestart(t *testing.T) {
 	store := grpcauth.NewFakeStore()
 	ctx := context.Background()
 
-	subjectKey, err := grantSubjectKey(testIssuer, "operator-a")
-	require.NoError(t, err)
+	subjectKey := grantSubjectKey(testIssuer, "operator-a")
 	require.NoError(t, store.Persist(ctx, subjectKey, "audience_score_system", grpcauth.TokenMaterial{RefreshToken: "rt", ObtainedAt: time.Now()}))
 
 	// Prove the grant is usable before revoke, in the same process.
-	_, err = store.TokenMaterial(ctx, subjectKey, "audience_score_system")
+	_, err := store.TokenMaterial(ctx, subjectKey, "audience_score_system")
 	require.NoError(t, err)
 
 	require.NoError(t, revokeGrant(ctx, store, testIssuer, "operator-a", "audience_score_system", discardLogger()))
@@ -334,8 +326,7 @@ func TestRevokeGrant_LogsExactlyOneINFORecord(t *testing.T) {
 	store := grpcauth.NewFakeStore()
 	ctx := context.Background()
 
-	subjectKey, err := grantSubjectKey(testIssuer, "operator-a")
-	require.NoError(t, err)
+	subjectKey := grantSubjectKey(testIssuer, "operator-a")
 	require.NoError(t, store.Persist(ctx, subjectKey, "audience_score_system", grpcauth.TokenMaterial{RefreshToken: "rt", ObtainedAt: time.Now()}))
 
 	var buf bytes.Buffer
@@ -353,4 +344,33 @@ func TestRevokeGrant_LogsExactlyOneINFORecord(t *testing.T) {
 	assert.Contains(t, output, "audience_score_system")
 	assert.NotContains(t, output, "level=WARN")
 	assert.NotContains(t, output, "level=ERROR")
+}
+
+// TestRevokeGrant_MatchesRealConsentSubjectKey is a regression test for
+// the bug where grantSubjectKey mcpidentity-encoded (iss, sub) into the
+// store's subject key while the real consent flow
+// (handlers_consent.go's handleMCPConsentConfirm -> BeginAuthorization ->
+// CompleteAuthorization -> Store.Persist) and mcp/tools/dispatch.go's
+// TokenSource lookup both key the store on the raw, unencoded Keycloak
+// `sub` claim -- so a self-service revoke could never find the row it was
+// supposed to revoke. This test persists directly under the raw sub, the
+// way CompleteAuthorization actually does, rather than going through
+// grantSubjectKey to seed the fixture (unlike the tests above), so it
+// would have caught that drift.
+func TestRevokeGrant_MatchesRealConsentSubjectKey(t *testing.T) {
+	store := grpcauth.NewFakeStore()
+	ctx := context.Background()
+
+	const rawSub = "operator-a"
+	require.NoError(t, store.Persist(ctx, rawSub, "audience_score_system", grpcauth.TokenMaterial{RefreshToken: "rt", ObtainedAt: time.Now()}))
+
+	status, err := store.Status(ctx, grantSubjectKey(testIssuer, rawSub), "audience_score_system")
+	require.NoError(t, err, "grantSubjectKey must resolve to the same key the real consent flow persists under")
+	assert.Equal(t, grpcauth.GrantStatusActive, status)
+
+	require.NoError(t, revokeGrant(ctx, store, testIssuer, rawSub, "audience_score_system", discardLogger()))
+
+	status, err = store.Status(ctx, rawSub, "audience_score_system")
+	require.NoError(t, err)
+	assert.Equal(t, grpcauth.GrantStatusRevoked, status, "revokeGrant must revoke the row the real consent flow actually wrote")
 }
