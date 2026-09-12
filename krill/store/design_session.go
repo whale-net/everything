@@ -1,14 +1,14 @@
 // This file (issue #2542, krill M2, FR1/FR8) is DesignSessionStore --
-// `design_session`'s (migration 006) accessor. Method bodies are scaffold
-// stubs; the Implementation phase of issue #2542 fills them in against
-// this same interface.
+// `design_session`'s (migration 006) accessor.
 package store
 
 import (
 	"context"
+	"errors"
 	"fmt"
 
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
@@ -47,14 +47,80 @@ var _ DesignSessionStore = designSessionStore{}
 // method below, mirroring product.go's productColumns precedent.
 const designSessionColumns = `id, scope_id, product_id, opening_submission, opened_by_krill_session_id, created_at`
 
+func scanDesignSession(row pgx.Row) (DesignSession, error) {
+	var ds DesignSession
+	var openedBy uuid.UUID
+	if err := row.Scan(&ds.ID, &ds.ScopeID, &ds.ProductID, &ds.OpeningSubmission, &openedBy, &ds.CreatedAt); err != nil {
+		return DesignSession{}, err
+	}
+	ds.OpenedByKrillSessionID = SessionID(openedBy)
+	return ds, nil
+}
+
 func (s designSessionStore) Open(ctx context.Context, scopeID, productID uuid.UUID, openingSubmission string, openedByKrillSessionID SessionID) (DesignSession, error) {
-	return DesignSession{}, fmt.Errorf("store: DesignSessionStore.Open not implemented -- see issue #2542's Implementation phase")
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return DesignSession{}, fmt.Errorf("begin tx: %w", err)
+	}
+	defer tx.Rollback(ctx) //nolint:errcheck
+
+	exists, err := currentRowExists(ctx, tx, "product", productID, scopeID)
+	if err != nil {
+		return DesignSession{}, err
+	}
+	if !exists {
+		return DesignSession{}, errParentNotFound("product", productID)
+	}
+
+	ds, err := scanDesignSession(tx.QueryRow(ctx, `
+		INSERT INTO design_session (scope_id, product_id, opening_submission, opened_by_krill_session_id)
+		VALUES ($1, $2, $3, $4)
+		RETURNING `+designSessionColumns,
+		scopeID, productID, openingSubmission, uuid.UUID(openedByKrillSessionID)))
+	if err != nil {
+		return DesignSession{}, fmt.Errorf("insert design_session: %w", err)
+	}
+
+	if err := tx.Commit(ctx); err != nil {
+		return DesignSession{}, fmt.Errorf("commit: %w", err)
+	}
+	return ds, nil
 }
 
 func (s designSessionStore) GetByID(ctx context.Context, id uuid.UUID) (DesignSession, error) {
-	return DesignSession{}, fmt.Errorf("store: DesignSessionStore.GetByID not implemented -- see issue #2542's Implementation phase")
+	ds, err := scanDesignSession(s.pool.QueryRow(ctx, `
+		SELECT `+designSessionColumns+`
+		FROM design_session
+		WHERE id = $1
+	`, id))
+	if errors.Is(err, pgx.ErrNoRows) {
+		return DesignSession{}, fmt.Errorf("%w: design_session id %s", ErrNotFound, id)
+	}
+	if err != nil {
+		return DesignSession{}, fmt.Errorf("select design_session: %w", err)
+	}
+	return ds, nil
 }
 
 func (s designSessionStore) ListByProduct(ctx context.Context, productID uuid.UUID) ([]DesignSession, error) {
-	return nil, fmt.Errorf("store: DesignSessionStore.ListByProduct not implemented -- see issue #2542's Implementation phase")
+	rows, err := s.pool.Query(ctx, `
+		SELECT `+designSessionColumns+`
+		FROM design_session
+		WHERE product_id = $1
+		ORDER BY created_at
+	`, productID)
+	if err != nil {
+		return nil, fmt.Errorf("list design_session by product: %w", err)
+	}
+	defer rows.Close()
+
+	var sessions []DesignSession
+	for rows.Next() {
+		ds, err := scanDesignSession(rows)
+		if err != nil {
+			return nil, fmt.Errorf("scan design_session: %w", err)
+		}
+		sessions = append(sessions, ds)
+	}
+	return sessions, rows.Err()
 }
