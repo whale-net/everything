@@ -28,6 +28,7 @@ go_library(
         "milestone.go",
         "models.go",
         "nongoal.go",
+        "open_questions.go",
         "persona.go",
         "pointer.go",
         "product.go",
@@ -259,9 +260,14 @@ go_test(
 # "deleted", full JSON round-trip through ListBySession's seq_no order, the
 # LB4 two-triple shape round-tripping both distinct and self-acting, and a
 # structural assertion (NFR1) that RevisionEventStore exposes no
-# Update/Delete/Amend verb. One target (not two) because a RevisionEvent's
-# sole parent is a DesignSession, so both files share this target's
-# scope/product/krill_session/design_session fixture helpers.
+# Update/Delete/Amend verb. This target also carries
+# open_questions_integration_test.go (issue #2545's Testing section, FR6):
+# ListOpenQuestions' last-event-wins derivation (open/resolve/re-open,
+# idempotent double-resolve, cross-session isolation, and a 50-event
+# session where only 2 touch questions). One target (not three) because a
+# RevisionEvent's sole parent is a DesignSession and ListOpenQuestions is a
+# read over the same revision_event rows, so all three files share this
+# target's scope/product/krill_session/design_session fixture helpers.
 # Deliberately NOT part of `bazel test //...` -- see //libs/go/dbtest's
 # README for the full rationale.
 #
@@ -273,6 +279,7 @@ go_test(
     timeout = "long",
     srcs = [
         "design_session_integration_test.go",
+        "open_questions_integration_test.go",
         "revision_event_integration_test.go",
     ],
     gotags = ["integration"],

@@ -44,6 +44,12 @@ type RevisionEventStore interface {
 	// ListBySession returns every revision_event row for sessionID,
 	// ordered by seq_no ascending.
 	ListBySession(ctx context.Context, sessionID uuid.UUID) ([]RevisionEvent, error)
+
+	// ListOpenQuestions returns sessionID's currently open questions --
+	// FR6's derived, last-event-wins view over open_questions_delta. See
+	// open_questions.go for the implementation and why it is one SQL
+	// window query, never a folded read of ListBySession's full log.
+	ListOpenQuestions(ctx context.Context, sessionID uuid.UUID) ([]OpenQuestion, error)
 }
 
 // revisionEventStore is the pgx-backed RevisionEventStore implementation.
@@ -94,6 +100,22 @@ func validateNewRevisionEvent(e NewRevisionEvent) error {
 			return fmt.Errorf("%w: entity_deltas change %q is not created|updated", ErrInvalidRevisionEvent, d.Change)
 		}
 	}
+
+	// FR6's identity shape: every opened/resolved entry must actually name
+	// a question. The stateful half of FR6's validation -- a resolved id
+	// that was never opened anywhere in this session -- needs a query
+	// against the session's history and so cannot run here; see Append's
+	// call to validateResolvedQuestionsOpened (open_questions.go).
+	for _, oq := range e.OpenQuestionsDelta.Opened {
+		if oq.QuestionID == "" {
+			return fmt.Errorf("%w: open_questions_delta.opened entry has an empty question_id", ErrInvalidRevisionEvent)
+		}
+	}
+	for _, r := range e.OpenQuestionsDelta.Resolved {
+		if r == "" {
+			return fmt.Errorf("%w: open_questions_delta.resolved entry has an empty question_id", ErrInvalidRevisionEvent)
+		}
+	}
 	return nil
 }
 
@@ -132,6 +154,20 @@ func (s revisionEventStore) Append(ctx context.Context, e NewRevisionEvent) (Rev
 		return RevisionEvent{}, err
 	}
 
+	// A nil Opened/Resolved slice marshals to JSON `null` -- a JSONB
+	// scalar, not the empty array open_questions.go's ListOpenQuestions
+	// (and validateResolvedQuestionsOpened below) unnest with
+	// jsonb_array_elements. Default both to empty slices here so every row
+	// this store ever writes carries `[]`, never a JSON null, for either
+	// field -- the one place that invariant needs to hold for the rest of
+	// this package's SQL to be simple.
+	if e.OpenQuestionsDelta.Opened == nil {
+		e.OpenQuestionsDelta.Opened = []OpenQuestionOpened{}
+	}
+	if e.OpenQuestionsDelta.Resolved == nil {
+		e.OpenQuestionsDelta.Resolved = []string{}
+	}
+
 	entityDeltas, err := json.Marshal(e.EntityDeltas)
 	if err != nil {
 		return RevisionEvent{}, fmt.Errorf("marshal entity_deltas: %w", err)
@@ -159,6 +195,16 @@ func (s revisionEventStore) Append(ctx context.Context, e NewRevisionEvent) (Rev
 	}
 	if err != nil {
 		return RevisionEvent{}, fmt.Errorf("lock design_session for append: %w", err)
+	}
+
+	// FR6's "resolved names an unopened question is a 400, not a silent
+	// no-op" rule -- checked here, inside the same transaction as the
+	// row lock above, against the session's full opened-question history
+	// (open_questions.go), never against ListOpenQuestions' currently-open
+	// subset (re-resolving an already-resolved question must stay a no-op,
+	// per Testing case 4).
+	if err := validateResolvedQuestionsOpened(ctx, tx, e.SessionID, e.OpenQuestionsDelta); err != nil {
+		return RevisionEvent{}, err
 	}
 
 	var signoffStatus *string

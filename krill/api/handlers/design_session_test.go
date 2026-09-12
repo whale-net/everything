@@ -160,7 +160,7 @@ func TestGetDesignSessionHandler_ReturnsSessionAndOrderedEvents(t *testing.T) {
 		ScopeID: ds.ScopeID, SessionID: ds.ID, Acting: acting, OnBehalfOf: onBehalfOf,
 		EventType: store.EventTypeDraft, VerifiedAgainst: &verified,
 		EntityDeltas:       []store.EntityDelta{{EntityID: entityID, Change: store.EntityDeltaChangeCreated, SummaryLine: "drafted the feature"}},
-		OpenQuestionsDelta: store.OpenQuestionsDelta{Opened: []string{"q1"}},
+		OpenQuestionsDelta: store.OpenQuestionsDelta{Opened: []store.OpenQuestionOpened{{QuestionID: "q1", Blocking: true, Text: "what storage backend?"}}},
 	})
 	require.NoError(t, err)
 	_, err = events.Append(t.Context(), store.NewRevisionEvent{
@@ -189,7 +189,11 @@ func TestGetDesignSessionHandler_ReturnsSessionAndOrderedEvents(t *testing.T) {
 				SummaryLine string `json:"summary_line"`
 			} `json:"entity_deltas"`
 			OpenQuestionsDelta struct {
-				Opened   []string `json:"opened"`
+				Opened []struct {
+					QuestionID string `json:"question_id"`
+					Blocking   bool   `json:"blocking"`
+					Text       string `json:"text"`
+				} `json:"opened"`
 				Resolved []string `json:"resolved"`
 			} `json:"open_questions_delta"`
 		} `json:"revision_events"`
@@ -209,7 +213,10 @@ func TestGetDesignSessionHandler_ReturnsSessionAndOrderedEvents(t *testing.T) {
 	require.Len(t, resp.RevisionEvents[0].EntityDeltas, 1)
 	assert.Equal(t, entityID.String(), resp.RevisionEvents[0].EntityDeltas[0].EntityID)
 	assert.Equal(t, "created", resp.RevisionEvents[0].EntityDeltas[0].Change)
-	assert.Equal(t, []string{"q1"}, resp.RevisionEvents[0].OpenQuestionsDelta.Opened)
+	require.Len(t, resp.RevisionEvents[0].OpenQuestionsDelta.Opened, 1)
+	assert.Equal(t, "q1", resp.RevisionEvents[0].OpenQuestionsDelta.Opened[0].QuestionID)
+	assert.True(t, resp.RevisionEvents[0].OpenQuestionsDelta.Opened[0].Blocking)
+	assert.Equal(t, "what storage backend?", resp.RevisionEvents[0].OpenQuestionsDelta.Opened[0].Text)
 
 	assert.Equal(t, 2, resp.RevisionEvents[1].SeqNo)
 	assert.Equal(t, "signoff", resp.RevisionEvents[1].EventType)

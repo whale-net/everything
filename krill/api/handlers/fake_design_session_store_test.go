@@ -15,6 +15,7 @@ package handlers_test
 import (
 	"context"
 	"fmt"
+	"sort"
 	"sync"
 
 	"github.com/google/uuid"
@@ -132,6 +133,10 @@ func (f *fakeRevisionEventStore) Append(ctx context.Context, e store.NewRevision
 	f.mu.Lock()
 	defer f.mu.Unlock()
 
+	if err := fakeValidateResolvedQuestionsOpened(f.events[e.SessionID], e.OpenQuestionsDelta); err != nil {
+		return store.RevisionEvent{}, err
+	}
+
 	seqNo := len(f.events[e.SessionID]) + 1
 	ev := store.RevisionEvent{
 		ID:                 uuid.New(),
@@ -154,6 +159,70 @@ func (f *fakeRevisionEventStore) ListBySession(ctx context.Context, sessionID uu
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	return f.events[sessionID], nil
+}
+
+// ListOpenQuestions mirrors krill/store/open_questions.go's SQL
+// last-event-wins derivation (issue #2545, FR6), folded in Go over this
+// fake's in-memory events -- acceptable here (open_questions_test.go's
+// point is the HTTP surface, not the derivation itself, which
+// krill/store/open_questions_integration_test.go proves against real
+// Postgres). f.events[sessionID] is already in seq_no order (Append
+// appends in call order), so the last write per question id wins.
+func (f *fakeRevisionEventStore) ListOpenQuestions(ctx context.Context, sessionID uuid.UUID) ([]store.OpenQuestion, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+
+	type latestTouch struct {
+		seqNo    int
+		blocking bool
+		text     string
+		open     bool
+	}
+	latest := make(map[string]latestTouch)
+	for _, ev := range f.events[sessionID] {
+		for _, o := range ev.OpenQuestionsDelta.Opened {
+			latest[o.QuestionID] = latestTouch{seqNo: ev.SeqNo, blocking: o.Blocking, text: o.Text, open: true}
+		}
+		for _, r := range ev.OpenQuestionsDelta.Resolved {
+			latest[r] = latestTouch{seqNo: ev.SeqNo, open: false}
+		}
+	}
+
+	var out []store.OpenQuestion
+	for id, t := range latest {
+		if !t.open {
+			continue
+		}
+		out = append(out, store.OpenQuestion{QuestionID: id, Text: t.text, Blocking: t.blocking, OpenedAtSeqNo: t.seqNo})
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].OpenedAtSeqNo < out[j].OpenedAtSeqNo })
+	return out, nil
+}
+
+// fakeValidateResolvedQuestionsOpened mirrors krill/store/open_questions.go's
+// validateResolvedQuestionsOpened (FR6's "resolved names an unopened
+// question is a 400, not a no-op" rule), folded over prior (this session's
+// events appended so far) plus e's own Opened entries -- same small,
+// deliberate duplicate as fakeValidateNewRevisionEvent above.
+func fakeValidateResolvedQuestionsOpened(prior []store.RevisionEvent, delta store.OpenQuestionsDelta) error {
+	if len(delta.Resolved) == 0 {
+		return nil
+	}
+	everOpened := make(map[string]bool, len(delta.Opened))
+	for _, o := range delta.Opened {
+		everOpened[o.QuestionID] = true
+	}
+	for _, ev := range prior {
+		for _, o := range ev.OpenQuestionsDelta.Opened {
+			everOpened[o.QuestionID] = true
+		}
+	}
+	for _, r := range delta.Resolved {
+		if !everOpened[r] {
+			return fmt.Errorf("%w: open_questions_delta.resolved names %q, which was never opened in this session", store.ErrInvalidRevisionEvent, r)
+		}
+	}
+	return nil
 }
 
 // fakeValidateNewRevisionEvent mirrors krill/store/revision_event.go's
@@ -187,6 +256,17 @@ func fakeValidateNewRevisionEvent(e store.NewRevisionEvent) error {
 	for _, d := range e.EntityDeltas {
 		if d.Change != store.EntityDeltaChangeCreated && d.Change != store.EntityDeltaChangeUpdated {
 			return fmt.Errorf("%w: entity_deltas change %q is not created|updated", store.ErrInvalidRevisionEvent, d.Change)
+		}
+	}
+
+	for _, oq := range e.OpenQuestionsDelta.Opened {
+		if oq.QuestionID == "" {
+			return fmt.Errorf("%w: open_questions_delta.opened entry has an empty question_id", store.ErrInvalidRevisionEvent)
+		}
+	}
+	for _, r := range e.OpenQuestionsDelta.Resolved {
+		if r == "" {
+			return fmt.Errorf("%w: open_questions_delta.resolved entry has an empty question_id", store.ErrInvalidRevisionEvent)
 		}
 	}
 	return nil
