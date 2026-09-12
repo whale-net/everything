@@ -38,6 +38,7 @@ Cross-cutting documentation for the Bazel build system, release pipeline, and in
 ## Agent Skills
 
 - [skills/architecture-scd2/SKILL.md](skills/architecture-scd2/SKILL.md) — Canonical, harness-neutral SCD2 (`valid_from`/`valid_to`) convention: write path, current-value/point-in-time query patterns, worked examples. Symlinked into `.claude/skills/architecture-scd2` for Claude Code; `AGENTS.md` § SCD2 keeps only the short, always-loaded naming/carve-out rules
+- [skills/doc-splitting/SKILL.md](skills/doc-splitting/SKILL.md) — Full doc-splitting mechanics: file-type-specific guidance (planning docs, cross-referenced reference docs, code modules, persona docs) and worked examples. Symlinked into `.claude/skills/doc-splitting` for Claude Code; `AGENTS.md` § Size Limits & Splitting keeps only the short, always-loaded threshold and numbered rules
 
 ## Implementation Plans & Feature Docs
 
