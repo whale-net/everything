@@ -1,0 +1,25 @@
+{
+  "mcpServers": {
+    "krill-pg-tilt": {
+      "command": "uvx",
+      "args": ["--with", "mcp<2", "postgres-mcp", "--access-mode=restricted"],
+      "env": {
+        "DATABASE_URI": "postgresql://postgres:password@localhost:5432/krill"
+      }
+    },
+    "krill-pg-dev": {
+      "command": "uvx",
+      "args": ["--with", "mcp<2", "postgres-mcp", "--access-mode=restricted"],
+      "env": {
+        "DATABASE_URI": "${KRILL_DEV_DATABASE_URI}"
+      }
+    },
+    "krill-pg-prod": {
+      "command": "uvx",
+      "args": ["--with", "mcp<2", "postgres-mcp", "--access-mode=restricted"],
+      "env": {
+        "DATABASE_URI": "${KRILL_PROD_DATABASE_URI}"
+      }
+    }
+  }
+}

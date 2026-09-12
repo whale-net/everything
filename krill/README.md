@@ -121,3 +121,11 @@ See `ARCHITECTURE.md` "The MCP spec surface" for the full design.
 tools through, mirroring `whagent_net/plugin` / `audience_score_system/plugin`:
 `.mcp.json` / `mcp_config.json` register `krill-mcp-tilt` (local Tilt,
 `http://localhost:8084/mcp/spec`), `krill-mcp-dev`, and `krill-mcp-prod`.
+Registered in `.claude-plugin/marketplace.json` as `krill`.
+
+`plugin/data/` is the companion "-data" plugin, mirroring
+`audience_score_system/plugin/data` / `leaflab/plugin/data`: direct
+read-restricted crystaldba `postgres-mcp` access to the same `krill`
+Postgres database `migrate`/`api`/`mcp` share, one server per environment
+(`krill-pg-tilt`, `krill-pg-dev`, `krill-pg-prod` — see `ENV.md` "Postgres
+MCP (Claude Code plugin)"). Registered as `krill-data`.
