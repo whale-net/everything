@@ -3,11 +3,9 @@ load("@rules_go//go:def.bzl", "go_library", "go_test")
 # Link-assertion verification package (issue #2598, FR3's verification
 # half, NFR5) -- see assertion.go's package doc comment for why this is
 # deliberately not whagent.Verifier and not a second generic claim/
-# verifier pair added to libs/go/whagent. NewVerifier and Verify are
-# Scaffold-phase stubs; issue #2598's Implementation phase fills them in
-# (remote JWKS key set with `kid` lookup + caching, signature-then-shape
-# verification) and adds the ENV.md entries for ASS_WHAGENT_UI_JWKS_URL /
-# ASS_WHAGENT_UI_ISSUER.
+# verifier pair added to libs/go/whagent. NewVerifier constructs a remote
+# JWKS key set (kid lookup + caching, oidc.NewRemoteKeySet); Verify checks
+# the signature first, then the claim shape, per verifier.go.
 go_library(
     name = "link",
     srcs = [
