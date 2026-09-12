@@ -20,14 +20,22 @@ go_library(
     ],
 )
 
-# Scaffold-phase placeholder asserting the "not implemented" stub contract
-# (see verifier.go). Issue #2598's Testing phase replaces this file
-# entirely with the full suite its Testing section describes: happy path,
+# Full red/green suite (issue #2598's Testing phase): happy path,
 # signature tampering, unknown-key rejection, expiry, unknown issuer,
 # missing fields, the signature-before-expiry ordering proof, rejection of
-# a whagent.Claim-shaped token, and kid rotation.
+# a whagent.Claim-shaped token, and kid rotation. Tests mint their own
+# tokens with a locally generated key pair and serve their own JWKS from
+# an httptest.Server -- no dependency on a running ui. The whagent
+# dependency below is test-only (constructing a genuine persona
+# credential for the rejection case); the link_library itself never
+# imports it.
 go_test(
     name = "link_test",
     srcs = ["link_test.go"],
     embed = [":link"],
+    deps = [
+        "//libs/go/whagent",
+        "@com_github_go_jose_go_jose_v4//:go-jose",
+        "@com_github_go_jose_go_jose_v4//jwt",
+    ],
 )
