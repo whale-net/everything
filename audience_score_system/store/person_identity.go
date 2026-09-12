@@ -13,6 +13,7 @@ import (
 	"errors"
 	"fmt"
 
+	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -29,7 +30,43 @@ type PersonIdentityStore interface {
 	// same sub under two different iss values must resolve to two
 	// distinct persons (see migration 020's header).
 	FindOrCreateByIssSub(ctx context.Context, iss, sub string) (Person, bool, error)
+
+	// LinkToExistingPerson links (iss, sub) to an EXISTING personID -- the
+	// link-to-existing path FR6 uses instead of FindOrCreateByIssSub's
+	// auto-provisioning branch.
+	//
+	// FR8: if the pair already has a row pointing at a DIFFERENT Person, it
+	// returns ErrLinkedToOtherPerson and writes nothing -- no merge, no
+	// reassignment, no overwrite.
+	// FR9: if the pair already points at personID, it returns
+	// LinkAlreadyOwned with no error and no duplicate row.
+	//
+	// No person row is ever created by this method -- it links to a
+	// Person that already exists (the signed-in Google-session Person). A
+	// personID that doesn't exist must fail on the foreign key, not
+	// silently create anything.
+	LinkToExistingPerson(ctx context.Context, iss, sub string, personID uuid.UUID) (LinkOutcome, error)
 }
+
+// LinkOutcome reports which of LinkToExistingPerson's two non-error
+// outcomes occurred (FR6/FR9). See ErrLinkedToOtherPerson for the
+// conflict case (FR8), which is an error, not a LinkOutcome value.
+type LinkOutcome int
+
+const (
+	// LinkCreated (FR6): a new person_oidc_identity row was written,
+	// linking (iss, sub) to the given personID.
+	LinkCreated LinkOutcome = iota
+	// LinkAlreadyOwned (FR9): this (iss, sub) pair already points at this
+	// same personID -- a no-op, not an error, and no duplicate row.
+	LinkAlreadyOwned
+)
+
+// ErrLinkedToOtherPerson (FR8) is returned by LinkToExistingPerson when
+// (iss, sub) already has a person_oidc_identity row pointing at a
+// DIFFERENT Person than the one requested. Never merge, reassign, or
+// overwrite in this case -- fail safe instead.
+var ErrLinkedToOtherPerson = errors.New("person identity: (iss, sub) is already linked to a different person")
 
 // personIdentityStore implements PersonIdentityStore against
 // person_oidc_identity (migration 020).
@@ -162,4 +199,15 @@ func (s personIdentityStore) FindOrCreateByIssSub(ctx context.Context, iss, sub 
 	}
 
 	return p, true, nil
+}
+
+// LinkToExistingPerson -- see the interface doc comment for the full
+// contract (FR6-FR9, NFR4).
+//
+// Scaffold only: the Implementation phase (issue #2599) fills this in as a
+// transactional INSERT that reuses isUniqueViolation against
+// person_oidc_identity_iss_sub for FR8/FR9, exactly as FindOrCreateByIssSub
+// already does for its own race case.
+func (s personIdentityStore) LinkToExistingPerson(ctx context.Context, iss, sub string, personID uuid.UUID) (LinkOutcome, error) {
+	panic("LinkToExistingPerson: not implemented -- Implementation phase of issue #2599")
 }
