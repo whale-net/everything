@@ -91,7 +91,11 @@ type AgentDefinitionConfig struct {
 	ToolSet         []ToolServerRefConfig `yaml:"tool_set"`
 	MaxTurns        int                   `yaml:"max_turns"`
 	MaxCostUSD      float64               `yaml:"max_cost_usd"`
-	RequiredRole    string                `yaml:"required_role"`
+	// MaxToolIterations bounds the inner tool-call loop's model calls within
+	// a single turn (worker/caps.go's defaultMaxToolIterations applies when
+	// left at the zero value) -- same level as MaxTurns/MaxCostUSD above.
+	MaxToolIterations int    `yaml:"max_tool_iterations"`
+	RequiredRole      string `yaml:"required_role"`
 }
 
 // document is agents.yaml's top-level shape.

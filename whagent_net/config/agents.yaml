@@ -38,6 +38,12 @@
 #   - max_turns / max_cost_usd: FR6/FR7 guardrails, left at/near the 100 /
 #                      $1 defaults (worker/caps.go's defaultMaxTurns/
 #                      defaultMaxCostUSD) so the caps stay exercisable
+#   - max_tool_iterations: bounds the inner tool-call loop (worker/workflow.go's
+#                      processTurn): the max number of model calls one turn may
+#                      make while the model keeps requesting tool calls before
+#                      the session ends capped instead of looping without
+#                      bound -- left at/near the default 10
+#                      (worker/caps.go's defaultMaxToolIterations)
 #   - required_role:  the Keycloak realm role FR9's authorization check
 #                      requires the acting subject to hold (api's
 #                      StartSession handler) -- see whagent_net/README.md
@@ -77,4 +83,5 @@ agents:
         allowed_tools: null
     max_turns: 100
     max_cost_usd: 1.0
+    max_tool_iterations: 10
     required_role: whagent-audience-score-system-research

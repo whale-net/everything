@@ -60,6 +60,15 @@ type AgentDefinition struct {
 	ToolSet           []ToolServerRef
 	MaxTurns          int
 	MaxCostUSD        float64
+	// MaxToolIterations bounds the inner tool-call loop worker/workflow.go's
+	// processTurn runs within a single external turn (issue: "add the inner
+	// tool loop"): the maximum number of model calls one turn may make
+	// while the model keeps requesting tool calls before the session ends
+	// capped (session.CapKindToolIterations) instead of looping without
+	// bound. Zero-valued (unset) falls back to worker/caps.go's
+	// defaultMaxToolIterations, the same convention MaxTurns/MaxCostUSD
+	// already follow.
+	MaxToolIterations int
 	RequiredRole      *string
 	CreatedAt         time.Time
 }
@@ -113,14 +122,14 @@ type agentDefinitionStore struct{ pool *pgxpool.Pool }
 
 var _ AgentDefinitionStore = agentDefinitionStore{}
 
-const agentDefinitionColumns = `id, agent_id, scope, version, model, model_definition_id, tool_set, max_turns, max_cost_usd, required_role, created_at`
+const agentDefinitionColumns = `id, agent_id, scope, version, model, model_definition_id, tool_set, max_turns, max_cost_usd, max_tool_iterations, required_role, created_at`
 
 func scanAgentDefinition(row pgx.Row) (*AgentDefinition, error) {
 	var def AgentDefinition
 	var toolSet json.RawMessage
 	if err := row.Scan(
 		&def.ID, &def.AgentID, &def.Scope, &def.Version, &def.Model, &def.ModelDefinitionID, &toolSet,
-		&def.MaxTurns, &def.MaxCostUSD, &def.RequiredRole, &def.CreatedAt,
+		&def.MaxTurns, &def.MaxCostUSD, &def.MaxToolIterations, &def.RequiredRole, &def.CreatedAt,
 	); err != nil {
 		return nil, err
 	}
@@ -201,8 +210,8 @@ func (s agentDefinitionStore) Upsert(ctx context.Context, def *AgentDefinition) 
 	}
 
 	err = s.pool.QueryRow(ctx, `
-		INSERT INTO agent_definition (agent_id, scope, version, model, model_definition_id, tool_set, max_turns, max_cost_usd, required_role)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+		INSERT INTO agent_definition (agent_id, scope, version, model, model_definition_id, tool_set, max_turns, max_cost_usd, max_tool_iterations, required_role)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
 		ON CONFLICT (agent_id, version) DO UPDATE SET
 			scope = EXCLUDED.scope,
 			model = EXCLUDED.model,
@@ -210,9 +219,10 @@ func (s agentDefinitionStore) Upsert(ctx context.Context, def *AgentDefinition) 
 			tool_set = EXCLUDED.tool_set,
 			max_turns = EXCLUDED.max_turns,
 			max_cost_usd = EXCLUDED.max_cost_usd,
+			max_tool_iterations = EXCLUDED.max_tool_iterations,
 			required_role = EXCLUDED.required_role
 		RETURNING id, created_at
-	`, def.AgentID, def.Scope, def.Version, def.Model, def.ModelDefinitionID, toolSet, def.MaxTurns, def.MaxCostUSD, def.RequiredRole).Scan(&def.ID, &def.CreatedAt)
+	`, def.AgentID, def.Scope, def.Version, def.Model, def.ModelDefinitionID, toolSet, def.MaxTurns, def.MaxCostUSD, def.MaxToolIterations, def.RequiredRole).Scan(&def.ID, &def.CreatedAt)
 	if err != nil {
 		return fmt.Errorf("upsert agent definition: %w", err)
 	}

@@ -184,9 +184,15 @@ func marshalMessagePayload(m llm.Message) (json.RawMessage, error) {
 // event decodes into its role's message verbatim (an assistant_message
 // already carries any ToolCalls the model requested that turn,
 // transcriptMessagePayload.ToolCalls, so there is nothing further to fold
-// in from a separate tool_call event -- see below). A tool_result event
-// (toolResultEventType's "tool_result:<call_index>" prefix, issue #2121)
-// decodes into an llm.RoleTool message bound back to its call via
+// in from a separate tool_call event -- see below). An intermediate loop
+// iteration's assistant message (assistantMessageEventType's
+// "assistant_message:<iteration>" prefix -- "add the inner tool loop")
+// decodes identically: the final iteration's response is the only one ever
+// committed under the bare EventTypeAssistantMessage constant (CommitTurn,
+// activities.go), so the two cases never collide within one turn, and both
+// must be visible to the next CallModel call the same way. A tool_result
+// event (toolResultEventType's "tool_result:<call_index>" prefix, issue
+// #2121) decodes into an llm.RoleTool message bound back to its call via
 // ToolCallID -- the OpenAI wire protocol CallModel speaks (llm/client.go)
 // requires exactly this reply-message shape following an assistant
 // message that requested tool calls, or the provider rejects the request.
@@ -199,7 +205,8 @@ func eventsToMessages(evs []events.Event) ([]llm.Message, error) {
 	messages := make([]llm.Message, 0, len(evs))
 	for _, ev := range evs {
 		switch {
-		case ev.Type == events.EventTypeUserMessage || ev.Type == events.EventTypeAssistantMessage:
+		case ev.Type == events.EventTypeUserMessage || ev.Type == events.EventTypeAssistantMessage ||
+			strings.HasPrefix(ev.Type, events.EventTypeAssistantMessage+":"):
 			var payload transcriptMessagePayload
 			if err := json.Unmarshal(ev.Payload, &payload); err != nil {
 				return nil, fmt.Errorf("unmarshal message payload for event %s: %w", ev.EventID, err)
@@ -239,13 +246,35 @@ func eventsToMessages(evs []events.Event) ([]llm.Message, error) {
 // must be folded in rather than using events.EventTypeToolCall/
 // EventTypeToolResult verbatim: AppendIfAbsent's idempotency key is
 // (session_id, turn, type) only, and a turn may carry more than one tool
-// call.
+// call. callIndex is a running count across the WHOLE external turn
+// (workflow.go's processTurn), not reset per model response -- "add the
+// inner tool loop" made a turn capable of more than one model response, so
+// keeping callIndex turn-scoped rather than response-scoped is what keeps
+// every dispatched call's pair of events distinct across iterations, with
+// no format change needed here: a turn that never loops still produces the
+// exact same "tool_call:0", "tool_call:1", ... sequence it always has,
+// since callIndex and response-local position are identical when there is
+// only one response.
 func toolCallEventType(callIndex int) string {
 	return fmt.Sprintf("%s:%d", events.EventTypeToolCall, callIndex)
 }
 
 func toolResultEventType(callIndex int) string {
 	return fmt.Sprintf("%s:%d", events.EventTypeToolResult, callIndex)
+}
+
+// assistantMessageEventType derives the `type` column
+// CommitToolLoopIteration (activities.go) commits for one non-final loop
+// iteration's assistant-message event ("add the inner tool loop"): the
+// final iteration of a turn (the response with no more tool calls) still
+// commits under the bare EventTypeAssistantMessage constant via CommitTurn,
+// unchanged from before this feature, so a turn that never loops produces
+// the exact same single "assistant_message" event it always has. iteration
+// is 0-based and counts only non-final loop iterations within the turn
+// (workflow.go's processTurn), disjoint from that bare type -- the two
+// never collide under AppendIfAbsent's (session_id, turn, type) key.
+func assistantMessageEventType(iteration int) string {
+	return fmt.Sprintf("%s:%d", events.EventTypeAssistantMessage, iteration)
 }
 
 // toolCallEventPayload is a tool_call transcript event's JSON payload

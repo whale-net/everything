@@ -62,6 +62,19 @@
 // "session-workflow-tool-dispatch", gates the ActivityListToolDefinitions
 // call ahead of ActivityCallModel and the per-tool-call
 // ActivityDispatchTool loop after it, both added to processTurn below.
+// "add the inner tool loop" is the fourth: its own change ID,
+// "session-workflow-tool-loop", gates replacing that single dispatch-once
+// pass with a bounded loop back to ActivityCallModel (dispatch this
+// response's tool calls, commit an intermediate assistant-message event via
+// the new ActivityCommitToolLoopIteration, rebuild context, call the model
+// again) that keeps running until a response has no more tool calls or
+// maxToolIterations (caps.go) is reached, in which case the turn ends
+// capped with session.CapKindToolIterations -- see processTurn's own doc
+// comment below for the full sequence. A run already open when this change
+// deploys keeps taking the old single-pass path (v ==
+// workflow.DefaultVersion for this changeID), dispatching whatever tool
+// calls the turn's one model response carried and committing the turn
+// immediately after, exactly as before this task.
 // The next behavior-changing edit to this file must add its own change ID
 // the same way.
 //
@@ -69,11 +82,12 @@
 //
 // SessionWorkflow's signal-per-turn loop, Stop/cancellation handling,
 // session-status transitions, turn/cost cap enforcement (FR6/FR7), tool
-// dispatch (FR8, FR10, FR11), and failure classification (FR2/FR3) are all
-// real. Still deferred: CommitTurnResult.Done (activities.go) is always
-// false (no task yet teaches CommitTurn to recognize a real
-// agent-initiated finish signal), so this workflow can reach
-// `awaiting_input`, `stopped`, `capped`, or `failed`, but never `done`.
+// dispatch (FR8, FR10, FR11), the inner tool-call loop and its own
+// tool-iteration cap (session.CapKindToolIterations), and failure
+// classification (FR2/FR3) are all real. Still deferred: CommitTurnResult.
+// Done (activities.go) is always false (no task yet teaches CommitTurn to
+// recognize a real agent-initiated finish signal), so this workflow can
+// reach `awaiting_input`, `stopped`, `capped`, or `failed`, but never `done`.
 package main
 
 import (
@@ -321,11 +335,17 @@ func runTurn(ctx workflow.Context, stopCh workflow.ReceiveChannel, sessionID uui
 // processTurn runs one turn's activity sequence (ARCHITECTURE.md "Session
 // workflow"): resolve the current agent definition, check caps (FR6/FR7,
 // "before" half), build context, list the tools this turn's model call may
-// use (FR8), call the model, dispatch each tool call the model requested
-// (FR8/FR10/FR11), commit the turn, check caps again ("after" half), then
-// return. Any activity error along the way is routed to failTurn (FR2/FR3)
-// instead of propagating as a raw workflow error -- see failTurn's doc
-// comment for why.
+// use (FR8), call the model, then -- "add the inner tool loop" -- while the
+// model keeps requesting tool calls: dispatch them (FR8/FR10/FR11), commit
+// an intermediate assistant-message event, re-check the turn/cost caps
+// against this turn's own running cost, rebuild context, and call the model
+// again, until a response has no more tool calls or the agent definition's
+// MaxToolIterations is reached (in which case the turn ends capped with
+// session.CapKindToolIterations). Once the model stops requesting tools,
+// commit the turn (folding in every loop iteration's usage), check caps
+// again ("after" half), then return. Any activity error along the way is
+// routed to failTurn (FR2/FR3) instead of propagating as a raw workflow
+// error -- see failTurn's doc comment for why.
 //
 // issue #2119's change ID ("session-workflow-cap-enforcement", this
 // file's package doc comment "NFR1") gates every branch below that did
@@ -419,15 +439,147 @@ func processTurn(ctx workflow.Context, sessionID uuid.UUID, turn int, in SendTur
 		return failTurn(ctx, sessionID, turn, err)
 	}
 
-	if toolVersion >= 1 {
-		// Dispatch every tool call the model requested this turn, in
-		// order (FR2's "tool calls, tool results in commit order").
-		// CallIndex is the call's 0-based position within
-		// modelResult.Response.ToolCalls -- stable across a Temporal
-		// retry of this same activity, and DispatchToolInput/DispatchTool
-		// (activities.go) both depend on that stability for FR11's
-		// idempotency key and for keeping each call's transcript events
-		// distinct (context.go's toolCallEventType/toolResultEventType).
+	// loopVersion gates "add the inner tool loop" (this file's package doc
+	// comment, fourth NFR1 entry): a run already open across this deploy
+	// takes the else branch below, dispatching this one response's tool
+	// calls and committing the turn immediately after -- exactly issue
+	// #2121's original behavior, never looping back to the model.
+	loopVersion := workflow.GetVersion(ctx, "session-workflow-tool-loop", workflow.DefaultVersion, 1)
+
+	var (
+		callIndex   int
+		finalEvents = built.EventIDs
+		prior       CommitToolLoopIterationResult
+	)
+
+	if toolVersion >= 1 && loopVersion >= 1 {
+		// The bounded inner loop: dispatch this response's tool calls,
+		// commit an intermediate assistant-message event for it, fold its
+		// usage into prior, rebuild context (so the next model call sees
+		// this iteration's own message and tool results), and call the
+		// model again -- until a response carries no more tool calls, or
+		// modelCalls reaches the agent definition's MaxToolIterations
+		// (caps.go's maxToolIterations), in which case the turn ends capped
+		// (session.CapKindToolIterations) rather than looping without
+		// bound. modelCalls starts at 1 -- the CallModel call above already
+		// made the turn's first.
+		maxIter := maxToolIterations(resolved.Definition)
+		modelCalls := 1
+		intermediateIndex := 0
+
+		// baseCostUSD is the session's cost committed by every EARLIER turn
+		// -- combined with prior.CostUSD (this turn's own not-yet-committed
+		// iterations, tallied in-workflow as they complete) it lets the
+		// loop re-evaluate FR7's cost cap after each of this turn's own
+		// model responses, not just once at the very end of the turn
+		// (ARCHITECTURE.md "Guardrails": "checks... after each LLM
+		// response"). Re-querying ActivitySumCost mid-loop instead would
+		// not see this turn's own accumulating cost at all -- none of it is
+		// written to turn_usage until the loop's final iteration commits
+		// via ActivityCommitTurn (CommitToolLoopIteration's doc comment) --
+		// so the in-workflow tally above is not a second source of truth
+		// that could drift from committed rows, it is the only place this
+		// turn's own in-flight cost exists yet. Read lazily, only once the
+		// loop actually runs at least one iteration -- a turn whose first
+		// response already has no tool calls (by far the common case) never
+		// enters this loop body at all, and must not spend an extra
+		// ActivitySumCost call it has no use for.
+		var (
+			baseCostUSD   float64
+			baseCostReady bool
+		)
+
+		for len(modelResult.Response.ToolCalls) > 0 {
+			if modelCalls >= maxIter {
+				return cappedTurn(ctx, sessionID, turn, session.CapKindToolIterations)
+			}
+
+			// Dispatch every tool call this response requested, in order
+			// (FR2's "tool calls, tool results in commit order"). CallIndex
+			// runs across the whole turn, not reset per response --
+			// context.go's toolCallEventType doc comment.
+			for _, call := range modelResult.Response.ToolCalls {
+				dispatchIn := DispatchToolInput{
+					SessionID: sessionID,
+					AgentID:   resolved.Definition.AgentID,
+					ToolSet:   resolved.Definition.ToolSet,
+					Turn:      turn,
+					CallIndex: callIndex,
+					Call:      call,
+				}
+				if err := workflow.ExecuteActivity(ctx, ActivityDispatchTool, dispatchIn).Get(ctx, nil); err != nil {
+					return failTurn(ctx, sessionID, turn, err)
+				}
+				callIndex++
+			}
+
+			var loopResult CommitToolLoopIterationResult
+			commitLoopIn := CommitToolLoopIterationInput{
+				SessionID: sessionID,
+				Turn:      turn,
+				Iteration: intermediateIndex,
+				Model:     resolved.Model,
+				Response:  modelResult.Response,
+			}
+			if err := workflow.ExecuteActivity(ctx, ActivityCommitToolLoopIteration, commitLoopIn).Get(ctx, &loopResult); err != nil {
+				return failTurn(ctx, sessionID, turn, err)
+			}
+			prior.PromptTokens += loopResult.PromptTokens
+			prior.CompletionTokens += loopResult.CompletionTokens
+			prior.CostUSD += loopResult.CostUSD
+			prior.CostEstimated = prior.CostEstimated || loopResult.CostEstimated
+			intermediateIndex++
+			modelCalls++
+
+			if !baseCostReady {
+				var baseSum SumCostResult
+				if err := workflow.ExecuteActivity(ctx, ActivitySumCost, SumCostInput{SessionID: sessionID}).Get(ctx, &baseSum); err != nil {
+					return failTurn(ctx, sessionID, turn, err)
+				}
+				baseCostUSD = baseSum.CostUSD
+				baseCostReady = true
+			}
+
+			// "After each LLM response" cap re-check, extended to every
+			// iteration of this turn's own loop, not just its last (see
+			// baseCostUSD's doc comment above for why this reads the
+			// in-workflow tally rather than SumCost). Reuses checkCaps
+			// unchanged -- turn is invariant across this turn's own
+			// iterations, so only the cost half can newly trip here.
+			if check, err := checkCaps(turn, resolved.Definition, baseCostUSD+prior.CostUSD); err != nil {
+				return failTurn(ctx, sessionID, turn, err)
+			} else if check.Capped {
+				return cappedTurn(ctx, sessionID, turn, check.CapKind)
+			}
+
+			var rebuilt BuildContextResult
+			rebuildIn := BuildContextInput{
+				SessionID:  sessionID,
+				Turn:       turn,
+				Definition: resolved.Definition,
+				Input:      in.Input,
+			}
+			if err := workflow.ExecuteActivity(ctx, ActivityBuildContext, rebuildIn).Get(ctx, &rebuilt); err != nil {
+				return failTurn(ctx, sessionID, turn, err)
+			}
+			finalEvents = rebuilt.EventIDs
+
+			loopCallIn := CallModelInput{
+				SessionID: sessionID,
+				Turn:      turn,
+				Model:     resolved.Model,
+				Provider:  resolved.Provider,
+				EventIDs:  rebuilt.EventIDs,
+				Tools:     toolDefs.Tools,
+			}
+			if err := workflow.ExecuteActivity(ctx, ActivityCallModel, loopCallIn).Get(ctx, &modelResult); err != nil {
+				return failTurn(ctx, sessionID, turn, err)
+			}
+		}
+	} else if toolVersion >= 1 {
+		// Pre-tool-loop behavior, preserved for a run already open when
+		// "session-workflow-tool-loop" deploys: dispatch this one response's
+		// tool calls once, never looping back to the model.
 		for i, call := range modelResult.Response.ToolCalls {
 			dispatchIn := DispatchToolInput{
 				SessionID: sessionID,
@@ -445,11 +597,15 @@ func processTurn(ctx workflow.Context, sessionID uuid.UUID, turn int, in SendTur
 
 	var commitResult CommitTurnResult
 	commitIn := CommitTurnInput{
-		SessionID: sessionID,
-		Turn:      turn,
-		Model:     resolved.Model,
-		EventIDs:  built.EventIDs,
-		Response:  modelResult.Response,
+		SessionID:             sessionID,
+		Turn:                  turn,
+		Model:                 resolved.Model,
+		EventIDs:              finalEvents,
+		Response:              modelResult.Response,
+		PriorPromptTokens:     prior.PromptTokens,
+		PriorCompletionTokens: prior.CompletionTokens,
+		PriorCostUSD:          prior.CostUSD,
+		PriorCostEstimated:    prior.CostEstimated,
 	}
 	if err := workflow.ExecuteActivity(ctx, ActivityCommitTurn, commitIn).Get(ctx, &commitResult); err != nil {
 		if v == workflow.DefaultVersion {

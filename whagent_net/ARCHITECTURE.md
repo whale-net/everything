@@ -198,9 +198,18 @@ never returns between turns. Per turn:
    workflow history — sessions are long-lived and agent definitions drift).
 2. Activity: build context (event-ID list + summaries, budgeted).
 3. Activity: LLM call.
-4. Activities: dispatch each tool call to the agent definition's MCP server(s),
-   carrying the idempotency key and persona claim.
-5. Activity: commit turn events to `session`, publish to the bus.
+4. While the model's response carries tool calls: dispatch each one to the
+   agent definition's MCP server(s), carrying the idempotency key and
+   persona claim, commit an intermediate assistant-message event, rebuild
+   context, and call the model again — until a response carries no more
+   tool calls, or the agent definition's `max_tool_iterations` is reached
+   (default 10; see [Guardrails](#guardrails)), in which case the turn ends
+   `capped` instead of looping without bound. A caller of `SendTurn` never
+   drives this inner loop itself — one signalled turn can make several
+   model calls before it returns.
+5. Activity: commit the turn's final response to `session` (folding in
+   every loop iteration's usage into one `turn_usage` row), publish to the
+   bus.
 6. Workflow updates status (`awaiting_input` / `done`), records the turn's
    context event-ID list.
 
@@ -242,8 +251,11 @@ added the turn/cost cap checks and failure-classification path. Issue
 #2121 (`session-workflow-tool-dispatch`) added the `ActivityListToolDefinitions`
 call ahead of the model call and the per-tool-call `ActivityDispatchTool`
 loop after it — the tool-dispatch step `processTurn` had left a no-op hook
-since #2114. Every later task that changes `SessionWorkflow`/`processTurn`'s
-control flow inherits this convention rather than reinventing it.
+since #2114. "Add the inner tool loop" (`session-workflow-tool-loop`)
+replaced that single dispatch-once pass with the bounded loop back to the
+model [Session workflow](#session-workflow) step 4 describes. Every later
+task that changes `SessionWorkflow`/`processTurn`'s control flow inherits
+this convention rather than reinventing it.
 
 ## Domain-owned MCP servers and the tool contract
 
@@ -273,24 +285,44 @@ would need the `ControlClient` extraction described in #1552 first.
 ## Guardrails
 
 Every session carries a **model** (chosen per agent definition, overridable
-per session — model selection is a hard requirement) and two **caps**: max
-turns and max cost, defaults 100 turns / $1, overridable per agent. The
-worker checks both before each turn and after each LLM response. Cost
-accrues from provider-reported usage (`usage.include=true` on OpenRouter);
-when the provider omits cost it is estimated from tokens against a
-configurable per-model price table and the turn's usage record is flagged
-`estimated` — never treated as free. Tripping either cap ends the session in
-`capped`, a terminal status distinct from `done` with its own transcript
-event, so consumers can react to "ran out" differently from "finished".
-Cap evaluation always reads `UsageStore.SumCost`'s committed running total,
-never a separately-mutated counter, and the turn cap/cost cap check itself
-(`whagent_net/worker/caps.go`'s `checkCaps`) is agent-definition-level only
-in M1 — there is no per-session cap override. The `GetSessionUsage` read
-path (`whagent_net/api/handlers/usage.go`, backed by
-`UsageStore.Summary`) sums the same `turn_usage` rows `SumCost` does — one
-COUNT/COALESCE(SUM)/bool_or query, not a separately-mutated counter — so a
-client reading usage never sees a figure that could diverge from what cap
-evaluation itself used to decide `capped`.
+per session — model selection is a hard requirement) and three **caps**: max
+turns, max cost, and max tool iterations — defaults 100 turns / $1 / 10
+iterations, overridable per agent (`agent_definition.max_turns`/
+`max_cost_usd`/`max_tool_iterations`, `whagent_net/config/agents.yaml`'s
+per-agent fields of the same names). The worker checks turns/cost before
+each turn and after each LLM response. Cost accrues from provider-reported
+usage (`usage.include=true` on OpenRouter); when the provider omits cost it
+is estimated from tokens against a configurable per-model price table and
+the turn's usage record is flagged `estimated` — never treated as free.
+Tripping any cap ends the session in `capped`, a terminal status distinct
+from `done` with its own transcript event, so consumers can react to "ran
+out" differently from "finished"; `GetSession`'s `cap_kind` names which one
+(`turns` / `cost` / `tool_iterations`). Cap evaluation always reads
+`UsageStore.SumCost`'s committed running total, never a separately-mutated
+counter, and the turn/cost cap check itself (`whagent_net/worker/caps.go`'s
+`checkCaps`) is agent-definition-level only in M1 — there is no per-session
+cap override. The `GetSessionUsage` read path
+(`whagent_net/api/handlers/usage.go`, backed by `UsageStore.Summary`) sums
+the same `turn_usage` rows `SumCost` does — one COUNT/COALESCE(SUM)/bool_or
+query, not a separately-mutated counter — so a client reading usage never
+sees a figure that could diverge from what cap evaluation itself used to
+decide `capped`.
+
+**Max tool iterations** bounds the *inner* tool-call loop [Session
+workflow](#session-workflow) step 4 runs within a single external turn: the
+number of model calls one `SendTurn` may trigger while the model keeps
+requesting tool calls before the turn ends `capped` (`tool_iterations`)
+rather than looping without bound. This is a genuinely different kind of
+cap from turns/cost — it is checked *inside* processTurn's loop, against
+that turn's own in-flight iteration count and running cost (the latter
+combined with the session's already-committed cost, since none of a
+loop's intermediate iterations write a `turn_usage` row of their own —
+`worker/activities.go`'s `CommitToolLoopIteration`), not against
+`UsageStore.SumCost` directly. A turn that loops still produces exactly one
+`turn_usage` row and one final `assistant_message` transcript event once it
+finishes normally — every intermediate iteration's usage is folded into
+that one row, and its own message is a distinct
+`assistant_message:<iteration>` event, never a second `turn_usage` write.
 
 There is no human-approval gate for tool calls (non-goal for now).
 

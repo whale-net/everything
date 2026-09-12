@@ -500,3 +500,150 @@ func TestAgentDefinition_HasNoPerSessionCapOverrideField(t *testing.T) {
 			"session.Session must not carry a per-session cap override field (%s) -- caps are agent-definition-level only in M1", name)
 	}
 }
+
+// sequencedCallModel returns a CallModel mock function that plays back
+// responses in order, one per call, repeating the last one if called more
+// times than len(responses) -- shared by the inner-tool-loop tests below,
+// which need CallModel to answer differently across a turn's own multiple
+// model calls (not just once, like wireSuccessfulCallModel).
+func sequencedCallModel(responses []llm.Response) (func(ctx context.Context, in CallModelInput) (CallModelResult, error), func() int) {
+	var mu sync.Mutex
+	calls := 0
+	fn := func(ctx context.Context, in CallModelInput) (CallModelResult, error) {
+		mu.Lock()
+		defer mu.Unlock()
+		idx := calls
+		if idx >= len(responses) {
+			idx = len(responses) - 1
+		}
+		calls++
+		return CallModelResult{Response: responses[idx]}, nil
+	}
+	count := func() int {
+		mu.Lock()
+		defer mu.Unlock()
+		return calls
+	}
+	return fn, count
+}
+
+// TestSessionWorkflow_ToolLoop_LoopsAcrossMultipleModelCalls_CommitsTurnOnce
+// proves "add the inner tool loop": a turn whose model keeps requesting
+// tool calls makes more than one CallModel call, dispatching and committing
+// each intermediate iteration (ActivityCommitToolLoopIteration), but still
+// commits exactly one turn_usage/assistant_message row via ActivityCommitTurn
+// once the model's response finally carries no more tool calls -- not one
+// CommitTurn per model call.
+func TestSessionWorkflow_ToolLoop_LoopsAcrossMultipleModelCalls_CommitsTurnOnce(t *testing.T) {
+	ts := testsuite.WorkflowTestSuite{}
+	env := ts.NewTestWorkflowEnvironment()
+
+	tracker := &statusTracker{}
+	rec := &callRecorder{}
+	def := session.AgentDefinition{MaxTurns: 100, MaxCostUSD: 100, MaxToolIterations: 100}
+	wireCapTestActivities(env, def, tracker, rec)
+	env.OnActivity(ActivitySumCost, mock.Anything, mock.Anything).
+		Return(SumCostResult{CostUSD: 0}, nil)
+
+	callModelFn, callModelCalls := sequencedCallModel([]llm.Response{
+		{Message: llm.Message{Role: llm.RoleAssistant}, ToolCalls: []llm.ToolCall{{ID: "call-1", Name: "search", Arguments: "{}"}}},
+		{Message: llm.Message{Role: llm.RoleAssistant}, ToolCalls: []llm.ToolCall{{ID: "call-2", Name: "search", Arguments: "{}"}}},
+		{Message: llm.Message{Role: llm.RoleAssistant, Content: "done"}},
+	})
+	env.OnActivity(ActivityCallModel, mock.Anything, mock.Anything).Return(callModelFn)
+
+	var dispatchCalls, loopIterationCalls int
+	var countMu sync.Mutex
+	env.OnActivity(ActivityDispatchTool, mock.Anything, mock.Anything).
+		Return(DispatchToolResult{}, nil).
+		Run(func(args mock.Arguments) {
+			countMu.Lock()
+			dispatchCalls++
+			countMu.Unlock()
+		})
+	env.OnActivity(ActivityCommitToolLoopIteration, mock.Anything, mock.Anything).
+		Return(CommitToolLoopIterationResult{PromptTokens: 10, CompletionTokens: 5, CostUSD: 0.01}, nil).
+		Run(func(args mock.Arguments) {
+			countMu.Lock()
+			loopIterationCalls++
+			countMu.Unlock()
+		})
+
+	env.RegisterDelayedCallback(func() {
+		env.SignalWorkflow(SignalSendTurn, SendTurnSignal{Input: "turn one"})
+	}, time.Second)
+	env.RegisterDelayedCallback(func() {
+		env.SignalWorkflow(SignalStop, struct{}{})
+	}, 2*time.Second)
+
+	env.ExecuteWorkflow(SessionWorkflow, SessionWorkflowInput{SessionID: testSessionID()})
+
+	require.True(t, env.IsWorkflowCompleted())
+	require.NoError(t, env.GetWorkflowError())
+
+	assert.Equal(t, 3, callModelCalls(), "the turn must make one model call per loop iteration plus the final, non-looping response")
+	assert.Equal(t, 2, dispatchCalls, "exactly one DispatchTool call per intermediate iteration's single tool call")
+	assert.Equal(t, 2, loopIterationCalls, "exactly one CommitToolLoopIteration call per intermediate (non-final) iteration")
+
+	callLog := rec.snapshotLog()
+	commitCount := 0
+	for _, c := range callLog {
+		if c == "CommitTurn" {
+			commitCount++
+		}
+	}
+	assert.Equal(t, 1, commitCount, "the turn must commit exactly once, via ActivityCommitTurn, regardless of how many model calls it took")
+}
+
+// TestSessionWorkflow_ToolIterationCapTrips_EndsCappedWithToolIterationsCapKind
+// proves the inner tool loop's own run-away guard: a model that never stops
+// requesting tool calls trips MaxToolIterations rather than looping without
+// bound, ending the session capped with CapKind tool_iterations -- distinct
+// from the turns/cost caps, and without ever reaching ActivityCommitTurn.
+func TestSessionWorkflow_ToolIterationCapTrips_EndsCappedWithToolIterationsCapKind(t *testing.T) {
+	ts := testsuite.WorkflowTestSuite{}
+	env := ts.NewTestWorkflowEnvironment()
+
+	tracker := &statusTracker{}
+	rec := &callRecorder{}
+	def := session.AgentDefinition{MaxTurns: 100, MaxCostUSD: 100, MaxToolIterations: 2}
+	wireCapTestActivities(env, def, tracker, rec)
+	env.OnActivity(ActivitySumCost, mock.Anything, mock.Anything).
+		Return(SumCostResult{CostUSD: 0}, nil)
+
+	// Always requests another tool call -- never a final, tool-call-free
+	// response -- so the only way this turn ever ends is the iteration cap.
+	alwaysToolCalls := llm.Response{
+		Message:   llm.Message{Role: llm.RoleAssistant},
+		ToolCalls: []llm.ToolCall{{ID: "call-1", Name: "search", Arguments: "{}"}},
+	}
+	callModelFn, callModelCalls := sequencedCallModel([]llm.Response{alwaysToolCalls, alwaysToolCalls, alwaysToolCalls})
+	env.OnActivity(ActivityCallModel, mock.Anything, mock.Anything).Return(callModelFn)
+	env.OnActivity(ActivityDispatchTool, mock.Anything, mock.Anything).Return(DispatchToolResult{}, nil)
+	env.OnActivity(ActivityCommitToolLoopIteration, mock.Anything, mock.Anything).
+		Return(CommitToolLoopIterationResult{}, nil)
+
+	env.RegisterDelayedCallback(func() {
+		env.SignalWorkflow(SignalSendTurn, SendTurnSignal{Input: "turn one"})
+	}, time.Second)
+
+	env.ExecuteWorkflow(SessionWorkflow, SessionWorkflowInput{SessionID: testSessionID()})
+
+	require.True(t, env.IsWorkflowCompleted())
+	require.NoError(t, env.GetWorkflowError())
+
+	statuses := tracker.snapshot()
+	require.NotEmpty(t, statuses)
+	assert.Equal(t, session.StatusCapped, statuses[len(statuses)-1])
+
+	assert.Equal(t, 2, callModelCalls(), "MaxToolIterations=2 allows exactly two model calls before the third would be blocked")
+
+	terminalEvents := rec.snapshotTerminalEvents()
+	require.Len(t, terminalEvents, 1)
+	var payload cappedEventPayload
+	require.NoError(t, json.Unmarshal(terminalEvents[0].Payload, &payload))
+	assert.Equal(t, session.CapKindToolIterations, payload.CapKind)
+
+	callLog := rec.snapshotLog()
+	assert.NotContains(t, callLog, "CommitTurn", "a turn that trips the iteration cap must never reach the ordinary commit path")
+}

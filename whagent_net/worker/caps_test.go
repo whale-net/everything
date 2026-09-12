@@ -117,3 +117,20 @@ func TestCheckCaps_EstimatedCostStillCounts(t *testing.T) {
 	assert.True(t, check.Capped)
 	assert.Equal(t, session.CapKindCost, check.CapKind)
 }
+
+// TestMaxToolIterations_Default proves the zero-value fallback ("add the
+// inner tool loop"): an agent definition that never set MaxToolIterations
+// gets defaultMaxToolIterations, the same zero-means-default convention
+// MaxTurns/MaxCostUSD already follow.
+func TestMaxToolIterations_Default(t *testing.T) {
+	def := session.AgentDefinition{}
+	assert.Equal(t, defaultMaxToolIterations, maxToolIterations(def))
+}
+
+// TestMaxToolIterations_Configured proves an explicit, non-zero
+// MaxToolIterations is used verbatim -- "should have option to go beyond
+// 10 to whatever we configure".
+func TestMaxToolIterations_Configured(t *testing.T) {
+	def := session.AgentDefinition{MaxToolIterations: 25}
+	assert.Equal(t, 25, maxToolIterations(def))
+}

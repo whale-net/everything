@@ -29,6 +29,15 @@
 // turn that trips a cap must still be allowed to run once and produce its
 // own transcript event -- Testing phase's "ends capped... on the turn
 // that reaches the cap" case, not the turn before it).
+//
+// A third, independent guardrail lives alongside checkCaps in this file:
+// maxToolIterations/defaultMaxToolIterations bound the inner tool-call loop
+// processTurn runs *within* one external turn ("add the inner tool loop"),
+// evaluated by workflow.go's own turn/cost-cap reuse (checkCaps again, with
+// this turn's running in-flight cost) plus a plain int comparison against
+// maxToolIterations -- not by checkCaps itself, since a model-call count
+// within one turn is not "turn"/"cost" as this function's two cases are
+// named.
 package main
 
 import (
@@ -63,6 +72,23 @@ const (
 	defaultMaxTurns   = 100
 	defaultMaxCostUSD = 1.0
 )
+
+// defaultMaxToolIterations bounds the inner tool-call loop workflow.go's
+// processTurn runs within a single external turn ("add the inner tool
+// loop"): the default number of model calls one turn may make while the
+// model keeps requesting tool calls, applied when an agent definition's
+// MaxToolIterations is the Go zero value -- the same zero-means-default
+// convention defaultMaxTurns/defaultMaxCostUSD above already follow.
+const defaultMaxToolIterations = 10
+
+// maxToolIterations returns def's effective tool-iteration cap, falling
+// back to defaultMaxToolIterations when MaxToolIterations is unset (zero).
+func maxToolIterations(def session.AgentDefinition) int {
+	if def.MaxToolIterations == 0 {
+		return defaultMaxToolIterations
+	}
+	return def.MaxToolIterations
+}
 
 // capCheck is checkCaps' result. At most one of the two caps is ever the
 // tripped one -- Capped false means neither cap was reached; Capped true
