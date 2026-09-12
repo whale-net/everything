@@ -98,7 +98,7 @@ func TestOpenDesignSessionHandler_PlainLanguageOpeningSubmission_Succeeds(t *tes
 }
 
 // TestOpenDesignSessionHandler_EmptyOpeningSubmission_Returns400 proves the
-// shared requireNonEmpty("opening_submission", ...) validation applies
+// shared RequireNonEmpty("opening_submission", ...) validation applies
 // here.
 func TestOpenDesignSessionHandler_EmptyOpeningSubmission_Returns400(t *testing.T) {
 	sessions, _, sessionIDStr := newTestSession(t)

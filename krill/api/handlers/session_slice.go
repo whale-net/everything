@@ -81,7 +81,7 @@ func (h *SessionSlice) handle(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	doc, err := h.querier.GetEntitySetSlice(r.Context(), unionEntityDeltaIDs(events))
+	doc, err := h.querier.GetEntitySetSlice(r.Context(), UnionEntityDeltaIDs(events))
 	if err != nil {
 		writeJSONError(w, http.StatusInternalServerError, "internal error")
 		return
@@ -90,13 +90,15 @@ func (h *SessionSlice) handle(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, doc)
 }
 
-// unionEntityDeltaIDs returns the deduplicated union of every entity_id
+// UnionEntityDeltaIDs returns the deduplicated union of every entity_id
 // named by any entity_delta of any of events, in first-seen order --
 // exactly the "union of every entity_id across every event's
 // entity_deltas" this issue's HTTP route section specifies. A nil/empty
 // events yields a nil slice, which GetEntitySetSlice treats as an empty
-// input set, not an error.
-func unionEntityDeltaIDs(events []store.RevisionEvent) []uuid.UUID {
+// input set, not an error. Exported (issue #2547) so krill/mcp/tools'
+// get_design_session_slice tool computes the same id set this handler
+// does, rather than a second, MCP-local reimplementation.
+func UnionEntityDeltaIDs(events []store.RevisionEvent) []uuid.UUID {
 	seen := make(map[uuid.UUID]struct{})
 	var ids []uuid.UUID
 	for _, ev := range events {

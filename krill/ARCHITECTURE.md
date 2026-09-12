@@ -495,8 +495,12 @@ verification is mounted on the `api` binary (see "No auth wired up on
 than re-deriving them from a verified credential. This is a deliberate M1
 boundary, not an oversight: NFR1's two-front-door pattern (`mcpauth` +
 `libs/go/whagent`) is scoped entirely to the separate `krill/mcp` binary
-(issue #2494), which never touches `krill_session` — `api`'s HTTP surface
-has no equivalent front door in this milestone.
+(issue #2494) — `api`'s HTTP surface has no equivalent front door in this
+milestone. `krill/mcp` itself did not touch `krill_session` at all as of
+issue #2494; that changed with issue #2547's design-session write tools —
+see "The design-session MCP surface" below for how `krill/mcp/tools`
+validates a caller-presented krill session id without `krill/mcp/server`
+ever depending on `store.SessionStore`.
 
 `api/handlers/gate.go` is the write gate every mutating endpoint in this
 milestone passes through (FR3's "write-only" clause): `RequireSession`
@@ -607,11 +611,13 @@ could silently drift. All four tools are mounted at `krill/mcp/server`'s
 (`whagent_net/ARCHITECTURE.md` "Domain-owned MCP servers and the tool
 contract"): the future work-axis surface (M4) gets its own mount
 (`/mcp/work`, not built yet) rather than every granularity ever landing on
-bare `/`. No write tool is registered on this endpoint in M1 — there is
-no `RegisterWrite` in `krill/mcp/server` at all, unlike
-`audience_score_system/mcp/server/registry.go`'s `RegisterRead`/
-`RegisterWrite` pair; write tools are out of scope until a later
-milestone actually needs one.
+bare `/`. No write tool is registered on this endpoint — M2's write tools
+(`open_design_session`, `append_revision_event`, `propose_entities`) are
+mounted at `/mcp/design` instead (see "The design-session MCP surface"
+below), never here. This sentence used to read "there is no `RegisterWrite`
+in `krill/mcp/server` at all" — that stopped being true as of issue #2547,
+which adds `RegisterWrite` to `registry.go`; `/mcp/spec` itself still
+carries zero write tools.
 
 **Two front doors, one mount point, authorized by persona (NFR1).**
 `krill/mcp/server/auth.go` (mcpauth/human) and `whagent_auth.go`
@@ -636,8 +642,9 @@ and a whagent Claim never carries a human profile to resolve further
 (`//libs/go/whagent`'s FR10). `krill/mcp/server/registry.go`'s
 `RegisterRead` requires only that *some* Persona resolved before a tool
 handler runs — none of the four FR5-FR8 tools is persona-sensitive, so
-there is no per-tool allow-list yet either; that is expected to change
-once the work-axis surface (M4) lands a persona-restricted tool.
+there is no per-tool allow-list on the read side. `RegisterWrite` (issue
+#2547) is where a per-tool allow-list first exists — see "The
+design-session MCP surface" below.
 
 **The mcpauth door's migration (`006_mcpauth_credential`) now exists.**
 `libs/go/mcpauth.NewCredentialStore` preflights a `mcp_credential`-shaped
@@ -652,6 +659,94 @@ opaque error `mcpauth.TokenVerifier` already produces for a revoked
 credential — so a caller presenting an mcpauth-shaped token against a
 not-yet-migrated deployment gets a clean 401, never a panic on a nil
 interface. The agent door is unaffected either way.
+
+## The design-session MCP surface (FR1-FR10 over MCP, NFR4, issue #2547)
+
+`krill/mcp/tools/design.go` exposes the design-session/mediated-intake
+capability the HTTP surface already ships (design_session.go,
+revision_event.go, mediated.go, open_questions.go, session_slice.go — see
+those sections above) over MCP, so an MCP-capable harness reaches it with
+no krill-specific harness code, exactly like the spec surface's own FR10
+wording. This is M2's — and this codebase's — first MCP **write** path:
+until this task, every tool `krill/mcp` registered anywhere was
+`RegisterRead`-only.
+
+**A second mount, not a second tool on the first one.** The six tools —
+`open_design_session`, `append_revision_event`, `propose_entities` (write);
+`get_design_session`, `get_design_session_slice`, `list_open_questions`
+(read) — are registered on their own `*mcp.Server`, mounted at
+`krill/mcp/server`'s `designMountPath` (`/mcp/design`), never at
+`specMountPath`. `mcp/main.go` builds two independent `*mcp.Server`/
+`Registry` pairs (`specSrv`/`specReg` and `designSrv`/`designReg`) precisely
+because registering a tool is a per-`*mcp.Server` operation
+(`mcp.AddTool`) — the only way to guarantee a write tool can never end up
+reachable from `/mcp/spec` is to never register it on the `*mcp.Server`
+that backs that mount. Both front doors (mcpauth/human, whagent-net/agent)
+apply identically to both mounts: `server.NewHTTPHandler`/
+`NewDualAuthHTTPHandler` now each take both `*mcp.Server`s and mount them
+under their own `newMux`-built mux, so the two caller-auth entry points can
+never drift on which mounts exist or how they're guarded.
+
+**`RegisterWrite`, and the one persona allow-list this milestone needs
+(NFR1).** `krill/mcp/server/registry.go` now has `RegisterRead` (unchanged)
+alongside a new `RegisterWrite[In, Out any]`, following
+`audience_score_system/mcp/server/registry.go`'s `RegisterRead`/
+`RegisterWrite` split in spirit — persona gating stands in for that
+package's `ChannelScoped` authorization — but deliberately not carrying
+over that precedent's idempotency guard (`store.Idempotency`/
+`IdempotencyKeyed`) or its per-call observability wrapper
+(`instrumentToolCall`): no FR/NFR in this milestone needs replay-safety for
+a write tool call, and this package has no equivalent tracing middleware
+for either registration path yet (registry.go's `RegisterWrite` doc
+comment has the full reasoning). What `RegisterWrite` **does** carry over,
+new for M2: an optional per-tool persona allow-list. Every write tool here
+accepts any resolved persona except `propose_entities`, which is
+restricted to `PersonaAgent` — FR9/FR10 require a producer-role Agent to be
+the caller of a mediated write, since FR10's "acting must differ from
+on-behalf-of" can never be satisfied by a human acting for itself. This is
+a bare allow-list per tool (a `[]Persona` slice `RegisterWrite` checks
+membership against), not a policy engine — nothing here needs more than
+that.
+
+**Krill-session gating now reaches `krill/mcp` (correcting "never touches
+`krill_session`").** `krill/ARCHITECTURE.md` used to say the `krill/mcp`
+binary "never touches `krill_session`" (see "`init` and the write gate"
+above) — that stopped being true as of this task. Persona is resolved once,
+from context, by middleware `krill/mcp/server` already owned; a krill
+session id, by contrast, is a **per-call input field** each write tool's
+argument type carries (`krillSessionInput`, embedded by
+`openDesignSessionInput`/`appendRevisionEventInput`/`proposeEntitiesInput`),
+validated by `krill/mcp/tools/design.go`'s one factored
+`requireKrillSession` helper before that tool's mutation ever runs — never
+per-tool, and never inside `krill/mcp/server` itself, which still has no
+`store.SessionStore` dependency. `requireKrillSession` mirrors
+`api/handlers/gate.go`'s `RequireSession` and `krill/importer`'s own
+`requireSession`: the same "resolve against `store.SessionStore.GetSession`,
+reject cleanly (never a panic, never a partial write) on a missing,
+malformed, or unknown id" contract, adapted for a caller with no HTTP
+header to carry it and no middleware chain to wrap itself in — `mcp/main.go`
+now builds a `*store.Store` and a `store.SessionStore` alongside the
+`slice.Querier` it already built, threading both into
+`tools.RegisterDesignAll`.
+
+**Thin wrappers, LB7 applied literally, same as slice.go.** No tool file
+in `krill/mcp/tools` defines its own bespoke response shape. Five of the
+six tools return one of `krill/api/handlers`' own exported wire types —
+`IDResponse`, `DesignSessionResponse`, `RevisionEventCreatedResponse`,
+`ProposeEntitiesResponse`, `ListOpenQuestionsResponse` — built by the exact
+same `handlers.NewXxx` constructor (or struct literal) the corresponding
+HTTP handler calls, never a second, MCP-local projection of the same data.
+`get_design_session_slice` goes one step further, exactly like the four
+FR5-FR8 tools: it returns `slice.Document` **unchanged**, via the same
+`handlers.UnionEntityDeltaIDs` helper `GET /design-sessions/{id}/slice`
+uses to resolve which ids belong to the session — so this tool's response
+is byte-identical to that HTTP route's for the same session, not merely
+similarly shaped. `append_revision_event` also reuses
+`handlers.ParseEventType`/`handlers.ParseUUIDField` directly (both now
+exported for this reason), so an unrecognized `event_type` or a malformed
+`entity_deltas[].entity_id` fails with the exact same named message its
+HTTP twin produces — no divergent validation between the two surfaces for
+the same input shape.
 
 ## krill/ui and the mcpauth front door (the auth-flow gap)
 
@@ -1118,23 +1213,29 @@ plan issue #2485's own acceptance criteria, not by an automated test —
   RevisionEvent pair as of #2543 (`api/handlers/design_session.go`,
   `revision_event.go`, see "The DesignSession/RevisionEvent HTTP surface"
   above) — every write path *this milestone's HTTP surface* defines is now
-  wired, but M2 is not yet fully wired end to end: the MCP surface for the
-  same open/append capability (`RegisterWrite`, a new MCP mount point) is a
-  separate M2 task, not built here. Import (#2492) is gated too, but as a
-  CLI entrypoint checking the session directly against the store rather
-  than through this HTTP middleware (see "The markdown importer" above).
+  wired, and, as of issue #2547, so is the MCP surface for the same
+  open/append/propose capability (`RegisterWrite`, the `/mcp/design` mount
+  — see "The design-session MCP surface" above). Import (#2492) is gated
+  too, but as a CLI entrypoint checking the session directly against the
+  store rather than through this HTTP middleware (see "The markdown
+  importer" above).
 - `krill/mcp` (issue #2494) now exists and wraps `krill/slice` directly,
   per LB7 (see "The MCP spec surface" above) — its mcpauth (human) front
   door now has both its verification-side migration (`006_mcpauth_credential`)
   and a mint-side `/authorize`/`/token` surface (`krill/ui`, see
   "krill/ui and the mcpauth front door" above); persona resolution
   (`auth.go`) still always resolves `PersonaSwarmOperator`, unconditionally,
-  until C12 lands.
+  until C12 lands. As of issue #2547, `krill/mcp` also mounts the
+  design-session write/read surface at `/mcp/design` (see "The
+  design-session MCP surface" above) — its persona resolution is the same
+  fixed `auth.go`/`whagent_auth.go` pair, with a new per-tool allow-list
+  (`RegisterWrite`) restricting `propose_entities` to `PersonaAgent` only.
 - No auth wired up on `api` — `POST /sessions/init`, every future write
   endpoint, and the FR5-FR9 slice routes all trust caller-asserted
   identity or are unauthenticated (see "`init` and the write gate"
-  above); only `krill/mcp` (issue #2494) gets NFR1's two-front-door
-  pattern, and only for the read-only spec surface.
+  above); only `krill/mcp` (issue #2494, extended by #2547) gets NFR1's
+  two-front-door pattern, for both the read-only spec surface and the
+  design-session surface — `api` itself gets none of it.
 - The renderer (`krill/render`, issue #2495) covers FR13-FR15/NFR3 as of
   this task; see "The doc renderer" above. No hook or schedule triggers it
   automatically yet — `bazel run //krill/render/cmd:render` is a manual,

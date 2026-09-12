@@ -80,7 +80,7 @@ func TestAmendRequirementHandler_ValidSession_CallsStoreWithPathIDAndBody(t *tes
 }
 
 // TestAmendRequirementHandler_MissingName_Rejected proves the shared
-// requireNonEmpty("name", ...) validation applies to amend too.
+// RequireNonEmpty("name", ...) validation applies to amend too.
 func TestAmendRequirementHandler_MissingName_Rejected(t *testing.T) {
 	sessions, _, sessionIDStr := newTestSession(t)
 	amend := &fakeAmendStore{}

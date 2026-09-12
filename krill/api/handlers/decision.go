@@ -43,12 +43,12 @@ func AttachLoadBearingDecisionHandler(decisions store.LoadBearingDecisionStore) 
 			return
 		}
 
-		featureSetID, err := parseUUIDField("feature_set_id", req.FeatureSetID)
+		featureSetID, err := ParseUUIDField("feature_set_id", req.FeatureSetID)
 		if err != nil {
 			writeJSONError(w, http.StatusBadRequest, err.Error())
 			return
 		}
-		if err := requireNonEmpty("name", req.Name); err != nil {
+		if err := RequireNonEmpty("name", req.Name); err != nil {
 			writeJSONError(w, http.StatusBadRequest, err.Error())
 			return
 		}
@@ -59,6 +59,6 @@ func AttachLoadBearingDecisionHandler(decisions store.LoadBearingDecisionStore) 
 			return
 		}
 
-		writeJSON(w, http.StatusCreated, idResponse{ID: decision.ID.String()})
+		writeJSON(w, http.StatusCreated, IDResponse{ID: decision.ID.String()})
 	}
 }

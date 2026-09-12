@@ -2,7 +2,7 @@
 // OpenDesignSessionHandler (write, gated) and GetDesignSessionHandler (read,
 // ungated) over store.DesignSessionStore/store.RevisionEventStore. See
 // revision_event.go for the append-RevisionEvent write endpoint and the
-// wire types (revisionEventWire, subjectWire, ...) this file's
+// wire types (RevisionEventWire, SubjectWire, ...) this file's
 // GetDesignSessionHandler reuses to render a session's ordered event log.
 package handlers
 
@@ -49,12 +49,12 @@ func OpenDesignSessionHandler(designSessions store.DesignSessionStore) http.Hand
 			return
 		}
 
-		productID, err := parseUUIDField("product_id", req.ProductID)
+		productID, err := ParseUUIDField("product_id", req.ProductID)
 		if err != nil {
 			writeJSONError(w, http.StatusBadRequest, err.Error())
 			return
 		}
-		if err := requireNonEmpty("opening_submission", req.OpeningSubmission); err != nil {
+		if err := RequireNonEmpty("opening_submission", req.OpeningSubmission); err != nil {
 			writeJSONError(w, http.StatusBadRequest, err.Error())
 			return
 		}
@@ -69,19 +69,22 @@ func OpenDesignSessionHandler(designSessions store.DesignSessionStore) http.Hand
 			return
 		}
 
-		writeJSON(w, http.StatusCreated, idResponse{ID: ds.ID.String()})
+		writeJSON(w, http.StatusCreated, IDResponse{ID: ds.ID.String()})
 	}
 }
 
-// designSessionResponse is GetDesignSessionHandler's response body: the
-// design_session row plus its ordered revision_event log.
-type designSessionResponse struct {
+// DesignSessionResponse is GetDesignSessionHandler's response body: the
+// design_session row plus its ordered revision_event log. Exported (issue
+// #2547) so krill/mcp/tools' get_design_session tool returns this exact
+// value -- built by the same NewDesignSessionResponse this handler calls --
+// rather than a second, MCP-local projection of the same data (LB7).
+type DesignSessionResponse struct {
 	ID                     string              `json:"id"`
 	ProductID              string              `json:"product_id"`
 	OpeningSubmission      string              `json:"opening_submission"`
 	OpenedByKrillSessionID string              `json:"opened_by_krill_session_id"`
 	CreatedAt              time.Time           `json:"created_at"`
-	RevisionEvents         []revisionEventWire `json:"revision_events"`
+	RevisionEvents         []RevisionEventWire `json:"revision_events"`
 }
 
 // GetDesignSessionHandler returns the read-DesignSession endpoint: GET
@@ -108,19 +111,28 @@ func GetDesignSessionHandler(designSessions store.DesignSessionStore, events sto
 			return
 		}
 
-		out := make([]revisionEventWire, len(revisionEvents))
-		for i, ev := range revisionEvents {
-			out[i] = toRevisionEventWire(ev)
-		}
+		writeJSON(w, http.StatusOK, NewDesignSessionResponse(ds, revisionEvents))
+	}
+}
 
-		writeJSON(w, http.StatusOK, designSessionResponse{
-			ID:                     ds.ID.String(),
-			ProductID:              ds.ProductID.String(),
-			OpeningSubmission:      ds.OpeningSubmission,
-			OpenedByKrillSessionID: uuid.UUID(ds.OpenedByKrillSessionID).String(),
-			CreatedAt:              ds.CreatedAt,
-			RevisionEvents:         out,
-		})
+// NewDesignSessionResponse builds a DesignSessionResponse from a
+// store.DesignSession and its ordered store.RevisionEvent log. Exported
+// (issue #2547) so krill/mcp/tools' get_design_session tool builds its
+// response the same way this handler does -- one conversion, never a
+// second one reimplemented in the MCP package (LB7).
+func NewDesignSessionResponse(ds store.DesignSession, revisionEvents []store.RevisionEvent) DesignSessionResponse {
+	out := make([]RevisionEventWire, len(revisionEvents))
+	for i, ev := range revisionEvents {
+		out[i] = ToRevisionEventWire(ev)
+	}
+
+	return DesignSessionResponse{
+		ID:                     ds.ID.String(),
+		ProductID:              ds.ProductID.String(),
+		OpeningSubmission:      ds.OpeningSubmission,
+		OpenedByKrillSessionID: uuid.UUID(ds.OpenedByKrillSessionID).String(),
+		CreatedAt:              ds.CreatedAt,
+		RevisionEvents:         out,
 	}
 }
 

@@ -39,12 +39,12 @@ func CreateFeatureSetHandler(featureSets store.FeatureSetStore) http.HandlerFunc
 			return
 		}
 
-		productID, err := parseUUIDField("product_id", req.ProductID)
+		productID, err := ParseUUIDField("product_id", req.ProductID)
 		if err != nil {
 			writeJSONError(w, http.StatusBadRequest, err.Error())
 			return
 		}
-		if err := requireNonEmpty("name", req.Name); err != nil {
+		if err := RequireNonEmpty("name", req.Name); err != nil {
 			writeJSONError(w, http.StatusBadRequest, err.Error())
 			return
 		}
@@ -55,6 +55,6 @@ func CreateFeatureSetHandler(featureSets store.FeatureSetStore) http.HandlerFunc
 			return
 		}
 
-		writeJSON(w, http.StatusCreated, idResponse{ID: featureSet.ID.String()})
+		writeJSON(w, http.StatusCreated, IDResponse{ID: featureSet.ID.String()})
 	}
 }

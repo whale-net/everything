@@ -77,10 +77,12 @@ func newTestSession(t *testing.T) (*fakeSessionStore, uuid.UUID, string) {
 	return sessions, scopeID, sessionID.String()
 }
 
-// idResponseBody mirrors types.go's unexported idResponse -- this package's
-// tests live in handlers_test (external test package) so they decode the
-// wire shape rather than reaching into the unexported type, exactly like
-// session_test.go's initSessionResponse-shaped anonymous struct.
+// idResponseBody mirrors types.go's IDResponse (exported as of issue #2547
+// so krill/mcp/tools can reuse it directly) -- this package's tests live
+// in handlers_test (external test package) so they decode the wire shape
+// via their own local struct rather than depending on IDResponse's own
+// field set staying test-compatible, exactly like session_test.go's
+// initSessionResponse-shaped anonymous struct.
 type idResponseBody struct {
 	ID string `json:"id"`
 }

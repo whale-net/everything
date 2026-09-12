@@ -19,10 +19,13 @@ import (
 	"github.com/whale-net/everything/krill/store"
 )
 
-// idResponse is every create handler's response body (LB2): the entity's
+// IDResponse is every create handler's response body (LB2): the entity's
 // immutable surrogate id, and nothing else -- no response field here ever
-// carries a stored display number ("FR7", "LB3", etc.).
-type idResponse struct {
+// carries a stored display number ("FR7", "LB3", etc.). Exported (issue
+// #2547) so krill/mcp/tools' open_design_session tool can return this exact
+// value rather than an MCP-local mirror (LB7: "the shared types
+// krill/api/handlers already serializes").
+type IDResponse struct {
 	ID string `json:"id"`
 }
 
@@ -36,11 +39,11 @@ func decodeStrict(r *http.Request, dst any) error {
 	return dec.Decode(dst)
 }
 
-// parseUUIDField parses value as a UUID, returning a field-scoped error
+// ParseUUIDField parses value as a UUID, returning a field-scoped error
 // (never a bare uuid.Parse error) so a handler's 400 body names which field
 // was missing or malformed -- covers both "missing parent" (empty string)
 // and "malformed parent" (not a UUID) in the one call.
-func parseUUIDField(field, value string) (uuid.UUID, error) {
+func ParseUUIDField(field, value string) (uuid.UUID, error) {
 	id, err := uuid.Parse(value)
 	if err != nil {
 		return uuid.UUID{}, fmt.Errorf("%s: invalid or missing UUID", field)
@@ -48,9 +51,9 @@ func parseUUIDField(field, value string) (uuid.UUID, error) {
 	return id, nil
 }
 
-// requireNonEmpty rejects a blank required string field with a
-// field-scoped error, mirroring parseUUIDField's shape.
-func requireNonEmpty(field, value string) error {
+// RequireNonEmpty rejects a blank required string field with a
+// field-scoped error, mirroring ParseUUIDField's shape.
+func RequireNonEmpty(field, value string) error {
 	if value == "" {
 		return fmt.Errorf("%s: required", field)
 	}

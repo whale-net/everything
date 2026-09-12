@@ -66,7 +66,7 @@ func CreatePointerArtifactHandler(products store.ProductStore, scopes store.Scop
 			return
 		}
 
-		productID, err := parseUUIDField("product_id", req.ProductID)
+		productID, err := ParseUUIDField("product_id", req.ProductID)
 		if err != nil {
 			writeJSONError(w, http.StatusBadRequest, err.Error())
 			return

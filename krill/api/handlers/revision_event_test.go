@@ -199,7 +199,7 @@ func TestAppendRevisionEventHandler_EntityDeltaDeleted_Returns400(t *testing.T) 
 }
 
 // TestAppendRevisionEventHandler_UnknownEventType_Returns400 proves
-// parseEventType rejects a value outside the five-value enum before the
+// ParseEventType rejects a value outside the five-value enum before the
 // store is ever called.
 func TestAppendRevisionEventHandler_UnknownEventType_Returns400(t *testing.T) {
 	sessions, _, sessionIDStr := newTestSession(t)

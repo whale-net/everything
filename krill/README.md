@@ -16,7 +16,7 @@ milestone hangs off. No spec entities exist yet — that is later M1 work.
 | `migrate` | `//krill/migrate` | job | Applies `krill/migrate/schema/migrations` and seeds the one `scope` row with this repo's forge coordinates (LB1, NFR2). |
 | `api` | `//krill/api` | external-api | HTTP server; `/healthz` (a live DB ping), `POST /sessions/init` (FR3's `init` primitive, issue #2489), the M1 entity write API (FR1/FR2/FR4, issue #2490), the FR5-FR9 scoped-slice query surface (`GET /slices/{feature-sets,features,requirements,products}/{id}`, issue #2491), and the pointer-artifact create endpoint (`POST /pointer-artifacts`, FR20, issue #2496). |
 | `import` | `//krill/importer/cmd` | CLI (not deployed) | The one-way markdown importer (FR16, FR17, issue #2492): parses a `PRODUCT.md` + `product/*.md` doc set into `krill/store`'s spec entities and prints the entity-id report. Gated on a valid `init` session, same as every other write path. Records a one-time, one-way `import_completion` marker after a successful run and refuses a second import for the same path before parsing (FR12, NFR3, issue #2548). Run with `bazel run //krill/importer/cmd:import -- --path <dir> --session-id <uuid> --source-revision <sha>`. See `ARCHITECTURE.md` "The markdown importer and the delivery-axis association". |
-| `mcp` | `//krill/mcp` | external-api | krill's FR10/NFR1 spec surface: the FR5-FR9 scoped-slice query over MCP at `/mcp/spec`, behind the mcpauth (human) + whagent-net (agent) two-front-door auth pattern. See "MCP spec surface" below. |
+| `mcp` | `//krill/mcp` | external-api | krill's MCP surface: the FR5-FR9 scoped-slice query over MCP at `/mcp/spec`, and (issue #2547) the FR1-FR10 design-session/mediated-intake surface at `/mcp/design`, both behind the mcpauth (human) + whagent-net (agent) two-front-door auth pattern. See "MCP spec surface" and "Design-session MCP surface" below. |
 | `ui` | `//krill/ui` | external-api | Barebones Keycloak sign-in shell: gives mcpauth's `/authorize` endpoint (mounted here) a `SignInURL` to redirect a not-yet-signed-in caller to, so the human front door above can actually mint a credential end to end. No session list, no spec browsing -- a real web UI is deferred (`PRODUCT.md`'s C19, "Later"). See "The mcpauth sign-in shell" below. |
 
 ## Endpoints
@@ -162,6 +162,34 @@ Operator / Requirement Contributor / Agent), never individual identity:
 
 See `ARCHITECTURE.md` "The MCP spec surface" for the full design.
 
+## Design-session MCP surface (FR1-FR10 over MCP, NFR4, issue #2547)
+
+`mcp` also exposes the design-session/mediated-intake HTTP surface above
+over MCP, at its own mount, `/mcp/design` -- never on `/mcp/spec`, and
+never reachable from it. This is krill's first MCP **write** surface.
+
+| Tool | Kind | Wraps | Persona |
+|------|------|-------|---------|
+| `open_design_session` | write | `DesignSessionStore.Open` (FR1, FR8) | any resolved persona |
+| `append_revision_event` | write | `RevisionEventStore.Append` (FR2-FR4, FR7) | any resolved persona |
+| `propose_entities` | write | `MediatedWriteStore.ProposeEntities` (FR9, FR10, NFR2) | **Agent only** |
+| `get_design_session` | read | session + ordered revision log (FR2) | any resolved persona |
+| `get_design_session_slice` | read | `slice.Querier.GetEntitySetSlice` over the session's id union (FR5) | any resolved persona |
+| `list_open_questions` | read | derived open-question view (FR6) | any resolved persona |
+
+Every write tool takes a `krill_session_id` field -- the same id
+`POST /sessions/init` mints and the HTTP surface's `X-Krill-Session-Id`
+header carries, validated the same way (`api/handlers/gate.go`'s
+`RequireSession`) but as an ordinary input field, since an MCP tool call
+has no header to carry it. `propose_entities` is the one tool restricted to
+the Agent persona (via the whagent-net front door): FR9/FR10's mediated
+write requires a producer-role Agent acting on a Requirement Contributor's
+behalf, which a human acting for itself can never satisfy. Every response
+is one of `krill/api/handlers`' own exported types, or (`get_design_session_slice`)
+`slice.Document` itself, unchanged (LB7) -- never a bespoke MCP-only shape.
+
+See `ARCHITECTURE.md` "The design-session MCP surface" for the full design.
+
 ## The mcpauth sign-in shell (`ui`)
 
 `ui` mounts mcpauth's OAuth2 authorization-server endpoints (`/authorize`,
@@ -189,7 +217,11 @@ end)" for every variable it reads.
 `plugin/user/` is the Claude Code plugin layout this domain exposes MCP
 tools through, mirroring `whagent_net/plugin` / `audience_score_system/plugin`:
 `.mcp.json` / `mcp_config.json` register `krill-mcp-tilt` (local Tilt,
-`http://localhost:8084/mcp/spec`), `krill-mcp-dev`, and `krill-mcp-prod`.
+`http://localhost:8084/mcp/spec`), `krill-mcp-dev`, and `krill-mcp-prod` for
+the FR5-FR9 spec surface, plus (issue #2547) `krill-mcp-design-tilt`
+(`http://localhost:8084/mcp/design`), `krill-mcp-design-dev`, and
+`krill-mcp-design-prod` for the design-session surface above -- one entry
+per mount per environment, since each is its own pre-filtered MCP endpoint.
 Registered in `.claude-plugin/marketplace.json` as `krill`.
 
 `plugin/data/` is the companion "-data" plugin, mirroring

@@ -42,12 +42,12 @@ func CreateRequirementHandler(requirements store.RequirementStore) http.HandlerF
 			return
 		}
 
-		featureID, err := parseUUIDField("feature_id", req.FeatureID)
+		featureID, err := ParseUUIDField("feature_id", req.FeatureID)
 		if err != nil {
 			writeJSONError(w, http.StatusBadRequest, err.Error())
 			return
 		}
-		if err := requireNonEmpty("name", req.Name); err != nil {
+		if err := RequireNonEmpty("name", req.Name); err != nil {
 			writeJSONError(w, http.StatusBadRequest, err.Error())
 			return
 		}
@@ -66,6 +66,6 @@ func CreateRequirementHandler(requirements store.RequirementStore) http.HandlerF
 			return
 		}
 
-		writeJSON(w, http.StatusCreated, idResponse{ID: requirement.ID.String()})
+		writeJSON(w, http.StatusCreated, IDResponse{ID: requirement.ID.String()})
 	}
 }
