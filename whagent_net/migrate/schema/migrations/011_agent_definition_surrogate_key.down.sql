@@ -1,4 +1,4 @@
--- Reverses 010_agent_definition_surrogate_key.up.sql.
+-- Reverses 011_agent_definition_surrogate_key.up.sql.
 ALTER TABLE agent_definition
     DROP CONSTRAINT agent_definition_pkey,
     DROP CONSTRAINT agent_definition_agent_id_version_key,

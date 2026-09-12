@@ -273,7 +273,7 @@ func equalUUIDPtr(a, b *uuid.UUID) bool {
 // diffs a config entry against.
 type latestRow struct {
 	Version           int
-	Domain            string
+	Scope             *string
 	Model             *string
 	ModelDefinitionID *uuid.UUID
 	ToolSet           []session.ToolServerRef
@@ -338,7 +338,7 @@ func seedOne(ctx context.Context, db *sql.DB, a config.AgentDefinitionConfig, na
 	nextVersion := 1
 	if found {
 		nextVersion = existing.Version + 1
-		if existing.Domain == a.Domain &&
+		if equalStringPtr(existing.Scope, a.Scope) &&
 			equalStringPtr(existing.Model, model) &&
 			equalUUIDPtr(existing.ModelDefinitionID, modelDefID) &&
 			reflect.DeepEqual(existing.ToolSet, toolSet) &&
@@ -357,9 +357,9 @@ func seedOne(ctx context.Context, db *sql.DB, a config.AgentDefinitionConfig, na
 	}
 
 	if _, err := tx.ExecContext(ctx, `
-		INSERT INTO agent_definition (agent_id, domain, version, model, model_definition_id, tool_set, max_turns, max_cost_usd, required_role)
+		INSERT INTO agent_definition (agent_id, scope, version, model, model_definition_id, tool_set, max_turns, max_cost_usd, required_role)
 		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
-	`, a.AgentID, a.Domain, nextVersion, model, modelDefID, toolSetJSON, a.MaxTurns, a.MaxCostUSD, role); err != nil {
+	`, a.AgentID, a.Scope, nextVersion, model, modelDefID, toolSetJSON, a.MaxTurns, a.MaxCostUSD, role); err != nil {
 		return fmt.Errorf("insert version %d: %w", nextVersion, err)
 	}
 	return tx.Commit()
@@ -378,12 +378,12 @@ func latestAgentDefinition(ctx context.Context, tx *sql.Tx, agentID string) (lat
 	var row latestRow
 	var toolSetJSON []byte
 	err := tx.QueryRowContext(ctx, `
-		SELECT version, domain, model, model_definition_id, tool_set, max_turns, max_cost_usd, required_role
+		SELECT version, scope, model, model_definition_id, tool_set, max_turns, max_cost_usd, required_role
 		FROM agent_definition
 		WHERE agent_id = $1
 		ORDER BY version DESC
 		LIMIT 1
-	`, agentID).Scan(&row.Version, &row.Domain, &row.Model, &row.ModelDefinitionID, &toolSetJSON, &row.MaxTurns, &row.MaxCostUSD, &row.RequiredRole)
+	`, agentID).Scan(&row.Version, &row.Scope, &row.Model, &row.ModelDefinitionID, &toolSetJSON, &row.MaxTurns, &row.MaxCostUSD, &row.RequiredRole)
 	if err != nil {
 		if err == sql.ErrNoRows { //nolint:errorlint // database/sql documents this exact sentinel, never wrapped
 			return latestRow{}, false, nil

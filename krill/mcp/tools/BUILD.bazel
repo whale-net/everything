@@ -1,0 +1,19 @@
+"""krill's MCP tool groups. slice.go (issue #2494) is the one group M1
+ships: four thin wrappers over //krill/slice's scoped-slice query
+(FR5-FR8)."""
+
+load("@rules_go//go:def.bzl", "go_library")
+
+go_library(
+    name = "tools",
+    srcs = ["slice.go"],
+    importpath = "github.com/whale-net/everything/krill/mcp/tools",
+    visibility = ["//visibility:public"],
+    deps = [
+        "//krill/mcp/server",
+        "//krill/slice",
+        "@com_github_google_jsonschema_go//jsonschema",
+        "@com_github_google_uuid//:uuid",
+        "@com_github_modelcontextprotocol_go_sdk//mcp",
+    ],
+)

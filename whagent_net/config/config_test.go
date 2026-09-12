@@ -8,6 +8,8 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+func strPtr(s string) *string { return &s }
+
 // validAgent returns a config.AgentDefinitionConfig that passes Validate,
 // for tests to copy and mutate exactly one field -- keeps each failure
 // case isolated to the one rule it's proving (this task's Testing
@@ -16,7 +18,7 @@ import (
 func validAgent() AgentDefinitionConfig {
 	return AgentDefinitionConfig{
 		AgentID: "test-agent",
-		Domain:  "test-domain",
+		Scope:   strPtr("test-scope"),
 		Model:   "anthropic/claude-3.5-sonnet",
 		ToolSet: []ToolServerRefConfig{
 			{ServerURL: "http://mcp.example.com:8081/", AllowedTools: nil},
@@ -49,28 +51,29 @@ func TestValidate_DuplicateAgentID_FailsLoudly(t *testing.T) {
 	assert.Contains(t, err.Error(), "duplicate agent_id")
 }
 
-// TestValidate_MissingDomain_FailsLoudly proves an entry with no `domain`
-// key fails Validate as a config error (issue #2424 FR1) -- never
-// deferred to seed time.
-func TestValidate_MissingDomain_FailsLoudly(t *testing.T) {
+// TestValidate_NilScope_Succeeds proves an entry with no `scope` key at
+// all (Scope left nil) passes Validate -- scope is optional (issue #2424
+// FR1, made optional): an agent definition with no scope simply carries
+// no delegated-grant scoping.
+func TestValidate_NilScope_Succeeds(t *testing.T) {
 	agent := validAgent()
-	agent.Domain = ""
+	agent.Scope = nil
 
-	err := Validate(nil, []AgentDefinitionConfig{agent})
-	require.Error(t, err)
-	assert.Contains(t, err.Error(), "domain is required")
+	assert.NoError(t, Validate(nil, []AgentDefinitionConfig{agent}))
 }
 
-// TestValidate_EmptyStringDomain_FailsLoudly mirrors the missing-key case
-// for a `domain: ""` entry -- both must fail identically since Go's yaml
-// decode leaves both as the empty string.
-func TestValidate_EmptyStringDomain_FailsLoudly(t *testing.T) {
+// TestValidate_EmptyStringScope_FailsLoudly proves a `scope: ""` entry --
+// present but blank, distinct from omitted entirely -- still fails
+// Validate: a set-but-empty scope would otherwise silently collapse onto
+// grantkey.ForScope's own empty-string rejection at a much less
+// informative point.
+func TestValidate_EmptyStringScope_FailsLoudly(t *testing.T) {
 	agent := validAgent()
-	agent.Domain = ""
+	agent.Scope = strPtr("")
 
 	err := Validate(nil, []AgentDefinitionConfig{agent})
 	require.Error(t, err)
-	assert.Contains(t, err.Error(), "domain is required")
+	assert.Contains(t, err.Error(), "scope, if set, must not be empty")
 }
 
 func TestValidate_MissingModelAndModelDefinition_FailsLoudly(t *testing.T) {
@@ -216,7 +219,9 @@ func TestLoad_EmbeddedAgentsYAML_ParsesAndValidates(t *testing.T) {
 
 	for _, a := range agents {
 		assert.NotEmpty(t, a.AgentID)
-		assert.NotEmpty(t, a.Domain, "agent %q must carry a non-empty domain", a.AgentID)
+		if a.Scope != nil {
+			assert.NotEmpty(t, *a.Scope, "agent %q's scope, if set, must not be empty", a.AgentID)
+		}
 		assert.True(t, a.Model != "" || a.ModelDefinition != "", "agent %q must name a model or model_definition", a.AgentID)
 		assert.NotEmpty(t, a.ToolSet)
 		for _, ref := range a.ToolSet {

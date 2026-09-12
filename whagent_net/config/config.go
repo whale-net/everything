@@ -73,14 +73,16 @@ type ModelDefinitionConfig struct {
 // whagent_net/migrate/seed's package doc comment for the version-diff
 // rule).
 //
-// Domain is required (Validate rejects a missing or empty value, issue
-// #2424 FR1): the one domain this agent definition belongs to. Every
-// tool_set entry below is understood to belong to that same domain, by
-// construction -- ToolServerRefConfig carries no domain field of its own,
-// and there is no "spans more than one domain" rule to enforce, because
-// there is only ever one Domain per definition to begin with. Domain is
-// the sole input whagent_net/grantkey.ForDomain may derive a
-// delegated-grant key from (FR4).
+// Scope is optional: the one grant-scope this agent definition belongs
+// to, when set. Every tool_set entry below is understood to belong to
+// that same scope, by construction -- ToolServerRefConfig carries no
+// scope field of its own, and there is no "spans more than one scope"
+// rule to enforce, because there is only ever one Scope per definition to
+// begin with. Scope is the sole input whagent_net/grantkey.ForScope may
+// derive a delegated-grant key from (FR4). Left unset, the agent
+// definition carries no delegated-grant scoping at all -- it still runs
+// with whatever ToolSet is configured below, just without a cross-domain
+// grant key derived or checked.
 //
 // Exactly one of Model and ModelDefinition is set (Validate enforces
 // this): Model names an OpenRouter model id directly, with OpenRouter's
@@ -90,7 +92,7 @@ type ModelDefinitionConfig struct {
 // entry, not from Model (which stays empty in that case).
 type AgentDefinitionConfig struct {
 	AgentID         string                `yaml:"agent_id"`
-	Domain          string                `yaml:"domain"`
+	Scope           *string               `yaml:"scope,omitempty"`
 	Model           string                `yaml:"model"`
 	ModelDefinition string                `yaml:"model_definition"`
 	ToolSet         []ToolServerRefConfig `yaml:"tool_set"`
@@ -176,13 +178,13 @@ func Validate(modelDefs []ModelDefinitionConfig, agents []AgentDefinitionConfig)
 		}
 		seen[a.AgentID] = struct{}{}
 
-		// FR1 (issue #2424): domain is required on every entry -- it is
-		// the sole input whagent_net/grantkey.ForDomain may derive a
-		// delegated-grant key from, so an unset domain must fail here,
-		// as a config error, rather than surface later as a seeded row
-		// with no usable grant key.
-		if a.Domain == "" {
-			return fmt.Errorf("agent %q: domain is required", a.AgentID)
+		// Scope is optional, but when present it must not be blank --
+		// it is the sole input whagent_net/grantkey.ForScope may derive
+		// a delegated-grant key from, so a set-but-empty scope must fail
+		// here, as a config error, rather than surface later as a
+		// seeded row with no usable grant key.
+		if a.Scope != nil && *a.Scope == "" {
+			return fmt.Errorf("agent %q: scope, if set, must not be empty", a.AgentID)
 		}
 
 		// Exactly one of model / model_definition -- see

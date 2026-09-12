@@ -84,8 +84,8 @@ func Decode(encoded string) (iss, sub string, err error) {
 // memory.
 //
 // mcp/server and mcp/tools are otherwise deliberately decoupled -- neither
-// imports the other (see mcp/tools/domain.go and mcp/tools/grant.go's own
-// doc comments for why the DomainResolver/GrantSource seams are duplicated
+// imports the other (see mcp/tools/scope.go and mcp/tools/grant.go's own
+// doc comments for why the ScopeResolver/GrantSource seams are duplicated
 // interface literals rather than shared types) -- so this context-carrying
 // pair lives here, in the one small dependency-free package both already
 // import, mirroring libs/go/grpcauth's own
@@ -112,7 +112,7 @@ func ContextWithIdentity(ctx context.Context, id Identity) context.Context {
 // any. A tool handler's absence check (the second return value) is exactly
 // how it distinguishes the two auth paths at dispatch time (issue #2430's
 // FR7/FR8 sequence): present means the browser-OAuth2 path, so the handler
-// must resolve a domain and acquire a token via GrantSource before
+// must resolve a scope and acquire a token via GrantSource before
 // forwarding; absent means the manual-token path, where AuthMiddleware
 // already placed a real, usable bearer token on ctx directly (grpcauth.
 // WithUserToken) and no further resolution is needed or possible (there is

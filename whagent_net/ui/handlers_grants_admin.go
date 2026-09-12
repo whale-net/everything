@@ -1,6 +1,6 @@
 // FR14/FR15/NFR3 (issue #2433, plan #2421): the admin all-operators grant
 // list and revoke page. GET /admin/grants lists every operator's
-// delegated grants (grantindex.ListAll, #2425) with a live per-domain
+// delegated grants (grantindex.ListAll, #2425) with a live per-scope
 // status read (grpcauth.Store.Status, never grantindex -- FR12, mirrors
 // ../handlers_grants.go's buildGrantRows). POST /admin/grants/revoke
 // revokes exactly one (subject, grant) pair belonging to whichever
@@ -162,10 +162,10 @@ func buildAdminGrantRows(ctx context.Context, index grantIndexAllLister, store g
 
 	rows := make([]pages.GrantRow, 0, len(entries))
 	for _, e := range entries {
-		grantKey, err := grantkey.ForDomain(e.Domain)
+		grantKey, err := grantkey.ForScope(e.Domain)
 		if err != nil {
 			// Mirrors buildGrantRows: refuse to guess a grant key for a
-			// malformed domain rather than risk mis-scoping a status read.
+			// malformed scope rather than risk mis-scoping a status read.
 			return nil, err
 		}
 
@@ -182,7 +182,7 @@ func buildAdminGrantRows(ctx context.Context, index grantIndexAllLister, store g
 			// an index row with no matching store row is a drift/edge
 			// case, not a hard failure (AGENTS.md "had to adjust to keep
 			// going" -- WARNING, page still renders).
-			logger.Warn("grant recorded in index has no matching store row", "domain", e.Domain, "subject_sub", e.SubjectSub)
+			logger.Warn("grant recorded in index has no matching store row", "scope", e.Domain, "subject_sub", e.SubjectSub)
 		case statusErr != nil:
 			return nil, statusErr
 		default:
@@ -191,7 +191,7 @@ func buildAdminGrantRows(ctx context.Context, index grantIndexAllLister, store g
 
 		rows = append(rows, pages.GrantRow{
 			OperatorLabel: e.PreferredUsername,
-			Domain:        e.Domain,
+			Scope:         e.Domain,
 			Status:        display,
 			GrantedAt:     e.GrantedAt,
 			SubjectSub:    e.SubjectSub,
@@ -208,8 +208,8 @@ func buildAdminGrantRows(ctx context.Context, index grantIndexAllLister, store g
 // handleGrantsAdminRevoke so a test can drive multiple distinct operators
 // (FR17's scoping test) without real signed-in sessions, and so the NFR4
 // audit log has exactly one call site for this path.
-func revokeGrantAsAdmin(ctx context.Context, store grpcauth.Store, iss, adminSub, targetSub, domain string, logger *slog.Logger) error {
-	grantKey, err := grantkey.ForDomain(domain)
+func revokeGrantAsAdmin(ctx context.Context, store grpcauth.Store, iss, adminSub, targetSub, scope string, logger *slog.Logger) error {
+	grantKey, err := grantkey.ForScope(scope)
 	if err != nil {
 		return err
 	}
@@ -222,8 +222,8 @@ func revokeGrantAsAdmin(ctx context.Context, store grpcauth.Store, iss, adminSub
 	}
 
 	// NFR4: every completed admin revoke logs at INFO -- who revoked (the
-	// admin), whose grant, which domain. Never logs token material.
-	logger.Info("delegated grant revoked by admin", "revoked_by_sub", adminSub, "subject_iss", iss, "subject_sub", targetSub, "domain", domain)
+	// admin), whose grant, which scope. Never logs token material.
+	logger.Info("delegated grant revoked by admin", "revoked_by_sub", adminSub, "subject_iss", iss, "subject_sub", targetSub, "scope", scope)
 	return nil
 }
 
@@ -278,7 +278,7 @@ func (app *App) handleGrantsAdmin(w http.ResponseWriter, r *http.Request) {
 
 // handleGrantsAdminRevoke is POST /admin/grants/revoke (FR14/FR17, issue
 // #2433): gated on isGrantsAdmin (FR15/NFR3) -- a non-admin gets 403 --
-// then revokes exactly the named (subject_sub, domain) pair, never the
+// then revokes exactly the named (subject_sub, scope) pair, never the
 // admin's own session subject (revokeGrantAsAdmin).
 func (app *App) handleGrantsAdminRevoke(w http.ResponseWriter, r *http.Request) {
 	logger := logging.Get("main")
@@ -299,9 +299,9 @@ func (app *App) handleGrantsAdminRevoke(w http.ResponseWriter, r *http.Request) 
 		http.Error(w, "invalid form", http.StatusBadRequest)
 		return
 	}
-	domain := strings.TrimSpace(r.FormValue("domain"))
-	if domain == "" {
-		http.Error(w, "domain is required", http.StatusBadRequest)
+	scope := strings.TrimSpace(r.FormValue("scope"))
+	if scope == "" {
+		http.Error(w, "scope is required", http.StatusBadRequest)
 		return
 	}
 	subjectSub := strings.TrimSpace(r.FormValue("subject_sub"))
@@ -315,8 +315,8 @@ func (app *App) handleGrantsAdminRevoke(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 
-	if _, err := grantkey.ForDomain(domain); err != nil {
-		http.Error(w, "invalid domain", http.StatusBadRequest)
+	if _, err := grantkey.ForScope(scope); err != nil {
+		http.Error(w, "invalid scope", http.StatusBadRequest)
 		return
 	}
 
@@ -326,7 +326,7 @@ func (app *App) handleGrantsAdminRevoke(w http.ResponseWriter, r *http.Request) 
 		adminSub = admin.Sub
 	}
 
-	if err := revokeGrantAsAdmin(ctx, app.grant.Store, app.oidcIssuer, adminSub, subjectSub, domain, logger); err != nil {
+	if err := revokeGrantAsAdmin(ctx, app.grant.Store, app.oidcIssuer, adminSub, subjectSub, scope, logger); err != nil {
 		switch {
 		case errors.Is(err, grpcauth.ErrGrantNotFound):
 			http.Error(w, "grant not found", http.StatusNotFound)

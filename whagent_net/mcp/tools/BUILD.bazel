@@ -10,7 +10,7 @@ go_library(
     srcs = [
         "convert.go",
         "dispatch.go",
-        "domain.go",
+        "scope.go",
         "errors.go",
         "get_session.go",
         "grant.go",
@@ -40,7 +40,7 @@ go_test(
         "dispatch_test.go",
         "errors_test.go",
         "fake_client_test.go",
-        "fake_domain_resolver_test.go",
+        "fake_scope_resolver_test.go",
         "fake_grant_source_test.go",
         "get_session_test.go",
         "read_transcript_test.go",

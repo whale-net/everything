@@ -4,10 +4,9 @@
 # migrate (job, applies 001_scope and seeds this repo's forge coordinates
 # onto the single `scope` row -- migrate/seed's package doc comment,
 # NFR2/LB1) + api (HTTP: /healthz + DB connectivity check only -- no spec
-# endpoints yet), with Postgres as the only infrastructure dependency.
-# Follows tools/app_registry/Tiltfile's raw-k8s_yaml-blob shape. Later M1
-# tasks add `mcp` here once it exists (do not register it before then --
-# see krill/plugin's placeholder-only layout for the same reasoning).
+# endpoints yet) + mcp (HTTP: the FR10/NFR1 spec surface at /mcp/spec,
+# issue #2494), with Postgres as the only infrastructure dependency.
+# Follows tools/app_registry/Tiltfile's raw-k8s_yaml-blob shape.
 
 load('ext://namespace', 'namespace_create')
 load('ext://dotenv', 'dotenv')
@@ -70,6 +69,11 @@ APPS = {
         'enabled_env': 'ENABLE_KRILL_API',
         'bazel_target': '//krill/api:api_image_load',
         'image_name': 'krill-api',
+    },
+    'mcp': {
+        'enabled_env': 'ENABLE_KRILL_MCP',
+        'bazel_target': '//krill/mcp:mcp_image_load',
+        'image_name': 'krill-mcp',
     },
 }
 
@@ -183,6 +187,74 @@ spec:
     )
     print("🔌 api forwarded to http://localhost:8083 (/healthz)")
 
+# mcp: krill's FR10/NFR1 spec surface -- /mcp/spec, guarded by the
+# mcpauth + whagent-net two-front-door pattern (../ARCHITECTURE.md "The
+# MCP spec surface"). Both front doors are independently env-gated; local
+# dev leaves KRILL_MCP_WHAGENT_JWKS_URL/KRILL_MCP_WHAGENT_ISSUER unset
+# (agent door disabled) and PG_DATABASE_URL points at the same Postgres
+# `api` uses, so the mcpauth door degrades to reject-all until that
+# migration exists (mcp/main.go's rejectingCredentialStore).
+if get_env_bool('ENABLE_KRILL_MCP', default='true'):
+    k8s_yaml(blob("""
+apiVersion: v1
+kind: Service
+metadata:
+  name: krill-mcp
+  namespace: {namespace}
+spec:
+  selector:
+    app: krill-mcp
+  ports:
+    - name: http
+      port: 8080
+      targetPort: 8080
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: krill-mcp
+  namespace: {namespace}
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: krill-mcp
+  template:
+    metadata:
+      labels:
+        app: krill-mcp
+    spec:
+      containers:
+      - name: mcp
+        image: krill-mcp
+        ports:
+        - containerPort: 8080
+          name: http
+        env:
+        - name: KRILL_MCP_ADDR
+          value: ":8080"
+        - name: PG_DATABASE_URL
+          value: "{pg_database_url}"
+        - name: OTEL_EXPORTER_OTLP_ENDPOINT
+          value: "{otel_endpoint}"
+""".format(
+        namespace=namespace,
+        pg_database_url=pg_database_url,
+        otel_endpoint=otel_endpoint,
+    )))
+
+    mcp_deps = []
+    if get_env_bool('ENABLE_KRILL_MIGRATE', default='true'):
+        mcp_deps.append('krill-migrate')
+
+    k8s_resource(
+        'krill-mcp',
+        resource_deps=mcp_deps,
+        port_forwards=['8084:8080'],
+        labels=['krill'],
+    )
+    print("🔌 mcp forwarded to http://localhost:8084/mcp/spec")
+
 # ===========================
 # Access Information
 # ===========================
@@ -192,10 +264,11 @@ print("📡 Access Information")
 print("="*60)
 print("  PostgreSQL:      localhost:5432 (user: postgres, pass: password)")
 print("  api (HTTP):      http://localhost:8083/healthz")
+print("  mcp (HTTP):      http://localhost:8084/mcp/spec")
 print("="*60)
 
 print_footer_info('krill')
 
 print("\n🚀 Quick Start:")
-print("  1. tilt up                # Start migrate + api (this)")
+print("  1. tilt up                # Start migrate + api + mcp (this)")
 print("  2. curl http://localhost:8083/healthz")

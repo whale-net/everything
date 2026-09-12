@@ -413,18 +413,18 @@ mints nothing (issue #2430 deleted `server/tokenexchange.go`'s
 `KeycloakExchanger` and its RFC 8693 impersonation-exchange call
 entirely, not left dormant — FR19). Acquisition happens later, at
 MCP tool-dispatch time (`whagent_net/mcp/tools/dispatch.go`), once a
-call's target domain is actually known — `AuthMiddleware` has no notion
-of "which domain" for any given call, since that requires the request's
+call's target scope is actually known — `AuthMiddleware` has no notion
+of "which scope" for any given call, since that requires the request's
 own `agent_id`/`session_id`, which only a tool handler has parsed (FR7):
 
-- `start_session` resolves the target domain via `DomainForAgent(ctx,
-  agentID)` (backed by the chosen `AgentDefinition.Domain`, FR1/#2424);
+- `start_session` resolves the target scope via `ScopeForAgent(ctx,
+  agentID)` (backed by the chosen `AgentDefinition.Scope`, FR1/#2424);
   every other tool (`send_turn`/`stop_session`/`get_session`/
-  `read_transcript`) resolves it via `DomainForSession(ctx, sessionID)`,
+  `read_transcript`) resolves it via `ScopeForSession(ctx, sessionID)`,
   backed by that session's already-recorded agent-definition assignment
-  — never a domain re-derived from a fresh `agent_id` on every call.
-- The resolved domain becomes a grant key via `whagent_net/grantkey.ForDomain`
-  — the *only* permitted derivation (FR4): the grant key for domain `d`
+  — never a scope re-derived from a fresh `agent_id` on every call.
+- The resolved scope becomes a grant key via `whagent_net/grantkey.ForScope`
+  — the *only* permitted derivation (FR4): the grant key for scope `d`
   is `d` itself, once validated as well-formed. Deriving one from
   `agent_id`, `required_role`, or `tool_set[].server_url` is forbidden.
 - `dispatch.go`'s `acquireGrantToken` calls `grant.TokenSource(identity.Sub,
@@ -434,37 +434,43 @@ own `agent_id`/`session_id`, which only a tool handler has parsed (FR7):
   `Store` on every call, never cached here or anywhere else (FR8:
   `tokenexchange.go`'s in-memory per-identity cache is gone, not
   replaced with a new one).
-- A domain with no active grant (`grpcauth.ErrGrantNotFound`) or a
+- A scope with no active grant (`grpcauth.ErrGrantNotFound`) or a
   revoked one (`ErrGrantRevoked`) fails the call outright — there is no
   fallback to any other credential path.
+- `AgentDefinition.Scope` is nullable (migration 010): when
+  `ScopeForAgent`/`ScopeForSession` resolves a nil scope, dispatch skips
+  grant-key derivation and token acquisition entirely and forwards the
+  call unchanged — a scope-less agent definition carries no
+  delegated-grant scoping at all, but still runs with whatever
+  `tool_set` it is configured with.
 
 The result is the same as before: a session started through the
 browser/OAuth2 path is indistinguishable downstream from one started
 with a manually-pasted token — same `subject` shape for every rule
-above — just acquired through a domain-scoped grant instead of an
+above — just acquired through a scoped grant instead of an
 impersonation exchange.
 
-**One-time per-domain consent (FR2/FR3/FR5/FR6, issue #2428).** The
+**One-time per-scope consent (FR2/FR3/FR5/FR6, issue #2428).** The
 token a `TokenSource` call above resolves only exists once the operator
-has completed a one-time, per-domain browser consent:
+has completed a one-time, per-scope browser consent:
 `whagent_net/ui/handlers_consent.go`'s `GET`/`POST
-/mcp/consent(?domain=<d>)` drives `DelegatedGrantSource.BeginAuthorization`/
+/mcp/consent(?scope=<d>)` drives `DelegatedGrantSource.BeginAuthorization`/
 `CompleteAuthorization` (requesting `offline_access`) for one explicit
-domain and records a bookkeeping-index entry (FR12, `grantindex`) on
-success — this route never infers or guesses a domain itself.
+scope and records a bookkeeping-index entry (FR12, `grantindex`) on
+success — this route never infers or guesses a scope itself.
 `authorizeConsentGate` wraps `GET /authorize` (`ui`'s mcpauth-hosted
 OAuth2 endpoint for the MCP client) with a prerequisite that the operator
-hold an active grant for `WHAGENT_UI_DEFAULT_DOMAIN` before a credential
-is minted — deliberately domain-agnostic at the OAuth layer rather than
-resource/scope-driven: `libs/go/mcpauth` is domain-agnostic by design
-(its own "zero domain-specific types" NFR) and `mcp`'s RFC 9728 resource
-identifier is one single, instance-wide URL, not one per domain —
-per-domain resolution happens later, at dispatch time (above). Consent
-for domain `D` grants standing access to `D` only (FR3): an operator who
+hold an active grant for `WHAGENT_UI_DEFAULT_SCOPE` before a credential
+is minted — deliberately scope-agnostic at the OAuth layer rather than
+resource/scope-driven: `libs/go/mcpauth` is scope-agnostic by design
+(its own "zero scope-specific types" NFR) and `mcp`'s RFC 9728 resource
+identifier is one single, instance-wide URL, not one per scope —
+per-scope resolution happens later, at dispatch time (above). Consent
+for scope `D` grants standing access to `D` only (FR3): an operator who
 has only consented for `audience_score_system` cannot reach `manmanv2`'s
 agent without separately consenting for it, and there is no
 session-based shortcut around this for an already-`ui`-authenticated
-operator (FR6) — accessing a new domain for the first time is routed
+operator (FR6) — accessing a new scope for the first time is routed
 through this same flow at the moment of first access (FR5), never at
 `ui` sign-in.
 
@@ -472,17 +478,17 @@ through this same flow at the moment of first access (FR5), never at
 working after it had been working (Keycloak rejects it in a way only
 re-consent fixes) — `acquireGrantToken` detects this distinctly
 (`errors.Is(err, grpcauth.ErrGrantNeedsReauth)`) and returns a
-`reauthRequiredError` naming the domain, rather than a plain acquisition
+`reauthRequiredError` naming the scope, rather than a plain acquisition
 failure, whether the failing call is `start_session`'s initial connect
 or an existing session's mid-call dispatch. No retry is attempted and no
 other grant is substituted — the operator is routed back through the
-consent flow above for that domain specifically, the next time they
+consent flow above for that scope specifically, the next time they
 access it through `ui`. Logged at WARNING (this is a genuine deviation
 needing a human, not an ERROR — the system itself behaved correctly).
 
 **Self-service and admin grant lists (FR14–FR17, issues #2432/#2433).**
 `GET /grants` (`whagent_net/ui/handlers_grants.go`) lists the signed-in
-operator's own delegated grants with a live per-domain status read
+operator's own delegated grants with a live per-scope status read
 (`grpcauth.Store.Status`, never the bookkeeping index, which carries no
 status column of its own — FR12) and lets them revoke any one
 individually (`POST /grants/revoke`); it never shows another operator's
@@ -497,43 +503,43 @@ Both revoke actions are scoped to exactly one `(subject, grant)` pair
 (FR17) and take effect immediately — there is no cache for a revoke to
 race against (FR8/NFR7).
 
-**NFR2 — domain isolation is a property of whagent_net's own dispatch
+**NFR2 — scope isolation is a property of whagent_net's own dispatch
 code, not of the Keycloak JWT.** The underlying Keycloak-signed JWT
 `TokenSource(...).Token(ctx)` returns is not scope-narrowed by which
 grant produced it — nothing at the IdP layer or in `grpcauth` itself
-prevents a JWT obtained via domain A's grant from being technically
-usable against domain B's `required_role` check if it were ever
+prevents a JWT obtained via scope A's grant from being technically
+usable against scope B's `required_role` check if it were ever
 forwarded there. The guarantee this design makes is **structural
-correctness of whagent_net's own grant→domain routing**: FR4's grant key
-ties one grant to exactly one domain, and no code path in `mcp` ever
-resolves or forwards a grant for any domain other than the one the
+correctness of whagent_net's own grant→scope routing**: FR4's grant key
+ties one grant to exactly one scope, and no code path in `mcp` ever
+resolves or forwards a grant for any scope other than the one the
 current call (above) is actually targeting — there is no code path that
-accepts a caller-supplied or mismatched grant/domain pair. This is
+accepts a caller-supplied or mismatched grant/scope pair. This is
 **not** a claim that the JWT itself is cryptographically restricted to
-one domain; it is a claim about what whagent_net's dispatch code will
+one scope; it is a claim about what whagent_net's dispatch code will
 and will not do with the JWT it obtains.
 
 **NFR1 — what compromising a secret alone can and cannot do.** No single
 secret held by `mcp` or `ui` — including `WHAGENT_GRANT_CLIENT_SECRET`,
 the one shared confidential client's secret (NFR5, below) — can mint a
 working credential for an operator who has not personally completed that
-domain's consent; it only lets a holder refresh already-consented,
+scope's consent; it only lets a holder refresh already-consented,
 still-active grants it can otherwise reach. This is a materially smaller
 blast radius than the removed impersonation-exchange design, whose
 equivalent secret could mint a JWT as *any* operator currently signed
-into `ui`, for any domain, without that operator ever having consented
+into `ui`, for any scope, without that operator ever having consented
 to anything.
 
-**NFR5 — one shared client, not one per domain.**
+**NFR5 — one shared client, not one per scope.**
 `WHAGENT_GRANT_CLIENT_ID`/`_CLIENT_SECRET`/`_REDIRECT_URI`/
 `_ENCRYPTION_KEY` (`ENV.md`) configure a *single* confidential Keycloak
 client used as the caller identity by both `ui` and `mcp` — distinct
 from `WHAGENT_OIDC_CLIENT_ID`/`_CLIENT_SECRET` (which only ever verifies
 or forwards a token neither binary minted itself) and unlike
-`KEYCLOAK.md`'s usual "one client per caller identity" principle: domain
+`KEYCLOAK.md`'s usual "one client per caller identity" principle: scope
 isolation for this flow is carried entirely by the grant key derived
-from `AgentDefinition.Domain` (FR4/NFR2 above), not by provisioning a
-separate Keycloak client per domain. The secret is read from the
+from `AgentDefinition.Scope` (FR4/NFR2 above), not by provisioning a
+separate Keycloak client per scope. The secret is read from the
 environment only, provisioned as a Kubernetes secret, never checked in,
 never logged, never echoed in an error. See
 `libs/go/grpcauth/KEYCLOAK.md` § 11 (and its whagent-net-specific runbook

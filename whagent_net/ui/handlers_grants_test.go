@@ -70,10 +70,10 @@ func TestHandleGrants_RendersPageStub(t *testing.T) {
 	require.Contains(t, w.Body.String(), "My grants")
 }
 
-// TestHandleGrantsRevoke_RequiresDomain is a scaffold-level sanity check:
-// a POST with no domain field is rejected with 400 before any store call
+// TestHandleGrantsRevoke_RequiresScope is a scaffold-level sanity check:
+// a POST with no scope field is rejected with 400 before any store call
 // is made.
-func TestHandleGrantsRevoke_RequiresDomain(t *testing.T) {
+func TestHandleGrantsRevoke_RequiresScope(t *testing.T) {
 	app := &App{auth: devModeAuthenticator(t)}
 	wrapped := app.auth.RequireAuthFunc(app.handleGrantsRevoke)
 
@@ -85,10 +85,10 @@ func TestHandleGrantsRevoke_RequiresDomain(t *testing.T) {
 	require.Equal(t, http.StatusBadRequest, w.Code)
 }
 
-// TestHandleGrantsRevoke_RedirectsOnValidDomain proves a POST for a
+// TestHandleGrantsRevoke_RedirectsOnValidScope proves a POST for a
 // domain the signed-in (dev-mode) operator actually holds a grant for
 // revokes it and redirects back to /grants.
-func TestHandleGrantsRevoke_RedirectsOnValidDomain(t *testing.T) {
+func TestHandleGrantsRevoke_RedirectsOnValidScope(t *testing.T) {
 	store := grpcauth.NewFakeStore()
 	subjectKey, err := grantSubjectKey(testIssuer, "dev-user")
 	require.NoError(t, err)
@@ -101,7 +101,7 @@ func TestHandleGrantsRevoke_RedirectsOnValidDomain(t *testing.T) {
 	}
 	wrapped := app.auth.RequireAuthFunc(app.handleGrantsRevoke)
 
-	req := httptest.NewRequest(http.MethodPost, "/grants/revoke", strings.NewReader("domain=audience_score_system"))
+	req := httptest.NewRequest(http.MethodPost, "/grants/revoke", strings.NewReader("scope=audience_score_system"))
 	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 	w := httptest.NewRecorder()
 	wrapped(w, req)
@@ -136,7 +136,7 @@ func TestHandleGrantsRevoke_TamperedSubjectIsIgnored(t *testing.T) {
 	}
 	wrapped := app.auth.RequireAuthFunc(app.handleGrantsRevoke)
 
-	form := "domain=audience_score_system&subject=victim-sub&sub=victim-sub"
+	form := "scope=audience_score_system&subject=victim-sub&sub=victim-sub"
 	req := httptest.NewRequest(http.MethodPost, "/grants/revoke", strings.NewReader(form))
 	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 	w := httptest.NewRecorder()
@@ -176,7 +176,7 @@ func TestBuildGrantRows_ScopedToSubject(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, rowsA, 1)
 	assert.Equal(t, "alice", rowsA[0].OperatorLabel)
-	assert.Equal(t, "audience_score_system", rowsA[0].Domain)
+	assert.Equal(t, "audience_score_system", rowsA[0].Scope)
 
 	for _, row := range rowsA {
 		assert.NotEqual(t, "bob", row.OperatorLabel, "operator A's rows must never include operator B's grant")

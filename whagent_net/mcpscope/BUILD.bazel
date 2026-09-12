@@ -1,16 +1,16 @@
 load("@rules_go//go:def.bzl", "go_library", "go_test")
 
-# The Postgres-backed implementation of the DomainResolver-shaped
+# The Postgres-backed implementation of the ScopeResolver-shaped
 # interfaces whagent_net/mcp/server and whagent_net/mcp/tools each declare
 # (issue #2427, FR7). Lives outside those two packages specifically
-# because it depends on whagent_net/session -- see mcpdomain.go's package
+# because it depends on whagent_net/session -- see mcpscope.go's package
 # doc and mcp/server/deps_test.go + mcp/tools/deps_test.go's
 # TestBUILD_NoStoreOrTemporalDependency, which forbid exactly that
 # dependency in mcp's own packages.
 go_library(
-    name = "mcpdomain",
-    srcs = ["mcpdomain.go"],
-    importpath = "github.com/whale-net/everything/whagent_net/mcpdomain",
+    name = "mcpscope",
+    srcs = ["mcpscope.go"],
+    importpath = "github.com/whale-net/everything/whagent_net/mcpscope",
     visibility = ["//visibility:public"],
     deps = [
         "//whagent_net/session",
@@ -21,11 +21,11 @@ go_library(
 # Pure unit test against a hand-rolled session.AgentDefinitionStore fake
 # (issue #2427's Testing section): proves Resolver's own not-found mapping
 # and transport-error passthrough independently of Postgres, so it runs as
-# part of `bazel test //...` -- unlike mcpdomain_integration_test below.
+# part of `bazel test //...` -- unlike mcpscope_integration_test below.
 go_test(
-    name = "mcpdomain_test",
-    srcs = ["mcpdomain_test.go"],
-    embed = [":mcpdomain"],
+    name = "mcpscope_test",
+    srcs = ["mcpscope_test.go"],
+    embed = [":mcpscope"],
     deps = [
         "//whagent_net/session",
         "@com_github_google_uuid//:uuid",
@@ -38,17 +38,17 @@ go_test(
 # a throwaway database via dbtest, applies whagent-net's own real embedded
 # migrations, and exercises Resolver against a real whagent_net/session.Store
 # end to end -- including the "session's recorded assignment wins over a
-# newer version with a different domain" case that a fake store can't
+# newer version with a different scope" case that a fake store can't
 # meaningfully prove. Deliberately NOT part of `bazel test //...` -- see
 # //libs/go/dbtest's README for the full rationale.
 #
 # Run it explicitly (requires a working Docker daemon):
-#   bazel test //whagent_net/mcpdomain:mcpdomain_integration_test --test_output=all
+#   bazel test //whagent_net/mcpscope:mcpscope_integration_test --test_output=all
 go_test(
-    name = "mcpdomain_integration_test",
+    name = "mcpscope_integration_test",
     size = "large",
     timeout = "long",
-    srcs = ["mcpdomain_integration_test.go"],
+    srcs = ["mcpscope_integration_test.go"],
     gotags = ["integration"],
     tags = [
         "external",
@@ -59,7 +59,7 @@ go_test(
         "requires-network",
     ],
     deps = [
-        ":mcpdomain",
+        ":mcpscope",
         "//libs/go/dbtest",
         "//libs/go/migrate",
         "//whagent_net/migrate/schema",

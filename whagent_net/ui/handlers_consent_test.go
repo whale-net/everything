@@ -257,7 +257,7 @@ func consentCookie(t *testing.T, w *httptest.ResponseRecorder) *http.Cookie {
 	return nil
 }
 
-// --- GET /mcp/consent: domain naming / no shortcuts -----------------------
+// --- GET /mcp/consent: scope naming / no shortcuts -----------------------
 //
 // The unauthenticated-request case
 // (TestMCPConsent_UnauthenticatedRequest_RedirectsToSignIn) lives in
@@ -280,38 +280,38 @@ func consentMux(app *App) *http.ServeMux {
 	return mux
 }
 
-func TestMCPConsent_RendersDomainName(t *testing.T) {
+func TestMCPConsent_RendersScopeName(t *testing.T) {
 	fake := newFakeGrantIdP(t)
 	app := newConsentTestApp(t, fake, grpcauth.NewFakeStore())
 	mux := consentMux(app)
 
-	req := httptest.NewRequest(http.MethodGet, "/mcp/consent?domain=audience_score_system", nil)
+	req := httptest.NewRequest(http.MethodGet, "/mcp/consent?scope=audience_score_system", nil)
 	w := httptest.NewRecorder()
 	mux.ServeHTTP(w, req)
 
 	require.Equal(t, http.StatusOK, w.Code)
-	assert.Contains(t, w.Body.String(), "audience_score_system", "the consent page must name the domain (FR2/FR6), sourced from the domain param, not inferred")
+	assert.Contains(t, w.Body.String(), "audience_score_system", "the consent page must name the scope (FR2/FR6), sourced from the scope param, not inferred")
 }
 
-func TestMCPConsent_InvalidDomain_Rejected(t *testing.T) {
+func TestMCPConsent_InvalidScope_Rejected(t *testing.T) {
 	fake := newFakeGrantIdP(t)
 	app := newConsentTestApp(t, fake, grpcauth.NewFakeStore())
 	mux := consentMux(app)
 
-	for _, domain := range []string{"", "not a valid domain!"} {
-		req := httptest.NewRequest(http.MethodGet, "/mcp/consent?domain="+url.QueryEscape(domain), nil)
+	for _, scope := range []string{"", "not a valid scope!"} {
+		req := httptest.NewRequest(http.MethodGet, "/mcp/consent?scope="+url.QueryEscape(scope), nil)
 		w := httptest.NewRecorder()
 		mux.ServeHTTP(w, req)
-		assert.Equal(t, http.StatusBadRequest, w.Code, "domain=%q should be rejected", domain)
+		assert.Equal(t, http.StatusBadRequest, w.Code, "scope=%q should be rejected", scope)
 	}
 }
 
-// TestMCPConsent_ActiveGrantForDifferentDomain_StillRequiresConsent is
+// TestMCPConsent_ActiveGrantForDifferentScope_StillRequiresConsent is
 // issue #2428's Testing section, FR5's exact scenario: an operator who
-// already holds an active grant for one domain, targeting a second domain,
-// is still shown the full consent step for the second domain -- never
-// skipped because *some* domain is already granted.
-func TestMCPConsent_ActiveGrantForDifferentDomain_StillRequiresConsent(t *testing.T) {
+// already holds an active grant for one scope, targeting a second scope,
+// is still shown the full consent step for the second scope -- never
+// skipped because *some* scope is already granted.
+func TestMCPConsent_ActiveGrantForDifferentScope_StillRequiresConsent(t *testing.T) {
 	fake := newFakeGrantIdP(t)
 	store := grpcauth.NewFakeStore()
 	require.NoError(t, store.Persist(context.Background(), devUserSub, "audience_score_system", grpcauth.TokenMaterial{RefreshToken: "already-granted"}))
@@ -319,7 +319,7 @@ func TestMCPConsent_ActiveGrantForDifferentDomain_StillRequiresConsent(t *testin
 	app := newConsentTestApp(t, fake, store)
 	mux := consentMux(app)
 
-	req := httptest.NewRequest(http.MethodGet, "/mcp/consent?domain=manmanv2", nil)
+	req := httptest.NewRequest(http.MethodGet, "/mcp/consent?scope=manmanv2", nil)
 	w := httptest.NewRecorder()
 	mux.ServeHTTP(w, req)
 
@@ -328,11 +328,11 @@ func TestMCPConsent_ActiveGrantForDifferentDomain_StillRequiresConsent(t *testin
 	assert.Contains(t, w.Body.String(), `action="/mcp/consent"`, "the confirm form must still be rendered, not skipped")
 }
 
-// TestMCPConsent_ActiveGrantForSameDomain_StillRequiresConsent proves FR6's
-// "no session shortcut" holds even for the exact domain already granted --
+// TestMCPConsent_ActiveGrantForSameScope_StillRequiresConsent proves FR6's
+// "no session shortcut" holds even for the exact scope already granted --
 // re-routing an operator here (e.g. FR18's reauth routing, a future task)
 // must never silently no-op past this step.
-func TestMCPConsent_ActiveGrantForSameDomain_StillRequiresConsent(t *testing.T) {
+func TestMCPConsent_ActiveGrantForSameScope_StillRequiresConsent(t *testing.T) {
 	fake := newFakeGrantIdP(t)
 	store := grpcauth.NewFakeStore()
 	require.NoError(t, store.Persist(context.Background(), devUserSub, "audience_score_system", grpcauth.TokenMaterial{RefreshToken: "already-granted"}))
@@ -340,12 +340,12 @@ func TestMCPConsent_ActiveGrantForSameDomain_StillRequiresConsent(t *testing.T) 
 	app := newConsentTestApp(t, fake, store)
 	mux := consentMux(app)
 
-	req := httptest.NewRequest(http.MethodGet, "/mcp/consent?domain=audience_score_system", nil)
+	req := httptest.NewRequest(http.MethodGet, "/mcp/consent?scope=audience_score_system", nil)
 	w := httptest.NewRecorder()
 	mux.ServeHTTP(w, req)
 
 	require.Equal(t, http.StatusOK, w.Code)
-	assert.Contains(t, w.Body.String(), `action="/mcp/consent"`, "an already-granted domain must still render the confirm form, not a shortcut")
+	assert.Contains(t, w.Body.String(), `action="/mcp/consent"`, "an already-granted scope must still render the confirm form, not a shortcut")
 }
 
 // --- Full BeginAuthorization/CompleteAuthorization round trip ------------
@@ -386,7 +386,7 @@ func TestConsentRoundTrip_MatchingGrantSubject_PersistsActiveGrant(t *testing.T)
 
 	// Step 1: POST /mcp/consent confirms consent for audience_score_system.
 	confirmReq := httptest.NewRequest(http.MethodPost, "/mcp/consent", strings.NewReader(url.Values{
-		"domain":    {"audience_score_system"},
+		"scope":    {"audience_score_system"},
 		"return_to": {"/sessions/42"},
 	}.Encode()))
 	confirmReq.Header.Set("Content-Type", "application/x-www-form-urlencoded")
@@ -450,7 +450,7 @@ func TestConsentRoundTrip_RealisticCrossClientSubject_MustSucceed(t *testing.T) 
 	mux := consentMux(app)
 
 	confirmReq := httptest.NewRequest(http.MethodPost, "/mcp/consent", strings.NewReader(url.Values{
-		"domain":    {"audience_score_system"},
+		"scope":    {"audience_score_system"},
 		"return_to": {"/sessions/42"},
 	}.Encode()))
 	confirmReq.Header.Set("Content-Type", "application/x-www-form-urlencoded")
@@ -476,9 +476,9 @@ func TestConsentRoundTrip_RealisticCrossClientSubject_MustSucceed(t *testing.T) 
 	assert.Equal(t, grpcauth.GrantStatusActive, status)
 }
 
-// --- Per-domain scoping (FR3) ---------------------------------------------
+// --- Per-scope scoping (FR3) ---------------------------------------------
 
-func TestConsentRoundTrip_ConsentForOneDomain_LeavesOtherDomainAbsent(t *testing.T) {
+func TestConsentRoundTrip_ConsentForOneScope_LeavesOtherScopeAbsent(t *testing.T) {
 	fake := newFakeGrantIdP(t)
 	fake.SetSubject(devUserSub)
 	store := grpcauth.NewFakeStore()
@@ -486,7 +486,7 @@ func TestConsentRoundTrip_ConsentForOneDomain_LeavesOtherDomainAbsent(t *testing
 	mux := consentMux(app)
 
 	confirmReq := httptest.NewRequest(http.MethodPost, "/mcp/consent", strings.NewReader(url.Values{
-		"domain": {"audience_score_system"},
+		"scope": {"audience_score_system"},
 	}.Encode()))
 	confirmReq.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 	confirmW := httptest.NewRecorder()
@@ -508,7 +508,7 @@ func TestConsentRoundTrip_ConsentForOneDomain_LeavesOtherDomainAbsent(t *testing
 	assert.Equal(t, grpcauth.GrantStatusActive, assStatus)
 
 	_, err = store.Status(context.Background(), devUserSub, "manmanv2")
-	assert.ErrorIs(t, err, grpcauth.ErrGrantNotFound, "consenting to one domain must not create a grant for any other domain")
+	assert.ErrorIs(t, err, grpcauth.ErrGrantNotFound, "consenting to one scope must not create a grant for any other scope")
 }
 
 // --- Callback failure paths ------------------------------------------------
@@ -521,7 +521,7 @@ func TestConsentCallback_StateMismatch_PersistsNothing(t *testing.T) {
 	mux := consentMux(app)
 
 	confirmReq := httptest.NewRequest(http.MethodPost, "/mcp/consent", strings.NewReader(url.Values{
-		"domain": {"audience_score_system"},
+		"scope": {"audience_score_system"},
 	}.Encode()))
 	confirmReq.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 	confirmW := httptest.NewRecorder()
@@ -548,7 +548,7 @@ func TestConsentCallback_KeycloakErrorResponse_PersistsNothing(t *testing.T) {
 	mux := consentMux(app)
 
 	confirmReq := httptest.NewRequest(http.MethodPost, "/mcp/consent", strings.NewReader(url.Values{
-		"domain": {"audience_score_system"},
+		"scope": {"audience_score_system"},
 	}.Encode()))
 	confirmReq.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 	confirmW := httptest.NewRecorder()
@@ -607,7 +607,7 @@ func TestConsentCallback_SubjectDoesNotMatchSignedInSession_Rejected(t *testing.
 			CodeVerifier: "irrelevant-verifier",
 			CreatedAt:    time.Now(),
 		},
-		Domain:   "audience_score_system",
+		Scope:   "audience_score_system",
 		ReturnTo: "/sessions/42",
 	}))
 	cookie := consentCookie(t, saveW)

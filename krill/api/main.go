@@ -30,12 +30,19 @@ type config struct {
 	// DatabaseURL is PG_DATABASE_URL -- empty defers to
 	// libs/go/db.NewPool's own PG_DATABASE_URL fallback.
 	DatabaseURL string
+
+	// GitHubToken is KRILL_GITHUB_TOKEN (issue #2496, FR20) -- the bearer
+	// credential //krill/forge.GitHubClient uses to create a Product's
+	// pointer issue. Only POST /pointer-artifacts needs it; every other
+	// endpoint in this binary ignores it. See ../ENV.md.
+	GitHubToken string
 }
 
 func loadConfig() config {
 	return config{
 		Addr:        getEnv("KRILL_API_ADDR", ":8080"),
 		DatabaseURL: os.Getenv("PG_DATABASE_URL"),
+		GitHubToken: os.Getenv("KRILL_GITHUB_TOKEN"),
 	}
 }
 
@@ -75,7 +82,7 @@ func run() error {
 	defer pool.Close()
 
 	mux := http.NewServeMux()
-	setupRoutes(mux, pool)
+	setupRoutes(mux, pool, cfg.GitHubToken)
 
 	httpServer := &http.Server{
 		Addr:         cfg.Addr,

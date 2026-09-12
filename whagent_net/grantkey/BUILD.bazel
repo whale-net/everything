@@ -1,4 +1,4 @@
-"""whagent-net domain-derived delegated-grant key (issue #2424, FR1/FR4):
+"""whagent-net scope-derived delegated-grant key (issue #2424, FR1/FR4):
 a pure, dependency-free helper so both whagent_net/mcp (server/tools,
 deps_test.go-protected) and whagent_net/ui can depend on it without
 pulling in Postgres/Temporal/config."""
@@ -12,8 +12,8 @@ go_library(
     visibility = ["//visibility:public"],
 )
 
-# Pure-Go suite (issue #2424's Testing section): ForDomain's determinism,
-# no-collision-across-domains, and empty/whitespace/malformed-domain error
+# Pure-Go suite (issue #2424's Testing section): ForScope's determinism,
+# no-collision-across-scopes, and empty/whitespace/malformed-scope error
 # cases. No Postgres/network dependency.
 go_test(
     name = "grantkey_test",

@@ -37,7 +37,7 @@ func toolError(rpcName string, err error) error {
 // translation (issue #2431, FR18): dispatch.go's acquireGrantToken detects
 // errors.Is(err, grpcauth.ErrGrantNeedsReauth) coming back from
 // GrantSource.TokenSource(...).Token(ctx) and, instead of leaving that
-// error as the plain domain-naming wrap #2430's acquireGrantToken already
+// error as the plain scope-naming wrap #2430's acquireGrantToken already
 // produces for every other grant failure, returns this instead -- it exists
 // as its own type (rather than reusing that plain wrap unchanged) so a
 // caller that needs to distinguish "no grant at all" / "revoked" from
@@ -50,29 +50,29 @@ func toolError(rpcName string, err error) error {
 // (already wrapping grpcauth.ErrGrantNeedsReauth), so Unwrap alone is
 // sufficient and this package's existing dependency surface is unchanged.
 //
-// Domain is always the value dispatch.go's acquireGrantToken already
+// Scope is always the value dispatch.go's acquireGrantToken already
 // resolved before calling TokenSource -- never re-derived from cause's own
 // text -- so it is exact even if a future wrap of ErrGrantNeedsReauth
 // changes its message.
 type reauthRequiredError struct {
-	domain string
+	scope string
 	cause  error
 }
 
 // newReauthRequiredError builds the mid-call reauth-required error for
-// domain, wrapping cause (expected to be, or wrap, grpcauth.ErrGrantNeedsReauth).
-func newReauthRequiredError(domain string, cause error) error {
-	return &reauthRequiredError{domain: domain, cause: cause}
+// scope, wrapping cause (expected to be, or wrap, grpcauth.ErrGrantNeedsReauth).
+func newReauthRequiredError(scope string, cause error) error {
+	return &reauthRequiredError{scope: scope, cause: cause}
 }
 
-// Error names domain explicitly and points at the standalone per-domain
-// consent route (issue #2428's GET /mcp/consent?domain=<d>, mounted on
+// Error names scope explicitly and points at the standalone per-scope
+// consent route (issue #2428's GET /mcp/consent?scope=<d>, mounted on
 // `ui`) so an operator reading the tool-call failure in their transcript
 // (mcp.AddTool's doc comment: a returned error's own message IS what the
 // operator sees) has both what happened and exactly where to go to fix
 // it -- not an opaque "auth failed".
 func (e *reauthRequiredError) Error() string {
-	return fmt.Sprintf("domain %q needs re-consent (grant rejected by Keycloak); complete consent again at GET /mcp/consent?domain=%s: %s", e.domain, e.domain, e.cause)
+	return fmt.Sprintf("scope %q needs re-consent (grant rejected by Keycloak); complete consent again at GET /mcp/consent?scope=%s: %s", e.scope, e.scope, e.cause)
 }
 
 // Unwrap exposes cause so errors.Is(err, grpcauth.ErrGrantNeedsReauth) still
@@ -81,13 +81,13 @@ func (e *reauthRequiredError) Unwrap() error {
 	return e.cause
 }
 
-// reauthDomain reports the affected domain if err is or wraps a
+// reauthScope reports the affected scope if err is or wraps a
 // reauthRequiredError, for callers (dispatch.go's structured WARNING
-// logging) that need the domain value without re-parsing Error() text.
-func reauthDomain(err error) (string, bool) {
+// logging) that need the scope value without re-parsing Error() text.
+func reauthScope(err error) (string, bool) {
 	var e *reauthRequiredError
 	if errors.As(err, &e) {
-		return e.domain, true
+		return e.scope, true
 	}
 	return "", false
 }

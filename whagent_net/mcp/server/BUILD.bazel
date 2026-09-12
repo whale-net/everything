@@ -7,7 +7,7 @@ go_library(
     name = "server",
     srcs = [
         "auth.go",
-        "domain.go",
+        "scope.go",
         "server.go",
         "transport.go",
     ],
