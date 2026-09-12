@@ -21,6 +21,8 @@ package tools_test
 
 import (
 	"context"
+	"crypto/ed25519"
+	"crypto/rand"
 	"database/sql"
 	"encoding/json"
 	"fmt"
@@ -43,6 +45,7 @@ import (
 	"github.com/whale-net/everything/libs/go/dbtest"
 	"github.com/whale-net/everything/libs/go/mcpauth"
 	"github.com/whale-net/everything/libs/go/migrate"
+	"github.com/whale-net/everything/libs/go/whagent"
 )
 
 // newListChannelsTestStack mirrors schedule_read_integration_test.go's
@@ -362,4 +365,143 @@ func TestListChannels_IssuesBoundedQueryCount_NFR9(t *testing.T) {
 
 	assert.Equal(t, queriesForOneChannel, queriesForFiveChannels,
 		"list_channels must issue the same number of queries regardless of how many Channels the caller holds a role on (NFR9) -- a per-Channel RolesFor loop would scale this with Channel count")
+}
+
+// ── FR11/FR12: whagent-path whole-Person zero-role linking discoverability ──
+
+const lcWhagentAudience = "https://mcp.example.com"
+
+// newListChannelsWhagentSignerVerifier mirrors
+// whagent_auth_integration_test.go's newTestWhagentSignerVerifier, at the
+// width this package's tests need to mint real Claim JWTs.
+func newListChannelsWhagentSignerVerifier(t *testing.T, issuer string) (*whagent.Signer, *whagent.Verifier) {
+	t.Helper()
+	pub, priv, err := ed25519.GenerateKey(rand.Reader)
+	require.NoError(t, err)
+	signer, err := whagent.New(priv, issuer, "test-key-1")
+	require.NoError(t, err)
+	verifier, err := whagent.NewVerifierFromKey(pub, issuer)
+	require.NoError(t, err)
+	return signer, verifier
+}
+
+// newListChannelsDualAuthTestServer mirrors newListChannelsTestServer, but
+// additionally mounts the whagent-net auth path (server.WhagentPersonMiddleware
+// + server.NewDualAuthHTTPHandler) alongside the existing mcp_credential
+// path -- list_channels' own FR11 call to server.RequireChannelAccess only
+// ever fires for a caller resolved via AuthPathWhagent, so exercising it
+// requires a real whagent-authenticated call, not just an mcp_credential
+// one.
+func newListChannelsDualAuthTestServer(t *testing.T, st *store.Store, pool *pgxpool.Pool, verifier *whagent.Verifier) *httptest.Server {
+	t.Helper()
+
+	srv := server.New(st)
+	reg := server.NewRegistry(srv, st)
+	tools.RegisterListChannels(reg, st.Access(), st.Roles())
+
+	srv.AddReceivingMiddleware(server.WhagentPersonMiddleware(st.PersonIdentities()))
+
+	handler := server.NewDualAuthHTTPHandler(srv, newTestCredentialStore(t, pool), server.WhagentAuthConfig{
+		Verifier: verifier,
+		Audience: lcWhagentAudience,
+	}, server.ResourceMetadataConfig{
+		Resource:            lcWhagentAudience,
+		AuthorizationServer: "https://web.example.com",
+		ResourceName:        "Test MCP",
+	})
+	ts := httptest.NewServer(handler)
+	t.Cleanup(ts.Close)
+	return ts
+}
+
+func lcMintWhagentToken(t *testing.T, signer *whagent.Signer, iss, sub string) string {
+	t.Helper()
+	token, err := signer.Mint(context.Background(), whagent.MintRequest{
+		Subject:       sub,
+		SubjectIssuer: iss,
+		Actor:         whagent.Actor{Subject: "agent-actor-1", AgentID: "research-agent-v3"},
+		SessionID:     "session-1",
+		Audience:      lcWhagentAudience,
+	})
+	require.NoError(t, err)
+	return token
+}
+
+// TestListChannels_FR11_WhagentZeroRoleGetsLinkingMessage is FR11's core
+// acceptance case for list_channels specifically (the other ChannelScoped
+// tool path is covered by mcp/server's own registry-level tests): a
+// whagent-authenticated caller who holds zero channel_person rows across
+// every Channel gets a discoverable pointer to the linking flow, not a
+// silent empty list.
+func TestListChannels_FR11_WhagentZeroRoleGetsLinkingMessage(t *testing.T) {
+	st, pg := newListChannelsTestStack(t)
+	signer, verifier := newListChannelsWhagentSignerVerifier(t, "https://whagent.example.test")
+	const iss, sub = "https://keycloak.example.test/realms/humans", "human-lc-fr11-1"
+
+	ts := newListChannelsDualAuthTestServer(t, st, pg.Pool, verifier)
+	cs := lcConnectAs(t, ts, lcMintWhagentToken(t, signer, iss, sub))
+
+	res, out := lcCall(t, cs)
+	require.True(t, res.IsError, "a whagent caller with zero roles anywhere must get an error result, not a silent empty list")
+	assert.Empty(t, out.Channels)
+	assert.Contains(t, lcTextOf(res), "Link ASS identity", "the message must name the linking action")
+	assert.Contains(t, lcTextOf(res), "not linked", "the message must explain why the result is empty")
+}
+
+// TestListChannels_FR11_WhagentWithRoleOnSomeChannelSucceedsNormally proves
+// the check is whole-Person, not per-call: a whagent-authenticated caller
+// who holds a role on at least one Channel sees the ordinary result, with
+// no linking-flow message anywhere in it.
+func TestListChannels_FR11_WhagentWithRoleOnSomeChannelSucceedsNormally(t *testing.T) {
+	st, pg := newListChannelsTestStack(t)
+	ctx := context.Background()
+	signer, verifier := newListChannelsWhagentSignerVerifier(t, "https://whagent.example.test")
+	const iss, sub = "https://keycloak.example.test/realms/humans", "human-lc-fr11-2"
+
+	// Auto-provision the whagent-resolved Person up front so a role can be
+	// granted to it before the tool call.
+	person, created, err := st.PersonIdentities().FindOrCreateByIssSub(ctx, iss, sub)
+	require.NoError(t, err)
+	require.True(t, created)
+
+	founder, _, err := st.Persons().UpsertByGoogleSubject(ctx, "sub-lc-fr11-founder", "lc-fr11-founder@example.com", "Founder")
+	require.NoError(t, err)
+	ch, err := st.Channels().Create(ctx, "yt-lc-fr11-2", "FR11 Channel", founder.ID)
+	require.NoError(t, err)
+	require.NoError(t, st.Roles().AddRole(ctx, ch.ID, person.ID, store.RoleAnalyst, founder.ID))
+
+	ts := newListChannelsDualAuthTestServer(t, st, pg.Pool, verifier)
+	cs := lcConnectAs(t, ts, lcMintWhagentToken(t, signer, iss, sub))
+
+	res, out := lcCall(t, cs)
+	require.False(t, res.IsError, "unexpected error: %s", lcTextOf(res))
+	require.Len(t, out.Channels, 1)
+	assert.Equal(t, ch.ID.String(), out.Channels[0].ChannelID)
+}
+
+// TestListChannels_FR12_McpCredentialZeroRoleNeverGetsLinkingMessage is
+// FR12's exclusion for list_channels: an mcp_credential caller with zero
+// roles everywhere keeps getting the ordinary empty list (already proven
+// generally by TestListChannels_ReturnsOnlyCallersChannelsWithRoleAndConnectionState's
+// "unassociated" case above) -- this test additionally asserts the FR11
+// message text is nowhere in that response, even with the whagent path
+// also mounted on the same server.
+func TestListChannels_FR12_McpCredentialZeroRoleNeverGetsLinkingMessage(t *testing.T) {
+	st, pg := newListChannelsTestStack(t)
+	ctx := context.Background()
+	_, verifier := newListChannelsWhagentSignerVerifier(t, "https://whagent.example.test")
+	creds := newTestCredentialStore(t, pg.Pool)
+
+	unassociated, _, err := st.Persons().UpsertByGoogleSubject(ctx, "sub-lc-fr12-unassoc", "lc-fr12-unassoc@example.com", "Unassociated")
+	require.NoError(t, err)
+
+	ts := newListChannelsDualAuthTestServer(t, st, pg.Pool, verifier)
+	token, _, err := creds.Mint(ctx, unassociated.ID.String())
+	require.NoError(t, err)
+	cs := lcConnectAs(t, ts, token)
+
+	res, out := lcCall(t, cs)
+	require.False(t, res.IsError, "an mcp_credential caller with zero roles must get an ordinary empty list, not an error (FR12)")
+	assert.Empty(t, out.Channels)
+	assert.NotContains(t, lcTextOf(res), "Link ASS identity")
 }

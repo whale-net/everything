@@ -68,10 +68,12 @@ func TestPersonMiddleware_ResolvesPersonAndCallsNext(t *testing.T) {
 	persons := fakePersonStore{byID: map[uuid.UUID]store.Person{personID: want}}
 
 	var gotPerson *store.Person
+	var gotAuthPath AuthPath
 	var nextCalled bool
 	next := mcp.MethodHandler(func(ctx context.Context, method string, req mcp.Request) (mcp.Result, error) {
 		nextCalled = true
 		gotPerson = PersonFromContext(ctx)
+		gotAuthPath = AuthPathFromContext(ctx)
 		return nil, nil
 	})
 
@@ -81,8 +83,13 @@ func TestPersonMiddleware_ResolvesPersonAndCallsNext(t *testing.T) {
 	assert.True(t, nextCalled, "next must run once caller identity resolves")
 	require.NotNil(t, gotPerson, "PersonFromContext must see the resolved Person inside next")
 	assert.Equal(t, want, *gotPerson)
+	assert.Equal(t, AuthPathMCPCredential, gotAuthPath, "PersonMiddleware must stamp AuthPathMCPCredential (FR12)")
 }
 
 func TestPersonFromContext_NilWhenNothingResolved(t *testing.T) {
 	assert.Nil(t, PersonFromContext(context.Background()), "PersonFromContext must return nil outside a request PersonMiddleware handled")
+}
+
+func TestAuthPathFromContext_UnknownWhenNothingResolved(t *testing.T) {
+	assert.Equal(t, AuthPathUnknown, AuthPathFromContext(context.Background()), "AuthPathFromContext must return AuthPathUnknown outside any request either middleware handled")
 }

@@ -302,6 +302,7 @@ go_test(
         "//libs/go/dbtest",
         "//libs/go/mcpauth",
         "//libs/go/migrate",
+        "//libs/go/whagent",
         "@com_github_jackc_pgx_v5//:pgx",
         "@com_github_jackc_pgx_v5//pgxpool",
         "@com_github_jackc_pgx_v5//stdlib",
