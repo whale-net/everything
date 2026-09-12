@@ -44,28 +44,28 @@ type ReadTranscriptOutput struct {
 // readTranscriptTool holds the SessionService client this tool is a
 // pass-through to.
 //
-// domainResolver/grant are FR7/FR8's dispatch-time resolution seams
-// (domain.go, grant.go): call resolves in.SessionID's domain via
-// DomainForSession and acquires a token via grant.TokenSource before
+// scopeResolver/grant are FR7/FR8's dispatch-time resolution seams
+// (scope.go, grant.go): call resolves in.SessionID's scope via
+// ScopeForSession and acquires a token via grant.TokenSource before
 // forwarding (dispatch.go's resolveGrantTokenForSession), for the
 // browser-OAuth2 path only -- see dispatch.go's own doc comment for the
 // manual-token-path no-op case.
 type readTranscriptTool struct {
 	client         pb.SessionServiceClient
-	domainResolver DomainResolver
+	scopeResolver ScopeResolver
 	grant          GrantSource
 }
 
 // RegisterReadTranscript registers the read_transcript tool on srv.
-func RegisterReadTranscript(srv *mcp.Server, client pb.SessionServiceClient, domainResolver DomainResolver, grant GrantSource) {
-	t := &readTranscriptTool{client: client, domainResolver: domainResolver, grant: grant}
+func RegisterReadTranscript(srv *mcp.Server, client pb.SessionServiceClient, scopeResolver ScopeResolver, grant GrantSource) {
+	t := &readTranscriptTool{client: client, scopeResolver: scopeResolver, grant: grant}
 	mcp.AddTool(srv, &mcp.Tool{
 		Name:        "read_transcript",
 		Description: "Read a whagent-net session's transcript events in commit order, paginated by from_seq/limit (FR2). Works for a running or ended session.",
 	}, t.call)
 }
 
-// call resolves in.SessionID's domain and acquires a token before
+// call resolves in.SessionID's scope and acquires a token before
 // forwarding to t.client.ReadTranscript (dispatch.go's
 // resolveGrantTokenForSession, FR7/FR8) -- otherwise a direct
 // pass-through, no other business logic -- forwarding the caller's bearer
@@ -75,7 +75,7 @@ func RegisterReadTranscript(srv *mcp.Server, client pb.SessionServiceClient, dom
 // already in commit (seq) order (FR2); this method preserves that order
 // rather than re-sorting.
 func (t *readTranscriptTool) call(ctx context.Context, req *mcp.CallToolRequest, in ReadTranscriptInput) (*mcp.CallToolResult, ReadTranscriptOutput, error) {
-	ctx, err := resolveGrantTokenForSession(ctx, t.domainResolver, t.grant, in.SessionID)
+	ctx, err := resolveGrantTokenForSession(ctx, t.scopeResolver, t.grant, in.SessionID)
 	if err != nil {
 		return nil, ReadTranscriptOutput{}, err
 	}

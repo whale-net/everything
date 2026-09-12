@@ -36,16 +36,18 @@ type ToolServerRef struct {
 // OpenRouter provider-routing preferences are resolved from the
 // referenced model_definition row (worker/activities.go's
 // ResolveAgentDefinition), not from Model, which is NULL in that case.
-// Domain is required (migration 007, issue #2424 FR1): the one domain
+// Scope is optional (migration 009): when set, it is the one grant-scope
 // this agent definition belongs to, and the sole input
-// whagent_net/grantkey.ForDomain may derive a delegated-grant key from
+// whagent_net/grantkey.ForScope may derive a delegated-grant key from
 // (FR4) -- never agent_id, required_role, or a tool_set[].server_url.
-// Every tool_set entry is understood to belong to this same domain, by
-// construction; there is no per-entry domain field to reconcile against
-// it.
+// Every tool_set entry is understood to belong to this same scope, by
+// construction; there is no per-entry scope field to reconcile against
+// it. A nil Scope means the agent runs with no delegated-grant scoping at
+// all -- it still gets whatever ToolSet is configured for it, just without
+// a cross-domain grant key derived or checked.
 type AgentDefinition struct {
 	AgentID           string
-	Domain            string
+	Scope             *string
 	Version           int
 	Model             *string
 	ModelDefinitionID *uuid.UUID
@@ -96,13 +98,13 @@ type agentDefinitionStore struct{ pool *pgxpool.Pool }
 
 var _ AgentDefinitionStore = agentDefinitionStore{}
 
-const agentDefinitionColumns = `agent_id, domain, version, model, model_definition_id, tool_set, max_turns, max_cost_usd, required_role, created_at`
+const agentDefinitionColumns = `agent_id, scope, version, model, model_definition_id, tool_set, max_turns, max_cost_usd, required_role, created_at`
 
 func scanAgentDefinition(row pgx.Row) (*AgentDefinition, error) {
 	var def AgentDefinition
 	var toolSet json.RawMessage
 	if err := row.Scan(
-		&def.AgentID, &def.Domain, &def.Version, &def.Model, &def.ModelDefinitionID, &toolSet,
+		&def.AgentID, &def.Scope, &def.Version, &def.Model, &def.ModelDefinitionID, &toolSet,
 		&def.MaxTurns, &def.MaxCostUSD, &def.RequiredRole, &def.CreatedAt,
 	); err != nil {
 		return nil, err
@@ -159,10 +161,10 @@ func (s agentDefinitionStore) Upsert(ctx context.Context, def *AgentDefinition) 
 	}
 
 	err = s.pool.QueryRow(ctx, `
-		INSERT INTO agent_definition (agent_id, domain, version, model, model_definition_id, tool_set, max_turns, max_cost_usd, required_role)
+		INSERT INTO agent_definition (agent_id, scope, version, model, model_definition_id, tool_set, max_turns, max_cost_usd, required_role)
 		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
 		ON CONFLICT (agent_id, version) DO UPDATE SET
-			domain = EXCLUDED.domain,
+			scope = EXCLUDED.scope,
 			model = EXCLUDED.model,
 			model_definition_id = EXCLUDED.model_definition_id,
 			tool_set = EXCLUDED.tool_set,
@@ -170,7 +172,7 @@ func (s agentDefinitionStore) Upsert(ctx context.Context, def *AgentDefinition) 
 			max_cost_usd = EXCLUDED.max_cost_usd,
 			required_role = EXCLUDED.required_role
 		RETURNING created_at
-	`, def.AgentID, def.Domain, def.Version, def.Model, def.ModelDefinitionID, toolSet, def.MaxTurns, def.MaxCostUSD, def.RequiredRole).Scan(&def.CreatedAt)
+	`, def.AgentID, def.Scope, def.Version, def.Model, def.ModelDefinitionID, toolSet, def.MaxTurns, def.MaxCostUSD, def.RequiredRole).Scan(&def.CreatedAt)
 	if err != nil {
 		return fmt.Errorf("upsert agent definition: %w", err)
 	}

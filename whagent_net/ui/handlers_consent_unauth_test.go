@@ -18,7 +18,7 @@ func TestMCPConsent_UnauthenticatedRequest_RedirectsToSignIn(t *testing.T) {
 	app := &App{auth: newTestOIDCAuthenticator(t)}
 	mux := consentMux(app)
 
-	req := httptest.NewRequest(http.MethodGet, "/mcp/consent?domain=audience_score_system", nil)
+	req := httptest.NewRequest(http.MethodGet, "/mcp/consent?scope=audience_score_system", nil)
 	w := httptest.NewRecorder()
 	mux.ServeHTTP(w, req)
 

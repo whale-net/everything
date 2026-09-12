@@ -23,7 +23,7 @@ go_library(
         "//whagent_net/delegatedgrant",
         "//whagent_net/mcp/server",
         "//whagent_net/mcp/tools",
-        "//whagent_net/mcpdomain",
+        "//whagent_net/mcpscope",
         "//whagent_net/protos:whagentpb",
         "//whagent_net/session",
         "@com_github_jackc_pgx_v5//pgxpool",

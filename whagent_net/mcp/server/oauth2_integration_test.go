@@ -6,7 +6,7 @@ package server_test
 // now goes through GrantSource at tool-dispatch time): a real
 // streamable-HTTP mcp.Client against a real server.NewHTTPHandler, a real
 // (fake-Postgres-backed) mcpauth.CredentialStore.Verify call, a fake
-// DomainResolver/GrantSource standing in for whagent_net/mcpdomain.Resolver
+// ScopeResolver/GrantSource standing in for whagent_net/mcpscope.Resolver
 // and //whagent_net/delegatedgrant's real, Postgres/Keycloak-backed
 // implementations, and a real (bufconn) gRPC call into a fake `api`. It
 // does not stand up #2245's authorization-server side (`ui`'s
@@ -112,25 +112,25 @@ func (f *fakeOAuthCredentialStore) List(context.Context, string) ([]mcpauth.Cred
 
 var _ mcpauth.CredentialStore = (*fakeOAuthCredentialStore)(nil)
 
-// ── fake tools.DomainResolver / tools.GrantSource ─────────────────────────
+// ── fake tools.ScopeResolver / tools.GrantSource ─────────────────────────
 
-// fakeIntegrationDomainResolver implements tools.DomainResolver against a
-// single fixed domain -- this file's own copy, distinct from the tools
-// package's own unexported fakeDomainResolver (fake_domain_resolver_test.go),
+// fakeIntegrationScopeResolver implements tools.ScopeResolver against a
+// single fixed scope -- this file's own copy, distinct from the tools
+// package's own unexported fakeScopeResolver (fake_scope_resolver_test.go),
 // which this package cannot import.
-type fakeIntegrationDomainResolver struct {
-	domain string
+type fakeIntegrationScopeResolver struct {
+	scope string
 }
 
-func (f *fakeIntegrationDomainResolver) DomainForAgent(context.Context, string) (string, error) {
-	return f.domain, nil
+func (f *fakeIntegrationScopeResolver) ScopeForAgent(context.Context, string) (*string, error) {
+	return &f.scope, nil
 }
 
-func (f *fakeIntegrationDomainResolver) DomainForSession(context.Context, string) (string, error) {
-	return f.domain, nil
+func (f *fakeIntegrationScopeResolver) ScopeForSession(context.Context, string) (*string, error) {
+	return &f.scope, nil
 }
 
-var _ tools.DomainResolver = (*fakeIntegrationDomainResolver)(nil)
+var _ tools.ScopeResolver = (*fakeIntegrationScopeResolver)(nil)
 
 // fakeIntegrationGrantCall records one TokenSource(subject, grant) call.
 type fakeIntegrationGrantCall struct {
@@ -197,14 +197,14 @@ func callGetSession(t *testing.T, mcpURL, bearer string) (*mcp.CallToolResult, e
 	})
 }
 
-// integrationDomain is the fixed domain fakeIntegrationDomainResolver
+// integrationScope is the fixed scope fakeIntegrationScopeResolver
 // resolves every agent id/session id to in this file's tests -- a
-// grantkey.ForDomain-valid value (lowercase, digits, underscore, hyphen).
-const integrationDomain = "audience_score_system"
+// grantkey.ForScope-valid value (lowercase, digits, underscore, hyphen).
+const integrationScope = "audience_score_system"
 
 // oauth2Stack bundles one fully wired `mcp` instance (real
 // server.NewHTTPHandler/server.New, a fake api backend, an in-memory
-// mcpauth.CredentialStore, and fake DomainResolver/GrantSource doubles)
+// mcpauth.CredentialStore, and fake ScopeResolver/GrantSource doubles)
 // for this file's tests to drive.
 type oauth2Stack struct {
 	url         string
@@ -218,11 +218,11 @@ func newOAuth2Stack(t *testing.T) *oauth2Stack {
 	fake, client := newFakeBackend(t) // auth_pass_through_test.go's helper, same package
 
 	credentials := newFakeOAuthCredentialStore()
-	domainResolver := &fakeIntegrationDomainResolver{domain: integrationDomain}
+	scopeResolver := &fakeIntegrationScopeResolver{scope: integrationScope}
 	grant := &fakeIntegrationGrantSource{token: "delegated-grant-token-xyz"}
 
 	srv := server.New()
-	tools.RegisterGetSession(srv, client, domainResolver, grant)
+	tools.RegisterGetSession(srv, client, scopeResolver, grant)
 
 	// httptest.NewUnstartedServer to learn the listen address before
 	// building the handler, exactly like the audience_score_system model
@@ -306,8 +306,8 @@ func TestOAuth2_MintedCredential_ToolCallAcquiresDelegatedGrantToken(t *testing.
 	require.False(t, res.IsError, "unexpected tool error")
 
 	require.Len(t, stack.grant.calls, 1)
-	assert.Equal(t, fakeIntegrationGrantCall{subject: sub, grant: integrationDomain}, stack.grant.calls[0],
-		"GrantSource must be keyed on the operator's raw sub and the resolved domain, never the mcpidentity-encoded composite")
+	assert.Equal(t, fakeIntegrationGrantCall{subject: sub, grant: integrationScope}, stack.grant.calls[0],
+		"GrantSource must be keyed on the operator's raw sub and the resolved scope, never the mcpidentity-encoded composite")
 
 	headers := stack.fake.recordedAuthHeaders()
 	require.Len(t, headers, 1)
@@ -340,13 +340,13 @@ func TestOAuth2_MintedCredential_EachToolCallAcquiresTokenFresh_NoLocalCache(t *
 	assert.Equal(t, 2, stack.grant.callCount(), "two tool calls for the same identity must acquire a token twice -- mcp must never cache one of its own (NFR7)")
 }
 
-// TestOAuth2_MintedCredential_NoGrantForDomain_FailsNamingDomain covers
+// TestOAuth2_MintedCredential_NoGrantForScope_FailsNamingScope covers
 // FR8's "no grant at all" case: GrantSource returning ErrGrantNotFound
-// must fail the tool call, naming the domain, and never fall back to any
+// must fail the tool call, naming the scope, and never fall back to any
 // other credential path.
-func TestOAuth2_MintedCredential_NoGrantForDomain_FailsNamingDomain(t *testing.T) {
+func TestOAuth2_MintedCredential_NoGrantForScope_FailsNamingScope(t *testing.T) {
 	stack := newOAuth2Stack(t)
-	stack.grant.tokenErr = fmt.Errorf("grpcauth: token material for grant %q: %w", integrationDomain, grpcauth.ErrGrantNotFound)
+	stack.grant.tokenErr = fmt.Errorf("grpcauth: token material for grant %q: %w", integrationScope, grpcauth.ErrGrantNotFound)
 	token := stack.credentials.mint(t, "https://keycloak.example.test/realms/whagent", "operator-sub-no-grant")
 
 	res, err := callGetSession(t, stack.url, token)
@@ -355,7 +355,7 @@ func TestOAuth2_MintedCredential_NoGrantForDomain_FailsNamingDomain(t *testing.T
 	require.NotEmpty(t, res.Content)
 	text, ok := res.Content[0].(*mcp.TextContent)
 	require.True(t, ok)
-	assert.Contains(t, text.Text, integrationDomain, "the failure must name the domain the operator needs to consent for")
+	assert.Contains(t, text.Text, integrationScope, "the failure must name the scope the operator needs to consent for")
 
 	assert.Empty(t, stack.fake.recordedAuthHeaders(), "api must never be reached when no working credential was acquired")
 }
@@ -389,7 +389,7 @@ func TestOAuth2_GarbageCredential_Rejected(t *testing.T) {
 // task's regression requirement, the OAuth2-configured mirror of
 // auth_pass_through_test.go's own coverage (which proves the same thing
 // with NO OAuth2 configuration present at all): with a real
-// mcpauth.CredentialStore and real DomainResolver/GrantSource doubles all
+// mcpauth.CredentialStore and real ScopeResolver/GrantSource doubles all
 // wired in, a manual (non-credential-shaped) bearer token must still be
 // forwarded byte for byte, completely bypassing the credential store and
 // dispatch-time resolution.

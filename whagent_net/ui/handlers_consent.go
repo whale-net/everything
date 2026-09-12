@@ -1,35 +1,35 @@
-// Package main: per-domain delegated-grant consent flow (FR2, FR3, FR5,
+// Package main: per-scope delegated-grant consent flow (FR2, FR3, FR5,
 // FR6, FR9, the write half of FR12; issue #2428, plan #2421).
 //
 // Two entry points exist, per the Open Question this task resolved on
 // #2421 before writing any of this (see that issue comment for the full
 // investigation):
 //
-//   - The standalone GET/POST /mcp/consent(?domain=<d>) route below is the
-//     general-purpose per-domain consent flow: the domain is always
+//   - The standalone GET/POST /mcp/consent(?scope=<s>) route below is the
+//     general-purpose per-scope consent flow: the scope is always
 //     supplied explicitly by whatever redirected the operator here (a
 //     downstream dispatch-time interrupt, issue #2430's FR7/FR8, when `mcp`
-//     finds no active grant for a domain a real call is targeting -- FR5's
-//     "first access to a new domain"; or issue #2431's mid-call reauth
-//     routing). This route never infers or guesses a domain itself.
+//     finds no active grant for a scope a real call is targeting -- FR5's
+//     "first access to a new scope"; or issue #2431's mid-call reauth
+//     routing). This route never infers or guesses a scope itself.
 //   - authorizeConsentGate wraps GET /authorize (mcpauth's own OAuth2
 //     endpoint for the MCP client, mounted by app.mcpProvider.Mount in
-//     main.go's setupRoutes) with a domain-agnostic prerequisite: the
+//     main.go's setupRoutes) with a scope-agnostic prerequisite: the
 //     operator must have completed consent for this deployment's one
-//     statically-configured default domain (WHAGENT_UI_DEFAULT_DOMAIN)
+//     statically-configured default scope (WHAGENT_UI_DEFAULT_SCOPE)
 //     before a credential is minted. libs/go/mcpauth is deliberately
 //     domain-agnostic (its own package doc: "NFR2 boundary -- zero
 //     domain-specific types") and its /authorize implementation reads no
-//     resource/scope parameter that could carry a domain (confirmed by
+//     resource/scope parameter that could carry a scope (confirmed by
 //     reading libs/go/mcpauth/authorize.go before writing this), and
 //     mcp/server's own RFC 9728 resource identifier
 //     (whagent_net/mcp/server.ResourceMetadataConfig.Resource) is one
-//     single, instance-wide URL, not one per domain -- there is no wire
-//     signal /authorize could read to learn which domain an MCP client is
-//     really after. Per-domain resolution structurally happens later, at
+//     single, instance-wide URL, not one per scope -- there is no wire
+//     signal /authorize could read to learn which scope an MCP client is
+//     really after. Per-scope resolution structurally happens later, at
 //     MCP tool-dispatch time via agent_id (FR7, issue #2427, already
 //     merged) -- downstream of /authorize entirely. This gate therefore
-//     does not attempt to name every possible domain up front; it names
+//     does not attempt to name every possible scope up front; it names
 //     the one this deployment is seeded with today, and defers everything
 //     else to the standalone route above.
 package main
@@ -71,13 +71,13 @@ const pendingConsentMaxAge = 10 * 60 // seconds
 // BeginAuthorization and the Keycloak redirect returning to
 // handleMCPConsentCallback: grpcauth.PendingAuthorization itself, plus the
 // two pieces of caller-side bookkeeping grpcauth does not carry -- which
-// domain this flow is for (Grant already IS the domain-derived key,
-// grantkey.ForDomain being the identity mapping, but keeping Domain
+// scope this flow is for (Grant already IS the scope-derived key,
+// grantkey.ForScope being the identity mapping, but keeping Scope
 // explicit here is more legible than re-deriving it every time it is
 // read) and where to send the browser once consent completes.
 type pendingConsent struct {
 	grpcauth.PendingAuthorization
-	Domain   string
+	Scope    string
 	ReturnTo string
 }
 
@@ -152,7 +152,7 @@ func (app *App) clearPendingConsent(w http.ResponseWriter, r *http.Request) {
 }
 
 // authorizeConsentGate wraps mux (main.go's run()) so a GET /authorize
-// request first passes through this domain-agnostic delegated-grant
+// request first passes through this scope-agnostic delegated-grant
 // prerequisite before ever reaching mcpauth.Provider's own /authorize
 // handler (mounted directly on mux by app.mcpProvider.Mount,
 // setupMCPAuth/mcpauth.go) -- see this file's package doc comment for why
@@ -162,18 +162,18 @@ func (app *App) clearPendingConsent(w http.ResponseWriter, r *http.Request) {
 // /authorize; delegated-grant is unconfigured on this deployment
 // (app.grant.Source == nil, initializeDelegatedGrant's degrade path,
 // mirroring every other WHAGENT_GRANT_*-gated behavior in this binary); no
-// WHAGENT_UI_DEFAULT_DOMAIN is configured; the operator is not resolvable
+// WHAGENT_UI_DEFAULT_SCOPE is configured; the operator is not resolvable
 // (mcpauth's own handleAuthorize already redirects an unauthenticated
 // request to SignInURL, so this gate only ever adds a step for an operator
 // who IS already resolvable); or the operator already holds an active
-// grant for the default domain.
+// grant for the default scope.
 func (app *App) authorizeConsentGate(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodGet || r.URL.Path != "/authorize" {
 			next.ServeHTTP(w, r)
 			return
 		}
-		if app.defaultDomain == "" || app.grant.Source == nil || app.grant.Store == nil {
+		if app.defaultScope == "" || app.grant.Source == nil || app.grant.Store == nil {
 			next.ServeHTTP(w, r)
 			return
 		}
@@ -200,9 +200,9 @@ func (app *App) authorizeConsentGate(next http.Handler) http.Handler {
 		// is needed to keep them in agreement.
 		subject := user.Sub
 
-		grant, err := grantkey.ForDomain(app.defaultDomain)
+		grant, err := grantkey.ForScope(app.defaultScope)
 		if err != nil {
-			logging.Get("main").Error("authorizeConsentGate: WHAGENT_UI_DEFAULT_DOMAIN is malformed", "domain", app.defaultDomain, "error", err)
+			logging.Get("main").Error("authorizeConsentGate: WHAGENT_UI_DEFAULT_SCOPE is malformed", "scope", app.defaultScope, "error", err)
 			next.ServeHTTP(w, r)
 			return
 		}
@@ -213,22 +213,22 @@ func (app *App) authorizeConsentGate(next http.Handler) http.Handler {
 			return
 		}
 
-		// No active grant yet for the default domain (grpcauth.
+		// No active grant yet for the default scope (grpcauth.
 		// ErrGrantNotFound, or a needs_reauth/revoked status) -- FR2/FR9:
 		// consent before any credential is minted. Preserve the exact
 		// original /authorize request so the operator lands back on it
 		// once consent completes.
-		app.redirectToConsent(w, r, app.defaultDomain, r.URL.RequestURI())
+		app.redirectToConsent(w, r, app.defaultScope, r.URL.RequestURI())
 	})
 }
 
 // redirectToConsent 302s the browser to the standalone consent route for
-// domain, carrying returnTo (the request to resume once consent completes)
+// scope, carrying returnTo (the request to resume once consent completes)
 // as a query parameter.
-func (app *App) redirectToConsent(w http.ResponseWriter, r *http.Request, domain, returnTo string) {
+func (app *App) redirectToConsent(w http.ResponseWriter, r *http.Request, scope, returnTo string) {
 	dest := url.URL{Path: "/mcp/consent"}
 	q := dest.Query()
-	q.Set("domain", domain)
+	q.Set("scope", scope)
 	if returnTo != "" {
 		q.Set("return_to", returnTo)
 	}
@@ -236,8 +236,8 @@ func (app *App) redirectToConsent(w http.ResponseWriter, r *http.Request, domain
 	http.Redirect(w, r, dest.String(), http.StatusFound)
 }
 
-// handleMCPConsent renders the FR2/FR6 consent page naming domain (query
-// param `domain`, e.g. GET /mcp/consent?domain=audience_score_system) --
+// handleMCPConsent renders the FR2/FR6 consent page naming scope (query
+// param `scope`, e.g. GET /mcp/consent?scope=audience_score_system) --
 // the standalone consent entry point this task's Open Question resolved
 // to. Registered behind app.auth.RequireAuthFunc (main.go), so an
 // unauthenticated request is already redirected to sign-in before this
@@ -245,9 +245,9 @@ func (app *App) redirectToConsent(w http.ResponseWriter, r *http.Request, domain
 func (app *App) handleMCPConsent(w http.ResponseWriter, r *http.Request) {
 	logger := logging.Get("main")
 
-	domain := strings.TrimSpace(r.URL.Query().Get("domain"))
-	if _, err := grantkey.ForDomain(domain); err != nil {
-		http.Error(w, "invalid or missing domain", http.StatusBadRequest)
+	scope := strings.TrimSpace(r.URL.Query().Get("scope"))
+	if _, err := grantkey.ForScope(scope); err != nil {
+		http.Error(w, "invalid or missing scope", http.StatusBadRequest)
 		return
 	}
 	returnTo := strings.TrimSpace(r.URL.Query().Get("return_to"))
@@ -257,7 +257,7 @@ func (app *App) handleMCPConsent(w http.ResponseWriter, r *http.Request) {
 			Title: "Grant access",
 			User:  htmxauth.GetUser(r.Context()),
 		},
-		Domain:   domain,
+		Scope:    scope,
 		ReturnTo: returnTo,
 	}
 	if err := RenderTempl(w, r, data.Layout.Title, pages.MCPConsent(data)); err != nil {
@@ -267,7 +267,7 @@ func (app *App) handleMCPConsent(w http.ResponseWriter, r *http.Request) {
 }
 
 // handleMCPConsentConfirm is the consent page's POST /mcp/consent submit:
-// starts DelegatedGrantSource.BeginAuthorization for (subject, domain),
+// starts DelegatedGrantSource.BeginAuthorization for (subject, scope),
 // persists the resulting PendingAuthorization (see pendingConsent above),
 // and redirects the browser to Keycloak's authorization endpoint.
 func (app *App) handleMCPConsentConfirm(w http.ResponseWriter, r *http.Request) {
@@ -278,12 +278,12 @@ func (app *App) handleMCPConsentConfirm(w http.ResponseWriter, r *http.Request) 
 		http.Error(w, "invalid form", http.StatusBadRequest)
 		return
 	}
-	domain := strings.TrimSpace(r.FormValue("domain"))
+	scope := strings.TrimSpace(r.FormValue("scope"))
 	returnTo := strings.TrimSpace(r.FormValue("return_to"))
 
-	grant, err := grantkey.ForDomain(domain)
+	grant, err := grantkey.ForScope(scope)
 	if err != nil {
-		http.Error(w, "invalid or missing domain", http.StatusBadRequest)
+		http.Error(w, "invalid or missing scope", http.StatusBadRequest)
 		return
 	}
 	if app.grant.Source == nil {
@@ -306,14 +306,14 @@ func (app *App) handleMCPConsentConfirm(w http.ResponseWriter, r *http.Request) 
 
 	authURL, pending, err := app.grant.Source.BeginAuthorization(ctx, subject, grant)
 	if err != nil {
-		logger.Error("handleMCPConsentConfirm: BeginAuthorization failed", "domain", domain, "error", err)
+		logger.Error("handleMCPConsentConfirm: BeginAuthorization failed", "scope", scope, "error", err)
 		http.Error(w, "Internal server error", http.StatusInternalServerError)
 		return
 	}
 
 	if err := app.savePendingConsent(w, r, pendingConsent{
 		PendingAuthorization: pending,
-		Domain:               domain,
+		Scope:                scope,
 		ReturnTo:             returnTo,
 	}); err != nil {
 		logger.Error("handleMCPConsentConfirm: failed to persist pending authorization", "error", err)
@@ -363,28 +363,28 @@ func (app *App) handleMCPConsentCallback(w http.ResponseWriter, r *http.Request)
 		// session that started it -- never under a different signed-in
 		// operator's session, whatever the stored (tamper-proof, but not
 		// on its own session-bound) PendingAuthorization itself claims.
-		logger.Info("mcp consent callback subject does not match the signed-in session; refusing", "domain", pending.Domain)
-		app.renderConsentFailure(w, r, pending.Domain, "This consent link does not belong to your signed-in session.")
+		logger.Info("mcp consent callback subject does not match the signed-in session; refusing", "scope", pending.Scope)
+		app.renderConsentFailure(w, r, pending.Scope, "This consent link does not belong to your signed-in session.")
 		return
 	}
 
 	if errParam := r.URL.Query().Get("error"); errParam != "" {
 		// A decline or Keycloak-side failure is expected control flow, not
 		// an ERROR (AGENTS.md "Logging Levels").
-		logger.Info("mcp consent declined or failed at Keycloak", "domain", pending.Domain, "error", errParam)
-		app.renderConsentFailure(w, r, pending.Domain, "Consent was not completed: "+errParam)
+		logger.Info("mcp consent declined or failed at Keycloak", "scope", pending.Scope, "error", errParam)
+		app.renderConsentFailure(w, r, pending.Scope, "Consent was not completed: "+errParam)
 		return
 	}
 
 	if err := app.grant.Source.CompleteAuthorization(ctx, pending.PendingAuthorization, r.URL.Query().Get("state"), r.URL.Query().Get("code")); err != nil {
-		logger.Info("mcp consent CompleteAuthorization failed", "domain", pending.Domain, "error", err)
-		app.renderConsentFailure(w, r, pending.Domain, "Consent could not be completed. Please try again.")
+		logger.Info("mcp consent CompleteAuthorization failed", "scope", pending.Scope, "error", err)
+		app.renderConsentFailure(w, r, pending.Scope, "Consent could not be completed. Please try again.")
 		return
 	}
 
 	app.recordConsentBookkeeping(ctx, pending)
 
-	logger.Info("delegated grant consented", "domain", pending.Domain)
+	logger.Info("delegated grant consented", "scope", pending.Scope)
 
 	returnTo := pending.ReturnTo
 	if returnTo == "" || !strings.HasPrefix(returnTo, "/") {
@@ -411,6 +411,10 @@ func (app *App) handleMCPConsentCallback(w http.ResponseWriter, r *http.Request)
 // composite, so no decode step is needed here -- app.oidcIssuer supplies
 // the issuer half directly, since this deployment (and grpcauth.Store's
 // key, pending.Subject itself) is always scoped to that one issuer.
+//
+// grantindex.Entry's Domain field keeps its library-defined name (that
+// package is domain-neutral and configured, not renamed by this repo) --
+// it is populated with pending.Scope's value here.
 func (app *App) recordConsentBookkeeping(ctx context.Context, pending pendingConsent) {
 	logger := logging.Get("main")
 
@@ -428,26 +432,26 @@ func (app *App) recordConsentBookkeeping(ctx context.Context, pending pendingCon
 	if err := app.grant.Index.Record(ctx, grantindex.Entry{
 		SubjectIss:        iss,
 		SubjectSub:        sub,
-		Domain:            pending.Domain,
+		Domain:            pending.Scope,
 		PreferredUsername: preferredUsername,
 	}); err != nil {
-		logger.Error("mcp consent: failed to record grant-bookkeeping index entry", "domain", pending.Domain, "error", err)
+		logger.Error("mcp consent: failed to record grant-bookkeeping index entry", "scope", pending.Scope, "error", err)
 	}
 }
 
 // renderConsentFailure renders FR2's "clear failure page" for a declined or
-// failed consent. domain may be empty (e.g. no pending authorization was
+// failed consent. scope may be empty (e.g. no pending authorization was
 // even found) -- MCPConsent's "Try again" link degrades to a bare
 // "/mcp/consent" in that case, which handleMCPConsent then 400s until the
-// operator is redirected here again with a real domain.
-func (app *App) renderConsentFailure(w http.ResponseWriter, r *http.Request, domain, message string) {
+// operator is redirected here again with a real scope.
+func (app *App) renderConsentFailure(w http.ResponseWriter, r *http.Request, scope, message string) {
 	logger := logging.Get("main")
 	data := pages.MCPConsentData{
 		Layout: components.LayoutData{
 			Title: "Grant access",
 			User:  htmxauth.GetUser(r.Context()),
 		},
-		Domain:  domain,
+		Scope:   scope,
 		Failure: message,
 	}
 	if err := RenderTempl(w, r, data.Layout.Title, pages.MCPConsent(data)); err != nil {

@@ -5,10 +5,10 @@ import (
 )
 
 // MCPConsentData carries MCPConsent's page-level parameterisation (FR2/FR3/
-// FR6, issue #2428): Domain names the AgentDefinition.Domain (issue #2424's
+// FR6, issue #2428): Scope names the AgentDefinition.Scope (issue #2424's
 // FR1) this consent step is for -- resolved and validated by the caller
-// (handlers_consent.go's grantkey.ForDomain check), never inferred by this
-// page itself, matching FR2's "names that domain (via AgentDefinition.Domain
+// (handlers_consent.go's grantkey.ForScope check), never inferred by this
+// page itself, matching FR2's "names that scope (via AgentDefinition.Scope
 // ... never inferred from agent_id, required_role, or server_url)"
 // requirement. ReturnTo is echoed back as a hidden form field so
 // handleMCPConsentConfirm can carry it through DelegatedGrantSource.
@@ -19,35 +19,35 @@ import (
 // failure page" requirement.
 type MCPConsentData struct {
 	Layout   components.LayoutData
-	Domain   string
+	Scope    string
 	ReturnTo string
 	Failure  string
 }
 
-// MCPConsent is FR2/FR6's explicit per-domain consent step. It always names
-// Domain and always renders this confirm step -- there is no session-age,
-// "already signed in", or "already consented for a different domain"
+// MCPConsent is FR2/FR6's explicit per-scope consent step. It always names
+// Scope and always renders this confirm step -- there is no session-age,
+// "already signed in", or "already consented for a different scope"
 // shortcut here or in its handler (handlers_consent.go's
-// authorizeConsentGate/handleMCPConsent): every domain access requires its
+// authorizeConsentGate/handleMCPConsent): every scope access requires its
 // own consent (FR3/FR5/FR6).
 templ MCPConsent(data MCPConsentData) {
 	@components.Layout(data.Layout) {
 		<h1 class="text-2xl font-bold text-base-content mb-4">Grant access</h1>
 		if data.Failure != "" {
 			<div role="alert" class="alert alert-error mb-4">{ data.Failure }</div>
-			<a href={ templ.URL("/mcp/consent?domain=" + data.Domain) } class="btn btn-secondary">Try again</a>
+			<a href={ templ.URL("/mcp/consent?scope=" + data.Scope) } class="btn btn-secondary">Try again</a>
 		} else {
 			<p class="mb-4">
 				An MCP client is requesting standing access to act on your behalf
-				against <strong>{ data.Domain }</strong>'s agent. Granting access
-				applies to <strong>{ data.Domain }</strong> only -- it does not grant
-				access to any other domain, and no credential is issued until you
+				against <strong>{ data.Scope }</strong>'s agent. Granting access
+				applies to <strong>{ data.Scope }</strong> only -- it does not grant
+				access to any other scope, and no credential is issued until you
 				confirm.
 			</p>
 			<form method="POST" action="/mcp/consent" class="flex gap-2">
-				<input type="hidden" name="domain" value={ data.Domain }/>
+				<input type="hidden" name="scope" value={ data.Scope }/>
 				<input type="hidden" name="return_to" value={ data.ReturnTo }/>
-				<button type="submit" class="btn btn-primary">Grant access to { data.Domain }</button>
+				<button type="submit" class="btn btn-primary">Grant access to { data.Scope }</button>
 			</form>
 		}
 	}

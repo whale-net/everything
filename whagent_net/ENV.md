@@ -150,13 +150,13 @@ from this wiring at tool-dispatch time (`mcp/tools/dispatch.go`) — the
 opaque `mcpauth`-credential-plus-RFC-8693-exchange path this replaced is
 gone (`WHAGENT_MCP_KEYCLOAK_*`, deleted, see "`mcp` server" below).
 
-**NFR5: one shared client, not one per domain.** Every variable below
+**NFR5: one shared client, not one per scope.** Every variable below
 configures a *single* confidential Keycloak client used as the caller
 identity by both `ui` and `mcp` — unlike a per-consuming-domain client
 (`KEYCLOAK.md`'s usual "one client per caller identity" principle, § 11):
-domain isolation for this flow is carried entirely by the grant key
-derived from `AgentDefinition.Domain` (`//whagent_net/grantkey`, FR4), not
-by provisioning a separate Keycloak client per domain. Both binaries must
+scope isolation for this flow is carried entirely by the grant key
+derived from `AgentDefinition.Scope` (`//whagent_net/grantkey`, FR4), not
+by provisioning a separate Keycloak client per scope. Both binaries must
 be configured with the *same* `WHAGENT_GRANT_CLIENT_ID`/
 `WHAGENT_GRANT_CLIENT_SECRET`/`WHAGENT_GRANT_REDIRECT_URI`/
 `WHAGENT_GRANT_ENCRYPTION_KEY` values.
@@ -287,4 +287,4 @@ purely-additive delegated-grant wiring (`main.go`'s
 | `WHAGENT_UI_PUBLIC_URL` | ui | *(required)* | `ui`'s own externally-reachable base URL, e.g. `https://whagent.example.com` -- FR9/issue #2245's `mcpauth.ProviderConfig.Issuer`, the base every mcpauth endpoint URL `ui` advertises (`/authorize`, `/token`, `/register`, `/.well-known/oauth-authorization-server`) is built from. Mirrors `audience_score_system`'s `ASS_OAUTH_REDIRECT_BASE_URL` doubling as mcpauth's issuer (see `audience_score_system/ENV.md`). |
 | `WHAGENT_MCP_PUBLIC_URL` | ui | *(required)* | `mcp`'s own externally-reachable base URL -- FR9's `mcpauth.ProviderConfig.Resource`, the OAuth2 `resource` identifier both binaries must agree on exactly. Must be byte-identical to what `mcp` itself advertises in its own protected-resource metadata (a dependent task, issue #2245's Context section) -- a mismatch breaks an MCP client's RFC 9728 discovery chain. |
 | `SECRET_KEY` | ui | `dev-secret-key-change-in-production` | Encrypts `ui`'s DB-backed session store's access/refresh tokens, and (issue #2428) the short-lived, httpOnly cookie `handlers_consent.go`'s `pendingConsent` round-trips through between `BeginAuthorization` and its Keycloak-redirect callback. Matches manmanv2/ui's and app-registry-ui's own literal `SECRET_KEY` name; distinct from `WHAGENT_SIGNING_KEY` above (JWKS signing, a different purpose entirely). |
-| `WHAGENT_UI_DEFAULT_DOMAIN` | ui | — | The one `AgentDefinition.Domain` (issue #2424's FR1) `authorizeConsentGate` (`handlers_consent.go`, issue #2428) requires an active delegated grant for before `/authorize` mints an MCP-client credential — see that file's package doc comment for why this is a single configured domain rather than a live multi-domain chooser (`ui` has no `agent_definition`-listing API to build one from; that table stays behind `api`'s gRPC surface per `ARCHITECTURE.md`). Unset disables the `/authorize` gate entirely (the standalone `GET /mcp/consent?domain=<d>` route, issue #2428, is unaffected either way). |
+| `WHAGENT_UI_DEFAULT_SCOPE` | ui | — | The one `AgentDefinition.Scope` (issue #2424's FR1, nullable as of migration 010) `authorizeConsentGate` (`handlers_consent.go`, issue #2428) requires an active delegated grant for before `/authorize` mints an MCP-client credential — see that file's package doc comment for why this is a single configured scope rather than a live multi-scope chooser (`ui` has no `agent_definition`-listing API to build one from; that table stays behind `api`'s gRPC surface per `ARCHITECTURE.md`). Unset disables the `/authorize` gate entirely (the standalone `GET /mcp/consent?scope=<d>` route, issue #2428, is unaffected either way). |

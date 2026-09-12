@@ -7,73 +7,73 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// TestForDomain_IsDeterministic proves ForDomain(d) returns the exact same
+// TestForScope_IsDeterministic proves ForScope(s) returns the exact same
 // key across repeated calls -- issue #2424's Testing section, first bullet.
-func TestForDomain_IsDeterministic(t *testing.T) {
-	first, err := ForDomain("audience_score_system")
+func TestForScope_IsDeterministic(t *testing.T) {
+	first, err := ForScope("audience_score_system")
 	require.NoError(t, err)
 
-	second, err := ForDomain("audience_score_system")
+	second, err := ForScope("audience_score_system")
 	require.NoError(t, err)
 
 	assert.Equal(t, first, second)
 }
 
-// TestForDomain_DifferentDomainsNeverCollide proves two different domains
+// TestForScope_DifferentScopesNeverCollide proves two different scopes
 // never derive the same grant key -- FR4/NFR2's "one grant key, one
-// domain" guarantee holds at the derivation function itself. Uses the
-// same two example domains issue #2424's Testing section names.
-func TestForDomain_DifferentDomainsNeverCollide(t *testing.T) {
-	ass, err := ForDomain("audience_score_system")
+// scope" guarantee holds at the derivation function itself. Uses the
+// same two example scopes issue #2424's Testing section names.
+func TestForScope_DifferentScopesNeverCollide(t *testing.T) {
+	ass, err := ForScope("audience_score_system")
 	require.NoError(t, err)
 
-	manmanv2, err := ForDomain("manmanv2")
+	manmanv2, err := ForScope("manmanv2")
 	require.NoError(t, err)
 
 	assert.NotEqual(t, ass, manmanv2)
 }
 
-// TestForDomain_EmptyDomain_ReturnsError proves an empty domain never
-// silently produces a key -- an unset AgentDefinition.Domain must fail
-// loudly rather than collapsing onto some default grant.
-func TestForDomain_EmptyDomain_ReturnsError(t *testing.T) {
-	key, err := ForDomain("")
+// TestForScope_EmptyScope_ReturnsError proves an empty scope never
+// silently produces a key -- a set-but-empty AgentDefinition.Scope must
+// fail loudly rather than collapsing onto some default grant.
+func TestForScope_EmptyScope_ReturnsError(t *testing.T) {
+	key, err := ForScope("")
 	require.Error(t, err)
 	assert.Empty(t, key)
 }
 
-// TestForDomain_WhitespaceOnlyDomain_ReturnsError mirrors the empty-string
-// case for a domain that is present but carries no real content.
-func TestForDomain_WhitespaceOnlyDomain_ReturnsError(t *testing.T) {
-	key, err := ForDomain("   ")
+// TestForScope_WhitespaceOnlyScope_ReturnsError mirrors the empty-string
+// case for a scope that is present but carries no real content.
+func TestForScope_WhitespaceOnlyScope_ReturnsError(t *testing.T) {
+	key, err := ForScope("   ")
 	require.Error(t, err)
 	assert.Empty(t, key)
 }
 
-// TestForDomain_MalformedDomain_ReturnsError proves a domain outside
-// domainPattern's character set (here: internal whitespace and a
+// TestForScope_MalformedScope_ReturnsError proves a scope outside
+// scopePattern's character set (here: internal whitespace and a
 // disallowed symbol) is rejected rather than passed through as-is.
-func TestForDomain_MalformedDomain_ReturnsError(t *testing.T) {
+func TestForScope_MalformedScope_ReturnsError(t *testing.T) {
 	cases := []string{
 		"audience score system",
 		"audience_score_system!",
 		" audience_score_system",
 		"audience_score_system ",
 	}
-	for _, domain := range cases {
-		key, err := ForDomain(domain)
-		require.Errorf(t, err, "domain %q should be rejected as malformed", domain)
+	for _, scope := range cases {
+		key, err := ForScope(scope)
+		require.Errorf(t, err, "scope %q should be rejected as malformed", scope)
 		assert.Empty(t, key)
 	}
 }
 
-// TestForDomain_ValidDomain_ReturnsTheDomainItself pins ForDomain's
-// derivation as the identity mapping over a well-formed domain (this
-// file's own doc comment on ForDomain explains why) -- a future change to
+// TestForScope_ValidScope_ReturnsTheScopeItself pins ForScope's
+// derivation as the identity mapping over a well-formed scope (this
+// file's own doc comment on ForScope explains why) -- a future change to
 // a non-identity derivation must update this test deliberately, not by
 // accident.
-func TestForDomain_ValidDomain_ReturnsTheDomainItself(t *testing.T) {
-	key, err := ForDomain("audience_score_system")
+func TestForScope_ValidScope_ReturnsTheScopeItself(t *testing.T) {
+	key, err := ForScope("audience_score_system")
 	require.NoError(t, err)
 	assert.Equal(t, "audience_score_system", key)
 }

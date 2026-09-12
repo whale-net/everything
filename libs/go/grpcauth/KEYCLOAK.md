@@ -481,9 +481,9 @@ registers its own client"): create exactly **one** confidential client
 (e.g. `whagent-net-grant`) for the whole deployment, following § 11's
 setup above (Client authentication On, Standard flow checked, no service
 accounts flow needed — this is browser-facing) — not one per
-`AgentDefinition.Domain` (`audience_score_system`, a future `manmanv2`,
-etc.). Domain isolation for this flow is carried entirely by the grant
-key derived from `AgentDefinition.Domain` (FR4/NFR2,
+`AgentDefinition.Scope` (`audience_score_system`, a future `manmanv2`,
+etc.). Scope isolation for this flow is carried entirely by the grant
+key derived from `AgentDefinition.Scope` (FR4/NFR2,
 `//whagent_net/grantkey`), not by Keycloak client boundaries — see
 `ARCHITECTURE.md`'s NFR2/NFR5 writeup for why that's a deliberate,
 reviewed trade-off, not an oversight of this file's usual rule.

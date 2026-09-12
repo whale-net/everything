@@ -179,11 +179,13 @@ func TestMigration001_SchemaContract(t *testing.T) {
 	`).Scan(&hasListIndex))
 	assert.True(t, hasListIndex, "sessions must have idx_sessions_created_at_id (issue #2241's ListSessions ordering/keyset index)")
 
-	// migration 007 (issue #2424 FR1): agent_definition.domain is required
-	// -- the sole input whagent_net/grantkey.ForDomain may derive a
+	// migration 010 (issue #2424 FR1, renamed from migration 007's
+	// `domain`): agent_definition.scope is nullable -- a NULL scope means
+	// the agent definition carries no delegated-grant scoping at all; when
+	// set, it is the sole input whagent_net/grantkey.ForScope may derive a
 	// delegated-grant key from.
-	_, nullable = nullableColumn(t, ctx, db, "agent_definition", "domain")
-	assert.Equal(t, "NO", nullable, "agent_definition.domain must be NOT NULL (issue #2424 FR1)")
+	_, nullable = nullableColumn(t, ctx, db, "agent_definition", "scope")
+	assert.Equal(t, "YES", nullable, "agent_definition.scope must be nullable (issue #2424 FR1, made optional)")
 
 	// migration 008 (issue #2426 FR10/FR13): grpcauth_delegated_grant and
 	// grpcauth_grant_index's column shapes are the actual schema contract
