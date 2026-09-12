@@ -28,12 +28,14 @@ func NewRegistry(srv *mcp.Server, st *store.Store) *Registry {
 }
 
 // RegisterRead adds a read-only tool. If In implements ChannelScoped
-// (channelscope.go), every call is authorized via store.CanRead before h
-// runs -- a caller with no live channel_person row for the requested
-// Channel gets a permission error and h is never entered. Tools whose
-// input carries no channel_id (e.g. whoami) are unaffected. Every call --
-// authorized or rejected -- is traced and logged by instrumentToolCall
-// (observability.go).
+// (channelscope.go), every call first passes RequireChannelAccess (FR11:
+// a whagent-authenticated caller with zero roles across every Channel gets
+// a linking-flow pointer, not a silent empty result) and is then
+// authorized via store.CanRead before h runs -- a caller with no live
+// channel_person row for the requested Channel gets a permission error and
+// h is never entered. Tools whose input carries no channel_id (e.g.
+// whoami) are unaffected by either check. Every call -- authorized or
+// rejected -- is traced and logged by instrumentToolCall (observability.go).
 func RegisterRead[In, Out any](reg *Registry, tool *mcp.Tool, h mcp.ToolHandlerFor[In, Out]) {
 	wrapped := func(ctx context.Context, req *mcp.CallToolRequest, in In) (*mcp.CallToolResult, Out, error) {
 		return instrumentToolCall(ctx, tool.Name, func(ctx context.Context) (*mcp.CallToolResult, Out, error) {
@@ -43,6 +45,9 @@ func RegisterRead[In, Out any](reg *Registry, tool *mcp.Tool, h mcp.ToolHandlerF
 				return nil, zero, fmt.Errorf("unauthenticated: no caller credential resolved")
 			}
 			if scoped, ok := any(in).(ChannelScoped); ok {
+				if err := RequireChannelAccess(ctx, reg.roles, person.ID); err != nil {
+					return nil, zero, err
+				}
 				if err := RequireChannelRole(ctx, reg.roles, store.CanRead, scoped.ChannelScopeID(), person.ID); err != nil {
 					return nil, zero, err
 				}
@@ -78,8 +83,9 @@ type WriteRender[Out any] func(ctx context.Context, ref uuid.UUID) (*mcp.CallToo
 // call means re-deriving Out from that ref, not replaying a cached
 // response body.
 //
-// If In implements ChannelScoped (channelscope.go), every call is
-// authorized via store.CanWrite before mutate runs. If In implements
+// If In implements ChannelScoped (channelscope.go), every call first passes
+// RequireChannelAccess (FR11, same whole-Person check RegisterRead runs)
+// and is then authorized via store.CanWrite before mutate runs. If In implements
 // IdempotencyKeyed (idempotency.go) and returns a nonempty key, mutate
 // runs under the (tool, personID, key) idempotency guard (NFR2/LB4) --
 // computed here via computeFingerprint and RunIdempotent -- so a tool
@@ -96,6 +102,9 @@ func RegisterWrite[In, Out any](reg *Registry, tool *mcp.Tool, mutate WriteMutat
 				return nil, zero, fmt.Errorf("unauthenticated: no caller credential resolved")
 			}
 			if scoped, ok := any(in).(ChannelScoped); ok {
+				if err := RequireChannelAccess(ctx, reg.roles, person.ID); err != nil {
+					return nil, zero, err
+				}
 				if err := RequireChannelRole(ctx, reg.roles, store.CanWrite, scoped.ChannelScopeID(), person.ID); err != nil {
 					return nil, zero, err
 				}

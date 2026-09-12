@@ -258,7 +258,7 @@ func newWorld(t *testing.T) *world {
 	srv := mcpserver.New(st)
 	reg := mcpserver.NewRegistry(srv, st)
 	mcptools.RegisterWhoami(reg)
-	mcptools.RegisterListChannels(reg, st.Access())
+	mcptools.RegisterListChannels(reg, st.Access(), st.Roles())
 	mcptools.RegisterResearch(reg, st)
 	mcptools.RegisterVerdict(reg, st)
 	mcptools.RegisterVideoScript(reg, st)

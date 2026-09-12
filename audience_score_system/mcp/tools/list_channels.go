@@ -50,22 +50,30 @@ type ListChannelsOutput struct {
 
 // RegisterListChannels registers list_channels via server.RegisterRead.
 // Takes no input -- like whoami, it reports the caller's own state, so
-// there is nothing to Channel-scope.
-func RegisterListChannels(reg *server.Registry, access store.AccessStore) {
+// there is nothing to Channel-scope. It still needs roles (store.RoleStore)
+// despite that: unlike every other unscoped tool, list_channels is one of
+// the two call sites FR11's whole-Person zero-role check covers (the other
+// is server.RegisterRead/RegisterWrite's generic ChannelScoped path), so it
+// calls server.RequireChannelAccess itself rather than relying on the
+// registry (which only runs that check for a ChannelScoped input).
+func RegisterListChannels(reg *server.Registry, access store.AccessStore, roles store.RoleStore) {
 	server.RegisterRead(reg, &mcp.Tool{
 		Name: "list_channels",
 		Description: "List every Channel the calling Person currently has access to, with that Channel's title, " +
 			"connection_state, and the caller's role (creator, co_creator, or analyst) on it. This is the discovery " +
 			"entry point for every other Channel-scoped tool: use the returned channel_id to call " +
 			"get_channel_overview, list_ideas, save_research_note, and the rest.",
-	}, listChannelsHandler(access))
+	}, listChannelsHandler(access, roles))
 }
 
-func listChannelsHandler(access store.AccessStore) mcp.ToolHandlerFor[any, ListChannelsOutput] {
+func listChannelsHandler(access store.AccessStore, roles store.RoleStore) mcp.ToolHandlerFor[any, ListChannelsOutput] {
 	return func(ctx context.Context, _ *mcp.CallToolRequest, _ any) (*mcp.CallToolResult, ListChannelsOutput, error) {
 		person := server.PersonFromContext(ctx)
 		if person == nil {
 			return nil, ListChannelsOutput{}, fmt.Errorf("unauthenticated: no caller credential resolved")
+		}
+		if err := server.RequireChannelAccess(ctx, roles, person.ID); err != nil {
+			return nil, ListChannelsOutput{}, err
 		}
 
 		channelRoles, err := access.ChannelsWithRoleForPerson(ctx, person.ID)

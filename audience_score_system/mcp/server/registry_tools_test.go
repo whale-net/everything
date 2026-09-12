@@ -69,7 +69,7 @@ func TestRegistry_RetiredScheduleDraftAndPacingTools_NotRegistered(t *testing.T)
 	reg := server.NewRegistry(srv, st)
 
 	tools.RegisterWhoami(reg)
-	tools.RegisterListChannels(reg, st.Access())
+	tools.RegisterListChannels(reg, st.Access(), st.Roles())
 	tools.RegisterResearch(reg, st)
 	tools.RegisterVerdict(reg, st)
 	tools.RegisterVideoScript(reg, st)

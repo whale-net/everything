@@ -152,7 +152,7 @@ func newListChannelsTestServer(t *testing.T, st *store.Store, pool *pgxpool.Pool
 
 	srv := server.New(st)
 	reg := server.NewRegistry(srv, st)
-	tools.RegisterListChannels(reg, st.Access())
+	tools.RegisterListChannels(reg, st.Access(), st.Roles())
 
 	handler := server.NewHTTPHandler(srv, newTestCredentialStore(t, pool), server.ResourceMetadataConfig{
 		Resource:            "https://mcp.example.com",
