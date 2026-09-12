@@ -246,6 +246,54 @@ go_test(
     ],
 )
 
+# Real Postgres integration test for DesignSessionStore and
+# RevisionEventStore (design_session.go/revision_event.go, migration 008,
+# issue #2542's Testing section): Open writes a row and GetByID/
+# ListByProduct read it back, LB2 parentage rejection for an unknown
+# Product, seq_no allocation (sequential and under concurrency via a
+# SELECT ... FOR UPDATE lock on the owning design_session row), FR3's
+# verified_against and FR4's signoff_status conditional-presence rules
+# enforced in Go ahead of the DDL CHECK, entity_deltas.change rejecting
+# "deleted", full JSON round-trip through ListBySession's seq_no order, the
+# LB4 two-triple shape round-tripping both distinct and self-acting, and a
+# structural assertion (NFR1) that RevisionEventStore exposes no
+# Update/Delete/Amend verb. One target (not two) because a RevisionEvent's
+# sole parent is a DesignSession, so both files share this target's
+# scope/product/krill_session/design_session fixture helpers.
+# Deliberately NOT part of `bazel test //...` -- see //libs/go/dbtest's
+# README for the full rationale.
+#
+# Run it explicitly (requires a working Docker daemon):
+#   bazel test //krill/store:design_session_integration_test --test_output=all
+go_test(
+    name = "design_session_integration_test",
+    size = "large",
+    timeout = "long",
+    srcs = [
+        "design_session_integration_test.go",
+        "revision_event_integration_test.go",
+    ],
+    gotags = ["integration"],
+    tags = [
+        "external",
+        "integration",
+        "manual",
+        "no-cache",
+        "no-sandbox",
+        "requires-network",
+    ],
+    deps = [
+        ":store",
+        "//krill/migrate/schema",
+        "//libs/go/dbtest",
+        "//libs/go/migrate",
+        "@com_github_google_uuid//:uuid",
+        "@com_github_jackc_pgx_v5//stdlib",
+        "@com_github_stretchr_testify//assert",
+        "@com_github_stretchr_testify//require",
+    ],
+)
+
 # Real Postgres integration test for PointerArtifactStore (pointer.go, issue
 # #2496's Testing section): Create attaches to a Product and mirrors the
 # minted issue number onto scope.pointer_issue_number (LB1) in the same
