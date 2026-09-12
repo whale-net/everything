@@ -48,6 +48,16 @@ type MilestoneStore interface {
 	// (FR16) and by tests asserting a `Must not foreclose: LB1, LB4` line
 	// produced exactly two rows.
 	ListAssociationsByMilestone(ctx context.Context, milestoneID uuid.UUID) ([]EntityMilestone, error)
+
+	// ListRefsByProduct returns every MilestoneRef under (scopeID,
+	// productID), ordered by Name -- a pure read, added for the renderer
+	// (issue #2495, FR13): krill/render enumerates a product's milestones
+	// this way to rebuild product/03-roadmap.md, then resolves each
+	// milestone's own Delivers/Must-not-foreclose lists via
+	// ListAssociationsByMilestone above. Name order is lexicographic
+	// ("M1" < "M10" < "M2"); callers that need numeric milestone order
+	// (krill/render does) re-sort by the parsed integer suffix themselves.
+	ListRefsByProduct(ctx context.Context, scopeID, productID uuid.UUID) ([]MilestoneRef, error)
 }
 
 type milestoneStore struct{ pool *pgxpool.Pool }
@@ -136,4 +146,27 @@ func (s milestoneStore) ListAssociationsByMilestone(ctx context.Context, milesto
 		associations = append(associations, m)
 	}
 	return associations, rows.Err()
+}
+
+func (s milestoneStore) ListRefsByProduct(ctx context.Context, scopeID, productID uuid.UUID) ([]MilestoneRef, error) {
+	rows, err := s.pool.Query(ctx, `
+		SELECT `+milestoneRefColumns+`
+		FROM milestone_ref
+		WHERE scope_id = $1 AND product_id = $2
+		ORDER BY name
+	`, scopeID, productID)
+	if err != nil {
+		return nil, fmt.Errorf("list milestone_ref by product: %w", err)
+	}
+	defer rows.Close()
+
+	var refs []MilestoneRef
+	for rows.Next() {
+		ref, err := scanMilestoneRef(rows)
+		if err != nil {
+			return nil, fmt.Errorf("scan milestone_ref: %w", err)
+		}
+		refs = append(refs, ref)
+	}
+	return refs, rows.Err()
 }
