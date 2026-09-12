@@ -12,7 +12,12 @@ history.go (issue #2493, FR11) is the as-of/version-list read endpoints
 over the same two entity kinds. Neither slice.go's nor history.go's routes
 carry the write-only session gate. pointer.go (issue #2496, FR20) is the
 pointer-artifact create endpoint -- the one handler in this package that
-calls out to //krill/forge before it ever touches //krill/store."""
+calls out to //krill/forge before it ever touches //krill/store.
+design_session.go/revision_event.go (issue #2543, FR1-FR4/FR8) are the
+DesignSession/RevisionEvent HTTP surface: both POST endpoints are gated,
+GET /design-sessions/{id} is not; revision_event.go also owns the
+Subject/EntityDelta/OpenQuestionsDelta wire types design_session.go's
+GetDesignSessionHandler reuses."""
 
 load("@rules_go//go:def.bzl", "go_library", "go_test")
 
@@ -21,6 +26,7 @@ go_library(
     srcs = [
         "amend.go",
         "decision.go",
+        "design_session.go",
         "feature.go",
         "featureset.go",
         "gate.go",
@@ -28,6 +34,7 @@ go_library(
         "pointer.go",
         "product.go",
         "requirement.go",
+        "revision_event.go",
         "session.go",
         "slice.go",
         "types.go",
