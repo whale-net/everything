@@ -1,4 +1,4 @@
-load("@rules_go//go:def.bzl", "go_library")
+load("@rules_go//go:def.bzl", "go_library", "go_test")
 
 # The one-way doc renderer (issue #2495, FR13-FR15): projects a krill
 # Product's current spec back out to PRODUCT.md + product/*.md (the layout
@@ -9,10 +9,6 @@ load("@rules_go//go:def.bzl", "go_library")
 # directly, so the render path structurally has no write dependency on
 # krill; store_source.go is the one file in this package that imports
 # krill/store to build a Source out of a real *store.Store.
-#
-# Test targets (render_test.go, fake_source_test.go, and the
-# render_integration_test.go covering FR15's read-only-role proof) land
-# with this task's Testing phase.
 go_library(
     name = "render",
     srcs = [
@@ -25,5 +21,69 @@ go_library(
         "//krill/slice",
         "//krill/store",
         "@com_github_google_uuid//:uuid",
+    ],
+)
+
+# Fast, no-Postgres unit coverage (issue #2495's Testing section): the
+# four-file layout with Vision/Personas/LB/Non-goals inline and the split
+# files each keeping their own exact-heading-text title, FR14's
+# insert-between-siblings renumbering proof, a Must-not-foreclose line
+# reconstructed from association rows, and the provenance/non-hand-editable
+# header on every file. Driven entirely by fakeSource
+# (fake_source_test.go); see render_integration_test.go for the
+# real-Postgres half of the same Testing section.
+go_test(
+    name = "render_test",
+    size = "small",
+    srcs = [
+        "fake_source_test.go",
+        "render_test.go",
+    ],
+    deps = [
+        ":render",
+        "//krill/slice",
+        "//krill/store",
+        "@com_github_google_uuid//:uuid",
+        "@com_github_stretchr_testify//assert",
+        "@com_github_stretchr_testify//require",
+    ],
+)
+
+# Real-Postgres integration coverage (issue #2495's Testing section): a
+# full seeded product rendered end to end through render.NewStoreSource,
+# and FR15's read-only-role proof -- Render succeeds against a pool whose
+# every session has had default_transaction_read_only forced on, which the
+# test also proves actually rejects a write (not just "wasn't called
+# this run"). Deliberately NOT part of `bazel test //...` -- see
+# //libs/go/dbtest's README for the rationale behind each tag.
+#
+# Run it explicitly (requires a working Docker daemon):
+#   bazel test //krill/render:render_integration_test --test_output=all
+go_test(
+    name = "render_integration_test",
+    size = "large",
+    timeout = "long",
+    srcs = ["render_integration_test.go"],
+    gotags = ["integration"],
+    tags = [
+        "external",
+        "integration",
+        "manual",
+        "no-cache",
+        "no-sandbox",
+        "requires-network",
+    ],
+    deps = [
+        ":render",
+        "//krill/migrate/schema",
+        "//krill/store",
+        "//libs/go/dbtest",
+        "//libs/go/migrate",
+        "@com_github_google_uuid//:uuid",
+        "@com_github_jackc_pgx_v5//:pgx",
+        "@com_github_jackc_pgx_v5//pgxpool",
+        "@com_github_jackc_pgx_v5//stdlib",
+        "@com_github_stretchr_testify//assert",
+        "@com_github_stretchr_testify//require",
     ],
 )
