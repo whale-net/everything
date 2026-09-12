@@ -15,6 +15,7 @@ C9 — Every tool call a session makes carries a whagent-net-signed claim of whi
 C10 — A headless service can start and drive sessions as a service account, with the same permission checks as a human.
 C11 — A tool call that mutates state is never applied twice when a turn is retried after a failure.
 C12 — A consumer-domain developer can make their MCP server usable by a session by satisfying one published tool contract — verifying the on-behalf-of claim and mapping it to the domain's own user record — without changes to whagent-net.
+C28 — An operator can tune which upstream OpenRouter providers/quantizations serve an agent's model — order, allow/deny list, fallback behavior, data-collection opt-out — as a named, reusable profile shared across agents, independent of picking the model itself (C5).
 
 ### Next
 C13 — An operator can pick an agent, start a session, and converse with it from a standalone web UI.
@@ -34,3 +35,4 @@ C23 — An operator can tighten or widen a running session's tool set mid-flight
 C24 — A viewer can see exactly what the model was shown on a given turn, to debug an agent's behaviour.
 C25 — An operator can see cost and turn usage rolled up across sessions, per agent and per user.
 C26 — A Slack user can start an agent and receive its replies in a Slack thread.
+C29 — An operator running an agent against a large tool catalog gets a session whose model searches for and loads only the tool definitions it needs on a given turn, instead of the entire allowed set being present from turn 1.
