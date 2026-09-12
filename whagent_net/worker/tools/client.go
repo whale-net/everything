@@ -62,11 +62,12 @@ func Connect(ctx context.Context, serverURL, token string) (*mcp.ClientSession, 
 	return cs, nil
 }
 
-// ListToolNames returns the set of tool names cs's server exposes (FR8):
-// M1 relies entirely on server-side pre-filtered endpoints, so the set
-// this returns is exactly what the session may call -- see this package's
-// doc comment (dispatch.go) for why whagent-side allowed_tools filtering
-// is explicitly out of scope.
+// ListToolNames returns the set of tool names cs's server exposes (FR8) --
+// callers apply their own ref-specific AllowedTools narrowing on top of
+// this (C22, allowlist.go's isAllowed); ListToolNames itself has no
+// ToolServerRef to filter against and returns the server's full exposed
+// set verbatim. See this package's doc comment (dispatch.go, "Tool
+// selection") for the combined server + whagent-side filter.
 func ListToolNames(ctx context.Context, cs *mcp.ClientSession) (map[string]struct{}, error) {
 	res, err := cs.ListTools(ctx, nil)
 	if err != nil {

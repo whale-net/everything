@@ -261,10 +261,20 @@ usable from an agent definition:
 - the agent definition-registration format the domain publishes.
 
 **Tool selection** — an agent definition names which of a server's tools an agent may
-see, so an agent can be focused. Initially this is enforced on the MCP
-server side (the server exposes a pre-filtered tool list at the agent definition's
-endpoint, e.g. `/mcp/research`); whagent-side filtering of a server's full
-tool list is a later capability, not an M1 requirement.
+see, so an agent can be focused. This is the intersection of two filters: the
+MCP server side (the server exposes a pre-filtered tool list at the agent
+definition's endpoint, e.g. `/mcp/research`) and, when a `tool_set` entry's
+`allowed_tools` is non-empty, whagent-side narrowing (C22) enforced by
+`whagent_net/worker/tools`' `ListToolDefinitions` (what the model is offered)
+and `Dispatch`'s `resolveTarget` (what is actually callable) — the same
+allowlist check in both places, so a server-exposed-but-not-allowed tool is
+never offered to the model and never dispatchable even if requested anyway.
+An empty/nil `allowed_tools` means "whatever the server exposes," matching
+the M1 default of relying entirely on the server-side pre-filtered endpoint.
+`allowed_tools` is manually authored today (`agents.yaml`'s `tool_set`
+entries, or a direct `agent_definition.tool_set` row edit); a UI for
+selecting/searching tools to populate it is a later capability (open item
+below).
 
 First consumer: `audience_score_system/mcp` (exists; research tools are the
 embedded-agent target). `manmanv2` is out of scope for this product — it
@@ -674,5 +684,21 @@ outright — the session still exists and a caller should retry with
 - **Cron-scheduled sessions**: non-goal *as a service offering* — a
   consumer wraps `StartSession` in its own Temporal schedule/workflow.
 - **Human approval gate for tool calls**: non-goal for now.
-- **Whagent-side tool filtering** of a server's full tool list: later
-  capability; v1 relies on server-side pre-filtered endpoints.
+- **UI-driven tool selection**: an operator picking/searching tools to
+  populate an agent definition's `allowed_tools` from `ui` rather than
+  hand-editing `agents.yaml`/the row directly — later capability, no UI
+  work done yet (C13–C16, the UI milestone, land first).
+- **Deferred/searched tool loading**: today `ListToolDefinitions` always
+  aggregates and offers the *full* (post-`allowed_tools`) tool set to every
+  model call, same as the rest of the field's MCP clients bulk-loading a
+  server's whole catalog up front. For a domain server with a large tool
+  catalog, a search-first pattern (a small fixed meta-tool the model calls
+  to find candidate tools by keyword/description, then only those
+  definitions are added to the next turn's `Tools`) would keep context/cost
+  down and compose with `allowed_tools` as a hard ceiling either way. Not
+  designed yet — would touch the tool contract (a reserved meta-tool name),
+  `ListToolDefinitions`'/`CallModelInput.Tools`' per-turn shape (now
+  path-dependent on prior turns, not just the agent definition), and context
+  budgeting (a searched-in tool definition is itself a context cost). Scope
+  through `/project-manager:design` before building, given the surface it
+  touches.

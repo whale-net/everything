@@ -543,8 +543,8 @@ type ListToolDefinitionsResult struct {
 // in in.ToolSet and listing its exposed tools, mirroring
 // whagent_net/worker/tools/dispatch.go's resolveTarget -- a fresh
 // credential minted per server (FR10), never reused across servers, and
-// never whagent-side-filtered against ToolServerRef.AllowedTools (C22/
-// Later, dispatch.go's package doc comment "Tool selection").
+// narrowed to a non-empty ToolServerRef.AllowedTools when set (C22,
+// dispatch.go's package doc comment "Tool selection").
 //
 // Implemented via whagent_net/worker/tools.ListToolDefinitions
 // (listdefs.go), over a.Dispatcher.Issuer (minting) -- this activity is a

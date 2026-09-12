@@ -23,7 +23,10 @@ see "Agent definition config" below for how it gets inserted.
 Deferred to M2/Later per the roadmap: transcript archival (C18, now a
 Temporal-scheduled workflow inside `worker` rather than a separate
 binary — see `worker/archive.go`), `ui`/`embed` (C13–C16), `StreamEvents`
-(C17), and whagent-side `allowed_tools` enforcement (C22). A
+(C17). Whagent-side `allowed_tools` enforcement (C22) now ships:
+`worker/tools`' `ListToolDefinitions`/`Dispatch` narrow to a `tool_set`
+entry's `allowed_tools` when non-empty, on top of whatever the server
+itself exposes — see "Agent definition config" below. A
 service-account caller (C10) can now start, send
 turns to, and stop a session exactly as a human operator can (FR6/#2243) —
 see "Client credentials (service accounts)" below. The product brief
@@ -246,6 +249,19 @@ VALUES (
   'whagent-audience-score-system-research'
 );
 ```
+
+To further constrain that same agent to only two of the server's tools
+(C22 — e.g. a research-only agent that must never call a write tool the
+`/mcp/research` endpoint still happens to expose), set `allowed_tools`
+instead of leaving it `null`:
+
+```sql
+'[{"server_url": "http://audience-score-system-mcp.audience-score-system-local-dev.svc.cluster.local:8081/", "allowed_tools": ["search_research_notes", "get_channel"]}]'
+```
+
+A tool name in `allowed_tools` that the server does not itself expose is
+harmless (it simply never matches anything `ListToolNames` returns); it is
+not validated against the server's live catalog at insert time.
 
 `version` is `1` for a brand-new `agent_id`, or `(current max version for
 that agent_id) + 1` when changing an existing definition — never an
