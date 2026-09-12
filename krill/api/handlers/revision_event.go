@@ -23,10 +23,20 @@ type entityDeltaRequest struct {
 	SummaryLine string `json:"summary_line"`
 }
 
+// openQuestionOpenedRequest mirrors store.OpenQuestionOpened field-for-
+// field (issue #2545, FR6): a question's blocking flag and text are
+// established here, at open time, and never resent on a later `resolved`
+// entry (openQuestionsDeltaRequest.Resolved below is bare ids).
+type openQuestionOpenedRequest struct {
+	QuestionID string `json:"question_id"`
+	Blocking   bool   `json:"blocking"`
+	Text       string `json:"text"`
+}
+
 // openQuestionsDeltaRequest mirrors store.OpenQuestionsDelta field-for-field.
 type openQuestionsDeltaRequest struct {
-	Opened   []string `json:"opened"`
-	Resolved []string `json:"resolved"`
+	Opened   []openQuestionOpenedRequest `json:"opened"`
+	Resolved []string                    `json:"resolved"`
 }
 
 // appendRevisionEventRequest is AppendRevisionEventHandler's request body
@@ -128,6 +138,11 @@ func AppendRevisionEventHandler(events store.RevisionEventStore) http.HandlerFun
 			signoffStatus = &st
 		}
 
+		opened := make([]store.OpenQuestionOpened, len(req.OpenQuestionsDelta.Opened))
+		for i, o := range req.OpenQuestionsDelta.Opened {
+			opened[i] = store.OpenQuestionOpened{QuestionID: o.QuestionID, Blocking: o.Blocking, Text: o.Text}
+		}
+
 		// sess.Acting/sess.OnBehalfOf/sess.ScopeID come from the gating
 		// krill_session only -- req above has no field for any of them, so
 		// there is nothing here for a caller to override even if it tried.
@@ -139,7 +154,7 @@ func AppendRevisionEventHandler(events store.RevisionEventStore) http.HandlerFun
 			EventType:    eventType,
 			EntityDeltas: entityDeltas,
 			OpenQuestionsDelta: store.OpenQuestionsDelta{
-				Opened:   req.OpenQuestionsDelta.Opened,
+				Opened:   opened,
 				Resolved: req.OpenQuestionsDelta.Resolved,
 			},
 			VerifiedAgainst: req.VerifiedAgainst,
@@ -194,10 +209,17 @@ type entityDeltaWire struct {
 	SummaryLine string `json:"summary_line"`
 }
 
+// openQuestionOpenedWire is the wire shape of one store.OpenQuestionOpened.
+type openQuestionOpenedWire struct {
+	QuestionID string `json:"question_id"`
+	Blocking   bool   `json:"blocking"`
+	Text       string `json:"text"`
+}
+
 // openQuestionsDeltaWire is the wire shape of a store.OpenQuestionsDelta.
 type openQuestionsDeltaWire struct {
-	Opened   []string `json:"opened"`
-	Resolved []string `json:"resolved"`
+	Opened   []openQuestionOpenedWire `json:"opened"`
+	Resolved []string                 `json:"resolved"`
 }
 
 // revisionEventWire is the wire shape of one store.RevisionEvent -- used by
@@ -232,6 +254,11 @@ func toRevisionEventWire(ev store.RevisionEvent) revisionEventWire {
 		signoffStatus = &s
 	}
 
+	opened := make([]openQuestionOpenedWire, len(ev.OpenQuestionsDelta.Opened))
+	for i, o := range ev.OpenQuestionsDelta.Opened {
+		opened[i] = openQuestionOpenedWire{QuestionID: o.QuestionID, Blocking: o.Blocking, Text: o.Text}
+	}
+
 	return revisionEventWire{
 		ID:           ev.ID.String(),
 		SeqNo:        ev.SeqNo,
@@ -240,7 +267,7 @@ func toRevisionEventWire(ev store.RevisionEvent) revisionEventWire {
 		EventType:    string(ev.EventType),
 		EntityDeltas: deltas,
 		OpenQuestionsDelta: openQuestionsDeltaWire{
-			Opened:   ev.OpenQuestionsDelta.Opened,
+			Opened:   opened,
 			Resolved: ev.OpenQuestionsDelta.Resolved,
 		},
 		VerifiedAgainst: ev.VerifiedAgainst,

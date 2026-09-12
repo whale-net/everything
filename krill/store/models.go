@@ -256,12 +256,25 @@ type EntityDelta struct {
 	SummaryLine string            `json:"summary_line"`
 }
 
+// OpenQuestionOpened is one entry of OpenQuestionsDelta.Opened (migration
+// 008, FR2/FR6) -- a question id together with the two properties FR6
+// says are established at open time and never mutated: its blocking flag
+// and its text. A later `resolved` entry names only the question id
+// (issue #2545's settled shape) because a resolution never needs to
+// restate either -- restating them would require exactly the mutable
+// question row FR6/NFR1 forbid.
+type OpenQuestionOpened struct {
+	QuestionID string `json:"question_id"`
+	Blocking   bool   `json:"blocking"`
+	Text       string `json:"text"`
+}
+
 // OpenQuestionsDelta is a revision_event's open_questions_delta JSONB
-// object (migration 008, FR2) -- the open question ids a round opened and
-// resolved, by id.
+// object (migration 008, FR2, FR6) -- the questions a round opened (with
+// their blocking flag and text) and the bare question ids it resolved.
 type OpenQuestionsDelta struct {
-	Opened   []string `json:"opened"`
-	Resolved []string `json:"resolved"`
+	Opened   []OpenQuestionOpened `json:"opened"`
+	Resolved []string             `json:"resolved"`
 }
 
 // DesignSession is one row of `design_session` (migration 008, issue
@@ -324,6 +337,19 @@ type RevisionEvent struct {
 	VerifiedAgainst    *string
 	SignoffStatus      *SignoffStatus
 	CreatedAt          time.Time
+}
+
+// OpenQuestion is one row of RevisionEventStore.ListOpenQuestions' derived
+// result (issue #2545, FR6) -- never a table of its own (see
+// open_questions.go's package doc comment for why). OpenedAtSeqNo is the
+// seq_no of the revision_event whose `opened` entry is currently winning
+// for QuestionID (the latest one, per last-event-wins), not the first time
+// the question id ever appeared.
+type OpenQuestion struct {
+	QuestionID    string
+	Text          string
+	Blocking      bool
+	OpenedAtSeqNo int
 }
 
 // PointerArtifact is one row of `pointer_artifact` (migration 005, issue

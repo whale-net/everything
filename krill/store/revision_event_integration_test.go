@@ -61,7 +61,7 @@ func baseRevisionEvent(f reTestFixture, acting, onBehalfOf store.Subject) store.
 		Acting:             acting,
 		OnBehalfOf:         onBehalfOf,
 		EventType:          store.EventTypeRuling,
-		OpenQuestionsDelta: store.OpenQuestionsDelta{Opened: []string{}, Resolved: []string{}},
+		OpenQuestionsDelta: store.OpenQuestionsDelta{Opened: []store.OpenQuestionOpened{}, Resolved: []string{}},
 	}
 }
 
@@ -222,7 +222,13 @@ func TestRevisionEventStore_Append_RoundTripsJSONAndListsInSeqOrder(t *testing.T
 	first.EntityDeltas = []store.EntityDelta{
 		{EntityID: uuid.New(), Change: store.EntityDeltaChangeCreated, SummaryLine: "created FR7"},
 	}
-	first.OpenQuestionsDelta = store.OpenQuestionsDelta{Opened: []string{"q1", "q2"}, Resolved: []string{}}
+	first.OpenQuestionsDelta = store.OpenQuestionsDelta{
+		Opened: []store.OpenQuestionOpened{
+			{QuestionID: "q1", Blocking: true, Text: "what storage backend?"},
+			{QuestionID: "q2", Blocking: false, Text: "naming bikeshed"},
+		},
+		Resolved: []string{},
+	}
 	ev1, err := f.store.RevisionEvents().Append(ctx, first)
 	require.NoError(t, err)
 
@@ -230,7 +236,7 @@ func TestRevisionEventStore_Append_RoundTripsJSONAndListsInSeqOrder(t *testing.T
 	second.EntityDeltas = []store.EntityDelta{
 		{EntityID: uuid.New(), Change: store.EntityDeltaChangeUpdated, SummaryLine: "reworded LB3"},
 	}
-	second.OpenQuestionsDelta = store.OpenQuestionsDelta{Opened: []string{}, Resolved: []string{"q1"}}
+	second.OpenQuestionsDelta = store.OpenQuestionsDelta{Opened: []store.OpenQuestionOpened{}, Resolved: []string{"q1"}}
 	ev2, err := f.store.RevisionEvents().Append(ctx, second)
 	require.NoError(t, err)
 
