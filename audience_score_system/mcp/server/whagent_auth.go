@@ -213,7 +213,7 @@ func WhagentPersonMiddleware(identities store.PersonIdentityStore) mcp.Middlewar
 				return nil, fmt.Errorf("unauthenticated: whagent identity could not be resolved")
 			}
 
-			return next(withPerson(ctx, person), method, req)
+			return next(withPerson(ctx, person, AuthPathWhagent), method, req)
 		}
 	}
 }

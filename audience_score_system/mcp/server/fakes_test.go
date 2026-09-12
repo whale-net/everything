@@ -308,7 +308,7 @@ func newTestRegistry(person *store.Person, roles store.RoleStore, idempotency st
 		p := *person
 		srv.AddReceivingMiddleware(func(next mcp.MethodHandler) mcp.MethodHandler {
 			return func(ctx context.Context, method string, req mcp.Request) (mcp.Result, error) {
-				return next(withPerson(ctx, p), method, req)
+				return next(withPerson(ctx, p, AuthPathMCPCredential), method, req)
 			}
 		})
 	}
