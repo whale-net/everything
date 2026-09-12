@@ -5,8 +5,9 @@ read the variables below. `krill/importer/cmd`'s `import` CLI (issue
 #2492) reads `PG_DATABASE_URL` too (via a `--database-url` flag that
 defaults to it), but is not a deployed binary and takes its other inputs
 (`--path`, `--session-id`) as flags -- see `krill/README.md`'s Binaries
-table. `mcp` (issue #2494, FR10/NFR1) is a third binary; see its own
-section below.
+table. `mcp` (issue #2494, FR10/NFR1) is a third binary and `ui` (the
+mcpauth `/authorize` sign-in shell) a fourth; see their own sections
+below.
 
 ## Database
 
@@ -71,12 +72,36 @@ layer and the mcpauth credential store read from it).
 
 The mcpauth (human OAuth2) front door additionally requires its
 `mcp_credential`-shaped table to exist against the same `PG_DATABASE_URL`
-pool (`libs/go/mcpauth.NewCredentialStore`'s preflight, mirroring
+pool (`libs/go/mcpauth.NewCredentialStore`'s preflight). Migration
+`006_mcpauth_credential` now provides it (mirroring
 `audience_score_system`'s own migration 006 and `whagent_net`'s migration
-004). No such migration exists in krill yet -- until one lands, `mcp`
-degrades that door to reject every call (`main.go`'s
-`rejectingCredentialStore`), rather than failing to boot; the agent front
-door never depends on it.
+004) -- until it is applied, `mcp` still degrades that door to reject
+every call (`main.go`'s `rejectingCredentialStore`) rather than failing to
+boot; the agent front door never depends on it either way.
+
+## `ui` (Keycloak sign-in shell, mcpauth's `/authorize` front end)
+
+`ui` is a barebones binary whose sole job is to give mcpauth's
+`/authorize` endpoint (mounted here, not on `mcp`) a `SignInURL` to
+redirect a not-yet-signed-in caller to -- see `krill/ui/main.go`'s package
+doc and `ARCHITECTURE.md` "krill/ui and the mcpauth front door" for why
+`mcp`'s own door had nowhere to send a caller before this binary existed.
+It shares `PG_DATABASE_URL` with `api`/`mcp` (its own `ui_sessions` table,
+migration `007_ui_sessions`, plus the same `mcp_credential`/
+`mcp_oauth_client`/`mcp_auth_code` tables `mcp` verifies against,
+migration `006_mcpauth_credential`).
+
+| Variable | Default | Description |
+|----------|---------|--------------|
+| `KRILL_UI_ADDR` | `:8080` | Address `ui`'s HTTP surface listens on. |
+| `AUTH_MODE` | `none` | `none` (dev-only synthetic user, no Keycloak) or `oidc` (real Keycloak sign-in). |
+| `KRILL_OIDC_ISSUER` | `""` | Keycloak realm issuer URL. Required when `AUTH_MODE=oidc`. |
+| `KRILL_OIDC_CLIENT_ID` / `KRILL_OIDC_CLIENT_SECRET` | `""` | Keycloak client credentials. Required when `AUTH_MODE=oidc`. |
+| `KRILL_OIDC_REDIRECT_URI` | `http://localhost:8080/auth/callback` | OIDC redirect URI registered on the Keycloak client. |
+| `SECRET_KEY` | `dev-secret-key-change-in-production` | Encrypts the DB-backed session store's access/refresh tokens (`//libs/go/htmxauth`). |
+| `PG_DATABASE_URL` | *(required)* | Backs both the `ui_sessions` table and the mcpauth Postgres-backed credential/client/auth-code stores. |
+| `KRILL_UI_PUBLIC_URL` | *(required)* | This instance's own externally reachable URL -- `mcpauth.ProviderConfig.Issuer`, the base every mcpauth endpoint URL (`/authorize`, `/token`, `/register`, discovery metadata) is built from. Must match what `mcp`'s own `KRILL_MCP_OAUTH_ISSUER` advertises. |
+| `KRILL_MCP_PUBLIC_URL` | *(required)* | `mcp`'s own externally reachable URL -- `mcpauth.ProviderConfig.Resource`. Must be byte-identical to `mcp`'s own `KRILL_MCP_PUBLIC_URL`. |
 
 ## Postgres MCP (Claude Code plugin)
 
@@ -102,8 +127,8 @@ than direct Postgres access.
 
 ## Telemetry
 
-Read via `//libs/go/logging` (`api`, `mcp`).
+Read via `//libs/go/logging` (`api`, `mcp`, `ui`).
 
 | Variable | Component | Default | Description |
 |----------|-----------|---------|-------------|
-| `OTEL_EXPORTER_OTLP_ENDPOINT` | api, mcp | — | OTLP collector endpoint for traces/logs. Unset leaves telemetry export inert rather than failing boot, same convention every other domain's binaries follow. |
+| `OTEL_EXPORTER_OTLP_ENDPOINT` | api, mcp, ui | — | OTLP collector endpoint for traces/logs. Unset leaves telemetry export inert rather than failing boot, same convention every other domain's binaries follow. |

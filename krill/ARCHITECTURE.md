@@ -14,18 +14,30 @@ and the milestone roadmap that drives what gets built next.
    Postgres  ◄───│  migrate  │  job: applies schema, seeds `scope` (LB1/NFR2)
    (scope)   ▲    └───────────┘
         │    │
-   ┌────┴────┐    ┌───────────┐
-   │   api   │    │    mcp    │  external-api: the FR10/NFR1 spec surface --
-   └─────────┘    └───────────┘  /mcp/spec, the same FR5-FR9 slice query as
-        ▲              ▲         `api`'s /slices/... routes, over MCP
-        │              │
+   ┌────┴────┬────────────┬────────────┐
+   │   api   │    mcp     │     ui     │
+   └─────────┴────────────┴────────────┘
+        ▲            ▲            ▲
+        │            │            │
+        │            │       external-api: barebones Keycloak sign-in
+        │            │       shell; mounts mcpauth's /authorize, /token,
+        │            │       /register, and discovery -- the SignInURL
+        │            │       mcp's mcpauth front door redirects to
+        │            │
+        │       external-api: the FR10/NFR1 spec surface -- /mcp/spec,
+        │       the same FR5-FR9 slice query as `api`'s /slices/...
+        │       routes, over MCP
+        │
    external-api: /healthz, /sessions/init, the M1 entity write API (issue
    #2490 — create/attach only), and the FR5-FR9 scoped-slice query surface
    (issue #2491, read-only, also reachable via `api`'s own HTTP routes)
 ```
 
-`migrate`, `api`, and `mcp` each get their own Postgres connection
+`migrate`, `api`, `mcp`, and `ui` each get their own Postgres connection
 (`PG_DATABASE_URL`, `//libs/go/db` / `//libs/go/migrate` — see `ENV.md`).
+`ui` additionally owns the `ui_sessions` table (migration 007) and, jointly
+with `mcp`, the `mcp_credential`/`mcp_oauth_client`/`mcp_auth_code` tables
+(migration 006) -- see "krill/ui and the mcpauth front door" below.
 `krill/plugin/` now carries `mcp`'s Claude Code plugin entries (`.mcp.json`
 / `mcp_config.json`, issue #2494) rather than being a placeholder, plus a
 companion `plugin/data/` "-data" plugin for direct Postgres access to the
@@ -203,6 +215,8 @@ milestone never collide on a migration version:
 | `003` | `session` (FR3's `init` gate) | #2489 |
 | `004` | Milestone reference + association (FR17) | #2492 |
 | `005` | Pointer artifact (FR20) | #2496 |
+| `006` | mcpauth credential/client/auth-code (`mcp_credential`, `mcp_oauth_client`, `mcp_auth_code`) | mcpauth auth-flow gap |
+| `007` | UI sessions (`ui_sessions`, `//libs/go/htmxauth`) | mcpauth auth-flow gap |
 
 ## `krill_session` and the two session ids (FR3, #2489)
 
@@ -363,22 +377,51 @@ handler runs — none of the four FR5-FR8 tools is persona-sensitive, so
 there is no per-tool allow-list yet either; that is expected to change
 once the work-axis surface (M4) lands a persona-restricted tool.
 
-**No migration for the mcpauth door yet.** `libs/go/mcpauth.NewCredentialStore`
-preflights a `mcp_credential`-shaped table at boot, exactly like
-`audience_score_system`'s migration 006 and `whagent_net`'s migration
-004 — krill has not shipped the equivalent migration (no slot for it
-exists in the "Migration numbering (M1)" table above, since this task
-predates deciding where it lands). Rather than fail `mcp` at boot
-entirely (which would also break the agent door, which does not need
-Postgres at all), `krill/mcp/main.go` degrades: a failed
-`NewCredentialStore` call logs a warning and substitutes
-`rejectingCredentialStore`, a `CredentialStore` of last resort whose every
-method fails with the same opaque error `mcpauth.TokenVerifier` already
-produces for a revoked credential — so a caller presenting an
-mcpauth-shaped token against a not-yet-migrated deployment gets a clean
-401, never a panic on a nil interface. The agent door is unaffected
-either way. Adding that migration and a real mint/revoke flow for the
-mcpauth door is a follow-up, not part of this task's scope.
+**The mcpauth door's migration (`006_mcpauth_credential`) now exists.**
+`libs/go/mcpauth.NewCredentialStore` preflights a `mcp_credential`-shaped
+table at boot, exactly like `audience_score_system`'s migration 006 and
+`whagent_net`'s migration 004; migration 006 now provides it. Until it is
+applied against a given deployment, `krill/mcp/main.go` still degrades
+rather than failing to boot entirely (which would also break the agent
+door, which does not need Postgres at all): a failed `NewCredentialStore`
+call logs a warning and substitutes `rejectingCredentialStore`, a
+`CredentialStore` of last resort whose every method fails with the same
+opaque error `mcpauth.TokenVerifier` already produces for a revoked
+credential — so a caller presenting an mcpauth-shaped token against a
+not-yet-migrated deployment gets a clean 401, never a panic on a nil
+interface. The agent door is unaffected either way.
+
+## krill/ui and the mcpauth front door (the auth-flow gap)
+
+Landing the migration above was necessary but not sufficient: `mcp`'s
+mcpauth door verifies credentials, but nothing in M1 ever *minted* one.
+`krill/mcp/main.go` constructs no `mcpauth.Provider` — only
+`mcpauth.NewCredentialStore` (verification) — so there was no
+`/authorize`, `/token`, `/register`, or discovery metadata anywhere in
+krill, and every other domain's own front door (`audience_score_system`,
+`whagent_net`) solves this by setting `mcpauth.ProviderConfig.SignInURL`
+to its own web UI's `/login` route (`libs/go/mcpauth/authorize.go`:
+`/authorize` 401s outright when `SignInURL` is unset and the caller isn't
+already resolved). krill had no UI to point at — `PRODUCT.md`'s roadmap
+defers a real web UI to "Later" (C19).
+
+`krill/ui` (`krill/ui/main.go`) is the minimum viable fix: a standalone
+binary that does nothing but (1) Keycloak sign-in via `//libs/go/htmxauth`
+(migration `007_ui_sessions`) and (2) construct and mount an
+`mcpauth.Provider` (migration `006_mcpauth_credential`, shared with `mcp`)
+with `SignInURL: "/login"`. `krill/ui/mcpauth.go`'s `mcpCallerResolver`
+reads the signed-in operator's session and encodes their `(iss, sub)` pair
+via the new `//krill/identity` package (mirroring
+`whagent_net/mcpidentity`'s encoding exactly) — krill has no person/user
+table to key an identity to instead (NFR1). This completes the
+authorization-code + PKCE round trip end to end (discovery → registration
+→ sign-in → `/authorize` → `/token` → a credential `mcp`'s
+`NewCredentialStore` can verify), but deliberately does **not** touch
+persona resolution: `krill/mcp/server/auth.go`'s `PersonaMiddleware` still
+resolves every mcpauth-authenticated caller to `PersonaSwarmOperator`
+unconditionally, exactly as before. Widening that resolution to a real
+identity → persona lookup is C12's own job (`PRODUCT.md`'s M2), not this
+gap-fix's — see `auth.go`'s doc comment.
 
 ## The markdown importer and the delivery-axis association (FR16, FR17, issue #2492)
 
@@ -759,8 +802,11 @@ plan issue #2485's own acceptance criteria, not by an automated test —
   than through this HTTP middleware (see "The markdown importer" above).
 - `krill/mcp` (issue #2494) now exists and wraps `krill/slice` directly,
   per LB7 (see "The MCP spec surface" above) — its mcpauth (human) front
-  door still has no migration to back it, and degrades to reject-all
-  until one lands (see that section's last paragraph).
+  door now has both its verification-side migration (`006_mcpauth_credential`)
+  and a mint-side `/authorize`/`/token` surface (`krill/ui`, see
+  "krill/ui and the mcpauth front door" above); persona resolution
+  (`auth.go`) still always resolves `PersonaSwarmOperator`, unconditionally,
+  until C12 lands.
 - No auth wired up on `api` — `POST /sessions/init`, every future write
   endpoint, and the FR5-FR9 slice routes all trust caller-asserted
   identity or are unauthenticated (see "`init` and the write gate"

@@ -1,0 +1,45 @@
+"""krill's barebones operator web UI: Keycloak sign-in shell whose sole job
+is to give mcpauth's `/authorize` endpoint (mounted here) a SignInURL to
+redirect a not-yet-signed-in caller to -- see main.go's package doc."""
+
+load("@rules_go//go:def.bzl", "go_binary", "go_library")
+load("//tools/bazel:release.bzl", "release_app")
+
+go_library(
+    name = "ui_lib",
+    srcs = [
+        "main.go",
+        "mcpauth.go",
+    ],
+    importpath = "github.com/whale-net/everything/krill/ui",
+    visibility = ["//visibility:private"],
+    deps = [
+        "//krill/identity",
+        "//libs/go/db",
+        "//libs/go/htmxauth",
+        "//libs/go/logging",
+        "//libs/go/mcpauth",
+        "@com_github_jackc_pgx_v5//pgxpool",
+        "@io_opentelemetry_go_contrib_instrumentation_net_http_otelhttp//:otelhttp",
+    ],
+)
+
+go_binary(
+    name = "ui",
+    embed = [":ui_lib"],
+    visibility = ["//visibility:public"],
+)
+
+# domain "krill" + name "ui" produces the "krill-ui" image/app identity.
+# external-api: this is the browser-facing sign-in shell an operator's
+# MCP client redirects them to during `/authorize`.
+release_app(
+    name = "ui",
+    binary_name = ":ui",
+    language = "go",
+    domain = "krill",
+    description = "krill's barebones operator web UI: Keycloak sign-in shell backing the mcpauth OAuth2 authorization-server front door",
+    app_type = "external-api",
+    port = 8080,
+    replicas = 1,
+)
