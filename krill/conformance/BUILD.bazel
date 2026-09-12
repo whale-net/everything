@@ -43,6 +43,7 @@ go_test(
         "design_milestone_query_integration_test.go",
         "roundtrip_integration_test.go",
         "whagent_net_import_integration_test.go",
+        "whagent_net_render_integration_test.go",
     ],
     data = [
         "//krill:docs",

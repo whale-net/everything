@@ -192,7 +192,7 @@ func renderProductMD(name, revision string, doc slice.Document, personas []store
 		title := cleanDecisionTitle(d.Name)
 		b.WriteString(fmt.Sprintf("LB%d — %s\n", decisionNumbers[d.ID], title))
 		if d.Body != nil && strings.TrimSpace(*d.Body) != "" {
-			b.WriteString(strings.TrimSpace(*d.Body))
+			b.WriteString(stripLeadingTitleLine(strings.TrimSpace(*d.Body), d.Name))
 			b.WriteString("\n")
 		}
 		b.WriteString("\n")
@@ -241,6 +241,33 @@ var leadingLBLabelRe = regexp.MustCompile(`^LB\d+\s*[—–-]\s*`)
 
 func cleanDecisionTitle(name string) string {
 	return leadingLBLabelRe.ReplaceAllString(strings.TrimSpace(name), "")
+}
+
+// stripLeadingTitleLine drops body's first line when it duplicates name
+// verbatim -- krill/importer/parse.go's parseDecisions keeps a decision's
+// own title line as the first line of Body (ParsedDecision.Body's doc:
+// "the full block text, including the title line"), specifically so
+// nothing is lost if a caller reads Body alone. But renderProductMD
+// already writes its own freshly-computed "LBn — <title>" line just above
+// this call (FR14), so printing Body unstripped would print the same
+// title twice -- once with the current render's number, once with
+// whatever the source document's title line looked like. This only
+// affects real imported data (krill/render's own unit and integration
+// tests seed Decisions with a bare title as Name and no title line inside
+// Body, so this codepath is a no-op there).
+func stripLeadingTitleLine(body, name string) string {
+	nameLine := strings.TrimSpace(name)
+	idx := strings.Index(body, "\n")
+	var firstLine, rest string
+	if idx == -1 {
+		firstLine, rest = body, ""
+	} else {
+		firstLine, rest = body[:idx], body[idx+1:]
+	}
+	if strings.TrimSpace(firstLine) != nameLine {
+		return body
+	}
+	return strings.TrimSpace(rest)
 }
 
 func renderCurrentStateMD(name, revision string) string {

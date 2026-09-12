@@ -57,9 +57,14 @@ func (s nonGoalStore) Create(ctx context.Context, scopeID, productID uuid.UUID, 
 		return NonGoal{}, errParentNotFound("product", productID)
 	}
 
+	// position is one past the current max among productID's own current
+	// NonGoals of the same kind (ListCurrentByProduct orders by kind
+	// first, so append order is scoped per kind) -- see product.go's
+	// Create doc comment for why this must not be left at column
+	// DEFAULT 0.
 	nonGoal, err := scanNonGoal(tx.QueryRow(ctx, `
-		INSERT INTO non_goal (scope_id, product_id, kind, name, body)
-		VALUES ($1, $2, $3, $4, $5)
+		INSERT INTO non_goal (scope_id, product_id, kind, name, body, position)
+		VALUES ($1, $2, $3, $4, $5, (SELECT COALESCE(MAX(position), -1) + 1 FROM non_goal WHERE product_id = $2 AND kind = $3 AND valid_to IS NULL))
 		RETURNING `+nonGoalColumns,
 		scopeID, productID, string(kind), name, body))
 	if err != nil {

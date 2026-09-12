@@ -68,9 +68,15 @@ func (s decisionStore) Create(ctx context.Context, scopeID, featureSetID uuid.UU
 		return LoadBearingDecision{}, errParentNotFound("feature_set", featureSetID)
 	}
 
+	// position is one past the current max among featureSetID's own
+	// current LoadBearingDecisions (append order) -- see
+	// krill/store/product.go's Create doc comment for why this must not
+	// be left at column DEFAULT 0: krill/render's FR14 numbering
+	// (numberByOrder) trusts this column to reconstruct a decision's
+	// `LBn` citation at render time.
 	decision, err := scanLoadBearingDecision(tx.QueryRow(ctx, `
-		INSERT INTO load_bearing_decision (scope_id, feature_set_id, name, body)
-		VALUES ($1, $2, $3, $4)
+		INSERT INTO load_bearing_decision (scope_id, feature_set_id, name, body, position)
+		VALUES ($1, $2, $3, $4, (SELECT COALESCE(MAX(position), -1) + 1 FROM load_bearing_decision WHERE feature_set_id = $2 AND valid_to IS NULL))
 		RETURNING `+loadBearingDecisionColumns,
 		scopeID, featureSetID, name, body))
 	if err != nil {

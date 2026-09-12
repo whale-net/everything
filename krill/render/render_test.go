@@ -117,6 +117,44 @@ func TestRender_ProducesFourFileLayout(t *testing.T) {
 	}
 }
 
+// TestRender_DecisionBodyWithEmbeddedTitleLine_NotDuplicated is a
+// regression case (issue #2550's whagent_net docs cutover): krill/importer/
+// parse.go's parseDecisions keeps a decision's own title line as the first
+// line of ParsedDecision.Body (its doc comment: "the full block text,
+// including the title line"), so a real imported decision's Body is never
+// just the "At risk:"/"Decide now:" prose the fake-source cases above
+// use -- it starts with the exact same title text renderProductMD already
+// writes on its own "LBn — <title>" line just above. Rendering Body
+// unstripped would print that title twice; TestRender_ProducesFourFileLayout
+// above never caught this because its fake decisions carry an empty Body.
+func TestRender_DecisionBodyWithEmbeddedTitleLine_NotDuplicated(t *testing.T) {
+	ctx := context.Background()
+	productID := uuid.New()
+	scopeID := uuid.New()
+
+	decision := newDecision("LB1 — Transcript event record")
+	decision.Body = strPtr("LB1 — Transcript event record\n  At risk: C1.\n  Decide now: something.")
+
+	src := &fakeSource{
+		Doc: slice.Document{
+			SchemaVersion: slice.SchemaVersion,
+			Product: &slice.ProductEntity{
+				EntityRef: slice.EntityRef{ID: productID, RevisionID: uuid.New()},
+				Name:      "Widgets",
+				Vision:    "Make great widgets.",
+			},
+			Decisions: []slice.DecisionEntity{decision},
+		},
+	}
+
+	files, err := render.Render(ctx, src, scopeID, productID)
+	require.NoError(t, err)
+
+	assert.Equal(t, 1, strings.Count(files.ProductMD, "LB1 — Transcript event record"), "the decision's title must appear exactly once, not once from renderProductMD's own line and again from Body's embedded title line")
+	assert.Contains(t, files.ProductMD, "At risk: C1.")
+	assert.Contains(t, files.ProductMD, "Decide now: something.")
+}
+
 func boolMap(m map[string]string) map[string]bool {
 	out := make(map[string]bool, len(m))
 	for k := range m {

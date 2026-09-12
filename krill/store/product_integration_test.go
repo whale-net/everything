@@ -86,7 +86,11 @@ func TestProductStore_ListCurrentByScope_OrdersByPositionThenName(t *testing.T) 
 	got, err := s.Products().ListCurrentByScope(ctx, scopeID)
 	require.NoError(t, err)
 	require.Len(t, got, 2)
-	// Both rows share position=0 (default), so ties break by name: A before B.
-	assert.Equal(t, a.ID, got[0].ID)
-	assert.Equal(t, b.ID, got[1].ID)
+	// Create assigns position in append (creation) order -- one past the
+	// current max among scopeID's own current Products, never the
+	// column's own DEFAULT 0 -- so "B Product" (created first) sorts
+	// before "A Product" (created second) despite the name order, proving
+	// position (not name) is the primary sort key.
+	assert.Equal(t, b.ID, got[0].ID)
+	assert.Equal(t, a.ID, got[1].ID)
 }

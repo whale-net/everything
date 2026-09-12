@@ -59,9 +59,15 @@ func (s featureStore) Create(ctx context.Context, scopeID, featureSetID uuid.UUI
 		return Feature{}, errParentNotFound("feature_set", featureSetID)
 	}
 
+	// position is one past the current max among featureSetID's own
+	// current Features (append order) -- see krill/store/product.go's
+	// Create doc comment for why this must not be left at column
+	// DEFAULT 0: krill/render's FR14 numbering (numberByOrder) trusts
+	// this column, via feature.position, to reconstruct a Feature's `Cn`
+	// citation at render time.
 	feature, err := scanFeature(tx.QueryRow(ctx, `
-		INSERT INTO feature (scope_id, feature_set_id, name, description)
-		VALUES ($1, $2, $3, $4)
+		INSERT INTO feature (scope_id, feature_set_id, name, description, position)
+		VALUES ($1, $2, $3, $4, (SELECT COALESCE(MAX(position), -1) + 1 FROM feature WHERE feature_set_id = $2 AND valid_to IS NULL))
 		RETURNING `+featureColumns,
 		scopeID, featureSetID, name, description))
 	if err != nil {

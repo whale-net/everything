@@ -56,9 +56,12 @@ func (s personaStore) Create(ctx context.Context, scopeID, productID uuid.UUID, 
 		return Persona{}, errParentNotFound("product", productID)
 	}
 
+	// position is one past the current max among productID's own current
+	// Personas (append order) -- see product.go's Create doc comment for
+	// why this must not be left at column DEFAULT 0.
 	persona, err := scanPersona(tx.QueryRow(ctx, `
-		INSERT INTO persona (scope_id, product_id, name, description)
-		VALUES ($1, $2, $3, $4)
+		INSERT INTO persona (scope_id, product_id, name, description, position)
+		VALUES ($1, $2, $3, $4, (SELECT COALESCE(MAX(position), -1) + 1 FROM persona WHERE product_id = $2 AND valid_to IS NULL))
 		RETURNING `+personaColumns,
 		scopeID, productID, name, description))
 	if err != nil {

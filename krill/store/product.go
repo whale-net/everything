@@ -42,10 +42,18 @@ func scanProduct(row pgx.Row) (Product, error) {
 	return p, err
 }
 
+// Create assigns position as one past the current max Position among
+// scopeID's own current Products (0 for the first) -- append order, the
+// "or creation order" ARCHITECTURE.md's spec-entity-model section
+// describes -- rather than leaving every row at column DEFAULT 0 (which
+// collapses `ORDER BY position, name` to a pure alphabetical-by-name sort,
+// silently discarding creation order the moment two sibling names do not
+// happen to already sort in that order -- see krill/render's FR14
+// numbering, which depends on this).
 func (s productStore) Create(ctx context.Context, scopeID uuid.UUID, name, vision string) (Product, error) {
 	product, err := scanProduct(s.pool.QueryRow(ctx, `
-		INSERT INTO product (scope_id, name, vision)
-		VALUES ($1, $2, $3)
+		INSERT INTO product (scope_id, name, vision, position)
+		VALUES ($1, $2, $3, (SELECT COALESCE(MAX(position), -1) + 1 FROM product WHERE scope_id = $1 AND valid_to IS NULL))
 		RETURNING `+productColumns,
 		scopeID, name, vision))
 	if err != nil {

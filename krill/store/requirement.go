@@ -58,9 +58,14 @@ func (s requirementStore) Create(ctx context.Context, scopeID, featureID uuid.UU
 		return Requirement{}, errParentNotFound("feature", featureID)
 	}
 
+	// position is one past the current max among featureID's own current
+	// Requirements of the same kind (ListCurrentByFeature orders by kind
+	// first, so append order is scoped per kind) -- see
+	// krill/store/product.go's Create doc comment for why this must not
+	// be left at column DEFAULT 0.
 	requirement, err := scanRequirement(tx.QueryRow(ctx, `
-		INSERT INTO requirement (scope_id, feature_id, kind, name, body)
-		VALUES ($1, $2, $3, $4, $5)
+		INSERT INTO requirement (scope_id, feature_id, kind, name, body, position)
+		VALUES ($1, $2, $3, $4, $5, (SELECT COALESCE(MAX(position), -1) + 1 FROM requirement WHERE feature_id = $2 AND kind = $3 AND valid_to IS NULL))
 		RETURNING `+requirementColumns,
 		scopeID, featureID, string(kind), name, body))
 	if err != nil {
