@@ -37,6 +37,11 @@ load("@rules_go//go:def.bzl", "go_library", "go_test")
 # unique index added by migration 017, issue #1937, root plan #1934):
 # FR3's discovery list (ListByChannel) and FR4's find-or-create half of
 # research-note threading.
+#
+# link_assertion.go is the single-use link-assertion consumption ledger
+# (migration 021, issue #2597, FR3/NFR1): jti-keyed, PRIMARY-KEY-is-the-
+# guarantee replay rejection, mirroring mcp_auth_code's shape rather than
+# reusing that table (see migration 021's header for why they're separate).
 go_library(
     name = "store",
     srcs = [
@@ -49,6 +54,7 @@ go_library(
         "idea.go",
         "idempotency.go",
         "invite.go",
+        "link_assertion.go",
         "match.go",
         "models.go",
         "mywork.go",
