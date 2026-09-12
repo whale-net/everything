@@ -10,6 +10,16 @@ load("@rules_go//go:def.bzl", "go_test")
 # part of `bazel test //...` -- see //libs/go/dbtest's README for the
 # rationale behind each tag below.
 #
+# design_milestone_query_integration_test.go (issue #2500, FR21) shares
+# this target and its testEnv/krillDocsRoot helpers: it proves the
+# live-consumer half of M1's self-hosting proof -- that
+# slice.Querier.GetProductSlice (FR8), the call the design skill's
+# krill-domain branch makes, surfaces the same capability content a
+# milestone's committed Delivers line names, and fails loud and named
+# rather than silently empty when the Product it's asked for does not
+# exist. See krill/ARCHITECTURE.md "The design skill's live milestone read
+# (FR21)".
+#
 # Run the round-trip tests explicitly (requires a working Docker daemon):
 #   bazel test //krill/conformance:roundtrip_integration_test --test_output=all
 #
@@ -22,7 +32,10 @@ go_test(
     name = "roundtrip_integration_test",
     size = "large",
     timeout = "long",
-    srcs = ["roundtrip_integration_test.go"],
+    srcs = [
+        "design_milestone_query_integration_test.go",
+        "roundtrip_integration_test.go",
+    ],
     data = [
         "//krill:docs",
         "//krill/product:docs",

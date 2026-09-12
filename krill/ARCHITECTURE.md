@@ -651,6 +651,82 @@ Feature, so it is unreachable from `GetFeatureSetSlice`/`GetFeatureSlice`/
 the `EntityRef`/`RevisionID` pair every other slice entity carries —
 `pointer_artifact` is not SCD2 (LB3), so there is no revision to expose.
 
+## The design skill's live milestone read (FR21, root plan issue #2485)
+
+FR21 is M1's one concrete self-hosting *consumer*: `/project-manager:design
+--milestone`'s milestone-read step (`tools/project-manager/skills/design/
+SKILL.md` step 2, and `tools/project-manager/agents/producer.md`'s
+"Milestone-scoped intake") reads `<domain>/product/03-roadmap.md` for every
+domain except krill's own — for krill, that step instead calls krill's own
+`get_product_slice` MCP tool (FR8, whole-product granularity — the same
+tool `krill/mcp/tools/slice.go` registers for FR5-FR9, issue #2494) over
+the MCP spec surface, ungated by `init` (a read, same as every FR5-FR9/FR11
+call — see "`init` and the write gate" above). See
+`tools/project-manager/CONVENTIONS.md` "krill's own milestone read is live,
+every other domain's is a file" for why this is a narrow, deliberate
+exception rather than the start of migrating every domain's read off the
+file.
+
+**Resolving krill's own Product id.** FR5-FR9's tools take a surrogate id,
+not a name — there is no "find a Product by name" tool in M1. The design
+skill resolves krill's own live Product id through its own FR20/C9 pointer
+artifact (see "The GitHub pointer artifact" above): the one GitHub issue
+titled `Product: krill` whose body carries `krill id \`<uuid>\``. This is
+exactly what FR20 exists for — keeping GitHub-side cross-referencing
+working once a Product's spec lives in krill's entity model rather than a
+file — used here for the read direction instead of the cross-linking
+direction FR20's own doc comment (`krill/forge/github.go`) describes. Until
+krill's own brief (FR16-FR19, issue #2497) has actually been imported into
+a reachable krill instance and a pointer artifact minted for it, this
+lookup has nothing to resolve; standing up and importing into that instance
+is an operational step, not something this task's code does (`AGENTS.md`:
+"Do not patch production environments").
+
+**Known gap: no live per-milestone filter (M3's C13/C28).** `get_product_
+slice` returns every current `FeatureSet`/`Feature`/`Requirement`/
+`LoadBearingDecision` under krill's Product — it does not, and cannot yet,
+filter to just the one milestone being designed. That filter needs
+`entity_milestone`/`milestone_ref` (see "The markdown importer and the
+delivery-axis association" above), which today is read only by
+`krill/render`'s direct `Source` interface (`krill/render/store_source.go`)
+against `*krill/store.Store` directly — never over MCP, and never through
+FR5-FR9's `slice.Document`, which carries no milestone field at all
+(`krill/slice/document.go`). Authoring and exposing that delivery-axis
+query is explicitly M3's (C13 authors the cut, C28 exposes status) — M1
+"can hold and render milestones that arrived inside an imported document...
+holding is not planning" (`krill/product/03-roadmap.md`'s M1 LB6 note).
+The design skill therefore treats the live call's result as this
+milestone's spec *context* (a superset — every capability/decision in the
+product, not a pre-filtered `Delivers:`/`Must not foreclose:` list), and
+still consults `krill/product/03-roadmap.md`'s headings (structure only,
+not content) to confirm which `M<n>` exists. Architect's own Load-bearing
+check (architect.md § Process) still reads the committed file directly for
+the authoritative `Must not foreclose` list on every milestone draft, krill
+included, so this gap does not leave that check unguarded.
+
+**Failure mode.** An unreachable krill MCP server, or no pointer artifact
+to resolve a Product id from, is a **loud, named stop** — "krill's spec MCP
+surface is unreachable; cannot read krill's own milestone roadmap live" —
+never a silent fallback to reading `krill/product/03-roadmap.md`. A quiet
+fallback would leave M1's self-hosting loop unexercised, which is the
+failure FR21 exists to prevent (root plan issue #2485).
+
+**Tested at the `slice.Querier` level (LB7).** `krill/conformance/
+design_milestone_query_integration_test.go` proves the *data* half of this
+read path against a real Postgres holding krill's own imported brief
+(#2497's fixture): `GetProductSlice` for krill's own Product surfaces the
+same capability descriptions a given milestone's committed `Delivers:`
+line names, and a nonexistent/unreachable Product id surfaces a clear,
+non-nil, named error rather than an empty or silently-wrong result. Per
+LB7 ("M1's MCP tool is a thin wrapper over it, not the thing itself" —
+`krill/mcp/tools/slice.go`), testing `slice.Querier` directly exercises the
+same code the MCP tool wraps; the MCP wire protocol itself (auth, byte-
+identical JSON shape) is already covered by issue #2494's own tests. The
+domain-branch decision in `SKILL.md`/`producer.md` itself (krill →
+live call, every other domain → file) is verified by diff review, per root
+plan issue #2485's own acceptance criteria, not by an automated test —
+`tools/project-manager` ships no Bazel targets to run one against.
+
 ## Open items
 
 - The HTTP surface over the spec entity model covers create/attach, amend,
@@ -664,7 +740,10 @@ the `EntityRef`/`RevisionID` pair every other slice entity carries —
   amend/history surface for Product, FeatureSet, or Feature (issue #2493
   scopes FR11/FR12 to Requirement and LoadBearingDecision only). FR5-FR9's
   read path exists (issue #2491, see "The scoped-slice query" above); FR21
-  remains open.
+  wires `/project-manager:design --milestone`'s krill-domain read to it
+  (issue #2500, see "The design skill's live milestone read" above) —
+  still open: a live, MCP-exposed way to filter that read to just one
+  milestone's own `Delivers`/`Must not foreclose` entities (M3's C13/C28).
 - `krill/slice`'s four granularities each have an as-of assembly twin now
   (issue #2493, see "As-of slice assembly" above) — but no HTTP route
   exposes them yet (`krill/api/handlers/slice.go` still wires only the
