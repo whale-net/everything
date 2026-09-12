@@ -5,7 +5,8 @@ read the variables below. `krill/importer/cmd`'s `import` CLI (issue
 #2492) reads `PG_DATABASE_URL` too (via a `--database-url` flag that
 defaults to it), but is not a deployed binary and takes its other inputs
 (`--path`, `--session-id`) as flags -- see `krill/README.md`'s Binaries
-table. `mcp` (later M1 tasks) will get its own section once it exists.
+table. `mcp` (issue #2494, FR10/NFR1) is a third binary; see its own
+section below.
 
 ## Database
 
@@ -42,10 +43,36 @@ the M1 entity write endpoints (FR1/FR2/FR4, issue #2490) -- see
 `krill/README.md`'s Endpoints table. No new configuration was added for the
 write endpoints; they read the same `PG_DATABASE_URL` pool as `/healthz`.
 
+## `mcp` server (FR10/NFR1, issue #2494)
+
+`mcp` exposes the FR5-FR9 scoped-slice query over MCP at `/mcp/spec`,
+behind the two-front-door auth pattern already shipped in
+`audience_score_system/mcp` and `whagent_net/mcp` -- see
+`ARCHITECTURE.md` "The MCP spec surface" for the full design. It shares
+`PG_DATABASE_URL` with `api` (same pool, both the `//krill/slice` query
+layer and the mcpauth credential store read from it).
+
+| Variable | Default | Description |
+|----------|---------|--------------|
+| `KRILL_MCP_ADDR` | `:8080` | Address `mcp`'s HTTP surface listens on. |
+| `KRILL_MCP_PUBLIC_URL` | — | This instance's own externally reachable URL. Passed as the RFC 9728 protected-resource `resource` value and as the audience every whagent Claim this instance verifies must carry. Leaving it unset skips serving RFC 9728 metadata (`server.ResourceMetadataConfig.enabled`). |
+| `KRILL_MCP_OAUTH_ISSUER` | — | The mcpauth (human) front door's OAuth2 authorization server issuer identifier, advertised in RFC 9728 metadata's `authorization_servers`. |
+| `KRILL_MCP_WHAGENT_JWKS_URL` | — | whagent-net's own JWKS endpoint. Both this and `KRILL_MCP_WHAGENT_ISSUER` must be set to enable the agent front door (`server.WhagentAuthConfig`) -- left unset, `mcp` mounts only the mcpauth door, mirroring `audience_score_system/mcp`'s own pre-FR12(a) fallback. |
+| `KRILL_MCP_WHAGENT_ISSUER` | — | whagent-net's own issuer identifier, verified against every whagent Claim `mcp` accepts. |
+
+The mcpauth (human OAuth2) front door additionally requires its
+`mcp_credential`-shaped table to exist against the same `PG_DATABASE_URL`
+pool (`libs/go/mcpauth.NewCredentialStore`'s preflight, mirroring
+`audience_score_system`'s own migration 006 and `whagent_net`'s migration
+004). No such migration exists in krill yet -- until one lands, `mcp`
+degrades that door to reject every call (`main.go`'s
+`rejectingCredentialStore`), rather than failing to boot; the agent front
+door never depends on it.
+
 ## Telemetry
 
-Read via `//libs/go/logging` (`api`).
+Read via `//libs/go/logging` (`api`, `mcp`).
 
 | Variable | Component | Default | Description |
 |----------|-----------|---------|-------------|
-| `OTEL_EXPORTER_OTLP_ENDPOINT` | api | — | OTLP collector endpoint for traces/logs. Unset leaves telemetry export inert rather than failing boot, same convention every other domain's binaries follow. |
+| `OTEL_EXPORTER_OTLP_ENDPOINT` | api, mcp | — | OTLP collector endpoint for traces/logs. Unset leaves telemetry export inert rather than failing boot, same convention every other domain's binaries follow. |

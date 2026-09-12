@@ -1,0 +1,117 @@
+"""krill/mcp's bootstrap: *mcp.Server construction, the two-front-door
+persona auth (mcpauth + whagent-net), and the streamable-HTTP transport
+mounted at /mcp/spec."""
+
+load("@rules_go//go:def.bzl", "go_library", "go_test")
+
+go_library(
+    name = "server",
+    srcs = [
+        "auth.go",
+        "registry.go",
+        "server.go",
+        "transport.go",
+        "whagent_auth.go",
+    ],
+    importpath = "github.com/whale-net/everything/krill/mcp/server",
+    visibility = ["//visibility:public"],
+    deps = [
+        "//libs/go/logging",
+        "//libs/go/mcpauth",
+        "//libs/go/whagent",
+        "@com_github_modelcontextprotocol_go_sdk//auth",
+        "@com_github_modelcontextprotocol_go_sdk//mcp",
+    ],
+)
+
+# Pure-Go coverage of PersonaMiddleware (auth.go), isWhagentShapedToken/
+# bearerToken/DualAuthHTTPHandler/WhagentPersonaMiddleware (whagent_auth.go),
+# and RegisterRead's persona gate (registry.go) against in-memory fakes
+# (fakes_test.go) -- no Docker required, runs as part of `bazel test //...`.
+# See server_integration_test.go (this package, "integration" gotag) for
+# the real-Postgres + real-HTTP-transport coverage of the same wiring this
+# cannot fake: real caller-auth credentials against both front doors and
+# each tool's byte-identical document round trip (LB7).
+go_test(
+    name = "server_test",
+    srcs = [
+        "auth_test.go",
+        "fakes_test.go",
+        "registry_test.go",
+        "whagent_auth_test.go",
+    ],
+    embed = [":server"],
+    deps = [
+        "//libs/go/mcpauth",
+        "//libs/go/whagent",
+        "@com_github_google_uuid//:uuid",
+        "@com_github_modelcontextprotocol_go_sdk//auth",
+        "@com_github_modelcontextprotocol_go_sdk//mcp",
+        "@com_github_stretchr_testify//assert",
+        "@com_github_stretchr_testify//require",
+    ],
+)
+
+# Issue #2494's Testing section negative test: no write/mutation tool is
+# registered on the spec endpoint. External package (server_test, not
+# server) precisely because it imports mcp/tools, which imports this
+# package's non-test library -- an internal test file doing the same
+# import is a genuine dependency cycle to rules_go's Go compiler. No
+# Docker required, runs as part of `bazel test //...` (store.New(nil)
+# never dials -- see the file's own doc comment).
+go_test(
+    name = "registry_tools_test",
+    srcs = ["registry_tools_test.go"],
+    deps = [
+        ":server",
+        "//krill/mcp/tools",
+        "//krill/slice",
+        "//krill/store",
+        "@com_github_modelcontextprotocol_go_sdk//mcp",
+        "@com_github_stretchr_testify//assert",
+        "@com_github_stretchr_testify//require",
+    ],
+)
+
+# Real Postgres + real HTTP-transport MCP client integration test: both
+# caller-auth front doors (mcpauth and whagent-net) mounted at the same
+# spec-surface mount point, end to end, plus each of the four FR5-FR8
+# tools' byte-identical document round trip (LB7) against a real
+# //krill/slice.Querier. Deliberately NOT part of `bazel test //...` --
+# see //libs/go/dbtest's README for the full rationale, mirrored by
+# //krill/slice:query_integration_test.
+#
+# Run it explicitly (requires a working Docker daemon):
+#   bazel test //krill/mcp/server:server_integration_test --test_output=all
+go_test(
+    name = "server_integration_test",
+    size = "large",
+    timeout = "long",
+    srcs = ["server_integration_test.go"],
+    gotags = ["integration"],
+    tags = [
+        "external",
+        "integration",
+        "manual",
+        "no-cache",
+        "no-sandbox",
+        "requires-network",
+    ],
+    deps = [
+        ":server",
+        "//krill/mcp/tools",
+        "//krill/migrate/schema",
+        "//krill/slice",
+        "//krill/store",
+        "//libs/go/dbtest",
+        "//libs/go/mcpauth",
+        "//libs/go/migrate",
+        "//libs/go/whagent",
+        "@com_github_google_uuid//:uuid",
+        "@com_github_jackc_pgx_v5//pgxpool",
+        "@com_github_jackc_pgx_v5//stdlib",
+        "@com_github_modelcontextprotocol_go_sdk//mcp",
+        "@com_github_stretchr_testify//assert",
+        "@com_github_stretchr_testify//require",
+    ],
+)

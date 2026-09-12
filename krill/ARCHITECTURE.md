@@ -1,30 +1,34 @@
 # krill — Architecture
 
 This document covers what exists after M1's domain scaffolding (issue
-#2487), spec entity model (issue #2488), and scoped-slice query (issue
-#2491). See [`PRODUCT.md`](PRODUCT.md) for vision, personas, load-bearing
-decisions, and the milestone roadmap that drives what gets built next.
+#2487), spec entity model (issue #2488), scoped-slice query (issue
+#2491), and the MCP spec surface (issue #2494). See
+[`PRODUCT.md`](PRODUCT.md) for vision, personas, load-bearing decisions,
+and the milestone roadmap that drives what gets built next.
 
 ## Component map (as of this task)
 
 ```
                  ┌───────────┐
    Postgres  ◄───│  migrate  │  job: applies schema, seeds `scope` (LB1/NFR2)
-   (scope)        └───────────┘
-        ▲
-        │
-   ┌────┴────┐
-   │   api   │  external-api: /healthz, /sessions/init, the M1 entity
-   └─────────┘  write API (issue #2490 — create/attach only), and the
-                FR5-FR9 scoped-slice query surface (issue #2491, read-only)
+   (scope)   ▲    └───────────┘
+        │    │
+   ┌────┴────┐    ┌───────────┐
+   │   api   │    │    mcp    │  external-api: the FR10/NFR1 spec surface --
+   └─────────┘    └───────────┘  /mcp/spec, the same FR5-FR9 slice query as
+        ▲              ▲         `api`'s /slices/... routes, over MCP
+        │              │
+   external-api: /healthz, /sessions/init, the M1 entity write API (issue
+   #2490 — create/attach only), and the FR5-FR9 scoped-slice query surface
+   (issue #2491, read-only, also reachable via `api`'s own HTTP routes)
 ```
 
-`migrate` and `api` each get their own Postgres connection
+`migrate`, `api`, and `mcp` each get their own Postgres connection
 (`PG_DATABASE_URL`, `//libs/go/db` / `//libs/go/migrate` — see `ENV.md`).
-There is no `mcp` binary yet; `krill/plugin/` exists as a placeholder
-directory for its future Claude Code plugin entries (see README.md
-"Claude Code plugin"), and `//krill:krill_chart` only bundles `migrate`
-and `api` today.
+`krill/plugin/` now carries `mcp`'s Claude Code plugin entries (`.mcp.json`
+/ `mcp_config.json`, issue #2494) rather than being a placeholder (see
+README.md "Claude Code plugin"), and `//krill:krill_chart` bundles all
+three binaries.
 
 `krill/store` (issue #2488) is the pgx-based repository over migration
 002's spec tables — a library, not a binary, so it does not appear in the
@@ -302,6 +306,78 @@ need and no single entity's `*Store` owns on its own — one query per
 entity kind rather than one query per sibling, regardless of how many
 FeatureSets or Features exist beneath the requested id.
 
+## The MCP spec surface (FR10/NFR1, issue #2494)
+
+`krill/mcp` exposes the FR5-FR9 scoped-slice query (`krill/slice.Querier`,
+above) over MCP, so any MCP-capable harness (Claude Code today) reaches
+it with no krill-specific harness code -- FR10's own wording. It mirrors
+the two-front-door pattern already shipped in `audience_score_system/mcp`
+and `whagent_net/mcp` rather than inventing a third shape.
+
+**One mount point, four thin-wrapper tools.** `krill/mcp/tools/slice.go`
+registers `get_feature_set_slice` (FR5), `get_feature_slice` (FR6),
+`get_requirement_slice` (FR7), and `get_product_slice` (FR8) — each takes
+a single surrogate id (LB2) and calls the matching `slice.Querier` method
+directly, returning its `slice.Document` **unchanged**. This is LB7's
+"M1's MCP tool is a thin wrapper over it, not the thing itself" applied
+literally: no tool file defines its own output struct, so the MCP
+response and `api`'s own `GET /slices/...` HTTP response are the same
+Go value serialized twice, never two independently-maintained shapes that
+could silently drift. All four tools are mounted at `krill/mcp/server`'s
+`specMountPath` (`/mcp/spec`) — its own pre-filtered endpoint, following
+`whagent_net`'s `/mcp/readonly` vs `/mcp/ops` split
+(`whagent_net/ARCHITECTURE.md` "Domain-owned MCP servers and the tool
+contract"): the future work-axis surface (M4) gets its own mount
+(`/mcp/work`, not built yet) rather than every granularity ever landing on
+bare `/`. No write tool is registered on this endpoint in M1 — there is
+no `RegisterWrite` in `krill/mcp/server` at all, unlike
+`audience_score_system/mcp/server/registry.go`'s `RegisterRead`/
+`RegisterWrite` pair; write tools are out of scope until a later
+milestone actually needs one.
+
+**Two front doors, one mount point, authorized by persona (NFR1).**
+`krill/mcp/server/auth.go` (mcpauth/human) and `whagent_auth.go`
+(whagent-net/agent) are structured identically to
+`audience_score_system/mcp/server`'s own `auth.go`/`whagent_auth.go`
+split — `DualAuthHTTPHandler` routes each request to exactly one door by
+bearer-token *shape* (a whagent Claim is always a three-segment JWT; an
+mcpauth credential is always a 64-character hex string with no dots),
+never by trial-and-error against both verifiers. The one deliberate
+departure from that precedent: NFR1 authorizes by **persona** (Swarm
+Operator / Requirement Contributor / Agent — `krill/PRODUCT.md`'s
+Personas section), not by individual identity, so there is no
+`store.Person`/`PersonStore` anywhere in `krill/mcp` — `server.Persona`
+is the only identity-shaped value either middleware ever places on
+context. Today that resolution is fixed, not looked up: the mcpauth door
+always resolves `PersonaSwarmOperator`, the whagent door always resolves
+`PersonaAgent`. This is not an oversight — `PRODUCT.md` is explicit that
+"The Requirement Contributor exists in the model and in permissions from
+M1, but has no unmediated path into krill until C12 lands in M2", so
+there is no second human persona for M1's mcpauth door to distinguish,
+and a whagent Claim never carries a human profile to resolve further
+(`//libs/go/whagent`'s FR10). `krill/mcp/server/registry.go`'s
+`RegisterRead` requires only that *some* Persona resolved before a tool
+handler runs — none of the four FR5-FR8 tools is persona-sensitive, so
+there is no per-tool allow-list yet either; that is expected to change
+once the work-axis surface (M4) lands a persona-restricted tool.
+
+**No migration for the mcpauth door yet.** `libs/go/mcpauth.NewCredentialStore`
+preflights a `mcp_credential`-shaped table at boot, exactly like
+`audience_score_system`'s migration 006 and `whagent_net`'s migration
+004 — krill has not shipped the equivalent migration (no slot for it
+exists in the "Migration numbering (M1)" table above, since this task
+predates deciding where it lands). Rather than fail `mcp` at boot
+entirely (which would also break the agent door, which does not need
+Postgres at all), `krill/mcp/main.go` degrades: a failed
+`NewCredentialStore` call logs a warning and substitutes
+`rejectingCredentialStore`, a `CredentialStore` of last resort whose every
+method fails with the same opaque error `mcpauth.TokenVerifier` already
+produces for a revoked credential — so a caller presenting an
+mcpauth-shaped token against a not-yet-migrated deployment gets a clean
+401, never a panic on a nil interface. The agent door is unaffected
+either way. Adding that migration and a real mint/revoke flow for the
+mcpauth door is a follow-up, not part of this task's scope.
+
 ## The markdown importer and the delivery-axis association (FR16, FR17, issue #2492)
 
 `krill/importer` (a library) and `krill/importer/cmd` (its runnable
@@ -483,13 +559,15 @@ read paths never require `init` (root plan issue #2485), exactly like
   gated too, but as a CLI entrypoint checking the session directly against
   the store rather than through this HTTP middleware (see "The markdown
   importer" above).
-- No MCP surface yet — `krill/plugin/` is a placeholder only; a later
-  milestone's MCP tool wraps `krill/slice` directly, per LB7.
+- `krill/mcp` (issue #2494) now exists and wraps `krill/slice` directly,
+  per LB7 (see "The MCP spec surface" above) — its mcpauth (human) front
+  door still has no migration to back it, and degrades to reject-all
+  until one lands (see that section's last paragraph).
 - No auth wired up on `api` — `POST /sessions/init`, every future write
   endpoint, and the FR5-FR9 slice routes all trust caller-asserted
   identity or are unauthenticated (see "`init` and the write gate"
-  above); only `krill/mcp` (issue #2494) gets NFR1's two-front-door
-  pattern, and only for the read-only spec surface.
+  above); only `krill/mcp` gets NFR1's two-front-door pattern, and only
+  for the read-only spec surface.
 - No renderer yet (FR13, a separate task) — the importer's report (FR16)
   is the only reflection of an imported product's entities back to a
   human today; nothing regenerates `PRODUCT.md`/`product/*.md` from
