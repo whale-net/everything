@@ -1,0 +1,504 @@
+package components
+
+import (
+	"encoding/json"
+	"fmt"
+	"strings"
+	"time"
+
+	"github.com/whale-net/everything/libs/go/htmxui"
+)
+
+// SubjectView is a plain (iss, sub, kind) identity triple for rendering --
+// mirrors whagentpb.Subject's three fields without this rendering layer
+// importing the proto package directly (LayoutData follows the same
+// plain-struct convention; ../convert.go does the pb -> view conversion).
+type SubjectView struct {
+	Iss  string
+	Sub  string
+	Kind string // "human" | "service" | "unspecified"
+}
+
+// SessionView is a plain rendering-ready projection of whagentpb.Session
+// (FR2/FR3/NFR3). CapKind/ErrorCategory/ErrorDetail are empty (never a
+// zero-value placeholder) unless State is the matching terminal value --
+// mirrors whagentpb.Session's has_cap_kind/has_error_category optionality.
+type SessionView struct {
+	SessionID     string
+	State         string // sessionStateString's lowercase convention (../convert.go)
+	AgentID       string
+	Model         string
+	Subject       SubjectView
+	OnBehalfOf    SubjectView
+	CapKind       string
+	ErrorCategory string
+	ErrorDetail   string
+	CreatedAt     time.Time
+	UpdatedAt     time.Time
+}
+
+// TranscriptEventView is a plain rendering-ready projection of one
+// TranscriptEvent -- whagentpb.TranscriptEvent (ReadTranscript) or
+// whagent_net/events.Event (the SSE bus, ../handlers_session_live.go) --
+// event_id, seq, turn, type, payload, committed_at, exactly session.proto's
+// TranscriptEvent field set (FR2).
+type TranscriptEventView struct {
+	EventID     string
+	Seq         int64
+	Turn        int32
+	Type        string
+	Payload     []byte
+	CommittedAt time.Time
+}
+
+// SessionDetailData carries SessionDetail's page-level parameterisation
+// (FR2/NFR2/NFR3/NFR4).
+type SessionDetailData struct {
+	Layout  LayoutData
+	Session SessionView
+	Events  []TranscriptEventView
+	// Usage is FR4's initial-render usage figures (../handlers_session.go's
+	// readUsage) -- the same GetSessionUsage-backed value
+	// ../handlers_session_usage_live.go's sessionUsageFragment re-reads on
+	// every live update, so the two can never disagree about how a
+	// SessionUsage is projected for rendering.
+	Usage UsageView
+
+	// IsOwner gates the composer/stop-control slot (LB2's (iss,sub) match
+	// against Session.OnBehalfOf, computed by the handler -- never here).
+	// A non-owner's rendered response must contain no composer/stop
+	// markup at all, not merely disabled CSS (issue #2242's Implementation
+	// section) -- so this templ's owner branch is the only place that
+	// markup is ever emitted, never conditionally hidden with CSS.
+	IsOwner bool
+
+	// Topics is this session's htmxsse topic set (../handlers_session_live.go's
+	// sessionEventTopics), computed once by the handler and threaded
+	// through here so the sse-swap attribute below can never drift from
+	// what handleSessionEvents actually subscribes to.
+	Topics []string
+
+	// UsageTopics is the usage panel's own, narrower htmxsse topic set
+	// (../handlers_session_usage_live.go's sessionUsageTopics) -- see that
+	// function's doc comment for why it is not simply Topics reused.
+	UsageTopics []string
+}
+
+// stateBadgeVariant maps a SessionView.State string onto htmxui's generic
+// Badge colour vocabulary -- domain semantics stay here, not in htmxui
+// (badge.templ's doc comment, "repo-generic only, no proto/domain deps").
+func stateBadgeVariant(state string) htmxui.BadgeVariant {
+	switch state {
+	case "running", "awaiting_input":
+		return htmxui.BadgeInfo
+	case "done":
+		return htmxui.BadgeSuccess
+	case "stopped":
+		return htmxui.BadgeNeutral
+	case "capped":
+		return htmxui.BadgeWarning
+	case "failed":
+		return htmxui.BadgeError
+	default:
+		return htmxui.BadgeGhost
+	}
+}
+
+// stateBadge renders SessionView.State as an htmxui.Badge, with an
+// `id="session-state-badge"` for readability/testability. It is rendered
+// inside SessionLive, the same element the SSE stream swaps as a whole
+// (../handlers_session_live.go's sessionTranscriptFragment re-reads the
+// session on every delivery and renders this alongside the transcript), so
+// it is never stale relative to the transcript it sits beside.
+templ stateBadge(state string) {
+	@htmxui.Badge(state, stateBadgeVariant(state), htmxui.BadgeSizeMD, true, templ.Attributes{"id": "session-state-badge"})
+}
+
+// startedByLine renders NFR3's "started by" line directly from
+// Session.Subject/OnBehalfOf and their Kind -- no display-name table, no
+// UI-local identity model. Shows both identities only when they differ
+// (on_behalf_of != subject, a delegated-caller session -- ARCHITECTURE.md
+// "Identity and auth chaining"); M1 has no such path yet, so this is
+// forward-compatible dead code today, not exercised markup.
+templ startedByLine(sess SessionView) {
+	<p class="text-base-content/70 text-sm mb-2">
+		Started by
+		<span class="font-mono">{ sess.OnBehalfOf.Sub }</span>
+		<span class="badge badge-ghost badge-xs align-middle">{ sess.OnBehalfOf.Kind }</span>
+		if sess.OnBehalfOf.Sub != sess.Subject.Sub || sess.OnBehalfOf.Iss != sess.Subject.Iss {
+			<span class="text-base-content/50">
+				(on behalf of by
+				<span class="font-mono">{ sess.Subject.Sub }</span>)
+			</span>
+		}
+	</p>
+}
+
+// sessionTopicsAttr joins topics into htmx-ext-sse's comma-separated
+// sse-swap value.
+func sessionTopicsAttr(topics []string) string {
+	return strings.Join(topics, ",")
+}
+
+// SessionDetail is the session detail page (FR2, NFR2, NFR3): initial
+// render from data.Session/data.Events, then live via hx-ext="sse" bound to
+// /sessions/{id}/events (../handlers_session_live.go). The composer/stop
+// slot (FR1, issue #2246) is filled with OwnerControls only inside the
+// data.IsOwner branch -- a non-owner's response contains this branch, and
+// therefore any composer/stop markup, nowhere at all. The state badge and
+// any terminal-state banner are *inside* the swapped div (SessionLive), not
+// here, so they swap live alongside the transcript rather than only
+// reflecting this initial render.
+//
+// The usage panel (FR4, issue #2248) is its own SSE-connected region,
+// separate from #transcript's, deliberately: htmx's SSE extension swaps an
+// element with the literal data payload of the named event it is listening
+// for, so two differently-rendered regions cannot share one topic's
+// delivery without an out-of-band swap this codebase does not otherwise use
+// (see ../handlers_session_usage_live.go's doc comment) -- a second,
+// narrower-topic SSE connection is the simpler, more explicit alternative.
+templ SessionDetail(data SessionDetailData) {
+	@Layout(data.Layout) {
+		<h1 class="text-2xl font-bold text-base-content mb-2">Session { data.Session.SessionID }</h1>
+		@startedByLine(data.Session)
+		if data.IsOwner {
+			<!-- FR1 (session lifecycle controls, issue #2246): the turn
+			     composer and stop control. A non-owner never reaches this
+			     branch, so no composer/stop markup exists in their response
+			     at all. -->
+			<div id="composer-slot" class="mb-4">
+				@OwnerControls(data.Session.SessionID, data.Session.State)
+			</div>
+		}
+		<div
+			id="usage-slot"
+			class="mb-4"
+			hx-ext="sse"
+			sse-connect={ fmt.Sprintf("/sessions/%s/usage-events", data.Session.SessionID) }
+			sse-swap={ sessionTopicsAttr(data.UsageTopics) }
+		>
+			@SessionUsage(data.Session, data.Usage)
+		</div>
+		<div
+			id="transcript"
+			hx-ext="sse"
+			sse-connect={ fmt.Sprintf("/sessions/%s/events", data.Session.SessionID) }
+			sse-swap={ sessionTopicsAttr(data.Topics) }
+		>
+			@SessionLive(data.Session, data.Events)
+		</div>
+	}
+}
+
+// SessionLive renders the portion of the session detail page that swaps
+// live on every SSE delivery (FR2, Implementation: "swaps transcript
+// fragments and the state badge on each SSE event"): the state badge, an
+// optional terminal-state banner, and the transcript, in that order. Used
+// both for SessionDetail's initial render and, verbatim, by
+// ../handlers_session_live.go's sessionTranscriptFragment.Render for every
+// later delivery -- the two can never disagree about what a given
+// (session, events) pair renders as.
+templ SessionLive(session SessionView, evs []TranscriptEventView) {
+	<div class="flex items-center gap-3 mb-2">
+		@stateBadge(session.State)
+	</div>
+	if session.State == "capped" && session.CapKind != "" {
+		<p class="text-sm text-warning mb-2">Capped: { session.CapKind }</p>
+	}
+	if session.State == "failed" {
+		<p class="text-sm text-error mb-2">
+			Failed
+			if session.ErrorCategory != "" {
+				({ session.ErrorCategory })
+			}
+			if session.ErrorDetail != "" {
+				: { session.ErrorDetail }
+			}
+		</p>
+	}
+	@TranscriptList(evs)
+}
+
+// isTerminalSessionState reports whether state is one of the four
+// terminal SessionState values (sessionStateString's lowercase
+// convention, ../convert.go) -- a session in any of these has no running
+// SessionWorkflow left to signal (whagent_net/api/handlers/stop.go's
+// StopSession doc comment), so FR1's stop control has nothing left to do
+// for the owner and is omitted entirely rather than rendered disabled.
+func isTerminalSessionState(state string) bool {
+	switch state {
+	case "done", "stopped", "failed", "capped":
+		return true
+	default:
+		return false
+	}
+}
+
+// composerFormID/stopControlID are the fixed element ids Composer's and
+// StopControl's own hx-target self-swap depend on --
+// ../handlers_session_lifecycle.go's handleSendTurn/handleStopSession
+// render these same templs (or StopControlAbsent) back as the swap
+// payload, so the id here and the id in the response fragment can never
+// drift apart.
+const (
+	composerFormID = "turn-composer"
+	stopControlID  = "stop-control"
+)
+
+// OwnerControls is FR1's composer/stop-control slot content (issue
+// #2246), mounted into SessionDetail's owner-only composer-slot div. The
+// stop control is omitted for an already-terminal session
+// (isTerminalSessionState); the composer is always rendered so a race
+// (the session turns terminal between page load and submit) still gets a
+// real inline error from handleSendTurn rather than a control that
+// silently vanished mid-typing.
+templ OwnerControls(sessionID string, state string) {
+	@Composer(sessionID, "")
+	if !isTerminalSessionState(state) {
+		@StopControl(sessionID, "")
+	}
+}
+
+// Composer is FR1's turn-composer form (issue #2246): POSTs to
+// /sessions/{id}/turns and swaps itself (hx-target="this",
+// hx-swap="outerHTML") with whatever handleSendTurn renders back -- an
+// empty, enabled Composer on success. SendTurn is asynchronous by
+// contract (session.proto's SendTurn doc comment: the call returns once
+// the turn is accepted, not once it completes), so there is nothing more
+// to show here on success -- the turn's actual output surfaces through
+// the live transcript (SessionLive), never through this form. A failed
+// submission (e.g. FailedPrecondition for a terminal session) re-renders
+// this same form with errMsg inline instead (FR1's "Error surfacing").
+templ Composer(sessionID string, errMsg string) {
+	<form
+		id={ composerFormID }
+		hx-post={ fmt.Sprintf("/sessions/%s/turns", sessionID) }
+		hx-target="this"
+		hx-swap="outerHTML"
+		class="flex flex-col gap-2 mb-2"
+	>
+		if errMsg != "" {
+			<div role="alert" class="alert alert-error mb-2">{ errMsg }</div>
+		}
+		<textarea name="input" class="textarea textarea-bordered w-full" placeholder="Send a message" required></textarea>
+		@htmxui.Button(htmxui.ButtonPrimary, htmxui.ButtonSizeMD, false, templ.Attributes{"type": "submit"}) {
+			Send
+		}
+	</form>
+}
+
+// StopControl is FR1's stop control (issue #2246): POSTs to
+// /sessions/{id}/stop and swaps its own `#stop-control` wrapper with
+// whatever handleStopSession renders back -- StopControlAbsent on success
+// (the control has nothing left to do once the session is stopped, so it
+// disappears entirely rather than rendering disabled -- mirrors
+// isTerminalSessionState's "omitted, not disabled" stance), or itself
+// again carrying errMsg inline on failure.
+templ StopControl(sessionID string, errMsg string) {
+	<div id={ stopControlID }>
+		if errMsg != "" {
+			<div role="alert" class="alert alert-error mb-2">{ errMsg }</div>
+		}
+		<form
+			hx-post={ fmt.Sprintf("/sessions/%s/stop", sessionID) }
+			hx-target={ "#" + stopControlID }
+			hx-swap="outerHTML"
+		>
+			@htmxui.Button(htmxui.ButtonError, htmxui.ButtonSizeMD, false, templ.Attributes{"type": "submit"}) {
+				Stop
+			}
+		</form>
+	</div>
+}
+
+// StopControlAbsent is handleStopSession's success-swap payload: the same
+// `#stop-control` id with no button inside, so a second click has nothing
+// left to act on (StopControl's doc comment).
+templ StopControlAbsent() {
+	<div id={ stopControlID }></div>
+}
+
+// TranscriptList renders evs (already in seq order, LB1) as the
+// transcript's full current state -- this is the swap target every SSE
+// delivery replaces wholesale (../handlers_session_live.go's
+// sessionTranscriptFragment, ARCHITECTURE.md "full-state, not deltas --
+// matching htmxsse's fragment-swap model").
+templ TranscriptList(evs []TranscriptEventView) {
+	<div class="flex flex-col gap-2">
+		for _, ev := range evs {
+			@EventRow(ev)
+		}
+	</div>
+}
+
+// eventTypePrefix reports the FR2 category a transcript event's Type
+// belongs to: the four session-lifecycle types are matched verbatim,
+// tool_call/tool_result by prefix (events.go's EventTypeToolCall/
+// EventTypeToolResult doc comment: the committed type is
+// "tool_call:<call_index>"/"tool_result:<call_index>", never the bare
+// constant, so a consumer must match by prefix, not equality).
+func eventTypePrefix(eventType string) string {
+	switch {
+	case eventType == "user_message":
+		return "user_message"
+	case eventType == "assistant_message":
+		return "assistant_message"
+	case eventType == "capped":
+		return "capped"
+	case eventType == "failure":
+		return "failure"
+	case strings.HasPrefix(eventType, "tool_call:"):
+		return "tool_call"
+	case strings.HasPrefix(eventType, "tool_result:"):
+		return "tool_result"
+	default:
+		return "unknown"
+	}
+}
+
+// messageEventPayload mirrors worker/context.go's unexported
+// transcriptMessagePayload wire shape -- a second, independent copy of
+// the JSON contract for the same reason mcp/tools/convert.go keeps its
+// own enum-string tables (worker's type is unexported, and this consumer
+// must not take a dependency on the worker binary's internals).
+type messageEventPayload struct {
+	Role    string `json:"role"`
+	Content string `json:"content,omitempty"`
+}
+
+// toolCallEventPayload mirrors worker/context.go's unexported
+// toolCallEventPayload wire shape (see messageEventPayload's doc comment).
+type toolCallEventPayload struct {
+	Name      string `json:"name"`
+	Arguments string `json:"arguments"`
+}
+
+// toolResultEventPayload mirrors worker/context.go's unexported
+// toolResultEventPayload wire shape (see messageEventPayload's doc
+// comment). IsError is the domain server's own flag -- rendered as an
+// ordinary tool result, never as the session's own failure (FR2's
+// boundary, worker/tools/dispatch.go's "isError is not a whagent-net
+// failure").
+type toolResultEventPayload struct {
+	Name    string `json:"name"`
+	Content string `json:"content"`
+	IsError bool   `json:"is_error"`
+}
+
+// cappedEventPayload mirrors worker/caps.go's unexported
+// cappedEventPayload wire shape (see messageEventPayload's doc comment).
+type cappedEventPayload struct {
+	CapKind string `json:"cap_kind"`
+}
+
+// failureEventPayload mirrors worker/workflow.go's unexported
+// failureEventPayload wire shape (see messageEventPayload's doc comment).
+type failureEventPayload struct {
+	ErrorCategory string `json:"error_category"`
+	ErrorDetail   string `json:"error_detail"`
+}
+
+// EventRow renders one transcript event per its FR2 type category. An
+// unparseable payload renders the row with a decode-error note rather
+// than failing the whole fragment -- one malformed event must never blank
+// the rest of the transcript.
+templ EventRow(ev TranscriptEventView) {
+	<div class="border-l-2 border-base-300 pl-3 py-1" data-event-id={ ev.EventID } data-seq={ fmt.Sprintf("%d", ev.Seq) }>
+		switch eventTypePrefix(ev.Type) {
+			case "user_message":
+				@messageRow("User", ev)
+			case "assistant_message":
+				@messageRow("Assistant", ev)
+			case "tool_call":
+				@toolCallRow(ev)
+			case "tool_result":
+				@toolResultRow(ev)
+			case "capped":
+				@cappedRow(ev)
+			case "failure":
+				@failureRow(ev)
+			default:
+				<p class="text-base-content/60 text-sm">Unrecognized event type: { ev.Type }</p>
+		}
+	</div>
+}
+
+templ messageRow(label string, ev TranscriptEventView) {
+	{{ payload, err := decodeMessagePayload(ev.Payload) }}
+	<p class="text-xs text-base-content/50">{ label } &middot; turn { fmt.Sprintf("%d", ev.Turn) }</p>
+	if err != nil {
+		<p class="text-error text-sm">failed to decode event payload</p>
+	} else {
+		<p class="whitespace-pre-wrap">{ payload.Content }</p>
+	}
+}
+
+templ toolCallRow(ev TranscriptEventView) {
+	{{ payload, err := decodeToolCallPayload(ev.Payload) }}
+	<p class="text-xs text-base-content/50">Tool call &middot; turn { fmt.Sprintf("%d", ev.Turn) }</p>
+	if err != nil {
+		<p class="text-error text-sm">failed to decode event payload</p>
+	} else {
+		<p class="font-mono text-sm">{ payload.Name }({ payload.Arguments })</p>
+	}
+}
+
+templ toolResultRow(ev TranscriptEventView) {
+	{{ payload, err := decodeToolResultPayload(ev.Payload) }}
+	<p class="text-xs text-base-content/50">Tool result &middot; turn { fmt.Sprintf("%d", ev.Turn) }</p>
+	if err != nil {
+		<p class="text-error text-sm">failed to decode event payload</p>
+	} else {
+		<p class={ "whitespace-pre-wrap text-sm", templ.KV("text-warning", payload.IsError) }>
+			{ payload.Name }: { payload.Content }
+		</p>
+	}
+}
+
+templ cappedRow(ev TranscriptEventView) {
+	{{ payload, err := decodeCappedPayload(ev.Payload) }}
+	if err != nil {
+		<p class="text-error text-sm">failed to decode event payload</p>
+	} else {
+		<p class="text-warning text-sm">Session capped: { payload.CapKind }</p>
+	}
+}
+
+templ failureRow(ev TranscriptEventView) {
+	{{ payload, err := decodeFailurePayload(ev.Payload) }}
+	if err != nil {
+		<p class="text-error text-sm">failed to decode event payload</p>
+	} else {
+		<p class="text-error text-sm">Session failed ({ payload.ErrorCategory }): { payload.ErrorDetail }</p>
+	}
+}
+
+func decodeMessagePayload(raw []byte) (messageEventPayload, error) {
+	var p messageEventPayload
+	err := json.Unmarshal(raw, &p)
+	return p, err
+}
+
+func decodeToolCallPayload(raw []byte) (toolCallEventPayload, error) {
+	var p toolCallEventPayload
+	err := json.Unmarshal(raw, &p)
+	return p, err
+}
+
+func decodeToolResultPayload(raw []byte) (toolResultEventPayload, error) {
+	var p toolResultEventPayload
+	err := json.Unmarshal(raw, &p)
+	return p, err
+}
+
+func decodeCappedPayload(raw []byte) (cappedEventPayload, error) {
+	var p cappedEventPayload
+	err := json.Unmarshal(raw, &p)
+	return p, err
+}
+
+func decodeFailurePayload(raw []byte) (failureEventPayload, error) {
+	var p failureEventPayload
+	err := json.Unmarshal(raw, &p)
+	return p, err
+}

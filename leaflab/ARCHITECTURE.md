@@ -72,7 +72,7 @@ Flash: `bazel run   //leaflab/sensorboard:flash -- /dev/ttyUSB0`
 - Sensor logical name in MQTT topics and manifest
 - Enabled/disabled per sensor
 - Poll interval per sensor
-- Region assignment (stored server-side; firmware forwards `region_id` to the processor)
+- Region assignment (`region_id` stays on the wire, but the device ignores it — placement is written server-side by `leaflab-api`'s `PlaceSensor` RPC directly against Postgres, never by the config push/ack path)
 
 Config is persisted to NVS and loaded on boot — no reflash needed to add sensors or change names. See [`MQTT.md`](MQTT.md) for the full config flow.
 
@@ -133,7 +133,7 @@ FirmwarePublisher.HandleConfigMessage():
 | `leaflab.<dev>.manifest` | Upsert board, upsert sensors (hw-address or name keyed), populate sensor cache |
 | `leaflab.<dev>.sensor.<name>` | Cache lookup → insert `sensor_reading` row with config_version stamp |
 | `leaflab.<dev>.config` | Decode `DeviceConfig`, persist as JSONB to `device_config` table |
-| `leaflab.<dev>.config.ack` | On accept: apply region assignments, update config version cache |
+| `leaflab.<dev>.config.ack` | Mark accepted, update config version cache — never a placement write (NFR4: `PlaceSensor` is the sole writer of `sensor.region_id` / `sensor_region_history`) |
 
 ---
 
@@ -162,7 +162,7 @@ All three `*_history` tables are SCD-2 using the uniform `valid_from` / `valid_t
 
 - **`sensor` is a stable dimension anchor.** A rename via `DeviceConfig` closes the old `sensor_name_history` row and opens a new one — the `sensor_id` (and all reading history) is unchanged. Continuity of data across renames is the primary reason the sensor table exists as a separate entity rather than denormalizing into readings.
 
-- **`sensor.region_id` is a current-value cache.** `sensor_region_history` records every assignment with open/closed intervals (`valid_to IS NULL` means current). Historical readings carry a snapshotted `region_id` at insert time, so location is preserved even when the sensor moves.
+- **`sensor.region_id` is a current-value cache.** `sensor_region_history` records every assignment with open/closed intervals (`valid_to IS NULL` means current). Historical readings carry a snapshotted `region_id` at insert time, so location is preserved even when the sensor moves. The sole writer of both is `leaflab-api`'s `PlaceSensor` (FR7) — the device-config ack path never writes placement (NFR4).
 
 - **`sensor.mux_path` is JSONB.** Supports arbitrary-depth mux cascades (`[]` = direct on root bus, `[{muxAddress, muxChannel}, ...]` ordered outer→inner). A functional unique index on `(board_id, i2c_address, sensor_type_id, mux_path::text)` prevents duplicates.
 
@@ -190,7 +190,7 @@ v_sensor_reading_with_plant    — reading × active plants at recorded_at (may 
 v_sensor_reading_with_config_debug — reading + full config_json (debug)
 ```
 
-The enriched view uses `sensor_reading.region_id` (the insert-time snapshot), not the sensor's current region — reads are historically accurate for region even when sensors move.
+The enriched view uses `sensor_reading.region_id` (the insert-time snapshot), not the sensor's current region — reads are historically accurate for region even when sensors move. Its region path (ancestor chain) is resolved by walking `region_parent_history` as of the reading's `recorded_at` (migration 018, FR4): re-parenting a region never changes the roll-up of readings recorded before the re-parent. `v_region_path` keeps resolving the current tree — that stays correct for current-state consumers like the region tree view (FR6).
 
 See [DATA.md](DATA.md#analytical-views) for the full view reference and example queries.
 
@@ -252,6 +252,23 @@ confers no other write access (an admin is still denied by
 a board it doesn't own). Both are SCD2 close-and-open (reassign) or
 close-only (clear) against `board_owner_history`, same as every other
 write to that table — never an in-place `UPDATE` of `leaflab_user_id`.
+
+M3's region lifecycle RPCs (`CreateRegion`, `RenameRegion`, `ReparentRegion`)
+add a second per-owner write chokepoint, `authorizeRegionWrite`
+(`leaflab/api/server.go`), and it DOES consult the admin role: NFR2 lets an
+admin perform region/placement edits on an owner's behalf out-of-band (the
+product brief's admin-bypass pattern), so a region write succeeds for the
+region's current `owner_leaflab_user_id` or an open-'admin'-grant holder.
+This is M3 NFR2's rule, deliberately unlike `authorizeBoardWrite`'s
+M2-FR5 no-exception rule. `CreateRegion` needs no fence beyond
+authentication: the creating user becomes the region's owner at creation,
+and nesting a new region under another user's region creates a region you
+own — it edits no one else's (the parent-existence check is a read, and
+reads stay unscoped by ownership). Regions whose owner column is NULL
+(pre-M3 rows) have no owner to match, so only the admin bypass passes.
+Re-parenting never changes ownership, and the cycle check (parent = self
+or a descendant → `codes.FailedPrecondition`) runs after authorization, via
+a single recursive-CTE ancestor walk (`Repository.ReparentCreatesCycle`).
 
 Reads are deliberately **not** scoped by ownership (FR5): every signed-in
 user still reads every board, sensor, and reading through

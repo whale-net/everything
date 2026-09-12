@@ -3,6 +3,7 @@ package handlers
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"log/slog"
 	"time"
 
@@ -176,6 +177,16 @@ func (h *SessionRestartConsumer) handleStatusUpdate(ctx context.Context, msg rmq
 	for attempts = 1; attempts <= startSessionRetryAttempts; attempts++ {
 		resp, startErr = h.starter.StartSession(startCtx, &pb.StartSessionRequest{ServerGameConfigId: rec.ServerGameConfigID})
 		if startErr == nil {
+			break
+		}
+		var cordonErr *cordonError
+		if errors.As(startErr, &cordonErr) {
+			// A drain cordon rejection (#2364) is terminal, not the
+			// transient commit-race FailedPrecondition this retry exists to
+			// absorb: retrying against a drained host would just spin for
+			// the whole backoff budget for no benefit. Fall through to the
+			// failure path below, which marks the pending restart failed
+			// with cordonErr's drain-specific message as the reason.
 			break
 		}
 		if status.Code(startErr) != codes.FailedPrecondition {

@@ -115,12 +115,17 @@ func TestMigration040_AppliesOnTopOfFullHistoryAndCreatesExpectedShape(t *testin
 	if err != nil {
 		t.Fatalf("LatestVersion: %v", err)
 	}
-	if latest != 40 {
-		t.Fatalf("expected the latest migration source version to be 40, got %d -- update this test if a newer migration has since landed", latest)
+	if latest != 43 {
+		t.Fatalf("expected the latest migration source version to be 43, got %d -- update this test if a newer migration has since landed", latest)
 	}
 
-	if err := runner.Up(); err != nil {
-		t.Fatalf("Up (applying every migration through 040): %v", err)
+	// Target version 40 explicitly rather than Up() (which now also
+	// applies 041-043) -- same rationale as the other migration
+	// integration tests' use of Migrate(N) over a relative Up() call:
+	// this test is about migration 040 specifically, not "whatever the
+	// latest migration happens to be".
+	if err := runner.Migrate(40); err != nil {
+		t.Fatalf("Migrate(40) (applying every migration through 040): %v", err)
 	}
 
 	version, dirty, err := runner.Version()
@@ -128,10 +133,10 @@ func TestMigration040_AppliesOnTopOfFullHistoryAndCreatesExpectedShape(t *testin
 		t.Fatalf("Version: %v", err)
 	}
 	if dirty {
-		t.Fatalf("expected clean state after Up, got dirty")
+		t.Fatalf("expected clean state after Migrate(40), got dirty")
 	}
 	if version != 40 {
-		t.Fatalf("expected version 40 after Up, got %d", version)
+		t.Fatalf("expected version 40 after Migrate(40), got %d", version)
 	}
 
 	for _, col := range requiredCacheEntryColumns {
@@ -263,19 +268,23 @@ func TestMigration040_DownThenUpRoundTrips(t *testing.T) {
 		t.Fatalf("seed cache entry: %v", err)
 	}
 
-	// Down exactly one step (tables gone). Runner.Down() rolls back ALL
-	// migrations, which trips over pre-existing down-chain issues in
-	// unrelated early migrations -- one step is all this round-trip needs
-	// (same rationale as migration_038_integration_test.go).
-	if err := runner.Steps(-1); err != nil {
-		t.Fatalf("Steps(-1): %v", err)
+	// Roll back to exactly version 39 (one before this migration), by
+	// target version rather than a relative Steps(-1) off of whatever the
+	// latest migration happens to be -- same rationale as
+	// migration_038_integration_test.go/migration_039_integration_test.go/
+	// migration_041_integration_test.go. A relative Steps(-1) would instead
+	// undo whatever migration is current HEAD (e.g. 041 once it lands),
+	// leaving 040's own tables in place and this test passing for the
+	// wrong reason.
+	if err := runner.Migrate(39); err != nil {
+		t.Fatalf("Migrate(39) (rolling back 040): %v", err)
 	}
 	version, _, err := runner.Version()
 	if err != nil {
-		t.Fatalf("Version after down-step: %v", err)
+		t.Fatalf("Version after rollback: %v", err)
 	}
-	if version == 40 {
-		t.Fatalf("expected version below 40 after down-step, got %d", version)
+	if version != 39 {
+		t.Fatalf("expected version 39 after Migrate(39), got %d", version)
 	}
 	for _, table := range []string{"workshop_cache_entries", "workshop_cache_host_presence"} {
 		var exists bool

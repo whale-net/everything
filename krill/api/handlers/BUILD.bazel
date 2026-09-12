@@ -1,0 +1,112 @@
+"""krill api's HTTP handler layer. session.go (issue #2489, FR3) is the
+`init` endpoint; gate.go is the write-only gate every mutating endpoint in
+this milestone passes through. product.go/featureset.go/feature.go/
+requirement.go/decision.go (issue #2490, FR1/FR2/FR4) are the entity
+create/attach endpoints; types.go is their shared request-decoding and
+error-mapping surface. slice.go (issue #2491, FR5-FR9) is the read-only
+HTTP surface over //krill/slice's four scoped-slice granularities -- thin
+adapters only, no business logic; see slice.go's package doc comment.
+amend.go (issue #2493, FR12) is the SCD2 supersession write endpoints for
+Requirement and LoadBearingDecision, gated like every other write endpoint;
+history.go (issue #2493, FR11) is the as-of/version-list read endpoints
+over the same two entity kinds. Neither slice.go's nor history.go's routes
+carry the write-only session gate. pointer.go (issue #2496, FR20) is the
+pointer-artifact create endpoint -- the one handler in this package that
+calls out to //krill/forge before it ever touches //krill/store.
+design_session.go/revision_event.go (issue #2543, FR1-FR4/FR8) are the
+DesignSession/RevisionEvent HTTP surface: both POST endpoints are gated,
+GET /design-sessions/{id} is not; revision_event.go also owns the
+Subject/EntityDelta/OpenQuestionsDelta wire types design_session.go's
+GetDesignSessionHandler reuses. session_slice.go (issue #2544, krill M2,
+FR5) is the HTTP surface over //krill/slice's fifth granularity,
+GetEntitySetSlice -- also ungated. mediated.go (issue #2546, FR9/FR10/NFR2)
+is the mediated-intake write endpoint, POST /design-sessions/{id}/propose --
+gated like every other write endpoint."""
+
+load("@rules_go//go:def.bzl", "go_library", "go_test")
+
+go_library(
+    name = "handlers",
+    srcs = [
+        "amend.go",
+        "decision.go",
+        "design_session.go",
+        "feature.go",
+        "featureset.go",
+        "gate.go",
+        "history.go",
+        "mediated.go",
+        "open_questions.go",
+        "pointer.go",
+        "product.go",
+        "requirement.go",
+        "revision_event.go",
+        "session.go",
+        "session_slice.go",
+        "slice.go",
+        "types.go",
+    ],
+    importpath = "github.com/whale-net/everything/krill/api/handlers",
+    visibility = ["//visibility:public"],
+    deps = [
+        "//krill/forge",
+        "//krill/slice",
+        "//krill/store",
+        "@com_github_google_uuid//:uuid",
+        "@com_github_jackc_pgx_v5//pgconn",
+    ],
+)
+
+# Unit tests for InitSessionHandler (session.go), RequireSession (gate.go),
+# the entity create/attach handlers (issue #2489's and #2490's Testing
+# sections), the four slice query endpoints (slice.go, issue #2491's
+# Testing section), the two amend endpoints (amend_test.go, issue #2493's
+# Testing section: gated like every other write path, calls AmendStore with
+# the path's {id} and the body's name/body unchanged), the DesignSession/
+# RevisionEvent HTTP surface (design_session_test.go/revision_event_test.go,
+# issue #2543's Testing section: both POST endpoints gated, GET
+# /design-sessions/{id} not, FR3/FR4's conditional-presence rules mapped to
+# 400), and SessionSlice's union-and-dedupe logic (session_slice_test.go,
+# issue #2544's Testing section). fakeSessionStore/fake entity stores/
+# fakeAmendStore/fakeDesignSessionStore/fakeRevisionEventStore/
+# fakeEntitySetQuerier stand in for krill/store's (and krill/slice's)
+# interfaces, so none of this needs Postgres/network and it runs as part of
+# `bazel test //...`. slice_internal_test.go is package handlers (white-box,
+# needs the unexported sliceQueryFunc/handle); everything else here is
+# package handlers_test (black-box).
+go_test(
+    name = "handlers_test",
+    srcs = [
+        "amend_test.go",
+        "decision_test.go",
+        "design_session_test.go",
+        "entity_test_helpers_test.go",
+        "fake_design_session_store_test.go",
+        "fake_entity_store_test.go",
+        "fake_mediated_store_test.go",
+        "fake_session_slice_stores_test.go",
+        "fake_session_store_test.go",
+        "feature_test.go",
+        "featureset_test.go",
+        "gate_test.go",
+        "mediated_test.go",
+        "open_questions_test.go",
+        "pointer_test.go",
+        "product_test.go",
+        "requirement_test.go",
+        "revision_event_test.go",
+        "session_slice_test.go",
+        "session_test.go",
+        "slice_internal_test.go",
+        "slice_test.go",
+    ],
+    embed = [":handlers"],
+    deps = [
+        "//krill/slice",
+        "//krill/store",
+        "@com_github_google_uuid//:uuid",
+        "@com_github_jackc_pgx_v5//pgconn",
+        "@com_github_stretchr_testify//assert",
+        "@com_github_stretchr_testify//require",
+    ],
+)

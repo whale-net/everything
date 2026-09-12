@@ -24,12 +24,14 @@ var Implementation = &mcp.Implementation{
 
 // New builds the mcp.Server every whagent-net MCP tool
 // (../tools/RegisterStartSession et al.) plugs into, with AuthMiddleware
-// (auth.go) wired to forward the caller's bearer token onto every tool
-// call's context so it can be forwarded again, unchanged, to `api`. Holds
-// no state of its own -- statelessness lives entirely in `api` and its
-// store, never here.
+// (auth.go) wired to place the caller's bearer token or resolved identity
+// onto every tool call's context -- either forwarded again, unchanged, to
+// `api` (the manual-token path), or resolved into a working credential at
+// tool-dispatch time via ../tools' ScopeResolver/GrantSource seams (the
+// browser-OAuth2 path, issue #2430's FR7/FR8). Holds no state of its own
+// -- statelessness lives entirely in `api` and its store, never here.
 func New() *mcp.Server {
 	srv := mcp.NewServer(Implementation, nil)
-	srv.AddReceivingMiddleware(AuthMiddleware)
+	srv.AddReceivingMiddleware(AuthMiddleware())
 	return srv
 }

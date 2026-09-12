@@ -17,6 +17,8 @@ import (
 	"github.com/whale-net/everything/manmanv2/host/rmq"
 	pb "github.com/whale-net/everything/manmanv2/protos"
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 )
 
 // buildSingleFileTar produces an uncompressed tar archive (the wire format
@@ -750,4 +752,139 @@ func TestHandleDownloadCommand_ConcurrentSameKey_NoLockNoCorruption(t *testing.T
 			t.Fatal("racing installs did not complete -- possible deadlock")
 		}
 	}
+}
+
+// fakeGCResolveWorkshopClient embeds the nil WorkshopServiceClient interface and
+// overrides only the RPCs EnsureLibraryAddonsInstalled's GC-scoped resolution path
+// (M6 #2370, plan #2359) drives: GetGameConfigLibraryAttachments, ListGameConfigLibraries,
+// GetLibraryAddons, GetChildLibraries, ListInstallations, InstallAddon, and GetAddon.
+// GetAddon deliberately returns an error (simulating a lookup miss) so
+// HandleDownloadCommand's verify/cache path is skipped and the test can focus purely on
+// what EnsureLibraryAddonsInstalled resolves and requests -- any other RPC call (in
+// particular any SGC-scoped one, which no longer exists on the interface at all since
+// NFR1 retired it) panics loudly via the embedded nil interface.
+type fakeGCResolveWorkshopClient struct {
+	pb.WorkshopServiceClient
+
+	attachments []*pb.GameConfigWorkshopLibrary
+	libraries   []*pb.WorkshopLibrary
+	addonsByLib map[int64][]*pb.WorkshopAddon
+
+	installAddonCalls []*pb.InstallAddonRequest
+}
+
+func (f *fakeGCResolveWorkshopClient) GetGameConfigLibraryAttachments(ctx context.Context, in *pb.GetGameConfigLibraryAttachmentsRequest, opts ...grpc.CallOption) (*pb.GetGameConfigLibraryAttachmentsResponse, error) {
+	return &pb.GetGameConfigLibraryAttachmentsResponse{Attachments: f.attachments}, nil
+}
+
+func (f *fakeGCResolveWorkshopClient) ListGameConfigLibraries(ctx context.Context, in *pb.ListGameConfigLibrariesRequest, opts ...grpc.CallOption) (*pb.ListGameConfigLibrariesResponse, error) {
+	return &pb.ListGameConfigLibrariesResponse{Libraries: f.libraries}, nil
+}
+
+func (f *fakeGCResolveWorkshopClient) GetLibraryAddons(ctx context.Context, in *pb.GetLibraryAddonsRequest, opts ...grpc.CallOption) (*pb.GetLibraryAddonsResponse, error) {
+	return &pb.GetLibraryAddonsResponse{Addons: f.addonsByLib[in.LibraryId]}, nil
+}
+
+func (f *fakeGCResolveWorkshopClient) GetChildLibraries(ctx context.Context, in *pb.GetChildLibrariesRequest, opts ...grpc.CallOption) (*pb.GetChildLibrariesResponse, error) {
+	return &pb.GetChildLibrariesResponse{}, nil
+}
+
+func (f *fakeGCResolveWorkshopClient) ListInstallations(ctx context.Context, in *pb.ListInstallationsRequest, opts ...grpc.CallOption) (*pb.ListInstallationsResponse, error) {
+	return &pb.ListInstallationsResponse{}, nil
+}
+
+func (f *fakeGCResolveWorkshopClient) InstallAddon(ctx context.Context, in *pb.InstallAddonRequest, opts ...grpc.CallOption) (*pb.InstallAddonResponse, error) {
+	f.installAddonCalls = append(f.installAddonCalls, in)
+	return &pb.InstallAddonResponse{
+		Installation: &pb.WorkshopInstallation{InstallationId: int64(len(f.installAddonCalls)), SgcId: in.SgcId, AddonId: in.AddonId, InstallationPath: "/data/mods"},
+	}, nil
+}
+
+func (f *fakeGCResolveWorkshopClient) GetAddon(ctx context.Context, in *pb.GetAddonRequest, opts ...grpc.CallOption) (*pb.GetAddonResponse, error) {
+	return nil, status.Error(codes.NotFound, "addon not found")
+}
+
+// fakeGCResolveManManClient embeds the nil ManManAPIClient interface and overrides only
+// GetServerGameConfig (to resolve the deployment's GameConfig) and ListGameConfigVolumes,
+// which deliberately reports no volumes -- resolveVolumeMounts then fails fast with "no
+// volumes configured", so HandleDownloadCommand's SteamCMD/docker path (irrelevant to
+// this test) is never reached, without needing a fake Docker client at all.
+type fakeGCResolveManManClient struct {
+	pb.ManManAPIClient
+
+	gameConfigID int64
+}
+
+func (f *fakeGCResolveManManClient) GetServerGameConfig(ctx context.Context, in *pb.GetServerGameConfigRequest, opts ...grpc.CallOption) (*pb.GetServerGameConfigResponse, error) {
+	return &pb.GetServerGameConfigResponse{
+		Config: &pb.ServerGameConfig{ServerGameConfigId: in.ServerGameConfigId, GameConfigId: f.gameConfigID},
+	}, nil
+}
+
+func (f *fakeGCResolveManManClient) ListGameConfigVolumes(ctx context.Context, in *pb.ListGameConfigVolumesRequest, opts ...grpc.CallOption) (*pb.ListGameConfigVolumesResponse, error) {
+	return &pb.ListGameConfigVolumesResponse{}, nil
+}
+
+// TestEnsureLibraryAddonsInstalled_ResolvesFromGameConfigAttachments_OverridesCarried is
+// the orchestrator test the issue's Testing section calls for (M6 #2370, plan #2359): a
+// deployment's install set resolves from its GameConfig's library attachments (not any
+// SGC-scoped state -- sgc_workshop_libraries is retired, NFR1), and each attachment's
+// per-library overrides (installation_path_override, preset_id, volume_id) are carried
+// through into the InstallAddon request for that library's addons. Two libraries are
+// attached: one with an explicit attachment-level preset override (which must win over
+// the library's own default preset), one with no attachment-level preset (which must
+// fall back to the library's default preset).
+func TestEnsureLibraryAddonsInstalled_ResolvesFromGameConfigAttachments_OverridesCarried(t *testing.T) {
+	const sgcID = int64(5)
+	const gameConfigID = int64(42)
+	const libA, libB = int64(1), int64(2)
+	const addonA, addonB = int64(1001), int64(1002)
+
+	workshopClient := &fakeGCResolveWorkshopClient{
+		attachments: []*pb.GameConfigWorkshopLibrary{
+			// libA: attachment overrides everything, including preset (must win over
+			// libA's own default preset of 10 below).
+			{ConfigId: gameConfigID, LibraryId: libA, PresetId: 55, VolumeId: 7, InstallationPathOverride: "mods/libA"},
+			// libB: no attachment-level preset override -- must fall back to libB's
+			// own default preset (99) resolved from ListGameConfigLibraries.
+			{ConfigId: gameConfigID, LibraryId: libB, PresetId: 0, VolumeId: 3, InstallationPathOverride: ""},
+		},
+		libraries: []*pb.WorkshopLibrary{
+			{LibraryId: libA, PresetId: 10},
+			{LibraryId: libB, PresetId: 99},
+		},
+		addonsByLib: map[int64][]*pb.WorkshopAddon{
+			libA: {{AddonId: addonA, WorkshopId: "111", SteamAppId: "550"}},
+			libB: {{AddonId: addonB, WorkshopId: "222", SteamAppId: "550"}},
+		},
+	}
+	manManClient := &fakeGCResolveManManClient{gameConfigID: gameConfigID}
+	publisher := &MockInstallationStatusPublisher{}
+
+	orchestrator := NewDownloadOrchestrator(
+		newFakeDockerClient(), manManClient, workshopClient, 1, "test", t.TempDir(), t.TempDir(), 3, publisher,
+	)
+
+	err := orchestrator.EnsureLibraryAddonsInstalled(context.Background(), sgcID, nil)
+	require.NoError(t, err, "download failures downstream of InstallAddon are non-fatal by design; only a resolution-path error should fail this")
+
+	require.Len(t, workshopClient.installAddonCalls, 2, "both libraries' addons must be resolved and installed")
+
+	byAddon := make(map[int64]*pb.InstallAddonRequest)
+	for _, call := range workshopClient.installAddonCalls {
+		assert.Equal(t, sgcID, call.SgcId, "InstallAddon must target the deployment, not the library or GameConfig")
+		byAddon[call.AddonId] = call
+	}
+
+	callA, ok := byAddon[addonA]
+	require.True(t, ok, "libA's addon must have been installed")
+	assert.Equal(t, "mods/libA", callA.InstallationPathOverride, "libA's attachment-level path override must be carried through")
+	assert.Equal(t, int64(55), callA.PresetIdOverride, "libA's attachment-level preset override must win over its library default")
+	assert.Equal(t, int64(7), callA.VolumeIdOverride, "libA's attachment-level volume override must be carried through")
+
+	callB, ok := byAddon[addonB]
+	require.True(t, ok, "libB's addon must have been installed")
+	assert.Equal(t, "", callB.InstallationPathOverride, "libB has no attachment-level path override")
+	assert.Equal(t, int64(99), callB.PresetIdOverride, "libB's attachment has no preset override, so its library default (99) must be used")
+	assert.Equal(t, int64(3), callB.VolumeIdOverride, "libB's attachment-level volume override must be carried through")
 }

@@ -16,7 +16,7 @@
 
 | Library | Purpose | Docs |
 |---------|---------|------|
-| `grpcauth` | gRPC authentication/authorization: server-side JWT interceptors and client-side credential helpers, with a `none` dev mode requiring no Keycloak | [README](go/grpcauth/README.md), [KEYCLOAK](go/grpcauth/KEYCLOAK.md) |
+| `grpcauth` | gRPC authentication/authorization: server-side JWT interceptors and client-side credential helpers, with a `none` dev mode requiring no Keycloak; also ships a delegated-grant credential source (per-user Keycloak `offline_access` grants for non-interactive scheduled agents, e.g. Temporal Activities) with `grpcauth/pgstore` as its pgx-backed reference `Store` — a separate `go_library` target (same divergent-BUILD-shape pattern as `htmxui`'s row below), keeping core `grpcauth` free of any Postgres dependency; schema is applied by the consuming domain's own migration | [README](go/grpcauth/README.md), [KEYCLOAK](go/grpcauth/KEYCLOAK.md) |
 | `htmxauth` | HTMX authentication (OIDC + no-auth modes) | [README](go/htmxauth/README.md) |
 | `htmxbase` | HTMX base template and layout utilities | [README](go/htmxbase/README.md) |
 | `htmxsse` | Server-sent events over RabbitMQ for HTMX live updates with reconnect baseline suppression | [README](go/htmxsse/README.md) |

@@ -69,20 +69,24 @@ func TestMigration037_SoftDeleteFKAndLosslessRoundTrip(t *testing.T) {
 	if err != nil {
 		t.Fatalf("LatestVersion: %v", err)
 	}
-	if latest != 40 {
-		t.Fatalf("expected the latest migration source version to be 40, got %d -- update this test if a newer migration has since landed", latest)
+	if latest != 43 {
+		t.Fatalf("expected the latest migration source version to be 43, got %d -- update this test if a newer migration has since landed", latest)
 	}
 
-	if err := runner.Up(); err != nil {
-		t.Fatalf("Up (applying every migration through 037): %v", err)
+	// Target version 37 explicitly rather than Up() (which now also
+	// applies every later migration through 043) -- this test is about
+	// migration 037 specifically, not "whatever the latest migration
+	// happens to be".
+	if err := runner.Migrate(37); err != nil {
+		t.Fatalf("Migrate(37) (applying every migration through 037): %v", err)
 	}
 
 	version, dirty, err := runner.Version()
 	if err != nil {
 		t.Fatalf("Version: %v", err)
 	}
-	if dirty || version != 40 {
-		t.Fatalf("expected clean version 40 after Up, got version %d dirty=%v", version, dirty)
+	if dirty || version != 37 {
+		t.Fatalf("expected clean version 37 after Migrate(37), got version %d dirty=%v", version, dirty)
 	}
 
 	// deleted_at column present on action_definitions.

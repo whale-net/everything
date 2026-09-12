@@ -1,0 +1,199 @@
+package pages
+
+import (
+	"fmt"
+
+	"github.com/whale-net/everything/libs/go/htmxui"
+	manmanpb "github.com/whale-net/everything/manmanv2/protos"
+	"github.com/whale-net/everything/manmanv2/ui/components"
+)
+
+// Infrastructure is the M6 fleet host list (FR1/FR2, C29): every host in
+// the fleet with its drain state, now the nav-facing surface FR16
+// (task #2372) redirects /servers and /servers/<id> onto.
+//
+// Implementation phase (#2369): the FR2 floor (host name + drain-state
+// badge) plus health indicators bounded by NFR5 (Server.status,
+// last_seen, host_public_address, ListAllocatedPorts -- server_capabilities
+// is deliberately not surfaced here: the API exposes no RPC to read a
+// server's persisted ServerCapability row today, and adding one would be
+// the new backend data path NFR5 rules out for this task), the FR3 drain /
+// FR4 undrain one-click actions (posting through handleInfrastructureAction),
+// and the FR2 transient "draining" state, which settles to "drained" on a
+// manual page refresh -- no new live transport (NFR5), no SSE/polling.
+//
+// Task #2372 (M6 navigation/disposition) additionally folds in each host's
+// public-address edit and allowed-port-ranges management (formerly
+// pages/server_detail.templ, retired by this task) as a per-row "Manage"
+// disclosure -- see hostManagePanel below and ServerPortRangesSection's
+// doc comment for why: #2369 did not fold that capability in, so this task
+// keeps it reachable rather than let it regress (NFR6).
+//
+// Infrastructure additionally renders the fleet-wide status summary
+// (#2371, manmanv2 M6, FR5/NFR5): one row per game with its running-over-
+// total deployment count across every host in the fleet. It is a
+// point-in-time snapshot computed fresh on every request -- the single
+// Refresh control above (shared with the host list) reloads it too; there
+// is no separate refresh affordance and no live transport backing it
+// (NFR5).
+templ Infrastructure(layout components.LayoutData, hosts []*InfrastructureHost, fleetStatus []*manmanpb.FleetGameStatus) {
+	@components.Layout(layout) {
+		<div class="flex justify-between items-center mb-2">
+			@components.HeroHeader("Infrastructure", "Every host in the fleet, with its current drain state and health")
+			<a href="/infrastructure" class="btn btn-secondary btn-sm">Refresh</a>
+		</div>
+		<p class="text-xs text-base-content/60 mb-6">
+			A host that just started draining still shows "draining" here until its running sessions finish stopping -- use Refresh to check on progress; this page does not update itself live.
+		</p>
+		<div class="mb-8">
+			<h2 class="text-lg font-semibold text-base-content mb-2">Fleet Status</h2>
+			<p class="text-xs text-base-content/60 mb-2">
+				Running deployments over total deployments per game, across every host -- a point-in-time snapshot, refreshed by the Refresh control above.
+			</p>
+			if len(fleetStatus) > 0 {
+				@components.Table() {
+					<thead>
+						<tr>
+							<th>Game</th>
+							<th>Running / Total</th>
+						</tr>
+					</thead>
+					<tbody>
+						for _, g := range fleetStatus {
+							<tr class="hover">
+								<td class="text-sm font-medium text-base-content">{ g.GameName }</td>
+								<td>
+									@htmxui.Badge(fleetStatusLabel(g.RunningCount, g.TotalCount), statusBadgeVariant(fleetStatusVariant(g.RunningCount, g.TotalCount)), htmxui.BadgeSizeSM, true, nil)
+								</td>
+							</tr>
+						}
+					</tbody>
+				}
+			} else {
+				@components.EmptyState(
+					"No games found",
+					"Fleet status will appear here once games exist.",
+					"",
+					"",
+				)
+			}
+		</div>
+		if len(hosts) > 0 {
+			@components.Table() {
+				<thead>
+					<tr>
+						<th>Name</th>
+						<th>Drain State</th>
+						<th>Status</th>
+						<th>Last Seen</th>
+						<th>Public Address</th>
+						<th>Allocated Ports</th>
+						<th class="text-right">Actions</th>
+					</tr>
+				</thead>
+				<tbody>
+					for _, host := range hosts {
+						<tr id={ fmt.Sprintf("host-row-%d", host.Server.ServerId) } class="hover">
+							<td class="text-sm font-medium text-base-content">{ host.Server.Name }</td>
+							<td>
+								@htmxui.Badge(drainStateLabel(host.Server.DrainState), statusBadgeVariant(drainStateVariant(host.Server.DrainState)), htmxui.BadgeSizeSM, true, nil)
+							</td>
+							<td>
+								@htmxui.Badge(host.Server.Status, statusBadgeVariant(serverStatusVariant(host.Server.Status)), htmxui.BadgeSizeSM, true, nil)
+							</td>
+							<td class="text-sm">{ timeAgo(host.Server.LastSeen) }</td>
+							<td class="text-sm">
+								if host.Server.HostPublicAddress == "" {
+									Not reported
+								} else {
+									{ host.Server.HostPublicAddress }
+								}
+							</td>
+							<td class="text-sm">{ allocatedPortsSummary(host.AllocatedPorts) }</td>
+							<td class="text-right text-sm font-medium">
+								<div class="flex justify-end gap-2">
+									if canDrain(host.Server.DrainState) {
+										<form method="POST" action={ templ.URL(fmt.Sprintf("/infrastructure/%d/drain", host.Server.ServerId)) }>
+											@htmxui.Button(htmxui.ButtonWarning, htmxui.ButtonSizeSM, false, templ.Attributes{
+												"type":       "submit",
+												"hx-confirm": drainConfirmMessage(host.Server.Name),
+											}) {
+												Drain
+											}
+										</form>
+									}
+									if canUndrain(host.Server.DrainState) {
+										<form method="POST" action={ templ.URL(fmt.Sprintf("/infrastructure/%d/undrain", host.Server.ServerId)) }>
+											@htmxui.Button(htmxui.ButtonSuccess, htmxui.ButtonSizeSM, false, templ.Attributes{
+												"type":       "submit",
+												"hx-confirm": undrainConfirmMessage(host.Server.Name),
+											}) {
+												Undrain
+											}
+										</form>
+									}
+									<a href={ templ.URL(fmt.Sprintf("/infrastructure?manage=%d#host-manage-%d", host.Server.ServerId, host.Server.ServerId)) } class="btn btn-secondary btn-sm">Manage</a>
+								</div>
+							</td>
+						</tr>
+						@hostManagePanel(host)
+					}
+				</tbody>
+			}
+		} else {
+			@components.EmptyState(
+				"No hosts found",
+				"Hosts will appear here when they register with the control plane.",
+				"",
+				"",
+			)
+		}
+	}
+}
+
+// hostManagePanel renders one host's collapsible "Manage" row: public
+// address edit (posting to handleInfrastructureUpdateAddress) plus the
+// allowed-port-ranges card (ServerPortRangesSection). Task #2372 (M6
+// navigation/disposition) added this when pages/server_detail.templ
+// retired -- see Infrastructure's doc comment above for why the
+// capability moved here instead of disappearing (NFR6).
+//
+// A plain HTML <details open?=...> is used rather than any client script:
+// host.ManageOpen (server-computed from the "?manage=<id>" query param FR16's
+// /servers/<id> redirect target sets, or from a ports/address action just
+// having round-tripped through this host) is the only thing that opens it,
+// so a host with no query param and no just-completed action renders
+// collapsed by default, keeping this page's normal (no manage state) render
+// identical to before this task.
+templ hostManagePanel(host *InfrastructureHost) {
+	<tr>
+		<td colspan="7" class="bg-base-200/40 p-0">
+			<details id={ fmt.Sprintf("host-manage-%d", host.Server.ServerId) } open?={ host.ManageOpen } class="p-4">
+				<summary class="cursor-pointer text-sm font-medium text-base-content/70">Manage { host.Server.Name }</summary>
+				<div class="mt-4 max-w-2xl">
+					<div class="card bg-base-100 border border-base-300 shadow-sm mb-4">
+						<div class="card-body">
+							<h3 class="text-sm font-semibold text-base-content mb-2">Public Address</h3>
+							<form method="POST" action={ templ.URL(fmt.Sprintf("/infrastructure/%d/update-address", host.Server.ServerId)) } class="flex flex-col gap-2 max-w-md">
+								<label for={ fmt.Sprintf("host_public_address_%d", host.Server.ServerId) } class="block text-sm font-medium text-base-content">Edit Public Address</label>
+								<input
+									type="text"
+									id={ fmt.Sprintf("host_public_address_%d", host.Server.ServerId) }
+									name="host_public_address"
+									value={ host.Server.HostPublicAddress }
+									placeholder="e.g., game.example.com:27015"
+									class="input input-bordered w-full"
+								/>
+								<p class="text-xs text-base-content/60">Leave blank to clear.</p>
+								<div>
+									<button type="submit" class="btn btn-success btn-sm">Save Public Address</button>
+								</div>
+							</form>
+						</div>
+					</div>
+					@ServerPortRangesSection(host.Server, host.PortsNotice, host.PortsEdit, "/infrastructure")
+				</div>
+			</details>
+		</td>
+	</tr>
+}

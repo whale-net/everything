@@ -1,0 +1,50 @@
+package pages
+
+import (
+	"github.com/whale-net/everything/whagent_net/ui/components"
+)
+
+// SessionNewData carries SessionNew's page-level parameterisation (FR1's
+// start form, issue #2246). AgentID/ModelOverride echo back the
+// just-submitted values on a validation/api rejection
+// (../handlers_session_lifecycle.go's handleStartSession) so a rejected
+// submission does not force the operator to retype the form. Error is
+// FR1's "Error surfacing" inline message -- never a raw gRPC status
+// string.
+type SessionNewData struct {
+	Layout        components.LayoutData
+	AgentID       string
+	ModelOverride string
+	Error         string
+}
+
+// SessionNew is FR1's start-session form (GET /sessions/new, issue
+// #2246): a plain (non-htmx) POST to /sessions --
+// ../handlers_session_lifecycle.go's handleStartSession redirects to
+// /sessions/{id} on success, or re-renders this same page with Error set
+// on failure. There is no agent picker: session.proto's SessionService
+// has no agent-listing RPC (this task's Implementation section --
+// "do not add a config read in the UI"), so Agent ID is free text and
+// StartSession's own agent-definition lookup (whagent_net/api/handlers/
+// start.go) is the only place an unknown agent id is ever resolved,
+// exactly like the session detail page never enumerates agent ids either
+// (it only ever displays the one GetSession already returned).
+templ SessionNew(data SessionNewData) {
+	@components.Layout(data.Layout) {
+		<h1 class="text-2xl font-bold text-base-content mb-4">Start a session</h1>
+		if data.Error != "" {
+			<div role="alert" class="alert alert-error mb-4">{ data.Error }</div>
+		}
+		<form method="POST" action="/sessions" class="flex flex-col gap-3 max-w-md">
+			<label class="form-control">
+				<span class="label-text">Agent ID</span>
+				<input type="text" name="agent_id" value={ data.AgentID } required class="input input-bordered w-full"/>
+			</label>
+			<label class="form-control">
+				<span class="label-text">Model override (optional)</span>
+				<input type="text" name="model_override" value={ data.ModelOverride } class="input input-bordered w-full"/>
+			</label>
+			<button type="submit" class="btn btn-primary">Start session</button>
+		</form>
+	}
+}

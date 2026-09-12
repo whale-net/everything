@@ -49,13 +49,20 @@ func NewAPIServer(repo *repository.Repository, s3Client *s3.Client, rmqConn *rmq
 		}()
 	}
 
+	// sessionHandler is constructed first so ServerHandler can be given it
+	// as the SessionStopper DrainServer's eviction loop (#2366, FR3) calls
+	// through -- eviction must dispatch stops via the exact same
+	// SessionHandler.StopSession path a manual stop uses, never a second
+	// implementation.
+	sessionHandler := NewSessionHandler(repo, commandPublisher, workshopManager, restartStallTimeout)
+
 	return &APIServer{
 		repo:                    repo,
-		serverHandler:           NewServerHandler(repo.Servers, repo.ServerPortRanges, repo.ServerPorts),
+		serverHandler:           NewServerHandler(repo.Servers, repo.ServerPortRanges, repo.ServerPorts, repo.Sessions, repo.PendingRestarts, sessionHandler),
 		gameHandler:             NewGameHandler(repo.Games),
 		gameConfigHandler:       NewGameConfigHandler(repo.GameConfigs),
-		serverGameConfigHandler: NewServerGameConfigHandler(repo.ServerGameConfigs, repo.ServerPorts),
-		sessionHandler:          NewSessionHandler(repo, commandPublisher, workshopManager, restartStallTimeout),
+		serverGameConfigHandler: NewServerGameConfigHandler(repo.ServerGameConfigs, repo.ServerPorts, repo.Servers),
+		sessionHandler:          sessionHandler,
 		registrationHandler:     NewRegistrationHandler(repo.Servers, repo.ServerCapabilities),
 		validationHandler:       NewValidationHandler(repo.Servers, repo.GameConfigs),
 		logsHandler:             NewLogsHandler(repo.LogReferences, s3Client),
@@ -107,6 +114,16 @@ func (s *APIServer) UpdateServerAllowedPortRanges(ctx context.Context, req *pb.U
 // #2098; guidance-only read path for the UI's ports editor).
 func (s *APIServer) ListAllocatedPorts(ctx context.Context, req *pb.ListAllocatedPortsRequest) (*pb.ListAllocatedPortsResponse, error) {
 	return s.serverHandler.ListAllocatedPorts(ctx, req)
+}
+
+// DrainServer/UndrainServer: host drain state (#2360, manmanv2 M6, C29
+// groundwork). Inert here -- no cordon enforcement or eviction yet.
+func (s *APIServer) DrainServer(ctx context.Context, req *pb.DrainServerRequest) (*pb.DrainServerResponse, error) {
+	return s.serverHandler.DrainServer(ctx, req)
+}
+
+func (s *APIServer) UndrainServer(ctx context.Context, req *pb.UndrainServerRequest) (*pb.UndrainServerResponse, error) {
+	return s.serverHandler.UndrainServer(ctx, req)
 }
 
 // Game RPCs
@@ -199,6 +216,12 @@ func (s *APIServer) SendInput(ctx context.Context, req *pb.SendInputRequest) (*p
 
 func (s *APIServer) ListPendingRestarts(ctx context.Context, req *pb.ListPendingRestartsRequest) (*pb.ListPendingRestartsResponse, error) {
 	return s.sessionHandler.ListPendingRestarts(ctx, req)
+}
+
+// GetFleetStatusSummary serves the Infrastructure page's fleet-wide status
+// summary (#2371, manmanv2 M6, FR5/NFR5).
+func (s *APIServer) GetFleetStatusSummary(ctx context.Context, req *pb.GetFleetStatusSummaryRequest) (*pb.GetFleetStatusSummaryResponse, error) {
+	return s.sessionHandler.GetFleetStatusSummary(ctx, req)
 }
 
 // Registration RPCs

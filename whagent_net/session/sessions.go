@@ -2,8 +2,11 @@ package session
 
 import (
 	"context"
+	"encoding/base64"
 	"errors"
 	"fmt"
+	"strconv"
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
@@ -105,6 +108,42 @@ type Session struct {
 	UpdatedAt       time.Time
 }
 
+// SessionFilter is ListSessions' (FR3/C15) filter set, mirroring
+// ListSessionsRequest's optional fields one-for-one. A nil field means "no
+// filter on this column"; multiple set fields combine with AND. There is
+// no free-text or multi-column-sort field here -- deliberately out of
+// scope for M2 (issue #2241).
+type SessionFilter struct {
+	AgentID *string
+	State   *Status
+	// StartedByKind filters on the session's own subject_kind column
+	// (LB2/NFR3) -- there is no separate identity/display-name table to
+	// join against, in this task or anywhere in M2.
+	StartedByKind *SubjectKind
+	// StartedAfter is an inclusive lower bound on CreatedAt.
+	StartedAfter *time.Time
+	// StartedBefore is an exclusive upper bound on CreatedAt.
+	StartedBefore *time.Time
+}
+
+// SessionPage is List's paging input: PageSize (0 means "server default",
+// mirroring defaultTranscriptLimit/maxTranscriptLimit's shape in
+// api/handlers/session.go) and PageToken, an opaque cursor previously
+// returned as PageInfo.NextPageToken or PageInfo.PrevPageToken. An empty
+// PageToken starts from the first page.
+type SessionPage struct {
+	PageSize  int
+	PageToken string
+}
+
+// PageInfo is List's paging output: opaque cursors for the next/previous
+// page, each encoding a position in the (created_at DESC, session_id DESC)
+// keyset List orders by. Empty means there is no such page.
+type PageInfo struct {
+	NextPageToken string
+	PrevPageToken string
+}
+
 // SessionStore is the `sessions` table's repository interface.
 // UpdateStatus is a compare-and-swap on terminal writes -- the same
 // pattern as manmanv2 control-api/event-processor's
@@ -121,6 +160,26 @@ type SessionStore interface {
 	// compare-and-swap so a stale non-terminal write can never clobber a
 	// terminal status that already committed.
 	UpdateStatus(ctx context.Context, id uuid.UUID, status Status, terminal *TerminalReason) error
+	// List returns sessions matching filter, in (created_at DESC,
+	// session_id DESC) order, keyset-paginated per page (FR3/C15) --
+	// sessions from any subject, not just the caller's own (that
+	// visibility rule is enforced by the caller, api/handlers/session.go,
+	// not here).
+	List(ctx context.Context, filter SessionFilter, page SessionPage) ([]*Session, PageInfo, error)
+	// ListArchiveEligible is FR7's archiver selection query (issue #2244):
+	// up to limit session IDs, ordered by updated_at ascending (oldest
+	// first), that are either (a) terminal (Status.IsTerminal()) with
+	// updated_at -- the compare-and-swap terminal write UpdateStatus
+	// performs, used here as the terminal timestamp -- older than
+	// olderThan and no `transcript_archive` row yet, or (b) already have a
+	// `transcript_archive` row whose hot_trimmed_at is still NULL, i.e. a
+	// prior archiver attempt uploaded and committed the index row but
+	// crashed before trimming. (b) is included regardless of olderThan so
+	// a crashed-mid-archive session is picked back up on the very next
+	// scan rather than waiting out the TTL again; RunArchiveBatch
+	// (whagent_net/worker/archive.go) tells the two cases apart via
+	// ArchiveStore.Get and does not re-upload in case (b).
+	ListArchiveEligible(ctx context.Context, olderThan time.Time, limit int) ([]uuid.UUID, error)
 }
 
 // sessionStore is the Postgres-backed SessionStore implementation.
@@ -262,3 +321,239 @@ func (s sessionStore) UpdateStatus(ctx context.Context, id uuid.UUID, status Sta
 // terminal values, kept in one place so UpdateStatus's CAS predicate
 // cannot drift from IsTerminal's Go-side definition.
 const terminalStatusList = `'done', 'stopped', 'failed', 'capped'`
+
+// ListArchiveEligible implements SessionStore.ListArchiveEligible (see
+// that doc comment for the two cases this query unions): a LEFT JOIN
+// against transcript_archive distinguishes "never archived" (ta.session_id
+// IS NULL, gated on updated_at < olderThan) from "archived but not yet
+// trimmed" (ta.session_id IS NOT NULL AND ta.hot_trimmed_at IS NULL,
+// ungated on olderThan -- a crash-recovery resume, not a fresh selection).
+func (s sessionStore) ListArchiveEligible(ctx context.Context, olderThan time.Time, limit int) ([]uuid.UUID, error) {
+	rows, err := s.pool.Query(ctx, `
+		SELECT s.session_id
+		FROM sessions s
+		LEFT JOIN transcript_archive ta ON ta.session_id = s.session_id
+		WHERE s.status IN (`+terminalStatusList+`)
+		  AND (
+		        (ta.session_id IS NULL AND s.updated_at < $1)
+		     OR (ta.session_id IS NOT NULL AND ta.hot_trimmed_at IS NULL)
+		      )
+		ORDER BY s.updated_at ASC
+		LIMIT $2
+	`, olderThan, limit)
+	if err != nil {
+		return nil, fmt.Errorf("list archive-eligible sessions: %w", err)
+	}
+	defer rows.Close()
+
+	var ids []uuid.UUID
+	for rows.Next() {
+		var id uuid.UUID
+		if err := rows.Scan(&id); err != nil {
+			return nil, fmt.Errorf("list archive-eligible sessions: scan: %w", err)
+		}
+		ids = append(ids, id)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("list archive-eligible sessions: %w", err)
+	}
+	return ids, nil
+}
+
+// defaultSessionListPageSize and maxSessionListPageSize bound List's page
+// size (FR3/C15's pagination), the same shape as api/handlers/session.go's
+// defaultTranscriptLimit/maxTranscriptLimit: 0 in SessionPage.PageSize
+// means "server default", and no caller can force an unbounded single-page
+// read.
+const (
+	defaultSessionListPageSize = 50
+	maxSessionListPageSize     = 200
+)
+
+// ErrInvalidPageToken is returned by List when SessionPage.PageToken is
+// malformed or tampered with -- callers (api/handlers/session.go) map this
+// to codes.InvalidArgument, never a panic or a silent full-list fallback.
+var ErrInvalidPageToken = errors.New("invalid page_token")
+
+// sessionCursorDirection distinguishes List's two paging directions, both
+// encoded into the same opaque page_token/prev_page_token string (see
+// encodeSessionCursor) so SessionPage's single PageToken field can drive
+// either direction.
+type sessionCursorDirection byte
+
+const (
+	// sessionCursorNext resumes strictly AFTER (created_at, session_id) in
+	// the canonical (created_at DESC, session_id DESC) order -- i.e. it
+	// walks toward older sessions.
+	sessionCursorNext sessionCursorDirection = 'n'
+	// sessionCursorPrev resumes strictly BEFORE (created_at, session_id) in
+	// the canonical order -- i.e. it walks back toward newer sessions.
+	sessionCursorPrev sessionCursorDirection = 'p'
+)
+
+// encodeSessionCursor is List's opaque page_token/prev_page_token encoding:
+// direction plus the (created_at, session_id) keyset position of the row
+// the next call should resume from or before. Mirrors
+// tools/app_registry/server/repository/postgres/keyset_cursor.go's
+// base64(ts|id) shape, with a leading direction byte since List's cursor
+// must carry both directions through a single PageToken field.
+func encodeSessionCursor(dir sessionCursorDirection, createdAt time.Time, id uuid.UUID) string {
+	raw := fmt.Sprintf("%c|%d|%s", dir, createdAt.UnixNano(), id.String())
+	return base64.RawURLEncoding.EncodeToString([]byte(raw))
+}
+
+// decodeSessionCursor is encodeSessionCursor's inverse. Any malformed or
+// tampered token -- bad base64, wrong field count, unparseable timestamp/
+// UUID, or an unrecognized direction byte -- is reported as
+// ErrInvalidPageToken, never a panic.
+func decodeSessionCursor(token string) (dir sessionCursorDirection, createdAt time.Time, id uuid.UUID, err error) {
+	raw, decErr := base64.RawURLEncoding.DecodeString(token)
+	if decErr != nil {
+		return 0, time.Time{}, uuid.UUID{}, fmt.Errorf("decode session cursor: %w", ErrInvalidPageToken)
+	}
+	parts := strings.SplitN(string(raw), "|", 3)
+	if len(parts) != 3 || len(parts[0]) != 1 {
+		return 0, time.Time{}, uuid.UUID{}, fmt.Errorf("decode session cursor: malformed cursor: %w", ErrInvalidPageToken)
+	}
+	switch sessionCursorDirection(parts[0][0]) {
+	case sessionCursorNext, sessionCursorPrev:
+		dir = sessionCursorDirection(parts[0][0])
+	default:
+		return 0, time.Time{}, uuid.UUID{}, fmt.Errorf("decode session cursor: unrecognized direction: %w", ErrInvalidPageToken)
+	}
+	nanos, err := strconv.ParseInt(parts[1], 10, 64)
+	if err != nil {
+		return 0, time.Time{}, uuid.UUID{}, fmt.Errorf("decode session cursor: %w", ErrInvalidPageToken)
+	}
+	id, err = uuid.Parse(parts[2])
+	if err != nil {
+		return 0, time.Time{}, uuid.UUID{}, fmt.Errorf("decode session cursor: %w", ErrInvalidPageToken)
+	}
+	return dir, time.Unix(0, nanos), id, nil
+}
+
+// List applies filter in SQL -- never an unbounded fetch filtered in Go --
+// keyset-paginated on (created_at DESC, session_id DESC) per SessionPage/
+// PageInfo's doc comments (FR3/C15, issue #2241). It fetches one row past
+// page's size to decide whether a further page exists in the query's own
+// direction without a separate COUNT(*) query.
+//
+// A backward (PrevPageToken-driven) page is queried in ascending order so
+// the LIMIT finds the rows immediately preceding the cursor, then reversed
+// in Go back into the canonical descending order before being returned --
+// callers never see the query's internal direction.
+func (s sessionStore) List(ctx context.Context, filter SessionFilter, page SessionPage) ([]*Session, PageInfo, error) {
+	pageSize := page.PageSize
+	switch {
+	case pageSize <= 0:
+		pageSize = defaultSessionListPageSize
+	case pageSize > maxSessionListPageSize:
+		pageSize = maxSessionListPageSize
+	}
+
+	var (
+		hasCursor bool
+		backward  bool
+		cursorTS  time.Time
+		cursorID  uuid.UUID
+	)
+	if page.PageToken != "" {
+		dir, ts, id, err := decodeSessionCursor(page.PageToken)
+		if err != nil {
+			return nil, PageInfo{}, err
+		}
+		hasCursor = true
+		backward = dir == sessionCursorPrev
+		cursorTS, cursorID = ts, id
+	}
+
+	query := `SELECT ` + sessionColumns + ` FROM sessions WHERE 1=1`
+	var args []any
+	if filter.AgentID != nil {
+		args = append(args, *filter.AgentID)
+		query += fmt.Sprintf(" AND agent_id = $%d", len(args))
+	}
+	if filter.State != nil {
+		args = append(args, string(*filter.State))
+		query += fmt.Sprintf(" AND status = $%d", len(args))
+	}
+	if filter.StartedByKind != nil {
+		args = append(args, string(*filter.StartedByKind))
+		query += fmt.Sprintf(" AND subject_kind = $%d", len(args))
+	}
+	if filter.StartedAfter != nil {
+		args = append(args, *filter.StartedAfter)
+		query += fmt.Sprintf(" AND created_at >= $%d", len(args))
+	}
+	if filter.StartedBefore != nil {
+		args = append(args, *filter.StartedBefore)
+		query += fmt.Sprintf(" AND created_at < $%d", len(args))
+	}
+	if hasCursor {
+		args = append(args, cursorTS, cursorID)
+		if backward {
+			query += fmt.Sprintf(" AND (created_at, session_id) > ($%d::timestamptz, $%d::uuid)", len(args)-1, len(args))
+		} else {
+			query += fmt.Sprintf(" AND (created_at, session_id) < ($%d::timestamptz, $%d::uuid)", len(args)-1, len(args))
+		}
+	}
+	if backward {
+		query += " ORDER BY created_at ASC, session_id ASC"
+	} else {
+		query += " ORDER BY created_at DESC, session_id DESC"
+	}
+	args = append(args, pageSize+1)
+	query += fmt.Sprintf(" LIMIT $%d", len(args))
+
+	rows, err := s.pool.Query(ctx, query, args...)
+	if err != nil {
+		return nil, PageInfo{}, fmt.Errorf("list sessions: %w", err)
+	}
+	defer rows.Close()
+
+	var out []*Session
+	for rows.Next() {
+		sess, err := scanSession(rows)
+		if err != nil {
+			return nil, PageInfo{}, fmt.Errorf("list sessions: scan: %w", err)
+		}
+		out = append(out, sess)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, PageInfo{}, fmt.Errorf("list sessions: %w", err)
+	}
+
+	hasMore := len(out) > pageSize
+	if hasMore {
+		out = out[:pageSize]
+	}
+	if backward {
+		// The query ran ascending to find the rows immediately preceding
+		// the cursor; reverse back into the canonical descending order.
+		for i, j := 0, len(out)-1; i < j; i, j = i+1, j-1 {
+			out[i], out[j] = out[j], out[i]
+		}
+	}
+
+	var info PageInfo
+	if len(out) > 0 {
+		first, last := out[0], out[len(out)-1]
+
+		// NextPageToken: a row exists after `last` in canonical order. A
+		// forward query's own extra-row fetch (hasMore) says so directly;
+		// a backward query always has a next page -- the one its cursor
+		// navigated back from.
+		if (!backward && hasMore) || (backward && hasCursor) {
+			info.NextPageToken = encodeSessionCursor(sessionCursorNext, last.CreatedAt, last.SessionID)
+		}
+		// PrevPageToken: a row exists before `first` in canonical order. A
+		// backward query's own extra-row fetch (hasMore) says so directly;
+		// a forward query has a previous page whenever a cursor drove it
+		// at all (an empty token is only ever the very first page).
+		if (backward && hasMore) || (!backward && hasCursor) {
+			info.PrevPageToken = encodeSessionCursor(sessionCursorPrev, first.CreatedAt, first.SessionID)
+		}
+	}
+
+	return out, info, nil
+}

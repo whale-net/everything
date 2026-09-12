@@ -276,6 +276,259 @@ the filter switched to **realm roles**.
 
 ---
 
+## 9. Service accounts: telling them apart from human callers
+
+A service running behind `grpcauth` (e.g. whagent-net's `api`, FR6/#2243)
+sometimes needs to know, per call, whether the caller is a human or a
+Keycloak client-credentials service account -- not just *which* client/role
+it holds. `grpcauth.Claims` carries this as two additive fields populated by
+`oidcVerifier.Verify` (`auth.go`):
+
+| Field | Source claim | What it is |
+|---|---|---|
+| `Claims.ClientID` | `azp` (falls back to `client_id`) | The client the token was issued to -- set on every token, human or service account. |
+| `Claims.IsServiceAccount` | `preferred_username` | `true` iff `preferred_username` starts with `service-account-`. |
+
+**The rule, and why it's reliable:** every service account Keycloak attaches
+to a confidential client (step 4a, "Service accounts roles") gets a Keycloak
+*user* named `service-account-<client-id>` -- Keycloak's own fixed naming,
+not something you configure. A token minted for that user's
+`client_credentials` grant carries that name in `preferred_username`, and no
+human user can be named this way (Keycloak reserves the prefix). This is the
+*only* signal available on the token itself: there is no separate token
+type, scope, or claim, and `ClientID` alone is not enough, since a human
+caller's token has one too (whichever client the human authenticated
+through).
+
+`grpcauth.Claims.IsServiceAccount` is what a handler should branch on --
+never `ClientID` presence -- exactly as `whagent_net/api/handlers/session.go`'s
+`callerSubject` does to pick `SubjectKindService` vs. `SubjectKindHuman`
+(FR6/#2243). `AuthModeNone`'s injected dev Claims never set
+`IsServiceAccount` (it defaults `false`), so local/Tilt development without a
+real Keycloak always looks like a human caller -- there is no dev-mode way to
+locally exercise a service-account-classified call short of running against
+a real `oidc`-mode Keycloak (see `whagent_net/README.md` § "Client
+credentials (service accounts)" for how one service documents that path).
+
+**Role checks are identical either way.** A service account's realm role
+still needs the same "Filter by realm roles" assignment as step 4c, just to
+the client's own service account user (**Service accounts roles** tab, not a
+separate human-vs-service role) -- `grpcauth` reads `realm_access.roles`
+regardless of who the caller is, so there is no special-casing needed on the
+authorization side, only on the identity side.
+
+---
+
+## 10. Token exchange (RFC 8693): a client that mints tokens for other identities
+
+**`whagent_net` no longer uses this (plan #2421, FR19).** Through issue
+#2249 it used exactly this mechanism (`whagent_net/mcp/server/tokenexchange.go`'s
+`KeycloakExchanger`) to turn an already-resolved `(iss, sub)` pair into a
+real, verifiable Keycloak access token before calling `api`. Issue #2430
+deleted that code and replaced it with per-domain delegated grants
+(§ 11 below, `libs/go/grpcauth.DelegatedGrantSource`) — the realm no
+longer needs this section's admin permission grant (10b) enabled for
+`whagent_net`'s sake, and no other consumer in this repo uses it either
+(a repo-wide grep for `KeycloakExchanger`/`requested_subject`/RFC 8693's
+grant-type string turns up no other live caller as of this writing).
+This section is kept as generic reference documentation for the
+mechanism itself, in case a future service has a genuine need for
+one-client-mints-for-arbitrary-identity — not because anything in this
+repo currently depends on it.
+
+This is a different problem from everything above: instead of a client
+proving *its own* identity, here a confidential client authenticates as
+itself and asks Keycloak to mint a token asserting **someone else's**
+identity, by user id (`requested_subject`) — the general RFC 8693
+mechanism, unrelated to any specific service's use of it.
+
+**This is a materially bigger blast radius than a normal client** (step
+4): the credential that authenticates this client can mint a token as
+*any* user in the realm, not just describe the client's own permissions.
+Treat it accordingly — a dedicated client, never reused for anything
+else, with the secret held only by the one process that needs it, read
+from the environment only, never logged, never echoed in an error.
+
+### 10a. Create the client
+
+Same as step 4a (**Clients → Create client**, confidential, **Client
+authentication** on, **Service accounts roles** on, no standard/implicit
+flow needed) — but do not reuse an existing caller client. Give it a name
+that says what it's for (e.g. `whagent-net-mcp-token-exchange`), not the
+name of the service that happens to hold it.
+
+### 10b. Grant it token-exchange / impersonation permission
+
+In newer Keycloak versions this lives under the realm's **Client policies**
+/ fine-grained admin permissions (**Realm settings → User profile** is not
+it — look for **Permissions** on the client itself, or the realm-level
+**Authorization** tab, depending on your Keycloak version): enable
+permissions on the client, then create (or reuse) a client policy that
+allows this client's service account to exchange tokens for arbitrary
+users. Exact admin-console navigation drifts between Keycloak versions —
+search your version's docs for "token exchange" or "impersonation" if the
+above doesn't match what you see; the underlying grant this section
+configures does not change between versions, only where you click to
+enable it.
+
+### 10c. Verify with curl before touching application code
+
+```bash
+curl -s -X POST "$KEYCLOAK_URL/realms/$REALM/protocol/openid-connect/token" \
+  -d grant_type=urn:ietf:params:oauth:grant-type:token-exchange \
+  -d client_id=whagent-net-mcp-token-exchange \
+  -d client_secret=$CLIENT_SECRET \
+  -d requested_subject=$TARGET_USER_ID \
+  -d requested_token_type=urn:ietf:params:oauth:token-type:access_token
+```
+
+A successful exchange returns an ordinary OAuth2 token response
+(`access_token`, `token_type`, `expires_in`); decode `access_token` (step
+7's `jwt` one-liner) and confirm its `sub` claim is `$TARGET_USER_ID`, not
+this client's own service-account user. A `403`/`invalid_client` here
+means 10b's permission grant did not take — fix that before wiring up
+any application code, exactly like step 7's guidance for a normal client.
+
+---
+
+## 11. Delegated grants (offline_access): browser consent for a client that acts later
+
+This is the setup behind `DelegatedGrantSource` (`delegatedgrant.go`,
+`delegatedgrant_authcode.go`): a one-time browser authorization-code + PKCE
+consent flow that requests `offline_access`, ending in a refresh token this
+package's `Store` persists so a confidential client can act as that subject
+later without another browser round trip.
+
+**Confidential client, not public (FR14).** Client authentication On (step
+4a) is required here for a different reason than step 10's token-exchange
+client: a server-side web app minting a server-persisted credential has
+somewhere to hold a secret, unlike `#1183`'s CLI-redirect device flow, which
+redirects back into a process with no place to keep one. Keycloak also
+simply refuses to issue offline tokens to a public client, but the design
+reason above is why this client should be confidential even where Keycloak
+wouldn't itself enforce it.
+
+**Each consuming domain registers its own client.** Same "one Keycloak
+client per caller identity" principle as step 4, applied to a browser-facing
+client instead of a machine-to-machine one: every domain that wants this
+flow creates its **own** client with its own redirect URI(s), rather than
+multiple domains sharing one client whose redirect-URI allow-list
+accumulates entries for all of them. Splitting here buys the same property
+step 4 does — a problem with one domain's client (a leaked secret, a
+misconfigured redirect URI) does not widen to every other domain using this
+flow.
+
+**The redirect-URI allow-list is a security control, not a configuration
+convenience (NFR5).** Keycloak refusing to redirect anywhere outside
+**Settings → Valid redirect URIs** is what stops an attacker-supplied
+`redirect_uri` from ever completing the exchange — treat that list with the
+same care you'd give a secret, not as a value to loosen "just for now"
+during testing.
+
+**Refresh-token rotation is assumed enabled for this client (FR13).** This
+package's non-interactive refresh path expects Keycloak to issue a new
+refresh token on every refresh and writes it back before returning the
+access token; this is Keycloak's own default and the more defensible
+setting for a confidential client, so leave it on unless you have a
+specific reason not to. Disabling rotation does not break this package, but
+it gives up the security property rotation buys for nothing this package
+needs in exchange.
+
+**The one setting people miss:** requesting the `offline_access` scope is not
+enough by itself. If Keycloak's token response comes back with no
+`refresh_token` at all,
+`CompleteAuthorization` fails with `ErrAuthorizationNoRefreshToken` — check,
+in order:
+
+1. **Client authentication: On** (step 4a) — offline tokens are only issued
+   to confidential clients.
+2. **Standard flow: checked** on this client (unlike the machine-to-machine
+   clients in step 4a, this one *does* need the browser login flow enabled).
+3. **Client scopes** tab → the client has the built-in `offline_access`
+   client scope assigned (Keycloak ships it as an optional scope on new
+   clients by default; if someone removed it, or your realm's default client
+   scope set doesn't include it, add it back as an optional or default
+   scope).
+4. The user actually completed consent for that scope — if **Consent
+   Required** is on for this client and the grantor didn't check the
+   "Offline access" consent checkbox, Keycloak silently drops the refresh
+   token from the response instead of erroring.
+
+Redirect URI is allow-listed on the Keycloak client (**Settings → Valid
+redirect URIs**) and must exactly match `DelegatedGrantConfig.RedirectURI` —
+this package never sends a redirect URI Keycloak wasn't already told to
+expect (NFR5).
+
+See ["Applying this to a new service"](#applying-this-to-a-new-service) for
+the full per-service checklist this section fits into: this section replaces
+that checklist's step 4 (per-caller-client creation) for a delegated-grant
+client specifically. Steps 1–3 and 5–10 apply unchanged, including step 5's
+audience mapper — an access token minted through this flow still needs to
+carry the right `aud` for whatever downstream service actually consumes it.
+
+### 11a. Realm-side runbook: `whagent_net`'s shared grant client + admin role (plan #2421)
+
+This is deployment/runbook work, not a coded FR (plan #2421's own "Out of
+scope" list names exactly this) — `whagent_net/ARCHITECTURE.md`'s
+"Identity and auth chaining" section and `whagent_net/ENV.md`'s
+"Delegated grant" section document the *code* that consumes what this
+runbook creates; nothing here is enforced by a test.
+
+**1. One shared client, deliberately not one per domain (NFR5).**
+`whagent_net` is a **named exception** to this file's usual "one client
+per caller identity" principle (step 3/§ 11's "each consuming domain
+registers its own client"): create exactly **one** confidential client
+(e.g. `whagent-net-grant`) for the whole deployment, following § 11's
+setup above (Client authentication On, Standard flow checked, no service
+accounts flow needed — this is browser-facing) — not one per
+`AgentDefinition.Scope` (`audience_score_system`, a future `manmanv2`,
+etc.). Scope isolation for this flow is carried entirely by the grant
+key derived from `AgentDefinition.Scope` (FR4/NFR2,
+`//whagent_net/grantkey`), not by Keycloak client boundaries — see
+`ARCHITECTURE.md`'s NFR2/NFR5 writeup for why that's a deliberate,
+reviewed trade-off, not an oversight of this file's usual rule.
+
+2. **Enable `offline_access`.** Confirm this client's **Client scopes**
+   tab carries the built-in `offline_access` scope (assigned by default
+   on a new client; add it back if your realm's default scope set
+   removed it) — § 11's "the one setting people miss" checklist applies
+   here unchanged.
+3. **Redirect URI.** Allow-list exactly `ui`'s `GET
+   /mcp/consent/callback` route (`WHAGENT_UI_PUBLIC_URL` +
+   `/mcp/consent/callback`) under **Settings → Valid redirect URIs** —
+   this must be byte-identical to `WHAGENT_GRANT_REDIRECT_URI`
+   (`whagent_net/ENV.md`).
+4. **Credentials.** Copy the client secret into
+   `WHAGENT_GRANT_CLIENT_SECRET` (Kubernetes secret, identically on both
+   `ui` and `mcp` — `WHAGENT_GRANT_CLIENT_ID`/`_REDIRECT_URI`/
+   `_ENCRYPTION_KEY` must also match on both binaries, per `ENV.md`).
+5. **Audience mapper.** Same as step 4d above — an access token minted
+   through this client still needs to carry `api`'s audience for `api`
+   to accept it once forwarded.
+
+**Admin realm role (FR14/FR15/NFR3, gates issue #2433's `/admin/grants`
+page).**
+
+1. **Realm roles** → **Create role** → name it (e.g.
+   `whagent-grants-admin`, following this file's `whagent-`-prefix
+   convention for realm-global names).
+2. Grant it to specific operators via a **group** (§ 5: "Humans get roles
+   via groups, never individually") — create or reuse an admin group,
+   add the role to its **Role mapping**, add the intended admins to the
+   group. There is deliberately no "everyone is admin" default: an
+   operator with no group membership simply cannot reach the page.
+3. Set `WHAGENT_GRANT_ADMIN_ROLE` (`ui`, `ENV.md`) to the exact role name
+   from step 1 — left unset, the admin page 403s for every operator, so
+   this variable and the role's existence are both required together.
+4. Verify the same way step 7 above does: obtain a token for a group
+   member and confirm the role name appears in `realm_access.roles`.
+   `ui`'s own check (`ARCHITECTURE.md`'s NFR3 writeup) reads this off a
+   freshly-refreshed access token on every request, not a cached
+   snapshot, so revoking group membership takes effect on the very next
+   request rather than up to a day later.
+
+---
+
 ## Applying this to a new service
 
 The checklist, stripped of the example:
@@ -297,6 +550,11 @@ The checklist, stripped of the example:
 9. Verify with the curl in step 7 **before** touching application code.
 10. Enforce in handlers, and write a test that asserts the *low*-privilege role
     is **rejected** — the negative test is the one that proves the boundary.
+
+**Setting up a delegated-grant client instead** (browser consent for a
+client that acts non-interactively later, not a per-request caller
+identity)? Use [section 11](#11-delegated-grants-offline_access-browser-consent-for-a-client-that-acts-later)'s
+checklist for step 4 above — the rest of this list still applies unchanged.
 
 ## Related
 

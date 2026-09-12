@@ -1,0 +1,7 @@
+{
+  "name": "whagent-net",
+  "description": "Streamable-HTTP MCP access to whagent-net's Agent API (start_session/send_turn/stop_session/get_session/read_transcript) across tilt/dev/prod",
+  "author": {
+    "name": "whale_net"
+  }
+}

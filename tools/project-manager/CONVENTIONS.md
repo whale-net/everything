@@ -95,6 +95,10 @@ Over-budget scope has one destination and never a silent drop. Scope notes are P
 
 Architect's **Load-bearing check** (architect.md § Process) is the pass that makes small milestones safe rather than merely small: a draft that forecloses a protected `Later` capability gets a numbered blocking question. The bar is *forecloses* — requiring a migration, a breaking wire change, or unpicking a decision threaded through the milestone — not merely *does not yet implement*.
 
+### krill's own milestone read is live, every other domain's is a file (FR21)
+
+`design`'s milestone-read step (SKILL.md step 2, and producer.md's "Milestone-scoped intake") reads `<domain>/product/03-roadmap.md` for every domain **except krill's own** — for krill, that same step calls krill's own MCP `get_product_slice` tool (FR5-FR9, root plan issue #2485's krill M1) instead of reading the file, because krill is the one domain whose product brief lives in krill itself; reading the file there would mean krill's self-hosting loop is never actually exercised by its own tooling. This is a **narrow, deliberate exception**, not a first step toward migrating every domain's read off the file — see krill's root plan issue #2485's Out of scope ("Wiring an existing consumer to call C3, beyond the one call site FR21 adds"). Do not "fix" the inconsistency by wiring another domain's milestone read to a live call, and do not revert krill's read back to the file to make the pipeline's read paths uniform again — both are the exact regression this convention exists to flag. See `krill/ARCHITECTURE.md` "The design skill's live milestone read (FR21)" for the mechanics and the one known gap (no live per-milestone `Delivers` filter yet, M3's C13/C28).
+
 ### Roadmap ledger
 
 Status is tracked on the **product tracking issue**, never in the committed spec — it changes on every milestone transition, and a file edit would mean a PR for every status flip. It is also never a body edit: `implement` already runs multiple tasks in parallel, and nothing stops two milestones being designed or implemented at once, so a read-modify-write update to one shared body table would race. Instead every status change is a **new comment**, in this exact form:
@@ -128,6 +132,14 @@ Status moves `drafted → reconciled → merged`, one comment per transition, wr
 - **producer** — `merged (#<pr-number>)` once the PR merges — the `Amended: <summary> (#<pr-number>)` comment still carries the human-readable summary; this line just makes the state grep-able alongside the others.
 
 Same rule as the roadmap ledger: the **last** `Amendment: <slug> →` comment on the issue wins; no such comment for a slug means that amendment hasn't reached that stage yet.
+
+**Out-of-band adoptions.** Not every change to committed behavior comes from the drafted → reconciled loop above — a hand-applied fix or a small correction made directly against a domain sometimes moves the ground truth ahead of the spec before anyone opens `/project-manager:product`. Rather than let that drift silently, whoever makes (or notices) the change posts the ledger comment immediately, entering the lifecycle at a later stage instead of at `drafted` since there is nothing left to draft or reconcile:
+
+```
+Amendment: <slug> → adopted-but-pending-amendment (<link-or-none>)
+```
+
+This status means "already true, spec not yet caught up" — it is not itself a merge; the committed files still need editing to match. It resolves the same way any other amendment does: `/project-manager:product`'s amendment step (SKILL.md step 8) checks for outstanding `adopted-but-pending-amendment` entries before drafting anything and bundles them into whatever it is amending, closing each with the usual terminal `Amendment: <slug> → merged (#<pr-number>)` comment. If 3 or more are outstanding with no unrelated amendment to piggyback on, that count is itself the trigger to run `/project-manager:product <issue-number>` and fold them in — the ledger never carries more than 2 pending adoptions at once.
 
 ### Keeping ledgers readable
 
@@ -485,14 +497,14 @@ Each task issue gets its own branch and, once pushed, its own small reviewable P
 3. **Creating a task's branch and its worktree** (only on the first phase dispatched for that task, after the lookup above turns up nothing — later phases reuse the branch/worktree already created), entirely inside a dedicated worktree — this never touches the shared checkout:
    ```sh
    git fetch origin main
-   git worktree add .claude/worktrees/<task-issue-number> -b pm-<root-issue-number>/<task-issue-number>-<slug> <parent>
+   git worktree add .claude/worktrees/<task-issue-number> -b pm-<root-issue-number>/<task-issue-number>-<slug> <fork-point>
    ```
-   `<parent>` is:
-   - `main`, if none of the task's `Depends on:` issues have an open branch yet.
-   - That dependency's branch (`pm-<root-issue-number>/<dep-issue-number>-<dep-slug>`), if exactly one does.
+   `<fork-point>` is:
+   - `origin/main`, if none of the task's `Depends on:` issues have an open branch yet — a task targeting trunk always forks off the freshly fetched `origin/main`, never the shared checkout's local `main` ref: the fetch above only advances `origin/main`, and local `main` drifts out of date as soon as anything else lands on trunk (another plan's continuous merge, a human push), so a branch forked off it starts behind trunk and spends its life resolving conflicts that don't exist against the real base. That task's `<parent>` for step 5's PR base is `main` — a PR base is always a branch name, never an `origin/<name>` ref.
+   - That dependency's branch (`pm-<root-issue-number>/<dep-issue-number>-<dep-slug>`), if exactly one does — here `<fork-point>` and `<parent>` are the same branch.
    - Any one dependency's branch, if more than one does — then also pull in the rest, inside the new worktree, before dispatching the worker: `git -C .claude/worktrees/<task-issue-number> merge --no-edit pm-<root-issue-number>/<other-dep-issue-number>-<other-dep-slug>` for each additional dependency. If this merge conflicts, resolve it per the division of responsibility above before dispatching the worker — an unresolved conflict must never be handed to a worker to sort out.
 
-   `git worktree add -b <branch> <path> <parent>` creates the branch and its dedicated working directory in one step. Unlike checking out `<parent>` in the shared checkout first (the old approach), this never leaves the shared checkout sitting on a task branch mid-operation — so two candidates' branches can be created concurrently without racing each other, and a crash mid-creation leaves the shared checkout untouched. Task branches aren't pushed or given a PR at creation time; `mergepush` is what pushes each one and opens its PR, in step 5, once it's actually ready to integrate.
+   `git worktree add -b <branch> <path> <fork-point>` creates the branch and its dedicated working directory in one step. Unlike checking out `<fork-point>` in the shared checkout first (the old approach), this never leaves the shared checkout sitting on a task branch mid-operation — so two candidates' branches can be created concurrently without racing each other, and a crash mid-creation leaves the shared checkout untouched. Task branches aren't pushed or given a PR at creation time; `mergepush` is what pushes each one and opens its PR, in step 5, once it's actually ready to integrate.
 
 4. **Per-phase commits** happen inside the worktree exactly as described in § Worker lifecycle below (`scaffold:`, `feat:`, `test:` commits on the task's own branch).
 

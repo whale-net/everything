@@ -363,7 +363,10 @@ func (app *App) setupRoutes(mux *http.ServeMux) {
 
 	// Protected routes - Home/Dashboard
 	mux.HandleFunc("/", app.auth.RequireAuthFunc(app.auth.WithAccessToken(app.handleHome)))
-	mux.HandleFunc("/sessions", app.auth.RequireAuthFunc(app.auth.WithAccessToken(app.handleSessions)))
+	// "/sessions" retired to a redirect onto "/activity" (task #2372, FR17)
+	// -- "/sessions/" (the detail page and its sub-routes) is untouched;
+	// see handlers_navigation_redirects.go's doc comment for why.
+	mux.HandleFunc("/sessions", app.auth.RequireAuthFunc(app.auth.WithAccessToken(app.handleSessionsRedirect)))
 	mux.HandleFunc("/sessions/", app.auth.RequireAuthFunc(app.auth.WithAccessToken(app.handleSessionDetail)))
 	// Registered ahead of (and more specific than) the "/sessions/" catch-all
 	// above: Go's ServeMux dispatches on longest-matching-pattern, so
@@ -393,6 +396,21 @@ func (app *App) setupRoutes(mux *http.ServeMux) {
 
 	// Note: Log streaming endpoint is handled by handleSessionDetail which routes to handleSessionLogsStream
 
+	// Activity: fleet-wide Live now/History view (FR14, task #2271). A
+	// fresh top-level path -- no collision with "/sessions/", "/sgc/" or
+	// "/games/"'s catch-alls, so it carries none of those routes'
+	// longest-pattern-wins precedence concerns (see the "/sessions/
+	// deployments/" comment above for the shape of that bite).
+	mux.HandleFunc("/activity", app.auth.RequireAuthFunc(app.auth.WithAccessToken(app.handleActivity)))
+	// SSE route for Activity's fleet-wide live status (FR15, NFR10;
+	// handlers_activity_live.go, #2277). Option (b) of the issue's two
+	// choices: a sibling "/api/live/" route reusing app.sseHub and
+	// htmxsse.Handler with a fleet-wide topic derivation, rather than
+	// overloading "/api/live/deployments"'s server-scoped one. Wrapped with
+	// RequireAuthFunc only, never WithAccessToken -- same reason as
+	// "/api/live/deployments" above.
+	mux.HandleFunc("/api/live/activity", app.auth.RequireAuthFunc(app.handleActivityLiveSSE))
+
 	// Protected routes - Games
 	mux.HandleFunc("/games", app.auth.RequireAuthFunc(app.auth.WithAccessToken(app.handleGames)))
 	mux.HandleFunc("/games/new", app.auth.RequireAuthFunc(app.auth.WithAccessToken(app.handleGameNew)))
@@ -405,12 +423,32 @@ func (app *App) setupRoutes(mux *http.ServeMux) {
 	// Documentation routes
 	mux.HandleFunc("/docs/config-strategies", app.auth.RequireAuthFunc(app.auth.WithAccessToken(app.handleConfigStrategiesDocs)))
 
-	// Protected routes - Servers
-	mux.HandleFunc("/servers", app.auth.RequireAuthFunc(app.auth.WithAccessToken(app.handleServers)))
-	mux.HandleFunc("/servers/", app.auth.RequireAuthFunc(app.auth.WithAccessToken(app.handleServerDetail)))
+	// Protected routes - Servers: retired to redirects onto Infrastructure
+	// (task #2372, FR16) -- "/servers/<id>" preserves the host id as
+	// "?manage=<id>" (Infrastructure has no per-host route of its own); see
+	// handlers_navigation_redirects.go's doc comment.
+	mux.HandleFunc("/servers", app.auth.RequireAuthFunc(app.auth.WithAccessToken(app.handleServersRedirect)))
+	mux.HandleFunc("/servers/", app.auth.RequireAuthFunc(app.auth.WithAccessToken(app.handleServerDetailRedirect)))
+
+	// Protected routes - Infrastructure (#2369, M6 FR1/FR2/FR3/FR4, C29):
+	// now the nav-facing surface "/servers" redirects onto (task #2372,
+	// FR16). "/infrastructure/{id}/update-address" and
+	// "/infrastructure/{id}/ports/*" (task #2372) fold in the host
+	// public-address and allowed-port-ranges management that
+	// pages/server_detail.templ used to own, before that page retired --
+	// see pages.InfrastructureHost's doc comment.
+	mux.HandleFunc("/infrastructure", app.auth.RequireAuthFunc(app.auth.WithAccessToken(app.handleInfrastructure)))
+	mux.HandleFunc("/infrastructure/", app.auth.RequireAuthFunc(app.auth.WithAccessToken(app.handleInfrastructureAction)))
 
 	// Protected routes - Workshop
-	mux.HandleFunc("/workshop/library", app.auth.RequireAuthFunc(app.auth.WithAccessToken(app.handleWorkshopLibrary)))
+	// "/workshop" (task #2362, FR6/FR7): the redesigned top-level page.
+	// "/workshop/library" retired to a redirect onto it (task #2372, FR16)
+	// -- every other "/workshop/*" sub-route below stays exactly as
+	// registered (NFR6); see handlers_navigation_redirects.go's doc
+	// comment for why "/workshop/library" is the one Workshop entry point
+	// that redirects.
+	mux.HandleFunc("/workshop", app.auth.RequireAuthFunc(app.auth.WithAccessToken(app.handleWorkshopPage)))
+	mux.HandleFunc("/workshop/library", app.auth.RequireAuthFunc(app.auth.WithAccessToken(app.handleWorkshopLibraryRedirect)))
 	mux.HandleFunc("/workshop/search", app.auth.RequireAuthFunc(app.auth.WithAccessToken(app.handleWorkshopSearch)))
 	mux.HandleFunc("/workshop/addon", app.auth.RequireAuthFunc(app.auth.WithAccessToken(app.handleWorkshopAddonDetail)))
 	mux.HandleFunc("/workshop/library-detail", app.auth.RequireAuthFunc(app.auth.WithAccessToken(app.handleLibraryDetail)))
@@ -434,16 +472,51 @@ func (app *App) setupRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("/workshop/api/presets-for-game", app.auth.RequireAuthFunc(app.auth.WithAccessToken(app.handlePresetsForGame)))
 	mux.HandleFunc("/workshop/batch-status", app.auth.RequireAuthFunc(app.auth.WithAccessToken(app.handleWorkshopBatchStatus)))
 	mux.HandleFunc("/workshop/cache", app.auth.RequireAuthFunc(app.auth.WithAccessToken(app.handleWorkshopCache)))
+	// Cache Blade fragment (task #2362, FR7 C35): opened via hx-get from
+	// "/workshop" so cache-backed install is executable without navigating
+	// to "/workshop/cache" (see handleWorkshopCacheBlade's doc comment).
+	mux.HandleFunc("/workshop/cache-blade", app.auth.RequireAuthFunc(app.auth.WithAccessToken(app.handleWorkshopCacheBlade)))
 	mux.HandleFunc("/workshop/cache/verify", app.auth.RequireAuthFunc(app.auth.WithAccessToken(app.handleWorkshopCacheVerify)))
 	mux.HandleFunc("/workshop/cache/evict", app.auth.RequireAuthFunc(app.auth.WithAccessToken(app.handleWorkshopCacheEvict)))
 	mux.HandleFunc("/workshop/bulk-add-collection", app.auth.RequireAuthFunc(app.auth.WithAccessToken(app.handleBulkAddCollection)))
 	mux.HandleFunc("/workshop/batch-create-addons", app.auth.RequireAuthFunc(app.auth.WithAccessToken(app.handleBatchCreateAddons)))
+	// FR12/US6 conflict resolution (task #2368): the Server-Manager-facing
+	// half of the SGC->GameConfig library migration (#2365 shipped
+	// detection). See handlers_workshop_conflicts.go's doc comments for
+	// the union/override resolution shape.
+	mux.HandleFunc("/workshop/conflicts", app.auth.RequireAuthFunc(app.auth.WithAccessToken(app.handleWorkshopLibraryConflicts)))
+	mux.HandleFunc("/workshop/conflicts/resolve", app.auth.RequireAuthFunc(app.auth.WithAccessToken(app.handleResolveLibraryMigrationConflict)))
 
-	// Protected routes - SGC detail
+	// Protected routes - SGC detail. The "/sgc/" and "/sgc/<id>" pages
+	// themselves retired (task #2279, FR16): handleSGCRoutes' fallback now
+	// redirects rather than rendering a page (see its doc comment below).
+	// The three SGC-scoped library routes that used to be registered here
+	// (/sgc/add-library, /sgc/remove-library, /sgc/api/available-libraries)
+	// retired with sgc_workshop_libraries (M6 #2370, NFR1): library
+	// attachment is now managed from the Games page panel (#2367). Any
+	// stale request to those paths now falls through to the "/sgc/"
+	// catch-all below and redirects there via handleSGCRoutes' fallback
+	// rather than 404ing.
 	mux.HandleFunc("/sgc/", app.auth.RequireAuthFunc(app.auth.WithAccessToken(app.handleSGCRoutes)))
-	mux.HandleFunc("/sgc/add-library", app.auth.RequireAuthFunc(app.auth.WithAccessToken(app.handleAddLibraryToSGC)))
-	mux.HandleFunc("/sgc/remove-library", app.auth.RequireAuthFunc(app.auth.WithAccessToken(app.handleSGCRemoveLibrary)))
-	mux.HandleFunc("/sgc/api/available-libraries", app.auth.RequireAuthFunc(app.auth.WithAccessToken(app.handleSGCAvailableLibraries)))
+
+	// Deployment-first redirect routes (task #2279, amendment A3): the new
+	// deployment-first names for the two retired SGC pages above. Both
+	// carry the identical redirect behaviour as their "/sgc/..." equivalent
+	// (handlers_deployment_redirects.go) -- registered under their own
+	// prefix, distinct from "/api/deployments/" (handleDeploymentRowFragment)
+	// and from the existing "/sgc/" and "/games/" catch-alls, per
+	// main.go:384-392's precedence note above.
+	mux.HandleFunc("/deployments", app.auth.RequireAuthFunc(app.auth.WithAccessToken(app.handleDeploymentsListRedirect)))
+	mux.HandleFunc("/deployments/", app.auth.RequireAuthFunc(app.auth.WithAccessToken(app.handleDeploymentDetailRedirectRoute)))
+
+	// Protected routes - Deployment Settings blade lazy fetch (task
+	// #2274, FR11/FR2). Deliberately a separate top-level prefix, not
+	// nested under /sgc/: this URL is embedded directly in the Games
+	// page's initial render (the blade's placeholder,
+	// pages.DeploymentSettingsEnvPlaceholder's hx-get), and FR2 forbids
+	// "SGC" appearing in any display text that page renders -- including
+	// a URL a user could read in devtools.
+	mux.HandleFunc("/deployment-settings/", app.auth.RequireAuthFunc(app.auth.WithAccessToken(app.handleDeploymentSettingsRoutes)))
 
 	// Backup config management
 	mux.HandleFunc("/backup-configs/create", app.auth.RequireAuthFunc(app.auth.WithAccessToken(app.handleBackupConfigCreate)))
@@ -454,7 +527,15 @@ func (app *App) setupRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("/api/dashboard-sessions", app.auth.RequireAuthFunc(app.auth.WithAccessToken(app.handleDashboardSessions)))
 }
 
-// handleSGCRoutes dispatches /sgc/* routes
+// handleSGCRoutes dispatches /sgc/* routes. The write endpoints nested
+// under /sgc/{id}/... below are untouched by #2279's page retirement -- the
+// Deployment Settings blade's env writes
+// (pages/deployment_settings.templ) still post to /sgc/{id}/env/set and
+// /sgc/{id}/env/remove, so this dispatch table must keep working exactly as
+// it did before. Only the fallback case -- no recognized sub-path, i.e. the
+// bare "/sgc/" list or a bare "/sgc/{id}" detail request -- changed: it used
+// to render a page (handleSGCDetail) and now redirects
+// (handlers_deployment_redirects.go), per FR16 and amendment A1.
 func (app *App) handleSGCRoutes(w http.ResponseWriter, r *http.Request) {
 	pathParts := strings.Split(strings.Trim(r.URL.Path, "/"), "/")
 	// /sgc/{id}/backup/trigger
@@ -488,7 +569,15 @@ func (app *App) handleSGCRoutes(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
-	app.handleSGCDetail(w, r)
+	// Fallback: no recognized action sub-path. A bare "/sgc/" (no id
+	// segment) is the retired deployment-list page; "/sgc/{id}" with
+	// nothing else after it is the retired SGC detail page. Both redirect
+	// now (FR16, A1) instead of rendering.
+	if len(pathParts) < 2 || pathParts[1] == "" {
+		app.handleDeploymentsListRedirect(w, r)
+		return
+	}
+	app.handleSGCDetailRedirect(w, r, pathParts[1])
 }
 
 func (app *App) handleHealth(w http.ResponseWriter, r *http.Request) {

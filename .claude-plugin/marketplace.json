@@ -28,6 +28,21 @@
       "name": "leaflab-data",
       "description": "Postgres MCP access (crystaldba postgres-mcp) to the LeafLab database across tilt/dev/prod",
       "source": "./leaflab/plugin/data"
+    },
+    {
+      "name": "krill",
+      "description": "Streamable-HTTP MCP access to krill's FR10/NFR1 spec surface (feature-set/feature/requirement/product slice query) across tilt/dev/prod",
+      "source": "./krill/plugin/user"
+    },
+    {
+      "name": "krill-data",
+      "description": "Postgres MCP access (crystaldba postgres-mcp) to the krill database across tilt/dev/prod",
+      "source": "./krill/plugin/data"
+    },
+    {
+      "name": "whagent-net",
+      "description": "Streamable-HTTP MCP access to whagent-net's Agent API (start_session/send_turn/stop_session/get_session/read_transcript) across tilt/dev/prod",
+      "source": "./whagent_net/plugin/user"
     }
   ]
 }

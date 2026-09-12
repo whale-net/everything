@@ -1,0 +1,277 @@
+package pages
+
+import (
+	"fmt"
+	"strings"
+	"time"
+
+	"github.com/whale-net/everything/manmanv2/ui/components"
+)
+
+// ActivityPageData is the view-model for /activity (FR14, FR15, NFR10,
+// tasks #2271/#2277): a fleet-wide, observation-only snapshot of what is
+// running now (Live) and what ran before (History). "Fleet-wide" means
+// Live/History are built on ListSessions's server-agnostic filters
+// (live_only / status_filter) against an explicitly-defined fleet-wide
+// authorized set (NFR10) -- never the server-scoped
+// resolveScopedServerGameConfigs derivation /sessions uses. See
+// handlers_activity.go's buildActivityPageData/handleActivity doc comments
+// for the authorized-set contract.
+type ActivityPageData struct {
+	Live    []ActivityLiveRow
+	History []ActivityHistoryRow
+
+	// FilterGameID and FilterStatus are echoed back into the filter
+	// controls so a filtered view is linkable and survives reload. 0 / ""
+	// mean "no filter".
+	FilterGameID int64
+	FilterStatus string
+
+	// LiveTopics is the fleet-wide authorized set's deployment topics
+	// (FR15, NFR10, #2277) -- handlers_activity.go's buildActivityPageData
+	// derives this from the exact same sgcByID handleActivityLiveSSE
+	// (handlers_activity_live.go) subscribes to, so the page's sse-swap
+	// list and the stream's authorized set can never drift apart. Empty
+	// when the fleet-wide set is empty (a valid, handled state -- NFR10).
+	LiveTopics []string
+	// HeartbeatIntervalMs mirrors SessionsPageData's field of the same
+	// name (handlers_sessions.go's heartbeatIntervalMs) for the #1726/#2268
+	// Not-Live debounce, reused unchanged for Activity's own LiveRegion.
+	HeartbeatIntervalMs int
+	// LiveUpdatesEnabled is false when app.sseHub is nil (RABBITMQ_URL
+	// unset/unreachable, NFR3/NFR8) or LiveTopics is empty (nothing
+	// fleet-wide to stream). FR15: there is no polling fallback to degrade
+	// to here (unlike SessionsPageData's LiveUpdatesEnabled=false case), so
+	// when this is false the page renders its plain server-side snapshot
+	// with no live-connection markup at all -- never a stream pointed at a
+	// route that can only 503.
+	LiveUpdatesEnabled bool
+}
+
+// ActivityLiveRow is one row of the Live now table (FR14): a session
+// ListSessions reports as live right now.
+type ActivityLiveRow struct {
+	GameName   string
+	ServerName string
+	ConfigName string
+	Uptime     time.Duration
+	SessionID  int64
+}
+
+// ActivityHistoryRow is one row of the History table (FR14). TerminalStatus
+// is Session.status read directly -- never ComputeDeploymentStatus's
+// two-state running/stopped rollup, and never ServerGameConfig.status's
+// active/inactive lifecycle flag. Both of those exist elsewhere in this
+// codebase; only Session.status is right here (see the issue's
+// ground-truth table).
+type ActivityHistoryRow struct {
+	GameName       string
+	ServerName     string
+	ConfigName     string
+	TerminalStatus string // Session.status -- NOT ServerGameConfig.status
+	StartTime      time.Time
+	Duration       time.Duration
+	SessionID      int64
+}
+
+// activityStatusOptions is the fixed Session.status vocabulary
+// (messages.proto's Session.status doc comment). Activity's status filter
+// offers these directly rather than a dynamically-fetched list -- the
+// vocabulary is small and fixed, unlike the game filter's options.
+var activityStatusOptions = []string{
+	"pending",
+	"starting",
+	"running",
+	"stopping",
+	"stopped",
+	"crashed",
+	"completed",
+}
+
+// Activity is the /activity page (FR14, NFR10, WD2). Observation-only: no
+// start/stop/restart control is rendered anywhere on this page -- that is
+// a deliberate divergence from the legacy 97-v2-activity wireframe (WD2,
+// decision 4); start/stop lives in Games (FR6).
+templ Activity(layout components.LayoutData, data ActivityPageData) {
+	@components.Layout(layout) {
+		@components.HeroHeader("Activity", "Fleet-wide view of what is running now and what ran before")
+		@ActivityFilters(data.FilterGameID, data.FilterStatus)
+		if data.LiveUpdatesEnabled {
+			@ActivityLiveRegion(data.HeartbeatIntervalMs) {
+				@ActivityLiveContent(data)
+			}
+		} else {
+			@ActivityLiveContent(data)
+		}
+	}
+}
+
+// ActivityLiveRegion wraps the Live/History tables with the FR15 SSE
+// plumbing (#2277), reusing components.LiveRegion (lifted out of
+// pages/sessions.templ's DeploymentsLiveRegion by #2268) against
+// Activity's own fleet-wide SSE path and reload target -- see
+// handlers_activity_live.go's handleActivityLiveSSE doc comment for the
+// fleet-wide topic/authorization-set contract this pairs with.
+templ ActivityLiveRegion(heartbeatIntervalMs int) {
+	@components.LiveRegion(components.LiveRegionOptions{
+		SSEPath:             "/api/live/activity",
+		HeartbeatIntervalMs: heartbeatIntervalMs,
+		ReloadHref:          "/activity",
+	}) {
+		{ children... }
+	}
+}
+
+// ActivityLiveContent is the sse-swap target wrapping both Live/History
+// tables (FR15). Unlike /sessions's per-row DeploymentRow targets, a
+// session moving live<->terminal moves it between these two tables rather
+// than updating one row in place, so the whole region -- not a single row
+// -- is the smallest correct swap unit here. sse-swap is set
+// unconditionally to the full fleet-wide topic list (data.LiveTopics,
+// comma-joined per htmx sse-ext's multi-event sse-swap syntax) so any
+// authorized deployment's status change re-renders both tables together.
+// ActivityLiveContentInner (below) is the exact same markup minus this
+// wrapper, rendered per delivery by handleActivityLiveSSE's fragment
+// (handlers_activity_live.go) so the two can never diverge -- mirrors
+// DeploymentRow/DeploymentRowInner's split in pages/sessions.templ.
+templ ActivityLiveContent(data ActivityPageData) {
+	<div id="activity-live-content" sse-swap={ strings.Join(data.LiveTopics, ",") }>
+		@ActivityLiveContentInner(data)
+	</div>
+}
+
+// ActivityLiveContentInner renders just the Live/History tables -- see
+// ActivityLiveContent's doc comment for why the whole region, not a
+// per-row fragment, is this feature's swap unit (FR15).
+templ ActivityLiveContentInner(data ActivityPageData) {
+	@ActivityLiveTable(data.Live)
+	@ActivityHistoryTable(data.History)
+}
+
+// ActivityFilters renders the game/status filter controls (round-trips
+// through the request per the Implementation section's "filter state
+// round-trips" requirement). GET so the resulting URL is linkable.
+templ ActivityFilters(filterGameID int64, filterStatus string) {
+	<div class="card bg-base-100 border border-base-300 shadow-sm mb-6">
+		<div class="card-body">
+			<form method="GET" action="/activity">
+				<div class="grid grid-cols-1 md:grid-cols-3 gap-4">
+					<div class="form-control">
+						<label class="label" for="activity-game-id">
+							<span class="label-text">Game</span>
+						</label>
+						if filterGameID > 0 {
+							<input type="number" id="activity-game-id" name="game_id" value={ fmt.Sprintf("%d", filterGameID) } min="1" class="input input-bordered w-full"/>
+						} else {
+							<input type="number" id="activity-game-id" name="game_id" min="1" class="input input-bordered w-full"/>
+						}
+					</div>
+					<div class="form-control">
+						<label class="label" for="activity-status">
+							<span class="label-text">Status</span>
+						</label>
+						<select id="activity-status" name="status" class="select select-bordered w-full">
+							if filterStatus == "" {
+								<option value="" selected>All statuses</option>
+							} else {
+								<option value="">All statuses</option>
+							}
+							for _, status := range activityStatusOptions {
+								if status == filterStatus {
+									<option value={ status } selected>{ status }</option>
+								} else {
+									<option value={ status }>{ status }</option>
+								}
+							}
+						</select>
+					</div>
+					<div class="flex items-end">
+						<button type="submit" class="btn btn-primary w-full">Apply Filters</button>
+					</div>
+				</div>
+			</form>
+		</div>
+	</div>
+}
+
+// ActivityLiveTable renders the Live now table: game, server, config,
+// uptime (FR14).
+templ ActivityLiveTable(rows []ActivityLiveRow) {
+	<div class="card bg-base-100 border border-base-300 shadow-sm overflow-hidden mb-6">
+		<div class="flex justify-between items-center p-4 border-b border-base-300 bg-base-200">
+			<h2 class="text-lg font-semibold text-base-content">Live now</h2>
+		</div>
+		if len(rows) > 0 {
+			@components.TableInline() {
+				<thead>
+					<tr>
+						<th>Game</th>
+						<th>Server</th>
+						<th>Config</th>
+						<th>Uptime</th>
+					</tr>
+				</thead>
+				<tbody>
+					for _, row := range rows {
+						<tr class="hover">
+							<td>{ row.GameName }</td>
+							<td>{ row.ServerName }</td>
+							<td>{ row.ConfigName }</td>
+							<td>{ row.Uptime.Truncate(time.Second).String() }</td>
+						</tr>
+					}
+				</tbody>
+			}
+		} else {
+			<div class="card-body">
+				<p class="text-sm text-base-content/60">Nothing is live right now.</p>
+			</div>
+		}
+	</div>
+}
+
+// ActivityHistoryTable renders the History table: game, server, config,
+// terminal status, start time, duration (FR14). Each row links out to the
+// existing session detail page -- M5 does not reshape session detail into
+// a blade or drawer (that is M6/C31 phase 2).
+templ ActivityHistoryTable(rows []ActivityHistoryRow) {
+	<div class="card bg-base-100 border border-base-300 shadow-sm overflow-hidden mb-6">
+		<div class="flex justify-between items-center p-4 border-b border-base-300 bg-base-200">
+			<h2 class="text-lg font-semibold text-base-content">History</h2>
+		</div>
+		if len(rows) > 0 {
+			@components.TableInline() {
+				<thead>
+					<tr>
+						<th>Game</th>
+						<th>Server</th>
+						<th>Config</th>
+						<th>Status</th>
+						<th>Started</th>
+						<th>Duration</th>
+					</tr>
+				</thead>
+				<tbody>
+					for _, row := range rows {
+						<tr class="hover">
+							<td>{ row.GameName }</td>
+							<td>{ row.ServerName }</td>
+							<td>
+								<a href={ templ.URL(fmt.Sprintf("/sessions/%d", row.SessionID)) } class="link link-primary text-sm font-medium">
+									{ row.ConfigName }
+								</a>
+							</td>
+							<td>{ row.TerminalStatus }</td>
+							<td>{ row.StartTime.Format("2006-01-02 15:04:05") }</td>
+							<td>{ row.Duration.Truncate(time.Second).String() }</td>
+						</tr>
+					}
+				</tbody>
+			}
+		} else {
+			<div class="card-body">
+				<p class="text-sm text-base-content/60">No history for the selected filters.</p>
+			</div>
+		}
+	</div>
+}

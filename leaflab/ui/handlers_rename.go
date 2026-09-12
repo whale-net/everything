@@ -72,7 +72,7 @@ func (app *App) handleRenameSensor(w http.ResponseWriter, r *http.Request) {
 		app.log().Info("sensor renamed", "sensor_id", sensorID, "board_id", boardID)
 	}
 
-	app.renderSensorRow(w, r, boardID, sensorID, renameErrMsg)
+	app.renderSensorRow(w, r, boardID, sensorID, renameErrMsg, "")
 }
 
 // renderSensorRow re-fetches the board's detail (the only RPC that returns
@@ -82,10 +82,22 @@ func (app *App) handleRenameSensor(w http.ResponseWriter, r *http.Request) {
 // observed state -- never an assumed-success render -- matching
 // manmanv2/ui's renderDeploymentRow precedent (handlers_deployment_actions.go).
 //
+// placementErr (always empty here -- handlePlaceSensor passes its own
+// value through the same parameter) re-renders the row's Region cell
+// error; this handler keeps it clear so a successful rename never
+// re-shows a stale placement error.
+//
+// The region pickers inside the row need every region, so when the
+// re-fetched detail reports the caller owns the board (the only case the
+// pickers render in) the full region forest is fetched best-effort too --
+// a failure leaves the picker as a "No regions yet" hint rather than
+// failing the re-render (handleRegionDetail's forest-for-pickers
+// precedent).
+//
 // For non-HTMX requests (no HX-Request header -- a no-JS fallback), it
 // redirects back to the board detail page instead of returning a bare
 // fragment, the same split handleClaimBoard already uses.
-func (app *App) renderSensorRow(w http.ResponseWriter, r *http.Request, boardID, sensorID int64, renameErr string) {
+func (app *App) renderSensorRow(w http.ResponseWriter, r *http.Request, boardID, sensorID int64, renameErr, placementErr string) {
 	if r.Header.Get("HX-Request") != "true" {
 		http.Redirect(w, r, fmt.Sprintf("/boards/%d", boardID), http.StatusSeeOther)
 		return
@@ -96,6 +108,15 @@ func (app *App) renderSensorRow(w http.ResponseWriter, r *http.Request, boardID,
 		app.log().Warn("GetBoardDetail failed while rendering sensor row", "board_id", boardID, "sensor_id", sensorID, "err", err)
 		http.Error(w, "Failed to reload sensor", http.StatusInternalServerError)
 		return
+	}
+
+	var allRegions []*leaflabapipb.RegionTreeNode
+	if resp.GetOwnedByCaller() {
+		forest, forestErr := app.api.GetRegionTree(r.Context(), 0)
+		if forestErr != nil {
+			app.log().Warn("GetRegionTree (forest for pickers) failed while rendering sensor row", "board_id", boardID, "err", forestErr)
+		}
+		allRegions = pages.FlattenRegions(forest.GetRegions())
 	}
 
 	var sensor *leaflabapipb.SensorDetail
@@ -112,7 +133,7 @@ func (app *App) renderSensorRow(w http.ResponseWriter, r *http.Request, boardID,
 
 	w.Header().Set("Content-Type", "text/html")
 	w.WriteHeader(http.StatusOK)
-	if renderErr := pages.SensorRow(resp.GetBoardId(), resp.GetDeviceId(), resp.GetOwnedByCaller(), sensor, renameErr).Render(r.Context(), w); renderErr != nil {
+	if renderErr := pages.SensorRow(resp.GetBoardId(), resp.GetDeviceId(), resp.GetOwnedByCaller(), sensor, allRegions, renameErr, placementErr).Render(r.Context(), w); renderErr != nil {
 		app.log().Error("failed to render sensor row", "sensor_id", sensorID, "err", renderErr)
 	}
 }

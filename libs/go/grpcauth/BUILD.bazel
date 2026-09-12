@@ -5,12 +5,24 @@ go_library(
     srcs = [
         "auth.go",
         "credentials.go",
+        "delegatedgrant.go",
+        "delegatedgrant_authcode.go",
+        "delegatedgrant_token.go",
+        "delegatedgrant_revoke.go",
+        "fakestore.go",
+        "grant.go",
+        "grantcrypto.go",
+        "granterrors.go",
         "interceptors.go",
+        "pkce.go",
+        "store.go",
     ],
     importpath = "github.com/whale-net/everything/libs/go/grpcauth",
     visibility = ["//visibility:public"],
     deps = [
         "@com_github_coreos_go_oidc_v3//oidc",
+        "@com_github_go_jose_go_jose_v4//:go-jose",
+        "@com_github_go_jose_go_jose_v4//jwt",
         "@org_golang_google_grpc//:grpc",
         "@org_golang_google_grpc//codes",
         "@org_golang_google_grpc//metadata",
@@ -22,12 +34,22 @@ go_library(
 
 go_test(
     name = "grpcauth_test",
-    srcs = ["interceptors_test.go"],
+    srcs = [
+        "auth_test.go",
+        "delegatedgrant_authcode_test.go",
+        "delegatedgrant_revoke_test.go",
+        "delegatedgrant_test.go",
+        "delegatedgrant_token_test.go",
+        "fakestore_test.go",
+        "grantcrypto_test.go",
+        "granterrors_test.go",
+        "interceptors_test.go",
+    ],
     embed = [":grpcauth"],
     deps = [
+        "//libs/go/grpcauth/internal/keycloakfake",
         "@org_golang_google_grpc//codes",
         "@org_golang_google_grpc//metadata",
         "@org_golang_google_grpc//status",
     ],
 )
-

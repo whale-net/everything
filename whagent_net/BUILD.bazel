@@ -8,23 +8,42 @@ filegroup(
     visibility = ["//visibility:public"],
 )
 
-# Composes all four M1 binaries (migrate, api, worker, mcp) into one
+filegroup(
+    name = "tiltfile",
+    srcs = ["Tiltfile"],
+    visibility = ["//whagent_net/conformance:__pkg__"],
+)
+
+# This BUILD.bazel itself, as text data for //whagent_net/conformance's
+# Tiltfile conformance test (issue #2341) -- used only to locate this
+# directory as a data-staging root, not asserted on directly.
+filegroup(
+    name = "build_file",
+    srcs = ["BUILD.bazel"],
+    visibility = ["//whagent_net/conformance:__pkg__"],
+)
+
+# Composes the M1 binaries (migrate, api, worker, mcp) and M2's ui into one
 # deployable chart, mirroring audience_score_system/BUILD.bazel's
-# ass_backend_chart (same four-binary shape: migration job + gRPC/MCP
-# external-apis + Temporal worker). domain "whagent-net" + chart_name
-# "whagent-net" produces the "helm-whagent-net-whagent-net" chart identity.
+# ass_backend_chart's migration-job + gRPC/MCP external-apis +
+# Temporal-worker shape. domain "whagent-net" + chart_name "whagent-net"
+# produces the "helm-whagent-net-whagent-net" chart identity. There is no
+# separate archiver app: hot-to-cold transcript archival (FR7/C18) runs as
+# a Temporal-scheduled workflow inside `worker` (worker/archive.go) rather
+# than its own deployable -- see ARCHITECTURE.md "Transcript storage
+# tiers".
 release_helm_chart(
     name = "whagent_net_chart",
-    chart_name = "whagent-net",
-    domain = "whagent-net",
-    namespace = "whagent-net",
-    environment = "dev",
     apps = [
         "//whagent_net/migrate:migrate_metadata",
         "//whagent_net/api:api_metadata",
         "//whagent_net/worker:worker_metadata",
         "//whagent_net/mcp:mcp_metadata",
-        "//whagent_net/ui:whagent-net-ui_metadata",
+        "//whagent_net/ui:ui_metadata",
     ],
+    chart_name = "whagent-net",
+    domain = "whagent-net",
+    environment = "dev",
+    namespace = "whagent-net",
     visibility = ["//visibility:public"],
 )

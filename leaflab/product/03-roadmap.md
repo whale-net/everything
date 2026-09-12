@@ -2,7 +2,7 @@
 
 Part of the [LeafLab product brief](../PRODUCT.md). Milestone definitions only.
 
-Every milestone below is `not started` except M0, which is a description of what already shipped. Live status is tracked as `Ledger:` comments on the product tracking issue, never by editing this file.
+Milestone status is not recorded in this file — M0 aside (a description of what already shipped), the definitions below are static. Live status is tracked as `Ledger: M<n> → <status>` comments on the [`Product: leaflab` tracking issue (#1491)](https://github.com/whale-net/everything/issues/1491); take the **last** `Ledger:` comment per milestone as current, never this file's prose.
 
 The CRUD UI is cut into five milestones rather than one. The reason is the ownership decision: the first milestone that puts a write button in a browser is also the first milestone that needs write-enforced ownership, and bundling naming, placement, plants, and hardware changes behind that one gate produces a milestone nobody can spec against a 12-FR budget. Each cut below is independently useful on the day it ships, and each one carries the defect fixes that would otherwise make its own headline capability a lie.
 

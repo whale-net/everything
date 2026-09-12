@@ -68,7 +68,7 @@ func TestBoardDetail_ThreeStates_AllRenderedNoBlockingError(t *testing.T) {
 		},
 	}
 	resp := boardDetailResp(1, "leaflab-aaaaaaaaaaaa", "", false, nil, sensors)
-	body := renderPage(t, BoardDetail(layoutData(), resp, nil, ""))
+	body := renderPage(t, BoardDetail(layoutData(), resp, nil, "", "", nil, nil))
 
 	for _, name := range []string{"Soil Moisture", "Air Temp", "Light"} {
 		if !strings.Contains(body, name) {
@@ -113,7 +113,7 @@ func TestBoardDetail_InvalidLatestReading_MarkedInvalidStateUnaffected(t *testin
 		},
 	}
 	resp := boardDetailResp(1, "leaflab-aaaaaaaaaaaa", "", false, nil, sensors)
-	body := renderPage(t, BoardDetail(layoutData(), resp, nil, ""))
+	body := renderPage(t, BoardDetail(layoutData(), resp, nil, "", "", nil, nil))
 
 	if !strings.Contains(body, "999.9") {
 		t.Errorf("expected the invalid reading's value to still be rendered, got %q", body)
@@ -148,7 +148,7 @@ func TestBoardDetail_Stale_RendersLastValueAndTimestamp(t *testing.T) {
 		},
 	}
 	resp := boardDetailResp(1, "leaflab-aaaaaaaaaaaa", "", false, nil, sensors)
-	body := renderPage(t, BoardDetail(layoutData(), resp, nil, ""))
+	body := renderPage(t, BoardDetail(layoutData(), resp, nil, "", "", nil, nil))
 
 	if !strings.Contains(body, "21.5") {
 		t.Errorf("expected the stale sensor's last value in the rendered output, got %q", body)
@@ -171,7 +171,7 @@ func TestBoardDetail_NeverReported_NoValueNoTimestamp(t *testing.T) {
 		},
 	}
 	resp := boardDetailResp(1, "leaflab-aaaaaaaaaaaa", "", false, nil, sensors)
-	body := renderPage(t, BoardDetail(layoutData(), resp, nil, ""))
+	body := renderPage(t, BoardDetail(layoutData(), resp, nil, "", "", nil, nil))
 
 	// The reading cell itself must render the "—" placeholder, not a
 	// value or timestamp. "lux" can legitimately still appear elsewhere on
@@ -192,7 +192,7 @@ func TestBoardDetail_NeverReported_NoValueNoTimestamp(t *testing.T) {
 // zero sensors -> the empty message", distinct from an error state.
 func TestBoardDetail_ZeroSensors_EmptyMessageNoError(t *testing.T) {
 	resp := boardDetailResp(1, "leaflab-aaaaaaaaaaaa", "", false, nil, nil)
-	body := renderPage(t, BoardDetail(layoutData(), resp, nil, ""))
+	body := renderPage(t, BoardDetail(layoutData(), resp, nil, "", "", nil, nil))
 
 	if !strings.Contains(body, "This board has no sensors yet.") {
 		t.Errorf("expected the empty-state message, got %q", body)
@@ -207,7 +207,7 @@ func TestBoardDetail_ZeroSensors_EmptyMessageNoError(t *testing.T) {
 // handler takes for an unknown board_id before this template is ever
 // reached).
 func TestBoardDetail_LoadError_RendersErrorState(t *testing.T) {
-	body := renderPage(t, BoardDetail(layoutData(), nil, errors.New("leaflab-api unavailable"), ""))
+	body := renderPage(t, BoardDetail(layoutData(), nil, errors.New("leaflab-api unavailable"), "", "", nil, nil))
 
 	if !strings.Contains(body, "alert-error") {
 		t.Errorf("expected alert-error styling on a load failure, got %q", body)
@@ -228,7 +228,7 @@ func TestBoardDetail_DeviceIDFullLengthVerbatim(t *testing.T) {
 		{SensorId: 1, SensorName: "Soil Moisture", ReportingState: leaflabapipb.ReportingState_REPORTING_STATE_REPORTING},
 	}
 	resp := boardDetailResp(1, fullID, "", false, nil, sensors)
-	body := renderPage(t, BoardDetail(layoutData(), resp, nil, ""))
+	body := renderPage(t, BoardDetail(layoutData(), resp, nil, "", "", nil, nil))
 
 	if !strings.Contains(body, fullID) {
 		t.Errorf("expected full device_id %q to appear verbatim and uncut, got %q", fullID, body)
@@ -252,9 +252,9 @@ func TestBoardDetail_NoAutoRefreshMarkup(t *testing.T) {
 		},
 	}
 	fixtures := map[string]templ.Component{
-		"with sensors": BoardDetail(layoutData(), boardDetailResp(1, "leaflab-aaaaaaaaaaaa", "", false, nil, sensors), nil, ""),
-		"empty":        BoardDetail(layoutData(), boardDetailResp(1, "leaflab-aaaaaaaaaaaa", "", false, nil, nil), nil, ""),
-		"load error":   BoardDetail(layoutData(), nil, errors.New("boom"), ""),
+		"with sensors": BoardDetail(layoutData(), boardDetailResp(1, "leaflab-aaaaaaaaaaaa", "", false, nil, sensors), nil, "", "", nil, nil),
+		"empty":        BoardDetail(layoutData(), boardDetailResp(1, "leaflab-aaaaaaaaaaaa", "", false, nil, nil), nil, "", "", nil, nil),
+		"load error":   BoardDetail(layoutData(), nil, errors.New("boom"), "", "", nil, nil),
 	}
 	for name, component := range fixtures {
 		t.Run(name, func(t *testing.T) {
@@ -269,12 +269,20 @@ func TestBoardDetail_NoAutoRefreshMarkup(t *testing.T) {
 	}
 }
 
-// TestBoardDetail_NoPollIntervalRegionText guards the "Do not display"
-// section: no poll-interval or region/location text appears anywhere on
-// the page. Unlike boards.templ's equivalent, "Owner" text is expected on
-// this page since #1765 added an explicit owner cell to the header -- see
+// TestBoardDetail_NoPollIntervalLocationText guards what survives of the
+// original "Do not display" section after #2318 (FR12) superseded its
+// region half: no poll-interval markup and no "Location" text appears in
+// the board detail content. The original #1503 ban on ANY region/location
+// text is deliberately gone -- #2318's FR12 adds a Region column and the
+// recorded-region card to this page (asserted positively in the
+// TestBoardDetail_Region* tests), so "Region" moved from this ban-list to
+// required content. The ban is scoped to the page's <main> content, not
+// the whole document: #2317 added a global "Regions" nav item to the
+// shared chrome (components/layout.templ), which every page renders.
+// Unlike boards.templ's equivalent, "Owner" text is expected on this page
+// since #1765 added an explicit owner cell to the header -- see
 // TestBoardDetail_Owner_* below for that coverage.
-func TestBoardDetail_NoPollIntervalRegionText(t *testing.T) {
+func TestBoardDetail_NoPollIntervalLocationText(t *testing.T) {
 	sensors := []*leaflabapipb.SensorDetail{
 		{
 			SensorId:       1,
@@ -288,12 +296,27 @@ func TestBoardDetail_NoPollIntervalRegionText(t *testing.T) {
 		},
 	}
 	resp := boardDetailResp(1, "leaflab-aaaaaaaaaaaa", "", false, nil, sensors)
-	body := renderPage(t, BoardDetail(layoutData(), resp, nil, ""))
+	body := renderPage(t, BoardDetail(layoutData(), resp, nil, "", "", nil, nil))
 
-	for _, banned := range []string{"poll interval", "Poll Interval", "Region", "Location"} {
-		if strings.Contains(body, banned) {
-			t.Errorf("expected no %q text on the board detail page, got %q", banned, body)
+	mainStart := strings.Index(body, "<main")
+	mainEnd := strings.Index(body, "</main>")
+	if mainStart < 0 || mainEnd <= mainStart {
+		t.Fatalf("could not locate the board detail main content in the rendered page: %q", body)
+	}
+	mainContent := body[mainStart:mainEnd]
+
+	for _, banned := range []string{"poll interval", "Poll Interval", "Location"} {
+		if strings.Contains(mainContent, banned) {
+			t.Errorf("expected no %q text in the board detail main content, got %q", banned, mainContent)
 		}
+	}
+	// FR12 (#2318) makes region display required content here: the sensors
+	// table's Region column header, and the recorded-region card.
+	if !strings.Contains(mainContent, "Region") {
+		t.Errorf("expected the Region column to render in the board detail main content (FR12, #2318), got %q", mainContent)
+	}
+	if !strings.Contains(mainContent, "Recorded region") {
+		t.Errorf("expected the recorded-region card to render in the board detail main content (FR12, #2318), got %q", mainContent)
 	}
 }
 
@@ -304,7 +327,7 @@ func TestBoardDetail_NoPollIntervalRegionText(t *testing.T) {
 // own claim route, and never the owner's display name.
 func TestBoardDetail_Owner_UnownedShowsClaimButton(t *testing.T) {
 	resp := boardDetailResp(42, "leaflab-aaaaaaaaaaaa", "", false, nil, nil)
-	body := renderPage(t, BoardDetail(layoutData(), resp, nil, ""))
+	body := renderPage(t, BoardDetail(layoutData(), resp, nil, "", "", nil, nil))
 
 	if !strings.Contains(body, "Unowned") {
 		t.Errorf("expected the 'Unowned' label, got %q", body)
@@ -322,7 +345,7 @@ func TestBoardDetail_Owner_UnownedShowsClaimButton(t *testing.T) {
 func TestBoardDetail_Owner_OwnedByCallerShowsYou(t *testing.T) {
 	owner := &leaflabapipb.LeafLabUser{LeaflabUserId: 1, DisplayName: "Board Owner"}
 	resp := boardDetailResp(42, "leaflab-aaaaaaaaaaaa", "", true, owner, nil)
-	body := renderPage(t, BoardDetail(layoutData(), resp, nil, ""))
+	body := renderPage(t, BoardDetail(layoutData(), resp, nil, "", "", nil, nil))
 
 	if !strings.Contains(body, "You") {
 		t.Errorf("expected the 'You' label for the caller's own board, got %q", body)
@@ -341,7 +364,7 @@ func TestBoardDetail_Owner_OwnedByCallerShowsYou(t *testing.T) {
 func TestBoardDetail_Owner_OwnedByOtherShowsDisplayName(t *testing.T) {
 	owner := &leaflabapipb.LeafLabUser{LeaflabUserId: 2, DisplayName: "Someone Else"}
 	resp := boardDetailResp(42, "leaflab-aaaaaaaaaaaa", "", false, owner, nil)
-	body := renderPage(t, BoardDetail(layoutData(), resp, nil, ""))
+	body := renderPage(t, BoardDetail(layoutData(), resp, nil, "", "", nil, nil))
 
 	if !strings.Contains(body, "Someone Else") {
 		t.Errorf("expected the other owner's display name, got %q", body)
@@ -361,7 +384,7 @@ func TestBoardDetail_Owner_OwnedByOtherShowsDisplayName(t *testing.T) {
 // boardNameCell doc comment for the same rule).
 func TestBoardDetail_Name_FallsBackToDeviceIDWhenEmpty(t *testing.T) {
 	resp := boardDetailResp(1, "leaflab-aaaaaaaaaaaa", "", false, nil, nil)
-	body := renderPage(t, BoardDetail(layoutData(), resp, nil, ""))
+	body := renderPage(t, BoardDetail(layoutData(), resp, nil, "", "", nil, nil))
 
 	if !strings.Contains(body, "leaflab-aaaaaaaaaaaa") {
 		t.Errorf("expected device_id to appear as the fallback label, got %q", body)
@@ -374,7 +397,7 @@ func TestBoardDetail_Name_FallsBackToDeviceIDWhenEmpty(t *testing.T) {
 // identifier printed on the hardware.
 func TestBoardDetail_Name_UsesBoardNameAsPrimaryLabel(t *testing.T) {
 	resp := boardDetailResp(1, "leaflab-aaaaaaaaaaaa", "Greenhouse Board", false, nil, nil)
-	body := renderPage(t, BoardDetail(layoutData(), resp, nil, ""))
+	body := renderPage(t, BoardDetail(layoutData(), resp, nil, "", "", nil, nil))
 
 	if !strings.Contains(body, "Greenhouse Board") {
 		t.Errorf("expected the board's name as the primary label, got %q", body)
@@ -389,7 +412,7 @@ func TestBoardDetail_Name_UsesBoardNameAsPrimaryLabel(t *testing.T) {
 // renders as an inline warning on the page, independent of loadErr.
 func TestBoardDetail_ClaimErr_RendersInlineMessage(t *testing.T) {
 	resp := boardDetailResp(1, "leaflab-aaaaaaaaaaaa", "", false, nil, nil)
-	body := renderPage(t, BoardDetail(layoutData(), resp, nil, "This board is already owned."))
+	body := renderPage(t, BoardDetail(layoutData(), resp, nil, "This board is already owned.", "", nil, nil))
 
 	if !strings.Contains(body, "This board is already owned.") {
 		t.Errorf("expected the inline claim-error message, got %q", body)
@@ -405,7 +428,7 @@ func TestBoardDetail_ClaimErr_RendersInlineMessage(t *testing.T) {
 // criterion 8's positive half: the rename control renders when
 // ownedByCaller is true.
 func TestBoardDetail_RenameControl_OwnedByCaller_Rendered(t *testing.T) {
-	body := renderPage(t, BoardDetail(layoutData(), boardDetailResp(1, "leaflab-aaaaaaaaaaaa", "greenhouse", true, nil, nil), nil, ""))
+	body := renderPage(t, BoardDetail(layoutData(), boardDetailResp(1, "leaflab-aaaaaaaaaaaa", "greenhouse", true, nil, nil), nil, "", "", nil, nil))
 
 	if !strings.Contains(body, `hx-post="/boards/1/rename"`) {
 		t.Errorf("expected the rename form (hx-post to /boards/1/rename) when ownedByCaller is true, got %q", body)
@@ -417,7 +440,7 @@ func TestBoardDetail_RenameControl_OwnedByCaller_Rendered(t *testing.T) {
 // disabled) when ownedByCaller is false, since NFR1's enforcement point is
 // server-side, not this hide.
 func TestBoardDetail_RenameControl_NotOwnedByCaller_Hidden(t *testing.T) {
-	body := renderPage(t, BoardDetail(layoutData(), boardDetailResp(1, "leaflab-aaaaaaaaaaaa", "greenhouse", false, nil, nil), nil, ""))
+	body := renderPage(t, BoardDetail(layoutData(), boardDetailResp(1, "leaflab-aaaaaaaaaaaa", "greenhouse", false, nil, nil), nil, "", "", nil, nil))
 
 	if strings.Contains(body, `hx-post="/boards/1/rename"`) {
 		t.Errorf("expected no rename form when ownedByCaller is false, got %q", body)
@@ -428,7 +451,7 @@ func TestBoardDetail_RenameControl_NotOwnedByCaller_Hidden(t *testing.T) {
 // named half: a board with a name shows it prefilled in the rename
 // control's value.
 func TestBoardDetail_BoardName_RenderedWhenSet(t *testing.T) {
-	body := renderPage(t, BoardDetail(layoutData(), boardDetailResp(1, "leaflab-aaaaaaaaaaaa", "greenhouse", true, nil, nil), nil, ""))
+	body := renderPage(t, BoardDetail(layoutData(), boardDetailResp(1, "leaflab-aaaaaaaaaaaa", "greenhouse", true, nil, nil), nil, "", "", nil, nil))
 
 	if !strings.Contains(body, `value="greenhouse"`) {
 		t.Errorf("expected the board name prefilled as the rename input's value, got %q", body)
@@ -440,7 +463,7 @@ func TestBoardDetail_BoardName_RenderedWhenSet(t *testing.T) {
 // empty rename field with device_id as the placeholder, per the task
 // issue's UI section.
 func TestBoardDetail_UnnamedBoard_ShowsDeviceIDPlaceholder(t *testing.T) {
-	body := renderPage(t, BoardDetail(layoutData(), boardDetailResp(1, "leaflab-aaaaaaaaaaaa", "", true, nil, nil), nil, ""))
+	body := renderPage(t, BoardDetail(layoutData(), boardDetailResp(1, "leaflab-aaaaaaaaaaaa", "", true, nil, nil), nil, "", "", nil, nil))
 
 	if !strings.Contains(body, `placeholder="leaflab-aaaaaaaaaaaa"`) {
 		t.Errorf("expected device_id as the rename input's placeholder for an unnamed board, got %q", body)
@@ -460,7 +483,7 @@ func TestBoardDetail_SensorRenameControl_OwnedByCaller_Rendered(t *testing.T) {
 		{SensorId: 5, SensorName: "Soil Moisture", ReportingState: leaflabapipb.ReportingState_REPORTING_STATE_REPORTING},
 	}
 	resp := boardDetailResp(1, "leaflab-aaaaaaaaaaaa", "greenhouse", true, nil, sensors)
-	body := renderPage(t, BoardDetail(layoutData(), resp, nil, ""))
+	body := renderPage(t, BoardDetail(layoutData(), resp, nil, "", "", nil, nil))
 
 	if !strings.Contains(body, `hx-post="/sensors/5/rename"`) {
 		t.Errorf("expected the per-sensor rename form (hx-post to /sensors/5/rename) when ownedByCaller is true, got %q", body)
@@ -476,7 +499,7 @@ func TestBoardDetail_SensorRenameControl_NotOwnedByCaller_Hidden(t *testing.T) {
 		{SensorId: 5, SensorName: "Soil Moisture", ReportingState: leaflabapipb.ReportingState_REPORTING_STATE_REPORTING},
 	}
 	resp := boardDetailResp(1, "leaflab-aaaaaaaaaaaa", "greenhouse", false, nil, sensors)
-	body := renderPage(t, BoardDetail(layoutData(), resp, nil, ""))
+	body := renderPage(t, BoardDetail(layoutData(), resp, nil, "", "", nil, nil))
 
 	if strings.Contains(body, `hx-post="/sensors/5/rename"`) {
 		t.Errorf("expected no per-sensor rename form when ownedByCaller is false, got %q", body)
@@ -494,7 +517,7 @@ func TestBoardDetail_SensorRow_ShowsNewNameImmediately(t *testing.T) {
 		{SensorId: 5, SensorName: "Renamed Sensor", ReportingState: leaflabapipb.ReportingState_REPORTING_STATE_REPORTING},
 	}
 	resp := boardDetailResp(1, "leaflab-aaaaaaaaaaaa", "greenhouse", true, nil, sensors)
-	body := renderPage(t, BoardDetail(layoutData(), resp, nil, ""))
+	body := renderPage(t, BoardDetail(layoutData(), resp, nil, "", "", nil, nil))
 
 	if !strings.Contains(body, "Renamed Sensor") {
 		t.Errorf("expected the sensor's current (renamed) name in the rendered output, got %q", body)

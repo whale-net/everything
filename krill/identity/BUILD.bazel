@@ -1,0 +1,25 @@
+load("@rules_go//go:def.bzl", "go_library", "go_test")
+
+# Encode/Decode for the (iss, sub) identity pair mcpauth's Provider
+# resolves a signed-in krill operator to -- krill/ui encodes it
+# (mcpauth.go's mcpCallerResolver); krill has no person/user table to key
+# it to instead (NFR1 authorizes by persona, never by individual
+# identity). See identity.go's package doc.
+go_library(
+    name = "identity",
+    srcs = ["identity.go"],
+    importpath = "github.com/whale-net/everything/krill/identity",
+    visibility = ["//visibility:public"],
+)
+
+# Pure-Go round-trip and malformed-input coverage -- no database, no HTTP,
+# runs as part of `bazel test //...`.
+go_test(
+    name = "identity_test",
+    srcs = ["identity_test.go"],
+    embed = [":identity"],
+    deps = [
+        "@com_github_stretchr_testify//assert",
+        "@com_github_stretchr_testify//require",
+    ],
+)

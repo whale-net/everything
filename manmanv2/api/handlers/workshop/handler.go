@@ -22,8 +22,13 @@ type WorkshopServiceHandler struct {
 	presetRepo       repository.AddonPathPresetRepository
 	cacheRepo        repository.WorkshopCacheRepository
 	batchJobRepo     repository.WorkshopBatchJobRepository
-	workshopManager  workshop.WorkshopManagerInterface
-	s3Client         cachePresigner
+	// gameConfigRepo and gcLibraryRepo back the GC-level Workshop library API
+	// (M6 #2365, plan #2359) -- attach/detach/list/conflict-resolve RPCs
+	// additive alongside the SGC-scoped ones above (NFR1).
+	gameConfigRepo  repository.GameConfigRepository
+	gcLibraryRepo   repository.GameConfigWorkshopLibraryRepository
+	workshopManager workshop.WorkshopManagerInterface
+	s3Client        cachePresigner
 	// rmqPublisher is the same fire-and-forget command-publish surface
 	// workshop.WorkshopManager already uses for workshop.download/remove
 	// (manmanv2/api/workshop/manager.go's RMQPublisher) -- VerifyCacheEntry
@@ -43,6 +48,8 @@ func NewWorkshopServiceHandler(
 	presetRepo repository.AddonPathPresetRepository,
 	cacheRepo repository.WorkshopCacheRepository,
 	batchJobRepo repository.WorkshopBatchJobRepository,
+	gameConfigRepo repository.GameConfigRepository,
+	gcLibraryRepo repository.GameConfigWorkshopLibraryRepository,
 	workshopManager *workshop.WorkshopManager,
 	s3Client cachePresigner,
 	rmqPublisher workshop.RMQPublisher,
@@ -55,6 +62,8 @@ func NewWorkshopServiceHandler(
 		presetRepo:       presetRepo,
 		cacheRepo:        cacheRepo,
 		batchJobRepo:     batchJobRepo,
+		gameConfigRepo:   gameConfigRepo,
+		gcLibraryRepo:    gcLibraryRepo,
 		workshopManager:  workshopManager,
 		s3Client:         s3Client,
 		rmqPublisher:     rmqPublisher,

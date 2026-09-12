@@ -46,6 +46,15 @@ service LeafLabAPI {
   // Rename a sensor on a board the calling user owns (FR4).
   rpc RenameSensor(RenameSensorRequest) returns (RenameSensorResponse);
 
+  // Place a sensor in a region (FR7): assigns a placement (whether or not
+  // the sensor had one) or moves it. An ordinary Postgres write -- never
+  // gated on the board being online or acknowledging a config (LB2). Sole
+  // writer of sensor.region_id / sensor_region_history (NFR4): the
+  // device-config ack path never writes placement, so the placement change
+  // is visible to subsequent readings immediately, with no device round
+  // trip.
+  rpc PlaceSensor(PlaceSensorRequest) returns (PlaceSensorResponse);
+
   // Admin: list every currently-owned board and its current owner (FR11).
   rpc ListOwnedBoards(ListOwnedBoardsRequest) returns (ListOwnedBoardsResponse);
 
@@ -58,6 +67,35 @@ service LeafLabAPI {
 
   // Admin: the user list the reassign picker selects from (FR11, FR12).
   rpc ListUsers(ListUsersRequest) returns (ListUsersResponse);
+
+  // M3: create a region (FR1) owned by the calling user from the moment it
+  // exists, with an optional parent (0 = top-level). Writes the region row
+  // and its initial open region_parent_history row in the same transaction.
+  rpc CreateRegion(CreateRegionRequest) returns (CreateRegionResponse);
+
+  // M3: rename a region (FR2). Forward-looking only -- names are
+  // current-value (no history table), so past reading attribution is never
+  // affected.
+  rpc RenameRegion(RenameRegionRequest) returns (RenameRegionResponse);
+
+  // M3: re-parent a region (FR3), 0 parent = make it top-level. Moves the
+  // region's whole subtree by construction. Self/descendant parents are
+  // rejected with codes.FailedPrecondition (FR5), never a silent cycle.
+  rpc ReparentRegion(ReparentRegionRequest) returns (ReparentRegionResponse);
+
+  // Record, change, or clear the region a board is physically located in
+  // (FR10). Bookkeeping only: this never touches sensor placement or
+  // reading attribution -- a board's recorded region and its sensors'
+  // placements are deliberately independent (see SetBoardRegionResponse
+  // for what the caller gets back to drive FR11's nudge).
+  rpc SetBoardRegion(SetBoardRegionRequest) returns (SetBoardRegionResponse);
+
+  // M3: view the region tree with drill-down (FR6). Returns the whole
+  // current forest (root_region_id = 0) or the subtree rooted at one
+  // region, each node carrying its sensor counts resolved over the
+  // CURRENT tree (v_region_path semantics) from CURRENT placements (open
+  // sensor_region_history rows). Siblings are ordered alphabetically.
+  rpc GetRegionTree(GetRegionTreeRequest) returns (GetRegionTreeResponse);
 }
 
 // ReportingState classifies a board or sensor by recency of its most recent
@@ -150,6 +188,14 @@ message BoardWithState {
   string board_name = 5;
   bool owned_by_caller = 6;
   LeafLabUser owner = 7;
+  // M3 additions (FR12): the board's recorded region (FR10) -- where the
+  // board is physically located, as written by SetBoardRegion. Recorded via
+  // the open board_region_history row; there is no region_id = 0 sentinel,
+  // so recorded_region_id is unset when the board has no recorded region
+  // and recorded_region_name is empty in that case. Current-state only,
+  // deliberately independent of where the board's sensors are placed.
+  optional int64 recorded_region_id = 8;
+  string recorded_region_name = 9;
 }
 
 message GetBoardDetailRequest {
@@ -167,6 +213,12 @@ message GetBoardDetailResponse {
   string board_name = 4;
   bool owned_by_caller = 5;
   LeafLabUser owner = 6;
+  // M3 additions (FR12): the board's recorded region (FR10), same fields
+  // and semantics as BoardWithState.recorded_region_id/name -- unset when
+  // the board has no recorded region (the absence of an open
+  // board_region_history row; no region_id = 0 sentinel).
+  optional int64 recorded_region_id = 7;
+  string recorded_region_name = 8;
 }
 
 // SensorDetail describes one sensor on a board, including its most recent
@@ -181,6 +233,14 @@ message SensorDetail {
   // (unset) is what makes REPORTING_STATE_NEVER_REPORTED unambiguous, rather
   // than relying on a zero-valued LatestReading.
   LatestReading latest_reading = 6;
+  // M3 additions (FR12): the region this sensor is currently placed in,
+  // from CURRENT placement (the open sensor_region_history row). Same shape
+  // as BoardSensorRegion's region fields: region_id is unset when the
+  // sensor is unplaced and region_name is empty in that case -- a sensor's
+  // unplaced state is the absence of an open placement row, never a
+  // sentinel region id.
+  optional int64 region_id = 7;
+  string region_name = 8;
 }
 
 // LatestReading is a sensor's most recent reading. `valid` is carried through
@@ -278,6 +338,16 @@ message RenameSensorRequest {
 
 message RenameSensorResponse {}
 
+message PlaceSensorRequest {
+  int64 sensor_id = 1;
+  // Region to place the sensor in. Required (> 0); a region_id that does
+  // not exist is codes.NotFound. Unassigning (clearing a placement) is not
+  // part of this RPC.
+  int64 region_id = 2;
+}
+
+message PlaceSensorResponse {}
+
 // OwnedBoard is one row of the admin ownership list (FR11): a board's
 // identity plus its current owner.
 message OwnedBoard {
@@ -311,4 +381,125 @@ message ListUsersRequest {}
 
 message ListUsersResponse {
   repeated LeafLabUser users = 1;
+}
+
+// -- M3 region lifecycle (FR1-FR3, FR5, NFR2) --------------------------------
+
+message CreateRegionRequest {
+  // Non-empty, at most 255 characters (region.name is VARCHAR(255)). No
+  // uniqueness rule across regions -- sibling-region uniqueness is a
+  // non-goal, same as board renames in M2.
+  string name = 1;
+  // Optional parent region. 0 = top-level region (a recorded NULL parent in
+  // region_parent_history, not an absent row). Non-zero must name an
+  // existing region (codes.NotFound otherwise). A cycle is impossible at
+  // creation -- the new region does not exist yet, so nothing can point at
+  // it. The creating user becomes the region's owner (FR1, NFR2); the
+  // parent's own ownership is deliberately not checked (reads and
+  // tree-structure navigation are unscoped by ownership, per the M2 FR5
+  // read precedent -- creating a child under another user's region creates
+  // a region you own, it does not edit theirs).
+  int64 parent_region_id = 2;
+}
+
+message CreateRegionResponse {
+  // The created region's ID, for the UI's drill-down navigation (#2317).
+  int64 region_id = 1;
+}
+
+message RenameRegionRequest {
+  int64 region_id = 1;
+  // Non-empty, at most 255 characters. Forward-looking only (FR2): names
+  // are current-value with no history table, so no past reading's
+  // attribution or display changes.
+  string name = 2;
+}
+
+message RenameRegionResponse {}
+
+message ReparentRegionRequest {
+  int64 region_id = 1;
+  // The region's new parent. 0 = top-level (NULL parent, recorded state on
+  // the open region_parent_history row). The region's whole subtree moves
+  // with it by construction: descendants' own parent pointers are untouched
+  // (FR3). parent_region_id = region_id, or any of region_id's descendants,
+  // is rejected with codes.FailedPrecondition (FR5) -- never a silent
+  // cycle.
+  int64 parent_region_id = 2;
+}
+
+message ReparentRegionResponse {}
+
+// -- M3: board recorded region (FR10) -----------------------------------------
+
+message SetBoardRegionRequest {
+  int64 board_id = 1;
+  // The region to record the board as physically located in. Leave unset to
+  // clear the recorded region: a board's un-recorded state is the absence of
+  // an open board_region_history row, with the mirror column board.region_id
+  // NULL to match (migration 017) -- there is no "region_id = 0" sentinel.
+  // Recording the region the board is already recorded in, or clearing one
+  // that is not recorded, is codes.FailedPrecondition rather than a silent
+  // no-op -- same no-op-refusal precedent as ReassignBoardOwner/
+  // ClearBoardOwner, so the history never gains a zero-length interval.
+  optional int64 region_id = 2;
+}
+
+message SetBoardRegionResponse {
+  int64 board_id = 1;
+  // The board's recorded region as of after this write; unset when the
+  // board has no recorded region (i.e. the request cleared it).
+  optional int64 region_id = 2;
+  // Display name of the recorded region. Empty when region_id is unset.
+  string region_name = 3;
+  // The board's sensors with their current placements, read after the
+  // write. Read-only snapshot for FR11's nudge: the UI compares these
+  // against the newly-recorded region and suggests which placements might
+  // need moving -- the system never moves any sensor automatically (FR10:
+  // changing a board's recorded region never changes sensor placement or
+  // reading attribution).
+  repeated BoardSensorRegion sensors = 4;
+}
+
+// BoardSensorRegion is one of a board's sensors plus the region that sensor
+// is currently placed in (FR11 nudge input). region_id is unset when the
+// sensor is unplaced; region_name is empty in that case.
+message BoardSensorRegion {
+  int64 sensor_id = 1;
+  string sensor_name = 2;
+  optional int64 region_id = 3;
+  string region_name = 4;
+}
+
+// -- M3: region tree view with drill-down (FR6) -------------------------------
+
+message GetRegionTreeRequest {
+  // 0 = the whole forest (every top-level region and its descendants).
+  // Non-zero = drill down into that region's subtree only (FR6); the node
+  // for root_region_id itself is returned as the response's single top
+  // element. Unknown region_id is codes.NotFound.
+  int64 root_region_id = 1;
+}
+
+// RegionTreeNode is one region in the tree view. Nesting depth is unbounded
+// (FR3); children are ordered alphabetically by name. Both counts come from
+// CURRENT placement (open sensor_region_history rows) resolved over the
+// CURRENT tree -- this is a current-state view, deliberately not historical
+// (FR4 left v_region_path unchanged for exactly this consumer).
+message RegionTreeNode {
+  int64 region_id = 1;
+  string name = 2;
+  // Child regions, alphabetically ordered by name.
+  repeated RegionTreeNode children = 3;
+  // Sensors currently placed in this region only (not descendants).
+  int64 sensor_count = 4;
+  // Sensors currently placed in this region or any of its descendants.
+  int64 inclusive_sensor_count = 5;
+}
+
+message GetRegionTreeResponse {
+  // Top-level nodes of the requested view: every top-level region
+  // (alphabetically ordered) when the request drilled into nothing, or the
+  // single drilled-into region when root_region_id was non-zero.
+  repeated RegionTreeNode regions = 1;
 }

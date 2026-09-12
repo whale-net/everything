@@ -4,7 +4,6 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/whale-net/everything/manmanv2/ui/components"
 	manmanpb "github.com/whale-net/everything/manmanv2/protos"
 )
 
@@ -12,10 +11,15 @@ import (
 // with remove/edit affordances, the zero-ranges state nudges toward
 // configuring ranges while stating assignment stays unconstrained
 // (SB-1.2), and edit mode swaps the row for a form.
+//
+// basePath is fixed to "/infrastructure" throughout this file, matching
+// task #2372's fold-in of this section into the Infrastructure page's
+// per-host "Manage" panel (see ServerPortRangesSection's doc comment) --
+// prior to that task these URLs were "/servers/...".
 
 func renderPortRangesSection(t *testing.T, server *manmanpb.Server, notice string, edit *manmanpb.PortRange) string {
 	t.Helper()
-	return renderPage(t, ServerDetail(components.LayoutData{Title: "Server"}, server, nil, notice, edit))
+	return renderPage(t, ServerPortRangesSection(server, notice, edit, "/infrastructure"))
 }
 
 func TestServerPortRangesSection_RendersRowsAndForms(t *testing.T) {
@@ -34,9 +38,9 @@ func TestServerPortRangesSection_RendersRowsAndForms(t *testing.T) {
 		"Allowed Host Port Ranges",
 		"25565-25570",
 		"27015-27020",
-		"/servers/2/ports/remove",
-		"/servers/2/ports/set",
-		"/servers/2/ports/edit?start=25565&amp;end=25570&amp;protocol=TCP",
+		"/infrastructure/2/ports/remove",
+		"/infrastructure/2/ports/set",
+		"/infrastructure/2/ports/edit?start=25565&amp;end=25570&amp;protocol=TCP",
 	} {
 		if !strings.Contains(body, want) {
 			t.Errorf("expected body to contain %q", want)
@@ -83,10 +87,10 @@ func TestServerPortRangesSection_EditModeSwapsRowForForm(t *testing.T) {
 		t.Errorf("expected original identity hidden fields")
 	}
 	// Untouched rows keep their normal remove form; the untouched edit link for the edited row is gone.
-	if strings.Contains(body, "/servers/2/ports/edit?start=25565&amp;end=25570&amp;protocol=TCP") {
+	if strings.Contains(body, "/infrastructure/2/ports/edit?start=25565&amp;end=25570&amp;protocol=TCP") {
 		t.Errorf("edited row still rendered its static row")
 	}
-	if !strings.Contains(body, "/servers/2/ports/edit?start=27015&amp;end=27020&amp;protocol=UDP") {
+	if !strings.Contains(body, "/infrastructure/2/ports/edit?start=27015&amp;end=27020&amp;protocol=UDP") {
 		t.Errorf("untouched row lost its edit link")
 	}
 	// The add form is hidden while editing.

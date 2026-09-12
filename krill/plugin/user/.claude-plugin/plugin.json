@@ -1,0 +1,7 @@
+{
+  "name": "krill",
+  "description": "Streamable-HTTP MCP access to krill's FR10/NFR1 spec surface (feature-set/feature/requirement/product slice query) across tilt/dev/prod.",
+  "author": {
+    "name": "whale_net"
+  }
+}

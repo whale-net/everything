@@ -21,9 +21,8 @@ import (
 // below:
 //
 //  1. hx-* attributes that moved from literal HTML onto htmxui.Button's
-//     `attrs templ.Attributes` escape hatch (server_detail.templ's Start
-//     Session button, session_detail.templ's action execute/submit
-//     buttons). templ.Attributes is a map, so RenderAttributes emits keys
+//     `attrs templ.Attributes` escape hatch (session_detail.templ's action
+//     execute/submit buttons). templ.Attributes is a map, so RenderAttributes emits keys
 //     in sorted order (see a-h/templ's runtime.go Items()); a mutation
 //     that dropped or renamed a key would silently stop reaching the
 //     rendered attribute.
@@ -48,10 +47,7 @@ import (
 // mutation-tested (verified red, by hand, then reverted): swapping
 // actionButtonVariant's "danger" case from htmxui.ButtonError to
 // htmxui.ButtonWarning made TestSessionDetail_ActionButtonsPreserveHxWiring
-// fail on the "btn btn-error" assertion; deleting the "hx-trigger" key from
-// server_detail.templ's Start Session Button attrs map made
-// TestServerDetail_StartSessionButtonPreservesHxWiring fail on the
-// hx-trigger assertion; both reverted to green afterward.
+// fail on the "btn btn-error" assertion, reverted to green afterward.
 
 func renderPage(t *testing.T, c templ.Component) string {
 	t.Helper()
@@ -62,80 +58,14 @@ func renderPage(t *testing.T, c templ.Component) string {
 	return buf.String()
 }
 
-// --- servers.templ: status badge variant mapping + View button ------------
-
-func TestServers_StatusBadgeVariantsAndViewButton(t *testing.T) {
-	servers := []*manmanpb.Server{
-		{ServerId: 1, Name: "Alpha", Status: "online"},
-		{ServerId: 2, Name: "Beta", Status: "offline"},
-	}
-	body := renderPage(t, Servers(components.LayoutData{Title: "Servers"}, servers))
-
-	// online -> serverStatusVariant "success" -> statusBadgeVariant BadgeSuccess.
-	if got := strings.Count(body, `<span class="badge badge-soft badge-success badge-sm">`); got != 1 {
-		t.Errorf("expected exactly 1 badge-success span for the online server, got %d in %q", got, body)
-	}
-	// offline -> serverStatusVariant "secondary" -> statusBadgeVariant BadgeNeutral.
-	if got := strings.Count(body, `<span class="badge badge-soft badge-neutral badge-sm">`); got != 1 {
-		t.Errorf("expected exactly 1 badge-neutral span for the offline server, got %d in %q", got, body)
-	}
-	// Neither status must render as the other colour (guards against a
-	// swapped success/neutral mapping producing 2 of one and 0 of the other).
-	if strings.Contains(body, `badge-error`) || strings.Contains(body, `badge-warning`) {
-		t.Errorf("expected no error/warning badge for plain online/offline servers, got %q", body)
-	}
-	if !strings.Contains(body, `<a href="/servers/1" class="btn btn-primary btn-sm">`) {
-		t.Errorf("expected the View button to render btn-primary btn-sm anchored to /servers/1, got %q", body)
-	}
-}
-
-// --- server_detail.templ: Start Session button's hx-* wiring --------------
+// --- servers.templ / server_detail.templ ------------------------------
 //
-// The pre-migration button carried hx-get/hx-trigger/hx-target/hx-swap as
-// literal HTML attributes; the migration relocated them into
-// htmxui.Button's attrs map without changing names/values (be60c947's
-// commit message). Since templ.Attributes renders keys in sorted order,
-// the attribute set below asserts each key/value individually rather than
-// assuming a fixed emission order matching the old literal markup.
-func TestServerDetail_StartSessionButtonPreservesHxWiring(t *testing.T) {
-	server := &manmanpb.Server{ServerId: 5, Name: "Gamma", Status: "online"}
-	configs := []*manmanpb.ServerGameConfig{
-		{ServerGameConfigId: 42, ServerId: 5, GameConfigId: 9, Status: "active"},
-	}
-	body := renderPage(t, ServerDetail(components.LayoutData{Title: "Server"}, server, configs, "", nil))
-
-	if !strings.Contains(body, `class="btn btn-success btn-sm"`) {
-		t.Errorf("expected the Start Session button to render btn-success btn-sm, got %q", body)
-	}
-	wantAttrs := []string{
-		`hx-get="/api/sessions/check-active?server_game_config_id=42"`,
-		`hx-trigger="mouseenter once"`,
-		`hx-target="#sgc-warning-42"`,
-		`hx-swap="innerHTML"`,
-		`type="submit"`,
-	}
-	for _, want := range wantAttrs {
-		if !strings.Contains(body, want) {
-			t.Errorf("expected Start Session button to carry %s, got %q", want, body)
-		}
-	}
-	if !strings.Contains(body, ">Start Session<") {
-		t.Errorf("expected the Start Session button label, got %q", body)
-	}
-
-	// Form wiring around the button: method/action/input name preserved
-	// exactly (literal HTML, untouched by the migration, but still in
-	// scope per #1008's testing checklist).
-	if !strings.Contains(body, `<form method="POST" action="/sessions/start" class="inline-flex items-center gap-2">`) {
-		t.Errorf("expected the Start Session form's method/action preserved, got %q", body)
-	}
-	if !strings.Contains(body, `<input type="hidden" name="server_game_config_id" value="42">`) {
-		t.Errorf("expected the hidden server_game_config_id input preserved, got %q", body)
-	}
-	if !strings.Contains(body, `<input type="checkbox" name="force" value="true" class="checkbox checkbox-xs">`) {
-		t.Errorf("expected the Force checkbox preserved with its input name, got %q", body)
-	}
-}
+// Both pages were retired by #2372 (superseded by /infrastructure); their
+// daisyUI-migration regression tests (TestServers_StatusBadgeVariantsAndViewButton,
+// TestServerDetail_StartSessionButtonPreservesHxWiring) were removed along
+// with the pages themselves. formatTime, previously defined alongside
+// server_detail.templ, moved to helpers.go since session_detail.templ and
+// workshop_cache.templ still use it.
 
 // --- session_detail.templ: action button variant + hx-* wiring ------------
 

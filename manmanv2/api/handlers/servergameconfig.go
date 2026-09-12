@@ -12,14 +12,19 @@ import (
 
 // ServerGameConfigHandler handles ServerGameConfig-related RPCs
 type ServerGameConfigHandler struct {
-	repo     repository.ServerGameConfigRepository
-	portRepo repository.ServerPortRepository
+	repo repository.ServerGameConfigRepository
+	// serverRepo backs the drain cordon guard (#2364, manmanv2 M6, FR3):
+	// DeployGameConfig loads the target server through this to reject
+	// deployment creation on a draining/drained host.
+	serverRepo repository.ServerRepository
+	portRepo   repository.ServerPortRepository
 }
 
-func NewServerGameConfigHandler(repo repository.ServerGameConfigRepository, portRepo repository.ServerPortRepository) *ServerGameConfigHandler {
+func NewServerGameConfigHandler(repo repository.ServerGameConfigRepository, portRepo repository.ServerPortRepository, serverRepo repository.ServerRepository) *ServerGameConfigHandler {
 	return &ServerGameConfigHandler{
-		repo:     repo,
-		portRepo: portRepo,
+		repo:       repo,
+		portRepo:   portRepo,
+		serverRepo: serverRepo,
 	}
 }
 
@@ -80,6 +85,12 @@ func (h *ServerGameConfigHandler) GetServerGameConfig(ctx context.Context, req *
 }
 
 func (h *ServerGameConfigHandler) DeployGameConfig(ctx context.Context, req *pb.DeployGameConfigRequest) (*pb.DeployGameConfigResponse, error) {
+	// Cordon (#2364, FR3): reject new deployment creation on a draining or
+	// drained host before writing the ServerGameConfig row.
+	if err := assertHostSchedulable(ctx, h.serverRepo, req.ServerId); err != nil {
+		return nil, err
+	}
+
 	// Port availability is checked when starting a session, not at deployment time.
 	// This allows multiple SGCs to define the same ports, with actual allocation
 	// and conflict detection happening only when sessions start.

@@ -22,13 +22,24 @@ func validPortRangeProtocol(s string) bool {
 	return false
 }
 
-// ServerPortRangesSection renders the allowed host-port ranges card on the
-// server detail page (FR12, task #2095). The zero-ranges state is
-// first-class: it nudges toward configuring ranges while stating that an
-// empty set leaves host-port assignment unconstrained (SB-1.2). Writes go
-// through the public API (NFR3) via the ports/set and ports/remove routes;
-// save-time API validation stays out of scope per Decision 7.
-templ ServerPortRangesSection(server *manmanpb.Server, portsNotice string, portsEdit *manmanpb.PortRange) {
+// ServerPortRangesSection renders the allowed host-port ranges card (FR12,
+// task #2095), embedded in a host's "Manage" panel on the Infrastructure
+// page (pages/infrastructure.templ) since task #2372 (M6 navigation/
+// disposition) folded this capability in when the server detail page it
+// previously lived on (pages/server_detail.templ) retired -- #2369's
+// Infrastructure page (FR1-FR4) did not fold in port-range management
+// itself, so this task keeps the capability reachable rather than let it
+// regress (NFR6). The zero-ranges state is first-class: it nudges toward
+// configuring ranges while stating that an empty set leaves host-port
+// assignment unconstrained (SB-1.2). Writes go through the public API
+// (NFR3) via the ports/set and ports/remove routes; save-time API
+// validation stays out of scope per Decision 7.
+//
+// basePath is the host page's route prefix ("/infrastructure") that owns
+// the ports/set, ports/remove, and ports/edit routes this section's forms
+// and links target -- parameterised (rather than the pre-#2372 hardcoded
+// "/servers") so this component has no route-prefix opinion of its own.
+templ ServerPortRangesSection(server *manmanpb.Server, portsNotice string, portsEdit *manmanpb.PortRange, basePath string) {
 	<div class="card bg-base-100 border border-base-300 shadow-sm overflow-hidden mb-6" id="allowed-port-ranges">
 		<div class="flex justify-between items-center p-4 border-b border-base-300 bg-base-200">
 			<div>
@@ -54,7 +65,7 @@ templ ServerPortRangesSection(server *manmanpb.Server, portsNotice string, ports
 					<tbody>
 						for _, pr := range server.AllowedPortRanges {
 							if portsEdit != nil && pr.Start == portsEdit.Start && pr.End == portsEdit.End && strings.EqualFold(pr.Protocol, portsEdit.Protocol) {
-								@serverPortRangeEditRow(server, pr)
+								@serverPortRangeEditRow(server, pr, basePath)
 							} else {
 								<tr class="hover">
 									<td class="text-sm font-mono">{ fmt.Sprintf("%d-%d", pr.Start, pr.End) }</td>
@@ -63,8 +74,8 @@ templ ServerPortRangesSection(server *manmanpb.Server, portsNotice string, ports
 									</td>
 									<td class="text-right">
 										<div class="flex justify-end gap-2">
-											<a href={ templ.URL(fmt.Sprintf("/servers/%d/ports/edit?start=%d&end=%d&protocol=%s", server.ServerId, pr.Start, pr.End, pr.Protocol)) } class="btn btn-secondary btn-sm">Edit</a>
-											<form method="POST" action={ templ.URL(fmt.Sprintf("/servers/%d/ports/remove", server.ServerId)) } class="inline">
+											<a href={ templ.URL(fmt.Sprintf("%s/%d/ports/edit?start=%d&end=%d&protocol=%s", basePath, server.ServerId, pr.Start, pr.End, pr.Protocol)) } class="btn btn-secondary btn-sm">Edit</a>
+											<form method="POST" action={ templ.URL(fmt.Sprintf("%s/%d/ports/remove", basePath, server.ServerId)) } class="inline">
 												<input type="hidden" name="start" value={ fmt.Sprintf("%d", pr.Start) }/>
 												<input type="hidden" name="end" value={ fmt.Sprintf("%d", pr.End) }/>
 												<input type="hidden" name="protocol" value={ pr.Protocol }/>
@@ -87,7 +98,7 @@ templ ServerPortRangesSection(server *manmanpb.Server, portsNotice string, ports
 		if portsEdit == nil {
 			<div class="p-4 border-t border-base-300">
 				<h3 class="text-sm font-semibold text-base-content mb-2">Add a range</h3>
-				<form method="POST" action={ templ.URL(fmt.Sprintf("/servers/%d/ports/set", server.ServerId)) } class="flex flex-col sm:flex-row sm:items-end gap-2 max-w-xl">
+				<form method="POST" action={ templ.URL(fmt.Sprintf("%s/%d/ports/set", basePath, server.ServerId)) } class="flex flex-col sm:flex-row sm:items-end gap-2 max-w-xl">
 					<div>
 						<label for="port_range_start" class="block text-xs font-medium text-base-content/60 mb-1">Start port</label>
 						<input type="number" id="port_range_start" name="start" min="1" max="65535" required class="input input-bordered input-sm w-32"/>
@@ -114,7 +125,7 @@ templ ServerPortRangesSection(server *manmanpb.Server, portsNotice string, ports
 }
 
 // serverPortRangeEditRow renders the in-table edit form for one range.
-templ serverPortRangeEditRow(server *manmanpb.Server, pr *manmanpb.PortRange) {
+templ serverPortRangeEditRow(server *manmanpb.Server, pr *manmanpb.PortRange, basePath string) {
 	<tr>
 		<td class="text-sm font-mono">
 			<input type="number" name="start" form={ fmt.Sprintf("port-range-edit-%d-%d-%d-%s", server.ServerId, pr.Start, pr.End, pr.Protocol) } value={ fmt.Sprintf("%d", pr.Start) } min="1" max="65535" required class="input input-bordered input-sm w-24"/>
@@ -134,13 +145,13 @@ templ serverPortRangeEditRow(server *manmanpb.Server, pr *manmanpb.PortRange) {
 		</td>
 		<td class="text-right">
 			<div class="flex justify-end gap-2">
-				<form method="POST" action={ templ.URL(fmt.Sprintf("/servers/%d/ports/set", server.ServerId)) } class="inline-flex gap-2" id={ fmt.Sprintf("port-range-edit-%d-%d-%d-%s", server.ServerId, pr.Start, pr.End, pr.Protocol) }>
+				<form method="POST" action={ templ.URL(fmt.Sprintf("%s/%d/ports/set", basePath, server.ServerId)) } class="inline-flex gap-2" id={ fmt.Sprintf("port-range-edit-%d-%d-%d-%s", server.ServerId, pr.Start, pr.End, pr.Protocol) }>
 					<input type="hidden" name="orig_start" value={ fmt.Sprintf("%d", pr.Start) }/>
 					<input type="hidden" name="orig_end" value={ fmt.Sprintf("%d", pr.End) }/>
 					<input type="hidden" name="orig_protocol" value={ pr.Protocol }/>
 					<input type="hidden" name="editing" value="true"/>
 					<button type="submit" class="btn btn-success btn-sm">Save</button>
-					<a href={ templ.URL(fmt.Sprintf("/servers/%d", server.ServerId)) } class="btn btn-ghost btn-sm">Cancel</a>
+					<a href={ templ.URL(fmt.Sprintf("%s?manage=%d#host-manage-%d", basePath, server.ServerId, server.ServerId)) } class="btn btn-ghost btn-sm">Cancel</a>
 				</form>
 			</div>
 		</td>

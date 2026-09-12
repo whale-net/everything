@@ -64,12 +64,12 @@ several UIs at once, and any consuming domain gets those semantics for free.
 | Concern | Library | Notes |
 |---|---|---|
 | Temporal | `//libs/go/temporal` | Bootstrap only (`NewClient`, `NewWorker`, `UpsertSchedule`, config, logger). Workflow precedents exist elsewhere: `tools/app_registry/worker` (release, writeback, outbox) and ASS's `ChannelSyncWorkflow`, with `testsuite` tests. New here: a long-lived signal-per-turn workflow and workflow-code versioning under open runs. |
-| S3 | `//libs/go/s3` | Exists. `manmanv2/log-processor/archiver` is a direct Postgres → S3 archiver precedent for `archiver`. |
+| S3 | `//libs/go/s3` | Exists. `manmanv2/log-processor/archiver` is a direct Postgres → S3 archiver precedent for `worker`'s archive workflow. |
 | Postgres | `//libs/go/db`, `//libs/go/migrate` | Same as `audience_score_system`. |
 | RabbitMQ | `//libs/go/rmq`, `//libs/go/htmxsse` | `htmxsse.Hub` + `DefaultAttachFunc` for SSE fan-out; reference implementation `tools/app_registry/ui/main.go` `initializeSSEHub`. |
 | Web UI | `//libs/go/htmxbase`, `//libs/go/htmxui`, `//libs/go/htmxauth` | Go + `templ` + htmx + daisyUI, CDN-pinned, no Node — the convention every UI in this repo follows. |
 | MCP | `github.com/modelcontextprotocol/go-sdk` | Precedent: `audience_score_system/mcp` (first Go MCP server in the repo, so #1552's "would be the first" note is stale). Auth via `//libs/go/mcpauth`. |
-| gRPC auth | `//libs/go/grpcauth` | Already verifies Keycloak OIDC (`coreos/go-oidc/v3`; `Claims{Subject, Roles, Audience}`; user-token and service-account dial options). The only gap is the on-behalf-of claim — see [Identity](#identity-and-auth-chaining). |
+| gRPC auth | `//libs/go/grpcauth` | Verifies Keycloak OIDC (`coreos/go-oidc/v3`; `Claims{Subject, Roles, Audience, ClientID, IsServiceAccount}`; user-token and service-account dial options). `IsServiceAccount` (FR6/#2243) is what `api` derives a session's `subject`/`on_behalf_of` `kind` from — see [Identity](#identity-and-auth-chaining). |
 | LLM client | `openai/openai-go` (candidate; architect to verify) | Serving is via **OpenRouter**, which is OpenAI-wire-compatible — the Anthropic SDK does not target it. One client with a base-URL override covers every OpenRouter model; a future second provider is another base URL, not an abstraction layer. |
 | Identity | Keycloak (OIDC) | Humans and service accounts alike — see [Identity](#identity-and-auth-chaining). |
 
@@ -93,14 +93,14 @@ Programmatic integrators need `GetSession` (is it done? waiting on me?),
 |---|---|---|
 | `whagent_net/session` | Go package + migrations | Store: `sessions`, `transcript_events` (append-only — explicitly **not** SCD2), idempotency ledger, agent definition assignment (SCD2, `valid_from`/`valid_to`). Publishes every committed event to the `whagent/events` exchange. Transparent S3 hydration on cold reads. |
 | `whagent_net/api` | gRPC service, `external-api` | Session service facade: `StartSession`, `SendTurn`, `StopSession`, `GetSession`, `ListSessions`, `ReadTranscript`, `StreamEvents` (FR5/C17, issue #2239) — a server-streaming bridge over the exchange so programmatic clients never need RabbitMQ credentials. Writes signal the Temporal workflow; reads go to `session` directly. Mirrors `manmanv2/control-api`. |
-| `whagent_net/worker` | Temporal worker, `worker` | `SessionWorkflow` (one per session, long-lived, signal-per-turn) + activities: resolve agent definition → build context → LLM call → dispatch tool calls to domain MCP servers → commit turn → publish. Imports `session` directly. |
-| `whagent_net/archiver` | RMQ consumer + retention job, `worker` | Postgres → S3 when a session is terminal and past TTL; trims hot-tier bodies; leaves an index row with the S3 pointer. The one new stateful deployable the tiering adds. |
+| `whagent_net/worker` | Temporal worker, `worker` | `SessionWorkflow` (one per session, long-lived, signal-per-turn) + activities: resolve agent definition → build context → LLM call → dispatch tool calls to domain MCP servers → commit turn → publish. Imports `session` directly. Also hosts `ArchiveWorkflow` (FR7/C18, `worker/archive.go`): a Temporal Schedule (`ArchiveScheduleID`, interval `WHAGENT_ARCHIVE_INTERVAL`) fires a `RunArchiveBatch` activity that moves a terminal session's transcript from Postgres to S3 once past TTL and trims the hot-tier rows, leaving an index row with the S3 pointer — no separate deployable, since Temporal already is this repo's scheduled-job engine (`//libs/go/temporal`'s `UpsertSchedule`, the same mechanism `audience_score_system/worker/sync` uses for `ChannelSyncWorkflow`). Selection is a poll of `sessions`/`transcript_archive` on the schedule's own cadence, not a consumer of `whagent/events` — a session's terminal transition is a row write (`sessions.updated_at`), not something archival needs a bus message to discover. Registered only when `WHAGENT_S3_BUCKET` is set; unset, `worker` runs `SessionWorkflow` with no archive schedule at all. |
 | `whagent_net/mcp` | MCP server, `external-api` | `start_session`, `send_turn`, `get_session`, `read_transcript` over `api`. Phase-1 test surface (Claude Code drives it directly) and, later, how agents spawn agents. Same `web` + `mcp` sibling shape as `audience_score_system`. |
 | `whagent_net/embed` | Go package | The shareable UI component: `templ` session components (transcript, turn composer, session list) + `embed.Mount(mux, apiClient, sseHub, opts)` registering fragment + SSE routes under a host-chosen prefix + a persona-mapping hook. Cross-app primitives only, per `libs/go/htmxui`'s rule. |
 | `whagent_net/ui` | Web UI, `external-api` | Standalone agent UI: session list, session view, "run an agent" form, view any session. `htmxui.Shell` + `embed` + an `htmxsse.Hub` on `whagent/events`. First consumer of `embed`; first *clean* `htmxui` adopter. |
-| `whagent_net/migrate` | Job | Applies `session` migrations, then runs the agent-definition seeder (`whagent_net/migrate/seed`, issue #2121) as a post-migration step — upserts `whagent_net/config/agents.yaml`'s checked-in definitions into `agent_definition`, minting a new version row whenever a definition's fields drift from the latest seeded one, never editing a version already pinned to a session. |
-| `whagent_net/config` | Go package | The checked-in agent-definition seed source (`agents.yaml` + `Load`/`Validate`) `whagent_net/migrate/seed` consumes — LB5/NFR6: config-driven seeding, but `agent_definition` stays a real, versioned table, never replaced by a config lookup. |
-| `whagent_net/llm` | Go package | The OpenRouter model client (issue #2112): a single OpenAI-wire `Client` pointed at OpenRouter's base URL, `Catalog` (FR5's "does the provider serve this model" gate, cached), and per-turn cost accounting (`cost.go`/`pricing.go`, FR7/LB6). One provider, one client — see [Open items](#open-items) "Provider abstraction". |
+| `whagent_net/migrate` | Job | Applies `session` migrations only (issue #2121). There is no seeder: `agent_definition`/`model_definition` rows are inserted by hand, directly against Postgres — see `whagent_net/README.md` "Agent definition config" for a worked example — minting a new version row whenever a definition's fields change, never editing a version already pinned to a session. |
+| `whagent_net/config` | Go package | Documents the `agent_definition` row shape (`agents.yaml` + `Load`/`Validate`) — LB5/NFR6: `agent_definition` stays a real, versioned table, never a config-lookup shortcut. `whagent_net/api/main.go` is the only production caller of `Load`, for `RequiredRoles`/`DevRoles`. Also documents the `model_definitions` shape (below), decoded via the same `Load`. |
+| `model_definition` | Table (`whagent_net/session`) | A named, reusable model id + OpenRouter provider-routing preference bundle (`session.ModelDefinition`/`ProviderPreferences`) an `agent_definition` row may reference (`model_definition_id`) instead of naming a model directly — exactly one of `agent_definition.model` / `model_definition_id` is set (migration 006's CHECK constraint). Documented by `agents.yaml`'s `model_definitions` the same way `agent_definition` is (inserted by hand, upserted by `name`), but NOT versioned/SCD2 itself — see `session/modeldef.go`'s `ModelDefinitionStore` doc comment for why. This is what "target specific providers"/quantization/etc. per agent is configured through, not an env var. |
+| `whagent_net/llm` | Go package | The OpenRouter model client (issue #2112): a single OpenAI-wire `Client` pointed at OpenRouter's base URL, `Catalog` (FR5's "does the provider serve this model" gate, cached), and per-turn cost accounting (`cost.go`/`pricing.go`, FR7/LB6). One LLM provider, one client — see [Open items](#open-items) "Provider abstraction"; `Request.Provider` (OpenRouter's own upstream-provider routing, resolved from `model_definition` above) does not revisit that non-goal. |
 | `//libs/go/whagent` | Go package | Tool contract for domain-owned MCP servers: idempotency-key field, persona claim shape, agent definition registration format. |
 
 ## Transcript storage tiers
@@ -110,12 +110,47 @@ neither classic queues nor streams are queryable by session. So:
 
 | Tier | Store | Role |
 |---|---|---|
-| **Bus** | RabbitMQ exchange `whagent/events` | Every transcript event, published on commit. Consumers each bind their own TTL'd queue: UI SSE hubs, the archiver, metrics, future programmatic subscribers. Never the system of record. |
-| **Hot** | Postgres `transcript_events` | Append-only. Serves `ReadTranscript` and the worker's context build. Retention = TTL. |
-| **Cold** | S3 `sessions/{id}.jsonl` | Written by `archiver` once a session is terminal and past TTL; hot-tier bodies trimmed, index row keeps the pointer. `ReadTranscript` hydrates from S3 transparently. |
+| **Bus** | RabbitMQ exchange `whagent/events` | Every transcript event, published on commit. Consumers each bind their own TTL'd queue: UI SSE hubs, metrics, future programmatic subscribers. Never the system of record — `worker`'s archive workflow does not consume it either (see the component map above). |
+| **Hot** | Postgres `transcript_event` | Append-only. Serves `ReadTranscript` and the worker's context build. Retention = TTL. |
+| **Cold** | S3 `sessions/{session_id}.jsonl.gz` | Written by `worker`'s `ArchiveWorkflow`/`RunArchiveBatch` once a session is terminal and past TTL; hot-tier bodies trimmed, index row (`transcript_archive`) keeps the pointer. `ReadTranscript` hydrates from S3 transparently. |
 
 Postgres is the queryable tier because it already exists in every domain;
 adding a second query engine for transcripts is not justified at this scale.
+
+### Cold-object contract (FR8/FR7, issue #2240)
+
+This is the interop contract between `session`'s tier-transparent reader
+(issue #2240) and `worker`'s `ArchiveWorkflow`/`RunArchiveBatch` (FR7,
+issue #2244, `worker/archive.go`): both agree on the exact object shape
+without either owning the other's code.
+
+- **Index row:** `transcript_archive` (migration 002), one row per archived
+  session — `session_id` (PK, `REFERENCES sessions`), `s3_bucket`, `s3_key`,
+  `event_count`/`min_seq`/`max_seq` (let a reader sanity-check what it
+  downloads without opening it), `archived_at`, and `hot_trimmed_at`
+  (`NULL` until `RunArchiveBatch` trims the session's hot rows).
+  Append-only-ish, like `transcript_event` —
+  explicitly **not** SCD2 (a session is archived at most once;
+  `hot_trimmed_at` is the one field ever revised after insert). A row
+  existing here is itself the "hydrate from S3" signal — readers never
+  consult `hot_trimmed_at` to decide whether to hydrate.
+- **Object key:** `sessions/{session_id}.jsonl.gz`.
+- **Object body:** gzip-compressed JSON Lines, one `whagent_net/events.Event`
+  per line (`event_id`, `session_id`, `seq`, `turn`, `type`, `payload`,
+  `committed_at` — LB1's single record definition, the same JSON shape as
+  the Postgres row and the bus message), in ascending `seq`, covering
+  exactly `[min_seq, max_seq]` with `event_count` lines. Never summarized,
+  reshaped, or dropped (LB1) — the cold copy is byte-for-byte the same
+  events the hot tier held, not a derived digest.
+- **Read-side merge:** `TranscriptStore.Read` (`session/transcript.go`)
+  serves from `transcript_event` first; when the requested range is not
+  fully satisfied from hot rows and a `transcript_archive` row exists, it
+  hydrates the object via `//libs/go/s3`, decodes it, and merges hot +
+  cold in ascending `seq` with hot rows winning on a duplicate `seq` (the
+  same event committed to both tiers is emitted once, never twice). No
+  archive row and no hot rows is an empty result, not an error; an archive
+  row whose object is missing is an `Internal` error (ERROR-level log),
+  never a silently truncated transcript.
 
 ## Service boundary vs. package boundary
 
@@ -226,10 +261,20 @@ usable from an agent definition:
 - the agent definition-registration format the domain publishes.
 
 **Tool selection** — an agent definition names which of a server's tools an agent may
-see, so an agent can be focused. Initially this is enforced on the MCP
-server side (the server exposes a pre-filtered tool list at the agent definition's
-endpoint, e.g. `/mcp/research`); whagent-side filtering of a server's full
-tool list is a later capability, not an M1 requirement.
+see, so an agent can be focused. This is the intersection of two filters: the
+MCP server side (the server exposes a pre-filtered tool list at the agent
+definition's endpoint, e.g. `/mcp/research`) and, when a `tool_set` entry's
+`allowed_tools` is non-empty, whagent-side narrowing (C22) enforced by
+`whagent_net/worker/tools`' `ListToolDefinitions` (what the model is offered)
+and `Dispatch`'s `resolveTarget` (what is actually callable) — the same
+allowlist check in both places, so a server-exposed-but-not-allowed tool is
+never offered to the model and never dispatchable even if requested anyway.
+An empty/nil `allowed_tools` means "whatever the server exposes," matching
+the M1 default of relying entirely on the server-side pre-filtered endpoint.
+`allowed_tools` is manually authored today (`agents.yaml`'s `tool_set`
+entries, or a direct `agent_definition.tool_set` row edit); a UI for
+selecting/searching tools to populate it is a later capability (open item
+below).
 
 First consumer: `audience_score_system/mcp` (exists; research tools are the
 embedded-agent target). `manmanv2` is out of scope for this product — it
@@ -287,16 +332,20 @@ category alone, without reading the transcript.
 ## Embeddable session UI
 
 Every web UI in this repo is Go + `templ` + htmx, so "a session component
-other UIs can embed" is a **Go package, not a JS bundle**. `embed` is
-imported by the host binary and mounted same-origin, so the host's existing
-authn (`htmxauth`, or `audience_score_system/web`'s own Google OAuth flow)
-applies unchanged. Live updates come from an `htmxsse.Hub` the host builds
-on `whagent/events`; `embed` renders fragments via `api` reads and swaps
-them on SSE. Hosts that have no SSE today (ASS `web` is form-POST-only)
-gain it only on the embedded routes.
-
-`whagent_net/ui` is `embed`'s first consumer so the component is proven
-before any other domain imports it.
+other UIs can embed" is a **Go package, not a JS bundle**. As of M2, that
+package does not exist yet: `whagent_net/ui/components` (e.g.
+`session.templ`, the session detail page's transcript/state-badge/composer
+component) renders in place, directly inside `ui`, with no `embed` package
+in between. Extraction of these components into a standalone `embed`
+package — imported by a host binary and mounted same-origin, so the host's
+existing authn (`htmxauth`, or `audience_score_system/web`'s own Google
+OAuth flow) applies unchanged — is deferred to M3/C19, when
+`audience_score_system/web` becomes the first other-domain consumer. Live
+updates already come from an `htmxsse.Hub` the host builds on
+`whagent/events` (LB7); at M3, `embed` renders fragments via `api` reads
+and swaps them on SSE the same way `ui` does today. Hosts that have no SSE
+today (ASS `web` is form-POST-only) will gain it only on the embedded
+routes.
 
 ## Identity and auth chaining
 
@@ -319,7 +368,22 @@ is always populated — it equals the acting subject whenever a caller acts
 for itself, whatever its kind. Keeping `iss` a real column is what lets a
 non-Keycloak identity (an ASS Person is keyed on Google `sub`) be an
 on-behalf-of subject later without a schema change; C8's role check
-applies to the *acting* subject.
+applies to the *acting* subject, identically for a human or a service
+account — `api`'s `StartSession` runs the same `required_role` check
+either way (FR6/#2243), never a service-specific branch.
+
+**Kind (FR6/#2243).** `grpcauth.Claims.IsServiceAccount` (derived from a
+Keycloak client-credentials token's `preferred_username`, see
+`libs/go/grpcauth/KEYCLOAK.md` § "Service accounts") is what
+`callerSubject` (`whagent_net/api/handlers/session.go`) maps to
+`SubjectKindService` vs. `SubjectKindHuman` when it reconstructs the
+acting subject — the only place kind is decided. `StartSession` then
+writes `on_behalf_of = subject` as usual (M1's caller-acts-for-itself
+default, above), so a service account's session records `kind = service`
+on both columns with no other code path aware of the distinction —
+`worker`'s claim-minting and tool-dispatch paths (`api/persona`,
+`worker/tools/dispatch.go`) carry no service-specific branch (LB3): the
+stored `on_behalf_of.kind` is the only thing that differs.
 
 **Read vs. control are two different rules, not one ownership check
 (#2237).** `SessionService`'s two read RPCs (`GetSession`, `ReadTranscript`)
@@ -336,6 +400,189 @@ There is no admin override in M1 — a caller that is neither the acting nor
 the on-behalf-of subject simply cannot control a session it didn't start.
 `whagent_net/api/handlers/session.go`'s `canControl` is the single place
 this control rule lives; no other handler re-derives it.
+
+**`mcp`'s delegated-grant credential acquisition (FR7/FR8/FR9, plan
+#2421).** `api` verifies real Keycloak-signed JWTs and nothing else —
+that verifier is unchanged by this design (`libs/go/grpcauth`). `mcp`
+accepts a second credential shape alongside the manual Keycloak access
+token (`README.md` "Browser-based sign-in"): an opaque bearer credential
+`ui`'s own OAuth2 authorization-server front end (`libs/go/mcpauth.Provider`,
+mounted by `whagent_net/ui/mcpauth.go`) mints for an operator already
+signed in there. That credential resolves (via
+`mcpauth.CredentialStore.Verify`) to the operator's own real Keycloak
+`(iss, sub)` — packed into `mcpauth.CredentialStore`'s opaque `Identity`
+string by `whagent_net/mcpidentity.Encode`/`Decode`, the one place that
+packing happens — never a new whagent-net-only identity.
+
+Because `api` cannot verify that opaque credential directly, a *working*
+Keycloak-signed JWT still has to come from somewhere — but `mcp` no
+longer mints one itself. `whagent_net/mcp/server/auth.go`'s
+`AuthMiddleware` places the resolved `(iss, sub)` on ctx
+(`mcpidentity.ContextWithIdentity`) and stops there: it exchanges or
+mints nothing (issue #2430 deleted `server/tokenexchange.go`'s
+`KeycloakExchanger` and its RFC 8693 impersonation-exchange call
+entirely, not left dormant — FR19). Acquisition happens later, at
+MCP tool-dispatch time (`whagent_net/mcp/tools/dispatch.go`), once a
+call's target scope is actually known — `AuthMiddleware` has no notion
+of "which scope" for any given call, since that requires the request's
+own `agent_id`/`session_id`, which only a tool handler has parsed (FR7):
+
+- `start_session` resolves the target scope via `ScopeForAgent(ctx,
+  agentID)` (backed by the chosen `AgentDefinition.Scope`, FR1/#2424);
+  every other tool (`send_turn`/`stop_session`/`get_session`/
+  `read_transcript`) resolves it via `ScopeForSession(ctx, sessionID)`,
+  backed by that session's already-recorded agent-definition assignment
+  — never a scope re-derived from a fresh `agent_id` on every call.
+- The resolved scope becomes a grant key via `whagent_net/grantkey.ForScope`
+  — the *only* permitted derivation (FR4): the grant key for scope `d`
+  is `d` itself, once validated as well-formed. Deriving one from
+  `agent_id`, `required_role`, or `tool_set[].server_url` is forbidden.
+- `dispatch.go`'s `acquireGrantToken` calls `grant.TokenSource(identity.Sub,
+  grantKey).Token(ctx)` (`libs/go/grpcauth.DelegatedGrantSource`, keyed
+  on the operator's raw Keycloak `sub`, never the mcpidentity-encoded
+  composite) to obtain a real, working access token — re-read from
+  `Store` on every call, never cached here or anywhere else (FR8:
+  `tokenexchange.go`'s in-memory per-identity cache is gone, not
+  replaced with a new one).
+- A scope with no active grant (`grpcauth.ErrGrantNotFound`) or a
+  revoked one (`ErrGrantRevoked`) fails the call outright — there is no
+  fallback to any other credential path.
+- `AgentDefinition.Scope` is nullable (migration 010): when
+  `ScopeForAgent`/`ScopeForSession` resolves a nil scope, dispatch skips
+  grant-key derivation and token acquisition entirely and forwards the
+  call unchanged — a scope-less agent definition carries no
+  delegated-grant scoping at all, but still runs with whatever
+  `tool_set` it is configured with.
+
+The result is the same as before: a session started through the
+browser/OAuth2 path is indistinguishable downstream from one started
+with a manually-pasted token — same `subject` shape for every rule
+above — just acquired through a scoped grant instead of an
+impersonation exchange.
+
+**One-time per-scope consent (FR2/FR3/FR5/FR6, issue #2428).** The
+token a `TokenSource` call above resolves only exists once the operator
+has completed a one-time, per-scope browser consent:
+`whagent_net/ui/handlers_consent.go`'s `GET`/`POST
+/mcp/consent(?scope=<d>)` drives `DelegatedGrantSource.BeginAuthorization`/
+`CompleteAuthorization` (requesting `offline_access`) for one explicit
+scope and records a bookkeeping-index entry (FR12, `grantindex`) on
+success — this route never infers or guesses a scope itself.
+`authorizeConsentGate` wraps `GET /authorize` (`ui`'s mcpauth-hosted
+OAuth2 endpoint for the MCP client) with a prerequisite that the operator
+hold an active grant for `WHAGENT_UI_DEFAULT_SCOPE` before a credential
+is minted — deliberately scope-agnostic at the OAuth layer rather than
+resource/scope-driven: `libs/go/mcpauth` is scope-agnostic by design
+(its own "zero scope-specific types" NFR) and `mcp`'s RFC 9728 resource
+identifier is one single, instance-wide URL, not one per scope —
+per-scope resolution happens later, at dispatch time (above). Consent
+for scope `D` grants standing access to `D` only (FR3): an operator who
+has only consented for `audience_score_system` cannot reach `manmanv2`'s
+agent without separately consenting for it, and there is no
+session-based shortcut around this for an already-`ui`-authenticated
+operator (FR6) — accessing a new scope for the first time is routed
+through this same flow at the moment of first access (FR5), never at
+`ui` sign-in.
+
+**Mid-call reauth (FR18, issue #2431).** A stored refresh token can stop
+working after it had been working (Keycloak rejects it in a way only
+re-consent fixes) — `acquireGrantToken` detects this distinctly
+(`errors.Is(err, grpcauth.ErrGrantNeedsReauth)`) and returns a
+`reauthRequiredError` naming the scope, rather than a plain acquisition
+failure, whether the failing call is `start_session`'s initial connect
+or an existing session's mid-call dispatch. No retry is attempted and no
+other grant is substituted — the operator is routed back through the
+consent flow above for that scope specifically, the next time they
+access it through `ui`. Logged at WARNING (this is a genuine deviation
+needing a human, not an ERROR — the system itself behaved correctly).
+
+**Self-service and admin grant lists (FR14–FR17, issues #2432/#2433).**
+`GET /grants` (`whagent_net/ui/handlers_grants.go`) lists the signed-in
+operator's own delegated grants with a live per-scope status read
+(`grpcauth.Store.Status`, never the bookkeeping index, which carries no
+status column of its own — FR12) and lets them revoke any one
+individually (`POST /grants/revoke`); it never shows another operator's
+grants (FR16). `GET /admin/grants` (`handlers_grants_admin.go`) is the
+equivalent for every operator's grants, reachable only to an operator
+whose token carries the `WHAGENT_GRANT_ADMIN_ROLE` realm role (FR14/FR15)
+— checked against the roles on a freshly-refreshed access token
+(`htmxauth.DBSessionManager.GetAccessToken`), never the 24h-cached
+`htmxauth.GetUser(ctx).Roles` snapshot, so a revoked admin role stops
+working on the very next request rather than up to a day later (NFR3).
+Both revoke actions are scoped to exactly one `(subject, grant)` pair
+(FR17) and take effect immediately — there is no cache for a revoke to
+race against (FR8/NFR7).
+
+**NFR2 — scope isolation is a property of whagent_net's own dispatch
+code, not of the Keycloak JWT.** The underlying Keycloak-signed JWT
+`TokenSource(...).Token(ctx)` returns is not scope-narrowed by which
+grant produced it — nothing at the IdP layer or in `grpcauth` itself
+prevents a JWT obtained via scope A's grant from being technically
+usable against scope B's `required_role` check if it were ever
+forwarded there. The guarantee this design makes is **structural
+correctness of whagent_net's own grant→scope routing**: FR4's grant key
+ties one grant to exactly one scope, and no code path in `mcp` ever
+resolves or forwards a grant for any scope other than the one the
+current call (above) is actually targeting — there is no code path that
+accepts a caller-supplied or mismatched grant/scope pair. This is
+**not** a claim that the JWT itself is cryptographically restricted to
+one scope; it is a claim about what whagent_net's dispatch code will
+and will not do with the JWT it obtains.
+
+**NFR1 — what compromising a secret alone can and cannot do.** No single
+secret held by `mcp` or `ui` — including `WHAGENT_GRANT_CLIENT_SECRET`,
+the one shared confidential client's secret (NFR5, below) — can mint a
+working credential for an operator who has not personally completed that
+scope's consent; it only lets a holder refresh already-consented,
+still-active grants it can otherwise reach. This is a materially smaller
+blast radius than the removed impersonation-exchange design, whose
+equivalent secret could mint a JWT as *any* operator currently signed
+into `ui`, for any scope, without that operator ever having consented
+to anything.
+
+**NFR5 — one shared client, not one per scope.**
+`WHAGENT_GRANT_CLIENT_ID`/`_CLIENT_SECRET`/`_REDIRECT_URI`/
+`_ENCRYPTION_KEY` (`ENV.md`) configure a *single* confidential Keycloak
+client used as the caller identity by both `ui` and `mcp` — distinct
+from `WHAGENT_OIDC_CLIENT_ID`/`_CLIENT_SECRET` (which only ever verifies
+or forwards a token neither binary minted itself) and unlike
+`KEYCLOAK.md`'s usual "one client per caller identity" principle: scope
+isolation for this flow is carried entirely by the grant key derived
+from `AgentDefinition.Scope` (FR4/NFR2 above), not by provisioning a
+separate Keycloak client per scope. The secret is read from the
+environment only, provisioned as a Kubernetes secret, never checked in,
+never logged, never echoed in an error. See
+`libs/go/grpcauth/KEYCLOAK.md` § 11 (and its whagent-net-specific runbook
+subsection) for the Keycloak-side client and admin-role setup this
+requires.
+
+**NFR6 — why the grant index is not a local identity store.** "No new
+local identity table" means no new whagent-net-only *user/account*
+identity, not "no new table": grant lookups still key on Keycloak `(iss,
+sub)` plus domain (FR4) — nothing here mints, verifies, or stores a
+whagent-net-local notion of "who this operator is" that could drift from
+Keycloak. FR12's bookkeeping index (`grantindex`,
+`(subject_iss, subject_sub, domain, preferred_username, granted_at)`) is
+compatible with this: it is a pure existence index over
+already-Keycloak-resolved identities, written once at successful consent
+and never updated afterward — it carries no status column (every render
+reads live status from `grpcauth.Store.Status` instead, so this index
+and `grpcauth`'s own store never need to be kept in sync), and its one
+non-identity field (`preferred_username`) is a captured display-only
+snapshot, not a live lookup, since the admin page has no way to
+re-derive another operator's username later.
+
+**Cutover (FR11/NFR8, issue #2434).** Migration `009_mcpauth_cutover` is
+a single, one-time deploy: every row in `mcp_credential`/`mcp_auth_code`
+is deleted outright (not revoked, not time-boxed), so every
+previously-minted opaque `mcpauth` credential stops working immediately
+and permanently, and every operator who used the browser-OAuth2 path
+before cutover must redo the per-domain consent above to regain access.
+There is no feature flag, dual-read, or coexistence window between the
+old and new paths. RFC 7591 client registrations (`mcp_oauth_client`)
+are left alone — a registration identifies the MCP client software, not
+an operator's authority. See `README.md` "Cutover" for the full
+operator-facing runbook note.
 
 Chain: subject → `api` → `worker` → domain MCP server → domain API. A
 short-lived **whagent-signed JWT** (`sub` + `sub_iss` = the on-behalf-of
@@ -393,8 +640,8 @@ API lacks such a field — one reason it is not a consumer of this product).
 ## Phasing
 
 1. **gRPC + MCP, no UI** — `session`, `migrate`, `api`, `worker`, `mcp`
-   (`archiver` + S3 may trail). Driven from Claude Code, with an agent definition
-   targeting `audience_score_system/mcp`.
+   (`worker`'s archive workflow + S3 may trail). Driven from Claude Code,
+   with an agent definition targeting `audience_score_system/mcp`.
 2. **Agent UI** — `embed` + `ui`.
 3. **Embedded research agent in ASS** — `audience_score_system/web` imports
    `embed`, agent definition targets `audience_score_system/mcp`, persona chaining
@@ -437,5 +684,21 @@ outright — the session still exists and a caller should retry with
 - **Cron-scheduled sessions**: non-goal *as a service offering* — a
   consumer wraps `StartSession` in its own Temporal schedule/workflow.
 - **Human approval gate for tool calls**: non-goal for now.
-- **Whagent-side tool filtering** of a server's full tool list: later
-  capability; v1 relies on server-side pre-filtered endpoints.
+- **UI-driven tool selection**: an operator picking/searching tools to
+  populate an agent definition's `allowed_tools` from `ui` rather than
+  hand-editing `agents.yaml`/the row directly — later capability, no UI
+  work done yet (C13–C16, the UI milestone, land first).
+- **Deferred/searched tool loading**: today `ListToolDefinitions` always
+  aggregates and offers the *full* (post-`allowed_tools`) tool set to every
+  model call, same as the rest of the field's MCP clients bulk-loading a
+  server's whole catalog up front. For a domain server with a large tool
+  catalog, a search-first pattern (a small fixed meta-tool the model calls
+  to find candidate tools by keyword/description, then only those
+  definitions are added to the next turn's `Tools`) would keep context/cost
+  down and compose with `allowed_tools` as a hard ceiling either way. Not
+  designed yet — would touch the tool contract (a reserved meta-tool name),
+  `ListToolDefinitions`'/`CallModelInput.Tools`' per-turn shape (now
+  path-dependent on prior turns, not just the agent definition), and context
+  budgeting (a searched-in tool definition is itself a context cost). Scope
+  through `/project-manager:design` before building, given the surface it
+  touches.

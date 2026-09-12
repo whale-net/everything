@@ -1,0 +1,38 @@
+load("@rules_go//go:def.bzl", "go_binary", "go_library", "go_test")
+
+# The importer's runnable entrypoint (issue #2492): a Swarm Operator-run,
+# one-time CLI, not a deployed service -- it is deliberately not wired into
+# //krill:krill_chart (compare //krill/migrate and //krill/api, both of
+# which are). Run it with:
+#   bazel run //krill/importer/cmd:import -- --path krill --session-id <uuid>
+go_library(
+    name = "import_lib",
+    srcs = ["main.go"],
+    importpath = "github.com/whale-net/everything/krill/importer/cmd",
+    visibility = ["//visibility:private"],
+    deps = [
+        "//krill/importer",
+        "//krill/store",
+        "//libs/go/db",
+        "@com_github_google_uuid//:uuid",
+    ],
+)
+
+go_binary(
+    name = "import",
+    embed = [":import_lib"],
+    visibility = ["//visibility:public"],
+)
+
+# Structural check (issue #2549, FR11's --allow-unmapped gate): reads
+# main.go back and pins its gate logic (UnmappedTotal -> !allowUnmapped
+# non-zero exit -> WARNING log on acknowledge) without needing a live
+# Postgres or a subprocess -- mirrors
+# //krill/importer:importer_nfr3_test's own "read this package's source
+# back" style. Part of `bazel test //...` (no docker needed).
+go_test(
+    name = "main_structural_test",
+    srcs = ["main_structural_test.go"],
+    data = ["main.go"],
+    embed = [":import_lib"],
+)

@@ -42,9 +42,14 @@ service SessionService {
   // is no ownership check on a read, only on SendTurn/StopSession (FR1/C13).
   rpc GetSession(GetSessionRequest) returns (GetSessionResponse);
 
-  // ListSessions may be minimal in M1 (no C15 capability yet): implement
-  // enough to list the caller's own sessions, or return UNIMPLEMENTED.
-  // Deliberately no filtering/search fields on the request.
+  // ListSessions returns sessions matching the request's filters, in
+  // (created_at DESC, session_id DESC) order, keyset-paginated by
+  // page_token/prev_page_token (FR3/C15). Any authenticated caller may
+  // list any session -- the read rule #2237 establishes for GetSession/
+  // ReadTranscript applies here too, there is no owner-only filter. No
+  // full-text search or multi-column sort: page_size/page_token plus the
+  // agent/state/started-by/time-range filters on the request are the
+  // whole M2 surface.
   rpc ListSessions(ListSessionsRequest) returns (ListSessionsResponse);
 
   // ReadTranscript returns every transcript event for a session -- user
@@ -68,6 +73,19 @@ service SessionService {
   // NOT_FOUND for an unknown session id. Authorization follows the same
   // rule as GetSession (any authenticated caller) -- see issue #2238.
   rpc GetSessionUsage(GetSessionUsageRequest) returns (GetSessionUsageResponse);
+
+  // ListAgentDefinitionScopes returns every distinct grant-scope
+  // configured across all agent_definition rows
+  // (whagent_net/session.AgentDefinition.Scope, issue #2424 FR1/FR4) --
+  // the full set of scopes an operator could ever need to consent to via
+  // the delegated-grant consent flow (`ui`'s GET /mcp/consent?scope=<s>,
+  // issue #2428), not scoped to any one agent_id, version, or session.
+  // Backs `ui`'s self-service /grants page (issue #2432) offering a
+  // clickable consent link per scope instead of requiring a hand-typed
+  // URL. Any authenticated caller may call this -- scope names carry no
+  // secret material, mirroring the read-any rule GetSession/ListSessions
+  // already establish (#2237).
+  rpc ListAgentDefinitionScopes(ListAgentDefinitionScopesRequest) returns (ListAgentDefinitionScopesResponse);
 
   // StreamEvents is FR5/C17's server-streaming bridge over the
   // `whagent/events` exchange (NFR4, LB7, issue #2239): a programmatic
@@ -170,11 +188,25 @@ message GetSessionResponse {
 message ListSessionsRequest {
   int32 page_size = 1;
   string page_token = 2;
+
+  // The following filters are all optional and additive -- unset means
+  // "no filter on this field" (FR3/C15). Combined with AND when more than
+  // one is set.
+  optional string agent_id = 3;
+  optional SessionState state = 4;
+  optional SubjectKind started_by_kind = 5;
+  // Inclusive lower bound on Session.created_at.
+  optional google.protobuf.Timestamp started_after = 6;
+  // Exclusive upper bound on Session.created_at.
+  optional google.protobuf.Timestamp started_before = 7;
 }
 
 message ListSessionsResponse {
   repeated Session sessions = 1;
+  // Empty when this is the last page.
   string next_page_token = 2;
+  // Empty when this is the first page.
+  string prev_page_token = 3;
 }
 
 message StartSessionRequest {
@@ -278,6 +310,14 @@ message GetSessionUsageRequest {
 
 message GetSessionUsageResponse {
   SessionUsage usage = 1;
+}
+
+message ListAgentDefinitionScopesRequest {}
+
+message ListAgentDefinitionScopesResponse {
+  // Sorted alphabetically, deduplicated -- whagent_net/session.
+  // AgentDefinitionStore.ListScopes' contract.
+  repeated string scopes = 1;
 }
 
 message StreamEventsRequest {

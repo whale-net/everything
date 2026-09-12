@@ -44,6 +44,8 @@ def _app_metadata_impl(ctx):
         metadata["app_type"] = ctx.attr.app_type
     if ctx.attr.port:
         metadata["port"] = ctx.attr.port
+    if ctx.attr.additional_ports:
+        metadata["additional_ports"] = ctx.attr.additional_ports
     metadata["replicas"] = ctx.attr.replicas
 
     # Add optional health check configuration if provided
@@ -115,6 +117,7 @@ app_metadata = rule(
         "domain": attr.string(mandatory = True),
         "app_type": attr.string(default = ""),
         "port": attr.int(default = 0),
+        "additional_ports": attr.int_list(default = []),
         "replicas": attr.int(default = 0),
         "health_check_enabled": attr.bool(default = False),
         "health_check_path": attr.string(default = "/health"),
@@ -131,18 +134,18 @@ app_metadata = rule(
     },
 )
 
-# Note: This function has many parameters (24) to support flexible app configuration.
+# Note: This function has many parameters (25) to support flexible app configuration.
 # They are logically grouped as:
 # - Binary config: name, binary_name, language
 # - Release config: domain, description, version, registry, organization, custom_repo_name
-# - Deployment config: app_type, port, replicas, command, args
+# - Deployment config: app_type, port, additional_ports, replicas, command, args
 # - Health check config: health_check_enabled, health_check_path
 # - Ingress config: ingress_host, ingress_tls_secret
 # - Resource config: resources_requests_cpu, resources_requests_memory, resources_limits_cpu, resources_limits_memory
 # - OpenAPI config: fastapi_app
 # - Container config: additional_tars
 # Bazel/Starlark does not support nested struct parameters, so they remain flat.
-def release_app(name, binary_name = None, language = None, domain = None, description = "", version = "latest", registry = "ghcr.io", organization = "whale-net", custom_repo_name = None, app_type = "", port = 0, replicas = 0, health_check_enabled = False, health_check_path = "/health", ingress_host = "", ingress_tls_secret = "", command = [], args = [], resources_requests_cpu = "", resources_requests_memory = "", resources_limits_cpu = "", resources_limits_memory = "", fastapi_app = None, additional_tars = None, deploy_unit = None, app_name = None, base = None):
+def release_app(name, binary_name = None, language = None, domain = None, description = "", version = "latest", registry = "ghcr.io", organization = "whale-net", custom_repo_name = None, app_type = "", port = 0, additional_ports = [], replicas = 0, health_check_enabled = False, health_check_path = "/health", ingress_host = "", ingress_tls_secret = "", command = [], args = [], resources_requests_cpu = "", resources_requests_memory = "", resources_limits_cpu = "", resources_limits_memory = "", fastapi_app = None, additional_tars = None, deploy_unit = None, app_name = None, base = None):
     """Convenience macro to set up release metadata and OCI images for an app.
 
     This macro consolidates the creation of OCI images and release metadata,
@@ -167,6 +170,10 @@ def release_app(name, binary_name = None, language = None, domain = None, descri
         custom_repo_name: Custom repository name (defaults to name)
         app_type: Application type (external-api, internal-api, worker, job, cli, binary, firmware)
         port: Port the application listens on (0 = not specified)
+        additional_ports: Extra container/Service ports beyond `port` (e.g. a second HTTP
+                     listener serving a different protocol from the same process, such as
+                     whagent-net-api's JWKS endpoint alongside its gRPC port). Each entry
+                     gets its own containerPort/Service port named "extra-<port>".
         replicas: Default number of replicas (0 = use composer default based on app_type)
         health_check_enabled: Whether to enable health checks (default: False)
         health_check_path: Path for health check endpoint (default: /health)
@@ -218,7 +225,22 @@ def release_app(name, binary_name = None, language = None, domain = None, descri
     if not base_label.startswith("//") and not base_label.startswith(":"):
         base_label = ":" + base_label
 
-    # Image name uses domain-app format (e.g., "demo-hello-python")
+    # Image name uses domain-app format (e.g., "demo-hello-python"), computed
+    # unconditionally: this MUST stay in lockstep with release_helper_go's
+    # AppMetadata.FullName() (tools/release_helper_go/cmd/metadata.go), which
+    # does the same Domain+"-"+Name concatenation with no tolerance for an
+    # already-prefixed Name. A prior version of this macro special-cased
+    # "effective_name already starts with domain-" to avoid double-prefixing
+    # whagent-net-ui/-archiver, without making the same exception on the
+    # FullName() side -- that desynced the two computations for every OTHER
+    # domain whose apps are, by longstanding convention, named with the
+    # domain prefix (leaflab-api, leaflab-ui, leaflab-emulator, manmanv2-ui),
+    # breaking their `tilt up` and release pipeline even though nothing
+    # about their own naming had changed (#2385, #2404). whagent-net-ui and
+    # -archiver were fixed properly instead, by renaming release_app's name
+    # to the short form ("ui"/"archiver") -- do the same for any future app
+    # whose name would otherwise collide with its own domain prefix, rather
+    # than special-casing this macro again.
     image_name = (domain + "-" + effective_name) if domain else effective_name
     image_target_ref = None
 
@@ -299,6 +321,7 @@ def release_app(name, binary_name = None, language = None, domain = None, descri
         domain = domain,
         app_type = app_type,
         port = port,
+        additional_ports = additional_ports,
         replicas = replicas,
         health_check_enabled = health_check_enabled,
         health_check_path = health_check_path,

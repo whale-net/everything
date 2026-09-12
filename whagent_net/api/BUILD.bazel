@@ -13,6 +13,7 @@ go_library(
         "//libs/go/grpcauth",
         "//libs/go/logging",
         "//libs/go/rmq",
+        "//libs/go/s3",
         "//libs/go/temporal",
         "//whagent_net/api/handlers",
         "//whagent_net/api/persona",
@@ -55,11 +56,17 @@ go_test(
 # whagent_net/README.md.
 release_app(
     name = "api",
-    binary_name = ":api",
-    language = "go",
-    domain = "whagent-net",
-    description = "whagent-net SessionService gRPC server",
+    # JWKS document (`WHAGENT_JWKS_ADDR`, see ENV.md), served on a separate
+    # net/http listener alongside the gRPC server above -- needs its own
+    # Service port so audience_score_system (and any other domain) can
+    # actually reach it in-cluster to verify a whagent-net-issued JWT
+    # (argok8s#200).
+    additional_ports = [8090],
     app_type = "external-api",
+    binary_name = ":api",
+    description = "whagent-net SessionService gRPC server",
+    domain = "whagent-net",
+    language = "go",
     port = 50051,
     replicas = 1,
 )

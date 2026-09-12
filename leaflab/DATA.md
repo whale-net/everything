@@ -8,6 +8,7 @@ erDiagram
         bigserial board_id PK
         varchar   device_id UK
         varchar   name
+        bigint    region_id FK
         timestamptz registered_at
         timestamptz last_seen_at
     }
@@ -56,6 +57,14 @@ erDiagram
         text        description
         timestamptz created_at
         bigint      owner_leaflab_user_id FK
+    }
+
+    region_parent_history {
+        bigserial   history_id PK
+        bigint      region_id FK
+        bigint      parent_region_id FK
+        timestamptz valid_from
+        timestamptz valid_to
     }
 
     sensor_region_history {
@@ -124,6 +133,14 @@ erDiagram
         timestamptz valid_to
     }
 
+    board_region_history {
+        bigserial   history_id PK
+        bigint      board_id FK
+        bigint      region_id FK
+        timestamptz valid_from
+        timestamptz valid_to
+    }
+
     leaflab_user_role {
         bigserial   leaflab_user_role_id PK
         bigint      leaflab_user_id FK
@@ -149,6 +166,11 @@ erDiagram
     leaflab_user     ||--o{ board_owner_history  : "owns"
     leaflab_user     |o--o{ region               : "current owner"
     leaflab_user     ||--o{ leaflab_user_role    : "role grant history"
+    board            |o--o{ region               : "recorded region"
+    board            ||--o{ board_region_history : "recorded-region history"
+    region           ||--o{ board_region_history : "records"
+    region           ||--o{ region_parent_history: "parent history"
+    region           |o--o{ region_parent_history: "parent of (history)"
 ```
 
 Ownership (`leaflab_user`, `board_owner_history`, and the `owner_leaflab_user_id`
@@ -156,13 +178,31 @@ references on `region` and `plant`) is created in M1 but written by nothing
 but interactive sign-in — no row exists in any of these until FR2/C25 land.
 `plant` is omitted from the diagram above along with `plant_type` (existing
 gap, reconciled in M4 per `leaflab/product/03-roadmap.md`), but it gains the
-same nullable `owner_leaflab_user_id FK` as `region`.
+same nullable `owner_leaflab_user_id FK` as `region`. From M3, the
+region-lifecycle API (`CreateRegion`) is the second writer of one of these:
+it sets `region.owner_leaflab_user_id` to the creating user at creation
+(FR1 — a new region is never ownerless). `region.owner_leaflab_user_id` is
+a plain current-value column with no history table: no M3 capability
+transfers a region, and re-parenting never touches it. Pre-M3 regions keep
+a NULL owner (only an admin may write them).
 
 `board.name` is a plain current-value column, not a history table, by
 design (FR3, migration 016) -- board name is not an attribution dimension
 for any reading, matching `region.name`'s precedent under LB6. `NULL` means
 "no name set, display `device_id`"; non-empty is enforced in the API layer,
 not by a check constraint.
+
+Migration 017 adds the region hierarchy history and board recorded-region
+bookkeeping. `region_parent_history` (FR1) is SCD2 with one open row per
+region at all times -- migration 017 backfills exactly one open row per
+pre-existing region from its current `region.parent_region_id`. Unlike the
+other SCD2 tables, where "unset" is the *absence* of an open row, a region's
+top-level-ness must be a recorded state, so `parent_region_id` is nullable
+and `NULL` on an open row means "top-level region" -- ancestor walks
+terminate on a row, never on a missing one. `board.region_id` (nullable
+mirror column) plus `board_region_history` records which region a board sits
+in; both are bookkeeping only and never affect reading attribution (FR10) --
+readings snapshot `sensor.region_id`, never the board's.
 
 `leaflab_user_role` (FR10, migration 016) is leaflab-local role storage --
 it is never read from OIDC `realm_access.roles`. It is SCD2-shaped like
@@ -253,7 +293,7 @@ flowchart TD
 
 ---
 
-## Config Push & Region Assignment
+## Config Push & Sensor Placement
 
 ```mermaid
 sequenceDiagram
@@ -274,9 +314,21 @@ sequenceDiagram
     Processor->>DB: UpsertSensor per descriptor
     MQTT->>Processor: leaflab.<id>.config.ack
     Processor->>DB: AckDeviceConfig (accepted=true)
-    Processor->>DB: ApplyConfigRegions\n  UPDATE sensor.region_id\n  close + open sensor_region_history rows
     Processor->>Processor: cache.SetConfigVersion(device, version)
 ```
+
+**Placement is written only by `PlaceSensor` (FR7, NFR4).**
+`leaflab/api/repository.go`'s `PlaceSensor` is the sole writer of
+`sensor.region_id` and `sensor_region_history`: an ordinary Postgres
+transaction (SCD2 close-and-open plus the mirror update), never gated on
+the board being online or acknowledging anything (LB2), owner-authorized
+(NFR2), and idempotent — re-placing a sensor in the region it already
+occupies writes no history row. `SensorConfig.region_id` stays on the wire
+but the device ignores it (NFR3, `firmware/proto/config.proto`) and the
+processor's config-ack handler never writes placement from it: a push or
+ack carrying any region value leaves placement history untouched. A
+placement change therefore takes effect for subsequent readings with no
+device round trip — see Reading Write Path below.
 
 **API composes the full desired sensor list (FR8).** Before the `publish`
 step above, `leaflab-api`'s `PushDeviceConfig` (`leaflab/api/server.go`) is
@@ -303,12 +355,19 @@ for the same DB state.
 flowchart LR
     Device -->|SensorReading proto| MQTT
     MQTT -->|leaflab.id.sensor.name| Processor
-    Processor --> Cache{sensor in\ncache?}
+    Processor --> Cache{sensor_id in\ncache?}
     Cache -- hit --> Insert
     Cache -- miss --> DB_lookup[GetSensor from DB]
     DB_lookup --> Insert
-    Insert[InsertReading\nsensor_id, region_id snapshot\nconfig_version stamp\nrecorded_at = NOW] --> TimescaleDB
+    Insert[InsertReading\nsensor_id, value, config_version stamp\nregion_id = SELECT s.region_id\nFROM sensor -- current placement\nrecorded_at = NOW] --> TimescaleDB
 ```
+
+The reading's `region_id` is resolved from `sensor.region_id` inside the
+same `INSERT ... SELECT` that writes the row (FR8/FR9) — the sensor's
+**current** placement at insert time, not a manifest-time cached value. A
+`PlaceSensor` move therefore attributes every subsequent reading to the new
+region immediately; readings written before the move keep the region they
+were stamped with. The `SensorCache` resolves `sensor_id` only.
 
 ---
 
@@ -366,7 +425,7 @@ All SCD2 (Slowly Changing Dimension Type 2) history tables follow a uniform colu
 | `valid_from` | `TIMESTAMPTZ NOT NULL` | When this row became the current value |
 | `valid_to` | `TIMESTAMPTZ` | When it was superseded; `NULL` = still current |
 
-A partial index on `(sensor_id) WHERE valid_to IS NULL` makes "what is the current value?" queries O(1) on each history table.
+A partial index on each table's entity column (`<entity>_id WHERE valid_to IS NULL`) makes "what is the current value?" queries O(1) on each history table.
 
 SCD2 tables in this schema:
 
@@ -377,6 +436,15 @@ SCD2 tables in this schema:
 | `sensor_hw_history` | Sensor I2C address + mux path |
 | `board_owner_history` | Board ownership (`leaflab_user_id`) |
 | `leaflab_user_role` | leaflab-local role grants (e.g. `'admin'`) -- not OIDC-derived |
+| `region_parent_history` | Region hierarchy position (`parent_region_id`; `NULL` = top-level) |
+| `board_region_history` | Board recorded region (bookkeeping only, never attribution) |
+
+Two "unset" representations coexist deliberately. On most of these tables an
+unset value is the *absence of an open row* (`board.region_id`'s mirror
+column is NULL to match). `region_parent_history` is the exception: every
+region carries exactly one open row from the moment it exists (FR1), and
+top-level-ness is recorded as `parent_region_id IS NULL` on that row rather
+than left to a missing row.
 
 `device_config` is NOT SCD2 — it is an append-only event log keyed by `(board_id, version)`. The view `v_board_state_history` derives a SCD2-shaped representation from it using a window function.
 
@@ -388,11 +456,11 @@ Nine plain views (prefixed `v_`) expose the schema to downstream consumers (Graf
 
 | View | Cardinality | Purpose |
 |---|---|---|
-| `v_region_path` | 1 row / region | Recursive region hierarchy with `path_ids[]`, `path_names[]`, `path_name` |
+| `v_region_path` | 1 row / region | Recursive region hierarchy with `path_ids[]`, `path_names[]`, `path_name`. **Current tree only** — the FR6 tree/drill-down view consumes it; reading roll-up uses the historical walk instead (see `v_sensor_reading_enriched`) |
 | `v_sensor_current` | 1 row / sensor | Current state: name, type, chip, board, region path |
 | `v_board_state_history` | 1 row / accepted config | SCD2-shaped board config history (valid_from / valid_to) |
 | `v_board_state_current` | 1 row / board | Current accepted device config per board |
-| `v_sensor_reading_enriched` | 1 row / reading | **Workhorse**: reading + sensor + region path + config metadata |
+| `v_sensor_reading_enriched` | 1 row / reading | **Workhorse**: reading + sensor + region path as of `recorded_at` + config metadata. Region path walks `region_parent_history` at each ancestor step, so re-parenting a region does not change roll-up of pre-existing readings (FR4, migration 018) |
 | `v_sensor_reading_with_plant` | 1 row / (reading × active plant) | Plant and plant_type slices; readings without plants appear with NULL plant fields |
 | `v_sensor_reading_with_config_debug` | 1 row / reading | `v_sensor_reading_enriched` + full `device_config.config_json` (debug) |
 | `v_sensor_last_reading` | 1 row / sensor | Each sensor's latest `recorded_at`, via a `LATERAL ... ORDER BY recorded_at DESC LIMIT 1` that uses `idx_sensor_reading_sensor_id` — O(1) per sensor instead of scanning the hypertable |
@@ -400,7 +468,7 @@ Nine plain views (prefixed `v_`) expose the schema to downstream consumers (Graf
 
 ### Temporal accuracy
 
-- **Region** is historically accurate: `sensor_reading.region_id` is snapshotted at insert, so the views join the snapshot — not the sensor's current region.
+- **Region** is historically accurate: `sensor_reading.region_id` is snapshotted at insert, so the views join the snapshot — not the sensor's current region — and the region path (ancestor chain) is resolved by walking `region_parent_history` filtered to `valid_from <= recorded_at AND (valid_to IS NULL OR valid_to > recorded_at)` at each step. Re-parenting a region never changes the roll-up of readings recorded before the re-parent. Readings recorded before `region_parent_history` existed (migration 017's backfill) resolve to their snapshot region alone, without ancestors.
 - **Config version** is historically accurate: `sensor_reading.config_version` is stamped at insert from the in-memory cache.
 - **Sensor name** is the *current* name from `sensor_name_history WHERE valid_to IS NULL`. For dashboards showing live or recent data this is almost always correct; for strict point-in-time name lookups query `sensor_name_history` directly.
 - **Plant** is resolved at query time: plants active in the reading's snapshot region at `recorded_at`.

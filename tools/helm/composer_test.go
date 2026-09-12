@@ -845,6 +845,75 @@ func TestWriteValuesYAML_InternalAPIExposeIngress(t *testing.T) {
 	}
 }
 
+// TestWriteValuesYAML_AdditionalPorts verifies additionalPorts renders as a
+// plain int list in values.yaml, and is omitted entirely when unset (argok8s
+// issue #200: whagent-net-api needs a second Service port for its JWKS
+// endpoint alongside its gRPC port).
+func TestWriteValuesYAML_AdditionalPorts(t *testing.T) {
+	tmpDir, err := os.MkdirTemp("", "values-test")
+	if err != nil {
+		t.Fatalf("Failed to create temp dir: %v", err)
+	}
+	defer os.RemoveAll(tmpDir)
+
+	valuesFile := filepath.Join(tmpDir, "values.yaml")
+	f, err := os.Create(valuesFile)
+	if err != nil {
+		t.Fatalf("Failed to create values file: %v", err)
+	}
+	defer f.Close()
+
+	data := ValuesData{
+		Global: GlobalConfig{Namespace: "test-ns", Environment: "dev"},
+		Apps: map[string]AppConfig{
+			"whagent-net-api": {
+				Type:            "external-api",
+				Image:           "whagent-net-api",
+				ImageTag:        "latest",
+				Port:            50051,
+				AdditionalPorts: []int{8090},
+				Replicas:        1,
+			},
+			"no-extra-ports": {
+				Type:     "external-api",
+				Image:    "no-extra-ports",
+				ImageTag: "latest",
+				Port:     8080,
+				Replicas: 1,
+			},
+		},
+	}
+
+	if err := writeValuesYAML(f, data); err != nil {
+		t.Fatalf("Failed to write values: %v", err)
+	}
+	f.Close()
+
+	content, err := os.ReadFile(valuesFile)
+	if err != nil {
+		t.Fatalf("Failed to read values file: %v", err)
+	}
+	valuesContent := string(content)
+
+	if !contains(valuesContent, "additionalPorts:") || !contains(valuesContent, "- 8090") {
+		t.Errorf("expected additionalPorts: / - 8090 in values.yaml, got:\n%s", valuesContent)
+	}
+
+	lines := strings.Split(valuesContent, "\n")
+	inNoExtraPortsSection := false
+	for _, line := range lines {
+		trimmed := strings.TrimSpace(line)
+		if strings.HasPrefix(trimmed, "no-extra-ports:") {
+			inNoExtraPortsSection = true
+		} else if inNoExtraPortsSection && strings.HasPrefix(trimmed, "whagent-net-api:") {
+			inNoExtraPortsSection = false
+		}
+		if inNoExtraPortsSection && strings.Contains(line, "additionalPorts:") {
+			t.Error("additionalPorts should not appear for an app that doesn't set it")
+		}
+	}
+}
+
 // TestGenerateChart_Golden renders a full chart (Chart.yaml + values.yaml +
 // templates) from a fixed set of AppManifest fixtures covering every app
 // type, and byte-compares the output against a checked-in golden chart.

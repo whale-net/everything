@@ -1,0 +1,59 @@
+load("@rules_go//go:def.bzl", "go_library", "go_test")
+
+# Embeds the real golang-migrate SQL so both the migration binary
+# (//krill/migrate) and anything else that needs the real schema apply the
+# exact same schema instead of maintaining separate copies. See schema.go
+# for why the embed directive uses "all:migrations" instead of a "*.sql"
+# glob.
+go_library(
+    name = "schema",
+    srcs = ["schema.go"],
+    embedsrcs = glob(
+        ["migrations/*"],
+        allow_empty = True,
+    ),
+    importpath = "github.com/whale-net/everything/krill/migrate/schema",
+    visibility = ["//visibility:public"],
+)
+
+# Trivial test asserting the embed FS resolves Dir without error and
+# contains migration 001's files.
+go_test(
+    name = "schema_test",
+    srcs = ["schema_test.go"],
+    embed = [":schema"],
+)
+
+# Real Postgres integration test proving migration 001 (issue #2487's
+# `scope` table, LB1) applies cleanly, reverses to a clean database, and is
+# re-runnable -- plus the specific column-shape/constraint assertions the
+# issue's Testing section calls out. Deliberately NOT part of
+# `bazel test //...` -- see //libs/go/dbtest's README for the full rationale
+# behind each tag and how to run tests like this one.
+#
+# Run it explicitly (requires a working Docker daemon):
+#   bazel test //krill/migrate/schema:schema_integration_test --test_output=all
+go_test(
+    name = "schema_integration_test",
+    size = "large",
+    timeout = "long",
+    srcs = ["schema_integration_test.go"],
+    gotags = ["integration"],
+    tags = [
+        "external",
+        "integration",
+        "manual",
+        "no-cache",
+        "no-sandbox",
+        "requires-network",
+    ],
+    deps = [
+        ":schema",
+        "//libs/go/dbtest",
+        "//libs/go/migrate",
+        "@com_github_google_uuid//:uuid",
+        "@com_github_jackc_pgx_v5//stdlib",
+        "@com_github_stretchr_testify//assert",
+        "@com_github_stretchr_testify//require",
+    ],
+)

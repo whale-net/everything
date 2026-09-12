@@ -131,7 +131,7 @@ templ GameDetail(data GameDetailPageData) {
 			</div>
 		</div>
 		<!-- Path Presets -->
-		<div x-data="{ expanded: false }" class="card bg-base-100 border border-base-300 shadow-sm mb-6 overflow-hidden">
+		<div id="settings-presets" x-data="{ expanded: false }" class="card bg-base-100 border border-base-300 shadow-sm mb-6 overflow-hidden">
 			<button @click="expanded = !expanded" class="w-full flex justify-between items-center p-4 border-b border-base-300 hover:bg-base-200 transition-colors">
 				<div class="flex items-center gap-3">
 					<h2 class="text-lg font-semibold text-base-content">Addon Path Presets</h2>
@@ -263,7 +263,7 @@ templ GameDetail(data GameDetailPageData) {
 		<!-- Danger Zone: chrome only restyled onto htmxui.Confirm's ZoneTitle visual
 			language; the existing Alpine click-to-reveal gate is kept as-is (FR7),
 			see sgc_detail.templ's Danger Zone comment for the full rationale. -->
-		<div x-data="{ confirmDelete: false }" class="card bg-base-100 border-2 border-error/40 shadow-md overflow-hidden mt-6">
+		<div id="danger-zone" x-data="{ confirmDelete: false }" class="card bg-base-100 border-2 border-error/40 shadow-md overflow-hidden mt-6">
 			<div class="bg-error/10 px-6 py-4 border-b-2 border-error/40">
 				<h2 class="text-lg font-semibold text-error">⚠️ Danger Zone</h2>
 			</div>

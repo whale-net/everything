@@ -15,9 +15,11 @@ import (
 // ToolServerRef is one entry of an agent definition's tool_set JSONB array
 // (LB5, ARCHITECTURE.md "Domain-owned MCP servers and the tool contract"):
 // an MCP endpoint plus the tool names an agent using this definition may
-// see there. A nil AllowedTools means "whatever the server exposes" --
-// initial tool selection is enforced server-side via a pre-filtered
-// endpoint (e.g. `/mcp/research`), not by whagent-side filtering.
+// see there. A nil/empty AllowedTools means "whatever the server exposes."
+// Tool selection is the intersection of two filters: server-side, via a
+// pre-filtered endpoint (e.g. `/mcp/research`), and, when AllowedTools is
+// non-empty, whagent-side narrowing (C22) enforced by
+// whagent_net/worker/tools' ListToolDefinitions/Dispatch.
 type ToolServerRef struct {
 	ServerURL    string   `json:"server_url"`
 	AllowedTools []string `json:"allowed_tools,omitempty"`
@@ -26,17 +28,42 @@ type ToolServerRef struct {
 // AgentDefinition is an `agent_definition` row (LB5/NFR6): a named,
 // role-shaped tool set plus the model and guardrail defaults a session
 // inherits unless overridden (FR5/FR6/FR7, FR9's required_role).
-// (AgentID, Version) is the primary key -- versions are never mutated in
-// place, only inserted.
+// ID is the surrogate primary key (migration 009): a single stable handle
+// for one row, so callers, logs, and any future FK never need to repeat
+// both AgentID and Version to name one. AgentID remains the stable,
+// human-authored business key (agents.yaml, MCP tool inputs, UI filters --
+// LB5/NFR6); (AgentID, Version) stays UNIQUE at the database layer, it is
+// just no longer the primary key. Versions are never mutated in place,
+// only inserted.
+//
+// Exactly one of Model and ModelDefinitionID is set (migration 006's
+// agent_definition_model_xor_model_definition CHECK constraint;
+// config.Validate enforces the identical rule pre-seed). When
+// ModelDefinitionID is set, it is preferred: the effective model and
+// OpenRouter provider-routing preferences are resolved from the
+// referenced model_definition row (worker/activities.go's
+// ResolveAgentDefinition), not from Model, which is NULL in that case.
+// Scope is optional (migration 009): when set, it is the one grant-scope
+// this agent definition belongs to, and the sole input
+// whagent_net/grantkey.ForScope may derive a delegated-grant key from
+// (FR4) -- never agent_id, required_role, or a tool_set[].server_url.
+// Every tool_set entry is understood to belong to this same scope, by
+// construction; there is no per-entry scope field to reconcile against
+// it. A nil Scope means the agent runs with no delegated-grant scoping at
+// all -- it still gets whatever ToolSet is configured for it, just without
+// a cross-domain grant key derived or checked.
 type AgentDefinition struct {
-	AgentID      string
-	Version      int
-	Model        string
-	ToolSet      []ToolServerRef
-	MaxTurns     int
-	MaxCostUSD   float64
-	RequiredRole *string
-	CreatedAt    time.Time
+	ID                uuid.UUID
+	AgentID           string
+	Scope             *string
+	Version           int
+	Model             *string
+	ModelDefinitionID *uuid.UUID
+	ToolSet           []ToolServerRef
+	MaxTurns          int
+	MaxCostUSD        float64
+	RequiredRole      *string
+	CreatedAt         time.Time
 }
 
 // SessionAgent is a `session_agent` row (LB5/NFR6): the SCD2 history of
@@ -71,6 +98,15 @@ type AgentDefinitionStore interface {
 	// CurrentAssignment returns the session's open (ValidTo nil)
 	// session_agent row.
 	CurrentAssignment(ctx context.Context, sessionID uuid.UUID) (*SessionAgent, error)
+	// ListScopes returns every distinct non-null Scope value across all
+	// agent_definition rows (every agent_id and version), sorted
+	// alphabetically -- the full set of grant-scopes an operator could
+	// ever need to consent to (whagent_net/grantkey.ForScope's input),
+	// not scoped to any one agent_id, version, or session. Backs `api`'s
+	// ListAgentDefinitionScopes RPC, which `ui`'s self-service /grants
+	// page (issue #2432) uses to offer a clickable consent link instead
+	// of requiring a hand-typed /mcp/consent?scope=<s> URL.
+	ListScopes(ctx context.Context) ([]string, error)
 }
 
 // agentDefinitionStore is the Postgres-backed AgentDefinitionStore
@@ -79,13 +115,13 @@ type agentDefinitionStore struct{ pool *pgxpool.Pool }
 
 var _ AgentDefinitionStore = agentDefinitionStore{}
 
-const agentDefinitionColumns = `agent_id, version, model, tool_set, max_turns, max_cost_usd, required_role, created_at`
+const agentDefinitionColumns = `id, agent_id, scope, version, model, model_definition_id, tool_set, max_turns, max_cost_usd, required_role, created_at`
 
 func scanAgentDefinition(row pgx.Row) (*AgentDefinition, error) {
 	var def AgentDefinition
 	var toolSet json.RawMessage
 	if err := row.Scan(
-		&def.AgentID, &def.Version, &def.Model, &toolSet,
+		&def.ID, &def.AgentID, &def.Scope, &def.Version, &def.Model, &def.ModelDefinitionID, &toolSet,
 		&def.MaxTurns, &def.MaxCostUSD, &def.RequiredRole, &def.CreatedAt,
 	); err != nil {
 		return nil, err
@@ -114,6 +150,31 @@ func (s agentDefinitionStore) GetLatest(ctx context.Context, agentID string) (*A
 	return def, nil
 }
 
+// ListScopes returns every distinct non-null scope value, sorted
+// alphabetically -- see the interface doc comment above.
+func (s agentDefinitionStore) ListScopes(ctx context.Context) ([]string, error) {
+	rows, err := s.pool.Query(ctx, `
+		SELECT DISTINCT scope FROM agent_definition WHERE scope IS NOT NULL ORDER BY scope
+	`)
+	if err != nil {
+		return nil, fmt.Errorf("list agent definition scopes: %w", err)
+	}
+	defer rows.Close()
+
+	var scopes []string
+	for rows.Next() {
+		var scope string
+		if err := rows.Scan(&scope); err != nil {
+			return nil, fmt.Errorf("scan agent definition scope: %w", err)
+		}
+		scopes = append(scopes, scope)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("list agent definition scopes: %w", err)
+	}
+	return scopes, nil
+}
+
 // GetVersion returns nil (not an error) when (agentID, version) does not
 // exist.
 func (s agentDefinitionStore) GetVersion(ctx context.Context, agentID string, version int) (*AgentDefinition, error) {
@@ -132,9 +193,9 @@ func (s agentDefinitionStore) GetVersion(ctx context.Context, agentID string, ve
 }
 
 // Upsert inserts (AgentID, Version) or, on conflict, replaces every column
-// except created_at (a replace of an already-seeded definition keeps its
-// original creation time rather than bumping it). Fills in CreatedAt on
-// def either way.
+// except id and created_at (a replace of an already-seeded definition
+// keeps its original surrogate id and creation time rather than minting a
+// new one). Fills in ID and CreatedAt on def either way.
 func (s agentDefinitionStore) Upsert(ctx context.Context, def *AgentDefinition) error {
 	toolSet, err := json.Marshal(def.ToolSet)
 	if err != nil {
@@ -142,16 +203,18 @@ func (s agentDefinitionStore) Upsert(ctx context.Context, def *AgentDefinition) 
 	}
 
 	err = s.pool.QueryRow(ctx, `
-		INSERT INTO agent_definition (agent_id, version, model, tool_set, max_turns, max_cost_usd, required_role)
-		VALUES ($1, $2, $3, $4, $5, $6, $7)
+		INSERT INTO agent_definition (agent_id, scope, version, model, model_definition_id, tool_set, max_turns, max_cost_usd, required_role)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
 		ON CONFLICT (agent_id, version) DO UPDATE SET
+			scope = EXCLUDED.scope,
 			model = EXCLUDED.model,
+			model_definition_id = EXCLUDED.model_definition_id,
 			tool_set = EXCLUDED.tool_set,
 			max_turns = EXCLUDED.max_turns,
 			max_cost_usd = EXCLUDED.max_cost_usd,
 			required_role = EXCLUDED.required_role
-		RETURNING created_at
-	`, def.AgentID, def.Version, def.Model, toolSet, def.MaxTurns, def.MaxCostUSD, def.RequiredRole).Scan(&def.CreatedAt)
+		RETURNING id, created_at
+	`, def.AgentID, def.Scope, def.Version, def.Model, def.ModelDefinitionID, toolSet, def.MaxTurns, def.MaxCostUSD, def.RequiredRole).Scan(&def.ID, &def.CreatedAt)
 	if err != nil {
 		return fmt.Errorf("upsert agent definition: %w", err)
 	}

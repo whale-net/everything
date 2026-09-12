@@ -20,6 +20,11 @@ type ServerRepository interface {
 	UpdateLastSeen(ctx context.Context, serverID int64, lastSeen time.Time) error
 	ListStaleServers(ctx context.Context, thresholdSeconds int) ([]*manman.Server, error)
 	MarkServersOffline(ctx context.Context, serverIDs []int64) error
+	// SetDrainState/ListByDrainState: host drain state (#2360, manmanv2 M6,
+	// C29 groundwork). Inert here -- no cordon enforcement or eviction yet.
+	// ListByDrainState is used by the dependent eviction task.
+	SetDrainState(ctx context.Context, serverID int64, state string, requestedAt *time.Time) error
+	ListByDrainState(ctx context.Context, state string) ([]*manman.Server, error)
 }
 
 // GameRepository defines operations for Game entities
@@ -40,18 +45,47 @@ type GameConfigRepository interface {
 	Delete(ctx context.Context, configID int64) error
 }
 
-// ServerGameConfigRepository defines operations for ServerGameConfig entities
+// ServerGameConfigRepository defines operations for ServerGameConfig entities.
+// SGC-scoped library attachment (AddLibrary/RemoveLibrary/ListLibraries/
+// GetSGCLibraryAttachments) retired with sgc_workshop_libraries (M6 #2370,
+// plan #2359, NFR1) -- see GameConfigWorkshopLibraryRepository below for the
+// GC-scoped replacement.
 type ServerGameConfigRepository interface {
 	Create(ctx context.Context, sgc *manman.ServerGameConfig) (*manman.ServerGameConfig, error)
 	Get(ctx context.Context, sgcID int64) (*manman.ServerGameConfig, error)
 	List(ctx context.Context, serverID *int64, limit, offset int) ([]*manman.ServerGameConfig, error)
 	Update(ctx context.Context, sgc *manman.ServerGameConfig) error
 	Delete(ctx context.Context, sgcID int64) error
+}
 
-	AddLibrary(ctx context.Context, sgcID, libraryID int64, presetID, volumeID *int64, installationPathOverride *string) error
-	RemoveLibrary(ctx context.Context, sgcID, libraryID int64) error
-	ListLibraries(ctx context.Context, sgcID int64) ([]*manman.WorkshopLibrary, error)
-	GetSGCLibraryAttachments(ctx context.Context, sgcID int64) ([]*manman.SGCWorkshopLibrary, error)
+// GameConfigWorkshopLibraryRepository defines operations for the GC-level
+// Workshop library attachment table (M6 #2361, plan #2359) and the FR12
+// conflicts the SGC->GC backfill surfaces. This is the sole resolution path
+// for deploy-time library resolution since sgc_workshop_libraries was
+// retired (M6 #2370, NFR1).
+type GameConfigWorkshopLibraryRepository interface {
+	ListLibraries(ctx context.Context, configID int64) ([]*manman.WorkshopLibrary, error)
+	ListAttachments(ctx context.Context, configID int64) ([]*manman.GameConfigWorkshopLibrary, error)
+	AddLibrary(ctx context.Context, configID, libraryID int64, presetID, volumeID *int64, installationPathOverride *string) error
+	RemoveLibrary(ctx context.Context, configID, libraryID int64) error
+	// ListUnresolvedConflicts returns every unresolved conflict with its
+	// Candidates already populated -- callers must not loop
+	// ListConflictCandidates per conflict to build a full listing.
+	ListUnresolvedConflicts(ctx context.Context) ([]*manman.WorkshopLibraryMigrationConflict, error)
+	GetConflictForConfig(ctx context.Context, configID int64) (*manman.WorkshopLibraryMigrationConflict, error)
+	// ListConflictCandidates returns conflictID's candidates regardless of
+	// whether the conflict is resolved -- resolving a conflict does not
+	// delete its candidate rows. Used to validate an "override" resolution's
+	// keep_library_id before calling ResolveConflict.
+	ListConflictCandidates(ctx context.Context, conflictID int64) ([]*manman.WorkshopLibraryMigrationConflictCandidate, error)
+	// ResolveConflict writes the resulting attachment set into
+	// gameconfig_workshop_libraries and stamps resolved_at/resolution in one
+	// transaction: "union" inserts every candidate library (one
+	// representative override variant per library_id), "override" inserts
+	// only keepLibraryID and discards the rest. Resolving an already-resolved
+	// conflict is rejected (FR12, Out of scope: no other resolution shape
+	// exists in M6).
+	ResolveConflict(ctx context.Context, conflictID int64, resolution string, keepLibraryID *int64) error
 }
 
 // SessionFilters defines filters for session queries
@@ -81,6 +115,17 @@ type SessionRepository interface {
 	UpdateSessionEndIfStatus(ctx context.Context, sessionID int64, expectedStatus string, newStatus string, endedAt time.Time, exitCode *int) (updated bool, err error)
 	GetStaleSessions(ctx context.Context, threshold time.Duration) ([]*manman.Session, error)
 	StopOtherSessionsForSGC(ctx context.Context, sessionID int64, sgcID int64) error
+	// CountRunningDeploymentsByGame is the fleet-wide status summary
+	// aggregate (#2371, manmanv2 M6, FR5/NFR5): one row per game (games with
+	// zero deployments included, as 0/0), ordered by game name, computed in
+	// a single query -- never one query per game. For each ServerGameConfig
+	// (deployment) belonging to the game across every host, "total" counts
+	// the deployment regardless of whether a session was ever started for
+	// it; "running" counts it only if its most recent Session (by
+	// session_id) has status "running" -- a deployment with no session at
+	// all, or whose most recent session is pending/starting/stopping/
+	// stopped/crashed/lost/completed, does not count toward running.
+	CountRunningDeploymentsByGame(ctx context.Context) ([]*manman.FleetGameStatus, error)
 }
 
 // ServerCapabilityRepository defines operations for ServerCapability entities
@@ -279,6 +324,19 @@ type PendingRestartRepository interface {
 	// GetLatestBySGCIDs returns the current non-resolved-or-recently-resolved
 	// state per SGC for the operator-facing read path (FR12).
 	GetLatestBySGCIDs(ctx context.Context, sgcIDs []int64) (map[int64]*manman.PendingRestart, error)
+	// CancelForSGCs moves every 'pending' record for the given SGCs to a
+	// terminal state with reason, and returns how many rows it moved
+	// (#2366, FR18: drain eviction cancels the pending restart for every
+	// deployment it evicts, before the evicted session's Stop reaches a
+	// terminal status, so SessionRestartConsumer never claims it). Reuses
+	// MarkFailed's 'failed' terminal state rather than inventing a
+	// 'cancelled' status the schema doesn't otherwise express -- the reason
+	// string is what distinguishes a drain cancellation from an ordinary
+	// failed restart for an operator reading it back. A no-op (0, nil) for
+	// SGCs with no 'pending' record is expected, not an error, and calling
+	// it twice for the same SGCs is idempotent -- the second call simply
+	// matches no rows.
+	CancelForSGCs(ctx context.Context, sgcIDs []int64, reason string) (int, error)
 }
 
 // AddonPathPresetRepository defines operations for game addon path presets
@@ -324,26 +382,27 @@ type WorkshopCacheRepository interface {
 
 // Repository aggregates all repository interfaces
 type Repository struct {
-	Servers                 ServerRepository
-	Games                   GameRepository
-	GameConfigs             GameConfigRepository
-	ServerGameConfigs       ServerGameConfigRepository
-	Sessions                SessionRepository
-	ServerCapabilities      ServerCapabilityRepository
-	LogReferences           LogReferenceRepository
-	Backups                 BackupRepository
-	BackupConfigs           BackupConfigRepository
-	ServerPorts             ServerPortRepository
-	ServerPortRanges        ServerPortRangeRepository
-	ConfigurationStrategies ConfigurationStrategyRepository
-	ConfigurationPatches    ConfigurationPatchRepository
-	GameConfigVolumes       GameConfigVolumeRepository
-	WorkshopAddons          WorkshopAddonRepository
-	WorkshopInstallations   WorkshopInstallationRepository
-	WorkshopLibraries       WorkshopLibraryRepository
-	WorkshopBatchJobs       WorkshopBatchJobRepository
-	AddonPathPresets        AddonPathPresetRepository
-	PendingRestarts         PendingRestartRepository
-	WorkshopCache           WorkshopCacheRepository
-	Actions                 interface{} // ActionRepository from postgres package
+	Servers                     ServerRepository
+	Games                       GameRepository
+	GameConfigs                 GameConfigRepository
+	ServerGameConfigs           ServerGameConfigRepository
+	GameConfigWorkshopLibraries GameConfigWorkshopLibraryRepository
+	Sessions                    SessionRepository
+	ServerCapabilities          ServerCapabilityRepository
+	LogReferences               LogReferenceRepository
+	Backups                     BackupRepository
+	BackupConfigs               BackupConfigRepository
+	ServerPorts                 ServerPortRepository
+	ServerPortRanges            ServerPortRangeRepository
+	ConfigurationStrategies     ConfigurationStrategyRepository
+	ConfigurationPatches        ConfigurationPatchRepository
+	GameConfigVolumes           GameConfigVolumeRepository
+	WorkshopAddons              WorkshopAddonRepository
+	WorkshopInstallations       WorkshopInstallationRepository
+	WorkshopLibraries           WorkshopLibraryRepository
+	WorkshopBatchJobs           WorkshopBatchJobRepository
+	AddonPathPresets            AddonPathPresetRepository
+	PendingRestarts             PendingRestartRepository
+	WorkshopCache               WorkshopCacheRepository
+	Actions                     interface{} // ActionRepository from postgres package
 }

@@ -28,7 +28,9 @@ go_test(
 # build-tagged/manual pattern as
 # manmanv2/api/handlers:action_execution_integration_test.
 #
-# Run it explicitly (requires working Docker):
+# Runs in CI via the "Test Database Integration" job's explicit union (see
+# .github/workflows/ci.yml) -- it has no //libs/go/dbtest dependency for that
+# job's discovery query to key on. Run it locally (requires working Docker):
 #   bazel test //libs/go/s3:s3_integration_test --test_output=all
 go_test(
     # keep

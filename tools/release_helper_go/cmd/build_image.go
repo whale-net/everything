@@ -249,8 +249,7 @@ func newReleaseMultiarchCmd() *cobra.Command {
 			if owner == "" {
 				owner = "whale-net"
 			}
-			imageName := app.Domain + "-" + app.Name
-			repoPath := fmt.Sprintf("%s/%s/%s", registry, owner, imageName)
+			repoPath := fmt.Sprintf("%s/%s/%s", registry, owner, app.FullName())
 
 			tags := []string{version, "latest"}
 			if commitSHA != "" {

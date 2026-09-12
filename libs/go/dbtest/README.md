@@ -150,6 +150,13 @@ so any test that depends on this package is picked up the moment it exists. The 
 loudly if the query returns nothing, since a silently-empty run would report green while
 testing nothing.
 
+The same job also runs container-backed integration tests that don't use `dbtest` — e.g.
+MinIO via testcontainers-go in `//libs/go/s3:s3_integration_test`. Those have no shared
+library for the query to key on (each starts its own container directly), so they're unioned
+into the job's `CANDIDATES` expression by label instead of discovered by dependency. If you
+write a new non-Postgres container-backed test, add its label to that union in
+`.github/workflows/ci.yml` — it will not be picked up automatically.
+
 Two gotchas that cost a debugging cycle when this job was written:
 
 - **`bazel query` takes `--config=ci`.** Configured with `--noimplicit_deps` in

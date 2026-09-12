@@ -59,6 +59,39 @@ func (c *ControlClient) ListServers(ctx context.Context) ([]*manmanpb.Server, er
 	return resp.Servers, nil
 }
 
+// DrainServer transitions a host to "draining" (#2360, manmanv2 M6, C29
+// groundwork). Inert server-side in this task -- no cordon enforcement or
+// eviction happens as a result of this call.
+func (c *ControlClient) DrainServer(ctx context.Context, serverID int64) (*manmanpb.Server, error) {
+	resp, err := c.api.DrainServer(ctx, &manmanpb.DrainServerRequest{ServerId: serverID})
+	if err != nil {
+		return nil, fmt.Errorf("failed to drain server: %w", err)
+	}
+	return resp.Server, nil
+}
+
+// UndrainServer returns a host to "schedulable" and clears
+// drain_requested_at. Never restarts anything (FR4).
+func (c *ControlClient) UndrainServer(ctx context.Context, serverID int64) (*manmanpb.Server, error) {
+	resp, err := c.api.UndrainServer(ctx, &manmanpb.UndrainServerRequest{ServerId: serverID})
+	if err != nil {
+		return nil, fmt.Errorf("failed to undrain server: %w", err)
+	}
+	return resp.Server, nil
+}
+
+// GetFleetStatusSummary retrieves the fleet-wide per-game running/total
+// deployment snapshot for the Infrastructure page (#2371, manmanv2 M6,
+// FR5/NFR5). Point-in-time only -- callers refresh it themselves (page load
+// or manual refresh), this method never caches or polls.
+func (c *ControlClient) GetFleetStatusSummary(ctx context.Context) ([]*manmanpb.FleetGameStatus, error) {
+	resp, err := c.api.GetFleetStatusSummary(ctx, &manmanpb.GetFleetStatusSummaryRequest{})
+	if err != nil {
+		return nil, fmt.Errorf("failed to get fleet status summary: %w", err)
+	}
+	return resp.Games, nil
+}
+
 // ListGames retrieves all games
 func (c *ControlClient) ListGames(ctx context.Context) ([]*manmanpb.Game, error) {
 	resp, err := c.api.ListGames(ctx, &manmanpb.ListGamesRequest{
@@ -813,51 +846,80 @@ func (c *ControlClient) UpdateAddon(ctx context.Context, addonID int64, name, de
 	return resp.Addon, nil
 }
 
-// SGC-Library management methods
+// GameConfig-Library management methods (M6 #2365/#2370, plan #2359). The
+// prior SGC-Library methods (AddLibraryToSGC/ListSGCLibraries/
+// RemoveLibraryFromSGC/GetSGCLibraryAttachments) retired with
+// sgc_workshop_libraries (NFR1); these are the sole library-attachment
+// methods now.
 
-func (c *ControlClient) AddLibraryToSGC(ctx context.Context, sgcID, libraryID, presetID, volumeID int64, pathOverride string) error {
-	_, err := c.workshop.AddLibraryToSGC(ctx, &manmanpb.AddLibraryToSGCRequest{
-		SgcId:                    sgcID,
+func (c *ControlClient) AddLibraryToGameConfig(ctx context.Context, configID, libraryID, presetID, volumeID int64, pathOverride string) error {
+	_, err := c.workshop.AddLibraryToGameConfig(ctx, &manmanpb.AddLibraryToGameConfigRequest{
+		ConfigId:                 configID,
 		LibraryId:                libraryID,
 		PresetId:                 presetID,
 		VolumeId:                 volumeID,
 		InstallationPathOverride: pathOverride,
 	})
 	if err != nil {
-		return fmt.Errorf("failed to add library to SGC: %w", err)
+		return fmt.Errorf("failed to add library to game config: %w", err)
 	}
 	return nil
 }
 
-func (c *ControlClient) ListSGCLibraries(ctx context.Context, sgcID int64) ([]*manmanpb.WorkshopLibrary, error) {
-	resp, err := c.workshop.ListSGCLibraries(ctx, &manmanpb.ListSGCLibrariesRequest{
-		SgcId: sgcID,
+func (c *ControlClient) RemoveLibraryFromGameConfig(ctx context.Context, configID, libraryID int64) error {
+	_, err := c.workshop.RemoveLibraryFromGameConfig(ctx, &manmanpb.RemoveLibraryFromGameConfigRequest{
+		ConfigId:  configID,
+		LibraryId: libraryID,
 	})
 	if err != nil {
-		return nil, fmt.Errorf("failed to list SGC libraries: %w", err)
+		return fmt.Errorf("failed to remove library from game config: %w", err)
+	}
+	return nil
+}
+
+func (c *ControlClient) ListGameConfigLibraries(ctx context.Context, configID int64) ([]*manmanpb.WorkshopLibrary, error) {
+	resp, err := c.workshop.ListGameConfigLibraries(ctx, &manmanpb.ListGameConfigLibrariesRequest{
+		ConfigId: configID,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("failed to list game config libraries: %w", err)
 	}
 	return resp.Libraries, nil
 }
 
-func (c *ControlClient) RemoveLibraryFromSGC(ctx context.Context, sgcID, libraryID int64) error {
-	_, err := c.workshop.RemoveLibraryFromSGC(ctx, &manmanpb.RemoveLibraryFromSGCRequest{
-		SgcId:     sgcID,
-		LibraryId: libraryID,
+func (c *ControlClient) GetGameConfigLibraryAttachments(ctx context.Context, configID int64) ([]*manmanpb.GameConfigWorkshopLibrary, error) {
+	resp, err := c.workshop.GetGameConfigLibraryAttachments(ctx, &manmanpb.GetGameConfigLibraryAttachmentsRequest{
+		ConfigId: configID,
 	})
 	if err != nil {
-		return fmt.Errorf("failed to remove library from SGC: %w", err)
-	}
-	return nil
-}
-
-func (c *ControlClient) GetSGCLibraryAttachments(ctx context.Context, sgcID int64) ([]*manmanpb.SGCWorkshopLibrary, error) {
-	resp, err := c.workshop.GetSGCLibraryAttachments(ctx, &manmanpb.GetSGCLibraryAttachmentsRequest{
-		SgcId: sgcID,
-	})
-	if err != nil {
-		return nil, fmt.Errorf("failed to get SGC library attachments: %w", err)
+		return nil, fmt.Errorf("failed to get game config library attachments: %w", err)
 	}
 	return resp.Attachments, nil
+}
+
+// ListLibraryMigrationConflicts lists every unresolved SGC->GC backfill
+// conflict (FR12) for the resolution UI.
+func (c *ControlClient) ListLibraryMigrationConflicts(ctx context.Context) ([]*manmanpb.WorkshopLibraryMigrationConflict, error) {
+	resp, err := c.workshop.ListLibraryMigrationConflicts(ctx, &manmanpb.ListLibraryMigrationConflictsRequest{})
+	if err != nil {
+		return nil, fmt.Errorf("failed to list library migration conflicts: %w", err)
+	}
+	return resp.Conflicts, nil
+}
+
+// ResolveLibraryMigrationConflict applies a union or override resolution to
+// an SGC->GC backfill conflict (FR12). keepLibraryID is only meaningful
+// (and required) when resolution == "override".
+func (c *ControlClient) ResolveLibraryMigrationConflict(ctx context.Context, conflictID int64, resolution string, keepLibraryID int64) error {
+	_, err := c.workshop.ResolveLibraryMigrationConflict(ctx, &manmanpb.ResolveLibraryMigrationConflictRequest{
+		ConflictId:    conflictID,
+		Resolution:    resolution,
+		KeepLibraryId: keepLibraryID,
+	})
+	if err != nil {
+		return fmt.Errorf("failed to resolve library migration conflict: %w", err)
+	}
+	return nil
 }
 
 // Path Preset Management
@@ -917,6 +979,26 @@ func (c *ControlClient) ListBackupConfigs(ctx context.Context, volumeID int64) (
 func (c *ControlClient) CreateBackupConfig(ctx context.Context, volumeID int64, cadenceMinutes int32, backupPath string, enabled bool) (*manmanpb.BackupConfig, error) {
 	resp, err := c.api.CreateBackupConfig(ctx, &manmanpb.CreateBackupConfigRequest{
 		VolumeId:       volumeID,
+		CadenceMinutes: cadenceMinutes,
+		BackupPath:     backupPath,
+		Enabled:        enabled,
+	})
+	if err != nil {
+		return nil, err
+	}
+	return resp.Config, nil
+}
+
+// UpdateBackupConfig updates a BackupConfig's volume-level settings (FR14,
+// #2363): cadence, backup path, enabled. There is no volume_id field here
+// deliberately -- the API handler's UpdateBackupConfig never accepts one
+// (manmanv2/api/handlers/backup_config.go), since BackupConfig.VolumeID is
+// set once at creation and never reassigned (see ConfigEditorVolume's doc
+// comment in manmanv2/ui/pages/config_editor.templ for why that also means
+// "assign" and "create" are the same operation in this schema).
+func (c *ControlClient) UpdateBackupConfig(ctx context.Context, backupConfigID int64, cadenceMinutes int32, backupPath string, enabled bool) (*manmanpb.BackupConfig, error) {
+	resp, err := c.api.UpdateBackupConfig(ctx, &manmanpb.UpdateBackupConfigRequest{
+		BackupConfigId: backupConfigID,
 		CadenceMinutes: cadenceMinutes,
 		BackupPath:     backupPath,
 		Enabled:        enabled,

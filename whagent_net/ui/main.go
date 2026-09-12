@@ -5,10 +5,13 @@
 // whagent-net-specific login mechanism and no local user table -- and
 // every outbound call to `api` forwards that operator's own access token
 // (//libs/go/grpcauth), never a shared service account (mirrors `mcp`'s
-// FR10 stance, ARCHITECTURE.md "Identity and auth chaining"). Real
-// session pages (FR1-FR4) and the MCP OAuth2 provider (FR9) mount onto
-// what this task builds; today this binary only serves a placeholder
-// authenticated index page.
+// FR10 stance, ARCHITECTURE.md "Identity and auth chaining"). The session
+// detail page and its live transcript over an htmxsse.Hub (FR2, issue
+// #2242), the ownership-gated start/turn/stop lifecycle controls (FR1,
+// issue #2246), and the filtered/paginated session list (FR3/C15, issue
+// #2247) that is also the authenticated landing page, are the real pages
+// so far; the usage panel (FR4) and the MCP OAuth2 provider (FR9) mount
+// onto what this task builds in later tasks under plan #2233.
 package main
 
 import (
@@ -21,12 +24,18 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/gorilla/sessions"
 	"go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp"
 
 	"github.com/whale-net/everything/libs/go/db"
 	"github.com/whale-net/everything/libs/go/grpcauth"
 	"github.com/whale-net/everything/libs/go/htmxauth"
+	"github.com/whale-net/everything/libs/go/htmxsse"
 	"github.com/whale-net/everything/libs/go/logging"
+	"github.com/whale-net/everything/libs/go/mcpauth"
+	"github.com/whale-net/everything/libs/go/rmq"
+	"github.com/whale-net/everything/whagent_net/delegatedgrant"
+	"github.com/whale-net/everything/whagent_net/events"
 )
 
 // config holds `ui`'s configuration, loaded entirely from environment
@@ -78,6 +87,68 @@ type config struct {
 	// forwarded to `api` on outbound calls (grpcauth.NewUserTokenDialOption).
 	// Should match `api`'s own GRPC_AUTH_MODE (ENV.md "`api` server").
 	GRPCAuthMode string
+
+	// RabbitMQURL backs the live session detail page's htmxsse.Hub (FR2,
+	// NFR2, issue #2242) -- ENV.md's "RabbitMQ (event bus)" section
+	// already documents RABBITMQ_URL as applying to `ui`. Unset or an
+	// unreachable broker must not fail boot (NFR2's degrade-and-retry
+	// stance, mirrored from manmanv2/ui and tools/app_registry/ui's own
+	// initializeSSEHub) -- see initializeSSEHub's doc comment.
+	RabbitMQURL string
+
+	// UIPublicURL is this binary's own externally-reachable base URL
+	// (e.g. https://whagent.example.com) -- FR9/issue #2245's
+	// mcpauth.ProviderConfig.Issuer, the base every mcpauth endpoint URL
+	// `ui` advertises (`/authorize`, `/token`, `/register`,
+	// `/.well-known/oauth-authorization-server`) is built from. Mirrors
+	// audience_score_system's ASS_OAUTH_REDIRECT_BASE_URL doubling as
+	// mcpauth's issuer (see audience_score_system/ENV.md).
+	UIPublicURL string
+
+	// MCPPublicURL is `mcp`'s own externally-reachable base URL -- FR9's
+	// mcpauth.ProviderConfig.Resource, the OAuth2 `resource` identifier.
+	// Must be byte-identical to what `mcp` itself advertises in its own
+	// protected-resource metadata (mcp's dependent task, issue #2245's
+	// Context section) -- a mismatch breaks an MCP client's RFC 9728
+	// discovery chain.
+	MCPPublicURL string
+
+	// GrantClientID/GrantClientSecret/GrantRedirectURI/GrantEncryptionKey
+	// configure the single shared confidential Keycloak client
+	// //whagent_net/delegatedgrant.Build constructs (issue #2426,
+	// FR10/FR13/NFR5/NFR6 of plan #2421) -- WHAGENT_GRANT_CLIENT_ID/
+	// _CLIENT_SECRET/_REDIRECT_URI/_ENCRYPTION_KEY (../ENV.md). Distinct
+	// from OIDCClientID/OIDCClientSecret above, which only ever verify or
+	// forward a token, never mint one (NFR5). Purely additive: nothing
+	// built from these is on any request path yet (see
+	// initializeDelegatedGrant's doc comment).
+	GrantClientID      string
+	GrantClientSecret  string
+	GrantRedirectURI   string
+	GrantEncryptionKey string
+
+	// GrantAdminRole is the Keycloak realm role name that gates
+	// FR14/FR15's admin all-operators grant list and revoke page (issue
+	// #2433). Checked fresh on every request against
+	// app.auth.GetAccessToken(r)'s roles (NFR3) -- never
+	// htmxauth.GetUser(ctx).Roles, which caches at sign-in for the full
+	// 24h session TTL (see handlers_grants_admin.go's package doc
+	// comment). Realm-side creation/assignment of this role is
+	// deployment/runbook work, not coded here (out of scope on #2421).
+	// Left empty, the admin page 403s for everyone -- there is no
+	// "everyone is admin" default.
+	GrantAdminRole string
+
+	// DefaultScope (WHAGENT_UI_DEFAULT_SCOPE) is the one
+	// AgentDefinition.Scope (issue #2424's FR1) authorizeConsentGate
+	// (handlers_consent.go, issue #2428) requires the operator have an
+	// active delegated grant for before /authorize mints an MCP-client
+	// credential -- see that file's package doc comment for why this is a
+	// single configured scope rather than a live multi-scope chooser.
+	// Left empty, the gate is a no-op (matches every other
+	// WHAGENT_GRANT_*-gated degrade path in this binary): required only
+	// once a deployment actually onboards this consent flow.
+	DefaultScope string
 }
 
 func loadConfig() config {
@@ -92,6 +163,16 @@ func loadConfig() config {
 		DatabaseURL:      getEnv("PG_DATABASE_URL", ""),
 		APIAddr:          getEnv("WHAGENT_API_URL", ""),
 		GRPCAuthMode:     strings.ToLower(getEnv("GRPC_AUTH_MODE", "none")),
+		RabbitMQURL:      getEnv("RABBITMQ_URL", ""),
+		UIPublicURL:      getEnv("WHAGENT_UI_PUBLIC_URL", ""),
+		MCPPublicURL:     getEnv("WHAGENT_MCP_PUBLIC_URL", ""),
+
+		GrantClientID:      getEnv("WHAGENT_GRANT_CLIENT_ID", ""),
+		GrantClientSecret:  getEnv("WHAGENT_GRANT_CLIENT_SECRET", ""),
+		GrantRedirectURI:   getEnv("WHAGENT_GRANT_REDIRECT_URI", ""),
+		GrantEncryptionKey: getEnv("WHAGENT_GRANT_ENCRYPTION_KEY", ""),
+		GrantAdminRole:     getEnv("WHAGENT_GRANT_ADMIN_ROLE", ""),
+		DefaultScope:       getEnv("WHAGENT_UI_DEFAULT_SCOPE", ""),
 	}
 }
 
@@ -106,6 +187,57 @@ func getEnv(key, def string) string {
 type App struct {
 	auth    *htmxauth.Authenticator
 	session *SessionClient
+
+	// oidcIssuer is the signed-in operator's iss for FR2's read-only
+	// gating (isSessionOwner, handlers_session.go) -- cfg.OIDCIssuer
+	// verbatim, never a per-token claim; see isSessionOwner's doc comment
+	// for why.
+	oidcIssuer string
+
+	// sseHub backs the live session detail page (handlers_session_live.go,
+	// FR2/NFR2). nil when RabbitMQURL is unset or the broker was
+	// unreachable at startup (initializeSSEHub) -- handleSessionEvents
+	// degrades to 503 in that case rather than the whole binary failing
+	// to boot.
+	sseHub *htmxsse.Hub
+
+	// mcpProvider is mcpauth's OAuth2 authorization-server front end
+	// (FR9/C27, issue #2245) -- constructed in NewApp, mounted on this
+	// binary's mux in setupRoutes on unauthenticated routes (discovery
+	// metadata and dynamic client registration must be reachable before
+	// an MCP client has any credential at all). Its Resolver reads
+	// `ui`'s own Keycloak session (mcpCallerResolver, mcpauth.go) --
+	// `/authorize` mints a credential only once the operator is already
+	// signed in via app.auth, and (issue #2428) only once
+	// authorizeConsentGate (run()) is satisfied, since it wraps this
+	// binary's whole mux rather than being registered as its own route.
+	mcpProvider *mcpauth.Provider
+
+	// grant is the shared DelegatedGrantSource/Store/Index triple (issue
+	// #2426, FR10/FR13/NFR5/NFR6) initializeDelegatedGrant constructs.
+	// Zero-valued (every field nil) when WHAGENT_GRANT_*/WHAGENT_OIDC_ISSUER
+	// are not configured -- see initializeDelegatedGrant's doc comment.
+	// Read by handlers_consent.go's consent flow (issue #2428, FR9) --
+	// authorizeConsentGate's degrade-to-no-op path for an unconfigured
+	// deployment.
+	grant delegatedgrant.Components
+
+	// adminRole is cfg.GrantAdminRole verbatim -- the realm role name
+	// handleGrantsAdmin/handleGrantsAdminRevoke's fresh-role gate checks
+	// for (FR15/NFR3, issue #2433). Empty means the admin page is
+	// unreachable to everyone, not "everyone is admin".
+	adminRole string
+
+	// defaultScope is cfg.DefaultScope verbatim -- the one scope
+	// authorizeConsentGate (handlers_consent.go, issue #2428) gates
+	// /authorize on. Empty disables that gate entirely.
+	defaultScope string
+
+	// consentStore is the signed, httpOnly cookie store
+	// handlers_consent.go's savePendingConsent/loadPendingConsent round-trip
+	// a pendingConsent through between DelegatedGrantSource.
+	// BeginAuthorization and its Keycloak-redirect callback (issue #2428).
+	consentStore *sessions.CookieStore
 }
 
 // NewApp wires up Keycloak sign-in (NFR1) and the authenticated `api`
@@ -128,6 +260,12 @@ func NewApp(ctx context.Context, cfg config) (*App, error) {
 	}
 	if cfg.APIAddr == "" {
 		return nil, fmt.Errorf("WHAGENT_API_URL is required")
+	}
+	if cfg.UIPublicURL == "" {
+		return nil, fmt.Errorf("WHAGENT_UI_PUBLIC_URL is required")
+	}
+	if cfg.MCPPublicURL == "" {
+		return nil, fmt.Errorf("WHAGENT_MCP_PUBLIC_URL is required")
 	}
 
 	pool, err := db.NewPool(ctx, cfg.DatabaseURL)
@@ -170,14 +308,88 @@ func NewApp(ctx context.Context, cfg config) (*App, error) {
 		return nil, fmt.Errorf("failed to connect to api at %s: %w", cfg.APIAddr, err)
 	}
 
-	return &App{
-		auth:    auth,
-		session: sessionClient,
-	}, nil
+	app := &App{
+		auth:          auth,
+		session:       sessionClient,
+		oidcIssuer:    cfg.OIDCIssuer,
+		sseHub:        initializeSSEHub(cfg),
+		adminRole:     cfg.GrantAdminRole,
+		defaultScope: cfg.DefaultScope,
+		consentStore:  newConsentStore(cfg.SessionSecret),
+	}
+
+	// mcpauth.NewCredentialStore/NewPostgresClientRegistry/
+	// NewPostgresAuthCodeStore each preflight their own table (see
+	// whagent_net/migrate/schema/migrations/004_mcpauth_credential) and
+	// fail loudly, naming the table, if it hasn't been applied yet --
+	// exactly like htmxauth.NewDBSessionManager's ui_sessions probe above.
+	mcpProvider, err := setupMCPAuth(ctx, pool, cfg, app.mcpCallerResolver())
+	if err != nil {
+		return nil, fmt.Errorf("failed to initialize mcpauth provider: %w", err)
+	}
+	app.mcpProvider = mcpProvider
+
+	// Purely additive (issue #2426): constructs the shared delegated-grant
+	// triple but wires it onto nothing yet -- see
+	// initializeDelegatedGrant's doc comment. Non-fatal only when the
+	// feature is entirely unconfigured; a partial configuration is a
+	// fatal startup error.
+	grant, err := initializeDelegatedGrant(ctx, cfg, pool, logging.Get("main"))
+	if err != nil {
+		return nil, fmt.Errorf("failed to initialize delegated-grant client: %w", err)
+	}
+	app.grant = grant
+
+	return app, nil
+}
+
+// initializeSSEHub dials RabbitMQ and builds the htmxsse.Hub backing the
+// live session detail page (FR2, NFR2, LB7, issue #2242). Mirrors
+// manmanv2/ui/main.go's initializeSSEHub (itself mirroring
+// tools/app_registry/ui/main.go's) and events.RoutingKey's scheme
+// (ARCHITECTURE.md "Event bus").
+//
+// RabbitMQURL unset or the broker unreachable must not prevent `ui` from
+// starting or serving any other route (NFR2's degrade-and-retry stance):
+// this returns nil in that case, logged as a WARNING, and
+// handleSessionEvents responds 503 so the client's reconnect loop
+// retries. Attach is lazy in htmxsse (Hub.Subscribe triggers it), so an
+// unreachable-but-configured broker already degrades correctly on its
+// own once a connection is returned here.
+func initializeSSEHub(cfg config) *htmxsse.Hub {
+	logger := logging.Get("main")
+
+	if cfg.RabbitMQURL == "" {
+		logger.Warn("RABBITMQ_URL not set; live session updates (/sessions/{id}/events) disabled")
+		return nil
+	}
+
+	conn, err := rmq.NewConnectionFromURL(cfg.RabbitMQURL)
+	if err != nil {
+		logger.Warn("failed to connect to RabbitMQ; live session updates (/sessions/{id}/events) disabled", "error", err)
+		return nil
+	}
+
+	// events.DeclareArgs() matches htmxsse.DefaultAttachFunc's own
+	// hardcoded declare call byte-for-byte (topic/durable=true/
+	// autoDelete=false/internal=false/noWait=false/args=nil) -- see
+	// events.go's doc comment -- so the library's default attach func is
+	// used directly rather than a local copy that could drift.
+	attachFunc := htmxsse.DefaultAttachFunc(events.ExchangeName, conn)
+
+	hubConfig := htmxsse.DefaultConfig()
+	hubConfig.ExchangeName = events.ExchangeName
+
+	return htmxsse.NewHub(attachFunc, hubConfig)
 }
 
 // Close releases this App's resources.
 func (app *App) Close() error {
+	if app.sseHub != nil {
+		if err := app.sseHub.Close(); err != nil {
+			logging.Get("main").Warn("error closing SSE hub", "error", err)
+		}
+	}
 	if app.session != nil {
 		return app.session.Close()
 	}
@@ -222,9 +434,16 @@ func run() error {
 	mux := http.NewServeMux()
 	app.setupRoutes(mux)
 
+	// authorizeConsentGate wraps the whole mux, outside routing, rather than
+	// being registered as its own mux pattern: mcpauth.Provider.Mount above
+	// already claims the exact "GET /authorize" pattern, and net/http's
+	// ServeMux panics on a duplicate registration of the same pattern -- see
+	// handlers_consent.go's package doc comment for the full reasoning.
+	var handler http.Handler = app.authorizeConsentGate(mux)
+
 	httpServer := &http.Server{
 		Addr:         cfg.Addr,
-		Handler:      otelhttp.NewHandler(mux, "whagent-net-ui"),
+		Handler:      otelhttp.NewHandler(handler, "whagent-net-ui"),
 		ReadTimeout:  15 * time.Second,
 		WriteTimeout: 15 * time.Second,
 		IdleTimeout:  60 * time.Second,
@@ -275,7 +494,68 @@ func (app *App) setupRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("/auth/callback", app.auth.HandleCallback)
 	mux.HandleFunc("/logout", app.auth.HandleLogout)
 
-	mux.HandleFunc("/", app.auth.RequireAuthFunc(app.auth.WithAccessToken(app.handleIndex)))
+	// mcpauth's OAuth2 authorization-server endpoints (/authorize, /token,
+	// /register, and both discovery metadata documents, FR9/issue #2245)
+	// are registered directly on mux here, outside app.auth.RequireAuth --
+	// unlike "/", none of setupRoutes' other registrations wrap these in
+	// RequireAuthFunc, so there is no blanket auth middleware for Mount to
+	// be caught under. Discovery and dynamic client registration must be
+	// reachable before an MCP client has any credential at all; /authorize
+	// itself is where app.mcpProvider's own Resolver + SignInURL gate
+	// access to a signed-in operator, not RequireAuth.
+	app.mcpProvider.Mount(mux)
+
+	// Per-domain delegated-grant consent (FR2/FR3/FR5/FR6/FR9/FR12, issue
+	// #2428): the standalone entry point (handlers_consent.go's package doc
+	// comment). Requires a signed-in operator like every other app route --
+	// unlike the mcpauth endpoints above, these are `ui`'s own pages, not
+	// an OAuth2 authorization-server surface an MCP client hits directly.
+	mux.HandleFunc("GET /mcp/consent", app.auth.RequireAuthFunc(app.handleMCPConsent))
+	mux.HandleFunc("POST /mcp/consent", app.auth.RequireAuthFunc(app.handleMCPConsentConfirm))
+	mux.HandleFunc("GET /mcp/consent/callback", app.auth.RequireAuthFunc(app.handleMCPConsentCallback))
+
+	// Session list (FR3/C15, NFR3, issue #2247): the authenticated landing
+	// page, mounted at both "/" and "/sessions" -- replacing issue #2236's
+	// placeholder index -- so a bare sign-in and an explicit nav click both
+	// land here.
+	mux.HandleFunc("/", app.auth.RequireAuthFunc(app.auth.WithAccessToken(app.handleSessionList)))
+	mux.HandleFunc("GET /sessions", app.auth.RequireAuthFunc(app.auth.WithAccessToken(app.handleSessionList)))
+
+	// Session lifecycle controls (FR1, issue #2246): start form, turn
+	// composer, stop control. Registered ahead of "GET /sessions/{id}"
+	// below -- Go 1.22 ServeMux's exact-literal-over-wildcard precedence
+	// means "/sessions/new" always wins over "/sessions/{id}" regardless
+	// of registration order, but the two are still grouped here so the
+	// whole session route family reads top-to-bottom as one block.
+	mux.HandleFunc("GET /sessions/new", app.auth.RequireAuthFunc(app.auth.WithAccessToken(app.handleNewSession)))
+	mux.HandleFunc("POST /sessions", app.auth.RequireAuthFunc(app.auth.WithAccessToken(app.handleStartSession)))
+	mux.HandleFunc("POST /sessions/{id}/turns", app.auth.RequireAuthFunc(app.auth.WithAccessToken(app.handleSendTurn)))
+	mux.HandleFunc("POST /sessions/{id}/stop", app.auth.RequireAuthFunc(app.auth.WithAccessToken(app.handleStopSession)))
+
+	// Session detail (FR2, NFR2, NFR3, NFR4, issue #2242/#2248): full page
+	// and its two SSE streams (transcript+state, usage panel). Both SSE
+	// routes are wrapped with RequireAuthFunc only, never WithAccessToken
+	// -- see handleSessionEvents' doc comment.
+	mux.HandleFunc("GET /sessions/{id}", app.auth.RequireAuthFunc(app.auth.WithAccessToken(app.handleSessionDetail)))
+	mux.HandleFunc("GET /sessions/{id}/events", app.auth.RequireAuthFunc(app.handleSessionEvents))
+	mux.HandleFunc("GET /sessions/{id}/usage-events", app.auth.RequireAuthFunc(app.handleSessionUsageEvents))
+
+	// Self-service per-domain grant list and revoke page (FR16/FR17, issue
+	// #2432): app.grant.Store/Index is intentionally NOT threaded through
+	// WithAccessToken -- neither handler calls `api`, so no outbound
+	// forwarded token is needed here.
+	mux.HandleFunc("GET /grants", app.auth.RequireAuthFunc(app.handleGrants))
+	mux.HandleFunc("POST /grants/revoke", app.auth.RequireAuthFunc(app.handleGrantsRevoke))
+
+	// Admin all-operators grant list and revoke page (FR14/FR15/NFR3, issue
+	// #2433): app.grant.Store/Index is intentionally NOT threaded through
+	// WithAccessToken here either -- neither handler calls `api`. The
+	// admin-role gate itself (Implementation phase) still needs a freshly
+	// refreshed access token, read via app.auth.GetAccessToken(r) directly
+	// inside the handler -- never htmxauth.GetUser(ctx)'s cached Roles, see
+	// handlers_grants_admin.go's package doc comment (NFR3).
+	mux.HandleFunc("GET /admin/grants", app.auth.RequireAuthFunc(app.handleGrantsAdmin))
+	mux.HandleFunc("POST /admin/grants/revoke", app.auth.RequireAuthFunc(app.handleGrantsAdminRevoke))
 }
 
 func handleHealthz(w http.ResponseWriter, r *http.Request) {

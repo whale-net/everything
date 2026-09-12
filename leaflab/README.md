@@ -155,7 +155,7 @@ erDiagram
 
 Key design decisions:
 - `sensor` is a stable dimension anchor — rename via config closes the old `sensor_name_history` row, opens new; `sensor_id` and reading history are unchanged
-- `sensor.region_id` is a current-value cache; `sensor_region_history` records every assignment (SCD-2, `valid_from`/`valid_to`)
+- `sensor.region_id` is a current-value cache; `sensor_region_history` records every assignment (SCD-2, `valid_from`/`valid_to`). Both are written only by `leaflab-api`'s `PlaceSensor` RPC — the device-config ack path never writes placement
 - `sensor_reading.region_id` is snapshotted at insert so historical location is preserved when sensors move
 - `sensor_reading.config_version` records which `DeviceConfig` was active at write time
 - `sensor.mux_path` is JSONB supporting arbitrary mux cascade depth
@@ -223,7 +223,11 @@ role this milestone uses is `'admin'`, which gates the admin ownership RPCs
 (`ListOwnedBoards`, `ReassignBoardOwner`, `ClearBoardOwner`, `ListUsers`) via
 `LeafLabAPIServer.requireAdmin` in `leaflab/api/server.go`. It grants no
 board-write access beyond those RPCs — `authorizeBoardWrite` never consults
-it (FR5 has no admin exception).
+it (FR5 has no admin exception). From M3 it additionally unlocks region
+writes (`CreateRegion`'s fence is authentication alone; `RenameRegion` and
+`ReparentRegion` go through `authorizeRegionWrite`): an admin may rename or
+re-parent any region on its owner's behalf out-of-band (NFR2's admin-bypass
+pattern), including regions with no owner set.
 
 **Bootstrap: how the first admin comes to exist.** After this milestone's
 migrations run, at least one user always holds `'admin'`, with no

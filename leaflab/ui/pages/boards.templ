@@ -9,14 +9,15 @@ import (
 )
 
 // Boards is the boards list screen (#1502: FR4, FR5, NFR1; #1765 added the
-// Owner column) -- every board leaflab-api returns from
-// ListBoardsWithState, with no client-side filtering by owner or ownership
-// status (FR4: an unowned board is shown the same as an owned one, just
-// with an Unowned label and a Claim button -- never hidden or flagged as an
-// error). boards and loadErr are mutually exclusive: handlers_boards.go
-// passes a nil boards slice on a load failure and a nil loadErr on
-// success, mirroring tools/app_registry/ui/pages/environments.templ's
-// Environments(..., loadErr error) shape.
+// Owner column; #2318 added the Region column) -- every board leaflab-api
+// returns from ListBoardsWithState, with no client-side filtering by owner
+// or ownership status (FR4: an unowned board is shown the same as an owned
+// one, just with an Unowned label and a Claim button -- never hidden or
+// flagged as an error). boards and loadErr are mutually exclusive:
+// handlers_boards.go passes a nil boards slice on a load failure and a nil
+// loadErr on success, mirroring
+// tools/app_registry/ui/pages/environments.templ's Environments(...,
+// loadErr error) shape.
 //
 // NFR1: this page has no hx-trigger polling interval, no sse-connect, and
 // no WebSocket -- data reflects the last page load or navigation only. Do
@@ -46,7 +47,11 @@ templ Boards(data components.LayoutData, boards []*leaflabapipb.BoardWithState, 
 // unnamed, per #1765's boardDisplayName) is the primary label; device_id
 // stays visible underneath, monospaced, so it can still be matched against
 // the eFuse-derived identifier printed on the hardware. Each row links to
-// the board's detail page (#1503).
+// the board's detail page (#1503). The Region column (#2318, FR12) shows
+// each board's current recorded region, verbatim from the API -- display
+// only here; the set/change/clear control lives on the board detail screen
+// (board_detail.templ's BoardRegionCard), so the list never grows a second
+// copy of the write path.
 templ boardsTable(boards []*leaflabapipb.BoardWithState) {
 	<div class="overflow-x-auto">
 		<table class="table">
@@ -54,6 +59,7 @@ templ boardsTable(boards []*leaflabapipb.BoardWithState) {
 				<tr>
 					<th>Board</th>
 					<th>Owner</th>
+					<th>Region</th>
 					<th>Status</th>
 					<th></th>
 				</tr>
@@ -63,6 +69,7 @@ templ boardsTable(boards []*leaflabapipb.BoardWithState) {
 					<tr class="hover">
 						<td>@boardNameCell(board.GetBoardName(), board.GetDeviceId())</td>
 						<td>@boardOwnerCell(board.GetBoardId(), board.GetOwnedByCaller(), board.GetOwner())</td>
+						<td>@boardRecordedRegionCell(board.RecordedRegionId, board.GetRecordedRegionName())</td>
 						<td>@boardStateCell(board)</td>
 						<td class="text-right">
 							<a href={ templ.URL(fmt.Sprintf("/boards/%d", board.GetBoardId())) } class="btn btn-primary btn-sm">View</a>
@@ -72,6 +79,19 @@ templ boardsTable(boards []*leaflabapipb.BoardWithState) {
 			</tbody>
 		</table>
 	</div>
+}
+
+// boardRecordedRegionCell renders a board's current recorded region (FR12,
+// #2318) as the API supplied it -- a region name, or an em-dash when the
+// board has no recorded region (recorded_region_id unset: the absence of an
+// open board_region_history row, never a sentinel region id). No client-side
+// fallback names, no recomputation -- the API's own name is the display.
+templ boardRecordedRegionCell(recordedRegionID *int64, recordedRegionName string) {
+	if recordedRegionID == nil {
+		<span class="text-base-content/40">—</span>
+	} else {
+		<span>{ recordedRegionName }</span>
+	}
 }
 
 // boardNameCell renders a board's primary label (name, falling back to

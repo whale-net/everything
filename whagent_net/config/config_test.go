@@ -8,6 +8,8 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+func strPtr(s string) *string { return &s }
+
 // validAgent returns a config.AgentDefinitionConfig that passes Validate,
 // for tests to copy and mutate exactly one field -- keeps each failure
 // case isolated to the one rule it's proving (this task's Testing
@@ -16,6 +18,7 @@ import (
 func validAgent() AgentDefinitionConfig {
 	return AgentDefinitionConfig{
 		AgentID: "test-agent",
+		Scope:   strPtr("test-scope"),
 		Model:   "anthropic/claude-3.5-sonnet",
 		ToolSet: []ToolServerRefConfig{
 			{ServerURL: "http://mcp.example.com:8081/", AllowedTools: nil},
@@ -27,14 +30,14 @@ func validAgent() AgentDefinitionConfig {
 }
 
 func TestValidate_AcceptsAWellFormedDefinition(t *testing.T) {
-	assert.NoError(t, Validate([]AgentDefinitionConfig{validAgent()}))
+	assert.NoError(t, Validate(nil, []AgentDefinitionConfig{validAgent()}))
 }
 
 func TestValidate_MissingAgentID_FailsLoudly(t *testing.T) {
 	agent := validAgent()
 	agent.AgentID = ""
 
-	err := Validate([]AgentDefinitionConfig{agent})
+	err := Validate(nil, []AgentDefinitionConfig{agent})
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "agent_id is required")
 }
@@ -43,25 +46,100 @@ func TestValidate_DuplicateAgentID_FailsLoudly(t *testing.T) {
 	agent := validAgent()
 	other := validAgent()
 
-	err := Validate([]AgentDefinitionConfig{agent, other})
+	err := Validate(nil, []AgentDefinitionConfig{agent, other})
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "duplicate agent_id")
 }
 
-func TestValidate_MissingModel_FailsLoudly(t *testing.T) {
+// TestValidate_NilScope_Succeeds proves an entry with no `scope` key at
+// all (Scope left nil) passes Validate -- scope is optional (issue #2424
+// FR1, made optional): an agent definition with no scope simply carries
+// no delegated-grant scoping.
+func TestValidate_NilScope_Succeeds(t *testing.T) {
+	agent := validAgent()
+	agent.Scope = nil
+
+	assert.NoError(t, Validate(nil, []AgentDefinitionConfig{agent}))
+}
+
+// TestValidate_EmptyStringScope_FailsLoudly proves a `scope: ""` entry --
+// present but blank, distinct from omitted entirely -- still fails
+// Validate: a set-but-empty scope would otherwise silently collapse onto
+// grantkey.ForScope's own empty-string rejection at a much less
+// informative point.
+func TestValidate_EmptyStringScope_FailsLoudly(t *testing.T) {
+	agent := validAgent()
+	agent.Scope = strPtr("")
+
+	err := Validate(nil, []AgentDefinitionConfig{agent})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "scope, if set, must not be empty")
+}
+
+func TestValidate_MissingModelAndModelDefinition_FailsLoudly(t *testing.T) {
 	agent := validAgent()
 	agent.Model = ""
 
-	err := Validate([]AgentDefinitionConfig{agent})
+	err := Validate(nil, []AgentDefinitionConfig{agent})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "exactly one of model or model_definition is required")
+}
+
+func TestValidate_ModelAndModelDefinitionBothSet_FailsLoudly(t *testing.T) {
+	agent := validAgent()
+	agent.ModelDefinition = "shared-model"
+
+	err := Validate([]ModelDefinitionConfig{{Name: "shared-model", Model: "anthropic/claude-3.5-sonnet"}}, []AgentDefinitionConfig{agent})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "mutually exclusive")
+}
+
+func TestValidate_ModelDefinitionNotDefined_FailsLoudly(t *testing.T) {
+	agent := validAgent()
+	agent.Model = ""
+	agent.ModelDefinition = "does-not-exist"
+
+	err := Validate(nil, []AgentDefinitionConfig{agent})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), `model_definition "does-not-exist" is not defined`)
+}
+
+func TestValidate_AcceptsModelDefinitionReference(t *testing.T) {
+	agent := validAgent()
+	agent.Model = ""
+	agent.ModelDefinition = "shared-model"
+
+	err := Validate([]ModelDefinitionConfig{{Name: "shared-model", Model: "anthropic/claude-3.5-sonnet"}}, []AgentDefinitionConfig{agent})
+	assert.NoError(t, err)
+}
+
+func TestValidate_ModelDefinitionMissingName_FailsLoudly(t *testing.T) {
+	err := Validate([]ModelDefinitionConfig{{Model: "anthropic/claude-3.5-sonnet"}}, []AgentDefinitionConfig{validAgent()})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "name is required")
+}
+
+func TestValidate_ModelDefinitionMissingModel_FailsLoudly(t *testing.T) {
+	err := Validate([]ModelDefinitionConfig{{Name: "shared-model"}}, []AgentDefinitionConfig{validAgent()})
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "model is required")
+}
+
+func TestValidate_DuplicateModelDefinitionName_FailsLoudly(t *testing.T) {
+	modelDefs := []ModelDefinitionConfig{
+		{Name: "shared-model", Model: "anthropic/claude-3.5-sonnet"},
+		{Name: "shared-model", Model: "openai/gpt-4o"},
+	}
+	err := Validate(modelDefs, []AgentDefinitionConfig{validAgent()})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "duplicate name")
 }
 
 func TestValidate_EmptyToolSet_FailsLoudly(t *testing.T) {
 	agent := validAgent()
 	agent.ToolSet = nil
 
-	err := Validate([]AgentDefinitionConfig{agent})
+	err := Validate(nil, []AgentDefinitionConfig{agent})
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "tool_set must have at least one entry")
 }
@@ -70,7 +148,7 @@ func TestValidate_ToolSetMissingServerURL_FailsLoudly(t *testing.T) {
 	agent := validAgent()
 	agent.ToolSet = []ToolServerRefConfig{{ServerURL: "", AllowedTools: nil}}
 
-	err := Validate([]AgentDefinitionConfig{agent})
+	err := Validate(nil, []AgentDefinitionConfig{agent})
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "server_url is required")
 }
@@ -87,7 +165,7 @@ func TestValidate_FirstBadEntryReportedByIndex(t *testing.T) {
 	bad.AgentID = "second-agent"
 	bad.Model = ""
 
-	err := Validate([]AgentDefinitionConfig{good, bad})
+	err := Validate(nil, []AgentDefinitionConfig{good, bad})
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "second-agent")
 }
@@ -121,7 +199,7 @@ func TestRequiredRoles_DedupesAndSkipsEmpty(t *testing.T) {
 // whagent_net/api/main_test.go's TestDevRolesCarrySeededRequiredRoles
 // asserts ends up in AuthModeNone's dev Claims.
 func TestRequiredRoles_RealAgentsYAML(t *testing.T) {
-	agents, err := Load()
+	_, agents, err := Load()
 	require.NoError(t, err)
 
 	roles := RequiredRoles(agents)
@@ -135,13 +213,16 @@ func TestRequiredRoles_RealAgentsYAML(t *testing.T) {
 // so this guards against the checked-in seed data itself drifting into an
 // invalid shape.
 func TestLoad_EmbeddedAgentsYAML_ParsesAndValidates(t *testing.T) {
-	agents, err := Load()
+	_, agents, err := Load()
 	require.NoError(t, err)
 	require.NotEmpty(t, agents, "agents.yaml must seed at least one real agent definition (LB5/NFR6)")
 
 	for _, a := range agents {
 		assert.NotEmpty(t, a.AgentID)
-		assert.NotEmpty(t, a.Model)
+		if a.Scope != nil {
+			assert.NotEmpty(t, *a.Scope, "agent %q's scope, if set, must not be empty", a.AgentID)
+		}
+		assert.True(t, a.Model != "" || a.ModelDefinition != "", "agent %q must name a model or model_definition", a.AgentID)
 		assert.NotEmpty(t, a.ToolSet)
 		for _, ref := range a.ToolSet {
 			assert.True(t, strings.HasPrefix(ref.ServerURL, "http"), "tool_set server_url %q should be an http(s) URL", ref.ServerURL)

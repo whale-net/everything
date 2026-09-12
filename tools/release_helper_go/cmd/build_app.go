@@ -179,26 +179,42 @@ func ExecuteBuildApp(p BuildAppParams) (*BuildAppManifest, error) {
 		owner = "whale-net"
 	}
 	repoPath := fmt.Sprintf("%s/%s/%s", reg, owner, fullName)
-	pushTarget := imagePushTarget(*matchedApp)
 
-	fmt.Printf("Building and pushing %s (build tag: %s) via %s...\n", fullName, p.GitSHA, pushTarget)
 	buildStart := time.Now()
-	// This is the highest-bandwidth bazel invocation in the release pipeline
-	// (pulling multi-platform image layers out of remote cache before
-	// pushing to ghcr.io); bazelRunToDisk's --config=ci-images ensures they
-	// land on local disk with build:ci's CI tuning applied.
-	if _, err := bazelRunToDisk(bazel, "run", pushTarget, "--", "--tag", p.GitSHA); err != nil {
-		return nil, fmt.Errorf("bazel run %s: %w", pushTarget, err)
-	}
-	buildDuration := time.Since(buildStart)
+	var digest string
+	if nativeImagePushEnabled() {
+		// Opt-in (issue #2099): push the OCI image index directly via
+		// go-containerregistry instead of shelling out to rules_oci's
+		// generated bash/crane-CLI push script -- see
+		// image_push_native.go's doc comments.
+		fmt.Printf("Building and pushing %s (build tag: %s) natively...\n", fullName, p.GitSHA)
+		pushedDigest, err := buildAndPushImageNative(bazel, *matchedApp, repoPath, []string{p.GitSHA}, defaultEnv("GHCR_TOKEN"))
+		if err != nil {
+			return nil, fmt.Errorf("native image push: %w", err)
+		}
+		digest = pushedDigest
+		fmt.Printf("Built and pushed %s in %s (digest: %s)\n",
+			fullName, time.Since(buildStart).Round(time.Second), digest)
+	} else {
+		pushTarget := imagePushTarget(*matchedApp)
+		fmt.Printf("Building and pushing %s (build tag: %s) via %s...\n", fullName, p.GitSHA, pushTarget)
+		// This is the highest-bandwidth bazel invocation in the release pipeline
+		// (pulling multi-platform image layers out of remote cache before
+		// pushing to ghcr.io); bazelRunToDisk's --config=ci-images ensures they
+		// land on local disk with build:ci's CI tuning applied.
+		if _, err := bazelRunToDisk(bazel, "run", pushTarget, "--", "--tag", p.GitSHA); err != nil {
+			return nil, fmt.Errorf("bazel run %s: %w", pushTarget, err)
+		}
+		buildDuration := time.Since(buildStart)
 
-	digestStart := time.Now()
-	digest := extractImageDigest(docker, repoPath, p.GitSHA)
-	if digest == "" {
-		return nil, fmt.Errorf("could not resolve pushed digest for %s:%s", repoPath, p.GitSHA)
+		digestStart := time.Now()
+		digest = extractImageDigest(docker, repoPath, p.GitSHA)
+		if digest == "" {
+			return nil, fmt.Errorf("could not resolve pushed digest for %s:%s", repoPath, p.GitSHA)
+		}
+		fmt.Printf("Built and pushed %s in %s (digest lookup: %s)\n",
+			fullName, buildDuration.Round(time.Second), time.Since(digestStart).Round(time.Second))
 	}
-	fmt.Printf("Built and pushed %s in %s (digest lookup: %s)\n",
-		fullName, buildDuration.Round(time.Second), time.Since(digestStart).Round(time.Second))
 
 	manifest := &BuildAppManifest{
 		Domain:     p.Domain,

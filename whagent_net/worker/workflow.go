@@ -408,6 +408,7 @@ func processTurn(ctx workflow.Context, sessionID uuid.UUID, turn int, in SendTur
 		SessionID: sessionID,
 		Turn:      turn,
 		Model:     resolved.Model,
+		Provider:  resolved.Provider,
 		EventIDs:  built.EventIDs,
 		Tools:     toolDefs.Tools,
 	}

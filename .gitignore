@@ -23,6 +23,13 @@ generated/py/
 .env.local
 .env.*.local
 
+# Pi project-scope runtime state (pi-claude-marketplace reconciles this at
+# session load from the committed .pi/claude-plugins.json — see issue #2264)
+.pi/claude-plugins.local.json
+.pi/pi-claude-marketplace/
+.pi/agents/
+.pi/mcp.json
+
 # Python
 __pycache__/
 *.py[cod]

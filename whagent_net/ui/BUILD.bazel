@@ -1,6 +1,10 @@
 """whagent-net standalone agent web UI (M2, issue #2236): binary entrypoint,
-Keycloak sign-in, and the authenticated api client. Real session pages
-(FR1-FR4) land in later tasks under the same plan (#2233)."""
+Keycloak sign-in, and the authenticated api client. The session detail page
+and its live transcript (FR2, NFR2, NFR3, NFR4, issue #2242), the
+ownership-gated start/turn/stop lifecycle controls (FR1, issue #2246), and
+the filtered/paginated session list that is also the authenticated landing
+page (FR3, C15, NFR3, issue #2247), are this package's other consumers;
+remaining FR4/FR9 pieces land in later tasks under the same plan (#2233)."""
 
 load("@rules_go//go:def.bzl", "go_binary", "go_library", "go_test")
 load("//tools/bazel:release.bzl", "release_app")
@@ -8,9 +12,19 @@ load("//tools/bazel:release.bzl", "release_app")
 go_library(
     name = "ui_lib",
     srcs = [
+        "convert.go",
+        "delegatedgrant.go",
         "grpc_client.go",
-        "handlers.go",
+        "handlers_consent.go",
+        "handlers_grants.go",
+        "handlers_grants_admin.go",
+        "handlers_session.go",
+        "handlers_session_lifecycle.go",
+        "handlers_session_live.go",
+        "handlers_session_usage_live.go",
+        "handlers_sessions.go",
         "main.go",
+        "mcpauth.go",
         "templ_render.go",
     ],
     importpath = "github.com/whale-net/everything/whagent_net/ui",
@@ -18,22 +32,37 @@ go_library(
     deps = [
         "//libs/go/db",
         "//libs/go/grpcauth",
+        "//libs/go/grpcauth/grantindex",
         "//libs/go/grpcclient",
         "//libs/go/htmxauth",
         "//libs/go/htmxbase",
+        "//libs/go/htmxsse",
+        "//libs/go/htmxsse/templadapter",
         "//libs/go/htmxui",
         "//libs/go/logging",
+        "//libs/go/mcpauth",
+        "//libs/go/rmq",
+        "//whagent_net/delegatedgrant",
+        "//whagent_net/events",
+        "//whagent_net/grantkey",
+        "//whagent_net/mcpidentity",
         "//whagent_net/protos:whagentpb",
         "//whagent_net/ui/components",
         "//whagent_net/ui/pages",
         "@com_github_a_h_templ//:templ",
+        "@com_github_google_uuid//:uuid",
+        "@com_github_gorilla_sessions//:sessions",
+        "@com_github_jackc_pgx_v5//pgxpool",
         "@io_opentelemetry_go_contrib_instrumentation_net_http_otelhttp//:otelhttp",
         "@org_golang_google_grpc//:grpc",
+        "@org_golang_google_grpc//codes",
+        "@org_golang_google_grpc//status",
+        "@org_golang_google_protobuf//types/known/timestamppb",
     ],
 )
 
 go_binary(
-    name = "whagent-net-ui",
+    name = "ui",
     embed = [":ui_lib"],
     visibility = ["//visibility:public"],
 )
@@ -42,33 +71,158 @@ go_binary(
 # redirect, /healthz reachable without a session, and the api client
 # forwarding the caller's own access token -- mirrors
 # manmanv2/ui/BUILD.bazel's ui_test target shape.
+#
+# handlers_session_test.go/handlers_session_live_test.go (issue #2242's
+# Testing section) added: FR2 owner-gating at the handler level,
+# NFR4/LB1's dedup/order fragment-builder unit tests, and an SSE handler
+# test that a published event produces exactly one swap.
+#
+# handlers_session_lifecycle_test.go (issue #2246's Testing section)
+# added: owner start/turn/stop reaching the right `api` call with the
+# right args, non-owner turns/stop refused both by the UI and at the
+# underlying `api` call, SendTurn's asynchrony (no read-back/poll),
+# PermissionDenied/FailedPrecondition inline-message mapping, and the
+# composer/stop-control rendering matrix (owner vs. non-owner, terminal
+# vs. non-terminal).
+#
+# handlers_sessions_test.go (issue #2247's Testing section) added:
+# GET /sessions' filter-to-ListSessionsRequest mapping (unset filters
+# omitted, started_by_kind=service round-trips), next/prev pagination
+# round-tripping back to the original page with the pagination controls
+# absent at the correct end, and NFR3's "started by" rendering for a
+# service-started session and a session started by another user.
+#
+# handlers_session_usage_live_test.go (issue #2248's Testing section)
+# added: FR4/NFR5's SSE live-path coverage for the usage panel -- a
+# published usage-relevant event produces exactly one swap reflecting the
+# re-read figure, and a duplicate re-publish of the same event_id changes
+# no number (reuses fakeLiveTransport/newLiveTestHub/
+# waitForLiveHandlerRegistered from handlers_session_live_test.go).
+#
+# handlers_grants_test.go (issue #2432's Scaffold section) added:
+# route-reachability/render sanity checks for GET /grants and POST
+# /grants/revoke -- the Implementation phase's Testing section (FR16/
+# FR17/NFR4/NFR7) replaces these with the full scoped-listing/live-status/
+# revoke-scoping/audit-log coverage the issue describes.
+#
+# handlers_grants_admin_test.go (issue #2433's Scaffold section) added:
+# route-reachability/render sanity checks for GET /admin/grants and POST
+# /admin/grants/revoke -- the Implementation phase's Testing section
+# (FR14/FR15/NFR3/NFR4/NFR7) replaces these with the full admin-gate/
+# live-status/revoke-scoping/audit-log coverage the issue describes.
 go_test(
     name = "ui_test",
     size = "small",
     srcs = [
+        "delegatedgrant_test.go",
         "grpc_client_test.go",
+        "handlers_consent_gate_test.go",
+        "handlers_consent_test.go",
+        "handlers_consent_unauth_test.go",
+        "handlers_grants_test.go",
+        "handlers_grants_admin_test.go",
+        "handlers_session_lifecycle_test.go",
+        "handlers_session_live_test.go",
+        "handlers_session_test.go",
+        "handlers_session_usage_live_test.go",
+        "handlers_sessions_test.go",
         "main_test.go",
+        "mcpauth_test.go",
     ],
     embed = [":ui_lib"],
     deps = [
         "//libs/go/grpcauth",
+        "//libs/go/grpcauth/grantindex",
         "//libs/go/htmxauth",
+        "//libs/go/htmxsse",
+        "//libs/go/mcpauth",
+        "//libs/go/rmq",
+        "//whagent_net/delegatedgrant",
+        "//whagent_net/events",
+        "//whagent_net/grantkey",
+        "//whagent_net/mcpidentity",
         "//whagent_net/protos:whagentpb",
+        "//whagent_net/ui/components",
+        "//whagent_net/ui/pages",
+        "@com_github_go_jose_go_jose_v4//:go-jose",
+        "@com_github_google_uuid//:uuid",
+        "@com_github_gorilla_sessions//:sessions",
+        "@com_github_jackc_pgx_v5//pgxpool",
         "@com_github_stretchr_testify//assert",
         "@com_github_stretchr_testify//require",
         "@org_golang_google_grpc//:grpc",
+        "@org_golang_google_grpc//codes",
         "@org_golang_google_grpc//metadata",
+        "@org_golang_google_grpc//status",
         "@org_golang_google_grpc//test/bufconn",
+        "@org_golang_google_protobuf//types/known/timestamppb",
+    ],
+)
+
+# Real-Postgres coverage for mcpCallerResolver's tampered/expired/valid
+# session cases (issue #2245's Testing section) and the full
+# authorization-code + PKCE bootstrap round trip against the actually-
+# mounted Provider (discovery -> registration -> /authorize -> /token ->
+# a credential whose stored identity is the encoded (iss, sub) pair), plus
+# the "/authorize while signed out redirects to /login" case -- mirrors
+# audience_score_system/mcp/server/oauth_bootstrap_integration_test.go's
+# shape, reduced to the single-binary (authorization-server-only) case
+# this task builds. Deliberately NOT part of `bazel test //...` -- see
+# //libs/go/dbtest's README.
+#
+# Run it explicitly (requires a working Docker daemon):
+#   bazel test //whagent_net/ui:ui_integration_test --test_output=all
+go_test(
+    name = "ui_integration_test",
+    size = "large",
+    timeout = "long",
+    srcs = [
+        "handlers_consent_integration_test.go",
+        "handlers_consent_test.go",
+        "mcpauth_integration_test.go",
+    ],
+    embed = [":ui_lib"],
+    gotags = ["integration"],
+    tags = [
+        "external",
+        "integration",
+        "manual",
+        "no-cache",
+        "no-sandbox",
+        "requires-network",
+    ],
+    deps = [
+        "//libs/go/dbtest",
+        "//libs/go/grpcauth",
+        "//libs/go/grpcauth/grantindex",
+        "//libs/go/htmxauth",
+        "//libs/go/mcpauth",
+        "//libs/go/migrate",
+        "//whagent_net/delegatedgrant",
+        "//whagent_net/mcpidentity",
+        "//whagent_net/migrate/schema",
+        "@com_github_go_jose_go_jose_v4//:go-jose",
+        "@com_github_jackc_pgx_v5//pgxpool",
+        "@com_github_jackc_pgx_v5//stdlib",
+        "@com_github_stretchr_testify//assert",
+        "@com_github_stretchr_testify//require",
     ],
 )
 
 # Release metadata for whagent-net's standalone agent web UI (issue #2236).
-# domain "whagent-net" + name "whagent-net-ui" mirrors //whagent_net/api:api's
-# release_app and manmanv2/ui's own release_app (app_type "external-api");
-# ingress fields left unset for now, per this task's Scaffold section.
+# domain "whagent-net" + name "ui" mirrors //whagent_net/api:api's
+# release_app (app_type "external-api"); ingress fields left unset for now,
+# per this task's Scaffold section.
+#
+# name is "ui", not "whagent-net-ui": release_app's image_name already
+# prepends the domain ("whagent-net" + "ui" -> "whagent-net-ui" image), and
+# AppMetadata.FullName() in tools/release_helper_go does the same
+# Domain+"-"+Name concatenation unconditionally (no already-prefixed guard).
+# A name that already carries the domain prefix here double-prefixes at
+# release time -- see the bug this fixed.
 release_app(
-    name = "whagent-net-ui",
-    binary_name = ":whagent-net-ui",
+    name = "ui",
+    binary_name = ":ui",
     language = "go",
     domain = "whagent-net",
     app_type = "external-api",

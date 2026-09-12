@@ -3,68 +3,456 @@ package pages
 import (
 	"fmt"
 
-	manmanpb "github.com/whale-net/everything/manmanv2/protos"
+	"github.com/whale-net/everything/libs/go/htmxui"
 	"github.com/whale-net/everything/manmanv2/ui/components"
 )
 
-templ Games(layout components.LayoutData, games []*manmanpb.Game) {
-	@components.Layout(layout) {
-		@components.HeroHeader("Games", "Manage game configurations and deployments") {
+// GamesPageData drives the Games page's flat list (root plan #2266, task
+// #2270 -- FR4, FR5, NFR7, WD1, WD6): one row per game, expanding in
+// place with no server round-trip.
+//
+// handleGames assembles Games from a constant number of fleet-wide list
+// calls (games, game configs, deployments, servers, sessions) joined
+// in the UI (NFR7) -- see handlers_games.go's doc comment on that join.
+// This template only renders what it is given and issues no request of
+// its own: expansion is a client-side disclosure of already-fetched data
+// (FR4), never a per-row fetch. The one exception is the expanded row's
+// Customize control (#2272, FR6/FR11/FR12): it clones an already-rendered
+// <template> into the document rather than fetching anything, so it too
+// costs no request (see openDeploymentSettingsBlade below).
+type GamesPageData struct {
+	Layout components.LayoutData
+	Games  []GameRow
+	// ExpandGameID is an entry-point hint (spec amendment A1; the
+	// /sgc/<id> -> /games?expand=<game_id> migration task): the row for
+	// this game starts expanded on first render. Zero means none. An
+	// unknown or stale value (no matching GameRow) is silently ignored,
+	// never an error -- see gameRowExpanded below. Expanding or
+	// collapsing rows client-side never writes back to this or the URL:
+	// the page URL stays /games throughout (FR4).
+	ExpandGameID int64
+}
+
+// GameRow is one collapsed/expandable row (FR5). Deliberately excludes
+// player count and "last played" (WD1) and any aggregate rollup string
+// (WD6) -- those are documented, intentional divergences from
+// 90-v2-games, not gaps to fill in later.
+type GameRow struct {
+	GameID int64
+	Name   string
+	// RunState is the rollup across this game's deployments, derived
+	// from components.ComputeDeploymentStatus(components.LatestSession(...))
+	// per deployment -- never from ServerGameConfig.status, which is the
+	// active/inactive lifecycle flag and means something else entirely
+	// (see the ground-truth table on issue #2270).
+	RunState components.DeploymentStatus
+	// Connect is the shared connect-address view (#2268): a copyable
+	// host:port control, or the shared unavailable state -- never a
+	// blank (AC2).
+	Connect components.ConnectAddressView
+
+	// Deployments populates the expanded row's Deployments section (#2272,
+	// FR6): one GameDeploymentRow per deployment of this game.
+	Deployments []GameDeploymentRow
+
+	// Configs populates the expanded row's Configurations section (FR7,
+	// task #2273): every Game Config of this game, joined in the UI from
+	// data the page already fetched (NFR7) -- see buildGameRows in
+	// handlers_games.go.
+	Configs []ConfigRowView
+
+	// Workshop Libraries no longer populates a GameRow field (task #2367):
+	// the section became a lazily-fetched fragment (pages.WorkshopPanelData,
+	// workshop_panel.templ) keyed by GameID alone, fetched on first expand
+	// rather than joined at page load -- see gameWorkshopPlaceholder's doc
+	// comment below for why.
+}
+
+// GameDeploymentRow is one row of a game's expanded Deployments section
+// (#2272, FR6). Row is the shared pages.DeploymentRowData -- rendered
+// verbatim via DeploymentRow/DeploymentRowInner (#1627), the same
+// component /sessions renders each deployment with -- so Start/Stop/
+// Restart availability, the session-status badge, and the #1628
+// self-terminating row poll are reused unmodified rather than re-derived
+// (FR6's anti-drift requirement: this page must not be able to disagree
+// with /sessions about the same deployment's state). Connect, LogsURL, and
+// ActionsURL are additive: none of them feed back into Row's derivation.
+type GameDeploymentRow struct {
+	Row DeploymentRowData
+	// Connect is the shared connect-address view (#2268), same as the
+	// collapsed row's (FR5) -- never a blank; the shared unavailable state
+	// when unresolvable (AC2).
+	Connect components.ConnectAddressView
+	// LogsURL links out to this deployment's logs surface: the session
+	// detail page for its latest session (which also serves historical
+	// logs once the session has ended), or "" when the deployment has never
+	// had a session.
+	LogsURL string
+	// ActionsURL links out to the existing Actions surface for console
+	// commands (C23/M3, decision 8: not reshaped, not inlined, not a Config
+	// Editor tab) -- the config-level Actions management page, which also
+	// shows this deployment's inherited game-level actions.
+	ActionsURL string
+}
+
+// ConfigRowView is one row in the expanded row's Configurations section
+// (FR7): every Game Config of the game, with the number of deployments
+// using it derived entirely from data the page already fetched (NFR7) --
+// no new aggregate field, no per-config query. Deliberately excludes a
+// port column (WD10): port_bindings live on ServerGameConfig (a
+// deployment), never on GameConfig -- see the ground-truth table on issue
+// #2273. Adding one here would be a defect, not a nicety.
+type ConfigRowView struct {
+	GameID          int64
+	ConfigID        int64
+	Name            string
+	Image           string
+	DeploymentCount int
+}
+
+// gameRowExpanded reports whether row should start expanded per
+// GamesPageData.ExpandGameID (A1): true only on an exact GameID match, so
+// a zero, unknown, or stale ExpandGameID matches nothing and the page
+// renders normally with no row expanded (never an error).
+func gameRowExpanded(data GamesPageData, row GameRow) bool {
+	return data.ExpandGameID != 0 && data.ExpandGameID == row.GameID
+}
+
+templ Games(data GamesPageData) {
+	@components.Layout(data.Layout) {
+		<style>
+			[x-cloak] { display: none !important; }
+		</style>
+		<script>
+			// Deployment Settings blade opener (#2272/#2274, FR6/FR11/FR12): each
+			// deployment row carries a <template id="deployment-settings-blade-template-N">
+			// holding an already-rendered components.Blade instance (the
+			// blade shell) and a Customize button with
+			// data-open-blade-template="...-N" naming that template's id. A
+			// single delegated listener, rather than one per row, clones the
+			// matching template's content into the document on click. This
+			// is deliberately not an hx-get: opening the blade shell itself
+			// must cost no request (FR4/NFR7's "no fetch on expand" carried
+			// forward to "no fetch on Customize" too), and cloning a
+			// <script>-bearing <template> via appendChild executes that
+			// script, which is what mounts Blade's own scrim/Escape/
+			// focus-trap behavior (see blade.templ's doc comment).
+			//
+			// The blade's *body* is a different story (#2274, FR11): its
+			// layered-environment content is per-deployment data that would
+			// grow the Games page's call count with the number of
+			// deployments rendered if fetched at page load (NFR7), so it is
+			// not pre-rendered into the cloned template. Instead the cloned
+			// subtree carries its own hx-get (DeploymentSettingsEnvPlaceholder,
+			// hx-trigger="load"), and since this clone lands in the document
+			// via plain DOM appendChild rather than an htmx swap, htmx never
+			// sees it unless told to -- htmx.process(bladeRoot) below is that
+			// one explicit call, scoped to just the newly inserted blade
+			// (root captured from the fragment before it is moved into the
+			// document, so the reference stays valid after appendChild).
+			document.addEventListener('click', function(event) {
+				var trigger = event.target.closest('[data-open-blade-template]');
+				if (!trigger) return;
+				var tpl = document.getElementById(trigger.getAttribute('data-open-blade-template'));
+				if (!tpl) return;
+				var fragment = tpl.content.cloneNode(true);
+				var bladeRoot = fragment.querySelector('[data-blade]');
+				document.body.appendChild(fragment);
+				if (bladeRoot && window.htmx) {
+					window.htmx.process(bladeRoot);
+				}
+			});
+		</script>
+		@components.HeroHeader("Games", "Status and connect at a glance — expand a game for deployments, configurations, and workshop libraries") {
 			<a href="/games/new" class="btn bg-base-100 text-primary hover:bg-base-200 border-none shadow-md">
 				+ Create New Game
 			</a>
 		}
-		if len(games) > 0 {
-			@components.Table() {
-				<thead>
-					<tr>
-						<th>Name</th>
-						<th>Steam App ID</th>
-						<th>Genre</th>
-						<th>Publisher</th>
-						<th>Tags</th>
-						<th class="text-right">Actions</th>
-					</tr>
-				</thead>
-				<tbody>
-					for _, game := range games {
-						<tr class="hover">
-							<td>
-								<a href={ templ.URL(fmt.Sprintf("/games/%d", game.GameId)) } class="link link-primary text-sm font-medium">
-									{ game.Name }
-								</a>
-							</td>
-							<td class="text-sm">{ game.SteamAppId }</td>
-							<td class="text-sm">
-								if game.Metadata != nil {
-									{ game.Metadata.Genre }
-								}
-							</td>
-							<td class="text-sm">
-								if game.Metadata != nil {
-									{ game.Metadata.Publisher }
-								}
-							</td>
-							<td>
-								<div class="flex flex-wrap gap-1">
-									if game.Metadata != nil {
-										for _, tag := range game.Metadata.Tags {
-											<span class="badge badge-neutral badge-soft badge-sm">
-												{ tag }
-											</span>
-										}
-									}
-								</div>
-							</td>
-							<td class="text-right text-sm font-medium">
-								<a href={ templ.URL(fmt.Sprintf("/games/%d", game.GameId)) } class="btn btn-primary btn-sm">View</a>
-							</td>
-						</tr>
-					}
-				</tbody>
-			}
+		if len(data.Games) > 0 {
+			<div class="flex flex-col gap-2">
+				for _, row := range data.Games {
+					@gameRow(row, gameRowExpanded(data, row))
+				}
+			</div>
 		} else {
 			@components.EmptyState("No games found", "Get started by creating your first game!", "Create Game", "/games/new")
 		}
 	}
+}
+
+// gameRow renders one flat-list row (FR5) with client-side-only
+// expansion (FR4): "expanded" is an Alpine.js flag toggled by clicking
+// the row header -- no hx-get, no per-row fetch, and the page URL never
+// changes. startExpanded seeds the Alpine state from
+// GamesPageData.ExpandGameID on first render only; subsequent
+// expand/collapse clicks are pure client state.
+templ gameRow(row GameRow, startExpanded bool) {
+	<div
+		id={ fmt.Sprintf("game-row-%d", row.GameID) }
+		x-data={ fmt.Sprintf("{ expanded: %t }", startExpanded) }
+		class="card bg-base-100 border border-base-300 shadow-sm overflow-hidden"
+	>
+		<button
+			type="button"
+			@click="expanded = !expanded"
+			class="w-full flex justify-between items-center gap-4 p-4 hover:bg-base-200 transition-colors text-left"
+		>
+			<span class="font-medium text-base-content">{ row.Name }</span>
+			<span class="flex items-center gap-3">
+				@htmxui.Badge(deploymentStatusLabel(row.RunState), statusBadgeVariant(string(row.RunState)), htmxui.BadgeSizeMD, true, nil)
+				@components.ConnectAddressDisplay(row.Connect)
+				<svg :class="expanded ? 'rotate-180' : ''" class="w-5 h-5 text-base-content/60 transition-transform shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+					<path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7"></path>
+				</svg>
+			</span>
+		</button>
+		<!--
+			Expanded row shell (FR4: at most one nested panel level), each
+			section in its own stable-id container. Deployments (#2272,
+			FR6), Configurations (FR7), and the settings/danger footer
+			(FR9) render for real here, from row data already fetched on
+			page load, never a fetch of their own. Workshop Libraries
+			(#2367, FR8/FR9/FR10) is the one exception: it is a lazily
+			fetched fragment (gameWorkshopPlaceholder's doc comment below
+			explains why).
+		-->
+		<div id={ fmt.Sprintf("game-expand-%d", row.GameID) } x-show="expanded" x-cloak class="border-t border-base-300 p-4 flex flex-col gap-4">
+			<div id={ fmt.Sprintf("game-deployments-%d", row.GameID) }>
+				@deploymentsSection(row.Deployments)
+			</div>
+			<div id={ fmt.Sprintf("game-configs-%d", row.GameID) }>
+				@gameConfigsSection(row)
+			</div>
+			<div
+				id={ fmt.Sprintf("game-workshop-%d", row.GameID) }
+				hx-get={ fmt.Sprintf("/games/%d/workshop-panel", row.GameID) }
+				hx-trigger="revealed"
+				hx-swap="innerHTML"
+			>
+				@gameWorkshopPlaceholder()
+			</div>
+			@gameFooter(row)
+		</div>
+	</div>
+}
+
+// deploymentsSection renders the expanded row's Deployments section (#2272,
+// FR6, AC1): every deployment of this game, or a muted empty state when it
+// has none. Deployments render inside a <table> even though this section is
+// otherwise card-based, because gameDeploymentRow's status/actions half is
+// literally DeploymentRow's own <tr> (#1627) -- reused, not
+// reimplemented -- and htmx's outerHTML swap on that <tr> (the #1628 row
+// poll, and the Start/Stop/Restart action responses) only parses correctly
+// with a real <table>/<tbody> ancestor providing table insertion-mode
+// context; a <div>-based swap target would silently drop the replacement
+// content.
+templ deploymentsSection(deployments []GameDeploymentRow) {
+	if len(deployments) == 0 {
+		<p class="text-sm text-base-content/60">No deployments yet.</p>
+	} else {
+		<div class="overflow-x-auto">
+			<table class="table table-sm">
+				<tbody>
+					for _, dep := range deployments {
+						@gameDeploymentRow(dep)
+					}
+				</tbody>
+			</table>
+		</div>
+	}
+}
+
+// gameDeploymentRow renders one Deployments-section entry: a name/connect/
+// link-outs/Customize header row, immediately followed by dep.Row rendered
+// via DeploymentRow(dep.Row) -- byte-identical to how /sessions renders the
+// same deployment (#1627), so Start/Stop/Restart availability and the
+// session-status badge cannot drift from /sessions (FR6). colspan matches
+// DeploymentRowInner's own four <td>s.
+templ gameDeploymentRow(dep GameDeploymentRow) {
+	<tr class="bg-base-200/40">
+		<td colspan="4">
+			<div class="flex flex-wrap justify-between items-center gap-3 py-1">
+				<div class="flex items-center gap-3">
+					<span class="font-medium text-sm">{ dep.Row.DisplayName }</span>
+					<!--
+						AC4: this span is the stable target a successful ports
+						Save (#2275, handleDeploymentSettingsPortsSave) swaps
+						out of band via DeploymentConnectAddressOOB, so the
+						recomputed connect address shows up here without
+						re-fetching anything else on this page (FR10).
+					-->
+					<span id={ DeploymentConnectAddressID(dep.Row.ServerGameConfigID) }>
+						@components.ConnectAddressDisplay(dep.Connect)
+					</span>
+				</div>
+				<div class="flex items-center gap-3 text-xs">
+					if dep.LogsURL != "" {
+						<a href={ templ.URL(dep.LogsURL) } class="link link-primary">Logs</a>
+					} else {
+						<span class="text-base-content/40">No logs yet</span>
+					}
+					<a href={ templ.URL(dep.ActionsURL) } class="link link-primary">Actions</a>
+					<button
+						type="button"
+						data-open-blade-template={ fmt.Sprintf("deployment-settings-blade-template-%d", dep.Row.ServerGameConfigID) }
+						class="btn btn-outline btn-xs"
+					>
+						Customize
+					</button>
+				</div>
+			</div>
+			<template id={ fmt.Sprintf("deployment-settings-blade-template-%d", dep.Row.ServerGameConfigID) }>
+				@components.Blade(components.BladeData{
+					ID:       fmt.Sprintf("deployment-settings-blade-%d", dep.Row.ServerGameConfigID),
+					Title:    "Deployment Settings",
+					Subtitle: dep.Row.DisplayName,
+				}) {
+					<!--
+						#2274, FR11: the environment section, lazily fetched (see
+						DeploymentSettingsEnvPlaceholder's doc comment) rather than
+						pre-rendered here.
+						#2275, FR12: the ports section, alongside it: an
+						*accumulating* section (unlike env's per-key commits),
+						which is why #2269's Blade dismissal can prompt for this
+						blade at all (FR10's section-granularity rule). See the
+						split note on issue #2274 and deployment_settings.templ's
+						file doc comment.
+					-->
+					@DeploymentSettingsEnvPlaceholder(dep.Row.ServerGameConfigID)
+					@DeploymentSettingsPortsPlaceholder(dep.Row.ServerGameConfigID)
+				}
+			</template>
+		</td>
+	</tr>
+	@DeploymentRow(dep.Row)
+}
+
+// gameConfigsSection renders the Configurations section (FR7, task #2273):
+// every Game Config of this game with name, image, the number of
+// deployments using it, an Edit control opening the Config Editor blade,
+// and a link out to today's existing create-deployment flow. Renders
+// entirely from row.Configs -- no fetch of its own (FR4, NFR7).
+templ gameConfigsSection(row GameRow) {
+	<div class="border border-base-300 rounded-box overflow-hidden">
+		<div class="p-3 border-b border-base-300 bg-base-200">
+			<h3 class="font-semibold text-base-content">Configurations</h3>
+		</div>
+		if len(row.Configs) > 0 {
+			<div class="overflow-x-auto">
+				<table class="table table-sm">
+					<thead>
+						<tr>
+							<th scope="col">Name</th>
+							<th scope="col">Image</th>
+							<th scope="col">Deployments</th>
+							<th scope="col" class="text-right">Actions</th>
+						</tr>
+					</thead>
+					<tbody>
+						for _, cfg := range row.Configs {
+							<tr class="hover">
+								<td class="font-medium text-base-content">{ cfg.Name }</td>
+								<td class="font-mono text-sm">{ cfg.Image }</td>
+								<td>{ fmt.Sprintf("%d", cfg.DeploymentCount) }</td>
+								<td class="text-right space-x-2">
+									<!--
+										FR13 (#2276): Edit opens the Config Editor blade.
+										The blade's own content (Basics/Environment/
+										Volumes) is not already in hand the way the
+										Deployments section's Customize blade shell is
+										(only Name/Image/DeploymentCount got fetched for
+										this row), so this is a real hx-get rather than a
+										zero-cost pre-rendered template clone, see
+										pages.ConfigEditorData's doc comment. htmx appends
+										the returned blade fragment to the end of body;
+										data-config-editor-trigger stays as the stable
+										test/automation hook #2273 introduced.
+									-->
+									<button
+										type="button"
+										class="btn btn-xs btn-secondary"
+										data-config-editor-trigger
+										data-config-id={ fmt.Sprintf("%d", cfg.ConfigID) }
+										hx-get={ fmt.Sprintf("/games/%d/configs/%d/editor", cfg.GameID, cfg.ConfigID) }
+										hx-target="body"
+										hx-swap="beforeend"
+									>
+										Edit
+									</button>
+									<!--
+										WD7: a link out to today's existing create-deployment
+										flow (the Config Detail page's "Deploy to Server"
+										form), never an inline deploy-and-start composite.
+									-->
+									<a
+										href={ templ.URL(fmt.Sprintf("/games/%d/configs/%d", cfg.GameID, cfg.ConfigID)) }
+										class="btn btn-xs btn-success"
+									>
+										Deploy
+									</a>
+								</td>
+							</tr>
+						}
+					</tbody>
+				</table>
+			</div>
+		} else {
+			<p class="p-4 text-sm text-base-content/60">No configurations yet.</p>
+		}
+	</div>
+}
+
+// gameWorkshopPlaceholder renders the expanded row's Workshop Libraries
+// section shell before its data has loaded (task #2367, FR8/FR9/FR10 --
+// editable GC-level attach/detach, replacing M5's read-only SGC-scoped
+// panel and its "coming soon: shared across configs" note, now removed).
+//
+// Unlike Deployments (FR6) and Configurations (FR7), this section's data
+// is not part of handleGames' own join: GetGameConfigLibraryAttachments
+// and ListGameConfigLibraries both require a single config_id (no
+// sgc_id==0-style "all" filter exists for either), so populating every
+// row's libraries at page load would cost two RPCs per GameConfig
+// rendered -- growing with fleet size, which is exactly what NFR7
+// (carried over from M5, task #2270 -- see
+// TestHandleGames_NFR7_ConstantCallCount) forbids for handleGames.
+//
+// Instead the parent div (see gameRow above) carries
+// hx-trigger="revealed": htmx's IntersectionObserver-backed trigger fires
+// once, the first time the element actually gets a layout box. Since
+// Alpine's x-show hides the whole expanded-row shell with display:none
+// (see [x-cloak] above) until a row is expanded, this placeholder --
+// though already present in the initial page HTML -- is never observed
+// as revealed, and so triggers no request, until a Server Manager
+// actually expands that row. This is the same "pay for it only once
+// interacted with" shape the Deployment Settings blade's environment tab
+// already uses (#2274), applied without needing a <template> clone since
+// this section is not behind a separate open action the way the blade
+// is.
+templ gameWorkshopPlaceholder() {
+	<div class="border border-base-300 rounded-box overflow-hidden">
+		<div class="p-3 border-b border-base-300 bg-base-200">
+			<h3 class="font-semibold text-base-content">Workshop Libraries</h3>
+		</div>
+		<p class="p-4 text-sm text-base-content/60">Loading workshop libraries…</p>
+	</div>
+}
+
+// gameFooter renders the settings/danger footer (FR9, task #2273): links
+// out to the existing game settings/presets surface and the existing
+// delete-game surface (both on GameDetail, /games/{id}), with their
+// existing confirmation flows. The destructive action is never
+// reproduced inline here and gains no new one-click affordance -- see
+// GameDetail's Danger Zone (game_detail.templ) for the confirm-before-
+// delete gate this links to. Hard requirement: this must not make delete
+// more reachable than today's game-detail page (it is exactly as
+// reachable: one link to the same page, same confirm gate on it).
+templ gameFooter(row GameRow) {
+	<div class="flex gap-2 text-sm">
+		<a href={ templ.URL(fmt.Sprintf("/games/%d#settings-presets", row.GameID)) } class="btn btn-xs btn-secondary">
+			Game settings &amp; presets…
+		</a>
+		<a href={ templ.URL(fmt.Sprintf("/games/%d#danger-zone", row.GameID)) } class="btn btn-xs btn-error ml-auto">
+			Delete Game…
+		</a>
+	</div>
 }

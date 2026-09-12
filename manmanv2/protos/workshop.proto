@@ -34,11 +34,19 @@ service WorkshopService {
   rpc GetLibraryAddons(GetLibraryAddonsRequest) returns (GetLibraryAddonsResponse);
   rpc GetChildLibraries(GetChildLibrariesRequest) returns (GetChildLibrariesResponse);
 
-  // SGC-Library Management
-  rpc AddLibraryToSGC(AddLibraryToSGCRequest) returns (AddLibraryToSGCResponse);
-  rpc RemoveLibraryFromSGC(RemoveLibraryFromSGCRequest) returns (RemoveLibraryFromSGCResponse);
-  rpc ListSGCLibraries(ListSGCLibrariesRequest) returns (ListSGCLibrariesResponse);
-  rpc GetSGCLibraryAttachments(GetSGCLibraryAttachmentsRequest) returns (GetSGCLibraryAttachmentsResponse);
+  // GameConfig-Library Management (M6 #2365/#2370, plan #2359) -- attach
+  // once at GC level, inherited by every deployment (FR8/FR9). The prior
+  // SGC-scoped RPCs (AddLibraryToSGC/RemoveLibraryFromSGC/ListSGCLibraries/
+  // GetSGCLibraryAttachments) retired with sgc_workshop_libraries (NFR1).
+  rpc AddLibraryToGameConfig(AddLibraryToGameConfigRequest) returns (AddLibraryToGameConfigResponse);
+  rpc RemoveLibraryFromGameConfig(RemoveLibraryFromGameConfigRequest) returns (RemoveLibraryFromGameConfigResponse);
+  rpc ListGameConfigLibraries(ListGameConfigLibrariesRequest) returns (ListGameConfigLibrariesResponse);
+  rpc GetGameConfigLibraryAttachments(GetGameConfigLibraryAttachmentsRequest) returns (GetGameConfigLibraryAttachmentsResponse);
+
+  // Workshop Library Migration Conflicts (FR12) -- SGC->GC backfill
+  // conflicts surfaced by #2361; union/override are the only resolutions.
+  rpc ListLibraryMigrationConflicts(ListLibraryMigrationConflictsRequest) returns (ListLibraryMigrationConflictsResponse);
+  rpc ResolveLibraryMigrationConflict(ResolveLibraryMigrationConflictRequest) returns (ResolveLibraryMigrationConflictResponse);
 
   // Path Preset Management
   rpc CreateAddonPathPreset(CreateAddonPathPresetRequest) returns (CreateAddonPathPresetResponse);
@@ -161,14 +169,36 @@ message WorkshopLibrary {
   int64 updated_at = 7;  // Unix timestamp
 }
 
-// SGCWorkshopLibrary represents the attachment of a library to an SGC with overrides
-message SGCWorkshopLibrary {
-  int64 sgc_id = 1;
+// GameConfigWorkshopLibrary represents the attachment of a library to a
+// GameConfig with overrides (M6 #2365) -- the sole library-attachment shape
+// since the SGC-scoped SGCWorkshopLibrary retired (M6 #2370, NFR1),
+// inherited by every deployment of the config (FR8/FR9).
+message GameConfigWorkshopLibrary {
+  int64 config_id = 1;
   int64 library_id = 2;
   int64 preset_id = 3;  // Optional: override library's default preset
   int64 volume_id = 4;  // Optional: specify which volume to install to
   string installation_path_override = 5;  // Optional: completely custom path
   int64 created_at = 6;  // Unix timestamp
+}
+
+// WorkshopLibraryMigrationConflictCandidate is one (library_id, sgc_id) pair
+// contributing to a WorkshopLibraryMigrationConflict -- the source SGC and
+// the library it attached, so the resolution UI can show exactly which SGCs
+// disagreed and on what.
+message WorkshopLibraryMigrationConflictCandidate {
+  int64 library_id = 1;
+  int64 sgc_id = 2;
+}
+
+// WorkshopLibraryMigrationConflict records that a GameConfig's SGCs
+// disagreed on their attached Workshop library set (or on override columns
+// for the same library_id) when the SGC->GC backfill ran (FR12).
+message WorkshopLibraryMigrationConflict {
+  int64 conflict_id = 1;
+  int64 config_id = 2;
+  int64 detected_at = 3;  // Unix timestamp
+  repeated WorkshopLibraryMigrationConflictCandidate candidates = 4;
 }
 
 // ============================================================================
@@ -403,41 +433,62 @@ message GetChildLibrariesResponse {
 }
 
 // ============================================================================
-// SGC-Library Management RPCs
+// GameConfig-Library Management RPCs (M6 #2365, plan #2359)
 // ============================================================================
 
-message AddLibraryToSGCRequest {
-  int64 sgc_id = 1;
+message AddLibraryToGameConfigRequest {
+  int64 config_id = 1;
   int64 library_id = 2;
   int64 preset_id = 3;  // Optional: override library's default preset
   int64 volume_id = 4;  // Optional: specify which volume to install to
   string installation_path_override = 5;  // Optional: completely custom path
 }
 
-message AddLibraryToSGCResponse {}
+message AddLibraryToGameConfigResponse {}
 
-message RemoveLibraryFromSGCRequest {
-  int64 sgc_id = 1;
+message RemoveLibraryFromGameConfigRequest {
+  int64 config_id = 1;
   int64 library_id = 2;
 }
 
-message RemoveLibraryFromSGCResponse {}
+message RemoveLibraryFromGameConfigResponse {}
 
-message ListSGCLibrariesRequest {
-  int64 sgc_id = 1;
+message ListGameConfigLibrariesRequest {
+  int64 config_id = 1;
 }
 
-message ListSGCLibrariesResponse {
+message ListGameConfigLibrariesResponse {
   repeated WorkshopLibrary libraries = 1;
 }
 
-message GetSGCLibraryAttachmentsRequest {
-  int64 sgc_id = 1;
+message GetGameConfigLibraryAttachmentsRequest {
+  int64 config_id = 1;
 }
 
-message GetSGCLibraryAttachmentsResponse {
-  repeated SGCWorkshopLibrary attachments = 1;
+message GetGameConfigLibraryAttachmentsResponse {
+  repeated GameConfigWorkshopLibrary attachments = 1;
 }
+
+// ============================================================================
+// Workshop Library Migration Conflict RPCs (FR12, M6 #2365)
+// ============================================================================
+
+message ListLibraryMigrationConflictsRequest {}
+
+message ListLibraryMigrationConflictsResponse {
+  repeated WorkshopLibraryMigrationConflict conflicts = 1;
+}
+
+message ResolveLibraryMigrationConflictRequest {
+  int64 conflict_id = 1;
+  // "union" | "override" -- no other resolution shape exists in M6.
+  string resolution = 2;
+  // Required when resolution == "override"; must be one of the conflict's
+  // candidate library_ids.
+  int64 keep_library_id = 3;
+}
+
+message ResolveLibraryMigrationConflictResponse {}
 
 // ============================================================================
 // Path Preset Management RPCs

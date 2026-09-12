@@ -39,6 +39,10 @@ var everyTable = []string{
 	"turn_usage",
 	"session_agent",
 	"tool_call_idempotency",
+	"ui_sessions",
+	"model_definition",
+	"grpcauth_delegated_grant",
+	"grpcauth_grant_index",
 }
 
 func tableExists(t *testing.T, ctx context.Context, db *dbtest.Postgres, table string) bool {
@@ -68,34 +72,42 @@ func TestMigration001_UpDownUp_LeavesCleanDatabaseAndIsRerunnable(t *testing.T) 
 
 	latest, err := runner.LatestVersion()
 	require.NoError(t, err)
-	require.Equal(t, uint(1), latest, "expected the latest migration source version to be 1 -- update this test if a later migration has since landed")
+	require.Equal(t, uint(11), latest, "expected the latest migration source version to be 11 (001_initial_schema + 002_transcript_archive, issue #2240 + 003_sessions_list_index, issue #2241 + 004_mcpauth_credential, issue #2245 + 005_ui_sessions, issue #2288 + 006_model_definition + 007_agent_definition_domain, issue #2424 + 008_delegated_grant, issue #2426 + 009_mcpauth_cutover, issue #2434 + 010_agent_definition_scope + 011_agent_definition_surrogate_key) -- update this test if a later migration has since landed")
 
-	// -- Up: every table must exist, version must land clean at 1 ----------
-	require.NoError(t, runner.Up(), "apply migration 001")
+	// -- Up: every table must exist, version must land clean at the latest --
+	require.NoError(t, runner.Up(), "apply every migration")
 
 	version, dirty, err := runner.Version()
 	require.NoError(t, err)
 	assert.False(t, dirty)
-	assert.Equal(t, uint(1), version)
+	assert.Equal(t, uint(11), version)
 
 	for _, table := range everyTable {
 		assert.True(t, tableExists(t, ctx, db, table), "expected table %q to exist after Up()", table)
 	}
 
+	// 005_ui_sessions (issue #2288): confirm the expires_at index landed
+	// alongside the table, not just the table itself.
+	var hasUISessionsExpiresAtIndex bool
+	require.NoError(t, db.Pool.QueryRow(ctx, `
+		SELECT EXISTS (SELECT 1 FROM pg_indexes WHERE tablename = 'ui_sessions' AND indexname = 'idx_ui_sessions_expires_at')
+	`).Scan(&hasUISessionsExpiresAtIndex))
+	assert.True(t, hasUISessionsExpiresAtIndex, "expected idx_ui_sessions_expires_at to exist after Up()")
+
 	// -- Down: every table must be gone, not just some of them -------------
-	require.NoError(t, runner.Down(), "roll back migration 001")
+	require.NoError(t, runner.Down(), "roll back every migration")
 
 	for _, table := range everyTable {
 		assert.False(t, tableExists(t, ctx, db, table), "expected table %q to be dropped after Down() -- a clean database", table)
 	}
 
 	// -- Up again: re-runnable from the clean state -------------------------
-	require.NoError(t, runner.Up(), "re-apply migration 001 after Down() -- must be re-runnable")
+	require.NoError(t, runner.Up(), "re-apply every migration after Down() -- must be re-runnable")
 
 	version, dirty, err = runner.Version()
 	require.NoError(t, err)
 	assert.False(t, dirty)
-	assert.Equal(t, uint(1), version)
+	assert.Equal(t, uint(11), version)
 
 	for _, table := range everyTable {
 		assert.True(t, tableExists(t, ctx, db, table), "expected table %q to exist again after the second Up()", table)
@@ -157,4 +169,79 @@ func TestMigration001_SchemaContract(t *testing.T) {
 		_, nullable := nullableColumn(t, ctx, db, "transcript_event", col)
 		assert.Equal(t, "NO", nullable, "transcript_event.%s must exist and be NOT NULL", col)
 	}
+
+	// migration 002 (issue #2241/FR3/C15): sessions has the composite
+	// ordering/keyset index ListSessions relies on to avoid a sequential
+	// scan.
+	var hasListIndex bool
+	require.NoError(t, db.Pool.QueryRow(ctx, `
+		SELECT EXISTS (SELECT 1 FROM pg_indexes WHERE tablename = 'sessions' AND indexname = 'idx_sessions_created_at_id')
+	`).Scan(&hasListIndex))
+	assert.True(t, hasListIndex, "sessions must have idx_sessions_created_at_id (issue #2241's ListSessions ordering/keyset index)")
+
+	// migration 010 (issue #2424 FR1, renamed from migration 007's
+	// `domain`): agent_definition.scope is nullable -- a NULL scope means
+	// the agent definition carries no delegated-grant scoping at all; when
+	// set, it is the sole input whagent_net/grantkey.ForScope may derive a
+	// delegated-grant key from.
+	_, nullable = nullableColumn(t, ctx, db, "agent_definition", "scope")
+	assert.Equal(t, "YES", nullable, "agent_definition.scope must be nullable (issue #2424 FR1, made optional)")
+
+	// migration 008 (issue #2426 FR10/FR13): grpcauth_delegated_grant and
+	// grpcauth_grant_index's column shapes are the actual schema contract
+	// libs/go/grpcauth/pgstore and libs/go/grpcauth/grantindex check --
+	// see delegatedgrant_integration_test.go's round-trip tests in this
+	// same package for the deeper "these tables actually work with those
+	// packages" proof; this is just the column-shape guard.
+	for _, col := range []string{"subject", "grant_key", "token_material", "status", "created_at", "updated_at"} {
+		_, nullable := nullableColumn(t, ctx, db, "grpcauth_delegated_grant", col)
+		assert.Equal(t, "NO", nullable, "grpcauth_delegated_grant.%s must be NOT NULL (issue #2426, pgstore's schema contract)", col)
+	}
+	for _, col := range []string{"subject_iss", "subject_sub", "domain", "preferred_username", "granted_at"} {
+		_, nullable := nullableColumn(t, ctx, db, "grpcauth_grant_index", col)
+		assert.Equal(t, "NO", nullable, "grpcauth_grant_index.%s must be NOT NULL (issue #2426, grantindex's schema contract)", col)
+	}
+}
+
+// TestMigration007_BackfillsEveryPreExistingRow_NotJustTheKnownOne proves
+// migration 007 (agent_definition.domain) doesn't dirty when
+// agent_definition already holds a row config/agents.yaml never described
+// (e.g. a manual-test row from a long-lived environment like dev) --
+// migration 007's original backfill only matched
+// agent_id = 'audience-score-system-research', so any other row was left
+// with a NULL domain and failed the immediately-following
+// ALTER COLUMN ... SET NOT NULL, dirtying the migration.
+func TestMigration007_BackfillsEveryPreExistingRow_NotJustTheKnownOne(t *testing.T) {
+	ctx := context.Background()
+	db := dbtest.NewPostgres(ctx, t, dbtest.Options{})
+
+	sqlDB, err := sql.Open("pgx", db.ConnString)
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = sqlDB.Close() })
+
+	runner := migrate.NewRunner(sqlDB, schema.Migrations, schema.Dir)
+
+	// Land at version 6 -- right before 007 adds `domain` -- and insert a
+	// row with an agent_id the real config has never used, simulating a
+	// stray row a long-lived database (dev) can accumulate that a fresh
+	// test database never would.
+	require.NoError(t, runner.Migrate(6))
+	_, err = sqlDB.ExecContext(ctx, `
+		INSERT INTO agent_definition (agent_id, version, model, tool_set, max_turns, max_cost_usd)
+		VALUES ('some-orphaned-test-agent', 1, 'anthropic/claude-3.5-sonnet', '[]', 100, 1.0)
+	`)
+	require.NoError(t, err)
+
+	require.NoError(t, runner.Migrate(9), "007 must not dirty even with a pre-existing row outside its hardcoded agent_id")
+
+	version, dirty, err := runner.Version()
+	require.NoError(t, err)
+	assert.False(t, dirty)
+	assert.Equal(t, uint(9), version)
+
+	var domain string
+	require.NoError(t, sqlDB.QueryRowContext(ctx, `
+		SELECT domain FROM agent_definition WHERE agent_id = 'some-orphaned-test-agent'
+	`).Scan(&domain))
+	assert.Equal(t, "audience_score_system", domain, "the orphaned row must be backfilled too, not just the one agent_id 007 originally hardcoded")
 }

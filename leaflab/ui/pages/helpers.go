@@ -38,6 +38,27 @@ func boardStateVariant(state leaflabapipb.ReportingState) htmxui.BadgeVariant {
 	}
 }
 
+// FlattenRegions walks a forest of RegionTreeNodes depth-first and returns
+// every region as one flat list in display order -- the source list the
+// regions screen's create parent-picker and re-parent pickers select from
+// (#2317). It is purely a transform of what GetRegionTree returned: no
+// filtering by ownership (tree reads are unscoped, M2 FR5 read precedent)
+// and no cycle filtering -- FR5's re-parent cycle rejection is the API's
+// enforcement point (NFR2), so pickers deliberately offer every region and
+// the rendered error carries the API's own message.
+func FlattenRegions(nodes []*leaflabapipb.RegionTreeNode) []*leaflabapipb.RegionTreeNode {
+	var out []*leaflabapipb.RegionTreeNode
+	var walk func(ns []*leaflabapipb.RegionTreeNode)
+	walk = func(ns []*leaflabapipb.RegionTreeNode) {
+		for _, n := range ns {
+			out = append(out, n)
+			walk(n.GetChildren())
+		}
+	}
+	walk(nodes)
+	return out
+}
+
 // formatReadingTime renders a sensor's latest reading timestamp (FR6) as an
 // absolute UTC RFC3339 string -- unlike lastReadingAge's relative "N ago"
 // caption for the boards list, the board detail screen shows the exact
@@ -90,4 +111,18 @@ func roughDuration(d time.Duration) string {
 		}
 		return fmt.Sprintf("%d days", days)
 	}
+}
+
+// boardDetailRecordedRegionID returns the recorded_region_id field of a
+// GetBoardDetailResponse, nil-safely for the load-error render path
+// (pages.BoardDetail renders the recorded-region card even when resp is
+// nil -- BoardHeader already renders from a nil resp the same way, via
+// generated getters; recorded_region_id needs the nil *int64 preserved, so
+// a getter (which would flatten it to a 0 sentinel -- there is no
+// region_id = 0, absence is nil) can't be used here).
+func boardDetailRecordedRegionID(resp *leaflabapipb.GetBoardDetailResponse) *int64 {
+	if resp == nil {
+		return nil
+	}
+	return resp.RecordedRegionId
 }

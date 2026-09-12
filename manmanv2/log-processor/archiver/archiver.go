@@ -331,10 +331,22 @@ func (a *Archiver) uploadWindow(ctx context.Context, window *MinuteWindow) error
 		return fmt.Errorf("failed to create log reference: %w", err)
 	}
 
-	// Check if we need to append
-	exists, err := a.s3Client.Exists(ctx, s3Key)
-	if err != nil {
-		return fmt.Errorf("failed to check S3 object existence: %w", err)
+	// Check if we need to append. Skip the HeadObject round-trip when no
+	// log_references row existed for this (sgc_id, minute_timestamp) above
+	// (existingLog == nil): every S3 write to this key is always preceded by
+	// creating exactly such a row, so its absence proves s3Key cannot exist
+	// yet -- calling Exists() here would just be a guaranteed-404 HeadObject
+	// on the hot path (every session, every minute), which is what produced
+	// the constant stream of spurious error-status trace spans in issue
+	// #1846 ("s3 head error, continues to persist"). Only ask S3 when
+	// existingLog != nil, i.e. we're actually revisiting a window that may
+	// already have a completed or old-pending upload.
+	exists := false
+	if existingLog != nil {
+		exists, err = a.s3Client.Exists(ctx, s3Key)
+		if err != nil {
+			return fmt.Errorf("failed to check S3 object existence: %w", err)
+		}
 	}
 
 	logData := window.Buffer.Bytes()

@@ -9,6 +9,7 @@ load("@rules_go//go:def.bzl", "go_library", "go_test")
 go_library(
     name = "tools",
     srcs = [
+        "allowlist.go",
         "client.go",
         "dispatch.go",
         "keys.go",
@@ -64,6 +65,25 @@ go_test(
         "//whagent_net/session",
         "@com_github_google_uuid//:uuid",
         "@com_github_jackc_pgx_v5//stdlib",
+        "@com_github_modelcontextprotocol_go_sdk//mcp",
+        "@com_github_stretchr_testify//assert",
+        "@com_github_stretchr_testify//require",
+    ],
+)
+
+go_test(
+    name = "tools_test",
+    srcs = [
+        "allowlist_test.go",
+        "dispatch_test.go",
+    ],
+    embed = [":tools"],
+    deps = [
+        "//libs/go/whagent",
+        "//whagent_net/api/persona",
+        "//whagent_net/llm",
+        "//whagent_net/session",
+        "@com_github_google_uuid//:uuid",
         "@com_github_modelcontextprotocol_go_sdk//mcp",
         "@com_github_stretchr_testify//assert",
         "@com_github_stretchr_testify//require",

@@ -59,12 +59,16 @@ func TestMigration038_AppliesOnTopOfFullHistoryAndCreatesExpectedShape(t *testin
 	if err != nil {
 		t.Fatalf("LatestVersion: %v", err)
 	}
-	if latest != 40 {
-		t.Fatalf("expected the latest migration source version to be 40, got %d -- update this test if a newer migration has since landed", latest)
+	if latest != 43 {
+		t.Fatalf("expected the latest migration source version to be 43, got %d -- update this test if a newer migration has since landed", latest)
 	}
 
-	if err := runner.Up(); err != nil {
-		t.Fatalf("Up (applying every migration through 038): %v", err)
+	// Target version 38 explicitly rather than Up() (which now also
+	// applies every later migration through 043) -- this test is about
+	// migration 038 specifically, not "whatever the latest migration
+	// happens to be".
+	if err := runner.Migrate(38); err != nil {
+		t.Fatalf("Migrate(38) (applying every migration through 038): %v", err)
 	}
 
 	version, dirty, err := runner.Version()
@@ -72,10 +76,10 @@ func TestMigration038_AppliesOnTopOfFullHistoryAndCreatesExpectedShape(t *testin
 		t.Fatalf("Version: %v", err)
 	}
 	if dirty {
-		t.Fatalf("expected clean state after Up, got dirty")
+		t.Fatalf("expected clean state after Migrate(38), got dirty")
 	}
-	if version != 40 {
-		t.Fatalf("expected version 40 after Up, got %d", version)
+	if version != 38 {
+		t.Fatalf("expected version 38 after Migrate(38), got %d", version)
 	}
 
 	// All columns of the PortRange shape (start/end/protocol) must exist.

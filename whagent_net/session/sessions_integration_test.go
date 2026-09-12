@@ -4,12 +4,15 @@ package session_test
 
 import (
 	"context"
+	"strings"
 	"testing"
+	"time"
 
 	"github.com/google/uuid"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/whale-net/everything/libs/go/dbtest"
 	"github.com/whale-net/everything/whagent_net/session"
 )
 
@@ -154,4 +157,310 @@ func TestSessionStore_UpdateStatus_NonExistentSession_ReturnsErrNoRows(t *testin
 	err := s.Sessions().UpdateStatus(ctx, uuid.New(), session.StatusDone, nil)
 	assert.Error(t, err)
 	assert.NotErrorIs(t, err, session.ErrTerminalStatus, "a nonexistent session must not be reported as terminal")
+}
+
+// createTestSessionAt is createTestSession plus a raw SQL patch pinning
+// created_at to a caller-chosen deterministic value (Create itself always
+// writes NOW() -- List's ordering/pagination tests need exact control over
+// created_at, including deliberately identical values to exercise the
+// session_id tie-breaker). mutate, if non-nil, is applied to the fixture
+// before Create.
+func createTestSessionAt(t *testing.T, ctx context.Context, s *session.Store, db *dbtest.Postgres, createdAt time.Time, mutate func(*session.Session)) *session.Session {
+	t.Helper()
+	sess := newTestSession()
+	if mutate != nil {
+		mutate(sess)
+	}
+	require.NoError(t, s.Sessions().Create(ctx, sess))
+	_, err := db.Pool.Exec(ctx, `UPDATE sessions SET created_at = $1 WHERE session_id = $2`, createdAt, sess.SessionID)
+	require.NoError(t, err)
+	sess.CreatedAt = createdAt
+	return sess
+}
+
+// TestSessionStore_List_FiltersByAgentID proves agent_id is applied in SQL
+// (FR3/C15): only the matching session is returned.
+func TestSessionStore_List_FiltersByAgentID(t *testing.T) {
+	ctx := context.Background()
+	s, db := newStore(t)
+	base := time.Now().UTC().Truncate(time.Microsecond)
+
+	want := createTestSessionAt(t, ctx, s, db, base, func(sess *session.Session) { sess.AgentID = "agent-a" })
+	createTestSessionAt(t, ctx, s, db, base.Add(-time.Second), func(sess *session.Session) { sess.AgentID = "agent-b" })
+
+	agentID := "agent-a"
+	got, _, err := s.Sessions().List(ctx, session.SessionFilter{AgentID: &agentID}, session.SessionPage{})
+	require.NoError(t, err)
+	require.Len(t, got, 1)
+	assert.Equal(t, want.SessionID, got[0].SessionID)
+}
+
+// TestSessionStore_List_FiltersByState proves the state filter matches the
+// stored status column, not some derived value.
+func TestSessionStore_List_FiltersByState(t *testing.T) {
+	ctx := context.Background()
+	s, db := newStore(t)
+	base := time.Now().UTC().Truncate(time.Microsecond)
+
+	running := createTestSessionAt(t, ctx, s, db, base, nil)
+	done := createTestSessionAt(t, ctx, s, db, base.Add(-time.Second), nil)
+	require.NoError(t, s.Sessions().UpdateStatus(ctx, done.SessionID, session.StatusDone, nil))
+
+	state := session.StatusDone
+	got, _, err := s.Sessions().List(ctx, session.SessionFilter{State: &state}, session.SessionPage{})
+	require.NoError(t, err)
+	require.Len(t, got, 1)
+	assert.Equal(t, done.SessionID, got[0].SessionID)
+	assert.NotEqual(t, running.SessionID, got[0].SessionID)
+}
+
+// TestSessionStore_List_FiltersByStartedByKind proves started_by_kind
+// filters on subject_kind (LB2/NFR3) -- a service-started session must not
+// leak into a human-only (or vice versa) filtered list.
+func TestSessionStore_List_FiltersByStartedByKind(t *testing.T) {
+	ctx := context.Background()
+	s, db := newStore(t)
+	base := time.Now().UTC().Truncate(time.Microsecond)
+
+	human := createTestSessionAt(t, ctx, s, db, base, func(sess *session.Session) {
+		sess.Subject.Kind = session.SubjectKindHuman
+		sess.OnBehalfOf.Kind = session.SubjectKindHuman
+	})
+	service := createTestSessionAt(t, ctx, s, db, base.Add(-time.Second), func(sess *session.Session) {
+		sess.Subject.Kind = session.SubjectKindService
+		sess.OnBehalfOf.Kind = session.SubjectKindService
+	})
+
+	kind := session.SubjectKindService
+	got, _, err := s.Sessions().List(ctx, session.SessionFilter{StartedByKind: &kind}, session.SessionPage{})
+	require.NoError(t, err)
+	require.Len(t, got, 1, "started_by_kind=service must return only the service-subject row")
+	assert.Equal(t, service.SessionID, got[0].SessionID)
+	assert.NotEqual(t, human.SessionID, got[0].SessionID)
+}
+
+// TestSessionStore_List_StartTimeRange_BoundariesAreInclusiveExclusive
+// proves StartedAfter is an inclusive lower bound and StartedBefore an
+// exclusive upper bound on created_at, exactly as SessionFilter's doc
+// comment states.
+func TestSessionStore_List_StartTimeRange_BoundariesAreInclusiveExclusive(t *testing.T) {
+	ctx := context.Background()
+	s, db := newStore(t)
+	base := time.Now().UTC().Truncate(time.Microsecond)
+
+	before := createTestSessionAt(t, ctx, s, db, base.Add(-time.Hour), nil)
+	at := createTestSessionAt(t, ctx, s, db, base, nil)
+	after := createTestSessionAt(t, ctx, s, db, base.Add(time.Hour), nil)
+
+	t.Run("started_after is inclusive", func(t *testing.T) {
+		got, _, err := s.Sessions().List(ctx, session.SessionFilter{StartedAfter: &base}, session.SessionPage{})
+		require.NoError(t, err)
+		ids := sessionIDs(got)
+		assert.Contains(t, ids, at.SessionID, "the boundary row itself must be included")
+		assert.Contains(t, ids, after.SessionID)
+		assert.NotContains(t, ids, before.SessionID)
+	})
+
+	t.Run("started_before is exclusive", func(t *testing.T) {
+		got, _, err := s.Sessions().List(ctx, session.SessionFilter{StartedBefore: &base}, session.SessionPage{})
+		require.NoError(t, err)
+		ids := sessionIDs(got)
+		assert.Contains(t, ids, before.SessionID)
+		assert.NotContains(t, ids, at.SessionID, "the boundary row itself must be excluded")
+		assert.NotContains(t, ids, after.SessionID)
+	})
+}
+
+// TestSessionStore_List_CombinesFiltersWithAND proves multiple set filters
+// narrow the result jointly, not independently (a row matching only one of
+// two set filters must not appear).
+func TestSessionStore_List_CombinesFiltersWithAND(t *testing.T) {
+	ctx := context.Background()
+	s, db := newStore(t)
+	base := time.Now().UTC().Truncate(time.Microsecond)
+
+	want := createTestSessionAt(t, ctx, s, db, base, func(sess *session.Session) { sess.AgentID = "agent-a" })
+	createTestSessionAt(t, ctx, s, db, base.Add(-time.Second), func(sess *session.Session) { sess.AgentID = "agent-a" })
+	require.NoError(t, s.Sessions().UpdateStatus(ctx, want.SessionID, session.StatusDone, nil))
+
+	agentID := "agent-a"
+	state := session.StatusDone
+	got, _, err := s.Sessions().List(ctx, session.SessionFilter{AgentID: &agentID, State: &state}, session.SessionPage{})
+	require.NoError(t, err)
+	require.Len(t, got, 1, "only the row matching BOTH filters must be returned")
+	assert.Equal(t, want.SessionID, got[0].SessionID)
+}
+
+// TestSessionStore_List_MultipleSubjectsAllAppear proves List has no
+// implicit by-subject scope -- sessions started by distinct subjects all
+// appear in an unfiltered call (the caller-side visibility rule, #2237,
+// applies in api/handlers, not here).
+func TestSessionStore_List_MultipleSubjectsAllAppear(t *testing.T) {
+	ctx := context.Background()
+	s, db := newStore(t)
+	base := time.Now().UTC().Truncate(time.Microsecond)
+
+	a := createTestSessionAt(t, ctx, s, db, base, func(sess *session.Session) { sess.Subject.Sub = "subject-a" })
+	b := createTestSessionAt(t, ctx, s, db, base.Add(-time.Second), func(sess *session.Session) { sess.Subject.Sub = "subject-b" })
+	c := createTestSessionAt(t, ctx, s, db, base.Add(-2*time.Second), func(sess *session.Session) { sess.Subject.Sub = "subject-c" })
+
+	got, _, err := s.Sessions().List(ctx, session.SessionFilter{}, session.SessionPage{})
+	require.NoError(t, err)
+	ids := sessionIDs(got)
+	assert.Contains(t, ids, a.SessionID)
+	assert.Contains(t, ids, b.SessionID)
+	assert.Contains(t, ids, c.SessionID)
+}
+
+// TestSessionStore_List_Pagination_WalksForwardAndBackNoDuplicateNoSkip
+// seeds a set larger than one page and proves next/prev pagination covers
+// every row exactly once, forward and back, including a run of rows that
+// share the exact same created_at -- proving the session_id tie-breaker
+// (not created_at alone) determines order there.
+func TestSessionStore_List_Pagination_WalksForwardAndBackNoDuplicateNoSkip(t *testing.T) {
+	ctx := context.Background()
+	s, db := newStore(t)
+	base := time.Now().UTC().Truncate(time.Microsecond)
+
+	const total = 5
+	// The three newest rows share created_at exactly, straddling a page
+	// boundary at pageSize=2 below -- with no session_id tie-breaker, a
+	// keyset predicate of "created_at < cursor" alone would skip the
+	// remaining tied row(s) entirely (ties are excluded by strict "<"),
+	// not merely reorder them, which is what actually makes this fixture
+	// catch a missing tie-breaker (see the issue's red/green instruction).
+	const tiedAtSameInstant = 3
+	var seeded []*session.Session
+	for i := 0; i < total; i++ {
+		createdAt := base
+		if i >= tiedAtSameInstant {
+			createdAt = base.Add(-time.Duration(i) * time.Second)
+		}
+		seeded = append(seeded, createTestSessionAt(t, ctx, s, db, createdAt, nil))
+	}
+
+	// Canonical order per List's contract: created_at DESC, session_id DESC.
+	sortSessionsCanonical(seeded)
+	want := sessionIDs(seeded)
+
+	const pageSize = 2
+
+	// Walk forward to the end, collecting every id in order and remembering
+	// the exact PageInfo the LAST page returned -- its PrevPageToken is the
+	// backward walk's starting cursor below.
+	var forward []uuid.UUID
+	var lastInfo session.PageInfo
+	var nextToken string
+	for page := 0; page < total+1; page++ { // +1 guards against an infinite loop if pagination regresses
+		got, info, err := s.Sessions().List(ctx, session.SessionFilter{}, session.SessionPage{PageSize: pageSize, PageToken: nextToken})
+		require.NoError(t, err)
+		if len(got) == 0 {
+			break
+		}
+		forward = append(forward, sessionIDs(got)...)
+		lastInfo = info
+		if info.NextPageToken == "" {
+			break
+		}
+		nextToken = info.NextPageToken
+	}
+	require.Equal(t, want, forward, "forward walk must cover every row exactly once, in canonical order, with no gap or duplicate")
+	require.Empty(t, lastInfo.NextPageToken, "the forward walk above must have reached the true last page")
+
+	// Walk backward from the last page's own PrevPageToken, back to the
+	// start, prepending each earlier page in front of the pages already
+	// collected -- starting from the last page's own ids (the tail of
+	// `forward`, already known to be correct from the assertion above).
+	backward := append([]uuid.UUID{}, forward[len(forward)-pageSizeOf(forward, want, pageSize):]...)
+	prevToken := lastInfo.PrevPageToken
+	for page := 0; page < total+1; page++ {
+		if prevToken == "" {
+			break
+		}
+		got, info, err := s.Sessions().List(ctx, session.SessionFilter{}, session.SessionPage{PageSize: pageSize, PageToken: prevToken})
+		require.NoError(t, err)
+		require.NotEmpty(t, got, "a non-empty PrevPageToken must always resolve to a non-empty page")
+		backward = append(sessionIDs(got), backward...)
+		prevToken = info.PrevPageToken
+	}
+	require.Equal(t, want, backward, "backward walk must reconstruct the exact same canonical order, with no gap or duplicate")
+}
+
+// pageSizeOf returns however many rows made up the final page of a forward
+// walk over total items with the given pageSize (a short final page when
+// total isn't a multiple of pageSize).
+func pageSizeOf(forward, want []uuid.UUID, pageSize int) int {
+	n := len(want) % pageSize
+	if n == 0 {
+		n = pageSize
+	}
+	if n > len(forward) {
+		n = len(forward)
+	}
+	return n
+}
+
+// sortSessionsCanonical sorts sessions in place into List's documented
+// (created_at DESC, session_id DESC) order.
+func sortSessionsCanonical(sessions []*session.Session) {
+	for i := 1; i < len(sessions); i++ {
+		for j := i; j > 0; j-- {
+			a, b := sessions[j-1], sessions[j]
+			if a.CreatedAt.Before(b.CreatedAt) || (a.CreatedAt.Equal(b.CreatedAt) && strings.Compare(a.SessionID.String(), b.SessionID.String()) < 0) {
+				sessions[j-1], sessions[j] = sessions[j], sessions[j-1]
+			}
+		}
+	}
+}
+
+// sessionIDs extracts SessionID from each row, for assert.Contains checks
+// that don't care about order.
+func sessionIDs(sessions []*session.Session) []uuid.UUID {
+	ids := make([]uuid.UUID, len(sessions))
+	for i, sess := range sessions {
+		ids[i] = sess.SessionID
+	}
+	return ids
+}
+
+// TestSessionStore_List_InvalidPageToken_ReturnsErrInvalidPageToken proves
+// a tampered/malformed page_token is reported as ErrInvalidPageToken (which
+// the handler maps to codes.InvalidArgument) -- never a panic, never a
+// silent full-list fallback.
+func TestSessionStore_List_InvalidPageToken_ReturnsErrInvalidPageToken(t *testing.T) {
+	ctx := context.Background()
+	s, _ := newStore(t)
+
+	_, _, err := s.Sessions().List(ctx, session.SessionFilter{}, session.SessionPage{PageToken: "not-a-real-token"})
+	assert.ErrorIs(t, err, session.ErrInvalidPageToken)
+}
+
+// TestSessionStore_List_UsesIndexNotSequentialScan proves migration 002's
+// idx_sessions_created_at_id index (not a sequential scan) backs List's
+// default ORDER BY created_at DESC, session_id DESC / LIMIT query on a
+// seeded table (Validation section).
+func TestSessionStore_List_UsesIndexNotSequentialScan(t *testing.T) {
+	ctx := context.Background()
+	s, db := newStore(t)
+	base := time.Now().UTC()
+	for i := 0; i < 200; i++ {
+		createTestSessionAt(t, ctx, s, db, base.Add(-time.Duration(i)*time.Second), nil)
+	}
+
+	rows, err := db.Pool.Query(ctx, `EXPLAIN SELECT session_id FROM sessions ORDER BY created_at DESC, session_id DESC LIMIT 10`)
+	require.NoError(t, err)
+	defer rows.Close()
+
+	var plan strings.Builder
+	for rows.Next() {
+		var line string
+		require.NoError(t, rows.Scan(&line))
+		plan.WriteString(line)
+		plan.WriteString("\n")
+	}
+	require.NoError(t, rows.Err())
+
+	planText := plan.String()
+	assert.Contains(t, planText, "idx_sessions_created_at_id", "the list query must use the new index, plan was:\n%s", planText)
+	assert.NotContains(t, planText, "Seq Scan on sessions", "the list query must not fall back to a sequential scan, plan was:\n%s", planText)
 }

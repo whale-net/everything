@@ -14,7 +14,7 @@ import (
 	"google.golang.org/protobuf/proto"
 )
 
-// stubRepo records UpsertSensor and ApplyConfigRegions calls so tests can assert behaviour.
+// stubRepo records UpsertSensor calls so tests can assert behaviour.
 type stubRepo struct {
 	// Configurable return values.
 	boardID      int64
@@ -22,13 +22,7 @@ type stubRepo struct {
 	sensorID     int64
 
 	// Recorded call arguments.
-	upsertSensorCalls       []upsertSensorCall
-	applyConfigRegionsCalls []applyConfigRegionsCall
-}
-
-type applyConfigRegionsCall struct {
-	boardID int64
-	version int64
+	upsertSensorCalls []upsertSensorCall
 }
 
 type upsertSensorCall struct {
@@ -47,7 +41,7 @@ func (s *stubRepo) UpsertSensorType(_ context.Context, _, _ string) (int64, erro
 	return s.sensorTypeID, nil
 }
 
-func (s *stubRepo) UpsertSensor(_ context.Context, boardID, sensorTypeID int64, name, unit string, hw *HardwareAddress) (int64, *int64, error) {
+func (s *stubRepo) UpsertSensor(_ context.Context, boardID, sensorTypeID int64, name, unit string, hw *HardwareAddress) (int64, error) {
 	s.upsertSensorCalls = append(s.upsertSensorCalls, upsertSensorCall{
 		boardID:      boardID,
 		sensorTypeID: sensorTypeID,
@@ -55,7 +49,7 @@ func (s *stubRepo) UpsertSensor(_ context.Context, boardID, sensorTypeID int64, 
 		unit:         unit,
 		hw:           hw,
 	})
-	return s.sensorID, nil, nil
+	return s.sensorID, nil
 }
 
 func (s *stubRepo) UpsertSensorLabel(_ context.Context, _ int64, _ string) error { return nil }
@@ -68,7 +62,7 @@ func (s *stubRepo) GetSensor(_ context.Context, _, _ string) (SensorInfo, bool, 
 	return SensorInfo{}, false, nil
 }
 
-func (s *stubRepo) InsertReading(_ context.Context, _ int64, _ *int64, _ float64, _ bool, _ uint32, _ time.Time, _ *int64) error {
+func (s *stubRepo) InsertReading(_ context.Context, _ int64, _ float64, _ bool, _ uint32, _ time.Time, _ *int64) error {
 	return nil
 }
 
@@ -77,11 +71,6 @@ func (s *stubRepo) UpsertDeviceConfig(_ context.Context, _ int64, _ int64, _ []b
 }
 
 func (s *stubRepo) AckDeviceConfig(_ context.Context, _ int64, _ int64, _ bool, _ string) error {
-	return nil
-}
-
-func (s *stubRepo) ApplyConfigRegions(_ context.Context, boardID, version int64) error {
-	s.applyConfigRegionsCalls = append(s.applyConfigRegionsCalls, applyConfigRegionsCall{boardID: boardID, version: version})
 	return nil
 }
 
@@ -381,10 +370,14 @@ func TestHandleManifest_DirectSensorEmptyMuxPath(t *testing.T) {
 	}
 }
 
-// TestHandleConfigAck_AcceptedCallsApplyRegionsAndSetsCache verifies that an
-// accepted DeviceConfigAck triggers ApplyConfigRegions and updates the config
-// version cache; a rejected ack does neither.
-func TestHandleConfigAck_AcceptedCallsApplyRegionsAndSetsCache(t *testing.T) {
+// TestHandleConfigAck_AcceptedSetsConfigVersion verifies that an accepted
+// DeviceConfigAck updates the config version cache; a rejected ack does not.
+//
+// The ack is never a placement write (NFR4/M3): no region value on the wire
+// can create or close a sensor_region_history row -- that invariant is
+// asserted against a real database by the ack-path integration test (see
+// issue #2314's Testing section), not by this in-memory stub.
+func TestHandleConfigAck_AcceptedSetsConfigVersion(t *testing.T) {
 	repo := &stubRepo{boardID: 7}
 	h := newTestHandler(repo)
 
@@ -402,17 +395,6 @@ func TestHandleConfigAck_AcceptedCallsApplyRegionsAndSetsCache(t *testing.T) {
 		t.Fatalf("handleConfigAck: %v", err)
 	}
 
-	if len(repo.applyConfigRegionsCalls) != 1 {
-		t.Fatalf("expected 1 ApplyConfigRegions call, got %d", len(repo.applyConfigRegionsCalls))
-	}
-	call := repo.applyConfigRegionsCalls[0]
-	if call.boardID != 7 {
-		t.Errorf("ApplyConfigRegions boardID: want 7, got %d", call.boardID)
-	}
-	if call.version != 3 {
-		t.Errorf("ApplyConfigRegions version: want 3, got %d", call.version)
-	}
-
 	v, ok := h.cache.GetConfigVersion("leaflab-aabbccdd")
 	if !ok {
 		t.Fatal("config version not set in cache after accepted ack")
@@ -422,9 +404,9 @@ func TestHandleConfigAck_AcceptedCallsApplyRegionsAndSetsCache(t *testing.T) {
 	}
 }
 
-// TestHandleConfigAck_RejectedSkipsApplyRegions verifies that a rejected ack
-// does not call ApplyConfigRegions and does not update the config version cache.
-func TestHandleConfigAck_RejectedSkipsApplyRegions(t *testing.T) {
+// TestHandleConfigAck_RejectedSkipsConfigVersion verifies that a rejected
+// ack does not update the config version cache.
+func TestHandleConfigAck_RejectedSkipsConfigVersion(t *testing.T) {
 	repo := &stubRepo{boardID: 7}
 	h := newTestHandler(repo)
 
@@ -441,10 +423,6 @@ func TestHandleConfigAck_RejectedSkipsApplyRegions(t *testing.T) {
 
 	if err := h.handleConfigAck(context.Background(), "leaflab-aabbccdd", body); err != nil {
 		t.Fatalf("handleConfigAck: %v", err)
-	}
-
-	if len(repo.applyConfigRegionsCalls) != 0 {
-		t.Errorf("expected 0 ApplyConfigRegions calls on rejection, got %d", len(repo.applyConfigRegionsCalls))
 	}
 
 	if _, ok := h.cache.GetConfigVersion("leaflab-aabbccdd"); ok {

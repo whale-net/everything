@@ -1,4 +1,4 @@
-load("@rules_go//go:def.bzl", "go_binary", "go_library")
+load("@rules_go//go:def.bzl", "go_binary", "go_library", "go_test")
 load("//tools/bazel:release.bzl", "release_app")
 
 # `mcp` -- whagent-net's MCP surface for Claude Code (issue #2120,
@@ -8,16 +8,25 @@ load("//tools/bazel:release.bzl", "release_app")
 # surface.
 go_library(
     name = "mcp_lib",
-    srcs = ["main.go"],
+    srcs = [
+        "delegatedgrant.go",
+        "main.go",
+    ],
     importpath = "github.com/whale-net/everything/whagent_net/mcp",
     visibility = ["//visibility:private"],
     deps = [
+        "//libs/go/db",
         "//libs/go/grpcauth",
         "//libs/go/grpcclient",
         "//libs/go/logging",
+        "//libs/go/mcpauth",
+        "//whagent_net/delegatedgrant",
         "//whagent_net/mcp/server",
         "//whagent_net/mcp/tools",
+        "//whagent_net/mcpscope",
         "//whagent_net/protos:whagentpb",
+        "//whagent_net/session",
+        "@com_github_jackc_pgx_v5//pgxpool",
         "@io_opentelemetry_go_contrib_instrumentation_net_http_otelhttp//:otelhttp",
     ],
 )
@@ -26,6 +35,23 @@ go_binary(
     name = "mcp",
     embed = [":mcp_lib"],
     visibility = ["//visibility:public"],
+)
+
+# Construction-test coverage for the purely-additive delegated-grant
+# wiring (issue #2426's Testing section): the config-from-env path errors
+# loudly when the client secret is unset (rather than silently
+# constructing a source that fails at first token call), distinguished
+# from the entirely-unset and no-pool degrade cases. No database, no
+# network -- runs as part of `bazel test //...`.
+go_test(
+    name = "mcp_test",
+    size = "small",
+    srcs = ["delegatedgrant_test.go"],
+    embed = [":mcp_lib"],
+    deps = [
+        "//whagent_net/delegatedgrant",
+        "@com_github_jackc_pgx_v5//pgxpool",
+    ],
 )
 
 # Release metadata. domain "whagent-net" + name "mcp" matches the binary

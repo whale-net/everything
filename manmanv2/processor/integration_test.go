@@ -119,6 +119,26 @@ func (m *MockServerRepository) MarkServersOffline(ctx context.Context, serverIDs
 	return nil
 }
 
+func (m *MockServerRepository) SetDrainState(ctx context.Context, serverID int64, state string, requestedAt *time.Time) error {
+	server, ok := m.servers[serverID]
+	if !ok {
+		return &NotFoundError{ID: serverID}
+	}
+	server.DrainState = state
+	server.DrainRequestedAt = requestedAt
+	return nil
+}
+
+func (m *MockServerRepository) ListByDrainState(ctx context.Context, state string) ([]*manman.Server, error) {
+	servers := make([]*manman.Server, 0)
+	for _, server := range m.servers {
+		if server.DrainState == state {
+			servers = append(servers, server)
+		}
+	}
+	return servers, nil
+}
+
 // MockSessionRepository implements repository.SessionRepository for testing
 type MockSessionRepository struct {
 	sessions map[int64]*manman.Session
@@ -243,6 +263,10 @@ func (m *MockSessionRepository) StopOtherSessionsForSGC(ctx context.Context, ses
 		}
 	}
 	return nil
+}
+
+func (m *MockSessionRepository) CountRunningDeploymentsByGame(ctx context.Context) ([]*manman.FleetGameStatus, error) {
+	return nil, nil
 }
 
 // NotFoundError represents an entity not found error

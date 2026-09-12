@@ -130,6 +130,28 @@ func attrInt32(r *build.Rule, key string) int32 {
 	return int32(n)
 }
 
+// attrInt32List reads a rule's list-of-int attribute (e.g.
+// release_app(additional_ports = [8090])) from a literal list expression.
+func attrInt32List(r *build.Rule, key string) []int32 {
+	list, ok := r.Attr(key).(*build.ListExpr)
+	if !ok {
+		return nil
+	}
+	var out []int32
+	for _, e := range list.List {
+		lit, ok := e.(*build.LiteralExpr)
+		if !ok {
+			continue
+		}
+		n, err := strconv.Atoi(lit.Token)
+		if err != nil {
+			continue
+		}
+		out = append(out, int32(n))
+	}
+	return out
+}
+
 // topLevelAssign returns the RHS of a top-level "NAME = ..." statement in f,
 // or nil if there is none.
 func topLevelAssign(f *build.File, name string) build.Expr {
@@ -211,12 +233,19 @@ func appManifestFromRule(pkg string, r *build.Rule) (AppMetadata, error) {
 	}
 
 	manifest := &appmetapb.AppManifest{
-		Name:              effectiveName,
-		Domain:            domain,
-		Description:       r.AttrString("description"),
-		Language:          r.AttrString("language"),
-		Registry:          attrStringOr(r, "registry", "ghcr.io"),
-		Organization:      attrStringOr(r, "organization", "whale-net"),
+		Name:         effectiveName,
+		Domain:       domain,
+		Description:  r.AttrString("description"),
+		Language:     r.AttrString("language"),
+		Registry:     attrStringOr(r, "registry", "ghcr.io"),
+		Organization: attrStringOr(r, "organization", "whale-net"),
+		// Mirrors release.bzl's release_app() image_name/repo_name formula
+		// (tools/bazel/release.bzl) -- this fast path reads BUILD.bazel
+		// attrs directly instead of going through the real app_metadata
+		// Bazel rule, so it can't just read the value Bazel computed the
+		// way the normal cquery-discovery path does (AppMetadata.FullName()
+		// reads RepoName off that rule's output). If release.bzl's naming
+		// formula ever changes, this line must change with it.
 		RepoName:          domain + "-" + effectiveName,
 		Version:           attrStringOr(r, "version", "latest"),
 		BinaryTarget:      binaryTarget,
@@ -224,6 +253,7 @@ func appManifestFromRule(pkg string, r *build.Rule) (AppMetadata, error) {
 		OpenapiSpecTarget: openapiSpecTarget,
 		AppType:           appType,
 		Port:              attrInt32(r, "port"),
+		AdditionalPorts:   attrInt32List(r, "additional_ports"),
 		Replicas:          attrInt32(r, "replicas"),
 		Command:           r.AttrStrings("command"),
 		Args:              r.AttrStrings("args"),

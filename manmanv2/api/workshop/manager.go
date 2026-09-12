@@ -61,12 +61,16 @@ type WorkshopManager struct {
 	sgcRepo          repository.ServerGameConfigRepository
 	gameRepo         repository.GameRepository
 	gameConfigRepo   repository.GameConfigRepository
-	volumeRepo       repository.GameConfigVolumeRepository
-	presetRepo       repository.AddonPathPresetRepository
-	sessionRepo      repository.SessionRepository
-	batchJobRepo     repository.WorkshopBatchJobRepository
-	steamClient      SteamClient
-	rmqPublisher     RMQPublisher
+	// gcLibraryRepo backs ResolveGameConfigLibraryAddons below (M6 #2365/#2370,
+	// plan #2359) -- the GC-scoped resolution primitive, and sole resolution
+	// path driving installs since sgc_workshop_libraries was retired (NFR1).
+	gcLibraryRepo repository.GameConfigWorkshopLibraryRepository
+	volumeRepo    repository.GameConfigVolumeRepository
+	presetRepo    repository.AddonPathPresetRepository
+	sessionRepo   repository.SessionRepository
+	batchJobRepo  repository.WorkshopBatchJobRepository
+	steamClient   SteamClient
+	rmqPublisher  RMQPublisher
 }
 
 // NewWorkshopManager creates a new WorkshopManager instance
@@ -77,6 +81,7 @@ func NewWorkshopManager(
 	sgcRepo repository.ServerGameConfigRepository,
 	gameRepo repository.GameRepository,
 	gameConfigRepo repository.GameConfigRepository,
+	gcLibraryRepo repository.GameConfigWorkshopLibraryRepository,
 	volumeRepo repository.GameConfigVolumeRepository,
 	presetRepo repository.AddonPathPresetRepository,
 	sessionRepo repository.SessionRepository,
@@ -91,6 +96,7 @@ func NewWorkshopManager(
 		sgcRepo:          sgcRepo,
 		gameRepo:         gameRepo,
 		gameConfigRepo:   gameConfigRepo,
+		gcLibraryRepo:    gcLibraryRepo,
 		volumeRepo:       volumeRepo,
 		presetRepo:       presetRepo,
 		sessionRepo:      sessionRepo,
@@ -324,56 +330,18 @@ func (wm *WorkshopManager) FetchMetadata(ctx context.Context, gameID int64, work
 	return addon, nil
 }
 
-// EnsureLibraryAddonsInstalled pre-installs all addons from libraries attached to an SGC.
+// EnsureLibraryAddonsInstalled pre-installs all addons inherited from the deployment's
+// GameConfig-level library attachments (M6 #2370, plan #2359). Resolution is GC-scoped:
+// sgc_workshop_libraries is retired (NFR1), so every deployment of a GameConfig resolves
+// through that GameConfig's attachments via ResolveGameConfigLibraryAddons, not its own.
 // It collects all unique addon IDs (recursively via library references), triggers installs
 // for any not yet installed, and polls until they complete or timeout.
 // Returns nil even if some installs fail — failures are visible in the UI.
 func (wm *WorkshopManager) EnsureLibraryAddonsInstalled(ctx context.Context, sgcID int64) error {
-	// 1. List libraries attached to this SGC
-	libraries, err := wm.sgcRepo.ListLibraries(ctx, sgcID)
+	// 1. Resolve the addon set inherited from the deployment's GameConfig-level libraries
+	addonIDs, err := wm.ResolveGameConfigLibraryAddons(ctx, sgcID)
 	if err != nil {
-		return fmt.Errorf("failed to list SGC libraries: %w", err)
-	}
-	if len(libraries) == 0 {
-		return nil
-	}
-
-	// 2. BFS collect all unique addon IDs from all libraries (including nested references)
-	addonIDs := make(map[int64]struct{})
-	visited := make(map[int64]struct{})
-	queue := make([]int64, 0, len(libraries))
-	for _, lib := range libraries {
-		queue = append(queue, lib.LibraryID)
-	}
-
-	for len(queue) > 0 {
-		libID := queue[0]
-		queue = queue[1:]
-
-		if _, seen := visited[libID]; seen {
-			continue
-		}
-		visited[libID] = struct{}{}
-
-		// Collect direct addons
-		addons, err := wm.libraryRepo.ListAddons(ctx, libID)
-		if err != nil {
-			log.Printf("Warning: failed to list addons for library %d: %v", libID, err)
-		} else {
-			for _, a := range addons {
-				addonIDs[a.AddonID] = struct{}{}
-			}
-		}
-
-		// Enqueue child libraries
-		children, err := wm.libraryRepo.ListReferences(ctx, libID)
-		if err != nil {
-			log.Printf("Warning: failed to list child libraries for library %d: %v", libID, err)
-		} else {
-			for _, child := range children {
-				queue = append(queue, child.LibraryID)
-			}
-		}
+		return fmt.Errorf("failed to resolve game config library addons: %w", err)
 	}
 
 	if len(addonIDs) == 0 {
@@ -426,6 +394,76 @@ func (wm *WorkshopManager) EnsureLibraryAddonsInstalled(ctx context.Context, sgc
 	}
 
 	return nil
+}
+
+// resolveAddonIDsFromLibraries BFS-collects every unique addon ID reachable
+// from libraries, including nested library references, tolerating
+// individual list failures the same way EnsureLibraryAddonsInstalled and
+// ResolveGameConfigLibraryAddons already did inline before this was factored
+// out -- a failure to list one library's addons or references is logged and
+// skipped rather than aborting the whole resolution.
+func (wm *WorkshopManager) resolveAddonIDsFromLibraries(ctx context.Context, libraries []*manman.WorkshopLibrary) map[int64]struct{} {
+	addonIDs := make(map[int64]struct{})
+	visited := make(map[int64]struct{})
+	queue := make([]int64, 0, len(libraries))
+	for _, lib := range libraries {
+		queue = append(queue, lib.LibraryID)
+	}
+
+	for len(queue) > 0 {
+		libID := queue[0]
+		queue = queue[1:]
+
+		if _, seen := visited[libID]; seen {
+			continue
+		}
+		visited[libID] = struct{}{}
+
+		// Collect direct addons
+		addons, err := wm.libraryRepo.ListAddons(ctx, libID)
+		if err != nil {
+			log.Printf("Warning: failed to list addons for library %d: %v", libID, err)
+		} else {
+			for _, a := range addons {
+				addonIDs[a.AddonID] = struct{}{}
+			}
+		}
+
+		// Enqueue child libraries
+		children, err := wm.libraryRepo.ListReferences(ctx, libID)
+		if err != nil {
+			log.Printf("Warning: failed to list child libraries for library %d: %v", libID, err)
+		} else {
+			for _, child := range children {
+				queue = append(queue, child.LibraryID)
+			}
+		}
+	}
+
+	return addonIDs
+}
+
+// ResolveGameConfigLibraryAddons resolves the addon set a deployment (SGC)
+// inherits from its GameConfig's GC-level Workshop library attachments (M6
+// #2365/#2370, FR8/FR9) -- the sole resolution path driving installs since
+// sgc_workshop_libraries was retired (NFR1), shared by
+// EnsureLibraryAddonsInstalled above via the same BFS-over-references logic
+// in resolveAddonIDsFromLibraries. Because every deployment of a GameConfig
+// resolves through this helper, a single GC-level detach
+// (RemoveLibraryFromGameConfig) changes what every one of them returns with
+// no per-deployment write (FR9).
+func (wm *WorkshopManager) ResolveGameConfigLibraryAddons(ctx context.Context, sgcID int64) (map[int64]struct{}, error) {
+	sgc, err := wm.sgcRepo.Get(ctx, sgcID)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get SGC: %w", err)
+	}
+
+	libraries, err := wm.gcLibraryRepo.ListLibraries(ctx, sgc.GameConfigID)
+	if err != nil {
+		return nil, fmt.Errorf("failed to list game config libraries: %w", err)
+	}
+
+	return wm.resolveAddonIDsFromLibraries(ctx, libraries), nil
 }
 
 // FetchAndCreateAddon fetches metadata from Steam Workshop and creates addon

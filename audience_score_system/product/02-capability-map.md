@@ -24,3 +24,4 @@ C19 — A Creator can review and approve or deny a proposed video script, making
 ### Later
 C15 — A Creator can delegate close guidance of research steps to an Analyst, reducing the Creator's direct involvement in Loop 1.
 C16 — A Creator or Analyst can see deeper Analytics metrics beyond views/retention/CTR (e.g. audience retention curves, traffic sources, subscriber conversion), deepening whichever loop proves weakest.
+C21 — A Creator or Analyst can run a research agent inside ASS's web UI that acts as them against ASS's MCP tools, embedding a whagent-net session (delivered by `whagent_net`'s M3, its own C19/C20; amendment `whagent-net-embed`, issue #1562, LB6).

@@ -1,0 +1,52 @@
+package components
+
+// copyConnectAddress is a templ script template (mirrors
+// tools/app_registry/ui/components/digest.templ's copyDigest): a
+// self-contained JS function templ generates and dedupes across every
+// call site, so ConnectAddress needs no hand-written inline-script wiring
+// and no new client-side JS dependency.
+script copyConnectAddress(address string) {
+	navigator.clipboard.writeText(address);
+}
+
+// ConnectAddressDisplay renders a deployment's connect address(es)
+// (FR5/FR6): each address as a copyable "host:port" control that copies
+// the exact address string to the clipboard, and -- when
+// view.Unavailable -- the existing unavailable message instead. Callers
+// that need the running-vs-stopped reveal gating sgc_detail.templ has
+// today wrap this component rather than this component encoding that
+// gating itself; it renders one thing, the address list (or its
+// absence), regardless of deployment status.
+//
+// Named ConnectAddressDisplay rather than the issue's originally proposed
+// ConnectAddress to avoid colliding with the pre-existing
+// components.ConnectAddress struct (deployment_status.go) -- one address
+// entry from ComputeConnectAddresses -- which ConnectAddressView.Addresses
+// is built from and this template ranges over.
+//
+// NFR1 (htmxui candidate): like ConnectAddressView, this stays in
+// manmanv2/ui/components rather than being written for a libs/go/htmxui
+// lift -- it is inherently manmanv2-domain-specific (it knows about port
+// bindings and the "connect address" concept), not a generic UI primitive.
+templ ConnectAddressDisplay(view ConnectAddressView) {
+	if view.Unavailable {
+		<p class="text-sm text-base-content/60">Connect address unavailable — no public address configured for this host.</p>
+	} else {
+		<ul class="space-y-1">
+			for _, addr := range view.Addresses {
+				<li class="flex items-center gap-2">
+					<code class="text-sm font-mono bg-base-200 text-base-content px-2 py-1 rounded">{ addr.Address }</code>
+					<span class="text-xs text-base-content/60">{ addr.Protocol }</span>
+					<button
+						type="button"
+						class="btn btn-ghost btn-xs px-1"
+						title="Copy connect address"
+						onclick={ copyConnectAddress(addr.Address) }
+					>
+						⧉
+					</button>
+				</li>
+			}
+		</ul>
+	}
+}

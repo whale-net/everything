@@ -7,13 +7,17 @@ import (
 	"os"
 	"os/signal"
 	"syscall"
+	"time"
 
+	enumspb "go.temporal.io/api/enums/v1"
 	"go.temporal.io/sdk/activity"
+	"go.temporal.io/sdk/client"
 	"go.temporal.io/sdk/worker"
 
 	"github.com/whale-net/everything/libs/go/db"
 	"github.com/whale-net/everything/libs/go/logging"
 	"github.com/whale-net/everything/libs/go/rmq"
+	"github.com/whale-net/everything/libs/go/s3"
 	temporallib "github.com/whale-net/everything/libs/go/temporal"
 	"github.com/whale-net/everything/whagent_net/api/persona"
 	"github.com/whale-net/everything/whagent_net/events"
@@ -101,6 +105,16 @@ func run() error {
 	issuer := persona.NewIssuer(keySet.ActiveSigner())
 	dispatcher := &tools.Dispatcher{Issuer: issuer, Ledger: store.Idempotency()}
 
+	// S3 client for transcript archival (archive.go's RunArchiveBatch),
+	// the deprecated whagent_net/archiver binary's replacement now that
+	// it runs as a Temporal-scheduled job inside this worker instead of
+	// its own process. Construction is non-fatal, same as
+	// initializePublisher above: WHAGENT_S3_BUCKET unset (or a
+	// construction failure) leaves s3Client nil, and this worker simply
+	// never registers ArchiveWorkflow/the archive schedule below rather
+	// than crash-looping on a missing cold tier.
+	s3Client := initializeS3Client(ctx, logger)
+
 	// Temporal client + worker, via libs/go/temporal (NewWorker bootstrap).
 	temporalCfg := temporallib.ConfigFromEnv()
 	if temporalCfg.TaskQueue == "" {
@@ -116,7 +130,7 @@ func run() error {
 	w := temporallib.NewWorker(temporalClient, temporalCfg.TaskQueue, worker.Options{})
 	w.RegisterWorkflow(SessionWorkflow)
 
-	acts := &Activities{Store: store, LLM: llmClient, Prices: prices, Dispatcher: dispatcher}
+	acts := &Activities{Store: store, LLM: llmClient, Prices: prices, Dispatcher: dispatcher, S3: s3Client}
 	w.RegisterActivityWithOptions(acts.ResolveAgentDefinition, activity.RegisterOptions{Name: ActivityResolveAgentDefinition})
 	w.RegisterActivityWithOptions(acts.BuildContext, activity.RegisterOptions{Name: ActivityBuildContext})
 	w.RegisterActivityWithOptions(acts.CallModel, activity.RegisterOptions{Name: ActivityCallModel})
@@ -135,6 +149,36 @@ func run() error {
 	// both.
 	w.RegisterActivityWithOptions(acts.ListToolDefinitions, activity.RegisterOptions{Name: ActivityListToolDefinitions})
 	w.RegisterActivityWithOptions(acts.DispatchTool, activity.RegisterOptions{Name: ActivityDispatchTool})
+
+	// Transcript archival (archive.go): only registered/scheduled when a
+	// cold tier is actually configured. See archive.go's package doc
+	// comment for why this runs as a Temporal schedule inside this
+	// worker rather than as its own binary.
+	if s3Client != nil {
+		archiveCfg, err := ArchiveConfigFromEnv()
+		if err != nil {
+			return fmt.Errorf("archive config: %w", err)
+		}
+		archiveInterval, err := ArchiveInterval()
+		if err != nil {
+			return fmt.Errorf("archive interval: %w", err)
+		}
+
+		w.RegisterWorkflow(ArchiveWorkflow)
+		w.RegisterActivityWithOptions(acts.RunArchiveBatch, activity.RegisterOptions{Name: ActivityRunArchiveBatch})
+
+		// Non-fatal at startup, same as scheduleManager.Reconcile in
+		// audience_score_system/worker/main.go: a reconcile hiccup (e.g.
+		// Temporal transiently unreachable) should not prevent this
+		// worker from starting and serving SessionWorkflow.
+		if err := ensureArchiveSchedule(ctx, temporalClient.ScheduleClient(), archiveCfg, archiveInterval); err != nil {
+			logger.Warn("failed to ensure archive schedule at startup", "error", err)
+		} else {
+			logger.Info("archive schedule ensured", "interval", archiveInterval)
+		}
+	} else {
+		logger.Info("WHAGENT_S3_BUCKET not set; transcript archival schedule disabled")
+	}
 
 	done := make(chan error, 1)
 	go func() {
@@ -179,6 +223,65 @@ func initializePublisher(ctx context.Context, logger *slog.Logger) events.Publis
 		return nil
 	}
 	return pub
+}
+
+// initializeS3Client builds the cold-tier S3 client archive.go's
+// RunArchiveBatch writes through. Construction is non-fatal, mirroring
+// whagent_net/api/main.go's identical initializeS3Client (api uses its
+// client to hydrate archived transcripts on read; this worker uses one to
+// write them): WHAGENT_S3_BUCKET unset returns nil (transcript archival
+// stays disabled -- run's caller never registers ArchiveWorkflow/the
+// archive schedule in that case), and a construction failure (bad
+// credentials/endpoint) logs a warning and also returns nil rather than
+// failing this worker's startup -- SessionWorkflow has nothing to do with
+// archival and must keep running regardless.
+func initializeS3Client(ctx context.Context, logger *slog.Logger) *s3.Client {
+	bucket := getEnv("WHAGENT_S3_BUCKET", "")
+	if bucket == "" {
+		return nil
+	}
+
+	c, err := s3.NewClient(ctx, s3.Config{
+		Bucket:    bucket,
+		Region:    getEnv("S3_REGION", "us-east-1"),
+		Endpoint:  getEnv("S3_ENDPOINT", ""),
+		AccessKey: getEnv("S3_ACCESS_KEY", ""),
+		SecretKey: getEnv("S3_SECRET_KEY", ""),
+	})
+	if err != nil {
+		logger.Warn("failed to initialize S3 client; transcript archival will be unavailable", "error", err)
+		return nil
+	}
+	return c
+}
+
+// ensureArchiveSchedule idempotently creates-or-updates the archive
+// schedule (ArchiveScheduleID, archive.go): a ScheduleWorkflowAction
+// targeting ArchiveWorkflow on TaskQueue, an interval ScheduleSpec of
+// interval, and SCHEDULE_OVERLAP_POLICY_SKIP so a slow archive run never
+// stacks concurrent runs. Mirrors
+// audience_score_system/worker/sync.ScheduleManager.EnsureSchedule's
+// shape, just as one global schedule rather than one per entity -- a
+// single RunArchiveBatch pass already scans across every eligible
+// session, so there is nothing to key a per-entity schedule on here.
+// temporallib.UpsertSchedule (issue #1742) reconciles an already-exists
+// response from Temporal into an update of the existing schedule's
+// Spec/Action/Overlap, so a later change to WHAGENT_ARCHIVE_INTERVAL
+// takes effect on the next worker restart instead of being pinned to
+// whatever value first created the schedule.
+func ensureArchiveSchedule(ctx context.Context, schedules client.ScheduleClient, cfg ArchiveConfig, interval time.Duration) error {
+	return temporallib.UpsertSchedule(ctx, schedules, client.ScheduleOptions{
+		ID: ArchiveScheduleID,
+		Spec: client.ScheduleSpec{
+			Intervals: []client.ScheduleIntervalSpec{{Every: interval}},
+		},
+		Action: &client.ScheduleWorkflowAction{
+			Workflow:  ArchiveWorkflow,
+			Args:      []interface{}{cfg},
+			TaskQueue: TaskQueue,
+		},
+		Overlap: enumspb.SCHEDULE_OVERLAP_POLICY_SKIP,
+	})
 }
 
 func getEnv(key, def string) string {

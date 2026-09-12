@@ -1,0 +1,451 @@
+load("@rules_go//go:def.bzl", "go_library", "go_test")
+
+# pgx-based repository over //libs/go/db for krill's spec axis (migration
+# 002, issue #2488, M1): Product -> FeatureSet -> Feature -> {FR, NFR},
+# FeatureSet -> LoadBearingDecision, and the product-level Persona/NonGoal
+# entities the same task settles. Store layer only -- no HTTP surface
+# lands here (a separate task). See krill/ARCHITECTURE.md's "Capability
+# map entries, personas, and non-goals" section for how a capability-map
+# entry (`Cn`) resolves onto Feature with no schema of its own.
+#
+# session.go (issue #2489, FR3) is the `init` primitive: mints a
+# krill-native session id and records the two LB4 subjects. amend.go
+# (issue #2493, FR12) is the SCD2 close-and-open supersession write path
+# for Requirement and LoadBearingDecision; history.go (issue #2493, FR11)
+# is its read side -- as-of reads and version lists over the same two
+# entity kinds.
+go_library(
+    name = "store",
+    srcs = [
+        "amend.go",
+        "decision.go",
+        "design_session.go",
+        "errors.go",
+        "feature.go",
+        "featureset.go",
+        "history.go",
+        "import_completion.go",
+        "mediated.go",
+        "milestone.go",
+        "models.go",
+        "nongoal.go",
+        "open_questions.go",
+        "persona.go",
+        "pointer.go",
+        "product.go",
+        "requirement.go",
+        "revision_event.go",
+        "scope.go",
+        "session.go",
+        "slice.go",
+        "store.go",
+    ],
+    importpath = "github.com/whale-net/everything/krill/store",
+    visibility = ["//visibility:public"],
+    deps = [
+        "@com_github_google_uuid//:uuid",
+        "@com_github_jackc_pgx_v5//:pgx",
+        "@com_github_jackc_pgx_v5//pgconn",
+        "@com_github_jackc_pgx_v5//pgxpool",
+    ],
+)
+
+# Real Postgres integration test for the whole store package: creating one
+# of each entity kind (LB2 surrogate ids, LB1 scope_id), scope-qualified
+# uniqueness per entity, parent-not-found rejection per child entity (LB2
+# parentage, store-enforced), a LoadBearingDecision attaching to and reading
+# back from its FeatureSet (FR4/C2), the capability-map decision (an FR's
+# feature_id resolving to a real Feature row), and position rewrite leaving
+# sibling surrogate ids untouched -- all against migration 002's real
+# embedded SQL (//krill/migrate/schema), not a hand-copied schema.
+# Deliberately NOT part of `bazel test //...` -- see //libs/go/dbtest's
+# README for the full rationale behind each tag and how to run tests like
+# this one.
+#
+# Run it explicitly (requires a working Docker daemon):
+#   bazel test //krill/store:store_integration_test --test_output=all
+go_test(
+    name = "store_integration_test",
+    size = "large",
+    timeout = "long",
+    srcs = [
+        "decision_integration_test.go",
+        "feature_integration_test.go",
+        "featureset_integration_test.go",
+        "nongoal_integration_test.go",
+        "persona_integration_test.go",
+        "product_integration_test.go",
+        "requirement_integration_test.go",
+        "store_integration_test.go",
+    ],
+    gotags = ["integration"],
+    tags = [
+        "external",
+        "integration",
+        "manual",
+        "no-cache",
+        "no-sandbox",
+        "requires-network",
+    ],
+    deps = [
+        ":store",
+        "//krill/migrate/schema",
+        "//libs/go/dbtest",
+        "//libs/go/migrate",
+        "@com_github_google_uuid//:uuid",
+        "@com_github_jackc_pgx_v5//stdlib",
+        "@com_github_stretchr_testify//assert",
+        "@com_github_stretchr_testify//require",
+    ],
+)
+
+# Real Postgres integration test for SessionStore (session.go, issue #2489's
+# Testing section): InitSession's LB4 dual-subject population (self-acting
+# identical triples, agent-on-behalf-of-agent distinct triples), the
+# whagent_session_id correlation field (populated-and-distinct-from-the-
+# minted-id, and nullable for a human/OAuth2 caller), and GetSession's
+# found/not-found paths -- all against krill's real embedded schema
+# (//krill/migrate/schema), not a hand-copied one. Deliberately NOT part of
+# `bazel test //...` -- see //libs/go/dbtest's README for the full rationale
+# behind each tag and how to run tests like this one.
+#
+# Run it explicitly (requires a working Docker daemon):
+#   bazel test //krill/store:session_integration_test --test_output=all
+go_test(
+    name = "session_integration_test",
+    size = "large",
+    timeout = "long",
+    srcs = ["session_integration_test.go"],
+    gotags = ["integration"],
+    tags = [
+        "external",
+        "integration",
+        "manual",
+        "no-cache",
+        "no-sandbox",
+        "requires-network",
+    ],
+    deps = [
+        ":store",
+        "//krill/migrate/schema",
+        "//libs/go/dbtest",
+        "//libs/go/migrate",
+        "@com_github_google_uuid//:uuid",
+        "@com_github_jackc_pgx_v5//pgxpool",
+        "@com_github_jackc_pgx_v5//stdlib",
+        "@com_github_stretchr_testify//assert",
+        "@com_github_stretchr_testify//require",
+    ],
+)
+
+# Real Postgres integration test for the M1 entity write API's store layer
+# (decision.go/feature.go/featureset.go/product.go/requirement.go, issue
+# #2490's Testing section): the full Product -> FeatureSet -> Feature ->
+# {FR, NFR} create chain, LB2 parentage rejection for both a nonexistent AND
+# a cross-scope parent, a Load-Bearing Decision attach-then-read-back, and
+# scope-qualified uniqueness surfacing as a genuine Postgres unique-
+# constraint violation. Deliberately NOT part of `bazel test //...` -- see
+# //libs/go/dbtest's README for the full rationale.
+#
+# Run it explicitly (requires a working Docker daemon):
+#   bazel test //krill/store:entities_integration_test --test_output=all
+go_test(
+    name = "entities_integration_test",
+    size = "large",
+    timeout = "long",
+    srcs = ["entities_integration_test.go"],
+    gotags = ["integration"],
+    tags = [
+        "external",
+        "integration",
+        "manual",
+        "no-cache",
+        "no-sandbox",
+        "requires-network",
+    ],
+    deps = [
+        ":store",
+        "//krill/migrate/schema",
+        "//libs/go/dbtest",
+        "//libs/go/migrate",
+        "@com_github_google_uuid//:uuid",
+        "@com_github_jackc_pgx_v5//pgconn",
+        "@com_github_jackc_pgx_v5//pgxpool",
+        "@com_github_jackc_pgx_v5//stdlib",
+        "@com_github_stretchr_testify//assert",
+        "@com_github_stretchr_testify//require",
+    ],
+)
+
+# Real Postgres integration test for AmendStore (amend.go, issue #2493's
+# Testing section): amending a Requirement or a LoadBearingDecision closes
+# exactly one row and inserts exactly one new current row under the same
+# surrogate id (LB2), a sibling entity is never touched by an amendment,
+# and an amend of an unknown id is rejected (ErrNotFound) without writing
+# anything. Deliberately NOT part of `bazel test //...` -- see
+# //libs/go/dbtest's README for the full rationale.
+#
+# Run it explicitly (requires a working Docker daemon):
+#   bazel test //krill/store:amend_integration_test --test_output=all
+go_test(
+    name = "amend_integration_test",
+    size = "large",
+    timeout = "long",
+    srcs = ["amend_integration_test.go"],
+    gotags = ["integration"],
+    tags = [
+        "external",
+        "integration",
+        "manual",
+        "no-cache",
+        "no-sandbox",
+        "requires-network",
+    ],
+    deps = [
+        ":store",
+        "//krill/migrate/schema",
+        "//libs/go/dbtest",
+        "//libs/go/migrate",
+        "@com_github_google_uuid//:uuid",
+        "@com_github_jackc_pgx_v5//stdlib",
+        "@com_github_stretchr_testify//assert",
+        "@com_github_stretchr_testify//require",
+    ],
+)
+
+# Real Postgres integration test for HistoryStore (history.go, issue
+# #2493's Testing section): an as-of read between two amendments returns
+# the version current at that point (not the latest), an as-of read before
+# an entity's first revision (or of an id that never existed) is
+# not-found, and the version list returns every revision oldest-first with
+# correct supersession timestamps -- for both Requirement (FR and NFR) and
+# LoadBearingDecision. Deliberately NOT part of `bazel test //...` -- see
+# //libs/go/dbtest's README for the full rationale.
+#
+# Run it explicitly (requires a working Docker daemon):
+#   bazel test //krill/store:history_integration_test --test_output=all
+go_test(
+    name = "history_integration_test",
+    size = "large",
+    timeout = "long",
+    srcs = ["history_integration_test.go"],
+    gotags = ["integration"],
+    tags = [
+        "external",
+        "integration",
+        "manual",
+        "no-cache",
+        "no-sandbox",
+        "requires-network",
+    ],
+    deps = [
+        ":store",
+        "//krill/migrate/schema",
+        "//libs/go/dbtest",
+        "//libs/go/migrate",
+        "@com_github_google_uuid//:uuid",
+        "@com_github_jackc_pgx_v5//stdlib",
+        "@com_github_stretchr_testify//assert",
+        "@com_github_stretchr_testify//require",
+    ],
+)
+
+# Real Postgres integration test for DesignSessionStore and
+# RevisionEventStore (design_session.go/revision_event.go, migration 008,
+# issue #2542's Testing section): Open writes a row and GetByID/
+# ListByProduct read it back, LB2 parentage rejection for an unknown
+# Product, seq_no allocation (sequential and under concurrency via a
+# SELECT ... FOR UPDATE lock on the owning design_session row), FR3's
+# verified_against and FR4's signoff_status conditional-presence rules
+# enforced in Go ahead of the DDL CHECK, entity_deltas.change rejecting
+# "deleted", full JSON round-trip through ListBySession's seq_no order, the
+# LB4 two-triple shape round-tripping both distinct and self-acting, and a
+# structural assertion (NFR1) that RevisionEventStore exposes no
+# Update/Delete/Amend verb. This target also carries
+# open_questions_integration_test.go (issue #2545's Testing section, FR6):
+# ListOpenQuestions' last-event-wins derivation (open/resolve/re-open,
+# idempotent double-resolve, cross-session isolation, and a 50-event
+# session where only 2 touch questions). One target (not three) because a
+# RevisionEvent's sole parent is a DesignSession and ListOpenQuestions is a
+# read over the same revision_event rows, so all three files share this
+# target's scope/product/krill_session/design_session fixture helpers.
+# Deliberately NOT part of `bazel test //...` -- see //libs/go/dbtest's
+# README for the full rationale.
+#
+# Run it explicitly (requires a working Docker daemon):
+#   bazel test //krill/store:design_session_integration_test --test_output=all
+go_test(
+    name = "design_session_integration_test",
+    size = "large",
+    timeout = "long",
+    srcs = [
+        "design_session_integration_test.go",
+        "open_questions_integration_test.go",
+        "revision_event_integration_test.go",
+    ],
+    gotags = ["integration"],
+    tags = [
+        "external",
+        "integration",
+        "manual",
+        "no-cache",
+        "no-sandbox",
+        "requires-network",
+    ],
+    deps = [
+        ":store",
+        "//krill/migrate/schema",
+        "//libs/go/dbtest",
+        "//libs/go/migrate",
+        "@com_github_google_uuid//:uuid",
+        "@com_github_jackc_pgx_v5//stdlib",
+        "@com_github_stretchr_testify//assert",
+        "@com_github_stretchr_testify//require",
+    ],
+)
+
+# Real Postgres integration test for PointerArtifactStore (pointer.go, issue
+# #2496's Testing section): Create attaches to a Product and mirrors the
+# minted issue number onto scope.pointer_issue_number (LB1) in the same
+# transaction, LB2 parentage rejection for an unknown Product,
+# pointer_artifact_product_idx's at-most-one-per-Product rejection, and the
+# issue's own FR8 proof -- a created pointer artifact appears in its own
+# Product's whole-product slice (//krill/slice) and never in another
+# scope's. This is its own target (not folded into store_integration_test)
+# because it is the one PointerArtifactStore test that also needs
+# //krill/slice. Deliberately NOT part of `bazel test //...` -- see
+# //libs/go/dbtest's README for the full rationale.
+#
+# Run it explicitly (requires a working Docker daemon):
+#   bazel test //krill/store:pointer_integration_test --test_output=all
+# Real Postgres integration test for ImportCompletionStore
+# (import_completion.go, issue #2548's Testing section): MarkComplete
+# writing a row and IsComplete resolving it back, a second MarkComplete for
+# the same (scope, product) rejected without overwriting the first row
+# (ErrAlreadyComplete), IsComplete on an unimported product returning
+# false/nil rather than an error, and MarkComplete against an unknown
+# product_id rejected (ErrNotFound, LB2 parentage) with nothing written.
+# Deliberately NOT part of `bazel test //...` -- see //libs/go/dbtest's
+# README for the full rationale.
+#
+# Run it explicitly (requires a working Docker daemon):
+#   bazel test //krill/store:import_completion_integration_test --test_output=all
+go_test(
+    name = "import_completion_integration_test",
+    size = "large",
+    timeout = "long",
+    srcs = ["import_completion_integration_test.go"],
+    gotags = ["integration"],
+    tags = [
+        "external",
+        "integration",
+        "manual",
+        "no-cache",
+        "no-sandbox",
+        "requires-network",
+    ],
+    deps = [
+        ":store",
+        "//krill/migrate/schema",
+        "//libs/go/dbtest",
+        "//libs/go/migrate",
+        "@com_github_google_uuid//:uuid",
+        "@com_github_jackc_pgx_v5//pgxpool",
+        "@com_github_jackc_pgx_v5//stdlib",
+        "@com_github_stretchr_testify//assert",
+        "@com_github_stretchr_testify//require",
+    ],
+)
+
+# NFR3 structural check (issue #2548's Testing item 8): SourcePath is
+# recorded for the audit trail only (import_completion.go's own doc
+# comment) -- nothing in this package ever opens the file it names. No
+# database needed: this reads the package's own source file back
+# (declared as `data` below) and asserts the absence of any
+# os.Open/os.ReadFile/ioutil.ReadFile call, so a future change that adds a
+# file-read keyed on SourcePath is caught without Docker or Postgres. Part
+# of `bazel test //...` (no "manual"/"integration" tag) -- as of this
+# change, a repo-wide grep confirms import_completion.go and
+# krill/importer/importer.go are the only two files that reference
+# SourcePath at all; see importer's own
+# TestNFR3_ImporterSourceNeverOpensSourcePath for the other half.
+go_test(
+    name = "import_completion_nfr3_test",
+    srcs = ["import_completion_nfr3_test.go"],
+    data = ["import_completion.go"],
+)
+
+# Real Postgres integration test for MediatedWriteStore (mediated.go, issue
+# #2546's Testing section): a Feature+two-Requirements proposal (one via
+# ParentID, two via ParentProposalIndex) creates all three and exactly one
+# revision_event naming them all "created" (NFR2); a proposal whose last item
+# has an invalid parent leaves zero entities and zero revision_event rows
+# behind, verified by direct row counts; a property-style multi-batch check
+# that every id ProposeEntities returns appears in some revision_event's
+# entity_deltas; acting == on-behalf-of rejected with no rows written
+# (FR10); acting != on-behalf-of stored distinctly and read back via
+# ListBySession; FR9's whole-product-slice visibility with no signoff event
+# anywhere in the session; scope_id on both entity rows and the event coming
+# from the proposal, never elsewhere; and the FR8->FR9 seam tying a session's
+# opening_submission to its mediated-created entities via one session_id.
+# Its own target (not folded into design_session_integration_test) because
+# it is the one test needing the full Product -> FeatureSet -> Feature chain
+# alongside DesignSession/RevisionEvent, plus //krill/slice for FR9.
+# Deliberately NOT part of `bazel test //...` -- see //libs/go/dbtest's
+# README for the full rationale.
+#
+# Run it explicitly (requires a working Docker daemon):
+#   bazel test //krill/store:mediated_integration_test --test_output=all
+go_test(
+    name = "mediated_integration_test",
+    size = "large",
+    timeout = "long",
+    srcs = ["mediated_integration_test.go"],
+    gotags = ["integration"],
+    tags = [
+        "external",
+        "integration",
+        "manual",
+        "no-cache",
+        "no-sandbox",
+        "requires-network",
+    ],
+    deps = [
+        ":store",
+        "//krill/migrate/schema",
+        "//krill/slice",
+        "//libs/go/dbtest",
+        "//libs/go/migrate",
+        "@com_github_google_uuid//:uuid",
+        "@com_github_jackc_pgx_v5//stdlib",
+        "@com_github_stretchr_testify//assert",
+        "@com_github_stretchr_testify//require",
+    ],
+)
+
+go_test(
+    name = "pointer_integration_test",
+    size = "large",
+    timeout = "long",
+    srcs = ["pointer_integration_test.go"],
+    gotags = ["integration"],
+    tags = [
+        "external",
+        "integration",
+        "manual",
+        "no-cache",
+        "no-sandbox",
+        "requires-network",
+    ],
+    deps = [
+        ":store",
+        "//krill/migrate/schema",
+        "//krill/slice",
+        "//libs/go/dbtest",
+        "//libs/go/migrate",
+        "@com_github_google_uuid//:uuid",
+        "@com_github_jackc_pgx_v5//stdlib",
+        "@com_github_stretchr_testify//assert",
+        "@com_github_stretchr_testify//require",
+    ],
+)

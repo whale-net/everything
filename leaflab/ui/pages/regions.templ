@@ -1,0 +1,203 @@
+package pages
+
+import (
+	"fmt"
+
+	leaflabapipb "github.com/whale-net/everything/leaflab/api/proto"
+	"github.com/whale-net/everything/leaflab/ui/components"
+	"github.com/whale-net/everything/libs/go/htmxui"
+)
+
+// Regions is the region management screen (#2317: FR1, FR2, FR3, FR5, FR6)
+// -- the GetRegionTree result rendered as a nested, drill-down-able tree,
+// plus the create/rename/re-parent forms (FR1-FR3). Server-rendered, no
+// live refresh: data reflects the last page load or navigation only, like
+// every other screen in this UI (NFR1) -- there is deliberately no
+// hx-trigger polling, no sse-connect, and no WebSocket here.
+//
+// view holds the top-level nodes to render: the whole forest (every
+// top-level region, alphabetically ordered) when rootID is 0, or the single
+// drilled-into region's subtree when rootID is non-zero -- both exactly as
+// GetRegionTree returned them, with no client-side re-ordering (the API
+// orders siblings alphabetically; FR6's ordering requirement is its
+// guarantee, not this template's job).
+//
+// all is every region flattened out of the full forest (pages.FlattenRegions
+// by the handler), the option source for the create parent-picker and every
+// per-region re-parent picker. It is passed separately from view because a
+// drill-down page renders only a subtree but must still offer every region
+// as a re-parent target (e.g. moving a shelf from one building to another
+// while drilled into the first building).
+//
+// The pickers deliberately offer self and descendants too: FR5's cycle
+// rejection ("re-parenting into self/descendant") is the API's
+// codes.FailedPrecondition, surfaced verbatim via actionErr -- pre-filtering
+// here would move enforcement into the UI and could diverge from the API
+// (the same presentation-only rule as ownership gating: RegionTreeNode
+// carries no ownership signal, so these forms render for every region and
+// the backing RPCs reject non-owner writes server-side, NFR2).
+//
+// actionErr carries a failed create/rename/re-parent attempt's message
+// (regionActionError in handlers_regions.go) back onto the page via the
+// POST-redirect-GET ?error= parameter, the same mechanism
+// handleClaimBoard's claim_error uses -- independent of loadErr, since the
+// tree load itself may well have succeeded while only the write failed.
+//
+// loadErr, when non-empty, replaces the tree entirely (view/all are then
+// nil and unused), mirroring boards.templ's Boards(..., loadErr) shape.
+// The create form stays rendered below the load-error banner: creating a
+// region does not need the tree, and top-level creation remains possible
+// even while the tree cannot be displayed.
+templ Regions(data components.LayoutData, view []*leaflabapipb.RegionTreeNode, rootID int64, all []*leaflabapipb.RegionTreeNode, actionErr string, loadErr error) {
+	@components.Layout(data) {
+		<h1 class="text-2xl font-bold mb-4">Regions</h1>
+		if rootID != 0 {
+			<a href="/regions" class="link link-hover text-sm mb-2 inline-block">← All regions</a>
+		}
+		if actionErr != "" {
+			<div role="alert" class="alert alert-warning shadow-md mb-4">
+				<span>{ actionErr }</span>
+			</div>
+		}
+		if loadErr != nil {
+			<div role="alert" class="alert alert-error shadow-md mb-4">
+				<span>Failed to load regions from leaflab-api: { loadErr.Error() }</span>
+			</div>
+		} else if len(view) == 0 {
+			<div class="card bg-base-100 border border-base-300 shadow-sm mb-6">
+				<div class="card-body items-center text-center py-12">
+					<p class="text-base-content/60">No regions yet. Create your first one below.</p>
+				</div>
+			</div>
+		} else {
+			@htmxui.Card(nil, regionTree(view, rootID, all), nil, nil)
+		}
+		@createRegionForm(all, rootID)
+	}
+}
+
+// regionTree renders the forest as nested unordered lists -- one
+// regionNode per top-level node, children nested underneath, in the order
+// the API returned (alphabetical, FR6).
+templ regionTree(nodes []*leaflabapipb.RegionTreeNode, rootID int64, all []*leaflabapipb.RegionTreeNode) {
+	<ul class="menu bg-base-100 rounded-box w-full">
+		for _, node := range nodes {
+			@regionNode(node, rootID, all)
+		}
+	</ul>
+}
+
+// regionNode renders one region's row -- name (linking to its own
+// drill-down view, FR6), both sensor counts the API supplied ("sensors here
+// only" = sensor_count, "sensors here or below" = inclusive_sensor_count,
+// both current-placement numbers rendered verbatim), and the per-region
+// rename/re-parent controls (FR2, FR3) tucked into <details> disclosures so
+// a large tree stays scannable. Children recurse with no depth limit (FR3:
+// nesting is unbounded).
+templ regionNode(node *leaflabapipb.RegionTreeNode, rootID int64, all []*leaflabapipb.RegionTreeNode) {
+	<li>
+		<div class="flex w-full flex-wrap items-center gap-2">
+			<a href={ templ.URL(fmt.Sprintf("/regions/%d", node.GetRegionId())) } class="font-medium link link-hover">
+				{ node.GetName() }
+			</a>
+			<span class="text-xs text-base-content/60">{ fmt.Sprintf("%d here", node.GetSensorCount()) }</span>
+			<span class="text-xs text-base-content/60">{ fmt.Sprintf("%d here or below", node.GetInclusiveSensorCount()) }</span>
+			<div class="ml-auto flex items-center gap-1">
+				@regionRenameDetails(node, rootID)
+				@regionReparentDetails(node, all, rootID)
+			</div>
+		</div>
+		if len(node.GetChildren()) > 0 {
+			<ul>
+				for _, child := range node.GetChildren() {
+					@regionNode(child, rootID, all)
+				}
+			</ul>
+		}
+	</li>
+}
+
+// regionRenameDetails is one region's inline rename control (FR2): a
+// <details> disclosure so the tree stays readable, containing a plain HTML
+// form (POST-redirect-GET, the claimForm precedent -- there is no
+// fragment-render endpoint to hx-post into, and no live refresh to
+// piggyback on). Prefilled with the region's current name; a rejected
+// rename surfaces the API's message via the ?error= redirect parameter and
+// the unchanged name via this prefill, since the page is re-fetched fresh
+// after the redirect.
+templ regionRenameDetails(node *leaflabapipb.RegionTreeNode, rootID int64) {
+	<details class="inline-block">
+		<summary class="btn btn-ghost btn-xs">Rename</summary>
+		<form method="POST" action={ templ.URL(fmt.Sprintf("/regions/%d/rename", node.GetRegionId())) } class="mt-1 flex items-center gap-1">
+			<input type="hidden" name="next" value={ regionsNextPath(rootID) }/>
+			<input type="text" name="name" value={ node.GetName() } maxlength="255" required class="input input-bordered input-xs w-40"/>
+			<button type="submit" class="btn btn-xs btn-primary">Rename</button>
+		</form>
+	</details>
+}
+
+// regionReparentDetails is one region's re-parent control (FR3): a
+// <details> disclosure containing a picker of every region (plus
+// "Top-level", the "make top-level" affordance). The picker deliberately
+// includes the region itself and its descendants -- FR5 makes the API's
+// codes.FailedPrecondition the cycle enforcement point, and this UI
+// surfaces that error (see Regions' doc comment) rather than pre-filtering
+// options that could drift from the server's own tree.
+templ regionReparentDetails(node *leaflabapipb.RegionTreeNode, all []*leaflabapipb.RegionTreeNode, rootID int64) {
+	<details class="inline-block">
+		<summary class="btn btn-ghost btn-xs">Re-parent</summary>
+		<form method="POST" action={ templ.URL(fmt.Sprintf("/regions/%d/reparent", node.GetRegionId())) } class="mt-1 flex items-center gap-1">
+			<input type="hidden" name="next" value={ regionsNextPath(rootID) }/>
+			<select name="parent_region_id" class="select select-bordered select-xs">
+				<option value="0">Top-level</option>
+				for _, n := range all {
+					<option value={ fmt.Sprintf("%d", n.GetRegionId()) }>{ n.GetName() }</option>
+				}
+			</select>
+			<button type="submit" class="btn btn-xs btn-primary">Move</button>
+		</form>
+	</details>
+}
+
+// createRegionForm is the create control (FR1): a name field plus the
+// optional parent picker (top-level by default -- the picker's first option
+// is selected unless the user changes it, so a bare name + submit creates a
+// top-level region). Rendered below the tree on every regions view; the
+// picker flattens the full forest, so a region can be created under any
+// existing one from any drill-down level.
+templ createRegionForm(all []*leaflabapipb.RegionTreeNode, rootID int64) {
+	<div class="card bg-base-100 border border-base-300 shadow-sm">
+		<div class="card-body">
+			<h2 class="card-title text-base">Create region</h2>
+			<form method="POST" action="/regions/create" class="flex flex-wrap items-end gap-2">
+				<input type="hidden" name="next" value={ regionsNextPath(rootID) }/>
+				<div class="flex flex-col">
+					<label for="new-region-name" class="text-xs text-base-content/60">Name</label>
+					<input id="new-region-name" type="text" name="name" maxlength="255" required class="input input-bordered input-sm w-56"/>
+				</div>
+				<div class="flex flex-col">
+					<label for="new-region-parent" class="text-xs text-base-content/60">Parent (optional)</label>
+					<select id="new-region-parent" name="parent_region_id" class="select select-bordered select-sm">
+						<option value="0">Top-level</option>
+						for _, n := range all {
+							<option value={ fmt.Sprintf("%d", n.GetRegionId()) }>{ n.GetName() }</option>
+						}
+					</select>
+				</div>
+				<button type="submit" class="btn btn-primary btn-sm">Create</button>
+			</form>
+		</div>
+	</div>
+}
+
+// regionsNextPath is the ?next= target the regions page's forms carry so
+// the POST handlers redirect back to the page the form was submitted from
+// (the top-level view or a drill-down) rather than always to /regions.
+// Deliberately path-only, never a query-bearing URI, so handlers can append
+// ?error= unambiguously.
+func regionsNextPath(rootID int64) string {
+	if rootID == 0 {
+		return "/regions"
+	}
+	return fmt.Sprintf("/regions/%d", rootID)
+}

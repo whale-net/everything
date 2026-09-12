@@ -1,0 +1,89 @@
+load("@rules_go//go:def.bzl", "go_library", "go_test")
+
+# The one-way markdown importer (issue #2492, FR16, FR17): parses a
+# PRODUCT.md + product/*.md doc set (tools/project-manager/CONVENTIONS.md §
+# Layout) into krill/store entities and reports the entity id each became.
+# See importer.go's package doc for the one-way constraint (LB5/FR15) this
+# package exists under. Parse (parse.go) never touches krill/store -- write
+# (write.go) is the only file in this package that does -- so a later
+# Testing-phase test can exercise Parse alone against a read-only fixture
+# (whagent_net's own doc set) with no database at all. Test targets land
+# with issue #2492's Testing phase (importer_integration_test.go,
+# testdata/).
+go_library(
+    name = "importer",
+    srcs = [
+        "coverage.go",
+        "importer.go",
+        "parse.go",
+        "report.go",
+        "write.go",
+    ],
+    importpath = "github.com/whale-net/everything/krill/importer",
+    visibility = ["//visibility:public"],
+    deps = [
+        "//krill/store",
+        "@com_github_google_uuid//:uuid",
+    ],
+)
+
+# Real Postgres integration test for Import (importer.go, write.go, issue
+# #2492's Testing section) against krill's real embedded schema
+# (//krill/migrate/schema), plus Parse alone against whagent_net's real doc
+# set as a read-only parser fixture (data dep on //whagent_net:docs and
+# //whagent_net/product:docs, located at runtime via
+# @rules_go//go/runfiles -- whagent_net is never imported, only parsed).
+# Deliberately NOT part of `bazel test //...` -- see //libs/go/dbtest's
+# README for the full rationale behind each tag and how to run tests like
+# this one.
+#
+# Run it explicitly (requires a working Docker daemon):
+#   bazel test //krill/importer:importer_integration_test --test_output=all
+go_test(
+    name = "importer_integration_test",
+    size = "large",
+    timeout = "long",
+    srcs = ["importer_integration_test.go"],
+    data = [
+        "//whagent_net:docs",
+        "//whagent_net/product:docs",
+    ] + glob(["testdata/**"]),
+    gotags = ["integration"],
+    tags = [
+        "external",
+        "integration",
+        "manual",
+        "no-cache",
+        "no-sandbox",
+        "requires-network",
+    ],
+    deps = [
+        ":importer",
+        "//krill/migrate/schema",
+        "//krill/store",
+        "//libs/go/dbtest",
+        "//libs/go/migrate",
+        "@com_github_google_uuid//:uuid",
+        "@com_github_jackc_pgx_v5//pgxpool",
+        "@com_github_jackc_pgx_v5//stdlib",
+        "@com_github_stretchr_testify//assert",
+        "@com_github_stretchr_testify//require",
+        "@rules_go//go/runfiles",
+    ],
+)
+
+# NFR3 structural check (issue #2548's Testing item 8): the pre-parse
+# refusal check (importer.go's refuseIfAlreadyImported) compares
+# SourcePath, it never opens the file it names. No database needed: this
+# reads this package's own source file back (declared as `data` below) and
+# asserts the absence of any os.Open/os.ReadFile/ioutil.ReadFile call, so a
+# future change that adds a file-read keyed on SourcePath is caught
+# without Docker or Postgres. Part of `bazel test //...` (no
+# "manual"/"integration" tag) -- see krill/store's own
+# TestNFR3_ImportCompletionSourceNeverOpensAFile for the other file that
+# references SourcePath.
+go_test(
+    name = "importer_nfr3_test",
+    srcs = ["importer_nfr3_test.go"],
+    data = ["importer.go"],
+)

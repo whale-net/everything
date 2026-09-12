@@ -1,0 +1,16 @@
+{
+  "mcpServers": {
+    "krill-mcp-tilt": {
+      "serverUrl": "http://localhost:8084/mcp/spec",
+      "headers": {
+        "Authorization": "Bearer dev-local"
+      }
+    },
+    "krill-mcp-dev": {
+      "serverUrl": "https://dev-mcp.krill.whalenet.dev/mcp/spec"
+    },
+    "krill-mcp-prod": {
+      "serverUrl": "https://mcp.krill.whalenet.app/mcp/spec"
+    }
+  }
+}

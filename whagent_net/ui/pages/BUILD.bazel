@@ -1,3 +1,4 @@
+load("@rules_go//go:def.bzl", "go_test")
 load("//tools:templ.bzl", "templ_library")
 
 templ_library(
@@ -5,6 +6,23 @@ templ_library(
     srcs = glob(["*.templ"]),
     visibility = ["//whagent_net/ui:__pkg__"],
     deps = [
+        "//libs/go/htmxui",
         "//whagent_net/ui/components",
+    ],
+)
+
+# Implementation phase (issue #2432's Testing section): "Render test: the
+# list renders correctly from the plain GrantRow type with no
+# whagent_net-specific input" -- exercises Grants/grantsTable directly
+# with hand-built GrantsData, no App/handler/store involved at all.
+go_test(
+    name = "pages_test",
+    size = "small",
+    srcs = ["grants_test.go"],
+    embed = [":pages"],
+    deps = [
+        "@com_github_a_h_templ//:templ",
+        "@com_github_stretchr_testify//assert",
+        "@com_github_stretchr_testify//require",
     ],
 )

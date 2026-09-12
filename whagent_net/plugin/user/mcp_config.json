@@ -1,0 +1,16 @@
+{
+  "mcpServers": {
+    "whagent-net-mcp-tilt": {
+      "serverUrl": "http://localhost:8082/",
+      "headers": {
+        "Authorization": "Bearer dev-local"
+      }
+    },
+    "whagent-net-mcp-dev": {
+      "serverUrl": "https://dev-mcp.whagent-net.whalenet.dev"
+    },
+    "whagent-net-mcp-prod": {
+      "serverUrl": "https://mcp.whagent-net.whalenet.dev"
+    }
+  }
+}

@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log"
 	"net/http"
+	"sort"
 	"strconv"
 	"strings"
 
@@ -13,14 +14,6 @@ import (
 	"github.com/whale-net/everything/manmanv2/ui/pages"
 	manmanpb "github.com/whale-net/everything/manmanv2/protos"
 )
-
-// GamesPageData holds data for the games list page
-type GamesPageData struct {
-	Title  string
-	Active string
-	User   *htmxauth.UserInfo
-	Games  []*manmanpb.Game
-}
 
 // GameDetailPageData holds data for game detail page
 type GameDetailPageData struct {
@@ -43,17 +36,106 @@ type GameFormData struct {
 	User *htmxauth.UserInfo
 }
 
+// handleGames renders the Games page's flat list (root plan #2266, task
+// #2270 -- FR4, FR5, NFR7, WD1, WD6).
+//
+// Data assembly is a constant number (five) of fleet-wide list calls --
+// games, game configs, deployments (server game configs), servers, and
+// live sessions -- joined in the UI. NFR7 requires this count not grow
+// with the number of games, configs, or deployments rendered: no call is
+// issued inside a per-game or per-deployment loop, and expanding a row
+// client-side (FR4, in games.templ) issues no additional request.
+//
+// The join: a deployment's game_config_id resolves to a GameConfig,
+// whose game_id resolves to a Game (ServerGameConfig itself carries no
+// game_id -- see the ground-truth table on issue #2270). Run-state and
+// connect-address are then rolled up per game from that game's
+// deployments, using components.ComputeDeploymentStatus /
+// components.LatestSession / components.BuildConnectAddressView --
+// never ServerGameConfig.status, which is the unrelated active/inactive
+// lifecycle flag (FR5).
+//
+// Task #2272 (FR6) additionally builds each game's expanded-row
+// Deployments section from this same in-memory join: per-deployment
+// Start/Stop/Restart availability and the session-status badge reuse
+// components.ComputeDeploymentActions / pages.DeploymentRow verbatim (the
+// same derivation and markup buildDeploymentRowData/DeploymentRow render on
+// /sessions, #1627) so the two surfaces cannot drift on the same
+// deployment's state -- see buildGameDeploymentRow.
 func (app *App) handleGames(w http.ResponseWriter, r *http.Request) {
 	user := htmxauth.GetUser(r.Context())
 	ctx := r.Context()
-	
+
 	games, err := app.grpc.ListGames(ctx)
 	if err != nil {
 		log.Printf("Error fetching games: %v", err)
 		http.Error(w, "Failed to fetch games", http.StatusInternalServerError)
 		return
 	}
-	
+
+	// 0 = no game_id / server_id filter, i.e. fleet-wide (see
+	// ListGameConfigsRequest.game_id / ListServerGameConfigsRequest.server_id
+	// doc comments in manmanv2/protos/api_messages_game.proto and
+	// messages.proto; the same 0-means-all convention handleGameDetail
+	// already relies on for SGC counts).
+	configs, err := app.grpc.ListGameConfigs(ctx, 0)
+	if err != nil {
+		log.Printf("Warning: failed to fetch game configs: %v", err)
+		configs = nil
+	}
+	deployments, err := app.grpc.ListServerGameConfigs(ctx, 0)
+	if err != nil {
+		log.Printf("Warning: failed to fetch deployments: %v", err)
+		deployments = nil
+	}
+	servers, err := app.grpc.ListServers(ctx)
+	if err != nil {
+		log.Printf("Warning: failed to fetch servers: %v", err)
+		servers = nil
+	}
+	// liveOnly=false (task #2272): the collapsed row's rollup only ever
+	// needed a deployment's *live* session, but the expanded row's
+	// Deployments section (FR6) must feed components.ComputeDeploymentActions
+	// the same way buildDeploymentRowData does on /sessions -- which means
+	// knowing the latest session even for a stopped/crashed/lost deployment,
+	// not just a currently-live one, so Start/Restart availability doesn't
+	// silently go blank for every non-running row. Same call, same count
+	// (NFR7): only the filter argument changed, not the number of fleet-wide
+	// calls handleGames makes.
+	sessions, err := app.grpc.ListSessions(ctx, false)
+	if err != nil {
+		log.Printf("Warning: failed to fetch sessions: %v", err)
+		sessions = nil
+	}
+
+	// FR12/#1735, verified present here by task #2372 (M6 navigation/
+	// disposition, FR17's retained-capability clause -- the restart-state
+	// badge must survive /sessions's retirement, and this fleet-wide render
+	// had never actually populated it despite pages.DeploymentRowInner
+	// already knowing how to render it): one batched ListPendingRestarts RPC
+	// for every deployment on the page, not a per-row call -- same shape as
+	// the retired handleSessions and buildDeploymentRowData
+	// (handlers_deployment_actions.go). A failure here must not fail the
+	// page; rows just render without the restart badge (same degradation
+	// posture as every other optional fetch above).
+	sgcIDs := make([]int64, len(deployments))
+	for i, d := range deployments {
+		sgcIDs[i] = d.GetServerGameConfigId()
+	}
+	restartStates, err := app.grpc.ListPendingRestarts(ctx, sgcIDs)
+	if err != nil {
+		log.Printf("Warning: failed to list pending restarts: %v", err)
+		restartStates = nil
+	}
+
+	// expand (spec amendment A1, migration task): an entry-point hint,
+	// not persisted page state. Absent, non-numeric, or stale (no
+	// matching game) all resolve to 0 / "expand nothing" and are never
+	// an error -- gameRowExpanded in games.templ does the stale check.
+	expandGameID, _ := strconv.ParseInt(strings.TrimSpace(r.URL.Query().Get("expand")), 10, 64)
+
+	rows := buildGameRows(games, configs, deployments, servers, sessions, restartStates)
+
 	breadcrumbs := []components.Breadcrumb{
 		{Label: "Games", URL: "/games"},
 	}
@@ -65,9 +147,231 @@ func (app *App) handleGames(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if err := RenderTempl(w, r, "Games", pages.Games(layoutData, games)); err != nil {
+	data := pages.GamesPageData{
+		Layout:       layoutData,
+		Games:        rows,
+		ExpandGameID: expandGameID,
+	}
+
+	if err := RenderTempl(w, r, "Games", pages.Games(data)); err != nil {
 		log.Printf("Error rendering template: %v", err)
 		http.Error(w, "Internal server error", http.StatusInternalServerError)
+	}
+}
+
+// buildGameRows performs the UI-side join (NFR7) from the five fleet-wide
+// list results into one pages.GameRow per game. It issues no RPCs itself
+// -- all data is already in memory -- so it can be exercised directly by
+// tests without a fake gRPC client.
+//
+// ServerGameConfig carries no game_id (only GameConfig does), so a
+// deployment resolves to a game via its game_config_id -> GameConfig.game_id.
+// A deployment whose game_config_id has no matching GameConfig (e.g. the
+// config was deleted after the deployment was created) is skipped -- it
+// cannot be attributed to any game.
+//
+// It also populates each row's Configs (FR7, task #2273): every
+// GameConfig of that game, with a deployment count derived from the same
+// deployments slice already joined above -- no new call, no per-config
+// query (NFR7). The Workshop Libraries panel (FR8/FR9/FR10, task #2367)
+// is deliberately not part of this join at all -- it is a lazily-fetched
+// fragment now, see pages.WorkshopPanelData's doc comment for why.
+func buildGameRows(
+	games []*manmanpb.Game,
+	configs []*manmanpb.GameConfig,
+	deployments []*manmanpb.ServerGameConfig,
+	servers []*manmanpb.Server,
+	sessions []*manmanpb.Session,
+	restartStates map[int64]*manmanpb.PendingRestartState,
+) []pages.GameRow {
+	configByID := make(map[int64]*manmanpb.GameConfig, len(configs))
+	for _, c := range configs {
+		configByID[c.GetConfigId()] = c
+	}
+
+	serverByID := make(map[int64]*manmanpb.Server, len(servers))
+	for _, s := range servers {
+		serverByID[s.GetServerId()] = s
+	}
+
+	sessionsBySGC := make(map[int64][]*manmanpb.Session, len(sessions))
+	for _, s := range sessions {
+		sgcID := s.GetServerGameConfigId()
+		sessionsBySGC[sgcID] = append(sessionsBySGC[sgcID], s)
+	}
+
+	deploymentsByGame := make(map[int64][]*manmanpb.ServerGameConfig)
+	// deploymentCountByConfig backs FR7's per-config deployment count: a
+	// single pass over the already-fetched deployments slice, keyed by
+	// game_config_id directly (unlike deploymentsByGame above, this one
+	// does not need a config to resolve to a game -- an orphaned
+	// game_config_id still just never matches any rendered ConfigRowView).
+	deploymentCountByConfig := make(map[int64]int, len(deployments))
+	for _, d := range deployments {
+		deploymentCountByConfig[d.GetGameConfigId()]++
+
+		cfg, ok := configByID[d.GetGameConfigId()]
+		if !ok {
+			continue
+		}
+		gameID := cfg.GetGameId()
+		deploymentsByGame[gameID] = append(deploymentsByGame[gameID], d)
+	}
+
+	// configsByGame backs FR7's Configurations section: every GameConfig
+	// grouped by its game_id, a single pass over the already-fetched
+	// configs slice (NFR7 -- no per-game query).
+	configsByGame := make(map[int64][]*manmanpb.GameConfig)
+	for _, c := range configs {
+		gameID := c.GetGameId()
+		configsByGame[gameID] = append(configsByGame[gameID], c)
+	}
+
+	rows := make([]pages.GameRow, 0, len(games))
+	for _, game := range games {
+		gameDeployments := deploymentsByGame[game.GetGameId()]
+		// Sorted so connect-address selection below (first running
+		// deployment with a resolvable address) is deterministic
+		// regardless of the RPC's own return order.
+		sort.Slice(gameDeployments, func(i, j int) bool {
+			return gameDeployments[i].GetServerGameConfigId() < gameDeployments[j].GetServerGameConfigId()
+		})
+
+		runState := components.DeploymentStopped
+		connect := components.ConnectAddressView{Unavailable: true}
+		deploymentRows := make([]pages.GameDeploymentRow, 0, len(gameDeployments))
+		for _, d := range gameDeployments {
+			latest := components.LatestSession(sessionsBySGC[d.GetServerGameConfigId()])
+			server := serverByID[d.GetServerId()]
+			cfg := configByID[d.GetGameConfigId()]
+
+			if components.ComputeDeploymentStatus(latest) == components.DeploymentRunning {
+				runState = components.DeploymentRunning
+				if connect.Unavailable {
+					if view := components.BuildConnectAddressView(server.GetHostPublicAddress(), d.GetPortBindings()); !view.Unavailable {
+						connect = view
+					}
+				}
+			}
+
+			deploymentRows = append(deploymentRows, buildGameDeploymentRow(game, cfg, server, d, latest, restartStates[d.GetServerGameConfigId()]))
+		}
+
+		gameConfigs := configsByGame[game.GetGameId()]
+		configRows := make([]pages.ConfigRowView, 0, len(gameConfigs))
+		for _, c := range gameConfigs {
+			configRows = append(configRows, pages.ConfigRowView{
+				GameID:          game.GetGameId(),
+				ConfigID:        c.GetConfigId(),
+				Name:            c.GetName(),
+				Image:           c.GetImage(),
+				DeploymentCount: deploymentCountByConfig[c.GetConfigId()],
+			})
+		}
+		// Deterministic sort, same rationale as the games sort below: by
+		// name, tie-broken by config_id.
+		sort.Slice(configRows, func(i, j int) bool {
+			if configRows[i].Name != configRows[j].Name {
+				return configRows[i].Name < configRows[j].Name
+			}
+			return configRows[i].ConfigID < configRows[j].ConfigID
+		})
+
+		rows = append(rows, pages.GameRow{
+			GameID:      game.GetGameId(),
+			Name:        game.GetName(),
+			RunState:    runState,
+			Connect:     connect,
+			Deployments: deploymentRows,
+			Configs:     configRows,
+		})
+	}
+
+	// Deterministic sort (task #2270): by name, tie-broken by game_id, so
+	// two operators loading the page see the same order regardless of
+	// ListGames' own return order.
+	sort.Slice(rows, func(i, j int) bool {
+		if rows[i].Name != rows[j].Name {
+			return rows[i].Name < rows[j].Name
+		}
+		return rows[i].GameID < rows[j].GameID
+	})
+
+	return rows
+}
+
+// buildGameDeploymentRow builds one row of a game's expanded Deployments
+// section (#2272, FR6). Row.Actions/Row.LatestSession/Row.SGCStatus/
+// Row.LiveSession are exactly the fields pages.DeploymentRow /
+// DeploymentRowInner (#1627) already know how to render Start/Stop/Restart
+// availability and the session-status badge from -- components.
+// ComputeDeploymentActions(latest) is called here directly (the same
+// function buildDeploymentRowData calls on /sessions), not re-derived, so
+// the two surfaces cannot independently disagree about a control's
+// availability for the same deployment state (FR6's anti-drift
+// requirement). Everything else on GameDeploymentRow (Connect, LogsURL,
+// ActionsURL, and DisplayName's "config on server" naming, FR2) is
+// additive to that reused derivation, never a substitute for it.
+//
+// liveSession mirrors the server-side live_only filter
+// (manmanv2/api/repository/postgres/session.go: status IN pending,
+// starting, running, stopping) so DeploymentRowInner's "View Live Session"
+// column renders the same way it would from a dedicated getLiveSession
+// call, without a second RPC.
+//
+// restartState is this deployment's entry (if any) from handleGames' one
+// batched ListPendingRestarts call -- Row.RestartState feeds
+// DeploymentRowInner's components.RestartBadge exactly like
+// buildDeploymentRowData does, so the badge (FR17's retained-capability
+// requirement, verified by task #2372 to have been missing here) renders
+// on Games too, not just on the #1628 poll/action-endpoint path.
+func buildGameDeploymentRow(game *manmanpb.Game, cfg *manmanpb.GameConfig, server *manmanpb.Server, d *manmanpb.ServerGameConfig, latest *manmanpb.Session, restartState *manmanpb.PendingRestartState) pages.GameDeploymentRow {
+	serverName := server.GetName()
+	if serverName == "" {
+		serverName = fmt.Sprintf("server %d", d.GetServerId())
+	}
+	configName := cfg.GetName()
+	if configName == "" {
+		configName = fmt.Sprintf("config %d", d.GetGameConfigId())
+	}
+	// "<config> on <server>" (FR2): this is the deployment's display name,
+	// distinct from buildDeploymentRowData's "<config> (<game>)" format on
+	// /sessions -- the game is already the context this row renders inside,
+	// so naming repeats the game here instead of the server would be
+	// redundant and less useful than knowing which server it's on.
+	displayName := fmt.Sprintf("%s on %s", configName, serverName)
+
+	var liveSession *manmanpb.Session
+	if latest != nil && (latest.GetStatus() == "running" || components.IsTransientStatus(latest.GetStatus())) {
+		liveSession = latest
+	}
+
+	var logsURL string
+	if latest != nil {
+		logsURL = fmt.Sprintf("/sessions/%d", latest.GetSessionId())
+	}
+
+	return pages.GameDeploymentRow{
+		Row: pages.DeploymentRowData{
+			ServerGameConfigID: d.GetServerGameConfigId(),
+			DisplayName:        displayName,
+			SGCStatus:          d.GetStatus(),
+			LatestSession:      latest,
+			LiveSession:        liveSession,
+			Actions:            components.ComputeDeploymentActions(latest),
+			RestartState:       restartState,
+		},
+		Connect: components.BuildConnectAddressView(server.GetHostPublicAddress(), d.GetPortBindings()),
+		LogsURL: logsURL,
+		// The config-level Actions management page (C23/M3): the existing
+		// Actions surface FR6 links out to, per decision 8 (not reshaped,
+		// not inlined, not a Config Editor tab). There is no routed
+		// deployment-level (server_game_config) Actions page today --
+		// categorizeActions in handlers_actions.go builds that URL shape for
+		// display only, main.go never registers a handler for it -- so this
+		// links to the one that is actually routed and already shows this
+		// deployment's config-level (and inherited game-level) actions.
+		ActionsURL: fmt.Sprintf("/games/%d/configs/%d/actions", game.GetGameId(), cfg.GetConfigId()),
 	}
 }
 
@@ -162,6 +466,13 @@ func (app *App) handleGameDetail(w http.ResponseWriter, r *http.Request) {
 			return
 		case "actions":
 			app.handleGameActions(w, r)
+			return
+		case "workshop-panel":
+			// GET /games/{id}/workshop-panel (task #2367, FR8/FR9/FR10):
+			// the lazily-fetched Workshop Libraries panel fragment -- see
+			// gameWorkshopPlaceholder's doc comment in games.templ and
+			// handlers_games_libraries.go.
+			app.handleGameWorkshopPanel(w, r, gameIDStr)
 			return
 		case "presets":
 			// Handle preset routes: /games/{id}/presets/create or /games/{id}/presets/{preset_id}/delete
@@ -395,6 +706,12 @@ func (app *App) handleGameConfigDetail(w http.ResponseWriter, r *http.Request, g
 		case "actions":
 			app.handleConfigActions(w, r)
 			return
+		case "editor":
+			// Config Editor blade (#2276, FR13): GET fetches the blade
+			// fragment, POST validates and saves. See
+			// handlers_config_editor.go.
+			app.handleGameConfigEditor(w, r, gameIDStr, configIDStr)
+			return
 		case "volumes":
 			// Handle volume routes
 			if len(pathParts) > 5 {
@@ -403,15 +720,47 @@ func (app *App) handleGameConfigDetail(w http.ResponseWriter, r *http.Request, g
 				if actionOrVolumeID == "create" {
 					app.handleGameConfigVolumeCreate(w, r, gameIDStr, configIDStr)
 					return
-				} else {
-					// Assume it's a volume_id for delete
-					app.handleGameConfigVolumeDelete(w, r, gameIDStr, configIDStr, actionOrVolumeID)
+				}
+				if len(pathParts) > 6 && pathParts[6] == "backup-config" {
+					// /games/{id}/configs/{config_id}/volumes/{volume_id}/backup-config/{assign|edit|remove}
+					// (FR14/FR15, #2363: Config Editor Volumes tab inline
+					// backup-config assign/edit/remove -- see
+					// handlers_config_editor_volumes.go.)
+					action := ""
+					if len(pathParts) > 7 {
+						action = pathParts[7]
+					}
+					app.handleConfigEditorVolumeBackupConfig(w, r, gameIDStr, configIDStr, actionOrVolumeID, action)
 					return
 				}
+				// Assume it's a volume_id for delete
+				app.handleGameConfigVolumeDelete(w, r, gameIDStr, configIDStr, actionOrVolumeID)
+				return
 			} else {
 				// POST to /games/{id}/configs/{config_id}/volumes (create)
 				if r.Method == http.MethodPost {
 					app.handleGameConfigVolumeCreate(w, r, gameIDStr, configIDStr)
+					return
+				}
+			}
+		case "libraries":
+			// GC-level Workshop library routes (task #2367, FR8/FR9):
+			//   GET  /games/{id}/configs/{config_id}/libraries/available
+			//   POST /games/{id}/configs/{config_id}/libraries/add
+			//   POST /games/{id}/configs/{config_id}/libraries/{library_id}/remove
+			// See handlers_games_libraries.go.
+			if len(pathParts) > 5 {
+				sub := pathParts[5]
+				if sub == "available" {
+					app.handleGameConfigAvailableLibraries(w, r, gameIDStr, configIDStr)
+					return
+				}
+				if sub == "add" {
+					app.handleGameConfigLibraryAdd(w, r, gameIDStr, configIDStr)
+					return
+				}
+				if len(pathParts) > 6 && pathParts[6] == "remove" {
+					app.handleGameConfigLibraryRemove(w, r, gameIDStr, configIDStr, sub)
 					return
 				}
 			}

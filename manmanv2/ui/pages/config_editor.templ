@@ -1,0 +1,492 @@
+package pages
+
+import (
+	"fmt"
+
+	"github.com/whale-net/everything/manmanv2/ui/components"
+)
+
+// ConfigEditorData drives the Config Editor blade (root plan #2266, task
+// #2276 -- FR13, the Config-Editor half of FR10, NFR5, WD4, WD10; task
+// #2363 -- FR14, FR15): three tabs -- Basics, Environment, Volumes --
+// opened from the Configurations section's Edit control (#2273's
+// data-config-editor-trigger). Basics and Environment are editable and save
+// together as one explicit UpdateGameConfigRequest; Volumes is editable for
+// backup-config assignment inline (FR14/FR15, #2363) -- each volume-level
+// assign/edit/remove is its own immediate POST, not staged into the
+// Basics/Environment Save.
+//
+// This is rendered as a standalone HTML fragment (handleGameConfigEditor,
+// GET /games/{gameID}/configs/{configID}/editor), not through RenderTempl's
+// full-page htmxbase layout -- it is appended into the existing document
+// via hx-swap="beforeend" from the Edit button, exactly like the deployment
+// settings blade's <template> clone in games.templ, except this one needs
+// live server data (env_template, volumes) the Games page never fetched
+// (see ConfigRowView's doc comment: only Name/Image/DeploymentCount are
+// already in hand), so it is a real request rather than a zero-cost clone.
+type ConfigEditorData struct {
+	GameID   int64
+	ConfigID int64
+
+	// Name, Image, ArgsTemplate, EnvVars are the editable Basics/
+	// Environment fields (FR13). ArgsTemplate is deliberately allowed to
+	// be "" -- the whole reason update_paths is sent explicitly (see
+	// buildUpdateGameConfigRequest's doc comment) is so an emptied args
+	// template actually clears, rather than silently surviving the
+	// handler's `if req.ArgsTemplate != ""` guard on the empty-paths
+	// branch.
+	Name         string
+	Image        string
+	ArgsTemplate string
+	// EnvVars is GameConfig.env_template rendered as ordered rows (sorted
+	// by key for deterministic rendering/tests) -- this writes the base
+	// layer only (NFR5); it is never a deployment-level override, which is
+	// FR11's separate write path (#2274).
+	EnvVars []ConfigEditorEnvVar
+
+	// Volumes renders each volume plus its backup-config assignment, if
+	// any (FR14/FR15, #2363): inline assign/edit/remove controls, no
+	// navigation out of the Blade. Template/action management itself stays
+	// on the standalone BackupConfig surface (NFR4) -- BackupLinkURL below
+	// is the link out.
+	Volumes []ConfigEditorVolume
+
+	// Errors carries per-field validation messages from a rejected Save
+	// (FR10: validation errors are reported per field, block saving, and
+	// do not lose entered values -- including a field in a tab that is not
+	// currently visible, since all three tabs stay in the DOM at once, see
+	// below).
+	Errors ConfigEditorErrors
+
+	// Dirty seeds the Basics/Environment section's initial
+	// data-blade-dirty value: false on a fresh open, true when this data
+	// is being re-rendered after a rejected Save (the edits are still
+	// unsaved).
+	Dirty bool
+
+	// ActiveTab marks which tab starts active (BladeTabs' activeID);
+	// "basics" on a fresh open, and again "basics" after a rejected Save
+	// since Basics is where every validation error this task produces
+	// surfaces.
+	ActiveTab string
+
+	// BackupLinkURL is the link-out to today's existing backup-config
+	// surface (WD4): the Config Detail page's own Backup Configurations
+	// section (manmanv2/ui/pages/config_detail.templ), never a new
+	// surface built here.
+	BackupLinkURL string
+}
+
+// ConfigEditorEnvVar is one row of the Environment tab's key/value editor.
+type ConfigEditorEnvVar struct {
+	Key   string
+	Value string
+}
+
+// ConfigEditorVolume is one row of the Volumes tab: the six read-only
+// GameConfigVolume fields from WD4, plus VolumeID (needed to build the
+// inline backup-config routes below) and this volume's current
+// backup-config assignment, if any (FR14/FR15, #2363).
+type ConfigEditorVolume struct {
+	VolumeID      int64
+	Name          string
+	Description   string
+	ContainerPath string
+	HostSubpath   string
+	ReadOnly      bool
+	VolumeType    string
+
+	// Backup is the volume's current BackupConfig assignment, nil if none
+	// is assigned yet. schema note (#2363): BackupConfig.VolumeID is a
+	// required FK set once at creation -- there is no cross-volume
+	// reusable "template" row and no volume_id update path (see
+	// manmanv2/migrate/migrations/029_backup_configs.up.sql and
+	// manmanv2/api/handlers/backup_config.go's CreateBackupConfig /
+	// UpdateBackupConfig) -- so "assign" and "create, bound to this
+	// volume" are the same operation in this schema; "existing" in FR14
+	// only ever refers to a volume's own already-assigned config, edited
+	// in place, never a config picked up from another volume. The schema
+	// does allow more than one BackupConfig per volume ("many per
+	// GameConfigVolume" per the migration's own comment), but this tab's
+	// assign/edit/remove verbs are singular by design (FR14/FR15) -- if a
+	// volume already carries more than one (e.g. created before M6, or via
+	// the standalone surface), Backup below is the first one returned;
+	// the rest stay reachable and manageable only via the standalone
+	// BackupConfig surface link-out (NFR4).
+	Backup *ConfigEditorVolumeBackup
+}
+
+// ConfigEditorVolumeBackup is a volume's current backup-config assignment
+// (FR14/FR15, #2363): the volume-level settings this tab can edit inline.
+// Pre-backup actions and trigger/list/delete-a-backup stay on the
+// standalone surface (NFR4) -- not rendered here.
+type ConfigEditorVolumeBackup struct {
+	BackupConfigID int64
+	CadenceMinutes int32
+	BackupPath     string
+	Enabled        bool
+}
+
+// ConfigEditorErrors is the Save handler's per-field validation result
+// (FR10). A zero value means no errors.
+type ConfigEditorErrors struct {
+	Name  string
+	Image string
+}
+
+// HasAny reports whether any field carries a validation error -- the Save
+// handler's gate for re-rendering the blade instead of writing.
+func (e ConfigEditorErrors) HasAny() bool {
+	return e.Name != "" || e.Image != ""
+}
+
+// configEditorBladeID is the DOM id shared by the Blade root and every
+// script in this file that needs to scope a querySelector to this blade
+// instance specifically (mirrors blade.templ's own data-blade-id
+// convention) -- one Config Editor blade can be open per configuration
+// row, keyed by ConfigID.
+func configEditorBladeID(configID int64) string {
+	return fmt.Sprintf("config-editor-blade-%d", configID)
+}
+
+// ConfigEditor renders the Config Editor blade (FR13): BladeTabs' three
+// fixed tabs -- Basics, Environment, Volumes, in that order (final for M5
+// and M6, not provisional) -- inside components.Blade. Deliberately no
+// Ports tab (WD10: port_bindings live on the deployment, not the config)
+// and no Actions tab (decision 8: Actions link out from the deployment row,
+// #2272).
+//
+// All three tab panels stay in the DOM simultaneously; switching tabs only
+// toggles a `hidden` attribute (see the script below) rather than
+// htmx-swapping panel content, precisely because FR10 requires that
+// switching tabs preserve entered values (including in a tab not currently
+// visible) and never itself prompt the unsaved-changes confirmation -- an
+// htmx swap of the outgoing tab's content would discard whatever was typed
+// there.
+templ ConfigEditor(data ConfigEditorData) {
+	@components.Blade(components.BladeData{
+		ID:       configEditorBladeID(data.ConfigID),
+		Title:    "Edit Configuration",
+		Subtitle: data.Name,
+	}) {
+		@components.BladeTabs([]components.BladeTab{
+			{ID: "basics", Label: "Basics"},
+			{ID: "environment", Label: "Environment"},
+			{ID: "volumes", Label: "Volumes"},
+		}, data.ActiveTab)
+		<form
+			hx-post={ fmt.Sprintf("/games/%d/configs/%d/editor", data.GameID, data.ConfigID) }
+			hx-target={ "#" + configEditorBladeID(data.ConfigID) }
+			hx-swap="outerHTML"
+			class="mt-4"
+		>
+			<!--
+				FR10: Basics and Environment save together as one explicit
+				Save, a single data-blade-section covering both tabs'
+				panels, dirty on the first edit in either one (see the
+				script below), clean again once a fresh (non-error) open
+				renders Dirty=false.
+			-->
+			<div
+				data-blade-section="basics-environment"
+				if data.Dirty {
+					data-blade-dirty="true"
+				} else {
+					data-blade-dirty="false"
+				}
+			>
+				<div
+					data-blade-tab-panel="basics"
+					if data.ActiveTab != "basics" {
+						hidden
+					}
+					class="flex flex-col gap-4"
+				>
+					<div>
+						<label class="block text-sm font-medium text-base-content mb-1" for="config-editor-name">Name</label>
+						<input
+							id="config-editor-name"
+							type="text"
+							name="name"
+							value={ data.Name }
+							class="input input-bordered w-full"
+						/>
+						if data.Errors.Name != "" {
+							<p class="text-xs text-error mt-1" data-field-error="name">{ data.Errors.Name }</p>
+						}
+					</div>
+					<div>
+						<label class="block text-sm font-medium text-base-content mb-1" for="config-editor-image">Image</label>
+						<input
+							id="config-editor-image"
+							type="text"
+							name="image"
+							value={ data.Image }
+							class="input input-bordered w-full font-mono"
+						/>
+						if data.Errors.Image != "" {
+							<p class="text-xs text-error mt-1" data-field-error="image">{ data.Errors.Image }</p>
+						}
+					</div>
+					<div>
+						<label class="block text-sm font-medium text-base-content mb-1" for="config-editor-args-template">Args Template</label>
+						<input
+							id="config-editor-args-template"
+							type="text"
+							name="args_template"
+							value={ data.ArgsTemplate }
+							class="input input-bordered w-full font-mono"
+						/>
+					</div>
+				</div>
+				<div
+					data-blade-tab-panel="environment"
+					if data.ActiveTab != "environment" {
+						hidden
+					}
+				>
+					<div data-env-rows class="space-y-2 mb-4">
+						for _, ev := range data.EnvVars {
+							<div class="env-row flex gap-2">
+								<input type="text" name="env_key" value={ ev.Key } placeholder="KEY" class="input input-bordered flex-1 font-mono text-sm"/>
+								<input type="text" name="env_value" value={ ev.Value } placeholder="value" class="input input-bordered flex-1 font-mono text-sm"/>
+								<button type="button" data-env-remove-row class="btn btn-error btn-sm">×</button>
+							</div>
+						}
+					</div>
+					<template data-env-row-template>
+						<div class="env-row flex gap-2">
+							<input type="text" name="env_key" value="" placeholder="KEY" class="input input-bordered flex-1 font-mono text-sm"/>
+							<input type="text" name="env_value" value="" placeholder="value" class="input input-bordered flex-1 font-mono text-sm"/>
+							<button type="button" data-env-remove-row class="btn btn-error btn-sm">×</button>
+						</div>
+					</template>
+					<button type="button" data-env-add-row class="btn btn-secondary btn-sm">+ Add Variable</button>
+				</div>
+			</div>
+			<div class="flex gap-2 mt-6">
+				<button type="submit" class="btn btn-success">Save</button>
+				<button type="button" data-config-editor-cancel class="btn">Cancel</button>
+			</div>
+		</form>
+		<!--
+			Volumes (FR14/FR15, #2363): deliberately outside the Basics/
+			Environment form above, since each volume row's assign/edit/
+			remove control is its own form that posts immediately (see
+			handlers_config_editor_volumes.go), not staged into the
+			Basics/Environment Save. It is its own data-blade-section
+			(below), so an in-progress, not-yet-submitted edit here still
+			guards Blade dismissal (FR10) the same way Basics/Environment
+			does.
+		-->
+		<div
+			data-blade-tab-panel="volumes"
+			if data.ActiveTab != "volumes" {
+				hidden
+			}
+			class="mt-4"
+		>
+			<div data-blade-section="volumes" data-blade-dirty="false" class="space-y-4">
+				if len(data.Volumes) > 0 {
+					for _, vol := range data.Volumes {
+						<div class="border border-base-300 rounded-lg overflow-hidden" data-volume-row data-volume-id={ fmt.Sprintf("%d", vol.VolumeID) }>
+							<div class="bg-base-200 px-4 py-2 flex items-center justify-between gap-2">
+								<h4 class="text-sm font-semibold text-base-content">{ vol.Name }</h4>
+								<span class="text-xs text-base-content/60">{ vol.VolumeType }</span>
+							</div>
+							<div class="px-4 py-3 space-y-1">
+								if vol.Description != "" {
+									<p class="text-sm text-base-content">{ vol.Description }</p>
+								}
+								<p class="text-xs font-mono text-base-content/70">{ vol.ContainerPath } &#8592; { vol.HostSubpath }</p>
+								<p class="text-xs text-base-content/60">
+									if vol.ReadOnly {
+										Read-only
+									} else {
+										Read-write
+									}
+								</p>
+							</div>
+							<div class="border-t border-base-300 px-4 py-3">
+								<h5 class="text-xs font-semibold uppercase tracking-wide text-base-content/60 mb-2">Backup Config</h5>
+								if vol.Backup != nil {
+									<form
+										hx-post={ fmt.Sprintf("/games/%d/configs/%d/volumes/%d/backup-config/edit", data.GameID, data.ConfigID, vol.VolumeID) }
+										hx-target={ "#" + configEditorBladeID(data.ConfigID) }
+										hx-swap="outerHTML"
+										class="flex flex-wrap gap-2 items-end"
+										data-volume-backup-edit-form
+									>
+										<input type="hidden" name="backup_config_id" value={ fmt.Sprintf("%d", vol.Backup.BackupConfigID) }/>
+										<div>
+											<label class="block text-xs font-medium text-base-content mb-1">Path</label>
+											<input type="text" name="backup_path" value={ vol.Backup.BackupPath } class="input input-bordered input-sm w-28"/>
+										</div>
+										<div>
+											<label class="block text-xs font-medium text-base-content mb-1">Cadence (min)</label>
+											<input type="number" name="cadence_minutes" min="1" value={ fmt.Sprintf("%d", vol.Backup.CadenceMinutes) } class="input input-bordered input-sm w-24"/>
+										</div>
+										<div>
+											<label class="block text-xs font-medium text-base-content mb-1">Enabled</label>
+											<select name="enabled" class="select select-bordered select-sm w-20">
+												if vol.Backup.Enabled {
+													<option value="true" selected>Yes</option>
+													<option value="false">No</option>
+												} else {
+													<option value="true">Yes</option>
+													<option value="false" selected>No</option>
+												}
+											</select>
+										</div>
+										<button type="submit" class="btn btn-primary btn-sm" data-volume-backup-save>Save</button>
+									</form>
+									<form
+										hx-post={ fmt.Sprintf("/games/%d/configs/%d/volumes/%d/backup-config/remove", data.GameID, data.ConfigID, vol.VolumeID) }
+										hx-target={ "#" + configEditorBladeID(data.ConfigID) }
+										hx-swap="outerHTML"
+										class="mt-2"
+										data-volume-backup-remove-form
+									>
+										<input type="hidden" name="backup_config_id" value={ fmt.Sprintf("%d", vol.Backup.BackupConfigID) }/>
+										<button type="submit" class="btn btn-error btn-xs" data-volume-backup-remove>Remove</button>
+									</form>
+								} else {
+									<form
+										hx-post={ fmt.Sprintf("/games/%d/configs/%d/volumes/%d/backup-config/assign", data.GameID, data.ConfigID, vol.VolumeID) }
+										hx-target={ "#" + configEditorBladeID(data.ConfigID) }
+										hx-swap="outerHTML"
+										class="flex flex-wrap gap-2 items-end"
+										data-volume-backup-assign-form
+									>
+										<div>
+											<label class="block text-xs font-medium text-base-content mb-1">Path</label>
+											<input type="text" name="backup_path" value="." placeholder="." class="input input-bordered input-sm w-28"/>
+										</div>
+										<div>
+											<label class="block text-xs font-medium text-base-content mb-1">Cadence (min)</label>
+											<input type="number" name="cadence_minutes" min="1" value="1440" class="input input-bordered input-sm w-24"/>
+										</div>
+										<div>
+											<label class="block text-xs font-medium text-base-content mb-1">Enabled</label>
+											<select name="enabled" class="select select-bordered select-sm w-20">
+												<option value="true" selected>Yes</option>
+												<option value="false">No</option>
+											</select>
+										</div>
+										<button type="submit" class="btn btn-primary btn-sm" data-volume-backup-assign>Assign backup config</button>
+									</form>
+								}
+							</div>
+						</div>
+					}
+				} else {
+					<p class="text-sm text-base-content/60">No volumes configured.</p>
+				}
+			</div>
+			<div class="mt-4 flex items-center justify-end gap-2">
+				<a href={ templ.URL(data.BackupLinkURL) } class="link link-primary text-sm">Manage backups</a>
+			</div>
+		</div>
+		<script data-config-editor-script-id={ configEditorBladeID(data.ConfigID) }>
+(function() {
+  // Scoped to this blade instance the same way blade.templ's own script
+  // is (document.currentScript's data attribute), so more than one
+  // Config Editor blade opened across a page lifetime (one at a time per
+  // FR10 decision 6, but the DOM can accumulate a dismissed prior one)
+  // never cross-wires another instance's tabs/rows/dirty-section.
+  var self = document.currentScript;
+  var bladeId = self && self.getAttribute('data-config-editor-script-id');
+  var root = bladeId && document.getElementById(bladeId);
+  if (!root) return;
+
+  var tabStrip = root.querySelector('[data-blade-tabs]');
+  var panels = root.querySelectorAll('[data-blade-tab-panel]');
+  // Two independently dirty-tracked sections (FR10): Basics/Environment
+  // (staged, saved together via the form's own Save) and Volumes
+  // (#2363, FR14/FR15 -- each row's assign/edit/remove submits
+  // immediately, but an in-progress, not-yet-submitted edit still marks
+  // this section dirty so Blade dismissal still guards it).
+  var basicsEnvSection = root.querySelector('[data-blade-section="basics-environment"]');
+  var volumesSection = root.querySelector('[data-blade-section="volumes"]');
+
+  // Tab switching (FR10): show/hide only, never an htmx swap -- every
+  // panel already holds its own entered values, and toggling `hidden`
+  // cannot lose them or itself mark the section dirty.
+  function activateTab(tabId) {
+    if (tabStrip) {
+      var tabs = tabStrip.querySelectorAll('[data-blade-tab-id]');
+      for (var i = 0; i < tabs.length; i++) {
+        var isActive = tabs[i].getAttribute('data-blade-tab-id') === tabId;
+        tabs[i].classList.toggle('tab-active', isActive);
+        tabs[i].setAttribute('aria-selected', isActive ? 'true' : 'false');
+      }
+    }
+    for (var j = 0; j < panels.length; j++) {
+      panels[j].hidden = panels[j].getAttribute('data-blade-tab-panel') !== tabId;
+    }
+  }
+
+  if (tabStrip) {
+    tabStrip.addEventListener('click', function(event) {
+      var tab = event.target.closest('[data-blade-tab-id]');
+      if (!tab) return;
+      activateTab(tab.getAttribute('data-blade-tab-id'));
+    });
+  }
+
+  // Dirty tracking (FR10): each section marks itself dirty on its first
+  // accumulated edit -- typing in a field, adding/removing an Environment
+  // row, or starting to fill in a Volumes assign/edit form -- and only
+  // Blade's own dismiss() ever reads the flag back off.
+  function markDirty(section) {
+    if (section) section.setAttribute('data-blade-dirty', 'true');
+  }
+
+  if (basicsEnvSection) {
+    basicsEnvSection.addEventListener('input', function() { markDirty(basicsEnvSection); });
+    basicsEnvSection.addEventListener('change', function() { markDirty(basicsEnvSection); });
+  }
+  if (volumesSection) {
+    volumesSection.addEventListener('input', function() { markDirty(volumesSection); });
+    volumesSection.addEventListener('change', function() { markDirty(volumesSection); });
+  }
+
+  // Environment row add/remove (mirrors blade.templ's own <template>
+  // clone convention for the deployment settings blade opener, rather
+  // than introducing an Alpine + JSON-seeded x-data dependency here).
+  var envRows = root.querySelector('[data-env-rows]');
+  var envRowTemplate = root.querySelector('[data-env-row-template]');
+  root.addEventListener('click', function(event) {
+    if (event.target.closest('[data-env-add-row]')) {
+      if (envRows && envRowTemplate) {
+        envRows.appendChild(envRowTemplate.content.cloneNode(true));
+        markDirty(basicsEnvSection);
+      }
+      return;
+    }
+    var removeBtn = event.target.closest('[data-env-remove-row]');
+    if (removeBtn) {
+      var row = removeBtn.closest('.env-row');
+      if (row) row.remove();
+      markDirty(basicsEnvSection);
+      return;
+    }
+    // Cancel discards (leaving the config unchanged) by routing through
+    // Blade's own guarded dismiss(), not a bare root.remove() here: a
+    // direct removal would skip blade.templ's cleanup() (it never detaches
+    // the document-level keydown listener dismiss() installs) and would
+    // skip the same dirty-section confirm gate scrim-click/Escape get, so
+    // Cancel would silently diverge from every other way of leaving this
+    // blade. Synthesizing a click on the scrim is the only hook available
+    // from here -- dismiss() itself is a closure private to blade.templ's
+    // own script.
+    if (event.target.closest('[data-config-editor-cancel]')) {
+      var scrim = root.querySelector('[data-blade-scrim]');
+      if (scrim) scrim.click();
+      return;
+    }
+  });
+})();
+		</script>
+	}
+}

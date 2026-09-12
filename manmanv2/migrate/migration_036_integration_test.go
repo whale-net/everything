@@ -62,12 +62,16 @@ func TestMigration036_AppliesOnTopOfFullHistoryAndCreatesExpectedShape(t *testin
 	if err != nil {
 		t.Fatalf("LatestVersion: %v", err)
 	}
-	if latest != 40 {
-		t.Fatalf("expected the latest migration source version to be 40, got %d -- update this test if a newer migration has since landed", latest)
+	if latest != 43 {
+		t.Fatalf("expected the latest migration source version to be 43, got %d -- update this test if a newer migration has since landed", latest)
 	}
 
-	if err := runner.Up(); err != nil {
-		t.Fatalf("Up (applying every migration through 036): %v", err)
+	// Target version 36 explicitly rather than Up() (which now also
+	// applies every later migration through 043) -- this test is about
+	// migration 036 specifically, not "whatever the latest migration
+	// happens to be".
+	if err := runner.Migrate(36); err != nil {
+		t.Fatalf("Migrate(36) (applying every migration through 036): %v", err)
 	}
 
 	version, dirty, err := runner.Version()
@@ -75,10 +79,10 @@ func TestMigration036_AppliesOnTopOfFullHistoryAndCreatesExpectedShape(t *testin
 		t.Fatalf("Version: %v", err)
 	}
 	if dirty {
-		t.Fatalf("expected clean state after Up, got dirty")
+		t.Fatalf("expected clean state after Migrate(36), got dirty")
 	}
-	if version != 40 {
-		t.Fatalf("expected version 40 after Up (036 stays current until a later migration lands), got %d", version)
+	if version != 36 {
+		t.Fatalf("expected version 36 after Migrate(36), got %d", version)
 	}
 
 	// pending_restarts must have no valid_from/valid_to columns -- this is

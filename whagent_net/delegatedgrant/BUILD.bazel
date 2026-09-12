@@ -1,0 +1,37 @@
+"""whagent-net's shared delegated-grant wiring (issue #2426,
+FR10/FR13/NFR5/NFR6 of plan #2421): the single confidential Keycloak
+client, pgstore.Store, and grantindex.Index triple both `ui` and `mcp`'s
+composition roots construct identically. Not `mcp/server`/`mcp/tools` --
+issue #2120's TestBUILD_NoStoreOrTemporalDependency does not apply here,
+so this package may freely depend on the pgx-backed
+grpcauth/pgstore and grpcauth/grantindex sub-packages."""
+
+load("@rules_go//go:def.bzl", "go_library", "go_test")
+
+go_library(
+    name = "delegatedgrant",
+    srcs = ["delegatedgrant.go"],
+    importpath = "github.com/whale-net/everything/whagent_net/delegatedgrant",
+    visibility = ["//visibility:public"],
+    deps = [
+        "//libs/go/grpcauth",
+        "//libs/go/grpcauth/grantindex",
+        "//libs/go/grpcauth/pgstore",
+        "@com_github_jackc_pgx_v5//pgxpool",
+    ],
+)
+
+# Pure-Go suite (issue #2426's Testing section): the entirely-unset ->
+# ErrNotConfigured case, every single-field-missing partial-configuration
+# case (including the client-secret-unset case named explicitly in the
+# issue), and Config's String()/LogValue() secret redaction. No database,
+# no network -- runs as part of `bazel test //...`.
+go_test(
+    name = "delegatedgrant_test",
+    srcs = ["delegatedgrant_test.go"],
+    embed = [":delegatedgrant"],
+    deps = [
+        "@com_github_stretchr_testify//assert",
+        "@com_github_stretchr_testify//require",
+    ],
+)

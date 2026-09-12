@@ -11,6 +11,9 @@
     },
     "ghcr.io/devcontainers/features/docker-in-docker": {
       "moby": false
+    },
+    "ghcr.io/devcontainers/features/kubectl-helm-minikube": {
+      "minikube": "none"
     }
   }
 }

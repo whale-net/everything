@@ -34,6 +34,7 @@ type fakePendingRestartRepo struct {
 	claimCalls  []int64
 	startedCall *markStartedCall
 	failedCall  *markFailedCall
+	cancelCalls [][]int64
 }
 
 type markStartedCall struct {
@@ -76,6 +77,32 @@ func (f *fakePendingRestartRepo) claimCallCount() int {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	return len(f.claimCalls)
+}
+
+// CancelForSGCs models drain eviction's FR18 cancellation (#2366): it drops
+// every still-'pending' entry (keyed by gating_session_id) whose
+// ServerGameConfigID is in sgcIDs, so a later ClaimForSession for that
+// gating session finds nothing left to claim -- exactly like the real
+// UPDATE ... WHERE status='pending' committing before the gating stop's
+// terminal status arrives.
+func (f *fakePendingRestartRepo) CancelForSGCs(ctx context.Context, sgcIDs []int64, reason string) (int, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	cp := append([]int64(nil), sgcIDs...)
+	f.cancelCalls = append(f.cancelCalls, cp)
+
+	want := make(map[int64]bool, len(sgcIDs))
+	for _, id := range sgcIDs {
+		want[id] = true
+	}
+	cancelled := 0
+	for sessionID, rec := range f.pending {
+		if want[rec.ServerGameConfigID] {
+			delete(f.pending, sessionID)
+			cancelled++
+		}
+	}
+	return cancelled, nil
 }
 
 // fakeDeferredStarter is a DeferredStarter fake that records calls and
@@ -324,6 +351,76 @@ func TestHandleStatusUpdate_TerminalStatusNoPendingRecord(t *testing.T) {
 	}
 }
 
+// TestHandleStatusUpdate_NoStartAfterDrainCancellation proves #2366's FR18
+// guarantee from this consumer's side: once drain eviction's CancelForSGCs
+// has cancelled a deployment's pending restart, the gating session's
+// terminal status -- arriving afterward, exactly as the ordering
+// requirement guarantees -- finds nothing left to claim, so no
+// StartSession is dispatched and no retry loop runs.
+func TestHandleStatusUpdate_NoStartAfterDrainCancellation(t *testing.T) {
+	gatingSessionID := int64(42)
+	sgcID := int64(7)
+	repo := &fakePendingRestartRepo{
+		pending: map[int64]*manman.PendingRestart{
+			gatingSessionID: {
+				PendingRestartID:   1,
+				ServerGameConfigID: sgcID,
+				GatingSessionID:    gatingSessionID,
+				Status:             manman.PendingRestartStatusPending,
+			},
+		},
+	}
+	starter := &fakeDeferredStarter{startedSessionID: 99}
+	h, rh := newTestConsumer(repo, starter)
+
+	// Drain eviction cancels the pending restart before the evicted
+	// session's stop is dispatched (server.go's evictSessions) -- so by the
+	// time this consumer sees the gating session's terminal status, the
+	// record is already gone from 'pending'.
+	cancelled, err := repo.CancelForSGCs(context.Background(), []int64{sgcID}, "host 1 draining")
+	if err != nil {
+		t.Fatalf("CancelForSGCs: %v", err)
+	}
+	if cancelled != 1 {
+		t.Fatalf("expected CancelForSGCs to cancel exactly 1 record, got %d", cancelled)
+	}
+
+	err = h.handleStatusUpdate(context.Background(), rmq.Message{
+		Body: statusUpdateBody(t, gatingSessionID, manman.SessionStatusStopped),
+	})
+	if err != nil {
+		t.Fatalf("expected nil error, got %v", err)
+	}
+
+	if got := repo.claimCallCount(); got != 1 {
+		t.Fatalf("expected ClaimForSession to still be attempted once (and find nothing), got %d calls", got)
+	}
+	if got := starter.callCount(); got != 0 {
+		t.Fatalf("expected zero StartSession calls after a drain-cancelled pending restart, got %d", got)
+	}
+	if repo.startedCall != nil {
+		t.Errorf("expected MarkStarted not to be called, got %+v", repo.startedCall)
+	}
+	if repo.failedCall != nil {
+		t.Errorf("expected MarkFailed not to be called (nothing left to fail), got %+v", repo.failedCall)
+	}
+
+	// Redelivery (retry loop) of the same terminal status must remain a
+	// no-op too -- not just the first delivery.
+	err = h.handleStatusUpdate(context.Background(), rmq.Message{
+		Body: statusUpdateBody(t, gatingSessionID, manman.SessionStatusStopped),
+	})
+	if err != nil {
+		t.Fatalf("expected nil error on redelivery, got %v", err)
+	}
+	if got := starter.callCount(); got != 0 {
+		t.Fatalf("expected zero StartSession calls even after redelivery, got %d", got)
+	}
+	if lvl, logged := rh.maxLevel(); logged && lvl >= slog.LevelWarn {
+		t.Errorf("expected nothing logged at WARNING or above, got max level %v", lvl)
+	}
+}
+
 func TestHandleStatusUpdate_StartSessionFailureMarksFailed(t *testing.T) {
 	gatingSessionID := int64(42)
 	sgcID := int64(7)
@@ -544,6 +641,53 @@ func TestHandleStatusUpdate_NonRetryableErrorFailsImmediately(t *testing.T) {
 	}
 	if repo.failedCall == nil {
 		t.Fatal("expected MarkFailed to be called")
+	}
+	if repo.startedCall != nil {
+		t.Errorf("expected MarkStarted not to be called, got %+v", repo.startedCall)
+	}
+}
+
+// TestHandleStatusUpdate_CordonRejectionFailsImmediately covers #2364: a
+// drain cordon rejection is also a codes.FailedPrecondition (same as the
+// commit-race error the retry loop exists to absorb), but it must be
+// treated as terminal -- one StartSession attempt, immediately marked
+// failed with the drain-specific reason -- never spun through the retry
+// budget.
+func TestHandleStatusUpdate_CordonRejectionFailsImmediately(t *testing.T) {
+	gatingSessionID := int64(42)
+	sgcID := int64(7)
+	repo := &fakePendingRestartRepo{
+		pending: map[int64]*manman.PendingRestart{
+			gatingSessionID: {
+				PendingRestartID:   1,
+				ServerGameConfigID: sgcID,
+				GatingSessionID:    gatingSessionID,
+				Status:             manman.PendingRestartStatusPending,
+			},
+		},
+	}
+	cordonErr := &cordonError{serverID: 9, serverName: "gameserver-9", drainState: manman.ServerDrainStateDraining}
+	starter := &fakeDeferredStarter{err: cordonErr}
+	h, _ := newTestConsumer(repo, starter)
+
+	err := h.handleStatusUpdate(context.Background(), rmq.Message{
+		Body: statusUpdateBody(t, gatingSessionID, manman.SessionStatusStopped),
+	})
+	if err != nil {
+		t.Fatalf("expected nil error, got %v", err)
+	}
+
+	if got := starter.callCount(); got != 1 {
+		t.Fatalf("expected exactly 1 StartSession call (cordon rejection is terminal, not retried), got %d", got)
+	}
+	if repo.failedCall == nil {
+		t.Fatal("expected MarkFailed to be called")
+	}
+	if repo.failedCall.pendingRestartID != 1 {
+		t.Errorf("expected MarkFailed pendingRestartID 1, got %d", repo.failedCall.pendingRestartID)
+	}
+	if !strings.Contains(repo.failedCall.reason, "gameserver-9") {
+		t.Errorf("expected MarkFailed reason to name the cordoned host, got %q", repo.failedCall.reason)
 	}
 	if repo.startedCall != nil {
 		t.Errorf("expected MarkStarted not to be called, got %+v", repo.startedCall)

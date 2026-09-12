@@ -298,6 +298,21 @@ func (a *Activities) DispatchBuild(ctx context.Context, plan ResolvedPlan, diges
 	// fall back to the required, always-branch/tag GitHubDispatcherConfig.Ref.
 	inputs["build_ref"] = dispatchRef
 
+	// release_run_id is forwarded when known so release-v2.yml's notify job
+	// can call NotifyBuildComplete (release_helper notify-build) with it
+	// and signal this exact release run's Temporal ReleaseWorkflow instead
+	// of leaving it to PollBuild's fallback loop. Empty for the fallback
+	// dispatches without a persisted release run (test doubles, bot
+	// dispatches without a resolved plan) -- release-v2.yml declares the
+	// input, and notify-build skips client-side when it's empty. The input
+	// must be declared in release-v2.yml's workflow_dispatch trigger, since
+	// GitHub rejects undeclared dispatch inputs with 422 (the same reason
+	// dispatching v1's release.yml fails on `resolved_plan` -- see
+	// GitHubDispatcherConfig.WorkflowFile).
+	if plan.ReleaseRunID != "" {
+		inputs["release_run_id"] = plan.ReleaseRunID
+	}
+
 	ref, err := a.GitHub.Dispatch(ctx, plan.ReleaseRunID, inputs, "")
 	if err != nil {
 		return BuildRef{}, fmt.Errorf("dispatch build: %w", err)

@@ -168,11 +168,14 @@ func (r *Repository) ListBoardsWithState(ctx context.Context) ([]BoardWithReadin
 		SELECT
 			v.board_id, v.device_id, v.last_reading_at,
 			b.name,
-			boh.leaflab_user_id, u.display_name, u.preferred_username, u.email
+			boh.leaflab_user_id, u.display_name, u.preferred_username, u.email,
+			brh.region_id, COALESCE(br.name, '')
 		FROM v_board_last_reading v
 		JOIN board b ON b.board_id = v.board_id
 		LEFT JOIN board_owner_history boh ON boh.board_id = v.board_id AND boh.valid_to IS NULL
 		LEFT JOIN leaflab_user u ON u.leaflab_user_id = boh.leaflab_user_id
+		LEFT JOIN board_region_history brh ON brh.board_id = v.board_id AND brh.valid_to IS NULL
+		LEFT JOIN region br ON br.region_id = brh.region_id
 		ORDER BY v.board_id
 	`)
 	if err != nil {
@@ -190,7 +193,8 @@ func (r *Repository) ListBoardsWithState(ctx context.Context) ([]BoardWithReadin
 			email             *string
 		)
 		if err := rows.Scan(&b.BoardID, &b.DeviceID, &b.LastReadingAt, &b.BoardName,
-			&ownerID, &displayName, &preferredUsername, &email); err != nil {
+			&ownerID, &displayName, &preferredUsername, &email,
+			&b.RecordedRegionID, &b.RecordedRegionName); err != nil {
 			return nil, fmt.Errorf("scan board with state: %w", err)
 		}
 		b.Owner = ownerRowFromScan(ownerID, displayName, preferredUsername, email)
@@ -204,12 +208,21 @@ func (r *Repository) ListBoardsWithState(ctx context.Context) ([]BoardWithReadin
 // is nil when the board has no name (FR3 — caller falls back to DeviceID).
 // Owner is nil when the board is unowned — never a sentinel user id.
 // LastReadingAt is nil when the board has no readings.
+//
+// M3 additions (#2318, FR12): the board's current recorded region (FR10),
+// read from the open board_region_history row (#2315's read shape).
+// RecordedRegionID is nil when the board has no recorded region -- the
+// absence of an open row, never a sentinel region id -- and
+// RecordedRegionName is empty in that case.
 type BoardWithReadingRow struct {
 	BoardID       int64
 	DeviceID      string
 	LastReadingAt *time.Time
 	BoardName     *string
 	Owner         *OwnerRow
+
+	RecordedRegionID   *int64
+	RecordedRegionName string
 }
 
 // OwnerRow is the repository-side projection of a board's current owner,
@@ -256,16 +269,21 @@ func (r *Repository) GetBoardIdentity(ctx context.Context, boardID int64) (Board
 		displayName       *string
 		preferredUsername *string
 		email             *string
+		recordedRegionID  *int64
 	)
 	err := r.db.QueryRow(ctx, `
 		SELECT
 			b.device_id, b.name,
-			boh.leaflab_user_id, u.display_name, u.preferred_username, u.email
+			boh.leaflab_user_id, u.display_name, u.preferred_username, u.email,
+			brh.region_id, COALESCE(br.name, '')
 		FROM board b
 		LEFT JOIN board_owner_history boh ON boh.board_id = b.board_id AND boh.valid_to IS NULL
 		LEFT JOIN leaflab_user u ON u.leaflab_user_id = boh.leaflab_user_id
+		LEFT JOIN board_region_history brh ON brh.board_id = b.board_id AND brh.valid_to IS NULL
+		LEFT JOIN region br ON br.region_id = brh.region_id
 		WHERE b.board_id = $1
-	`, boardID).Scan(&bi.DeviceID, &bi.BoardName, &ownerID, &displayName, &preferredUsername, &email)
+	`, boardID).Scan(&bi.DeviceID, &bi.BoardName, &ownerID, &displayName, &preferredUsername, &email,
+		&recordedRegionID, &bi.RecordedRegionName)
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			return BoardIdentity{}, err
@@ -273,16 +291,23 @@ func (r *Repository) GetBoardIdentity(ctx context.Context, boardID int64) (Board
 		return BoardIdentity{}, fmt.Errorf("get board identity for %d: %w", boardID, err)
 	}
 	bi.Owner = ownerRowFromScan(ownerID, displayName, preferredUsername, email)
+	bi.RecordedRegionID = recordedRegionID
 	return bi, nil
 }
 
 // BoardIdentity is a board's device_id plus M2's read-side ownership fields
 // (#1765). BoardName is nil when the board has no name (FR3 — caller falls
 // back to DeviceID). Owner is nil when the board is unowned.
+// M3 additions (#2318, FR12): the board's current recorded region (FR10),
+// same read shape and unset-when-absent semantics as
+// BoardWithReadingRow's recorded-region fields.
 type BoardIdentity struct {
 	DeviceID  string
 	BoardName *string
 	Owner     *OwnerRow
+
+	RecordedRegionID   *int64
+	RecordedRegionName string
 }
 
 // ListSensorDetailsForBoard returns every sensor recorded for a board (FR6 —
@@ -295,8 +320,10 @@ type BoardIdentity struct {
 // join to the current open row and joins sensor_type — re-deriving that by
 // hand here would duplicate logic that already exists. Readings come
 // directly from sensor_reading, not the heavier v_sensor_reading_enriched,
-// whose device_config/region joins are dead weight here (no region or
-// location is shown in M1).
+// whose device_config/region joins are dead weight here (FR12's region
+// display reads the sensor's CURRENT placement straight off
+// v_sensor_current, not the reading-level enriched view -- reading
+// attribution history is not this screen's concern).
 //
 // This is one query for the board's sensors plus a LATERAL "most recent
 // reading" join per sensor row — not one query per sensor — since boards
@@ -318,7 +345,9 @@ func (r *Repository) ListSensorDetailsForBoard(ctx context.Context, boardID int6
 			sc.sensor_type_name,
 			lr.value,
 			lr.recorded_at,
-			lr.valid
+			lr.valid,
+			sc.region_id,
+			COALESCE(sc.region_name, '')
 		FROM v_sensor_current sc
 		LEFT JOIN LATERAL (
 			SELECT sr.value, sr.recorded_at, sr.valid
@@ -346,6 +375,8 @@ func (r *Repository) ListSensorDetailsForBoard(ctx context.Context, boardID int6
 			&s.LatestValue,
 			&s.LatestRecordedAt,
 			&s.LatestValid,
+			&s.RegionID,
+			&s.RegionName,
 		); err != nil {
 			return nil, fmt.Errorf("scan sensor detail: %w", err)
 		}
@@ -357,6 +388,12 @@ func (r *Repository) ListSensorDetailsForBoard(ctx context.Context, boardID int6
 // SensorDetailRow is one sensor plus its most recent reading, if it has
 // ever reported one. LatestValue/LatestRecordedAt/LatestValid are nil
 // together exactly when the sensor has no readings at all.
+//
+// M3 additions (#2318, FR12): the sensor's currently-placed region, read
+// straight off v_sensor_current (the same source ListSensorRegionsForBoard
+// uses for SetBoardRegionResponse's nudge snapshot). RegionID is nil when
+// the sensor is unplaced -- the absence of an open sensor_region_history
+// row -- and RegionName is empty in that case.
 type SensorDetailRow struct {
 	SensorID       int64
 	SensorName     string
@@ -366,6 +403,9 @@ type SensorDetailRow struct {
 	LatestValue      *float64
 	LatestRecordedAt *time.Time
 	LatestValid      *bool
+
+	RegionID   *int64
+	RegionName string
 }
 
 // SensorExists reports whether a sensor with the given ID has ever been registered.
@@ -660,6 +700,106 @@ func (r *Repository) RenameSensor(ctx context.Context, sensorID int64, name stri
 
 	if err := tx.Commit(ctx); err != nil {
 		return fmt.Errorf("commit rename sensor %d tx: %w", sensorID, err)
+	}
+	return nil
+}
+
+// ErrRegionNotFound is returned by PlaceSensor when the requested region_id
+// does not exist -- surfaced by server.go's PlaceSensor RPC as
+// codes.NotFound, never a raw 500. The FK constraints on sensor.region_id
+// and sensor_region_history.region_id would also reject the write, but the
+// explicit check inside the placement transaction fails before any row is
+// touched and maps cleanly to a user-facing error.
+var ErrRegionNotFound = errors.New("region not found")
+
+// ErrSensorNotFound is returned by PlaceSensor when the requested sensor_id
+// does not exist. The server-side GetBoardIDForSensor lookup already 404s
+// unknown sensors before authorization, so this only fires for a sensor
+// that disappears between that check and the write (there is no sensor
+// delete path today, so in practice it is unreachable -- it exists so the
+// write path itself never silently no-ops).
+var ErrSensorNotFound = errors.New("sensor not found")
+
+// PlaceSensor assigns sensorID to regionID (FR7) -- whether or not the
+// sensor already had a placement -- or moves it. Sole placement writer
+// (NFR4): leaflab-processor's device-config ack path never creates or
+// closes a sensor_region_history row and never touches sensor.region_id,
+// no matter what region value a DeviceConfig carried on the wire.
+//
+// SCD2 close-and-open on sensor_region_history plus the sensor.region_id
+// mirror update, all in one transaction per AGENTS.md § SCD2 -- a reader
+// never sees a sensor whose mirror column and open history row disagree.
+// Close-then-insert means a move is recorded as [old region → closed] +
+// [new region → open]; a first placement has nothing to close, so the
+// UPDATE simply affects zero rows.
+//
+// Idempotent: placing a sensor into the region it already occupies writes
+// nothing at all (no new history row), matching UpsertSensorLabel's
+// same-value no-op precedent -- a repeated UI submit must not fabricate a
+// placement "move" in the history. The check reads sensor.region_id, the
+// mirror every reader (and every reading insert) resolves from.
+//
+// Never issues a device round trip (LB2) -- this is a pure Postgres write;
+// the placement is visible to the next reading insert immediately, not
+// after a board reboot or config ack.
+func (r *Repository) PlaceSensor(ctx context.Context, sensorID, regionID int64) error {
+	tx, err := r.db.Begin(ctx)
+	if err != nil {
+		return fmt.Errorf("begin place sensor %d tx: %w", sensorID, err)
+	}
+	defer tx.Rollback(ctx) //nolint:errcheck // no-op once Commit succeeds
+
+	// The region must exist. Checked inside the transaction rather than
+	// trusting the FK to catch it, so an unknown region surfaces as
+	// ErrRegionNotFound (codes.NotFound) instead of a raw 23503.
+	var regionExists bool
+	if err := tx.QueryRow(ctx, `
+		SELECT EXISTS(SELECT 1 FROM region WHERE region_id = $1)
+	`, regionID).Scan(&regionExists); err != nil {
+		return fmt.Errorf("check region %d exists: %w", regionID, err)
+	}
+	if !regionExists {
+		return ErrRegionNotFound
+	}
+
+	// Current mirror value: both the idempotency check and the
+	// sensor-must-exist guard (no sensor row -> nothing to place).
+	var currentRegion *int64
+	if err := tx.QueryRow(ctx, `
+		SELECT region_id FROM sensor WHERE sensor_id = $1
+	`, sensorID).Scan(&currentRegion); err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return ErrSensorNotFound
+		}
+		return fmt.Errorf("read current placement for sensor %d: %w", sensorID, err)
+	}
+	if currentRegion != nil && *currentRegion == regionID {
+		return nil // already placed in regionID -- no write
+	}
+
+	// Close any open history row for this sensor (no-op when the sensor had
+	// no placement yet).
+	if _, err := tx.Exec(ctx, `
+		UPDATE sensor_region_history SET valid_to = NOW()
+		WHERE sensor_id = $1 AND valid_to IS NULL
+	`, sensorID); err != nil {
+		return fmt.Errorf("close open sensor_region_history row for sensor %d: %w", sensorID, err)
+	}
+
+	if _, err := tx.Exec(ctx, `
+		INSERT INTO sensor_region_history (sensor_id, region_id) VALUES ($1, $2)
+	`, sensorID, regionID); err != nil {
+		return fmt.Errorf("insert sensor_region_history row for sensor %d: %w", sensorID, err)
+	}
+
+	if _, err := tx.Exec(ctx, `
+		UPDATE sensor SET region_id = $2 WHERE sensor_id = $1
+	`, sensorID, regionID); err != nil {
+		return fmt.Errorf("sync sensor.region_id for sensor %d: %w", sensorID, err)
+	}
+
+	if err := tx.Commit(ctx); err != nil {
+		return fmt.Errorf("commit place sensor %d tx: %w", sensorID, err)
 	}
 	return nil
 }
@@ -1051,4 +1191,428 @@ func (r *Repository) ListUsers(ctx context.Context) ([]LeafLabUserRow, error) {
 		result = append(result, row)
 	}
 	return result, rows.Err()
+}
+
+// -- M3 region lifecycle repository methods ----------------------------------
+// CreateRegion/RenameRegion/ReparentRegion back server.go's three region
+// lifecycle RPCs (#2312: FR1-FR3, FR5). Region ownership is region's plain
+// nullable owner_leaflab_user_id column (013_ownership.up.sql) -- current
+// value only, no history table, unlike board ownership's board_owner_history:
+// no M3 capability reassigns or transfers a region, so there is no history
+// to preserve and the column alone is the whole ownership state (FR1: set at
+// creation, never changed afterward; re-parenting does not touch it).
+
+// maxRegionNameLen mirrors region.name's VARCHAR(255) constraint
+// (001_initial_schema.up.sql). Postgres counts VARCHAR length in characters,
+// not bytes, so the handler-side check must too (utf8 rune count) -- a
+// multi-byte name that fits 255 characters is legal, and a byte-count check
+// would wrongly reject it.
+const maxRegionNameLen = 255
+
+// RegionIdentity is a region's current-value state, the region-lifecycle
+// analog of BoardIdentity. OwnerLeaflabUserID is nil when the region
+// predates M3's create path (migration 013 added the column nullable;
+// pre-existing regions were never assigned an owner -- only an admin may
+// write such a region, per NFR2's owner-plus-admin-bypass rule).
+// ParentRegionID is nil for a top-level region (the mirror column's NULL is
+// meaningful state, mirrored by the open region_parent_history row).
+type RegionIdentity struct {
+	RegionID           int64
+	Name               string
+	ParentRegionID     *int64
+	OwnerLeaflabUserID *int64
+}
+
+// GetRegionIdentity returns a region's current-value state, or
+// pgx.ErrNoRows (unwrapped, so callers can errors.Is against it directly)
+// when region_id is unknown.
+func (r *Repository) GetRegionIdentity(ctx context.Context, regionID int64) (RegionIdentity, error) {
+	var (
+		ri       RegionIdentity
+		parentID *int64
+	)
+	err := r.db.QueryRow(ctx, `
+		SELECT name, parent_region_id, owner_leaflab_user_id
+		FROM region
+		WHERE region_id = $1
+	`, regionID).Scan(&ri.Name, &parentID, &ri.OwnerLeaflabUserID)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return RegionIdentity{}, err
+		}
+		return RegionIdentity{}, fmt.Errorf("get region identity for %d: %w", regionID, err)
+	}
+	ri.RegionID = regionID
+	ri.ParentRegionID = parentID
+	return ri, nil
+}
+
+// CreateRegion inserts the region row (owned by ownerUserID from the moment
+// it exists -- FR1/NFR2: a new region is never left ownerless) and its
+// initial open region_parent_history row, in one transaction: every region
+// has at least one open history row from the moment it exists, never only
+// from its first re-parent. parentRegionID may be nil (top-level region --
+// a recorded NULL parent on the open history row, not an absent row).
+//
+// No cycle is possible at creation (the new region_id is not yet known to
+// any other row), so there is deliberately no cycle check here -- that is
+// ReparentRegion's job (FR5). Callers (server.go's CreateRegion RPC) are
+// responsible for the non-empty/length name check and the parent-existence
+// check before calling this; the parent-region FK is the backstop for a
+// parent deleted concurrently after the check (a 23503 that surfaces as a
+// plain wrapped error, not a sentinel).
+func (r *Repository) CreateRegion(ctx context.Context, name string, parentRegionID *int64, ownerUserID int64) (int64, error) {
+	tx, err := r.db.Begin(ctx)
+	if err != nil {
+		return 0, fmt.Errorf("begin create region tx: %w", err)
+	}
+	defer tx.Rollback(ctx) //nolint:errcheck // no-op once Commit succeeds
+
+	var regionID int64
+	if err := tx.QueryRow(ctx, `
+		INSERT INTO region (parent_region_id, name, owner_leaflab_user_id)
+		VALUES ($1, $2, $3)
+		RETURNING region_id
+	`, parentRegionID, name, ownerUserID).Scan(&regionID); err != nil {
+		return 0, fmt.Errorf("insert region: %w", err)
+	}
+
+	if _, err := tx.Exec(ctx, `
+		INSERT INTO region_parent_history (region_id, parent_region_id)
+		VALUES ($1, $2)
+	`, regionID, parentRegionID); err != nil {
+		return 0, fmt.Errorf("insert initial region_parent_history row for region %d: %w", regionID, err)
+	}
+
+	if err := tx.Commit(ctx); err != nil {
+		return 0, fmt.Errorf("commit create region tx: %w", err)
+	}
+	return regionID, nil
+}
+
+// RenameRegion sets a region's name directly (FR2). A plain current-value
+// UPDATE against region.name -- no history table: region.name is not an
+// attribution dimension for any reading (names are resolved at read time
+// from the current tree; past readings roll up under the region's
+// history-resolved ancestor chain, never its name), so it follows
+// board.name's precedent under LB6. This is deliberately different from
+// RenameSensor's sensor_name_history SCD2 extension. Enforces no uniqueness
+// and no format restriction here; callers are responsible for the non-empty
+// and 255-character checks (CreateRegion/RenameRegion RPCs in server.go)
+// and for confirming regionID exists first -- an UPDATE against an unknown
+// region_id affects zero rows and returns no error.
+func (r *Repository) RenameRegion(ctx context.Context, regionID int64, name string) error {
+	if _, err := r.db.Exec(ctx, `UPDATE region SET name = $2 WHERE region_id = $1`, regionID, name); err != nil {
+		return fmt.Errorf("rename region %d: %w", regionID, err)
+	}
+	return nil
+}
+
+// ReparentRegion changes a region's parent (FR3): plain SCD2 close-and-open
+// on region_parent_history -- close the currently-open row, open a new one
+// for the new parent -- plus the mirror-column UPDATE on
+// region.parent_region_id, all in one transaction (per AGENTS.md section
+// SCD2's close-and-open pattern; the mirror column and the history must
+// never be observable out of sync). No immutability trigger: the API is the
+// only writer of both, and migration 017 is deliberately trigger-free.
+//
+// newParentRegionID may be nil (top-level: the open row records a NULL
+// parent -- recorded state, not an absence). Descendant rows are untouched:
+// every descendant's parent_region_id already points at its own immediate
+// parent, so a subtree relocates atomically by construction (FR3).
+// Callers (server.go's ReparentRegion RPC) are responsible for the
+// existence, authorization, and cycle checks (FR5) before calling this --
+// this method performs the close-and-open plus mirror update
+// unconditionally. Re-parenting never touches region.owner_leaflab_user_id.
+func (r *Repository) ReparentRegion(ctx context.Context, regionID int64, newParentRegionID *int64) error {
+	tx, err := r.db.Begin(ctx)
+	if err != nil {
+		return fmt.Errorf("begin reparent region %d tx: %w", regionID, err)
+	}
+	defer tx.Rollback(ctx) //nolint:errcheck // no-op once Commit succeeds
+
+	if _, err := tx.Exec(ctx, `
+		UPDATE region_parent_history SET valid_to = NOW()
+		WHERE region_id = $1 AND valid_to IS NULL
+	`, regionID); err != nil {
+		return fmt.Errorf("close open region_parent_history row for region %d: %w", regionID, err)
+	}
+
+	if _, err := tx.Exec(ctx, `
+		INSERT INTO region_parent_history (region_id, parent_region_id)
+		VALUES ($1, $2)
+	`, regionID, newParentRegionID); err != nil {
+		return fmt.Errorf("open region_parent_history row for region %d: %w", regionID, err)
+	}
+
+	if _, err := tx.Exec(ctx, `
+		UPDATE region SET parent_region_id = $2 WHERE region_id = $1
+	`, regionID, newParentRegionID); err != nil {
+		return fmt.Errorf("sync region.parent_region_id for region %d: %w", regionID, err)
+	}
+
+	if err := tx.Commit(ctx); err != nil {
+		return fmt.Errorf("commit reparent region %d tx: %w", regionID, err)
+	}
+	return nil
+}
+
+// reparentCycleDepthCap bounds the ancestor walk in ReparentCreatesCycle.
+// FR3 allows unbounded nesting depth, so no legitimate tree reaches this;
+// the cap only guarantees termination if corrupt data ever contained a
+// parent-pointer cycle despite FR5's rejection (the CTE would otherwise
+// walk it forever).
+const reparentCycleDepthCap = 10000
+
+// ReparentCreatesCycle reports whether re-parenting regionID under
+// newParentRegionID would create a cycle (FR5): that is, whether
+// newParentRegionID is regionID itself or any of regionID's descendants --
+// equivalently, whether walking the current tree upward from
+// newParentRegionID reaches regionID. The walk reads the current mirror
+// column (region.parent_region_id), which every write path keeps in sync
+// with the open history row; walking the open history rows would be
+// equivalent but no safer, and region's existing parent-pointer index
+// (idx_region_parent_region_id) answers each hop.
+//
+// One recursive CTE, one round trip -- not a Go-side loop of per-hop queries
+// (FR3 allows unbounded depth; the CTE's depth guard reparentCycleDepthCap
+// exists only to terminate on corrupt data). Callers map true to
+// codes.FailedPrecondition (ReparentRegion RPC in server.go).
+func (r *Repository) ReparentCreatesCycle(ctx context.Context, regionID, newParentRegionID int64) (bool, error) {
+	var createsCycle bool
+	err := r.db.QueryRow(ctx, `
+		WITH RECURSIVE walk AS (
+			SELECT region_id, parent_region_id, 0 AS depth
+			FROM region
+			WHERE region_id = $2
+			UNION ALL
+			SELECT r.region_id, r.parent_region_id, w.depth + 1
+			FROM region r
+			JOIN walk w ON r.region_id = w.parent_region_id
+			WHERE w.depth < $3
+		)
+		SELECT EXISTS(SELECT 1 FROM walk WHERE region_id = $1)
+	`, regionID, newParentRegionID, reparentCycleDepthCap).Scan(&createsCycle)
+	if err != nil {
+		return false, fmt.Errorf("walk ancestors from region %d for cycle check against region %d: %w", newParentRegionID, regionID, err)
+	}
+	return createsCycle, nil
+}
+
+// -- M3 board recorded region (FR10) -------------------------------------------
+// #2315: SetBoardRegion's data access. Bookkeeping only -- these methods
+// write only board.region_id and board_region_history and never touch
+// sensor placement (sensor.region_id / sensor_region_history) or reading
+// attribution; see server.go's SetBoardRegion RPC doc comment.
+
+// RegionExists reports whether regionID names a region row --
+// SetBoardRegion's unknown-region check (an unknown region_id maps to
+// codes.NotFound in server.go rather than a Postgres FK violation as a
+// plain wrapped error).
+func (r *Repository) RegionExists(ctx context.Context, regionID int64) (bool, error) {
+	var exists bool
+	err := r.db.QueryRow(ctx, `
+		SELECT EXISTS(SELECT 1 FROM region WHERE region_id = $1)
+	`, regionID).Scan(&exists)
+	if err != nil {
+		return false, fmt.Errorf("check region %d exists: %w", regionID, err)
+	}
+	return exists, nil
+}
+
+// GetCurrentBoardRegion returns a board's recorded region and its name.
+// ok=false means the board has no recorded region -- the absence of an open
+// board_region_history row, with the mirror column board.region_id NULL to
+// match (migration 017); it is never expressed as a sentinel region id.
+// Reads via the valid_to IS NULL predicate backed by
+// idx_board_region_history_current. Used by server.go both for the no-op
+// refusal check before the write and to build SetBoardRegionResponse's
+// post-write region fields.
+func (r *Repository) GetCurrentBoardRegion(ctx context.Context, boardID int64) (regionID *int64, regionName string, err error) {
+	var name *string
+	err = r.db.QueryRow(ctx, `
+		SELECT brh.region_id, r.name
+		FROM board_region_history brh
+		LEFT JOIN region r ON r.region_id = brh.region_id
+		WHERE brh.board_id = $1 AND brh.valid_to IS NULL
+	`, boardID).Scan(&regionID, &name)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return nil, "", nil
+		}
+		return nil, "", fmt.Errorf("get current recorded region for board %d: %w", boardID, err)
+	}
+	if name != nil {
+		regionName = *name
+	}
+	return regionID, regionName, nil
+}
+
+// SensorRegionRow is one of a board's sensors plus the region that sensor is
+// currently placed in, for SetBoardRegionResponse's FR11 nudge snapshot.
+// RegionID is nil when the sensor is unplaced; RegionName is empty in that
+// case. Read-only: never written by this package's board-region path (FR10).
+type SensorRegionRow struct {
+	SensorID   int64
+	SensorName string
+	RegionID   *int64
+	RegionName string
+}
+
+// ListSensorRegionsForBoard returns every sensor recorded for the board
+// (FR6 precedent -- no filtering by recency or config membership) with the
+// region it is currently placed in, for SetBoardRegionResponse's FR11 nudge
+// snapshot. Reads via v_sensor_current (migration 012), which already
+// resolves the sensor_name_history SCD2 join and the region name -- the
+// same precedent ListSensorDetailsForBoard follows. Purely a read: this
+// deliberately runs even when the write was a no-op refusal path and never
+// implies any placement change.
+func (r *Repository) ListSensorRegionsForBoard(ctx context.Context, boardID int64) ([]SensorRegionRow, error) {
+	rows, err := r.db.Query(ctx, `
+		SELECT
+			sc.sensor_id,
+			COALESCE(sc.sensor_name, ''),
+			sc.region_id,
+			COALESCE(sc.region_name, '')
+		FROM v_sensor_current sc
+		WHERE sc.board_id = $1
+		ORDER BY sc.sensor_id
+	`, boardID)
+	if err != nil {
+		return nil, fmt.Errorf("list sensor regions for board %d: %w", boardID, err)
+	}
+	defer rows.Close()
+
+	var sensors []SensorRegionRow
+	for rows.Next() {
+		var s SensorRegionRow
+		if err := rows.Scan(&s.SensorID, &s.SensorName, &s.RegionID, &s.RegionName); err != nil {
+			return nil, fmt.Errorf("scan sensor region row: %w", err)
+		}
+		sensors = append(sensors, s)
+	}
+	return sensors, rows.Err()
+}
+
+// SetBoardRegion writes a board's recorded region (FR10): closes the
+// currently-open board_region_history row, opens one for the new region,
+// and syncs the mirror column board.region_id -- all in one transaction,
+// per AGENTS.md section SCD2's close-and-open pattern.
+//
+// regionID == nil clears the recorded region: it closes the open history
+// row (if any) and sets the mirror column to NULL, opening no new row -- a
+// board's un-recorded state is the absence of an open row, per migration
+// 017. This mirrors ClearBoardOwner's close-without-reopen shape.
+//
+// Bookkeeping only (FR10): this is the only board-region write, and it
+// writes only board.region_id and board_region_history. It never touches
+// sensor.region_id, sensor_region_history, or any reading -- changing a
+// board's recorded region must never change sensor placement or reading
+// attribution.
+//
+// Callers (server.go's SetBoardRegion RPC) are responsible for the
+// unknown-board and unknown-region checks and the no-op refusal (setting
+// the already-recorded region, or clearing a region that is not recorded)
+// before calling this -- this method performs the close-and-open
+// unconditionally, mirroring ReassignBoardOwner's tx shape.
+func (r *Repository) SetBoardRegion(ctx context.Context, boardID int64, regionID *int64) error {
+	tx, err := r.db.Begin(ctx)
+	if err != nil {
+		return fmt.Errorf("begin set board region tx for board %d: %w", boardID, err)
+	}
+	defer tx.Rollback(ctx) //nolint:errcheck // no-op once Commit succeeds
+
+	if _, err := tx.Exec(ctx, `
+		UPDATE board_region_history SET valid_to = NOW()
+		WHERE board_id = $1 AND valid_to IS NULL
+	`, boardID); err != nil {
+		return fmt.Errorf("close open board_region_history row for board %d: %w", boardID, err)
+	}
+
+	// Open a new row only when recording a region; a clear closes without
+	// re-opening (see doc comment above).
+	if regionID != nil {
+		if _, err := tx.Exec(ctx, `
+			INSERT INTO board_region_history (board_id, region_id) VALUES ($1, $2)
+		`, boardID, *regionID); err != nil {
+			return fmt.Errorf("insert board_region_history row for board %d: %w", boardID, err)
+		}
+	}
+
+	if _, err := tx.Exec(ctx, `
+		UPDATE board SET region_id = $2 WHERE board_id = $1
+	`, boardID, regionID); err != nil {
+		return fmt.Errorf("sync board.region_id mirror for board %d: %w", boardID, err)
+	}
+
+	if err := tx.Commit(ctx); err != nil {
+		return fmt.Errorf("commit set board region tx for board %d: %w", boardID, err)
+	}
+	return nil
+}
+
+// -- #2316: GetRegionTree's data access (FR6 region tree view) ---------------
+
+// RegionTreeRow is one region of the requested subtree (or the whole
+// forest) with its DIRECT sensor count -- sensors currently placed in that
+// region only, from open sensor_region_history rows. The inclusive count
+// (region + descendants) is computed by the caller over the assembled
+// tree, not here.
+type RegionTreeRow struct {
+	RegionID       int64
+	ParentRegionID *int64
+	Name           string
+	SensorCount    int64
+}
+
+// GetRegionTree returns every region of the current tree with each
+// region's direct sensor count: the whole forest when rootRegionID is 0,
+// otherwise the subtree rooted at rootRegionID (drill-down, FR6).
+//
+// The subtree is bounded by a recursive CTE over region.parent_region_id --
+// the same current-parent walk v_region_path performs (FR4 deliberately
+// left v_region_path unchanged; this is a current-state view). Sensor
+// counts aggregate open sensor_region_history rows (valid_to IS NULL),
+// i.e. CURRENT placement only -- a sensor's unplaced state is the absence
+// of an open row, so it contributes to no region's count.
+//
+// Sibling ordering (alphabetical by name, FR6) is deliberately NOT done
+// here: rows are returned unordered and the server assembles the tree,
+// sorts siblings, and computes inclusive counts in one pass.
+func (r *Repository) GetRegionTree(ctx context.Context, rootRegionID int64) ([]RegionTreeRow, error) {
+	rows, err := r.db.Query(ctx, `
+		WITH RECURSIVE subtree AS (
+			SELECT region_id, parent_region_id, name
+			FROM region
+			WHERE ($1 = 0 AND parent_region_id IS NULL) OR region_id = $1
+			UNION ALL
+			SELECT rg.region_id, rg.parent_region_id, rg.name
+			FROM region rg
+			JOIN subtree st ON rg.parent_region_id = st.region_id
+		),
+		counts AS (
+			SELECT srh.region_id, COUNT(*) AS sensor_count
+			FROM sensor_region_history srh
+			WHERE srh.valid_to IS NULL
+			GROUP BY srh.region_id
+		)
+		SELECT st.region_id, st.parent_region_id, st.name,
+		       COALESCE(c.sensor_count, 0)::BIGINT
+		FROM subtree st
+		LEFT JOIN counts c ON c.region_id = st.region_id
+	`, rootRegionID)
+	if err != nil {
+		return nil, fmt.Errorf("query region tree (root %d): %w", rootRegionID, err)
+	}
+	defer rows.Close()
+
+	var regions []RegionTreeRow
+	for rows.Next() {
+		var row RegionTreeRow
+		if err := rows.Scan(&row.RegionID, &row.ParentRegionID, &row.Name, &row.SensorCount); err != nil {
+			return nil, fmt.Errorf("scan region tree row: %w", err)
+		}
+		regions = append(regions, row)
+	}
+	return regions, rows.Err()
 }

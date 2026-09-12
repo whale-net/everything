@@ -3,9 +3,15 @@ package main
 import "sync"
 
 // SensorInfo holds the DB IDs needed to write a sensor_reading row.
+//
+// No region here, deliberately: a reading's region_id is resolved from
+// sensor.region_id at insert time (Repository.InsertReading's INSERT ...
+// SELECT) -- the sensor's *current* placement -- so a PlaceSensor move
+// attributes subsequent readings immediately without waiting for the next
+// manifest (FR8/FR9). A manifest-time cached region would lag behind the
+// placement until the board re-reported it.
 type SensorInfo struct {
 	SensorID int64
-	RegionID *int64 // nil if sensor not yet placed in a region
 }
 
 // SensorCache is an in-memory lookup of registered sensors, keyed by

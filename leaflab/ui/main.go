@@ -276,9 +276,16 @@ func (app *App) setupRoutes(mux *http.ServeMux) {
 	// handleRenameBoard (#1767: FR3) -- owner-only inline board rename,
 	// re-renders the "#board-header" fragment via HTMX.
 	mux.HandleFunc("POST /boards/{board_id}/rename", app.auth.RequireAuthFunc(app.auth.WithAccessToken(app.handleRenameBoard)))
+	// handleSetBoardRegion (#2318: FR10, FR11) -- the recorded-region
+	// set/change/clear control's POST target, re-renders the
+	// "#board-region-card" fragment via HTMX.
+	mux.HandleFunc("POST /boards/{board_id}/region", app.auth.RequireAuthFunc(app.auth.WithAccessToken(app.handleSetBoardRegion)))
 	// handleRenameSensor (#1770: FR4) -- the per-sensor inline rename
 	// form's POST target, rendered only for the board's owner.
 	mux.HandleFunc("POST /sensors/{sensor_id}/rename", app.auth.RequireAuthFunc(app.auth.WithAccessToken(app.handleRenameSensor)))
+	// handlePlaceSensor (#2318: FR7) -- the per-sensor place/move picker's
+	// POST target, rendered only for the board's owner.
+	mux.HandleFunc("POST /sensors/{sensor_id}/place", app.auth.RequireAuthFunc(app.auth.WithAccessToken(app.handlePlaceSensor)))
 	// handleSensorHistory (#1504: FR8, FR9, FR10) -- one sensor's reading
 	// history chart. handleSensorHistoryData is the small JSON endpoint
 	// its chart fetches range data from on every preset click or
@@ -293,6 +300,20 @@ func (app *App) setupRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("/admin/boards", app.auth.RequireAuthFunc(app.auth.WithAccessToken(app.handleAdminBoards)))
 	mux.HandleFunc("POST /admin/boards/{board_id}/reassign", app.auth.RequireAuthFunc(app.auth.WithAccessToken(app.handleReassignBoardOwner)))
 	mux.HandleFunc("POST /admin/boards/{board_id}/clear", app.auth.RequireAuthFunc(app.auth.WithAccessToken(app.handleClearBoardOwner)))
+	// handleRegions/handleRegionDetail (#2317: FR6) -- the regions screen:
+	// the whole forest at "/regions", one region's subtree at
+	// "/regions/{region_id}" (drill-down). Both renders are exactly what
+	// GetRegionTree returned, counts included, nothing recomputed locally.
+	// handleCreateRegion/handleRenameRegion/handleReparentRegion (#2317:
+	// FR1, FR2, FR3, FR5) -- the three write paths' POST targets. Owner
+	// authz is enforced server-side by the backing RPCs (NFR2); RegionTreeNode
+	// carries no ownership signal, so this UI adds no local ownership check
+	// and renders the forms for every region.
+	mux.HandleFunc("/regions", app.auth.RequireAuthFunc(app.auth.WithAccessToken(app.handleRegions)))
+	mux.HandleFunc("/regions/{region_id}", app.auth.RequireAuthFunc(app.auth.WithAccessToken(app.handleRegionDetail)))
+	mux.HandleFunc("POST /regions/create", app.auth.RequireAuthFunc(app.auth.WithAccessToken(app.handleCreateRegion)))
+	mux.HandleFunc("POST /regions/{region_id}/rename", app.auth.RequireAuthFunc(app.auth.WithAccessToken(app.handleRenameRegion)))
+	mux.HandleFunc("POST /regions/{region_id}/reparent", app.auth.RequireAuthFunc(app.auth.WithAccessToken(app.handleReparentRegion)))
 }
 
 func (app *App) handleHealth(w http.ResponseWriter, r *http.Request) {
