@@ -12,6 +12,7 @@ go_library(
     deps = [
         "//krill/mcp/server",
         "//krill/slice",
+        "@com_github_google_jsonschema_go//jsonschema",
         "@com_github_google_uuid//:uuid",
         "@com_github_modelcontextprotocol_go_sdk//mcp",
     ],

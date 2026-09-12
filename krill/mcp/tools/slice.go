@@ -18,7 +18,10 @@ package tools
 
 import (
 	"context"
+	"fmt"
+	"reflect"
 
+	"github.com/google/jsonschema-go/jsonschema"
 	"github.com/google/uuid"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 
@@ -43,13 +46,47 @@ type sliceInput struct {
 // parse/call sequence four times.
 type sliceQueryFunc func(ctx context.Context, id uuid.UUID) (slice.Document, error)
 
+// sliceDocumentOutputSchema is the MCP output schema every FR5-FR8 tool
+// advertises for slice.Document, computed once and shared since all four
+// granularities return the same document type (FR9). It must be set
+// explicitly rather than left to mcp.AddTool's default
+// reflection-based inference: jsonschema-go's jsonschema.ForType walks
+// uuid.UUID's underlying Go kind ([16]byte) and infers JSON schema type
+// "array", but encoding/json's actual marshaling of a uuid.UUID (via its
+// MarshalText method) produces a JSON string. The SDK validates every
+// tool call's real output against whatever schema it advertises, so
+// left to the default, every one of these tools fails its own
+// output-schema validation for any populated document -- issue #2494's
+// Testing-phase defect. This is the same jsonschema-go/uuid.UUID gotcha
+// audience_score_system/mcp/tools/research.go documents on the input
+// side (hence that package declares UUID-carrying input fields as
+// string, not uuid.UUID) -- but LB7 forbids reshaping slice.Document
+// into a bespoke output DTO the way that package reshapes its outputs,
+// so the fix here corrects the advertised schema instead, via
+// jsonschema.ForOptions.TypeSchemas overriding just the uuid.UUID leaf
+// to match its real wire shape.
+var sliceDocumentOutputSchema = mustSliceDocumentOutputSchema()
+
+func mustSliceDocumentOutputSchema() *jsonschema.Schema {
+	s, err := jsonschema.For[slice.Document](&jsonschema.ForOptions{
+		TypeSchemas: map[reflect.Type]*jsonschema.Schema{
+			reflect.TypeFor[uuid.UUID](): {Type: "string"},
+		},
+	})
+	if err != nil {
+		panic(fmt.Errorf("krill/mcp/tools: building slice.Document output schema: %w", err))
+	}
+	return s
+}
+
 // registerSliceTool registers one FR5-FR8 granularity as a read-only MCP
 // tool: parse the caller's id, call query, return the resulting
 // slice.Document unchanged (LB7).
 func registerSliceTool(reg *server.Registry, name, description string, query sliceQueryFunc) {
 	server.RegisterRead(reg, &mcp.Tool{
-		Name:        name,
-		Description: description,
+		Name:         name,
+		Description:  description,
+		OutputSchema: sliceDocumentOutputSchema,
 	}, func(ctx context.Context, _ *mcp.CallToolRequest, in sliceInput) (*mcp.CallToolResult, slice.Document, error) {
 		id, err := uuid.Parse(in.ID)
 		if err != nil {
