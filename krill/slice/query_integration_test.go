@@ -23,12 +23,19 @@
 // Run it explicitly (requires a working Docker daemon):
 //
 //	bazel test //krill/slice:query_integration_test --test_output=all
+//
+// Also covers issue #2493's own Testing bullet ("a slice query at a past
+// as-of assembles from the historical revisions, and its as-of revisions
+// metadata reflects them"): TestGetRequirementSliceAsOf_* and
+// TestGetFeatureSetSliceAsOf_* below, exercising query.go's *AsOf methods
+// against krill/store's real AmendStore/HistoryStore.
 package slice_test
 
 import (
 	"context"
 	"database/sql"
 	"testing"
+	"time"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -358,4 +365,113 @@ func TestQuery_UnknownID_ReturnsNotFound(t *testing.T) {
 
 	_, err = q.GetProductSlice(ctx, unknown)
 	assert.ErrorIs(t, err, store.ErrNotFound)
+}
+
+// dbNow reads pool's own current time -- every as-of boundary below is
+// read off Postgres's clock, never the Go test process's wall clock, for
+// the same reason krill/store/history_integration_test.go's dbNow exists:
+// valid_from/valid_to are both written with Postgres's NOW(), so a
+// Go-side timestamp would be vulnerable to clock skew against a
+// (possibly containerized) database.
+func dbNow(t *testing.T, ctx context.Context, pool *pgxpool.Pool) time.Time {
+	t.Helper()
+	var now time.Time
+	require.NoError(t, pool.QueryRow(ctx, `SELECT NOW()`).Scan(&now))
+	return now
+}
+
+const sliceAsOfStepDelay = 20 * time.Millisecond
+
+// TestGetRequirementSliceAsOf_AssemblesFromHistoricalRevision is issue
+// #2493's own Testing bullet for FR7: GetRequirementSliceAsOf must read
+// through krill/store's HistoryStore rather than always the current row,
+// and the resulting entity's RevisionID ("as-of revisions" metadata, LB7)
+// must be the historical row's, distinct from today's.
+func TestGetRequirementSliceAsOf_AssemblesFromHistoricalRevision(t *testing.T) {
+	ctx := context.Background()
+	entities, pool := newTestStore(t)
+	scopeID := createScope(t, ctx, pool, "whale-net/slice-fr11-asof-test")
+	w := seedWorld(t, ctx, entities, scopeID)
+
+	time.Sleep(sliceAsOfStepDelay)
+	asOf := dbNow(t, ctx, pool)
+	time.Sleep(sliceAsOfStepDelay)
+
+	amended, err := entities.Amend().AmendRequirement(ctx, w.RequirementA1FR.ID, "FR1-amended", strPtr("do the amended thing"))
+	require.NoError(t, err)
+
+	q := slice.NewQuerier(entities)
+
+	historicalDoc, err := q.GetRequirementSliceAsOf(ctx, w.RequirementA1FR.ID, asOf)
+	require.NoError(t, err)
+	require.Len(t, historicalDoc.Requirements, 1)
+	assert.Equal(t, "FR1", historicalDoc.Requirements[0].Name, "an as-of read before the amendment must return the pre-amendment name, not the latest")
+	assert.Equal(t, w.RequirementA1FR.RevisionID, historicalDoc.Requirements[0].RevisionID, "as-of revision must be the original row")
+
+	currentDoc, err := q.GetRequirementSlice(ctx, w.RequirementA1FR.ID)
+	require.NoError(t, err)
+	require.Len(t, currentDoc.Requirements, 1)
+	assert.Equal(t, "FR1-amended", currentDoc.Requirements[0].Name)
+	assert.Equal(t, amended.RevisionID, currentDoc.Requirements[0].RevisionID)
+
+	assert.NotEqual(t, historicalDoc.Requirements[0].RevisionID, currentDoc.Requirements[0].RevisionID,
+		"the as-of document's revision metadata must differ from the current document's -- they must not silently collapse to the same row")
+}
+
+// TestGetRequirementSliceAsOf_BeforeEntityExisted_ReturnsNotFound mirrors
+// HistoryStore's own "as-of predates creation" contract (FR11) through the
+// slice layer.
+func TestGetRequirementSliceAsOf_BeforeEntityExisted_ReturnsNotFound(t *testing.T) {
+	ctx := context.Background()
+	entities, pool := newTestStore(t)
+	scopeID := createScope(t, ctx, pool, "whale-net/slice-fr11-notfound-test")
+
+	beforeCreation := dbNow(t, ctx, pool)
+	time.Sleep(sliceAsOfStepDelay)
+	w := seedWorld(t, ctx, entities, scopeID)
+
+	q := slice.NewQuerier(entities)
+	_, err := q.GetRequirementSliceAsOf(ctx, w.RequirementA1FR.ID, beforeCreation)
+	assert.ErrorIs(t, err, store.ErrNotFound)
+}
+
+// TestGetFeatureSetSliceAsOf_AssemblesFromHistoricalRevisions is the same
+// bullet exercised through a container granularity (FR5): an as-of
+// FeatureSet slice must carry its Requirements' pre-amendment revisions,
+// and an as-of read from before the FeatureSet itself existed must be
+// not-found.
+func TestGetFeatureSetSliceAsOf_AssemblesFromHistoricalRevisions(t *testing.T) {
+	ctx := context.Background()
+	entities, pool := newTestStore(t)
+	scopeID := createScope(t, ctx, pool, "whale-net/slice-fr11-featureset-asof-test")
+
+	beforeCreation := dbNow(t, ctx, pool)
+	time.Sleep(sliceAsOfStepDelay)
+
+	w := seedWorld(t, ctx, entities, scopeID)
+
+	time.Sleep(sliceAsOfStepDelay)
+	asOf := dbNow(t, ctx, pool)
+	time.Sleep(sliceAsOfStepDelay)
+
+	_, err := entities.Amend().AmendRequirement(ctx, w.RequirementA1FR.ID, "FR1-amended", strPtr("do the amended thing"))
+	require.NoError(t, err)
+
+	q := slice.NewQuerier(entities)
+
+	doc, err := q.GetFeatureSetSliceAsOf(ctx, w.FeatureSetA.ID, asOf)
+	require.NoError(t, err)
+
+	var gotFR *slice.RequirementEntity
+	for i := range doc.Requirements {
+		if doc.Requirements[i].ID == w.RequirementA1FR.ID {
+			gotFR = &doc.Requirements[i]
+		}
+	}
+	require.NotNil(t, gotFR, "the amended requirement must still appear in an as-of slice taken before its amendment")
+	assert.Equal(t, "FR1", gotFR.Name, "an as-of slice must carry the pre-amendment revision, not today's")
+	assert.Equal(t, w.RequirementA1FR.RevisionID, gotFR.RevisionID)
+
+	_, err = q.GetFeatureSetSliceAsOf(ctx, w.FeatureSetA.ID, beforeCreation)
+	assert.ErrorIs(t, err, store.ErrNotFound, "an as-of read before the FeatureSet existed must be not-found")
 }
