@@ -57,3 +57,43 @@ go_test(
         "@com_github_stretchr_testify//require",
     ],
 )
+
+# Real-Postgres integration coverage for GetEntitySetSlice (issue #2544,
+# krill M2, FR5: the fifth granularity), reusing query_integration_test.go's
+# newTestStore/createScope/seedWorld harness rather than duplicating it --
+# both files build under package slice_test with the "integration" gotag,
+# so they compile as one test binary. Same "NOT part of `bazel test //...`"
+# rationale as query_integration_test above.
+#
+# Run it explicitly (requires a working Docker daemon):
+#   bazel test //krill/slice:entity_set_query_integration_test --test_output=all
+go_test(
+    name = "entity_set_query_integration_test",
+    size = "large",
+    timeout = "long",
+    srcs = [
+        "entity_set_query_integration_test.go",
+        "query_integration_test.go",
+    ],
+    gotags = ["integration"],
+    tags = [
+        "external",
+        "integration",
+        "manual",
+        "no-cache",
+        "no-sandbox",
+        "requires-network",
+    ],
+    deps = [
+        ":slice",
+        "//krill/migrate/schema",
+        "//krill/store",
+        "//libs/go/dbtest",
+        "//libs/go/migrate",
+        "@com_github_google_uuid//:uuid",
+        "@com_github_jackc_pgx_v5//pgxpool",
+        "@com_github_jackc_pgx_v5//stdlib",
+        "@com_github_stretchr_testify//assert",
+        "@com_github_stretchr_testify//require",
+    ],
+)
