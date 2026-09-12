@@ -60,7 +60,7 @@ func (s decisionStore) Create(ctx context.Context, scopeID, featureSetID uuid.UU
 	}
 	defer tx.Rollback(ctx)
 
-	exists, err := currentRowExists(ctx, tx, "feature_set", featureSetID)
+	exists, err := currentRowExists(ctx, tx, "feature_set", featureSetID, scopeID)
 	if err != nil {
 		return LoadBearingDecision{}, err
 	}

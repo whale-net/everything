@@ -48,7 +48,7 @@ func (s personaStore) Create(ctx context.Context, scopeID, productID uuid.UUID, 
 	}
 	defer tx.Rollback(ctx)
 
-	exists, err := currentRowExists(ctx, tx, "product", productID)
+	exists, err := currentRowExists(ctx, tx, "product", productID, scopeID)
 	if err != nil {
 		return Persona{}, err
 	}
