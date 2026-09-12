@@ -82,6 +82,16 @@ func Import(ctx context.Context, st *store.Store, sessions store.SessionStore, s
 		return nil, fmt.Errorf("import %s: %w", rootPath, err)
 	}
 
+	// FR11 item 2 (issue #2549): attach completeness accounting to the
+	// report before it is ever returned, so a caller (cmd/main.go's
+	// --allow-unmapped gate) always sees coverage alongside the entity-id
+	// list -- never a report that only Render()s the happy-path entries.
+	coverage, err := ComputeCoverage(rootPath, parsed)
+	if err != nil {
+		return nil, fmt.Errorf("import %s: compute coverage: %w", rootPath, err)
+	}
+	report.Coverage = coverage
+
 	// Not inside write()'s own transaction(s): write() issues one Create
 	// call per entity, each in its own transaction (see write.go), so
 	// there is no single write-path transaction for this to join. Record

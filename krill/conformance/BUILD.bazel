@@ -20,6 +20,13 @@ load("@rules_go//go:def.bzl", "go_test")
 # exist. See krill/ARCHITECTURE.md "The design skill's live milestone read
 # (FR21)".
 #
+# whagent_net_import_integration_test.go (issue #2549, FR11) shares this
+# target too: it imports whagent_net's real, committed brief (data deps
+# //whagent_net:docs, //whagent_net/product:docs, located via runfiles the
+# same way krillDocsRoot locates krill's own) -- the first product krill
+# holds that krill did not author -- and proves the FR11 entity-id report
+# accounts for every source item, with no content lost across the import.
+#
 # Run the round-trip tests explicitly (requires a working Docker daemon):
 #   bazel test //krill/conformance:roundtrip_integration_test --test_output=all
 #
@@ -35,10 +42,13 @@ go_test(
     srcs = [
         "design_milestone_query_integration_test.go",
         "roundtrip_integration_test.go",
+        "whagent_net_import_integration_test.go",
     ],
     data = [
         "//krill:docs",
         "//krill/product:docs",
+        "//whagent_net:docs",
+        "//whagent_net/product:docs",
     ] + glob(["testdata/**"]),
     gotags = ["integration"],
     tags = [

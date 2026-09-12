@@ -13,6 +13,14 @@
 // parsing anything (importer.ErrAlreadyImported) -- FR12's one-time,
 // one-way guarantee.
 //
+// --allow-unmapped (FR11, issue #2549) acknowledges a partial import: by
+// default, any recognized-but-unmapped item the report's Coverage section
+// names (importer.Report.UnmappedTotal) makes run() fail with a non-zero
+// exit, per AGENTS.md's logging levels an unacknowledged partial import is
+// an ERROR, not a WARNING. Passing --allow-unmapped downgrades that to a
+// logged WARNING and lets the run succeed anyway -- an Operator/Admin must
+// opt into "trust this partial import," never get one silently.
+//
 // Usage:
 //
 //	bazel run //krill/importer/cmd:import -- --path krill --session-id <uuid> --source-revision <sha>
@@ -22,6 +30,7 @@ import (
 	"context"
 	"flag"
 	"fmt"
+	"log/slog"
 	"os"
 
 	"github.com/google/uuid"
@@ -42,6 +51,7 @@ func run() error {
 	path := flag.String("path", "", "root directory of the product's PRODUCT.md + product/*.md doc set (required)")
 	sessionIDFlag := flag.String("session-id", "", "krill session id minted by POST /sessions/init (required, FR3)")
 	sourceRevision := flag.String("source-revision", "", "repo commit SHA --path was imported from (required, FR12/NFR3: krill does not shell out to git to discover this)")
+	allowUnmapped := flag.Bool("allow-unmapped", false, "acknowledge a partial import: proceed (logged at WARNING) even if the report's coverage section names recognized-but-unmapped items (FR11); without this flag, any unmapped item is a non-zero exit")
 	databaseURL := flag.String("database-url", os.Getenv("PG_DATABASE_URL"), "Postgres connection string (defaults to PG_DATABASE_URL, then //libs/go/db's own fallback)")
 	flag.Parse()
 
@@ -75,5 +85,13 @@ func run() error {
 	}
 
 	fmt.Print(report.Render())
+
+	if unmapped := report.UnmappedTotal(); unmapped > 0 {
+		if !*allowUnmapped {
+			return fmt.Errorf("import %s: %d unmapped item(s) in the coverage section above -- rerun with --allow-unmapped to acknowledge and proceed (FR11)", *path, unmapped)
+		}
+		slog.Warn("import proceeded with unmapped items", "path", *path, "unmapped_count", unmapped)
+	}
+
 	return nil
 }

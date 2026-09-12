@@ -634,6 +634,34 @@ not a flag flip. NFR3's one-way guarantee: `source_path` and
 and the caller (not krill) supplies `source_revision` (`--source-revision`
 on `krill/importer/cmd`) so krill never shells out to git.
 
+### Completeness accounting and the whagent_net import (M2's FR11, issue #2549)
+
+`whagent_net` is the first product krill holds that krill did not
+author (C27's adoption proof) — every other imported doc set to date
+(krill's own self-import, FR18/FR19) is krill's own brief. Its doc set
+(`whagent_net/PRODUCT.md` + `whagent_net/product/*.md`) already matches
+the layout `parse.go` expects; no parser change was needed (confirmed
+against the real files, not assumed — see
+`krill/importer/importer_integration_test.go`'s
+`TestParse_WhagentNetFixture_ParsesWithoutImporting`, which now also pins
+exact per-section counts, not just non-emptiness).
+
+FR11's harder half — "confirmation that nothing was lost in that import" —
+is `krill/importer/coverage.go`'s `ComputeCoverage`, attached to every
+`Report` as `Report.Coverage` (`report.go`) alongside FR16's entity-id
+entries. `cmd/main.go`'s `--allow-unmapped` flag gates it: any non-zero
+`Report.UnmappedTotal()` fails the run (non-zero exit) unless the caller
+passes `--allow-unmapped`, which downgrades the failure to a logged
+WARNING per `AGENTS.md`'s logging levels (a deliberate, acknowledged
+partial import is "the system had to adjust something to keep going," not
+an ERROR — an unacknowledged one is). See `krill/README.md` "Importing
+whagent_net's brief" for the runbook and `krill/conformance/
+whagent_net_import_integration_test.go` for the completeness proof (FR11
+item 3): every reported entity id is looked up through
+`slice.Querier.GetProductSlice` (or the relevant store getter) and its
+content compared against the source text, not merely checked for
+presence.
+
 ## Amend and as-of history reads (FR11, FR12, issue #2493)
 
 `krill/store/amend.go` (write) and `krill/store/history.go` (read) are the
