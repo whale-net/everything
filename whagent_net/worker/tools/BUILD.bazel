@@ -73,7 +73,19 @@ go_test(
 
 go_test(
     name = "tools_test",
-    srcs = ["allowlist_test.go"],
+    srcs = [
+        "allowlist_test.go",
+        "dispatch_test.go",
+    ],
     embed = [":tools"],
-    deps = ["@com_github_stretchr_testify//assert"],
+    deps = [
+        "//libs/go/whagent",
+        "//whagent_net/api/persona",
+        "//whagent_net/llm",
+        "//whagent_net/session",
+        "@com_github_google_uuid//:uuid",
+        "@com_github_modelcontextprotocol_go_sdk//mcp",
+        "@com_github_stretchr_testify//assert",
+        "@com_github_stretchr_testify//require",
+    ],
 )

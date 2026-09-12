@@ -12,7 +12,8 @@
 //
 //   - client.go -- the MCP client transport half: Connect (a streamable-
 //     HTTP mcp.ClientSession authenticated with a bearer credential),
-//     ListToolNames (FR8's server-exposed tool set), and CallTool.
+//     ListTools (FR8's server-exposed tool set, keyed by name) plus
+//     acceptsIdempotencyKey (FR11's read/write signal), and CallTool.
 //   - keys.go -- the two "keys" every dispatched call carries:
 //     idempotencyKey (FR11, wrapping whagent.DeriveIdempotencyKey) and
 //     mintCredential (FR10, wrapping persona.Issuer.Issue).
@@ -55,6 +56,15 @@
 // returns the recorded result instead of re-executing the mutation. The
 // domain server's own idempotency guard (scoped on (tool, resolved
 // identity, key), whagent.IdempotencyGuardScope) is independent by design.
+//
+// "Every mutating call" is enforced by checking the resolved tool's own
+// InputSchema (client.go's acceptsIdempotencyKey) before attaching the
+// key to args -- a read tool's schema never declares
+// whagent.IdempotencyKeyArgument as a property, and (per the domain
+// server's RegisterRead-generated schema) typically sets
+// additionalProperties: false, so attaching the key unconditionally to
+// every call would make every read tool call fail schema validation
+// server-side rather than merely being ignored.
 //
 // # isError is not a whagent-net failure (FR2)
 //
@@ -177,7 +187,7 @@ func (d *Dispatcher) Dispatch(ctx context.Context, in DispatchInput) (Result, er
 		return Result{}, fmt.Errorf("tools: Dispatcher.Issuer is nil")
 	}
 
-	serverURL, cs, err := resolveTarget(ctx, d.Issuer, in)
+	serverURL, cs, tool, err := resolveTarget(ctx, d.Issuer, in)
 	if err != nil {
 		return Result{}, err
 	}
@@ -212,12 +222,15 @@ func (d *Dispatcher) Dispatch(ctx context.Context, in DispatchInput) (Result, er
 	if err != nil {
 		return Result{}, fmt.Errorf("tools: decode arguments for call %q: %w", in.Call.Name, err)
 	}
-	// Every dispatched call carries idempotency_key as a top-level argument
-	// (FR11, LB4) -- Dispatch has no principled way to know which of a
-	// server's tools mutate state (that classification is the domain
-	// server's own, via whagent.IdempotencyKeyed), so this is attached
-	// unconditionally; a read-only tool's handler simply never looks at it.
-	args[whagent.IdempotencyKeyArgument] = key
+	// A write tool's InputSchema declares idempotency_key as a property
+	// (the domain server's own IdempotencyKeyed classification, reflected
+	// into its generated schema); a read tool's does not, and typically
+	// rejects an unexpected property outright (additionalProperties:
+	// false) rather than silently ignoring it. So the key is attached only
+	// when the resolved tool's schema actually expects it (FR11, LB4).
+	if acceptsIdempotencyKey(tool) {
+		args[whagent.IdempotencyKeyArgument] = key
+	}
 
 	callRes, err := CallTool(ctx, cs, in.Call.Name, args)
 	if err != nil {
@@ -250,16 +263,17 @@ func (d *Dispatcher) Dispatch(ctx context.Context, in DispatchInput) (Result, er
 // resolveTarget finds which entry of in.ToolSet exposes in.Call.Name
 // (FR8), mints a persona credential scoped to exactly that one server
 // (FR10, keys.go's mintCredential), and returns an authenticated,
-// connected *mcp.ClientSession to it -- the caller owns the returned
-// session's lifecycle (Close). A call naming a tool no configured server
-// exposes, or that a matching server exposes but this ref's AllowedTools
-// excludes (C22, allowlist.go's isAllowed), returns an error before any
-// CallTool is ever issued against any server -- this is where FR8's "a
-// tool the server does not expose is not callable" (and now C22's "the
-// agent definition does not allow it") is actually enforced. A credential
-// is minted (and a connection opened) for each server tried, in
+// connected *mcp.ClientSession to it plus the matched *mcp.Tool itself (so
+// Dispatch can decide whether it expects an idempotency_key, FR11) -- the
+// caller owns the returned session's lifecycle (Close). A call naming a
+// tool no configured server exposes, or that a matching server exposes but
+// this ref's AllowedTools excludes (C22, allowlist.go's isAllowed), returns
+// an error before any CallTool is ever issued against any server -- this is
+// where FR8's "a tool the server does not expose is not callable" (and now
+// C22's "the agent definition does not allow it") is actually enforced. A
+// credential is minted (and a connection opened) for each server tried, in
 // in.ToolSet order, and is never reused across servers.
-func resolveTarget(ctx context.Context, issuer *persona.Issuer, in DispatchInput) (string, *mcp.ClientSession, error) {
+func resolveTarget(ctx context.Context, issuer *persona.Issuer, in DispatchInput) (string, *mcp.ClientSession, *mcp.Tool, error) {
 	for _, ref := range in.ToolSet {
 		if !isAllowed(in.Call.Name, ref.AllowedTools) {
 			continue
@@ -267,26 +281,26 @@ func resolveTarget(ctx context.Context, issuer *persona.Issuer, in DispatchInput
 
 		token, err := mintCredential(ctx, issuer, in.Session, in.AgentID, ref.ServerURL)
 		if err != nil {
-			return "", nil, fmt.Errorf("tools: mint credential for %s: %w", ref.ServerURL, err)
+			return "", nil, nil, fmt.Errorf("tools: mint credential for %s: %w", ref.ServerURL, err)
 		}
 
 		cs, err := Connect(ctx, ref.ServerURL, token)
 		if err != nil {
-			return "", nil, fmt.Errorf("tools: connect to %s: %w", ref.ServerURL, err)
+			return "", nil, nil, fmt.Errorf("tools: connect to %s: %w", ref.ServerURL, err)
 		}
 
-		names, err := ListToolNames(ctx, cs)
+		byName, err := ListTools(ctx, cs)
 		if err != nil {
 			cs.Close()
-			return "", nil, fmt.Errorf("tools: list tools on %s: %w", ref.ServerURL, err)
+			return "", nil, nil, fmt.Errorf("tools: list tools on %s: %w", ref.ServerURL, err)
 		}
 
-		if _, ok := names[in.Call.Name]; ok {
-			return ref.ServerURL, cs, nil
+		if tool, ok := byName[in.Call.Name]; ok {
+			return ref.ServerURL, cs, tool, nil
 		}
 		cs.Close()
 	}
-	return "", nil, fmt.Errorf("tools: call %q: no configured server exposes this tool", in.Call.Name)
+	return "", nil, nil, fmt.Errorf("tools: call %q: no configured server exposes this tool", in.Call.Name)
 }
 
 // decodeArguments decodes a tool call's raw JSON arguments (llm.ToolCall.

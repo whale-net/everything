@@ -2,10 +2,13 @@ package tools
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"net/http"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
+
+	"github.com/whale-net/everything/libs/go/whagent"
 )
 
 // clientName/clientVersion identify worker's MCP client identity to a
@@ -62,22 +65,55 @@ func Connect(ctx context.Context, serverURL, token string) (*mcp.ClientSession, 
 	return cs, nil
 }
 
-// ListToolNames returns the set of tool names cs's server exposes (FR8) --
+// ListTools returns cs's server-exposed tools keyed by name (FR8) --
 // callers apply their own ref-specific AllowedTools narrowing on top of
-// this (C22, allowlist.go's isAllowed); ListToolNames itself has no
+// this (C22, allowlist.go's isAllowed); ListTools itself has no
 // ToolServerRef to filter against and returns the server's full exposed
-// set verbatim. See this package's doc comment (dispatch.go, "Tool
-// selection") for the combined server + whagent-side filter.
-func ListToolNames(ctx context.Context, cs *mcp.ClientSession) (map[string]struct{}, error) {
+// set verbatim. Returning the full *mcp.Tool (not just the name) also lets
+// resolveTarget inspect a matched tool's InputSchema via
+// acceptsIdempotencyKey below. See this package's doc comment (dispatch.go,
+// "Tool selection") for the combined server + whagent-side filter.
+func ListTools(ctx context.Context, cs *mcp.ClientSession) (map[string]*mcp.Tool, error) {
 	res, err := cs.ListTools(ctx, nil)
 	if err != nil {
 		return nil, fmt.Errorf("tools: list tools: %w", err)
 	}
-	names := make(map[string]struct{}, len(res.Tools))
+	byName := make(map[string]*mcp.Tool, len(res.Tools))
 	for _, t := range res.Tools {
-		names[t.Name] = struct{}{}
+		byName[t.Name] = t
 	}
-	return names, nil
+	return byName, nil
+}
+
+// acceptsIdempotencyKey reports whether tool's InputSchema declares
+// whagent.IdempotencyKeyArgument as a property -- the client-side signal
+// that tool is one of the domain server's write tools expecting FR11's
+// idempotency_key argument (see audience_score_system/mcp/server/
+// registry.go's RegisterWrite and IdempotencyKeyed: only a write tool's
+// input type implements that interface and gets the field in its
+// generated schema). dispatch.go's Dispatch uses this to decide whether to
+// attach the key at all -- a read tool's schema has no such property and,
+// per its RegisterRead-generated schema's additionalProperties: false,
+// rejects the call outright if an unexpected key is attached anyway.
+// InputSchema arrives as whatever shape the transport decoded it into
+// (typically map[string]any from JSON), so this round-trips through
+// encoding/json rather than assuming a concrete Go type.
+func acceptsIdempotencyKey(tool *mcp.Tool) bool {
+	if tool == nil || tool.InputSchema == nil {
+		return false
+	}
+	raw, err := json.Marshal(tool.InputSchema)
+	if err != nil {
+		return false
+	}
+	var schema struct {
+		Properties map[string]json.RawMessage `json:"properties"`
+	}
+	if err := json.Unmarshal(raw, &schema); err != nil {
+		return false
+	}
+	_, ok := schema.Properties[whagent.IdempotencyKeyArgument]
+	return ok
 }
 
 // CallTool invokes name on cs's server with args, returning the domain
