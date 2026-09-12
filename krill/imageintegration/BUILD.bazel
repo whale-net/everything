@@ -1,0 +1,56 @@
+load("@rules_go//go:def.bzl", "go_test")
+
+# Plain, always-on part of `bazel test //krill/...` -- no Docker/QEMU
+# needed. See chart_metadata_test.go.
+go_test(
+    name = "imageintegration_test",
+    size = "small",
+    srcs = ["chart_metadata_test.go"],
+    data = ["//krill:krill_chart_chart_metadata"],
+    deps = ["@rules_go//go/runfiles"],
+)
+
+# NFR2 (issue #2499): runtime proof that krill's migrate/api/mcp binaries
+# actually run under both platforms krill ships images for -- not just
+# that they build. See docs/DOCKER.md: ARM64 cross-compilation breakage is
+# silent at build time and only fails at runtime.
+#
+# Tags mirror //libs/go/dbtest:postgres_constraints_test (this test also
+# needs a live Docker daemon, via dbtest's testcontainers-go Postgres),
+# plus "image-integration" so it is picked up the same way
+# //tools/scripts:test_cross_compilation is (see tools/BUILD.bazel's
+# test_cross_compilation test_suite and docs/DOCKER.md).
+#
+# Run it explicitly (needs Docker + arm64 QEMU emulation registered via
+# binfmt_misc -- e.g. `docker run --rm --privileged
+# multiarch/qemu-user-static --reset -p yes`, or CI's
+# docker/setup-qemu-action):
+#   bazel test //krill/imageintegration:image_integration_test \
+#     --test_tag_filters=-manual --test_output=all
+go_test(
+    name = "image_integration_test",
+    size = "large",
+    timeout = "long",
+    srcs = ["image_integration_test.go"],
+    data = [
+        "//krill/api:api_image",
+        "//krill/mcp:mcp_image",
+        "//krill/migrate:migrate_image",
+    ],
+    gotags = ["integration"],
+    tags = [
+        "external",
+        "image-integration",
+        "integration",
+        "manual",
+        "no-cache",
+        "no-sandbox",
+        "requires-network",
+    ],
+    deps = [
+        "//libs/go/dbtest",
+        "@com_github_google_go_containerregistry//pkg/v1:go_default_library",
+        "@com_github_google_go_containerregistry//pkg/v1/layout:go_default_library",
+        "@rules_go//go/runfiles",
+    ],
+)

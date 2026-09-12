@@ -651,6 +651,59 @@ Feature, so it is unreachable from `GetFeatureSetSlice`/`GetFeatureSlice`/
 the `EntityRef`/`RevisionID` pair every other slice entity carries —
 `pointer_artifact` is not SCD2 (LB3), so there is no revision to expose.
 
+## Cross-compilation and image-integration validation (NFR2, issue #2499)
+
+krill is the first krill-domain Go binary set to actually run
+`image-integration` for itself (see docs/DOCKER.md's cross-compilation
+warning) rather than assuming the `whagent_net`/`audience_score_system`
+template covers it by inheritance. `krill/imageintegration` (a package with
+no non-test `.go` files, only two `go_test` targets) is the result:
+
+- `imageintegration_test` (no special tags): reads the actual generated
+  `krill_chart_chart_metadata.json` (not `krill/BUILD.bazel`'s source text)
+  and asserts the chart identity is `helm-krill-krill` and lists all three
+  M1 binaries. Fast, needs no Docker, runs as a normal part of `bazel test
+  //krill/...`.
+- `image_integration_test` (`manual`/`no-sandbox`/`no-cache`/`external`/
+  `requires-network`/`image-integration`, mirroring
+  `//libs/go/dbtest:postgres_constraints_test`'s tags): for each of
+  `linux/amd64` and `linux/arm64`, extracts the real `migrate`/`api`/`mcp`
+  binaries straight out of the built OCI image index using
+  `go-containerregistry`'s `layout` package (the same multiplatform
+  artifact `//tools:release` pushes), and actually runs them — `migrate up`
+  against a real Postgres (via `//libs/go/dbtest`) twice, asserting the
+  second run is a genuine no-op; `api`'s `/healthz`; and `mcp`'s `/healthz`
+  plus a real `POST /mcp/spec` `initialize` handshake. A build-only check
+  (e.g. inspecting the ELF header's `e_machine` field) would not catch what
+  docs/DOCKER.md warns about — arm64 breakage is silent at build time and
+  only surfaces at runtime.
+
+**The finding that generalizes beyond krill (now in docs/DOCKER.md too):**
+krill's Go binaries are `CGO_ENABLED=0` and statically linked (every
+`go_binary` in `krill/*/BUILD.bazel`), so once extracted from their image
+layer they can be exec'd directly with no base-image libc dependency. That
+means the *binary itself* needs no Docker at all to runtime-test
+cross-platform — only `binfmt_misc` needs `qemu-aarch64` registered (CI:
+`docker/setup-qemu-action`, wired into `.github/actions/setup-build-env`'s
+new `setup-qemu` input, enabled on the `test-database` job; locally:
+`docker run --rm --privileged multiarch/qemu-user-static --reset -p yes`).
+Docker is still needed here only because `//libs/go/dbtest` starts a real
+Postgres via testcontainers-go — a domain with no such dependency could
+runtime-test its arm64 binary with no Docker daemon at all. This is a
+strictly cheaper and more portable pattern than loading the image into
+Docker and `docker run --platform`-ing it (which this task's manual
+verification also confirmed works, but is not what the checked-in test
+does).
+
+**CI wiring:** `//krill/...` was not in `test-database`'s discovery
+`SCOPE` (`.github/workflows/ci.yml`) before this task — every one of
+krill's existing `dbtest`-backed integration tests (`krill/store`,
+`krill/conformance`, `krill/importer`, etc.) was silently never run in CI.
+Adding krill to `SCOPE` fixed that for the whole domain, not just this
+task's own new test; `rdeps(SCOPE, //libs/go/dbtest:dbtest)` picks
+`image_integration_test` up the same way it already covers every other
+domain's Postgres-backed integration tests.
+
 ## Open items
 
 - The HTTP surface over the spec entity model covers create/attach, amend,

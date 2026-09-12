@@ -334,6 +334,11 @@ jobs:
       with:
         cache-suffix: 'ci'
         setup-docker: 'true'
+        # krill's image_integration_test (issue #2499, NFR2) runs real
+        # arm64 binaries extracted from krill's OCI images, discovered
+        # below via its //libs/go/dbtest dependency -- it needs binfmt_misc
+        # registered for that exec to work on this amd64 runner.
+        setup-qemu: 'true'
         bazel-remote-cache-url: ${{ secrets.BAZEL_REMOTE_CACHE_URL || vars.BAZEL_REMOTE_CACHE_URL }}
         bazel-remote-cache-user: ${{ secrets.BAZEL_REMOTE_CACHE_USER || vars.BAZEL_REMOTE_CACHE_USER }}
         bazel-remote-cache-password: ${{ secrets.BAZEL_REMOTE_CACHE_PASSWORD || vars.BAZEL_REMOTE_CACHE_PASSWORD }}
@@ -349,7 +354,13 @@ jobs:
         #
         # Uses --config=ci (defined in .bazelrc with --noimplicit_deps) and
         # --universe_scope to accelerate target discovery.
-        SCOPE='//libs/... + //tools/... + //manmanv2/... + //audience_score_system/...'
+        #
+        # //krill/... is included so krill/imageintegration:image_integration_test
+        # (issue #2499, NFR2 -- krill's own image-integration validation
+        # rather than inheriting whagent_net/audience_score_system's) is
+        # picked up automatically by the same rdeps(dbtest) discovery every
+        # other domain's Postgres-backed integration test uses.
+        SCOPE='//libs/... + //tools/... + //manmanv2/... + //audience_score_system/... + //krill/...'
         CANDIDATES="(tests($SCOPE) intersect rdeps($SCOPE, //libs/go/dbtest:dbtest)) union //libs/go/s3:s3_integration_test"
         ALL_TARGETS=$(bazel query \
           --config=ci \

@@ -9,6 +9,16 @@ inputs:
     description: 'Whether to setup Docker Buildx'
     required: false
     default: 'false'
+  setup-qemu:
+    description: >-
+      Whether to register QEMU user-mode emulation (binfmt_misc) so
+      `docker run --platform linux/arm64` and directly exec'd arm64
+      binaries work on this amd64 runner. Needed by krill's
+      image-integration test (issue #2499) and any future container-backed
+      test that runs a real cross-compiled arm64 binary, not just inspects
+      its bytes -- see docs/DOCKER.md.
+    required: false
+    default: 'false'
   cache-suffix:
     description: 'Suffix to add to cache keys for isolation'
     required: false
@@ -118,3 +128,9 @@ runs:
     - name: Set up Docker Buildx
       if: ${{ inputs.setup-docker == 'true' }}
       uses: docker/setup-buildx-action@v3
+
+    - name: Set up QEMU (arm64 user-mode emulation)
+      if: ${{ inputs.setup-qemu == 'true' }}
+      uses: docker/setup-qemu-action@v3
+      with:
+        platforms: arm64

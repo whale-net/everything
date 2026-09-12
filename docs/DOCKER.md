@@ -74,6 +74,53 @@ bazel run //tools:release -- build hello-python
 - **Platforms**: Full support for both `linux/amd64` and `linux/arm64`
 - **Cross-compilation**: Automatically handles platform-specific builds
 
+## Runtime Cross-Compilation Validation (not just a build check)
+
+A successful `bazel build` of an arm64 image proves nothing about whether
+the binary inside it actually runs — that's exactly what makes ARM64
+cross-compilation breakage silent at build time (see the warning at the
+top of this doc). Actually running the arm64 artifact, not just building
+it, is what an `image-integration` test must do.
+
+**Go binaries built with `CGO_ENABLED=0` (the default for every `go_binary`
+release image in this repo) are statically linked**, so once you have the
+compiled binary in hand, running it cross-arch needs no Docker container
+and no base-image libc at all — only `binfmt_misc` needs `qemu-aarch64`
+registered on the host:
+
+```bash
+# One-time per host/CI runner (idempotent):
+docker run --rm --privileged multiarch/qemu-user-static --reset -p yes
+# In GitHub Actions, use docker/setup-qemu-action instead -- wired into
+# this repo's .github/actions/setup-build-env as the setup-qemu input.
+
+# Now an arm64 ELF just... runs, transparently emulated:
+bazel build //some/domain:some_binary --platforms=//tools:linux_arm64
+bazel-bin/some/domain/some_binary_/some_binary --help
+```
+
+For a binary that ships as a release image rather than a plain
+`go_binary`, extract it straight out of the built `oci_image_index`
+(`google/go-containerregistry`'s `pkg/v1/layout` package can open the OCI
+layout directory and walk to a specific platform's manifest/layers) instead
+of `docker load`-ing it — this sidesteps the `_load` target's `--platforms`
+flag entirely, since `oci_image_index`'s own `platforms` attribute already
+builds every platform in a single invocation. See
+`krill/imageintegration/image_integration_test.go` (issue #2499) for a
+worked example: it extracts `migrate`/`api`/`mcp` for both platforms this
+way and runs each one for real (a live Postgres migration, an HTTP
+`/healthz`, an MCP handshake) rather than just inspecting the ELF header's
+architecture field.
+
+A domain whose binary talks to Postgres or another dockerized dependency
+still needs a live Docker daemon for *that* — Docker itself is not needed
+to exec the cross-compiled binary, only for whatever it talks to. Tag such
+a test the same way `//libs/go/dbtest:postgres_constraints_test` does
+(`manual`, `no-sandbox`, `no-cache`, `external`, `requires-network`) plus
+`image-integration`, and see `krill/ARCHITECTURE.md` "Cross-compilation and
+image-integration validation" for how it gets discovered and run in CI
+without being hardcoded into a target list.
+
 ## Container Image Naming Convention
 
 All container images follow the `<domain>-<app>:<version>` format:
