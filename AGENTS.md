@@ -9,6 +9,27 @@
 - Do not patch production environments — rely on release actions and human inputs.
 - Read relevant docs before falling back to search or bash exploration.
 
+## Finishing a Task
+
+When you finish a task, tell the user exactly how to verify it themselves:
+the Bazel commands to run, the inputs to provide, or the steps to reproduce.
+Prefer verification that a human should perform directly (concrete manual
+behavior checks) over only listing test commands. Don't leave the user
+guessing how to confirm the result — tell them exactly what to do.
+
+## Code Comments
+
+Keep comments short and focused on the code, not on the change history.
+
+- **Brief** — one or two lines; avoid more than three. If you need more, the
+  code likely needs refactoring or a doc string, not a wall of inline
+  commentary.
+- **Describe the scenario, not the change** — explain *what* the code
+  handles or *why* it exists, in terms a future reader needs. Don't
+  reference PR numbers, issue numbers, or ticket IDs (`#1646`,
+  `fixes JIRA-123`) — the scenario should be clear without chasing external
+  links.
+
 ## Logging Levels
 
 Use these levels consistently across all code (Go, Python, etc.) — they signal severity to on-call humans and downstream alerting, so don't pick one by feel:
@@ -140,30 +161,9 @@ Priority order when these pull against each other: an algorithmic, agent-navigab
 
 Do not use synonyms (`assigned_at`/`unassigned_at`, `start_at`/`end_at`, etc.).
 
-**Write path — close and open:**
-```sql
-UPDATE <table> SET valid_to = NOW() WHERE <entity_id> = $1 AND valid_to IS NULL;
-INSERT INTO <table> (<entity_id>, <data_cols>) VALUES ($1, $2);
-```
+**Do not apply SCD2 to** append-only event logs or soft-delete tables — those have different semantics. If a table needs a SCD2-shaped view over it, derive one with a window function (`LEAD(valid_from) OVER (PARTITION BY entity_id ORDER BY version)`) instead of adding real `valid_to` writes.
 
-**Current value:**
-```sql
-SELECT * FROM <table> WHERE <entity_id> = $1 AND valid_to IS NULL;
-```
-Always back this with a partial index: `CREATE INDEX ON <table>(<entity_id>) WHERE valid_to IS NULL`.
-
-**Value at time T** (e.g. joining a fact table to a history table at event time):
-```sql
-SELECT * FROM <table>
-WHERE <entity_id> = $1
-  AND valid_from <= $t
-  AND (valid_to IS NULL OR valid_to > $t);
--- Example: leaflab's v_sensor_reading_with_plant joins plants active at recorded_at this way.
-```
-
-**Do not apply SCD2 to** append-only event logs or soft-delete tables — those have different semantics. If a table needs a SCD2-shaped view over it, derive one with a window function (`LEAD(valid_from) OVER (PARTITION BY entity_id ORDER BY version)`).
-
-**Views:** Pre-join SCD2 history tables in `v_` views so downstream consumers (dashboards, APIs) never replicate the join logic. See `leaflab/` for a worked example.
+For the close-and-open write path, current-value/point-in-time query patterns, the partial-index convention, and worked examples, see the `architecture-scd2` skill (`docs/skills/architecture-scd2/SKILL.md`, symlinked into `.claude/skills/`).
 
 ## GitHub Labels
 
