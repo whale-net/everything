@@ -154,13 +154,45 @@ func (s revisionEventStore) Append(ctx context.Context, e NewRevisionEvent) (Rev
 		return RevisionEvent{}, err
 	}
 
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return RevisionEvent{}, fmt.Errorf("begin tx: %w", err)
+	}
+	defer tx.Rollback(ctx) //nolint:errcheck
+
+	ev, err := appendRevisionEventTx(ctx, tx, e)
+	if err != nil {
+		return RevisionEvent{}, err
+	}
+
+	if err := tx.Commit(ctx); err != nil {
+		return RevisionEvent{}, fmt.Errorf("commit: %w", err)
+	}
+	return ev, nil
+}
+
+// appendRevisionEventTx is Append's per-transaction body, factored out so
+// mediated.go's ProposeEntities (issue #2546, NFR2) can append the one
+// revision_event describing a mediated write's entity creates inside the
+// SAME transaction as those creates, rather than opening a second
+// transaction the way calling the exported Append method would. Append
+// itself is just this function wrapped in its own Begin/Commit. e is
+// assumed already validated (validateNewRevisionEvent) by the caller.
+//
+// tx must already hold (or be about to take) no conflicting lock on
+// e.SessionID's design_session row -- this function takes the same
+// `SELECT ... FOR UPDATE` lock Append's doc comment describes, so two
+// concurrent appends to the same session (whether via Append or via
+// ProposeEntities) still cannot race the same seq_no.
+func appendRevisionEventTx(ctx context.Context, tx pgx.Tx, e NewRevisionEvent) (RevisionEvent, error) {
 	// A nil Opened/Resolved slice marshals to JSON `null` -- a JSONB
 	// scalar, not the empty array open_questions.go's ListOpenQuestions
 	// (and validateResolvedQuestionsOpened below) unnest with
-	// jsonb_array_elements. Default both to empty slices here so every row
-	// this store ever writes carries `[]`, never a JSON null, for either
-	// field -- the one place that invariant needs to hold for the rest of
-	// this package's SQL to be simple.
+	// jsonb_array_elements. Default both to empty slices here, inside the
+	// shared transactional body rather than only in Append's wrapper, so
+	// every row this store ever writes carries `[]`, never a JSON null,
+	// for either field -- including mediated.go's ProposeEntities, which
+	// calls this function directly and never goes through Append.
 	if e.OpenQuestionsDelta.Opened == nil {
 		e.OpenQuestionsDelta.Opened = []OpenQuestionOpened{}
 	}
@@ -177,16 +209,10 @@ func (s revisionEventStore) Append(ctx context.Context, e NewRevisionEvent) (Rev
 		return RevisionEvent{}, fmt.Errorf("marshal open_questions_delta: %w", err)
 	}
 
-	tx, err := s.pool.Begin(ctx)
-	if err != nil {
-		return RevisionEvent{}, fmt.Errorf("begin tx: %w", err)
-	}
-	defer tx.Rollback(ctx) //nolint:errcheck
-
 	// Lock the owning design_session row for the duration of this
 	// transaction so two concurrent Appends to the same session cannot
-	// both compute the same seq_no (see this method's doc comment) --
-	// never a plain MAX(seq_no)+1 without this lock, which would race the
+	// both compute the same seq_no (see Append's doc comment) -- never a
+	// plain MAX(seq_no)+1 without this lock, which would race the
 	// `UNIQUE (session_id, seq_no)` index.
 	var locked uuid.UUID
 	err = tx.QueryRow(ctx, `SELECT id FROM design_session WHERE id = $1 FOR UPDATE`, e.SessionID).Scan(&locked)
@@ -232,10 +258,6 @@ func (s revisionEventStore) Append(ctx context.Context, e NewRevisionEvent) (Rev
 	))
 	if err != nil {
 		return RevisionEvent{}, fmt.Errorf("insert revision_event: %w", err)
-	}
-
-	if err := tx.Commit(ctx); err != nil {
-		return RevisionEvent{}, fmt.Errorf("commit: %w", err)
 	}
 	return ev, nil
 }

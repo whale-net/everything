@@ -20,8 +20,9 @@ import (
 // FR6) are ungated; every entity
 // create/attach endpoint (issue #2490, FR1/FR2/FR4), the two amend
 // endpoints below (FR12, issue #2493), the pointer-artifact create
-// endpoint (issue #2496, FR20), and POST /design-sessions and POST
-// /design-sessions/{id}/revision-events (issue #2543, FR1-FR4/FR8) are
+// endpoint (issue #2496, FR20), POST /design-sessions and POST
+// /design-sessions/{id}/revision-events (issue #2543, FR1-FR4/FR8), and
+// POST /design-sessions/{id}/propose (issue #2546, FR9/FR10/NFR2) are
 // wrapped with handlers.RequireSession (gate.go) -- no write path is
 // reachable without a session minted by `init`. Read paths never require a
 // session (root plan issue #2485). Import (FR16) is a later task's route,
@@ -50,6 +51,7 @@ func setupRoutes(mux *http.ServeMux, pool *pgxpool.Pool, githubToken string) {
 	mux.HandleFunc("GET /design-sessions/{id}", handlers.GetDesignSessionHandler(entities.DesignSessions(), entities.RevisionEvents()))
 	mux.Handle("POST /design-sessions/{id}/revision-events", gate(handlers.AppendRevisionEventHandler(entities.RevisionEvents())))
 	mux.HandleFunc("GET /design-sessions/{id}/open-questions", handlers.ListOpenQuestionsHandler(entities.DesignSessions(), entities.RevisionEvents()))
+	mux.Handle("POST /design-sessions/{id}/propose", gate(handlers.ProposeEntitiesHandler(entities.MediatedWrites())))
 
 	mux.Handle("POST /requirements/{id}/amend", gate(handlers.AmendRequirementHandler(entities.Amend())))
 	mux.Handle("POST /load-bearing-decisions/{id}/amend", gate(handlers.AmendLoadBearingDecisionHandler(entities.Amend())))

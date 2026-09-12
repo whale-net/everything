@@ -25,6 +25,7 @@ go_library(
         "featureset.go",
         "history.go",
         "import_completion.go",
+        "mediated.go",
         "milestone.go",
         "models.go",
         "nongoal.go",

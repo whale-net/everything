@@ -19,7 +19,9 @@ GET /design-sessions/{id} is not; revision_event.go also owns the
 Subject/EntityDelta/OpenQuestionsDelta wire types design_session.go's
 GetDesignSessionHandler reuses. session_slice.go (issue #2544, krill M2,
 FR5) is the HTTP surface over //krill/slice's fifth granularity,
-GetEntitySetSlice -- also ungated."""
+GetEntitySetSlice -- also ungated. mediated.go (issue #2546, FR9/FR10/NFR2)
+is the mediated-intake write endpoint, POST /design-sessions/{id}/propose --
+gated like every other write endpoint."""
 
 load("@rules_go//go:def.bzl", "go_library", "go_test")
 
@@ -33,6 +35,7 @@ go_library(
         "featureset.go",
         "gate.go",
         "history.go",
+        "mediated.go",
         "open_questions.go",
         "pointer.go",
         "product.go",
