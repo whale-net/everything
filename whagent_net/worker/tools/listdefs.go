@@ -17,10 +17,10 @@ import (
 // exposed tool set (mcp.ClientSession.ListTools) into the
 // llm.ToolDefinition list CallModelInput.Tools carries (activities.go's
 // ListToolDefinitions activity, whagent_net/worker). Order matches
-// toolSet's own order. Never whagent-side-filtered against a
-// ToolServerRef's AllowedTools (C22/Later, this package's doc comment
-// "Tool selection") -- exactly the same server-exposes-it-or-it-doesn't
-// rule resolveTarget enforces for a dispatched call.
+// toolSet's own order. A ToolServerRef with a non-empty AllowedTools is
+// further narrowed to just that subset (C22, allowlist.go's isAllowed) --
+// the same rule resolveTarget enforces for a dispatched call, so a model
+// is never offered a tool name Dispatch would then refuse.
 //
 // A connect/list failure against any one server fails the whole call
 // (returns the first error encountered) rather than silently omitting
@@ -52,6 +52,9 @@ func ListToolDefinitions(ctx context.Context, issuer *persona.Issuer, sess *sess
 			return nil, fmt.Errorf("tools: list tools on %s: %w", ref.ServerURL, err)
 		}
 		for _, t := range res.Tools {
+			if !isAllowed(t.Name, ref.AllowedTools) {
+				continue
+			}
 			defs = append(defs, llm.ToolDefinition{
 				Name:        t.Name,
 				Description: t.Description,

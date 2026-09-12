@@ -22,15 +22,19 @@
 //     workflow.GetVersion("session-workflow-tool-dispatch", ...) gate per
 //     that file's NFR1 doc comment) drives per tool call.
 //
-// # Tool selection (FR8)
+// # Tool selection (FR8, C22)
 //
 // An agent definition's tool_set (session.ToolServerRef) is
-// {server_url, allowed_tools}. For M1 the session sees exactly the subset
-// of tools a server chooses to expose to it -- enforced server-side via a
-// pre-filtered endpoint (e.g. a scoped MCP path). session.ToolServerRef's
-// AllowedTools field exists per LB5, but whagent-side enforcement of it is
-// explicitly out of scope (C22, Later) -- Dispatch must never filter a
-// server's exposed tool list itself, and a nil AllowedTools is not a bug.
+// {server_url, allowed_tools}. A session sees the intersection of two
+// filters: whatever subset of tools a server chooses to expose to it
+// (enforced server-side via a pre-filtered endpoint, e.g. a scoped MCP
+// path) and, when AllowedTools is non-empty, whagent-side narrowing to
+// exactly those tool names (C22, allowlist.go's isAllowed) -- both
+// ListToolDefinitions (what the model is offered) and resolveTarget below
+// (what Dispatch will actually call) apply the identical check, so a
+// server-exposed-but-not-allowed tool is never offered to the model and
+// never dispatchable even if a model requests it anyway. A nil/empty
+// AllowedTools means "whatever the server exposes," not "allow nothing."
 //
 // # Persona credential (FR10, NFR4)
 //
@@ -248,13 +252,19 @@ func (d *Dispatcher) Dispatch(ctx context.Context, in DispatchInput) (Result, er
 // (FR10, keys.go's mintCredential), and returns an authenticated,
 // connected *mcp.ClientSession to it -- the caller owns the returned
 // session's lifecycle (Close). A call naming a tool no configured server
-// exposes returns an error before any CallTool is ever issued against any
-// server -- this is where FR8's "a tool the server does not expose is not
-// callable" is actually enforced. A credential is minted (and a
-// connection opened) for each server tried, in in.ToolSet order, and is
-// never reused across servers.
+// exposes, or that a matching server exposes but this ref's AllowedTools
+// excludes (C22, allowlist.go's isAllowed), returns an error before any
+// CallTool is ever issued against any server -- this is where FR8's "a
+// tool the server does not expose is not callable" (and now C22's "the
+// agent definition does not allow it") is actually enforced. A credential
+// is minted (and a connection opened) for each server tried, in
+// in.ToolSet order, and is never reused across servers.
 func resolveTarget(ctx context.Context, issuer *persona.Issuer, in DispatchInput) (string, *mcp.ClientSession, error) {
 	for _, ref := range in.ToolSet {
+		if !isAllowed(in.Call.Name, ref.AllowedTools) {
+			continue
+		}
+
 		token, err := mintCredential(ctx, issuer, in.Session, in.AgentID, ref.ServerURL)
 		if err != nil {
 			return "", nil, fmt.Errorf("tools: mint credential for %s: %w", ref.ServerURL, err)

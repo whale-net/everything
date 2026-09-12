@@ -15,9 +15,11 @@ import (
 // ToolServerRef is one entry of an agent definition's tool_set JSONB array
 // (LB5, ARCHITECTURE.md "Domain-owned MCP servers and the tool contract"):
 // an MCP endpoint plus the tool names an agent using this definition may
-// see there. A nil AllowedTools means "whatever the server exposes" --
-// initial tool selection is enforced server-side via a pre-filtered
-// endpoint (e.g. `/mcp/research`), not by whagent-side filtering.
+// see there. A nil/empty AllowedTools means "whatever the server exposes."
+// Tool selection is the intersection of two filters: server-side, via a
+// pre-filtered endpoint (e.g. `/mcp/research`), and, when AllowedTools is
+// non-empty, whagent-side narrowing (C22) enforced by
+// whagent_net/worker/tools' ListToolDefinitions/Dispatch.
 type ToolServerRef struct {
 	ServerURL    string   `json:"server_url"`
 	AllowedTools []string `json:"allowed_tools,omitempty"`

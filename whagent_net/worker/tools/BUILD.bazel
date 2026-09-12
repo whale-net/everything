@@ -9,6 +9,7 @@ load("@rules_go//go:def.bzl", "go_library", "go_test")
 go_library(
     name = "tools",
     srcs = [
+        "allowlist.go",
         "client.go",
         "dispatch.go",
         "keys.go",
@@ -68,4 +69,11 @@ go_test(
         "@com_github_stretchr_testify//assert",
         "@com_github_stretchr_testify//require",
     ],
+)
+
+go_test(
+    name = "tools_test",
+    srcs = ["allowlist_test.go"],
+    embed = [":tools"],
+    deps = ["@com_github_stretchr_testify//assert"],
 )
