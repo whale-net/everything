@@ -8,8 +8,11 @@ import "github.com/jackc/pgx/v5/pgxpool"
 // (migration 004, issue #2492), `scope` (migration 001, read-only here),
 // `pointer_artifact` (migration 005, issue #2496), `design_session`
 // and `revision_event` (migration 008, issue #2542), and
-// `import_completion` (migration 009, issue #2548). Built over
-// //libs/go/db's *pgxpool.Pool,
+// `import_completion` (migration 009, issue #2548). MediatedWrites()
+// (mediated.go, issue #2546) is not a new table: it writes `feature`/
+// `requirement`/`revision_event` rows this same Store already owns,
+// through one shared transaction instead of per-entity accessor calls.
+// Built over //libs/go/db's *pgxpool.Pool,
 // mirroring audience_score_system/store.Store's shape: a thin holder whose
 // accessors hand back per-entity Store implementations, kept as separate
 // concrete types because e.g. ProductStore.GetCurrentByID and
@@ -80,3 +83,8 @@ func (s *Store) RevisionEvents() RevisionEventStore { return revisionEventStore{
 // the one-time, one-way import-completion marker (migration 009, issue
 // #2548, FR12, NFR3).
 func (s *Store) ImportCompletions() ImportCompletionStore { return importCompletionStore{pool: s.pool} }
+
+// MediatedWrites returns the MediatedWriteStore implementation -- the
+// mediated-intake transactional entity+revision-event write path (issue
+// #2546, FR9, FR10, NFR2).
+func (s *Store) MediatedWrites() MediatedWriteStore { return mediatedWriteStore{pool: s.pool} }
