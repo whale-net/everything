@@ -425,6 +425,28 @@ Neither `AmendStore` nor `HistoryStore` reads or writes anything beyond
 FeatureSet, Feature, Persona, NonGoal) is amendable or as-of-readable in
 this milestone.
 
+**As-of slice assembly (`krill/slice`).** Every one of C3's four
+granularities (`GetFeatureSetSlice`, `GetFeatureSlice`,
+`GetRequirementSlice`, `GetProductSlice`, issue #2491) has an `*AsOf` twin
+(`GetFeatureSetSliceAsOf`, ..., `krill/slice/query.go`) that assembles the
+same `Document` shape as of a past `asOf` instead of today: every
+`Requirement`/`LoadBearingDecision` in the result is read through
+`HistoryStore` (the revision current at `asOf`, not the latest), and any
+entity whose first revision postdates `asOf` is dropped from the
+assembly rather than reported at its current contents. `Product`,
+`FeatureSet`, and `Feature` have no write path that supersedes a row yet
+(no other entity kind is amendable, per the paragraph above), so for
+those three "as of `asOf`" reduces to "had it been created by `asOf`"
+(`entityExistedAsOf`) — the current row is their only revision, and a
+top-level `*AsOf` call whose own entity postdates `asOf` returns
+`store.ErrNotFound`, exactly like `HistoryStore`'s own not-found
+semantics. `EntityRef.RevisionID` (`krill/slice/document.go`) is the
+"as-of revisions" metadata PRODUCT.md's LB7 describes — an `*AsOf`
+assembly's entities simply carry a historical row's `RevisionID` instead
+of today's current row's. No new HTTP route exists for this yet — the
+capability lives at the `slice.Querier` layer only, for a later task's
+surface to wire up if needed.
+
 **HTTP surface.** `krill/api/handlers/amend.go` wraps `AmendStore` behind
 `RequireSession` (`routes.go`: `POST /requirements/{id}/amend`,
 `POST /load-bearing-decisions/{id}/amend`) — one of this milestone's write
@@ -449,12 +471,11 @@ read paths never require `init` (root plan issue #2485), exactly like
   scopes FR11/FR12 to Requirement and LoadBearingDecision only). FR5-FR9's
   read path exists (issue #2491, see "The scoped-slice query" above); FR21
   remains open.
-- No as-of (historical) *slice* read yet — `krill/slice`'s four
-  granularities always read current (`valid_to IS NULL`) rows; issue
-  #2493's as-of read (see "Amend and as-of history reads" above) is a
-  single-entity (`Requirement`/`LoadBearingDecision`) read, not a
-  `slice.Document` assembled as of a past revision — that remains open if
-  a later task needs it.
+- `krill/slice`'s four granularities each have an as-of assembly twin now
+  (issue #2493, see "As-of slice assembly" above) — but no HTTP route
+  exposes them yet (`krill/api/handlers/slice.go` still wires only the
+  current-row four); that surface, and any MCP tool built over it, remain
+  open for a later task.
 - `init` (FR3, #2489) and the write-only gate (`api/handlers/session.go`,
   `api/handlers/gate.go`) cover entity creates and LB attach as of #2490,
   and amend as of #2493 (`api/handlers/amend.go`); pointer-issue create
