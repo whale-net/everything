@@ -195,6 +195,26 @@ func (f *fakePersonIdentityStore) FindOrCreateByIssSub(_ context.Context, iss, s
 	return p, true, nil
 }
 
+// LinkToExistingPerson is a minimal in-memory mirror of the real store's
+// FR6/FR8/FR9 contract -- just enough to keep this fake satisfying
+// store.PersonIdentityStore. Nothing in this package exercises it yet
+// (that lands with issue #2600); the real behavioural coverage is the
+// Postgres-backed integration tests in
+// audience_score_system/store/person_identity_integration_test.go.
+func (f *fakePersonIdentityStore) LinkToExistingPerson(_ context.Context, iss, sub string, personID uuid.UUID) (store.LinkOutcome, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	key := issSub{iss, sub}
+	if p, ok := f.byKey[key]; ok {
+		if p.ID == personID {
+			return store.LinkAlreadyOwned, nil
+		}
+		return 0, store.ErrLinkedToOtherPerson
+	}
+	f.byKey[key] = store.Person{ID: personID}
+	return store.LinkCreated, nil
+}
+
 var _ store.PersonIdentityStore = (*fakePersonIdentityStore)(nil)
 
 // ── fake mcpauth.CredentialStore ──────────────────────────────────────────────
