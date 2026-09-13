@@ -1,0 +1,76 @@
+package link
+
+import (
+	"github.com/whale-net/everything/audience_score_system/web/components"
+)
+
+// ConfirmationData carries Confirmation's page-level parameterisation
+// (FR5, issue #2600). PersonLabel names the signed-in ASS Operator about
+// to be linked (display name/email from their Google session);
+// SubjectLabel is an operator-recognizable identifier of the
+// whagent-net identity from the verified assertion. Token carries the
+// assertion itself so the confirm POST can re-verify it -- HandleConfirm
+// must never trust HandleShow's verification result to still hold (see
+// handlers.go's HandleConfirm doc comment).
+//
+// HandleShow always populates both fields from a verified, unconsumed,
+// origin-checked assertion before rendering this page at all -- an empty
+// PersonLabel/SubjectLabel only ever renders in a test that constructs
+// ConfirmationData directly.
+type ConfirmationData struct {
+	Layout       components.LayoutData
+	PersonLabel  string
+	SubjectLabel string
+	Token        string
+}
+
+// Confirmation is FR5's explicit confirmation page: nothing is written
+// until the Operator submits POST /link/whagent/confirm (see handlers.go's
+// package doc comment). Names both sides per FR5 -- the signed-in Person
+// (PersonLabel) and the whagent-net identity from the assertion
+// (SubjectLabel).
+templ Confirmation(data ConfirmationData) {
+	@components.Layout(data.Layout) {
+		<div class="card bg-base-100 border border-base-300 shadow-sm">
+			<div class="card-body">
+				<h1 class="card-title">Link whagent-net identity</h1>
+				if data.PersonLabel == "" && data.SubjectLabel == "" {
+					<p class="opacity-70">No assertion to confirm yet.</p>
+				} else {
+					<p class="text-base-content/70">
+						Link { data.PersonLabel } to the whagent-net identity { data.SubjectLabel }?
+					</p>
+					<form method="post" action="/link/whagent/confirm">
+						<input type="hidden" name="token" value={ data.Token }/>
+						<div class="card-actions justify-end">
+							<button type="submit" class="btn btn-primary">Confirm</button>
+						</div>
+					</form>
+				}
+			</div>
+		</div>
+	}
+}
+
+// Rejected renders the local terminal page for an assertion that fails
+// before a trustworthy ReturnURL is available -- an invalid signature,
+// missing field, unknown issuer, expiry, or a ReturnURL whose origin
+// doesn't match the configured ui issuer (FR3, FR10's open-redirect
+// guard). Unlike a replayed assertion (which IS redirected back to ui
+// with the "rejected" outcome, since it has a verified, trustworthy
+// ReturnURL by that point), this page never redirects anywhere -- see
+// handlers.go's package doc comment for the exact split.
+templ Rejected(data components.LayoutData) {
+	@components.Layout(data) {
+		<div class="card bg-base-100 border border-base-300 shadow-sm">
+			<div class="card-body">
+				<h1 class="card-title">Link request rejected</h1>
+				<p class="text-base-content/70">
+					This link request could not be verified. It may have expired or
+					already been used -- go back to whagent-net and retry the "Link
+					ASS identity" action.
+				</p>
+			</div>
+		</div>
+	}
+}

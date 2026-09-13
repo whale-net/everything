@@ -1,22 +1,35 @@
-load("@rules_go//go:def.bzl", "go_library", "go_test")
+load("@rules_go//go:def.bzl", "go_test")
+load("//tools:templ.bzl", "templ_library")
 
-# Link-assertion verification package (issue #2598, FR3's verification
-# half, NFR5) -- see assertion.go's package doc comment for why this is
-# deliberately not whagent.Verifier and not a second generic claim/
-# verifier pair added to libs/go/whagent. NewVerifier constructs a remote
-# JWKS key set (kid lookup + caching, oidc.NewRemoteKeySet); Verify checks
-# the signature first, then the claim shape, per verifier.go.
-go_library(
+# Link-assertion verification (issue #2598, FR3's verification half, NFR5)
+# plus the handler half (issue #2600, FR4-FR6, FR8-FR10, FR13, NFR3, NFR5)
+# -- see assertion.go's package doc comment for why this is deliberately
+# not whagent.Verifier and not a second generic claim/verifier pair added
+# to libs/go/whagent. NewVerifier constructs a remote JWKS key set (kid
+# lookup + caching, oidc.NewRemoteKeySet); Verify checks the signature
+# first, then the claim shape, per verifier.go. handlers.go/views.templ add
+# GET /link/whagent and POST /link/whagent/confirm -- see handlers.go's
+# package doc comment for the scaffold-vs-implementation split.
+templ_library(
     name = "link",
-    srcs = [
+    srcs = glob(["*.templ"]),
+    go_srcs = [
         "assertion.go",
         "errors.go",
+        "handlers.go",
         "verifier.go",
     ],
-    importpath = "github.com/whale-net/everything/audience_score_system/web/link",
-    visibility = ["//audience_score_system/web:__subpackages__"],
+    visibility = [
+        "//audience_score_system/web:__subpackages__",
+    ],
     deps = [
+        "//audience_score_system/store",
+        "//audience_score_system/web/auth",
+        "//audience_score_system/web/components",
+        "//libs/go/logging",
         "@com_github_coreos_go_oidc_v3//oidc",
+        "@com_github_google_uuid//:uuid",
+        "@com_github_jackc_pgx_v5//:pgx",
     ],
 )
 
@@ -37,5 +50,45 @@ go_test(
         "//libs/go/whagent",
         "@com_github_go_jose_go_jose_v4//:go-jose",
         "@com_github_go_jose_go_jose_v4//jwt",
+    ],
+)
+
+# Postgres-backed handler coverage (issue #2600's Testing section): the full
+# GET /link/whagent + POST /link/whagent/confirm flow against a real store,
+# real handlers, and a test JWKS server standing in for `ui` -- mirroring
+# //audience_score_system/web/invite:invite_integration_test's shape (see
+# that BUILD.bazel comment for why each tag is required). `# keep` tells a
+# later `bazel run //:gazelle` not to touch or remove this rule.
+#
+# Run it explicitly (requires a working Docker daemon):
+#   bazel test //audience_score_system/web/link:link_handlers_integration_test --test_output=all
+go_test(
+    # keep
+    name = "link_handlers_integration_test",
+    size = "large",
+    timeout = "long",
+    srcs = ["handlers_integration_test.go"],
+    embed = [":link"],
+    gotags = ["integration"],
+    tags = [
+        "external",
+        "integration",
+        "manual",
+        "no-cache",
+        "no-sandbox",
+        "requires-network",
+    ],
+    deps = [
+        "//audience_score_system/migrate/schema",
+        "//audience_score_system/store",
+        "//audience_score_system/web/auth",
+        "//libs/go/dbtest",
+        "//libs/go/migrate",
+        "@com_github_go_jose_go_jose_v4//:go-jose",
+        "@com_github_go_jose_go_jose_v4//jwt",
+        "@com_github_google_uuid//:uuid",
+        "@com_github_jackc_pgx_v5//stdlib",
+        "@com_github_stretchr_testify//assert",
+        "@com_github_stretchr_testify//require",
     ],
 )
