@@ -8,6 +8,55 @@
   <button class="btn btn-primary">Edit Game</button>
 </div>
 
+<div class="card bg-base-100 shadow-md mb-6 border border-base-300 p-6">
+  <div class="flex flex-col gap-6">
+    <div class="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-3 border-b border-base-300 pb-4">
+      <div>
+        <div class="flex items-center gap-2">
+          <span class="text-xl">⚡</span>
+          <h2 class="text-xl font-bold">Daily Ops Overview</h2>
+        </div>
+        <p class="text-xs opacity-60 mt-1">Core server status, runtime, and one-click operational controls</p>
+      </div>
+      <div>
+        <span class="badge badge-success badge-lg font-bold gap-2 px-3 py-3 text-white shadow-sm">
+          <span class="w-2.5 h-2.5 rounded-full bg-white animate-pulse"></span> ONLINE
+        </span>
+      </div>
+    </div>
+
+    <div class="grid grid-cols-1 md:grid-cols-2 gap-4 mb-2">
+      <div class="bg-base-200/40 rounded-box p-4 border border-base-300">
+        <div class="text-xs font-semibold uppercase tracking-wider opacity-60 mb-1">Runtime / Uptime</div>
+        <div class="text-3xl font-bold font-mono">4h 12m</div>
+        <div class="text-xs opacity-50 mt-2">Server is active and accepting connections</div>
+      </div>
+      <div class="bg-base-200/40 rounded-box p-4 border border-base-300">
+        <div class="text-xs font-semibold uppercase tracking-wider opacity-60 mb-1">Connection Info</div>
+        <div class="mt-2 flex items-center gap-2">
+          <code class="text-sm font-mono bg-base-200 px-2 py-1 rounded">valheim.whalenet.app:2456</code>
+          <span class="text-xs opacity-60">UDP</span>
+          <button class="btn btn-ghost btn-xs px-1" title="Copy connect address">⧉</button>
+        </div>
+        <div class="text-xs opacity-50 mt-2">Formatted host and port for players to join</div>
+      </div>
+    </div>
+
+    <div class="flex flex-col sm:flex-row items-stretch sm:items-center justify-between gap-4 pt-4 border-t border-base-300">
+      <div class="flex flex-wrap items-center gap-3">
+        <button disabled class="btn btn-disabled btn-md opacity-50 cursor-not-allowed">Start</button>
+        <button class="btn btn-error btn-md font-semibold">Stop</button>
+        <button class="btn btn-info btn-md font-semibold">Restart</button>
+      </div>
+      <div>
+        <a href="#/session-detail" class="btn btn-outline btn-primary btn-md gap-2 font-semibold">
+          View Live Output / Logs
+        </a>
+      </div>
+    </div>
+  </div>
+</div>
+
 <div class="card bg-base-100 shadow-md mb-6">
   <div class="card-body">
     <h2 class="card-title text-lg">Game Information</h2>

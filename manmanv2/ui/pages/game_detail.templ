@@ -9,6 +9,30 @@ import (
 	manmanpb "github.com/whale-net/everything/manmanv2/protos"
 )
 
+type GameOverviewData struct {
+	GameID      int64
+	Deployments []GameDeploymentOverview
+	ActionError string
+}
+
+type GameDeploymentOverview struct {
+	SGCID         int64
+	ServerID      int64
+	ServerName    string
+	ConfigID      int64
+	ConfigName    string
+	DisplayName   string
+	Status        string
+	StatusVariant string
+	Uptime        string
+	Connect       components.ConnectAddressView
+	CanStart      bool
+	CanStop       bool
+	CanRestart    bool
+	IsTransient   bool
+	LogsURL       string
+}
+
 type GameDetailPageData struct {
 	Layout      components.LayoutData
 	Game        *manmanpb.Game
@@ -17,6 +41,7 @@ type GameDetailPageData struct {
 	Volumes     []*manmanpb.GameConfigVolume
 	Configs     []*manmanpb.GameConfig
 	SgcCounts   map[int64]int
+	Overview    GameOverviewData
 }
 
 func metadataValue(game *manmanpb.Game, field string) string {
@@ -37,6 +62,300 @@ func metadataTags(game *manmanpb.Game) string {
 		return ""
 	}
 	return strings.Join(game.Metadata.Tags, ", ")
+}
+
+func overviewPollAttrs(data GameOverviewData) templ.Attributes {
+	for _, dep := range data.Deployments {
+		if dep.IsTransient {
+			return templ.Attributes{
+				"hx-get":     fmt.Sprintf("/games/%d/overview", data.GameID),
+				"hx-trigger": "every 3s",
+				"hx-target":  "#daily-ops-overview",
+				"hx-swap":    "outerHTML",
+			}
+		}
+	}
+	return templ.Attributes{}
+}
+
+templ overviewStatusBadge(status string) {
+	switch status {
+	case "Online":
+		<span class="badge badge-success badge-lg font-bold gap-2 px-3 py-3 text-success-content shadow-sm">
+			<span class="w-2.5 h-2.5 rounded-full bg-current animate-pulse"></span> ONLINE
+		</span>
+	case "Restarting":
+		<span class="badge badge-info badge-lg font-bold gap-2 px-3 py-3 text-info-content shadow-sm">
+			<span class="loading loading-spinner loading-xs"></span> RESTARTING
+		</span>
+	case "Error":
+		<span class="badge badge-error badge-lg font-bold gap-2 px-3 py-3 text-error-content shadow-sm">
+			<span class="w-2.5 h-2.5 rounded-full bg-current"></span> ERROR
+		</span>
+	default:
+		<span class="badge badge-neutral badge-lg font-bold gap-2 px-3 py-3 text-neutral-content">
+			<span class="w-2.5 h-2.5 rounded-full bg-base-content/40"></span> OFFLINE
+		</span>
+	}
+}
+
+templ overviewEmptyState(gameID int64) {
+	<div class="grid grid-cols-1 md:grid-cols-2 gap-4 mb-6">
+		<div class="bg-base-200/40 rounded-box p-4 border border-base-300">
+			<div class="text-xs font-semibold uppercase tracking-wider text-base-content/60 mb-1">Runtime / Uptime</div>
+			<div class="text-3xl font-bold font-mono text-base-content">—</div>
+			<div class="text-xs text-base-content/50 mt-2">Server is not deployed yet</div>
+		</div>
+		<div class="bg-base-200/40 rounded-box p-4 border border-base-300">
+			<div class="text-xs font-semibold uppercase tracking-wider text-base-content/60 mb-1">Connection Info</div>
+			<div class="mt-2 text-sm text-base-content/60">Connect address unavailable — no active deployment for this game.</div>
+		</div>
+	</div>
+	<div class="flex flex-col sm:flex-row items-stretch sm:items-center justify-between gap-4 pt-4 border-t border-base-300">
+		<div class="flex flex-wrap items-center gap-3">
+			<button type="button" disabled class="btn btn-disabled btn-md opacity-50 cursor-not-allowed">Start</button>
+			<button type="button" disabled class="btn btn-disabled btn-md opacity-50 cursor-not-allowed">Stop</button>
+			<button type="button" disabled class="btn btn-disabled btn-md opacity-50 cursor-not-allowed">Restart</button>
+		</div>
+		<div>
+			<a href={ templ.URL(fmt.Sprintf("/games/%d/configs/new", gameID)) } class="btn btn-primary btn-md gap-2 font-semibold">
+				+ Create Config to Deploy
+			</a>
+		</div>
+	</div>
+}
+
+templ overviewDeploymentContent(gameID int64, dep GameDeploymentOverview) {
+	<!-- Stats: Runtime & Connection Info -->
+	<div class="grid grid-cols-1 md:grid-cols-2 gap-4 mb-6">
+		<div class="bg-base-200/40 rounded-box p-4 border border-base-300 flex flex-col justify-between">
+			<div>
+				<div class="text-xs font-semibold uppercase tracking-wider text-base-content/60 mb-1">Runtime / Uptime</div>
+				<div class="text-3xl font-bold font-mono text-base-content">{ dep.Uptime }</div>
+			</div>
+			<div class="text-xs text-base-content/50 mt-2">
+				if dep.Status == "Online" {
+					Server is active and accepting connections
+				} else if dep.Status == "Restarting" {
+					Server is transitioning state
+				} else if dep.Status == "Error" {
+					Server encountered an error or crashed
+				} else {
+					Server is currently offline
+				}
+			</div>
+		</div>
+
+		<div class="bg-base-200/40 rounded-box p-4 border border-base-300 flex flex-col justify-between">
+			<div>
+				<div class="text-xs font-semibold uppercase tracking-wider text-base-content/60 mb-1">Connection Info</div>
+				<div class="mt-2">
+					@components.ConnectAddressDisplay(dep.Connect)
+				</div>
+			</div>
+			<div class="text-xs text-base-content/50 mt-2">Formatted host and port for players to join</div>
+		</div>
+	</div>
+
+	<!-- Primary Action Bar and One-Click Diagnostics -->
+	<div class="flex flex-col sm:flex-row items-stretch sm:items-center justify-between gap-4 pt-4 border-t border-base-300">
+		<div class="flex flex-wrap items-center gap-3" x-data="{ confirmStop: false, confirmRestart: false }">
+			<!-- Start button -->
+			if dep.CanStart {
+				<form
+					method="POST"
+					action={ templ.URL(fmt.Sprintf("/games/%d/overview/action", gameID)) }
+					hx-post={ fmt.Sprintf("/games/%d/overview/action", gameID) }
+					hx-target="#daily-ops-overview"
+					hx-swap="outerHTML"
+					class="inline"
+				>
+					<input type="hidden" name="sgc_id" value={ fmt.Sprintf("%d", dep.SGCID) }/>
+					<input type="hidden" name="action" value="start"/>
+					<button type="submit" class="btn btn-success btn-md font-semibold gap-2">
+						<svg class="w-4 h-4" fill="currentColor" viewBox="0 0 20 20">
+							<path fill-rule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zM9.555 7.168A1 1 0 008 8v4a1 1 0 001.555.832l3-2a1 1 0 000-1.664l-3-2z" clip-rule="evenodd"></path>
+						</svg>
+						Start
+					</button>
+				</form>
+			} else {
+				<button type="button" disabled class="btn btn-disabled btn-md opacity-50 cursor-not-allowed gap-2">
+					<svg class="w-4 h-4" fill="currentColor" viewBox="0 0 20 20">
+						<path fill-rule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zM9.555 7.168A1 1 0 008 8v4a1 1 0 001.555.832l3-2a1 1 0 000-1.664l-3-2z" clip-rule="evenodd"></path>
+					</svg>
+					Start
+				</button>
+			}
+
+			<!-- Stop button -->
+			if dep.CanStop {
+				<div class="inline-flex">
+					<button
+						type="button"
+						x-show="!confirmStop"
+						@click="confirmStop = true"
+						class="btn btn-error btn-md font-semibold gap-2"
+					>
+						<svg class="w-4 h-4" fill="currentColor" viewBox="0 0 20 20">
+							<path fill-rule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zM8 7a1 1 0 00-1 1v4a1 1 0 001 1h4a1 1 0 001-1V8a1 1 0 00-1-1H8z" clip-rule="evenodd"></path>
+						</svg>
+						Stop
+					</button>
+					<div x-show="confirmStop" x-cloak class="flex gap-2 items-center">
+						<span class="text-sm font-semibold text-error">Stop now?</span>
+						<form
+							method="POST"
+							action={ templ.URL(fmt.Sprintf("/games/%d/overview/action", gameID)) }
+							hx-post={ fmt.Sprintf("/games/%d/overview/action", gameID) }
+							hx-target="#daily-ops-overview"
+							hx-swap="outerHTML"
+							class="inline"
+						>
+							<input type="hidden" name="sgc_id" value={ fmt.Sprintf("%d", dep.SGCID) }/>
+							<input type="hidden" name="action" value="stop"/>
+							<button type="submit" class="btn btn-error btn-md font-semibold">Yes, Stop</button>
+						</form>
+						<button type="button" @click="confirmStop = false" class="btn btn-ghost btn-md">Cancel</button>
+					</div>
+				</div>
+			} else {
+				<button type="button" disabled class="btn btn-disabled btn-md opacity-50 cursor-not-allowed gap-2">
+					<svg class="w-4 h-4" fill="currentColor" viewBox="0 0 20 20">
+						<path fill-rule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zM8 7a1 1 0 00-1 1v4a1 1 0 001 1h4a1 1 0 001-1V8a1 1 0 00-1-1H8z" clip-rule="evenodd"></path>
+					</svg>
+					Stop
+				</button>
+			}
+
+			<!-- Restart button -->
+			if dep.CanRestart {
+				<div class="inline-flex">
+					<button
+						type="button"
+						x-show="!confirmRestart"
+						@click="confirmRestart = true"
+						class="btn btn-info btn-md font-semibold gap-2"
+					>
+						<svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+							<path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"></path>
+						</svg>
+						Restart
+					</button>
+					<div x-show="confirmRestart" x-cloak class="flex gap-2 items-center">
+						<span class="text-sm font-semibold text-info">Restart now?</span>
+						<form
+							method="POST"
+							action={ templ.URL(fmt.Sprintf("/games/%d/overview/action", gameID)) }
+							hx-post={ fmt.Sprintf("/games/%d/overview/action", gameID) }
+							hx-target="#daily-ops-overview"
+							hx-swap="outerHTML"
+							class="inline"
+						>
+							<input type="hidden" name="sgc_id" value={ fmt.Sprintf("%d", dep.SGCID) }/>
+							<input type="hidden" name="action" value="restart"/>
+							<button type="submit" class="btn btn-info btn-md font-semibold">Yes, Restart</button>
+						</form>
+						<button type="button" @click="confirmRestart = false" class="btn btn-ghost btn-md">Cancel</button>
+					</div>
+				</div>
+			} else {
+				<button type="button" disabled class="btn btn-disabled btn-md opacity-50 cursor-not-allowed gap-2">
+					<svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+						<path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"></path>
+					</svg>
+					Restart
+				</button>
+			}
+		</div>
+
+		<!-- One-Click Diagnostics -->
+		<div>
+			if dep.LogsURL != "" {
+				<a
+					href={ templ.URL(dep.LogsURL) }
+					class="btn btn-outline btn-primary btn-md gap-2 font-semibold w-full sm:w-auto"
+					title="Open live session console and log stream"
+				>
+					<svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+						<path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 9l3 3-3 3m5 0h3M5 20h14a2 2 0 002-2V6a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z"></path>
+					</svg>
+					View Live Output / Logs
+				</a>
+			} else {
+				<button
+					type="button"
+					disabled
+					class="btn btn-disabled btn-md opacity-50 cursor-not-allowed gap-2 w-full sm:w-auto"
+				>
+					<svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+						<path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 9l3 3-3 3m5 0h3M5 20h14a2 2 0 002-2V6a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z"></path>
+					</svg>
+					No Logs Available
+				</button>
+			}
+		</div>
+	</div>
+}
+
+templ GameOverview(data GameOverviewData) {
+	<div
+		id="daily-ops-overview"
+		class="card bg-base-100 border border-base-300 shadow-sm p-6 mb-6"
+		{ overviewPollAttrs(data)... }
+	>
+		<div class="flex flex-col gap-6">
+			<div class="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-3 border-b border-base-300 pb-4">
+				<div>
+					<div class="flex items-center gap-2">
+						<span class="text-xl">⚡</span>
+						<h2 class="text-xl font-bold text-base-content">Daily Ops Overview</h2>
+					</div>
+					<p class="text-xs text-base-content/60 mt-1">Core server status, runtime, and one-click operational controls</p>
+				</div>
+				if len(data.Deployments) == 0 {
+					<div>
+						<span class="badge badge-neutral badge-lg font-bold gap-2 px-3 py-3 text-neutral-content">
+							<span class="w-2.5 h-2.5 rounded-full bg-base-content/40"></span> OFFLINE
+						</span>
+					</div>
+				} else if len(data.Deployments) == 1 {
+					<div>
+						@overviewStatusBadge(data.Deployments[0].Status)
+					</div>
+				}
+			</div>
+
+			if data.ActionError != "" {
+				<div role="alert" class="alert alert-error alert-sm">
+					<svg class="w-4 h-4 shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+						<path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z"></path>
+					</svg>
+					<span class="text-sm font-medium">{ data.ActionError }</span>
+				</div>
+			}
+
+			if len(data.Deployments) == 0 {
+				@overviewEmptyState(data.GameID)
+			} else if len(data.Deployments) == 1 {
+				@overviewDeploymentContent(data.GameID, data.Deployments[0])
+			} else {
+				<div class="flex flex-col gap-6">
+					for _, dep := range data.Deployments {
+						<div class="border border-base-300 rounded-box p-4 bg-base-200/20">
+							<div class="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-2 mb-4 pb-2 border-b border-base-300">
+								<div class="font-semibold text-base-content">
+									{ dep.DisplayName }
+								</div>
+								@overviewStatusBadge(dep.Status)
+							</div>
+							@overviewDeploymentContent(data.GameID, dep)
+						</div>
+					}
+				</div>
+			}
+		</div>
+	</div>
 }
 
 templ GameDetail(data GameDetailPageData) {
@@ -78,6 +397,7 @@ templ GameDetail(data GameDetailPageData) {
 				</button>
 			</div>
 		</div>
+		@GameOverview(data.Overview)
 		<!-- Deployments -->
 		<div class="card bg-base-100 border border-base-300 shadow-sm overflow-hidden mb-6">
 			<div class="p-4 border-b border-base-300 bg-base-200">

@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"log"
@@ -467,6 +468,9 @@ func (app *App) handleGameDetail(w http.ResponseWriter, r *http.Request) {
 		case "actions":
 			app.handleGameActions(w, r)
 			return
+		case "overview":
+			app.handleGameOverview(w, r, gameIDStr)
+			return
 		case "workshop-panel":
 			// GET /games/{id}/workshop-panel (task #2367, FR8/FR9/FR10):
 			// the lazily-fetched Workshop Libraries panel fragment -- see
@@ -604,6 +608,11 @@ func (app *App) handleGameDetail(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	overviewData, err := app.buildGameOverviewData(ctx, gameID, configs, allSGCs)
+	if err != nil {
+		log.Printf("Warning: failed to build game overview data: %v", err)
+	}
+
 	data := pages.GameDetailPageData{
 		Layout:      layoutData,
 		Game:        game,
@@ -612,6 +621,7 @@ func (app *App) handleGameDetail(w http.ResponseWriter, r *http.Request) {
 		Volumes:     volumeSlice,
 		Configs:     configs,
 		SgcCounts:   sgcCounts,
+		Overview:    overviewData,
 	}
 
 	RenderTempl(w, r, game.Name, pages.GameDetail(data))
@@ -1348,3 +1358,247 @@ func (app *App) handleDeleteAddonPathPreset(w http.ResponseWriter, r *http.Reque
 
 	http.Redirect(w, r, "/games/"+gameIDStr, http.StatusSeeOther)
 }
+
+// computeOverviewStatus maps a deployment's latest session and pending restart state
+// to one of the four gamer-facing high-visibility overview statuses:
+// Online, Offline, Restarting, or Error.
+func computeOverviewStatus(latest *manmanpb.Session, restartState *manmanpb.PendingRestartState) (status string, variant string, isTransient bool) {
+	if restartState != nil && restartState.GetStatus() == "pending" {
+		return "Restarting", "info", true
+	}
+	if latest != nil && (latest.GetStatus() == "starting" || latest.GetStatus() == "stopping") {
+		return "Restarting", "info", true
+	}
+	if restartState != nil && (restartState.GetStatus() == "failed" || restartState.GetStatus() == "expired") {
+		return "Error", "error", false
+	}
+	if latest != nil && (latest.GetStatus() == "crashed" || latest.GetStatus() == "error" || latest.GetStatus() == "failed" || latest.GetStatus() == "lost") {
+		return "Error", "error", false
+	}
+	if latest != nil && latest.GetStatus() == "running" {
+		return "Online", "success", false
+	}
+	return "Offline", "neutral", false
+}
+
+// buildGameOverviewData assembles the Daily Ops overview data for a game.
+func (app *App) buildGameOverviewData(ctx context.Context, gameID int64, configs []*manmanpb.GameConfig, allDeployments []*manmanpb.ServerGameConfig) (pages.GameOverviewData, error) {
+	if configs == nil {
+		var err error
+		configs, err = app.grpc.ListGameConfigs(ctx, gameID)
+		if err != nil {
+			return pages.GameOverviewData{GameID: gameID}, fmt.Errorf("failed to list game configs: %w", err)
+		}
+	}
+	if allDeployments == nil {
+		var err error
+		allDeployments, err = app.grpc.ListServerGameConfigs(ctx, 0)
+		if err != nil {
+			return pages.GameOverviewData{GameID: gameID}, fmt.Errorf("failed to list server game configs: %w", err)
+		}
+	}
+
+	configByID := make(map[int64]*manmanpb.GameConfig, len(configs))
+	for _, c := range configs {
+		configByID[c.GetConfigId()] = c
+	}
+
+	var gameDeployments []*manmanpb.ServerGameConfig
+	var sgcIDs []int64
+	for _, d := range allDeployments {
+		if _, ok := configByID[d.GetGameConfigId()]; ok {
+			gameDeployments = append(gameDeployments, d)
+			sgcIDs = append(sgcIDs, d.GetServerGameConfigId())
+		}
+	}
+
+	sort.Slice(gameDeployments, func(i, j int) bool {
+		return gameDeployments[i].GetServerGameConfigId() < gameDeployments[j].GetServerGameConfigId()
+	})
+
+	if len(gameDeployments) == 0 {
+		return pages.GameOverviewData{
+			GameID: gameID,
+		}, nil
+	}
+
+	servers, err := app.grpc.ListServers(ctx)
+	if err != nil {
+		log.Printf("Warning: failed to fetch servers for overview: %v", err)
+		servers = nil
+	}
+	serverByID := make(map[int64]*manmanpb.Server, len(servers))
+	for _, s := range servers {
+		serverByID[s.GetServerId()] = s
+	}
+
+	sessions, err := app.grpc.ListSessions(ctx, false)
+	if err != nil {
+		log.Printf("Warning: failed to fetch sessions for overview: %v", err)
+		sessions = nil
+	}
+	sessionsBySGC := make(map[int64][]*manmanpb.Session, len(sessions))
+	for _, s := range sessions {
+		sessionsBySGC[s.GetServerGameConfigId()] = append(sessionsBySGC[s.GetServerGameConfigId()], s)
+	}
+
+	restartStates, err := app.grpc.ListPendingRestarts(ctx, sgcIDs)
+	if err != nil {
+		log.Printf("Warning: failed to list pending restarts for overview: %v", err)
+		restartStates = nil
+	}
+
+	depOverviews := make([]pages.GameDeploymentOverview, 0, len(gameDeployments))
+	for _, d := range gameDeployments {
+		cfg := configByID[d.GetGameConfigId()]
+		server := serverByID[d.GetServerId()]
+		latest := components.LatestSession(sessionsBySGC[d.GetServerGameConfigId()])
+		restartState := restartStates[d.GetServerGameConfigId()]
+
+		status, variant, isTransient := computeOverviewStatus(latest, restartState)
+
+		uptime := "—"
+		if status == "Online" && latest != nil && latest.GetStartedAt() > 0 {
+			uptime = computeUptime(latest.GetStartedAt())
+		} else if status == "Restarting" {
+			uptime = "Restarting..."
+		}
+
+		var hostPublicAddress string
+		var serverName string
+		if server != nil {
+			hostPublicAddress = server.GetHostPublicAddress()
+			serverName = server.GetName()
+		}
+		if serverName == "" {
+			serverName = fmt.Sprintf("Server %d", d.GetServerId())
+		}
+
+		var configName string
+		if cfg != nil {
+			configName = cfg.GetName()
+		}
+		if configName == "" {
+			configName = fmt.Sprintf("Config %d", d.GetGameConfigId())
+		}
+		displayName := fmt.Sprintf("%s on %s", configName, serverName)
+
+		var logsURL string
+		if latest != nil {
+			logsURL = fmt.Sprintf("/sessions/%d", latest.GetSessionId())
+		}
+
+		connect := components.BuildConnectAddressView(hostPublicAddress, d.GetPortBindings())
+
+		canStart := (status == "Offline" || status == "Error")
+		canStop := (status == "Online")
+		canRestart := (status == "Online" || status == "Error")
+
+		depOverviews = append(depOverviews, pages.GameDeploymentOverview{
+			SGCID:         d.GetServerGameConfigId(),
+			ServerID:      d.GetServerId(),
+			ServerName:    serverName,
+			ConfigID:      d.GetGameConfigId(),
+			ConfigName:    configName,
+			DisplayName:   displayName,
+			Status:        status,
+			StatusVariant: variant,
+			Uptime:        uptime,
+			Connect:       connect,
+			CanStart:      canStart,
+			CanStop:       canStop,
+			CanRestart:    canRestart,
+			IsTransient:   isTransient,
+			LogsURL:       logsURL,
+		})
+	}
+
+	return pages.GameOverviewData{
+		GameID:      gameID,
+		Deployments: depOverviews,
+	}, nil
+}
+
+// handleGameOverview serves GET /games/{id}/overview and POST /games/{id}/overview/action.
+func (app *App) handleGameOverview(w http.ResponseWriter, r *http.Request, gameIDStr string) {
+	gameID, err := strconv.ParseInt(gameIDStr, 10, 64)
+	if err != nil {
+		http.Error(w, "Invalid game ID", http.StatusBadRequest)
+		return
+	}
+
+	ctx := r.Context()
+
+	if r.Method == http.MethodPost {
+		if err := r.ParseForm(); err != nil {
+			http.Error(w, "Invalid form data", http.StatusBadRequest)
+			return
+		}
+
+		sgcIDStr := strings.TrimSpace(r.FormValue("sgc_id"))
+		action := strings.TrimSpace(r.FormValue("action"))
+
+		sgcID, err := strconv.ParseInt(sgcIDStr, 10, 64)
+		if err != nil {
+			http.Error(w, "Invalid sgc_id", http.StatusBadRequest)
+			return
+		}
+
+		var actionErr string
+		switch action {
+		case "start":
+			if _, err := boundDeploymentRPC(ctx, app.deploymentActionBound(), func(c context.Context) (*manmanpb.Session, error) {
+				return app.grpc.StartSession(c, sgcID, false)
+			}); err != nil {
+				log.Printf("Error starting deployment %d: %v", sgcID, err)
+				actionErr = deploymentStartErrorMessage(err)
+			}
+		case "stop":
+			actionErr = app.stopDeployment(ctx, sgcID)
+		case "restart":
+			actionErr = app.restartDeployment(ctx, sgcID)
+		default:
+			http.Error(w, "Unknown action", http.StatusBadRequest)
+			return
+		}
+
+		if r.Header.Get("HX-Request") == "" {
+			http.Redirect(w, r, "/games/"+gameIDStr, http.StatusSeeOther)
+			return
+		}
+
+		overviewData, err := app.buildGameOverviewData(ctx, gameID, nil, nil)
+		if err != nil {
+			log.Printf("Error building overview data: %v", err)
+			http.Error(w, "Internal server error", http.StatusInternalServerError)
+			return
+		}
+		overviewData.ActionError = actionErr
+
+		w.Header().Set("Content-Type", "text/html")
+		w.WriteHeader(http.StatusOK)
+		if err := pages.GameOverview(overviewData).Render(ctx, w); err != nil {
+			log.Printf("Error rendering overview template: %v", err)
+		}
+		return
+	}
+
+	if r.Method == http.MethodGet {
+		overviewData, err := app.buildGameOverviewData(ctx, gameID, nil, nil)
+		if err != nil {
+			log.Printf("Error building overview data: %v", err)
+			http.Error(w, "Internal server error", http.StatusInternalServerError)
+			return
+		}
+
+		w.Header().Set("Content-Type", "text/html")
+		w.WriteHeader(http.StatusOK)
+		if err := pages.GameOverview(overviewData).Render(ctx, w); err != nil {
+			log.Printf("Error rendering overview template: %v", err)
+		}
+		return
+	}
+
+	http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+}
+

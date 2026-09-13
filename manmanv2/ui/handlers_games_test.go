@@ -78,7 +78,47 @@ func (f *fakeGamesAPIClient) ListServers(ctx context.Context, in *manmanpb.ListS
 
 func (f *fakeGamesAPIClient) ListSessions(ctx context.Context, in *manmanpb.ListSessionsRequest, opts ...grpc.CallOption) (*manmanpb.ListSessionsResponse, error) {
 	f.calls["ListSessions"]++
+	if in.LiveOnly {
+		var live []*manmanpb.Session
+		for _, s := range f.sessions {
+			if (in.ServerGameConfigId == 0 || s.ServerGameConfigId == in.ServerGameConfigId) && (s.Status == "running" || components.IsTransientStatus(s.Status)) {
+				live = append(live, s)
+			}
+		}
+		return &manmanpb.ListSessionsResponse{Sessions: live}, nil
+	}
 	return &manmanpb.ListSessionsResponse{Sessions: f.sessions}, nil
+}
+
+func (f *fakeGamesAPIClient) StartSession(ctx context.Context, in *manmanpb.StartSessionRequest, opts ...grpc.CallOption) (*manmanpb.StartSessionResponse, error) {
+	f.calls["StartSession"]++
+	return &manmanpb.StartSessionResponse{
+		Session: &manmanpb.Session{
+			SessionId:          999,
+			ServerGameConfigId: in.ServerGameConfigId,
+			Status:             "starting",
+		},
+	}, nil
+}
+
+func (f *fakeGamesAPIClient) StopSession(ctx context.Context, in *manmanpb.StopSessionRequest, opts ...grpc.CallOption) (*manmanpb.StopSessionResponse, error) {
+	f.calls["StopSession"]++
+	return &manmanpb.StopSessionResponse{
+		Session: &manmanpb.Session{
+			SessionId: in.SessionId,
+			Status:    "stopping",
+		},
+	}, nil
+}
+
+func (f *fakeGamesAPIClient) RestartDeployment(ctx context.Context, in *manmanpb.RestartDeploymentRequest, opts ...grpc.CallOption) (*manmanpb.RestartDeploymentResponse, error) {
+	f.calls["RestartDeployment"]++
+	return &manmanpb.RestartDeploymentResponse{
+		StoppingSession: &manmanpb.Session{
+			ServerGameConfigId: in.ServerGameConfigId,
+			Status:             "stopping",
+		},
+	}, nil
 }
 
 // ListPendingRestarts backs handleGames' FR12/#1735 batched restart-state
@@ -954,6 +994,149 @@ func TestHandleGames_RowDirectLinksToGameDetail(t *testing.T) {
 	}
 	if !strings.Contains(body, `href="/games/2"`) {
 		t.Errorf("expected game row to link directly to /games/2, got body: %s", body)
+	}
+}
+
+func newGamesDetailTestApp(api *fakeGamesAPIClient) *App {
+	return &App{grpc: &ControlClient{api: api, workshop: api}}
+}
+
+func TestHandleGameDetail_OverviewHeroCard(t *testing.T) {
+	api := buildFakeGamesData(1)
+	app := newGamesDetailTestApp(api)
+
+	req := httptest.NewRequest(http.MethodGet, "/games/1", nil)
+	w := httptest.NewRecorder()
+	app.handleGameDetail(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200", w.Code)
+	}
+	body := w.Body.String()
+
+	// Prominent hero card header
+	if !strings.Contains(body, "Daily Ops Overview") {
+		t.Errorf("expected 'Daily Ops Overview' hero card, got: %s", body)
+	}
+	// High-visibility status badge
+	if !strings.Contains(body, "ONLINE") {
+		t.Errorf("expected ONLINE badge, got: %s", body)
+	}
+	// Runtime / Uptime counter
+	if !strings.Contains(body, "Runtime / Uptime") {
+		t.Errorf("expected Runtime / Uptime section, got: %s", body)
+	}
+	// Connection info
+	if !strings.Contains(body, "host-01:25000") {
+		t.Errorf("expected connect address host-01:25000, got: %s", body)
+	}
+	// Action bar with active Stop and Restart, disabled Start
+	if !strings.Contains(body, "Stop") || !strings.Contains(body, "Restart") {
+		t.Errorf("expected Stop and Restart buttons, got: %s", body)
+	}
+	// One-click diagnostics button linking to live session
+	if !strings.Contains(body, "/sessions/1") || !strings.Contains(body, "View Live Output / Logs") {
+		t.Errorf("expected View Live Output / Logs linking to /sessions/1, got: %s", body)
+	}
+}
+
+func TestHandleGameOverview_GET(t *testing.T) {
+	api := buildFakeGamesData(1)
+	app := newGamesDetailTestApp(api)
+
+	req := httptest.NewRequest(http.MethodGet, "/games/1/overview", nil)
+	w := httptest.NewRecorder()
+	app.handleGameDetail(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200", w.Code)
+	}
+	body := w.Body.String()
+	if !strings.Contains(body, `id="daily-ops-overview"`) {
+		t.Errorf("expected overview fragment with id='daily-ops-overview', got: %s", body)
+	}
+	if !strings.Contains(body, "ONLINE") {
+		t.Errorf("expected ONLINE badge, got: %s", body)
+	}
+}
+
+func TestHandleGameOverview_Action_Start(t *testing.T) {
+	api := buildFakeGamesData(1)
+	api.sessions[0].Status = "stopped"
+	app := newGamesDetailTestApp(api)
+
+	form := strings.NewReader("sgc_id=1&action=start")
+	req := httptest.NewRequest(http.MethodPost, "/games/1/overview/action", form)
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	req.Header.Set("HX-Request", "true")
+	w := httptest.NewRecorder()
+	app.handleGameDetail(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200", w.Code)
+	}
+	if api.calls["StartSession"] != 1 {
+		t.Errorf("expected 1 StartSession call, got: %d", api.calls["StartSession"])
+	}
+}
+
+func TestHandleGameOverview_Action_Stop(t *testing.T) {
+	api := buildFakeGamesData(1)
+	api.sessions[0].Status = "running"
+	app := newGamesDetailTestApp(api)
+
+	form := strings.NewReader("sgc_id=1&action=stop")
+	req := httptest.NewRequest(http.MethodPost, "/games/1/overview/action", form)
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	req.Header.Set("HX-Request", "true")
+	w := httptest.NewRecorder()
+	app.handleGameDetail(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200", w.Code)
+	}
+	if api.calls["StopSession"] != 1 {
+		t.Errorf("expected 1 StopSession call, got: %d", api.calls["StopSession"])
+	}
+}
+
+func TestHandleGameOverview_Action_Restart(t *testing.T) {
+	api := buildFakeGamesData(1)
+	api.sessions[0].Status = "running"
+	app := newGamesDetailTestApp(api)
+
+	form := strings.NewReader("sgc_id=1&action=restart")
+	req := httptest.NewRequest(http.MethodPost, "/games/1/overview/action", form)
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	req.Header.Set("HX-Request", "true")
+	w := httptest.NewRecorder()
+	app.handleGameDetail(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200", w.Code)
+	}
+	if api.calls["RestartDeployment"] != 1 {
+		t.Errorf("expected 1 RestartDeployment call, got: %d", api.calls["RestartDeployment"])
+	}
+}
+
+func TestHandleGameOverview_Action_NonHTMX_Redirect(t *testing.T) {
+	api := buildFakeGamesData(1)
+	api.sessions[0].Status = "running"
+	app := newGamesDetailTestApp(api)
+
+	form := strings.NewReader("sgc_id=1&action=restart")
+	req := httptest.NewRequest(http.MethodPost, "/games/1/overview/action", form)
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	w := httptest.NewRecorder()
+	app.handleGameDetail(w, req)
+
+	if w.Code != http.StatusSeeOther {
+		t.Fatalf("status = %d, want 303 See Other", w.Code)
+	}
+	loc := w.Header().Get("Location")
+	if loc != "/games/1" {
+		t.Errorf("Location = %q, want /games/1", loc)
 	}
 }
 
