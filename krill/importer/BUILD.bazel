@@ -87,3 +87,25 @@ go_test(
     srcs = ["importer_nfr3_test.go"],
     data = ["importer.go"],
 )
+
+# Non-manual smoke check for the drift class issue #2629 fixed: Parse
+# alone against whagent_net's real doc set (data deps on //whagent_net:docs
+# and //whagent_net/product:docs, located via runfiles the same way
+# importer_integration_test.go does above), checked against counts
+# re-derived from those same files instead of a hardcoded snapshot. No
+# database needed, so this runs under default `bazel test //...` even
+# though importer_integration_test.go (and
+# krill/conformance:roundtrip_integration_test, which shares the fuller
+# FR11 conformance test) stay `manual` for their real-Postgres dependency.
+go_test(
+    name = "whagent_net_parse_smoke_test",
+    srcs = ["whagent_net_parse_smoke_test.go"],
+    data = [
+        "//whagent_net:docs",
+        "//whagent_net/product:docs",
+    ],
+    deps = [
+        ":importer",
+        "@rules_go//go/runfiles",
+    ],
+)
