@@ -303,6 +303,45 @@ func TestHandleActivity_HistoryRowsLinkToSessionDetail(t *testing.T) {
 	}
 }
 
+// TestHandleActivity_LiveRowsLinkToSessionDetail covers: "Live rows
+// link to /sessions/<id>."
+func TestHandleActivity_LiveRowsLinkToSessionDetail(t *testing.T) {
+	api := baseActivityFixture()
+	api.sessions = []*manmanpb.Session{
+		{SessionId: 101, ServerGameConfigId: 55, Status: "running", StartedAt: time.Now().Add(-10 * time.Minute).Unix()},
+	}
+
+	_, body := renderActivityHTTP(t, api, "")
+	if !strings.Contains(body, `href="/sessions/101"`) {
+		t.Errorf("expected a Live row linking to /sessions/101, got body: %s", body)
+	}
+}
+
+// TestHandleActivity_EntityLinks covers linking game and server across both
+// Live and History tables.
+func TestHandleActivity_EntityLinks(t *testing.T) {
+	api := baseActivityFixture()
+	api.sessions = []*manmanpb.Session{
+		{SessionId: 1, ServerGameConfigId: 55, Status: "running", StartedAt: time.Now().Add(-10 * time.Minute).Unix()},
+		{SessionId: 2, ServerGameConfigId: 66, Status: "stopped", StartedAt: time.Now().Add(-1 * time.Hour).Unix(), EndedAt: time.Now().Unix()},
+	}
+
+	_, body := renderActivityHTTP(t, api, "")
+	// Server 10 hosts SGC 55 (game 9000); server 20 hosts SGC 66 (game 9001).
+	if !strings.Contains(body, `href="/games/9000"`) {
+		t.Errorf("expected link to /games/9000, got body: %s", body)
+	}
+	if !strings.Contains(body, `href="/infrastructure?manage=10#host-manage-10"`) {
+		t.Errorf("expected link to /infrastructure?manage=10#host-manage-10, got body: %s", body)
+	}
+	if !strings.Contains(body, `href="/games/9001"`) {
+		t.Errorf("expected link to /games/9001, got body: %s", body)
+	}
+	if !strings.Contains(body, `href="/infrastructure?manage=20#host-manage-20"`) {
+		t.Errorf("expected link to /infrastructure?manage=20#host-manage-20, got body: %s", body)
+	}
+}
+
 // TestHandleActivity_FleetWideAcrossMultipleServers covers: "Fleet-wide:
 // sessions from more than one server all appear (guards against
 // accidentally inheriting the server-scoped derivation)."

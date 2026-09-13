@@ -194,35 +194,40 @@ func (app *App) buildActivityPageData(ctx context.Context, r *http.Request) Acti
 	sgcByID, serverByID := app.resolveFleetWideActivitySet(ctx, servers)
 	gameConfigByID, gameByID := app.activityDisplayNames(ctx, sgcByID)
 
-	// activityRowLabels resolves one session's display fields against the
-	// authorized set. ok is false when the session's SGC fell outside the
-	// fleet-wide authorized set (NFR10) or when the game filter excludes it
-	// (FilterGameID has no ListSessions-side filter -- ListSessionsRequest
-	// carries no game_id -- so this is applied client-side here).
-	activityRowLabels := func(session *manmanpb.Session) (gameName, serverName, configName string, ok bool) {
+	// activityRowLabels resolves one session's display fields and entity IDs
+	// against the authorized set. ok is false when the session's SGC fell
+	// outside the fleet-wide authorized set (NFR10) or when the game filter
+	// excludes it (FilterGameID has no ListSessions-side filter --
+	// ListSessionsRequest carries no game_id -- so this is applied
+	// client-side here).
+	activityRowLabels := func(session *manmanpb.Session) (gameID int64, gameName string, serverID int64, serverName, configName string, ok bool) {
 		sgc, found := sgcByID[session.ServerGameConfigId]
 		if !found {
-			return "", "", "", false
+			return 0, "", 0, "", "", false
 		}
 		gc := gameConfigByID[sgc.GameConfigId]
 		if filterGameID > 0 && (gc == nil || gc.GameId != filterGameID) {
-			return "", "", "", false
+			return 0, "", 0, "", "", false
 		}
 		configName = "Unknown Config"
 		if gc != nil {
 			configName = gc.Name
+			gameID = gc.GameId
 			if game, gameOK := gameByID[gc.GameId]; gameOK {
 				gameName = game.Name
+				gameID = game.GameId
 			}
 		}
 		if gameName == "" {
 			gameName = "Unknown Game"
 		}
+		serverID = sgc.ServerId
 		serverName = "Unknown Server"
 		if server, serverOK := serverByID[sgc.ServerId]; serverOK {
 			serverName = server.Name
+			serverID = server.ServerId
 		}
-		return gameName, serverName, configName, true
+		return gameID, gameName, serverID, serverName, configName, true
 	}
 
 	// Live now (FR14): ListSessions(live_only=true), fleet-wide (no
@@ -241,12 +246,14 @@ func (app *App) buildActivityPageData(ctx context.Context, r *http.Request) Acti
 		log.Printf("WARNING: activity: failed to list live sessions: %v", err)
 	}
 	for _, session := range liveSessions {
-		gameName, serverName, configName, ok := activityRowLabels(session)
+		gameID, gameName, serverID, serverName, configName, ok := activityRowLabels(session)
 		if !ok {
 			continue
 		}
 		liveRows = append(liveRows, ActivityLiveRow{
+			GameID:     gameID,
 			GameName:   gameName,
+			ServerID:   serverID,
 			ServerName: serverName,
 			ConfigName: configName,
 			Uptime:     activitySessionUptime(session),
@@ -271,12 +278,14 @@ func (app *App) buildActivityPageData(ctx context.Context, r *http.Request) Acti
 		log.Printf("WARNING: activity: failed to list history sessions: %v", err)
 	}
 	for _, session := range historySessions {
-		gameName, serverName, configName, ok := activityRowLabels(session)
+		gameID, gameName, serverID, serverName, configName, ok := activityRowLabels(session)
 		if !ok {
 			continue
 		}
 		historyRows = append(historyRows, ActivityHistoryRow{
+			GameID:         gameID,
 			GameName:       gameName,
+			ServerID:       serverID,
 			ServerName:     serverName,
 			ConfigName:     configName,
 			TerminalStatus: session.Status,
