@@ -163,6 +163,30 @@ MC4CAQAwBQYDK2VwBCIEIJ24ADljcQFdb5ZBhTWbOTrZJhQe91FsLOSQUUn+mg/5
 whagent_signing_key_yaml = whagent_signing_key.replace("\n", "\\n")
 
 # ===========================
+# UI link-assertion signing key (issue #2595, dev-only)
+# ===========================
+#
+# WHAGENT_UI_SIGNING_KEY/WHAGENT_UI_SIGNING_KEY_ID are ui's own
+# link-assertion trust root (see issue #2595's NFR1, no-insecure-default
+# signing key) -- a separate signing surface from api/worker's
+# whagent_signing_key above, so ui fails startup loudly
+# (linkassert: no signing key configured) without a distinct key here.
+# This is a second fixed, checked-in dev-only Ed25519 key (PKCS8 PEM,
+# generated via `openssl genpkey -algorithm ed25519`), deliberately
+# different key material from whagent_signing_key above -- #2595's design
+# treats ui's signing key as separate custody from api's/worker's, so
+# api's and ui's JWKS documents must never publish the same key.
+# Overridable via WHAGENT_UI_SIGNING_KEY/WHAGENT_UI_SIGNING_KEY_ID in a
+# local .env, same precedent as whagent_signing_key above.
+whagent_ui_signing_key_id = os.environ.get('WHAGENT_UI_SIGNING_KEY_ID', 'dev-ui-key-1')
+whagent_ui_signing_key = os.environ.get('WHAGENT_UI_SIGNING_KEY', '''-----BEGIN PRIVATE KEY-----
+MC4CAQAwBQYDK2VwBCIEICsX6Ho9smQjRMfxOC1G9ct3Kv1FPMKWEET1adNB7c2D
+-----END PRIVATE KEY-----''')
+# See whagent_signing_key_yaml above for why the PEM must be \n-escaped
+# before interpolation into a k8s_yaml(blob(...)) double-quoted scalar.
+whagent_ui_signing_key_yaml = whagent_ui_signing_key.replace("\n", "\\n")
+
+# ===========================
 # On-behalf-of OIDC issuer (issue #2150, dev-only)
 # ===========================
 #
@@ -596,6 +620,10 @@ spec:
           value: "http://localhost:8081"
         - name: WHAGENT_MCP_PUBLIC_URL
           value: "http://localhost:8082"
+        - name: WHAGENT_UI_SIGNING_KEY_ID
+          value: "{whagent_ui_signing_key_id}"
+        - name: WHAGENT_UI_SIGNING_KEY
+          value: "{whagent_ui_signing_key_yaml}"
         - name: OTEL_EXPORTER_OTLP_ENDPOINT
           value: "{otel_endpoint}"
 """.format(
@@ -603,6 +631,8 @@ spec:
         pg_database_url=pg_database_url,
         rabbitmq_url=rabbitmq_url,
         whagent_oidc_issuer=whagent_oidc_issuer,
+        whagent_ui_signing_key_id=whagent_ui_signing_key_id,
+        whagent_ui_signing_key_yaml=whagent_ui_signing_key_yaml,
         otel_endpoint=otel_endpoint,
     )))
 
