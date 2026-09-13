@@ -18,11 +18,10 @@ func LatestSessionStatus(sessions []*manmanpb.Session) string {
 }
 
 // ComputeDeploymentActions derives the available one-click controls from a
-// deployment's latest session, per the M2 plan's action-availability table
-// (#1620):
+// deployment's latest session:
 //
 //	latest session | CanStart | CanStop | CanRestart
-//	nil            | false    | false   | false
+//	nil            | true     | false   | false
 //	pending        | false    | false   | false
 //	starting       | false    | false   | false
 //	running        | false    | true    | true
@@ -32,18 +31,16 @@ func LatestSessionStatus(sessions []*manmanpb.Session) string {
 //	lost           | true     | false   | true
 //	unknown/empty  | false    | false   | false
 //
-//   - FR1: Start is offered on stopped/crashed/lost. A deployment with no
-//     session at all shows no Start action -- deploy-and-start is out of
-//     scope for M2.
-//   - FR3: Stop is offered only when there is a live running session.
-//   - FR5: Restart is offered on running/crashed/lost.
+//   - Start is offered on nil (never started), stopped, crashed, and lost.
+//   - Stop is offered only when there is a live running session.
+//   - Restart is offered on running, crashed, and lost.
 //
-// Any status not covered above (including nil and unrecognised strings)
+// Any status not covered above (including unrecognised strings)
 // yields all-false, matching ComputeDeploymentStatus's fail-closed
 // convention.
 func ComputeDeploymentActions(latest *manmanpb.Session) DeploymentActions {
 	if latest == nil {
-		return DeploymentActions{}
+		return DeploymentActions{CanStart: true}
 	}
 	switch latest.GetStatus() {
 	case "running":

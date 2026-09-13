@@ -38,13 +38,11 @@ func TestComputeDeploymentActions_StatusMapping(t *testing.T) {
 	}
 }
 
-// TestComputeDeploymentActions_NilLatestSession is FR1's "no session yet
-// shows no Start action" case: a deployment that never had a session must
-// not offer any action, including Start (deploy-and-start is out of scope
-// for M2).
+// TestComputeDeploymentActions_NilLatestSession covers the never-started
+// deployment case: a deployment with no session yet offers Start.
 func TestComputeDeploymentActions_NilLatestSession(t *testing.T) {
 	got := ComputeDeploymentActions(nil)
-	want := DeploymentActions{}
+	want := DeploymentActions{CanStart: true}
 	if got != want {
 		t.Errorf("ComputeDeploymentActions(nil) = %+v, want %+v", got, want)
 	}
