@@ -40,10 +40,15 @@ type fakeInfrastructureAPIClient struct {
 	// summary tests below (#2371).
 	fleetStatus    []*manmanpb.FleetGameStatus
 	fleetStatusErr error
+
+	getServerOverride map[int64]*manmanpb.Server
 }
 
 func newFakeInfrastructureAPIClient() *fakeInfrastructureAPIClient {
-	return &fakeInfrastructureAPIClient{allocatedPorts: map[int64][]*manmanpb.AllocatedPort{}}
+	return &fakeInfrastructureAPIClient{
+		allocatedPorts:    map[int64][]*manmanpb.AllocatedPort{},
+		getServerOverride: map[int64]*manmanpb.Server{},
+	}
 }
 
 func (f *fakeInfrastructureAPIClient) ListServers(ctx context.Context, in *manmanpb.ListServersRequest, opts ...grpc.CallOption) (*manmanpb.ListServersResponse, error) {
@@ -83,6 +88,11 @@ func (f *fakeInfrastructureAPIClient) GetFleetStatusSummary(ctx context.Context,
 }
 
 func (f *fakeInfrastructureAPIClient) GetServer(ctx context.Context, in *manmanpb.GetServerRequest, opts ...grpc.CallOption) (*manmanpb.GetServerResponse, error) {
+	if f.getServerOverride != nil {
+		if s, ok := f.getServerOverride[in.GetServerId()]; ok {
+			return &manmanpb.GetServerResponse{Server: s}, nil
+		}
+	}
 	for _, s := range f.servers {
 		if s.GetServerId() == in.GetServerId() {
 			return &manmanpb.GetServerResponse{Server: s}, nil
@@ -366,6 +376,72 @@ func TestHandleInfrastructure_ManageQueryParam_OpensThatHostsPanel(t *testing.T)
 	}
 	if !strings.Contains(body, "alpha.example.com:27015") {
 		t.Errorf("expected host-alpha's public address to render in its Manage panel, got: %s", body)
+	}
+}
+
+// TestHandleInfrastructure_RendersAllowedPortRanges covers rendering configured
+// allowed host-port ranges on the infrastructure page's host Manage panel.
+func TestHandleInfrastructure_RendersAllowedPortRanges(t *testing.T) {
+	api := newFakeInfrastructureAPIClient()
+	api.servers = []*manmanpb.Server{
+		{
+			ServerId: 1,
+			Name:     "host-alpha",
+			AllowedPortRanges: []*manmanpb.PortRange{
+				{Start: 25565, End: 25570, Protocol: "TCP"},
+				{Start: 27015, End: 27020, Protocol: "UDP"},
+			},
+		},
+	}
+
+	code, body := renderInfrastructureHTTP(t, api, "/infrastructure?manage=1")
+	if code != http.StatusOK {
+		t.Fatalf("status = %d, want 200; body: %s", code, body)
+	}
+
+	for _, want := range []string{
+		"Allowed Host Port Ranges",
+		"25565-25570",
+		"27015-27020",
+		"/infrastructure/1/ports/edit?start=25565&amp;end=25570&amp;protocol=TCP",
+		"/infrastructure/1/ports/edit?start=27015&amp;end=27020&amp;protocol=UDP",
+		"/infrastructure/1/ports/remove",
+	} {
+		if !strings.Contains(body, want) {
+			t.Errorf("expected body to contain %q", want)
+		}
+	}
+	if strings.Contains(body, "No allowed host-port ranges configured") {
+		t.Errorf("empty-state rendered even though ranges exist on host")
+	}
+}
+
+// TestHandleInfrastructure_ManageQueryParam_FallsBackToGetServerForPortRanges
+// covers the fallback when ListServers does not include allowed port ranges on
+// the server struct, but GetServer has them.
+func TestHandleInfrastructure_ManageQueryParam_FallsBackToGetServerForPortRanges(t *testing.T) {
+	api := newFakeInfrastructureAPIClient()
+	// api.servers has no ranges (simulating ListServers without ranges):
+	api.servers = []*manmanpb.Server{
+		{ServerId: 1, Name: "host-alpha"},
+	}
+	// But GetServer has ranges:
+	getServerWithRanges := &manmanpb.Server{
+		ServerId: 1,
+		Name:     "host-alpha",
+		AllowedPortRanges: []*manmanpb.PortRange{
+			{Start: 25565, End: 25570, Protocol: "TCP"},
+		},
+	}
+	api.getServerOverride[1] = getServerWithRanges
+
+	code, body := renderInfrastructureHTTP(t, api, "/infrastructure?manage=1")
+	if code != http.StatusOK {
+		t.Fatalf("status = %d, want 200; body: %s", code, body)
+	}
+
+	if !strings.Contains(body, "25565-25570") {
+		t.Errorf("expected body to contain 25565-25570 via GetServer fallback, got: %s", body)
 	}
 }
 

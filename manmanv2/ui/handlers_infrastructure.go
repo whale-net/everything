@@ -65,6 +65,11 @@ func (app *App) renderInfrastructure(w http.ResponseWriter, r *http.Request, man
 			host.ManageOpen = true
 			host.PortsNotice = portsNotice
 			host.PortsEdit = portsEdit
+			if len(server.AllowedPortRanges) == 0 {
+				if getResp, err := app.grpc.GetAPI().GetServer(ctx, &manmanpb.GetServerRequest{ServerId: server.ServerId}); err == nil && getResp.GetServer() != nil {
+					server.AllowedPortRanges = getResp.GetServer().AllowedPortRanges
+				}
+			}
 		}
 		hosts = append(hosts, host)
 	}
