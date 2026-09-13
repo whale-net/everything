@@ -5,8 +5,8 @@ import (
 	"strings"
 
 	"github.com/whale-net/everything/libs/go/htmxui"
-	"github.com/whale-net/everything/manmanv2/ui/components"
 	manmanpb "github.com/whale-net/everything/manmanv2/protos"
+	"github.com/whale-net/everything/manmanv2/ui/components"
 )
 
 type GameOverviewData struct {
@@ -34,14 +34,22 @@ type GameDeploymentOverview struct {
 }
 
 type GameDetailPageData struct {
-	Layout      components.LayoutData
-	Game        *manmanpb.Game
-	Row         GameRow
-	PathPresets []*manmanpb.GameAddonPathPreset
-	Volumes     []*manmanpb.GameConfigVolume
-	Configs     []*manmanpb.GameConfig
-	SgcCounts   map[int64]int
-	Overview    GameOverviewData
+	Layout        components.LayoutData
+	Game          *manmanpb.Game
+	IsAdmin       bool
+	ActiveTab     string
+	RunState      components.DeploymentStatus
+	Connect       components.ConnectAddressView
+	Deployments   []GameDeploymentRow
+	LatestSession *manmanpb.Session
+	LiveSession   *manmanpb.Session
+	Sessions      []*manmanpb.Session
+	Actions       []*manmanpb.ActionDefinition
+	PathPresets   []*manmanpb.GameAddonPathPreset
+	Volumes       []*manmanpb.GameConfigVolume
+	Configs       []*manmanpb.GameConfig
+	SgcCounts     map[int64]int
+	Overview      GameOverviewData
 }
 
 func metadataValue(game *manmanpb.Game, field string) string {
@@ -362,6 +370,37 @@ templ GameDetail(data GameDetailPageData) {
 	@components.Layout(data.Layout) {
 		<style>
 			[x-cloak] { display: none !important; }
+			.log-viewer-container {
+				background: #1e1e1e;
+				max-height: 500px;
+				overflow: hidden;
+			}
+			[data-theme="oled"] .log-viewer-container {
+				background: #000000;
+			}
+			.log-viewer-output {
+				margin: 0;
+				padding: 1rem;
+				color: #d4d4d4;
+				font-family: 'Consolas', 'Monaco', 'Courier New', monospace;
+				font-size: 0.875rem;
+				line-height: 1.5;
+				overflow-y: auto;
+				overflow-x: auto;
+				max-height: 500px;
+				white-space: pre-wrap;
+				word-wrap: break-word;
+			}
+			.log-viewer-container.collapsed .log-viewer-output {
+				display: none;
+			}
+			.log-line { display: block; }
+			.log-stdout { color: #d4d4d4; }
+			.log-stderr { color: #f48771; }
+			.log-host { color: #4fc1ff; }
+			.log-info { color: #4fc1ff; }
+			.log-warning { color: #f9c74f; }
+			.log-error { color: #f48771; }
 		</style>
 		<script>
 			document.addEventListener('click', function(event) {
@@ -377,244 +416,726 @@ templ GameDetail(data GameDetailPageData) {
 				}
 			});
 		</script>
-		<div class="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4 mb-6">
-			<div>
-				<div class="flex items-center gap-2 mb-2">
-					<span class="badge badge-primary badge-soft">
-						🎮 GAME
-					</span>
-					@htmxui.Badge(deploymentStatusLabel(data.Row.RunState), statusBadgeVariant(string(data.Row.RunState)), htmxui.BadgeSizeMD, true, nil)
-					@components.ConnectAddressDisplay(data.Row.Connect)
-				</div>
-				<h1 class="text-3xl font-bold text-base-content">{ data.Game.Name }</h1>
-			</div>
-			<div class="flex flex-wrap gap-2">
-				<a href={ templ.URL(fmt.Sprintf("/games/%d/actions", data.Game.GameId)) } class="btn btn-primary btn-sm">
-					⚡ Manage Actions
-				</a>
-				<button onclick="document.getElementById('edit-form').classList.remove('hidden')" class="btn btn-secondary btn-sm">
-					Edit
-				</button>
-			</div>
-		</div>
-		@GameOverview(data.Overview)
-		<!-- Deployments -->
-		<div class="card bg-base-100 border border-base-300 shadow-sm overflow-hidden mb-6">
-			<div class="p-4 border-b border-base-300 bg-base-200">
-				<h2 class="text-lg font-semibold text-base-content">Deployments</h2>
-			</div>
-			<div class="p-4" id={ fmt.Sprintf("game-deployments-%d", data.Game.GameId) }>
-				@deploymentsSection(data.Row.Deployments)
-			</div>
-		</div>
-		<!-- Configurations -->
-		<div class="card bg-base-100 border border-base-300 shadow-sm overflow-hidden mb-6">
-			<div class="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-3 p-4 border-b border-base-300 bg-base-200">
-				<h2 class="text-lg font-semibold text-base-content">Configurations</h2>
-				<a href={ templ.URL(fmt.Sprintf("/games/%d/configs/new", data.Game.GameId)) } class="btn btn-primary btn-sm">+ Create Config</a>
-			</div>
-			<div class="p-4" id={ fmt.Sprintf("game-configs-%d", data.Game.GameId) }>
-				@gameConfigsSection(data.Row)
-			</div>
-		</div>
-		<!-- Workshop Libraries -->
 		<div
-			id={ fmt.Sprintf("game-workshop-%d", data.Game.GameId) }
-			hx-get={ fmt.Sprintf("/games/%d/workshop-panel", data.Game.GameId) }
-			hx-trigger="load"
-			hx-swap="innerHTML"
-			class="mb-6"
+			id="game-detail-tabs"
+			x-data={ fmt.Sprintf(`{
+				activeTab: (function() {
+					const urlParams = new URLSearchParams(window.location.search);
+					const tabParam = urlParams.get('tab');
+					if (tabParam) return tabParam;
+					const hash = window.location.hash.replace('#', '');
+					if (hash === 'settings-presets' || hash === 'configuration') return 'configuration';
+					if (hash === 'danger-zone' || hash === 'advanced') return 'advanced';
+					if (hash === 'logs' || hash === 'console') return 'logs';
+					return '%s';
+				})(),
+				switchTab(tab) {
+					this.activeTab = tab;
+					const url = new URL(window.location);
+					url.searchParams.set('tab', tab);
+					window.history.replaceState({}, '', url);
+				}
+			}`, data.ActiveTab) }
 		>
-			@gameWorkshopPlaceholder()
-		</div>
-		<!-- Edit form -->
-		<div id="edit-form" class="hidden mb-6">
-			<div class="card bg-base-100 border border-base-300 shadow-sm p-6">
-				<h2 class="text-lg font-semibold text-base-content mb-4">Edit Game</h2>
-				<form hx-post={ fmt.Sprintf("/games/%d/edit", data.Game.GameId) } hx-swap="none" class="space-y-4">
-					<div>
-						<label for="name" class="block text-sm font-medium text-base-content mb-2">Name *</label>
-						<input type="text" id="name" name="name" value={ data.Game.Name } required class="input input-bordered w-full"/>
+			<!-- Page Header -->
+			<div class="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4 mb-6">
+				<div>
+					<div class="flex items-center gap-2 mb-2">
+						<span class="badge badge-primary badge-soft">
+							🎮 GAME
+						</span>
+						@htmxui.Badge(deploymentStatusLabel(data.RunState), statusBadgeVariant(string(data.RunState)), htmxui.BadgeSizeMD, true, nil)
 					</div>
-					<div>
-						<label for="steam_app_id" class="block text-sm font-medium text-base-content mb-2">Steam App ID</label>
-						<input type="text" id="steam_app_id" name="steam_app_id" value={ data.Game.SteamAppId } class="input input-bordered w-full"/>
+					<h1 class="text-3xl font-bold text-base-content">{ data.Game.Name }</h1>
+					<div class="mt-2">
+						@components.ConnectAddressDisplay(data.Connect)
 					</div>
-					<div>
-						<label for="genre" class="block text-sm font-medium text-base-content mb-2">Genre</label>
-						<input type="text" id="genre" name="genre" value={ metadataValue(data.Game, "genre") } class="input input-bordered w-full"/>
-					</div>
-					<div>
-						<label for="publisher" class="block text-sm font-medium text-base-content mb-2">Publisher</label>
-						<input type="text" id="publisher" name="publisher" value={ metadataValue(data.Game, "publisher") } class="input input-bordered w-full"/>
-					</div>
-					<div>
-						<label for="tags" class="block text-sm font-medium text-base-content mb-2">Tags (comma-separated)</label>
-						<input type="text" id="tags" name="tags" value={ metadataTags(data.Game) } class="input input-bordered w-full"/>
-					</div>
-					<div class="flex gap-3 pt-2">
-						<button type="submit" class="btn btn-success">Save Changes</button>
-						<button type="button" onclick="document.getElementById('edit-form').classList.add('hidden')" class="btn btn-secondary">Cancel</button>
-					</div>
-				</form>
-			</div>
-		</div>
-		<!-- Path Presets -->
-		<div id="settings-presets" x-data="{ expanded: false }" class="card bg-base-100 border border-base-300 shadow-sm mb-6 overflow-hidden">
-			<button @click="expanded = !expanded" class="w-full flex justify-between items-center p-4 border-b border-base-300 hover:bg-base-200 transition-colors">
-				<div class="flex items-center gap-3">
-					<h2 class="text-lg font-semibold text-base-content">Addon Path Presets</h2>
-					<span class="text-sm text-base-content/60">({ fmt.Sprintf("%d presets", len(data.PathPresets)) })</span>
 				</div>
-				<svg :class="expanded ? 'rotate-180' : ''" class="w-5 h-5 text-base-content/60 transition-transform" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-					<path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7"></path>
-				</svg>
-			</button>
-			<div x-show="expanded" x-cloak x-collapse>
-				if len(data.PathPresets) > 0 {
-					<div class="overflow-x-auto">
-						<table class="table">
-							<thead class="bg-base-200">
-								<tr>
-									<th scope="col">Name</th>
-									<th scope="col">Volume</th>
-									<th scope="col">Installation Path</th>
-									<th scope="col" class="text-right">Actions</th>
-								</tr>
-							</thead>
-							<tbody>
-								for _, preset := range data.PathPresets {
-									<tr class="hover">
-										<td>
-											<div class="text-sm font-medium text-base-content">{ preset.Name }</div>
-											if preset.Description != "" {
-												<div class="text-xs text-base-content/60 mt-1">{ preset.Description }</div>
-											}
-										</td>
-										<td class="text-sm text-base-content"><em>(relative path)</em></td>
-										<td class="text-sm font-mono text-base-content">{ preset.InstallationPath }</td>
-										<td class="text-right">
-											<form method="POST" action={ templ.URL(fmt.Sprintf("/games/%d/presets/%d/delete", data.Game.GameId, preset.PresetId)) } class="inline">
-												<button type="submit" onclick="return confirm('Delete this preset?')" class="btn btn-error btn-sm">Delete</button>
-											</form>
-										</td>
-									</tr>
-								}
-							</tbody>
-						</table>
-					</div>
-				} else {
-					<div class="p-12 text-center">
-						<p class="text-base-content/60">No path presets defined. Add a preset to make addon installation easier.</p>
-					</div>
-				}
-				<div class="p-4 border-t border-base-300">
-					<button onclick="document.getElementById('add-preset-form').classList.remove('hidden')" class="btn btn-primary btn-sm">+ Add Preset</button>
-				</div>
-			</div>
-		</div>
-		<!-- Add Preset Form -->
-		<div id="add-preset-form" class="hidden mb-6">
-			<div class="card bg-base-100 border border-base-300 shadow-sm p-6">
-				<h2 class="text-lg font-semibold text-base-content mb-4">Add Path Preset</h2>
-				<form method="POST" action={ templ.URL(fmt.Sprintf("/games/%d/presets/create", data.Game.GameId)) } class="space-y-4">
-					<input type="hidden" name="game_id" value={ fmt.Sprintf("%d", data.Game.GameId) }/>
-					<div>
-						<label for="preset_name" class="block text-sm font-medium text-base-content mb-2">Name *</label>
-						<input type="text" id="preset_name" name="name" required placeholder="e.g., Maps, Plugins, Skins" class="input input-bordered w-full"/>
-						<p class="text-xs text-base-content/60 mt-1">Short label for this preset</p>
-					</div>
-					<div>
-						<label for="preset_description" class="block text-sm font-medium text-base-content mb-2">Description</label>
-						<textarea id="preset_description" name="description" rows="2" placeholder="Optional description" class="textarea textarea-bordered w-full"></textarea>
-					</div>
-					<div>
-						<label for="preset_volume_id" class="block text-sm font-medium text-base-content mb-2">Volume (Optional)</label>
-						<select id="preset_volume_id" name="volume_id" class="select select-bordered w-full">
-							<option value="">-- Use first volume (default) --</option>
-							for _, vol := range data.Volumes {
-								<option value={ fmt.Sprintf("%d", vol.VolumeId) }>{ vol.Name } ({ vol.ContainerPath })</option>
-							}
-						</select>
-						<p class="text-xs text-base-content/60 mt-1">Select which volume addons using this preset should install to</p>
-					</div>
-					<div>
-						<label for="preset_installation_path" class="block text-sm font-medium text-base-content mb-2">Installation Path *</label>
-						<input type="text" id="preset_installation_path" name="installation_path" required placeholder="e.g., left4dead2/maps/" class="input input-bordered w-full"/>
-						<p class="text-xs text-base-content/60 mt-1">Relative path within the volume</p>
-					</div>
-					<div class="flex gap-3 pt-2">
-						<button type="submit" class="btn btn-success">Add Preset</button>
-						<button type="button" onclick="document.getElementById('add-preset-form').classList.add('hidden')" class="btn btn-secondary">Cancel</button>
-					</div>
-				</form>
-			</div>
-		</div>
-		<!-- Game Information -->
-		<div class="card bg-base-100 border border-base-300 shadow-sm p-6 mb-6">
-			<h2 class="text-lg font-semibold text-base-content mb-4">Game Information</h2>
-			<dl class="grid grid-cols-1 md:grid-cols-2 gap-4">
-				@components.DLItem("Game ID", fmt.Sprintf("%d", data.Game.GameId))
-				@components.DLItem("Name", data.Game.Name)
-				@components.DLItem("Steam App ID", func() string {
-					if data.Game.SteamAppId != "" {
-						return data.Game.SteamAppId
+				<div class="flex flex-wrap gap-2">
+					<a href={ templ.URL(fmt.Sprintf("/games/%d/actions", data.Game.GameId)) } class="btn btn-primary btn-sm">
+						⚡ Manage Actions
+					</a>
+					if data.IsAdmin {
+						<button type="button" @click="switchTab('advanced')" class="btn btn-secondary btn-sm">
+							Edit Game
+						</button>
 					}
-					return "-"
-				}())
-				if data.Game.Metadata != nil {
-					@components.DLItem("Genre", func() string {
-						if data.Game.Metadata.Genre != "" {
-							return data.Game.Metadata.Genre
-						}
-						return "-"
-					}())
-					@components.DLItem("Publisher", func() string {
-						if data.Game.Metadata.Publisher != "" {
-							return data.Game.Metadata.Publisher
-						}
-						return "-"
-					}())
-					<div>
-						<dt class="text-sm font-medium text-base-content/60">Tags</dt>
-						<dd class="mt-1 flex flex-wrap gap-1">
-							if len(data.Game.Metadata.Tags) > 0 {
-								for _, tag := range data.Game.Metadata.Tags {
-									<span class="badge badge-neutral badge-soft badge-sm">{ tag }</span>
-								}
-							} else {
-								<span class="text-sm text-base-content">-</span>
+				</div>
+			</div>
+
+			<!-- Tab Sub-Navigation (FR: Progressive disclosure) -->
+			<div role="tablist" class="tabs tabs-bordered mb-6" data-game-tabs>
+				<button
+					type="button"
+					role="tab"
+					id="tab-btn-overview"
+					class="tab tab-lg"
+					:class="{ 'tab-active font-semibold': activeTab === 'overview' }"
+					@click="switchTab('overview')"
+				>
+					Overview
+				</button>
+				<button
+					type="button"
+					role="tab"
+					id="tab-btn-logs"
+					class="tab tab-lg"
+					:class="{ 'tab-active font-semibold': activeTab === 'logs' }"
+					@click="switchTab('logs')"
+				>
+					Console &amp; Logs
+				</button>
+				if data.IsAdmin {
+					<button
+						type="button"
+						role="tab"
+						id="tab-btn-configuration"
+						class="tab tab-lg"
+						:class="{ 'tab-active font-semibold': activeTab === 'configuration' }"
+						@click="switchTab('configuration')"
+					>
+						Configuration
+					</button>
+					<button
+						type="button"
+						role="tab"
+						id="tab-btn-advanced"
+						class="tab tab-lg"
+						:class="{ 'tab-active font-semibold': activeTab === 'advanced' }"
+						@click="switchTab('advanced')"
+					>
+						Advanced
+					</button>
+				}
+			</div>
+
+			<!-- TAB 1: OVERVIEW (Default: status, runtime, start/stop/restart) -->
+			<div id="tab-panel-overview" x-show="activeTab === 'overview'">
+				@GameOverview(data.Overview)
+
+				<div class="card bg-base-100 border border-base-300 shadow-sm overflow-hidden mb-6">
+					<div class="p-4 border-b border-base-300 bg-base-200">
+						<h2 class="text-lg font-semibold text-base-content">Server Status &amp; Controls</h2>
+						<p class="text-xs text-base-content/60 mt-1">Start, stop, and restart deployments with real-time status.</p>
+					</div>
+					if len(data.Deployments) > 0 {
+						<div class="overflow-x-auto">
+							<table class="table">
+								<thead>
+									<tr>
+										<th>Deployment</th>
+										<th>Status</th>
+										<th>Live Session</th>
+										<th>Actions</th>
+									</tr>
+								</thead>
+								<tbody>
+									for _, dep := range data.Deployments {
+										<tr class="bg-base-200/40">
+											<td colspan="4">
+												<div class="flex flex-wrap justify-between items-center gap-3 py-1">
+													<div class="flex items-center gap-3">
+														<span class="font-medium text-sm">{ dep.Row.DisplayName }</span>
+														<span id={ DeploymentConnectAddressID(dep.Row.ServerGameConfigID) }>
+															@components.ConnectAddressDisplay(dep.Connect)
+														</span>
+													</div>
+													<div class="flex items-center gap-3 text-xs">
+														<button
+															type="button"
+															@click="switchTab('logs')"
+															class="link link-primary"
+														>
+															Console &amp; Logs
+														</button>
+													</div>
+												</div>
+											</td>
+										</tr>
+										@DeploymentRow(dep.Row)
+									}
+								</tbody>
+							</table>
+						</div>
+					} else {
+						<div class="p-8 text-center">
+							<p class="text-base-content/60">No deployments found for this game.</p>
+							if data.IsAdmin {
+								<button type="button" @click="switchTab('advanced')" class="btn btn-primary btn-sm mt-3">
+									Go to Advanced to Deploy
+								</button>
 							}
-						</dd>
+						</div>
+					}
+				</div>
+
+				<div class="card bg-base-100 border border-base-300 shadow-sm p-6 mb-6">
+					<h2 class="text-lg font-semibold text-base-content mb-4">Game Information</h2>
+					<dl class="grid grid-cols-1 md:grid-cols-2 gap-4">
+						@components.DLItem("Game ID", fmt.Sprintf("%d", data.Game.GameId))
+						@components.DLItem("Name", data.Game.Name)
+						@components.DLItem("Steam App ID", func() string {
+							if data.Game.SteamAppId != "" {
+								return data.Game.SteamAppId
+							}
+							return "-"
+						}())
+						if data.Game.Metadata != nil {
+							@components.DLItem("Genre", func() string {
+								if data.Game.Metadata.Genre != "" {
+									return data.Game.Metadata.Genre
+								}
+								return "-"
+							}())
+							@components.DLItem("Publisher", func() string {
+								if data.Game.Metadata.Publisher != "" {
+									return data.Game.Metadata.Publisher
+								}
+								return "-"
+							}())
+							<div>
+								<dt class="text-sm font-medium text-base-content/60">Tags</dt>
+								<dd class="mt-1 flex flex-wrap gap-1">
+									if len(data.Game.Metadata.Tags) > 0 {
+										for _, tag := range data.Game.Metadata.Tags {
+											<span class="badge badge-neutral badge-soft badge-sm">{ tag }</span>
+										}
+									} else {
+										<span class="text-sm text-base-content">-</span>
+									}
+								</dd>
+							</div>
+						}
+					</dl>
+				</div>
+			</div>
+
+			<!-- TAB 2: CONSOLE & LOGS (Live stream + log history) -->
+			<div id="tab-panel-logs" x-show="activeTab === 'logs'" x-cloak>
+				if data.LiveSession != nil {
+					<!-- Live Logs viewer -->
+					<div class="card bg-base-100 border border-base-300 shadow-sm mb-6 overflow-hidden">
+						<div class="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-3 p-4 border-b border-base-300 bg-base-200">
+							<div class="flex items-center gap-2">
+								<h2 class="text-lg font-semibold text-base-content">Live Console &amp; Stream</h2>
+								<span class="badge badge-info badge-sm">{ fmt.Sprintf("Session #%d", data.LiveSession.SessionId) }</span>
+							</div>
+							<div class="flex flex-wrap items-center gap-2">
+								<button id="toggle-logs" class="btn btn-neutral btn-sm">Hide</button>
+								<button id="clear-logs" class="btn btn-neutral btn-sm">Clear</button>
+								<span id="log-status" class="text-sm text-base-content/60">Connecting...</span>
+							</div>
+						</div>
+						<div id="log-viewer" class="log-viewer-container">
+							<pre id="log-output" class="log-viewer-output"></pre>
+						</div>
+						<div class="border-t border-base-300">
+							<form id="stdin-form" class="flex gap-2 p-3 bg-neutral">
+								<input type="text" id="stdin-input" placeholder="Send command to server..." class="input input-bordered flex-1 bg-neutral text-neutral-content font-mono text-sm"/>
+								<button type="submit" id="stdin-submit" class="btn btn-primary min-w-[80px]">Send</button>
+							</form>
+							<div id="stdin-status" class="px-3 pb-2 text-xs text-neutral-content/60 min-h-[1.5rem] bg-neutral"></div>
+						</div>
+					</div>
+					<div id="live-logs-data" data-session-id={ fmt.Sprintf("%d", data.LiveSession.SessionId) }></div>
+					<script type="text/javascript">
+						(function() {
+							const dataEl = document.getElementById('live-logs-data');
+							if (!dataEl) return;
+							const sessionId = parseInt(dataEl.dataset.sessionId);
+							const logOutput = document.getElementById('log-output');
+							const logStatus = document.getElementById('log-status');
+							const logViewer = document.getElementById('log-viewer');
+							const toggleBtn = document.getElementById('toggle-logs');
+							const clearBtn = document.getElementById('clear-logs');
+							let autoScroll = true;
+							let evtSource = null;
+							let lastSequenceNumber = 0;
+
+							function appendLogLine(container, timestamp, source, message) {
+								const line = document.createElement('span');
+								line.className = 'log-line log-' + source;
+								line.textContent = '[' + timestamp + '] [' + source + '] ' + message;
+								container.appendChild(line);
+								container.appendChild(document.createTextNode('\n'));
+							}
+
+							function connect() {
+								const url = lastSequenceNumber > 0
+									? '/sessions/' + sessionId + '/logs/stream?after_sequence_number=' + lastSequenceNumber
+									: '/sessions/' + sessionId + '/logs/stream';
+								evtSource = new EventSource(url);
+								evtSource.onopen = () => {
+									if (logStatus) {
+										logStatus.textContent = '● Connected';
+										logStatus.style.color = '#4fc1ff';
+									}
+								};
+								evtSource.onmessage = (event) => {
+									const d = JSON.parse(event.data);
+									if (d.type === 'connected') return;
+									if (d.sequence_number) lastSequenceNumber = d.sequence_number;
+									const date = new Date(d.timestamp);
+									const time = date.toLocaleTimeString('en-US', { hour12: false });
+									if (logOutput) {
+										appendLogLine(logOutput, time, d.source, d.message);
+										if (autoScroll) {
+											logOutput.scrollTop = logOutput.scrollHeight;
+										}
+										const lines = logOutput.children;
+										if (lines.length > 1000) {
+											logOutput.removeChild(lines[0]);
+										}
+									}
+								};
+								evtSource.onerror = () => {
+									if (logStatus) {
+										logStatus.textContent = '● Disconnected';
+										logStatus.style.color = '#f48771';
+									}
+									if (evtSource) {
+										evtSource.close();
+										evtSource = null;
+									}
+									setTimeout(connect, 3000);
+								};
+							}
+
+							if (toggleBtn && logViewer) {
+								toggleBtn.addEventListener('click', () => {
+									logViewer.classList.toggle('collapsed');
+									toggleBtn.textContent = logViewer.classList.contains('collapsed') ? 'Show' : 'Hide';
+								});
+							}
+
+							if (clearBtn && logOutput) {
+								clearBtn.addEventListener('click', () => {
+									logOutput.textContent = '';
+								});
+							}
+
+							if (logOutput) {
+								logOutput.addEventListener('scroll', () => {
+									autoScroll = (logOutput.scrollHeight - logOutput.scrollTop - logOutput.clientHeight) < 20;
+								});
+							}
+
+							connect();
+
+							const stdinForm = document.getElementById('stdin-form');
+							const stdinInput = document.getElementById('stdin-input');
+							const stdinStatus = document.getElementById('stdin-status');
+							if (stdinForm && stdinInput) {
+								stdinForm.addEventListener('submit', async (e) => {
+									e.preventDefault();
+									const text = stdinInput.value.trim();
+									if (!text) return;
+									stdinInput.disabled = true;
+									try {
+										const resp = await fetch('/sessions/' + sessionId + '/stdin', {
+											method: 'POST',
+											headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+											body: 'input=' + encodeURIComponent(text)
+										});
+										if (resp.ok) {
+											stdinInput.value = '';
+											if (stdinStatus) {
+												stdinStatus.textContent = 'Command sent: ' + text;
+												setTimeout(() => { if (stdinStatus) stdinStatus.textContent = ''; }, 3000);
+											}
+										} else {
+											const err = await resp.text();
+											if (stdinStatus) stdinStatus.textContent = 'Error: ' + err;
+										}
+									} catch (err) {
+										if (stdinStatus) stdinStatus.textContent = 'Error: ' + err.message;
+									} finally {
+										stdinInput.disabled = false;
+										stdinInput.focus();
+									}
+								});
+							}
+						})();
+					</script>
+					if len(data.Actions) > 0 {
+						<div class="card bg-base-100 border border-base-300 shadow-sm p-4 mb-6">
+							<h3 class="text-sm font-semibold text-base-content mb-2">Quick Console Actions</h3>
+							<div class="flex flex-wrap gap-2">
+								for _, act := range data.Actions {
+									<form
+										method="POST"
+										action={ templ.URL(fmt.Sprintf("/sessions/%d/actions/execute", data.LiveSession.SessionId)) }
+										hx-post={ fmt.Sprintf("/sessions/%d/actions/execute", data.LiveSession.SessionId) }
+										hx-vals={ fmt.Sprintf("{\"action_id\": \"%d\"}", act.ActionId) }
+										hx-target="#action-quick-status"
+										hx-swap="innerHTML"
+										class="inline"
+									>
+										<button type="submit" class="btn btn-sm btn-outline">
+											{ act.Name }
+										</button>
+									</form>
+								}
+							</div>
+							<div id="action-quick-status" class="text-xs text-base-content/70 mt-2"></div>
+						</div>
+					}
+				} else if len(data.Sessions) > 0 {
+					<div class="alert alert-info shadow-sm mb-6">
+						<span>Game server is currently offline. Start a deployment from the Overview tab to view live streaming logs and console.</span>
 					</div>
 				}
-			</dl>
-		</div>
-		<!-- Danger Zone: chrome only restyled onto htmxui.Confirm's ZoneTitle visual
-			language; the existing Alpine click-to-reveal gate is kept as-is (FR7),
-			see sgc_detail.templ's Danger Zone comment for the full rationale. -->
-		<div id="danger-zone" x-data="{ confirmDelete: false }" class="card bg-base-100 border-2 border-error/40 shadow-md overflow-hidden mt-6">
-			<div class="bg-error/10 px-6 py-4 border-b-2 border-error/40">
-				<h2 class="text-lg font-semibold text-error">⚠️ Danger Zone</h2>
-			</div>
-			<div class="card-body">
-				<div class="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4">
-					<div>
-						<h3 class="text-sm font-semibold text-base-content mb-1">Delete this game</h3>
-						<p class="text-sm text-base-content/60">Once deleted, all configurations and deployments will be removed. This action cannot be undone.</p>
+
+				<!-- Log History (Past Sessions) -->
+				<div class="card bg-base-100 border border-base-300 shadow-sm overflow-hidden mb-6">
+					<div class="p-4 border-b border-base-300 bg-base-200">
+						<h2 class="text-lg font-semibold text-base-content">Session Log History</h2>
 					</div>
-					<div class="flex-shrink-0">
-						<button x-show="!confirmDelete" @click="confirmDelete = true" class="btn btn-error">Delete Game</button>
-						<div x-show="confirmDelete" x-cloak class="flex gap-2 items-center">
-							<span class="text-sm text-error font-medium">Are you sure?</span>
-							<form method="POST" action={ templ.URL(fmt.Sprintf("/games/%d/delete", data.Game.GameId)) } class="inline">
-								<button type="submit" class="btn btn-error">Yes, Delete</button>
+					if len(data.Sessions) > 0 {
+						<div class="overflow-x-auto">
+							<table class="table">
+								<thead>
+									<tr>
+										<th>Session ID</th>
+										<th>Status</th>
+										<th>Started</th>
+										<th>Ended</th>
+										<th>Exit Code</th>
+										<th class="text-right">Actions</th>
+									</tr>
+								</thead>
+								<tbody>
+									for _, s := range data.Sessions {
+										<tr class="hover">
+											<td class="font-mono text-sm">{ fmt.Sprintf("#%d", s.SessionId) }</td>
+											<td>
+												@htmxui.Badge(s.Status, statusBadgeVariant(sessionStatusVariant(s.Status)), htmxui.BadgeSizeSM, true, nil)
+											</td>
+											<td class="text-sm">{ timeAgo(s.StartedAt) }</td>
+											<td class="text-sm">
+												if s.EndedAt > 0 {
+													{ timeAgo(s.EndedAt) }
+												} else {
+													<span class="text-base-content/40">-</span>
+												}
+											</td>
+											<td class="text-sm font-mono">{ fmt.Sprintf("%d", s.ExitCode) }</td>
+											<td class="text-right">
+												<a href={ templ.URL(fmt.Sprintf("/sessions/%d", s.SessionId)) } class="btn btn-primary btn-sm">
+													View Logs
+												</a>
+											</td>
+										</tr>
+									}
+								</tbody>
+							</table>
+						</div>
+					} else {
+						<div class="p-8 text-center">
+							<p class="text-base-content/60">No sessions recorded yet for this game.</p>
+						</div>
+					}
+				</div>
+			</div>
+
+			<!-- TAB 3: CONFIGURATION (Game config files, environment variables, ports) -->
+			if data.IsAdmin {
+				<div id="tab-panel-configuration" x-show="activeTab === 'configuration'" x-cloak>
+					<!-- Game Configurations -->
+					<div class="card bg-base-100 border border-base-300 shadow-sm overflow-hidden mb-6">
+						<div class="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-3 p-4 border-b border-base-300 bg-base-200">
+							<div>
+								<h2 class="text-lg font-semibold text-base-content">Game Configurations</h2>
+								<p class="text-xs text-base-content/60 mt-1">Docker image, entrypoints, and base parameters.</p>
+							</div>
+							<a href={ templ.URL(fmt.Sprintf("/games/%d/configs/new", data.Game.GameId)) } class="btn btn-primary btn-sm">
+								+ Create Config
+							</a>
+						</div>
+						if len(data.Configs) > 0 {
+							<div class="overflow-x-auto">
+								<table class="table">
+									<thead>
+										<tr>
+											<th>Name</th>
+											<th>Docker Image</th>
+											<th>Deployments</th>
+											<th class="text-right">Actions</th>
+										</tr>
+									</thead>
+									<tbody>
+										for _, config := range data.Configs {
+											<tr class="hover">
+												<td>
+													<a href={ templ.URL(fmt.Sprintf("/games/%d/configs/%d", data.Game.GameId, config.ConfigId)) } class="text-sm font-medium link link-primary">
+														{ config.Name }
+													</a>
+												</td>
+												<td class="text-sm font-mono text-base-content">{ config.Image }</td>
+												<td class="text-sm text-base-content">{ fmt.Sprintf("%d", data.SgcCounts[config.ConfigId]) }</td>
+												<td class="text-right space-x-2">
+													<a href={ templ.URL(fmt.Sprintf("/games/%d/configs/%d", data.Game.GameId, config.ConfigId)) } class="btn btn-secondary btn-sm">
+														Edit Configuration
+													</a>
+													<a href={ templ.URL(fmt.Sprintf("/games/%d/configs/%d", data.Game.GameId, config.ConfigId)) } class="btn btn-primary btn-sm">
+														View
+													</a>
+												</td>
+											</tr>
+										}
+									</tbody>
+								</table>
+							</div>
+						} else {
+							<div class="p-8 text-center">
+								<p class="text-base-content/60">No configurations yet. Create a configuration to deploy this game.</p>
+							</div>
+						}
+					</div>
+
+					<!-- Environment Variables & Ports info -->
+					<div class="card bg-base-100 border border-base-300 shadow-sm p-6 mb-6">
+						<h2 class="text-lg font-semibold text-base-content mb-2">Environment &amp; Ports Management</h2>
+						<p class="text-sm text-base-content/70 mb-4">
+							Base environment variables and arguments templates are managed on each Game Configuration.
+							Port bindings and host-level environment overrides can be customized per deployment.
+						</p>
+						<div class="grid grid-cols-1 md:grid-cols-2 gap-4 text-sm">
+							<div class="bg-base-200/50 p-4 rounded-box border border-base-300">
+								<h3 class="font-semibold text-base-content mb-1">🔧 Configuration Defaults</h3>
+								<p class="text-xs text-base-content/60">
+									Select a configuration above and click "Edit Configuration" to modify environment templates, entrypoints, and mounted volumes.
+								</p>
+							</div>
+							<div class="bg-base-200/50 p-4 rounded-box border border-base-300">
+								<h3 class="font-semibold text-base-content mb-1">🌐 Ports &amp; Host Placement</h3>
+								<p class="text-xs text-base-content/60">
+									Ports are mapped dynamically or statically when deploying to a bare-metal host. Manage deployments in the Advanced tab.
+								</p>
+							</div>
+						</div>
+					</div>
+
+					<!-- Path Presets -->
+					<div id="settings-presets" x-data="{ expanded: false }" class="card bg-base-100 border border-base-300 shadow-sm mb-6 overflow-hidden">
+						<button @click="expanded = !expanded" class="w-full flex justify-between items-center p-4 border-b border-base-300 hover:bg-base-200 transition-colors">
+							<div class="flex items-center gap-3">
+								<h2 class="text-lg font-semibold text-base-content">Addon Path Presets</h2>
+								<span class="text-sm text-base-content/60">({ fmt.Sprintf("%d presets", len(data.PathPresets)) })</span>
+							</div>
+							<svg :class="expanded ? 'rotate-180' : ''" class="w-5 h-5 text-base-content/60 transition-transform" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+								<path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7"></path>
+							</svg>
+						</button>
+						<div x-show="expanded" x-cloak x-collapse>
+							if len(data.PathPresets) > 0 {
+								<div class="overflow-x-auto">
+									<table class="table">
+										<thead class="bg-base-200">
+											<tr>
+												<th scope="col">Name</th>
+												<th scope="col">Volume</th>
+												<th scope="col">Installation Path</th>
+												<th scope="col" class="text-right">Actions</th>
+											</tr>
+										</thead>
+										<tbody>
+											for _, preset := range data.PathPresets {
+												<tr class="hover">
+													<td>
+														<div class="text-sm font-medium text-base-content">{ preset.Name }</div>
+														if preset.Description != "" {
+															<div class="text-xs text-base-content/60 mt-1">{ preset.Description }</div>
+														}
+													</td>
+													<td class="text-sm text-base-content"><em>(relative path)</em></td>
+													<td class="text-sm font-mono text-base-content">{ preset.InstallationPath }</td>
+													<td class="text-right">
+														<form method="POST" action={ templ.URL(fmt.Sprintf("/games/%d/presets/%d/delete", data.Game.GameId, preset.PresetId)) } class="inline">
+															<button type="submit" onclick="return confirm('Delete this preset?')" class="btn btn-error btn-sm">Delete</button>
+														</form>
+													</td>
+												</tr>
+											}
+										</tbody>
+									</table>
+								</div>
+							} else {
+								<div class="p-8 text-center">
+									<p class="text-base-content/60">No path presets defined. Add a preset to make addon installation easier.</p>
+								</div>
+							}
+							<div class="p-4 border-t border-base-300">
+								<button onclick="document.getElementById('add-preset-form').classList.remove('hidden')" class="btn btn-primary btn-sm">+ Add Preset</button>
+							</div>
+						</div>
+					</div>
+
+					<!-- Add Preset Form -->
+					<div id="add-preset-form" class="hidden mb-6">
+						<div class="card bg-base-100 border border-base-300 shadow-sm p-6">
+							<h2 class="text-lg font-semibold text-base-content mb-4">Add Path Preset</h2>
+							<form method="POST" action={ templ.URL(fmt.Sprintf("/games/%d/presets/create", data.Game.GameId)) } class="space-y-4">
+								<input type="hidden" name="game_id" value={ fmt.Sprintf("%d", data.Game.GameId) }/>
+								<div>
+									<label for="preset_name" class="block text-sm font-medium text-base-content mb-2">Name *</label>
+									<input type="text" id="preset_name" name="name" required placeholder="e.g., Maps, Plugins, Skins" class="input input-bordered w-full"/>
+									<p class="text-xs text-base-content/60 mt-1">Short label for this preset</p>
+								</div>
+								<div>
+									<label for="preset_description" class="block text-sm font-medium text-base-content mb-2">Description</label>
+									<textarea id="preset_description" name="description" rows="2" placeholder="Optional description" class="textarea textarea-bordered w-full"></textarea>
+								</div>
+								<div>
+									<label for="preset_volume_id" class="block text-sm font-medium text-base-content mb-2">Volume (Optional)</label>
+									<select id="preset_volume_id" name="volume_id" class="select select-bordered w-full">
+										<option value="">-- Use first volume (default) --</option>
+										for _, vol := range data.Volumes {
+											<option value={ fmt.Sprintf("%d", vol.VolumeId) }>{ vol.Name } ({ vol.ContainerPath })</option>
+										}
+									</select>
+									<p class="text-xs text-base-content/60 mt-1">Select which volume addons using this preset should install to</p>
+								</div>
+								<div>
+									<label for="preset_installation_path" class="block text-sm font-medium text-base-content mb-2">Installation Path *</label>
+									<input type="text" id="preset_installation_path" name="installation_path" required placeholder="e.g., left4dead2/maps/" class="input input-bordered w-full"/>
+									<p class="text-xs text-base-content/60 mt-1">Relative path within the volume</p>
+								</div>
+								<div class="flex gap-3 pt-2">
+									<button type="submit" class="btn btn-success">Add Preset</button>
+									<button type="button" onclick="document.getElementById('add-preset-form').classList.add('hidden')" class="btn btn-secondary">Cancel</button>
+								</div>
 							</form>
-							<button @click="confirmDelete = false" class="btn btn-secondary">Cancel</button>
+						</div>
+					</div>
+
+					<!-- Workshop Libraries -->
+					<div
+						id={ fmt.Sprintf("game-workshop-%d", data.Game.GameId) }
+						hx-get={ fmt.Sprintf("/games/%d/workshop-panel", data.Game.GameId) }
+						hx-trigger="load"
+						hx-swap="innerHTML"
+						class="mb-6"
+					>
+						@gameWorkshopPlaceholder()
+					</div>
+				</div>
+
+				<!-- TAB 4: ADVANCED / DANGER ZONE (Deployments, container rebuilds, teardown) -->
+				<div id="tab-panel-advanced" x-show="activeTab === 'advanced'" x-cloak>
+					<!-- Deployments & Rebuilds -->
+					<div class="card bg-base-100 border border-base-300 shadow-sm overflow-hidden mb-6">
+						<div class="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-3 p-4 border-b border-base-300 bg-base-200">
+							<div>
+								<h2 class="text-lg font-semibold text-base-content">Deployments &amp; Host Placement</h2>
+								<p class="text-xs text-base-content/60 mt-1">Deploy game configurations onto infrastructure servers.</p>
+							</div>
+							if len(data.Configs) > 0 {
+								<a href={ templ.URL(fmt.Sprintf("/games/%d/configs/%d", data.Game.GameId, data.Configs[0].ConfigId)) } class="btn btn-success btn-sm">
+									+ Deploy to Server
+								</a>
+							} else {
+								<a href={ templ.URL(fmt.Sprintf("/games/%d/configs/new", data.Game.GameId)) } class="btn btn-primary btn-sm">
+									Create Config to Deploy
+								</a>
+							}
+						</div>
+						if len(data.Deployments) > 0 {
+							<div class="overflow-x-auto">
+								<table class="table">
+									<thead>
+										<tr>
+											<th>Deployment ID</th>
+											<th>Instance</th>
+											<th>Status</th>
+											<th>Connect Address</th>
+											<th class="text-right">Actions</th>
+										</tr>
+									</thead>
+									<tbody>
+										for _, dep := range data.Deployments {
+											<tr class="hover">
+												<td class="font-mono text-sm">{ fmt.Sprintf("#%d", dep.Row.ServerGameConfigID) }</td>
+												<td class="font-medium text-sm">{ dep.Row.DisplayName }</td>
+												<td>
+													@htmxui.Badge(dep.Row.SGCStatus, statusBadgeVariant(dep.Row.SGCStatus), htmxui.BadgeSizeSM, true, nil)
+												</td>
+												<td>
+													@components.ConnectAddressDisplay(dep.Connect)
+												</td>
+												<td class="text-right">
+													<a href={ templ.URL(dep.ActionsURL) } class="btn btn-sm btn-outline">
+														Actions
+													</a>
+												</td>
+											</tr>
+										}
+									</tbody>
+								</table>
+							</div>
+						} else {
+							<div class="p-8 text-center">
+								<p class="text-base-content/60">No deployments currently placed on any server.</p>
+							</div>
+						}
+					</div>
+
+					<!-- Edit Game Form (Administrative) -->
+					<div class="card bg-base-100 border border-base-300 shadow-sm p-6 mb-6">
+						<h2 class="text-lg font-semibold text-base-content mb-4">Edit Game Details</h2>
+						<form hx-post={ fmt.Sprintf("/games/%d/edit", data.Game.GameId) } hx-swap="none" class="space-y-4">
+							<div>
+								<label for="name" class="block text-sm font-medium text-base-content mb-2">Name *</label>
+								<input type="text" id="name" name="name" value={ data.Game.Name } required class="input input-bordered w-full"/>
+							</div>
+							<div>
+								<label for="steam_app_id" class="block text-sm font-medium text-base-content mb-2">Steam App ID</label>
+								<input type="text" id="steam_app_id" name="steam_app_id" value={ data.Game.SteamAppId } class="input input-bordered w-full"/>
+							</div>
+							<div>
+								<label for="genre" class="block text-sm font-medium text-base-content mb-2">Genre</label>
+								<input type="text" id="genre" name="genre" value={ metadataValue(data.Game, "genre") } class="input input-bordered w-full"/>
+							</div>
+							<div>
+								<label for="publisher" class="block text-sm font-medium text-base-content mb-2">Publisher</label>
+								<input type="text" id="publisher" name="publisher" value={ metadataValue(data.Game, "publisher") } class="input input-bordered w-full"/>
+							</div>
+							<div>
+								<label for="tags" class="block text-sm font-medium text-base-content mb-2">Tags (comma-separated)</label>
+								<input type="text" id="tags" name="tags" value={ metadataTags(data.Game) } class="input input-bordered w-full"/>
+							</div>
+							<div class="pt-2">
+								<button type="submit" class="btn btn-success">Save Game Details</button>
+							</div>
+						</form>
+					</div>
+
+					<!-- Danger Zone -->
+					<div id="danger-zone" x-data="{ confirmDelete: false }" class="card bg-base-100 border-2 border-error/40 shadow-md overflow-hidden mb-6">
+						<div class="bg-error/10 px-6 py-4 border-b-2 border-error/40">
+							<h2 class="text-lg font-semibold text-error">⚠️ Danger Zone</h2>
+						</div>
+						<div class="card-body">
+							<div class="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4">
+								<div>
+									<h3 class="text-sm font-semibold text-base-content mb-1">Delete this game</h3>
+									<p class="text-sm text-base-content/60">Once deleted, all configurations and deployments will be removed. This action cannot be undone.</p>
+								</div>
+								<div class="flex-shrink-0">
+									<button x-show="!confirmDelete" @click="confirmDelete = true" class="btn btn-error">Delete Game</button>
+									<div x-show="confirmDelete" x-cloak class="flex gap-2 items-center">
+										<span class="text-sm text-error font-medium">Are you sure?</span>
+										<form method="POST" action={ templ.URL(fmt.Sprintf("/games/%d/delete", data.Game.GameId)) } class="inline">
+											<button type="submit" class="btn btn-error">Yes, Delete</button>
+										</form>
+										<button @click="confirmDelete = false" class="btn btn-secondary">Cancel</button>
+									</div>
+								</div>
+							</div>
 						</div>
 					</div>
 				</div>
-			</div>
+			}
 		</div>
 	}
 }
