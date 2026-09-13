@@ -4,10 +4,11 @@
 # `migrate` + `mcp`, wired with the whagent-net trust configuration
 # (ASS_WHAGENT_JWKS_URL/ASS_WHAGENT_ISSUER, issue #2116) so the
 # cross-domain tool-dispatch path (whagent_net/worker -> this `mcp`) is
-# exercisable end to end. `web`/`worker` (Google OAuth sign-in, YouTube
-# sync) are NOT wired here -- out of scope for whagent-net's M1 milestone;
-# add them in a follow-up if this domain gets its own full local-dev
-# story.
+# exercisable end to end. `web` (Google OAuth sign-in, the FR3-FR10
+# whagent-ui link-acceptance flow) is also wired, with dev-only dummy
+# OAuth/session secrets -- see its block below. `worker` (YouTube sync)
+# is NOT wired here -- out of scope for whagent-net's M1 milestone; add it
+# in a follow-up if this domain gets its own full local-dev story.
 #
 # Run alongside whagent_net's own Tiltfile:
 #   cd whagent_net && tilt up                    # in one terminal
@@ -98,6 +99,42 @@ ass_mcp_public_url = get_custom_or_default(
 )
 
 # ===========================
+# whagent-net UI trust configuration (issue #2600/#2638)
+# ===========================
+#
+# Points `web`'s link.NewVerifier (FR3, issue #2598) at whagent_net's `ui`
+# JWKS endpoint and issuer -- a DISTINCT pair from whagent_jwks_url/
+# whagent_issuer above (that pair verifies api-minted persona Claims on
+# `mcp`; this pair verifies ui-minted link assertions on `web`). `web`
+# fails fast at startup if either is unset -- see ENV.md
+# "ASS_WHAGENT_UI_JWKS_URL"/"ASS_WHAGENT_UI_ISSUER".
+whagent_ui_jwks_url = get_custom_or_default(
+    'BUILD_WHAGENT_ENV', 'ASS_WHAGENT_UI_JWKS_URL',
+    'http://whagent-net-ui.whagent-net-local-dev.svc.cluster.local:8080/.well-known/jwks.json',
+)
+# Must equal whagent_net/Tiltfile's `ui` block's WHAGENT_UI_PUBLIC_URL
+# exactly (a string-equality check against the assertion's `iss` claim,
+# not a network address -- stays the browser-facing value even though
+# whagent_ui_jwks_url above is the in-cluster one).
+whagent_ui_issuer = get_custom_or_default(
+    'BUILD_WHAGENT_ENV', 'ASS_WHAGENT_UI_ISSUER', 'http://localhost:8081',
+)
+
+# ===========================
+# web: dev-only dummy secrets (issue #2635b/#2638)
+# ===========================
+#
+# None of these authenticate against real infrastructure locally -- they
+# exist only so auth.NewAuthenticator/mcpauth construction doesn't fail.
+# Override via a local .env for a real Google OAuth client, same
+# override-friendly os.environ.get(..., '<dummy>') pattern as
+# whagent_net/Tiltfile's whagent_signing_key.
+ass_google_client_id = os.environ.get('ASS_GOOGLE_CLIENT_ID', 'dummy-google-client-id.apps.googleusercontent.com')
+ass_google_client_secret = os.environ.get('ASS_GOOGLE_CLIENT_SECRET', 'dummy-google-client-secret')
+ass_session_secret = os.environ.get('ASS_SESSION_SECRET', 'dev-secret-key')
+ass_token_encryption_key = os.environ.get('ASS_TOKEN_ENCRYPTION_KEY', 'dev-secret-key')
+
+# ===========================
 # Application Configuration
 # ===========================
 
@@ -113,6 +150,11 @@ APPS = {
         'enabled_env': 'ENABLE_ASS_MCP',
         'bazel_target': '//audience_score_system/mcp:mcp_image_load',
         'image_name': 'audience-score-system-mcp',
+    },
+    'web': {
+        'enabled_env': 'ENABLE_ASS_WEB',
+        'bazel_target': '//audience_score_system/web:web_image_load',
+        'image_name': 'audience-score-system-web',
     },
 }
 
@@ -236,6 +278,104 @@ spec:
     )
     print("🔌 mcp forwarded to http://localhost:8081/ (whagent-net trust: {})".format(whagent_jwks_url))
 
+# web: the only UI surface (NFR3) -- Google OAuth sign-in and the FR3-FR10
+# whagent-ui link-acceptance flow (/link/whagent, /link/whagent/confirm).
+# Deployed as Service name 'audience-score-system-web' on port 8080
+# (release_app's port in audience_score_system/web/BUILD.bazel). The
+# Google OAuth client id/secret and session/token secrets above are
+# dev-only dummies -- they never authenticate against real Google
+# infrastructure and exist only so auth.NewAuthenticator/mcpauth
+# construction doesn't fail locally.
+web_port_forward = 8083
+web_public_url = 'http://localhost:{}'.format(web_port_forward)
+if get_env_bool('ENABLE_ASS_WEB', default='true'):
+    k8s_yaml(blob("""
+apiVersion: v1
+kind: Service
+metadata:
+  name: audience-score-system-web
+  namespace: {namespace}
+spec:
+  selector:
+    app: audience-score-system-web
+  ports:
+    - name: http
+      port: 8080
+      targetPort: 8080
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: audience-score-system-web
+  namespace: {namespace}
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: audience-score-system-web
+  template:
+    metadata:
+      labels:
+        app: audience-score-system-web
+    spec:
+      containers:
+      - name: web
+        image: audience-score-system-web
+        ports:
+        - containerPort: 8080
+          name: http
+        env:
+        - name: PG_DATABASE_URL
+          value: "{pg_database_url}"
+        - name: ASS_HTTP_ADDR
+          value: ":8080"
+        - name: ASS_GOOGLE_CLIENT_ID
+          value: "{ass_google_client_id}"
+        - name: ASS_GOOGLE_CLIENT_SECRET
+          value: "{ass_google_client_secret}"
+        - name: ASS_OAUTH_REDIRECT_BASE_URL
+          value: "{web_public_url}"
+        - name: ASS_SESSION_SECRET
+          value: "{ass_session_secret}"
+        - name: ASS_TOKEN_ENCRYPTION_KEY
+          value: "{ass_token_encryption_key}"
+        - name: ASS_MCP_PUBLIC_URL
+          value: "{ass_mcp_public_url}"
+        - name: ASS_WHAGENT_UI_JWKS_URL
+          value: "{whagent_ui_jwks_url}"
+        - name: ASS_WHAGENT_UI_ISSUER
+          value: "{whagent_ui_issuer}"
+        - name: TEMPORAL_HOST
+          value: "{temporal_host}"
+        - name: OTEL_EXPORTER_OTLP_ENDPOINT
+          value: "{otel_endpoint}"
+""".format(
+        namespace=namespace,
+        pg_database_url=pg_database_url,
+        ass_google_client_id=ass_google_client_id,
+        ass_google_client_secret=ass_google_client_secret,
+        web_public_url=web_public_url,
+        ass_session_secret=ass_session_secret,
+        ass_token_encryption_key=ass_token_encryption_key,
+        ass_mcp_public_url=ass_mcp_public_url,
+        whagent_ui_jwks_url=whagent_ui_jwks_url,
+        whagent_ui_issuer=whagent_ui_issuer,
+        temporal_host=temporal_host,
+        otel_endpoint=otel_endpoint,
+    )))
+
+    web_deps = ['temporal-dev', 'postgres-dev-ass']
+    if get_env_bool('ENABLE_ASS_MIGRATION', default='true'):
+        web_deps.append('audience-score-system-migration')
+
+    k8s_resource(
+        'audience-score-system-web',
+        resource_deps=web_deps,
+        port_forwards=['{}:8080'.format(web_port_forward)],
+        labels=['audience-score-system'],
+    )
+    print("🌐 web forwarded to {} (whagent-ui trust: {})".format(web_public_url, whagent_ui_jwks_url))
+
 # ===========================
 # Access Information
 # ===========================
@@ -246,10 +386,11 @@ print("="*60)
 print("  PostgreSQL:  localhost:5432 (user: postgres, pass: password)")
 print("  Temporal:    localhost:7233 (gRPC), {} (Web UI)".format(temporal_info['ui_service_info']))
 print("  mcp (HTTP):  http://localhost:8081/")
+print("  web (HTTP):  {}/".format(web_public_url))
 print("="*60)
 
 print_footer_info('audience-score-system')
 
 print("\n🚀 Quick Start:")
-print("  1. tilt up                         # Start migration + mcp (this)")
+print("  1. tilt up                         # Start migration + mcp + web (this)")
 print("  2. cd whagent_net && tilt up        # The whagent-net side of the cross-domain trust wiring")
