@@ -18,6 +18,7 @@ go_library(
         "handlers_consent.go",
         "handlers_grants.go",
         "handlers_grants_admin.go",
+        "handlers_link.go",
         "handlers_session.go",
         "handlers_session_lifecycle.go",
         "handlers_session_live.go",
@@ -111,6 +112,12 @@ go_binary(
 # /admin/grants/revoke -- the Implementation phase's Testing section
 # (FR14/FR15/NFR3/NFR4/NFR7) replaces these with the full admin-gate/
 # live-status/revoke-scoping/audit-log coverage the issue describes.
+#
+# handlers_link_test.go (issue #2596's Scaffold section) added:
+# TODO-stubbed test names for FR13's unauthenticated-redirect gating,
+# FR2's mint+redirect (and its "not configured" degrade path), FR10's
+# four distinct outcome messages, and FR1's Mint-single-call-site
+# invariant -- the Implementation phase's Testing section fills these in.
 go_test(
     name = "ui_test",
     size = "small",
@@ -122,6 +129,7 @@ go_test(
         "handlers_consent_unauth_test.go",
         "handlers_grants_test.go",
         "handlers_grants_admin_test.go",
+        "handlers_link_test.go",
         "handlers_session_lifecycle_test.go",
         "handlers_session_live_test.go",
         "handlers_session_test.go",
