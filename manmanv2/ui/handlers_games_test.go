@@ -772,6 +772,18 @@ func TestBuildGameRows_Deployments_LinkOuts(t *testing.T) {
 	if !strings.Contains(html, fmt.Sprintf(`href="%s"`, withSession.ActionsURL)) {
 		t.Errorf("Actions link-out for SGC 100 not found as an <a href> in rendered page")
 	}
+	if !strings.Contains(html, ">Console Commands<") {
+		t.Errorf("expected 'Console Commands' link text in rendered page")
+	}
+	if strings.Contains(html, fmt.Sprintf(`href="%s">Actions<`, withSession.ActionsURL)) {
+		t.Errorf("expected no ambiguous '>Actions<' link for ActionsURL")
+	}
+	if strings.Contains(html, ">View Live Session<") {
+		t.Errorf("expected no '>View Live Session<' text, single canonical button should be '>View Console<'")
+	}
+	if !strings.Contains(html, ">View Console<") {
+		t.Errorf("expected canonical '>View Console<' button in rendered page")
+	}
 }
 
 // TestHandleGames_Deployments_NoAdditionalRequestOnExpand extends #2270's

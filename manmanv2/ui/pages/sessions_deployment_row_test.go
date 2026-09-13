@@ -385,6 +385,73 @@ func TestDeploymentRow_RestartState_ByteStableAcrossRenders(t *testing.T) {
 	}
 }
 
+func TestDeploymentRow_ConsoleAndLogsLinks(t *testing.T) {
+	// 1. Live session renders "View Console" button pointing to /sessions/{id}.
+	liveSession := &manmanpb.Session{SessionId: 101, ServerGameConfigId: 70, Status: "running"}
+	liveData := buildDeploymentRowData(70, "RunningDep", "active", liveSession, liveSession, "")
+	liveBody := deploymentRowMarkup(t, liveData)
+
+	if !strings.Contains(liveBody, ">View Console<") {
+		t.Errorf("expected 'View Console' button for live session, got: %s", liveBody)
+	}
+	if !strings.Contains(liveBody, `href="/sessions/101"`) {
+		t.Errorf("expected link to /sessions/101 for live session, got: %s", liveBody)
+	}
+	if strings.Contains(liveBody, ">View Live Session<") {
+		t.Errorf("expected no ambiguous 'View Live Session' text, got: %s", liveBody)
+	}
+
+	// 2. Stopped session with previous session renders "View Logs" button pointing to /sessions/{id}.
+	stoppedSession := &manmanpb.Session{SessionId: 102, ServerGameConfigId: 71, Status: "stopped"}
+	stoppedData := buildDeploymentRowData(71, "StoppedDep", "active", stoppedSession, nil, "")
+	stoppedBody := deploymentRowMarkup(t, stoppedData)
+
+	if !strings.Contains(stoppedBody, ">View Logs<") {
+		t.Errorf("expected 'View Logs' button for stopped session with historical records, got: %s", stoppedBody)
+	}
+	if !strings.Contains(stoppedBody, `href="/sessions/102"`) {
+		t.Errorf("expected link to /sessions/102 for stopped session, got: %s", stoppedBody)
+	}
+
+	// 3. Never-started session renders "None" badge, no session links.
+	neverStartedData := buildDeploymentRowData(72, "NeverStartedDep", "active", nil, nil, "")
+	neverBody := deploymentRowMarkup(t, neverStartedData)
+
+	if !strings.Contains(neverBody, "None") {
+		t.Errorf("expected 'None' badge for never-started deployment, got: %s", neverBody)
+	}
+	if strings.Contains(neverBody, "/sessions/") {
+		t.Errorf("expected no session link for never-started deployment, got: %s", neverBody)
+	}
+}
+
+func TestDeploymentRow_ActionButtonsExplicitTitles(t *testing.T) {
+	running := &manmanpb.Session{SessionId: 103, ServerGameConfigId: 73, Status: "running"}
+	runningData := buildDeploymentRowData(73, "RunningDep", "active", running, running, "")
+	runningBody := deploymentRowMarkup(t, runningData)
+
+	if !strings.Contains(runningBody, `title="Stop server container"`) {
+		t.Errorf("expected Stop button to carry descriptive title attribute, got: %s", runningBody)
+	}
+	if !strings.Contains(runningBody, `title="Restart server container"`) {
+		t.Errorf("expected Restart button to carry descriptive title attribute, got: %s", runningBody)
+	}
+	if !strings.Contains(runningBody, "Stop server now?") {
+		t.Errorf("expected 'Stop server now?' confirmation prompt, got: %s", runningBody)
+	}
+	if !strings.Contains(runningBody, "Restart server now?") {
+		t.Errorf("expected 'Restart server now?' confirmation prompt, got: %s", runningBody)
+	}
+
+	stopped := &manmanpb.Session{SessionId: 104, ServerGameConfigId: 74, Status: "stopped"}
+	stoppedData := buildDeploymentRowData(74, "StoppedDep", "active", stopped, nil, "")
+	stoppedBody := deploymentRowMarkup(t, stoppedData)
+
+	if !strings.Contains(stoppedBody, `title="Start server container"`) {
+		t.Errorf("expected Start button to carry descriptive title attribute, got: %s", stoppedBody)
+	}
+}
+
 // Note: GSCStatusTable (the /sessions list page's own table wrapper) and
 // its "loops rows and includes an Actions header" coverage retired along
 // with pages/sessions.templ (task #2372, M6 navigation/disposition, FR17)

@@ -138,7 +138,9 @@ templ DeploymentRowInner(data DeploymentRowData) {
 	</td>
 	<td class="text-sm">
 		if data.LiveSession != nil {
-			<a href={ templ.URL(fmt.Sprintf("/sessions/%d", data.LiveSession.SessionId)) } class="btn btn-primary btn-sm">View Live Session</a>
+			<a href={ templ.URL(fmt.Sprintf("/sessions/%d", data.LiveSession.SessionId)) } class="btn btn-primary btn-sm">View Console</a>
+		} else if data.LatestSession != nil {
+			<a href={ templ.URL(fmt.Sprintf("/sessions/%d", data.LatestSession.SessionId)) } class="btn btn-ghost btn-sm">View Logs</a>
 		} else {
 			@htmxui.Badge("None", htmxui.BadgeNeutral, htmxui.BadgeSizeSM, true, nil)
 		}
@@ -162,14 +164,14 @@ templ DeploymentRowInner(data DeploymentRowData) {
 					hx-swap="outerHTML"
 					class="inline"
 				>
-					<button type="submit" class="btn btn-success btn-sm">Start</button>
+					<button type="submit" class="btn btn-success btn-sm" title="Start server container">Start</button>
 				</form>
 			}
 			if data.Actions.CanStop {
 				<div>
-					<button type="button" x-show="!confirmStop" @click="confirmStop = true" class="btn btn-warning btn-sm">Stop</button>
+					<button type="button" x-show="!confirmStop" @click="confirmStop = true" class="btn btn-warning btn-sm" title="Stop server container">Stop</button>
 					<div x-show="confirmStop" x-cloak class="flex gap-2 items-center">
-						<span class="text-sm text-warning font-medium">Stop now?</span>
+						<span class="text-sm text-warning font-medium">Stop server now?</span>
 						<form
 							method="POST"
 							action={ templ.URL(fmt.Sprintf("/sessions/deployments/%d/stop", data.ServerGameConfigID)) }
@@ -186,9 +188,9 @@ templ DeploymentRowInner(data DeploymentRowData) {
 			}
 			if data.Actions.CanRestart {
 				<div>
-					<button type="button" x-show="!confirmRestart" @click="confirmRestart = true" class="btn btn-info btn-sm">Restart</button>
+					<button type="button" x-show="!confirmRestart" @click="confirmRestart = true" class="btn btn-info btn-sm" title="Restart server container">Restart</button>
 					<div x-show="confirmRestart" x-cloak class="flex gap-2 items-center">
-						<span class="text-sm text-info font-medium">Restart now?</span>
+						<span class="text-sm text-info font-medium">Restart server now?</span>
 						<form
 							method="POST"
 							action={ templ.URL(fmt.Sprintf("/sessions/deployments/%d/restart", data.ServerGameConfigID)) }

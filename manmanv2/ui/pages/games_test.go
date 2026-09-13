@@ -4,6 +4,7 @@ import (
 	"strings"
 	"testing"
 
+	manmanpb "github.com/whale-net/everything/manmanv2/protos"
 	"github.com/whale-net/everything/manmanv2/ui/components"
 )
 
@@ -212,6 +213,50 @@ func TestGameRow_HeaderMarkupAndNoNestedButtons(t *testing.T) {
 	}
 	if !strings.Contains(body, `@click.stop`) {
 		t.Errorf("gameRow header must isolate connect address with @click.stop, got: %s", body)
+	}
+}
+
+// TestGameDeploymentRow_DeduplicatedNavAndConsoleCommands verifies that console
+// command links use explicit terminology and that duplicate session links are omitted.
+func TestGameDeploymentRow_DeduplicatedNavAndConsoleCommands(t *testing.T) {
+	liveSession := &manmanpb.Session{SessionId: 42, ServerGameConfigId: 10, Status: "running"}
+	dep := GameDeploymentRow{
+		Row: DeploymentRowData{
+			ServerGameConfigID: 10,
+			DisplayName:        "Default on host-01",
+			SGCStatus:          "active",
+			LatestSession:      liveSession,
+			LiveSession:        liveSession,
+			Actions:            components.DeploymentActions{CanStop: true, CanRestart: true},
+		},
+		Connect:    components.ConnectAddressView{Addresses: []components.ConnectAddress{{Address: "1.2.3.4:2456", Protocol: "UDP"}}},
+		LogsURL:    "/sessions/42",
+		ActionsURL: "/games/1/configs/2/actions",
+	}
+
+	body := renderPage(t, gameDeploymentRow(dep))
+
+	// 1. Console Commands link exists and points to ActionsURL.
+	if !strings.Contains(body, ">Console Commands<") {
+		t.Errorf("expected 'Console Commands' link text, got: %s", body)
+	}
+	if !strings.Contains(body, `href="/games/1/configs/2/actions"`) {
+		t.Errorf("expected ActionsURL link href, got: %s", body)
+	}
+
+	// 2. Ambiguous standalone "Actions" link is not present.
+	if strings.Contains(body, ">Actions<") {
+		t.Errorf("expected no ambiguous '>Actions<' link text in deployment row, got: %s", body)
+	}
+
+	// 3. No duplicate ">Logs<" link in the header.
+	if strings.Contains(body, ">Logs<") {
+		t.Errorf("expected no duplicate '>Logs<' link in deployment row header, got: %s", body)
+	}
+
+	// 4. Single "View Console" button is present.
+	if !strings.Contains(body, ">View Console<") {
+		t.Errorf("expected canonical 'View Console' button, got: %s", body)
 	}
 }
 
