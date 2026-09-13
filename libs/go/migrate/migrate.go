@@ -5,6 +5,7 @@ import (
 	"embed"
 	"errors"
 	"fmt"
+	"io/fs"
 	"os"
 	"time"
 
@@ -16,7 +17,7 @@ import (
 // Runner provides database migration functionality
 type Runner struct {
 	db         *sql.DB
-	migrations embed.FS
+	migrations fs.FS
 	migrateDir string
 	tracker    *HistoryTracker
 }

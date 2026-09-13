@@ -44,7 +44,9 @@ unlike `manmanv2/ui`, this UI never falls back to cookie sessions.
 `PG_DATABASE_URL` is required at boot; if the `ui_sessions` table is
 missing, the DB session manager's preflight (`libs/go/htmxauth`, FR-58)
 fails startup with a message naming the table and the migration that owns
-it (`tools/app_registry/migrate/schema/migrations/012_ui_sessions.up.sql`).
+it (`libs/go/htmxauth/migrations/001_ui_sessions.up.sql`, applied
+independently via `migrate.WithSource` in `migrate/main.go`, tracked in its
+own `schema_migrations_htmxauth` table rather than this domain's own).
 
 `AUTH_MODE=none` runs without Keycloak; the developer is treated as
 holding every role (`htmxauth.AllRoles` sentinel). See `../ENV.md`.

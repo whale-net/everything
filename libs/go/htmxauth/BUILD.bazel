@@ -5,7 +5,9 @@ go_library(
     srcs = [
         "auth.go",
         "db_session.go",
+        "migrations.go",
     ],
+    embedsrcs = glob(["migrations/*.sql"]),
     importpath = "github.com/whale-net/everything/libs/go/htmxauth",
     visibility = ["//visibility:public"],
     deps = [

@@ -1,1 +1,1 @@
-DROP TABLE IF EXISTS ui_sessions;
+-- No-op placeholder -- see 012_ui_sessions.up.sql.
