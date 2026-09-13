@@ -99,7 +99,7 @@ Any MCP client that speaks RFC 9728/8414/7591 discovery (Claude Desktop,
 GitHub Copilot, opencode, and others) bootstraps against `mcp` with **no
 ASS-specific configuration beyond the endpoint URL**:
 
-1. Point the client at `mcp`'s endpoint (`http://localhost:8081`, or
+1. Point the client at `mcp`'s endpoint (`http://localhost:8084`, or
    `ASS_MCP_ADDR`'s address in another environment).
 2. The client's own OAuth2 machinery discovers the rest: an unauthenticated
    call to `mcp` returns a 401 naming `mcp`'s protected-resource metadata
