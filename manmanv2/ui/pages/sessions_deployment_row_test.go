@@ -161,14 +161,17 @@ func TestDeploymentRow_TransientStatuses_NoActions(t *testing.T) {
 	}
 }
 
-// --- 5. never-started: no Start, "Never started" indication -----------------
+// --- 5. never-started: Start available, "Never started" indication -----------
 
-func TestDeploymentRow_NeverStarted_NoStartAndNeverStartedBadge(t *testing.T) {
+func TestDeploymentRow_NeverStarted_StartAndNeverStartedBadge(t *testing.T) {
 	data := buildDeploymentRowData(14, "Epsilon", "active", nil, nil, "")
 	body := deploymentRowMarkup(t, data)
 
-	if strings.Contains(body, ">Start<") || strings.Contains(body, ">Stop<") || strings.Contains(body, ">Restart<") {
-		t.Errorf("expected no action buttons for a never-started deployment, got body %q", body)
+	if !strings.Contains(body, ">Start<") {
+		t.Errorf("expected Start button for a never-started deployment, got body %q", body)
+	}
+	if strings.Contains(body, ">Stop<") || strings.Contains(body, ">Restart<") {
+		t.Errorf("expected no Stop or Restart buttons for a never-started deployment, got body %q", body)
 	}
 	if !strings.Contains(body, "Never started") {
 		t.Errorf("expected a 'Never started' indication rather than an empty status cell, got body %q", body)

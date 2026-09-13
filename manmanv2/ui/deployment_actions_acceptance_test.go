@@ -488,16 +488,11 @@ func TestFR1_StartOfferedOnlyOnStoppedCrashedLost(t *testing.T) {
 	}
 	body := w.Body.String()
 
-	for _, id := range []int64{sgcStopped, sgcCrashed, sgcLost} {
+	for _, id := range []int64{sgcStopped, sgcCrashed, sgcLost, sgcNever} {
 		section := deploymentRowSection(t, body, id)
 		if !strings.Contains(section, ">Start<") {
 			t.Errorf("SGC %d: expected Start offered, got %q", id, section)
 		}
-	}
-
-	neverSection := deploymentRowSection(t, body, sgcNever)
-	if strings.Contains(neverSection, ">Start<") {
-		t.Errorf("never-started SGC %d: expected no Start action (deploy-and-start is out of scope for M2), got %q", sgcNever, neverSection)
 	}
 }
 
@@ -537,6 +532,34 @@ func TestFR2_StartFromListStartsSessionWithoutNavigation(t *testing.T) {
 	}
 	if loc := w.Header().Get("Location"); loc != "" {
 		t.Errorf("expected no Location header (no navigation away from the list), got %q", loc)
+	}
+}
+
+func TestFR2_StartNeverStartedDeployment(t *testing.T) {
+	_, api, mux := newAcceptanceFixture(t)
+	const sgcID = 202
+	api.addSGC(sgcID)
+	// sgcID has never had a session.
+
+	w := doPost(mux, fmt.Sprintf("/sessions/deployments/%d/start", sgcID), true)
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200; body: %s", w.Code, w.Body.String())
+	}
+
+	if len(api.startCalls) != 1 {
+		t.Fatalf("StartSession call count = %d, want 1", len(api.startCalls))
+	}
+	got := api.startCalls[0]
+	if got.ServerGameConfigId != sgcID {
+		t.Errorf("StartSessionRequest.ServerGameConfigId = %d, want %d", got.ServerGameConfigId, sgcID)
+	}
+	if got.Force {
+		t.Errorf("StartSessionRequest.Force = true, want false")
+	}
+
+	body := w.Body.String()
+	if !strings.Contains(body, fmt.Sprintf(`id="deployment-row-%d"`, sgcID)) {
+		t.Fatalf("expected a row fragment response for SGC %d, got %q", sgcID, body)
 	}
 }
 
