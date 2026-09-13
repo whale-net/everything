@@ -66,6 +66,7 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"regexp"
 	"testing"
 
 	"github.com/bazelbuild/rules_go/go/runfiles"
@@ -172,15 +173,40 @@ func parsedTotalEntries(p *importer.ParsedProduct) int {
 	return n
 }
 
+// capabilityLinePattern and milestoneHeadingPattern independently count
+// entries directly in whagent_net's raw files, without going through
+// importer.Parse's own regexes -- the expected counts below are derived
+// from the same files Parse itself reads, at test run time, so a
+// perfectly ordinary additive change to whagent_net's brief (adding a
+// capability or a milestone) never breaks this test, while a genuine
+// Parse regression (missing a line, double-counting one) still does.
+var (
+	capabilityLinePattern   = regexp.MustCompile(`(?m)^C\d+ — `)
+	milestoneHeadingPattern = regexp.MustCompile(`(?m)^### M\d+ `)
+)
+
+func countMatches(t *testing.T, path string, re *regexp.Regexp) int {
+	t.Helper()
+	b, err := os.ReadFile(path)
+	require.NoError(t, err, "reading %s", path)
+	return len(re.FindAllIndex(b, -1))
+}
+
 // TestFR11_WhagentNetImport_ParseOnly_EverySourceItemPresent is item 1:
 // Parse alone (no store) over whagent_net's real, committed doc set must
 // surface every persona, decision, non-goal, capability, and milestone --
 // checked by count *and* by naming specific items verbatim, so a
 // regression in one section cannot hide behind a total that happens to
 // still add up (e.g. one persona silently dropped and one non-goal
-// double-counted).
+// double-counted). Capability and milestone counts are derived from the
+// source files themselves (see capabilityLinePattern/
+// milestoneHeadingPattern above), not hardcoded, since whagent_net's
+// capability map and roadmap grow independently of krill on their own
+// /project-manager:product cadence; personas, decisions, and non-goals
+// have stayed fixed in size since #2549 and are still checked verbatim.
 func TestFR11_WhagentNetImport_ParseOnly_EverySourceItemPresent(t *testing.T) {
-	parsed, err := importer.Parse(whagentNetDocsRoot(t))
+	root := whagentNetDocsRoot(t)
+	parsed, err := importer.Parse(root)
 	require.NoError(t, err, "whagent_net's real doc set must parse cleanly")
 
 	assert.Equal(t, "whagent-net", parsed.Name)
@@ -207,23 +233,38 @@ func TestFR11_WhagentNetImport_ParseOnly_EverySourceItemPresent(t *testing.T) {
 		bucketSizes[b.Name] = len(b.Capabilities)
 		totalCaps += len(b.Capabilities)
 	}
-	assert.Equal(t, 27, totalCaps, "expected all 27 capabilities (C1-C27, allocated not sequential -- C27 lands in Next) across Now/Next/Later")
-	assert.Equal(t, 12, bucketSizes["Now"])
-	assert.Equal(t, 7, bucketSizes["Next"])
-	assert.Equal(t, 8, bucketSizes["Later"])
+	wantCaps := countMatches(t, filepath.Join(root, "product", "02-capability-map.md"), capabilityLinePattern)
+	assert.Equal(t, wantCaps, totalCaps, "expected one parsed capability per `C<n> —` line in 02-capability-map.md")
+	for _, bucket := range []string{"Now", "Next", "Later"} {
+		assert.Positive(t, bucketSizes[bucket], "expected the %q bucket to be non-empty", bucket)
+	}
 	capByID := parsedCapabilityByID(parsed.Buckets)
-	assert.Equal(t, "An operator can start a session for a named agent, send it turns, and stop it, from Claude Code or any gRPC client.", capByID["C1"].Description)
-	assert.Equal(t, "An operator can connect their Claude Code MCP client to whagent-net by signing in once through the browser, instead of manually copying a Keycloak token into their MCP client config.", capByID["C27"].Description)
+	assert.Equal(t, "An operator can start a session for a named agent, send it turns, and stop it, from Claude Code or any gRPC client.", capByID["C1"].Description, "C1 predates #2549 and its own text is stable across additive capability-map growth")
 
-	require.Len(t, parsed.Milestones, 3, "expected whagent_net's M1-M3 roadmap headings to parse: %+v", parsed.Milestones)
+	wantMilestones := countMatches(t, filepath.Join(root, "product", "03-roadmap.md"), milestoneHeadingPattern)
+	require.Len(t, parsed.Milestones, wantMilestones, "expected one parsed milestone per `### M<n>` heading in 03-roadmap.md: %+v", parsed.Milestones)
 	msByID := parsedMilestoneByID(parsed.Milestones)
-	assert.Equal(t, "An operator can run a capped, tool-enabled session as themselves against ASS's MCP server from Claude Code, and read its transcript", msByID["M1"].Title)
-	assert.ElementsMatch(t, []string{"C1", "C2", "C3", "C4", "C5", "C6", "C7", "C8", "C9", "C11", "C12"}, msByID["M1"].Delivers, "M1 Delivers must be exactly what its own roadmap line names -- it deliberately excludes C10 (deferred to M2)")
-	assert.ElementsMatch(t, []string{"LB1", "LB2", "LB3", "LB4", "LB5", "LB6", "LB7"}, msByID["M1"].MustNotForeclose)
-	assert.ElementsMatch(t, []string{"C10", "C13", "C14", "C15", "C16", "C17", "C18", "C27"}, msByID["M2"].Delivers)
-	assert.ElementsMatch(t, []string{"LB1", "LB2", "LB3", "LB6", "LB7"}, msByID["M2"].MustNotForeclose)
-	assert.ElementsMatch(t, []string{"C19", "C20"}, msByID["M3"].Delivers)
-	assert.ElementsMatch(t, []string{"LB1", "LB2", "LB3", "LB7"}, msByID["M3"].MustNotForeclose)
+	assert.Equal(t, "An operator can run a capped, tool-enabled session as themselves against ASS's MCP server from Claude Code, and read its transcript", msByID["M1"].Title, "M1 predates #2549 and its own outcome sentence is stable across additive roadmap growth")
+
+	// Structural invariant, in place of a literal Delivers/MustNotForeclose
+	// list per milestone: every id a milestone names must resolve to
+	// something Parse itself found elsewhere in the doc set -- catching a
+	// typo'd or retired id without pinning the exact set of milestones or
+	// their sizes.
+	decIDs := map[string]bool{}
+	for _, d := range parsed.Decisions {
+		decIDs[d.ID] = true
+	}
+	for _, m := range parsed.Milestones {
+		assert.NotEmpty(t, m.Delivers, "milestone %s: expected a non-empty Delivers list", m.ID)
+		for _, capID := range m.Delivers {
+			_, ok := capByID[capID]
+			assert.True(t, ok, "milestone %s Delivers references unknown capability %s", m.ID, capID)
+		}
+		for _, lbID := range m.MustNotForeclose {
+			assert.True(t, decIDs[lbID], "milestone %s Must not foreclose references unknown decision %s", m.ID, lbID)
+		}
+	}
 }
 
 // TestFR11_WhagentNetImport_FullImport_ReportNamesEntityIDForEverySourceItem
@@ -420,8 +461,12 @@ func TestFR11_WhagentNetImport_CapabilityMapEntries_LandUnderBucketFeatureSets(t
 			assert.Equal(t, "Load-bearing decisions", gotFeatureSet, "decision %s must land under the synthetic Load-bearing decisions FeatureSet (importer.loadBearingFeatureSetName), not a whagent_net-specific one", e.SourceID)
 		}
 	}
-	assert.Equal(t, 27, capCount)
-	assert.Equal(t, 7, decCount)
+	wantCapCount := 0
+	for _, b := range r.parsed.Buckets {
+		wantCapCount += len(b.Capabilities)
+	}
+	assert.Equal(t, wantCapCount, capCount, "expected one Feature per parsed capability")
+	assert.Equal(t, len(r.parsed.Decisions), decCount, "expected one Decision per parsed load-bearing decision")
 
 	for _, bucket := range []string{"Now", "Next", "Later", "Load-bearing decisions"} {
 		found := false
@@ -445,7 +490,7 @@ func TestFR11_WhagentNetImport_MilestoneAssociations_CreatedForEveryRoadmapMiles
 	r := importAndResolveWhagentNet(t)
 
 	msByID := parsedMilestoneByID(r.parsed.Milestones)
-	require.Len(t, r.milestoneByID, 3, "expected exactly M1, M2, M3 as milestone_ref rows")
+	require.Len(t, r.milestoneByID, len(r.parsed.Milestones), "expected exactly one milestone_ref row per parsed milestone")
 
 	for _, ref := range r.milestoneByID {
 		want, ok := msByID[ref.Name]

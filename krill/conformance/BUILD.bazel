@@ -26,6 +26,12 @@ load("@rules_go//go:def.bzl", "go_test")
 # same way krillDocsRoot locates krill's own) -- the first product krill
 # holds that krill did not author -- and proves the FR11 entity-id report
 # accounts for every source item, with no content lost across the import.
+# Its own expected counts are derived from whagent_net's real files at
+# test run time, not hardcoded (issue #2629), but the target itself stays
+# `manual` for the same real-Postgres reason as the rest of this file --
+# //krill/importer:whagent_net_parse_smoke_test is the non-manual,
+# database-free smoke check that runs under default `bazel test //...`
+# and would still catch a Parse regression in the interim.
 #
 # Run the round-trip tests explicitly (requires a working Docker daemon):
 #   bazel test //krill/conformance:roundtrip_integration_test --test_output=all
