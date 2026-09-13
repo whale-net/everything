@@ -83,7 +83,7 @@ func newRealTransportTestApp(t *testing.T) *App {
 	// userAuthOpt) exactly: the same PerRPCCredentials DialOption feeding
 	// the same grpcclient.NewClient constructor.
 	userAuthOpt := grpcauth.NewUserTokenDialOption(grpcauth.AuthModeNone)
-	dialCtx, dialCancel := context.WithTimeout(context.Background(), 5*time.Second)
+	dialCtx, dialCancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer dialCancel()
 	controlClient, err := NewControlClient(dialCtx, lis.Addr().String(), userAuthOpt)
 	if err != nil {

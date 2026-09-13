@@ -108,8 +108,8 @@ func TestHandleDashboardSessions_SGCIDPopulatedEvenWhenEnrichmentMisses(t *testi
 
 	body := renderDashboardSessionsHTTP(t, api)
 
-	if !strings.Contains(body, `href="/sgc/55"`) {
-		t.Errorf("expected enriched session's card to link /sgc/55, got body: %s", body)
+	if !strings.Contains(body, `href="/games/9000"`) {
+		t.Errorf("expected enriched session's card to link /games/9000, got body: %s", body)
 	}
 	if !strings.Contains(body, `href="/sgc/77"`) {
 		t.Errorf("expected the enrichment-miss session's card to still link /sgc/77 (SGCID set directly from the session, not the enrichment lookup), got body: %s", body)

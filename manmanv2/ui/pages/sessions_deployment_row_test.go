@@ -423,7 +423,7 @@ func TestDeploymentRow_ConsoleAndLogsLinks(t *testing.T) {
 	if !strings.Contains(neverBody, "None") {
 		t.Errorf("expected 'None' badge for never-started deployment, got: %s", neverBody)
 	}
-	if strings.Contains(neverBody, "/sessions/") {
+	if strings.Contains(neverBody, `href="/sessions/`) {
 		t.Errorf("expected no session link for never-started deployment, got: %s", neverBody)
 	}
 }

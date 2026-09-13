@@ -202,13 +202,28 @@ templ gameRow(row GameRow, startExpanded bool) {
 			class="w-full flex justify-between items-center gap-4 p-4 hover:bg-base-200 transition-colors text-left cursor-pointer select-none"
 		>
 			<div class="flex items-center gap-3 min-w-0">
-				<span class="font-medium text-base-content truncate">{ row.Name }</span>
+				<a
+					href={ templ.URL(fmt.Sprintf("/games/%d", row.GameID)) }
+					@click.stop
+					class="font-medium text-base-content hover:underline truncate"
+					title="View game details"
+				>
+					{ row.Name }
+				</a>
 				@htmxui.Badge(deploymentStatusLabel(row.RunState), statusBadgeVariant(string(row.RunState)), htmxui.BadgeSizeMD, true, nil)
 			</div>
 			<div class="flex items-center gap-3 shrink-0">
 				<div @click.stop class="shrink-0">
 					@components.ConnectAddressDisplay(row.Connect)
 				</div>
+				<a
+					href={ templ.URL(fmt.Sprintf("/games/%d", row.GameID)) }
+					@click.stop
+					class="btn btn-ghost btn-xs text-base-content/60"
+					title="View game details"
+				>
+					View →
+				</a>
 				<span class="p-1 text-base-content/60 transition-colors shrink-0">
 					<svg :class="expanded ? 'rotate-180' : ''" class="w-5 h-5 transition-transform" fill="none" stroke="currentColor" viewBox="0 0 24 24">
 						<path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7"></path>

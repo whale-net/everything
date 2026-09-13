@@ -3,6 +3,8 @@ package pages
 import (
 	"fmt"
 	"strings"
+
+	"github.com/whale-net/everything/libs/go/htmxui"
 	"github.com/whale-net/everything/manmanv2/ui/components"
 	manmanpb "github.com/whale-net/everything/manmanv2/protos"
 )
@@ -10,6 +12,7 @@ import (
 type GameDetailPageData struct {
 	Layout      components.LayoutData
 	Game        *manmanpb.Game
+	Row         GameRow
 	PathPresets []*manmanpb.GameAddonPathPreset
 	Volumes     []*manmanpb.GameConfigVolume
 	Configs     []*manmanpb.GameConfig
@@ -41,12 +44,28 @@ templ GameDetail(data GameDetailPageData) {
 		<style>
 			[x-cloak] { display: none !important; }
 		</style>
+		<script>
+			document.addEventListener('click', function(event) {
+				var trigger = event.target.closest('[data-open-blade-template]');
+				if (!trigger) return;
+				var tpl = document.getElementById(trigger.getAttribute('data-open-blade-template'));
+				if (!tpl) return;
+				var fragment = tpl.content.cloneNode(true);
+				var bladeRoot = fragment.querySelector('[data-blade]');
+				document.body.appendChild(fragment);
+				if (bladeRoot && window.htmx) {
+					window.htmx.process(bladeRoot);
+				}
+			});
+		</script>
 		<div class="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4 mb-6">
 			<div>
 				<div class="flex items-center gap-2 mb-2">
 					<span class="badge badge-primary badge-soft">
 						🎮 GAME
 					</span>
+					@htmxui.Badge(deploymentStatusLabel(data.Row.RunState), statusBadgeVariant(string(data.Row.RunState)), htmxui.BadgeSizeMD, true, nil)
+					@components.ConnectAddressDisplay(data.Row.Connect)
 				</div>
 				<h1 class="text-3xl font-bold text-base-content">{ data.Game.Name }</h1>
 			</div>
@@ -59,44 +78,34 @@ templ GameDetail(data GameDetailPageData) {
 				</button>
 			</div>
 		</div>
-		<div class="card bg-base-100 border border-base-300 shadow-sm p-6 mb-6">
-			<h2 class="text-lg font-semibold text-base-content mb-4">Game Information</h2>
-			<dl class="grid grid-cols-1 md:grid-cols-2 gap-4">
-				@components.DLItem("Game ID", fmt.Sprintf("%d", data.Game.GameId))
-				@components.DLItem("Name", data.Game.Name)
-				@components.DLItem("Steam App ID", func() string {
-					if data.Game.SteamAppId != "" {
-						return data.Game.SteamAppId
-					}
-					return "-"
-				}())
-				if data.Game.Metadata != nil {
-					@components.DLItem("Genre", func() string {
-						if data.Game.Metadata.Genre != "" {
-							return data.Game.Metadata.Genre
-						}
-						return "-"
-					}())
-					@components.DLItem("Publisher", func() string {
-						if data.Game.Metadata.Publisher != "" {
-							return data.Game.Metadata.Publisher
-						}
-						return "-"
-					}())
-					<div>
-						<dt class="text-sm font-medium text-base-content/60">Tags</dt>
-						<dd class="mt-1 flex flex-wrap gap-1">
-							if len(data.Game.Metadata.Tags) > 0 {
-								for _, tag := range data.Game.Metadata.Tags {
-									<span class="badge badge-neutral badge-soft badge-sm">{ tag }</span>
-								}
-							} else {
-								<span class="text-sm text-base-content">-</span>
-							}
-						</dd>
-					</div>
-				}
-			</dl>
+		<!-- Deployments -->
+		<div class="card bg-base-100 border border-base-300 shadow-sm overflow-hidden mb-6">
+			<div class="p-4 border-b border-base-300 bg-base-200">
+				<h2 class="text-lg font-semibold text-base-content">Deployments</h2>
+			</div>
+			<div class="p-4" id={ fmt.Sprintf("game-deployments-%d", data.Game.GameId) }>
+				@deploymentsSection(data.Row.Deployments)
+			</div>
+		</div>
+		<!-- Configurations -->
+		<div class="card bg-base-100 border border-base-300 shadow-sm overflow-hidden mb-6">
+			<div class="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-3 p-4 border-b border-base-300 bg-base-200">
+				<h2 class="text-lg font-semibold text-base-content">Configurations</h2>
+				<a href={ templ.URL(fmt.Sprintf("/games/%d/configs/new", data.Game.GameId)) } class="btn btn-primary btn-sm">+ Create Config</a>
+			</div>
+			<div class="p-4" id={ fmt.Sprintf("game-configs-%d", data.Game.GameId) }>
+				@gameConfigsSection(data.Row)
+			</div>
+		</div>
+		<!-- Workshop Libraries -->
+		<div
+			id={ fmt.Sprintf("game-workshop-%d", data.Game.GameId) }
+			hx-get={ fmt.Sprintf("/games/%d/workshop-panel", data.Game.GameId) }
+			hx-trigger="load"
+			hx-swap="innerHTML"
+			class="mb-6"
+		>
+			@gameWorkshopPlaceholder()
 		</div>
 		<!-- Edit form -->
 		<div id="edit-form" class="hidden mb-6">
@@ -221,44 +230,45 @@ templ GameDetail(data GameDetailPageData) {
 				</form>
 			</div>
 		</div>
-		<!-- Configs -->
-		<div class="card bg-base-100 border border-base-300 shadow-sm overflow-hidden mb-6">
-			<div class="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-3 p-4 border-b border-base-300">
-				<h2 class="text-lg font-semibold text-base-content">Game Configurations</h2>
-				<a href={ templ.URL(fmt.Sprintf("/games/%d/configs/new", data.Game.GameId)) } class="btn btn-primary btn-sm">Create Config</a>
-			</div>
-			if len(data.Configs) > 0 {
-				<div class="overflow-x-auto">
-					<table class="table">
-						<thead class="bg-base-200">
-							<tr>
-								<th scope="col">Name</th>
-								<th scope="col">Docker Image</th>
-								<th scope="col">SGCs</th>
-								<th scope="col" class="text-right">Actions</th>
-							</tr>
-						</thead>
-						<tbody>
-							for _, config := range data.Configs {
-								<tr class="hover">
-									<td>
-										<a href={ templ.URL(fmt.Sprintf("/games/%d/configs/%d", data.Game.GameId, config.ConfigId)) } class="text-sm font-medium link link-primary">{ config.Name }</a>
-									</td>
-									<td class="text-sm font-mono text-base-content">{ config.Image }</td>
-									<td class="text-sm text-base-content">{ fmt.Sprintf("%d", data.SgcCounts[config.ConfigId]) }</td>
-									<td class="text-right">
-										<a href={ templ.URL(fmt.Sprintf("/games/%d/configs/%d", data.Game.GameId, config.ConfigId)) } class="btn btn-primary btn-sm">View</a>
-									</td>
-								</tr>
+		<!-- Game Information -->
+		<div class="card bg-base-100 border border-base-300 shadow-sm p-6 mb-6">
+			<h2 class="text-lg font-semibold text-base-content mb-4">Game Information</h2>
+			<dl class="grid grid-cols-1 md:grid-cols-2 gap-4">
+				@components.DLItem("Game ID", fmt.Sprintf("%d", data.Game.GameId))
+				@components.DLItem("Name", data.Game.Name)
+				@components.DLItem("Steam App ID", func() string {
+					if data.Game.SteamAppId != "" {
+						return data.Game.SteamAppId
+					}
+					return "-"
+				}())
+				if data.Game.Metadata != nil {
+					@components.DLItem("Genre", func() string {
+						if data.Game.Metadata.Genre != "" {
+							return data.Game.Metadata.Genre
+						}
+						return "-"
+					}())
+					@components.DLItem("Publisher", func() string {
+						if data.Game.Metadata.Publisher != "" {
+							return data.Game.Metadata.Publisher
+						}
+						return "-"
+					}())
+					<div>
+						<dt class="text-sm font-medium text-base-content/60">Tags</dt>
+						<dd class="mt-1 flex flex-wrap gap-1">
+							if len(data.Game.Metadata.Tags) > 0 {
+								for _, tag := range data.Game.Metadata.Tags {
+									<span class="badge badge-neutral badge-soft badge-sm">{ tag }</span>
+								}
+							} else {
+								<span class="text-sm text-base-content">-</span>
 							}
-						</tbody>
-					</table>
-				</div>
-			} else {
-				<div class="p-12 text-center">
-					<p class="text-base-content/60">No configurations yet. Create a configuration to deploy this game.</p>
-				</div>
-			}
+						</dd>
+					</div>
+				}
+			</dl>
 		</div>
 		<!-- Danger Zone: chrome only restyled onto htmxui.Confirm's ZoneTitle visual
 			language; the existing Alpine click-to-reveal gate is kept as-is (FR7),
