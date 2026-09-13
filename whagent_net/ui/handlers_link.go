@@ -15,37 +15,116 @@ package main
 
 import (
 	"net/http"
+	"net/url"
+	"time"
 
+	"github.com/whale-net/everything/libs/go/htmxauth"
+	"github.com/whale-net/everything/libs/go/logging"
+	"github.com/whale-net/everything/whagent_net/ui/components"
 	"github.com/whale-net/everything/whagent_net/ui/pages"
 )
 
-// handleLinkASSStart is POST /link/ass (FR1/FR2). Scaffold phase: always
-// answers 501 -- Implementation phase fills in the mint + redirect below.
-//
-// TODO(Implementation phase): when app.assLinkURL == "" (WHAGENT_UI_ASS_
-// LINK_URL unset), respond with a plain "link flow not configured"
-// message -- never a 500, never a redirect to an empty host. Otherwise:
-// read the signed-in Operator's (iss, sub) from app.oidcIssuer/
-// htmxauth.GetUser(ctx).Sub (mirrors handlers_grants.go's own precedent),
-// call app.linkAssertKey.Mint with a return URL of
-// "{WHAGENT_UI_PUBLIC_URL}/link/ass/result", and issue a 303 redirect to
-// app.assLinkURL's link-acceptance endpoint carrying the resulting
-// assertion.
+// The four FR10 outcome values ASS `web`'s redirect back to
+// GET /link/ass/result carries on its "outcome" query parameter -- mirrors
+// audience_score_system/web/link/handlers.go's own outcome* constants
+// verbatim (that package is the producer of these values; this package is
+// only ever a consumer).
+const (
+	outcomeLinked        = "linked"
+	outcomeAlreadyLinked = "already_linked"
+	outcomeConflict      = "conflict"
+	outcomeRejected      = "rejected"
+)
+
+// handleLinkASSStart is POST /link/ass (FR1/FR2). When app.assLinkURL is
+// unconfigured, answers a plain "not configured" message -- never a 500,
+// never a redirect to an empty host. Otherwise mints a linkassert.Key
+// assertion for the signed-in Operator (iss = app.publicURL, sub/sub_iss =
+// the Operator's own Keycloak identity, mirroring handlers_grants.go's
+// handleGrants/handleGrantsRevoke precedent) and issues a 303 redirect to
+// ASS `web`'s link-acceptance endpoint carrying it on the "token" query
+// parameter. This is the only call site in this binary that invokes
+// linkassert.Key.Mint (FR1's "never silently automatic").
 func (app *App) handleLinkASSStart(w http.ResponseWriter, r *http.Request) {
-	http.Error(w, "not implemented", http.StatusNotImplemented)
+	logger := logging.Get("main")
+
+	if app.assLinkURL == "" {
+		http.Error(w, "Linking your account to ASS is not configured on this deployment.", http.StatusServiceUnavailable)
+		return
+	}
+
+	user := htmxauth.GetUser(r.Context())
+	if user == nil {
+		http.Error(w, "unauthorized", http.StatusUnauthorized)
+		return
+	}
+
+	returnURL := app.publicURL + "/link/ass/result"
+	token, err := app.linkAssertKey.Mint(app.publicURL, user.Sub, app.oidcIssuer, returnURL, time.Now())
+	if err != nil {
+		logger.Error("failed to mint link assertion", "error", err)
+		http.Error(w, "Internal server error", http.StatusInternalServerError)
+		return
+	}
+
+	dest := app.assLinkURL + "/link/whagent?" + url.Values{"token": {token}}.Encode()
+	http.Redirect(w, r, dest, http.StatusSeeOther)
 }
 
-// handleLinkASSResult is GET /link/ass/result (FR10). Scaffold phase:
-// renders pages.LinkASSResult's skeleton with no outcome resolved yet.
-//
-// TODO(Implementation phase): resolve the outcome query parameter ASS's
-// redirect carries into one of pages.LinkASSResult's four distinct
-// messages (linked / already linked / conflict / rejected assertion --
-// see #2600 for the exact query-parameter contract to mirror). An
-// unrecognized or absent value must render the generic failure, never a
-// success.
+// linkASSResultMessage is FR10's outcome-to-message mapping: exactly one
+// of the four values ASS `web`'s redirect carries maps to its own
+// distinct message; anything else (including an absent outcome) maps to
+// the generic failure -- never a success.
+func linkASSResultMessage(outcome string) pages.LinkASSResultData {
+	switch outcome {
+	case outcomeLinked:
+		return pages.LinkASSResultData{
+			Heading: "Linked",
+			Message: "Your account is now linked. Agent calls made on your behalf now resolve to your existing ASS person.",
+			Success: true,
+		}
+	case outcomeAlreadyLinked:
+		return pages.LinkASSResultData{
+			Heading: "Already linked",
+			Message: "Your account was already linked to this same ASS person -- nothing changed.",
+			Success: true,
+		}
+	case outcomeConflict:
+		return pages.LinkASSResultData{
+			Heading: "Already linked to a different person",
+			Message: "Your account is already linked to a different ASS person. There is no automatic re-link or merge -- contact an administrator if this is unexpected.",
+			Success: false,
+		}
+	case outcomeRejected:
+		return pages.LinkASSResultData{
+			Heading: "Link request rejected",
+			Message: "The link request was invalid, expired, or already used. Please retry the link from your grants page.",
+			Success: false,
+		}
+	default:
+		return pages.LinkASSResultData{
+			Heading: "Link failed",
+			Message: "Something went wrong linking your account. Please retry the link from your grants page.",
+			Success: false,
+		}
+	}
+}
+
+// handleLinkASSResult is GET /link/ass/result (FR10): resolves the
+// "outcome" query parameter ASS `web`'s redirect carries into one of
+// linkASSResultMessage's four distinct messages (or the generic failure
+// for anything else) and renders it.
 func (app *App) handleLinkASSResult(w http.ResponseWriter, r *http.Request) {
-	if err := RenderTempl(w, r, "Link ASS identity", pages.LinkASSResult(pages.LinkASSResultData{})); err != nil {
+	user := htmxauth.GetUser(r.Context())
+	data := linkASSResultMessage(r.URL.Query().Get("outcome"))
+	data.Layout = components.LayoutData{
+		Title:  "Link ASS identity",
+		Active: "Grants",
+		User:   user,
+	}
+
+	if err := RenderTempl(w, r, data.Layout.Title, pages.LinkASSResult(data)); err != nil {
+		logging.Get("main").Error("failed to render link ASS result page", "error", err)
 		http.Error(w, "Internal server error", http.StatusInternalServerError)
 	}
 }
