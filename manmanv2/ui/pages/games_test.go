@@ -3,6 +3,8 @@ package pages
 import (
 	"strings"
 	"testing"
+
+	"github.com/whale-net/everything/manmanv2/ui/components"
 )
 
 // This file guards task #2273 (root plan #2266): the expanded game row's
@@ -179,3 +181,37 @@ func TestGamesSections_FR2_NoSGCTerminology(t *testing.T) {
 		t.Errorf("rendered sections contain %q (FR2 forbids raw entity terminology in display text), got: %s", "server game config", body)
 	}
 }
+
+// TestGameRow_HeaderMarkupAndNoNestedButtons guards the game row header markup:
+// the row header must be a div[role="button"], not a <button>, to prevent
+// invalid HTML button-inside-button nesting when ConnectAddressDisplay renders
+// its copy button. It also ensures @click.stop isolates the connect address
+// from triggering row expansion.
+func TestGameRow_HeaderMarkupAndNoNestedButtons(t *testing.T) {
+	row := GameRow{
+		GameID:   1,
+		Name:     "Valheim",
+		RunState: components.DeploymentRunning,
+		Connect: components.ConnectAddressView{
+			Addresses: []components.ConnectAddress{
+				{Address: "203.0.113.7:2456", Protocol: "UDP"},
+			},
+		},
+	}
+	body := renderPage(t, gameRow(row, false))
+
+	if strings.Contains(body, `<button type="button" @click="expanded = !expanded"`) ||
+		strings.Contains(body, `<button @click="expanded = !expanded"`) {
+		t.Errorf("gameRow header must not be a <button> element (prevents button-inside-button HTML nesting), got: %s", body)
+	}
+	if !strings.Contains(body, `role="button"`) {
+		t.Errorf("gameRow header must have role=\"button\" for accessibility, got: %s", body)
+	}
+	if !strings.Contains(body, `@click="expanded = !expanded"`) {
+		t.Errorf("gameRow header must bind @click to toggle expanded, got: %s", body)
+	}
+	if !strings.Contains(body, `@click.stop`) {
+		t.Errorf("gameRow header must isolate connect address with @click.stop, got: %s", body)
+	}
+}
+

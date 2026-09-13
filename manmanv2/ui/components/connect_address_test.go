@@ -133,6 +133,12 @@ func TestConnectAddressDisplay_RendersCopyableAddresses(t *testing.T) {
 	if !strings.Contains(html, `onclick="__templ_copyConnectAddress_`) {
 		t.Errorf("expected the copy button wired to the copyConnectAddress script, got %q", html)
 	}
+	if !strings.Contains(html, "@click.stop") {
+		t.Errorf("expected copy button to have @click.stop, got %q", html)
+	}
+	if !strings.Contains(html, "whitespace-nowrap") {
+		t.Errorf("expected address elements to have whitespace-nowrap, got %q", html)
+	}
 	if strings.Contains(html, "Connect address unavailable") {
 		t.Errorf("expected no unavailable message when addresses are present, got %q", html)
 	}
