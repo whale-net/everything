@@ -521,10 +521,49 @@ func (app *App) handleGameDetail(w http.ResponseWriter, r *http.Request) {
 	allSGCs, err := app.grpc.ListServerGameConfigs(ctx, 0)
 	if err != nil {
 		log.Printf("Warning: failed to fetch SGC counts: %v", err)
+		allSGCs = nil
 	} else {
 		for _, sgc := range allSGCs {
 			sgcCounts[sgc.GameConfigId]++
 		}
+	}
+
+	servers, err := app.grpc.ListServers(ctx)
+	if err != nil {
+		log.Printf("Warning: failed to fetch servers: %v", err)
+		servers = nil
+	}
+
+	sessions, err := app.grpc.ListSessions(ctx, false)
+	if err != nil {
+		log.Printf("Warning: failed to fetch sessions: %v", err)
+		sessions = nil
+	}
+
+	configIDs := make(map[int64]bool, len(configs))
+	for _, c := range configs {
+		configIDs[c.GetConfigId()] = true
+	}
+	var gameDeployments []*manmanpb.ServerGameConfig
+	for _, sgc := range allSGCs {
+		if configIDs[sgc.GetGameConfigId()] {
+			gameDeployments = append(gameDeployments, sgc)
+		}
+	}
+	sgcIDs := make([]int64, len(gameDeployments))
+	for i, d := range gameDeployments {
+		sgcIDs[i] = d.GetServerGameConfigId()
+	}
+	restartStates, err := app.grpc.ListPendingRestarts(ctx, sgcIDs)
+	if err != nil {
+		log.Printf("Warning: failed to list pending restarts: %v", err)
+		restartStates = nil
+	}
+
+	gameRows := buildGameRows([]*manmanpb.Game{game}, configs, allSGCs, servers, sessions, restartStates)
+	var gameRow pages.GameRow
+	if len(gameRows) > 0 {
+		gameRow = gameRows[0]
 	}
 
 	// Fetch path presets for this game
@@ -554,6 +593,7 @@ func (app *App) handleGameDetail(w http.ResponseWriter, r *http.Request) {
 	}
 
 	breadcrumbs := []components.Breadcrumb{
+		{Label: "Dashboard", URL: "/"},
 		{Label: "Games", URL: "/games"},
 		{Label: game.Name, URL: ""},
 	}
@@ -567,6 +607,7 @@ func (app *App) handleGameDetail(w http.ResponseWriter, r *http.Request) {
 	data := pages.GameDetailPageData{
 		Layout:      layoutData,
 		Game:        game,
+		Row:         gameRow,
 		PathPresets: pathPresets,
 		Volumes:     volumeSlice,
 		Configs:     configs,

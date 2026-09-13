@@ -86,3 +86,21 @@ func TestDashboardSessions_EmptySliceRendersEmptyState(t *testing.T) {
 		t.Errorf("expected no session cards in the empty state, got body: %s", body)
 	}
 }
+
+// TestDashboardSessions_CardLinksToGameDetailWhenGameIDPresent covers the
+// dedicated game detail routing: when GameID is known, the dashboard card
+// links to /games/<GameID> directly rather than the deployment route.
+func TestDashboardSessions_CardLinksToGameDetailWhenGameIDPresent(t *testing.T) {
+	sessions := []ActiveSessionInfo{
+		{SessionID: 3, SGCID: 7, GameID: 42, Status: "running", ServerName: "Alpha", GameName: "Valheim", ConfigName: "Coop"},
+	}
+	body := renderDashboardSessions(t, sessions)
+
+	if !strings.Contains(body, `href="/games/42"`) {
+		t.Errorf("expected card href %q, got body: %s", `href="/games/42"`, body)
+	}
+	if strings.Contains(body, `href="/sgc/7"`) {
+		t.Errorf("expected no /sgc/7 link when GameID is present, got body: %s", body)
+	}
+}
+

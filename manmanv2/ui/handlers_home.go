@@ -157,6 +157,7 @@ func (app *App) handleDashboardSessions(w http.ResponseWriter, r *http.Request) 
 				info.ConfigName = gc.Name
 				if game, ok := gameByID[gc.GameId]; ok {
 					info.GameName = game.Name
+					info.GameID = game.GameId
 				}
 			}
 			for _, pb := range sgc.PortBindings {

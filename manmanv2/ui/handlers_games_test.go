@@ -13,6 +13,8 @@ import (
 	"github.com/whale-net/everything/manmanv2/ui/components"
 	"github.com/whale-net/everything/manmanv2/ui/pages"
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 )
 
 // This file guards task #2270 (root plan #2266): the Games page's flat
@@ -32,6 +34,7 @@ import (
 // the same convention.
 type fakeGamesAPIClient struct {
 	manmanpb.ManManAPIClient
+	manmanpb.WorkshopServiceClient
 
 	games       []*manmanpb.Game
 	configs     []*manmanpb.GameConfig
@@ -91,6 +94,26 @@ func (f *fakeGamesAPIClient) ListPendingRestarts(ctx context.Context, in *manman
 	return &manmanpb.ListPendingRestartsResponse{States: f.pendingRestartStates}, nil
 }
 
+func (f *fakeGamesAPIClient) GetGame(ctx context.Context, in *manmanpb.GetGameRequest, opts ...grpc.CallOption) (*manmanpb.GetGameResponse, error) {
+	f.calls["GetGame"]++
+	for _, g := range f.games {
+		if g.GameId == in.GameId {
+			return &manmanpb.GetGameResponse{Game: g}, nil
+		}
+	}
+	return nil, status.Error(codes.NotFound, "game not found")
+}
+
+func (f *fakeGamesAPIClient) ListAddonPathPresets(ctx context.Context, in *manmanpb.ListAddonPathPresetsRequest, opts ...grpc.CallOption) (*manmanpb.ListAddonPathPresetsResponse, error) {
+	f.calls["ListAddonPathPresets"]++
+	return &manmanpb.ListAddonPathPresetsResponse{}, nil
+}
+
+func (f *fakeGamesAPIClient) ListGameConfigVolumes(ctx context.Context, in *manmanpb.ListGameConfigVolumesRequest, opts ...grpc.CallOption) (*manmanpb.ListGameConfigVolumesResponse, error) {
+	f.calls["ListGameConfigVolumes"]++
+	return &manmanpb.ListGameConfigVolumesResponse{}, nil
+}
+
 // buildFakeGamesData constructs n games, each with one config and one
 // running, resolvable-address deployment -- enough to exercise the full
 // join/rollup while staying cheap to generate at n=20 for the NFR7 size
@@ -139,6 +162,15 @@ func renderGamesHTTP(t *testing.T, api *fakeGamesAPIClient, target string) (int,
 	req := httptest.NewRequest(http.MethodGet, target, nil)
 	w := httptest.NewRecorder()
 	app.handleGames(w, req)
+	return w.Code, w.Body.String()
+}
+
+func renderGameDetailHTTP(t *testing.T, api *fakeGamesAPIClient, target string) (int, string) {
+	t.Helper()
+	app := &App{grpc: &ControlClient{api: api, workshop: api}}
+	req := httptest.NewRequest(http.MethodGet, target, nil)
+	w := httptest.NewRecorder()
+	app.handleGameDetail(w, req)
 	return w.Code, w.Body.String()
 }
 
@@ -842,3 +874,86 @@ func assertRowExpanded(t *testing.T, body string, gameID int64, want bool) {
 		t.Errorf("game_id %d row: expected Alpine seed %q near %q, got window %q", gameID, wantText, marker, window)
 	}
 }
+
+// TestHandleGameDetail_DedicatedLandingPage covers the dedicated game detail
+// route (/games/<game_id>): header breadcrumbs and context scoped to that
+// specific game, status and connect info, deployments with action controls,
+// configurations, and isolation from other games in the catalog.
+func TestHandleGameDetail_DedicatedLandingPage(t *testing.T) {
+	api := buildFakeGamesData(3) // Game-000 (ID 1), Game-001 (ID 2), Game-002 (ID 3)
+
+	code, body := renderGameDetailHTTP(t, api, "/games/1")
+	if code != http.StatusOK {
+		t.Fatalf("status = %d, want 200; body: %s", code, body)
+	}
+
+	// Page header and breadcrumbs scoped to Game-000
+	if !strings.Contains(body, "Game-000") {
+		t.Errorf("expected page to contain game name %q, got body: %s", "Game-000", body)
+	}
+	if !strings.Contains(body, "Dashboard") {
+		t.Errorf("expected breadcrumbs to contain Dashboard, got body: %s", body)
+	}
+	if !strings.Contains(body, "Games") {
+		t.Errorf("expected breadcrumbs to contain Games, got body: %s", body)
+	}
+
+	// Status badge and connect address
+	if !strings.Contains(body, "running") {
+		t.Errorf("expected status badge 'running' in header, got body: %s", body)
+	}
+	if !strings.Contains(body, "host-01:25000") {
+		t.Errorf("expected connect address 'host-01:25000' in header, got body: %s", body)
+	}
+
+	// Deployments section with actions
+	if !strings.Contains(body, "Deployments") {
+		t.Errorf("expected Deployments section heading, got body: %s", body)
+	}
+	if !strings.Contains(body, "Config-000 on server 1") {
+		t.Errorf("expected deployment display name in table, got body: %s", body)
+	}
+	if !strings.Contains(body, "Restart") {
+		t.Errorf("expected Restart action button in deployment row, got body: %s", body)
+	}
+
+	// Configurations section
+	if !strings.Contains(body, "Configurations") {
+		t.Errorf("expected Configurations section heading, got body: %s", body)
+	}
+	if !strings.Contains(body, "Config-000") {
+		t.Errorf("expected Config-000 in configurations table, got body: %s", body)
+	}
+
+	// Workshop Libraries section placeholder
+	if !strings.Contains(body, "game-workshop-1") {
+		t.Errorf("expected workshop libraries container for game 1, got body: %s", body)
+	}
+
+	// Isolated view: other games are NOT visible
+	if strings.Contains(body, "Game-001") {
+		t.Errorf("expected Game-001 not to be present on dedicated Game-000 page, got body: %s", body)
+	}
+	if strings.Contains(body, "Game-002") {
+		t.Errorf("expected Game-002 not to be present on dedicated Game-000 page, got body: %s", body)
+	}
+}
+
+// TestHandleGames_RowDirectLinksToGameDetail guards the navigation update:
+// clicking a game card on the /games catalog navigates directly to /games/<game_id>.
+func TestHandleGames_RowDirectLinksToGameDetail(t *testing.T) {
+	api := buildFakeGamesData(2)
+
+	code, body := renderGamesHTTP(t, api, "/games")
+	if code != http.StatusOK {
+		t.Fatalf("status = %d, want 200; body: %s", code, body)
+	}
+
+	if !strings.Contains(body, `href="/games/1"`) {
+		t.Errorf("expected game row to link directly to /games/1, got body: %s", body)
+	}
+	if !strings.Contains(body, `href="/games/2"`) {
+		t.Errorf("expected game row to link directly to /games/2, got body: %s", body)
+	}
+}
+
