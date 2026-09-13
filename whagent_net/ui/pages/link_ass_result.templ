@@ -5,32 +5,44 @@ import (
 )
 
 // LinkASSResultData carries LinkASSResult's page-level parameterisation
-// (FR10, issue #2596). Outcome is the raw outcome value ASS `web`'s
-// redirect back to GET /link/ass/result carries -- resolved by
-// ../handlers_link.go's handleLinkASSResult, never parsed by this page
-// itself.
-//
-// Scaffold phase: Outcome is rendered verbatim. Implementation phase
-// replaces this with the four distinct FR10 messages (linked / already
-// linked / conflict / rejected assertion) plus a generic failure for an
-// unrecognized or absent value -- see #2600 for the exact query-parameter
-// contract to mirror.
+// (FR10, issue #2596). Heading/Message/Success are resolved by
+// ../handlers_link.go's linkASSResultMessage from the raw "outcome" query
+// parameter ASS `web`'s redirect back to GET /link/ass/result carries --
+// this page never parses that value itself. Success is false for every
+// outcome except the two the Operator should read as good news ("linked",
+// "already_linked") -- an unrecognized or absent outcome always resolves
+// to Success == false (see linkASSResultMessage's default branch).
 type LinkASSResultData struct {
 	Layout  components.LayoutData
-	Outcome string
+	Heading string
+	Message string
+	Success bool
 }
 
 // LinkASSResult is FR10's outcome page (issue #2596): the page ASS `web`
 // redirects the Operator's browser back to once handleLinkASSStart's
-// assertion has been consumed. See LinkASSResultData's doc comment for
-// this task's scaffold-vs-implementation split.
+// assertion has been consumed. Renders one of four distinct messages
+// (linked / already linked / conflict / rejected) plus a generic failure
+// for anything else -- Success controls only the visual styling
+// (alert-success vs alert-error), never which message is shown.
 templ LinkASSResult(data LinkASSResultData) {
 	@components.Layout(data.Layout) {
 		<h1 class="text-2xl font-bold text-base-content mb-4">Link ASS identity</h1>
-		if data.Outcome == "" {
-			<p class="opacity-70">No outcome to display yet.</p>
+		if data.Success {
+			<div role="status" class="alert alert-success">
+				<div>
+					<h2 class="font-bold">{ data.Heading }</h2>
+					<p>{ data.Message }</p>
+				</div>
+			</div>
 		} else {
-			<p>{ data.Outcome }</p>
+			<div role="alert" class="alert alert-error">
+				<div>
+					<h2 class="font-bold">{ data.Heading }</h2>
+					<p>{ data.Message }</p>
+				</div>
+			</div>
 		}
+		<a class="btn btn-sm btn-primary mt-4" href="/grants">Back to grants</a>
 	}
 }
