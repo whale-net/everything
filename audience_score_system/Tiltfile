@@ -46,7 +46,7 @@ print_startup_banner("Audience Score System", namespace, platform)
 
 setup_dev_util(namespace)
 
-db_info = setup_postgres(namespace, db_name='audience_score_system', resource_name='postgres-dev-ass')
+db_info = setup_postgres(namespace, db_name='audience_score_system', resource_name='postgres-dev-ass', host_port='5433')
 pg_database_url = get_custom_or_default(
     'BUILD_POSTGRES_ENV',
     'PG_DATABASE_URL',
@@ -58,7 +58,7 @@ pg_database_url = get_custom_or_default(
 # mcp hard-depends on Temporal at startup (main.go: constructs a Temporal
 # client unconditionally for trigger_channel_sync's ScheduleManager),
 # same as web/worker.
-temporal_info = setup_temporal(namespace)
+temporal_info = setup_temporal(namespace, grpc_host_port='7234', ui_host_port='8234')
 temporal_host = temporal_info['grpc_target']
 
 otel_endpoint = setup_otelcollector(namespace, resource_name='otelcollector-dev-ass')
@@ -247,7 +247,7 @@ spec:
         - name: ASS_MCP_PUBLIC_URL
           value: "{ass_mcp_public_url}"
         - name: ASS_OAUTH_REDIRECT_BASE_URL
-          value: "http://localhost:8081"
+          value: "http://localhost:8084"
         - name: TEMPORAL_HOST
           value: "{temporal_host}"
         - name: ASS_WHAGENT_JWKS_URL
@@ -273,10 +273,10 @@ spec:
     k8s_resource(
         'audience-score-system-mcp',
         resource_deps=mcp_deps,
-        port_forwards=['8081:8081'],
+        port_forwards=['8084:8081'],
         labels=['audience-score-system'],
     )
-    print("🔌 mcp forwarded to http://localhost:8081/ (whagent-net trust: {})".format(whagent_jwks_url))
+    print("🔌 mcp forwarded to http://localhost:8084/ (whagent-net trust: {})".format(whagent_jwks_url))
 
 # web: the only UI surface (NFR3) -- Google OAuth sign-in and the FR3-FR10
 # whagent-ui link-acceptance flow (/link/whagent, /link/whagent/confirm).
@@ -347,7 +347,7 @@ spec:
         # host-facing address mcp's own port_forwards exposes -- a local-dev-
         # only divergence, never set outside dev.
         - name: ASS_WEB_MCP_RESOURCE_URL
-          value: "http://localhost:8081/"
+          value: "http://localhost:8084/"
         - name: ASS_WHAGENT_UI_JWKS_URL
           value: "{whagent_ui_jwks_url}"
         - name: ASS_WHAGENT_UI_ISSUER
@@ -390,9 +390,9 @@ spec:
 print("\n" + "="*60)
 print("📡 Access Information")
 print("="*60)
-print("  PostgreSQL:  localhost:5432 (user: postgres, pass: password)")
-print("  Temporal:    localhost:7233 (gRPC), {} (Web UI)".format(temporal_info['ui_service_info']))
-print("  mcp (HTTP):  http://localhost:8081/")
+print("  PostgreSQL:  localhost:5433 (user: postgres, pass: password)")
+print("  Temporal:    localhost:7234 (gRPC), {} (Web UI)".format(temporal_info['ui_service_info']))
+print("  mcp (HTTP):  http://localhost:8084/")
 print("  web (HTTP):  {}/".format(web_public_url))
 print("="*60)
 

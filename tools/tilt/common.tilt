@@ -231,7 +231,7 @@ def setup_dev_util(namespace):
     """
     helm_repo('dev-util', 'https://whale-net.github.io/dev-util')
 
-def setup_postgres(namespace, db_name='default', resource_name='postgres-dev', service_name='postgres-dev', port_forward=True, image=''):
+def setup_postgres(namespace, db_name='default', resource_name='postgres-dev', service_name='postgres-dev', port_forward=True, image='', host_port='5432'):
     """
     Setup PostgreSQL using dev-util helm chart.
 
@@ -248,6 +248,9 @@ def setup_postgres(namespace, db_name='default', resource_name='postgres-dev', s
         port_forward: Whether to forward port 5432
         image: Override the postgres image (e.g. 'timescale/timescaledb:latest-pg16').
                Defaults to the chart default (postgres:15.3).
+        host_port: Host-side port to forward to the container's 5432. Override
+                   when another domain's Tiltfile is already forwarding 5432
+                   locally (e.g. running two domains' Tiltfiles concurrently).
 
     Returns:
         Dict with connection info:
@@ -280,7 +283,7 @@ def setup_postgres(namespace, db_name='default', resource_name='postgres-dev', s
     )
 
     if port_forward:
-        k8s_resource(workload=resource_name, port_forwards='5432:5432')
+        k8s_resource(workload=resource_name, port_forwards='{}:5432'.format(host_port))
 
     host = '{}.{}.svc.cluster.local'.format(service_name, namespace)
 
@@ -291,7 +294,7 @@ def setup_postgres(namespace, db_name='default', resource_name='postgres-dev', s
         'user': 'postgres',
         'password': 'password',
         'database': db_name,
-        'service_info': 'localhost:5432 (user: postgres, pass: password)',
+        'service_info': 'localhost:{} (user: postgres, pass: password)'.format(host_port),
     }
 
 def setup_rabbitmq(namespace, resource_name='rabbitmq-dev', port_forward=True, mqtt=False):
@@ -405,7 +408,7 @@ def setup_rabbitmq_mqtt_plugin(namespace, resource_name='rabbitmq-dev', labels=[
         labels=labels,
     )
 
-def setup_temporal(namespace, resource_name='temporal-dev', port_forward=True, image='temporalio/temporal:1.8.2'):
+def setup_temporal(namespace, resource_name='temporal-dev', port_forward=True, image='temporalio/temporal:1.8.2', grpc_host_port='7233', ui_host_port='8233'):
     """
     Setup a Temporal dev server for local development.
 
@@ -429,6 +432,12 @@ def setup_temporal(namespace, resource_name='temporal-dev', port_forward=True, i
             Pinned deliberately -- a floating :latest makes every developer's
             local Temporal a different version, and dev-server storage format
             changes between releases.
+        grpc_host_port: Host-side port to forward to the container's 7233.
+            Override when another domain's Tiltfile is already forwarding
+            7233 locally (e.g. running two domains' Tiltfiles concurrently).
+        ui_host_port: Host-side port to forward to the container's 8233.
+            Override when another domain's Tiltfile is already forwarding
+            8233 locally (e.g. running two domains' Tiltfiles concurrently).
 
     Returns:
         Dict with connection info:
@@ -509,14 +518,14 @@ spec:
 """.format(resource_name=resource_name, namespace=namespace, image=image)))
 
     if port_forward:
-        k8s_resource(workload=resource_name, port_forwards=['7233:7233', '8233:8233'])
+        k8s_resource(workload=resource_name, port_forwards=['{}:7233'.format(grpc_host_port), '{}:8233'.format(ui_host_port)])
 
     return {
         'host': host,
         'port': '7233',
         'namespace': 'default',
         'grpc_target': '{}:7233'.format(host),
-        'ui_service_info': 'http://localhost:8233',
+        'ui_service_info': 'http://localhost:{}'.format(ui_host_port),
         'service_info': 'localhost:7233 (namespace: default)',
     }
 
