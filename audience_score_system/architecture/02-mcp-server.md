@@ -279,6 +279,22 @@ remember to call them:
   specific Channel's data has nothing to scope) simply doesn't
   implement the interface and is left unscoped; this is deliberate, not an
   oversight — NFR5 only applies to Channel-scoped data.
+- **Whole-Person zero-role discoverability (FR11, issue #2601):** a
+  distinct, additional check from `RequireChannelRole` above, which it
+  never replaces or relaxes. `RequireChannelAccess` (`channelscope.go`)
+  fires only for a caller resolved via the whagent-net auth path
+  (`AuthPathWhagent`, `context.go`) who holds zero `channel_person` rows
+  across **every** Channel (`store.RoleStore.ChannelsForPerson`) — not just
+  the one Channel a call targets — and returns a message pointing the
+  caller at whagent-net's `ui` "Link ASS identity" action instead of a
+  silent empty result or an undifferentiated permission error (US2).
+  `RegisterRead`/`RegisterWrite` run it ahead of `RequireChannelRole` for
+  every `ChannelScoped` tool; `list_channels` (the one unscoped tool FR11
+  also covers, since it has no `channel_id` for `RequireChannelRole` to
+  check against) calls it directly. Deliberately a no-op for
+  `AuthPathMCPCredential` — an ASS-native Person can hold zero roles for an
+  unrelated reason (e.g. pending an invite), so pointing them at a
+  whagent-net linking flow would be wrong (FR12).
 - **Idempotency (NFR2/LB4):** `RegisterWrite` splits a write tool into a
   `WriteMutate` step (the side-effecting write, returning the UUID of the
   entity it created or affected) and a `WriteRender` step (builds the

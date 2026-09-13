@@ -260,18 +260,27 @@ func TestWhagentPersonMiddleware_ResolvesAndAutoProvisionsOnFirstSight(t *testin
 	}})
 
 	var gotPerson1, gotPerson2 *store.Person
+	var gotAuthPath1 AuthPath
 	next := mcp.MethodHandler(func(ctx context.Context, method string, req mcp.Request) (mcp.Result, error) {
 		gotPerson1 = PersonFromContext(ctx)
+		gotAuthPath1 = AuthPathFromContext(ctx)
 		return nil, nil
 	})
 	_, err := WhagentPersonMiddleware(identities)(next)(context.Background(), "tools/call", req)
 	require.NoError(t, err)
 	require.NotNil(t, gotPerson1)
+	assert.Equal(t, AuthPathWhagent, gotAuthPath1, "WhagentPersonMiddleware must stamp AuthPathWhagent (FR12), not derive it from the token")
 
 	// A second call for the exact same (iss, sub) pair must resolve to the
-	// same Person and must not create a second one.
+	// same Person and must not create a second one. This Person comes back
+	// from the fake's existing-entry branch, not its "mint a new one"
+	// branch -- proving the AuthPathWhagent marker comes from the
+	// middleware calling withPerson itself, not from anything about how
+	// the Person was resolved or what the claim/token contained.
+	var gotAuthPath2 AuthPath
 	next2 := mcp.MethodHandler(func(ctx context.Context, method string, req mcp.Request) (mcp.Result, error) {
 		gotPerson2 = PersonFromContext(ctx)
+		gotAuthPath2 = AuthPathFromContext(ctx)
 		return nil, nil
 	})
 	_, err = WhagentPersonMiddleware(identities)(next2)(context.Background(), "tools/call", req)
@@ -279,6 +288,7 @@ func TestWhagentPersonMiddleware_ResolvesAndAutoProvisionsOnFirstSight(t *testin
 	require.NotNil(t, gotPerson2)
 
 	assert.Equal(t, gotPerson1.ID, gotPerson2.ID, "the same (iss, sub) pair must resolve to the same person_id across calls")
+	assert.Equal(t, AuthPathWhagent, gotAuthPath2, "AuthPathWhagent must still be set when resolving an already-existing Person, not just on first-sight auto-provisioning")
 	assert.Equal(t, 2, identities.calls)
 }
 

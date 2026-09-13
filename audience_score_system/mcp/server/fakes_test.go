@@ -36,8 +36,9 @@ type roleKey struct{ channelID, personID uuid.UUID }
 // (channelID, personID) -- enough to drive channelscope.go/registry.go's
 // Channel-scope authorization without a real database.
 type fakeRoleStore struct {
-	mu    sync.Mutex
-	roles map[roleKey][]store.Role
+	mu                   sync.Mutex
+	roles                map[roleKey][]store.Role
+	channelsForPersonErr error
 }
 
 func newFakeRoleStore() *fakeRoleStore {
@@ -64,8 +65,24 @@ func (f *fakeRoleStore) RemoveRole(context.Context, uuid.UUID, uuid.UUID, uuid.U
 	return false, errors.New("fakeRoleStore.RemoveRole is not used by these tests")
 }
 
-func (f *fakeRoleStore) ChannelsForPerson(context.Context, uuid.UUID) ([]store.Channel, error) {
-	return nil, errors.New("fakeRoleStore.ChannelsForPerson is not used by these tests")
+// ChannelsForPerson backs RequireChannelAccess's (channelscope.go) FR11
+// whole-Person check: one store.Channel per distinct Channel personID
+// holds a nonempty role slice on, derived from grant, or
+// channelsForPersonErr if injected -- enough to drive that check's
+// zero-vs-nonzero and error-propagation cases without a real database.
+func (f *fakeRoleStore) ChannelsForPerson(_ context.Context, personID uuid.UUID) ([]store.Channel, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.channelsForPersonErr != nil {
+		return nil, f.channelsForPersonErr
+	}
+	var out []store.Channel
+	for k, roles := range f.roles {
+		if k.personID == personID && len(roles) > 0 {
+			out = append(out, store.Channel{ID: k.channelID})
+		}
+	}
+	return out, nil
 }
 
 func (f *fakeRoleStore) RowID(context.Context, uuid.UUID, uuid.UUID) (uuid.UUID, bool, error) {
@@ -303,12 +320,21 @@ type countOutput struct {
 // PersonMiddleware itself); if nil, no middleware runs and
 // PersonFromContext sees nothing, exactly like an unauthenticated caller.
 func newTestRegistry(person *store.Person, roles store.RoleStore, idempotency store.Idempotency) (*mcp.Server, *Registry) {
+	return newTestRegistryWithAuthPath(person, AuthPathMCPCredential, roles, idempotency)
+}
+
+// newTestRegistryWithAuthPath is newTestRegistry, but lets a test choose
+// which AuthPath the fixed receiving middleware stamps -- used by FR11's
+// registry-level tests (registry_test.go), which need to drive a
+// whagent-authenticated caller through RegisterRead/RegisterWrite's
+// RequireChannelAccess call, not just RequireChannelRole's.
+func newTestRegistryWithAuthPath(person *store.Person, authPath AuthPath, roles store.RoleStore, idempotency store.Idempotency) (*mcp.Server, *Registry) {
 	srv := mcp.NewServer(Implementation, nil)
 	if person != nil {
 		p := *person
 		srv.AddReceivingMiddleware(func(next mcp.MethodHandler) mcp.MethodHandler {
 			return func(ctx context.Context, method string, req mcp.Request) (mcp.Result, error) {
-				return next(withPerson(ctx, p), method, req)
+				return next(withPerson(ctx, p, authPath), method, req)
 			}
 		})
 	}

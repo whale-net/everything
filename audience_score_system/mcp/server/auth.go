@@ -81,7 +81,7 @@ func PersonMiddleware(persons store.PersonStore) mcp.Middleware {
 				return nil, fmt.Errorf("unauthenticated: caller identity not found")
 			}
 
-			return next(withPerson(ctx, person), method, req)
+			return next(withPerson(ctx, person, AuthPathMCPCredential), method, req)
 		}
 	}
 }

@@ -99,6 +99,99 @@ func TestRegisterRead_ChannelScoping_DeniesUnrelatedPersonAllowsCreatorAndAnalys
 	}
 }
 
+// TestRegisterRead_FR11_WhagentZeroRoleGetsLinkingMessage_RequireChannelRoleUnaffected
+// is FR11/FR12's boundary matrix, exercised through RegisterRead itself
+// (not just RequireChannelAccess/RequireChannelRole directly, which
+// channelscope_test.go already covers) -- proving the two checks compose
+// correctly in registry.go's actual call order.
+func TestRegisterRead_FR11_WhagentZeroRoleGetsLinkingMessage_RequireChannelRoleUnaffected(t *testing.T) {
+	channelA, channelB := uuid.New(), uuid.New()
+	person := store.Person{ID: uuid.New()}
+
+	cases := []struct {
+		name        string
+		roles       *fakeRoleStore
+		targetsChan uuid.UUID
+		wantErr     string
+	}{
+		{
+			name:        "zero roles across every Channel gets the FR11 linking message",
+			roles:       newFakeRoleStore(),
+			targetsChan: channelA,
+			wantErr:     linkingRequiredMessage,
+		},
+		{
+			name: "role on Channel B, call targets Channel A gets RequireChannelRole's ordinary error, not the FR11 message",
+			roles: func() *fakeRoleStore {
+				r := newFakeRoleStore()
+				r.grant(channelB, person.ID, store.RoleAnalyst)
+				return r
+			}(),
+			targetsChan: channelA,
+			wantErr:     "permission denied",
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			var calls int32
+			srv, reg := newTestRegistryWithAuthPath(&person, AuthPathWhagent, tc.roles, newFakeIdempotency())
+			RegisterRead(reg, &mcp.Tool{Name: "scoped_read"}, countingReadHandler(&calls))
+			cs := connectClient(t, srv)
+
+			res, err := cs.CallTool(context.Background(), &mcp.CallToolParams{
+				Name:      "scoped_read",
+				Arguments: scopedInput{ChannelID: tc.targetsChan.String()},
+			})
+			require.NoError(t, err)
+			assert.True(t, res.IsError)
+			assert.Contains(t, textOf(res), tc.wantErr)
+			assert.Equal(t, int32(0), atomic.LoadInt32(&calls), "the handler must never run when either check rejects the call")
+		})
+	}
+
+	t.Run("whagent caller with a role on the targeted Channel succeeds normally", func(t *testing.T) {
+		var calls int32
+		roles := newFakeRoleStore()
+		roles.grant(channelA, person.ID, store.RoleAnalyst)
+		srv, reg := newTestRegistryWithAuthPath(&person, AuthPathWhagent, roles, newFakeIdempotency())
+		RegisterRead(reg, &mcp.Tool{Name: "scoped_read"}, countingReadHandler(&calls))
+		cs := connectClient(t, srv)
+
+		res, err := cs.CallTool(context.Background(), &mcp.CallToolParams{
+			Name:      "scoped_read",
+			Arguments: scopedInput{ChannelID: channelA.String()},
+		})
+		require.NoError(t, err)
+		assert.False(t, res.IsError, "unexpected error: %s", textOf(res))
+		assert.Equal(t, int32(1), atomic.LoadInt32(&calls))
+	})
+}
+
+// TestRegisterRead_MCPCredential_ZeroRolesNeverGetsFR11Message is FR12's
+// exclusion, exercised through the registry: an mcp_credential caller with
+// zero roles everywhere gets RequireChannelRole's ordinary permission
+// error (same as it always has), never the FR11 message.
+func TestRegisterRead_MCPCredential_ZeroRolesNeverGetsFR11Message(t *testing.T) {
+	channelID := uuid.New()
+	person := store.Person{ID: uuid.New()}
+
+	var calls int32
+	srv, reg := newTestRegistry(&person, newFakeRoleStore(), newFakeIdempotency())
+	RegisterRead(reg, &mcp.Tool{Name: "scoped_read"}, countingReadHandler(&calls))
+	cs := connectClient(t, srv)
+
+	res, err := cs.CallTool(context.Background(), &mcp.CallToolParams{
+		Name:      "scoped_read",
+		Arguments: scopedInput{ChannelID: channelID.String()},
+	})
+	require.NoError(t, err)
+	assert.True(t, res.IsError)
+	assert.Contains(t, textOf(res), "permission denied")
+	assert.NotContains(t, textOf(res), linkingRequiredMessage, "an mcp_credential caller must never see the whagent linking-flow message (FR12)")
+	assert.Equal(t, int32(0), atomic.LoadInt32(&calls))
+}
+
 // fakeWriteHandler is the counting fake write-tool handler this task's
 // Implementation-phase note calls for: WriteMutate increments calls and
 // records a durable-enough (in-memory, per-instance) mapping from the ref

@@ -14,6 +14,7 @@ package server
 
 import (
 	"context"
+	"errors"
 	"fmt"
 
 	"github.com/google/uuid"
@@ -47,6 +48,41 @@ func RequireChannelRole(ctx context.Context, roles store.RoleStore, check Channe
 	}
 	if !ok {
 		return fmt.Errorf("permission denied: no live role on this Channel")
+	}
+	return nil
+}
+
+// linkingRequiredMessage is FR11's discoverability response: it explains
+// why a Channel-scoped call (or list_channels) came back empty for a
+// whagent-authenticated caller and names the fix, in prose rather than a
+// hardcoded cross-domain URL -- the caller already has a `ui` session by
+// construction if it got here via the whagent auth path.
+const linkingRequiredMessage = `no Channel access yet: this whagent-net identity is not linked to an ` +
+	`Audience Score System Person with Channel access. Open whagent-net's ui and use the ` +
+	`"Link ASS identity" action to connect your identity, then retry.`
+
+// RequireChannelAccess enforces FR11's whole-Person zero-role check: a
+// whagent-authenticated (AuthPathWhagent) caller who holds zero
+// channel_person rows across EVERY Channel -- not just the one a call
+// targets, which is RequireChannelRole's job, left completely unaffected --
+// gets linkingRequiredMessage instead of a silent empty result or an
+// undifferentiated permission error (US2). Deliberately a no-op for
+// AuthPathMCPCredential: an ASS-native Person can hold zero roles for an
+// unrelated reason (e.g. pending an invite), and telling them to go link a
+// whagent-net identity would be wrong (FR12). Called from
+// RegisterRead/RegisterWrite (registry.go) for every ChannelScoped tool,
+// and directly from list_channels (mcp/tools/list_channels.go) -- the one
+// unscoped tool FR11 also covers.
+func RequireChannelAccess(ctx context.Context, roles store.RoleStore, personID uuid.UUID) error {
+	if AuthPathFromContext(ctx) != AuthPathWhagent {
+		return nil
+	}
+	channels, err := roles.ChannelsForPerson(ctx, personID)
+	if err != nil {
+		return fmt.Errorf("check whole-person channel access: %w", err)
+	}
+	if len(channels) == 0 {
+		return errors.New(linkingRequiredMessage)
 	}
 	return nil
 }
