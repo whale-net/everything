@@ -36,6 +36,7 @@ import (
 	"github.com/whale-net/everything/libs/go/rmq"
 	"github.com/whale-net/everything/whagent_net/delegatedgrant"
 	"github.com/whale-net/everything/whagent_net/events"
+	"github.com/whale-net/everything/whagent_net/ui/linkassert"
 )
 
 // config holds `ui`'s configuration, loaded entirely from environment
@@ -149,6 +150,18 @@ type config struct {
 	// WHAGENT_GRANT_*-gated degrade path in this binary): required only
 	// once a deployment actually onboards this consent flow.
 	DefaultScope string
+
+	// LinkAssertSigningKey/LinkAssertSigningKeyID (WHAGENT_UI_SIGNING_KEY/
+	// WHAGENT_UI_SIGNING_KEY_ID) configure `linkassert.Key`, the FR2
+	// link-assertion signing key `ui` holds and mints with itself (issue
+	// #2595) -- distinct key material, distinct variable names, and a
+	// distinct k8s secret from api/worker's WHAGENT_SIGNING_KEY/
+	// WHAGENT_SIGNING_KEY_ID. Unlike this binary's other optional
+	// WHAGENT_GRANT_*/RABBITMQ_URL-style config, both are required: `ui`
+	// fails startup loudly when either is missing or unparseable (NFR1)
+	// -- there is no unsigned or symmetric fallback mode.
+	LinkAssertSigningKey   string
+	LinkAssertSigningKeyID string
 }
 
 func loadConfig() config {
@@ -173,6 +186,9 @@ func loadConfig() config {
 		GrantEncryptionKey: getEnv("WHAGENT_GRANT_ENCRYPTION_KEY", ""),
 		GrantAdminRole:     getEnv("WHAGENT_GRANT_ADMIN_ROLE", ""),
 		DefaultScope:       getEnv("WHAGENT_UI_DEFAULT_SCOPE", ""),
+
+		LinkAssertSigningKey:   getEnv("WHAGENT_UI_SIGNING_KEY", ""),
+		LinkAssertSigningKeyID: getEnv("WHAGENT_UI_SIGNING_KEY_ID", ""),
 	}
 }
 
@@ -238,6 +254,13 @@ type App struct {
 	// a pendingConsent through between DelegatedGrantSource.
 	// BeginAuthorization and its Keycloak-redirect callback (issue #2428).
 	consentStore *sessions.CookieStore
+
+	// linkAssertKey is the FR2 link-assertion signing key (issue #2595)
+	// -- linkassert.JWKSHandler serves its public half unauthenticated at
+	// linkassert.JWKSPath (setupRoutes), and the browser flow's minting
+	// helper (#B, a later task) calls its Mint method. Always non-nil:
+	// NewApp fails startup loudly rather than leaving this nil (NFR1).
+	linkAssertKey *linkassert.Key
 }
 
 // NewApp wires up Keycloak sign-in (NFR1) and the authenticated `api`
@@ -266,6 +289,14 @@ func NewApp(ctx context.Context, cfg config) (*App, error) {
 	}
 	if cfg.MCPPublicURL == "" {
 		return nil, fmt.Errorf("WHAGENT_MCP_PUBLIC_URL is required")
+	}
+
+	// FR2/NFR1 (issue #2595): required at startup, never falls back to an
+	// unsigned or symmetric mode -- see linkassert.LoadKey's own
+	// validation for the empty/unparseable cases this wraps.
+	linkAssertKey, err := linkassert.LoadKey(cfg.LinkAssertSigningKey, cfg.LinkAssertSigningKeyID)
+	if err != nil {
+		return nil, fmt.Errorf("failed to load link-assertion signing key: %w", err)
 	}
 
 	pool, err := db.NewPool(ctx, cfg.DatabaseURL)
@@ -314,8 +345,9 @@ func NewApp(ctx context.Context, cfg config) (*App, error) {
 		oidcIssuer:    cfg.OIDCIssuer,
 		sseHub:        initializeSSEHub(cfg),
 		adminRole:     cfg.GrantAdminRole,
-		defaultScope: cfg.DefaultScope,
+		defaultScope:  cfg.DefaultScope,
 		consentStore:  newConsentStore(cfg.SessionSecret),
+		linkAssertKey: linkAssertKey,
 	}
 
 	// mcpauth.NewCredentialStore/NewPostgresClientRegistry/
@@ -488,6 +520,11 @@ func run() error {
 // for the exact same handler rather than moved or duplicated in logic.
 func (app *App) setupRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("/healthz", handleHealthz)
+
+	// FR2/NFR1 (issue #2595): the link-assertion key's public JWKS,
+	// unauthenticated -- same posture as api's own JWKS endpoint. Must
+	// never be wrapped in app.auth.RequireAuthFunc.
+	mux.Handle(linkassert.JWKSPath, linkassert.JWKSHandler(app.linkAssertKey))
 
 	mux.HandleFunc("/login", app.auth.HandleLogin)
 	mux.HandleFunc("/auth/login", app.auth.HandleLogin) // alias: see doc comment above.
