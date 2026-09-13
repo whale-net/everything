@@ -32,6 +32,7 @@ type GameConfigVolume struct {
 	HostSubpath   *string   `db:"host_subpath"`
 	ReadOnly      bool      `db:"read_only"`
 	VolumeType    string    `db:"volume_type"`
+	IsEnabled     bool      `db:"is_enabled"`
 	CreatedAt     time.Time `db:"created_at"`
 }
 

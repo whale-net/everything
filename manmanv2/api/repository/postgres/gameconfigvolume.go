@@ -17,8 +17,8 @@ func NewGameConfigVolumeRepository(db *pgxpool.Pool) *GameConfigVolumeRepository
 
 func (r *GameConfigVolumeRepository) Create(ctx context.Context, volume *manman.GameConfigVolume) (*manman.GameConfigVolume, error) {
 	query := `
-		INSERT INTO game_config_volumes (config_id, name, description, container_path, host_subpath, read_only, volume_type)
-		VALUES ($1, $2, $3, $4, $5, $6, $7)
+		INSERT INTO game_config_volumes (config_id, name, description, container_path, host_subpath, read_only, volume_type, is_enabled)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
 		RETURNING volume_id, created_at
 	`
 
@@ -30,6 +30,7 @@ func (r *GameConfigVolumeRepository) Create(ctx context.Context, volume *manman.
 		volume.HostSubpath,
 		volume.ReadOnly,
 		volume.VolumeType,
+		volume.IsEnabled,
 	).Scan(&volume.VolumeID, &volume.CreatedAt)
 	if err != nil {
 		return nil, err
@@ -42,7 +43,7 @@ func (r *GameConfigVolumeRepository) Get(ctx context.Context, volumeID int64) (*
 	volume := &manman.GameConfigVolume{}
 
 	query := `
-		SELECT volume_id, config_id, name, description, container_path, host_subpath, read_only, volume_type, created_at
+		SELECT volume_id, config_id, name, description, container_path, host_subpath, read_only, volume_type, is_enabled, created_at
 		FROM game_config_volumes
 		WHERE volume_id = $1
 	`
@@ -56,6 +57,7 @@ func (r *GameConfigVolumeRepository) Get(ctx context.Context, volumeID int64) (*
 		&volume.HostSubpath,
 		&volume.ReadOnly,
 		&volume.VolumeType,
+		&volume.IsEnabled,
 		&volume.CreatedAt,
 	)
 	if err != nil {
@@ -67,7 +69,7 @@ func (r *GameConfigVolumeRepository) Get(ctx context.Context, volumeID int64) (*
 
 func (r *GameConfigVolumeRepository) ListByGameConfig(ctx context.Context, configID int64) ([]*manman.GameConfigVolume, error) {
 	query := `
-		SELECT volume_id, config_id, name, description, container_path, host_subpath, read_only, volume_type, created_at
+		SELECT volume_id, config_id, name, description, container_path, host_subpath, read_only, volume_type, is_enabled, created_at
 		FROM game_config_volumes
 		WHERE config_id = $1
 		ORDER BY volume_id
@@ -91,6 +93,7 @@ func (r *GameConfigVolumeRepository) ListByGameConfig(ctx context.Context, confi
 			&volume.HostSubpath,
 			&volume.ReadOnly,
 			&volume.VolumeType,
+			&volume.IsEnabled,
 			&volume.CreatedAt,
 		)
 		if err != nil {
@@ -109,7 +112,7 @@ func (r *GameConfigVolumeRepository) ListByGameConfig(ctx context.Context, confi
 func (r *GameConfigVolumeRepository) Update(ctx context.Context, volume *manman.GameConfigVolume) error {
 	query := `
 		UPDATE game_config_volumes
-		SET name = $2, description = $3, container_path = $4, host_subpath = $5, read_only = $6, volume_type = $7
+		SET name = $2, description = $3, container_path = $4, host_subpath = $5, read_only = $6, volume_type = $7, is_enabled = $8
 		WHERE volume_id = $1
 	`
 
@@ -121,6 +124,7 @@ func (r *GameConfigVolumeRepository) Update(ctx context.Context, volume *manman.
 		volume.HostSubpath,
 		volume.ReadOnly,
 		volume.VolumeType,
+		volume.IsEnabled,
 	)
 
 	return err
