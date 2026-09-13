@@ -6,6 +6,9 @@ package components
 // call site, so ConnectAddress needs no hand-written inline-script wiring
 // and no new client-side JS dependency.
 script copyConnectAddress(address string) {
+	if (window.event) {
+		window.event.stopPropagation();
+	}
 	navigator.clipboard.writeText(address);
 }
 
@@ -30,18 +33,19 @@ script copyConnectAddress(address string) {
 // bindings and the "connect address" concept), not a generic UI primitive.
 templ ConnectAddressDisplay(view ConnectAddressView) {
 	if view.Unavailable {
-		<p class="text-sm text-base-content/60">Connect address unavailable — no public address configured for this host.</p>
+		<span class="text-xs text-base-content/60 whitespace-nowrap">Connect address unavailable</span>
 	} else {
-		<ul class="space-y-1">
+		<ul class="space-y-1 shrink-0">
 			for _, addr := range view.Addresses {
-				<li class="flex items-center gap-2">
-					<code class="text-sm font-mono bg-base-200 text-base-content px-2 py-1 rounded">{ addr.Address }</code>
-					<span class="text-xs text-base-content/60">{ addr.Protocol }</span>
+				<li class="flex items-center gap-2 flex-nowrap whitespace-nowrap select-text">
+					<code class="text-sm font-mono bg-base-200 text-base-content px-2 py-1 rounded whitespace-nowrap select-all">{ addr.Address }</code>
+					<span class="text-xs text-base-content/60 whitespace-nowrap">{ addr.Protocol }</span>
 					<button
 						type="button"
 						class="btn btn-ghost btn-xs px-1"
 						title="Copy connect address"
 						onclick={ copyConnectAddress(addr.Address) }
+						@click.stop
 					>
 						⧉
 					</button>

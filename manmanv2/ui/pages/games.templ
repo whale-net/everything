@@ -192,20 +192,30 @@ templ gameRow(row GameRow, startExpanded bool) {
 		x-data={ fmt.Sprintf("{ expanded: %t }", startExpanded) }
 		class="card bg-base-100 border border-base-300 shadow-sm overflow-hidden"
 	>
-		<button
-			type="button"
+		<div
+			role="button"
+			tabindex="0"
+			:aria-expanded="expanded ? 'true' : 'false'"
 			@click="expanded = !expanded"
-			class="w-full flex justify-between items-center gap-4 p-4 hover:bg-base-200 transition-colors text-left"
+			@keydown.enter.self="expanded = !expanded"
+			@keydown.space.self.prevent="expanded = !expanded"
+			class="w-full flex justify-between items-center gap-4 p-4 hover:bg-base-200 transition-colors text-left cursor-pointer select-none"
 		>
-			<span class="font-medium text-base-content">{ row.Name }</span>
-			<span class="flex items-center gap-3">
+			<div class="flex items-center gap-3 min-w-0">
+				<span class="font-medium text-base-content truncate">{ row.Name }</span>
 				@htmxui.Badge(deploymentStatusLabel(row.RunState), statusBadgeVariant(string(row.RunState)), htmxui.BadgeSizeMD, true, nil)
-				@components.ConnectAddressDisplay(row.Connect)
-				<svg :class="expanded ? 'rotate-180' : ''" class="w-5 h-5 text-base-content/60 transition-transform shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-					<path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7"></path>
-				</svg>
-			</span>
-		</button>
+			</div>
+			<div class="flex items-center gap-3 shrink-0">
+				<div @click.stop class="shrink-0">
+					@components.ConnectAddressDisplay(row.Connect)
+				</div>
+				<span class="p-1 text-base-content/60 transition-colors shrink-0">
+					<svg :class="expanded ? 'rotate-180' : ''" class="w-5 h-5 transition-transform" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+						<path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7"></path>
+					</svg>
+				</span>
+			</div>
+		</div>
 		<!--
 			Expanded row shell (FR4: at most one nested panel level), each
 			section in its own stable-id container. Deployments (#2272,
