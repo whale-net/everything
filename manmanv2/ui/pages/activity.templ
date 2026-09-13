@@ -51,7 +51,9 @@ type ActivityPageData struct {
 // ActivityLiveRow is one row of the Live now table (FR14): a session
 // ListSessions reports as live right now.
 type ActivityLiveRow struct {
+	GameID     int64
 	GameName   string
+	ServerID   int64
 	ServerName string
 	ConfigName string
 	Uptime     time.Duration
@@ -65,7 +67,9 @@ type ActivityLiveRow struct {
 // codebase; only Session.status is right here (see the issue's
 // ground-truth table).
 type ActivityHistoryRow struct {
+	GameID         int64
 	GameName       string
+	ServerID       int64
 	ServerName     string
 	ConfigName     string
 	TerminalStatus string // Session.status -- NOT ServerGameConfig.status
@@ -195,7 +199,8 @@ templ ActivityFilters(filterGameID int64, filterStatus string) {
 }
 
 // ActivityLiveTable renders the Live now table: game, server, config,
-// uptime (FR14).
+// uptime (FR14). Each row links out to the game, server management, and
+// session detail pages.
 templ ActivityLiveTable(rows []ActivityLiveRow) {
 	<div class="card bg-base-100 border border-base-300 shadow-sm overflow-hidden mb-6">
 		<div class="flex justify-between items-center p-4 border-b border-base-300 bg-base-200">
@@ -214,9 +219,33 @@ templ ActivityLiveTable(rows []ActivityLiveRow) {
 				<tbody>
 					for _, row := range rows {
 						<tr class="hover">
-							<td>{ row.GameName }</td>
-							<td>{ row.ServerName }</td>
-							<td>{ row.ConfigName }</td>
+							<td>
+								if row.GameID > 0 {
+									<a href={ templ.URL(fmt.Sprintf("/games/%d", row.GameID)) } class="link link-primary text-sm font-medium">
+										{ row.GameName }
+									</a>
+								} else {
+									{ row.GameName }
+								}
+							</td>
+							<td>
+								if row.ServerID > 0 {
+									<a href={ templ.URL(fmt.Sprintf("/infrastructure?manage=%d#host-manage-%d", row.ServerID, row.ServerID)) } class="link link-primary text-sm font-medium">
+										{ row.ServerName }
+									</a>
+								} else {
+									{ row.ServerName }
+								}
+							</td>
+							<td>
+								if row.SessionID > 0 {
+									<a href={ templ.URL(fmt.Sprintf("/sessions/%d", row.SessionID)) } class="link link-primary text-sm font-medium">
+										{ row.ConfigName }
+									</a>
+								} else {
+									{ row.ConfigName }
+								}
+							</td>
 							<td>{ row.Uptime.Truncate(time.Second).String() }</td>
 						</tr>
 					}
@@ -232,8 +261,7 @@ templ ActivityLiveTable(rows []ActivityLiveRow) {
 
 // ActivityHistoryTable renders the History table: game, server, config,
 // terminal status, start time, duration (FR14). Each row links out to the
-// existing session detail page -- M5 does not reshape session detail into
-// a blade or drawer (that is M6/C31 phase 2).
+// game, server management, and session detail pages.
 templ ActivityHistoryTable(rows []ActivityHistoryRow) {
 	<div class="card bg-base-100 border border-base-300 shadow-sm overflow-hidden mb-6">
 		<div class="flex justify-between items-center p-4 border-b border-base-300 bg-base-200">
@@ -254,12 +282,32 @@ templ ActivityHistoryTable(rows []ActivityHistoryRow) {
 				<tbody>
 					for _, row := range rows {
 						<tr class="hover">
-							<td>{ row.GameName }</td>
-							<td>{ row.ServerName }</td>
 							<td>
-								<a href={ templ.URL(fmt.Sprintf("/sessions/%d", row.SessionID)) } class="link link-primary text-sm font-medium">
+								if row.GameID > 0 {
+									<a href={ templ.URL(fmt.Sprintf("/games/%d", row.GameID)) } class="link link-primary text-sm font-medium">
+										{ row.GameName }
+									</a>
+								} else {
+									{ row.GameName }
+								}
+							</td>
+							<td>
+								if row.ServerID > 0 {
+									<a href={ templ.URL(fmt.Sprintf("/infrastructure?manage=%d#host-manage-%d", row.ServerID, row.ServerID)) } class="link link-primary text-sm font-medium">
+										{ row.ServerName }
+									</a>
+								} else {
+									{ row.ServerName }
+								}
+							</td>
+							<td>
+								if row.SessionID > 0 {
+									<a href={ templ.URL(fmt.Sprintf("/sessions/%d", row.SessionID)) } class="link link-primary text-sm font-medium">
+										{ row.ConfigName }
+									</a>
+								} else {
 									{ row.ConfigName }
-								</a>
+								}
 							</td>
 							<td>{ row.TerminalStatus }</td>
 							<td>{ row.StartTime.Format("2006-01-02 15:04:05") }</td>

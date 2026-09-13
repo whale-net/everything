@@ -18,10 +18,10 @@ func activityFixtureData() ActivityPageData {
 	now := time.Now()
 	return ActivityPageData{
 		Live: []ActivityLiveRow{
-			{GameName: "Minecraft", ServerName: "Alpha", ConfigName: "Survival", Uptime: 90 * time.Minute, SessionID: 1},
+			{GameID: 10, GameName: "Minecraft", ServerID: 20, ServerName: "Alpha", ConfigName: "Survival", Uptime: 90 * time.Minute, SessionID: 1},
 		},
 		History: []ActivityHistoryRow{
-			{GameName: "Valheim", ServerName: "Beta", ConfigName: "Hardcore", TerminalStatus: "stopped", StartTime: now.Add(-2 * time.Hour), Duration: time.Hour, SessionID: 2},
+			{GameID: 11, GameName: "Valheim", ServerID: 21, ServerName: "Beta", ConfigName: "Hardcore", TerminalStatus: "stopped", StartTime: now.Add(-2 * time.Hour), Duration: time.Hour, SessionID: 2},
 		},
 		FilterGameID: 0,
 		FilterStatus: "",
@@ -78,13 +78,62 @@ func TestActivity_NoSGCTerminology(t *testing.T) {
 	}
 }
 
-// TestActivity_HistoryLinksToSessionDetail guards the same link contract
-// from the page-markup side: History's config cell is an anchor to
-// /sessions/<id>, not a Stop-style action.
+// TestActivity_HistoryLinksToSessionDetail guards the session link contract:
+// History's config cell is an anchor to /sessions/<id>.
 func TestActivity_HistoryLinksToSessionDetail(t *testing.T) {
 	body := renderPage(t, Activity(components.LayoutData{Title: "Activity"}, activityFixtureData()))
 
 	if !strings.Contains(body, `href="/sessions/2"`) {
 		t.Errorf("expected History's config cell to link to /sessions/2, got body: %s", body)
+	}
+}
+
+// TestActivity_LiveLinksToSessionDetail guards the session link contract:
+// Live's config cell is an anchor to /sessions/<id>.
+func TestActivity_LiveLinksToSessionDetail(t *testing.T) {
+	body := renderPage(t, Activity(components.LayoutData{Title: "Activity"}, activityFixtureData()))
+
+	if !strings.Contains(body, `href="/sessions/1"`) {
+		t.Errorf("expected Live's config cell to link to /sessions/1, got body: %s", body)
+	}
+}
+
+// TestActivity_GameAndServerLinks guards that Game and Server cells link out
+// to the game detail and infrastructure management pages.
+func TestActivity_GameAndServerLinks(t *testing.T) {
+	body := renderPage(t, Activity(components.LayoutData{Title: "Activity"}, activityFixtureData()))
+
+	if !strings.Contains(body, `href="/games/10"`) {
+		t.Errorf("expected Live game cell to link to /games/10, got body: %s", body)
+	}
+	if !strings.Contains(body, `href="/infrastructure?manage=20#host-manage-20"`) {
+		t.Errorf("expected Live server cell to link to /infrastructure?manage=20#host-manage-20, got body: %s", body)
+	}
+	if !strings.Contains(body, `href="/games/11"`) {
+		t.Errorf("expected History game cell to link to /games/11, got body: %s", body)
+	}
+	if !strings.Contains(body, `href="/infrastructure?manage=21#host-manage-21"`) {
+		t.Errorf("expected History server cell to link to /infrastructure?manage=21#host-manage-21, got body: %s", body)
+	}
+}
+
+// TestActivity_ZeroIDsRenderPlainTextWithoutLinks guards that unknown/zero
+// IDs fall back to plain text rather than dead or invalid links.
+func TestActivity_ZeroIDsRenderPlainTextWithoutLinks(t *testing.T) {
+	now := time.Now()
+	data := ActivityPageData{
+		Live: []ActivityLiveRow{
+			{GameName: "Unknown Game", ServerName: "Unknown Server", ConfigName: "Unknown Config", Uptime: 90 * time.Minute},
+		},
+		History: []ActivityHistoryRow{
+			{GameName: "Unknown Game", ServerName: "Unknown Server", ConfigName: "Unknown Config", TerminalStatus: "stopped", StartTime: now.Add(-2 * time.Hour), Duration: time.Hour},
+		},
+	}
+	body := renderPage(t, Activity(components.LayoutData{Title: "Activity"}, data))
+
+	for _, forbidden := range []string{`href="/games/0"`, `href="/infrastructure?manage=0`, `href="/sessions/0"`} {
+		if strings.Contains(body, forbidden) {
+			t.Errorf("expected no %q link when entity IDs are 0, got body: %s", forbidden, body)
+		}
 	}
 }
