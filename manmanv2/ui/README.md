@@ -321,6 +321,17 @@ opens on load when the request carries `?manage=<id>` (the `/servers/<id>`
 redirect target) or when a ports/address action just round-tripped through
 that host (`infrastructureManageRedirectTarget`, `handlers_infrastructure.go`).
 
+## Game Detail Progressive Disclosure
+
+`GET /games/{id}` (`handleGameDetail`, `handlers_games.go`) provides a tabbed game detail surface (`pages.GameDetail`, `pages/game_detail.templ`) organized into four distinct tabs:
+
+1. **Overview** (Default): Routine daily actions — overall game status, connect address, runtime, and deployment Start/Stop/Restart controls. Low-frequency administrative controls ("Edit Configuration" and "Deploy") are intentionally separated out of this view.
+2. **Console & Logs**: Live interactive stream via EventSource (`/sessions/{id}/logs/stream`) and command input (`/sessions/{id}/stdin`) when a deployment is active, plus historical session log records.
+3. **Configuration**: Base game configuration files, images, environment templates, and addon path presets. Includes the "Edit Configuration" action.
+4. **Advanced**: Host deployment placements, container rebuilds, the "Deploy to Server" action, game metadata editing, and the delete-game Danger Zone confirmation gate.
+
+**Role Guarding**: If the authenticated user lacks administrative roles (neither `admin`, `server-manager`, nor dev wildcard `*` via `components.HasAdminRole`), the `Configuration` and `Advanced` tabs are omitted from the UI, and direct navigation via `?tab=configuration` or `?tab=advanced` defaults back to `Overview`.
+
 ## Documentation
 
 - **[ARCHITECTURE.md](ARCHITECTURE.md)** - System architecture and patterns

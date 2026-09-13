@@ -10,6 +10,7 @@ import (
 	"testing"
 
 	manmanpb "github.com/whale-net/everything/manmanv2/protos"
+	"github.com/whale-net/everything/libs/go/htmxauth"
 	"github.com/whale-net/everything/manmanv2/ui/components"
 	"github.com/whale-net/everything/manmanv2/ui/pages"
 	"google.golang.org/grpc"
@@ -154,6 +155,18 @@ func (f *fakeGamesAPIClient) ListGameConfigVolumes(ctx context.Context, in *manm
 	return &manmanpb.ListGameConfigVolumesResponse{}, nil
 }
 
+func (f *fakeGamesAPIClient) ListActionDefinitions(ctx context.Context, in *manmanpb.ListActionDefinitionsRequest, opts ...grpc.CallOption) (*manmanpb.ListActionDefinitionsResponse, error) {
+	f.calls["ListActionDefinitions"]++
+	return &manmanpb.ListActionDefinitionsResponse{}, nil
+}
+
+type fakeGamesWorkshopClient struct {
+	manmanpb.WorkshopServiceClient
+}
+
+func (f *fakeGamesWorkshopClient) ListAddonPathPresets(ctx context.Context, in *manmanpb.ListAddonPathPresetsRequest, opts ...grpc.CallOption) (*manmanpb.ListAddonPathPresetsResponse, error) {
+	return &manmanpb.ListAddonPathPresetsResponse{}, nil
+}
 // buildFakeGamesData constructs n games, each with one config and one
 // running, resolvable-address deployment -- enough to exercise the full
 // join/rollup while staying cheap to generate at n=20 for the NFR7 size
@@ -205,12 +218,35 @@ func renderGamesHTTP(t *testing.T, api *fakeGamesAPIClient, target string) (int,
 	return w.Code, w.Body.String()
 }
 
-func renderGameDetailHTTP(t *testing.T, api *fakeGamesAPIClient, target string) (int, string) {
+func devAuth(t *testing.T) *htmxauth.Authenticator {
 	t.Helper()
+	auth, err := htmxauth.NewAuthenticator(context.Background(), htmxauth.Config{
+		Mode:          htmxauth.AuthModeNone,
+		SessionSecret: "test-secret-at-least-32-bytes-long!!",
+		SessionName:   "test_session",
+	})
+	if err != nil {
+		t.Fatalf("failed to create dev authenticator: %v", err)
+	}
+	return auth
+}
+
+func renderGameDetailHTTP(t *testing.T, api *fakeGamesAPIClient, target string, asAdmin ...bool) (int, string) {
+	t.Helper()
+	admin := true
+	if len(asAdmin) > 0 {
+		admin = asAdmin[0]
+	}
 	app := &App{grpc: &ControlClient{api: api, workshop: api}}
 	req := httptest.NewRequest(http.MethodGet, target, nil)
 	w := httptest.NewRecorder()
-	app.handleGameDetail(w, req)
+	if admin {
+		auth := devAuth(t)
+		app.auth = auth
+		auth.RequireAuthFunc(app.handleGameDetail)(w, req)
+	} else {
+		app.handleGameDetail(w, req)
+	}
 	return w.Code, w.Body.String()
 }
 
@@ -1140,3 +1176,98 @@ func TestHandleGameOverview_Action_NonHTMX_Redirect(t *testing.T) {
 	}
 }
 
+func TestHandleGameDetail_NotFound(t *testing.T) {
+	api := buildFakeGamesData(1)
+	code, _ := renderGameDetailHTTP(t, api, "/games/999", true)
+	if code != http.StatusNotFound {
+		t.Errorf("expected 404 for nonexistent game, got %d", code)
+	}
+}
+
+func TestHandleGameDetail_TabbedLayout_Admin(t *testing.T) {
+	api := buildFakeGamesData(1)
+	code, body := renderGameDetailHTTP(t, api, "/games/1", true)
+	if code != http.StatusOK {
+		t.Fatalf("expected 200, got %d", code)
+	}
+
+	for _, tab := range []string{"Overview", "Console &amp; Logs", "Configuration", "Advanced"} {
+		if !strings.Contains(body, tab) {
+			t.Errorf("expected tab %q in response, got body: %s", tab, body)
+		}
+	}
+
+	for _, panel := range []string{"tab-panel-overview", "tab-panel-logs", "tab-panel-configuration", "tab-panel-advanced"} {
+		if !strings.Contains(body, `id="`+panel+`"`) {
+			t.Errorf("expected panel %q in response, got body: %s", panel, body)
+		}
+	}
+}
+
+func TestHandleGameDetail_TabbedLayout_NonAdmin(t *testing.T) {
+	api := buildFakeGamesData(1)
+	code, body := renderGameDetailHTTP(t, api, "/games/1", false)
+	if code != http.StatusOK {
+		t.Fatalf("expected 200, got %d", code)
+	}
+
+	if !strings.Contains(body, "Overview") {
+		t.Errorf("expected Overview tab for non-admin, got body: %s", body)
+	}
+	if !strings.Contains(body, "Console &amp; Logs") {
+		t.Errorf("expected Console & Logs tab for non-admin, got body: %s", body)
+	}
+
+	if strings.Contains(body, `id="tab-btn-configuration"`) {
+		t.Errorf("non-admin must NOT see Configuration tab button, got body: %s", body)
+	}
+	if strings.Contains(body, `id="tab-btn-advanced"`) {
+		t.Errorf("non-admin must NOT see Advanced tab button, got body: %s", body)
+	}
+	if strings.Contains(body, `id="tab-panel-configuration"`) {
+		t.Errorf("non-admin must NOT see Configuration tab panel, got body: %s", body)
+	}
+	if strings.Contains(body, `id="tab-panel-advanced"`) {
+		t.Errorf("non-admin must NOT see Advanced tab panel, got body: %s", body)
+	}
+}
+
+func TestHandleGameDetail_SeparatesLowFrequencyActions(t *testing.T) {
+	api := buildFakeGamesData(1)
+	code, body := renderGameDetailHTTP(t, api, "/games/1", true)
+	if code != http.StatusOK {
+		t.Fatalf("expected 200, got %d", code)
+	}
+
+	startIdx := strings.Index(body, `id="tab-panel-overview"`)
+	endIdx := strings.Index(body, `id="tab-panel-logs"`)
+	if startIdx == -1 || endIdx == -1 {
+		t.Fatalf("could not find tab panels in body")
+	}
+	overview := body[startIdx:endIdx]
+
+	if !strings.Contains(overview, "Server Status &amp; Controls") {
+		t.Errorf("expected Server Status & Controls on overview, got: %s", overview)
+	}
+	if strings.Contains(overview, "Edit Configuration") {
+		t.Errorf("Overview must NOT contain 'Edit Configuration', got: %s", overview)
+	}
+	if strings.Contains(overview, "Deploy to Server") {
+		t.Errorf("Overview must NOT contain 'Deploy to Server', got: %s", overview)
+	}
+
+	configStart := strings.Index(body, `id="tab-panel-configuration"`)
+	configEnd := strings.Index(body, `id="tab-panel-advanced"`)
+	if configStart == -1 || configEnd == -1 {
+		t.Fatalf("could not find config panels in body")
+	}
+	configPanel := body[configStart:configEnd]
+	if !strings.Contains(configPanel, "Edit Configuration") {
+		t.Errorf("Configuration tab must contain 'Edit Configuration', got: %s", configPanel)
+	}
+
+	advancedPanel := body[configEnd:]
+	if !strings.Contains(advancedPanel, "Deploy to Server") {
+		t.Errorf("Advanced tab must contain 'Deploy to Server', got: %s", advancedPanel)
+	}
+}

@@ -532,44 +532,6 @@ func (app *App) handleGameDetail(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	servers, err := app.grpc.ListServers(ctx)
-	if err != nil {
-		log.Printf("Warning: failed to fetch servers: %v", err)
-		servers = nil
-	}
-
-	sessions, err := app.grpc.ListSessions(ctx, false)
-	if err != nil {
-		log.Printf("Warning: failed to fetch sessions: %v", err)
-		sessions = nil
-	}
-
-	configIDs := make(map[int64]bool, len(configs))
-	for _, c := range configs {
-		configIDs[c.GetConfigId()] = true
-	}
-	var gameDeployments []*manmanpb.ServerGameConfig
-	for _, sgc := range allSGCs {
-		if configIDs[sgc.GetGameConfigId()] {
-			gameDeployments = append(gameDeployments, sgc)
-		}
-	}
-	sgcIDs := make([]int64, len(gameDeployments))
-	for i, d := range gameDeployments {
-		sgcIDs[i] = d.GetServerGameConfigId()
-	}
-	restartStates, err := app.grpc.ListPendingRestarts(ctx, sgcIDs)
-	if err != nil {
-		log.Printf("Warning: failed to list pending restarts: %v", err)
-		restartStates = nil
-	}
-
-	gameRows := buildGameRows([]*manmanpb.Game{game}, configs, allSGCs, servers, sessions, restartStates)
-	var gameRow pages.GameRow
-	if len(gameRows) > 0 {
-		gameRow = gameRows[0]
-	}
-
 	// Fetch path presets for this game
 	pathPresets, err := app.grpc.ListAddonPathPresets(ctx, gameID)
 	if err != nil {
@@ -596,12 +558,115 @@ func (app *App) handleGameDetail(w http.ResponseWriter, r *http.Request) {
 		volumeSlice = append(volumeSlice, vol)
 	}
 
+	// Build deployment rows, sessions, and status for this game
+	configByID := make(map[int64]*manmanpb.GameConfig, len(configs))
+	for _, c := range configs {
+		configByID[c.GetConfigId()] = c
+	}
+
+	var gameDeployments []*manmanpb.ServerGameConfig
+	for _, sgc := range allSGCs {
+		if _, ok := configByID[sgc.GetGameConfigId()]; ok {
+			gameDeployments = append(gameDeployments, sgc)
+		}
+	}
+	sort.Slice(gameDeployments, func(i, j int) bool {
+		return gameDeployments[i].GetServerGameConfigId() < gameDeployments[j].GetServerGameConfigId()
+	})
+
+	servers, err := app.grpc.ListServers(ctx)
+	if err != nil {
+		log.Printf("Warning: failed to fetch servers: %v", err)
+		servers = nil
+	}
+	serverByID := make(map[int64]*manmanpb.Server, len(servers))
+	for _, s := range servers {
+		serverByID[s.GetServerId()] = s
+	}
+
+	sessions, err := app.grpc.ListSessions(ctx, false)
+	if err != nil {
+		log.Printf("Warning: failed to fetch sessions: %v", err)
+		sessions = nil
+	}
+	sessionsBySGC := make(map[int64][]*manmanpb.Session)
+	for _, s := range sessions {
+		sgcID := s.GetServerGameConfigId()
+		sessionsBySGC[sgcID] = append(sessionsBySGC[sgcID], s)
+	}
+
+	sgcIDs := make([]int64, len(gameDeployments))
+	for i, d := range gameDeployments {
+		sgcIDs[i] = d.GetServerGameConfigId()
+	}
+	restartStates, err := app.grpc.ListPendingRestarts(ctx, sgcIDs)
+	if err != nil {
+		log.Printf("Warning: failed to fetch restart states: %v", err)
+		restartStates = nil
+	}
+
+	runState := components.DeploymentStopped
+	connect := components.ConnectAddressView{Unavailable: true}
+	deploymentRows := make([]pages.GameDeploymentRow, 0, len(gameDeployments))
+	var latestSession *manmanpb.Session
+	var liveSession *manmanpb.Session
+	var gameSessions []*manmanpb.Session
+
+	for _, d := range gameDeployments {
+		sgcSessions := sessionsBySGC[d.GetServerGameConfigId()]
+		latest := components.LatestSession(sgcSessions)
+		if latest != nil {
+			if latestSession == nil || latest.GetStartedAt() > latestSession.GetStartedAt() {
+				latestSession = latest
+			}
+			if latest.GetStatus() == "running" {
+				liveSession = latest
+			}
+		}
+		gameSessions = append(gameSessions, sgcSessions...)
+
+		server := serverByID[d.GetServerId()]
+		cfg := configByID[d.GetGameConfigId()]
+
+		if components.ComputeDeploymentStatus(latest) == components.DeploymentRunning {
+			runState = components.DeploymentRunning
+			if connect.Unavailable {
+				cand := components.BuildConnectAddressView(server.GetHostPublicAddress(), d.GetPortBindings())
+				if !cand.Unavailable {
+					connect = cand
+				}
+			}
+		}
+
+		deploymentRows = append(deploymentRows, buildGameDeploymentRow(game, cfg, server, d, latest, restartStates[d.GetServerGameConfigId()]))
+	}
+
+	sort.Slice(gameSessions, func(i, j int) bool {
+		return gameSessions[i].GetStartedAt() > gameSessions[j].GetStartedAt()
+	})
+
+	actions, err := app.grpc.ListActionDefinitions(ctx, &gameID, nil, nil)
+	if err != nil {
+		log.Printf("Warning: failed to fetch actions: %v", err)
+		actions = nil
+	}
+
+	isAdmin := components.HasAdminRole(user)
+
+	activeTab := strings.TrimSpace(r.URL.Query().Get("tab"))
+	if activeTab == "" {
+		activeTab = "overview"
+	}
+	if !isAdmin && (activeTab == "configuration" || activeTab == "advanced") {
+		activeTab = "overview"
+	}
+
 	breadcrumbs := []components.Breadcrumb{
 		{Label: "Dashboard", URL: "/"},
 		{Label: "Games", URL: "/games"},
 		{Label: game.Name, URL: ""},
 	}
-	layoutData, err := app.buildTemplLayoutData(r, game.Name, "games", user, breadcrumbs)
+	layoutData, err := app.buildTemplLayoutData(r, game.Name, "Games", user, breadcrumbs)
 	if err != nil {
 		log.Printf("Error building layout data: %v", err)
 		http.Error(w, "Failed to build layout", http.StatusInternalServerError)
@@ -614,14 +679,22 @@ func (app *App) handleGameDetail(w http.ResponseWriter, r *http.Request) {
 	}
 
 	data := pages.GameDetailPageData{
-		Layout:      layoutData,
-		Game:        game,
-		Row:         gameRow,
-		PathPresets: pathPresets,
-		Volumes:     volumeSlice,
-		Configs:     configs,
-		SgcCounts:   sgcCounts,
-		Overview:    overviewData,
+		Layout:        layoutData,
+		Game:          game,
+		IsAdmin:       isAdmin,
+		ActiveTab:     activeTab,
+		RunState:      runState,
+		Connect:       connect,
+		Deployments:   deploymentRows,
+		LatestSession: latestSession,
+		LiveSession:   liveSession,
+		Sessions:      gameSessions,
+		Actions:       actions,
+		PathPresets:   pathPresets,
+		Volumes:       volumeSlice,
+		Configs:       configs,
+		SgcCounts:     sgcCounts,
+		Overview:      overviewData,
 	}
 
 	RenderTempl(w, r, game.Name, pages.GameDetail(data))

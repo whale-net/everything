@@ -10,6 +10,7 @@ templ_library(
         "deployment_actions.go",
         "deployment_status.go",
         "restart_state.go",
+        "roles.go",
     ],
     visibility = ["//manmanv2/ui:__subpackages__"],
     deps = [
@@ -37,6 +38,7 @@ go_test(
         "layout_test.go",
         "live_indicator_test.go",
         "restart_state_test.go",
+        "roles_test.go",
     ],
     embed = [":components"],
     deps = [

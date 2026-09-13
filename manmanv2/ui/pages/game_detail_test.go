@@ -3,7 +3,7 @@ package pages
 import (
 	"strings"
 	"testing"
-
+	manmanpb "github.com/whale-net/everything/manmanv2/protos"
 	"github.com/whale-net/everything/manmanv2/ui/components"
 )
 
@@ -276,5 +276,237 @@ func TestGameOverview_ActionError(t *testing.T) {
 	}
 	if !strings.Contains(body, "alert-error") {
 		t.Errorf("expected alert-error class, got: %s", body)
+	}
+}
+
+func fixtureGameDetailPageData(isAdmin bool) GameDetailPageData {
+	game := &manmanpb.Game{
+		GameId:     42,
+		Name:       "Left 4 Dead 2",
+		SteamAppId: "550",
+		Metadata: &manmanpb.GameMetadata{
+			Genre:     "Shooter",
+			Publisher: "Valve",
+			Tags:      []string{"zombies", "co-op"},
+		},
+	}
+
+	configs := []*manmanpb.GameConfig{
+		{
+			ConfigId: 101,
+			GameId:   42,
+			Name:     "default",
+			Image:    "l4d2-server:latest",
+		},
+	}
+
+	deployments := []GameDeploymentRow{
+		{
+			Row: DeploymentRowData{
+				ServerGameConfigID: 201,
+				DisplayName:        "default on server 1",
+				SGCStatus:          "active",
+				LatestSession: &manmanpb.Session{
+					SessionId: 301,
+					Status:    "running",
+					StartedAt: 1700000000,
+				},
+				LiveSession: &manmanpb.Session{
+					SessionId: 301,
+					Status:    "running",
+					StartedAt: 1700000000,
+				},
+				Actions: components.DeploymentActions{
+					CanStop:    true,
+					CanRestart: true,
+				},
+			},
+			Connect: components.BuildConnectAddressView("192.168.1.50", []*manmanpb.PortBinding{{HostPort: 27015, Protocol: "udp"}}),
+			LogsURL:    "/sessions/301",
+			ActionsURL: "/games/42/configs/101/actions",
+		},
+	}
+
+	return GameDetailPageData{
+		Layout: components.LayoutData{
+			Title:  "Left 4 Dead 2",
+			Active: "Games",
+		},
+		Game:          game,
+		IsAdmin:       isAdmin,
+		ActiveTab:     "overview",
+		RunState:      components.DeploymentRunning,
+		Connect:       components.BuildConnectAddressView("192.168.1.50", []*manmanpb.PortBinding{{HostPort: 27015, Protocol: "udp"}}),
+		Deployments:   deployments,
+		LatestSession: deployments[0].Row.LatestSession,
+		LiveSession:   deployments[0].Row.LiveSession,
+		Sessions: []*manmanpb.Session{
+			deployments[0].Row.LatestSession,
+		},
+		Configs: configs,
+		SgcCounts: map[int64]int{
+			101: 1,
+		},
+		PathPresets: []*manmanpb.GameAddonPathPreset{
+			{
+				PresetId:         501,
+				GameId:           42,
+				Name:             "Maps",
+				InstallationPath: "left4dead2/maps/",
+			},
+		},
+		Overview: GameOverviewData{
+			GameID: 42,
+			Deployments: []GameDeploymentOverview{
+				{
+					SGCID:         201,
+					DisplayName:   "default on server 1",
+					Status:        "Online",
+					StatusVariant: "success",
+					Uptime:        "running",
+					Connect:       components.BuildConnectAddressView("192.168.1.50", []*manmanpb.PortBinding{{HostPort: 27015, Protocol: "udp"}}),
+					CanStop:       true,
+					CanRestart:    true,
+					LogsURL:       "/sessions/301",
+				},
+			},
+		},
+	}
+}
+
+func TestGameDetail_TabbedLayout_AdminRendersAllTabs(t *testing.T) {
+	data := fixtureGameDetailPageData(true)
+	body := renderPage(t, GameDetail(data))
+
+	// All four tab buttons must be rendered for admin
+	for _, wantTab := range []string{"Overview", "Console &amp; Logs", "Configuration", "Advanced"} {
+		if !strings.Contains(body, wantTab) {
+			t.Errorf("expected tab button %q in body, got: %s", wantTab, body)
+		}
+	}
+
+	// Tab panel IDs must be present
+	for _, wantPanel := range []string{"tab-panel-overview", "tab-panel-logs", "tab-panel-configuration", "tab-panel-advanced"} {
+		if !strings.Contains(body, `id="`+wantPanel+`"`) {
+			t.Errorf("expected tab panel %q in body, got: %s", wantPanel, body)
+		}
+	}
+}
+
+func TestGameDetail_TabbedLayout_NonAdminHidesConfigAndAdvanced(t *testing.T) {
+	data := fixtureGameDetailPageData(false)
+	body := renderPage(t, GameDetail(data))
+
+	// Overview and Console & Logs must be present
+	if !strings.Contains(body, "Overview") {
+		t.Errorf("expected Overview tab for non-admin, got: %s", body)
+	}
+	if !strings.Contains(body, "Console &amp; Logs") {
+		t.Errorf("expected Console & Logs tab for non-admin, got: %s", body)
+	}
+
+	// Configuration and Advanced tab buttons must NOT be rendered
+	if strings.Contains(body, `id="tab-btn-configuration"`) {
+		t.Errorf("Configuration tab button must NOT be rendered for non-admin, got: %s", body)
+	}
+	if strings.Contains(body, `id="tab-btn-advanced"`) {
+		t.Errorf("Advanced tab button must NOT be rendered for non-admin, got: %s", body)
+	}
+
+	// Configuration and Advanced tab panels must NOT be present in DOM
+	if strings.Contains(body, `id="tab-panel-configuration"`) {
+		t.Errorf("Configuration tab panel must NOT exist for non-admin, got: %s", body)
+	}
+	if strings.Contains(body, `id="tab-panel-advanced"`) {
+		t.Errorf("Advanced tab panel must NOT exist for non-admin, got: %s", body)
+	}
+}
+
+func TestGameDetail_Overview_SeparatesLowFrequencyActions(t *testing.T) {
+	data := fixtureGameDetailPageData(true)
+	body := renderPage(t, GameDetail(data))
+
+	// Find the Overview panel content
+	startIdx := strings.Index(body, `id="tab-panel-overview"`)
+	if startIdx == -1 {
+		t.Fatalf("missing tab-panel-overview")
+	}
+	endIdx := strings.Index(body, `id="tab-panel-logs"`)
+	if endIdx == -1 {
+		t.Fatalf("missing tab-panel-logs")
+	}
+	overviewContent := body[startIdx:endIdx]
+
+	// Overview MUST contain status, runtime, and start/stop/restart controls
+	if !strings.Contains(overviewContent, "Server Status &amp; Controls") {
+		t.Errorf("Overview must have Server Status & Controls section, got: %s", overviewContent)
+	}
+	if !strings.Contains(overviewContent, "192.168.1.50:27015") {
+		t.Errorf("Overview must show connect address, got: %s", overviewContent)
+	}
+	if !strings.Contains(overviewContent, "Stop") {
+		t.Errorf("Overview must show Stop control, got: %s", overviewContent)
+	}
+	if !strings.Contains(overviewContent, "Restart") {
+		t.Errorf("Overview must show Restart control, got: %s", overviewContent)
+	}
+
+	// Overview MUST NOT contain "Edit Configuration" or "Deploy" (AC: separate low-frequency actions)
+	if strings.Contains(overviewContent, "Edit Configuration") {
+		t.Errorf("Overview must NOT contain 'Edit Configuration' (moved to Configuration tab), got: %s", overviewContent)
+	}
+	if strings.Contains(overviewContent, "Deploy to Server") || strings.Contains(overviewContent, "+ Deploy") {
+		t.Errorf("Overview must NOT contain Deploy controls (moved to Advanced tab), got: %s", overviewContent)
+	}
+}
+
+func TestGameDetail_ConfigurationTab_HasEditConfiguration(t *testing.T) {
+	data := fixtureGameDetailPageData(true)
+	body := renderPage(t, GameDetail(data))
+
+	startIdx := strings.Index(body, `id="tab-panel-configuration"`)
+	if startIdx == -1 {
+		t.Fatalf("missing tab-panel-configuration")
+	}
+	endIdx := strings.Index(body, `id="tab-panel-advanced"`)
+	if endIdx == -1 {
+		t.Fatalf("missing tab-panel-advanced")
+	}
+	configContent := body[startIdx:endIdx]
+
+	// Must contain Game Configurations, Edit Configuration, and Path Presets
+	if !strings.Contains(configContent, "Game Configurations") {
+		t.Errorf("Configuration tab must have Game Configurations section, got: %s", configContent)
+	}
+	if !strings.Contains(configContent, "Edit Configuration") {
+		t.Errorf("Configuration tab must have 'Edit Configuration' button, got: %s", configContent)
+	}
+	if !strings.Contains(configContent, "Addon Path Presets") {
+		t.Errorf("Configuration tab must have Addon Path Presets section, got: %s", configContent)
+	}
+}
+
+func TestGameDetail_AdvancedTab_HasDeployAndDangerZone(t *testing.T) {
+	data := fixtureGameDetailPageData(true)
+	body := renderPage(t, GameDetail(data))
+
+	startIdx := strings.Index(body, `id="tab-panel-advanced"`)
+	if startIdx == -1 {
+		t.Fatalf("missing tab-panel-advanced")
+	}
+	advancedContent := body[startIdx:]
+
+	// Must contain Deploy button, Edit Game form, and Danger Zone
+	if !strings.Contains(advancedContent, "Deploy to Server") {
+		t.Errorf("Advanced tab must have Deploy button, got: %s", advancedContent)
+	}
+	if !strings.Contains(advancedContent, "Edit Game Details") {
+		t.Errorf("Advanced tab must have Edit Game Details form, got: %s", advancedContent)
+	}
+	if !strings.Contains(advancedContent, "Danger Zone") {
+		t.Errorf("Advanced tab must have Danger Zone section, got: %s", advancedContent)
+	}
+	if !strings.Contains(advancedContent, "Delete Game") {
+		t.Errorf("Advanced tab must have Delete Game button, got: %s", advancedContent)
 	}
 }
