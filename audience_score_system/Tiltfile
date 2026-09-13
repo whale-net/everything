@@ -341,6 +341,13 @@ spec:
           value: "{ass_token_encryption_key}"
         - name: ASS_MCP_PUBLIC_URL
           value: "{ass_mcp_public_url}"
+        # ass_mcp_public_url is the in-cluster address mcp/worker need; web's
+        # mcpauth.NewProvider rejects that as a non-loopback http Resource.
+        # ASS_WEB_MCP_RESOURCE_URL overrides it for web alone with the same
+        # host-facing address mcp's own port_forwards exposes -- a local-dev-
+        # only divergence, never set outside dev.
+        - name: ASS_WEB_MCP_RESOURCE_URL
+          value: "http://localhost:8081/"
         - name: ASS_WHAGENT_UI_JWKS_URL
           value: "{whagent_ui_jwks_url}"
         - name: ASS_WHAGENT_UI_ISSUER

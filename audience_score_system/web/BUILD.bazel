@@ -50,6 +50,14 @@ go_binary(
     visibility = ["//visibility:public"],
 )
 
+# loadConfig() unit coverage for ASS_WEB_MCP_RESOURCE_URL (issue #2645):
+# plain unit test, no gotags, safe to run without a Docker daemon.
+go_test(
+    name = "web_config_test",
+    srcs = ["config_test.go"],
+    embed = [":web_lib"],
+)
+
 # `web` handler tests via httptest against the real mcpauth.Provider mounted
 # exactly like run() mounts it in main.go (issue #1646). Gated behind
 # `//go:build integration`; hand-written with the same tag set as
