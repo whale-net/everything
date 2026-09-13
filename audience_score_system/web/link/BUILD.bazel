@@ -60,11 +60,6 @@ go_test(
 # that BUILD.bazel comment for why each tag is required). `# keep` tells a
 # later `bazel run //:gazelle` not to touch or remove this rule.
 #
-# Scaffold phase: every test in handlers_integration_test.go is a named TODO
-# stub (see that file's package doc comment) -- this target exists so the
-# real deps land with the Implementation/Testing phases' file, not as a
-# last-minute BUILD.bazel change.
-#
 # Run it explicitly (requires a working Docker daemon):
 #   bazel test //audience_score_system/web/link:link_handlers_integration_test --test_output=all
 go_test(
@@ -83,11 +78,17 @@ go_test(
         "no-sandbox",
         "requires-network",
     ],
-    # Scaffold phase's stub bodies import nothing beyond "testing" --
-    # Implementation/Testing phases add //audience_score_system/migrate/
-    # schema, //audience_score_system/store, //audience_score_system/web/
-    # auth, //libs/go/dbtest, //libs/go/migrate, and the JWKS-minting test
-    # deps invite_integration_test.go/link_test.go already use, once the
-    # real bodies land.
-    deps = [],
+    deps = [
+        "//audience_score_system/migrate/schema",
+        "//audience_score_system/store",
+        "//audience_score_system/web/auth",
+        "//libs/go/dbtest",
+        "//libs/go/migrate",
+        "@com_github_go_jose_go_jose_v4//:go-jose",
+        "@com_github_go_jose_go_jose_v4//jwt",
+        "@com_github_google_uuid//:uuid",
+        "@com_github_jackc_pgx_v5//stdlib",
+        "@com_github_stretchr_testify//assert",
+        "@com_github_stretchr_testify//require",
+    ],
 )

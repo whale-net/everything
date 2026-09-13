@@ -83,7 +83,18 @@ import (
 	"github.com/whale-net/everything/libs/go/logging"
 )
 
-var logger = logging.Get("audience_score_system/web/link")
+// loggerName is this package's structured-logger name. Deliberately NOT a
+// package-level `var logger = logging.Get(loggerName)`: logging.Get
+// returns slog.Default().With(...), and a package-level var would freeze
+// that Default() snapshot at package initialization time -- before any
+// test's slog.SetDefault(...) call could ever take effect, making NFR3's
+// INFO/WARNING-level assertions unwritable against this package's actual
+// logger (see whagent_net/mcp/tools/dispatch.go's identical fix for the
+// same problem). Calling logging.Get(loggerName) fresh at each log site
+// instead costs one extra allocation per request and keeps output
+// identical in production, while letting a test observe slog.Default() as
+// it stands at the moment the log line is actually emitted.
+const loggerName = "audience_score_system/web/link"
 
 // The four FR10 outcome values -- see this file's package doc comment for
 // the query-parameter contract these are carried under.
@@ -128,20 +139,20 @@ func (h *Handlers) HandleShow(w http.ResponseWriter, r *http.Request) {
 
 	token := r.URL.Query().Get("token")
 	if token == "" {
-		logger.WarnContext(ctx, "link assertion rejected: no token on request")
+		logging.Get(loggerName).WarnContext(ctx, "link assertion rejected: no token on request")
 		h.rejectAssertion(w, r, token)
 		return
 	}
 
 	assertion, err := h.verifier.Verify(ctx, token)
 	if err != nil {
-		logger.WarnContext(ctx, "link assertion rejected: verification failed", "error", err)
+		logging.Get(loggerName).WarnContext(ctx, "link assertion rejected: verification failed", "error", err)
 		h.rejectAssertion(w, r, token)
 		return
 	}
 
 	if !returnURLOriginMatches(assertion.ReturnURL, h.uiOrigin) {
-		logger.WarnContext(ctx, "link assertion rejected: return url origin mismatch")
+		logging.Get(loggerName).WarnContext(ctx, "link assertion rejected: return url origin mismatch")
 		h.renderRejected(w, r)
 		return
 	}
@@ -155,7 +166,7 @@ func (h *Handlers) HandleShow(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if consumed {
-		logger.WarnContext(ctx, "link assertion rejected: already consumed", "jti", assertion.ID)
+		logging.Get(loggerName).WarnContext(ctx, "link assertion rejected: already consumed", "jti", assertion.ID)
 		h.redirectOutcome(w, r, assertion.ReturnURL, outcomeRejected)
 		return
 	}
@@ -210,20 +221,20 @@ func (h *Handlers) HandleConfirm(w http.ResponseWriter, r *http.Request) {
 
 	token := r.FormValue("token")
 	if token == "" {
-		logger.WarnContext(ctx, "link assertion rejected on confirm: no token in form")
+		logging.Get(loggerName).WarnContext(ctx, "link assertion rejected on confirm: no token in form")
 		h.rejectAssertion(w, r, token)
 		return
 	}
 
 	assertion, err := h.verifier.Verify(ctx, token)
 	if err != nil {
-		logger.WarnContext(ctx, "link assertion rejected on confirm: verification failed", "error", err)
+		logging.Get(loggerName).WarnContext(ctx, "link assertion rejected on confirm: verification failed", "error", err)
 		h.rejectAssertion(w, r, token)
 		return
 	}
 
 	if !returnURLOriginMatches(assertion.ReturnURL, h.uiOrigin) {
-		logger.WarnContext(ctx, "link assertion rejected on confirm: return url origin mismatch")
+		logging.Get(loggerName).WarnContext(ctx, "link assertion rejected on confirm: return url origin mismatch")
 		h.renderRejected(w, r)
 		return
 	}
@@ -233,7 +244,7 @@ func (h *Handlers) HandleConfirm(w http.ResponseWriter, r *http.Request) {
 	// confirm is rejected here rather than by HandleShow's read-only check.
 	if err := h.store.LinkAssertions().Consume(ctx, assertion.ID, assertion.Expiry); err != nil {
 		if errors.Is(err, store.ErrAssertionAlreadyConsumed) {
-			logger.WarnContext(ctx, "link assertion rejected on confirm: already consumed", "jti", assertion.ID)
+			logging.Get(loggerName).WarnContext(ctx, "link assertion rejected on confirm: already consumed", "jti", assertion.ID)
 			h.redirectOutcome(w, r, assertion.ReturnURL, outcomeRejected)
 			return
 		}
@@ -244,7 +255,7 @@ func (h *Handlers) HandleConfirm(w http.ResponseWriter, r *http.Request) {
 	outcome, err := h.store.PersonIdentities().LinkToExistingPerson(ctx, assertion.SubjectIssuer, assertion.Subject, person.ID)
 	if err != nil {
 		if errors.Is(err, store.ErrLinkedToOtherPerson) {
-			logger.WarnContext(ctx, "link rejected: pair already linked to a different person",
+			logging.Get(loggerName).WarnContext(ctx, "link rejected: pair already linked to a different person",
 				"person_id", person.ID, "iss", assertion.SubjectIssuer, "sub", assertion.Subject)
 			h.redirectOutcome(w, r, assertion.ReturnURL, outcomeConflict)
 			return
@@ -255,11 +266,11 @@ func (h *Handlers) HandleConfirm(w http.ResponseWriter, r *http.Request) {
 
 	switch outcome {
 	case store.LinkCreated:
-		logger.InfoContext(ctx, "whagent-net identity linked",
+		logging.Get(loggerName).InfoContext(ctx, "whagent-net identity linked",
 			"person_id", person.ID, "iss", assertion.SubjectIssuer, "sub", assertion.Subject)
 		h.redirectOutcome(w, r, assertion.ReturnURL, outcomeLinked)
 	case store.LinkAlreadyOwned:
-		logger.InfoContext(ctx, "whagent-net identity already linked",
+		logging.Get(loggerName).InfoContext(ctx, "whagent-net identity already linked",
 			"person_id", person.ID, "iss", assertion.SubjectIssuer, "sub", assertion.Subject)
 		h.redirectOutcome(w, r, assertion.ReturnURL, outcomeAlreadyLinked)
 	default:
