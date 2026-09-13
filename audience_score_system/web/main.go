@@ -31,6 +31,7 @@ import (
 	"github.com/whale-net/everything/audience_score_system/web/channel"
 	"github.com/whale-net/everything/audience_score_system/web/components"
 	"github.com/whale-net/everything/audience_score_system/web/invite"
+	"github.com/whale-net/everything/audience_score_system/web/link"
 	"github.com/whale-net/everything/audience_score_system/web/matches"
 	"github.com/whale-net/everything/audience_score_system/web/outcomes"
 	"github.com/whale-net/everything/audience_score_system/web/pages"
@@ -98,6 +99,16 @@ type config struct {
 	// defaultSyncInterval's doc comment above for why this must match
 	// worker's identically-loaded value.
 	SyncInterval time.Duration
+
+	// WhagentUIJWKSURL/WhagentUIIssuer (ASS_WHAGENT_UI_JWKS_URL/
+	// ASS_WHAGENT_UI_ISSUER, issue #2600) configure link.NewVerifier
+	// (#2598, FR3) so `web` can verify a `ui`-minted link assertion. This
+	// is a DISTINCT pair from WhagentJWKSURL/WhagentIssuer used by `mcp`
+	// (that pair verifies api-minted persona Claims) -- never reused,
+	// aliased, defaulted from, or falling back to it, or vice versa. See
+	// ../ENV.md.
+	WhagentUIJWKSURL string
+	WhagentUIIssuer  string
 }
 
 // loadConfig loads configuration from environment variables, failing fast
@@ -129,6 +140,8 @@ func loadConfig() (config, error) {
 		TokenEncryptionKey: os.Getenv("ASS_TOKEN_ENCRYPTION_KEY"),
 		MCPPublicURL:       os.Getenv("ASS_MCP_PUBLIC_URL"),
 		SyncInterval:       interval,
+		WhagentUIJWKSURL:   os.Getenv("ASS_WHAGENT_UI_JWKS_URL"),
+		WhagentUIIssuer:    os.Getenv("ASS_WHAGENT_UI_ISSUER"),
 	}, nil
 }
 
@@ -144,6 +157,7 @@ type app struct {
 	store    *store.Store
 	auth     *auth.Authenticator
 	invite   *invite.Handlers
+	link     *link.Handlers
 	channels *channel.Handler
 	schedule *schedule.Handlers
 	access   *access.Handlers
@@ -228,6 +242,25 @@ func run() error {
 	}
 
 	inviteHandlers := invite.New(st, sessions)
+
+	// linkHandlers is the whagent-net identity link-acceptance flow (issue
+	// #2600, FR4-FR6, FR8-FR10, FR13, NFR3, NFR5) -- verifies a `ui`-minted
+	// link assertion against `ui`'s own JWKS/issuer (#2598), distinct from
+	// the ASS_WHAGENT_JWKS_URL/ASS_WHAGENT_ISSUER pair `mcp` uses to verify
+	// api-minted persona Claims. `web` fails fast at startup if either is
+	// unset, matching this app's prevailing required-config convention
+	// (e.g. ASS_MCP_PUBLIC_URL below) -- see ../ENV.md.
+	if cfg.WhagentUIJWKSURL == "" {
+		return fmt.Errorf("ASS_WHAGENT_UI_JWKS_URL is required")
+	}
+	if cfg.WhagentUIIssuer == "" {
+		return fmt.Errorf("ASS_WHAGENT_UI_ISSUER is required")
+	}
+	linkVerifier, err := link.NewVerifier(ctx, cfg.WhagentUIJWKSURL, cfg.WhagentUIIssuer)
+	if err != nil {
+		return fmt.Errorf("construct link verifier: %w", err)
+	}
+	linkHandlers := link.New(st, sessions, linkVerifier, cfg.WhagentUIIssuer)
 
 	// tokenStore is the Channel-connect grant's (C2, #1571) credential
 	// store -- a SEPARATE token store from `sessions` above (C1's Google
@@ -355,7 +388,7 @@ func run() error {
 		return fmt.Errorf("construct mcpauth provider: %w", err)
 	}
 
-	application := &app{store: st, auth: authenticator, invite: inviteHandlers, channels: channelHandler, schedule: scheduleHandlers, access: accessHandlers, research: researchHandlers, matches: matchesHandlers, outcomes: outcomesHandlers, videos: videosHandlers, mcpProvider: mcpProvider}
+	application := &app{store: st, auth: authenticator, invite: inviteHandlers, link: linkHandlers, channels: channelHandler, schedule: scheduleHandlers, access: accessHandlers, research: researchHandlers, matches: matchesHandlers, outcomes: outcomesHandlers, videos: videosHandlers, mcpProvider: mcpProvider}
 
 	mux := http.NewServeMux()
 	application.setupRoutes(mux)
@@ -413,6 +446,14 @@ func (a *app) setupRoutes(mux *http.ServeMux) {
 	// for a signed-in vs. anonymous caller rather than redirecting an
 	// anonymous one away (see invite.Handlers.HandleShow).
 	mux.HandleFunc("GET /invites/{code}", a.invite.HandleShow)
+
+	// GET /link/whagent is public at entry, same reasoning as GET
+	// /invites/{code} above (issue #2600, FR4/FR5): an anonymous caller is
+	// routed into sign-in and resumes here, rather than being redirected
+	// away from the handler entirely. POST /link/whagent/confirm is the
+	// FR6 write, signed-in only (FR13: no headless path).
+	mux.HandleFunc("GET /link/whagent", a.link.HandleShow)
+	mux.HandleFunc("POST /link/whagent/confirm", a.auth.RequireSignedIn(a.link.HandleConfirm))
 
 	// Protected: the signed-in landing page. It carries no content of its
 	// own -- it redirects straight to /channels, FR26's Channel list/
