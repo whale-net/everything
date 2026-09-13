@@ -113,11 +113,15 @@ go_binary(
 # (FR14/FR15/NFR3/NFR4/NFR7) replaces these with the full admin-gate/
 # live-status/revoke-scoping/audit-log coverage the issue describes.
 #
-# handlers_link_test.go (issue #2596's Scaffold section) added:
-# TODO-stubbed test names for FR13's unauthenticated-redirect gating,
-# FR2's mint+redirect (and its "not configured" degrade path), FR10's
-# four distinct outcome messages, and FR1's Mint-single-call-site
-# invariant -- the Implementation phase's Testing section fills these in.
+# handlers_link_test.go (issue #2596's Testing section) filled in: FR13's
+# unauthenticated-redirect gating for both routes, FR2's mint+redirect
+# (assertion parses, sub/sub_iss match the session, and the "not
+# configured" degrade path never 500s or redirects to a bare host), FR10's
+# four distinct outcome messages (plus the unrecognized/absent generic
+# failure), and FR1's Mint-single-call-site invariant, checked via a
+# go/ast source scan (mirrors manmanv2/ui/nfr5_bulk_env_write_guard_test.go's
+# guard technique) -- hence the "data" glob and "@rules_go//go/runfiles"
+# dep below, needed only by that one test.
 go_test(
     name = "ui_test",
     size = "small",
@@ -138,6 +142,16 @@ go_test(
         "main_test.go",
         "mcpauth_test.go",
     ],
+    # Made available so TestMint_OnlyCalledFromHandleLinkASSStart
+    # (handlers_link_test.go) can locate and parse this package's own
+    # non-test source files' declarations via the Bazel runfiles manifest
+    # (`bazel test`'s sandbox working directory does not contain the
+    # source tree) -- same technique as
+    # manmanv2/ui/nfr5_bulk_env_write_guard_test.go's guard.
+    data = glob(
+        ["*.go"],
+        exclude = ["*_test.go"],
+    ),
     embed = [":ui_lib"],
     deps = [
         "//libs/go/grpcauth",
@@ -152,8 +166,10 @@ go_test(
         "//whagent_net/mcpidentity",
         "//whagent_net/protos:whagentpb",
         "//whagent_net/ui/components",
+        "//whagent_net/ui/linkassert",
         "//whagent_net/ui/pages",
         "@com_github_go_jose_go_jose_v4//:go-jose",
+        "@com_github_go_jose_go_jose_v4//jwt",
         "@com_github_google_uuid//:uuid",
         "@com_github_gorilla_sessions//:sessions",
         "@com_github_jackc_pgx_v5//pgxpool",
@@ -165,6 +181,7 @@ go_test(
         "@org_golang_google_grpc//status",
         "@org_golang_google_grpc//test/bufconn",
         "@org_golang_google_protobuf//types/known/timestamppb",
+        "@rules_go//go/runfiles",
     ],
 )
 

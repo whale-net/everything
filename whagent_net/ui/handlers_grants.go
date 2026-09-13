@@ -219,6 +219,7 @@ func (app *App) handleGrants(w http.ResponseWriter, r *http.Request) {
 			Active: "Grants",
 			User:   user,
 		},
+		ShowLinkASSAction: app.assLinkURL != "",
 	}
 
 	if user == nil {

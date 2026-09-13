@@ -287,6 +287,14 @@ type App struct {
 	// host. Unlike linkAssertKey above, NewApp never fails startup over
 	// this being empty (NFR1 is scoped to the signing key, not this var).
 	assLinkURL string
+
+	// publicURL is cfg.UIPublicURL verbatim -- `ui`'s own externally-
+	// reachable base URL. handlers_link.go's handleLinkASSStart uses this
+	// both as the minted assertion's `iss` and to build the return URL
+	// ASS `web` sends the Operator's browser back to
+	// ({publicURL}/link/ass/result). Always non-empty: NewApp fails
+	// startup when cfg.UIPublicURL is empty (see above).
+	publicURL string
 }
 
 // NewApp wires up Keycloak sign-in (NFR1) and the authenticated `api`
@@ -375,6 +383,7 @@ func NewApp(ctx context.Context, cfg config) (*App, error) {
 		consentStore:  newConsentStore(cfg.SessionSecret),
 		linkAssertKey: linkAssertKey,
 		assLinkURL:    cfg.ASSLinkURL,
+		publicURL:     cfg.UIPublicURL,
 	}
 
 	// mcpauth.NewCredentialStore/NewPostgresClientRegistry/

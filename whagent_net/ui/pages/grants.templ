@@ -83,6 +83,12 @@ type GrantsData struct {
 	AvailableScopes []string
 
 	Error string
+
+	// ShowLinkASSAction is true when app.assLinkURL is configured (FR1,
+	// issue #2596) -- gates whether the "Link ASS identity" action
+	// renders at all. Never the raw URL: the action always posts to this
+	// binary's own POST /link/ass, never directly to ASS.
+	ShowLinkASSAction bool
 }
 
 // scopeConsentURL builds the standalone consent route's URL for scope
@@ -163,6 +169,13 @@ templ Grants(data GrantsData) {
 			<div role="alert" class="alert alert-error mb-4">{ data.Error }</div>
 		}
 		@grantsTable(data.Rows, "/grants/revoke")
+		if data.ShowLinkASSAction {
+			<h2 class="text-xl font-bold text-base-content mt-8 mb-2">Link ASS identity</h2>
+			<p class="opacity-70 mb-4">Link this account to an existing ASS person so agent calls made on your behalf resolve to it.</p>
+			<form method="post" action="/link/ass">
+				<button type="submit" class="btn btn-sm btn-primary">Link ASS identity</button>
+			</form>
+		}
 		if len(data.AvailableScopes) > 0 {
 			<h2 class="text-xl font-bold text-base-content mt-8 mb-2">Available grants</h2>
 			<p class="opacity-70 mb-4">Scopes configured on this deployment you have not yet granted access to.</p>
