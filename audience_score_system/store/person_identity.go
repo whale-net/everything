@@ -13,6 +13,7 @@ import (
 	"errors"
 	"fmt"
 
+	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -29,7 +30,43 @@ type PersonIdentityStore interface {
 	// same sub under two different iss values must resolve to two
 	// distinct persons (see migration 020's header).
 	FindOrCreateByIssSub(ctx context.Context, iss, sub string) (Person, bool, error)
+
+	// LinkToExistingPerson links (iss, sub) to an EXISTING personID -- the
+	// link-to-existing path FR6 uses instead of FindOrCreateByIssSub's
+	// auto-provisioning branch.
+	//
+	// FR8: if the pair already has a row pointing at a DIFFERENT Person, it
+	// returns ErrLinkedToOtherPerson and writes nothing -- no merge, no
+	// reassignment, no overwrite.
+	// FR9: if the pair already points at personID, it returns
+	// LinkAlreadyOwned with no error and no duplicate row.
+	//
+	// No person row is ever created by this method -- it links to a
+	// Person that already exists (the signed-in Google-session Person). A
+	// personID that doesn't exist must fail on the foreign key, not
+	// silently create anything.
+	LinkToExistingPerson(ctx context.Context, iss, sub string, personID uuid.UUID) (LinkOutcome, error)
 }
+
+// LinkOutcome reports which of LinkToExistingPerson's two non-error
+// outcomes occurred (FR6/FR9). See ErrLinkedToOtherPerson for the
+// conflict case (FR8), which is an error, not a LinkOutcome value.
+type LinkOutcome int
+
+const (
+	// LinkCreated (FR6): a new person_oidc_identity row was written,
+	// linking (iss, sub) to the given personID.
+	LinkCreated LinkOutcome = iota
+	// LinkAlreadyOwned (FR9): this (iss, sub) pair already points at this
+	// same personID -- a no-op, not an error, and no duplicate row.
+	LinkAlreadyOwned
+)
+
+// ErrLinkedToOtherPerson (FR8) is returned by LinkToExistingPerson when
+// (iss, sub) already has a person_oidc_identity row pointing at a
+// DIFFERENT Person than the one requested. Never merge, reassign, or
+// overwrite in this case -- fail safe instead.
+var ErrLinkedToOtherPerson = errors.New("person identity: (iss, sub) is already linked to a different person")
 
 // personIdentityStore implements PersonIdentityStore against
 // person_oidc_identity (migration 020).
@@ -162,4 +199,66 @@ func (s personIdentityStore) FindOrCreateByIssSub(ctx context.Context, iss, sub 
 	}
 
 	return p, true, nil
+}
+
+// LinkToExistingPerson -- see the interface doc comment for the full
+// contract (FR6-FR9, NFR4).
+//
+// Unlike FindOrCreateByIssSub, there is no fast-path lookup and no Person
+// row to speculatively create: this method only ever writes the
+// person_oidc_identity link row itself, inside a single transaction
+// (NFR4), and lets the person_id foreign key reject an unknown personID
+// rather than ever creating one.
+//
+//  1. INSERT the (person_id, iss, sub) link row.
+//  2. If that unique-violates person_oidc_identity_iss_sub (FR8/FR9), a
+//     row for this exact (iss, sub) pair already exists -- either written
+//     by a previous call to this method, or auto-provisioned by
+//     FindOrCreateByIssSub. Roll back first (same reasoning as
+//     FindOrCreateByIssSub's own race branch: return this connection to
+//     the pool before asking for another one for the re-lookup, so
+//     concurrent losers can't self-deadlock a saturated pool), then
+//     re-read the row to decide FR9 (same person_id: LinkAlreadyOwned, no
+//     error) from FR8 (different person_id: ErrLinkedToOtherPerson, and
+//     nothing is merged, reassigned, or overwritten).
+//  3. Any other insert error (notably an unknown personID failing the
+//     person_id foreign key) is returned as-is; the deferred Rollback
+//     below discards the failed transaction, leaving no partial row.
+func (s personIdentityStore) LinkToExistingPerson(ctx context.Context, iss, sub string, personID uuid.UUID) (LinkOutcome, error) {
+	if iss == "" || sub == "" {
+		return 0, errors.New("link to existing person: iss and sub are both required")
+	}
+
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return 0, fmt.Errorf("link to existing person: begin tx: %w", err)
+	}
+	// See FindOrCreateByIssSub's identical defer for why this is safe as a
+	// no-op once either Commit or the explicit Rollback below has run.
+	defer tx.Rollback(ctx) //nolint:errcheck // no-op once Commit -- or the explicit Rollback below -- has already run.
+
+	if _, err := tx.Exec(ctx, `
+		INSERT INTO person_oidc_identity (person_id, iss, sub) VALUES ($1, $2, $3)
+	`, personID, iss, sub); err != nil {
+		if isUniqueViolation(err) {
+			if rollbackErr := tx.Rollback(ctx); rollbackErr != nil {
+				return 0, fmt.Errorf("link to existing person: rollback after conflict: %w", rollbackErr)
+			}
+			existing, lookupErr := s.lookup(ctx, iss, sub)
+			if lookupErr != nil {
+				return 0, fmt.Errorf("link to existing person: resolve after conflict: %w", lookupErr)
+			}
+			if existing.ID == personID {
+				return LinkAlreadyOwned, nil
+			}
+			return 0, ErrLinkedToOtherPerson
+		}
+		return 0, fmt.Errorf("link to existing person: insert link: %w", err)
+	}
+
+	if err := tx.Commit(ctx); err != nil {
+		return 0, fmt.Errorf("link to existing person: commit: %w", err)
+	}
+
+	return LinkCreated, nil
 }
