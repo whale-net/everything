@@ -26,7 +26,10 @@ templ_library(
         "//audience_score_system/store",
         "//audience_score_system/web/auth",
         "//audience_score_system/web/components",
+        "//libs/go/logging",
         "@com_github_coreos_go_oidc_v3//oidc",
+        "@com_github_google_uuid//:uuid",
+        "@com_github_jackc_pgx_v5//:pgx",
     ],
 )
 

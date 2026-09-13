@@ -29,6 +29,23 @@ type LinkAssertionStore interface {
 	// returning the number of rows deleted. Exposed but not wired to any
 	// scheduler by this task -- see this file's package doc comment.
 	ReapExpired(ctx context.Context, now time.Time) (int64, error)
+
+	// IsConsumed reports whether jti has already been recorded as consumed
+	// -- a plain SELECT, never a write. This is issue #2600's GET
+	// /link/whagent read-only replay check (FR3 step 3): it lets the
+	// handler reject an already-used assertion before the Operator ever
+	// sees the confirmation page, without performing the consuming write
+	// itself -- that stays exclusively POST /link/whagent/confirm's job
+	// via Consume, so an Operator who opens the confirmation page and
+	// abandons it can still retry within the assertion's TTL.
+	//
+	// This is a convenience check only, never the single-use guarantee's
+	// enforcement mechanism -- that guarantee is Consume's INSERT/
+	// unique-violation path alone (see Consume's doc comment). A race
+	// between this read and a concurrent Consume is harmless: the loser of
+	// that race still gets Consume's authoritative
+	// ErrAssertionAlreadyConsumed rejection.
+	IsConsumed(ctx context.Context, jti string) (bool, error)
 }
 
 // ErrAssertionAlreadyConsumed is returned by LinkAssertionStore.Consume
@@ -63,6 +80,24 @@ func (s linkAssertionStore) Consume(ctx context.Context, jti string, expiresAt t
 		return fmt.Errorf("store: consume link assertion: %w", err)
 	}
 	return nil
+}
+
+// IsConsumed -- see the interface doc comment for the full contract. A
+// plain SELECT EXISTS, deliberately never an INSERT -- see the interface
+// doc comment for why this must stay read-only.
+func (s linkAssertionStore) IsConsumed(ctx context.Context, jti string) (bool, error) {
+	if jti == "" {
+		return false, errors.New("store: is consumed link assertion: jti is required")
+	}
+
+	var exists bool
+	err := s.pool.QueryRow(ctx, `
+		SELECT EXISTS(SELECT 1 FROM link_assertion_consumption WHERE jti = $1)
+	`, jti).Scan(&exists)
+	if err != nil {
+		return false, fmt.Errorf("store: is consumed link assertion: %w", err)
+	}
+	return exists, nil
 }
 
 // ReapExpired -- see the interface doc comment for the full contract.
