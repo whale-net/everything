@@ -91,7 +91,10 @@ type config struct {
 	// externally reachable URL of the `mcp` server, passed as
 	// mcpauth.ProviderConfig.Resource. `web` (this binary, the OAuth2
 	// authorization server) and `mcp` (the OAuth2 protected resource) must
-	// agree on this exact value -- see ../ENV.md.
+	// agree on this exact value -- see ../ENV.md. ASS_WEB_MCP_RESOURCE_URL
+	// overrides it for `web` alone, letting a local-dev deployment satisfy
+	// mcpauth's loopback/https validation without changing `mcp`'s
+	// in-cluster value.
 	MCPPublicURL string
 
 	// SyncInterval is FR14/NFR4's per-Channel Temporal sync cadence,
@@ -138,7 +141,7 @@ func loadConfig() (config, error) {
 		OAuthRedirectBase:  os.Getenv("ASS_OAUTH_REDIRECT_BASE_URL"),
 		SessionSecret:      os.Getenv("ASS_SESSION_SECRET"),
 		TokenEncryptionKey: os.Getenv("ASS_TOKEN_ENCRYPTION_KEY"),
-		MCPPublicURL:       os.Getenv("ASS_MCP_PUBLIC_URL"),
+		MCPPublicURL:       getEnv("ASS_WEB_MCP_RESOURCE_URL", os.Getenv("ASS_MCP_PUBLIC_URL")),
 		SyncInterval:       interval,
 		WhagentUIJWKSURL:   os.Getenv("ASS_WHAGENT_UI_JWKS_URL"),
 		WhagentUIIssuer:    os.Getenv("ASS_WHAGENT_UI_ISSUER"),
