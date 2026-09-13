@@ -315,7 +315,7 @@ func buildGameRows(
 //
 // liveSession mirrors the server-side live_only filter
 // (manmanv2/api/repository/postgres/session.go: status IN pending,
-// starting, running, stopping) so DeploymentRowInner's "View Live Session"
+// starting, running, stopping) so DeploymentRowInner's "View Console"
 // column renders the same way it would from a dedicated getLiveSession
 // call, without a second RPC.
 //

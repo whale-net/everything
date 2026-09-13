@@ -296,12 +296,9 @@ templ gameDeploymentRow(dep GameDeploymentRow) {
 					</span>
 				</div>
 				<div class="flex items-center gap-3 text-xs">
-					if dep.LogsURL != "" {
-						<a href={ templ.URL(dep.LogsURL) } class="link link-primary">Logs</a>
-					} else {
-						<span class="text-base-content/40">No logs yet</span>
+					if dep.ActionsURL != "" {
+						<a href={ templ.URL(dep.ActionsURL) } class="link link-primary" title="Configure custom console commands">Console Commands</a>
 					}
-					<a href={ templ.URL(dep.ActionsURL) } class="link link-primary">Actions</a>
 					<button
 						type="button"
 						data-open-blade-template={ fmt.Sprintf("deployment-settings-blade-template-%d", dep.Row.ServerGameConfigID) }
