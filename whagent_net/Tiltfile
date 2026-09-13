@@ -202,6 +202,23 @@ whagent_ui_signing_key_yaml = whagent_ui_signing_key.replace("\n", "\\n")
 whagent_oidc_issuer = os.environ.get('WHAGENT_OIDC_ISSUER', 'dev-issuer')
 
 # ===========================
+# ASS link-acceptance URL (issue #2646, FR1 "Link ASS identity")
+# ===========================
+#
+# Points `ui`'s /grants "Link ASS identity" action at audience_score_system's
+# `web` deployment (ui/main.go's getEnv("WHAGENT_UI_ASS_LINK_URL", "")
+# degrades non-fatally when unset, so this default only matters for
+# exercising FR1 against a real `web`). 8083 must equal
+# audience_score_system/Tiltfile's `web_port_forward`/`web_public_url`
+# exactly, and is only reachable when audience_score_system's own Tiltfile
+# is also up -- same cross-Tiltfile convention as that Tiltfile's
+# ASS_WHAGENT_UI_JWKS_URL/ASS_WHAGENT_UI_ISSUER comment. Overridable via
+# WHAGENT_UI_ASS_LINK_URL in BUILD_WHAGENT_ENV/a local .env.
+whagent_ui_ass_link_url = get_custom_or_default(
+    'BUILD_WHAGENT_ENV', 'WHAGENT_UI_ASS_LINK_URL', 'http://localhost:8083',
+)
+
+# ===========================
 # Application Configuration
 # ===========================
 
@@ -620,6 +637,8 @@ spec:
           value: "http://localhost:8081"
         - name: WHAGENT_MCP_PUBLIC_URL
           value: "http://localhost:8082"
+        - name: WHAGENT_UI_ASS_LINK_URL
+          value: "{whagent_ui_ass_link_url}"
         - name: WHAGENT_UI_SIGNING_KEY_ID
           value: "{whagent_ui_signing_key_id}"
         - name: WHAGENT_UI_SIGNING_KEY
@@ -631,6 +650,7 @@ spec:
         pg_database_url=pg_database_url,
         rabbitmq_url=rabbitmq_url,
         whagent_oidc_issuer=whagent_oidc_issuer,
+        whagent_ui_ass_link_url=whagent_ui_ass_link_url,
         whagent_ui_signing_key_id=whagent_ui_signing_key_id,
         whagent_ui_signing_key_yaml=whagent_ui_signing_key_yaml,
         otel_endpoint=otel_endpoint,
