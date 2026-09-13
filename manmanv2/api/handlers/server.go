@@ -91,7 +91,7 @@ func (h *ServerHandler) ListServers(ctx context.Context, req *pb.ListServersRequ
 
 	pbServers := make([]*pb.Server, len(servers))
 	for i, s := range servers {
-		pbServers[i] = serverToProto(s)
+		pbServers[i] = h.serverToProtoWithRanges(ctx, s)
 	}
 
 	return &pb.ListServersResponse{
@@ -187,10 +187,12 @@ func (h *ServerHandler) ListAllocatedPorts(ctx context.Context, req *pb.ListAllo
 }
 
 // serverToProtoWithRanges is serverToProto plus the server's allowed
-// host-port ranges (additive, FR12). ListServers keeps the cheap shape;
-// ranges ride on GetServer only.
+// host-port ranges (additive, FR12).
 func (h *ServerHandler) serverToProtoWithRanges(ctx context.Context, server *manman.Server) *pb.Server {
 	pbServer := serverToProto(server)
+	if h.portRangeRepo == nil {
+		return pbServer
+	}
 	ranges, err := h.portRangeRepo.List(ctx, server.ServerID)
 	if err != nil {
 		return pbServer

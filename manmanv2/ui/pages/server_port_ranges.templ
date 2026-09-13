@@ -100,16 +100,16 @@ templ ServerPortRangesSection(server *manmanpb.Server, portsNotice string, ports
 				<h3 class="text-sm font-semibold text-base-content mb-2">Add a range</h3>
 				<form method="POST" action={ templ.URL(fmt.Sprintf("%s/%d/ports/set", basePath, server.ServerId)) } class="flex flex-col sm:flex-row sm:items-end gap-2 max-w-xl">
 					<div>
-						<label for="port_range_start" class="block text-xs font-medium text-base-content/60 mb-1">Start port</label>
-						<input type="number" id="port_range_start" name="start" min="1" max="65535" required class="input input-bordered input-sm w-32"/>
+						<label for={ fmt.Sprintf("port_range_start_%d", server.ServerId) } class="block text-xs font-medium text-base-content/60 mb-1">Start port</label>
+						<input type="number" id={ fmt.Sprintf("port_range_start_%d", server.ServerId) } name="start" min="1" max="65535" required class="input input-bordered input-sm w-32"/>
 					</div>
 					<div>
-						<label for="port_range_end" class="block text-xs font-medium text-base-content/60 mb-1">End port</label>
-						<input type="number" id="port_range_end" name="end" min="1" max="65535" required class="input input-bordered input-sm w-32"/>
+						<label for={ fmt.Sprintf("port_range_end_%d", server.ServerId) } class="block text-xs font-medium text-base-content/60 mb-1">End port</label>
+						<input type="number" id={ fmt.Sprintf("port_range_end_%d", server.ServerId) } name="end" min="1" max="65535" required class="input input-bordered input-sm w-32"/>
 					</div>
 					<div>
-						<label for="port_range_protocol" class="block text-xs font-medium text-base-content/60 mb-1">Protocol</label>
-						<select id="port_range_protocol" name="protocol" class="select select-bordered select-sm w-32">
+						<label for={ fmt.Sprintf("port_range_protocol_%d", server.ServerId) } class="block text-xs font-medium text-base-content/60 mb-1">Protocol</label>
+						<select id={ fmt.Sprintf("port_range_protocol_%d", server.ServerId) } name="protocol" class="select select-bordered select-sm w-32">
 							for _, p := range allowedPortRangeProtocols {
 								<option value={ p }>{ p }</option>
 							}

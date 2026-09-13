@@ -593,3 +593,68 @@ func TestServerToProto_HostPublicAddressRoundTrip(t *testing.T) {
 		t.Errorf("Expected host_public_address=%q, got: %q", addr, pbPopulated.HostPublicAddress)
 	}
 }
+
+func TestListServers_PopulatesAllowedPortRanges(t *testing.T) {
+	repo := newMockServerRepository()
+	addServer(repo, &manman.Server{ServerID: 1, Name: "srv-1", Status: manman.ServerStatusOnline})
+	addServer(repo, &manman.Server{ServerID: 2, Name: "srv-2", Status: manman.ServerStatusOnline})
+
+	rangeRepo := newMockServerPortRangeRepository()
+	_, err := rangeRepo.Replace(context.Background(), 1, []*manman.ServerAllowedPortRange{
+		{StartPort: 27015, EndPort: 27020, Protocol: "UDP"},
+	})
+	if err != nil {
+		t.Fatalf("Replace ranges: %v", err)
+	}
+
+	handler := NewServerHandler(repo, rangeRepo, nil, nil, nil, nil)
+	resp, err := handler.ListServers(context.Background(), &pb.ListServersRequest{})
+	if err != nil {
+		t.Fatalf("ListServers failed: %v", err)
+	}
+
+	if len(resp.Servers) != 2 {
+		t.Fatalf("expected 2 servers, got %d", len(resp.Servers))
+	}
+
+	var srv1, srv2 *pb.Server
+	for _, s := range resp.Servers {
+		if s.ServerId == 1 {
+			srv1 = s
+		} else if s.ServerId == 2 {
+			srv2 = s
+		}
+	}
+
+	if srv1 == nil || srv2 == nil {
+		t.Fatalf("missing servers in response: %+v", resp.Servers)
+	}
+
+	if len(srv1.AllowedPortRanges) != 1 {
+		t.Fatalf("expected 1 range on srv1, got %d", len(srv1.AllowedPortRanges))
+	}
+	if srv1.AllowedPortRanges[0].Start != 27015 || srv1.AllowedPortRanges[0].End != 27020 || srv1.AllowedPortRanges[0].Protocol != "UDP" {
+		t.Errorf("unexpected range on srv1: %+v", srv1.AllowedPortRanges[0])
+	}
+
+	if len(srv2.AllowedPortRanges) != 0 {
+		t.Errorf("expected 0 ranges on srv2, got %d", len(srv2.AllowedPortRanges))
+	}
+}
+
+func TestListServers_NilPortRangeRepo_DoesNotPanic(t *testing.T) {
+	repo := newMockServerRepository()
+	addServer(repo, &manman.Server{ServerID: 1, Name: "srv-1", Status: manman.ServerStatusOnline})
+
+	handler := NewServerHandler(repo, nil, nil, nil, nil, nil)
+	resp, err := handler.ListServers(context.Background(), &pb.ListServersRequest{})
+	if err != nil {
+		t.Fatalf("ListServers failed: %v", err)
+	}
+	if len(resp.Servers) != 1 {
+		t.Fatalf("expected 1 server, got %d", len(resp.Servers))
+	}
+	if len(resp.Servers[0].AllowedPortRanges) != 0 {
+		t.Errorf("expected empty ranges, got %d", len(resp.Servers[0].AllowedPortRanges))
+	}
+}

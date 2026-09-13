@@ -87,7 +87,18 @@ func (m *mockServerRepository) Get(ctx context.Context, serverID int64) (*manman
 }
 
 func (m *mockServerRepository) List(ctx context.Context, limit, offset int) ([]*manman.Server, error) {
-	return nil, nil
+	out := make([]*manman.Server, 0, len(m.servers))
+	for _, s := range m.servers {
+		out = append(out, s)
+	}
+	if offset >= len(out) {
+		return nil, nil
+	}
+	out = out[offset:]
+	if limit > 0 && len(out) > limit {
+		out = out[:limit]
+	}
+	return out, nil
 }
 
 func (m *mockServerRepository) Delete(ctx context.Context, serverID int64) error {
