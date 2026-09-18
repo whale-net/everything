@@ -25,6 +25,20 @@ type ToolServerRef struct {
 	AllowedTools []string `json:"allowed_tools,omitempty"`
 }
 
+// ToolLoadingMode is an agent_definition row's tool_loading_mode column
+// (FR1): whether a session using that definition loads its full ToolSet up
+// front ("bulk") or discovers tools by search at call time ("search", M4's
+// opt-in). The zero value ("") means "bulk" -- callers must not treat an
+// empty ToolLoadingMode as invalid or distinct from ToolLoadingModeBulk.
+// FR2 guarantees a "bulk" (or unset) definition's behavior stays
+// byte-for-byte unchanged by anything this milestone adds.
+type ToolLoadingMode string
+
+const (
+	ToolLoadingModeBulk   ToolLoadingMode = "bulk"
+	ToolLoadingModeSearch ToolLoadingMode = "search"
+)
+
 // AgentDefinition is an `agent_definition` row (LB5/NFR6): a named,
 // role-shaped tool set plus the model and guardrail defaults a session
 // inherits unless overridden (FR5/FR6/FR7, FR9's required_role).
