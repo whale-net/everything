@@ -263,6 +263,18 @@ func toolResultEventType(callIndex int) string {
 	return fmt.Sprintf("%s:%d", events.EventTypeToolResult, callIndex)
 }
 
+// toolUnlockEventType derives the `type` column a search_tools call's
+// tool_unlock event is committed under (events.go's EventTypeToolUnlock doc
+// comment) -- the same reasoning as toolCallEventType/toolResultEventType
+// above applies: AppendIfAbsent's idempotency key is (session_id, turn,
+// type) only, and one turn may carry more than one search_tools call.
+// callIndex must be the same turn-scoped call index used for that call's
+// paired tool_call/tool_result events, so the three events of one
+// search_tools call are trivially correlatable by index.
+func toolUnlockEventType(callIndex int) string {
+	return fmt.Sprintf("%s:%d", events.EventTypeToolUnlock, callIndex)
+}
+
 // assistantMessageEventType derives the `type` column
 // CommitToolLoopIteration (activities.go) commits for one non-final loop
 // iteration's assistant-message event ("add the inner tool loop"): the
@@ -321,6 +333,25 @@ func marshalToolResultPayload(result tools.Result) (json.RawMessage, error) {
 	})
 	if err != nil {
 		return nil, fmt.Errorf("marshal tool result payload: %w", err)
+	}
+	return raw, nil
+}
+
+// toolUnlockEventPayload is a tool_unlock transcript event's JSON payload
+// (FR5, FR6): the tool names a search_tools call sticky-unlocked for the
+// rest of the session, plus the query that produced them.
+type toolUnlockEventPayload struct {
+	ToolNames []string `json:"tool_names"`
+	Query     string   `json:"query"`
+}
+
+// marshalToolUnlockPayload converts a search_tools call's unlocked tool
+// names and query into the JSON payload committed for its tool_unlock
+// transcript event.
+func marshalToolUnlockPayload(toolNames []string, query string) (json.RawMessage, error) {
+	raw, err := json.Marshal(toolUnlockEventPayload{ToolNames: toolNames, Query: query})
+	if err != nil {
+		return nil, fmt.Errorf("marshal tool unlock payload: %w", err)
 	}
 	return raw, nil
 }

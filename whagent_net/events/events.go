@@ -101,6 +101,20 @@ const (
 	// equality with these constants.
 	EventTypeToolCall   = "tool_call"
 	EventTypeToolResult = "tool_result"
+
+	// EventTypeToolUnlock (issue #2668) is committed, in addition to (never
+	// instead of) the ordinary tool_call/tool_result pair a search_tools
+	// call produces, to durably record which tool names that call
+	// sticky-unlocked for the rest of the session (FR5, FR6): the LB1
+	// shape means an unlock survives a worker restart or workflow replay,
+	// since it is re-derived from Postgres rather than kept in workflow
+	// memory. Like EventTypeToolCall/EventTypeToolResult above, this is a
+	// *prefix*, never the bare committed `type` column value --
+	// whagent_net/worker/context.go's toolUnlockEventType derives
+	// "tool_unlock:<call_index>" for the same AppendIfAbsent idempotency-key
+	// reason (a single turn may carry more than one search_tools call); a
+	// consumer should match it with strings.HasPrefix.
+	EventTypeToolUnlock = "tool_unlock"
 )
 
 // Event is the whagent-net LB1 record: the single definition of a
