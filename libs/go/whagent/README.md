@@ -25,6 +25,15 @@ rest of whagent-net's M1 work.
   web-session (or other) caller-resolution flow a domain server already
   has — see "Mounting the verifying middleware" below.
 
+## Reserved tool name (FR8)
+
+`search_tools` is reserved globally. A consuming domain server must not
+register a tool by this literal name — whagent-net reserves it for its
+own in-process tool-search meta-tool, and refuses to resolve *any* tool
+set from a server whose exposed catalog contains it (a loud error, not a
+silent filter or shadowing), independent of `tool_loading_mode` or a
+ref's `allowed_tools`.
+
 ## The `Claim` (LB3, FR10)
 
 Exactly these fields, and no profile attributes — no email, no display

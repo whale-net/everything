@@ -36,6 +36,13 @@
 //     LB4 -- see idempotency.go -- keeping one idempotency store across
 //     all of its authentication paths, not one per path.
 //
+// # Reserved tool name (FR8)
+//
+// A consuming domain server must not register a tool named search_tools.
+// whagent-net reserves that literal name for its own in-process
+// tool-search meta-tool, and will refuse to resolve a tool set from any
+// server whose catalog contains it -- a loud error, not a silent filter.
+//
 // See README.md for the full contract write-up.
 package whagent
 
