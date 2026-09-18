@@ -1,5 +1,7 @@
 package tools
 
+import "github.com/whale-net/everything/whagent_net/llm"
+
 // SearchToolsName is the reserved meta-tool name (FR8): no configured
 // domain server may expose a real tool by this literal name, in any
 // agent definition's tool set, bulk or search mode alike. The reservation
@@ -9,3 +11,40 @@ package tools
 // goes through. whagent-net itself will later expose search_tools as an
 // in-process meta-tool (#2669) for search-mode tool loading.
 const SearchToolsName = "search_tools"
+
+// searchToolsDefinition is SearchToolsDefinition's package-level literal:
+// built once, at init, so every call to SearchToolsDefinition returns a
+// byte-identical value -- required for the pinned, cache-stable render
+// order a search-mode turn's Tools slice must hold (root plan #2602 scope
+// note; see listdefs.go's ListToolDefinitions doc comment).
+var searchToolsDefinition = llm.ToolDefinition{
+	Name: SearchToolsName,
+	Description: "Search the full catalog of tools available to this agent " +
+		"and unlock any that match a natural-language query. A tool this " +
+		"call matches becomes available to call directly for the rest of " +
+		"this session -- it does not need to be searched for again. Call " +
+		"this again later, with a different query, whenever the task's " +
+		"needs change and none of the currently unlocked tools cover it.",
+	Parameters: map[string]any{
+		"type": "object",
+		"properties": map[string]any{
+			"query": map[string]any{
+				"type":        "string",
+				"description": "A natural-language description of the capability or tool needed right now.",
+			},
+		},
+		"required": []string{"query"},
+	},
+}
+
+// SearchToolsDefinition returns the reserved meta-tool's llm.ToolDefinition
+// (FR3/FR4): a search-mode agent definition's turn-1 Tools is exactly this
+// one definition (listdefs.go), and every later search-mode turn offers it
+// alongside whatever has been unlocked so far (FR7). Always returns
+// searchToolsDefinition's own value -- a struct of only value types
+// (string/map[string]any built from literals), so two calls in the same
+// process are byte-identical, and JSON-marshal identically, per this
+// package's cache-stability requirement.
+func SearchToolsDefinition() llm.ToolDefinition {
+	return searchToolsDefinition
+}

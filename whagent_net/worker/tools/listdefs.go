@@ -41,6 +41,20 @@ func ListToolDefinitions(ctx context.Context, issuer *persona.Issuer, sess *sess
 		return nil, fmt.Errorf("tools: ListToolDefinitions: sess is nil")
 	}
 
+	return candidateDefinitions(ctx, issuer, sess, agentID, toolSet)
+}
+
+// candidateDefinitions is the Candidates path every ListToolDefinitions
+// caller resolves through: it connects to every entry of toolSet, lists
+// each server's exposed tools, rejects FR8's reserved SearchToolsName
+// wherever it appears in a server's own catalog, and narrows the rest to
+// each ref's non-empty AllowedTools (C22, isAllowed) -- the one place that
+// narrowing happens. ListToolDefinitions' bulk path above calls this
+// directly; issue #2669's search-mode path (added on top of this scaffold)
+// calls it too, to build the pool search-mode unlock names are matched
+// against, so a name search_tools unlocked can never surface a tool
+// AllowedTools would not otherwise permit (NFR2).
+func candidateDefinitions(ctx context.Context, issuer *persona.Issuer, sess *session.Session, agentID string, toolSet []session.ToolServerRef) ([]llm.ToolDefinition, error) {
 	var defs []llm.ToolDefinition
 	for _, ref := range toolSet {
 		token, err := mintCredential(ctx, issuer, sess, agentID, ref.ServerURL)
