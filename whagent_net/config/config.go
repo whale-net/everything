@@ -96,6 +96,12 @@ type AgentDefinitionConfig struct {
 	// left at the zero value) -- same level as MaxTurns/MaxCostUSD above.
 	MaxToolIterations int    `yaml:"max_tool_iterations"`
 	RequiredRole      string `yaml:"required_role"`
+	// ToolLoadingMode decodes 1:1 into
+	// whagent_net/session.AgentDefinition.ToolLoadingMode (FR1): "" or
+	// "bulk" means the session loads its full ToolSet up front (the
+	// only behavior before M4); "search" is the FR3/FR4 opt-in to
+	// search-based tool discovery. Validate rejects any other value.
+	ToolLoadingMode string `yaml:"tool_loading_mode"`
 }
 
 // document is agents.yaml's top-level shape.
@@ -202,6 +208,12 @@ func Validate(modelDefs []ModelDefinitionConfig, agents []AgentDefinitionConfig)
 			if ref.ServerURL == "" {
 				return fmt.Errorf("agent %q: tool_set[%d]: server_url is required", a.AgentID, j)
 			}
+		}
+
+		switch a.ToolLoadingMode {
+		case "", "bulk", "search":
+		default:
+			return fmt.Errorf("agent %q: tool_loading_mode %q must be \"bulk\" or \"search\"", a.AgentID, a.ToolLoadingMode)
 		}
 	}
 	return nil

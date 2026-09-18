@@ -218,7 +218,8 @@ directly, by hand, against Postgres. `agent_definition` stays a real,
 versioned table (LB5/NFR6), never a config-lookup shortcut — never edit a
 version already pinned to a session in place; insert a new version
 instead whenever a definition's fields (`model`, `tool_set`, `max_turns`,
-`max_cost_usd`, `max_tool_iterations`, `required_role`, `scope`) change.
+`max_cost_usd`, `max_tool_iterations`, `required_role`, `scope`,
+`tool_loading_mode`) change.
 
 **`scope` is optional (migration 009/010).** When set, it names the one
 grant-scope (often, but not required to be, an `AGENTS.md` Domains-table
@@ -237,7 +238,7 @@ For example, to insert the `audience-score-system-research` definition
 
 ```sql
 INSERT INTO agent_definition
-  (agent_id, scope, version, model, tool_set, max_turns, max_cost_usd, required_role)
+  (agent_id, scope, version, model, tool_set, max_turns, max_cost_usd, required_role, tool_loading_mode)
 VALUES (
   'audience-score-system-research',
   'audience_score_system',
@@ -246,9 +247,15 @@ VALUES (
   '[{"server_url": "http://audience-score-system-mcp.audience-score-system-local-dev.svc.cluster.local:8081/", "allowed_tools": null}]',
   100,
   1.0,
-  'whagent-audience-score-system-research'
+  'whagent-audience-score-system-research',
+  'bulk'
 );
 ```
+
+Omitting `tool_loading_mode` entirely also works — the column defaults
+to `'bulk'` (migration 013). Set it to `'search'` instead to opt a
+definition into the FR3/FR4 search-based tool-discovery mode this
+milestone adds the plumbing for.
 
 To further constrain that same agent to only two of the server's tools
 (C22 — e.g. a research-only agent that must never call a write tool the
