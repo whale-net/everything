@@ -49,6 +49,13 @@
 #                      StartSession handler) -- see whagent_net/README.md
 #                      "Keycloak role" for how to grant it (Implementation
 #                      phase closes out that doc section)
+#   - tool_loading_mode: "bulk" (default) or "search" (M4 FR1) -- "bulk"
+#                      loads this definition's full tool_set up front, the
+#                      only behavior before M4; "search" is the FR3/FR4
+#                      opt-in to search-based tool discovery at call time.
+#                      Unset (omitted) means "bulk". This milestone ships
+#                      the capability only -- no shipped agent below opts
+#                      in yet.
 #
 # `model_definitions` entries (session.ModelDefinition, upserted into the
 # `model_definition` table by `name` -- NOT versioned/SCD2 like

@@ -25,6 +25,20 @@ type ToolServerRef struct {
 	AllowedTools []string `json:"allowed_tools,omitempty"`
 }
 
+// ToolLoadingMode is an agent_definition row's tool_loading_mode column
+// (FR1): whether a session using that definition loads its full ToolSet up
+// front ("bulk") or discovers tools by search at call time ("search", M4's
+// opt-in). The zero value ("") means "bulk" -- callers must not treat an
+// empty ToolLoadingMode as invalid or distinct from ToolLoadingModeBulk.
+// FR2 guarantees a "bulk" (or unset) definition's behavior stays
+// byte-for-byte unchanged by anything this milestone adds.
+type ToolLoadingMode string
+
+const (
+	ToolLoadingModeBulk   ToolLoadingMode = "bulk"
+	ToolLoadingModeSearch ToolLoadingMode = "search"
+)
+
 // AgentDefinition is an `agent_definition` row (LB5/NFR6): a named,
 // role-shaped tool set plus the model and guardrail defaults a session
 // inherits unless overridden (FR5/FR6/FR7, FR9's required_role).
@@ -72,6 +86,7 @@ type AgentDefinition struct {
 	// already follow.
 	MaxToolIterations int
 	RequiredRole      *string
+	ToolLoadingMode   ToolLoadingMode
 	CreatedAt         time.Time
 }
 
@@ -124,14 +139,14 @@ type agentDefinitionStore struct{ pool *pgxpool.Pool }
 
 var _ AgentDefinitionStore = agentDefinitionStore{}
 
-const agentDefinitionColumns = `id, agent_id, scope, version, model, model_definition_id, tool_set, max_turns, max_cost_usd, max_tool_iterations, required_role, created_at`
+const agentDefinitionColumns = `id, agent_id, scope, version, model, model_definition_id, tool_set, max_turns, max_cost_usd, max_tool_iterations, required_role, tool_loading_mode, created_at`
 
 func scanAgentDefinition(row pgx.Row) (*AgentDefinition, error) {
 	var def AgentDefinition
 	var toolSet json.RawMessage
 	if err := row.Scan(
 		&def.ID, &def.AgentID, &def.Scope, &def.Version, &def.Model, &def.ModelDefinitionID, &toolSet,
-		&def.MaxTurns, &def.MaxCostUSD, &def.MaxToolIterations, &def.RequiredRole, &def.CreatedAt,
+		&def.MaxTurns, &def.MaxCostUSD, &def.MaxToolIterations, &def.RequiredRole, &def.ToolLoadingMode, &def.CreatedAt,
 	); err != nil {
 		return nil, err
 	}
@@ -205,15 +220,24 @@ func (s agentDefinitionStore) GetVersion(ctx context.Context, agentID string, ve
 // except id and created_at (a replace of an already-seeded definition
 // keeps its original surrogate id and creation time rather than minting a
 // new one). Fills in ID and CreatedAt on def either way.
+//
+// A zero-valued def.ToolLoadingMode is normalized to ToolLoadingModeBulk
+// before writing: the column is NOT NULL, and this explicit-column
+// INSERT bypasses the schema default that would otherwise apply.
 func (s agentDefinitionStore) Upsert(ctx context.Context, def *AgentDefinition) error {
 	toolSet, err := json.Marshal(def.ToolSet)
 	if err != nil {
 		return fmt.Errorf("marshal tool_set: %w", err)
 	}
 
+	toolLoadingMode := def.ToolLoadingMode
+	if toolLoadingMode == "" {
+		toolLoadingMode = ToolLoadingModeBulk
+	}
+
 	err = s.pool.QueryRow(ctx, `
-		INSERT INTO agent_definition (agent_id, scope, version, model, model_definition_id, tool_set, max_turns, max_cost_usd, max_tool_iterations, required_role)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+		INSERT INTO agent_definition (agent_id, scope, version, model, model_definition_id, tool_set, max_turns, max_cost_usd, max_tool_iterations, required_role, tool_loading_mode)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
 		ON CONFLICT (agent_id, version) DO UPDATE SET
 			scope = EXCLUDED.scope,
 			model = EXCLUDED.model,
@@ -222,12 +246,14 @@ func (s agentDefinitionStore) Upsert(ctx context.Context, def *AgentDefinition) 
 			max_turns = EXCLUDED.max_turns,
 			max_cost_usd = EXCLUDED.max_cost_usd,
 			max_tool_iterations = EXCLUDED.max_tool_iterations,
-			required_role = EXCLUDED.required_role
+			required_role = EXCLUDED.required_role,
+			tool_loading_mode = EXCLUDED.tool_loading_mode
 		RETURNING id, created_at
-	`, def.AgentID, def.Scope, def.Version, def.Model, def.ModelDefinitionID, toolSet, def.MaxTurns, def.MaxCostUSD, def.MaxToolIterations, def.RequiredRole).Scan(&def.ID, &def.CreatedAt)
+	`, def.AgentID, def.Scope, def.Version, def.Model, def.ModelDefinitionID, toolSet, def.MaxTurns, def.MaxCostUSD, def.MaxToolIterations, def.RequiredRole, toolLoadingMode).Scan(&def.ID, &def.CreatedAt)
 	if err != nil {
 		return fmt.Errorf("upsert agent definition: %w", err)
 	}
+	def.ToolLoadingMode = toolLoadingMode
 	return nil
 }
 
