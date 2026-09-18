@@ -198,6 +198,118 @@ func TestAgentDefinitionStore_AssignToSession_TwiceClosesFirstOpensOne(t *testin
 	assert.Equal(t, 1, closedCount, "the first assignment (agent-a) must be closed (valid_to set), not deleted")
 }
 
+// TestAgentDefinitionStore_ToolLoadingMode_UnsetRoundTripsAsBulk proves an
+// AgentDefinition written with ToolLoadingMode left at its zero value
+// round-trips as ToolLoadingModeBulk through both GetLatest and GetVersion
+// (FR1: the zero value means bulk, by construction, not by caller
+// convention alone).
+func TestAgentDefinitionStore_ToolLoadingMode_UnsetRoundTripsAsBulk(t *testing.T) {
+	ctx := context.Background()
+	s, _ := newStore(t)
+
+	def := newTestAgentDefinition("bulk-default-agent", 1)
+	require.NoError(t, s.AgentDefinitions().Upsert(ctx, def))
+	assert.Equal(t, session.ToolLoadingModeBulk, def.ToolLoadingMode, "Upsert must normalize the zero value on def itself")
+
+	latest, err := s.AgentDefinitions().GetLatest(ctx, "bulk-default-agent")
+	require.NoError(t, err)
+	require.NotNil(t, latest)
+	assert.Equal(t, session.ToolLoadingModeBulk, latest.ToolLoadingMode)
+
+	version, err := s.AgentDefinitions().GetVersion(ctx, "bulk-default-agent", 1)
+	require.NoError(t, err)
+	require.NotNil(t, version)
+	assert.Equal(t, session.ToolLoadingModeBulk, version.ToolLoadingMode)
+}
+
+// TestAgentDefinitionStore_ToolLoadingMode_SearchRoundTrips proves an
+// AgentDefinition written with ToolLoadingModeSearch round-trips as
+// "search", not silently coerced to bulk.
+func TestAgentDefinitionStore_ToolLoadingMode_SearchRoundTrips(t *testing.T) {
+	ctx := context.Background()
+	s, _ := newStore(t)
+
+	def := newTestAgentDefinition("search-agent", 1)
+	def.ToolLoadingMode = session.ToolLoadingModeSearch
+	require.NoError(t, s.AgentDefinitions().Upsert(ctx, def))
+
+	latest, err := s.AgentDefinitions().GetLatest(ctx, "search-agent")
+	require.NoError(t, err)
+	require.NotNil(t, latest)
+	assert.Equal(t, session.ToolLoadingModeSearch, latest.ToolLoadingMode)
+
+	version, err := s.AgentDefinitions().GetVersion(ctx, "search-agent", 1)
+	require.NoError(t, err)
+	require.NotNil(t, version)
+	assert.Equal(t, session.ToolLoadingModeSearch, version.ToolLoadingMode)
+}
+
+// TestAgentDefinitionStore_ToolLoadingMode_UpsertReplaceTakesEffect proves
+// Upsert's ON CONFLICT DO UPDATE actually replaces tool_loading_mode on an
+// existing (agent_id, version), in both directions -- omitting the column
+// from the DO UPDATE SET list would silently strand the row on whatever
+// mode it was first written with.
+func TestAgentDefinitionStore_ToolLoadingMode_UpsertReplaceTakesEffect(t *testing.T) {
+	ctx := context.Background()
+	s, _ := newStore(t)
+
+	def := newTestAgentDefinition("flip-agent", 1)
+	require.NoError(t, s.AgentDefinitions().Upsert(ctx, def))
+
+	toSearch := newTestAgentDefinition("flip-agent", 1)
+	toSearch.ToolLoadingMode = session.ToolLoadingModeSearch
+	require.NoError(t, s.AgentDefinitions().Upsert(ctx, toSearch))
+
+	afterSearch, err := s.AgentDefinitions().GetVersion(ctx, "flip-agent", 1)
+	require.NoError(t, err)
+	require.NotNil(t, afterSearch)
+	assert.Equal(t, session.ToolLoadingModeSearch, afterSearch.ToolLoadingMode, "replacing bulk -> search must take effect")
+
+	backToBulk := newTestAgentDefinition("flip-agent", 1)
+	backToBulk.ToolLoadingMode = session.ToolLoadingModeBulk
+	require.NoError(t, s.AgentDefinitions().Upsert(ctx, backToBulk))
+
+	afterBulk, err := s.AgentDefinitions().GetVersion(ctx, "flip-agent", 1)
+	require.NoError(t, err)
+	require.NotNil(t, afterBulk)
+	assert.Equal(t, session.ToolLoadingModeBulk, afterBulk.ToolLoadingMode, "replacing search -> bulk must take effect")
+}
+
+// TestAgentDefinition_ToolLoadingMode_RawInsertOmittingColumn_DefaultsToBulk
+// proves migration 013's column default, not just the Go layer's own
+// zero-value normalization: a row inserted by raw SQL that never mentions
+// tool_loading_mode at all reads back as 'bulk'.
+func TestAgentDefinition_ToolLoadingMode_RawInsertOmittingColumn_DefaultsToBulk(t *testing.T) {
+	ctx := context.Background()
+	s, db := newStore(t)
+
+	_, err := db.Pool.Exec(ctx, `
+		INSERT INTO agent_definition (agent_id, version, model, tool_set)
+		VALUES ('raw-insert-agent', 1, 'test-model', '[]'::jsonb)
+	`)
+	require.NoError(t, err)
+
+	got, err := s.AgentDefinitions().GetVersion(ctx, "raw-insert-agent", 1)
+	require.NoError(t, err)
+	require.NotNil(t, got)
+	assert.Equal(t, session.ToolLoadingModeBulk, got.ToolLoadingMode)
+}
+
+// TestAgentDefinition_ToolLoadingMode_CheckConstraint_RejectsUnknownValue
+// proves migration 013's CHECK constraint is real DB enforcement, not just
+// an application-layer rule (config.Validate's own check) -- a raw SQL
+// insert of an unrecognized value must be rejected outright.
+func TestAgentDefinition_ToolLoadingMode_CheckConstraint_RejectsUnknownValue(t *testing.T) {
+	ctx := context.Background()
+	_, db := newStore(t)
+
+	_, err := db.Pool.Exec(ctx, `
+		INSERT INTO agent_definition (agent_id, version, model, tool_set, tool_loading_mode)
+		VALUES ('bad-mode-agent', 1, 'test-model', '[]'::jsonb, 'semantic')
+	`)
+	assert.Error(t, err, "an unrecognized tool_loading_mode must be rejected by the CHECK constraint")
+}
+
 // TestAgentDefinitionStore_PartialUniqueIndex_RejectsTwoOpenRows proves the
 // partial unique index itself is real DB enforcement (NFR6): inserting a
 // second open (valid_to IS NULL) session_agent row directly -- bypassing

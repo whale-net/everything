@@ -6,6 +6,7 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"gopkg.in/yaml.v3"
 )
 
 func strPtr(s string) *string { return &s }
@@ -227,5 +228,58 @@ func TestLoad_EmbeddedAgentsYAML_ParsesAndValidates(t *testing.T) {
 		for _, ref := range a.ToolSet {
 			assert.True(t, strings.HasPrefix(ref.ServerURL, "http"), "tool_set server_url %q should be an http(s) URL", ref.ServerURL)
 		}
+	}
+}
+
+// TestAgentDefinitionConfig_ToolLoadingMode_Decodes proves a
+// `tool_loading_mode: search` key decodes 1:1 onto
+// AgentDefinitionConfig.ToolLoadingMode (FR1) -- the same yaml.Unmarshal
+// path Load uses on the embedded agents.yaml.
+func TestAgentDefinitionConfig_ToolLoadingMode_Decodes(t *testing.T) {
+	var agent AgentDefinitionConfig
+	require.NoError(t, yaml.Unmarshal([]byte(`
+agent_id: search-agent
+tool_loading_mode: search
+`), &agent))
+	assert.Equal(t, "search", agent.ToolLoadingMode)
+}
+
+// TestAgentDefinitionConfig_ToolLoadingMode_AbsentDecodesToEmptyString
+// proves an entry with no tool_loading_mode key at all decodes to the zero
+// value ("") -- distinct from an explicit "bulk" but treated identically by
+// Validate and by session.ToolLoadingMode's zero-value convention.
+func TestAgentDefinitionConfig_ToolLoadingMode_AbsentDecodesToEmptyString(t *testing.T) {
+	var agent AgentDefinitionConfig
+	require.NoError(t, yaml.Unmarshal([]byte(`
+agent_id: no-mode-agent
+`), &agent))
+	assert.Equal(t, "", agent.ToolLoadingMode)
+}
+
+// TestValidate_ToolLoadingMode_AcceptsEmptyBulkAndSearch proves Validate's
+// three accepted values (FR1: "" and "bulk" both mean bulk, "search" is the
+// FR3/FR4 opt-in).
+func TestValidate_ToolLoadingMode_AcceptsEmptyBulkAndSearch(t *testing.T) {
+	for _, mode := range []string{"", "bulk", "search"} {
+		agent := validAgent()
+		agent.ToolLoadingMode = mode
+		assert.NoError(t, Validate(nil, []AgentDefinitionConfig{agent}), "tool_loading_mode %q should be accepted", mode)
+	}
+}
+
+// TestValidate_ToolLoadingMode_RejectsUnknownValue_NamesAgentAndValue
+// proves an invalid tool_loading_mode fails Validate loudly, naming both
+// the offending agent_id and the bad value, for values that could plausibly
+// be a typo of a valid one (wrong case, wrong separator) or arbitrary text.
+func TestValidate_ToolLoadingMode_RejectsUnknownValue_NamesAgentAndValue(t *testing.T) {
+	for _, mode := range []string{"bulk_mode", "SEARCH", "arbitrary text"} {
+		agent := validAgent()
+		agent.AgentID = "bad-mode-agent"
+		agent.ToolLoadingMode = mode
+
+		err := Validate(nil, []AgentDefinitionConfig{agent})
+		require.Error(t, err, "tool_loading_mode %q should be rejected", mode)
+		assert.Contains(t, err.Error(), "bad-mode-agent")
+		assert.Contains(t, err.Error(), mode)
 	}
 }
