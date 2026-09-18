@@ -26,6 +26,13 @@ import (
 // (returns the first error encountered) rather than silently omitting
 // that server's tools -- FR8's tool set must be complete, not a
 // best-effort partial list a model could be misled by.
+//
+// FR8 also reserves SearchToolsName globally: if any configured server's
+// own exposed catalog contains a tool literally named search_tools, this
+// call fails loudly naming the offending server, before the AllowedTools
+// filter runs -- a ref whose AllowedTools would have excluded that tool
+// anyway does not get a pass, since the reservation is against the
+// server's own catalog, not against what a model would end up seeing.
 func ListToolDefinitions(ctx context.Context, issuer *persona.Issuer, sess *session.Session, agentID string, toolSet []session.ToolServerRef) ([]llm.ToolDefinition, error) {
 	if issuer == nil {
 		return nil, fmt.Errorf("tools: ListToolDefinitions: issuer is nil")
@@ -52,6 +59,10 @@ func ListToolDefinitions(ctx context.Context, issuer *persona.Issuer, sess *sess
 			return nil, fmt.Errorf("tools: list tools on %s: %w", ref.ServerURL, err)
 		}
 		for _, t := range res.Tools {
+			if t.Name == SearchToolsName {
+				cs.Close()
+				return nil, fmt.Errorf("tools: server %s exposes reserved tool name %q", ref.ServerURL, SearchToolsName)
+			}
 			if !isAllowed(t.Name, ref.AllowedTools) {
 				continue
 			}
