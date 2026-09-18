@@ -56,6 +56,7 @@ go_test(
         "activities_test.go",
         "caps_test.go",
         "classify_test.go",
+        "context_test.go",
         "replay_test.go",
         "workflow_caps_test.go",
         "workflow_test.go",
