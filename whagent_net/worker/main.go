@@ -149,6 +149,11 @@ func run() error {
 	// both.
 	w.RegisterActivityWithOptions(acts.ListToolDefinitions, activity.RegisterOptions{Name: ActivityListToolDefinitions})
 	w.RegisterActivityWithOptions(acts.DispatchTool, activity.RegisterOptions{Name: ActivityDispatchTool})
+	// UnlockedTools (issue #2668): FR6's read side -- nothing in
+	// processTurn calls it yet (#2669 does), registered now the same as
+	// the activities above so the worker binary exposes it from this
+	// task onward.
+	w.RegisterActivityWithOptions(acts.UnlockedTools, activity.RegisterOptions{Name: ActivityUnlockedTools})
 
 	// Transcript archival (archive.go): only registered/scheduled when a
 	// cold tier is actually configured. See archive.go's package doc

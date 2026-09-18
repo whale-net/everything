@@ -199,8 +199,13 @@ func marshalMessagePayload(m llm.Message) (json.RawMessage, error) {
 // A tool_call event itself (informational -- FR2's transcript visibility)
 // is intentionally not turned into a message here: the assistant_message
 // event it accompanies already carries the identical call in its
-// ToolCalls field. Any other/future event type is skipped rather than
-// failing the whole turn.
+// ToolCalls field. A tool_unlock event (toolUnlockEventType's
+// "tool_unlock:<call_index>" prefix, FR5/FR6) is likewise intentionally
+// not turned into a message here: it is whagent-net's own bookkeeping for
+// UnlockedTools (activities.go) to read back, not part of the model's view
+// of a search_tools call -- that view is exactly the tool_call/tool_result
+// pair above. Both fall through the switch's default case below. Any
+// other/future event type is skipped rather than failing the whole turn.
 func eventsToMessages(evs []events.Event) ([]llm.Message, error) {
 	messages := make([]llm.Message, 0, len(evs))
 	for _, ev := range evs {

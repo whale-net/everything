@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strings"
 
 	"github.com/google/uuid"
 
@@ -58,6 +59,14 @@ const (
 	// turn_usage row once the loop's final iteration commits via
 	// ActivityCommitTurn. See that activity's doc comment below.
 	ActivityCommitToolLoopIteration = "CommitToolLoopIteration"
+
+	// ActivityUnlockedTools is issue #2668's read-side activity for FR6's
+	// sticky-unlocked tool set: derives a session's ordered,
+	// de-duplicated list of every tool a search_tools call has ever
+	// unlocked, by reading the tool_unlock events (context.go's
+	// toolUnlockEventType/toolUnlockEventPayload) back out of the whole
+	// transcript. See that activity's doc comment below.
+	ActivityUnlockedTools = "UnlockedTools"
 )
 
 // Activities groups the per-turn activities SessionWorkflow drives
@@ -782,4 +791,70 @@ func (a *Activities) DispatchTool(ctx context.Context, in DispatchToolInput) (Di
 	}
 
 	return DispatchToolResult{Result: result}, nil
+}
+
+// UnlockedToolsInput is UnlockedTools' activity input.
+type UnlockedToolsInput struct {
+	SessionID uuid.UUID
+}
+
+// UnlockedToolsResult is UnlockedTools' activity result.
+type UnlockedToolsResult struct {
+	// ToolNames is every tool name a search_tools call has ever unlocked
+	// for this session (FR6), in first-unlock order with duplicates
+	// removed -- a name unlocked again on a later turn keeps its original
+	// position. See UnlockedTools' doc comment for why this ordering is
+	// load-bearing rather than incidental.
+	ToolNames []string
+}
+
+// UnlockedTools is issue #2668's read side of FR6's sticky-unlocked tool
+// set: reads sessionID's WHOLE transcript (readWholeTranscript, context.go
+// -- never the context-budgeted projection BuildContext selects, since an
+// unlock must stay effective for the life of the session even once its
+// originating tool_unlock event ages out of a turn's maxContextEvents
+// window), selects every event whose Type carries the
+// events.EventTypeToolUnlock prefix (toolUnlockEventType, context.go) in
+// seq order, decodes each toolUnlockEventPayload, and folds every payload's
+// ToolNames into one de-duplicated slice.
+//
+// Ordering is load-bearing, not incidental: this slice is what issue
+// #2669 renders a search-mode session's Tools from, and the root plan's
+// scope note (#2602) requires that list to be byte-stable turn-over-turn
+// for prompt-cache prefix matching. A name's position is fixed the first
+// time it is unlocked; a later re-unlock of the same name is a no-op for
+// ordering purposes. Never build the result from a Go map's iteration
+// order, never sort it, and never re-derive it from anything whose order
+// depends on later session state -- any of those would make the returned
+// slice non-deterministic across calls or across a workflow replay.
+func (a *Activities) UnlockedTools(ctx context.Context, in UnlockedToolsInput) (UnlockedToolsResult, error) {
+	if a.Store == nil {
+		return UnlockedToolsResult{}, fmt.Errorf("worker: Activities.Store is nil")
+	}
+
+	evs, err := readWholeTranscript(ctx, a.Store, in.SessionID)
+	if err != nil {
+		return UnlockedToolsResult{}, fmt.Errorf("unlocked tools: read transcript: %w", err)
+	}
+
+	seen := make(map[string]bool)
+	names := make([]string, 0)
+	for _, ev := range evs {
+		if !strings.HasPrefix(ev.Type, events.EventTypeToolUnlock+":") {
+			continue
+		}
+		var payload toolUnlockEventPayload
+		if err := json.Unmarshal(ev.Payload, &payload); err != nil {
+			return UnlockedToolsResult{}, fmt.Errorf("unlocked tools: unmarshal tool unlock payload for event %s: %w", ev.EventID, err)
+		}
+		for _, name := range payload.ToolNames {
+			if seen[name] {
+				continue
+			}
+			seen[name] = true
+			names = append(names, name)
+		}
+	}
+
+	return UnlockedToolsResult{ToolNames: names}, nil
 }
