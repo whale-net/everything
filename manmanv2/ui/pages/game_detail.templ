@@ -612,17 +612,18 @@ templ GameDetail(data GameDetailPageData) {
 						}
 					</dl>
 				</div>
-			</div>
 
-			<!--
-				View More (Game Configurations, Environment & Ports, Addon
-				Path Presets, Workshop Libraries): collapsed by default,
-				since these are configuration/library concerns an operator
-				checking status doesn't need on every visit. Not deleted,
-				just one click away instead of a separate "Configuration"
-				tab.
-			-->
-			if data.IsAdmin {
+				<!--
+					View More (Game Configurations, Environment & Ports, Addon
+					Path Presets, Workshop Libraries): collapsed by default,
+					since these are configuration/library concerns an operator
+					checking status doesn't need on every visit. Not deleted,
+					just one click away instead of a separate "Configuration"
+					tab. Scoped inside tab-panel-overview (x-show="activeTab
+					=== 'overview'" above) so it doesn't also render on the
+					Console & Logs / Advanced tabs.
+				-->
+				if data.IsAdmin {
 				<div id="game-detail-view-more" x-data="{ expanded: false }" class="card bg-base-100 border border-base-300 shadow-sm mb-6 overflow-hidden">
 					<button type="button" @click="expanded = !expanded" class="w-full flex justify-between items-center p-4 border-b border-base-300 hover:bg-base-200 transition-colors">
 						<h2 class="text-lg font-semibold text-base-content">
@@ -834,6 +835,7 @@ templ GameDetail(data GameDetailPageData) {
 					</div>
 				</div>
 			}
+			</div>
 
 			<!-- TAB 2: CONSOLE & LOGS (Live stream + log history) -->
 			<div id="tab-panel-logs" x-show="activeTab === 'logs'" x-cloak>

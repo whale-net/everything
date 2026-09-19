@@ -523,10 +523,6 @@ func TestBuildGameRows_DeploymentsResolveViaConfigJoin(t *testing.T) {
 	}
 }
 
-// TestHandleGames_WD1WD6_NoPlayerCountOrLastPlayed guards WD1 and WD6: the
-// collapsed row must never render a player count, a "last played" value,
-// or an aggregate rollup string -- documented, intentional divergences
-// from 90-v2-games.
 // TestHandleGames_WD1WD6_NoPlayerCountOrLastPlayed guards WD1/WD6: no
 // player *count* or "last played" value anywhere on the collapsed or
 // expanded row. This deliberately checks for those specific phrases, not a
@@ -550,8 +546,6 @@ func TestHandleGames_WD1WD6_NoPlayerCountOrLastPlayed(t *testing.T) {
 	}
 }
 
-// TestHandleGames_FR2_NoSGCTerminology guards FR2: no user-facing display
-// text on the Games page may contain "SGC" or "server game config".
 // sgcWordRe matches a standalone "sgc" -- case-insensitive, not part of a
 // longer identifier like the ops panel's internal hidden form field
 // name="sgc_id" (GameOverview/overviewDeploymentContent, shared by /games
