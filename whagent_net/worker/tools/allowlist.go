@@ -23,3 +23,21 @@ func isAllowed(name string, allowed []string) bool {
 	}
 	return false
 }
+
+// isUnlocked reports whether name is in unlocked (FR9: search-mode
+// dispatch's own gate, dispatch.go's resolveTarget) -- exact-match, no
+// wildcarding, the same shape as isAllowed above. Unlike isAllowed, a
+// nil/empty unlocked list means "nothing unlocked yet", not "allow
+// everything" -- the opposite of isAllowed's convention, since an empty
+// AllowedTools is the server's/agent-definition's own "no restriction"
+// signal, while an empty Unlocked is simply a search-mode session that
+// has not called search_tools yet and so must not be able to dispatch
+// anything beyond search_tools itself.
+func isUnlocked(name string, unlocked []string) bool {
+	for _, u := range unlocked {
+		if u == name {
+			return true
+		}
+	}
+	return false
+}

@@ -149,6 +149,17 @@ type DispatchInput struct {
 	CallIndex int
 	// Call is the model-requested tool call (llm.ToolCall) to dispatch.
 	Call llm.ToolCall
+	// Mode and Unlocked (FR9) are the same two values
+	// tools.ListToolDefinitions resolved this turn's `Tools` from --
+	// dispatch and offer must agree, the same way isAllowed already keeps
+	// them in agreement for allowed_tools (C22). Mode != ToolLoadingMode
+	// Search (including the zero value) leaves resolveTarget's existing
+	// per-ref isAllowed check as the only gate (FR2); Mode == Search
+	// additionally refuses any call.Name that is neither SearchToolsName
+	// nor in Unlocked (isUnlocked, allowlist.go), before any credential is
+	// minted or server connected for it.
+	Mode     session.ToolLoadingMode
+	Unlocked []string
 }
 
 // Dispatcher dispatches one turn's tool calls to the agent definition's
