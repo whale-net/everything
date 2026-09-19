@@ -8,6 +8,7 @@ package main
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"strings"
 	"testing"
 
@@ -290,8 +291,14 @@ func bigToolDefsForBuildContextTest() []llm.ToolDefinition {
 // proves FR10's (issue #2673) "a bulk-mode session's accounting is
 // untouched" for the >maxContextEvents truncation case: BuildContext with
 // a bulk (zero-valued ToolLoadingMode) definition produces byte-identical
-// EventIDs whether or not Tools is set, and still truncates to exactly
-// maxContextEvents -- today's flat placeholder, not fitToBudget.
+// EventIDs whether or not a turn_tool_defs row exists for this turn, and
+// still truncates to exactly maxContextEvents -- today's flat placeholder,
+// not fitToBudget. BuildContext no longer receives tools as a
+// BuildContextInput field (ARCHITECTURE.md "Activity payload discipline");
+// it only ever re-reads turn_tool_defs for a search-mode definition
+// (context.go), so this test writes the row directly to prove bulk mode
+// really does skip that read entirely, not merely that it was never asked
+// to use one.
 func TestActivities_BuildContext_BulkMode_IgnoresToolsAndMatchesLegacyTruncation(t *testing.T) {
 	ctx := context.Background()
 	store, _ := newTestStore(t)
@@ -312,19 +319,22 @@ func TestActivities_BuildContext_BulkMode_IgnoresToolsAndMatchesLegacyTruncation
 	require.NoError(t, err)
 
 	// A retried call for the SAME (session, turn) is idempotent
-	// (BuildContext's doc comment), so calling it again with a large Tools
-	// slice attached isolates whether bulk mode's truncation depends on
-	// Tools at all -- it must not.
+	// (BuildContext's doc comment), so calling it again after a large
+	// turn_tool_defs row has been written for this turn isolates whether
+	// bulk mode's truncation depends on it at all -- it must not.
+	encoded, err := json.Marshal(bigToolDefsForBuildContextTest())
+	require.NoError(t, err)
+	require.NoError(t, store.Transcript().SaveTurnToolDefs(ctx, sess.SessionID, turn, encoded))
+
 	withTools, err := a.BuildContext(ctx, BuildContextInput{
 		SessionID:  sess.SessionID,
 		Turn:       turn,
 		Input:      "hello",
 		Definition: session.AgentDefinition{ToolLoadingMode: session.ToolLoadingModeBulk},
-		Tools:      bigToolDefsForBuildContextTest(),
 	})
 	require.NoError(t, err)
 
-	assert.Equal(t, withoutTools.EventIDs, withTools.EventIDs, "bulk mode must ignore Tools entirely -- byte-identical output with or without it, for the same transcript")
+	assert.Equal(t, withoutTools.EventIDs, withTools.EventIDs, "bulk mode must ignore the turn_tool_defs row entirely -- byte-identical output with or without one present, for the same transcript")
 	assert.Len(t, withTools.EventIDs, maxContextEvents, "bulk mode must still truncate to exactly maxContextEvents, unchanged by FR10")
 }
 

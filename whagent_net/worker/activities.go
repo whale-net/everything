@@ -246,16 +246,6 @@ type CallModelInput struct {
 	// verbatim into llm.Request.Provider -- see that field's doc comment.
 	Provider *llm.ProviderPreferences
 	EventIDs []uuid.UUID
-	// Tools is what the model may call this turn (FR8) -- llm.Request.Tools
-	// verbatim, so an empty/nil Tools produces the identical
-	// no-tools-attached request this activity has always sent (issue
-	// #2114/#2117's "no tools are attached to the request" scaffold-phase
-	// behavior, preserved for any caller that does not yet populate this
-	// field). Implementation phase (issue #2121) populates it from
-	// ActivityListToolDefinitions' result, called once per turn ahead of
-	// CallModel in processTurn (workflow.go) -- see that activity's doc
-	// comment below.
-	Tools []llm.ToolDefinition
 }
 
 // CallModelResult is CallModel's activity result.
@@ -266,16 +256,20 @@ type CallModelResult struct {
 // CallModel is per-turn activity #3 (ARCHITECTURE.md "Session workflow"):
 // re-reads in.EventIDs' rows from a.Store (never receives their bodies
 // over the activity boundary itself -- see CallModelInput's doc comment),
-// decodes them back into an llm.Request via eventsToMessages
-// (context.go), and calls a.LLM.Complete using the session's resolved
-// model plus in.Tools (FR8) -- forwarded to llm.Request.Tools verbatim,
-// so a caller that leaves Tools nil/empty gets the identical
-// no-tools-attached request this activity has always sent. A model
-// response that requests tool calls is still recorded verbatim by
-// CommitTurn regardless of whether they were ever dispatched -- see
-// ActivityDispatchTool's doc comment for the dispatch step itself, still
-// a no-op hook in processTurn (workflow.go) as of this Scaffold-phase
-// task.
+// decodes them back into an llm.Request via eventsToMessages (context.go),
+// and re-reads in.Turn's tool list the same way -- ReadTurnToolDefs,
+// keyed on (in.SessionID, in.Turn), the row ActivityListToolDefinitions
+// persisted earlier this turn (see that activity's ListToolDefinitionsResult
+// doc comment for why: this used to be a CallModelInput.Tools field
+// forwarded verbatim on every call, duplicating the full tool catalog into
+// workflow history on every tool-loop iteration). No row (an agent
+// definition with no tool_set, or a session that predates
+// ActivityListToolDefinitions entirely) means no tools are attached to the
+// request -- the same no-tools-attached behavior this activity has always
+// had for that case, not an error. A model response that requests tool
+// calls is still recorded verbatim by CommitTurn regardless of whether they
+// were ever dispatched -- see ActivityDispatchTool's doc comment for the
+// dispatch step itself.
 func (a *Activities) CallModel(ctx context.Context, in CallModelInput) (CallModelResult, error) {
 	if a.Store == nil {
 		return CallModelResult{}, fmt.Errorf("worker: Activities.Store is nil")
@@ -294,7 +288,12 @@ func (a *Activities) CallModel(ctx context.Context, in CallModelInput) (CallMode
 		return CallModelResult{}, fmt.Errorf("call model: decode context events: %w", err)
 	}
 
-	resp, err := a.LLM.Complete(ctx, llm.Request{Model: in.Model, Messages: messages, Tools: in.Tools, Provider: in.Provider})
+	toolDefs, err := readTurnToolDefs(ctx, a.Store, in.SessionID, in.Turn)
+	if err != nil {
+		return CallModelResult{}, fmt.Errorf("call model: %w", err)
+	}
+
+	resp, err := a.LLM.Complete(ctx, llm.Request{Model: in.Model, Messages: messages, Tools: toolDefs, Provider: in.Provider})
 	if err != nil {
 		return CallModelResult{}, fmt.Errorf("call model: %w", err)
 	}
@@ -634,6 +633,10 @@ func (a *Activities) CommitTerminalEvent(ctx context.Context, in CommitTerminalE
 // ListToolDefinitionsInput is ListToolDefinitions' activity input.
 type ListToolDefinitionsInput struct {
 	SessionID uuid.UUID
+	// Turn is the current turn number -- the key (with SessionID) this
+	// activity persists its resolved tool list under in `turn_tool_defs`
+	// (see ListToolDefinitionsResult's doc comment).
+	Turn int
 	// AgentID is the current turn's agent definition ID, passed through
 	// like DispatchToolInput.AgentID below (persona.Issuer.Issue's doc
 	// comment: a session's assignment can drift, SCD2, so this is always
@@ -657,14 +660,20 @@ type ListToolDefinitionsInput struct {
 	Unlocked []string
 }
 
-// ListToolDefinitionsResult is ListToolDefinitions' activity result.
-type ListToolDefinitionsResult struct {
-	// Tools is what CallModelInput.Tools (above) forwards to
-	// llm.Request.Tools (FR8) -- the union of every configured server's
-	// exposed tool set, converted from each server's MCP tool schema
-	// (mcp.Tool.InputSchema) into llm.ToolDefinition.Parameters.
-	Tools []llm.ToolDefinition
-}
+// ListToolDefinitionsResult is ListToolDefinitions' activity result. It
+// deliberately carries no tool data itself -- earlier, it returned the full
+// []llm.ToolDefinition list verbatim here, which processTurn then forwarded
+// into CallModelInput.Tools (and, since M4's search-mode budget, also
+// BuildContextInput.Tools) on every model/context call a turn's tool loop
+// made, duplicating the full tool catalog (JSON schemas included) into
+// Temporal workflow history up to several times per turn. This activity
+// instead persists that list to a `turn_tool_defs` row
+// (session.TranscriptStore.SaveTurnToolDefs, keyed on (in.SessionID,
+// in.Turn), the same shape as `turn_context`) and returns nothing; CallModel
+// and BuildContext each re-read it via ReadTurnToolDefs using the
+// SessionID/Turn they already carry -- an activity-internal read, invisible
+// to workflow history (ARCHITECTURE.md "Activity payload discipline").
+type ListToolDefinitionsResult struct{}
 
 // ListToolDefinitions is per-turn activity #2.5 (ARCHITECTURE.md "Session
 // workflow" step 3, immediately ahead of CallModel): resolves FR8's
@@ -678,8 +687,9 @@ type ListToolDefinitionsResult struct {
 // Implemented via whagent_net/worker/tools.ListToolDefinitions
 // (listdefs.go), over a.Dispatcher.Issuer (minting) -- this activity is a
 // thin activity-boundary wrapper: read in.SessionID's *session.Session
-// (needed by mintCredential's sub/sub_iss/act derivation, keys.go) then
-// delegate.
+// (needed by mintCredential's sub/sub_iss/act derivation, keys.go), delegate,
+// then persist the result via SaveTurnToolDefs (see ListToolDefinitionsResult's
+// doc comment) instead of returning it.
 func (a *Activities) ListToolDefinitions(ctx context.Context, in ListToolDefinitionsInput) (ListToolDefinitionsResult, error) {
 	if a.Dispatcher == nil {
 		return ListToolDefinitionsResult{}, fmt.Errorf("worker: Activities.Dispatcher is nil")
@@ -700,7 +710,15 @@ func (a *Activities) ListToolDefinitions(ctx context.Context, in ListToolDefinit
 	if err != nil {
 		return ListToolDefinitionsResult{}, fmt.Errorf("list tool definitions: %w", err)
 	}
-	return ListToolDefinitionsResult{Tools: defs}, nil
+
+	encoded, err := json.Marshal(defs)
+	if err != nil {
+		return ListToolDefinitionsResult{}, fmt.Errorf("list tool definitions: encode tools: %w", err)
+	}
+	if err := a.Store.Transcript().SaveTurnToolDefs(ctx, in.SessionID, in.Turn, encoded); err != nil {
+		return ListToolDefinitionsResult{}, fmt.Errorf("list tool definitions: %w", err)
+	}
+	return ListToolDefinitionsResult{}, nil
 }
 
 // DispatchToolInput is DispatchTool's activity input.

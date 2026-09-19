@@ -79,6 +79,25 @@ type TranscriptStore interface {
 	// activity overwrites with the same deterministically-recomputed list
 	// rather than erroring on the primary key.
 	SaveTurnContext(ctx context.Context, tc TurnContext) error
+	// SaveTurnToolDefs idempotently upserts a `turn_tool_defs` row: the
+	// tool catalog the worker's ListToolDefinitions activity resolved for
+	// (sessionID, turn), JSON-encoded and opaque to this package -- the
+	// same encoding boundary transcript_event.payload already uses. This
+	// is what lets CallModel's and BuildContext's activity inputs carry
+	// only a reference (SessionID+Turn, both already required fields)
+	// instead of the full tool list on every one of a turn's model/context
+	// calls (ARCHITECTURE.md "Activity payload discipline"). Safe to call
+	// more than once for the same (SessionID, Turn) -- a retried
+	// ListToolDefinitions activity overwrites with the same
+	// deterministically-refetched list.
+	SaveTurnToolDefs(ctx context.Context, sessionID uuid.UUID, turn int, tools json.RawMessage) error
+	// ReadTurnToolDefs returns the tools row SaveTurnToolDefs saved for
+	// (sessionID, turn). ok is false, not an error, when no row exists yet
+	// -- an ordinary state (no tool_set configured that turn, or a
+	// pre-#2121 session predating ListToolDefinitions entirely), which
+	// CallModel/BuildContext treat as "no tools attached this turn" rather
+	// than a fault.
+	ReadTurnToolDefs(ctx context.Context, sessionID uuid.UUID, turn int) (tools json.RawMessage, ok bool, err error)
 	// TrimHot deletes every transcript_event row for sessionID -- the
 	// final "trim the hot tier" step of FR7's archiver write-order
 	// contract (issue #2244). This is the crash-safety invariant enforced
@@ -570,6 +589,43 @@ func (s transcriptStore) SaveTurnContext(ctx context.Context, tc TurnContext) er
 		return fmt.Errorf("save turn context: %w", err)
 	}
 	return nil
+}
+
+// SaveTurnToolDefs upserts a `turn_tool_defs` row -- ON CONFLICT DO UPDATE
+// for the same reason SaveTurnContext above does: a retried
+// ListToolDefinitions activity (Temporal's at-least-once execution) must
+// succeed even if the row already exists, and a legitimate retry's
+// deterministically-refetched tools are expected to match what is already
+// stored, so overwriting it is equivalent to a no-op in the case that
+// matters.
+func (s transcriptStore) SaveTurnToolDefs(ctx context.Context, sessionID uuid.UUID, turn int, tools json.RawMessage) error {
+	_, err := s.pool.Exec(ctx, `
+		INSERT INTO turn_tool_defs (session_id, turn, tools)
+		VALUES ($1, $2, $3)
+		ON CONFLICT (session_id, turn) DO UPDATE SET tools = EXCLUDED.tools
+	`, sessionID, turn, tools)
+	if err != nil {
+		return fmt.Errorf("save turn tool defs: %w", err)
+	}
+	return nil
+}
+
+// ReadTurnToolDefs returns (nil, false, nil) when no row exists for
+// (sessionID, turn) yet, rather than an error -- an absent row is an
+// ordinary, expected state (e.g. this turn's agent definition has no
+// tool_set at all), not a fault.
+func (s transcriptStore) ReadTurnToolDefs(ctx context.Context, sessionID uuid.UUID, turn int) (json.RawMessage, bool, error) {
+	var tools json.RawMessage
+	err := s.pool.QueryRow(ctx, `
+		SELECT tools FROM turn_tool_defs WHERE session_id = $1 AND turn = $2
+	`, sessionID, turn).Scan(&tools)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return nil, false, nil
+	}
+	if err != nil {
+		return nil, false, fmt.Errorf("read turn tool defs: %w", err)
+	}
+	return tools, true, nil
 }
 
 // TrimHot implements TranscriptStore.TrimHot. The existence check and the

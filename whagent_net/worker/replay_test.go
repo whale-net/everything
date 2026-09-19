@@ -383,9 +383,7 @@ func TestSessionWorkflow_ReplayRecordedHistory_WithCapEnforcementAndToolDispatch
 	// ActivityListToolDefinitions.
 	completedID = b.decision()
 	b.marker("session-workflow-tool-dispatch", 1, completedID)
-	b.activity(ActivityListToolDefinitions, ListToolDefinitionsResult{
-		Tools: []llm.ToolDefinition{{Name: "search", Description: "search ASS", Parameters: nil}},
-	})
+	b.activity(ActivityListToolDefinitions, ListToolDefinitionsResult{})
 
 	// The model responds with one tool call -- FR8's round trip.
 	b.decision()
@@ -468,9 +466,7 @@ func TestSessionWorkflow_ReplayRecordedHistory_WithToolLoop_NoNonDeterminismErro
 
 	completedID = b.decision()
 	b.marker("session-workflow-tool-dispatch", 1, completedID)
-	b.activity(ActivityListToolDefinitions, ListToolDefinitionsResult{
-		Tools: []llm.ToolDefinition{{Name: "search", Description: "search ASS", Parameters: nil}},
-	})
+	b.activity(ActivityListToolDefinitions, ListToolDefinitionsResult{})
 
 	// The turn's first model call requests a tool call -- this is what
 	// makes the loop run at all.
@@ -591,9 +587,7 @@ func TestSessionWorkflow_ReplayRecordedHistory_WithSearchModeBudgeting_NoNonDete
 	b.activity(ActivityUnlockedTools, UnlockedToolsResult{ToolNames: []string{"search_things"}})
 
 	b.decision()
-	b.activity(ActivityListToolDefinitions, ListToolDefinitionsResult{
-		Tools: []llm.ToolDefinition{{Name: "search_tools", Description: "search for more tools"}, {Name: "search_things", Description: "search ASS"}},
-	})
+	b.activity(ActivityListToolDefinitions, ListToolDefinitionsResult{})
 
 	// BuildContext now runs AFTER Tools are resolved, budgeted by
 	// fitToBudget (budget.go) against the Tools scheduled above.
@@ -702,9 +696,7 @@ func TestSessionWorkflow_ReplayRecordedHistory_WithSearchToolsCall_NoNonDetermin
 	b.activity(ActivityUnlockedTools, UnlockedToolsResult{})
 
 	b.decision()
-	b.activity(ActivityListToolDefinitions, ListToolDefinitionsResult{
-		Tools: []llm.ToolDefinition{{Name: tools.SearchToolsName, Description: "search for more tools"}},
-	})
+	b.activity(ActivityListToolDefinitions, ListToolDefinitionsResult{})
 
 	b.decision()
 	b.activity(ActivityBuildContext, BuildContextResult{EventIDs: []uuid.UUID{uuid.New()}})

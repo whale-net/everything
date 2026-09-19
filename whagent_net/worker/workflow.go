@@ -374,10 +374,10 @@ func runTurn(ctx workflow.Context, stopCh workflow.ReceiveChannel, sessionID uui
 // second marker.
 //
 // mode/unlocked are processTurn's toolMode/toolUnlocked, the exact values
-// ActivityListToolDefinitions resolved toolDefs.Tools from this turn --
-// threaded through verbatim into DispatchToolInput.Mode/.Unlocked so
-// dispatch's search-mode refusal gate (FR9) always agrees with what was
-// offered, never a value re-derived here.
+// ActivityListToolDefinitions resolved this turn's tools from -- threaded
+// through verbatim into DispatchToolInput.Mode/.Unlocked so dispatch's
+// search-mode refusal gate (FR9) always agrees with what was offered, never
+// a value re-derived here.
 func dispatchToolCall(ctx workflow.Context, sessionID uuid.UUID, turn int, callIndex int, def session.AgentDefinition, call llm.ToolCall, mode session.ToolLoadingMode, unlocked []string) error {
 	searchVersion := workflow.GetVersion(ctx, "session-workflow-tool-search-loading", workflow.DefaultVersion, 1)
 	if searchVersion >= 1 && def.ToolLoadingMode == session.ToolLoadingModeSearch && call.Name == tools.SearchToolsName {
@@ -488,15 +488,18 @@ func processTurn(ctx workflow.Context, sessionID uuid.UUID, turn int, in SendTur
 	searchVersion := workflow.GetVersion(ctx, "session-workflow-tool-search-loading", workflow.DefaultVersion, 1)
 	searchMode := searchVersion >= 1 && resolved.Definition.ToolLoadingMode == session.ToolLoadingModeSearch
 
+	// toolMode/toolUnlocked mirror whichever listIn below actually ran
+	// (this search-mode block, or the bulk-mode block after BuildContext)
+	// -- every DispatchToolInput this turn constructs, via dispatchToolCall,
+	// carries these two verbatim so dispatch's search-mode refusal gate
+	// (FR9) always agrees with exactly what ActivityListToolDefinitions
+	// resolved, never a value re-derived separately. The resolved tool
+	// list itself never enters a workflow variable at all (unlike Mode/
+	// Unlocked, which are small and legitimately workflow state) -- it is
+	// persisted by ListToolDefinitions to a turn_tool_defs row and re-read
+	// activity-side by CallModel/BuildContext (ListToolDefinitionsResult's
+	// doc comment, activities.go).
 	var (
-		toolDefs ListToolDefinitionsResult
-		// toolMode/toolUnlocked mirror whichever listIn below actually ran
-		// (this search-mode block, or the bulk-mode block after
-		// BuildContext) -- every DispatchToolInput this turn constructs, via
-		// dispatchToolCall, carries these two verbatim so dispatch's
-		// search-mode refusal gate (FR9) always agrees with exactly what
-		// ActivityListToolDefinitions resolved toolDefs.Tools from, never a
-		// value re-derived separately.
 		toolMode     session.ToolLoadingMode
 		toolUnlocked []string
 	)
@@ -510,12 +513,13 @@ func processTurn(ctx workflow.Context, sessionID uuid.UUID, turn int, in SendTur
 		}
 		listIn := ListToolDefinitionsInput{
 			SessionID: sessionID,
+			Turn:      turn,
 			AgentID:   resolved.Definition.AgentID,
 			ToolSet:   resolved.Definition.ToolSet,
 			Mode:      session.ToolLoadingModeSearch,
 			Unlocked:  unlockedResult.ToolNames,
 		}
-		if err := workflow.ExecuteActivity(ctx, ActivityListToolDefinitions, listIn).Get(ctx, &toolDefs); err != nil {
+		if err := workflow.ExecuteActivity(ctx, ActivityListToolDefinitions, listIn).Get(ctx, nil); err != nil {
 			return failTurn(ctx, sessionID, turn, err)
 		}
 		toolMode = listIn.Mode
@@ -528,12 +532,6 @@ func processTurn(ctx workflow.Context, sessionID uuid.UUID, turn int, in SendTur
 		Turn:       turn,
 		Definition: resolved.Definition,
 		Input:      in.Input,
-		// Tools is toolDefs.Tools from the search-mode block above when
-		// searchMode, empty otherwise -- BuildContext's own branch on
-		// Definition.ToolLoadingMode ignores it entirely for a bulk
-		// definition (context.go), so leaving it unset there is exactly
-		// FR10's "bulk-mode accounting is untouched".
-		Tools: toolDefs.Tools,
 	}
 	if err := workflow.ExecuteActivity(ctx, ActivityBuildContext, buildIn).Get(ctx, &built); err != nil {
 		if v == workflow.DefaultVersion {
@@ -551,17 +549,18 @@ func processTurn(ctx workflow.Context, sessionID uuid.UUID, turn int, in SendTur
 	// at its original position (right here, unmoved by #2673) -- issue
 	// #2121 is the first task to add either call, and a run already open
 	// across this deploy must keep taking the old no-tools/no-dispatch path
-	// (empty CallModelInput.Tools, no dispatch loop) rather than replay
-	// into a non-determinism error.
+	// (no turn_tool_defs row that turn, so CallModel attaches no tools; no
+	// dispatch loop) rather than replay into a non-determinism error.
 	toolVersion := workflow.GetVersion(ctx, "session-workflow-tool-dispatch", workflow.DefaultVersion, 1)
 
 	if toolVersion >= 1 && !searchMode {
 		listIn := ListToolDefinitionsInput{
 			SessionID: sessionID,
+			Turn:      turn,
 			AgentID:   resolved.Definition.AgentID,
 			ToolSet:   resolved.Definition.ToolSet,
 		}
-		if err := workflow.ExecuteActivity(ctx, ActivityListToolDefinitions, listIn).Get(ctx, &toolDefs); err != nil {
+		if err := workflow.ExecuteActivity(ctx, ActivityListToolDefinitions, listIn).Get(ctx, nil); err != nil {
 			return failTurn(ctx, sessionID, turn, err)
 		}
 		toolMode = listIn.Mode
@@ -575,7 +574,6 @@ func processTurn(ctx workflow.Context, sessionID uuid.UUID, turn int, in SendTur
 		Model:     resolved.Model,
 		Provider:  resolved.Provider,
 		EventIDs:  built.EventIDs,
-		Tools:     toolDefs.Tools,
 	}
 	if err := workflow.ExecuteActivity(ctx, ActivityCallModel, callIn).Get(ctx, &modelResult); err != nil {
 		if v == workflow.DefaultVersion {
@@ -591,23 +589,24 @@ func processTurn(ctx workflow.Context, sessionID uuid.UUID, turn int, in SendTur
 	// #2121's original behavior, never looping back to the model.
 	loopVersion := workflow.GetVersion(ctx, "session-workflow-tool-loop", workflow.DefaultVersion, 1)
 
-	// toolDefs.Tools (search-mode or bulk alike) is resolved once, ahead of
-	// CallModel above, and every loopCallIn below reuses that same slice
-	// rather than re-executing ActivityListToolDefinitions per iteration
-	// (FR6 permits either: "starting with the turn immediately after" makes
-	// per-iteration re-resolution optional, not required). A tool unlocked
-	// mid-turn -- a search_tools call this turn's own loop dispatches --
-	// therefore is not offered until the next processTurn invocation that
-	// re-lists, i.e. the next external turn, not the next inner-loop
-	// iteration of this one.
+	// This turn's tools (search-mode or bulk alike) are resolved once, ahead
+	// of CallModel above, and every loopCallIn/rebuildIn below re-reads the
+	// same turn_tool_defs row (keyed on (SessionID, Turn), CallModel/
+	// BuildContext's own readTurnToolDefs, context.go) rather than
+	// re-executing ActivityListToolDefinitions per iteration (FR6 permits
+	// either: "starting with the turn immediately after" makes per-iteration
+	// re-resolution optional, not required). A tool unlocked mid-turn -- a
+	// search_tools call this turn's own loop dispatches -- therefore is not
+	// offered until the next processTurn invocation that re-lists, i.e. the
+	// next external turn, not the next inner-loop iteration of this one.
 	//
 	// Every DispatchToolInput below (both loop bodies) carries toolMode/
 	// toolUnlocked verbatim -- the exact same values ActivityListToolDefinitions
-	// resolved toolDefs.Tools from above, never re-derived per call or per
-	// iteration (FR9, dispatch.go's package doc comment "Tool selection").
-	// So a tool a search_tools call unlocks mid-turn is refused by
-	// DispatchTool at every call index within that same turn, consistent
-	// with it not being offered in Tools until the next external turn.
+	// resolved this turn's tools from above, never re-derived per call or
+	// per iteration (FR9, dispatch.go's package doc comment "Tool
+	// selection"). So a tool a search_tools call unlocks mid-turn is
+	// refused by DispatchTool at every call index within that same turn,
+	// consistent with it not being offered until the next external turn.
 
 	var (
 		callIndex   int
@@ -713,12 +712,6 @@ func processTurn(ctx workflow.Context, sessionID uuid.UUID, turn int, in SendTur
 				Turn:       turn,
 				Definition: resolved.Definition,
 				Input:      in.Input,
-				// Same turn's Tools as the outer BuildContext call above
-				// (toolDefs.Tools, resolved once per external turn -- see
-				// this function's own doc comment) -- a mid-turn loop
-				// iteration is budgeted by FR10 the same way the turn's
-				// first context build is.
-				Tools: toolDefs.Tools,
 			}
 			if err := workflow.ExecuteActivity(ctx, ActivityBuildContext, rebuildIn).Get(ctx, &rebuilt); err != nil {
 				return failTurn(ctx, sessionID, turn, err)
@@ -731,7 +724,6 @@ func processTurn(ctx workflow.Context, sessionID uuid.UUID, turn int, in SendTur
 				Model:     resolved.Model,
 				Provider:  resolved.Provider,
 				EventIDs:  rebuilt.EventIDs,
-				Tools:     toolDefs.Tools,
 			}
 			if err := workflow.ExecuteActivity(ctx, ActivityCallModel, loopCallIn).Get(ctx, &modelResult); err != nil {
 				return failTurn(ctx, sessionID, turn, err)
