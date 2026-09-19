@@ -17,6 +17,7 @@ go_library(
         "milestone_status.go",
         "recut.go",
         "slice.go",
+        "task.go",
     ],
     importpath = "github.com/whale-net/everything/krill/mcp/tools",
     visibility = ["//visibility:public"],

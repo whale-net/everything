@@ -28,7 +28,9 @@ FR8/FR9/FR12) is the milestone/milepebble status HTTP surface: POST
 #2686, FR10) is the per-delivered-item shipment surface: POST
 /milestones/{id}/shipped is gated, GET /milestones/{id}/delivery is
 not. recut.go (issue #2687, FR5) is the delivery-axis re-cut surface:
-POST /delivery/move is gated, GET /products/{id}/backlog is not."""
+POST /delivery/move is gated, GET /products/{id}/backlog is not.
+task.go (issue #2719, FR1) is the work-axis task-create surface: POST
+/tasks will be gated once wired -- scaffold stage, stub handler only."""
 
 load("@rules_go//go:def.bzl", "go_library", "go_test")
 
@@ -56,6 +58,7 @@ go_library(
         "session.go",
         "session_slice.go",
         "slice.go",
+        "task.go",
         "types.go",
     ],
     importpath = "github.com/whale-net/everything/krill/api/handlers",

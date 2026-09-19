@@ -45,6 +45,7 @@ go_library(
         "session.go",
         "slice.go",
         "store.go",
+        "task.go",
     ],
     importpath = "github.com/whale-net/everything/krill/store",
     visibility = ["//visibility:public"],

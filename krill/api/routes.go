@@ -38,6 +38,12 @@ import (
 // /products/{id}/delivery (issue #2689, FR11).
 // Import (FR16) is a later task's route, not added here.
 //
+// POST /tasks (the work-axis task-create endpoint, issue #2719, FR1) is
+// not yet mounted here -- api/handlers/task.go ships a scaffold-stage stub
+// handler with no store dependency; wiring it behind gate (with
+// entities.Tasks()) lands in that issue's Implementation phase, the same
+// staging milestone_authoring.go's endpoints followed (issue #2683).
+//
 // githubToken is KRILL_GITHUB_TOKEN (see main.go's config/../ENV.md) --
 // threaded through to //krill/forge.GitHubClient, the one dependency
 // POST /pointer-artifacts has that no other route in this binary does.

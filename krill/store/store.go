@@ -10,8 +10,10 @@ import "github.com/jackc/pgx/v5/pgxpool"
 // and `revision_event` (migration 008, issue #2542),
 // `import_completion` (migration 009, issue #2548), and the milestone
 // authoring fields plus `milestone_deferral` (migration 010, issue
-// #2683), `milestone_status_event` (migration 012, issue #2685), and
-// `delivery_shipment` (migration 013, issue #2686).
+// #2683), `milestone_status_event` (migration 012, issue #2685),
+// `delivery_shipment` (migration 013, issue #2686), and the work axis --
+// `task`, `task_dependency`, `task_claim`, `task_lease_event`,
+// `task_attempt`, `task_note` (migration 015, issue #2719).
 // MediatedWrites()
 // (mediated.go, issue #2546) is not a new table: it writes `feature`/
 // `requirement`/`revision_event` rows this same Store already owns,
@@ -133,3 +135,9 @@ func (s *Store) ImportCompletions() ImportCompletionStore { return importComplet
 // mediated-intake transactional entity+revision-event write path (issue
 // #2546, FR9, FR10, NFR2).
 func (s *Store) MediatedWrites() MediatedWriteStore { return mediatedWriteStore{pool: s.pool} }
+
+// Tasks returns the TaskStore implementation -- the work-axis surface
+// (migration 015, issue #2719, FR1) every later M4 task (dependency
+// declaration, claim/lease/attempt, notes) widens rather than replaces --
+// see task.go's package doc comment.
+func (s *Store) Tasks() TaskStore { return taskStore{pool: s.pool} }

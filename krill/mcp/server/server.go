@@ -6,8 +6,11 @@
 // shipped in `audience_score_system/mcp` and `whagent_net/mcp` (see
 // ../../ARCHITECTURE.md "The MCP spec surface (FR10/NFR1, issue #2494)").
 //
-// M1 ships only this spec-scoped mount: the work-axis surface (M4) has no
-// endpoint yet and is out of scope here (root plan issue #2485's roadmap).
+// M1 shipped only this spec-scoped mount; M4 (root plan issue #2717)
+// begins the work-axis surface -- its write tools (e.g. create_task,
+// issue #2719) mount on the same design-scoped *mcp.Server this file
+// builds (../tools.RegisterCreateTask et al., wired from ../main.go),
+// never a third mount of their own.
 package server
 
 import (
