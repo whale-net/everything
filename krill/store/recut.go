@@ -146,6 +146,22 @@ func (s recutStore) GetOrCreateBacklog(ctx context.Context, scopeID, productID u
 	}
 	defer tx.Rollback(ctx) //nolint:errcheck
 
+	ref, err := getOrCreateBacklogTx(ctx, tx, scopeID, productID, acting, onBehalfOf)
+	if err != nil {
+		return MilestoneRef{}, err
+	}
+
+	if err := tx.Commit(ctx); err != nil {
+		return MilestoneRef{}, fmt.Errorf("commit: %w", err)
+	}
+	return ref, nil
+}
+
+// getOrCreateBacklogTx is GetOrCreateBacklog's transaction-scoped core --
+// shared with Abandon (abandon.go, issue #2688), which resolves the same
+// backlog bucket as one step inside its own larger transaction rather
+// than through a second, standalone one.
+func getOrCreateBacklogTx(ctx context.Context, tx pgx.Tx, scopeID, productID uuid.UUID, acting, onBehalfOf Subject) (MilestoneRef, error) {
 	exists, err := currentRowExists(ctx, tx, "product", productID, scopeID)
 	if err != nil {
 		return MilestoneRef{}, err
@@ -181,10 +197,6 @@ func (s recutStore) GetOrCreateBacklog(ctx context.Context, scopeID, productID u
 	}
 	if err != nil {
 		return MilestoneRef{}, fmt.Errorf("get or create backlog milestone_ref: %w", err)
-	}
-
-	if err := tx.Commit(ctx); err != nil {
-		return MilestoneRef{}, fmt.Errorf("commit: %w", err)
 	}
 	return ref, nil
 }
@@ -259,6 +271,23 @@ func (s recutStore) MoveScope(ctx context.Context, scopeID uuid.UUID, entityIDs 
 	}
 	defer tx.Rollback(ctx) //nolint:errcheck
 
+	if err := moveScopeTx(ctx, tx, scopeID, entityIDs, fromContainerID, toContainerID, acting, onBehalfOf); err != nil {
+		return err
+	}
+
+	if err := tx.Commit(ctx); err != nil {
+		return fmt.Errorf("commit: %w", err)
+	}
+	return nil
+}
+
+// moveScopeTx is MoveScope's transaction-scoped core (entityIDs must
+// already be non-empty -- MoveScope itself enforces that before opening
+// its transaction) -- shared with Abandon (abandon.go, issue #2688),
+// which sweeps a container's not-yet-shipped scope into the backlog
+// bucket as one step inside its own larger transaction rather than
+// through a second, standalone one.
+func moveScopeTx(ctx context.Context, tx pgx.Tx, scopeID uuid.UUID, entityIDs []uuid.UUID, fromContainerID, toContainerID uuid.UUID, acting, onBehalfOf Subject) error {
 	fromKind, fromParent, err := milestoneRefKindAndParent(ctx, tx, scopeID, fromContainerID)
 	if err != nil {
 		return err
@@ -364,8 +393,5 @@ func (s recutStore) MoveScope(ctx context.Context, scopeID uuid.UUID, entityIDs 
 		}
 	}
 
-	if err := tx.Commit(ctx); err != nil {
-		return fmt.Errorf("commit: %w", err)
-	}
 	return nil
 }

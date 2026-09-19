@@ -35,6 +35,7 @@ load("@rules_go//go:def.bzl", "go_library", "go_test")
 go_library(
     name = "handlers",
     srcs = [
+        "abandon.go",
         "amend.go",
         "decision.go",
         "delivery_shipment.go",
@@ -88,11 +89,13 @@ go_library(
 go_test(
     name = "handlers_test",
     srcs = [
+        "abandon_test.go",
         "amend_test.go",
         "decision_test.go",
         "delivery_shipment_test.go",
         "design_session_test.go",
         "entity_test_helpers_test.go",
+        "fake_abandon_store_test.go",
         "fake_delivery_shipment_store_test.go",
         "fake_design_session_store_test.go",
         "fake_entity_store_test.go",

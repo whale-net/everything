@@ -18,6 +18,7 @@ import (
 	"fmt"
 
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
@@ -116,7 +117,21 @@ func (s deliveryShipmentStore) MarkShipped(ctx context.Context, scopeID, milesto
 }
 
 func (s deliveryShipmentStore) ShippedEntityIDs(ctx context.Context, milestoneID uuid.UUID) (map[uuid.UUID]bool, error) {
-	rows, err := s.pool.Query(ctx, `
+	return shippedEntityIDs(ctx, s.pool, milestoneID)
+}
+
+// deliveryQueryer is the one method ShippedEntityIDs/DeliveryBreakdown's
+// shared cores need -- satisfied by both *pgxpool.Pool (their own
+// pool-backed methods) and pgx.Tx (Abandon, abandon.go, issue #2688,
+// which computes a container's not-yet-shipped scope as one read inside
+// its own transaction, the same snapshot the move step that consumes it
+// runs against).
+type deliveryQueryer interface {
+	Query(ctx context.Context, sql string, args ...any) (pgx.Rows, error)
+}
+
+func shippedEntityIDs(ctx context.Context, q deliveryQueryer, milestoneID uuid.UUID) (map[uuid.UUID]bool, error) {
+	rows, err := q.Query(ctx, `
 		SELECT DISTINCT entity_id FROM delivery_shipment WHERE milestone_id = $1
 	`, milestoneID)
 	if err != nil {
@@ -139,7 +154,11 @@ func (s deliveryShipmentStore) ShippedEntityIDs(ctx context.Context, milestoneID
 }
 
 func (s deliveryShipmentStore) DeliveryBreakdown(ctx context.Context, milestoneID uuid.UUID) (shipped []uuid.UUID, unshipped []uuid.UUID, err error) {
-	rows, err := s.pool.Query(ctx, `
+	return deliveryBreakdown(ctx, s.pool, milestoneID)
+}
+
+func deliveryBreakdown(ctx context.Context, q deliveryQueryer, milestoneID uuid.UUID) (shipped []uuid.UUID, unshipped []uuid.UUID, err error) {
+	rows, err := q.Query(ctx, `
 		SELECT entity_id FROM entity_milestone
 		WHERE milestone_id = $1 AND relation = $2
 	`, milestoneID, string(MilestoneRelationDelivers))
@@ -163,13 +182,13 @@ func (s deliveryShipmentStore) DeliveryBreakdown(ctx context.Context, milestoneI
 
 	// A container with zero `delivers` associations short-circuits here:
 	// deliveredIDs is nil, so both returned slices stay nil, and
-	// ShippedEntityIDs is never called for an id set that would only ever
+	// shippedEntityIDs is never called for an id set that would only ever
 	// produce an empty map.
 	if len(deliveredIDs) == 0 {
 		return nil, nil, nil
 	}
 
-	shippedSet, err := s.ShippedEntityIDs(ctx, milestoneID)
+	shippedSet, err := shippedEntityIDs(ctx, q, milestoneID)
 	if err != nil {
 		return nil, nil, err
 	}

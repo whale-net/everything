@@ -10,6 +10,7 @@ load("@rules_go//go:def.bzl", "go_library", "go_test")
 go_library(
     name = "tools",
     srcs = [
+        "abandon.go",
         "delivery_shipment.go",
         "design.go",
         "milestone.go",
@@ -41,6 +42,25 @@ go_library(
 go_test(
     name = "milestone_status_registration_test",
     srcs = ["milestone_status_registration_test.go"],
+    deps = [
+        ":tools",
+        "//krill/mcp/server",
+        "//krill/store",
+        "@com_github_modelcontextprotocol_go_sdk//mcp",
+        "@com_github_stretchr_testify//assert",
+        "@com_github_stretchr_testify//require",
+    ],
+)
+
+# No-database unit test (issue #2688's own "not reversible" design choice,
+# proven structurally): RegisterAbandonAll registers exactly
+# {abandon_milestone} over a real in-memory MCP client/server connection --
+# no un-abandon tool exists. Mirrors :milestone_status_registration_test's
+# own store.New(nil)/in-memory transport technique, so it needs no Docker
+# and is part of `bazel test //...`.
+go_test(
+    name = "abandon_registration_test",
+    srcs = ["abandon_registration_test.go"],
     deps = [
         ":tools",
         "//krill/mcp/server",
@@ -238,6 +258,38 @@ go_test(
 #
 # Run it explicitly (requires a working Docker daemon):
 #   bazel test //krill/mcp/tools:recut_test --test_output=all
+go_test(
+    name = "abandon_test",
+    size = "large",
+    timeout = "long",
+    srcs = ["abandon_test.go"],
+    gotags = ["integration"],
+    tags = [
+        "external",
+        "integration",
+        "manual",
+        "no-cache",
+        "no-sandbox",
+        "requires-network",
+    ],
+    deps = [
+        ":tools",
+        "//krill/mcp/server",
+        "//krill/migrate/schema",
+        "//krill/store",
+        "//libs/go/dbtest",
+        "//libs/go/mcpauth",
+        "//libs/go/migrate",
+        "//libs/go/whagent",
+        "@com_github_google_uuid//:uuid",
+        "@com_github_jackc_pgx_v5//pgxpool",
+        "@com_github_jackc_pgx_v5//stdlib",
+        "@com_github_modelcontextprotocol_go_sdk//mcp",
+        "@com_github_stretchr_testify//assert",
+        "@com_github_stretchr_testify//require",
+    ],
+)
+
 go_test(
     name = "recut_test",
     size = "large",
