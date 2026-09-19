@@ -75,6 +75,16 @@
 // workflow.DefaultVersion for this changeID), dispatching whatever tool
 // calls the turn's one model response carried and committing the turn
 // immediately after, exactly as before this task.
+// M4's "search-mode per-turn Tools resolution" (issue #2669, root plan
+// #2602) is the fifth: its own change ID,
+// "session-workflow-tool-search-loading", gated at the exact point the new
+// branch diverges from "session-workflow-tool-dispatch"'s existing
+// ActivityListToolDefinitions call -- immediately before it, inside the
+// same toolVersion >= 1 block. A run already open across this deploy keeps
+// taking the pre-M4 path for every definition, search-mode or not: no
+// ActivityUnlockedTools call, and a zero-valued ListToolDefinitionsInput.
+// Mode/Unlocked, which tools.ListToolDefinitions treats as bulk regardless
+// of the resolved definition's actual ToolLoadingMode.
 // The next behavior-changing edit to this file must add its own change ID
 // the same way.
 //
@@ -418,6 +428,30 @@ func processTurn(ctx workflow.Context, sessionID uuid.UUID, turn int, in SendTur
 			AgentID:   resolved.Definition.AgentID,
 			ToolSet:   resolved.Definition.ToolSet,
 		}
+
+		// searchVersion gates M4's search-based tool loading (root plan
+		// #2602), added at the exact point the new branch diverges: right
+		// before the ActivityListToolDefinitions call every prior deploy
+		// already made (NFR1). A run already open across this deploy gets
+		// workflow.DefaultVersion here and takes the path above verbatim --
+		// no ActivityUnlockedTools call, and listIn's Mode/Unlocked left at
+		// their zero values, which ListToolDefinitions (tools/listdefs.go)
+		// treats as bulk regardless of what the resolved definition's own
+		// ToolLoadingMode says. A bulk-mode definition never executes
+		// ActivityUnlockedTools even once this gate opens -- only a
+		// search-mode definition needs FR6's sticky-unlocked set at all,
+		// and a bulk session must not gain a per-turn activity call it does
+		// not have today.
+		searchVersion := workflow.GetVersion(ctx, "session-workflow-tool-search-loading", workflow.DefaultVersion, 1)
+		if searchVersion >= 1 && resolved.Definition.ToolLoadingMode == session.ToolLoadingModeSearch {
+			var unlockedResult UnlockedToolsResult
+			if err := workflow.ExecuteActivity(ctx, ActivityUnlockedTools, UnlockedToolsInput{SessionID: sessionID}).Get(ctx, &unlockedResult); err != nil {
+				return failTurn(ctx, sessionID, turn, err)
+			}
+			listIn.Mode = session.ToolLoadingModeSearch
+			listIn.Unlocked = unlockedResult.ToolNames
+		}
+
 		if err := workflow.ExecuteActivity(ctx, ActivityListToolDefinitions, listIn).Get(ctx, &toolDefs); err != nil {
 			return failTurn(ctx, sessionID, turn, err)
 		}
@@ -445,6 +479,16 @@ func processTurn(ctx workflow.Context, sessionID uuid.UUID, turn int, in SendTur
 	// calls and committing the turn immediately after -- exactly issue
 	// #2121's original behavior, never looping back to the model.
 	loopVersion := workflow.GetVersion(ctx, "session-workflow-tool-loop", workflow.DefaultVersion, 1)
+
+	// toolDefs.Tools (search-mode or bulk alike) is resolved once, ahead of
+	// CallModel above, and every loopCallIn below reuses that same slice
+	// rather than re-executing ActivityListToolDefinitions per iteration
+	// (FR6 permits either: "starting with the turn immediately after" makes
+	// per-iteration re-resolution optional, not required). A tool unlocked
+	// mid-turn -- a search_tools call this turn's own loop dispatches --
+	// therefore is not offered until the next processTurn invocation that
+	// re-lists, i.e. the next external turn, not the next inner-loop
+	// iteration of this one.
 
 	var (
 		callIndex   int

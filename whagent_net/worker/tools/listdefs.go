@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"log/slog"
 
 	"github.com/whale-net/everything/whagent_net/api/persona"
 	"github.com/whale-net/everything/whagent_net/llm"
@@ -14,13 +15,12 @@ import (
 // call": it connects to every entry of toolSet (a fresh, per-server
 // credential minted for each, FR10 -- never reused across servers, the
 // same rule resolveTarget above follows) and aggregates each server's
-// exposed tool set (mcp.ClientSession.ListTools) into the
-// llm.ToolDefinition list CallModelInput.Tools carries (activities.go's
-// ListToolDefinitions activity, whagent_net/worker). Order matches
-// toolSet's own order. A ToolServerRef with a non-empty AllowedTools is
-// further narrowed to just that subset (C22, allowlist.go's isAllowed) --
-// the same rule resolveTarget enforces for a dispatched call, so a model
-// is never offered a tool name Dispatch would then refuse.
+// exposed tool set (mcp.ClientSession.ListTools) into the candidate pool
+// (candidateDefinitions below) both branches below render from. A
+// ToolServerRef with a non-empty AllowedTools is further narrowed to just
+// that subset (C22, allowlist.go's isAllowed) -- the same rule
+// resolveTarget enforces for a dispatched call, so a model is never
+// offered a tool name Dispatch would then refuse.
 //
 // A connect/list failure against any one server fails the whole call
 // (returns the first error encountered) rather than silently omitting
@@ -33,7 +33,36 @@ import (
 // filter runs -- a ref whose AllowedTools would have excluded that tool
 // anyway does not get a pass, since the reservation is against the
 // server's own catalog, not against what a model would end up seeing.
-func ListToolDefinitions(ctx context.Context, issuer *persona.Issuer, sess *session.Session, agentID string, toolSet []session.ToolServerRef) ([]llm.ToolDefinition, error) {
+//
+// mode selects between the two shapes this function has returned since
+// M4 (root plan #2602):
+//
+//   - mode != session.ToolLoadingModeSearch, including the zero value
+//     (FR2): returns exactly the candidate pool, in toolSet order --
+//     byte-for-byte what this function returned before M4. unlocked is
+//     ignored entirely on this path.
+//   - mode == session.ToolLoadingModeSearch (FR3/FR6/FR7): returns
+//     search.SearchToolsDefinition() first, then, for each name in
+//     unlocked in the given order, that name's definition from the
+//     candidate pool. A name with no match in the current pool -- the
+//     agent definition's ToolSet/AllowedTools narrowed between the turn
+//     that unlocked it and this one -- is silently skipped (logged at
+//     WARNING, never surfaced as an error): NFR2 guarantees the unlocked
+//     set only ever intersects with what AllowedTools permits right now,
+//     never widens it.
+//
+// Ordering guarantee (root-plan #2602 scope note, prompt-cache prefix
+// stability): the search-mode Tools slice is built by appending in a
+// single pass over unlocked, in the order UnlockedTools (activities.go)
+// returned it -- never re-sorted, never re-filtered by any later state,
+// and never assembled via a Go map's iteration order. `tools` renders
+// first in the provider request, so any byte-level reordering across
+// turns invalidates the whole request's cache prefix (symptom:
+// cache_read_input_tokens stays at zero). Future changes to this
+// function must preserve that: build the result by iterating unlocked in
+// order and looking values up in a name-keyed map, never by iterating a
+// map or re-deriving the order from the candidate pool.
+func ListToolDefinitions(ctx context.Context, issuer *persona.Issuer, sess *session.Session, agentID string, toolSet []session.ToolServerRef, mode session.ToolLoadingMode, unlocked []string) ([]llm.ToolDefinition, error) {
 	if issuer == nil {
 		return nil, fmt.Errorf("tools: ListToolDefinitions: issuer is nil")
 	}
@@ -41,7 +70,32 @@ func ListToolDefinitions(ctx context.Context, issuer *persona.Issuer, sess *sess
 		return nil, fmt.Errorf("tools: ListToolDefinitions: sess is nil")
 	}
 
-	return candidateDefinitions(ctx, issuer, sess, agentID, toolSet)
+	candidates, err := candidateDefinitions(ctx, issuer, sess, agentID, toolSet)
+	if err != nil {
+		return nil, err
+	}
+
+	if mode != session.ToolLoadingModeSearch {
+		return candidates, nil
+	}
+
+	byName := make(map[string]llm.ToolDefinition, len(candidates))
+	for _, d := range candidates {
+		byName[d.Name] = d
+	}
+
+	defs := make([]llm.ToolDefinition, 0, len(unlocked)+1)
+	defs = append(defs, SearchToolsDefinition())
+	for _, name := range unlocked {
+		d, ok := byName[name]
+		if !ok {
+			slog.WarnContext(ctx, "search-mode tool unlock has no matching candidate in the current tool set; skipping",
+				"tool_name", name, "agent_id", agentID)
+			continue
+		}
+		defs = append(defs, d)
+	}
+	return defs, nil
 }
 
 // candidateDefinitions is the Candidates path every ListToolDefinitions
@@ -49,11 +103,11 @@ func ListToolDefinitions(ctx context.Context, issuer *persona.Issuer, sess *sess
 // each server's exposed tools, rejects FR8's reserved SearchToolsName
 // wherever it appears in a server's own catalog, and narrows the rest to
 // each ref's non-empty AllowedTools (C22, isAllowed) -- the one place that
-// narrowing happens. ListToolDefinitions' bulk path above calls this
-// directly; issue #2669's search-mode path (added on top of this scaffold)
-// calls it too, to build the pool search-mode unlock names are matched
-// against, so a name search_tools unlocked can never surface a tool
-// AllowedTools would not otherwise permit (NFR2).
+// narrowing happens. ListToolDefinitions' bulk branch returns this slice
+// unchanged (FR2); its search branch builds the pool search-mode unlock
+// names are matched against from the same slice, so a name search_tools
+// unlocked can never surface a tool AllowedTools would not otherwise
+// permit (NFR2).
 func candidateDefinitions(ctx context.Context, issuer *persona.Issuer, sess *session.Session, agentID string, toolSet []session.ToolServerRef) ([]llm.ToolDefinition, error) {
 	var defs []llm.ToolDefinition
 	for _, ref := range toolSet {
