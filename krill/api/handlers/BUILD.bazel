@@ -33,7 +33,9 @@ task.go (issue #2719, FR1) is the work-axis task-create surface: POST
 /tasks is gated behind RequireSession, mirroring every other write
 endpoint above. task_dependency.go (issue #2720, FR2) is the work-axis
 dependency-declaration surface: POST /tasks/{id}/dependencies is gated,
-GET /tasks/{id}/dependencies is not."""
+GET /tasks/{id}/dependencies is not. task_payload.go (issue #2721,
+FR4/FR10) is the work-axis by-task-id fetch surface: GET /tasks/{id} is
+ungated, over //krill/work's Assembler."""
 
 load("@rules_go//go:def.bzl", "go_library", "go_test")
 
@@ -63,6 +65,7 @@ go_library(
         "slice.go",
         "task.go",
         "task_dependency.go",
+        "task_payload.go",
         "types.go",
     ],
     importpath = "github.com/whale-net/everything/krill/api/handlers",
@@ -71,6 +74,7 @@ go_library(
         "//krill/forge",
         "//krill/slice",
         "//krill/store",
+        "//krill/work",
         "@com_github_google_uuid//:uuid",
         "@com_github_jackc_pgx_v5//pgconn",
     ],

@@ -1,0 +1,54 @@
+"""krill/work is M4's work-axis task payload document (FR4, FR10, issue
+#2721): the typed, self-describing Payload every later M4 task (#2722
+claim/lease, #2727 notes) extends additively, assembled by enriching M1's
+C3 scoped-slice document (//krill/slice) rather than independently
+re-deriving spec-axis content (NFR4/LB7)."""
+
+load("@rules_go//go:def.bzl", "go_library", "go_test")
+
+go_library(
+    name = "work",
+    srcs = ["payload.go"],
+    importpath = "github.com/whale-net/everything/krill/work",
+    visibility = ["//visibility:public"],
+    deps = [
+        "//krill/slice",
+        "//krill/store",
+        "@com_github_google_uuid//:uuid",
+    ],
+)
+
+# Scaffold-phase placeholder unit test (issue #2721) -- proves Assemble's
+# stub contract only; full coverage lands in this task's Testing phase.
+go_test(
+    name = "work_test",
+    srcs = ["payload_test.go"],
+    deps = [
+        ":work",
+        "@com_github_google_uuid//:uuid",
+        "@com_github_stretchr_testify//assert",
+    ],
+)
+
+# Real-Postgres integration coverage placeholder (issue #2721's Testing
+# section) -- see payload_integration_test.go's own doc comment.
+# Deliberately NOT part of `bazel test //...` -- see //libs/go/dbtest's
+# README, mirrored by //krill/slice:query_integration_test.
+#
+# Run it explicitly once populated (requires a working Docker daemon):
+#   bazel test //krill/work:payload_integration_test --test_output=all
+go_test(
+    name = "payload_integration_test",
+    size = "large",
+    timeout = "long",
+    srcs = ["payload_integration_test.go"],
+    gotags = ["integration"],
+    tags = [
+        "external",
+        "integration",
+        "manual",
+        "no-cache",
+        "no-sandbox",
+        "requires-network",
+    ],
+)
