@@ -10,13 +10,11 @@
 // for why this table is append-only rather than SCD2, and why
 // shipped-ness hangs off the (entity, container) association rather than
 // the spec entity itself.
-//
-// Scaffold-stage: interface signatures and the compile-time interface
-// assertion are in place; method bodies land in the Implementation phase.
 package store
 
 import (
 	"context"
+	"errors"
 	"fmt"
 
 	"github.com/google/uuid"
@@ -68,14 +66,120 @@ const deliveryShipmentColumns = `id, scope_id, entity_id, milestone_id, note, ` 
 	`created_by_acting_iss, created_by_acting_sub, created_by_acting_kind, ` +
 	`created_by_on_behalf_of_iss, created_by_on_behalf_of_sub, created_by_on_behalf_of_kind, created_at`
 
+// ErrEntityNotDelivered is MarkShipped's named, loud rejection: entityID
+// is not a relation='delivers' `entity_milestone` association of
+// milestoneID -- you cannot ship what the container does not deliver,
+// mirroring ErrMilepebbleDeliversNotSubset's role in
+// AddMilepebbleDelivers (milestone_authoring.go).
+var ErrEntityNotDelivered = errors.New("krill/store: entity is not a delivers association of this milestone")
+
 func (s deliveryShipmentStore) MarkShipped(ctx context.Context, scopeID, milestoneID, entityID uuid.UUID, note *string, acting, onBehalfOf Subject) error {
-	return fmt.Errorf("MarkShipped: not implemented")
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return fmt.Errorf("begin tx: %w", err)
+	}
+	defer tx.Rollback(ctx) //nolint:errcheck
+
+	var delivers bool
+	if err := tx.QueryRow(ctx, `
+		SELECT EXISTS (
+			SELECT 1 FROM entity_milestone
+			WHERE entity_id = $1 AND milestone_id = $2 AND relation = $3
+		)
+	`, entityID, milestoneID, string(MilestoneRelationDelivers)).Scan(&delivers); err != nil {
+		return fmt.Errorf("check delivers association: %w", err)
+	}
+	if !delivers {
+		return fmt.Errorf("%w: entity %s, milestone %s", ErrEntityNotDelivered, entityID, milestoneID)
+	}
+
+	// Plain INSERT, no ON CONFLICT -- NFR2/NFR3 require a second call for
+	// the same (entityID, milestoneID) pair to append a second row, never
+	// collapse or reject as a duplicate. Idempotency for a reader ("is
+	// this shipped") lives in ShippedEntityIDs/DeliveryBreakdown, not here.
+	if _, err := tx.Exec(ctx, `
+		INSERT INTO delivery_shipment (
+			scope_id, entity_id, milestone_id, note,
+			created_by_acting_iss, created_by_acting_sub, created_by_acting_kind,
+			created_by_on_behalf_of_iss, created_by_on_behalf_of_sub, created_by_on_behalf_of_kind
+		) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+	`, scopeID, entityID, milestoneID, note,
+		acting.Iss, acting.Sub, string(acting.Kind),
+		onBehalfOf.Iss, onBehalfOf.Sub, string(onBehalfOf.Kind)); err != nil {
+		return fmt.Errorf("insert delivery_shipment: %w", err)
+	}
+
+	if err := tx.Commit(ctx); err != nil {
+		return fmt.Errorf("commit: %w", err)
+	}
+	return nil
 }
 
 func (s deliveryShipmentStore) ShippedEntityIDs(ctx context.Context, milestoneID uuid.UUID) (map[uuid.UUID]bool, error) {
-	return nil, fmt.Errorf("ShippedEntityIDs: not implemented")
+	rows, err := s.pool.Query(ctx, `
+		SELECT DISTINCT entity_id FROM delivery_shipment WHERE milestone_id = $1
+	`, milestoneID)
+	if err != nil {
+		return nil, fmt.Errorf("list delivery_shipment entity ids: %w", err)
+	}
+	defer rows.Close()
+
+	result := make(map[uuid.UUID]bool)
+	for rows.Next() {
+		var id uuid.UUID
+		if err := rows.Scan(&id); err != nil {
+			return nil, fmt.Errorf("scan delivery_shipment entity id: %w", err)
+		}
+		result[id] = true
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("list delivery_shipment entity ids: %w", err)
+	}
+	return result, nil
 }
 
 func (s deliveryShipmentStore) DeliveryBreakdown(ctx context.Context, milestoneID uuid.UUID) (shipped []uuid.UUID, unshipped []uuid.UUID, err error) {
-	return nil, nil, fmt.Errorf("DeliveryBreakdown: not implemented")
+	rows, err := s.pool.Query(ctx, `
+		SELECT entity_id FROM entity_milestone
+		WHERE milestone_id = $1 AND relation = $2
+	`, milestoneID, string(MilestoneRelationDelivers))
+	if err != nil {
+		return nil, nil, fmt.Errorf("list entity_milestone delivers: %w", err)
+	}
+
+	var deliveredIDs []uuid.UUID
+	for rows.Next() {
+		var id uuid.UUID
+		if err := rows.Scan(&id); err != nil {
+			rows.Close()
+			return nil, nil, fmt.Errorf("scan entity_milestone: %w", err)
+		}
+		deliveredIDs = append(deliveredIDs, id)
+	}
+	rows.Close()
+	if err := rows.Err(); err != nil {
+		return nil, nil, fmt.Errorf("list entity_milestone delivers: %w", err)
+	}
+
+	// A container with zero `delivers` associations short-circuits here:
+	// deliveredIDs is nil, so both returned slices stay nil, and
+	// ShippedEntityIDs is never called for an id set that would only ever
+	// produce an empty map.
+	if len(deliveredIDs) == 0 {
+		return nil, nil, nil
+	}
+
+	shippedSet, err := s.ShippedEntityIDs(ctx, milestoneID)
+	if err != nil {
+		return nil, nil, err
+	}
+
+	for _, id := range deliveredIDs {
+		if shippedSet[id] {
+			shipped = append(shipped, id)
+		} else {
+			unshipped = append(unshipped, id)
+		}
+	}
+	return shipped, unshipped, nil
 }

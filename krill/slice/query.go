@@ -209,6 +209,34 @@ func (q *Querier) GetEntitySetSlice(ctx context.Context, entityIDs []uuid.UUID) 
 	}, nil
 }
 
+// GetDeliveryBreakdown is FR10 (issue #2686): resolves milestoneID's
+// per-item shipped/not-shipped split -- store.DeliveryShipmentStore.
+// DeliveryBreakdown's "not-yet-shipped scope" definition -- into two
+// Documents of the same typed entities (FeatureEntity/RequirementEntity,
+// today's only two `delivers`-able kinds) every other granularity in this
+// package returns, via GetEntitySetSlice, rather than a second, id-only
+// projection (LB7). Works for a milepebble exactly as it does for a
+// milestone: both are `milestone_ref` rows, and DeliveryBreakdown already
+// scopes to milestoneID's own `delivers` associations alone. A container
+// with zero `delivers` associations returns two empty Documents, not an
+// error -- DeliveryBreakdown's own empty-input contract, unchanged here.
+func (q *Querier) GetDeliveryBreakdown(ctx context.Context, milestoneID uuid.UUID) (shipped Document, unshipped Document, err error) {
+	shippedIDs, unshippedIDs, err := q.store.DeliveryShipments().DeliveryBreakdown(ctx, milestoneID)
+	if err != nil {
+		return Document{}, Document{}, fmt.Errorf("delivery breakdown: %w", err)
+	}
+
+	shipped, err = q.GetEntitySetSlice(ctx, shippedIDs)
+	if err != nil {
+		return Document{}, Document{}, fmt.Errorf("shipped entity set slice: %w", err)
+	}
+	unshipped, err = q.GetEntitySetSlice(ctx, unshippedIDs)
+	if err != nil {
+		return Document{}, Document{}, fmt.Errorf("unshipped entity set slice: %w", err)
+	}
+	return shipped, unshipped, nil
+}
+
 // -- as-of assembly (FR11 x FR5-FR8, issue #2493) ------------------------
 //
 // Each granularity above has an *AsOf twin below: the same shape of

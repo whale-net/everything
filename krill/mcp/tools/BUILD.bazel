@@ -10,6 +10,7 @@ load("@rules_go//go:def.bzl", "go_library", "go_test")
 go_library(
     name = "tools",
     srcs = [
+        "delivery_shipment.go",
         "design.go",
         "milestone.go",
         "milestone_status.go",
