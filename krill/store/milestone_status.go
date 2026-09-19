@@ -8,16 +8,15 @@
 // this file is additive. See migration 012's LB3 boundary comment for why
 // this table is append-only rather than SCD2, unlike the milestone_ref
 // row it hangs off.
-//
-// Scaffold-stage: interface signatures and the compile-time interface
-// assertion are in place; method bodies land in the Implementation phase.
 package store
 
 import (
 	"context"
+	"errors"
 	"fmt"
 
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
@@ -70,18 +69,140 @@ const milestoneStatusEventColumns = `id, scope_id, milestone_id, status, note, `
 	`created_by_acting_iss, created_by_acting_sub, created_by_acting_kind, ` +
 	`created_by_on_behalf_of_iss, created_by_on_behalf_of_sub, created_by_on_behalf_of_kind, created_at`
 
+func scanMilestoneStatusEvent(row pgx.Row) (MilestoneStatusEvent, error) {
+	var e MilestoneStatusEvent
+	var status string
+	var actingKind, onBehalfOfKind string
+	err := row.Scan(
+		&e.ID, &e.ScopeID, &e.MilestoneID, &status, &e.Note,
+		&e.CreatedByActing.Iss, &e.CreatedByActing.Sub, &actingKind,
+		&e.CreatedByOnBehalfOf.Iss, &e.CreatedByOnBehalfOf.Sub, &onBehalfOfKind,
+		&e.CreatedAt,
+	)
+	if err != nil {
+		return MilestoneStatusEvent{}, err
+	}
+	e.Status = MilestoneStatus(status)
+	e.CreatedByActing.Kind = SubjectKind(actingKind)
+	e.CreatedByOnBehalfOf.Kind = SubjectKind(onBehalfOfKind)
+	return e, nil
+}
+
 func (s milestoneStatusEventStore) RecordTransition(ctx context.Context, scopeID, milestoneID uuid.UUID, status MilestoneStatus, note *string, acting, onBehalfOf Subject) (MilestoneStatusEvent, error) {
-	return MilestoneStatusEvent{}, fmt.Errorf("RecordTransition: not implemented")
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return MilestoneStatusEvent{}, fmt.Errorf("begin tx: %w", err)
+	}
+	defer tx.Rollback(ctx) //nolint:errcheck
+
+	// milestone_ref's own kind CHECK (migration 011) already restricts
+	// every row to kind IN ('milestone', 'milepebble') -- a plain
+	// existence check under scopeID is therefore sufficient to enforce
+	// this method's "target is a milestone or milepebble" contract; there
+	// is no third kind a row in this table could have.
+	exists, err := plainRowExists(ctx, tx, "milestone_ref", milestoneID, scopeID)
+	if err != nil {
+		return MilestoneStatusEvent{}, err
+	}
+	if !exists {
+		return MilestoneStatusEvent{}, errParentNotFound("milestone_ref", milestoneID)
+	}
+
+	event, err := scanMilestoneStatusEvent(tx.QueryRow(ctx, `
+		INSERT INTO milestone_status_event (
+			scope_id, milestone_id, status, note,
+			created_by_acting_iss, created_by_acting_sub, created_by_acting_kind,
+			created_by_on_behalf_of_iss, created_by_on_behalf_of_sub, created_by_on_behalf_of_kind
+		) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+		RETURNING `+milestoneStatusEventColumns,
+		scopeID, milestoneID, string(status), note,
+		acting.Iss, acting.Sub, string(acting.Kind),
+		onBehalfOf.Iss, onBehalfOf.Sub, string(onBehalfOf.Kind)))
+	if err != nil {
+		return MilestoneStatusEvent{}, fmt.Errorf("insert milestone_status_event: %w", err)
+	}
+
+	if err := tx.Commit(ctx); err != nil {
+		return MilestoneStatusEvent{}, fmt.Errorf("commit: %w", err)
+	}
+	return event, nil
 }
 
 func (s milestoneStatusEventStore) CurrentStatus(ctx context.Context, milestoneID uuid.UUID) (MilestoneStatus, error) {
-	return "", fmt.Errorf("CurrentStatus: not implemented")
+	var status string
+	err := s.pool.QueryRow(ctx, `
+		SELECT status FROM milestone_status_event
+		WHERE milestone_id = $1
+		ORDER BY created_at DESC, id DESC
+		LIMIT 1
+	`, milestoneID).Scan(&status)
+	if errors.Is(err, pgx.ErrNoRows) {
+		// Absence of any row IS "not started" (FR8) -- never a seeded
+		// row, see MilestoneStatusNotStarted's doc comment.
+		return MilestoneStatusNotStarted, nil
+	}
+	if err != nil {
+		return "", fmt.Errorf("current milestone_status_event: %w", err)
+	}
+	return MilestoneStatus(status), nil
 }
 
 func (s milestoneStatusEventStore) CurrentStatuses(ctx context.Context, milestoneIDs []uuid.UUID) (map[uuid.UUID]MilestoneStatus, error) {
-	return nil, fmt.Errorf("CurrentStatuses: not implemented")
+	result := make(map[uuid.UUID]MilestoneStatus, len(milestoneIDs))
+	for _, id := range milestoneIDs {
+		result[id] = MilestoneStatusNotStarted
+	}
+	if len(milestoneIDs) == 0 {
+		return result, nil
+	}
+
+	// One query for the whole set (FR11 depends on this shape) -- DISTINCT
+	// ON (milestone_id) picks the latest row per id, tie-broken by id the
+	// same way CurrentStatus is.
+	rows, err := s.pool.Query(ctx, `
+		SELECT DISTINCT ON (milestone_id) milestone_id, status
+		FROM milestone_status_event
+		WHERE milestone_id = ANY($1)
+		ORDER BY milestone_id, created_at DESC, id DESC
+	`, milestoneIDs)
+	if err != nil {
+		return nil, fmt.Errorf("current milestone_status_events: %w", err)
+	}
+	defer rows.Close()
+
+	for rows.Next() {
+		var id uuid.UUID
+		var status string
+		if err := rows.Scan(&id, &status); err != nil {
+			return nil, fmt.Errorf("scan milestone_status_event: %w", err)
+		}
+		result[id] = MilestoneStatus(status)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("current milestone_status_events: %w", err)
+	}
+	return result, nil
 }
 
 func (s milestoneStatusEventStore) ListTransitions(ctx context.Context, milestoneID uuid.UUID) ([]MilestoneStatusEvent, error) {
-	return nil, fmt.Errorf("ListTransitions: not implemented")
+	rows, err := s.pool.Query(ctx, `
+		SELECT `+milestoneStatusEventColumns+`
+		FROM milestone_status_event
+		WHERE milestone_id = $1
+		ORDER BY created_at ASC, id ASC
+	`, milestoneID)
+	if err != nil {
+		return nil, fmt.Errorf("list milestone_status_event: %w", err)
+	}
+	defer rows.Close()
+
+	var events []MilestoneStatusEvent
+	for rows.Next() {
+		e, err := scanMilestoneStatusEvent(rows)
+		if err != nil {
+			return nil, fmt.Errorf("scan milestone_status_event: %w", err)
+		}
+		events = append(events, e)
+	}
+	return events, rows.Err()
 }

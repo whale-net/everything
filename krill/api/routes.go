@@ -26,11 +26,13 @@ import (
 // /design-sessions/{id}/propose (issue #2546, FR9/FR10/NFR2), the five
 // POST /milestones* endpoints below (issue #2683, FR1/FR2, LB4), and the
 // three POST /milestones/{id}/milepebbles, /milepebbles/{id}/delivers,
-// and /milepebbles/{id}/discovered-scope endpoints (issue #2684, FR3/FR4)
-// are wrapped with handlers.RequireSession (gate.go) -- no write path is
-// reachable without a session minted by `init`. Read paths never require a
-// session (root plan issue #2485). Import (FR16) is a later task's route,
-// not added here.
+// and /milepebbles/{id}/discovered-scope endpoints (issue #2684, FR3/FR4),
+// and POST /milestones/{id}/status (issue #2685, FR8/FR9/FR12) are wrapped
+// with handlers.RequireSession (gate.go) -- no write path is reachable
+// without a session minted by `init`. Read paths never require a session
+// (root plan issue #2485) -- this includes GET /milestones/{id}/status and
+// GET /milestones/{id}/status/history. Import (FR16) is a later task's
+// route, not added here.
 //
 // githubToken is KRILL_GITHUB_TOKEN (see main.go's config/../ENV.md) --
 // threaded through to //krill/forge.GitHubClient, the one dependency
@@ -63,6 +65,14 @@ func setupRoutes(mux *http.ServeMux, pool *pgxpool.Pool, githubToken string) {
 	mux.Handle("POST /milepebbles/{id}/discovered-scope", gate(handlers.AddDiscoveredScopeHandler(entities.MilestoneAuthoring())))
 	mux.HandleFunc("GET /milepebbles/{id}", handlers.GetMilepebbleHandler(entities.MilestoneAuthoring()))
 	mux.HandleFunc("GET /milestones/{id}/milepebbles", handlers.ListMilepebblesHandler(entities.MilestoneAuthoring()))
+
+	// milestone_status_event (issue #2685, FR8/FR9/FR12) serves both a
+	// MilestoneKindMilestone and a MilestoneKindMilepebble row -- both are
+	// `milestone_ref` rows, so one route pair covers both without a
+	// milepebble-specific alias.
+	mux.Handle("POST /milestones/{id}/status", gate(handlers.SetMilestoneStatusHandler(entities.MilestoneStatus())))
+	mux.HandleFunc("GET /milestones/{id}/status", handlers.GetMilestoneStatusHandler(entities.MilestoneStatus()))
+	mux.HandleFunc("GET /milestones/{id}/status/history", handlers.GetMilestoneStatusHistoryHandler(entities.MilestoneStatus()))
 
 	mux.Handle("POST /design-sessions", gate(handlers.OpenDesignSessionHandler(entities.DesignSessions())))
 	mux.HandleFunc("GET /design-sessions/{id}", handlers.GetDesignSessionHandler(entities.DesignSessions(), entities.RevisionEvents()))

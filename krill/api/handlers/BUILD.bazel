@@ -21,7 +21,10 @@ GetDesignSessionHandler reuses. session_slice.go (issue #2544, krill M2,
 FR5) is the HTTP surface over //krill/slice's fifth granularity,
 GetEntitySetSlice -- also ungated. mediated.go (issue #2546, FR9/FR10/NFR2)
 is the mediated-intake write endpoint, POST /design-sessions/{id}/propose --
-gated like every other write endpoint."""
+gated like every other write endpoint. milestone_status.go (issue #2685,
+FR8/FR9/FR12) is the milestone/milepebble status HTTP surface: POST
+/milestones/{id}/status is gated, GET /milestones/{id}/status and GET
+/milestones/{id}/status/history are not."""
 
 load("@rules_go//go:def.bzl", "go_library", "go_test")
 
@@ -37,6 +40,7 @@ go_library(
         "history.go",
         "mediated.go",
         "milestone.go",
+        "milestone_status.go",
         "open_questions.go",
         "pointer.go",
         "product.go",
