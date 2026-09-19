@@ -378,6 +378,26 @@ go_test(
     data = ["import_completion.go"],
 )
 
+# NFR2/LB3 structural check (issue #2685's Testing item 5): a status
+# transition is an addition to history, never an overwrite, so
+# MilestoneStatusEventStore must expose no update/delete-shaped method (a
+# reflect-based check against the interface itself, not a fake) and
+# milestone_status.go -- the only file that writes to
+# `milestone_status_event` -- must never issue an UPDATE/DELETE/TRUNCATE
+# naming that table (read back via `data`, mirroring
+# import_completion_nfr3_test.go's own technique). No database needed --
+# part of `bazel test //...` (no "manual"/"integration" tag).
+go_test(
+    name = "milestone_status_nfr2_test",
+    srcs = ["milestone_status_nfr2_test.go"],
+    data = ["milestone_status.go"],
+    deps = [
+        ":store",
+        "@com_github_stretchr_testify//assert",
+        "@com_github_stretchr_testify//require",
+    ],
+)
+
 # Real Postgres integration test for MediatedWriteStore (mediated.go, issue
 # #2546's Testing section): a Feature+two-Requirements proposal (one via
 # ParentID, two via ParentProposalIndex) creates all three and exactly one
@@ -530,6 +550,54 @@ go_test(
     srcs = [
         "milepebble_integration_test.go",
         "milestone_authoring_integration_test.go",
+    ],
+    gotags = ["integration"],
+    tags = [
+        "external",
+        "integration",
+        "manual",
+        "no-cache",
+        "no-sandbox",
+        "requires-network",
+    ],
+    deps = [
+        ":store",
+        "//krill/migrate/schema",
+        "//libs/go/dbtest",
+        "//libs/go/migrate",
+        "@com_github_google_uuid//:uuid",
+        "@com_github_jackc_pgx_v5//stdlib",
+        "@com_github_stretchr_testify//assert",
+        "@com_github_stretchr_testify//require",
+    ],
+)
+
+# Real Postgres integration test for MilestoneStatusEventStore
+# (milestone_status.go, migration 012, issue #2685's Testing section,
+# FR8/FR9/FR12): the "not started"-by-absence derivation with zero seeded
+# rows, all seven fixed statuses accepted and an eighth rejected by the DB
+# CHECK, the same operations working against a kind='milepebble' row (FR9)
+# with an unknown id rejected loudly, a planned -> in progress -> shipped
+# sequence returning chronological history with CurrentStatus deriving the
+# latest (FR12), a later write never mutating an earlier row's id/created_at
+# (NFR2's behavioral half), a re-affirmed status appending rather than
+# no-op-ing, every event's subject pair populated (NFR4), and
+# CurrentStatuses' batch form over 50 milestones matching 50 individual
+# CurrentStatus calls. Shares milestone_authoring_integration_test.go's
+# test-store/test-scope/subject helpers (same package, same build tag)
+# rather than duplicating them, mirroring milepebble_integration_test.go's
+# own choice. Deliberately NOT part of `bazel test //...` -- see
+# //libs/go/dbtest's README for the full rationale.
+#
+# Run it explicitly (requires a working Docker daemon):
+#   bazel test //krill/store:milestone_status_integration_test --test_output=all
+go_test(
+    name = "milestone_status_integration_test",
+    size = "large",
+    timeout = "long",
+    srcs = [
+        "milestone_authoring_integration_test.go",
+        "milestone_status_integration_test.go",
     ],
     gotags = ["integration"],
     tags = [
