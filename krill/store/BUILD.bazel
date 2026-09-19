@@ -840,6 +840,34 @@ go_test(
 # Run it explicitly (requires a working Docker daemon):
 #   bazel test //krill/store:task_dependency_integration_test --test_output=all
 go_test(
+    name = "task_note_integration_test",
+    size = "large",
+    timeout = "long",
+    srcs = ["task_note_integration_test.go"],
+    gotags = ["integration"],
+    tags = [
+        "external",
+        "integration",
+        "manual",
+        "no-cache",
+        "no-sandbox",
+        "requires-network",
+    ],
+    deps = [
+        ":store",
+        "//krill/migrate/schema",
+        "//krill/slice",
+        "//krill/work",
+        "//libs/go/dbtest",
+        "//libs/go/migrate",
+        "@com_github_google_uuid//:uuid",
+        "@com_github_jackc_pgx_v5//stdlib",
+        "@com_github_stretchr_testify//assert",
+        "@com_github_stretchr_testify//require",
+    ],
+)
+
+go_test(
     name = "task_dependency_integration_test",
     size = "large",
     timeout = "long",
