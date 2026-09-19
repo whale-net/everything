@@ -335,7 +335,8 @@ func (app *App) handleReleaseStatus(w http.ResponseWriter, r *http.Request) {
 	resp, err := app.registry.Release.GetRelease(r.Context(), &pb.GetReleaseRequest{ReleaseRunId: releaseRunID})
 	if err != nil {
 		log.Printf("GetRelease(%q) failed: %v", releaseRunID, err)
-		s := pages.ReleaseStatusViewState{ReleaseRunID: releaseRunID, LoadErr: grpcErrorMessage(err)}
+		heartbeatMs := int(app.sseHub.Config().HeartbeatInterval.Milliseconds())
+		s := pages.ReleaseStatusViewState{ReleaseRunID: releaseRunID, LoadErr: grpcErrorMessage(err), HeartbeatIntervalMs: heartbeatMs}
 		if renderErr := RenderTempl(w, r, "Release Status", pages.ReleaseStatus(user, s)); renderErr != nil {
 			log.Printf("Failed to render release status page: %v", renderErr)
 			http.Error(w, "Failed to render page", http.StatusInternalServerError)
@@ -343,10 +344,12 @@ func (app *App) handleReleaseStatus(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	heartbeatMs := int(app.sseHub.Config().HeartbeatInterval.Milliseconds())
 	s := pages.ReleaseStatusViewState{
-		ReleaseRunID: releaseRunID,
-		Release:      resp,
-		BuildCommits: app.resolveTargetCommits(r.Context(), resp.GetTargets()),
+		ReleaseRunID:        releaseRunID,
+		Release:             resp,
+		BuildCommits:        app.resolveTargetCommits(r.Context(), resp.GetTargets()),
+		HeartbeatIntervalMs: heartbeatMs,
 	}
 	if renderErr := RenderTempl(w, r, "Release Status", pages.ReleaseStatus(user, s)); renderErr != nil {
 		log.Printf("Failed to render release status page: %v", renderErr)
