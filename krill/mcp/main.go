@@ -131,11 +131,12 @@ func run() error {
 	// write tool can never end up reachable from specMountPath is to never
 	// register it on the same *mcp.Server that backs it. tools.RegisterAll
 	// (FR5-FR8, read-only) is unchanged; tools.RegisterDesignAll (issue
-	// #2547) and tools.RegisterMilestoneAll (milestone authoring, issue
-	// #2683) both mount on designReg -- create_milestone/set_fr_budget/
-	// add_delivers/add_must_not_foreclose/add_deferral all need the same
-	// krill-session-derived LB4 subject pair every write tool on that
-	// mount already resolves.
+	// #2547), tools.RegisterMilestoneAll (milestone authoring, issue
+	// #2683), and tools.RegisterMilestoneStatusAll (status history, issue
+	// #2685) all mount on designReg -- create_milestone/set_fr_budget/
+	// add_delivers/add_must_not_foreclose/add_deferral/set_milestone_status
+	// all need the same krill-session-derived LB4 subject pair every write
+	// tool on that mount already resolves.
 	specSrv := server.New()
 	specReg := server.NewRegistry(specSrv)
 	tools.RegisterAll(specReg, querier)
@@ -144,6 +145,7 @@ func run() error {
 	designReg := server.NewRegistry(designSrv)
 	tools.RegisterDesignAll(designReg, entities, sessions, querier)
 	tools.RegisterMilestoneAll(designReg, sessions, entities.MilestoneAuthoring())
+	tools.RegisterMilestoneStatusAll(designReg, sessions, entities.MilestoneStatus())
 
 	// The mcpauth (human) front door's CredentialStore preflights the
 	// consuming domain's credential table at boot -- exactly like

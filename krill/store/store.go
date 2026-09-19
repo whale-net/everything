@@ -10,7 +10,8 @@ import "github.com/jackc/pgx/v5/pgxpool"
 // and `revision_event` (migration 008, issue #2542),
 // `import_completion` (migration 009, issue #2548), and the milestone
 // authoring fields plus `milestone_deferral` (migration 010, issue
-// #2683). MediatedWrites()
+// #2683), and `milestone_status_event` (migration 012, issue #2685).
+// MediatedWrites()
 // (mediated.go, issue #2546) is not a new table: it writes `feature`/
 // `requirement`/`revision_event` rows this same Store already owns,
 // through one shared transaction instead of per-entity accessor calls.
@@ -65,6 +66,14 @@ func (s *Store) Milestones() MilestoneStore { return milestoneStore{pool: s.pool
 // accessor.
 func (s *Store) MilestoneAuthoring() MilestoneAuthoringStore {
 	return milestoneAuthoringStore{pool: s.pool}
+}
+
+// MilestoneStatus returns the MilestoneStatusEventStore implementation --
+// the append-only status history register (migration 012, issue #2685,
+// FR8, FR9, FR12) sitting alongside MilestoneAuthoringStore, covering
+// both a milestone and a milepebble row (both `milestone_ref`).
+func (s *Store) MilestoneStatus() MilestoneStatusEventStore {
+	return milestoneStatusEventStore{pool: s.pool}
 }
 
 // Amend returns the AmendStore implementation -- the SCD2 close-and-open
