@@ -1246,8 +1246,8 @@ func TestHandleGameDetail_SeparatesLowFrequencyActions(t *testing.T) {
 	}
 	overview := body[startIdx:endIdx]
 
-	if !strings.Contains(overview, "Server Status &amp; Controls") {
-		t.Errorf("expected Server Status & Controls on overview, got: %s", overview)
+	if !strings.Contains(overview, "Daily Ops Overview") {
+		t.Errorf("expected Daily Ops Overview on overview, got: %s", overview)
 	}
 	if strings.Contains(overview, "Edit Configuration") {
 		t.Errorf("Overview must NOT contain 'Edit Configuration', got: %s", overview)

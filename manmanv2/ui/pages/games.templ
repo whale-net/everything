@@ -213,9 +213,11 @@ templ gameRow(row GameRow, startExpanded bool) {
 				@htmxui.Badge(deploymentStatusLabel(row.RunState), statusBadgeVariant(string(row.RunState)), htmxui.BadgeSizeMD, true, nil)
 			</div>
 			<div class="flex items-center gap-3 shrink-0">
-				<div @click.stop class="shrink-0">
-					@components.ConnectAddressDisplay(row.Connect)
-				</div>
+				if len(row.Deployments) <= 1 {
+					<div @click.stop class="shrink-0">
+						@components.ConnectAddressDisplay(row.Connect)
+					</div>
+				}
 				<a
 					href={ templ.URL(fmt.Sprintf("/games/%d", row.GameID)) }
 					@click.stop

@@ -438,8 +438,11 @@ func TestGameDetail_Overview_SeparatesLowFrequencyActions(t *testing.T) {
 	overviewContent := body[startIdx:endIdx]
 
 	// Overview MUST contain status, runtime, and start/stop/restart controls
-	if !strings.Contains(overviewContent, "Server Status &amp; Controls") {
-		t.Errorf("Overview must have Server Status & Controls section, got: %s", overviewContent)
+	// (Daily Ops Overview is the single home for these now -- the "Server
+	// Status & Controls" table used to duplicate this per deployment via
+	// DeploymentRow before it was removed as redundant.)
+	if !strings.Contains(overviewContent, "Daily Ops Overview") {
+		t.Errorf("Overview must have Daily Ops Overview section, got: %s", overviewContent)
 	}
 	if !strings.Contains(overviewContent, "192.168.1.50:27015") {
 		t.Errorf("Overview must show connect address, got: %s", overviewContent)
