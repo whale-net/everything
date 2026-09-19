@@ -237,6 +237,30 @@ func (q *Querier) GetDeliveryBreakdown(ctx context.Context, milestoneID uuid.UUI
 	return shipped, unshipped, nil
 }
 
+// GetMilestoneDeliversSlice is issue #2721's (FR4/FR10) task-payload
+// slice resolution: milestoneID's own `delivers` associations only (never
+// `must_not_foreclose` -- that set is a guardrail, not deliverable
+// content a task payload embeds), resolved into the same typed Document
+// (LB7) every other granularity returns, via GetEntitySetSlice --
+// krill/work.Assembler calls this rather than reading `entity_milestone`
+// or any spec-axis table itself (NFR4). Works for a milepebble exactly as
+// it does for a milestone: both are `milestone_ref` rows, mirroring
+// GetDeliveryBreakdown's own note. A container with zero `delivers`
+// associations returns an empty Document, not an error.
+func (q *Querier) GetMilestoneDeliversSlice(ctx context.Context, milestoneID uuid.UUID) (Document, error) {
+	associations, err := q.store.Milestones().ListAssociationsByMilestone(ctx, milestoneID)
+	if err != nil {
+		return Document{}, fmt.Errorf("list associations for milestone %s: %w", milestoneID, err)
+	}
+	deliversIDs, _ := milestoneRelationSets(associations)
+
+	doc, err := q.GetEntitySetSlice(ctx, deliversIDs)
+	if err != nil {
+		return Document{}, fmt.Errorf("delivers entity set slice for milestone %s: %w", milestoneID, err)
+	}
+	return doc, nil
+}
+
 // GetBacklog is FR5/FR6 (issue #2687): productID's backlog bucket
 // contents, as the same typed entities (FeatureEntity/RequirementEntity)
 // every other granularity in this package returns, via GetEntitySetSlice

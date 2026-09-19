@@ -33,7 +33,9 @@ task.go (issue #2719, FR1) is the work-axis task-create surface: POST
 /tasks is gated behind RequireSession, mirroring every other write
 endpoint above. task_dependency.go (issue #2720, FR2) is the work-axis
 dependency-declaration surface: POST /tasks/{id}/dependencies is gated,
-GET /tasks/{id}/dependencies is not."""
+GET /tasks/{id}/dependencies is not. task_payload.go (issue #2721,
+FR4/FR10) is the work-axis by-task-id fetch surface: GET /tasks/{id} is
+ungated, over //krill/work's Assembler."""
 
 load("@rules_go//go:def.bzl", "go_library", "go_test")
 
@@ -63,6 +65,7 @@ go_library(
         "slice.go",
         "task.go",
         "task_dependency.go",
+        "task_payload.go",
         "types.go",
     ],
     importpath = "github.com/whale-net/everything/krill/api/handlers",
@@ -71,6 +74,7 @@ go_library(
         "//krill/forge",
         "//krill/slice",
         "//krill/store",
+        "//krill/work",
         "@com_github_google_uuid//:uuid",
         "@com_github_jackc_pgx_v5//pgconn",
     ],
@@ -137,14 +141,55 @@ go_test(
         "slice_internal_test.go",
         "slice_test.go",
         "task_dependency_test.go",
+        "task_payload_test.go",
         "task_test.go",
     ],
     embed = [":handlers"],
     deps = [
         "//krill/slice",
         "//krill/store",
+        "//krill/work",
         "@com_github_google_uuid//:uuid",
         "@com_github_jackc_pgx_v5//pgconn",
+        "@com_github_stretchr_testify//assert",
+        "@com_github_stretchr_testify//require",
+    ],
+)
+
+# Real-Postgres coverage for GetTaskPayloadHandler's full success path
+# (task_payload_integration_test.go, issue #2721's Testing section) -- the
+# one branch task_payload_test.go's fakes cannot reach, since
+# work.Assembler wraps a concrete *slice.Querier over a real *store.Store.
+# Deliberately NOT part of `bazel test //...` -- see //libs/go/dbtest's
+# README, mirrored by //krill/slice:query_integration_test.
+#
+# Run it explicitly (requires a working Docker daemon):
+#   bazel test //krill/api/handlers:task_payload_integration_test --test_output=all
+go_test(
+    name = "task_payload_integration_test",
+    size = "large",
+    timeout = "long",
+    srcs = ["task_payload_integration_test.go"],
+    embed = [":handlers"],
+    gotags = ["integration"],
+    tags = [
+        "external",
+        "integration",
+        "manual",
+        "no-cache",
+        "no-sandbox",
+        "requires-network",
+    ],
+    deps = [
+        "//krill/migrate/schema",
+        "//krill/slice",
+        "//krill/store",
+        "//krill/work",
+        "//libs/go/dbtest",
+        "//libs/go/migrate",
+        "@com_github_google_uuid//:uuid",
+        "@com_github_jackc_pgx_v5//pgxpool",
+        "@com_github_jackc_pgx_v5//stdlib",
         "@com_github_stretchr_testify//assert",
         "@com_github_stretchr_testify//require",
     ],

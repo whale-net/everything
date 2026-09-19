@@ -20,6 +20,7 @@ go_library(
         "//krill/forge",
         "//krill/slice",
         "//krill/store",
+        "//krill/work",
         "//libs/go/db",
         "//libs/go/logging",
         "@com_github_jackc_pgx_v5//pgxpool",

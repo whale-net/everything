@@ -10,6 +10,7 @@ import (
 	"github.com/whale-net/everything/krill/forge"
 	"github.com/whale-net/everything/krill/slice"
 	"github.com/whale-net/everything/krill/store"
+	"github.com/whale-net/everything/krill/work"
 )
 
 // setupRoutes registers krill's HTTP surface. /healthz, `init` (FR3, issue
@@ -52,6 +53,7 @@ func setupRoutes(mux *http.ServeMux, pool *pgxpool.Pool, githubToken string) {
 	gate := handlers.RequireSession(sessions)
 	forgeClient := &forge.GitHubClient{Token: githubToken}
 	querier := slice.NewQuerier(entities)
+	assembler := work.NewAssembler(entities.Tasks(), querier)
 
 	mux.HandleFunc("/healthz", handleHealthz(pool))
 	mux.HandleFunc("POST /sessions/init", handlers.InitSessionHandler(sessions))
@@ -118,6 +120,12 @@ func setupRoutes(mux *http.ServeMux, pool *pgxpool.Pool, githubToken string) {
 	// ungated like every other read endpoint in this package.
 	mux.Handle("POST /tasks/{id}/dependencies", gate(handlers.DeclareTaskDependenciesHandler(entities.Tasks())))
 	mux.HandleFunc("GET /tasks/{id}/dependencies", handlers.ListTaskDependenciesHandler(entities.Tasks()))
+
+	// The work-axis task payload document (issue #2721, FR4/FR10): the
+	// by-task-id fetch that makes resumption on a different host a
+	// re-fetch rather than a dedicated verb. Ungated like every other read
+	// endpoint in this package (NFR6's gate is write-only).
+	mux.HandleFunc("GET /tasks/{id}", handlers.GetTaskPayloadHandler(entities.Tasks(), assembler))
 
 	mux.Handle("POST /design-sessions", gate(handlers.OpenDesignSessionHandler(entities.DesignSessions())))
 	mux.HandleFunc("GET /design-sessions/{id}", handlers.GetDesignSessionHandler(entities.DesignSessions(), entities.RevisionEvents()))

@@ -1523,6 +1523,41 @@ issue #2717's Personas section states the Swarm Operator, not the Agent,
 creates tasks and their dependency edges; the Agent's role starts at claim,
 a later M4 task.
 
+## The task payload document (FR4, FR10, NFR4, issue #2721)
+
+`krill/work.Payload` is the one typed, self-describing document every M4
+verb that hands a task to an Agent returns (LB7) — today just the
+by-task-id fetch (`GET /tasks/{id}`, `get_task`), later also #2722's claim
+verb. It is not a second, independently derived projection over the spec
+axis: `Payload.Slice` is `slice.Document` embedded verbatim, and
+`work.Assembler.Assemble` obtains it by calling
+`slice.Querier.GetMilestoneDeliversSlice` (`krill/slice/query.go`) — a new
+sixth `Querier` method alongside FR5-FR9's five (see "The scoped-slice
+query" above) that resolves a `milestone_ref` row's own `delivers`
+associations (never `must_not_foreclose` — a guardrail, not deliverable
+content) into a `Document` via the existing `GetEntitySetSlice`, mirroring
+`GetDeliveryBreakdown`/`GetBacklog`'s own composition rather than adding a
+bespoke join. This is the live, MCP-exposed per-milestone `Delivers` read
+the "Open items" list below used to flag as still open — narrower than
+that item asked for (`Delivers` only, no `Must not foreclose`, and reached
+through the task payload rather than a standalone `GET
+/milestones/{id}/slice` route), so a future task may still want the wider
+version. `krill/work` itself never reads `feature`, `requirement`,
+`load_bearing_decision`, or `entity_milestone` directly — only through
+`slice.Querier` and `store.TaskStore`.
+
+`Assemble(ctx, scopeID, taskID)` loads the `task` row (`store.TaskStore.
+GetTaskByID`, which takes no scope argument since task ids are globally
+unique surrogates), rejects a `scopeID` mismatch identically to an unknown
+`taskID` (`store.ErrNotFound`, NFR1 — mirrors `api/handlers/pointer.go`'s
+own cross-scope check), then attaches the work-axis fields: lane state,
+lane sequence, attempt count, and the declared dependency list
+(`store.TaskStore.ListDependencies`, issue #2720) as `[]work.TaskDep` —
+always a non-nil slice, so a task with no dependencies serializes as `[]`,
+never `null`. Each `TaskDep.DependsOnTaskID` is named that way rather than
+a bare `TaskID` specifically so it is never misread as the payload's own
+`Task.ID` when the two appear side by side in the same document.
+
 ## Open items
 
 - The HTTP surface over the spec entity model covers create/attach, amend,
@@ -1538,8 +1573,12 @@ a later M4 task.
   read path exists (issue #2491, see "The scoped-slice query" above); FR21
   wires `/project-manager:design --milestone`'s krill-domain read to it
   (issue #2500, see "The design skill's live milestone read" above) —
-  still open: a live, MCP-exposed way to filter that read to just one
-  milestone's own `Delivers`/`Must not foreclose` entities (M3's C13/C28).
+  a `Delivers`-only version of "filter that read to just one milestone" now
+  exists (`slice.Querier.GetMilestoneDeliversSlice`, issue #2721, see "The
+  task payload document" above), reached only through the task payload
+  fetch/claim path today; still open: a standalone, MCP-exposed
+  `Delivers`+`Must not foreclose` version (M3's C13/C28) for a caller that
+  isn't fetching a task.
 - `krill/slice`'s four granularities each have an as-of assembly twin now
   (issue #2493, see "As-of slice assembly" above) — but no HTTP route
   exposes them yet (`krill/api/handlers/slice.go` still wires only the

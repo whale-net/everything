@@ -1,0 +1,74 @@
+"""krill/work is M4's work-axis task payload document (FR4, FR10, issue
+#2721): the typed, self-describing Payload every later M4 task (#2722
+claim/lease, #2727 notes) extends additively, assembled by enriching M1's
+C3 scoped-slice document (//krill/slice) rather than independently
+re-deriving spec-axis content (NFR4/LB7)."""
+
+load("@rules_go//go:def.bzl", "go_library", "go_test")
+
+go_library(
+    name = "work",
+    srcs = ["payload.go"],
+    importpath = "github.com/whale-net/everything/krill/work",
+    visibility = ["//visibility:public"],
+    deps = [
+        "//krill/slice",
+        "//krill/store",
+        "@com_github_google_uuid//:uuid",
+    ],
+)
+
+# Unit coverage for Assemble's two error branches that never touch a real
+# store (issue #2721's Testing section: NFR1's cross-scope rejection, an
+# unknown task id's named failure) -- see payload_test.go's own doc
+# comment for why these need no Postgres.
+go_test(
+    name = "work_test",
+    srcs = ["payload_test.go"],
+    deps = [
+        "//krill/slice",
+        "//krill/store",
+        "//krill/work",
+        "@com_github_google_uuid//:uuid",
+        "@com_github_stretchr_testify//assert",
+        "@com_github_stretchr_testify//require",
+    ],
+)
+
+# Real-Postgres coverage for Assemble's Testing-phase criteria (issue
+# #2721's Testing section: NFR4's byte-equal slice regression test, the
+# empty-dependency-list case, and full slice/lane/dependency/attempt
+# content) -- see payload_integration_test.go's own doc comment.
+# Deliberately NOT part of `bazel test //...` -- see //libs/go/dbtest's
+# README, mirrored by //krill/slice:query_integration_test.
+#
+# Run it explicitly (requires a working Docker daemon):
+#   bazel test //krill/work:payload_integration_test --test_output=all
+go_test(
+    name = "payload_integration_test",
+    size = "large",
+    timeout = "long",
+    srcs = ["payload_integration_test.go"],
+    gotags = ["integration"],
+    tags = [
+        "external",
+        "integration",
+        "manual",
+        "no-cache",
+        "no-sandbox",
+        "requires-network",
+    ],
+    deps = [
+        "//krill/migrate/schema",
+        "//krill/slice",
+        "//krill/store",
+        "//krill/work",
+        "//libs/go/dbtest",
+        "//libs/go/migrate",
+        "@com_github_google_uuid//:uuid",
+        "@com_github_jackc_pgx_v5//pgxpool",
+        "@com_github_jackc_pgx_v5//stdlib",
+        "@com_github_stretchr_testify//assert",
+        "@com_github_stretchr_testify//require",
+    ],
+)
