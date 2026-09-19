@@ -8,6 +8,7 @@ go_library(
         "apps_data.go",
         "artifact_data.go",
         "artifact_lookup.go",
+        "build_commit_cache.go",
         "chart_data.go",
         "deployments_data.go",
         "drift_data.go",
