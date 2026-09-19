@@ -33,6 +33,18 @@ load("@rules_go//go:def.bzl", "go_test")
 # database-free smoke check that runs under default `bazel test //...`
 # and would still catch a Parse regression in the interim.
 #
+# delivery_axis_integration_test.go (issue #2690, krill M3's own
+# end-to-end proof) shares this target too: one connected walk through
+# every M3 delivery-axis FR (#2683-#2689) against a real Postgres --
+# milestone authoring, milepebbles and mid-milestone discovery, status
+# history, per-item shipment, re-cut, the backlog bucket, and abandon --
+# re-asserting every captured entity/container id across the whole walk
+# (NFR1) and re-rendering PRODUCT.md/product/*.md at the end to prove a
+# milepebble or the backlog bucket never leaks into product/03-roadmap.md.
+# Unlike the other three files here, it never goes through
+# //krill/importer -- the delivery axis has no markdown-import path of its
+# own, so its fixture is built directly against //krill/store.
+#
 # Run the round-trip tests explicitly (requires a working Docker daemon):
 #   bazel test //krill/conformance:roundtrip_integration_test --test_output=all
 #
@@ -46,6 +58,7 @@ go_test(
     size = "large",
     timeout = "long",
     srcs = [
+        "delivery_axis_integration_test.go",
         "design_milestone_query_integration_test.go",
         "roundtrip_integration_test.go",
         "whagent_net_import_integration_test.go",
