@@ -387,10 +387,15 @@ func (app *App) resolveDigestCommit(ctx context.Context, digest string) *pages.B
 // matrix keeps that small; same N+1-avoidance rationale as
 // ownerIdentityIndex's doc comment in handlers_builds.go, just scoped to one
 // run instead of the whole builds list since ListBuilds has no id filter to
-// batch this into a single call). A GetBuild failure for one build_id is
-// logged and simply omitted from the returned map -- the page renders
-// "unknown" for that target rather than failing the whole page over one
-// commit link.
+// batch this into a single call). A build_id's git_sha is immutable, so a
+// successful resolution is read through app.buildCommits first and, on a
+// miss, cached for the rest of the process's lifetime (#1699 NFR9) -- this
+// is what keeps a live release page's periodic SSE re-render from re-issuing
+// GetBuild on every heartbeat for a build it has already resolved. A
+// GetBuild failure, or a build with an empty git_sha, is never cached (so
+// it's retried on a later render) and is logged and simply omitted from the
+// returned map -- the page renders "unknown" for that target rather than
+// failing the whole page over one commit link.
 func (app *App) resolveTargetCommits(ctx context.Context, targets []*pb.ReleaseRunTarget) map[string]pages.BuildCommitInfo {
 	commits := make(map[string]pages.BuildCommitInfo, len(targets))
 	for _, t := range targets {
@@ -399,6 +404,10 @@ func (app *App) resolveTargetCommits(ctx context.Context, targets []*pb.ReleaseR
 			continue
 		}
 		if _, ok := commits[buildID]; ok {
+			continue
+		}
+		if info, ok := app.buildCommits.get(buildID); ok {
+			commits[buildID] = info
 			continue
 		}
 		resp, err := app.registry.Artifact.GetBuild(ctx, &pb.GetBuildRequest{BuildId: buildID})
@@ -410,10 +419,12 @@ func (app *App) resolveTargetCommits(ctx context.Context, targets []*pb.ReleaseR
 		if sha == "" {
 			continue
 		}
-		commits[buildID] = pages.BuildCommitInfo{
+		info := pages.BuildCommitInfo{
 			GitSha: sha,
 			URL:    githubCommitURL(sha),
 		}
+		app.buildCommits.put(buildID, info)
+		commits[buildID] = info
 	}
 	return commits
 }

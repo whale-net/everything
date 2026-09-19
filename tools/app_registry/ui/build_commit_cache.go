@@ -37,8 +37,14 @@ func newBuildCommitCache() *buildCommitCache {
 	}
 }
 
-// get returns the cached commit info for buildID, if present.
+// get returns the cached commit info for buildID, if present. A nil
+// receiver always misses -- this lets an App built without newBuildCommitCache
+// (e.g. a test constructing &App{...} directly for handlers unrelated to
+// this cache) fall back to resolving on every call instead of panicking.
 func (c *buildCommitCache) get(buildID string) (pages.BuildCommitInfo, bool) {
+	if c == nil {
+		return pages.BuildCommitInfo{}, false
+	}
 	c.mu.RLock()
 	defer c.mu.RUnlock()
 	info, ok := c.entries[buildID]
@@ -48,8 +54,12 @@ func (c *buildCommitCache) get(buildID string) (pages.BuildCommitInfo, bool) {
 // put records a successfully resolved commit info for buildID. Callers
 // must only call put for a resolution that actually succeeded (non-empty
 // git_sha) -- a failed or incomplete resolution must never be cached, so
-// it can be retried on a later render (see resolveTargetCommits).
+// it can be retried on a later render (see resolveTargetCommits). A nil
+// receiver is a no-op, matching get's nil-safety above.
 func (c *buildCommitCache) put(buildID string, info pages.BuildCommitInfo) {
+	if c == nil {
+		return
+	}
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	c.entries[buildID] = info
