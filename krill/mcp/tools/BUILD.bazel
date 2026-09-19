@@ -72,6 +72,25 @@ go_test(
     ],
 )
 
+# No-database unit test (issue #2719's own MCP-layer structural proof):
+# RegisterCreateTask registers exactly {create_task} over a real in-memory
+# MCP client/server connection. Mirrors
+# :milestone_status_registration_test's own store.New(nil)/in-memory
+# transport technique, so it needs no Docker and is part of
+# `bazel test //...`.
+go_test(
+    name = "task_registration_test",
+    srcs = ["task_registration_test.go"],
+    deps = [
+        ":tools",
+        "//krill/mcp/server",
+        "//krill/store",
+        "@com_github_modelcontextprotocol_go_sdk//mcp",
+        "@com_github_stretchr_testify//assert",
+        "@com_github_stretchr_testify//require",
+    ],
+)
+
 # Real Postgres + real HTTP-transport MCP client integration test for the
 # design-session surface (issue #2547's Testing section, criteria 2-8;
 # criterion 1 -- exactly six tools on /mcp/design, none on /mcp/spec -- is
