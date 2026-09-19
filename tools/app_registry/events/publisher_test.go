@@ -2,6 +2,7 @@ package events
 
 import (
 	"context"
+	"encoding/json"
 	"io"
 	"log/slog"
 	"testing"
@@ -9,6 +10,19 @@ import (
 
 	"github.com/whale-net/everything/libs/go/rmq"
 )
+
+// newBufferOnlyPublisher builds a Publisher with an initialized buffer but no
+// background goroutine draining it, so a test can enqueue via Publish /
+// PublishReleaseRun and then read the resulting *publishRequest straight off
+// p.buffer to inspect its routing key and payload -- broker-free and without
+// racing a consumer.
+func newBufferOnlyPublisher(logger *slog.Logger, bufferSize int) *Publisher {
+	return &Publisher{
+		bufferSize: bufferSize,
+		logger:     logger,
+		buffer:     make(chan *publishRequest, bufferSize),
+	}
+}
 
 // newTestLogger creates a logger that discards all output for testing.
 func newTestLogger() *slog.Logger {
@@ -300,6 +314,116 @@ func TestMultiplePublishesAreEnqueued(t *testing.T) {
 	}
 
 	pub.Close(context.Background())
+}
+
+// TestPublishReleaseRunUnattachedDropsWithoutBlocking verifies that
+// PublishReleaseRun returns immediately even when the broker never attaches,
+// and that the event is eventually counted as dropped (broker-not-attached
+// path in backgroundPublisher), never blocking the caller.
+func TestPublishReleaseRunUnattachedDropsWithoutBlocking(t *testing.T) {
+	logger := newTestLogger()
+
+	fakeConn := &rmq.Connection{}
+	// This factory always fails, so the publisher never attaches.
+	publisherFn := func(conn *rmq.Connection, exchange string) (*rmq.Publisher, error) {
+		return nil, errAttachFailed
+	}
+
+	pub := NewPublisher(context.Background(), fakeConn, logger, 10, publisherFn)
+
+	start := time.Now()
+	pub.PublishReleaseRun("run-1", "release_run_started", "pending")
+	elapsed := time.Since(start)
+
+	if elapsed > 100*time.Millisecond {
+		t.Errorf("PublishReleaseRun took %v, want < 100ms", elapsed)
+	}
+
+	deadline := time.Now().Add(2 * time.Second)
+	for pub.droppedCounter.Load() == 0 {
+		if time.Now().After(deadline) {
+			t.Fatal("droppedCounter never incremented for unattached PublishReleaseRun")
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+
+	pub.Close(context.Background())
+}
+
+// TestPublishReleaseRunRoutingKeyAndPayload verifies that PublishReleaseRun
+// resolves the release-run routing key and a body that JSON-unmarshals to
+// ReleaseRunEventPayload with the right fields.
+func TestPublishReleaseRunRoutingKeyAndPayload(t *testing.T) {
+	logger := newTestLogger()
+	pub := newBufferOnlyPublisher(logger, 1)
+
+	pub.PublishReleaseRun("run-1", "release_run_started", "pending")
+
+	req := <-pub.buffer
+
+	wantRoutingKey := "release_run.run-1"
+	if req.routingKey != wantRoutingKey {
+		t.Errorf("routingKey = %q, want %q", req.routingKey, wantRoutingKey)
+	}
+
+	body, err := json.Marshal(req.payload)
+	if err != nil {
+		t.Fatalf("failed to marshal payload: %v", err)
+	}
+
+	var got ReleaseRunEventPayload
+	if err := json.Unmarshal(body, &got); err != nil {
+		t.Fatalf("failed to unmarshal payload as ReleaseRunEventPayload: %v", err)
+	}
+
+	want := ReleaseRunEventPayload{ReleaseRunID: "run-1", EventKind: "release_run_started", EventStatus: "pending"}
+	if got != want {
+		t.Errorf("payload = %+v, want %+v", got, want)
+	}
+}
+
+// TestInterleavedPublishAndPublishReleaseRunGetOwnRoutingKeys is the
+// regression guard for the publishRequest rework: Publish and
+// PublishReleaseRun must each resolve their own routing key, not share one.
+func TestInterleavedPublishAndPublishReleaseRunGetOwnRoutingKeys(t *testing.T) {
+	logger := newTestLogger()
+	pub := newBufferOnlyPublisher(logger, 2)
+
+	pub.Publish("promo-1", "promotion_started", "pending")
+	pub.PublishReleaseRun("run-1", "release_run_started", "pending")
+
+	promoReq := <-pub.buffer
+	releaseRunReq := <-pub.buffer
+
+	if want := "promotion.promo-1"; promoReq.routingKey != want {
+		t.Errorf("Publish routingKey = %q, want %q", promoReq.routingKey, want)
+	}
+	if want := "release_run.run-1"; releaseRunReq.routingKey != want {
+		t.Errorf("PublishReleaseRun routingKey = %q, want %q", releaseRunReq.routingKey, want)
+	}
+}
+
+// TestPublishReleaseRunFullBufferDrops verifies that PublishReleaseRun drops
+// rather than blocks when the buffer is full.
+func TestPublishReleaseRunFullBufferDrops(t *testing.T) {
+	logger := newTestLogger()
+	pub := newBufferOnlyPublisher(logger, 1)
+
+	pub.PublishReleaseRun("run-1", "release_run_started", "pending")
+
+	start := time.Now()
+	pub.PublishReleaseRun("run-2", "release_run_started", "pending")
+	elapsed := time.Since(start)
+
+	if elapsed > 100*time.Millisecond {
+		t.Errorf("PublishReleaseRun took %v, want < 100ms", elapsed)
+	}
+	if pub.drainedCounter.Load() != 1 {
+		t.Errorf("drainedCounter = %d, want 1", pub.drainedCounter.Load())
+	}
+	if pub.droppedCounter.Load() != 1 {
+		t.Errorf("droppedCounter = %d, want 1", pub.droppedCounter.Load())
+	}
 }
 
 var errAttachFailed = &AttachError{msg: "attach failed"}
