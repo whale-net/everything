@@ -334,6 +334,31 @@ type MilestoneStatusEvent struct {
 	CreatedByOnBehalfOf Subject
 }
 
+// DeliveryShipment is one row of `delivery_shipment` (migration 013,
+// issue #2686, FR10). Records that EntityID shipped as part of
+// MilestoneID's delivered scope -- keyed per (EntityID, MilestoneID), not
+// per entity, since the same Feature/Requirement can be a `delivers`
+// association of more than one container and shipping it in one says
+// nothing about the others (see migration 013's comment). Append-only,
+// NOT SCD2 (LB3, NFR2, NFR3): a shipment is a fact that accrues, never a
+// flag flipped in place, so this struct carries no ValidFrom/ValidTo pair
+// and no store method updates or deletes a row of this shape -- marking
+// the same item shipped twice appends a second DeliveryShipment row
+// rather than being rejected or collapsed. CreatedByActing/
+// CreatedByOnBehalfOf are always populated (NFR4) -- the only write path
+// onto this table, MarkShipped, always has a real caller session.
+type DeliveryShipment struct {
+	ID          uuid.UUID
+	ScopeID     uuid.UUID
+	EntityID    uuid.UUID
+	MilestoneID uuid.UUID
+	Note        *string
+	CreatedAt   time.Time
+
+	CreatedByActing     Subject
+	CreatedByOnBehalfOf Subject
+}
+
 // Scope is one row of `scope` (migration 001, issue #2487, LB1) -- the
 // forge-coordinate row every other table's scope_id hangs off. Plain
 // mutable config, not SCD2 (see migrations/001_scope.up.sql's boundary

@@ -10,7 +10,8 @@ import "github.com/jackc/pgx/v5/pgxpool"
 // and `revision_event` (migration 008, issue #2542),
 // `import_completion` (migration 009, issue #2548), and the milestone
 // authoring fields plus `milestone_deferral` (migration 010, issue
-// #2683), and `milestone_status_event` (migration 012, issue #2685).
+// #2683), `milestone_status_event` (migration 012, issue #2685), and
+// `delivery_shipment` (migration 013, issue #2686).
 // MediatedWrites()
 // (mediated.go, issue #2546) is not a new table: it writes `feature`/
 // `requirement`/`revision_event` rows this same Store already owns,
@@ -74,6 +75,15 @@ func (s *Store) MilestoneAuthoring() MilestoneAuthoringStore {
 // both a milestone and a milepebble row (both `milestone_ref`).
 func (s *Store) MilestoneStatus() MilestoneStatusEventStore {
 	return milestoneStatusEventStore{pool: s.pool}
+}
+
+// DeliveryShipments returns the DeliveryShipmentStore implementation --
+// the per-delivered-item shipment register (migration 013, issue #2686,
+// FR10) sitting alongside MilestoneStatusEventStore, defining the
+// "not-yet-shipped scope" the re-cut and abandon work on the same board
+// both consume.
+func (s *Store) DeliveryShipments() DeliveryShipmentStore {
+	return deliveryShipmentStore{pool: s.pool}
 }
 
 // Amend returns the AmendStore implementation -- the SCD2 close-and-open
