@@ -253,9 +253,14 @@ call ahead of the model call and the per-tool-call `ActivityDispatchTool`
 loop after it — the tool-dispatch step `processTurn` had left a no-op hook
 since #2114. "Add the inner tool loop" (`session-workflow-tool-loop`)
 replaced that single dispatch-once pass with the bounded loop back to the
-model [Session workflow](#session-workflow) step 4 describes. Every later
-task that changes `SessionWorkflow`/`processTurn`'s control flow inherits
-this convention rather than reinventing it.
+model [Session workflow](#session-workflow) step 4 describes. Issue #2669
+(`session-workflow-tool-search-loading`, M4/#2602) added the
+`ActivityUnlockedTools` call ahead of `ActivityListToolDefinitions`, gated
+so it only ever runs for a `search`-mode agent definition — see
+"Search-based tool loading" in
+[Domain-owned MCP servers and the tool contract](#domain-owned-mcp-servers-and-the-tool-contract)
+above. Every later task that changes `SessionWorkflow`/`processTurn`'s
+control flow inherits this convention rather than reinventing it.
 
 ## Domain-owned MCP servers and the tool contract
 
@@ -291,6 +296,35 @@ below).
 First consumer: `audience_score_system/mcp` (exists; research tools are the
 embedded-agent target). `manmanv2` is out of scope for this product — it
 would need the `ControlClient` extraction described in #1552 first.
+
+**Search-based tool loading (M4, root plan #2602)** — an agent definition's
+`tool_loading_mode` column (`bulk` — the default/zero value, or `search`)
+picks between two shapes for a turn's `Tools`:
+
+- `bulk` (or unset): unchanged from the description above — every turn
+  offers the definition's full post-`allowed_tools` candidate set.
+- `search`: turn 1 offers exactly one tool, the reserved `search_tools`
+  meta-tool (`whagent_net/worker/tools/search.go`) — a natural-language
+  query the model can call to unlock real tools from the candidate set. A
+  later turn offers `search_tools` plus every name unlocked by a
+  `search_tools` call so far (FR6, "sticky" — once unlocked, a tool stays
+  offered for the rest of the session; the read side derives this list from
+  the session's whole transcript, not a mutable counter, the same
+  never-a-separately-mutated-counter discipline [Guardrails](#guardrails)
+  uses for cost). Unlocking never widens what `allowed_tools` permits: a
+  name unlocked on an earlier turn that no longer matches the current
+  candidate set (`allowed_tools` narrowed since) is silently dropped from
+  `Tools`, never offered, and never an error.
+
+`Tools`' render order is pinned — `search_tools` first, then unlocked names
+in unlock order — and never re-sorted or re-filtered by later state. This is
+a prompt-caching prefix-stability concern: `tools` renders first in the
+provider request, and any byte-level reordering of that prefix invalidates
+the whole request's cache (`cache_read_input_tokens` silently drops to
+zero). M4 does not implement caching itself; it only avoids foreclosing it.
+Answering a `search_tools` call (actually running the search and unlocking
+matches) is a separate, later task — this milestone ships the shape of
+per-turn `Tools` resolution only.
 
 ## Guardrails
 
@@ -747,17 +781,9 @@ outright — the session still exists and a caller should retry with
   populate an agent definition's `allowed_tools` from `ui` rather than
   hand-editing `agents.yaml`/the row directly — later capability, no UI
   work done yet (C13–C16, the UI milestone, land first).
-- **Deferred/searched tool loading**: today `ListToolDefinitions` always
-  aggregates and offers the *full* (post-`allowed_tools`) tool set to every
-  model call, same as the rest of the field's MCP clients bulk-loading a
-  server's whole catalog up front. For a domain server with a large tool
-  catalog, a search-first pattern (a small fixed meta-tool the model calls
-  to find candidate tools by keyword/description, then only those
-  definitions are added to the next turn's `Tools`) would keep context/cost
-  down and compose with `allowed_tools` as a hard ceiling either way. Not
-  designed yet — would touch the tool contract (a reserved meta-tool name),
-  `ListToolDefinitions`'/`CallModelInput.Tools`' per-turn shape (now
-  path-dependent on prior turns, not just the agent definition), and context
-  budgeting (a searched-in tool definition is itself a context cost). Scope
-  through `/project-manager:design` before building, given the surface it
-  touches.
+- **Deferred/searched tool loading**: shipped as M4 (root plan #2602) — see
+  "Search-based tool loading" in
+  [Domain-owned MCP servers and the tool contract](#domain-owned-mcp-servers-and-the-tool-contract).
+  Still open within M4: actually answering a `search_tools` call (matching
+  the query against the candidate set and committing the `tool_unlock`
+  event) is a separate task from this shape.

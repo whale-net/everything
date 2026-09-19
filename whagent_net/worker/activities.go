@@ -634,6 +634,18 @@ type ListToolDefinitionsInput struct {
 	// (session.ToolServerRef) -- ResolveAgentDefinitionResult.Definition.
 	// ToolSet, unchanged.
 	ToolSet []session.ToolServerRef
+	// Mode is the current agent definition's ToolLoadingMode
+	// (ResolveAgentDefinitionResult.Definition.ToolLoadingMode). The zero
+	// value behaves as session.ToolLoadingModeBulk (FR2) -- workflow.go's
+	// pre-M4 callers (a run replaying from before the
+	// "session-workflow-tool-search-loading" change ID) leave this unset.
+	Mode session.ToolLoadingMode
+	// Unlocked is FR6's sticky-unlocked tool-name set for this session, in
+	// unlock order (UnlockedToolsResult.ToolNames, activities.go below) --
+	// only consulted when Mode == session.ToolLoadingModeSearch. A bulk
+	// session's workflow caller never populates this (workflow.go never
+	// even executes ActivityUnlockedTools for one), so it stays nil there.
+	Unlocked []string
 }
 
 // ListToolDefinitionsResult is ListToolDefinitions' activity result.
@@ -675,7 +687,7 @@ func (a *Activities) ListToolDefinitions(ctx context.Context, in ListToolDefinit
 		return ListToolDefinitionsResult{}, fmt.Errorf("list tool definitions: session %s not found", in.SessionID)
 	}
 
-	defs, err := tools.ListToolDefinitions(ctx, a.Dispatcher.Issuer, sess, in.AgentID, in.ToolSet)
+	defs, err := tools.ListToolDefinitions(ctx, a.Dispatcher.Issuer, sess, in.AgentID, in.ToolSet, in.Mode, in.Unlocked)
 	if err != nil {
 		return ListToolDefinitionsResult{}, fmt.Errorf("list tool definitions: %w", err)
 	}

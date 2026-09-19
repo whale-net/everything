@@ -95,7 +95,7 @@ func TestListToolDefinitions_ReservedNameRejected(t *testing.T) {
 	issuer, sess, agentID := newListDefsTestFixture(t)
 
 	toolSet := []session.ToolServerRef{{ServerURL: serverURL}}
-	defs, err := tools.ListToolDefinitions(ctx, issuer, sess, agentID, toolSet)
+	defs, err := tools.ListToolDefinitions(ctx, issuer, sess, agentID, toolSet, session.ToolLoadingModeBulk, nil)
 
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), serverURL)
@@ -113,7 +113,7 @@ func TestListToolDefinitions_ReservedNameRejected_EvenWhenAllowedToolsExcludesIt
 	issuer, sess, agentID := newListDefsTestFixture(t)
 
 	toolSet := []session.ToolServerRef{{ServerURL: serverURL, AllowedTools: []string{"other_tool"}}}
-	defs, err := tools.ListToolDefinitions(ctx, issuer, sess, agentID, toolSet)
+	defs, err := tools.ListToolDefinitions(ctx, issuer, sess, agentID, toolSet, session.ToolLoadingModeBulk, nil)
 
 	require.Error(t, err, "AllowedTools excluding search_tools must not grant a pass")
 	assert.Contains(t, err.Error(), serverURL)
@@ -131,7 +131,7 @@ func TestListToolDefinitions_ReservedNameOnSecondServer(t *testing.T) {
 	issuer, sess, agentID := newListDefsTestFixture(t)
 
 	toolSet := []session.ToolServerRef{{ServerURL: firstURL}, {ServerURL: secondURL}}
-	defs, err := tools.ListToolDefinitions(ctx, issuer, sess, agentID, toolSet)
+	defs, err := tools.ListToolDefinitions(ctx, issuer, sess, agentID, toolSet, session.ToolLoadingModeBulk, nil)
 
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), secondURL)
@@ -147,7 +147,7 @@ func TestListToolDefinitions_SimilarNamesNotReserved(t *testing.T) {
 	issuer, sess, agentID := newListDefsTestFixture(t)
 
 	toolSet := []session.ToolServerRef{{ServerURL: serverURL}}
-	defs, err := tools.ListToolDefinitions(ctx, issuer, sess, agentID, toolSet)
+	defs, err := tools.ListToolDefinitions(ctx, issuer, sess, agentID, toolSet, session.ToolLoadingModeBulk, nil)
 
 	require.NoError(t, err)
 	names := make([]string, 0, len(defs))

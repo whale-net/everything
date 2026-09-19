@@ -73,6 +73,13 @@ func registerActivityStubs(env *testsuite.TestWorkflowEnvironment) {
 	env.RegisterActivityWithOptions(func(ctx context.Context, in CommitToolLoopIterationInput) (CommitToolLoopIterationResult, error) {
 		return CommitToolLoopIterationResult{}, nil
 	}, activity.RegisterOptions{Name: ActivityCommitToolLoopIteration})
+	// UnlockedTools (M4, root plan #2602) is only ever invoked for a
+	// search-mode agent definition (workflow.go's processTurn), but
+	// registered here too so any test can rely on this helper alone
+	// regardless of which mode it exercises.
+	env.RegisterActivityWithOptions(func(ctx context.Context, in UnlockedToolsInput) (UnlockedToolsResult, error) {
+		return UnlockedToolsResult{}, nil
+	}, activity.RegisterOptions{Name: ActivityUnlockedTools})
 }
 
 func testSessionID() uuid.UUID {
@@ -375,4 +382,123 @@ func TestSessionWorkflow_DefinitionChangedBetweenTurns_PickedUpFreshOnSecondTurn
 	require.NoError(t, env.GetWorkflowError())
 	require.Equal(t, []string{"model-v1", "model-v2"}, models,
 		"turn 2 must observe the drifted definition -- ResolveAgentDefinition must run fresh every turn, never cached in workflow state")
+}
+
+// TestSessionWorkflow_SearchMode_ExecutesUnlockedToolsBeforeSearchModeListToolDefinitions
+// is this task's workflow-level guard (root plan #2602, FR6/FR7): a
+// search-mode agent definition causes processTurn to execute
+// ActivityUnlockedTools, then ActivityListToolDefinitions with
+// Mode == session.ToolLoadingModeSearch and Unlocked set to whatever
+// ActivityUnlockedTools returned.
+func TestSessionWorkflow_SearchMode_ExecutesUnlockedToolsBeforeSearchModeListToolDefinitions(t *testing.T) {
+	ts := testsuite.WorkflowTestSuite{}
+	env := ts.NewTestWorkflowEnvironment()
+	registerActivityStubs(env)
+
+	// Wired individually, not via mockHappyPathActivities, so this test's own
+	// ResolveAgentDefinition expectation (the search-mode Definition below)
+	// is the only one registered -- mockHappyPathActivities' own unconditional
+	// mock.Anything expectation would otherwise take precedence (testify
+	// matches On() expectations in registration order).
+	env.OnActivity(ActivityUpdateSessionStatus, mock.Anything, mock.Anything).
+		Return(UpdateSessionStatusResult{}, nil)
+	env.OnActivity(ActivityBuildContext, mock.Anything, mock.Anything).
+		Return(BuildContextResult{EventIDs: []uuid.UUID{uuid.New()}}, nil)
+	env.OnActivity(ActivityCallModel, mock.Anything, mock.Anything).
+		Return(CallModelResult{Response: llm.Response{Message: llm.Message{Role: llm.RoleAssistant, Content: "ok"}}}, nil)
+	env.OnActivity(ActivityCommitTurn, mock.Anything, mock.Anything).
+		Return(CommitTurnResult{Done: false}, nil)
+	env.OnActivity(ActivitySumCost, mock.Anything, mock.Anything).
+		Return(SumCostResult{CostUSD: 0}, nil)
+
+	env.OnActivity(ActivityResolveAgentDefinition, mock.Anything, mock.Anything).
+		Return(ResolveAgentDefinitionResult{
+			Model:      "test-model",
+			Definition: session.AgentDefinition{ToolLoadingMode: session.ToolLoadingModeSearch},
+		}, nil)
+
+	var unlockedToolsCalled bool
+	env.OnActivity(ActivityUnlockedTools, mock.Anything, mock.Anything).
+		Return(UnlockedToolsResult{ToolNames: []string{"a", "b"}}, nil).
+		Run(func(args mock.Arguments) { unlockedToolsCalled = true })
+
+	var listIn ListToolDefinitionsInput
+	env.OnActivity(ActivityListToolDefinitions, mock.Anything, mock.Anything).
+		Return(ListToolDefinitionsResult{}, nil).
+		Run(func(args mock.Arguments) { listIn = args.Get(1).(ListToolDefinitionsInput) })
+
+	env.RegisterDelayedCallback(func() {
+		env.SignalWorkflow(SignalSendTurn, SendTurnSignal{Input: "hello"})
+	}, time.Second)
+	env.RegisterDelayedCallback(func() {
+		env.SignalWorkflow(SignalStop, struct{}{})
+	}, 2*time.Second)
+
+	env.ExecuteWorkflow(SessionWorkflow, SessionWorkflowInput{SessionID: testSessionID()})
+
+	require.True(t, env.IsWorkflowCompleted())
+	require.NoError(t, env.GetWorkflowError())
+	require.True(t, unlockedToolsCalled, "a search-mode definition must execute ActivityUnlockedTools")
+	require.Equal(t, session.ToolLoadingModeSearch, listIn.Mode)
+	require.Equal(t, []string{"a", "b"}, listIn.Unlocked)
+}
+
+// TestSessionWorkflow_BulkMode_NeverExecutesUnlockedTools_ListsWithZeroModeAndNoUnlocked
+// is the complementary guard: a bulk-mode (and, separately, an unset-mode)
+// agent definition never executes ActivityUnlockedTools at all -- a bulk
+// session must not gain a per-turn activity call it does not have today --
+// and ActivityListToolDefinitions is called with a zero-valued Mode and no
+// Unlocked names.
+func TestSessionWorkflow_BulkMode_NeverExecutesUnlockedTools_ListsWithZeroModeAndNoUnlocked(t *testing.T) {
+	for _, mode := range []session.ToolLoadingMode{session.ToolLoadingModeBulk, ""} {
+		t.Run(string(mode), func(t *testing.T) {
+			ts := testsuite.WorkflowTestSuite{}
+			env := ts.NewTestWorkflowEnvironment()
+			registerActivityStubs(env)
+
+			// See the search-mode test above for why these are wired
+			// individually rather than via mockHappyPathActivities.
+			env.OnActivity(ActivityUpdateSessionStatus, mock.Anything, mock.Anything).
+				Return(UpdateSessionStatusResult{}, nil)
+			env.OnActivity(ActivityBuildContext, mock.Anything, mock.Anything).
+				Return(BuildContextResult{EventIDs: []uuid.UUID{uuid.New()}}, nil)
+			env.OnActivity(ActivityCallModel, mock.Anything, mock.Anything).
+				Return(CallModelResult{Response: llm.Response{Message: llm.Message{Role: llm.RoleAssistant, Content: "ok"}}}, nil)
+			env.OnActivity(ActivityCommitTurn, mock.Anything, mock.Anything).
+				Return(CommitTurnResult{Done: false}, nil)
+			env.OnActivity(ActivitySumCost, mock.Anything, mock.Anything).
+				Return(SumCostResult{CostUSD: 0}, nil)
+
+			env.OnActivity(ActivityResolveAgentDefinition, mock.Anything, mock.Anything).
+				Return(ResolveAgentDefinitionResult{
+					Model:      "test-model",
+					Definition: session.AgentDefinition{ToolLoadingMode: mode},
+				}, nil)
+
+			var unlockedToolsCalled bool
+			env.OnActivity(ActivityUnlockedTools, mock.Anything, mock.Anything).
+				Return(UnlockedToolsResult{}, nil).
+				Run(func(args mock.Arguments) { unlockedToolsCalled = true })
+
+			var listIn ListToolDefinitionsInput
+			env.OnActivity(ActivityListToolDefinitions, mock.Anything, mock.Anything).
+				Return(ListToolDefinitionsResult{}, nil).
+				Run(func(args mock.Arguments) { listIn = args.Get(1).(ListToolDefinitionsInput) })
+
+			env.RegisterDelayedCallback(func() {
+				env.SignalWorkflow(SignalSendTurn, SendTurnSignal{Input: "hello"})
+			}, time.Second)
+			env.RegisterDelayedCallback(func() {
+				env.SignalWorkflow(SignalStop, struct{}{})
+			}, 2*time.Second)
+
+			env.ExecuteWorkflow(SessionWorkflow, SessionWorkflowInput{SessionID: testSessionID()})
+
+			require.True(t, env.IsWorkflowCompleted())
+			require.NoError(t, env.GetWorkflowError())
+			require.False(t, unlockedToolsCalled, "a bulk/unset-mode definition must never execute ActivityUnlockedTools")
+			require.Equal(t, session.ToolLoadingMode(""), listIn.Mode, "a bulk/unset-mode definition must call ListToolDefinitions with a zero-valued Mode")
+			require.Empty(t, listIn.Unlocked)
+		})
+	}
 }
