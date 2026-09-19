@@ -412,3 +412,177 @@ func TestMCPMilestoneSurface_EndToEnd(t *testing.T) {
 		assert.Equal(t, "M4", deferrals[0].Destination)
 	})
 }
+
+// TestMCPMilepebbleSurface_EndToEnd is issue #2684's Testing section's own
+// MCP-layer re-verification of its Validation section's first bullet: a
+// Requirement Contributor can cut a milestone into a milepebble and drop a
+// mid-milestone discovery onto one, entirely over MCP, via
+// create_milepebble, add_milepebble_scope, add_discovered_scope, and
+// list_milepebbles (RegisterMilestoneAll already wires all four -- see
+// milestone.go). Mirrors TestMCPMilestoneSurface_EndToEnd's seeding/HTTP/
+// auth plumbing (same package, same helpers).
+func TestMCPMilepebbleSurface_EndToEnd(t *testing.T) {
+	ctx := context.Background()
+	entities, pool := newMilestoneToolsTestStore(t)
+	scopeID := createMilestoneToolsTestScope(t, ctx, pool, "whale-net/krill-mcp-milepebble-e2e-test")
+	sessions := store.NewSessionStore(pool)
+
+	product, err := entities.Products().Create(ctx, scopeID, "krill", "milepebble e2e product")
+	require.NoError(t, err)
+	featureSet, err := entities.FeatureSets().Create(ctx, scopeID, product.ID, "e2e feature set", nil)
+	require.NoError(t, err)
+	inSet, err := entities.Features().Create(ctx, scopeID, featureSet.ID, "in the parent's delivers set", nil)
+	require.NoError(t, err)
+	notInSet, err := entities.Features().Create(ctx, scopeID, featureSet.ID, "not in the parent's delivers set", nil)
+	require.NoError(t, err)
+
+	selfSubject := store.Subject{Iss: "https://keycloak.example.test/realms/humans", Sub: "human-1", Kind: store.SubjectKindHuman}
+	selfSessionID, err := sessions.InitSession(ctx, scopeID, selfSubject, selfSubject, nil)
+	require.NoError(t, err)
+
+	milestone, err := entities.MilestoneAuthoring().CreateMilestone(ctx, scopeID, product.ID, "M1", "ship it incrementally", nil, selfSubject, selfSubject)
+	require.NoError(t, err)
+	require.NoError(t, entities.MilestoneAuthoring().AddDelivers(ctx, scopeID, milestone.ID, inSet.ID, selfSubject, selfSubject))
+
+	credentials := milestoneFakeCredentialStore{validToken: "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcd", identity: "swarm-operator-2"}
+	signer, verifier := newMilestoneTestWhagentVerifier(t, "https://whagent.example.test")
+
+	designSrv := server.New()
+	designReg := server.NewRegistry(designSrv)
+	tools.RegisterMilestoneAll(designReg, sessions, entities.MilestoneAuthoring())
+	designSrv.AddReceivingMiddleware(server.WhagentPersonaMiddleware())
+
+	handler := server.NewDualAuthHTTPHandler(server.New(), designSrv, credentials, server.WhagentAuthConfig{
+		Verifier: verifier,
+		Audience: milestoneTestWhagentAudience,
+	}, server.ResourceMetadataConfig{})
+	ts := httptest.NewServer(handler)
+	t.Cleanup(ts.Close)
+
+	designURL := ts.URL + "/mcp/design"
+	agentToken := mintMilestoneWhagentToken(t, signer, "human-e2e-2")
+
+	var milepebbleID string
+	t.Run("create_milepebble cuts a milestone into a new sub-milestone container (FR3)", func(t *testing.T) {
+		cs, err := connectMilestoneMCP(t, designURL, agentToken)
+		require.NoError(t, err)
+
+		res, err := cs.CallTool(ctx, &mcp.CallToolParams{
+			Name: "create_milepebble",
+			Arguments: map[string]any{
+				"krill_session_id": selfSessionID.String(),
+				"milestone_id":     milestone.ID.String(),
+				"name":             "cut 1",
+				"outcome":          "ship the first slice",
+			},
+		})
+		require.NoError(t, err)
+		require.False(t, res.IsError, "unexpected error: %s", milestoneTextOf(res))
+
+		structured, ok := res.StructuredContent.(map[string]any)
+		require.True(t, ok)
+		milepebbleID, ok = structured["id"].(string)
+		require.True(t, ok, "response must carry an id field")
+		_, err = uuid.Parse(milepebbleID)
+		require.NoError(t, err)
+	})
+
+	t.Run("add_milepebble_scope rejects an entity outside the parent milestone's delivers set (FR3)", func(t *testing.T) {
+		cs, err := connectMilestoneMCP(t, designURL, agentToken)
+		require.NoError(t, err)
+
+		res, err := cs.CallTool(ctx, &mcp.CallToolParams{
+			Name: "add_milepebble_scope",
+			Arguments: map[string]any{
+				"krill_session_id": selfSessionID.String(),
+				"milepebble_id":    milepebbleID,
+				"entity_id":        notInSet.ID.String(),
+			},
+		})
+		require.NoError(t, err, "a rejected write is a tool error, not a protocol error")
+		assert.True(t, res.IsError, "an entity outside the parent milestone's delivers set must be rejected loudly")
+		assert.Contains(t, milestoneTextOf(res), "delivers set")
+	})
+
+	t.Run("add_milepebble_scope accepts an entity already in the parent milestone's delivers set (FR3)", func(t *testing.T) {
+		cs, err := connectMilestoneMCP(t, designURL, agentToken)
+		require.NoError(t, err)
+
+		res, err := cs.CallTool(ctx, &mcp.CallToolParams{
+			Name: "add_milepebble_scope",
+			Arguments: map[string]any{
+				"krill_session_id": selfSessionID.String(),
+				"milepebble_id":    milepebbleID,
+				"entity_id":        inSet.ID.String(),
+			},
+		})
+		require.NoError(t, err)
+		require.False(t, res.IsError, "unexpected error: %s", milestoneTextOf(res))
+	})
+
+	var discoveredEntityID string
+	t.Run("add_discovered_scope creates a real Requirement and associates it without touching the parent milestone (FR4)", func(t *testing.T) {
+		cs, err := connectMilestoneMCP(t, designURL, agentToken)
+		require.NoError(t, err)
+
+		res, err := cs.CallTool(ctx, &mcp.CallToolParams{
+			Name: "add_discovered_scope",
+			Arguments: map[string]any{
+				"krill_session_id": selfSessionID.String(),
+				"milepebble_id":    milepebbleID,
+				"feature_set_id":   nil,
+				"feature_id":       inSet.ID.String(),
+				"requirement_kind": "FR",
+				"name":             "discovered mid-milestone requirement",
+				"description":      nil,
+				"body":             "the system must do the discovered thing",
+			},
+		})
+		require.NoError(t, err)
+		require.False(t, res.IsError, "unexpected error: %s", milestoneTextOf(res))
+
+		structured, ok := res.StructuredContent.(map[string]any)
+		require.True(t, ok)
+		discoveredEntityID, ok = structured["entity_id"].(string)
+		require.True(t, ok, "response must carry an entity_id field")
+		assert.Equal(t, "requirement", structured["kind"])
+
+		// The parent milestone's own outcome is untouched by the discovery.
+		gotMilestone, delivers, _, _, err := entities.MilestoneAuthoring().GetMilestone(ctx, milestone.ID)
+		require.NoError(t, err)
+		require.NotNil(t, gotMilestone.Outcome)
+		assert.Equal(t, "ship it incrementally", *gotMilestone.Outcome)
+
+		discoveredID, err := uuid.Parse(discoveredEntityID)
+		require.NoError(t, err)
+		found := false
+		for _, d := range delivers {
+			if d.EntityID == discoveredID {
+				found = true
+			}
+		}
+		assert.True(t, found, "the discovered requirement must also land in the parent milestone's own Delivers set")
+	})
+
+	t.Run("list_milepebbles returns the cut milepebble", func(t *testing.T) {
+		cs, err := connectMilestoneMCP(t, designURL, agentToken)
+		require.NoError(t, err)
+
+		res, err := cs.CallTool(ctx, &mcp.CallToolParams{
+			Name:      "list_milepebbles",
+			Arguments: map[string]any{"milestone_id": milestone.ID.String()},
+		})
+		require.NoError(t, err)
+		require.False(t, res.IsError, "unexpected error: %s", milestoneTextOf(res))
+
+		structured, ok := res.StructuredContent.(map[string]any)
+		require.True(t, ok)
+		milepebbles, ok := structured["milepebbles"].([]any)
+		require.True(t, ok)
+		require.Len(t, milepebbles, 1)
+		entry, ok := milepebbles[0].(map[string]any)
+		require.True(t, ok)
+		assert.Equal(t, milepebbleID, entry["id"])
+		assert.Equal(t, "cut 1", entry["name"])
+	})
+}
