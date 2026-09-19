@@ -425,6 +425,84 @@ go_test(
     ],
 )
 
+# Real Postgres integration test for MilestoneStore (milestone.go, migration
+# 004, issue #2492; kind-filtering and the entity_milestone.relation column
+# added by migration 010, issue #2683): GetOrCreateRef idempotency,
+# ListRefsByProduct's kind='milestone' filtering, and this task's explicit
+# regression test for the AddAssociation ON CONFLICT fix (migration 010's
+# relation column widened entity_milestone's unique index, which made the
+# old ON CONFLICT (entity_id, milestone_id) target stale). Deliberately NOT
+# part of `bazel test //...` -- see //libs/go/dbtest's README for the full
+# rationale.
+#
+# Run it explicitly (requires a working Docker daemon):
+#   bazel test //krill/store:milestone_integration_test --test_output=all
+go_test(
+    name = "milestone_integration_test",
+    size = "large",
+    timeout = "long",
+    srcs = ["milestone_integration_test.go"],
+    gotags = ["integration"],
+    tags = [
+        "external",
+        "integration",
+        "manual",
+        "no-cache",
+        "no-sandbox",
+        "requires-network",
+    ],
+    deps = [
+        ":store",
+        "//krill/migrate/schema",
+        "//libs/go/dbtest",
+        "//libs/go/migrate",
+        "@com_github_google_uuid//:uuid",
+        "@com_github_jackc_pgx_v5//stdlib",
+        "@com_github_stretchr_testify//assert",
+        "@com_github_stretchr_testify//require",
+    ],
+)
+
+# Real Postgres integration test for MilestoneAuthoringStore
+# (milestone_authoring.go, migration 010, issue #2683's Testing section):
+# CreateMilestone with outcome+FR budget round-tripping through
+# GetMilestone plus the recorded LB4 subject pair (NFR4), SetOutcome/
+# SetFRBudget latest-value semantics (FR2), AddDelivers/AddMustNotForeclose
+# partitioning by relation and idempotency (LB6), AddDeferral's FR1
+# empty-destination rejection and mandatory subject pair, and NFR1's
+# identity-stability guarantee (a captured milestone id keeps resolving to
+# the same content after a sibling is renamed or deleted). Deliberately NOT
+# part of `bazel test //...` -- see //libs/go/dbtest's README for the full
+# rationale.
+#
+# Run it explicitly (requires a working Docker daemon):
+#   bazel test //krill/store:milestone_authoring_integration_test --test_output=all
+go_test(
+    name = "milestone_authoring_integration_test",
+    size = "large",
+    timeout = "long",
+    srcs = ["milestone_authoring_integration_test.go"],
+    gotags = ["integration"],
+    tags = [
+        "external",
+        "integration",
+        "manual",
+        "no-cache",
+        "no-sandbox",
+        "requires-network",
+    ],
+    deps = [
+        ":store",
+        "//krill/migrate/schema",
+        "//libs/go/dbtest",
+        "//libs/go/migrate",
+        "@com_github_google_uuid//:uuid",
+        "@com_github_jackc_pgx_v5//stdlib",
+        "@com_github_stretchr_testify//assert",
+        "@com_github_stretchr_testify//require",
+    ],
+)
+
 go_test(
     name = "pointer_integration_test",
     size = "large",
