@@ -146,6 +146,7 @@ go_test(
         "slice_internal_test.go",
         "slice_test.go",
         "task_dependency_test.go",
+        "task_note_test.go",
         "task_payload_test.go",
         "task_test.go",
     ],
