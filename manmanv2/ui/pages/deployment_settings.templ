@@ -62,9 +62,9 @@ import (
 
 // DeploymentSettingsData drives the blade's environment section.
 // DisplayName is FR2's "<config> on <server>" naming -- the same value
-// games.templ's gameDeploymentRow already uses as the Blade's own
-// Subtitle, so this fragment never needs (and never renders) a raw SGC
-// identifier.
+// game_detail.templ's overviewDeploymentContent already uses as the
+// Blade's own Subtitle, so this fragment never needs (and never renders) a
+// raw SGC identifier.
 type DeploymentSettingsData struct {
 	SGCID        int64
 	DisplayName  string
@@ -442,14 +442,14 @@ templ DeploymentSettingsPortsSection(data DeploymentSettingsPortsData) {
 	</div>
 }
 
-// DeploymentConnectAddressID is the stable id the Games page's expanded
-// Deployments-section row (games.templ's gameDeploymentRow) wraps its
-// connect-address display in. AC4: a successful ports Save recomputes the
-// connect address from the newly saved bindings and swaps it into this
-// element out of band (DeploymentConnectAddressOOB) alongside this
-// section's own primary swap, so the underlying Games page row reflects
-// the new binding without a page reload or a re-fetch of anything else on
-// that page (FR10).
+// DeploymentConnectAddressID is the stable id the Daily Ops Overview panel
+// (game_detail.templ's overviewDeploymentContent, shared by the Games list
+// row and the game detail page) wraps its connect-address display in. AC4:
+// a successful ports Save recomputes the connect address from the newly
+// saved bindings and swaps it into this element out of band
+// (DeploymentConnectAddressOOB) alongside this section's own primary swap,
+// so the underlying panel reflects the new binding without a page reload
+// or a re-fetch of anything else on that page (FR10).
 func DeploymentConnectAddressID(sgcID int64) string {
 	return fmt.Sprintf("deployment-connect-%d", sgcID)
 }

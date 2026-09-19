@@ -6,6 +6,8 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"reflect"
+	"regexp"
 	"strings"
 	"testing"
 
@@ -298,23 +300,17 @@ func TestHandleGames_NFR7_ConstantCallCount(t *testing.T) {
 // TestHandleGames_RestartStateBadge_RendersOnDeploymentRow is task #2372's
 // own validation gap closed: every other test in this file leaves
 // fakeGamesAPIClient's ListPendingRestarts returning an empty response, so
-// none of them ever exercised the badge's positive path -- they prove the
+// none of them ever exercised the pending-restart path -- they prove the
 // batched call happens (NFR7's exact-method-set/call-count checks above),
 // not that a real pending-restart entry actually threads through
-// buildGameRows/buildGameDeploymentRow into the rendered Games page
+// buildGameRows/buildGameDeploymentOverview into the rendered Games page
 // (FR17's retained-capability clause: the restart-state badge, one of the
 // two capabilities /sessions's retirement must not drop). A deployment
-// with a "pending" PendingRestartState must render components.RestartBadge's
-// "Restarting" label on its Deployments row.
-//
-// Red this by hand: comment out buildGameDeploymentRow's
-// `RestartState: restartState` line (handlers_games.go) -- this test fails
-// (no "Restarting" text in the rendered body) while
-// TestHandleGames_NFR7_ConstantCallCount keeps passing unchanged, since
-// that test only counts calls and never inspects rendered content. That gap
-// is exactly what let the original defect (the call happening but never
-// reaching the template) ship unnoticed. Verified red/green by hand;
-// reverted to green before commit.
+// with a "pending" PendingRestartState must render the Daily Ops Overview
+// panel's "Restarting" state on its expanded row (computeOverviewStatus /
+// overviewStatusBadge, game_detail.templ) -- a different badge than the
+// old gameDeploymentRow's components.RestartBadge, not a dropped
+// capability (see deployment_row.templ's DeploymentRowInner doc comment).
 func TestHandleGames_RestartStateBadge_RendersOnDeploymentRow(t *testing.T) {
 	const sgcID = int64(100)
 	api := &fakeGamesAPIClient{
@@ -517,20 +513,24 @@ func TestBuildGameRows_DeploymentsResolveViaConfigJoin(t *testing.T) {
 	rows := buildGameRows(games, configs, deployments, servers, sessions, nil)
 
 	alpha := gameRowByID(t, rows, 1)
-	if len(alpha.Deployments) != 2 {
-		t.Fatalf("game 1 Deployments = %+v, want 2 entries (no leak from game 2)", alpha.Deployments)
+	if len(alpha.Overview.Deployments) != 2 {
+		t.Fatalf("game 1 Overview.Deployments = %+v, want 2 entries (no leak from game 2)", alpha.Overview.Deployments)
 	}
 
 	beta := gameRowByID(t, rows, 2)
-	if len(beta.Deployments) != 1 {
-		t.Fatalf("game 2 Deployments = %+v, want exactly 1 entry (no leak from game 1)", beta.Deployments)
+	if len(beta.Overview.Deployments) != 1 {
+		t.Fatalf("game 2 Overview.Deployments = %+v, want exactly 1 entry (no leak from game 1)", beta.Overview.Deployments)
 	}
 }
 
-// TestHandleGames_WD1WD6_NoPlayerCountOrLastPlayed guards WD1 and WD6: the
-// collapsed row must never render a player count, a "last played" value,
-// or an aggregate rollup string -- documented, intentional divergences
-// from 90-v2-games.
+// TestHandleGames_WD1WD6_NoPlayerCountOrLastPlayed guards WD1/WD6: no
+// player *count* or "last played" value anywhere on the collapsed or
+// expanded row. This deliberately checks for those specific phrases, not a
+// bare "player" substring: the Daily Ops Overview panel (GameOverview,
+// now shared by /games and /games/{id}) already carries incidental,
+// pre-existing copy like "Formatted host and port for players to join" in
+// its Connection Info caption, which is not a player-count/last-played
+// value and is not what WD1/WD6 forbids.
 func TestHandleGames_WD1WD6_NoPlayerCountOrLastPlayed(t *testing.T) {
 	api := buildFakeGamesData(3)
 	code, body := renderGamesHTTP(t, api, "/games")
@@ -539,15 +539,26 @@ func TestHandleGames_WD1WD6_NoPlayerCountOrLastPlayed(t *testing.T) {
 	}
 
 	lower := strings.ToLower(body)
-	for _, forbidden := range []string{"player", "last played"} {
+	for _, forbidden := range []string{"player count", "players online", "last played"} {
 		if strings.Contains(lower, forbidden) {
 			t.Errorf("rendered Games page contains forbidden text %q (WD1/WD6)", forbidden)
 		}
 	}
 }
 
+// sgcWordRe matches a standalone "sgc" -- case-insensitive, not part of a
+// longer identifier like the ops panel's internal hidden form field
+// name="sgc_id" (GameOverview/overviewDeploymentContent, shared by /games
+// and /games/{id} -- not display text, never seen by a user).
+var sgcWordRe = regexp.MustCompile(`(?i)\bsgc\b`)
+
 // TestHandleGames_FR2_NoSGCTerminology guards FR2: no user-facing display
-// text on the Games page may contain "SGC" or "server game config".
+// text on the Games page may contain "SGC" or "server game config". This
+// deliberately excludes the ops panel's internal hidden form field
+// (name="sgc_id", never rendered as visible text) via sgcWordRe's word
+// boundary, rather than a bare substring match -- see WD1/WD6's guard
+// above for the same "pre-existing non-display markup now also renders on
+// /games" situation.
 func TestHandleGames_FR2_NoSGCTerminology(t *testing.T) {
 	api := buildFakeGamesData(3)
 	code, body := renderGamesHTTP(t, api, "/games")
@@ -556,8 +567,8 @@ func TestHandleGames_FR2_NoSGCTerminology(t *testing.T) {
 	}
 
 	lower := strings.ToLower(body)
-	if strings.Contains(lower, "sgc") {
-		t.Errorf("rendered Games page contains %q (FR2 forbids SGC terminology in display text)", "sgc")
+	if sgcWordRe.MatchString(lower) {
+		t.Errorf("rendered Games page contains standalone %q (FR2 forbids SGC terminology in display text)", "sgc")
 	}
 	if strings.Contains(lower, "server game config") {
 		t.Errorf("rendered Games page contains %q (FR2 forbids raw entity terminology in display text)", "server game config")
@@ -632,39 +643,39 @@ func TestBuildGameRows_Deployments_ListsAllDeployments(t *testing.T) {
 	rows := buildGameRows(games, configs, deployments, servers, sessions, nil)
 
 	alpha := gameRowByID(t, rows, 1)
-	if len(alpha.Deployments) != 2 {
-		t.Fatalf("Alpha Deployments = %d rows, want 2 (100 and 101): %+v", len(alpha.Deployments), alpha.Deployments)
+	if len(alpha.Overview.Deployments) != 2 {
+		t.Fatalf("Alpha Overview.Deployments = %d rows, want 2 (100 and 101): %+v", len(alpha.Overview.Deployments), alpha.Overview.Deployments)
 	}
 	gotSGCIDs := map[int64]bool{}
-	for _, dep := range alpha.Deployments {
-		gotSGCIDs[dep.Row.ServerGameConfigID] = true
-		if dep.Row.ServerGameConfigID == 200 {
-			t.Errorf("Alpha's Deployments section contains SGC 200, which belongs to Beta (leaked across games)")
+	for _, dep := range alpha.Overview.Deployments {
+		gotSGCIDs[dep.SGCID] = true
+		if dep.SGCID == 200 {
+			t.Errorf("Alpha's Overview.Deployments contains SGC 200, which belongs to Beta (leaked across games)")
 		}
 	}
 	for _, want := range []int64{100, 101} {
 		if !gotSGCIDs[want] {
-			t.Errorf("Alpha Deployments missing SGC %d: got %+v", want, alpha.Deployments)
+			t.Errorf("Alpha Overview.Deployments missing SGC %d: got %+v", want, alpha.Overview.Deployments)
 		}
 	}
 
 	beta := gameRowByID(t, rows, 2)
-	if len(beta.Deployments) != 1 || beta.Deployments[0].Row.ServerGameConfigID != 200 {
-		t.Fatalf("Beta Deployments = %+v, want exactly [SGC 200]", beta.Deployments)
+	if len(beta.Overview.Deployments) != 1 || beta.Overview.Deployments[0].SGCID != 200 {
+		t.Fatalf("Beta Overview.Deployments = %+v, want exactly [SGC 200]", beta.Overview.Deployments)
 	}
 }
 
-// TestBuildGameRows_Deployments_AntiDrift is FR6's central anti-drift
-// guard: the Games row's control availability must be identical to what
-// /sessions renders for the same deployment state. Both surfaces reuse
-// components.ComputeDeploymentActions(latest) verbatim (buildGameDeploymentRow
-// here, buildDeploymentRowData on /sessions), so this test drives both
-// paths -- buildGameRows and a direct components.ComputeDeploymentActions
-// call against the identical fixture session -- and asserts they agree,
-// across running, stopped, and every transitional/error state
-// ComputeDeploymentActions' own table documents (pending, starting,
-// stopping, crashed, lost, and no session at all).
-func TestBuildGameRows_Deployments_AntiDrift(t *testing.T) {
+// TestBuildGameRows_Overview_MatchesBuildGameDeploymentOverview is this
+// restructure's anti-drift guard: the Games row's Daily Ops Overview panel
+// must derive a deployment's status and Start/Stop/Restart availability
+// identically to what buildGameOverviewData computes for the detail page's
+// Overview tab -- both call buildGameDeploymentOverview. This test drives
+// buildGameRows and a direct buildGameDeploymentOverview call against the
+// identical fixture session and asserts they agree, across running,
+// stopped, and every transitional/error state computeOverviewStatus's own
+// table documents (pending, starting, stopping, crashed, lost, and no
+// session at all).
+func TestBuildGameRows_Overview_MatchesBuildGameDeploymentOverview(t *testing.T) {
 	game := &manmanpb.Game{GameId: 1, Name: "Drift"}
 	config := &manmanpb.GameConfig{ConfigId: 10, GameId: 1, Name: "Cfg"}
 	servers := []*manmanpb.Server{{ServerId: 1, HostPublicAddress: "host-01"}}
@@ -702,36 +713,36 @@ func TestBuildGameRows_Deployments_AntiDrift(t *testing.T) {
 				nil,
 			)
 			row := gameRowByID(t, rows, 1)
-			if len(row.Deployments) != 1 {
-				t.Fatalf("Deployments = %d rows, want 1", len(row.Deployments))
+			if len(row.Overview.Deployments) != 1 {
+				t.Fatalf("Overview.Deployments = %d rows, want 1", len(row.Overview.Deployments))
 			}
-			got := row.Deployments[0].Row.Actions
+			got := row.Overview.Deployments[0]
 
 			// The independent, same-fixture derivation: exactly what
-			// buildDeploymentRowData computes for /sessions, called
-			// directly against the identical latest session.
-			want := components.ComputeDeploymentActions(latest)
+			// buildGameOverviewData calls for the detail page's Overview
+			// tab, called directly against the identical latest session.
+			want := buildGameDeploymentOverview(1, config, servers[0], deployment, latest, nil)
 
-			if got != want {
-				t.Errorf("state %q: Games row Actions = %+v, /sessions-equivalent Actions = %+v (FR6 anti-drift violation)", tc.sessionStatus, got, want)
+			if !reflect.DeepEqual(got, want) {
+				t.Errorf("state %q: Games row Overview = %+v, buildGameDeploymentOverview = %+v (anti-drift violation)", tc.sessionStatus, got, want)
 			}
 
-			// End-to-end: render the row exactly as the page does
-			// (gameDeploymentRow -> DeploymentRow(dep.Row)) and confirm
+			// End-to-end: render the panel exactly as the page does
+			// (GameOverview -> overviewDeploymentContent) and confirm
 			// button presence matches want, not just the struct field.
 			var buf bytes.Buffer
-			if err := pages.DeploymentRow(row.Deployments[0].Row).Render(context.Background(), &buf); err != nil {
-				t.Fatalf("DeploymentRow.Render: %v", err)
+			if err := pages.GameOverview(row.Overview).Render(context.Background(), &buf); err != nil {
+				t.Fatalf("GameOverview.Render: %v", err)
 			}
 			html := buf.String()
-			if strings.Contains(html, ">Start<") != want.CanStart {
-				t.Errorf("state %q: rendered Start button presence = %v, want %v", tc.sessionStatus, strings.Contains(html, ">Start<"), want.CanStart)
+			if strings.Contains(html, `value="start"`) != want.CanStart {
+				t.Errorf("state %q: rendered Start form presence = %v, want %v", tc.sessionStatus, strings.Contains(html, `value="start"`), want.CanStart)
 			}
-			if strings.Contains(html, ">Stop<") != want.CanStop {
-				t.Errorf("state %q: rendered Stop button presence = %v, want %v", tc.sessionStatus, strings.Contains(html, ">Stop<"), want.CanStop)
+			if strings.Contains(html, `value="stop"`) != want.CanStop {
+				t.Errorf("state %q: rendered Stop form presence = %v, want %v", tc.sessionStatus, strings.Contains(html, `value="stop"`), want.CanStop)
 			}
-			if strings.Contains(html, ">Restart<") != want.CanRestart {
-				t.Errorf("state %q: rendered Restart button presence = %v, want %v", tc.sessionStatus, strings.Contains(html, ">Restart<"), want.CanRestart)
+			if strings.Contains(html, `value="restart"`) != want.CanRestart {
+				t.Errorf("state %q: rendered Restart form presence = %v, want %v", tc.sessionStatus, strings.Contains(html, `value="restart"`), want.CanRestart)
 			}
 		})
 	}
@@ -755,15 +766,15 @@ func TestBuildGameRows_Deployments_RunStateUsesComputeDeploymentStatus(t *testin
 
 	rows := buildGameRows(games, configs, deployments, servers, sessions, nil)
 	row := gameRowByID(t, rows, 1)
-	if len(row.Deployments) != 1 {
-		t.Fatalf("Deployments = %d rows, want 1", len(row.Deployments))
+	if len(row.Overview.Deployments) != 1 {
+		t.Fatalf("Overview.Deployments = %d rows, want 1", len(row.Overview.Deployments))
 	}
-	dep := row.Deployments[0]
-	if dep.Row.SGCStatus != "inactive" {
-		t.Fatalf("fixture setup: SGCStatus = %q, want inactive", dep.Row.SGCStatus)
+	dep := row.Overview.Deployments[0]
+	if dep.Status != "Online" {
+		t.Errorf("deployment with inactive SGC.status but a running latest session must show Online status: got %q", dep.Status)
 	}
-	if dep.Row.LatestSession == nil || components.ComputeDeploymentStatus(dep.Row.LatestSession) != components.DeploymentRunning {
-		t.Errorf("deployment with inactive SGC.status but a running latest session must show running: LatestSession = %+v", dep.Row.LatestSession)
+	if row.RunState != components.DeploymentRunning {
+		t.Errorf("collapsed row RunState = %q, want running (an inactive-lifecycle SGC with a running session must still roll up to running)", row.RunState)
 	}
 }
 
@@ -787,7 +798,7 @@ func TestBuildGameRows_Deployments_ConnectAddress(t *testing.T) {
 
 	rows := buildGameRows(games, configs, deployments, servers, sessions, nil)
 	row := gameRowByID(t, rows, 1)
-	dep := row.Deployments[0]
+	dep := row.Overview.Deployments[0]
 
 	if dep.Connect.Unavailable || len(dep.Connect.Addresses) != 1 {
 		t.Fatalf("dep.Connect = %+v, want resolvable", dep.Connect)
@@ -799,7 +810,7 @@ func TestBuildGameRows_Deployments_ConnectAddress(t *testing.T) {
 	// Unresolvable case: no host_public_address configured.
 	unresolvableServers := []*manmanpb.Server{{ServerId: 1, HostPublicAddress: ""}}
 	rows = buildGameRows(games, configs, deployments, unresolvableServers, sessions, nil)
-	dep = gameRowByID(t, rows, 1).Deployments[0]
+	dep = gameRowByID(t, rows, 1).Overview.Deployments[0]
 	if !dep.Connect.Unavailable {
 		t.Errorf("unresolvable deployment Connect.Unavailable = false, want true (never a blank)")
 	}
@@ -824,9 +835,9 @@ func TestBuildGameRows_Deployments_LinkOuts(t *testing.T) {
 	}
 
 	rows := buildGameRows(games, configs, deployments, servers, sessions, nil)
-	depByID := map[int64]pages.GameDeploymentRow{}
-	for _, dep := range gameRowByID(t, rows, 1).Deployments {
-		depByID[dep.Row.ServerGameConfigID] = dep
+	depByID := map[int64]pages.GameDeploymentOverview{}
+	for _, dep := range gameRowByID(t, rows, 1).Overview.Deployments {
+		depByID[dep.SGCID] = dep
 	}
 
 	withSession := depByID[100]
@@ -842,7 +853,7 @@ func TestBuildGameRows_Deployments_LinkOuts(t *testing.T) {
 		t.Errorf("deployment with no session has LogsURL = %q, want empty", withoutSession.LogsURL)
 	}
 
-	// Render the section and confirm Actions is an <a> link, never an
+	// Render the panel and confirm Actions is an <a> link, never an
 	// inlined panel or button-triggered fragment swap.
 	var buf bytes.Buffer
 	if err := pages.Games(pages.GamesPageData{Games: []pages.GameRow{gameRowByID(t, rows, 1)}}).Render(context.Background(), &buf); err != nil {
@@ -858,11 +869,11 @@ func TestBuildGameRows_Deployments_LinkOuts(t *testing.T) {
 	if strings.Contains(html, fmt.Sprintf(`href="%s">Actions<`, withSession.ActionsURL)) {
 		t.Errorf("expected no ambiguous '>Actions<' link for ActionsURL")
 	}
-	if strings.Contains(html, ">View Live Session<") {
-		t.Errorf("expected no '>View Live Session<' text, single canonical button should be '>View Console<'")
+	if !strings.Contains(html, "View Live Output / Logs") {
+		t.Errorf("expected the 'View Live Output / Logs' diagnostics link for the deployment with a session, in rendered page")
 	}
-	if !strings.Contains(html, ">View Console<") {
-		t.Errorf("expected canonical '>View Console<' button in rendered page")
+	if !strings.Contains(html, "No Logs Available") {
+		t.Errorf("expected 'No Logs Available' for the deployment with no session, in rendered page")
 	}
 }
 
@@ -1060,8 +1071,8 @@ func TestHandleGameOverview_GET(t *testing.T) {
 		t.Fatalf("status = %d, want 200", w.Code)
 	}
 	body := w.Body.String()
-	if !strings.Contains(body, `id="daily-ops-overview"`) {
-		t.Errorf("expected overview fragment with id='daily-ops-overview', got: %s", body)
+	if !strings.Contains(body, `id="daily-ops-overview-1"`) {
+		t.Errorf("expected overview fragment with id='daily-ops-overview-1' (scoped per game_id), got: %s", body)
 	}
 	if !strings.Contains(body, "ONLINE") {
 		t.Errorf("expected ONLINE badge, got: %s", body)
@@ -1156,6 +1167,10 @@ func TestHandleGameDetail_NotFound(t *testing.T) {
 	}
 }
 
+// TestHandleGameDetail_TabbedLayout_Admin guards the post-restructure tab
+// set: "Configuration" is no longer its own tab (its content folded into
+// Overview's collapsed View More section, id="game-detail-view-more") --
+// only Overview, Console & Logs, and Advanced remain as tabs for admins.
 func TestHandleGameDetail_TabbedLayout_Admin(t *testing.T) {
 	api := buildFakeGamesData(1)
 	code, body := renderGameDetailHTTP(t, api, "/games/1", true)
@@ -1163,16 +1178,25 @@ func TestHandleGameDetail_TabbedLayout_Admin(t *testing.T) {
 		t.Fatalf("expected 200, got %d", code)
 	}
 
-	for _, tab := range []string{"Overview", "Console &amp; Logs", "Configuration", "Advanced"} {
+	for _, tab := range []string{"Overview", "Console &amp; Logs", "Advanced"} {
 		if !strings.Contains(body, tab) {
 			t.Errorf("expected tab %q in response, got body: %s", tab, body)
 		}
 	}
+	if strings.Contains(body, `id="tab-btn-configuration"`) {
+		t.Errorf("Configuration tab button must no longer exist, got body: %s", body)
+	}
+	if strings.Contains(body, `id="tab-panel-configuration"`) {
+		t.Errorf("Configuration tab panel must no longer exist, got body: %s", body)
+	}
 
-	for _, panel := range []string{"tab-panel-overview", "tab-panel-logs", "tab-panel-configuration", "tab-panel-advanced"} {
+	for _, panel := range []string{"tab-panel-overview", "tab-panel-logs", "tab-panel-advanced"} {
 		if !strings.Contains(body, `id="`+panel+`"`) {
 			t.Errorf("expected panel %q in response, got body: %s", panel, body)
 		}
+	}
+	if !strings.Contains(body, `id="game-detail-view-more"`) {
+		t.Errorf("expected the collapsed View More section for admin, got body: %s", body)
 	}
 }
 
@@ -1204,6 +1228,12 @@ func TestHandleGameDetail_TabbedLayout_NonAdmin(t *testing.T) {
 	}
 }
 
+// TestHandleGameDetail_SeparatesLowFrequencyActions guards the restructure:
+// Overview shows the Daily Ops Overview panel directly, and Advanced-only
+// controls (Deploy, Danger Zone) never leak into it, but the collapsed
+// View More section -- which now lives inside the Overview tab panel,
+// rather than a separate Configuration tab -- still carries Edit
+// Configuration.
 func TestHandleGameDetail_SeparatesLowFrequencyActions(t *testing.T) {
 	api := buildFakeGamesData(1)
 	code, body := renderGameDetailHTTP(t, api, "/games/1", true)
@@ -1221,24 +1251,26 @@ func TestHandleGameDetail_SeparatesLowFrequencyActions(t *testing.T) {
 	if !strings.Contains(overview, "Daily Ops Overview") {
 		t.Errorf("expected Daily Ops Overview on overview, got: %s", overview)
 	}
-	if strings.Contains(overview, "Edit Configuration") {
-		t.Errorf("Overview must NOT contain 'Edit Configuration', got: %s", overview)
-	}
 	if strings.Contains(overview, "Deploy to Server") {
-		t.Errorf("Overview must NOT contain 'Deploy to Server', got: %s", overview)
+		t.Errorf("Overview must NOT contain 'Deploy to Server' (Advanced tab only), got: %s", overview)
+	}
+	if strings.Contains(overview, "Danger Zone") {
+		t.Errorf("Overview must NOT contain 'Danger Zone' (Advanced tab only), got: %s", overview)
 	}
 
-	configStart := strings.Index(body, `id="tab-panel-configuration"`)
-	configEnd := strings.Index(body, `id="tab-panel-advanced"`)
-	if configStart == -1 || configEnd == -1 {
-		t.Fatalf("could not find config panels in body")
+	viewMoreStart := strings.Index(overview, `id="game-detail-view-more"`)
+	if viewMoreStart == -1 {
+		t.Fatalf("could not find game-detail-view-more inside the Overview panel")
 	}
-	configPanel := body[configStart:configEnd]
-	if !strings.Contains(configPanel, "Edit Configuration") {
-		t.Errorf("Configuration tab must contain 'Edit Configuration', got: %s", configPanel)
+	if !strings.Contains(overview[viewMoreStart:], "Edit Configuration") {
+		t.Errorf("View More section must contain 'Edit Configuration', got: %s", overview[viewMoreStart:])
 	}
 
-	advancedPanel := body[configEnd:]
+	advancedStart := strings.Index(body, `id="tab-panel-advanced"`)
+	if advancedStart == -1 {
+		t.Fatalf("could not find tab-panel-advanced in body")
+	}
+	advancedPanel := body[advancedStart:]
 	if !strings.Contains(advancedPanel, "Deploy to Server") {
 		t.Errorf("Advanced tab must contain 'Deploy to Server', got: %s", advancedPanel)
 	}

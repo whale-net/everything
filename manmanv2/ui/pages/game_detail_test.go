@@ -184,8 +184,8 @@ func TestGameOverview_Restarting_SelfTerminatingPoll(t *testing.T) {
 	if !strings.Contains(body, "hx-get=\"/games/1/overview\"") {
 		t.Errorf("expected hx-get='/games/1/overview', got: %s", body)
 	}
-	if !strings.Contains(body, "hx-target=\"#daily-ops-overview\"") {
-		t.Errorf("expected hx-target='#daily-ops-overview', got: %s", body)
+	if !strings.Contains(body, "hx-target=\"#daily-ops-overview-1\"") {
+		t.Errorf("expected hx-target='#daily-ops-overview-1' (scoped per game_id), got: %s", body)
 	}
 	if !strings.Contains(body, "hx-swap=\"outerHTML\"") {
 		t.Errorf("expected hx-swap='outerHTML', got: %s", body)
@@ -374,26 +374,40 @@ func fixtureGameDetailPageData(isAdmin bool) GameDetailPageData {
 	}
 }
 
-func TestGameDetail_TabbedLayout_AdminRendersAllTabs(t *testing.T) {
+// TestGameDetail_TabbedLayout_AdminRendersOverviewLogsAdvanced guards the
+// post-restructure tab set: "Configuration" is no longer its own tab (its
+// content folded into Overview's collapsed View More section) -- only
+// Overview, Console & Logs, and Advanced remain as tabs for admins.
+func TestGameDetail_TabbedLayout_AdminRendersOverviewLogsAdvanced(t *testing.T) {
 	data := fixtureGameDetailPageData(true)
 	body := renderPage(t, GameDetail(data))
 
-	// All four tab buttons must be rendered for admin
-	for _, wantTab := range []string{"Overview", "Console &amp; Logs", "Configuration", "Advanced"} {
+	for _, wantTab := range []string{"Overview", "Console &amp; Logs", "Advanced"} {
 		if !strings.Contains(body, wantTab) {
 			t.Errorf("expected tab button %q in body, got: %s", wantTab, body)
 		}
 	}
+	if strings.Contains(body, `id="tab-btn-configuration"`) {
+		t.Errorf("Configuration tab button must no longer exist (folded into Overview's View More), got: %s", body)
+	}
+	if strings.Contains(body, `id="tab-panel-configuration"`) {
+		t.Errorf("Configuration tab panel must no longer exist (folded into Overview's View More), got: %s", body)
+	}
 
 	// Tab panel IDs must be present
-	for _, wantPanel := range []string{"tab-panel-overview", "tab-panel-logs", "tab-panel-configuration", "tab-panel-advanced"} {
+	for _, wantPanel := range []string{"tab-panel-overview", "tab-panel-logs", "tab-panel-advanced"} {
 		if !strings.Contains(body, `id="`+wantPanel+`"`) {
 			t.Errorf("expected tab panel %q in body, got: %s", wantPanel, body)
 		}
 	}
+
+	// The collapsed View More section lives inside Overview now.
+	if !strings.Contains(body, `id="game-detail-view-more"`) {
+		t.Errorf("expected the collapsed View More section for admin, got: %s", body)
+	}
 }
 
-func TestGameDetail_TabbedLayout_NonAdminHidesConfigAndAdvanced(t *testing.T) {
+func TestGameDetail_TabbedLayout_NonAdminHidesAdvancedAndViewMore(t *testing.T) {
 	data := fixtureGameDetailPageData(false)
 	body := renderPage(t, GameDetail(data))
 
@@ -405,20 +419,17 @@ func TestGameDetail_TabbedLayout_NonAdminHidesConfigAndAdvanced(t *testing.T) {
 		t.Errorf("expected Console & Logs tab for non-admin, got: %s", body)
 	}
 
-	// Configuration and Advanced tab buttons must NOT be rendered
-	if strings.Contains(body, `id="tab-btn-configuration"`) {
-		t.Errorf("Configuration tab button must NOT be rendered for non-admin, got: %s", body)
-	}
+	// Advanced tab button must NOT be rendered
 	if strings.Contains(body, `id="tab-btn-advanced"`) {
 		t.Errorf("Advanced tab button must NOT be rendered for non-admin, got: %s", body)
 	}
 
-	// Configuration and Advanced tab panels must NOT be present in DOM
-	if strings.Contains(body, `id="tab-panel-configuration"`) {
-		t.Errorf("Configuration tab panel must NOT exist for non-admin, got: %s", body)
-	}
+	// Advanced tab panel and the View More section must NOT be present in DOM
 	if strings.Contains(body, `id="tab-panel-advanced"`) {
 		t.Errorf("Advanced tab panel must NOT exist for non-admin, got: %s", body)
+	}
+	if strings.Contains(body, `id="game-detail-view-more"`) {
+		t.Errorf("View More section must NOT exist for non-admin, got: %s", body)
 	}
 }
 
@@ -454,38 +465,58 @@ func TestGameDetail_Overview_SeparatesLowFrequencyActions(t *testing.T) {
 		t.Errorf("Overview must show Restart control, got: %s", overviewContent)
 	}
 
-	// Overview MUST NOT contain "Edit Configuration" or "Deploy" (AC: separate low-frequency actions)
-	if strings.Contains(overviewContent, "Edit Configuration") {
-		t.Errorf("Overview must NOT contain 'Edit Configuration' (moved to Configuration tab), got: %s", overviewContent)
-	}
+	// Overview MUST NOT contain Advanced-only controls (Deploy, Danger
+	// Zone): Advanced stays a separate tab, untouched by this restructure.
 	if strings.Contains(overviewContent, "Deploy to Server") || strings.Contains(overviewContent, "+ Deploy") {
-		t.Errorf("Overview must NOT contain Deploy controls (moved to Advanced tab), got: %s", overviewContent)
+		t.Errorf("Overview must NOT contain Deploy controls (Advanced tab only), got: %s", overviewContent)
+	}
+	if strings.Contains(overviewContent, "Danger Zone") {
+		t.Errorf("Overview must NOT contain Danger Zone (Advanced tab only), got: %s", overviewContent)
+	}
+
+	// "Edit Configuration" now lives inside Overview's own collapsed View
+	// More section (folded in, not deleted): present in the panel's
+	// rendered HTML, gated behind expanded=false by default.
+	viewMoreIdx := strings.Index(overviewContent, `id="game-detail-view-more"`)
+	if viewMoreIdx == -1 {
+		t.Fatalf("expected the collapsed View More section inside the Overview panel, got: %s", overviewContent)
+	}
+	if !strings.Contains(overviewContent, "Edit Configuration") {
+		t.Errorf("expected 'Edit Configuration' text inside the View More section, got: %s", overviewContent)
+	}
+	if !strings.Contains(overviewContent[viewMoreIdx:viewMoreIdx+80], `x-data="{ expanded: false }"`) {
+		t.Errorf("expected the View More section collapsed by default (expanded: false), got: %s", overviewContent[viewMoreIdx:viewMoreIdx+80])
 	}
 }
 
-func TestGameDetail_ConfigurationTab_HasEditConfiguration(t *testing.T) {
+// TestGameDetail_ViewMore_HasEditConfigurationAndPathPresets guards that
+// the collapsed View More section (folded out of the retired Configuration
+// tab, still inside Overview's tab panel) carries the Game Configurations
+// table, its Edit Configuration entry point, and the Addon Path Presets
+// section.
+func TestGameDetail_ViewMore_HasEditConfigurationAndPathPresets(t *testing.T) {
 	data := fixtureGameDetailPageData(true)
 	body := renderPage(t, GameDetail(data))
 
-	startIdx := strings.Index(body, `id="tab-panel-configuration"`)
+	startIdx := strings.Index(body, `id="game-detail-view-more"`)
 	if startIdx == -1 {
-		t.Fatalf("missing tab-panel-configuration")
+		t.Fatalf("missing game-detail-view-more")
 	}
-	endIdx := strings.Index(body, `id="tab-panel-advanced"`)
+	endIdx := strings.Index(body, `id="tab-panel-logs"`)
 	if endIdx == -1 {
-		t.Fatalf("missing tab-panel-advanced")
+		t.Fatalf("missing tab-panel-logs")
 	}
-	configContent := body[startIdx:endIdx]
+	viewMoreContent := body[startIdx:endIdx]
 
 	// Must contain Game Configurations, Edit Configuration, and Path Presets
-	if !strings.Contains(configContent, "Game Configurations") {
-		t.Errorf("Configuration tab must have Game Configurations section, got: %s", configContent)
+	if !strings.Contains(viewMoreContent, "Game Configurations") {
+		t.Errorf("View More must have Game Configurations section, got: %s", viewMoreContent)
 	}
-	if !strings.Contains(configContent, "Edit Configuration") {
-		t.Errorf("Configuration tab must have 'Edit Configuration' button, got: %s", configContent)
+	if !strings.Contains(viewMoreContent, "Edit Configuration") {
+		t.Errorf("View More must have 'Edit Configuration' text, got: %s", viewMoreContent)
 	}
-	if !strings.Contains(configContent, "Addon Path Presets") {
-		t.Errorf("Configuration tab must have Addon Path Presets section, got: %s", configContent)
+	if !strings.Contains(viewMoreContent, "Addon Path Presets") {
+		t.Errorf("View More must have Addon Path Presets section, got: %s", viewMoreContent)
 	}
 }
 
@@ -514,33 +545,33 @@ func TestGameDetail_AdvancedTab_HasDeployAndDangerZone(t *testing.T) {
 	}
 }
 
-// TestGameDetail_ConfigurationTab_HasConfigEditorTrigger guards the Config
-// Editor blade's only entry point (root plan #2266, task #2276, FR13):
-// once the Games list row's own Configurations section (data-config-
-// editor-trigger, #2273) was trimmed away for a quick-glance list, this
-// admin-gated Configuration tab became its sole home.
-func TestGameDetail_ConfigurationTab_HasConfigEditorTrigger(t *testing.T) {
+// TestGameDetail_ViewMore_HasConfigEditorTrigger guards the Config Editor
+// blade's only entry point (root plan #2266, task #2276, FR13): once the
+// Games list row's own Configurations section (data-config-editor-trigger,
+// #2273) was trimmed away for a quick-glance list, this admin-gated View
+// More section became its sole home.
+func TestGameDetail_ViewMore_HasConfigEditorTrigger(t *testing.T) {
 	data := fixtureGameDetailPageData(true)
 	body := renderPage(t, GameDetail(data))
 
 	if !strings.Contains(body, "data-config-editor-trigger") {
-		t.Errorf("Configuration tab must carry an Edit control opening the Config Editor blade, got: %s", body)
+		t.Errorf("View More must carry an Edit control opening the Config Editor blade, got: %s", body)
 	}
 	if !strings.Contains(body, `hx-get="/games/42/configs/101/editor"`) {
 		t.Errorf("expected the Edit control to hx-get the Config Editor route, got: %s", body)
 	}
 }
 
-// TestGameDetail_ConfigurationTab_HasWorkshopLibraries guards that the
-// Workshop Libraries panel (task #2367, FR8/FR9/FR10) is reachable here:
-// it moved off the Games list row entirely, so this admin-gated
-// Configuration tab is now its only home.
-func TestGameDetail_ConfigurationTab_HasWorkshopLibraries(t *testing.T) {
+// TestGameDetail_ViewMore_HasWorkshopLibraries guards that the Workshop
+// Libraries panel (task #2367, FR8/FR9/FR10) is reachable here: it moved
+// off the Games list row entirely, so this admin-gated View More section
+// is now its only home.
+func TestGameDetail_ViewMore_HasWorkshopLibraries(t *testing.T) {
 	data := fixtureGameDetailPageData(true)
 	body := renderPage(t, GameDetail(data))
 
 	if !strings.Contains(body, "Workshop Libraries") {
-		t.Errorf("Configuration tab must contain the Workshop Libraries panel, got: %s", body)
+		t.Errorf("View More must contain the Workshop Libraries panel, got: %s", body)
 	}
 	if !strings.Contains(body, `hx-get="/games/42/workshop-panel"`) {
 		t.Errorf("expected the Workshop Libraries panel to lazily fetch its content, got: %s", body)

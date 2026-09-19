@@ -31,6 +31,12 @@ type GameDeploymentOverview struct {
 	CanRestart    bool
 	IsTransient   bool
 	LogsURL       string
+	// ActionsURL links out to the config-level Actions management page
+	// (console commands), same URL shape buildGameDeploymentRow computes --
+	// also backs this deployment's Customize control (deployment settings
+	// blade), folded in here so both /games (list) and /games/{id}
+	// (detail) get them for free from this one shared component.
+	ActionsURL string
 }
 
 type GameDetailPageData struct {
@@ -72,13 +78,21 @@ func metadataTags(game *manmanpb.Game) string {
 	return strings.Join(game.Metadata.Tags, ", ")
 }
 
+// dailyOpsOverviewID is the ops panel's DOM id, scoped per game so the
+// panel can render safely either once (the detail page) or many times on
+// one page (the games list, one collapsed row per game): "#daily-ops-
+// overview" alone would collide across rows.
+func dailyOpsOverviewID(gameID int64) string {
+	return fmt.Sprintf("daily-ops-overview-%d", gameID)
+}
+
 func overviewPollAttrs(data GameOverviewData) templ.Attributes {
 	for _, dep := range data.Deployments {
 		if dep.IsTransient {
 			return templ.Attributes{
 				"hx-get":     fmt.Sprintf("/games/%d/overview", data.GameID),
 				"hx-trigger": "every 3s",
-				"hx-target":  "#daily-ops-overview",
+				"hx-target":  "#" + dailyOpsOverviewID(data.GameID),
 				"hx-swap":    "outerHTML",
 			}
 		}
@@ -157,7 +171,14 @@ templ overviewDeploymentContent(gameID int64, dep GameDeploymentOverview) {
 		<div class="bg-base-200/40 rounded-box p-4 border border-base-300 flex flex-col justify-between">
 			<div>
 				<div class="text-xs font-semibold uppercase tracking-wider text-base-content/60 mb-1">Connection Info</div>
-				<div class="mt-2">
+				<!--
+					AC4: this id is the stable target a successful ports
+					Save (handleDeploymentSettingsPortsSave) swaps out of
+					band via DeploymentConnectAddressOOB, so the recomputed
+					connect address shows up here without re-fetching
+					anything else on the page (FR10).
+				-->
+				<div id={ DeploymentConnectAddressID(dep.SGCID) } class="mt-2">
 					@components.ConnectAddressDisplay(dep.Connect)
 				</div>
 			</div>
@@ -174,7 +195,7 @@ templ overviewDeploymentContent(gameID int64, dep GameDeploymentOverview) {
 					method="POST"
 					action={ templ.URL(fmt.Sprintf("/games/%d/overview/action", gameID)) }
 					hx-post={ fmt.Sprintf("/games/%d/overview/action", gameID) }
-					hx-target="#daily-ops-overview"
+					hx-target={ "#" + dailyOpsOverviewID(gameID) }
 					hx-swap="outerHTML"
 					class="inline"
 				>
@@ -216,7 +237,7 @@ templ overviewDeploymentContent(gameID int64, dep GameDeploymentOverview) {
 							method="POST"
 							action={ templ.URL(fmt.Sprintf("/games/%d/overview/action", gameID)) }
 							hx-post={ fmt.Sprintf("/games/%d/overview/action", gameID) }
-							hx-target="#daily-ops-overview"
+							hx-target={ "#" + dailyOpsOverviewID(gameID) }
 							hx-swap="outerHTML"
 							class="inline"
 						>
@@ -256,7 +277,7 @@ templ overviewDeploymentContent(gameID int64, dep GameDeploymentOverview) {
 							method="POST"
 							action={ templ.URL(fmt.Sprintf("/games/%d/overview/action", gameID)) }
 							hx-post={ fmt.Sprintf("/games/%d/overview/action", gameID) }
-							hx-target="#daily-ops-overview"
+							hx-target={ "#" + dailyOpsOverviewID(gameID) }
 							hx-swap="outerHTML"
 							class="inline"
 						>
@@ -303,12 +324,43 @@ templ overviewDeploymentContent(gameID int64, dep GameDeploymentOverview) {
 				</button>
 			}
 		</div>
+
+		<!--
+			Console Commands + Customize (folded in from the Games list
+			row's former Deployments section, games.templ's retired
+			gameDeploymentRow): this component is shared by /games (one
+			panel per row) and /games/{id} (one panel total), so both
+			surfaces keep these controls reachable for free.
+		-->
+		<div class="flex flex-wrap items-center gap-3">
+			if dep.ActionsURL != "" {
+				<a href={ templ.URL(dep.ActionsURL) } class="link link-primary text-sm" title="Configure custom console commands">Console Commands</a>
+			}
+			<button
+				type="button"
+				data-open-blade-template={ fmt.Sprintf("deployment-settings-blade-template-%d", dep.SGCID) }
+				class="btn btn-outline btn-sm"
+			>
+				Customize
+			</button>
+		</div>
 	</div>
+
+	<template id={ fmt.Sprintf("deployment-settings-blade-template-%d", dep.SGCID) }>
+		@components.Blade(components.BladeData{
+			ID:       fmt.Sprintf("deployment-settings-blade-%d", dep.SGCID),
+			Title:    "Deployment Settings",
+			Subtitle: dep.DisplayName,
+		}) {
+			@DeploymentSettingsEnvPlaceholder(dep.SGCID)
+			@DeploymentSettingsPortsPlaceholder(dep.SGCID)
+		}
+	</template>
 }
 
 templ GameOverview(data GameOverviewData) {
 	<div
-		id="daily-ops-overview"
+		id={ dailyOpsOverviewID(data.GameID) }
 		class="card bg-base-100 border border-base-300 shadow-sm p-6 mb-6"
 		{ overviewPollAttrs(data)... }
 	>
@@ -422,9 +474,14 @@ templ GameDetail(data GameDetailPageData) {
 				activeTab: (function() {
 					const urlParams = new URLSearchParams(window.location.search);
 					const tabParam = urlParams.get('tab');
+					// 'configuration' is no longer a real tab (folded into the
+					// Overview tab's collapsed View More section): an old
+					// ?tab=configuration bookmark resolves to Overview rather
+					// than a blank panel.
+					if (tabParam === 'configuration') return 'overview';
 					if (tabParam) return tabParam;
 					const hash = window.location.hash.replace('#', '');
-					if (hash === 'settings-presets' || hash === 'configuration') return 'configuration';
+					if (hash === 'settings-presets' || hash === 'configuration') return 'overview';
 					if (hash === 'danger-zone' || hash === 'advanced') return 'advanced';
 					if (hash === 'logs' || hash === 'console') return 'logs';
 					return '%s';
@@ -486,16 +543,6 @@ templ GameDetail(data GameDetailPageData) {
 					Console &amp; Logs
 				</button>
 				if data.IsAdmin {
-					<button
-						type="button"
-						role="tab"
-						id="tab-btn-configuration"
-						class="tab tab-lg"
-						:class="{ 'tab-active font-semibold': activeTab === 'configuration' }"
-						@click="switchTab('configuration')"
-					>
-						Configuration
-					</button>
 					<button
 						type="button"
 						role="tab"
@@ -565,6 +612,229 @@ templ GameDetail(data GameDetailPageData) {
 						}
 					</dl>
 				</div>
+
+				<!--
+					View More (Game Configurations, Environment & Ports, Addon
+					Path Presets, Workshop Libraries): collapsed by default,
+					since these are configuration/library concerns an operator
+					checking status doesn't need on every visit. Not deleted,
+					just one click away instead of a separate "Configuration"
+					tab. Scoped inside tab-panel-overview (x-show="activeTab
+					=== 'overview'" above) so it doesn't also render on the
+					Console & Logs / Advanced tabs.
+				-->
+				if data.IsAdmin {
+				<div id="game-detail-view-more" x-data="{ expanded: false }" class="card bg-base-100 border border-base-300 shadow-sm mb-6 overflow-hidden">
+					<button type="button" @click="expanded = !expanded" class="w-full flex justify-between items-center p-4 border-b border-base-300 hover:bg-base-200 transition-colors">
+						<h2 class="text-lg font-semibold text-base-content">
+							<span x-show="!expanded">View More: Configurations &amp; Library</span>
+							<span x-show="expanded" x-cloak>Hide Configurations &amp; Library</span>
+						</h2>
+						<svg :class="expanded ? 'rotate-180' : ''" class="w-5 h-5 text-base-content/60 transition-transform" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+							<path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7"></path>
+						</svg>
+					</button>
+					<div x-show="expanded" x-cloak x-collapse class="p-4">
+						<!-- Game Configurations -->
+						<div class="card bg-base-100 border border-base-300 shadow-sm overflow-hidden mb-6">
+							<div class="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-3 p-4 border-b border-base-300 bg-base-200">
+								<div>
+									<h2 class="text-lg font-semibold text-base-content">Game Configurations</h2>
+									<p class="text-xs text-base-content/60 mt-1">Docker image, entrypoints, and base parameters.</p>
+								</div>
+								<a href={ templ.URL(fmt.Sprintf("/games/%d/configs/new", data.Game.GameId)) } class="btn btn-primary btn-sm">
+									+ Create Config
+								</a>
+							</div>
+							if len(data.Configs) > 0 {
+								<div class="overflow-x-auto">
+									<table class="table">
+										<thead>
+											<tr>
+												<th>Name</th>
+												<th>Docker Image</th>
+												<th>Deployments</th>
+												<th class="text-right">Actions</th>
+											</tr>
+										</thead>
+										<tbody>
+											for _, config := range data.Configs {
+												<tr class="hover">
+													<td>
+														<a href={ templ.URL(fmt.Sprintf("/games/%d/configs/%d", data.Game.GameId, config.ConfigId)) } class="text-sm font-medium link link-primary">
+															{ config.Name }
+														</a>
+													</td>
+													<td class="text-sm font-mono text-base-content">{ config.Image }</td>
+													<td class="text-sm text-base-content">{ fmt.Sprintf("%d", data.SgcCounts[config.ConfigId]) }</td>
+													<td class="text-right space-x-2">
+														<!--
+															Opens the Config Editor blade (root plan #2266,
+															task #2276, FR13): Basics/Environment/Volumes,
+															editable. This is View More's only entry point
+															to it now that the Games list row's own
+															Configurations section (data-config-editor-
+															trigger, #2273) is gone. The list stays a
+															quick-glance view; genuine editing lives here,
+															behind this already admin-gated section. See
+															handleGameConfigEditor's doc comment.
+														-->
+														<button
+															type="button"
+															class="btn btn-secondary btn-sm"
+															data-config-editor-trigger
+															data-config-id={ fmt.Sprintf("%d", config.ConfigId) }
+															hx-get={ fmt.Sprintf("/games/%d/configs/%d/editor", data.Game.GameId, config.ConfigId) }
+															hx-target="body"
+															hx-swap="beforeend"
+														>
+															Edit
+														</button>
+														<a href={ templ.URL(fmt.Sprintf("/games/%d/configs/%d", data.Game.GameId, config.ConfigId)) } class="btn btn-primary btn-sm">
+															View
+														</a>
+													</td>
+												</tr>
+											}
+										</tbody>
+									</table>
+								</div>
+							} else {
+								<div class="p-8 text-center">
+									<p class="text-base-content/60">No configurations yet. Create a configuration to deploy this game.</p>
+								</div>
+							}
+						</div>
+
+						<!-- Environment Variables & Ports info -->
+						<div class="card bg-base-100 border border-base-300 shadow-sm p-6 mb-6">
+							<h2 class="text-lg font-semibold text-base-content mb-2">Environment &amp; Ports Management</h2>
+							<p class="text-sm text-base-content/70 mb-4">
+								Base environment variables and arguments templates are managed on each Game Configuration.
+								Port bindings and host-level environment overrides can be customized per deployment.
+							</p>
+							<div class="grid grid-cols-1 md:grid-cols-2 gap-4 text-sm">
+								<div class="bg-base-200/50 p-4 rounded-box border border-base-300">
+									<h3 class="font-semibold text-base-content mb-1">🔧 Configuration Defaults</h3>
+									<p class="text-xs text-base-content/60">
+										Select a configuration above and click "Edit Configuration" to modify environment templates, entrypoints, and mounted volumes.
+									</p>
+								</div>
+								<div class="bg-base-200/50 p-4 rounded-box border border-base-300">
+									<h3 class="font-semibold text-base-content mb-1">🌐 Ports &amp; Host Placement</h3>
+									<p class="text-xs text-base-content/60">
+										Ports are mapped dynamically or statically when deploying to a bare-metal host. Manage deployments in the Advanced tab.
+									</p>
+								</div>
+							</div>
+						</div>
+
+						<!-- Path Presets -->
+						<div id="settings-presets" x-data="{ expanded: false }" class="card bg-base-100 border border-base-300 shadow-sm mb-6 overflow-hidden">
+							<button @click="expanded = !expanded" class="w-full flex justify-between items-center p-4 border-b border-base-300 hover:bg-base-200 transition-colors">
+								<div class="flex items-center gap-3">
+									<h2 class="text-lg font-semibold text-base-content">Addon Path Presets</h2>
+									<span class="text-sm text-base-content/60">({ fmt.Sprintf("%d presets", len(data.PathPresets)) })</span>
+								</div>
+								<svg :class="expanded ? 'rotate-180' : ''" class="w-5 h-5 text-base-content/60 transition-transform" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+									<path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7"></path>
+								</svg>
+							</button>
+							<div x-show="expanded" x-cloak x-collapse>
+								if len(data.PathPresets) > 0 {
+									<div class="overflow-x-auto">
+										<table class="table">
+											<thead class="bg-base-200">
+												<tr>
+													<th scope="col">Name</th>
+													<th scope="col">Volume</th>
+													<th scope="col">Installation Path</th>
+													<th scope="col" class="text-right">Actions</th>
+												</tr>
+											</thead>
+											<tbody>
+												for _, preset := range data.PathPresets {
+													<tr class="hover">
+														<td>
+															<div class="text-sm font-medium text-base-content">{ preset.Name }</div>
+															if preset.Description != "" {
+																<div class="text-xs text-base-content/60 mt-1">{ preset.Description }</div>
+															}
+														</td>
+														<td class="text-sm text-base-content"><em>(relative path)</em></td>
+														<td class="text-sm font-mono text-base-content">{ preset.InstallationPath }</td>
+														<td class="text-right">
+															<form method="POST" action={ templ.URL(fmt.Sprintf("/games/%d/presets/%d/delete", data.Game.GameId, preset.PresetId)) } class="inline">
+																<button type="submit" onclick="return confirm('Delete this preset?')" class="btn btn-error btn-sm">Delete</button>
+															</form>
+														</td>
+													</tr>
+												}
+											</tbody>
+										</table>
+									</div>
+								} else {
+									<div class="p-8 text-center">
+										<p class="text-base-content/60">No path presets defined. Add a preset to make addon installation easier.</p>
+									</div>
+								}
+								<div class="p-4 border-t border-base-300">
+									<button onclick="document.getElementById('add-preset-form').classList.remove('hidden')" class="btn btn-primary btn-sm">+ Add Preset</button>
+								</div>
+							</div>
+						</div>
+
+						<!-- Add Preset Form -->
+						<div id="add-preset-form" class="hidden mb-6">
+							<div class="card bg-base-100 border border-base-300 shadow-sm p-6">
+								<h2 class="text-lg font-semibold text-base-content mb-4">Add Path Preset</h2>
+								<form method="POST" action={ templ.URL(fmt.Sprintf("/games/%d/presets/create", data.Game.GameId)) } class="space-y-4">
+									<input type="hidden" name="game_id" value={ fmt.Sprintf("%d", data.Game.GameId) }/>
+									<div>
+										<label for="preset_name" class="block text-sm font-medium text-base-content mb-2">Name *</label>
+										<input type="text" id="preset_name" name="name" required placeholder="e.g., Maps, Plugins, Skins" class="input input-bordered w-full"/>
+										<p class="text-xs text-base-content/60 mt-1">Short label for this preset</p>
+									</div>
+									<div>
+										<label for="preset_description" class="block text-sm font-medium text-base-content mb-2">Description</label>
+										<textarea id="preset_description" name="description" rows="2" placeholder="Optional description" class="textarea textarea-bordered w-full"></textarea>
+									</div>
+									<div>
+										<label for="preset_volume_id" class="block text-sm font-medium text-base-content mb-2">Volume (Optional)</label>
+										<select id="preset_volume_id" name="volume_id" class="select select-bordered w-full">
+											<option value="">-- Use first volume (default) --</option>
+											for _, vol := range data.Volumes {
+												<option value={ fmt.Sprintf("%d", vol.VolumeId) }>{ vol.Name } ({ vol.ContainerPath })</option>
+											}
+										</select>
+										<p class="text-xs text-base-content/60 mt-1">Select which volume addons using this preset should install to</p>
+									</div>
+									<div>
+										<label for="preset_installation_path" class="block text-sm font-medium text-base-content mb-2">Installation Path *</label>
+										<input type="text" id="preset_installation_path" name="installation_path" required placeholder="e.g., left4dead2/maps/" class="input input-bordered w-full"/>
+										<p class="text-xs text-base-content/60 mt-1">Relative path within the volume</p>
+									</div>
+									<div class="flex gap-3 pt-2">
+										<button type="submit" class="btn btn-success">Add Preset</button>
+										<button type="button" onclick="document.getElementById('add-preset-form').classList.add('hidden')" class="btn btn-secondary">Cancel</button>
+									</div>
+								</form>
+							</div>
+						</div>
+
+						<!-- Workshop Libraries -->
+						<div
+							id={ fmt.Sprintf("game-workshop-%d", data.Game.GameId) }
+							hx-get={ fmt.Sprintf("/games/%d/workshop-panel", data.Game.GameId) }
+							hx-trigger="load"
+							hx-swap="innerHTML"
+							class="mb-6"
+						>
+							@gameWorkshopPlaceholder()
+						</div>
+					</div>
+				</div>
+			}
 			</div>
 
 			<!-- TAB 2: CONSOLE & LOGS (Live stream + log history) -->
@@ -799,208 +1069,7 @@ templ GameDetail(data GameDetailPageData) {
 				</div>
 			</div>
 
-			<!-- TAB 3: CONFIGURATION (Game config files, environment variables, ports) -->
 			if data.IsAdmin {
-				<div id="tab-panel-configuration" x-show="activeTab === 'configuration'" x-cloak>
-					<!-- Game Configurations -->
-					<div class="card bg-base-100 border border-base-300 shadow-sm overflow-hidden mb-6">
-						<div class="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-3 p-4 border-b border-base-300 bg-base-200">
-							<div>
-								<h2 class="text-lg font-semibold text-base-content">Game Configurations</h2>
-								<p class="text-xs text-base-content/60 mt-1">Docker image, entrypoints, and base parameters.</p>
-							</div>
-							<a href={ templ.URL(fmt.Sprintf("/games/%d/configs/new", data.Game.GameId)) } class="btn btn-primary btn-sm">
-								+ Create Config
-							</a>
-						</div>
-						if len(data.Configs) > 0 {
-							<div class="overflow-x-auto">
-								<table class="table">
-									<thead>
-										<tr>
-											<th>Name</th>
-											<th>Docker Image</th>
-											<th>Deployments</th>
-											<th class="text-right">Actions</th>
-										</tr>
-									</thead>
-									<tbody>
-										for _, config := range data.Configs {
-											<tr class="hover">
-												<td>
-													<a href={ templ.URL(fmt.Sprintf("/games/%d/configs/%d", data.Game.GameId, config.ConfigId)) } class="text-sm font-medium link link-primary">
-														{ config.Name }
-													</a>
-												</td>
-												<td class="text-sm font-mono text-base-content">{ config.Image }</td>
-												<td class="text-sm text-base-content">{ fmt.Sprintf("%d", data.SgcCounts[config.ConfigId]) }</td>
-												<td class="text-right space-x-2">
-													<!--
-														Opens the Config Editor blade (root plan #2266,
-														task #2276, FR13): Basics/Environment/Volumes,
-														editable. This is the Configuration tab's only
-														entry point to it now that the Games list row's
-														own Configurations section (data-config-editor-
-														trigger, #2273) is gone. The list stays a
-														quick-glance view; genuine editing lives here,
-														behind this already admin-gated tab. See
-														handleGameConfigEditor's doc comment.
-													-->
-													<button
-														type="button"
-														class="btn btn-secondary btn-sm"
-														data-config-editor-trigger
-														data-config-id={ fmt.Sprintf("%d", config.ConfigId) }
-														hx-get={ fmt.Sprintf("/games/%d/configs/%d/editor", data.Game.GameId, config.ConfigId) }
-														hx-target="body"
-														hx-swap="beforeend"
-													>
-														Edit
-													</button>
-													<a href={ templ.URL(fmt.Sprintf("/games/%d/configs/%d", data.Game.GameId, config.ConfigId)) } class="btn btn-primary btn-sm">
-														View
-													</a>
-												</td>
-											</tr>
-										}
-									</tbody>
-								</table>
-							</div>
-						} else {
-							<div class="p-8 text-center">
-								<p class="text-base-content/60">No configurations yet. Create a configuration to deploy this game.</p>
-							</div>
-						}
-					</div>
-
-					<!-- Environment Variables & Ports info -->
-					<div class="card bg-base-100 border border-base-300 shadow-sm p-6 mb-6">
-						<h2 class="text-lg font-semibold text-base-content mb-2">Environment &amp; Ports Management</h2>
-						<p class="text-sm text-base-content/70 mb-4">
-							Base environment variables and arguments templates are managed on each Game Configuration.
-							Port bindings and host-level environment overrides can be customized per deployment.
-						</p>
-						<div class="grid grid-cols-1 md:grid-cols-2 gap-4 text-sm">
-							<div class="bg-base-200/50 p-4 rounded-box border border-base-300">
-								<h3 class="font-semibold text-base-content mb-1">🔧 Configuration Defaults</h3>
-								<p class="text-xs text-base-content/60">
-									Select a configuration above and click "Edit Configuration" to modify environment templates, entrypoints, and mounted volumes.
-								</p>
-							</div>
-							<div class="bg-base-200/50 p-4 rounded-box border border-base-300">
-								<h3 class="font-semibold text-base-content mb-1">🌐 Ports &amp; Host Placement</h3>
-								<p class="text-xs text-base-content/60">
-									Ports are mapped dynamically or statically when deploying to a bare-metal host. Manage deployments in the Advanced tab.
-								</p>
-							</div>
-						</div>
-					</div>
-
-					<!-- Path Presets -->
-					<div id="settings-presets" x-data="{ expanded: false }" class="card bg-base-100 border border-base-300 shadow-sm mb-6 overflow-hidden">
-						<button @click="expanded = !expanded" class="w-full flex justify-between items-center p-4 border-b border-base-300 hover:bg-base-200 transition-colors">
-							<div class="flex items-center gap-3">
-								<h2 class="text-lg font-semibold text-base-content">Addon Path Presets</h2>
-								<span class="text-sm text-base-content/60">({ fmt.Sprintf("%d presets", len(data.PathPresets)) })</span>
-							</div>
-							<svg :class="expanded ? 'rotate-180' : ''" class="w-5 h-5 text-base-content/60 transition-transform" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-								<path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7"></path>
-							</svg>
-						</button>
-						<div x-show="expanded" x-cloak x-collapse>
-							if len(data.PathPresets) > 0 {
-								<div class="overflow-x-auto">
-									<table class="table">
-										<thead class="bg-base-200">
-											<tr>
-												<th scope="col">Name</th>
-												<th scope="col">Volume</th>
-												<th scope="col">Installation Path</th>
-												<th scope="col" class="text-right">Actions</th>
-											</tr>
-										</thead>
-										<tbody>
-											for _, preset := range data.PathPresets {
-												<tr class="hover">
-													<td>
-														<div class="text-sm font-medium text-base-content">{ preset.Name }</div>
-														if preset.Description != "" {
-															<div class="text-xs text-base-content/60 mt-1">{ preset.Description }</div>
-														}
-													</td>
-													<td class="text-sm text-base-content"><em>(relative path)</em></td>
-													<td class="text-sm font-mono text-base-content">{ preset.InstallationPath }</td>
-													<td class="text-right">
-														<form method="POST" action={ templ.URL(fmt.Sprintf("/games/%d/presets/%d/delete", data.Game.GameId, preset.PresetId)) } class="inline">
-															<button type="submit" onclick="return confirm('Delete this preset?')" class="btn btn-error btn-sm">Delete</button>
-														</form>
-													</td>
-												</tr>
-											}
-										</tbody>
-									</table>
-								</div>
-							} else {
-								<div class="p-8 text-center">
-									<p class="text-base-content/60">No path presets defined. Add a preset to make addon installation easier.</p>
-								</div>
-							}
-							<div class="p-4 border-t border-base-300">
-								<button onclick="document.getElementById('add-preset-form').classList.remove('hidden')" class="btn btn-primary btn-sm">+ Add Preset</button>
-							</div>
-						</div>
-					</div>
-
-					<!-- Add Preset Form -->
-					<div id="add-preset-form" class="hidden mb-6">
-						<div class="card bg-base-100 border border-base-300 shadow-sm p-6">
-							<h2 class="text-lg font-semibold text-base-content mb-4">Add Path Preset</h2>
-							<form method="POST" action={ templ.URL(fmt.Sprintf("/games/%d/presets/create", data.Game.GameId)) } class="space-y-4">
-								<input type="hidden" name="game_id" value={ fmt.Sprintf("%d", data.Game.GameId) }/>
-								<div>
-									<label for="preset_name" class="block text-sm font-medium text-base-content mb-2">Name *</label>
-									<input type="text" id="preset_name" name="name" required placeholder="e.g., Maps, Plugins, Skins" class="input input-bordered w-full"/>
-									<p class="text-xs text-base-content/60 mt-1">Short label for this preset</p>
-								</div>
-								<div>
-									<label for="preset_description" class="block text-sm font-medium text-base-content mb-2">Description</label>
-									<textarea id="preset_description" name="description" rows="2" placeholder="Optional description" class="textarea textarea-bordered w-full"></textarea>
-								</div>
-								<div>
-									<label for="preset_volume_id" class="block text-sm font-medium text-base-content mb-2">Volume (Optional)</label>
-									<select id="preset_volume_id" name="volume_id" class="select select-bordered w-full">
-										<option value="">-- Use first volume (default) --</option>
-										for _, vol := range data.Volumes {
-											<option value={ fmt.Sprintf("%d", vol.VolumeId) }>{ vol.Name } ({ vol.ContainerPath })</option>
-										}
-									</select>
-									<p class="text-xs text-base-content/60 mt-1">Select which volume addons using this preset should install to</p>
-								</div>
-								<div>
-									<label for="preset_installation_path" class="block text-sm font-medium text-base-content mb-2">Installation Path *</label>
-									<input type="text" id="preset_installation_path" name="installation_path" required placeholder="e.g., left4dead2/maps/" class="input input-bordered w-full"/>
-									<p class="text-xs text-base-content/60 mt-1">Relative path within the volume</p>
-								</div>
-								<div class="flex gap-3 pt-2">
-									<button type="submit" class="btn btn-success">Add Preset</button>
-									<button type="button" onclick="document.getElementById('add-preset-form').classList.add('hidden')" class="btn btn-secondary">Cancel</button>
-								</div>
-							</form>
-						</div>
-					</div>
-
-					<!-- Workshop Libraries -->
-					<div
-						id={ fmt.Sprintf("game-workshop-%d", data.Game.GameId) }
-						hx-get={ fmt.Sprintf("/games/%d/workshop-panel", data.Game.GameId) }
-						hx-trigger="load"
-						hx-swap="innerHTML"
-						class="mb-6"
-					>
-						@gameWorkshopPlaceholder()
-					</div>
-				</div>
-
 				<!-- TAB 4: ADVANCED / DANGER ZONE (Deployments, container rebuilds, teardown) -->
 				<div id="tab-panel-advanced" x-show="activeTab === 'advanced'" x-cloak>
 					<!-- Deployments & Rebuilds -->

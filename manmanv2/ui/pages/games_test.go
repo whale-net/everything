@@ -4,20 +4,21 @@ import (
 	"strings"
 	"testing"
 
-	manmanpb "github.com/whale-net/everything/manmanv2/protos"
 	"github.com/whale-net/everything/manmanv2/ui/components"
 )
 
 // This file guards the Games list row (root plan #2266): the expanded row
-// renders only the Deployments section (start/stop/restart, #2272 FR6) plus
-// a "View More" link out to GameDetail. The Configurations (formerly FR7,
-// task #2273) and settings/danger footer (formerly FR9, task #2273)
-// sections that used to render here moved to GameDetail (game_detail.templ)
-// -- a quick-glance list shouldn't require parsing four sections to find
-// the actionable controls. gameWorkshopPlaceholder (task #2367) moved there
-// too; its coverage now lives in game_detail_test.go alongside it.
+// renders the Daily Ops Overview panel (GameOverview, game_detail.templ --
+// status, runtime, connect, and per-deployment Start/Stop/Restart/
+// Customize/Console Commands) plus a "View More" link out to GameDetail.
+// The Configurations (formerly FR7, task #2273) and settings/danger footer
+// (formerly FR9, task #2273) sections that used to render here moved to
+// GameDetail (game_detail.templ) -- a quick-glance list shouldn't require
+// parsing four sections to find the actionable controls. gameWorkshopPlaceholder
+// (task #2367) moved there too; its coverage now lives in game_detail_test.go
+// alongside it.
 
-// --- Expanded row: Deployments + View More only -----------------------------
+// --- Expanded row: Daily Ops Overview + View More only -----------------------
 
 func TestGameRow_Expanded_ViewMoreLinksToGameDetail(t *testing.T) {
 	row := GameRow{GameID: 42, Name: "Valheim"}
@@ -46,20 +47,22 @@ func TestGameRow_Expanded_NoConfigsWorkshopOrFooter(t *testing.T) {
 	}
 }
 
-// TestGameRow_Expanded_DeploymentsStillRender guards that the actionable
-// Deployments section (start/stop/restart) is still rendered directly in
-// the list, not gated behind an additional navigation.
-func TestGameRow_Expanded_DeploymentsStillRender(t *testing.T) {
+// TestGameRow_Expanded_DailyOpsOverviewStillRenders guards that the
+// actionable Daily Ops Overview panel (start/stop/restart) is still
+// rendered directly in the list, not gated behind an additional
+// navigation.
+func TestGameRow_Expanded_DailyOpsOverviewStillRenders(t *testing.T) {
 	row := GameRow{
 		GameID: 1,
 		Name:   "Valheim",
-		Deployments: []GameDeploymentRow{
-			{
-				Row: DeploymentRowData{
-					ServerGameConfigID: 100,
-					DisplayName:        "Survival on host-01",
-					SGCStatus:          "active",
-					Actions:            components.DeploymentActions{CanStart: true},
+		Overview: GameOverviewData{
+			GameID: 1,
+			Deployments: []GameDeploymentOverview{
+				{
+					SGCID:       100,
+					DisplayName: "Survival on host-01",
+					Status:      "Offline",
+					CanStart:    true,
 				},
 			},
 		},
@@ -104,25 +107,24 @@ func TestGameRow_HeaderMarkupAndNoNestedButtons(t *testing.T) {
 	}
 }
 
-// TestGameDeploymentRow_DeduplicatedNavAndConsoleCommands verifies that console
-// command links use explicit terminology and that duplicate session links are omitted.
-func TestGameDeploymentRow_DeduplicatedNavAndConsoleCommands(t *testing.T) {
-	liveSession := &manmanpb.Session{SessionId: 42, ServerGameConfigId: 10, Status: "running"}
-	dep := GameDeploymentRow{
-		Row: DeploymentRowData{
-			ServerGameConfigID: 10,
-			DisplayName:        "Default on host-01",
-			SGCStatus:          "active",
-			LatestSession:      liveSession,
-			LiveSession:        liveSession,
-			Actions:            components.DeploymentActions{CanStop: true, CanRestart: true},
-		},
-		Connect:    components.ConnectAddressView{Addresses: []components.ConnectAddress{{Address: "1.2.3.4:2456", Protocol: "UDP"}}},
-		LogsURL:    "/sessions/42",
-		ActionsURL: "/games/1/configs/2/actions",
+// TestOverviewDeploymentContent_ConsoleCommandsAndCustomize verifies that
+// the ops panel's per-deployment content (shared by the Games list row and
+// GameDetail's Overview tab) carries the Console Commands link and
+// Customize control folded in from the retired games.templ gameDeploymentRow,
+// using explicit terminology with no ambiguous standalone "Actions" link.
+func TestOverviewDeploymentContent_ConsoleCommandsAndCustomize(t *testing.T) {
+	dep := GameDeploymentOverview{
+		SGCID:       10,
+		DisplayName: "Default on host-01",
+		Status:      "Online",
+		CanStop:     true,
+		CanRestart:  true,
+		Connect:     components.ConnectAddressView{Addresses: []components.ConnectAddress{{Address: "1.2.3.4:2456", Protocol: "UDP"}}},
+		LogsURL:     "/sessions/42",
+		ActionsURL:  "/games/1/configs/2/actions",
 	}
 
-	body := renderPage(t, gameDeploymentRow(dep))
+	body := renderPage(t, overviewDeploymentContent(1, dep))
 
 	// 1. Console Commands link exists and points to ActionsURL.
 	if !strings.Contains(body, ">Console Commands<") {
@@ -134,17 +136,20 @@ func TestGameDeploymentRow_DeduplicatedNavAndConsoleCommands(t *testing.T) {
 
 	// 2. Ambiguous standalone "Actions" link is not present.
 	if strings.Contains(body, ">Actions<") {
-		t.Errorf("expected no ambiguous '>Actions<' link text in deployment row, got: %s", body)
+		t.Errorf("expected no ambiguous '>Actions<' link text, got: %s", body)
 	}
 
-	// 3. No duplicate ">Logs<" link in the header.
-	if strings.Contains(body, ">Logs<") {
-		t.Errorf("expected no duplicate '>Logs<' link in deployment row header, got: %s", body)
+	// 3. Customize control and its deployment settings blade are present.
+	if !strings.Contains(body, ">Customize<") {
+		t.Errorf("expected 'Customize' button, got: %s", body)
+	}
+	if !strings.Contains(body, `data-open-blade-template="deployment-settings-blade-template-10"`) {
+		t.Errorf("expected Customize to open the deployment settings blade template, got: %s", body)
 	}
 
-	// 4. Single "View Console" button is present.
-	if !strings.Contains(body, ">View Console<") {
-		t.Errorf("expected canonical 'View Console' button, got: %s", body)
+	// 4. Diagnostics link to live output/logs is present.
+	if !strings.Contains(body, "View Live Output / Logs") {
+		t.Errorf("expected 'View Live Output / Logs' diagnostics link, got: %s", body)
 	}
 }
 

@@ -10,12 +10,12 @@ import (
 )
 
 // DeploymentRowData is everything one deployment row needs to render itself,
-// standalone (HTMX fragment) or inside a table (the Games page's
-// per-deployment row, pages/games.templ's gameDeploymentRow). Originally
+// standalone (HTMX fragment) or inside a table (GameDetail's Advanced tab
+// Deployments & Rebuilds table, pages/game_detail.templ). Originally
 // pages/sessions.templ's shared piece; moved to its own file by task #2372
 // (M6 navigation/disposition) when the /sessions list page itself retired
 // (FR17) -- DeploymentRow/DeploymentRowInner are not list-page-specific and
-// are still reached from Games and the #1628/#1627 action/refresh
+// are still reached from GameDetail and the #1628/#1627 action/refresh
 // endpoints (handlers_deployment_actions.go), so they survive the page's
 // removal unchanged.
 type DeploymentRowData struct {
@@ -108,11 +108,11 @@ templ DeploymentRow(data DeploymentRowData) {
 //
 // The RestartBadge rendered below (components.RestartBadge, lifted out in
 // M5's #2268) is FR17's "restart-state badge" retained-capability
-// requirement: this same component renders inside the Games page's row
-// (pages/games.templ's gameDeploymentRow -> @DeploymentRow(dep.Row)), so
-// the badge survives the /sessions list page's retirement automatically --
-// verified present on Games rather than assumed, per task #2372's issue
-// body.
+// requirement, reached today via GameDetail's Advanced tab (Deployments &
+// Rebuilds table). The Games list row shows the same pending-restart state
+// through the Daily Ops Overview panel's own "Restarting" status instead
+// (game_detail.templ's computeOverviewStatus / overviewStatusBadge) --
+// a different badge, not a dropped capability.
 templ DeploymentRowInner(data DeploymentRowData) {
 	<td class="text-sm">
 		if data.DisplayName != "" {
