@@ -37,6 +37,14 @@
 // never dispatchable even if a model requests it anyway. A nil/empty
 // AllowedTools means "whatever the server exposes," not "allow nothing."
 //
+// In search mode (FR9, session.ToolLoadingModeSearch), a third filter
+// composes with the two above: resolveTarget refuses any call.Name that is
+// neither SearchToolsName nor currently in the session's unlocked set
+// (allowlist.go's isUnlocked), with the exact same error shape an
+// allowlist refusal returns -- the same discipline ListToolDefinitions
+// already applies to what a search-mode model is offered (listdefs.go), so
+// a name Tools never rendered this turn is never dispatchable either.
+//
 // # Persona credential (FR10, NFR4)
 //
 // Every call carries a whagent-net-signed, short-lived credential minted
@@ -284,7 +292,24 @@ func (d *Dispatcher) Dispatch(ctx context.Context, in DispatchInput) (Result, er
 // C22's "the agent definition does not allow it") is actually enforced. A
 // credential is minted (and a connection opened) for each server tried, in
 // in.ToolSet order, and is never reused across servers.
+//
+// In search mode (FR9), a name that is neither SearchToolsName nor in
+// in.Unlocked is refused up front, before this loop even runs -- composing
+// with, never replacing, the isAllowed check below: a name that is
+// unlocked but no longer allowlisted still falls through to isAllowed's
+// refusal in the loop.
 func resolveTarget(ctx context.Context, issuer *persona.Issuer, in DispatchInput) (string, *mcp.ClientSession, *mcp.Tool, error) {
+	if in.Mode == session.ToolLoadingModeSearch && in.Call.Name != SearchToolsName && !isUnlocked(in.Call.Name, in.Unlocked) {
+		// FR9: a search-mode session's model was never offered this name
+		// (ListToolDefinitions only rendered SearchToolsName plus
+		// in.Unlocked this turn) -- refuse before minting any credential or
+		// opening any connection, with the exact same error shape an
+		// allowlist refusal below would return, so a model cannot
+		// distinguish "not allowlisted" from "not yet unlocked" and start
+		// probing.
+		return "", nil, nil, fmt.Errorf("tools: call %q: no configured server exposes this tool", in.Call.Name)
+	}
+
 	for _, ref := range in.ToolSet {
 		if !isAllowed(in.Call.Name, ref.AllowedTools) {
 			continue
