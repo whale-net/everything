@@ -824,6 +824,48 @@ go_test(
     ],
 )
 
+# Real-Postgres coverage for TaskStore.DeclareDependency/ListDependencies/
+# UnsatisfiedDependencies (task_dependency.go, migration 015, issue
+# #2720's Testing section, FR2): declaring one dependency and several at
+# once, idempotent re-declaration, self-dependency and cycle rejection,
+# NFR1's cross-scope rejection, the terminal-Done claimability predicate,
+# and NFR3's two-subject attribution. Shares task_integration_test.go's
+# test-store/test-scope/test-world/subject helpers rather than duplicating
+# them, mirroring milepebble_integration_test.go's own choice. Deliberately
+# NOT part of `bazel test //...` -- see //libs/go/dbtest's README for the
+# full rationale.
+#
+# Run it explicitly (requires a working Docker daemon):
+#   bazel test //krill/store:task_dependency_integration_test --test_output=all
+go_test(
+    name = "task_dependency_integration_test",
+    size = "large",
+    timeout = "long",
+    srcs = [
+        "task_dependency_integration_test.go",
+        "task_integration_test.go",
+    ],
+    gotags = ["integration"],
+    tags = [
+        "external",
+        "integration",
+        "manual",
+        "no-cache",
+        "no-sandbox",
+        "requires-network",
+    ],
+    deps = [
+        ":store",
+        "//krill/migrate/schema",
+        "//libs/go/dbtest",
+        "//libs/go/migrate",
+        "@com_github_google_uuid//:uuid",
+        "@com_github_jackc_pgx_v5//stdlib",
+        "@com_github_stretchr_testify//assert",
+        "@com_github_stretchr_testify//require",
+    ],
+)
+
 go_test(
     name = "pointer_integration_test",
     size = "large",

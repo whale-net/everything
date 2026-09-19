@@ -89,7 +89,11 @@ go_library(
 # issue #2544's Testing section), and the work-axis task-create endpoint
 # (task_test.go, issue #2719's Testing section: session-derived scope_id/
 # subject-pair pass-through, field validation, CreateTask's named FR1
-# rejections mapped to 400, and the NFR6 no-session-header 401).
+# rejections mapped to 400, and the NFR6 no-session-header 401), and the
+# work-axis dependency-declaration surface (task_dependency_test.go, issue
+# #2720's Testing section: the same session-derived pass-through/
+# validation/named-rejection/NFR6 shape as task_test.go, plus the ungated
+# GET /tasks/{id}/dependencies read).
 # fakeSessionStore/fake entity stores/fakeAmendStore/fakeDesignSessionStore/
 # fakeRevisionEventStore/fakeEntitySetQuerier/fakeTaskStore stand in for
 # krill/store's (and krill/slice's) interfaces, so none of this needs
@@ -132,6 +136,7 @@ go_test(
         "session_test.go",
         "slice_internal_test.go",
         "slice_test.go",
+        "task_dependency_test.go",
         "task_test.go",
     ],
     embed = [":handlers"],
