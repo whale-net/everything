@@ -1207,21 +1207,21 @@ func TestHandleGameDetail_TabbedLayout_NonAdmin(t *testing.T) {
 		t.Fatalf("expected 200, got %d", code)
 	}
 
+	// Every user needs to view and edit their own game's configs, volumes,
+	// and workshop libraries -- only the Advanced/Danger Zone tab (teardown,
+	// container rebuilds) stays admin-only.
 	if !strings.Contains(body, "Overview") {
 		t.Errorf("expected Overview tab for non-admin, got body: %s", body)
 	}
 	if !strings.Contains(body, "Console &amp; Logs") {
 		t.Errorf("expected Console & Logs tab for non-admin, got body: %s", body)
 	}
-
-	if strings.Contains(body, `id="tab-btn-configuration"`) {
-		t.Errorf("non-admin must NOT see Configuration tab button, got body: %s", body)
+	if !strings.Contains(body, `id="game-detail-view-more"`) {
+		t.Errorf("non-admin must see the collapsed View More section, got body: %s", body)
 	}
+
 	if strings.Contains(body, `id="tab-btn-advanced"`) {
 		t.Errorf("non-admin must NOT see Advanced tab button, got body: %s", body)
-	}
-	if strings.Contains(body, `id="tab-panel-configuration"`) {
-		t.Errorf("non-admin must NOT see Configuration tab panel, got body: %s", body)
 	}
 	if strings.Contains(body, `id="tab-panel-advanced"`) {
 		t.Errorf("non-admin must NOT see Advanced tab panel, got body: %s", body)

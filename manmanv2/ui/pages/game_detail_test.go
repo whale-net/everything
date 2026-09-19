@@ -407,29 +407,30 @@ func TestGameDetail_TabbedLayout_AdminRendersOverviewLogsAdvanced(t *testing.T) 
 	}
 }
 
-func TestGameDetail_TabbedLayout_NonAdminHidesAdvancedAndViewMore(t *testing.T) {
+func TestGameDetail_TabbedLayout_NonAdminHidesOnlyAdvanced(t *testing.T) {
 	data := fixtureGameDetailPageData(false)
 	body := renderPage(t, GameDetail(data))
 
-	// Overview and Console & Logs must be present
+	// Overview, Console & Logs, and the collapsed View More section (game
+	// configs, volumes, workshop libraries) must be present -- every user
+	// needs to be able to view and edit their own game's configuration, not
+	// just admins.
 	if !strings.Contains(body, "Overview") {
 		t.Errorf("expected Overview tab for non-admin, got: %s", body)
 	}
 	if !strings.Contains(body, "Console &amp; Logs") {
 		t.Errorf("expected Console & Logs tab for non-admin, got: %s", body)
 	}
+	if !strings.Contains(body, `id="game-detail-view-more"`) {
+		t.Errorf("expected the collapsed View More section for non-admin, got: %s", body)
+	}
 
-	// Advanced tab button must NOT be rendered
+	// Advanced (danger zone: teardown, container rebuilds) stays admin-only.
 	if strings.Contains(body, `id="tab-btn-advanced"`) {
 		t.Errorf("Advanced tab button must NOT be rendered for non-admin, got: %s", body)
 	}
-
-	// Advanced tab panel and the View More section must NOT be present in DOM
 	if strings.Contains(body, `id="tab-panel-advanced"`) {
 		t.Errorf("Advanced tab panel must NOT exist for non-admin, got: %s", body)
-	}
-	if strings.Contains(body, `id="game-detail-view-more"`) {
-		t.Errorf("View More section must NOT exist for non-admin, got: %s", body)
 	}
 }
 
@@ -546,10 +547,9 @@ func TestGameDetail_AdvancedTab_HasDeployAndDangerZone(t *testing.T) {
 }
 
 // TestGameDetail_ViewMore_HasConfigEditorTrigger guards the Config Editor
-// blade's only entry point (root plan #2266, task #2276, FR13): once the
-// Games list row's own Configurations section (data-config-editor-trigger,
-// #2273) was trimmed away for a quick-glance list, this admin-gated View
-// More section became its sole home.
+// blade's only entry point: the collapsed View More section, visible to
+// every user viewing the game (not just admins), since editing configs is
+// a routine ops task rather than a destructive admin-only action.
 func TestGameDetail_ViewMore_HasConfigEditorTrigger(t *testing.T) {
 	data := fixtureGameDetailPageData(true)
 	body := renderPage(t, GameDetail(data))
@@ -563,9 +563,8 @@ func TestGameDetail_ViewMore_HasConfigEditorTrigger(t *testing.T) {
 }
 
 // TestGameDetail_ViewMore_HasWorkshopLibraries guards that the Workshop
-// Libraries panel (task #2367, FR8/FR9/FR10) is reachable here: it moved
-// off the Games list row entirely, so this admin-gated View More section
-// is now its only home.
+// Libraries panel is reachable from the collapsed View More section,
+// visible to every user viewing the game rather than admins only.
 func TestGameDetail_ViewMore_HasWorkshopLibraries(t *testing.T) {
 	data := fixtureGameDetailPageData(true)
 	body := renderPage(t, GameDetail(data))

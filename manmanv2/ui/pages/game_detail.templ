@@ -299,7 +299,18 @@ templ overviewDeploymentContent(gameID int64, dep GameDeploymentOverview) {
 		</div>
 
 		<!-- One-Click Diagnostics -->
-		<div>
+		<div class="flex flex-wrap items-center gap-2">
+			<a
+				href={ templ.URL(fmt.Sprintf("/games/%d/configs/%d", gameID, dep.ConfigID)) }
+				class="btn btn-outline btn-md gap-2 font-semibold w-full sm:w-auto"
+				title="View and edit the game config used by this deployment"
+			>
+				<svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+					<path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z"></path>
+					<path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z"></path>
+				</svg>
+				Edit Config: { dep.ConfigName }
+			</a>
 			if dep.LogsURL != "" {
 				<a
 					href={ templ.URL(dep.LogsURL) }
@@ -621,9 +632,11 @@ templ GameDetail(data GameDetailPageData) {
 					just one click away instead of a separate "Configuration"
 					tab. Scoped inside tab-panel-overview (x-show="activeTab
 					=== 'overview'" above) so it doesn't also render on the
-					Console & Logs / Advanced tabs.
+					Console & Logs / Advanced tabs. Visible to every user (not
+					just admins): viewing/editing your own game's configs,
+					volumes, and workshop libraries is a routine ops task, not
+					a destructive admin-only action.
 				-->
-				if data.IsAdmin {
 				<div id="game-detail-view-more" x-data="{ expanded: false }" class="card bg-base-100 border border-base-300 shadow-sm mb-6 overflow-hidden">
 					<button type="button" @click="expanded = !expanded" class="w-full flex justify-between items-center p-4 border-b border-base-300 hover:bg-base-200 transition-colors">
 						<h2 class="text-lg font-semibold text-base-content">
@@ -834,7 +847,6 @@ templ GameDetail(data GameDetailPageData) {
 						</div>
 					</div>
 				</div>
-			}
 			</div>
 
 			<!-- TAB 2: CONSOLE & LOGS (Live stream + log history) -->
@@ -1194,8 +1206,9 @@ templ GameDetail(data GameDetailPageData) {
 // GC-level attach/detach, replacing M5's read-only SGC-scoped panel and
 // its "coming soon: shared across configs" note). Lives here rather than
 // on the Games list row (games.templ): the list was trimmed to a
-// quick-glance Deployments-only view, and this admin-gated Configuration
-// tab is now Workshop Libraries' only home.
+// quick-glance Deployments-only view, and the collapsed View More section
+// (visible to every user, not just admins) is now Workshop Libraries' only
+// home.
 //
 // GetGameConfigLibraryAttachments and ListGameConfigLibraries both require
 // a single config_id (no sgc_id==0-style "all" filter exists for either),
