@@ -359,6 +359,50 @@ func (a *Authenticator) WithAccessToken(next http.HandlerFunc) http.HandlerFunc 
 	}
 }
 
+// ReacquireGRPCContext re-acquires r's access token and returns a context
+// with it attached via grpcauth.WithUserToken, for a per-delivery gRPC call
+// inside a long-lived SSE connection's fragment Render method (a route that
+// deliberately skips WithAccessToken -- see that method's doc comment for
+// why a connection already streaming can't take a redirect on a stale
+// token -- so the token is re-acquired on every delivery instead).
+//
+// On failure it distinguishes terminal from transient: if a.CurrentUser(r)
+// also fails, the session itself is gone, so cancel is invoked (ending the
+// stream) and the returned error wraps that session error; otherwise the
+// token refresh alone failed and the caller should treat this delivery as
+// transient (no bytes written, stream stays open, next delivery retries).
+//
+// Hoisted from manmanv2/ui, tools/app_registry/ui, and whagent_net/ui,
+// where this logic was byte-for-byte (or near-byte-for-byte) duplicated
+// across every such fragment's Render.
+func (a *Authenticator) ReacquireGRPCContext(r *http.Request, cancel context.CancelFunc) (context.Context, error) {
+	token, err := a.GetAccessToken(r)
+	if err != nil {
+		if _, checkErr := a.CurrentUser(r); checkErr != nil {
+			cancel()
+			return nil, fmt.Errorf("session lost: %w", checkErr)
+		}
+		return nil, fmt.Errorf("token refresh failed: %w", err)
+	}
+	return grpcauth.WithUserToken(r.Context(), token), nil
+}
+
+// TryAttachAccessToken attempts to acquire r's access token and attach it
+// to ctx via grpcauth.WithUserToken, for an authenticated call an SSE
+// handler makes before its stream opens (still on the route that skips
+// WithAccessToken, so no redirect is possible here either). Unlike
+// ReacquireGRPCContext, there is no established stream yet to end or leave
+// open on failure -- callers already degrade this call's own error (e.g.
+// falling back to an empty result), so on failure this returns ctx
+// unchanged and the token error for the caller to log.
+func (a *Authenticator) TryAttachAccessToken(ctx context.Context, r *http.Request) (context.Context, error) {
+	token, err := a.GetAccessToken(r)
+	if err != nil {
+		return ctx, err
+	}
+	return grpcauth.WithUserToken(ctx, token), nil
+}
+
 // HandleLogin initiates the OIDC login flow
 func (a *Authenticator) HandleLogin(w http.ResponseWriter, r *http.Request) {
 	if a.config.Mode == AuthModeNone {

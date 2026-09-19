@@ -8,7 +8,6 @@ import (
 
 	"github.com/a-h/templ"
 
-	"github.com/whale-net/everything/libs/go/grpcauth"
 	"github.com/whale-net/everything/libs/go/htmxauth"
 	"github.com/whale-net/everything/libs/go/htmxsse"
 	"github.com/whale-net/everything/libs/go/htmxsse/templadapter"
@@ -94,23 +93,10 @@ type renderPromoDetailsFragmentComponent struct {
 // the promotion details body (FR3).
 func (c renderPromoDetailsFragmentComponent) Render(ctx context.Context, w io.Writer) error {
 	// Re-acquire the access token on every delivery (FR27).
-	token, err := c.app.auth.GetAccessToken(c.r)
+	grpcCtx, err := c.app.auth.ReacquireGRPCContext(c.r, c.cancel)
 	if err != nil {
-		// Check if this is a terminal error (session gone) or transient (credential failed).
-		if c.app.sessionMgr != nil {
-			_, checkErr := c.app.sessionMgr.GetUserInfo(c.r)
-			if checkErr != nil {
-				// Terminal: session is gone, cancel the stream
-				c.cancel()
-				return fmt.Errorf("session lost: %w", checkErr)
-			}
-		}
-		// Transient: credential failure, don't cancel
-		return fmt.Errorf("token refresh failed: %w", err)
+		return err
 	}
-
-	// Inject the fresh token into the context for gRPC calls.
-	grpcCtx := grpcauth.WithUserToken(c.r.Context(), token)
 
 	// Fetch the promotion details from the registry.
 	resp, err := c.app.registry.Promotion.GetPromotionDetails(grpcCtx, &pb.GetPromotionDetailsRequest{PromotionId: c.promID})

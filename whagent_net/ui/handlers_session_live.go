@@ -241,15 +241,10 @@ type sessionTranscriptFragment struct {
 // end the stream for a terminal (session-gone) failure -- mirrors
 // manmanv2/ui/handlers_sessions_live.go's deploymentRowFragment.Render.
 func (f sessionTranscriptFragment) Render(ctx context.Context, w io.Writer) error {
-	token, err := f.app.auth.GetAccessToken(f.r)
+	grpcCtx, err := f.app.auth.ReacquireGRPCContext(f.r, f.cancel)
 	if err != nil {
-		if _, checkErr := f.app.auth.CurrentUser(f.r); checkErr != nil {
-			f.cancel()
-			return fmt.Errorf("session lost: %w", checkErr)
-		}
-		return fmt.Errorf("token refresh failed: %w", err)
+		return err
 	}
-	grpcCtx := grpcauth.WithUserToken(f.r.Context(), token)
 
 	newEvents, _, err := f.app.readTranscript(grpcCtx, f.sessionID, f.state.watermark+1)
 	if err != nil {

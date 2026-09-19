@@ -9,7 +9,6 @@ import (
 	"github.com/a-h/templ"
 	"github.com/google/uuid"
 
-	"github.com/whale-net/everything/libs/go/grpcauth"
 	"github.com/whale-net/everything/libs/go/htmxsse"
 	"github.com/whale-net/everything/libs/go/htmxsse/templadapter"
 	"github.com/whale-net/everything/libs/go/logging"
@@ -117,15 +116,10 @@ type sessionUsageFragment struct {
 // stays open) unless f.cancel was already called to end the stream for a
 // terminal (session-gone) failure -- mirrors sessionTranscriptFragment.Render.
 func (f sessionUsageFragment) Render(ctx context.Context, w io.Writer) error {
-	token, err := f.app.auth.GetAccessToken(f.r)
+	grpcCtx, err := f.app.auth.ReacquireGRPCContext(f.r, f.cancel)
 	if err != nil {
-		if _, checkErr := f.app.auth.CurrentUser(f.r); checkErr != nil {
-			f.cancel()
-			return fmt.Errorf("session lost: %w", checkErr)
-		}
-		return fmt.Errorf("token refresh failed: %w", err)
+		return err
 	}
-	grpcCtx := grpcauth.WithUserToken(f.r.Context(), token)
 
 	// Read the session alongside its usage on every delivery, not just at
 	// connect, so the capped-cap-tripped label (components.SessionUsage's

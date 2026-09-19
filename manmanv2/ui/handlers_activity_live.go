@@ -2,14 +2,12 @@ package main
 
 import (
 	"context"
-	"fmt"
 	"io"
 	"log"
 	"net/http"
 
 	"github.com/a-h/templ"
 
-	"github.com/whale-net/everything/libs/go/grpcauth"
 	"github.com/whale-net/everything/libs/go/htmxsse"
 	"github.com/whale-net/everything/libs/go/htmxsse/templadapter"
 	"github.com/whale-net/everything/manmanv2/events"
@@ -52,8 +50,8 @@ func (app *App) handleActivityLiveSSE(w http.ResponseWriter, r *http.Request) {
 	// activityLiveFragment.Render's per-delivery re-acquisition below; without
 	// it the per-RPC credentials have no token in context and every call
 	// fails UNAUTHENTICATED.
-	if token, tokenErr := app.auth.GetAccessToken(r); tokenErr == nil {
-		ctx = grpcauth.WithUserToken(ctx, token)
+	if tokenCtx, tokenErr := app.auth.TryAttachAccessToken(ctx, r); tokenErr == nil {
+		ctx = tokenCtx
 	} else {
 		log.Printf("WARNING: error acquiring access token for live activity stream: %v", tokenErr)
 	}
@@ -116,18 +114,10 @@ type activityLiveFragment struct {
 func (f activityLiveFragment) Render(ctx context.Context, w io.Writer) error {
 	// Re-acquire the access token on every delivery -- mirrors
 	// deploymentRowFragment.Render (handlers_sessions_live.go).
-	token, err := f.app.auth.GetAccessToken(f.r)
+	grpcCtx, err := f.app.auth.ReacquireGRPCContext(f.r, f.cancel)
 	if err != nil {
-		if _, checkErr := f.app.auth.CurrentUser(f.r); checkErr != nil {
-			// Terminal: session is gone, end the stream.
-			f.cancel()
-			return fmt.Errorf("session lost: %w", checkErr)
-		}
-		// Transient: credential refresh failed, session intact.
-		return fmt.Errorf("token refresh failed: %w", err)
+		return err
 	}
-
-	grpcCtx := grpcauth.WithUserToken(f.r.Context(), token)
 
 	data := f.app.buildActivityPageData(grpcCtx, f.r)
 	return pages.ActivityLiveContentInner(data).Render(ctx, w)
