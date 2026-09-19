@@ -74,6 +74,9 @@ func isUniqueViolation(err error) bool {
 // writeStoreError maps a krill/store Create* error onto this package's one
 // JSON error shape (jsonError, session.go):
 //   - store.ErrNotFound (missing or cross-scope parent, LB2 parentage) -> 400
+//   - store.ErrInvalidLaneSequence / store.ErrStartingLaneNotInSequence /
+//     store.ErrMilestoneHasMilepebbleCut (CreateTask's own named FR1
+//     rejections, task.go)                                            -> 400
 //   - a scope-qualified unique-constraint violation                   -> 409
 //   - anything else (a genuine store failure)                         -> 500
 //
@@ -81,7 +84,10 @@ func isUniqueViolation(err error) bool {
 // single switch so the mapping cannot drift handler-to-handler.
 func writeStoreError(w http.ResponseWriter, err error) {
 	switch {
-	case errors.Is(err, store.ErrNotFound):
+	case errors.Is(err, store.ErrNotFound),
+		errors.Is(err, store.ErrInvalidLaneSequence),
+		errors.Is(err, store.ErrStartingLaneNotInSequence),
+		errors.Is(err, store.ErrMilestoneHasMilepebbleCut):
 		writeJSONError(w, http.StatusBadRequest, err.Error())
 	case isUniqueViolation(err):
 		writeJSONError(w, http.StatusConflict, "an entity with this name already exists in this scope")

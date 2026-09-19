@@ -17,6 +17,7 @@ go_library(
         "milestone_status.go",
         "recut.go",
         "slice.go",
+        "task.go",
     ],
     importpath = "github.com/whale-net/everything/krill/mcp/tools",
     visibility = ["//visibility:public"],
@@ -61,6 +62,25 @@ go_test(
 go_test(
     name = "abandon_registration_test",
     srcs = ["abandon_registration_test.go"],
+    deps = [
+        ":tools",
+        "//krill/mcp/server",
+        "//krill/store",
+        "@com_github_modelcontextprotocol_go_sdk//mcp",
+        "@com_github_stretchr_testify//assert",
+        "@com_github_stretchr_testify//require",
+    ],
+)
+
+# No-database unit test (issue #2719's own MCP-layer structural proof):
+# RegisterCreateTask registers exactly {create_task} over a real in-memory
+# MCP client/server connection. Mirrors
+# :milestone_status_registration_test's own store.New(nil)/in-memory
+# transport technique, so it needs no Docker and is part of
+# `bazel test //...`.
+go_test(
+    name = "task_registration_test",
+    srcs = ["task_registration_test.go"],
     deps = [
         ":tools",
         "//krill/mcp/server",

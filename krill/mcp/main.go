@@ -9,11 +9,11 @@
 // `mcp` mounts two pre-filtered tool surfaces, each on its own *mcp.Server
 // and its own mount point (server/transport.go's specMountPath and
 // designMountPath): the FR5-FR8 read-only spec surface at /mcp/spec
-// (unchanged since M1), and this task's FR1-FR10 design-session surface
-// (three write tools, three read tools) at /mcp/design -- distinct from
-// the future work-axis surface (M4, no endpoint exists for it yet, root
-// plan issue #2485's roadmap). Both front doors (mcpauth/human,
-// whagent-net/agent) apply to both mounts identically.
+// (unchanged since M1), and the design-scoped write/read surface at
+// /mcp/design -- milestone authoring, status, delivery, and, as of M4
+// (issue #2719), the work axis's own create_task tool, all mount here
+// rather than on a fourth mount of their own. Both front doors
+// (mcpauth/human, whagent-net/agent) apply to both mounts identically.
 package main
 
 import (
@@ -135,13 +135,14 @@ func run() error {
 	// #2683), tools.RegisterMilestoneStatusAll (status history, issue
 	// #2685), tools.RegisterDeliveryShipmentAll (per-item shipment, issue
 	// #2686), tools.RegisterRecutAll (delivery-axis re-cut plus the
-	// backlog bucket, issue #2687), and tools.RegisterAbandonAll (the
-	// composed abandon verb, issue #2688) all mount on designReg --
-	// create_milestone/set_fr_budget/add_delivers/add_must_not_foreclose/
-	// add_deferral/set_milestone_status/mark_delivered_item_shipped/
-	// move_delivery_scope/abandon_milestone all need the same
-	// krill-session-derived LB4 subject pair every write tool on that
-	// mount already resolves.
+	// backlog bucket, issue #2687), tools.RegisterAbandonAll (the
+	// composed abandon verb, issue #2688), and tools.RegisterCreateTask
+	// (the work-axis task-create tool, issue #2719, FR1) all mount on
+	// designReg -- create_milestone/set_fr_budget/add_delivers/
+	// add_must_not_foreclose/add_deferral/set_milestone_status/
+	// mark_delivered_item_shipped/move_delivery_scope/abandon_milestone/
+	// create_task all need the same krill-session-derived LB4 subject
+	// pair every write tool on that mount already resolves.
 	specSrv := server.New()
 	specReg := server.NewRegistry(specSrv)
 	tools.RegisterAll(specReg, querier)
@@ -154,6 +155,7 @@ func run() error {
 	tools.RegisterDeliveryShipmentAll(designReg, sessions, entities.DeliveryShipments(), entities.MilestoneStatus(), querier)
 	tools.RegisterRecutAll(designReg, sessions, entities.Recut(), querier)
 	tools.RegisterAbandonAll(designReg, sessions, entities.Abandon())
+	tools.RegisterCreateTask(designReg, sessions, entities.Tasks())
 
 	// The mcpauth (human) front door's CredentialStore preflights the
 	// consuming domain's credential table at boot -- exactly like

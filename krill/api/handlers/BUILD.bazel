@@ -28,7 +28,10 @@ FR8/FR9/FR12) is the milestone/milepebble status HTTP surface: POST
 #2686, FR10) is the per-delivered-item shipment surface: POST
 /milestones/{id}/shipped is gated, GET /milestones/{id}/delivery is
 not. recut.go (issue #2687, FR5) is the delivery-axis re-cut surface:
-POST /delivery/move is gated, GET /products/{id}/backlog is not."""
+POST /delivery/move is gated, GET /products/{id}/backlog is not.
+task.go (issue #2719, FR1) is the work-axis task-create surface: POST
+/tasks is gated behind RequireSession, mirroring every other write
+endpoint above."""
 
 load("@rules_go//go:def.bzl", "go_library", "go_test")
 
@@ -56,6 +59,7 @@ go_library(
         "session.go",
         "session_slice.go",
         "slice.go",
+        "task.go",
         "types.go",
     ],
     importpath = "github.com/whale-net/everything/krill/api/handlers",
@@ -78,14 +82,18 @@ go_library(
 # RevisionEvent HTTP surface (design_session_test.go/revision_event_test.go,
 # issue #2543's Testing section: both POST endpoints gated, GET
 # /design-sessions/{id} not, FR3/FR4's conditional-presence rules mapped to
-# 400), and SessionSlice's union-and-dedupe logic (session_slice_test.go,
-# issue #2544's Testing section). fakeSessionStore/fake entity stores/
-# fakeAmendStore/fakeDesignSessionStore/fakeRevisionEventStore/
-# fakeEntitySetQuerier stand in for krill/store's (and krill/slice's)
-# interfaces, so none of this needs Postgres/network and it runs as part of
-# `bazel test //...`. slice_internal_test.go is package handlers (white-box,
-# needs the unexported sliceQueryFunc/handle); everything else here is
-# package handlers_test (black-box).
+# 400), SessionSlice's union-and-dedupe logic (session_slice_test.go,
+# issue #2544's Testing section), and the work-axis task-create endpoint
+# (task_test.go, issue #2719's Testing section: session-derived scope_id/
+# subject-pair pass-through, field validation, CreateTask's named FR1
+# rejections mapped to 400, and the NFR6 no-session-header 401).
+# fakeSessionStore/fake entity stores/fakeAmendStore/fakeDesignSessionStore/
+# fakeRevisionEventStore/fakeEntitySetQuerier/fakeTaskStore stand in for
+# krill/store's (and krill/slice's) interfaces, so none of this needs
+# Postgres/network and it runs as part of `bazel test //...`.
+# slice_internal_test.go is package handlers (white-box, needs the
+# unexported sliceQueryFunc/handle); everything else here is package
+# handlers_test (black-box).
 go_test(
     name = "handlers_test",
     srcs = [
@@ -104,6 +112,7 @@ go_test(
         "fake_recut_store_test.go",
         "fake_session_slice_stores_test.go",
         "fake_session_store_test.go",
+        "fake_task_store_test.go",
         "feature_test.go",
         "featureset_test.go",
         "gate_test.go",
@@ -120,6 +129,7 @@ go_test(
         "session_test.go",
         "slice_internal_test.go",
         "slice_test.go",
+        "task_test.go",
     ],
     embed = [":handlers"],
     deps = [

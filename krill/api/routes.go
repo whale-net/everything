@@ -38,6 +38,11 @@ import (
 // /products/{id}/delivery (issue #2689, FR11).
 // Import (FR16) is a later task's route, not added here.
 //
+// POST /tasks (the work-axis task-create endpoint, issue #2719, FR1) is
+// gated the same way every other write endpoint above is -- scope_id and
+// both subjects come from the session RequireSession resolves, never the
+// request body (NFR6).
+//
 // githubToken is KRILL_GITHUB_TOKEN (see main.go's config/../ENV.md) --
 // threaded through to //krill/forge.GitHubClient, the one dependency
 // POST /pointer-artifacts has that no other route in this binary does.
@@ -102,6 +107,11 @@ func setupRoutes(mux *http.ServeMux, pool *pgxpool.Pool, githubToken string) {
 	// product's delivery-axis listing, filterable by `status` -- ungated
 	// like every other read endpoint in this package.
 	mux.HandleFunc("GET /products/{id}/delivery", handlers.GetProductDeliveryHandler(entities.Products(), querier))
+
+	// The work axis (M4, issue #2719, FR1): a task scoped to exactly one
+	// milepebble, or to a milestone directly when that milestone has no
+	// milepebble cut.
+	mux.Handle("POST /tasks", gate(handlers.CreateTaskHandler(entities.Tasks())))
 
 	mux.Handle("POST /design-sessions", gate(handlers.OpenDesignSessionHandler(entities.DesignSessions())))
 	mux.HandleFunc("GET /design-sessions/{id}", handlers.GetDesignSessionHandler(entities.DesignSessions(), entities.RevisionEvents()))
