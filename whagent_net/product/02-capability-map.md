@@ -36,3 +36,4 @@ C24 — A viewer can see exactly what the model was shown on a given turn, to de
 C25 — An operator can see cost and turn usage rolled up across sessions, per agent and per user.
 C26 — A Slack user can start an agent and receive its replies in a Slack thread.
 C29 — An operator running an agent against a large tool catalog gets a session whose model searches for and loads only the tool definitions it needs on a given turn, instead of the entire allowed set being present from turn 1.
+C30 — An operator or on-call viewer watching a session in whagent-net's own web UI can tell, at a glance and without refreshing, whether the session is currently processing a turn or idle waiting for input — instead of a badge whose text changes but reads the same either way.
