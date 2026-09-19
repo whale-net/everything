@@ -27,7 +27,8 @@ FR8/FR9/FR12) is the milestone/milepebble status HTTP surface: POST
 /milestones/{id}/status/history are not. delivery_shipment.go (issue
 #2686, FR10) is the per-delivered-item shipment surface: POST
 /milestones/{id}/shipped is gated, GET /milestones/{id}/delivery is
-not."""
+not. recut.go (issue #2687, FR5) is the delivery-axis re-cut surface:
+POST /delivery/move is gated, GET /products/{id}/backlog is not."""
 
 load("@rules_go//go:def.bzl", "go_library", "go_test")
 
@@ -48,6 +49,7 @@ go_library(
         "open_questions.go",
         "pointer.go",
         "product.go",
+        "recut.go",
         "requirement.go",
         "revision_event.go",
         "session.go",

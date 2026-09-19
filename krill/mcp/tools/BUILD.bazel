@@ -14,6 +14,7 @@ go_library(
         "design.go",
         "milestone.go",
         "milestone_status.go",
+        "recut.go",
         "slice.go",
     ],
     importpath = "github.com/whale-net/everything/krill/mcp/tools",

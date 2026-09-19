@@ -133,12 +133,13 @@ func run() error {
 	// (FR5-FR8, read-only) is unchanged; tools.RegisterDesignAll (issue
 	// #2547), tools.RegisterMilestoneAll (milestone authoring, issue
 	// #2683), tools.RegisterMilestoneStatusAll (status history, issue
-	// #2685), and tools.RegisterDeliveryShipmentAll (per-item shipment,
-	// issue #2686) all mount on designReg -- create_milestone/
+	// #2685), tools.RegisterDeliveryShipmentAll (per-item shipment, issue
+	// #2686), and tools.RegisterRecutAll (delivery-axis re-cut plus the
+	// backlog bucket, issue #2687) all mount on designReg -- create_milestone/
 	// set_fr_budget/add_delivers/add_must_not_foreclose/add_deferral/
-	// set_milestone_status/mark_delivered_item_shipped all need the same
-	// krill-session-derived LB4 subject pair every write tool on that
-	// mount already resolves.
+	// set_milestone_status/mark_delivered_item_shipped/move_delivery_scope
+	// all need the same krill-session-derived LB4 subject pair every write
+	// tool on that mount already resolves.
 	specSrv := server.New()
 	specReg := server.NewRegistry(specSrv)
 	tools.RegisterAll(specReg, querier)
@@ -149,6 +150,7 @@ func run() error {
 	tools.RegisterMilestoneAll(designReg, sessions, entities.MilestoneAuthoring())
 	tools.RegisterMilestoneStatusAll(designReg, sessions, entities.MilestoneStatus())
 	tools.RegisterDeliveryShipmentAll(designReg, sessions, entities.DeliveryShipments(), entities.MilestoneStatus(), querier)
+	tools.RegisterRecutAll(designReg, sessions, entities.Recut(), querier)
 
 	// The mcpauth (human) front door's CredentialStore preflights the
 	// consuming domain's credential table at boot -- exactly like

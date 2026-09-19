@@ -268,14 +268,28 @@ scope creates a new Feature/Requirement and a fresh Delivers association,
 it never resurrects a backlog row.
 
 `krill/store/recut.go`'s `RecutStore` covers `GetOrCreateBacklog` (the
-idempotent resolve-or-create, mirroring `MilestoneStore.GetOrCreateRef`)
-and `MoveScope` (the not-yet-shipped move primitive, gated by
-`DeliveryShipmentStore.DeliveryBreakdown`, migration 013/issue #2686, so a
-move can never touch anything already shipped — NFR3). `krill/render`'s
-existing `kind = 'milestone'` filter (migration 010's own addition,
-"The milestone authoring schema" above) already excludes any later kind
-from `product/03-roadmap.md`, so a `'backlog'` row was excluded from
-rendered output before this migration ever created one.
+idempotent resolve-or-create, mirroring `MilestoneStore.GetOrCreateRef`),
+`ListBacklog` (the bucket's raw entity-id contents, the same shape
+`DeliveryShipmentStore.DeliveryBreakdown` returns — `krill/slice.Querier.
+GetBacklog` turns it into typed entities, mirroring `GetDeliveryBreakdown`'s
+own composition), and `MoveScope` (the not-yet-shipped move primitive).
+`MoveScope` checks `delivery_shipment` directly inside its own
+transaction rather than calling `DeliveryShipmentStore.DeliveryBreakdown`
+(migration 013/issue #2686) through the pool, so the shipped-check and the
+move it gates share one snapshot — a move can never touch anything
+already shipped (NFR3), and validates its whole `entity_ids` batch before
+writing anything (all-or-nothing). It also preserves the FR3 subset
+invariant (#2684): a move into a milepebble whose parent does not yet
+deliver the entity is only auto-added when the source is a sibling
+milepebble of that same parent, and moving an entity out of a milestone
+also drops its Delivers association with every milepebble cut from that
+milestone. `POST /delivery/move` / `move_delivery_scope` and `GET
+/products/{id}/backlog` / `get_backlog` are its HTTP/MCP surfaces
+(`krill/api/handlers/recut.go`, `krill/mcp/tools/recut.go`).
+`krill/render`'s existing `kind = 'milestone'` filter (migration 010's own
+addition, "The milestone authoring schema" above) already excludes any
+later kind from `product/03-roadmap.md`, so a `'backlog'` row was excluded
+from rendered output before this migration ever created one.
 
 ## The milestone authoring schema (FR1, FR2, LB6, issue #2683)
 
