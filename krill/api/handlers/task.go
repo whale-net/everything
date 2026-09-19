@@ -1,15 +1,17 @@
 // This file (issue #2719, FR1, C14) is the work-axis task-create HTTP
 // surface: POST /tasks over store.TaskStore.CreateTask
-// (krill/store/task.go). Must be mounted behind RequireSession (gate.go)
-// once wired -- the LB4 subject pair and scope_id always come from the
-// caller's session, never the request body (NFR6).
-//
-// Scaffold stage: the handler body is a stub returning 501; routes.go
-// wiring and the store-backed body land in this issue's Implementation
-// phase.
+// (krill/store/task.go). Mounted behind RequireSession (gate.go) in
+// routes.go -- the LB4 subject pair and scope_id always come from the
+// caller's session (sess.Acting/sess.OnBehalfOf/sess.ScopeID), never the
+// request body (NFR6).
 package handlers
 
-import "net/http"
+import (
+	"fmt"
+	"net/http"
+
+	"github.com/whale-net/everything/krill/store"
+)
 
 // createTaskRequest is CreateTaskHandler's request body (FR1).
 // MilestoneID names either a milepebble or a milestone with no milepebble
@@ -23,10 +25,56 @@ type createTaskRequest struct {
 	StartingLane string   `json:"starting_lane"`
 }
 
-// CreateTaskHandler will return the task-create endpoint (FR1): POST
-// /tasks. Scaffold stub -- see this file's doc comment.
-func CreateTaskHandler() http.HandlerFunc {
+// CreateTaskHandler returns the task-create endpoint (FR1): POST /tasks.
+// Must be mounted behind RequireSession.
+func CreateTaskHandler(tasks store.TaskStore) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		writeJSONError(w, http.StatusNotImplemented, "CreateTaskHandler: not implemented -- see issue #2719's Implementation phase")
+		if r.Method != http.MethodPost {
+			writeJSONError(w, http.StatusMethodNotAllowed, "method not allowed")
+			return
+		}
+
+		sess, ok := requireSessionOrInternalError(w, r)
+		if !ok {
+			return
+		}
+
+		var req createTaskRequest
+		if err := decodeStrict(r, &req); err != nil {
+			writeJSONError(w, http.StatusBadRequest, fmt.Sprintf("invalid request body: %v", err))
+			return
+		}
+
+		milestoneID, err := ParseUUIDField("milestone_id", req.MilestoneID)
+		if err != nil {
+			writeJSONError(w, http.StatusBadRequest, err.Error())
+			return
+		}
+		if err := RequireNonEmpty("title", req.Title); err != nil {
+			writeJSONError(w, http.StatusBadRequest, err.Error())
+			return
+		}
+
+		laneSequence := make([]store.Lane, len(req.LaneSequence))
+		for i, l := range req.LaneSequence {
+			laneSequence[i] = store.Lane(l)
+		}
+
+		task, err := tasks.CreateTask(r.Context(), store.CreateTaskParams{
+			ScopeID:      sess.ScopeID,
+			MilestoneID:  milestoneID,
+			Title:        req.Title,
+			Body:         req.Body,
+			LaneSequence: laneSequence,
+			StartingLane: store.Lane(req.StartingLane),
+			Acting:       sess.Acting,
+			OnBehalfOf:   sess.OnBehalfOf,
+		})
+		if err != nil {
+			writeStoreError(w, err)
+			return
+		}
+
+		writeJSON(w, http.StatusCreated, IDResponse{ID: task.ID.String()})
 	}
 }

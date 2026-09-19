@@ -890,13 +890,15 @@ could silently drift. All four tools are mounted at `krill/mcp/server`'s
 `specMountPath` (`/mcp/spec`) — its own pre-filtered endpoint, following
 `whagent_net`'s `/mcp/readonly` vs `/mcp/ops` split
 (`whagent_net/ARCHITECTURE.md` "Domain-owned MCP servers and the tool
-contract"): the future work-axis surface (M4) gets its own mount
-(`/mcp/work`, not built yet) rather than every granularity ever landing on
-bare `/`. No write tool is registered on this endpoint — M2's write tools
-(`open_design_session`, `append_revision_event`, `propose_entities`) are
-mounted at `/mcp/design` instead (see "The design-session MCP surface"
-below), never here. This sentence used to read "there is no `RegisterWrite`
-in `krill/mcp/server` at all" — that stopped being true as of issue #2547,
+contract"): no write tool is registered on this endpoint. This sentence
+used to predict a dedicated `/mcp/work` mount for the future work-axis
+surface (M4) — that never happened: M2's write tools (`open_design_session`,
+`append_revision_event`, `propose_entities`) mount at `/mcp/design` instead
+(see "The design-session MCP surface" below), and M4's own first write
+tool, `create_task` (issue #2719, FR1), mounts there too rather than on a
+third surface of its own — `mcp/main.go` only ever builds the two
+`*mcp.Server`s this section already describes. This sentence used to read
+"there is no `RegisterWrite` in `krill/mcp/server` at all" — that stopped being true as of issue #2547,
 which adds `RegisterWrite` to `registry.go`; `/mcp/spec` itself still
 carries zero write tools.
 
@@ -1473,6 +1475,53 @@ domain-branch decision in `SKILL.md`/`producer.md` itself (krill →
 live call, every other domain → file) is verified by diff review, per root
 plan issue #2485's own acceptance criteria, not by an automated test —
 `tools/project-manager` ships no Bazel targets to run one against.
+
+## The work axis: task creation (FR1, NFR1/NFR3/NFR5/NFR6/NFR7, issue #2719)
+
+Migration `015_work_axis` (root plan issue #2717, M4) is the one migration
+number reserved for the whole work axis — `task`, `task_dependency`,
+`task_claim`, `task_lease_event`, `task_attempt`, `task_note` — created
+together so later M4 tasks never risk a golang-migrate version gap by
+landing a later-numbered migration before an earlier one; each later task
+states "no new migration" and implements against tables this one already
+created. `task` is the one **append-only-plus-claimed** table this
+milestone ships (NFR2): written once at create, then updated in place only
+for claim/lease/lane fields a later M4 task's claim/heartbeat/reclaim path
+touches — every other table is a plain append-only log. See the migration
+file's own per-table comments for the full LB3 reasoning.
+
+**`CreateTask` (`krill/store/task.go`) is FR1's whole vertical slice**: a
+task is scoped to exactly one `milestone_ref` row, resolved to either a
+milepebble (always allowed) or a milestone with no milepebble cut (checked
+by an `EXISTS` query against `parent_milestone_id` inside the same
+transaction as the insert) — a milestone that already has a cut, or any
+other `milestone_ref` kind (today, only the backlog bucket), is rejected
+with a named error (`ErrMilestoneHasMilepebbleCut`), never silently
+retargeted. A Feature or Requirement id is rejected too, but for free:
+`milestone_id` only ever resolves against `milestone_ref`, a table neither
+of those ids ever appears in, so it surfaces as the same `ErrNotFound` a
+stale or cross-scope milestone id would (NFR7). `lane_sequence`/
+`starting_lane` validation (non-empty, no duplicates, every element one of
+the five canonical lane names, in that relative order, lanes skippable)
+is pure Go validation (`validateLaneSequence`) run before any DB round
+trip — `current_lane`/`lane_sequence` are krill's own stored state,
+never read back from a git branch name or other external ref (NFR5).
+
+**HTTP and MCP are both thin wrappers, LB7 applied literally.** `POST
+/tasks` (`krill/api/handlers/task.go`) and the `create_task` MCP tool
+(`krill/mcp/tools/task.go`) both resolve `scope_id` and the two-subject
+LB4 pair from the caller's session — `sess.ScopeID`/`sess.Acting`/
+`sess.OnBehalfOf` on the HTTP side (`RequireSession`, NFR6's write gate),
+`requireKrillSession`'s resolved `store.Session` on the MCP side — never
+from the request body or tool input, mirroring every other create
+endpoint in this package. `create_task` mounts on the same design-scoped
+`*mcp.Server` `/mcp/design` already backs (see "The design-session MCP
+surface" above and "The MCP spec surface"'s corrected note on the
+`/mcp/work` mount that never happened) rather than getting a dedicated
+work-axis mount, and is restricted to `PersonaSwarmOperator` — root plan
+issue #2717's Personas section states the Swarm Operator, not the Agent,
+creates tasks and their dependency edges; the Agent's role starts at claim,
+a later M4 task.
 
 ## Open items
 

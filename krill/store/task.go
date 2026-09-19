@@ -1,25 +1,30 @@
 // This file (issue #2719, FR1, C14) is TaskStore -- the work-axis store
-// surface migration 015 creates. It ships one method this issue's
-// Implementation phase fills in, CreateTask, and is the interface every
-// later M4 task (#2720 dependency declaration, #2722-#2726 claim/lease/
-// attempt, #2727 notes) widens with its own methods rather than
-// introducing a sibling accessor -- see #2720's issue body: "Store API on
-// store.TaskStore (or a sibling TaskDependencyStore reachable from the
-// same entities accessor)" settles on the former. This mirrors
-// MilestoneAuthoringStore's own incremental growth (milestone_authoring.go
-// gained CreateMilepebble/AddMilepebbleDelivers/AddDiscoveredScope across
-// several M3 tasks without ever splitting into a second interface).
+// surface migration 015 creates. It ships one method, CreateTask, and is
+// the interface every later M4 task (#2720 dependency declaration,
+// #2722-#2726 claim/lease/attempt, #2727 notes) widens with its own
+// methods rather than introducing a sibling accessor -- see #2720's issue
+// body: "Store API on store.TaskStore (or a sibling TaskDependencyStore
+// reachable from the same entities accessor)" settles on the former. This
+// mirrors MilestoneAuthoringStore's own incremental growth
+// (milestone_authoring.go gained CreateMilepebble/AddMilepebbleDelivers/
+// AddDiscoveredScope across several M3 tasks without ever splitting into
+// a second interface).
 //
-// Method bodies are scaffold stubs; the Implementation phase of issue
-// #2719 fills in CreateTask against this same interface.
+// CreateTask resolves params.MilestoneID against `milestone_ref` inside
+// the same transaction as its INSERT, mirroring
+// MilestoneAuthoringStore.CreateMilepebble's own parent-kind check
+// (milestone_authoring.go) -- see this file's errNotADeliveryTarget and
+// errMilestoneHasMilepebbleCut for FR1's two rejection shapes.
 package store
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
@@ -46,6 +51,59 @@ const (
 // phase validates that a given LaneSequence is a subset of this slice
 // preserving this same relative order, never a reordering of it.
 var CanonicalLaneOrder = []Lane{LaneScaffold, LaneImplementation, LaneTesting, LaneValidation, LaneDone}
+
+// canonicalLaneIndex returns lane's position in CanonicalLaneOrder, or -1
+// if lane is not one of the five fixed values.
+func canonicalLaneIndex(lane Lane) int {
+	for i, l := range CanonicalLaneOrder {
+		if l == lane {
+			return i
+		}
+	}
+	return -1
+}
+
+// ErrInvalidLaneSequence is CreateTask's rejection for a lane_sequence
+// that is empty, contains a duplicate, contains a value outside
+// CanonicalLaneOrder, or is not in that order's relative order (lanes may
+// be skipped, never reordered -- FR1).
+var ErrInvalidLaneSequence = errors.New("krill/store: lane_sequence must be a non-empty, duplicate-free, canonical-order subset of {Scaffold, Implementation, Testing, Validation, Done}")
+
+// ErrStartingLaneNotInSequence is CreateTask's rejection when
+// StartingLane is not itself a member of LaneSequence (FR1).
+var ErrStartingLaneNotInSequence = errors.New("krill/store: starting_lane must be a member of lane_sequence")
+
+// validateLaneSequence enforces FR1's "ordered subset... lanes skippable"
+// convention: seq must be non-empty, every element must be one of
+// CanonicalLaneOrder's five values, no element may repeat, and each
+// element's canonical index must strictly increase across seq (an
+// out-of-order sequence, e.g. [Testing, Implementation], is rejected the
+// same way a duplicate is). starting must be a member of seq.
+func validateLaneSequence(seq []Lane, starting Lane) error {
+	if len(seq) == 0 {
+		return fmt.Errorf("%w: empty", ErrInvalidLaneSequence)
+	}
+	seen := make(map[Lane]bool, len(seq))
+	lastIdx := -1
+	for _, lane := range seq {
+		if seen[lane] {
+			return fmt.Errorf("%w: duplicate lane %q", ErrInvalidLaneSequence, lane)
+		}
+		seen[lane] = true
+		idx := canonicalLaneIndex(lane)
+		if idx < 0 {
+			return fmt.Errorf("%w: %q is not one of %v", ErrInvalidLaneSequence, lane, CanonicalLaneOrder)
+		}
+		if idx <= lastIdx {
+			return fmt.Errorf("%w: %q is out of canonical order", ErrInvalidLaneSequence, lane)
+		}
+		lastIdx = idx
+	}
+	if !seen[starting] {
+		return fmt.Errorf("%w: %q", ErrStartingLaneNotInSequence, starting)
+	}
+	return nil
+}
 
 // Task is one row of `task` (migration 015, issue #2719, FR1) -- the one
 // append-only-plus-claimed table this milestone ships (NFR2, LB3; see
@@ -106,11 +164,137 @@ type TaskStore interface {
 	CreateTask(ctx context.Context, params CreateTaskParams) (Task, error)
 }
 
+// ErrMilestoneHasMilepebbleCut is CreateTask's named, loud rejection
+// (FR1) for a MilestoneID that names a MilestoneKindMilestone row which
+// already has one or more milepebbles cut from it -- the caller must
+// scope the task to one of those milepebbles instead, never to the
+// milestone directly, once a cut exists.
+var ErrMilestoneHasMilepebbleCut = errors.New("krill/store: milestone has a milepebble cut; scope the task to a milepebble instead")
+
+// errNotADeliveryTarget reports that MilestoneID names a milestone_ref
+// row that is neither a milepebble nor an uncut milestone -- today this
+// is only MilestoneKindBacklog (NFR7/LB6: a task's one delivery-axis
+// reference is always a milestone or milepebble, never the backlog
+// bucket, and never a Feature/Requirement id -- a Feature/Requirement id
+// is rejected earlier, as an ErrNotFound, since it names no milestone_ref
+// row at all).
+func errNotADeliveryTarget(id uuid.UUID, kind string) error {
+	return fmt.Errorf("%w: milestone_ref id %s has kind %q, not a milepebble or an uncut milestone", ErrNotFound, id, kind)
+}
+
 // taskStore is the pgx-backed TaskStore implementation.
 type taskStore struct{ pool *pgxpool.Pool }
 
 var _ TaskStore = taskStore{}
 
+// taskColumns mirrors milestoneRefColumns' role for `task` -- the two-
+// subject columns here are NOT NULL (NFR3, LB4; unlike milestone_ref's
+// nullable pair), so scanTask reads them straight into Task's Subject
+// fields, mirroring scanMilestoneDeferral's shape rather than
+// scanMilestoneRef's sql.NullString one.
+const taskColumns = `id, scope_id, milestone_id, title, body, lane_sequence, current_lane, ` +
+	`attempt_count, current_claim_id, lease_expires_at, ` +
+	`created_by_acting_iss, created_by_acting_sub, created_by_acting_kind, ` +
+	`created_by_on_behalf_of_iss, created_by_on_behalf_of_sub, created_by_on_behalf_of_kind, created_at`
+
+func scanTask(row pgx.Row) (Task, error) {
+	var t Task
+	var laneSeq []string
+	var currentLane string
+	var actingKind, onBehalfOfKind string
+	err := row.Scan(
+		&t.ID, &t.ScopeID, &t.MilestoneID, &t.Title, &t.Body, &laneSeq, &currentLane,
+		&t.AttemptCount, &t.CurrentClaimID, &t.LeaseExpiresAt,
+		&t.CreatedByActing.Iss, &t.CreatedByActing.Sub, &actingKind,
+		&t.CreatedByOnBehalfOf.Iss, &t.CreatedByOnBehalfOf.Sub, &onBehalfOfKind,
+		&t.CreatedAt,
+	)
+	if err != nil {
+		return Task{}, err
+	}
+	t.LaneSequence = make([]Lane, len(laneSeq))
+	for i, l := range laneSeq {
+		t.LaneSequence[i] = Lane(l)
+	}
+	t.CurrentLane = Lane(currentLane)
+	t.CreatedByActing.Kind = SubjectKind(actingKind)
+	t.CreatedByOnBehalfOf.Kind = SubjectKind(onBehalfOfKind)
+	return t, nil
+}
+
 func (s taskStore) CreateTask(ctx context.Context, params CreateTaskParams) (Task, error) {
-	return Task{}, fmt.Errorf("store: TaskStore.CreateTask not implemented -- see issue #2719's Implementation phase")
+	// Pure input validation first (FR1's lane-sequence rule), never
+	// derived from a branch name or other external ref (NFR5) -- no DB
+	// round trip is needed to reject a malformed lane sequence.
+	if err := validateLaneSequence(params.LaneSequence, params.StartingLane); err != nil {
+		return Task{}, err
+	}
+
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return Task{}, fmt.Errorf("begin tx: %w", err)
+	}
+	defer tx.Rollback(ctx) //nolint:errcheck
+
+	// milestone_ref is plain (not SCD2, LB3), so its parentage is checked
+	// with a direct existence lookup rather than currentRowExists --
+	// mirrors MilestoneAuthoringStore.CreateMilepebble's own check. A
+	// Feature or Requirement id (NFR7) simply names no row in
+	// milestone_ref at all, so it is rejected right here as ErrNotFound,
+	// the same path a stale or cross-scope milestone_id takes.
+	var kind string
+	err = tx.QueryRow(ctx, `
+		SELECT kind FROM milestone_ref WHERE id = $1 AND scope_id = $2
+	`, params.MilestoneID, params.ScopeID).Scan(&kind)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return Task{}, errParentNotFound("milestone_ref", params.MilestoneID)
+	}
+	if err != nil {
+		return Task{}, fmt.Errorf("get milestone_ref: %w", err)
+	}
+
+	switch MilestoneKind(kind) {
+	case MilestoneKindMilepebble:
+		// A milepebble is always a valid task scope (FR1) -- no further
+		// check needed.
+	case MilestoneKindMilestone:
+		var hasMilepebbleCut bool
+		err = tx.QueryRow(ctx, `
+			SELECT EXISTS (
+				SELECT 1 FROM milestone_ref WHERE parent_milestone_id = $1 AND scope_id = $2
+			)
+		`, params.MilestoneID, params.ScopeID).Scan(&hasMilepebbleCut)
+		if err != nil {
+			return Task{}, fmt.Errorf("check milepebble cut: %w", err)
+		}
+		if hasMilepebbleCut {
+			return Task{}, fmt.Errorf("%w: milestone_ref id %s", ErrMilestoneHasMilepebbleCut, params.MilestoneID)
+		}
+	default:
+		return Task{}, errNotADeliveryTarget(params.MilestoneID, kind)
+	}
+
+	laneSeq := make([]string, len(params.LaneSequence))
+	for i, l := range params.LaneSequence {
+		laneSeq[i] = string(l)
+	}
+
+	task, err := scanTask(tx.QueryRow(ctx, `
+		INSERT INTO task (
+			scope_id, milestone_id, title, body, lane_sequence, current_lane,
+			created_by_acting_iss, created_by_acting_sub, created_by_acting_kind,
+			created_by_on_behalf_of_iss, created_by_on_behalf_of_sub, created_by_on_behalf_of_kind
+		) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
+		RETURNING `+taskColumns,
+		params.ScopeID, params.MilestoneID, params.Title, params.Body, laneSeq, string(params.StartingLane),
+		params.Acting.Iss, params.Acting.Sub, string(params.Acting.Kind),
+		params.OnBehalfOf.Iss, params.OnBehalfOf.Sub, string(params.OnBehalfOf.Kind)))
+	if err != nil {
+		return Task{}, fmt.Errorf("insert task: %w", err)
+	}
+
+	if err := tx.Commit(ctx); err != nil {
+		return Task{}, fmt.Errorf("commit: %w", err)
+	}
+	return task, nil
 }

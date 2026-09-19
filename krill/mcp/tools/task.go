@@ -8,15 +8,17 @@
 // dependency edges" in this milestone -- the Agent's role starts at
 // claim (a later M4 task), not creation.
 //
-// Scaffold stage: the tool handler is a stub returning a not-implemented
-// error; RegisterCreateTask's caller wiring (../main.go) lands in this
-// issue's Implementation phase.
+// RegisterCreateTask is wired from ../main.go onto the same
+// design-scoped *mcp.Server the milestone-authoring tools mount on (see
+// ../server/server.go's doc comment) -- never a third work-axis-only
+// mount.
 package tools
 
 import (
 	"context"
 	"fmt"
 
+	"github.com/google/uuid"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 
 	"github.com/whale-net/everything/krill/api/handlers"
@@ -37,13 +39,47 @@ type createTaskInput struct {
 }
 
 // RegisterCreateTask registers create_task (FR1): mints a new `task` row
-// via store.TaskStore.CreateTask. Scaffold stub -- see this file's
-// doc comment.
+// via store.TaskStore.CreateTask, mirroring
+// krill/api/handlers/task.go's CreateTaskHandler for the same capability
+// (LB7).
 func RegisterCreateTask(reg *server.Registry, sessions store.SessionStore, tasks store.TaskStore) {
 	server.RegisterWrite(reg, &mcp.Tool{
 		Name:        "create_task",
 		Description: "Create a task scoped to a milepebble or a milestone with no milepebble cut, with its own lane sequence and starting lane (FR1).",
 	}, []server.Persona{server.PersonaSwarmOperator}, func(ctx context.Context, _ *mcp.CallToolRequest, in createTaskInput) (*mcp.CallToolResult, handlers.IDResponse, error) {
-		return nil, handlers.IDResponse{}, fmt.Errorf("create_task: not implemented -- see issue #2719's Implementation phase")
+		var zero handlers.IDResponse
+
+		sess, err := requireKrillSession(ctx, sessions, in.KrillSessionID)
+		if err != nil {
+			return nil, zero, err
+		}
+
+		milestoneID, err := uuid.Parse(in.MilestoneID)
+		if err != nil {
+			return nil, zero, fmt.Errorf("milestone_id: invalid or missing UUID")
+		}
+		if in.Title == "" {
+			return nil, zero, fmt.Errorf("title: required")
+		}
+
+		laneSequence := make([]store.Lane, len(in.LaneSequence))
+		for i, l := range in.LaneSequence {
+			laneSequence[i] = store.Lane(l)
+		}
+
+		task, err := tasks.CreateTask(ctx, store.CreateTaskParams{
+			ScopeID:      sess.ScopeID,
+			MilestoneID:  milestoneID,
+			Title:        in.Title,
+			Body:         in.Body,
+			LaneSequence: laneSequence,
+			StartingLane: store.Lane(in.StartingLane),
+			Acting:       sess.Acting,
+			OnBehalfOf:   sess.OnBehalfOf,
+		})
+		if err != nil {
+			return nil, zero, err
+		}
+		return nil, handlers.IDResponse{ID: task.ID.String()}, nil
 	})
 }
