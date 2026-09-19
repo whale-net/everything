@@ -22,6 +22,7 @@ import (
 
 	"github.com/whale-net/everything/krill/api/handlers"
 	"github.com/whale-net/everything/krill/mcp/server"
+	"github.com/whale-net/everything/krill/slice"
 	"github.com/whale-net/everything/krill/store"
 )
 
@@ -454,6 +455,27 @@ func RegisterListMilepebbles(reg *server.Registry, milestones store.MilestoneAut
 		}
 		return nil, listMilepebblesResponse{Milepebbles: summaries}, nil
 	})
+}
+
+// productDeliveryQuerier is the one method of *slice.Querier
+// list_product_delivery will call, narrowed to an interface mirroring
+// delivery_shipment.go's own deliveryBreakdownQuerier precedent, so this
+// file's tests can supply a fake without a real *store.Store.
+type productDeliveryQuerier interface {
+	ListProductDelivery(ctx context.Context, scopeID, productID uuid.UUID, statuses []store.MilestoneStatus) (slice.DeliveryListing, error)
+}
+
+var _ productDeliveryQuerier = (*slice.Querier)(nil)
+
+// RegisterListProductDelivery will register list_product_delivery (issue
+// #2689, FR11, C28): every milestone and milepebble under a product,
+// filterable by status, via //krill/slice.Querier.ListProductDelivery.
+// Scaffold-stage skeleton -- the JSON output schema (mirroring slice.go's
+// mustSliceDocumentOutputSchema pattern), argument parsing, and
+// registration onto RegisterMilestoneAll land in the Implementation
+// phase, matching that method's own skeleton this will eventually wrap.
+// Not yet wired into RegisterMilestoneAll.
+func RegisterListProductDelivery(reg *server.Registry, querier productDeliveryQuerier) {
 }
 
 // RegisterMilestoneAll registers every milestone-authoring tool this

@@ -11,12 +11,14 @@
 package handlers
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"net/http"
 
 	"github.com/google/uuid"
 
+	"github.com/whale-net/everything/krill/slice"
 	"github.com/whale-net/everything/krill/store"
 )
 
@@ -548,6 +550,31 @@ func ListMilepebblesHandler(milestones store.MilestoneAuthoringStore) http.Handl
 		}
 
 		writeJSON(w, http.StatusOK, ListMilepebblesResponse{Milepebbles: summaries})
+	}
+}
+
+// Product-wide delivery listing below (issue #2689, FR11, C28) is a
+// scaffold-stage skeleton -- routes.go wiring, repeated `status=` query
+// param parsing, the unknown-status 400, and the response shape land in
+// the Implementation phase, matching //krill/slice.Querier.
+// ListProductDelivery's own skeleton this will call.
+
+// productDeliveryQuerier is the one method of *slice.Querier
+// GetProductDeliveryHandler calls, narrowed to an interface for
+// testability without Postgres -- mirrors deliveryBreakdownQuerier's own
+// precedent above (delivery_shipment.go).
+type productDeliveryQuerier interface {
+	ListProductDelivery(ctx context.Context, scopeID, productID uuid.UUID, statuses []store.MilestoneStatus) (slice.DeliveryListing, error)
+}
+
+var _ productDeliveryQuerier = (*slice.Querier)(nil)
+
+// GetProductDeliveryHandler will return FR11's product-wide delivery
+// listing endpoint: GET /products/{id}/delivery, ungated like every other
+// read endpoint in this package. Not yet mounted in routes.go.
+func GetProductDeliveryHandler(products store.ProductStore, querier productDeliveryQuerier) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		writeJSONError(w, http.StatusNotImplemented, "not implemented")
 	}
 }
 

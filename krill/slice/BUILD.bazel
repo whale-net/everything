@@ -10,6 +10,7 @@ go_library(
     name = "slice",
     srcs = [
         "document.go",
+        "milestone_listing.go",
         "query.go",
     ],
     importpath = "github.com/whale-net/everything/krill/slice",
