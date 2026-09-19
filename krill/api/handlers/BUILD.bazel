@@ -36,6 +36,7 @@ go_library(
         "gate.go",
         "history.go",
         "mediated.go",
+        "milestone.go",
         "open_questions.go",
         "pointer.go",
         "product.go",

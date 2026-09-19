@@ -231,6 +231,61 @@ version:
 | `008` | `design_session` + `revision_event` (FR1-FR4, NFR1) | #2542 |
 | `009` | Import-completion marker (FR12) | filed separately on this plan |
 
+## Migration numbering (M3)
+
+Assigned on root plan issue #2681 -- the first M3 migration:
+
+| Version | Contents | Task |
+|---------|----------|------|
+| `010` | Milestone authoring: `milestone_ref` authoring columns, `milestone_deferral`, `entity_milestone.relation` (FR1, FR2) | #2683 |
+
+## The milestone authoring schema (FR1, FR2, LB6, issue #2683)
+
+Migration `010_milestone_authoring` is the first `ALTER TABLE` migration in
+`krill/` -- every migration through `009` only ever `CREATE TABLE`d. Two
+schema decisions worth calling out beyond what that migration's own inline
+comments cover:
+
+**`milestone_ref`'s new LB4 subject-pair columns are nullable, unlike
+`pointer_artifact`'s.** `pointer_artifact` (migration 005) made its
+`created_by_*` columns `NOT NULL` because every write onto that table goes
+through a session-gated HTTP handler. `milestone_ref` already has a
+pre-existing write path with no session to attribute to --
+`krill/importer`'s `GetOrCreateRef` (FR16) -- and this issue's own scope
+keeps that path "working unchanged." Making the new columns `NOT NULL`
+would have broken that INSERT outright, so they are nullable instead: a
+row `CreateMilestone` (the new authoring path, this issue's Implementation
+phase) writes always has both populated; a row the importer writes never
+does. `GetMilestone`'s two callers can tell which path produced a given row
+from that alone.
+
+**`entity_milestone.relation` replaces (not just extends) the old unique
+index.** `entity_milestone_entity_milestone_idx` was `(entity_id,
+milestone_id)` through migration 004 -- LB6's one association table,
+implicitly always "delivers." Migration 010 adds `relation` (`'delivers'`
+| `'must_not_foreclose'`, default `'delivers'` so every importer-written
+row keeps its existing meaning) and rebuilds the unique index as
+`(entity_id, milestone_id, relation)`, so a `Delivers` and a `Must not
+foreclose` row can now coexist for the same `(entity_id, milestone_id)`
+pair without a spurious duplicate rejection -- distinguishing the two
+lists with a column on the one association table LB6 already settled,
+never a second table and never a column on the spec entity itself.
+
+`krill/store/milestone_authoring.go`'s `MilestoneAuthoringStore` is kept as
+a sibling accessor (`(*Store).MilestoneAuthoring()`) next to the
+pre-existing `MilestoneStore` (`(*Store).Milestones()`, migration 004)
+rather than folded into it, so the importer's `GetOrCreateRef`/
+`AddAssociation` surface is untouched by this addition. As of this task's
+Scaffold phase, `MilestoneAuthoringStore`'s methods are stubs (mirrors
+`DesignSessionStore`'s own scaffold precedent, #2542) -- store bodies,
+`api/handlers/milestone.go`'s HTTP wiring, and `mcp/tools/milestone.go`'s
+`RegisterAll` wiring all land in this issue's Implementation phase. That
+same phase also migrates `krill/store/milestone.go`'s `ListRefsByProduct`
+and `krill/render`'s `ListMilestoneRefs`/`renderMilestones` to filter on
+`kind = 'milestone'` explicitly -- migration 010 adds the column and its
+CHECK constraint now, ahead of any second kind existing, but no existing
+reader is kind-aware yet.
+
 ## `design_session` vs `krill_session` (FR1, FR8, #2542)
 
 M2's `design_session` (migration `008`) is the single most confusable

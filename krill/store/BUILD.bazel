@@ -27,6 +27,7 @@ go_library(
         "import_completion.go",
         "mediated.go",
         "milestone.go",
+        "milestone_authoring.go",
         "models.go",
         "nongoal.go",
         "open_questions.go",

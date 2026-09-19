@@ -11,6 +11,7 @@ go_library(
     name = "tools",
     srcs = [
         "design.go",
+        "milestone.go",
         "slice.go",
     ],
     importpath = "github.com/whale-net/everything/krill/mcp/tools",
