@@ -71,22 +71,24 @@ type milestoneStore struct{ pool *pgxpool.Pool }
 
 var _ MilestoneStore = milestoneStore{}
 
-// milestoneRefColumns covers both the bare migration-004 columns and the
-// authoring columns migration 010 added (issue #2683): Kind/Outcome/
-// FRBudget/Position plus the nullable LB4 subject pair -- see
-// scanMilestoneRef and MilestoneRef's doc comment (models.go) for why the
-// subject-pair columns may be NULL.
-const milestoneRefColumns = `id, scope_id, product_id, name, kind, outcome, fr_budget, position, ` +
+// milestoneRefColumns covers the bare migration-004 columns, the
+// authoring columns migration 010 added (issue #2683), and
+// parent_milestone_id migration 011 added (issue #2684): Kind/Outcome/
+// FRBudget/Position/ParentMilestoneID plus the nullable LB4 subject pair
+// -- see scanMilestoneRef and MilestoneRef's doc comment (models.go) for
+// why the subject-pair and parent columns may be NULL.
+const milestoneRefColumns = `id, scope_id, product_id, name, kind, outcome, fr_budget, position, parent_milestone_id, ` +
 	`created_by_acting_iss, created_by_acting_sub, created_by_acting_kind, ` +
 	`created_by_on_behalf_of_iss, created_by_on_behalf_of_sub, created_by_on_behalf_of_kind, created_at`
 
 func scanMilestoneRef(row pgx.Row) (MilestoneRef, error) {
 	var m MilestoneRef
 	var kind string
+	var parentMilestoneID uuid.NullUUID
 	var actingIss, actingSub, actingKind sql.NullString
 	var onBehalfOfIss, onBehalfOfSub, onBehalfOfKind sql.NullString
 	err := row.Scan(
-		&m.ID, &m.ScopeID, &m.ProductID, &m.Name, &kind, &m.Outcome, &m.FRBudget, &m.Position,
+		&m.ID, &m.ScopeID, &m.ProductID, &m.Name, &kind, &m.Outcome, &m.FRBudget, &m.Position, &parentMilestoneID,
 		&actingIss, &actingSub, &actingKind,
 		&onBehalfOfIss, &onBehalfOfSub, &onBehalfOfKind,
 		&m.CreatedAt,
@@ -95,6 +97,9 @@ func scanMilestoneRef(row pgx.Row) (MilestoneRef, error) {
 		return MilestoneRef{}, err
 	}
 	m.Kind = MilestoneKind(kind)
+	if parentMilestoneID.Valid {
+		m.ParentMilestoneID = &parentMilestoneID.UUID
+	}
 	// The importer's GetOrCreateRef path writes no subject pair (no
 	// session to attribute to) -- both sides are NULL together, never
 	// independently, since every writer either sets both (CreateMilestone)
@@ -123,10 +128,22 @@ func (s milestoneStore) GetOrCreateRef(ctx context.Context, scopeID, productID u
 		return MilestoneRef{}, errParentNotFound("product", productID)
 	}
 
+	// GetOrCreateRef only ever creates/resolves a MilestoneKindMilestone
+	// row (kind defaults to 'milestone', parent_milestone_id stays NULL --
+	// the importer has no notion of milepebbles). Both the ON CONFLICT
+	// inference and the fallback SELECT below are scoped to
+	// `parent_milestone_id IS NULL` -- migration 011 (issue #2684) widened
+	// milestone_ref_scope_product_name_idx into a partial index over
+	// exactly that predicate (a milepebble may share a name with a
+	// milestone under the same product, since its own uniqueness is
+	// scoped per-parent instead), so a plain `ON CONFLICT (scope_id,
+	// product_id, name)` no longer matches any index and the WHERE clause
+	// on the SELECT is what keeps this method from ever resolving onto a
+	// same-named milepebble row.
 	ref, err := scanMilestoneRef(tx.QueryRow(ctx, `
 		INSERT INTO milestone_ref (scope_id, product_id, name)
 		VALUES ($1, $2, $3)
-		ON CONFLICT (scope_id, product_id, name) DO NOTHING
+		ON CONFLICT (scope_id, product_id, name) WHERE parent_milestone_id IS NULL DO NOTHING
 		RETURNING `+milestoneRefColumns,
 		scopeID, productID, name))
 	if errors.Is(err, pgx.ErrNoRows) {
@@ -136,7 +153,7 @@ func (s milestoneStore) GetOrCreateRef(ctx context.Context, scopeID, productID u
 		ref, err = scanMilestoneRef(tx.QueryRow(ctx, `
 			SELECT `+milestoneRefColumns+`
 			FROM milestone_ref
-			WHERE scope_id = $1 AND product_id = $2 AND name = $3
+			WHERE scope_id = $1 AND product_id = $2 AND name = $3 AND parent_milestone_id IS NULL
 		`, scopeID, productID, name))
 	}
 	if err != nil {

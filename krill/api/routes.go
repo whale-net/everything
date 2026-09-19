@@ -23,9 +23,11 @@ import (
 // endpoints below (FR12, issue #2493), the pointer-artifact create
 // endpoint (issue #2496, FR20), POST /design-sessions and POST
 // /design-sessions/{id}/revision-events (issue #2543, FR1-FR4/FR8), POST
-// /design-sessions/{id}/propose (issue #2546, FR9/FR10/NFR2), and the five
-// POST /milestones* endpoints below (issue #2683, FR1/FR2, LB4) are
-// wrapped with handlers.RequireSession (gate.go) -- no write path is
+// /design-sessions/{id}/propose (issue #2546, FR9/FR10/NFR2), the five
+// POST /milestones* endpoints below (issue #2683, FR1/FR2, LB4), and the
+// three POST /milestones/{id}/milepebbles, /milepebbles/{id}/delivers,
+// and /milepebbles/{id}/discovered-scope endpoints (issue #2684, FR3/FR4)
+// are wrapped with handlers.RequireSession (gate.go) -- no write path is
 // reachable without a session minted by `init`. Read paths never require a
 // session (root plan issue #2485). Import (FR16) is a later task's route,
 // not added here.
@@ -55,6 +57,12 @@ func setupRoutes(mux *http.ServeMux, pool *pgxpool.Pool, githubToken string) {
 	mux.Handle("POST /milestones/{id}/must-not-foreclose", gate(handlers.AddMustNotForecloseHandler(entities.MilestoneAuthoring())))
 	mux.Handle("POST /milestones/{id}/deferrals", gate(handlers.AddDeferralHandler(entities.MilestoneAuthoring())))
 	mux.HandleFunc("GET /milestones/{id}", handlers.GetMilestoneHandler(entities.MilestoneAuthoring()))
+
+	mux.Handle("POST /milestones/{id}/milepebbles", gate(handlers.CreateMilepebbleHandler(entities.MilestoneAuthoring())))
+	mux.Handle("POST /milepebbles/{id}/delivers", gate(handlers.AddMilepebbleDeliversHandler(entities.MilestoneAuthoring())))
+	mux.Handle("POST /milepebbles/{id}/discovered-scope", gate(handlers.AddDiscoveredScopeHandler(entities.MilestoneAuthoring())))
+	mux.HandleFunc("GET /milepebbles/{id}", handlers.GetMilepebbleHandler(entities.MilestoneAuthoring()))
+	mux.HandleFunc("GET /milestones/{id}/milepebbles", handlers.ListMilepebblesHandler(entities.MilestoneAuthoring()))
 
 	mux.Handle("POST /design-sessions", gate(handlers.OpenDesignSessionHandler(entities.DesignSessions())))
 	mux.HandleFunc("GET /design-sessions/{id}", handlers.GetDesignSessionHandler(entities.DesignSessions(), entities.RevisionEvents()))

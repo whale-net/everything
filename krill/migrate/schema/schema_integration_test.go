@@ -114,25 +114,27 @@ var specTables = []string{"product", "feature_set", "feature", "requirement", "l
 
 // TestMigrations_UpDownUp_LeavesCleanDatabaseAndIsRerunnable proves the
 // whole migration set's lifecycle through the latest migration currently
-// embedded (010_milestone_authoring, krill M3 issue #2683): Up() creates
-// every table including `krill_session`, `milestone_ref`,
-// `entity_milestone`, `milestone_deferral`, `pointer_artifact`,
+// embedded (011_milepebble, krill M3 issue #2684): Up() creates every
+// table including `krill_session`, `milestone_ref`, `entity_milestone`,
+// `milestone_deferral`, `pointer_artifact`,
 // `mcp_credential`/`mcp_oauth_client`/`mcp_auth_code`, `ui_sessions`,
 // `design_session`/`revision_event`, and `import_completion`, Down()
 // drops all of them (a clean database), and Up() again succeeds a second
 // time from that clean state -- the migration set is re-runnable through
 // //libs/go/migrate, not a one-shot script. The hardcoded latest-version
 // assertion below must be bumped whenever a new migration lands (it was 1
-// for 001_scope alone, issue #2487; it is 10 now that 002_spec_entities,
+// for 001_scope alone, issue #2487; it is 11 now that 002_spec_entities,
 // 003_session, 004_milestone_assoc, 005_pointer_artifact,
 // 006_mcpauth_credential, 007_ui_sessions, 008_design_session,
-// 009_import_completion, and 010_milestone_authoring have all landed --
-// 008/009 rather than 006/007 because 006/007 were already claimed by the
-// mcpauth auth-flow gap work by the time this plan's migrations merged;
-// see ARCHITECTURE.md's "Migration numbering (M2)" table). `milestone_ref`
-// itself is not a new table (004 created it) so it is not listed again
-// below -- only `milestone_deferral` is new to this migration; its
-// authoring columns are covered by TestMigration010_SchemaContract.
+// 009_import_completion, 010_milestone_authoring, and 011_milepebble have
+// all landed -- 008/009 rather than 006/007 because 006/007 were already
+// claimed by the mcpauth auth-flow gap work by the time this plan's
+// migrations merged; see ARCHITECTURE.md's "Migration numbering (M2)"
+// table). `milestone_ref` itself is not a new table (004 created it) so it
+// is not listed again below -- only `milestone_deferral` is new since
+// migration 010; migration 011 (issue #2684) only widens `milestone_ref`
+// (a new `parent_milestone_id` column, no new table) -- covered by
+// TestMigration011_SchemaContract, not here.
 func TestMigrations_UpDownUp_LeavesCleanDatabaseAndIsRerunnable(t *testing.T) {
 	ctx := context.Background()
 	db := dbtest.NewPostgres(ctx, t, dbtest.Options{})
@@ -145,17 +147,17 @@ func TestMigrations_UpDownUp_LeavesCleanDatabaseAndIsRerunnable(t *testing.T) {
 
 	latest, err := runner.LatestVersion()
 	require.NoError(t, err)
-	require.Equal(t, uint(10), latest, "expected the latest migration source version to be 10 (001_scope, 002_spec_entities, 003_session, 004_milestone_assoc, 005_pointer_artifact, 006_mcpauth_credential, 007_ui_sessions, 008_design_session, 009_import_completion, 010_milestone_authoring) -- update this test if a later migration has since landed")
+	require.Equal(t, uint(11), latest, "expected the latest migration source version to be 11 (001_scope, 002_spec_entities, 003_session, 004_milestone_assoc, 005_pointer_artifact, 006_mcpauth_credential, 007_ui_sessions, 008_design_session, 009_import_completion, 010_milestone_authoring, 011_milepebble) -- update this test if a later migration has since landed")
 
 	// -- Up: scope, krill_session, the milestone tables, pointer_artifact,
 	// the mcpauth tables, ui_sessions, and design_session/revision_event
 	// must exist, version must land clean at the latest --
-	require.NoError(t, runner.Up(), "apply migrations 001-010")
+	require.NoError(t, runner.Up(), "apply migrations 001-011")
 
 	version, dirty, err := runner.Version()
 	require.NoError(t, err)
 	assert.False(t, dirty)
-	assert.Equal(t, uint(10), version)
+	assert.Equal(t, uint(11), version)
 
 	assert.True(t, tableExists(t, ctx, db, "scope"), "expected table \"scope\" to exist after Up()")
 	assert.True(t, tableExists(t, ctx, db, "krill_session"), "expected table \"krill_session\" to exist after Up() (003_session, issue #2489)")
@@ -194,7 +196,7 @@ func TestMigrations_UpDownUp_LeavesCleanDatabaseAndIsRerunnable(t *testing.T) {
 	version, dirty, err = runner.Version()
 	require.NoError(t, err)
 	assert.False(t, dirty)
-	assert.Equal(t, uint(10), version)
+	assert.Equal(t, uint(11), version)
 
 	assert.True(t, tableExists(t, ctx, db, "scope"), "expected table \"scope\" to exist again after the second Up()")
 	assert.True(t, tableExists(t, ctx, db, "krill_session"), "expected table \"krill_session\" to exist again after the second Up()")
@@ -350,12 +352,12 @@ func TestMigration002_SchemaContract(t *testing.T) {
 	// parentColumn is the plain-uuid parent-id column each child table
 	// carries (LB2 parentage) -- product has none, it is the chain's root.
 	parentColumn := map[string]string{
-		"feature_set":            "product_id",
-		"feature":                "feature_set_id",
-		"requirement":            "feature_id",
-		"load_bearing_decision":  "feature_set_id",
-		"persona":                "product_id",
-		"non_goal":               "product_id",
+		"feature_set":           "product_id",
+		"feature":               "feature_set_id",
+		"requirement":           "feature_id",
+		"load_bearing_decision": "feature_set_id",
+		"persona":               "product_id",
+		"non_goal":              "product_id",
 	}
 
 	for _, table := range specTables {
@@ -544,17 +546,19 @@ func TestMigration003_SchemaContract(t *testing.T) {
 // TestMigration004_SchemaContract guards LB6's own stated trap (migration
 // 004_milestone_assoc.up.sql's "LB6 -- an association, never a second
 // parent" comment, issue #2492): `milestone_ref` must carry no status
-// column or milepebble breakdown -- those remain out of scope even after
-// M3's authoring surface (010_milestone_authoring, issue #2683) added
-// Kind/Outcome/FRBudget/Position -- and no spec entity table (`feature`,
-// `requirement`, `load_bearing_decision`) may have acquired a
-// `milestone_id` column. It also asserts the shape the importer and
-// MilestoneStore depend on: scope_id NOT NULL on both new tables (LB1),
-// the milestone_ref (scope_id, product_id, name) uniqueness that makes
-// GetOrCreateRef idempotent, the entity_milestone (entity_id,
-// milestone_id, relation) uniqueness (widened by migration 010 to include
-// relation) that makes AddAssociation idempotent, and milestone_id's real
-// FK to milestone_ref(id).
+// column -- that remains out of scope even after M3's authoring surface
+// (010_milestone_authoring, issue #2683) added Kind/Outcome/FRBudget/
+// Position and 011_milepebble (issue #2684) added ParentMilestoneID -- and
+// no spec entity table (`feature`, `requirement`, `load_bearing_decision`)
+// may have acquired a `milestone_id` or `milepebble_id` column (LB6's
+// other direction, and FR3/FR4's own boundary call -- a milepebble is
+// never a new parentage column on a spec entity). It also asserts the
+// shape the importer and MilestoneStore depend on: scope_id NOT NULL on
+// both new tables (LB1), the milestone_ref (scope_id, product_id, name)
+// uniqueness that makes GetOrCreateRef idempotent, the entity_milestone
+// (entity_id, milestone_id, relation) uniqueness (widened by migration 010
+// to include relation) that makes AddAssociation idempotent, and
+// milestone_id's real FK to milestone_ref(id).
 func TestMigration004_SchemaContract(t *testing.T) {
 	ctx := context.Background()
 	db := dbtest.NewPostgres(ctx, t, dbtest.Options{})
@@ -566,20 +570,20 @@ func TestMigration004_SchemaContract(t *testing.T) {
 	runner := migrate.NewRunner(sqlDB, schema.Migrations, schema.Dir)
 	require.NoError(t, runner.Up())
 
-	// -- LB6's trap: no status or milepebble breakdown on milestone_ref,
-	// even after M3's authoring columns landed --
+	// -- LB6's trap: no status column on milestone_ref, even after M3's
+	// authoring columns and the milepebble parent column landed --
 	milestoneRefCols := columnNames(t, ctx, db, "milestone_ref")
-	for _, forbidden := range []string{"status", "milepebble", "milepebble_id", "state", "author", "authored_by", "authored_at"} {
+	for _, forbidden := range []string{"status", "milepebble_id", "state", "author", "authored_by", "authored_at"} {
 		assert.NotContains(t, milestoneRefCols, forbidden,
-			"milestone_ref must not carry a %q column -- status/milepebbles are a later issue's, not M1's or M3's (LB6's own note)", forbidden)
+			"milestone_ref must not carry a %q column -- status is a later issue's, not M1's/M3's, and a milepebble is never referenced by a milepebble_id column even on its own table (LB6's own note)", forbidden)
 	}
 	assert.ElementsMatch(t, []string{
 		"id", "scope_id", "product_id", "name", "created_at",
-		"kind", "outcome", "fr_budget", "position",
+		"kind", "outcome", "fr_budget", "position", "parent_milestone_id",
 		"created_by_acting_iss", "created_by_acting_sub", "created_by_acting_kind",
 		"created_by_on_behalf_of_iss", "created_by_on_behalf_of_sub", "created_by_on_behalf_of_kind",
 	}, milestoneRefCols,
-		"milestone_ref must be exactly the bare reference shape LB6 specifies (004_milestone_assoc) plus the authoring columns migration 010 (issue #2683) added -- no more, no less")
+		"milestone_ref must be exactly the bare reference shape LB6 specifies (004_milestone_assoc) plus the authoring columns migration 010 (issue #2683) added plus migration 011's (issue #2684) parent_milestone_id -- no more, no less")
 
 	// -- LB6's trap, other direction: no spec entity table may have grown a milestone_id column --
 	for _, table := range []string{"feature", "requirement", "load_bearing_decision"} {
@@ -916,10 +920,12 @@ func TestMigration010_SchemaContract(t *testing.T) {
 // columns, milestone_deferral, entity_milestone.relation) and leaves
 // migration 004's milestone_ref/entity_milestone tables themselves intact
 // and usable -- issue #2683's Testing section item 7's explicit "010 down
-// leaves 004's tables intact" clause. Migrates down by exactly one version
-// from latest (Steps(-1)) rather than all the way to 0, so this is the one
-// test in this file that exercises a partial rollback instead of the
-// whole-set Up()/Down() TestMigrations_UpDownUp_LeavesCleanDatabaseAndIsRerunnable
+// leaves 004's tables intact" clause. Migrates up to exactly version 10
+// (Migrate(10), not Up()/latest -- migration 011 and later would otherwise
+// shift what "roll back one step" lands on as soon as a further migration
+// is added) and then rolls back that one step, so this is the one test in
+// this file that exercises a partial rollback instead of the whole-set
+// Up()/Down() TestMigrations_UpDownUp_LeavesCleanDatabaseAndIsRerunnable
 // above already covers.
 func TestMigration010_DownLeavesMilestoneAssocTablesIntact(t *testing.T) {
 	ctx := context.Background()
@@ -930,7 +936,7 @@ func TestMigration010_DownLeavesMilestoneAssocTablesIntact(t *testing.T) {
 	t.Cleanup(func() { _ = sqlDB.Close() })
 
 	runner := migrate.NewRunner(sqlDB, schema.Migrations, schema.Dir)
-	require.NoError(t, runner.Up(), "apply every migration through 010")
+	require.NoError(t, runner.Migrate(10), "apply every migration through exactly 010")
 
 	require.NoError(t, runner.Steps(-1), "roll back exactly migration 010")
 
@@ -966,4 +972,231 @@ func TestMigration010_DownLeavesMilestoneAssocTablesIntact(t *testing.T) {
 		INSERT INTO milestone_ref (scope_id, product_id, name) VALUES ($1, $2, 'M1') RETURNING id
 	`, scopeID, productID).Scan(&milestoneID))
 	require.NotEqual(t, uuid.Nil, milestoneID, "milestone_ref must still accept inserts of its bare 004 shape after 010's Down()")
+}
+
+// indexExists reports whether a named index exists on table -- used below
+// where hasPartialUniqueIndexOnCurrentID's fixed "(id) WHERE valid_to IS
+// NULL" shape doesn't apply (011_milepebble's partial indexes are keyed
+// differently and milestone_ref is not SCD2 in the first place).
+func indexExists(t *testing.T, ctx context.Context, db *dbtest.Postgres, table, indexName string) bool {
+	t.Helper()
+	var exists bool
+	require.NoError(t, db.Pool.QueryRow(ctx, `
+		SELECT EXISTS (SELECT 1 FROM pg_indexes WHERE schemaname = 'public' AND tablename = $1 AND indexname = $2)
+	`, table, indexName).Scan(&exists))
+	return exists
+}
+
+// TestMigration011_SchemaContract asserts 011_milepebble's own boundary
+// calls (issue #2684's Testing section, items 2 and 6): milestone_ref's
+// widened `kind` CHECK accepts "milepebble" as well as "milestone",
+// `parent_milestone_id` is a real DB-enforced FK back onto
+// milestone_ref(id) (milestone_ref is not SCD2, so its id is table-wide
+// unique -- the same reasoning entity_milestone.milestone_id and
+// milestone_deferral.milestone_id already rely on), and the CHECK pairing
+// `(kind = 'milepebble') = (parent_milestone_id IS NOT NULL)` is enforced
+// by the database itself, not merely by convention -- a milepebble row
+// with a NULL parent, or a milestone row with a non-NULL parent, must both
+// be rejected. It also asserts the re-scoped uniqueness: two milepebbles
+// under different parents may share a name, two milepebbles under the SAME
+// parent may not, and the original one-name-per-(scope,product) milestone
+// uniqueness is unchanged. Finally, LB6's own trap in this migration's
+// direction: no spec entity table (`feature`, `requirement`) has acquired
+// a `milepebble_id` column -- asserted directly against
+// information_schema.columns so a future "convenience column" fails the
+// build (issue #2684's Testing section item 6, verbatim).
+func TestMigration011_SchemaContract(t *testing.T) {
+	ctx := context.Background()
+	db := dbtest.NewPostgres(ctx, t, dbtest.Options{})
+
+	sqlDB, err := sql.Open("pgx", db.ConnString)
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = sqlDB.Close() })
+
+	runner := migrate.NewRunner(sqlDB, schema.Migrations, schema.Dir)
+	require.NoError(t, runner.Up())
+
+	// -- LB6's own trap, this migration's direction: no milepebble_id column
+	// anywhere on a spec entity table (issue #2684's Testing item 6) --
+	for _, table := range []string{"feature", "requirement"} {
+		cols := columnNames(t, ctx, db, table)
+		assert.NotContains(t, cols, "milepebble_id",
+			"%s must never carry a milepebble_id column -- a milepebble's delivered scope is recorded via entity_milestone, the same association mechanism migration 004 established, never a second parent column on a spec entity (FR3/LB6)", table)
+		assert.NotContains(t, cols, "milestone_id", "%s must never carry a milestone_id column either (LB6, re-asserted here now that milepebbles exist too)", table)
+	}
+
+	// -- parent_milestone_id: nullable, real DB-enforced FK to milestone_ref(id) --
+	dataType, nullable := nullableColumn(t, ctx, db, "milestone_ref", "parent_milestone_id")
+	assert.Equal(t, "YES", nullable, "milestone_ref.parent_milestone_id must be nullable -- NULL for every kind=\"milestone\" row")
+	assert.Equal(t, "uuid", dataType, "milestone_ref.parent_milestone_id must be a plain uuid column")
+	assert.True(t, hasForeignKeyTo(t, ctx, db, "milestone_ref", "milestone_ref"), "milestone_ref.parent_milestone_id must carry a real DB-enforced FK back onto milestone_ref(id)")
+
+	var scopeID uuid.UUID
+	require.NoError(t, db.Pool.QueryRow(ctx, `
+		INSERT INTO scope (repo_full_name, default_branch) VALUES ('milepebble-011-check/repo', 'main') RETURNING id
+	`).Scan(&scopeID))
+	var productID uuid.UUID
+	require.NoError(t, db.Pool.QueryRow(ctx, `
+		INSERT INTO product (scope_id, name, vision) VALUES ($1, 'P', 'V') RETURNING id
+	`, scopeID).Scan(&productID))
+
+	// -- milestone_ref.kind CHECK: "milepebble" is now accepted, given a parent --
+	var milestoneID uuid.UUID
+	require.NoError(t, db.Pool.QueryRow(ctx, `
+		INSERT INTO milestone_ref (scope_id, product_id, name) VALUES ($1, $2, 'M1') RETURNING id
+	`, scopeID, productID).Scan(&milestoneID))
+
+	var milepebbleID uuid.UUID
+	require.NoError(t, db.Pool.QueryRow(ctx, `
+		INSERT INTO milestone_ref (scope_id, product_id, name, kind, parent_milestone_id) VALUES ($1, $2, 'cut 1', 'milepebble', $3) RETURNING id
+	`, scopeID, productID, milestoneID).Scan(&milepebbleID))
+	require.NotEqual(t, uuid.Nil, milepebbleID)
+
+	// A kind other than "milestone"/"milepebble" is still rejected.
+	_, err = db.Pool.Exec(ctx, `
+		INSERT INTO milestone_ref (scope_id, product_id, name, kind, parent_milestone_id) VALUES ($1, $2, 'bogus-kind', 'backlog', $3)
+	`, scopeID, productID, milestoneID)
+	assert.Error(t, err, "milestone_ref.kind must still reject a value other than \"milestone\"/\"milepebble\" (CHECK constraint)")
+
+	// -- milestone_ref_milepebble_has_parent_check: the pairing is DB-enforced --
+	_, err = db.Pool.Exec(ctx, `
+		INSERT INTO milestone_ref (scope_id, product_id, name, kind, parent_milestone_id) VALUES ($1, $2, 'orphan-milepebble', 'milepebble', NULL)
+	`, scopeID, productID)
+	assert.Error(t, err, "a kind=\"milepebble\" row with a NULL parent_milestone_id must be rejected -- FR3's \"exactly one milestone\"")
+
+	_, err = db.Pool.Exec(ctx, `
+		INSERT INTO milestone_ref (scope_id, product_id, name, kind, parent_milestone_id) VALUES ($1, $2, 'double-parented-milestone', 'milestone', $3)
+	`, scopeID, productID, milestoneID)
+	assert.Error(t, err, "a kind=\"milestone\" row with a non-NULL parent_milestone_id must be rejected -- a milestone has no parent milestone")
+
+	// -- parent_milestone_id FK is real, not just a plain uuid column --
+	_, err = db.Pool.Exec(ctx, `
+		INSERT INTO milestone_ref (scope_id, product_id, name, kind, parent_milestone_id) VALUES ($1, $2, 'dangling-parent', 'milepebble', gen_random_uuid())
+	`, scopeID, productID)
+	assert.Error(t, err, "milestone_ref.parent_milestone_id must be FK-enforced against milestone_ref(id)")
+
+	// -- re-scoped uniqueness: two milepebbles under the SAME parent sharing a name is rejected --
+	_, err = db.Pool.Exec(ctx, `
+		INSERT INTO milestone_ref (scope_id, product_id, name, kind, parent_milestone_id) VALUES ($1, $2, 'cut 1', 'milepebble', $3)
+	`, scopeID, productID, milestoneID)
+	assert.Error(t, err, "two milepebbles under the same parent milestone must not share a name (milestone_ref_milepebble_parent_name_idx)")
+
+	// -- but two milepebbles under DIFFERENT parents may share a name --
+	var milestone2ID uuid.UUID
+	require.NoError(t, db.Pool.QueryRow(ctx, `
+		INSERT INTO milestone_ref (scope_id, product_id, name) VALUES ($1, $2, 'M2') RETURNING id
+	`, scopeID, productID).Scan(&milestone2ID))
+	_, err = db.Pool.Exec(ctx, `
+		INSERT INTO milestone_ref (scope_id, product_id, name, kind, parent_milestone_id) VALUES ($1, $2, 'cut 1', 'milepebble', $3)
+	`, scopeID, productID, milestone2ID)
+	assert.NoError(t, err, "two milepebbles cut from DIFFERENT parent milestones may legitimately share a name")
+
+	// -- the original milestone-level uniqueness (one name per scope/product, among milestones) is unchanged --
+	_, err = db.Pool.Exec(ctx, `
+		INSERT INTO milestone_ref (scope_id, product_id, name) VALUES ($1, $2, 'M1')
+	`, scopeID, productID)
+	assert.Error(t, err, "two milestones (kind=\"milestone\", parent_milestone_id IS NULL) under the same product must still not share a name")
+
+	// -- both partial indexes exist by name, proving the re-scoping was a
+	// widen, not a silent drop --
+	assert.True(t, indexExists(t, ctx, db, "milestone_ref", "milestone_ref_scope_product_name_idx"))
+	assert.True(t, indexExists(t, ctx, db, "milestone_ref", "milestone_ref_milepebble_parent_name_idx"))
+}
+
+// TestMigration011_DownLeavesMilestoneRefIntact proves 011's own Down()
+// rolls back exactly its own additions (parent_milestone_id, the widened
+// kind CHECK, the milepebble-parent CHECK, and the milepebble-scoped
+// unique index) and leaves migration 004/010's milestone_ref shape intact
+// and usable -- the same "down leaves the earlier migration's tables
+// intact" clause TestMigration010_DownLeavesMilestoneAssocTablesIntact
+// proves for 010, applied to 011. Migrates up to exactly version 11
+// (Migrate(11)) and rolls back that one step, landing on 10. It also
+// covers issue #2684's Testing section item 8's explicit
+// "down-migrating with milepebble rows present" clause: a real
+// kind="milepebble" row exists before the rollback, and 011.down.sql's
+// own documented behavior (its "DELETE FROM milestone_ref WHERE
+// kind = 'milepebble'" comment) is exercised for real -- the milepebble
+// row is gone afterward, while its parent milestone row survives.
+func TestMigration011_DownLeavesMilestoneRefIntact(t *testing.T) {
+	ctx := context.Background()
+	db := dbtest.NewPostgres(ctx, t, dbtest.Options{})
+
+	sqlDB, err := sql.Open("pgx", db.ConnString)
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = sqlDB.Close() })
+
+	runner := migrate.NewRunner(sqlDB, schema.Migrations, schema.Dir)
+	require.NoError(t, runner.Migrate(11), "apply every migration through exactly 011")
+
+	// -- seed a real milepebble row (item 8: "down-migrating with milepebble
+	// rows present behaves as documented in the .down.sql comment") --
+	var seedScopeID uuid.UUID
+	require.NoError(t, db.Pool.QueryRow(ctx, `
+		INSERT INTO scope (repo_full_name, default_branch) VALUES ('milepebble-011-down-seed/repo', 'main') RETURNING id
+	`).Scan(&seedScopeID))
+	var seedProductID uuid.UUID
+	require.NoError(t, db.Pool.QueryRow(ctx, `
+		INSERT INTO product (scope_id, name, vision) VALUES ($1, 'P', 'V') RETURNING id
+	`, seedScopeID).Scan(&seedProductID))
+	var seedMilestoneID uuid.UUID
+	require.NoError(t, db.Pool.QueryRow(ctx, `
+		INSERT INTO milestone_ref (scope_id, product_id, name) VALUES ($1, $2, 'M1') RETURNING id
+	`, seedScopeID, seedProductID).Scan(&seedMilestoneID))
+	var seedMilepebbleID uuid.UUID
+	require.NoError(t, db.Pool.QueryRow(ctx, `
+		INSERT INTO milestone_ref (scope_id, product_id, name, kind, parent_milestone_id) VALUES ($1, $2, 'cut 1', 'milepebble', $3) RETURNING id
+	`, seedScopeID, seedProductID, seedMilestoneID).Scan(&seedMilepebbleID))
+
+	require.NoError(t, runner.Steps(-1), "roll back exactly migration 011")
+
+	// The milepebble row itself must be gone -- 011.down.sql documents (and
+	// this proves) that a kind="milepebble" row has no meaning once
+	// parent_milestone_id is dropped, so it is deleted rather than left as
+	// an orphaned bare milestone_ref row. Its parent milestone survives.
+	var milepebbleStillExists bool
+	require.NoError(t, db.Pool.QueryRow(ctx, `
+		SELECT EXISTS (SELECT 1 FROM milestone_ref WHERE id = $1)
+	`, seedMilepebbleID).Scan(&milepebbleStillExists))
+	assert.False(t, milepebbleStillExists, "011's Down() must delete every kind=\"milepebble\" row, per 011.down.sql's own documented behavior")
+
+	var milestoneStillExists bool
+	require.NoError(t, db.Pool.QueryRow(ctx, `
+		SELECT EXISTS (SELECT 1 FROM milestone_ref WHERE id = $1)
+	`, seedMilestoneID).Scan(&milestoneStillExists))
+	assert.True(t, milestoneStillExists, "011's Down() must leave the parent milestone row itself untouched")
+
+	version, dirty, err := runner.Version()
+	require.NoError(t, err)
+	assert.False(t, dirty)
+	assert.Equal(t, uint(10), version, "rolling back exactly one step from 11 must land on 10 (010_milestone_authoring)")
+
+	assert.True(t, tableExists(t, ctx, db, "milestone_ref"), "011's Down() must leave milestone_ref itself intact")
+
+	milestoneRefCols := columnNames(t, ctx, db, "milestone_ref")
+	assert.NotContains(t, milestoneRefCols, "parent_milestone_id", "011's Down() must drop milestone_ref.parent_milestone_id")
+	assert.Contains(t, milestoneRefCols, "kind", "011's Down() must leave migration 010's kind column intact")
+	assert.Contains(t, milestoneRefCols, "outcome", "011's Down() must leave migration 010's outcome column intact")
+
+	var scopeID uuid.UUID
+	require.NoError(t, db.Pool.QueryRow(ctx, `
+		INSERT INTO scope (repo_full_name, default_branch) VALUES ('milepebble-011-down-check/repo', 'main') RETURNING id
+	`).Scan(&scopeID))
+	var productID uuid.UUID
+	require.NoError(t, db.Pool.QueryRow(ctx, `
+		INSERT INTO product (scope_id, name, vision) VALUES ($1, 'P', 'V') RETURNING id
+	`, scopeID).Scan(&productID))
+
+	// milestone_ref's kind CHECK reverts to accepting only "milestone" --
+	// 011's widening is fully undone, not left partially in place.
+	_, err = db.Pool.Exec(ctx, `
+		INSERT INTO milestone_ref (scope_id, product_id, name, kind) VALUES ($1, $2, 'M1', 'milepebble')
+	`, scopeID, productID)
+	assert.Error(t, err, "after 011's Down(), milestone_ref.kind must reject \"milepebble\" again -- the CHECK widening must be fully reverted")
+
+	// The bare (post-010) shape must still be usable.
+	var milestoneID uuid.UUID
+	require.NoError(t, db.Pool.QueryRow(ctx, `
+		INSERT INTO milestone_ref (scope_id, product_id, name) VALUES ($1, $2, 'M1') RETURNING id
+	`, scopeID, productID).Scan(&milestoneID))
+	require.NotEqual(t, uuid.Nil, milestoneID, "milestone_ref must still accept inserts of its post-010 shape after 011's Down()")
 }

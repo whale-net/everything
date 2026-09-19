@@ -129,13 +129,13 @@ func TestMilestoneStore_AddAssociation_IdempotentAndONCONFLICTRegression(t *test
 
 // TestMilestoneStore_ListRefsByProduct_FiltersToMilestoneKind proves
 // migration 010's kind-aware expand-contract step (issue #2683's
-// Implementation section): a row of any other kind must never appear in
-// ListRefsByProduct's result, even though no second kind exists yet --
-// this inserts a bogus non-"milestone" kind row directly (bypassing the
-// CHECK constraint is not possible, so this proves the SELECT's WHERE
-// kind = 'milestone' clause is live by checking a real milestone row is
-// returned and confirming the query text scopes by kind, exercised via
-// GetOrCreateRef's own default kind assignment).
+// Implementation section), now with kind="milepebble" rows actually
+// present for the first time (migration 011, issue #2684's "Kind-awareness
+// follow-through" note): two real milestones and two real milepebbles cut
+// from one of them all exist in the same product, and
+// ListRefsByProduct returns only the two milestones -- never a milepebble,
+// even though both share the same product_id and (for one pair) a
+// milestone/milepebble could otherwise collide on name.
 func TestMilestoneStore_ListRefsByProduct_FiltersToMilestoneKind(t *testing.T) {
 	ctx := context.Background()
 	s, db := newMilestoneTestStore(t)
@@ -143,14 +143,20 @@ func TestMilestoneStore_ListRefsByProduct_FiltersToMilestoneKind(t *testing.T) {
 	product, err := s.Products().Create(ctx, scopeID, "Krill", "spec-of-record")
 	require.NoError(t, err)
 
-	_, err = s.Milestones().GetOrCreateRef(ctx, scopeID, product.ID, "M1")
+	m1, err := s.Milestones().GetOrCreateRef(ctx, scopeID, product.ID, "M1")
 	require.NoError(t, err)
 	_, err = s.Milestones().GetOrCreateRef(ctx, scopeID, product.ID, "M2")
 	require.NoError(t, err)
 
+	self := store.Subject{Iss: "https://issuer.example.com", Sub: "agent-1", Kind: store.SubjectKindService}
+	_, err = s.MilestoneAuthoring().CreateMilepebble(ctx, scopeID, m1.ID, "cut 1", "", self, self)
+	require.NoError(t, err)
+	_, err = s.MilestoneAuthoring().CreateMilepebble(ctx, scopeID, m1.ID, "cut 2", "", self, self)
+	require.NoError(t, err)
+
 	refs, err := s.Milestones().ListRefsByProduct(ctx, scopeID, product.ID)
 	require.NoError(t, err)
-	require.Len(t, refs, 2)
+	require.Len(t, refs, 2, "ListRefsByProduct must return exactly the two milestones, never either milepebble")
 	for _, ref := range refs {
 		assert.Equal(t, store.MilestoneKindMilestone, ref.Kind, "ListRefsByProduct must only ever return kind=\"milestone\" rows")
 	}

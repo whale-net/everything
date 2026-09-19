@@ -44,14 +44,16 @@ func scanFeature(row pgx.Row) (Feature, error) {
 	return f, err
 }
 
-func (s featureStore) Create(ctx context.Context, scopeID, featureSetID uuid.UUID, name string, description *string) (Feature, error) {
-	tx, err := s.pool.Begin(ctx)
-	if err != nil {
-		return Feature{}, fmt.Errorf("begin tx: %w", err)
-	}
-	defer tx.Rollback(ctx)
-
-	exists, err := currentRowExists(ctx, tx, "feature_set", featureSetID, scopeID)
+// createFeatureTx is Create's body against any txQuerier, not just a
+// freshly-begun transaction this method owns -- extracted so
+// krill/store/milestone_authoring.go's AddDiscoveredScope (FR4, issue
+// #2684) can insert a discovered Feature inside its own transaction,
+// alongside the milepebble/parent-milestone Delivers associations that
+// must commit atomically with it, without a second, competing
+// s.pool.Begin. Create itself (below) is the only caller that owns its
+// transaction end-to-end.
+func createFeatureTx(ctx context.Context, q txQuerier, scopeID, featureSetID uuid.UUID, name string, description *string) (Feature, error) {
+	exists, err := currentRowExists(ctx, q, "feature_set", featureSetID, scopeID)
 	if err != nil {
 		return Feature{}, err
 	}
@@ -59,18 +61,32 @@ func (s featureStore) Create(ctx context.Context, scopeID, featureSetID uuid.UUI
 		return Feature{}, errParentNotFound("feature_set", featureSetID)
 	}
 
-	position, err := nextSiblingPosition(ctx, tx, "feature", "feature_set_id", featureSetID, scopeID)
+	position, err := nextSiblingPosition(ctx, q, "feature", "feature_set_id", featureSetID, scopeID)
 	if err != nil {
 		return Feature{}, err
 	}
 
-	feature, err := scanFeature(tx.QueryRow(ctx, `
+	feature, err := scanFeature(q.QueryRow(ctx, `
 		INSERT INTO feature (scope_id, feature_set_id, name, description, position)
 		VALUES ($1, $2, $3, $4, $5)
 		RETURNING `+featureColumns,
 		scopeID, featureSetID, name, description, position))
 	if err != nil {
 		return Feature{}, fmt.Errorf("insert feature: %w", err)
+	}
+	return feature, nil
+}
+
+func (s featureStore) Create(ctx context.Context, scopeID, featureSetID uuid.UUID, name string, description *string) (Feature, error) {
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return Feature{}, fmt.Errorf("begin tx: %w", err)
+	}
+	defer tx.Rollback(ctx)
+
+	feature, err := createFeatureTx(ctx, tx, scopeID, featureSetID, name, description)
+	if err != nil {
+		return Feature{}, err
 	}
 
 	if err := tx.Commit(ctx); err != nil {
