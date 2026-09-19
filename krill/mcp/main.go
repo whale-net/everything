@@ -136,13 +136,15 @@ func run() error {
 	// #2685), tools.RegisterDeliveryShipmentAll (per-item shipment, issue
 	// #2686), tools.RegisterRecutAll (delivery-axis re-cut plus the
 	// backlog bucket, issue #2687), tools.RegisterAbandonAll (the
-	// composed abandon verb, issue #2688), and tools.RegisterCreateTask
-	// (the work-axis task-create tool, issue #2719, FR1) all mount on
-	// designReg -- create_milestone/set_fr_budget/add_delivers/
-	// add_must_not_foreclose/add_deferral/set_milestone_status/
-	// mark_delivered_item_shipped/move_delivery_scope/abandon_milestone/
-	// create_task all need the same krill-session-derived LB4 subject
-	// pair every write tool on that mount already resolves.
+	// composed abandon verb, issue #2688), tools.RegisterCreateTask (the
+	// work-axis task-create tool, issue #2719, FR1), and
+	// tools.RegisterDeclareTaskDependencies (the work-axis dependency-
+	// declaration tool, issue #2720, FR2) all mount on designReg --
+	// create_milestone/set_fr_budget/add_delivers/add_must_not_foreclose/
+	// add_deferral/set_milestone_status/mark_delivered_item_shipped/
+	// move_delivery_scope/abandon_milestone/create_task/
+	// declare_task_dependencies all need the same krill-session-derived
+	// LB4 subject pair every write tool on that mount already resolves.
 	specSrv := server.New()
 	specReg := server.NewRegistry(specSrv)
 	tools.RegisterAll(specReg, querier)
@@ -156,6 +158,7 @@ func run() error {
 	tools.RegisterRecutAll(designReg, sessions, entities.Recut(), querier)
 	tools.RegisterAbandonAll(designReg, sessions, entities.Abandon())
 	tools.RegisterCreateTask(designReg, sessions, entities.Tasks())
+	tools.RegisterDeclareTaskDependencies(designReg, sessions, entities.Tasks())
 
 	// The mcpauth (human) front door's CredentialStore preflights the
 	// consuming domain's credential table at boot -- exactly like

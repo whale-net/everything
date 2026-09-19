@@ -1,7 +1,11 @@
 // fakeTaskStore is an in-memory store.TaskStore backing task_test.go:
 // CreateTaskHandler (task.go, issue #2719) depends only on this
 // interface, so handler-level tests never need a real Postgres (that is
-// krill/store/task_integration_test.go's job).
+// krill/store/task_integration_test.go's job). The DeclareDependency/
+// ListDependencies/UnsatisfiedDependencies/GetTaskByID stubs below exist
+// only so this fake keeps satisfying store.TaskStore now that
+// task_dependency.go (issue #2720) widens it -- task_dependency_test.go's
+// own Testing-phase task is what actually exercises them.
 package handlers_test
 
 import (
@@ -19,6 +23,15 @@ type fakeTaskStore struct {
 	createErr error
 
 	gotParams store.CreateTaskParams
+
+	declareErr          error
+	gotDeclareParams    store.DeclareDependencyParams
+	dependencies        []store.TaskDependency
+	listDependenciesErr error
+	unsatisfied         []uuid.UUID
+	unsatisfiedErr      error
+	getTaskByIDResult   store.Task
+	getTaskByIDErr      error
 }
 
 func (f *fakeTaskStore) CreateTask(ctx context.Context, params store.CreateTaskParams) (store.Task, error) {
@@ -37,6 +50,23 @@ func (f *fakeTaskStore) CreateTask(ctx context.Context, params store.CreateTaskP
 		CreatedByActing:     params.Acting,
 		CreatedByOnBehalfOf: params.OnBehalfOf,
 	}, nil
+}
+
+func (f *fakeTaskStore) DeclareDependency(ctx context.Context, params store.DeclareDependencyParams) error {
+	f.gotDeclareParams = params
+	return f.declareErr
+}
+
+func (f *fakeTaskStore) ListDependencies(ctx context.Context, scopeID, taskID uuid.UUID) ([]store.TaskDependency, error) {
+	return f.dependencies, f.listDependenciesErr
+}
+
+func (f *fakeTaskStore) UnsatisfiedDependencies(ctx context.Context, scopeID, taskID uuid.UUID) ([]uuid.UUID, error) {
+	return f.unsatisfied, f.unsatisfiedErr
+}
+
+func (f *fakeTaskStore) GetTaskByID(ctx context.Context, id uuid.UUID) (store.Task, error) {
+	return f.getTaskByIDResult, f.getTaskByIDErr
 }
 
 var _ store.TaskStore = (*fakeTaskStore)(nil)

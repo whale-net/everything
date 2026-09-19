@@ -18,6 +18,7 @@ go_library(
         "recut.go",
         "slice.go",
         "task.go",
+        "task_dependency.go",
     ],
     importpath = "github.com/whale-net/everything/krill/mcp/tools",
     visibility = ["//visibility:public"],
