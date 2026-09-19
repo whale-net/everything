@@ -687,6 +687,56 @@ go_test(
     ],
 )
 
+# Real Postgres integration test for RecutStore (recut.go, migration 014,
+# issue #2687's Testing section, FR5): GetOrCreateBacklog's idempotency
+# and per-product isolation, MoveScope's happy paths (milestone->milestone
+# with NFR1's identity-stability guarantee, milestone->backlog round-
+# tripping via ListBacklog, milestone->milepebble and
+# milepebble->milepebble both landing the FR3 subset invariant), NFR3's
+# all-or-nothing rejection of a batch naming an already-shipped entity
+# with nothing written, a half-shipped container's unshipped half
+# re-cutting cleanly while the shipped half's association and
+# delivery_shipment row stay byte-identical, ErrEntityNotInContainer, the
+# FR3 subset invariant's own rejection for a non-sibling source, and the
+# "drop from every milepebble cut from a milestone" behavior chosen for
+# moving scope out of that milestone. Shares
+# milestone_authoring_integration_test.go's test-store/test-scope/subject
+# helpers (same package, same build tag) rather than duplicating them,
+# mirroring milepebble_integration_test.go's own choice. Deliberately NOT
+# part of `bazel test //...` -- see //libs/go/dbtest's README for the full
+# rationale.
+#
+# Run it explicitly (requires a working Docker daemon):
+#   bazel test //krill/store:recut_integration_test --test_output=all
+go_test(
+    name = "recut_integration_test",
+    size = "large",
+    timeout = "long",
+    srcs = [
+        "milestone_authoring_integration_test.go",
+        "recut_integration_test.go",
+    ],
+    gotags = ["integration"],
+    tags = [
+        "external",
+        "integration",
+        "manual",
+        "no-cache",
+        "no-sandbox",
+        "requires-network",
+    ],
+    deps = [
+        ":store",
+        "//krill/migrate/schema",
+        "//libs/go/dbtest",
+        "//libs/go/migrate",
+        "@com_github_google_uuid//:uuid",
+        "@com_github_jackc_pgx_v5//stdlib",
+        "@com_github_stretchr_testify//assert",
+        "@com_github_stretchr_testify//require",
+    ],
+)
+
 go_test(
     name = "pointer_integration_test",
     size = "large",
