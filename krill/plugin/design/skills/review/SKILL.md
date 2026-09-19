@@ -46,13 +46,18 @@ approved plan — there is no root plan Issue to create (see
      entity_deltas: []
    }
    ```
-   - **If this is a milestone of a product brief** — post
-     `gh issue comment <product-issue> --body "Ledger: M<n> → planned
-     (<design-session-id>)"` on the tracking issue (never a body edit).
+   - **If this is a milestone of a product brief not hosted in krill** —
+     post `gh issue comment <product-issue> --body "Ledger: M<n> → planned
+     (<design-session-id>)"` on the tracking issue (never a body edit). **If
+     it's a krill-hosted milestone** — call `set_milestone_status
+     {milestone_id, status: "planned"}` instead.
    - Tell the user the design is approved and that `/krill-work:plan
-     <feature-set-id>` is the next step (task breakdown — **TODO(M3)**: still
-     creates a GitHub Project/tracking issue citing the FeatureSet id, since
-     no krill `PointerArtifact` MCP write path exists yet). If no
+     <feature-set-id>` (plus `--milestone-id <id>` if one exists) is the
+     next step. Task breakdown still creates a GitHub Project/tracking issue
+     for swimlane execution either way (**TODO(M3)**: no krill
+     `PointerArtifact` MCP write path exists yet to link that issue to the
+     FeatureSet/Milestone natively) — but on the Milestone path, `plan` also
+     creates real krill `Task` entities via `create_task` (M4 FR1). If no
      stakeholder meeting was held, mention `/krill-design:stakeholder-meeting
      <design-session-id>` is still available before implementation starts.
 

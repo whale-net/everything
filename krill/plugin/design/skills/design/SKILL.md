@@ -44,12 +44,18 @@ the full effect of each — unchanged by this fork.
    - **Check `--milestone` first** — the positional argument is a product
      issue number. `gh issue view <n>` and confirm `product:approved`; read
      `<domain>/PRODUCT.md` → `product/03-roadmap.md` for the milestone entry
-     (**krill's own domain: same FR21 live `get_product_slice` read
-     project-manager's `design` skill already does — see that skill's
-     "krill's own milestone read" section, unchanged by this fork**). Take
-     the last `Ledger: M<n> → <status> (<design-session-id>)` comment on the
-     tracking issue — already `in design` or later means resume that session
-     id instead of opening a new one.
+     — **except for a product actually hosted in krill** (krill's own
+     domain, or one imported via `krill/importer`), where a real krill
+     Milestone entity exists (M3): call `get_milestone {id}` for its exact
+     authoring fields/`Delivers`/`Must not foreclose`/deferrals. This is an
+     exact per-milestone read, not the whole-product `get_product_slice`
+     superset project-manager's own `design` skill still falls back to for
+     krill's own domain (its "krill's own milestone read" section describes
+     that pre-M3 limitation; it no longer applies here). Take the last
+     `Ledger: M<n> → <status> (<design-session-id>)` tracking-issue comment
+     for a non-krill-hosted product, or `get_milestone_status {id}` for a
+     krill-hosted one — already `in design` or later means resume that
+     session id instead of opening a new one.
    - If given a design-session id, call `get_design_session` and
      `list_open_questions {blocking: true}`. Zero blocking questions after a
      `reconciliation` event means architect has already signed off — skip to
@@ -65,9 +71,11 @@ the full effect of each — unchanged by this fork.
    the DesignSession's own event log is the durable record. Conduct the
    interview conversationally directly in this session (do not delegate —
    it needs live back-and-forth), following `agents/producer.md` Mode 0.
-   If step 1 turned up real overlap, open with those issue numbers. Post
-   `gh issue comment <product-issue> --body "Ledger: M<n> → in design
-   (<design-session-id>)"` before interviewing, if this is a milestone.
+   If step 1 turned up real overlap, open with those issue numbers. If this
+   is a milestone, post `gh issue comment <product-issue> --body "Ledger:
+   M<n> → in design (<design-session-id>)"` before interviewing — or, for a
+   krill-hosted milestone, call `set_milestone_status {milestone_id,
+   status: "in design"}` instead (CONVENTIONS.md).
 
 4. **Draft the specification.** Dispatch with an explicit `name: "producer-
    <design-session-id>"` (and `name: "architect-<design-session-id>"` for
@@ -109,6 +117,10 @@ the full effect of each — unchanged by this fork.
    <design-session-id>` runs the same pipeline unattended.
 
    **With `--milestone`:** also report the Requirement count against the
-   milestone's FR budget. `review` appends the `signoff` event that makes
-   the proposed entities the approved plan as usual; producer posts
-   `Ledger: M<n> → planned (<design-session-id>)` on the tracking issue.
+   milestone's FR budget (`get_milestone`'s `fr_budget` for a krill-hosted
+   milestone, the roadmap file's `FR budget` line otherwise). `review`
+   appends the `signoff` event that makes the proposed entities the
+   approved plan as usual; producer posts `Ledger: M<n> → planned
+   (<design-session-id>)` on the tracking issue, or calls
+   `set_milestone_status {milestone_id, status: "planned"}` for a
+   krill-hosted milestone.

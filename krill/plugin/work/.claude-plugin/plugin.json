@@ -1,6 +1,6 @@
 {
   "name": "krill-work",
-  "description": "Work-axis krill plugin: MCP read access to krill's spec surface plus planner/worker/validator/system-validator/mergepush personas and plan/implement/validate skills forked from project-manager. Task claim/heartbeat/complete/abandon/note still ride on GitHub Issues/Projects until krill's M4 work-tracking MCP surface (/mcp/work) ships -- see CONVENTIONS.md TODOs.",
+  "description": "Work-axis krill plugin: MCP access to krill's spec surface plus the milestone/delivery-axis tools and create_task (M3, M4 FR1), plus planner/worker/validator/system-validator/mergepush personas and plan/implement/validate skills forked from project-manager. Swimlane execution (claim/heartbeat/complete/abandon/note, task dependencies, lane queries) still rides on GitHub Issues/Projects until krill's remaining M4 FRs ship -- see CONVENTIONS.md TODOs.",
   "author": {
     "name": "whale_net"
   }

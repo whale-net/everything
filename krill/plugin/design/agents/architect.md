@@ -46,10 +46,13 @@ Given a krill DesignSession id:
    shared libraries (`libs/`), and the domain's `ARCHITECTURE.md`.
 4. **Load-bearing check** (milestones of a product brief only). Same as
    project-manager: read `<domain>/PRODUCT.md`'s `LB` entries and this
-   milestone's `Must not foreclose` list from `product/03-roadmap.md`
-   (or, for krill's own domain, the live `get_product_slice` context the
-   `design` skill already fetched), and check the proposed Requirement
-   entities against it. A Requirement that forecloses a protected `Later`
+   milestone's `Must not foreclose` list from `product/03-roadmap.md` — or,
+   for a product actually hosted in krill, call `get_milestone {id}` for its
+   exact `Must not foreclose` list (M3, real today — not the whole-product
+   `get_product_slice` superset project-manager's own architect.md still
+   describes as the only option for krill's own domain) — and check the
+   proposed Requirement entities against it. A Requirement that forecloses a
+   protected `Later`
    capability is a **numbered open question**, opened via
    `open_questions_delta.opened: [{question_id, blocking: true, text}]` on
    your `reconciliation` event — not a nitpick.

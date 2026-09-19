@@ -30,9 +30,12 @@ body's copied-in text. Only meaningful once all swimlane tasks are `Done`.
 
 4. **If everything passed:** identical finalize sequence to project-manager's
    `validate` step 4 — re-dispatch `mergepush` as a no-op re-confirmation,
-   verify every PR is `MERGED`, post `PRs: ...` on the tracking issue, post
+   verify every PR is `MERGED`, post `PRs: ...` on the tracking issue. Post
    `Ledger: M<k> → shipped` on the product tracking issue if this is a
-   milestone, report the plan fully validated with the full PR list.
+   milestone not hosted in krill; call `set_milestone_status {milestone_id,
+   status: "shipped"}` instead for a krill-hosted milestone (and, per-item,
+   `mark_delivered_item_shipped` for each delivered Feature/Requirement —
+   CONVENTIONS.md). Report the plan fully validated with the full PR list.
 
 5. **If there are findings:** dispatch `krill-work:planner` with the finding
    issue numbers to run its findings-handling process. Report the new task

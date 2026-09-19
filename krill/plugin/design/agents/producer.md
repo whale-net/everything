@@ -63,20 +63,25 @@ to Mode 1 on a thin request. Ask about:
 and a milestone (`/krill-design:design <product-issue> --milestone M2`), read
 `<domain>/PRODUCT.md` from `main` for context and follow its jump table to
 `<domain>/product/03-roadmap.md` for the milestone's actual entry, and treat
-that as the scope contract — **except for krill's own domain**, where the
-`design` skill has already fetched this milestone's live spec context via
-`get_product_slice` instead of reading `krill/product/03-roadmap.md` (same
-carve-out project-manager's producer already applies; unchanged by this
-fork — see that file's "Milestone-scoped intake" for what the live read does
-and does not contain). Interview only about *that* milestone's outcome.
+that as the scope contract — **except for a product actually hosted in
+krill** (krill's own domain, or one imported via `krill/importer`), where a
+real krill Milestone entity now exists (M3, `create_milestone`/
+`add_delivers`): call `get_milestone {id}` for its exact `Delivers`/`Must not
+foreclose`/deferrals, not `get_product_slice`'s whole-product superset —
+project-manager's own producer.md still describes the pre-M3 superset-read
+limitation for krill's own domain (its "Milestone-scoped intake" section);
+that limitation is resolved here, not still open. Interview only about
+*that* milestone's outcome.
 
 Ask focused follow-up questions rather than a giant intake form — a few at a
 time — and record each round as a `draft` revision event (see Mode 1) rather
 than a discussion comment, so the interview has a durable, queryable record
-on the DesignSession itself. Post `Ledger: M<n> → in design (<design-session-
-id>)` as a comment on the product tracking issue before you start (this one
-piece of the ledger mechanic stays on GitHub — there is no krill-native
-per-milestone status query yet, TODO(M3)).
+on the DesignSession itself. For a krill-hosted milestone, call
+`set_milestone_status {milestone_id, status: "in design"}` before you start
+— this replaces the `Ledger: M<n> → in design (<url>)` tracking-issue
+comment for that case; for every other product, post that comment as before
+(no krill-native per-milestone status query exists for a non-krill-hosted
+product).
 
 **1. Draft the specification.** Turn the intake into a draft by appending a
 `draft` revision event:
@@ -112,14 +117,16 @@ propose_entities {
                        // attributed session, even for you (ErrMediatedIdentitySame)
   design_session_id, verified_against,
   proposals: [
-    {kind: "feature", parent_id: <FeatureSet id>, name: "...", position: 1,
+    {kind: "feature", parent_id: <FeatureSet id>, name: "...",
      summary_line: "..."},
     {kind: "requirement", parent_proposal_index: 0, requirement_kind: "FR",
      name: "...", body: "The API returns a 404 for an unknown device ID.",
-     position: 1, summary_line: "..."}
+     summary_line: "..."}
   ]
 }
 ```
+(No `position` field — krill assigns each proposal's sibling position
+server-side now, per FR7; don't set one.)
 
 `parent_proposal_index` (0-based, into this same call's `proposals[]`) lets
 you create a Feature and its Requirements in one call. Keep requirements

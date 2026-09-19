@@ -31,12 +31,12 @@
     },
     {
       "name": "krill-design",
-      "description": "Design-axis krill plugin: MCP access to krill's spec and design-session surfaces, plus producer/architect/reviewer/stakeholder personas and design/product/review skills forked from project-manager",
+      "description": "Design-axis krill plugin: MCP access to krill's spec, design-session, and milestone/delivery-axis surfaces, plus producer/architect/reviewer/stakeholder personas and design/product/review skills forked from project-manager",
       "source": "./krill/plugin/design"
     },
     {
       "name": "krill-work",
-      "description": "Work-axis krill plugin: MCP read access to krill's spec surface plus planner/worker/validator/system-validator/mergepush personas and plan/implement/validate skills forked from project-manager",
+      "description": "Work-axis krill plugin: MCP access to krill's spec surface plus the milestone/delivery-axis tools and create_task, plus planner/worker/validator/system-validator/mergepush personas and plan/implement/validate skills forked from project-manager",
       "source": "./krill/plugin/work"
     },
     {

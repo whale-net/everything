@@ -14,6 +14,21 @@
     "krill-mcp-prod": {
       "type": "http",
       "url": "https://mcp.krill.whalenet.app/mcp/spec"
+    },
+    "krill-mcp-design-tilt": {
+      "type": "http",
+      "url": "http://localhost:8084/mcp/design",
+      "headers": {
+        "Authorization": "Bearer dev-local"
+      }
+    },
+    "krill-mcp-design-dev": {
+      "type": "http",
+      "url": "https://dev-mcp.krill.whalenet.dev/mcp/design"
+    },
+    "krill-mcp-design-prod": {
+      "type": "http",
+      "url": "https://mcp.krill.whalenet.app/mcp/design"
     }
   }
 }

@@ -11,7 +11,11 @@ never edit files or commit (read-only by design). Everything you need for
 normal execution is below.
 
 **`<root>` here is the GitHub tracking issue `krill-work:planner` minted
-citing a krill FeatureSet id (TODO(M3)) — not a krill entity itself.**
+citing a krill FeatureSet or Milestone id (TODO(M3)) — not a krill entity
+itself.** A task issue's body may also cite `krill task-id: <id>` (a real
+krill `Task` row, M4 FR1, when this work belongs to a krill-hosted
+Milestone) — its `current_lane` is stale once past `starting_lane`; the
+GitHub Project's `Status` field remains authoritative (CONVENTIONS.md).
 
 ## Process
 

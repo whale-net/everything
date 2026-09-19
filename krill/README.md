@@ -278,15 +278,19 @@ that plugin, adapted to call krill's own MCP tools instead of driving
 GitHub Discussions. See `plugin/shared/CONVENTIONS.md`.
 
 `plugin/work/` (registered as `krill-work`) is the companion plugin for the
-work/execution axis: read-only MCP access to the FR5-FR9 spec surface, plus
-the work-axis personas (`planner`/`worker`/`validator`/`system-validator`/
-`mergepush`/`project-manager`) and skills (`plan`/`implement`/`validate`/
-`loop-plan-implement-validate`) forked from `tools/project-manager`. It
-still drives GitHub Issues/Projects for task tracking -- krill's M3
-(milestone authoring) and M4 (`claim`/`heartbeat`/`complete`/`abandon`/
-`note`) work-tracking MCP surface don't exist yet. See
-`plugin/shared/CONVENTIONS.md` for the `TODO(M3)`/`TODO(M4)` markers this
-implies.
+work/execution axis: MCP access to the FR5-FR9 spec surface plus the same
+`/mcp/design` mount `krill-design` uses (milestone/delivery-axis tools and
+`create_task` also register there -- see "Delivery-axis endpoints" above),
+plus the work-axis personas (`planner`/`worker`/`validator`/
+`system-validator`/`mergepush`/`project-manager`) and skills
+(`plan`/`implement`/`validate`/`loop-plan-implement-validate`) forked from
+`tools/project-manager`. Milestone authoring/status and `create_task` (M3,
+M4 FR1) are real and used where a product is actually hosted in krill; task
+claim/heartbeat/complete/abandon/note, dependency declaration, and any
+lane/status query for a worker to discover ready work are still unbuilt, so
+swimlane execution still rides on GitHub Issues/Projects either way. See
+`plugin/shared/CONVENTIONS.md` for exactly what's real versus still a
+`TODO(M4)`.
 
 `plugin/shared/` holds the `CONVENTIONS.md` and the `help`/`status`
 persona/skill both plugins symlink in, so they never drift apart.

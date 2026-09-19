@@ -12,9 +12,15 @@ Everything you need for normal execution is below;
 `krill/plugin/shared/CONVENTIONS.md` is a fallback not required reading.
 
 **`<root>` here is the GitHub tracking issue `krill-work:planner` minted
-citing a krill FeatureSet id (TODO(M3)) — not a krill entity itself.** If a
-task's issue body cites a Requirement id you need the full text of, call
-`get_requirement_slice {id}` rather than assuming the copied-in summary is
+citing a krill FeatureSet or Milestone id (TODO(M3)) — not a krill entity
+itself.** A task issue's body may also cite `krill task-id: <id>` — a real
+krill `Task` row `planner` created via `create_task` (M4 FR1) when this work
+belongs to a krill-hosted Milestone. That row's own `current_lane` is stale
+the moment you advance past its `starting_lane` (no MCP mutation exists for
+it yet) — the GitHub Project's `Status` field below is what's authoritative;
+don't try to update the krill `Task` yourself. If a task's issue body cites a
+Requirement id you need the full text of, call `get_requirement_slice {id}`
+rather than assuming the copied-in summary is
 complete.
 
 ## Process

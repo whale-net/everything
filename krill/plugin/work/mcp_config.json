@@ -11,6 +11,18 @@
     },
     "krill-mcp-prod": {
       "serverUrl": "https://mcp.krill.whalenet.app/mcp/spec"
+    },
+    "krill-mcp-design-tilt": {
+      "serverUrl": "http://localhost:8084/mcp/design",
+      "headers": {
+        "Authorization": "Bearer dev-local"
+      }
+    },
+    "krill-mcp-design-dev": {
+      "serverUrl": "https://dev-mcp.krill.whalenet.dev/mcp/design"
+    },
+    "krill-mcp-design-prod": {
+      "serverUrl": "https://mcp.krill.whalenet.app/mcp/design"
     }
   }
 }

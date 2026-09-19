@@ -93,11 +93,13 @@ that skill for the exact forwarding/capping semantics.
      `krill-design:architect` for another round, then repeat step 5.
      Increment the counter each time; stop at `--max-panel-rounds`.
 
-7. **Report.** If this is a milestone of a product brief, post
-   `Ledger: M<n> → planned (<design-session-id>)` on the tracking issue
-   (unchanged mechanic — the ledger still lives on GitHub). There is no
-   separate "publish" dispatch — the `signoff` event from step 5 already
-   made the proposed entities the approved plan.
+7. **Report.** If this is a milestone of a product brief not hosted in
+   krill, post `Ledger: M<n> → planned (<design-session-id>)` on the
+   tracking issue. If it's a krill-hosted milestone, call
+   `set_milestone_status {milestone_id, status: "planned"}` instead
+   (CONVENTIONS.md). There is no separate "publish" dispatch — the
+   `signoff` event from step 5 already made the proposed entities the
+   approved plan.
 
 8. **Report to the user.** The design-session id, that its final event is a
    `signoff` with `acting.kind: service` (i.e. not a human), how many panel
