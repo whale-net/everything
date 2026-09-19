@@ -72,3 +72,44 @@ func TestEventsToMessages_ToolUnlockEventIsSkipped(t *testing.T) {
 
 	assert.Equal(t, withoutMessages, withMessages, "a tool_unlock event must not change eventsToMessages' output")
 }
+
+// TestEventsToMessages_SearchToolsTriple_YieldsWellFormedAssistantThenToolResultPair
+// proves the other half of FR4's transcript shape: a search_tools call's
+// full committed triple (assistant message carrying the call, tool_result,
+// tool_unlock) decodes into exactly the assistant-message-then-tool-result
+// sequence the OpenAI wire protocol requires -- byte-identical in structure
+// to a dispatched call's own pair -- with the tool_unlock event contributing
+// no message at all.
+func TestEventsToMessages_SearchToolsTriple_YieldsWellFormedAssistantThenToolResultPair(t *testing.T) {
+	sessionID := uuid.New()
+	now := time.Now()
+
+	assistantPayload, err := marshalMessagePayload(llm.Message{
+		Role:      llm.RoleAssistant,
+		ToolCalls: []llm.ToolCall{{ID: "call-1", Name: "search_tools", Arguments: `{"query":"widgets"}`}},
+	})
+	require.NoError(t, err)
+	resultRaw, err := json.Marshal(toolResultEventPayload{ToolCallID: "call-1", Name: "search_tools", Content: "widget_get: fetch a widget", IsError: false})
+	require.NoError(t, err)
+	unlockPayload, err := marshalToolUnlockPayload([]string{"widget_get"}, "widgets")
+	require.NoError(t, err)
+
+	evs := []events.Event{
+		{EventID: uuid.New(), SessionID: sessionID, Seq: 1, Turn: 1, Type: events.EventTypeAssistantMessage, Payload: assistantPayload, CommittedAt: now},
+		{EventID: uuid.New(), SessionID: sessionID, Seq: 2, Turn: 1, Type: toolResultEventType(0), Payload: resultRaw, CommittedAt: now},
+		{EventID: uuid.New(), SessionID: sessionID, Seq: 3, Turn: 1, Type: toolUnlockEventType(0), Payload: unlockPayload, CommittedAt: now},
+	}
+
+	messages, err := eventsToMessages(evs)
+	require.NoError(t, err)
+	require.Len(t, messages, 2, "the tool_unlock event must contribute no message of its own")
+
+	assert.Equal(t, llm.RoleAssistant, messages[0].Role)
+	require.Len(t, messages[0].ToolCalls, 1)
+	assert.Equal(t, "call-1", messages[0].ToolCalls[0].ID)
+	assert.Equal(t, "search_tools", messages[0].ToolCalls[0].Name)
+
+	assert.Equal(t, llm.RoleTool, messages[1].Role)
+	assert.Equal(t, "call-1", messages[1].ToolCallID)
+	assert.Equal(t, "widget_get: fetch a widget", messages[1].Content)
+}
