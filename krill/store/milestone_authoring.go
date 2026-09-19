@@ -397,22 +397,234 @@ func (s milestoneAuthoringStore) GetMilestone(ctx context.Context, id uuid.UUID)
 	return ref, delivers, mustNotForeclose, deferrals, nil
 }
 
-// Milepebble methods below (migration 011, issue #2684, FR3/FR4) are
-// scaffold-stage skeletons -- signatures and the compile-time interface
-// assertion are in place; method bodies land in the Implementation phase.
+// ErrMilepebbleDeliversNotSubset is AddMilepebbleDelivers' named, loud
+// rejection (FR3: "a milepebble's delivered scope is a subset of that
+// milestone's own delivered features/FRs") -- returned instead of a
+// silent skip whenever the caller names an entity that is not already a
+// Relation=MilestoneRelationDelivers association of the milepebble's
+// parent milestone.
+var ErrMilepebbleDeliversNotSubset = errors.New("krill/store: entity is not in the parent milestone's delivers set")
+
+// errNotAMilepebble/errNotAMilestone report a milestone_ref row of the
+// wrong Kind for the operation attempted -- CreateMilepebble's parent must
+// be MilestoneKindMilestone (never another milepebble, FR3's "exactly one
+// milestone"), while AddMilepebbleDelivers/AddDiscoveredScope's target
+// must be MilestoneKindMilepebble.
+func errNotAMilepebble(id uuid.UUID) error {
+	return fmt.Errorf("%w: milestone_ref id %s is not a milepebble", ErrNotFound, id)
+}
+
+func errNotAMilestone(id uuid.UUID) error {
+	return fmt.Errorf("%w: milestone_ref id %s is not a milestone (a milepebble's parent must be a milestone, never another milepebble)", ErrNotFound, id)
+}
 
 func (s milestoneAuthoringStore) CreateMilepebble(ctx context.Context, scopeID, parentMilestoneID uuid.UUID, name, outcome string, acting, onBehalfOf Subject) (MilestoneRef, error) {
-	return MilestoneRef{}, fmt.Errorf("CreateMilepebble: not implemented")
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return MilestoneRef{}, fmt.Errorf("begin tx: %w", err)
+	}
+	defer tx.Rollback(ctx) //nolint:errcheck
+
+	var parentKind string
+	var productID uuid.UUID
+	err = tx.QueryRow(ctx, `
+		SELECT kind, product_id FROM milestone_ref WHERE id = $1 AND scope_id = $2
+	`, parentMilestoneID, scopeID).Scan(&parentKind, &productID)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return MilestoneRef{}, errParentNotFound("milestone_ref", parentMilestoneID)
+	}
+	if err != nil {
+		return MilestoneRef{}, fmt.Errorf("get parent milestone_ref: %w", err)
+	}
+	if MilestoneKind(parentKind) != MilestoneKindMilestone {
+		return MilestoneRef{}, errNotAMilestone(parentMilestoneID)
+	}
+
+	// Siblings are scoped by parent_milestone_id, not product_id -- two
+	// milepebbles cut from different parent milestones under the same
+	// product must not compete for the same position (see this method's
+	// doc comment on MilestoneAuthoringStore).
+	position, err := nextSiblingPositionPlain(ctx, tx, "milestone_ref", "parent_milestone_id", parentMilestoneID, scopeID)
+	if err != nil {
+		return MilestoneRef{}, err
+	}
+
+	ref, err := scanMilestoneRef(tx.QueryRow(ctx, `
+		INSERT INTO milestone_ref (
+			scope_id, product_id, name, kind, outcome, position, parent_milestone_id,
+			created_by_acting_iss, created_by_acting_sub, created_by_acting_kind,
+			created_by_on_behalf_of_iss, created_by_on_behalf_of_sub, created_by_on_behalf_of_kind
+		) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
+		RETURNING `+milestoneRefColumns,
+		scopeID, productID, name, string(MilestoneKindMilepebble), outcome, position, parentMilestoneID,
+		acting.Iss, acting.Sub, string(acting.Kind),
+		onBehalfOf.Iss, onBehalfOf.Sub, string(onBehalfOf.Kind)))
+	if err != nil {
+		return MilestoneRef{}, fmt.Errorf("insert milestone_ref: %w", err)
+	}
+
+	if err := tx.Commit(ctx); err != nil {
+		return MilestoneRef{}, fmt.Errorf("commit: %w", err)
+	}
+	return ref, nil
+}
+
+// getMilepebbleParent looks up milepebbleID's Kind and ParentMilestoneID
+// inside q, returning errNotAMilepebble if the row is missing or is not
+// itself a milepebble -- the shared parentage check AddMilepebbleDelivers
+// and AddDiscoveredScope both need before touching entity_milestone.
+func getMilepebbleParent(ctx context.Context, q txQuerier, scopeID, milepebbleID uuid.UUID) (uuid.UUID, error) {
+	var kind string
+	var parentMilestoneID uuid.NullUUID
+	err := q.QueryRow(ctx, `
+		SELECT kind, parent_milestone_id FROM milestone_ref WHERE id = $1 AND scope_id = $2
+	`, milepebbleID, scopeID).Scan(&kind, &parentMilestoneID)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return uuid.UUID{}, errParentNotFound("milestone_ref", milepebbleID)
+	}
+	if err != nil {
+		return uuid.UUID{}, fmt.Errorf("get milepebble milestone_ref: %w", err)
+	}
+	if MilestoneKind(kind) != MilestoneKindMilepebble || !parentMilestoneID.Valid {
+		return uuid.UUID{}, errNotAMilepebble(milepebbleID)
+	}
+	return parentMilestoneID.UUID, nil
 }
 
 func (s milestoneAuthoringStore) AddMilepebbleDelivers(ctx context.Context, scopeID, milepebbleID, entityID uuid.UUID, acting, onBehalfOf Subject) error {
-	return fmt.Errorf("AddMilepebbleDelivers: not implemented")
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return fmt.Errorf("begin tx: %w", err)
+	}
+	defer tx.Rollback(ctx) //nolint:errcheck
+
+	parentMilestoneID, err := getMilepebbleParent(ctx, tx, scopeID, milepebbleID)
+	if err != nil {
+		return err
+	}
+
+	var inParentDelivers bool
+	if err := tx.QueryRow(ctx, `
+		SELECT EXISTS (
+			SELECT 1 FROM entity_milestone
+			WHERE entity_id = $1 AND milestone_id = $2 AND relation = $3
+		)
+	`, entityID, parentMilestoneID, string(MilestoneRelationDelivers)).Scan(&inParentDelivers); err != nil {
+		return fmt.Errorf("check parent milestone delivers: %w", err)
+	}
+	if !inParentDelivers {
+		return fmt.Errorf("%w: entity %s, milepebble %s, parent milestone %s", ErrMilepebbleDeliversNotSubset, entityID, milepebbleID, parentMilestoneID)
+	}
+
+	if _, err := tx.Exec(ctx, `
+		INSERT INTO entity_milestone (scope_id, entity_id, milestone_id, relation)
+		VALUES ($1, $2, $3, $4)
+		ON CONFLICT (entity_id, milestone_id, relation) DO NOTHING
+	`, scopeID, entityID, milepebbleID, string(MilestoneRelationDelivers)); err != nil {
+		return fmt.Errorf("insert entity_milestone: %w", err)
+	}
+
+	if err := tx.Commit(ctx); err != nil {
+		return fmt.Errorf("commit: %w", err)
+	}
+	return nil
 }
 
 func (s milestoneAuthoringStore) ListMilepebblesByMilestone(ctx context.Context, milestoneID uuid.UUID) ([]MilestoneRef, error) {
-	return nil, fmt.Errorf("ListMilepebblesByMilestone: not implemented")
+	rows, err := s.pool.Query(ctx, `
+		SELECT `+milestoneRefColumns+`
+		FROM milestone_ref
+		WHERE parent_milestone_id = $1
+		ORDER BY position
+	`, milestoneID)
+	if err != nil {
+		return nil, fmt.Errorf("list milepebbles by milestone: %w", err)
+	}
+	defer rows.Close()
+
+	var refs []MilestoneRef
+	for rows.Next() {
+		ref, err := scanMilestoneRef(rows)
+		if err != nil {
+			return nil, fmt.Errorf("scan milestone_ref: %w", err)
+		}
+		refs = append(refs, ref)
+	}
+	return refs, rows.Err()
 }
 
+// addDiscoveredScopeAssociation writes one entity_milestone Delivers row
+// inside tx -- AddDiscoveredScope calls this twice (milepebble, then
+// parent milestone) so the FR3 subset invariant AddMilepebbleDelivers
+// enforces holds again the instant the transaction commits.
+func addDiscoveredScopeAssociation(ctx context.Context, tx pgx.Tx, scopeID, entityID, milestoneID uuid.UUID) error {
+	_, err := tx.Exec(ctx, `
+		INSERT INTO entity_milestone (scope_id, entity_id, milestone_id, relation)
+		VALUES ($1, $2, $3, $4)
+		ON CONFLICT (entity_id, milestone_id, relation) DO NOTHING
+	`, scopeID, entityID, milestoneID, string(MilestoneRelationDelivers))
+	if err != nil {
+		return fmt.Errorf("insert entity_milestone: %w", err)
+	}
+	return nil
+}
+
+// acting/onBehalfOf are accepted for NFR4/LB4 signature symmetry with
+// every other write in this package, but -- like addRelation above --
+// are not persisted: neither `feature`/`requirement` (migration 002) nor
+// `entity_milestone` (migration 004) carries a subject-pair column, and
+// FR3/LB6 forbid adding one (a milepebble is never a new entity kind or a
+// new association mechanism).
 func (s milestoneAuthoringStore) AddDiscoveredScope(ctx context.Context, scopeID, milepebbleID uuid.UUID, input DiscoveredScopeInput, acting, onBehalfOf Subject) (DiscoveredScopeResult, error) {
-	return DiscoveredScopeResult{}, fmt.Errorf("AddDiscoveredScope: not implemented")
+	if (input.FeatureSetID == nil) == (input.FeatureID == nil) {
+		return DiscoveredScopeResult{}, fmt.Errorf("discovered scope: exactly one of feature_set_id or feature_id must be set")
+	}
+	if input.Name == "" {
+		return DiscoveredScopeResult{}, fmt.Errorf("name: required")
+	}
+
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return DiscoveredScopeResult{}, fmt.Errorf("begin tx: %w", err)
+	}
+	defer tx.Rollback(ctx) //nolint:errcheck
+
+	parentMilestoneID, err := getMilepebbleParent(ctx, tx, scopeID, milepebbleID)
+	if err != nil {
+		return DiscoveredScopeResult{}, err
+	}
+
+	var result DiscoveredScopeResult
+	if input.FeatureSetID != nil {
+		feature, err := createFeatureTx(ctx, tx, scopeID, *input.FeatureSetID, input.Name, input.Description)
+		if err != nil {
+			return DiscoveredScopeResult{}, err
+		}
+		result = DiscoveredScopeResult{EntityID: feature.ID, Kind: DiscoveredScopeEntityKindFeature}
+	} else {
+		if input.RequirementKind != RequirementKindFR && input.RequirementKind != RequirementKindNFR {
+			return DiscoveredScopeResult{}, fmt.Errorf("requirement_kind: must be FR or NFR")
+		}
+		requirement, err := createRequirementTx(ctx, tx, scopeID, *input.FeatureID, input.RequirementKind, input.Name, input.Body)
+		if err != nil {
+			return DiscoveredScopeResult{}, err
+		}
+		result = DiscoveredScopeResult{EntityID: requirement.ID, Kind: DiscoveredScopeEntityKindRequirement}
+	}
+
+	// Both associations land in the same transaction as the entity Create
+	// above -- the parent milestone's own authoring rows (outcome,
+	// fr_budget, milestone_deferral) are never touched by any statement
+	// here, so this method cannot regress them even by accident.
+	if err := addDiscoveredScopeAssociation(ctx, tx, scopeID, result.EntityID, milepebbleID); err != nil {
+		return DiscoveredScopeResult{}, err
+	}
+	if err := addDiscoveredScopeAssociation(ctx, tx, scopeID, result.EntityID, parentMilestoneID); err != nil {
+		return DiscoveredScopeResult{}, err
+	}
+
+	if err := tx.Commit(ctx); err != nil {
+		return DiscoveredScopeResult{}, fmt.Errorf("commit: %w", err)
+	}
+	return result, nil
 }

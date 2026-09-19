@@ -43,14 +43,14 @@ func scanRequirement(row pgx.Row) (Requirement, error) {
 	return r, err
 }
 
-func (s requirementStore) Create(ctx context.Context, scopeID, featureID uuid.UUID, kind RequirementKind, name string, body *string) (Requirement, error) {
-	tx, err := s.pool.Begin(ctx)
-	if err != nil {
-		return Requirement{}, fmt.Errorf("begin tx: %w", err)
-	}
-	defer tx.Rollback(ctx)
-
-	exists, err := currentRowExists(ctx, tx, "feature", featureID, scopeID)
+// createRequirementTx is Create's body against any txQuerier -- see
+// createFeatureTx's (feature.go) doc comment for why this split exists:
+// milestone_authoring.go's AddDiscoveredScope (FR4, issue #2684) needs to
+// insert a discovered Requirement inside its own transaction, alongside
+// the milepebble/parent-milestone associations it must commit atomically
+// with.
+func createRequirementTx(ctx context.Context, q txQuerier, scopeID, featureID uuid.UUID, kind RequirementKind, name string, body *string) (Requirement, error) {
+	exists, err := currentRowExists(ctx, q, "feature", featureID, scopeID)
 	if err != nil {
 		return Requirement{}, err
 	}
@@ -58,18 +58,32 @@ func (s requirementStore) Create(ctx context.Context, scopeID, featureID uuid.UU
 		return Requirement{}, errParentNotFound("feature", featureID)
 	}
 
-	position, err := nextSiblingPosition(ctx, tx, "requirement", "feature_id", featureID, scopeID)
+	position, err := nextSiblingPosition(ctx, q, "requirement", "feature_id", featureID, scopeID)
 	if err != nil {
 		return Requirement{}, err
 	}
 
-	requirement, err := scanRequirement(tx.QueryRow(ctx, `
+	requirement, err := scanRequirement(q.QueryRow(ctx, `
 		INSERT INTO requirement (scope_id, feature_id, kind, name, body, position)
 		VALUES ($1, $2, $3, $4, $5, $6)
 		RETURNING `+requirementColumns,
 		scopeID, featureID, string(kind), name, body, position))
 	if err != nil {
 		return Requirement{}, fmt.Errorf("insert requirement: %w", err)
+	}
+	return requirement, nil
+}
+
+func (s requirementStore) Create(ctx context.Context, scopeID, featureID uuid.UUID, kind RequirementKind, name string, body *string) (Requirement, error) {
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return Requirement{}, fmt.Errorf("begin tx: %w", err)
+	}
+	defer tx.Rollback(ctx)
+
+	requirement, err := createRequirementTx(ctx, tx, scopeID, featureID, kind, name, body)
+	if err != nil {
+		return Requirement{}, err
 	}
 
 	if err := tx.Commit(ctx); err != nil {

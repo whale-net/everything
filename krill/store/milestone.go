@@ -128,10 +128,22 @@ func (s milestoneStore) GetOrCreateRef(ctx context.Context, scopeID, productID u
 		return MilestoneRef{}, errParentNotFound("product", productID)
 	}
 
+	// GetOrCreateRef only ever creates/resolves a MilestoneKindMilestone
+	// row (kind defaults to 'milestone', parent_milestone_id stays NULL --
+	// the importer has no notion of milepebbles). Both the ON CONFLICT
+	// inference and the fallback SELECT below are scoped to
+	// `parent_milestone_id IS NULL` -- migration 011 (issue #2684) widened
+	// milestone_ref_scope_product_name_idx into a partial index over
+	// exactly that predicate (a milepebble may share a name with a
+	// milestone under the same product, since its own uniqueness is
+	// scoped per-parent instead), so a plain `ON CONFLICT (scope_id,
+	// product_id, name)` no longer matches any index and the WHERE clause
+	// on the SELECT is what keeps this method from ever resolving onto a
+	// same-named milepebble row.
 	ref, err := scanMilestoneRef(tx.QueryRow(ctx, `
 		INSERT INTO milestone_ref (scope_id, product_id, name)
 		VALUES ($1, $2, $3)
-		ON CONFLICT (scope_id, product_id, name) DO NOTHING
+		ON CONFLICT (scope_id, product_id, name) WHERE parent_milestone_id IS NULL DO NOTHING
 		RETURNING `+milestoneRefColumns,
 		scopeID, productID, name))
 	if errors.Is(err, pgx.ErrNoRows) {
@@ -141,7 +153,7 @@ func (s milestoneStore) GetOrCreateRef(ctx context.Context, scopeID, productID u
 		ref, err = scanMilestoneRef(tx.QueryRow(ctx, `
 			SELECT `+milestoneRefColumns+`
 			FROM milestone_ref
-			WHERE scope_id = $1 AND product_id = $2 AND name = $3
+			WHERE scope_id = $1 AND product_id = $2 AND name = $3 AND parent_milestone_id IS NULL
 		`, scopeID, productID, name))
 	}
 	if err != nil {

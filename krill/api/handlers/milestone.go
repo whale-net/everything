@@ -305,18 +305,98 @@ func AddDeferralHandler(milestones store.MilestoneAuthoringStore) http.HandlerFu
 	}
 }
 
-// Milepebble handlers below (migration 011, issue #2684, FR3/FR4) are
-// scaffold-stage skeletons -- routes.go wiring and request/response
-// bodies land in the Implementation phase, matching
-// krill/store/milestone_authoring.go's own skeleton methods each of these
-// will call.
+// Milepebble handlers below (migration 011, issue #2684, FR3/FR4) wrap
+// the equally-named store.MilestoneAuthoringStore methods -- see that
+// file's doc comments for the FR3 subset rule and FR4 atomicity this
+// layer relies on but does not itself enforce.
+
+// createMilepebbleRequest is CreateMilepebbleHandler's request body (FR3).
+type createMilepebbleRequest struct {
+	Name    string `json:"name"`
+	Outcome string `json:"outcome"`
+}
+
+// addMilepebbleDeliversRequest is AddMilepebbleDeliversHandler's request
+// body (FR3).
+type addMilepebbleDeliversRequest struct {
+	EntityID string `json:"entity_id"`
+}
+
+// addDiscoveredScopeRequest is AddDiscoveredScopeHandler's request body
+// (FR4). Exactly one of FeatureSetID (creating a Feature) or FeatureID
+// (creating a Requirement) must be set, mirroring
+// store.DiscoveredScopeInput's own shape.
+type addDiscoveredScopeRequest struct {
+	FeatureSetID    *string `json:"feature_set_id"`
+	FeatureID       *string `json:"feature_id"`
+	RequirementKind string  `json:"requirement_kind"`
+	Name            string  `json:"name"`
+	Description     *string `json:"description"`
+	Body            *string `json:"body"`
+}
+
+// DiscoveredScopeResponse is AddDiscoveredScopeHandler's response body --
+// the newly created entity's id and which table it landed in ("feature"
+// or "requirement").
+type DiscoveredScopeResponse struct {
+	EntityID string `json:"entity_id"`
+	Kind     string `json:"kind"`
+}
+
+// MilepebbleSummary is one entry of ListMilepebblesResponse.Milepebbles.
+type MilepebbleSummary struct {
+	ID      string  `json:"id"`
+	Name    string  `json:"name"`
+	Outcome *string `json:"outcome"`
+}
+
+// ListMilepebblesResponse is ListMilepebblesHandler's response body.
+type ListMilepebblesResponse struct {
+	Milepebbles []MilepebbleSummary `json:"milepebbles"`
+}
 
 // CreateMilepebbleHandler returns the milepebble-create endpoint (FR3):
 // POST /milestones/{id}/milepebbles. Must be mounted behind
 // RequireSession.
 func CreateMilepebbleHandler(milestones store.MilestoneAuthoringStore) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		writeJSONError(w, http.StatusNotImplemented, "not implemented")
+		if r.Method != http.MethodPost {
+			writeJSONError(w, http.StatusMethodNotAllowed, "method not allowed")
+			return
+		}
+
+		sess, ok := requireSessionOrInternalError(w, r)
+		if !ok {
+			return
+		}
+
+		parentMilestoneID, err := uuid.Parse(r.PathValue("id"))
+		if err != nil {
+			writeJSONError(w, http.StatusBadRequest, "invalid id: must be a UUID")
+			return
+		}
+
+		var req createMilepebbleRequest
+		if err := decodeStrict(r, &req); err != nil {
+			writeJSONError(w, http.StatusBadRequest, fmt.Sprintf("invalid request body: %v", err))
+			return
+		}
+		if err := RequireNonEmpty("name", req.Name); err != nil {
+			writeJSONError(w, http.StatusBadRequest, err.Error())
+			return
+		}
+		if err := RequireNonEmpty("outcome", req.Outcome); err != nil {
+			writeJSONError(w, http.StatusBadRequest, err.Error())
+			return
+		}
+
+		milepebble, err := milestones.CreateMilepebble(r.Context(), sess.ScopeID, parentMilestoneID, req.Name, req.Outcome, sess.Acting, sess.OnBehalfOf)
+		if err != nil {
+			writeStoreError(w, err)
+			return
+		}
+
+		writeJSON(w, http.StatusCreated, IDResponse{ID: milepebble.ID.String()})
 	}
 }
 
@@ -325,7 +405,44 @@ func CreateMilepebbleHandler(milestones store.MilestoneAuthoringStore) http.Hand
 // RequireSession.
 func AddMilepebbleDeliversHandler(milestones store.MilestoneAuthoringStore) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		writeJSONError(w, http.StatusNotImplemented, "not implemented")
+		if r.Method != http.MethodPost {
+			writeJSONError(w, http.StatusMethodNotAllowed, "method not allowed")
+			return
+		}
+
+		sess, ok := requireSessionOrInternalError(w, r)
+		if !ok {
+			return
+		}
+
+		milepebbleID, err := uuid.Parse(r.PathValue("id"))
+		if err != nil {
+			writeJSONError(w, http.StatusBadRequest, "invalid id: must be a UUID")
+			return
+		}
+
+		var req addMilepebbleDeliversRequest
+		if err := decodeStrict(r, &req); err != nil {
+			writeJSONError(w, http.StatusBadRequest, fmt.Sprintf("invalid request body: %v", err))
+			return
+		}
+
+		entityID, err := ParseUUIDField("entity_id", req.EntityID)
+		if err != nil {
+			writeJSONError(w, http.StatusBadRequest, err.Error())
+			return
+		}
+
+		if err := milestones.AddMilepebbleDelivers(r.Context(), sess.ScopeID, milepebbleID, entityID, sess.Acting, sess.OnBehalfOf); err != nil {
+			if errors.Is(err, store.ErrMilepebbleDeliversNotSubset) {
+				writeJSONError(w, http.StatusConflict, err.Error())
+				return
+			}
+			writeStoreError(w, err)
+			return
+		}
+
+		writeJSON(w, http.StatusOK, IDResponse{ID: milepebbleID.String()})
 	}
 }
 
@@ -334,17 +451,78 @@ func AddMilepebbleDeliversHandler(milestones store.MilestoneAuthoringStore) http
 // mounted behind RequireSession.
 func AddDiscoveredScopeHandler(milestones store.MilestoneAuthoringStore) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		writeJSONError(w, http.StatusNotImplemented, "not implemented")
+		if r.Method != http.MethodPost {
+			writeJSONError(w, http.StatusMethodNotAllowed, "method not allowed")
+			return
+		}
+
+		sess, ok := requireSessionOrInternalError(w, r)
+		if !ok {
+			return
+		}
+
+		milepebbleID, err := uuid.Parse(r.PathValue("id"))
+		if err != nil {
+			writeJSONError(w, http.StatusBadRequest, "invalid id: must be a UUID")
+			return
+		}
+
+		var req addDiscoveredScopeRequest
+		if err := decodeStrict(r, &req); err != nil {
+			writeJSONError(w, http.StatusBadRequest, fmt.Sprintf("invalid request body: %v", err))
+			return
+		}
+		if err := RequireNonEmpty("name", req.Name); err != nil {
+			writeJSONError(w, http.StatusBadRequest, err.Error())
+			return
+		}
+		if (req.FeatureSetID == nil) == (req.FeatureID == nil) {
+			writeJSONError(w, http.StatusBadRequest, "exactly one of feature_set_id or feature_id must be set")
+			return
+		}
+
+		input := store.DiscoveredScopeInput{
+			Name:        req.Name,
+			Description: req.Description,
+			Body:        req.Body,
+		}
+		if req.FeatureSetID != nil {
+			featureSetID, err := ParseUUIDField("feature_set_id", *req.FeatureSetID)
+			if err != nil {
+				writeJSONError(w, http.StatusBadRequest, err.Error())
+				return
+			}
+			input.FeatureSetID = &featureSetID
+		}
+		if req.FeatureID != nil {
+			featureID, err := ParseUUIDField("feature_id", *req.FeatureID)
+			if err != nil {
+				writeJSONError(w, http.StatusBadRequest, err.Error())
+				return
+			}
+			input.FeatureID = &featureID
+			input.RequirementKind = store.RequirementKind(req.RequirementKind)
+		}
+
+		result, err := milestones.AddDiscoveredScope(r.Context(), sess.ScopeID, milepebbleID, input, sess.Acting, sess.OnBehalfOf)
+		if err != nil {
+			writeStoreError(w, err)
+			return
+		}
+
+		writeJSON(w, http.StatusCreated, DiscoveredScopeResponse{EntityID: result.EntityID.String(), Kind: string(result.Kind)})
 	}
 }
 
 // GetMilepebbleHandler returns the milepebble read endpoint: GET
 // /milepebbles/{id}, ungated like every other read endpoint in this
-// package.
+// package. A milepebble is a `milestone_ref` row like any other (FR3), so
+// this reuses store.MilestoneAuthoringStore.GetMilestone and
+// NewMilestoneResponse exactly as GetMilestoneHandler does (LB7) -- a
+// milepebble simply has no Must-not-foreclose associations or deferrals
+// of its own, so those lists come back empty.
 func GetMilepebbleHandler(milestones store.MilestoneAuthoringStore) http.HandlerFunc {
-	return func(w http.ResponseWriter, r *http.Request) {
-		writeJSONError(w, http.StatusNotImplemented, "not implemented")
-	}
+	return GetMilestoneHandler(milestones)
 }
 
 // ListMilepebblesHandler returns the milepebble list endpoint: GET
@@ -352,7 +530,24 @@ func GetMilepebbleHandler(milestones store.MilestoneAuthoringStore) http.Handler
 // this package.
 func ListMilepebblesHandler(milestones store.MilestoneAuthoringStore) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		writeJSONError(w, http.StatusNotImplemented, "not implemented")
+		milestoneID, err := uuid.Parse(r.PathValue("id"))
+		if err != nil {
+			writeJSONError(w, http.StatusBadRequest, "invalid id: must be a UUID")
+			return
+		}
+
+		milepebbles, err := milestones.ListMilepebblesByMilestone(r.Context(), milestoneID)
+		if err != nil {
+			writeJSONError(w, http.StatusInternalServerError, "internal error")
+			return
+		}
+
+		summaries := make([]MilepebbleSummary, len(milepebbles))
+		for i, m := range milepebbles {
+			summaries[i] = MilepebbleSummary{ID: m.ID.String(), Name: m.Name, Outcome: m.Outcome}
+		}
+
+		writeJSON(w, http.StatusOK, ListMilepebblesResponse{Milepebbles: summaries})
 	}
 }
 
