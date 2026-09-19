@@ -132,9 +132,10 @@ func run() error {
 	// register it on the same *mcp.Server that backs it. tools.RegisterAll
 	// (FR5-FR8, read-only) is unchanged; tools.RegisterDesignAll (issue
 	// #2547) and tools.RegisterMilestoneAll (milestone authoring, issue
-	// #2683) both mount on designReg -- create_milestone/set_fr_budget
-	// need the same krill-session-derived LB4 subject pair every write
-	// tool on that mount already resolves.
+	// #2683) both mount on designReg -- create_milestone/set_fr_budget/
+	// add_delivers/add_must_not_foreclose/add_deferral all need the same
+	// krill-session-derived LB4 subject pair every write tool on that
+	// mount already resolves.
 	specSrv := server.New()
 	specReg := server.NewRegistry(specSrv)
 	tools.RegisterAll(specReg, querier)

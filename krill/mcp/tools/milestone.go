@@ -1,7 +1,8 @@
 // This file (issue #2683, FR1/FR2, C13) is krill's milestone authoring MCP
-// tool group: three thin wrappers over store.MilestoneAuthoringStore --
-// create_milestone and set_fr_budget (write, Requirement Contributor and
-// Agent personas) and get_milestone (read) -- mirroring
+// tool group: thin wrappers over store.MilestoneAuthoringStore --
+// create_milestone, set_fr_budget, add_delivers, add_must_not_foreclose,
+// and add_deferral (write, Requirement Contributor and Agent personas)
+// and get_milestone (read) -- mirroring
 // krill/api/handlers/milestone.go's HTTP surface for the same capability,
 // via the same handlers.IDResponse/handlers.NewMilestoneResponse this
 // package's other write/read tools reuse (LB7). Registered from
@@ -99,6 +100,121 @@ func RegisterSetFRBudget(reg *server.Registry, sessions store.SessionStore, mile
 	})
 }
 
+// addDeliversInput is add_delivers's argument schema (LB6).
+type addDeliversInput struct {
+	krillSessionInput
+	MilestoneID string `json:"milestone_id" jsonschema:"The milestone surrogate id, as a UUID string."`
+	EntityID    string `json:"entity_id" jsonschema:"The delivered entity's surrogate id (feature or FR), as a UUID string."`
+}
+
+// RegisterAddDelivers registers add_delivers (LB6): attaches a
+// Delivers association between a milestone and a feature/FR via
+// store.MilestoneAuthoringStore.AddDelivers.
+func RegisterAddDelivers(reg *server.Registry, sessions store.SessionStore, milestones store.MilestoneAuthoringStore) {
+	server.RegisterWrite(reg, &mcp.Tool{
+		Name:        "add_delivers",
+		Description: "Record that a milestone delivers a given feature or FR (LB6).",
+	}, []server.Persona{server.PersonaRequirementContributor, server.PersonaAgent}, func(ctx context.Context, _ *mcp.CallToolRequest, in addDeliversInput) (*mcp.CallToolResult, handlers.IDResponse, error) {
+		var zero handlers.IDResponse
+
+		sess, err := requireKrillSession(ctx, sessions, in.KrillSessionID)
+		if err != nil {
+			return nil, zero, err
+		}
+
+		milestoneID, err := uuid.Parse(in.MilestoneID)
+		if err != nil {
+			return nil, zero, fmt.Errorf("milestone_id: invalid or missing UUID")
+		}
+		entityID, err := uuid.Parse(in.EntityID)
+		if err != nil {
+			return nil, zero, fmt.Errorf("entity_id: invalid or missing UUID")
+		}
+
+		if err := milestones.AddDelivers(ctx, sess.ScopeID, milestoneID, entityID, sess.Acting, sess.OnBehalfOf); err != nil {
+			return nil, zero, err
+		}
+		return nil, handlers.IDResponse{ID: milestoneID.String()}, nil
+	})
+}
+
+// addMustNotForecloseInput is add_must_not_foreclose's argument schema (LB6).
+type addMustNotForecloseInput struct {
+	krillSessionInput
+	MilestoneID string `json:"milestone_id" jsonschema:"The milestone surrogate id, as a UUID string."`
+	EntityID    string `json:"entity_id" jsonschema:"The entity's surrogate id this milestone must not foreclose, as a UUID string."`
+}
+
+// RegisterAddMustNotForeclose registers add_must_not_foreclose (LB6):
+// attaches a Must-not-foreclose association via
+// store.MilestoneAuthoringStore.AddMustNotForeclose.
+func RegisterAddMustNotForeclose(reg *server.Registry, sessions store.SessionStore, milestones store.MilestoneAuthoringStore) {
+	server.RegisterWrite(reg, &mcp.Tool{
+		Name:        "add_must_not_foreclose",
+		Description: "Record a decision or entity a milestone must not foreclose (LB6).",
+	}, []server.Persona{server.PersonaRequirementContributor, server.PersonaAgent}, func(ctx context.Context, _ *mcp.CallToolRequest, in addMustNotForecloseInput) (*mcp.CallToolResult, handlers.IDResponse, error) {
+		var zero handlers.IDResponse
+
+		sess, err := requireKrillSession(ctx, sessions, in.KrillSessionID)
+		if err != nil {
+			return nil, zero, err
+		}
+
+		milestoneID, err := uuid.Parse(in.MilestoneID)
+		if err != nil {
+			return nil, zero, fmt.Errorf("milestone_id: invalid or missing UUID")
+		}
+		entityID, err := uuid.Parse(in.EntityID)
+		if err != nil {
+			return nil, zero, fmt.Errorf("entity_id: invalid or missing UUID")
+		}
+
+		if err := milestones.AddMustNotForeclose(ctx, sess.ScopeID, milestoneID, entityID, sess.Acting, sess.OnBehalfOf); err != nil {
+			return nil, zero, err
+		}
+		return nil, handlers.IDResponse{ID: milestoneID.String()}, nil
+	})
+}
+
+// addDeferralInput is add_deferral's argument schema (FR1). Destination
+// must be non-empty -- every deferred entry cites where it went.
+type addDeferralInput struct {
+	krillSessionInput
+	MilestoneID string `json:"milestone_id" jsonschema:"The milestone surrogate id, as a UUID string."`
+	Body        string `json:"body" jsonschema:"What was deferred."`
+	Destination string `json:"destination" jsonschema:"Where the deferred item went, e.g. a future milestone or issue -- required for every deferral."`
+}
+
+// RegisterAddDeferral registers add_deferral (FR1): records a deferral
+// via store.MilestoneAuthoringStore.AddDeferral.
+func RegisterAddDeferral(reg *server.Registry, sessions store.SessionStore, milestones store.MilestoneAuthoringStore) {
+	server.RegisterWrite(reg, &mcp.Tool{
+		Name:        "add_deferral",
+		Description: "Record a deferred item and the destination it was pushed to (FR1).",
+	}, []server.Persona{server.PersonaRequirementContributor, server.PersonaAgent}, func(ctx context.Context, _ *mcp.CallToolRequest, in addDeferralInput) (*mcp.CallToolResult, handlers.IDResponse, error) {
+		var zero handlers.IDResponse
+
+		sess, err := requireKrillSession(ctx, sessions, in.KrillSessionID)
+		if err != nil {
+			return nil, zero, err
+		}
+
+		milestoneID, err := uuid.Parse(in.MilestoneID)
+		if err != nil {
+			return nil, zero, fmt.Errorf("milestone_id: invalid or missing UUID")
+		}
+		if in.Destination == "" {
+			return nil, zero, fmt.Errorf("destination: required")
+		}
+
+		deferral, err := milestones.AddDeferral(ctx, sess.ScopeID, milestoneID, in.Body, in.Destination, sess.Acting, sess.OnBehalfOf)
+		if err != nil {
+			return nil, zero, err
+		}
+		return nil, handlers.IDResponse{ID: deferral.ID.String()}, nil
+	})
+}
+
 // milestoneIDInput is get_milestone's argument schema: a single
 // MilestoneRef surrogate id.
 type milestoneIDInput struct {
@@ -130,15 +246,18 @@ func RegisterGetMilestone(reg *server.Registry, milestones store.MilestoneAuthor
 }
 
 // RegisterMilestoneAll registers every milestone-authoring tool this
-// milestone exposes against reg -- create_milestone/set_fr_budget
-// (write) and get_milestone (read). The caller (../main.go) mounts reg at
-// the design mount (server.designMountPath via designReg), never the
-// read-only spec mount: create_milestone/set_fr_budget need a resolved
-// krill session for their LB4 subject pair, the same shape every other
-// write tool on that mount already requires (see this file's package doc
-// comment).
+// milestone exposes against reg -- create_milestone/set_fr_budget/
+// add_delivers/add_must_not_foreclose/add_deferral (write) and
+// get_milestone (read). The caller (../main.go) mounts reg at the design
+// mount (server.designMountPath via designReg), never the read-only spec
+// mount: every write tool here needs a resolved krill session for its
+// LB4 subject pair, the same shape every other write tool on that mount
+// already requires (see this file's package doc comment).
 func RegisterMilestoneAll(reg *server.Registry, sessions store.SessionStore, milestones store.MilestoneAuthoringStore) {
 	RegisterCreateMilestone(reg, sessions, milestones)
 	RegisterSetFRBudget(reg, sessions, milestones)
+	RegisterAddDelivers(reg, sessions, milestones)
+	RegisterAddMustNotForeclose(reg, sessions, milestones)
+	RegisterAddDeferral(reg, sessions, milestones)
 	RegisterGetMilestone(reg, milestones)
 }
