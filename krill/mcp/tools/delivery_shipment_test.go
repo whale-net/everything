@@ -8,7 +8,8 @@
 // and the slice-level typed-entity resolution in
 // //krill/slice:delivery_breakdown_integration_test; this file is
 // specifically about the RegisterDeliveryShipmentAll wrapper layer, never
-// the HTTP handlers (krill/api/handlers has its own coverage).
+// the HTTP handlers (krill/api/handlers/delivery_shipment_test.go has its
+// own fake-store-backed coverage).
 //
 // Mirrors milestone_status_test.go's seeding/HTTP/auth plumbing
 // (duplicated here, not shared, since this file compiles into its own

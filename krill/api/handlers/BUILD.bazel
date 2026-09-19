@@ -88,8 +88,10 @@ go_test(
     srcs = [
         "amend_test.go",
         "decision_test.go",
+        "delivery_shipment_test.go",
         "design_session_test.go",
         "entity_test_helpers_test.go",
+        "fake_delivery_shipment_store_test.go",
         "fake_design_session_store_test.go",
         "fake_entity_store_test.go",
         "fake_mediated_store_test.go",
