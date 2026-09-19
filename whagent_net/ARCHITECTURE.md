@@ -329,9 +329,16 @@ CallTool` invocation against any configured server, and never mints a
 credential beyond what resolving the candidate pool itself requires. The
 match runs against the same allowed-tools-narrowed candidate pool
 `ListToolDefinitions` builds `Tools` from (`tools.Candidates`, factored out
-of `listdefs.go`) via case-insensitive substring matching on name or
-description (`tools.Match` — no embeddings, no ranking, out of scope for
-M4). `processTurn`'s tool-dispatch loop (`workflow.go`) recognizes the call
+of `listdefs.go`) via case-insensitive keyword matching on name or
+description: the query is split on whitespace, words shorter than 3
+characters are dropped (a bare "a"/"to" substring-matches nearly everything,
+which is as useless as matching nothing), and a candidate matches if any
+remaining word is a substring of its name or description (`tools.Match` —
+no embeddings, no ranking, out of scope for M4). Matching the query as one
+whole-string substring, rather than per word, was tried first and matched
+almost nothing in practice — a natural-language query essentially never
+appears verbatim inside a short tool name or description.
+`processTurn`'s tool-dispatch loop (`workflow.go`) recognizes the call
 by name and search-mode status and routes it to `ActivitySearchTools`
 instead of `ActivityDispatchTool`; a `search_tools` call arriving in a
 bulk-mode session is not special-cased and falls through to the ordinary

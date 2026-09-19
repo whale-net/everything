@@ -54,10 +54,23 @@ func SearchToolsDefinition() llm.ToolDefinition {
 	return searchToolsDefinition
 }
 
+// minMatchWordLen is the shortest query word Match will search on. FR4's
+// "substring/keyword matching" (root plan #2602) is whitespace-split
+// keyword matching, not whole-query-string containment: a natural-language
+// query (the query argument's own documented shape, searchToolsDefinition
+// above) essentially never appears verbatim inside a short tool name or
+// description, so matching the query as one literal substring made the
+// search meta-tool match nothing for almost every real query. Words shorter
+// than this are dropped before matching -- a 1-2 character word ("a", "to",
+// "of") is a substring of enough unrelated candidate text to make every
+// search match everything, which is exactly as useless as matching nothing.
+const minMatchWordLen = 3
+
 // Match returns the names of every candidate whose name or description
-// contains query as a case-insensitive substring (FR4). This is the
-// entire matching algorithm: no embeddings, no tokenization, no ranking
-// -- the root plan's (#2602) explicit out-of-scope boundary for M4.
+// contains, as a case-insensitive substring, at least one word (see
+// minMatchWordLen) from query (FR4). This is the entire matching algorithm:
+// no embeddings, no ranking -- the root plan's (#2602) explicit
+// out-of-scope boundary for M4.
 //
 // Result order follows candidates' own order (which is tool_set order,
 // post-allowed_tools, per candidateDefinitions in listdefs.go), so a
@@ -67,19 +80,30 @@ func SearchToolsDefinition() llm.ToolDefinition {
 //
 // An empty or whitespace-only query returns no matches, never every
 // candidate -- a blank query is a caller error, not "match everything."
-// A query that matches nothing returns an empty (non-nil) slice, never
-// an error.
+// A query that matches nothing (including one whose every word is shorter
+// than minMatchWordLen) returns an empty (non-nil) slice, never an error.
 func Match(candidates []llm.ToolDefinition, query string) []string {
 	q := strings.ToLower(strings.TrimSpace(query))
 	if q == "" {
 		return []string{}
 	}
 
+	words := make([]string, 0, len(strings.Fields(q)))
+	for _, w := range strings.Fields(q) {
+		if len(w) >= minMatchWordLen {
+			words = append(words, w)
+		}
+	}
+
 	matched := make([]string, 0, len(candidates))
 	for _, c := range candidates {
-		if strings.Contains(strings.ToLower(c.Name), q) ||
-			strings.Contains(strings.ToLower(c.Description), q) {
-			matched = append(matched, c.Name)
+		name := strings.ToLower(c.Name)
+		desc := strings.ToLower(c.Description)
+		for _, w := range words {
+			if strings.Contains(name, w) || strings.Contains(desc, w) {
+				matched = append(matched, c.Name)
+				break
+			}
 		}
 	}
 	return matched
