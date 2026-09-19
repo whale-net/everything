@@ -77,6 +77,8 @@ func isUniqueViolation(err error) bool {
 //   - store.ErrInvalidLaneSequence / store.ErrStartingLaneNotInSequence /
 //     store.ErrMilestoneHasMilepebbleCut (CreateTask's own named FR1
 //     rejections, task.go)                                            -> 400
+//   - store.ErrSelfDependency / store.ErrDependencyCycle
+//     (DeclareDependency's own named FR2 rejections, task_dependency.go) -> 400
 //   - a scope-qualified unique-constraint violation                   -> 409
 //   - anything else (a genuine store failure)                         -> 500
 //
@@ -87,7 +89,9 @@ func writeStoreError(w http.ResponseWriter, err error) {
 	case errors.Is(err, store.ErrNotFound),
 		errors.Is(err, store.ErrInvalidLaneSequence),
 		errors.Is(err, store.ErrStartingLaneNotInSequence),
-		errors.Is(err, store.ErrMilestoneHasMilepebbleCut):
+		errors.Is(err, store.ErrMilestoneHasMilepebbleCut),
+		errors.Is(err, store.ErrSelfDependency),
+		errors.Is(err, store.ErrDependencyCycle):
 		writeJSONError(w, http.StatusBadRequest, err.Error())
 	case isUniqueViolation(err):
 		writeJSONError(w, http.StatusConflict, "an entity with this name already exists in this scope")

@@ -113,6 +113,12 @@ func setupRoutes(mux *http.ServeMux, pool *pgxpool.Pool, githubToken string) {
 	// milepebble cut.
 	mux.Handle("POST /tasks", gate(handlers.CreateTaskHandler(entities.Tasks())))
 
+	// task_dependency (issue #2720, FR2): a Swarm Operator declares that
+	// one task depends on one or more others -- POST gated (NFR6), GET
+	// ungated like every other read endpoint in this package.
+	mux.Handle("POST /tasks/{id}/dependencies", gate(handlers.DeclareTaskDependenciesHandler(entities.Tasks())))
+	mux.HandleFunc("GET /tasks/{id}/dependencies", handlers.ListTaskDependenciesHandler(entities.Tasks()))
+
 	mux.Handle("POST /design-sessions", gate(handlers.OpenDesignSessionHandler(entities.DesignSessions())))
 	mux.HandleFunc("GET /design-sessions/{id}", handlers.GetDesignSessionHandler(entities.DesignSessions(), entities.RevisionEvents()))
 	mux.Handle("POST /design-sessions/{id}/revision-events", gate(handlers.AppendRevisionEventHandler(entities.RevisionEvents())))

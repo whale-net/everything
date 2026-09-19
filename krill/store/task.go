@@ -162,6 +162,43 @@ type TaskStore interface {
 	// duplicates, and that params.StartingLane is a member of it -- never
 	// derived from a branch name or other external reference (NFR5).
 	CreateTask(ctx context.Context, params CreateTaskParams) (Task, error)
+
+	// DeclareDependency records that params.TaskID depends on each id in
+	// params.DependsOnTaskIDs, one append-only `task_dependency` row per
+	// edge, all in one transaction (task_dependency.go, issue #2720,
+	// FR2). Rejects (never silently skips) a TaskID or DependsOnTaskIDs
+	// entry that names no `task` row in params.ScopeID (NFR1), a
+	// self-edge (ErrSelfDependency), and a dependency cycle
+	// (ErrDependencyCycle). Re-declaring an existing edge is idempotent --
+	// absorbed by the unique index, not an error.
+	DeclareDependency(ctx context.Context, params DeclareDependencyParams) error
+
+	// ListDependencies returns taskID's declared dependencies, in
+	// declaration order (task_dependency.go, issue #2720, FR2) -- the
+	// ordered list the claim payload (#2721) carries.
+	ListDependencies(ctx context.Context, scopeID, taskID uuid.UUID) ([]TaskDependency, error)
+
+	// UnsatisfiedDependencies is FR3's claimability predicate
+	// (task_dependency.go, issue #2720): every dependency of taskID whose
+	// own task has not reached its own terminal `Done` lane
+	// (task.current_lane), evaluated in one scope-qualified SQL query
+	// over the task_dependency/task join, never a per-dependency round
+	// trip. A lane sequence that never contains `Done` is rejected at
+	// CreateTask (above), so this predicate is always decidable.
+	UnsatisfiedDependencies(ctx context.Context, scopeID, taskID uuid.UUID) ([]uuid.UUID, error)
+
+	// GetTaskByID returns the Task row for id. Task ids are globally
+	// unique surrogates (like every other entity id in this package), so
+	// this takes no scope argument -- mirrors ProductStore.GetCurrentByID
+	// and MilestoneStatusEventStore.CurrentStatus's own id-only read
+	// shape. The one caller today is the ungated
+	// ListTaskDependenciesHandler (task_dependency.go, issue #2720),
+	// resolving a task's own ScopeID to scope-qualify ListDependencies/
+	// UnsatisfiedDependencies when mounted with no session to source a
+	// scope from -- the same "resolve scope from the entity itself"
+	// posture GetProductDeliveryHandler already established
+	// (milestone.go's own doc comment).
+	GetTaskByID(ctx context.Context, id uuid.UUID) (Task, error)
 }
 
 // ErrMilestoneHasMilepebbleCut is CreateTask's named, loud rejection
@@ -295,6 +332,21 @@ func (s taskStore) CreateTask(ctx context.Context, params CreateTaskParams) (Tas
 
 	if err := tx.Commit(ctx); err != nil {
 		return Task{}, fmt.Errorf("commit: %w", err)
+	}
+	return task, nil
+}
+
+func (s taskStore) GetTaskByID(ctx context.Context, id uuid.UUID) (Task, error) {
+	task, err := scanTask(s.pool.QueryRow(ctx, `
+		SELECT `+taskColumns+`
+		FROM task
+		WHERE id = $1
+	`, id))
+	if errors.Is(err, pgx.ErrNoRows) {
+		return Task{}, errParentNotFound("task", id)
+	}
+	if err != nil {
+		return Task{}, fmt.Errorf("get task: %w", err)
 	}
 	return task, nil
 }

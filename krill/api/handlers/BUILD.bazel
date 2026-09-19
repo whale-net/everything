@@ -31,7 +31,9 @@ not. recut.go (issue #2687, FR5) is the delivery-axis re-cut surface:
 POST /delivery/move is gated, GET /products/{id}/backlog is not.
 task.go (issue #2719, FR1) is the work-axis task-create surface: POST
 /tasks is gated behind RequireSession, mirroring every other write
-endpoint above."""
+endpoint above. task_dependency.go (issue #2720, FR2) is the work-axis
+dependency-declaration surface: POST /tasks/{id}/dependencies is gated,
+GET /tasks/{id}/dependencies is not."""
 
 load("@rules_go//go:def.bzl", "go_library", "go_test")
 
@@ -60,6 +62,7 @@ go_library(
         "session_slice.go",
         "slice.go",
         "task.go",
+        "task_dependency.go",
         "types.go",
     ],
     importpath = "github.com/whale-net/everything/krill/api/handlers",
