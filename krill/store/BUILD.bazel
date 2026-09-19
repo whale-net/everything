@@ -28,6 +28,7 @@ go_library(
         "mediated.go",
         "milestone.go",
         "milestone_authoring.go",
+        "milestone_status.go",
         "models.go",
         "nongoal.go",
         "open_questions.go",

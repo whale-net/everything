@@ -287,6 +287,53 @@ type EntityMilestone struct {
 	CreatedAt   time.Time
 }
 
+// MilestoneStatus discriminates `milestone_status_event.status` (migration
+// 012, issue #2685, FR8, FR9) -- CHECK-constrained to exactly these seven
+// values, shared verbatim by a MilestoneKindMilestone and a
+// MilestoneKindMilepebble row (FR9). Not a column on `milestone_ref`: the
+// current value is always derived from MilestoneStatusEventStore's
+// append-only history (see MilestoneStatusEvent's doc comment) -- there is
+// no `current_status` column anywhere, and MilestoneStatusNotStarted is
+// never itself written as a row.
+type MilestoneStatus string
+
+const (
+	// MilestoneStatusNotStarted is the derived answer when a milestone or
+	// milepebble has zero MilestoneStatusEvent rows -- the absence of a
+	// transition, never a seeded one (FR8).
+	MilestoneStatusNotStarted        MilestoneStatus = "not started"
+	MilestoneStatusInDesign          MilestoneStatus = "in design"
+	MilestoneStatusPlanned           MilestoneStatus = "planned"
+	MilestoneStatusInProgress        MilestoneStatus = "in progress"
+	MilestoneStatusShipped           MilestoneStatus = "shipped"
+	MilestoneStatusPartiallyComplete MilestoneStatus = "partially complete"
+	MilestoneStatusAbandoned         MilestoneStatus = "abandoned"
+)
+
+// MilestoneStatusEvent is one row of `milestone_status_event` (migration
+// 012, issue #2685, FR8, FR9, FR12). Single parent: MilestoneRef.ID (a
+// real DB-enforced REFERENCES -- milestone_ref is not SCD2, so its id is
+// table-wide unique), covering both a milestone and a milepebble row
+// (FR9) since both share the one `milestone_ref` table. Append-only, NOT
+// SCD2 (LB3, NFR2) -- see migration 012's boundary comment for why this
+// table draws that line even though milestone_ref itself is plain
+// mutable: a transition is an addition to history, never an overwrite,
+// so this struct carries no ValidFrom/ValidTo pair and there is no store
+// method that updates or deletes a row of this shape. CreatedByActing/
+// CreatedByOnBehalfOf are always populated (NFR4) -- the only write path
+// onto this table, RecordTransition, always has a real caller session.
+type MilestoneStatusEvent struct {
+	ID          uuid.UUID
+	ScopeID     uuid.UUID
+	MilestoneID uuid.UUID
+	Status      MilestoneStatus
+	Note        *string
+	CreatedAt   time.Time
+
+	CreatedByActing     Subject
+	CreatedByOnBehalfOf Subject
+}
+
 // Scope is one row of `scope` (migration 001, issue #2487, LB1) -- the
 // forge-coordinate row every other table's scope_id hangs off. Plain
 // mutable config, not SCD2 (see migrations/001_scope.up.sql's boundary
