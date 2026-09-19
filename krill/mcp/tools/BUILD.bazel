@@ -19,6 +19,7 @@ go_library(
         "slice.go",
         "task.go",
         "task_claim.go",
+        "task_complete.go",
         "task_dependency.go",
         "task_lease.go",
         "task_note.go",

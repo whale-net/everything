@@ -68,6 +68,7 @@ go_library(
         "slice.go",
         "task.go",
         "task_claim.go",
+        "task_complete.go",
         "task_dependency.go",
         "task_lease.go",
         "task_note.go",
@@ -147,6 +148,7 @@ go_test(
         "slice_internal_test.go",
         "slice_test.go",
         "task_claim_test.go",
+        "task_complete_test.go",
         "task_dependency_test.go",
         "task_lease_test.go",
         "task_note_test.go",
@@ -220,6 +222,57 @@ go_test(
     size = "large",
     timeout = "long",
     srcs = ["task_claim_integration_test.go"],
+    embed = [":handlers"],
+    gotags = ["integration"],
+    tags = [
+        "external",
+        "integration",
+        "manual",
+        "no-cache",
+        "no-sandbox",
+        "requires-network",
+    ],
+    deps = [
+        "//krill/migrate/schema",
+        "//krill/slice",
+        "//krill/store",
+        "//krill/work",
+        "//libs/go/dbtest",
+        "//libs/go/migrate",
+        "@com_github_google_uuid//:uuid",
+        "@com_github_jackc_pgx_v5//pgxpool",
+        "@com_github_jackc_pgx_v5//stdlib",
+        "@com_github_stretchr_testify//assert",
+        "@com_github_stretchr_testify//require",
+    ],
+)
+
+# Real-Postgres coverage for CompleteTaskHandler's full success path
+# (task_complete_integration_test.go, issue #2725's Testing section) --
+# the branches task_complete_test.go's fakes cannot reach, since
+# work.Assembler wraps a concrete *slice.Querier over a real *store.Store:
+# a genuine 200 whose payload carries the new lane and no current claim
+# (FR8), the complete response's document shape matching a subsequent GET
+# /tasks/{id} exactly (FR4 single-type check, LB7/NFR4), that a completed
+# (not Done) task is claimable again through the real claim endpoint, and
+# that a stale/foreign claim id is rejected with 409 leaving the real
+# claim untouched. Shares task_claim_integration_test.go's
+# newTaskClaimHTTPTestStore/taskClaimHTTPTestScope/
+# taskClaimHTTPTestSubject/seedTaskClaimHTTPWorld fixture helpers rather
+# than duplicating them. Deliberately NOT part of `bazel test //...` --
+# see //libs/go/dbtest's README, mirrored by task_claim_integration_test
+# above.
+#
+# Run it explicitly (requires a working Docker daemon):
+#   bazel test //krill/api/handlers:task_complete_integration_test --test_output=all
+go_test(
+    name = "task_complete_integration_test",
+    size = "large",
+    timeout = "long",
+    srcs = [
+        "task_claim_integration_test.go",
+        "task_complete_integration_test.go",
+    ],
     embed = [":handlers"],
     gotags = ["integration"],
     tags = [

@@ -47,6 +47,7 @@ go_library(
         "store.go",
         "task.go",
         "task_claim.go",
+        "task_complete.go",
         "task_dependency.go",
         "task_lease.go",
         "task_note.go",
@@ -803,6 +804,24 @@ go_test(
     ],
 )
 
+# Pure unit tests for NextLane (task_complete.go, issue #2725's Testing
+# section, FR8): every routing branch -- a full five-lane sequence
+# (pass from each lane lands on the next, pass from Validation lands on
+# Done), pass from a truncated sequence's last element lands on Done, a
+# skipping sequence's pass/fail from its own middle/starting lane, and
+# fail from a middle lane landing exactly one lane back in that task's own
+# sequence, never the canonical global order. No database needed -- part
+# of `bazel test //...` (no "manual"/"integration" tag), exactly what "no
+# DB access" pure routing is meant to buy.
+go_test(
+    name = "lane_test",
+    srcs = ["lane_test.go"],
+    deps = [
+        ":store",
+        "@com_github_stretchr_testify//assert",
+    ],
+)
+
 # Real Postgres integration test for TaskStore.CreateTask (task.go,
 # migration 015, issue #2719's Testing section, FR1): the milepebble and
 # uncut-milestone creation shapes, the cut-milestone rejection
@@ -983,6 +1002,56 @@ go_test(
         "task_dependency_integration_test.go",
         "task_integration_test.go",
         "task_lease_integration_test.go",
+    ],
+    gotags = ["integration"],
+    tags = [
+        "external",
+        "integration",
+        "manual",
+        "no-cache",
+        "no-sandbox",
+        "requires-network",
+    ],
+    deps = [
+        ":store",
+        "//krill/migrate/schema",
+        "//libs/go/dbtest",
+        "//libs/go/migrate",
+        "@com_github_google_uuid//:uuid",
+        "@com_github_jackc_pgx_v5//stdlib",
+        "@com_github_stretchr_testify//assert",
+        "@com_github_stretchr_testify//require",
+    ],
+)
+
+# Real-Postgres coverage for TaskStore.CompleteTask (task_complete.go,
+# migration 015, issue #2725's Testing section, FR8): claiming then
+# completing with `pass` advancing one lane (including landing on Done
+# from a sequence's last lane), completing with `fail` reverting one lane
+# (or staying put from a sequence's starting lane), a non-current claim id
+# rejected with ErrClaimNotCurrent writing nothing, the completed task
+# becoming unclaimed and claimable again, NFR3's two-subject attribution on
+# the completed task_attempt row, and that a completed attempt never
+# increments task.attempt_count. Shares task_integration_test.go's
+# test-store/test-scope/test-world/subject helpers,
+# task_dependency_integration_test.go's createTestTask/setTaskLane
+# helpers, and task_claim_integration_test.go's claimTestSession/
+# countRows helpers rather than duplicating them, mirroring
+# task_claim_integration_test's own choice to share fixtures. Deliberately
+# NOT part of `bazel test //...` -- see //libs/go/dbtest's README for the
+# full rationale.
+#
+# Run it explicitly (requires a working Docker daemon):
+#   bazel test //krill/store:task_complete_integration_test --test_output=all
+go_test(
+    name = "task_complete_integration_test",
+    size = "large",
+    timeout = "long",
+    srcs = [
+        "task_claim_integration_test.go",
+        "task_complete_integration_test.go",
+        "task_dependency_integration_test.go",
+        "task_integration_test.go",
     ],
     gotags = ["integration"],
     tags = [

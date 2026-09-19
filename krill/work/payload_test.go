@@ -66,6 +66,10 @@ func (f *fakeTaskStore) Heartbeat(ctx context.Context, params store.HeartbeatPar
 	panic("not used by this test")
 }
 
+func (f *fakeTaskStore) CompleteTask(ctx context.Context, params store.CompleteTaskParams) (store.TaskLaneResult, error) {
+	panic("not used by this test")
+}
+
 func (f *fakeTaskStore) RecordNote(ctx context.Context, params store.RecordNoteParams) (store.Note, error) {
 	panic("not used by this test")
 }
