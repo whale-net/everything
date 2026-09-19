@@ -8,6 +8,7 @@ go_library(
     srcs = [
         "activities.go",
         "archive.go",
+        "budget.go",
         "caps.go",
         "classify.go",
         "context.go",
@@ -54,6 +55,7 @@ go_test(
     name = "worker_test",
     srcs = [
         "activities_test.go",
+        "budget_test.go",
         "caps_test.go",
         "classify_test.go",
         "context_test.go",

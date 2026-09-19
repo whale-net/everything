@@ -797,8 +797,16 @@ outright — the session still exists and a caller should retry with
 - **Front door for humans before Phase 2**: `mcp` from Claude Code is the
   v1 answer; Slack via `friendly_computing_machine` is plausible later.
 - **Context budgeting strategy** (summarization vs. truncation, when to
-  write summary events): worker-internal, defer to the milestone that
-  first hits the budget.
+  write summary events): answered for **search-mode sessions only** (M4,
+  issue #2673, FR10) — `worker/budget.go`'s `fitToBudget` charges a
+  search-mode turn's tool definitions and transcript content against one
+  shared `searchModeContextBudget`, unit'd as a character count over each
+  side's wire-bound JSON/content (no tokenizer dependency, monotonic in
+  real token cost, both halves measured the same way). A **bulk-mode**
+  session still carries the pre-M4 placeholder (`worker/context.go`'s flat
+  `maxContextEvents` truncation) — this remains this open item's
+  unresolved half, deferred to whatever milestone first hits it for bulk
+  mode too.
 - **Provider abstraction**: non-goal — one provider (OpenRouter) and a
   base-URL swap covers the foreseeable need.
 - **Cron-scheduled sessions**: non-goal *as a service offering* — a

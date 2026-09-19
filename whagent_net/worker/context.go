@@ -8,6 +8,7 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/whale-net/everything/libs/go/logging"
 	"github.com/whale-net/everything/whagent_net/events"
 	"github.com/whale-net/everything/whagent_net/llm"
 	"github.com/whale-net/everything/whagent_net/session"
@@ -27,6 +28,14 @@ type BuildContextInput struct {
 	// workflow.go), the one piece of this turn's context BuildContext did
 	// not already have sitting in the transcript before this call.
 	Input string
+	// Tools is this turn's resolved tool definitions (workflow.go's
+	// toolDefs.Tools, ListToolDefinitionsResult) -- only consulted when
+	// Definition.ToolLoadingMode is session.ToolLoadingModeSearch (FR10,
+	// issue #2673): fitToBudget (budget.go) charges these against
+	// searchModeContextBudget before filling the rest with transcript
+	// events. A bulk-mode caller leaves this nil; BuildContext's bulk path
+	// never reads it, matching FR10's "bulk-mode accounting is untouched".
+	Tools []llm.ToolDefinition
 }
 
 // BuildContextResult is BuildContext's activity result: only the ordered
@@ -52,6 +61,13 @@ type BuildContextResult struct {
 // comfortably under this ceiling in practice, so plain truncation to the
 // most recent maxContextEvents (oldest events dropped first) is a safe
 // placeholder rather than a real token-budget/summarization algorithm.
+//
+// M4 (issue #2673, FR10) answered this open item for search-mode sessions
+// only -- see fitToBudget (budget.go) and this function's own branch on
+// Definition.ToolLoadingMode below. maxContextEvents remains exactly what
+// it always was for a bulk-mode session: still a placeholder, still this
+// file's open item, until a future milestone gives bulk mode the same
+// real accounting.
 const maxContextEvents = 400
 
 // transcriptReadPageSize bounds each Read call BuildContext issues while
@@ -64,11 +80,12 @@ const transcriptReadPageSize = 200
 // new-input event append" -- the one piece of this turn's context not
 // already sitting in the transcript), then selects a budgeted projection
 // over the transcript -- recent events plus the agent definition, fitted
-// to maxContextEvents -- and persists the exact ordered event-ID list that
-// projection was built from into `turn_context` (LB1). The projection
-// itself (the assembled llm.Message list) is derived and ephemeral and
-// never enters workflow history or the `turn_context` row -- what
-// BuildContextResult carries back to the workflow, and what gets
+// to maxContextEvents (bulk mode) or searchModeContextBudget via
+// fitToBudget (search mode, FR10) -- and persists the exact ordered
+// event-ID list that projection was built from into `turn_context` (LB1).
+// The projection itself (the assembled llm.Message list) is derived and
+// ephemeral and never enters workflow history or the `turn_context` row
+// -- what BuildContextResult carries back to the workflow, and what gets
 // persisted, is only the event-ID list.
 //
 // Retry-safety: the user-input append goes through
@@ -93,7 +110,16 @@ func (a *Activities) BuildContext(ctx context.Context, in BuildContextInput) (Bu
 	if err != nil {
 		return BuildContextResult{}, fmt.Errorf("build context: read transcript: %w", err)
 	}
-	if len(all) > maxContextEvents {
+	if in.Definition.ToolLoadingMode == session.ToolLoadingModeSearch {
+		// FR10 (issue #2673): a shared budget spanning this turn's tool
+		// definitions and transcript content, replacing the flat
+		// maxContextEvents truncation below for search-mode sessions only.
+		if overage := toolDefsCharge(in.Tools) - searchModeContextBudget; overage > 0 {
+			logging.Get("worker").WarnContext(ctx, "search-mode tool definitions alone exceed the context budget; keeping a minimal event floor instead of the full budgeted projection",
+				"session_id", in.SessionID, "turn", in.Turn, "overage_chars", overage)
+		}
+		all = fitToBudget(in.Tools, all, searchModeContextBudget)
+	} else if len(all) > maxContextEvents {
 		all = all[len(all)-maxContextEvents:]
 	}
 
