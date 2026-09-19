@@ -114,30 +114,33 @@ var specTables = []string{"product", "feature_set", "feature", "requirement", "l
 
 // TestMigrations_UpDownUp_LeavesCleanDatabaseAndIsRerunnable proves the
 // whole migration set's lifecycle through the latest migration currently
-// embedded (012_milestone_status, krill M3 issue #2685, Testing item 9):
+// embedded (013_delivery_shipment, krill M3 issue #2686, Testing item 8):
 // Up() creates every table including `krill_session`, `milestone_ref`,
 // `entity_milestone`, `milestone_deferral`, `pointer_artifact`,
 // `mcp_credential`/`mcp_oauth_client`/`mcp_auth_code`, `ui_sessions`,
-// `design_session`/`revision_event`, `import_completion`, and
-// `milestone_status_event`, Down() drops all of them (a clean database),
-// and Up() again succeeds a second time from that clean state -- the
-// migration set is re-runnable through //libs/go/migrate, not a one-shot
-// script. The hardcoded latest-version assertion below must be bumped
-// whenever a new migration lands (it was 1 for 001_scope alone, issue
-// #2487; it is 12 now that 002_spec_entities, 003_session,
-// 004_milestone_assoc, 005_pointer_artifact, 006_mcpauth_credential,
-// 007_ui_sessions, 008_design_session, 009_import_completion,
-// 010_milestone_authoring, 011_milepebble, and 012_milestone_status have
-// all landed -- 008/009 rather than 006/007 because 006/007 were already
-// claimed by the mcpauth auth-flow gap work by the time this plan's
-// migrations merged; see ARCHITECTURE.md's "Migration numbering (M2)"
-// table). `milestone_ref` itself is not a new table (004 created it) so it
-// is not listed again below -- only `milestone_deferral` is new since
-// migration 010; migration 011 (issue #2684) only widens `milestone_ref`
-// (a new `parent_milestone_id` column, no new table) -- covered by
+// `design_session`/`revision_event`, `import_completion`,
+// `milestone_status_event`, and `delivery_shipment`, Down() drops all of
+// them (a clean database), and Up() again succeeds a second time from
+// that clean state -- the migration set is re-runnable through
+// //libs/go/migrate, not a one-shot script. The hardcoded latest-version
+// assertion below must be bumped whenever a new migration lands (it was 1
+// for 001_scope alone, issue #2487; it is 13 now that 002_spec_entities,
+// 003_session, 004_milestone_assoc, 005_pointer_artifact,
+// 006_mcpauth_credential, 007_ui_sessions, 008_design_session,
+// 009_import_completion, 010_milestone_authoring, 011_milepebble,
+// 012_milestone_status, and 013_delivery_shipment have all landed --
+// 008/009 rather than 006/007 because 006/007 were already claimed by the
+// mcpauth auth-flow gap work by the time this plan's migrations merged;
+// see ARCHITECTURE.md's "Migration numbering (M2)" table). `milestone_ref`
+// itself is not a new table (004 created it) so it is not listed again
+// below -- only `milestone_deferral` is new since migration 010; migration
+// 011 (issue #2684) only widens `milestone_ref` (a new
+// `parent_milestone_id` column, no new table) -- covered by
 // TestMigration011_SchemaContract, not here; migration 012 (issue #2685)
 // is a brand-new table, `milestone_status_event` -- covered in detail by
-// TestMigration012_SchemaContract, not here.
+// TestMigration012_SchemaContract, not here; migration 013 (issue #2686)
+// is another brand-new table, `delivery_shipment` -- covered in detail by
+// TestMigration013_SchemaContract, not here.
 func TestMigrations_UpDownUp_LeavesCleanDatabaseAndIsRerunnable(t *testing.T) {
 	ctx := context.Background()
 	db := dbtest.NewPostgres(ctx, t, dbtest.Options{})
@@ -150,18 +153,18 @@ func TestMigrations_UpDownUp_LeavesCleanDatabaseAndIsRerunnable(t *testing.T) {
 
 	latest, err := runner.LatestVersion()
 	require.NoError(t, err)
-	require.Equal(t, uint(12), latest, "expected the latest migration source version to be 12 (001_scope, 002_spec_entities, 003_session, 004_milestone_assoc, 005_pointer_artifact, 006_mcpauth_credential, 007_ui_sessions, 008_design_session, 009_import_completion, 010_milestone_authoring, 011_milepebble, 012_milestone_status) -- update this test if a later migration has since landed")
+	require.Equal(t, uint(13), latest, "expected the latest migration source version to be 13 (001_scope, 002_spec_entities, 003_session, 004_milestone_assoc, 005_pointer_artifact, 006_mcpauth_credential, 007_ui_sessions, 008_design_session, 009_import_completion, 010_milestone_authoring, 011_milepebble, 012_milestone_status, 013_delivery_shipment) -- update this test if a later migration has since landed")
 
 	// -- Up: scope, krill_session, the milestone tables, pointer_artifact,
-	// the mcpauth tables, ui_sessions, design_session/revision_event, and
-	// milestone_status_event must exist, version must land clean at the
-	// latest --
-	require.NoError(t, runner.Up(), "apply migrations 001-012")
+	// the mcpauth tables, ui_sessions, design_session/revision_event,
+	// milestone_status_event, and delivery_shipment must exist, version
+	// must land clean at the latest --
+	require.NoError(t, runner.Up(), "apply migrations 001-013")
 
 	version, dirty, err := runner.Version()
 	require.NoError(t, err)
 	assert.False(t, dirty)
-	assert.Equal(t, uint(12), version)
+	assert.Equal(t, uint(13), version)
 
 	assert.True(t, tableExists(t, ctx, db, "scope"), "expected table \"scope\" to exist after Up()")
 	assert.True(t, tableExists(t, ctx, db, "krill_session"), "expected table \"krill_session\" to exist after Up() (003_session, issue #2489)")
@@ -177,6 +180,7 @@ func TestMigrations_UpDownUp_LeavesCleanDatabaseAndIsRerunnable(t *testing.T) {
 	assert.True(t, tableExists(t, ctx, db, "revision_event"), "expected table \"revision_event\" to exist after Up() (008_design_session, issue #2542)")
 	assert.True(t, tableExists(t, ctx, db, "import_completion"), "expected table \"import_completion\" to exist after Up() (009_import_completion, issue #2548)")
 	assert.True(t, tableExists(t, ctx, db, "milestone_status_event"), "expected table \"milestone_status_event\" to exist after Up() (012_milestone_status, issue #2685)")
+	assert.True(t, tableExists(t, ctx, db, "delivery_shipment"), "expected table \"delivery_shipment\" to exist after Up() (013_delivery_shipment, issue #2686)")
 
 	// -- Down: every table must be gone -------------------------------------
 	require.NoError(t, runner.Down(), "roll back every migration")
@@ -195,6 +199,7 @@ func TestMigrations_UpDownUp_LeavesCleanDatabaseAndIsRerunnable(t *testing.T) {
 	assert.False(t, tableExists(t, ctx, db, "revision_event"), "expected table \"revision_event\" to be dropped after Down() -- a clean database")
 	assert.False(t, tableExists(t, ctx, db, "import_completion"), "expected table \"import_completion\" to be dropped after Down() -- a clean database")
 	assert.False(t, tableExists(t, ctx, db, "milestone_status_event"), "expected table \"milestone_status_event\" to be dropped after Down() -- a clean database (012_milestone_status, issue #2685, Testing item 9)")
+	assert.False(t, tableExists(t, ctx, db, "delivery_shipment"), "expected table \"delivery_shipment\" to be dropped after Down() -- a clean database (013_delivery_shipment, issue #2686, Testing item 8)")
 
 	// -- Up again: re-runnable from the clean state --------------------------
 	require.NoError(t, runner.Up(), "re-apply every migration after Down() -- must be re-runnable")
@@ -202,7 +207,7 @@ func TestMigrations_UpDownUp_LeavesCleanDatabaseAndIsRerunnable(t *testing.T) {
 	version, dirty, err = runner.Version()
 	require.NoError(t, err)
 	assert.False(t, dirty)
-	assert.Equal(t, uint(12), version)
+	assert.Equal(t, uint(13), version)
 
 	assert.True(t, tableExists(t, ctx, db, "scope"), "expected table \"scope\" to exist again after the second Up()")
 	assert.True(t, tableExists(t, ctx, db, "krill_session"), "expected table \"krill_session\" to exist again after the second Up()")
@@ -218,6 +223,7 @@ func TestMigrations_UpDownUp_LeavesCleanDatabaseAndIsRerunnable(t *testing.T) {
 	assert.True(t, tableExists(t, ctx, db, "revision_event"), "expected table \"revision_event\" to exist again after the second Up()")
 	assert.True(t, tableExists(t, ctx, db, "import_completion"), "expected table \"import_completion\" to exist again after the second Up()")
 	assert.True(t, tableExists(t, ctx, db, "milestone_status_event"), "expected table \"milestone_status_event\" to exist again after the second Up()")
+	assert.True(t, tableExists(t, ctx, db, "delivery_shipment"), "expected table \"delivery_shipment\" to exist again after the second Up()")
 }
 
 // TestMigration001_SchemaContract asserts the specific column shapes and
@@ -487,10 +493,10 @@ func TestMigration002_NoDisplayNumberColumnsOrJoinTables(t *testing.T) {
 	expected := append([]string{
 		"schema_migrations", "scope", "krill_session", "milestone_ref", "entity_milestone", "milestone_deferral", "pointer_artifact",
 		"mcp_credential", "mcp_oauth_client", "mcp_auth_code", "ui_sessions", "design_session", "revision_event", "import_completion",
-		"milestone_status_event",
+		"milestone_status_event", "delivery_shipment",
 	}, specTables...)
 	sort.Strings(expected)
-	assert.Equal(t, expected, tables, "the public schema must contain exactly scope + the seven spec tables + krill_session (003_session, issue #2489) + milestone_ref + entity_milestone (004_milestone_assoc, issue #2492) + pointer_artifact (005_pointer_artifact, issue #2496) + mcp_credential/mcp_oauth_client/mcp_auth_code (006_mcpauth_credential) + ui_sessions (007_ui_sessions) + design_session/revision_event (008_design_session, issue #2542) + import_completion (009_import_completion, issue #2548) + milestone_deferral (010_milestone_authoring, issue #2683) + milestone_status_event (012_milestone_status, issue #2685) + golang-migrate's schema_migrations -- no fourth parallel table (e.g. \"capability\") and no join/bridge table for parentage (LB2)")
+	assert.Equal(t, expected, tables, "the public schema must contain exactly scope + the seven spec tables + krill_session (003_session, issue #2489) + milestone_ref + entity_milestone (004_milestone_assoc, issue #2492) + pointer_artifact (005_pointer_artifact, issue #2496) + mcp_credential/mcp_oauth_client/mcp_auth_code (006_mcpauth_credential) + ui_sessions (007_ui_sessions) + design_session/revision_event (008_design_session, issue #2542) + import_completion (009_import_completion, issue #2548) + milestone_deferral (010_milestone_authoring, issue #2683) + milestone_status_event (012_milestone_status, issue #2685) + delivery_shipment (013_delivery_shipment, issue #2686) + golang-migrate's schema_migrations -- no fourth parallel table (e.g. \"capability\") and no join/bridge table for parentage (LB2)")
 
 	// No display-number-shaped column on any spec table -- LB2's own
 	// vocabulary for the trap this guards against.
@@ -1390,4 +1396,206 @@ func TestMigration012_UpDownRoundTrip(t *testing.T) {
 	var count int
 	require.NoError(t, db.Pool.QueryRow(ctx, `SELECT count(*) FROM milestone_status_event`).Scan(&count))
 	assert.Equal(t, 0, count, "re-applying 012 creates a fresh, empty table -- the row seeded before the rollback is gone for good")
+}
+
+// TestMigration013_SchemaContract asserts 013_delivery_shipment's own
+// boundary calls (issue #2686's Testing section, items 3 and 8): the
+// table carries no `valid_from`/`valid_to` pair at all (LB3/NFR2's
+// append-only boundary, mirroring migration 012's own posture, never
+// SCD2), `note` is nullable, `scope_id` is NOT NULL with a real
+// DB-enforced FK to `scope` (LB1), `entity_id` is a plain, non-FK uuid
+// column (it names a spec entity, which migration 002's LB2 parentage
+// note already established is never a DB-enforced FK), `milestone_id` is
+// NOT NULL with a real DB-enforced FK back onto `milestone_ref(id)`
+// (accepting both a kind='milestone' and a kind='milepebble' row, FR9,
+// same as migration 012's own milestone_id), and every LB4 subject-pair
+// column is NOT NULL (NFR4).
+func TestMigration013_SchemaContract(t *testing.T) {
+	ctx := context.Background()
+	db := dbtest.NewPostgres(ctx, t, dbtest.Options{})
+
+	sqlDB, err := sql.Open("pgx", db.ConnString)
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = sqlDB.Close() })
+
+	runner := migrate.NewRunner(sqlDB, schema.Migrations, schema.Dir)
+	require.NoError(t, runner.Up())
+
+	// -- not SCD2 (LB3/NFR2): no valid_from/valid_to columns -----------------
+	cols := columnNames(t, ctx, db, "delivery_shipment")
+	assert.NotContains(t, cols, "valid_from", "delivery_shipment must not be SCD2 (LB3/NFR2) -- it is an append-only history table")
+	assert.NotContains(t, cols, "valid_to", "delivery_shipment must not be SCD2 (LB3/NFR2) -- it is an append-only history table")
+
+	// -- note: nullable --------------------------------------------------
+	_, nullable := nullableColumn(t, ctx, db, "delivery_shipment", "note")
+	assert.Equal(t, "YES", nullable, "delivery_shipment.note must be nullable")
+
+	// -- scope_id: NOT NULL, real DB-enforced FK (LB1) ------------------------
+	dataType, nullable := nullableColumn(t, ctx, db, "delivery_shipment", "scope_id")
+	assert.Equal(t, "NO", nullable, "delivery_shipment.scope_id must be NOT NULL (LB1)")
+	assert.Equal(t, "uuid", dataType, "delivery_shipment.scope_id must be a plain uuid column")
+	assert.True(t, hasForeignKeyTo(t, ctx, db, "delivery_shipment", "scope"), "delivery_shipment.scope_id must carry a real DB-enforced FK to scope(id) (LB1)")
+
+	// -- entity_id: NOT NULL, plain uuid, NOT a DB-enforced FK (LB2 parentage) --
+	dataType, nullable = nullableColumn(t, ctx, db, "delivery_shipment", "entity_id")
+	assert.Equal(t, "NO", nullable, "delivery_shipment.entity_id must be NOT NULL")
+	assert.Equal(t, "uuid", dataType, "delivery_shipment.entity_id must be a plain uuid column, never an array")
+	assert.False(t, hasForeignKeyTo(t, ctx, db, "delivery_shipment", "feature"), "delivery_shipment.entity_id must NOT carry a DB-enforced FK to feature -- LB2 parentage is store-layer-enforced only, same as every migration 002 child table")
+	assert.False(t, hasForeignKeyTo(t, ctx, db, "delivery_shipment", "requirement"), "delivery_shipment.entity_id must NOT carry a DB-enforced FK to requirement -- LB2 parentage is store-layer-enforced only")
+
+	// -- milestone_id: NOT NULL, real DB-enforced FK back onto milestone_ref(id) --
+	dataType, nullable = nullableColumn(t, ctx, db, "delivery_shipment", "milestone_id")
+	assert.Equal(t, "NO", nullable, "delivery_shipment.milestone_id must be NOT NULL")
+	assert.Equal(t, "uuid", dataType, "delivery_shipment.milestone_id must be a plain uuid column")
+	assert.True(t, hasForeignKeyTo(t, ctx, db, "delivery_shipment", "milestone_ref"), "delivery_shipment.milestone_id must carry a real DB-enforced FK to milestone_ref(id)")
+
+	// -- LB4/NFR4: every subject column NOT NULL ------------------------------
+	for _, col := range []string{
+		"created_by_acting_iss", "created_by_acting_sub", "created_by_acting_kind",
+		"created_by_on_behalf_of_iss", "created_by_on_behalf_of_sub", "created_by_on_behalf_of_kind",
+	} {
+		_, nullable := nullableColumn(t, ctx, db, "delivery_shipment", col)
+		assert.Equal(t, "NO", nullable, "delivery_shipment.%s must be NOT NULL (NFR4)", col)
+	}
+
+	_, nullable = nullableColumn(t, ctx, db, "delivery_shipment", "created_at")
+	assert.Equal(t, "NO", nullable, "delivery_shipment.created_at must be NOT NULL")
+
+	// -- seed a scope/product/milestone/milepebble to exercise the FKs --
+	var scopeID uuid.UUID
+	require.NoError(t, db.Pool.QueryRow(ctx, `
+		INSERT INTO scope (repo_full_name, default_branch) VALUES ('delivery-shipment-013-check/repo', 'main') RETURNING id
+	`).Scan(&scopeID))
+	var productID uuid.UUID
+	require.NoError(t, db.Pool.QueryRow(ctx, `
+		INSERT INTO product (scope_id, name, vision) VALUES ($1, 'P', 'V') RETURNING id
+	`, scopeID).Scan(&productID))
+	var milestoneID uuid.UUID
+	require.NoError(t, db.Pool.QueryRow(ctx, `
+		INSERT INTO milestone_ref (scope_id, product_id, name) VALUES ($1, $2, 'M1') RETURNING id
+	`, scopeID, productID).Scan(&milestoneID))
+	var milepebbleID uuid.UUID
+	require.NoError(t, db.Pool.QueryRow(ctx, `
+		INSERT INTO milestone_ref (scope_id, product_id, name, kind, parent_milestone_id) VALUES ($1, $2, 'cut 1', 'milepebble', $3) RETURNING id
+	`, scopeID, productID, milestoneID).Scan(&milepebbleID))
+
+	insertShipment := func(milestoneRefID uuid.UUID) error {
+		_, err := db.Pool.Exec(ctx, `
+			INSERT INTO delivery_shipment (
+				scope_id, entity_id, milestone_id,
+				created_by_acting_iss, created_by_acting_sub, created_by_acting_kind,
+				created_by_on_behalf_of_iss, created_by_on_behalf_of_sub, created_by_on_behalf_of_kind
+			) VALUES ($1, $2, $3, 'iss', 'sub', 'human', 'iss', 'sub', 'human')
+		`, scopeID, uuid.New(), milestoneRefID)
+		return err
+	}
+
+	// -- FR9: the exact same operation works against a kind='milepebble' row --
+	assert.NoError(t, insertShipment(milestoneID), "delivery_shipment must accept a kind='milestone' target")
+	assert.NoError(t, insertShipment(milepebbleID), "delivery_shipment must accept a kind='milepebble' target the same as a kind='milestone' one (FR9)")
+
+	// -- milestone_id FK is real, not just a plain uuid column ----------------
+	assert.Error(t, insertShipment(uuid.New()), "delivery_shipment.milestone_id must be FK-enforced against milestone_ref(id)")
+
+	// -- a second row for the exact same (entity, milestone) pair is accepted,
+	// never rejected as a duplicate (NFR2/NFR3: appending, not upserting) --
+	entityID := uuid.New()
+	_, err = db.Pool.Exec(ctx, `
+		INSERT INTO delivery_shipment (
+			scope_id, entity_id, milestone_id,
+			created_by_acting_iss, created_by_acting_sub, created_by_acting_kind,
+			created_by_on_behalf_of_iss, created_by_on_behalf_of_sub, created_by_on_behalf_of_kind
+		) VALUES ($1, $2, $3, 'iss', 'sub', 'human', 'iss', 'sub', 'human')
+	`, scopeID, entityID, milestoneID)
+	require.NoError(t, err)
+	_, err = db.Pool.Exec(ctx, `
+		INSERT INTO delivery_shipment (
+			scope_id, entity_id, milestone_id,
+			created_by_acting_iss, created_by_acting_sub, created_by_acting_kind,
+			created_by_on_behalf_of_iss, created_by_on_behalf_of_sub, created_by_on_behalf_of_kind
+		) VALUES ($1, $2, $3, 'iss', 'sub', 'human', 'iss', 'sub', 'human')
+	`, scopeID, entityID, milestoneID)
+	assert.NoError(t, err, "delivery_shipment must have no uniqueness constraint on (entity_id, milestone_id) -- a second shipment of the same pair must be a second row, never rejected as a duplicate")
+
+	// -- subject-pair columns are mandatory: NULL is rejected -----------------
+	_, err = db.Pool.Exec(ctx, `
+		INSERT INTO delivery_shipment (
+			scope_id, entity_id, milestone_id,
+			created_by_acting_iss, created_by_acting_sub, created_by_acting_kind,
+			created_by_on_behalf_of_iss, created_by_on_behalf_of_sub, created_by_on_behalf_of_kind
+		) VALUES ($1, $2, $3, NULL, 'sub', 'human', 'iss', 'sub', 'human')
+	`, scopeID, uuid.New(), milestoneID)
+	assert.Error(t, err, "delivery_shipment's LB4 subject-pair columns must reject NULL (NFR4)")
+}
+
+// TestMigration013_UpDownRoundTrip is issue #2686's Testing item 8:
+// migration 013 applies cleanly (creating delivery_shipment with a real
+// row present), rolls back cleanly (dropping the table and both indexes),
+// and re-applies cleanly a second time -- the append-only shipment
+// register is as re-runnable as every other migration in this package.
+// Migrates up to exactly version 13 (Migrate(13), not Up()/latest) so a
+// later migration landing on top of this one does not shift what "roll
+// back one step" means here, mirroring TestMigration012_UpDownRoundTrip's
+// own choice.
+func TestMigration013_UpDownRoundTrip(t *testing.T) {
+	ctx := context.Background()
+	db := dbtest.NewPostgres(ctx, t, dbtest.Options{})
+
+	sqlDB, err := sql.Open("pgx", db.ConnString)
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = sqlDB.Close() })
+
+	runner := migrate.NewRunner(sqlDB, schema.Migrations, schema.Dir)
+	require.NoError(t, runner.Migrate(13), "apply every migration through exactly 013")
+
+	assert.True(t, tableExists(t, ctx, db, "delivery_shipment"), "013's Up() must create delivery_shipment")
+	assert.True(t, indexExists(t, ctx, db, "delivery_shipment", "delivery_shipment_milestone_idx"), "013's Up() must create the (milestone_id) index")
+	assert.True(t, indexExists(t, ctx, db, "delivery_shipment", "delivery_shipment_entity_milestone_idx"), "013's Up() must create the (entity_id, milestone_id) index")
+
+	// Seed a real row before rolling back, so Down()'s "drops the whole
+	// table, history and all" behavior is exercised for real, not just
+	// against an empty table.
+	var scopeID uuid.UUID
+	require.NoError(t, db.Pool.QueryRow(ctx, `
+		INSERT INTO scope (repo_full_name, default_branch) VALUES ('delivery-shipment-013-roundtrip/repo', 'main') RETURNING id
+	`).Scan(&scopeID))
+	var productID uuid.UUID
+	require.NoError(t, db.Pool.QueryRow(ctx, `
+		INSERT INTO product (scope_id, name, vision) VALUES ($1, 'P', 'V') RETURNING id
+	`, scopeID).Scan(&productID))
+	var milestoneID uuid.UUID
+	require.NoError(t, db.Pool.QueryRow(ctx, `
+		INSERT INTO milestone_ref (scope_id, product_id, name) VALUES ($1, $2, 'M1') RETURNING id
+	`, scopeID, productID).Scan(&milestoneID))
+	_, err = db.Pool.Exec(ctx, `
+		INSERT INTO delivery_shipment (
+			scope_id, entity_id, milestone_id,
+			created_by_acting_iss, created_by_acting_sub, created_by_acting_kind,
+			created_by_on_behalf_of_iss, created_by_on_behalf_of_sub, created_by_on_behalf_of_kind
+		) VALUES ($1, $2, $3, 'iss', 'sub', 'human', 'iss', 'sub', 'human')
+	`, scopeID, uuid.New(), milestoneID)
+	require.NoError(t, err)
+
+	require.NoError(t, runner.Steps(-1), "roll back exactly migration 013")
+
+	version, dirty, err := runner.Version()
+	require.NoError(t, err)
+	assert.False(t, dirty)
+	assert.Equal(t, uint(12), version, "rolling back exactly one step from 13 must land on 12 (012_milestone_status)")
+
+	assert.False(t, tableExists(t, ctx, db, "delivery_shipment"), "013's Down() must drop delivery_shipment entirely -- the whole history along with the table")
+	assert.True(t, tableExists(t, ctx, db, "milestone_ref"), "013's Down() must leave milestone_ref itself untouched -- this migration never alters that table")
+
+	// Re-applying must succeed a second time from the rolled-back state.
+	require.NoError(t, runner.Steps(1), "re-apply migration 013 after Down() -- must be re-runnable")
+
+	version, dirty, err = runner.Version()
+	require.NoError(t, err)
+	assert.False(t, dirty)
+	assert.Equal(t, uint(13), version)
+	assert.True(t, tableExists(t, ctx, db, "delivery_shipment"), "delivery_shipment must exist again after re-applying 013")
+
+	var count int
+	require.NoError(t, db.Pool.QueryRow(ctx, `SELECT count(*) FROM delivery_shipment`).Scan(&count))
+	assert.Equal(t, 0, count, "re-applying 013 creates a fresh, empty table -- the row seeded before the rollback is gone for good")
 }

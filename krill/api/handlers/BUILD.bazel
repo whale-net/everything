@@ -24,7 +24,10 @@ is the mediated-intake write endpoint, POST /design-sessions/{id}/propose --
 gated like every other write endpoint. milestone_status.go (issue #2685,
 FR8/FR9/FR12) is the milestone/milepebble status HTTP surface: POST
 /milestones/{id}/status is gated, GET /milestones/{id}/status and GET
-/milestones/{id}/status/history are not."""
+/milestones/{id}/status/history are not. delivery_shipment.go (issue
+#2686, FR10) is the per-delivered-item shipment surface: POST
+/milestones/{id}/shipped is gated, GET /milestones/{id}/delivery is
+not."""
 
 load("@rules_go//go:def.bzl", "go_library", "go_test")
 
@@ -33,6 +36,7 @@ go_library(
     srcs = [
         "amend.go",
         "decision.go",
+        "delivery_shipment.go",
         "design_session.go",
         "feature.go",
         "featureset.go",
@@ -84,8 +88,10 @@ go_test(
     srcs = [
         "amend_test.go",
         "decision_test.go",
+        "delivery_shipment_test.go",
         "design_session_test.go",
         "entity_test_helpers_test.go",
+        "fake_delivery_shipment_store_test.go",
         "fake_design_session_store_test.go",
         "fake_entity_store_test.go",
         "fake_mediated_store_test.go",

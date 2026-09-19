@@ -19,6 +19,7 @@ go_library(
     srcs = [
         "amend.go",
         "decision.go",
+        "delivery_shipment.go",
         "design_session.go",
         "errors.go",
         "feature.go",
@@ -398,6 +399,25 @@ go_test(
     ],
 )
 
+# NFR2/LB3 structural check (issue #2686's Testing item 3): a shipment is
+# an addition to history, never an overwrite, so DeliveryShipmentStore
+# must expose no update/delete-shaped method (a reflect-based check
+# against the interface itself, not a fake) and delivery_shipment.go --
+# the only file that writes to `delivery_shipment` -- must never issue an
+# UPDATE/DELETE/TRUNCATE naming that table (read back via `data`,
+# mirroring milestone_status_nfr2_test.go's own technique). No database
+# needed -- part of `bazel test //...` (no "manual"/"integration" tag).
+go_test(
+    name = "delivery_shipment_nfr2_test",
+    srcs = ["delivery_shipment_nfr2_test.go"],
+    data = ["delivery_shipment.go"],
+    deps = [
+        ":store",
+        "@com_github_stretchr_testify//assert",
+        "@com_github_stretchr_testify//require",
+    ],
+)
+
 # Real Postgres integration test for MediatedWriteStore (mediated.go, issue
 # #2546's Testing section): a Feature+two-Requirements proposal (one via
 # ParentID, two via ParentProposalIndex) creates all three and exactly one
@@ -598,6 +618,52 @@ go_test(
     srcs = [
         "milestone_authoring_integration_test.go",
         "milestone_status_integration_test.go",
+    ],
+    gotags = ["integration"],
+    tags = [
+        "external",
+        "integration",
+        "manual",
+        "no-cache",
+        "no-sandbox",
+        "requires-network",
+    ],
+    deps = [
+        ":store",
+        "//krill/migrate/schema",
+        "//libs/go/dbtest",
+        "//libs/go/migrate",
+        "@com_github_google_uuid//:uuid",
+        "@com_github_jackc_pgx_v5//stdlib",
+        "@com_github_stretchr_testify//assert",
+        "@com_github_stretchr_testify//require",
+    ],
+)
+
+# Real Postgres integration test for DeliveryShipmentStore
+# (delivery_shipment.go, migration 013, issue #2686's Testing section,
+# FR10): MarkShipped's happy path, its ErrEntityNotDelivered rejection
+# writing nothing, ShippedEntityIDs' DISTINCT dedup of repeated marks,
+# DeliveryBreakdown's shipped/unshipped partition against a real milestone
+# with a mix of shipped/unshipped delivers, a zero-delivers container
+# returning two empty slices rather than an error, shipped-ness keyed
+# per-(entity, container) rather than per-entity, and the same breakdown
+# scoped correctly to a milepebble's own narrower delivers subset (FR9).
+# Shares milestone_authoring_integration_test.go's test-store/test-scope/
+# subject helpers (same package, same build tag) rather than duplicating
+# them, mirroring milestone_status_integration_test.go's own choice.
+# Deliberately NOT part of `bazel test //...` -- see //libs/go/dbtest's
+# README for the full rationale.
+#
+# Run it explicitly (requires a working Docker daemon):
+#   bazel test //krill/store:delivery_shipment_integration_test --test_output=all
+go_test(
+    name = "delivery_shipment_integration_test",
+    size = "large",
+    timeout = "long",
+    srcs = [
+        "delivery_shipment_integration_test.go",
+        "milestone_authoring_integration_test.go",
     ],
     gotags = ["integration"],
     tags = [

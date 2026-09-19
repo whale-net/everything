@@ -27,12 +27,13 @@ import (
 // POST /milestones* endpoints below (issue #2683, FR1/FR2, LB4), and the
 // three POST /milestones/{id}/milepebbles, /milepebbles/{id}/delivers,
 // and /milepebbles/{id}/discovered-scope endpoints (issue #2684, FR3/FR4),
-// and POST /milestones/{id}/status (issue #2685, FR8/FR9/FR12) are wrapped
-// with handlers.RequireSession (gate.go) -- no write path is reachable
-// without a session minted by `init`. Read paths never require a session
-// (root plan issue #2485) -- this includes GET /milestones/{id}/status and
-// GET /milestones/{id}/status/history. Import (FR16) is a later task's
-// route, not added here.
+// POST /milestones/{id}/status (issue #2685, FR8/FR9/FR12), and POST
+// /milestones/{id}/shipped (issue #2686, FR10) are wrapped with
+// handlers.RequireSession (gate.go) -- no write path is reachable without
+// a session minted by `init`. Read paths never require a session (root
+// plan issue #2485) -- this includes GET /milestones/{id}/status, GET
+// /milestones/{id}/status/history, and GET /milestones/{id}/delivery.
+// Import (FR16) is a later task's route, not added here.
 //
 // githubToken is KRILL_GITHUB_TOKEN (see main.go's config/../ENV.md) --
 // threaded through to //krill/forge.GitHubClient, the one dependency
@@ -42,6 +43,7 @@ func setupRoutes(mux *http.ServeMux, pool *pgxpool.Pool, githubToken string) {
 	entities := store.New(pool)
 	gate := handlers.RequireSession(sessions)
 	forgeClient := &forge.GitHubClient{Token: githubToken}
+	querier := slice.NewQuerier(entities)
 
 	mux.HandleFunc("/healthz", handleHealthz(pool))
 	mux.HandleFunc("POST /sessions/init", handlers.InitSessionHandler(sessions))
@@ -74,6 +76,12 @@ func setupRoutes(mux *http.ServeMux, pool *pgxpool.Pool, githubToken string) {
 	mux.HandleFunc("GET /milestones/{id}/status", handlers.GetMilestoneStatusHandler(entities.MilestoneStatus()))
 	mux.HandleFunc("GET /milestones/{id}/status/history", handlers.GetMilestoneStatusHistoryHandler(entities.MilestoneStatus()))
 
+	// delivery_shipment (issue #2686, FR10) also serves both a
+	// MilestoneKindMilestone and a MilestoneKindMilepebble row, same
+	// posture as the status routes just above.
+	mux.Handle("POST /milestones/{id}/shipped", gate(handlers.MarkShippedHandler(entities.DeliveryShipments())))
+	mux.HandleFunc("GET /milestones/{id}/delivery", handlers.GetDeliveryBreakdownHandler(entities.MilestoneStatus(), querier))
+
 	mux.Handle("POST /design-sessions", gate(handlers.OpenDesignSessionHandler(entities.DesignSessions())))
 	mux.HandleFunc("GET /design-sessions/{id}", handlers.GetDesignSessionHandler(entities.DesignSessions(), entities.RevisionEvents()))
 	mux.Handle("POST /design-sessions/{id}/revision-events", gate(handlers.AppendRevisionEventHandler(entities.RevisionEvents())))
@@ -88,7 +96,6 @@ func setupRoutes(mux *http.ServeMux, pool *pgxpool.Pool, githubToken string) {
 	mux.HandleFunc("GET /load-bearing-decisions/{id}/as-of", handlers.GetLoadBearingDecisionAsOfHandler(entities.History()))
 	mux.HandleFunc("GET /load-bearing-decisions/{id}/versions", handlers.ListLoadBearingDecisionVersionsHandler(entities.History()))
 
-	querier := slice.NewQuerier(entities)
 	handlers.NewSlice(querier).Register(mux)
 	handlers.NewSessionSlice(entities.DesignSessions(), entities.RevisionEvents(), querier).Register(mux)
 }
