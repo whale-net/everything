@@ -97,6 +97,23 @@ func (c *callRecorder) snapshotTerminalEvents() []terminalEventRecord {
 	return out
 }
 
+// nonStatusChangeTerminalEvents filters events down to the capped/failure
+// ones this file's tests care about, excluding M5's FR1 status_change
+// events (workflow_status_change_test.go covers those directly) -- every
+// SessionWorkflow run now commits at least one status_change event (the
+// pre-loop awaiting_input write) in addition to whatever cap/failure event
+// a given test is actually exercising.
+func nonStatusChangeTerminalEvents(in []terminalEventRecord) []terminalEventRecord {
+	var out []terminalEventRecord
+	for _, ev := range in {
+		if _, ok := events.ParseStatusChangeEventType(ev.EventType); ok {
+			continue
+		}
+		out = append(out, ev)
+	}
+	return out
+}
+
 // wireCapTestActivities registers every activity SessionWorkflow dispatches
 // and wires the ordinary happy-path ones (ResolveAgentDefinition,
 // BuildContext, CommitTurn) to always succeed instantly with def as the
@@ -204,8 +221,8 @@ func TestSessionWorkflow_TurnCapTrips_EndsCappedWithTurnsCapKind_NoFurtherTurnPr
 	}
 	assert.Equal(t, 2, commitCount, "exactly two turns must commit -- the turn that reaches the cap runs once, a further signalled turn never does")
 
-	terminalEvents := rec.snapshotTerminalEvents()
-	require.Len(t, terminalEvents, 1, "tripping the cap must commit exactly one terminal transcript event")
+	terminalEvents := nonStatusChangeTerminalEvents(rec.snapshotTerminalEvents())
+	require.Len(t, terminalEvents, 1, "tripping the cap must commit exactly one terminal transcript event, beyond M5's own status_change events")
 	assert.Equal(t, events.EventTypeCapped, terminalEvents[0].EventType)
 	var payload cappedEventPayload
 	require.NoError(t, json.Unmarshal(terminalEvents[0].Payload, &payload))
@@ -267,7 +284,7 @@ func TestSessionWorkflow_CostCapTrips_EndsCappedWithCostCapKind(t *testing.T) {
 	require.NotEmpty(t, statuses)
 	assert.Equal(t, session.StatusCapped, statuses[len(statuses)-1])
 
-	terminalEvents := rec.snapshotTerminalEvents()
+	terminalEvents := nonStatusChangeTerminalEvents(rec.snapshotTerminalEvents())
 	require.Len(t, terminalEvents, 1)
 	var payload cappedEventPayload
 	require.NoError(t, json.Unmarshal(terminalEvents[0].Payload, &payload))
@@ -357,7 +374,7 @@ func TestSessionWorkflow_FailedSession_CategoryDetailMatchAcrossStatusAndEvent(t
 	require.NotEmpty(t, statuses)
 	assert.Equal(t, session.StatusFailed, statuses[len(statuses)-1])
 
-	terminalEvents := rec.snapshotTerminalEvents()
+	terminalEvents := nonStatusChangeTerminalEvents(rec.snapshotTerminalEvents())
 	require.Len(t, terminalEvents, 1)
 	assert.Equal(t, events.EventTypeFailure, terminalEvents[0].EventType)
 	var eventPayload failureEventPayload
@@ -406,14 +423,20 @@ func TestSessionWorkflow_StopRacingCapTrip_ResolvesToSingleTerminalReason(t *tes
 	env := ts.NewTestWorkflowEnvironment()
 
 	// CommitTerminalEvent is a REAL registered activity (not an OnActivity
-	// mock) that blocks until its context is cancelled -- mirrors
+	// mock) that blocks until its context is cancelled for the capped
+	// event specifically (EventType == events.EventTypeCapped) -- mirrors
 	// workflow_test.go's TestSessionWorkflow_StopDuringInFlightActivity_
 	// CancelsAndEndsStopped's CallModel setup, which documents why: this is
 	// what lets the test prove actual cancellation propagation rather than
-	// a delay that merely happens to expire first. Every
-	// RegisterActivityWithOptions call must precede any OnActivity mock
-	// (testsuite panics otherwise), so this is registered before the
-	// OnActivity mocks below rather than reusing wireCapTestActivities.
+	// a delay that merely happens to expire first. Every other
+	// CommitTerminalEvent call this run makes -- FR1's pre-loop
+	// status_change:awaiting_input write, which is not inside any
+	// cancellable turn context -- returns immediately, or this call would
+	// hang the workflow before it ever reaches the turn this test actually
+	// races. Every RegisterActivityWithOptions call must precede any
+	// OnActivity mock (testsuite panics otherwise), so this is registered
+	// before the OnActivity mocks below rather than reusing
+	// wireCapTestActivities.
 	terminalEventStarted := make(chan struct{})
 	var startedOnce sync.Once
 	// The other five activities also need a real registration before
@@ -440,6 +463,9 @@ func TestSessionWorkflow_StopRacingCapTrip_ResolvesToSingleTerminalReason(t *tes
 		return UpdateSessionStatusResult{}, nil
 	}, activity.RegisterOptions{Name: ActivityUpdateSessionStatus})
 	env.RegisterActivityWithOptions(func(ctx context.Context, in CommitTerminalEventInput) (CommitTerminalEventResult, error) {
+		if in.EventType != events.EventTypeCapped {
+			return CommitTerminalEventResult{}, nil
+		}
 		startedOnce.Do(func() { close(terminalEventStarted) })
 		<-ctx.Done()
 		return CommitTerminalEventResult{}, ctx.Err()
@@ -712,7 +738,7 @@ func TestSessionWorkflow_ToolIterationCapTrips_EndsCappedWithToolIterationsCapKi
 
 	assert.Equal(t, 2, callModelCalls(), "MaxToolIterations=2 allows exactly two model calls before the third would be blocked")
 
-	terminalEvents := rec.snapshotTerminalEvents()
+	terminalEvents := nonStatusChangeTerminalEvents(rec.snapshotTerminalEvents())
 	require.Len(t, terminalEvents, 1)
 	var payload cappedEventPayload
 	require.NoError(t, json.Unmarshal(terminalEvents[0].Payload, &payload))

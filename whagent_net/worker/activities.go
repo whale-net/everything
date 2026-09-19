@@ -589,10 +589,12 @@ func (a *Activities) SumCost(ctx context.Context, in SumCostInput) (SumCostResul
 }
 
 // CommitTerminalEventInput is CommitTerminalEvent's activity input.
-// EventType must be events.EventTypeCapped or events.EventTypeFailure
-// (events.go) -- this activity is the one commit path both terminal
-// events share, mirroring how CommitTurn is the one commit path every
-// per-turn model-response event shares.
+// EventType must be events.EventTypeCapped, events.EventTypeFailure, or
+// one of the four events.StatusChangeEventType(...)-derived types
+// (running/awaiting_input/done/stopped) (events.go) -- this activity is
+// the one commit path every one of those events shares, mirroring how
+// CommitTurn is the one commit path every per-turn model-response event
+// shares.
 type CommitTerminalEventInput struct {
 	SessionID uuid.UUID
 	Turn      int
