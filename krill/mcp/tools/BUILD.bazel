@@ -123,6 +123,7 @@ go_test(
         ":tools",
         "//krill/mcp/server",
         "//krill/migrate/schema",
+        "//krill/slice",
         "//krill/store",
         "//libs/go/dbtest",
         "//libs/go/mcpauth",

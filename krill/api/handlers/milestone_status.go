@@ -15,6 +15,7 @@ package handlers
 import (
 	"fmt"
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
@@ -81,6 +82,30 @@ var ValidMilestoneStatuses = map[store.MilestoneStatus]struct{}{
 	store.MilestoneStatusShipped:           {},
 	store.MilestoneStatusPartiallyComplete: {},
 	store.MilestoneStatusAbandoned:         {},
+}
+
+// validMilestoneStatusesOrdered is ValidMilestoneStatuses' own fixed FR8
+// order (not map iteration order, which Go randomizes) -- used only to
+// name the seven valid values in a 400 body (e.g.
+// GetProductDeliveryHandler's unknown-`status`-query-param rejection).
+var validMilestoneStatusesOrdered = []store.MilestoneStatus{
+	store.MilestoneStatusNotStarted,
+	store.MilestoneStatusInDesign,
+	store.MilestoneStatusPlanned,
+	store.MilestoneStatusInProgress,
+	store.MilestoneStatusShipped,
+	store.MilestoneStatusPartiallyComplete,
+	store.MilestoneStatusAbandoned,
+}
+
+// validMilestoneStatusesJoined renders validMilestoneStatusesOrdered as a
+// comma-separated, quoted list for an error message body.
+func validMilestoneStatusesJoined() string {
+	quoted := make([]string, len(validMilestoneStatusesOrdered))
+	for i, s := range validMilestoneStatusesOrdered {
+		quoted[i] = fmt.Sprintf("%q", string(s))
+	}
+	return strings.Join(quoted, ", ")
 }
 
 // SetMilestoneStatusHandler returns the status-transition endpoint (FR8,

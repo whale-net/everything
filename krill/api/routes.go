@@ -33,7 +33,8 @@ import (
 // no write path is reachable without a session minted by `init`. Read
 // paths never require a session (root plan issue #2485) -- this includes
 // GET /milestones/{id}/status, GET /milestones/{id}/status/history, GET
-// /milestones/{id}/delivery, and GET /products/{id}/backlog.
+// /milestones/{id}/delivery, GET /products/{id}/backlog, and GET
+// /products/{id}/delivery (issue #2689, FR11).
 // Import (FR16) is a later task's route, not added here.
 //
 // githubToken is KRILL_GITHUB_TOKEN (see main.go's config/../ENV.md) --
@@ -88,6 +89,11 @@ func setupRoutes(mux *http.ServeMux, pool *pgxpool.Pool, githubToken string) {
 	// backlog bucket, plus reading the bucket's current contents.
 	mux.Handle("POST /delivery/move", gate(handlers.MoveScopeHandler(entities.Recut())))
 	mux.HandleFunc("GET /products/{id}/backlog", handlers.GetBacklogHandler(querier))
+
+	// GET /products/{id}/delivery (issue #2689, FR11, C28) is a whole
+	// product's delivery-axis listing, filterable by `status` -- ungated
+	// like every other read endpoint in this package.
+	mux.HandleFunc("GET /products/{id}/delivery", handlers.GetProductDeliveryHandler(entities.Products(), querier))
 
 	mux.Handle("POST /design-sessions", gate(handlers.OpenDesignSessionHandler(entities.DesignSessions())))
 	mux.HandleFunc("GET /design-sessions/{id}", handlers.GetDesignSessionHandler(entities.DesignSessions(), entities.RevisionEvents()))
