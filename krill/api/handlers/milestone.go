@@ -11,12 +11,14 @@
 package handlers
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"net/http"
 
 	"github.com/google/uuid"
 
+	"github.com/whale-net/everything/krill/slice"
 	"github.com/whale-net/everything/krill/store"
 )
 
@@ -549,6 +551,88 @@ func ListMilepebblesHandler(milestones store.MilestoneAuthoringStore) http.Handl
 
 		writeJSON(w, http.StatusOK, ListMilepebblesResponse{Milepebbles: summaries})
 	}
+}
+
+// Product-wide delivery listing below (issue #2689, FR11, C28) is a
+// scaffold-stage skeleton -- routes.go wiring, repeated `status=` query
+// param parsing, the unknown-status 400, and the response shape land in
+// the Implementation phase, matching //krill/slice.Querier.
+// ListProductDelivery's own skeleton this will call.
+
+// productDeliveryQuerier is the one method of *slice.Querier
+// GetProductDeliveryHandler calls, narrowed to an interface for
+// testability without Postgres -- mirrors deliveryBreakdownQuerier's own
+// precedent above (delivery_shipment.go).
+type productDeliveryQuerier interface {
+	ListProductDelivery(ctx context.Context, scopeID, productID uuid.UUID, statuses []store.MilestoneStatus) (slice.DeliveryListing, error)
+}
+
+var _ productDeliveryQuerier = (*slice.Querier)(nil)
+
+// GetProductDeliveryHandler returns FR11's product-wide delivery listing
+// endpoint: GET /products/{id}/delivery?status=planned&status=in+progress,
+// ungated like every other read endpoint in this package. A repeated
+// `status` query parameter narrows the listing to those statuses; absent
+// entirely, it means "all" (slice.Querier.ListProductDelivery's own
+// contract). An unrecognized status value is a 400 naming the seven valid
+// values (ValidMilestoneStatuses, milestone_status.go) rather than a
+// silent empty result.
+func GetProductDeliveryHandler(products store.ProductStore, querier productDeliveryQuerier) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		productID, err := uuid.Parse(r.PathValue("id"))
+		if err != nil {
+			writeJSONError(w, http.StatusBadRequest, "invalid id: must be a UUID")
+			return
+		}
+
+		statuses, ok := parseStatusFilter(w, r)
+		if !ok {
+			return
+		}
+
+		// milestone_ref rows are keyed (scope_id, product_id, ...), so
+		// this listing needs productID's own scope_id even though the
+		// caller supplied no session -- resolved from the product row
+		// itself, the same LB2 parentage every scoped store method
+		// relies on.
+		product, err := products.GetCurrentByID(r.Context(), productID)
+		if err != nil {
+			if errors.Is(err, store.ErrNotFound) {
+				writeJSONError(w, http.StatusNotFound, "product not found")
+				return
+			}
+			writeJSONError(w, http.StatusInternalServerError, "internal error")
+			return
+		}
+
+		listing, err := querier.ListProductDelivery(r.Context(), product.ScopeID, productID, statuses)
+		if err != nil {
+			writeJSONError(w, http.StatusInternalServerError, "internal error")
+			return
+		}
+
+		writeJSON(w, http.StatusOK, listing)
+	}
+}
+
+// parseStatusFilter parses r's repeated `status` query parameter into a
+// []store.MilestoneStatus, writing a 400 naming the seven valid values
+// (ValidMilestoneStatuses, milestone_status.go) and returning ok=false on
+// the first unrecognized value.
+func parseStatusFilter(w http.ResponseWriter, r *http.Request) (statuses []store.MilestoneStatus, ok bool) {
+	values := r.URL.Query()["status"]
+	statuses = make([]store.MilestoneStatus, 0, len(values))
+	for _, v := range values {
+		status := store.MilestoneStatus(v)
+		if _, valid := ValidMilestoneStatuses[status]; !valid {
+			writeJSONError(w, http.StatusBadRequest, fmt.Sprintf(
+				"status: must be one of the fixed FR8 values (%s), got %q",
+				validMilestoneStatusesJoined(), v))
+			return nil, false
+		}
+		statuses = append(statuses, status)
+	}
+	return statuses, true
 }
 
 // GetMilestoneHandler returns the milestone read endpoint: GET

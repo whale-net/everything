@@ -16,12 +16,15 @@ package tools
 import (
 	"context"
 	"fmt"
+	"reflect"
 
+	"github.com/google/jsonschema-go/jsonschema"
 	"github.com/google/uuid"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 
 	"github.com/whale-net/everything/krill/api/handlers"
 	"github.com/whale-net/everything/krill/mcp/server"
+	"github.com/whale-net/everything/krill/slice"
 	"github.com/whale-net/everything/krill/store"
 )
 
@@ -456,16 +459,102 @@ func RegisterListMilepebbles(reg *server.Registry, milestones store.MilestoneAut
 	})
 }
 
+// productDeliveryQuerier is the one method of *slice.Querier
+// list_product_delivery will call, narrowed to an interface mirroring
+// delivery_shipment.go's own deliveryBreakdownQuerier precedent, so this
+// file's tests can supply a fake without a real *store.Store.
+type productDeliveryQuerier interface {
+	ListProductDelivery(ctx context.Context, scopeID, productID uuid.UUID, statuses []store.MilestoneStatus) (slice.DeliveryListing, error)
+}
+
+var _ productDeliveryQuerier = (*slice.Querier)(nil)
+
+// listProductDeliveryInput is list_product_delivery's argument schema
+// (FR11): a Product surrogate id plus an optional repeated status filter.
+// An empty/omitted Statuses means "all", mirroring
+// slice.Querier.ListProductDelivery's own contract.
+type listProductDeliveryInput struct {
+	ProductID string   `json:"product_id" jsonschema:"The Product surrogate id to list delivery for, as a UUID string."`
+	Statuses  []string `json:"statuses,omitempty" jsonschema:"Optional list of MilestoneStatus values to filter to (see get_milestone_status for the fixed seven-value set) -- omitted or empty means all statuses."`
+}
+
+// listProductDeliveryOutputSchema is list_product_delivery's advertised
+// output schema for slice.DeliveryListing, computed once. Required for the
+// same reason slice.go's sliceDocumentOutputSchema is (see its own doc
+// comment): DeliveryListing nests slice.Document values (Delivers/
+// MustNotForeclose), and jsonschema-go's default reflection over
+// uuid.UUID (an [16]byte array) does not match encoding/json's real
+// string marshaling of it.
+var listProductDeliveryOutputSchema = mustListProductDeliveryOutputSchema()
+
+func mustListProductDeliveryOutputSchema() *jsonschema.Schema {
+	s, err := jsonschema.For[slice.DeliveryListing](&jsonschema.ForOptions{
+		TypeSchemas: map[reflect.Type]*jsonschema.Schema{
+			reflect.TypeFor[uuid.UUID](): {Type: "string"},
+		},
+	})
+	if err != nil {
+		panic(fmt.Errorf("krill/mcp/tools: building DeliveryListing output schema: %w", err))
+	}
+	return s
+}
+
+// RegisterListProductDelivery registers list_product_delivery (issue
+// #2689, FR11, C28): every milestone and milepebble under a product,
+// filterable by status, via //krill/slice.Querier.ListProductDelivery.
+// Resolves productID's own scope_id from the product row (the same LB2
+// parentage GetProductDeliveryHandler resolves for the HTTP surface),
+// since this listing needs a scope-qualified read but this read tool
+// takes no krill session.
+func RegisterListProductDelivery(reg *server.Registry, products store.ProductStore, querier productDeliveryQuerier) {
+	server.RegisterRead(reg, &mcp.Tool{
+		Name:         "list_product_delivery",
+		Description:  "List every milestone and milepebble under a Product, filterable by status (FR11) -- answers 'what is planned versus what is merely spec'd' for a whole product.",
+		OutputSchema: listProductDeliveryOutputSchema,
+	}, func(ctx context.Context, _ *mcp.CallToolRequest, in listProductDeliveryInput) (*mcp.CallToolResult, slice.DeliveryListing, error) {
+		var zero slice.DeliveryListing
+
+		productID, err := uuid.Parse(in.ProductID)
+		if err != nil {
+			return nil, zero, fmt.Errorf("product_id: invalid or missing UUID")
+		}
+
+		statuses := make([]store.MilestoneStatus, 0, len(in.Statuses))
+		for _, v := range in.Statuses {
+			status := store.MilestoneStatus(v)
+			if _, valid := handlers.ValidMilestoneStatuses[status]; !valid {
+				return nil, zero, fmt.Errorf("statuses: %q is not one of the fixed FR8 values", v)
+			}
+			statuses = append(statuses, status)
+		}
+
+		product, err := products.GetCurrentByID(ctx, productID)
+		if err != nil {
+			return nil, zero, err
+		}
+
+		listing, err := querier.ListProductDelivery(ctx, product.ScopeID, productID, statuses)
+		if err != nil {
+			return nil, zero, err
+		}
+		return nil, listing, nil
+	})
+}
+
 // RegisterMilestoneAll registers every milestone-authoring tool this
 // milestone exposes against reg -- create_milestone/set_fr_budget/
 // add_delivers/add_must_not_foreclose/add_deferral/create_milepebble/
 // add_milepebble_scope/add_discovered_scope (write) and get_milestone/
-// list_milepebbles (read). The caller (../main.go) mounts reg at the
-// design mount (server.designMountPath via designReg), never the
-// read-only spec mount: every write tool here needs a resolved krill
-// session for its LB4 subject pair, the same shape every other write tool
-// on that mount already requires (see this file's package doc comment).
-func RegisterMilestoneAll(reg *server.Registry, sessions store.SessionStore, milestones store.MilestoneAuthoringStore) {
+// list_milepebbles/list_product_delivery (read). The caller (../main.go)
+// mounts reg at the design mount (server.designMountPath via designReg),
+// never the read-only spec mount: every write tool here needs a resolved
+// krill session for its LB4 subject pair, the same shape every other
+// write tool on that mount already requires (see this file's package doc
+// comment) -- list_product_delivery is a read tool with no such
+// requirement, mounted here anyway (mirroring
+// RegisterDeliveryShipmentAll's own read/write mix) since it wraps this
+// same file's store.MilestoneAuthoringStore-adjacent surface.
+func RegisterMilestoneAll(reg *server.Registry, sessions store.SessionStore, milestones store.MilestoneAuthoringStore, products store.ProductStore, querier productDeliveryQuerier) {
 	RegisterCreateMilestone(reg, sessions, milestones)
 	RegisterSetFRBudget(reg, sessions, milestones)
 	RegisterAddDelivers(reg, sessions, milestones)
@@ -476,4 +565,5 @@ func RegisterMilestoneAll(reg *server.Registry, sessions store.SessionStore, mil
 	RegisterAddMilepebbleScope(reg, sessions, milestones)
 	RegisterAddDiscoveredScope(reg, sessions, milestones)
 	RegisterListMilepebbles(reg, milestones)
+	RegisterListProductDelivery(reg, products, querier)
 }

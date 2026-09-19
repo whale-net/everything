@@ -40,6 +40,7 @@ import (
 	"github.com/whale-net/everything/krill/mcp/server"
 	"github.com/whale-net/everything/krill/mcp/tools"
 	"github.com/whale-net/everything/krill/migrate/schema"
+	"github.com/whale-net/everything/krill/slice"
 	"github.com/whale-net/everything/krill/store"
 	"github.com/whale-net/everything/libs/go/dbtest"
 	"github.com/whale-net/everything/libs/go/mcpauth"
@@ -211,7 +212,7 @@ func TestMCPMilestoneSurface_EndToEnd(t *testing.T) {
 
 	designSrv := server.New()
 	designReg := server.NewRegistry(designSrv)
-	tools.RegisterMilestoneAll(designReg, sessions, entities.MilestoneAuthoring())
+	tools.RegisterMilestoneAll(designReg, sessions, entities.MilestoneAuthoring(), entities.Products(), slice.NewQuerier(entities))
 
 	// Mirrors ../main.go's own construction order exactly (see
 	// design_test.go's identical comment): every milestone write tool is
@@ -449,7 +450,7 @@ func TestMCPMilepebbleSurface_EndToEnd(t *testing.T) {
 
 	designSrv := server.New()
 	designReg := server.NewRegistry(designSrv)
-	tools.RegisterMilestoneAll(designReg, sessions, entities.MilestoneAuthoring())
+	tools.RegisterMilestoneAll(designReg, sessions, entities.MilestoneAuthoring(), entities.Products(), slice.NewQuerier(entities))
 	designSrv.AddReceivingMiddleware(server.WhagentPersonaMiddleware())
 
 	handler := server.NewDualAuthHTTPHandler(server.New(), designSrv, credentials, server.WhagentAuthConfig{
@@ -584,5 +585,152 @@ func TestMCPMilepebbleSurface_EndToEnd(t *testing.T) {
 		require.True(t, ok)
 		assert.Equal(t, milepebbleID, entry["id"])
 		assert.Equal(t, "cut 1", entry["name"])
+	})
+}
+
+// TestMCPListProductDelivery_EndToEnd is issue #2689's Testing section's
+// own MCP-layer re-verification of its Validation section's first bullet
+// (FR11, C28): "what is planned versus what is merely spec'd" for a whole
+// product answered over MCP alone, via list_product_delivery -- the
+// milestone/milepebble containers themselves are seeded directly through
+// the store (create_milestone/create_milepebble/status transitions are
+// already covered end to end by TestMCPMilestoneSurface_EndToEnd/
+// TestMCPMilepebbleSurface_EndToEnd above), so this test is specifically
+// about list_product_delivery's own status-filter/hierarchy/output-schema
+// behavior through the real MCP dispatch path -- a successful structured
+// response here also proves item 9 (the tool's declared output schema
+// validates against a real response): the go-sdk's own AddTool wrapper
+// validates StructuredContent against OutputSchema before ever returning
+// it, so a schema mismatch would surface as a call error, not a silent
+// pass.
+func TestMCPListProductDelivery_EndToEnd(t *testing.T) {
+	ctx := context.Background()
+	entities, pool := newMilestoneToolsTestStore(t)
+	scopeID := createMilestoneToolsTestScope(t, ctx, pool, "whale-net/krill-mcp-list-product-delivery-e2e-test")
+
+	product, err := entities.Products().Create(ctx, scopeID, "krill", "list_product_delivery e2e product")
+	require.NoError(t, err)
+
+	self := store.Subject{Iss: "https://keycloak.example.test/realms/humans", Sub: "human-1", Kind: store.SubjectKindHuman}
+
+	planned, err := entities.MilestoneAuthoring().CreateMilestone(ctx, scopeID, product.ID, "planned milestone", "ship the planned slice", nil, self, self)
+	require.NoError(t, err)
+	_, err = entities.MilestoneStatus().RecordTransition(ctx, scopeID, planned.ID, store.MilestoneStatusPlanned, nil, self, self)
+	require.NoError(t, err)
+
+	mp, err := entities.MilestoneAuthoring().CreateMilepebble(ctx, scopeID, planned.ID, "planned's own milepebble", "ship the first cut", self, self)
+	require.NoError(t, err)
+	_, err = entities.MilestoneStatus().RecordTransition(ctx, scopeID, mp.ID, store.MilestoneStatusPlanned, nil, self, self)
+	require.NoError(t, err)
+
+	shipped, err := entities.MilestoneAuthoring().CreateMilestone(ctx, scopeID, product.ID, "shipped milestone", "already out the door", nil, self, self)
+	require.NoError(t, err)
+	_, err = entities.MilestoneStatus().RecordTransition(ctx, scopeID, shipped.ID, store.MilestoneStatusShipped, nil, self, self)
+	require.NoError(t, err)
+
+	credentials := milestoneFakeCredentialStore{validToken: "fedcba9876543210fedcba9876543210fedcba9876543210fedcba98765432", identity: "swarm-operator-3"}
+	_, verifier := newMilestoneTestWhagentVerifier(t, "https://whagent.example.test")
+
+	designSrv := server.New()
+	designReg := server.NewRegistry(designSrv)
+	tools.RegisterMilestoneAll(designReg, store.NewSessionStore(pool), entities.MilestoneAuthoring(), entities.Products(), slice.NewQuerier(entities))
+	designSrv.AddReceivingMiddleware(server.WhagentPersonaMiddleware())
+
+	handler := server.NewDualAuthHTTPHandler(server.New(), designSrv, credentials, server.WhagentAuthConfig{
+		Verifier: verifier,
+		Audience: milestoneTestWhagentAudience,
+	}, server.ResourceMetadataConfig{})
+	ts := httptest.NewServer(handler)
+	t.Cleanup(ts.Close)
+
+	designURL := ts.URL + "/mcp/design"
+	humanToken := credentials.validToken
+
+	t.Run("filtered to planned, returns only the planned milestone with its milepebble nested underneath", func(t *testing.T) {
+		cs, err := connectMilestoneMCP(t, designURL, humanToken)
+		require.NoError(t, err)
+
+		res, err := cs.CallTool(ctx, &mcp.CallToolParams{
+			Name: "list_product_delivery",
+			Arguments: map[string]any{
+				"product_id": product.ID.String(),
+				"statuses":   []string{"planned"},
+			},
+		})
+		require.NoError(t, err)
+		require.False(t, res.IsError, "unexpected error: %s", milestoneTextOf(res))
+
+		structured, ok := res.StructuredContent.(map[string]any)
+		require.True(t, ok)
+		milestones, ok := structured["milestones"].([]any)
+		require.True(t, ok)
+		require.Len(t, milestones, 1, "only the planned milestone, never the shipped one")
+
+		entry, ok := milestones[0].(map[string]any)
+		require.True(t, ok)
+		assert.Equal(t, planned.ID.String(), entry["id"])
+		assert.Equal(t, "planned", entry["status"])
+
+		milepebbles, ok := entry["milepebbles"].([]any)
+		require.True(t, ok)
+		require.Len(t, milepebbles, 1, "the milestone's own milepebble is nested underneath, not a flat peer")
+		mpEntry, ok := milepebbles[0].(map[string]any)
+		require.True(t, ok)
+		assert.Equal(t, mp.ID.String(), mpEntry["id"])
+	})
+
+	t.Run("no filter returns every milestone under the product", func(t *testing.T) {
+		cs, err := connectMilestoneMCP(t, designURL, humanToken)
+		require.NoError(t, err)
+
+		res, err := cs.CallTool(ctx, &mcp.CallToolParams{
+			Name:      "list_product_delivery",
+			Arguments: map[string]any{"product_id": product.ID.String()},
+		})
+		require.NoError(t, err)
+		require.False(t, res.IsError, "unexpected error: %s", milestoneTextOf(res))
+
+		structured, ok := res.StructuredContent.(map[string]any)
+		require.True(t, ok)
+		milestones, ok := structured["milestones"].([]any)
+		require.True(t, ok)
+		require.Len(t, milestones, 2, "both the planned and the shipped milestone, no filter dropping either")
+
+		var gotIDs []string
+		for _, m := range milestones {
+			entry, ok := m.(map[string]any)
+			require.True(t, ok)
+			gotIDs = append(gotIDs, entry["id"].(string))
+		}
+		assert.Contains(t, gotIDs, planned.ID.String())
+		assert.Contains(t, gotIDs, shipped.ID.String())
+	})
+
+	t.Run("an unknown status value fails cleanly, never a silent empty result", func(t *testing.T) {
+		cs, err := connectMilestoneMCP(t, designURL, humanToken)
+		require.NoError(t, err)
+
+		res, err := cs.CallTool(ctx, &mcp.CallToolParams{
+			Name: "list_product_delivery",
+			Arguments: map[string]any{
+				"product_id": product.ID.String(),
+				"statuses":   []string{"bogus-status"},
+			},
+		})
+		require.NoError(t, err, "a rejected read is a tool error, not a protocol error")
+		assert.True(t, res.IsError)
+		assert.Contains(t, milestoneTextOf(res), "bogus-status")
+	})
+
+	t.Run("an unknown product_id fails cleanly", func(t *testing.T) {
+		cs, err := connectMilestoneMCP(t, designURL, humanToken)
+		require.NoError(t, err)
+
+		res, err := cs.CallTool(ctx, &mcp.CallToolParams{
+			Name:      "list_product_delivery",
+			Arguments: map[string]any{"product_id": uuid.New().String()},
+		})
+		require.NoError(t, err)
+		assert.True(t, res.IsError)
 	})
 }

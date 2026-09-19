@@ -146,7 +146,7 @@ func run() error {
 	designSrv := server.New()
 	designReg := server.NewRegistry(designSrv)
 	tools.RegisterDesignAll(designReg, entities, sessions, querier)
-	tools.RegisterMilestoneAll(designReg, sessions, entities.MilestoneAuthoring())
+	tools.RegisterMilestoneAll(designReg, sessions, entities.MilestoneAuthoring(), entities.Products(), querier)
 	tools.RegisterMilestoneStatusAll(designReg, sessions, entities.MilestoneStatus())
 	tools.RegisterDeliveryShipmentAll(designReg, sessions, entities.DeliveryShipments(), entities.MilestoneStatus(), querier)
 
