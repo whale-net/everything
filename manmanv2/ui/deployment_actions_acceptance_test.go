@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"regexp"
 	"strings"
 	"sync"
@@ -28,70 +29,52 @@ import (
 // behavior a Server Manager actually gets, so a future refactor that splits
 // the layers differently still has one place proving C21 works end to end.
 //
-// Since #2372 (M6 navigation/disposition), GET /sessions redirects to
-// /activity and no longer renders deployment rows -- the FR16/FR17-compliant
-// replacement page for this capability is /games?expand=<gameID>, which
-// renders the exact same DeploymentRow/DeploymentRowInner markup (see
-// handlers_games.go's buildGameDeploymentRow / pages/games.templ's
-// gameDeploymentRow). Every GET assertion in this file that used to target
-// /sessions?server_id=... now targets /games?expand=<acceptanceGameID>
-// instead; the fake's ListGames/ListGameConfigs additions below exist only
-// to give handleGames' UI-side join something to resolve every addSGC'd
-// deployment to (one fixed game/config pair shared by every test in this
-// file -- what game or config a deployment belongs to is not what this
-// suite guards). The POST action endpoints (/sessions/deployments/<id>/
-// start|stop|restart) are unchanged: #2372 retained them as action routes,
-// only the page routes moved.
+// Since the games-list/game-detail restructure (root plan #2266's ops-panel
+// task), the Games list row's expanded panel is the Daily Ops Overview
+// (pages.GameOverview, game_detail.templ), not the old Deployments table
+// (games.templ's now-retired deploymentsSection/gameDeploymentRow). Every
+// GET assertion in this file that used to target /games?expand=<gameID> and
+// look for DeploymentRow/DeploymentRowInner markup (id="deployment-row-N")
+// now looks for the ops panel's own per-deployment markup instead (see
+// gameOverviewDeploymentSection below), and every action POST that used to
+// target /sessions/deployments/<id>/{start|stop|restart} now targets
+// /games/<gameID>/overview/action (sgc_id + action form fields, one shared
+// endpoint for all three actions -- see handleGameOverview/GameOverview's
+// own forms in game_detail.templ). The legacy /sessions/deployments/...
+// and /api/deployments/.../row routes (handlers_deployment_actions.go)
+// still exist and still work if hit directly, but nothing in the UI links
+// to them any more now that gameDeploymentRow (their only caller) is gone
+// -- they are exercised by their own handler-level tests
+// (handlers_deployment_actions_test.go), not this page-level suite.
 //
 // fakeAcceptanceAPIClient is stateful, not fixed-response: StartSession
 // creates a session in "pending" (StopSession moves the live session to
 // "stopping"), and the fake's own storage is the single source of truth
 // every ListSessions call reads from -- so a poll of either the
-// unfiltered/PageSize-200 shape (buildDeploymentRowData's LatestSession/
-// Actions derivation) or the LiveOnly shape (the Live Session cell, and
-// Stop's live-session resolution) observes the same underlying state.
-// Tick(), called explicitly by a test between two HTTP round-trips,
-// converges every currently-transient session one step (pending/starting ->
-// running, or -> crashed if the SGC was configured via setLaunchFails;
-// stopping -> stopped). This is what FR7/FR8 use to model "poll the row
-// fragment endpoint through the fake's lifecycle ticks" -- the test
-// controls exactly when a tick happens, so a poll before the tick observes
-// the pre-tick state and a poll after observes the post-tick state,
-// deterministically.
+// unfiltered/PageSize-200 shape or the LiveOnly shape observes the same
+// underlying state. Tick(), called explicitly by a test between two HTTP
+// round-trips, converges every currently-transient session one step
+// (pending/starting -> running, or -> crashed if the SGC was configured via
+// setLaunchFails; stopping -> stopped).
+//
+// Note: computeOverviewStatus (handlers_games.go), which the ops panel
+// derives its status/poll-trigger from, classifies only "starting" and
+// "stopping" session statuses as transient/self-polling -- "pending" (the
+// status StartSession's fake response uses) is not, and falls through to
+// "Offline". This predates this restructure (computeOverviewStatus already
+// backed the detail page's Overview tab) and is out of scope here, so
+// TestFR7_RowUpdatesInPlaceWithoutFullReload below exercises the
+// self-terminating poll via a seeded "starting" session rather than via the
+// Start action's own "pending" response, to test the poll mechanism that
+// actually exists rather than assert behavior the shared status function
+// does not implement.
 //
 // Since #1733, restart no longer orchestrates stop-then-start from the UI
-// at all -- handleDeploymentAction's "restart" case dispatches a single
-// RestartDeployment RPC (fakeAcceptanceAPIClient.RestartDeployment below)
-// and returns as soon as it acks, so there is no wait-for-no-live-session
-// convergence left in this file to model: RestartDeployment simply records
-// the call and returns a canned response.
-//
-// Red/green discipline (verified by hand, then reverted -- see individual
-// notes at each check):
-//   - Inverting components.ComputeDeploymentActions' crashed/lost case to
-//     not set CanStart made TestFR1_StartOfferedOnlyOnStoppedCrashedLost
-//     fail (crashed/lost rows lost their Start button) while compiling
-//     cleanly; reverting restored green.
-//   - Changing handleDeploymentAction's "start" case to call
-//     app.grpc.StartSession(ctx, sgcID, true) (force=true) made
-//     TestFR2_StartFromListStartsSessionWithoutNavigation fail (Force ==
-//     true, want false); reverting restored green.
-//   - Changing restartDeployment to call app.grpc.StopSession/StartSession
-//     directly instead of app.grpc.RestartDeployment made
-//     TestFR6_RestartDispatchesRestartDeploymentOnly fail (RestartDeployment
-//     call count == 0, want 1; StopSession/StartSession call counts != 0);
-//     reverting restored green.
-//   - Removing "pending" from components.IsTransientStatus' switch made
-//     TestFR7_RowUpdatesInPlaceWithoutFullReload fail (the immediately-
-//     rendered pending row carried no hx-trigger poll attribute); reverting
-//     restored green.
-//   - Changing the Stop form's hx-post target in
-//     pages/sessions.templ (DeploymentRowInner) from
-//     fmt.Sprintf("/sessions/deployments/%d/stop", ...) to
-//     fmt.Sprintf("/sgc/%d/stop", ...) made
-//     TestNFR_AllActionsReachableFromListWithoutDetailPage fail (an hx-post
-//     target outside /sessions/deployments/...); reverting (and
-//     regenerating templ output) restored green.
+// at all -- the "restart" action dispatches a single RestartDeployment RPC
+// (fakeAcceptanceAPIClient.RestartDeployment below) and returns as soon as
+// it acks, so there is no wait-for-no-live-session convergence left in this
+// file to model: RestartDeployment simply records the call and returns a
+// canned response.
 
 // fakeSession is one deployment's current session record in
 // fakeAcceptanceAPIClient's storage.
@@ -433,29 +416,41 @@ func doGet(mux *http.ServeMux, path string) *httptest.ResponseRecorder {
 	return w
 }
 
-// deploymentRowSection isolates a single deployment row's rendered markup
-// (from its `id="deployment-row-<sgcID>"` opening tag to the closing
-// </tr>), mirroring handlers_sgc_test.go's statusConnectSection/
-// sessionHistorySection helpers of the same shape. Relocated here from the
-// now-deleted handlers_sessions_deployment_row_test.go (#2372 retired
-// handleSessions along with /sessions's page render) since this file is
-// its only remaining consumer.
-func deploymentRowSection(t *testing.T, body string, sgcID int64) string {
+// gameOverviewDeploymentSection isolates one deployment's own markup within
+// a rendered Daily Ops Overview panel: from its Connection Info id
+// (DeploymentConnectAddressID, game_detail.templ) through its Customize
+// control's deployment-settings blade template id -- the same SGC-keyed ids
+// bracket that deployment's Start/Stop/Restart action bar in between, so
+// this is safe even when multiple deployments share one game's panel
+// (buildGameRows sorts deployments by ServerGameConfigId ascending, so each
+// section never bleeds into a later sibling's). Replaces the retired
+// deploymentRowSection (which targeted DeploymentRow/DeploymentRowInner's
+// id="deployment-row-<sgcID>", no longer rendered here -- see the file
+// header comment).
+func gameOverviewDeploymentSection(t *testing.T, body string, sgcID int64) string {
 	t.Helper()
-	marker := fmt.Sprintf(`id="deployment-row-%d"`, sgcID)
-	start := strings.Index(body, marker)
+	startMarker := fmt.Sprintf(`id="deployment-connect-%d"`, sgcID)
+	start := strings.Index(body, startMarker)
 	if start < 0 {
-		t.Fatalf("expected a deployment row with %q in rendered body, got %q", marker, body)
+		t.Fatalf("expected a deployment section with %q in rendered body, got %q", startMarker, body)
 	}
-	end := strings.Index(body[start:], "</tr>")
-	if end < 0 {
-		t.Fatalf("expected a closing </tr> after the deployment row, got %q", body[start:])
+	endMarker := fmt.Sprintf(`id="deployment-settings-blade-template-%d"`, sgcID)
+	endIdx := strings.Index(body[start:], endMarker)
+	if endIdx < 0 {
+		t.Fatalf("expected %q after %q, got %q", endMarker, startMarker, body[start:])
 	}
-	return body[start : start+end]
+	return body[start : start+endIdx+len(endMarker)]
 }
 
-func doPost(mux *http.ServeMux, path string, htmx bool) *httptest.ResponseRecorder {
-	req := httptest.NewRequest(http.MethodPost, path, nil)
+// doOverviewAction posts to the Daily Ops Overview panel's one shared
+// action endpoint (POST /games/<gameID>/overview/action, sgc_id + action
+// form fields -- GameOverview/overviewDeploymentContent's own Start/Stop/
+// Restart forms in game_detail.templ), the mechanism that actually backs
+// the Games list row's action controls now (see the file header comment).
+func doOverviewAction(mux *http.ServeMux, gameID, sgcID int64, action string, htmx bool) *httptest.ResponseRecorder {
+	form := url.Values{"sgc_id": {fmt.Sprintf("%d", sgcID)}, "action": {action}}
+	req := httptest.NewRequest(http.MethodPost, fmt.Sprintf("/games/%d/overview/action", gameID), strings.NewReader(form.Encode()))
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 	if htmx {
 		req.Header.Set("HX-Request", "true")
 	}
@@ -489,8 +484,8 @@ func TestFR1_StartOfferedOnlyOnStoppedCrashedLost(t *testing.T) {
 	body := w.Body.String()
 
 	for _, id := range []int64{sgcStopped, sgcCrashed, sgcLost, sgcNever} {
-		section := deploymentRowSection(t, body, id)
-		if !strings.Contains(section, ">Start<") {
+		section := gameOverviewDeploymentSection(t, body, id)
+		if !strings.Contains(section, `value="start"`) {
 			t.Errorf("SGC %d: expected Start offered, got %q", id, section)
 		}
 	}
@@ -504,7 +499,7 @@ func TestFR2_StartFromListStartsSessionWithoutNavigation(t *testing.T) {
 	api.addSGC(sgcID)
 	api.seedSession(sgcID, "stopped")
 
-	w := doPost(mux, fmt.Sprintf("/sessions/deployments/%d/start", sgcID), true)
+	w := doOverviewAction(mux, acceptanceGameID, sgcID, "start", true)
 	if w.Code != http.StatusOK {
 		t.Fatalf("status = %d, want 200; body: %s", w.Code, w.Body.String())
 	}
@@ -521,11 +516,11 @@ func TestFR2_StartFromListStartsSessionWithoutNavigation(t *testing.T) {
 	}
 
 	body := w.Body.String()
-	if !strings.Contains(body, fmt.Sprintf(`id="deployment-row-%d"`, sgcID)) {
-		t.Fatalf("expected a row fragment response for SGC %d, got %q", sgcID, body)
+	if !strings.Contains(body, fmt.Sprintf(`id="daily-ops-overview-%d"`, acceptanceGameID)) {
+		t.Fatalf("expected an ops panel fragment response, got %q", body)
 	}
 	if strings.Contains(body, "<html") || strings.Contains(body, "<body") {
-		t.Errorf("expected a bare row fragment (no page navigation), got %q", body)
+		t.Errorf("expected a bare fragment (no page navigation), got %q", body)
 	}
 	if w.Header().Get("HX-Redirect") != "" {
 		t.Errorf("expected no HX-Redirect header, got %q", w.Header().Get("HX-Redirect"))
@@ -541,7 +536,7 @@ func TestFR2_StartNeverStartedDeployment(t *testing.T) {
 	api.addSGC(sgcID)
 	// sgcID has never had a session.
 
-	w := doPost(mux, fmt.Sprintf("/sessions/deployments/%d/start", sgcID), true)
+	w := doOverviewAction(mux, acceptanceGameID, sgcID, "start", true)
 	if w.Code != http.StatusOK {
 		t.Fatalf("status = %d, want 200; body: %s", w.Code, w.Body.String())
 	}
@@ -558,8 +553,8 @@ func TestFR2_StartNeverStartedDeployment(t *testing.T) {
 	}
 
 	body := w.Body.String()
-	if !strings.Contains(body, fmt.Sprintf(`id="deployment-row-%d"`, sgcID)) {
-		t.Fatalf("expected a row fragment response for SGC %d, got %q", sgcID, body)
+	if !strings.Contains(body, fmt.Sprintf(`id="daily-ops-overview-%d"`, acceptanceGameID)) {
+		t.Fatalf("expected an ops panel fragment response, got %q", body)
 	}
 }
 
@@ -584,14 +579,14 @@ func TestFR3_StopOfferedOnlyWithLiveRunningSession(t *testing.T) {
 
 	body := doGet(mux, fmt.Sprintf("/games?expand=%d", acceptanceGameID)).Body.String()
 
-	runningSection := deploymentRowSection(t, body, sgcRunning)
-	if !strings.Contains(runningSection, ">Stop<") {
+	runningSection := gameOverviewDeploymentSection(t, body, sgcRunning)
+	if !strings.Contains(runningSection, `value="stop"`) {
 		t.Errorf("running SGC %d: expected Stop offered, got %q", sgcRunning, runningSection)
 	}
 
 	for _, id := range []int64{sgcStopped, sgcCrashed, sgcLost, sgcNever} {
-		section := deploymentRowSection(t, body, id)
-		if strings.Contains(section, ">Stop<") {
+		section := gameOverviewDeploymentSection(t, body, id)
+		if strings.Contains(section, `value="stop"`) {
 			t.Errorf("SGC %d: expected no Stop action without a live running session, got %q", id, section)
 		}
 	}
@@ -606,7 +601,7 @@ func TestFR4_StopConfirmsThenStops(t *testing.T) {
 	api.seedSession(sgcID, "running")
 
 	listBody := doGet(mux, fmt.Sprintf("/games?expand=%d", acceptanceGameID)).Body.String()
-	section := deploymentRowSection(t, listBody, sgcID)
+	section := gameOverviewDeploymentSection(t, listBody, sgcID)
 	if !strings.Contains(section, `@click="confirmStop = true"`) {
 		t.Fatalf("expected the click-to-reveal Stop confirm gate, got %q", section)
 	}
@@ -618,7 +613,7 @@ func TestFR4_StopConfirmsThenStops(t *testing.T) {
 	liveID := api.sessions[sgcID].id
 	api.mu.Unlock()
 
-	w := doPost(mux, fmt.Sprintf("/sessions/deployments/%d/stop", sgcID), true)
+	w := doOverviewAction(mux, acceptanceGameID, sgcID, "stop", true)
 	if w.Code != http.StatusOK {
 		t.Fatalf("status = %d, want 200; body: %s", w.Code, w.Body.String())
 	}
@@ -652,14 +647,14 @@ func TestFR5_RestartOfferedOnRunningCrashedLost(t *testing.T) {
 	body := doGet(mux, fmt.Sprintf("/games?expand=%d", acceptanceGameID)).Body.String()
 
 	for _, id := range []int64{sgcRunning, sgcCrashed, sgcLost} {
-		section := deploymentRowSection(t, body, id)
-		if !strings.Contains(section, ">Restart<") {
+		section := gameOverviewDeploymentSection(t, body, id)
+		if !strings.Contains(section, `value="restart"`) {
 			t.Errorf("SGC %d: expected Restart offered, got %q", id, section)
 		}
 	}
 	for _, id := range []int64{sgcStopped, sgcNever} {
-		section := deploymentRowSection(t, body, id)
-		if strings.Contains(section, ">Restart<") {
+		section := gameOverviewDeploymentSection(t, body, id)
+		if strings.Contains(section, `value="restart"`) {
 			t.Errorf("SGC %d: expected no Restart action, got %q", id, section)
 		}
 	}
@@ -678,7 +673,7 @@ func TestFR6_RestartDispatchesRestartDeploymentOnly(t *testing.T) {
 	api.addSGC(sgcID)
 	api.seedSession(sgcID, "running")
 
-	w := doPost(mux, fmt.Sprintf("/sessions/deployments/%d/restart", sgcID), true)
+	w := doOverviewAction(mux, acceptanceGameID, sgcID, "restart", true)
 	if w.Code != http.StatusOK {
 		t.Fatalf("status = %d, want 200; body: %s", w.Code, w.Body.String())
 	}
@@ -704,66 +699,67 @@ func TestFR6_RestartDispatchesRestartDeploymentOnly(t *testing.T) {
 
 // ── FR7 ──────────────────────────────────────────────────────────────────
 
+// TestFR7_RowUpdatesInPlaceWithoutFullReload covers both halves of FR7:
+// dispatching Start returns the ops panel fragment inline (never a page
+// navigation), and a transient deployment's self-terminating poll works.
+// The poll half is exercised via a seeded "starting" session rather than
+// via Start's own resulting "pending" session -- see the file header
+// comment on computeOverviewStatus's transient classification.
 func TestFR7_RowUpdatesInPlaceWithoutFullReload(t *testing.T) {
 	_, api, mux := newAcceptanceFixture(t)
 	const sgcID = 701
 	api.addSGC(sgcID)
 	api.seedSession(sgcID, "stopped")
 
-	startResp := doPost(mux, fmt.Sprintf("/sessions/deployments/%d/start", sgcID), true)
+	startResp := doOverviewAction(mux, acceptanceGameID, sgcID, "start", true)
 	if startResp.Code != http.StatusOK {
 		t.Fatalf("status = %d, want 200; body: %s", startResp.Code, startResp.Body.String())
 	}
 	startBody := startResp.Body.String()
-	rowMarker := fmt.Sprintf(`id="deployment-row-%d"`, sgcID)
-	if !strings.Contains(startBody, rowMarker) {
-		t.Fatalf("expected a row fragment, got %q", startBody)
+	panelMarker := fmt.Sprintf(`id="daily-ops-overview-%d"`, acceptanceGameID)
+	if !strings.Contains(startBody, panelMarker) {
+		t.Fatalf("expected an ops panel fragment, got %q", startBody)
 	}
 	if strings.Contains(startBody, "<html") || strings.Contains(startBody, "<body") {
-		t.Errorf("expected a bare row fragment, not a full page reload, got %q", startBody)
+		t.Errorf("expected a bare fragment, not a full page reload, got %q", startBody)
 	}
-	if !strings.Contains(startBody, "pending") {
-		t.Errorf("expected the freshly observed pending status, got %q", startBody)
-	}
-	if strings.Contains(startBody, ">Stop<") || strings.Contains(startBody, ">Restart<") {
-		t.Errorf("expected no actions offered while pending (transient), got %q", startBody)
-	}
-	if !strings.Contains(startBody, `hx-trigger="every 3s"`) {
-		t.Errorf("expected the transient row to carry the self-terminating poll trigger, got %q", startBody)
-	}
-	if !strings.Contains(startBody, fmt.Sprintf(`hx-get="/api/deployments/%d/row"`, sgcID)) {
-		t.Errorf("expected the poll trigger to target this SGC's row-fragment endpoint, got %q", startBody)
+	if len(api.startCalls) != 1 {
+		t.Fatalf("StartSession call count = %d, want 1", len(api.startCalls))
 	}
 
-	// Poll the row fragment endpoint (mirrors the browser's hx-trigger)
-	// before any tick: still pending, still a bare fragment.
-	prePoll := doGet(mux, fmt.Sprintf("/api/deployments/%d/row", sgcID))
-	if prePoll.Code != http.StatusOK {
-		t.Fatalf("status = %d, want 200; body: %s", prePoll.Code, prePoll.Body.String())
+	// Seed a transient ("starting") session and confirm the panel carries
+	// the self-terminating poll trigger while transient.
+	api.seedSession(sgcID, "starting")
+	transientResp := doGet(mux, fmt.Sprintf("/games/%d/overview", acceptanceGameID))
+	if transientResp.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200; body: %s", transientResp.Code, transientResp.Body.String())
 	}
-	prePollBody := prePoll.Body.String()
-	if !strings.Contains(prePollBody, "pending") {
-		t.Errorf("expected the poll to still observe pending before the tick, got %q", prePollBody)
+	transientBody := transientResp.Body.String()
+	if !strings.Contains(transientBody, "RESTARTING") {
+		t.Errorf("expected the transient status badge to render, got %q", transientBody)
 	}
-	if strings.Contains(prePollBody, "<table") {
-		t.Errorf("expected a single row fragment from the poll endpoint, not the whole table, got %q", prePollBody)
+	if !strings.Contains(transientBody, `hx-trigger="every 3s"`) {
+		t.Errorf("expected the transient panel to carry the self-terminating poll trigger, got %q", transientBody)
+	}
+	if !strings.Contains(transientBody, fmt.Sprintf(`hx-get="/games/%d/overview"`, acceptanceGameID)) {
+		t.Errorf("expected the poll trigger to target this game's overview endpoint, got %q", transientBody)
 	}
 
-	// Advance the fake's lifecycle: pending -> running.
+	// Advance the fake's lifecycle: starting -> running.
 	api.Tick()
 
-	settledResp := doGet(mux, fmt.Sprintf("/api/deployments/%d/row", sgcID))
+	settledResp := doGet(mux, fmt.Sprintf("/games/%d/overview", acceptanceGameID))
 	if settledResp.Code != http.StatusOK {
 		t.Fatalf("status = %d, want 200; body: %s", settledResp.Code, settledResp.Body.String())
 	}
 	settledBody := settledResp.Body.String()
-	if !strings.Contains(settledBody, "running") {
-		t.Errorf("expected the settled row to report running after the tick, got %q", settledBody)
+	if !strings.Contains(settledBody, "ONLINE") {
+		t.Errorf("expected the settled panel to report ONLINE after the tick, got %q", settledBody)
 	}
-	if strings.Contains(settledBody, "hx-trigger") {
-		t.Errorf("expected the settled row to stop polling (no hx-trigger), got %q", settledBody)
+	if strings.Contains(settledBody, `hx-trigger="every 3s"`) {
+		t.Errorf("expected the settled panel to stop polling (no every-3s hx-trigger), got %q", settledBody)
 	}
-	if !strings.Contains(settledBody, ">Stop<") || !strings.Contains(settledBody, ">Restart<") {
+	if !strings.Contains(settledBody, `value="stop"`) || !strings.Contains(settledBody, `value="restart"`) {
 		t.Errorf("expected Stop/Restart to become available once running, got %q", settledBody)
 	}
 }
@@ -777,19 +773,19 @@ func TestFR8_FailedActionShowsInlineErrorAndObservedStatus(t *testing.T) {
 	api.seedSession(sgcID, "stopped")
 	api.setLaunchFails(sgcID)
 
-	w := doPost(mux, fmt.Sprintf("/sessions/deployments/%d/start", sgcID), true)
+	w := doOverviewAction(mux, acceptanceGameID, sgcID, "start", true)
 	if w.Code != http.StatusOK {
-		t.Fatalf("status = %d, want 200 (failure still re-renders the row); body: %s", w.Code, w.Body.String())
+		t.Fatalf("status = %d, want 200 (failure still re-renders the panel); body: %s", w.Code, w.Body.String())
 	}
 	body := w.Body.String()
-	if !strings.Contains(body, fmt.Sprintf(`id="deployment-row-%d"`, sgcID)) {
-		t.Fatalf("expected a row fragment for SGC %d, got %q", sgcID, body)
+	if !strings.Contains(body, fmt.Sprintf(`id="daily-ops-overview-%d"`, acceptanceGameID)) {
+		t.Fatalf("expected an ops panel fragment, got %q", body)
 	}
 	if !strings.Contains(body, "alert-error") {
 		t.Errorf("expected an inline alert-error on the immediate response, got %q", body)
 	}
-	if strings.Contains(body, "running") {
-		t.Errorf("expected no assumed-running status on the immediate response, got %q", body)
+	if strings.Contains(body, "ONLINE") {
+		t.Errorf("expected no assumed-online status on the immediate response, got %q", body)
 	}
 
 	// Advance the fake's lifecycle: the launch was actually attempted (a
@@ -797,19 +793,19 @@ func TestFR8_FailedActionShowsInlineErrorAndObservedStatus(t *testing.T) {
 	// rather than running.
 	api.Tick()
 
-	refreshed := doGet(mux, fmt.Sprintf("/api/deployments/%d/row", sgcID))
+	refreshed := doGet(mux, fmt.Sprintf("/games/%d/overview", acceptanceGameID))
 	if refreshed.Code != http.StatusOK {
 		t.Fatalf("status = %d, want 200; body: %s", refreshed.Code, refreshed.Body.String())
 	}
 	refreshedBody := refreshed.Body.String()
-	if !strings.Contains(refreshedBody, "crashed") {
-		t.Errorf("expected the subsequent refresh to observe crashed, got %q", refreshedBody)
+	if !strings.Contains(refreshedBody, "ERROR") {
+		t.Errorf("expected the subsequent refresh to observe the Error status, got %q", refreshedBody)
 	}
-	if strings.Contains(refreshedBody, "running") {
-		t.Errorf("expected no rendered running anywhere in this scenario, got %q", refreshedBody)
+	if strings.Contains(refreshedBody, "ONLINE") {
+		t.Errorf("expected no rendered ONLINE anywhere in this scenario, got %q", refreshedBody)
 	}
-	if !strings.Contains(refreshedBody, ">Start<") || !strings.Contains(refreshedBody, ">Restart<") {
-		t.Errorf("expected Start+Restart offered again once crashed, got %q", refreshedBody)
+	if !strings.Contains(refreshedBody, `value="start"`) || !strings.Contains(refreshedBody, `value="restart"`) {
+		t.Errorf("expected Start+Restart offered again once in Error status, got %q", refreshedBody)
 	}
 }
 
@@ -834,33 +830,37 @@ func TestNFR_StartHasNoConfirmation(t *testing.T) {
 
 	body := doGet(mux, fmt.Sprintf("/games?expand=%d", acceptanceGameID)).Body.String()
 
-	crashedSection := deploymentRowSection(t, body, sgcCrashed)
-	if !strings.Contains(crashedSection, ">Start<") {
+	crashedSection := gameOverviewDeploymentSection(t, body, sgcCrashed)
+	if !strings.Contains(crashedSection, `value="start"`) {
 		t.Fatalf("expected Start offered on a crashed deployment, got %q", crashedSection)
 	}
 	if !strings.Contains(crashedSection, `@click="confirmRestart = true"`) {
 		t.Fatalf("expected Restart's confirm gate on a crashed deployment, got %q", crashedSection)
 	}
 
-	// Isolate Start's own <form>...</form> (from its hx-post target through
-	// its own closing tag) to prove it individually carries no confirm-gate
-	// markup, even though this same row's Restart control (a sibling
-	// action) does.
-	startTarget := fmt.Sprintf("/sessions/deployments/%d/start", sgcCrashed)
-	startFormStart := strings.Index(crashedSection, startTarget)
-	if startFormStart < 0 {
-		t.Fatalf("expected Start's hx-post target %q in the row, got %q", startTarget, crashedSection)
+	// Isolate Start's own <form>...</form> (bounded by its own
+	// value="start" hidden input, since all three actions share one
+	// hx-post target now -- see doOverviewAction) to prove it individually
+	// carries no confirm-gate markup, even though this same row's Restart
+	// control (a sibling action) does.
+	startValueIdx := strings.Index(crashedSection, `value="start"`)
+	if startValueIdx < 0 {
+		t.Fatalf("expected Start's value=\"start\" hidden input in the section, got %q", crashedSection)
 	}
-	startFormEnd := strings.Index(crashedSection[startFormStart:], "</form>")
-	if startFormEnd < 0 {
-		t.Fatalf("expected a closing </form> after Start's hx-post target, got %q", crashedSection[startFormStart:])
+	formStart := strings.LastIndex(crashedSection[:startValueIdx], "<form")
+	if formStart < 0 {
+		t.Fatalf("expected an enclosing <form> before Start's hidden input, got %q", crashedSection[:startValueIdx])
 	}
-	startForm := crashedSection[startFormStart : startFormStart+startFormEnd]
+	formEnd := strings.Index(crashedSection[formStart:], "</form>")
+	if formEnd < 0 {
+		t.Fatalf("expected a closing </form> after Start's hidden input, got %q", crashedSection[formStart:])
+	}
+	startForm := crashedSection[formStart : formStart+formEnd]
 	if strings.Contains(startForm, "confirm") || strings.Contains(startForm, "Cancel") || strings.Contains(startForm, "x-show") {
 		t.Errorf("expected Start's own form to carry no confirm-gate markup, got %q", startForm)
 	}
 
-	runningSection := deploymentRowSection(t, body, sgcRunning)
+	runningSection := gameOverviewDeploymentSection(t, body, sgcRunning)
 	if !strings.Contains(runningSection, `@click="confirmStop = true"`) {
 		t.Errorf("expected Stop's confirm gate on a running deployment, got %q", runningSection)
 	}
@@ -870,7 +870,7 @@ func TestNFR_StartHasNoConfirmation(t *testing.T) {
 }
 
 // TestNFR_AllActionsReachableFromListWithoutDetailPage asserts every action
-// control on /games posts directly to a /sessions/deployments/...
+// control on /games posts directly to the ops panel's own action
 // endpoint -- never to a /sgc/{id} or /sessions/{id} detail-page route --
 // so no one-click action requires first navigating away from the list.
 func TestNFR_AllActionsReachableFromListWithoutDetailPage(t *testing.T) {
@@ -894,10 +894,11 @@ func TestNFR_AllActionsReachableFromListWithoutDetailPage(t *testing.T) {
 	if len(matches) == 0 {
 		t.Fatalf("expected at least one hx-post action target on /games, found none")
 	}
+	wantTarget := fmt.Sprintf("/games/%d/overview/action", acceptanceGameID)
 	for _, m := range matches {
 		target := m[1]
-		if !strings.HasPrefix(target, "/sessions/deployments/") {
-			t.Errorf("action target %q is not a /sessions/deployments/... endpoint -- an action would require navigating elsewhere first", target)
+		if target != wantTarget {
+			t.Errorf("action target %q is not the ops panel's %q endpoint -- an action would require navigating elsewhere first", target, wantTarget)
 		}
 	}
 }

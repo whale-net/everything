@@ -56,13 +56,11 @@ type GameFormData struct {
 // never ServerGameConfig.status, which is the unrelated active/inactive
 // lifecycle flag (FR5).
 //
-// Task #2272 (FR6) additionally builds each game's expanded-row
-// Deployments section from this same in-memory join: per-deployment
-// Start/Stop/Restart availability and the session-status badge reuse
-// components.ComputeDeploymentActions / pages.DeploymentRow verbatim (the
-// same derivation and markup buildDeploymentRowData/DeploymentRow render on
-// /sessions, #1627) so the two surfaces cannot drift on the same
-// deployment's state -- see buildGameDeploymentRow.
+// Each game's expanded-row Daily Ops Overview panel is also built from
+// this same in-memory join: per-deployment status, uptime, connect, and
+// Start/Stop/Restart availability reuse buildGameDeploymentOverview, the
+// same helper the detail page's Overview tab (buildGameOverviewData) calls,
+// so the two surfaces cannot drift on the same deployment's state.
 func (app *App) handleGames(w http.ResponseWriter, r *http.Request) {
 	user := htmxauth.GetUser(r.Context())
 	ctx := r.Context()
@@ -176,6 +174,13 @@ func (app *App) handleGames(w http.ResponseWriter, r *http.Request) {
 // list row's "View More" link, so a game's ListGameConfigs result still
 // feeds configByID below (deployment -> game resolution) but no longer
 // backs a per-row Configs field.
+//
+// Each row's expanded panel is the Daily Ops Overview (pages.GameOverview),
+// built per deployment via buildGameDeploymentOverview -- the same helper
+// buildGameOverviewData uses for the detail page's Overview tab -- so the
+// two surfaces cannot independently disagree about a deployment's state.
+// No RPC backs this: buildGameDeploymentOverview only reads the maps this
+// function already built from the five fleet-wide calls above.
 func buildGameRows(
 	games []*manmanpb.Game,
 	configs []*manmanpb.GameConfig,
@@ -222,7 +227,7 @@ func buildGameRows(
 
 		runState := components.DeploymentStopped
 		connect := components.ConnectAddressView{Unavailable: true}
-		deploymentRows := make([]pages.GameDeploymentRow, 0, len(gameDeployments))
+		depOverviews := make([]pages.GameDeploymentOverview, 0, len(gameDeployments))
 		for _, d := range gameDeployments {
 			latest := components.LatestSession(sessionsBySGC[d.GetServerGameConfigId()])
 			server := serverByID[d.GetServerId()]
@@ -237,15 +242,18 @@ func buildGameRows(
 				}
 			}
 
-			deploymentRows = append(deploymentRows, buildGameDeploymentRow(game, cfg, server, d, latest, restartStates[d.GetServerGameConfigId()]))
+			depOverviews = append(depOverviews, buildGameDeploymentOverview(game.GetGameId(), cfg, server, d, latest, restartStates[d.GetServerGameConfigId()]))
 		}
 
 		rows = append(rows, pages.GameRow{
-			GameID:      game.GetGameId(),
-			Name:        game.GetName(),
-			RunState:    runState,
-			Connect:     connect,
-			Deployments: deploymentRows,
+			GameID:   game.GetGameId(),
+			Name:     game.GetName(),
+			RunState: runState,
+			Connect:  connect,
+			Overview: pages.GameOverviewData{
+				GameID:      game.GetGameId(),
+				Deployments: depOverviews,
+			},
 		})
 	}
 
@@ -262,9 +270,11 @@ func buildGameRows(
 	return rows
 }
 
-// buildGameDeploymentRow builds one row of a game's expanded Deployments
-// section (#2272, FR6). Row.Actions/Row.LatestSession/Row.SGCStatus/
-// Row.LiveSession are exactly the fields pages.DeploymentRow /
+// buildGameDeploymentRow builds one row of GameDetail's Advanced tab
+// Deployments & Rebuilds table (the Games list row uses
+// buildGameDeploymentOverview instead -- see buildGameRows).
+// Row.Actions/Row.LatestSession/Row.SGCStatus/Row.LiveSession are exactly
+// the fields pages.DeploymentRow /
 // DeploymentRowInner (#1627) already know how to render Start/Stop/Restart
 // availability and the session-status badge from -- components.
 // ComputeDeploymentActions(latest) is called here directly (the same
@@ -281,12 +291,12 @@ func buildGameRows(
 // column renders the same way it would from a dedicated getLiveSession
 // call, without a second RPC.
 //
-// restartState is this deployment's entry (if any) from handleGames' one
+// restartState is this deployment's entry (if any) from the caller's one
 // batched ListPendingRestarts call -- Row.RestartState feeds
 // DeploymentRowInner's components.RestartBadge exactly like
 // buildDeploymentRowData does, so the badge (FR17's retained-capability
-// requirement, verified by task #2372 to have been missing here) renders
-// on Games too, not just on the #1628 poll/action-endpoint path.
+// requirement) renders on the Advanced tab too, not just on the #1628
+// poll/action-endpoint path.
 func buildGameDeploymentRow(game *manmanpb.Game, cfg *manmanpb.GameConfig, server *manmanpb.Server, d *manmanpb.ServerGameConfig, latest *manmanpb.Session, restartState *manmanpb.PendingRestartState) pages.GameDeploymentRow {
 	serverName := server.GetName()
 	if serverName == "" {
@@ -618,7 +628,14 @@ func (app *App) handleGameDetail(w http.ResponseWriter, r *http.Request) {
 	if activeTab == "" {
 		activeTab = "overview"
 	}
-	if !isAdmin && (activeTab == "configuration" || activeTab == "advanced") {
+	// "configuration" is no longer a real tab (folded into the Overview
+	// tab's collapsed View More section): an old ?tab=configuration
+	// bookmark resolves to Overview unconditionally, not just for
+	// non-admins, so it never renders a blank panel.
+	if activeTab == "configuration" {
+		activeTab = "overview"
+	}
+	if !isAdmin && activeTab == "advanced" {
 		activeTab = "overview"
 	}
 
@@ -1489,68 +1506,85 @@ func (app *App) buildGameOverviewData(ctx context.Context, gameID int64, configs
 		latest := components.LatestSession(sessionsBySGC[d.GetServerGameConfigId()])
 		restartState := restartStates[d.GetServerGameConfigId()]
 
-		status, variant, isTransient := computeOverviewStatus(latest, restartState)
-
-		uptime := "—"
-		if status == "Online" && latest != nil && latest.GetStartedAt() > 0 {
-			uptime = computeUptime(latest.GetStartedAt())
-		} else if status == "Restarting" {
-			uptime = "Restarting..."
-		}
-
-		var hostPublicAddress string
-		var serverName string
-		if server != nil {
-			hostPublicAddress = server.GetHostPublicAddress()
-			serverName = server.GetName()
-		}
-		if serverName == "" {
-			serverName = fmt.Sprintf("Server %d", d.GetServerId())
-		}
-
-		var configName string
-		if cfg != nil {
-			configName = cfg.GetName()
-		}
-		if configName == "" {
-			configName = fmt.Sprintf("Config %d", d.GetGameConfigId())
-		}
-		displayName := fmt.Sprintf("%s on %s", configName, serverName)
-
-		var logsURL string
-		if latest != nil {
-			logsURL = fmt.Sprintf("/sessions/%d", latest.GetSessionId())
-		}
-
-		connect := components.BuildConnectAddressView(hostPublicAddress, d.GetPortBindings())
-
-		canStart := (status == "Offline" || status == "Error")
-		canStop := (status == "Online")
-		canRestart := (status == "Online" || status == "Error")
-
-		depOverviews = append(depOverviews, pages.GameDeploymentOverview{
-			SGCID:         d.GetServerGameConfigId(),
-			ServerID:      d.GetServerId(),
-			ServerName:    serverName,
-			ConfigID:      d.GetGameConfigId(),
-			ConfigName:    configName,
-			DisplayName:   displayName,
-			Status:        status,
-			StatusVariant: variant,
-			Uptime:        uptime,
-			Connect:       connect,
-			CanStart:      canStart,
-			CanStop:       canStop,
-			CanRestart:    canRestart,
-			IsTransient:   isTransient,
-			LogsURL:       logsURL,
-		})
+		depOverviews = append(depOverviews, buildGameDeploymentOverview(gameID, cfg, server, d, latest, restartState))
 	}
 
 	return pages.GameOverviewData{
 		GameID:      gameID,
 		Deployments: depOverviews,
 	}, nil
+}
+
+// buildGameDeploymentOverview builds one deployment's Daily Ops Overview
+// entry (pages.GameDeploymentOverview): status/variant/isTransient
+// (computeOverviewStatus), uptime, connect address, Start/Stop/Restart
+// availability, display name, and link-outs. Shared by buildGameOverviewData
+// (the detail page's Overview tab) and buildGameRows (the Games list row's
+// expanded panel) so the two surfaces derive a deployment's ops state
+// identically -- issues no RPCs itself, callers already hold everything it
+// needs.
+func buildGameDeploymentOverview(gameID int64, cfg *manmanpb.GameConfig, server *manmanpb.Server, d *manmanpb.ServerGameConfig, latest *manmanpb.Session, restartState *manmanpb.PendingRestartState) pages.GameDeploymentOverview {
+	status, variant, isTransient := computeOverviewStatus(latest, restartState)
+
+	uptime := "—"
+	if status == "Online" && latest != nil && latest.GetStartedAt() > 0 {
+		uptime = computeUptime(latest.GetStartedAt())
+	} else if status == "Restarting" {
+		uptime = "Restarting..."
+	}
+
+	var hostPublicAddress string
+	var serverName string
+	if server != nil {
+		hostPublicAddress = server.GetHostPublicAddress()
+		serverName = server.GetName()
+	}
+	if serverName == "" {
+		serverName = fmt.Sprintf("Server %d", d.GetServerId())
+	}
+
+	var configName string
+	if cfg != nil {
+		configName = cfg.GetName()
+	}
+	if configName == "" {
+		configName = fmt.Sprintf("Config %d", d.GetGameConfigId())
+	}
+	displayName := fmt.Sprintf("%s on %s", configName, serverName)
+
+	var logsURL string
+	if latest != nil {
+		logsURL = fmt.Sprintf("/sessions/%d", latest.GetSessionId())
+	}
+
+	connect := components.BuildConnectAddressView(hostPublicAddress, d.GetPortBindings())
+
+	canStart := (status == "Offline" || status == "Error")
+	canStop := (status == "Online")
+	canRestart := (status == "Online" || status == "Error")
+
+	return pages.GameDeploymentOverview{
+		SGCID:         d.GetServerGameConfigId(),
+		ServerID:      d.GetServerId(),
+		ServerName:    serverName,
+		ConfigID:      d.GetGameConfigId(),
+		ConfigName:    configName,
+		DisplayName:   displayName,
+		Status:        status,
+		StatusVariant: variant,
+		Uptime:        uptime,
+		Connect:       connect,
+		CanStart:      canStart,
+		CanStop:       canStop,
+		CanRestart:    canRestart,
+		IsTransient:   isTransient,
+		LogsURL:       logsURL,
+		// The config-level Actions management page (C23/M3): the existing
+		// Actions surface (console commands) -- also backs this
+		// deployment's Customize control (deployment settings blade), same
+		// URL shape buildGameDeploymentRow computes for the Advanced tab.
+		ActionsURL: fmt.Sprintf("/games/%d/configs/%d/actions", gameID, cfg.GetConfigId()),
+	}
 }
 
 // handleGameOverview serves GET /games/{id}/overview and POST /games/{id}/overview/action.

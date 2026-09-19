@@ -21,12 +21,13 @@ import (
 // <template> into the document rather than fetching anything, so it too
 // costs no request (see openDeploymentSettingsBlade below).
 //
-// The expanded row is deliberately kept to just the Deployments section
-// (start/stop/restart, connect, logs, Customize): Configurations, Workshop
-// Libraries, and the settings/danger footer moved to GameDetail
-// (game_detail.templ) behind each row's "View More" link -- a quick-glance
-// list shouldn't require parsing four sections to find the actionable
-// controls.
+// The expanded row renders the Daily Ops Overview panel (GameOverview,
+// game_detail.templ) -- status, runtime, connect, and Start/Stop/Restart/
+// Customize/Console Commands per deployment -- the same shared component
+// /games/{id}'s Overview tab renders, so the two surfaces cannot drift.
+// Configurations, Workshop Libraries, and the settings/danger footer moved
+// to GameDetail behind each row's "View More" link -- a quick-glance list
+// shouldn't require parsing four sections to find the actionable controls.
 type GamesPageData struct {
 	Layout components.LayoutData
 	Games  []GameRow
@@ -58,20 +59,23 @@ type GameRow struct {
 	// blank (AC2).
 	Connect components.ConnectAddressView
 
-	// Deployments populates the expanded row's Deployments section (#2272,
-	// FR6): one GameDeploymentRow per deployment of this game.
-	Deployments []GameDeploymentRow
+	// Overview populates the expanded row's Daily Ops Overview panel
+	// (#2272/GameOverview): one GameDeploymentOverview per deployment of
+	// this game, built via the same buildGameDeploymentOverview helper
+	// the detail page's Overview tab uses, so the two surfaces cannot
+	// independently disagree about the same deployment's state.
+	Overview GameOverviewData
 }
 
-// GameDeploymentRow is one row of a game's expanded Deployments section
-// (#2272, FR6). Row is the shared pages.DeploymentRowData -- rendered
-// verbatim via DeploymentRow/DeploymentRowInner (#1627), the same
-// component /sessions renders each deployment with -- so Start/Stop/
-// Restart availability, the session-status badge, and the #1628
-// self-terminating row poll are reused unmodified rather than re-derived
-// (FR6's anti-drift requirement: this page must not be able to disagree
-// with /sessions about the same deployment's state). Connect, LogsURL, and
-// ActionsURL are additive: none of them feed back into Row's derivation.
+// GameDeploymentRow is one row of GameDetail's Advanced tab Deployments &
+// Rebuilds table (the Games list row now uses GameOverview/
+// GameDeploymentOverview instead -- see GameRow.Overview). Row is the
+// shared pages.DeploymentRowData -- the same status/actions derivation
+// buildDeploymentRowData feeds DeploymentRow/DeploymentRowInner (#1627) on
+// /sessions, so this table's status badge cannot drift from /sessions'
+// even though the Advanced tab renders its own compact `<tr>` rather than
+// reusing DeploymentRow verbatim. Connect, LogsURL, and ActionsURL are
+// additive: none of them feed back into Row's derivation.
 type GameDeploymentRow struct {
 	Row DeploymentRowData
 	// Connect is the shared connect-address view (#2268), same as the
@@ -193,7 +197,7 @@ templ gameRow(row GameRow, startExpanded bool) {
 				@htmxui.Badge(deploymentStatusLabel(row.RunState), statusBadgeVariant(string(row.RunState)), htmxui.BadgeSizeMD, true, nil)
 			</div>
 			<div class="flex items-center gap-3 shrink-0">
-				if len(row.Deployments) <= 1 {
+				if len(row.Overview.Deployments) <= 1 {
 					<div @click.stop class="shrink-0">
 						@components.ConnectAddressDisplay(row.Connect)
 					</div>
@@ -214,20 +218,18 @@ templ gameRow(row GameRow, startExpanded bool) {
 			</div>
 		</div>
 		<!--
-			Expanded row shell (FR4: at most one nested panel level): just
-			the Deployments section (#2272, FR6), namely Start/Stop/Restart,
-			connect, logs, and Customize, rendered for real here from row
-			data already fetched on page load, never a fetch of its own.
-			Configurations, Workshop Libraries, and the settings/danger
-			footer moved to GameDetail (game_detail.templ): a quick-glance
-			list shouldn't require parsing four sections to find the
-			actionable controls, so everything else is one "View More"
-			click away instead.
+			Expanded row shell (FR4: at most one nested panel level): the
+			Daily Ops Overview panel (GameOverview), status, runtime,
+			connect, and per-deployment Start/Stop/Restart/Customize/Console
+			Commands, rendered for real here from row data already fetched
+			on page load, never a fetch of its own. Configurations,
+			Workshop Libraries, and the settings/danger footer moved to
+			GameDetail (game_detail.templ): a quick-glance list shouldn't
+			require parsing four sections to find the actionable controls,
+			so everything else is one "View More" click away instead.
 		-->
 		<div id={ fmt.Sprintf("game-expand-%d", row.GameID) } x-show="expanded" x-cloak class="border-t border-base-300 p-4 flex flex-col gap-3">
-			<div id={ fmt.Sprintf("game-deployments-%d", row.GameID) }>
-				@deploymentsSection(row.Deployments)
-			</div>
+			@GameOverview(row.Overview)
 			<a href={ templ.URL(fmt.Sprintf("/games/%d", row.GameID)) } class="btn btn-outline btn-sm self-end">
 				View More →
 			</a>
@@ -235,97 +237,11 @@ templ gameRow(row GameRow, startExpanded bool) {
 	</div>
 }
 
-// deploymentsSection renders the expanded row's Deployments section (#2272,
-// FR6, AC1): every deployment of this game, or a muted empty state when it
-// has none. Deployments render inside a <table> even though this section is
-// otherwise card-based, because gameDeploymentRow's status/actions half is
-// literally DeploymentRow's own <tr> (#1627) -- reused, not
-// reimplemented -- and htmx's outerHTML swap on that <tr> (the #1628 row
-// poll, and the Start/Stop/Restart action responses) only parses correctly
-// with a real <table>/<tbody> ancestor providing table insertion-mode
-// context; a <div>-based swap target would silently drop the replacement
-// content.
-templ deploymentsSection(deployments []GameDeploymentRow) {
-	if len(deployments) == 0 {
-		<p class="text-sm text-base-content/60">No deployments yet.</p>
-	} else {
-		<div class="overflow-x-auto">
-			<table class="table table-sm">
-				<tbody>
-					for _, dep := range deployments {
-						@gameDeploymentRow(dep)
-					}
-				</tbody>
-			</table>
-		</div>
-	}
-}
-
-// gameDeploymentRow renders one Deployments-section entry: a name/connect/
-// link-outs/Customize header row, immediately followed by dep.Row rendered
-// via DeploymentRow(dep.Row) -- byte-identical to how /sessions renders the
-// same deployment (#1627), so Start/Stop/Restart availability and the
-// session-status badge cannot drift from /sessions (FR6). colspan matches
-// DeploymentRowInner's own four <td>s.
-templ gameDeploymentRow(dep GameDeploymentRow) {
-	<tr class="bg-base-200/40">
-		<td colspan="4">
-			<div class="flex flex-wrap justify-between items-center gap-3 py-1">
-				<div class="flex items-center gap-3">
-					<span class="font-medium text-sm">{ dep.Row.DisplayName }</span>
-					<!--
-						AC4: this span is the stable target a successful ports
-						Save (#2275, handleDeploymentSettingsPortsSave) swaps
-						out of band via DeploymentConnectAddressOOB, so the
-						recomputed connect address shows up here without
-						re-fetching anything else on this page (FR10).
-					-->
-					<span id={ DeploymentConnectAddressID(dep.Row.ServerGameConfigID) }>
-						@components.ConnectAddressDisplay(dep.Connect)
-					</span>
-				</div>
-				<div class="flex items-center gap-3 text-xs">
-					if dep.ActionsURL != "" {
-						<a href={ templ.URL(dep.ActionsURL) } class="link link-primary" title="Configure custom console commands">Console Commands</a>
-					}
-					<button
-						type="button"
-						data-open-blade-template={ fmt.Sprintf("deployment-settings-blade-template-%d", dep.Row.ServerGameConfigID) }
-						class="btn btn-outline btn-xs"
-					>
-						Customize
-					</button>
-				</div>
-			</div>
-			<template id={ fmt.Sprintf("deployment-settings-blade-template-%d", dep.Row.ServerGameConfigID) }>
-				@components.Blade(components.BladeData{
-					ID:       fmt.Sprintf("deployment-settings-blade-%d", dep.Row.ServerGameConfigID),
-					Title:    "Deployment Settings",
-					Subtitle: dep.Row.DisplayName,
-				}) {
-					<!--
-						#2274, FR11: the environment section, lazily fetched (see
-						DeploymentSettingsEnvPlaceholder's doc comment) rather than
-						pre-rendered here.
-						#2275, FR12: the ports section, alongside it: an
-						*accumulating* section (unlike env's per-key commits),
-						which is why #2269's Blade dismissal can prompt for this
-						blade at all (FR10's section-granularity rule). See the
-						split note on issue #2274 and deployment_settings.templ's
-						file doc comment.
-					-->
-					@DeploymentSettingsEnvPlaceholder(dep.Row.ServerGameConfigID)
-					@DeploymentSettingsPortsPlaceholder(dep.Row.ServerGameConfigID)
-				}
-			</template>
-		</td>
-	</tr>
-	@DeploymentRow(dep.Row)
-}
-
 // Configurations, Workshop Libraries, and the settings/danger footer that
 // used to render here (FR7/FR9, task #2273; FR8/FR9/FR10, task #2367) moved
 // to GameDetail (game_detail.templ, reachable via each row's "View More"
 // link): GameDetail already has its own Configurations table, and
 // gameWorkshopPlaceholder moved there as well -- see its doc comment on
-// game_detail.templ.
+// game_detail.templ. The Deployments table (deploymentsSection/
+// gameDeploymentRow) that used to render in the expanded row was replaced
+// by the Daily Ops Overview panel (GameOverview) -- see gameRow above.
