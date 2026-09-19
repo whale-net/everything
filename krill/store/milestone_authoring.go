@@ -531,7 +531,20 @@ func (s milestoneAuthoringStore) AddMilepebbleDelivers(ctx context.Context, scop
 }
 
 func (s milestoneAuthoringStore) ListMilepebblesByMilestone(ctx context.Context, milestoneID uuid.UUID) ([]MilestoneRef, error) {
-	rows, err := s.pool.Query(ctx, `
+	return listMilepebblesByMilestone(ctx, s.pool, milestoneID)
+}
+
+// milestoneRefQueryer is the one method listMilepebblesByMilestone needs
+// -- satisfied by both *pgxpool.Pool (ListMilepebblesByMilestone's own
+// pool-backed read) and pgx.Tx (Abandon's cascade step, abandon.go, issue
+// #2688, which lists a milestone's live milepebbles inside its own
+// transaction rather than through a second, standalone read).
+type milestoneRefQueryer interface {
+	Query(ctx context.Context, sql string, args ...any) (pgx.Rows, error)
+}
+
+func listMilepebblesByMilestone(ctx context.Context, q milestoneRefQueryer, milestoneID uuid.UUID) ([]MilestoneRef, error) {
+	rows, err := q.Query(ctx, `
 		SELECT `+milestoneRefColumns+`
 		FROM milestone_ref
 		WHERE parent_milestone_id = $1

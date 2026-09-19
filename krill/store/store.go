@@ -94,6 +94,13 @@ func (s *Store) Recut() RecutStore {
 	return recutStore{pool: s.pool}
 }
 
+// Abandon returns the AbandonStore implementation -- the composed abandon
+// verb (migration 012/013/014's tables, issue #2688, FR6) that appends an
+// `abandoned` MilestoneStatusEvent and sweeps a container's not-yet-shipped
+// DeliveryBreakdown scope into its product's backlog bucket, in one
+// transaction.
+func (s *Store) Abandon() AbandonStore { return abandonStore{pool: s.pool} }
+
 // Amend returns the AmendStore implementation -- the SCD2 close-and-open
 // write path (FR12, issue #2493) for Requirement and LoadBearingDecision.
 func (s *Store) Amend() AmendStore { return amendStore{pool: s.pool} }

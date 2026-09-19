@@ -95,11 +95,28 @@ func (s milestoneStatusEventStore) RecordTransition(ctx context.Context, scopeID
 	}
 	defer tx.Rollback(ctx) //nolint:errcheck
 
+	event, err := recordTransitionTx(ctx, tx, scopeID, milestoneID, status, note, acting, onBehalfOf)
+	if err != nil {
+		return MilestoneStatusEvent{}, err
+	}
+
+	if err := tx.Commit(ctx); err != nil {
+		return MilestoneStatusEvent{}, fmt.Errorf("commit: %w", err)
+	}
+	return event, nil
+}
+
+// recordTransitionTx is RecordTransition's transaction-scoped core --
+// shared with Abandon (abandon.go, issue #2688), which appends this same
+// append-only row as one step inside its own larger transaction rather
+// than through a second, standalone one.
+func recordTransitionTx(ctx context.Context, tx pgx.Tx, scopeID, milestoneID uuid.UUID, status MilestoneStatus, note *string, acting, onBehalfOf Subject) (MilestoneStatusEvent, error) {
 	// milestone_ref's own kind CHECK (migration 011) already restricts
-	// every row to kind IN ('milestone', 'milepebble') -- a plain
-	// existence check under scopeID is therefore sufficient to enforce
-	// this method's "target is a milestone or milepebble" contract; there
-	// is no third kind a row in this table could have.
+	// every row to kind IN ('milestone', 'milepebble', 'backlog') -- a
+	// plain existence check under scopeID is therefore sufficient to
+	// enforce this method's "target is a milestone or milepebble"
+	// contract; Abandon (abandon.go) itself is what keeps a backlog row
+	// from ever reaching here.
 	exists, err := plainRowExists(ctx, tx, "milestone_ref", milestoneID, scopeID)
 	if err != nil {
 		return MilestoneStatusEvent{}, err
@@ -121,16 +138,21 @@ func (s milestoneStatusEventStore) RecordTransition(ctx context.Context, scopeID
 	if err != nil {
 		return MilestoneStatusEvent{}, fmt.Errorf("insert milestone_status_event: %w", err)
 	}
-
-	if err := tx.Commit(ctx); err != nil {
-		return MilestoneStatusEvent{}, fmt.Errorf("commit: %w", err)
-	}
 	return event, nil
 }
 
 func (s milestoneStatusEventStore) CurrentStatus(ctx context.Context, milestoneID uuid.UUID) (MilestoneStatus, error) {
+	return currentStatusTx(ctx, s.pool, milestoneID)
+}
+
+// currentStatusTx is CurrentStatus's core query, generalized over
+// txQuerier (errors.go) so Abandon (abandon.go, issue #2688) can read a
+// container's latest status inside its own transaction -- the "already
+// abandoned" check needs the same snapshot the rest of that transaction
+// runs against, not a separate read through the pool.
+func currentStatusTx(ctx context.Context, q txQuerier, milestoneID uuid.UUID) (MilestoneStatus, error) {
 	var status string
-	err := s.pool.QueryRow(ctx, `
+	err := q.QueryRow(ctx, `
 		SELECT status FROM milestone_status_event
 		WHERE milestone_id = $1
 		ORDER BY created_at DESC, id DESC
