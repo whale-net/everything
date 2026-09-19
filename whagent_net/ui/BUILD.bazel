@@ -141,6 +141,7 @@ go_test(
         "handlers_sessions_test.go",
         "main_test.go",
         "mcpauth_test.go",
+        "templ_render_test.go",
     ],
     # Made available so TestMint_OnlyCalledFromHandleLinkASSStart
     # (handlers_link_test.go) can locate and parse this package's own
@@ -158,6 +159,7 @@ go_test(
         "//libs/go/grpcauth/grantindex",
         "//libs/go/htmxauth",
         "//libs/go/htmxsse",
+        "//libs/go/htmxui",
         "//libs/go/mcpauth",
         "//libs/go/rmq",
         "//whagent_net/delegatedgrant",

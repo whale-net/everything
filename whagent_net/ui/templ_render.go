@@ -41,12 +41,23 @@ func RenderTempl(w http.ResponseWriter, r *http.Request, title string, component
 
 // buildHead constructs the CustomHead markup: pinned Tailwind browser
 // build + daisyUI CDN <link>, then htmxui.ThemesCSS, in that exact order
-// (see the "Trap" doc comment above). Split out from RenderTempl so a
-// future templ_render_test.go can assert the load order directly against
+// (see the "Trap" doc comment above), then the htmx SSE extension script
+// session.templ's hx-ext="sse" (and its sse-connect/sse-swap attributes)
+// require to do anything at all -- without this script tag, htmx silently
+// no-ops the unknown "sse" extension and no live connection is ever
+// opened, regardless of the backend correctly publishing to the bus.
+// Mirrors manmanv2/ui/templ_render.go's and
+// tools/app_registry/ui/templ_render.go's identical buildHead line;
+// appended last, same as those two, since it has no ordering dependency on
+// daisyUI/ThemesCSS and only needs to load after the htmx core script,
+// which htmxbase.LayoutData already guarantees by rendering core before
+// CustomHead. Split out from RenderTempl so templ_render_test.go can
+// assert the load order and the SSE script's presence directly against
 // production code, mirroring the other two UIs' identical split.
 func buildHead() string {
 	return `<script src="https://cdn.jsdelivr.net/npm/@tailwindcss/browser@4.3.3/dist/index.global.js"></script>
 <style type="text/tailwindcss">@import "tailwindcss";</style>
 <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/daisyui@5.6.18/daisyui.css">
-<style>` + htmxui.ThemesCSS + `</style>`
+<style>` + htmxui.ThemesCSS + `</style>
+<script src="https://cdn.jsdelivr.net/npm/htmx.org@1.9.10/dist/ext/sse.js"></script>`
 }
