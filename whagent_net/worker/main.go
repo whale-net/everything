@@ -159,6 +159,11 @@ func run() error {
 	// (workflow.go) executes this instead of DispatchTool for that one
 	// call name in a search-mode turn.
 	w.RegisterActivityWithOptions(acts.SearchTools, activity.RegisterOptions{Name: ActivitySearchTools})
+	// CommitToolLoopIteration (issue #2616): processTurn's inner tool-call
+	// loop calls this once per non-final iteration (workflow.go); must be
+	// registered alongside CommitTurn or the workflow's ExecuteActivity
+	// call fails non-retryable with "unable to find activityType".
+	w.RegisterActivityWithOptions(acts.CommitToolLoopIteration, activity.RegisterOptions{Name: ActivityCommitToolLoopIteration})
 
 	// Transcript archival (archive.go): only registered/scheduled when a
 	// cold tier is actually configured. See archive.go's package doc
