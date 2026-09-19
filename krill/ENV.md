@@ -121,9 +121,10 @@ plugin pattern:
 These are separate from `PG_DATABASE_URL` above (which `migrate`/`api`/
 `mcp` read) so that tilt, dev, and prod can be queried side by side from
 the same Claude Code session without swapping a single variable. This is
-also separate from the `krill` plugin (`krill/plugin/user`), which gives
-streamable-HTTP MCP access to `mcp`'s own FR5-FR9 slice query tools rather
-than direct Postgres access.
+also separate from the `krill-design`/`krill-work` plugins
+(`krill/plugin/design`, `krill/plugin/work`), which give streamable-HTTP MCP
+access to `mcp`'s own FR5-FR9 slice query tools (and, for `krill-design`,
+the design-session surface) rather than direct Postgres access.
 
 ## Telemetry
 

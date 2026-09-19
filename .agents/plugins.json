@@ -13,7 +13,10 @@
       "path": "whagent_net/plugin/user"
     },
     {
-      "path": "krill/plugin/user"
+      "path": "krill/plugin/design"
+    },
+    {
+      "path": "krill/plugin/work"
     }
   ]
 }

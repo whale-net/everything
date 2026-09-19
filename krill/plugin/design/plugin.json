@@ -1,0 +1,7 @@
+{
+  "name": "krill-design",
+  "description": "Design-axis krill plugin: MCP access to krill's spec (FR5-FR8) and design-session (FR1-FR4, FR9-FR10) surfaces, plus producer/architect/reviewer/stakeholder personas and design/product/review skills forked from project-manager.",
+  "author": {
+    "name": "whale_net"
+  }
+}
