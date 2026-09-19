@@ -12,6 +12,7 @@ package events
 import (
 	"encoding/json"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
@@ -115,7 +116,50 @@ const (
 	// reason (a single turn may carry more than one search_tools call); a
 	// consumer should match it with strings.HasPrefix.
 	EventTypeToolUnlock = "tool_unlock"
+
+	// EventTypeStatusChange (whagent-net M5) is committed for a session
+	// status transition (running/awaiting_input/done/stopped). Like
+	// EventTypeToolCall/EventTypeToolResult/EventTypeToolUnlock above,
+	// this is a *prefix*, never the bare committed `type` column value:
+	// TranscriptStore.AppendIfAbsent's idempotency key is (session_id,
+	// turn, type), and `running` is written at the same `turn` value the
+	// trailing `awaiting_input`/`done` for that loop iteration uses
+	// (whagent_net/worker/workflow.go's `turn` variable does not advance
+	// between them) -- a bare "status_change" type would collide across
+	// that pair and silently drop the second event under AppendIfAbsent.
+	// Use StatusChangeEventType to derive the committed type and
+	// ParseStatusChangeEventType to recover the status from it; no call
+	// site should format or parse this string itself.
+	EventTypeStatusChange = "status_change"
 )
+
+// StatusChangeEventType returns the committed `type` column value for a
+// transition to status: "status_change:<status>" (EventTypeStatusChange's
+// doc comment explains why this must never be committed as the bare
+// prefix).
+func StatusChangeEventType(status string) string {
+	return fmt.Sprintf("%s:%s", EventTypeStatusChange, status)
+}
+
+// ParseStatusChangeEventType reports the status a committed
+// "status_change:<status>" type refers to. ok is false for any other
+// type, including the bare EventTypeStatusChange constant and a
+// "status_change:" with an empty status suffix.
+func ParseStatusChangeEventType(eventType string) (status string, ok bool) {
+	rest, found := strings.CutPrefix(eventType, EventTypeStatusChange+":")
+	if !found || rest == "" {
+		return "", false
+	}
+	return rest, true
+}
+
+// StatusChangeEventPayload is EventTypeStatusChange's transcript-event
+// payload (NFR2): the session status transitioned to. This is the minimum
+// a future embedded consumer (C19 -> M3) needs, alongside the
+// already-meaningful Seq/Turn/EventID/SessionID/CommittedAt on Event.
+type StatusChangeEventPayload struct {
+	Status string `json:"status"`
+}
 
 // Event is the whagent-net LB1 record: the single definition of a
 // committed transcript event. The `transcript_event` Postgres row, the

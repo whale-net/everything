@@ -161,3 +161,102 @@ func TestEvent_JSONFieldNames(t *testing.T) {
 		t.Errorf("marshaled Event has %d fields, want exactly 7 (no unexpected extra fields)", len(raw))
 	}
 }
+
+// TestStatusChangeEventType pins the "status_change:<status>" derivation
+// (events.go's EventTypeStatusChange doc comment, FR2's collision guard).
+func TestStatusChangeEventType(t *testing.T) {
+	tests := []struct {
+		status   string
+		expected string
+	}{
+		{"running", "status_change:running"},
+		{"awaiting_input", "status_change:awaiting_input"},
+		{"done", "status_change:done"},
+		{"stopped", "status_change:stopped"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.status, func(t *testing.T) {
+			got := StatusChangeEventType(tt.status)
+			if got != tt.expected {
+				t.Errorf("StatusChangeEventType(%q) = %q, want %q", tt.status, got, tt.expected)
+			}
+		})
+	}
+}
+
+// TestStatusChangeEventType_PairwiseDistinct asserts the FR2 collision
+// guard directly: the four derived types must never collide under
+// TranscriptStore.AppendIfAbsent's (session_id, turn, type) idempotency
+// key.
+func TestStatusChangeEventType_PairwiseDistinct(t *testing.T) {
+	statuses := []string{"running", "awaiting_input", "done", "stopped"}
+	seen := make(map[string]string, len(statuses))
+	for _, s := range statuses {
+		et := StatusChangeEventType(s)
+		if prior, ok := seen[et]; ok {
+			t.Errorf("StatusChangeEventType(%q) = %q collides with StatusChangeEventType(%q)", s, et, prior)
+		}
+		seen[et] = s
+	}
+}
+
+// TestParseStatusChangeEventType_RoundTrip proves
+// ParseStatusChangeEventType inverts StatusChangeEventType for every
+// status.
+func TestParseStatusChangeEventType_RoundTrip(t *testing.T) {
+	for _, status := range []string{"running", "awaiting_input", "done", "stopped"} {
+		t.Run(status, func(t *testing.T) {
+			gotStatus, ok := ParseStatusChangeEventType(StatusChangeEventType(status))
+			if !ok {
+				t.Fatalf("ParseStatusChangeEventType(%q) ok = false, want true", StatusChangeEventType(status))
+			}
+			if gotStatus != status {
+				t.Errorf("ParseStatusChangeEventType(%q) = %q, want %q", StatusChangeEventType(status), gotStatus, status)
+			}
+		})
+	}
+}
+
+// TestParseStatusChangeEventType_NotStatusChange guards the negative
+// space: non-status_change types, the bare prefix constant, and a
+// malformed empty-suffix type must all report ok == false.
+func TestParseStatusChangeEventType_NotStatusChange(t *testing.T) {
+	tests := []string{
+		EventTypeStatusChange,
+		"user_message",
+		"tool_call:0",
+		"status_change:",
+	}
+
+	for _, eventType := range tests {
+		t.Run(eventType, func(t *testing.T) {
+			status, ok := ParseStatusChangeEventType(eventType)
+			if ok {
+				t.Errorf("ParseStatusChangeEventType(%q) ok = true, want false (status = %q)", eventType, status)
+			}
+		})
+	}
+}
+
+// TestStatusChangeEventPayload_JSON pins the wire shape (NFR2): a future
+// out-of-process consumer depends on the fixed "status" key.
+func TestStatusChangeEventPayload_JSON(t *testing.T) {
+	original := StatusChangeEventPayload{Status: "running"}
+
+	body, err := json.Marshal(original)
+	if err != nil {
+		t.Fatalf("Marshal: %v", err)
+	}
+	if string(body) != `{"status":"running"}` {
+		t.Errorf("Marshal = %s, want %s", body, `{"status":"running"}`)
+	}
+
+	var decoded StatusChangeEventPayload
+	if err := json.Unmarshal(body, &decoded); err != nil {
+		t.Fatalf("Unmarshal: %v", err)
+	}
+	if decoded != original {
+		t.Errorf("round trip = %+v, want %+v", decoded, original)
+	}
+}
