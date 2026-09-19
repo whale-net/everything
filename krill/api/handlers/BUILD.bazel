@@ -102,6 +102,7 @@ go_test(
         "featureset_test.go",
         "gate_test.go",
         "mediated_test.go",
+        "milestone_delivery_test.go",
         "milestone_status_test.go",
         "open_questions_test.go",
         "pointer_test.go",

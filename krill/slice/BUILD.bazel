@@ -142,3 +142,50 @@ go_test(
         "@com_github_stretchr_testify//require",
     ],
 )
+
+# Real-Postgres integration coverage for ListProductDelivery (issue #2689,
+# krill M3, FR11): status filtering (single/multiple/empty), the
+# not-started-with-zero-rows edge case, the "parent carries only its
+# matching milepebble" rule, the partially-complete inline shipped/
+# unshipped counts (cross-checked against GetDeliveryBreakdown), and an
+# N+1 guard (a pgx.QueryTracer-backed query log proving CurrentStatuses is
+# called once, not once per container, when listing 20 milestones with 60
+# milepebbles). Reuses query_integration_test.go's newTestStore/
+# createScope/seedWorld harness -- all four files build under package
+# slice_test with the "integration" gotag, so they compile as one test
+# binary. Same "NOT part of `bazel test //...`" rationale as
+# query_integration_test above.
+#
+# Run it explicitly (requires a working Docker daemon):
+#   bazel test //krill/slice:milestone_listing_integration_test --test_output=all
+go_test(
+    name = "milestone_listing_integration_test",
+    size = "large",
+    timeout = "long",
+    srcs = [
+        "milestone_listing_integration_test.go",
+        "query_integration_test.go",
+    ],
+    gotags = ["integration"],
+    tags = [
+        "external",
+        "integration",
+        "manual",
+        "no-cache",
+        "no-sandbox",
+        "requires-network",
+    ],
+    deps = [
+        ":slice",
+        "//krill/migrate/schema",
+        "//krill/store",
+        "//libs/go/dbtest",
+        "//libs/go/migrate",
+        "@com_github_google_uuid//:uuid",
+        "@com_github_jackc_pgx_v5//:pgx",
+        "@com_github_jackc_pgx_v5//pgxpool",
+        "@com_github_jackc_pgx_v5//stdlib",
+        "@com_github_stretchr_testify//assert",
+        "@com_github_stretchr_testify//require",
+    ],
+)
