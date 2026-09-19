@@ -13,6 +13,7 @@ templ_library(
     srcs = glob(["*.templ"]),
     embedsrcs = ["themes.css"],
     go_srcs = [
+        "container.go",
         "doc.go",
         "themes.go",
     ],

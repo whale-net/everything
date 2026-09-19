@@ -5,9 +5,15 @@ applications in this monorepo. This package holds only cross-app primitives
 — never app-specific screens. App-specific UI stays in each consuming app's
 own package (e.g. `tools/app_registry/ui`, `manmanv2/ui`).
 
-This is Phase 1 groundwork (part of #998, FR1): no consuming app has been
-migrated to these primitives yet (that is issue #1005's job) -- the
-primitives below exist here but are not yet adopted anywhere.
+Originated as Phase 1 groundwork (part of #998, FR1). Chrome primitives
+(`Shell`, `ThemeSwitcher`, `Themes`, `UserMenu`) are now adopted by every
+current consumer (`manmanv2`, `tools/app_registry`, `leaflab`,
+`whagent_net`, `audience_score_system`). Content primitives
+(`Button`/`Badge`/`Card`/`Confirm`) are adopted by `manmanv2` and
+`tools/app_registry`; `audience_score_system` does not yet use them (still
+hand-rolls equivalent markup independently — an open adoption gap, not a
+primitive gap). See `ARCHITECTURE.md` for the design principles behind
+these primitives.
 
 ## Chrome primitives (FR1 / FR1a / FR5 / FR8)
 
@@ -21,9 +27,18 @@ primitives below exist here but are not yet adopted anywhere.
   extras like manmanv2's `ServerSelector`, respectively); Shell hardcodes
   none of them. `ShellData.Themes` drives the `ThemeSwitcher` mount,
   `UserLabel` is plain display text, and `ContainerClass` overrides the
-  default `max-w-4xl` wrapper for wide screens — Shell has no dependency on
+  default `max-w-4xl` wrapper — Shell has no dependency on
   `//libs/go/htmxauth` or any auth-specific user type. See `ShellData`'s
   doc comment for the full app-owned/shared boundary.
+- **`ContainerWide`** (`container.go`) — the named `ShellData.ContainerClass`
+  preset for information-dense pages (dashboards, multi-column detail
+  views) that need more horizontal room at larger breakpoints while
+  staying at the default narrow width on small/medium screens. Pass
+  `ContainerClass: htmxui.ContainerWide` instead of hand-writing the
+  breakpoint classes at each call site — this is the design-system answer
+  to "can my page be wide," so reach for it before inventing a one-off
+  `max-w-*` string. First adopted by `audience_score_system`'s Idea detail
+  page.
 - **`ThemeSwitcher(themes []Theme)`** (`theme_switcher.templ`) — the
   shared, CSS-variable/daisyUI `data-theme` switcher (FR5, shared side).
   Renders one control per caller-supplied `Theme{Value, Label}` and an
@@ -82,8 +97,8 @@ Each is a `.templ` component in `libs/go/htmxui`, daisyUI-classes-only
   (`badge.templ`) — a generic single-label, single-colour `badge` primitive.
   Deliberately repo-generic: app-registry's promotability/artifact-state/
   provenance vocabulary in `tools/app_registry/ui/components/badges.templ`
-  stays domain-owned and is expressed in terms of this `Badge` in the
-  adoption issue, keeping its labels and colours unchanged.
+  stays domain-owned and is expressed in terms of this `Badge` (adopted),
+  keeping its labels and colours unchanged.
 - **`Card(header, body, actions templ.Component, attrs templ.Attributes)`**
   (`card.templ`) — the shared `card bg-base-100 border border-base-300
   shadow-sm` chrome with three composition slots; a `nil` slot renders

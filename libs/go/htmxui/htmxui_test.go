@@ -502,6 +502,19 @@ func TestShell_ContainerClassDefaultAndCustom(t *testing.T) {
 	}
 }
 
+func TestShell_ContainerWidePreset(t *testing.T) {
+	body := render(t, Shell(ShellData{
+		BrandLabel:     "Brand",
+		BrandHref:      "/",
+		ContainerClass: ContainerWide,
+	}))
+	for _, class := range []string{"max-w-4xl", "xl:max-w-7xl", "2xl:max-w-[1600px]"} {
+		if !hasClass(body, class) {
+			t.Errorf("expected ContainerWide preset to render class %q, got %q", class, body)
+		}
+	}
+}
+
 // --- ThemesCSS (FR10 POC theme parity) ----------------------------------------
 
 // cssRuleRE matches one CSS rule's raw selector text and body, e.g. for
