@@ -94,6 +94,14 @@
 // call, and a zero-valued ListToolDefinitionsInput.Mode/Unlocked, which
 // tools.ListToolDefinitions treats as bulk regardless of the resolved
 // definition's actual ToolLoadingMode.
+// M5's "SessionWorkflow status_change emission" (issue #2753, root plan
+// #2747) is the sixth: its own change ID,
+// "session-workflow-status-change-event", gates commitStatusChangeEvent's
+// new ActivityCommitTerminalEvent call inside updateSessionStatus -- see
+// commitStatusChangeEvent's own doc comment below. A run already open
+// across this deploy keeps taking the pre-M5 path: updateSessionStatus
+// writes the session's status without committing any status_change
+// transcript event first.
 // The next behavior-changing edit to this file must add its own change ID
 // the same way.
 //
@@ -191,7 +199,7 @@ func SessionWorkflow(ctx workflow.Context, in SessionWorkflowInput) error {
 	turnCh := workflow.GetSignalChannel(ctx, SignalSendTurn)
 	stopCh := workflow.GetSignalChannel(ctx, SignalStop)
 
-	if err := updateSessionStatus(ctx, in.SessionID, session.StatusAwaitingInput, nil); err != nil {
+	if err := updateSessionStatus(ctx, in.SessionID, 0, session.StatusAwaitingInput, nil); err != nil {
 		return err
 	}
 
@@ -216,11 +224,11 @@ func SessionWorkflow(ctx workflow.Context, in SessionWorkflowInput) error {
 			// ever unblocks between turns, where the session is already
 			// idle) -- writing `stopped` is the only work left to do.
 			logger.Info("session stop signal received while awaiting input", "session_id", in.SessionID.String(), "turn", turn)
-			return updateSessionStatus(ctx, in.SessionID, session.StatusStopped, nil)
+			return updateSessionStatus(ctx, in.SessionID, turn, session.StatusStopped, nil)
 		}
 
 		turn++
-		if err := updateSessionStatus(ctx, in.SessionID, session.StatusRunning, nil); err != nil {
+		if err := updateSessionStatus(ctx, in.SessionID, turn, session.StatusRunning, nil); err != nil {
 			return err
 		}
 
@@ -229,7 +237,7 @@ func SessionWorkflow(ctx workflow.Context, in SessionWorkflowInput) error {
 			return err
 		}
 		if outcome.stopped {
-			return updateSessionStatus(ctx, in.SessionID, session.StatusStopped, nil)
+			return updateSessionStatus(ctx, in.SessionID, turn, session.StatusStopped, nil)
 		}
 		if outcome.failed {
 			// FR2/FR3: category/detail are exactly what failTurn
@@ -237,7 +245,7 @@ func SessionWorkflow(ctx workflow.Context, in SessionWorkflowInput) error {
 			// failure transcript event -- never recomputed here, so
 			// GetSession and that event always agree.
 			category, detail := outcome.errorCategory, outcome.errorDetail
-			return updateSessionStatus(ctx, in.SessionID, session.StatusFailed, &session.TerminalReason{
+			return updateSessionStatus(ctx, in.SessionID, turn, session.StatusFailed, &session.TerminalReason{
 				ErrorCategory: &category,
 				ErrorDetail:   &detail,
 			})
@@ -246,7 +254,7 @@ func SessionWorkflow(ctx workflow.Context, in SessionWorkflowInput) error {
 			// FR6/FR7: capKind is exactly what cappedTurn (processTurn)
 			// already committed to the capped transcript event.
 			capKind := outcome.capKind
-			return updateSessionStatus(ctx, in.SessionID, session.StatusCapped, &session.TerminalReason{
+			return updateSessionStatus(ctx, in.SessionID, turn, session.StatusCapped, &session.TerminalReason{
 				CapKind: &capKind,
 			})
 		}
@@ -255,7 +263,7 @@ func SessionWorkflow(ctx workflow.Context, in SessionWorkflowInput) error {
 		if outcome.done {
 			nextStatus = session.StatusDone
 		}
-		if err := updateSessionStatus(ctx, in.SessionID, nextStatus, nil); err != nil {
+		if err := updateSessionStatus(ctx, in.SessionID, turn, nextStatus, nil); err != nil {
 			return err
 		}
 		if outcome.done {
@@ -882,17 +890,53 @@ func failTurn(ctx workflow.Context, sessionID uuid.UUID, turn int, cause error) 
 // for a capped or failed status (nil for every other status, issue
 // #2119) -- passed straight through to UpdateSessionStatusInput.Terminal,
 // which the underlying compare-and-swap (session.SessionStore.UpdateStatus)
-// applies only when status is itself terminal.
-func updateSessionStatus(ctx workflow.Context, sessionID uuid.UUID, status session.Status, terminal *session.TerminalReason) error {
+// applies only when status is itself terminal. turn is the loop's current
+// turn variable at the call site (0 for the pre-loop call) -- threaded
+// through to commitStatusChangeEvent below so FR1's status_change event
+// shares its Turn with whatever other event this same iteration commits
+// (FR2's collision guard).
+func updateSessionStatus(ctx workflow.Context, sessionID uuid.UUID, turn int, status session.Status, terminal *session.TerminalReason) error {
 	v := workflow.GetVersion(ctx, "session-workflow-status-transitions", workflow.DefaultVersion, 1)
 	if v == workflow.DefaultVersion {
 		// Pre-existing behavior for any run whose history predates this
 		// change: no status write.
 		return nil
 	}
+	if err := commitStatusChangeEvent(ctx, sessionID, turn, status); err != nil {
+		return err
+	}
 	return workflow.ExecuteActivity(ctx, ActivityUpdateSessionStatus, UpdateSessionStatusInput{
 		SessionID: sessionID,
 		Status:    status,
 		Terminal:  terminal,
+	}).Get(ctx, nil)
+}
+
+// commitStatusChangeEvent commits FR1/FR2's status_change transcript
+// event for status, gated behind its own change ID so a workflow
+// execution already in flight when this milestone deploys replays its
+// pre-existing history without this activity call. Skips capped/failed:
+// those already commit an equivalent signal (cappedTurn/failTurn)
+// immediately before updateSessionStatus is even called, and FR1
+// explicitly does not duplicate it.
+func commitStatusChangeEvent(ctx workflow.Context, sessionID uuid.UUID, turn int, status session.Status) error {
+	v := workflow.GetVersion(ctx, "session-workflow-status-change-event", workflow.DefaultVersion, 1)
+	if v == workflow.DefaultVersion {
+		return nil
+	}
+	switch status {
+	case session.StatusRunning, session.StatusAwaitingInput, session.StatusDone, session.StatusStopped:
+	default:
+		return nil
+	}
+	payload, err := json.Marshal(events.StatusChangeEventPayload{Status: string(status)})
+	if err != nil {
+		return fmt.Errorf("marshal status_change event payload: %w", err)
+	}
+	return workflow.ExecuteActivity(ctx, ActivityCommitTerminalEvent, CommitTerminalEventInput{
+		SessionID: sessionID,
+		Turn:      turn,
+		EventType: events.StatusChangeEventType(string(status)),
+		Payload:   payload,
 	}).Get(ctx, nil)
 }

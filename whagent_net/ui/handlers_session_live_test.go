@@ -77,6 +77,33 @@ func TestSessionTranscriptState_WatermarkTracksHighestSeqOnly(t *testing.T) {
 	require.Equal(t, int64(3), s.watermark, "a late-arriving lower seq must not regress the watermark")
 }
 
+// --- sessionEventTopics (FR3) -------------------------------------------
+
+// TestSessionEventTopics_IncludesStatusChangeTopics proves FR3: for a
+// session with no seed events, sessionEventTopics includes all four
+// events.StatusChangeEventType(<status>) routing keys (running/
+// awaiting_input/done/stopped) alongside the four pre-existing
+// session-lifecycle topics.
+func TestSessionEventTopics_IncludesStatusChangeTopics(t *testing.T) {
+	sessionID := uuid.New()
+
+	topics := sessionEventTopics(sessionID, nil)
+
+	want := []string{
+		events.RoutingKey(sessionID, events.EventTypeUserMessage),
+		events.RoutingKey(sessionID, events.EventTypeAssistantMessage),
+		events.RoutingKey(sessionID, events.EventTypeCapped),
+		events.RoutingKey(sessionID, events.EventTypeFailure),
+		events.RoutingKey(sessionID, events.StatusChangeEventType("running")),
+		events.RoutingKey(sessionID, events.StatusChangeEventType("awaiting_input")),
+		events.RoutingKey(sessionID, events.StatusChangeEventType("done")),
+		events.RoutingKey(sessionID, events.StatusChangeEventType("stopped")),
+	}
+	for _, topic := range want {
+		require.Contains(t, topics, topic)
+	}
+}
+
 // --- handleSessionEvents (NFR2) -----------------------------------------
 
 // fakeLiveSessionServer is a real whagentpb.SessionServiceServer serving a

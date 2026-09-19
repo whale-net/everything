@@ -48,14 +48,18 @@ import (
 const toolEventTopicHeadroom = 8
 
 // sessionEventTopics computes the htmxsse topic set for sessionID's SSE
-// stream (NFR2/LB7, "topics = this session's routing keys"): the four
-// session-lifecycle event types that never carry a call index, plus
-// tool_call/tool_result topics for every call index observed in seed
-// extended by toolEventTopicHeadroom (see that constant's doc comment for
-// why a headroom, not the exact observed set, is both necessary and
-// sufficient). Shared by handleSessionDetail (the page's sse-swap
-// attribute, components.SessionDetailData.Topics) and handleSessionEvents
-// (the actual Subscribe calls) so the two can never drift.
+// stream (NFR2/LB7, "topics = this session's routing keys"): the eight
+// session-lifecycle event types that never carry a call index (the four
+// pre-existing ones plus FR1/FR3's four status_change transitions --
+// running/awaiting_input/done/stopped; capped/failed already cover the
+// other two `sessions.status` terminal values via EventTypeCapped/
+// EventTypeFailure above), plus tool_call/tool_result topics for every
+// call index observed in seed extended by toolEventTopicHeadroom (see
+// that constant's doc comment for why a headroom, not the exact observed
+// set, is both necessary and sufficient). Shared by handleSessionDetail
+// (the page's sse-swap attribute, components.SessionDetailData.Topics)
+// and handleSessionEvents (the actual Subscribe calls) so the two can
+// never drift.
 func sessionEventTopics(sessionID uuid.UUID, seed []components.TranscriptEventView) []string {
 	maxCallIndex := -1
 	for _, ev := range seed {
@@ -69,6 +73,10 @@ func sessionEventTopics(sessionID uuid.UUID, seed []components.TranscriptEventVi
 		events.RoutingKey(sessionID, events.EventTypeAssistantMessage),
 		events.RoutingKey(sessionID, events.EventTypeCapped),
 		events.RoutingKey(sessionID, events.EventTypeFailure),
+		events.RoutingKey(sessionID, events.StatusChangeEventType("running")),
+		events.RoutingKey(sessionID, events.StatusChangeEventType("awaiting_input")),
+		events.RoutingKey(sessionID, events.StatusChangeEventType("done")),
+		events.RoutingKey(sessionID, events.StatusChangeEventType("stopped")),
 	}
 	for i := 0; i <= maxCallIndex+toolEventTopicHeadroom; i++ {
 		topics = append(topics,

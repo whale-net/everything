@@ -62,6 +62,7 @@ go_test(
         "replay_test.go",
         "workflow_caps_test.go",
         "workflow_search_test.go",
+        "workflow_status_change_test.go",
         "workflow_test.go",
     ],
     embed = [":worker_lib"],
