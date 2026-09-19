@@ -5,6 +5,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync"
 	"testing"
 
 	"google.golang.org/grpc"
@@ -30,6 +31,14 @@ type fakeArtifactClient struct {
 	getReleaseRunResp  *pb.GetReleaseRunResponse
 	getReleaseRunErr   error
 
+	// mu guards the GetBuild-related fields below. GetBuild is the only
+	// method this fake needs to support concurrent calls on (the
+	// process-lifetime build-commit cache's own tests,
+	// handlers_release_test.go, drive resolveTargetCommits from several
+	// goroutines at once to exercise the cache under
+	// `bazel test --features=race`); every other method here is only ever
+	// called sequentially by today's tests.
+	mu            sync.Mutex
 	getBuildCalls int
 	getBuildReqs  []*pb.GetBuildRequest
 	// getBuildResps maps build_id -> the response GetBuild should return for
@@ -65,6 +74,8 @@ func (f *fakeArtifactClient) GetReleaseRun(ctx context.Context, in *pb.GetReleas
 }
 
 func (f *fakeArtifactClient) GetBuild(ctx context.Context, in *pb.GetBuildRequest, opts ...grpc.CallOption) (*pb.GetBuildResponse, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
 	f.getBuildCalls++
 	f.getBuildReqs = append(f.getBuildReqs, in)
 	if resp, ok := f.getBuildResps[in.GetBuildId()]; ok {

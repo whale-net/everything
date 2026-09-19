@@ -6,6 +6,7 @@ import (
 	"net/http/httptest"
 	"net/url"
 	"strings"
+	"sync"
 	"testing"
 
 	"google.golang.org/grpc"
@@ -421,6 +422,202 @@ func TestReleaseStatusPage_ShowsTargetCommitLinkedToGitHub(t *testing.T) {
 	}
 	if len(artifact.getBuildReqs) != 2 {
 		t.Errorf("expected one GetBuild call per distinct build_id (2 targets), got %d", len(artifact.getBuildReqs))
+	}
+}
+
+// --- resolveTargetCommits: process-lifetime cache (#1703, #1699 NFR9) ---
+//
+// These call app.resolveTargetCommits directly (rather than going through
+// handleReleaseStatus) so each test can drive the cache across several
+// calls against the same *App -- exactly the shape a live release page's
+// repeated SSE re-renders take.
+
+// The core NFR9 assertion: two resolutions of the same build_id, even
+// across two separate resolveTargetCommits calls, issue exactly one
+// GetBuild RPC -- the second call must be served from the cache.
+func TestResolveTargetCommits_CacheHit_OneRPCAcrossTwoCalls(t *testing.T) {
+	artifact := &fakeArtifactClient{
+		getBuildResps: map[string]*pb.GetBuildResponse{
+			"build-1": {Build: &pb.Build{BuildId: "build-1", GitSha: "deadbeefcafefeed"}},
+		},
+	}
+	app := &App{
+		registry:     &RegistryClient{Artifact: artifact},
+		buildCommits: newBuildCommitCache(),
+	}
+	targets := []*pb.ReleaseRunTarget{{OwnerFullName: "platform-worker", BuildId: "build-1"}}
+
+	first := app.resolveTargetCommits(context.Background(), targets)
+	second := app.resolveTargetCommits(context.Background(), targets)
+
+	if len(artifact.getBuildReqs) != 1 {
+		t.Fatalf("GetBuild calls across two resolveTargetCommits calls = %d, want 1 (second call should hit the cache)", len(artifact.getBuildReqs))
+	}
+	if first["build-1"].GitSha != "deadbeefcafefeed" || second["build-1"].GitSha != "deadbeefcafefeed" {
+		t.Errorf("resolved git_sha = %q / %q, want deadbeefcafefeed on both calls", first["build-1"].GitSha, second["build-1"].GitSha)
+	}
+}
+
+// The cache is keyed globally by build_id, not scoped to a release run: two
+// distinct runs (distinct target slices, as handleReleaseStatus builds one
+// per GetRelease call) that happen to share a build_id must still resolve
+// it via a single GetBuild call total.
+func TestResolveTargetCommits_GlobalKeyAcrossDifferentReleaseRuns(t *testing.T) {
+	artifact := &fakeArtifactClient{
+		getBuildResps: map[string]*pb.GetBuildResponse{
+			"build-shared": {Build: &pb.Build{BuildId: "build-shared", GitSha: "cafefeeddeadbeef"}},
+		},
+	}
+	app := &App{
+		registry:     &RegistryClient{Artifact: artifact},
+		buildCommits: newBuildCommitCache(),
+	}
+	runATargets := []*pb.ReleaseRunTarget{{OwnerFullName: "platform-worker", BuildId: "build-shared"}}
+	runBTargets := []*pb.ReleaseRunTarget{{OwnerFullName: "platform-api", BuildId: "build-shared"}}
+
+	app.resolveTargetCommits(context.Background(), runATargets)
+	app.resolveTargetCommits(context.Background(), runBTargets)
+
+	if len(artifact.getBuildReqs) != 1 {
+		t.Errorf("GetBuild calls across two release runs sharing a build_id = %d, want 1 (cache is keyed globally, not per-run)", len(artifact.getBuildReqs))
+	}
+}
+
+// N targets sharing one build_id within a single resolveTargetCommits call
+// must still resolve it with one GetBuild call -- the existing per-call
+// de-dup, preserved as a regression guard now that a cache sits alongside
+// it.
+func TestResolveTargetCommits_MultipleTargetsSameBuildIDInOneCall_SingleRPC(t *testing.T) {
+	artifact := &fakeArtifactClient{
+		getBuildResps: map[string]*pb.GetBuildResponse{
+			"build-shared": {Build: &pb.Build{BuildId: "build-shared", GitSha: "cafefeeddeadbeef"}},
+		},
+	}
+	app := &App{
+		registry:     &RegistryClient{Artifact: artifact},
+		buildCommits: newBuildCommitCache(),
+	}
+	targets := []*pb.ReleaseRunTarget{
+		{OwnerFullName: "platform-worker", BuildId: "build-shared"},
+		{OwnerFullName: "platform-api", BuildId: "build-shared"},
+		{OwnerFullName: "platform-web", BuildId: "build-shared"},
+	}
+
+	commits := app.resolveTargetCommits(context.Background(), targets)
+
+	if len(artifact.getBuildReqs) != 1 {
+		t.Errorf("GetBuild calls for 3 targets sharing one build_id = %d, want 1", len(artifact.getBuildReqs))
+	}
+	if commits["build-shared"].GitSha != "cafefeeddeadbeef" {
+		t.Errorf("resolved git_sha = %q, want cafefeeddeadbeef", commits["build-shared"].GitSha)
+	}
+}
+
+// A GetBuild failure must never be cached -- the target renders "unknown"
+// (existing behavior) on the call that failed, but a later call for the
+// same build_id must retry rather than staying pinned to "unknown" for the
+// rest of the process's life.
+func TestResolveTargetCommits_FailedGetBuildNotCached_RetriesOnNextCall(t *testing.T) {
+	artifact := &fakeArtifactClient{} // no entry for "build-flaky" -> GetBuild returns NotFound
+	app := &App{
+		registry:     &RegistryClient{Artifact: artifact},
+		buildCommits: newBuildCommitCache(),
+	}
+	targets := []*pb.ReleaseRunTarget{{OwnerFullName: "platform-worker", BuildId: "build-flaky"}}
+
+	first := app.resolveTargetCommits(context.Background(), targets)
+	if _, ok := first["build-flaky"]; ok {
+		t.Fatalf("first resolveTargetCommits: got a resolved entry for a failing GetBuild, want none")
+	}
+	if len(artifact.getBuildReqs) != 1 {
+		t.Fatalf("GetBuild calls after first (failing) resolveTargetCommits = %d, want 1", len(artifact.getBuildReqs))
+	}
+
+	// The build becomes available before the next render.
+	artifact.getBuildResps = map[string]*pb.GetBuildResponse{
+		"build-flaky": {Build: &pb.Build{BuildId: "build-flaky", GitSha: "abad1deacafefeed"}},
+	}
+
+	second := app.resolveTargetCommits(context.Background(), targets)
+	if len(artifact.getBuildReqs) != 2 {
+		t.Fatalf("GetBuild calls after second resolveTargetCommits = %d, want 2 (a failure must not be cached)", len(artifact.getBuildReqs))
+	}
+	if second["build-flaky"].GitSha != "abad1deacafefeed" {
+		t.Errorf("resolved git_sha on retry = %q, want abad1deacafefeed", second["build-flaky"].GitSha)
+	}
+}
+
+// A build with an empty git_sha is treated the same as a failure: not
+// cached, retried on a later call once the sha is populated.
+func TestResolveTargetCommits_EmptyGitShaNotCached_RetriesOnNextCall(t *testing.T) {
+	artifact := &fakeArtifactClient{
+		getBuildResps: map[string]*pb.GetBuildResponse{
+			"build-pending": {Build: &pb.Build{BuildId: "build-pending", GitSha: ""}},
+		},
+	}
+	app := &App{
+		registry:     &RegistryClient{Artifact: artifact},
+		buildCommits: newBuildCommitCache(),
+	}
+	targets := []*pb.ReleaseRunTarget{{OwnerFullName: "platform-worker", BuildId: "build-pending"}}
+
+	first := app.resolveTargetCommits(context.Background(), targets)
+	if _, ok := first["build-pending"]; ok {
+		t.Fatalf("first resolveTargetCommits: got a resolved entry for an empty git_sha, want none")
+	}
+
+	artifact.getBuildResps["build-pending"] = &pb.GetBuildResponse{
+		Build: &pb.Build{BuildId: "build-pending", GitSha: "beadedcafefeed12"},
+	}
+
+	second := app.resolveTargetCommits(context.Background(), targets)
+	if len(artifact.getBuildReqs) != 2 {
+		t.Fatalf("GetBuild calls = %d, want 2 (an empty-git_sha resolution must not be cached)", len(artifact.getBuildReqs))
+	}
+	if second["build-pending"].GitSha != "beadedcafefeed12" {
+		t.Errorf("resolved git_sha on retry = %q, want beadedcafefeed12", second["build-pending"].GitSha)
+	}
+}
+
+// Parallel resolveTargetCommits calls against the same *App (the shape
+// concurrent open tabs' SSE renders take) must be race-free under
+// `bazel test --features=race`.
+func TestResolveTargetCommits_ConcurrentCalls_RaceFree(t *testing.T) {
+	artifact := &fakeArtifactClient{
+		getBuildResps: map[string]*pb.GetBuildResponse{
+			"build-1": {Build: &pb.Build{BuildId: "build-1", GitSha: "deadbeefcafefeed"}},
+			"build-2": {Build: &pb.Build{BuildId: "build-2", GitSha: "cafefeeddeadbeef"}},
+		},
+	}
+	app := &App{
+		registry:     &RegistryClient{Artifact: artifact},
+		buildCommits: newBuildCommitCache(),
+	}
+	targets := []*pb.ReleaseRunTarget{
+		{OwnerFullName: "platform-worker", BuildId: "build-1"},
+		{OwnerFullName: "platform-api", BuildId: "build-2"},
+	}
+
+	const goroutines = 20
+	var wg sync.WaitGroup
+	wg.Add(goroutines)
+	for i := 0; i < goroutines; i++ {
+		go func() {
+			defer wg.Done()
+			app.resolveTargetCommits(context.Background(), targets)
+		}()
+	}
+	wg.Wait()
+
+	// Not asserting an exact GetBuild count here: the fake's own counters
+	// are guarded by fakeArtifactClient.mu (handlers_builds_test.go), not
+	// by the cache, so a race in the cache itself -- not in call count --
+	// is what `-race`/`--features=race` catches. The cache having
+	// converged to a resolved entry for both build_ids is still a useful
+	// sanity check that concurrent access didn't corrupt it.
+	commits := app.resolveTargetCommits(context.Background(), targets)
+	if commits["build-1"].GitSha != "deadbeefcafefeed" || commits["build-2"].GitSha != "cafefeeddeadbeef" {
+		t.Errorf("commits after concurrent access = %+v, want both build-1 and build-2 resolved", commits)
 	}
 }
 

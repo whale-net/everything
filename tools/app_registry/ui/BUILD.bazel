@@ -79,6 +79,7 @@ go_test(
     name = "ui_test",
     size = "small",
     srcs = [
+        "build_commit_cache_test.go",
         "handlers_builds_test.go",
         "handlers_promote_rollback_test.go",
         "handlers_promo_fragment_test.go",
