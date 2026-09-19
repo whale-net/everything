@@ -1,6 +1,11 @@
 package tools
 
-import "github.com/whale-net/everything/whagent_net/llm"
+import (
+	"fmt"
+	"strings"
+
+	"github.com/whale-net/everything/whagent_net/llm"
+)
 
 // SearchToolsName is the reserved meta-tool name (FR8): no configured
 // domain server may expose a real tool by this literal name, in any
@@ -47,4 +52,60 @@ var searchToolsDefinition = llm.ToolDefinition{
 // package's cache-stability requirement.
 func SearchToolsDefinition() llm.ToolDefinition {
 	return searchToolsDefinition
+}
+
+// Match returns the names of every candidate whose name or description
+// contains query as a case-insensitive substring (FR4). This is the
+// entire matching algorithm: no embeddings, no tokenization, no ranking
+// -- the root plan's (#2602) explicit out-of-scope boundary for M4.
+//
+// Result order follows candidates' own order (which is tool_set order,
+// post-allowed_tools, per candidateDefinitions in listdefs.go), so a
+// given search's matched-name list is deterministic -- this is what
+// ListToolDefinitions' pinned search-mode Tools order ultimately
+// inherits (see that function's ordering-guarantee doc comment).
+//
+// An empty or whitespace-only query returns no matches, never every
+// candidate -- a blank query is a caller error, not "match everything."
+// A query that matches nothing returns an empty (non-nil) slice, never
+// an error.
+func Match(candidates []llm.ToolDefinition, query string) []string {
+	q := strings.ToLower(strings.TrimSpace(query))
+	if q == "" {
+		return []string{}
+	}
+
+	matched := make([]string, 0, len(candidates))
+	for _, c := range candidates {
+		if strings.Contains(strings.ToLower(c.Name), q) ||
+			strings.Contains(strings.ToLower(c.Description), q) {
+			matched = append(matched, c.Name)
+		}
+	}
+	return matched
+}
+
+// RenderMatchResult renders a search_tools call's Match output into the
+// tool_result event's model-readable payload content (FR4): "name:
+// description" per matched name, in matched's own order, one per line, or
+// an explicit "no tools matched" body on zero matches -- never an empty
+// string, since a model must be able to tell "the search ran and found
+// nothing" apart from a missing/truncated result. candidates supplies each
+// matched name's description; callers pass the exact same candidate pool
+// Match matched against.
+func RenderMatchResult(matched []string, candidates []llm.ToolDefinition) string {
+	if len(matched) == 0 {
+		return "no tools matched"
+	}
+
+	byName := make(map[string]string, len(candidates))
+	for _, c := range candidates {
+		byName[c.Name] = c.Description
+	}
+
+	lines := make([]string, 0, len(matched))
+	for _, name := range matched {
+		lines = append(lines, fmt.Sprintf("%s: %s", name, byName[name]))
+	}
+	return strings.Join(lines, "\n")
 }

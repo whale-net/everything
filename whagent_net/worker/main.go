@@ -154,6 +154,11 @@ func run() error {
 	// the activities above so the worker binary exposes it from this
 	// task onward.
 	w.RegisterActivityWithOptions(acts.UnlockedTools, activity.RegisterOptions{Name: ActivityUnlockedTools})
+	// SearchTools (issue #2671): search-mode tool loading's in-process
+	// answer to a model-issued search_tools call -- processTurn
+	// (workflow.go) executes this instead of DispatchTool for that one
+	// call name in a search-mode turn.
+	w.RegisterActivityWithOptions(acts.SearchTools, activity.RegisterOptions{Name: ActivitySearchTools})
 
 	// Transcript archival (archive.go): only registered/scheduled when a
 	// cold tier is actually configured. See archive.go's package doc

@@ -218,7 +218,7 @@ func (d *Dispatcher) Dispatch(ctx context.Context, in DispatchInput) (Result, er
 		}
 	}
 
-	args, err := decodeArguments(in.Call.Arguments)
+	args, err := DecodeArguments(in.Call.Arguments)
 	if err != nil {
 		return Result{}, fmt.Errorf("tools: decode arguments for call %q: %w", in.Call.Name, err)
 	}
@@ -303,11 +303,13 @@ func resolveTarget(ctx context.Context, issuer *persona.Issuer, in DispatchInput
 	return "", nil, nil, fmt.Errorf("tools: call %q: no configured server exposes this tool", in.Call.Name)
 }
 
-// decodeArguments decodes a tool call's raw JSON arguments (llm.ToolCall.
+// DecodeArguments decodes a tool call's raw JSON arguments (llm.ToolCall.
 // Arguments) into the map CallTool's Arguments parameter expects, treating
 // an empty string as "no arguments" rather than a decode error -- a model
-// may request a zero-argument tool call.
-func decodeArguments(raw string) (map[string]any, error) {
+// may request a zero-argument tool call. Exported so SearchTools
+// (activities.go) can decode a search_tools call's `query` argument with
+// the identical empty-string tolerance, rather than re-implementing it.
+func DecodeArguments(raw string) (map[string]any, error) {
 	args := map[string]any{}
 	if raw == "" {
 		return args, nil

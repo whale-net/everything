@@ -80,6 +80,14 @@ func registerActivityStubs(env *testsuite.TestWorkflowEnvironment) {
 	env.RegisterActivityWithOptions(func(ctx context.Context, in UnlockedToolsInput) (UnlockedToolsResult, error) {
 		return UnlockedToolsResult{}, nil
 	}, activity.RegisterOptions{Name: ActivityUnlockedTools})
+	// SearchTools (issue #2671) is only ever invoked when a search-mode
+	// turn's model requests search_tools (workflow.go's dispatchToolCall),
+	// but registered here too so any test can rely on this helper alone,
+	// the same reasoning ListToolDefinitions/DispatchTool above already
+	// follow.
+	env.RegisterActivityWithOptions(func(ctx context.Context, in SearchToolsInput) (SearchToolsResult, error) {
+		return SearchToolsResult{}, nil
+	}, activity.RegisterOptions{Name: ActivitySearchTools})
 }
 
 func testSessionID() uuid.UUID {

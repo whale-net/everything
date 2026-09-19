@@ -15,6 +15,7 @@ import (
 
 	"github.com/whale-net/everything/libs/go/whagent"
 	"github.com/whale-net/everything/whagent_net/api/persona"
+	"github.com/whale-net/everything/whagent_net/llm"
 	"github.com/whale-net/everything/whagent_net/session"
 	"github.com/whale-net/everything/whagent_net/worker/tools"
 )
@@ -136,6 +137,121 @@ func TestListToolDefinitions_ReservedNameOnSecondServer(t *testing.T) {
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), secondURL)
 	assert.Empty(t, defs, "must not silently merge the first server's tools when a later server violates FR8")
+}
+
+// TestMatch covers Match's entire matching algorithm (FR4, issue #2671's
+// Testing phase): case-insensitive substring on name, on description, on
+// both at once (the matched name is still reported exactly once), no match
+// at all, an empty/whitespace-only query, a substring that is not a word
+// boundary, and that result order follows candidates' own order rather than
+// match strength or alphabetical order.
+func TestMatch(t *testing.T) {
+	// Each candidate's name and description deliberately share no words
+	// with any other candidate's, except where a case explicitly needs a
+	// name/description overlap ("gadget") -- so a break in either half of
+	// Match's "name OR description" check changes exactly the cases it
+	// should and none of the others.
+	candidates := []llm.ToolDefinition{
+		{Name: "list_gadgets", Description: "Enumerate every entry in the catalog."},
+		{Name: "purge_cache", Description: "Deletes stale gadget entries from cache."},
+		{Name: "sync_gadgets", Description: "Refresh gadget records from upstream."},
+		{Name: "list_schedules", Description: "Enumerate upcoming release plans."},
+		{Name: "rename_folder", Description: "Rename a folder in the workspace."},
+	}
+
+	cases := []struct {
+		name  string
+		query string
+		want  []string
+	}{
+		{
+			// "gadgets" (plural) appears in list_gadgets/sync_gadgets' NAMES
+			// only -- neither candidate's description contains it.
+			name:  "case-insensitive hit on name",
+			query: "GADGETS",
+			want:  []string{"list_gadgets", "sync_gadgets"},
+		},
+		{
+			// "stale" appears only in purge_cache's DESCRIPTION -- no
+			// candidate's name contains it.
+			name:  "case-insensitive hit on description",
+			query: "STALE",
+			want:  []string{"purge_cache"},
+		},
+		{
+			// "gadget" (singular) hits list_gadgets by name, purge_cache by
+			// description, and sync_gadgets by both -- each name reported
+			// exactly once regardless of which half (or both) matched.
+			name:  "hit on name only, description only, and both at once",
+			query: "gadget",
+			want:  []string{"list_gadgets", "purge_cache", "sync_gadgets"},
+		},
+		{
+			name:  "no match returns an empty, non-nil slice",
+			query: "nonexistent",
+			want:  []string{},
+		},
+		{
+			name:  "empty query returns no matches",
+			query: "",
+			want:  []string{},
+		},
+		{
+			name:  "whitespace-only query returns no matches",
+			query: "   ",
+			want:  []string{},
+		},
+		{
+			// "sched" is a mid-word substring of list_schedules' name only
+			// ("SCHEDules") -- not a whole word in any candidate.
+			name:  "substring match is not word-boundary limited",
+			query: "sched",
+			want:  []string{"list_schedules"},
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got := tools.Match(candidates, tc.query)
+			assert.Equal(t, tc.want, got, "result order must follow candidates' own order")
+			assert.NotNil(t, got, "Match must never return a nil slice")
+		})
+	}
+}
+
+// TestCandidates_AllowedToolsExcludesEvenAMatchingQuery is FR4/NFR2: a tool
+// a ToolServerRef's AllowedTools excludes is never a candidate at all, so a
+// query that would otherwise match its name never surfaces it -- the
+// exclusion happens before Match ever runs, not as a post-filter on its
+// output.
+func TestCandidates_AllowedToolsExcludesEvenAMatchingQuery(t *testing.T) {
+	ctx := context.Background()
+	serverURL := newListDefsTestServer(t, "list_widgets", "delete_widgets")
+	issuer, sess, agentID := newListDefsTestFixture(t)
+
+	toolSet := []session.ToolServerRef{{ServerURL: serverURL, AllowedTools: []string{"list_widgets"}}}
+	candidates, err := tools.Candidates(ctx, issuer, sess, agentID, toolSet)
+	require.NoError(t, err)
+
+	matched := tools.Match(candidates, "widgets")
+	assert.Equal(t, []string{"list_widgets"}, matched, "delete_widgets is excluded by AllowedTools and must never be matched, even though its name matches the query")
+}
+
+// TestCandidates_SearchToolsNeverACandidate proves search_tools can never
+// appear in its own search results: it is never a real domain server's tool
+// (candidateDefinitions/Candidates rejects any server that tries to expose
+// it, FR8), so a query that literally names it still matches nothing.
+func TestCandidates_SearchToolsNeverACandidate(t *testing.T) {
+	ctx := context.Background()
+	serverURL := newListDefsTestServer(t, "list_widgets", "delete_widgets")
+	issuer, sess, agentID := newListDefsTestFixture(t)
+
+	toolSet := []session.ToolServerRef{{ServerURL: serverURL}}
+	candidates, err := tools.Candidates(ctx, issuer, sess, agentID, toolSet)
+	require.NoError(t, err)
+
+	matched := tools.Match(candidates, tools.SearchToolsName)
+	assert.Empty(t, matched, "search_tools is never a candidate, so searching for its own name must match nothing")
 }
 
 // TestListToolDefinitions_SimilarNamesNotReserved proves the check is exact,

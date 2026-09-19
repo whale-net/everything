@@ -322,9 +322,36 @@ a prompt-caching prefix-stability concern: `tools` renders first in the
 provider request, and any byte-level reordering of that prefix invalidates
 the whole request's cache (`cache_read_input_tokens` silently drops to
 zero). M4 does not implement caching itself; it only avoids foreclosing it.
-Answering a `search_tools` call (actually running the search and unlocking
-matches) is a separate, later task — this milestone ships the shape of
-per-turn `Tools` resolution only.
+A model-issued `search_tools` call is answered entirely in-process
+(`whagent_net/worker.Activities.SearchTools`, `activities.go`) — it is never
+dispatched to a domain server, so it never appears as an `mcp.ClientSession.
+CallTool` invocation against any configured server, and never mints a
+credential beyond what resolving the candidate pool itself requires. The
+match runs against the same allowed-tools-narrowed candidate pool
+`ListToolDefinitions` builds `Tools` from (`tools.Candidates`, factored out
+of `listdefs.go`) via case-insensitive substring matching on name or
+description (`tools.Match` — no embeddings, no ranking, out of scope for
+M4). `processTurn`'s tool-dispatch loop (`workflow.go`) recognizes the call
+by name and search-mode status and routes it to `ActivitySearchTools`
+instead of `ActivityDispatchTool`; a `search_tools` call arriving in a
+bulk-mode session is not special-cased and falls through to the ordinary
+dispatch path, where it fails with "no configured server exposes this
+tool" (correct — `search_tools` is never offered in bulk mode and no domain
+server may expose it, FR8's global reservation).
+
+Answering the call still produces the ordinary `tool_call:<idx>`/
+`tool_result:<idx>` transcript event pair every dispatched tool call
+produces — indistinguishable in shape, so `eventsToMessages`' assistant-
+message-then-tool-result pairing requirement holds the same way — with the
+`tool_result` payload naming every matched tool. In addition to, never
+instead of, that pair, the call also commits a `tool_unlock:<idx>` event
+(FR5/FR6) carrying the matched names and the query, even when nothing
+matched — the search happened, so the transcript says so, and this is the
+event `UnlockedTools` reads back into the next turn's sticky-unlocked set.
+A malformed or absent `query` argument is answered as an ordinary
+`IsError: true` tool result, not a session failure — the same "isError is
+not a whagent-net failure" boundary `whagent_net/worker/tools/dispatch.go`
+documents for a domain server's own results.
 
 ## Guardrails
 
@@ -781,9 +808,7 @@ outright — the session still exists and a caller should retry with
   populate an agent definition's `allowed_tools` from `ui` rather than
   hand-editing `agents.yaml`/the row directly — later capability, no UI
   work done yet (C13–C16, the UI milestone, land first).
-- **Deferred/searched tool loading**: shipped as M4 (root plan #2602) — see
-  "Search-based tool loading" in
+- **Deferred/searched tool loading**: shipped as M4 (root plan #2602),
+  including answering a `search_tools` call in-process — see "Search-based
+  tool loading" in
   [Domain-owned MCP servers and the tool contract](#domain-owned-mcp-servers-and-the-tool-contract).
-  Still open within M4: actually answering a `search_tools` call (matching
-  the query against the candidate set and committing the `tool_unlock`
-  event) is a separate task from this shape.
