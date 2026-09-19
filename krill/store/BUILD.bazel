@@ -37,6 +37,7 @@ go_library(
         "pointer.go",
         "position.go",
         "product.go",
+        "recut.go",
         "requirement.go",
         "revision_event.go",
         "scope.go",

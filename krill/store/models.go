@@ -166,10 +166,11 @@ type NonGoal struct {
 }
 
 // MilestoneKind discriminates `milestone_ref.kind` (migration 010, issue
-// #2683; widened by migration 011, issue #2684) -- CHECK-constrained to
-// the two values below. Every existing consumer of MilestoneRef
-// (ListRefsByProduct, krill/render, krill/importer) must filter on this
-// field rather than assuming every row is a milestone.
+// #2683; widened by migration 011, issue #2684 and migration 014, issue
+// #2687) -- CHECK-constrained to the three values below. Every existing
+// consumer of MilestoneRef (ListRefsByProduct, krill/render,
+// krill/importer) must filter on this field rather than assuming every
+// row is a milestone.
 type MilestoneKind string
 
 const (
@@ -180,6 +181,16 @@ const (
 	// MilestoneKindMilestone row (the DB CHECK enforces this pairing, not
 	// just this comment).
 	MilestoneKindMilepebble MilestoneKind = "milepebble"
+	// MilestoneKindBacklog (migration 014, issue #2687, FR5/FR6) is the
+	// one reserved-name backlog bucket row per (scope, product) --
+	// ParentMilestoneID is always nil on a row of this kind, same as
+	// MilestoneKindMilestone (the DB CHECK enforces this too). It is a
+	// delivery-axis home for scope re-cut off a milestone or milepebble,
+	// distinct from the product's own `Later` capability-map bucket (a
+	// spec-axis concept, krill/product/02-capability-map.md) -- see
+	// migration 014's own comment and krill/ARCHITECTURE.md's "The
+	// backlog bucket" section for why these are never the same thing.
+	MilestoneKindBacklog MilestoneKind = "backlog"
 )
 
 // MilestoneRef is one row of `milestone_ref` (migration 004, issue #2492,

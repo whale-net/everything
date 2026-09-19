@@ -86,6 +86,14 @@ func (s *Store) DeliveryShipments() DeliveryShipmentStore {
 	return deliveryShipmentStore{pool: s.pool}
 }
 
+// Recut returns the RecutStore implementation -- the backlog bucket plus
+// the not-yet-shipped scope-move primitive (migration 014, issue #2687,
+// FR5) sitting alongside DeliveryShipmentStore, whose DeliveryBreakdown it
+// consumes to refuse moving anything already shipped (NFR3).
+func (s *Store) Recut() RecutStore {
+	return recutStore{pool: s.pool}
+}
+
 // Amend returns the AmendStore implementation -- the SCD2 close-and-open
 // write path (FR12, issue #2493) for Requirement and LoadBearingDecision.
 func (s *Store) Amend() AmendStore { return amendStore{pool: s.pool} }
