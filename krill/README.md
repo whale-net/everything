@@ -282,9 +282,11 @@ work/execution axis: MCP access to the FR5-FR9 spec surface plus the same
 `/mcp/design` mount `krill-design` uses (milestone/delivery-axis tools and
 `create_task` also register there -- see "Delivery-axis endpoints" above),
 plus the work-axis personas (`planner`/`worker`/`validator`/
-`system-validator`/`mergepush`/`project-manager`) and skills
+`system-validator`/`mergepush`/`quick-task`) and skills
 (`plan`/`implement`/`validate`/`loop-plan-implement-validate`) forked from
-`tools/project-manager`. Milestone authoring/status and `create_task` (M3,
+`tools/project-manager`. `quick-task` is the krill-aware, renamed fork of
+that plugin's lightweight `project-manager` persona -- see its own file for
+why. Milestone authoring/status and `create_task` (M3,
 M4 FR1) are real and used where a product is actually hosted in krill; task
 claim/heartbeat/complete/abandon/note, dependency declaration, and any
 lane/status query for a worker to discover ready work are still unbuilt, so
