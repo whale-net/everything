@@ -54,6 +54,14 @@ func (f *fakeTaskStore) GetTaskByID(ctx context.Context, id uuid.UUID) (store.Ta
 	return f.getTaskByIDResult, f.getTaskByIDErr
 }
 
+func (f *fakeTaskStore) ClaimTask(ctx context.Context, params store.ClaimTaskParams) (store.Claim, error) {
+	panic("not used by this test")
+}
+
+func (f *fakeTaskStore) GetClaimByID(ctx context.Context, id uuid.UUID) (store.Claim, error) {
+	panic("not used by this test -- both branches under test return before Assemble ever calls this")
+}
+
 var _ store.TaskStore = (*fakeTaskStore)(nil)
 
 // TestAssemble_CrossScopeTaskID_NotFound proves NFR1: a taskID that

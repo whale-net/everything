@@ -141,12 +141,14 @@ func run() error {
 	// composed abandon verb, issue #2688), tools.RegisterCreateTask (the
 	// work-axis task-create tool, issue #2719, FR1),
 	// tools.RegisterDeclareTaskDependencies (the work-axis dependency-
-	// declaration tool, issue #2720, FR2), and tools.RegisterGetTaskPayload
-	// (the work-axis by-task-id fetch tool, issue #2721, FR4/FR10) all
+	// declaration tool, issue #2720, FR2), tools.RegisterGetTaskPayload
+	// (the work-axis by-task-id fetch tool, issue #2721, FR4/FR10), and
+	// tools.RegisterClaimTask (the work-axis claim tool, issue #2722,
+	// FR3/FR5) all
 	// mount on designReg -- create_milestone/set_fr_budget/add_delivers/
 	// add_must_not_foreclose/add_deferral/set_milestone_status/
 	// mark_delivered_item_shipped/move_delivery_scope/abandon_milestone/
-	// create_task/declare_task_dependencies all need the same
+	// create_task/declare_task_dependencies/claim_task all need the same
 	// krill-session-derived LB4 subject pair every write tool on that mount
 	// already resolves; get_task needs no session (ungated read, NFR6) but
 	// mounts here too rather than a fourth surface of its own (LB7).
@@ -165,6 +167,7 @@ func run() error {
 	tools.RegisterCreateTask(designReg, sessions, entities.Tasks())
 	tools.RegisterDeclareTaskDependencies(designReg, sessions, entities.Tasks())
 	tools.RegisterGetTaskPayload(designReg, entities.Tasks(), assembler)
+	tools.RegisterClaimTask(designReg, sessions, entities.Tasks(), assembler)
 
 	// The mcpauth (human) front door's CredentialStore preflights the
 	// consuming domain's credential table at boot -- exactly like

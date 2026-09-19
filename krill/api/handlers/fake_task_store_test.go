@@ -32,6 +32,12 @@ type fakeTaskStore struct {
 	unsatisfiedErr      error
 	getTaskByIDResult   store.Task
 	getTaskByIDErr      error
+
+	claimErr           error
+	claimResult        store.Claim
+	gotClaimParams     store.ClaimTaskParams
+	getClaimByIDResult store.Claim
+	getClaimByIDErr    error
 }
 
 func (f *fakeTaskStore) CreateTask(ctx context.Context, params store.CreateTaskParams) (store.Task, error) {
@@ -67,6 +73,18 @@ func (f *fakeTaskStore) UnsatisfiedDependencies(ctx context.Context, scopeID, ta
 
 func (f *fakeTaskStore) GetTaskByID(ctx context.Context, id uuid.UUID) (store.Task, error) {
 	return f.getTaskByIDResult, f.getTaskByIDErr
+}
+
+func (f *fakeTaskStore) ClaimTask(ctx context.Context, params store.ClaimTaskParams) (store.Claim, error) {
+	f.gotClaimParams = params
+	if f.claimErr != nil {
+		return store.Claim{}, f.claimErr
+	}
+	return f.claimResult, nil
+}
+
+func (f *fakeTaskStore) GetClaimByID(ctx context.Context, id uuid.UUID) (store.Claim, error) {
+	return f.getClaimByIDResult, f.getClaimByIDErr
 }
 
 var _ store.TaskStore = (*fakeTaskStore)(nil)

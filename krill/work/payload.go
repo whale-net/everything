@@ -18,6 +18,7 @@ package work
 import (
 	"context"
 	"fmt"
+	"time"
 
 	"github.com/google/uuid"
 
@@ -45,19 +46,39 @@ type TaskDep struct {
 	DependsOnTaskID uuid.UUID `json:"depends_on_task_id"`
 }
 
+// ClaimView is TaskView's claim/lease half (issue #2722, FR3/FR5/FR10):
+// nil when the task is unclaimed. LeaseExpiresAt always mirrors
+// task.lease_expires_at -- the parent task row's own "current" derived
+// value (015_work_axis.up.sql's own task LB3 note) -- never the owning
+// task_claim row's immutable InitialLeaseExpiresAt, so a later heartbeat
+// extension (#2723) is reflected here with no change to this package.
+// Released/ReleaseReason surface a reclaimed-away prior claim identically
+// to a live one, so a resumption read (FR10) can tell "still claimed,
+// lease live" from "reclaimed out from under a lapsed session" from this
+// one document shape.
+type ClaimView struct {
+	ClaimID        uuid.UUID `json:"claim_id"`
+	SessionID      uuid.UUID `json:"session_id"`
+	ClaimedAt      time.Time `json:"claimed_at"`
+	LeaseExpiresAt time.Time `json:"lease_expires_at"`
+	Released       bool      `json:"released"`
+	ReleaseReason  *string   `json:"release_reason,omitempty"`
+}
+
 // TaskView is Payload's work-axis half: the task's own fields plus its
-// declared dependency list, alongside the spec slice Payload.Slice embeds.
-// Lease/claim state is added by #2722; Notes is added by #2727 -- both
+// declared dependency list and current claim/lease state, alongside the
+// spec slice Payload.Slice embeds. Notes is added by #2727 -- also
 // additive, per this package's own doc comment.
 type TaskView struct {
-	ID            uuid.UUID `json:"id"`
-	MilestoneID   uuid.UUID `json:"milestone_id"`
-	Title         string    `json:"title"`
-	Body          string    `json:"body"`
-	CurrentLane   string    `json:"current_lane"`
-	LaneSequence  []string  `json:"lane_sequence"`
-	Dependencies  []TaskDep `json:"dependencies"`
-	AttemptNumber int       `json:"attempt_number"`
+	ID            uuid.UUID  `json:"id"`
+	MilestoneID   uuid.UUID  `json:"milestone_id"`
+	Title         string     `json:"title"`
+	Body          string     `json:"body"`
+	CurrentLane   string     `json:"current_lane"`
+	LaneSequence  []string   `json:"lane_sequence"`
+	Dependencies  []TaskDep  `json:"dependencies"`
+	AttemptNumber int        `json:"attempt_number"`
+	CurrentClaim  *ClaimView `json:"current_claim"`
 }
 
 // Payload is the one typed, self-describing task payload document (FR4,
@@ -137,6 +158,26 @@ func (a *Assembler) Assemble(ctx context.Context, scopeID, taskID uuid.UUID) (Pa
 		body = *task.Body
 	}
 
+	// CurrentClaim is nil when the task is unclaimed (task.CurrentClaimID
+	// nil) -- populated from the task_claim row it names otherwise
+	// (#2722, FR10). LeaseExpiresAt is always read from task itself, not
+	// the claim row, per ClaimView's own doc comment.
+	var currentClaim *ClaimView
+	if task.CurrentClaimID != nil {
+		claim, err := a.tasks.GetClaimByID(ctx, *task.CurrentClaimID)
+		if err != nil {
+			return Payload{}, fmt.Errorf("get task claim: %w", err)
+		}
+		currentClaim = &ClaimView{
+			ClaimID:        claim.ID,
+			SessionID:      uuid.UUID(claim.SessionID),
+			ClaimedAt:      claim.ClaimedAt,
+			LeaseExpiresAt: *task.LeaseExpiresAt,
+			Released:       claim.ReleasedAt != nil,
+			ReleaseReason:  claim.ReleaseReason,
+		}
+	}
+
 	return Payload{
 		Slice: sliceDoc,
 		Task: TaskView{
@@ -148,6 +189,7 @@ func (a *Assembler) Assemble(ctx context.Context, scopeID, taskID uuid.UUID) (Pa
 			LaneSequence:  laneSequence,
 			Dependencies:  taskDeps,
 			AttemptNumber: task.AttemptCount,
+			CurrentClaim:  currentClaim,
 		},
 	}, nil
 }

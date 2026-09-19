@@ -18,6 +18,7 @@ go_library(
         "recut.go",
         "slice.go",
         "task.go",
+        "task_claim.go",
         "task_dependency.go",
         "task_payload.go",
     ],
