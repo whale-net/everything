@@ -581,6 +581,9 @@ func TestFR2_ResponseCommitOrdering(t *testing.T) {
 	// Response should have status 200 and SSE headers
 	require.Equal(t, http.StatusOK, w.Code)
 	require.Equal(t, "text/event-stream", w.Header().Get("Content-Type"))
+	// Disables reverse-proxy response buffering so streamed events aren't
+	// held in a proxy buffer until it trips its own idle timeout.
+	require.Equal(t, "no", w.Header().Get("X-Accel-Buffering"))
 	// Should have zero events (fragment errored)
 	require.NotContains(t, w.Body.String(), "event: topic-a")
 }
