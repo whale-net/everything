@@ -5,9 +5,15 @@ applications in this monorepo. This package holds only cross-app primitives
 — never app-specific screens. App-specific UI stays in each consuming app's
 own package (e.g. `tools/app_registry/ui`, `manmanv2/ui`).
 
-This is Phase 1 groundwork (part of #998, FR1): no consuming app has been
-migrated to these primitives yet (that is issue #1005's job) -- the
-primitives below exist here but are not yet adopted anywhere.
+Originated as Phase 1 groundwork (part of #998, FR1). Chrome primitives
+(`Shell`, `ThemeSwitcher`, `Themes`, `UserMenu`) are now adopted by every
+current consumer (`manmanv2`, `tools/app_registry`, `leaflab`,
+`whagent_net`, `audience_score_system`). Content primitives
+(`Button`/`Badge`/`Card`/`Confirm`) are adopted by `manmanv2` and
+`tools/app_registry`; `audience_score_system` does not yet use them (still
+hand-rolls equivalent markup independently — an open adoption gap, not a
+primitive gap). See `ARCHITECTURE.md` for the design principles behind
+these primitives.
 
 ## Chrome primitives (FR1 / FR1a / FR5 / FR8)
 
@@ -91,8 +97,8 @@ Each is a `.templ` component in `libs/go/htmxui`, daisyUI-classes-only
   (`badge.templ`) — a generic single-label, single-colour `badge` primitive.
   Deliberately repo-generic: app-registry's promotability/artifact-state/
   provenance vocabulary in `tools/app_registry/ui/components/badges.templ`
-  stays domain-owned and is expressed in terms of this `Badge` in the
-  adoption issue, keeping its labels and colours unchanged.
+  stays domain-owned and is expressed in terms of this `Badge` (adopted),
+  keeping its labels and colours unchanged.
 - **`Card(header, body, actions templ.Component, attrs templ.Attributes)`**
   (`card.templ`) — the shared `card bg-base-100 border border-base-300
   shadow-sm` chrome with three composition slots; a `nil` slot renders
