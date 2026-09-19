@@ -165,9 +165,9 @@ func TestFR7_ResolutionIsARevisionEventCarryingBothIdentities(t *testing.T) {
 	require.Equal(t, http.StatusOK, dsRec.Code, dsRec.Body.String())
 	var dsResp struct {
 		RevisionEvents []struct {
-			EventType  string `json:"event_type"`
-			Acting     struct{ Sub string } `json:"acting"`
-			OnBehalfOf struct{ Sub string } `json:"on_behalf_of"`
+			EventType          string               `json:"event_type"`
+			Acting             struct{ Sub string } `json:"acting"`
+			OnBehalfOf         struct{ Sub string } `json:"on_behalf_of"`
 			OpenQuestionsDelta struct {
 				Resolved []string `json:"resolved"`
 			} `json:"open_questions_delta"`

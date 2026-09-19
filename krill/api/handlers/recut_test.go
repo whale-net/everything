@@ -97,8 +97,8 @@ func TestMoveScopeHandler_ValidSession_MovesWithBodyAndSubjects(t *testing.T) {
 // rejection (recut.go's own doc comment).
 func TestMoveScopeHandler_ErrorMapping(t *testing.T) {
 	for name, err := range map[string]error{
-		"ErrEntityNotInContainer":       store.ErrEntityNotInContainer,
-		"ErrEntityShipped":              store.ErrEntityShipped,
+		"ErrEntityNotInContainer":        store.ErrEntityNotInContainer,
+		"ErrEntityShipped":               store.ErrEntityShipped,
 		"ErrMilepebbleDeliversNotSubset": store.ErrMilepebbleDeliversNotSubset,
 	} {
 		t.Run(name, func(t *testing.T) {

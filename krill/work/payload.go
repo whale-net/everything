@@ -65,10 +65,21 @@ type ClaimView struct {
 	ReleaseReason  *string   `json:"release_reason,omitempty"`
 }
 
+// NoteView is one entry of TaskView's note list (FR4, FR11, issue #2727):
+// the wire shape of a store.Note recorded against the task -- a flat,
+// immutable record with no status/lifecycle field (FR12).
+type NoteView struct {
+	ID   uuid.UUID `json:"id"`
+	Kind string    `json:"kind"`
+	Body string    `json:"body"`
+}
+
 // TaskView is Payload's work-axis half: the task's own fields plus its
-// declared dependency list and current claim/lease state, alongside the
-// spec slice Payload.Slice embeds. Notes is added by #2727 -- also
-// additive, per this package's own doc comment.
+// declared dependency list, current claim/lease state (#2722), and note
+// list (#2727) -- populated with every note recorded against the task
+// (FR4), ordered by CreatedAt -- alongside the spec slice Payload.Slice
+// embeds. Both CurrentClaim and Notes are purely additive fields, per this
+// package's own doc comment.
 type TaskView struct {
 	ID            uuid.UUID  `json:"id"`
 	MilestoneID   uuid.UUID  `json:"milestone_id"`
@@ -79,6 +90,7 @@ type TaskView struct {
 	Dependencies  []TaskDep  `json:"dependencies"`
 	AttemptNumber int        `json:"attempt_number"`
 	CurrentClaim  *ClaimView `json:"current_claim"`
+	Notes         []NoteView `json:"notes"`
 }
 
 // Payload is the one typed, self-describing task payload document (FR4,
@@ -178,6 +190,17 @@ func (a *Assembler) Assemble(ctx context.Context, scopeID, taskID uuid.UUID) (Pa
 		}
 	}
 
+	notes, err := a.tasks.ListNotesForTask(ctx, scopeID, taskID)
+	if err != nil {
+		return Payload{}, fmt.Errorf("list task notes: %w", err)
+	}
+	// Always a non-nil slice, even when notes is empty -- mirrors
+	// Dependencies' own "marshal as [], never null" rule above.
+	noteViews := make([]NoteView, len(notes))
+	for i, n := range notes {
+		noteViews[i] = NoteView{ID: n.ID, Kind: string(n.Kind), Body: n.Body}
+	}
+
 	return Payload{
 		Slice: sliceDoc,
 		Task: TaskView{
@@ -190,6 +213,7 @@ func (a *Assembler) Assemble(ctx context.Context, scopeID, taskID uuid.UUID) (Pa
 			Dependencies:  taskDeps,
 			AttemptNumber: task.AttemptCount,
 			CurrentClaim:  currentClaim,
+			Notes:         noteViews,
 		},
 	}, nil
 }
