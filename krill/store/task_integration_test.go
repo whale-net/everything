@@ -214,9 +214,9 @@ func TestTaskStore_CreateTask_InvalidLaneSequence_Rejected(t *testing.T) {
 	world := newTaskTestWorld(t, ctx, s, scopeID, self)
 
 	cases := map[string]struct {
-		seq          []store.Lane
-		starting     store.Lane
-		wantErrIs    error
+		seq       []store.Lane
+		starting  store.Lane
+		wantErrIs error
 	}{
 		"out of canonical order": {
 			seq:       []store.Lane{store.LaneTesting, store.LaneImplementation},

@@ -20,6 +20,7 @@ go_library(
         "task.go",
         "task_claim.go",
         "task_dependency.go",
+        "task_note.go",
         "task_payload.go",
     ],
     importpath = "github.com/whale-net/everything/krill/mcp/tools",

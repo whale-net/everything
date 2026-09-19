@@ -62,6 +62,18 @@ func (f *fakeTaskStore) GetClaimByID(ctx context.Context, id uuid.UUID) (store.C
 	panic("not used by this test -- both branches under test return before Assemble ever calls this")
 }
 
+func (f *fakeTaskStore) RecordNote(ctx context.Context, params store.RecordNoteParams) (store.Note, error) {
+	panic("not used by this test")
+}
+
+func (f *fakeTaskStore) ListNotesForTask(ctx context.Context, scopeID, taskID uuid.UUID) ([]store.Note, error) {
+	panic("not used by this test -- both branches under test return before Assemble ever calls this")
+}
+
+func (f *fakeTaskStore) ListNotesForEntity(ctx context.Context, scopeID uuid.UUID, kind store.NoteEntityKind, entityID uuid.UUID) ([]store.Note, error) {
+	panic("not used by this test")
+}
+
 var _ store.TaskStore = (*fakeTaskStore)(nil)
 
 // TestAssemble_CrossScopeTaskID_NotFound proves NFR1: a taskID that

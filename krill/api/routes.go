@@ -136,6 +136,14 @@ func setupRoutes(mux *http.ServeMux, pool *pgxpool.Pool, githubToken string) {
 	// the fresh lease.
 	mux.Handle("POST /tasks/{id}/claim", gate(handlers.ClaimTaskHandler(entities.Tasks(), assembler)))
 
+	// task_note (issue #2727, FR11/FR12): any Agent, claimant or not, can
+	// record a flat, immutable note against a task or a spec-axis entity
+	// -- POST gated (NFR6; the only other gate is the session requirement
+	// itself, never current_claim_id), GET ungated like every other read
+	// endpoint in this package.
+	mux.Handle("POST /notes", gate(handlers.RecordNoteHandler(entities.Tasks())))
+	mux.HandleFunc("GET /tasks/{id}/notes", handlers.ListTaskNotesHandler(entities.Tasks()))
+
 	mux.Handle("POST /design-sessions", gate(handlers.OpenDesignSessionHandler(entities.DesignSessions())))
 	mux.HandleFunc("GET /design-sessions/{id}", handlers.GetDesignSessionHandler(entities.DesignSessions(), entities.RevisionEvents()))
 	mux.Handle("POST /design-sessions/{id}/revision-events", gate(handlers.AppendRevisionEventHandler(entities.RevisionEvents())))

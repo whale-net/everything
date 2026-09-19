@@ -69,6 +69,7 @@ go_library(
         "task.go",
         "task_claim.go",
         "task_dependency.go",
+        "task_note.go",
         "task_payload.go",
         "types.go",
     ],

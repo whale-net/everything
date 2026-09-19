@@ -48,6 +48,7 @@ go_library(
         "task.go",
         "task_claim.go",
         "task_dependency.go",
+        "task_note.go",
     ],
     importpath = "github.com/whale-net/everything/krill/store",
     visibility = ["//visibility:public"],
