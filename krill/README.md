@@ -259,21 +259,48 @@ PG_DATABASE_URL=postgres://postgres:password@localhost:5432/krill?sslmode=disabl
 See `ENV.md` "`ui` (Keycloak sign-in shell, mcpauth's `/authorize` front
 end)" for every variable it reads.
 
-## Claude Code plugin
+## Claude Code plugins
 
-`plugin/user/` is the Claude Code plugin layout this domain exposes MCP
-tools through, mirroring `whagent_net/plugin` / `audience_score_system/plugin`:
-`.mcp.json` / `mcp_config.json` register `krill-mcp-tilt` (local Tilt,
+`plugin/design/` (registered as `krill-design`) is the Claude Code plugin
+layout that exposes MCP tools for the spec/design axis, mirroring
+`whagent_net/plugin` / `audience_score_system/plugin`: `.mcp.json` /
+`mcp_config.json` register `krill-mcp-tilt` (local Tilt,
 `http://localhost:8084/mcp/spec`), `krill-mcp-dev`, and `krill-mcp-prod` for
 the FR5-FR9 spec surface, plus (issue #2547) `krill-mcp-design-tilt`
 (`http://localhost:8084/mcp/design`), `krill-mcp-design-dev`, and
 `krill-mcp-design-prod` for the design-session surface above -- one entry
 per mount per environment, since each is its own pre-filtered MCP endpoint.
-Registered in `.claude-plugin/marketplace.json` as `krill`.
+It also carries the design-axis personas (`producer`/`architect`/`reviewer`/
+`stakeholder`) and skills (`product`/`design`/`review`/
+`stakeholder-meeting`/`loop-design-panel`) forked from
+`tools/project-manager` -- this is krill's first iteration of superseding
+that plugin, adapted to call krill's own MCP tools instead of driving
+GitHub Discussions. See `plugin/shared/CONVENTIONS.md`.
+
+`plugin/work/` (registered as `krill-work`) is the companion plugin for the
+work/execution axis: MCP access to the FR5-FR9 spec surface plus the same
+`/mcp/design` mount `krill-design` uses (milestone/delivery-axis tools and
+`create_task` also register there -- see "Delivery-axis endpoints" above),
+plus the work-axis personas (`planner`/`worker`/`validator`/
+`system-validator`/`mergepush`/`quick-task`) and skills
+(`plan`/`implement`/`validate`/`loop-plan-implement-validate`) forked from
+`tools/project-manager`. `quick-task` is the krill-aware, renamed fork of
+that plugin's lightweight `project-manager` persona -- see its own file for
+why. Milestone authoring/status and `create_task` (M3,
+M4 FR1) are real and used where a product is actually hosted in krill; task
+claim/heartbeat/complete/abandon/note, dependency declaration, and any
+lane/status query for a worker to discover ready work are still unbuilt, so
+swimlane execution still rides on GitHub Issues/Projects either way. See
+`plugin/shared/CONVENTIONS.md` for exactly what's real versus still a
+`TODO(M4)`.
+
+`plugin/shared/` holds the `CONVENTIONS.md` and the `help`/`status`
+persona/skill both plugins symlink in, so they never drift apart.
 
 `plugin/data/` is the companion "-data" plugin, mirroring
 `audience_score_system/plugin/data` / `leaflab/plugin/data`: direct
 read-restricted crystaldba `postgres-mcp` access to the same `krill`
 Postgres database `migrate`/`api`/`mcp` share, one server per environment
 (`krill-pg-tilt`, `krill-pg-dev`, `krill-pg-prod` — see `ENV.md` "Postgres
-MCP (Claude Code plugin)"). Registered as `krill-data`.
+MCP (Claude Code plugin)"). Registered as `krill-data`, unaffected by the
+design/work split above.

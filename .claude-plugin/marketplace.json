@@ -30,9 +30,14 @@
       "source": "./leaflab/plugin/data"
     },
     {
-      "name": "krill",
-      "description": "Streamable-HTTP MCP access to krill's FR10/NFR1 spec surface (feature-set/feature/requirement/product slice query) across tilt/dev/prod",
-      "source": "./krill/plugin/user"
+      "name": "krill-design",
+      "description": "Design-axis krill plugin: MCP access to krill's spec, design-session, and milestone/delivery-axis surfaces, plus producer/architect/reviewer/stakeholder personas and design/product/review skills forked from project-manager",
+      "source": "./krill/plugin/design"
+    },
+    {
+      "name": "krill-work",
+      "description": "Work-axis krill plugin: MCP access to krill's spec surface plus the milestone/delivery-axis tools and create_task, plus planner/worker/validator/system-validator/mergepush personas and plan/implement/validate skills forked from project-manager",
+      "source": "./krill/plugin/work"
     },
     {
       "name": "krill-data",

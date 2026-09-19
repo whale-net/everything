@@ -3,6 +3,15 @@
 AGY and Claude Code plugin providing a multi-persona project-management pipeline for the
 `everything` monorepo, tracked entirely in GitHub plus one committed doc: optional product scoping into a **`<domain>/PRODUCT.md` spec**, tracked by a thin **product Issue**; intake, design drafting, and architect reconciliation in a **Discussion**; the final approved root plan as an **Issue**; task breakdown and task execution progressing through **swimlanes** on a GitHub **Project (v2)** board. See [`CONVENTIONS.md`](CONVENTIONS.md) for the full contract.
 
+**Superseded-in-progress by krill.** `krill/plugin/design` and
+`krill/plugin/work` are a first-iteration fork of this plugin's personas and
+skills, adapted to call krill's own MCP tools (design sessions, typed
+Feature/Requirement entities) on the design axis; the work axis still drives
+GitHub Issues/Projects, pending krill's M3/M4 work-tracking surface. This
+plugin keeps working as-is — nothing here is deprecated yet — but new
+design-pipeline development should happen in krill's fork. See
+`krill/plugin/shared/CONVENTIONS.md`.
+
 **Scoping first, for anything product-sized.** A single `design` pass over a whole product produces 60-80 FRs — too big to implement in one shot and too big to hold in context. `/project-manager:product` cuts that up front: a capability map instead of requirements, the **load-bearing decisions** later capabilities depend on, and a roadmap of milestones each defined by one user-visible outcome. The rest of the pipeline then runs once per milestone, small enough to be safe, with architect checking each milestone's spec against the load-bearing decisions so *small* doesn't mean *painted into a corner*. A feature added to an existing system skips this and goes straight to `design`.
 
 ## Personas
