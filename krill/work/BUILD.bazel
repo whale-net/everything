@@ -18,19 +18,31 @@ go_library(
     ],
 )
 
-# Implementation-phase placeholder unit test (issue #2721) -- full unit
-# coverage of Assemble's real logic lands in this task's Testing phase.
+# Unit coverage for Assemble's two error branches that never touch a real
+# store (issue #2721's Testing section: NFR1's cross-scope rejection, an
+# unknown task id's named failure) -- see payload_test.go's own doc
+# comment for why these need no Postgres.
 go_test(
     name = "work_test",
     srcs = ["payload_test.go"],
+    deps = [
+        "//krill/slice",
+        "//krill/store",
+        "//krill/work",
+        "@com_github_google_uuid//:uuid",
+        "@com_github_stretchr_testify//assert",
+        "@com_github_stretchr_testify//require",
+    ],
 )
 
-# Real-Postgres integration coverage placeholder (issue #2721's Testing
-# section) -- see payload_integration_test.go's own doc comment.
+# Real-Postgres coverage for Assemble's Testing-phase criteria (issue
+# #2721's Testing section: NFR4's byte-equal slice regression test, the
+# empty-dependency-list case, and full slice/lane/dependency/attempt
+# content) -- see payload_integration_test.go's own doc comment.
 # Deliberately NOT part of `bazel test //...` -- see //libs/go/dbtest's
 # README, mirrored by //krill/slice:query_integration_test.
 #
-# Run it explicitly once populated (requires a working Docker daemon):
+# Run it explicitly (requires a working Docker daemon):
 #   bazel test //krill/work:payload_integration_test --test_output=all
 go_test(
     name = "payload_integration_test",
@@ -45,5 +57,18 @@ go_test(
         "no-cache",
         "no-sandbox",
         "requires-network",
+    ],
+    deps = [
+        "//krill/migrate/schema",
+        "//krill/slice",
+        "//krill/store",
+        "//krill/work",
+        "//libs/go/dbtest",
+        "//libs/go/migrate",
+        "@com_github_google_uuid//:uuid",
+        "@com_github_jackc_pgx_v5//pgxpool",
+        "@com_github_jackc_pgx_v5//stdlib",
+        "@com_github_stretchr_testify//assert",
+        "@com_github_stretchr_testify//require",
     ],
 )
