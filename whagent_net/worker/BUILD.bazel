@@ -8,6 +8,7 @@ go_library(
     srcs = [
         "activities.go",
         "archive.go",
+        "budget.go",
         "caps.go",
         "classify.go",
         "context.go",
