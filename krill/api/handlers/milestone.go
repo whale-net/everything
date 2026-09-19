@@ -305,6 +305,57 @@ func AddDeferralHandler(milestones store.MilestoneAuthoringStore) http.HandlerFu
 	}
 }
 
+// Milepebble handlers below (migration 011, issue #2684, FR3/FR4) are
+// scaffold-stage skeletons -- routes.go wiring and request/response
+// bodies land in the Implementation phase, matching
+// krill/store/milestone_authoring.go's own skeleton methods each of these
+// will call.
+
+// CreateMilepebbleHandler returns the milepebble-create endpoint (FR3):
+// POST /milestones/{id}/milepebbles. Must be mounted behind
+// RequireSession.
+func CreateMilepebbleHandler(milestones store.MilestoneAuthoringStore) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		writeJSONError(w, http.StatusNotImplemented, "not implemented")
+	}
+}
+
+// AddMilepebbleDeliversHandler returns the milepebble Delivers-attach
+// endpoint (FR3): POST /milepebbles/{id}/delivers. Must be mounted behind
+// RequireSession.
+func AddMilepebbleDeliversHandler(milestones store.MilestoneAuthoringStore) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		writeJSONError(w, http.StatusNotImplemented, "not implemented")
+	}
+}
+
+// AddDiscoveredScopeHandler returns the mid-milestone discovered-scope
+// endpoint (FR4): POST /milepebbles/{id}/discovered-scope. Must be
+// mounted behind RequireSession.
+func AddDiscoveredScopeHandler(milestones store.MilestoneAuthoringStore) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		writeJSONError(w, http.StatusNotImplemented, "not implemented")
+	}
+}
+
+// GetMilepebbleHandler returns the milepebble read endpoint: GET
+// /milepebbles/{id}, ungated like every other read endpoint in this
+// package.
+func GetMilepebbleHandler(milestones store.MilestoneAuthoringStore) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		writeJSONError(w, http.StatusNotImplemented, "not implemented")
+	}
+}
+
+// ListMilepebblesHandler returns the milepebble list endpoint: GET
+// /milestones/{id}/milepebbles, ungated like every other read endpoint in
+// this package.
+func ListMilepebblesHandler(milestones store.MilestoneAuthoringStore) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		writeJSONError(w, http.StatusNotImplemented, "not implemented")
+	}
+}
+
 // GetMilestoneHandler returns the milestone read endpoint: GET
 // /milestones/{id}, ungated like every other read endpoint in this
 // package.

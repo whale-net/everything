@@ -67,6 +67,76 @@ type MilestoneAuthoringStore interface {
 	// plus its Delivers/Must-not-foreclose association lists and its
 	// deferrals, or ErrNotFound.
 	GetMilestone(ctx context.Context, id uuid.UUID) (MilestoneRef, []EntityMilestone, []EntityMilestone, []MilestoneDeferral, error)
+
+	// CreateMilepebble inserts a new `milestone_ref` row under
+	// parentMilestoneID with kind='milepebble' (migration 011, issue
+	// #2684, FR3), assigning position via nextSiblingPositionPlain among
+	// siblings sharing the same parent (not the same product -- two
+	// milepebbles under different parents may share a position) and
+	// recording the LB4 subject pair. Returns ErrNotFound if
+	// parentMilestoneID has no `milestone_ref` row in scopeID, or if that
+	// row is itself a milepebble (a milepebble's parent must be a
+	// milestone, never another milepebble -- FR3's "exactly one
+	// milestone").
+	CreateMilepebble(ctx context.Context, scopeID, parentMilestoneID uuid.UUID, name, outcome string, acting, onBehalfOf Subject) (MilestoneRef, error)
+
+	// AddMilepebbleDelivers records that entityID is delivered by
+	// milepebbleID -- an `entity_milestone` row with
+	// Relation=MilestoneRelationDelivers against the milepebble. Rejects
+	// (with a named, loud error, never a silent skip) an entityID that is
+	// not already a Delivers association of milepebbleID's parent
+	// milestone -- FR3's "a milepebble's delivered scope is a subset of
+	// that milestone's own delivered features/FRs".
+	AddMilepebbleDelivers(ctx context.Context, scopeID, milepebbleID, entityID uuid.UUID, acting, onBehalfOf Subject) error
+
+	// ListMilepebblesByMilestone returns every milepebble cut from
+	// milestoneID, in Position order (FR7).
+	ListMilepebblesByMilestone(ctx context.Context, milestoneID uuid.UUID) ([]MilestoneRef, error)
+
+	// AddDiscoveredScope is FR4's mid-milestone path: creates a real
+	// Feature or Requirement row (via FeatureStore.Create/
+	// RequirementStore.Create, respecting that entity's own real parent in
+	// the spec chain -- input's FeatureSetID or FeatureID selects which),
+	// then associates the new row to milepebbleID and, in the same
+	// transaction, to milepebbleID's parent milestone's Delivers set --
+	// so the FR3 subset invariant AddMilepebbleDelivers enforces still
+	// holds immediately afterward. The parent milestone's own authoring
+	// rows (outcome, fr_budget, deferrals) are never touched by this
+	// method.
+	AddDiscoveredScope(ctx context.Context, scopeID, milepebbleID uuid.UUID, input DiscoveredScopeInput, acting, onBehalfOf Subject) (DiscoveredScopeResult, error)
+}
+
+// DiscoveredScopeEntityKind discriminates which spec entity table
+// AddDiscoveredScope wrote to (FR4) -- DiscoveredScopeResult's own
+// discriminator, mirroring EntityDeltaChange's shape in spirit but for a
+// different table pair.
+type DiscoveredScopeEntityKind string
+
+const (
+	DiscoveredScopeEntityKindFeature     DiscoveredScopeEntityKind = "feature"
+	DiscoveredScopeEntityKindRequirement DiscoveredScopeEntityKind = "requirement"
+)
+
+// DiscoveredScopeInput is AddDiscoveredScope's input (FR4). Exactly one of
+// FeatureSetID (creating a Feature) or FeatureID (creating a Requirement)
+// must be set -- mirroring FeatureStore.Create's and
+// RequirementStore.Create's own parent shapes; AddDiscoveredScope invents
+// no new entity kind of its own. RequirementKind/Body apply only when
+// FeatureID is set; Description applies only when FeatureSetID is set.
+type DiscoveredScopeInput struct {
+	FeatureSetID    *uuid.UUID
+	FeatureID       *uuid.UUID
+	RequirementKind RequirementKind
+	Name            string
+	Description     *string
+	Body            *string
+}
+
+// DiscoveredScopeResult is AddDiscoveredScope's result -- the newly
+// created entity's immutable id and which table it landed in.
+type DiscoveredScopeResult struct {
+	EntityID uuid.UUID
+	Kind     DiscoveredScopeEntityKind
 }
 
 // milestoneAuthoringStore is the pgx-backed MilestoneAuthoringStore
@@ -325,4 +395,24 @@ func (s milestoneAuthoringStore) GetMilestone(ctx context.Context, id uuid.UUID)
 	}
 
 	return ref, delivers, mustNotForeclose, deferrals, nil
+}
+
+// Milepebble methods below (migration 011, issue #2684, FR3/FR4) are
+// scaffold-stage skeletons -- signatures and the compile-time interface
+// assertion are in place; method bodies land in the Implementation phase.
+
+func (s milestoneAuthoringStore) CreateMilepebble(ctx context.Context, scopeID, parentMilestoneID uuid.UUID, name, outcome string, acting, onBehalfOf Subject) (MilestoneRef, error) {
+	return MilestoneRef{}, fmt.Errorf("CreateMilepebble: not implemented")
+}
+
+func (s milestoneAuthoringStore) AddMilepebbleDelivers(ctx context.Context, scopeID, milepebbleID, entityID uuid.UUID, acting, onBehalfOf Subject) error {
+	return fmt.Errorf("AddMilepebbleDelivers: not implemented")
+}
+
+func (s milestoneAuthoringStore) ListMilepebblesByMilestone(ctx context.Context, milestoneID uuid.UUID) ([]MilestoneRef, error) {
+	return nil, fmt.Errorf("ListMilepebblesByMilestone: not implemented")
+}
+
+func (s milestoneAuthoringStore) AddDiscoveredScope(ctx context.Context, scopeID, milepebbleID uuid.UUID, input DiscoveredScopeInput, acting, onBehalfOf Subject) (DiscoveredScopeResult, error) {
+	return DiscoveredScopeResult{}, fmt.Errorf("AddDiscoveredScope: not implemented")
 }

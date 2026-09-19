@@ -245,6 +245,42 @@ func RegisterGetMilestone(reg *server.Registry, milestones store.MilestoneAuthor
 	})
 }
 
+// Milepebble tools below (migration 011, issue #2684, FR3/FR4) are
+// scaffold-stage skeletons -- registration onto RegisterMilestoneAll/the
+// design mount and the actual store calls land in the Implementation
+// phase, matching krill/store/milestone_authoring.go's own skeleton
+// methods each of these will eventually wrap.
+
+// RegisterCreateMilepebble will register create_milepebble (FR3): cuts a
+// milestone into a new milepebble via
+// store.MilestoneAuthoringStore.CreateMilepebble. Not yet wired into
+// RegisterMilestoneAll.
+func RegisterCreateMilepebble(reg *server.Registry, sessions store.SessionStore, milestones store.MilestoneAuthoringStore) {
+}
+
+// RegisterAddMilepebbleScope will register add_milepebble_scope (FR3):
+// attaches a Delivers association between a milepebble and an entity
+// already delivered by its parent milestone, via
+// store.MilestoneAuthoringStore.AddMilepebbleDelivers. Not yet wired into
+// RegisterMilestoneAll.
+func RegisterAddMilepebbleScope(reg *server.Registry, sessions store.SessionStore, milestones store.MilestoneAuthoringStore) {
+}
+
+// RegisterAddDiscoveredScope will register add_discovered_scope (FR4):
+// creates a real Feature/Requirement row and associates it to a
+// milepebble and its parent milestone, via
+// store.MilestoneAuthoringStore.AddDiscoveredScope. Not yet wired into
+// RegisterMilestoneAll.
+func RegisterAddDiscoveredScope(reg *server.Registry, sessions store.SessionStore, milestones store.MilestoneAuthoringStore) {
+}
+
+// RegisterListMilepebbles will register list_milepebbles: every milepebble
+// cut from a milestone, in Position order, via
+// store.MilestoneAuthoringStore.ListMilepebblesByMilestone. Not yet wired
+// into RegisterMilestoneAll.
+func RegisterListMilepebbles(reg *server.Registry, milestones store.MilestoneAuthoringStore) {
+}
+
 // RegisterMilestoneAll registers every milestone-authoring tool this
 // milestone exposes against reg -- create_milestone/set_fr_budget/
 // add_delivers/add_must_not_foreclose/add_deferral (write) and

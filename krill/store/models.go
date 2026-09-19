@@ -166,23 +166,34 @@ type NonGoal struct {
 }
 
 // MilestoneKind discriminates `milestone_ref.kind` (migration 010, issue
-// #2683) -- today CHECK-constrained to the one value below; a later issue
-// on this board (milepebbles, backlog) widens the CHECK and adds sibling
-// constants here. Every existing consumer of MilestoneRef
+// #2683; widened by migration 011, issue #2684) -- CHECK-constrained to
+// the two values below. Every existing consumer of MilestoneRef
 // (ListRefsByProduct, krill/render, krill/importer) must filter on this
 // field rather than assuming every row is a milestone.
 type MilestoneKind string
 
-const MilestoneKindMilestone MilestoneKind = "milestone"
+const (
+	MilestoneKindMilestone MilestoneKind = "milestone"
+	// MilestoneKindMilepebble (migration 011, issue #2684, FR3) is a
+	// sub-milestone container cut from exactly one milestone --
+	// ParentMilestoneID is always set on a row of this kind, never on a
+	// MilestoneKindMilestone row (the DB CHECK enforces this pairing, not
+	// just this comment).
+	MilestoneKindMilepebble MilestoneKind = "milepebble"
+)
 
 // MilestoneRef is one row of `milestone_ref` (migration 004, issue #2492,
 // FR17, LB6; authoring fields added by migration 010, issue #2683, FR1/
-// FR2). Originally a bare reference to an `M<n>` identifier a source
-// document names -- Kind/Outcome/FRBudget/Position/CreatedByActing/
-// CreatedByOnBehalfOf are this task's addition, deliberately still no
-// milepebble breakdown (a later issue on this board). Single parent:
-// Product.ID. Not SCD2 (LB3) -- see 004_milestone_assoc.up.sql's and
-// 010_milestone_authoring.up.sql's comments for why.
+// FR2; ParentMilestoneID added by migration 011, issue #2684, FR3).
+// Originally a bare reference to an `M<n>` identifier a source document
+// names -- Kind/Outcome/FRBudget/Position/CreatedByActing/
+// CreatedByOnBehalfOf/ParentMilestoneID are additions since. Single
+// parent: Product.ID (always) plus, for a milepebble, a second parent
+// naming the milestone it was cut from (ParentMilestoneID) -- see this
+// field's own doc comment for why that is a second FK, not a
+// `milestone_id` column on a different table. Not SCD2 (LB3) -- see
+// 004_milestone_assoc.up.sql's, 010_milestone_authoring.up.sql's, and
+// 011_milepebble.up.sql's comments for why.
 type MilestoneRef struct {
 	ID        uuid.UUID
 	ScopeID   uuid.UUID
@@ -191,9 +202,17 @@ type MilestoneRef struct {
 	CreatedAt time.Time
 
 	// Kind discriminates this row's own shape (migration 010) -- see
-	// MilestoneKind's doc comment. Every row from before this task
+	// MilestoneKind's doc comment. Every row from before migration 010
 	// defaults to MilestoneKindMilestone.
 	Kind MilestoneKind
+
+	// ParentMilestoneID names the one milestone a milepebble was cut from
+	// (migration 011, FR3) -- nil for a MilestoneKindMilestone row, always
+	// set for a MilestoneKindMilepebble row (DB CHECK-enforced pairing).
+	// This is a real MilestoneRef.ID, never the milepebble's own
+	// Product.ID parentage, which is unchanged (a milepebble belongs to
+	// the same Product its parent milestone does).
+	ParentMilestoneID *uuid.UUID
 
 	// Outcome is the milestone's outcome sentence (FR1), NULL until
 	// CreateMilestone/SetOutcome sets it.

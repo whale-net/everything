@@ -71,22 +71,24 @@ type milestoneStore struct{ pool *pgxpool.Pool }
 
 var _ MilestoneStore = milestoneStore{}
 
-// milestoneRefColumns covers both the bare migration-004 columns and the
-// authoring columns migration 010 added (issue #2683): Kind/Outcome/
-// FRBudget/Position plus the nullable LB4 subject pair -- see
-// scanMilestoneRef and MilestoneRef's doc comment (models.go) for why the
-// subject-pair columns may be NULL.
-const milestoneRefColumns = `id, scope_id, product_id, name, kind, outcome, fr_budget, position, ` +
+// milestoneRefColumns covers the bare migration-004 columns, the
+// authoring columns migration 010 added (issue #2683), and
+// parent_milestone_id migration 011 added (issue #2684): Kind/Outcome/
+// FRBudget/Position/ParentMilestoneID plus the nullable LB4 subject pair
+// -- see scanMilestoneRef and MilestoneRef's doc comment (models.go) for
+// why the subject-pair and parent columns may be NULL.
+const milestoneRefColumns = `id, scope_id, product_id, name, kind, outcome, fr_budget, position, parent_milestone_id, ` +
 	`created_by_acting_iss, created_by_acting_sub, created_by_acting_kind, ` +
 	`created_by_on_behalf_of_iss, created_by_on_behalf_of_sub, created_by_on_behalf_of_kind, created_at`
 
 func scanMilestoneRef(row pgx.Row) (MilestoneRef, error) {
 	var m MilestoneRef
 	var kind string
+	var parentMilestoneID uuid.NullUUID
 	var actingIss, actingSub, actingKind sql.NullString
 	var onBehalfOfIss, onBehalfOfSub, onBehalfOfKind sql.NullString
 	err := row.Scan(
-		&m.ID, &m.ScopeID, &m.ProductID, &m.Name, &kind, &m.Outcome, &m.FRBudget, &m.Position,
+		&m.ID, &m.ScopeID, &m.ProductID, &m.Name, &kind, &m.Outcome, &m.FRBudget, &m.Position, &parentMilestoneID,
 		&actingIss, &actingSub, &actingKind,
 		&onBehalfOfIss, &onBehalfOfSub, &onBehalfOfKind,
 		&m.CreatedAt,
@@ -95,6 +97,9 @@ func scanMilestoneRef(row pgx.Row) (MilestoneRef, error) {
 		return MilestoneRef{}, err
 	}
 	m.Kind = MilestoneKind(kind)
+	if parentMilestoneID.Valid {
+		m.ParentMilestoneID = &parentMilestoneID.UUID
+	}
 	// The importer's GetOrCreateRef path writes no subject pair (no
 	// session to attribute to) -- both sides are NULL together, never
 	// independently, since every writer either sets both (CreateMilestone)
