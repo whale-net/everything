@@ -26,11 +26,16 @@ Wireframes: `manmanv2/ui/design/wireframes/` — proposal screens are the
 4. **IA / navigation**: Dashboard · Games · Activity · Infrastructure ·
    Workshop. Games is the hub; Activity is observation-only (start/stop
    happens in Games); Infrastructure is admin-only.
-5. **Games page = flat list, expand in place** (not tiles, not a page
-   hop): the expanded game shows Deployments, Configurations, Workshop
-   Libraries, and a settings/danger footer inline. Chosen over
-   card-grid + workspace-panel specifically to avoid multi-layer
-   stacking.
+5. **Games page = flat list, expand in place** (not tiles): the expanded
+   game shows only the Deployments section (Start/Stop/Restart, connect,
+   logs, Customize) inline. Chosen over card-grid + workspace-panel
+   specifically to avoid multi-layer stacking. **Revised 2026-09-19**:
+   Configurations, Workshop Libraries, and the settings/danger footer
+   moved off the list row to GameDetail (a page hop via each row's
+   "View More" link) — showing all four sections inline made the
+   expanded row too much to parse for a quick status/connect/action
+   glance; only the actionable start/stop/restart panel stays on the
+   list itself.
 6. **Blade layers only one deep, only for complex editing**: Customize →
    Deployment Settings (env overrides + extra addons), Edit → Config
    Editor (basics/ports/env/volumes+backups). Scrim/Esc tabs out.

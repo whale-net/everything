@@ -171,12 +171,11 @@ func (app *App) handleGames(w http.ResponseWriter, r *http.Request) {
 // config was deleted after the deployment was created) is skipped -- it
 // cannot be attributed to any game.
 //
-// It also populates each row's Configs (FR7, task #2273): every
-// GameConfig of that game, with a deployment count derived from the same
-// deployments slice already joined above -- no new call, no per-config
-// query (NFR7). The Workshop Libraries panel (FR8/FR9/FR10, task #2367)
-// is deliberately not part of this join at all -- it is a lazily-fetched
-// fragment now, see pages.WorkshopPanelData's doc comment for why.
+// The Configurations table and Workshop Libraries panel are no longer
+// part of this join: they render on GameDetail now, reached via the Games
+// list row's "View More" link, so a game's ListGameConfigs result still
+// feeds configByID below (deployment -> game resolution) but no longer
+// backs a per-row Configs field.
 func buildGameRows(
 	games []*manmanpb.Game,
 	configs []*manmanpb.GameConfig,
@@ -202,30 +201,13 @@ func buildGameRows(
 	}
 
 	deploymentsByGame := make(map[int64][]*manmanpb.ServerGameConfig)
-	// deploymentCountByConfig backs FR7's per-config deployment count: a
-	// single pass over the already-fetched deployments slice, keyed by
-	// game_config_id directly (unlike deploymentsByGame above, this one
-	// does not need a config to resolve to a game -- an orphaned
-	// game_config_id still just never matches any rendered ConfigRowView).
-	deploymentCountByConfig := make(map[int64]int, len(deployments))
 	for _, d := range deployments {
-		deploymentCountByConfig[d.GetGameConfigId()]++
-
 		cfg, ok := configByID[d.GetGameConfigId()]
 		if !ok {
 			continue
 		}
 		gameID := cfg.GetGameId()
 		deploymentsByGame[gameID] = append(deploymentsByGame[gameID], d)
-	}
-
-	// configsByGame backs FR7's Configurations section: every GameConfig
-	// grouped by its game_id, a single pass over the already-fetched
-	// configs slice (NFR7 -- no per-game query).
-	configsByGame := make(map[int64][]*manmanpb.GameConfig)
-	for _, c := range configs {
-		gameID := c.GetGameId()
-		configsByGame[gameID] = append(configsByGame[gameID], c)
 	}
 
 	rows := make([]pages.GameRow, 0, len(games))
@@ -258,33 +240,12 @@ func buildGameRows(
 			deploymentRows = append(deploymentRows, buildGameDeploymentRow(game, cfg, server, d, latest, restartStates[d.GetServerGameConfigId()]))
 		}
 
-		gameConfigs := configsByGame[game.GetGameId()]
-		configRows := make([]pages.ConfigRowView, 0, len(gameConfigs))
-		for _, c := range gameConfigs {
-			configRows = append(configRows, pages.ConfigRowView{
-				GameID:          game.GetGameId(),
-				ConfigID:        c.GetConfigId(),
-				Name:            c.GetName(),
-				Image:           c.GetImage(),
-				DeploymentCount: deploymentCountByConfig[c.GetConfigId()],
-			})
-		}
-		// Deterministic sort, same rationale as the games sort below: by
-		// name, tie-broken by config_id.
-		sort.Slice(configRows, func(i, j int) bool {
-			if configRows[i].Name != configRows[j].Name {
-				return configRows[i].Name < configRows[j].Name
-			}
-			return configRows[i].ConfigID < configRows[j].ConfigID
-		})
-
 		rows = append(rows, pages.GameRow{
 			GameID:      game.GetGameId(),
 			Name:        game.GetName(),
 			RunState:    runState,
 			Connect:     connect,
 			Deployments: deploymentRows,
-			Configs:     configRows,
 		})
 	}
 
