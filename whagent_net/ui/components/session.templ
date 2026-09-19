@@ -109,9 +109,19 @@ func stateBadgeVariant(state string) htmxui.BadgeVariant {
 // inside SessionLive, the same element the SSE stream swaps as a whole
 // (../handlers_session_live.go's sessionTranscriptFragment re-reads the
 // session on every delivery and renders this alongside the transcript), so
-// it is never stale relative to the transcript it sits beside.
+// it is never stale relative to the transcript it sits beside. While
+// running, an adjacent spinner signals live activity to any viewer (FR4/
+// FR5 -- not gated behind IsOwner); every other state is unchanged. htmxui.
+// Badge has no children/slot support and is reused repo-wide, so the
+// spinner sits beside it rather than inside (manmanv2/ui/pages/
+// game_detail.templ's overviewStatusBadge is the same pattern).
 templ stateBadge(state string) {
-	@htmxui.Badge(state, stateBadgeVariant(state), htmxui.BadgeSizeMD, true, templ.Attributes{"id": "session-state-badge"})
+	<span class="inline-flex items-center gap-2">
+		if state == "running" {
+			<span class="loading loading-spinner loading-xs" aria-hidden="true"></span>
+		}
+		@htmxui.Badge(state, stateBadgeVariant(state), htmxui.BadgeSizeMD, true, templ.Attributes{"id": "session-state-badge"})
+	</span>
 }
 
 // startedByLine renders NFR3's "started by" line directly from

@@ -20,11 +20,17 @@ templ_library(
 # coverage for SessionUsage -- used/cap rendered verbatim, the estimated-
 # cost flag appears iff CostEstimated is true, and a capped session names
 # the tripped cap.
+#
+# session_test.go (issue #2754's Testing section) added: FR4/FR5 coverage
+# for stateBadge's spinner treatment -- present only for the running state,
+# the session-state-badge id and every other state's label/variant markup
+# left byte-identical.
 go_test(
     name = "components_test",
     size = "small",
     srcs = [
         "layout_test.go",
+        "session_test.go",
         "session_usage_test.go",
     ],
     embed = [":components"],
