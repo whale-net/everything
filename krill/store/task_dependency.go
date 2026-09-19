@@ -206,7 +206,16 @@ func (s taskStore) ListDependencies(ctx context.Context, scopeID, taskID uuid.UU
 }
 
 func (s taskStore) UnsatisfiedDependencies(ctx context.Context, scopeID, taskID uuid.UUID) ([]uuid.UUID, error) {
-	rows, err := s.pool.Query(ctx, `
+	return unsatisfiedDependencies(ctx, s.pool, scopeID, taskID)
+}
+
+// unsatisfiedDependencies is UnsatisfiedDependencies' own query, factored
+// out over rowsQuerier (errors.go) so ClaimTask (task_claim.go, issue
+// #2722, FR3) can run this exact predicate against its own claim
+// transaction's row-locked snapshot, rather than a second, pool-backed
+// round trip taken outside that transaction.
+func unsatisfiedDependencies(ctx context.Context, q rowsQuerier, scopeID, taskID uuid.UUID) ([]uuid.UUID, error) {
+	rows, err := q.Query(ctx, `
 		SELECT td.depends_on_task_id
 		FROM task_dependency td
 		JOIN task t ON t.id = td.depends_on_task_id AND t.scope_id = td.scope_id

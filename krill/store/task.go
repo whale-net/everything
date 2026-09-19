@@ -199,6 +199,23 @@ type TaskStore interface {
 	// posture GetProductDeliveryHandler already established
 	// (milestone.go's own doc comment).
 	GetTaskByID(ctx context.Context, id uuid.UUID) (Task, error)
+
+	// ClaimTask is FR3/FR5's race-safe claim (task_claim.go, issue #2722):
+	// a single transaction that row-locks the `task` (SELECT ... FOR
+	// UPDATE), checks claimability (unclaimed or lease-expired,
+	// UnsatisfiedDependencies empty, attempt cap not exceeded), inserts
+	// one `task_claim` row and one `task_attempt` row, and updates
+	// task.current_claim_id/lease_expires_at in place. Returns one of the
+	// named errors below on any claimability failure -- never a generic
+	// error -- with nothing written in that case.
+	ClaimTask(ctx context.Context, params ClaimTaskParams) (Claim, error)
+
+	// GetClaimByID returns the Claim row for id -- claim ids are globally
+	// unique surrogates, mirroring GetTaskByID's own id-only shape
+	// (task_claim.go, issue #2722). The one caller today is
+	// work.Assembler.Assemble (krill/work/payload.go), resolving a task's
+	// current claim/lease state for the by-id payload (FR10).
+	GetClaimByID(ctx context.Context, id uuid.UUID) (Claim, error)
 }
 
 // ErrMilestoneHasMilepebbleCut is CreateTask's named, loud rejection

@@ -35,7 +35,10 @@ endpoint above. task_dependency.go (issue #2720, FR2) is the work-axis
 dependency-declaration surface: POST /tasks/{id}/dependencies is gated,
 GET /tasks/{id}/dependencies is not. task_payload.go (issue #2721,
 FR4/FR10) is the work-axis by-task-id fetch surface: GET /tasks/{id} is
-ungated, over //krill/work's Assembler."""
+ungated, over //krill/work's Assembler. task_claim.go (issue #2722,
+FR3/FR5) is the work-axis claim surface: POST /tasks/{id}/claim is gated,
+returning the same //krill/work Assembler payload task_payload.go's GET
+/tasks/{id} does, enriched with the fresh lease."""
 
 load("@rules_go//go:def.bzl", "go_library", "go_test")
 
@@ -64,6 +67,7 @@ go_library(
         "session_slice.go",
         "slice.go",
         "task.go",
+        "task_claim.go",
         "task_dependency.go",
         "task_payload.go",
         "types.go",
