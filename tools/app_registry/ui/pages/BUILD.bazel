@@ -42,6 +42,14 @@ templ_library(
 # Button call site in builds/deployments/drift_audit/environment_diff/
 # apps_catalog/environment_form -- none of which any pre-existing test
 # asserted the rendered class/structure of.
+#
+# release_status_templ_test.go (issue #1704) shares this target too, for
+# the same renderComponent/adminUser helpers: it guards release_status.
+# templ's FR11 pushed-region boundary (the sse-swap target wraps exactly
+# the aggregate summary + Targets table and nothing else), FR13's
+# run-level aggregate summary text, and FR14/FR15's live indicator and
+# reload affordance -- mirroring promotion_details_templ_test.go's
+# structural-assertion style for the same shape #1113 built.
 go_test(
     name = "role_gating_test",
     size = "small",
@@ -49,6 +57,7 @@ go_test(
         "app_detail_test.go",
         "button_card_migration_test.go",
         "confirm_migration_test.go",
+        "release_status_templ_test.go",
         "role_gating_test.go",
     ],
     embed = [":pages"],
