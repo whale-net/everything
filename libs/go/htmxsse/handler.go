@@ -66,6 +66,13 @@ func Handler(hub *Hub, topics []string, fragment Fragment) http.HandlerFunc {
 		w.Header().Set("Cache-Control", "no-cache")
 		w.Header().Set("Connection", "keep-alive")
 		w.Header().Set("Access-Control-Allow-Origin", "*")
+		// Disable nginx-class reverse-proxy response buffering. Without this,
+		// a proxy in front of the service buffers this stream's small,
+		// infrequent writes (heartbeats, sparse live events) instead of
+		// forwarding them immediately, and the connection trips the proxy's
+		// own idle timeout -- surfacing as a streaming timeout even though
+		// this handler itself is still writing.
+		w.Header().Set("X-Accel-Buffering", "no")
 
 		// Set retry interval (FR5, NFR16)
 		retryMs := hub.config.AdvertisedRetryInterval.Milliseconds()
