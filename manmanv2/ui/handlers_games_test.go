@@ -258,17 +258,13 @@ func renderGameDetailHTTP(t *testing.T, api *fakeGamesAPIClient, target string, 
 // ones, while today's join (buildGameRows, issuing zero RPCs itself) keeps
 // them identical.
 //
-// Extended for task #2273: buildFakeGamesData's per-game config/deployment
-// pair now also populates row.Configs (FR7's join), so this same
-// comparison covers the Configurations section too -- rendering it at
-// fleet size adds no RPC. The exact-method-set check below additionally
-// guards the Workshop Libraries section (FR8): since fakeGamesAPIClient
-// panics on any un-overridden ManManAPIClient method, wiring that section
-// to a live per-deployment or per-sgc call (the very thing its doc
-// comment says NFR7 forbids) would panic this test outright; the len(calls)
-// assertion further catches a hypothetical new call that happened to
-// target one of the five already-faked methods' RPC family without
-// panicking.
+// The exact-method-set check below additionally guards against a
+// regression that wires the Deployments section to a live per-deployment
+// or per-sgc call: since fakeGamesAPIClient panics on any un-overridden
+// ManManAPIClient method, that would panic this test outright; the
+// len(calls) assertion further catches a hypothetical new call that
+// happened to target one of the five already-faked methods' RPC family
+// without panicking.
 func TestHandleGames_NFR7_ConstantCallCount(t *testing.T) {
 	small := buildFakeGamesData(2)
 	code, _ := renderGamesHTTP(t, small, "/games")
@@ -492,21 +488,18 @@ func TestBuildGameRows_DeterministicSort(t *testing.T) {
 	}
 }
 
-// TestBuildGameRows_FR7_ConfigsPerGameWithDeploymentCount covers FR7's
-// join: every GameConfig of a game appears in that game's Configs, with a
-// deployment count derived from the same deployments slice already
-// joined for the Deployments section (no per-config query, NFR7),
-// including the zero-deployment case; a config belonging to a different
-// game must never leak into this game's Configs.
-func TestBuildGameRows_FR7_ConfigsPerGameWithDeploymentCount(t *testing.T) {
+// TestBuildGameRows_DeploymentsResolveViaConfigJoin covers the
+// deployment -> game resolution buildGameRows relies on: ServerGameConfig
+// carries no game_id, only game_config_id, so a deployment must resolve to
+// its game via game_config_id -> GameConfig.game_id; a config belonging to
+// a different game must never leak a deployment into this game's row.
+func TestBuildGameRows_DeploymentsResolveViaConfigJoin(t *testing.T) {
 	games := []*manmanpb.Game{
 		{GameId: 1, Name: "Alpha"},
 		{GameId: 2, Name: "Beta"},
 	}
 	configs := []*manmanpb.GameConfig{
 		{ConfigId: 10, GameId: 1, Name: "Survival", Image: "itzg/minecraft-server:latest"},
-		// Zero-deployment case: no ServerGameConfig references this one.
-		{ConfigId: 11, GameId: 1, Name: "Creative", Image: "itzg/minecraft-server:creative"},
 		{ConfigId: 20, GameId: 2, Name: "Dedicated", Image: "valheim:latest"},
 	}
 	deployments := []*manmanpb.ServerGameConfig{
@@ -524,34 +517,13 @@ func TestBuildGameRows_FR7_ConfigsPerGameWithDeploymentCount(t *testing.T) {
 	rows := buildGameRows(games, configs, deployments, servers, sessions, nil)
 
 	alpha := gameRowByID(t, rows, 1)
-	if len(alpha.Configs) != 2 {
-		t.Fatalf("game 1 Configs = %+v, want 2 entries (no leak from game 2)", alpha.Configs)
-	}
-	byConfigID := map[int64]pages.ConfigRowView{}
-	for _, c := range alpha.Configs {
-		byConfigID[c.ConfigID] = c
-	}
-	survival, ok := byConfigID[10]
-	if !ok {
-		t.Fatalf("game 1 Configs missing config_id 10: %+v", alpha.Configs)
-	}
-	if survival.Name != "Survival" || survival.Image != "itzg/minecraft-server:latest" || survival.DeploymentCount != 2 {
-		t.Errorf("config 10 = %+v, want Name=Survival Image=itzg/minecraft-server:latest DeploymentCount=2", survival)
-	}
-	creative, ok := byConfigID[11]
-	if !ok {
-		t.Fatalf("game 1 Configs missing config_id 11 (the zero-deployment config): %+v", alpha.Configs)
-	}
-	if creative.DeploymentCount != 0 {
-		t.Errorf("config 11 DeploymentCount = %d, want 0 (zero-deployment case)", creative.DeploymentCount)
+	if len(alpha.Deployments) != 2 {
+		t.Fatalf("game 1 Deployments = %+v, want 2 entries (no leak from game 2)", alpha.Deployments)
 	}
 
 	beta := gameRowByID(t, rows, 2)
-	if len(beta.Configs) != 1 || beta.Configs[0].ConfigID != 20 {
-		t.Fatalf("game 2 Configs = %+v, want exactly config_id 20 (no leak from game 1)", beta.Configs)
-	}
-	if beta.Configs[0].DeploymentCount != 1 {
-		t.Errorf("config 20 DeploymentCount = %d, want 1", beta.Configs[0].DeploymentCount)
+	if len(beta.Deployments) != 1 {
+		t.Fatalf("game 2 Deployments = %+v, want exactly 1 entry (no leak from game 1)", beta.Deployments)
 	}
 }
 

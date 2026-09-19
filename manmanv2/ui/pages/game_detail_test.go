@@ -513,3 +513,36 @@ func TestGameDetail_AdvancedTab_HasDeployAndDangerZone(t *testing.T) {
 		t.Errorf("Advanced tab must have Delete Game button, got: %s", advancedContent)
 	}
 }
+
+// TestGameDetail_ConfigurationTab_HasConfigEditorTrigger guards the Config
+// Editor blade's only entry point (root plan #2266, task #2276, FR13):
+// once the Games list row's own Configurations section (data-config-
+// editor-trigger, #2273) was trimmed away for a quick-glance list, this
+// admin-gated Configuration tab became its sole home.
+func TestGameDetail_ConfigurationTab_HasConfigEditorTrigger(t *testing.T) {
+	data := fixtureGameDetailPageData(true)
+	body := renderPage(t, GameDetail(data))
+
+	if !strings.Contains(body, "data-config-editor-trigger") {
+		t.Errorf("Configuration tab must carry an Edit control opening the Config Editor blade, got: %s", body)
+	}
+	if !strings.Contains(body, `hx-get="/games/42/configs/101/editor"`) {
+		t.Errorf("expected the Edit control to hx-get the Config Editor route, got: %s", body)
+	}
+}
+
+// TestGameDetail_ConfigurationTab_HasWorkshopLibraries guards that the
+// Workshop Libraries panel (task #2367, FR8/FR9/FR10) is reachable here:
+// it moved off the Games list row entirely, so this admin-gated
+// Configuration tab is now its only home.
+func TestGameDetail_ConfigurationTab_HasWorkshopLibraries(t *testing.T) {
+	data := fixtureGameDetailPageData(true)
+	body := renderPage(t, GameDetail(data))
+
+	if !strings.Contains(body, "Workshop Libraries") {
+		t.Errorf("Configuration tab must contain the Workshop Libraries panel, got: %s", body)
+	}
+	if !strings.Contains(body, `hx-get="/games/42/workshop-panel"`) {
+		t.Errorf("expected the Workshop Libraries panel to lazily fetch its content, got: %s", body)
+	}
+}

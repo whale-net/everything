@@ -835,9 +835,28 @@ templ GameDetail(data GameDetailPageData) {
 												<td class="text-sm font-mono text-base-content">{ config.Image }</td>
 												<td class="text-sm text-base-content">{ fmt.Sprintf("%d", data.SgcCounts[config.ConfigId]) }</td>
 												<td class="text-right space-x-2">
-													<a href={ templ.URL(fmt.Sprintf("/games/%d/configs/%d", data.Game.GameId, config.ConfigId)) } class="btn btn-secondary btn-sm">
-														Edit Configuration
-													</a>
+													<!--
+														Opens the Config Editor blade (root plan #2266,
+														task #2276, FR13): Basics/Environment/Volumes,
+														editable. This is the Configuration tab's only
+														entry point to it now that the Games list row's
+														own Configurations section (data-config-editor-
+														trigger, #2273) is gone. The list stays a
+														quick-glance view; genuine editing lives here,
+														behind this already admin-gated tab. See
+														handleGameConfigEditor's doc comment.
+													-->
+													<button
+														type="button"
+														class="btn btn-secondary btn-sm"
+														data-config-editor-trigger
+														data-config-id={ fmt.Sprintf("%d", config.ConfigId) }
+														hx-get={ fmt.Sprintf("/games/%d/configs/%d/editor", data.Game.GameId, config.ConfigId) }
+														hx-target="body"
+														hx-swap="beforeend"
+													>
+														Edit
+													</button>
 													<a href={ templ.URL(fmt.Sprintf("/games/%d/configs/%d", data.Game.GameId, config.ConfigId)) } class="btn btn-primary btn-sm">
 														View
 													</a>
@@ -1099,4 +1118,25 @@ templ GameDetail(data GameDetailPageData) {
 			}
 		</div>
 	}
+}
+
+// gameWorkshopPlaceholder renders the Workshop Libraries section shell
+// before its data has loaded (task #2367, FR8/FR9/FR10 -- editable
+// GC-level attach/detach, replacing M5's read-only SGC-scoped panel and
+// its "coming soon: shared across configs" note). Lives here rather than
+// on the Games list row (games.templ): the list was trimmed to a
+// quick-glance Deployments-only view, and this admin-gated Configuration
+// tab is now Workshop Libraries' only home.
+//
+// GetGameConfigLibraryAttachments and ListGameConfigLibraries both require
+// a single config_id (no sgc_id==0-style "all" filter exists for either),
+// so this stays a lazily-fetched fragment (the enclosing div's hx-get)
+// rather than data GameDetailPageData carries directly.
+templ gameWorkshopPlaceholder() {
+	<div class="border border-base-300 rounded-box overflow-hidden">
+		<div class="p-3 border-b border-base-300 bg-base-200">
+			<h3 class="font-semibold text-base-content">Workshop Libraries</h3>
+		</div>
+		<p class="p-4 text-sm text-base-content/60">Loading workshop libraries…</p>
+	</div>
 }

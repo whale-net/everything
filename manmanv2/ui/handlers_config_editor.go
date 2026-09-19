@@ -15,8 +15,8 @@ import (
 
 // handleGameConfigEditor is the Config Editor blade's route (root plan
 // #2266, task #2276 -- FR13): GET renders the blade fragment appended into
-// the Games page via hx-get/hx-swap="beforeend" from #2273's Edit control
-// (data-config-editor-trigger in games.templ); POST validates and, on
+// GameDetail via hx-get/hx-swap="beforeend" from #2273's Edit control
+// (data-config-editor-trigger in game_detail.templ); POST validates and, on
 // success, issues the single explicit-update_paths UpdateGameConfigRequest
 // that is FR13's whole point (see buildConfigEditorUpdateRequest's doc
 // comment). Dispatched from handleGameConfigDetail's "editor" sub-route,

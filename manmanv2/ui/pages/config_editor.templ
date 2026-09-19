@@ -9,7 +9,7 @@ import (
 // ConfigEditorData drives the Config Editor blade (root plan #2266, task
 // #2276 -- FR13, the Config-Editor half of FR10, NFR5, WD4, WD10; task
 // #2363 -- FR14, FR15): three tabs -- Basics, Environment, Volumes --
-// opened from the Configurations section's Edit control (#2273's
+// opened from GameDetail's Game Configurations table Edit control (#2273's
 // data-config-editor-trigger). Basics and Environment are editable and save
 // together as one explicit UpdateGameConfigRequest; Volumes is editable for
 // backup-config assignment inline (FR14/FR15, #2363) -- each volume-level
@@ -22,8 +22,8 @@ import (
 // via hx-swap="beforeend" from the Edit button, exactly like the deployment
 // settings blade's <template> clone in games.templ, except this one needs
 // live server data (env_template, volumes) the Games page never fetched
-// (see ConfigRowView's doc comment: only Name/Image/DeploymentCount are
-// already in hand), so it is a real request rather than a zero-cost clone.
+// (only Name/Image/DeploymentCount are already in hand there), so it is a
+// real request rather than a zero-cost clone.
 type ConfigEditorData struct {
 	GameID   int64
 	ConfigID int64
