@@ -8,6 +8,7 @@ package main
 import (
 	"context"
 	"database/sql"
+	"strings"
 	"testing"
 
 	"github.com/google/uuid"
@@ -272,4 +273,88 @@ func TestActivities_UnlockedTools_SurvivesBeyondMaxContextEvents(t *testing.T) {
 	result, err := a.UnlockedTools(ctx, UnlockedToolsInput{SessionID: sess.SessionID})
 	require.NoError(t, err)
 	assert.Contains(t, result.ToolNames, "early_unlocked_tool", "an unlock must remain effective even once its tool_unlock event ages out of maxContextEvents")
+}
+
+// bigToolDefsForBuildContextTest builds a toolDefs slice whose combined
+// toolDefsCharge (budget.go) is large enough to matter, used below to
+// prove bulk mode ignores it entirely while search mode is bounded by it.
+func bigToolDefsForBuildContextTest() []llm.ToolDefinition {
+	return []llm.ToolDefinition{
+		{Name: "search_tools", Description: strings.Repeat("d", 2000)},
+		{Name: "tool_a", Description: strings.Repeat("d", 2000)},
+		{Name: "tool_b", Description: strings.Repeat("d", 2000)},
+	}
+}
+
+// TestActivities_BuildContext_BulkMode_IgnoresToolsAndMatchesLegacyTruncation
+// proves FR10's (issue #2673) "a bulk-mode session's accounting is
+// untouched" for the >maxContextEvents truncation case: BuildContext with
+// a bulk (zero-valued ToolLoadingMode) definition produces byte-identical
+// EventIDs whether or not Tools is set, and still truncates to exactly
+// maxContextEvents -- today's flat placeholder, not fitToBudget.
+func TestActivities_BuildContext_BulkMode_IgnoresToolsAndMatchesLegacyTruncation(t *testing.T) {
+	ctx := context.Background()
+	store, _ := newTestStore(t)
+	sess := newTestSessionRow(t, ctx, store)
+
+	for turn := 1; turn <= maxContextEvents+10; turn++ {
+		appendFillerEvent(t, ctx, store, sess.SessionID, turn)
+	}
+
+	a := &Activities{Store: store}
+	turn := maxContextEvents + 11
+
+	withoutTools, err := a.BuildContext(ctx, BuildContextInput{
+		SessionID: sess.SessionID,
+		Turn:      turn,
+		Input:     "hello",
+	})
+	require.NoError(t, err)
+
+	// A retried call for the SAME (session, turn) is idempotent
+	// (BuildContext's doc comment), so calling it again with a large Tools
+	// slice attached isolates whether bulk mode's truncation depends on
+	// Tools at all -- it must not.
+	withTools, err := a.BuildContext(ctx, BuildContextInput{
+		SessionID:  sess.SessionID,
+		Turn:       turn,
+		Input:      "hello",
+		Definition: session.AgentDefinition{ToolLoadingMode: session.ToolLoadingModeBulk},
+		Tools:      bigToolDefsForBuildContextTest(),
+	})
+	require.NoError(t, err)
+
+	assert.Equal(t, withoutTools.EventIDs, withTools.EventIDs, "bulk mode must ignore Tools entirely -- byte-identical output with or without it, for the same transcript")
+	assert.Len(t, withTools.EventIDs, maxContextEvents, "bulk mode must still truncate to exactly maxContextEvents, unchanged by FR10")
+}
+
+// TestActivities_BuildContext_SearchMode_BoundedByBudgetNotMaxContextEvents
+// proves the other half of FR10 (issue #2673): a search-mode session's
+// context is bounded by searchModeContextBudget (budget.go's fitToBudget),
+// not by maxContextEvents. The transcript here has more than
+// maxContextEvents small filler events, all of which fit comfortably
+// under the char budget -- a case where the two bounds disagree, so this
+// test would fail (asserting len <= maxContextEvents) if the old flat
+// truncation were still applied to a search-mode session.
+func TestActivities_BuildContext_SearchMode_BoundedByBudgetNotMaxContextEvents(t *testing.T) {
+	ctx := context.Background()
+	store, _ := newTestStore(t)
+	sess := newTestSessionRow(t, ctx, store)
+
+	fillerCount := maxContextEvents + 50
+	for turn := 1; turn <= fillerCount; turn++ {
+		appendFillerEvent(t, ctx, store, sess.SessionID, turn)
+	}
+
+	a := &Activities{Store: store}
+	result, err := a.BuildContext(ctx, BuildContextInput{
+		SessionID:  sess.SessionID,
+		Turn:       fillerCount + 1,
+		Input:      "hello",
+		Definition: session.AgentDefinition{ToolLoadingMode: session.ToolLoadingModeSearch},
+	})
+	require.NoError(t, err)
+
+	assert.Greater(t, len(result.EventIDs), maxContextEvents, "a search-mode session must not be truncated to maxContextEvents when the char budget still has room -- it must be bounded by the budget, not the event count")
+	assert.Len(t, result.EventIDs, fillerCount+1, "every filler event plus this turn's own new user-input event must fit comfortably under the char budget")
 }

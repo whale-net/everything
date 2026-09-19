@@ -510,3 +510,142 @@ func TestSessionWorkflow_BulkMode_NeverExecutesUnlockedTools_ListsWithZeroModeAn
 		})
 	}
 }
+
+// orderTracker records the name of each activity call, in the order
+// mocked activities observe them -- a small thread-safe helper for the
+// FR10 (issue #2673) ordering tests below, since testsuite's mocked
+// activity handlers can run from a different goroutine than the test's
+// own assertions (mirrors statusTracker above).
+type orderTracker struct {
+	mu    sync.Mutex
+	order []string
+}
+
+func (o *orderTracker) record(name string) {
+	o.mu.Lock()
+	defer o.mu.Unlock()
+	o.order = append(o.order, name)
+}
+
+func (o *orderTracker) snapshot() []string {
+	o.mu.Lock()
+	defer o.mu.Unlock()
+	out := make([]string, len(o.order))
+	copy(out, o.order)
+	return out
+}
+
+// TestSessionWorkflow_SearchMode_ActivityOrderIsUnlockedToolsThenListToolDefinitionsThenBuildContext
+// is FR10's (issue #2673) own workflow-ordering guard, complementing
+// TestSessionWorkflow_SearchMode_ExecutesUnlockedToolsBeforeSearchModeListToolDefinitions
+// above (which only proves UnlockedTools precedes ListToolDefinitions):
+// this proves the full three-activity order a search-mode turn must
+// execute so BuildContext can charge the turn's resolved Tools against
+// fitToBudget (budget.go) -- ActivityUnlockedTools, then
+// ActivityListToolDefinitions, then ActivityBuildContext -- the reordering
+// workflow.go's processTurn doc comment describes under the
+// "session-workflow-tool-search-loading" change ID.
+func TestSessionWorkflow_SearchMode_ActivityOrderIsUnlockedToolsThenListToolDefinitionsThenBuildContext(t *testing.T) {
+	ts := testsuite.WorkflowTestSuite{}
+	env := ts.NewTestWorkflowEnvironment()
+	registerActivityStubs(env)
+
+	order := &orderTracker{}
+	env.OnActivity(ActivityUpdateSessionStatus, mock.Anything, mock.Anything).
+		Return(UpdateSessionStatusResult{}, nil)
+	env.OnActivity(ActivityResolveAgentDefinition, mock.Anything, mock.Anything).
+		Return(ResolveAgentDefinitionResult{
+			Model:      "test-model",
+			Definition: session.AgentDefinition{ToolLoadingMode: session.ToolLoadingModeSearch},
+		}, nil)
+	env.OnActivity(ActivityUnlockedTools, mock.Anything, mock.Anything).
+		Return(UnlockedToolsResult{ToolNames: []string{"a"}}, nil).
+		Run(func(args mock.Arguments) { order.record(ActivityUnlockedTools) })
+	env.OnActivity(ActivityListToolDefinitions, mock.Anything, mock.Anything).
+		Return(ListToolDefinitionsResult{Tools: []llm.ToolDefinition{{Name: "a"}}}, nil).
+		Run(func(args mock.Arguments) { order.record(ActivityListToolDefinitions) })
+	env.OnActivity(ActivityBuildContext, mock.Anything, mock.Anything).
+		Return(BuildContextResult{EventIDs: []uuid.UUID{uuid.New()}}, nil).
+		Run(func(args mock.Arguments) {
+			order.record(ActivityBuildContext)
+			in := args.Get(1).(BuildContextInput)
+			require.Equal(t, []llm.ToolDefinition{{Name: "a"}}, in.Tools, "BuildContext must receive this turn's already-resolved Tools so it can charge them against the shared budget")
+		})
+	env.OnActivity(ActivityCallModel, mock.Anything, mock.Anything).
+		Return(CallModelResult{Response: llm.Response{Message: llm.Message{Role: llm.RoleAssistant, Content: "ok"}}}, nil)
+	env.OnActivity(ActivityCommitTurn, mock.Anything, mock.Anything).
+		Return(CommitTurnResult{Done: false}, nil)
+	env.OnActivity(ActivitySumCost, mock.Anything, mock.Anything).
+		Return(SumCostResult{CostUSD: 0}, nil)
+
+	env.RegisterDelayedCallback(func() {
+		env.SignalWorkflow(SignalSendTurn, SendTurnSignal{Input: "hello"})
+	}, time.Second)
+	env.RegisterDelayedCallback(func() {
+		env.SignalWorkflow(SignalStop, struct{}{})
+	}, 2*time.Second)
+
+	env.ExecuteWorkflow(SessionWorkflow, SessionWorkflowInput{SessionID: testSessionID()})
+
+	require.True(t, env.IsWorkflowCompleted())
+	require.NoError(t, env.GetWorkflowError())
+	require.Equal(t,
+		[]string{ActivityUnlockedTools, ActivityListToolDefinitions, ActivityBuildContext},
+		order.snapshot(),
+		"a search-mode turn must resolve Tools (UnlockedTools -> ListToolDefinitions) BEFORE BuildContext, not after",
+	)
+}
+
+// TestSessionWorkflow_BulkMode_ActivityOrderIsBuildContextThenListToolDefinitions
+// is the complementary guard: a bulk-mode turn's order is untouched by
+// FR10's reordering -- ActivityBuildContext still runs before
+// ActivityListToolDefinitions, exactly as before issue #2673.
+func TestSessionWorkflow_BulkMode_ActivityOrderIsBuildContextThenListToolDefinitions(t *testing.T) {
+	ts := testsuite.WorkflowTestSuite{}
+	env := ts.NewTestWorkflowEnvironment()
+	registerActivityStubs(env)
+
+	order := &orderTracker{}
+	env.OnActivity(ActivityUpdateSessionStatus, mock.Anything, mock.Anything).
+		Return(UpdateSessionStatusResult{}, nil)
+	env.OnActivity(ActivityResolveAgentDefinition, mock.Anything, mock.Anything).
+		Return(ResolveAgentDefinitionResult{
+			Model:      "test-model",
+			Definition: session.AgentDefinition{ToolLoadingMode: session.ToolLoadingModeBulk},
+		}, nil)
+	env.OnActivity(ActivityUnlockedTools, mock.Anything, mock.Anything).
+		Return(UnlockedToolsResult{}, nil)
+	env.OnActivity(ActivityBuildContext, mock.Anything, mock.Anything).
+		Return(BuildContextResult{EventIDs: []uuid.UUID{uuid.New()}}, nil).
+		Run(func(args mock.Arguments) {
+			order.record(ActivityBuildContext)
+			in := args.Get(1).(BuildContextInput)
+			require.Empty(t, in.Tools, "a bulk-mode turn's BuildContext call must not have Tools set -- they are only resolved after BuildContext, via ListToolDefinitions below")
+		})
+	env.OnActivity(ActivityListToolDefinitions, mock.Anything, mock.Anything).
+		Return(ListToolDefinitionsResult{}, nil).
+		Run(func(args mock.Arguments) { order.record(ActivityListToolDefinitions) })
+	env.OnActivity(ActivityCallModel, mock.Anything, mock.Anything).
+		Return(CallModelResult{Response: llm.Response{Message: llm.Message{Role: llm.RoleAssistant, Content: "ok"}}}, nil)
+	env.OnActivity(ActivityCommitTurn, mock.Anything, mock.Anything).
+		Return(CommitTurnResult{Done: false}, nil)
+	env.OnActivity(ActivitySumCost, mock.Anything, mock.Anything).
+		Return(SumCostResult{CostUSD: 0}, nil)
+
+	env.RegisterDelayedCallback(func() {
+		env.SignalWorkflow(SignalSendTurn, SendTurnSignal{Input: "hello"})
+	}, time.Second)
+	env.RegisterDelayedCallback(func() {
+		env.SignalWorkflow(SignalStop, struct{}{})
+	}, 2*time.Second)
+
+	env.ExecuteWorkflow(SessionWorkflow, SessionWorkflowInput{SessionID: testSessionID()})
+
+	require.True(t, env.IsWorkflowCompleted())
+	require.NoError(t, env.GetWorkflowError())
+	require.Equal(t,
+		[]string{ActivityBuildContext, ActivityListToolDefinitions},
+		order.snapshot(),
+		"a bulk-mode turn's order must stay BuildContext -> ListToolDefinitions, exactly as before FR10's reordering",
+	)
+}

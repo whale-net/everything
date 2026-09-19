@@ -31,6 +31,7 @@ import (
 	"go.temporal.io/sdk/worker"
 
 	"github.com/whale-net/everything/whagent_net/llm"
+	"github.com/whale-net/everything/whagent_net/session"
 	"github.com/whale-net/everything/whagent_net/worker/tools"
 )
 
@@ -530,4 +531,109 @@ func TestSessionWorkflow_ReplayRecordedHistory_WithToolLoop_NoNonDeterminismErro
 
 	err = replayer.ReplayWorkflowHistory(nil, b.build())
 	require.NoError(t, err, "the current SessionWorkflow code must replay a FRESH (post-\"add the inner tool loop\") history -- session-workflow-tool-loop already at version 1, including a real multi-model-call loop iteration -- without a non-determinism error (NFR1)")
+}
+
+// TestSessionWorkflow_ReplayRecordedHistory_WithSearchModeBudgeting_NoNonDeterminismError
+// is issue #2673's (FR10) own NFR1 guard: a history recorded WITH
+// "session-workflow-tool-search-loading" already at version 1 at its NEW
+// call site -- ahead of ActivityBuildContext rather than immediately
+// before ActivityListToolDefinitions inside the toolVersion>=1 block, as
+// it sat before this task (workflow.go's processTurn doc comment) --
+// still replays cleanly against the current code. This is the forward
+// direction for the marker-relocation this task's own reasoning argues is
+// safe (no history predates it, since #2669 and #2673 are the same
+// deploy); this fixture exercises the actual reordered activity sequence
+// -- ActivityUnlockedTools, then ActivityListToolDefinitions, then
+// ActivityBuildContext -- a search-mode turn now takes. Complements the
+// three existing fixtures above, none of which ever record this changeID
+// at all: those already prove the backward direction (a history that
+// predates this changeID entirely, bulk-ordered: ActivityBuildContext
+// then ActivityListToolDefinitions, still replays under the current code,
+// which calls workflow.GetVersion for this changeID at the new,
+// earlier call site regardless of mode -- see this file's package doc
+// comment).
+func TestSessionWorkflow_ReplayRecordedHistory_WithSearchModeBudgeting_NoNonDeterminismError(t *testing.T) {
+	dc := converter.GetDefaultDataConverter()
+	sessionID := testSessionID()
+
+	startInput, err := dc.ToPayloads(SessionWorkflowInput{SessionID: sessionID})
+	require.NoError(t, err)
+	signalPayload, err := dc.ToPayloads(SendTurnSignal{Input: "hello"})
+	require.NoError(t, err)
+
+	b := newHistoryFixtureBuilder()
+	b.started("SessionWorkflow", TaskQueue, startInput)
+
+	completedID := b.decision()
+	b.marker("session-workflow-status-transitions", 1, completedID)
+	b.activity(ActivityUpdateSessionStatus, UpdateSessionStatusResult{})
+
+	b.signal(SignalSendTurn, signalPayload)
+	b.decision()
+	b.activity(ActivityUpdateSessionStatus, UpdateSessionStatusResult{})
+
+	completedID = b.decision()
+	b.marker("session-workflow-cap-enforcement", 1, completedID)
+	b.activity(ActivityResolveAgentDefinition, ResolveAgentDefinitionResult{
+		Model:      "replay-model",
+		Definition: session.AgentDefinition{ToolLoadingMode: session.ToolLoadingModeSearch},
+	})
+
+	// evaluateCaps' "before" half.
+	b.decision()
+	b.activity(ActivitySumCost, SumCostResult{CostUSD: 0})
+
+	// "session-workflow-tool-search-loading"'s marker now lands here, on
+	// the decision that schedules ActivityUnlockedTools -- its new call
+	// site, ahead of ActivityBuildContext, per this task's reordering.
+	completedID = b.decision()
+	b.marker("session-workflow-tool-search-loading", 1, completedID)
+	b.activity(ActivityUnlockedTools, UnlockedToolsResult{ToolNames: []string{"search_things"}})
+
+	b.decision()
+	b.activity(ActivityListToolDefinitions, ListToolDefinitionsResult{
+		Tools: []llm.ToolDefinition{{Name: "search_tools", Description: "search for more tools"}, {Name: "search_things", Description: "search ASS"}},
+	})
+
+	// BuildContext now runs AFTER Tools are resolved, budgeted by
+	// fitToBudget (budget.go) against the Tools scheduled above.
+	b.decision()
+	b.activity(ActivityBuildContext, BuildContextResult{EventIDs: []uuid.UUID{uuid.New()}})
+
+	// "session-workflow-tool-dispatch"'s marker is still recorded
+	// unconditionally right after BuildContext completes (workflow.go),
+	// even for a search-mode turn -- it just never schedules
+	// ActivityListToolDefinitions a second time (searchMode is true), so
+	// this decision goes straight to CallModel.
+	completedID = b.decision()
+	b.marker("session-workflow-tool-dispatch", 1, completedID)
+	b.activity(ActivityCallModel, CallModelResult{Response: llm.Response{
+		Message:   llm.Message{Role: llm.RoleAssistant, Content: ""},
+		ToolCalls: []llm.ToolCall{{ID: "call-1", Name: "search_things", Arguments: `{"query":"hello"}`}},
+	}})
+
+	// processTurn's per-tool-call dispatch loop -- one ActivityDispatchTool
+	// per entry of the model's ToolCalls (workflow.go).
+	b.decision()
+	b.activity(ActivityDispatchTool, DispatchToolResult{Result: tools.Result{
+		ToolCallID: "call-1", Name: "search_things", Content: "3 results found", IsError: false,
+	}})
+
+	b.decision()
+	b.activity(ActivityCommitTurn, CommitTurnResult{Done: false})
+
+	// evaluateCaps' "after" half -- still not capped.
+	b.decision()
+	b.activity(ActivitySumCost, SumCostResult{CostUSD: 0.01})
+
+	b.decision()
+	b.activity(ActivityUpdateSessionStatus, UpdateSessionStatusResult{})
+
+	b.openDecision()
+
+	replayer := worker.NewWorkflowReplayer()
+	replayer.RegisterWorkflow(SessionWorkflow)
+
+	err = replayer.ReplayWorkflowHistory(nil, b.build())
+	require.NoError(t, err, "the current SessionWorkflow code must replay a search-mode history recorded with FR10's reordering (session-workflow-tool-search-loading already at version 1, at its new call site ahead of BuildContext) without a non-determinism error (NFR1)")
 }
