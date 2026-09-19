@@ -238,6 +238,10 @@ func RegisterAppendRevisionEvent(reg *server.Registry, sessions store.SessionSto
 
 // mediatedProposalInput mirrors store.MediatedEntityProposal field-for-
 // field, exactly like api/handlers/mediated.go's mediatedProposalRequest.
+//
+// Position is accepted and silently ignored: FR7 assigns each proposed
+// entity's position server-side, never a caller-supplied value -- see
+// mediatedProposalRequest's doc comment.
 type mediatedProposalInput struct {
 	Kind                string  `json:"kind" jsonschema:"feature or requirement."`
 	ParentID            *string `json:"parent_id,omitempty" jsonschema:"An existing FeatureSet (for a feature proposal) or Feature (for a requirement proposal) surrogate id. Exactly one of parent_id/parent_proposal_index must be set."`
@@ -303,7 +307,6 @@ func RegisterProposeEntities(reg *server.Registry, sessions store.SessionStore, 
 				Kind:            store.MediatedEntityKind(p.Kind),
 				Name:            p.Name,
 				Body:            p.Body,
-				Position:        p.Position,
 				RequirementKind: store.RequirementKind(p.RequirementKind),
 				SummaryLine:     p.SummaryLine,
 			}
