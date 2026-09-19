@@ -32,7 +32,10 @@ func runFinalizePublish(t *testing.T, a *Activities, plan ResolvedPlan, ref Buil
 	ts := testsuite.WorkflowTestSuite{}
 	env := ts.NewTestActivityEnvironment()
 	env.RegisterActivity(a.FinalizePublish)
-	val, err := env.ExecuteActivity(a.FinalizePublish, plan, ref)
+	// releaseRunID (FR2/FR3, issue #1701): every test in this file already
+	// stamps plan.ReleaseRunID, so reuse it rather than adding a fifth
+	// parameter every call site here would need to pass.
+	val, err := env.ExecuteActivity(a.FinalizePublish, plan.ReleaseRunID, plan, ref)
 	if err != nil {
 		return FinalizeResult{}, err
 	}
@@ -974,7 +977,7 @@ func TestPublishCLIBinaries_ConfirmedVersion_UploadsWithCorrectKeys(t *testing.T
 	versions := map[string]string{"image:tools-release_helper_go": "v1.2.3"}
 	finalizeTargets := map[string]FinalizeTargetOutcome{}
 
-	failures := a.publishCLIBinaries(context.Background(), []string{"tools-release_helper_go"}, versions, finalizeTargets, cliBinariesDir, true, "")
+	failures := a.publishCLIBinaries(context.Background(), "release-run-1", []string{"tools-release_helper_go"}, versions, finalizeTargets, cliBinariesDir, true, "")
 
 	require.Empty(t, failures)
 	require.Equal(t, FinalizeTargetOutcome{EffectiveVersion: "v1.2.3"}, finalizeTargets["image:tools-release_helper_go"], "a successful publish must record the plan version as this target's outcome")
@@ -1029,7 +1032,7 @@ func TestPublishCLIBinaries_RecordsArtifactInAppRegistry(t *testing.T) {
 	versions := map[string]string{"image:tools-release_helper_go": "v1.2.3"}
 	finalizeTargets := map[string]FinalizeTargetOutcome{}
 
-	failures := a.publishCLIBinaries(context.Background(), []string{"tools-release_helper_go"}, versions, finalizeTargets, cliBinariesDir, true, "build-123")
+	failures := a.publishCLIBinaries(context.Background(), "release-run-1", []string{"tools-release_helper_go"}, versions, finalizeTargets, cliBinariesDir, true, "build-123")
 
 	require.Empty(t, failures)
 	require.Equal(t, FinalizeTargetOutcome{EffectiveVersion: "v1.2.3"}, finalizeTargets["image:tools-release_helper_go"])
@@ -1073,7 +1076,7 @@ func TestPublishCLIBinaries_EmptyBuildID_SkipsRecording(t *testing.T) {
 	versions := map[string]string{"image:tools-release_helper_go": "v1.2.3"}
 	finalizeTargets := map[string]FinalizeTargetOutcome{}
 
-	failures := a.publishCLIBinaries(context.Background(), []string{"tools-release_helper_go"}, versions, finalizeTargets, cliBinariesDir, true, "")
+	failures := a.publishCLIBinaries(context.Background(), "release-run-1", []string{"tools-release_helper_go"}, versions, finalizeTargets, cliBinariesDir, true, "")
 
 	require.Empty(t, failures)
 	require.Equal(t, FinalizeTargetOutcome{EffectiveVersion: "v1.2.3"}, finalizeTargets["image:tools-release_helper_go"])
@@ -1102,7 +1105,7 @@ func TestPublishCLIBinaries_UsesPlanVersion(t *testing.T) {
 	versions := map[string]string{"image:tools-app-registry": "v0.9.0"}
 	finalizeTargets := map[string]FinalizeTargetOutcome{}
 
-	failures := a.publishCLIBinaries(context.Background(), []string{"tools-app-registry"}, versions, finalizeTargets, cliBinariesDir, true, "")
+	failures := a.publishCLIBinaries(context.Background(), "release-run-1", []string{"tools-app-registry"}, versions, finalizeTargets, cliBinariesDir, true, "")
 
 	require.Empty(t, failures)
 	require.Contains(t, uploader.uploads, "app-registry/v0.9.0/checksums.txt")
@@ -1123,7 +1126,7 @@ func TestPublishCLIBinaries_NonCLIBinaryApp_NeverTouched(t *testing.T) {
 	}
 	original := finalizeTargets["image:demo-widget"]
 
-	failures := a.publishCLIBinaries(context.Background(), []string{"demo-widget"}, versions, finalizeTargets, t.TempDir(), true, "")
+	failures := a.publishCLIBinaries(context.Background(), "release-run-1", []string{"demo-widget"}, versions, finalizeTargets, t.TempDir(), true, "")
 
 	require.Empty(t, failures)
 	require.Equal(t, original, finalizeTargets["image:demo-widget"], "a non-CLI-binary app's outcome must be untouched")
@@ -1163,7 +1166,7 @@ func TestPublishCLIBinaries_NoConfirmedVersion_NeverUploads(t *testing.T) {
 			a := &Activities{S3Uploader: uploader}
 			finalizeTargets := map[string]FinalizeTargetOutcome{}
 
-			failures := a.publishCLIBinaries(context.Background(), tc.apps, tc.versions, finalizeTargets, cliBinariesDir, true, "")
+			failures := a.publishCLIBinaries(context.Background(), "release-run-1", tc.apps, tc.versions, finalizeTargets, cliBinariesDir, true, "")
 
 			require.Empty(t, failures, "no confirmed version means nothing to fail either -- this target is simply not touched")
 			require.Empty(t, finalizeTargets, "a target with no confirmed version must not be mutated")
@@ -1185,7 +1188,7 @@ func TestPublishCLIBinaries_UploadFailure_MarksTargetFailed(t *testing.T) {
 	versions := map[string]string{"image:tools-release_helper_go": "v1.2.3"}
 	finalizeTargets := map[string]FinalizeTargetOutcome{}
 
-	failures := a.publishCLIBinaries(context.Background(), []string{"tools-release_helper_go"}, versions, finalizeTargets, cliBinariesDir, true, "")
+	failures := a.publishCLIBinaries(context.Background(), "release-run-1", []string{"tools-release_helper_go"}, versions, finalizeTargets, cliBinariesDir, true, "")
 
 	require.Len(t, failures, 1)
 	require.Contains(t, failures[0], "simulated S3 write failure")
@@ -1207,7 +1210,7 @@ func TestPublishCLIBinaries_MissingCLIBinariesArtifact_FailsThatTarget(t *testin
 	versions := map[string]string{"image:tools-release_helper_go": "v1.2.3"}
 	finalizeTargets := map[string]FinalizeTargetOutcome{}
 
-	failures := a.publishCLIBinaries(context.Background(), []string{"tools-release_helper_go"}, versions, finalizeTargets, t.TempDir(), false /* haveCLIBinaries */, "")
+	failures := a.publishCLIBinaries(context.Background(), "release-run-1", []string{"tools-release_helper_go"}, versions, finalizeTargets, t.TempDir(), false /* haveCLIBinaries */, "")
 
 	require.Len(t, failures, 1)
 	require.Contains(t, failures[0], "no cli-binaries artifact entry")

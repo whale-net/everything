@@ -267,7 +267,14 @@ type ReleaseActivities interface {
 	// routes a target reported Failed here straight to that target's Failed
 	// state, without depending on VerifyPublished's inference at all (see
 	// ReleaseWorkflow's body).
-	FinalizePublish(ctx context.Context, plan ResolvedPlan, ref BuildRef) (FinalizeResult, error)
+	//
+	// releaseRunID (FR2/FR3, issue #1701) lets FinalizePublish itself
+	// record each target's PUBLISHING (work on this target begins) and
+	// RECORDING (this target's artifact-record write is about to happen)
+	// transitions in place, as ordinary *Activities method calls rather
+	// than through workflow.ExecuteActivity -- see finalize.go's per-target
+	// loops.
+	FinalizePublish(ctx context.Context, releaseRunID string, plan ResolvedPlan, ref BuildRef) (FinalizeResult, error)
 
 	// VerifyPublished confirms every target in releaseRunID reached
 	// published/succeeded via GetRelease/GetReleaseRun (FR12).
@@ -362,11 +369,17 @@ var finalizePublishActivityOptions = workflow.ActivityOptions{
 // RecordResolvedPlan, issue #906 -- see that activity's doc comment; only
 // called when ResolvePlan actually returns RawJSON, so it does not
 // interpose an extra dispatch on a test double or future ResolvePlan
-// implementation that omits it), then DispatchBuild, then
+// implementation that omits it), then DispatchBuild, then RecordTargetState
+// once per target with BUILDING (FR1, issue #1701 -- every target enters
+// BUILDING together the moment DispatchBuild confirms a real GitHub Actions
+// run exists, not at the very end of the workflow), then
 // awaitBuildCompletion (NotifyBuildComplete's build-completed signal raced
 // against the PollBuild activity -- signal first when it arrives, poll as
-// the fallback), then VerifyPublished, then RecordTargetState once per
-// target -- in that exact order, matching the dispatch sequence
+// the fallback), then FinalizePublish (which itself records each target's
+// PUBLISHING and RECORDING transitions in place as it does that target's
+// real work -- FR2/FR3, issue #1701, see finalize.go), then VerifyPublished,
+// then RecordTargetState once per target with its terminal state -- in that
+// exact order, matching the dispatch sequence
 // worker/release/workflow_test.go (Testing phase) asserts against. A
 // failure at any step before
 // RecordTargetState still causes every target to be recorded failed (via
@@ -431,6 +444,34 @@ func ReleaseWorkflow(ctx workflow.Context, in ReleaseWorkflowInput) (ReleaseWork
 		return recordFailure(ctx, in, fmt.Errorf("dispatch build: %w", err))
 	}
 
+	// release_run_target.build_id is a UUID FK into the `build` table
+	// (migration 016) -- it is NOT buildRef.RunID, which is GitHub's
+	// numeric Actions run id (used only by PollBuild/FinalizePublish to
+	// address that run). planBuildID extracts the same App Registry
+	// build_id field FinalizePublish already threads through to
+	// finalize-app/finalize-chart's --build-id (finalize.go); passing
+	// buildRef.RunID here instead made every RecordTargetState call fail
+	// in production with "invalid input syntax for type uuid".
+	buildID := planBuildID(plan.RawJSON)
+
+	// FR1: DispatchBuild has just confirmed a real GitHub Actions run
+	// exists -- move every target in the batch to BUILDING together before
+	// awaiting that run's completion. This is deliberately batch-wide, not
+	// per target: DispatchBuild/awaitBuildCompletion are batch-scoped (one
+	// GHA run covers every target in the batch, and awaitBuildCompletion's
+	// NotifyBuildComplete signal is still whole-run, not per-target), so
+	// there is no earlier per-target moment to pin this to. Do not wait for
+	// GitHub's run to leave "queued" first -- DispatchBuild does not
+	// confirm that, and BUILDING is pinned to dispatch-confirmed. An error
+	// here routes through recordFailure exactly like dispatchBuild's own
+	// error (FR6) rather than returning early and leaving targets stuck at
+	// QUEUED.
+	for _, t := range in.Targets {
+		if rerr := recordTargetState(ctx, in.ReleaseRunID, t, repository.ReleaseRunTargetStateBuilding, buildID, ""); rerr != nil {
+			return recordFailure(ctx, in, fmt.Errorf("record building state for %s: %w", t.key(), rerr))
+		}
+	}
+
 	buildStatus, err := awaitBuildCompletion(ctx, buildRef)
 	if err != nil {
 		return recordFailure(ctx, in, fmt.Errorf("poll build: %w", err))
@@ -452,7 +493,7 @@ func ReleaseWorkflow(ctx workflow.Context, in ReleaseWorkflowInput) (ReleaseWork
 	// that target's Failed state, bypassing verifyPublished entirely for
 	// it) and expectedVersions (the EffectiveVersion verifyPublished must
 	// compare a published artifact against for every other target) below.
-	finalizeResult, err := finalizePublish(workflow.WithActivityOptions(ctx, finalizePublishActivityOptions), plan, buildRef)
+	finalizeResult, err := finalizePublish(workflow.WithActivityOptions(ctx, finalizePublishActivityOptions), in.ReleaseRunID, plan, buildRef)
 	if err != nil {
 		return recordFailure(ctx, in, fmt.Errorf("finalize publish: %w", err))
 	}
@@ -470,16 +511,6 @@ func ReleaseWorkflow(ctx workflow.Context, in ReleaseWorkflowInput) (ReleaseWork
 	if err != nil {
 		return recordFailure(ctx, in, fmt.Errorf("verify published: %w", err))
 	}
-
-	// release_run_target.build_id is a UUID FK into the `build` table
-	// (migration 016) -- it is NOT buildRef.RunID, which is GitHub's
-	// numeric Actions run id (used only by PollBuild/FinalizePublish to
-	// address that run). planBuildID extracts the same App Registry
-	// build_id field FinalizePublish already threads through to
-	// finalize-app/finalize-chart's --build-id (finalize.go); passing
-	// buildRef.RunID here instead made every RecordTargetState call fail
-	// in production with "invalid input syntax for type uuid".
-	buildID := planBuildID(plan.RawJSON)
 
 	result := ReleaseWorkflowResult{ReleaseRunID: in.ReleaseRunID}
 	for _, t := range in.Targets {
@@ -635,9 +666,9 @@ func awaitBuildCompletion(ctx workflow.Context, ref BuildRef) (BuildStatus, erro
 	return status, statusErr
 }
 
-func finalizePublish(ctx workflow.Context, plan ResolvedPlan, ref BuildRef) (FinalizeResult, error) {
+func finalizePublish(ctx workflow.Context, releaseRunID string, plan ResolvedPlan, ref BuildRef) (FinalizeResult, error) {
 	var result FinalizeResult
-	err := workflow.ExecuteActivity(ctx, ActivityFinalizePublish, plan, ref).Get(ctx, &result)
+	err := workflow.ExecuteActivity(ctx, ActivityFinalizePublish, releaseRunID, plan, ref).Get(ctx, &result)
 	return result, err
 }
 

@@ -237,6 +237,40 @@ type FinalizeResult struct {
 	Targets map[string]FinalizeTargetOutcome
 }
 
+// recordTargetStateBestEffort implements FR2/FR3 (issue #1701): calls
+// RecordTargetState directly, as an ordinary *Activities Go method call
+// rather than through workflow.ExecuteActivity -- a Temporal activity
+// cannot invoke another registered activity that way, and RecordTargetState
+// (record.go) does no Temporal-specific context work beyond the ctx it is
+// handed, so this is safe (see ReleaseActivities.FinalizePublish's doc
+// comment). Best-effort: a failure updating this live-status row must never
+// abort or fail the target's actual finalize work, which is what decides
+// its real outcome (via finalizeTargets/VerifyPublished) -- so this only
+// warns, matching this file's existing best-effort bookkeeping precedent
+// (e.g. the buildID-persist warning in DispatchBuild).
+func (a *Activities) recordTargetStateBestEffort(ctx context.Context, releaseRunID string, target ReleaseTarget, state repository.ReleaseRunTargetState, buildID string) {
+	if err := a.RecordTargetState(ctx, releaseRunID, target, state, buildID, ""); err != nil {
+		workerLog.Warn("record target state failed", "release_run_id", releaseRunID, "target", target.key(), "state", state, "error", err)
+	}
+}
+
+// recordTargetFailure implements FR4 (issue #1701): marks target FAILED
+// directly, the moment this target's own finalize failure is known, via the
+// same direct *Activities method call recordTargetStateBestEffort uses
+// (see its doc comment). ReleaseWorkflow's own post-VerifyPublished loop
+// still redundantly attempts the same write as a backstop for any target
+// this call didn't reach (e.g. this activity itself retried, or crashed
+// before this call ran) -- a no-op there once this has already landed, via
+// RecordTargetState's idempotency guard (FR5). Best-effort for the same
+// reason recordTargetStateBestEffort is: a failure recording the failure
+// must not mask detail (the real reason) or abort sibling targets'
+// processing.
+func (a *Activities) recordTargetFailure(ctx context.Context, releaseRunID string, target ReleaseTarget, buildID, detail string) {
+	if err := a.RecordTargetState(ctx, releaseRunID, target, repository.ReleaseRunTargetStateFailed, buildID, detail); err != nil {
+		workerLog.Warn("record target failure failed", "release_run_id", releaseRunID, "target", target.key(), "error", err)
+	}
+}
+
 // FinalizePublish implements the new post-build finalize/publish step --
 // see this file's package doc comment for the full design. Deliberately
 // does not return a hard error for an individual target's finalize
@@ -255,7 +289,15 @@ type FinalizeResult struct {
 // real registry-state check. FinalizeResult.Detail/Succeeded are
 // operator-facing aggregates derived from Targets; ReleaseWorkflow itself
 // never acts on them directly.
-func (a *Activities) FinalizePublish(ctx context.Context, plan ResolvedPlan, ref BuildRef) (FinalizeResult, error) {
+//
+// releaseRunID (FR2/FR3, issue #1701) is used to record each target's own
+// PUBLISHING and RECORDING transitions in place, via
+// recordTargetStateBestEffort, as each target's own loop iteration (apps,
+// charts, and publishCLIBinaries) reaches those two distinct moments --
+// see those helpers' doc comments and each loop below. A per-target
+// failure additionally records that target FAILED directly at the moment
+// it is known, via recordTargetFailure (FR4).
+func (a *Activities) FinalizePublish(ctx context.Context, releaseRunID string, plan ResolvedPlan, ref BuildRef) (FinalizeResult, error) {
 	if a.GitHub == nil {
 		return FinalizeResult{}, fmt.Errorf("finalize publish: GitHub dispatcher not configured")
 	}
@@ -472,6 +514,7 @@ func (a *Activities) FinalizePublish(ctx context.Context, plan ResolvedPlan, ref
 	for _, fullName := range apps {
 		key := repository.TargetKey(repository.ArtifactKindImage, fullName)
 		version := plan.Versions[key]
+		target := ReleaseTarget{OwnerFullName: fullName, Kind: repository.ArtifactKindImage}
 
 		// cliBinaryTargets apps (release_helper_go, app-registry) are
 		// app_type "cli" -- release.bzl never generates an image-push
@@ -485,10 +528,14 @@ func (a *Activities) FinalizePublish(ctx context.Context, plan ResolvedPlan, ref
 			continue
 		}
 
+		// FR2: this target's real finalize work begins now.
+		a.recordTargetStateBestEffort(ctx, releaseRunID, target, repository.ReleaseRunTargetStatePublishing, buildID)
+
 		m, ok := appManifests[fullName]
 		if !ok {
 			detail := fmt.Sprintf("%s: no build-manifest entry in run %s", fullName, ref.RunID)
 			finalizeTargets[key] = FinalizeTargetOutcome{Failed: true, Detail: detail}
+			a.recordTargetFailure(ctx, releaseRunID, target, buildID, detail)
 			failures = append(failures, detail)
 			workerLog.Warn("finalize target failed", "target", fullName, "detail", detail)
 			continue
@@ -510,9 +557,15 @@ func (a *Activities) FinalizePublish(ctx context.Context, plan ResolvedPlan, ref
 		if idempotencyKeyPrefix != "" {
 			args = append(args, "--idempotency-key-prefix", idempotencyKeyPrefix)
 		}
+		// FR3: about to invoke finalize-app, whose ExecuteRelease call
+		// performs the actual BeginPublish/RecordArtifact write that makes
+		// this target visible to VerifyPublished -- distinct in time from
+		// the FR2 Publishing call above.
+		a.recordTargetStateBestEffort(ctx, releaseRunID, target, repository.ReleaseRunTargetStateRecording, buildID)
 		if _, err := runReleaseHelper(ctx, binary, tmpDir, []string{"GHCR_TOKEN=" + ghcrToken}, args...); err != nil {
 			detail := fmt.Sprintf("%s: finalize-app: %v", fullName, err)
 			finalizeTargets[key] = FinalizeTargetOutcome{Failed: true, Detail: detail}
+			a.recordTargetFailure(ctx, releaseRunID, target, buildID, detail)
 			failures = append(failures, detail)
 			workerLog.Warn("finalize target failed", "target", fullName, "detail", detail)
 			continue
@@ -588,7 +641,7 @@ func (a *Activities) FinalizePublish(ctx context.Context, plan ResolvedPlan, ref
 	// per-target) so it only ever considers finalizeTargets entries that
 	// already reflect a confirmed finalize-app outcome, never a plan-time
 	// guess.
-	failures = append(failures, a.publishCLIBinaries(ctx, apps, plan.Versions, finalizeTargets, cliBinariesDir, haveCLIBinaries, buildID)...)
+	failures = append(failures, a.publishCLIBinaries(ctx, releaseRunID, apps, plan.Versions, finalizeTargets, cliBinariesDir, haveCLIBinaries, buildID)...)
 
 	appVersionsJSON, _ := json.Marshal(appVersions) //nolint:errcheck
 	appDigestsJSON, _ := json.Marshal(appDigests)   //nolint:errcheck
@@ -613,10 +666,16 @@ func (a *Activities) FinalizePublish(ctx context.Context, plan ResolvedPlan, ref
 	for _, fullName := range charts {
 		key := repository.TargetKey(repository.ArtifactKindChart, fullName)
 		version := plan.Versions[key]
+		target := ReleaseTarget{OwnerFullName: fullName, Kind: repository.ArtifactKindChart}
+
+		// FR2: this target's real finalize work begins now.
+		a.recordTargetStateBestEffort(ctx, releaseRunID, target, repository.ReleaseRunTargetStatePublishing, buildID)
+
 		c, ok := chartManifests[fullName]
 		if !ok {
 			detail := fmt.Sprintf("%s: no chart-sources manifest entry in run %s", fullName, ref.RunID)
 			finalizeTargets[key] = FinalizeTargetOutcome{Failed: true, Detail: detail}
+			a.recordTargetFailure(ctx, releaseRunID, target, buildID, detail)
 			failures = append(failures, detail)
 			workerLog.Warn("finalize target failed", "target", fullName, "detail", detail)
 			continue
@@ -638,9 +697,15 @@ func (a *Activities) FinalizePublish(ctx context.Context, plan ResolvedPlan, ref
 		if idempotencyKeyPrefix != "" {
 			args = append(args, "--idempotency-key-prefix", idempotencyKeyPrefix)
 		}
+		// FR3: about to invoke finalize-chart, whose ExecuteRelease call
+		// performs the actual BeginPublish/RecordArtifact write that makes
+		// this target visible to VerifyPublished -- distinct in time from
+		// the FR2 Publishing call above.
+		a.recordTargetStateBestEffort(ctx, releaseRunID, target, repository.ReleaseRunTargetStateRecording, buildID)
 		if _, err := runReleaseHelper(ctx, binary, tmpDir, chartEnv, args...); err != nil {
 			detail := fmt.Sprintf("%s: finalize-chart: %v", fullName, err)
 			finalizeTargets[key] = FinalizeTargetOutcome{Failed: true, Detail: detail}
+			a.recordTargetFailure(ctx, releaseRunID, target, buildID, detail)
 			failures = append(failures, detail)
 			workerLog.Warn("finalize target failed", "target", fullName, "detail", detail)
 			continue
@@ -853,7 +918,7 @@ func loadChartManifest(dir string) (map[string]buildChartManifestEntry, error) {
 // skipped (planBuildID's doc comment), not treated as a target failure --
 // registry recording was already best-effort/tolerated for images with no
 // buildID, so binaries are no stricter.
-func (a *Activities) publishCLIBinaries(ctx context.Context, apps []string, versions map[string]string, finalizeTargets map[string]FinalizeTargetOutcome, cliBinariesDir string, haveCLIBinaries bool, buildID string) []string {
+func (a *Activities) publishCLIBinaries(ctx context.Context, releaseRunID string, apps []string, versions map[string]string, finalizeTargets map[string]FinalizeTargetOutcome, cliBinariesDir string, haveCLIBinaries bool, buildID string) []string {
 	var failures []string
 	var uploader binaryUploader
 
@@ -863,6 +928,7 @@ func (a *Activities) publishCLIBinaries(ctx context.Context, apps []string, vers
 			continue
 		}
 		key := repository.TargetKey(repository.ArtifactKindImage, fullName)
+		target := ReleaseTarget{OwnerFullName: fullName, Kind: repository.ArtifactKindImage}
 		// cliBinaryTargets apps skip the image finalize-app flow entirely
 		// (see the apps loop above), so there is no finalizeTargets
 		// EffectiveVersion to gate on here -- publish straight off the
@@ -872,11 +938,15 @@ func (a *Activities) publishCLIBinaries(ctx context.Context, apps []string, vers
 			continue
 		}
 
+		// FR2: this target's real publish work begins now.
+		a.recordTargetStateBestEffort(ctx, releaseRunID, target, repository.ReleaseRunTargetStatePublishing, buildID)
+
 		if uploader == nil {
 			u, err := a.binaryUploaderFor(ctx)
 			if err != nil {
 				detail := fmt.Sprintf("%s: construct release-tools S3 client: %v", fullName, err)
 				finalizeTargets[key] = FinalizeTargetOutcome{Failed: true, Detail: detail}
+				a.recordTargetFailure(ctx, releaseRunID, target, buildID, detail)
 				failures = append(failures, detail)
 				workerLog.Warn("finalize target failed", "target", fullName, "detail", detail)
 				continue
@@ -889,6 +959,7 @@ func (a *Activities) publishCLIBinaries(ctx context.Context, apps []string, vers
 		if !haveCLIBinaries || direrr != nil || len(entries) == 0 {
 			detail := fmt.Sprintf("%s: no cli-binaries artifact entry for %q (expected dir %s)", fullName, binaryName, binDir)
 			finalizeTargets[key] = FinalizeTargetOutcome{Failed: true, Detail: detail}
+			a.recordTargetFailure(ctx, releaseRunID, target, buildID, detail)
 			failures = append(failures, detail)
 			workerLog.Warn("finalize target failed", "target", fullName, "detail", detail)
 			continue
@@ -927,15 +998,22 @@ func (a *Activities) publishCLIBinaries(ctx context.Context, apps []string, vers
 		if uploadErr != nil {
 			detail := fmt.Sprintf("%s: publish cli binaries: %v", fullName, uploadErr)
 			finalizeTargets[key] = FinalizeTargetOutcome{Failed: true, Detail: detail}
+			a.recordTargetFailure(ctx, releaseRunID, target, buildID, detail)
 			failures = append(failures, detail)
 			workerLog.Warn("finalize target failed", "target", fullName, "detail", detail)
 			continue
 		}
 
 		if buildID != "" {
+			// FR3: about to record this target's published artifact via
+			// BeginPublish/RecordArtifact -- the write that makes it
+			// visible to VerifyPublished -- distinct in time from the FR2
+			// Publishing call above.
+			a.recordTargetStateBestEffort(ctx, releaseRunID, target, repository.ReleaseRunTargetStateRecording, buildID)
 			if err := a.recordCLIBinaryArtifact(ctx, fullName, version, buildID, checksumsData); err != nil {
 				detail := fmt.Sprintf("%s: record published artifact in App Registry: %v", fullName, err)
 				finalizeTargets[key] = FinalizeTargetOutcome{Failed: true, Detail: detail}
+				a.recordTargetFailure(ctx, releaseRunID, target, buildID, detail)
 				failures = append(failures, detail)
 				workerLog.Warn("finalize target failed", "target", fullName, "detail", detail)
 				continue

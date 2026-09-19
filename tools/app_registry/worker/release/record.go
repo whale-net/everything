@@ -186,22 +186,33 @@ var releaseRunTargetStateOrder = []repository.ReleaseRunTargetState{
 }
 
 // RecordTargetState implements ReleaseActivities.RecordTargetState (FR10,
-// FR11/NFR3 idempotency). newState is the target's DESIRED final state for
-// this workflow execution -- ReleaseWorkflow calls this activity exactly
-// once per target, after VerifyPublished, with newState already resolved
-// to Succeeded or Failed (see workflow.go's ReleaseWorkflow/recordFailure).
-// Since repository.ReleaseRunRepository.UpdateTargetState enforces the
-// adjacent-only legal-transition table, reaching Succeeded from Queued in
-// one call requires walking every intermediate state
+// FR11/NFR3 idempotency). newState is the target's DESIRED state for this
+// call -- unlike before issue #1701, this is no longer called exactly once
+// per target at the very end of the workflow. It now has two call shapes:
+// ReleaseWorkflow itself dispatches it via workflow.ExecuteActivity, once
+// per target with Building right after DispatchBuild confirms a real run
+// (FR1), and once per target with its terminal state (Succeeded/Failed)
+// after VerifyPublished, same as before (see workflow.go's
+// ReleaseWorkflow/recordFailure); FinalizePublish (finalize.go) additionally
+// calls this method directly, as an ordinary Go method call rather than
+// through a Temporal activity dispatch, with Publishing and then Recording
+// for each target as that target's own finalize work reaches those points
+// (FR2/FR3). Since repository.ReleaseRunRepository.UpdateTargetState
+// enforces the adjacent-only legal-transition table, reaching a state past
+// the target's current one requires walking every intermediate state
 // (releaseRunTargetStateOrder) in order first; Failed is legal directly
 // from any non-terminal state, so it skips the walk.
 //
 // Idempotent (NFR3): resolves the target's CURRENT state first and returns
-// immediately (no-op) if it already equals newState, or if it is already
-// terminal (Succeeded/Failed) at all -- covering both a redelivered
-// activity retry after this exact write already landed, and (defensively)
-// a second, contradictory final call, which should never happen within one
-// workflow execution but must not crash the workflow if it somehow did.
+// immediately (no-op) if it already equals newState, if it is already
+// terminal (Succeeded/Failed) at all, or if newState is BEHIND the current
+// state (see the endIdx < startIdx check below) -- covering a redelivered
+// activity retry after this exact write already landed, two of the several
+// call sites above racing each other or repeating (e.g. a retried
+// FinalizePublish re-requesting Publishing for a target FR1 or an earlier
+// attempt already advanced past it), and (defensively) a second,
+// contradictory final call, which should never happen within one workflow
+// execution but must not crash the workflow if it somehow did.
 func (a *Activities) RecordTargetState(ctx context.Context, releaseRunID string, target ReleaseTarget, newState repository.ReleaseRunTargetState, buildID, errorDetail string) error {
 	if a.Registry == nil {
 		return fmt.Errorf("record target state for release run %s: Activities.Registry not configured", releaseRunID)
@@ -244,8 +255,17 @@ func (a *Activities) RecordTargetState(ctx context.Context, releaseRunID string,
 
 	startIdx := indexOfState(row.State)
 	endIdx := indexOfState(newState)
-	if startIdx < 0 || endIdx < 0 || endIdx < startIdx {
+	if startIdx < 0 || endIdx < 0 {
 		return fmt.Errorf("record target state for release run %s: cannot walk %s -> %s for %s", releaseRunID, row.State, newState, target.key())
+	}
+	if endIdx < startIdx {
+		// A backwards request (e.g. FinalizePublish's per-target Publishing
+		// call arriving after FR1's Building loop already advanced further,
+		// or a caller retry racing a later call that already landed) means
+		// the row is already further along than newState asks for -- there
+		// is nothing to walk, and this is not an error (FR5: idempotency
+		// under caller retry).
+		return nil
 	}
 	for i := startIdx + 1; i <= endIdx; i++ {
 		step := releaseRunTargetStateOrder[i]
