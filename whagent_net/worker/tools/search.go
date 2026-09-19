@@ -1,6 +1,7 @@
 package tools
 
 import (
+	"fmt"
 	"strings"
 
 	"github.com/whale-net/everything/whagent_net/llm"
@@ -82,4 +83,29 @@ func Match(candidates []llm.ToolDefinition, query string) []string {
 		}
 	}
 	return matched
+}
+
+// RenderMatchResult renders a search_tools call's Match output into the
+// tool_result event's model-readable payload content (FR4): "name:
+// description" per matched name, in matched's own order, one per line, or
+// an explicit "no tools matched" body on zero matches -- never an empty
+// string, since a model must be able to tell "the search ran and found
+// nothing" apart from a missing/truncated result. candidates supplies each
+// matched name's description; callers pass the exact same candidate pool
+// Match matched against.
+func RenderMatchResult(matched []string, candidates []llm.ToolDefinition) string {
+	if len(matched) == 0 {
+		return "no tools matched"
+	}
+
+	byName := make(map[string]string, len(candidates))
+	for _, c := range candidates {
+		byName[c.Name] = c.Description
+	}
+
+	lines := make([]string, 0, len(matched))
+	for _, name := range matched {
+		lines = append(lines, fmt.Sprintf("%s: %s", name, byName[name]))
+	}
+	return strings.Join(lines, "\n")
 }

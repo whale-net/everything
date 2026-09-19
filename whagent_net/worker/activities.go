@@ -67,6 +67,15 @@ const (
 	// toolUnlockEventType/toolUnlockEventPayload) back out of the whole
 	// transcript. See that activity's doc comment below.
 	ActivityUnlockedTools = "UnlockedTools"
+
+	// ActivitySearchTools is issue #2671's in-process answer to a
+	// model-issued search_tools call (FR4, the write half of FR5):
+	// processTurn (workflow.go) executes this instead of ActivityDispatchTool
+	// whenever the requested call's name is tools.SearchToolsName and the
+	// current turn's agent definition is search-mode, under the same
+	// "session-workflow-tool-search-loading" change ID #2669 added. See
+	// that activity's doc comment below.
+	ActivitySearchTools = "SearchTools"
 )
 
 // Activities groups the per-turn activities SessionWorkflow drives
@@ -803,6 +812,159 @@ func (a *Activities) DispatchTool(ctx context.Context, in DispatchToolInput) (Di
 	}
 
 	return DispatchToolResult{Result: result}, nil
+}
+
+// SearchToolsInput is SearchTools' activity input.
+type SearchToolsInput struct {
+	SessionID uuid.UUID
+	// AgentID and ToolSet mirror DispatchToolInput's own fields above --
+	// SearchTools resolves the same candidate pool ListToolDefinitions'
+	// search branch matches unlocked names against (tools.Candidates,
+	// listdefs.go), narrowed by ToolSet/AllowedTools the identical way
+	// (FR4, NFR2).
+	AgentID string
+	ToolSet []session.ToolServerRef
+	// Turn and CallIndex are DispatchToolInput's own idempotency-key-
+	// shaped fields, reused here for the identical reason: CallIndex is a
+	// running count across the whole external turn (context.go's
+	// toolCallEventType doc comment), stable across a Temporal retry of
+	// this activity for the same call.
+	Turn      int
+	CallIndex int
+	// Call is the model-requested search_tools call (llm.ToolCall) to
+	// answer in-process.
+	Call llm.ToolCall
+}
+
+// SearchToolsResult is SearchTools' activity result.
+type SearchToolsResult struct {
+	// Matched is every tool name the query matched (tools.Match), in
+	// candidate order -- the same names committed into the
+	// tool_result/tool_unlock event pair below. Empty (never nil) on a
+	// malformed/absent query or a zero-match search alike.
+	Matched []string
+}
+
+// SearchTools is search-mode tool loading's in-process answer to a
+// model-issued search_tools call (FR4, the write half of FR5): unlike
+// DispatchTool above, this never dispatches to a domain server (never
+// calls mcp.ClientSession.CallTool) -- the whole call is answered from the
+// current turn's candidate pool (tools.Candidates), matched via
+// tools.Match, entirely inside this activity.
+//
+// Commits, all via AppendIfAbsent (retry-safe the same way DispatchTool's
+// pair is -- TranscriptStore.AppendIfAbsent's (session_id, turn, type)
+// idempotency key, so a Temporal retry after a partial prior attempt
+// commits no duplicate events):
+//
+//  1. The ordinary tool_call:<CallIndex> event, via the same
+//     marshalToolCallPayload DispatchTool commits -- byte-identical in
+//     shape to a dispatched call's own tool_call event, so
+//     eventsToMessages' assistant-message-then-tool-result pairing
+//     requirement is satisfied the same way (FR4).
+//  2. The tool_result:<CallIndex> event, naming every matched tool (FR4).
+//     On a malformed/absent `query` argument, this is instead an
+//     IsError: true result carrying a message the model can act on --
+//     not a session failure (dispatch.go's package doc comment, "isError
+//     is not a whagent-net failure") -- and step 3 is skipped, since no
+//     search actually ran.
+//  3. In addition to, never instead of, step 2: the tool_unlock:<CallIndex>
+//     event (FR5/FR6) carrying every matched name plus the query, even
+//     when nothing matched -- the search happened, so the transcript
+//     says so.
+func (a *Activities) SearchTools(ctx context.Context, in SearchToolsInput) (SearchToolsResult, error) {
+	if a.Store == nil {
+		return SearchToolsResult{}, fmt.Errorf("worker: Activities.Store is nil")
+	}
+	if a.Dispatcher == nil {
+		return SearchToolsResult{}, fmt.Errorf("worker: Activities.Dispatcher is nil")
+	}
+
+	callPayload, err := marshalToolCallPayload(in.Call)
+	if err != nil {
+		return SearchToolsResult{}, fmt.Errorf("search tools: marshal tool call payload: %w", err)
+	}
+	if _, err := a.Store.Transcript().AppendIfAbsent(ctx, in.SessionID, in.Turn, toolCallEventType(in.CallIndex), callPayload); err != nil {
+		return SearchToolsResult{}, fmt.Errorf("search tools: commit tool call event: %w", err)
+	}
+
+	query, queryErr := decodeSearchQuery(in.Call.Arguments)
+	if queryErr != nil {
+		resultPayload, err := marshalToolResultPayload(tools.Result{
+			ToolCallID: in.Call.ID,
+			Name:       tools.SearchToolsName,
+			Content:    fmt.Sprintf("search_tools: %s", queryErr),
+			IsError:    true,
+		})
+		if err != nil {
+			return SearchToolsResult{}, fmt.Errorf("search tools: marshal tool result payload: %w", err)
+		}
+		if _, err := a.Store.Transcript().AppendIfAbsent(ctx, in.SessionID, in.Turn, toolResultEventType(in.CallIndex), resultPayload); err != nil {
+			return SearchToolsResult{}, fmt.Errorf("search tools: commit tool result event: %w", err)
+		}
+		return SearchToolsResult{}, nil
+	}
+
+	sess, err := a.Store.Sessions().GetByID(ctx, in.SessionID)
+	if err != nil {
+		return SearchToolsResult{}, fmt.Errorf("search tools: get session: %w", err)
+	}
+	if sess == nil {
+		return SearchToolsResult{}, fmt.Errorf("search tools: session %s not found", in.SessionID)
+	}
+
+	candidates, err := tools.Candidates(ctx, a.Dispatcher.Issuer, sess, in.AgentID, in.ToolSet)
+	if err != nil {
+		return SearchToolsResult{}, fmt.Errorf("search tools: %w", err)
+	}
+
+	matched := tools.Match(candidates, query)
+
+	resultPayload, err := marshalToolResultPayload(tools.Result{
+		ToolCallID: in.Call.ID,
+		Name:       tools.SearchToolsName,
+		Content:    tools.RenderMatchResult(matched, candidates),
+		IsError:    false,
+	})
+	if err != nil {
+		return SearchToolsResult{}, fmt.Errorf("search tools: marshal tool result payload: %w", err)
+	}
+	if _, err := a.Store.Transcript().AppendIfAbsent(ctx, in.SessionID, in.Turn, toolResultEventType(in.CallIndex), resultPayload); err != nil {
+		return SearchToolsResult{}, fmt.Errorf("search tools: commit tool result event: %w", err)
+	}
+
+	unlockPayload, err := marshalToolUnlockPayload(matched, query)
+	if err != nil {
+		return SearchToolsResult{}, fmt.Errorf("search tools: marshal tool unlock payload: %w", err)
+	}
+	if _, err := a.Store.Transcript().AppendIfAbsent(ctx, in.SessionID, in.Turn, toolUnlockEventType(in.CallIndex), unlockPayload); err != nil {
+		return SearchToolsResult{}, fmt.Errorf("search tools: commit tool unlock event: %w", err)
+	}
+
+	return SearchToolsResult{Matched: matched}, nil
+}
+
+// decodeSearchQuery decodes a search_tools call's `query` argument out of
+// its raw JSON arguments (llm.ToolCall.Arguments), reusing
+// tools.DecodeArguments' empty-string tolerance (an empty Arguments string
+// decodes to an empty map, not a decode error -- the missing-argument
+// check below is what actually reports it). The returned error, when
+// non-nil, is exactly the message SearchTools commits into its IsError
+// tool_result content -- never wrapped with additional context here.
+func decodeSearchQuery(raw string) (string, error) {
+	args, err := tools.DecodeArguments(raw)
+	if err != nil {
+		return "", fmt.Errorf("malformed arguments: %v", err)
+	}
+	v, ok := args["query"]
+	if !ok {
+		return "", fmt.Errorf("missing required argument %q", "query")
+	}
+	q, ok := v.(string)
+	if !ok {
+		return "", fmt.Errorf("argument %q must be a string", "query")
+	}
+	return q, nil
 }
 
 // UnlockedToolsInput is UnlockedTools' activity input.

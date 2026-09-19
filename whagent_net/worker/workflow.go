@@ -111,7 +111,9 @@ import (
 	"go.temporal.io/sdk/workflow"
 
 	"github.com/whale-net/everything/whagent_net/events"
+	"github.com/whale-net/everything/whagent_net/llm"
 	"github.com/whale-net/everything/whagent_net/session"
+	"github.com/whale-net/everything/whagent_net/worker/tools"
 )
 
 // TaskQueue is the Temporal task queue SessionWorkflow and its activities
@@ -342,6 +344,50 @@ func runTurn(ctx workflow.Context, stopCh workflow.ReceiveChannel, sessionID uui
 	}, nil
 }
 
+// dispatchToolCall executes one model-requested tool call: ActivitySearchTools
+// (FR4, the write half of FR5) when call is a search-mode search_tools call,
+// ActivityDispatchTool (FR2/FR8/FR10/FR11) otherwise -- the ordinary,
+// unchanged dispatch path every non-search_tools call still takes, including
+// a search_tools call in a bulk-mode session (which falls through to
+// ActivityDispatchTool and fails with the existing "no configured server
+// exposes this tool" error, since search_tools is never offered in bulk
+// mode, FR2, and no domain server may expose it, FR8).
+//
+// Gated by the same "session-workflow-tool-search-loading" change ID #2669
+// added at the ActivityListToolDefinitions call site above -- extended here
+// to its dispatch-time branch rather than given a second change ID, per
+// this file's NFR1 doc comment ("one change ID per behavior-changing
+// edit... unless it diverges at a different point"): this is the same
+// milestone branch, just reached from two call sites within one turn.
+// workflow.GetVersion caches its decision per change ID within one workflow
+// execution, so calling it again here returns the identical value the
+// ActivityListToolDefinitions call site already recorded, without writing a
+// second marker.
+func dispatchToolCall(ctx workflow.Context, sessionID uuid.UUID, turn int, callIndex int, def session.AgentDefinition, call llm.ToolCall) error {
+	searchVersion := workflow.GetVersion(ctx, "session-workflow-tool-search-loading", workflow.DefaultVersion, 1)
+	if searchVersion >= 1 && def.ToolLoadingMode == session.ToolLoadingModeSearch && call.Name == tools.SearchToolsName {
+		searchIn := SearchToolsInput{
+			SessionID: sessionID,
+			AgentID:   def.AgentID,
+			ToolSet:   def.ToolSet,
+			Turn:      turn,
+			CallIndex: callIndex,
+			Call:      call,
+		}
+		return workflow.ExecuteActivity(ctx, ActivitySearchTools, searchIn).Get(ctx, nil)
+	}
+
+	dispatchIn := DispatchToolInput{
+		SessionID: sessionID,
+		AgentID:   def.AgentID,
+		ToolSet:   def.ToolSet,
+		Turn:      turn,
+		CallIndex: callIndex,
+		Call:      call,
+	}
+	return workflow.ExecuteActivity(ctx, ActivityDispatchTool, dispatchIn).Get(ctx, nil)
+}
+
 // processTurn runs one turn's activity sequence (ARCHITECTURE.md "Session
 // workflow"): resolve the current agent definition, check caps (FR6/FR7,
 // "before" half), build context, list the tools this turn's model call may
@@ -543,15 +589,7 @@ func processTurn(ctx workflow.Context, sessionID uuid.UUID, turn int, in SendTur
 			// runs across the whole turn, not reset per response --
 			// context.go's toolCallEventType doc comment.
 			for _, call := range modelResult.Response.ToolCalls {
-				dispatchIn := DispatchToolInput{
-					SessionID: sessionID,
-					AgentID:   resolved.Definition.AgentID,
-					ToolSet:   resolved.Definition.ToolSet,
-					Turn:      turn,
-					CallIndex: callIndex,
-					Call:      call,
-				}
-				if err := workflow.ExecuteActivity(ctx, ActivityDispatchTool, dispatchIn).Get(ctx, nil); err != nil {
+				if err := dispatchToolCall(ctx, sessionID, turn, callIndex, resolved.Definition, call); err != nil {
 					return failTurn(ctx, sessionID, turn, err)
 				}
 				callIndex++
@@ -625,15 +663,7 @@ func processTurn(ctx workflow.Context, sessionID uuid.UUID, turn int, in SendTur
 		// "session-workflow-tool-loop" deploys: dispatch this one response's
 		// tool calls once, never looping back to the model.
 		for i, call := range modelResult.Response.ToolCalls {
-			dispatchIn := DispatchToolInput{
-				SessionID: sessionID,
-				AgentID:   resolved.Definition.AgentID,
-				ToolSet:   resolved.Definition.ToolSet,
-				Turn:      turn,
-				CallIndex: i,
-				Call:      call,
-			}
-			if err := workflow.ExecuteActivity(ctx, ActivityDispatchTool, dispatchIn).Get(ctx, nil); err != nil {
+			if err := dispatchToolCall(ctx, sessionID, turn, i, resolved.Definition, call); err != nil {
 				return failTurn(ctx, sessionID, turn, err)
 			}
 		}

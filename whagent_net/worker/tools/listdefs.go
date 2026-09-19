@@ -98,6 +98,19 @@ func ListToolDefinitions(ctx context.Context, issuer *persona.Issuer, sess *sess
 	return defs, nil
 }
 
+// Candidates is candidateDefinitions exported for SearchTools
+// (activities.go) to call directly: an in-process search_tools call needs
+// the exact same candidate pool ListToolDefinitions' own search branch
+// matches unlocked names against -- the agent definition's tool_set
+// narrowed by allowed_tools, never a server's raw, unfiltered catalog
+// (FR4, NFR2) -- but resolves it on its own schedule (once per
+// search_tools call, not once per turn ahead of CallModel), so it calls
+// the shared helper directly rather than going through
+// ListToolDefinitions' bulk/search branching.
+func Candidates(ctx context.Context, issuer *persona.Issuer, sess *session.Session, agentID string, toolSet []session.ToolServerRef) ([]llm.ToolDefinition, error) {
+	return candidateDefinitions(ctx, issuer, sess, agentID, toolSet)
+}
+
 // candidateDefinitions is the Candidates path every ListToolDefinitions
 // caller resolves through: it connects to every entry of toolSet, lists
 // each server's exposed tools, rejects FR8's reserved SearchToolsName
