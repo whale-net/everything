@@ -22,6 +22,16 @@ type EventPayload struct {
 	EventStatus string `json:"event_status"` // Advisory: e.g. "pending", "success", "failed"
 }
 
+// ReleaseRunEventPayload is the small structured JSON payload for
+// app-registry release-run events. It mirrors EventPayload's shape but
+// carries a release-run id instead of a promotion id, published to its own
+// routing key family (see TopicForReleaseRun) on the same shared exchange.
+type ReleaseRunEventPayload struct {
+	ReleaseRunID string `json:"release_run_id"`
+	EventKind    string `json:"event_kind"`
+	EventStatus  string `json:"event_status"`
+}
+
 // publishRequest is an internal struct for events enqueued to the buffer.
 type publishRequest struct {
 	payload EventPayload
@@ -153,6 +163,21 @@ func (p *Publisher) Publish(promotionID, eventKind, eventStatus string) {
 		p.droppedCounter.Add(1)
 		p.logger.Warn("event buffer full, dropping publish", "promotion_id", promotionID, "event_kind", eventKind)
 		req.done <- fmt.Errorf("buffer full")
+	}
+}
+
+// PublishReleaseRun enqueues a release-run event for publication. It shares
+// Publish's non-blocking bounded hand-off, background goroutine, buffer, and
+// counters; only the routing key and payload shape differ.
+//
+// Scaffold stub: the enqueue/routing-key plumbing this needs (publishRequest
+// carrying a resolved routing key instead of a concrete EventPayload) lands
+// in the implementation phase; see events events.go's TopicForReleaseRun.
+func (p *Publisher) PublishReleaseRun(releaseRunID, eventKind, eventStatus string) {
+	_ = ReleaseRunEventPayload{
+		ReleaseRunID: releaseRunID,
+		EventKind:    eventKind,
+		EventStatus:  eventStatus,
 	}
 }
 

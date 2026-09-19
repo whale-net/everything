@@ -20,6 +20,7 @@ import (
 // Publisher and test fakes implement this interface.
 type PublisherInterface interface {
 	Publish(promotionID, eventKind, eventStatus string)
+	PublishReleaseRun(releaseRunID, eventKind, eventStatus string)
 }
 
 // ExchangeName is the RabbitMQ topic exchange name for app-registry's htmxsse
@@ -33,6 +34,14 @@ const ExchangeName = "app-registry.htmxsse"
 // subscribers to bind with topic wildcards (e.g., "promotion.#").
 func TopicForPromotion(id string) string {
 	return fmt.Sprintf("promotion.%s", id)
+}
+
+// TopicForReleaseRun returns the routing key for a release-run event,
+// derived from the release-run id. The routing key format is
+// "release_run.<id>", allowing subscribers to bind with topic wildcards
+// (e.g., "release_run.#").
+func TopicForReleaseRun(id string) string {
+	return fmt.Sprintf("release_run.%s", id)
 }
 
 // DeclareArgs returns the AMQP ExchangeDeclare arguments for the app-registry

@@ -344,7 +344,8 @@ func TestRecorder_RecordWritebackResult_NoPublisherConfigured(t *testing.T) {
 
 // FakeRecorderPublisher for testing Recorder publishes.
 type FakeRecorderPublisher struct {
-	events []RecorderPublishedEvent
+	events           []RecorderPublishedEvent
+	releaseRunEvents []RecorderReleaseRunPublishedEvent
 }
 
 type RecorderPublishedEvent struct {
@@ -353,11 +354,28 @@ type RecorderPublishedEvent struct {
 	EventStatus string
 }
 
+// RecorderReleaseRunPublishedEvent records a PublishReleaseRun call for
+// testing purposes, kept separate from RecorderPublishedEvent since a
+// release-run event has no promotion id.
+type RecorderReleaseRunPublishedEvent struct {
+	ReleaseRunID string
+	EventKind    string
+	EventStatus  string
+}
+
 func (f *FakeRecorderPublisher) Publish(promotionID, eventKind, eventStatus string) {
 	f.events = append(f.events, RecorderPublishedEvent{
 		PromotionID: promotionID,
 		EventKind:   eventKind,
 		EventStatus: eventStatus,
+	})
+}
+
+func (f *FakeRecorderPublisher) PublishReleaseRun(releaseRunID, eventKind, eventStatus string) {
+	f.releaseRunEvents = append(f.releaseRunEvents, RecorderReleaseRunPublishedEvent{
+		ReleaseRunID: releaseRunID,
+		EventKind:    eventKind,
+		EventStatus:  eventStatus,
 	})
 }
 

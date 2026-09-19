@@ -663,16 +663,26 @@ func drainOutboxToDone(t *testing.T, repo repository.Registry) []repository.Writ
 
 // FakePublisher records all publishes for testing purposes.
 type FakePublisher struct {
-	mu              sync.Mutex
-	publishedEvents []PublishedEvent
-	shouldBlock     bool
-	blockChan       chan struct{}
+	mu                     sync.Mutex
+	publishedEvents        []PublishedEvent
+	releaseRunPublishedEvs []ReleaseRunPublishedEvent
+	shouldBlock            bool
+	blockChan              chan struct{}
 }
 
 type PublishedEvent struct {
 	PromotionID string
 	EventKind   string
 	EventStatus string
+}
+
+// ReleaseRunPublishedEvent records a PublishReleaseRun call for testing
+// purposes, kept separate from PublishedEvent since a release-run event has
+// no promotion id.
+type ReleaseRunPublishedEvent struct {
+	ReleaseRunID string
+	EventKind    string
+	EventStatus  string
 }
 
 func NewFakePublisher() *FakePublisher {
@@ -692,6 +702,19 @@ func (f *FakePublisher) Publish(promotionID, eventKind, eventStatus string) {
 		PromotionID: promotionID,
 		EventKind:   eventKind,
 		EventStatus: eventStatus,
+	})
+}
+
+func (f *FakePublisher) PublishReleaseRun(releaseRunID, eventKind, eventStatus string) {
+	if f.shouldBlock {
+		<-f.blockChan
+	}
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.releaseRunPublishedEvs = append(f.releaseRunPublishedEvs, ReleaseRunPublishedEvent{
+		ReleaseRunID: releaseRunID,
+		EventKind:    eventKind,
+		EventStatus:  eventStatus,
 	})
 }
 
@@ -718,6 +741,15 @@ func (f *FakePublisher) EventCount() int {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	return len(f.publishedEvents)
+}
+
+func (f *FakePublisher) GetReleaseRunPublishedEvents() []ReleaseRunPublishedEvent {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	// Return a copy to avoid race conditions
+	result := make([]ReleaseRunPublishedEvent, len(f.releaseRunPublishedEvs))
+	copy(result, f.releaseRunPublishedEvs)
+	return result
 }
 
 // TestPromote_PublishesAfterWriteCommits verifies that Promote publishes
