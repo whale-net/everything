@@ -723,6 +723,15 @@ type DispatchToolInput struct {
 	// Call is the model-requested tool call (llm.ToolCall,
 	// modelResult.Response.ToolCalls[CallIndex]) to dispatch.
 	Call llm.ToolCall
+	// Mode and Unlocked (FR9) are tools.DispatchInput's search-mode gate
+	// inputs, populated from the exact same ListToolDefinitionsInput.Mode/
+	// .Unlocked values workflow.go resolved this turn's Tools from -- never
+	// re-derived independently, so "offered" and "dispatchable" cannot
+	// diverge within one turn (dispatch.go's package doc comment, "Tool
+	// selection"). A bulk-mode turn leaves both at their zero value, the
+	// same as ListToolDefinitionsInput's own doc comment.
+	Mode     session.ToolLoadingMode
+	Unlocked []string
 }
 
 // DispatchToolResult is DispatchTool's activity result: exactly
@@ -798,6 +807,8 @@ func (a *Activities) DispatchTool(ctx context.Context, in DispatchToolInput) (Di
 		Turn:      in.Turn,
 		CallIndex: in.CallIndex,
 		Call:      in.Call,
+		Mode:      in.Mode,
+		Unlocked:  in.Unlocked,
 	})
 	if err != nil {
 		return DispatchToolResult{}, fmt.Errorf("dispatch tool: %w", err)

@@ -363,7 +363,13 @@ func runTurn(ctx workflow.Context, stopCh workflow.ReceiveChannel, sessionID uui
 // execution, so calling it again here returns the identical value the
 // ActivityListToolDefinitions call site already recorded, without writing a
 // second marker.
-func dispatchToolCall(ctx workflow.Context, sessionID uuid.UUID, turn int, callIndex int, def session.AgentDefinition, call llm.ToolCall) error {
+//
+// mode/unlocked are processTurn's toolMode/toolUnlocked, the exact values
+// ActivityListToolDefinitions resolved toolDefs.Tools from this turn --
+// threaded through verbatim into DispatchToolInput.Mode/.Unlocked so
+// dispatch's search-mode refusal gate (FR9) always agrees with what was
+// offered, never a value re-derived here.
+func dispatchToolCall(ctx workflow.Context, sessionID uuid.UUID, turn int, callIndex int, def session.AgentDefinition, call llm.ToolCall, mode session.ToolLoadingMode, unlocked []string) error {
 	searchVersion := workflow.GetVersion(ctx, "session-workflow-tool-search-loading", workflow.DefaultVersion, 1)
 	if searchVersion >= 1 && def.ToolLoadingMode == session.ToolLoadingModeSearch && call.Name == tools.SearchToolsName {
 		searchIn := SearchToolsInput{
@@ -384,6 +390,8 @@ func dispatchToolCall(ctx workflow.Context, sessionID uuid.UUID, turn int, callI
 		Turn:      turn,
 		CallIndex: callIndex,
 		Call:      call,
+		Mode:      mode,
+		Unlocked:  unlocked,
 	}
 	return workflow.ExecuteActivity(ctx, ActivityDispatchTool, dispatchIn).Get(ctx, nil)
 }
@@ -467,7 +475,18 @@ func processTurn(ctx workflow.Context, sessionID uuid.UUID, turn int, in SendTur
 	// no dispatch loop) rather than replay into a non-determinism error.
 	toolVersion := workflow.GetVersion(ctx, "session-workflow-tool-dispatch", workflow.DefaultVersion, 1)
 
-	var toolDefs ListToolDefinitionsResult
+	var (
+		toolDefs ListToolDefinitionsResult
+		// toolMode/toolUnlocked mirror listIn.Mode/.Unlocked below at outer
+		// scope (listIn itself is block-scoped to this if) -- every
+		// DispatchToolInput this turn constructs, in both the inner-loop and
+		// pre-loop branches further down, carries these two verbatim so
+		// dispatch's search-mode gate (FR9) always agrees with exactly what
+		// ActivityListToolDefinitions resolved toolDefs.Tools from, never a
+		// value re-derived separately.
+		toolMode     session.ToolLoadingMode
+		toolUnlocked []string
+	)
 	if toolVersion >= 1 {
 		listIn := ListToolDefinitionsInput{
 			SessionID: sessionID,
@@ -501,6 +520,8 @@ func processTurn(ctx workflow.Context, sessionID uuid.UUID, turn int, in SendTur
 		if err := workflow.ExecuteActivity(ctx, ActivityListToolDefinitions, listIn).Get(ctx, &toolDefs); err != nil {
 			return failTurn(ctx, sessionID, turn, err)
 		}
+		toolMode = listIn.Mode
+		toolUnlocked = listIn.Unlocked
 	}
 
 	var modelResult CallModelResult
@@ -535,6 +556,14 @@ func processTurn(ctx workflow.Context, sessionID uuid.UUID, turn int, in SendTur
 	// therefore is not offered until the next processTurn invocation that
 	// re-lists, i.e. the next external turn, not the next inner-loop
 	// iteration of this one.
+	//
+	// Every DispatchToolInput below (both loop bodies) carries toolMode/
+	// toolUnlocked verbatim -- the exact same values ActivityListToolDefinitions
+	// resolved toolDefs.Tools from above, never re-derived per call or per
+	// iteration (FR9, dispatch.go's package doc comment "Tool selection").
+	// So a tool a search_tools call unlocks mid-turn is refused by
+	// DispatchTool at every call index within that same turn, consistent
+	// with it not being offered in Tools until the next external turn.
 
 	var (
 		callIndex   int
@@ -589,7 +618,7 @@ func processTurn(ctx workflow.Context, sessionID uuid.UUID, turn int, in SendTur
 			// runs across the whole turn, not reset per response --
 			// context.go's toolCallEventType doc comment.
 			for _, call := range modelResult.Response.ToolCalls {
-				if err := dispatchToolCall(ctx, sessionID, turn, callIndex, resolved.Definition, call); err != nil {
+				if err := dispatchToolCall(ctx, sessionID, turn, callIndex, resolved.Definition, call, toolMode, toolUnlocked); err != nil {
 					return failTurn(ctx, sessionID, turn, err)
 				}
 				callIndex++
@@ -663,7 +692,7 @@ func processTurn(ctx workflow.Context, sessionID uuid.UUID, turn int, in SendTur
 		// "session-workflow-tool-loop" deploys: dispatch this one response's
 		// tool calls once, never looping back to the model.
 		for i, call := range modelResult.Response.ToolCalls {
-			if err := dispatchToolCall(ctx, sessionID, turn, i, resolved.Definition, call); err != nil {
+			if err := dispatchToolCall(ctx, sessionID, turn, i, resolved.Definition, call, toolMode, toolUnlocked); err != nil {
 				return failTurn(ctx, sessionID, turn, err)
 			}
 		}

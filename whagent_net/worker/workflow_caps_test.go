@@ -595,6 +595,80 @@ func TestSessionWorkflow_ToolLoop_LoopsAcrossMultipleModelCalls_CommitsTurnOnce(
 	assert.Equal(t, 1, commitCount, "the turn must commit exactly once, via ActivityCommitTurn, regardless of how many model calls it took")
 }
 
+// TestSessionWorkflow_SearchMode_DispatchToolInput_SameUnlockedSetAcrossLoopIterations
+// is this task's FR9 workflow-level guard for "same-turn ordering"
+// (workflow.go's "Every DispatchToolInput below" doc comment): a
+// search-mode turn's toolDefs.Tools/toolUnlocked is resolved once, from
+// ActivityListToolDefinitions, ahead of the turn's first model call, and
+// every DispatchToolInput this turn constructs -- across every inner-loop
+// iteration, not just the first -- carries those exact Mode/Unlocked
+// values verbatim, never re-derived per call or per iteration. A name
+// hypothetically unlocked mid-turn is therefore dispatched with the SAME
+// Unlocked set at iteration 1 as at iteration 0 within this same turn -- it
+// only becomes offered/dispatchable starting the next external turn's own
+// re-list, per #2669's per-iteration decision.
+func TestSessionWorkflow_SearchMode_DispatchToolInput_SameUnlockedSetAcrossLoopIterations(t *testing.T) {
+	ts := testsuite.WorkflowTestSuite{}
+	env := ts.NewTestWorkflowEnvironment()
+
+	tracker := &statusTracker{}
+	rec := &callRecorder{}
+	def := session.AgentDefinition{
+		MaxTurns: 100, MaxCostUSD: 100, MaxToolIterations: 100,
+		ToolLoadingMode: session.ToolLoadingModeSearch,
+	}
+	wireCapTestActivities(env, def, tracker, rec)
+	env.OnActivity(ActivitySumCost, mock.Anything, mock.Anything).
+		Return(SumCostResult{CostUSD: 0}, nil)
+	env.OnActivity(ActivityUnlockedTools, mock.Anything, mock.Anything).
+		Return(UnlockedToolsResult{ToolNames: []string{"b"}}, nil)
+
+	// Response 1 and response 2 each request an ordinary (non-search_tools)
+	// call -- issue #2671's dispatchToolCall routes search_tools to
+	// ActivitySearchTools instead, so a search_tools call here would never
+	// reach ActivityDispatchTool at all and couldn't exercise this test's
+	// own assertion. toolDefs.Tools/toolUnlocked is resolved once, ahead of
+	// response 1, and must never be re-derived for response 2's dispatch.
+	callModelFn, callModelCalls := sequencedCallModel([]llm.Response{
+		{Message: llm.Message{Role: llm.RoleAssistant}, ToolCalls: []llm.ToolCall{{ID: "call-1", Name: "b", Arguments: `{"query":"x"}`}}},
+		{Message: llm.Message{Role: llm.RoleAssistant}, ToolCalls: []llm.ToolCall{{ID: "call-2", Name: "newly_unlocked", Arguments: "{}"}}},
+		{Message: llm.Message{Role: llm.RoleAssistant, Content: "done"}},
+	})
+	env.OnActivity(ActivityCallModel, mock.Anything, mock.Anything).Return(callModelFn)
+
+	var dispatchIns []DispatchToolInput
+	var dispatchMu sync.Mutex
+	env.OnActivity(ActivityDispatchTool, mock.Anything, mock.Anything).
+		Return(DispatchToolResult{}, nil).
+		Run(func(args mock.Arguments) {
+			dispatchMu.Lock()
+			dispatchIns = append(dispatchIns, args.Get(1).(DispatchToolInput))
+			dispatchMu.Unlock()
+		})
+	env.OnActivity(ActivityCommitToolLoopIteration, mock.Anything, mock.Anything).
+		Return(CommitToolLoopIterationResult{}, nil)
+
+	env.RegisterDelayedCallback(func() {
+		env.SignalWorkflow(SignalSendTurn, SendTurnSignal{Input: "hello"})
+	}, time.Second)
+	env.RegisterDelayedCallback(func() {
+		env.SignalWorkflow(SignalStop, struct{}{})
+	}, 2*time.Second)
+
+	env.ExecuteWorkflow(SessionWorkflow, SessionWorkflowInput{SessionID: testSessionID()})
+
+	require.True(t, env.IsWorkflowCompleted())
+	require.NoError(t, env.GetWorkflowError())
+
+	assert.Equal(t, 3, callModelCalls(), "one model call per loop iteration plus the final, non-looping response")
+	require.Len(t, dispatchIns, 2, "one DispatchTool call per iteration's single tool call")
+	for i, in := range dispatchIns {
+		assert.Equal(t, session.ToolLoadingModeSearch, in.Mode, "dispatch call %d must carry search mode", i)
+		assert.Equal(t, []string{"b"}, in.Unlocked,
+			"dispatch call %d must carry the SAME unlocked set ActivityListToolDefinitions resolved this turn's Tools from -- never re-derived mid-turn", i)
+	}
+}
+
 // TestSessionWorkflow_ToolIterationCapTrips_EndsCappedWithToolIterationsCapKind
 // proves the inner tool loop's own run-away guard: a model that never stops
 // requesting tool calls trips MaxToolIterations rather than looping without

@@ -6,6 +6,7 @@ import (
 	"crypto/rand"
 	"net/http"
 	"net/http/httptest"
+	"sync/atomic"
 	"testing"
 
 	"github.com/google/uuid"
@@ -74,6 +75,39 @@ func newDispatchTestServer(t *testing.T) string {
 	ts := httptest.NewServer(handler)
 	t.Cleanup(ts.Close)
 	return ts.URL
+}
+
+// newDispatchTestServerCounting mirrors newDispatchTestServer but also
+// counts every HTTP request the server receives (httpHits -- a proxy for
+// "a connection was opened", since resolveTarget's mintCredential+Connect+
+// ListTools sequence for a tried ref always issues at least one) and every
+// genuine read_probe invocation (readCalls) -- FR9's refusal tests below
+// assert both stay at zero for a call resolveTarget's search-mode gate
+// refuses before ever minting a credential or opening a connection (this
+// package's "Tool selection" doc comment, dispatch.go).
+func newDispatchTestServerCounting(t *testing.T) (serverURL string, httpHits, readCalls *int32) {
+	t.Helper()
+
+	srv := mcp.NewServer(&mcp.Implementation{Name: "dispatch-test-server", Version: "0.1.0"}, nil)
+
+	readCalls = new(int32)
+	mcp.AddTool(srv, &mcp.Tool{Name: "read_probe", Description: "read-only probe with a strict schema"},
+		func(_ context.Context, _ *mcp.CallToolRequest, in readProbeInput) (*mcp.CallToolResult, readProbeOutput, error) {
+			atomic.AddInt32(readCalls, 1)
+			return nil, readProbeOutput{ChannelID: in.ChannelID}, nil
+		})
+
+	mcpHandler := mcp.NewStreamableHTTPHandler(func(*http.Request) *mcp.Server { return srv }, nil)
+
+	httpHits = new(int32)
+	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		atomic.AddInt32(httpHits, 1)
+		mcpHandler.ServeHTTP(w, r)
+	})
+
+	ts := httptest.NewServer(handler)
+	t.Cleanup(ts.Close)
+	return ts.URL, httpHits, readCalls
 }
 
 // newDispatchTestFixture builds the whagent-net-side pieces Dispatch needs
@@ -153,4 +187,140 @@ func TestDispatch_WriteTool_IdempotencyKeyAttached(t *testing.T) {
 
 	wantKey := whagent.DeriveIdempotencyKey(in.Session.SessionID.String(), in.Turn, in.CallIndex)
 	assert.Contains(t, result.Content, wantKey)
+}
+
+// TestDispatch_SearchMode_EmptyUnlocked_RefusesRealTool_NoConnect is FR9's
+// core refusal proof: a search-mode call for a name the session has never
+// unlocked is refused with the exact allowlist-refusal error shape, and
+// resolveTarget's gate fires before any credential is minted or connection
+// opened -- the fake server records zero HTTP hits and zero genuine
+// read_probe invocations.
+func TestDispatch_SearchMode_EmptyUnlocked_RefusesRealTool_NoConnect(t *testing.T) {
+	ctx := context.Background()
+	serverURL, httpHits, readCalls := newDispatchTestServerCounting(t)
+	dispatcher, in := newDispatchTestFixture(t, serverURL)
+
+	in.Mode = session.ToolLoadingModeSearch
+	in.Unlocked = nil
+	in.Turn = 1
+	in.CallIndex = 0
+	in.Call = llm.ToolCall{ID: "call-1", Name: "read_probe", Arguments: `{"channel_id":"chan-1"}`}
+
+	_, err := dispatcher.Dispatch(ctx, in)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), `no configured server exposes this tool`)
+	assert.Equal(t, int32(0), atomic.LoadInt32(httpHits), "a search-mode refusal must never open a connection")
+	assert.Equal(t, int32(0), atomic.LoadInt32(readCalls), "a search-mode refusal must never reach the domain server's handler")
+}
+
+// TestDispatch_SearchMode_Unlocked_DispatchesNormally is the positive
+// case: a name present in Unlocked dispatches exactly as bulk mode would.
+func TestDispatch_SearchMode_Unlocked_DispatchesNormally(t *testing.T) {
+	ctx := context.Background()
+	serverURL := newDispatchTestServer(t)
+	dispatcher, in := newDispatchTestFixture(t, serverURL)
+
+	in.Mode = session.ToolLoadingModeSearch
+	in.Unlocked = []string{"read_probe"}
+	in.Turn = 1
+	in.CallIndex = 0
+	in.Call = llm.ToolCall{ID: "call-1", Name: "read_probe", Arguments: `{"channel_id":"chan-1"}`}
+
+	result, err := dispatcher.Dispatch(ctx, in)
+	require.NoError(t, err)
+	assert.False(t, result.IsError, "unexpected tool error: %s", result.Content)
+	assert.Contains(t, result.Content, "chan-1")
+}
+
+// TestDispatch_SearchMode_NotInUnlocked_Refused proves a non-empty but
+// non-matching Unlocked set still refuses a call for a different name.
+func TestDispatch_SearchMode_NotInUnlocked_Refused(t *testing.T) {
+	ctx := context.Background()
+	serverURL, httpHits, readCalls := newDispatchTestServerCounting(t)
+	dispatcher, in := newDispatchTestFixture(t, serverURL)
+
+	in.Mode = session.ToolLoadingModeSearch
+	in.Unlocked = []string{"write_probe"}
+	in.Turn = 1
+	in.CallIndex = 0
+	in.Call = llm.ToolCall{ID: "call-1", Name: "read_probe", Arguments: `{"channel_id":"chan-1"}`}
+
+	_, err := dispatcher.Dispatch(ctx, in)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), `no configured server exposes this tool`)
+	assert.Equal(t, int32(0), atomic.LoadInt32(httpHits))
+	assert.Equal(t, int32(0), atomic.LoadInt32(readCalls))
+}
+
+// TestDispatch_SearchMode_SearchToolsCall_NotRejectedByModeGate proves
+// resolveTarget's search-mode gate is not what rejects a search_tools
+// call (that name is exempted from the gate outright): a call for
+// tools.SearchToolsName still ultimately fails here, because no
+// configured domain server actually exposes a real tool by that name
+// (FR8's global reservation, search.go) and this fixture never wires a
+// #2671-style in-process handler for it -- but it fails via the ordinary
+// per-ref lookup loop further down, which is only ever reached once a
+// connection has actually been attempted. A non-zero httpHits count is
+// this test's proof the mode gate itself did not short-circuit the call.
+func TestDispatch_SearchMode_SearchToolsCall_NotRejectedByModeGate(t *testing.T) {
+	ctx := context.Background()
+	serverURL, httpHits, _ := newDispatchTestServerCounting(t)
+	dispatcher, in := newDispatchTestFixture(t, serverURL)
+
+	in.Mode = session.ToolLoadingModeSearch
+	in.Unlocked = nil
+	in.Turn = 1
+	in.CallIndex = 0
+	in.Call = llm.ToolCall{ID: "call-1", Name: tools.SearchToolsName, Arguments: `{"query":"probe"}`}
+
+	_, err := dispatcher.Dispatch(ctx, in)
+	require.Error(t, err, "no configured server exposes search_tools as a real tool -- FR8's reservation, not this test's fixture")
+	assert.Contains(t, err.Error(), `no configured server exposes this tool`)
+	assert.NotEqual(t, int32(0), atomic.LoadInt32(httpHits),
+		"a search_tools call must fall through resolveTarget's mode gate into the ordinary per-ref lookup loop, proven by a connection actually having been attempted")
+}
+
+// TestDispatch_SearchMode_UnlockedButNoLongerAllowlisted_StillRefused
+// proves NFR2's composition rule: a name that is unlocked but no longer
+// present in the matching ref's AllowedTools must still be refused, by
+// isAllowed further down -- the search-mode gate above alone is not
+// sufficient to let a call through.
+func TestDispatch_SearchMode_UnlockedButNoLongerAllowlisted_StillRefused(t *testing.T) {
+	ctx := context.Background()
+	serverURL, httpHits, readCalls := newDispatchTestServerCounting(t)
+	dispatcher, in := newDispatchTestFixture(t, serverURL)
+	in.ToolSet = []session.ToolServerRef{{ServerURL: serverURL, AllowedTools: []string{"write_probe"}}}
+
+	in.Mode = session.ToolLoadingModeSearch
+	in.Unlocked = []string{"read_probe"}
+	in.Turn = 1
+	in.CallIndex = 0
+	in.Call = llm.ToolCall{ID: "call-1", Name: "read_probe", Arguments: `{"channel_id":"chan-1"}`}
+
+	_, err := dispatcher.Dispatch(ctx, in)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), `no configured server exposes this tool`)
+	assert.Equal(t, int32(0), atomic.LoadInt32(httpHits),
+		"isAllowed must refuse an unlocked-but-no-longer-allowlisted name before ever connecting (NFR2 composition)")
+	assert.Equal(t, int32(0), atomic.LoadInt32(readCalls))
+}
+
+// TestDispatch_BulkMode_UnlockedSetIgnored proves the check is strictly
+// mode-gated: a bulk-mode (zero-valued Mode) DispatchInput with a
+// non-empty Unlocked set accidentally populated must behave exactly as
+// today -- FR9's gate never applies outside search mode.
+func TestDispatch_BulkMode_UnlockedSetIgnored(t *testing.T) {
+	ctx := context.Background()
+	serverURL := newDispatchTestServer(t)
+	dispatcher, in := newDispatchTestFixture(t, serverURL)
+
+	in.Unlocked = []string{"some-other-name"}
+	in.Turn = 1
+	in.CallIndex = 0
+	in.Call = llm.ToolCall{ID: "call-1", Name: "read_probe", Arguments: `{"channel_id":"chan-1"}`}
+
+	result, err := dispatcher.Dispatch(ctx, in)
+	require.NoError(t, err)
+	assert.False(t, result.IsError, "unexpected tool error: %s", result.Content)
+	assert.Contains(t, result.Content, "chan-1")
 }
