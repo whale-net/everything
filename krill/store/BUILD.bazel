@@ -46,6 +46,7 @@ go_library(
         "slice.go",
         "store.go",
         "task.go",
+        "task_claim.go",
         "task_dependency.go",
     ],
     importpath = "github.com/whale-net/everything/krill/store",
@@ -842,6 +843,53 @@ go_test(
     size = "large",
     timeout = "long",
     srcs = [
+        "task_dependency_integration_test.go",
+        "task_integration_test.go",
+    ],
+    gotags = ["integration"],
+    tags = [
+        "external",
+        "integration",
+        "manual",
+        "no-cache",
+        "no-sandbox",
+        "requires-network",
+    ],
+    deps = [
+        ":store",
+        "//krill/migrate/schema",
+        "//libs/go/dbtest",
+        "//libs/go/migrate",
+        "@com_github_google_uuid//:uuid",
+        "@com_github_jackc_pgx_v5//stdlib",
+        "@com_github_stretchr_testify//assert",
+        "@com_github_stretchr_testify//require",
+    ],
+)
+
+# Real-Postgres coverage for TaskStore.ClaimTask/GetClaimByID
+# (task_claim.go, migration 015, issue #2722's Testing section, FR3/FR5):
+# the successful-claim path, the real-Postgres concurrency race (two
+# goroutines racing the same task's row lock -- exactly one wins), the
+# unsatisfied-dependency rejection naming the blocking task, the
+# expired-lease reclaim path, attempt-cap exhaustion, attempt_count
+# incrementing by exactly one per successful claim (including across a
+# reclaim), and NFR3's two-subject attribution on both task_claim and
+# task_attempt. Shares task_integration_test.go's test-store/test-scope/
+# test-world/subject helpers and task_dependency_integration_test.go's
+# createTestTask/setTaskLane helpers rather than duplicating them,
+# mirroring milepebble_integration_test.go's own choice. Deliberately NOT
+# part of `bazel test //...` -- see //libs/go/dbtest's README for the full
+# rationale.
+#
+# Run it explicitly (requires a working Docker daemon):
+#   bazel test //krill/store:task_claim_integration_test --test_output=all
+go_test(
+    name = "task_claim_integration_test",
+    size = "large",
+    timeout = "long",
+    srcs = [
+        "task_claim_integration_test.go",
         "task_dependency_integration_test.go",
         "task_integration_test.go",
     ],

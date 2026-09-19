@@ -21,6 +21,16 @@ type txQuerier interface {
 	QueryRow(ctx context.Context, sql string, args ...any) pgx.Row
 }
 
+// rowsQuerier is txQuerier's multi-row counterpart -- satisfied by both
+// pgx.Tx and *pgxpool.Pool identically. ClaimTask (task_claim.go, issue
+// #2722) uses this to run UnsatisfiedDependencies' own predicate
+// (task_dependency.go) against its claim transaction's row-locked
+// snapshot, rather than a second, pool-backed round trip outside that
+// transaction.
+type rowsQuerier interface {
+	Query(ctx context.Context, sql string, args ...any) (pgx.Rows, error)
+}
+
 // currentRowExists reports whether table has a current (valid_to IS NULL)
 // row whose `id` column equals id AND whose `scope_id` column equals
 // scopeID. It is the store-layer enforcement LB2's parentage design calls

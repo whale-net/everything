@@ -35,7 +35,10 @@ endpoint above. task_dependency.go (issue #2720, FR2) is the work-axis
 dependency-declaration surface: POST /tasks/{id}/dependencies is gated,
 GET /tasks/{id}/dependencies is not. task_payload.go (issue #2721,
 FR4/FR10) is the work-axis by-task-id fetch surface: GET /tasks/{id} is
-ungated, over //krill/work's Assembler."""
+ungated, over //krill/work's Assembler. task_claim.go (issue #2722,
+FR3/FR5) is the work-axis claim surface: POST /tasks/{id}/claim is gated,
+returning the same //krill/work Assembler payload task_payload.go's GET
+/tasks/{id} does, enriched with the fresh lease."""
 
 load("@rules_go//go:def.bzl", "go_library", "go_test")
 
@@ -64,6 +67,7 @@ go_library(
         "session_slice.go",
         "slice.go",
         "task.go",
+        "task_claim.go",
         "task_dependency.go",
         "task_payload.go",
         "types.go",
@@ -140,6 +144,7 @@ go_test(
         "session_test.go",
         "slice_internal_test.go",
         "slice_test.go",
+        "task_claim_test.go",
         "task_dependency_test.go",
         "task_payload_test.go",
         "task_test.go",
@@ -170,6 +175,47 @@ go_test(
     size = "large",
     timeout = "long",
     srcs = ["task_payload_integration_test.go"],
+    embed = [":handlers"],
+    gotags = ["integration"],
+    tags = [
+        "external",
+        "integration",
+        "manual",
+        "no-cache",
+        "no-sandbox",
+        "requires-network",
+    ],
+    deps = [
+        "//krill/migrate/schema",
+        "//krill/slice",
+        "//krill/store",
+        "//krill/work",
+        "//libs/go/dbtest",
+        "//libs/go/migrate",
+        "@com_github_google_uuid//:uuid",
+        "@com_github_jackc_pgx_v5//pgxpool",
+        "@com_github_jackc_pgx_v5//stdlib",
+        "@com_github_stretchr_testify//assert",
+        "@com_github_stretchr_testify//require",
+    ],
+)
+
+# Real-Postgres coverage for ClaimTaskHandler's full success path
+# (task_claim_integration_test.go, issue #2722's Testing section) -- the
+# branches task_claim_test.go's fakes cannot reach, since work.Assembler
+# wraps a concrete *slice.Querier over a real *store.Store: a genuine 200
+# carrying a real minted lease (FR3/FR5), and the claim response's document
+# shape matching a subsequent GET /tasks/{id} exactly (FR4/FR10, LB7/NFR4).
+# Deliberately NOT part of `bazel test //...` -- see //libs/go/dbtest's
+# README, mirrored by task_payload_integration_test above.
+#
+# Run it explicitly (requires a working Docker daemon):
+#   bazel test //krill/api/handlers:task_claim_integration_test --test_output=all
+go_test(
+    name = "task_claim_integration_test",
+    size = "large",
+    timeout = "long",
+    srcs = ["task_claim_integration_test.go"],
     embed = [":handlers"],
     gotags = ["integration"],
     tags = [

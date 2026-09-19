@@ -39,7 +39,8 @@ import (
 // /products/{id}/delivery (issue #2689, FR11).
 // Import (FR16) is a later task's route, not added here.
 //
-// POST /tasks (the work-axis task-create endpoint, issue #2719, FR1) is
+// POST /tasks (the work-axis task-create endpoint, issue #2719, FR1) and
+// POST /tasks/{id}/claim (the claim endpoint, issue #2722, FR3/FR5) are
 // gated the same way every other write endpoint above is -- scope_id and
 // both subjects come from the session RequireSession resolves, never the
 // request body (NFR6).
@@ -126,6 +127,14 @@ func setupRoutes(mux *http.ServeMux, pool *pgxpool.Pool, githubToken string) {
 	// re-fetch rather than a dedicated verb. Ungated like every other read
 	// endpoint in this package (NFR6's gate is write-only).
 	mux.HandleFunc("GET /tasks/{id}", handlers.GetTaskPayloadHandler(entities.Tasks(), assembler))
+
+	// task_claim (issue #2722, FR3/FR5): an Agent with an active session
+	// claims a task -- race-safe (a Postgres row lock, not an
+	// application-level mutex), mints a lease, and records one attempt.
+	// Gated like every other write endpoint (NFR6); the response is the
+	// same work.Payload document GET /tasks/{id} returns, enriched with
+	// the fresh lease.
+	mux.Handle("POST /tasks/{id}/claim", gate(handlers.ClaimTaskHandler(entities.Tasks(), assembler)))
 
 	mux.Handle("POST /design-sessions", gate(handlers.OpenDesignSessionHandler(entities.DesignSessions())))
 	mux.HandleFunc("GET /design-sessions/{id}", handlers.GetDesignSessionHandler(entities.DesignSessions(), entities.RevisionEvents()))

@@ -79,6 +79,10 @@ func isUniqueViolation(err error) bool {
 //     rejections, task.go)                                            -> 400
 //   - store.ErrSelfDependency / store.ErrDependencyCycle
 //     (DeclareDependency's own named FR2 rejections, task_dependency.go) -> 400
+//   - store.ErrTaskAlreadyClaimed / store.ErrDependenciesUnsatisfied /
+//     store.ErrAttemptCapExhausted (ClaimTask's own named FR3/FR5/FR7
+//     rejections, task_claim.go) -- the task exists, but is not
+//     claimable right now                                             -> 409
 //   - a scope-qualified unique-constraint violation                   -> 409
 //   - anything else (a genuine store failure)                         -> 500
 //
@@ -93,6 +97,10 @@ func writeStoreError(w http.ResponseWriter, err error) {
 		errors.Is(err, store.ErrSelfDependency),
 		errors.Is(err, store.ErrDependencyCycle):
 		writeJSONError(w, http.StatusBadRequest, err.Error())
+	case errors.Is(err, store.ErrTaskAlreadyClaimed),
+		errors.Is(err, store.ErrDependenciesUnsatisfied),
+		errors.Is(err, store.ErrAttemptCapExhausted):
+		writeJSONError(w, http.StatusConflict, err.Error())
 	case isUniqueViolation(err):
 		writeJSONError(w, http.StatusConflict, "an entity with this name already exists in this scope")
 	default:
