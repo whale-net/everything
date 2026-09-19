@@ -48,6 +48,16 @@ func (app *App) handleActivityLiveSSE(w http.ResponseWriter, r *http.Request) {
 	defer cancel()
 	r = r.WithContext(ctx)
 
+	// Attach the user token for this initial ListServers call -- mirrors
+	// activityLiveFragment.Render's per-delivery re-acquisition below; without
+	// it the per-RPC credentials have no token in context and every call
+	// fails UNAUTHENTICATED.
+	if token, tokenErr := app.auth.GetAccessToken(r); tokenErr == nil {
+		ctx = grpcauth.WithUserToken(ctx, token)
+	} else {
+		log.Printf("WARNING: error acquiring access token for live activity stream: %v", tokenErr)
+	}
+
 	servers, err := app.grpc.ListServers(ctx)
 	if err != nil {
 		log.Printf("WARNING: error fetching servers for live activity stream: %v", err)

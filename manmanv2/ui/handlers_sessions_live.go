@@ -37,6 +37,16 @@ func (app *App) handleDeploymentsLiveSSE(w http.ResponseWriter, r *http.Request)
 	defer cancel()
 	r = r.WithContext(ctx)
 
+	// Attach the user token for this initial ListServers call -- mirrors
+	// deploymentRowFragment.Render's per-delivery re-acquisition below; without
+	// it the per-RPC credentials have no token in context and every call
+	// fails UNAUTHENTICATED.
+	if token, tokenErr := app.auth.GetAccessToken(r); tokenErr == nil {
+		ctx = grpcauth.WithUserToken(ctx, token)
+	} else {
+		log.Printf("WARNING: error acquiring access token for live deployment stream: %v", tokenErr)
+	}
+
 	// Topic set (FR7): exactly the SGCs handleSessions would render for the
 	// request's selected-server scope, via the helper shared with it
 	// (handlers_sessions.go) so the two can't drift.
