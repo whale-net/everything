@@ -18,16 +18,11 @@ go_library(
     ],
 )
 
-# Scaffold-phase placeholder unit test (issue #2721) -- proves Assemble's
-# stub contract only; full coverage lands in this task's Testing phase.
+# Implementation-phase placeholder unit test (issue #2721) -- full unit
+# coverage of Assemble's real logic lands in this task's Testing phase.
 go_test(
     name = "work_test",
     srcs = ["payload_test.go"],
-    deps = [
-        ":work",
-        "@com_github_google_uuid//:uuid",
-        "@com_github_stretchr_testify//assert",
-    ],
 )
 
 # Real-Postgres integration coverage placeholder (issue #2721's Testing

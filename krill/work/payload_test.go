@@ -1,25 +1,13 @@
-// Scaffold-phase placeholder (issue #2721) -- full red/green coverage of
-// Assemble's real behavior (NFR4's byte-equal slice regression test, the
-// empty-dependency-list case, etc.) lands in this task's Testing phase.
-// This file only proves the Scaffold-phase stub's own contract: Assemble
-// returns ErrNotImplemented, and the package compiles/links against
-// //krill/slice and //krill/store as //krill/work:work.
+// Implementation-phase placeholder (issue #2721) -- Assemble now has real
+// logic (payload.go), so this file no longer asserts the Scaffold-phase
+// stub's ErrNotImplemented contract. Full unit coverage of Assemble's
+// Testing-phase criteria (issue #2721's Testing section) lands here in
+// this task's Testing phase, alongside payload_integration_test.go's
+// real-Postgres coverage.
 package work_test
 
-import (
-	"context"
-	"testing"
+import "testing"
 
-	"github.com/google/uuid"
-	"github.com/stretchr/testify/assert"
-
-	"github.com/whale-net/everything/krill/work"
-)
-
-func TestAssemble_ScaffoldStubNotImplemented(t *testing.T) {
-	a := work.NewAssembler(nil, nil)
-
-	_, err := a.Assemble(context.Background(), uuid.New(), uuid.New())
-
-	assert.ErrorIs(t, err, work.ErrNotImplemented)
+func TestAssemble_Placeholder(t *testing.T) {
+	t.Skip("full coverage added in this task's Testing phase (issue #2721)")
 }

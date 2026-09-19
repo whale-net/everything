@@ -17,7 +17,7 @@ package work
 
 import (
 	"context"
-	"errors"
+	"fmt"
 
 	"github.com/google/uuid"
 
@@ -36,10 +36,13 @@ import (
 const SchemaVersion = "1"
 
 // TaskDep is one entry of TaskView's declared dependency list (FR2, issue
-// #2720): the id of a task this task depends on, in
-// store.TaskStore.ListDependencies' declaration order.
+// #2720): DependsOnTaskID is the id of a task this task depends on, in
+// store.TaskStore.ListDependencies' declaration order. Named
+// DependsOnTaskID rather than a bare TaskID -- which store.TaskDependency
+// already uses for the *owning* task -- so a Dependencies entry is never
+// misread as the payload's own Task.ID.
 type TaskDep struct {
-	TaskID uuid.UUID `json:"task_id"`
+	DependsOnTaskID uuid.UUID `json:"depends_on_task_id"`
 }
 
 // TaskView is Payload's work-axis half: the task's own fields plus its
@@ -68,12 +71,6 @@ type Payload struct {
 	Task TaskView `json:"task"`
 }
 
-// ErrNotImplemented is Assembler.Assemble's Scaffold-phase placeholder
-// return (issue #2721) -- real assembly logic (resolving the task's
-// milestone_id to its spec slice via slice.Querier, then attaching the
-// work-axis fields) lands in this task's Implementation phase.
-var ErrNotImplemented = errors.New("krill/work: Assemble not implemented yet")
-
 // Assembler builds Payload values from krill/store and krill/slice --
 // mirrors slice.Querier's own shape (a thin struct wrapping the store it
 // reads from) so the later MCP tool and HTTP handler (LB7) have one call
@@ -89,15 +86,68 @@ func NewAssembler(tasks store.TaskStore, querier *slice.Querier) *Assembler {
 }
 
 // Assemble builds taskID's Payload (FR4, FR10):
-//  1. Load the `task` row (scope-qualified).
+//  1. Load the `task` row (scope-qualified) -- store.TaskStore.
+//     GetTaskByID takes no scope argument (task ids are globally unique
+//     surrogates), so a scopeID mismatch is checked explicitly below and
+//     rejected identically to an unknown taskID (NFR1): a cross-scope
+//     task id must never leak another scope's payload.
 //  2. Resolve the task's delivery reference (milestone_id) to the spec
-//     slice it implies, and obtain that slice by calling slice.Querier --
-//     never by issuing its own SELECTs against any spec-axis table.
+//     slice it implies, by calling slice.Querier.GetMilestoneDeliversSlice
+//     -- never by issuing its own SELECTs against any spec-axis table
+//     (NFR4). Works identically whether milestone_id names a milestone or
+//     a milepebble (both are `milestone_ref` rows).
 //  3. Attach the work-axis fields: task id, current lane, lane sequence,
 //     dependency list (store.TaskStore.ListDependencies), attempt number.
-//
-// Scaffold-phase stub: returns ErrNotImplemented unconditionally. This
-// task's Implementation phase fills in the three steps above.
 func (a *Assembler) Assemble(ctx context.Context, scopeID, taskID uuid.UUID) (Payload, error) {
-	return Payload{}, ErrNotImplemented
+	task, err := a.tasks.GetTaskByID(ctx, taskID)
+	if err != nil {
+		return Payload{}, fmt.Errorf("get task: %w", err)
+	}
+	if task.ScopeID != scopeID {
+		// A cross-scope taskID is rejected identically to an unknown one
+		// (NFR1) -- never leaks whether taskID belongs to another scope,
+		// mirroring krill/api/handlers/pointer.go's own cross-scope check.
+		return Payload{}, fmt.Errorf("%w: task id %s", store.ErrNotFound, taskID)
+	}
+
+	sliceDoc, err := a.querier.GetMilestoneDeliversSlice(ctx, task.MilestoneID)
+	if err != nil {
+		return Payload{}, fmt.Errorf("get milestone delivers slice: %w", err)
+	}
+
+	deps, err := a.tasks.ListDependencies(ctx, scopeID, taskID)
+	if err != nil {
+		return Payload{}, fmt.Errorf("list task dependencies: %w", err)
+	}
+	// Always a non-nil slice, even when deps is empty -- FR4's dependency
+	// list must marshal as `[]`, never `null` (Dependencies carries no
+	// `omitempty`).
+	taskDeps := make([]TaskDep, len(deps))
+	for i, d := range deps {
+		taskDeps[i] = TaskDep{DependsOnTaskID: d.DependsOnTaskID}
+	}
+
+	laneSequence := make([]string, len(task.LaneSequence))
+	for i, lane := range task.LaneSequence {
+		laneSequence[i] = string(lane)
+	}
+
+	var body string
+	if task.Body != nil {
+		body = *task.Body
+	}
+
+	return Payload{
+		Slice: sliceDoc,
+		Task: TaskView{
+			ID:            task.ID,
+			MilestoneID:   task.MilestoneID,
+			Title:         task.Title,
+			Body:          body,
+			CurrentLane:   string(task.CurrentLane),
+			LaneSequence:  laneSequence,
+			Dependencies:  taskDeps,
+			AttemptNumber: task.AttemptCount,
+		},
+	}, nil
 }
