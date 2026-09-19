@@ -8,7 +8,9 @@
 // own Testing-phase task is what actually exercises them. The
 // RecordNote/ListNotesForTask/ListNotesForEntity stubs exist for the same
 // reason now that task_note.go (issue #2727) widens it again --
-// task_note_test.go's own later Testing-phase task exercises them.
+// task_note_test.go's own later Testing-phase task exercises them. The
+// Heartbeat stub exists for the same reason now that task_lease.go (issue
+// #2723) widens it once more -- task_lease_test.go exercises it.
 package handlers_test
 
 import (
@@ -41,6 +43,10 @@ type fakeTaskStore struct {
 	gotClaimParams     store.ClaimTaskParams
 	getClaimByIDResult store.Claim
 	getClaimByIDErr    error
+
+	heartbeatErr       error
+	heartbeatResult    store.LeaseState
+	gotHeartbeatParams store.HeartbeatParams
 
 	recordNoteErr         error
 	gotRecordNoteParams   store.RecordNoteParams
@@ -96,6 +102,14 @@ func (f *fakeTaskStore) ClaimTask(ctx context.Context, params store.ClaimTaskPar
 
 func (f *fakeTaskStore) GetClaimByID(ctx context.Context, id uuid.UUID) (store.Claim, error) {
 	return f.getClaimByIDResult, f.getClaimByIDErr
+}
+
+func (f *fakeTaskStore) Heartbeat(ctx context.Context, params store.HeartbeatParams) (store.LeaseState, error) {
+	f.gotHeartbeatParams = params
+	if f.heartbeatErr != nil {
+		return store.LeaseState{}, f.heartbeatErr
+	}
+	return f.heartbeatResult, nil
 }
 
 func (f *fakeTaskStore) RecordNote(ctx context.Context, params store.RecordNoteParams) (store.Note, error) {

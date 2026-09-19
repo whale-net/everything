@@ -217,6 +217,17 @@ type TaskStore interface {
 	// current claim/lease state for the by-id payload (FR10).
 	GetClaimByID(ctx context.Context, id uuid.UUID) (Claim, error)
 
+	// Heartbeat is FR6's lease extension (task_lease.go, issue #2723): in
+	// one transaction that row-locks the same `task` row ClaimTask does,
+	// verifies params.ClaimID is the task's current, live claim (rejecting
+	// with ErrClaimNotCurrent and writing nothing otherwise -- the
+	// anti-zombie rule), appends one append-only `task_lease_event` row,
+	// and updates task.lease_expires_at in place. Records no attempt --
+	// see task_lease.go's own doc comment for the full semantic,
+	// including the expired-but-not-yet-reclaimed lease's chosen
+	// behavior.
+	Heartbeat(ctx context.Context, params HeartbeatParams) (LeaseState, error)
+
 	// RecordNote appends one `task_note` row (task_note.go, issue #2727,
 	// FR11/FR12): a flat, immutable note against exactly one target --
 	// params.TaskID, or params.EntityKind+params.EntityID naming a

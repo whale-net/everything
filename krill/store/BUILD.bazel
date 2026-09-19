@@ -48,6 +48,7 @@ go_library(
         "task.go",
         "task_claim.go",
         "task_dependency.go",
+        "task_lease.go",
         "task_note.go",
     ],
     importpath = "github.com/whale-net/everything/krill/store",
@@ -402,6 +403,20 @@ go_test(
         ":store",
         "@com_github_stretchr_testify//assert",
         "@com_github_stretchr_testify//require",
+    ],
+)
+
+# NFR2 structural check (issue #2723's own Validation item): task_lease.go
+# -- the only file that writes to `task_lease_event` -- must never issue an
+# UPDATE/DELETE/TRUNCATE naming that table (read back via `data`, mirroring
+# milestone_status_nfr2_test.go's own technique). No database needed --
+# part of `bazel test //...` (no "manual"/"integration" tag).
+go_test(
+    name = "task_lease_nfr2_test",
+    srcs = ["task_lease_nfr2_test.go"],
+    data = ["task_lease.go"],
+    deps = [
+        "@com_github_stretchr_testify//assert",
     ],
 )
 
@@ -921,6 +936,53 @@ go_test(
         "task_claim_integration_test.go",
         "task_dependency_integration_test.go",
         "task_integration_test.go",
+    ],
+    gotags = ["integration"],
+    tags = [
+        "external",
+        "integration",
+        "manual",
+        "no-cache",
+        "no-sandbox",
+        "requires-network",
+    ],
+    deps = [
+        ":store",
+        "//krill/migrate/schema",
+        "//libs/go/dbtest",
+        "//libs/go/migrate",
+        "@com_github_google_uuid//:uuid",
+        "@com_github_jackc_pgx_v5//stdlib",
+        "@com_github_stretchr_testify//assert",
+        "@com_github_stretchr_testify//require",
+    ],
+)
+
+# Real-Postgres coverage for TaskStore.Heartbeat (task_lease.go, migration
+# 015, issue #2723's Testing section, FR6): the successful-heartbeat path,
+# repeated heartbeats each appending their own row without mutating an
+# earlier one (NFR2), a stale ClaimID rejected with ErrClaimNotCurrent, a
+# claim already released rejected the same way, the zombie-run scenario
+# (task reclaimed by a second claimant), the expired-but-not-yet-reclaimed
+# lease's documented semantic (still extends), and NFR3's two-subject
+# attribution on task_lease_event. Shares task_integration_test.go's
+# test-store/test-scope/test-world/subject helpers and
+# task_claim_integration_test.go's claimTestSession/countRows helpers
+# rather than duplicating them, mirroring task_claim_integration_test.go's
+# own choice. Deliberately NOT part of `bazel test //...` -- see
+# //libs/go/dbtest's README for the full rationale.
+#
+# Run it explicitly (requires a working Docker daemon):
+#   bazel test //krill/store:task_lease_integration_test --test_output=all
+go_test(
+    name = "task_lease_integration_test",
+    size = "large",
+    timeout = "long",
+    srcs = [
+        "task_claim_integration_test.go",
+        "task_dependency_integration_test.go",
+        "task_integration_test.go",
+        "task_lease_integration_test.go",
     ],
     gotags = ["integration"],
     tags = [
