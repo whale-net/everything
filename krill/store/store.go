@@ -7,8 +7,10 @@ import "github.com/jackc/pgx/v5/pgxpool"
 // `non_goal` (migration 002), `milestone_ref` and `entity_milestone`
 // (migration 004, issue #2492), `scope` (migration 001, read-only here),
 // `pointer_artifact` (migration 005, issue #2496), `design_session`
-// and `revision_event` (migration 008, issue #2542), and
-// `import_completion` (migration 009, issue #2548). MediatedWrites()
+// and `revision_event` (migration 008, issue #2542),
+// `import_completion` (migration 009, issue #2548), and the milestone
+// authoring fields plus `milestone_deferral` (migration 010, issue
+// #2683). MediatedWrites()
 // (mediated.go, issue #2546) is not a new table: it writes `feature`/
 // `requirement`/`revision_event` rows this same Store already owns,
 // through one shared transaction instead of per-entity accessor calls.
@@ -55,6 +57,15 @@ func (s *Store) Slices() SliceStore { return sliceStore{pool: s.pool} }
 
 // Milestones returns the MilestoneStore implementation.
 func (s *Store) Milestones() MilestoneStore { return milestoneStore{pool: s.pool} }
+
+// MilestoneAuthoring returns the MilestoneAuthoringStore implementation --
+// the outcome/FR-budget/delivery-axis/deferral authoring surface
+// (migration 010, issue #2683, FR1, FR2) that sits alongside
+// MilestoneStore's bare importer-facing milestone_ref/entity_milestone
+// accessor.
+func (s *Store) MilestoneAuthoring() MilestoneAuthoringStore {
+	return milestoneAuthoringStore{pool: s.pool}
+}
 
 // Amend returns the AmendStore implementation -- the SCD2 close-and-open
 // write path (FR12, issue #2493) for Requirement and LoadBearingDecision.

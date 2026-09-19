@@ -165,31 +165,106 @@ type NonGoal struct {
 	ValidTo    *time.Time
 }
 
+// MilestoneKind discriminates `milestone_ref.kind` (migration 010, issue
+// #2683) -- today CHECK-constrained to the one value below; a later issue
+// on this board (milepebbles, backlog) widens the CHECK and adds sibling
+// constants here. Every existing consumer of MilestoneRef
+// (ListRefsByProduct, krill/render, krill/importer) must filter on this
+// field rather than assuming every row is a milestone.
+type MilestoneKind string
+
+const MilestoneKindMilestone MilestoneKind = "milestone"
+
 // MilestoneRef is one row of `milestone_ref` (migration 004, issue #2492,
-// FR17, LB6) -- a bare reference to an `M<n>` identifier a source document
-// names. Deliberately thin: no status, no milepebble breakdown, no
-// authoring fields -- those are M3's (C13, C28); see migration
-// 004_milestone_assoc.up.sql's LB6 note. Single parent: Product.ID. Not
-// SCD2 (LB3) -- see that migration's comment for why.
+// FR17, LB6; authoring fields added by migration 010, issue #2683, FR1/
+// FR2). Originally a bare reference to an `M<n>` identifier a source
+// document names -- Kind/Outcome/FRBudget/Position/CreatedByActing/
+// CreatedByOnBehalfOf are this task's addition, deliberately still no
+// milepebble breakdown (a later issue on this board). Single parent:
+// Product.ID. Not SCD2 (LB3) -- see 004_milestone_assoc.up.sql's and
+// 010_milestone_authoring.up.sql's comments for why.
 type MilestoneRef struct {
 	ID        uuid.UUID
 	ScopeID   uuid.UUID
 	ProductID uuid.UUID
 	Name      string // the bare "M<n>" identifier, e.g. "M1"
 	CreatedAt time.Time
+
+	// Kind discriminates this row's own shape (migration 010) -- see
+	// MilestoneKind's doc comment. Every row from before this task
+	// defaults to MilestoneKindMilestone.
+	Kind MilestoneKind
+
+	// Outcome is the milestone's outcome sentence (FR1), NULL until
+	// CreateMilestone/SetOutcome sets it.
+	Outcome *string
+
+	// FRBudget is the milestone's FR budget (FR2), NULL until
+	// CreateMilestone/SetFRBudget sets it.
+	FRBudget *int
+
+	// Position carries sibling order among a Product's milestones (FR7),
+	// explicitly not identity -- see this package's doc comment.
+	Position int
+
+	// CreatedByActing/CreatedByOnBehalfOf are the LB4 subject pair
+	// recorded when this row was created through the authoring path
+	// (CreateMilestone). Both are nil for a row krill/importer's
+	// GetOrCreateRef created -- an import has no session-attributable
+	// actor to record; see migration 010's LB4 note for why this column
+	// pair is nullable, unlike pointer_artifact's.
+	CreatedByActing     *Subject
+	CreatedByOnBehalfOf *Subject
 }
 
-// EntityMilestone is one row of `entity_milestone` (migration 004) -- the
+// MilestoneRelation discriminates an `entity_milestone` row's delivery-axis
+// meaning (migration 010, issue #2683, LB6): a "Delivers: C13, C28" line
+// and a "Must not foreclose: LB2, LB6, LB7" line are both entity_milestone
+// rows, distinguished only by this column -- never a second association
+// table, and never a column on the spec entity itself.
+type MilestoneRelation string
+
+const (
+	MilestoneRelationDelivers         MilestoneRelation = "delivers"
+	MilestoneRelationMustNotForeclose MilestoneRelation = "must_not_foreclose"
+)
+
+// MilestoneDeferral is one row of `milestone_deferral` (migration 010,
+// issue #2683, FR1) -- one deliberately-deferred item cited under a
+// milestone's authoring content. Single parent: MilestoneRef.ID (a real
+// DB-enforced REFERENCES -- milestone_ref is not SCD2, so its id is
+// table-wide unique). Not SCD2 (LB3): a deferral is a fact, not a value
+// that changes over time -- see migration 010's comment. Destination is
+// never empty: FR1 requires every deferred entry to cite where it went.
+type MilestoneDeferral struct {
+	ID          uuid.UUID
+	ScopeID     uuid.UUID
+	MilestoneID uuid.UUID
+	Body        string // what was deferred
+	Destination string // the milestone or "Later" capability bucket it moved to
+	Position    int
+	CreatedAt   time.Time
+
+	// CreatedByActing/CreatedByOnBehalfOf are always populated (NFR4) --
+	// every write path onto this table is the new AddDeferral method,
+	// which always has a real caller session.
+	CreatedByActing     Subject
+	CreatedByOnBehalfOf Subject
+}
+
+// EntityMilestone is one row of `entity_milestone` (migration 004; the
+// Relation discriminator added by migration 010, issue #2683, LB6) -- the
 // delivery-axis association LB6 specifies, keyed `(entity_id,
-// milestone_id)`. EntityID is a spec entity's immutable `id` (to date,
-// always a Feature.ID for a `Cn` citation or a LoadBearingDecision.ID for
-// an `LBn` citation) -- never a `milestone_id` column added to that
+// milestone_id, relation)`. EntityID is a spec entity's immutable `id` (to
+// date, always a Feature.ID for a `Cn` citation or a LoadBearingDecision.ID
+// for an `LBn` citation) -- never a `milestone_id` column added to that
 // entity's own table. Not SCD2 (LB3).
 type EntityMilestone struct {
 	ID          uuid.UUID
 	ScopeID     uuid.UUID
 	EntityID    uuid.UUID
 	MilestoneID uuid.UUID
+	Relation    MilestoneRelation
 	CreatedAt   time.Time
 }
 

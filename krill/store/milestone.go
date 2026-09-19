@@ -2,6 +2,7 @@ package store
 
 import (
 	"context"
+	"database/sql"
 	"errors"
 	"fmt"
 
@@ -50,13 +51,19 @@ type MilestoneStore interface {
 	ListAssociationsByMilestone(ctx context.Context, milestoneID uuid.UUID) ([]EntityMilestone, error)
 
 	// ListRefsByProduct returns every MilestoneRef under (scopeID,
-	// productID), ordered by Name -- a pure read, added for the renderer
-	// (issue #2495, FR13): krill/render enumerates a product's milestones
-	// this way to rebuild product/03-roadmap.md, then resolves each
-	// milestone's own Delivers/Must-not-foreclose lists via
-	// ListAssociationsByMilestone above. Name order is lexicographic
-	// ("M1" < "M10" < "M2"); callers that need numeric milestone order
-	// (krill/render does) re-sort by the parsed integer suffix themselves.
+	// productID) whose Kind is MilestoneKindMilestone, ordered by Name --
+	// a pure read, added for the renderer (issue #2495, FR13): krill/render
+	// enumerates a product's milestones this way to rebuild
+	// product/03-roadmap.md, then resolves each milestone's own Delivers/
+	// Must-not-foreclose lists via ListAssociationsByMilestone above. Name
+	// order is lexicographic ("M1" < "M10" < "M2"); callers that need
+	// numeric milestone order (krill/render does) re-sort by the parsed
+	// integer suffix themselves.
+	//
+	// Kind-filtered as of migration 010 (issue #2683): a later kind
+	// (milepebble, backlog bucket) must never silently appear where a
+	// caller asked for milestones -- see MilestoneKind's doc comment
+	// (models.go).
 	ListRefsByProduct(ctx context.Context, scopeID, productID uuid.UUID) ([]MilestoneRef, error)
 }
 
@@ -64,12 +71,41 @@ type milestoneStore struct{ pool *pgxpool.Pool }
 
 var _ MilestoneStore = milestoneStore{}
 
-const milestoneRefColumns = `id, scope_id, product_id, name, created_at`
+// milestoneRefColumns covers both the bare migration-004 columns and the
+// authoring columns migration 010 added (issue #2683): Kind/Outcome/
+// FRBudget/Position plus the nullable LB4 subject pair -- see
+// scanMilestoneRef and MilestoneRef's doc comment (models.go) for why the
+// subject-pair columns may be NULL.
+const milestoneRefColumns = `id, scope_id, product_id, name, kind, outcome, fr_budget, position, ` +
+	`created_by_acting_iss, created_by_acting_sub, created_by_acting_kind, ` +
+	`created_by_on_behalf_of_iss, created_by_on_behalf_of_sub, created_by_on_behalf_of_kind, created_at`
 
 func scanMilestoneRef(row pgx.Row) (MilestoneRef, error) {
 	var m MilestoneRef
-	err := row.Scan(&m.ID, &m.ScopeID, &m.ProductID, &m.Name, &m.CreatedAt)
-	return m, err
+	var kind string
+	var actingIss, actingSub, actingKind sql.NullString
+	var onBehalfOfIss, onBehalfOfSub, onBehalfOfKind sql.NullString
+	err := row.Scan(
+		&m.ID, &m.ScopeID, &m.ProductID, &m.Name, &kind, &m.Outcome, &m.FRBudget, &m.Position,
+		&actingIss, &actingSub, &actingKind,
+		&onBehalfOfIss, &onBehalfOfSub, &onBehalfOfKind,
+		&m.CreatedAt,
+	)
+	if err != nil {
+		return MilestoneRef{}, err
+	}
+	m.Kind = MilestoneKind(kind)
+	// The importer's GetOrCreateRef path writes no subject pair (no
+	// session to attribute to) -- both sides are NULL together, never
+	// independently, since every writer either sets both (CreateMilestone)
+	// or neither (GetOrCreateRef).
+	if actingIss.Valid {
+		m.CreatedByActing = &Subject{Iss: actingIss.String, Sub: actingSub.String, Kind: SubjectKind(actingKind.String)}
+	}
+	if onBehalfOfIss.Valid {
+		m.CreatedByOnBehalfOf = &Subject{Iss: onBehalfOfIss.String, Sub: onBehalfOfSub.String, Kind: SubjectKind(onBehalfOfKind.String)}
+	}
+	return m, nil
 }
 
 func (s milestoneStore) GetOrCreateRef(ctx context.Context, scopeID, productID uuid.UUID, name string) (MilestoneRef, error) {
@@ -114,11 +150,20 @@ func (s milestoneStore) GetOrCreateRef(ctx context.Context, scopeID, productID u
 }
 
 func (s milestoneStore) AddAssociation(ctx context.Context, scopeID, entityID, milestoneID uuid.UUID) error {
+	// relation is written explicitly as MilestoneRelationDelivers -- the
+	// importer (FR16) has no concept of "must not foreclose", so every row
+	// it writes is a Delivers row, same meaning this column defaults to
+	// (migration 010's comment). The ON CONFLICT target must name every
+	// column of entity_milestone_entity_milestone_idx (migration 010
+	// widened it to (entity_id, milestone_id, relation)) -- naming only
+	// the first two, as this method did before that migration, is no
+	// longer a valid arbiter and fails at the database with "no unique or
+	// exclusion constraint matching the ON CONFLICT specification".
 	_, err := s.pool.Exec(ctx, `
-		INSERT INTO entity_milestone (scope_id, entity_id, milestone_id)
-		VALUES ($1, $2, $3)
-		ON CONFLICT (entity_id, milestone_id) DO NOTHING
-	`, scopeID, entityID, milestoneID)
+		INSERT INTO entity_milestone (scope_id, entity_id, milestone_id, relation)
+		VALUES ($1, $2, $3, $4)
+		ON CONFLICT (entity_id, milestone_id, relation) DO NOTHING
+	`, scopeID, entityID, milestoneID, string(MilestoneRelationDelivers))
 	if err != nil {
 		return fmt.Errorf("insert entity_milestone: %w", err)
 	}
@@ -127,7 +172,7 @@ func (s milestoneStore) AddAssociation(ctx context.Context, scopeID, entityID, m
 
 func (s milestoneStore) ListAssociationsByMilestone(ctx context.Context, milestoneID uuid.UUID) ([]EntityMilestone, error) {
 	rows, err := s.pool.Query(ctx, `
-		SELECT id, scope_id, entity_id, milestone_id, created_at
+		SELECT id, scope_id, entity_id, milestone_id, relation, created_at
 		FROM entity_milestone
 		WHERE milestone_id = $1
 		ORDER BY created_at
@@ -140,9 +185,11 @@ func (s milestoneStore) ListAssociationsByMilestone(ctx context.Context, milesto
 	var associations []EntityMilestone
 	for rows.Next() {
 		var m EntityMilestone
-		if err := rows.Scan(&m.ID, &m.ScopeID, &m.EntityID, &m.MilestoneID, &m.CreatedAt); err != nil {
+		var relation string
+		if err := rows.Scan(&m.ID, &m.ScopeID, &m.EntityID, &m.MilestoneID, &relation, &m.CreatedAt); err != nil {
 			return nil, fmt.Errorf("scan entity_milestone: %w", err)
 		}
+		m.Relation = MilestoneRelation(relation)
 		associations = append(associations, m)
 	}
 	return associations, rows.Err()
@@ -152,9 +199,9 @@ func (s milestoneStore) ListRefsByProduct(ctx context.Context, scopeID, productI
 	rows, err := s.pool.Query(ctx, `
 		SELECT `+milestoneRefColumns+`
 		FROM milestone_ref
-		WHERE scope_id = $1 AND product_id = $2
+		WHERE scope_id = $1 AND product_id = $2 AND kind = $3
 		ORDER BY name
-	`, scopeID, productID)
+	`, scopeID, productID, string(MilestoneKindMilestone))
 	if err != nil {
 		return nil, fmt.Errorf("list milestone_ref by product: %w", err)
 	}

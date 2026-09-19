@@ -11,6 +11,7 @@ go_library(
     name = "tools",
     srcs = [
         "design.go",
+        "milestone.go",
         "slice.go",
     ],
     importpath = "github.com/whale-net/everything/krill/mcp/tools",
@@ -56,6 +57,48 @@ go_test(
         "//krill/mcp/server",
         "//krill/migrate/schema",
         "//krill/slice",
+        "//krill/store",
+        "//libs/go/dbtest",
+        "//libs/go/mcpauth",
+        "//libs/go/migrate",
+        "//libs/go/whagent",
+        "@com_github_google_uuid//:uuid",
+        "@com_github_jackc_pgx_v5//pgxpool",
+        "@com_github_jackc_pgx_v5//stdlib",
+        "@com_github_modelcontextprotocol_go_sdk//mcp",
+        "@com_github_stretchr_testify//assert",
+        "@com_github_stretchr_testify//require",
+    ],
+)
+
+# Real Postgres + real HTTP-transport MCP client integration test for the
+# milestone-authoring surface (issue #2683's Testing section: add_delivers/
+# add_must_not_foreclose/add_deferral exercised through the MCP tool
+# registration/dispatch layer, plus an end-to-end create_milestone ->
+# add_delivers -> add_must_not_foreclose -> add_deferral -> get_milestone
+# round trip). Deliberately NOT part of `bazel test //...` -- see
+# //libs/go/dbtest's README, mirrored by :design_test above.
+#
+# Run it explicitly (requires a working Docker daemon):
+#   bazel test //krill/mcp/tools:milestone_test --test_output=all
+go_test(
+    name = "milestone_test",
+    size = "large",
+    timeout = "long",
+    srcs = ["milestone_test.go"],
+    gotags = ["integration"],
+    tags = [
+        "external",
+        "integration",
+        "manual",
+        "no-cache",
+        "no-sandbox",
+        "requires-network",
+    ],
+    deps = [
+        ":tools",
+        "//krill/mcp/server",
+        "//krill/migrate/schema",
         "//krill/store",
         "//libs/go/dbtest",
         "//libs/go/mcpauth",

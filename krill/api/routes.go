@@ -16,13 +16,15 @@ import (
 // #2489), the four M1 scoped-slice query endpoints (FR5-FR9, issue #2491),
 // the fifth, session-scoped granularity below (FR5, M2, issue #2544), the
 // history endpoints below (FR11, issue #2493), GET /design-sessions/{id}
-// (issue #2543), and GET /design-sessions/{id}/open-questions (issue #2545,
-// FR6) are ungated; every entity
+// (issue #2543), GET /design-sessions/{id}/open-questions (issue #2545,
+// FR6), and GET /milestones/{id} (issue #2683, FR1/FR2) are ungated; every
+// entity
 // create/attach endpoint (issue #2490, FR1/FR2/FR4), the two amend
 // endpoints below (FR12, issue #2493), the pointer-artifact create
 // endpoint (issue #2496, FR20), POST /design-sessions and POST
-// /design-sessions/{id}/revision-events (issue #2543, FR1-FR4/FR8), and
-// POST /design-sessions/{id}/propose (issue #2546, FR9/FR10/NFR2) are
+// /design-sessions/{id}/revision-events (issue #2543, FR1-FR4/FR8), POST
+// /design-sessions/{id}/propose (issue #2546, FR9/FR10/NFR2), and the five
+// POST /milestones* endpoints below (issue #2683, FR1/FR2, LB4) are
 // wrapped with handlers.RequireSession (gate.go) -- no write path is
 // reachable without a session minted by `init`. Read paths never require a
 // session (root plan issue #2485). Import (FR16) is a later task's route,
@@ -46,6 +48,13 @@ func setupRoutes(mux *http.ServeMux, pool *pgxpool.Pool, githubToken string) {
 	mux.Handle("POST /requirements", gate(handlers.CreateRequirementHandler(entities.Requirements())))
 	mux.Handle("POST /load-bearing-decisions", gate(handlers.AttachLoadBearingDecisionHandler(entities.Decisions())))
 	mux.Handle("POST /pointer-artifacts", gate(handlers.CreatePointerArtifactHandler(entities.Products(), entities.Scopes(), entities.PointerArtifacts(), forgeClient)))
+
+	mux.Handle("POST /milestones", gate(handlers.CreateMilestoneHandler(entities.MilestoneAuthoring())))
+	mux.Handle("POST /milestones/{id}/fr-budget", gate(handlers.SetFRBudgetHandler(entities.MilestoneAuthoring())))
+	mux.Handle("POST /milestones/{id}/delivers", gate(handlers.AddDeliversHandler(entities.MilestoneAuthoring())))
+	mux.Handle("POST /milestones/{id}/must-not-foreclose", gate(handlers.AddMustNotForecloseHandler(entities.MilestoneAuthoring())))
+	mux.Handle("POST /milestones/{id}/deferrals", gate(handlers.AddDeferralHandler(entities.MilestoneAuthoring())))
+	mux.HandleFunc("GET /milestones/{id}", handlers.GetMilestoneHandler(entities.MilestoneAuthoring()))
 
 	mux.Handle("POST /design-sessions", gate(handlers.OpenDesignSessionHandler(entities.DesignSessions())))
 	mux.HandleFunc("GET /design-sessions/{id}", handlers.GetDesignSessionHandler(entities.DesignSessions(), entities.RevisionEvents()))
