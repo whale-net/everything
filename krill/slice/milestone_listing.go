@@ -21,6 +21,7 @@ package slice
 import (
 	"context"
 	"fmt"
+	"sort"
 
 	"github.com/google/uuid"
 
@@ -113,5 +114,199 @@ type DeliveryListing struct {
 // CurrentStatus call per id -- listing N containers must not cost N+1
 // status queries.
 func (q *Querier) ListProductDelivery(ctx context.Context, scopeID, productID uuid.UUID, statuses []store.MilestoneStatus) (DeliveryListing, error) {
-	return DeliveryListing{}, fmt.Errorf("ListProductDelivery: not implemented")
+	milestoneRefs, err := q.store.Milestones().ListRefsByProduct(ctx, scopeID, productID)
+	if err != nil {
+		return DeliveryListing{}, fmt.Errorf("list milestone_ref by product: %w", err)
+	}
+
+	// ListRefsByProduct orders by Name (lexicographic, for the renderer's
+	// own use -- see that method's doc comment); this listing needs
+	// Position order instead, so re-sort here in Go rather than touching
+	// that method's SQL ORDER BY.
+	sort.SliceStable(milestoneRefs, func(i, j int) bool {
+		return milestoneRefs[i].Position < milestoneRefs[j].Position
+	})
+
+	milepebblesByMilestone := make(map[uuid.UUID][]store.MilestoneRef, len(milestoneRefs))
+	statusIDs := make([]uuid.UUID, 0, len(milestoneRefs)*2)
+	for _, m := range milestoneRefs {
+		statusIDs = append(statusIDs, m.ID)
+
+		milepebbles, err := q.store.MilestoneAuthoring().ListMilepebblesByMilestone(ctx, m.ID)
+		if err != nil {
+			return DeliveryListing{}, fmt.Errorf("list milepebbles by milestone %s: %w", m.ID, err)
+		}
+		milepebblesByMilestone[m.ID] = milepebbles
+		for _, mp := range milepebbles {
+			statusIDs = append(statusIDs, mp.ID)
+		}
+	}
+
+	// One batched call for every milestone and milepebble id under
+	// productID (see this method's own doc comment) -- never one
+	// CurrentStatus call per container.
+	statusByID, err := q.store.MilestoneStatus().CurrentStatuses(ctx, statusIDs)
+	if err != nil {
+		return DeliveryListing{}, fmt.Errorf("current statuses: %w", err)
+	}
+
+	matchesFilter := statusMatcher(statuses)
+
+	var entries []MilestoneListingEntry
+	for _, m := range milestoneRefs {
+		milestoneStatus := statusByID[m.ID]
+
+		var milepebbleEntries []MilepebbleListingEntry
+		for _, mp := range milepebblesByMilestone[m.ID] {
+			mpStatus := statusByID[mp.ID]
+			if !matchesFilter(mpStatus) {
+				continue
+			}
+
+			entry, err := q.buildMilepebbleListingEntry(ctx, mp, mpStatus)
+			if err != nil {
+				return DeliveryListing{}, err
+			}
+			milepebbleEntries = append(milepebbleEntries, entry)
+		}
+
+		// A milestone is returned if it itself matches the filter, or if
+		// at least one of its milepebbles does -- see this method's doc
+		// comment for why dropping the parent in that second case would
+		// make the response unreadable.
+		if !matchesFilter(milestoneStatus) && len(milepebbleEntries) == 0 {
+			continue
+		}
+
+		entry, err := q.buildMilestoneListingEntry(ctx, m, milestoneStatus, milepebbleEntries)
+		if err != nil {
+			return DeliveryListing{}, err
+		}
+		entries = append(entries, entry)
+	}
+
+	return DeliveryListing{Milestones: entries}, nil
+}
+
+// statusMatcher returns a predicate reporting whether a given
+// store.MilestoneStatus satisfies statuses -- an empty statuses means
+// "all" (the predicate always reports true), never "none".
+func statusMatcher(statuses []store.MilestoneStatus) func(store.MilestoneStatus) bool {
+	if len(statuses) == 0 {
+		return func(store.MilestoneStatus) bool { return true }
+	}
+	set := make(map[store.MilestoneStatus]struct{}, len(statuses))
+	for _, s := range statuses {
+		set[s] = struct{}{}
+	}
+	return func(s store.MilestoneStatus) bool {
+		_, ok := set[s]
+		return ok
+	}
+}
+
+// milestoneRelationSets splits containerID's own `entity_milestone`
+// associations (store.MilestoneStore.ListAssociationsByMilestone) into
+// Delivers and Must-not-foreclose entity id lists -- the same split
+// store.MilestoneAuthoringStore.GetMilestone already performs, reused
+// here so both call sites agree on which relation wins a row with an
+// unexpected value (default: Delivers).
+func milestoneRelationSets(associations []store.EntityMilestone) (delivers, mustNotForeclose []uuid.UUID) {
+	for _, a := range associations {
+		switch a.Relation {
+		case store.MilestoneRelationMustNotForeclose:
+			mustNotForeclose = append(mustNotForeclose, a.EntityID)
+		default:
+			delivers = append(delivers, a.EntityID)
+		}
+	}
+	return delivers, mustNotForeclose
+}
+
+// buildMilestoneListingEntry assembles one MilestoneListingEntry: m's own
+// Delivers/Must-not-foreclose Documents (via GetEntitySetSlice, LB7), its
+// deferrals, and its already-filtered milepebbles. shippedCount/
+// unshippedCount are populated only when status is
+// store.MilestoneStatusPartiallyComplete (FR10 inlined into FR11, per
+// this package's doc comment on MilestoneListingEntry).
+func (q *Querier) buildMilestoneListingEntry(ctx context.Context, m store.MilestoneRef, status store.MilestoneStatus, milepebbles []MilepebbleListingEntry) (MilestoneListingEntry, error) {
+	associations, err := q.store.Milestones().ListAssociationsByMilestone(ctx, m.ID)
+	if err != nil {
+		return MilestoneListingEntry{}, fmt.Errorf("list associations for milestone %s: %w", m.ID, err)
+	}
+	deliversIDs, mustNotForecloseIDs := milestoneRelationSets(associations)
+
+	delivers, err := q.GetEntitySetSlice(ctx, deliversIDs)
+	if err != nil {
+		return MilestoneListingEntry{}, fmt.Errorf("delivers entity set slice for milestone %s: %w", m.ID, err)
+	}
+	mustNotForeclose, err := q.GetEntitySetSlice(ctx, mustNotForecloseIDs)
+	if err != nil {
+		return MilestoneListingEntry{}, fmt.Errorf("must_not_foreclose entity set slice for milestone %s: %w", m.ID, err)
+	}
+
+	deferrals, err := q.store.MilestoneAuthoring().ListDeferrals(ctx, m.ID)
+	if err != nil {
+		return MilestoneListingEntry{}, fmt.Errorf("list deferrals for milestone %s: %w", m.ID, err)
+	}
+
+	entry := MilestoneListingEntry{
+		ID:               m.ID,
+		Name:             m.Name,
+		Outcome:          m.Outcome,
+		FRBudget:         m.FRBudget,
+		Status:           status,
+		Delivers:         delivers,
+		MustNotForeclose: mustNotForeclose,
+		Deferrals:        deferrals,
+		Milepebbles:      milepebbles,
+	}
+
+	if status == store.MilestoneStatusPartiallyComplete {
+		shipped, unshipped, err := q.store.DeliveryShipments().DeliveryBreakdown(ctx, m.ID)
+		if err != nil {
+			return MilestoneListingEntry{}, fmt.Errorf("delivery breakdown for milestone %s: %w", m.ID, err)
+		}
+		shippedCount, unshippedCount := len(shipped), len(unshipped)
+		entry.ShippedCount = &shippedCount
+		entry.UnshippedCount = &unshippedCount
+	}
+
+	return entry, nil
+}
+
+// buildMilepebbleListingEntry mirrors buildMilestoneListingEntry for one
+// milepebble -- a milepebble carries no Must-not-foreclose associations or
+// deferrals of its own (FR3), so it needs neither of those two calls.
+func (q *Querier) buildMilepebbleListingEntry(ctx context.Context, mp store.MilestoneRef, status store.MilestoneStatus) (MilepebbleListingEntry, error) {
+	associations, err := q.store.Milestones().ListAssociationsByMilestone(ctx, mp.ID)
+	if err != nil {
+		return MilepebbleListingEntry{}, fmt.Errorf("list associations for milepebble %s: %w", mp.ID, err)
+	}
+	deliversIDs, _ := milestoneRelationSets(associations)
+
+	delivers, err := q.GetEntitySetSlice(ctx, deliversIDs)
+	if err != nil {
+		return MilepebbleListingEntry{}, fmt.Errorf("delivers entity set slice for milepebble %s: %w", mp.ID, err)
+	}
+
+	entry := MilepebbleListingEntry{
+		ID:       mp.ID,
+		Name:     mp.Name,
+		Outcome:  mp.Outcome,
+		Status:   status,
+		Delivers: delivers,
+	}
+
+	if status == store.MilestoneStatusPartiallyComplete {
+		shipped, unshipped, err := q.store.DeliveryShipments().DeliveryBreakdown(ctx, mp.ID)
+		if err != nil {
+			return MilepebbleListingEntry{}, fmt.Errorf("delivery breakdown for milepebble %s: %w", mp.ID, err)
+		}
+		shippedCount, unshippedCount := len(shipped), len(unshipped)
+		entry.ShippedCount = &shippedCount
+		entry.UnshippedCount = &unshippedCount
+	}
+
+	return entry, nil
 }

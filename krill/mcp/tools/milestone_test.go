@@ -40,6 +40,7 @@ import (
 	"github.com/whale-net/everything/krill/mcp/server"
 	"github.com/whale-net/everything/krill/mcp/tools"
 	"github.com/whale-net/everything/krill/migrate/schema"
+	"github.com/whale-net/everything/krill/slice"
 	"github.com/whale-net/everything/krill/store"
 	"github.com/whale-net/everything/libs/go/dbtest"
 	"github.com/whale-net/everything/libs/go/mcpauth"
@@ -211,7 +212,7 @@ func TestMCPMilestoneSurface_EndToEnd(t *testing.T) {
 
 	designSrv := server.New()
 	designReg := server.NewRegistry(designSrv)
-	tools.RegisterMilestoneAll(designReg, sessions, entities.MilestoneAuthoring())
+	tools.RegisterMilestoneAll(designReg, sessions, entities.MilestoneAuthoring(), entities.Products(), slice.NewQuerier(entities))
 
 	// Mirrors ../main.go's own construction order exactly (see
 	// design_test.go's identical comment): every milestone write tool is
@@ -449,7 +450,7 @@ func TestMCPMilepebbleSurface_EndToEnd(t *testing.T) {
 
 	designSrv := server.New()
 	designReg := server.NewRegistry(designSrv)
-	tools.RegisterMilestoneAll(designReg, sessions, entities.MilestoneAuthoring())
+	tools.RegisterMilestoneAll(designReg, sessions, entities.MilestoneAuthoring(), entities.Products(), slice.NewQuerier(entities))
 	designSrv.AddReceivingMiddleware(server.WhagentPersonaMiddleware())
 
 	handler := server.NewDualAuthHTTPHandler(server.New(), designSrv, credentials, server.WhagentAuthConfig{
