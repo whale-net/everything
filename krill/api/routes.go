@@ -27,12 +27,13 @@ import (
 // POST /milestones* endpoints below (issue #2683, FR1/FR2, LB4), and the
 // three POST /milestones/{id}/milepebbles, /milepebbles/{id}/delivers,
 // and /milepebbles/{id}/discovered-scope endpoints (issue #2684, FR3/FR4),
-// POST /milestones/{id}/status (issue #2685, FR8/FR9/FR12), and POST
-// /milestones/{id}/shipped (issue #2686, FR10) are wrapped with
-// handlers.RequireSession (gate.go) -- no write path is reachable without
-// a session minted by `init`. Read paths never require a session (root
-// plan issue #2485) -- this includes GET /milestones/{id}/status, GET
-// /milestones/{id}/status/history, GET /milestones/{id}/delivery, and GET
+// POST /milestones/{id}/status (issue #2685, FR8/FR9/FR12), POST
+// /milestones/{id}/shipped (issue #2686, FR10), and POST /delivery/move
+// (issue #2687, FR5) are wrapped with handlers.RequireSession (gate.go) --
+// no write path is reachable without a session minted by `init`. Read
+// paths never require a session (root plan issue #2485) -- this includes
+// GET /milestones/{id}/status, GET /milestones/{id}/status/history, GET
+// /milestones/{id}/delivery, GET /products/{id}/backlog, and GET
 // /products/{id}/delivery (issue #2689, FR11).
 // Import (FR16) is a later task's route, not added here.
 //
@@ -82,6 +83,12 @@ func setupRoutes(mux *http.ServeMux, pool *pgxpool.Pool, githubToken string) {
 	// posture as the status routes just above.
 	mux.Handle("POST /milestones/{id}/shipped", gate(handlers.MarkShippedHandler(entities.DeliveryShipments())))
 	mux.HandleFunc("GET /milestones/{id}/delivery", handlers.GetDeliveryBreakdownHandler(entities.MilestoneStatus(), querier))
+
+	// The delivery-axis re-cut surface (issue #2687, FR5): moving
+	// not-yet-shipped scope to a different milestone, milepebble, or the
+	// backlog bucket, plus reading the bucket's current contents.
+	mux.Handle("POST /delivery/move", gate(handlers.MoveScopeHandler(entities.Recut())))
+	mux.HandleFunc("GET /products/{id}/backlog", handlers.GetBacklogHandler(querier))
 
 	// GET /products/{id}/delivery (issue #2689, FR11, C28) is a whole
 	// product's delivery-axis listing, filterable by `status` -- ungated

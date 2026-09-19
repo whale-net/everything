@@ -14,6 +14,7 @@ go_library(
         "design.go",
         "milestone.go",
         "milestone_status.go",
+        "recut.go",
         "slice.go",
     ],
     importpath = "github.com/whale-net/everything/krill/mcp/tools",
@@ -198,6 +199,50 @@ go_test(
     size = "large",
     timeout = "long",
     srcs = ["delivery_shipment_test.go"],
+    gotags = ["integration"],
+    tags = [
+        "external",
+        "integration",
+        "manual",
+        "no-cache",
+        "no-sandbox",
+        "requires-network",
+    ],
+    deps = [
+        ":tools",
+        "//krill/mcp/server",
+        "//krill/migrate/schema",
+        "//krill/slice",
+        "//krill/store",
+        "//libs/go/dbtest",
+        "//libs/go/mcpauth",
+        "//libs/go/migrate",
+        "//libs/go/whagent",
+        "@com_github_google_uuid//:uuid",
+        "@com_github_jackc_pgx_v5//pgxpool",
+        "@com_github_jackc_pgx_v5//stdlib",
+        "@com_github_modelcontextprotocol_go_sdk//mcp",
+        "@com_github_stretchr_testify//assert",
+        "@com_github_stretchr_testify//require",
+    ],
+)
+
+# Real Postgres + real HTTP-transport MCP client integration test for the
+# delivery-axis re-cut surface (issue #2687's Testing section, FR5):
+# move_delivery_scope -> get_backlog exercised through the MCP tool
+# registration/dispatch layer, including the ErrEntityNotInContainer
+# rejection, a successful move into the backlog bucket, and a cross-check
+# against the store layer directly. Deliberately NOT part of
+# `bazel test //...` -- see //libs/go/dbtest's README, mirrored by
+# :delivery_shipment_test above.
+#
+# Run it explicitly (requires a working Docker daemon):
+#   bazel test //krill/mcp/tools:recut_test --test_output=all
+go_test(
+    name = "recut_test",
+    size = "large",
+    timeout = "long",
+    srcs = ["recut_test.go"],
     gotags = ["integration"],
     tags = [
         "external",

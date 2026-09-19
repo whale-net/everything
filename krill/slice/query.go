@@ -237,6 +237,36 @@ func (q *Querier) GetDeliveryBreakdown(ctx context.Context, milestoneID uuid.UUI
 	return shipped, unshipped, nil
 }
 
+// GetBacklog is FR5/FR6 (issue #2687): productID's backlog bucket
+// contents, as the same typed entities (FeatureEntity/RequirementEntity)
+// every other granularity in this package returns, via GetEntitySetSlice
+// (LB7) -- mirroring GetDeliveryBreakdown's own composition of a
+// store-layer raw id list (RecutStore.ListBacklog here, DeliveryBreakdown
+// there) into a Document, rather than a second, id-only projection.
+// Resolves productID's scope_id from its own current `product` row
+// (store.Products().GetCurrentByID) -- same shape as GetProductSlice,
+// which also takes only a product id, not a scope id, since the caller
+// (an ungated read) has no session to read scope_id from. A product with
+// no backlog bucket yet returns an empty Document, not an error --
+// RecutStore.ListBacklog's own empty-input contract, unchanged here.
+func (q *Querier) GetBacklog(ctx context.Context, productID uuid.UUID) (Document, error) {
+	product, err := q.store.Products().GetCurrentByID(ctx, productID)
+	if err != nil {
+		return Document{}, fmt.Errorf("get product: %w", err)
+	}
+
+	entityIDs, err := q.store.Recut().ListBacklog(ctx, product.ScopeID, productID)
+	if err != nil {
+		return Document{}, fmt.Errorf("list backlog: %w", err)
+	}
+
+	doc, err := q.GetEntitySetSlice(ctx, entityIDs)
+	if err != nil {
+		return Document{}, fmt.Errorf("backlog entity set slice: %w", err)
+	}
+	return doc, nil
+}
+
 // -- as-of assembly (FR11 x FR5-FR8, issue #2493) ------------------------
 //
 // Each granularity above has an *AsOf twin below: the same shape of

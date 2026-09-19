@@ -291,6 +291,55 @@ func TestRender_MilepebbleRefsExcludedFromRoadmap(t *testing.T) {
 	assert.NotContains(t, strings.ToLower(files.RoadmapMD), "milepebble", "no milepebble-shaped entry belongs in the rendered roadmap")
 }
 
+// TestRender_BacklogRefsExcludedFromRoadmap is issue #2687's Testing item
+// 7: with a real kind="backlog" MilestoneRef present alongside a
+// kind="milestone" one (migration 014's own new row shape), Render must
+// emit only the milestone into product/03-roadmap.md -- the backlog
+// bucket is a delivery-axis home for un-committed scope, never a roadmap
+// entry of its own, the same posture TestRender_MilepebbleRefsExcludedFromRoadmap
+// proves for a milepebble.
+func TestRender_BacklogRefsExcludedFromRoadmap(t *testing.T) {
+	ctx := context.Background()
+	productID := uuid.New()
+	scopeID := uuid.New()
+
+	product := &slice.ProductEntity{EntityRef: slice.EntityRef{ID: productID, RevisionID: uuid.New()}, Name: "Widgets", Vision: "v"}
+	fsID := uuid.New()
+	featureSet := slice.FeatureSetEntity{EntityRef: slice.EntityRef{ID: fsID, RevisionID: uuid.New()}, Name: "Core"}
+
+	f1 := newFeature("F1")
+	f1.FeatureSetID = fsID
+	f2 := newFeature("F2 (backlogged)")
+	f2.FeatureSetID = fsID
+
+	milestoneID := uuid.New()
+	backlogID := uuid.New()
+
+	src := &fakeSource{
+		Doc: slice.Document{
+			SchemaVersion: slice.SchemaVersion,
+			Product:       product,
+			FeatureSets:   []slice.FeatureSetEntity{featureSet},
+			Features:      []slice.FeatureEntity{f1, f2},
+		},
+		MilestoneRefs: []store.MilestoneRef{
+			{ID: milestoneID, Name: "M1", Kind: store.MilestoneKindMilestone},
+			{ID: backlogID, Name: "__backlog__", Kind: store.MilestoneKindBacklog},
+		},
+		Associations: map[uuid.UUID][]store.EntityMilestone{
+			milestoneID: {{EntityID: f1.ID}},
+			backlogID:   {{EntityID: f2.ID}},
+		},
+	}
+
+	files, err := render.Render(ctx, src, scopeID, productID)
+	require.NoError(t, err)
+
+	assert.Contains(t, files.RoadmapMD, "### M1", "the real milestone must still render")
+	assert.NotContains(t, files.RoadmapMD, "__backlog__", "the backlog bucket's own name must never appear in the roadmap")
+	assert.NotContains(t, strings.ToLower(files.RoadmapMD), "backlog", "no backlog-bucket-shaped entry belongs in the rendered roadmap")
+}
+
 // TestRender_NoProductRow_ReturnsError guards the one error path Render
 // itself owns (as opposed to propagating a Source error): an empty
 // GetProductSlice response (no current Product row) must not silently
