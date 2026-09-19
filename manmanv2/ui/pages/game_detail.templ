@@ -513,51 +513,8 @@ templ GameDetail(data GameDetailPageData) {
 			<div id="tab-panel-overview" x-show="activeTab === 'overview'">
 				@GameOverview(data.Overview)
 
-				<div class="card bg-base-100 border border-base-300 shadow-sm overflow-hidden mb-6">
-					<div class="p-4 border-b border-base-300 bg-base-200">
-						<h2 class="text-lg font-semibold text-base-content">Server Status &amp; Controls</h2>
-						<p class="text-xs text-base-content/60 mt-1">Start, stop, and restart deployments with real-time status.</p>
-					</div>
-					if len(data.Deployments) > 0 {
-						<div class="overflow-x-auto">
-							<table class="table">
-								<thead>
-									<tr>
-										<th>Deployment</th>
-										<th>Status</th>
-										<th>Live Session</th>
-										<th>Actions</th>
-									</tr>
-								</thead>
-								<tbody>
-									for _, dep := range data.Deployments {
-										<tr class="bg-base-200/40">
-											<td colspan="4">
-												<div class="flex flex-wrap justify-between items-center gap-3 py-1">
-													<div class="flex items-center gap-3">
-														<span class="font-medium text-sm">{ dep.Row.DisplayName }</span>
-														<span id={ DeploymentConnectAddressID(dep.Row.ServerGameConfigID) }>
-															@components.ConnectAddressDisplay(dep.Connect)
-														</span>
-													</div>
-													<div class="flex items-center gap-3 text-xs">
-														<button
-															type="button"
-															@click="switchTab('logs')"
-															class="link link-primary"
-														>
-															Console &amp; Logs
-														</button>
-													</div>
-												</div>
-											</td>
-										</tr>
-										@DeploymentRow(dep.Row)
-									}
-								</tbody>
-							</table>
-						</div>
-					} else {
+				if len(data.Deployments) == 0 {
+					<div class="card bg-base-100 border border-base-300 shadow-sm overflow-hidden mb-6">
 						<div class="p-8 text-center">
 							<p class="text-base-content/60">No deployments found for this game.</p>
 							if data.IsAdmin {
@@ -566,8 +523,8 @@ templ GameDetail(data GameDetailPageData) {
 								</button>
 							}
 						</div>
-					}
-				</div>
+					</div>
+				}
 
 				<div class="card bg-base-100 border border-base-300 shadow-sm p-6 mb-6">
 					<h2 class="text-lg font-semibold text-base-content mb-4">Game Information</h2>
@@ -612,7 +569,7 @@ templ GameDetail(data GameDetailPageData) {
 
 			<!-- TAB 2: CONSOLE & LOGS (Live stream + log history) -->
 			<div id="tab-panel-logs" x-show="activeTab === 'logs'" x-cloak>
-				if data.LiveSession != nil {
+				if data.LiveSession != nil && len(data.Deployments) <= 1 {
 					<!-- Live Logs viewer -->
 					<div class="card bg-base-100 border border-base-300 shadow-sm mb-6 overflow-hidden">
 						<div class="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-3 p-4 border-b border-base-300 bg-base-200">
@@ -780,6 +737,10 @@ templ GameDetail(data GameDetailPageData) {
 							<div id="action-quick-status" class="text-xs text-base-content/70 mt-2"></div>
 						</div>
 					}
+				} else if len(data.Deployments) > 1 {
+					<div class="alert alert-info shadow-sm mb-6">
+						<span>This game has multiple deployments. Open a deployment's live console from its "View Live Output / Logs" link on the Overview tab.</span>
+					</div>
 				} else if len(data.Sessions) > 0 {
 					<div class="alert alert-info shadow-sm mb-6">
 						<span>Game server is currently offline. Start a deployment from the Overview tab to view live streaming logs and console.</span>
