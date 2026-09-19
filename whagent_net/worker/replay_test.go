@@ -637,3 +637,166 @@ func TestSessionWorkflow_ReplayRecordedHistory_WithSearchModeBudgeting_NoNonDete
 	err = replayer.ReplayWorkflowHistory(nil, b.build())
 	require.NoError(t, err, "the current SessionWorkflow code must replay a search-mode history recorded with FR10's reordering (session-workflow-tool-search-loading already at version 1, at its new call site ahead of BuildContext) without a non-determinism error (NFR1)")
 }
+
+// TestSessionWorkflow_ReplayRecordedHistory_WithSearchToolsCall_NoNonDeterminismError
+// is issue #2674's (root plan #2602's milestone closeout) own NFR1 guard,
+// closing a gap none of the four search-mode fixtures above cover: none of
+// them ever actually route a model-requested call through
+// dispatchToolCall's ActivitySearchTools branch (workflow.go) --
+// TestSessionWorkflow_ReplayRecordedHistory_WithSearchModeBudgeting_
+// NoNonDeterminismError's own model response calls an ALREADY-unlocked
+// ordinary tool (search_things) by name, so it only ever schedules
+// ActivityDispatchTool. This fixture's turn 1 has the model call the
+// reserved search_tools name itself: the SAME "session-workflow-tool-
+// search-loading" change ID the fixture above already exercises at
+// ActivityUnlockedTools' call site ALSO governs dispatchToolCall's routing
+// decision here, so the recorded history schedules ActivitySearchTools,
+// never ActivityDispatchTool, for that call -- exactly as issue #2671
+// implemented. The turn then loops ("add the inner tool loop",
+// "session-workflow-tool-loop" marker) into a second model call that
+// dispatches the newly-unlocked domain tool (an ordinary
+// ActivityDispatchTool call) before finishing -- covering the loop's own
+// reuse of the SAME toolDefs.Tools/toolUnlocked resolved once ahead of the
+// turn's first CallModel (workflow.go's "Every DispatchToolInput below"
+// doc comment), never re-resolved mid-turn. ActivitySumCost's lazy,
+// once-per-turn read (baseCostReady, workflow.go) is recorded only after
+// the loop's FIRST iteration, never its second -- getting that placement
+// wrong is exactly the kind of extra/missing command this replay guard
+// would catch.
+func TestSessionWorkflow_ReplayRecordedHistory_WithSearchToolsCall_NoNonDeterminismError(t *testing.T) {
+	dc := converter.GetDefaultDataConverter()
+	sessionID := testSessionID()
+
+	startInput, err := dc.ToPayloads(SessionWorkflowInput{SessionID: sessionID})
+	require.NoError(t, err)
+	signalPayload, err := dc.ToPayloads(SendTurnSignal{Input: "hello"})
+	require.NoError(t, err)
+
+	b := newHistoryFixtureBuilder()
+	b.started("SessionWorkflow", TaskQueue, startInput)
+
+	completedID := b.decision()
+	b.marker("session-workflow-status-transitions", 1, completedID)
+	b.activity(ActivityUpdateSessionStatus, UpdateSessionStatusResult{})
+
+	b.signal(SignalSendTurn, signalPayload)
+	b.decision()
+	b.activity(ActivityUpdateSessionStatus, UpdateSessionStatusResult{})
+
+	completedID = b.decision()
+	b.marker("session-workflow-cap-enforcement", 1, completedID)
+	b.activity(ActivityResolveAgentDefinition, ResolveAgentDefinitionResult{
+		Model:      "replay-model",
+		Definition: session.AgentDefinition{ToolLoadingMode: session.ToolLoadingModeSearch},
+	})
+
+	// evaluateCaps' "before" half.
+	b.decision()
+	b.activity(ActivitySumCost, SumCostResult{CostUSD: 0})
+
+	// "session-workflow-tool-search-loading"'s marker, at its FR10 call
+	// site ahead of ActivityBuildContext -- no unlock yet, so turn 1's
+	// Tools is exactly search_tools (FR3).
+	completedID = b.decision()
+	b.marker("session-workflow-tool-search-loading", 1, completedID)
+	b.activity(ActivityUnlockedTools, UnlockedToolsResult{})
+
+	b.decision()
+	b.activity(ActivityListToolDefinitions, ListToolDefinitionsResult{
+		Tools: []llm.ToolDefinition{{Name: tools.SearchToolsName, Description: "search for more tools"}},
+	})
+
+	b.decision()
+	b.activity(ActivityBuildContext, BuildContextResult{EventIDs: []uuid.UUID{uuid.New()}})
+
+	completedID = b.decision()
+	b.marker("session-workflow-tool-dispatch", 1, completedID)
+	b.activity(ActivityCallModel, CallModelResult{Response: llm.Response{
+		Message:   llm.Message{Role: llm.RoleAssistant, Content: ""},
+		ToolCalls: []llm.ToolCall{{ID: "call-1", Name: tools.SearchToolsName, Arguments: `{"query":"hello"}`}},
+	}})
+
+	// "session-workflow-tool-loop"'s marker lands here, on the decision
+	// that schedules the loop's first tool-dispatch activity -- for a
+	// search-mode search_tools call, dispatchToolCall routes that to
+	// ActivitySearchTools, never ActivityDispatchTool.
+	completedID = b.decision()
+	b.marker("session-workflow-tool-loop", 1, completedID)
+	b.activity(ActivitySearchTools, SearchToolsResult{Matched: []string{"search_things"}})
+
+	// This non-final iteration's own commit.
+	b.decision()
+	b.activity(ActivityCommitToolLoopIteration, CommitToolLoopIterationResult{
+		PromptTokens: 8, CompletionTokens: 3, CostUSD: 0.01,
+	})
+
+	// The loop's own cost-cap re-check reads SumCost once, lazily, the
+	// first time any iteration commits (workflow.go's baseCostReady) --
+	// never again for this turn's later iterations.
+	b.decision()
+	b.activity(ActivitySumCost, SumCostResult{CostUSD: 0.01})
+
+	b.decision()
+	b.activity(ActivityBuildContext, BuildContextResult{EventIDs: []uuid.UUID{uuid.New(), uuid.New()}})
+
+	// The loop's second model call dispatches the now-unlocked domain tool
+	// by name -- an ordinary ActivityDispatchTool call, proving this turn's
+	// loop reuses the SAME toolDefs.Tools/toolUnlocked resolved ahead of
+	// the turn's first CallModel rather than re-listing mid-turn.
+	b.decision()
+	b.activity(ActivityCallModel, CallModelResult{Response: llm.Response{
+		Message:   llm.Message{Role: llm.RoleAssistant, Content: ""},
+		ToolCalls: []llm.ToolCall{{ID: "call-2", Name: "search_things", Arguments: `{}`}},
+	}})
+
+	b.decision()
+	b.activity(ActivityDispatchTool, DispatchToolResult{Result: tools.Result{
+		ToolCallID: "call-2", Name: "search_things", Content: "3 results found", IsError: false,
+	}})
+
+	// This second non-final iteration's own commit -- baseCostReady is
+	// already true by now, so NO further ActivitySumCost is scheduled here.
+	b.decision()
+	b.activity(ActivityCommitToolLoopIteration, CommitToolLoopIterationResult{
+		PromptTokens: 8, CompletionTokens: 3, CostUSD: 0.01,
+	})
+
+	b.decision()
+	b.activity(ActivityBuildContext, BuildContextResult{EventIDs: []uuid.UUID{uuid.New(), uuid.New(), uuid.New()}})
+
+	// The loop's third model call carries no more tool calls -- this ends
+	// the loop and makes this the turn's final response.
+	b.decision()
+	b.activity(ActivityCallModel, CallModelResult{Response: llm.Response{
+		Message: llm.Message{Role: llm.RoleAssistant, Content: "done"},
+	}})
+
+	b.decision()
+	b.activity(ActivityCommitTurn, CommitTurnResult{Done: false})
+
+	// evaluateCaps' "after" half -- still not capped.
+	b.decision()
+	b.activity(ActivitySumCost, SumCostResult{CostUSD: 0.03})
+
+	b.decision()
+	b.activity(ActivityUpdateSessionStatus, UpdateSessionStatusResult{})
+
+	b.openDecision()
+
+	replayer := worker.NewWorkflowReplayer()
+	replayer.RegisterWorkflow(SessionWorkflow)
+
+	err = replayer.ReplayWorkflowHistory(nil, b.build())
+	require.NoError(t, err, "the current SessionWorkflow code must replay a search-mode history whose model itself calls search_tools -- ActivitySearchTools scheduled via dispatchToolCall's routing, then a loop iteration that dispatches the newly-unlocked tool -- without a non-determinism error (NFR1)")
+
+	// TestSessionWorkflow_ReplayRecordedHistory_NoNonDeterminismError, this
+	// file's very first fixture, predates every change ID this file
+	// records markers for (including "session-workflow-tool-search-
+	// loading" this test's own fixture exercises) -- it is this file's
+	// standing "pre-change-ID fixture", run in the same `go test` process
+	// as every fixture below it, including this one, so a single `bazel
+	// test //whagent_net/worker:worker_test` run is what actually confirms
+	// both directions together (issue #2674's Testing phase: "confirm both
+	// it and the existing pre-change-ID fixture replay without a
+	// non-determinism error").
+}
