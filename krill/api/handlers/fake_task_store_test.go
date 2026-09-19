@@ -5,7 +5,10 @@
 // ListDependencies/UnsatisfiedDependencies/GetTaskByID stubs below exist
 // only so this fake keeps satisfying store.TaskStore now that
 // task_dependency.go (issue #2720) widens it -- task_dependency_test.go's
-// own Testing-phase task is what actually exercises them.
+// own Testing-phase task is what actually exercises them. The
+// RecordNote/ListNotesForTask/ListNotesForEntity stubs exist for the same
+// reason now that task_note.go (issue #2727) widens it again --
+// task_note_test.go's own later Testing-phase task exercises them.
 package handlers_test
 
 import (
@@ -38,6 +41,14 @@ type fakeTaskStore struct {
 	gotClaimParams     store.ClaimTaskParams
 	getClaimByIDResult store.Claim
 	getClaimByIDErr    error
+
+	recordNoteErr         error
+	gotRecordNoteParams   store.RecordNoteParams
+	recordNoteResult      store.Note
+	notesForTask          []store.Note
+	listNotesForTaskErr   error
+	notesForEntity        []store.Note
+	listNotesForEntityErr error
 }
 
 func (f *fakeTaskStore) CreateTask(ctx context.Context, params store.CreateTaskParams) (store.Task, error) {
@@ -85,6 +96,22 @@ func (f *fakeTaskStore) ClaimTask(ctx context.Context, params store.ClaimTaskPar
 
 func (f *fakeTaskStore) GetClaimByID(ctx context.Context, id uuid.UUID) (store.Claim, error) {
 	return f.getClaimByIDResult, f.getClaimByIDErr
+}
+
+func (f *fakeTaskStore) RecordNote(ctx context.Context, params store.RecordNoteParams) (store.Note, error) {
+	f.gotRecordNoteParams = params
+	if f.recordNoteErr != nil {
+		return store.Note{}, f.recordNoteErr
+	}
+	return f.recordNoteResult, nil
+}
+
+func (f *fakeTaskStore) ListNotesForTask(ctx context.Context, scopeID, taskID uuid.UUID) ([]store.Note, error) {
+	return f.notesForTask, f.listNotesForTaskErr
+}
+
+func (f *fakeTaskStore) ListNotesForEntity(ctx context.Context, scopeID uuid.UUID, kind store.NoteEntityKind, entityID uuid.UUID) ([]store.Note, error) {
+	return f.notesForEntity, f.listNotesForEntityErr
 }
 
 var _ store.TaskStore = (*fakeTaskStore)(nil)

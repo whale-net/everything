@@ -75,9 +75,9 @@ func TestCreateTaskHandler_MissingOrMalformedFields_Rejected(t *testing.T) {
 func TestCreateTaskHandler_StoreRejection_Returns400(t *testing.T) {
 	for name, err := range map[string]error{
 		"unknown or non-delivery-target milestone_id": store.ErrNotFound,
-		"milestone has a milepebble cut":               store.ErrMilestoneHasMilepebbleCut,
-		"invalid lane sequence":                        store.ErrInvalidLaneSequence,
-		"starting lane not in sequence":                store.ErrStartingLaneNotInSequence,
+		"milestone has a milepebble cut":              store.ErrMilestoneHasMilepebbleCut,
+		"invalid lane sequence":                       store.ErrInvalidLaneSequence,
+		"starting lane not in sequence":               store.ErrStartingLaneNotInSequence,
 	} {
 		t.Run(name, func(t *testing.T) {
 			sessions, _, sessionIDStr := newTestSession(t)

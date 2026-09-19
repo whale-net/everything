@@ -216,6 +216,26 @@ type TaskStore interface {
 	// work.Assembler.Assemble (krill/work/payload.go), resolving a task's
 	// current claim/lease state for the by-id payload (FR10).
 	GetClaimByID(ctx context.Context, id uuid.UUID) (Claim, error)
+
+	// RecordNote appends one `task_note` row (task_note.go, issue #2727,
+	// FR11/FR12): a flat, immutable note against exactly one target --
+	// params.TaskID, or params.EntityKind+params.EntityID naming a
+	// spec-axis entity. Deliberately does NOT check current_claim_id --
+	// any Agent may note, claimant or not (FR11); the only gate is NFR6's
+	// session requirement, enforced by the caller's HTTP/MCP layer, not
+	// here.
+	RecordNote(ctx context.Context, params RecordNoteParams) (Note, error)
+
+	// ListNotesForTask returns every note recorded against taskID, in
+	// taskID's own scope, ordered by CreatedAt (task_note.go, issue
+	// #2727) -- the list work.Assemble (#2721) populates TaskView.Notes
+	// from.
+	ListNotesForTask(ctx context.Context, scopeID, taskID uuid.UUID) ([]Note, error)
+
+	// ListNotesForEntity returns every note recorded against the
+	// spec-axis entity (kind, entityID), in scopeID's own scope, ordered
+	// by CreatedAt (task_note.go, issue #2727).
+	ListNotesForEntity(ctx context.Context, scopeID uuid.UUID, kind NoteEntityKind, entityID uuid.UUID) ([]Note, error)
 }
 
 // ErrMilestoneHasMilepebbleCut is CreateTask's named, loud rejection
