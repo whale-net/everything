@@ -143,8 +143,10 @@ func TestListToolDefinitions_ReservedNameOnSecondServer(t *testing.T) {
 // Testing phase): case-insensitive substring on name, on description, on
 // both at once (the matched name is still reported exactly once), no match
 // at all, an empty/whitespace-only query, a substring that is not a word
-// boundary, and that result order follows candidates' own order rather than
-// match strength or alphabetical order.
+// boundary, a multi-word natural-language query matching on any one of its
+// words, short filler words being ignored rather than over-matching, and
+// that result order follows candidates' own order rather than match
+// strength or alphabetical order.
 func TestMatch(t *testing.T) {
 	// Each candidate's name and description deliberately share no words
 	// with any other candidate's, except where a case explicitly needs a
@@ -207,6 +209,36 @@ func TestMatch(t *testing.T) {
 			name:  "substring match is not word-boundary limited",
 			query: "sched",
 			want:  []string{"list_schedules"},
+		},
+		{
+			// A realistic natural-language query (the shape searchToolsDefinition
+			// itself asks for): "list" hits list_gadgets/list_schedules by name,
+			// "gadgets" additionally hits sync_gadgets by name -- "please"/"all"/
+			// "now" hit nothing. Each candidate reported once even when more
+			// than one of its words matches (list_gadgets matches both "list"
+			// and "gadgets").
+			name:  "multi-word query matches on any one word",
+			query: "please list all gadgets now",
+			want:  []string{"list_gadgets", "sync_gadgets", "list_schedules"},
+		},
+		{
+			// Every word is shorter than minMatchWordLen (2 letters), so none
+			// of them is searched on at all -- this must not degrade into
+			// "match everything," which is what unfiltered short-word
+			// substring matching would do (nearly every candidate contains
+			// "a" or "of" somewhere).
+			name:  "query of only short filler words matches nothing",
+			query: "a to of",
+			want:  []string{},
+		},
+		{
+			// "to" (2 letters) is dropped as too short to search on; "gadget"
+			// (6 letters) still matches exactly as it does on its own --
+			// short filler words are ignored, not combined with real words
+			// to broaden the match.
+			name:  "short filler word alongside a real word is ignored",
+			query: "to gadget",
+			want:  []string{"list_gadgets", "purge_cache", "sync_gadgets"},
 		},
 	}
 
