@@ -28,14 +28,6 @@ type BuildContextInput struct {
 	// workflow.go), the one piece of this turn's context BuildContext did
 	// not already have sitting in the transcript before this call.
 	Input string
-	// Tools is this turn's resolved tool definitions (workflow.go's
-	// toolDefs.Tools, ListToolDefinitionsResult) -- only consulted when
-	// Definition.ToolLoadingMode is session.ToolLoadingModeSearch (FR10,
-	// issue #2673): fitToBudget (budget.go) charges these against
-	// searchModeContextBudget before filling the rest with transcript
-	// events. A bulk-mode caller leaves this nil; BuildContext's bulk path
-	// never reads it, matching FR10's "bulk-mode accounting is untouched".
-	Tools []llm.ToolDefinition
 }
 
 // BuildContextResult is BuildContext's activity result: only the ordered
@@ -114,11 +106,21 @@ func (a *Activities) BuildContext(ctx context.Context, in BuildContextInput) (Bu
 		// FR10 (issue #2673): a shared budget spanning this turn's tool
 		// definitions and transcript content, replacing the flat
 		// maxContextEvents truncation below for search-mode sessions only.
-		if overage := toolDefsCharge(in.Tools) - searchModeContextBudget; overage > 0 {
+		// toolDefs is re-read from the turn_tool_defs row
+		// ActivityListToolDefinitions persisted earlier this turn (search
+		// mode always resolves tools before BuildContext runs, workflow.go's
+		// processTurn) rather than received as a BuildContextInput field --
+		// see ListToolDefinitionsResult's doc comment (activities.go) for
+		// why.
+		toolDefs, err := readTurnToolDefs(ctx, a.Store, in.SessionID, in.Turn)
+		if err != nil {
+			return BuildContextResult{}, fmt.Errorf("build context: %w", err)
+		}
+		if overage := toolDefsCharge(toolDefs) - searchModeContextBudget; overage > 0 {
 			logging.Get("worker").WarnContext(ctx, "search-mode tool definitions alone exceed the context budget; keeping a minimal event floor instead of the full budgeted projection",
 				"session_id", in.SessionID, "turn", in.Turn, "overage_chars", overage)
 		}
-		all = fitToBudget(in.Tools, all, searchModeContextBudget)
+		all = fitToBudget(toolDefs, all, searchModeContextBudget)
 	} else if len(all) > maxContextEvents {
 		all = all[len(all)-maxContextEvents:]
 	}
@@ -158,6 +160,32 @@ func readWholeTranscript(ctx context.Context, store *session.Store, sessionID uu
 		}
 		fromSeq = page[len(page)-1].Seq + 1
 	}
+}
+
+// readTurnToolDefs re-reads the tool list ActivityListToolDefinitions
+// persisted for (sessionID, turn) via SaveTurnToolDefs (session/
+// transcript.go) -- the activity-internal read half of "Activity payload
+// discipline" (ARCHITECTURE.md): CallModel and, for a search-mode turn,
+// BuildContext both call this instead of receiving the tool list as their
+// own activity input, so the full catalog crosses the Temporal workflow
+// boundary once per turn (as ListToolDefinitions' own input/nothing-result)
+// rather than once per turn PLUS once per caller PLUS once per tool-loop
+// iteration. No row (no tool_set configured, or a session predating
+// ListToolDefinitions) returns a nil slice, not an error -- "no tools
+// attached" is an ordinary state, not a fault.
+func readTurnToolDefs(ctx context.Context, store *session.Store, sessionID uuid.UUID, turn int) ([]llm.ToolDefinition, error) {
+	encoded, ok, err := store.Transcript().ReadTurnToolDefs(ctx, sessionID, turn)
+	if err != nil {
+		return nil, fmt.Errorf("read turn tool defs: %w", err)
+	}
+	if !ok {
+		return nil, nil
+	}
+	var toolDefs []llm.ToolDefinition
+	if err := json.Unmarshal(encoded, &toolDefs); err != nil {
+		return nil, fmt.Errorf("decode turn tool defs: %w", err)
+	}
+	return toolDefs, nil
 }
 
 // transcriptMessagePayload is the JSON payload shape BuildContext and

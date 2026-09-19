@@ -19,6 +19,7 @@ first pilot consumer.
 - [Component map](#component-map)
 - [Transcript storage tiers](#transcript-storage-tiers)
 - [Service boundary vs. package boundary](#service-boundary-vs-package-boundary)
+- [Activity payload discipline](#activity-payload-discipline)
 - [Event bus](#event-bus)
 - [Session workflow](#session-workflow)
 - [Workflow versioning (NFR1)](#workflow-versioning-nfr1)
@@ -165,6 +166,42 @@ rather than transcript bodies; it does not require a process boundary.
 
 If a non-Go consumer ever needs direct transcript access, `session` is the
 seam to promote to a service.
+
+## Activity payload discipline
+
+Temporal permanently records both an activity's input (`ActivityTaskScheduled`)
+and its result (`ActivityTaskCompleted`) into workflow history. For
+`SessionWorkflow` — long-lived, signal-per-turn, with a turn's own inner tool
+loop able to call the model (and rebuild context) several times (see
+[Session workflow](#session-workflow) step 4) — anything large crossing that
+boundary is duplicated into history once per crossing, not once per turn.
+The rule: **an activity crossing the workflow boundary carries references
+(IDs, small structs), never the bodies those references resolve to; the body
+is re-read or resolved inside the next activity, which is invisible to
+workflow history.**
+
+Two concrete applications:
+
+- **Transcript context.** `BuildContext`'s result is `EventIDs
+  []uuid.UUID` — never the assembled message bodies. `CallModel` re-reads
+  those IDs' rows from `session.TranscriptStore.ReadByIDs` itself. This was
+  the original motivation the [Service boundary vs. package
+  boundary](#service-boundary-vs-package-boundary) section's `#1552`
+  reference describes.
+- **Tool catalog.** `ListToolDefinitions` resolves the full tool list (JSON
+  schemas included) once per turn. Forwarding that result directly into
+  `CallModelInput.Tools` (and, for a search-mode turn's budget accounting,
+  `BuildContextInput.Tools`) would duplicate it into workflow history on
+  every turn AND on every tool-loop iteration a turn's own loop runs — up to
+  several times per turn. Instead, `ListToolDefinitions` persists the list
+  to a `turn_tool_defs` row (`session.TranscriptStore.SaveTurnToolDefs`,
+  keyed on `(session_id, turn)`, the same shape as `turn_context`) and
+  returns nothing; both `CallModel` and `BuildContext` (for a search-mode
+  turn) re-read it via `ReadTurnToolDefs`/`readTurnToolDefs` using the
+  `SessionID`/`Turn` they already carry. No new activity-call sequence, no
+  `workflow.GetVersion` gate needed — only the content of already-scheduled
+  activities' input/internal logic changed, not the set, order, or count of
+  activities `processTurn` issues.
 
 ## Event bus
 

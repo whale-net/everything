@@ -277,7 +277,22 @@ func registerE2EActivities(env *testsuite.TestWorkflowEnvironment, holder *activ
 	}, activity.RegisterOptions{Name: ActivitySearchTools})
 }
 
-// callModelRecorder captures every CallModelInput a scripted CallModel
+// callModelCall is one recorded scriptedCallModel invocation: the
+// CallModelInput it received, plus the tool list this call would actually
+// have been offered -- Tools, re-read from the turn_tool_defs row
+// ActivityListToolDefinitions already persisted for (Input.SessionID,
+// Input.Turn) by the time CallModel runs (readTurnToolDefs, context.go).
+// CallModelInput itself no longer carries Tools (ListToolDefinitionsResult's
+// doc comment, activities.go -- the whole point of that change is that it
+// no longer crosses the workflow boundary), so scriptedCallModel, standing
+// in for the real CallModel activity, re-reads the same row the real one
+// would to keep this file's Tools-shape assertions meaningful.
+type callModelCall struct {
+	Input CallModelInput
+	Tools []llm.ToolDefinition
+}
+
+// callModelRecorder captures every callModelCall a scripted CallModel
 // implementation (scriptedCallModel below) receives, in call order -- this
 // file's tests inspect .Tools off these to assert exactly what each model
 // call was offered (FR3/FR6/FR7/FR10), which a mocked activity with
@@ -287,37 +302,46 @@ func registerE2EActivities(env *testsuite.TestWorkflowEnvironment, holder *activ
 // expectation.
 type callModelRecorder struct {
 	mu  sync.Mutex
-	ins []CallModelInput
+	ins []callModelCall
 }
 
-func (r *callModelRecorder) record(in CallModelInput) {
+func (r *callModelRecorder) record(c callModelCall) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	r.ins = append(r.ins, in)
+	r.ins = append(r.ins, c)
 }
 
-func (r *callModelRecorder) snapshot() []CallModelInput {
+func (r *callModelRecorder) snapshot() []callModelCall {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	out := make([]CallModelInput, len(r.ins))
+	out := make([]callModelCall, len(r.ins))
 	copy(out, r.ins)
 	return out
 }
 
 // scriptedCallModel returns a CallModel implementation that records every
-// call it receives into rec, then returns responses in order -- one
-// element of responses is consumed per call, panicking (via a returned
-// error) if the script under-provisions calls, so an unexpectedly-long
-// tool loop fails loudly rather than silently reusing a stale response.
-// Every response's Usage.ProviderCostUSD is expected to be set by the
-// caller (costPtr, tool_loop_integration_test.go) -- CommitTurn/
+// call it receives (plus that call's actual tool list, re-read from
+// Postgres -- callModelCall's doc comment) into rec, then returns responses
+// in order -- one element of responses is consumed per call, panicking (via
+// a returned error) if the script under-provisions calls, so an
+// unexpectedly-long tool loop fails loudly rather than silently reusing a
+// stale response. Every response's Usage.ProviderCostUSD is expected to be
+// set by the caller (costPtr, tool_loop_integration_test.go) -- CommitTurn/
 // CommitToolLoopIteration's resolveCost fails outright otherwise, since
-// this file never configures Activities.Prices.
-func scriptedCallModel(rec *callModelRecorder, responses []llm.Response) func(context.Context, CallModelInput) (CallModelResult, error) {
+// this file never configures Activities.Prices. store only needs to point
+// at the same underlying Postgres database ListToolDefinitions wrote
+// through (any *session.Store wrapping it works, even a different pool --
+// see the durability test below, which shares one database across two
+// independent stores).
+func scriptedCallModel(store *session.Store, rec *callModelRecorder, responses []llm.Response) func(context.Context, CallModelInput) (CallModelResult, error) {
 	var i int
 	var mu sync.Mutex
-	return func(_ context.Context, in CallModelInput) (CallModelResult, error) {
-		rec.record(in)
+	return func(ctx context.Context, in CallModelInput) (CallModelResult, error) {
+		toolDefs, err := readTurnToolDefs(ctx, store, in.SessionID, in.Turn)
+		if err != nil {
+			return CallModelResult{}, fmt.Errorf("scriptedCallModel: %w", err)
+		}
+		rec.record(callModelCall{Input: in, Tools: toolDefs})
 		mu.Lock()
 		defer mu.Unlock()
 		if i >= len(responses) {
@@ -412,7 +436,7 @@ func TestSessionWorkflow_SearchMode_FullLifecycle_EndToEnd(t *testing.T) {
 	registerE2EActivities(env, holder, newActivityCounters(), nil)
 
 	rec := &callModelRecorder{}
-	env.RegisterActivityWithOptions(scriptedCallModel(rec, []llm.Response{
+	env.RegisterActivityWithOptions(scriptedCallModel(store, rec, []llm.Response{
 		// Turn 1: search for "widget", then a final tool-call-free response.
 		{Message: llm.Message{Role: llm.RoleAssistant}, ToolCalls: []llm.ToolCall{{ID: "c1", Name: tools.SearchToolsName, Arguments: `{"query":"widget"}`}}, Usage: llm.UsageReport{ProviderCostUSD: costPtr(0)}},
 		{Message: llm.Message{Role: llm.RoleAssistant, Content: "found a widget tool"}, Usage: llm.UsageReport{ProviderCostUSD: costPtr(0)}},
@@ -507,7 +531,7 @@ func TestSessionWorkflow_SearchMode_DispatchNeverSearchedTool_RefusedButSessionE
 	registerE2EActivities(env, holder, newActivityCounters(), nil)
 
 	rec := &callModelRecorder{}
-	env.RegisterActivityWithOptions(scriptedCallModel(rec, []llm.Response{
+	env.RegisterActivityWithOptions(scriptedCallModel(store, rec, []llm.Response{
 		// Turn 1: search only for "widget" -- inspect_sensor is allowlisted
 		// but never matched, so it is never unlocked.
 		{Message: llm.Message{Role: llm.RoleAssistant}, ToolCalls: []llm.ToolCall{{ID: "c1", Name: tools.SearchToolsName, Arguments: `{"query":"widget"}`}}, Usage: llm.UsageReport{ProviderCostUSD: costPtr(0)}},
@@ -574,7 +598,7 @@ func TestSessionWorkflow_BulkMode_ControlCase_EndToEnd(t *testing.T) {
 	registerE2EActivities(env, holder, counters, nil)
 
 	rec := &callModelRecorder{}
-	env.RegisterActivityWithOptions(scriptedCallModel(rec, []llm.Response{
+	env.RegisterActivityWithOptions(scriptedCallModel(store, rec, []llm.Response{
 		{Message: llm.Message{Role: llm.RoleAssistant}, ToolCalls: []llm.ToolCall{{ID: "c1", Name: "delete_gadget", Arguments: "{}"}}, Usage: llm.UsageReport{ProviderCostUSD: costPtr(0)}},
 		{Message: llm.Message{Role: llm.RoleAssistant, Content: "done"}, Usage: llm.UsageReport{ProviderCostUSD: costPtr(0)}},
 	}), activity.RegisterOptions{Name: ActivityCallModel})
@@ -739,7 +763,7 @@ func TestSessionWorkflow_SearchMode_WorkerRestartBetweenTurns_UnlockedSetRederiv
 	registerE2EActivities(env, holder, newActivityCounters(), onStatus)
 
 	rec := &callModelRecorder{}
-	env.RegisterActivityWithOptions(scriptedCallModel(rec, []llm.Response{
+	env.RegisterActivityWithOptions(scriptedCallModel(storeA, rec, []llm.Response{
 		{Message: llm.Message{Role: llm.RoleAssistant}, ToolCalls: []llm.ToolCall{{ID: "c1", Name: tools.SearchToolsName, Arguments: `{"query":"widget"}`}}, Usage: llm.UsageReport{ProviderCostUSD: costPtr(0)}},
 		{Message: llm.Message{Role: llm.RoleAssistant, Content: "ok"}, Usage: llm.UsageReport{ProviderCostUSD: costPtr(0)}},
 		{Message: llm.Message{Role: llm.RoleAssistant}, ToolCalls: []llm.ToolCall{{ID: "c2", Name: "list_widgets", Arguments: "{}"}}, Usage: llm.UsageReport{ProviderCostUSD: costPtr(0)}},

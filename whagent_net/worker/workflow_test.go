@@ -540,11 +540,18 @@ func (o *orderTracker) snapshot() []string {
 // TestSessionWorkflow_SearchMode_ExecutesUnlockedToolsBeforeSearchModeListToolDefinitions
 // above (which only proves UnlockedTools precedes ListToolDefinitions):
 // this proves the full three-activity order a search-mode turn must
-// execute so BuildContext can charge the turn's resolved Tools against
+// execute so BuildContext can charge the turn's resolved tools against
 // fitToBudget (budget.go) -- ActivityUnlockedTools, then
 // ActivityListToolDefinitions, then ActivityBuildContext -- the reordering
 // workflow.go's processTurn doc comment describes under the
-// "session-workflow-tool-search-loading" change ID.
+// "session-workflow-tool-search-loading" change ID. The real
+// ActivityListToolDefinitions persists its resolved list to a
+// turn_tool_defs row (ListToolDefinitionsResult's doc comment,
+// activities.go) rather than returning it to the workflow, so this test
+// (which mocks every activity and never touches Postgres) can only assert
+// the ORDER, not that BuildContext actually saw the tools -- see
+// context_integration_test.go / search_mode_e2e_integration_test.go for
+// coverage of the real read-after-write behavior.
 func TestSessionWorkflow_SearchMode_ActivityOrderIsUnlockedToolsThenListToolDefinitionsThenBuildContext(t *testing.T) {
 	ts := testsuite.WorkflowTestSuite{}
 	env := ts.NewTestWorkflowEnvironment()
@@ -562,15 +569,11 @@ func TestSessionWorkflow_SearchMode_ActivityOrderIsUnlockedToolsThenListToolDefi
 		Return(UnlockedToolsResult{ToolNames: []string{"a"}}, nil).
 		Run(func(args mock.Arguments) { order.record(ActivityUnlockedTools) })
 	env.OnActivity(ActivityListToolDefinitions, mock.Anything, mock.Anything).
-		Return(ListToolDefinitionsResult{Tools: []llm.ToolDefinition{{Name: "a"}}}, nil).
+		Return(ListToolDefinitionsResult{}, nil).
 		Run(func(args mock.Arguments) { order.record(ActivityListToolDefinitions) })
 	env.OnActivity(ActivityBuildContext, mock.Anything, mock.Anything).
 		Return(BuildContextResult{EventIDs: []uuid.UUID{uuid.New()}}, nil).
-		Run(func(args mock.Arguments) {
-			order.record(ActivityBuildContext)
-			in := args.Get(1).(BuildContextInput)
-			require.Equal(t, []llm.ToolDefinition{{Name: "a"}}, in.Tools, "BuildContext must receive this turn's already-resolved Tools so it can charge them against the shared budget")
-		})
+		Run(func(args mock.Arguments) { order.record(ActivityBuildContext) })
 	env.OnActivity(ActivityCallModel, mock.Anything, mock.Anything).
 		Return(CallModelResult{Response: llm.Response{Message: llm.Message{Role: llm.RoleAssistant, Content: "ok"}}}, nil)
 	env.OnActivity(ActivityCommitTurn, mock.Anything, mock.Anything).
@@ -617,11 +620,7 @@ func TestSessionWorkflow_BulkMode_ActivityOrderIsBuildContextThenListToolDefinit
 		Return(UnlockedToolsResult{}, nil)
 	env.OnActivity(ActivityBuildContext, mock.Anything, mock.Anything).
 		Return(BuildContextResult{EventIDs: []uuid.UUID{uuid.New()}}, nil).
-		Run(func(args mock.Arguments) {
-			order.record(ActivityBuildContext)
-			in := args.Get(1).(BuildContextInput)
-			require.Empty(t, in.Tools, "a bulk-mode turn's BuildContext call must not have Tools set -- they are only resolved after BuildContext, via ListToolDefinitions below")
-		})
+		Run(func(args mock.Arguments) { order.record(ActivityBuildContext) })
 	env.OnActivity(ActivityListToolDefinitions, mock.Anything, mock.Anything).
 		Return(ListToolDefinitionsResult{}, nil).
 		Run(func(args mock.Arguments) { order.record(ActivityListToolDefinitions) })
