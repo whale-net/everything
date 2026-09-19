@@ -57,3 +57,27 @@ func TestPersonaStore_Create_DuplicateNameSameProduct_Rejected(t *testing.T) {
 	_, err = s.Personas().Create(ctx, scopeID, product.ID, "Agent Swarm Operator", nil)
 	assert.Error(t, err, "a second current Persona with the same name under the same product must be rejected (LB1)")
 }
+
+// TestPersonaStore_ListCurrentByProduct_OrdersByCreationPosition is this
+// issue's Testing case 2 (FR7): three personas created under one product
+// in order C, A, B (not alphabetical) must list back C, A, B.
+func TestPersonaStore_ListCurrentByProduct_OrdersByCreationPosition(t *testing.T) {
+	ctx := context.Background()
+	s, db := newStore(t)
+	scopeID := newScope(t, ctx, db)
+	product, err := s.Products().Create(ctx, scopeID, "Krill", "")
+	require.NoError(t, err)
+
+	c, err := s.Personas().Create(ctx, scopeID, product.ID, "C Persona", nil)
+	require.NoError(t, err)
+	a, err := s.Personas().Create(ctx, scopeID, product.ID, "A Persona", nil)
+	require.NoError(t, err)
+	b, err := s.Personas().Create(ctx, scopeID, product.ID, "B Persona", nil)
+	require.NoError(t, err)
+
+	got, err := s.Personas().ListCurrentByProduct(ctx, product.ID)
+	require.NoError(t, err)
+	require.Len(t, got, 3)
+	assert.Equal(t, []uuid.UUID{c.ID, a.ID, b.ID}, []uuid.UUID{got[0].ID, got[1].ID, got[2].ID},
+		"ListCurrentByProduct must reflect creation order (C, A, B), not alphabetical order (A, B, C)")
+}

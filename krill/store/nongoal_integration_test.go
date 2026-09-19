@@ -66,3 +66,28 @@ func TestNonGoalStore_Create_DuplicateNameSameProduct_Rejected(t *testing.T) {
 	_, err = s.NonGoals().Create(ctx, scopeID, product.ID, store.NonGoalKindDeferred, "Multi-tenant scope", nil)
 	assert.Error(t, err, "a second current NonGoal with the same name under the same product must be rejected (LB1), regardless of kind")
 }
+
+// TestNonGoalStore_ListCurrentByProduct_SameKind_OrdersByCreationPosition is
+// this issue's Testing case 2 (FR7): three permanent non-goals created
+// under one product in order C, A, B (not alphabetical) must list back C,
+// A, B -- with kind held constant, ordering is purely position-then-name.
+func TestNonGoalStore_ListCurrentByProduct_SameKind_OrdersByCreationPosition(t *testing.T) {
+	ctx := context.Background()
+	s, db := newStore(t)
+	scopeID := newScope(t, ctx, db)
+	product, err := s.Products().Create(ctx, scopeID, "Krill", "")
+	require.NoError(t, err)
+
+	c, err := s.NonGoals().Create(ctx, scopeID, product.ID, store.NonGoalKindPermanent, "C Non-Goal", nil)
+	require.NoError(t, err)
+	a, err := s.NonGoals().Create(ctx, scopeID, product.ID, store.NonGoalKindPermanent, "A Non-Goal", nil)
+	require.NoError(t, err)
+	b, err := s.NonGoals().Create(ctx, scopeID, product.ID, store.NonGoalKindPermanent, "B Non-Goal", nil)
+	require.NoError(t, err)
+
+	got, err := s.NonGoals().ListCurrentByProduct(ctx, product.ID)
+	require.NoError(t, err)
+	require.Len(t, got, 3)
+	assert.Equal(t, []uuid.UUID{c.ID, a.ID, b.ID}, []uuid.UUID{got[0].ID, got[1].ID, got[2].ID},
+		"ListCurrentByProduct must reflect creation order (C, A, B) within the same kind, not alphabetical order (A, B, C)")
+}

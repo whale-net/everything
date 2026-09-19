@@ -91,3 +91,26 @@ func TestFeatureStore_CapabilityMapCitation_ResolvesToRealFeatureID(t *testing.T
 	require.NoError(t, err, "an FR's citation of a capability must resolve to a real, current Feature row")
 	assert.Equal(t, capability.ID, resolved.ID)
 }
+
+// TestFeatureStore_ListCurrentByFeatureSet_OrdersByCreationPosition is this
+// issue's Testing case 1/2 (FR7): creating C, A, B (not alphabetical) under
+// the same feature_set must list back C, A, B.
+func TestFeatureStore_ListCurrentByFeatureSet_OrdersByCreationPosition(t *testing.T) {
+	ctx := context.Background()
+	s, db := newStore(t)
+	scopeID := newScope(t, ctx, db)
+	fs := setupFeatureSet(t, ctx, s, scopeID)
+
+	c, err := s.Features().Create(ctx, scopeID, fs.ID, "C Feature", nil)
+	require.NoError(t, err)
+	a, err := s.Features().Create(ctx, scopeID, fs.ID, "A Feature", nil)
+	require.NoError(t, err)
+	b, err := s.Features().Create(ctx, scopeID, fs.ID, "B Feature", nil)
+	require.NoError(t, err)
+
+	got, err := s.Features().ListCurrentByFeatureSet(ctx, fs.ID)
+	require.NoError(t, err)
+	require.Len(t, got, 3)
+	assert.Equal(t, []uuid.UUID{c.ID, a.ID, b.ID}, []uuid.UUID{got[0].ID, got[1].ID, got[2].ID},
+		"ListCurrentByFeatureSet must reflect creation order (C, A, B), not alphabetical order (A, B, C)")
+}

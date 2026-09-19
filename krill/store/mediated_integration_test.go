@@ -188,6 +188,46 @@ func TestMediatedWriteStore_ProposeEntities_CreatesAllAndOneRevisionEvent(t *tes
 	assert.Len(t, list, 1, "exactly one revision_event must have been appended")
 }
 
+// TestMediatedWriteStore_ProposeEntities_AssignsIncreasingPositionsInProposalOrder
+// is this issue's Testing case 5 (FR7): ProposeEntities assigns each
+// proposed entity an explicit, increasing position via the same
+// nextSiblingPosition helper every other Create* in this package uses --
+// in proposal order, never a caller-supplied value (MediatedEntityProposal
+// has no Position field at all).
+func TestMediatedWriteStore_ProposeEntities_AssignsIncreasingPositionsInProposalOrder(t *testing.T) {
+	ctx := context.Background()
+	f := newMedFixture(t, "whale-net/mediated-position-order-test")
+	agent := mediatedTestSubject("producer-agent")
+	contributor := mediatedTestSubject("requirement-contributor")
+
+	p := baseMediatedProposal(f, agent, contributor)
+	p.Proposals = []store.MediatedEntityProposal{
+		{Kind: store.MediatedEntityKindRequirement, ParentID: &f.featureID, Name: "C Requirement", RequirementKind: store.RequirementKindFR, SummaryLine: "c"},
+		{Kind: store.MediatedEntityKindRequirement, ParentID: &f.featureID, Name: "A Requirement", RequirementKind: store.RequirementKindFR, SummaryLine: "a"},
+		{Kind: store.MediatedEntityKindRequirement, ParentID: &f.featureID, Name: "B Requirement", RequirementKind: store.RequirementKindFR, SummaryLine: "b"},
+	}
+
+	_, entities, err := f.store.MediatedWrites().ProposeEntities(ctx, p)
+	require.NoError(t, err)
+	require.Len(t, entities, 3)
+
+	rows := make([]store.Requirement, len(entities))
+	for i, e := range entities {
+		got, err := f.store.Requirements().GetCurrentByID(ctx, e.ID)
+		require.NoError(t, err)
+		rows[i] = got
+	}
+
+	assert.Less(t, rows[0].Position, rows[1].Position, "the second proposed entity's position must exceed the first's")
+	assert.Less(t, rows[1].Position, rows[2].Position, "the third proposed entity's position must exceed the second's")
+
+	list, err := f.store.Requirements().ListCurrentByFeature(ctx, f.featureID)
+	require.NoError(t, err)
+	require.Len(t, list, 3)
+	assert.Equal(t, []uuid.UUID{rows[0].ID, rows[1].ID, rows[2].ID}, []uuid.UUID{list[0].ID, list[1].ID, list[2].ID},
+		"ListCurrentByFeature must reflect proposal order (C, A, B), not alphabetical order (A, B, C)")
+}
+
 // TestMediatedWriteStore_ProposeEntities_InvalidLastParent_LeavesZeroRows is
 // this issue's Testing case 2 (atomicity, NFR2): a proposal whose last item
 // has an invalid parent leaves zero entities and zero revision events
