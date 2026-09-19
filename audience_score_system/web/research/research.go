@@ -103,6 +103,7 @@ import (
 	"github.com/whale-net/everything/audience_score_system/store"
 	"github.com/whale-net/everything/audience_score_system/web/auth"
 	"github.com/whale-net/everything/audience_score_system/web/components"
+	"github.com/whale-net/everything/libs/go/htmxui"
 )
 
 // defaultPageLimit is NFR2's fixed 50-row default page for both
@@ -733,7 +734,7 @@ func (h *Handlers) renderIdeaDetail(w http.ResponseWriter, r *http.Request, pers
 	data := components.LayoutData{
 		Title:          title,
 		User:           person,
-		ContainerClass: "max-w-4xl xl:max-w-7xl 2xl:max-w-[1600px]",
+		ContainerClass: htmxui.ContainerWide,
 	}
 	if status != http.StatusOK {
 		w.WriteHeader(status)

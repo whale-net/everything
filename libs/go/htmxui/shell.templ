@@ -44,8 +44,9 @@ package htmxui
 // referenced inside the component body today.
 //
 // ContainerClass allows overriding the default "max-w-4xl" main container
-// width class (e.g. for widescreen or full-bleed layouts). Empty defaults
-// to "max-w-4xl".
+// width class. Empty defaults to "max-w-4xl". Use the named ContainerWide
+// preset (container.go) for information-dense pages like dashboards and
+// multi-column detail views, rather than hand-writing breakpoint classes.
 type ShellData struct {
 	Title          string
 	BrandLabel     string

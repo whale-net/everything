@@ -8,6 +8,7 @@ import (
 	"github.com/whale-net/everything/audience_score_system/mcp/tools"
 	"github.com/whale-net/everything/audience_score_system/store"
 	"github.com/whale-net/everything/audience_score_system/web/components"
+	"github.com/whale-net/everything/libs/go/htmxui"
 )
 
 // verdictLabel renders a human-readable label for store.VerdictValue,
@@ -884,7 +885,7 @@ templ citedNotesSection(citedIDs []uuid.UUID, notes map[uuid.UUID]store.Research
 templ IdeaDetail(data components.LayoutData, ch store.Channel, idea store.Idea, notes []store.ResearchNoteWithAuthor, relationsByNote map[uuid.UUID][]store.NoteRelation, noteRefTargets map[uuid.UUID]*uuid.UUID, notesTruncated bool, threads []store.ThreadSummary, current *store.Verdict, authorNames map[uuid.UUID]string, citedNotes map[uuid.UUID]store.ResearchNote, retiredNotes map[uuid.UUID][]store.RelationType, canWrite bool, form noteFormData, verdictForm verdictFormData, strategies []store.StrategyDetail, proposeForm proposeFormData) {
 	{{
 		if data.ContainerClass == "" {
-			data.ContainerClass = "max-w-4xl xl:max-w-7xl 2xl:max-w-[1600px]"
+			data.ContainerClass = htmxui.ContainerWide
 		}
 	}}
 	@components.Layout(data) {

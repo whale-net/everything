@@ -21,9 +21,18 @@ primitives below exist here but are not yet adopted anywhere.
   extras like manmanv2's `ServerSelector`, respectively); Shell hardcodes
   none of them. `ShellData.Themes` drives the `ThemeSwitcher` mount,
   `UserLabel` is plain display text, and `ContainerClass` overrides the
-  default `max-w-4xl` wrapper for wide screens — Shell has no dependency on
+  default `max-w-4xl` wrapper — Shell has no dependency on
   `//libs/go/htmxauth` or any auth-specific user type. See `ShellData`'s
   doc comment for the full app-owned/shared boundary.
+- **`ContainerWide`** (`container.go`) — the named `ShellData.ContainerClass`
+  preset for information-dense pages (dashboards, multi-column detail
+  views) that need more horizontal room at larger breakpoints while
+  staying at the default narrow width on small/medium screens. Pass
+  `ContainerClass: htmxui.ContainerWide` instead of hand-writing the
+  breakpoint classes at each call site — this is the design-system answer
+  to "can my page be wide," so reach for it before inventing a one-off
+  `max-w-*` string. First adopted by `audience_score_system`'s Idea detail
+  page.
 - **`ThemeSwitcher(themes []Theme)`** (`theme_switcher.templ`) — the
   shared, CSS-variable/daisyUI `data-theme` switcher (FR5, shared side).
   Renders one control per caller-supplied `Theme{Value, Label}` and an
