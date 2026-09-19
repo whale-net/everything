@@ -90,3 +90,27 @@ func TestRequirementStore_ListCurrentByFeature_OrdersByKindThenPositionThenName(
 	assert.Equal(t, fr.ID, got[0].ID, "FR sorts before NFR")
 	assert.Equal(t, nfr.ID, got[1].ID)
 }
+
+// TestRequirementStore_ListCurrentByFeature_SameKind_OrdersByCreationPosition
+// is this issue's Testing case 2 (FR7): three FRs created under one Feature
+// in order C, A, B (not alphabetical) must list back C, A, B -- with kind
+// held constant, ordering is purely position-then-name.
+func TestRequirementStore_ListCurrentByFeature_SameKind_OrdersByCreationPosition(t *testing.T) {
+	ctx := context.Background()
+	s, db := newStore(t)
+	scopeID := newScope(t, ctx, db)
+	feature := setupFeature(t, ctx, s, scopeID)
+
+	c, err := s.Requirements().Create(ctx, scopeID, feature.ID, store.RequirementKindFR, "C Requirement", nil)
+	require.NoError(t, err)
+	a, err := s.Requirements().Create(ctx, scopeID, feature.ID, store.RequirementKindFR, "A Requirement", nil)
+	require.NoError(t, err)
+	b, err := s.Requirements().Create(ctx, scopeID, feature.ID, store.RequirementKindFR, "B Requirement", nil)
+	require.NoError(t, err)
+
+	got, err := s.Requirements().ListCurrentByFeature(ctx, feature.ID)
+	require.NoError(t, err)
+	require.Len(t, got, 3)
+	assert.Equal(t, []uuid.UUID{c.ID, a.ID, b.ID}, []uuid.UUID{got[0].ID, got[1].ID, got[2].ID},
+		"ListCurrentByFeature must reflect creation order (C, A, B) within the same kind, not alphabetical order (A, B, C)")
+}

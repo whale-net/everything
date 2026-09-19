@@ -57,13 +57,18 @@ const (
 // proposal's entity_delta carries on the appended revision_event (mirrors
 // AppendRevisionEventHandler's per-delta summary_line) -- the producer
 // Agent writes it; it is never derived automatically from Name.
+//
+// There is deliberately no caller-settable Position field (FR7): a
+// proposed entity's position is assigned by ProposeEntities itself, via
+// the same nextSiblingPosition helper every other Create* in this package
+// uses, in the same transaction as its INSERT -- never a value a caller
+// could pass in wrong or duplicate.
 type MediatedEntityProposal struct {
 	Kind                MediatedEntityKind
 	ParentID            *uuid.UUID
 	ParentProposalIndex *int
 	Name                string
 	Body                *string
-	Position            int
 	RequirementKind     RequirementKind
 	SummaryLine         string
 }
@@ -266,20 +271,28 @@ func (s mediatedWriteStore) ProposeEntities(ctx context.Context, in MediatedProp
 		var newID uuid.UUID
 		switch p.Kind {
 		case MediatedEntityKindFeature:
-			err := tx.QueryRow(ctx, `
+			position, err := nextSiblingPosition(ctx, tx, "feature", "feature_set_id", parentID, in.ScopeID)
+			if err != nil {
+				return RevisionEvent{}, nil, err
+			}
+			err = tx.QueryRow(ctx, `
 				INSERT INTO feature (scope_id, feature_set_id, name, description, position)
 				VALUES ($1, $2, $3, $4, $5)
 				RETURNING id
-			`, in.ScopeID, parentID, p.Name, p.Body, p.Position).Scan(&newID)
+			`, in.ScopeID, parentID, p.Name, p.Body, position).Scan(&newID)
 			if err != nil {
 				return RevisionEvent{}, nil, fmt.Errorf("insert feature (proposals[%d]): %w", i, err)
 			}
 		case MediatedEntityKindRequirement:
-			err := tx.QueryRow(ctx, `
+			position, err := nextSiblingPosition(ctx, tx, "requirement", "feature_id", parentID, in.ScopeID)
+			if err != nil {
+				return RevisionEvent{}, nil, err
+			}
+			err = tx.QueryRow(ctx, `
 				INSERT INTO requirement (scope_id, feature_id, kind, name, body, position)
 				VALUES ($1, $2, $3, $4, $5, $6)
 				RETURNING id
-			`, in.ScopeID, parentID, string(p.RequirementKind), p.Name, p.Body, p.Position).Scan(&newID)
+			`, in.ScopeID, parentID, string(p.RequirementKind), p.Name, p.Body, position).Scan(&newID)
 			if err != nil {
 				return RevisionEvent{}, nil, fmt.Errorf("insert requirement (proposals[%d]): %w", i, err)
 			}

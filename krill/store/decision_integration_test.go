@@ -87,3 +87,26 @@ func TestLoadBearingDecisionStore_ListCurrentByFeatureSet_NeverLeaksAnotherFeatu
 	require.NoError(t, err)
 	assert.Empty(t, listB, "FeatureSet B must not see FeatureSet A's LoadBearingDecision")
 }
+
+// TestLoadBearingDecisionStore_ListCurrentByFeatureSet_OrdersByCreationPosition
+// is this issue's Testing case 2 (FR7): three decisions attached to one
+// FeatureSet in order C, A, B (not alphabetical) must list back C, A, B.
+func TestLoadBearingDecisionStore_ListCurrentByFeatureSet_OrdersByCreationPosition(t *testing.T) {
+	ctx := context.Background()
+	s, db := newStore(t)
+	scopeID := newScope(t, ctx, db)
+	fs := setupFeatureSet(t, ctx, s, scopeID)
+
+	c, err := s.Decisions().Create(ctx, scopeID, fs.ID, "C Decision", nil)
+	require.NoError(t, err)
+	a, err := s.Decisions().Create(ctx, scopeID, fs.ID, "A Decision", nil)
+	require.NoError(t, err)
+	b, err := s.Decisions().Create(ctx, scopeID, fs.ID, "B Decision", nil)
+	require.NoError(t, err)
+
+	got, err := s.Decisions().ListCurrentByFeatureSet(ctx, fs.ID)
+	require.NoError(t, err)
+	require.Len(t, got, 3)
+	assert.Equal(t, []uuid.UUID{c.ID, a.ID, b.ID}, []uuid.UUID{got[0].ID, got[1].ID, got[2].ID},
+		"ListCurrentByFeatureSet must reflect creation order (C, A, B), not alphabetical order (A, B, C)")
+}

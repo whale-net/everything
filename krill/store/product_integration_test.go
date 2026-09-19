@@ -73,20 +73,27 @@ func TestProductStore_GetCurrentByID_UnknownID_ReturnsErrNotFound(t *testing.T) 
 	assert.ErrorIs(t, err, store.ErrNotFound)
 }
 
-func TestProductStore_ListCurrentByScope_OrdersByPositionThenName(t *testing.T) {
+// TestProductStore_ListCurrentByScope_OrdersByCreationPosition is this
+// issue's Testing case 2 (FR7) applied to Product: creating C, A, B (an
+// order that is NOT alphabetical) must list back C, A, B -- each Create
+// assigns an explicit, increasing position (position.go's
+// nextSiblingPosition), so sibling order reflects creation order and never
+// silently degrades to alphabetical-by-name.
+func TestProductStore_ListCurrentByScope_OrdersByCreationPosition(t *testing.T) {
 	ctx := context.Background()
 	s, db := newStore(t)
 	scopeID := newScope(t, ctx, db)
 
-	b, err := s.Products().Create(ctx, scopeID, "B Product", "")
+	c, err := s.Products().Create(ctx, scopeID, "C Product", "")
 	require.NoError(t, err)
 	a, err := s.Products().Create(ctx, scopeID, "A Product", "")
+	require.NoError(t, err)
+	b, err := s.Products().Create(ctx, scopeID, "B Product", "")
 	require.NoError(t, err)
 
 	got, err := s.Products().ListCurrentByScope(ctx, scopeID)
 	require.NoError(t, err)
-	require.Len(t, got, 2)
-	// Both rows share position=0 (default), so ties break by name: A before B.
-	assert.Equal(t, a.ID, got[0].ID)
-	assert.Equal(t, b.ID, got[1].ID)
+	require.Len(t, got, 3)
+	assert.Equal(t, []uuid.UUID{c.ID, a.ID, b.ID}, []uuid.UUID{got[0].ID, got[1].ID, got[2].ID},
+		"ListCurrentByScope must reflect creation order (C, A, B), not alphabetical order (A, B, C)")
 }

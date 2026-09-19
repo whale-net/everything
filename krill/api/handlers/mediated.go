@@ -21,6 +21,12 @@ import (
 // proposals array -- mirrors store.MediatedEntityProposal field-for-field,
 // except ParentID/ParentProposalIndex arrive as wire-friendly types
 // (string/*int) ahead of parsing.
+// Position is accepted on the wire and silently ignored: FR7 assigns each
+// proposed entity's position server-side (store.MediatedWriteStore.
+// ProposeEntities, via the same nextSiblingPosition helper every other
+// Create* uses), never a caller-supplied value. The field stays declared
+// here only so a request body carrying it (older callers) still decodes
+// under decodeStrict's unknown-field rejection.
 type mediatedProposalRequest struct {
 	Kind                string  `json:"kind"`
 	ParentID            *string `json:"parent_id,omitempty"`
@@ -98,7 +104,6 @@ func ProposeEntitiesHandler(mediated store.MediatedWriteStore) http.HandlerFunc 
 			mp := store.MediatedEntityProposal{
 				Name:        p.Name,
 				Body:        p.Body,
-				Position:    p.Position,
 				SummaryLine: p.SummaryLine,
 			}
 

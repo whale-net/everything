@@ -68,11 +68,16 @@ func (s decisionStore) Create(ctx context.Context, scopeID, featureSetID uuid.UU
 		return LoadBearingDecision{}, errParentNotFound("feature_set", featureSetID)
 	}
 
+	position, err := nextSiblingPosition(ctx, tx, "load_bearing_decision", "feature_set_id", featureSetID, scopeID)
+	if err != nil {
+		return LoadBearingDecision{}, err
+	}
+
 	decision, err := scanLoadBearingDecision(tx.QueryRow(ctx, `
-		INSERT INTO load_bearing_decision (scope_id, feature_set_id, name, body)
-		VALUES ($1, $2, $3, $4)
+		INSERT INTO load_bearing_decision (scope_id, feature_set_id, name, body, position)
+		VALUES ($1, $2, $3, $4, $5)
 		RETURNING `+loadBearingDecisionColumns,
-		scopeID, featureSetID, name, body))
+		scopeID, featureSetID, name, body, position))
 	if err != nil {
 		return LoadBearingDecision{}, fmt.Errorf("insert load_bearing_decision: %w", err)
 	}

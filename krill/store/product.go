@@ -43,13 +43,31 @@ func scanProduct(row pgx.Row) (Product, error) {
 }
 
 func (s productStore) Create(ctx context.Context, scopeID uuid.UUID, name, vision string) (Product, error) {
-	product, err := scanProduct(s.pool.QueryRow(ctx, `
-		INSERT INTO product (scope_id, name, vision)
-		VALUES ($1, $2, $3)
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return Product{}, fmt.Errorf("begin tx: %w", err)
+	}
+	defer tx.Rollback(ctx)
+
+	// Product has no parent column of its own -- its sibling set is
+	// scoped by scope_id alone (see position.go's nextSiblingPosition
+	// doc comment).
+	position, err := nextSiblingPosition(ctx, tx, "product", "scope_id", scopeID, scopeID)
+	if err != nil {
+		return Product{}, err
+	}
+
+	product, err := scanProduct(tx.QueryRow(ctx, `
+		INSERT INTO product (scope_id, name, vision, position)
+		VALUES ($1, $2, $3, $4)
 		RETURNING `+productColumns,
-		scopeID, name, vision))
+		scopeID, name, vision, position))
 	if err != nil {
 		return Product{}, fmt.Errorf("insert product: %w", err)
+	}
+
+	if err := tx.Commit(ctx); err != nil {
+		return Product{}, fmt.Errorf("commit: %w", err)
 	}
 	return product, nil
 }

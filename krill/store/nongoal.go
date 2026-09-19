@@ -57,11 +57,16 @@ func (s nonGoalStore) Create(ctx context.Context, scopeID, productID uuid.UUID, 
 		return NonGoal{}, errParentNotFound("product", productID)
 	}
 
+	position, err := nextSiblingPosition(ctx, tx, "non_goal", "product_id", productID, scopeID)
+	if err != nil {
+		return NonGoal{}, err
+	}
+
 	nonGoal, err := scanNonGoal(tx.QueryRow(ctx, `
-		INSERT INTO non_goal (scope_id, product_id, kind, name, body)
-		VALUES ($1, $2, $3, $4, $5)
+		INSERT INTO non_goal (scope_id, product_id, kind, name, body, position)
+		VALUES ($1, $2, $3, $4, $5, $6)
 		RETURNING `+nonGoalColumns,
-		scopeID, productID, string(kind), name, body))
+		scopeID, productID, string(kind), name, body, position))
 	if err != nil {
 		return NonGoal{}, fmt.Errorf("insert non_goal: %w", err)
 	}

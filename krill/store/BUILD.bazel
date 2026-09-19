@@ -32,6 +32,7 @@ go_library(
         "open_questions.go",
         "persona.go",
         "pointer.go",
+        "position.go",
         "product.go",
         "requirement.go",
         "revision_event.go",

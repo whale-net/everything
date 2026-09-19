@@ -164,9 +164,9 @@ func TestMediatedWriteStore_ProposeEntities_CreatesAllAndOneRevisionEvent(t *tes
 
 	p := baseMediatedProposal(f, agent, contributor)
 	p.Proposals = []store.MediatedEntityProposal{
-		{Kind: store.MediatedEntityKindFeature, ParentID: &f.featureSetID, Name: "Mediated Feature", Position: 1, SummaryLine: "proposed a feature"},
-		{Kind: store.MediatedEntityKindRequirement, ParentProposalIndex: intPtr(0), Name: "FR: does the thing", Position: 1, RequirementKind: store.RequirementKindFR, SummaryLine: "proposed FR"},
-		{Kind: store.MediatedEntityKindRequirement, ParentProposalIndex: intPtr(0), Name: "NFR: does it fast", Position: 2, RequirementKind: store.RequirementKindNFR, SummaryLine: "proposed NFR"},
+		{Kind: store.MediatedEntityKindFeature, ParentID: &f.featureSetID, Name: "Mediated Feature", SummaryLine: "proposed a feature"},
+		{Kind: store.MediatedEntityKindRequirement, ParentProposalIndex: intPtr(0), Name: "FR: does the thing", RequirementKind: store.RequirementKindFR, SummaryLine: "proposed FR"},
+		{Kind: store.MediatedEntityKindRequirement, ParentProposalIndex: intPtr(0), Name: "NFR: does it fast", RequirementKind: store.RequirementKindNFR, SummaryLine: "proposed NFR"},
 	}
 
 	ev, entities, err := f.store.MediatedWrites().ProposeEntities(ctx, p)
@@ -188,6 +188,46 @@ func TestMediatedWriteStore_ProposeEntities_CreatesAllAndOneRevisionEvent(t *tes
 	assert.Len(t, list, 1, "exactly one revision_event must have been appended")
 }
 
+// TestMediatedWriteStore_ProposeEntities_AssignsIncreasingPositionsInProposalOrder
+// is this issue's Testing case 5 (FR7): ProposeEntities assigns each
+// proposed entity an explicit, increasing position via the same
+// nextSiblingPosition helper every other Create* in this package uses --
+// in proposal order, never a caller-supplied value (MediatedEntityProposal
+// has no Position field at all).
+func TestMediatedWriteStore_ProposeEntities_AssignsIncreasingPositionsInProposalOrder(t *testing.T) {
+	ctx := context.Background()
+	f := newMedFixture(t, "whale-net/mediated-position-order-test")
+	agent := mediatedTestSubject("producer-agent")
+	contributor := mediatedTestSubject("requirement-contributor")
+
+	p := baseMediatedProposal(f, agent, contributor)
+	p.Proposals = []store.MediatedEntityProposal{
+		{Kind: store.MediatedEntityKindRequirement, ParentID: &f.featureID, Name: "C Requirement", RequirementKind: store.RequirementKindFR, SummaryLine: "c"},
+		{Kind: store.MediatedEntityKindRequirement, ParentID: &f.featureID, Name: "A Requirement", RequirementKind: store.RequirementKindFR, SummaryLine: "a"},
+		{Kind: store.MediatedEntityKindRequirement, ParentID: &f.featureID, Name: "B Requirement", RequirementKind: store.RequirementKindFR, SummaryLine: "b"},
+	}
+
+	_, entities, err := f.store.MediatedWrites().ProposeEntities(ctx, p)
+	require.NoError(t, err)
+	require.Len(t, entities, 3)
+
+	rows := make([]store.Requirement, len(entities))
+	for i, e := range entities {
+		got, err := f.store.Requirements().GetCurrentByID(ctx, e.ID)
+		require.NoError(t, err)
+		rows[i] = got
+	}
+
+	assert.Less(t, rows[0].Position, rows[1].Position, "the second proposed entity's position must exceed the first's")
+	assert.Less(t, rows[1].Position, rows[2].Position, "the third proposed entity's position must exceed the second's")
+
+	list, err := f.store.Requirements().ListCurrentByFeature(ctx, f.featureID)
+	require.NoError(t, err)
+	require.Len(t, list, 3)
+	assert.Equal(t, []uuid.UUID{rows[0].ID, rows[1].ID, rows[2].ID}, []uuid.UUID{list[0].ID, list[1].ID, list[2].ID},
+		"ListCurrentByFeature must reflect proposal order (C, A, B), not alphabetical order (A, B, C)")
+}
+
 // TestMediatedWriteStore_ProposeEntities_InvalidLastParent_LeavesZeroRows is
 // this issue's Testing case 2 (atomicity, NFR2): a proposal whose last item
 // has an invalid parent leaves zero entities and zero revision events
@@ -205,8 +245,8 @@ func TestMediatedWriteStore_ProposeEntities_InvalidLastParent_LeavesZeroRows(t *
 	unknownFeature := uuid.New()
 	p := baseMediatedProposal(f, agent, contributor)
 	p.Proposals = []store.MediatedEntityProposal{
-		{Kind: store.MediatedEntityKindRequirement, ParentID: &f.featureID, Name: "FR: valid parent", Position: 1, RequirementKind: store.RequirementKindFR, SummaryLine: "ok"},
-		{Kind: store.MediatedEntityKindRequirement, ParentID: &unknownFeature, Name: "FR: invalid parent", Position: 2, RequirementKind: store.RequirementKindFR, SummaryLine: "bad"},
+		{Kind: store.MediatedEntityKindRequirement, ParentID: &f.featureID, Name: "FR: valid parent", RequirementKind: store.RequirementKindFR, SummaryLine: "ok"},
+		{Kind: store.MediatedEntityKindRequirement, ParentID: &unknownFeature, Name: "FR: invalid parent", RequirementKind: store.RequirementKindFR, SummaryLine: "bad"},
 	}
 
 	_, _, err := f.store.MediatedWrites().ProposeEntities(ctx, p)
@@ -230,15 +270,15 @@ func TestMediatedWriteStore_ProposeEntities_EveryReturnedIDAppearsInADelta(t *te
 
 	batches := [][]store.MediatedEntityProposal{
 		{
-			{Kind: store.MediatedEntityKindFeature, ParentID: &f.featureSetID, Name: "Batch 1 Feature", Position: 1, SummaryLine: "f1"},
+			{Kind: store.MediatedEntityKindFeature, ParentID: &f.featureSetID, Name: "Batch 1 Feature", SummaryLine: "f1"},
 		},
 		{
-			{Kind: store.MediatedEntityKindRequirement, ParentID: &f.featureID, Name: "Batch 2 FR A", Position: 1, RequirementKind: store.RequirementKindFR, SummaryLine: "fr-a"},
-			{Kind: store.MediatedEntityKindRequirement, ParentID: &f.featureID, Name: "Batch 2 FR B", Position: 2, RequirementKind: store.RequirementKindNFR, SummaryLine: "nfr-b"},
+			{Kind: store.MediatedEntityKindRequirement, ParentID: &f.featureID, Name: "Batch 2 FR A", RequirementKind: store.RequirementKindFR, SummaryLine: "fr-a"},
+			{Kind: store.MediatedEntityKindRequirement, ParentID: &f.featureID, Name: "Batch 2 FR B", RequirementKind: store.RequirementKindNFR, SummaryLine: "nfr-b"},
 		},
 		{
-			{Kind: store.MediatedEntityKindFeature, ParentID: &f.featureSetID, Name: "Batch 3 Feature", Position: 2, SummaryLine: "f3"},
-			{Kind: store.MediatedEntityKindRequirement, ParentProposalIndex: intPtr(0), Name: "Batch 3 FR", Position: 1, RequirementKind: store.RequirementKindFR, SummaryLine: "fr3"},
+			{Kind: store.MediatedEntityKindFeature, ParentID: &f.featureSetID, Name: "Batch 3 Feature", SummaryLine: "f3"},
+			{Kind: store.MediatedEntityKindRequirement, ParentProposalIndex: intPtr(0), Name: "Batch 3 FR", RequirementKind: store.RequirementKindFR, SummaryLine: "fr3"},
 		},
 	}
 
@@ -282,7 +322,7 @@ func TestMediatedWriteStore_ProposeEntities_ActingEqualsOnBehalfOf_Rejected(t *t
 
 	p := baseMediatedProposal(f, self, self)
 	p.Proposals = []store.MediatedEntityProposal{
-		{Kind: store.MediatedEntityKindFeature, ParentID: &f.featureSetID, Name: "Should never exist", Position: 1, SummaryLine: "nope"},
+		{Kind: store.MediatedEntityKindFeature, ParentID: &f.featureSetID, Name: "Should never exist", SummaryLine: "nope"},
 	}
 
 	_, _, err := f.store.MediatedWrites().ProposeEntities(ctx, p)
@@ -304,7 +344,7 @@ func TestMediatedWriteStore_ProposeEntities_ActingDiffersFromOnBehalfOf_BothStor
 
 	p := baseMediatedProposal(f, agent, contributor)
 	p.Proposals = []store.MediatedEntityProposal{
-		{Kind: store.MediatedEntityKindFeature, ParentID: &f.featureSetID, Name: "Distinctly attributed feature", Position: 1, SummaryLine: "f"},
+		{Kind: store.MediatedEntityKindFeature, ParentID: &f.featureSetID, Name: "Distinctly attributed feature", SummaryLine: "f"},
 	}
 
 	ev, _, err := f.store.MediatedWrites().ProposeEntities(ctx, p)
@@ -334,7 +374,7 @@ func TestMediatedWriteStore_ProposeEntities_AppearsInWholeProductSlice_NoSignoff
 
 	p := baseMediatedProposal(f, agent, contributor)
 	p.Proposals = []store.MediatedEntityProposal{
-		{Kind: store.MediatedEntityKindFeature, ParentID: &f.featureSetID, Name: "Unsigned-off feature", Position: 1, SummaryLine: "f"},
+		{Kind: store.MediatedEntityKindFeature, ParentID: &f.featureSetID, Name: "Unsigned-off feature", SummaryLine: "f"},
 	}
 	_, entities, err := f.store.MediatedWrites().ProposeEntities(ctx, p)
 	require.NoError(t, err)
@@ -372,7 +412,7 @@ func TestMediatedWriteStore_ProposeEntities_ScopeIDComesFromProposal_NeverElsewh
 
 	p := baseMediatedProposal(f, agent, contributor)
 	p.Proposals = []store.MediatedEntityProposal{
-		{Kind: store.MediatedEntityKindFeature, ParentID: &f.featureSetID, Name: "Scope-qualified feature", Position: 1, SummaryLine: "f"},
+		{Kind: store.MediatedEntityKindFeature, ParentID: &f.featureSetID, Name: "Scope-qualified feature", SummaryLine: "f"},
 	}
 	ev, entities, err := f.store.MediatedWrites().ProposeEntities(ctx, p)
 	require.NoError(t, err)
@@ -402,7 +442,7 @@ func TestMediatedWriteStore_ProposeEntities_TiesOpeningSubmissionToCreatedEntiti
 
 	p := baseMediatedProposal(f, agent, contributor)
 	p.Proposals = []store.MediatedEntityProposal{
-		{Kind: store.MediatedEntityKindFeature, ParentID: &f.featureSetID, Name: "From the contributor's idea", Position: 1, SummaryLine: "f"},
+		{Kind: store.MediatedEntityKindFeature, ParentID: &f.featureSetID, Name: "From the contributor's idea", SummaryLine: "f"},
 	}
 	_, entities, err := f.store.MediatedWrites().ProposeEntities(ctx, p)
 	require.NoError(t, err)

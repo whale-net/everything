@@ -58,11 +58,16 @@ func (s requirementStore) Create(ctx context.Context, scopeID, featureID uuid.UU
 		return Requirement{}, errParentNotFound("feature", featureID)
 	}
 
+	position, err := nextSiblingPosition(ctx, tx, "requirement", "feature_id", featureID, scopeID)
+	if err != nil {
+		return Requirement{}, err
+	}
+
 	requirement, err := scanRequirement(tx.QueryRow(ctx, `
-		INSERT INTO requirement (scope_id, feature_id, kind, name, body)
-		VALUES ($1, $2, $3, $4, $5)
+		INSERT INTO requirement (scope_id, feature_id, kind, name, body, position)
+		VALUES ($1, $2, $3, $4, $5, $6)
 		RETURNING `+requirementColumns,
-		scopeID, featureID, string(kind), name, body))
+		scopeID, featureID, string(kind), name, body, position))
 	if err != nil {
 		return Requirement{}, fmt.Errorf("insert requirement: %w", err)
 	}

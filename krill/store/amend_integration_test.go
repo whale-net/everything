@@ -237,3 +237,75 @@ func TestAmendLoadBearingDecision_UnknownID_ReturnsErrNotFoundAndInsertsNoRow(t 
 	require.NoError(t, db.Pool.QueryRow(ctx, `SELECT count(*) FROM load_bearing_decision`).Scan(&count))
 	assert.Equal(t, 0, count)
 }
+
+// TestAmendRequirement_PreservesPositionRelativeToSiblings is this issue's
+// Testing case 3 (FR7): amending a requirement does not change its position
+// relative to its siblings -- a supersession is the same logical entity, so
+// its sibling order must not move even though amend inserts a brand new
+// physical row.
+func TestAmendRequirement_PreservesPositionRelativeToSiblings(t *testing.T) {
+	ctx := context.Background()
+	s, db := newAmendTestStore(t)
+	scopeID := newAmendTestScope(t, ctx, db)
+	feature := newAmendTestFeature(t, ctx, s, scopeID)
+
+	// Created in order C, A, B -- positions 0, 1, 2 respectively.
+	c, err := s.Requirements().Create(ctx, scopeID, feature.ID, store.RequirementKindFR, "C Requirement", nil)
+	require.NoError(t, err)
+	a, err := s.Requirements().Create(ctx, scopeID, feature.ID, store.RequirementKindFR, "A Requirement", nil)
+	require.NoError(t, err)
+	b, err := s.Requirements().Create(ctx, scopeID, feature.ID, store.RequirementKindFR, "B Requirement", nil)
+	require.NoError(t, err)
+
+	amendedA, err := s.Amend().AmendRequirement(ctx, a.ID, "A Requirement (amended)", nil)
+	require.NoError(t, err)
+	assert.Equal(t, a.Position, amendedA.Position, "amending must carry the prior revision's position through unchanged")
+
+	got, err := s.Requirements().ListCurrentByFeature(ctx, feature.ID)
+	require.NoError(t, err)
+	require.Len(t, got, 3)
+	assert.Equal(t, []uuid.UUID{c.ID, a.ID, b.ID}, []uuid.UUID{got[0].ID, got[1].ID, got[2].ID},
+		"amending A must not move it relative to its siblings -- order must still be C, A, B")
+}
+
+// TestAmendRequirement_SiblingCreatedAfterAmend_PicksUpMaxPlusOneOverCurrentRowsOnly
+// is this issue's Testing case 4 (FR7): creating a sibling after an amend
+// picks up max+1 over CURRENT rows only -- the closed (superseded) revision
+// must not inflate the max.
+//
+// Amend always carries a prior revision's position through unchanged, so an
+// ordinary amend can never leave behind a closed row whose position exceeds
+// its own replacement's -- the two are always equal, which would mask a
+// missing/broken "valid_to IS NULL" filter in nextSiblingPosition (MAX() is
+// insensitive to a duplicate value at the same magnitude). To make the
+// filter's absence actually observable, this test manufactures a stale-high
+// closed position directly via SQL after the amend, the same "position is
+// freely rewritable" technique store_integration_test.go's
+// TestStore_InsertBetweenSiblings_PreservesSiblingSurrogateIDs uses -- then
+// proves the next Create ignores it.
+func TestAmendRequirement_SiblingCreatedAfterAmend_PicksUpMaxPlusOneOverCurrentRowsOnly(t *testing.T) {
+	ctx := context.Background()
+	s, db := newAmendTestStore(t)
+	scopeID := newAmendTestScope(t, ctx, db)
+	feature := newAmendTestFeature(t, ctx, s, scopeID)
+
+	a, err := s.Requirements().Create(ctx, scopeID, feature.ID, store.RequirementKindFR, "A Requirement", nil)
+	require.NoError(t, err)
+	b, err := s.Requirements().Create(ctx, scopeID, feature.ID, store.RequirementKindFR, "B Requirement", nil)
+	require.NoError(t, err)
+	require.Equal(t, a.Position+1, b.Position, "B must be one greater than A")
+
+	_, err = s.Amend().AmendRequirement(ctx, a.ID, "A Requirement (amended)", nil)
+	require.NoError(t, err)
+
+	// Manufacture a stale-high position on A's now-closed original row --
+	// a value no current row carries -- so a next-position query that
+	// forgot to filter on valid_to IS NULL would wrongly pick it up.
+	_, err = db.Pool.Exec(ctx, `UPDATE requirement SET position = 99 WHERE id = $1 AND valid_to IS NOT NULL`, a.ID)
+	require.NoError(t, err)
+
+	c, err := s.Requirements().Create(ctx, scopeID, feature.ID, store.RequirementKindFR, "C Requirement", nil)
+	require.NoError(t, err)
+	assert.Equal(t, b.Position+1, c.Position,
+		"a sibling created after an amend must pick up max+1 over CURRENT rows only, ignoring the closed original A row's stale position")
+}

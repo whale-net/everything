@@ -56,11 +56,16 @@ func (s personaStore) Create(ctx context.Context, scopeID, productID uuid.UUID, 
 		return Persona{}, errParentNotFound("product", productID)
 	}
 
+	position, err := nextSiblingPosition(ctx, tx, "persona", "product_id", productID, scopeID)
+	if err != nil {
+		return Persona{}, err
+	}
+
 	persona, err := scanPersona(tx.QueryRow(ctx, `
-		INSERT INTO persona (scope_id, product_id, name, description)
-		VALUES ($1, $2, $3, $4)
+		INSERT INTO persona (scope_id, product_id, name, description, position)
+		VALUES ($1, $2, $3, $4, $5)
 		RETURNING `+personaColumns,
-		scopeID, productID, name, description))
+		scopeID, productID, name, description, position))
 	if err != nil {
 		return Persona{}, fmt.Errorf("insert persona: %w", err)
 	}

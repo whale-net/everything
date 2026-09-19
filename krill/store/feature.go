@@ -59,11 +59,16 @@ func (s featureStore) Create(ctx context.Context, scopeID, featureSetID uuid.UUI
 		return Feature{}, errParentNotFound("feature_set", featureSetID)
 	}
 
+	position, err := nextSiblingPosition(ctx, tx, "feature", "feature_set_id", featureSetID, scopeID)
+	if err != nil {
+		return Feature{}, err
+	}
+
 	feature, err := scanFeature(tx.QueryRow(ctx, `
-		INSERT INTO feature (scope_id, feature_set_id, name, description)
-		VALUES ($1, $2, $3, $4)
+		INSERT INTO feature (scope_id, feature_set_id, name, description, position)
+		VALUES ($1, $2, $3, $4, $5)
 		RETURNING `+featureColumns,
-		scopeID, featureSetID, name, description))
+		scopeID, featureSetID, name, description, position))
 	if err != nil {
 		return Feature{}, fmt.Errorf("insert feature: %w", err)
 	}
