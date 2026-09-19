@@ -77,14 +77,23 @@
 // immediately after, exactly as before this task.
 // M4's "search-mode per-turn Tools resolution" (issue #2669, root plan
 // #2602) is the fifth: its own change ID,
-// "session-workflow-tool-search-loading", gated at the exact point the new
-// branch diverges from "session-workflow-tool-dispatch"'s existing
-// ActivityListToolDefinitions call -- immediately before it, inside the
-// same toolVersion >= 1 block. A run already open across this deploy keeps
-// taking the pre-M4 path for every definition, search-mode or not: no
-// ActivityUnlockedTools call, and a zero-valued ListToolDefinitionsInput.
-// Mode/Unlocked, which tools.ListToolDefinitions treats as bulk regardless
-// of the resolved definition's actual ToolLoadingMode.
+// "session-workflow-tool-search-loading". Issue #2673 (FR10, same
+// milestone) extends this same change ID rather than adding a sixth: it
+// moves the GetVersion("session-workflow-tool-search-loading", ...) call
+// itself to ahead of ActivityBuildContext (previously it sat immediately
+// before ActivityListToolDefinitions, inside the toolVersion >= 1 block,
+// i.e. after ActivityBuildContext), so a search-mode turn's Tools are
+// known before BuildContext runs and can be charged against FR10's shared
+// budget. A search-mode turn now runs ActivityUnlockedTools ->
+// ActivityListToolDefinitions -> ActivityBuildContext; a bulk-mode turn's
+// order is untouched: ActivityBuildContext -> ActivityListToolDefinitions,
+// exactly as #2669 left it, since toolVersion's own GetVersion call is not
+// moved (processTurn's doc comment on why that one specifically must stay
+// put). A run already open across this deploy keeps taking the pre-M4
+// path for every definition, search-mode or not: no ActivityUnlockedTools
+// call, and a zero-valued ListToolDefinitionsInput.Mode/Unlocked, which
+// tools.ListToolDefinitions treats as bulk regardless of the resolved
+// definition's actual ToolLoadingMode.
 // The next behavior-changing edit to this file must add its own change ID
 // the same way.
 //
@@ -451,12 +460,80 @@ func processTurn(ctx workflow.Context, sessionID uuid.UUID, turn int, in SendTur
 		}
 	}
 
+	// searchVersion gates M4's search-based tool loading (root plan #2602)
+	// and, as of issue #2673 (FR10), WHERE in this sequence that gate is
+	// even checked: a search-mode turn's Tools must be resolved BEFORE
+	// ActivityBuildContext runs, so BuildContext can charge them against
+	// FR10's shared budget (worker/budget.go's fitToBudget) instead of
+	// building context blind to them. Checked here, ahead of
+	// ActivityBuildContext, under the SAME "session-workflow-tool-search-
+	// loading" change ID #2669 introduced -- extended at the exact point
+	// control flow newly diverges, per this file's NFR1 doc comment.
+	//
+	// Moving where this GetVersion call sits is the one part of this
+	// reordering that could look like an NFR1 hazard, so the reasoning for
+	// why it is safe: this change ID has no marker recorded in any history
+	// from before this task (issue #2669 is the same deploy that
+	// introduced it), so workflow.GetVersion's documented default-version
+	// fallback for a changeID absent from history applies here exactly as
+	// it does at #2669's own original call site -- there is nothing an
+	// older recorded history could have positioned differently for this
+	// changeID to conflict with. toolVersion below is deliberately NOT
+	// moved -- real histories already carry ITS marker (issue #2121), and
+	// relocating an EXISTING marker's call site is exactly the thing this
+	// reordering must not do; a search-mode turn is only reachable once
+	// toolVersion is already established >=1 for this execution anyway
+	// (search-loading's own gate is nested under toolVersion>=1 in
+	// #2669's original placement), so nothing here needs to re-check it.
+	searchVersion := workflow.GetVersion(ctx, "session-workflow-tool-search-loading", workflow.DefaultVersion, 1)
+	searchMode := searchVersion >= 1 && resolved.Definition.ToolLoadingMode == session.ToolLoadingModeSearch
+
+	var (
+		toolDefs ListToolDefinitionsResult
+		// toolMode/toolUnlocked mirror whichever listIn below actually ran
+		// (this search-mode block, or the bulk-mode block after
+		// BuildContext) -- every DispatchToolInput this turn constructs, via
+		// dispatchToolCall, carries these two verbatim so dispatch's
+		// search-mode refusal gate (FR9) always agrees with exactly what
+		// ActivityListToolDefinitions resolved toolDefs.Tools from, never a
+		// value re-derived separately.
+		toolMode     session.ToolLoadingMode
+		toolUnlocked []string
+	)
+	if searchMode {
+		// FR6's sticky-unlocked set, then this turn's Tools -- both ahead
+		// of BuildContext now. A bulk-mode definition never executes
+		// ActivityUnlockedTools at all (see the toolVersion block below).
+		var unlockedResult UnlockedToolsResult
+		if err := workflow.ExecuteActivity(ctx, ActivityUnlockedTools, UnlockedToolsInput{SessionID: sessionID}).Get(ctx, &unlockedResult); err != nil {
+			return failTurn(ctx, sessionID, turn, err)
+		}
+		listIn := ListToolDefinitionsInput{
+			SessionID: sessionID,
+			AgentID:   resolved.Definition.AgentID,
+			ToolSet:   resolved.Definition.ToolSet,
+			Mode:      session.ToolLoadingModeSearch,
+			Unlocked:  unlockedResult.ToolNames,
+		}
+		if err := workflow.ExecuteActivity(ctx, ActivityListToolDefinitions, listIn).Get(ctx, &toolDefs); err != nil {
+			return failTurn(ctx, sessionID, turn, err)
+		}
+		toolMode = listIn.Mode
+		toolUnlocked = listIn.Unlocked
+	}
+
 	var built BuildContextResult
 	buildIn := BuildContextInput{
 		SessionID:  sessionID,
 		Turn:       turn,
 		Definition: resolved.Definition,
 		Input:      in.Input,
+		// Tools is toolDefs.Tools from the search-mode block above when
+		// searchMode, empty otherwise -- BuildContext's own branch on
+		// Definition.ToolLoadingMode ignores it entirely for a bulk
+		// definition (context.go), so leaving it unset there is exactly
+		// FR10's "bulk-mode accounting is untouched".
+		Tools: toolDefs.Tools,
 	}
 	if err := workflow.ExecuteActivity(ctx, ActivityBuildContext, buildIn).Get(ctx, &built); err != nil {
 		if v == workflow.DefaultVersion {
@@ -466,57 +543,24 @@ func processTurn(ctx workflow.Context, sessionID uuid.UUID, turn int, in SendTur
 	}
 
 	// FR8's tool-attach step: resolves what CallModel below may offer the
-	// model this turn (ActivityListToolDefinitions), then, once the model
-	// responds, dispatches each requested call (ActivityDispatchTool).
-	// Gated behind its own change ID ("session-workflow-tool-dispatch")
-	// per this file's NFR1 doc comment -- issue #2121 is the first task to
-	// add either call, and a run already open across this deploy must keep
-	// taking the old no-tools/no-dispatch path (empty CallModelInput.Tools,
-	// no dispatch loop) rather than replay into a non-determinism error.
+	// model this turn (ActivityListToolDefinitions, for a bulk-mode turn --
+	// a search-mode turn already resolved this above, ahead of
+	// BuildContext), then, once the model responds, dispatches each
+	// requested call (ActivityDispatchTool). Gated behind its own change ID
+	// ("session-workflow-tool-dispatch") per this file's NFR1 doc comment,
+	// at its original position (right here, unmoved by #2673) -- issue
+	// #2121 is the first task to add either call, and a run already open
+	// across this deploy must keep taking the old no-tools/no-dispatch path
+	// (empty CallModelInput.Tools, no dispatch loop) rather than replay
+	// into a non-determinism error.
 	toolVersion := workflow.GetVersion(ctx, "session-workflow-tool-dispatch", workflow.DefaultVersion, 1)
 
-	var (
-		toolDefs ListToolDefinitionsResult
-		// toolMode/toolUnlocked mirror listIn.Mode/.Unlocked below at outer
-		// scope (listIn itself is block-scoped to this if) -- every
-		// DispatchToolInput this turn constructs, in both the inner-loop and
-		// pre-loop branches further down, carries these two verbatim so
-		// dispatch's search-mode gate (FR9) always agrees with exactly what
-		// ActivityListToolDefinitions resolved toolDefs.Tools from, never a
-		// value re-derived separately.
-		toolMode     session.ToolLoadingMode
-		toolUnlocked []string
-	)
-	if toolVersion >= 1 {
+	if toolVersion >= 1 && !searchMode {
 		listIn := ListToolDefinitionsInput{
 			SessionID: sessionID,
 			AgentID:   resolved.Definition.AgentID,
 			ToolSet:   resolved.Definition.ToolSet,
 		}
-
-		// searchVersion gates M4's search-based tool loading (root plan
-		// #2602), added at the exact point the new branch diverges: right
-		// before the ActivityListToolDefinitions call every prior deploy
-		// already made (NFR1). A run already open across this deploy gets
-		// workflow.DefaultVersion here and takes the path above verbatim --
-		// no ActivityUnlockedTools call, and listIn's Mode/Unlocked left at
-		// their zero values, which ListToolDefinitions (tools/listdefs.go)
-		// treats as bulk regardless of what the resolved definition's own
-		// ToolLoadingMode says. A bulk-mode definition never executes
-		// ActivityUnlockedTools even once this gate opens -- only a
-		// search-mode definition needs FR6's sticky-unlocked set at all,
-		// and a bulk session must not gain a per-turn activity call it does
-		// not have today.
-		searchVersion := workflow.GetVersion(ctx, "session-workflow-tool-search-loading", workflow.DefaultVersion, 1)
-		if searchVersion >= 1 && resolved.Definition.ToolLoadingMode == session.ToolLoadingModeSearch {
-			var unlockedResult UnlockedToolsResult
-			if err := workflow.ExecuteActivity(ctx, ActivityUnlockedTools, UnlockedToolsInput{SessionID: sessionID}).Get(ctx, &unlockedResult); err != nil {
-				return failTurn(ctx, sessionID, turn, err)
-			}
-			listIn.Mode = session.ToolLoadingModeSearch
-			listIn.Unlocked = unlockedResult.ToolNames
-		}
-
 		if err := workflow.ExecuteActivity(ctx, ActivityListToolDefinitions, listIn).Get(ctx, &toolDefs); err != nil {
 			return failTurn(ctx, sessionID, turn, err)
 		}
@@ -669,6 +713,12 @@ func processTurn(ctx workflow.Context, sessionID uuid.UUID, turn int, in SendTur
 				Turn:       turn,
 				Definition: resolved.Definition,
 				Input:      in.Input,
+				// Same turn's Tools as the outer BuildContext call above
+				// (toolDefs.Tools, resolved once per external turn -- see
+				// this function's own doc comment) -- a mid-turn loop
+				// iteration is budgeted by FR10 the same way the turn's
+				// first context build is.
+				Tools: toolDefs.Tools,
 			}
 			if err := workflow.ExecuteActivity(ctx, ActivityBuildContext, rebuildIn).Get(ctx, &rebuilt); err != nil {
 				return failTurn(ctx, sessionID, turn, err)
