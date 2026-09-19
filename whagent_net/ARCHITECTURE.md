@@ -19,6 +19,7 @@ first pilot consumer.
 - [Component map](#component-map)
 - [Transcript storage tiers](#transcript-storage-tiers)
 - [Service boundary vs. package boundary](#service-boundary-vs-package-boundary)
+- [Activity payload discipline](#activity-payload-discipline)
 - [Event bus](#event-bus)
 - [Session workflow](#session-workflow)
 - [Workflow versioning (NFR1)](#workflow-versioning-nfr1)
@@ -165,6 +166,39 @@ rather than transcript bodies; it does not require a process boundary.
 
 If a non-Go consumer ever needs direct transcript access, `session` is the
 seam to promote to a service.
+
+## Activity payload discipline
+
+Temporal permanently records both an activity's input (`ActivityTaskScheduled`)
+and its result (`ActivityTaskCompleted`) into workflow history. For
+`SessionWorkflow` — long-lived, signal-per-turn, with a turn's own inner tool
+loop able to call the model several times (see
+[Session workflow](#session-workflow) step 4) — anything large crossing that
+boundary is duplicated into history once per crossing, not once per turn.
+The rule: **an activity crossing the workflow boundary carries references
+(IDs, small structs), never the bodies those references resolve to; the body
+is re-read or resolved inside the next activity, which is invisible to
+workflow history.**
+
+Two concrete applications:
+
+- **Transcript context.** `BuildContext`'s result is `EventIDs
+  []uuid.UUID` — never the assembled message bodies (`CallModelInput`'s doc
+  comment, `worker/activities.go`). `CallModel` re-reads those IDs' rows from
+  `session.TranscriptStore.ReadByIDs` itself. This was the original
+  motivation the [Service boundary vs. package boundary](#service-boundary-vs-package-boundary)
+  section's `#1552` reference describes.
+- **Tool catalog.** `ListToolDefinitions` resolves the full tool list (JSON
+  schemas included) once per turn, but returning it as the activity's result
+  would still forward it into `CallModelInput.Tools` on *every* model call a
+  turn's tool loop makes — up to `max_tool_iterations`+1 times, not once.
+  Instead, `ListToolDefinitions` persists the list to a `turn_tool_defs` row
+  (`session.TranscriptStore.SaveTurnToolDefs`, keyed on `(session_id, turn)`,
+  the same shape as `turn_context`) and returns nothing; `CallModel` re-reads
+  it via `ReadTurnToolDefs` using the `SessionID`/`Turn` it already carries.
+  No new activity-call sequence, no `workflow.GetVersion` gate needed — only
+  the content of an already-scheduled activity's input/internal logic
+  changed, not the set, order, or count of activities `processTurn` issues.
 
 ## Event bus
 
@@ -750,13 +784,17 @@ outright — the session still exists and a caller should retry with
 - **Deferred/searched tool loading**: today `ListToolDefinitions` always
   aggregates and offers the *full* (post-`allowed_tools`) tool set to every
   model call, same as the rest of the field's MCP clients bulk-loading a
-  server's whole catalog up front. For a domain server with a large tool
-  catalog, a search-first pattern (a small fixed meta-tool the model calls
-  to find candidate tools by keyword/description, then only those
-  definitions are added to the next turn's `Tools`) would keep context/cost
-  down and compose with `allowed_tools` as a hard ceiling either way. Not
-  designed yet — would touch the tool contract (a reserved meta-tool name),
-  `ListToolDefinitions`'/`CallModelInput.Tools`' per-turn shape (now
+  server's whole catalog up front — resolved once per turn and cached via
+  `turn_tool_defs` ([Activity payload discipline](#activity-payload-discipline)
+  fixed the Temporal-history duplication this used to cause; this item is
+  about the *model's own per-turn context cost*, a separate concern). For a
+  domain server with a large tool catalog, a search-first pattern (a small
+  fixed meta-tool the model calls to find candidate tools by
+  keyword/description, then only those definitions are added to the next
+  turn's `Tools`) would keep that per-turn model context/cost down and
+  compose with `allowed_tools` as a hard ceiling either way. Not designed
+  yet — would touch the tool contract (a reserved meta-tool name),
+  `ListToolDefinitions`'/`turn_tool_defs`' per-turn shape (now
   path-dependent on prior turns, not just the agent definition), and context
   budgeting (a searched-in tool definition is itself a context cost). Scope
   through `/project-manager:design` before building, given the surface it

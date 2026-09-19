@@ -17,10 +17,18 @@ import (
 // CallModel would otherwise need to receive verbatim if this discipline
 // were dropped; llm.Message itself (a single message body) covers the
 // same mistake made one level down (e.g. a field that smuggles one
-// message's body through instead of a whole slice).
+// message's body through instead of a whole slice). []llm.ToolDefinition/
+// llm.ToolDefinition cover the same discipline applied to the tool
+// catalog: CallModelInput used to carry the full resolved tool list
+// (JSON schemas included) verbatim, forwarded on every one of a turn's
+// tool-loop model calls -- CallModel now re-reads it via
+// ReadTurnToolDefs (activities.go), the same pattern EventIDs already
+// follows for transcript bodies.
 var disallowedBodyTypes = []reflect.Type{
 	reflect.TypeOf([]llm.Message{}),
 	reflect.TypeOf(llm.Message{}),
+	reflect.TypeOf([]llm.ToolDefinition{}),
+	reflect.TypeOf(llm.ToolDefinition{}),
 }
 
 // assertNoTranscriptBodyFields fails t if any field of v's type (a struct
@@ -45,7 +53,9 @@ func assertNoTranscriptBodyFields(t *testing.T, v interface{}) {
 // type carries no event payloads"): CallModel receives BuildContext's
 // selected EventIDs and re-reads the rows itself (activities.go's doc
 // comment), never the assembled llm.Message list over the activity
-// boundary.
+// boundary -- and, by the same discipline, never the resolved tool
+// catalog either; it re-reads that from the turn_tool_defs row
+// ActivityListToolDefinitions persisted (ReadTurnToolDefs).
 func TestCallModelInput_CarriesEventIDsNotTranscriptBodies(t *testing.T) {
 	assertNoTranscriptBodyFields(t, CallModelInput{})
 
@@ -53,6 +63,18 @@ func TestCallModelInput_CarriesEventIDsNotTranscriptBodies(t *testing.T) {
 	if assert.True(t, ok, "CallModelInput must carry the context's event-ID list") {
 		assert.Equal(t, reflect.TypeOf([]uuid.UUID{}), field.Type, "EventIDs must be a []uuid.UUID, not a slice of bodies")
 	}
+}
+
+// TestListToolDefinitionsResult_CarriesNoToolCatalog proves
+// ListToolDefinitionsResult carries the tool catalog to nowhere across the
+// workflow boundary: the activity persists it to `turn_tool_defs`
+// (SaveTurnToolDefs) instead of returning it, so this result type must stay
+// empty rather than regain a Tools field that processTurn would then have
+// to forward into every one of a turn's CallModel calls again.
+func TestListToolDefinitionsResult_CarriesNoToolCatalog(t *testing.T) {
+	assertNoTranscriptBodyFields(t, ListToolDefinitionsResult{})
+	assert.Equal(t, 0, reflect.TypeOf(ListToolDefinitionsResult{}).NumField(),
+		"ListToolDefinitionsResult must stay empty -- the tool catalog is persisted via SaveTurnToolDefs, not returned")
 }
 
 // TestCommitTurnInput_CarriesEventIDsNotTranscriptBodies is the same

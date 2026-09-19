@@ -402,23 +402,27 @@ func processTurn(ctx workflow.Context, sessionID uuid.UUID, turn int, in SendTur
 	}
 
 	// FR8's tool-attach step: resolves what CallModel below may offer the
-	// model this turn (ActivityListToolDefinitions), then, once the model
-	// responds, dispatches each requested call (ActivityDispatchTool).
-	// Gated behind its own change ID ("session-workflow-tool-dispatch")
-	// per this file's NFR1 doc comment -- issue #2121 is the first task to
-	// add either call, and a run already open across this deploy must keep
-	// taking the old no-tools/no-dispatch path (empty CallModelInput.Tools,
-	// no dispatch loop) rather than replay into a non-determinism error.
+	// model this turn (ActivityListToolDefinitions -- it persists the
+	// resolved list to a `turn_tool_defs` row itself, see
+	// ListToolDefinitionsResult's doc comment; this workflow never sees the
+	// tool list contents), then, once the model responds, dispatches each
+	// requested call (ActivityDispatchTool). Gated behind its own change ID
+	// ("session-workflow-tool-dispatch") per this file's NFR1 doc comment --
+	// issue #2121 is the first task to add either call, and a run already
+	// open across this deploy must keep taking the old no-tools/no-dispatch
+	// path (no `turn_tool_defs` row that turn, so CallModel attaches no
+	// tools; no dispatch loop) rather than replay into a non-determinism
+	// error.
 	toolVersion := workflow.GetVersion(ctx, "session-workflow-tool-dispatch", workflow.DefaultVersion, 1)
 
-	var toolDefs ListToolDefinitionsResult
 	if toolVersion >= 1 {
 		listIn := ListToolDefinitionsInput{
 			SessionID: sessionID,
+			Turn:      turn,
 			AgentID:   resolved.Definition.AgentID,
 			ToolSet:   resolved.Definition.ToolSet,
 		}
-		if err := workflow.ExecuteActivity(ctx, ActivityListToolDefinitions, listIn).Get(ctx, &toolDefs); err != nil {
+		if err := workflow.ExecuteActivity(ctx, ActivityListToolDefinitions, listIn).Get(ctx, nil); err != nil {
 			return failTurn(ctx, sessionID, turn, err)
 		}
 	}
@@ -430,7 +434,6 @@ func processTurn(ctx workflow.Context, sessionID uuid.UUID, turn int, in SendTur
 		Model:     resolved.Model,
 		Provider:  resolved.Provider,
 		EventIDs:  built.EventIDs,
-		Tools:     toolDefs.Tools,
 	}
 	if err := workflow.ExecuteActivity(ctx, ActivityCallModel, callIn).Get(ctx, &modelResult); err != nil {
 		if v == workflow.DefaultVersion {
@@ -570,7 +573,6 @@ func processTurn(ctx workflow.Context, sessionID uuid.UUID, turn int, in SendTur
 				Model:     resolved.Model,
 				Provider:  resolved.Provider,
 				EventIDs:  rebuilt.EventIDs,
-				Tools:     toolDefs.Tools,
 			}
 			if err := workflow.ExecuteActivity(ctx, ActivityCallModel, loopCallIn).Get(ctx, &modelResult); err != nil {
 				return failTurn(ctx, sessionID, turn, err)

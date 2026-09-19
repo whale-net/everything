@@ -14,10 +14,11 @@ import (
 // call": it connects to every entry of toolSet (a fresh, per-server
 // credential minted for each, FR10 -- never reused across servers, the
 // same rule resolveTarget above follows) and aggregates each server's
-// exposed tool set (mcp.ClientSession.ListTools) into the
-// llm.ToolDefinition list CallModelInput.Tools carries (activities.go's
-// ListToolDefinitions activity, whagent_net/worker). Order matches
-// toolSet's own order. A ToolServerRef with a non-empty AllowedTools is
+// exposed tool set (mcp.ClientSession.ListTools) into the []llm.ToolDefinition
+// list the worker's ListToolDefinitions activity (activities.go,
+// whagent_net/worker) persists to a `turn_tool_defs` row rather than
+// returning over the workflow boundary -- CallModel re-reads it from there.
+// Order matches toolSet's own order. A ToolServerRef with a non-empty AllowedTools is
 // further narrowed to just that subset (C22, allowlist.go's isAllowed) --
 // the same rule resolveTarget enforces for a dispatched call, so a model
 // is never offered a tool name Dispatch would then refuse.

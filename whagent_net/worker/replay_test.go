@@ -382,9 +382,7 @@ func TestSessionWorkflow_ReplayRecordedHistory_WithCapEnforcementAndToolDispatch
 	// ActivityListToolDefinitions.
 	completedID = b.decision()
 	b.marker("session-workflow-tool-dispatch", 1, completedID)
-	b.activity(ActivityListToolDefinitions, ListToolDefinitionsResult{
-		Tools: []llm.ToolDefinition{{Name: "search", Description: "search ASS", Parameters: nil}},
-	})
+	b.activity(ActivityListToolDefinitions, ListToolDefinitionsResult{})
 
 	// The model responds with one tool call -- FR8's round trip.
 	b.decision()
@@ -467,9 +465,7 @@ func TestSessionWorkflow_ReplayRecordedHistory_WithToolLoop_NoNonDeterminismErro
 
 	completedID = b.decision()
 	b.marker("session-workflow-tool-dispatch", 1, completedID)
-	b.activity(ActivityListToolDefinitions, ListToolDefinitionsResult{
-		Tools: []llm.ToolDefinition{{Name: "search", Description: "search ASS", Parameters: nil}},
-	})
+	b.activity(ActivityListToolDefinitions, ListToolDefinitionsResult{})
 
 	// The turn's first model call requests a tool call -- this is what
 	// makes the loop run at all.
