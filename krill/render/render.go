@@ -61,7 +61,12 @@ type Source interface {
 
 	// ListMilestoneRefs returns every MilestoneRef under (scopeID,
 	// productID) -- the bare `M<n>` identifiers a product's roadmap
-	// names (LB6).
+	// names (LB6). May return rows of any store.MilestoneKind --
+	// renderMilestones (below) is what filters to
+	// store.MilestoneKindMilestone before rendering, so a later kind
+	// (milepebble, backlog bucket -- migration 010, issue #2683) can never
+	// silently appear in the roadmap doc even if a Source implementation
+	// forgets to filter itself.
 	ListMilestoneRefs(ctx context.Context, scopeID, productID uuid.UUID) ([]store.MilestoneRef, error)
 
 	// ListMilestoneAssociations returns every EntityMilestone row for
@@ -315,6 +320,15 @@ func renderMilestones(ctx context.Context, src Source, scopeID, productID uuid.U
 
 	entries := make([]milestoneEntry, 0, len(refs))
 	for _, ref := range refs {
+		// A later kind (milepebble, backlog bucket -- migration 010,
+		// issue #2683) must never silently render as a roadmap milestone
+		// -- see this file's Source.ListMilestoneRefs doc comment for why
+		// this filter belongs here rather than trusting every Source
+		// implementation to apply it itself.
+		if ref.Kind != store.MilestoneKindMilestone {
+			continue
+		}
+
 		associations, err := src.ListMilestoneAssociations(ctx, ref.ID)
 		if err != nil {
 			return nil, fmt.Errorf("list associations for milestone %s: %w", ref.Name, err)

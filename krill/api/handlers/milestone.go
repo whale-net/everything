@@ -8,13 +8,17 @@
 // endpoint -- the LB4 subject pair always comes from the caller's
 // session, never the request body. GET /milestones/{id} is ungated, same
 // as every other read endpoint in this package.
-//
-// Scaffold stage: handler bodies are stubs returning 501; routes.go
-// wiring and store-backed bodies land in this issue's Implementation
-// phase.
 package handlers
 
-import "net/http"
+import (
+	"errors"
+	"fmt"
+	"net/http"
+
+	"github.com/google/uuid"
+
+	"github.com/whale-net/everything/krill/store"
+)
 
 // createMilestoneRequest is CreateMilestoneHandler's request body (FR1).
 type createMilestoneRequest struct {
@@ -68,54 +72,260 @@ type MilestoneDeferralWire struct {
 	Destination string `json:"destination"`
 }
 
-// CreateMilestoneHandler will return the milestone-create endpoint (FR1):
-// POST /milestones. Scaffold stub -- see this file's doc comment.
-func CreateMilestoneHandler() http.HandlerFunc {
-	return func(w http.ResponseWriter, r *http.Request) {
-		writeJSONError(w, http.StatusNotImplemented, "CreateMilestoneHandler: not implemented -- see issue #2683's Implementation phase")
+// NewMilestoneResponse builds a MilestoneResponse from a
+// store.MilestoneRef plus its two entity_milestone association lists and
+// its deferrals -- exported so krill/mcp/tools' get_milestone tool builds
+// its response the same way this handler does, never a second conversion
+// (LB7).
+func NewMilestoneResponse(ref store.MilestoneRef, delivers, mustNotForeclose []store.EntityMilestone, deferrals []store.MilestoneDeferral) MilestoneResponse {
+	deliversIDs := make([]string, len(delivers))
+	for i, m := range delivers {
+		deliversIDs[i] = m.EntityID.String()
+	}
+	mustNotForecloseIDs := make([]string, len(mustNotForeclose))
+	for i, m := range mustNotForeclose {
+		mustNotForecloseIDs[i] = m.EntityID.String()
+	}
+	deferralWires := make([]MilestoneDeferralWire, len(deferrals))
+	for i, d := range deferrals {
+		deferralWires[i] = MilestoneDeferralWire{Body: d.Body, Destination: d.Destination}
+	}
+
+	return MilestoneResponse{
+		ID:               ref.ID.String(),
+		ProductID:        ref.ProductID.String(),
+		Name:             ref.Name,
+		Outcome:          ref.Outcome,
+		FRBudget:         ref.FRBudget,
+		Delivers:         deliversIDs,
+		MustNotForeclose: mustNotForecloseIDs,
+		Deferrals:        deferralWires,
 	}
 }
 
-// SetFRBudgetHandler will return the FR-budget revise endpoint (FR2):
-// POST /milestones/{id}/fr-budget. Scaffold stub -- see this file's doc
-// comment.
-func SetFRBudgetHandler() http.HandlerFunc {
+// CreateMilestoneHandler returns the milestone-create endpoint (FR1):
+// POST /milestones. Must be mounted behind RequireSession (gate.go).
+func CreateMilestoneHandler(milestones store.MilestoneAuthoringStore) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		writeJSONError(w, http.StatusNotImplemented, "SetFRBudgetHandler: not implemented -- see issue #2683's Implementation phase")
+		if r.Method != http.MethodPost {
+			writeJSONError(w, http.StatusMethodNotAllowed, "method not allowed")
+			return
+		}
+
+		sess, ok := requireSessionOrInternalError(w, r)
+		if !ok {
+			return
+		}
+
+		var req createMilestoneRequest
+		if err := decodeStrict(r, &req); err != nil {
+			writeJSONError(w, http.StatusBadRequest, fmt.Sprintf("invalid request body: %v", err))
+			return
+		}
+
+		productID, err := ParseUUIDField("product_id", req.ProductID)
+		if err != nil {
+			writeJSONError(w, http.StatusBadRequest, err.Error())
+			return
+		}
+		if err := RequireNonEmpty("name", req.Name); err != nil {
+			writeJSONError(w, http.StatusBadRequest, err.Error())
+			return
+		}
+		if err := RequireNonEmpty("outcome", req.Outcome); err != nil {
+			writeJSONError(w, http.StatusBadRequest, err.Error())
+			return
+		}
+
+		milestone, err := milestones.CreateMilestone(r.Context(), sess.ScopeID, productID, req.Name, req.Outcome, req.FRBudget, sess.Acting, sess.OnBehalfOf)
+		if err != nil {
+			writeStoreError(w, err)
+			return
+		}
+
+		writeJSON(w, http.StatusCreated, IDResponse{ID: milestone.ID.String()})
 	}
 }
 
-// AddDeliversHandler will return the Delivers-attach endpoint (LB6): POST
-// /milestones/{id}/delivers. Scaffold stub -- see this file's doc comment.
-func AddDeliversHandler() http.HandlerFunc {
+// SetFRBudgetHandler returns the FR-budget revise endpoint (FR2):
+// POST /milestones/{id}/fr-budget. Must be mounted behind RequireSession.
+func SetFRBudgetHandler(milestones store.MilestoneAuthoringStore) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		writeJSONError(w, http.StatusNotImplemented, "AddDeliversHandler: not implemented -- see issue #2683's Implementation phase")
+		if r.Method != http.MethodPost {
+			writeJSONError(w, http.StatusMethodNotAllowed, "method not allowed")
+			return
+		}
+
+		sess, ok := requireSessionOrInternalError(w, r)
+		if !ok {
+			return
+		}
+
+		id, err := uuid.Parse(r.PathValue("id"))
+		if err != nil {
+			writeJSONError(w, http.StatusBadRequest, "invalid id: must be a UUID")
+			return
+		}
+
+		var req setFRBudgetRequest
+		if err := decodeStrict(r, &req); err != nil {
+			writeJSONError(w, http.StatusBadRequest, fmt.Sprintf("invalid request body: %v", err))
+			return
+		}
+
+		if err := milestones.SetFRBudget(r.Context(), id, req.FRBudget, sess.Acting, sess.OnBehalfOf); err != nil {
+			writeStoreError(w, err)
+			return
+		}
+
+		writeJSON(w, http.StatusOK, IDResponse{ID: id.String()})
 	}
 }
 
-// AddMustNotForecloseHandler will return the Must-not-foreclose-attach
-// endpoint (LB6): POST /milestones/{id}/must-not-foreclose. Scaffold
-// stub -- see this file's doc comment.
-func AddMustNotForecloseHandler() http.HandlerFunc {
+// AddDeliversHandler returns the Delivers-attach endpoint (LB6): POST
+// /milestones/{id}/delivers. Must be mounted behind RequireSession.
+func AddDeliversHandler(milestones store.MilestoneAuthoringStore) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		writeJSONError(w, http.StatusNotImplemented, "AddMustNotForecloseHandler: not implemented -- see issue #2683's Implementation phase")
+		if r.Method != http.MethodPost {
+			writeJSONError(w, http.StatusMethodNotAllowed, "method not allowed")
+			return
+		}
+
+		sess, ok := requireSessionOrInternalError(w, r)
+		if !ok {
+			return
+		}
+
+		id, err := uuid.Parse(r.PathValue("id"))
+		if err != nil {
+			writeJSONError(w, http.StatusBadRequest, "invalid id: must be a UUID")
+			return
+		}
+
+		var req addDeliversRequest
+		if err := decodeStrict(r, &req); err != nil {
+			writeJSONError(w, http.StatusBadRequest, fmt.Sprintf("invalid request body: %v", err))
+			return
+		}
+
+		entityID, err := ParseUUIDField("entity_id", req.EntityID)
+		if err != nil {
+			writeJSONError(w, http.StatusBadRequest, err.Error())
+			return
+		}
+
+		if err := milestones.AddDelivers(r.Context(), sess.ScopeID, id, entityID, sess.Acting, sess.OnBehalfOf); err != nil {
+			writeStoreError(w, err)
+			return
+		}
+
+		writeJSON(w, http.StatusOK, IDResponse{ID: id.String()})
 	}
 }
 
-// AddDeferralHandler will return the deferral-record endpoint (FR1): POST
-// /milestones/{id}/deferrals. Scaffold stub -- see this file's doc
-// comment.
-func AddDeferralHandler() http.HandlerFunc {
+// AddMustNotForecloseHandler returns the Must-not-foreclose-attach
+// endpoint (LB6): POST /milestones/{id}/must-not-foreclose. Must be
+// mounted behind RequireSession.
+func AddMustNotForecloseHandler(milestones store.MilestoneAuthoringStore) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		writeJSONError(w, http.StatusNotImplemented, "AddDeferralHandler: not implemented -- see issue #2683's Implementation phase")
+		if r.Method != http.MethodPost {
+			writeJSONError(w, http.StatusMethodNotAllowed, "method not allowed")
+			return
+		}
+
+		sess, ok := requireSessionOrInternalError(w, r)
+		if !ok {
+			return
+		}
+
+		id, err := uuid.Parse(r.PathValue("id"))
+		if err != nil {
+			writeJSONError(w, http.StatusBadRequest, "invalid id: must be a UUID")
+			return
+		}
+
+		var req addMustNotForecloseRequest
+		if err := decodeStrict(r, &req); err != nil {
+			writeJSONError(w, http.StatusBadRequest, fmt.Sprintf("invalid request body: %v", err))
+			return
+		}
+
+		entityID, err := ParseUUIDField("entity_id", req.EntityID)
+		if err != nil {
+			writeJSONError(w, http.StatusBadRequest, err.Error())
+			return
+		}
+
+		if err := milestones.AddMustNotForeclose(r.Context(), sess.ScopeID, id, entityID, sess.Acting, sess.OnBehalfOf); err != nil {
+			writeStoreError(w, err)
+			return
+		}
+
+		writeJSON(w, http.StatusOK, IDResponse{ID: id.String()})
 	}
 }
 
-// GetMilestoneHandler will return the milestone read endpoint: GET
+// AddDeferralHandler returns the deferral-record endpoint (FR1): POST
+// /milestones/{id}/deferrals. Must be mounted behind RequireSession.
+func AddDeferralHandler(milestones store.MilestoneAuthoringStore) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			writeJSONError(w, http.StatusMethodNotAllowed, "method not allowed")
+			return
+		}
+
+		sess, ok := requireSessionOrInternalError(w, r)
+		if !ok {
+			return
+		}
+
+		id, err := uuid.Parse(r.PathValue("id"))
+		if err != nil {
+			writeJSONError(w, http.StatusBadRequest, "invalid id: must be a UUID")
+			return
+		}
+
+		var req addDeferralRequest
+		if err := decodeStrict(r, &req); err != nil {
+			writeJSONError(w, http.StatusBadRequest, fmt.Sprintf("invalid request body: %v", err))
+			return
+		}
+		if err := RequireNonEmpty("destination", req.Destination); err != nil {
+			writeJSONError(w, http.StatusBadRequest, err.Error())
+			return
+		}
+
+		deferral, err := milestones.AddDeferral(r.Context(), sess.ScopeID, id, req.Body, req.Destination, sess.Acting, sess.OnBehalfOf)
+		if err != nil {
+			writeStoreError(w, err)
+			return
+		}
+
+		writeJSON(w, http.StatusCreated, IDResponse{ID: deferral.ID.String()})
+	}
+}
+
+// GetMilestoneHandler returns the milestone read endpoint: GET
 // /milestones/{id}, ungated like every other read endpoint in this
-// package. Scaffold stub -- see this file's doc comment.
-func GetMilestoneHandler() http.HandlerFunc {
+// package.
+func GetMilestoneHandler(milestones store.MilestoneAuthoringStore) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		writeJSONError(w, http.StatusNotImplemented, "GetMilestoneHandler: not implemented -- see issue #2683's Implementation phase")
+		id, err := uuid.Parse(r.PathValue("id"))
+		if err != nil {
+			writeJSONError(w, http.StatusBadRequest, "invalid id: must be a UUID")
+			return
+		}
+
+		ref, delivers, mustNotForeclose, deferrals, err := milestones.GetMilestone(r.Context(), id)
+		if err != nil {
+			if errors.Is(err, store.ErrNotFound) {
+				writeJSONError(w, http.StatusNotFound, "milestone not found")
+				return
+			}
+			writeJSONError(w, http.StatusInternalServerError, "internal error")
+			return
+		}
+
+		writeJSON(w, http.StatusOK, NewMilestoneResponse(ref, delivers, mustNotForeclose, deferrals))
 	}
 }

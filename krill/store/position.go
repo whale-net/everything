@@ -38,3 +38,24 @@ func nextSiblingPosition(ctx context.Context, q txQuerier, table, parentColumn s
 	}
 	return position, nil
 }
+
+// nextSiblingPositionPlain is nextSiblingPosition's counterpart for a
+// table with no `valid_to` column at all -- `milestone_ref` and
+// `milestone_deferral` (migration 010, issue #2683) are not SCD2 (LB3:
+// see 004_milestone_assoc.up.sql's and 010_milestone_authoring.up.sql's
+// boundary comments), so every row simply exists or does not; there is no
+// "current row" distinction to filter on the way every nextSiblingPosition
+// caller's table has. Same FR7 shape otherwise: COALESCE(MAX(position),
+// -1) + 1 over the parent's siblings, read inside the same transaction as
+// the INSERT that follows.
+func nextSiblingPositionPlain(ctx context.Context, q txQuerier, table, parentColumn string, parentID, scopeID uuid.UUID) (int, error) {
+	var position int
+	err := q.QueryRow(ctx, fmt.Sprintf(
+		`SELECT COALESCE(MAX(position), -1) + 1 FROM %s WHERE %s = $1 AND scope_id = $2`,
+		table, parentColumn,
+	), parentID, scopeID).Scan(&position)
+	if err != nil {
+		return 0, fmt.Errorf("next sibling position in %s: %w", table, err)
+	}
+	return position, nil
+}

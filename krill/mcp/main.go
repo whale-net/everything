@@ -127,11 +127,14 @@ func run() error {
 
 	// Two *mcp.Server instances, one per mount (server/transport.go's
 	// specMountPath and designMountPath) -- registering a tool is a
-	// per-server operation (mcp.AddTool), so the only way to guarantee the
-	// FR1-FR10 write tools this task adds can never end up reachable from
-	// specMountPath is to never register them on the same *mcp.Server that
-	// backs it. tools.RegisterAll (FR5-FR8, read-only) is unchanged;
-	// tools.RegisterDesignAll (this task) is new.
+	// per-server operation (mcp.AddTool), so the only way to guarantee a
+	// write tool can never end up reachable from specMountPath is to never
+	// register it on the same *mcp.Server that backs it. tools.RegisterAll
+	// (FR5-FR8, read-only) is unchanged; tools.RegisterDesignAll (issue
+	// #2547) and tools.RegisterMilestoneAll (milestone authoring, issue
+	// #2683) both mount on designReg -- create_milestone/set_fr_budget
+	// need the same krill-session-derived LB4 subject pair every write
+	// tool on that mount already resolves.
 	specSrv := server.New()
 	specReg := server.NewRegistry(specSrv)
 	tools.RegisterAll(specReg, querier)
@@ -139,6 +142,7 @@ func run() error {
 	designSrv := server.New()
 	designReg := server.NewRegistry(designSrv)
 	tools.RegisterDesignAll(designReg, entities, sessions, querier)
+	tools.RegisterMilestoneAll(designReg, sessions, entities.MilestoneAuthoring())
 
 	// The mcpauth (human) front door's CredentialStore preflights the
 	// consuming domain's credential table at boot -- exactly like

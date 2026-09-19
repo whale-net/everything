@@ -226,7 +226,7 @@ func TestRender_MustNotForecloseRendersFromAssociationRows(t *testing.T) {
 			Features:      []slice.FeatureEntity{f1, f2},
 			Decisions:     []slice.DecisionEntity{lb1, lb2, lb3, lb4},
 		},
-		MilestoneRefs: []store.MilestoneRef{{ID: milestoneID, Name: "M1"}},
+		MilestoneRefs: []store.MilestoneRef{{ID: milestoneID, Name: "M1", Kind: store.MilestoneKindMilestone}},
 		Associations: map[uuid.UUID][]store.EntityMilestone{
 			milestoneID: {
 				{EntityID: f1.ID},  // delivers C1

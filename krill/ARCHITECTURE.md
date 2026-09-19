@@ -275,16 +275,49 @@ never a second table and never a column on the spec entity itself.
 a sibling accessor (`(*Store).MilestoneAuthoring()`) next to the
 pre-existing `MilestoneStore` (`(*Store).Milestones()`, migration 004)
 rather than folded into it, so the importer's `GetOrCreateRef`/
-`AddAssociation` surface is untouched by this addition. As of this task's
-Scaffold phase, `MilestoneAuthoringStore`'s methods are stubs (mirrors
-`DesignSessionStore`'s own scaffold precedent, #2542) -- store bodies,
-`api/handlers/milestone.go`'s HTTP wiring, and `mcp/tools/milestone.go`'s
-`RegisterAll` wiring all land in this issue's Implementation phase. That
-same phase also migrates `krill/store/milestone.go`'s `ListRefsByProduct`
-and `krill/render`'s `ListMilestoneRefs`/`renderMilestones` to filter on
-`kind = 'milestone'` explicitly -- migration 010 adds the column and its
-CHECK constraint now, ahead of any second kind existing, but no existing
-reader is kind-aware yet.
+`AddAssociation` surface is untouched by this addition.
+
+**Implementation phase (this issue).** `MilestoneAuthoringStore`'s methods
+are implemented over `milestone_ref`/`milestone_deferral`/
+`entity_milestone`, `api/handlers/milestone.go`'s six endpoints are wired
+into `routes.go` (five behind `RequireSession`, `GET /milestones/{id}`
+ungated), and `mcp/tools/milestone.go`'s `RegisterMilestoneAll` is wired
+onto the design mount (`../main.go`'s `designReg`, alongside
+`RegisterDesignAll`) -- not the read-only spec mount -- since
+`create_milestone`/`set_fr_budget` need the same krill-session-derived
+LB4 subject pair every other write tool on that mount already resolves
+(`krillSessionInput`/`requireKrillSession`, design.go).
+
+Two schema-shape consequences worth calling out:
+
+- `milestone_ref` and `milestone_deferral` are **not** SCD2 (LB3: see this
+  section's earlier note and 010's own comment), so `position.go`'s
+  existing `nextSiblingPosition` -- built for the migration-002 spec axis,
+  which always filters on `valid_to IS NULL` -- cannot be reused as-is:
+  neither table has a `valid_to` column to filter on. `position.go` adds a
+  second helper, `nextSiblingPositionPlain`, with the same
+  `COALESCE(MAX(position), -1) + 1` shape but no `valid_to` filter, used
+  by `CreateMilestone` and `AddDeferral`. Likewise, `errors.go`'s
+  `currentRowExists` cannot check `milestone_ref` parentage (same missing-
+  column reason) -- `plainRowExists` is its non-SCD2 counterpart, used by
+  every `MilestoneAuthoringStore` method that takes a `milestoneID` and a
+  `scopeID` together.
+- `entity_milestone_entity_milestone_idx` widening to `(entity_id,
+  milestone_id, relation)` (migration 010) breaks the pre-existing
+  `MilestoneStore.AddAssociation`'s `ON CONFLICT (entity_id,
+  milestone_id)` clause -- Postgres requires an `ON CONFLICT` target to
+  name a real unique constraint's columns exactly, and `(entity_id,
+  milestone_id)` alone stopped being one. `AddAssociation` now inserts an
+  explicit `relation = 'delivers'` (the importer's only relation, FR16 has
+  no "must not foreclose" concept) and targets all three columns.
+
+`krill/store/milestone.go`'s `ListRefsByProduct` now filters
+`kind = 'milestone'` explicitly, and `krill/render/render.go`'s
+`renderMilestones` filters the same way defensively (belt-and-suspenders:
+a `Source` implementation that forgets to filter can still never leak a
+later kind into the rendered roadmap) -- migration 010 added the column
+and its CHECK constraint ahead of any second kind existing, but as of this
+issue every reader is kind-aware.
 
 ## `design_session` vs `krill_session` (FR1, FR8, #2542)
 
