@@ -38,7 +38,7 @@ it requires `PG_DATABASE_URL`.
 
 | Variable | Component | Default | Description |
 |----------|-----------|---------|--------------|
-| `RABBITMQ_URL` | server, worker, ui | *(unset)* | RabbitMQ connection URL (amqp or amqps scheme), e.g. `amqp://user:pass@host:5672/vhost`. Required format: `amqp[s]://username:password@host:port/vhost`. When unset, event publishing is skipped (NFR7: graceful degradation). |
+| `RABBITMQ_URL` | server, worker, ui | *(unset)* | RabbitMQ connection URL (amqp or amqps scheme), e.g. `amqp://user:pass@host:5672/vhost`. Required format: `amqp[s]://username:password@host:port/vhost`. When unset, event publishing is skipped (NFR7: graceful degradation). Shared by both event families on the same exchange: promotion events (`/promotions/{id}`) and release-run events (`/releases/{id}`, issue #1702) -- there is no separate variable for release-run live updates, and both degrade the same way when unset (the page still renders current state by ordinary GET; see architecture/21-promotion-sse.md and architecture/22-release-run-sse.md). |
 | `RABBITMQ_SSL_VERIFY` | server, worker, ui | `true` | For amqps URLs: set to `false` to skip certificate verification (dev/test only). |
 | `RABBITMQ_CA_CERT_PATH` | server, worker, ui | *(unset)* | For amqps URLs: path to custom CA certificate file for server verification. |
 | `RABBITMQ_TLS_SERVER_NAME` | server, worker, ui | *(unset)* | For amqps URLs: server name for certificate verification (useful when connecting via k8s service but cert is for external domain). |

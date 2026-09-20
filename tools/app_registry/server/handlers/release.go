@@ -11,6 +11,7 @@ import (
 
 	"github.com/whale-net/everything/libs/go/logging"
 	"github.com/whale-net/everything/libs/go/semver"
+	"github.com/whale-net/everything/tools/app_registry/events"
 	pb "github.com/whale-net/everything/tools/app_registry/protos"
 	"github.com/whale-net/everything/tools/app_registry/server/auth"
 	"github.com/whale-net/everything/tools/app_registry/server/repository"
@@ -53,12 +54,20 @@ type ReleaseServer struct {
 	// reaching the ExecuteWorkflow call); a real deployment (server/main.go)
 	// always provides one.
 	temporal client.Client
+	// pub is the optional, best-effort SSE event publisher TriggerRelease
+	// uses to announce the QUEUED release_run_target rows it just created
+	// (FR7, issue #1702) -- same events.PublisherInterface
+	// PromotionServer.pub already holds, nil-checked at the one call site
+	// below. Nil in any deployment with RABBITMQ_URL unset
+	// (initializePublisher, server/main.go) or in tests that don't
+	// construct one.
+	pub events.PublisherInterface
 }
 
 // NewReleaseServer constructs a ReleaseServer over repo, starting
 // ReleaseWorkflow executions via temporalClient (see TriggerRelease).
-func NewReleaseServer(repo repository.Registry, temporalClient client.Client) *ReleaseServer {
-	return &ReleaseServer{repo: repo, temporal: temporalClient}
+func NewReleaseServer(repo repository.Registry, temporalClient client.Client, pub events.PublisherInterface) *ReleaseServer {
+	return &ReleaseServer{repo: repo, temporal: temporalClient, pub: pub}
 }
 
 // TriggerRelease dedup-checks the batch against any already-non-terminal
@@ -195,6 +204,15 @@ func (s *ReleaseServer) TriggerRelease(ctx context.Context, req *pb.TriggerRelea
 		return nil
 	}); err != nil {
 		return nil, mapRepoErr(err)
+	}
+
+	// Publish after the write commits (FR7, issue #1702), same non-fatal
+	// pattern as Promote's publish point: the QUEUED row(s) CreateReleaseRun
+	// just created are real regardless of whether the workflow start below
+	// succeeds, so this fires unconditionally on that success -- not
+	// gated on s.temporal's outcome.
+	if s.pub != nil {
+		s.pub.PublishReleaseRun(created.ReleaseRunID, "release_target_queued", "pending")
 	}
 
 	if s.temporal != nil {

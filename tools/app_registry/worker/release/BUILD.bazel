@@ -17,6 +17,7 @@ go_library(
     deps = [
         "//libs/go/logging",
         "//libs/go/s3",
+        "//tools/app_registry/events",
         "//tools/app_registry/server/repository",
         "//tools/app_registry/worker/writeback",
         "@com_github_google_uuid//:uuid",

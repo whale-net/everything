@@ -2,6 +2,7 @@ package release
 
 import (
 	"context"
+	"fmt"
 	"testing"
 
 	"github.com/stretchr/testify/require"
@@ -10,6 +11,36 @@ import (
 	"github.com/whale-net/everything/tools/app_registry/server/repository/fake"
 	appmetapb "github.com/whale-net/everything/tools/appmeta/proto"
 )
+
+// fakeReleaseRunPublisher records every PublishReleaseRun call for testing
+// purposes, mirroring worker/writeback/argosync_test.go's FakePublisher.
+// Implements events.PublisherInterface (assigned directly to
+// Activities.Publisher below) via structural typing -- no explicit import
+// of the events package needed here since nothing in this file references
+// its types by name.
+type fakeReleaseRunPublisher struct {
+	events []releaseRunPublishedEvent
+}
+
+type releaseRunPublishedEvent struct {
+	ReleaseRunID string
+	EventKind    string
+	EventStatus  string
+}
+
+func newFakeReleaseRunPublisher() *fakeReleaseRunPublisher {
+	return &fakeReleaseRunPublisher{}
+}
+
+func (f *fakeReleaseRunPublisher) Publish(promotionID, eventKind, eventStatus string) {}
+
+func (f *fakeReleaseRunPublisher) PublishReleaseRun(releaseRunID, eventKind, eventStatus string) {
+	f.events = append(f.events, releaseRunPublishedEvent{
+		ReleaseRunID: releaseRunID,
+		EventKind:    eventKind,
+		EventStatus:  eventStatus,
+	})
+}
 
 func newTestRegistry(t *testing.T) *fake.Registry {
 	t.Helper()
@@ -346,4 +377,181 @@ func TestActivities_RecordTargetState_DefensiveNoOpOnContradictingTerminalState(
 	_, targets, err := repo.ReleaseRuns().GetReleaseRun(context.Background(), run.ReleaseRunID)
 	require.NoError(t, err)
 	require.Equal(t, repository.ReleaseRunTargetStateSucceeded, targets[0].State, "the first terminal write must stick")
+}
+
+// --- RecordTargetState publish (FR7, issue #1702) ---
+
+// TestActivities_RecordTargetState_PublishesOncePerLandedWrite drives a
+// QUEUED->BUILDING->PUBLISHING->RECORDING->SUCCEEDED progression for one
+// target, one RecordTargetState call per adjacent step (the shape
+// ReleaseWorkflow/FinalizePublish actually use -- see that method's doc
+// comment), and asserts exactly one PublishReleaseRun call lands per step,
+// each carrying the run's id, in order.
+func TestActivities_RecordTargetState_PublishesOncePerLandedWrite(t *testing.T) {
+	repo := newTestRegistry(t)
+	run, _ := createTestReleaseRun(t, repo, []repository.ReleaseRunTarget{
+		{OwnerFullName: "demo-widget", Kind: repository.ArtifactKindImage},
+	})
+	pub := newFakeReleaseRunPublisher()
+	a := &Activities{Registry: repo, Publisher: pub}
+	target := ReleaseTarget{OwnerFullName: "demo-widget", Kind: repository.ArtifactKindImage}
+
+	progression := []repository.ReleaseRunTargetState{
+		repository.ReleaseRunTargetStateBuilding,
+		repository.ReleaseRunTargetStatePublishing,
+		repository.ReleaseRunTargetStateRecording,
+		repository.ReleaseRunTargetStateSucceeded,
+	}
+	for _, state := range progression {
+		require.NoError(t, a.RecordTargetState(context.Background(), run.ReleaseRunID, target, state, "build-1", ""))
+	}
+
+	require.Len(t, pub.events, len(progression), "expected exactly one publish per landed write")
+	for i, state := range progression {
+		require.Equal(t, run.ReleaseRunID, pub.events[i].ReleaseRunID)
+		require.Equal(t, "release_target_"+string(state), pub.events[i].EventKind)
+	}
+	require.Equal(t, "succeeded", pub.events[len(pub.events)-1].EventStatus)
+}
+
+// TestActivities_RecordTargetState_MultiStepWalk_PublishesOncePerStep
+// covers the other call shape: a single RecordTargetState call that must
+// walk several intermediate states to catch up (e.g. VerifyPublished's
+// terminal call after Building was the last state explicitly recorded) --
+// each landed UpdateTargetState still gets its own publish, not one for
+// the whole call.
+func TestActivities_RecordTargetState_MultiStepWalk_PublishesOncePerStep(t *testing.T) {
+	repo := newTestRegistry(t)
+	run, _ := createTestReleaseRun(t, repo, []repository.ReleaseRunTarget{
+		{OwnerFullName: "demo-widget", Kind: repository.ArtifactKindImage},
+	})
+	pub := newFakeReleaseRunPublisher()
+	a := &Activities{Registry: repo, Publisher: pub}
+	target := ReleaseTarget{OwnerFullName: "demo-widget", Kind: repository.ArtifactKindImage}
+
+	// One call straight from Queued to Succeeded walks Building,
+	// Publishing, Recording, Succeeded -- four landed writes.
+	require.NoError(t, a.RecordTargetState(context.Background(), run.ReleaseRunID, target, repository.ReleaseRunTargetStateSucceeded, "build-1", ""))
+
+	require.Len(t, pub.events, 4)
+	wantKinds := []string{
+		"release_target_building",
+		"release_target_publishing",
+		"release_target_recording",
+		"release_target_succeeded",
+	}
+	for i, kind := range wantKinds {
+		require.Equal(t, kind, pub.events[i].EventKind)
+		require.Equal(t, run.ReleaseRunID, pub.events[i].ReleaseRunID)
+	}
+}
+
+// TestActivities_RecordTargetState_FailedPublishesOnce covers the direct
+// Failed transition (skips the walk entirely).
+func TestActivities_RecordTargetState_FailedPublishesOnce(t *testing.T) {
+	repo := newTestRegistry(t)
+	run, _ := createTestReleaseRun(t, repo, []repository.ReleaseRunTarget{
+		{OwnerFullName: "demo-widget", Kind: repository.ArtifactKindImage},
+	})
+	pub := newFakeReleaseRunPublisher()
+	a := &Activities{Registry: repo, Publisher: pub}
+	target := ReleaseTarget{OwnerFullName: "demo-widget", Kind: repository.ArtifactKindImage}
+
+	require.NoError(t, a.RecordTargetState(context.Background(), run.ReleaseRunID, target, repository.ReleaseRunTargetStateFailed, "", "build failed"))
+
+	require.Len(t, pub.events, 1)
+	require.Equal(t, run.ReleaseRunID, pub.events[0].ReleaseRunID)
+	require.Equal(t, "release_target_failed", pub.events[0].EventKind)
+	require.Equal(t, "failed", pub.events[0].EventStatus)
+}
+
+// TestActivities_RecordTargetState_NoopRetry_PublishesNothing is FR7's
+// idempotency counterpart to TestActivities_RecordTargetState_IdempotentRetry:
+// a retried call that lands on the no-op early return (already at the
+// desired state) must not emit an event -- a retry that changes nothing
+// must not tell the page anything changed.
+func TestActivities_RecordTargetState_NoopRetry_PublishesNothing(t *testing.T) {
+	repo := newTestRegistry(t)
+	run, _ := createTestReleaseRun(t, repo, []repository.ReleaseRunTarget{
+		{OwnerFullName: "demo-widget", Kind: repository.ArtifactKindImage},
+	})
+	pub := newFakeReleaseRunPublisher()
+	a := &Activities{Registry: repo, Publisher: pub}
+	target := ReleaseTarget{OwnerFullName: "demo-widget", Kind: repository.ArtifactKindImage}
+
+	require.NoError(t, a.RecordTargetState(context.Background(), run.ReleaseRunID, target, repository.ReleaseRunTargetStateSucceeded, "build-1", ""))
+	require.Len(t, pub.events, len(releaseRunTargetStateOrder)-1, "sanity: the first call walked queued->succeeded")
+
+	before := len(pub.events)
+	// Redelivered retry of the exact same final call -- the no-op early
+	// return (row.State == newState).
+	require.NoError(t, a.RecordTargetState(context.Background(), run.ReleaseRunID, target, repository.ReleaseRunTargetStateSucceeded, "build-1", ""))
+	require.Len(t, pub.events, before, "a no-op retry must not publish")
+}
+
+// failingUpdateStateReleaseRuns wraps a real repository.ReleaseRunRepository
+// and injects a failure on the one UpdateTargetState call whose newState
+// equals failState -- letting tests exercise "the repository write itself
+// failed" without a real broken database.
+type failingUpdateStateReleaseRuns struct {
+	repository.ReleaseRunRepository
+	failState repository.ReleaseRunTargetState
+}
+
+func (f failingUpdateStateReleaseRuns) UpdateTargetState(ctx context.Context, releaseRunTargetID string, newState repository.ReleaseRunTargetState, buildID, errorDetail string) error {
+	if newState == f.failState {
+		return fmt.Errorf("injected failure for %s", newState)
+	}
+	return f.ReleaseRunRepository.UpdateTargetState(ctx, releaseRunTargetID, newState, buildID, errorDetail)
+}
+
+// registryWithFailingReleaseRuns wraps a real repository.Registry, routing
+// every other repository through unchanged and ReleaseRuns() through
+// failingUpdateStateReleaseRuns.
+type registryWithFailingReleaseRuns struct {
+	repository.Registry
+	failState repository.ReleaseRunTargetState
+}
+
+func (r registryWithFailingReleaseRuns) ReleaseRuns() repository.ReleaseRunRepository {
+	return failingUpdateStateReleaseRuns{ReleaseRunRepository: r.Registry.ReleaseRuns(), failState: r.failState}
+}
+
+// TestActivities_RecordTargetState_RepositoryWriteFailure_PublishesNothing
+// proves the NFR3 structural contract this task's issue calls for directly:
+// with a real UpdateTargetState failure injected on the Building step, the
+// walk returns an error and exactly zero PublishReleaseRun calls land --
+// the publish call sits strictly after the write it announces, never
+// before it and never on its error path.
+func TestActivities_RecordTargetState_RepositoryWriteFailure_PublishesNothing(t *testing.T) {
+	repo := newTestRegistry(t)
+	run, _ := createTestReleaseRun(t, repo, []repository.ReleaseRunTarget{
+		{OwnerFullName: "demo-widget", Kind: repository.ArtifactKindImage},
+	})
+	pub := newFakeReleaseRunPublisher()
+	failing := registryWithFailingReleaseRuns{Registry: repo, failState: repository.ReleaseRunTargetStateBuilding}
+	a := &Activities{Registry: failing, Publisher: pub}
+	target := ReleaseTarget{OwnerFullName: "demo-widget", Kind: repository.ArtifactKindImage}
+
+	err := a.RecordTargetState(context.Background(), run.ReleaseRunID, target, repository.ReleaseRunTargetStateSucceeded, "build-1", "")
+	require.Error(t, err)
+	require.Empty(t, pub.events, "a failed repository write must not publish")
+}
+
+// TestActivities_RecordTargetState_NilPublisher_NoPanic proves NFR6: every
+// RecordTargetState path (walk, direct Failed) runs to completion with a
+// nil Publisher -- the default when RABBITMQ_URL is unset.
+func TestActivities_RecordTargetState_NilPublisher_NoPanic(t *testing.T) {
+	repo := newTestRegistry(t)
+	run, _ := createTestReleaseRun(t, repo, []repository.ReleaseRunTarget{
+		{OwnerFullName: "demo-widget", Kind: repository.ArtifactKindImage},
+		{OwnerFullName: "demo-gadget", Kind: repository.ArtifactKindImage},
+	})
+	a := &Activities{Registry: repo}
+
+	target := ReleaseTarget{OwnerFullName: "demo-widget", Kind: repository.ArtifactKindImage}
+	require.NoError(t, a.RecordTargetState(context.Background(), run.ReleaseRunID, target, repository.ReleaseRunTargetStateSucceeded, "build-1", ""))
+
+	failTarget := ReleaseTarget{OwnerFullName: "demo-gadget", Kind: repository.ArtifactKindImage}
+	require.NoError(t, a.RecordTargetState(context.Background(), run.ReleaseRunID, failTarget, repository.ReleaseRunTargetStateFailed, "", "boom"))
 }
