@@ -297,145 +297,122 @@ kubectl access, and (for NFR17b) a real browser session.
 
 ### NFR17(a) — Per-replica fan-out against a live broker
 
-**Objective:** Verify that an event published by one UI replica reaches SSE
-subscribers attached to **every** replica (not one at random). This tests the
-broker's server-named, non-durable, auto-delete queue behavior (FR1/NFR1).
+**Objective:** Verify that ONE event published for a release run or a
+promotion reaches SSE subscribers attached to **every** `app-registry-ui`
+replica, not one at random. This is a broker property (server-named,
+non-durable, auto-delete queue per replica — `libs/go/htmxsse`'s `Hub`) and
+cannot be asserted broker-free; see #1138's NFR17(a) and #1699's FR17/NFR1.
+
+**Do not go through the Service.** One Service in front of two pods gives no
+control over which pod a subscriber lands on, degrading the criterion into
+"connect twice and hope." Every subscriber below is a `kubectl port-forward`
+straight to one pod.
+
+**Committed tool:** the procedure below is driven by
+`//tools/app_registry/scripts/verify_multi_replica_sse` (source:
+`tools/app_registry/scripts/verify_multi_replica_sse/main.go`). It seeds the
+minimum real `release_run`/`release_run_target` and
+`app`/`build`/`artifact`/`promotion` rows needed for both status pages to
+render, opens one SSE subscriber per pod for **both** topic families
+(`release_run.<id>` and `promotion.<id>` — the same Hub and exchange, so
+this is one extra subscriber pair over covering promotions alone), hand-
+publishes one event per family, and asserts every subscriber received *a*
+push (never an exact count — duplicate/bursty publishes are normal and
+harmless, since the fragment re-reads current state at delivery).
 
 **Prerequisites:**
-- Tilt environment running (`tilt up`)
-- kubectl configured for `docker-desktop` context
-- Two or more pod replicas of `app-registry-ui`
-- Real RabbitMQ instance (provided by Tilt's `setup_rabbitmq`)
-- AUTH_MODE=none (already set in Tiltfile)
+- kubectl configured for the local cluster's context (`kind-everything` for
+  this repo's dev container; `docker-desktop` if you're on Docker Desktop
+  Kubernetes)
+- `tilt`, `kubectl`
 
 **Procedure:**
 
-1. **Scale the UI deployment to 2+ replicas:**
+1. **Bring up `app-registry` at 2 UI replicas.** `APP_REGISTRY_UI_REPLICAS`
+   controls the `app-registry-ui` Deployment's `replicas` (Tiltfile; default
+   1, unchanged for ordinary local dev):
    ```bash
-   kubectl scale deployment/app-registry-ui -n app-registry-local-dev --replicas=2
+   cd tools/app_registry
+   APP_REGISTRY_UI_REPLICAS=2 tilt up --stream=true
+   ```
+   Wait for both pods Ready:
+   ```bash
    kubectl wait --for=condition=Ready pod -l app=app-registry-ui \
-     -n app-registry-local-dev --timeout=60s
-   ```
-   Verify both pods are running:
-   ```bash
+     -n app-registry-local-dev --timeout=120s
    kubectl get pods -n app-registry-local-dev -l app=app-registry-ui
-   # Should show 2 pods in Ready state
+   # expect 2 pods, READY 1/1
    ```
 
-2. **Set up per-pod port-forwards (one SSE subscriber per pod):**
-   
-   Open three terminal windows. In the first, forward pod 1 to a local port:
+2. **Port-forward each pod to its own local port** (never the Service):
    ```bash
-   # Terminal 1: Get the first pod name
-   POD1=$(kubectl get pods -n app-registry-local-dev -l app=app-registry-ui \
-     -o jsonpath='{.items[0].metadata.name}')
-   echo "Pod 1: $POD1"
-   
-   # Forward pod 1 to localhost:8000
-   kubectl port-forward -n app-registry-local-dev $POD1 8000:8000
+   POD1=$(kubectl get pods -n app-registry-local-dev -l app=app-registry-ui -o jsonpath='{.items[0].metadata.name}')
+   POD2=$(kubectl get pods -n app-registry-local-dev -l app=app-registry-ui -o jsonpath='{.items[1].metadata.name}')
+   kubectl port-forward -n app-registry-local-dev pod/$POD1 8000:8000 &
+   kubectl port-forward -n app-registry-local-dev pod/$POD2 8001:8000 &
    ```
-   
-   In a second terminal, forward pod 2 to a different local port:
+   Tilt's own `setup_postgres`/`setup_rabbitmq` helpers also forward Postgres
+   to `localhost:5432` and RabbitMQ to `localhost:5672` by default. **If
+   another domain's Tilt session already holds those ports** (a shared dev
+   box running more than one domain at once — check with
+   `ss -tln | grep -E ':5432|:5672'`), forward Postgres/RabbitMQ from their
+   pods directly, to different local ports, and pass those via the tool's
+   `--pg-url`/`--rabbitmq-url` flags in step 3:
    ```bash
-   # Terminal 2: Get the second pod name
-   POD2=$(kubectl get pods -n app-registry-local-dev -l app=app-registry-ui \
-     -o jsonpath='{.items[1].metadata.name}')
-   echo "Pod 2: $POD2"
-   
-   # Forward pod 2 to localhost:8001
-   kubectl port-forward -n app-registry-local-dev $POD2 8001:8000
-   ```
-   
-   Verify both forwards are active:
-   ```bash
-   # Terminal 3: Test connectivity
-   curl -I http://localhost:8000/
-   curl -I http://localhost:8001/
-   # Both should return 200 OK
+   kubectl port-forward -n app-registry-local-dev pod/postgres-dev-0 25432:5432 &
+   kubectl port-forward -n app-registry-local-dev pod/rabbitmq-dev-0 25672:5672 &
    ```
 
-3. **Prepare test data (if needed):**
-   
-   If no promotions exist, create one via the gRPC API:
+3. **Run the verification tool:**
    ```bash
-   # Using the forwarded API port (default 50061)
-   grpcurl -plaintext -d '{
-     "environment_key": "dev",
-     "owner_full_name": "test-app",
-     "kind": "ARTIFACT_KIND_IMAGE",
-     "version": "v1.0.0",
-     "idempotency_key": "nfr17a-test-1"
-   }' localhost:50061 appregistry.v1.PromotionRegistry/Promote
+   bazel run //tools/app_registry/scripts/verify_multi_replica_sse:verify_multi_replica_sse -- \
+     --pg-url="postgres://postgres:password@localhost:25432/app_registry?sslmode=disable" \
+     --rabbitmq-url="amqp://rabbit:password@localhost:25672/app-registry-dev" \
+     --pod1-addr="http://localhost:8000" \
+     --pod2-addr="http://localhost:8001"
    ```
-   
-   Record the `promotion_id` from the response for the next step.
+   Omit `--pg-url`/`--rabbitmq-url` (or point them at `localhost:5432`/
+   `localhost:5672`) if Tilt's own forwards are free to use.
 
-4. **Subscribe to SSE on both pods (Terminal 3):**
-   
-   Open two concurrent SSE connections, one to each pod's port-forward:
-   ```bash
-   # Terminal 3A: Subscribe to pod 1
-   curl -N -H "Accept: text/event-stream" \
-     http://localhost:8000/promotions/<promotion-id>/status/sse
-   
-   # Terminal 3B (new session): Subscribe to pod 2
-   curl -N -H "Accept: text/event-stream" \
-     http://localhost:8001/promotions/<promotion-id>/status/sse
+   **Expected output on pass:**
    ```
-   
-   Both connections should receive heartbeats immediately (`:` lines every few seconds).
+   === NFR17(a) multi-replica SSE fan-out result ===
+     release-run/pod1 topic=release_run.<id> RECEIVED
+     release-run/pod2 topic=release_run.<id> RECEIVED
+     promotion/pod1   topic=promotion.<id>   RECEIVED
+     promotion/pod2   topic=promotion.<id>   RECEIVED
 
-5. **Publish an event via the broker (Terminal 3, new session):**
-   
-   Publish a promotion status update to trigger a broadcast:
-   ```bash
-   grpcurl -plaintext -d '{
-     "environment_key": "dev",
-     "owner_full_name": "test-app",
-     "kind": "ARTIFACT_KIND_IMAGE",
-     "version": "v1.0.1",
-     "idempotency_key": "nfr17a-publish-1"
-   }' localhost:50061 appregistry.v1.PromotionRegistry/Promote
+   PASS: both replicas' subscribers received a push for their own hand-published event.
    ```
-   
-   Or publish directly to RabbitMQ (if gRPC is unavailable):
-   ```bash
-   kubectl exec -n app-registry-local-dev rabbitmq-dev-0 -- \
-     rabbitmqadmin publish exchange=app-registry.promotions.v1 \
-     routing_key=promotion.status \
-     payload='{"promotion_id":"<id>","status":"published"}'
-   ```
+   Exit code 0 on pass; non-zero (via `log.Fatalf`) on any subscriber missing
+   its push.
 
-6. **Verify both subscribers receive the event:**
-   
-   In both SSE terminals (3A and 3B), observe that both receive a data message
-   within a few seconds. The message should contain the promotion details fragment
-   (HTML) or an error indicator. The key is that **both** subscribers receive it.
-   
-   **Pass criterion:** Both terminals log a non-heartbeat message (lines NOT starting
-   with `:`). If only one terminal receives the message, the broker's queue
-   fan-out has failed.
+   **Failure signature:** one pod's subscriber(s) read `RECEIVED`, the
+   other's read `MISSING (timed out waiting for post-publish frame)` — a
+   shared/durable queue (or accidentally going through the Service instead
+   of per-pod port-forwards) produces exactly this asymmetry, one replica
+   sees the event and the other does not. If **every** subscriber reads
+   `MISSING` on the *first* run against freshly-started pods, this is most
+   likely `htmxsse.Hub`'s lazy broker attach (triggered by that pod's
+   first-ever SSE subscriber, asynchronous from there) racing the tool's
+   own first publish — the tool already re-publishes every 2s for the
+   duration of `--push-timeout` (15s default) to absorb exactly this, so a
+   same-run retry succeeding is expected; only a `MISSING` that persists for
+   the full `--push-timeout` on a warm pod (i.e., a second run against the
+   same still-running pods) indicates an actual fan-out failure.
 
-7. **Record results (placeholder for manual execution):**
-   
-   After running the procedure:
-   ```
-   - Date/time of execution: [PLACEHOLDER — fill in after running]
-   - Environment: [docker-desktop, Tilt version X.Y.Z]
-   - Pod 1 name: [PLACEHOLDER]
-   - Pod 2 name: [PLACEHOLDER]
-   - Promotion ID published: [PLACEHOLDER]
-   - Pod 1 received event: [PLACEHOLDER — yes/no]
-   - Pod 2 received event: [PLACEHOLDER — yes/no]
-   - Notes: [PLACEHOLDER — any issues, timing observations, etc.]
-   ```
+4. **Record the run's evidence** (pod names, ports, both topic IDs, and the
+   tool's RECEIVED/MISSING table) in a comment on the tracking issue.
 
 **Cleanup:**
 
 ```bash
-# Kill port-forwards (Ctrl+C in those terminals)
-# Scale back to 1 replica
+# Kill the port-forwards (foreground jobs started with `&` above)
+kill %1 %2 %3 %4 2>/dev/null
+
+# Either scale back to 1 replica for continued local dev on this checkout...
 kubectl scale deployment/app-registry-ui -n app-registry-local-dev --replicas=1
+# ...or tear the whole thing down if this Tilt session was only for this check
+tilt down
 ```
 
 ---
