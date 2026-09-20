@@ -153,7 +153,7 @@ func TestMCPInitSession_EndToEnd(t *testing.T) {
 	tools.RegisterInitSession(designReg, sessions, entities.Scopes())
 	tools.RegisterDesignAll(designReg, entities, sessions, querier)
 
-	handler := server.NewHTTPHandler(server.New(), designSrv, credentials, server.ResourceMetadataConfig{})
+	handler := server.NewHTTPHandler(server.New(), designSrv, server.New(), credentials, server.ResourceMetadataConfig{})
 	ts := httptest.NewServer(handler)
 	t.Cleanup(ts.Close)
 
