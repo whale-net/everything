@@ -13,7 +13,9 @@
 // #2723) widens it once more -- task_lease_test.go exercises it. The
 // CompleteTask stub exists for the same reason now that task_complete.go
 // (issue #2725) widens it once more -- task_complete_test.go's own Testing
-// section is what actually exercises it.
+// section is what actually exercises it. The ReclaimExpired stub exists for
+// the same reason now that task_reclaim.go (issue #2724) widens it again --
+// task_reclaim_test.go exercises it.
 package handlers_test
 
 import (
@@ -54,6 +56,10 @@ type fakeTaskStore struct {
 	completeErr       error
 	completeResult    store.TaskLaneResult
 	gotCompleteParams store.CompleteTaskParams
+
+	reclaimErr       error
+	reclaimResult    store.ReclaimResult
+	gotReclaimParams store.ReclaimParams
 
 	recordNoteErr         error
 	gotRecordNoteParams   store.RecordNoteParams
@@ -125,6 +131,14 @@ func (f *fakeTaskStore) CompleteTask(ctx context.Context, params store.CompleteT
 		return store.TaskLaneResult{}, f.completeErr
 	}
 	return f.completeResult, nil
+}
+
+func (f *fakeTaskStore) ReclaimExpired(ctx context.Context, params store.ReclaimParams) (store.ReclaimResult, error) {
+	f.gotReclaimParams = params
+	if f.reclaimErr != nil {
+		return store.ReclaimResult{}, f.reclaimErr
+	}
+	return f.reclaimResult, nil
 }
 
 func (f *fakeTaskStore) RecordNote(ctx context.Context, params store.RecordNoteParams) (store.Note, error) {
