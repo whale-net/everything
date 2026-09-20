@@ -137,12 +137,13 @@ func getEnvDuration(key string, defaultValue time.Duration) time.Duration {
 
 // App holds the application state.
 type App struct {
-	config      *Config
-	auth        *htmxauth.Authenticator
-	registry    *RegistryClient
-	userAuthOpt grpc.DialOption
-	sessionMgr  *htmxauth.DBSessionManager // Retained for FR27 session re-check on failure path
-	sseHub      *htmxsse.Hub               // Hub for SSE connections
+	config       *Config
+	auth         *htmxauth.Authenticator
+	registry     *RegistryClient
+	userAuthOpt  grpc.DialOption
+	sessionMgr   *htmxauth.DBSessionManager // Retained for FR27 session re-check on failure path
+	sseHub       *htmxsse.Hub               // Hub for SSE connections
+	buildCommits *buildCommitCache          // Process-lifetime build_id -> commit cache (#1699 NFR9)
 }
 
 // NewApp creates a new application instance.
@@ -206,12 +207,13 @@ func NewApp(ctx context.Context, config *Config) (*App, error) {
 	sseHub := initializeSSEHub(ctx)
 
 	return &App{
-		config:      config,
-		auth:        auth,
-		registry:    registry,
-		userAuthOpt: userAuthOpt,
-		sessionMgr:  store, // Retain for FR27 failure discrimination
-		sseHub:      sseHub,
+		config:       config,
+		auth:         auth,
+		registry:     registry,
+		userAuthOpt:  userAuthOpt,
+		sessionMgr:   store, // Retain for FR27 failure discrimination
+		sseHub:       sseHub,
+		buildCommits: newBuildCommitCache(), // One instance for the process lifetime (#1699 NFR9)
 	}, nil
 }
 
