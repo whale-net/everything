@@ -1,12 +1,15 @@
 package components
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
+	"html"
 	"strings"
 	"time"
 
 	"github.com/whale-net/everything/libs/go/htmxui"
+	"github.com/yuin/goldmark"
 )
 
 // SubjectView is a plain (iss, sub, kind) identity triple for rendering --
@@ -171,15 +174,6 @@ templ SessionDetail(data SessionDetailData) {
 	@Layout(data.Layout) {
 		<h1 class="text-2xl font-bold text-base-content mb-2">Session { data.Session.SessionID }</h1>
 		@startedByLine(data.Session)
-		if data.IsOwner {
-			<!-- FR1 (session lifecycle controls, issue #2246): the turn
-			     composer and stop control. A non-owner never reaches this
-			     branch, so no composer/stop markup exists in their response
-			     at all. -->
-			<div id="composer-slot" class="mb-4">
-				@OwnerControls(data.Session.SessionID, data.Session.State)
-			</div>
-		}
 		<div
 			id="usage-slot"
 			class="mb-4"
@@ -197,6 +191,20 @@ templ SessionDetail(data SessionDetailData) {
 		>
 			@SessionLive(data.Session, data.Events)
 		</div>
+		if data.IsOwner {
+			<!-- FR1 (session lifecycle controls, issue #2246): the turn
+			     composer and stop control, docked directly under the chat
+			     window and stuck to the bottom of the viewport on scroll,
+			     matching the input bar under the message list convention
+			     every mainstream AI chat UI uses; see OwnerControls' doc
+			     comment for why the composer's own id/hx-target wiring is
+			     unaffected by moving this slot down the page. A non-owner
+			     never reaches this branch, so no composer/stop markup
+			     exists in their response at all. -->
+			<div id="composer-slot" class="sticky bottom-4 z-10 pt-2">
+				@OwnerControls(data.Session.SessionID, data.Session.State)
+			</div>
+		}
 	}
 }
 
@@ -306,17 +314,37 @@ const (
 )
 
 // OwnerControls is FR1's composer/stop-control slot content (issue
-// #2246), mounted into SessionDetail's owner-only composer-slot div. The
-// stop control is omitted for an already-terminal session
+// #2246), mounted into SessionDetail's owner-only composer-slot div,
+// itself now docked to the bottom of the page (SessionDetail's doc
+// comment). Stop is a small, secondary control tucked above the primary
+// input bar -- mainstream chat UIs keep exactly one prominent control in
+// the input row (send) and push anything destructive/occasional out of
+// it -- and is omitted for an already-terminal session
 // (isTerminalSessionState); the composer is always rendered so a race
 // (the session turns terminal between page load and submit) still gets a
 // real inline error from handleSendTurn rather than a control that
 // silently vanished mid-typing.
 templ OwnerControls(sessionID string, state string) {
-	@Composer(sessionID, "")
-	if !isTerminalSessionState(state) {
-		@StopControl(sessionID, "")
-	}
+	<div class="flex flex-col gap-1">
+		if !isTerminalSessionState(state) {
+			<div class="flex justify-end">
+				@StopControl(sessionID, "")
+			</div>
+		}
+		@Composer(sessionID, "")
+	</div>
+}
+
+// sendIcon is the composer's submit button glyph -- a plain up-arrow, the
+// send-button convention shared by every mainstream AI chat UI today.
+// Hand-written inline (mirrors manmanv2/ui/components/layout.templ's own
+// inline-SVG buttons) rather than routed through htmxui.Button, which has
+// no icon-only/circular variant to hang this on.
+templ sendIcon() {
+	<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" class="w-4 h-4">
+		<path d="M12 19V5"></path>
+		<path d="M5 12l7-7 7 7"></path>
+	</svg>
 }
 
 // Composer is FR1's turn-composer form (issue #2246): POSTs to
@@ -329,22 +357,64 @@ templ OwnerControls(sessionID string, state string) {
 // the live transcript (SessionLive), never through this form. A failed
 // submission (e.g. FailedPrecondition for a terminal session) re-renders
 // this same form with errMsg inline instead (FR1's "Error surfacing").
+//
+// Styled as a single rounded pill (the ChatGPT/Claude.ai/Gemini input-bar
+// convention) with a circular icon-only send button -- no "Send" label,
+// matching that same minimalist convention -- plus an inline script for
+// auto-growing the textarea as its content wraps and Enter-to-send
+// (Shift+Enter for a literal newline). The script re-attaches on every
+// render of this fragment, not just the page's first load: htmx
+// evaluates <script> tags it encounters in swapped content (documented
+// htmx behaviour), and this form is itself an hx-swap="outerHTML" target,
+// so a failed-submission round trip needs the same behaviour rewired
+// into the fresh textarea it just rendered, not only the original one.
 templ Composer(sessionID string, errMsg string) {
 	<form
 		id={ composerFormID }
 		hx-post={ fmt.Sprintf("/sessions/%s/turns", sessionID) }
 		hx-target="this"
 		hx-swap="outerHTML"
-		class="flex flex-col gap-2 mb-2"
 	>
 		if errMsg != "" {
 			<div role="alert" class="alert alert-error mb-2">{ errMsg }</div>
 		}
-		<textarea name="input" class="textarea textarea-bordered w-full" placeholder="Send a message" required></textarea>
-		@htmxui.Button(htmxui.ButtonPrimary, htmxui.ButtonSizeMD, false, templ.Attributes{"type": "submit"}) {
-			Send
-		}
+		<div class="flex items-end gap-2 rounded-3xl border border-base-300 bg-base-100 shadow-sm p-2 pl-4">
+			<textarea
+				name="input"
+				rows="1"
+				autofocus
+				class="textarea textarea-ghost w-full resize-none focus:outline-none min-h-10 max-h-52 py-2 px-0 leading-6"
+				placeholder="Send a message..."
+				required
+			></textarea>
+			<button type="submit" class="btn btn-circle btn-primary btn-sm shrink-0" aria-label="Send message">
+				@sendIcon()
+			</button>
+		</div>
 	</form>
+	<script>
+		(function() {
+			var form = document.getElementById("turn-composer");
+			if (!form) { return; }
+			var ta = form.querySelector('textarea[name="input"]');
+			if (!ta) { return; }
+			var autosize = function() {
+				ta.style.height = "auto";
+				ta.style.height = Math.min(ta.scrollHeight, 208) + "px";
+			};
+			ta.addEventListener("input", autosize);
+			autosize();
+			ta.addEventListener("keydown", function(e) {
+				if (e.key === "Enter" && !e.shiftKey) {
+					e.preventDefault();
+					if (ta.value.trim() !== "") {
+						form.requestSubmit();
+					}
+				}
+			});
+			ta.focus();
+		})();
+	</script>
 }
 
 // StopControl is FR1's stop control (issue #2246): POSTs to
@@ -353,7 +423,9 @@ templ Composer(sessionID string, errMsg string) {
 // (the control has nothing left to do once the session is stopped, so it
 // disappears entirely rather than rendering disabled -- mirrors
 // isTerminalSessionState's "omitted, not disabled" stance), or itself
-// again carrying errMsg inline on failure.
+// again carrying errMsg inline on failure. Rendered small/ghost (not a
+// solid error-coloured button) since OwnerControls now places it as a
+// secondary control above the primary composer, not beside it.
 templ StopControl(sessionID string, errMsg string) {
 	<div id={ stopControlID }>
 		if errMsg != "" {
@@ -364,9 +436,7 @@ templ StopControl(sessionID string, errMsg string) {
 			hx-target={ "#" + stopControlID }
 			hx-swap="outerHTML"
 		>
-			@htmxui.Button(htmxui.ButtonError, htmxui.ButtonSizeMD, false, templ.Attributes{"type": "submit"}) {
-				Stop
-			}
+			<button type="submit" class="btn btn-ghost btn-xs text-error">Stop session</button>
 		</form>
 	</div>
 }
@@ -378,6 +448,14 @@ templ StopControlAbsent() {
 	<div id={ stopControlID }></div>
 }
 
+// chatWindowID is the scrollable transcript pane's fixed id -- the
+// auto-scroll script at the end of TranscriptList looks it up by this id
+// on every render (initial page load and every SSE-delivered swap alike,
+// since TranscriptList is re-emitted wholesale each time -- see this
+// templ's own doc comment), so a newly delivered message is always
+// scrolled into view without depending on any particular htmx event name.
+const chatWindowID = "chat-window"
+
 // TranscriptList renders evs (already in seq order, LB1) as the
 // transcript's full current state -- this is the swap target every SSE
 // delivery replaces wholesale (../handlers_session_live.go's
@@ -386,14 +464,29 @@ templ StopControlAbsent() {
 // event is skipped entirely rather than routed into EventRow -- it exists
 // only to drive reconcileTerminalState's badge reconciliation (FR3), never
 // to populate a transcript content row (issue #2796).
+//
+// Rendered as a bounded, scrollable chat pane (the "chat window" look) --
+// message bubbles for user/assistant turns, collapsed-by-default rows for
+// tool calls/results (see toolCallRow/toolResultRow), and plain banners
+// for capped/failure events. The trailing inline script re-runs on every
+// swap (htmx evaluates <script> tags it encounters in swapped content) and
+// simply scrolls #chat-window to its own bottom -- no MutationObserver or
+// htmx-event wiring needed, since a full re-render already happens on
+// every delivery.
 templ TranscriptList(evs []TranscriptEventView) {
-	<div class="flex flex-col gap-2">
+	<div id={ chatWindowID } class="flex flex-col gap-3 max-h-[65vh] overflow-y-auto rounded-box border border-base-300 bg-base-100 p-4">
 		for _, ev := range evs {
 			if eventTypePrefix(ev.Type) != "status_change" {
 				@EventRow(ev)
 			}
 		}
 	</div>
+	<script>
+		(function() {
+			var el = document.getElementById("chat-window");
+			if (el) { el.scrollTop = el.scrollHeight; }
+		})();
+	</script>
 }
 
 // eventTypePrefix reports the FR2 category a transcript event's Type
@@ -469,14 +562,17 @@ type failureEventPayload struct {
 // EventRow renders one transcript event per its FR2 type category. An
 // unparseable payload renders the row with a decode-error note rather
 // than failing the whole fragment -- one malformed event must never blank
-// the rest of the transcript.
+// the rest of the transcript. data-event-id/data-seq stay on every row
+// (message bubble, collapsed tool row, or banner alike) so the transcript
+// remains inspectable/testable by event regardless of which visual shape
+// a given type renders as.
 templ EventRow(ev TranscriptEventView) {
-	<div class="border-l-2 border-base-300 pl-3 py-1" data-event-id={ ev.EventID } data-seq={ fmt.Sprintf("%d", ev.Seq) }>
+	<div data-event-id={ ev.EventID } data-seq={ fmt.Sprintf("%d", ev.Seq) }>
 		switch eventTypePrefix(ev.Type) {
 			case "user_message":
-				@messageRow("User", ev)
+				@messageRow("user", "You", ev)
 			case "assistant_message":
-				@messageRow("Assistant", ev)
+				@messageRow("assistant", "Assistant", ev)
 			case "tool_call":
 				@toolCallRow(ev)
 			case "tool_result":
@@ -491,35 +587,89 @@ templ EventRow(ev TranscriptEventView) {
 	</div>
 }
 
-templ messageRow(label string, ev TranscriptEventView) {
-	{{ payload, err := decodeMessagePayload(ev.Payload) }}
-	<p class="text-xs text-base-content/50">{ label } &middot; turn { fmt.Sprintf("%d", ev.Turn) }</p>
-	if err != nil {
-		<p class="text-error text-sm">failed to decode event payload</p>
-	} else {
-		<p class="whitespace-pre-wrap">{ payload.Content }</p>
+// renderMarkdown converts a transcript message's raw text into sanitized
+// HTML for chat-bubble rendering, backed by goldmark exactly the way
+// audience_score_system/web/schedule/markdown.go's renderScriptMarkdown
+// is (see that doc comment for why goldmark's default Unsafe:false
+// renderer already satisfies "must not execute" for a message body
+// containing raw HTML like "<script>" -- goldmark replaces it with a
+// comment placeholder rather than passing it through). Unlike that
+// caller, this one has no error to propagate up through a templ node, so
+// a conversion failure (goldmark's Convert essentially never errors on
+// valid UTF-8 input) falls back to the HTML-escaped source rather than
+// dropping the message.
+func renderMarkdown(source string) string {
+	var buf bytes.Buffer
+	if err := goldmark.Convert([]byte(source), &buf); err != nil {
+		return html.EscapeString(source)
 	}
+	return buf.String()
 }
 
+// messageRow renders a user_message/assistant_message event as a daisyUI
+// chat bubble (FR2's "bubbly" chat-window look) -- user turns on the
+// right (chat-end, primary-coloured bubble), assistant turns on the left
+// (chat-start, neutral bubble), matching the now-conventional AI chatbot
+// layout. Content renders through renderMarkdown so fenced code, lists,
+// links, etc. in either a user's or the assistant's turn render as actual
+// markup rather than a literal wall of text.
+templ messageRow(role string, label string, ev TranscriptEventView) {
+	{{ payload, err := decodeMessagePayload(ev.Payload) }}
+	<div class={ "chat", templ.KV("chat-end", role == "user"), templ.KV("chat-start", role != "user") }>
+		<div class="chat-image avatar avatar-placeholder">
+			<div class={ "w-8 rounded-full text-neutral-content", templ.KV("bg-primary", role == "user"), templ.KV("bg-neutral", role != "user") }>
+				<span class="text-xs">{ strings.ToUpper(label[:1]) }</span>
+			</div>
+		</div>
+		<div class="chat-header text-xs text-base-content/50">
+			{ label } <time class="opacity-50">turn { fmt.Sprintf("%d", ev.Turn) }</time>
+		</div>
+		if err != nil {
+			<div class="chat-bubble chat-bubble-error text-sm">failed to decode event payload</div>
+		} else {
+			<div class={ "chat-bubble chat-markdown", templ.KV("chat-bubble-primary", role == "user") }>
+				@templ.Raw(renderMarkdown(payload.Content))
+			</div>
+		}
+	</div>
+}
+
+// toolCallRow/toolResultRow render tool events collapsed by default,
+// behind a daisyUI focus-toggled collapse (tabindex-driven, no JS
+// required) -- FR2's "tools hidden with an option to expand": the
+// summary line (tool name, badge) is always visible, the arguments/result
+// body only after the row is focused/clicked open.
 templ toolCallRow(ev TranscriptEventView) {
 	{{ payload, err := decodeToolCallPayload(ev.Payload) }}
-	<p class="text-xs text-base-content/50">Tool call &middot; turn { fmt.Sprintf("%d", ev.Turn) }</p>
 	if err != nil {
 		<p class="text-error text-sm">failed to decode event payload</p>
 	} else {
-		<p class="font-mono text-sm">{ payload.Name }({ payload.Arguments })</p>
+		<div tabindex="0" class="collapse collapse-arrow border border-base-300 bg-base-200/60 rounded-box text-sm">
+			<div class="collapse-title font-mono">
+				<span class="badge badge-ghost badge-xs align-middle mr-2">tool call</span>
+				{ payload.Name }
+			</div>
+			<div class="collapse-content">
+				<pre class="whitespace-pre-wrap font-mono text-xs">{ payload.Arguments }</pre>
+			</div>
+		</div>
 	}
 }
 
 templ toolResultRow(ev TranscriptEventView) {
 	{{ payload, err := decodeToolResultPayload(ev.Payload) }}
-	<p class="text-xs text-base-content/50">Tool result &middot; turn { fmt.Sprintf("%d", ev.Turn) }</p>
 	if err != nil {
 		<p class="text-error text-sm">failed to decode event payload</p>
 	} else {
-		<p class={ "whitespace-pre-wrap text-sm", templ.KV("text-warning", payload.IsError) }>
-			{ payload.Name }: { payload.Content }
-		</p>
+		<div tabindex="0" class={ "collapse collapse-arrow border rounded-box text-sm", templ.KV("border-warning bg-warning/10", payload.IsError), templ.KV("border-base-300 bg-base-200/60", !payload.IsError) }>
+			<div class="collapse-title font-mono">
+				<span class={ "badge badge-xs align-middle mr-2", templ.KV("badge-warning", payload.IsError), templ.KV("badge-ghost", !payload.IsError) }>tool result</span>
+				{ payload.Name }
+			</div>
+			<div class="collapse-content">
+				<pre class="whitespace-pre-wrap font-mono text-xs">{ payload.Content }</pre>
+			</div>
+		</div>
 	}
 }
 
@@ -528,7 +678,7 @@ templ cappedRow(ev TranscriptEventView) {
 	if err != nil {
 		<p class="text-error text-sm">failed to decode event payload</p>
 	} else {
-		<p class="text-warning text-sm">Session capped: { payload.CapKind }</p>
+		<div role="alert" class="alert alert-warning text-sm py-2">Session capped: { payload.CapKind }</div>
 	}
 }
 
@@ -537,7 +687,15 @@ templ failureRow(ev TranscriptEventView) {
 	if err != nil {
 		<p class="text-error text-sm">failed to decode event payload</p>
 	} else {
-		<p class="text-error text-sm">Session failed ({ payload.ErrorCategory }): { payload.ErrorDetail }</p>
+		<div role="alert" class="alert alert-error text-sm py-2">
+			Session failed
+			if payload.ErrorCategory != "" {
+				({ payload.ErrorCategory })
+			}
+			if payload.ErrorDetail != "" {
+				: { payload.ErrorDetail }
+			}
+		</div>
 	}
 }
 
