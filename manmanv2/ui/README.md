@@ -340,6 +340,18 @@ and "Load more" pagination (server-side via `next_page_token`, NFR4).
 page token straight onto the API's `ListBackups` RPC (#2809) and returns
 its per-row display context (`items`) unchanged.
 
+The SGC, volume and BackupConfig filters render as name-based `<select>`
+pickers, not raw ID inputs: `handleBackupsPage` resolves their fleet-wide
+option lists once per full page render (`backupRunsFilterOptions`,
+`handlers_backups_fleet.go`) -- SGCs via the same `ListServers` ->
+per-server `ListServerGameConfigs` -> Game/GameConfig-name resolution
+`/activity` already uses, and volumes/BackupConfigs via
+`ControlClient.ListBackupConfigItems`'s fleet-wide `BackupConfigListItem`s.
+A failed `ListBackups` call renders an inline error alert in place of the
+table (`BackupRunsFragmentData.Err`) rather than a bare 500; a resolution
+failure for one picker's options degrades to an empty option list for that
+picker alone rather than failing the page.
+
 ## Game Detail Progressive Disclosure
 
 `GET /games/{id}` (`handleGameDetail`, `handlers_games.go`) provides a tabbed game detail surface (`pages.GameDetail`, `pages/game_detail.templ`) organized into four distinct tabs:

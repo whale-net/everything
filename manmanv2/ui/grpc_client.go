@@ -976,6 +976,21 @@ func (c *ControlClient) ListBackupConfigs(ctx context.Context, volumeID int64) (
 	return resp.Configs, nil
 }
 
+// ListBackupConfigItems lists every BackupConfig fleet-wide (no volume
+// filter) with its volume/game-config/game display context
+// (BackupConfigListItem, already populated server-side regardless of
+// filter -- api/handlers/backup_config.go). Used to populate /backups'
+// BackupConfig and Volume name-based filter pickers (task #2812's
+// Implementation-phase refinement of the raw ID inputs Scaffold shipped)
+// without a second RPC per volume.
+func (c *ControlClient) ListBackupConfigItems(ctx context.Context) ([]*manmanpb.BackupConfigListItem, error) {
+	resp, err := c.api.ListBackupConfigs(ctx, &manmanpb.ListBackupConfigsRequest{PageSize: 100})
+	if err != nil {
+		return nil, err
+	}
+	return resp.Items, nil
+}
+
 func (c *ControlClient) CreateBackupConfig(ctx context.Context, volumeID int64, cadenceMinutes int32, backupPath string, enabled bool) (*manmanpb.BackupConfig, error) {
 	resp, err := c.api.CreateBackupConfig(ctx, &manmanpb.CreateBackupConfigRequest{
 		VolumeId:       volumeID,

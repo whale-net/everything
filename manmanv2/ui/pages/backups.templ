@@ -19,6 +19,22 @@ import (
 type BackupsPageData struct {
 	Layout components.LayoutData
 	Runs   BackupRunsFragmentData
+	// FilterOptions backs the filter bar's name-based pickers (SGC, volume,
+	// BackupConfig) -- resolved once per full "/backups" page render, not
+	// per "/backups/runs" fragment swap, since the filter bar itself lives
+	// outside "#backup-runs-panel" and is never re-rendered by a swap.
+	FilterOptions BackupRunsFilterOptions
+}
+
+// BackupRunsFilterOptions holds the fleet-wide name-based picker options
+// for the filter bar's SGC (deployment), volume and BackupConfig fields
+// (handlers_backups_fleet.go's backupRunsFilterOptions) -- each entry's
+// Value is the underlying int64 ID as a string, Label the display name a
+// Server Manager recognizes, matching components.SelectOption's shape.
+type BackupRunsFilterOptions struct {
+	ServerGameConfigs []components.SelectOption
+	Volumes           []components.SelectOption
+	BackupConfigs     []components.SelectOption
 }
 
 // BackupRunsFragmentData backs both the initial "/backups" page render and
@@ -34,6 +50,10 @@ type BackupRunsFragmentData struct {
 	Items         []*manmanpb.BackupListItem
 	NextPageToken string
 	Filter        BackupRunsFilterValues
+	// Err, when non-empty, renders an inline alert in place of the table
+	// (and suppresses the "Load more" control) instead of a bare 500 --
+	// the ListBackups call itself failed, not "zero rows matched".
+	Err string
 }
 
 // BackupRunsFilterValues holds the filter bar's current values as strings
@@ -87,7 +107,7 @@ templ BackupsPage(data BackupsPageData) {
 				</button>
 			</div>
 			<div id="tab-panel-backup-runs" x-show="activeTab === 'runs'">
-				@backupRunsFilterBar(data.Runs.Filter)
+				@backupRunsFilterBar(data.Runs.Filter, data.FilterOptions)
 				<div id="backup-runs-panel">
 					@BackupRunsFragment(data.Runs)
 				</div>
@@ -99,13 +119,17 @@ templ BackupsPage(data BackupsPageData) {
 	}
 }
 
-// backupRunsFilterBar is the FR4 filter bar: SGC, volume, BackupConfig
-// (each an ID input -- resolving those to name-based pickers is left to
-// the Implementation phase) and status (a fixed select, FR4). Submits via
-// htmx GET to "/backups/runs", swapping "#backup-runs-panel" in place;
-// hx-push-url keeps the current filters in the address bar so a filtered
-// view is linkable (NFR4's pagination sibling requirement).
-templ backupRunsFilterBar(filter BackupRunsFilterValues) {
+// backupRunsFilterBar is the FR4 filter bar: SGC (deployment), volume and
+// BackupConfig each render as a name-based <select> (backupRunsSelect)
+// rather than a raw ID input -- Scaffold shipped these as plain number
+// inputs and left resolving them to name-based pickers as this
+// Implementation phase's job; options come from
+// handlers_backups_fleet.go's backupRunsFilterOptions. Status stays a
+// fixed select (FR4), its option set never varying with fleet data.
+// Submits via htmx GET to "/backups/runs", swapping "#backup-runs-panel"
+// in place; hx-push-url keeps the current filters in the address bar so a
+// filtered view is linkable (NFR4's pagination sibling requirement).
+templ backupRunsFilterBar(filter BackupRunsFilterValues, options BackupRunsFilterOptions) {
 	<form
 		hx-get="/backups/runs"
 		hx-target="#backup-runs-panel"
@@ -113,18 +137,9 @@ templ backupRunsFilterBar(filter BackupRunsFilterValues) {
 		hx-push-url="true"
 		class="flex flex-wrap gap-4 items-end mb-4 bg-base-100 border border-base-300 rounded-box p-4"
 	>
-		<div>
-			<label class="block text-sm font-medium text-base-content mb-1" for="backup-runs-filter-sgc">Deployment (SGC ID)</label>
-			<input type="number" id="backup-runs-filter-sgc" name="server_game_config_id" min="1" value={ filter.ServerGameConfigID } class="input input-bordered input-sm w-32"/>
-		</div>
-		<div>
-			<label class="block text-sm font-medium text-base-content mb-1" for="backup-runs-filter-volume">Volume ID</label>
-			<input type="number" id="backup-runs-filter-volume" name="volume_id" min="1" value={ filter.VolumeID } class="input input-bordered input-sm w-32"/>
-		</div>
-		<div>
-			<label class="block text-sm font-medium text-base-content mb-1" for="backup-runs-filter-config">Backup Config ID</label>
-			<input type="number" id="backup-runs-filter-config" name="backup_config_id" min="1" value={ filter.BackupConfigID } class="input input-bordered input-sm w-32"/>
-		</div>
+		@backupRunsSelect("backup-runs-filter-sgc", "server_game_config_id", "Deployment", "All deployments", filter.ServerGameConfigID, options.ServerGameConfigs)
+		@backupRunsSelect("backup-runs-filter-volume", "volume_id", "Volume", "All volumes", filter.VolumeID, options.Volumes)
+		@backupRunsSelect("backup-runs-filter-config", "backup_config_id", "Backup Config", "All backup configs", filter.BackupConfigID, options.BackupConfigs)
 		<div>
 			<label class="block text-sm font-medium text-base-content mb-1" for="backup-runs-filter-status">Status</label>
 			<select id="backup-runs-filter-status" name="status" class="select select-bordered select-sm w-40">
@@ -138,12 +153,31 @@ templ backupRunsFilterBar(filter BackupRunsFilterValues) {
 	</form>
 }
 
+// backupRunsSelect renders one name-based filter picker: an "all" option
+// (value "", matching BackupRunsFilterValues' unset convention) plus one
+// option per fleet-wide entity, selected against the filter's current
+// string ID. Shared by the SGC, volume and BackupConfig pickers so the
+// three can't drift on markup or the unset-value convention.
+templ backupRunsSelect(id, name, label, allLabel, selected string, opts []components.SelectOption) {
+	<div>
+		<label class="block text-sm font-medium text-base-content mb-1" for={ id }>{ label }</label>
+		<select id={ id } name={ name } class="select select-bordered select-sm w-56">
+			<option value="" selected?={ selected == "" }>{ allLabel }</option>
+			for _, opt := range opts {
+				<option value={ opt.Value } selected?={ selected == opt.Value }>{ opt.Label }</option>
+			}
+		</select>
+	</div>
+}
+
 // BackupRunsFragment renders the backup-run table plus its "Load more"
 // pagination control (NFR4) -- exported because handlers_backups_fleet.go
 // renders it directly for "/backups/runs" htmx requests, in addition to
 // BackupsPage using it for the initial unfiltered render.
 templ BackupRunsFragment(data BackupRunsFragmentData) {
-	if len(data.Items) == 0 {
+	if data.Err != "" {
+		@components.Alert("error", data.Err)
+	} else if len(data.Items) == 0 {
 		@components.EmptyState("No backup runs", "No backup runs match the current filters.", "", "")
 	} else {
 		<div class="bg-base-100 rounded-box border border-base-300 overflow-x-auto">
