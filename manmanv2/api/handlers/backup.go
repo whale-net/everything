@@ -167,6 +167,8 @@ func backupToProto(b *manman.Backup) *pb.Backup {
 		BackupId:           b.BackupID,
 		SessionId:          b.SessionID,
 		ServerGameConfigId: b.ServerGameConfigID,
+		Status:             b.Status,
+		TriggerSource:      b.TriggerSource,
 		CreatedAt:          b.CreatedAt.Unix(),
 	}
 
@@ -178,6 +180,15 @@ func backupToProto(b *manman.Backup) *pb.Backup {
 	}
 	if b.Description != nil {
 		pbBackup.Description = *b.Description
+	}
+	if b.ErrorMessage != nil {
+		pbBackup.ErrorMessage = *b.ErrorMessage
+	}
+	if b.BackupConfigID != nil {
+		pbBackup.BackupConfigId = *b.BackupConfigID
+	}
+	if b.VolumeID != nil {
+		pbBackup.VolumeId = *b.VolumeID
 	}
 
 	return pbBackup

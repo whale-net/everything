@@ -186,6 +186,7 @@ func (h *BackupConfigHandler) TriggerBackup(ctx context.Context, req *pb.Trigger
 		BackupConfigID:     &cfg.BackupConfigID,
 		VolumeID:           &volume.VolumeID,
 		Status:             manman.BackupStatusPending,
+		TriggerSource:      manman.BackupTriggerSourceManual,
 		CreatedAt:          now,
 	}
 	backup, err = h.backupRepo.Create(ctx, backup)
