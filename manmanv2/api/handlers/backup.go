@@ -83,34 +83,55 @@ func (h *BackupHandler) ListBackups(ctx context.Context, req *pb.ListBackupsRequ
 		}
 	}
 
-	var sgcID *int64
+	filter := repository.BackupListFilter{}
 	if req.ServerGameConfigId > 0 {
-		sgcID = &req.ServerGameConfigId
+		filter.SGCID = &req.ServerGameConfigId
 	}
-
-	var sessionID *int64
 	if req.SessionId > 0 {
-		sessionID = &req.SessionId
+		filter.SessionID = &req.SessionId
+	}
+	if req.VolumeId > 0 {
+		filter.VolumeID = &req.VolumeId
+	}
+	if req.BackupConfigId > 0 {
+		filter.BackupConfigID = &req.BackupConfigId
+	}
+	if req.Status != "" {
+		switch req.Status {
+		case manman.BackupStatusPending, manman.BackupStatusRunning, manman.BackupStatusCompleted, manman.BackupStatusFailed:
+			filter.Status = &req.Status
+		default:
+			return nil, status.Errorf(codes.InvalidArgument, "unknown status %q", req.Status)
+		}
 	}
 
-	backups, err := h.backupRepo.List(ctx, sgcID, sessionID, pageSize+1, offset)
+	rows, err := h.backupRepo.List(ctx, filter, pageSize+1, offset)
 	if err != nil {
 		return nil, status.Errorf(codes.Internal, "failed to list backups: %v", err)
 	}
 
 	var nextPageToken string
-	if len(backups) > pageSize {
-		backups = backups[:pageSize]
+	if len(rows) > pageSize {
+		rows = rows[:pageSize]
 		nextPageToken = encodePageToken(offset + pageSize)
 	}
 
-	pbBackups := make([]*pb.Backup, len(backups))
-	for i, b := range backups {
-		pbBackups[i] = backupToProto(b)
+	pbBackups := make([]*pb.Backup, len(rows))
+	items := make([]*pb.BackupListItem, len(rows))
+	for i, row := range rows {
+		pbBackups[i] = backupToProto(row.Backup)
+		items[i] = &pb.BackupListItem{
+			Backup:               pbBackups[i],
+			ServerGameConfigName: row.ServerGameConfigName,
+			GameConfigName:       row.GameConfigName,
+			VolumeName:           row.VolumeName,
+			ServerName:           row.ServerName,
+		}
 	}
 
 	return &pb.ListBackupsResponse{
 		Backups:       pbBackups,
+		Items:         items,
 		NextPageToken: nextPageToken,
 	}, nil
 }

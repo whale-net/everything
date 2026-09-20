@@ -121,6 +121,44 @@ go_test(
     ],
 )
 
+# Real-Postgres coverage for FR1/FR4/NFR4 (task #2809, plan #2777):
+# BackupHandler.ListBackups must be fleet-wide with no filters, narrow
+# correctly on each of SGC/volume/BackupConfig/status alone and combined,
+# reject an unknown status with InvalidArgument, paginate server-side with
+# soft-deleted rows never surfacing, and keep `items` in the same
+# count/order as `backups` with populated display names. Real Postgres via
+# //libs/go/dbtest, same precedent as backup_config_actions_integration_test
+# -- no RabbitMQ needed since ListBackups never publishes a command.
+#
+# Run it explicitly (requires working Docker):
+#   bazel test //manmanv2/api/handlers:backup_list_integration_test --test_output=all
+go_test(
+    # keep
+    name = "backup_list_integration_test",
+    size = "large",
+    timeout = "long",
+    srcs = ["backup_list_integration_test.go"],
+    embed = [":handlers"],
+    gotags = ["integration"],
+    tags = [
+        "external",
+        "integration",
+        "manual",
+        "no-cache",
+        "no-sandbox",
+        "requires-network",
+    ],
+    deps = [
+        "//libs/go/dbtest",
+        "//manmanv2/api/repository/postgres",
+        "//manmanv2/models",
+        "//manmanv2/protos:manmanpb",
+        "@com_github_jackc_pgx_v5//pgxpool",
+        "@org_golang_google_grpc//codes",
+        "@org_golang_google_grpc//status",
+    ],
+)
+
 go_test(
     name = "handlers_test",
     srcs = [
