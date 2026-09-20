@@ -142,20 +142,24 @@ func (r *BackupConfigRepository) Get(ctx context.Context, id int64) (*manman.Bac
 // List returns BackupConfigs fleet-wide, optionally narrowed by f, with the
 // display context (volume/GameConfig/game names) needed for a list row.
 // Filters use the "$n::type IS NULL OR col = $n" idiom so a nil filter field
-// is a no-op. TODO(Implementation phase): join game_config_volumes ->
-// game_configs -> games for volume_name/game_config_name/game_name; for now
-// those fields are left zero-valued.
+// is a no-op. Joins to game_config_volumes -> game_configs -> games for
+// display names; a backup config's volume/GameConfig/game are never
+// soft-deleted independently of the backup config itself, so inner joins are
+// safe here.
 func (r *BackupConfigRepository) List(ctx context.Context, f repository.BackupConfigListFilter, limit, offset int) ([]*repository.BackupConfigListRow, error) {
 	rows, err := r.db.Query(ctx, `
-		SELECT backup_config_id, volume_id, cadence_minutes, backup_path, enabled, last_backup_at, created_at, updated_at
-		FROM backup_configs
-		WHERE ($1::bigint IS NULL OR volume_id = $1)
-		  AND ($2::bigint IS NULL OR volume_id IN (
-		      SELECT volume_id FROM game_config_volumes WHERE config_id = $2
-		  ))
-		  AND ($3::boolean IS NULL OR enabled = $3)
-		  AND deleted_at IS NULL
-		ORDER BY backup_config_id
+		SELECT bc.backup_config_id, bc.volume_id, bc.cadence_minutes, bc.backup_path, bc.enabled,
+		       bc.last_backup_at, bc.created_at, bc.updated_at,
+		       gcv.name, gc.config_id, gc.name, g.name
+		FROM backup_configs bc
+		JOIN game_config_volumes gcv ON gcv.volume_id = bc.volume_id
+		JOIN game_configs gc ON gc.config_id = gcv.config_id
+		JOIN games g ON g.game_id = gc.game_id
+		WHERE ($1::bigint IS NULL OR bc.volume_id = $1)
+		  AND ($2::bigint IS NULL OR gc.config_id = $2)
+		  AND ($3::boolean IS NULL OR bc.enabled = $3)
+		  AND bc.deleted_at IS NULL
+		ORDER BY bc.backup_config_id
 		LIMIT $4 OFFSET $5
 	`, f.VolumeID, f.GameConfigID, f.Enabled, limit, offset)
 	if err != nil {
@@ -166,13 +170,15 @@ func (r *BackupConfigRepository) List(ctx context.Context, f repository.BackupCo
 	var result []*repository.BackupConfigListRow
 	for rows.Next() {
 		cfg := &manman.BackupConfig{}
+		row := &repository.BackupConfigListRow{Config: cfg}
 		if err := rows.Scan(
 			&cfg.BackupConfigID, &cfg.VolumeID, &cfg.CadenceMinutes, &cfg.BackupPath,
 			&cfg.Enabled, &cfg.LastBackupAt, &cfg.CreatedAt, &cfg.UpdatedAt,
+			&row.VolumeName, &row.GameConfigID, &row.GameConfigName, &row.GameName,
 		); err != nil {
 			return nil, err
 		}
-		result = append(result, &repository.BackupConfigListRow{Config: cfg})
+		result = append(result, row)
 	}
 	return result, rows.Err()
 }
