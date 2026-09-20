@@ -114,7 +114,7 @@ LIVE_EXCHANGE=manmanv2.htmxsse        # dedicated exchange for live status→UI 
 | `TEMPORAL_NAMESPACE` | `default` | Temporal namespace (`libs/go/temporal.DefaultNamespace`). |
 | `TEMPORAL_TASK_QUEUE` | `manmanv2-processor` | Task queue the event-processor worker polls, named after this worker binary per `ARCHITECTURE.md`'s task-queue convention (`manmanv2/processor/backupsched.DefaultTaskQueue`). |
 
-The event-processor worker upserts a Temporal Schedule (`manmanv2-backup-scan`, 1-minute interval) at startup that drives `BackupScanWorkflow`/`DispatchBackupWorkflow` — see `ARCHITECTURE.md` § "Backup Scheduler (Temporal)". This runs alongside the existing River-based scheduler (`manmanv2/processor/backup_scheduler.go`) until #2819 removes it.
+The event-processor worker upserts a Temporal Schedule (`manmanv2-backup-scan`, 1-minute interval) at startup that drives `BackupScanWorkflow`/`DispatchBackupWorkflow` — see `ARCHITECTURE.md` § "Backup Scheduler (Temporal)". This is the sole backup scheduler; the earlier River-based one was removed in a hard cutover.
 
 ## Platform-Wide Variables
 

@@ -317,18 +317,6 @@ go_deps.gazelle_override(
     ],
     path = "github.com/aws/aws-sdk-go-v2/feature/s3/manager",
 )
-go_deps.gazelle_override(
-    directives = [
-        "gazelle:default_visibility //visibility:public",
-    ],
-    path = "github.com/riverqueue/river",
-)
-go_deps.gazelle_override(
-    directives = [
-        "gazelle:default_visibility //visibility:public",
-    ],
-    path = "github.com/riverqueue/river/riverdriver/riverpgxv5",
-)
 
 # go.temporal.io/sdk/contrib/opentelemetry is a separate Go module (own
 # go.mod) that imports go.temporal.io/sdk's internal/common/metrics
@@ -376,9 +364,6 @@ use_repo(
     "com_github_opencontainers_image_spec",
     "com_github_pkg_errors",
     "com_github_rabbitmq_amqp091_go",
-    "com_github_riverqueue_river",
-    "com_github_riverqueue_river_riverdriver",
-    "com_github_riverqueue_river_riverdriver_riverpgxv5",
     "com_github_spf13_cobra",
     "com_github_spf13_pflag",
     "com_github_stretchr_testify",

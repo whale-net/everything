@@ -318,6 +318,42 @@ go_test(
     ],
 )
 
+# Drop the River scheduler's schema (M7 NFR2, plan #2777, task #2819):
+# migration round-trip against a recreated slice of River's own schema
+# (river_job/river_leader/river_queue/river_client*/river_migration, the
+# river_job_state enum and its river_job_state_in_bitmask() function),
+# proving the drop happens with real data present, plus the no-op case on a
+# database that never ran River. Same build-tag/target conventions as
+# migration_044_integration_test.go.
+#
+# Run it explicitly (requires a working Docker daemon):
+#   bazel test //manmanv2/migrate:migration_046_integration_test --test_output=all
+go_test(
+    # keep
+    name = "migration_046_integration_test",
+    size = "large",
+    timeout = "long",
+    srcs = [
+        "main.go",
+        "migration_046_integration_test.go",
+    ],
+    embedsrcs = glob(["migrations/*.sql"]),
+    gotags = ["integration"],
+    tags = [
+        "external",
+        "integration",
+        "manual",
+        "no-cache",
+        "no-sandbox",
+        "requires-network",
+    ],
+    deps = [
+        "//libs/go/dbtest",
+        "//libs/go/migrate",
+        "@com_github_jackc_pgx_v5//stdlib",
+    ],
+)
+
 # Release metadata for migration job
 release_app(
     name = "control-migration",
