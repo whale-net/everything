@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"io"
 	"log"
 	"net/http"
 	"sort"
@@ -222,8 +223,24 @@ func Handler(hub *Hub, topics []string, fragment Fragment) http.HandlerFunc {
 func emitSwap(w http.ResponseWriter, flusher http.Flusher, topic string, fragment []byte, baselineID string) {
 	fmt.Fprintf(w, "event: %s\n", topic)
 	fmt.Fprintf(w, "id: %s\n", baselineID)
-	fmt.Fprintf(w, "data: %s\n\n", bytes.TrimSpace(fragment))
+	writeDataField(w, bytes.TrimSpace(fragment))
+	fmt.Fprint(w, "\n")
 	flusher.Flush()
+}
+
+// writeDataField writes data as an SSE "data" field, per the spec's line
+// framing: each *line* of a multi-line payload needs its own "data:"
+// prefix. A single "data: <fragment>\n" is not a safe way to send an
+// HTML fragment that itself contains a newline (any rendered event/message
+// body with more than one line, e.g. a multi-paragraph assistant message)
+// -- everything after the first line would lack the "data:" prefix, so
+// per spec it is not part of the field at all, and a blank line inside the
+// fragment (a paragraph break) would dispatch the event early with only
+// the text before it, silently dropping the rest.
+func writeDataField(w io.Writer, data []byte) {
+	for _, line := range bytes.Split(data, []byte("\n")) {
+		fmt.Fprintf(w, "data: %s\n", line)
+	}
 }
 
 // emitKeepalive writes a keepalive event (no swap, no id) to the response.

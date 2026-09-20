@@ -66,6 +66,67 @@ func TestFR5_FullStateOnConnect(t *testing.T) {
 	require.Contains(t, body, "data: {\"topic\": \"topic-a\", \"state\": \"current\"}")
 }
 
+// TestMultiLineFragmentSurvivesSSEFraming guards against a regression where
+// emitSwap wrote a multi-line fragment (e.g. a rendered transcript message
+// with a paragraph break) as a single "data: <fragment>\n\n" line: per the
+// SSE spec, a blank line inside that fragment dispatches the event early,
+// silently dropping everything after it, and any other embedded newline
+// produces continuation lines with no "data:" prefix, which the spec
+// requires clients to ignore. A real client (EventSource/htmx-ext-sse)
+// only reconstructs a multi-line data field from multiple "data:" lines.
+func TestMultiLineFragmentSurvivesSSEFraming(t *testing.T) {
+	fakeTransport := &fakeTransport{}
+	attachFunc := func(ctx context.Context) (Transport, error) {
+		return fakeTransport, nil
+	}
+
+	config := DefaultConfig()
+	h := NewHub(attachFunc, config)
+	defer h.Close()
+
+	fragmentBody := "<p>No more calls needed.</p>\n\n<h1>Your Access</h1>\n<p>rest of the message</p>"
+	fragment := func(r *http.Request, topic string) ([]byte, error) {
+		return []byte(fragmentBody), nil
+	}
+
+	handler := Handler(h, []string{"topic-a"}, fragment)
+
+	req := httptest.NewRequest("GET", "/events", nil)
+	ctx, cancel := context.WithCancel(req.Context())
+	req = req.WithContext(ctx)
+
+	w := httptest.NewRecorder()
+
+	done := make(chan struct{})
+	go func() {
+		handler(w, req)
+		close(done)
+	}()
+
+	time.Sleep(50 * time.Millisecond)
+	cancel()
+	<-done
+
+	body := w.Body.String()
+
+	// Every physical line of the fragment must carry its own "data:"
+	// prefix -- a continuation line without one is not part of the field
+	// per spec and a real EventSource client would drop it.
+	for _, line := range strings.Split(fragmentBody, "\n") {
+		require.Contains(t, body, "data: "+line+"\n")
+	}
+
+	// Reconstruct the data field the way EventSource does (join
+	// "data:" lines with "\n") and confirm nothing was lost.
+	var dataLines []string
+	for _, line := range strings.Split(body, "\n") {
+		if strings.HasPrefix(line, "data: ") {
+			dataLines = append(dataLines, strings.TrimPrefix(line, "data: "))
+		}
+	}
+	require.Equal(t, fragmentBody, strings.Join(dataLines, "\n"))
+}
+
 // TestFR5_ReconnectBaselineSuppression tests that keepalive is emitted when baseline matches
 func TestFR5_ReconnectBaselineSuppression(t *testing.T) {
 	fakeTransport := &fakeTransport{}
