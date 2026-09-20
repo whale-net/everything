@@ -191,9 +191,11 @@ func (a *Activities) VerifyPublished(ctx context.Context, releaseRunID string, e
 	return result, nil
 }
 
-// releaseRunTargetStateOrder is the legal linear progression
-// repository.ReleaseRunTargetState's doc comment describes: queued ->
-// building -> publishing -> recording -> succeeded. Used by
+// releaseRunTargetStateOrder is chart targets' legal linear progression
+// (repository.ReleaseRunTargetState's doc comment): queued -> building ->
+// publishing -> recording -> succeeded -- chart targets never report
+// built/pushed (there is no docker push half to a chart's build), so their
+// walk skips straight from building to publishing. Used by
 // RecordTargetState to walk from a target's current state up to a desired
 // terminal state one legal transition at a time -- see that method's doc
 // comment for why a single UpdateTargetState call straight from queued to
@@ -206,6 +208,34 @@ var releaseRunTargetStateOrder = []repository.ReleaseRunTargetState{
 	repository.ReleaseRunTargetStatePublishing,
 	repository.ReleaseRunTargetStateRecording,
 	repository.ReleaseRunTargetStateSucceeded,
+}
+
+// releaseRunTargetStateOrderImage is image targets' own linear progression:
+// queued -> building -> built -> pushed -> publishing ->
+// recording -> succeeded. Built/pushed are optional in practice --
+// ReportTargetProgress may report them early (see server/handlers/
+// release.go), but a target that never reports either still walks through
+// both here in one burst the moment FinalizePublish requests Publishing
+// (idempotent no-op writes, same as any other catch-up walk this function
+// already does).
+var releaseRunTargetStateOrderImage = []repository.ReleaseRunTargetState{
+	repository.ReleaseRunTargetStateQueued,
+	repository.ReleaseRunTargetStateBuilding,
+	repository.ReleaseRunTargetStateBuilt,
+	repository.ReleaseRunTargetStatePushed,
+	repository.ReleaseRunTargetStatePublishing,
+	repository.ReleaseRunTargetStateRecording,
+	repository.ReleaseRunTargetStateSucceeded,
+}
+
+// releaseRunTargetStateOrderFor returns the linear walk order for kind --
+// see releaseRunTargetStateOrder/releaseRunTargetStateOrderImage's doc
+// comments for why these differ only for image targets.
+func releaseRunTargetStateOrderFor(kind repository.ArtifactKind) []repository.ReleaseRunTargetState {
+	if kind == repository.ArtifactKindImage {
+		return releaseRunTargetStateOrderImage
+	}
+	return releaseRunTargetStateOrder
 }
 
 // RecordTargetState implements ReleaseActivities.RecordTargetState (FR10,
@@ -289,8 +319,9 @@ func (a *Activities) RecordTargetState(ctx context.Context, releaseRunID string,
 		return nil
 	}
 
-	startIdx := indexOfState(row.State)
-	endIdx := indexOfState(newState)
+	order := releaseRunTargetStateOrderFor(target.Kind)
+	startIdx := indexOfState(order, row.State)
+	endIdx := indexOfState(order, newState)
 	if startIdx < 0 || endIdx < 0 {
 		return fmt.Errorf("record target state for release run %s: cannot walk %s -> %s for %s", releaseRunID, row.State, newState, target.key())
 	}
@@ -304,7 +335,7 @@ func (a *Activities) RecordTargetState(ctx context.Context, releaseRunID string,
 		return nil
 	}
 	for i := startIdx + 1; i <= endIdx; i++ {
-		step := releaseRunTargetStateOrder[i]
+		step := order[i]
 		stepBuildID, stepErrorDetail := "", ""
 		if i == endIdx {
 			// Only the final step in the walk carries buildID/errorDetail
@@ -335,8 +366,8 @@ func isTerminalState(s repository.ReleaseRunTargetState) bool {
 	return s == repository.ReleaseRunTargetStateSucceeded || s == repository.ReleaseRunTargetStateFailed
 }
 
-func indexOfState(s repository.ReleaseRunTargetState) int {
-	for i, v := range releaseRunTargetStateOrder {
+func indexOfState(order []repository.ReleaseRunTargetState, s repository.ReleaseRunTargetState) int {
+	for i, v := range order {
 		if v == s {
 			return i
 		}

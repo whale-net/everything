@@ -164,7 +164,8 @@ service PromotionRegistry {
 // scoped surface.
 // Role: promoter (TriggerRelease -- same check Promote already requires,
 // FR4/NFR5, no new role), builder (NotifyBuildComplete -- the build job's
-// own credential reports its run's terminal state), any (reads).
+// own credential reports its run's terminal state; ReportTargetProgress --
+// same credential reports one target's intra-build progress), any (reads).
 // ============================================================================
 service ReleaseRegistry {
   // Dedup-checks the batch against any already-non-terminal release
@@ -193,6 +194,17 @@ service ReleaseRegistry {
   // role every other build-job-side write (AssertApps, RecordBuild,
   // BeginPublishBatch, ...) requires, no new role.
   rpc NotifyBuildComplete(NotifyBuildCompleteRequest) returns (NotifyBuildCompleteResponse);
+
+  // Builder-authenticated intra-build progress report: the
+  // release-v2 build job (via release_helper_go, in-process from
+  // ExecuteBuildApp) reports one image target reaching BUILT (built
+  // locally) or PUSHED (pushed to the registry), ahead of the batch-wide
+  // NotifyBuildComplete terminal signal -- so the release page's live
+  // status can distinguish "still building" from "built, not yet pushed"
+  // instead of the single batch-wide BUILDING state both used to share.
+  // Role: app-registry-builder (server/auth.RoleBuilder), same as
+  // NotifyBuildComplete.
+  rpc ReportTargetProgress(ReportTargetProgressRequest) returns (ReportTargetProgressResponse);
 }
 
 // ============================================================================

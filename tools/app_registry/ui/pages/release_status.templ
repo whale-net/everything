@@ -308,15 +308,20 @@ templ releaseStatusRunBody(rel *pb.GetReleaseResponse) {
 	</dl>
 }
 
-// releaseRunTargetStateOrder is the queued -> building -> publishing ->
-// recording -> succeeded/failed progression ReleaseRunTargetState's own
-// doc comment (api_messages_release.proto) defines -- the aggregate
-// summary below walks states in this order so the line always reads in
-// lifecycle order regardless of which states a given run happens to have
-// reached.
+// releaseRunTargetStateOrder is the queued -> building -> built -> pushed
+// -> publishing -> recording -> succeeded/failed progression
+// ReleaseRunTargetState's own doc comment (api_messages_release.proto)
+// defines -- the aggregate summary below walks states in this order so the
+// line always reads in lifecycle order regardless of which states a given
+// run happens to have reached. Built/pushed are image-only and optional --
+// a run with no image targets, or whose image targets never
+// reported them, simply has a zero count for both and they are omitted
+// from the rendered line (see releaseRunAggregateSummary below).
 var releaseRunTargetStateOrder = []pb.ReleaseRunTargetState{
 	pb.ReleaseRunTargetState_RELEASE_RUN_TARGET_STATE_QUEUED,
 	pb.ReleaseRunTargetState_RELEASE_RUN_TARGET_STATE_BUILDING,
+	pb.ReleaseRunTargetState_RELEASE_RUN_TARGET_STATE_BUILT,
+	pb.ReleaseRunTargetState_RELEASE_RUN_TARGET_STATE_PUSHED,
 	pb.ReleaseRunTargetState_RELEASE_RUN_TARGET_STATE_PUBLISHING,
 	pb.ReleaseRunTargetState_RELEASE_RUN_TARGET_STATE_RECORDING,
 	pb.ReleaseRunTargetState_RELEASE_RUN_TARGET_STATE_SUCCEEDED,
