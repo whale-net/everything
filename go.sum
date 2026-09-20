@@ -505,16 +505,6 @@ github.com/rabbitmq/amqp091-go v1.10.0 h1:STpn5XsHlHGcecLmMFCtg7mqq0RnD+zFr4uzuk
 github.com/rabbitmq/amqp091-go v1.10.0/go.mod h1:Hy4jKW5kQART1u+JkDTF9YYOQUHXqMuhrgxOEeS7G4o=
 github.com/remyoudompheng/bigfft v0.0.0-20200410134404-eec4a21b6bb0 h1:OdAsTTz6OkFY5QxjkYwrChwuRruF69c169dPK26NUlk=
 github.com/remyoudompheng/bigfft v0.0.0-20200410134404-eec4a21b6bb0/go.mod h1:qqbHyh8v60DhA7CoWK5oRCqLrMHRGoxYCSS9EjAz6Eo=
-github.com/riverqueue/river v0.31.0 h1:BERwce/WS4Guter0/A3GyTDP+1rxl6vFHyBQv+U/5tM=
-github.com/riverqueue/river v0.31.0/go.mod h1:Aqbb/jBrFMvh6rbe6SDC6XVZnS0v1W+QQPjejRvyHzk=
-github.com/riverqueue/river/riverdriver v0.31.0 h1:XwDa8DqkRxkqMqfdLOYTgSykiTHNSRcWG1LcCg/g0ys=
-github.com/riverqueue/river/riverdriver v0.31.0/go.mod h1:Vl6XPbWtjqP+rqEa/HxcEeXeZL/KPCwqjRlqj+wWsq8=
-github.com/riverqueue/river/riverdriver/riverpgxv5 v0.31.0 h1:Zii6/VNqasBuPvFIA98xgjz3MRy2EvMm6lMyh1RtWBw=
-github.com/riverqueue/river/riverdriver/riverpgxv5 v0.31.0/go.mod h1:z859lpsOraO3IYWjY9w8RZec5I0BAcas9rjZkwxAijU=
-github.com/riverqueue/river/rivershared v0.31.0 h1:KVEp+13jnK9YOlMUKnR0eUyJaK+P/APcheoSGMfZArA=
-github.com/riverqueue/river/rivershared v0.31.0/go.mod h1:Wvf489bvAiZsJm7mln8YAPZbK7pVfuK7bYfsBt5Nzbw=
-github.com/riverqueue/river/rivertype v0.31.0 h1:O6vaJ72SffgF1nxzCrDKd4M+eMZFRlJpycnOcUIGLD8=
-github.com/riverqueue/river/rivertype v0.31.0/go.mod h1:D1Ad+EaZiaXbQbJcJcfeicXJMBKno0n6UcfKI5Q7DIQ=
 github.com/robfig/cron v1.2.0 h1:ZjScXvvxeQ63Dbyxy76Fj3AT3Ut0aKsyd2/tl3DTMuQ=
 github.com/robfig/cron v1.2.0/go.mod h1:JGuDeoQd7Z6yL4zQhZ3OPEVHB7fL6Ka6skscFHfmt2k=
 github.com/rqlite/gorqlite v0.0.0-20230708021416-2acd02b70b79 h1:V7x0hCAgL8lNGezuex1RW1sh7VXXCqfw8nXZti66iFg=

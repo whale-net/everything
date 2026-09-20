@@ -1,0 +1,8 @@
+-- Migration 046 down: explicit no-op.
+--
+-- This cannot faithfully restore River's schema -- rivermigrate owned that
+-- schema's creation and River itself is removed from the module graph as
+-- part of this same task (NFR2), so there is no longer any code path that
+-- would run against a recreated river_job/river_leader/river_queue/
+-- river_client* table set even if this file recreated them empty. Rolling
+-- back this migration is a schema-version bookkeeping step only.

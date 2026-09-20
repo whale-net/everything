@@ -188,7 +188,7 @@ func run() error {
 	// Start stale session checker
 	sessionStatusHandler.StartStaleSessionChecker(appCtx, 10*time.Second, time.Duration(cfg.StaleSessionThreshold)*time.Second)
 
-	// Start backup scheduler (River)
+	// Start backup scheduler (Temporal)
 	s3Client, err := s3lib.NewClient(appCtx, s3lib.Config{
 		Bucket:         os.Getenv("S3_BUCKET"),
 		Region:         os.Getenv("S3_REGION"),
@@ -201,19 +201,12 @@ func run() error {
 		logger.Warn("failed to initialize S3 client, scheduled backups will not run", "error", err)
 		s3Client = nil
 	}
-	riverClient, err := startBackupScheduler(appCtx, dbPool, repo, rmqConn, s3Client, logger)
-	if err != nil {
-		logger.Warn("failed to start backup scheduler, scheduled backups will not run", "error", err)
-	} else {
-		defer riverClient.Stop(context.Background()) //nolint:errcheck
-	}
 
-	// Start the Temporal-based backup scheduler (FR16, FR17 M7) alongside
-	// the still-running River path above -- #2819 removes River once this
-	// path has proven itself on trunk (NFR2). Unlike the S3/River startup
-	// above, a failure here fails the process: a worker that silently never
-	// came up would leave every enabled BackupConfig's cadence unscheduled
-	// with no observable signal beyond a missing Temporal Schedule.
+	// Start the Temporal-based backup scheduler (FR16, FR17 M7) — the sole
+	// scheduler path now that River is removed (NFR2). A failure here fails
+	// the process: a worker that silently never came up would leave every
+	// enabled BackupConfig's cadence unscheduled with no observable signal
+	// beyond a missing Temporal Schedule.
 	temporalWorker, temporalClient, err := startBackupTemporalWorker(appCtx, cfg, dbPool, repo, rmqConn, s3Client, logger)
 	if err != nil {
 		return fmt.Errorf("failed to start temporal backup scheduler: %w", err)
@@ -271,7 +264,7 @@ func run() error {
 // cfg.TemporalTaskQueue, starts the worker, and upserts the
 // backupsched.ScanScheduleID Schedule (manmanv2/ARCHITECTURE.md's "Backup
 // Scheduler (Temporal)" section). Every step here is fatal on error -- see
-// the call site's comment for why this path, unlike the River/S3 startup
+// the call site's comment for why this path, unlike the S3 client init
 // above it, must fail the process loudly rather than degrade silently.
 func startBackupTemporalWorker(ctx context.Context, cfg *Config, dbPool *pgxpool.Pool, repo *repository.Repository, rmqConn *rmq.Connection, s3Client *s3lib.Client, logger *slog.Logger) (worker.Worker, temporalclient.Client, error) {
 	temporalCfg := temporallib.Config{
