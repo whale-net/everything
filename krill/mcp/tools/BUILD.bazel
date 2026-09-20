@@ -20,6 +20,7 @@ go_library(
         "task.go",
         "task_claim.go",
         "task_dependency.go",
+        "task_lease.go",
         "task_note.go",
         "task_payload.go",
     ],
@@ -86,6 +87,24 @@ go_test(
 go_test(
     name = "task_registration_test",
     srcs = ["task_registration_test.go"],
+    deps = [
+        ":tools",
+        "//krill/mcp/server",
+        "//krill/store",
+        "@com_github_modelcontextprotocol_go_sdk//mcp",
+        "@com_github_stretchr_testify//assert",
+        "@com_github_stretchr_testify//require",
+    ],
+)
+
+# No-database unit test (issue #2723's own MCP-layer structural proof, FR6):
+# RegisterHeartbeatTask registers exactly {heartbeat_task} over a real
+# in-memory MCP client/server connection. Mirrors :task_registration_test's
+# own store.New(nil)/in-memory transport technique, so it needs no Docker
+# and is part of `bazel test //...`.
+go_test(
+    name = "task_lease_registration_test",
+    srcs = ["task_lease_registration_test.go"],
     deps = [
         ":tools",
         "//krill/mcp/server",

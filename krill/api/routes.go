@@ -136,6 +136,12 @@ func setupRoutes(mux *http.ServeMux, pool *pgxpool.Pool, githubToken string) {
 	// the fresh lease.
 	mux.Handle("POST /tasks/{id}/claim", gate(handlers.ClaimTaskHandler(entities.Tasks(), assembler)))
 
+	// task_lease_event (issue #2723, FR6): the current claimant extends its
+	// own lease. Gated like every other write endpoint (NFR6); a stale
+	// claim id (reclaimed, or already released by complete/abandon) is
+	// rejected with a 409, never a silently-accepted no-op.
+	mux.Handle("POST /tasks/{id}/heartbeat", gate(handlers.HeartbeatHandler(entities.Tasks())))
+
 	// task_note (issue #2727, FR11/FR12): any Agent, claimant or not, can
 	// record a flat, immutable note against a task or a spec-axis entity
 	// -- POST gated (NFR6; the only other gate is the session requirement
