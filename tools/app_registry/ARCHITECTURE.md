@@ -34,7 +34,7 @@ itself, for the topic you need.
 | [`architecture/19-resolved-questions.md`](architecture/19-resolved-questions.md) | Numbered Q&A cited by number elsewhere in this doc and in OPERATIONS.md |
 | [`architecture/20-open-questions.md`](architecture/20-open-questions.md) | What's still genuinely undecided |
 | [`architecture/21-promotion-sse.md`](architecture/21-promotion-sse.md) | SSE integration on `/promotions/{id}` — publish points, token lifecycle, session state, terminal/transient discrimination, and the non-redirecting auth shim |
-| [`architecture/22-release-run-sse.md`](architecture/22-release-run-sse.md) | Release-run event family on the same shared exchange — the two `release_run_target` publish points, payload shape, and NFR3/NFR6 guarantees; `/releases/{id}`'s own route mechanics are a separate, not-yet-built follow-up |
+| [`architecture/22-release-run-sse.md`](architecture/22-release-run-sse.md) | Release-run SSE — the two `release_run_target` publish points and payload shape, plus `/releases/{id}`'s route: the second `htmxsse`/`htmxauth` adopter, the `release_run.*` routing-key family, the FR12/NFR9 commit-resolution cache, and FR16's no-terminal-special-case rule. Cross-references `21-promotion-sse.md` for everything reused verbatim |
 
 `architecture/08-release-lifecycle/` is itself split — the parent topic alone
 was too large for one file:
