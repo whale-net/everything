@@ -74,6 +74,10 @@ func (f *fakeTaskStore) ReclaimExpired(ctx context.Context, params store.Reclaim
 	panic("not used by this test")
 }
 
+func (f *fakeTaskStore) AbandonClaim(ctx context.Context, params store.AbandonParams) (store.AbandonClaimResult, error) {
+	panic("not used by this test")
+}
+
 func (f *fakeTaskStore) RecordNote(ctx context.Context, params store.RecordNoteParams) (store.Note, error) {
 	panic("not used by this test")
 }

@@ -251,6 +251,17 @@ type TaskStore interface {
 	// no-op, not an error.
 	ReclaimExpired(ctx context.Context, params ReclaimParams) (ReclaimResult, error)
 
+	// AbandonClaim is FR9's claimant-initiated release (task_abandon.go,
+	// issue #2726): a single transaction that verifies params.ClaimID is
+	// the task's current, unreleased claim (ErrClaimNotCurrent otherwise,
+	// the same rule Heartbeat/CompleteTask apply), releases it
+	// (release_reason='abandon'), records one `abandoned` task_attempt
+	// row, and increments attempt_count -- the exact same
+	// DefaultAttemptCap ClaimTask/ReclaimExpired enforce, never a second
+	// cap check. current_lane is never touched (abandoning is not a
+	// verdict).
+	AbandonClaim(ctx context.Context, params AbandonParams) (AbandonClaimResult, error)
+
 	// RecordNote appends one `task_note` row (task_note.go, issue #2727,
 	// FR11/FR12): a flat, immutable note against exactly one target --
 	// params.TaskID, or params.EntityKind+params.EntityID naming a

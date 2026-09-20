@@ -150,6 +150,15 @@ func setupRoutes(mux *http.ServeMux, pool *pgxpool.Pool, githubToken string) {
 	// claim return.
 	mux.Handle("POST /tasks/{id}/complete", gate(handlers.CompleteTaskHandler(entities.Tasks(), assembler)))
 
+	// task_abandon (issue #2726, FR9): an Agent holding a task's current
+	// claim releases it without reporting a verdict -- current_lane is
+	// unchanged, and the abandon counts as an attempt against the same
+	// DefaultAttemptCap #2724's reclaim sweep enforces. Gated like every
+	// other write endpoint (NFR6); the response is the same work.Payload
+	// document GET /tasks/{id} and claim/complete return. Distinct from
+	// the pre-existing delivery-axis POST /milestones/{id}/abandon.
+	mux.Handle("POST /tasks/{id}/abandon", gate(handlers.AbandonTaskHandler(entities.Tasks(), assembler)))
+
 	// task_reclaim (issue #2724, FR7): an operator/automation-triggered
 	// sweep of the caller's own scope for lease-expired tasks -- gated like
 	// every other write endpoint (NFR6). No background scheduler/cron
