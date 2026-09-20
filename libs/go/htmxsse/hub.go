@@ -346,8 +346,10 @@ func (h *Hub) registerHandler() {
 		return
 	}
 
-	// Register a catch-all handler that dispatches based on routing key
-	transport.RegisterHandler("*", h.handleMessage)
+	// Register a catch-all handler that dispatches based on routing key.
+	// "#" is the pattern rmq's dispatcher treats as match-everything; it
+	// matches the exchange binding below.
+	transport.RegisterHandler("#", h.handleMessage)
 
 	// Bind to the exchange with a wildcard routing key
 	err := transport.BindExchange(exchangeName, []string{"#"})

@@ -552,8 +552,10 @@ func (c *Consumer) sendReply(ctx context.Context, replyTo, correlationID string,
 	log.Printf("Failed to send reply to %s: %v", replyTo, publishErr)
 }
 
-// matchesRoutingKey checks if a routing key matches a pattern
-// Supports wildcards: * (single word), # (zero or more words)
+// matchesRoutingKey checks if a routing key matches a pattern.
+// Supports only exact matches, "#" as match-everything, and a
+// "<prefix>#" prefix match. A single-word "*" wildcard is not
+// implemented — a literal "*" pattern will not match any key.
 func matchesRoutingKey(key, pattern string) bool {
 	if pattern == "#" {
 		return true
