@@ -1029,6 +1029,17 @@ func (c *ControlClient) DeleteBackupConfig(ctx context.Context, backupConfigID i
 	return err
 }
 
+// DeleteBackup deletes one backup run (FR7, FR8, task #2815) -- the API's
+// DeleteBackup already deletes the S3 object first and only then
+// soft-deletes the row, returning codes.FailedPrecondition when there is no
+// S3 object yet (manmanv2/api/handlers/backup.go); this wrapper forwards
+// that error as-is so the caller can render the precondition legibly
+// instead of a generic failure.
+func (c *ControlClient) DeleteBackup(ctx context.Context, backupID int64) error {
+	_, err := c.api.DeleteBackup(ctx, &manmanpb.DeleteBackupRequest{BackupId: backupID})
+	return err
+}
+
 func (c *ControlClient) TriggerBackup(ctx context.Context, sgcID, backupConfigID int64) (int64, error) {
 	resp, err := c.api.TriggerBackup(ctx, &manmanpb.TriggerBackupRequest{
 		ServerGameConfigId: sgcID,

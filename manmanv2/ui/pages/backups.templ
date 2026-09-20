@@ -54,6 +54,15 @@ type BackupRunsFragmentData struct {
 	// (and suppresses the "Load more" control) instead of a bare 500 --
 	// the ListBackups call itself failed, not "zero rows matched".
 	Err string
+	// DeleteNotice, when non-empty, renders an inline alert above the table
+	// after a delete attempt (handleBackupRunDelete, task #2815 -- FR7,
+	// FR8) -- unlike Err, it never suppresses the table: the list call
+	// itself succeeded, this just reports what the delete attempt on one
+	// row did (or, for a FailedPrecondition/NotFound response, didn't do).
+	// DeleteNoticeVariant is components.Alert's alertType ("warning" for an
+	// expected precondition, "error" for an unexpected failure).
+	DeleteNotice        string
+	DeleteNoticeVariant string
 }
 
 // BackupRunsFilterValues holds the filter bar's current values as strings
@@ -216,8 +225,14 @@ templ BackupRunsFragment(data BackupRunsFragmentData) {
 	if data.Err != "" {
 		@components.Alert("error", data.Err)
 	} else if len(data.Items) == 0 {
+		if data.DeleteNotice != "" {
+			@components.Alert(data.DeleteNoticeVariant, data.DeleteNotice)
+		}
 		@components.EmptyState("No backup runs", "No backup runs match the current filters.", "", "")
 	} else {
+		if data.DeleteNotice != "" {
+			@components.Alert(data.DeleteNoticeVariant, data.DeleteNotice)
+		}
 		<div class="bg-base-100 rounded-box border border-base-300 overflow-x-auto">
 			<table class="table">
 				<thead>
@@ -228,6 +243,7 @@ templ BackupRunsFragment(data BackupRunsFragmentData) {
 						<th>Created</th>
 						<th>Size</th>
 						<th>Origin</th>
+						<th></th>
 					</tr>
 				</thead>
 				<tbody>
@@ -257,7 +273,11 @@ templ BackupRunsFragment(data BackupRunsFragmentData) {
 // come from the item's own display-context fields (#2809), not a per-row
 // lookup. Each row links to "/backups/runs/{backup_id}" (task #2814, FR6)
 // so a Server Manager can drill into a single run -- e.g. a failed one --
-// without a database query.
+// without a database query. The trailing delete button (FR7, FR8, task
+// #2815) posts to handleBackupRunDelete, which always re-renders this same
+// fragment: a successful delete drops the row, a FailedPrecondition/
+// NotFound response leaves it in place with an inline notice above the
+// table.
 templ backupRunRow(item *manmanpb.BackupListItem) {
 	<tr>
 		<td>
@@ -270,6 +290,18 @@ templ backupRunRow(item *manmanpb.BackupListItem) {
 		<td>{ timeAgo(item.Backup.CreatedAt) }</td>
 		<td>{ backupRunSize(item.Backup) }</td>
 		<td>{ backupRunOrigin(item.Backup) }</td>
+		<td class="text-right">
+			<button
+				type="button"
+				class="btn btn-error btn-xs"
+				hx-post={ fmt.Sprintf("/backups/runs/%d/delete", item.Backup.BackupId) }
+				hx-confirm="Delete this backup run? This also removes its stored archive."
+				hx-target="#backup-runs-panel"
+				hx-swap="innerHTML"
+			>
+				Delete
+			</button>
+		</td>
 	</tr>
 }
 
