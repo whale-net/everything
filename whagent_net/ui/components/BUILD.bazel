@@ -8,6 +8,7 @@ templ_library(
     deps = [
         "//libs/go/htmxauth",
         "//libs/go/htmxui",
+        "@com_github_yuin_goldmark//:goldmark",
     ],
 )
 
