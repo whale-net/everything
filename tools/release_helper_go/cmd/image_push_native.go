@@ -84,12 +84,11 @@ func pushOCILayoutIndex(imageDir, repository string, tags []string, token string
 	return pushDigest.String(), nil
 }
 
-// buildImageNative runs `bazel build` (not `bazel run`) on meta's OCI image
-// index target and returns the local layout directory it was built into --
-// the split half of buildAndPushImageNative's former single call, pulled
-// apart so ExecuteBuildApp can report BUILT progress between this and the
-// push half (pushOCILayoutIndex).
-func buildImageNative(bazel BazelRunner, meta AppMetadata) (imageDir string, err error) {
+// buildAndPushImageNative builds meta's OCI image index (`bazel build`, not
+// `bazel run`) and pushes it natively via pushOCILayoutIndex, replacing the
+// `bazel run <target>_image_push` bash/crane-CLI path end to end. Returns
+// the pushed digest.
+func buildAndPushImageNative(bazel BazelRunner, meta AppMetadata, repository string, tags []string, token string) (string, error) {
 	indexTarget := meta.ImageTarget
 	if indexTarget == "" {
 		return "", fmt.Errorf("%s has no image_target metadata", meta.FullName())
@@ -106,7 +105,9 @@ func buildImageNative(bazel BazelRunner, meta AppMetadata) (imageDir string, err
 	bazelBin := strings.TrimSpace(bazelBinOut)
 
 	pkg, targetName := splitLabel(indexTarget)
-	return filepath.Join(bazelBin, pkg, targetName), nil
+	imageDir := filepath.Join(bazelBin, pkg, targetName)
+
+	return pushOCILayoutIndex(imageDir, repository, tags, token)
 }
 
 // splitLabel splits a "//pkg/path:name" Bazel label into its package

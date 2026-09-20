@@ -396,12 +396,8 @@ func TestActivities_RecordTargetState_PublishesOncePerLandedWrite(t *testing.T) 
 	a := &Activities{Registry: repo, Publisher: pub}
 	target := ReleaseTarget{OwnerFullName: "demo-widget", Kind: repository.ArtifactKindImage}
 
-	// Image targets' full progression includes Built/Pushed
-	// between Building and Publishing -- see releaseRunTargetStateOrderImage.
 	progression := []repository.ReleaseRunTargetState{
 		repository.ReleaseRunTargetStateBuilding,
-		repository.ReleaseRunTargetStateBuilt,
-		repository.ReleaseRunTargetStatePushed,
 		repository.ReleaseRunTargetStatePublishing,
 		repository.ReleaseRunTargetStateRecording,
 		repository.ReleaseRunTargetStateSucceeded,
@@ -433,16 +429,13 @@ func TestActivities_RecordTargetState_MultiStepWalk_PublishesOncePerStep(t *test
 	a := &Activities{Registry: repo, Publisher: pub}
 	target := ReleaseTarget{OwnerFullName: "demo-widget", Kind: repository.ArtifactKindImage}
 
-	// One call straight from Queued to Succeeded walks Building, Built,
-	// Pushed, Publishing, Recording, Succeeded (image target's fuller
-	// releaseRunTargetStateOrderImage) -- six landed writes.
+	// One call straight from Queued to Succeeded walks Building,
+	// Publishing, Recording, Succeeded -- four landed writes.
 	require.NoError(t, a.RecordTargetState(context.Background(), run.ReleaseRunID, target, repository.ReleaseRunTargetStateSucceeded, "build-1", ""))
 
-	require.Len(t, pub.events, 6)
+	require.Len(t, pub.events, 4)
 	wantKinds := []string{
 		"release_target_building",
-		"release_target_built",
-		"release_target_pushed",
 		"release_target_publishing",
 		"release_target_recording",
 		"release_target_succeeded",
@@ -487,7 +480,7 @@ func TestActivities_RecordTargetState_NoopRetry_PublishesNothing(t *testing.T) {
 	target := ReleaseTarget{OwnerFullName: "demo-widget", Kind: repository.ArtifactKindImage}
 
 	require.NoError(t, a.RecordTargetState(context.Background(), run.ReleaseRunID, target, repository.ReleaseRunTargetStateSucceeded, "build-1", ""))
-	require.Len(t, pub.events, len(releaseRunTargetStateOrderImage)-1, "sanity: the first call walked queued->succeeded (image target's fuller order)")
+	require.Len(t, pub.events, len(releaseRunTargetStateOrder)-1, "sanity: the first call walked queued->succeeded")
 
 	before := len(pub.events)
 	// Redelivered retry of the exact same final call -- the no-op early

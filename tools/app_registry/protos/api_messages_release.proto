@@ -17,20 +17,12 @@ import "tools/app_registry/protos/messages.proto";
 // ============================================================================
 
 // ReleaseRunTargetState mirrors repository.ReleaseRunTargetState
-// (server/repository/models.go) -- queued -> building -> built -> pushed ->
-// publishing -> recording -> succeeded, with a transition to failed legal
-// from any non-terminal state. succeeded/failed are terminal. NOT the same
-// lifecycle as ArtifactState: this tracks the UI-trigger layer's own view of
-// one target's progress through a release, ahead of (and independent of)
+// (server/repository/models.go) -- queued -> building -> publishing ->
+// recording -> succeeded, with a transition to failed legal from any
+// non-terminal state. succeeded/failed are terminal. NOT the same lifecycle
+// as ArtifactState: this tracks the UI-trigger layer's own view of one
+// target's progress through a release, ahead of (and independent of)
 // whatever `artifact` row that target's build eventually produces.
-//
-// BUILT/PUSHED are optional intra-BUILDING progress markers
-// for image targets only: the release-v2 build job reports them via
-// ReportTargetProgress as it works through ExecuteBuildApp, ahead of the
-// batch-wide NotifyBuildComplete terminal signal. A target that never
-// reports them (chart targets, or an image target on an older
-// release_helper_go revision) simply walks BUILDING -> PUBLISHING directly,
-// same as before -- see RecordTargetState's walk-forward idempotency.
 enum ReleaseRunTargetState {
   RELEASE_RUN_TARGET_STATE_UNSPECIFIED = 0;
   RELEASE_RUN_TARGET_STATE_QUEUED = 1;
@@ -39,8 +31,6 @@ enum ReleaseRunTargetState {
   RELEASE_RUN_TARGET_STATE_RECORDING = 4;
   RELEASE_RUN_TARGET_STATE_SUCCEEDED = 5;
   RELEASE_RUN_TARGET_STATE_FAILED = 6;
-  RELEASE_RUN_TARGET_STATE_BUILT = 7;
-  RELEASE_RUN_TARGET_STATE_PUSHED = 8;
 }
 
 // ReleaseTargetInput is one target (app or chart) in a trigger's already-
@@ -170,40 +160,5 @@ message NotifyBuildCompleteResponse {
   // workflow is unknown to Temporal (already completed, wrong id, or no
   // Temporal configured) -- the notify job treats this as an informational
   // no-op (polling remains the correctness fallback) rather than an error.
-  bool signaled = 1;
-}
-
-// ReportTargetProgressRequest reports one image target's intra-build
-// progress (see ReleaseRegistry.ReportTargetProgress) -- built (image
-// produced locally) or pushed (image pushed to the registry), ahead of the
-// batch-wide NotifyBuildComplete terminal signal. Sent by release_helper_go,
-// in-process from ExecuteBuildApp, holding the same app-registry-builder
-// client credentials NotifyBuildComplete uses.
-message ReportTargetProgressRequest {
-  // release_run_id identifies which Temporal ReleaseWorkflow execution to
-  // signal -- same meaning as NotifyBuildCompleteRequest.release_run_id.
-  // Required -- an empty value (manual/bot fallback dispatch with no
-  // Temporal release run behind it) is expected to skip this call
-  // client-side entirely, same as notify-build's identical skip.
-  string release_run_id = 1;
-  // github_run_id is the reporting GHA Actions run's id (github.RunID).
-  // Cross-checked against release_run.build_ref_run_id exactly like
-  // NotifyBuildCompleteRequest.github_run_id.
-  int64 github_run_id = 2;
-  string owner_full_name = 3;
-  ArtifactKind kind = 4;
-  // state must be RELEASE_RUN_TARGET_STATE_BUILT or
-  // RELEASE_RUN_TARGET_STATE_PUSHED -- any other value is rejected
-  // InvalidArgument.
-  ReleaseRunTargetState state = 5;
-  // detail is a human-readable one-liner for release_run_target's
-  // error_detail / release-run UI. Optional.
-  string detail = 6;
-}
-
-message ReportTargetProgressResponse {
-  // signaled mirrors NotifyBuildCompleteResponse.signaled -- false is an
-  // informational no-op (the workflow already moved past this target, or
-  // finished), never an error.
   bool signaled = 1;
 }

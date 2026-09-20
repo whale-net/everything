@@ -348,90 +348,6 @@ func (s *ReleaseServer) NotifyBuildComplete(ctx context.Context, req *pb.NotifyB
 	return &pb.NotifyBuildCompleteResponse{Signaled: true}, nil
 }
 
-// ReportTargetProgress delivers one image target's intra-build progress
-// (BUILT or PUSHED) onto the running ReleaseWorkflow, ahead of
-// NotifyBuildComplete's batch-wide terminal signal -- release_helper_go
-// calls this in-process from ExecuteBuildApp, holding the same
-// app-registry-builder client credentials NotifyBuildComplete uses. Mirrors
-// NotifyBuildComplete's structure closely: same auth, same run lookup, same
-// github_run_id cross-check, same "workflow not found is an informational
-// no-op" stance (the progress signal is advisory -- FinalizePublish's own
-// walk-forward RecordTargetState call self-heals any target that never got
-// a progress report at all, see worker/release/record.go).
-//
-// Role: builder (auth.RoleBuilder), same as NotifyBuildComplete.
-func (s *ReleaseServer) ReportTargetProgress(ctx context.Context, req *pb.ReportTargetProgressRequest) (*pb.ReportTargetProgressResponse, error) {
-	if err := auth.Require(ctx, auth.RoleBuilder); err != nil {
-		return nil, err
-	}
-	if req.GetReleaseRunId() == "" {
-		return nil, status.Error(codes.InvalidArgument, "release_run_id is required")
-	}
-	if req.GetOwnerFullName() == "" {
-		return nil, status.Error(codes.InvalidArgument, "owner_full_name is required")
-	}
-	var state repository.ReleaseRunTargetState
-	switch req.GetState() {
-	case pb.ReleaseRunTargetState_RELEASE_RUN_TARGET_STATE_BUILT:
-		state = repository.ReleaseRunTargetStateBuilt
-	case pb.ReleaseRunTargetState_RELEASE_RUN_TARGET_STATE_PUSHED:
-		state = repository.ReleaseRunTargetStatePushed
-	default:
-		return nil, status.Errorf(codes.InvalidArgument, "state must be BUILT or PUSHED, got %s", req.GetState())
-	}
-	if s.temporal == nil {
-		// Unreachable in a real deployment -- see NotifyBuildComplete's
-		// identical check.
-		return nil, status.Error(codes.FailedPrecondition, "temporal client not configured")
-	}
-
-	run, _, err := s.repo.ReleaseRuns().GetReleaseRun(ctx, req.GetReleaseRunId())
-	if err != nil {
-		return nil, mapRepoErr(err)
-	}
-	if run.TemporalWorkflowID == "" {
-		return nil, status.Errorf(codes.FailedPrecondition, "release run %s has no Temporal workflow id", run.ReleaseRunID)
-	}
-
-	notifyRunID := ""
-	if req.GetGithubRunId() != 0 {
-		notifyRunID = strconv.FormatInt(req.GetGithubRunId(), 10)
-	}
-	if run.BuildRefRunID != "" && notifyRunID != "" && notifyRunID != run.BuildRefRunID {
-		return nil, status.Errorf(codes.FailedPrecondition,
-			"report run id %s does not match release run %s's dispatched build run %s",
-			notifyRunID, run.ReleaseRunID, run.BuildRefRunID)
-	}
-
-	signal := release.TargetProgressSignal{
-		GitHubRunID:   notifyRunID,
-		OwnerFullName: req.GetOwnerFullName(),
-		Kind:          artifactKindFromPB(req.GetKind()),
-		State:         state,
-		Detail:        req.GetDetail(),
-	}
-	if serr := s.temporal.SignalWorkflow(ctx, run.TemporalWorkflowID, "", release.SignalTargetProgress, signal); serr != nil {
-		var notFound *serviceerror.NotFound
-		if errors.As(serr, &notFound) {
-			releaseLog.Info("report target progress: workflow execution not found; ignoring",
-				slog.String("release_run_id", run.ReleaseRunID),
-				slog.String("workflow_id", run.TemporalWorkflowID),
-				slog.String("owner_full_name", req.GetOwnerFullName()),
-				slog.String("state", string(state)),
-			)
-			return &pb.ReportTargetProgressResponse{Signaled: false}, nil
-		}
-		return nil, status.Errorf(codes.Internal, "signal release workflow %s: %v", run.TemporalWorkflowID, serr)
-	}
-	releaseLog.Info("report target progress: signalled release workflow",
-		slog.String("release_run_id", run.ReleaseRunID),
-		slog.String("workflow_id", run.TemporalWorkflowID),
-		slog.String("owner_full_name", req.GetOwnerFullName()),
-		slog.String("state", string(state)),
-	)
-	return &pb.ReportTargetProgressResponse{Signaled: true}, nil
-}
-
 // rejectIfAlreadyReleasing implements FR5's fast-fail check: it returns
 // codes.FailedPrecondition if ownerFullName+kind already has a
 // release_run_target row in a non-terminal state on any release_run --
@@ -570,10 +486,6 @@ func releaseRunTargetStateToPB(s repository.ReleaseRunTargetState) pb.ReleaseRun
 		return pb.ReleaseRunTargetState_RELEASE_RUN_TARGET_STATE_QUEUED
 	case repository.ReleaseRunTargetStateBuilding:
 		return pb.ReleaseRunTargetState_RELEASE_RUN_TARGET_STATE_BUILDING
-	case repository.ReleaseRunTargetStateBuilt:
-		return pb.ReleaseRunTargetState_RELEASE_RUN_TARGET_STATE_BUILT
-	case repository.ReleaseRunTargetStatePushed:
-		return pb.ReleaseRunTargetState_RELEASE_RUN_TARGET_STATE_PUSHED
 	case repository.ReleaseRunTargetStatePublishing:
 		return pb.ReleaseRunTargetState_RELEASE_RUN_TARGET_STATE_PUBLISHING
 	case repository.ReleaseRunTargetStateRecording:
