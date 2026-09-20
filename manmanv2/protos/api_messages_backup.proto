@@ -80,11 +80,27 @@ message GetBackupConfigResponse {
 }
 
 message ListBackupConfigsRequest {
-  int64 volume_id = 1;
+  int64 volume_id = 1;  // Optional filter; 0 means no volume filter
+  int64 game_config_id = 2;  // Optional filter
+  optional bool enabled = 3;  // Optional tri-state filter (explicit presence distinguishes false from unset)
+  int32 page_size = 4;
+  string page_token = 5;
+}
+
+// BackupConfigListItem carries per-row display context so the fleet-wide list
+// doesn't require a follow-up RPC per row.
+message BackupConfigListItem {
+  BackupConfig config = 1;
+  string volume_name = 2;
+  int64 game_config_id = 3;
+  string game_config_name = 4;
+  string game_name = 5;
 }
 
 message ListBackupConfigsResponse {
   repeated BackupConfig configs = 1;
+  repeated BackupConfigListItem items = 2;
+  string next_page_token = 3;
 }
 
 message UpdateBackupConfigRequest {

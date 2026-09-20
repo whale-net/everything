@@ -5,6 +5,7 @@ import (
 	"time"
 
 	"github.com/jackc/pgx/v5/pgxpool"
+	"github.com/whale-net/everything/manmanv2/api/repository"
 	"github.com/whale-net/everything/manmanv2/models"
 )
 
@@ -138,17 +139,31 @@ func (r *BackupConfigRepository) Get(ctx context.Context, id int64) (*manman.Bac
 	return cfg, nil
 }
 
-func (r *BackupConfigRepository) List(ctx context.Context, volumeID int64) ([]*manman.BackupConfig, error) {
+// List returns BackupConfigs fleet-wide, optionally narrowed by f, with the
+// display context (volume/GameConfig/game names) needed for a list row.
+// Filters use the "$n::type IS NULL OR col = $n" idiom so a nil filter field
+// is a no-op. TODO(Implementation phase): join game_config_volumes ->
+// game_configs -> games for volume_name/game_config_name/game_name; for now
+// those fields are left zero-valued.
+func (r *BackupConfigRepository) List(ctx context.Context, f repository.BackupConfigListFilter, limit, offset int) ([]*repository.BackupConfigListRow, error) {
 	rows, err := r.db.Query(ctx, `
 		SELECT backup_config_id, volume_id, cadence_minutes, backup_path, enabled, last_backup_at, created_at, updated_at
-		FROM backup_configs WHERE volume_id = $1 AND deleted_at IS NULL ORDER BY backup_config_id
-	`, volumeID)
+		FROM backup_configs
+		WHERE ($1::bigint IS NULL OR volume_id = $1)
+		  AND ($2::bigint IS NULL OR volume_id IN (
+		      SELECT volume_id FROM game_config_volumes WHERE config_id = $2
+		  ))
+		  AND ($3::boolean IS NULL OR enabled = $3)
+		  AND deleted_at IS NULL
+		ORDER BY backup_config_id
+		LIMIT $4 OFFSET $5
+	`, f.VolumeID, f.GameConfigID, f.Enabled, limit, offset)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
 
-	var cfgs []*manman.BackupConfig
+	var result []*repository.BackupConfigListRow
 	for rows.Next() {
 		cfg := &manman.BackupConfig{}
 		if err := rows.Scan(
@@ -157,9 +172,9 @@ func (r *BackupConfigRepository) List(ctx context.Context, volumeID int64) ([]*m
 		); err != nil {
 			return nil, err
 		}
-		cfgs = append(cfgs, cfg)
+		result = append(result, &repository.BackupConfigListRow{Config: cfg})
 	}
-	return cfgs, rows.Err()
+	return result, rows.Err()
 }
 
 func (r *BackupConfigRepository) Update(ctx context.Context, cfg *manman.BackupConfig) error {
