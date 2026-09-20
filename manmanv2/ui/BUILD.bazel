@@ -76,6 +76,7 @@ go_test(
         "deployment_actions_acceptance_test.go",
         "handlers_activity_live_test.go",
         "handlers_activity_test.go",
+        "handlers_backups_fleet_test.go",
         "handlers_config_editor_test.go",
         "handlers_config_editor_volumes_test.go",
         "handlers_deployment_actions_realtransport_test.go",
