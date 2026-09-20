@@ -515,6 +515,15 @@ func (app *App) setupRoutes(mux *http.ServeMux) {
 	// of handleBackupRunDetail / handleBackupRunDelete actually owns the
 	// request, distinct from the exact-match "/backups/runs" fragment route.
 	mux.HandleFunc("/backups/runs/", app.auth.RequireAuthFunc(app.auth.WithAccessToken(app.handleBackupRunRoute)))
+	// "/backups/configs/{backup_config_id}/actions[/add|remove|reorder]"
+	// (task #2817, FR12-FR15): the pre-backup Action ordering panel opened
+	// from a BackupConfig row on the "Backup configs" tab -- attachments and
+	// ordering only, never a BackupConfig or Action-definition create/edit/
+	// delete control (FR11, C30). A trailing-slash subtree match, distinct
+	// from the exact-match "/backups/configs" fragment route above, mirroring
+	// "/backups/runs/"'s own exact-vs-subtree split; same auth wrapper as
+	// every other "/backups" route (NFR3).
+	mux.HandleFunc("/backups/configs/", app.auth.RequireAuthFunc(app.auth.WithAccessToken(app.handleBackupConfigActionsRoute)))
 
 	// Protected routes - SGC detail. The "/sgc/" and "/sgc/<id>" pages
 	// themselves retired (task #2279, FR16): handleSGCRoutes' fallback now

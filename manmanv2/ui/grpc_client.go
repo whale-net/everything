@@ -1149,3 +1149,40 @@ func (c *ControlClient) ListBackupConfigActions(ctx context.Context, backupConfi
 	}
 	return resp.Items, nil
 }
+
+// AddBackupConfigAction attaches an existing Action to a BackupConfig at an
+// explicit, dense (0-based) display_order position (task #2817, FR13) --
+// the position an operator sees in the current list, not a sparse/gapped
+// value (api/handlers/backup_config.go's own doc comment on this RPC).
+func (c *ControlClient) AddBackupConfigAction(ctx context.Context, backupConfigID, actionID int64, displayOrder int32) error {
+	_, err := c.api.AddBackupConfigAction(ctx, &manmanpb.AddBackupConfigActionRequest{
+		BackupConfigId: backupConfigID,
+		ActionId:       actionID,
+		DisplayOrder:   displayOrder,
+	})
+	return err
+}
+
+// RemoveBackupConfigAction detaches one Action from a BackupConfig (task
+// #2817, FR14) -- this only removes the attachment, never the Action
+// definition itself (FR11, C30).
+func (c *ControlClient) RemoveBackupConfigAction(ctx context.Context, backupConfigID, actionID int64) error {
+	_, err := c.api.RemoveBackupConfigAction(ctx, &manmanpb.RemoveBackupConfigActionRequest{
+		BackupConfigId: backupConfigID,
+		ActionId:       actionID,
+	})
+	return err
+}
+
+// ReorderBackupConfigActions submits the full desired execution order for a
+// BackupConfig's attached Actions (task #2817, FR15) -- actionIDs must be
+// exactly the config's current attached-action set, just permuted; the API
+// rejects anything else with codes.InvalidArgument
+// (api/handlers/backup_config.go), which the caller renders inline.
+func (c *ControlClient) ReorderBackupConfigActions(ctx context.Context, backupConfigID int64, actionIDs []int64) error {
+	_, err := c.api.ReorderBackupConfigActions(ctx, &manmanpb.ReorderBackupConfigActionsRequest{
+		BackupConfigId: backupConfigID,
+		ActionIds:      actionIDs,
+	})
+	return err
+}

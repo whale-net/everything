@@ -768,3 +768,268 @@ func backupTriggerErrorMessage(err error) string {
 		return "Failed to trigger backup. Try again."
 	}
 }
+
+// handleBackupConfigActionsRoute dispatches the "/backups/configs/" subtree
+// (task #2817, FR12-FR15) between this task's four routes: "GET
+// .../{id}/actions" (list), "POST .../{id}/actions/add",
+// "POST .../{id}/actions/remove", and "POST .../{id}/actions/reorder".
+// net/http.ServeMux's exact-match "/backups/configs" (#2816's
+// handleBackupConfigsFragment) stays a separate registration and is never
+// reached through this subtree, matching handleBackupRunRoute's own
+// exact-vs-subtree split for "/backups/runs" above.
+func (app *App) handleBackupConfigActionsRoute(w http.ResponseWriter, r *http.Request) {
+	// "/backups/configs/{backup_config_id}/actions[/add|remove|reorder]"
+	parts := strings.Split(strings.Trim(r.URL.Path, "/"), "/")
+	if len(parts) < 4 || parts[3] != "actions" {
+		http.NotFound(w, r)
+		return
+	}
+	backupConfigID, err := strconv.ParseInt(parts[2], 10, 64)
+	if err != nil || backupConfigID <= 0 {
+		http.NotFound(w, r)
+		return
+	}
+
+	switch {
+	case len(parts) == 4:
+		app.handleBackupConfigActionsList(w, r, backupConfigID)
+	case len(parts) == 5 && parts[4] == "add":
+		app.handleBackupConfigActionAdd(w, r, backupConfigID)
+	case len(parts) == 5 && parts[4] == "remove":
+		app.handleBackupConfigActionRemove(w, r, backupConfigID)
+	case len(parts) == 5 && parts[4] == "reorder":
+		app.handleBackupConfigActionsReorder(w, r, backupConfigID)
+	default:
+		http.NotFound(w, r)
+	}
+}
+
+// handleBackupConfigActionsList serves "GET /backups/configs/{id}/actions"
+// (FR12): the Actions Blade's own lazy hx-get on open
+// (pages.BackupConfigActionsPlaceholder), rendering the ordered pre-backup
+// Action list plus the "add" picker's available-Actions options.
+func (app *App) handleBackupConfigActionsList(w http.ResponseWriter, r *http.Request, backupConfigID int64) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	app.renderBackupConfigActionsPanel(w, r, backupConfigID, "")
+}
+
+// handleBackupConfigActionAdd serves "POST /backups/configs/{id}/actions/add"
+// (FR13): attaches an existing Action at a chosen position. Every outcome
+// re-fetches and re-renders the panel from the server via
+// renderBackupConfigActionsPanel (never optimistic local state) so the
+// displayed order always matches what AddBackupConfigAction actually
+// committed.
+func (app *App) handleBackupConfigActionAdd(w http.ResponseWriter, r *http.Request, backupConfigID int64) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	if err := r.ParseForm(); err != nil {
+		http.Error(w, "Invalid form", http.StatusBadRequest)
+		return
+	}
+	ctx := r.Context()
+
+	actionID, actionErr := strconv.ParseInt(r.FormValue("action_id"), 10, 64)
+	displayOrder, orderErr := strconv.ParseInt(r.FormValue("display_order"), 10, 32)
+	var mutateErr string
+	if actionErr != nil || orderErr != nil || actionID <= 0 {
+		mutateErr = "Select an Action and a valid position."
+	} else if err := app.grpc.AddBackupConfigAction(ctx, backupConfigID, actionID, int32(displayOrder)); err != nil {
+		log.Printf("ERROR: backups: failed to add action %d to backup config %d: %v", actionID, backupConfigID, err)
+		mutateErr = backupConfigActionErrorMessage(err, "Failed to add action. Try again.")
+	}
+
+	app.renderBackupConfigActionsPanel(w, r, backupConfigID, mutateErr)
+}
+
+// handleBackupConfigActionRemove serves
+// "POST /backups/configs/{id}/actions/remove" (FR14) -- detaches one
+// Action; the underlying RPC never touches the Action definition itself
+// (FR11, C30).
+func (app *App) handleBackupConfigActionRemove(w http.ResponseWriter, r *http.Request, backupConfigID int64) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	if err := r.ParseForm(); err != nil {
+		http.Error(w, "Invalid form", http.StatusBadRequest)
+		return
+	}
+	ctx := r.Context()
+
+	actionID, err := strconv.ParseInt(r.FormValue("action_id"), 10, 64)
+	var mutateErr string
+	if err != nil || actionID <= 0 {
+		mutateErr = "Missing action to remove."
+	} else if err := app.grpc.RemoveBackupConfigAction(ctx, backupConfigID, actionID); err != nil {
+		log.Printf("ERROR: backups: failed to remove action %d from backup config %d: %v", actionID, backupConfigID, err)
+		mutateErr = backupConfigActionErrorMessage(err, "Failed to remove action. Try again.")
+	}
+
+	app.renderBackupConfigActionsPanel(w, r, backupConfigID, mutateErr)
+}
+
+// handleBackupConfigActionsReorder serves
+// "POST /backups/configs/{id}/actions/reorder" (FR15): submits the full
+// desired order as repeated action_ids form values -- each move-up/
+// move-down control in pages.backupConfigActionRow POSTs the entire
+// resulting order (an explicit, keyboard-accessible control, not a
+// drag-only interaction), never a partial swap instruction the server
+// would have to interpret.
+func (app *App) handleBackupConfigActionsReorder(w http.ResponseWriter, r *http.Request, backupConfigID int64) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	if err := r.ParseForm(); err != nil {
+		http.Error(w, "Invalid form", http.StatusBadRequest)
+		return
+	}
+	ctx := r.Context()
+
+	actionIDs := make([]int64, 0, len(r.Form["action_ids"]))
+	var mutateErr string
+	for _, raw := range r.Form["action_ids"] {
+		id, err := strconv.ParseInt(raw, 10, 64)
+		if err != nil {
+			mutateErr = "Invalid reorder request."
+			break
+		}
+		actionIDs = append(actionIDs, id)
+	}
+	if mutateErr == "" {
+		if err := app.grpc.ReorderBackupConfigActions(ctx, backupConfigID, actionIDs); err != nil {
+			log.Printf("ERROR: backups: failed to reorder actions for backup config %d: %v", backupConfigID, err)
+			mutateErr = backupConfigActionErrorMessage(err, "Failed to reorder actions. Try again.")
+		}
+	}
+
+	app.renderBackupConfigActionsPanel(w, r, backupConfigID, mutateErr)
+}
+
+// renderBackupConfigActionsPanel re-fetches a BackupConfig's Actions panel
+// data fresh from the server and renders it -- the one path the list
+// handler and every mutation handler above share, so the displayed order
+// after every request (including the very first) comes from a real list
+// call, never optimistic local state (this task's "re-render from a fresh
+// list call" requirement).
+func (app *App) renderBackupConfigActionsPanel(w http.ResponseWriter, r *http.Request, backupConfigID int64, mutateErr string) {
+	ctx := r.Context()
+	data, err := app.buildBackupConfigActionsData(ctx, backupConfigID, mutateErr)
+	if err != nil {
+		log.Printf("ERROR: backups: failed to build actions panel for backup config %d: %v", backupConfigID, err)
+		http.Error(w, "Internal server error", http.StatusInternalServerError)
+		return
+	}
+	w.Header().Set("Content-Type", "text/html")
+	if err := pages.BackupConfigActionsPanel(data).Render(ctx, w); err != nil {
+		log.Printf("ERROR: backups: failed to render actions panel for backup config %d: %v", backupConfigID, err)
+	}
+}
+
+// buildBackupConfigActionsData assembles pages.BackupConfigActionsData: the
+// BackupConfig's current ordered Action attachments (ListBackupConfigActions)
+// plus the "add" picker's available-Actions options -- every Action usable
+// at the BackupConfig's owning GameConfig (local + inherited from its Game,
+// mirroring handlers_actions.go's categorizeActions posture) that is not
+// already attached. A resolution failure on the owning GameConfig/Game
+// degrades to an empty picker (logged as a WARNING) rather than failing the
+// whole panel -- the attached-Action list itself, this panel's primary
+// content, comes from a separate call that has already succeeded or failed
+// on its own by the time this runs.
+func (app *App) buildBackupConfigActionsData(ctx context.Context, backupConfigID int64, mutateErr string) (pages.BackupConfigActionsData, error) {
+	items, err := app.grpc.ListBackupConfigActions(ctx, backupConfigID)
+	if err != nil {
+		return pages.BackupConfigActionsData{}, fmt.Errorf("failed to list backup config actions: %w", err)
+	}
+
+	data := pages.BackupConfigActionsData{
+		BackupConfigID: backupConfigID,
+		Items:          items,
+		Err:            mutateErr,
+	}
+
+	attached := make(map[int64]bool, len(items))
+	for _, item := range items {
+		attached[item.ActionId] = true
+	}
+
+	configItem, ok, err := app.findBackupConfigItem(ctx, backupConfigID)
+	if err != nil {
+		log.Printf("WARNING: backups: failed to list backup configs to resolve backup config %d's game config: %v", backupConfigID, err)
+		return data, nil
+	}
+	if !ok {
+		log.Printf("WARNING: backups: backup config %d not found while resolving its game config for the actions picker", backupConfigID)
+		return data, nil
+	}
+
+	gameActions, gErr := app.grpc.ListActionDefinitions(ctx, &configItem.GameId, nil, nil)
+	if gErr != nil {
+		log.Printf("WARNING: backups: failed to list game-level actions for backup config %d: %v", backupConfigID, gErr)
+	}
+	configActions, cErr := app.grpc.ListActionDefinitions(ctx, nil, &configItem.GameConfigId, nil)
+	if cErr != nil {
+		log.Printf("WARNING: backups: failed to list config-level actions for backup config %d: %v", backupConfigID, cErr)
+	}
+
+	seen := make(map[int64]bool, len(gameActions)+len(configActions))
+	for _, action := range append(gameActions, configActions...) {
+		if attached[action.ActionId] || seen[action.ActionId] {
+			continue
+		}
+		seen[action.ActionId] = true
+		label := action.Label
+		if label == "" {
+			label = action.Name
+		}
+		data.AvailableActions = append(data.AvailableActions, components.SelectOption{
+			Value: strconv.FormatInt(action.ActionId, 10),
+			Label: label,
+		})
+	}
+	sortSelectOptions(data.AvailableActions)
+
+	return data, nil
+}
+
+// findBackupConfigItem finds one BackupConfig's fleet-wide list item (its
+// volume/GameConfig/Game display context, #2809/#2811) by id -- reused here
+// to resolve the owning GameConfig/Game the "add" picker's available-Actions
+// options are scoped to, mirroring resolveBackupRunDisplayNames' own
+// linear-scan-over-ListBackupConfigItems posture rather than adding a new
+// get-by-id RPC.
+func (app *App) findBackupConfigItem(ctx context.Context, backupConfigID int64) (*manmanpb.BackupConfigListItem, bool, error) {
+	items, err := app.grpc.ListBackupConfigItems(ctx)
+	if err != nil {
+		return nil, false, err
+	}
+	for _, item := range items {
+		if item.Config != nil && item.Config.BackupConfigId == backupConfigID {
+			return item, true, nil
+		}
+	}
+	return nil, false, nil
+}
+
+// backupConfigActionErrorMessage turns an add/remove/reorder error into a
+// human-readable inline message rather than leaking raw gRPC status text --
+// InvalidArgument (e.g. ReorderBackupConfigActions' own action-set-mismatch
+// guard, api/handlers/backup_config.go) is the one expected/actionable case
+// and surfaces the API's own message; anything else falls back to a generic
+// retry prompt, mirroring backupTriggerErrorMessage's own posture just
+// above.
+func backupConfigActionErrorMessage(err error, fallback string) string {
+	st, ok := status.FromError(err)
+	if !ok {
+		return fallback
+	}
+	if st.Code() == codes.InvalidArgument {
+		return st.Message()
+	}
+	return fallback
+}
