@@ -155,6 +155,37 @@ go_test(
     ],
 )
 
+# Real-Postgres coverage for FR15 (task #2811, plan #2777):
+# BackupConfigRepository.ReorderActions must rewrite display_order to a
+# dense 0..n-1 sequence matching the requested order, atomically, and must
+# reject -- with no partial write -- any actionIDs set that isn't exactly a
+# permutation of the config's currently attached actions. Same hand-written,
+# build-tagged precedent as the other integration targets in this package.
+#
+# Run it explicitly (requires a working Docker daemon):
+#   bazel test //manmanv2/api/repository/postgres:backup_config_actions_integration_test --test_output=all
+go_test(
+    # keep
+    name = "backup_config_actions_integration_test",
+    size = "large",
+    timeout = "long",
+    srcs = ["backup_config_actions_integration_test.go"],
+    embed = [":postgres"],
+    gotags = ["integration"],
+    tags = [
+        "external",
+        "integration",
+        "manual",
+        "no-cache",
+        "no-sandbox",
+        "requires-network",
+    ],
+    deps = [
+        "//libs/go/dbtest",
+        "@com_github_jackc_pgx_v5//pgxpool",
+    ],
+)
+
 # Real-Postgres coverage for FR12's enforcement half (task #2097, plan
 # #2080): fresh host-port allocation outside the server's configured
 # allowed ranges must refuse on the same synchronous failure path as a
