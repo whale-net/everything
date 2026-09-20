@@ -14,6 +14,7 @@ type Backup struct {
 	Status             string    `db:"status"`         // pending/running/completed/failed
 	ErrorMessage       *string   `db:"error_message"`
 	Description        *string   `db:"description"`
+	TriggerSource      string    `db:"trigger_source"` // scheduled/manual/unknown
 	CreatedAt          time.Time `db:"created_at"`
 }
 

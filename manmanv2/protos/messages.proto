@@ -150,6 +150,7 @@ message Backup {
   string description = 6;
   string error_message = 11;
   int64 created_at = 7;
+  string trigger_source = 12;  // scheduled/manual/unknown
 }
 
 // BackupConfig defines a scheduled backup for a specific volume

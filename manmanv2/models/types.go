@@ -132,6 +132,11 @@ const (
 	BackupStatusCompleted = "completed"
 	BackupStatusFailed    = "failed"
 
+	// Backup trigger sources
+	BackupTriggerSourceScheduled = "scheduled"
+	BackupTriggerSourceManual    = "manual"
+	BackupTriggerSourceUnknown   = "unknown"
+
 	// Workshop installation statuses
 	InstallationStatusPending     = "pending"
 	InstallationStatusDownloading = "downloading"
