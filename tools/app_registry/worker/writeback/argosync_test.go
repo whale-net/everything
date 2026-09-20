@@ -341,13 +341,23 @@ func TestSelectArgoSyncActivities_InvalidConfigReturnsError(t *testing.T) {
 
 // FakePublisher for testing records all publishes.
 type FakePublisher struct {
-	events []PublishedEvent
+	events           []PublishedEvent
+	releaseRunEvents []ReleaseRunPublishedEvent
 }
 
 type PublishedEvent struct {
 	PromotionID string
 	EventKind   string
 	EventStatus string
+}
+
+// ReleaseRunPublishedEvent records a PublishReleaseRun call for testing
+// purposes, kept separate from PublishedEvent since a release-run event has
+// no promotion id.
+type ReleaseRunPublishedEvent struct {
+	ReleaseRunID string
+	EventKind    string
+	EventStatus  string
 }
 
 func NewFakePublisher() *FakePublisher {
@@ -359,6 +369,14 @@ func (f *FakePublisher) Publish(promotionID, eventKind, eventStatus string) {
 		PromotionID: promotionID,
 		EventKind:   eventKind,
 		EventStatus: eventStatus,
+	})
+}
+
+func (f *FakePublisher) PublishReleaseRun(releaseRunID, eventKind, eventStatus string) {
+	f.releaseRunEvents = append(f.releaseRunEvents, ReleaseRunPublishedEvent{
+		ReleaseRunID: releaseRunID,
+		EventKind:    eventKind,
+		EventStatus:  eventStatus,
 	})
 }
 

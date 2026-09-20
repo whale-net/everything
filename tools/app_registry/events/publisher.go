@@ -22,9 +22,31 @@ type EventPayload struct {
 	EventStatus string `json:"event_status"` // Advisory: e.g. "pending", "success", "failed"
 }
 
+// ReleaseRunEventPayload is the small structured JSON payload for
+// app-registry release-run events. It mirrors EventPayload's shape but
+// carries a release-run id instead of a promotion id, published to its own
+// routing key family (see TopicForReleaseRun) on the same shared exchange.
+type ReleaseRunEventPayload struct {
+	ReleaseRunID string `json:"release_run_id"`
+	EventKind    string `json:"event_kind"`
+	EventStatus  string `json:"event_status"`
+}
+
 // publishRequest is an internal struct for events enqueued to the buffer.
+// It carries the routing key resolved at enqueue time (Publish resolves
+// TopicForPromotion, PublishReleaseRun resolves TopicForReleaseRun) so
+// publishEvent stays agnostic to which event family it is delivering.
 type publishRequest struct {
-	payload EventPayload
+	routingKey string
+	payload    any
+	// entityIDKey/entityID identify the log field name and value for this
+	// event's subject (e.g. "promotion_id"/"promo-1" or
+	// "release_run_id"/"run-1"), so drop/publish logs always name the
+	// right entity instead of reporting an empty promotion_id for a
+	// release-run event.
+	entityIDKey string
+	entityID    string
+	eventKind   string
 	// done is closed when the publish completes (or is dropped).
 	// This allows callers to await the result if needed (though
 	// the non-blocking model means most don't).
@@ -138,12 +160,41 @@ func (p *Publisher) Publish(promotionID, eventKind, eventStatus string) {
 		EventStatus: eventStatus,
 	}
 
-	req := &publishRequest{
-		payload: payload,
-		done:    make(chan error, 1), // Buffered so backgroundPublisher never blocks sending the result
+	p.enqueue(&publishRequest{
+		routingKey:  TopicForPromotion(promotionID),
+		payload:     payload,
+		entityIDKey: "promotion_id",
+		entityID:    promotionID,
+		eventKind:   eventKind,
+		done:        make(chan error, 1), // Buffered so backgroundPublisher never blocks sending the result
+	})
+}
+
+// PublishReleaseRun enqueues a release-run event for publication. It shares
+// Publish's non-blocking bounded hand-off, background goroutine, buffer, and
+// counters; only the routing key and payload shape differ.
+func (p *Publisher) PublishReleaseRun(releaseRunID, eventKind, eventStatus string) {
+	payload := ReleaseRunEventPayload{
+		ReleaseRunID: releaseRunID,
+		EventKind:    eventKind,
+		EventStatus:  eventStatus,
 	}
 
-	// Try to enqueue the request to the buffer.
+	p.enqueue(&publishRequest{
+		routingKey:  TopicForReleaseRun(releaseRunID),
+		payload:     payload,
+		entityIDKey: "release_run_id",
+		entityID:    releaseRunID,
+		eventKind:   eventKind,
+		done:        make(chan error, 1), // Buffered so backgroundPublisher never blocks sending the result
+	})
+}
+
+// enqueue tries to hand req off to the bounded buffer, returning immediately
+// either way. If the buffer is full, the event is dropped and logged. Shared
+// by Publish and PublishReleaseRun so both event families get identical
+// non-blocking hand-off behavior.
+func (p *Publisher) enqueue(req *publishRequest) {
 	select {
 	case p.buffer <- req:
 		// Successfully enqueued; caller returns immediately.
@@ -151,7 +202,7 @@ func (p *Publisher) Publish(promotionID, eventKind, eventStatus string) {
 	default:
 		// Buffer is full; drop the event and log it.
 		p.droppedCounter.Add(1)
-		p.logger.Warn("event buffer full, dropping publish", "promotion_id", promotionID, "event_kind", eventKind)
+		p.logger.Warn("event buffer full, dropping publish", req.entityIDKey, req.entityID, "event_kind", req.eventKind)
 		req.done <- fmt.Errorf("buffer full")
 	}
 }
@@ -193,8 +244,8 @@ func (p *Publisher) backgroundPublisher() {
 				// Not attached; drop and log
 				p.droppedCounter.Add(1)
 				p.logger.Warn("broker not attached, dropping publish",
-					"promotion_id", req.payload.PromotionID,
-					"event_kind", req.payload.EventKind)
+					req.entityIDKey, req.entityID,
+					"event_kind", req.eventKind)
 				req.done <- fmt.Errorf("broker not attached")
 			}
 		}
@@ -241,12 +292,12 @@ func (p *Publisher) publishEvent(req *publishRequest) {
 	if err != nil {
 		p.logger.Error("failed to marshal event payload",
 			"error", err,
-			"promotion_id", req.payload.PromotionID)
+			req.entityIDKey, req.entityID)
 		req.done <- fmt.Errorf("marshal error: %w", err)
 		return
 	}
 
-	routingKey := TopicForPromotion(req.payload.PromotionID)
+	routingKey := req.routingKey
 
 	// Use a bounded context (5 seconds) for the broker publish.
 	// This is the same timeout as rmq.Publisher.Publish itself.
@@ -268,7 +319,7 @@ func (p *Publisher) publishEvent(req *publishRequest) {
 	if err != nil {
 		p.logger.Warn("failed to publish event to broker",
 			"error", err,
-			"promotion_id", req.payload.PromotionID,
+			req.entityIDKey, req.entityID,
 			"exchange", p.exchangeName,
 			"routing_key", routingKey)
 		// Mark as detached; the background loop will retry attach
@@ -278,8 +329,8 @@ func (p *Publisher) publishEvent(req *publishRequest) {
 	}
 
 	p.logger.Debug("published event to broker",
-		"promotion_id", req.payload.PromotionID,
-		"event_kind", req.payload.EventKind,
+		req.entityIDKey, req.entityID,
+		"event_kind", req.eventKind,
 		"exchange", p.exchangeName,
 		"routing_key", routingKey)
 	req.done <- nil
@@ -314,7 +365,7 @@ func (p *Publisher) drainRemaining() {
 			} else {
 				droppedOnShutdown++
 				p.logger.Warn("dropped event on shutdown, broker not attached",
-					"promotion_id", req.payload.PromotionID)
+					req.entityIDKey, req.entityID)
 				req.done <- fmt.Errorf("shutdown")
 			}
 		}

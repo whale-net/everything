@@ -39,6 +39,46 @@ func TestTopicForPromotion(t *testing.T) {
 	}
 }
 
+func TestTopicForReleaseRun(t *testing.T) {
+	tests := []struct {
+		name     string
+		id       string
+		expected string
+	}{
+		{
+			name:     "simple id",
+			id:       "abc123",
+			expected: "release_run.abc123",
+		},
+		{
+			name:     "id with hyphens",
+			id:       "run-001",
+			expected: "release_run.run-001",
+		},
+		{
+			name:     "uuid-like id",
+			id:       "550e8400-e29b-41d4-a716-446655440000",
+			expected: "release_run.550e8400-e29b-41d4-a716-446655440000",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := TopicForReleaseRun(tt.id)
+			if got != tt.expected {
+				t.Errorf("TopicForReleaseRun(%q) = %q, want %q", tt.id, got, tt.expected)
+			}
+
+			// Regression guard: TopicForPromotion must keep producing its own
+			// "promotion.<id>" routing key, unaffected by the addition of
+			// TopicForReleaseRun (e.g. accidental shared-helper refactor).
+			if gotPromo := TopicForPromotion(tt.id); gotPromo == got {
+				t.Errorf("TopicForPromotion(%q) = %q, collided with TopicForReleaseRun(%q) = %q", tt.id, gotPromo, tt.id, got)
+			}
+		})
+	}
+}
+
 func TestDeclareArgs(t *testing.T) {
 	kind, durable, autoDelete, internal, noWait, args := DeclareArgs()
 
