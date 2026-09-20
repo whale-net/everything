@@ -6,10 +6,13 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"time"
 
 	"github.com/spf13/cobra"
+
+	pb "github.com/whale-net/everything/tools/app_registry/protos"
 )
 
 // cliBinaryAppNames is the fixed set of apps FR7 of #979 packages
@@ -155,6 +158,25 @@ type BuildReleaseArtifactsParams struct {
 	OpenAPIOutputDir     string // default /tmp/openapi-specs
 	CLIBinariesOutputDir string // default /tmp/cli-binaries
 
+	// ReleaseRunID identifies the release_run row this build belongs to --
+	// forwarded verbatim from release-v2.yml's release_run_id
+	// workflow_dispatch input, same identity
+	// NotifyBuildComplete already uses. Empty means "no Temporal release
+	// run behind this dispatch" (manual/bot fallback path) -- app image
+	// builds still happen normally, they just skip progress reporting
+	// (see targetProgressReporter).
+	ReleaseRunID string
+	// GitHubRunID is this build's own Actions run id (github.RunID),
+	// cross-checked server-side against the dispatched run exactly like
+	// NotifyBuildComplete's --run-id.
+	GitHubRunID int64
+	// ProgressClient overrides the ReleaseRegistryClient factory used for
+	// per-target progress reporting -- tests inject a
+	// FakeReleaseRegistryClient here. When nil, the real client is dialed
+	// once (via NewReleaseRegistryClient) and shared across every app in
+	// this batch.
+	ProgressClient pb.ReleaseRegistryClient
+
 	Bazel         BazelRunner
 	Docker        DockerRunner
 	FS            FileSystem
@@ -232,6 +254,26 @@ func ExecuteBuildReleaseArtifacts(p BuildReleaseArtifactsParams) (*BuildReleaseA
 	// step's `if: dry_run == 'false' && release-matrix != ''`.
 	if !p.DryRun && len(matrixItems) > 0 {
 		appsStart := time.Now()
+
+		// Progress-reporting client: dialed once for the
+		// whole batch, not per app/state -- shared across every
+		// targetProgressReporter closure below. Skipped entirely when
+		// there is no release run to report against (p.ReleaseRunID
+		// empty); a dial failure is a WARNING, not a build failure, same
+		// best-effort stance as ExecuteNotifyBuild.
+		progressClient := p.ProgressClient
+		if progressClient == nil && p.ReleaseRunID != "" {
+			dialed, cleanup, err := NewReleaseRegistryClient(p.Ctx)
+			if err != nil {
+				fmt.Printf("target progress: dial app registry failed; skipping progress reporting for this batch: %v\n", err)
+			} else {
+				progressClient = dialed
+				if cleanup != nil {
+					defer func() { _ = cleanup() }()
+				}
+			}
+		}
+
 		for _, item := range matrixItems {
 			manifest, err := ExecuteBuildApp(BuildAppParams{
 				Ctx:           p.Ctx,
@@ -243,6 +285,7 @@ func ExecuteBuildReleaseArtifacts(p BuildReleaseArtifactsParams) (*BuildReleaseA
 				Bazel:         bazel,
 				Docker:        docker,
 				WorkspaceRoot: workspaceRoot,
+				OnProgress:    targetProgressReporter(p.Ctx, p.ReleaseRunID, p.GitHubRunID, progressClient, item.Domain, item.App),
 			})
 			if err != nil {
 				return nil, fmt.Errorf("build app %s-%s: %w", item.Domain, item.App, err)
@@ -346,6 +389,8 @@ func newBuildReleaseCmd() *cobra.Command {
 		chartsOutputDir      string
 		openapiOutputDir     string
 		cliBinariesOutputDir string
+		releaseRunID         string
+		githubRunID          int64
 	)
 
 	cmd := &cobra.Command{
@@ -372,6 +417,15 @@ func newBuildReleaseCmd() *cobra.Command {
 			if gitSHA == "" {
 				return fmt.Errorf("missing required flag: --git-sha (and GITHUB_SHA is unset)")
 			}
+			if githubRunID == 0 {
+				if v := defaultEnv("GITHUB_RUN_ID"); v != "" {
+					parsed, perr := strconv.ParseInt(v, 10, 64)
+					if perr != nil {
+						return fmt.Errorf("GITHUB_RUN_ID %q is not a valid integer: %w", v, perr)
+					}
+					githubRunID = parsed
+				}
+			}
 
 			workspaceRoot, err := defaultWorkspaceRoot()
 			if err != nil {
@@ -388,6 +442,8 @@ func newBuildReleaseCmd() *cobra.Command {
 				ChartsOutputDir:      chartsOutputDir,
 				OpenAPIOutputDir:     openapiOutputDir,
 				CLIBinariesOutputDir: cliBinariesOutputDir,
+				ReleaseRunID:         releaseRunID,
+				GitHubRunID:          githubRunID,
 				Bazel:                defaultBazel,
 				Docker:               defaultDocker,
 				FS:                   defaultFS,
@@ -411,6 +467,10 @@ func newBuildReleaseCmd() *cobra.Command {
 	cmd.Flags().StringVar(&chartsOutputDir, "charts-output-dir", "/tmp/build-manifest/charts", "Directory to copy chart source trees into")
 	cmd.Flags().StringVar(&openapiOutputDir, "openapi-output-dir", "/tmp/openapi-specs", "Directory to write built OpenAPI spec JSON files to")
 	cmd.Flags().StringVar(&cliBinariesOutputDir, "cli-binaries-output-dir", "/tmp/cli-binaries", "Directory to write packaged multi-platform CLI binaries to")
+	cmd.Flags().StringVar(&releaseRunID, "release-run-id", "",
+		"Release run id from the release-v2 workflow_dispatch input (empty: skip per-target progress reporting -- this run has no Temporal release run behind it)")
+	cmd.Flags().Int64Var(&githubRunID, "github-run-id", 0,
+		"GitHub Actions run id of this build (github.RunID; default: $GITHUB_RUN_ID)")
 
 	_ = cmd.MarkFlagRequired("from-resolved-plan")
 

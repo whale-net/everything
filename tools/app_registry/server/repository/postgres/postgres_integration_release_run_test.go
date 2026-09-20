@@ -511,6 +511,52 @@ func TestReleaseRun_UpdateTargetState_LegalTransitionsRoundTrip(t *testing.T) {
 	}
 }
 
+// TestReleaseRun_UpdateTargetState_BuiltPushedTransitionsRoundTrip proves
+// the built/pushed detour (migration 026) is legal against a
+// real Postgres: queued -> building -> built -> pushed -> publishing ->
+// recording -> succeeded, each step a direct UpdateTargetState call (the
+// shape ReportTargetProgress's signal handler uses, not RecordTargetState's
+// catch-up walk).
+func TestReleaseRun_UpdateTargetState_BuiltPushedTransitionsRoundTrip(t *testing.T) {
+	reg, pool := newTestRegistry(t)
+	ctx := context.Background()
+
+	_, targets, err := createReleaseRunTx(t, reg, newReleaseRun("wf-built-pushed"), []repository.ReleaseRunTarget{
+		{OwnerFullName: "acme-widget", Kind: repository.ArtifactKindImage},
+	})
+	if err != nil {
+		t.Fatalf("CreateReleaseRun: %v", err)
+	}
+	targetID := targets[0].ReleaseRunTargetID
+	buildID := seedBuild(t, pool, "wf-built-pushed-run")
+
+	steps := []repository.ReleaseRunTargetState{
+		repository.ReleaseRunTargetStateBuilding,
+		repository.ReleaseRunTargetStateBuilt,
+		repository.ReleaseRunTargetStatePushed,
+		repository.ReleaseRunTargetStatePublishing,
+		repository.ReleaseRunTargetStateRecording,
+		repository.ReleaseRunTargetStateSucceeded,
+	}
+	for _, state := range steps {
+		buildIDArg := ""
+		if state == repository.ReleaseRunTargetStateBuilding {
+			buildIDArg = buildID
+		}
+		if err := reg.ReleaseRuns().UpdateTargetState(ctx, targetID, state, buildIDArg, ""); err != nil {
+			t.Fatalf("UpdateTargetState(%s): %v", state, err)
+		}
+	}
+
+	_, gotTargets, err := reg.ReleaseRuns().GetReleaseRun(ctx, targets[0].ReleaseRunID)
+	if err != nil {
+		t.Fatalf("GetReleaseRun: %v", err)
+	}
+	if len(gotTargets) != 1 || gotTargets[0].State != repository.ReleaseRunTargetStateSucceeded {
+		t.Fatalf("expected final state succeeded, got %+v", gotTargets)
+	}
+}
+
 // TestReleaseRun_UpdateTargetState_IllegalTransitionRejected proves a
 // transition skipping states (queued -> succeeded) is rejected with
 // ErrFailedPrecondition and leaves the row unchanged -- the red half of the

@@ -70,15 +70,31 @@ func scanReleaseRunTarget(row pgx.Row) (repository.ReleaseRunTarget, error) {
 
 // legalReleaseRunTargetTransitions is the transition table
 // ReleaseRunTargetState's doc comment (repository/models.go) describes:
-// queued -> building -> publishing -> recording -> succeeded, with a
-// transition to failed legal from any non-terminal state. succeeded/failed
-// have no entry, i.e. no legal transition out of either -- both terminal.
+// queued -> building -> built -> pushed -> publishing -> recording ->
+// succeeded, with a transition to failed legal from any non-terminal state.
+// succeeded/failed have no entry, i.e. no legal transition out of either --
+// both terminal. Building -> publishing is ALSO a direct legal edge (built/
+// pushed are skippable): chart targets never report built/pushed at all
+// (worker/release/record.go's per-kind releaseRunTargetStateOrder omits
+// them for chart), and an image target whose build never called
+// ReportTargetProgress (an older release_helper_go, or a report that never
+// arrived) still needs to walk straight from building to publishing when
+// FinalizePublish requests it.
 var legalReleaseRunTargetTransitions = map[repository.ReleaseRunTargetState]map[repository.ReleaseRunTargetState]bool{
 	repository.ReleaseRunTargetStateQueued: {
 		repository.ReleaseRunTargetStateBuilding: true,
 		repository.ReleaseRunTargetStateFailed:   true,
 	},
 	repository.ReleaseRunTargetStateBuilding: {
+		repository.ReleaseRunTargetStateBuilt:      true,
+		repository.ReleaseRunTargetStatePublishing: true,
+		repository.ReleaseRunTargetStateFailed:     true,
+	},
+	repository.ReleaseRunTargetStateBuilt: {
+		repository.ReleaseRunTargetStatePushed: true,
+		repository.ReleaseRunTargetStateFailed: true,
+	},
+	repository.ReleaseRunTargetStatePushed: {
 		repository.ReleaseRunTargetStatePublishing: true,
 		repository.ReleaseRunTargetStateFailed:     true,
 	},
