@@ -23,6 +23,7 @@ go_test(
     srcs = [
         "connection_internal_test.go",
         "connection_test.go",
+        "consumer_dispatch_internal_test.go",
         "consumer_internal_test.go",
         "consumer_test.go",
         "publisher_constructor_test.go",

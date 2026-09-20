@@ -20,6 +20,7 @@ func TestMatchesRoutingKey(t *testing.T) {
 		{"no match", "test.key", "other.key", false},
 		{"empty pattern", "test.key", "", false},
 		{"empty key", "", "test.key", false},
+		{"single-word wildcard * is not supported", "test.key", "*", false},
 	}
 
 	for _, tt := range tests {
