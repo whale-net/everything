@@ -417,157 +417,150 @@ tilt down
 
 ---
 
-### NFR17(b) — Real browser path through ingress and Service
+### NFR17(b) — Real browser path through ingress and Service (#1699 FR18, closes #1138 NFR17(b))
 
-**Objective:** Verify that a real browser, reaching the page through a real
-ingress and Kubernetes Service (not port-forward), receives pushed SSE updates.
-Additionally verify that the `Last-Event-ID` request header survives round-trip
-through the ingress intact, which guards against proxy header truncation.
+> This section previously described the `/promotions/{id}` page and a
+> generic `~30s` heartbeat, written before #1699's FR18 rework moved live
+> updates onto the release-run page. It has been corrected below to match
+> the shipped routes, topic, and env var. It was never executed against a
+> real deployed environment — see [Execution status](#execution-status)
+> at the end of this section before relying on it as evidence NFR17(b) has
+> passed.
+
+**Objective — all three parts must hold (#1138's own bar, not merely one
+successful push):**
+
+1. A real browser on a deployed environment, reaching `/releases/{release_run_id}`
+   through the **ingress and the Service** (not a port-forward), receives a
+   pushed update — the Targets table and/or aggregate summary line change
+   without a reload.
+2. The `Last-Event-ID` request header round-trips intact through that ingress
+   on reconnect (no truncation).
+3. The connection survives at least one full heartbeat interval without the
+   live/not-live indicator ever flipping to not-live.
+
+**Do not count events** — duplicate/bursty publishes are normal and
+harmless (the fragment re-reads current state at delivery); assert *a push
+was observed*, never an exact count.
 
 **Prerequisites:**
-- Tilt environment running with a real ingress (requires `setup_ingress` or
-  similar helper in Tiltfile — **currently requires manual ingress setup**)
-- kubectl configured for `docker-desktop` context
-- A real browser (Chrome, Firefox, Safari) on your development machine
-- UI deployment running (no multi-replica requirement for this test)
-
-**Note on ingress setup:** The current Tiltfile does not include an ingress
-resource. To run this test, you must either:
-1. Add an ingress resource manually via `kubectl apply`, or
-2. Extend the Tiltfile to call `setup_ingress` (if implemented in `common.tilt`)
-
-Example ingress manifest (apply manually if not in Tiltfile):
-```yaml
-apiVersion: networking.k8s.io/v1
-kind: Ingress
-metadata:
-  name: app-registry-ui-ingress
-  namespace: app-registry-local-dev
-spec:
-  ingressClassName: nginx  # or docker-desktop's default
-  rules:
-  - host: app-registry-ui.localhost
-    http:
-      paths:
-      - path: /
-        pathType: Prefix
-        backend:
-          service:
-            name: app-registry-ui
-            port:
-              number: 8000
-```
+- A deployed environment (dev/stage/prod) running `app-registry-ui` behind its
+  real ingress — **not** `tilt up`/`tilt ci`'s port-forwarded local dev
+  cluster, which bypasses the ingress entirely and cannot exercise this
+  criterion. As of this writing no such environment exists yet for
+  app-registry outside local Tilt (see [OPERATIONS.md "What actually deploys
+  anything, today?"](OPERATIONS.md#what-actually-deploys-anything-today) —
+  provisioning one is out of this task's scope; report it rather than
+  standing infrastructure up here if it's still true when you run this).
+- A real browser (Chrome, Firefox, Safari) with DevTools, on a machine that
+  can reach that environment's ingress host.
+- `grpcurl` or `rabbitmqadmin`/broker access to that environment, to trigger a
+  state change by hand if you don't want to run a real release.
+- `APP_REGISTRY_SSE_HEARTBEAT_INTERVAL` in effect for that environment (default
+  `5s` — see [ENV.md](ENV.md), **not** `libs/go/htmxsse`'s 30s library
+  default). Record whatever value that deployment actually sets.
 
 **Procedure:**
 
-1. **Ensure the ingress is running:**
+1. **Identify a `release_run_id` to watch**, either from a real release run
+   against that environment, or any existing id — a hand-published event
+   doesn't require the run to actually exist in Postgres, since the fragment
+   handler re-reads current state at delivery time and the page itself
+   already handles a run in any state.
+
+2. **Open the page in a real browser** at
+   `https://<ui-ingress-host>/releases/<release_run_id>` (the actual
+   `ingress_host` for that environment, e.g. as set in DEPLOY.md's redirect-URI
+   table — not `localhost`). Log in if the deployment runs `GRPC_AUTH_MODE=oidc`.
+
+3. **Open DevTools → Network, filter to `sse`** (or search for
+   `/releases/<id>/status/sse`). Confirm:
+   - The request's `Content-Type` in the response headers is
+     `text/event-stream` and stays open (status "pending"/no `Content-Length`).
+   - The page shows the `#release-live-status` badge as "Live" (FR14; inspect
+     via DevTools Elements if the badge text isn't obviously visible).
+
+4. **Trigger a state change** — either run a real release against this
+   environment, or hand-publish on the shared exchange:
    ```bash
-   kubectl get ingress -n app-registry-local-dev app-registry-ui-ingress
-   # Should show app-registry-ui.localhost with the UI's Service backend
+   # Exchange: app-registry.htmxsse (tools/app_registry/events/events.go)
+   # Routing key: release_run.<release_run_id> (TopicForReleaseRun)
+   rabbitmqadmin publish exchange=app-registry.htmxsse \
+     routing_key=release_run.<release_run_id> \
+     payload='{}'
+   ```
+   The payload body is irrelevant — the fragment handler re-reads current
+   state from Postgres on delivery, it does not deserialize the event body.
+
+5. **Verify part 1 (push observed):** within a few seconds, the Targets
+   table and/or aggregate summary visibly update with **no reload** — confirm
+   via the Network tab that no new top-level document request fired, only an
+   SSE `data:` frame. **Fail signature:** nothing changes until you reload
+   the page — either the ingress buffered/dropped the stream, or the publish
+   never reached the hub.
+
+6. **Verify part 2 (`Last-Event-ID` round-trip):** force a reconnect (e.g.
+   DevTools → Network → right-click the SSE request → close it, or toggle
+   offline/online, or reload the page once so the browser's `EventSource`
+   reconnects using its last received `id:`). Inspect the **new** SSE
+   request's **Request Headers** for `Last-Event-ID` and copy its exact value.
+   - **Pass signature:** reconnecting on an *unchanged* run yields a
+     **keepalive** (no visible swap) — this is only possible if the baseline
+     the server parsed from the header matches what it last sent, i.e. the
+     header round-tripped intact.
+   - **Fail signature:** the page **always swaps on reconnect**, even when
+     nothing changed. `libs/go/htmxsse`'s `parseBaseline` fails safe toward
+     swapping on any missing/malformed baseline (deliberately, so a
+     truncated header never repeats a genuinely stale one) — so this
+     "always swaps" behavior, not an error, is what ingress-level header
+     truncation looks like. If you see it, capture the exact `Last-Event-ID`
+     value from DevTools alongside what the last `id:` field actually was in
+     the SSE stream (visible in the EventStream tab) for the comparison.
+
+7. **Verify part 3 (heartbeat stability):** leave the tab open and observe
+   **several** heartbeat intervals (the deployment's
+   `APP_REGISTRY_SSE_HEARTBEAT_INTERVAL`, default `5s` — not one tick).
+   - **Pass signature:** `#release-live-status` stays "Live" throughout; the
+     EventStream tab in DevTools shows `id:`-only or comment/keepalive frames
+     arriving on schedule.
+   - **Fail signature:** the indicator flips to not-live and
+     `#release-reload-container` appears (FR15) despite the server process
+     never having restarted — this is the graceful degraded state #1138
+     anticipates, but its appearance here means the ingress idle-timed-out or
+     buffered the connection.
+
+8. **Record results** as a comment on #1708 (not only in this file):
+   ```
+   - Date/time of execution:
+   - Environment (dev/stage/prod) and ingress host:
+   - Browser + version:
+   - release_run_id watched, and how the state change was triggered (real
+     release vs. hand-published event):
+   - Part 1 — push observed without reload: pass/fail, what visibly changed
+   - Part 2 — Last-Event-ID value on reconnect, and whether the unchanged-run
+     reconnect produced a keepalive (pass) or an unconditional swap (fail):
+   - Part 3 — heartbeat interval in effect, how many intervals observed, and
+     whether the indicator ever flipped to not-live:
+   - Notes:
    ```
 
-2. **Create a promotion with known ID (if needed):**
-   ```bash
-   grpcurl -plaintext -d '{
-     "environment_key": "dev",
-     "owner_full_name": "test-app-browser",
-     "kind": "ARTIFACT_KIND_IMAGE",
-     "version": "v1.0.0",
-     "idempotency_key": "nfr17b-test-1"
-   }' localhost:50061 appregistry.v1.PromotionRegistry/Promote
-   ```
-   
-   Record the promotion ID.
+**Cleanup:** none required — this procedure makes no changes to the
+deployed environment (the hand-published event has no persisted side
+effect beyond RabbitMQ's own message lifecycle).
 
-3. **Open a real browser and navigate to the page:**
-   
-   In Chrome, Firefox, or Safari, open:
-   ```
-   http://app-registry-ui.localhost/promotions/<promotion-id>
-   ```
-   
-   (Note: localhost hostname resolution for `app-registry-ui.localhost` may
-   require adding an entry to `/etc/hosts` on non-Docker-Desktop systems.)
+#### Execution status
 
-4. **Observe the live indicator and SSE connection:**
-   
-   The page should:
-   - Display the promotion details (name, version, status, etc.)
-   - Show a "live" indicator (if FR23 is implemented) in the top-right or
-     as a status badge
-   - Establish an SSE connection in the browser's Network tab
-     (DevTools → Network, filter by `sse` or look for `/promotions/<id>/status/sse`)
-
-5. **Publish an update event:**
-   
-   In a terminal, promote a new version or manually publish to RabbitMQ:
-   ```bash
-   grpcurl -plaintext -d '{
-     "environment_key": "dev",
-     "owner_full_name": "test-app-browser",
-     "kind": "ARTIFACT_KIND_IMAGE",
-     "version": "v1.0.1",
-     "idempotency_key": "nfr17b-publish-1"
-   }' localhost:50061 appregistry.v1.PromotionRegistry/Promote
-   ```
-
-6. **Verify the browser receives the update:**
-   
-   Within a few seconds of publishing:
-   - The page should update (details change, new version appears, or status updates)
-   - The "live" indicator should remain green/active (not flip to "not-live")
-   - In DevTools Network tab, the SSE connection should show incoming messages
-   - **No page reload or manual refresh should be required.**
-
-7. **Verify Last-Event-ID header round-trip:**
-   
-   This is an advanced check to confirm the ingress does not truncate headers:
-   
-   a. Open DevTools → Network, filter by XHR/Fetch to see SSE requests
-   b. Click on the SSE connection request and inspect the **Request Headers** section
-   c. Look for the `Last-Event-ID` header — it should be present after reconnect
-   d. Compare the header value against what the browser's last received event ID was
-   e. They should match exactly (same format, no truncation)
-   
-   Alternatively, check the browser console logs if FR27's error handling logs
-   the header value.
-
-8. **Verify connection stability (heartbeat interval):**
-   
-   Continue observing for at least one heartbeat interval (default ~30s):
-   - The SSE connection should remain open
-   - Heartbeat lines (`:` comments) should arrive regularly
-   - The live indicator should not flip to "not-live" unless you manually stop
-     the server
-   - No unintended page reloads or connection resets should occur
-
-9. **Record results (placeholder for manual execution):**
-   
-   After running the procedure:
-   ```
-   - Date/time of execution: [PLACEHOLDER — fill in after running]
-   - Browser: [Chrome/Firefox/Safari version]
-   - Environment: [docker-desktop, ingress type]
-   - Ingress hostname: [app-registry-ui.localhost or custom]
-   - Promotion ID accessed: [PLACEHOLDER]
-   - Page loaded successfully: [PLACEHOLDER — yes/no]
-   - SSE connection established: [PLACEHOLDER — yes/no]
-   - Event received in browser: [PLACEHOLDER — yes/no]
-   - Live indicator behavior: [PLACEHOLDER — stayed green/reacted correctly]
-   - Last-Event-ID header present: [PLACEHOLDER — yes/no]
-   - Last-Event-ID value: [PLACEHOLDER — actual value]
-   - Connection stable for ≥1 heartbeat: [PLACEHOLDER — yes/no]
-   - Notes: [PLACEHOLDER — proxy errors, header truncation, timing issues, etc.]
-   ```
-
-**Cleanup:**
-
-```bash
-# Delete the ingress (if manually applied)
-kubectl delete ingress -n app-registry-local-dev app-registry-ui-ingress
-
-# Port-forwards terminate on exit
-```
+Not yet executed. As of this task's most recent pass, `kubectl config
+current-context` in every environment available to run it resolved to a
+local-only cluster (this repo's shared local dev cluster, or Docker
+Desktop) with no ingress controller and no `app-registry-ui` deployment —
+and no real browser tooling was available in the automated session that
+authored this revision. Confirm both of OPERATIONS.md's "What actually
+deploys anything, today?" section and the presence of a reachable
+`<ui-ingress-host>` before attempting this procedure for real; if neither
+exists yet, this criterion cannot be executed and should be reported back
+rather than simulated against local Tilt (which is exactly the port-forward
+path #1706 already covers and this section exists to *not* duplicate).
 
 ---
 
