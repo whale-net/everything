@@ -149,6 +149,7 @@ go_test(
         "session_test.go",
         "slice_internal_test.go",
         "slice_test.go",
+        "task_abandon_test.go",
         "task_claim_test.go",
         "task_complete_test.go",
         "task_dependency_test.go",
