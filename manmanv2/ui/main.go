@@ -503,6 +503,12 @@ func (app *App) setupRoutes(mux *http.ServeMux) {
 	// Same auth wrapper as every other "/backups" route (NFR3).
 	mux.HandleFunc("/backups/trigger-form", app.auth.RequireAuthFunc(app.auth.WithAccessToken(app.handleBackupTriggerForm)))
 	mux.HandleFunc("/backups/trigger", app.auth.RequireAuthFunc(app.auth.WithAccessToken(app.handleBackupTrigger)))
+	// "/backups/runs/{backup_id}" (task #2814, FR6): a single run's detail
+	// view, so a failed backup can be diagnosed without a database query.
+	// Registered as a trailing-slash subtree, same as "/games/" ->
+	// handleGameDetail above, distinct from the exact-match
+	// "/backups/runs" fragment route.
+	mux.HandleFunc("/backups/runs/", app.auth.RequireAuthFunc(app.auth.WithAccessToken(app.handleBackupRunDetail)))
 
 	// Protected routes - SGC detail. The "/sgc/" and "/sgc/<id>" pages
 	// themselves retired (task #2279, FR16): handleSGCRoutes' fallback now

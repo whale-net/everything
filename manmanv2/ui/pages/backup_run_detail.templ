@@ -1,0 +1,166 @@
+package pages
+
+import (
+	"fmt"
+
+	"github.com/whale-net/everything/libs/go/htmxui"
+	manmanpb "github.com/whale-net/everything/manmanv2/protos"
+	"github.com/whale-net/everything/manmanv2/ui/components"
+)
+
+// BackupRunDetailData backs "/backups/runs/{backup_id}" (root plan #2777,
+// task #2814 -- FR6): a single backup run's diagnosable detail. Unlike
+// BackupRunsFragmentData's BackupListItem rows, GetBackup returns the bare
+// Backup with no display-context fields, so ServerGameConfigName/
+// VolumeName/BackupConfigLabel are resolved separately
+// (handlers_backups_fleet.go's resolveBackupRunDisplayNames) and may be
+// empty if resolution failed or found nothing -- the template then falls
+// back to the raw id rather than showing a blank field.
+type BackupRunDetailData struct {
+	Layout components.LayoutData
+	Backup *manmanpb.Backup
+
+	ServerGameConfigName string
+	VolumeName           string
+	// BackupConfigLabel is "" whenever HasBackupConfig is false (manual
+	// backup, no config) or the config could not be resolved.
+	BackupConfigLabel string
+
+	// HasBackupConfig distinguishes "this run has a backup_config_id" from
+	// "resolving that config's label failed" -- only the former decides
+	// whether the Actions section renders the explicit "none" state.
+	HasBackupConfig bool
+	// Actions is the BackupConfig's pre-backup Actions in display_order --
+	// there is no per-run execution record in the schema, so this is
+	// explicitly labelled as configured-for-the-BackupConfig, not
+	// executed-for-this-run (see this task's issue body).
+	Actions []*manmanpb.BackupConfigActionItem
+}
+
+// backupRunDetailField renders one label/value pair in the summary grid,
+// matching workshop_batch_status.templ's uppercase-label-over-value card
+// convention so this detail view doesn't invent a second field layout.
+templ backupRunDetailField(label, value string) {
+	<div>
+		<div class="text-xs font-semibold text-base-content/60 uppercase tracking-wider mb-1">{ label }</div>
+		<div>{ value }</div>
+	</div>
+}
+
+// backupRunDeploymentDisplay falls back to a raw SGC id when the fleet-wide
+// name resolution found nothing (server drained, deleted, or the lookup
+// itself failed) -- never a blank field.
+func backupRunDeploymentDisplay(data BackupRunDetailData) string {
+	if data.ServerGameConfigName != "" {
+		return data.ServerGameConfigName
+	}
+	if data.Backup.ServerGameConfigId == 0 {
+		return "-"
+	}
+	return fmt.Sprintf("SGC #%d", data.Backup.ServerGameConfigId)
+}
+
+// backupRunVolumeDisplay mirrors backupRunDeploymentDisplay's raw-id
+// fallback for the volume field.
+func backupRunVolumeDisplay(data BackupRunDetailData) string {
+	if data.VolumeName != "" {
+		return data.VolumeName
+	}
+	if data.Backup.VolumeId == 0 {
+		return "-"
+	}
+	return fmt.Sprintf("Volume #%d", data.Backup.VolumeId)
+}
+
+// backupRunConfigDisplay renders the honest "manual, no config" state
+// (HasBackupConfig false) distinctly from "has a config but its label
+// didn't resolve" (HasBackupConfig true, label empty) -- the latter falls
+// back to the raw id rather than claiming "none".
+func backupRunConfigDisplay(data BackupRunDetailData) string {
+	if !data.HasBackupConfig {
+		return "None (manual backup, no BackupConfig)"
+	}
+	if data.BackupConfigLabel != "" {
+		return data.BackupConfigLabel
+	}
+	return fmt.Sprintf("BackupConfig #%d", data.Backup.BackupConfigId)
+}
+
+// backupRunS3State renders FR6's "S3 location once completed, explicitly
+// absent-with-reason otherwise" rule: an empty s3_url is never rendered as
+// a blank or broken link, and the reason names the actual run state rather
+// than a generic "not available".
+func backupRunS3State(backup *manmanpb.Backup) (url string, hasURL bool, reason string) {
+	if backup.S3Url != "" {
+		return backup.S3Url, true, ""
+	}
+	switch backup.Status {
+	case "pending":
+		return "", false, "Not yet available -- this run has not started."
+	case "running":
+		return "", false, "Not yet available -- this run is still in progress."
+	case "failed":
+		return "", false, "No S3 object was created -- this run failed before completing."
+	default:
+		return "", false, "No S3 object recorded for this run."
+	}
+}
+
+// BackupRunDetail renders a single backup run (FR6): a failed backup must
+// be diagnosable from this page alone, so error_message renders verbatim
+// (no truncation) whenever the run failed, and trigger origin/S3 state
+// follow the same honesty rules as the fleet-wide list (backups.templ's
+// backupRunOrigin, this file's backupRunS3State).
+templ BackupRunDetail(data BackupRunDetailData) {
+	@components.Layout(data.Layout) {
+		@components.HeroHeader(fmt.Sprintf("Backup run #%d", data.Backup.BackupId), "Diagnose a single backup run without a database query") {
+		}
+		<div class="bg-base-100 rounded-box border border-base-300 p-5 mb-6">
+			<div class="grid grid-cols-1 md:grid-cols-3 gap-4 text-sm">
+				<div>
+					<div class="text-xs font-semibold text-base-content/60 uppercase tracking-wider mb-1">Status</div>
+					<div>
+						@htmxui.Badge(data.Backup.Status, statusBadgeVariant(data.Backup.Status), htmxui.BadgeSizeSM, true, nil)
+					</div>
+				</div>
+				@backupRunDetailField("Origin", backupRunOrigin(data.Backup))
+				@backupRunDetailField("Deployment", backupRunDeploymentDisplay(data))
+				@backupRunDetailField("Volume", backupRunVolumeDisplay(data))
+				@backupRunDetailField("Backup Config", backupRunConfigDisplay(data))
+				@backupRunDetailField("Created", timeAgo(data.Backup.CreatedAt))
+				@backupRunDetailField("Size", backupRunSize(data.Backup))
+			</div>
+		</div>
+		<div class="bg-base-100 rounded-box border border-base-300 p-5 mb-6">
+			<h2 class="text-lg font-semibold mb-3">S3 location</h2>
+			if url, hasURL, reason := backupRunS3State(data.Backup); hasURL {
+				<a href={ templ.URL(url) } class="link link-primary font-mono break-all">{ url }</a>
+			} else {
+				<p class="text-base-content/60">{ reason }</p>
+			}
+		</div>
+		if data.Backup.Status == "failed" {
+			<div class="bg-base-100 rounded-box border border-error/50 p-5 mb-6">
+				<h2 class="text-lg font-semibold mb-3 text-error">Error</h2>
+				<pre class="whitespace-pre-wrap text-sm text-error">{ data.Backup.ErrorMessage }</pre>
+			</div>
+		}
+		<div class="bg-base-100 rounded-box border border-base-300 p-5">
+			<h2 class="text-lg font-semibold mb-1">Pre-backup Actions</h2>
+			if data.HasBackupConfig {
+				<p class="text-base-content/60 text-sm mb-3">Actions configured for this run's BackupConfig, not a per-run execution record -- this schema does not track which Actions actually ran for a given backup.</p>
+				if len(data.Actions) == 0 {
+					<p class="text-base-content/60">No Actions attached to this BackupConfig.</p>
+				} else {
+					<ol class="list-decimal list-inside space-y-1">
+						for _, action := range data.Actions {
+							<li>{ action.Name }</li>
+						}
+					</ol>
+				}
+			} else {
+				<p class="text-base-content/60">None -- this is a manual backup with no BackupConfig.</p>
+			}
+		</div>
+	}
+}

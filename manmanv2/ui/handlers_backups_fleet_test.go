@@ -61,6 +61,20 @@ type fakeBackupsFleetAPIClient struct {
 	triggerBackupResp    *manmanpb.TriggerBackupResponse
 	triggerBackupErr     error
 	lastTriggerBackupReq *manmanpb.TriggerBackupRequest
+
+	// backupsByID/getBackupErr back GetBackup for handleBackupRunDetail
+	// (task #2814, FR6). backupsByID is keyed by backup id rather than a
+	// single fixed response so a test can assert an unknown id 404s
+	// without a second fake instance.
+	backupsByID  map[int64]*manmanpb.Backup
+	getBackupErr error
+
+	// actionsByBackupConfigID backs ListBackupConfigActions for the detail
+	// view's pre-backup Actions section (task #2814, FR6) -- keyed by
+	// backup_config_id so a test can fixture one BackupConfig's Actions
+	// without affecting another's.
+	actionsByBackupConfigID    map[int64][]*manmanpb.BackupConfigActionItem
+	listBackupConfigActionsErr error
 }
 
 func (f *fakeBackupsFleetAPIClient) ListServers(ctx context.Context, in *manmanpb.ListServersRequest, opts ...grpc.CallOption) (*manmanpb.ListServersResponse, error) {
@@ -104,6 +118,24 @@ func (f *fakeBackupsFleetAPIClient) TriggerBackup(ctx context.Context, in *manma
 		return f.triggerBackupResp, nil
 	}
 	return &manmanpb.TriggerBackupResponse{BackupId: 999}, nil
+}
+
+func (f *fakeBackupsFleetAPIClient) GetBackup(ctx context.Context, in *manmanpb.GetBackupRequest, opts ...grpc.CallOption) (*manmanpb.GetBackupResponse, error) {
+	if f.getBackupErr != nil {
+		return nil, f.getBackupErr
+	}
+	backup, ok := f.backupsByID[in.BackupId]
+	if !ok {
+		return nil, status.Error(codes.NotFound, "backup not found")
+	}
+	return &manmanpb.GetBackupResponse{Backup: backup}, nil
+}
+
+func (f *fakeBackupsFleetAPIClient) ListBackupConfigActions(ctx context.Context, in *manmanpb.ListBackupConfigActionsRequest, opts ...grpc.CallOption) (*manmanpb.ListBackupConfigActionsResponse, error) {
+	if f.listBackupConfigActionsErr != nil {
+		return nil, f.listBackupConfigActionsErr
+	}
+	return &manmanpb.ListBackupConfigActionsResponse{Items: f.actionsByBackupConfigID[in.BackupConfigId]}, nil
 }
 
 func newBackupsFleetTestApp(api *fakeBackupsFleetAPIClient) *App {

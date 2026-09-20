@@ -255,10 +255,14 @@ templ BackupRunsFragment(data BackupRunsFragmentData) {
 
 // backupRunRow is one BackupListItem's row (FR3): deployment/volume names
 // come from the item's own display-context fields (#2809), not a per-row
-// lookup.
+// lookup. Each row links to "/backups/runs/{backup_id}" (task #2814, FR6)
+// so a Server Manager can drill into a single run -- e.g. a failed one --
+// without a database query.
 templ backupRunRow(item *manmanpb.BackupListItem) {
 	<tr>
-		<td>{ item.ServerGameConfigName }</td>
+		<td>
+			<a href={ templ.URL(fmt.Sprintf("/backups/runs/%d", item.Backup.BackupId)) } class="link link-primary">{ item.ServerGameConfigName }</a>
+		</td>
 		<td>{ item.VolumeName }</td>
 		<td>
 			@htmxui.Badge(item.Backup.Status, statusBadgeVariant(item.Backup.Status), htmxui.BadgeSizeSM, true, nil)

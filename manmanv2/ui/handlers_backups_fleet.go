@@ -84,6 +84,131 @@ func (app *App) handleBackupRunsFragment(w http.ResponseWriter, r *http.Request)
 	}
 }
 
+// handleBackupRunDetail renders "/backups/runs/{backup_id}" (task #2814,
+// FR6): a single run's diagnosable detail -- status, trigger origin, S3
+// location (once completed), size, error message when failed, deployment/
+// volume/BackupConfig context, and the run's pre-backup Actions. An unknown
+// id 404s rather than 500ing (the acceptance criteria's NotFound
+// requirement); GetBackup's NotFound is the only gRPC status this handler
+// distinguishes from a generic upstream failure.
+func (app *App) handleBackupRunDetail(w http.ResponseWriter, r *http.Request) {
+	ctx := r.Context()
+	user := htmxauth.GetUser(ctx)
+
+	backupID, ok := parseBackupRunID(r.URL.Path)
+	if !ok {
+		http.NotFound(w, r)
+		return
+	}
+
+	backup, err := app.grpc.GetBackup(ctx, backupID)
+	if err != nil {
+		if status.Code(err) == codes.NotFound {
+			http.NotFound(w, r)
+			return
+		}
+		log.Printf("ERROR: backups: failed to fetch backup run %d: %v", backupID, err)
+		http.Error(w, "Internal server error", http.StatusInternalServerError)
+		return
+	}
+
+	breadcrumbs := []components.Breadcrumb{
+		{Label: "Backups", URL: "/backups"},
+		{Label: fmt.Sprintf("Run #%d", backupID), URL: fmt.Sprintf("/backups/runs/%d", backupID)},
+	}
+	layoutData, err := app.buildTemplLayoutData(r, fmt.Sprintf("Backup run #%d", backupID), "Backups", user, breadcrumbs)
+	if err != nil {
+		log.Printf("ERROR: backups: failed to build layout data for run %d: %v", backupID, err)
+		http.Error(w, "Internal server error", http.StatusInternalServerError)
+		return
+	}
+
+	data := pages.BackupRunDetailData{Layout: layoutData, Backup: backup}
+	data.ServerGameConfigName, data.VolumeName, data.BackupConfigLabel = app.resolveBackupRunDisplayNames(ctx, backup)
+
+	// A run's pre-backup Actions come from its BackupConfig, not a per-run
+	// execution record -- one does not exist in the schema (see this task's
+	// issue body). A manual backup with no backup_config_id renders the
+	// template's explicit "none" state instead of an empty list.
+	if backup.BackupConfigId != 0 {
+		data.HasBackupConfig = true
+		actions, err := app.grpc.ListBackupConfigActions(ctx, backup.BackupConfigId)
+		if err != nil {
+			log.Printf("WARNING: backups: failed to list pre-backup actions for backup config %d (run %d): %v", backup.BackupConfigId, backupID, err)
+		} else {
+			data.Actions = actions
+		}
+	}
+
+	if err := RenderTempl(w, r, fmt.Sprintf("Backup run #%d", backupID), pages.BackupRunDetail(data)); err != nil {
+		log.Printf("ERROR: backups: failed to render backup run detail template: %v", err)
+		http.Error(w, "Internal server error", http.StatusInternalServerError)
+	}
+}
+
+// parseBackupRunID extracts the backup id from "/backups/runs/{id}", the
+// only sub-route "/backups/runs/" (registered as a subtree pattern
+// alongside the exact-match "/backups/runs" fragment route) serves --
+// matching handleGameDetail's (handlers_games.go) manual path-segment
+// convention rather than net/http's newer "{wildcard}" mux patterns, so
+// every route in this file stays on the one parsing style. A non-numeric or
+// non-positive id is treated the same as "unknown id" (404), not a 400 --
+// there is no meaningful distinction a Server Manager would act on
+// differently.
+func parseBackupRunID(path string) (int64, bool) {
+	parts := strings.Split(strings.Trim(path, "/"), "/")
+	if len(parts) != 3 {
+		return 0, false
+	}
+	id, err := strconv.ParseInt(parts[2], 10, 64)
+	if err != nil || id <= 0 {
+		return 0, false
+	}
+	return id, true
+}
+
+// resolveBackupRunDisplayNames resolves a single run's deployment (SGC),
+// volume and BackupConfig display names best-effort, reusing the same
+// fleet-wide helpers backupRunsFilterOptions above already relies on for its
+// pickers. Resolution failure -- or the id simply not being found in the
+// resolved set -- degrades to an empty string per field (the template falls
+// back to a raw id) rather than failing the whole detail page, matching
+// backupRunsFilterOptions' own degrade posture.
+func (app *App) resolveBackupRunDisplayNames(ctx context.Context, backup *manmanpb.Backup) (sgcName, volumeName, backupConfigLabel string) {
+	servers, err := app.grpc.ListServers(ctx)
+	if err != nil {
+		log.Printf("WARNING: backups: failed to list servers to resolve run %d's deployment name: %v", backup.BackupId, err)
+	} else {
+		sgcByID, serverByID := app.resolveFleetWideActivitySet(ctx, servers)
+		if sgc, ok := sgcByID[backup.ServerGameConfigId]; ok {
+			gameConfigByID, _ := app.activityDisplayNames(ctx, map[int64]*manmanpb.ServerGameConfig{sgc.ServerGameConfigId: sgc})
+			server := serverByID[sgc.ServerId]
+			gameConfig := gameConfigByID[sgc.GameConfigId]
+			if server != nil && gameConfig != nil {
+				sgcName = fmt.Sprintf("%s / %s", server.Name, gameConfig.Name)
+			}
+		}
+	}
+
+	items, err := app.grpc.ListBackupConfigItems(ctx)
+	if err != nil {
+		log.Printf("WARNING: backups: failed to list backup configs to resolve run %d's volume/config name: %v", backup.BackupId, err)
+		return sgcName, volumeName, backupConfigLabel
+	}
+	for _, item := range items {
+		if item.Config == nil {
+			continue
+		}
+		if item.Config.VolumeId == backup.VolumeId {
+			volumeName = item.VolumeName
+		}
+		if backup.BackupConfigId != 0 && item.Config.BackupConfigId == backup.BackupConfigId {
+			backupConfigLabel = fmt.Sprintf("%s / %s", item.GameConfigName, item.VolumeName)
+		}
+	}
+	return sgcName, volumeName, backupConfigLabel
+}
+
 // parseBackupRunsFilter reads FR4's filter set plus paging off the request
 // query string -- both "/backups" (first page, filters usually absent) and
 // "/backups/runs" (filter-bar submit or "Load more") share this one

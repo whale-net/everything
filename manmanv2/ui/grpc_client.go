@@ -1074,3 +1074,29 @@ func (c *ControlClient) ListBackups(ctx context.Context, filter BackupListFilter
 		PageSize:           pageSize,
 	})
 }
+
+// GetBackup fetches a single backup run by id (task #2814, FR6) -- the
+// backup-run detail view's sole data source for the run itself. The API's
+// GetBackup RPC returns codes.NotFound for an unknown id (backup.go); the
+// handler maps that to a 404 rather than a bare 500.
+func (c *ControlClient) GetBackup(ctx context.Context, backupID int64) (*manmanpb.Backup, error) {
+	resp, err := c.api.GetBackup(ctx, &manmanpb.GetBackupRequest{BackupId: backupID})
+	if err != nil {
+		return nil, err
+	}
+	return resp.Backup, nil
+}
+
+// ListBackupConfigActions lists a BackupConfig's attached pre-backup Actions
+// in execution order (task #2814, FR6; #2811 shipped the RPC). There is no
+// per-run execution record in the schema -- the detail view resolves a run's
+// Actions from its backup_config_id, not from the run itself, and must label
+// that clearly rather than imply a per-run record (see handleBackupRunDetail
+// in handlers_backups_fleet.go).
+func (c *ControlClient) ListBackupConfigActions(ctx context.Context, backupConfigID int64) ([]*manmanpb.BackupConfigActionItem, error) {
+	resp, err := c.api.ListBackupConfigActions(ctx, &manmanpb.ListBackupConfigActionsRequest{BackupConfigId: backupConfigID})
+	if err != nil {
+		return nil, err
+	}
+	return resp.Items, nil
+}
