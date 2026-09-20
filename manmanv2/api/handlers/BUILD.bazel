@@ -86,6 +86,7 @@ go_test(
 go_test(
     name = "handlers_test",
     srcs = [
+        "backup_test.go",
         "converters_test.go",
         "drain_cordon_test.go",
         "patch_test.go",

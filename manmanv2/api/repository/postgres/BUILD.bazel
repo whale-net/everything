@@ -155,6 +155,38 @@ go_test(
     ],
 )
 
+# Real-Postgres coverage for backups.trigger_source (M7 FR2/FR3 backing,
+# plan #2777, task #2808): a Backup created through BackupRepository.Create
+# round-trips its TriggerSource through Get/List, an unset TriggerSource
+# defaults to "unknown" on write, and the trigger_source CHECK constraint
+# rejects any other value. Same hand-written, build-tagged precedent as
+# action_soft_delete_integration_test.go.
+#
+# Run it explicitly (requires a working Docker daemon):
+#   bazel test //manmanv2/api/repository/postgres:backup_trigger_source_integration_test --test_output=all
+go_test(
+    # keep
+    name = "backup_trigger_source_integration_test",
+    size = "large",
+    timeout = "long",
+    srcs = ["backup_trigger_source_integration_test.go"],
+    embed = [":postgres"],
+    gotags = ["integration"],
+    tags = [
+        "external",
+        "integration",
+        "manual",
+        "no-cache",
+        "no-sandbox",
+        "requires-network",
+    ],
+    deps = [
+        "//libs/go/dbtest",
+        "//manmanv2/models",
+        "@com_github_jackc_pgx_v5//pgxpool",
+    ],
+)
+
 # Real-Postgres coverage for FR12's enforcement half (task #2097, plan
 # #2080): fresh host-port allocation outside the server's configured
 # allowed ranges must refuse on the same synchronous failure path as a
