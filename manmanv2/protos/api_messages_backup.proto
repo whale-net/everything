@@ -24,11 +24,25 @@ message ListBackupsRequest {
   int64 session_id = 2;  // Filter by session (optional)
   int32 page_size = 3;
   string page_token = 4;
+  int64 volume_id = 5;         // Optional filter
+  int64 backup_config_id = 6;  // Optional filter
+  string status = 7;           // Optional filter: pending|running|completed|failed
+}
+
+// BackupListItem carries per-row display context so the fleet-wide list
+// doesn't require a follow-up RPC per row.
+message BackupListItem {
+  Backup backup = 1;
+  string server_game_config_name = 2;  // deployment/SGC display name
+  string game_config_name = 3;
+  string volume_name = 4;
+  string server_name = 5;
 }
 
 message ListBackupsResponse {
   repeated Backup backups = 1;
   string next_page_token = 2;
+  repeated BackupListItem items = 3;
 }
 
 message GetBackupRequest {

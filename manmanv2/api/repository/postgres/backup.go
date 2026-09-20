@@ -62,24 +62,34 @@ func (r *BackupRepository) Get(ctx context.Context, backupID int64) (*manman.Bac
 	return b, nil
 }
 
-func (r *BackupRepository) List(ctx context.Context, sgcID *int64, sessionID *int64, limit int, offset int) ([]*manman.Backup, error) {
+// List returns Backups fleet-wide, optionally narrowed by f, with the
+// display context (SGC/GameConfig/volume/server names) needed for a list
+// row. Filters use the "$n::type IS NULL OR col = $n" idiom so a nil filter
+// field is a no-op. TODO(Implementation phase): join server_game_configs ->
+// game_configs / game_config_volumes / servers for
+// server_game_config_name/game_config_name/volume_name/server_name; for now
+// those fields are left zero-valued.
+func (r *BackupRepository) List(ctx context.Context, f repository.BackupListFilter, limit, offset int) ([]*repository.BackupListRow, error) {
 	query := `
 		SELECT backup_id, session_id, server_game_config_id, backup_config_id, volume_id,
 		       s3_url, size_bytes, status, error_message, description, trigger_source, created_at
 		FROM backups
 		WHERE ($1::bigint IS NULL OR server_game_config_id = $1)
 		  AND ($2::bigint IS NULL OR session_id = $2)
+		  AND ($3::bigint IS NULL OR volume_id = $3)
+		  AND ($4::bigint IS NULL OR backup_config_id = $4)
+		  AND ($5::text IS NULL OR status = $5)
 		  AND deleted_at IS NULL
 		ORDER BY created_at DESC
-		LIMIT $3 OFFSET $4
+		LIMIT $6 OFFSET $7
 	`
-	rows, err := r.db.Query(ctx, query, sgcID, sessionID, limit, offset)
+	rows, err := r.db.Query(ctx, query, f.SGCID, f.SessionID, f.VolumeID, f.BackupConfigID, f.Status, limit, offset)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
 
-	var backups []*manman.Backup
+	var result []*repository.BackupListRow
 	for rows.Next() {
 		b := &manman.Backup{}
 		if err := rows.Scan(
@@ -88,9 +98,9 @@ func (r *BackupRepository) List(ctx context.Context, sgcID *int64, sessionID *in
 		); err != nil {
 			return nil, err
 		}
-		backups = append(backups, b)
+		result = append(result, &repository.BackupListRow{Backup: b})
 	}
-	return backups, rows.Err()
+	return result, rows.Err()
 }
 
 func (r *BackupRepository) Delete(ctx context.Context, backupID int64) error {

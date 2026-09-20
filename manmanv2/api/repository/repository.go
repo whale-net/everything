@@ -147,11 +147,32 @@ type LogReferenceRepository interface {
 	GetHistogramBySession(ctx context.Context, sessionID int64, bucketSeconds int64, startTime, endTime *int64) (map[int64]map[string]int32, error)
 }
 
+// BackupListFilter narrows a fleet-wide Backup listing. A nil field means "no
+// filter on that dimension".
+type BackupListFilter struct {
+	SGCID          *int64
+	SessionID      *int64
+	VolumeID       *int64
+	BackupConfigID *int64
+	Status         *string
+}
+
+// BackupListRow is a Backup plus the display context (deployment/SGC,
+// GameConfig, volume, server names) needed to render a fleet-wide list row
+// without a follow-up RPC per row.
+type BackupListRow struct {
+	Backup               *manman.Backup
+	ServerGameConfigName string
+	GameConfigName       string
+	VolumeName           string
+	ServerName           string
+}
+
 // BackupRepository defines operations for Backup entities
 type BackupRepository interface {
 	Create(ctx context.Context, backup *manman.Backup) (*manman.Backup, error)
 	Get(ctx context.Context, backupID int64) (*manman.Backup, error)
-	List(ctx context.Context, sgcID *int64, sessionID *int64, limit int, offset int) ([]*manman.Backup, error)
+	List(ctx context.Context, f BackupListFilter, limit, offset int) ([]*BackupListRow, error)
 	Delete(ctx context.Context, backupID int64) error
 	UpdateStatus(ctx context.Context, backupID int64, status string, s3URL *string, sizeBytes *int64, errMsg *string) error
 }

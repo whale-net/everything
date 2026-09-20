@@ -22,6 +22,7 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/whale-net/everything/libs/go/dbtest"
+	"github.com/whale-net/everything/manmanv2/api/repository"
 	manman "github.com/whale-net/everything/manmanv2/models"
 )
 
@@ -136,15 +137,15 @@ func TestBackupRepository_TriggerSourceRoundTrips(t *testing.T) {
 		t.Fatalf("Get: expected TriggerSource = %q, got %q", manman.BackupTriggerSourceManual, got.TriggerSource)
 	}
 
-	listed, err := repo.List(context.Background(), &sgcID, nil, 10, 0)
+	listed, err := repo.List(context.Background(), repository.BackupListFilter{SGCID: &sgcID}, 10, 0)
 	if err != nil {
 		t.Fatalf("List: %v", err)
 	}
 	if len(listed) != 1 {
 		t.Fatalf("expected 1 listed backup, got %d", len(listed))
 	}
-	if listed[0].TriggerSource != manman.BackupTriggerSourceManual {
-		t.Fatalf("List: expected TriggerSource = %q, got %q", manman.BackupTriggerSourceManual, listed[0].TriggerSource)
+	if listed[0].Backup.TriggerSource != manman.BackupTriggerSourceManual {
+		t.Fatalf("List: expected TriggerSource = %q, got %q", manman.BackupTriggerSourceManual, listed[0].Backup.TriggerSource)
 	}
 }
 
