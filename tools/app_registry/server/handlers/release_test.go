@@ -3,6 +3,7 @@ package handlers
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"testing"
 
 	pb "github.com/whale-net/everything/tools/app_registry/protos"
@@ -162,6 +163,60 @@ func TestTriggerRelease_ValidationFailure_DoesNotPublish(t *testing.T) {
 	requireCode(t, err, codes.InvalidArgument, "TriggerRelease")
 	if got := len(pub.GetReleaseRunPublishedEvents()); got != 0 {
 		t.Fatalf("expected 0 published events on validation failure, got %d", got)
+	}
+}
+
+// failingCreateReleaseRuns wraps a real repository.ReleaseRunRepository and
+// injects a failure on CreateReleaseRun, mirroring worker/release/
+// record_test.go's failingUpdateStateReleaseRuns -- lets
+// TestTriggerRelease_CreateReleaseRunFails_DoesNotPublish exercise the
+// actual repository-write failure path the issue calls for (distinct from
+// TestTriggerRelease_ValidationFailure_DoesNotPublish, which never reaches
+// CreateReleaseRun at all).
+type failingCreateReleaseRuns struct {
+	repository.ReleaseRunRepository
+}
+
+func (f failingCreateReleaseRuns) CreateReleaseRun(ctx context.Context, run repository.ReleaseRun, targets []repository.ReleaseRunTarget) (*repository.ReleaseRun, []repository.ReleaseRunTarget, error) {
+	return nil, nil, errors.New("injected CreateReleaseRun failure")
+}
+
+// registryWithFailingCreateReleaseRun wraps a real repository.Registry,
+// routing every other repository through unchanged, ReleaseRuns() through
+// failingCreateReleaseRuns, and WithTx through so the failing wrapper is
+// still in effect on the Registry TriggerRelease's WithTx callback receives
+// (TriggerRelease calls r.ReleaseRuns().CreateReleaseRun on the inner
+// Registry WithTx hands its callback, not on the outer one).
+type registryWithFailingCreateReleaseRun struct {
+	repository.Registry
+}
+
+func (r registryWithFailingCreateReleaseRun) ReleaseRuns() repository.ReleaseRunRepository {
+	return failingCreateReleaseRuns{ReleaseRunRepository: r.Registry.ReleaseRuns()}
+}
+
+func (r registryWithFailingCreateReleaseRun) WithTx(ctx context.Context, fn func(ctx context.Context, reg repository.Registry) error) error {
+	return r.Registry.WithTx(ctx, func(ctx context.Context, inner repository.Registry) error {
+		return fn(ctx, registryWithFailingCreateReleaseRun{Registry: inner})
+	})
+}
+
+// TestTriggerRelease_CreateReleaseRunFails_DoesNotPublish is the issue
+// #1702 structural NFR3 test: with CreateReleaseRun itself failing (not a
+// request-shape validation failure), TriggerRelease returns an error and
+// publishes nothing -- the publish call sits strictly after the write it
+// announces, never before it and never on its error path.
+func TestTriggerRelease_CreateReleaseRunFails_DoesNotPublish(t *testing.T) {
+	repo := registryWithFailingCreateReleaseRun{Registry: fake.New()}
+	pub := NewFakePublisher()
+	srv := NewReleaseServer(repo, nil, pub)
+
+	_, err := srv.TriggerRelease(authedCtx(), triggerReq("demo", target("demo-svc", pb.ArtifactKind_ARTIFACT_KIND_IMAGE, "")))
+	if err == nil {
+		t.Fatalf("expected TriggerRelease to fail when CreateReleaseRun fails")
+	}
+	if got := len(pub.GetReleaseRunPublishedEvents()); got != 0 {
+		t.Fatalf("expected 0 published events when CreateReleaseRun fails, got %d", got)
 	}
 }
 
