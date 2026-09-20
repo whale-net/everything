@@ -1,8 +1,10 @@
 package pages
 
 import (
+	"encoding/json"
 	"fmt"
 	"net/url"
+	"strconv"
 
 	"github.com/whale-net/everything/libs/go/htmxui"
 	manmanpb "github.com/whale-net/everything/manmanv2/protos"
@@ -582,10 +584,13 @@ templ backupConfigsFilterBar(filter BackupConfigsFilterValues, options BackupCon
 
 // backupConfigRow is one BackupConfigListItem's row (FR9): volume/game/
 // GameConfig display names come from the item's own display-context fields,
-// not a per-row lookup. No create/edit/delete control renders here or
-// anywhere else in this tab (FR11) -- that control lives exclusively in the
-// Config Editor's Volumes tab; the row's only interactive element is the
-// "Manage" link-out (backupConfigEditorURL).
+// not a per-row lookup. No BackupConfig or Action-definition create/edit/
+// delete control renders here or anywhere else in this tab (FR11, C30) --
+// that control lives exclusively in the Config Editor's Volumes tab; this
+// row's interactive elements are the "Manage" link-out
+// (backupConfigEditorURL) and the "Actions" button, which opens this row's
+// own pre-backup Actions Blade (task #2817, FR12-FR15) -- attachments and
+// ordering only, same C30 boundary.
 templ backupConfigRow(item *manmanpb.BackupConfigListItem) {
 	<tr>
 		<td>{ item.VolumeName }</td>
@@ -600,10 +605,37 @@ templ backupConfigRow(item *manmanpb.BackupConfigListItem) {
 			}
 		</td>
 		<td>{ timeAgo(item.Config.LastBackupAt) }</td>
-		<td>
-			<a href={ templ.URL(backupConfigEditorURL(item)) } class="link link-primary text-sm">Manage in Config Editor</a>
+		<td class="text-right whitespace-nowrap">
+			<a href={ templ.URL(backupConfigEditorURL(item)) } class="link link-primary text-sm mr-3">Manage in Config Editor</a>
+			<button type="button" data-open-blade-template={ backupConfigActionsBladeTemplateID(item.Config.BackupConfigId) } class="btn btn-outline btn-xs">
+				Actions
+			</button>
+			<template id={ backupConfigActionsBladeTemplateID(item.Config.BackupConfigId) }>
+				@components.Blade(components.BladeData{
+					ID:       backupConfigActionsBladeID(item.Config.BackupConfigId),
+					Title:    "Pre-backup Actions",
+					Subtitle: fmt.Sprintf("%s / %s", item.GameConfigName, item.VolumeName),
+				}) {
+					@BackupConfigActionsPlaceholder(item.Config.BackupConfigId)
+				}
+			</template>
 		</td>
 	</tr>
+}
+
+// backupConfigActionsBladeTemplateID and backupConfigActionsBladeID are the
+// per-row <template>/Blade id pair backupConfigRow's "Actions" button opens
+// (backupTriggerBladeOpenerScript's data-open-blade-template click
+// delegate, already registered once by BackupsPage, handles the clone --
+// this file needs no second copy of that script), mirroring
+// game_detail.templ's "deployment-settings-blade-template-%d" /
+// "deployment-settings-blade-%d" per-deployment pair.
+func backupConfigActionsBladeTemplateID(backupConfigID int64) string {
+	return fmt.Sprintf("backup-config-actions-blade-template-%d", backupConfigID)
+}
+
+func backupConfigActionsBladeID(backupConfigID int64) string {
+	return fmt.Sprintf("backup-config-actions-blade-%d", backupConfigID)
 }
 
 // backupConfigEditorURL is the FR11 link-out target: the Config Editor's
@@ -681,4 +713,205 @@ func nextPageQuery(filter BackupRunsFilterValues, pageToken string) string {
 	}
 	v.Set("page_token", pageToken)
 	return v.Encode()
+}
+
+// BackupConfigActionsData drives the pre-backup Actions panel opened from a
+// BackupConfig row (task #2817, FR12-FR15) --
+// handlers_backups_fleet.go's buildBackupConfigActionsData assembles one of
+// these fresh for the panel's initial lazy load and after every add/remove/
+// reorder mutation, so the displayed order always comes from a real
+// ListBackupConfigActions call, never optimistic local state.
+type BackupConfigActionsData struct {
+	BackupConfigID int64
+	// Items is already in execution order (display_order ascending) --
+	// api/handlers/backup_config.go's ListBackupConfigActions orders them,
+	// this panel never re-sorts.
+	Items []*manmanpb.BackupConfigActionItem
+	// AvailableActions is every Action usable at this BackupConfig's owning
+	// GameConfig (local + inherited from its Game) that is not already
+	// attached -- the "add" picker's option set.
+	AvailableActions []components.SelectOption
+	// Err, when non-empty, renders an inline alert above the list -- an
+	// add/remove/reorder call's own failure (e.g. InvalidArgument from a
+	// stale reorder set), not a bare 500. The list itself still renders:
+	// the ListBackupConfigActions call this panel's Items come from is
+	// separate and already succeeded by the time Err is ever set.
+	Err string
+}
+
+// backupConfigActionsPanelID is the one stable container id the Blade's
+// lazy-load placeholder and every add/remove/reorder response share
+// (hx-swap="outerHTML"), mirroring DeploymentSettingsEnvSectionID's
+// placeholder/section id-sharing convention.
+func backupConfigActionsPanelID(backupConfigID int64) string {
+	return fmt.Sprintf("backup-config-actions-panel-%d", backupConfigID)
+}
+
+// BackupConfigActionsPlaceholder is the Blade body backupConfigRow embeds
+// inside the "Actions" button's cloned <template> -- cloning that template
+// costs no request, but the BackupConfig's current Action list and
+// available-Actions picker options need a fresh fetch every time the blade
+// opens, mirroring BackupTriggerFormPlaceholder's lazy-load posture.
+templ BackupConfigActionsPlaceholder(backupConfigID int64) {
+	<div
+		id={ backupConfigActionsPanelID(backupConfigID) }
+		hx-get={ fmt.Sprintf("/backups/configs/%d/actions", backupConfigID) }
+		hx-trigger="load"
+		hx-swap="outerHTML"
+	>
+		<p class="text-sm text-base-content/60">Loading pre-backup actions…</p>
+	</div>
+}
+
+// BackupConfigActionsPanel renders the real, data-backed panel: the ordered
+// attachment list (FR12) with per-row remove (FR14) and move-up/move-down
+// reorder controls (FR15), plus the "add an existing Action at a chosen
+// position" form (FR13). Every control here only ever manages attachments/
+// ordering -- there is no create/edit/delete control for the Action
+// definitions themselves or for the BackupConfig (FR11, C30).
+templ BackupConfigActionsPanel(data BackupConfigActionsData) {
+	<div id={ backupConfigActionsPanelID(data.BackupConfigID) }>
+		if data.Err != "" {
+			@components.Alert("error", data.Err)
+		}
+		if len(data.Items) == 0 {
+			<p class="text-sm text-base-content/60 mb-4">No pre-backup actions attached yet.</p>
+		} else {
+			<ol class="mb-4 space-y-2">
+				for i, item := range data.Items {
+					@backupConfigActionRow(data.BackupConfigID, data.Items, i, item)
+				}
+			</ol>
+		}
+		@backupConfigActionAddForm(data)
+	</div>
+}
+
+// backupConfigActionRow is one attached Action's row: its execution
+// position and name (BackupConfigActionItem carries the name directly,
+// #2811 -- no per-row lookup), a remove control (FR14), and move-up/
+// move-down controls (FR15) -- deliberately explicit buttons rather than a
+// drag-only interaction, so reordering has a keyboard-accessible path. Each
+// move control POSTs the *entire* resulting order (swapActionOrder), never
+// a partial "swap these two" instruction the server would have to
+// interpret, matching ReorderBackupConfigActionsRequest's "full desired
+// order" contract (api_messages_backup.proto).
+templ backupConfigActionRow(backupConfigID int64, items []*manmanpb.BackupConfigActionItem, index int, item *manmanpb.BackupConfigActionItem) {
+	<li class="flex items-center justify-between gap-3 bg-base-100 border border-base-300 rounded px-3 py-2">
+		<div>
+			<span class="font-mono text-xs text-base-content/50 mr-2">{ fmt.Sprintf("%d.", index+1) }</span>
+			<span class="font-medium text-sm">{ item.Name }</span>
+		</div>
+		<div class="flex items-center gap-1">
+			if index > 0 {
+				<button
+					type="button"
+					class="btn btn-ghost btn-xs"
+					aria-label="Move up"
+					hx-post={ fmt.Sprintf("/backups/configs/%d/actions/reorder", backupConfigID) }
+					hx-vals={ reorderActionIDsJSON(swapActionOrder(items, index, index-1)) }
+					hx-target={ "#" + backupConfigActionsPanelID(backupConfigID) }
+					hx-swap="outerHTML"
+				>
+					↑
+				</button>
+			}
+			if index < len(items)-1 {
+				<button
+					type="button"
+					class="btn btn-ghost btn-xs"
+					aria-label="Move down"
+					hx-post={ fmt.Sprintf("/backups/configs/%d/actions/reorder", backupConfigID) }
+					hx-vals={ reorderActionIDsJSON(swapActionOrder(items, index, index+1)) }
+					hx-target={ "#" + backupConfigActionsPanelID(backupConfigID) }
+					hx-swap="outerHTML"
+				>
+					↓
+				</button>
+			}
+			<button
+				type="button"
+				class="btn btn-error btn-xs"
+				hx-post={ fmt.Sprintf("/backups/configs/%d/actions/remove", backupConfigID) }
+				hx-vals={ fmt.Sprintf(`{"action_id": %d}`, item.ActionId) }
+				hx-confirm="Remove this action from the pre-backup list?"
+				hx-target={ "#" + backupConfigActionsPanelID(backupConfigID) }
+				hx-swap="outerHTML"
+			>
+				Remove
+			</button>
+		</div>
+	</li>
+}
+
+// backupConfigActionAddForm is the FR13 "add an existing Action at a chosen
+// position" control: the Action picker reuses the same fleet of Actions
+// usable at this BackupConfig's owning GameConfig
+// (handlers_actions.go's categorizeActions posture, minus anything already
+// attached) that handlers_backups_fleet.go's buildBackupConfigActionsData
+// resolves -- never a create-a-new-Action form (FR11, C30). Position is a
+// 1-based select for readability; its value is already the 0-based
+// display_order handleBackupConfigActionAdd forwards as-is. Disabled
+// (rather than hidden) when there is nothing left to add, so an operator
+// sees why the control is inert instead of it silently disappearing.
+templ backupConfigActionAddForm(data BackupConfigActionsData) {
+	<form
+		hx-post={ fmt.Sprintf("/backups/configs/%d/actions/add", data.BackupConfigID) }
+		hx-target={ "#" + backupConfigActionsPanelID(data.BackupConfigID) }
+		hx-swap="outerHTML"
+		class="flex flex-wrap items-end gap-2 border-t border-base-300 pt-3"
+	>
+		<div>
+			<label class="block text-xs font-medium text-base-content mb-1" for="backup-config-action-add-select">Action</label>
+			if len(data.AvailableActions) == 0 {
+				<select id="backup-config-action-add-select" disabled class="select select-bordered select-sm">
+					<option>No available actions to add</option>
+				</select>
+			} else {
+				<select id="backup-config-action-add-select" name="action_id" required class="select select-bordered select-sm">
+					<option value="">-- select an action --</option>
+					for _, opt := range data.AvailableActions {
+						<option value={ opt.Value }>{ opt.Label }</option>
+					}
+				</select>
+			}
+		</div>
+		<div>
+			<label class="block text-xs font-medium text-base-content mb-1" for="backup-config-action-add-position">Position</label>
+			<select id="backup-config-action-add-position" name="display_order" disabled?={ len(data.AvailableActions) == 0 } class="select select-bordered select-sm">
+				for i := 0; i <= len(data.Items); i++ {
+					<option value={ strconv.Itoa(i) } selected?={ i == len(data.Items) }>{ strconv.Itoa(i + 1) }</option>
+				}
+			</select>
+		</div>
+		<button type="submit" class="btn btn-primary btn-sm" disabled?={ len(data.AvailableActions) == 0 }>Add</button>
+	</form>
+}
+
+// swapActionOrder returns the full attached-action id order with the
+// entries at i and j swapped -- the move-up/move-down controls' way of
+// computing the *entire* resulting order server-side at render time
+// (backupConfigActionRow), so the button's own hx-vals never needs
+// client-side JS to compute it.
+func swapActionOrder(items []*manmanpb.BackupConfigActionItem, i, j int) []int64 {
+	ids := make([]int64, len(items))
+	for k, item := range items {
+		ids[k] = item.ActionId
+	}
+	ids[i], ids[j] = ids[j], ids[i]
+	return ids
+}
+
+// reorderActionIDsJSON renders an action id order as the JSON object
+// literal htmx's hx-vals attribute expects
+// (https://htmx.org/attributes/hx-vals/): htmx expands an array-valued
+// entry into one repeated form field per element when it builds the
+// request body, so handleBackupConfigActionsReorder's r.Form["action_ids"]
+// receives the full ordered sequence, not a single JSON blob to parse.
+func reorderActionIDsJSON(actionIDs []int64) string {
+	b, err := json.Marshal(map[string][]int64{"action_ids": actionIDs})
+	if err != nil {
+		return "{}"
+	}
+	return string(b)
 }
