@@ -146,13 +146,16 @@ func run() error {
 	// tools.RegisterClaimTask (the work-axis claim tool, issue #2722,
 	// FR3/FR5), tools.RegisterHeartbeatTask (the work-axis lease-extension
 	// tool, issue #2723, FR6), tools.RegisterCompleteTask (the work-axis
-	// complete-with-a-verdict tool, issue #2725, FR8), and
-	// tools.RegisterRecordNote (the work-axis note-recording tool, issue
-	// #2727, FR11/FR12) all mount on designReg -- create_milestone/
-	// set_fr_budget/add_delivers/add_must_not_foreclose/add_deferral/
-	// set_milestone_status/mark_delivered_item_shipped/move_delivery_scope/
-	// abandon_milestone/create_task/declare_task_dependencies/claim_task/
-	// heartbeat_task/complete_task/record_note all need the same
+	// complete-with-a-verdict tool, issue #2725, FR8),
+	// tools.RegisterAbandonTask (the work-axis abandon tool, issue #2726,
+	// FR9 -- distinct from tools.RegisterAbandonAll's delivery-axis
+	// abandon_milestone above), and tools.RegisterRecordNote (the
+	// work-axis note-recording tool, issue #2727, FR11/FR12) all mount on
+	// designReg -- create_milestone/set_fr_budget/add_delivers/
+	// add_must_not_foreclose/add_deferral/set_milestone_status/
+	// mark_delivered_item_shipped/move_delivery_scope/abandon_milestone/
+	// create_task/declare_task_dependencies/claim_task/heartbeat_task/
+	// complete_task/abandon_task/record_note all need the same
 	// krill-session-derived LB4 subject pair every write tool on that mount
 	// already resolves; get_task needs no session (ungated read, NFR6) but
 	// mounts here too rather than a fourth surface of its own (LB7).
@@ -174,6 +177,7 @@ func run() error {
 	tools.RegisterClaimTask(designReg, sessions, entities.Tasks(), assembler)
 	tools.RegisterHeartbeatTask(designReg, sessions, entities.Tasks())
 	tools.RegisterCompleteTask(designReg, sessions, entities.Tasks(), assembler)
+	tools.RegisterAbandonTask(designReg, sessions, entities.Tasks(), assembler)
 	tools.RegisterRecordNote(designReg, sessions, entities.Tasks())
 
 	// The mcpauth (human) front door's CredentialStore preflights the

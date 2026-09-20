@@ -67,6 +67,7 @@ go_library(
         "session_slice.go",
         "slice.go",
         "task.go",
+        "task_abandon.go",
         "task_claim.go",
         "task_complete.go",
         "task_dependency.go",

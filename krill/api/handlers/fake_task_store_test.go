@@ -15,7 +15,10 @@
 // (issue #2725) widens it once more -- task_complete_test.go's own Testing
 // section is what actually exercises it. The ReclaimExpired stub exists for
 // the same reason now that task_reclaim.go (issue #2724) widens it again --
-// task_reclaim_test.go exercises it.
+// task_reclaim_test.go exercises it. The AbandonClaim stub exists for the
+// same reason now that task_abandon.go (issue #2726) widens it once more --
+// task_abandon_test.go's own Testing-phase task is what actually exercises
+// it.
 package handlers_test
 
 import (
@@ -60,6 +63,10 @@ type fakeTaskStore struct {
 	reclaimErr       error
 	reclaimResult    store.ReclaimResult
 	gotReclaimParams store.ReclaimParams
+
+	abandonErr       error
+	abandonResult    store.AbandonClaimResult
+	gotAbandonParams store.AbandonParams
 
 	recordNoteErr         error
 	gotRecordNoteParams   store.RecordNoteParams
@@ -139,6 +146,14 @@ func (f *fakeTaskStore) ReclaimExpired(ctx context.Context, params store.Reclaim
 		return store.ReclaimResult{}, f.reclaimErr
 	}
 	return f.reclaimResult, nil
+}
+
+func (f *fakeTaskStore) AbandonClaim(ctx context.Context, params store.AbandonParams) (store.AbandonClaimResult, error) {
+	f.gotAbandonParams = params
+	if f.abandonErr != nil {
+		return store.AbandonClaimResult{}, f.abandonErr
+	}
+	return f.abandonResult, nil
 }
 
 func (f *fakeTaskStore) RecordNote(ctx context.Context, params store.RecordNoteParams) (store.Note, error) {
