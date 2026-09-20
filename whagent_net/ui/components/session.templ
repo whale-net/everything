@@ -174,15 +174,6 @@ templ SessionDetail(data SessionDetailData) {
 	@Layout(data.Layout) {
 		<h1 class="text-2xl font-bold text-base-content mb-2">Session { data.Session.SessionID }</h1>
 		@startedByLine(data.Session)
-		if data.IsOwner {
-			<!-- FR1 (session lifecycle controls, issue #2246): the turn
-			     composer and stop control. A non-owner never reaches this
-			     branch, so no composer/stop markup exists in their response
-			     at all. -->
-			<div id="composer-slot" class="mb-4">
-				@OwnerControls(data.Session.SessionID, data.Session.State)
-			</div>
-		}
 		<div
 			id="usage-slot"
 			class="mb-4"
@@ -200,6 +191,20 @@ templ SessionDetail(data SessionDetailData) {
 		>
 			@SessionLive(data.Session, data.Events)
 		</div>
+		if data.IsOwner {
+			<!-- FR1 (session lifecycle controls, issue #2246): the turn
+			     composer and stop control, docked directly under the chat
+			     window and stuck to the bottom of the viewport on scroll,
+			     matching the input bar under the message list convention
+			     every mainstream AI chat UI uses; see OwnerControls' doc
+			     comment for why the composer's own id/hx-target wiring is
+			     unaffected by moving this slot down the page. A non-owner
+			     never reaches this branch, so no composer/stop markup
+			     exists in their response at all. -->
+			<div id="composer-slot" class="sticky bottom-4 z-10 pt-2">
+				@OwnerControls(data.Session.SessionID, data.Session.State)
+			</div>
+		}
 	}
 }
 
@@ -309,17 +314,37 @@ const (
 )
 
 // OwnerControls is FR1's composer/stop-control slot content (issue
-// #2246), mounted into SessionDetail's owner-only composer-slot div. The
-// stop control is omitted for an already-terminal session
+// #2246), mounted into SessionDetail's owner-only composer-slot div,
+// itself now docked to the bottom of the page (SessionDetail's doc
+// comment). Stop is a small, secondary control tucked above the primary
+// input bar -- mainstream chat UIs keep exactly one prominent control in
+// the input row (send) and push anything destructive/occasional out of
+// it -- and is omitted for an already-terminal session
 // (isTerminalSessionState); the composer is always rendered so a race
 // (the session turns terminal between page load and submit) still gets a
 // real inline error from handleSendTurn rather than a control that
 // silently vanished mid-typing.
 templ OwnerControls(sessionID string, state string) {
-	@Composer(sessionID, "")
-	if !isTerminalSessionState(state) {
-		@StopControl(sessionID, "")
-	}
+	<div class="flex flex-col gap-1">
+		if !isTerminalSessionState(state) {
+			<div class="flex justify-end">
+				@StopControl(sessionID, "")
+			</div>
+		}
+		@Composer(sessionID, "")
+	</div>
+}
+
+// sendIcon is the composer's submit button glyph -- a plain up-arrow, the
+// send-button convention shared by every mainstream AI chat UI today.
+// Hand-written inline (mirrors manmanv2/ui/components/layout.templ's own
+// inline-SVG buttons) rather than routed through htmxui.Button, which has
+// no icon-only/circular variant to hang this on.
+templ sendIcon() {
+	<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" class="w-4 h-4">
+		<path d="M12 19V5"></path>
+		<path d="M5 12l7-7 7 7"></path>
+	</svg>
 }
 
 // Composer is FR1's turn-composer form (issue #2246): POSTs to
@@ -332,24 +357,64 @@ templ OwnerControls(sessionID string, state string) {
 // the live transcript (SessionLive), never through this form. A failed
 // submission (e.g. FailedPrecondition for a terminal session) re-renders
 // this same form with errMsg inline instead (FR1's "Error surfacing").
+//
+// Styled as a single rounded pill (the ChatGPT/Claude.ai/Gemini input-bar
+// convention) with a circular icon-only send button -- no "Send" label,
+// matching that same minimalist convention -- plus an inline script for
+// auto-growing the textarea as its content wraps and Enter-to-send
+// (Shift+Enter for a literal newline). The script re-attaches on every
+// render of this fragment, not just the page's first load: htmx
+// evaluates <script> tags it encounters in swapped content (documented
+// htmx behaviour), and this form is itself an hx-swap="outerHTML" target,
+// so a failed-submission round trip needs the same behaviour rewired
+// into the fresh textarea it just rendered, not only the original one.
 templ Composer(sessionID string, errMsg string) {
 	<form
 		id={ composerFormID }
 		hx-post={ fmt.Sprintf("/sessions/%s/turns", sessionID) }
 		hx-target="this"
 		hx-swap="outerHTML"
-		class="flex flex-col gap-2"
 	>
 		if errMsg != "" {
 			<div role="alert" class="alert alert-error mb-2">{ errMsg }</div>
 		}
-		<div class="flex items-end gap-2 rounded-box border border-base-300 bg-base-100 p-2">
-			<textarea name="input" rows="1" class="textarea textarea-ghost w-full resize-none focus:outline-none" placeholder="Send a message" required></textarea>
-			@htmxui.Button(htmxui.ButtonPrimary, htmxui.ButtonSizeMD, false, templ.Attributes{"type": "submit"}) {
-				Send
-			}
+		<div class="flex items-end gap-2 rounded-3xl border border-base-300 bg-base-100 shadow-sm p-2 pl-4">
+			<textarea
+				name="input"
+				rows="1"
+				autofocus
+				class="textarea textarea-ghost w-full resize-none focus:outline-none min-h-10 max-h-52 py-2 px-0 leading-6"
+				placeholder="Send a message..."
+				required
+			></textarea>
+			<button type="submit" class="btn btn-circle btn-primary btn-sm shrink-0" aria-label="Send message">
+				@sendIcon()
+			</button>
 		</div>
 	</form>
+	<script>
+		(function() {
+			var form = document.getElementById("turn-composer");
+			if (!form) { return; }
+			var ta = form.querySelector('textarea[name="input"]');
+			if (!ta) { return; }
+			var autosize = function() {
+				ta.style.height = "auto";
+				ta.style.height = Math.min(ta.scrollHeight, 208) + "px";
+			};
+			ta.addEventListener("input", autosize);
+			autosize();
+			ta.addEventListener("keydown", function(e) {
+				if (e.key === "Enter" && !e.shiftKey) {
+					e.preventDefault();
+					if (ta.value.trim() !== "") {
+						form.requestSubmit();
+					}
+				}
+			});
+			ta.focus();
+		})();
+	</script>
 }
 
 // StopControl is FR1's stop control (issue #2246): POSTs to
@@ -358,7 +423,9 @@ templ Composer(sessionID string, errMsg string) {
 // (the control has nothing left to do once the session is stopped, so it
 // disappears entirely rather than rendering disabled -- mirrors
 // isTerminalSessionState's "omitted, not disabled" stance), or itself
-// again carrying errMsg inline on failure.
+// again carrying errMsg inline on failure. Rendered small/ghost (not a
+// solid error-coloured button) since OwnerControls now places it as a
+// secondary control above the primary composer, not beside it.
 templ StopControl(sessionID string, errMsg string) {
 	<div id={ stopControlID }>
 		if errMsg != "" {
@@ -369,9 +436,7 @@ templ StopControl(sessionID string, errMsg string) {
 			hx-target={ "#" + stopControlID }
 			hx-swap="outerHTML"
 		>
-			@htmxui.Button(htmxui.ButtonError, htmxui.ButtonSizeMD, false, templ.Attributes{"type": "submit"}) {
-				Stop
-			}
+			<button type="submit" class="btn btn-ghost btn-xs text-error">Stop session</button>
 		</form>
 	</div>
 }
