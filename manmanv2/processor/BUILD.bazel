@@ -28,6 +28,10 @@ go_library(
         "@com_github_riverqueue_river//:river",
         "@com_github_riverqueue_river_riverdriver_riverpgxv5//:riverpgxv5",
         "@com_github_riverqueue_river//rivermigrate",
+        "@io_temporal_go_api//enums/v1:enums",
+        "@io_temporal_go_sdk//activity",
+        "@io_temporal_go_sdk//client",
+        "@io_temporal_go_sdk//worker",
     ],
 )
 

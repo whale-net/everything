@@ -28,3 +28,12 @@ const ScanScheduleID = "manmanv2-backup-scan"
 // ScanInterval is how often the scan schedule fires, matching the River
 // scheduler's PeriodicInterval(1 * time.Minute) (FR16 cadence semantics).
 const ScanInterval = time.Minute
+
+// Activity names, registered explicitly in manmanv2/processor/main.go via
+// activity.RegisterOptions{Name: ...} and referenced by name (not by method
+// value) from workflow.go, so the workflow code has no compile-time
+// dependency on the concrete *Activities receiver.
+const (
+	ActivityListDueBackupConfigs = "ListDueBackupConfigs"
+	ActivityDispatchBackup       = "DispatchBackup"
+)
