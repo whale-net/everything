@@ -487,6 +487,16 @@ func (app *App) setupRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("/workshop/conflicts", app.auth.RequireAuthFunc(app.auth.WithAccessToken(app.handleWorkshopLibraryConflicts)))
 	mux.HandleFunc("/workshop/conflicts/resolve", app.auth.RequireAuthFunc(app.auth.WithAccessToken(app.handleResolveLibraryMigrationConflict)))
 
+	// "/backups" (root plan #2777, task #2812 -- FR1, FR3, FR4): the
+	// fleet-wide backup management surface, following "/workshop"'s shape
+	// above -- one top-level page, no new authorization axis (NFR3, same
+	// RequireAuthFunc/WithAccessToken wrapper as every other route here).
+	// "/backups/runs" is the "Backup runs" tab's htmx fragment (filter
+	// submit and "Load more" pagination, NFR4) -- see
+	// handlers_backups_fleet.go and pages/backups.templ.
+	mux.HandleFunc("/backups", app.auth.RequireAuthFunc(app.auth.WithAccessToken(app.handleBackupsPage)))
+	mux.HandleFunc("/backups/runs", app.auth.RequireAuthFunc(app.auth.WithAccessToken(app.handleBackupRunsFragment)))
+
 	// Protected routes - SGC detail. The "/sgc/" and "/sgc/<id>" pages
 	// themselves retired (task #2279, FR16): handleSGCRoutes' fallback now
 	// redirects rather than rendering a page (see its doc comment below).

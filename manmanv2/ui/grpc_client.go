@@ -976,6 +976,21 @@ func (c *ControlClient) ListBackupConfigs(ctx context.Context, volumeID int64) (
 	return resp.Configs, nil
 }
 
+// ListBackupConfigItems lists every BackupConfig fleet-wide (no volume
+// filter) with its volume/game-config/game display context
+// (BackupConfigListItem, already populated server-side regardless of
+// filter -- api/handlers/backup_config.go). Used to populate /backups'
+// BackupConfig and Volume name-based filter pickers (task #2812's
+// Implementation-phase refinement of the raw ID inputs Scaffold shipped)
+// without a second RPC per volume.
+func (c *ControlClient) ListBackupConfigItems(ctx context.Context) ([]*manmanpb.BackupConfigListItem, error) {
+	resp, err := c.api.ListBackupConfigs(ctx, &manmanpb.ListBackupConfigsRequest{PageSize: 100})
+	if err != nil {
+		return nil, err
+	}
+	return resp.Items, nil
+}
+
 func (c *ControlClient) CreateBackupConfig(ctx context.Context, volumeID int64, cadenceMinutes int32, backupPath string, enabled bool) (*manmanpb.BackupConfig, error) {
 	resp, err := c.api.CreateBackupConfig(ctx, &manmanpb.CreateBackupConfigRequest{
 		VolumeId:       volumeID,
@@ -1025,13 +1040,37 @@ func (c *ControlClient) TriggerBackup(ctx context.Context, sgcID, backupConfigID
 	return resp.BackupId, nil
 }
 
-func (c *ControlClient) ListBackups(ctx context.Context, sgcID int64) ([]*manmanpb.Backup, error) {
-	resp, err := c.api.ListBackups(ctx, &manmanpb.ListBackupsRequest{
-		ServerGameConfigId: sgcID,
-		PageSize:           50,
-	})
-	if err != nil {
-		return nil, err
+// BackupListFilter is the /backups fleet-wide list's optional filter set
+// (FR4) plus paging, mirroring ListBackupsRequest's own convention: every
+// field's zero value ("" for Status/PageToken, 0 for the ID filters) means
+// "no filter", not "filter on zero" (#2809, api_messages_backup.proto).
+type BackupListFilter struct {
+	ServerGameConfigID int64
+	VolumeID           int64
+	BackupConfigID     int64
+	Status             string
+	PageToken          string
+	PageSize           int32
+}
+
+// ListBackups lists backup runs fleet-wide (FR1, FR4) -- unlike the
+// per-SGC signature this replaces, no SGC scoping is assumed: a zero
+// ServerGameConfigID in the filter means "every deployment", exactly like
+// every other field. Forwards BackupListFilter onto the API's ListBackups
+// RPC and returns the full response so callers get both the per-row
+// display context (items -- deployment/volume names, #2809) and
+// next_page_token for server-side pagination (NFR4).
+func (c *ControlClient) ListBackups(ctx context.Context, filter BackupListFilter) (*manmanpb.ListBackupsResponse, error) {
+	pageSize := filter.PageSize
+	if pageSize <= 0 {
+		pageSize = 50
 	}
-	return resp.Backups, nil
+	return c.api.ListBackups(ctx, &manmanpb.ListBackupsRequest{
+		ServerGameConfigId: filter.ServerGameConfigID,
+		VolumeId:           filter.VolumeID,
+		BackupConfigId:     filter.BackupConfigID,
+		Status:             filter.Status,
+		PageToken:          filter.PageToken,
+		PageSize:           pageSize,
+	})
 }

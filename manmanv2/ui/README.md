@@ -321,6 +321,37 @@ opens on load when the request carries `?manage=<id>` (the `/servers/<id>`
 redirect target) or when a ports/address action just round-tripped through
 that host (`infrastructureManageRedirectTarget`, `handlers_infrastructure.go`).
 
+## Backups Fleet Surface (M7, #2812)
+
+`GET /backups` (`handleBackupsPage`, `handlers_backups_fleet.go`) is the
+fleet-wide backup management surface (root plan #2777, FR1, FR3, FR4): the
+one place a Server Manager sees backup runs across every deployment and
+volume, no per-deployment page required. Two tabs, switched client-side
+with no navigation: "Backup runs" (this task) and "Backup configs"
+(placeholder, filled in by #2816).
+
+`pages.BackupsPage` (`pages/backups.templ`) renders the "Backup runs" tab's
+filter bar (SGC, volume, BackupConfig, status -- FR4) and table (deployment,
+volume, status, created time, size-once-completed, and trigger origin --
+FR3) via `pages.BackupRunsFragment`, an htmx fragment also served directly
+by `GET /backups/runs` (`handleBackupRunsFragment`) for filter-bar submits
+and "Load more" pagination (server-side via `next_page_token`, NFR4).
+`ControlClient.ListBackups` (`grpc_client.go`) forwards the filter set and
+page token straight onto the API's `ListBackups` RPC (#2809) and returns
+its per-row display context (`items`) unchanged.
+
+The SGC, volume and BackupConfig filters render as name-based `<select>`
+pickers, not raw ID inputs: `handleBackupsPage` resolves their fleet-wide
+option lists once per full page render (`backupRunsFilterOptions`,
+`handlers_backups_fleet.go`) -- SGCs via the same `ListServers` ->
+per-server `ListServerGameConfigs` -> Game/GameConfig-name resolution
+`/activity` already uses, and volumes/BackupConfigs via
+`ControlClient.ListBackupConfigItems`'s fleet-wide `BackupConfigListItem`s.
+A failed `ListBackups` call renders an inline error alert in place of the
+table (`BackupRunsFragmentData.Err`) rather than a bare 500; a resolution
+failure for one picker's options degrades to an empty option list for that
+picker alone rather than failing the page.
+
 ## Game Detail Progressive Disclosure
 
 `GET /games/{id}` (`handleGameDetail`, `handlers_games.go`) provides a tabbed game detail surface (`pages.GameDetail`, `pages/game_detail.templ`) organized into four distinct tabs:

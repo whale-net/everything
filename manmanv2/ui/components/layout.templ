@@ -50,10 +50,13 @@ templ navLink(href, label, active string) {
 // the previous themeManagement() script's manual mobile-menu-button
 // toggle is retired along with the rest of that script.
 //
-// The five entries below and their order are the M6 disposition (task
-// #2372, root plan #2359 FR1/FR6): Dashboard · Games · Activity ·
+// The first five entries below and their order are the M6 disposition
+// (task #2372, root plan #2359 FR1/FR6): Dashboard · Games · Activity ·
 // Infrastructure · Workshop (manmanv2/docs/DESIGN_UI_REDESIGN.md line 26).
-// This supersedes amendment A4's six-entry interim list
+// "Backups" is appended after Workshop (root plan #2777, task #2812 --
+// FR1) for the new fleet-wide backup management surface at "/backups";
+// M6's five-entry list itself is otherwise unchanged. This supersedes
+// amendment A4's six-entry interim list
 // (https://github.com/whale-net/everything/issues/2266#issuecomment-5605995958),
 // which kept a "Sessions" entry only because /sessions was still a live
 // page pending this milestone (FR17's #1726 live-row indicator and #1712
@@ -72,6 +75,7 @@ templ navItems(data LayoutData) {
 		@navLink("/activity", "Activity", data.Active)
 		@navLink("/infrastructure", "Infrastructure", data.Active)
 		@navLink("/workshop", "Workshop", data.Active)
+		@navLink("/backups", "Backups", data.Active)
 	</ul>
 	<div class="dropdown lg:hidden">
 		<div tabindex="0" role="button" class="btn btn-ghost btn-sm" aria-label="Open menu">
@@ -85,6 +89,7 @@ templ navItems(data LayoutData) {
 			@navLink("/activity", "Activity", data.Active)
 			@navLink("/infrastructure", "Infrastructure", data.Active)
 			@navLink("/workshop", "Workshop", data.Active)
+			@navLink("/backups", "Backups", data.Active)
 			<li class="menu-title">Server</li>
 			@MobileServerSelector(data.Servers, data.SelectedServer)
 		</ul>
