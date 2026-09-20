@@ -438,6 +438,17 @@ func (app *App) setupRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("/releases", app.auth.RequireAuthFunc(app.auth.WithAccessToken(app.handleReleaseHistory)))
 	mux.HandleFunc("/releases/trigger", app.auth.RequireAuthFunc(app.auth.WithAccessToken(app.handleReleaseTrigger)))
 	mux.HandleFunc("/releases/{id}", app.auth.RequireAuthFunc(app.auth.WithAccessToken(app.handleReleaseStatus)))
+	// SSE route for release-run status updates (#1699 FR8-FR10, FR12,
+	// FR16). Same composition as /promotions/{id}/status/sse above: wrapped
+	// with noRedirectWriter, does NOT use WithAccessToken. "/releases/{id}"
+	// (above) is a shorter, distinct pattern and does not collide with this
+	// longer one.
+	mux.HandleFunc("/releases/{id}/status/sse", func(w http.ResponseWriter, r *http.Request) {
+		w = newNoRedirectWriter(w)
+		app.auth.RequireAuthFunc(func(w http.ResponseWriter, r *http.Request) {
+			app.handleReleaseStatusSSE(w, r)
+		})(w, r)
+	})
 }
 
 func (app *App) handleHealth(w http.ResponseWriter, r *http.Request) {
