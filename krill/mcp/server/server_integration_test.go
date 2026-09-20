@@ -19,6 +19,15 @@
 //     call's StructuredContent against querier's own output run through
 //     the identical JSON encoding, not merely spot-checking a few fields.
 //
+// Also covers the operator surface (M5, issue #2867):
+// TestMCPOpsSurface_EndToEnd_SameCredentialPathPersonaGated proves
+// /mcp/ops is guarded by the same two-front-door credential path as
+// /mcp/spec and /mcp/design (transport.go's newMux), refuses an
+// unauthenticated request identically, and rejects a real, validly
+// authenticated PersonaAgent caller at the mount's own persona gate
+// (registry.go's registerOpsGated) while letting PersonaSwarmOperator
+// through.
+//
 // mcpauth's CredentialStore here is a hand-rolled in-memory fake, not the
 // real Postgres-backed one: krill has not yet shipped its own
 // mcp_credential-shaped migration (see mcp/main.go's
@@ -186,7 +195,23 @@ func mintWhagentToken(t *testing.T, signer *whagent.Signer, sub string) string {
 
 // ── HTTP server + real MCP client plumbing ──────────────────────────────────
 
-type testServer struct{ url string }
+type testServer struct {
+	url    string // /mcp/spec
+	opsURL string // /mcp/ops (issue #2867)
+}
+
+// opsProbeInput/opsProbeOutput/opsProbeHandler are a synthetic stand-in for
+// a real ops-mount tool -- issue #2867 ships the empty, authorized /mcp/ops
+// mount itself, with no operator verb or console query registered yet (see
+// registry.go's RegisterOpsRead/RegisterOpsWrite doc comments), so there is
+// no real ops tool this file could call to prove the mount's two-front-door
+// authentication and PersonaSwarmOperator authorization actually apply.
+type opsProbeInput struct{}
+type opsProbeOutput struct{}
+
+func opsProbeHandler(context.Context, *mcp.CallToolRequest, opsProbeInput) (*mcp.CallToolResult, opsProbeOutput, error) {
+	return nil, opsProbeOutput{}, nil
+}
 
 func newTestDualAuthServer(t *testing.T, querier *slice.Querier, credentials mcpauth.CredentialStore, verifier *whagent.Verifier) *testServer {
 	t.Helper()
@@ -198,13 +223,36 @@ func newTestDualAuthServer(t *testing.T, querier *slice.Querier, credentials mcp
 	// This file's own coverage (its doc comment) is scoped to specMountPath
 	// -- the FR5-FR8 spec surface's two-front-door round trip. designSrv
 	// below has no design-session tool registered: it exists only so
-	// server.NewDualAuthHTTPHandler's two-mount signature (issue #2547) is
-	// satisfied here, at /mcp/design, alongside specSrv. See
+	// server.NewDualAuthHTTPHandler's three-mount signature (issues #2547,
+	// #2867) is satisfied here, at /mcp/design, alongside specSrv. See
 	// krill/mcp/tools/design_test.go (this task's Testing phase) for the
 	// design-session surface's own end-to-end coverage.
 	designSrv := server.New()
 
-	handler := server.NewDualAuthHTTPHandler(specSrv, designSrv, credentials, server.WhagentAuthConfig{
+	// opsSrv carries one synthetic tool (opsProbeHandler, gated by
+	// server.RegisterOpsRead) so this file's own ops-mount subtest below has
+	// something to actually call -- proving the same two-front-door
+	// authentication path applies at /mcp/ops as at /mcp/spec, and that
+	// PersonaSwarmOperator (resolved by the mcpauth door) is let through
+	// while PersonaAgent (resolved by the whagent door) is rejected by the
+	// mount's own persona gate.
+	opsSrv := server.New()
+	opsReg := server.NewRegistry(opsSrv)
+	server.RegisterOpsRead(opsReg, &mcp.Tool{Name: "ops_probe"}, opsProbeHandler)
+
+	// mirrors mcp/main.go's real construction order: WhagentPersonaMiddleware
+	// mounted OUTSIDE (i.e. before) server.New's own PersonaMiddleware, on
+	// every mount, whenever the agent front door is configured -- without
+	// this, a whagent-routed call's non-empty TokenInfo.UserID would still
+	// satisfy PersonaMiddleware's own check and get resolved to
+	// PersonaSwarmOperator (auth.go), never PersonaAgent, silently making
+	// TestMCPOpsSurface_EndToEnd_SameCredentialPathPersonaGated's rejection
+	// case unable to fail the way it's meant to.
+	specSrv.AddReceivingMiddleware(server.WhagentPersonaMiddleware())
+	designSrv.AddReceivingMiddleware(server.WhagentPersonaMiddleware())
+	opsSrv.AddReceivingMiddleware(server.WhagentPersonaMiddleware())
+
+	handler := server.NewDualAuthHTTPHandler(specSrv, designSrv, opsSrv, credentials, server.WhagentAuthConfig{
 		Verifier: verifier,
 		Audience: testWhagentAudience,
 	}, server.ResourceMetadataConfig{})
@@ -212,11 +260,11 @@ func newTestDualAuthServer(t *testing.T, querier *slice.Querier, credentials mcp
 	t.Cleanup(ts.Close)
 
 	// transport.go's newMux mounts the guarded MCP handler at
-	// specMountPath ("/mcp/spec", unexported -- duplicated here as a
-	// literal since this file is package server_test), not at the mux
-	// root -- unlike audience_score_system's own testServer, which mounts
-	// at "/".
-	return &testServer{url: ts.URL + "/mcp/spec"}
+	// specMountPath ("/mcp/spec") and opsMountPath ("/mcp/ops") --
+	// unexported, duplicated here as literals since this file is package
+	// server_test -- not at the mux root, unlike audience_score_system's
+	// own testServer, which mounts at "/".
+	return &testServer{url: ts.URL + "/mcp/spec", opsURL: ts.URL + "/mcp/ops"}
 }
 
 type bearerRoundTripper struct{ token string }
@@ -229,12 +277,12 @@ func (rt bearerRoundTripper) RoundTrip(req *http.Request) (*http.Response, error
 	return http.DefaultTransport.RoundTrip(req)
 }
 
-func (ts *testServer) connect(t *testing.T, token string) (*mcp.ClientSession, error) {
+func connectTo(t *testing.T, endpoint, token string) (*mcp.ClientSession, error) {
 	t.Helper()
 	ctx := context.Background()
 
 	transport := &mcp.StreamableClientTransport{
-		Endpoint:   ts.url,
+		Endpoint:   endpoint,
 		HTTPClient: &http.Client{Transport: bearerRoundTripper{token: token}},
 	}
 	client := mcp.NewClient(&mcp.Implementation{Name: "test-client", Version: "0.0.1"}, nil)
@@ -243,6 +291,18 @@ func (ts *testServer) connect(t *testing.T, token string) (*mcp.ClientSession, e
 		t.Cleanup(func() { _ = cs.Close() })
 	}
 	return cs, err
+}
+
+func (ts *testServer) connect(t *testing.T, token string) (*mcp.ClientSession, error) {
+	t.Helper()
+	return connectTo(t, ts.url, token)
+}
+
+// connectOps is (ts *testServer) connect's opsURL twin -- same bearer-token
+// plumbing, aimed at the ops mount instead of the spec mount.
+func (ts *testServer) connectOps(t *testing.T, token string) (*mcp.ClientSession, error) {
+	t.Helper()
+	return connectTo(t, ts.opsURL, token)
 }
 
 // sliceCallInput mirrors tools.sliceInput's wire shape (unexported in that
@@ -338,5 +398,61 @@ func TestMCPSpecSurface_EndToEnd_BothFrontDoorsAndDocumentRoundTrip(t *testing.T
 	t.Run("an invalid mcpauth credential is rejected and never resolves a persona", func(t *testing.T) {
 		_, err := ts.connect(t, "0000000000000000000000000000000000000000000000000000000000000000")
 		require.Error(t, err)
+	})
+}
+
+// TestMCPOpsSurface_EndToEnd_SameCredentialPathPersonaGated is issue
+// #2867's Testing section: "/mcp/ops is served and authenticated by the
+// same credential path the other two mounts use; an unauthenticated
+// request is refused identically." It reuses newTestDualAuthServer's
+// opsSrv (opsProbeHandler, registered via server.RegisterOpsRead) rather
+// than a real operator verb -- this task ships the empty, authorized
+// surface only (see registry.go's RegisterOpsRead/RegisterOpsWrite doc
+// comments) -- and proves three things the pure-Go suites cannot:
+//
+//   - an unauthenticated request against /mcp/ops is refused before the
+//     MCP session opens, exactly like /mcp/spec (same requireBearer/
+//     DualAuthHTTPHandler guard, transport.go's newMux);
+//   - the mcpauth door's human identity, which resolves
+//     PersonaSwarmOperator (auth.go), can call the ops tool;
+//   - the whagent door's agent identity, which resolves PersonaAgent, is
+//     rejected -- not by the HTTP layer (the credential itself is valid,
+//     same as it is against /mcp/spec/design) but by registry.go's
+//     registerOpsGated persona check, proving the ops mount's
+//     authorization boundary is enforced on this real transport, not just
+//     in registry_test.go's in-memory-transport coverage.
+func TestMCPOpsSurface_EndToEnd_SameCredentialPathPersonaGated(t *testing.T) {
+	ctx := context.Background()
+	entities, pool := newTestStore(t)
+	scopeID := createScope(t, ctx, pool, "whale-net/krill-mcp-ops-e2e-test")
+	seedWorld(t, ctx, entities, scopeID)
+	querier := slice.NewQuerier(entities)
+
+	credentials := fakeCredentialStore{validToken: "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcd", identity: "swarm-operator-1"}
+	signer, verifier := newTestWhagentVerifier(t, "https://whagent.example.test")
+
+	ts := newTestDualAuthServer(t, querier, credentials, verifier)
+
+	t.Run("unauthenticated request against /mcp/ops is refused before the MCP session opens", func(t *testing.T) {
+		_, err := ts.connectOps(t, "")
+		require.Error(t, err, "a request with no bearer token must be rejected at the HTTP layer, before any MCP session opens -- identical to /mcp/spec")
+	})
+
+	t.Run("PersonaSwarmOperator (mcpauth door) can call an ops tool", func(t *testing.T) {
+		cs, err := ts.connectOps(t, credentials.validToken)
+		require.NoError(t, err, "the mcpauth door must authenticate against /mcp/ops the same way it does against /mcp/spec")
+
+		res, err := cs.CallTool(ctx, &mcp.CallToolParams{Name: "ops_probe", Arguments: opsProbeInput{}})
+		require.NoError(t, err)
+		assert.False(t, res.IsError, "PersonaSwarmOperator must be let through the ops mount's persona gate: %v", res.Content)
+	})
+
+	t.Run("PersonaAgent (whagent door) is rejected by the ops mount's persona gate", func(t *testing.T) {
+		cs, err := ts.connectOps(t, mintWhagentToken(t, signer, "human-ops-e2e-1"))
+		require.NoError(t, err, "the whagent door's credential itself is valid -- the same door accepted at /mcp/spec -- so the MCP session must still open")
+
+		res, err := cs.CallTool(ctx, &mcp.CallToolParams{Name: "ops_probe", Arguments: opsProbeInput{}})
+		require.NoError(t, err, "a rejected call is a tool error, not a protocol error")
+		assert.True(t, res.IsError, "PersonaAgent must be rejected by the ops mount's PersonaSwarmOperator-only gate (registry.go's registerOpsGated)")
 	})
 }

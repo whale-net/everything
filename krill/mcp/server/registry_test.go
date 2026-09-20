@@ -136,3 +136,97 @@ func TestRegisterWrite_AllowList_RejectsDisallowedPersona_AllowsListedPersona(t 
 		assert.Equal(t, int32(1), atomic.LoadInt32(&calls))
 	})
 }
+
+// ── RegisterOpsRead / RegisterOpsWrite (issue #2867) ─────────────────────────
+//
+// Pure-Go coverage of registerOpsGated, the shared gate RegisterOpsRead and
+// RegisterOpsWrite wrap (registry.go): unlike RegisterRead/RegisterWrite,
+// there is no caller-supplied allow-list -- exactly PersonaSwarmOperator is
+// let through, every other resolved persona is rejected, and an
+// unauthenticated call is rejected the same way RegisterRead/RegisterWrite
+// reject one. Both entry points are exercised separately so a regression
+// that wires only one of them to registerOpsGated is still caught.
+
+func TestRegisterOpsRead_NoPersonaResolved_HandlerNotInvoked(t *testing.T) {
+	var calls int32
+	srv, reg := newTestServer("")
+	RegisterOpsRead(reg, &mcp.Tool{Name: "ops_read"}, countingReadHandler(&calls))
+	cs := connectClient(t, srv)
+
+	res, err := cs.CallTool(context.Background(), &mcp.CallToolParams{Name: "ops_read", Arguments: countInput{}})
+	require.NoError(t, err, "an unauthenticated call is a tool error, not a protocol error")
+	assert.True(t, res.IsError, "a call with no resolved persona must be reported as a tool error")
+	assert.Contains(t, textOf(res), "unauthenticated")
+	assert.Equal(t, int32(0), atomic.LoadInt32(&calls), "the handler must never run when no persona has been resolved")
+}
+
+func TestRegisterOpsRead_NonOperatorPersona_Rejected(t *testing.T) {
+	for _, persona := range []Persona{PersonaRequirementContributor, PersonaAgent} {
+		t.Run(string(persona), func(t *testing.T) {
+			var calls int32
+			srv, reg := newTestServer(persona)
+			RegisterOpsRead(reg, &mcp.Tool{Name: "ops_read"}, countingReadHandler(&calls))
+			cs := connectClient(t, srv)
+
+			res, err := cs.CallTool(context.Background(), &mcp.CallToolParams{Name: "ops_read", Arguments: countInput{}})
+			require.NoError(t, err)
+			assert.True(t, res.IsError, "%s must be rejected on the ops mount -- only PersonaSwarmOperator may call an ops tool", persona)
+			assert.Contains(t, textOf(res), "forbidden")
+			assert.Equal(t, int32(0), atomic.LoadInt32(&calls), "the handler must never run for a non-operator persona")
+		})
+	}
+}
+
+func TestRegisterOpsRead_SwarmOperator_HandlerInvokedExactlyOnce(t *testing.T) {
+	var calls int32
+	srv, reg := newTestServer(PersonaSwarmOperator)
+	RegisterOpsRead(reg, &mcp.Tool{Name: "ops_read"}, countingReadHandler(&calls))
+	cs := connectClient(t, srv)
+
+	res, err := cs.CallTool(context.Background(), &mcp.CallToolParams{Name: "ops_read", Arguments: countInput{}})
+	require.NoError(t, err)
+	assert.False(t, res.IsError, "unexpected error: %s", textOf(res))
+	assert.Equal(t, int32(1), atomic.LoadInt32(&calls))
+}
+
+func TestRegisterOpsWrite_NoPersonaResolved_HandlerNotInvoked(t *testing.T) {
+	var calls int32
+	srv, reg := newTestServer("")
+	RegisterOpsWrite(reg, &mcp.Tool{Name: "ops_write"}, countingWriteHandler(&calls))
+	cs := connectClient(t, srv)
+
+	res, err := cs.CallTool(context.Background(), &mcp.CallToolParams{Name: "ops_write", Arguments: countInput{}})
+	require.NoError(t, err, "an unauthenticated call is a tool error, not a protocol error")
+	assert.True(t, res.IsError, "a call with no resolved persona must be reported as a tool error")
+	assert.Contains(t, textOf(res), "unauthenticated")
+	assert.Equal(t, int32(0), atomic.LoadInt32(&calls), "the handler must never run when no persona has been resolved")
+}
+
+func TestRegisterOpsWrite_NonOperatorPersona_Rejected(t *testing.T) {
+	for _, persona := range []Persona{PersonaRequirementContributor, PersonaAgent} {
+		t.Run(string(persona), func(t *testing.T) {
+			var calls int32
+			srv, reg := newTestServer(persona)
+			RegisterOpsWrite(reg, &mcp.Tool{Name: "ops_write"}, countingWriteHandler(&calls))
+			cs := connectClient(t, srv)
+
+			res, err := cs.CallTool(context.Background(), &mcp.CallToolParams{Name: "ops_write", Arguments: countInput{}})
+			require.NoError(t, err)
+			assert.True(t, res.IsError, "%s must be rejected on the ops mount -- only PersonaSwarmOperator may call an ops tool", persona)
+			assert.Contains(t, textOf(res), "forbidden")
+			assert.Equal(t, int32(0), atomic.LoadInt32(&calls), "the handler must never run for a non-operator persona")
+		})
+	}
+}
+
+func TestRegisterOpsWrite_SwarmOperator_HandlerInvokedExactlyOnce(t *testing.T) {
+	var calls int32
+	srv, reg := newTestServer(PersonaSwarmOperator)
+	RegisterOpsWrite(reg, &mcp.Tool{Name: "ops_write"}, countingWriteHandler(&calls))
+	cs := connectClient(t, srv)
+
+	res, err := cs.CallTool(context.Background(), &mcp.CallToolParams{Name: "ops_write", Arguments: countInput{}})
+	require.NoError(t, err)
+	assert.False(t, res.IsError, "unexpected error: %s", textOf(res))
+	assert.Equal(t, int32(1), atomic.LoadInt32(&calls))
+}
