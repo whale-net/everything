@@ -45,6 +45,20 @@ load("@rules_go//go:def.bzl", "go_test")
 # //krill/importer -- the delivery axis has no markdown-import path of its
 # own, so its fixture is built directly against //krill/store.
 #
+# work_axis_integration_test.go (issue #2728, krill M4's own end-to-end
+# proof) shares this target too: one connected walk through the whole work
+# axis (#2719-#2727) against a real Postgres -- task create, dependency
+# gating, claim, heartbeat, lease-expiry reclaim, abandon, complete with
+# verdict lane advance/revert, and FR10's cross-host resume via fetch-by-id
+# -- plus a mechanical audit of every NFR the root plan (#2717) states for
+# this milestone (NFR1-NFR7). Like delivery_axis_integration_test.go, it
+# never goes through //krill/importer -- built directly against
+# //krill/store, and, for NFR6's HTTP write-gate audit, //krill/api/handlers
+# and //krill/work. NFR5's grep assertion reads the work axis's own
+# committed source files through Bazel runfiles -- see the work_axis_srcs
+# filegroup data deps below and //krill/store, //krill/api/handlers, and
+# //krill/work's own BUILD.bazel comments on that filegroup.
+#
 # Run the round-trip tests explicitly (requires a working Docker daemon):
 #   bazel test //krill/conformance:roundtrip_integration_test --test_output=all
 #
@@ -62,10 +76,14 @@ go_test(
         "design_milestone_query_integration_test.go",
         "roundtrip_integration_test.go",
         "whagent_net_import_integration_test.go",
+        "work_axis_integration_test.go",
     ],
     data = [
         "//krill:docs",
+        "//krill/api/handlers:work_axis_srcs",
         "//krill/product:docs",
+        "//krill/store:work_axis_srcs",
+        "//krill/work:work_axis_srcs",
         "//whagent_net:docs",
         "//whagent_net/product:docs",
     ] + glob(["testdata/**"]),
@@ -79,11 +97,13 @@ go_test(
         "requires-network",
     ],
     deps = [
+        "//krill/api/handlers",
         "//krill/importer",
         "//krill/migrate/schema",
         "//krill/render",
         "//krill/slice",
         "//krill/store",
+        "//krill/work",
         "//libs/go/dbtest",
         "//libs/go/migrate",
         "@com_github_google_uuid//:uuid",

@@ -1,5 +1,17 @@
 load("@rules_go//go:def.bzl", "go_library", "go_test")
 
+# The work-axis source files migration 015 (issue #2719-#2727) added to
+# this package, exposed as source (not compiled) data so
+# //krill/conformance:roundtrip_integration_test's NFR5 grep assertion
+# (issue #2728) can read their real, committed content through Bazel
+# runfiles -- mirrors //krill:docs' own "expose real committed files as
+# data" shape, scoped to this package's conformance-test consumer only.
+filegroup(
+    name = "work_axis_srcs",
+    srcs = glob(["task*.go"], exclude = ["*_test.go"]),
+    visibility = ["//krill/conformance:__pkg__"],
+)
+
 # pgx-based repository over //libs/go/db for krill's spec axis (migration
 # 002, issue #2488, M1): Product -> FeatureSet -> Feature -> {FR, NFR},
 # FeatureSet -> LoadBearingDecision, and the product-level Persona/NonGoal
