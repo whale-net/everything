@@ -17,8 +17,50 @@ import (
 
 	"github.com/whale-net/everything/libs/go/s3"
 	"github.com/whale-net/everything/tools/app_registry/server/repository"
+	"github.com/whale-net/everything/tools/app_registry/server/repository/fake"
 	appmetapb "github.com/whale-net/everything/tools/appmeta/proto"
 )
+
+// spyReleaseRunRepo wraps a repository.ReleaseRunRepository, recording every
+// UpdateTargetState call (by target label, not raw row id) into *calls
+// before delegating -- lets a test assert the exact interleaving
+// FinalizePublish's per-target loops produce (FR2/FR3, issue #1701), not
+// just the final settled state GetReleaseRun would show.
+type spyReleaseRunRepo struct {
+	repository.ReleaseRunRepository
+	rowLabel map[string]string // ReleaseRunTargetID -> "<kind>:<owner>"
+	calls    *[]string
+}
+
+func (s spyReleaseRunRepo) UpdateTargetState(ctx context.Context, releaseRunTargetID string, newState repository.ReleaseRunTargetState, buildID, errorDetail string) error {
+	*s.calls = append(*s.calls, fmt.Sprintf("%s->%s", s.rowLabel[releaseRunTargetID], newState))
+	return s.ReleaseRunRepository.UpdateTargetState(ctx, releaseRunTargetID, newState, buildID, errorDetail)
+}
+
+// GetReleaseRun is also spied on: RecordTargetState (record.go) calls it
+// exactly once per top-level invocation (to resolve the row and check its
+// current state), before ever reaching UpdateTargetState -- counting these
+// calls is what distinguishes "two separate RecordTargetState calls per
+// target" (FR2/FR3's actual requirement) from a single call whose internal
+// walk happens to write the same two UpdateTargetState rows, which
+// UpdateTargetState-only counting cannot tell apart.
+func (s spyReleaseRunRepo) GetReleaseRun(ctx context.Context, releaseRunID string) (*repository.ReleaseRun, []repository.ReleaseRunTarget, error) {
+	*s.calls = append(*s.calls, "GetReleaseRun")
+	return s.ReleaseRunRepository.GetReleaseRun(ctx, releaseRunID)
+}
+
+// spyRegistry wraps a *fake.Registry, overriding only ReleaseRuns() to
+// return a spyReleaseRunRepo -- every other repository (Apps, Builds, ...)
+// is the plain fake, promoted unchanged via embedding.
+type spyRegistry struct {
+	*fake.Registry
+	rowLabel map[string]string
+	calls    *[]string
+}
+
+func (s spyRegistry) ReleaseRuns() repository.ReleaseRunRepository {
+	return spyReleaseRunRepo{ReleaseRunRepository: s.Registry.ReleaseRuns(), rowLabel: s.rowLabel, calls: s.calls}
+}
 
 // runFinalizePublish executes a.FinalizePublish through a real Temporal
 // activity environment rather than calling it directly with
@@ -32,7 +74,10 @@ func runFinalizePublish(t *testing.T, a *Activities, plan ResolvedPlan, ref Buil
 	ts := testsuite.WorkflowTestSuite{}
 	env := ts.NewTestActivityEnvironment()
 	env.RegisterActivity(a.FinalizePublish)
-	val, err := env.ExecuteActivity(a.FinalizePublish, plan, ref)
+	// releaseRunID (FR2/FR3, issue #1701): every test in this file already
+	// stamps plan.ReleaseRunID, so reuse it rather than adding a fifth
+	// parameter every call site here would need to pass.
+	val, err := env.ExecuteActivity(a.FinalizePublish, plan.ReleaseRunID, plan, ref)
 	if err != nil {
 		return FinalizeResult{}, err
 	}
@@ -974,7 +1019,7 @@ func TestPublishCLIBinaries_ConfirmedVersion_UploadsWithCorrectKeys(t *testing.T
 	versions := map[string]string{"image:tools-release_helper_go": "v1.2.3"}
 	finalizeTargets := map[string]FinalizeTargetOutcome{}
 
-	failures := a.publishCLIBinaries(context.Background(), []string{"tools-release_helper_go"}, versions, finalizeTargets, cliBinariesDir, true, "")
+	failures := a.publishCLIBinaries(context.Background(), "release-run-1", []string{"tools-release_helper_go"}, versions, finalizeTargets, cliBinariesDir, true, "")
 
 	require.Empty(t, failures)
 	require.Equal(t, FinalizeTargetOutcome{EffectiveVersion: "v1.2.3"}, finalizeTargets["image:tools-release_helper_go"], "a successful publish must record the plan version as this target's outcome")
@@ -1029,7 +1074,7 @@ func TestPublishCLIBinaries_RecordsArtifactInAppRegistry(t *testing.T) {
 	versions := map[string]string{"image:tools-release_helper_go": "v1.2.3"}
 	finalizeTargets := map[string]FinalizeTargetOutcome{}
 
-	failures := a.publishCLIBinaries(context.Background(), []string{"tools-release_helper_go"}, versions, finalizeTargets, cliBinariesDir, true, "build-123")
+	failures := a.publishCLIBinaries(context.Background(), "release-run-1", []string{"tools-release_helper_go"}, versions, finalizeTargets, cliBinariesDir, true, "build-123")
 
 	require.Empty(t, failures)
 	require.Equal(t, FinalizeTargetOutcome{EffectiveVersion: "v1.2.3"}, finalizeTargets["image:tools-release_helper_go"])
@@ -1073,7 +1118,7 @@ func TestPublishCLIBinaries_EmptyBuildID_SkipsRecording(t *testing.T) {
 	versions := map[string]string{"image:tools-release_helper_go": "v1.2.3"}
 	finalizeTargets := map[string]FinalizeTargetOutcome{}
 
-	failures := a.publishCLIBinaries(context.Background(), []string{"tools-release_helper_go"}, versions, finalizeTargets, cliBinariesDir, true, "")
+	failures := a.publishCLIBinaries(context.Background(), "release-run-1", []string{"tools-release_helper_go"}, versions, finalizeTargets, cliBinariesDir, true, "")
 
 	require.Empty(t, failures)
 	require.Equal(t, FinalizeTargetOutcome{EffectiveVersion: "v1.2.3"}, finalizeTargets["image:tools-release_helper_go"])
@@ -1102,7 +1147,7 @@ func TestPublishCLIBinaries_UsesPlanVersion(t *testing.T) {
 	versions := map[string]string{"image:tools-app-registry": "v0.9.0"}
 	finalizeTargets := map[string]FinalizeTargetOutcome{}
 
-	failures := a.publishCLIBinaries(context.Background(), []string{"tools-app-registry"}, versions, finalizeTargets, cliBinariesDir, true, "")
+	failures := a.publishCLIBinaries(context.Background(), "release-run-1", []string{"tools-app-registry"}, versions, finalizeTargets, cliBinariesDir, true, "")
 
 	require.Empty(t, failures)
 	require.Contains(t, uploader.uploads, "app-registry/v0.9.0/checksums.txt")
@@ -1123,7 +1168,7 @@ func TestPublishCLIBinaries_NonCLIBinaryApp_NeverTouched(t *testing.T) {
 	}
 	original := finalizeTargets["image:demo-widget"]
 
-	failures := a.publishCLIBinaries(context.Background(), []string{"demo-widget"}, versions, finalizeTargets, t.TempDir(), true, "")
+	failures := a.publishCLIBinaries(context.Background(), "release-run-1", []string{"demo-widget"}, versions, finalizeTargets, t.TempDir(), true, "")
 
 	require.Empty(t, failures)
 	require.Equal(t, original, finalizeTargets["image:demo-widget"], "a non-CLI-binary app's outcome must be untouched")
@@ -1163,7 +1208,7 @@ func TestPublishCLIBinaries_NoConfirmedVersion_NeverUploads(t *testing.T) {
 			a := &Activities{S3Uploader: uploader}
 			finalizeTargets := map[string]FinalizeTargetOutcome{}
 
-			failures := a.publishCLIBinaries(context.Background(), tc.apps, tc.versions, finalizeTargets, cliBinariesDir, true, "")
+			failures := a.publishCLIBinaries(context.Background(), "release-run-1", tc.apps, tc.versions, finalizeTargets, cliBinariesDir, true, "")
 
 			require.Empty(t, failures, "no confirmed version means nothing to fail either -- this target is simply not touched")
 			require.Empty(t, finalizeTargets, "a target with no confirmed version must not be mutated")
@@ -1185,7 +1230,7 @@ func TestPublishCLIBinaries_UploadFailure_MarksTargetFailed(t *testing.T) {
 	versions := map[string]string{"image:tools-release_helper_go": "v1.2.3"}
 	finalizeTargets := map[string]FinalizeTargetOutcome{}
 
-	failures := a.publishCLIBinaries(context.Background(), []string{"tools-release_helper_go"}, versions, finalizeTargets, cliBinariesDir, true, "")
+	failures := a.publishCLIBinaries(context.Background(), "release-run-1", []string{"tools-release_helper_go"}, versions, finalizeTargets, cliBinariesDir, true, "")
 
 	require.Len(t, failures, 1)
 	require.Contains(t, failures[0], "simulated S3 write failure")
@@ -1207,7 +1252,7 @@ func TestPublishCLIBinaries_MissingCLIBinariesArtifact_FailsThatTarget(t *testin
 	versions := map[string]string{"image:tools-release_helper_go": "v1.2.3"}
 	finalizeTargets := map[string]FinalizeTargetOutcome{}
 
-	failures := a.publishCLIBinaries(context.Background(), []string{"tools-release_helper_go"}, versions, finalizeTargets, t.TempDir(), false /* haveCLIBinaries */, "")
+	failures := a.publishCLIBinaries(context.Background(), "release-run-1", []string{"tools-release_helper_go"}, versions, finalizeTargets, t.TempDir(), false /* haveCLIBinaries */, "")
 
 	require.Len(t, failures, 1)
 	require.Contains(t, failures[0], "no cli-binaries artifact entry")
@@ -1225,4 +1270,171 @@ func TestPublishCLIBinaries_MissingCLIBinariesArtifact_FailsThatTarget(t *testin
 func TestCLIBinaryS3Key_MatchesDocumentedConvention(t *testing.T) {
 	require.Equal(t, "release_helper_go/v1.2.3/release_helper_go-linux-amd64", cliBinaryS3Key("release_helper_go", "v1.2.3", "release_helper_go-linux-amd64"))
 	require.Equal(t, "app-registry/v0.9.0/checksums.txt", cliBinaryS3Key("app-registry", "v0.9.0", "checksums.txt"))
+}
+
+// TestActivities_FinalizePublish_RecordsPublishingThenRecordingPerTarget is
+// FR2/FR3's own regression test (issue #1701): for a two-target plan (both
+// app targets, so both go through the same apps loop), the recorded state
+// sequence is Publishing then Recording for the FIRST target, and only then
+// Publishing then Recording for the SECOND target -- proving the two
+// RecordTargetState calls per target are genuinely interleaved per-target
+// (as two separate call sites in the loop body, per the issue's FR2/FR3),
+// not batched (every target's Publishing first, then every target's
+// Recording).
+func TestActivities_FinalizePublish_RecordsPublishingThenRecordingPerTarget(t *testing.T) {
+	gadgetManifest := `{"domain":"demo","app":"gadget","full_name":"demo-gadget","repository":"ghcr.io/whale-net/demo-gadget","digest":"sha256:bbb"}`
+	widgetManifest := `{"domain":"demo","app":"widget","full_name":"demo-widget","repository":"ghcr.io/whale-net/demo-widget","digest":"sha256:aaa"}`
+	buildManifestZip := zipDir(t, map[string]string{
+		"demo-gadget.json": gadgetManifest,
+		"demo-widget.json": widgetManifest,
+	})
+
+	mux := http.NewServeMux()
+	mux.HandleFunc("/app/installations/1/access_tokens", func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusCreated)
+		_, _ = w.Write([]byte(`{"token":"ghs_test"}`))
+	})
+	mux.HandleFunc("/repos/whale-net/everything/actions/runs/42/artifacts", func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte(`{"artifacts":[{"id":7,"name":"build-manifest","expired":false}]}`))
+	})
+	mux.HandleFunc("/repos/whale-net/everything/actions/artifacts/7/zip", func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write(buildManifestZip)
+	})
+
+	binDir := t.TempDir()
+	bin := filepath.Join(binDir, "fake-release-helper-go")
+	require.NoError(t, os.WriteFile(bin, fakeFinalizeAppScript(), 0o755))
+
+	repo := newTestRegistry(t)
+	run, targets := createTestReleaseRun(t, repo, []repository.ReleaseRunTarget{
+		{OwnerFullName: "demo-gadget", Kind: repository.ArtifactKindImage},
+		{OwnerFullName: "demo-widget", Kind: repository.ArtifactKindImage},
+	})
+	rowLabel := map[string]string{}
+	for _, tgt := range targets {
+		rowLabel[tgt.ReleaseRunTargetID] = repository.TargetKey(tgt.Kind, tgt.OwnerFullName)
+	}
+	var calls []string
+	spy := spyRegistry{Registry: repo, rowLabel: rowLabel, calls: &calls}
+
+	a := &Activities{
+		Registry:       spy,
+		GitHub:         newTestDispatcher(t, mux),
+		PlanBinaryPath: bin,
+		GHCRToken:      "test-ghcr-token",
+	}
+
+	plan := ResolvedPlan{
+		ReleaseRunID: run.ReleaseRunID,
+		Versions: map[string]string{
+			"image:demo-gadget": "v1.0.0",
+			"image:demo-widget": "v1.0.0",
+		},
+	}
+	ref := BuildRef{ReleaseRunID: run.ReleaseRunID, RunID: "42"}
+
+	// Match production ordering (workflow.go's ReleaseWorkflow): FR1's
+	// Building loop always runs before FinalizePublish is ever invoked, so
+	// pre-advance both targets to Building here and reset the spy's call
+	// log -- this test is only about the Publishing/Recording interleaving
+	// FinalizePublish's own loop produces (FR2/FR3), not RecordTargetState's
+	// separately-tested Queued->Building walk.
+	for _, tgt := range []ReleaseTarget{
+		{OwnerFullName: "demo-gadget", Kind: repository.ArtifactKindImage},
+		{OwnerFullName: "demo-widget", Kind: repository.ArtifactKindImage},
+	} {
+		require.NoError(t, a.RecordTargetState(context.Background(), run.ReleaseRunID, tgt, repository.ReleaseRunTargetStateBuilding, "", ""))
+	}
+	calls = nil
+
+	result, err := runFinalizePublish(t, a, plan, ref)
+	require.NoError(t, err)
+	require.True(t, result.Succeeded, "detail: %s", result.Detail)
+
+	// A "GetReleaseRun" entry precedes each transition because
+	// RecordTargetState (record.go) calls it exactly once per top-level
+	// invocation -- so two "GetReleaseRun"s per target here is what proves
+	// this is genuinely two separate RecordTargetState calls (FR2's
+	// Publishing call, FR3's later Recording call), not one call whose
+	// internal walk happens to write both rows -- see spyReleaseRunRepo's
+	// GetReleaseRun override.
+	require.Equal(t, []string{
+		"GetReleaseRun", "image:demo-gadget->publishing",
+		"GetReleaseRun", "image:demo-gadget->recording",
+		"GetReleaseRun", "image:demo-widget->publishing",
+		"GetReleaseRun", "image:demo-widget->recording",
+	}, calls, "each target's Publishing and Recording transitions must be written back-to-back for that target as two separate RecordTargetState calls (FR2/FR3, issue #1701), not batched across targets nor merged into a single walking call")
+}
+
+// TestActivities_RecordTargetState_RetryIdempotency_PerTargetLoop is FR5's
+// regression test (issue #1701): re-running FinalizePublish's exact
+// per-target call shape (Publishing then Recording, per target) a second
+// time -- simulating a Temporal retry of FinalizePublish after a partial
+// prior attempt -- must be a no-op for every call that has already landed,
+// with no error, and must converge on the identical final per-target state
+// a single clean run would reach. Includes the case the issue calls out
+// explicitly: the first attempt already advanced target A to Recording
+// while target B was never touched at all.
+func TestActivities_RecordTargetState_RetryIdempotency_PerTargetLoop(t *testing.T) {
+	repo := newTestRegistry(t)
+	run, _ := createTestReleaseRun(t, repo, []repository.ReleaseRunTarget{
+		{OwnerFullName: "demo-widget", Kind: repository.ArtifactKindImage}, // target A
+		{OwnerFullName: "demo-gadget", Kind: repository.ArtifactKindImage}, // target B
+	})
+
+	a := &Activities{Registry: repo}
+	targetA := ReleaseTarget{OwnerFullName: "demo-widget", Kind: repository.ArtifactKindImage}
+	targetB := ReleaseTarget{OwnerFullName: "demo-gadget", Kind: repository.ArtifactKindImage}
+
+	// "First attempt": target A reaches Recording; target B is left
+	// completely untouched (still Queued), simulating a FinalizePublish
+	// execution that crashed/was retried partway through its loop.
+	require.NoError(t, a.RecordTargetState(context.Background(), run.ReleaseRunID, targetA, repository.ReleaseRunTargetStatePublishing, "", ""))
+	require.NoError(t, a.RecordTargetState(context.Background(), run.ReleaseRunID, targetA, repository.ReleaseRunTargetStateRecording, "", ""))
+
+	// "Retry": FinalizePublish's per-target loop re-runs from the top for
+	// every target, re-requesting Publishing then Recording for BOTH.
+	runLoop := func() error {
+		for _, tgt := range []ReleaseTarget{targetA, targetB} {
+			if err := a.RecordTargetState(context.Background(), run.ReleaseRunID, tgt, repository.ReleaseRunTargetStatePublishing, "", ""); err != nil {
+				return err
+			}
+			if err := a.RecordTargetState(context.Background(), run.ReleaseRunID, tgt, repository.ReleaseRunTargetStateRecording, "", ""); err != nil {
+				return err
+			}
+		}
+		return nil
+	}
+	require.NoError(t, runLoop(), "a retried per-target loop must not error even though target A's Publishing request is now BEHIND its already-Recording state")
+
+	_, gotTargets, err := repo.ReleaseRuns().GetReleaseRun(context.Background(), run.ReleaseRunID)
+	require.NoError(t, err)
+	byOwner := map[string]repository.ReleaseRunTargetState{}
+	for _, tgt := range gotTargets {
+		byOwner[tgt.OwnerFullName] = tgt.State
+	}
+	require.Equal(t, repository.ReleaseRunTargetStateRecording, byOwner["demo-widget"], "target A must remain at Recording, not regress or error on the backwards Publishing request")
+	require.Equal(t, repository.ReleaseRunTargetStateRecording, byOwner["demo-gadget"], "target B must advance to Recording exactly as a single clean run would")
+
+	// A single clean run (no partial first attempt) from Queued must reach
+	// the identical final state -- proving retry idempotency doesn't leave
+	// any target somewhere a clean run wouldn't.
+	repo2 := newTestRegistry(t)
+	run2, _ := createTestReleaseRun(t, repo2, []repository.ReleaseRunTarget{
+		{OwnerFullName: "demo-widget", Kind: repository.ArtifactKindImage},
+		{OwnerFullName: "demo-gadget", Kind: repository.ArtifactKindImage},
+	})
+	a2 := &Activities{Registry: repo2}
+	for _, tgt := range []ReleaseTarget{targetA, targetB} {
+		require.NoError(t, a2.RecordTargetState(context.Background(), run2.ReleaseRunID, tgt, repository.ReleaseRunTargetStatePublishing, "", ""))
+		require.NoError(t, a2.RecordTargetState(context.Background(), run2.ReleaseRunID, tgt, repository.ReleaseRunTargetStateRecording, "", ""))
+	}
+	_, cleanTargets, err := repo2.ReleaseRuns().GetReleaseRun(context.Background(), run2.ReleaseRunID)
+	require.NoError(t, err)
+	cleanByOwner := map[string]repository.ReleaseRunTargetState{}
+	for _, tgt := range cleanTargets {
+		cleanByOwner[tgt.OwnerFullName] = tgt.State
+	}
+	require.Equal(t, cleanByOwner["demo-widget"], byOwner["demo-widget"], "retried loop must converge on the same final state a single clean run reaches")
+	require.Equal(t, cleanByOwner["demo-gadget"], byOwner["demo-gadget"], "retried loop must converge on the same final state a single clean run reaches")
 }

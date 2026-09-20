@@ -297,6 +297,37 @@ func TestActivities_RecordTargetState_IdempotentRetry(t *testing.T) {
 	require.Equal(t, repository.ReleaseRunTargetStateSucceeded, targets[0].State)
 }
 
+// TestActivities_RecordTargetState_BackwardsNonTerminalRequest_NoOp is FR5's
+// direct regression test (issue #1701): a caller requesting a state BEHIND
+// the row's current non-terminal state (e.g. FinalizePublish's own
+// Publishing call racing/arriving after FR1's Building loop -- or, as here,
+// a retried Publishing request after Recording already landed) is a no-op,
+// not an error. Unlike TestActivities_RecordTargetState_DefensiveNoOpOnContradictingTerminalState
+// (which covers the already-terminal short-circuit), this exercises
+// RecordTargetState's endIdx < startIdx walk-skip directly: Recording ->
+// Publishing is a real backwards request between two NON-terminal states.
+func TestActivities_RecordTargetState_BackwardsNonTerminalRequest_NoOp(t *testing.T) {
+	repo := newTestRegistry(t)
+	run, _ := createTestReleaseRun(t, repo, []repository.ReleaseRunTarget{
+		{OwnerFullName: "demo-widget", Kind: repository.ArtifactKindImage},
+	})
+
+	a := &Activities{Registry: repo}
+	target := ReleaseTarget{OwnerFullName: "demo-widget", Kind: repository.ArtifactKindImage}
+	require.NoError(t, a.RecordTargetState(context.Background(), run.ReleaseRunID, target, repository.ReleaseRunTargetStateBuilding, "", ""))
+	require.NoError(t, a.RecordTargetState(context.Background(), run.ReleaseRunID, target, repository.ReleaseRunTargetStatePublishing, "", ""))
+	require.NoError(t, a.RecordTargetState(context.Background(), run.ReleaseRunID, target, repository.ReleaseRunTargetStateRecording, "", ""))
+
+	// Backwards request: the row is already at Recording, a step further
+	// than the Publishing this call asks for.
+	err := a.RecordTargetState(context.Background(), run.ReleaseRunID, target, repository.ReleaseRunTargetStatePublishing, "", "")
+	require.NoError(t, err, "a backwards request between two non-terminal states must be a no-op, not an error (FR5)")
+
+	_, targets, err := repo.ReleaseRuns().GetReleaseRun(context.Background(), run.ReleaseRunID)
+	require.NoError(t, err)
+	require.Equal(t, repository.ReleaseRunTargetStateRecording, targets[0].State, "the backwards request must not regress the row's state")
+}
+
 // TestActivities_RecordTargetState_DefensiveNoOpOnContradictingTerminalState
 // proves RecordTargetState never crashes the workflow when told to move a
 // target that is already terminal to a *different* terminal state -- see
