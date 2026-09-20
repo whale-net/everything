@@ -83,6 +83,44 @@ go_test(
     ],
 )
 
+# Real-Postgres coverage for FR12/FR13/FR15 (task #2811, plan #2777):
+# BackupConfigHandler.ListBackupConfigActions must resolve each attached
+# Action's name/command_template through the action repository while
+# keeping the legacy parallel arrays consistent with `items`, an
+# AddBackupConfigAction at an explicit display_order lands there, and
+# ReorderBackupConfigActions returns NotFound/InvalidArgument for an
+# unknown config or a mismatched action_ids set. Real Postgres via
+# //libs/go/dbtest, same precedent as action_execution_integration_test --
+# no RabbitMQ needed since none of the exercised paths publish a command.
+#
+# Run it explicitly (requires working Docker):
+#   bazel test //manmanv2/api/handlers:backup_config_actions_integration_test --test_output=all
+go_test(
+    # keep
+    name = "backup_config_actions_integration_test",
+    size = "large",
+    timeout = "long",
+    srcs = ["backup_config_actions_integration_test.go"],
+    embed = [":handlers"],
+    gotags = ["integration"],
+    tags = [
+        "external",
+        "integration",
+        "manual",
+        "no-cache",
+        "no-sandbox",
+        "requires-network",
+    ],
+    deps = [
+        "//libs/go/dbtest",
+        "//manmanv2/api/repository/postgres",
+        "//manmanv2/protos:manmanpb",
+        "@com_github_jackc_pgx_v5//pgxpool",
+        "@org_golang_google_grpc//codes",
+        "@org_golang_google_grpc//status",
+    ],
+)
+
 go_test(
     name = "handlers_test",
     srcs = [

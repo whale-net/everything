@@ -2,6 +2,7 @@ package postgres
 
 import (
 	"context"
+	"fmt"
 	"time"
 
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -282,4 +283,63 @@ func (r *BackupConfigRepository) ListActions(ctx context.Context, backupConfigID
 		actions = append(actions, a)
 	}
 	return actions, rows.Err()
+}
+
+// ReorderActions rewrites display_order for backupConfigID's attached actions
+// to a dense 0..n-1 sequence matching actionIDs, inside one transaction. It
+// rejects -- with no partial write -- any actionIDs set that isn't exactly a
+// permutation of the config's current attached-action set: a reorder never
+// adds or drops an attachment (FR15).
+func (r *BackupConfigRepository) ReorderActions(ctx context.Context, backupConfigID int64, actionIDs []int64) error {
+	tx, err := r.db.Begin(ctx)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback(ctx)
+
+	rows, err := tx.Query(ctx, `
+		SELECT action_id FROM backup_config_actions WHERE backup_config_id = $1
+	`, backupConfigID)
+	if err != nil {
+		return err
+	}
+	current := make(map[int64]bool)
+	for rows.Next() {
+		var id int64
+		if err := rows.Scan(&id); err != nil {
+			rows.Close()
+			return err
+		}
+		current[id] = true
+	}
+	if err := rows.Err(); err != nil {
+		rows.Close()
+		return err
+	}
+	rows.Close()
+
+	seen := make(map[int64]bool, len(actionIDs))
+	for _, id := range actionIDs {
+		if seen[id] {
+			return fmt.Errorf("duplicate action_id %d in reorder request", id)
+		}
+		seen[id] = true
+		if !current[id] {
+			return fmt.Errorf("action_id %d is not attached to backup config %d", id, backupConfigID)
+		}
+	}
+	if len(seen) != len(current) {
+		return fmt.Errorf("reorder request omits currently attached action(s) for backup config %d", backupConfigID)
+	}
+
+	for i, actionID := range actionIDs {
+		if _, err := tx.Exec(ctx, `
+			UPDATE backup_config_actions SET display_order = $3
+			WHERE backup_config_id = $1 AND action_id = $2
+		`, backupConfigID, actionID, i); err != nil {
+			return err
+		}
+	}
+
+	return tx.Commit(ctx)
 }
