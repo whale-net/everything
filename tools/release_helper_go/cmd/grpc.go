@@ -457,16 +457,13 @@ func (f *FakeArtifactRegistryClient) ResolveBinaryURL(ctx context.Context, in *p
 
 // FakeReleaseRegistryClient is an in-memory test implementation of
 // pb.ReleaseRegistryClient. Only NotifyBuildComplete (release_helper's
-// notify-build path) and ReportTargetProgress (its in-process progress
-// reporter) carry Fn/calls plumbing today -- the read methods
+// notify-build path) carries Fn/calls plumbing today -- the read methods
 // return zero values so the fake satisfies the full interface without
 // every other test in this package needing to mock five more methods.
 type FakeReleaseRegistryClient struct {
-	NotifyBuildCompleteFn  func(ctx context.Context, in *pb.NotifyBuildCompleteRequest, opts ...grpc.CallOption) (*pb.NotifyBuildCompleteResponse, error)
-	ReportTargetProgressFn func(ctx context.Context, in *pb.ReportTargetProgressRequest, opts ...grpc.CallOption) (*pb.ReportTargetProgressResponse, error)
+	NotifyBuildCompleteFn func(ctx context.Context, in *pb.NotifyBuildCompleteRequest, opts ...grpc.CallOption) (*pb.NotifyBuildCompleteResponse, error)
 
-	NotifyBuildCompleteCalls  []*pb.NotifyBuildCompleteRequest
-	ReportTargetProgressCalls []*pb.ReportTargetProgressRequest
+	NotifyBuildCompleteCalls []*pb.NotifyBuildCompleteRequest
 }
 
 // NewFakeReleaseRegistryClient creates a new FakeReleaseRegistryClient.
@@ -496,12 +493,4 @@ func (f *FakeReleaseRegistryClient) NotifyBuildComplete(ctx context.Context, in 
 		return f.NotifyBuildCompleteFn(ctx, in, opts...)
 	}
 	return &pb.NotifyBuildCompleteResponse{Signaled: true}, nil
-}
-
-func (f *FakeReleaseRegistryClient) ReportTargetProgress(ctx context.Context, in *pb.ReportTargetProgressRequest, opts ...grpc.CallOption) (*pb.ReportTargetProgressResponse, error) {
-	f.ReportTargetProgressCalls = append(f.ReportTargetProgressCalls, in)
-	if f.ReportTargetProgressFn != nil {
-		return f.ReportTargetProgressFn(ctx, in, opts...)
-	}
-	return &pb.ReportTargetProgressResponse{Signaled: true}, nil
 }
