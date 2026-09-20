@@ -150,6 +150,14 @@ func setupRoutes(mux *http.ServeMux, pool *pgxpool.Pool, githubToken string) {
 	// claim return.
 	mux.Handle("POST /tasks/{id}/complete", gate(handlers.CompleteTaskHandler(entities.Tasks(), assembler)))
 
+	// task_reclaim (issue #2724, FR7): an operator/automation-triggered
+	// sweep of the caller's own scope for lease-expired tasks -- gated like
+	// every other write endpoint (NFR6). No background scheduler/cron
+	// exists in this milestone; this is the sweep's only entry point aside
+	// from ClaimTask's own expired-lease branch (#2722), which both call
+	// the same underlying closure logic rather than duplicating it.
+	mux.Handle("POST /tasks/reclaim", gate(handlers.ReclaimExpiredHandler(entities.Tasks())))
+
 	// task_note (issue #2727, FR11/FR12): any Agent, claimant or not, can
 	// record a flat, immutable note against a task or a spec-axis entity
 	// -- POST gated (NFR6; the only other gate is the session requirement

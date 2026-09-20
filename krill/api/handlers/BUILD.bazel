@@ -73,6 +73,7 @@ go_library(
         "task_lease.go",
         "task_note.go",
         "task_payload.go",
+        "task_reclaim.go",
         "types.go",
     ],
     importpath = "github.com/whale-net/everything/krill/api/handlers",

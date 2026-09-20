@@ -239,6 +239,18 @@ type TaskStore interface {
 	// task.current_lane/current_claim_id/lease_expires_at in place.
 	CompleteTask(ctx context.Context, params CompleteTaskParams) (TaskLaneResult, error)
 
+	// ReclaimExpired is FR7's lease-expiry sweep (task_reclaim.go, issue
+	// #2724): per candidate task (every lease-expired task in
+	// params.ScopeID, or exactly params.TaskID when set), in its own
+	// transaction, closes the stale claim (release_reason='reclaim'),
+	// records one 'lapsed' task_attempt, increments attempt_count, and
+	// clears current_claim_id/lease_expires_at -- making the task claimable
+	// again below DefaultAttemptCap, or refusing to re-serve it (via
+	// ClaimTask's own attempt-cap check) at/over it. current_lane is never
+	// touched. A repeated sweep over an already-reclaimed task is a
+	// no-op, not an error.
+	ReclaimExpired(ctx context.Context, params ReclaimParams) (ReclaimResult, error)
+
 	// RecordNote appends one `task_note` row (task_note.go, issue #2727,
 	// FR11/FR12): a flat, immutable note against exactly one target --
 	// params.TaskID, or params.EntityKind+params.EntityID naming a
