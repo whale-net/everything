@@ -228,6 +228,17 @@ type TaskStore interface {
 	// behavior.
 	Heartbeat(ctx context.Context, params HeartbeatParams) (LeaseState, error)
 
+	// CompleteTask is FR8's krill-decided lane advance/revert
+	// (task_complete.go, issue #2725): a single transaction that verifies
+	// params.ClaimID is the task's current claim (ErrClaimNotCurrent
+	// otherwise), computes the destination lane with the package-level
+	// NextLane against the task's own lane_sequence/current_lane (never a
+	// caller-supplied lane -- CompleteTaskParams carries no such field),
+	// releases the claim (release_reason='complete'), records one
+	// `completed` task_attempt row, and updates
+	// task.current_lane/current_claim_id/lease_expires_at in place.
+	CompleteTask(ctx context.Context, params CompleteTaskParams) (TaskLaneResult, error)
+
 	// RecordNote appends one `task_note` row (task_note.go, issue #2727,
 	// FR11/FR12): a flat, immutable note against exactly one target --
 	// params.TaskID, or params.EntityKind+params.EntityID naming a

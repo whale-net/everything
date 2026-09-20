@@ -142,6 +142,14 @@ func setupRoutes(mux *http.ServeMux, pool *pgxpool.Pool, githubToken string) {
 	// rejected with a 409, never a silently-accepted no-op.
 	mux.Handle("POST /tasks/{id}/heartbeat", gate(handlers.HeartbeatHandler(entities.Tasks())))
 
+	// task_complete (issue #2725, FR8): an Agent holding a task's current
+	// claim reports a pass/fail verdict -- krill, not the caller, decides
+	// whether the task advances or reverts one lane in its own lane
+	// sequence. Gated like every other write endpoint (NFR6); the
+	// response is the same work.Payload document GET /tasks/{id} and
+	// claim return.
+	mux.Handle("POST /tasks/{id}/complete", gate(handlers.CompleteTaskHandler(entities.Tasks(), assembler)))
+
 	// task_note (issue #2727, FR11/FR12): any Agent, claimant or not, can
 	// record a flat, immutable note against a task or a spec-axis entity
 	// -- POST gated (NFR6; the only other gate is the session requirement

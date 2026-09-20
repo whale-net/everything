@@ -10,7 +10,10 @@
 // reason now that task_note.go (issue #2727) widens it again --
 // task_note_test.go's own later Testing-phase task exercises them. The
 // Heartbeat stub exists for the same reason now that task_lease.go (issue
-// #2723) widens it once more -- task_lease_test.go exercises it.
+// #2723) widens it once more -- task_lease_test.go exercises it. The
+// CompleteTask stub exists for the same reason now that task_complete.go
+// (issue #2725) widens it once more -- task_complete_test.go's own Testing
+// section is what actually exercises it.
 package handlers_test
 
 import (
@@ -47,6 +50,10 @@ type fakeTaskStore struct {
 	heartbeatErr       error
 	heartbeatResult    store.LeaseState
 	gotHeartbeatParams store.HeartbeatParams
+
+	completeErr       error
+	completeResult    store.TaskLaneResult
+	gotCompleteParams store.CompleteTaskParams
 
 	recordNoteErr         error
 	gotRecordNoteParams   store.RecordNoteParams
@@ -110,6 +117,14 @@ func (f *fakeTaskStore) Heartbeat(ctx context.Context, params store.HeartbeatPar
 		return store.LeaseState{}, f.heartbeatErr
 	}
 	return f.heartbeatResult, nil
+}
+
+func (f *fakeTaskStore) CompleteTask(ctx context.Context, params store.CompleteTaskParams) (store.TaskLaneResult, error) {
+	f.gotCompleteParams = params
+	if f.completeErr != nil {
+		return store.TaskLaneResult{}, f.completeErr
+	}
+	return f.completeResult, nil
 }
 
 func (f *fakeTaskStore) RecordNote(ctx context.Context, params store.RecordNoteParams) (store.Note, error) {
