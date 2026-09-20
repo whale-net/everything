@@ -612,7 +612,11 @@ func renderMarkdown(source string) string {
 // (chat-start, neutral bubble), matching the now-conventional AI chatbot
 // layout. Content renders through renderMarkdown so fenced code, lists,
 // links, etc. in either a user's or the assistant's turn render as actual
-// markup rather than a literal wall of text.
+// markup rather than a literal wall of text. The assistant bubble gets a
+// wider max-width and roomier padding/line-height than daisyUI's default
+// -- assistant turns tend to run long and prose-heavy (multi-paragraph
+// explanations, code blocks), so the tight, texting-sized default bubble
+// reads as cramped; a short user turn keeps the default sizing.
 templ messageRow(role string, label string, ev TranscriptEventView) {
 	{{ payload, err := decodeMessagePayload(ev.Payload) }}
 	<div class={ "chat", templ.KV("chat-end", role == "user"), templ.KV("chat-start", role != "user") }>
@@ -627,32 +631,33 @@ templ messageRow(role string, label string, ev TranscriptEventView) {
 		if err != nil {
 			<div class="chat-bubble chat-bubble-error text-sm">failed to decode event payload</div>
 		} else {
-			<div class={ "chat-bubble chat-markdown", templ.KV("chat-bubble-primary", role == "user") }>
+			<div class={ "chat-bubble chat-markdown", templ.KV("chat-bubble-primary", role == "user"), templ.KV("max-w-xl md:max-w-2xl px-5 py-3 text-[15px] leading-relaxed", role != "user") }>
 				@templ.Raw(renderMarkdown(payload.Content))
 			</div>
 		}
 	</div>
 }
 
-// toolCallRow/toolResultRow render tool events collapsed by default,
-// behind a daisyUI focus-toggled collapse (tabindex-driven, no JS
-// required) -- FR2's "tools hidden with an option to expand": the
-// summary line (tool name, badge) is always visible, the arguments/result
-// body only after the row is focused/clicked open.
+// toolCallRow/toolResultRow render tool events as a single tiny line --
+// icon, name, and (truncated) args/content at text-xs, no card chrome --
+// matching a CLI's own tool-call line size rather than a bordered/
+// badged daisyUI collapse card, which reads as a "full bar" once a
+// transcript has more than a couple of tool calls in it. <details>/
+// <summary> keeps the same click-to-expand affordance the old collapse
+// card had, for the rare long argument/result payload, without the
+// border/background/badge chrome inflating the collapsed line.
 templ toolCallRow(ev TranscriptEventView) {
 	{{ payload, err := decodeToolCallPayload(ev.Payload) }}
 	if err != nil {
 		<p class="text-error text-sm">failed to decode event payload</p>
 	} else {
-		<div tabindex="0" class="collapse collapse-arrow border border-base-300 bg-base-200/60 rounded-box text-sm">
-			<div class="collapse-title font-mono">
-				<span class="badge badge-ghost badge-xs align-middle mr-2">tool call</span>
-				{ payload.Name }
-			</div>
-			<div class="collapse-content">
-				<pre class="whitespace-pre-wrap font-mono text-xs">{ payload.Arguments }</pre>
-			</div>
-		</div>
+		<details>
+			<summary class="flex items-center gap-1.5 py-0.5 font-mono text-xs text-base-content/50 cursor-pointer marker:hidden">
+				<span class="text-base-content/30">&#9679;</span>
+				<span class="truncate">{ payload.Name }({ payload.Arguments })</span>
+			</summary>
+			<pre class="whitespace-pre-wrap font-mono text-xs text-base-content/60 pl-4">{ payload.Arguments }</pre>
+		</details>
 	}
 }
 
@@ -661,15 +666,13 @@ templ toolResultRow(ev TranscriptEventView) {
 	if err != nil {
 		<p class="text-error text-sm">failed to decode event payload</p>
 	} else {
-		<div tabindex="0" class={ "collapse collapse-arrow border rounded-box text-sm", templ.KV("border-warning bg-warning/10", payload.IsError), templ.KV("border-base-300 bg-base-200/60", !payload.IsError) }>
-			<div class="collapse-title font-mono">
-				<span class={ "badge badge-xs align-middle mr-2", templ.KV("badge-warning", payload.IsError), templ.KV("badge-ghost", !payload.IsError) }>tool result</span>
-				{ payload.Name }
-			</div>
-			<div class="collapse-content">
-				<pre class="whitespace-pre-wrap font-mono text-xs">{ payload.Content }</pre>
-			</div>
-		</div>
+		<details>
+			<summary class={ "flex items-center gap-1.5 py-0.5 font-mono text-xs cursor-pointer marker:hidden", templ.KV("text-warning", payload.IsError), templ.KV("text-base-content/50", !payload.IsError) }>
+				<span class="text-base-content/30">&#8618;</span>
+				<span class="truncate">{ payload.Name }: { payload.Content }</span>
+			</summary>
+			<pre class={ "whitespace-pre-wrap font-mono text-xs pl-4", templ.KV("text-warning", payload.IsError), templ.KV("text-base-content/60", !payload.IsError) }>{ payload.Content }</pre>
+		</details>
 	}
 }
 
