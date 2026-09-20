@@ -209,8 +209,10 @@ var manmanv2RouteTable = []string{
 	"/deployments/1", // #2279 amendment A3: deployment-first name for "/sgc/<id>"'s redirect
 	"/backup-configs/create",
 	"/backup-configs/1",
-	"/backups",      // #2812 M7: fleet-wide backup management surface shell (FR1, FR3, FR4)
-	"/backups/runs", // #2812 M7: "Backup runs" tab's htmx fragment (filter submit + "Load more")
+	"/backups",              // #2812 M7: fleet-wide backup management surface shell (FR1, FR3, FR4)
+	"/backups/runs",         // #2812 M7: "Backup runs" tab's htmx fragment (filter submit + "Load more")
+	"/backups/trigger-form", // #2813 M7: fleet-wide "trigger a backup run" picker fragment (FR5)
+	"/backups/trigger",      // #2813 M7: fleet-wide "trigger a backup run" submit target (FR5)
 	"/api/dashboard-summary",
 	"/api/dashboard-sessions",
 }

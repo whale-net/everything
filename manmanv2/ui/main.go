@@ -496,6 +496,13 @@ func (app *App) setupRoutes(mux *http.ServeMux) {
 	// handlers_backups_fleet.go and pages/backups.templ.
 	mux.HandleFunc("/backups", app.auth.RequireAuthFunc(app.auth.WithAccessToken(app.handleBackupsPage)))
 	mux.HandleFunc("/backups/runs", app.auth.RequireAuthFunc(app.auth.WithAccessToken(app.handleBackupRunsFragment)))
+	// "/backups/trigger-form" and "/backups/trigger" (task #2813, FR5): the
+	// fleet-wide "trigger a backup run" entry point -- a picker (GET, listing
+	// every BackupConfig plus, once one is chosen, its eligible deployments)
+	// and the submit target (POST, calling the existing TriggerBackup RPC).
+	// Same auth wrapper as every other "/backups" route (NFR3).
+	mux.HandleFunc("/backups/trigger-form", app.auth.RequireAuthFunc(app.auth.WithAccessToken(app.handleBackupTriggerForm)))
+	mux.HandleFunc("/backups/trigger", app.auth.RequireAuthFunc(app.auth.WithAccessToken(app.handleBackupTrigger)))
 
 	// Protected routes - SGC detail. The "/sgc/" and "/sgc/<id>" pages
 	// themselves retired (task #2279, FR16): handleSGCRoutes' fallback now

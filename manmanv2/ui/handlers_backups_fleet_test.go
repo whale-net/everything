@@ -5,11 +5,14 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"strings"
 	"testing"
 
 	manmanpb "github.com/whale-net/everything/manmanv2/protos"
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 )
 
 // This file guards task #2812 (root plan #2777, M7): the fleet-wide
@@ -50,6 +53,14 @@ type fakeBackupsFleetAPIClient struct {
 	// tests can assert a query-string filter was forwarded onto the right
 	// request field (FR4), not just that the call happened.
 	lastListBackupsReq *manmanpb.ListBackupsRequest
+
+	// triggerBackupResp/triggerBackupErr back TriggerBackup (task #2813,
+	// FR5); lastTriggerBackupReq captures the most recent request so tests
+	// can assert the submitted ids -- not just backupConfigIDs -- are
+	// forwarded onto the RPC unchanged.
+	triggerBackupResp    *manmanpb.TriggerBackupResponse
+	triggerBackupErr     error
+	lastTriggerBackupReq *manmanpb.TriggerBackupRequest
 }
 
 func (f *fakeBackupsFleetAPIClient) ListServers(ctx context.Context, in *manmanpb.ListServersRequest, opts ...grpc.CallOption) (*manmanpb.ListServersResponse, error) {
@@ -84,6 +95,17 @@ func (f *fakeBackupsFleetAPIClient) ListBackups(ctx context.Context, in *manmanp
 	return f.listBackupsResp, nil
 }
 
+func (f *fakeBackupsFleetAPIClient) TriggerBackup(ctx context.Context, in *manmanpb.TriggerBackupRequest, opts ...grpc.CallOption) (*manmanpb.TriggerBackupResponse, error) {
+	f.lastTriggerBackupReq = in
+	if f.triggerBackupErr != nil {
+		return nil, f.triggerBackupErr
+	}
+	if f.triggerBackupResp != nil {
+		return f.triggerBackupResp, nil
+	}
+	return &manmanpb.TriggerBackupResponse{BackupId: 999}, nil
+}
+
 func newBackupsFleetTestApp(api *fakeBackupsFleetAPIClient) *App {
 	return &App{grpc: &ControlClient{api: api}}
 }
@@ -107,8 +129,8 @@ func baseBackupsFleetFixture() *fakeBackupsFleetAPIClient {
 			901: {ConfigId: 901, GameId: 9001, Name: "Creative"},
 		},
 		backupConfigItems: []*manmanpb.BackupConfigListItem{
-			{Config: &manmanpb.BackupConfig{BackupConfigId: 1, VolumeId: 501}, VolumeName: "World Data", GameConfigName: "Survival"},
-			{Config: &manmanpb.BackupConfig{BackupConfigId: 2, VolumeId: 502}, VolumeName: "Mods", GameConfigName: "Creative"},
+			{Config: &manmanpb.BackupConfig{BackupConfigId: 1, VolumeId: 501}, VolumeName: "World Data", GameConfigId: 900, GameConfigName: "Survival"},
+			{Config: &manmanpb.BackupConfig{BackupConfigId: 2, VolumeId: 502}, VolumeName: "Mods", GameConfigId: 901, GameConfigName: "Creative"},
 		},
 	}
 }
@@ -403,5 +425,192 @@ func TestHandleBackupsPage_FilterBarUsesNameBasedPickers(t *testing.T) {
 		if !strings.Contains(body, want) {
 			t.Errorf("expected filter picker option %q in rendered page, got: %s", want, body)
 		}
+	}
+}
+
+// --- task #2813 (FR5): trigger a backup run from the fleet surface --------
+//
+// mutation-tested (verified red, by hand, then reverted): temporarily
+// deleting handleBackupTrigger's `bcErr != nil` check from its malformed-id
+// guard (keeping only the sgcID check) made
+// TestHandleBackupTrigger_MissingBackupConfigIDReturns400WithoutCallingRPC
+// fail (a non-numeric backup_config_id no longer got rejected before
+// TriggerBackup was called); restoring the check made it pass again.
+
+func renderBackupTriggerFormHTTP(t *testing.T, api *fakeBackupsFleetAPIClient, rawQuery string) (int, string) {
+	t.Helper()
+	app := newBackupsFleetTestApp(api)
+	target := "/backups/trigger-form"
+	if rawQuery != "" {
+		target += "?" + rawQuery
+	}
+	req := httptest.NewRequest(http.MethodGet, target, nil)
+	w := httptest.NewRecorder()
+	app.handleBackupTriggerForm(w, req)
+	return w.Code, w.Body.String()
+}
+
+func postBackupTriggerHTTP(t *testing.T, api *fakeBackupsFleetAPIClient, form url.Values) (int, string) {
+	t.Helper()
+	app := newBackupsFleetTestApp(api)
+	req := httptest.NewRequest(http.MethodPost, "/backups/trigger", strings.NewReader(form.Encode()))
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	w := httptest.NewRecorder()
+	app.handleBackupTrigger(w, req)
+	return w.Code, w.Body.String()
+}
+
+// Picker test: the fragment lists BackupConfigs from more than one
+// GameConfig, proving the picker is fleet-wide, not scoped to a single SGC
+// or GameConfig the way a per-deployment page's own BackupConfig list would
+// be.
+func TestHandleBackupTriggerForm_ListsBackupConfigsFleetWide(t *testing.T) {
+	api := baseBackupsFleetFixture()
+
+	code, body := renderBackupTriggerFormHTTP(t, api, "")
+	if code != http.StatusOK {
+		t.Fatalf("status = %d, want %d; body: %s", code, http.StatusOK, body)
+	}
+	for _, want := range []string{"Survival / World Data", "Creative / Mods"} {
+		if !strings.Contains(body, want) {
+			t.Errorf("expected BackupConfig option %q from the fleet-wide picker, got: %s", want, body)
+		}
+	}
+}
+
+// Given a chosen BackupConfig, the picker lists only the deployments (SGCs)
+// eligible for it -- i.e. whose GameConfigId matches that BackupConfig's own
+// game config -- not every deployment fleet-wide.
+func TestHandleBackupTriggerForm_SelectedConfigListsOnlyEligibleDeployments(t *testing.T) {
+	api := baseBackupsFleetFixture()
+
+	code, body := renderBackupTriggerFormHTTP(t, api, "backup_config_id=1")
+	if code != http.StatusOK {
+		t.Fatalf("status = %d, want %d; body: %s", code, http.StatusOK, body)
+	}
+	if !strings.Contains(body, "Alpha / Survival") {
+		t.Errorf("expected the Survival BackupConfig's picker to list its own eligible deployment (Alpha / Survival), got: %s", body)
+	}
+	if strings.Contains(body, "Beta / Creative") {
+		t.Errorf("expected the Survival BackupConfig's picker to exclude the Creative deployment (Beta / Creative), got: %s", body)
+	}
+}
+
+// A well-formed POST calls TriggerBackup with the submitted deployment and
+// BackupConfig ids and re-renders the runs fragment (via the out-of-band
+// panel refresh) so the new pending row appears without navigation.
+func TestHandleBackupTrigger_WellFormedPostCallsTriggerBackupAndRefreshesRunList(t *testing.T) {
+	api := baseBackupsFleetFixture()
+	api.triggerBackupResp = &manmanpb.TriggerBackupResponse{BackupId: 42}
+	api.listBackupsResp = &manmanpb.ListBackupsResponse{
+		Items: []*manmanpb.BackupListItem{
+			{
+				Backup:               &manmanpb.Backup{BackupId: 42, ServerGameConfigId: 55, Status: "pending", TriggerSource: "manual"},
+				ServerGameConfigName: "Alpha / Survival",
+				VolumeName:           "World Data",
+			},
+		},
+	}
+
+	form := url.Values{"server_game_config_id": {"55"}, "backup_config_id": {"1"}}
+	code, body := postBackupTriggerHTTP(t, api, form)
+	if code != http.StatusOK {
+		t.Fatalf("status = %d, want %d; body: %s", code, http.StatusOK, body)
+	}
+
+	if api.lastTriggerBackupReq == nil {
+		t.Fatal("expected POST /backups/trigger to call TriggerBackup")
+	}
+	if api.lastTriggerBackupReq.ServerGameConfigId != 55 {
+		t.Errorf("TriggerBackup ServerGameConfigId = %d, want 55", api.lastTriggerBackupReq.ServerGameConfigId)
+	}
+	if api.lastTriggerBackupReq.BackupConfigId != 1 {
+		t.Errorf("TriggerBackup BackupConfigId = %d, want 1", api.lastTriggerBackupReq.BackupConfigId)
+	}
+
+	if !strings.Contains(body, "42") {
+		t.Errorf("expected the returned backup id (42) in the response, got: %s", body)
+	}
+	// The refreshed run list carries the new pending row and its manual
+	// origin (#2808's trigger_source, round-tripped here rather than
+	// re-implemented -- see backupRunOrigin).
+	if !strings.Contains(body, "Alpha / Survival") || !strings.Contains(body, "pending") || !strings.Contains(body, "manual") {
+		t.Errorf("expected an out-of-band refresh of the run list showing the new pending/manual row, got: %s", body)
+	}
+	if !strings.Contains(body, `hx-swap-oob="true"`) {
+		t.Errorf("expected the run list refresh to be an out-of-band swap so the Blade's own response isn't disturbed, got: %s", body)
+	}
+}
+
+// A malformed/missing id is rejected with 400 before TriggerBackup is ever
+// called.
+func TestHandleBackupTrigger_MissingBackupConfigIDReturns400WithoutCallingRPC(t *testing.T) {
+	api := baseBackupsFleetFixture()
+
+	form := url.Values{"server_game_config_id": {"55"}}
+	code, _ := postBackupTriggerHTTP(t, api, form)
+	if code != http.StatusBadRequest {
+		t.Errorf("status = %d, want %d", code, http.StatusBadRequest)
+	}
+	if api.lastTriggerBackupReq != nil {
+		t.Errorf("expected TriggerBackup not to be called for a missing backup_config_id, got request: %+v", api.lastTriggerBackupReq)
+	}
+}
+
+func TestHandleBackupTrigger_MissingServerGameConfigIDReturns400WithoutCallingRPC(t *testing.T) {
+	api := baseBackupsFleetFixture()
+
+	form := url.Values{"backup_config_id": {"1"}}
+	code, _ := postBackupTriggerHTTP(t, api, form)
+	if code != http.StatusBadRequest {
+		t.Errorf("status = %d, want %d", code, http.StatusBadRequest)
+	}
+	if api.lastTriggerBackupReq != nil {
+		t.Errorf("expected TriggerBackup not to be called for a missing server_game_config_id, got request: %+v", api.lastTriggerBackupReq)
+	}
+}
+
+// A FailedPrecondition from TriggerBackup (the "no session found for SGC"
+// case api/handlers/backup_config.go returns when the chosen deployment has
+// no running session) renders inline as a readable, actionable message --
+// not a generic 500 -- and does not refresh the run list (nothing new was
+// created).
+func TestHandleBackupTrigger_FailedPreconditionRendersActionableInlineMessage(t *testing.T) {
+	api := baseBackupsFleetFixture()
+	api.triggerBackupErr = status.Error(codes.FailedPrecondition, "no session found for SGC")
+
+	form := url.Values{"server_game_config_id": {"55"}, "backup_config_id": {"1"}}
+	code, body := postBackupTriggerHTTP(t, api, form)
+	if code != http.StatusOK {
+		t.Fatalf("status = %d, want %d (a FailedPrecondition must render inline, not bubble up); body: %s", code, http.StatusOK, body)
+	}
+	if strings.Contains(body, "no session found for SGC") {
+		t.Errorf("expected the raw gRPC status text to be replaced with an actionable message, got: %s", body)
+	}
+	if !strings.Contains(body, "start it before triggering a backup") {
+		t.Errorf("expected an actionable no-running-session message, got: %s", body)
+	}
+	if strings.Contains(body, `hx-swap-oob="true"`) {
+		t.Errorf("expected no run list refresh on a failed trigger, got: %s", body)
+	}
+}
+
+// Auth: unauthenticated POST is rejected by the same wrapper as the rest of
+// "/backups" (NFR3) -- covered at the route-table level for GET
+// (main_test.go's manmanv2RouteTable/TestSetupRoutes_OnlyFivePublicRoutesReachableUnauthenticated,
+// which asserts RequireAuthFunc runs ahead of any method check); this test
+// confirms the same wrapper is reached for an actual POST.
+func TestHandleBackupTrigger_UnauthenticatedPostIsRejected(t *testing.T) {
+	app := &App{auth: newTestOIDCAuthenticator(t)}
+	mux := http.NewServeMux()
+	app.setupRoutes(mux)
+
+	req := httptest.NewRequest(http.MethodPost, "/backups/trigger", strings.NewReader("server_game_config_id=55&backup_config_id=1"))
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	w := httptest.NewRecorder()
+	mux.ServeHTTP(w, req)
+
+	if !requestWasAuthBlocked(w) {
+		t.Fatalf("expected an unauthenticated POST /backups/trigger to be auth-blocked, got status %d", w.Code)
 	}
 }

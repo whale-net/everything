@@ -81,6 +81,10 @@ var backupRunStatuses = []string{"pending", "running", "completed", "failed"}
 // rendered on page load, so switching costs no request.
 templ BackupsPage(data BackupsPageData) {
 	@components.Layout(data.Layout) {
+		<style>
+			[x-cloak] { display: none !important; }
+		</style>
+		@backupTriggerBladeOpenerScript()
 		@components.HeroHeader("Backups", "Fleet-wide backup runs and schedules -- every deployment, no per-deployment page required") {
 		}
 		<div x-data="{ activeTab: 'runs' }">
@@ -107,6 +111,11 @@ templ BackupsPage(data BackupsPageData) {
 				</button>
 			</div>
 			<div id="tab-panel-backup-runs" x-show="activeTab === 'runs'">
+				<div class="flex justify-end mb-4">
+					<button type="button" data-open-blade-template="backup-trigger-blade-template" class="btn btn-primary btn-sm">
+						+ Trigger backup
+					</button>
+				</div>
 				@backupRunsFilterBar(data.Runs.Filter, data.FilterOptions)
 				<div id="backup-runs-panel">
 					@BackupRunsFragment(data.Runs)
@@ -116,7 +125,36 @@ templ BackupsPage(data BackupsPageData) {
 				@backupConfigsPlaceholder()
 			</div>
 		</div>
+		<!-- Trigger-backup Blade (task #2813, FR5). See BackupTriggerFormPlaceholder's doc comment for why its body is a lazy hx-get rather than pre-rendered data. -->
+		<template id="backup-trigger-blade-template">
+			@components.Blade(components.BladeData{
+				ID:       "backup-trigger-blade",
+				Title:    "Trigger backup",
+				Subtitle: "Start a backup run for any deployment and BackupConfig pair (FR5)",
+			}) {
+				@BackupTriggerFormPlaceholder()
+			}
+		</template>
 	}
+}
+
+// backupTriggerBladeOpenerScript is games.templ's data-open-blade-template
+// click delegate, duplicated here rather than shared -- see
+// workshopBladeOpenerScript's doc comment (workshop.templ) for why each page
+// using this pattern owns its own copy today.
+script backupTriggerBladeOpenerScript() {
+	document.addEventListener('click', function(event) {
+		var trigger = event.target.closest('[data-open-blade-template]');
+		if (!trigger) return;
+		var tpl = document.getElementById(trigger.getAttribute('data-open-blade-template'));
+		if (!tpl) return;
+		var fragment = tpl.content.cloneNode(true);
+		var bladeRoot = fragment.querySelector('[data-blade]');
+		document.body.appendChild(fragment);
+		if (bladeRoot && window.htmx) {
+			window.htmx.process(bladeRoot);
+		}
+	});
 }
 
 // backupRunsFilterBar is the FR4 filter bar: SGC (deployment), volume and
@@ -229,6 +267,143 @@ templ backupRunRow(item *manmanpb.BackupListItem) {
 		<td>{ backupRunSize(item.Backup) }</td>
 		<td>{ backupRunOrigin(item.Backup) }</td>
 	</tr>
+}
+
+// backupTriggerFormID is the one stable container id the Blade's lazy-load
+// placeholder, every "/backups/trigger-form" response (initial load and the
+// BackupConfig picker's own onchange re-fetch), and every "/backups/trigger"
+// submit response share -- each response replaces this same element
+// (hx-swap="outerHTML"), matching DeploymentSettingsEnvSectionID's
+// placeholder/section id-sharing convention (deployment_settings.templ).
+const backupTriggerFormID = "backup-trigger-form"
+
+// BackupTriggerFormPlaceholder is the Blade body BackupsPage embeds inside
+// the "Trigger backup" button's cloned <template> (task #2813, FR5):
+// cloning that template costs no request (BackupsPage's own
+// data-open-blade-template click handler only ever does a DOM clone), but
+// the fleet-wide BackupConfig list this picker needs is fetched fresh every
+// time the blade opens via this placeholder's own hx-get, so an operator
+// never sees a BackupConfig created elsewhere go missing from a stale page
+// load.
+templ BackupTriggerFormPlaceholder() {
+	<div
+		id={ backupTriggerFormID }
+		hx-get="/backups/trigger-form"
+		hx-trigger="load"
+		hx-swap="outerHTML"
+	>
+		<p class="text-sm text-base-content/60">Loading backup configs…</p>
+	</div>
+}
+
+// BackupTriggerFormData drives the trigger picker/submit form
+// (handlers_backups_fleet.go's handleBackupTriggerForm/handleBackupTrigger):
+// BackupConfigs is always the full fleet-wide list (#2810's
+// ListBackupConfigItems); ServerGameConfigs is scoped to whichever
+// BackupConfig is currently selected -- empty until one is chosen, or after
+// choosing one with no eligible deployment.
+type BackupTriggerFormData struct {
+	BackupConfigs          []components.SelectOption
+	SelectedBackupConfigID string
+	ServerGameConfigs      []components.SelectOption
+	// SuccessBackupID, when > 0, renders a "queued" confirmation for the
+	// most recently submitted trigger (the id TriggerBackup returned).
+	SuccessBackupID int64
+	// Err, when non-empty, renders the resubmitted form with an inline
+	// error instead of a bare 500 -- FailedPrecondition's "no running
+	// session" is the common case and must read as actionable
+	// (backupTriggerErrorMessage in handlers_backups_fleet.go), not raw
+	// gRPC status text.
+	Err string
+}
+
+// BackupTriggerForm renders both the picker (GET "/backups/trigger-form",
+// with or without a chosen BackupConfig) and the post-submit outcome (POST
+// "/backups/trigger") -- one templ so the two can never render
+// inconsistent markup for the same data. Selecting a BackupConfig re-fetches
+// this whole fragment via the select's own hx-get (with backup_config_id in
+// its request, htmx's default "include the closest form's values"
+// behavior) so ServerGameConfigs reflects the newly chosen config's
+// eligible deployments; submitting POSTs the same two fields.
+templ BackupTriggerForm(data BackupTriggerFormData) {
+	<form
+		id={ backupTriggerFormID }
+		hx-post="/backups/trigger"
+		hx-target={ "#" + backupTriggerFormID }
+		hx-swap="outerHTML"
+		class="space-y-4"
+	>
+		if data.SuccessBackupID > 0 {
+			<div class="alert alert-success mb-4">
+				<span class="text-sm">Backup #{ fmt.Sprintf("%d", data.SuccessBackupID) } queued.</span>
+			</div>
+		}
+		if data.Err != "" {
+			@components.Alert("error", data.Err)
+		}
+		<div>
+			<label class="block text-sm font-medium text-base-content mb-1" for="backup-trigger-config">Backup Config *</label>
+			<select
+				id="backup-trigger-config"
+				name="backup_config_id"
+				required
+				hx-get="/backups/trigger-form"
+				hx-trigger="change"
+				hx-target={ "#" + backupTriggerFormID }
+				hx-swap="outerHTML"
+				class="select select-bordered w-full"
+			>
+				<option value="">-- select a backup config --</option>
+				for _, opt := range data.BackupConfigs {
+					<option value={ opt.Value } selected?={ data.SelectedBackupConfigID == opt.Value }>{ opt.Label }</option>
+				}
+			</select>
+		</div>
+		<div>
+			<label class="block text-sm font-medium text-base-content mb-1" for="backup-trigger-sgc">Deployment *</label>
+			if data.SelectedBackupConfigID == "" {
+				<select id="backup-trigger-sgc" name="server_game_config_id" required disabled class="select select-bordered w-full">
+					<option value="">-- select a backup config first --</option>
+				</select>
+			} else if len(data.ServerGameConfigs) == 0 {
+				<select id="backup-trigger-sgc" name="server_game_config_id" required disabled class="select select-bordered w-full">
+					<option value="">No deployments use this backup config's game config</option>
+				</select>
+			} else {
+				<select id="backup-trigger-sgc" name="server_game_config_id" required class="select select-bordered w-full">
+					<option value="">-- select a deployment --</option>
+					for _, opt := range data.ServerGameConfigs {
+						<option value={ opt.Value }>{ opt.Label }</option>
+					}
+				</select>
+			}
+		</div>
+		<button type="submit" class="btn btn-primary" disabled?={ data.SelectedBackupConfigID == "" || len(data.ServerGameConfigs) == 0 }>
+			Trigger backup
+		</button>
+	</form>
+}
+
+// BackupRunsPanelOOB re-renders "/backups"' fleet-wide run list
+// out-of-band, targeting BackupRunsFragment's own "#backup-runs-panel"
+// wrapper (BackupsPage) wherever it exists in the document. A successful
+// "/backups/trigger" submit includes this alongside BackupTriggerForm's own
+// primary (in-Blade) response so the new "pending" row appears on the
+// underlying page without ever re-fetching or otherwise disturbing it
+// (Blade's own FR10 "opening/closing never re-renders the surface
+// underneath" contract, extended here to "neither does submitting inside
+// it" -- this is the one deliberate, explicit exception, and it only ever
+// touches the run list panel, nothing else on the page). This always
+// renders the unfiltered first page rather than trying to recreate
+// whatever filter the operator had applied before opening the Blade (the
+// Blade's own form carries no record of the filter bar's state) -- FR5's
+// acceptance criterion is "the new run appears in the fleet list", which an
+// active status/deployment/volume filter could exclude the new row from
+// regardless.
+templ BackupRunsPanelOOB(data BackupRunsFragmentData) {
+	<div id="backup-runs-panel" hx-swap-oob="true">
+		@BackupRunsFragment(data)
+	</div>
 }
 
 // backupConfigsPlaceholder is the "Backup configs" tab's scaffold content
