@@ -6,14 +6,17 @@
 // design-session MCP surface" for the two-front-door design this mirrors
 // from audience_score_system/mcp and whagent_net/mcp.
 //
-// `mcp` mounts two pre-filtered tool surfaces, each on its own *mcp.Server
-// and its own mount point (server/transport.go's specMountPath and
-// designMountPath): the FR5-FR8 read-only spec surface at /mcp/spec
-// (unchanged since M1), and the design-scoped write/read surface at
-// /mcp/design -- milestone authoring, status, delivery, and, as of M4
-// (issue #2719), the work axis's own create_task tool, all mount here
-// rather than on a fourth mount of their own. Both front doors
-// (mcpauth/human, whagent-net/agent) apply to both mounts identically.
+// `mcp` mounts three pre-filtered tool surfaces, each on its own
+// *mcp.Server and its own mount point (server/transport.go's
+// specMountPath, designMountPath, and opsMountPath): the FR5-FR8
+// read-only spec surface at /mcp/spec (unchanged since M1), the
+// design-scoped write/read surface at /mcp/design -- milestone authoring,
+// status, delivery, and, as of M4 (issue #2719), the work axis's own
+// create_task tool, all mount here rather than on a fourth mount of their
+// own -- and, as of M5 (issue #2867), the Swarm Operator-only surface at
+// /mcp/ops, mounted but with no tool registered yet (the rest of M5
+// registers onto it). Both front doors (mcpauth/human, whagent-net/agent)
+// apply to all three mounts identically.
 package main
 
 import (
@@ -127,16 +130,17 @@ func run() error {
 	querier := slice.NewQuerier(entities)
 	assembler := work.NewAssembler(entities.Tasks(), querier)
 
-	// Two *mcp.Server instances, one per mount (server/transport.go's
-	// specMountPath and designMountPath) -- registering a tool is a
-	// per-server operation (mcp.AddTool), so the only way to guarantee a
-	// write tool can never end up reachable from specMountPath is to never
-	// register it on the same *mcp.Server that backs it. tools.RegisterAll
-	// (FR5-FR8, read-only) is unchanged; tools.RegisterInitSession (the
+	// Three *mcp.Server instances, one per mount (server/transport.go's
+	// specMountPath, designMountPath, and opsMountPath) -- registering a
+	// tool is a per-server operation (mcp.AddTool), so the only way to
+	// guarantee a write tool can never end up reachable from specMountPath
+	// is to never register it on the same *mcp.Server that backs it.
+	// tools.RegisterAll (FR5-FR8, read-only) is unchanged; tools.RegisterInitSession (the
 	// krill_session_id minting tool, issue #2827 -- MUST register before
 	// every other designReg call below, since every one of them requires a
 	// session id this tool is the only MCP-reachable way to obtain),
 	// tools.RegisterDesignAll (issue
+	// #2547), tools.RegisterMilestoneAll (milestone authoring, issue
 	// #2683), tools.RegisterMilestoneStatusAll (status history, issue
 	// #2685), tools.RegisterDeliveryShipmentAll (per-item shipment, issue
 	// #2686), tools.RegisterRecutAll (delivery-axis re-cut plus the
@@ -184,6 +188,18 @@ func run() error {
 	tools.RegisterAbandonTask(designReg, sessions, entities.Tasks(), assembler)
 	tools.RegisterRecordNote(designReg, sessions, entities.Tasks())
 
+	// opsSrv/opsReg is M5's operator surface (issue #2867, /mcp/ops):
+	// its own *mcp.Server so an operator verb or console query
+	// (registered by later M5 tasks, via server.RegisterOpsRead/
+	// RegisterOpsWrite -- registry.go) can never end up reachable from
+	// specMountPath or designMountPath, the same isolation specSrv/
+	// designSrv give each other above. No tool is registered on it yet
+	// -- this task ships the empty, authorized surface the rest of M5
+	// registers onto.
+	opsSrv := server.New()
+	opsReg := server.NewRegistry(opsSrv)
+	_ = opsReg
+
 	// The mcpauth (human) front door's CredentialStore preflights the
 	// consuming domain's credential table at boot -- exactly like
 	// audience_score_system/mcp/main.go's own NewCredentialStore call.
@@ -220,12 +236,13 @@ func run() error {
 		}
 		specSrv.AddReceivingMiddleware(server.WhagentPersonaMiddleware())
 		designSrv.AddReceivingMiddleware(server.WhagentPersonaMiddleware())
-		handler = server.NewDualAuthHTTPHandler(specSrv, designSrv, credentials, server.WhagentAuthConfig{
+		opsSrv.AddReceivingMiddleware(server.WhagentPersonaMiddleware())
+		handler = server.NewDualAuthHTTPHandler(specSrv, designSrv, opsSrv, credentials, server.WhagentAuthConfig{
 			Verifier: whagentVerifier,
 			Audience: cfg.MCPPublicURL,
 		}, resourceMeta)
 	} else {
-		handler = server.NewHTTPHandler(specSrv, designSrv, credentials, resourceMeta)
+		handler = server.NewHTTPHandler(specSrv, designSrv, opsSrv, credentials, resourceMeta)
 	}
 
 	httpServer := &http.Server{

@@ -225,7 +225,7 @@ func TestMCPAbandonSurface_EndToEnd(t *testing.T) {
 	// WhagentPersonaMiddleware's own persona-widening posture.
 	designSrv.AddReceivingMiddleware(server.WhagentPersonaMiddleware())
 
-	handler := server.NewDualAuthHTTPHandler(server.New(), designSrv, credentials, server.WhagentAuthConfig{
+	handler := server.NewDualAuthHTTPHandler(server.New(), designSrv, server.New(), credentials, server.WhagentAuthConfig{
 		Verifier: verifier,
 		Audience: abandonTestWhagentAudience,
 	}, server.ResourceMetadataConfig{})

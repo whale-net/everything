@@ -229,6 +229,12 @@ func TestMCPDesignSurface_EndToEnd(t *testing.T) {
 	designReg := server.NewRegistry(designSrv)
 	tools.RegisterDesignAll(designReg, entities, sessions, querier)
 
+	// opsSrv exists only so server.NewDualAuthHTTPHandler's three-mount
+	// signature (issue #2867) is satisfied here, at /mcp/ops, alongside
+	// specSrv/designSrv -- no tool is registered on it, and this file's
+	// own coverage stays scoped to /mcp/spec and /mcp/design.
+	opsSrv := server.New()
+
 	// Mirrors ../main.go's own construction order exactly: WhagentPersonaMiddleware
 	// added AFTER server.New() (which already wired PersonaMiddleware) so it
 	// runs BEFORE it -- see that middleware's own doc comment for the
@@ -238,8 +244,9 @@ func TestMCPDesignSurface_EndToEnd(t *testing.T) {
 	// satisfied by anyone.
 	specSrv.AddReceivingMiddleware(server.WhagentPersonaMiddleware())
 	designSrv.AddReceivingMiddleware(server.WhagentPersonaMiddleware())
+	opsSrv.AddReceivingMiddleware(server.WhagentPersonaMiddleware())
 
-	handler := server.NewDualAuthHTTPHandler(specSrv, designSrv, credentials, server.WhagentAuthConfig{
+	handler := server.NewDualAuthHTTPHandler(specSrv, designSrv, opsSrv, credentials, server.WhagentAuthConfig{
 		Verifier: verifier,
 		Audience: testWhagentAudience,
 	}, server.ResourceMetadataConfig{})

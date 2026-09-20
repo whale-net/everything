@@ -161,3 +161,82 @@ func TestRegistry_DesignSurface_RegistersExactlySixTools_NoneOnSpecSurface(t *te
 		assert.False(t, designNames[name], "%s (a spec-surface tool) must never be registered on the design surface", name)
 	}
 }
+
+// opsToolInput/opsToolOutput/opsToolHandler are a synthetic stand-in for a
+// real ops-mount tool -- this task (issue #2867) ships the empty, authorized
+// /mcp/ops mount itself, with no operator verb or console query registered
+// yet (see registry.go's RegisterOpsRead/RegisterOpsWrite doc comments), so
+// there is no real tools.RegisterOpsAll to register against the ops
+// registry the way tools.RegisterAll/RegisterDesignAll are used above.
+type opsToolInput struct{}
+type opsToolOutput struct{}
+
+func opsToolHandler(context.Context, *mcp.CallToolRequest, opsToolInput) (*mcp.CallToolResult, opsToolOutput, error) {
+	return nil, opsToolOutput{}, nil
+}
+
+// TestRegistry_OpsSurface_ToolIsolatedFromSpecAndDesignSurfaces mirrors
+// main.go's full tool registration for all three mounts (issue #2867: the
+// spec registry via tools.RegisterAll, the design registry via
+// tools.RegisterDesignAll, and the ops registry via a tool registered
+// through server.RegisterOpsRead), then proves the same disjointness
+// property the two tests above prove for spec/design extends to the third
+// mount: a tool registered on the ops mount is reachable there and absent
+// from both the spec and design surfaces, and none of the spec/design
+// surfaces' own tool names leak onto the ops surface either -- registering
+// a tool under the same name on a second mount (registry.go's "no tool is
+// registered on more than one mount" invariant) still fails to make that
+// tool reachable from any mount but the one it was registered on.
+func TestRegistry_OpsSurface_ToolIsolatedFromSpecAndDesignSurfaces(t *testing.T) {
+	ctx := context.Background()
+	entities := store.New(nil)
+	querier := slice.NewQuerier(entities)
+	var sessions store.SessionStore // nil: registration never calls a method on it
+
+	specSrv := mcp.NewServer(server.Implementation, nil)
+	specReg := server.NewRegistry(specSrv)
+	tools.RegisterAll(specReg, querier)
+
+	designSrv := mcp.NewServer(server.Implementation, nil)
+	designReg := server.NewRegistry(designSrv)
+	tools.RegisterDesignAll(designReg, entities, sessions, querier)
+
+	opsSrv := mcp.NewServer(server.Implementation, nil)
+	opsReg := server.NewRegistry(opsSrv)
+	server.RegisterOpsRead(opsReg, &mcp.Tool{Name: "ops_test_tool"}, opsToolHandler)
+
+	listTools := func(t *testing.T, srv *mcp.Server) map[string]bool {
+		t.Helper()
+		serverTransport, clientTransport := mcp.NewInMemoryTransports()
+		_, err := srv.Connect(ctx, serverTransport, nil)
+		require.NoError(t, err)
+
+		client := mcp.NewClient(&mcp.Implementation{Name: "test-client", Version: "0.0.1"}, nil)
+		cs, err := client.Connect(ctx, clientTransport, nil)
+		require.NoError(t, err)
+		t.Cleanup(func() { _ = cs.Close() })
+
+		names := map[string]bool{}
+		for tool, err := range cs.Tools(ctx, nil) {
+			require.NoError(t, err)
+			names[tool.Name] = true
+		}
+		return names
+	}
+
+	specNames := listTools(t, specSrv)
+	designNames := listTools(t, designSrv)
+	opsNames := listTools(t, opsSrv)
+
+	require.Len(t, opsNames, 1, "the ops surface must register exactly the one tool registered against it -- nothing more, nothing fewer")
+	assert.True(t, opsNames["ops_test_tool"], "ops_test_tool must be registered on the ops surface")
+	assert.False(t, specNames["ops_test_tool"], "ops_test_tool must never be registered on the spec surface")
+	assert.False(t, designNames["ops_test_tool"], "ops_test_tool must never be registered on the design surface")
+
+	for _, name := range expectedSpecSurfaceToolNames {
+		assert.False(t, opsNames[name], "%s (a spec-surface tool) must never be registered on the ops surface", name)
+	}
+	for _, name := range expectedDesignSurfaceToolNames {
+		assert.False(t, opsNames[name], "%s (a design-session tool) must never be registered on the ops surface", name)
+	}
+}

@@ -31,6 +31,30 @@ const specMountPath = "/mcp/spec"
 // "on the whole binary."
 const designMountPath = "/mcp/design"
 
+// opsMountPath is where krill's operator surface (M5, issue #2867) is
+// mounted -- its own pre-filtered endpoint, alongside specMountPath and
+// designMountPath, never folded onto either. FR6-FR9 of the M5 root plan
+// (#2851) all state their actor as "A Swarm Operator can ..."; this mount,
+// not a per-call auth check layered onto an existing mount, is where that
+// restriction is enforced: registry.go's ops-mount registration path
+// fixes its allowed-persona set to PersonaSwarmOperator alone, so the
+// mount itself is the authorization boundary, the same way
+// specMountPath's absence of RegisterWrite calls is what keeps that mount
+// read-only (this file's designMountPath comment) -- "no write/read tool
+// crossover on a mount" stays a per-mount, grep-verifiable invariant
+// rather than a per-tool one. Both the M5 operator verbs (write) and the
+// M5 console queries (read, FR4/FR5/FR10/FR12) register here; neither
+// belongs on specMountPath (open to every persona) or designMountPath
+// (open to every resolved persona, not operator-restricted).
+//
+// The Swarm Operator persona check this mount enforces is MCP-only: M5's
+// mutating HTTP endpoints keep using the existing gate(...) write gate
+// (krill/api/routes.go, krill/api/handlers/gate.go) unchanged -- that gate
+// has no persona concept, only a valid krill session. A later task must
+// not add a second, divergent persona check on the HTTP side; this mount
+// is the one place the Swarm Operator restriction lives.
+const opsMountPath = "/mcp/ops"
+
 // ResourceMetadataConfig configures NewHTTPHandler's RFC 9728
 // protected-resource discovery surface: `mcp` is the OAuth2 protected
 // resource, mirroring audience_score_system/mcp/server/transport.go's own
@@ -69,31 +93,33 @@ func mcpHandlerFor(srv *mcp.Server) http.Handler {
 // address: an unauthenticated GET /healthz (k8s liveness/readiness), RFC
 // 9728 protected-resource metadata at the fixed well-known path (when
 // resourceMeta is configured), the streamable-HTTP MCP endpoint at
-// specSrv's specMountPath, and the one at designSrv's designMountPath --
-// both guarded by mcpauth.RequireBearerToken(credentials, ...), the
-// mcpauth-only door. `mcp`'s main.go calls NewDualAuthHTTPHandler instead
-// once the whagent-net door is configured; this function stays exactly as
-// the single-door shape for a caller that only ever wants the mcpauth door
+// specSrv's specMountPath, the one at designSrv's designMountPath, and the
+// one at opsSrv's opsMountPath -- all three guarded by
+// mcpauth.RequireBearerToken(credentials, ...), the mcpauth-only door.
+// `mcp`'s main.go calls NewDualAuthHTTPHandler instead once the
+// whagent-net door is configured; this function stays exactly as the
+// single-door shape for a caller that only ever wants the mcpauth door
 // (mirrors audience_score_system/mcp/server/transport.go's own
 // NewHTTPHandler/NewDualAuthHTTPHandler split).
-func NewHTTPHandler(specSrv, designSrv *mcp.Server, credentials mcpauth.CredentialStore, resourceMeta ResourceMetadataConfig) http.Handler {
+func NewHTTPHandler(specSrv, designSrv, opsSrv *mcp.Server, credentials mcpauth.CredentialStore, resourceMeta ResourceMetadataConfig) http.Handler {
 	opts := &sdkauth.RequireBearerTokenOptions{AllowMissingExpiration: true}
 	if resourceMeta.enabled() {
 		opts.ResourceMetadataURL = mcpauth.ProtectedResourceMetadataURL(resourceMeta.Resource)
 	}
 	requireBearer := mcpauth.RequireBearerToken(credentials, opts)
 
-	return newMux(requireBearer(mcpHandlerFor(specSrv)), requireBearer(mcpHandlerFor(designSrv)), resourceMeta)
+	return newMux(requireBearer(mcpHandlerFor(specSrv)), requireBearer(mcpHandlerFor(designSrv)), requireBearer(mcpHandlerFor(opsSrv)), resourceMeta)
 }
 
 // NewDualAuthHTTPHandler is NewHTTPHandler's two-front-door counterpart
-// (NFR1): the same mux, both specMountPath and designMountPath guarded
-// instead by DualAuthHTTPHandler (whagent_auth.go) so BOTH
+// (NFR1): the same mux, specMountPath, designMountPath, and opsMountPath
+// all guarded instead by DualAuthHTTPHandler (whagent_auth.go) so BOTH
 // caller-authentication paths -- the mcpauth door (credentials) and the
 // whagent-net door (whagentCfg) -- are mounted alongside one another, at
 // EACH mount (issue #2547's Scope: "Both existing front doors ... apply to
-// the new mount ... unchanged").
-func NewDualAuthHTTPHandler(specSrv, designSrv *mcp.Server, credentials mcpauth.CredentialStore, whagentCfg WhagentAuthConfig, resourceMeta ResourceMetadataConfig) http.Handler {
+// the new mount ... unchanged", carried forward to opsMountPath by this
+// task).
+func NewDualAuthHTTPHandler(specSrv, designSrv, opsSrv *mcp.Server, credentials mcpauth.CredentialStore, whagentCfg WhagentAuthConfig, resourceMeta ResourceMetadataConfig) http.Handler {
 	opts := &sdkauth.RequireBearerTokenOptions{AllowMissingExpiration: true}
 	if resourceMeta.enabled() {
 		opts.ResourceMetadataURL = mcpauth.ProtectedResourceMetadataURL(resourceMeta.Resource)
@@ -101,17 +127,19 @@ func NewDualAuthHTTPHandler(specSrv, designSrv *mcp.Server, credentials mcpauth.
 
 	specGuarded := DualAuthHTTPHandler(mcpHandlerFor(specSrv), credentials, whagentCfg, opts)
 	designGuarded := DualAuthHTTPHandler(mcpHandlerFor(designSrv), credentials, whagentCfg, opts)
+	opsGuarded := DualAuthHTTPHandler(mcpHandlerFor(opsSrv), credentials, whagentCfg, opts)
 
-	return newMux(specGuarded, designGuarded, resourceMeta)
+	return newMux(specGuarded, designGuarded, opsGuarded, resourceMeta)
 }
 
 // newMux builds `mcp`'s mux -- healthz, RFC 9728 protected-resource
 // metadata, the streamable-HTTP MCP endpoint at specMountPath guarded by
-// specGuarded, and the one at designMountPath guarded by designGuarded --
-// shared by NewHTTPHandler and NewDualAuthHTTPHandler so the two
-// caller-auth entry points can never drift on the non-auth parts of the
-// mux, or on which mounts exist at all.
-func newMux(specGuarded, designGuarded http.Handler, resourceMeta ResourceMetadataConfig) http.Handler {
+// specGuarded, the one at designMountPath guarded by designGuarded, and
+// the one at opsMountPath guarded by opsGuarded -- shared by
+// NewHTTPHandler and NewDualAuthHTTPHandler so the two caller-auth entry
+// points can never drift on the non-auth parts of the mux, or on which
+// mounts exist at all.
+func newMux(specGuarded, designGuarded, opsGuarded http.Handler, resourceMeta ResourceMetadataConfig) http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /healthz", handleHealthz)
 	if resourceMeta.enabled() {
@@ -123,6 +151,7 @@ func newMux(specGuarded, designGuarded http.Handler, resourceMeta ResourceMetada
 	}
 	mux.Handle(specMountPath, specGuarded)
 	mux.Handle(designMountPath, designGuarded)
+	mux.Handle(opsMountPath, opsGuarded)
 	return mux
 }
 
