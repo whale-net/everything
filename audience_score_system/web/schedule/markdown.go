@@ -4,7 +4,14 @@ import (
 	"bytes"
 
 	"github.com/yuin/goldmark"
+	"github.com/yuin/goldmark/extension"
 )
+
+// scriptMarkdown enables GFM (tables, strikethrough, autolinks) on top of
+// goldmark's CommonMark-only default -- mirrors session.templ's
+// chatMarkdown so pipe-table syntax renders the same way in both
+// implementations (see renderMarkdown's doc comment there).
+var scriptMarkdown = goldmark.New(goldmark.WithExtensions(extension.GFM))
 
 // renderScriptMarkdown converts a video script's raw markdown body to
 // sanitized HTML for FR14's rendered-preview mode. Backed by goldmark
@@ -34,7 +41,7 @@ import (
 // not decide how the caller injects it.
 func renderScriptMarkdown(source string) (string, error) {
 	var buf bytes.Buffer
-	if err := goldmark.Convert([]byte(source), &buf); err != nil {
+	if err := scriptMarkdown.Convert([]byte(source), &buf); err != nil {
 		return "", err
 	}
 	return buf.String(), nil

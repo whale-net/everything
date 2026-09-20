@@ -9,6 +9,7 @@ templ_library(
         "//libs/go/htmxauth",
         "//libs/go/htmxui",
         "@com_github_yuin_goldmark//:goldmark",
+        "@com_github_yuin_goldmark//extension:extension",
     ],
 )
 
