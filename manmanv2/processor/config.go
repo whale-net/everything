@@ -5,25 +5,37 @@ import (
 	"os"
 	"strconv"
 
+	temporallib "github.com/whale-net/everything/libs/go/temporal"
 	"github.com/whale-net/everything/manmanv2/events"
+	"github.com/whale-net/everything/manmanv2/processor/backupsched"
 )
 
 // Config holds all configuration for the processor service
 type Config struct {
-	RabbitMQURL        string
-	DBHost             string
-	DBPort             string
-	DBUser             string
-	DBPassword         string
-	DBName             string
-	DBSSLMode          string
-	QueueName          string
-	LogLevel           string
-	HealthCheckPort    string
+	RabbitMQURL           string
+	DBHost                string
+	DBPort                string
+	DBUser                string
+	DBPassword            string
+	DBName                string
+	DBSSLMode             string
+	QueueName             string
+	LogLevel              string
+	HealthCheckPort       string
 	StaleHostThreshold    int
 	StaleSessionThreshold int
 	ExternalExchange      string
 	LiveExchange          string
+
+	// Temporal — the backupsched package's worker registration (FR16, FR17
+	// M7). TemporalTaskQueue defaults to backupsched.DefaultTaskQueue
+	// ("manmanv2-processor", named after this worker binary) rather than
+	// libs/go/temporal.ConfigFromEnv's own empty default, per
+	// manmanv2/ARCHITECTURE.md's one-task-queue-per-worker-binary
+	// convention.
+	TemporalHost      string
+	TemporalNamespace string
+	TemporalTaskQueue string
 }
 
 // LoadConfig loads configuration from environment variables
@@ -43,6 +55,9 @@ func LoadConfig() (*Config, error) {
 		StaleSessionThreshold: getEnvInt("STALE_SESSION_THRESHOLD_SECONDS", 30), // Default 30 seconds
 		ExternalExchange:      getEnv("EXTERNAL_EXCHANGE", "external"),
 		LiveExchange:          getEnv("LIVE_EXCHANGE", events.ExchangeName),
+		TemporalHost:          getEnv("TEMPORAL_HOST", temporallib.DefaultHostPort),
+		TemporalNamespace:     getEnv("TEMPORAL_NAMESPACE", temporallib.DefaultNamespace),
+		TemporalTaskQueue:     getEnv("TEMPORAL_TASK_QUEUE", backupsched.DefaultTaskQueue),
 	}
 
 	// Validate required fields

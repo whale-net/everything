@@ -11,11 +11,18 @@ import (
 	"time"
 
 	"github.com/jackc/pgx/v5/pgxpool"
+	enumspb "go.temporal.io/api/enums/v1"
+	"go.temporal.io/sdk/activity"
+	temporalclient "go.temporal.io/sdk/client"
+	"go.temporal.io/sdk/worker"
+
 	"github.com/whale-net/everything/libs/go/logging"
 	"github.com/whale-net/everything/libs/go/rmq"
 	s3lib "github.com/whale-net/everything/libs/go/s3"
+	temporallib "github.com/whale-net/everything/libs/go/temporal"
 	"github.com/whale-net/everything/manmanv2/api/repository"
 	"github.com/whale-net/everything/manmanv2/api/repository/postgres"
+	"github.com/whale-net/everything/manmanv2/processor/backupsched"
 	"github.com/whale-net/everything/manmanv2/processor/consumer"
 	"github.com/whale-net/everything/manmanv2/processor/handlers"
 )
@@ -201,6 +208,19 @@ func run() error {
 		defer riverClient.Stop(context.Background()) //nolint:errcheck
 	}
 
+	// Start the Temporal-based backup scheduler (FR16, FR17 M7) alongside
+	// the still-running River path above -- #2819 removes River once this
+	// path has proven itself on trunk (NFR2). Unlike the S3/River startup
+	// above, a failure here fails the process: a worker that silently never
+	// came up would leave every enabled BackupConfig's cadence unscheduled
+	// with no observable signal beyond a missing Temporal Schedule.
+	temporalWorker, temporalClient, err := startBackupTemporalWorker(appCtx, cfg, dbPool, repo, rmqConn, s3Client, logger)
+	if err != nil {
+		return fmt.Errorf("failed to start temporal backup scheduler: %w", err)
+	}
+	defer temporalWorker.Stop()
+	defer temporalClient.Close()
+
 	// Start consumer in background
 	consumerErrChan := make(chan error, 1)
 	go func() {
@@ -244,6 +264,79 @@ func run() error {
 
 	logger.Info("shutdown complete")
 	return nil
+}
+
+// startBackupTemporalWorker connects to Temporal, registers backupsched's
+// BackupScanWorkflow/DispatchBackupWorkflow and Activities on
+// cfg.TemporalTaskQueue, starts the worker, and upserts the
+// backupsched.ScanScheduleID Schedule (manmanv2/ARCHITECTURE.md's "Backup
+// Scheduler (Temporal)" section). Every step here is fatal on error -- see
+// the call site's comment for why this path, unlike the River/S3 startup
+// above it, must fail the process loudly rather than degrade silently.
+func startBackupTemporalWorker(ctx context.Context, cfg *Config, dbPool *pgxpool.Pool, repo *repository.Repository, rmqConn *rmq.Connection, s3Client *s3lib.Client, logger *slog.Logger) (worker.Worker, temporalclient.Client, error) {
+	temporalCfg := temporallib.Config{
+		HostPort:  cfg.TemporalHost,
+		Namespace: cfg.TemporalNamespace,
+		TaskQueue: cfg.TemporalTaskQueue,
+	}
+
+	temporalClient, err := temporallib.NewClient(temporalCfg, temporallib.NewLogger("event-processor"))
+	if err != nil {
+		return nil, nil, fmt.Errorf("connect to temporal at %s (namespace %s): %w", temporalCfg.HostPort, temporalCfg.Namespace, err)
+	}
+
+	backupPublisher, err := rmq.NewPublisher(rmqConn)
+	if err != nil {
+		temporalClient.Close()
+		return nil, nil, fmt.Errorf("create backup dispatch publisher: %w", err)
+	}
+
+	temporalWorker := temporallib.NewWorker(temporalClient, temporalCfg.TaskQueue, worker.Options{})
+	temporalWorker.RegisterWorkflow(backupsched.BackupScanWorkflow)
+	temporalWorker.RegisterWorkflow(backupsched.DispatchBackupWorkflow)
+
+	backupActivities := &backupsched.Activities{
+		Repo:       repo,
+		ActionRepo: postgres.NewActionRepository(dbPool),
+		Publisher:  backupPublisher,
+		S3Client:   s3Client,
+	}
+	temporalWorker.RegisterActivityWithOptions(backupActivities.ListDueBackupConfigs, activity.RegisterOptions{Name: backupsched.ActivityListDueBackupConfigs})
+	temporalWorker.RegisterActivityWithOptions(backupActivities.DispatchBackup, activity.RegisterOptions{Name: backupsched.ActivityDispatchBackup})
+
+	if err := temporalWorker.Start(); err != nil {
+		temporalClient.Close()
+		return nil, nil, fmt.Errorf("start temporal worker on task queue %s: %w", temporalCfg.TaskQueue, err)
+	}
+
+	// UpsertSchedule (libs/go/temporal), not a one-time Create: a changed
+	// ScanInterval must take effect on the next worker restart rather than
+	// staying pinned to whatever value first created the schedule (see that
+	// function's doc comment for the incident this closes).
+	err = temporallib.UpsertSchedule(ctx, temporalClient.ScheduleClient(), temporalclient.ScheduleOptions{
+		ID: backupsched.ScanScheduleID,
+		Spec: temporalclient.ScheduleSpec{
+			Intervals: []temporalclient.ScheduleIntervalSpec{{Every: backupsched.ScanInterval}},
+		},
+		Action: &temporalclient.ScheduleWorkflowAction{
+			Workflow:  backupsched.BackupScanWorkflow,
+			TaskQueue: temporalCfg.TaskQueue,
+		},
+		Overlap: enumspb.SCHEDULE_OVERLAP_POLICY_SKIP,
+	})
+	if err != nil {
+		temporalWorker.Stop()
+		temporalClient.Close()
+		return nil, nil, fmt.Errorf("upsert schedule %s: %w", backupsched.ScanScheduleID, err)
+	}
+
+	logger.Info("temporal backup scheduler started",
+		"host_port", temporalCfg.HostPort,
+		"namespace", temporalCfg.Namespace,
+		"task_queue", temporalCfg.TaskQueue,
+		"schedule_id", backupsched.ScanScheduleID,
+	)
+	return temporalWorker, temporalClient, nil
 }
 
 func setupHealthCheckRoutes(dbPool *pgxpool.Pool, logger *slog.Logger) http.Handler {
