@@ -156,11 +156,31 @@ type BackupRepository interface {
 	UpdateStatus(ctx context.Context, backupID int64, status string, s3URL *string, sizeBytes *int64, errMsg *string) error
 }
 
+// BackupConfigListFilter narrows a fleet-wide BackupConfig listing. A nil
+// field means "no filter on that dimension"; Enabled is a pointer so
+// "enabled = false" is distinguishable from "unset".
+type BackupConfigListFilter struct {
+	VolumeID     *int64
+	GameConfigID *int64
+	Enabled      *bool
+}
+
+// BackupConfigListRow is a BackupConfig plus the display context (volume,
+// owning GameConfig/game) needed to render a fleet-wide list row without a
+// follow-up RPC per row.
+type BackupConfigListRow struct {
+	Config         *manman.BackupConfig
+	VolumeName     string
+	GameConfigID   int64
+	GameConfigName string
+	GameName       string
+}
+
 // BackupConfigRepository defines operations for BackupConfig entities
 type BackupConfigRepository interface {
 	Create(ctx context.Context, cfg *manman.BackupConfig) (*manman.BackupConfig, error)
 	Get(ctx context.Context, backupConfigID int64) (*manman.BackupConfig, error)
-	List(ctx context.Context, volumeID int64) ([]*manman.BackupConfig, error)
+	List(ctx context.Context, f BackupConfigListFilter, limit, offset int) ([]*BackupConfigListRow, error)
 	Update(ctx context.Context, cfg *manman.BackupConfig) error
 	Delete(ctx context.Context, backupConfigID int64) error
 	// ListDue returns enabled configs whose cadence has elapsed and whose SGC had an active session since last_backup_at

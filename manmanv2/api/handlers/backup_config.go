@@ -87,15 +87,62 @@ func (h *BackupConfigHandler) GetBackupConfig(ctx context.Context, req *pb.GetBa
 }
 
 func (h *BackupConfigHandler) ListBackupConfigs(ctx context.Context, req *pb.ListBackupConfigsRequest) (*pb.ListBackupConfigsResponse, error) {
-	cfgs, err := h.backupConfigRepo.List(ctx, req.VolumeId)
+	pageSize := int(req.PageSize)
+	if pageSize <= 0 {
+		pageSize = 50
+	}
+	if pageSize > 100 {
+		pageSize = 100
+	}
+
+	offset := 0
+	if req.PageToken != "" {
+		var err error
+		offset, err = decodePageToken(req.PageToken)
+		if err != nil {
+			return nil, status.Errorf(codes.InvalidArgument, "invalid page token: %v", err)
+		}
+	}
+
+	filter := repository.BackupConfigListFilter{}
+	if req.VolumeId > 0 {
+		filter.VolumeID = &req.VolumeId
+	}
+	if req.GameConfigId > 0 {
+		filter.GameConfigID = &req.GameConfigId
+	}
+	if req.Enabled != nil {
+		filter.Enabled = req.Enabled
+	}
+
+	rows, err := h.backupConfigRepo.List(ctx, filter, pageSize+1, offset)
 	if err != nil {
 		return nil, status.Errorf(codes.Internal, "failed to list backup configs: %v", err)
 	}
-	pbCfgs := make([]*pb.BackupConfig, len(cfgs))
-	for i, c := range cfgs {
-		pbCfgs[i] = backupConfigToProto(c)
+
+	var nextPageToken string
+	if len(rows) > pageSize {
+		rows = rows[:pageSize]
+		nextPageToken = encodePageToken(offset + pageSize)
 	}
-	return &pb.ListBackupConfigsResponse{Configs: pbCfgs}, nil
+
+	pbCfgs := make([]*pb.BackupConfig, len(rows))
+	items := make([]*pb.BackupConfigListItem, len(rows))
+	for i, row := range rows {
+		pbCfgs[i] = backupConfigToProto(row.Config)
+		items[i] = &pb.BackupConfigListItem{
+			Config:         pbCfgs[i],
+			VolumeName:     row.VolumeName,
+			GameConfigId:   row.GameConfigID,
+			GameConfigName: row.GameConfigName,
+			GameName:       row.GameName,
+		}
+	}
+	return &pb.ListBackupConfigsResponse{
+		Configs:       pbCfgs,
+		Items:         items,
+		NextPageToken: nextPageToken,
+	}, nil
 }
 
 func (h *BackupConfigHandler) UpdateBackupConfig(ctx context.Context, req *pb.UpdateBackupConfigRequest) (*pb.UpdateBackupConfigResponse, error) {
