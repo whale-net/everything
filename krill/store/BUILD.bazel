@@ -62,6 +62,7 @@ go_library(
         "task_claim.go",
         "task_complete.go",
         "task_dependency.go",
+        "task_escalation.go",
         "task_lease.go",
         "task_note.go",
         "task_reclaim.go",

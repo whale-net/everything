@@ -54,6 +54,18 @@ var ErrDependenciesUnsatisfied = errors.New("krill/store: task has unsatisfied d
 // one, since escalation is M5's C26, out of scope here.
 var ErrAttemptCapExhausted = errors.New("krill/store: task has exhausted its attempt cap")
 
+// ErrTaskEscalated and ErrTaskCancelled (both task_escalation.go, issue
+// #2868, root plan #2851's FR2) are ClaimTask's named rejections when
+// task.current_escalation_id or task.cancelled_at is non-NULL -- checked
+// ahead of, and independently from, the current_claim_id/lease claimable
+// check below: FR2 is explicit that an escalated task is unclaimable
+// "regardless of claim state" (a task escalated through a normal complete
+// already has current_claim_id NULL, exactly like any ordinary unclaimed
+// task). 016_escalation_axis.up.sql's task_claimable_idx enforces the
+// identical rule in the index itself (NFR-level defense against a bypass
+// of this Go check under concurrency); the query below mirrors that
+// index's own predicate shape so both layers agree on exactly one rule.
+
 // Claim is one row of `task_claim` (migration 015) -- append-only claim
 // events with one narrow in-place exception (ReleasedAt/ReleaseReason,
 // set exactly once when the claim ends: FR7 reclaim, FR8 complete, FR9
@@ -122,8 +134,10 @@ func scanClaim(row pgx.Row) (Claim, error) {
 //     it holding a "claimable" answer that stays true for the rest of this
 //     transaction.
 //  2. Reject with a named error, nothing written, on the first
-//     claimability failure: ErrTaskAlreadyClaimed (a live lease already
-//     held), ErrDependenciesUnsatisfied (naming every blocking task),
+//     claimability failure: ErrTaskCancelled (FR7's dead-letter state),
+//     ErrTaskEscalated (regardless of claim state -- #2851 FR2),
+//     ErrTaskAlreadyClaimed (a live lease already held),
+//     ErrDependenciesUnsatisfied (naming every blocking task),
 //     ErrAttemptCapExhausted (FR7's terminal state).
 //  3. If a prior claim's lease had lapsed, mark it released with
 //     release_reason='reclaim' -- the same release_reason #2724's sweep
@@ -149,20 +163,34 @@ func (s taskStore) ClaimTask(ctx context.Context, params ClaimTaskParams) (Claim
 	}
 	defer tx.Rollback(ctx) //nolint:errcheck
 
-	var currentClaimID *uuid.UUID
+	var currentClaimID, currentEscalationID *uuid.UUID
+	var cancelledAt *time.Time
 	var attemptCount int
 	var claimable bool
 	err = tx.QueryRow(ctx, `
-		SELECT current_claim_id, attempt_count, (current_claim_id IS NULL OR lease_expires_at < NOW())
+		SELECT current_claim_id, current_escalation_id, cancelled_at, attempt_count,
+			(current_claim_id IS NULL OR lease_expires_at < NOW())
 		FROM task
 		WHERE id = $1 AND scope_id = $2
 		FOR UPDATE
-	`, params.TaskID, params.ScopeID).Scan(&currentClaimID, &attemptCount, &claimable)
+	`, params.TaskID, params.ScopeID).Scan(&currentClaimID, &currentEscalationID, &cancelledAt, &attemptCount, &claimable)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return Claim{}, errParentNotFound("task", params.TaskID)
 	}
 	if err != nil {
 		return Claim{}, fmt.Errorf("lock task: %w", err)
+	}
+
+	// Cancelled/escalated checks run ahead of, and independently from, the
+	// claim/lease claimable check -- mirroring task_claimable_idx's own
+	// three-predicate WHERE clause (016_escalation_axis.up.sql) so an
+	// escalated task is excluded "regardless of claim state" (#2851 FR2),
+	// never only when it also happens to be unclaimed.
+	if cancelledAt != nil {
+		return Claim{}, fmt.Errorf("%w: task id %s", ErrTaskCancelled, params.TaskID)
+	}
+	if currentEscalationID != nil {
+		return Claim{}, fmt.Errorf("%w: task id %s", ErrTaskEscalated, params.TaskID)
 	}
 
 	if !claimable {
