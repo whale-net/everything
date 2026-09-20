@@ -141,15 +141,16 @@ type TaskLaneResult struct {
 // place.
 //
 // A completed attempt does NOT increment task.attempt_count: that column
-// (this migration's own LB3 note, task.go) counts how many times a task
-// has been claimed -- the FR7 cap ClaimTask enforces -- and a completion
-// concludes the attempt ClaimTask already counted, rather than starting a
-// new one. Of the three attempt-writing paths (ClaimTask's `claimed`,
-// #2726's `abandoned`, this file's `completed`), only a `claimed` attempt
-// ever increments attempt_count; the cap itself only ever refuses
-// re-service for a lapsed or abandoned attempt (FR7), never for a
-// completed one -- a completion is a successful outcome, not a strike
-// against the task.
+// (this migration's own LB3 note, task.go) counts only attempts that
+// closed badly -- a lapsed lease (#2724's reclaim sweep) or an abandon
+// (#2726) -- never a claim by itself and never a completion. Of the three
+// attempt-writing paths (ClaimTask's `claimed`, #2726's `abandoned`, this
+// file's `completed`), only `abandoned` and #2724's `lapsed` ever
+// increment attempt_count; the cap itself only ever refuses re-service
+// for a lapsed or abandoned attempt (FR7), never for a completed one --
+// so a task can walk its own lane_sequence end to end via any number of
+// clean claim/complete cycles without ever moving this column, no matter
+// how many lane transitions that walk takes.
 func (s taskStore) CompleteTask(ctx context.Context, params CompleteTaskParams) (TaskLaneResult, error) {
 	if !params.Verdict.Valid() {
 		return TaskLaneResult{}, fmt.Errorf("%w: got %q", ErrUnknownVerdict, params.Verdict)

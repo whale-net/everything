@@ -126,14 +126,22 @@ func scanClaim(row pgx.Row) (Claim, error) {
 //     held), ErrDependenciesUnsatisfied (naming every blocking task),
 //     ErrAttemptCapExhausted (FR7's terminal state).
 //  3. If a prior claim's lease had lapsed, mark it released with
-//     release_reason='reclaim' -- the same accounting #2724's sweep
-//     produces for the identical situation.
+//     release_reason='reclaim' -- the same release_reason #2724's sweep
+//     writes for the identical situation, though attempt_count itself is
+//     not touched here (see step 5): a caller who reclaims a lapsed lease
+//     by simply asking to claim it next pays no cap strike for that lapse
+//     the way #2724's sweep does, since the resulting claim still has to
+//     close via complete/abandon/a later lapse on its own merits.
 //  4. Insert one `task_claim` row (claimed_at/initial_lease_expires_at
 //     both NOW()-derived, so they agree with the claimability check above:
 //     NOW() is stable for the whole transaction) and one `task_attempt`
 //     row with outcome='claimed'.
-//  5. Update task.current_claim_id/lease_expires_at/attempt_count in
-//     place -- the one permitted in-place mutation shape (NFR2).
+//  5. Update task.current_claim_id/lease_expires_at in place -- the one
+//     permitted in-place mutation shape (NFR2). attempt_count is not
+//     touched here: it counts lapsed/abandoned attempts only (#2724's
+//     reclaim sweep, #2726's abandon path), never a claim itself -- see
+//     task_complete.go's CompleteTask doc comment for why a clean
+//     claim/complete cycle, of any length, must never move this column.
 func (s taskStore) ClaimTask(ctx context.Context, params ClaimTaskParams) (Claim, error) {
 	tx, err := s.pool.Begin(ctx)
 	if err != nil {
@@ -216,7 +224,7 @@ func (s taskStore) ClaimTask(ctx context.Context, params ClaimTaskParams) (Claim
 	}
 
 	if _, err := tx.Exec(ctx, `
-		UPDATE task SET current_claim_id = $1, lease_expires_at = $2, attempt_count = attempt_count + 1
+		UPDATE task SET current_claim_id = $1, lease_expires_at = $2
 		WHERE id = $3
 	`, claim.ID, claim.InitialLeaseExpiresAt, params.TaskID); err != nil {
 		return Claim{}, fmt.Errorf("update task claim state: %w", err)

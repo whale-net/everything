@@ -3,8 +3,9 @@
 // Real-Postgres coverage for TaskStore.AbandonClaim (task_abandon.go, issue
 // #2726's Testing section, FR9): abandon-from-the-current-claimant
 // accounting (claim released with release_reason='abandon', one
-// `abandoned` task_attempt row, attempt_count+1, current_lane untouched,
-// immediate re-claimability by a different session), a non-current claim id
+// `abandoned` task_attempt row, attempt_count+1 from the abandon alone,
+// current_lane untouched, immediate re-claimability by a different
+// session), a non-current claim id
 // rejected with ErrClaimNotCurrent writing nothing, an already-released
 // claim (via reclaim or complete) rejected the same way, the shared-cap
 // terminal state (abandons alone, and a mix of abandons and lapses, both
@@ -40,8 +41,9 @@ import (
 // #2726's Testing section item 1: abandoning the task's current, unreleased
 // claim releases it immediately (release_reason='abandon'), records exactly
 // one `abandoned` task_attempt row, increments attempt_count by exactly
-// one, leaves current_lane completely untouched (abandoning is not a
-// verdict), and the task is immediately claimable by a different session.
+// one (the abandon alone -- the earlier claim never moved it), leaves
+// current_lane completely untouched (abandoning is not a verdict), and the
+// task is immediately claimable by a different session.
 func TestTaskStore_AbandonClaim_CurrentClaimant_ReleasesWithAccounting(t *testing.T) {
 	ctx := context.Background()
 	s, db := newTaskTestStore(t)
@@ -79,7 +81,7 @@ func TestTaskStore_AbandonClaim_CurrentClaimant_ReleasesWithAccounting(t *testin
 
 	got, err := s.Tasks().GetTaskByID(ctx, task.ID)
 	require.NoError(t, err)
-	assert.Equal(t, 2, got.AttemptCount, "attempt_count must be incremented by exactly one (1 from the claim, 1 from the abandon)")
+	assert.Equal(t, 1, got.AttemptCount, "attempt_count must be incremented by exactly one, from the abandon alone -- the claim itself never moves it")
 	assert.Nil(t, got.CurrentClaimID, "current_claim_id must be cleared")
 	assert.Nil(t, got.LeaseExpiresAt, "lease_expires_at must be cleared")
 	assert.Equal(t, store.LaneScaffold, got.CurrentLane, "current_lane must be untouched by an abandon -- it is not a verdict")
