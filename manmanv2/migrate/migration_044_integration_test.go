@@ -90,8 +90,8 @@ func TestMigration044_BackfillsExistingRowsToUnknownAndEnforcesCheck(t *testing.
 	if err != nil {
 		t.Fatalf("LatestVersion: %v", err)
 	}
-	if latest != 44 {
-		t.Fatalf("expected the latest migration source version to be 44, got %d -- update this test if a newer migration has since landed", latest)
+	if latest != 46 {
+		t.Fatalf("expected the latest migration source version to be 46, got %d -- update this test if a newer migration has since landed", latest)
 	}
 
 	// Apply everything up to but excluding 044, seed a pre-existing backups
