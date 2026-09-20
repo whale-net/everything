@@ -299,3 +299,137 @@ func TestSessionLive_BadgeReflectsFailureEventEvenWhenSessionStateStillRunning(t
 		t.Errorf("expected failed banner line naming the category and detail, got %q", body)
 	}
 }
+
+// This block guards issue #2796: eventTypePrefix/reconcileTerminalState/
+// TranscriptList must all recognize FR1's status_change:<status> transcript
+// event category -- fixing the stale state badge (#2794) and the leaked
+// "Unrecognized event type: status_change:..." transcript rows (#2795).
+
+// TestEventTypePrefix_StatusChange guards eventTypePrefix's new
+// "status_change:" prefix match (mirrors the existing tool_call:/
+// tool_result: prefix branches) for each of FR1's four transition values.
+func TestEventTypePrefix_StatusChange(t *testing.T) {
+	for _, status := range []string{"running", "awaiting_input", "done", "stopped"} {
+		t.Run(status, func(t *testing.T) {
+			got := eventTypePrefix(events.StatusChangeEventType(status))
+			if got != "status_change" {
+				t.Errorf("eventTypePrefix(%q) = %q, want %q", events.StatusChangeEventType(status), got, "status_change")
+			}
+		})
+	}
+}
+
+// TestReconcileTerminalState_StatusChangeOverridesStaleState guards #2794:
+// a status_change:done/status_change:stopped last event must override a
+// stale DB-read session.State, the same way the pre-existing capped/failure
+// branches already do -- most visible for done/stopped since nothing
+// commits after a session goes terminal, so nothing else can trigger a
+// corrective re-render before the ~30s heartbeat.
+func TestReconcileTerminalState_StatusChangeOverridesStaleState(t *testing.T) {
+	for _, status := range []string{"done", "stopped"} {
+		t.Run(status, func(t *testing.T) {
+			session := SessionView{State: "awaiting_input"}
+			evs := []TranscriptEventView{evOfType(events.StatusChangeEventType(status), "")}
+
+			got := reconcileTerminalState(session, evs)
+
+			if got.State != status {
+				t.Errorf("expected State %q, got %q", status, got.State)
+			}
+		})
+	}
+}
+
+// TestReconcileTerminalState_StatusChangeRunningAndAwaitingInputAlsoOverride
+// covers the two non-terminal transitions too -- cheap defense-in-depth per
+// the issue, even though running/awaiting_input self-correct quickly via the
+// next transcript event in practice.
+func TestReconcileTerminalState_StatusChangeRunningAndAwaitingInputAlsoOverride(t *testing.T) {
+	cases := []struct {
+		from string
+		to   string
+	}{
+		{from: "awaiting_input", to: "running"},
+		{from: "running", to: "awaiting_input"},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.to, func(t *testing.T) {
+			session := SessionView{State: tc.from}
+			evs := []TranscriptEventView{evOfType(events.StatusChangeEventType(tc.to), "")}
+
+			got := reconcileTerminalState(session, evs)
+
+			if got.State != tc.to {
+				t.Errorf("expected State %q, got %q", tc.to, got.State)
+			}
+		})
+	}
+}
+
+// TestReconcileTerminalState_StatusChangeAlreadyMatchingUnchanged guards the
+// no-op path: the last event's parsed status already equals session.State,
+// so session is returned unchanged (matching the existing capped/failure
+// unchanged-guard tests).
+func TestReconcileTerminalState_StatusChangeAlreadyMatchingUnchanged(t *testing.T) {
+	session := SessionView{State: "stopped"}
+	evs := []TranscriptEventView{evOfType(events.StatusChangeEventType("stopped"), "")}
+
+	got := reconcileTerminalState(session, evs)
+
+	if got != session {
+		t.Errorf("expected session returned unchanged, got %+v (want %+v)", got, session)
+	}
+}
+
+// TestReconcileTerminalState_StatusChangeMalformedSuffixUnchanged proves a
+// malformed/empty status suffix never forces a state change -- the same
+// "never break rendering on a bad payload" discipline the capped/failure
+// branches already follow.
+func TestReconcileTerminalState_StatusChangeMalformedSuffixUnchanged(t *testing.T) {
+	session := SessionView{State: "running"}
+	evs := []TranscriptEventView{evOfType(events.EventTypeStatusChange+":", "")}
+
+	got := reconcileTerminalState(session, evs)
+
+	if got != session {
+		t.Errorf("expected session returned unchanged, got %+v (want %+v)", got, session)
+	}
+}
+
+func renderTranscriptList(t *testing.T, evs []TranscriptEventView) string {
+	t.Helper()
+	var buf strings.Builder
+	if err := TranscriptList(evs).Render(context.Background(), &buf); err != nil {
+		t.Fatalf("TranscriptList render failed: %v", err)
+	}
+	return buf.String()
+}
+
+// TestTranscriptList_StatusChangeEventSkipsRow guards #2795: a
+// status_change:<status> event interleaved with ordinary events must never
+// reach EventRow -- no "Unrecognized event type" leak, and its own EventID
+// never appears as a data-event-id attribute -- while the surrounding
+// ordinary events still render their own rows unchanged.
+func TestTranscriptList_StatusChangeEventSkipsRow(t *testing.T) {
+	evs := []TranscriptEventView{
+		{EventID: "e1", Seq: 1, Type: events.EventTypeUserMessage, Payload: []byte(`{"role":"user","content":"hi"}`)},
+		{EventID: "e2", Seq: 2, Type: events.StatusChangeEventType("running"), Payload: []byte(`{"status":"running"}`)},
+		{EventID: "e3", Seq: 3, Type: events.EventTypeAssistantMessage, Payload: []byte(`{"role":"assistant","content":"hello"}`)},
+	}
+
+	body := renderTranscriptList(t, evs)
+
+	if strings.Contains(body, "Unrecognized event type") {
+		t.Errorf("expected no leaked status_change row, got %q", body)
+	}
+	if strings.Contains(body, `data-event-id="e2"`) {
+		t.Errorf("expected status_change event's own row to be skipped entirely, got %q", body)
+	}
+	if !strings.Contains(body, `data-event-id="e1"`) || !strings.Contains(body, `data-event-id="e3"`) {
+		t.Errorf("expected surrounding ordinary events to still render their own rows, got %q", body)
+	}
+	if !strings.Contains(body, "hi") || !strings.Contains(body, "hello") {
+		t.Errorf("expected surrounding ordinary events' content unchanged, got %q", body)
+	}
+}

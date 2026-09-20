@@ -201,15 +201,17 @@ templ SessionDetail(data SessionDetailData) {
 }
 
 // reconcileTerminalState overrides session's DB-read state with the
-// terminal state implied by evs's last event, when that event is a
-// capped/failure event and session.State does not already report it --
-// closes the race where a live SSE delivery triggered by that event's
-// own publish renders before the session's separate terminal-status DB
-// write has landed (issue #2776). evs is always Seq-ordered and a
-// capped/failure event is always a session's last transcript event
-// (nothing commits after a session goes terminal), so the event's mere
-// presence is authoritative regardless of what the DB read currently
-// says.
+// state implied by evs's last event, when that event is a capped/
+// failure/status_change event and session.State does not already report
+// it -- closes the race where a live SSE delivery triggered by that
+// event's own publish renders before the session's separate
+// terminal-status DB write has landed (issue #2776, extended to FR1's
+// status_change:<status> events by issue #2796). evs is always
+// Seq-ordered and a capped/failure/status_change event is always a
+// session's last transcript event (nothing commits after a session goes
+// terminal, and status_change:running/awaiting_input precede whatever
+// comes next in the same turn), so the event's mere presence is
+// authoritative regardless of what the DB read currently says.
 func reconcileTerminalState(session SessionView, evs []TranscriptEventView) SessionView {
 	if len(evs) == 0 {
 		return session
@@ -237,6 +239,12 @@ func reconcileTerminalState(session SessionView, evs []TranscriptEventView) Sess
 		session.State = "failed"
 		session.ErrorCategory = payload.ErrorCategory
 		session.ErrorDetail = payload.ErrorDetail
+	case "status_change":
+		status, ok := strings.CutPrefix(last.Type, "status_change:")
+		if !ok || status == "" || status == session.State {
+			return session
+		}
+		session.State = status
 	}
 	return session
 }
@@ -374,20 +382,26 @@ templ StopControlAbsent() {
 // transcript's full current state -- this is the swap target every SSE
 // delivery replaces wholesale (../handlers_session_live.go's
 // sessionTranscriptFragment, ARCHITECTURE.md "full-state, not deltas --
-// matching htmxsse's fragment-swap model").
+// matching htmxsse's fragment-swap model"). A status_change:<status>
+// event is skipped entirely rather than routed into EventRow -- it exists
+// only to drive reconcileTerminalState's badge reconciliation (FR3), never
+// to populate a transcript content row (issue #2796).
 templ TranscriptList(evs []TranscriptEventView) {
 	<div class="flex flex-col gap-2">
 		for _, ev := range evs {
-			@EventRow(ev)
+			if eventTypePrefix(ev.Type) != "status_change" {
+				@EventRow(ev)
+			}
 		}
 	</div>
 }
 
 // eventTypePrefix reports the FR2 category a transcript event's Type
 // belongs to: the four session-lifecycle types are matched verbatim,
-// tool_call/tool_result by prefix (events.go's EventTypeToolCall/
-// EventTypeToolResult doc comment: the committed type is
-// "tool_call:<call_index>"/"tool_result:<call_index>", never the bare
+// tool_call/tool_result/status_change by prefix (events.go's
+// EventTypeToolCall/EventTypeToolResult/EventTypeStatusChange doc
+// comments: the committed type is "tool_call:<call_index>"/
+// "tool_result:<call_index>"/"status_change:<status>", never the bare
 // constant, so a consumer must match by prefix, not equality).
 func eventTypePrefix(eventType string) string {
 	switch {
@@ -403,6 +417,8 @@ func eventTypePrefix(eventType string) string {
 		return "tool_call"
 	case strings.HasPrefix(eventType, "tool_result:"):
 		return "tool_result"
+	case strings.HasPrefix(eventType, "status_change:"):
+		return "status_change"
 	default:
 		return "unknown"
 	}
