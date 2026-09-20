@@ -23,7 +23,7 @@ import (
 // server.
 func newReleaseFixture() (*ReleaseServer, repository.Registry) {
 	repo := fake.New()
-	return NewReleaseServer(repo, nil), repo
+	return NewReleaseServer(repo, nil, nil), repo
 }
 
 func triggerReq(scope string, targets ...*pb.ReleaseTargetInput) *pb.TriggerReleaseRequest {
@@ -116,6 +116,86 @@ func TestTriggerRelease_Success(t *testing.T) {
 	}
 	if _, ok := digests["demo-achart"]; ok {
 		t.Fatalf("expected no digest entry for build-fresh target demo-achart")
+	}
+}
+
+// TestTriggerRelease_PublishesQueuedEvent proves the FR7/issue #1702
+// publish point: TriggerRelease publishes exactly once after
+// CreateReleaseRun's write commits, carrying the new release_run_id --
+// regardless of how many targets were in the batch (see this method's doc
+// comment: one publish per TriggerRelease call, not one per target).
+func TestTriggerRelease_PublishesQueuedEvent(t *testing.T) {
+	repo := fake.New()
+	pub := NewFakePublisher()
+	srv := NewReleaseServer(repo, nil, pub)
+
+	resp, err := srv.TriggerRelease(authedCtx(), triggerReq("demo",
+		target("demo-svc", pb.ArtifactKind_ARTIFACT_KIND_IMAGE, ""),
+		target("demo-achart", pb.ArtifactKind_ARTIFACT_KIND_CHART, ""),
+	))
+	if err != nil {
+		t.Fatalf("TriggerRelease: %v", err)
+	}
+
+	evs := pub.GetReleaseRunPublishedEvents()
+	if len(evs) != 1 {
+		t.Fatalf("expected exactly 1 published event, got %d", len(evs))
+	}
+	if evs[0].ReleaseRunID != resp.ReleaseRunId {
+		t.Fatalf("expected release_run_id %s, got %s", resp.ReleaseRunId, evs[0].ReleaseRunID)
+	}
+	if evs[0].EventKind != "release_target_queued" {
+		t.Fatalf("expected event_kind 'release_target_queued', got %s", evs[0].EventKind)
+	}
+}
+
+// TestTriggerRelease_ValidationFailure_DoesNotPublish confirms a
+// TriggerRelease call that never reaches CreateReleaseRun (request-shape
+// validation failure, same as the CreateReleaseRun-fails case the issue
+// calls for: no row was ever created) publishes nothing.
+func TestTriggerRelease_ValidationFailure_DoesNotPublish(t *testing.T) {
+	repo := fake.New()
+	pub := NewFakePublisher()
+	srv := NewReleaseServer(repo, nil, pub)
+
+	_, err := srv.TriggerRelease(authedCtx(), triggerReq("demo"))
+	requireCode(t, err, codes.InvalidArgument, "TriggerRelease")
+	if got := len(pub.GetReleaseRunPublishedEvents()); got != 0 {
+		t.Fatalf("expected 0 published events on validation failure, got %d", got)
+	}
+}
+
+// TestTriggerRelease_AlreadyReleasing_DoesNotPublish confirms the
+// rejectIfAlreadyReleasing failure path -- reached after a first,
+// successful TriggerRelease -- does not itself publish a second time (the
+// first call's own publish is the only one recorded).
+func TestTriggerRelease_AlreadyReleasing_DoesNotPublish(t *testing.T) {
+	repo := fake.New()
+	pub := NewFakePublisher()
+	srv := NewReleaseServer(repo, nil, pub)
+
+	if _, err := srv.TriggerRelease(authedCtx(), triggerReq("demo", target("demo-svc", pb.ArtifactKind_ARTIFACT_KIND_IMAGE, ""))); err != nil {
+		t.Fatalf("first TriggerRelease: %v", err)
+	}
+	if got := len(pub.GetReleaseRunPublishedEvents()); got != 1 {
+		t.Fatalf("expected 1 published event after first TriggerRelease, got %d", got)
+	}
+
+	_, err := srv.TriggerRelease(authedCtx(), triggerReq("demo", target("demo-svc", pb.ArtifactKind_ARTIFACT_KIND_IMAGE, "")))
+	requireCode(t, err, codes.FailedPrecondition, "TriggerRelease (already releasing)")
+	if got := len(pub.GetReleaseRunPublishedEvents()); got != 1 {
+		t.Fatalf("expected still 1 published event after rejected second TriggerRelease, got %d", got)
+	}
+}
+
+// TestTriggerRelease_NilPublisher_NoPanic proves NFR6: a nil publisher
+// (the default when RABBITMQ_URL is unset) does not change TriggerRelease's
+// behavior -- newReleaseFixture already wires nil, but this asserts it
+// explicitly against the same request TestTriggerRelease_Success uses.
+func TestTriggerRelease_NilPublisher_NoPanic(t *testing.T) {
+	srv, _ := newReleaseFixture()
+	if _, err := srv.TriggerRelease(authedCtx(), triggerReq("demo", target("demo-svc", pb.ArtifactKind_ARTIFACT_KIND_IMAGE, ""))); err != nil {
+		t.Fatalf("TriggerRelease with nil publisher: %v", err)
 	}
 }
 
@@ -469,7 +549,7 @@ func notifyFixture(t *testing.T) (*ReleaseServer, repository.Registry, *fakeTemp
 	t.Helper()
 	repo := fake.New()
 	temporal := &fakeTemporal{}
-	srv := NewReleaseServer(repo, temporal)
+	srv := NewReleaseServer(repo, temporal, nil)
 
 	created, _, err := repo.ReleaseRuns().CreateReleaseRun(context.Background(), repository.ReleaseRun{
 		TriggeredBy:        "test-user",

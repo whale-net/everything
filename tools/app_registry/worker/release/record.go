@@ -16,6 +16,29 @@ import (
 	"github.com/whale-net/everything/tools/app_registry/server/repository"
 )
 
+// releaseTargetEventKind returns the "release_target_<state>" SSE event
+// kind RecordTargetState publishes for state, and releaseTargetEventStatus
+// returns its paired advisory status. Both are stable, documented strings
+// (FR7, issue #1702): every non-terminal state (queued/building/
+// publishing/recording) is reported "pending", Succeeded/Failed report
+// their own name. Neither value is meant to be acted on by a consumer --
+// the SSE fragment re-reads release_run_target state at delivery time
+// (FR12) rather than rendering this payload; see events.ReleaseRunEventPayload.
+func releaseTargetEventKind(s repository.ReleaseRunTargetState) string {
+	return "release_target_" + string(s)
+}
+
+func releaseTargetEventStatus(s repository.ReleaseRunTargetState) string {
+	switch s {
+	case repository.ReleaseRunTargetStateSucceeded:
+		return "succeeded"
+	case repository.ReleaseRunTargetStateFailed:
+		return "failed"
+	default:
+		return "pending"
+	}
+}
+
 // RecordResolvedPlan implements ReleaseActivities.RecordResolvedPlan (issue
 // #906, validation finding #903): stamps resolvedPlan onto
 // release_run.resolved_plan for releaseRunID via
@@ -213,6 +236,14 @@ var releaseRunTargetStateOrder = []repository.ReleaseRunTargetState{
 // attempt already advanced past it), and (defensively) a second,
 // contradictory final call, which should never happen within one workflow
 // execution but must not crash the workflow if it somehow did.
+//
+// Publish (FR7, issue #1702): this is the single funnel every
+// release_run_target write goes through (both ReleaseWorkflow's
+// ExecuteActivity dispatches and FinalizePublish's direct calls), so it is
+// the one place that publishes a "release_target_<state>" SSE event on
+// a.Publisher for each write that actually lands -- see the walk loop and
+// the Failed branch below. The no-op early return above (already at
+// newState, already terminal) publishes nothing.
 func (a *Activities) RecordTargetState(ctx context.Context, releaseRunID string, target ReleaseTarget, newState repository.ReleaseRunTargetState, buildID, errorDetail string) error {
 	if a.Registry == nil {
 		return fmt.Errorf("record target state for release run %s: Activities.Registry not configured", releaseRunID)
@@ -250,6 +281,11 @@ func (a *Activities) RecordTargetState(ctx context.Context, releaseRunID string,
 		// worth finding by grep without a Postgres round trip.
 		workerLog.Warn("release target failed",
 			"release_run_id", releaseRunID, "target", target.key(), "build_id", buildID, "error_detail", errorDetail)
+		// Publish after the write lands (NFR3): never before, never on a
+		// failed UpdateTargetState (the early return above skips this).
+		if a.Publisher != nil {
+			a.Publisher.PublishReleaseRun(releaseRunID, releaseTargetEventKind(repository.ReleaseRunTargetStateFailed), releaseTargetEventStatus(repository.ReleaseRunTargetStateFailed))
+		}
 		return nil
 	}
 
@@ -279,6 +315,13 @@ func (a *Activities) RecordTargetState(ctx context.Context, releaseRunID string,
 		}
 		if err := repo.UpdateTargetState(ctx, row.ReleaseRunTargetID, step, stepBuildID, stepErrorDetail); err != nil {
 			return fmt.Errorf("record target state for release run %s: transition %s -> %s for %s: %w", releaseRunID, row.State, step, target.key(), err)
+		}
+		// Publish once per landed write (FR7, issue #1702) -- if this call
+		// walked multiple intermediate states to catch up, each one gets
+		// its own event, in order. Never published on a failed
+		// UpdateTargetState (the error return above short-circuits first).
+		if a.Publisher != nil {
+			a.Publisher.PublishReleaseRun(releaseRunID, releaseTargetEventKind(step), releaseTargetEventStatus(step))
 		}
 	}
 	if newState == repository.ReleaseRunTargetStateSucceeded {

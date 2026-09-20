@@ -5,6 +5,7 @@ import (
 	"fmt"
 
 	"github.com/whale-net/everything/libs/go/logging"
+	"github.com/whale-net/everything/tools/app_registry/events"
 	"github.com/whale-net/everything/tools/app_registry/server/repository"
 )
 
@@ -34,6 +35,17 @@ type Activities struct {
 	// (buildref.go's resolveDispatchRef) -- the same direct-Postgres
 	// rationale applies: AppBuildLogs() has no read RPC either.
 	Registry repository.Registry
+
+	// Publisher is the optional, best-effort SSE event publisher
+	// RecordTargetState uses to announce every release_run_target state
+	// write it lands (FR7, issue #1702) -- the same
+	// events.PublisherInterface writeback.Recorder/ArgoSyncActivities
+	// already hold. Nil in any deployment with RABBITMQ_URL unset
+	// (initializePublisher, worker/main.go) or in tests that don't care
+	// about publish behavior; every use is nil-checked, and a publish can
+	// never fail, retry, or delay a state write (NFR6/NFR3 -- see
+	// record.go's package doc comment).
+	Publisher events.PublisherInterface
 
 	// GitHub dispatches/polls the GitHub Actions build job. Required for
 	// DispatchBuild/PollBuild.

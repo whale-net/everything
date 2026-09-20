@@ -1,0 +1,17 @@
+# Release-Run SSE Publish Points — Architecture
+
+**A second event family shares the promotion exchange** (`events.ExchangeName`, `tools/app_registry/events/publisher.go`): every `release_run_target` state write announces itself on that release run's own routing key, `release_run.<release_run_id>` (`events.TopicForReleaseRun`). This document records only the publish-point set and payload shape (issue #1702, spec #1699 FR7/NFR3/NFR6). The `/releases/{id}` page's route mechanics — fragment rendering, heartbeat, auth, terminal/transient discrimination — are not built yet; when they are, that work should follow `architecture/21-promotion-sse.md`'s pattern closely and either extend this file or add a sibling, not duplicate the shared mechanics documented there (non-blocking hand-off, process-lifetime publish context, non-fatal construction, best-effort shutdown all already apply unchanged — `Publisher` is the same component for both event families).
+
+## The two publish points
+
+1. **Row creation at `QUEUED`.** `ReleaseServer.TriggerRelease` (`server/handlers/release.go`) publishes once, after `repo.ReleaseRuns().CreateReleaseRun` commits — one publish per `TriggerRelease` call, not one per target in the batch, since every target in that batch starts `QUEUED` in the same write.
+
+2. **Every transition `RecordTargetState` lands.** `worker/release/record.go`'s `RecordTargetState` is the single funnel every `BUILDING`/`PUBLISHING`/`RECORDING`/`SUCCEEDED`/`FAILED` write goes through — both `ReleaseWorkflow`'s `workflow.ExecuteActivity` dispatches and `FinalizePublish`'s direct in-process calls. It publishes once per `UpdateTargetState` call that actually lands (a single `RecordTargetState` call can walk several intermediate states to catch up — each landed step gets its own event, in order), and publishes nothing on its idempotent no-op path (already at the desired state, or already terminal).
+
+## Payload shape
+
+`PublishReleaseRun(releaseRunID, eventKind, eventStatus)`. `eventKind` is `"release_target_" + state` (`release_target_queued`, `release_target_building`, `release_target_publishing`, `release_target_recording`, `release_target_succeeded`, `release_target_failed`); `eventStatus` is `"pending"` for every non-terminal state and `"succeeded"`/`"failed"` for the two terminal ones. Both fields are **advisory only** — same convention as promotion events (see `architecture/21-promotion-sse.md`'s Post-commit best-effort publish section): a future `/releases/{id}` SSE route must re-read `release_run`/`release_run_target` state at delivery time rather than render this payload, and must not treat the target identity carried implicitly by a publish as something to act on directly.
+
+## NFR3 / NFR6 (never fail, retry, or delay a write; nil-safe)
+
+Every publish happens strictly **after** its write returns successfully, and its return value is discarded — a publish can never turn a successful write into an activity error, and (unlike the write itself) is never retried. `Activities.Publisher` and `ReleaseServer.pub` are both `nil` in any deployment with `RABBITMQ_URL` unset (`initializePublisher`, `worker/main.go` and `server/main.go`) — every call site is nil-checked, matching `promotion.go`'s existing `s.pub != nil` guards exactly. With no broker, the release pipeline is entirely unaffected: `TriggerRelease`, `ReleaseWorkflow`, and `FinalizePublish` all run to completion unchanged, and `/releases/{id}` still renders current state by ordinary GET.

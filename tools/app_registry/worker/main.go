@@ -207,6 +207,7 @@ func run() error {
 	// dev/Tilt keep working with zero config either way.
 	releaseActivities := &release.Activities{
 		Registry:       repo,
+		Publisher:      publisher,
 		PlanBinaryPath: os.Getenv("RELEASE_PLAN_BINARY_PATH"),
 		WorkspaceRoot:  os.Getenv("RELEASE_WORKSPACE_ROOT"),
 		// ChartMuseum credentials for FinalizePublish's finalize-chart

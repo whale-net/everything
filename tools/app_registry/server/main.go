@@ -178,7 +178,7 @@ func registerServices(grpcServer *grpc.Server, repo repository.Registry, tempora
 	pb.RegisterArtifactRegistryServer(grpcServer, handlers.NewArtifactServer(repo, handlers.WithReleaseToolsS3(releaseToolsS3Bucket, releaseToolsS3PublicEndpoint, releaseToolsS3Region, releaseToolsS3AccessKey, releaseToolsS3SecretKey)))
 	pb.RegisterPromotionRegistryServer(grpcServer, handlers.NewPromotionServer(repo, temporalClient, publisher))
 	pb.RegisterEnvironmentRegistryServer(grpcServer, handlers.NewEnvironmentServer(repo))
-	pb.RegisterReleaseRegistryServer(grpcServer, handlers.NewReleaseServer(repo, temporalClient))
+	pb.RegisterReleaseRegistryServer(grpcServer, handlers.NewReleaseServer(repo, temporalClient, publisher))
 
 	// Health check — reports SERVING once the process is up. AR-1 has no
 	// downstream dependency to gate on beyond the DB pool, which is already
