@@ -1044,6 +1044,52 @@ go_test(
 #
 # Run it explicitly (requires a working Docker daemon):
 #   bazel test //krill/store:task_complete_integration_test --test_output=all
+# Real-Postgres coverage for TaskStore.ReclaimExpired (task_reclaim.go,
+# migration 015, issue #2724's Testing section, FR7): an expired lease
+# becomes reclaimable and counts as an attempt, under-cap/at-cap outcomes,
+# a live lease left untouched, a single-TaskID-scoped sweep, and an
+# unknown TaskID's ErrNotFound. Shares task_integration_test.go's
+# test-store/test-scope/test-world/subject helpers,
+# task_dependency_integration_test.go's createTestTask/setTaskLane
+# helpers, and task_claim_integration_test.go's claimTestSession/
+# countRows helpers rather than duplicating them, mirroring
+# task_lease_integration_test's own choice. Deliberately NOT part of
+# `bazel test //...` -- see //libs/go/dbtest's README for the full
+# rationale.
+#
+# Run it explicitly (requires a working Docker daemon):
+#   bazel test //krill/store:task_reclaim_integration_test --test_output=all
+go_test(
+    name = "task_reclaim_integration_test",
+    size = "large",
+    timeout = "long",
+    srcs = [
+        "task_claim_integration_test.go",
+        "task_dependency_integration_test.go",
+        "task_integration_test.go",
+        "task_reclaim_integration_test.go",
+    ],
+    gotags = ["integration"],
+    tags = [
+        "external",
+        "integration",
+        "manual",
+        "no-cache",
+        "no-sandbox",
+        "requires-network",
+    ],
+    deps = [
+        ":store",
+        "//krill/migrate/schema",
+        "//libs/go/dbtest",
+        "//libs/go/migrate",
+        "@com_github_google_uuid//:uuid",
+        "@com_github_jackc_pgx_v5//stdlib",
+        "@com_github_stretchr_testify//assert",
+        "@com_github_stretchr_testify//require",
+    ],
+)
+
 go_test(
     name = "task_complete_integration_test",
     size = "large",
