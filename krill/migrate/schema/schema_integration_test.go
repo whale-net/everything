@@ -160,18 +160,18 @@ func TestMigrations_UpDownUp_LeavesCleanDatabaseAndIsRerunnable(t *testing.T) {
 
 	latest, err := runner.LatestVersion()
 	require.NoError(t, err)
-	require.Equal(t, uint(15), latest, "expected the latest migration source version to be 15 (001_scope, 002_spec_entities, 003_session, 004_milestone_assoc, 005_pointer_artifact, 006_mcpauth_credential, 007_ui_sessions, 008_design_session, 009_import_completion, 010_milestone_authoring, 011_milepebble, 012_milestone_status, 013_delivery_shipment, 014_backlog_bucket, 015_work_axis) -- update this test if a later migration has since landed")
+	require.Equal(t, uint(16), latest, "expected the latest migration source version to be 16 (001_scope, 002_spec_entities, 003_session, 004_milestone_assoc, 005_pointer_artifact, 006_mcpauth_credential, 007_ui_sessions, 008_design_session, 009_import_completion, 010_milestone_authoring, 011_milepebble, 012_milestone_status, 013_delivery_shipment, 014_backlog_bucket, 015_work_axis, 016_escalation_axis) -- update this test if a later migration has since landed")
 
 	// -- Up: scope, krill_session, the milestone tables, pointer_artifact,
 	// the mcpauth tables, ui_sessions, design_session/revision_event,
 	// milestone_status_event, delivery_shipment, and the work-axis tables
 	// must exist, version must land clean at the latest --
-	require.NoError(t, runner.Up(), "apply migrations 001-015")
+	require.NoError(t, runner.Up(), "apply migrations 001-016")
 
 	version, dirty, err := runner.Version()
 	require.NoError(t, err)
 	assert.False(t, dirty)
-	assert.Equal(t, uint(15), version)
+	assert.Equal(t, uint(16), version)
 
 	assert.True(t, tableExists(t, ctx, db, "scope"), "expected table \"scope\" to exist after Up()")
 	assert.True(t, tableExists(t, ctx, db, "krill_session"), "expected table \"krill_session\" to exist after Up() (003_session, issue #2489)")
@@ -226,7 +226,7 @@ func TestMigrations_UpDownUp_LeavesCleanDatabaseAndIsRerunnable(t *testing.T) {
 	version, dirty, err = runner.Version()
 	require.NoError(t, err)
 	assert.False(t, dirty)
-	assert.Equal(t, uint(15), version)
+	assert.Equal(t, uint(16), version)
 
 	assert.True(t, tableExists(t, ctx, db, "scope"), "expected table \"scope\" to exist again after the second Up()")
 	assert.True(t, tableExists(t, ctx, db, "krill_session"), "expected table \"krill_session\" to exist again after the second Up()")
@@ -520,9 +520,10 @@ func TestMigration002_NoDisplayNumberColumnsOrJoinTables(t *testing.T) {
 		"mcp_credential", "mcp_oauth_client", "mcp_auth_code", "ui_sessions", "design_session", "revision_event", "import_completion",
 		"milestone_status_event", "delivery_shipment",
 		"task", "task_dependency", "task_claim", "task_lease_event", "task_attempt", "task_note",
+		"task_escalation_event", "task_intervention_event", "task_note_lifecycle_event",
 	}, specTables...)
 	sort.Strings(expected)
-	assert.Equal(t, expected, tables, "the public schema must contain exactly scope + the seven spec tables + krill_session (003_session, issue #2489) + milestone_ref + entity_milestone (004_milestone_assoc, issue #2492) + pointer_artifact (005_pointer_artifact, issue #2496) + mcp_credential/mcp_oauth_client/mcp_auth_code (006_mcpauth_credential) + ui_sessions (007_ui_sessions) + design_session/revision_event (008_design_session, issue #2542) + import_completion (009_import_completion, issue #2548) + milestone_deferral (010_milestone_authoring, issue #2683) + milestone_status_event (012_milestone_status, issue #2685) + delivery_shipment (013_delivery_shipment, issue #2686) + task/task_dependency/task_claim/task_lease_event/task_attempt/task_note (015_work_axis, issue #2719) + golang-migrate's schema_migrations -- no fourth parallel table (e.g. \"capability\") and no join/bridge table for parentage (LB2)")
+	assert.Equal(t, expected, tables, "the public schema must contain exactly scope + the seven spec tables + krill_session (003_session, issue #2489) + milestone_ref + entity_milestone (004_milestone_assoc, issue #2492) + pointer_artifact (005_pointer_artifact, issue #2496) + mcp_credential/mcp_oauth_client/mcp_auth_code (006_mcpauth_credential) + ui_sessions (007_ui_sessions) + design_session/revision_event (008_design_session, issue #2542) + import_completion (009_import_completion, issue #2548) + milestone_deferral (010_milestone_authoring, issue #2683) + milestone_status_event (012_milestone_status, issue #2685) + delivery_shipment (013_delivery_shipment, issue #2686) + task/task_dependency/task_claim/task_lease_event/task_attempt/task_note (015_work_axis, issue #2719) + task_escalation_event/task_intervention_event/task_note_lifecycle_event (016_escalation_axis, issue #2868) + golang-migrate's schema_migrations -- no fourth parallel table (e.g. \"capability\") and no join/bridge table for parentage (LB2)")
 
 	// No display-number-shaped column on any spec table -- LB2's own
 	// vocabulary for the trap this guards against.
@@ -1961,4 +1962,371 @@ func TestMigration015_UpDownRoundTrip(t *testing.T) {
 		require.NoError(t, db.Pool.QueryRow(ctx, `SELECT count(*) FROM `+table).Scan(&count))
 		assert.Equal(t, 0, count, "re-applying 015 creates a fresh, empty table %q -- the rows seeded before the rollback are gone for good", table)
 	}
+}
+
+// TestMigration016_SchemaContract asserts 016_escalation_axis's own boundary
+// calls (issue #2868's Testing section, FR2/NFR1-NFR6): scope_id and both
+// LB4 subject pairs are NOT NULL on all three new tables (NFR1, NFR3);
+// task_escalation_event's reason/counter/cap pairing CHECK (manual carries
+// neither, every other reason carries both, NFR4) is DB-enforced, not just
+// a store-layer convention; task's three additive columns
+// (thrash_count/current_escalation_id/cancelled_at) and task_note's
+// additive current_status column carry the shapes the migration commits
+// to; task_claim.release_reason and task_attempt.outcome accept every
+// value 016 widens their CHECKs to add; and task_claimable_idx's own
+// indexdef carries both new predicates (FR2's index-enforced claimability
+// rule).
+func TestMigration016_SchemaContract(t *testing.T) {
+	ctx := context.Background()
+	db := dbtest.NewPostgres(ctx, t, dbtest.Options{})
+
+	sqlDB, err := sql.Open("pgx", db.ConnString)
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = sqlDB.Close() })
+
+	runner := migrate.NewRunner(sqlDB, schema.Migrations, schema.Dir)
+	require.NoError(t, runner.Up())
+
+	// scope_id and both LB4 subject pairs are NOT NULL on every new table.
+	subjectCols := []string{
+		"scope_id",
+		"created_by_acting_iss", "created_by_acting_sub", "created_by_acting_kind",
+		"created_by_on_behalf_of_iss", "created_by_on_behalf_of_sub", "created_by_on_behalf_of_kind",
+	}
+	for _, table := range []string{"task_escalation_event", "task_intervention_event", "task_note_lifecycle_event"} {
+		for _, col := range subjectCols {
+			_, nullable := nullableColumn(t, ctx, db, table, col)
+			assert.Equal(t, "NO", nullable, "%s.%s must be NOT NULL (NFR1/NFR3)", table, col)
+		}
+	}
+
+	// task's three additive columns (FR1 thrash counter, FR2/FR3/FR6/FR9
+	// current escalation, FR7 dead-letter).
+	dataType, nullable := nullableColumn(t, ctx, db, "task", "thrash_count")
+	assert.Equal(t, "integer", dataType)
+	assert.Equal(t, "NO", nullable, "task.thrash_count must be NOT NULL (it defaults to 0)")
+	_, nullable = nullableColumn(t, ctx, db, "task", "current_escalation_id")
+	assert.Equal(t, "YES", nullable, "task.current_escalation_id must be nullable -- most tasks are never escalated")
+	_, nullable = nullableColumn(t, ctx, db, "task", "cancelled_at")
+	assert.Equal(t, "YES", nullable, "task.cancelled_at must be nullable -- most tasks are never dead-lettered")
+
+	// task_note's additive current_status column (FR11).
+	_, nullable = nullableColumn(t, ctx, db, "task_note", "current_status")
+	assert.Equal(t, "NO", nullable, "task_note.current_status must be NOT NULL (it defaults to 'noted')")
+
+	// task_escalation_event's reason/counter/cap pairing CHECK (NFR4): a
+	// manual escalation carries neither counter_value nor cap_value; every
+	// automatic reason carries both.
+	var scopeID uuid.UUID
+	require.NoError(t, db.Pool.QueryRow(ctx, `
+		INSERT INTO scope (repo_full_name, default_branch) VALUES ('escalation-016-schema/repo', 'main') RETURNING id
+	`).Scan(&scopeID))
+	var productID uuid.UUID
+	require.NoError(t, db.Pool.QueryRow(ctx, `
+		INSERT INTO product (scope_id, name, vision) VALUES ($1, 'P', 'V') RETURNING id
+	`, scopeID).Scan(&productID))
+	var milestoneID uuid.UUID
+	require.NoError(t, db.Pool.QueryRow(ctx, `
+		INSERT INTO milestone_ref (scope_id, product_id, name, kind) VALUES ($1, $2, 'M1', 'milestone') RETURNING id
+	`, scopeID, productID).Scan(&milestoneID))
+
+	const subjectColList = `created_by_acting_iss, created_by_acting_sub, created_by_acting_kind, created_by_on_behalf_of_iss, created_by_on_behalf_of_sub, created_by_on_behalf_of_kind`
+	const subjectValList = `'https://issuer.example.com', 'agent-1', 'service', 'https://issuer.example.com', 'agent-1', 'service'`
+
+	var taskID uuid.UUID
+	require.NoError(t, db.Pool.QueryRow(ctx, `
+		INSERT INTO task (scope_id, milestone_id, title, lane_sequence, current_lane, `+subjectColList+`)
+		VALUES ($1, $2, 'T1', ARRAY['Scaffold', 'Implementation'], 'Scaffold', `+subjectValList+`)
+		RETURNING id
+	`, scopeID, milestoneID).Scan(&taskID))
+
+	_, err = db.Pool.Exec(ctx, `
+		INSERT INTO task_escalation_event (scope_id, task_id, reason, lane_at_escalation, `+subjectColList+`)
+		VALUES ($1, $2, 'manual', 'Scaffold', `+subjectValList+`)
+	`, scopeID, taskID)
+	assert.NoError(t, err, "reason='manual' with counter_value/cap_value both NULL must be accepted")
+
+	_, err = db.Pool.Exec(ctx, `
+		INSERT INTO task_escalation_event (scope_id, task_id, reason, lane_at_escalation, `+subjectColList+`)
+		VALUES ($1, $2, 'thrash-cap', 'Scaffold', `+subjectValList+`)
+	`, scopeID, taskID)
+	assert.Error(t, err, "reason='thrash-cap' with counter_value/cap_value both NULL must be rejected -- the pairing CHECK")
+
+	_, err = db.Pool.Exec(ctx, `
+		INSERT INTO task_escalation_event (scope_id, task_id, reason, counter_value, cap_value, lane_at_escalation, `+subjectColList+`)
+		VALUES ($1, $2, 'thrash-cap', 3, 3, 'Scaffold', `+subjectValList+`)
+	`, scopeID, taskID)
+	assert.NoError(t, err, "reason='thrash-cap' with counter_value/cap_value both set must be accepted")
+
+	_, err = db.Pool.Exec(ctx, `
+		INSERT INTO task_escalation_event (scope_id, task_id, reason, counter_value, lane_at_escalation, `+subjectColList+`)
+		VALUES ($1, $2, 'manual', 3, 'Scaffold', `+subjectValList+`)
+	`, scopeID, taskID)
+	assert.Error(t, err, "reason='manual' with counter_value set must be rejected -- manual has no causing counter")
+
+	// task_claim.release_reason's widened CHECK accepts the three new
+	// operator-driven values and still rejects an unknown one.
+	var sessionID uuid.UUID
+	require.NoError(t, db.Pool.QueryRow(ctx, `
+		INSERT INTO krill_session (scope_id, acting_iss, acting_sub, acting_kind, on_behalf_of_iss, on_behalf_of_sub, on_behalf_of_kind)
+		VALUES ($1, 'https://issuer.example.com', 'agent-1', 'service', 'https://issuer.example.com', 'agent-1', 'service')
+		RETURNING id
+	`, scopeID).Scan(&sessionID))
+
+	for _, reason := range []string{"release", "cancel", "escalate"} {
+		_, err = db.Pool.Exec(ctx, `
+			INSERT INTO task_claim (scope_id, task_id, session_id, initial_lease_expires_at, released_at, release_reason, `+subjectColList+`)
+			VALUES ($1, $2, $3, NOW() + interval '1 hour', NOW(), $4, `+subjectValList+`)
+		`, scopeID, taskID, sessionID, reason)
+		assert.NoError(t, err, "task_claim.release_reason must accept %q", reason)
+	}
+	_, err = db.Pool.Exec(ctx, `
+		INSERT INTO task_claim (scope_id, task_id, session_id, initial_lease_expires_at, released_at, release_reason, `+subjectColList+`)
+		VALUES ($1, $2, $3, NOW() + interval '1 hour', NOW(), 'not-a-real-reason', `+subjectValList+`)
+	`, scopeID, taskID, sessionID)
+	assert.Error(t, err, "task_claim.release_reason must still reject an unknown value")
+
+	// task_attempt.outcome's widened CHECK accepts the two new values and
+	// still rejects an unknown one.
+	var claimID uuid.UUID
+	require.NoError(t, db.Pool.QueryRow(ctx, `
+		INSERT INTO task_claim (scope_id, task_id, session_id, initial_lease_expires_at, `+subjectColList+`)
+		VALUES ($1, $2, $3, NOW() + interval '1 hour', `+subjectValList+`)
+		RETURNING id
+	`, scopeID, taskID, sessionID).Scan(&claimID))
+
+	for _, outcome := range []string{"released", "force-closed"} {
+		_, err = db.Pool.Exec(ctx, `
+			INSERT INTO task_attempt (scope_id, task_id, claim_id, outcome, `+subjectColList+`) VALUES ($1, $2, $3, $4, `+subjectValList+`)
+		`, scopeID, taskID, claimID, outcome)
+		assert.NoError(t, err, "task_attempt.outcome must accept %q", outcome)
+	}
+	_, err = db.Pool.Exec(ctx, `
+		INSERT INTO task_attempt (scope_id, task_id, claim_id, outcome, `+subjectColList+`) VALUES ($1, $2, $3, 'not-a-real-outcome', `+subjectValList+`)
+	`, scopeID, taskID, claimID)
+	assert.Error(t, err, "task_attempt.outcome must still reject an unknown value")
+
+	// task_intervention_event: escalation_event_id is optional, and a real
+	// row referencing the escalation seeded above succeeds.
+	var escalationID uuid.UUID
+	require.NoError(t, db.Pool.QueryRow(ctx, `
+		SELECT id FROM task_escalation_event WHERE task_id = $1 AND reason = 'manual' LIMIT 1
+	`, taskID).Scan(&escalationID))
+	_, err = db.Pool.Exec(ctx, `
+		INSERT INTO task_intervention_event (scope_id, task_id, action, escalation_event_id, `+subjectColList+`)
+		VALUES ($1, $2, 'requeue', $3, `+subjectValList+`)
+	`, scopeID, taskID, escalationID)
+	assert.NoError(t, err, "task_intervention_event must accept a real escalation_event_id")
+
+	_, err = db.Pool.Exec(ctx, `
+		INSERT INTO task_intervention_event (scope_id, task_id, action, `+subjectColList+`)
+		VALUES ($1, $2, 'not-a-real-action', `+subjectValList+`)
+	`, scopeID, taskID)
+	assert.Error(t, err, "task_intervention_event.action must reject a value outside {requeue, cancel, release, escalate}")
+
+	// task_note_lifecycle_event: status must be one of the four fixed
+	// values (FR11).
+	var noteID uuid.UUID
+	require.NoError(t, db.Pool.QueryRow(ctx, `
+		INSERT INTO task_note (scope_id, task_id, kind, body, `+subjectColList+`) VALUES ($1, $2, 'comment', 'a note', `+subjectValList+`)
+		RETURNING id
+	`, scopeID, taskID).Scan(&noteID))
+	_, err = db.Pool.Exec(ctx, `
+		INSERT INTO task_note_lifecycle_event (scope_id, note_id, status, `+subjectColList+`) VALUES ($1, $2, 'not-a-real-status', `+subjectValList+`)
+	`, scopeID, noteID)
+	assert.Error(t, err, "task_note_lifecycle_event.status must reject a value outside {noted, carried-over, deferred, closed}")
+	_, err = db.Pool.Exec(ctx, `
+		INSERT INTO task_note_lifecycle_event (scope_id, note_id, status, `+subjectColList+`) VALUES ($1, $2, 'carried-over', `+subjectValList+`)
+	`, scopeID, noteID)
+	assert.NoError(t, err, "task_note_lifecycle_event.status must accept 'carried-over'")
+
+	// task_claimable_idx's own indexdef must carry both new predicates
+	// (FR2's index-enforced claimability rule, not just an application
+	// check).
+	var indexDef string
+	require.NoError(t, db.Pool.QueryRow(ctx, `
+		SELECT indexdef FROM pg_indexes WHERE indexname = 'task_claimable_idx'
+	`).Scan(&indexDef))
+	assert.Contains(t, indexDef, "current_escalation_id", "task_claimable_idx must exclude escalated tasks in the index itself (FR2)")
+	assert.Contains(t, indexDef, "cancelled_at", "task_claimable_idx must exclude cancelled tasks in the index itself (FR7)")
+}
+
+// TestMigration016_UpDownRoundTrip is issue #2868's Testing section's own
+// migration test, mirroring TestMigration015_UpDownRoundTrip's shape:
+// migration 016 applies cleanly (creating all three new tables with a real
+// row in each, exercising the CHECK constraints each table's own LB3 note
+// describes, plus the additive columns and widened CHECKs on
+// task/task_note/task_claim/task_attempt), rolls back cleanly --
+// 016_escalation_axis.down.sql's documented FK-safe order -- leaving every
+// earlier table (`task`, `task_note`, `milestone_ref`) intact minus the
+// columns 016 added, and re-applies cleanly a second time. Migrates up to
+// exactly version 16 (Migrate(16), not Up()/latest) and rolls back exactly
+// one step.
+func TestMigration016_UpDownRoundTrip(t *testing.T) {
+	ctx := context.Background()
+	db := dbtest.NewPostgres(ctx, t, dbtest.Options{})
+
+	sqlDB, err := sql.Open("pgx", db.ConnString)
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = sqlDB.Close() })
+
+	runner := migrate.NewRunner(sqlDB, schema.Migrations, schema.Dir)
+	require.NoError(t, runner.Migrate(16), "apply every migration through exactly 016")
+
+	for _, table := range []string{"task_escalation_event", "task_intervention_event", "task_note_lifecycle_event"} {
+		assert.True(t, tableExists(t, ctx, db, table), "016's Up() must create table %q", table)
+	}
+
+	// Seed a real scope/product/milestone/session/task/note so every new
+	// table below can be populated with a real row, not just checked for
+	// existence.
+	var scopeID uuid.UUID
+	require.NoError(t, db.Pool.QueryRow(ctx, `
+		INSERT INTO scope (repo_full_name, default_branch) VALUES ('escalation-016-roundtrip/repo', 'main') RETURNING id
+	`).Scan(&scopeID))
+	var productID uuid.UUID
+	require.NoError(t, db.Pool.QueryRow(ctx, `
+		INSERT INTO product (scope_id, name, vision) VALUES ($1, 'P', 'V') RETURNING id
+	`, scopeID).Scan(&productID))
+	var milestoneID uuid.UUID
+	require.NoError(t, db.Pool.QueryRow(ctx, `
+		INSERT INTO milestone_ref (scope_id, product_id, name, kind) VALUES ($1, $2, 'M1', 'milestone') RETURNING id
+	`, scopeID, productID).Scan(&milestoneID))
+	var sessionID uuid.UUID
+	require.NoError(t, db.Pool.QueryRow(ctx, `
+		INSERT INTO krill_session (scope_id, acting_iss, acting_sub, acting_kind, on_behalf_of_iss, on_behalf_of_sub, on_behalf_of_kind)
+		VALUES ($1, 'https://issuer.example.com', 'agent-1', 'service', 'https://issuer.example.com', 'agent-1', 'service')
+		RETURNING id
+	`, scopeID).Scan(&sessionID))
+
+	const subjectCols = `created_by_acting_iss, created_by_acting_sub, created_by_acting_kind, created_by_on_behalf_of_iss, created_by_on_behalf_of_sub, created_by_on_behalf_of_kind`
+	const subjectVals = `'https://issuer.example.com', 'agent-1', 'service', 'https://issuer.example.com', 'agent-1', 'service'`
+
+	var taskID uuid.UUID
+	require.NoError(t, db.Pool.QueryRow(ctx, `
+		INSERT INTO task (scope_id, milestone_id, title, lane_sequence, current_lane, `+subjectCols+`)
+		VALUES ($1, $2, 'T1', ARRAY['Scaffold', 'Implementation'], 'Scaffold', `+subjectVals+`)
+		RETURNING id
+	`, scopeID, milestoneID).Scan(&taskID))
+
+	// task's additive columns: thrash_count defaults to 0, current_escalation_id/cancelled_at are settable.
+	var thrashCount int
+	require.NoError(t, db.Pool.QueryRow(ctx, `SELECT thrash_count FROM task WHERE id = $1`, taskID).Scan(&thrashCount))
+	assert.Equal(t, 0, thrashCount, "task.thrash_count must default to 0")
+
+	var escalationID uuid.UUID
+	require.NoError(t, db.Pool.QueryRow(ctx, `
+		INSERT INTO task_escalation_event (scope_id, task_id, reason, lane_at_escalation, `+subjectCols+`)
+		VALUES ($1, $2, 'manual', 'Scaffold', `+subjectVals+`)
+		RETURNING id
+	`, scopeID, taskID).Scan(&escalationID))
+	_, err = db.Pool.Exec(ctx, `UPDATE task SET current_escalation_id = $1 WHERE id = $2`, escalationID, taskID)
+	require.NoError(t, err)
+
+	// release_reason/outcome below deliberately use values 015 already
+	// accepted ("complete"/"completed"), not one of 016's widened-only
+	// values ("escalate"/"force-closed") -- 016's down.sql narrows these
+	// CHECKs back to their 015 shape without deleting any row, so a row
+	// carrying a widened-only value would make the rollback below itself
+	// fail with a check_violation; TestMigration016_SchemaContract is
+	// where the widened values themselves are exercised.
+	var claimID uuid.UUID
+	require.NoError(t, db.Pool.QueryRow(ctx, `
+		INSERT INTO task_claim (scope_id, task_id, session_id, initial_lease_expires_at, released_at, release_reason, `+subjectCols+`)
+		VALUES ($1, $2, $3, NOW() + interval '1 hour', NOW(), 'complete', `+subjectVals+`)
+		RETURNING id
+	`, scopeID, taskID, sessionID).Scan(&claimID))
+
+	_, err = db.Pool.Exec(ctx, `
+		INSERT INTO task_attempt (scope_id, task_id, claim_id, outcome, `+subjectCols+`) VALUES ($1, $2, $3, 'completed', `+subjectVals+`)
+	`, scopeID, taskID, claimID)
+	require.NoError(t, err)
+
+	_, err = db.Pool.Exec(ctx, `
+		INSERT INTO task_intervention_event (scope_id, task_id, action, escalation_event_id, `+subjectCols+`)
+		VALUES ($1, $2, 'escalate', $3, `+subjectVals+`)
+	`, scopeID, taskID, escalationID)
+	require.NoError(t, err)
+
+	var noteID uuid.UUID
+	require.NoError(t, db.Pool.QueryRow(ctx, `
+		INSERT INTO task_note (scope_id, task_id, kind, body, `+subjectCols+`) VALUES ($1, $2, 'comment', 'a note', `+subjectVals+`)
+		RETURNING id
+	`, scopeID, taskID).Scan(&noteID))
+	_, err = db.Pool.Exec(ctx, `
+		INSERT INTO task_note_lifecycle_event (scope_id, note_id, status, `+subjectCols+`) VALUES ($1, $2, 'deferred', `+subjectVals+`)
+	`, scopeID, noteID)
+	require.NoError(t, err)
+
+	require.NoError(t, runner.Steps(-1), "roll back exactly migration 016")
+
+	version, dirty, err := runner.Version()
+	require.NoError(t, err)
+	assert.False(t, dirty)
+	assert.Equal(t, uint(15), version, "rolling back exactly one step from 16 must land on 15 (015_work_axis)")
+
+	for _, table := range []string{"task_escalation_event", "task_intervention_event", "task_note_lifecycle_event"} {
+		assert.False(t, tableExists(t, ctx, db, table), "016's Down() must drop table %q entirely", table)
+	}
+	assert.True(t, tableExists(t, ctx, db, "task"), "016's Down() must leave task itself untouched")
+	assert.True(t, tableExists(t, ctx, db, "task_note"), "016's Down() must leave task_note itself untouched")
+
+	// 016's additive columns must be gone.
+	taskCols := columnNames(t, ctx, db, "task")
+	assert.NotContains(t, taskCols, "thrash_count", "016's Down() must drop task.thrash_count")
+	assert.NotContains(t, taskCols, "current_escalation_id", "016's Down() must drop task.current_escalation_id")
+	assert.NotContains(t, taskCols, "cancelled_at", "016's Down() must drop task.cancelled_at")
+	noteCols := columnNames(t, ctx, db, "task_note")
+	assert.NotContains(t, noteCols, "current_status", "016's Down() must drop task_note.current_status")
+
+	// The task/task_note rows seeded above must still resolve -- 016's
+	// Down() must not have cascaded into unrelated earlier tables.
+	var taskStillExists bool
+	require.NoError(t, db.Pool.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM task WHERE id = $1)`, taskID).Scan(&taskStillExists))
+	assert.True(t, taskStillExists)
+	var noteStillExists bool
+	require.NoError(t, db.Pool.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM task_note WHERE id = $1)`, noteID).Scan(&noteStillExists))
+	assert.True(t, noteStillExists)
+
+	// task_claim.release_reason and task_attempt.outcome must revert to
+	// their pre-016 CHECKs -- the widening must be fully undone.
+	_, err = db.Pool.Exec(ctx, `
+		INSERT INTO task_claim (scope_id, task_id, session_id, initial_lease_expires_at, released_at, release_reason, `+subjectCols+`)
+		VALUES ($1, $2, $3, NOW() + interval '1 hour', NOW(), 'escalate', `+subjectVals+`)
+	`, scopeID, taskID, sessionID)
+	assert.Error(t, err, "after 016's Down(), task_claim.release_reason must reject 'escalate' again")
+	_, err = db.Pool.Exec(ctx, `
+		INSERT INTO task_attempt (scope_id, task_id, claim_id, outcome, `+subjectCols+`) VALUES ($1, $2, $3, 'force-closed', `+subjectVals+`)
+	`, scopeID, taskID, claimID)
+	assert.Error(t, err, "after 016's Down(), task_attempt.outcome must reject 'force-closed' again")
+
+	// task_claimable_idx must revert to 015's single-predicate shape.
+	var indexDef string
+	require.NoError(t, db.Pool.QueryRow(ctx, `
+		SELECT indexdef FROM pg_indexes WHERE indexname = 'task_claimable_idx'
+	`).Scan(&indexDef))
+	assert.NotContains(t, indexDef, "current_escalation_id", "016's Down() must restore task_claimable_idx to 015's single-predicate shape")
+	assert.NotContains(t, indexDef, "cancelled_at", "016's Down() must restore task_claimable_idx to 015's single-predicate shape")
+
+	// -- re-apply: must be re-runnable from the rolled-back state --
+	require.NoError(t, runner.Steps(1), "re-apply migration 016 after Down() -- must be re-runnable")
+
+	version, dirty, err = runner.Version()
+	require.NoError(t, err)
+	assert.False(t, dirty)
+	assert.Equal(t, uint(16), version)
+
+	for _, table := range []string{"task_escalation_event", "task_intervention_event", "task_note_lifecycle_event"} {
+		assert.True(t, tableExists(t, ctx, db, table), "table %q must exist again after re-applying 016", table)
+		var count int
+		require.NoError(t, db.Pool.QueryRow(ctx, `SELECT count(*) FROM `+table).Scan(&count))
+		assert.Equal(t, 0, count, "re-applying 016 creates a fresh, empty table %q -- the rows seeded before the rollback are gone for good", table)
+	}
+
+	taskCols = columnNames(t, ctx, db, "task")
+	assert.Contains(t, taskCols, "thrash_count", "016's additive task columns must exist again after re-applying 016")
+	assert.Contains(t, taskCols, "current_escalation_id")
+	assert.Contains(t, taskCols, "cancelled_at")
+	noteCols = columnNames(t, ctx, db, "task_note")
+	assert.Contains(t, noteCols, "current_status", "016's additive task_note column must exist again after re-applying 016")
 }
