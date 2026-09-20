@@ -20,6 +20,14 @@
 // than duplicate fixture helpers. See store_integration_test.go's package
 // doc for why this file only builds under the "integration" build tag.
 //
+// TestTaskStore_ReclaimExpired_AttemptCapReached_RefusesToReserve's own
+// doc comment notes that migration 016 (issue #2868, M5's C26) has since
+// landed task_escalation_event/task_intervention_event/task_note_lifecycle_event
+// -- that table's existence is no longer an M4/M5 scope boundary this test
+// enforces; what it still proves is that ReclaimExpired itself writes no
+// escalation event for the cap-exhausted task (escalating a capped task is
+// FR3, issue #2871, a later M5 task this one is not).
+//
 // Run it explicitly (requires a working Docker daemon):
 //
 //	bazel test //krill/store:task_reclaim_integration_test --test_output=all
@@ -240,8 +248,10 @@ func TestTaskStore_ReclaimExpired_SingleTaskID_SweepsOnlyThatTask(t *testing.T) 
 // attempt cap is reclaimed (the lapse still counts, and CapExhausted is
 // reported), but reclaim refuses to re-serve it -- a subsequent ClaimTask
 // by any session returns ErrAttemptCapExhausted, the task stays claimed by
-// no one, and no escalation row/queue/table exists anywhere in the schema
-// (M5's C26 is explicitly out of scope for this milestone).
+// no one, and ReclaimExpired itself writes no task_escalation_event row for
+// it (escalating a capped task is FR3, issue #2871, a later M5 task this
+// one is not -- migration 016, issue #2868, has since landed the table
+// itself, but this task's own reclaim sweep never writes to it).
 func TestTaskStore_ReclaimExpired_AttemptCapReached_RefusesToReserve(t *testing.T) {
 	ctx := context.Background()
 	s, db := newTaskTestStore(t)
@@ -279,13 +289,11 @@ func TestTaskStore_ReclaimExpired_AttemptCapReached_RefusesToReserve(t *testing.
 	require.Error(t, err, "any subsequent claim of a cap-exhausted task must be refused")
 	assert.ErrorIs(t, err, store.ErrAttemptCapExhausted)
 
-	var escalationTables int
+	var escalationEvents int
 	require.NoError(t, db.Pool.QueryRow(ctx, `
-		SELECT count(*) FROM information_schema.tables
-		WHERE table_schema = 'public'
-		AND (table_name ILIKE '%escalation%' OR table_name ILIKE '%dead_letter%' OR table_name ILIKE '%human_attention%')
-	`).Scan(&escalationTables))
-	assert.Equal(t, 0, escalationTables, "no escalation destination, human-attention queue, or dead-letter table may exist anywhere in the schema (M5's C26 is out of scope)")
+		SELECT count(*) FROM task_escalation_event WHERE task_id = $1
+	`, task.ID).Scan(&escalationEvents))
+	assert.Equal(t, 0, escalationEvents, "ReclaimExpired must write no task_escalation_event row -- escalating a capped task is FR3 (issue #2871), a later M5 task this one is not")
 }
 
 // TestTaskStore_ReclaimExpired_RepeatedSweep_Idempotent is issue #2724's

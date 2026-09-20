@@ -1182,6 +1182,52 @@ go_test(
     ],
 )
 
+# Real-Postgres coverage for 016_escalation_axis.up.sql and
+# task_escalation.go (migration 016, issue #2868's Testing section,
+# FR2's index rule, NFR1-NFR3): migration up-then-down-then-up
+# idempotency, scope_id/both subject pairs NOT NULL on all three new
+# tables, the widened task_claim.release_reason/task_attempt.outcome
+# CHECKs, the Go/DB enum lockstep for EscalationReason/
+# InterventionAction/NoteLifecycleStatus, recordEscalationTx's
+# one-active-escalation rule, forceCloseClaimTx's claim-closing behavior
+# and the post-force-close zombie-heartbeat rejection, the real-Postgres
+# concurrency proof that task_claimable_idx itself (not only ClaimTask's
+# Go check) excludes an escalated or cancelled task, and the ordinary-task
+# regression. Deliberately `package store` (embed = [":store"]), not
+# `package store_test` like every sibling in this file -- see this test
+# file's own package doc comment for why. Deliberately NOT part of
+# `bazel test //...` -- see //libs/go/dbtest's README for the full
+# rationale.
+#
+# Run it explicitly (requires a working Docker daemon):
+#   bazel test //krill/store:task_escalation_integration_test --test_output=all
+go_test(
+    name = "task_escalation_integration_test",
+    size = "large",
+    timeout = "long",
+    srcs = ["task_escalation_integration_test.go"],
+    embed = [":store"],
+    gotags = ["integration"],
+    tags = [
+        "external",
+        "integration",
+        "manual",
+        "no-cache",
+        "no-sandbox",
+        "requires-network",
+    ],
+    deps = [
+        "//krill/migrate/schema",
+        "//libs/go/dbtest",
+        "//libs/go/migrate",
+        "@com_github_google_uuid//:uuid",
+        "@com_github_jackc_pgx_v5//pgconn",
+        "@com_github_jackc_pgx_v5//stdlib",
+        "@com_github_stretchr_testify//assert",
+        "@com_github_stretchr_testify//require",
+    ],
+)
+
 go_test(
     name = "pointer_integration_test",
     size = "large",
