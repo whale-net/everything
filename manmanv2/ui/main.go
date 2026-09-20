@@ -494,6 +494,10 @@ func (app *App) setupRoutes(mux *http.ServeMux) {
 	// "/backups/runs" is the "Backup runs" tab's htmx fragment (filter
 	// submit and "Load more" pagination, NFR4) -- see
 	// handlers_backups_fleet.go and pages/backups.templ.
+	// "/backups/runs/{backup_id}/delete" (task #2815 -- FR7, FR8) deletes
+	// one run and re-renders that same fragment; registered as a "/backups/
+	// runs/" subtree pattern so it coexists with the exact-match "/backups/
+	// runs" fragment route above.
 	mux.HandleFunc("/backups", app.auth.RequireAuthFunc(app.auth.WithAccessToken(app.handleBackupsPage)))
 	mux.HandleFunc("/backups/runs", app.auth.RequireAuthFunc(app.auth.WithAccessToken(app.handleBackupRunsFragment)))
 	// "/backups/trigger-form" and "/backups/trigger" (task #2813, FR5): the
@@ -503,12 +507,15 @@ func (app *App) setupRoutes(mux *http.ServeMux) {
 	// Same auth wrapper as every other "/backups" route (NFR3).
 	mux.HandleFunc("/backups/trigger-form", app.auth.RequireAuthFunc(app.auth.WithAccessToken(app.handleBackupTriggerForm)))
 	mux.HandleFunc("/backups/trigger", app.auth.RequireAuthFunc(app.auth.WithAccessToken(app.handleBackupTrigger)))
-	// "/backups/runs/{backup_id}" (task #2814, FR6): a single run's detail
-	// view, so a failed backup can be diagnosed without a database query.
-	// Registered as a trailing-slash subtree, same as "/games/" ->
-	// handleGameDetail above, distinct from the exact-match
-	// "/backups/runs" fragment route.
-	mux.HandleFunc("/backups/runs/", app.auth.RequireAuthFunc(app.auth.WithAccessToken(app.handleBackupRunDetail)))
+	// "/backups/runs/{backup_id}" (task #2814, FR6) is a single run's detail
+	// view; "/backups/runs/{backup_id}/delete" (task #2815, FR7/FR8) deletes
+	// it. Both are trailing-slash subtree matches under the same
+	// "/backups/runs/" pattern -- net/http.ServeMux forbids registering the
+	// same pattern twice, so both live behind one registration here and
+	// handleBackupRunRoute (handlers_backups_fleet.go) fans out to whichever
+	// of handleBackupRunDetail / handleBackupRunDelete actually owns the
+	// request, distinct from the exact-match "/backups/runs" fragment route.
+	mux.HandleFunc("/backups/runs/", app.auth.RequireAuthFunc(app.auth.WithAccessToken(app.handleBackupRunRoute)))
 
 	// Protected routes - SGC detail. The "/sgc/" and "/sgc/<id>" pages
 	// themselves retired (task #2279, FR16): handleSGCRoutes' fallback now

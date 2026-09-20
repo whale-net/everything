@@ -75,6 +75,24 @@ type fakeBackupsFleetAPIClient struct {
 	// without affecting another's.
 	actionsByBackupConfigID    map[int64][]*manmanpb.BackupConfigActionItem
 	listBackupConfigActionsErr error
+
+	// deleteBackupErr, when non-nil, is returned by DeleteBackup -- tests
+	// set it to a status.Error(codes.FailedPrecondition, ...) or
+	// codes.NotFound to drive handleBackupRunDelete's response-handling
+	// branches (task #2815, FR7, FR8) without a real API/S3 round trip.
+	deleteBackupErr error
+	// lastDeleteBackupReq captures the most recent DeleteBackup request so
+	// tests can assert the right backup_id was forwarded, not just that
+	// some delete happened.
+	lastDeleteBackupReq *manmanpb.DeleteBackupRequest
+}
+
+func (f *fakeBackupsFleetAPIClient) DeleteBackup(ctx context.Context, in *manmanpb.DeleteBackupRequest, opts ...grpc.CallOption) (*manmanpb.DeleteBackupResponse, error) {
+	f.lastDeleteBackupReq = in
+	if f.deleteBackupErr != nil {
+		return nil, f.deleteBackupErr
+	}
+	return &manmanpb.DeleteBackupResponse{}, nil
 }
 
 func (f *fakeBackupsFleetAPIClient) ListServers(ctx context.Context, in *manmanpb.ListServersRequest, opts ...grpc.CallOption) (*manmanpb.ListServersResponse, error) {
@@ -644,5 +662,162 @@ func TestHandleBackupTrigger_UnauthenticatedPostIsRejected(t *testing.T) {
 
 	if !requestWasAuthBlocked(w) {
 		t.Fatalf("expected an unauthenticated POST /backups/trigger to be auth-blocked, got status %d", w.Code)
+	}
+}
+
+// --- FR7/FR8: deleting a backup run from the fleet surface ----------------
+//
+// Testing-phase coverage for handleBackupRunDelete (task #2815), deferred
+// from the Implementation phase: success drops the row from the re-rendered
+// fragment, FailedPrecondition/NotFound leave the row in place with an
+// inline, actionable notice, and neither error path returns a 500.
+//
+// mutation-tested (verified red, by hand, then reverted): temporarily
+// collapsing handleBackupRunDelete's codes.FailedPrecondition/codes.NotFound
+// switch cases into the default "Failed to delete backup run. Try again."
+// branch made TestHandleBackupRunDelete_FailedPreconditionRendersActionableNotice's
+// specific-message assertion fail (it got the generic message instead);
+// restoring the switch cases returned it to green.
+
+func renderBackupRunDeleteHTTP(t *testing.T, api *fakeBackupsFleetAPIClient, backupID int64, referer string) (int, string) {
+	t.Helper()
+	app := newBackupsFleetTestApp(api)
+	target := fmt.Sprintf("/backups/runs/%d/delete", backupID)
+	req := httptest.NewRequest(http.MethodPost, target, nil)
+	if referer != "" {
+		req.Header.Set("Referer", referer)
+	}
+	w := httptest.NewRecorder()
+	app.handleBackupRunDelete(w, req)
+	return w.Code, w.Body.String()
+}
+
+// pendingRunBackupItem fixtures FR8's driving case end to end: a run with no
+// s3_url yet (the API's precondition for DeleteBackup's FailedPrecondition,
+// manmanv2/api/handlers/backup.go), still present in the list so a test can
+// confirm it survives a failed delete attempt.
+func pendingRunBackupItem() *manmanpb.BackupListItem {
+	return &manmanpb.BackupListItem{
+		Backup:               &manmanpb.Backup{BackupId: 7, ServerGameConfigId: 55, Status: "running", TriggerSource: "manual"},
+		ServerGameConfigName: "Alpha / Survival",
+		VolumeName:           "World Data",
+	}
+}
+
+func TestHandleBackupRunDelete_SuccessCallsDeleteBackupAndDropsRowFromRefreshedFragment(t *testing.T) {
+	api := baseBackupsFleetFixture()
+	// The refreshed list (post-delete ListBackups call) reflects the
+	// backend having already dropped the deleted run -- backup 1 stays,
+	// backup 3 (the one being deleted) is gone.
+	api.listBackupsResp = &manmanpb.ListBackupsResponse{Items: []*manmanpb.BackupListItem{threeOriginBackupItems()[0]}}
+
+	code, body := renderBackupRunDeleteHTTP(t, api, 3, "")
+	if code != http.StatusOK {
+		t.Fatalf("status = %d, want %d; body: %s", code, http.StatusOK, body)
+	}
+
+	if api.lastDeleteBackupReq == nil {
+		t.Fatal("expected handleBackupRunDelete to call DeleteBackup")
+	}
+	if api.lastDeleteBackupReq.BackupId != 3 {
+		t.Errorf("DeleteBackup called with backup_id=%d, want 3", api.lastDeleteBackupReq.BackupId)
+	}
+
+	if strings.Contains(body, "Legacy Volume") {
+		t.Errorf("expected the deleted run's row (%q) to be gone from the refreshed fragment, got: %s", "Legacy Volume", body)
+	}
+	if !strings.Contains(body, "World Data") {
+		t.Errorf("expected the surviving run's row (%q) to still be present, got: %s", "World Data", body)
+	}
+}
+
+func TestHandleBackupRunDelete_FailedPreconditionRendersActionableNoticeAndKeepsRow(t *testing.T) {
+	api := baseBackupsFleetFixture()
+	api.deleteBackupErr = status.Error(codes.FailedPrecondition, "backup has no S3 URL")
+	// The row survives the failed delete: the refreshed list still
+	// contains the pending run.
+	api.listBackupsResp = &manmanpb.ListBackupsResponse{Items: []*manmanpb.BackupListItem{pendingRunBackupItem()}}
+
+	code, body := renderBackupRunDeleteHTTP(t, api, 7, "")
+	if code != http.StatusOK {
+		t.Fatalf("status = %d, want %d (a FailedPrecondition must render in-page, not a 500); body: %s", code, http.StatusOK, body)
+	}
+	if code >= 500 {
+		t.Fatalf("FailedPrecondition must not surface as a 500, got status %d", code)
+	}
+
+	if !strings.Contains(body, "no archive uploaded yet") {
+		t.Errorf("expected a specific, actionable FR8 message naming why the run cannot be deleted, got: %s", body)
+	}
+	if strings.Contains(body, "Failed to delete backup run. Try again.") {
+		t.Errorf("expected the specific FailedPrecondition message, not the generic delete-failure message, got: %s", body)
+	}
+	if !strings.Contains(body, "World Data") {
+		t.Errorf("expected the pending run's row to remain in the refreshed fragment after a failed delete, got: %s", body)
+	}
+}
+
+func TestHandleBackupRunDelete_NotFoundRendersNotFoundNotice(t *testing.T) {
+	api := baseBackupsFleetFixture()
+	api.deleteBackupErr = status.Error(codes.NotFound, "backup not found")
+	api.listBackupsResp = &manmanpb.ListBackupsResponse{}
+
+	code, body := renderBackupRunDeleteHTTP(t, api, 999, "")
+	if code != http.StatusOK {
+		t.Fatalf("status = %d, want %d (a NotFound must render in-page, not a 500); body: %s", code, http.StatusOK, body)
+	}
+	if code >= 500 {
+		t.Fatalf("NotFound must not surface as a 500, got status %d", code)
+	}
+	if !strings.Contains(body, "not be found") && !strings.Contains(body, "was not found") {
+		t.Errorf("expected an inline not-found notice, got: %s", body)
+	}
+}
+
+func TestHandleBackupRunDelete_UnexpectedErrorRendersGenericNoticeNot500(t *testing.T) {
+	api := baseBackupsFleetFixture()
+	api.deleteBackupErr = status.Error(codes.Internal, "control API unreachable")
+	api.listBackupsResp = &manmanpb.ListBackupsResponse{Items: []*manmanpb.BackupListItem{pendingRunBackupItem()}}
+
+	code, body := renderBackupRunDeleteHTTP(t, api, 7, "")
+	if code != http.StatusOK {
+		t.Fatalf("status = %d, want %d (an unexpected DeleteBackup error must render in-page, not a 500); body: %s", code, http.StatusOK, body)
+	}
+	if !strings.Contains(body, "Failed to delete backup run. Try again.") {
+		t.Errorf("expected the generic delete-failure notice for an unexpected error code, got: %s", body)
+	}
+}
+
+func TestHandleBackupRunDelete_RefreshesFragmentUsingFilterFromReferer(t *testing.T) {
+	api := baseBackupsFleetFixture()
+	api.listBackupsResp = &manmanpb.ListBackupsResponse{}
+
+	code, _ := renderBackupRunDeleteHTTP(t, api, 3, "https://manman.example.com/backups/runs?server_game_config_id=55&status=completed")
+	if code != http.StatusOK {
+		t.Fatalf("status = %d, want %d", code, http.StatusOK)
+	}
+	if api.lastListBackupsReq == nil {
+		t.Fatal("expected the post-delete refresh to call ListBackups")
+	}
+	if api.lastListBackupsReq.ServerGameConfigId != 55 {
+		t.Errorf("ServerGameConfigId = %d, want 55 (forwarded from Referer)", api.lastListBackupsReq.ServerGameConfigId)
+	}
+	if api.lastListBackupsReq.Status != "completed" {
+		t.Errorf("Status = %q, want %q (forwarded from Referer)", api.lastListBackupsReq.Status, "completed")
+	}
+}
+
+func TestHandleBackupRunDelete_RejectsNonPostMethod(t *testing.T) {
+	api := baseBackupsFleetFixture()
+	app := newBackupsFleetTestApp(api)
+	req := httptest.NewRequest(http.MethodGet, "/backups/runs/3/delete", nil)
+	w := httptest.NewRecorder()
+	app.handleBackupRunDelete(w, req)
+
+	if w.Code != http.StatusMethodNotAllowed {
+		t.Errorf("status = %d, want %d for a non-POST request", w.Code, http.StatusMethodNotAllowed)
+	}
+	if api.lastDeleteBackupReq != nil {
+		t.Errorf("expected a non-POST request never to reach DeleteBackup, got a call with backup_id=%d", api.lastDeleteBackupReq.BackupId)
 	}
 }

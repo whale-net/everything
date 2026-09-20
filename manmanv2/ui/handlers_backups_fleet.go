@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log"
 	"net/http"
+	"net/url"
 	"sort"
 	"strconv"
 	"strings"
@@ -146,6 +147,85 @@ func (app *App) handleBackupRunDetail(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
+// handleBackupRunDelete serves "POST /backups/runs/{backup_id}/delete"
+// (root plan #2777, task #2815 -- FR7, FR8): deletes one backup run via the
+// API's existing DeleteBackup RPC, which deletes the S3 object first and
+// only then soft-deletes the row (manmanv2/api/handlers/backup.go) -- this
+// handler wires that behavior to the fleet surface as-is and does not add a
+// second, UI-side S3 delete path. It always re-renders the same
+// BackupRunsFragment the row's own view was showing (via
+// backupRunsFilterFromReferer), whether the delete succeeded or not, so a
+// successful delete simply drops the row from the refreshed list and a
+// failed one leaves it in place with an inline notice -- neither path
+// returns a 500 for an expected API error.
+func (app *App) handleBackupRunDelete(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	// "/backups/runs/{backup_id}/delete"
+	pathParts := strings.Split(strings.Trim(r.URL.Path, "/"), "/")
+	if len(pathParts) != 4 || pathParts[3] != "delete" {
+		http.Error(w, "Invalid path", http.StatusBadRequest)
+		return
+	}
+	backupID, err := strconv.ParseInt(pathParts[2], 10, 64)
+	if err != nil {
+		http.Error(w, "Invalid backup ID", http.StatusBadRequest)
+		return
+	}
+
+	ctx := r.Context()
+	filter := backupRunsFilterFromReferer(r)
+
+	var notice, variant string
+	if err := app.grpc.DeleteBackup(ctx, backupID); err != nil {
+		switch status.Code(err) {
+		case codes.FailedPrecondition:
+			notice = "This run has no archive uploaded yet -- wait for it to finish or fail before deleting it."
+			variant = "warning"
+		case codes.NotFound:
+			notice = "This backup run was not found -- it may already have been deleted."
+			variant = "warning"
+		default:
+			log.Printf("ERROR: backups: failed to delete backup run %d: %v", backupID, err)
+			notice = "Failed to delete backup run. Try again."
+			variant = "error"
+		}
+	}
+
+	resp, listErr := app.grpc.ListBackups(ctx, filter)
+	if listErr != nil {
+		log.Printf("ERROR: backups: failed to refresh backup runs after delete attempt on %d: %v", backupID, listErr)
+	}
+	fragData := backupRunsFragmentData(resp, filter, listErr)
+	fragData.DeleteNotice = notice
+	fragData.DeleteNoticeVariant = variant
+	if err := pages.BackupRunsFragment(fragData).Render(ctx, w); err != nil {
+		log.Printf("ERROR: backups: failed to render backup runs fragment after delete: %v", err)
+		http.Error(w, "Internal server error", http.StatusInternalServerError)
+	}
+}
+
+// handleBackupRunRoute dispatches the "/backups/runs/" subtree (registered
+// once in main.go's setupRoutes) between the two shapes it serves: "POST
+// /backups/runs/{id}/delete" (task #2815, FR7/FR8) and "GET /backups/runs/
+// {id}" (task #2814, FR6). net/http.ServeMux panics at registration time if
+// two handlers are registered on the same pattern, so both tasks' handlers
+// stay as separate functions and this dispatches between them on the
+// trailing "/delete" segment -- not on method alone, so a non-POST request
+// to the delete path still reaches handleBackupRunDelete and gets its own
+// 405 rather than falling through to handleBackupRunDetail's id parsing
+// (which would otherwise 404 on the non-numeric "delete" segment).
+func (app *App) handleBackupRunRoute(w http.ResponseWriter, r *http.Request) {
+	if strings.HasSuffix(strings.Trim(r.URL.Path, "/"), "/delete") {
+		app.handleBackupRunDelete(w, r)
+		return
+	}
+	app.handleBackupRunDetail(w, r)
+}
+
 // parseBackupRunID extracts the backup id from "/backups/runs/{id}", the
 // only sub-route "/backups/runs/" (registered as a subtree pattern
 // alongside the exact-match "/backups/runs" fragment route) serves --
@@ -216,7 +296,28 @@ func (app *App) resolveBackupRunDisplayNames(ctx context.Context, backup *manman
 // means. A missing or non-numeric ID filter parses as 0, i.e. unset,
 // matching BackupListFilter's zero-value-means-unset convention.
 func parseBackupRunsFilter(r *http.Request) BackupListFilter {
-	q := r.URL.Query()
+	return backupRunsFilterFromQuery(r.URL.Query())
+}
+
+// backupRunsFilterFromReferer reconstructs the filter+page that was active
+// on whichever "/backups" or "/backups/runs" view a delete request
+// (handleBackupRunDelete) came from, so the refreshed fragment it returns
+// matches the view the row was deleted from rather than resetting to the
+// unfiltered first page. This works because both the filter bar and "Load
+// more" set hx-push-url="true" (pages/backups.templ), keeping the browser's
+// address bar -- and therefore the Referer header a same-page htmx request
+// carries -- in sync with the current filter and page_token. A missing or
+// unparsable Referer degrades to the unfiltered first page rather than
+// failing the delete itself.
+func backupRunsFilterFromReferer(r *http.Request) BackupListFilter {
+	u, err := url.Parse(r.Referer())
+	if err != nil {
+		return BackupListFilter{}
+	}
+	return backupRunsFilterFromQuery(u.Query())
+}
+
+func backupRunsFilterFromQuery(q url.Values) BackupListFilter {
 	filter := BackupListFilter{
 		Status:    q.Get("status"),
 		PageToken: q.Get("page_token"),
