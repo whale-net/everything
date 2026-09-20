@@ -10,7 +10,13 @@ import (
 
 	"github.com/whale-net/everything/libs/go/htmxui"
 	"github.com/yuin/goldmark"
+	"github.com/yuin/goldmark/extension"
 )
+
+// chatMarkdown enables GFM (tables, strikethrough, autolinks) on top of
+// goldmark's CommonMark-only default -- without it, pipe-table syntax in
+// chat messages falls through as a plain paragraph instead of a table.
+var chatMarkdown = goldmark.New(goldmark.WithExtensions(extension.GFM))
 
 // SubjectView is a plain (iss, sub, kind) identity triple for rendering --
 // mirrors whagentpb.Subject's three fields without this rendering layer
@@ -600,7 +606,7 @@ templ EventRow(ev TranscriptEventView) {
 // dropping the message.
 func renderMarkdown(source string) string {
 	var buf bytes.Buffer
-	if err := goldmark.Convert([]byte(source), &buf); err != nil {
+	if err := chatMarkdown.Convert([]byte(source), &buf); err != nil {
 		return html.EscapeString(source)
 	}
 	return buf.String()
