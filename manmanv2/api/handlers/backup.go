@@ -97,7 +97,12 @@ func (h *BackupHandler) ListBackups(ctx context.Context, req *pb.ListBackupsRequ
 		filter.BackupConfigID = &req.BackupConfigId
 	}
 	if req.Status != "" {
-		filter.Status = &req.Status
+		switch req.Status {
+		case manman.BackupStatusPending, manman.BackupStatusRunning, manman.BackupStatusCompleted, manman.BackupStatusFailed:
+			filter.Status = &req.Status
+		default:
+			return nil, status.Errorf(codes.InvalidArgument, "unknown status %q", req.Status)
+		}
 	}
 
 	rows, err := h.backupRepo.List(ctx, filter, pageSize+1, offset)

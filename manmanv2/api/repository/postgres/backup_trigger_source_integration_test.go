@@ -58,6 +58,12 @@ const backupTriggerSourceSchema = `
 		sgc_id BIGINT NOT NULL REFERENCES server_game_configs(sgc_id) ON DELETE CASCADE
 	);
 
+	CREATE TABLE game_config_volumes (
+		volume_id BIGSERIAL PRIMARY KEY,
+		config_id BIGINT NOT NULL REFERENCES game_configs(config_id) ON DELETE CASCADE,
+		name VARCHAR(100) NOT NULL
+	);
+
 	CREATE TABLE backups (
 		backup_id BIGSERIAL PRIMARY KEY,
 		session_id BIGINT NOT NULL REFERENCES sessions(session_id) ON DELETE CASCADE,

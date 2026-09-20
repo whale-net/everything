@@ -65,22 +65,30 @@ func (r *BackupRepository) Get(ctx context.Context, backupID int64) (*manman.Bac
 // List returns Backups fleet-wide, optionally narrowed by f, with the
 // display context (SGC/GameConfig/volume/server names) needed for a list
 // row. Filters use the "$n::type IS NULL OR col = $n" idiom so a nil filter
-// field is a no-op. TODO(Implementation phase): join server_game_configs ->
-// game_configs / game_config_volumes / servers for
-// server_game_config_name/game_config_name/volume_name/server_name; for now
-// those fields are left zero-valued.
+// field is a no-op. server_game_config_name is derived as "<server> /
+// <game config>" since server_game_configs has no name column of its own.
+// The joins to server_game_configs/game_configs/servers key off the
+// backup's server_game_config_id, which is always set; the join to
+// game_config_volumes keys off volume_id, which is only set for
+// config-driven backups, so it is a LEFT JOIN and volume_name is empty for
+// ad-hoc backups with no volume_id.
 func (r *BackupRepository) List(ctx context.Context, f repository.BackupListFilter, limit, offset int) ([]*repository.BackupListRow, error) {
 	query := `
-		SELECT backup_id, session_id, server_game_config_id, backup_config_id, volume_id,
-		       s3_url, size_bytes, status, error_message, description, trigger_source, created_at
-		FROM backups
-		WHERE ($1::bigint IS NULL OR server_game_config_id = $1)
-		  AND ($2::bigint IS NULL OR session_id = $2)
-		  AND ($3::bigint IS NULL OR volume_id = $3)
-		  AND ($4::bigint IS NULL OR backup_config_id = $4)
-		  AND ($5::text IS NULL OR status = $5)
-		  AND deleted_at IS NULL
-		ORDER BY created_at DESC
+		SELECT b.backup_id, b.session_id, b.server_game_config_id, b.backup_config_id, b.volume_id,
+		       b.s3_url, b.size_bytes, b.status, b.error_message, b.description, b.trigger_source, b.created_at,
+		       s.name || ' / ' || gc.name, gc.name, COALESCE(gcv.name, ''), s.name
+		FROM backups b
+		JOIN server_game_configs sgc ON sgc.sgc_id = b.server_game_config_id
+		JOIN game_configs gc ON gc.config_id = sgc.game_config_id
+		JOIN servers s ON s.server_id = sgc.server_id
+		LEFT JOIN game_config_volumes gcv ON gcv.volume_id = b.volume_id
+		WHERE ($1::bigint IS NULL OR b.server_game_config_id = $1)
+		  AND ($2::bigint IS NULL OR b.session_id = $2)
+		  AND ($3::bigint IS NULL OR b.volume_id = $3)
+		  AND ($4::bigint IS NULL OR b.backup_config_id = $4)
+		  AND ($5::text IS NULL OR b.status = $5)
+		  AND b.deleted_at IS NULL
+		ORDER BY b.created_at DESC
 		LIMIT $6 OFFSET $7
 	`
 	rows, err := r.db.Query(ctx, query, f.SGCID, f.SessionID, f.VolumeID, f.BackupConfigID, f.Status, limit, offset)
@@ -92,13 +100,15 @@ func (r *BackupRepository) List(ctx context.Context, f repository.BackupListFilt
 	var result []*repository.BackupListRow
 	for rows.Next() {
 		b := &manman.Backup{}
+		row := &repository.BackupListRow{Backup: b}
 		if err := rows.Scan(
 			&b.BackupID, &b.SessionID, &b.ServerGameConfigID, &b.BackupConfigID, &b.VolumeID,
 			&b.S3URL, &b.SizeBytes, &b.Status, &b.ErrorMessage, &b.Description, &b.TriggerSource, &b.CreatedAt,
+			&row.ServerGameConfigName, &row.GameConfigName, &row.VolumeName, &row.ServerName,
 		); err != nil {
 			return nil, err
 		}
-		result = append(result, &repository.BackupListRow{Backup: b})
+		result = append(result, row)
 	}
 	return result, rows.Err()
 }
