@@ -991,6 +991,44 @@ func (c *ControlClient) ListBackupConfigItems(ctx context.Context) ([]*manmanpb.
 	return resp.Items, nil
 }
 
+// BackupConfigListFilter is the /backups fleet-wide "Backup configs" tab's
+// optional filter set (FR10) plus paging, mirroring BackupListFilter's own
+// convention: a zero VolumeID/GameConfigID means "no filter" on that field,
+// and a nil Enabled means "no filter on enabled state" -- Enabled is a
+// pointer, not a bool, specifically so "enabled=false" (show only disabled
+// configs) is distinguishable from "unset" (show both), matching
+// ListBackupConfigsRequest.enabled's own optional-bool shape
+// (api_messages_backup.proto).
+type BackupConfigListFilter struct {
+	VolumeID     int64
+	GameConfigID int64
+	Enabled      *bool
+	PageToken    string
+	PageSize     int32
+}
+
+// ListBackupConfigsFleet lists BackupConfigs fleet-wide for the "Backup
+// configs" tab (#2816, FR9-FR11) -- unlike ListBackupConfigs above (which
+// always scopes to one volume for the Config Editor's Volumes tab), this
+// forwards BackupConfigListFilter's optional volume/GameConfig/enabled
+// filters onto the same ListBackupConfigsRequest and returns the full
+// response so callers get both items (per-row volume/GameConfig/game
+// display context, api_messages_backup.proto's BackupConfigListItem) and
+// next_page_token for server-side pagination (NFR4).
+func (c *ControlClient) ListBackupConfigsFleet(ctx context.Context, filter BackupConfigListFilter) (*manmanpb.ListBackupConfigsResponse, error) {
+	pageSize := filter.PageSize
+	if pageSize <= 0 {
+		pageSize = 50
+	}
+	return c.api.ListBackupConfigs(ctx, &manmanpb.ListBackupConfigsRequest{
+		VolumeId:     filter.VolumeID,
+		GameConfigId: filter.GameConfigID,
+		Enabled:      filter.Enabled,
+		PageToken:    filter.PageToken,
+		PageSize:     pageSize,
+	})
+}
+
 func (c *ControlClient) CreateBackupConfig(ctx context.Context, volumeID int64, cadenceMinutes int32, backupPath string, enabled bool) (*manmanpb.BackupConfig, error) {
 	resp, err := c.api.CreateBackupConfig(ctx, &manmanpb.CreateBackupConfigRequest{
 		VolumeId:       volumeID,

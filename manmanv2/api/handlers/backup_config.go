@@ -135,6 +135,7 @@ func (h *BackupConfigHandler) ListBackupConfigs(ctx context.Context, req *pb.Lis
 			VolumeName:     row.VolumeName,
 			GameConfigId:   row.GameConfigID,
 			GameConfigName: row.GameConfigName,
+			GameId:         row.GameID,
 			GameName:       row.GameName,
 		}
 	}

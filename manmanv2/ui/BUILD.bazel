@@ -77,6 +77,7 @@ go_test(
         "handlers_activity_live_test.go",
         "handlers_activity_test.go",
         "handlers_backup_run_detail_test.go",
+        "handlers_backups_configs_test.go",
         "handlers_backups_fleet_test.go",
         "handlers_config_editor_test.go",
         "handlers_config_editor_volumes_test.go",

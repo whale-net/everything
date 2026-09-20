@@ -194,6 +194,7 @@ type BackupConfigListRow struct {
 	VolumeName     string
 	GameConfigID   int64
 	GameConfigName string
+	GameID         int64
 	GameName       string
 }
 

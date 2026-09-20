@@ -51,10 +51,18 @@ func (app *App) handleBackupsPage(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	configFilter := parseBackupConfigsFilter(r)
+	configResp, configListErr := app.grpc.ListBackupConfigsFleet(ctx, configFilter)
+	if configListErr != nil {
+		log.Printf("ERROR: backups: failed to fetch fleet-wide backup configs: %v", configListErr)
+	}
+
 	pageData := pages.BackupsPageData{
-		Layout:        layoutData,
-		Runs:          backupRunsFragmentData(resp, filter, listErr),
-		FilterOptions: app.backupRunsFilterOptions(ctx),
+		Layout:              layoutData,
+		Runs:                backupRunsFragmentData(resp, filter, listErr),
+		FilterOptions:       app.backupRunsFilterOptions(ctx),
+		Configs:             backupConfigsFragmentData(configResp, configFilter, configListErr),
+		ConfigFilterOptions: app.backupConfigsFilterOptions(ctx),
 	}
 
 	if err := RenderTempl(w, r, "Backups", pages.BackupsPage(pageData)); err != nil {
@@ -81,6 +89,26 @@ func (app *App) handleBackupRunsFragment(w http.ResponseWriter, r *http.Request)
 	fragData := backupRunsFragmentData(resp, filter, listErr)
 	if err := pages.BackupRunsFragment(fragData).Render(ctx, w); err != nil {
 		log.Printf("ERROR: backups: failed to render backup runs fragment: %v", err)
+		http.Error(w, "Internal server error", http.StatusInternalServerError)
+	}
+}
+
+// handleBackupConfigsFragment serves "/backups/configs", the htmx target
+// both backupConfigsFilterBar's filter submit and BackupConfigsFragment's
+// "Load more" button hit (pages/backups.templ) -- mirrors
+// handleBackupRunsFragment's shape for the "Backup configs" tab (FR9-FR11).
+func (app *App) handleBackupConfigsFragment(w http.ResponseWriter, r *http.Request) {
+	ctx := r.Context()
+
+	filter := parseBackupConfigsFilter(r)
+	resp, listErr := app.grpc.ListBackupConfigsFleet(ctx, filter)
+	if listErr != nil {
+		log.Printf("ERROR: backups: failed to fetch fleet-wide backup configs: %v", listErr)
+	}
+
+	fragData := backupConfigsFragmentData(resp, filter, listErr)
+	if err := pages.BackupConfigsFragment(fragData).Render(ctx, w); err != nil {
+		log.Printf("ERROR: backups: failed to render backup configs fragment: %v", err)
 		http.Error(w, "Internal server error", http.StatusInternalServerError)
 	}
 }
@@ -204,6 +232,7 @@ func (app *App) handleBackupRunDelete(w http.ResponseWriter, r *http.Request) {
 	fragData.DeleteNoticeVariant = variant
 	if err := pages.BackupRunsFragment(fragData).Render(ctx, w); err != nil {
 		log.Printf("ERROR: backups: failed to render backup runs fragment after delete: %v", err)
+
 		http.Error(w, "Internal server error", http.StatusInternalServerError)
 	}
 }
@@ -287,6 +316,72 @@ func (app *App) resolveBackupRunDisplayNames(ctx context.Context, backup *manman
 		}
 	}
 	return sgcName, volumeName, backupConfigLabel
+}
+
+// parseBackupConfigsFilter reads FR10's filter set plus paging off the
+// request query string, mirroring parseBackupRunsFilter -- both "/backups"
+// (first page, filters usually absent) and "/backups/configs" (filter-bar
+// submit or "Load more") share this one parser. "enabled" parses to nil
+// (unset) unless it is exactly "true" or "false", so an unrecognized or
+// missing value never accidentally filters on a tri-state value.
+func parseBackupConfigsFilter(r *http.Request) BackupConfigListFilter {
+	q := r.URL.Query()
+	filter := BackupConfigListFilter{
+		PageToken: q.Get("page_token"),
+	}
+	if v, err := strconv.ParseInt(q.Get("volume_id"), 10, 64); err == nil {
+		filter.VolumeID = v
+	}
+	if v, err := strconv.ParseInt(q.Get("game_config_id"), 10, 64); err == nil {
+		filter.GameConfigID = v
+	}
+	switch q.Get("enabled") {
+	case "true":
+		enabled := true
+		filter.Enabled = &enabled
+	case "false":
+		enabled := false
+		filter.Enabled = &enabled
+	}
+	return filter
+}
+
+// backupConfigsFragmentData assembles pages.BackupConfigsFragmentData from a
+// ListBackupConfigsFleet response plus the filter that produced it,
+// mirroring backupRunsFragmentData -- the filter round-trips back into
+// BackupConfigsFilterValues so the filter bar redisplays what was just
+// submitted and so paging (nextConfigPageQuery) carries it forward.
+// listErr non-nil means the ListBackupConfigsFleet call itself failed
+// (resp is nil): the fragment renders an inline error alert instead of the
+// table rather than the caller returning a bare 500.
+func backupConfigsFragmentData(resp *manmanpb.ListBackupConfigsResponse, filter BackupConfigListFilter, listErr error) pages.BackupConfigsFragmentData {
+	data := pages.BackupConfigsFragmentData{
+		Filter: backupConfigsFilterValues(filter),
+	}
+	if listErr != nil {
+		data.Err = "Failed to load backup configs. Try again."
+		return data
+	}
+	data.Items = resp.Items
+	data.NextPageToken = resp.NextPageToken
+	return data
+}
+
+// backupConfigsFilterValues renders BackupConfigListFilter's fields as
+// strings for the filter bar's <input>/<select>s, mirroring
+// backupRunsFilterValues -- 0 (unset) becomes "" for the ID filters, and a
+// nil Enabled becomes "" (matching the filter bar's "All" option) rather
+// than a stringified "false".
+func backupConfigsFilterValues(filter BackupConfigListFilter) pages.BackupConfigsFilterValues {
+	values := pages.BackupConfigsFilterValues{
+		VolumeID:     formatFilterID(filter.VolumeID),
+		GameConfigID: formatFilterID(filter.GameConfigID),
+	}
+	if filter.Enabled != nil {
+		values.Enabled = strconv.FormatBool(*filter.Enabled)
+	}
+	return values
+
 }
 
 // parseBackupRunsFilter reads FR4's filter set plus paging off the request
@@ -397,26 +492,68 @@ func (app *App) backupRunsFilterOptions(ctx context.Context) pages.BackupRunsFil
 		log.Printf("WARNING: backups: failed to list backup configs for filter options: %v", err)
 		return options
 	}
+	options.Volumes, _, options.BackupConfigs = backupConfigItemOptions(items)
+	sortSelectOptions(options.BackupConfigs)
+	sortSelectOptions(options.Volumes)
+	return options
+}
+
+// backupConfigsFilterOptions resolves the "Backup configs" tab's filter bar
+// name-based picker options (FR10, this task's Implementation-phase
+// refinement of the raw ID inputs Scaffold shipped): Volume and GameConfig,
+// both derived from the same fleet-wide ListBackupConfigItems call
+// backupRunsFilterOptions already makes for its own Volume/BackupConfig
+// pickers (backupConfigItemOptions), so this tab's picker options never
+// drift from the Runs tab's. A resolution failure degrades to empty option
+// lists (logged as a WARNING), matching backupRunsFilterOptions' own
+// degrade posture.
+func (app *App) backupConfigsFilterOptions(ctx context.Context) pages.BackupConfigsFilterOptions {
+	var options pages.BackupConfigsFilterOptions
+
+	items, err := app.grpc.ListBackupConfigItems(ctx)
+	if err != nil {
+		log.Printf("WARNING: backups: failed to list backup configs for filter options: %v", err)
+		return options
+	}
+	options.Volumes, options.GameConfigs, _ = backupConfigItemOptions(items)
+	sortSelectOptions(options.Volumes)
+	sortSelectOptions(options.GameConfigs)
+	return options
+}
+
+// backupConfigItemOptions builds Volume, GameConfig and BackupConfig
+// name-based picker options from a fleet-wide BackupConfigListItem slice,
+// deduplicating Volume/GameConfig by ID -- shared by
+// backupRunsFilterOptions (Volume/BackupConfig pickers) and
+// backupConfigsFilterOptions (Volume/GameConfig pickers) so the two tabs'
+// filter bars can never derive a shared entity's label differently.
+func backupConfigItemOptions(items []*manmanpb.BackupConfigListItem) (volumes, gameConfigs, backupConfigs []components.SelectOption) {
 	seenVolumes := make(map[int64]bool, len(items))
+	seenGameConfigs := make(map[int64]bool, len(items))
 	for _, item := range items {
 		if item.Config == nil {
 			continue
 		}
-		options.BackupConfigs = append(options.BackupConfigs, components.SelectOption{
+		backupConfigs = append(backupConfigs, components.SelectOption{
 			Value: strconv.FormatInt(item.Config.BackupConfigId, 10),
 			Label: fmt.Sprintf("%s / %s", item.GameConfigName, item.VolumeName),
 		})
 		if !seenVolumes[item.Config.VolumeId] {
 			seenVolumes[item.Config.VolumeId] = true
-			options.Volumes = append(options.Volumes, components.SelectOption{
+			volumes = append(volumes, components.SelectOption{
 				Value: strconv.FormatInt(item.Config.VolumeId, 10),
 				Label: fmt.Sprintf("%s (%s)", item.VolumeName, item.GameConfigName),
 			})
 		}
+		if !seenGameConfigs[item.GameConfigId] {
+			seenGameConfigs[item.GameConfigId] = true
+			gameConfigs = append(gameConfigs, components.SelectOption{
+				Value: strconv.FormatInt(item.GameConfigId, 10),
+				Label: fmt.Sprintf("%s / %s", item.GameName, item.GameConfigName),
+			})
+		}
 	}
-	sortSelectOptions(options.BackupConfigs)
-	sortSelectOptions(options.Volumes)
-	return options
+	return volumes, gameConfigs, backupConfigs
 }
 
 // sortSelectOptions orders a filter picker's options alphabetically by
