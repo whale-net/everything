@@ -29,6 +29,19 @@ type BackupsPageData struct {
 	// initial page load and every subsequent "/backups/configs" htmx
 	// fragment swap render identically.
 	Configs BackupConfigsFragmentData
+	// ConfigFilterOptions backs the "Backup configs" tab's filter bar
+	// name-based pickers (Volume, GameConfig), mirroring FilterOptions --
+	// resolved once per full "/backups" page render since that filter bar
+	// also lives outside "#backup-configs-panel".
+	ConfigFilterOptions BackupConfigsFilterOptions
+}
+
+// BackupConfigsFilterOptions holds the fleet-wide name-based picker options
+// for the "Backup configs" tab's filter bar (handlers_backups_fleet.go's
+// backupConfigsFilterOptions), mirroring BackupRunsFilterOptions' shape.
+type BackupConfigsFilterOptions struct {
+	Volumes     []components.SelectOption
+	GameConfigs []components.SelectOption
 }
 
 // BackupRunsFilterOptions holds the fleet-wide name-based picker options
@@ -136,7 +149,7 @@ templ BackupsPage(data BackupsPageData) {
 				</div>
 			</div>
 			<div id="tab-panel-backup-configs" x-show="activeTab === 'configs'" x-cloak>
-				@backupConfigsFilterBar(data.Configs.Filter)
+				@backupConfigsFilterBar(data.Configs.Filter, data.ConfigFilterOptions)
 				<div id="backup-configs-panel">
 					@BackupConfigsFragment(data.Configs)
 				</div>
@@ -487,14 +500,13 @@ type BackupConfigsFilterValues struct {
 // requests, in addition to BackupsPage using it for the initial unfiltered
 // render.
 //
-// Scaffold ships every column FR9 asks for (volume, owning GameConfig/game,
+// Every column FR9 asks for renders (volume, owning GameConfig/game,
 // cadence, backup path, enabled state, last-run time via timeAgo's existing
-// "Never" zero-state) plus raw-ID filter inputs (Implementation's job,
-// mirroring backupRunsFilterBar's own scaffold-to-named-picker history, is
-// resolving volume/GameConfig to name-based selects) -- the FR11 link-out
-// to the Config Editor's Volumes tab is deliberately not wired yet: it
-// needs each row's owning game ID, which BackupConfigListItem does not
-// carry today, so deriving that link is left to the Implementation phase.
+// "Never" zero-state), the filter bar's Volume/GameConfig fields are
+// name-based selects (FR10, backupConfigsFilterBar), and each row links out
+// to the Config Editor via backupConfigEditorURL (FR11) -- see that
+// function's doc comment for why the link targets Game Detail/Config
+// Detail rather than the blade route directly.
 templ BackupConfigsFragment(data BackupConfigsFragmentData) {
 	if data.Err != "" {
 		@components.Alert("error", data.Err)
@@ -511,6 +523,7 @@ templ BackupConfigsFragment(data BackupConfigsFragmentData) {
 						<th>Backup Path</th>
 						<th>Enabled</th>
 						<th>Last Run</th>
+						<th></th>
 					</tr>
 				</thead>
 				<tbody>
@@ -536,15 +549,16 @@ templ BackupConfigsFragment(data BackupConfigsFragmentData) {
 	}
 }
 
-// backupConfigsFilterBar is the FR10 filter bar: volume and GameConfig ship
-// as raw ID inputs in Scaffold, same as backupRunsFilterBar's own history
-// -- Implementation resolves them to name-based pickers. Enabled is a fixed
-// three-way select (All/Enabled/Disabled) since its option set never varies
-// with fleet data, matching backupRunsFilterBar's Status select. Submits
-// via htmx GET to "/backups/configs", swapping "#backup-configs-panel" in
-// place; hx-push-url keeps the current filters in the address bar so a
-// filtered view is linkable.
-templ backupConfigsFilterBar(filter BackupConfigsFilterValues) {
+// backupConfigsFilterBar is the FR10 filter bar: volume and GameConfig each
+// render as a name-based <select> (backupRunsSelect, shared with
+// backupRunsFilterBar) rather than the raw ID inputs Scaffold shipped --
+// options come from handlers_backups_fleet.go's backupConfigsFilterOptions.
+// Enabled is a fixed three-way select (All/Enabled/Disabled) since its
+// option set never varies with fleet data, matching backupRunsFilterBar's
+// Status select. Submits via htmx GET to "/backups/configs", swapping
+// "#backup-configs-panel" in place; hx-push-url keeps the current filters
+// in the address bar so a filtered view is linkable.
+templ backupConfigsFilterBar(filter BackupConfigsFilterValues, options BackupConfigsFilterOptions) {
 	<form
 		hx-get="/backups/configs"
 		hx-target="#backup-configs-panel"
@@ -552,26 +566,8 @@ templ backupConfigsFilterBar(filter BackupConfigsFilterValues) {
 		hx-push-url="true"
 		class="flex flex-wrap gap-4 items-end mb-4 bg-base-100 border border-base-300 rounded-box p-4"
 	>
-		<div>
-			<label class="block text-sm font-medium text-base-content mb-1" for="backup-configs-filter-volume">Volume ID</label>
-			<input
-				type="number"
-				id="backup-configs-filter-volume"
-				name="volume_id"
-				value={ filter.VolumeID }
-				class="input input-bordered input-sm w-40"
-			/>
-		</div>
-		<div>
-			<label class="block text-sm font-medium text-base-content mb-1" for="backup-configs-filter-game-config">Game Config ID</label>
-			<input
-				type="number"
-				id="backup-configs-filter-game-config"
-				name="game_config_id"
-				value={ filter.GameConfigID }
-				class="input input-bordered input-sm w-40"
-			/>
-		</div>
+		@backupRunsSelect("backup-configs-filter-volume", "volume_id", "Volume", "All volumes", filter.VolumeID, options.Volumes)
+		@backupRunsSelect("backup-configs-filter-game-config", "game_config_id", "Game Config", "All game configs", filter.GameConfigID, options.GameConfigs)
 		<div>
 			<label class="block text-sm font-medium text-base-content mb-1" for="backup-configs-filter-enabled">Enabled</label>
 			<select id="backup-configs-filter-enabled" name="enabled" class="select select-bordered select-sm w-40">
@@ -588,7 +584,8 @@ templ backupConfigsFilterBar(filter BackupConfigsFilterValues) {
 // GameConfig display names come from the item's own display-context fields,
 // not a per-row lookup. No create/edit/delete control renders here or
 // anywhere else in this tab (FR11) -- that control lives exclusively in the
-// Config Editor's Volumes tab.
+// Config Editor's Volumes tab; the row's only interactive element is the
+// "Manage" link-out (backupConfigEditorURL).
 templ backupConfigRow(item *manmanpb.BackupConfigListItem) {
 	<tr>
 		<td>{ item.VolumeName }</td>
@@ -603,7 +600,23 @@ templ backupConfigRow(item *manmanpb.BackupConfigListItem) {
 			}
 		</td>
 		<td>{ timeAgo(item.Config.LastBackupAt) }</td>
+		<td>
+			<a href={ templ.URL(backupConfigEditorURL(item)) } class="link link-primary text-sm">Manage in Config Editor</a>
+		</td>
 	</tr>
+}
+
+// backupConfigEditorURL is the FR11 link-out target: the Config Editor's
+// Volumes tab lives behind an htmx-triggered blade opened from within Game
+// Detail (data-config-editor-trigger, game_detail.templ), not a plain
+// navigable route, so this instead points at the Game Detail/Config Detail
+// page for the row's owning GameConfig -- the same
+// "/games/{game_id}/configs/{game_config_id}" shape
+// handlers_config_editor.go's own BackupLinkURL already uses for its
+// "Manage backups" link the other direction, so the two surfaces link to
+// each other consistently without either needing blade auto-open support.
+func backupConfigEditorURL(item *manmanpb.BackupConfigListItem) string {
+	return fmt.Sprintf("/games/%d/configs/%d", item.GameId, item.GameConfigId)
 }
 
 // nextConfigPageQuery carries the current filter values plus the next page

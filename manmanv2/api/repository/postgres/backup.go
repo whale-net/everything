@@ -171,7 +171,7 @@ func (r *BackupConfigRepository) List(ctx context.Context, f repository.BackupCo
 	rows, err := r.db.Query(ctx, `
 		SELECT bc.backup_config_id, bc.volume_id, bc.cadence_minutes, bc.backup_path, bc.enabled,
 		       bc.last_backup_at, bc.created_at, bc.updated_at,
-		       gcv.name, gc.config_id, gc.name, g.name
+		       gcv.name, gc.config_id, gc.name, g.game_id, g.name
 		FROM backup_configs bc
 		JOIN game_config_volumes gcv ON gcv.volume_id = bc.volume_id
 		JOIN game_configs gc ON gc.config_id = gcv.config_id
@@ -195,7 +195,7 @@ func (r *BackupConfigRepository) List(ctx context.Context, f repository.BackupCo
 		if err := rows.Scan(
 			&cfg.BackupConfigID, &cfg.VolumeID, &cfg.CadenceMinutes, &cfg.BackupPath,
 			&cfg.Enabled, &cfg.LastBackupAt, &cfg.CreatedAt, &cfg.UpdatedAt,
-			&row.VolumeName, &row.GameConfigID, &row.GameConfigName, &row.GameName,
+			&row.VolumeName, &row.GameConfigID, &row.GameConfigName, &row.GameID, &row.GameName,
 		); err != nil {
 			return nil, err
 		}

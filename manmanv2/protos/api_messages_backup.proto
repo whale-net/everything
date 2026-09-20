@@ -109,6 +109,10 @@ message BackupConfigListItem {
   int64 game_config_id = 3;
   string game_config_name = 4;
   string game_name = 5;
+  // game_id is the owning Game's ID, distinct from game_config_id -- lets a
+  // caller build the Config Editor's own link shape ("/games/{game_id}/
+  // configs/{game_config_id}") without a second lookup.
+  int64 game_id = 6;
 }
 
 message ListBackupConfigsResponse {

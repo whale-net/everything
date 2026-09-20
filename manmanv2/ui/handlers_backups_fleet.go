@@ -58,10 +58,11 @@ func (app *App) handleBackupsPage(w http.ResponseWriter, r *http.Request) {
 	}
 
 	pageData := pages.BackupsPageData{
-		Layout:        layoutData,
-		Runs:          backupRunsFragmentData(resp, filter, listErr),
-		FilterOptions: app.backupRunsFilterOptions(ctx),
-		Configs:       backupConfigsFragmentData(configResp, configFilter, configListErr),
+		Layout:              layoutData,
+		Runs:                backupRunsFragmentData(resp, filter, listErr),
+		FilterOptions:       app.backupRunsFilterOptions(ctx),
+		Configs:             backupConfigsFragmentData(configResp, configFilter, configListErr),
+		ConfigFilterOptions: app.backupConfigsFilterOptions(ctx),
 	}
 
 	if err := RenderTempl(w, r, "Backups", pages.BackupsPage(pageData)); err != nil {
@@ -491,26 +492,68 @@ func (app *App) backupRunsFilterOptions(ctx context.Context) pages.BackupRunsFil
 		log.Printf("WARNING: backups: failed to list backup configs for filter options: %v", err)
 		return options
 	}
+	options.Volumes, _, options.BackupConfigs = backupConfigItemOptions(items)
+	sortSelectOptions(options.BackupConfigs)
+	sortSelectOptions(options.Volumes)
+	return options
+}
+
+// backupConfigsFilterOptions resolves the "Backup configs" tab's filter bar
+// name-based picker options (FR10, this task's Implementation-phase
+// refinement of the raw ID inputs Scaffold shipped): Volume and GameConfig,
+// both derived from the same fleet-wide ListBackupConfigItems call
+// backupRunsFilterOptions already makes for its own Volume/BackupConfig
+// pickers (backupConfigItemOptions), so this tab's picker options never
+// drift from the Runs tab's. A resolution failure degrades to empty option
+// lists (logged as a WARNING), matching backupRunsFilterOptions' own
+// degrade posture.
+func (app *App) backupConfigsFilterOptions(ctx context.Context) pages.BackupConfigsFilterOptions {
+	var options pages.BackupConfigsFilterOptions
+
+	items, err := app.grpc.ListBackupConfigItems(ctx)
+	if err != nil {
+		log.Printf("WARNING: backups: failed to list backup configs for filter options: %v", err)
+		return options
+	}
+	options.Volumes, options.GameConfigs, _ = backupConfigItemOptions(items)
+	sortSelectOptions(options.Volumes)
+	sortSelectOptions(options.GameConfigs)
+	return options
+}
+
+// backupConfigItemOptions builds Volume, GameConfig and BackupConfig
+// name-based picker options from a fleet-wide BackupConfigListItem slice,
+// deduplicating Volume/GameConfig by ID -- shared by
+// backupRunsFilterOptions (Volume/BackupConfig pickers) and
+// backupConfigsFilterOptions (Volume/GameConfig pickers) so the two tabs'
+// filter bars can never derive a shared entity's label differently.
+func backupConfigItemOptions(items []*manmanpb.BackupConfigListItem) (volumes, gameConfigs, backupConfigs []components.SelectOption) {
 	seenVolumes := make(map[int64]bool, len(items))
+	seenGameConfigs := make(map[int64]bool, len(items))
 	for _, item := range items {
 		if item.Config == nil {
 			continue
 		}
-		options.BackupConfigs = append(options.BackupConfigs, components.SelectOption{
+		backupConfigs = append(backupConfigs, components.SelectOption{
 			Value: strconv.FormatInt(item.Config.BackupConfigId, 10),
 			Label: fmt.Sprintf("%s / %s", item.GameConfigName, item.VolumeName),
 		})
 		if !seenVolumes[item.Config.VolumeId] {
 			seenVolumes[item.Config.VolumeId] = true
-			options.Volumes = append(options.Volumes, components.SelectOption{
+			volumes = append(volumes, components.SelectOption{
 				Value: strconv.FormatInt(item.Config.VolumeId, 10),
 				Label: fmt.Sprintf("%s (%s)", item.VolumeName, item.GameConfigName),
 			})
 		}
+		if !seenGameConfigs[item.GameConfigId] {
+			seenGameConfigs[item.GameConfigId] = true
+			gameConfigs = append(gameConfigs, components.SelectOption{
+				Value: strconv.FormatInt(item.GameConfigId, 10),
+				Label: fmt.Sprintf("%s / %s", item.GameName, item.GameConfigName),
+			})
+		}
 	}
-	sortSelectOptions(options.BackupConfigs)
-	sortSelectOptions(options.Volumes)
-	return options
+	return volumes, gameConfigs, backupConfigs
 }
 
 // sortSelectOptions orders a filter picker's options alphabetically by
