@@ -25,6 +25,12 @@ templ_library(
 # for stateBadge's spinner treatment -- present only for the running state,
 # the session-state-badge id and every other state's label/variant markup
 # left byte-identical.
+#
+# session_test.go (issue #2778's Testing section) additionally added:
+# reconcileTerminalState/SessionLive coverage proving a capped/failure
+# event as evs's last element overrides a stale session.State == "running"
+# DB read, not just the four `TestReconcileTerminalState_*Unchanged` guard
+# cases -- needs whagent_net/events for its EventType* constants.
 go_test(
     name = "components_test",
     size = "small",
@@ -36,5 +42,6 @@ go_test(
     embed = [":components"],
     deps = [
         "//libs/go/htmxauth",
+        "//whagent_net/events",
     ],
 )
