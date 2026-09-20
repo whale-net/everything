@@ -76,6 +76,31 @@ type fakeBackupsFleetAPIClient struct {
 	actionsByBackupConfigID    map[int64][]*manmanpb.BackupConfigActionItem
 	listBackupConfigActionsErr error
 
+	// actionDefsByGameID/actionDefsByConfigID back ListActionDefinitions for
+	// the Actions panel's "add" picker (task #2817, FR13,
+	// buildBackupConfigActionsData) -- keyed by game_id/config_id so a test
+	// can fixture one BackupConfig's owning GameConfig/Game without
+	// affecting another's, mirroring actionsByBackupConfigID's own
+	// per-BackupConfig keying just above.
+	actionDefsByGameID   map[int64][]*manmanpb.ActionDefinition
+	actionDefsByConfigID map[int64][]*manmanpb.ActionDefinition
+
+	// addBackupConfigActionErr/removeBackupConfigActionErr/
+	// reorderBackupConfigActionsErr, when non-nil, are returned by the
+	// corresponding RPC -- tests set an InvalidArgument to drive the
+	// mutation handlers' inline-error rendering (task #2817's "an API error
+	// renders inline, not a 500" requirement) without a real API round trip.
+	// The lastXReq fields capture the most recent request so tests can
+	// assert the exact fields forwarded, not just that some call happened.
+	lastAddBackupConfigActionReq *manmanpb.AddBackupConfigActionRequest
+	addBackupConfigActionErr     error
+
+	lastRemoveBackupConfigActionReq *manmanpb.RemoveBackupConfigActionRequest
+	removeBackupConfigActionErr     error
+
+	lastReorderBackupConfigActionsReq *manmanpb.ReorderBackupConfigActionsRequest
+	reorderBackupConfigActionsErr     error
+
 	// deleteBackupErr, when non-nil, is returned by DeleteBackup -- tests
 	// set it to a status.Error(codes.FailedPrecondition, ...) or
 	// codes.NotFound to drive handleBackupRunDelete's response-handling
@@ -154,6 +179,85 @@ func (f *fakeBackupsFleetAPIClient) ListBackupConfigActions(ctx context.Context,
 		return nil, f.listBackupConfigActionsErr
 	}
 	return &manmanpb.ListBackupConfigActionsResponse{Items: f.actionsByBackupConfigID[in.BackupConfigId]}, nil
+}
+
+// ListActionDefinitions backs the Actions panel's "add" picker
+// (buildBackupConfigActionsData calls this once at game level, once at
+// config level). in.GameId/in.ConfigId are the optional oneof-style filters
+// ListActionDefinitions(ctx, gameID, configID, sgcID *int64) sets in
+// grpc_client.go -- exactly one is non-nil per call here.
+func (f *fakeBackupsFleetAPIClient) ListActionDefinitions(ctx context.Context, in *manmanpb.ListActionDefinitionsRequest, opts ...grpc.CallOption) (*manmanpb.ListActionDefinitionsResponse, error) {
+	if in.GameId != nil {
+		return &manmanpb.ListActionDefinitionsResponse{Actions: f.actionDefsByGameID[in.GetGameId()]}, nil
+	}
+	if in.ConfigId != nil {
+		return &manmanpb.ListActionDefinitionsResponse{Actions: f.actionDefsByConfigID[in.GetConfigId()]}, nil
+	}
+	return &manmanpb.ListActionDefinitionsResponse{}, nil
+}
+
+// AddBackupConfigAction mutates actionsByBackupConfigID in place (appending
+// a row named after the requested action_id) so a test can assert the
+// re-rendered panel reflects the server's post-mutation state, not
+// optimistic local state -- mirroring how the real API commits the
+// attachment before ListBackupConfigActions would next see it.
+func (f *fakeBackupsFleetAPIClient) AddBackupConfigAction(ctx context.Context, in *manmanpb.AddBackupConfigActionRequest, opts ...grpc.CallOption) (*manmanpb.AddBackupConfigActionResponse, error) {
+	f.lastAddBackupConfigActionReq = in
+	if f.addBackupConfigActionErr != nil {
+		return nil, f.addBackupConfigActionErr
+	}
+	if f.actionsByBackupConfigID == nil {
+		f.actionsByBackupConfigID = map[int64][]*manmanpb.BackupConfigActionItem{}
+	}
+	f.actionsByBackupConfigID[in.BackupConfigId] = append(f.actionsByBackupConfigID[in.BackupConfigId], &manmanpb.BackupConfigActionItem{
+		ActionId:     in.ActionId,
+		DisplayOrder: in.DisplayOrder,
+		Name:         fmt.Sprintf("Action %d", in.ActionId),
+	})
+	return &manmanpb.AddBackupConfigActionResponse{}, nil
+}
+
+// RemoveBackupConfigAction mutates actionsByBackupConfigID in place
+// (dropping the requested action_id) for the same re-render-from-server
+// assertion AddBackupConfigAction's doc comment describes.
+func (f *fakeBackupsFleetAPIClient) RemoveBackupConfigAction(ctx context.Context, in *manmanpb.RemoveBackupConfigActionRequest, opts ...grpc.CallOption) (*manmanpb.RemoveBackupConfigActionResponse, error) {
+	f.lastRemoveBackupConfigActionReq = in
+	if f.removeBackupConfigActionErr != nil {
+		return nil, f.removeBackupConfigActionErr
+	}
+	kept := f.actionsByBackupConfigID[in.BackupConfigId][:0]
+	for _, item := range f.actionsByBackupConfigID[in.BackupConfigId] {
+		if item.ActionId != in.ActionId {
+			kept = append(kept, item)
+		}
+	}
+	f.actionsByBackupConfigID[in.BackupConfigId] = kept
+	return &manmanpb.RemoveBackupConfigActionResponse{}, nil
+}
+
+// ReorderBackupConfigActions mutates actionsByBackupConfigID's order to
+// match the submitted action_ids sequence exactly, for the same
+// re-render-from-server assertion described above.
+func (f *fakeBackupsFleetAPIClient) ReorderBackupConfigActions(ctx context.Context, in *manmanpb.ReorderBackupConfigActionsRequest, opts ...grpc.CallOption) (*manmanpb.ReorderBackupConfigActionsResponse, error) {
+	f.lastReorderBackupConfigActionsReq = in
+	if f.reorderBackupConfigActionsErr != nil {
+		return nil, f.reorderBackupConfigActionsErr
+	}
+	byID := make(map[int64]*manmanpb.BackupConfigActionItem, len(f.actionsByBackupConfigID[in.BackupConfigId]))
+	for _, item := range f.actionsByBackupConfigID[in.BackupConfigId] {
+		byID[item.ActionId] = item
+	}
+	reordered := make([]*manmanpb.BackupConfigActionItem, 0, len(in.ActionIds))
+	for i, id := range in.ActionIds {
+		item, ok := byID[id]
+		if !ok {
+			continue
+		}
+		item.DisplayOrder = int32(i)
+		reordered = append(reordered, item)
+	}
+	f.actionsByBackupConfigID[in.BackupConfigId] = reordered
+	return &manmanpb.ReorderBackupConfigActionsResponse{}, nil
 }
 
 func newBackupsFleetTestApp(api *fakeBackupsFleetAPIClient) *App {
@@ -819,5 +923,263 @@ func TestHandleBackupRunDelete_RejectsNonPostMethod(t *testing.T) {
 	}
 	if api.lastDeleteBackupReq != nil {
 		t.Errorf("expected a non-POST request never to reach DeleteBackup, got a call with backup_id=%d", api.lastDeleteBackupReq.BackupId)
+	}
+}
+
+// --- FR12-FR15: pre-backup Action ordering panel (task #2817) -------------
+//
+// Testing-phase coverage for handleBackupConfigActionsRoute's four
+// sub-handlers (list/add/remove/reorder): every mutation re-fetches and
+// re-renders the panel from a fresh ListBackupConfigActions call rather than
+// optimistic local state, so fakeBackupsFleetAPIClient's Add/Remove/Reorder
+// methods above mutate actionsByBackupConfigID in place -- exactly like the
+// real API committing the change before the next list call would see it --
+// and these tests assert on the *rendered* body, not just the captured
+// request, wherever "did it actually re-render from the server" matters.
+
+// threeActionItems fixtures one BackupConfig's attached pre-backup Actions
+// in execution order, each with a distinct name so a test can locate a
+// specific row (and its position relative to the others) in rendered HTML.
+func threeActionItems() []*manmanpb.BackupConfigActionItem {
+	return []*manmanpb.BackupConfigActionItem{
+		{ActionId: 101, DisplayOrder: 0, Name: "Save World"},
+		{ActionId: 102, DisplayOrder: 1, Name: "Flush Cache"},
+		{ActionId: 103, DisplayOrder: 2, Name: "Notify Discord"},
+	}
+}
+
+// backupConfigActionsFixture layers threeActionItems onto
+// baseBackupsFleetFixture's BackupConfig 1 (owned by GameConfig 900 / Game
+// 9000) so buildBackupConfigActionsData's findBackupConfigItem lookup
+// succeeds.
+func backupConfigActionsFixture() *fakeBackupsFleetAPIClient {
+	api := baseBackupsFleetFixture()
+	api.actionsByBackupConfigID = map[int64][]*manmanpb.BackupConfigActionItem{
+		1: threeActionItems(),
+	}
+	return api
+}
+
+func renderBackupConfigActionsListHTTP(t *testing.T, api *fakeBackupsFleetAPIClient, backupConfigID int64) (int, string) {
+	t.Helper()
+	app := newBackupsFleetTestApp(api)
+	req := httptest.NewRequest(http.MethodGet, fmt.Sprintf("/backups/configs/%d/actions", backupConfigID), nil)
+	w := httptest.NewRecorder()
+	app.handleBackupConfigActionsRoute(w, req)
+	return w.Code, w.Body.String()
+}
+
+func postBackupConfigActionsSubrouteHTTP(t *testing.T, api *fakeBackupsFleetAPIClient, backupConfigID int64, subroute string, form url.Values) (int, string) {
+	t.Helper()
+	app := newBackupsFleetTestApp(api)
+	target := fmt.Sprintf("/backups/configs/%d/actions/%s", backupConfigID, subroute)
+	req := httptest.NewRequest(http.MethodPost, target, strings.NewReader(form.Encode()))
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	w := httptest.NewRecorder()
+	app.handleBackupConfigActionsRoute(w, req)
+	return w.Code, w.Body.String()
+}
+
+// criterion 1 (FR12): the ordered list renders with names, in display_order.
+func TestHandleBackupConfigActionsList_RendersOrderedListWithNames(t *testing.T) {
+	api := backupConfigActionsFixture()
+
+	code, body := renderBackupConfigActionsListHTTP(t, api, 1)
+	if code != http.StatusOK {
+		t.Fatalf("status = %d, want %d; body: %s", code, http.StatusOK, body)
+	}
+
+	for _, name := range []string{"Save World", "Flush Cache", "Notify Discord"} {
+		if !strings.Contains(body, name) {
+			t.Errorf("expected the attached action %q in the rendered panel, got: %s", name, body)
+		}
+	}
+
+	saveIdx := strings.Index(body, "Save World")
+	flushIdx := strings.Index(body, "Flush Cache")
+	notifyIdx := strings.Index(body, "Notify Discord")
+	if !(saveIdx < flushIdx && flushIdx < notifyIdx) {
+		t.Errorf("expected actions rendered in display_order (Save World, Flush Cache, Notify Discord), got: %s", body)
+	}
+}
+
+// criterion 2 (FR13): add forwards action_id + the chosen display_order, and
+// the response re-renders from a fresh ListBackupConfigActions call (the
+// newly attached action's name appears -- fakeBackupsFleetAPIClient's
+// AddBackupConfigAction only adds it to actionsByBackupConfigID, the
+// handler never invents it locally).
+func TestHandleBackupConfigActionAdd_ForwardsActionIDAndDisplayOrderThenRerendersFromServer(t *testing.T) {
+	api := backupConfigActionsFixture()
+
+	form := url.Values{"action_id": {"104"}, "display_order": {"1"}}
+	code, body := postBackupConfigActionsSubrouteHTTP(t, api, 1, "add", form)
+	if code != http.StatusOK {
+		t.Fatalf("status = %d, want %d; body: %s", code, http.StatusOK, body)
+	}
+
+	if api.lastAddBackupConfigActionReq == nil {
+		t.Fatal("expected POST .../actions/add to call AddBackupConfigAction")
+	}
+	if api.lastAddBackupConfigActionReq.BackupConfigId != 1 {
+		t.Errorf("BackupConfigId = %d, want 1", api.lastAddBackupConfigActionReq.BackupConfigId)
+	}
+	if api.lastAddBackupConfigActionReq.ActionId != 104 {
+		t.Errorf("ActionId = %d, want 104", api.lastAddBackupConfigActionReq.ActionId)
+	}
+	if api.lastAddBackupConfigActionReq.DisplayOrder != 1 {
+		t.Errorf("DisplayOrder = %d, want 1", api.lastAddBackupConfigActionReq.DisplayOrder)
+	}
+
+	if !strings.Contains(body, "Action 104") {
+		t.Errorf("expected the panel to re-render from a fresh list call showing the newly attached action, got: %s", body)
+	}
+}
+
+// criterion 3 (FR14): remove forwards action_id, and the response
+// re-renders from the server with that action gone (never locally spliced
+// out) while the others remain.
+func TestHandleBackupConfigActionRemove_ForwardsActionIDThenRerendersFromServer(t *testing.T) {
+	api := backupConfigActionsFixture()
+
+	form := url.Values{"action_id": {"102"}}
+	code, body := postBackupConfigActionsSubrouteHTTP(t, api, 1, "remove", form)
+	if code != http.StatusOK {
+		t.Fatalf("status = %d, want %d; body: %s", code, http.StatusOK, body)
+	}
+
+	if api.lastRemoveBackupConfigActionReq == nil {
+		t.Fatal("expected POST .../actions/remove to call RemoveBackupConfigAction")
+	}
+	if api.lastRemoveBackupConfigActionReq.BackupConfigId != 1 {
+		t.Errorf("BackupConfigId = %d, want 1", api.lastRemoveBackupConfigActionReq.BackupConfigId)
+	}
+	if api.lastRemoveBackupConfigActionReq.ActionId != 102 {
+		t.Errorf("ActionId = %d, want 102", api.lastRemoveBackupConfigActionReq.ActionId)
+	}
+
+	if strings.Contains(body, "Flush Cache") {
+		t.Errorf("expected the removed action to be gone from the re-rendered panel, got: %s", body)
+	}
+	if !strings.Contains(body, "Save World") || !strings.Contains(body, "Notify Discord") {
+		t.Errorf("expected the surviving actions to remain in the re-rendered panel, got: %s", body)
+	}
+}
+
+// criterion 4 (FR15): reorder forwards the complete action_ids sequence
+// exactly as submitted, and the response re-renders in that order.
+func TestHandleBackupConfigActionsReorder_ForwardsCompleteActionIDsSequenceThenRerendersFromServer(t *testing.T) {
+	api := backupConfigActionsFixture()
+
+	form := url.Values{"action_ids": {"103", "101", "102"}}
+	code, body := postBackupConfigActionsSubrouteHTTP(t, api, 1, "reorder", form)
+	if code != http.StatusOK {
+		t.Fatalf("status = %d, want %d; body: %s", code, http.StatusOK, body)
+	}
+
+	if api.lastReorderBackupConfigActionsReq == nil {
+		t.Fatal("expected POST .../actions/reorder to call ReorderBackupConfigActions")
+	}
+	got := api.lastReorderBackupConfigActionsReq.ActionIds
+	want := []int64{103, 101, 102}
+	if len(got) != len(want) {
+		t.Fatalf("ActionIds = %v, want %v", got, want)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Fatalf("ActionIds = %v, want %v (submitted order must be forwarded unchanged)", got, want)
+		}
+	}
+
+	notifyIdx := strings.Index(body, "Notify Discord")
+	saveIdx := strings.Index(body, "Save World")
+	flushIdx := strings.Index(body, "Flush Cache")
+	if notifyIdx == -1 || saveIdx == -1 || flushIdx == -1 {
+		t.Fatalf("expected all three actions still present after reorder, got: %s", body)
+	}
+	if !(notifyIdx < saveIdx && saveIdx < flushIdx) {
+		t.Errorf("expected the re-rendered panel to reflect the new server order (Notify Discord, Save World, Flush Cache), got: %s", body)
+	}
+}
+
+// Ordering assertion: moving the last action to the top produces a reorder
+// request whose first element is that action's id, and the re-rendered
+// panel shows it first.
+//
+// mutation-tested (verified red, by hand, then reverted): temporarily
+// changing handleBackupConfigActionsReorder's r.Form["action_ids"] loop
+// (handlers_backups_fleet.go) to append parsed ids in *reverse* of the
+// submitted order made this test's "first element" assertion fail (it
+// forwarded action 102 first instead of 103); reverting restored green.
+func TestHandleBackupConfigActionsReorder_MoveLastActionToTopPutsItFirst(t *testing.T) {
+	api := backupConfigActionsFixture() // 101, 102, 103 -- 103 is last.
+
+	form := url.Values{"action_ids": {"103", "101", "102"}} // 103 moved to the top.
+	code, body := postBackupConfigActionsSubrouteHTTP(t, api, 1, "reorder", form)
+	if code != http.StatusOK {
+		t.Fatalf("status = %d, want %d; body: %s", code, http.StatusOK, body)
+	}
+
+	if api.lastReorderBackupConfigActionsReq == nil {
+		t.Fatal("expected POST .../actions/reorder to call ReorderBackupConfigActions")
+	}
+	if len(api.lastReorderBackupConfigActionsReq.ActionIds) == 0 || api.lastReorderBackupConfigActionsReq.ActionIds[0] != 103 {
+		t.Fatalf("ActionIds[0] = %v, want 103 (the action moved from last to first)", api.lastReorderBackupConfigActionsReq.ActionIds)
+	}
+
+	if strings.Index(body, "Notify Discord") > strings.Index(body, "Save World") {
+		t.Errorf("expected the moved action (Notify Discord, id 103) to render first, got: %s", body)
+	}
+}
+
+// criterion: an API error (e.g. InvalidArgument from a bad reorder set)
+// renders inline, not a 500 -- and the attached-action list itself, whose
+// separate ListBackupConfigActions call has already succeeded, still
+// renders unmodified.
+func TestHandleBackupConfigActionsReorder_InvalidArgumentRendersInlineNotFiveHundred(t *testing.T) {
+	api := backupConfigActionsFixture()
+	api.reorderBackupConfigActionsErr = status.Error(codes.InvalidArgument, "action_ids must match the current attached set")
+
+	form := url.Values{"action_ids": {"101", "102"}} // a bad/incomplete set.
+	code, body := postBackupConfigActionsSubrouteHTTP(t, api, 1, "reorder", form)
+	if code != http.StatusOK {
+		t.Fatalf("status = %d, want %d (an InvalidArgument must render in-page, not a 500); body: %s", code, http.StatusOK, body)
+	}
+	if code >= 500 {
+		t.Fatalf("an InvalidArgument reorder error must not surface as a 500, got status %d", code)
+	}
+	if !strings.Contains(body, "action_ids must match the current attached set") {
+		t.Errorf("expected the API's own InvalidArgument message rendered inline, got: %s", body)
+	}
+	// The reorder failed server-side, so the fake's actionsByBackupConfigID
+	// was never mutated -- the re-fetched list must still show the
+	// original three actions.
+	for _, name := range []string{"Save World", "Flush Cache", "Notify Discord"} {
+		if !strings.Contains(body, name) {
+			t.Errorf("expected the unmodified attached-action list to still render alongside the inline error, got: %s", body)
+		}
+	}
+}
+
+// Auth (NFR3): an unauthenticated POST to each add/remove/reorder route is
+// rejected by the same RequireAuthFunc/WithAccessToken wrapper the rest of
+// "/backups" uses, mirroring
+// TestHandleBackupTrigger_UnauthenticatedPostIsRejected's posture.
+func TestHandleBackupConfigActions_UnauthenticatedPostIsRejected(t *testing.T) {
+	for _, subroute := range []string{"add", "remove", "reorder"} {
+		t.Run(subroute, func(t *testing.T) {
+			app := &App{auth: newTestOIDCAuthenticator(t)}
+			mux := http.NewServeMux()
+			app.setupRoutes(mux)
+
+			target := fmt.Sprintf("/backups/configs/1/actions/%s", subroute)
+			req := httptest.NewRequest(http.MethodPost, target, strings.NewReader("action_id=101"))
+			req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+			w := httptest.NewRecorder()
+			mux.ServeHTTP(w, req)
+
+			if !requestWasAuthBlocked(w) {
+				t.Fatalf("expected an unauthenticated POST %s to be auth-blocked, got status %d", target, w.Code)
+			}
+		})
 	}
 }
