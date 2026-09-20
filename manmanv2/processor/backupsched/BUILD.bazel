@@ -1,0 +1,26 @@
+load("@rules_go//go:def.bzl", "go_library", "go_test")
+
+go_library(
+    name = "backupsched",
+    srcs = [
+        "activities.go",
+        "backupsched.go",
+        "workflow.go",
+    ],
+    importpath = "github.com/whale-net/everything/manmanv2/processor/backupsched",
+    visibility = ["//visibility:public"],
+    deps = [
+        "//libs/go/rmq",
+        "//libs/go/s3",
+        "//manmanv2/api/repository",
+        "//manmanv2/api/repository/postgres",
+        "//manmanv2/models",
+        "@io_temporal_go_sdk//workflow",
+    ],
+)
+
+go_test(
+    name = "backupsched_test",
+    srcs = ["backupsched_test.go"],
+    embed = [":backupsched"],
+)

@@ -415,6 +415,55 @@ the `manman`/`external` exchange bindings.
   `/sessions`, and `/api/live/deployments` returns `503` until a broker
   becomes reachable.
 
+### Backup Scheduler (Temporal, M7)
+
+`event-processor` runs a Temporal worker in-process, alongside its RabbitMQ
+consumer, that re-implements the periodic due-config backup scan and
+per-config dispatch on Temporal (`manmanv2/processor/backupsched`;
+FR16/FR17). This section documents the planner decisions M7 made
+deliberately (do not re-litigate without a new plan) so future Temporal
+work in this domain (e.g. issue #1552) follows the same shape.
+
+- **Worker binary: reuse the existing event-processor.** The Temporal
+  worker runs inside `//manmanv2/processor:event-processor` — no new
+  binary, no new deployment, no new `release_app`. That process already
+  owns the pgx pool, the full `repository.Repository`, the RabbitMQ
+  publisher and the S3 client that backup dispatch needs.
+- **Task queue convention: one task queue per worker binary, named
+  `manmanv2-<binary>`, with workflow/activity code in a package under that
+  binary's directory.** `event-processor` polls `manmanv2-processor`
+  (`backupsched.DefaultTaskQueue`), read from `TEMPORAL_TASK_QUEUE`
+  (`libs/go/temporal.ConfigFromEnv`) and defaulting to that constant in
+  code when the env var is unset. A future worker binary in this domain
+  gets its own task queue (`manmanv2-<that binary>`), not a shared one.
+- **Schedule, not a periodic job loop.** A Temporal Schedule with ID
+  `manmanv2-backup-scan` (`backupsched.ScanScheduleID`), interval 1 minute
+  (`backupsched.ScanInterval`, matching the River scheduler's
+  `PeriodicInterval(1*time.Minute)`), overlap policy `SKIP`, upserted at
+  worker startup with `libs/go/temporal.UpsertSchedule` so a changed
+  interval is actually applied on restart rather than pinned at
+  first-create.
+- **Workflows**: `BackupScanWorkflow` (no args) lists due `BackupConfig`s
+  (`BackupConfigRepository.ListDue`, unchanged — that query is the cadence
+  semantics FR16 preserves) and starts one `DispatchBackupWorkflow` child
+  per due config, keyed by `backup-dispatch-<backup_config_id>-<window>` so
+  a config due in the same cadence window is not dispatched twice
+  (mirroring River's `UniqueOpts{ByArgs, ByPeriod: cadence}`).
+  `DispatchBackupWorkflow(backupConfigID)` executes the `DispatchBackup`
+  activity, which ports `scheduledBackupWorker.Work`
+  (`manmanv2/processor/backup_scheduler.go`) verbatim in behavior: same S3
+  key scheme (`backups/<sgc_id>/<backup_config_id>/<backup_id>.tar.gz`),
+  same `Backup` record shape (`Status = pending`,
+  `TriggerSource = scheduled`), same `hostrmq.BackupCommand` payload
+  published to `command.host.<server_id>.backup` on the `manman` exchange
+  (FR17, NFR5) — the host manager and existing RabbitMQ consumers need no
+  change.
+- **Coexistence with River**: this Temporal path runs alongside the
+  existing River-based scheduler (`manmanv2/processor/backup_scheduler.go`)
+  until a follow-up task performs the hard cutover removal — splitting it
+  this way means the removal (the only breaking step) can't land before
+  its replacement is on trunk.
+
 ---
 
 ## gRPC Service Definitions

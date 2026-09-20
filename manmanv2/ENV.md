@@ -106,6 +106,16 @@ LIVE_EXCHANGE=manmanv2.htmxsse        # dedicated exchange for live status→UI 
 
 `LIVE_EXCHANGE` defaults to `manmanv2/events.ExchangeName` (`manmanv2.htmxsse`) and only needs to be set explicitly to point at a non-default exchange. `manmanv2/ui` must be configured to consume from the same exchange name.
 
+### Temporal (backup scheduler, M7)
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `TEMPORAL_HOST` | `localhost:7233` | Temporal frontend `host:port` the `backupsched` package's client dials (`libs/go/temporal.DefaultHostPort`). |
+| `TEMPORAL_NAMESPACE` | `default` | Temporal namespace (`libs/go/temporal.DefaultNamespace`). |
+| `TEMPORAL_TASK_QUEUE` | `manmanv2-processor` | Task queue the event-processor worker polls, named after this worker binary per `ARCHITECTURE.md`'s task-queue convention (`manmanv2/processor/backupsched.DefaultTaskQueue`). |
+
+The event-processor worker upserts a Temporal Schedule (`manmanv2-backup-scan`, 1-minute interval) at startup that drives `BackupScanWorkflow`/`DispatchBackupWorkflow` — see `ARCHITECTURE.md` § "Backup Scheduler (Temporal)". This runs alongside the existing River-based scheduler (`manmanv2/processor/backup_scheduler.go`) until #2819 removes it.
+
 ## Platform-Wide Variables
 
 `GRPC_AUTH_MODE` appears on every component. Set it consistently across the platform — mismatched modes will cause `codes.Unauthenticated` errors.

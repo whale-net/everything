@@ -15,7 +15,7 @@ load('ext://namespace', 'namespace_create')
 load('ext://dotenv', 'dotenv')
 load('../tools/tilt/common.tilt',
      'build_images_from_apps', 'detect_platform', 'get_bazel_platform', 'get_watch_paths',
-     'setup_dev_util', 'setup_postgres', 'setup_rabbitmq', 'setup_otelcollector',
+     'setup_dev_util', 'setup_postgres', 'setup_rabbitmq', 'setup_otelcollector', 'setup_temporal',
      'get_env_bool', 'get_custom_or_default',
      'print_startup_banner', 'print_footer_info')
 load('../tools/tilt/minio.tilt', 'deploy_minio')
@@ -78,10 +78,20 @@ s3_bucket = os.environ.get('S3_BUCKET', 'manmanv2-dev')
 # OpenTelemetry Collector
 otel_endpoint = setup_otelcollector(namespace)
 
+# Temporal — event-processor's backupsched package (M7, FR16/FR17) upserts
+# the manmanv2-backup-scan Schedule and polls task queue manmanv2-processor
+# here. Host ports 7235/8235 are deliberately non-default: app_registry and
+# whagent_net both already forward 7233/8233, and audience_score_system
+# forwards 7234/8234 — running any of those Tiltfiles alongside this one
+# would otherwise collide.
+temporal_info = setup_temporal(namespace, grpc_host_port='7235', ui_host_port='8235')
+temporal_host = temporal_info['grpc_target']
+
 print("📊 Infrastructure configured:")
 print("  Postgres:  {}".format("custom" if os.environ.get('BUILD_POSTGRES_ENV') == 'custom' else "local"))
 print("  RabbitMQ:  {}".format("custom" if os.environ.get('BUILD_RABBITMQ_ENV') == 'custom' else "local"))
 print("  MinIO:     {}".format("custom" if os.environ.get('BUILD_MINIO_ENV') == 'custom' else "local"))
+print("  Temporal:  {}".format(temporal_host))
 print("  OTEL:      {}".format(otel_endpoint))
 
 # Setup RabbitMQ vhost for ManManV2
@@ -386,6 +396,12 @@ spec:
           value: "us-east-1"
         - name: OTEL_EXPORTER_OTLP_ENDPOINT
           value: "{otel_endpoint}"
+        - name: TEMPORAL_HOST
+          value: "{temporal_host}"
+        - name: TEMPORAL_NAMESPACE
+          value: "default"
+        - name: TEMPORAL_TASK_QUEUE
+          value: "manmanv2-processor"
 """.format(
         namespace=namespace,
         rabbitmq_url=rabbitmq_url,
@@ -395,10 +411,11 @@ spec:
         s3_secret_key=s3_secret_key,
         s3_bucket=s3_bucket,
         otel_endpoint=otel_endpoint,
+        temporal_host=temporal_host,
     )))
 
     # Build dependency list for processor
-    processor_deps = ['rabbitmq-vhost-setup']
+    processor_deps = ['rabbitmq-vhost-setup', 'temporal-dev']
     if get_env_bool('ENABLE_MANMANV2_MIGRATION', default='true'):
         processor_deps.append('manmanv2-migration')
 
