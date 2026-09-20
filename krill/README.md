@@ -94,6 +94,57 @@ tools share.
 | `abandon_milestone` | `AbandonStore` (FR6) |
 | `list_product_delivery` | `slice.Querier.ListProductDelivery` (FR11) |
 
+## Work-axis endpoints (M4, issues #2719-#2728)
+
+M4 adds the work axis on top of the milestones/milepebbles above: a task
+scoped to exactly one milepebble (or to a milestone directly when it has
+no milepebble cut), dependency declaration, claim/heartbeat/complete/
+abandon on a task's current claim, a lease-expiry reclaim sweep, and flat,
+immutable notes against a task or any spec-axis entity. See
+`ARCHITECTURE.md` "The work axis (M4): task, claim, lease, attempt, note"
+for the design; every endpoint here follows the same gating rules the
+tables above state (`RequireSession` on every write, never on a read)
+unless noted otherwise.
+
+| Endpoint | Description |
+|----------|--------------|
+| `POST /tasks` | Creates a task under a milepebble or milestone, with a lane sequence and starting lane (FR1). Body: `{"milestone_id", "title", "body"?, "lane_sequence", "starting_lane"}`. Gated. Returns `{"id": "<uuid>"}`. |
+| `POST /tasks/{id}/dependencies` | Declares that a task depends on one or more other tasks (FR2). Body: `{"depends_on_task_ids"}`. Gated. |
+| `GET /tasks/{id}/dependencies` | Lists the task ids a task depends on. Never gated. |
+| `GET /tasks/{id}` | Returns the task's payload document (current lane, live claim if any, dependency and note summaries) — the same document claim/complete/abandon return, whether or not a claim is currently live (FR4/FR10). Never gated. |
+| `POST /tasks/{id}/claim` | Claims a task for the caller's session, mints a lease, and records one attempt — race-safe via a row lock, not an application mutex (FR3/FR5). Gated. Returns the task payload document. |
+| `POST /tasks/{id}/heartbeat` | Extends the caller's current claim's lease (FR6). Body: `{"claim_id"}`. Gated. Rejects a stale/superseded claim id with 409, never a silent no-op. Returns `{"task_id", "claim_id", "extended_to"}`. |
+| `POST /tasks/{id}/complete` | Reports a pass/fail verdict against the claim the caller holds — krill, not the caller, decides whether the task advances or reverts one lane (FR8). Body: `{"claim_id", "verdict", "summary"?}`; a caller-supplied destination lane field is rejected outright. Gated. Returns the task payload document. |
+| `POST /tasks/{id}/abandon` | Releases the claim the caller holds without reporting a verdict — `current_lane` is unchanged, and the abandon counts as an attempt against the same cap reclaim enforces (FR9). Body: `{"claim_id", "reason"?}`; a caller-supplied verdict field is rejected outright. Gated. Returns the task payload document. Distinct from the delivery-axis `POST /milestones/{id}/abandon` above. |
+| `POST /tasks/reclaim` | Sweeps the caller's own scope for lease-expired tasks and reclaims them, or reclaims one named task instead (FR7). Body: `{"task_id"?}` (empty/absent sweeps the whole scope). Gated. Returns `{"reclaimed": [{"task_id", "cap_exhausted"}]}`. |
+| `POST /notes` | Records a flat, immutable note against a task or a spec-axis entity — any Agent, claimant or not (FR11/FR12). Body: `{"task_id"?, "entity_kind"?, "entity_id"?, "kind", "body"}` (exactly one of `task_id` or `entity_kind`+`entity_id`). Gated. Never accepts a status/lifecycle field. |
+| `GET /tasks/{id}/notes` | Lists every note recorded against a task. Never gated. |
+
+The MCP surface below mirrors every endpoint above one-to-one, mounted on
+the same `/mcp/design` server the delivery-axis tools above use (see
+"Design-session MCP surface" below for the mount/auth pattern) — every
+write tool still requires the same krill-session-derived subject pair;
+`get_task` alone needs no session (ungated read, NFR6) but mounts here
+too rather than a fourth surface of its own (LB7).
+
+| Tool | Kind | Wraps | Persona |
+|------|------|-------|---------|
+| `create_task` | write | `TaskStore.CreateTask` (FR1) | Swarm Operator |
+| `declare_task_dependencies` | write | `TaskStore.DeclareDependency` (FR2) | Swarm Operator |
+| `get_task` | read | `work.Assembler.Assemble` (FR4, FR10) | any resolved persona |
+| `claim_task` | write | `TaskStore.ClaimTask` (FR3, FR5) | Agent |
+| `heartbeat_task` | write | `TaskStore.Heartbeat` (FR6) | Agent |
+| `complete_task` | write | `TaskStore.CompleteTask` (FR8) | Agent |
+| `abandon_task` | write | `TaskStore.AbandonClaim` (FR9) | Agent |
+| `record_note` | write | `TaskStore.RecordNote` (FR11, FR12) | Agent |
+
+`declare_task_dependencies`/`get_task`/`heartbeat_task`/`complete_task`/
+`abandon_task`/`record_note` return the same wire types their HTTP
+counterparts above do (`handlers.IDResponse`, `work.Payload`, or
+`handlers.HeartbeatResponse`), never a bespoke MCP-only shape (LB7). There
+is no MCP tool for `POST /tasks/reclaim`, `GET /tasks/{id}/dependencies`,
+or `GET /tasks/{id}/notes` in this milestone — those three stay HTTP-only.
+
 ## Local development
 
 ```sh
@@ -286,13 +337,16 @@ plus the work-axis personas (`planner`/`worker`/`validator`/
 (`plan`/`implement`/`validate`/`loop-plan-implement-validate`) forked from
 `tools/project-manager`. `quick-task` is the krill-aware, renamed fork of
 that plugin's lightweight `project-manager` persona -- see its own file for
-why. Milestone authoring/status and `create_task` (M3,
-M4 FR1) are real and used where a product is actually hosted in krill; task
-claim/heartbeat/complete/abandon/note, dependency declaration, and any
-lane/status query for a worker to discover ready work are still unbuilt, so
-swimlane execution still rides on GitHub Issues/Projects either way. See
-`plugin/shared/CONVENTIONS.md` for exactly what's real versus still a
-`TODO(M4)`.
+why. Milestone authoring/status and `create_task` (M3, M4 FR1) are real
+and used where a product is actually hosted in krill; task claim/
+heartbeat/complete/abandon/note, dependency declaration, and the
+`GET /tasks/{id}` payload document a worker uses to discover a task's
+current lane and any live claim (M4, this milestone, #2717 -- see
+"Work-axis endpoints" above) are now real too. There is still no
+lane/status *query* endpoint for a worker to discover ready work across a
+whole scope without already knowing a task id, so swimlane execution still
+rides on GitHub Issues/Projects either way. See `plugin/shared/CONVENTIONS.md`
+for exactly what's real versus still a `TODO(M4)`.
 
 `plugin/shared/` holds the `CONVENTIONS.md` and the `help`/`status`
 persona/skill both plugins symlink in, so they never drift apart.
