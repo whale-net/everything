@@ -16,7 +16,7 @@ milestone hangs off. No spec entities exist yet — that is later M1 work.
 | `migrate` | `//krill/migrate` | job | Applies `krill/migrate/schema/migrations` and seeds the one `scope` row with this repo's forge coordinates (LB1, NFR2). |
 | `api` | `//krill/api` | external-api | HTTP server; `/healthz` (a live DB ping), `POST /sessions/init` (FR3's `init` primitive, issue #2489), the M1 entity write API (FR1/FR2/FR4, issue #2490), the FR5-FR9 scoped-slice query surface (`GET /slices/{feature-sets,features,requirements,products}/{id}`, issue #2491), the pointer-artifact create endpoint (`POST /pointer-artifacts`, FR20, issue #2496), and (M3, issues #2683-#2689) the delivery-axis surface -- milestone/milepebble authoring, status, shipment, re-cut, backlog, and abandon. See "Delivery-axis endpoints" below. |
 | `import` | `//krill/importer/cmd` | CLI (not deployed) | The one-way markdown importer (FR16, FR17, issue #2492): parses a `PRODUCT.md` + `product/*.md` doc set into `krill/store`'s spec entities and prints the entity-id report. Gated on a valid `init` session, same as every other write path. Records a one-time, one-way `import_completion` marker after a successful run and refuses a second import for the same path before parsing (FR12, NFR3, issue #2548). Run with `bazel run //krill/importer/cmd:import -- --path <dir> --session-id <uuid> --source-revision <sha>`. See `ARCHITECTURE.md` "The markdown importer and the delivery-axis association". |
-| `mcp` | `//krill/mcp` | external-api | krill's MCP surface: the FR5-FR9 scoped-slice query over MCP at `/mcp/spec`, and (issue #2547) the FR1-FR10 design-session/mediated-intake surface plus (M3, issues #2683-#2689) the delivery-axis tool set at `/mcp/design`, both behind the mcpauth (human) + whagent-net (agent) two-front-door auth pattern. See "MCP spec surface", "Design-session MCP surface", and "Delivery-axis endpoints" below. |
+| `mcp` | `//krill/mcp` | external-api | krill's MCP surface: the FR5-FR9 scoped-slice query over MCP at `/mcp/spec`, the FR1-FR10 design-session/mediated-intake surface plus (M3, issues #2683-#2689) the delivery-axis tool set at `/mcp/design` (issue #2547), and (M5, issue #2867) the Swarm Operator-only surface at `/mcp/ops` -- mounted but with no tool registered yet -- all three behind the mcpauth (human) + whagent-net (agent) two-front-door auth pattern. See "MCP spec surface", "Design-session MCP surface", "Operator MCP surface", and "Delivery-axis endpoints" below. |
 | `ui` | `//krill/ui` | external-api | Barebones Keycloak sign-in shell: gives mcpauth's `/authorize` endpoint (mounted here) a `SignInURL` to redirect a not-yet-signed-in caller to, so the human front door above can actually mint a credential end to end. No session list, no spec browsing -- a real web UI is deferred (`PRODUCT.md`'s C19, "Later"). See "The mcpauth sign-in shell" below. |
 
 ## Endpoints
@@ -287,6 +287,29 @@ is one of `krill/api/handlers`' own exported types, or (`get_design_session_slic
 `slice.Document` itself, unchanged (LB7) -- never a bespoke MCP-only shape.
 
 See `ARCHITECTURE.md` "The design-session MCP surface" for the full design.
+
+## Operator MCP surface (M5, issue #2867)
+
+`mcp` also mounts a third, pre-filtered endpoint, `/mcp/ops`, alongside
+`/mcp/spec` and `/mcp/design` -- the surface FR6-FR9's operator verbs and
+FR4/FR5/FR10/FR12's console queries (the rest of M5) register onto. No
+tool is registered here yet; this task ships only the mount and its
+authorization boundary.
+
+**Auth -- Swarm Operator only.** Both front doors (mcpauth/human,
+whagent-net/agent) are mounted at `/mcp/ops` exactly as they are at the
+other two mounts, but every tool registered here -- read or write, via
+`krill/mcp/server/registry.go`'s `RegisterOpsRead`/`RegisterOpsWrite` --
+additionally requires the caller's persona to be `PersonaSwarmOperator`;
+any other resolved persona (`PersonaRequirementContributor`,
+`PersonaAgent`) is rejected before the tool handler runs. This is the one
+place the Swarm Operator restriction FR6-FR9 name lives: M5's mutating
+HTTP endpoints keep using the existing `gate(...)` write gate
+(`api/routes.go`, `api/handlers/gate.go`) unchanged, which has no persona
+concept at all.
+
+See `krill/mcp/server/transport.go`'s `opsMountPath` doc comment for the
+full reasoning.
 
 ## The mcpauth sign-in shell (`ui`)
 

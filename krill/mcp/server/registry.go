@@ -7,16 +7,20 @@ import (
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 )
 
-// Registry wraps *mcp.Server so every tool registration on either the spec
-// surface (/mcp/spec) or the design-session surface (/mcp/design, this
-// task) goes through RegisterRead/RegisterWrite rather than mcp.AddTool
-// directly -- the choke point registry_tools_test.go's negative tests
-// check against ("no write/mutation tool is registered on the spec
-// endpoint" and, this task, "no tool is registered on both mounts").
+// Registry wraps *mcp.Server so every tool registration on the spec
+// surface (/mcp/spec), the design-session surface (/mcp/design), or the
+// operator surface (/mcp/ops, issue #2867) goes through
+// RegisterRead/RegisterWrite/RegisterOpsRead/RegisterOpsWrite rather than
+// mcp.AddTool directly -- the choke point registry_tools_test.go's
+// negative tests check against ("no write/mutation tool is registered on
+// the spec endpoint" and "no tool is registered on both mounts").
 // RegisterWrite (below) is new as of issue #2547: M1 shipped no write
 // tools at all (see ../../ARCHITECTURE.md "The MCP spec surface" for that
 // now-corrected sentence); M2's design-session surface is the first
-// milestone that needs one.
+// milestone that needs one. RegisterOpsRead/RegisterOpsWrite (also below)
+// are new as of issue #2867: M5's operator surface is the first mount
+// whose authorization boundary is the mount itself, not a per-tool
+// allow-list a caller opts into.
 type Registry struct {
 	server *mcp.Server
 }
@@ -118,4 +122,48 @@ func personaAllowed(persona Persona, allowed []Persona) bool {
 		}
 	}
 	return false
+}
+
+// registerOpsGated is the persona gate RegisterOpsRead and RegisterOpsWrite
+// share: exactly PersonaSwarmOperator may reach h, fixed rather than taken
+// as an allow-list parameter -- transport.go's opsMountPath doc comment
+// makes that one persona the operator mount's entire reason to exist, so
+// there is nothing for a caller-supplied allow-list to ever vary. Mirrors
+// RegisterRead/RegisterWrite's own "no resolved persona -> unauthenticated"
+// gate first.
+func registerOpsGated[In, Out any](reg *Registry, tool *mcp.Tool, h mcp.ToolHandlerFor[In, Out]) {
+	wrapped := func(ctx context.Context, req *mcp.CallToolRequest, in In) (*mcp.CallToolResult, Out, error) {
+		var zero Out
+		persona := PersonaFromContext(ctx)
+		if persona == "" {
+			return nil, zero, fmt.Errorf("unauthenticated: no caller persona resolved")
+		}
+		if persona != PersonaSwarmOperator {
+			return nil, zero, fmt.Errorf("forbidden: persona %q may not call %s", persona, tool.Name)
+		}
+		return h(ctx, req, in)
+	}
+	mcp.AddTool(reg.server, tool, wrapped)
+}
+
+// RegisterOpsRead adds a read-only tool to the operator surface
+// (transport.go's opsMountPath, /mcp/ops) -- M5's console queries
+// (FR4/FR5/FR10/FR12, issue #2867). Unlike RegisterRead (open to any
+// resolved persona on the spec/design mounts), every tool registered here
+// -- read or write -- requires PersonaSwarmOperator specifically: the ops
+// mount's authorization boundary IS this persona restriction, enforced at
+// the mount rather than layered onto individual tools elsewhere (see
+// transport.go's opsMountPath doc comment).
+func RegisterOpsRead[In, Out any](reg *Registry, tool *mcp.Tool, h mcp.ToolHandlerFor[In, Out]) {
+	registerOpsGated(reg, tool, h)
+}
+
+// RegisterOpsWrite adds a write tool to the operator surface
+// (transport.go's opsMountPath, /mcp/ops) -- M5's operator verbs
+// (FR6-FR9, issue #2867). Gated identically to RegisterOpsRead; kept as
+// its own function (rather than one shared entry point) so the read/write
+// distinction RegisterRead/RegisterWrite already model on the other two
+// mounts stays visible here too, per this package's doc comment.
+func RegisterOpsWrite[In, Out any](reg *Registry, tool *mcp.Tool, h mcp.ToolHandlerFor[In, Out]) {
+	registerOpsGated(reg, tool, h)
 }

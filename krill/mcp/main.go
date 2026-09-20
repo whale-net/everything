@@ -190,7 +190,8 @@ func run() error {
 
 	// opsSrv/opsReg is M5's operator surface (issue #2867, /mcp/ops):
 	// its own *mcp.Server so an operator verb or console query
-	// (registered by later M5 tasks) can never end up reachable from
+	// (registered by later M5 tasks, via server.RegisterOpsRead/
+	// RegisterOpsWrite -- registry.go) can never end up reachable from
 	// specMountPath or designMountPath, the same isolation specSrv/
 	// designSrv give each other above. No tool is registered on it yet
 	// -- this task ships the empty, authorized surface the rest of M5
