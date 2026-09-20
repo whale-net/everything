@@ -495,13 +495,19 @@ jobs:
   # Issue #986 (FR21/FR22 of #979): reviewed step-by-step -- build-app
   # pushes by digest only (--tag is the build-scoped git SHA; see its own
   # `Short`/`Long` help text), build-chart composes a source tree only (no
-  # `helm package`, no ChartMuseum upload, no version resolution), and
-  # neither step calls any App Registry RPC. Matches this header comment's
-  # design. Clean. The folded-in OpenAPI (bazel build + upload only) and
-  # CLI-binaries (package-assets + upload only) steps were reviewed the
-  # same way when they were still separate jobs -- see their original
-  # header comments, preserved below on each step group -- and neither
-  # gained any new side effect by moving here.
+  # `helm package`, no ChartMuseum upload, no version resolution). The
+  # folded-in OpenAPI (bazel build + upload only) and CLI-binaries
+  # (package-assets + upload only) steps were reviewed the same way when
+  # they were still separate jobs -- see their original header comments,
+  # preserved below on each step group -- and neither gained any new side
+  # effect by moving here.
+  #
+  # build-app now ALSO makes a best-effort, non-blocking App
+  # Registry call per image target (ReportTargetProgress, builder role) as
+  # it works through each build/push -- see the "Build release artifacts"
+  # step's own comment below. Every other guarantee above (digest-only
+  # push, no version resolution, no ChartMuseum upload) is unchanged; a
+  # progress-report failure never fails this job.
   build-release-artifacts:
     name: Build Release Artifacts
     runs-on: ubuntu-latest
@@ -596,13 +602,27 @@ jobs:
       # comment; ExecuteBuildReleaseArtifacts calls the exact same
       # ExecuteBuildApp/ExecuteBuildCharts/PackageAppAssets primitives the
       # former per-type steps did.
+      # Builder credentials for build-release's own best-effort
+      # ReportTargetProgress calls (one per image target, built then
+      # pushed) -- same app-registry-builder-<env> client the notify job
+      # below already uses for NotifyBuildComplete. --release-run-id empty
+      # (manual/bot fallback dispatch, no Temporal release run behind this
+      # run) makes build-release skip progress reporting entirely, same
+      # skip notify-build applies.
       - name: Build release artifacts
         env:
           RESOLVED_PLAN: ${{ needs.plan-release.outputs.resolved-plan }}
           BUILD_SHA: ${{ github.event.inputs.build_ref || github.sha }}
+          APP_REGISTRY_ADDRESS: ${{ vars.APP_REGISTRY_ADDRESS }}
+          GRPC_AUTH_TOKEN_URL: ${{ vars.APP_REGISTRY_AUTH_TOKEN_URL }}
+          GRPC_AUTH_CLIENT_ID: app-registry-builder-${{ vars.APP_REGISTRY_BUILDER_ENV || 'dev' }}
+          GRPC_AUTH_CLIENT_SECRET: ${{ secrets.APP_REGISTRY_BUILDER_CLIENT_SECRET }}
         run: |
-          ARGS=(build-release --from-resolved-plan "$RESOLVED_PLAN" --git-sha "$BUILD_SHA")
+          ARGS=(build-release --from-resolved-plan "$RESOLVED_PLAN" --git-sha "$BUILD_SHA" --github-run-id "${{ github.run_id }}")
           [[ "${{ github.event.inputs.dry_run }}" == "true" ]] && ARGS+=(--dry-run)
+          if [[ -n "${{ github.event.inputs.release_run_id || '' }}" ]]; then
+            ARGS+=(--release-run-id "${{ github.event.inputs.release_run_id }}")
+          fi
           "$RELEASE_HELPER" "${ARGS[@]}"
 
       - name: Upload build manifest artifact

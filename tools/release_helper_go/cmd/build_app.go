@@ -42,6 +42,23 @@ type BuildAppParams struct {
 	Bazel         BazelRunner
 	Docker        DockerRunner
 	WorkspaceRoot string
+	// OnProgress, when non-nil, is called with "built" immediately after
+	// the image is built locally (before it is pushed), and again with
+	// "pushed" immediately after it is pushed to the registry -- best-effort
+	// intra-build progress reporting to App Registry. ExecuteBuildApp never
+	// fails the build over this callback;
+	// any reporting policy (dialing a client, swallowing errors, logging)
+	// is the caller's concern -- see ExecuteBuildReleaseArtifacts'
+	// targetProgressReporter.
+	OnProgress func(state string)
+}
+
+// reportProgress calls p.OnProgress if set, so call sites below don't each
+// need a nil check.
+func (p BuildAppParams) reportProgress(state string) {
+	if p.OnProgress != nil {
+		p.OnProgress(state)
+	}
 }
 
 func newBuildAppCmd() *cobra.Command {
@@ -188,20 +205,33 @@ func ExecuteBuildApp(p BuildAppParams) (*BuildAppManifest, error) {
 		// generated bash/crane-CLI push script -- see
 		// image_push_native.go's doc comments.
 		fmt.Printf("Building and pushing %s (build tag: %s) natively...\n", fullName, p.GitSHA)
-		pushedDigest, err := buildAndPushImageNative(bazel, *matchedApp, repoPath, []string{p.GitSHA}, defaultEnv("GHCR_TOKEN"))
+		imageDir, err := buildImageNative(bazel, *matchedApp)
+		if err != nil {
+			return nil, fmt.Errorf("native image build: %w", err)
+		}
+		p.reportProgress("built")
+		pushedDigest, err := pushOCILayoutIndex(imageDir, repoPath, []string{p.GitSHA}, defaultEnv("GHCR_TOKEN"))
 		if err != nil {
 			return nil, fmt.Errorf("native image push: %w", err)
 		}
+		p.reportProgress("pushed")
 		digest = pushedDigest
 		fmt.Printf("Built and pushed %s in %s (digest: %s)\n",
 			fullName, time.Since(buildStart).Round(time.Second), digest)
 	} else {
 		pushTarget := imagePushTarget(*matchedApp)
 		fmt.Printf("Building and pushing %s (build tag: %s) via %s...\n", fullName, p.GitSHA, pushTarget)
-		// This is the highest-bandwidth bazel invocation in the release pipeline
-		// (pulling multi-platform image layers out of remote cache before
-		// pushing to ghcr.io); bazelRunToDisk's --config=ci-images ensures they
-		// land on local disk with build:ci's CI tuning applied.
+		// `bazel run <target>_image_push` fuses build and push into one
+		// invocation (rules_oci's generated bash/crane-CLI script) -- there
+		// is no true intermediate checkpoint on this path the way the
+		// native path has, so "built" is reported immediately before this
+		// call and "pushed" immediately after it succeeds.
+		// This is the highest-bandwidth bazel invocation in the release
+		// pipeline (pulling multi-platform image layers out of remote
+		// cache before pushing to ghcr.io); bazelRunToDisk's
+		// --config=ci-images ensures they land on local disk with build:ci's
+		// CI tuning applied.
+		p.reportProgress("built")
 		if _, err := bazelRunToDisk(bazel, "run", pushTarget, "--", "--tag", p.GitSHA); err != nil {
 			return nil, fmt.Errorf("bazel run %s: %w", pushTarget, err)
 		}
@@ -212,6 +242,7 @@ func ExecuteBuildApp(p BuildAppParams) (*BuildAppManifest, error) {
 		if digest == "" {
 			return nil, fmt.Errorf("could not resolve pushed digest for %s:%s", repoPath, p.GitSHA)
 		}
+		p.reportProgress("pushed")
 		fmt.Printf("Built and pushed %s in %s (digest lookup: %s)\n",
 			fullName, buildDuration.Round(time.Second), time.Since(digestStart).Round(time.Second))
 	}

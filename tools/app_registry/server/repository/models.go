@@ -779,14 +779,19 @@ type VersionAllocation struct {
 // tracked independently of (and ahead of) whatever `artifact` row that
 // target's build eventually produces. Legal transitions, enforced
 // server-side in server/repository/postgres/release_run.go and mirrored in
-// server/repository/fake: queued -> building -> publishing -> recording ->
-// succeeded, with a transition to failed legal from any non-terminal state.
-// succeeded/failed are terminal.
+// server/repository/fake: queued -> building -> built -> pushed ->
+// publishing -> recording -> succeeded, with a transition to failed legal
+// from any non-terminal state. succeeded/failed are terminal. Built/pushed
+// (migration 026) are optional per-target progress markers image builds
+// report mid-BUILDING via ReportTargetProgress -- a target that never
+// reports them still walks BUILDING -> PUBLISHING directly.
 type ReleaseRunTargetState string
 
 const (
 	ReleaseRunTargetStateQueued     ReleaseRunTargetState = "queued"
 	ReleaseRunTargetStateBuilding   ReleaseRunTargetState = "building"
+	ReleaseRunTargetStateBuilt      ReleaseRunTargetState = "built"
+	ReleaseRunTargetStatePushed     ReleaseRunTargetState = "pushed"
 	ReleaseRunTargetStatePublishing ReleaseRunTargetState = "publishing"
 	ReleaseRunTargetStateRecording  ReleaseRunTargetState = "recording"
 	ReleaseRunTargetStateSucceeded  ReleaseRunTargetState = "succeeded"
