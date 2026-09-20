@@ -24,6 +24,16 @@ import (
 type ScopeStore interface {
 	// GetByID returns the scope row for id, or ErrNotFound.
 	GetByID(ctx context.Context, id uuid.UUID) (Scope, error)
+
+	// GetSole returns the one scope row this deployment's seeder
+	// (migrate/seed/seed.go) guarantees exists, or ErrNotFound before that
+	// seeder has run. Added for issue #2827: an MCP-only caller has no
+	// other way to learn a scope_id (there is exactly one, by
+	// construction -- render/cmd/main.go's own `SELECT id FROM scope
+	// LIMIT 1` already relies on the same assumption), so
+	// mcp/tools.RegisterInitSession resolves it here instead of asking
+	// the caller to supply or discover one.
+	GetSole(ctx context.Context) (Scope, error)
 }
 
 type scopeStore struct{ pool *pgxpool.Pool }
@@ -49,6 +59,21 @@ func (s scopeStore) GetByID(ctx context.Context, id uuid.UUID) (Scope, error) {
 	}
 	if err != nil {
 		return Scope{}, fmt.Errorf("get scope: %w", err)
+	}
+	return scope, nil
+}
+
+func (s scopeStore) GetSole(ctx context.Context) (Scope, error) {
+	scope, err := scanScope(s.pool.QueryRow(ctx, `
+		SELECT `+scopeColumns+`
+		FROM scope
+		LIMIT 1
+	`))
+	if errors.Is(err, pgx.ErrNoRows) {
+		return Scope{}, fmt.Errorf("%w: no scope row seeded yet", ErrNotFound)
+	}
+	if err != nil {
+		return Scope{}, fmt.Errorf("get sole scope: %w", err)
 	}
 	return scope, nil
 }

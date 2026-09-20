@@ -3,7 +3,9 @@ ships: four thin wrappers over //krill/slice's scoped-slice query
 (FR5-FR8). design.go (issue #2547) is M2's design-session group: six thin
 wrappers -- three write, three read -- over the design-session store
 layer, mirroring krill/api/handlers' own HTTP surface for the same
-FR1-FR10 capability."""
+FR1-FR10 capability. session.go (issue #2827) is init_session: the one MCP
+entry point that mints the krill_session_id every write tool above
+requires as input."""
 
 load("@rules_go//go:def.bzl", "go_library", "go_test")
 
@@ -16,6 +18,7 @@ go_library(
         "milestone.go",
         "milestone_status.go",
         "recut.go",
+        "session.go",
         "slice.go",
         "task.go",
         "task_abandon.go",
@@ -111,6 +114,67 @@ go_test(
         ":tools",
         "//krill/mcp/server",
         "//krill/store",
+        "@com_github_modelcontextprotocol_go_sdk//mcp",
+        "@com_github_stretchr_testify//assert",
+        "@com_github_stretchr_testify//require",
+    ],
+)
+
+# No-database unit test (issue #2827's own MCP-layer structural proof):
+# RegisterInitSession registers exactly {init_session} over a real
+# in-memory MCP client/server connection. Mirrors
+# :milestone_status_registration_test's own store.New(nil)/in-memory
+# transport technique, so it needs no Docker and is part of
+# `bazel test //...`.
+go_test(
+    name = "session_registration_test",
+    srcs = ["session_registration_test.go"],
+    deps = [
+        ":tools",
+        "//krill/mcp/server",
+        "//krill/store",
+        "@com_github_modelcontextprotocol_go_sdk//mcp",
+        "@com_github_stretchr_testify//assert",
+        "@com_github_stretchr_testify//require",
+    ],
+)
+
+# Real Postgres + real HTTP-transport MCP client integration test for
+# init_session (issue #2827's Testing section): a session minted over MCP,
+# with no scope_id ever supplied by the caller, is usable by another write
+# tool on the same mount (open_design_session), plus a per-field validation
+# rejection before the store is ever called. Deliberately NOT part of
+# `bazel test //...` -- see //libs/go/dbtest's README, mirrored by
+# :design_test below.
+#
+# Run it explicitly (requires a working Docker daemon):
+#   bazel test //krill/mcp/tools:session_test --test_output=all
+go_test(
+    name = "session_test",
+    size = "large",
+    timeout = "long",
+    srcs = ["session_test.go"],
+    gotags = ["integration"],
+    tags = [
+        "external",
+        "integration",
+        "manual",
+        "no-cache",
+        "no-sandbox",
+        "requires-network",
+    ],
+    deps = [
+        ":tools",
+        "//krill/mcp/server",
+        "//krill/migrate/schema",
+        "//krill/slice",
+        "//krill/store",
+        "//libs/go/dbtest",
+        "//libs/go/mcpauth",
+        "//libs/go/migrate",
+        "@com_github_google_uuid//:uuid",
+        "@com_github_jackc_pgx_v5//pgxpool",
+        "@com_github_jackc_pgx_v5//stdlib",
         "@com_github_modelcontextprotocol_go_sdk//mcp",
         "@com_github_stretchr_testify//assert",
         "@com_github_stretchr_testify//require",
