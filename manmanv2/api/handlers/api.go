@@ -305,6 +305,10 @@ func (s *APIServer) ListBackupConfigActions(ctx context.Context, req *pb.ListBac
 	return s.backupConfigHandler.ListBackupConfigActions(ctx, req)
 }
 
+func (s *APIServer) ReorderBackupConfigActions(ctx context.Context, req *pb.ReorderBackupConfigActionsRequest) (*pb.ReorderBackupConfigActionsResponse, error) {
+	return s.backupConfigHandler.ReorderBackupConfigActions(ctx, req)
+}
+
 // Configuration Strategy RPCs
 func (s *APIServer) CreateConfigurationStrategy(ctx context.Context, req *pb.CreateConfigurationStrategyRequest) (*pb.CreateConfigurationStrategyResponse, error) {
 	return s.strategyHandler.CreateConfigurationStrategy(ctx, req)

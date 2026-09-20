@@ -170,6 +170,10 @@ func (h *BackupConfigHandler) DeleteBackupConfig(ctx context.Context, req *pb.De
 	return &pb.DeleteBackupConfigResponse{}, nil
 }
 
+// AddBackupConfigAction honors an explicit display_order to attach an Action
+// at a chosen position (FR13). Positions are dense 0..n-1 after any
+// ReorderBackupConfigActions call, so a caller placing an action mid-list
+// should use the position it currently sees, not a sparse/gapped value.
 func (h *BackupConfigHandler) AddBackupConfigAction(ctx context.Context, req *pb.AddBackupConfigActionRequest) (*pb.AddBackupConfigActionResponse, error) {
 	if err := h.backupConfigRepo.AddAction(ctx, req.BackupConfigId, req.ActionId, int(req.DisplayOrder)); err != nil {
 		return nil, status.Errorf(codes.Internal, "failed to add action: %v", err)
@@ -191,11 +195,63 @@ func (h *BackupConfigHandler) ListBackupConfigActions(ctx context.Context, req *
 	}
 	ids := make([]int64, len(actions))
 	orders := make([]int32, len(actions))
+	items := make([]*pb.BackupConfigActionItem, len(actions))
 	for i, a := range actions {
 		ids[i] = a.ActionID
 		orders[i] = int32(a.DisplayOrder)
+		item := &pb.BackupConfigActionItem{
+			ActionId:     a.ActionID,
+			DisplayOrder: int32(a.DisplayOrder),
+		}
+		// A soft-deleted or missing Action definition still appears in the
+		// list -- with an empty name/template -- rather than being dropped.
+		if def, _, err := h.actionRepo.Get(ctx, a.ActionID); err == nil {
+			item.Name = def.Name
+			item.CommandTemplate = def.CommandTemplate
+		}
+		items[i] = item
 	}
-	return &pb.ListBackupConfigActionsResponse{ActionIds: ids, DisplayOrders: orders}, nil
+	return &pb.ListBackupConfigActionsResponse{ActionIds: ids, DisplayOrders: orders, Items: items}, nil
+}
+
+// ReorderBackupConfigActions changes the execution order of a BackupConfig's
+// attached Actions atomically. It is a pure reorder (FR15): action_ids must
+// be exactly the config's current attached-action set, just permuted -- use
+// AddBackupConfigAction / RemoveBackupConfigAction to change the set itself.
+// Positions stay dense (0..n-1) after every reorder, matching AddBackupConfigAction's
+// explicit display_order placement.
+func (h *BackupConfigHandler) ReorderBackupConfigActions(ctx context.Context, req *pb.ReorderBackupConfigActionsRequest) (*pb.ReorderBackupConfigActionsResponse, error) {
+	if _, err := h.backupConfigRepo.Get(ctx, req.BackupConfigId); err != nil {
+		return nil, status.Errorf(codes.NotFound, "backup config not found: %v", err)
+	}
+
+	current, err := h.backupConfigRepo.ListActions(ctx, req.BackupConfigId)
+	if err != nil {
+		return nil, status.Errorf(codes.Internal, "failed to list actions: %v", err)
+	}
+	currentSet := make(map[int64]bool, len(current))
+	for _, a := range current {
+		currentSet[a.ActionID] = true
+	}
+
+	seen := make(map[int64]bool, len(req.ActionIds))
+	for _, id := range req.ActionIds {
+		if seen[id] {
+			return nil, status.Errorf(codes.InvalidArgument, "duplicate action_id %d in reorder request", id)
+		}
+		seen[id] = true
+		if !currentSet[id] {
+			return nil, status.Errorf(codes.InvalidArgument, "action_id %d is not attached to backup config %d", id, req.BackupConfigId)
+		}
+	}
+	if len(seen) != len(currentSet) {
+		return nil, status.Errorf(codes.InvalidArgument, "action_ids must match backup config %d's full attached-action set", req.BackupConfigId)
+	}
+
+	if err := h.backupConfigRepo.ReorderActions(ctx, req.BackupConfigId, req.ActionIds); err != nil {
+		return nil, status.Errorf(codes.Internal, "failed to reorder actions: %v", err)
+	}
+	return &pb.ReorderBackupConfigActionsResponse{}, nil
 }
 
 // TriggerBackup creates a pending Backup record and dispatches a BackupCommand to the host-manager.
