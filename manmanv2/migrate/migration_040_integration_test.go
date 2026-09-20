@@ -115,12 +115,12 @@ func TestMigration040_AppliesOnTopOfFullHistoryAndCreatesExpectedShape(t *testin
 	if err != nil {
 		t.Fatalf("LatestVersion: %v", err)
 	}
-	if latest != 43 {
-		t.Fatalf("expected the latest migration source version to be 43, got %d -- update this test if a newer migration has since landed", latest)
+	if latest != 44 {
+		t.Fatalf("expected the latest migration source version to be 44, got %d -- update this test if a newer migration has since landed", latest)
 	}
 
 	// Target version 40 explicitly rather than Up() (which now also
-	// applies 041-043) -- same rationale as the other migration
+	// applies 041-044) -- same rationale as the other migration
 	// integration tests' use of Migrate(N) over a relative Up() call:
 	// this test is about migration 040 specifically, not "whatever the
 	// latest migration happens to be".

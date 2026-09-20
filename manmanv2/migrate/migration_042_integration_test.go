@@ -131,8 +131,8 @@ func migrateTo41ThenSeedAndApply42(ctx context.Context, t *testing.T, db *dbtest
 	if err != nil {
 		t.Fatalf("LatestVersion: %v", err)
 	}
-	if latest != 43 {
-		t.Fatalf("expected the latest migration source version to be 43, got %d -- update this test if a newer migration has since landed", latest)
+	if latest != 44 {
+		t.Fatalf("expected the latest migration source version to be 44, got %d -- update this test if a newer migration has since landed", latest)
 	}
 
 	if err := runner.Migrate(41); err != nil {
@@ -196,7 +196,7 @@ func TestMigration042_AppliesOnTopOfFullHistoryAndCreatesExpectedShape(t *testin
 
 	runner := migrate.NewRunner(sqlDB, migrations, "migrations")
 	// Target version 42 explicitly rather than Up() (which now also
-	// applies 043) -- same rationale as the other migration integration
+	// applies 043-044) -- same rationale as the other migration integration
 	// tests' use of Migrate(N) over a relative Up()/Steps() call: this
 	// test is about migration 042 specifically, not "whatever the latest
 	// migration happens to be".
