@@ -59,6 +59,7 @@ go_library(
     srcs = [
         "abandon.go",
         "amend.go",
+        "console.go",
         "decision.go",
         "delivery_shipment.go",
         "design_session.go",

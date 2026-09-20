@@ -175,6 +175,14 @@ func setupRoutes(mux *http.ServeMux, pool *pgxpool.Pool, githubToken string) {
 	mux.Handle("POST /notes", gate(handlers.RecordNoteHandler(entities.Tasks())))
 	mux.HandleFunc("GET /tasks/{id}/notes", handlers.ListTaskNotesHandler(entities.Tasks()))
 
+	// M5's console query surface (issue #2869, FR4, NFR6): GET
+	// /console/claimed, ungated like every other read endpoint in this
+	// package -- unlike every other ungated GET route above, this query
+	// has no single path entity to resolve scope_id from, so scope_id is
+	// a required query parameter instead (see console.go's own doc
+	// comment).
+	mux.HandleFunc("GET /console/claimed", handlers.ListClaimedTasksHandler(entities.Tasks()))
+
 	mux.Handle("POST /design-sessions", gate(handlers.OpenDesignSessionHandler(entities.DesignSessions())))
 	mux.HandleFunc("GET /design-sessions/{id}", handlers.GetDesignSessionHandler(entities.DesignSessions(), entities.RevisionEvents()))
 	mux.Handle("POST /design-sessions/{id}/revision-events", gate(handlers.AppendRevisionEventHandler(entities.RevisionEvents())))

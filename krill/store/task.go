@@ -296,6 +296,14 @@ type TaskStore interface {
 	// spec-axis entity (kind, entityID), in scopeID's own scope, ordered
 	// by CreatedAt (task_note.go, issue #2727).
 	ListNotesForEntity(ctx context.Context, scopeID uuid.UUID, kind NoteEntityKind, entityID uuid.UUID) ([]Note, error)
+
+	// ListClaimedTasks returns every currently-claimed task in
+	// params.ScopeID (task_console.go, issue #2869, FR4), bounded and
+	// continuable per params.Page (NFR6) -- M5's console query surface's
+	// first query, whose paging machinery (paging.go) and
+	// identifying-context join FR5's (#2875) and FR10's (#2873) queries
+	// both reuse.
+	ListClaimedTasks(ctx context.Context, params ListClaimedTasksParams) (Page[ClaimedTaskRow], error)
 }
 
 // ErrMilestoneHasMilepebbleCut is CreateTask's named, loud rejection
