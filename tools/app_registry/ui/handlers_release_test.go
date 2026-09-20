@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -13,8 +14,21 @@ import (
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 
+	"github.com/whale-net/everything/libs/go/htmxsse"
 	pb "github.com/whale-net/everything/tools/app_registry/protos"
 )
+
+// newReleaseStatusTestHub builds a stub htmxsse.Hub (real connections are
+// never exercised in these handler tests) so handleReleaseStatus's
+// HeartbeatIntervalMs wiring -- app.sseHub.Config().HeartbeatInterval,
+// mirroring handlers_promotion_details_test.go's identical
+// newPromotionDetailsTestApp helper -- has a non-nil Hub to read from.
+func newReleaseStatusTestHub() *htmxsse.Hub {
+	attachFunc := func(ctx context.Context) (htmxsse.Transport, error) {
+		return nil, fmt.Errorf("test stub: no transport")
+	}
+	return htmxsse.NewHub(attachFunc, htmxsse.DefaultConfig())
+}
 
 // This file covers issue #890's Implementation-phase wiring: the actual
 // TriggerRelease submit call (success + FR5's "already releasing"
@@ -363,7 +377,7 @@ func TestReleaseStatusRetryForm_PostsScopeToTriggerEndpoint(t *testing.T) {
 	rel := &fakeReleaseClient{
 		getResp: &pb.GetReleaseResponse{ReleaseRunId: "run-7", RequestedScope: "platform"},
 	}
-	app := &App{registry: &RegistryClient{Release: rel}}
+	app := &App{registry: &RegistryClient{Release: rel}, sseHub: newReleaseStatusTestHub()}
 
 	req := httptest.NewRequest(http.MethodGet, "/releases/run-7", nil)
 	req.SetPathValue("id", "run-7")
@@ -403,7 +417,7 @@ func TestReleaseStatusPage_ShowsTargetCommitLinkedToGitHub(t *testing.T) {
 			"build-ok": {Build: &pb.Build{BuildId: "build-ok", GitSha: "deadbeefcafefeed"}},
 		},
 	}
-	app := &App{registry: &RegistryClient{Release: rel, Artifact: artifact}}
+	app := &App{registry: &RegistryClient{Release: rel, Artifact: artifact}, sseHub: newReleaseStatusTestHub()}
 
 	req := httptest.NewRequest(http.MethodGet, "/releases/run-7", nil)
 	req.SetPathValue("id", "run-7")
@@ -623,7 +637,7 @@ func TestResolveTargetCommits_ConcurrentCalls_RaceFree(t *testing.T) {
 
 func TestReleaseStatusPage_HasManualRefreshLink(t *testing.T) {
 	rel := &fakeReleaseClient{getResp: &pb.GetReleaseResponse{ReleaseRunId: "run-7"}}
-	app := &App{registry: &RegistryClient{Release: rel}}
+	app := &App{registry: &RegistryClient{Release: rel}, sseHub: newReleaseStatusTestHub()}
 
 	req := httptest.NewRequest(http.MethodGet, "/releases/run-7", nil)
 	req.SetPathValue("id", "run-7")

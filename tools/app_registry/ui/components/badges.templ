@@ -153,6 +153,15 @@ templ ReleaseRunTargetStateBadge(s pb.ReleaseRunTargetState) {
 	@htmxui.Badge(label, variant, htmxui.BadgeSizeMD, false, nil)
 }
 
+// ReleaseRunTargetStateLabel exposes releaseRunTargetStateLabel's display
+// text to other packages (the release-status screen's run-level aggregate
+// summary, FR13) so a second rendering of the six states reuses this
+// badge's exact wording instead of inventing its own.
+func ReleaseRunTargetStateLabel(s pb.ReleaseRunTargetState) string {
+	label, _ := releaseRunTargetStateLabel(s)
+	return label
+}
+
 // promotionSyncOutcomeLabel returns the display label + daisyUI badge
 // modifier class for a PromotionSyncOutcome (FR8, issue #1031/#1032): three
 // visibly distinct colours so "version upgraded, sync failed" (badge-error)

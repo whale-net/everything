@@ -2,6 +2,7 @@ package pages
 
 import (
 	"fmt"
+	"strings"
 
 	"github.com/whale-net/everything/libs/go/htmxauth"
 	"github.com/whale-net/everything/libs/go/htmxui"
@@ -19,6 +20,15 @@ type ReleaseStatusViewState struct {
 	ReleaseRunID string
 	Release      *pb.GetReleaseResponse
 	LoadErr      string
+
+	// HeartbeatIntervalMs is the SSE hub's advertised heartbeat interval
+	// (FR14), same source and same data-heartbeat-ms wiring
+	// PromotionDetailsViewState.HeartbeatIntervalMs uses -- the live/
+	// not-live script below derives its debounce and timeout-threshold
+	// windows from this value rather than a hardcoded constant, so a
+	// deployment-tuned heartbeat interval never drifts out of sync with the
+	// indicator's own timing.
+	HeartbeatIntervalMs int
 
 	// BuildCommits maps a target's build_id (ReleaseRunTarget.GetBuildId())
 	// to the commit that build resolved -- resolved via one GetBuild call
@@ -83,46 +93,157 @@ script copyReleaseRunID(id string) {
 }
 
 // ReleaseStatus is the release-status screen: durable, keyed by
-// release_run_id, showing per-target state through to completion (FR10).
+// release_run_id, showing per-target state through to completion (FR10),
+// with a live-pushed Targets region (FR8, FR11) once the SSE route feeding
+// it exists -- see this file's ReleaseStatusLiveBody doc comment. Modelled
+// on PromotionDetails' own hx-ext/indicator/reload-affordance shape
+// (promotion_details.templ), generalizing its FR29 pushed-region boundary
+// and FR23/FR24 live-indicator behavior to this screen.
 templ ReleaseStatus(user *htmxauth.UserInfo, s ReleaseStatusViewState) {
 	@components.Shell("Release Status", user) {
-		<div class="flex justify-between items-center mb-4">
-			<div>
-				<h2 class="text-xl font-bold">
-					if s.Release != nil {
-						{ releaseHeaderName(s.Release) }
-					} else {
-						Release
-					}
-				</h2>
-				<div class="flex items-center gap-1 text-sm opacity-60">
-					<span class="font-mono" title={ s.ReleaseRunID }>{ releaseRunIDShort(s.ReleaseRunID) }</span>
-					<button
-						type="button"
-						class="btn btn-ghost btn-xs px-1"
-						title="Copy full release run ID"
-						onclick={ copyReleaseRunID(s.ReleaseRunID) }
+		<div
+			hx-ext="sse"
+			sse-connect={ templ.URL("/releases/" + s.ReleaseRunID + "/status/sse") }
+			data-heartbeat-ms={ fmt.Sprint(s.HeartbeatIntervalMs) }
+		>
+			<div class="flex justify-between items-center mb-4">
+				<div>
+					<h2 class="text-xl font-bold">
+						if s.Release != nil {
+							{ releaseHeaderName(s.Release) }
+						} else {
+							Release
+						}
+					</h2>
+					<div class="flex items-center gap-1 text-sm opacity-60">
+						<span class="font-mono" title={ s.ReleaseRunID }>{ releaseRunIDShort(s.ReleaseRunID) }</span>
+						<button
+							type="button"
+							class="btn btn-ghost btn-xs px-1"
+							title="Copy full release run ID"
+							onclick={ copyReleaseRunID(s.ReleaseRunID) }
+						>
+							⧉
+						</button>
+					</div>
+				</div>
+				<div class="flex gap-1">
+					<a
+						href={ templ.URL("/releases/" + s.ReleaseRunID) }
+						class="btn btn-sm btn-ghost"
+						title="A plain GET reload of this same page -- distinct from the live indicator below (FR14), which already reflects whether the Targets region is receiving push updates."
 					>
-						⧉
-					</button>
+						↻ Refresh
+					</a>
+					<a href="/releases/trigger" class="btn btn-sm btn-circle btn-ghost">✕</a>
 				</div>
 			</div>
-			<div class="flex gap-1">
-				<a
-					href={ templ.URL("/releases/" + s.ReleaseRunID) }
-					class="btn btn-sm btn-ghost"
-					title="No auto-refresh/polling precedent exists elsewhere in this UI (issue #890) -- this is a manual reload of this same page."
-				>
-					↻ Refresh
-				</a>
-				<a href="/releases/trigger" class="btn btn-sm btn-circle btn-ghost">✕</a>
+
+			<!-- FR14: Live/not-live indicator (outside the pushed region). -->
+			<div id="release-live-indicator" class="flex items-center gap-2 mb-4">
+				<div id="release-live-status" class="badge badge-success" title="SSE connection is healthy">Live</div>
 			</div>
+
+			<!-- FR15: Reload affordance (only shown when not-live, outside the pushed region). This is the only recovery path from an expired/revoked session on this route. -->
+			<div id="release-reload-container" class="mb-4" style="display: none;">
+				<a href={ templ.URL("/releases/" + s.ReleaseRunID) } class="btn btn-sm btn-warning">Reload</a>
+			</div>
+
+			if s.LoadErr != "" {
+				<div role="alert" class="alert alert-error shadow-md mb-4"><span>{ s.LoadErr }</span></div>
+			} else if s.Release != nil {
+				@releaseStatusDetail(s.Release, s.BuildCommits, s.ReleaseRunID)
+			}
 		</div>
-		if s.LoadErr != "" {
-			<div role="alert" class="alert alert-error shadow-md mb-4"><span>{ s.LoadErr }</span></div>
-		} else if s.Release != nil {
-			@releaseStatusDetail(s.Release, s.BuildCommits)
-		}
+
+		<!-- FR14, FR15: SSE connection state management, ported from promotion_details.templ's identical script rather than reimplemented. -->
+		<script type="module">
+(function() {
+  const container = document.querySelector('[hx-ext="sse"]');
+  if (!container) return;
+
+  const indicator = document.getElementById('release-live-status');
+  const reloadContainer = document.getElementById('release-reload-container');
+  if (!indicator || !reloadContainer) return;
+
+  let isLive = true;
+  let lastEventTime = Date.now();
+  let heartbeatMs = parseInt(container.getAttribute('data-heartbeat-ms'), 10) || 30000;
+  let debounceTimeoutId = null;
+
+  container.addEventListener('htmx:sseOpen', () => {
+    cancelDebounce();
+    setLive(true);
+    lastEventTime = Date.now();
+  });
+
+  container.addEventListener('htmx:sseError', () => {
+    handleConnectionError();
+  });
+
+  const swapTarget = container.querySelector('[sse-swap]');
+  if (swapTarget) {
+    const observer = new MutationObserver(() => {
+      lastEventTime = Date.now();
+      cancelDebounce();
+      setLive(true);
+    });
+    observer.observe(swapTarget, {
+      childList: true,
+      subtree: true,
+      characterData: true,
+      attributes: true
+    });
+  }
+
+  const heartbeatCheckInterval = setInterval(() => {
+    const timeSinceLastEvent = Date.now() - lastEventTime;
+    const timeoutThreshold = heartbeatMs * 2;
+
+    if (isLive && timeSinceLastEvent > timeoutThreshold) {
+      handleTimeout();
+    }
+  }, 10000);
+
+  function handleConnectionError() {
+    if (debounceTimeoutId) return;
+    debounceTimeoutId = setTimeout(() => {
+      setLive(false);
+      debounceTimeoutId = null;
+    }, heartbeatMs);
+  }
+
+  function handleTimeout() {
+    if (debounceTimeoutId) return;
+    debounceTimeoutId = setTimeout(() => {
+      setLive(false);
+      debounceTimeoutId = null;
+    }, heartbeatMs);
+  }
+
+  function cancelDebounce() {
+    if (debounceTimeoutId) {
+      clearTimeout(debounceTimeoutId);
+      debounceTimeoutId = null;
+    }
+  }
+
+  function setLive(live) {
+    isLive = live;
+    if (live) {
+      indicator.textContent = 'Live';
+      indicator.className = 'badge badge-success';
+      indicator.title = 'SSE connection is healthy';
+      reloadContainer.style.display = 'none';
+    } else {
+      indicator.textContent = 'Not Live';
+      indicator.className = 'badge badge-warning';
+      indicator.title = 'SSE connection is not live - page updates stopped';
+      reloadContainer.style.display = 'block';
+    }
+  }
+})();
+		</script>
 	}
 }
 
@@ -135,12 +256,12 @@ templ ReleaseStatus(user *htmxauth.UserInfo, s ReleaseStatusViewState) {
 // discarded by the browser, not merged) -- a plain unstyled wrapping div
 // carries the margin instead, with no effect on the Card's own rendered
 // box.
-templ releaseStatusDetail(rel *pb.GetReleaseResponse, commits map[string]BuildCommitInfo) {
+templ releaseStatusDetail(rel *pb.GetReleaseResponse, commits map[string]BuildCommitInfo, releaseRunID string) {
 	<div class="mb-4">
 		@htmxui.Card(nil, releaseStatusRunBody(rel), nil, nil)
 	</div>
 	<div class="mb-4">
-		@htmxui.Card(nil, releaseStatusTargetsBody(rel, commits), nil, nil)
+		@htmxui.Card(nil, releaseStatusLiveSwap(rel, commits, releaseRunID), nil, nil)
 	</div>
 	if rel.GetResolvedPlanJson() != "" {
 		<div class="mb-4">
@@ -161,6 +282,20 @@ templ releaseStatusDetail(rel *pb.GetReleaseResponse, commits map[string]BuildCo
 	</div>
 }
 
+// releaseStatusLiveSwap wraps ReleaseStatusLiveBody in FR11's swap target.
+// The sse-swap key matches the routing key events.TopicForReleaseRun (a
+// separate, not-yet-landed task) will produce -- the same
+// "promotion."+id precedent promotion_details.templ's own sse-swap target
+// sets for that screen. The SSE route/handler that actually pushes into
+// this target does not exist yet (also a separate task); until it lands,
+// this div renders once on GET and simply never receives a push -- the
+// intended intermediate state.
+templ releaseStatusLiveSwap(rel *pb.GetReleaseResponse, commits map[string]BuildCommitInfo, releaseRunID string) {
+	<div sse-swap={ "release_run." + releaseRunID } id="release-status-body">
+		@ReleaseStatusLiveBody(rel, commits)
+	</div>
+}
+
 templ releaseStatusRunBody(rel *pb.GetReleaseResponse) {
 	<h3 class="card-title text-base">Run</h3>
 	<dl class="grid grid-cols-[max-content_1fr] gap-x-3 gap-y-1 text-sm">
@@ -171,6 +306,78 @@ templ releaseStatusRunBody(rel *pb.GetReleaseResponse) {
 		<dt class="opacity-60">Temporal workflow</dt>
 		<dd class="font-mono">{ rel.GetTemporalWorkflowId() }</dd>
 	</dl>
+}
+
+// releaseRunTargetStateOrder is the queued -> building -> publishing ->
+// recording -> succeeded/failed progression ReleaseRunTargetState's own
+// doc comment (api_messages_release.proto) defines -- the aggregate
+// summary below walks states in this order so the line always reads in
+// lifecycle order regardless of which states a given run happens to have
+// reached.
+var releaseRunTargetStateOrder = []pb.ReleaseRunTargetState{
+	pb.ReleaseRunTargetState_RELEASE_RUN_TARGET_STATE_QUEUED,
+	pb.ReleaseRunTargetState_RELEASE_RUN_TARGET_STATE_BUILDING,
+	pb.ReleaseRunTargetState_RELEASE_RUN_TARGET_STATE_PUBLISHING,
+	pb.ReleaseRunTargetState_RELEASE_RUN_TARGET_STATE_RECORDING,
+	pb.ReleaseRunTargetState_RELEASE_RUN_TARGET_STATE_SUCCEEDED,
+	pb.ReleaseRunTargetState_RELEASE_RUN_TARGET_STATE_FAILED,
+}
+
+// releaseRunAggregateSummary folds rel.GetTargets() into per-state counts
+// and renders one line, e.g. "3/5 succeeded · 1 building · 1 failed"
+// (FR13). Computed here in Go at render time, from GetReleaseResponse.
+// targets alone -- never in browser JS, and never a new proto field.
+// Reuses components.ReleaseRunTargetStateLabel so this line never invents
+// a second vocabulary for the same states ReleaseRunTargetStateBadge
+// already names. A target somehow still in the UNSPECIFIED zero state
+// (never actually produced by the release pipeline, see the enum's own
+// doc comment) still counts toward the total, appended under its badge's
+// "Unknown" label rather than silently dropped.
+func releaseRunAggregateSummary(rel *pb.GetReleaseResponse) string {
+	targets := rel.GetTargets()
+	total := len(targets)
+	if total == 0 {
+		return "No targets"
+	}
+
+	counts := make(map[pb.ReleaseRunTargetState]int, len(releaseRunTargetStateOrder)+1)
+	for _, t := range targets {
+		counts[t.GetState()]++
+	}
+
+	order := releaseRunTargetStateOrder
+	if counts[pb.ReleaseRunTargetState_RELEASE_RUN_TARGET_STATE_UNSPECIFIED] > 0 {
+		order = append(append([]pb.ReleaseRunTargetState{}, releaseRunTargetStateOrder...), pb.ReleaseRunTargetState_RELEASE_RUN_TARGET_STATE_UNSPECIFIED)
+	}
+
+	var parts []string
+	for _, state := range order {
+		n := counts[state]
+		if n == 0 {
+			continue
+		}
+		label := strings.ToLower(components.ReleaseRunTargetStateLabel(state))
+		if state == pb.ReleaseRunTargetState_RELEASE_RUN_TARGET_STATE_SUCCEEDED {
+			parts = append(parts, fmt.Sprintf("%d/%d %s", n, total, label))
+			continue
+		}
+		parts = append(parts, fmt.Sprintf("%d %s", n, label))
+	}
+	return strings.Join(parts, " · ")
+}
+
+templ releaseStatusAggregateSummary(rel *pb.GetReleaseResponse) {
+	<p class="text-sm opacity-70 mb-2">{ releaseRunAggregateSummary(rel) }</p>
+}
+
+// ReleaseStatusLiveBody is the FR11 pushed region's single render path
+// (NFR2): the run-level aggregate summary (FR13) followed by the Targets
+// table. Both the initial GET (via releaseStatusLiveSwap) and the eventual
+// SSE fragment handler (a separate, not-yet-landed task) render this exact
+// same component -- never a second variant for the pushed case.
+templ ReleaseStatusLiveBody(rel *pb.GetReleaseResponse, commits map[string]BuildCommitInfo) {
+	@releaseStatusAggregateSummary(rel)
+	@releaseStatusTargetsBody(rel, commits)
 }
 
 templ releaseStatusTargetsBody(rel *pb.GetReleaseResponse, commits map[string]BuildCommitInfo) {
