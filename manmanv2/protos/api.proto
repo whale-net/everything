@@ -75,6 +75,7 @@ service ManManAPI {
   rpc AddBackupConfigAction(AddBackupConfigActionRequest) returns (AddBackupConfigActionResponse);
   rpc RemoveBackupConfigAction(RemoveBackupConfigActionRequest) returns (RemoveBackupConfigActionResponse);
   rpc ListBackupConfigActions(ListBackupConfigActionsRequest) returns (ListBackupConfigActionsResponse);
+  rpc ReorderBackupConfigActions(ReorderBackupConfigActionsRequest) returns (ReorderBackupConfigActionsResponse);
 
   // Server registration
   rpc RegisterServer(RegisterServerRequest) returns (RegisterServerResponse);

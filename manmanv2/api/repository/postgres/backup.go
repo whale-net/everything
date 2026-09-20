@@ -2,6 +2,7 @@ package postgres
 
 import (
 	"context"
+	"errors"
 	"time"
 
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -282,4 +283,13 @@ func (r *BackupConfigRepository) ListActions(ctx context.Context, backupConfigID
 		actions = append(actions, a)
 	}
 	return actions, rows.Err()
+}
+
+// ReorderActions rewrites display_order for backupConfigID's attached actions
+// (FR15).
+//
+// Scaffold stub: the implementation phase fills in the atomic
+// validate-then-rewrite transaction described on repository.BackupConfigRepository.
+func (r *BackupConfigRepository) ReorderActions(ctx context.Context, backupConfigID int64, actionIDs []int64) error {
+	return errors.New("not implemented")
 }

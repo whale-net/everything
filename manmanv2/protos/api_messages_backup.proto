@@ -139,7 +139,29 @@ message ListBackupConfigActionsRequest {
   int64 backup_config_id = 1;
 }
 
+// BackupConfigActionItem is a single row in a pre-backup Action list, carrying
+// the Action's name and command template alongside its attachment ordering
+// (FR12) so the UI doesn't need a second round trip per Action.
+message BackupConfigActionItem {
+  int64 action_id = 1;
+  int32 display_order = 2;
+  string name = 3;              // ActionDefinition name
+  string command_template = 4;
+}
+
 message ListBackupConfigActionsResponse {
   repeated int64 action_ids = 1;
   repeated int32 display_orders = 2;
+  repeated BackupConfigActionItem items = 3;
 }
+
+// ReorderBackupConfigActionsRequest carries the full desired execution order
+// (FR15) -- it is a pure reorder: action_ids must be exactly the config's
+// current attached-action set, just permuted. Adding/removing an attachment
+// stays the job of AddBackupConfigAction / RemoveBackupConfigAction.
+message ReorderBackupConfigActionsRequest {
+  int64 backup_config_id = 1;
+  repeated int64 action_ids = 2;  // full desired order, first = runs first
+}
+
+message ReorderBackupConfigActionsResponse {}

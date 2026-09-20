@@ -190,6 +190,11 @@ type BackupConfigRepository interface {
 	AddAction(ctx context.Context, backupConfigID, actionID int64, displayOrder int) error
 	RemoveAction(ctx context.Context, backupConfigID, actionID int64) error
 	ListActions(ctx context.Context, backupConfigID int64) ([]*manman.BackupConfigAction, error)
+	// ReorderActions rewrites display_order for the config's attached actions to match
+	// actionIDs (0..n-1, in the given order) atomically. It must reject -- with no
+	// partial write -- any actionIDs set that doesn't exactly match the config's
+	// current attached-action set (FR15).
+	ReorderActions(ctx context.Context, backupConfigID int64, actionIDs []int64) error
 }
 
 // ServerPortRepository defines operations for port allocation management
