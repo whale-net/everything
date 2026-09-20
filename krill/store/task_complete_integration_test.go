@@ -5,9 +5,12 @@
 // with `pass` advancing one lane, `fail` reverting one lane, a
 // non-current claim id rejected with ErrClaimNotCurrent writing nothing,
 // the completed task becoming unclaimed and claimable again, NFR3's
-// two-subject attribution on the completed task_attempt row, and that a
-// completed attempt never increments task.attempt_count (this file's own
-// task_complete.go doc comment). NextLane's own routing branches are
+// two-subject attribution on the completed task_attempt row, that a clean
+// claim/complete cycle never increments task.attempt_count (this file's
+// own task_complete.go doc comment) no matter how many cycles a task's
+// full lane_sequence takes to walk end to end, and that a dependent task
+// becomes claimable once its dependency reaches Done even past that many
+// cycles. NextLane's own routing branches are
 // covered exhaustively, DB-free, by lane_test.go -- this file only proves
 // CompleteTask's transactional wiring around it. Shares
 // task_integration_test.go's test-store/test-scope/test-world/subject
@@ -241,11 +244,12 @@ func TestTaskStore_CompleteTask_UnclaimedAndClaimableAgain(t *testing.T) {
 	assert.NotEqual(t, firstClaim.ID, secondClaim.ID)
 }
 
-// TestTaskStore_CompleteTask_CompletedAttemptDoesNotIncrementAttemptCount
-// proves this file's own task_complete.go doc comment: a `completed`
-// attempt never increments task.attempt_count -- only a `claimed` one
-// does (ClaimTask, FR5/FR7).
-func TestTaskStore_CompleteTask_CompletedAttemptDoesNotIncrementAttemptCount(t *testing.T) {
+// TestTaskStore_CompleteTask_CleanClaimCompleteCycleNeverIncrementsAttemptCount
+// proves this file's own task_complete.go doc comment: neither the claim
+// nor the completion of a clean claim/complete cycle ever moves
+// task.attempt_count -- only a lapsed or abandoned attempt does
+// (ReclaimExpired/AbandonClaim).
+func TestTaskStore_CompleteTask_CleanClaimCompleteCycleNeverIncrementsAttemptCount(t *testing.T) {
 	ctx := context.Background()
 	s, db := newTaskTestStore(t)
 	scopeID := newTaskTestScope(t, ctx, db)
@@ -262,7 +266,7 @@ func TestTaskStore_CompleteTask_CompletedAttemptDoesNotIncrementAttemptCount(t *
 
 	before, err := s.Tasks().GetTaskByID(ctx, task.ID)
 	require.NoError(t, err)
-	require.Equal(t, 1, before.AttemptCount, "the claim itself must have brought attempt_count to 1")
+	require.Equal(t, 0, before.AttemptCount, "the claim itself must leave attempt_count at 0")
 
 	_, err = s.Tasks().CompleteTask(ctx, store.CompleteTaskParams{
 		ScopeID: scopeID, TaskID: task.ID, ClaimID: claim.ID, Verdict: store.VerdictPass,
@@ -272,7 +276,94 @@ func TestTaskStore_CompleteTask_CompletedAttemptDoesNotIncrementAttemptCount(t *
 
 	after, err := s.Tasks().GetTaskByID(ctx, task.ID)
 	require.NoError(t, err)
-	assert.Equal(t, 1, after.AttemptCount, "completing must never increment attempt_count")
+	assert.Equal(t, 0, after.AttemptCount, "completing must never increment attempt_count")
+}
+
+// TestTaskStore_CompleteTask_FullLaneSequence_NeverExhaustsAttemptCap is a
+// regression test for a task walking its own lane_sequence end to end via
+// nothing but passing verdicts: it must never be refused a claim, no
+// matter how many claim/complete cycles that walk takes -- even well past
+// DefaultAttemptCap's count of cycles, since a clean complete never counts
+// against the cap.
+func TestTaskStore_CompleteTask_FullLaneSequence_NeverExhaustsAttemptCap(t *testing.T) {
+	ctx := context.Background()
+	s, db := newTaskTestStore(t)
+	scopeID := newTaskTestScope(t, ctx, db)
+	self := taskTestSubject("agent-1")
+	world := newTaskTestWorld(t, ctx, s, scopeID, self)
+
+	task := createTestTask(t, ctx, s, scopeID, world.milepebbleID, "full-sequence", self)
+	cycles := len(task.LaneSequence) - 1 // one claim/complete cycle per lane transition, Done needs none of its own
+	require.Greater(t, cycles, store.DefaultAttemptCap,
+		"the default lane sequence must need more claim/complete cycles than DefaultAttemptCap to reach Done, to actually exercise this bug")
+
+	for i := 0; i < cycles; i++ {
+		sessionID := claimTestSession(t, ctx, db, scopeID, self)
+		claim, err := s.Tasks().ClaimTask(ctx, store.ClaimTaskParams{
+			ScopeID: scopeID, TaskID: task.ID, SessionID: sessionID,
+			Acting: self, OnBehalfOf: self,
+		})
+		require.NoError(t, err, "claim %d of %d must never be refused by the attempt cap on a clean pass-only walk", i+1, cycles)
+
+		_, err = s.Tasks().CompleteTask(ctx, store.CompleteTaskParams{
+			ScopeID: scopeID, TaskID: task.ID, ClaimID: claim.ID, Verdict: store.VerdictPass,
+			Acting: self, OnBehalfOf: self,
+		})
+		require.NoError(t, err)
+	}
+
+	got, err := s.Tasks().GetTaskByID(ctx, task.ID)
+	require.NoError(t, err)
+	assert.Equal(t, store.LaneDone, got.CurrentLane, "a full walk of clean pass cycles must reach Done")
+	assert.Equal(t, 0, got.AttemptCount, "a clean pass-only walk must never move attempt_count, no matter how many cycles it took")
+}
+
+// TestTaskStore_CompleteTask_DependentTask_ClaimableOnceDependencyDone_EvenPastAttemptCap
+// is FR2's knock-on regression test: a dependent task must become
+// claimable once its dependency reaches Done, even though that dependency
+// needed more than DefaultAttemptCap claim/complete cycles to get there.
+func TestTaskStore_CompleteTask_DependentTask_ClaimableOnceDependencyDone_EvenPastAttemptCap(t *testing.T) {
+	ctx := context.Background()
+	s, db := newTaskTestStore(t)
+	scopeID := newTaskTestScope(t, ctx, db)
+	self := taskTestSubject("agent-1")
+	world := newTaskTestWorld(t, ctx, s, scopeID, self)
+
+	depTask := createTestTask(t, ctx, s, scopeID, world.milepebbleID, "dependency", self)
+	cycles := len(depTask.LaneSequence) - 1 // one claim/complete cycle per lane transition, Done needs none of its own
+	require.Greater(t, cycles, store.DefaultAttemptCap,
+		"the dependency must need more claim/complete cycles than DefaultAttemptCap to reach Done, to actually exercise this bug")
+	depTaskB := createTestTask(t, ctx, s, scopeID, world.milepebbleID, "dependent", self)
+	require.NoError(t, s.Tasks().DeclareDependency(ctx, store.DeclareDependencyParams{
+		ScopeID: scopeID, TaskID: depTaskB.ID, DependsOnTaskIDs: []uuid.UUID{depTask.ID},
+		Acting: self, OnBehalfOf: self,
+	}))
+
+	for i := 0; i < cycles; i++ {
+		sessionID := claimTestSession(t, ctx, db, scopeID, self)
+		claim, err := s.Tasks().ClaimTask(ctx, store.ClaimTaskParams{
+			ScopeID: scopeID, TaskID: depTask.ID, SessionID: sessionID,
+			Acting: self, OnBehalfOf: self,
+		})
+		require.NoError(t, err, "dependency claim %d of %d must never be refused by the attempt cap on a clean pass-only walk", i+1, cycles)
+
+		_, err = s.Tasks().CompleteTask(ctx, store.CompleteTaskParams{
+			ScopeID: scopeID, TaskID: depTask.ID, ClaimID: claim.ID, Verdict: store.VerdictPass,
+			Acting: self, OnBehalfOf: self,
+		})
+		require.NoError(t, err)
+	}
+
+	gotDep, err := s.Tasks().GetTaskByID(ctx, depTask.ID)
+	require.NoError(t, err)
+	require.Equal(t, store.LaneDone, gotDep.CurrentLane, "the dependency must have reached Done")
+
+	sessionID := claimTestSession(t, ctx, db, scopeID, self)
+	_, err = s.Tasks().ClaimTask(ctx, store.ClaimTaskParams{
+		ScopeID: scopeID, TaskID: depTaskB.ID, SessionID: sessionID,
+		Acting: self, OnBehalfOf: self,
+	})
+	require.NoError(t, err, "the dependent task must be claimable once its dependency reaches Done, even though that took more than DefaultAttemptCap cycles")
 }
 
 // TestTaskStore_CompleteTask_RecordsBothSubjectPairs is issue #2725's

@@ -69,7 +69,7 @@ func TestTaskStore_Heartbeat_CurrentClaimant_ExtendsLease(t *testing.T) {
 	require.NoError(t, err)
 	require.NotNil(t, got.LeaseExpiresAt)
 	assert.Equal(t, lease.ExtendedTo, *got.LeaseExpiresAt, "task.lease_expires_at must be updated in place to the new value")
-	assert.Equal(t, 1, got.AttemptCount, "a heartbeat records no attempt -- attempt_count must stay exactly what ClaimTask left it at")
+	assert.Equal(t, 0, got.AttemptCount, "a heartbeat records no attempt -- attempt_count must stay exactly what ClaimTask left it at (a clean claim never increments it)")
 
 	assert.Equal(t, 1, countRows(t, ctx, db, "task_lease_event", task.ID), "exactly one task_lease_event row must exist after one heartbeat")
 }

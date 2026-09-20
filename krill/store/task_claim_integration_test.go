@@ -3,14 +3,14 @@
 // Real-Postgres coverage for TaskStore.ClaimTask/GetClaimByID
 // (task_claim.go, migration 015, issue #2722's Testing section, FR3/FR5):
 // the successful-claim path (a new task_claim row, a claimed task_attempt
-// row, and task.current_claim_id/lease_expires_at/attempt_count updated in
-// place), the real-Postgres concurrency race (two goroutines racing the
-// same task's row lock -- exactly one wins), the unsatisfied-dependency
-// rejection naming the blocking task, the expired-lease reclaim path
-// (mirroring #2724's later sweep's own accounting), attempt-cap
-// exhaustion, attempt_count incrementing by exactly one per successful
-// claim (including across a reclaim), and NFR3's two-subject attribution
-// on both task_claim and task_attempt. Shares task_integration_test.go's
+// row, and task.current_claim_id/lease_expires_at updated in place, with
+// attempt_count left untouched), the real-Postgres concurrency race (two
+// goroutines racing the same task's row lock -- exactly one wins), the
+// unsatisfied-dependency rejection naming the blocking task, the
+// expired-lease reclaim path, attempt-cap exhaustion, attempt_count never
+// incrementing from a claim alone (a fresh claim or a reclaim of a lapsed
+// lease), and NFR3's two-subject attribution on both task_claim and
+// task_attempt. Shares task_integration_test.go's
 // test-store/test-scope/test-world/subject helpers and
 // task_dependency_integration_test.go's createTestTask/setTaskLane
 // helpers, mirroring milepebble_integration_test.go's own choice to share
@@ -103,7 +103,7 @@ func TestTaskStore_ClaimTask_UnclaimedTaskAllDepsDone_Succeeds(t *testing.T) {
 	assert.Equal(t, claim.ID, *task.CurrentClaimID)
 	require.NotNil(t, task.LeaseExpiresAt)
 	assert.Equal(t, claim.InitialLeaseExpiresAt, *task.LeaseExpiresAt)
-	assert.Equal(t, 1, task.AttemptCount, "a successful claim must record exactly one attempt")
+	assert.Equal(t, 0, task.AttemptCount, "a successful claim of an unclaimed task must never move attempt_count -- it only counts lapsed/abandoned attempts")
 
 	assert.Equal(t, 1, countRows(t, ctx, db, "task_claim", taskA.ID), "exactly one task_claim row must exist")
 	assert.Equal(t, 1, countRows(t, ctx, db, "task_attempt", taskA.ID), "exactly one task_attempt row must exist")
@@ -279,11 +279,13 @@ func TestTaskStore_ClaimTask_AttemptCapExhausted_Rejected(t *testing.T) {
 	assert.Equal(t, 0, countRows(t, ctx, db, "task_attempt", task.ID), "a rejected claim must write no task_attempt row")
 }
 
-// TestTaskStore_ClaimTask_AttemptCountIncrementsExactlyOnePerClaim is issue
-// #2722's Testing section item 6: attempt_count increments by exactly one
-// per successful claim, including across a reclaim -- never reset, never
-// double-counted.
-func TestTaskStore_ClaimTask_AttemptCountIncrementsExactlyOnePerClaim(t *testing.T) {
+// TestTaskStore_ClaimTask_NeverIncrementsAttemptCount asserts a claim --
+// whether of a never-claimed task or of one whose prior lease had just
+// lapsed -- never moves attempt_count on its own. Only ReclaimExpired's
+// sweep and AbandonClaim count a strike against the cap
+// (task_complete.go's CompleteTask doc comment); ClaimTask closing out a
+// lapsed lease inline is not a second place that lapse gets counted.
+func TestTaskStore_ClaimTask_NeverIncrementsAttemptCount(t *testing.T) {
 	ctx := context.Background()
 	s, db := newTaskTestStore(t)
 	scopeID := newTaskTestScope(t, ctx, db)
@@ -301,7 +303,7 @@ func TestTaskStore_ClaimTask_AttemptCountIncrementsExactlyOnePerClaim(t *testing
 
 	got, err := s.Tasks().GetTaskByID(ctx, task.ID)
 	require.NoError(t, err)
-	assert.Equal(t, 1, got.AttemptCount, "the first successful claim must bring attempt_count to exactly 1")
+	assert.Equal(t, 0, got.AttemptCount, "the first successful claim must leave attempt_count at 0")
 
 	_, err = db.Pool.Exec(ctx, `UPDATE task SET lease_expires_at = NOW() - INTERVAL '1 minute' WHERE id = $1`, task.ID)
 	require.NoError(t, err)
@@ -315,7 +317,7 @@ func TestTaskStore_ClaimTask_AttemptCountIncrementsExactlyOnePerClaim(t *testing
 
 	got, err = s.Tasks().GetTaskByID(ctx, task.ID)
 	require.NoError(t, err)
-	assert.Equal(t, 2, got.AttemptCount, "a reclaim must increment attempt_count by exactly one again, never reset or double-counted")
+	assert.Equal(t, 0, got.AttemptCount, "reclaiming a lapsed lease via ClaimTask itself must still leave attempt_count at 0 -- only ReclaimExpired's sweep counts a lapse")
 }
 
 // TestTaskStore_ClaimTask_RecordsBothSubjectPairs is issue #2722's Testing

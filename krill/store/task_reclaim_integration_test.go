@@ -3,8 +3,9 @@
 // Real-Postgres coverage for TaskStore.ReclaimExpired (task_reclaim.go,
 // migration 015, issue #2724's Testing section, FR7): the successful-reclaim
 // accounting (prior claim released with release_reason='reclaim', one
-// lapsed task_attempt row, attempt_count+1, current_claim_id/lease_expires_at
-// cleared, current_lane untouched), immediate re-claimability by a different
+// lapsed task_attempt row, attempt_count+1 from the lapse alone,
+// current_claim_id/lease_expires_at cleared, current_lane untouched),
+// immediate re-claimability by a different
 // session (the FR3+FR7 round trip), the zombie-heartbeat rejection after
 // reclaim (the FR6/FR7 interaction), a live (unexpired) lease left
 // untouched, a single-TaskID sweep touching only the named task, the
@@ -38,8 +39,9 @@ import (
 // #2724's Testing section item 1: a task whose lease expired is reclaimed --
 // the prior claim is marked released_at/release_reason='reclaim', exactly
 // one lapsed task_attempt row is appended, attempt_count is incremented by
-// exactly one, current_claim_id/lease_expires_at are cleared, and
-// current_lane is left completely untouched (a lapse is not a verdict).
+// exactly one (the lapse alone -- the earlier claim never moved it),
+// current_claim_id/lease_expires_at are cleared, and current_lane is left
+// completely untouched (a lapse is not a verdict).
 func TestTaskStore_ReclaimExpired_LeaseExpired_ReclaimsWithAccounting(t *testing.T) {
 	ctx := context.Background()
 	s, db := newTaskTestStore(t)
@@ -79,7 +81,7 @@ func TestTaskStore_ReclaimExpired_LeaseExpired_ReclaimsWithAccounting(t *testing
 
 	got, err := s.Tasks().GetTaskByID(ctx, task.ID)
 	require.NoError(t, err)
-	assert.Equal(t, 2, got.AttemptCount, "attempt_count must be incremented by exactly one (1 from the claim, 1 from the lapse)")
+	assert.Equal(t, 1, got.AttemptCount, "attempt_count must be incremented by exactly one, from the lapse alone -- the claim itself never moves it")
 	assert.Nil(t, got.CurrentClaimID, "current_claim_id must be cleared")
 	assert.Nil(t, got.LeaseExpiresAt, "lease_expires_at must be cleared")
 	assert.Equal(t, store.LaneScaffold, got.CurrentLane, "current_lane must be untouched by a reclaim -- a lapse is not a verdict")

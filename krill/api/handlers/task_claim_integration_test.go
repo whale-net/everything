@@ -154,7 +154,7 @@ func TestClaimTaskHandler_Success_ReturnsPayloadWithLease(t *testing.T) {
 	assert.False(t, payload.Task.CurrentClaim.Released)
 	assert.Nil(t, payload.Task.CurrentClaim.ReleaseReason)
 	assert.True(t, payload.Task.CurrentClaim.LeaseExpiresAt.After(payload.Task.CurrentClaim.ClaimedAt), "the lease must expire after it was claimed")
-	assert.Equal(t, 1, payload.Task.AttemptNumber, "a successful claim must record exactly one attempt")
+	assert.Equal(t, 0, payload.Task.AttemptNumber, "a successful claim must never move attempt_count -- it only counts lapsed/abandoned attempts")
 }
 
 // TestClaimTaskHandler_ClaimResponseMatchesSubsequentGet is issue #2722's
