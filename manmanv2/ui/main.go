@@ -493,13 +493,12 @@ func (app *App) setupRoutes(mux *http.ServeMux) {
 	// RequireAuthFunc/WithAccessToken wrapper as every other route here).
 	// "/backups/runs" is the "Backup runs" tab's htmx fragment (filter
 	// submit and "Load more" pagination, NFR4) -- see
-	// handlers_backups_fleet.go and pages/backups.templ.
-	// "/backups/runs/{backup_id}/delete" (task #2815 -- FR7, FR8) deletes
-	// one run and re-renders that same fragment; registered as a "/backups/
-	// runs/" subtree pattern so it coexists with the exact-match "/backups/
-	// runs" fragment route above.
+	// handlers_backups_fleet.go and pages/backups.templ. "/backups/configs"
+	// is the "Backup configs" tab's own htmx fragment (task #2816 --
+	// FR9-FR11).
 	mux.HandleFunc("/backups", app.auth.RequireAuthFunc(app.auth.WithAccessToken(app.handleBackupsPage)))
 	mux.HandleFunc("/backups/runs", app.auth.RequireAuthFunc(app.auth.WithAccessToken(app.handleBackupRunsFragment)))
+	mux.HandleFunc("/backups/configs", app.auth.RequireAuthFunc(app.auth.WithAccessToken(app.handleBackupConfigsFragment)))
 	// "/backups/trigger-form" and "/backups/trigger" (task #2813, FR5): the
 	// fleet-wide "trigger a backup run" entry point -- a picker (GET, listing
 	// every BackupConfig plus, once one is chosen, its eligible deployments)

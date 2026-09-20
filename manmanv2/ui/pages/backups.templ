@@ -12,10 +12,9 @@ import (
 // BackupsPageData drives the fleet-wide /backups surface (root plan #2777,
 // task #2812 -- FR1, FR3, FR4). This page owns the shell (nav entry, tab
 // strip, gRPC client wrappers) so #2813/#2814/#2815/#2816 can each add one
-// capability without re-litigating layout -- see this file's package
-// doc comment on BackupRunsFragmentData for the "Backup runs" tab this
-// task fills in; "Backup configs" (backupConfigsPlaceholder below) is
-// filled in by #2816.
+// capability without re-litigating layout -- see this file's doc comment on
+// BackupRunsFragmentData for the "Backup runs" tab #2812 fills in, and on
+// BackupConfigsFragmentData for the "Backup configs" tab #2816 fills in.
 type BackupsPageData struct {
 	Layout components.LayoutData
 	Runs   BackupRunsFragmentData
@@ -24,6 +23,12 @@ type BackupsPageData struct {
 	// per "/backups/runs" fragment swap, since the filter bar itself lives
 	// outside "#backup-runs-panel" and is never re-rendered by a swap.
 	FilterOptions BackupRunsFilterOptions
+	// Configs backs the "Backup configs" tab's initial (unfiltered,
+	// first-page) render -- handlers_backups_fleet.go builds this the same
+	// way it builds Runs, from a ListBackupConfigsFleet call, so the
+	// initial page load and every subsequent "/backups/configs" htmx
+	// fragment swap render identically.
+	Configs BackupConfigsFragmentData
 }
 
 // BackupRunsFilterOptions holds the fleet-wide name-based picker options
@@ -85,9 +90,9 @@ var backupRunStatuses = []string{"pending", "running", "completed", "failed"}
 // BackupsPage is the fleet-wide backup management surface (FR1), registered
 // at "/backups" (handlers_backups_fleet.go). Two tabs from the start,
 // switched client-side (no navigation, matching game_detail.templ's
-// activeTab pattern): "Backup runs" (this task, FR3/FR4) and "Backup
-// configs" (placeholder, filled by #2816) -- both tabs' content is already
-// rendered on page load, so switching costs no request.
+// activeTab pattern): "Backup runs" (#2812, FR3/FR4) and "Backup configs"
+// (#2816, FR9-FR11) -- both tabs' content is already rendered on page load,
+// so switching costs no request.
 templ BackupsPage(data BackupsPageData) {
 	@components.Layout(data.Layout) {
 		<style>
@@ -131,7 +136,10 @@ templ BackupsPage(data BackupsPageData) {
 				</div>
 			</div>
 			<div id="tab-panel-backup-configs" x-show="activeTab === 'configs'" x-cloak>
-				@backupConfigsPlaceholder()
+				@backupConfigsFilterBar(data.Configs.Filter)
+				<div id="backup-configs-panel">
+					@BackupConfigsFragment(data.Configs)
+				</div>
 			</div>
 		</div>
 		<!-- Trigger-backup Blade (task #2813, FR5). See BackupTriggerFormPlaceholder's doc comment for why its body is a lazy hx-get rather than pre-rendered data. -->
@@ -442,12 +450,178 @@ templ BackupRunsPanelOOB(data BackupRunsFragmentData) {
 	</div>
 }
 
-// backupConfigsPlaceholder is the "Backup configs" tab's scaffold content
-// (#2816 fills this in with the fleet-wide BackupConfig list, #2822).
-templ backupConfigsPlaceholder() {
-	<div class="bg-base-100 rounded-box border border-base-300 p-12 text-center">
-		<p class="text-base-content/60">Backup configs land here in a follow-up task.</p>
-	</div>
+// BackupConfigsFragmentData backs both the initial "/backups" page render's
+// "Backup configs" tab and every subsequent "/backups/configs" htmx
+// fragment swap (filter submit or "Load more") -- handlers_backups_fleet.go
+// builds one of these from ControlClient.ListBackupConfigsFleet's response
+// for either route, mirroring BackupRunsFragmentData's own shape.
+type BackupConfigsFragmentData struct {
+	// Items is BackupConfigListItem, not the bare BackupConfig slice --
+	// each row's volume/GameConfig/game display names come from here, no
+	// per-row lookup (FR9).
+	Items         []*manmanpb.BackupConfigListItem
+	NextPageToken string
+	Filter        BackupConfigsFilterValues
+	// Err, when non-empty, renders an inline alert in place of the table
+	// (and suppresses the "Load more" control) instead of a bare 500 --
+	// the ListBackupConfigsFleet call itself failed, not "zero rows
+	// matched".
+	Err string
+}
+
+// BackupConfigsFilterValues holds the "Backup configs" tab's current filter
+// values as strings (empty string means unset, matching each <input>/
+// <select>'s own empty state), mirroring BackupRunsFilterValues.
+// EnabledFilter distinguishes "false" (only disabled configs) from "" (no
+// filter) so it can round-trip through BackupConfigListFilter's *bool
+// (FR10, NFR4's pagination-composes-with-filtering requirement).
+type BackupConfigsFilterValues struct {
+	VolumeID     string
+	GameConfigID string
+	Enabled      string
+}
+
+// BackupConfigsFragment renders the "Backup configs" tab's table plus its
+// "Load more" pagination control (NFR4) -- exported because
+// handlers_backups_fleet.go renders it directly for "/backups/configs" htmx
+// requests, in addition to BackupsPage using it for the initial unfiltered
+// render.
+//
+// Scaffold ships every column FR9 asks for (volume, owning GameConfig/game,
+// cadence, backup path, enabled state, last-run time via timeAgo's existing
+// "Never" zero-state) plus raw-ID filter inputs (Implementation's job,
+// mirroring backupRunsFilterBar's own scaffold-to-named-picker history, is
+// resolving volume/GameConfig to name-based selects) -- the FR11 link-out
+// to the Config Editor's Volumes tab is deliberately not wired yet: it
+// needs each row's owning game ID, which BackupConfigListItem does not
+// carry today, so deriving that link is left to the Implementation phase.
+templ BackupConfigsFragment(data BackupConfigsFragmentData) {
+	if data.Err != "" {
+		@components.Alert("error", data.Err)
+	} else if len(data.Items) == 0 {
+		@components.EmptyState("No backup configs", "No backup configs match the current filters.", "", "")
+	} else {
+		<div class="bg-base-100 rounded-box border border-base-300 overflow-x-auto">
+			<table class="table">
+				<thead>
+					<tr>
+						<th>Volume</th>
+						<th>Game / Config</th>
+						<th>Cadence</th>
+						<th>Backup Path</th>
+						<th>Enabled</th>
+						<th>Last Run</th>
+					</tr>
+				</thead>
+				<tbody>
+					for _, item := range data.Items {
+						@backupConfigRow(item)
+					}
+				</tbody>
+			</table>
+		</div>
+		if data.NextPageToken != "" {
+			<div class="flex justify-center mt-4">
+				<button
+					type="button"
+					class="btn btn-sm"
+					hx-get={ fmt.Sprintf("/backups/configs?%s", nextConfigPageQuery(data.Filter, data.NextPageToken)) }
+					hx-target="#backup-configs-panel"
+					hx-swap="innerHTML"
+				>
+					Load more
+				</button>
+			</div>
+		}
+	}
+}
+
+// backupConfigsFilterBar is the FR10 filter bar: volume and GameConfig ship
+// as raw ID inputs in Scaffold, same as backupRunsFilterBar's own history
+// -- Implementation resolves them to name-based pickers. Enabled is a fixed
+// three-way select (All/Enabled/Disabled) since its option set never varies
+// with fleet data, matching backupRunsFilterBar's Status select. Submits
+// via htmx GET to "/backups/configs", swapping "#backup-configs-panel" in
+// place; hx-push-url keeps the current filters in the address bar so a
+// filtered view is linkable.
+templ backupConfigsFilterBar(filter BackupConfigsFilterValues) {
+	<form
+		hx-get="/backups/configs"
+		hx-target="#backup-configs-panel"
+		hx-swap="innerHTML"
+		hx-push-url="true"
+		class="flex flex-wrap gap-4 items-end mb-4 bg-base-100 border border-base-300 rounded-box p-4"
+	>
+		<div>
+			<label class="block text-sm font-medium text-base-content mb-1" for="backup-configs-filter-volume">Volume ID</label>
+			<input
+				type="number"
+				id="backup-configs-filter-volume"
+				name="volume_id"
+				value={ filter.VolumeID }
+				class="input input-bordered input-sm w-40"
+			/>
+		</div>
+		<div>
+			<label class="block text-sm font-medium text-base-content mb-1" for="backup-configs-filter-game-config">Game Config ID</label>
+			<input
+				type="number"
+				id="backup-configs-filter-game-config"
+				name="game_config_id"
+				value={ filter.GameConfigID }
+				class="input input-bordered input-sm w-40"
+			/>
+		</div>
+		<div>
+			<label class="block text-sm font-medium text-base-content mb-1" for="backup-configs-filter-enabled">Enabled</label>
+			<select id="backup-configs-filter-enabled" name="enabled" class="select select-bordered select-sm w-40">
+				<option value="" selected?={ filter.Enabled == "" }>All</option>
+				<option value="true" selected?={ filter.Enabled == "true" }>Enabled</option>
+				<option value="false" selected?={ filter.Enabled == "false" }>Disabled</option>
+			</select>
+		</div>
+		<button type="submit" class="btn btn-primary btn-sm">Filter</button>
+	</form>
+}
+
+// backupConfigRow is one BackupConfigListItem's row (FR9): volume/game/
+// GameConfig display names come from the item's own display-context fields,
+// not a per-row lookup. No create/edit/delete control renders here or
+// anywhere else in this tab (FR11) -- that control lives exclusively in the
+// Config Editor's Volumes tab.
+templ backupConfigRow(item *manmanpb.BackupConfigListItem) {
+	<tr>
+		<td>{ item.VolumeName }</td>
+		<td>{ fmt.Sprintf("%s / %s", item.GameName, item.GameConfigName) }</td>
+		<td>{ fmt.Sprintf("%d min", item.Config.CadenceMinutes) }</td>
+		<td>{ item.Config.BackupPath }</td>
+		<td>
+			if item.Config.Enabled {
+				@htmxui.Badge("Enabled", htmxui.BadgeSuccess, htmxui.BadgeSizeSM, true, nil)
+			} else {
+				@htmxui.Badge("Disabled", htmxui.BadgeNeutral, htmxui.BadgeSizeSM, true, nil)
+			}
+		</td>
+		<td>{ timeAgo(item.Config.LastBackupAt) }</td>
+	</tr>
+}
+
+// nextConfigPageQuery carries the current filter values plus the next page
+// token into "Load more"'s hx-get target, mirroring nextPageQuery so paging
+// never drops an active filter (NFR4).
+func nextConfigPageQuery(filter BackupConfigsFilterValues, pageToken string) string {
+	v := url.Values{}
+	if filter.VolumeID != "" {
+		v.Set("volume_id", filter.VolumeID)
+	}
+	if filter.GameConfigID != "" {
+		v.Set("game_config_id", filter.GameConfigID)
+	}
+	if filter.Enabled != "" {
+		v.Set("enabled", filter.Enabled)
+	}
+	v.Set("page_token", pageToken)
+	return v.Encode()
 }
 
 // backupRunSize renders Backup.SizeBytes only once the run has completed
