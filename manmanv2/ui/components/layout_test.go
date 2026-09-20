@@ -152,6 +152,7 @@ func TestLayout_RendersNavItemsServerSelectorAndLogoutAffordance(t *testing.T) {
 		`<li><a href="/activity">Activity</a></li>`,
 		`<li><a href="/infrastructure">Infrastructure</a></li>`,
 		`<li><a href="/workshop">Workshop</a></li>`,
+		`<li><a href="/backups">Backups</a></li>`,
 	}
 	for _, want := range wantNavItems {
 		if got := strings.Count(body, want); got != 2 {
@@ -262,10 +263,11 @@ func TestLayout_NilUserOmitsLogoutAffordance(t *testing.T) {
 }
 
 // TestLayout_NavAmendmentA4_ExactOrderAndLabels is the direct M6 IA guard
-// (task #2372, root plan #2359 FR1/FR6): both nav renderings (wide menu,
-// narrow dropdown) must contain exactly the five M6 entries -- Dashboard ·
-// Games · Activity · Infrastructure · Workshop -- in that order, with no
-// more and no fewer. Unlike
+// (task #2372, root plan #2359 FR1/FR6), extended by task #2812 (root plan
+// #2777, FR1) for the "Backups" entry it appends: both nav renderings
+// (wide menu, narrow dropdown) must contain exactly these six entries --
+// Dashboard · Games · Activity · Infrastructure · Workshop · Backups -- in
+// that order, with no more and no fewer. Unlike
 // TestLayout_RendersNavItemsServerSelectorAndLogoutAffordance (which checks
 // each entry's presence/count independently), this test also asserts
 // relative order within each <ul>, and asserts the old "Servers" label is
@@ -288,6 +290,7 @@ func TestLayout_NavAmendmentA4_ExactOrderAndLabels(t *testing.T) {
 		`<li><a href="/activity">Activity</a></li>`,
 		`<li><a href="/infrastructure">Infrastructure</a></li>`,
 		`<li><a href="/workshop">Workshop</a></li>`,
+		`<li><a href="/backups">Backups</a></li>`,
 	}
 
 	// Split the rendered body at the boundary between the wide menu and the
@@ -314,12 +317,12 @@ func TestLayout_NavAmendmentA4_ExactOrderAndLabels(t *testing.T) {
 			}
 			lastIdx = idx
 		}
-		// Exactly five <li><a ...>...</a></li> nav-link entries per section
+		// Exactly six <li><a ...>...</a></li> nav-link entries per section
 		// (the mobile section also carries the "Server" menu-title li and
 		// the MobileServerSelector's own <li>, which don't match this
 		// pattern) -- guards against a stray extra entry.
-		if got := strings.Count(section, `<li><a href="`); got != 5 {
-			t.Errorf("%s: expected exactly 5 nav link entries, got %d in %q", name, got, section)
+		if got := strings.Count(section, `<li><a href="`); got != 6 {
+			t.Errorf("%s: expected exactly 6 nav link entries, got %d in %q", name, got, section)
 		}
 	}
 
@@ -334,9 +337,10 @@ func TestLayout_NavAmendmentA4_ExactOrderAndLabels(t *testing.T) {
 // TestLayout_NavActiveStateForEachAmendedTarget covers the five M6 nav
 // targets' active-state marking (navLink's exact-label match), including
 // Activity -- the one genuinely new target amendment A4 added a nav entry
-// for. A prior version of this suite only asserted active-state for
-// Dashboard; this extends coverage to prove data.Active reaches every
-// entry, not just the one pre-existing case.
+// for -- plus "Backups" (task #2812, root plan #2777, FR1), the entry
+// appended after Workshop. A prior version of this suite only asserted
+// active-state for Dashboard; this extends coverage to prove data.Active
+// reaches every entry, not just the one pre-existing case.
 func TestLayout_NavActiveStateForEachAmendedTarget(t *testing.T) {
 	cases := []struct {
 		active     string
@@ -347,6 +351,7 @@ func TestLayout_NavActiveStateForEachAmendedTarget(t *testing.T) {
 		{"Activity", `<li><a href="/activity" class="menu-active">Activity</a></li>`},
 		{"Infrastructure", `<li><a href="/infrastructure" class="menu-active">Infrastructure</a></li>`},
 		{"Workshop", `<li><a href="/workshop" class="menu-active">Workshop</a></li>`},
+		{"Backups", `<li><a href="/backups" class="menu-active">Backups</a></li>`},
 	}
 	for _, c := range cases {
 		body := renderLayout(t, LayoutData{Title: "Dashboard", Active: c.active})
@@ -361,7 +366,7 @@ func TestLayout_NavActiveStateForEachAmendedTarget(t *testing.T) {
 // display text (case-insensitive), across every value of data.Active so no
 // active-state branch of navLink accidentally introduces it.
 func TestLayout_NavContainsNoSGCTerminology(t *testing.T) {
-	for _, active := range []string{"", "Dashboard", "Games", "Activity", "Infrastructure", "Workshop"} {
+	for _, active := range []string{"", "Dashboard", "Games", "Activity", "Infrastructure", "Workshop", "Backups"} {
 		body := renderLayout(t, LayoutData{Title: "Dashboard", Active: active})
 		lower := strings.ToLower(body)
 		if strings.Contains(lower, "sgc") || strings.Contains(lower, "server game config") {

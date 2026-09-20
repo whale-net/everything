@@ -1,0 +1,252 @@
+package pages
+
+import (
+	"fmt"
+	"net/url"
+
+	"github.com/whale-net/everything/libs/go/htmxui"
+	manmanpb "github.com/whale-net/everything/manmanv2/protos"
+	"github.com/whale-net/everything/manmanv2/ui/components"
+)
+
+// BackupsPageData drives the fleet-wide /backups surface (root plan #2777,
+// task #2812 -- FR1, FR3, FR4). This page owns the shell (nav entry, tab
+// strip, gRPC client wrappers) so #2813/#2814/#2815/#2816 can each add one
+// capability without re-litigating layout -- see this file's package
+// doc comment on BackupRunsFragmentData for the "Backup runs" tab this
+// task fills in; "Backup configs" (backupConfigsPlaceholder below) is
+// filled in by #2816.
+type BackupsPageData struct {
+	Layout components.LayoutData
+	Runs   BackupRunsFragmentData
+}
+
+// BackupRunsFragmentData backs both the initial "/backups" page render and
+// every subsequent "/backups/runs" htmx fragment swap (filter submit or
+// "Load more") -- handlers_backups_fleet.go builds one of these from
+// ControlClient.ListBackups's response for either route, so the table and
+// pagination control render identically regardless of which route
+// produced them.
+type BackupRunsFragmentData struct {
+	// Items is BackupListItem, not the bare Backup slice -- each row's
+	// deployment/volume display names come from here, no per-row lookup
+	// (#2809).
+	Items         []*manmanpb.BackupListItem
+	NextPageToken string
+	Filter        BackupRunsFilterValues
+}
+
+// BackupRunsFilterValues holds the filter bar's current values as strings
+// (empty string means unset, matching each <input>/<select>'s own empty
+// state) so the fragment can redisplay what a Server Manager just
+// submitted and so nextPageQuery can carry the same filters into a
+// "Load more" request.
+type BackupRunsFilterValues struct {
+	ServerGameConfigID string
+	VolumeID           string
+	BackupConfigID     string
+	Status             string
+}
+
+// backupRunStatuses is the fixed status filter option set (FR4), matching
+// ListBackupsRequest.status's documented values
+// (api_messages_backup.proto: "pending|running|completed|failed").
+var backupRunStatuses = []string{"pending", "running", "completed", "failed"}
+
+// BackupsPage is the fleet-wide backup management surface (FR1), registered
+// at "/backups" (handlers_backups_fleet.go). Two tabs from the start,
+// switched client-side (no navigation, matching game_detail.templ's
+// activeTab pattern): "Backup runs" (this task, FR3/FR4) and "Backup
+// configs" (placeholder, filled by #2816) -- both tabs' content is already
+// rendered on page load, so switching costs no request.
+templ BackupsPage(data BackupsPageData) {
+	@components.Layout(data.Layout) {
+		@components.HeroHeader("Backups", "Fleet-wide backup runs and schedules -- every deployment, no per-deployment page required") {
+		}
+		<div x-data="{ activeTab: 'runs' }">
+			<div role="tablist" class="tabs tabs-bordered mb-6" data-backups-tabs>
+				<button
+					type="button"
+					role="tab"
+					id="tab-btn-backup-runs"
+					class="tab tab-lg"
+					:class="{ 'tab-active font-semibold': activeTab === 'runs' }"
+					@click="activeTab = 'runs'"
+				>
+					Backup runs
+				</button>
+				<button
+					type="button"
+					role="tab"
+					id="tab-btn-backup-configs"
+					class="tab tab-lg"
+					:class="{ 'tab-active font-semibold': activeTab === 'configs' }"
+					@click="activeTab = 'configs'"
+				>
+					Backup configs
+				</button>
+			</div>
+			<div id="tab-panel-backup-runs" x-show="activeTab === 'runs'">
+				@backupRunsFilterBar(data.Runs.Filter)
+				<div id="backup-runs-panel">
+					@BackupRunsFragment(data.Runs)
+				</div>
+			</div>
+			<div id="tab-panel-backup-configs" x-show="activeTab === 'configs'" x-cloak>
+				@backupConfigsPlaceholder()
+			</div>
+		</div>
+	}
+}
+
+// backupRunsFilterBar is the FR4 filter bar: SGC, volume, BackupConfig
+// (each an ID input -- resolving those to name-based pickers is left to
+// the Implementation phase) and status (a fixed select, FR4). Submits via
+// htmx GET to "/backups/runs", swapping "#backup-runs-panel" in place;
+// hx-push-url keeps the current filters in the address bar so a filtered
+// view is linkable (NFR4's pagination sibling requirement).
+templ backupRunsFilterBar(filter BackupRunsFilterValues) {
+	<form
+		hx-get="/backups/runs"
+		hx-target="#backup-runs-panel"
+		hx-swap="innerHTML"
+		hx-push-url="true"
+		class="flex flex-wrap gap-4 items-end mb-4 bg-base-100 border border-base-300 rounded-box p-4"
+	>
+		<div>
+			<label class="block text-sm font-medium text-base-content mb-1" for="backup-runs-filter-sgc">Deployment (SGC ID)</label>
+			<input type="number" id="backup-runs-filter-sgc" name="server_game_config_id" min="1" value={ filter.ServerGameConfigID } class="input input-bordered input-sm w-32"/>
+		</div>
+		<div>
+			<label class="block text-sm font-medium text-base-content mb-1" for="backup-runs-filter-volume">Volume ID</label>
+			<input type="number" id="backup-runs-filter-volume" name="volume_id" min="1" value={ filter.VolumeID } class="input input-bordered input-sm w-32"/>
+		</div>
+		<div>
+			<label class="block text-sm font-medium text-base-content mb-1" for="backup-runs-filter-config">Backup Config ID</label>
+			<input type="number" id="backup-runs-filter-config" name="backup_config_id" min="1" value={ filter.BackupConfigID } class="input input-bordered input-sm w-32"/>
+		</div>
+		<div>
+			<label class="block text-sm font-medium text-base-content mb-1" for="backup-runs-filter-status">Status</label>
+			<select id="backup-runs-filter-status" name="status" class="select select-bordered select-sm w-40">
+				<option value="" selected?={ filter.Status == "" }>All</option>
+				for _, status := range backupRunStatuses {
+					<option value={ status } selected?={ filter.Status == status }>{ status }</option>
+				}
+			</select>
+		</div>
+		<button type="submit" class="btn btn-primary btn-sm">Filter</button>
+	</form>
+}
+
+// BackupRunsFragment renders the backup-run table plus its "Load more"
+// pagination control (NFR4) -- exported because handlers_backups_fleet.go
+// renders it directly for "/backups/runs" htmx requests, in addition to
+// BackupsPage using it for the initial unfiltered render.
+templ BackupRunsFragment(data BackupRunsFragmentData) {
+	if len(data.Items) == 0 {
+		@components.EmptyState("No backup runs", "No backup runs match the current filters.", "", "")
+	} else {
+		<div class="bg-base-100 rounded-box border border-base-300 overflow-x-auto">
+			<table class="table">
+				<thead>
+					<tr>
+						<th>Deployment</th>
+						<th>Volume</th>
+						<th>Status</th>
+						<th>Created</th>
+						<th>Size</th>
+						<th>Origin</th>
+					</tr>
+				</thead>
+				<tbody>
+					for _, item := range data.Items {
+						@backupRunRow(item)
+					}
+				</tbody>
+			</table>
+		</div>
+		if data.NextPageToken != "" {
+			<div class="flex justify-center mt-4">
+				<button
+					type="button"
+					class="btn btn-sm"
+					hx-get={ fmt.Sprintf("/backups/runs?%s", nextPageQuery(data.Filter, data.NextPageToken)) }
+					hx-target="#backup-runs-panel"
+					hx-swap="innerHTML"
+				>
+					Load more
+				</button>
+			</div>
+		}
+	}
+}
+
+// backupRunRow is one BackupListItem's row (FR3): deployment/volume names
+// come from the item's own display-context fields (#2809), not a per-row
+// lookup.
+templ backupRunRow(item *manmanpb.BackupListItem) {
+	<tr>
+		<td>{ item.ServerGameConfigName }</td>
+		<td>{ item.VolumeName }</td>
+		<td>
+			@htmxui.Badge(item.Backup.Status, statusBadgeVariant(item.Backup.Status), htmxui.BadgeSizeSM, true, nil)
+		</td>
+		<td>{ timeAgo(item.Backup.CreatedAt) }</td>
+		<td>{ backupRunSize(item.Backup) }</td>
+		<td>{ backupRunOrigin(item.Backup) }</td>
+	</tr>
+}
+
+// backupConfigsPlaceholder is the "Backup configs" tab's scaffold content
+// (#2816 fills this in with the fleet-wide BackupConfig list, #2822).
+templ backupConfigsPlaceholder() {
+	<div class="bg-base-100 rounded-box border border-base-300 p-12 text-center">
+		<p class="text-base-content/60">Backup configs land here in a follow-up task.</p>
+	</div>
+}
+
+// backupRunSize renders Backup.SizeBytes only once the run has completed
+// (FR3: "size once completed") -- pending/running/failed rows show a dash
+// rather than a stale or zero size, matching cacheEntrySize's
+// (workshop_cache.templ) "%.1f MB" convention for a byte count elsewhere
+// in this UI.
+func backupRunSize(backup *manmanpb.Backup) string {
+	if backup.Status != "completed" || backup.SizeBytes <= 0 {
+		return "-"
+	}
+	return fmt.Sprintf("%.1f MB", float64(backup.SizeBytes)/1048576)
+}
+
+// backupRunOrigin renders Backup.TriggerSource verbatim (FR2/FR3's core
+// rule): the API already normalizes this to exactly "scheduled", "manual",
+// or "unknown" for historical rows with no recorded origin -- this must
+// never guess or default an "unknown" (or empty, pre-#2809 data) row to
+// "manual"/"scheduled".
+func backupRunOrigin(backup *manmanpb.Backup) string {
+	if backup.TriggerSource == "" {
+		return "unknown"
+	}
+	return backup.TriggerSource
+}
+
+// nextPageQuery carries the current filter values plus the next page token
+// into "Load more"'s hx-get target, so paging never drops an active filter
+// (NFR4's server-side-pagination requirement implies paging composes with
+// filtering, not resets it).
+func nextPageQuery(filter BackupRunsFilterValues, pageToken string) string {
+	v := url.Values{}
+	if filter.ServerGameConfigID != "" {
+		v.Set("server_game_config_id", filter.ServerGameConfigID)
+	}
+	if filter.VolumeID != "" {
+		v.Set("volume_id", filter.VolumeID)
+	}
+	if filter.BackupConfigID != "" {
+		v.Set("backup_config_id", filter.BackupConfigID)
+	}
+	if filter.Status != "" {
+		v.Set("status", filter.Status)
+	}
+	v.Set("page_token", pageToken)
+	return v.Encode()
+}
