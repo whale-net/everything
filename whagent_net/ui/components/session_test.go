@@ -4,6 +4,8 @@ import (
 	"context"
 	"strings"
 	"testing"
+
+	"github.com/whale-net/everything/whagent_net/events"
 )
 
 // This file guards issue #2754's FR4/FR5: stateBadge's spinner treatment is
@@ -104,5 +106,196 @@ func TestStateBadge_NonRunningLabelUnchanged(t *testing.T) {
 				t.Errorf("expected label %q in rendered badge, got %q", state, body)
 			}
 		})
+	}
+}
+
+// This block guards issue #2776/#2778: SessionLive must not trust a stale
+// DB-read session.State when evs's own last event already proves the
+// session went terminal. reconcileTerminalState is the pure decision
+// function; the TestSessionLive_* tests below prove SessionLive actually
+// wires it into the rendered badge/banner end to end.
+//
+// Red/green discipline (verified by hand, then reverted): temporarily
+// removing the `{{ session = reconcileTerminalState(session, evs) }}`
+// statement from SessionLive made
+// TestSessionLive_BadgeReflectsCappedEventEvenWhenSessionStateStillRunning
+// and TestSessionLive_BadgeReflectsFailureEventEvenWhenSessionStateStillRunning
+// fail -- the rendered badge stayed "running" with the spinner present
+// instead of flipping to the terminal badge/banner. Restoring the
+// statement made both pass again.
+
+func evOfType(eventType string, payload string) TranscriptEventView {
+	return TranscriptEventView{EventID: "e1", Seq: 1, Type: eventType, Payload: []byte(payload)}
+}
+
+func TestReconcileTerminalState_CappedEventOverridesStaleRunning(t *testing.T) {
+	session := SessionView{State: "running"}
+	evs := []TranscriptEventView{evOfType(events.EventTypeCapped, `{"cap_kind":"turns"}`)}
+
+	got := reconcileTerminalState(session, evs)
+
+	if got.State != "capped" {
+		t.Errorf("expected State %q, got %q", "capped", got.State)
+	}
+	if got.CapKind != "turns" {
+		t.Errorf("expected CapKind %q, got %q", "turns", got.CapKind)
+	}
+}
+
+func TestReconcileTerminalState_FailureEventOverridesStaleRunning(t *testing.T) {
+	session := SessionView{State: "running"}
+	evs := []TranscriptEventView{evOfType(events.EventTypeFailure, `{"error_category":"retryable","error_detail":"boom"}`)}
+
+	got := reconcileTerminalState(session, evs)
+
+	if got.State != "failed" {
+		t.Errorf("expected State %q, got %q", "failed", got.State)
+	}
+	if got.ErrorCategory != "retryable" {
+		t.Errorf("expected ErrorCategory %q, got %q", "retryable", got.ErrorCategory)
+	}
+	if got.ErrorDetail != "boom" {
+		t.Errorf("expected ErrorDetail %q, got %q", "boom", got.ErrorDetail)
+	}
+}
+
+// TestReconcileTerminalState_AlreadyTerminalStateUnchanged guards against
+// re-decoding/overwriting fields the DB read already populated correctly
+// once session.State already matches the last event's implied terminal
+// state.
+func TestReconcileTerminalState_AlreadyTerminalStateUnchanged(t *testing.T) {
+	cases := []struct {
+		name    string
+		session SessionView
+		evs     []TranscriptEventView
+	}{
+		{
+			name:    "capped",
+			session: SessionView{State: "capped", CapKind: "turns"},
+			evs:     []TranscriptEventView{evOfType(events.EventTypeCapped, `{"cap_kind":"turns"}`)},
+		},
+		{
+			name:    "failed",
+			session: SessionView{State: "failed", ErrorCategory: "retryable", ErrorDetail: "boom"},
+			evs:     []TranscriptEventView{evOfType(events.EventTypeFailure, `{"error_category":"retryable","error_detail":"boom"}`)},
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got := reconcileTerminalState(tc.session, tc.evs)
+			if got != tc.session {
+				t.Errorf("expected session returned unchanged, got %+v (want %+v)", got, tc.session)
+			}
+		})
+	}
+}
+
+// TestReconcileTerminalState_NonTerminalLastEventUnchanged proves a
+// genuinely still-running session (last event neither capped nor failure)
+// is returned unchanged.
+func TestReconcileTerminalState_NonTerminalLastEventUnchanged(t *testing.T) {
+	session := SessionView{State: "running"}
+	evs := []TranscriptEventView{evOfType(events.EventTypeAssistantMessage, `{"role":"assistant","content":"hi"}`)}
+
+	got := reconcileTerminalState(session, evs)
+
+	if got != session {
+		t.Errorf("expected session returned unchanged, got %+v (want %+v)", got, session)
+	}
+}
+
+// TestReconcileTerminalState_EmptyEventsUnchanged proves an empty evs
+// slice is a no-op.
+func TestReconcileTerminalState_EmptyEventsUnchanged(t *testing.T) {
+	session := SessionView{State: "running"}
+
+	got := reconcileTerminalState(session, nil)
+
+	if got != session {
+		t.Errorf("expected session returned unchanged, got %+v (want %+v)", got, session)
+	}
+}
+
+// TestReconcileTerminalState_UndecodablePayloadUnchanged proves a
+// malformed capped/failure payload never forces a state change -- the DB
+// read is trusted as-is when the terminal event's own payload can't be
+// decoded.
+func TestReconcileTerminalState_UndecodablePayloadUnchanged(t *testing.T) {
+	cases := []struct {
+		name      string
+		eventType string
+	}{
+		{name: "capped", eventType: events.EventTypeCapped},
+		{name: "failure", eventType: events.EventTypeFailure},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			session := SessionView{State: "running"}
+			evs := []TranscriptEventView{evOfType(tc.eventType, `not json`)}
+
+			got := reconcileTerminalState(session, evs)
+
+			if got != session {
+				t.Errorf("expected session returned unchanged, got %+v (want %+v)", got, session)
+			}
+		})
+	}
+}
+
+func renderSessionLive(t *testing.T, session SessionView, evs []TranscriptEventView) string {
+	t.Helper()
+	var buf strings.Builder
+	if err := SessionLive(session, evs).Render(context.Background(), &buf); err != nil {
+		t.Fatalf("SessionLive render failed: %v", err)
+	}
+	return buf.String()
+}
+
+// TestSessionLive_BadgeReflectsCappedEventEvenWhenSessionStateStillRunning
+// collapses issue #2776's actual repro into a unit test: a stale
+// session.State == "running" DB read must not win over a capped event
+// that is already evs's last element.
+func TestSessionLive_BadgeReflectsCappedEventEvenWhenSessionStateStillRunning(t *testing.T) {
+	session := SessionView{State: "running"}
+	evs := []TranscriptEventView{evOfType(events.EventTypeCapped, `{"cap_kind":"turns"}`)}
+
+	body := renderSessionLive(t, session, evs)
+
+	if strings.Contains(body, loadingSpinnerMarker) {
+		t.Errorf("expected no spinner once a capped event is the last event, got %q", body)
+	}
+	if !strings.Contains(body, "badge-warning") {
+		t.Errorf("expected badge-warning (capped) class, got %q", body)
+	}
+	if strings.Contains(body, "badge-info") {
+		t.Errorf("expected no badge-info (running) class, got %q", body)
+	}
+	if !strings.Contains(body, "Capped: turns") {
+		t.Errorf("expected capped banner line, got %q", body)
+	}
+}
+
+// TestSessionLive_BadgeReflectsFailureEventEvenWhenSessionStateStillRunning
+// is TestSessionLive_BadgeReflectsCappedEventEvenWhenSessionStateStillRunning's
+// failure-event counterpart.
+func TestSessionLive_BadgeReflectsFailureEventEvenWhenSessionStateStillRunning(t *testing.T) {
+	session := SessionView{State: "running"}
+	evs := []TranscriptEventView{evOfType(events.EventTypeFailure, `{"error_category":"retryable","error_detail":"boom"}`)}
+
+	body := renderSessionLive(t, session, evs)
+
+	if strings.Contains(body, loadingSpinnerMarker) {
+		t.Errorf("expected no spinner once a failure event is the last event, got %q", body)
+	}
+	if !strings.Contains(body, "badge-error") {
+		t.Errorf("expected badge-error (failed) class, got %q", body)
+	}
+	if strings.Contains(body, "badge-info") {
+		t.Errorf("expected no badge-info (running) class, got %q", body)
+	}
+	if !strings.Contains(body, "Failed (retryable)") || !strings.Contains(body, "boom") {
+		t.Errorf("expected failed banner line naming the category and detail, got %q", body)
 	}
 }

@@ -200,6 +200,47 @@ templ SessionDetail(data SessionDetailData) {
 	}
 }
 
+// reconcileTerminalState overrides session's DB-read state with the
+// terminal state implied by evs's last event, when that event is a
+// capped/failure event and session.State does not already report it --
+// closes the race where a live SSE delivery triggered by that event's
+// own publish renders before the session's separate terminal-status DB
+// write has landed (issue #2776). evs is always Seq-ordered and a
+// capped/failure event is always a session's last transcript event
+// (nothing commits after a session goes terminal), so the event's mere
+// presence is authoritative regardless of what the DB read currently
+// says.
+func reconcileTerminalState(session SessionView, evs []TranscriptEventView) SessionView {
+	if len(evs) == 0 {
+		return session
+	}
+	last := evs[len(evs)-1]
+	switch eventTypePrefix(last.Type) {
+	case "capped":
+		if session.State == "capped" {
+			return session
+		}
+		payload, err := decodeCappedPayload(last.Payload)
+		if err != nil {
+			return session
+		}
+		session.State = "capped"
+		session.CapKind = payload.CapKind
+	case "failure":
+		if session.State == "failed" {
+			return session
+		}
+		payload, err := decodeFailurePayload(last.Payload)
+		if err != nil {
+			return session
+		}
+		session.State = "failed"
+		session.ErrorCategory = payload.ErrorCategory
+		session.ErrorDetail = payload.ErrorDetail
+	}
+	return session
+}
+
 // SessionLive renders the portion of the session detail page that swaps
 // live on every SSE delivery (FR2, Implementation: "swaps transcript
 // fragments and the state badge on each SSE event"): the state badge, an
@@ -209,6 +250,7 @@ templ SessionDetail(data SessionDetailData) {
 // later delivery -- the two can never disagree about what a given
 // (session, events) pair renders as.
 templ SessionLive(session SessionView, evs []TranscriptEventView) {
+	{{ session = reconcileTerminalState(session, evs) }}
 	<div class="flex items-center gap-3 mb-2">
 		@stateBadge(session.State)
 	</div>
