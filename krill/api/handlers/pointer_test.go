@@ -60,6 +60,13 @@ func (f *fakePointerScopeStore) GetByID(ctx context.Context, id uuid.UUID) (stor
 	return f.scope, nil
 }
 
+func (f *fakePointerScopeStore) GetSole(ctx context.Context) (store.Scope, error) {
+	if f.getErr != nil {
+		return store.Scope{}, f.getErr
+	}
+	return f.scope, nil
+}
+
 // fakePointerArtifactStore backs pointer_test.go.
 type fakePointerArtifactStore struct {
 	createErr error

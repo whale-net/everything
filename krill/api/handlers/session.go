@@ -8,6 +8,12 @@
 // identity fields rather than verifying a bearer credential itself. See
 // gate.go for the write gate every mutating endpoint after this one passes
 // through.
+//
+// This handler is no longer the only way to mint a session (issue #2827):
+// krill/mcp/tools' init_session tool wraps the same store.SessionStore.
+// InitSession call for an MCP-only caller, reusing SubjectRequest/
+// ParseSubject/InitSessionResponse below rather than a second copy of this
+// file's request/response shapes and validation.
 package handlers
 
 import (
@@ -20,9 +26,11 @@ import (
 	"github.com/whale-net/everything/krill/store"
 )
 
-// subjectRequest is the wire shape of a Subject in an initSessionRequest --
-// mirrors store.Subject field-for-field (LB4).
-type subjectRequest struct {
+// SubjectRequest is the wire shape of a Subject in an initSessionRequest --
+// mirrors store.Subject field-for-field (LB4). Exported (issue #2827) so
+// krill/mcp/tools' init_session tool can reuse it, and ParseSubject below,
+// rather than a second MCP-local copy of the same validation (LB7).
+type SubjectRequest struct {
 	Iss  string `json:"iss"`
 	Sub  string `json:"sub"`
 	Kind string `json:"kind"`
@@ -34,13 +42,16 @@ type subjectRequest struct {
 // doc comment on store.SessionStore.InitSession).
 type initSessionRequest struct {
 	ScopeID          string         `json:"scope_id"`
-	Acting           subjectRequest `json:"acting"`
-	OnBehalfOf       subjectRequest `json:"on_behalf_of"`
+	Acting           SubjectRequest `json:"acting"`
+	OnBehalfOf       SubjectRequest `json:"on_behalf_of"`
 	WhagentSessionID *string        `json:"whagent_session_id,omitempty"`
 }
 
-// initSessionResponse is InitSessionHandler's response body.
-type initSessionResponse struct {
+// InitSessionResponse is InitSessionHandler's response body. Exported
+// (issue #2827) so krill/mcp/tools' init_session tool returns this exact
+// value rather than an MCP-local mirror (LB7, the same rule IDResponse's
+// doc comment states for open_design_session).
+type InitSessionResponse struct {
 	SessionID string `json:"session_id"`
 }
 
@@ -69,13 +80,13 @@ func InitSessionHandler(sessions store.SessionStore) http.HandlerFunc {
 			return
 		}
 
-		acting, err := parseSubject(req.Acting)
+		acting, err := ParseSubject(req.Acting)
 		if err != nil {
 			writeJSONError(w, http.StatusBadRequest, fmt.Sprintf("acting: %v", err))
 			return
 		}
 
-		onBehalfOf, err := parseSubject(req.OnBehalfOf)
+		onBehalfOf, err := ParseSubject(req.OnBehalfOf)
 		if err != nil {
 			writeJSONError(w, http.StatusBadRequest, fmt.Sprintf("on_behalf_of: %v", err))
 			return
@@ -87,15 +98,17 @@ func InitSessionHandler(sessions store.SessionStore) http.HandlerFunc {
 			return
 		}
 
-		writeJSON(w, http.StatusCreated, initSessionResponse{SessionID: id.String()})
+		writeJSON(w, http.StatusCreated, InitSessionResponse{SessionID: id.String()})
 	}
 }
 
-// parseSubject validates and converts a subjectRequest into a store.Subject.
+// ParseSubject validates and converts a SubjectRequest into a store.Subject.
 // iss and sub must both be non-empty (LB4: both real columns, never
 // defaulted); kind must be one of store.SubjectKindHuman/SubjectKindService
 // -- there is no third kind in M1 (see 003_session.up.sql's CHECK comment).
-func parseSubject(s subjectRequest) (store.Subject, error) {
+// Exported (issue #2827) so krill/mcp/tools' init_session tool validates a
+// caller-supplied Subject identically to this handler (LB7).
+func ParseSubject(s SubjectRequest) (store.Subject, error) {
 	if s.Iss == "" {
 		return store.Subject{}, fmt.Errorf("iss is required")
 	}
