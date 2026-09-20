@@ -136,6 +136,7 @@ func (w *scheduledBackupWorker) Work(ctx context.Context, job *river.Job[schedul
 			BackupConfigID:     &cfg.BackupConfigID,
 			VolumeID:           &volume.VolumeID,
 			Status:             manman.BackupStatusPending,
+			TriggerSource:      manman.BackupTriggerSourceScheduled,
 			CreatedAt:          time.Now(),
 		}
 		backup, err = w.repo.Backups.Create(ctx, backup)

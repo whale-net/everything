@@ -20,11 +20,14 @@ func (r *BackupRepository) Create(ctx context.Context, backup *manman.Backup) (*
 	query := `
 		INSERT INTO backups (
 			session_id, server_game_config_id, backup_config_id, volume_id,
-			s3_url, size_bytes, status, description, created_at
+			s3_url, size_bytes, status, description, trigger_source, created_at
 		)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
 		RETURNING backup_id
 	`
+	if backup.TriggerSource == "" {
+		backup.TriggerSource = manman.BackupTriggerSourceUnknown
+	}
 	err := r.db.QueryRow(ctx, query,
 		backup.SessionID,
 		backup.ServerGameConfigID,
@@ -34,6 +37,7 @@ func (r *BackupRepository) Create(ctx context.Context, backup *manman.Backup) (*
 		backup.SizeBytes,
 		backup.Status,
 		backup.Description,
+		backup.TriggerSource,
 		backup.CreatedAt,
 	).Scan(&backup.BackupID)
 	return backup, err
@@ -42,13 +46,13 @@ func (r *BackupRepository) Create(ctx context.Context, backup *manman.Backup) (*
 func (r *BackupRepository) Get(ctx context.Context, backupID int64) (*manman.Backup, error) {
 	query := `
 		SELECT backup_id, session_id, server_game_config_id, backup_config_id, volume_id,
-		       s3_url, size_bytes, status, error_message, description, created_at
+		       s3_url, size_bytes, status, error_message, description, trigger_source, created_at
 		FROM backups WHERE backup_id = $1 AND deleted_at IS NULL
 	`
 	b := &manman.Backup{}
 	err := r.db.QueryRow(ctx, query, backupID).Scan(
 		&b.BackupID, &b.SessionID, &b.ServerGameConfigID, &b.BackupConfigID, &b.VolumeID,
-		&b.S3URL, &b.SizeBytes, &b.Status, &b.ErrorMessage, &b.Description, &b.CreatedAt,
+		&b.S3URL, &b.SizeBytes, &b.Status, &b.ErrorMessage, &b.Description, &b.TriggerSource, &b.CreatedAt,
 	)
 	if err != nil {
 		return nil, err
@@ -59,7 +63,7 @@ func (r *BackupRepository) Get(ctx context.Context, backupID int64) (*manman.Bac
 func (r *BackupRepository) List(ctx context.Context, sgcID *int64, sessionID *int64, limit int, offset int) ([]*manman.Backup, error) {
 	query := `
 		SELECT backup_id, session_id, server_game_config_id, backup_config_id, volume_id,
-		       s3_url, size_bytes, status, error_message, description, created_at
+		       s3_url, size_bytes, status, error_message, description, trigger_source, created_at
 		FROM backups
 		WHERE ($1::bigint IS NULL OR server_game_config_id = $1)
 		  AND ($2::bigint IS NULL OR session_id = $2)
@@ -78,7 +82,7 @@ func (r *BackupRepository) List(ctx context.Context, sgcID *int64, sessionID *in
 		b := &manman.Backup{}
 		if err := rows.Scan(
 			&b.BackupID, &b.SessionID, &b.ServerGameConfigID, &b.BackupConfigID, &b.VolumeID,
-			&b.S3URL, &b.SizeBytes, &b.Status, &b.ErrorMessage, &b.Description, &b.CreatedAt,
+			&b.S3URL, &b.SizeBytes, &b.Status, &b.ErrorMessage, &b.Description, &b.TriggerSource, &b.CreatedAt,
 		); err != nil {
 			return nil, err
 		}
