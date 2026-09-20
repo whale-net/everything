@@ -339,6 +339,14 @@ elif get_env_bool('ENABLE_APP_REGISTRY_WORKER', default='true'):
 # the same app_registry database, not a second one. Local dev runs with
 # AUTH_MODE=none / GRPC_AUTH_MODE=none, same as the API above.
 if get_env_bool('ENABLE_APP_REGISTRY_UI', default='true'):
+    # UI replica count -- defaults to 1 (unchanged normal local dev). Only
+    # #1706's live multi-replica SSE fan-out verification (NFR17(a)) needs
+    # this above 1: `htmxsse.Hub`'s per-replica server-named queue fan-out
+    # is a broker property that a single replica cannot exercise (see
+    # TESTING.md's "Live environment testing (NFR17)" section). Do not
+    # leave this at 2 for ordinary local dev -- one replica is simpler to
+    # reason about for every other workflow in this file.
+    ui_replicas = int(os.environ.get('APP_REGISTRY_UI_REPLICAS', '1'))
     k8s_yaml(blob("""
 apiVersion: v1
 kind: Service
@@ -359,7 +367,7 @@ metadata:
   name: app-registry-ui
   namespace: {namespace}
 spec:
-  replicas: 1
+  replicas: {ui_replicas}
   selector:
     matchLabels:
       app: app-registry-ui
@@ -393,6 +401,7 @@ spec:
           value: "{rabbitmq_url}"
 """.format(
         namespace=namespace,
+        ui_replicas=ui_replicas,
         pg_database_url=pg_database_url,
         otel_endpoint=otel_endpoint,
         rabbitmq_url=rabbitmq_url,

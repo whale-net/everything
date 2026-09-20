@@ -1,0 +1,24 @@
+load("@rules_go//go:def.bzl", "go_binary", "go_library")
+
+# The committed, re-runnable procedure for #1706 (NFR17(a), closes #1138's
+# exit criterion) -- see main.go's package doc and TESTING.md's "Live
+# environment testing (NFR17)" section for how to run it against a Tilt
+# cluster.
+go_binary(
+    name = "verify_multi_replica_sse",
+    embed = [":verify_multi_replica_sse_lib"],
+    visibility = ["//visibility:public"],
+)
+
+go_library(
+    name = "verify_multi_replica_sse_lib",
+    srcs = ["main.go"],
+    importpath = "github.com/whale-net/everything/tools/app_registry/scripts/verify_multi_replica_sse",
+    visibility = ["//visibility:private"],
+    deps = [
+        "//libs/go/db",
+        "//libs/go/rmq",
+        "//tools/app_registry/events",
+        "@com_github_jackc_pgx_v5//pgxpool",
+    ],
+)
