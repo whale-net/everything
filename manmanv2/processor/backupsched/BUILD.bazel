@@ -11,8 +11,6 @@ go_library(
     visibility = ["//visibility:public"],
     deps = [
         "//libs/go/logging",
-        "//libs/go/rmq",
-        "//libs/go/s3",
         "//manmanv2/api/repository",
         "//manmanv2/api/repository/postgres",
         "//manmanv2/host/rmq",
@@ -26,6 +24,19 @@ go_library(
 
 go_test(
     name = "backupsched_test",
-    srcs = ["backupsched_test.go"],
+    srcs = [
+        "activities_test.go",
+        "backupsched_test.go",
+        "workflow_test.go",
+    ],
     embed = [":backupsched"],
+    deps = [
+        "//manmanv2/api/repository",
+        "//manmanv2/host/rmq",
+        "//manmanv2/models",
+        "@com_github_stretchr_testify//mock",
+        "@com_github_stretchr_testify//require",
+        "@io_temporal_go_sdk//activity",
+        "@io_temporal_go_sdk//testsuite",
+    ],
 )

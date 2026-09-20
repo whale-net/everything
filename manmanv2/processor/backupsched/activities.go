@@ -8,8 +8,6 @@ import (
 	"time"
 
 	"github.com/whale-net/everything/libs/go/logging"
-	"github.com/whale-net/everything/libs/go/rmq"
-	s3lib "github.com/whale-net/everything/libs/go/s3"
 	"github.com/whale-net/everything/manmanv2/api/repository"
 	"github.com/whale-net/everything/manmanv2/api/repository/postgres"
 	hostrmq "github.com/whale-net/everything/manmanv2/host/rmq"
@@ -24,6 +22,21 @@ import (
 // precedent.
 var log = logging.Get("manmanv2-backupsched")
 
+// Publisher is the narrow publish surface DispatchBackup needs.
+// *rmq.Publisher satisfies it in production (main.go wires one in
+// unchanged); tests substitute a fake that records the exchange, routing
+// key and body so the FR17 wire-shape test can assert on them without a
+// real RabbitMQ connection.
+type Publisher interface {
+	Publish(ctx context.Context, exchange, routingKey string, body interface{}) error
+}
+
+// Presigner is the narrow S3 surface DispatchBackup needs. *s3lib.Client
+// satisfies it in production; tests substitute a fake presigned URL.
+type Presigner interface {
+	PresignPutURL(ctx context.Context, key string, ttl time.Duration) (string, error)
+}
+
 // Activities holds the dependencies ListDueBackupConfigs and DispatchBackup
 // need: the shared repository, the action-template repository, the RMQ
 // publisher, and the S3 client — the same four scheduledBackupWorker
@@ -33,8 +46,8 @@ var log = logging.Get("manmanv2-backupsched")
 type Activities struct {
 	Repo       *repository.Repository
 	ActionRepo *postgres.ActionRepository
-	Publisher  *rmq.Publisher
-	S3Client   *s3lib.Client
+	Publisher  Publisher
+	S3Client   Presigner
 }
 
 // ListDueBackupConfigs returns every enabled BackupConfig due for a backup
