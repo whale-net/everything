@@ -213,6 +213,7 @@ var manmanv2RouteTable = []string{
 	"/backups/runs",         // #2812 M7: "Backup runs" tab's htmx fragment (filter submit + "Load more")
 	"/backups/trigger-form", // #2813 M7: fleet-wide "trigger a backup run" picker fragment (FR5)
 	"/backups/trigger",      // #2813 M7: fleet-wide "trigger a backup run" submit target (FR5)
+	"/backups/runs/1",       // #2814 M7: single backup-run detail view (FR6)
 	"/api/dashboard-summary",
 	"/api/dashboard-sessions",
 }
