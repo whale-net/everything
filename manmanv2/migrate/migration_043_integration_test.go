@@ -152,8 +152,8 @@ func migrateTo42_043(ctx context.Context, t *testing.T, db *dbtest.Postgres, sql
 	if err != nil {
 		t.Fatalf("LatestVersion: %v", err)
 	}
-	if latest != 43 {
-		t.Fatalf("expected the latest migration source version to be 43, got %d -- update this test if a newer migration has since landed", latest)
+	if latest != 44 {
+		t.Fatalf("expected the latest migration source version to be 44, got %d -- update this test if a newer migration has since landed", latest)
 	}
 
 	if err := runner.Migrate(42); err != nil {
@@ -182,18 +182,21 @@ func TestMigration043_AppliesOnTopOfFullHistoryAndDropsTable(t *testing.T) {
 	sqlDB := openMigrateTestDB043(t, db)
 
 	runner := migrate.NewRunner(sqlDB, migrations, "migrations")
-	if err := runner.Up(); err != nil {
-		t.Fatalf("Up (applying every migration through 043): %v", err)
+	// Target version 43 explicitly rather than Up() (which now also
+	// applies 044) -- this test is about migration 043 specifically, not
+	// "whatever the latest migration happens to be".
+	if err := runner.Migrate(43); err != nil {
+		t.Fatalf("Migrate(43) (applying every migration through 043): %v", err)
 	}
 	version, dirty, err := runner.Version()
 	if err != nil {
 		t.Fatalf("Version: %v", err)
 	}
 	if dirty {
-		t.Fatalf("expected clean state after Up, got dirty")
+		t.Fatalf("expected clean state after Migrate(43), got dirty")
 	}
 	if version != 43 {
-		t.Fatalf("expected version 43 after Up, got %d", version)
+		t.Fatalf("expected version 43 after Migrate(43), got %d", version)
 	}
 
 	if sgcWorkshopLibrariesTableExists043(ctx, t, db) {
@@ -318,15 +321,18 @@ func TestMigration043_DownRecreatesEmptyTable(t *testing.T) {
 	sqlDB := openMigrateTestDB043(t, db)
 
 	runner := migrate.NewRunner(sqlDB, migrations, "migrations")
-	if err := runner.Up(); err != nil {
-		t.Fatalf("Up: %v", err)
+	// Target version 43 explicitly rather than Up() (which now also
+	// applies 044) -- same rationale as the other migration integration
+	// tests' use of Migrate(N) over a relative Up()/Steps() call.
+	if err := runner.Migrate(43); err != nil {
+		t.Fatalf("Migrate(43): %v", err)
 	}
 	if sgcWorkshopLibrariesTableExists043(ctx, t, db) {
-		t.Fatal("sanity check: sgc_workshop_libraries should be dropped after Up")
+		t.Fatal("sanity check: sgc_workshop_libraries should be dropped after Migrate(43)")
 	}
 
-	if err := runner.Steps(-1); err != nil {
-		t.Fatalf("Steps(-1) (rolling back migration 043): %v", err)
+	if err := runner.Migrate(42); err != nil {
+		t.Fatalf("Migrate(42) (rolling back migration 043): %v", err)
 	}
 	version, dirty, err := runner.Version()
 	if err != nil {
