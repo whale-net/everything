@@ -6,6 +6,17 @@ re-deriving spec-axis content (NFR4/LB7)."""
 
 load("@rules_go//go:def.bzl", "go_library", "go_test")
 
+# payload.go, exposed as source data so
+# //krill/conformance:roundtrip_integration_test's NFR5 grep assertion
+# (issue #2728) can read its real, committed content through Bazel
+# runfiles -- mirrors store/BUILD.bazel's and api/handlers/BUILD.bazel's
+# own identical filegroups for the rest of the same audit.
+filegroup(
+    name = "work_axis_srcs",
+    srcs = ["payload.go"],
+    visibility = ["//krill/conformance:__pkg__"],
+)
+
 go_library(
     name = "work",
     srcs = ["payload.go"],

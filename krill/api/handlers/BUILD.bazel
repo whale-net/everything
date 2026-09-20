@@ -42,6 +42,18 @@ returning the same //krill/work Assembler payload task_payload.go's GET
 
 load("@rules_go//go:def.bzl", "go_library", "go_test")
 
+# The work-axis HTTP handler source files (issue #2719-#2727) this package
+# added, exposed as source data so
+# //krill/conformance:roundtrip_integration_test's NFR5 grep assertion
+# (issue #2728) can read their real, committed content through Bazel
+# runfiles -- mirrors store/BUILD.bazel's own identical filegroup for the
+# store-layer half of the same audit.
+filegroup(
+    name = "work_axis_srcs",
+    srcs = glob(["task*.go"], exclude = ["*_test.go"]),
+    visibility = ["//krill/conformance:__pkg__"],
+)
+
 go_library(
     name = "handlers",
     srcs = [
