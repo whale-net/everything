@@ -192,13 +192,31 @@ spec:
     )
     print("🔌 api forwarded to http://localhost:8083 (/healthz)")
 
+# whagent-net trust configuration -- mirrors audience_score_system/Tiltfile's
+# own block exactly (same whagent-net dev instance: namespace
+# 'whagent-net-local-dev', api Service 'whagent-net-api', JWKS port 8090,
+# issuer "whagent-net"). Setting these mounts the agent front door
+# ALONGSIDE the mcpauth door (server.NewDualAuthHTTPHandler), never in
+# place of it -- a caller with no whagent Claim still gets the mcpauth
+# (Swarm Operator) door. Run whagent_net's own `tilt up` alongside this
+# one for the JWKS endpoint to actually resolve.
+krill_whagent_jwks_url = get_custom_or_default(
+    'BUILD_WHAGENT_ENV', 'KRILL_MCP_WHAGENT_JWKS_URL',
+    'http://whagent-net-api.whagent-net-local-dev.svc.cluster.local:8090/.well-known/jwks.json',
+)
+krill_whagent_issuer = get_custom_or_default('BUILD_WHAGENT_ENV', 'KRILL_MCP_WHAGENT_ISSUER', 'whagent-net')
+
 # mcp: krill's FR10/NFR1 spec surface -- /mcp/spec, guarded by the
 # mcpauth + whagent-net two-front-door pattern (../ARCHITECTURE.md "The
-# MCP spec surface"). Both front doors are independently env-gated; local
-# dev leaves KRILL_MCP_WHAGENT_JWKS_URL/KRILL_MCP_WHAGENT_ISSUER unset
-# (agent door disabled). KRILL_MCP_OAUTH_ISSUER points at `ui` (below) --
-# migration 006_mcpauth_credential now backs the mcpauth door for real,
-# but `/authorize` itself is served by `ui`, not `mcp`.
+# MCP spec surface"). Both front doors are independently env-gated;
+# KRILL_MCP_WHAGENT_JWKS_URL/KRILL_MCP_WHAGENT_ISSUER now default to
+# whagent-net's local dev instance above (agent door enabled) -- a whagent-
+# net-authenticated caller still needs an actual agent_definition row
+# registered for krill (whagent_net/config/agents.yaml's doc comment: "a
+# human inserts these rows by hand") before any real Claim can be minted
+# against it. KRILL_MCP_OAUTH_ISSUER points at `ui` (below) -- migration
+# 006_mcpauth_credential now backs the mcpauth door for real, but
+# `/authorize` itself is served by `ui`, not `mcp`.
 if get_env_bool('ENABLE_KRILL_MCP', default='true'):
     k8s_yaml(blob("""
 apiVersion: v1
@@ -244,12 +262,18 @@ spec:
           value: "http://localhost:8084"
         - name: KRILL_MCP_OAUTH_ISSUER
           value: "http://localhost:8085"
+        - name: KRILL_MCP_WHAGENT_JWKS_URL
+          value: "{krill_whagent_jwks_url}"
+        - name: KRILL_MCP_WHAGENT_ISSUER
+          value: "{krill_whagent_issuer}"
         - name: OTEL_EXPORTER_OTLP_ENDPOINT
           value: "{otel_endpoint}"
 """.format(
         namespace=namespace,
         pg_database_url=pg_database_url,
         otel_endpoint=otel_endpoint,
+        krill_whagent_jwks_url=krill_whagent_jwks_url,
+        krill_whagent_issuer=krill_whagent_issuer,
     )))
 
     mcp_deps = []
