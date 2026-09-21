@@ -76,8 +76,9 @@ templ Blade(data BladeData) {
   // into the script body) is how the dynamic per-instance id gets in here
   // -- templ text interpolation inside a <script> body is HTML-escaped
   // text, not a JS-safe value, so the id travels as an attribute instead
-  // (same reason live_indicator.templ's heartbeat interval travels via
-  // data-heartbeat-ms rather than being spliced into its script body).
+  // (same reason liveindicator.LiveIndicator's heartbeat interval travels
+  // via data-live-heartbeat-ms rather than being spliced into its script
+  // body).
   // This also means a plain <script> (not type="module"), since
   // document.currentScript is always null inside a module script.
   const self = document.currentScript;

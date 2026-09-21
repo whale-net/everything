@@ -101,7 +101,7 @@ templ Activity(layout components.LayoutData, data ActivityPageData) {
 		@components.HeroHeader("Activity", "Fleet-wide view of what is running now and what ran before")
 		@ActivityFilters(data.FilterGameID, data.FilterStatus)
 		if data.LiveUpdatesEnabled {
-			@ActivityLiveRegion(data.HeartbeatIntervalMs) {
+			@ActivityLiveRegion(data.LiveTopics, data.HeartbeatIntervalMs) {
 				@ActivityLiveContent(data)
 			}
 		} else {
@@ -116,9 +116,10 @@ templ Activity(layout components.LayoutData, data ActivityPageData) {
 // Activity's own fleet-wide SSE path and reload target -- see
 // handlers_activity_live.go's handleActivityLiveSSE doc comment for the
 // fleet-wide topic/authorization-set contract this pairs with.
-templ ActivityLiveRegion(heartbeatIntervalMs int) {
+templ ActivityLiveRegion(liveTopics []string, heartbeatIntervalMs int) {
 	@components.LiveRegion(components.LiveRegionOptions{
 		SSEPath:             "/api/live/activity",
+		Topics:              liveTopics,
 		HeartbeatIntervalMs: heartbeatIntervalMs,
 		ReloadHref:          "/activity",
 	}) {
