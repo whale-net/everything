@@ -2,8 +2,11 @@
 // abandon_task, a thin wrapper over store.TaskStore.AbandonClaim
 // (krill/store/task_abandon.go), mirroring
 // krill/api/handlers/task_abandon.go's HTTP surface for the same
-// capability (LB7). Restricted to PersonaAgent, mirroring claim_task/
-// complete_task -- the Agent holding a claim is the one that abandons it.
+// capability (LB7). Originally restricted to PersonaAgent only, mirroring
+// claim_task/complete_task -- the Agent holding a claim is the one that
+// abandons it -- but also allow-listed to PersonaSwarmOperator as of issue
+// #2926's follow-up (see task_claim.go's doc comment for why: no
+// whagent-net JWT-minting path exists for krill-work yet, issue #2932).
 // abandonTaskInput declares no verdict field of any kind (FR9): abandoning
 // reports no outcome.
 //
@@ -46,7 +49,7 @@ func RegisterAbandonTask(reg *server.Registry, sessions store.SessionStore, task
 	server.RegisterWrite(reg, &mcp.Tool{
 		Name:        "abandon_task",
 		Description: "Abandon a claimed task without reporting a verdict (FR9): releases the claim immediately, leaves the task's current lane unchanged, and counts as an attempt against the same cap a lease-expiry lapse counts against. Returns the task's full payload document.",
-	}, []server.Persona{server.PersonaAgent}, func(ctx context.Context, _ *mcp.CallToolRequest, in abandonTaskInput) (*mcp.CallToolResult, work.Payload, error) {
+	}, []server.Persona{server.PersonaAgent, server.PersonaSwarmOperator}, func(ctx context.Context, _ *mcp.CallToolRequest, in abandonTaskInput) (*mcp.CallToolResult, work.Payload, error) {
 		var zero work.Payload
 
 		sess, err := requireKrillSession(ctx, sessions, in.KrillSessionID)
