@@ -237,22 +237,68 @@ func (app *App) handleBackupRunDelete(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-// handleBackupRunRoute dispatches the "/backups/runs/" subtree (registered
-// once in main.go's setupRoutes) between the two shapes it serves: "POST
-// /backups/runs/{id}/delete" (task #2815, FR7/FR8) and "GET /backups/runs/
-// {id}" (task #2814, FR6). net/http.ServeMux panics at registration time if
-// two handlers are registered on the same pattern, so both tasks' handlers
-// stay as separate functions and this dispatches between them on the
-// trailing "/delete" segment -- not on method alone, so a non-POST request
-// to the delete path still reaches handleBackupRunDelete and gets its own
-// 405 rather than falling through to handleBackupRunDetail's id parsing
-// (which would otherwise 404 on the non-numeric "delete" segment).
-func (app *App) handleBackupRunRoute(w http.ResponseWriter, r *http.Request) {
-	if strings.HasSuffix(strings.Trim(r.URL.Path, "/"), "/delete") {
-		app.handleBackupRunDelete(w, r)
+// handleBackupRunDownload serves "GET /backups/runs/{backup_id}/download":
+// mints a fresh short-lived pre-signed public S3 URL for the run's archive
+// via the API's GetBackupDownloadURL RPC and redirects the browser straight
+// to it, rather than ever rendering a presigned URL server-side into the
+// detail page -- that URL would go stale the moment its TTL passes, and the
+// detail page is a static GET that can be viewed long after it was
+// generated. A run with no archive yet (pending/running/failed) gets an
+// inline notice instead of a 500.
+func (app *App) handleBackupRunDownload(w http.ResponseWriter, r *http.Request) {
+	// "/backups/runs/{backup_id}/download"
+	pathParts := strings.Split(strings.Trim(r.URL.Path, "/"), "/")
+	if len(pathParts) != 4 || pathParts[3] != "download" {
+		http.Error(w, "Invalid path", http.StatusBadRequest)
 		return
 	}
-	app.handleBackupRunDetail(w, r)
+	backupID, err := strconv.ParseInt(pathParts[2], 10, 64)
+	if err != nil {
+		http.Error(w, "Invalid backup ID", http.StatusBadRequest)
+		return
+	}
+
+	ctx := r.Context()
+	resp, err := app.grpc.GetBackupDownloadURL(ctx, backupID)
+	if err != nil {
+		switch status.Code(err) {
+		case codes.NotFound:
+			http.NotFound(w, r)
+			return
+		case codes.FailedPrecondition:
+			http.Error(w, "This run has no archive uploaded yet.", http.StatusConflict)
+			return
+		default:
+			log.Printf("ERROR: backups: failed to get download URL for backup run %d: %v", backupID, err)
+			http.Error(w, "Internal server error", http.StatusInternalServerError)
+			return
+		}
+	}
+
+	http.Redirect(w, r, resp.PresignedUrl, http.StatusFound)
+}
+
+// handleBackupRunRoute dispatches the "/backups/runs/" subtree (registered
+// once in main.go's setupRoutes) between the shapes it serves: "POST
+// /backups/runs/{id}/delete" (task #2815, FR7/FR8), "GET /backups/runs/
+// {id}/download" (backup detail download link), and "GET /backups/runs/
+// {id}" (task #2814, FR6). net/http.ServeMux panics at registration time if
+// two handlers are registered on the same pattern, so these handlers stay as
+// separate functions and this dispatches between them on the trailing path
+// segment -- not on method alone, so a non-POST request to the delete path
+// still reaches handleBackupRunDelete and gets its own 405 rather than
+// falling through to handleBackupRunDetail's id parsing (which would
+// otherwise 404 on the non-numeric "delete"/"download" segment).
+func (app *App) handleBackupRunRoute(w http.ResponseWriter, r *http.Request) {
+	trimmed := strings.Trim(r.URL.Path, "/")
+	switch {
+	case strings.HasSuffix(trimmed, "/delete"):
+		app.handleBackupRunDelete(w, r)
+	case strings.HasSuffix(trimmed, "/download"):
+		app.handleBackupRunDownload(w, r)
+	default:
+		app.handleBackupRunDetail(w, r)
+	}
 }
 
 // parseBackupRunID extracts the backup id from "/backups/runs/{id}", the

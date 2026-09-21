@@ -134,7 +134,8 @@ templ BackupRunDetail(data BackupRunDetailData) {
 		<div class="bg-base-100 rounded-box border border-base-300 p-5 mb-6">
 			<h2 class="text-lg font-semibold mb-3">S3 location</h2>
 			if url, hasURL, reason := backupRunS3State(data.Backup); hasURL {
-				<a href={ templ.URL(url) } class="link link-primary font-mono break-all">{ url }</a>
+				<p class="font-mono break-all text-base-content/80 mb-3">{ url }</p>
+				<a href={ templ.URL(fmt.Sprintf("/backups/runs/%d/download", data.Backup.BackupId)) } class="btn btn-sm btn-primary">Download</a>
 			} else {
 				<p class="text-base-content/60">{ reason }</p>
 			}

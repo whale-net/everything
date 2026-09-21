@@ -65,6 +65,7 @@ service ManManAPI {
   rpc GetBackup(GetBackupRequest) returns (GetBackupResponse);
   rpc DeleteBackup(DeleteBackupRequest) returns (DeleteBackupResponse);
   rpc TriggerBackup(TriggerBackupRequest) returns (TriggerBackupResponse);
+  rpc GetBackupDownloadURL(GetBackupDownloadURLRequest) returns (GetBackupDownloadURLResponse);
 
   // BackupConfig management
   rpc CreateBackupConfig(CreateBackupConfigRequest) returns (CreateBackupConfigResponse);

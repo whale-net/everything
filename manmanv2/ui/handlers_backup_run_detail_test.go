@@ -7,6 +7,8 @@ import (
 	"testing"
 
 	manmanpb "github.com/whale-net/everything/manmanv2/protos"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 )
 
 // This file guards task #2814 (root plan #2777, M7): the single-backup-run
@@ -68,7 +70,7 @@ func TestHandleBackupRunDetail_CompletedRunRendersStatusS3SizeAndActions(t *test
 		t.Fatalf("status = %d, want %d; body: %s", code, http.StatusOK, body)
 	}
 
-	for _, want := range []string{"completed", "s3://backups/run-1.tar.gz", "2.0 MB", "Flush database", "Snapshot volume", "scheduled"} {
+	for _, want := range []string{"completed", "s3://backups/run-1.tar.gz", "2.0 MB", "Flush database", "Snapshot volume", "scheduled", `href="/backups/runs/1/download"`, "Download"} {
 		if !strings.Contains(body, want) {
 			t.Errorf("expected %q in rendered detail page, got: %s", want, body)
 		}
@@ -127,6 +129,9 @@ func TestHandleBackupRunDetail_PendingRunRendersNoS3StateNotBrokenLink(t *testin
 	}
 	if !strings.Contains(body, "Not yet available") {
 		t.Errorf("expected the explicit pending S3 state, got: %s", body)
+	}
+	if strings.Contains(body, "/download") {
+		t.Errorf("expected no download link for a run with no S3 object yet, got: %s", body)
 	}
 }
 
@@ -187,5 +192,78 @@ func TestHandleBackupRunDetail_NoBackupConfigRendersExplicitNoneState(t *testing
 	}
 	if strings.Contains(body, "No Actions attached") {
 		t.Errorf("a manual run with no backup_config_id must render the \"none\" state, not the has-a-config-but-empty state; got: %s", body)
+	}
+}
+
+// --- download link: "GET /backups/runs/{id}/download" mints a fresh
+// pre-signed public S3 URL and redirects the browser to it -----------------
+
+func renderBackupRunRouteHTTP(t *testing.T, api *fakeBackupsFleetAPIClient, path string, method string) (int, *httptest.ResponseRecorder) {
+	t.Helper()
+	app := newBackupsFleetTestApp(api)
+	req := httptest.NewRequest(method, path, nil)
+	w := httptest.NewRecorder()
+	app.handleBackupRunRoute(w, req)
+	return w.Code, w
+}
+
+func TestHandleBackupRunDownload_RedirectsToFreshPresignedURL(t *testing.T) {
+	api := baseBackupsFleetFixture()
+	const presignedURL = "https://s3.example.com/backups/run-1.tar.gz?X-Amz-Signature=abc"
+	api.getBackupDownloadURLResp = &manmanpb.GetBackupDownloadURLResponse{PresignedUrl: presignedURL}
+
+	code, w := renderBackupRunRouteHTTP(t, api, "/backups/runs/1/download", http.MethodGet)
+	if code != http.StatusFound {
+		t.Fatalf("status = %d, want %d; body: %s", code, http.StatusFound, w.Body.String())
+	}
+	if loc := w.Header().Get("Location"); loc != presignedURL {
+		t.Errorf("Location = %q, want %q", loc, presignedURL)
+	}
+	if api.lastGetBackupDownloadURLReq == nil || api.lastGetBackupDownloadURLReq.BackupId != 1 {
+		t.Errorf("expected GetBackupDownloadURL called with backup_id=1, got: %+v", api.lastGetBackupDownloadURLReq)
+	}
+}
+
+func TestHandleBackupRunDownload_NoArchiveYetReturnsConflictNotServerError(t *testing.T) {
+	api := baseBackupsFleetFixture()
+	api.getBackupDownloadURLErr = status.Error(codes.FailedPrecondition, "backup has no S3 URL")
+
+	code, w := renderBackupRunRouteHTTP(t, api, "/backups/runs/2/download", http.MethodGet)
+	if code != http.StatusConflict {
+		t.Errorf("status = %d, want %d; body: %s", code, http.StatusConflict, w.Body.String())
+	}
+}
+
+func TestHandleBackupRunDownload_UnknownIDReturns404(t *testing.T) {
+	api := baseBackupsFleetFixture()
+	api.getBackupDownloadURLErr = status.Error(codes.NotFound, "backup not found")
+
+	code, _ := renderBackupRunRouteHTTP(t, api, "/backups/runs/999/download", http.MethodGet)
+	if code != http.StatusNotFound {
+		t.Errorf("status = %d, want %d for an unknown backup id", code, http.StatusNotFound)
+	}
+}
+
+// TestHandleBackupRunRoute_DispatchesDetailDeleteAndDownloadDistinctly
+// guards handleBackupRunRoute's three-way trailing-segment dispatch: adding
+// "/download" alongside the existing "/delete" dispatch must not regress the
+// bare-id detail route or the delete route (both already covered by their
+// own tests above/in handlers_backups_fleet_test.go) -- this only asserts
+// download is reachable through the shared subtree dispatcher, not just
+// when called directly.
+func TestHandleBackupRunRoute_DownloadReachableThroughSharedDispatcher(t *testing.T) {
+	api := baseBackupsFleetFixture()
+	api.backupsByID = map[int64]*manmanpb.Backup{
+		1: {BackupId: 1, ServerGameConfigId: 55, Status: "completed", S3Url: "s3://backups/run-1.tar.gz"},
+	}
+	const presignedURL = "https://s3.example.com/backups/run-1.tar.gz?X-Amz-Signature=abc"
+	api.getBackupDownloadURLResp = &manmanpb.GetBackupDownloadURLResponse{PresignedUrl: presignedURL}
+
+	code, w := renderBackupRunRouteHTTP(t, api, "/backups/runs/1/download", http.MethodGet)
+	if code != http.StatusFound {
+		t.Fatalf("status = %d, want %d; body: %s", code, http.StatusFound, w.Body.String())
+	}
+	if loc := w.Header().Get("Location"); loc != presignedURL {
+		t.Errorf("Location = %q, want %q", loc, presignedURL)
 	}
 }

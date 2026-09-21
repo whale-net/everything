@@ -110,6 +110,14 @@ type fakeBackupsFleetAPIClient struct {
 	// tests can assert the right backup_id was forwarded, not just that
 	// some delete happened.
 	lastDeleteBackupReq *manmanpb.DeleteBackupRequest
+
+	// getBackupDownloadURLResp/getBackupDownloadURLErr back
+	// GetBackupDownloadURL for handleBackupRunDownload (backup detail
+	// download link). lastGetBackupDownloadURLReq captures the most recent
+	// request so tests can assert the right backup_id was forwarded.
+	getBackupDownloadURLResp    *manmanpb.GetBackupDownloadURLResponse
+	getBackupDownloadURLErr     error
+	lastGetBackupDownloadURLReq *manmanpb.GetBackupDownloadURLRequest
 }
 
 func (f *fakeBackupsFleetAPIClient) DeleteBackup(ctx context.Context, in *manmanpb.DeleteBackupRequest, opts ...grpc.CallOption) (*manmanpb.DeleteBackupResponse, error) {
@@ -118,6 +126,17 @@ func (f *fakeBackupsFleetAPIClient) DeleteBackup(ctx context.Context, in *manman
 		return nil, f.deleteBackupErr
 	}
 	return &manmanpb.DeleteBackupResponse{}, nil
+}
+
+func (f *fakeBackupsFleetAPIClient) GetBackupDownloadURL(ctx context.Context, in *manmanpb.GetBackupDownloadURLRequest, opts ...grpc.CallOption) (*manmanpb.GetBackupDownloadURLResponse, error) {
+	f.lastGetBackupDownloadURLReq = in
+	if f.getBackupDownloadURLErr != nil {
+		return nil, f.getBackupDownloadURLErr
+	}
+	if f.getBackupDownloadURLResp != nil {
+		return f.getBackupDownloadURLResp, nil
+	}
+	return &manmanpb.GetBackupDownloadURLResponse{PresignedUrl: "https://s3.example.com/backups/run.tar.gz?X-Amz-Signature=abc"}, nil
 }
 
 func (f *fakeBackupsFleetAPIClient) ListServers(ctx context.Context, in *manmanpb.ListServersRequest, opts ...grpc.CallOption) (*manmanpb.ListServersResponse, error) {
