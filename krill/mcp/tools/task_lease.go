@@ -1,9 +1,12 @@
 // This file (issue #2723, FR6, C14) is krill's work-axis heartbeat MCP
 // tool: heartbeat_task, a thin wrapper over store.TaskStore.Heartbeat
 // (krill/store/task_lease.go), mirroring krill/api/handlers/task_lease.go's
-// HTTP surface for the same capability (LB7). Restricted to PersonaAgent,
-// same as claim_task -- the Agent, not the Swarm Operator, is the one
-// actively working a claimed task.
+// HTTP surface for the same capability (LB7). Originally restricted to
+// PersonaAgent only, same as claim_task -- the Agent, not the Swarm
+// Operator, is the one actively working a claimed task -- but also
+// allow-listed to PersonaSwarmOperator as of issue #2926's follow-up (see
+// task_claim.go's doc comment for why: no whagent-net JWT-minting path
+// exists for krill-work yet, issue #2932).
 package tools
 
 import (
@@ -38,7 +41,7 @@ func RegisterHeartbeatTask(reg *server.Registry, sessions store.SessionStore, ta
 	server.RegisterWrite(reg, &mcp.Tool{
 		Name:        "heartbeat_task",
 		Description: "Extend a currently-held claim's lease (FR6). Rejected if the caller's claim is no longer the task's current, live claim -- a slow run must not resume writing to a task another run now owns.",
-	}, []server.Persona{server.PersonaAgent}, func(ctx context.Context, _ *mcp.CallToolRequest, in heartbeatTaskInput) (*mcp.CallToolResult, handlers.HeartbeatResponse, error) {
+	}, []server.Persona{server.PersonaAgent, server.PersonaSwarmOperator}, func(ctx context.Context, _ *mcp.CallToolRequest, in heartbeatTaskInput) (*mcp.CallToolResult, handlers.HeartbeatResponse, error) {
 		var zero handlers.HeartbeatResponse
 
 		sess, err := requireKrillSession(ctx, sessions, in.KrillSessionID)

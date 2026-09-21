@@ -2,10 +2,13 @@
 // recording MCP tool: record_note, a thin wrapper over
 // store.TaskStore.RecordNote (krill/store/task_note.go), mirroring
 // krill/api/handlers/task_note.go's HTTP surface for the same capability
-// (LB7). Restricted to PersonaAgent -- root plan issue #2717's Personas
-// section states the Agent "can record a note against a task or spec
-// entity regardless of whether it holds the claim" (FR11); this milestone's
-// Swarm Operator persona is not named against FR11 at all.
+// (LB7). Originally restricted to PersonaAgent only -- root plan issue
+// #2717's Personas section states the Agent "can record a note against a
+// task or spec entity regardless of whether it holds the claim" (FR11);
+// this milestone's Swarm Operator persona is not named against FR11 at
+// all -- but also allow-listed to PersonaSwarmOperator as of issue #2926's
+// follow-up (see task_claim.go's doc comment for why: no whagent-net
+// JWT-minting path exists for krill-work yet, issue #2932).
 //
 // transition_note_lifecycle (issue #2874, root plan #2851, FR11) is the
 // sibling write tool over store.TaskStore.TransitionNoteLifecycle,
@@ -48,8 +51,8 @@ type recordNoteInput struct {
 func RegisterRecordNote(reg *server.Registry, sessions store.SessionStore, tasks store.TaskStore) {
 	server.RegisterWrite(reg, &mcp.Tool{
 		Name:        "record_note",
-		Description: "Record a flat, immutable note against a task or a spec-axis entity (FR11). Any Agent may call this, whether or not it holds the target task's current claim -- the only gate is an active krill session.",
-	}, []server.Persona{server.PersonaAgent}, func(ctx context.Context, _ *mcp.CallToolRequest, in recordNoteInput) (*mcp.CallToolResult, handlers.IDResponse, error) {
+		Description: "Record a flat, immutable note against a task or a spec-axis entity (FR11). Callable whether or not the caller holds the target task's current claim -- the only gate is an active krill session.",
+	}, []server.Persona{server.PersonaAgent, server.PersonaSwarmOperator}, func(ctx context.Context, _ *mcp.CallToolRequest, in recordNoteInput) (*mcp.CallToolResult, handlers.IDResponse, error) {
 		var zero handlers.IDResponse
 
 		sess, err := requireKrillSession(ctx, sessions, in.KrillSessionID)
