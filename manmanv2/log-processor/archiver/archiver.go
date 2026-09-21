@@ -206,18 +206,24 @@ func (a *Archiver) closeStaleWindows() {
 	}
 }
 
-// uploadWorker processes windows from the upload queue
+// uploadWorker processes windows from the upload queue until Close closes
+// uploadChan, draining any windows still buffered in it first.
+//
+// This deliberately does not also select on a.ctx.Done(): Close() cancels
+// a.ctx before closing uploadChan, so a select with both a ctx.Done() case
+// and an uploadChan case would have both become ready simultaneously during
+// shutdown, and select chooses pseudo-randomly between ready cases. Picking
+// ctx.Done() could exit with windows still buffered in the channel (silently
+// dropping them); picking the channel after it was closed handed uploadWindow
+// a nil *MinuteWindow (the zero value of a closed channel receive), which
+// panicked in uploadWindow's window.mu.Lock(). Ranging over the channel
+// avoids both: it only stops once the channel is closed and fully drained.
 func (a *Archiver) uploadWorker() {
 	defer a.wg.Done()
 
-	for {
-		select {
-		case <-a.ctx.Done():
-			return
-		case window := <-a.uploadChan:
-			if err := a.uploadWindow(a.ctx, window); err != nil {
-				a.scheduleRetry(window, err)
-			}
+	for window := range a.uploadChan {
+		if err := a.uploadWindow(a.ctx, window); err != nil {
+			a.scheduleRetry(window, err)
 		}
 	}
 }
