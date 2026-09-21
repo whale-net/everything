@@ -204,7 +204,10 @@ func run() error {
 	// tools.RegisterListCancelledTasks (issue #2873, FR10) are the next
 	// two: cancel_task (write) and list_cancelled_tasks (read), the same
 	// PersonaSwarmOperator-only posture. tools.RegisterListOpenNotes (issue
-	// #2874, FR12) mounts the same way, just below.
+	// #2874, FR12) mounts the same way, just below. tools.RegisterReleaseTask/
+	// RegisterEscalateTask (issue #2872, FR8/FR9) are the next two:
+	// release_task and escalate_task (both write), the same
+	// PersonaSwarmOperator-only posture.
 	opsSrv := server.New()
 	opsReg := server.NewRegistry(opsSrv)
 	tools.RegisterListClaimedTasks(opsReg, entities.Tasks())
@@ -214,6 +217,12 @@ func run() error {
 	// tools.RegisterListOpenNotes (issue #2874, FR12): list_open_notes,
 	// PersonaSwarmOperator only (RegisterOpsRead/the mount itself).
 	tools.RegisterListOpenNotes(opsReg, entities.Tasks())
+
+	// tools.RegisterReleaseTask/RegisterEscalateTask (issue #2872, FR8/FR9):
+	// release_task and escalate_task, PersonaSwarmOperator only
+	// (RegisterOpsWrite/the mount itself).
+	tools.RegisterReleaseTask(opsReg, sessions, entities.Tasks(), assembler)
+	tools.RegisterEscalateTask(opsReg, sessions, entities.Tasks(), assembler)
 
 	// The mcpauth (human) front door's CredentialStore preflights the
 	// consuming domain's credential table at boot -- exactly like

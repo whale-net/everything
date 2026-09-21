@@ -30,7 +30,10 @@
 // TransitionNoteLifecycle/ListOpenNotes stubs exist for the same reason now
 // that task_note_lifecycle.go/task_note_console.go (issue #2874) widen it
 // once more -- task_note_lifecycle_test.go/console_test.go's own later
-// Testing-phase task exercises them.
+// Testing-phase task exercises them. The ReleaseLease/EscalateTask stubs
+// exist for the same reason now that task_release.go/task_escalate.go
+// (issue #2872) widen it once more -- task_release_test.go/
+// task_escalate_test.go's own later Testing-phase task exercises them.
 package handlers_test
 
 import (
@@ -109,6 +112,14 @@ type fakeTaskStore struct {
 	listOpenNotesErr       error
 	listOpenNotesResult    store.Page[store.OpenNoteRow]
 	gotListOpenNotesParams store.ListOpenNotesParams
+
+	releaseErr       error
+	releaseResult    store.ReleaseResult
+	gotReleaseParams store.ReleaseParams
+
+	escalateErr       error
+	escalateResult    store.EscalateResult
+	gotEscalateParams store.EscalateParams
 }
 
 func (f *fakeTaskStore) CreateTask(ctx context.Context, params store.CreateTaskParams) (store.Task, error) {
@@ -248,6 +259,22 @@ func (f *fakeTaskStore) ListOpenNotes(ctx context.Context, params store.ListOpen
 		return store.Page[store.OpenNoteRow]{}, f.listOpenNotesErr
 	}
 	return f.listOpenNotesResult, nil
+}
+
+func (f *fakeTaskStore) ReleaseLease(ctx context.Context, params store.ReleaseParams) (store.ReleaseResult, error) {
+	f.gotReleaseParams = params
+	if f.releaseErr != nil {
+		return store.ReleaseResult{}, f.releaseErr
+	}
+	return f.releaseResult, nil
+}
+
+func (f *fakeTaskStore) EscalateTask(ctx context.Context, params store.EscalateParams) (store.EscalateResult, error) {
+	f.gotEscalateParams = params
+	if f.escalateErr != nil {
+		return store.EscalateResult{}, f.escalateErr
+	}
+	return f.escalateResult, nil
 }
 
 var _ store.TaskStore = (*fakeTaskStore)(nil)
