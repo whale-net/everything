@@ -148,9 +148,11 @@ func TestAbandonTaskHandler_NoReason_Optional(t *testing.T) {
 
 // TestAbandonTaskHandler_StoreRejection_MappedToStatus proves writeStoreError
 // maps AbandonClaim's own named rejections onto the right status:
-// ErrClaimNotCurrent (a stale, foreign, or already-released claim) and
-// ErrAttemptCapExhausted to 409, ErrNotFound to 400 -- never a 500 for any
-// of them.
+// ErrClaimNotCurrent (a stale, foreign, or already-released claim),
+// ErrAttemptCapExhausted, and ErrTaskEscalated (the error recordEscalationTx
+// returns when the task already carries an active escalation, issue #2871's
+// own same-transaction rollback proof) to 409, ErrNotFound to 400 -- never
+// a 500 for any of them.
 func TestAbandonTaskHandler_StoreRejection_MappedToStatus(t *testing.T) {
 	for name, tc := range map[string]struct {
 		err  error
@@ -158,6 +160,7 @@ func TestAbandonTaskHandler_StoreRejection_MappedToStatus(t *testing.T) {
 	}{
 		"claim not current":     {store.ErrClaimNotCurrent, http.StatusConflict},
 		"attempt cap exhausted": {store.ErrAttemptCapExhausted, http.StatusConflict},
+		"task escalated":        {store.ErrTaskEscalated, http.StatusConflict},
 		"not found":             {store.ErrNotFound, http.StatusBadRequest},
 	} {
 		t.Run(name, func(t *testing.T) {

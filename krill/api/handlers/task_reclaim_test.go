@@ -101,16 +101,20 @@ func TestReclaimExpiredHandler_EmptyBody_SweepsWholeScope(t *testing.T) {
 // TestReclaimExpiredHandler_TaskIDInBody_PassedThroughAndNamedInResponse
 // proves a task_id in the request body is passed through as
 // ReclaimParams.TaskID, and that the response names both a reclaimed task
-// and a cap-exhausted one distinctly.
+// and a cap-exhausted one distinctly -- including, for the cap-exhausted
+// one, the escalation_id/escalation_reason issue #2871 (FR3) adds
+// additively to ReclaimedTaskResponse.
 func TestReclaimExpiredHandler_TaskIDInBody_PassedThroughAndNamedInResponse(t *testing.T) {
 	sessions, _, sessionIDStr := newTestSession(t)
 	taskID := uuid.New()
 	reclaimedID := uuid.New()
 	capExhaustedID := uuid.New()
+	escalationID := uuid.New()
+	escalationReason := store.EscalationReasonAttemptCap
 	tasks := &fakeTaskStore{reclaimResult: store.ReclaimResult{
 		Reclaimed: []store.ReclaimedTask{
 			{TaskID: reclaimedID, CapExhausted: false},
-			{TaskID: capExhaustedID, CapExhausted: true},
+			{TaskID: capExhaustedID, CapExhausted: true, EscalationID: &escalationID, EscalationReason: &escalationReason},
 		},
 	}}
 
@@ -125,6 +129,8 @@ func TestReclaimExpiredHandler_TaskIDInBody_PassedThroughAndNamedInResponse(t *t
 	assert.Contains(t, body, capExhaustedID.String())
 	assert.Contains(t, body, `"cap_exhausted":false`)
 	assert.Contains(t, body, `"cap_exhausted":true`)
+	assert.Contains(t, body, escalationID.String(), "the cap-exhausted task's response must name the escalation event it wrote")
+	assert.Contains(t, body, `"escalation_reason":"attempt-cap"`)
 }
 
 // TestReclaimExpiredHandler_UnknownTaskID_Returns400 proves writeStoreError
@@ -137,4 +143,18 @@ func TestReclaimExpiredHandler_UnknownTaskID_Returns400(t *testing.T) {
 	rec := doReclaimRequest(t, handlers.ReclaimExpiredHandler(tasks), sessions, sessionIDStr, `{"task_id":"`+uuid.New().String()+`"}`)
 
 	assert.Equal(t, http.StatusBadRequest, rec.Code, rec.Body.String())
+}
+
+// TestReclaimExpiredHandler_TaskEscalated_Returns409 proves writeStoreError
+// maps store.ErrTaskEscalated -- the error recordEscalationTx (via this
+// same reclaim) returns when the task already carries an active
+// escalation (issue #2871's own same-transaction rollback proof) -- onto
+// 409, not the default 500.
+func TestReclaimExpiredHandler_TaskEscalated_Returns409(t *testing.T) {
+	sessions, _, sessionIDStr := newTestSession(t)
+	tasks := &fakeTaskStore{reclaimErr: store.ErrTaskEscalated}
+
+	rec := doReclaimRequest(t, handlers.ReclaimExpiredHandler(tasks), sessions, sessionIDStr, "")
+
+	assert.Equal(t, http.StatusConflict, rec.Code, rec.Body.String())
 }

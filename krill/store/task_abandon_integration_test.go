@@ -1,7 +1,8 @@
 //go:build integration
 
 // Real-Postgres coverage for TaskStore.AbandonClaim (task_abandon.go, issue
-// #2726's Testing section, FR9): abandon-from-the-current-claimant
+// #2726's Testing section, FR9; attempt-cap escalation issue #2871, root
+// plan #2851's M5, FR3): abandon-from-the-current-claimant
 // accounting (claim released with release_reason='abandon', one
 // `abandoned` task_attempt row, attempt_count+1 from the abandon alone,
 // current_lane untouched, immediate re-claimability by a different
@@ -9,9 +10,11 @@
 // rejected with ErrClaimNotCurrent writing nothing, an already-released
 // claim (via reclaim or complete) rejected the same way, the shared-cap
 // terminal state (abandons alone, and a mix of abandons and lapses, both
-// summing to DefaultAttemptCap refuse re-service with
-// ErrAttemptCapExhausted -- the exact same cap #2724's ReclaimExpired
-// enforces, proving this file adds no second cap check), a heartbeat from
+// summing to DefaultAttemptCap record exactly one task_escalation_event in
+// the same transaction and refuse re-service with ErrTaskEscalated -- the
+// exact same cap #2724's ReclaimExpired enforces, proving this file adds
+// no second cap check or a second escalation path), a same-transaction
+// rollback proof when the escalation insert itself fails, a heartbeat from
 // the abandoning run afterwards rejected (#2723 interaction), and NFR3's
 // two-subject attribution on the abandoned task_attempt row. Shares
 // task_integration_test.go's test-store/test-scope/test-world/subject
@@ -85,6 +88,12 @@ func TestTaskStore_AbandonClaim_CurrentClaimant_ReleasesWithAccounting(t *testin
 	assert.Nil(t, got.CurrentClaimID, "current_claim_id must be cleared")
 	assert.Nil(t, got.LeaseExpiresAt, "lease_expires_at must be cleared")
 	assert.Equal(t, store.LaneScaffold, got.CurrentLane, "current_lane must be untouched by an abandon -- it is not a verdict")
+	assert.Nil(t, got.CurrentEscalationID, "a below-cap abandon must not escalate the task")
+	assert.Nil(t, result.EscalationID, "a below-cap abandon's result must carry no escalation reference")
+
+	var escalationEvents int
+	require.NoError(t, db.Pool.QueryRow(ctx, `SELECT count(*) FROM task_escalation_event WHERE task_id = $1`, task.ID).Scan(&escalationEvents))
+	assert.Equal(t, 0, escalationEvents, "a below-cap abandon must write no task_escalation_event row (issue #2871's FR3 regression)")
 
 	secondSelf := taskTestSubject("agent-2")
 	secondSession := claimTestSession(t, ctx, db, scopeID, secondSelf)
@@ -202,10 +211,13 @@ func TestTaskStore_AbandonClaim_AlreadyReleasedByComplete_Rejected(t *testing.T)
 
 // TestTaskStore_AbandonClaim_AttemptCapReached_RefusesToReserve is issue
 // #2726's Testing section item 4 (the shared-cap terminal state, abandons
-// alone): a task abandoned enough times to reach DefaultAttemptCap reports
-// CapExhausted and refuses re-service -- a subsequent ClaimTask by any
-// session returns the exact same store.ErrAttemptCapExhausted #2724's
-// reclaim path proves, since AbandonClaim adds no cap check of its own.
+// alone), updated by issue #2871's Testing section (FR3): a task abandoned
+// enough times to reach DefaultAttemptCap reports CapExhausted, records
+// exactly one task_escalation_event (reason 'attempt-cap') in the same
+// transaction, sets task.current_escalation_id, and refuses re-service -- a
+// subsequent ClaimTask by any session returns ErrTaskEscalated, not
+// ErrAttemptCapExhausted, since AbandonClaim adds no second cap or
+// escalation path of its own.
 func TestTaskStore_AbandonClaim_AttemptCapReached_RefusesToReserve(t *testing.T) {
 	ctx := context.Background()
 	s, db := newTaskTestStore(t)
@@ -231,18 +243,32 @@ func TestTaskStore_AbandonClaim_AttemptCapReached_RefusesToReserve(t *testing.T)
 	})
 	require.NoError(t, err)
 	assert.True(t, result.CapExhausted, "an abandon that brings attempt_count to DefaultAttemptCap must report CapExhausted")
+	require.NotNil(t, result.EscalationID, "a cap-exhausted abandon must report the escalation event it wrote, in the same call")
+	require.NotNil(t, result.EscalationReason)
+	assert.Equal(t, store.EscalationReasonAttemptCap, *result.EscalationReason)
 
 	got, err := s.Tasks().GetTaskByID(ctx, task.ID)
 	require.NoError(t, err)
 	assert.Equal(t, store.DefaultAttemptCap, got.AttemptCount)
 	assert.Nil(t, got.CurrentClaimID, "a cap-exhausted task must be left claimed by no one")
+	require.NotNil(t, got.CurrentEscalationID)
+	assert.Equal(t, *result.EscalationID, *got.CurrentEscalationID)
+
+	var reason string
+	var counterValue, capValue int
+	require.NoError(t, db.Pool.QueryRow(ctx, `
+		SELECT reason, counter_value, cap_value FROM task_escalation_event WHERE task_id = $1
+	`, task.ID).Scan(&reason, &counterValue, &capValue))
+	assert.Equal(t, "attempt-cap", reason)
+	assert.Equal(t, store.DefaultAttemptCap, counterValue)
+	assert.Equal(t, store.DefaultAttemptCap, capValue)
 
 	otherSession := claimTestSession(t, ctx, db, scopeID, self)
 	_, err = s.Tasks().ClaimTask(ctx, store.ClaimTaskParams{
 		ScopeID: scopeID, TaskID: task.ID, SessionID: otherSession, Acting: self, OnBehalfOf: self,
 	})
-	require.Error(t, err, "any subsequent claim of a cap-exhausted task must be refused")
-	assert.ErrorIs(t, err, store.ErrAttemptCapExhausted)
+	require.Error(t, err, "any subsequent claim of an escalated task must be refused")
+	assert.ErrorIs(t, err, store.ErrTaskEscalated, "an escalated task is refused with ErrTaskEscalated, not ErrAttemptCapExhausted, once the escalation event exists")
 }
 
 // TestTaskStore_AbandonClaim_MixOfAbandonsAndLapses_SharesOneCap is issue
@@ -298,12 +324,19 @@ func TestTaskStore_AbandonClaim_MixOfAbandonsAndLapses_SharesOneCap(t *testing.T
 	assert.Equal(t, 1, lapsedCount, "the mix must include exactly one lapsed attempt")
 	assert.GreaterOrEqual(t, abandonedCount, 1, "the mix must include at least one abandoned attempt")
 
+	require.NotNil(t, lastResult.EscalationID, "whichever call (lapse or abandon) brought the shared counter to the cap must record the escalation")
+	assert.True(t, lastResult.CapExhausted)
+
+	var escalationEvents int
+	require.NoError(t, db.Pool.QueryRow(ctx, `SELECT count(*) FROM task_escalation_event WHERE task_id = $1`, task.ID).Scan(&escalationEvents))
+	assert.Equal(t, 1, escalationEvents, "the mix must record exactly one escalation event, regardless of how many calls contributed to the shared counter")
+
 	otherSession := claimTestSession(t, ctx, db, scopeID, self)
 	_, err = s.Tasks().ClaimTask(ctx, store.ClaimTaskParams{
 		ScopeID: scopeID, TaskID: task.ID, SessionID: otherSession, Acting: self, OnBehalfOf: self,
 	})
 	require.Error(t, err, "a task at the shared cap via a mix of lapses and abandons must refuse any further claim")
-	assert.ErrorIs(t, err, store.ErrAttemptCapExhausted)
+	assert.ErrorIs(t, err, store.ErrTaskEscalated)
 }
 
 // TestTaskStore_AbandonClaim_ZombieHeartbeat_Rejected is issue #2726's
@@ -370,4 +403,69 @@ func TestTaskStore_AbandonClaim_RecordsBothSubjectPairsOnAbandonedAttempt(t *tes
 	assert.Equal(t, "agent-1", actingSub)
 	assert.Equal(t, "human-1", onBehalfOfSub)
 	assert.NotEqual(t, actingSub, onBehalfOfSub, "a distinct acting/on-behalf-of pair must be recorded distinctly, never collapsed into one")
+}
+
+// TestTaskStore_AbandonClaim_AttemptCapEscalation_SameTransactionRollback is
+// issue #2871's Testing section "same-transaction proof": when the
+// escalation insert itself fails (here, because the task already has an
+// active escalation, forcing recordEscalationTx's own one-active-escalation
+// rule to reject it), the entire abandon rolls back with it -- the claim is
+// never marked released, no abandoned task_attempt row is appended, and
+// attempt_count is never incremented.
+func TestTaskStore_AbandonClaim_AttemptCapEscalation_SameTransactionRollback(t *testing.T) {
+	ctx := context.Background()
+	s, db := newTaskTestStore(t)
+	scopeID := newTaskTestScope(t, ctx, db)
+	self := taskTestSubject("agent-1")
+	world := newTaskTestWorld(t, ctx, s, scopeID, self)
+
+	task := createTestTask(t, ctx, s, scopeID, world.milepebbleID, "abandon-rollback-proof", self)
+	sessionID := claimTestSession(t, ctx, db, scopeID, self)
+	claim, err := s.Tasks().ClaimTask(ctx, store.ClaimTaskParams{
+		ScopeID: scopeID, TaskID: task.ID, SessionID: sessionID, Acting: self, OnBehalfOf: self,
+	})
+	require.NoError(t, err)
+
+	// Force attempt_count to one below the cap, exactly like the ordinary
+	// cap-reached test, so this abandon's own increment would reach
+	// DefaultAttemptCap and attempt to escalate -- the failure this test
+	// forces below.
+	_, err = db.Pool.Exec(ctx, `UPDATE task SET attempt_count = $1 WHERE id = $2`, store.DefaultAttemptCap-1, task.ID)
+	require.NoError(t, err)
+
+	rowsBefore := countRows(t, ctx, db, "task_attempt", task.ID)
+
+	var existingEscalationID uuid.UUID
+	require.NoError(t, db.Pool.QueryRow(ctx, `
+		INSERT INTO task_escalation_event (
+			scope_id, task_id, reason, counter_value, cap_value, lane_at_escalation,
+			created_by_acting_iss, created_by_acting_sub, created_by_acting_kind,
+			created_by_on_behalf_of_iss, created_by_on_behalf_of_sub, created_by_on_behalf_of_kind
+		) VALUES ($1, $2, 'manual', NULL, NULL, 'scaffold', 'test', 'planted', 'agent', 'test', 'planted', 'agent')
+		RETURNING id
+	`, scopeID, task.ID).Scan(&existingEscalationID))
+	_, err = db.Pool.Exec(ctx, `UPDATE task SET current_escalation_id = $1 WHERE id = $2`, existingEscalationID, task.ID)
+	require.NoError(t, err)
+
+	_, err = s.Tasks().AbandonClaim(ctx, store.AbandonParams{
+		ScopeID: scopeID, TaskID: task.ID, ClaimID: claim.ID, Acting: self, OnBehalfOf: self,
+	})
+	require.Error(t, err, "an abandon whose own escalation insert fails must fail as a whole")
+	assert.ErrorIs(t, err, store.ErrTaskEscalated)
+
+	stillOpen, err := s.Tasks().GetClaimByID(ctx, claim.ID)
+	require.NoError(t, err)
+	assert.Nil(t, stillOpen.ReleasedAt, "a rolled-back abandon must leave the claim exactly as it was, not released")
+
+	assert.Equal(t, rowsBefore, countRows(t, ctx, db, "task_attempt", task.ID), "a rolled-back abandon must write no abandoned task_attempt row")
+
+	got, err := s.Tasks().GetTaskByID(ctx, task.ID)
+	require.NoError(t, err)
+	assert.Equal(t, store.DefaultAttemptCap-1, got.AttemptCount, "a rolled-back abandon must never increment attempt_count")
+	require.NotNil(t, got.CurrentClaimID, "a rolled-back abandon must leave current_claim_id untouched")
+	assert.Equal(t, claim.ID, *got.CurrentClaimID)
+
+	var escalationEvents int
+	require.NoError(t, db.Pool.QueryRow(ctx, `SELECT count(*) FROM task_escalation_event WHERE task_id = $1`, task.ID).Scan(&escalationEvents))
+	assert.Equal(t, 1, escalationEvents, "only the one planted escalation event must exist -- the failed abandon wrote no second one")
 }
