@@ -227,6 +227,11 @@ func run() error {
 	tools.RegisterReleaseTask(opsReg, sessions, entities.Tasks(), assembler)
 	tools.RegisterEscalateTask(opsReg, sessions, entities.Tasks(), assembler)
 
+	// tools.RegisterListEscalatedTasks (issue #2875, FR5): list_escalated_tasks,
+	// this milestone's headline console query, PersonaSwarmOperator only
+	// (RegisterOpsRead/the mount itself).
+	tools.RegisterListEscalatedTasks(opsReg, entities.Tasks())
+
 	// The mcpauth (human) front door's CredentialStore preflights the
 	// consuming domain's credential table at boot -- exactly like
 	// audience_score_system/mcp/main.go's own NewCredentialStore call.

@@ -204,6 +204,12 @@ func setupRoutes(mux *http.ServeMux, pool *pgxpool.Pool, githubToken string) {
 	// /console/claimed above.
 	mux.HandleFunc("GET /console/cancelled", handlers.ListCancelledTasksHandler(entities.Tasks()))
 
+	// FR5's escalated-task console view (issue #2875): GET
+	// /console/escalated, ungated and scope_id-as-query-parameter like GET
+	// /console/claimed above -- the milestone's headline query, over
+	// store.TaskStore.ListEscalatedTasks.
+	mux.HandleFunc("GET /console/escalated", handlers.ListEscalatedTasksHandler(entities.Tasks()))
+
 	// task_release (issue #2872, FR8): a Swarm Operator force-closes the
 	// active lease on a claimed task directly, independent of lease
 	// expiry -- counts as an attempt against the same DefaultAttemptCap

@@ -1442,15 +1442,19 @@ go_test(
     ],
 )
 
-# Real-Postgres coverage for TaskStore.ListCancelledTasks (task_console.go,
-# issue #2873's Testing section, FR10): only cancelled tasks appear, each
-# row's title/delivery-reference (both shapes)/both cancellation subject
-# pairs, paging default/max/clamp, deterministic order, a continuation
-# walk with no gaps or duplicates, a cross-scope token rejected, and
-# another scope's rows absent. Shares task_integration_test.go's
-# test-store/test-scope/test-world/subject helpers,
-# task_dependency_integration_test.go's createTestTask helper, and
-# task_claim_integration_test.go's claimTestSession helper rather than
+# Real-Postgres coverage for TaskStore.ListCancelledTasks and
+# TaskStore.ListEscalatedTasks (task_console.go, issue #2873's Testing
+# section (FR10) and issue #2875's Testing section (FR5)): only cancelled/
+# escalated tasks appear, produced through the real per-reason paths for
+# escalation, each row's title/delivery-reference/subject pairs/counter-cap/
+# summary counts, no inline history, paging default/max/clamp, deterministic
+# order, a continuation walk with no gaps or duplicates, a cross-scope token
+# rejected, another scope's rows absent, a requeued/cancelled task's
+# absence, and a row-size proof that a long history doesn't grow the row.
+# Shares task_integration_test.go's test-store/test-scope/test-world/
+# subject helpers, task_dependency_integration_test.go's createTestTask
+# helper, task_claim_integration_test.go's claimTestSession helper, and
+# task_complete_integration_test.go's tripThrashCap helper rather than
 # duplicating them. Deliberately NOT part of `bazel test //...` -- see
 # //libs/go/dbtest's README for the full rationale.
 #
@@ -1462,6 +1466,7 @@ go_test(
     timeout = "long",
     srcs = [
         "task_claim_integration_test.go",
+        "task_complete_integration_test.go",
         "task_console_integration_test.go",
         "task_dependency_integration_test.go",
         "task_integration_test.go",

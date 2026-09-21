@@ -9,6 +9,10 @@
 // mirror. list_open_notes (issue #2874, FR12) is the sibling read tool
 // over store.TaskStore.ListOpenNotes, mirroring
 // krill/api/handlers/console.go's ListOpenNotesHandler the same way.
+// list_cancelled_tasks (issue #2873, FR10) and list_escalated_tasks (issue
+// #2875, FR5) are the same shape again, over ListCancelledTasks/
+// ListEscalatedTasks respectively -- list_escalated_tasks is this
+// milestone's headline query, "what is stuck and why" in one call.
 package tools
 
 import (
@@ -194,6 +198,68 @@ func RegisterListOpenNotes(reg *server.Registry, tasks store.TaskStore) {
 		}
 		for i, row := range page.Items {
 			out.Notes[i] = handlers.ToOpenNoteWire(row)
+		}
+		return nil, out, nil
+	})
+}
+
+// listEscalatedTasksInput is list_escalated_tasks' argument schema (FR5,
+// issue #2875) -- mirrors listClaimedTasksInput's own shape: ScopeID is
+// explicit input, not session-derived, since this is a read tool (NFR6's
+// gate is write-only).
+type listEscalatedTasksInput struct {
+	ScopeID   string `json:"scope_id" jsonschema:"The scope to query, as a UUID string (NFR1)."`
+	PageSize  int    `json:"page_size" jsonschema:"Optional page size, up to the server-enforced maximum (NFR6); absent or zero applies the default."`
+	PageToken string `json:"page_token" jsonschema:"Optional continuation token from a prior page's next_token (NFR6)."`
+}
+
+// listEscalatedTasksOutput mirrors krill/api/handlers/console.go's HTTP
+// response for the same query 1:1 (LB7), reusing its exported
+// handlers.EscalatedTaskWire rather than a bespoke MCP-local shape.
+type listEscalatedTasksOutput struct {
+	Tasks     []handlers.EscalatedTaskWire `json:"tasks"`
+	NextToken string                       `json:"next_token,omitempty"`
+}
+
+// RegisterListEscalatedTasks registers list_escalated_tasks (FR5, issue
+// #2875): every task with an active escalation in a scope -- its reason,
+// the triggering counter/cap where automatic, lane, timestamp, acting
+// subject, and summary history only (attempt count, failing-verdict
+// count, most recent verdict, note count -- never the full attempt/
+// verdict/note history inline, FR5/NFR6/#2851 Assumption 11) -- via
+// store.TaskStore.ListEscalatedTasks, mirroring
+// krill/api/handlers/console.go's ListEscalatedTasksHandler for the same
+// capability. Mounted via server.RegisterOpsRead -- PersonaSwarmOperator
+// only.
+func RegisterListEscalatedTasks(reg *server.Registry, tasks store.TaskStore) {
+	server.RegisterOpsRead(reg, &mcp.Tool{
+		Name:        "list_escalated_tasks",
+		Description: "Return every task with an active escalation in a scope: reason (thrash-cap, attempt-cap, manual), triggering counter/cap where automatic, lane, timestamp, acting subject, title, delivery reference, and summary history only -- never the full attempt/verdict/note history inline (FR5). Bounded and continuable (NFR6).",
+	}, func(ctx context.Context, _ *mcp.CallToolRequest, in listEscalatedTasksInput) (*mcp.CallToolResult, listEscalatedTasksOutput, error) {
+		var zero listEscalatedTasksOutput
+
+		scopeID, err := uuid.Parse(in.ScopeID)
+		if err != nil {
+			return nil, zero, fmt.Errorf("scope_id: invalid or missing UUID")
+		}
+
+		page, err := tasks.ListEscalatedTasks(ctx, store.ListEscalatedTasksParams{
+			ScopeID: scopeID,
+			Page: store.PageParams{
+				PageSize:          in.PageSize,
+				ContinuationToken: in.PageToken,
+			},
+		})
+		if err != nil {
+			return nil, zero, err
+		}
+
+		out := listEscalatedTasksOutput{
+			Tasks:     make([]handlers.EscalatedTaskWire, len(page.Items)),
+			NextToken: page.NextToken,
+		}
+		for i, row := range page.Items {
+			out.Tasks[i] = handlers.ToEscalatedTaskWire(row)
 		}
 		return nil, out, nil
 	})
