@@ -251,7 +251,11 @@ type TaskStore interface {
 	// caller-supplied lane -- CompleteTaskParams carries no such field),
 	// releases the claim (release_reason='complete'), records one
 	// `completed` task_attempt row, and updates
-	// task.current_lane/current_claim_id/lease_expires_at in place.
+	// task.current_lane/current_claim_id/lease_expires_at in place. A
+	// VerdictFail also increments task.thrash_count (FR1, issue #2870);
+	// the moment that reaches DefaultThrashCap, NextLane's revert is
+	// skipped -- the task is held at its current lane instead, and one
+	// 'thrash-cap' escalation is recorded against it (FR2).
 	CompleteTask(ctx context.Context, params CompleteTaskParams) (TaskLaneResult, error)
 
 	// ReclaimExpired is FR7's lease-expiry sweep (task_reclaim.go, issue
@@ -304,6 +308,12 @@ type TaskStore interface {
 	// identifying-context join FR5's (#2875) and FR10's (#2873) queries
 	// both reuse.
 	ListClaimedTasks(ctx context.Context, params ListClaimedTasksParams) (Page[ClaimedTaskRow], error)
+
+	// GetEscalationEventByID returns the EscalationEvent row for id
+	// (task_escalation.go, issue #2868) -- the one caller today is
+	// work.Assembler.Assemble, resolving the reason behind a task's own
+	// current_escalation_id for the payload document (FR2, issue #2870).
+	GetEscalationEventByID(ctx context.Context, id uuid.UUID) (EscalationEvent, error)
 }
 
 // ErrMilestoneHasMilepebbleCut is CreateTask's named, loud rejection

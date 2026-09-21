@@ -94,6 +94,10 @@ func (f *fakeTaskStore) ListClaimedTasks(ctx context.Context, params store.ListC
 	panic("not used by this test")
 }
 
+func (f *fakeTaskStore) GetEscalationEventByID(ctx context.Context, id uuid.UUID) (store.EscalationEvent, error) {
+	panic("not used by this test -- both branches under test return before Assemble ever calls this")
+}
+
 var _ store.TaskStore = (*fakeTaskStore)(nil)
 
 // TestAssemble_CrossScopeTaskID_NotFound proves NFR1: a taskID that

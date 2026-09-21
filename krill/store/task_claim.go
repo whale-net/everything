@@ -38,6 +38,18 @@ const DefaultAttemptCap = 3
 // environment variable or per-scope override exists yet.
 const DefaultLeaseDuration = 15 * time.Minute
 
+// DefaultThrashCap is FR1's lane-thrash cap (root plan #2851, C26,
+// issue #2870) -- its own constant, deliberately separate from
+// DefaultAttemptCap: the two counters are independent bookkeeping (NFR4),
+// so a task can trip one cap without affecting the other, and each cap
+// therefore needs its own tunable value even though this milestone picks
+// the same provisional magnitude for both. task_complete.go's
+// CompleteTask is this constant's one reader -- it increments
+// task.thrash_count on every failing verdict the task ever receives
+// (total, not consecutive) and escalates with reason 'thrash-cap' the
+// moment that count reaches this value.
+const DefaultThrashCap = 3
+
 // ErrTaskAlreadyClaimed is ClaimTask's named rejection when the task is
 // currently claimed by a live (non-expired) lease -- the race-loser's
 // outcome (FR3): at most one concurrent caller ever sees success.

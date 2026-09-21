@@ -176,6 +176,70 @@ func TestCompleteTaskHandler_UnclaimedAfterComplete_ClaimableAgain(t *testing.T)
 	assert.NotEqual(t, firstClaim.Task.CurrentClaim.ClaimID, secondClaim.Task.CurrentClaim.ClaimID, "a completed (not Done) task must mint a genuinely new claim on re-claim")
 }
 
+// TestCompleteTaskHandler_ThrashCapTrip_SurfacesStateReasonAndHeldLane is
+// issue #2870's Testing section (FR2, response contract): driving a task
+// through repeated claim/complete `fail` cycles until the thrash cap trips
+// returns a 200 whose payload carries state "escalated", escalation_reason
+// "thrash-cap", and current_lane set to the *held* lane -- never the
+// reverted one a plain fail would have produced below the cap.
+func TestCompleteTaskHandler_ThrashCapTrip_SurfacesStateReasonAndHeldLane(t *testing.T) {
+	ctx := context.Background()
+	s, pool := newTaskClaimHTTPTestStore(t)
+	scopeID := taskClaimHTTPTestScope(t, ctx, pool)
+	self := taskClaimHTTPTestSubject()
+	taskID, _ := seedTaskClaimHTTPWorld(t, ctx, s, scopeID, self)
+
+	sessions := store.NewSessionStore(pool)
+	assembler := work.NewAssembler(s.Tasks(), slice.NewQuerier(s))
+	mux := newTaskCompleteHTTPMux(s, sessions, assembler)
+
+	claimAndCompleteViaHTTP := func(verdict string) *httptest.ResponseRecorder {
+		sessionID, err := sessions.InitSession(ctx, scopeID, self, self, nil)
+		require.NoError(t, err)
+		claimPayload := claimViaHTTP(t, mux, taskID, uuid.UUID(sessionID))
+		require.NotNil(t, claimPayload.Task.CurrentClaim)
+		return completeViaHTTP(t, mux, taskID, claimPayload.Task.CurrentClaim.ClaimID, uuid.UUID(sessionID), verdict)
+	}
+
+	// The task starts on Scaffold with the standard five-lane sequence
+	// (seedTaskClaimHTTPWorld). One pass then puts it on Implementation,
+	// from which three fails -- interleaved with passes so no two are
+	// ever consecutive -- trip the cap on the third.
+	rec := claimAndCompleteViaHTTP("pass")
+	require.Equal(t, http.StatusOK, rec.Code, rec.Body.String())
+
+	for i := 0; i < store.DefaultThrashCap-1; i++ {
+		rec = claimAndCompleteViaHTTP("fail")
+		require.Equal(t, http.StatusOK, rec.Code, rec.Body.String())
+		rec = claimAndCompleteViaHTTP("pass")
+		require.Equal(t, http.StatusOK, rec.Code, rec.Body.String())
+	}
+	// One final fail from Implementation trips the cap (thrash_count
+	// reaches DefaultThrashCap): NextLane would normally revert to
+	// Scaffold, but the response must report the held lane instead.
+	rec = claimAndCompleteViaHTTP("fail")
+	require.Equal(t, http.StatusOK, rec.Code, rec.Body.String())
+
+	var payload work.Payload
+	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &payload))
+
+	assert.Equal(t, "escalated", payload.Task.State)
+	require.NotNil(t, payload.Task.EscalationReason)
+	assert.Equal(t, "thrash-cap", *payload.Task.EscalationReason)
+	assert.Equal(t, "Implementation", payload.Task.CurrentLane, "the response must report the held lane, never the reverted one")
+	assert.Nil(t, payload.Task.CurrentClaim, "a thrash-capped complete still closes its own claim like any ordinary complete")
+
+	// A subsequent claim attempt must be refused now that the task is
+	// escalated -- proving the response fields above match the store's
+	// own resulting claimability, not just its own isolated view.
+	rejectedSessionID, err := sessions.InitSession(ctx, scopeID, self, self, nil)
+	require.NoError(t, err)
+	_, err = s.Tasks().ClaimTask(ctx, store.ClaimTaskParams{
+		ScopeID: scopeID, TaskID: taskID, SessionID: rejectedSessionID, Acting: self, OnBehalfOf: self,
+	})
+	assert.ErrorIs(t, err, store.ErrTaskEscalated)
+}
+
 // TestCompleteTaskHandler_NonCurrentClaim_Returns409 proves
 // writeCompleteStoreError maps a stale/foreign claim id onto a 409
 // through the real store, and that a subsequent GET /tasks/{id} shows the

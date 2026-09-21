@@ -123,12 +123,23 @@ type CompleteTaskParams struct {
 // resulting state for any caller-facing response (FR4/NFR4) -- this
 // value exists only so CompleteTask's own caller (the HTTP handler, the
 // MCP tool) has the transition's before/after without a second read.
+//
+// State/EscalationReason are additive (issue #2870, FR2): State is
+// TaskStateEscalated, with EscalationReason naming
+// EscalationReasonThrashCap, exactly when this completion tripped FR1's
+// thrash cap -- TaskStateActive with a nil EscalationReason otherwise.
+// ToLane always names the lane the task is actually held at: for a
+// thrash-cap trip that is FromLane itself (NextLane's own revert is never
+// applied), never a lane the task was not in fact routed to.
 type TaskLaneResult struct {
 	TaskID   uuid.UUID
 	ClaimID  uuid.UUID
 	Verdict  Verdict
 	FromLane Lane
 	ToLane   Lane
+
+	State            TaskState
+	EscalationReason *EscalationReason
 }
 
 // CompleteTask is TaskStore.CompleteTask (FR8): a single transaction that
@@ -151,6 +162,20 @@ type TaskLaneResult struct {
 // so a task can walk its own lane_sequence end to end via any number of
 // clean claim/complete cycles without ever moving this column, no matter
 // how many lane transitions that walk takes.
+//
+// FR1/FR2/NFR4 (issue #2870): a VerdictFail also increments
+// task.thrash_count by exactly 1, in this same transaction -- every
+// failing verdict the task ever receives, total not consecutive, and
+// never task.attempt_count (NFR4's independent-bookkeeping rule: a
+// completion, pass or fail, never touches attempt_count at all, per the
+// paragraph above). The moment that increment reaches DefaultThrashCap
+// (task_claim.go), this call still succeeds exactly as a normal complete
+// does -- the claim still closes with release_reason='complete' -- but
+// NextLane's own revert is never applied: the task is held at fromLane,
+// and recordEscalationTx (task_escalation.go, #2868) records one
+// 'thrash-cap' escalation against it instead, in the same transaction, so
+// an escalation insert failure rolls back the whole complete (no counter
+// increment without its event).
 func (s taskStore) CompleteTask(ctx context.Context, params CompleteTaskParams) (TaskLaneResult, error) {
 	if !params.Verdict.Valid() {
 		return TaskLaneResult{}, fmt.Errorf("%w: got %q", ErrUnknownVerdict, params.Verdict)
@@ -165,12 +190,13 @@ func (s taskStore) CompleteTask(ctx context.Context, params CompleteTaskParams) 
 	var currentClaimID *uuid.UUID
 	var currentLane string
 	var laneSeq []string
+	var thrashCount int
 	err = tx.QueryRow(ctx, `
-		SELECT current_claim_id, current_lane, lane_sequence
+		SELECT current_claim_id, current_lane, lane_sequence, thrash_count
 		FROM task
 		WHERE id = $1 AND scope_id = $2
 		FOR UPDATE
-	`, params.TaskID, params.ScopeID).Scan(&currentClaimID, &currentLane, &laneSeq)
+	`, params.TaskID, params.ScopeID).Scan(&currentClaimID, &currentLane, &laneSeq, &thrashCount)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return TaskLaneResult{}, errParentNotFound("task", params.TaskID)
 	}
@@ -188,6 +214,22 @@ func (s taskStore) CompleteTask(ctx context.Context, params CompleteTaskParams) 
 	}
 	fromLane := Lane(currentLane)
 	toLane := NextLane(sequence, fromLane, params.Verdict)
+
+	// FR1: total failing verdicts, never consecutive-only -- a pass never
+	// moves this counter, and it is never reset by an intervening pass
+	// (the roadmap's own alternating pass/fail/pass/fail sequence must
+	// still trip the cap).
+	newThrashCount := thrashCount
+	if params.Verdict == VerdictFail {
+		newThrashCount++
+	}
+	thrashCapped := newThrashCount >= DefaultThrashCap
+
+	if thrashCapped {
+		// FR2: held at the lane occupied when this call arrived --
+		// NextLane's revert (computed above) is never applied.
+		toLane = fromLane
+	}
 
 	if _, err := tx.Exec(ctx, `
 		UPDATE task_claim SET released_at = NOW(), release_reason = 'complete'
@@ -210,10 +252,32 @@ func (s taskStore) CompleteTask(ctx context.Context, params CompleteTaskParams) 
 	}
 
 	if _, err := tx.Exec(ctx, `
-		UPDATE task SET current_lane = $1, current_claim_id = NULL, lease_expires_at = NULL
-		WHERE id = $2
-	`, string(toLane), params.TaskID); err != nil {
+		UPDATE task SET current_lane = $1, current_claim_id = NULL, lease_expires_at = NULL, thrash_count = $2
+		WHERE id = $3
+	`, string(toLane), newThrashCount, params.TaskID); err != nil {
 		return TaskLaneResult{}, fmt.Errorf("update task lane state: %w", err)
+	}
+
+	state := TaskStateActive
+	var escalationReason *EscalationReason
+	if thrashCapped {
+		capValue := DefaultThrashCap
+		counterValue := newThrashCount
+		if _, err := recordEscalationTx(ctx, tx, RecordEscalationParams{
+			ScopeID:          params.ScopeID,
+			TaskID:           params.TaskID,
+			Reason:           EscalationReasonThrashCap,
+			CounterValue:     &counterValue,
+			CapValue:         &capValue,
+			LaneAtEscalation: toLane,
+			Acting:           params.Acting,
+			OnBehalfOf:       params.OnBehalfOf,
+		}); err != nil {
+			return TaskLaneResult{}, fmt.Errorf("record thrash-cap escalation: %w", err)
+		}
+		state = TaskStateEscalated
+		reason := EscalationReasonThrashCap
+		escalationReason = &reason
 	}
 
 	if err := tx.Commit(ctx); err != nil {
@@ -221,10 +285,12 @@ func (s taskStore) CompleteTask(ctx context.Context, params CompleteTaskParams) 
 	}
 
 	return TaskLaneResult{
-		TaskID:   params.TaskID,
-		ClaimID:  params.ClaimID,
-		Verdict:  params.Verdict,
-		FromLane: fromLane,
-		ToLane:   toLane,
+		TaskID:           params.TaskID,
+		ClaimID:          params.ClaimID,
+		Verdict:          params.Verdict,
+		FromLane:         fromLane,
+		ToLane:           toLane,
+		State:            state,
+		EscalationReason: escalationReason,
 	}, nil
 }
