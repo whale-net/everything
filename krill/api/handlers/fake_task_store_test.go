@@ -36,7 +36,9 @@
 // task_escalate_test.go's own later Testing-phase task exercises them. The
 // ListEscalatedTasks stub exists for the same reason now that console.go
 // (issue #2875, FR5) widens it once more -- console_test.go's own Testing-
-// phase task exercises it.
+// phase task exercises it. The RequeueTask stub exists for the same reason
+// now that task_requeue.go (issue #2876) widens it once more --
+// task_requeue_test.go's own later Testing-phase task exercises it.
 package handlers_test
 
 import (
@@ -127,6 +129,10 @@ type fakeTaskStore struct {
 	listEscalatedErr    error
 	listEscalatedResult store.Page[store.EscalatedTaskRow]
 	gotListEscalated    store.ListEscalatedTasksParams
+
+	requeueErr       error
+	requeueResult    store.RequeueResult
+	gotRequeueParams store.RequeueParams
 }
 
 func (f *fakeTaskStore) CreateTask(ctx context.Context, params store.CreateTaskParams) (store.Task, error) {
@@ -290,6 +296,14 @@ func (f *fakeTaskStore) ListEscalatedTasks(ctx context.Context, params store.Lis
 		return store.Page[store.EscalatedTaskRow]{}, f.listEscalatedErr
 	}
 	return f.listEscalatedResult, nil
+}
+
+func (f *fakeTaskStore) RequeueTask(ctx context.Context, params store.RequeueParams) (store.RequeueResult, error) {
+	f.gotRequeueParams = params
+	if f.requeueErr != nil {
+		return store.RequeueResult{}, f.requeueErr
+	}
+	return f.requeueResult, nil
 }
 
 var _ store.TaskStore = (*fakeTaskStore)(nil)

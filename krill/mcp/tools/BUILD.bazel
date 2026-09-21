@@ -33,6 +33,7 @@ go_library(
         "task_note.go",
         "task_payload.go",
         "task_release.go",
+        "task_requeue.go",
     ],
     importpath = "github.com/whale-net/everything/krill/mcp/tools",
     visibility = ["//visibility:public"],
