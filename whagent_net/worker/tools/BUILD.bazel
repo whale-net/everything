@@ -24,6 +24,7 @@ go_library(
         "//whagent_net/llm",
         "//whagent_net/session",
         "@com_github_modelcontextprotocol_go_sdk//mcp",
+        "@io_opentelemetry_go_contrib_instrumentation_net_http_otelhttp//:otelhttp",
     ],
 )
 

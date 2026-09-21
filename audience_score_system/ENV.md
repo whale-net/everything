@@ -158,6 +158,14 @@ by `ASS_WHAGENT_JWKS_URL`/`ASS_WHAGENT_ISSUER` below.
 | `ASS_WHAGENT_JWKS_URL` | mcp | *(optional)* | whagent-net's own JWKS endpoint, passed to `whagent.NewVerifier` (issue #2116, FR12) so `mcp` can verify a whagent-net-minted Claim (`//libs/go/whagent`) without any per-domain Keycloak token-exchange configuration (NFR4). Optional: when either this or `ASS_WHAGENT_ISSUER` is unset, `mcp` mounts only the pre-#2116 `mcp_credential` path (`server.NewHTTPHandler`) — exactly as it did before this task, so a deployment that has no whagent-net session to serve needs no configuration change. Setting both mounts the whagent-net path ALONGSIDE (never in place of) `mcp_credential` (`server.NewDualAuthHTTPHandler`, see `ARCHITECTURE.md`'s "MCP server: whagent-net authentication path"). |
 | `ASS_WHAGENT_ISSUER` | mcp | *(optional)* | whagent-net's own `iss` value — a Verifier rejects any Claim whose `iss` doesn't match this exactly, including a valid Keycloak token or an unsigned claim (NFR4). See `ASS_WHAGENT_JWKS_URL` above for when this path is mounted at all. |
 
+## Telemetry
+
+Read via `//libs/go/logging` (`web`, `mcp`, `worker`).
+
+| Variable | Component | Default | Description |
+|----------|-----------|---------|-------------|
+| `OTEL_EXPORTER_OTLP_ENDPOINT` | web, mcp, worker | — | OTLP collector endpoint for traces/logs. Unset leaves telemetry export inert rather than failing boot, same convention every other domain's binaries follow. |
+
 ## Postgres MCP (Claude Code plugin)
 
 `.mcp.json` at the plugin root (`audience_score_system/plugin/data/.mcp.json`,
