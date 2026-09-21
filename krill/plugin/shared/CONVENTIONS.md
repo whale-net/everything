@@ -13,7 +13,10 @@ project-manager's inlined-copy convention accepts drift as a tradeoff.
 
 **First iteration, updated as krill's M3/M4 land.** The design axis (this
 file's "Design session model" section) is real and callable today against
-krill's `/mcp/spec` and `/mcp/design` MCP surfaces (M1/M2, merged). M3
+krill's `/mcp/spec` and `/mcp/design` MCP surfaces (M1/M2, merged) — but not
+yet from this plugin's own producer/architect dispatch (whale-net/everything#2926:
+their write tools need `PersonaAgent`, unreachable from an ordinary Claude
+Code subagent). M3
 (milestone/milepebble authoring and delivery status) is now **also fully
 merged**, and M4's first FR (`create_task`) landed right behind it — see
 "Milestone and delivery-axis tools (M3, real today)" and "Work axis:
