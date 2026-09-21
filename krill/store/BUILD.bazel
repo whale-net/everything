@@ -68,6 +68,8 @@ go_library(
         "task_escalation.go",
         "task_lease.go",
         "task_note.go",
+        "task_note_console.go",
+        "task_note_lifecycle.go",
         "task_reclaim.go",
     ],
     importpath = "github.com/whale-net/everything/krill/store",
@@ -1367,3 +1369,4 @@ go_test(
         "@com_github_stretchr_testify//require",
     ],
 )
+

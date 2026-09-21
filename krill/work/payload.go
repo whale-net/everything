@@ -67,11 +67,14 @@ type ClaimView struct {
 
 // NoteView is one entry of TaskView's note list (FR4, FR11, issue #2727):
 // the wire shape of a store.Note recorded against the task -- a flat,
-// immutable record with no status/lifecycle field (FR12).
+// immutable record (Body/Kind never revised, FR12) plus its current
+// lifecycle Status (M5's C26, issue #2874, FR11), purely additive per this
+// package's own doc comment -- no SchemaVersion bump.
 type NoteView struct {
-	ID   uuid.UUID `json:"id"`
-	Kind string    `json:"kind"`
-	Body string    `json:"body"`
+	ID     uuid.UUID `json:"id"`
+	Kind   string    `json:"kind"`
+	Body   string    `json:"body"`
+	Status string    `json:"status"`
 }
 
 // TaskView is Payload's work-axis half: the task's own fields plus its
@@ -215,7 +218,7 @@ func (a *Assembler) Assemble(ctx context.Context, scopeID, taskID uuid.UUID) (Pa
 	// Dependencies' own "marshal as [], never null" rule above.
 	noteViews := make([]NoteView, len(notes))
 	for i, n := range notes {
-		noteViews[i] = NoteView{ID: n.ID, Kind: string(n.Kind), Body: n.Body}
+		noteViews[i] = NoteView{ID: n.ID, Kind: string(n.Kind), Body: n.Body, Status: string(n.CurrentStatus)}
 	}
 
 	// State/EscalationReason (issue #2870, FR2): "escalated" the moment

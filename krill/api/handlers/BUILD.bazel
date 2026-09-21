@@ -87,6 +87,7 @@ go_library(
         "task_dependency.go",
         "task_lease.go",
         "task_note.go",
+        "task_note_lifecycle.go",
         "task_payload.go",
         "task_reclaim.go",
         "types.go",
