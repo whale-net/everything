@@ -33,7 +33,10 @@
 // Testing-phase task exercises them. The ReleaseLease/EscalateTask stubs
 // exist for the same reason now that task_release.go/task_escalate.go
 // (issue #2872) widen it once more -- task_release_test.go/
-// task_escalate_test.go's own later Testing-phase task exercises them.
+// task_escalate_test.go's own later Testing-phase task exercises them. The
+// ListEscalatedTasks stub exists for the same reason now that console.go
+// (issue #2875, FR5) widens it once more -- console_test.go's own Testing-
+// phase task exercises it.
 package handlers_test
 
 import (
@@ -120,6 +123,10 @@ type fakeTaskStore struct {
 	escalateErr       error
 	escalateResult    store.EscalateResult
 	gotEscalateParams store.EscalateParams
+
+	listEscalatedErr    error
+	listEscalatedResult store.Page[store.EscalatedTaskRow]
+	gotListEscalated    store.ListEscalatedTasksParams
 }
 
 func (f *fakeTaskStore) CreateTask(ctx context.Context, params store.CreateTaskParams) (store.Task, error) {
@@ -275,6 +282,14 @@ func (f *fakeTaskStore) EscalateTask(ctx context.Context, params store.EscalateP
 		return store.EscalateResult{}, f.escalateErr
 	}
 	return f.escalateResult, nil
+}
+
+func (f *fakeTaskStore) ListEscalatedTasks(ctx context.Context, params store.ListEscalatedTasksParams) (store.Page[store.EscalatedTaskRow], error) {
+	f.gotListEscalated = params
+	if f.listEscalatedErr != nil {
+		return store.Page[store.EscalatedTaskRow]{}, f.listEscalatedErr
+	}
+	return f.listEscalatedResult, nil
 }
 
 var _ store.TaskStore = (*fakeTaskStore)(nil)

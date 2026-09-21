@@ -375,6 +375,17 @@ type TaskStore interface {
 	// exception to FR8's "cap crossed => attempt-cap escalation" rule).
 	// Appends one task_intervention_event row (action='escalate').
 	EscalateTask(ctx context.Context, params EscalateParams) (EscalateResult, error)
+
+	// ListEscalatedTasks returns every task in params.ScopeID with an
+	// active escalation (task_console.go, issue #2875, FR5), bounded and
+	// continuable per params.Page (NFR6) -- reuses ListClaimedTasks' own
+	// paging machinery and identifying-context join style rather than
+	// forking a copy. Each row carries summary history only (attempt
+	// count, failing-verdict count, most recent verdict, note count),
+	// never the task's full attempt/verdict/note history inline (FR5,
+	// NFR6, #2851 Assumption 11) -- that full history is M4 FR10's
+	// per-task fetch (GET /tasks/{id}).
+	ListEscalatedTasks(ctx context.Context, params ListEscalatedTasksParams) (Page[EscalatedTaskRow], error)
 }
 
 // ErrMilestoneHasMilepebbleCut is CreateTask's named, loud rejection
