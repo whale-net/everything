@@ -18,7 +18,9 @@
 // task_reclaim_test.go exercises it. The AbandonClaim stub exists for the
 // same reason now that task_abandon.go (issue #2726) widens it once more --
 // task_abandon_test.go's own Testing-phase task is what actually exercises
-// it.
+// it. The ListClaimedTasks stub exists for the same reason now that
+// console.go (issue #2869) widens it once more -- console_test.go's own
+// later Testing-phase task exercises it.
 package handlers_test
 
 import (
@@ -75,6 +77,10 @@ type fakeTaskStore struct {
 	listNotesForTaskErr   error
 	notesForEntity        []store.Note
 	listNotesForEntityErr error
+
+	listClaimedTasksErr       error
+	listClaimedTasksResult    store.Page[store.ClaimedTaskRow]
+	gotListClaimedTasksParams store.ListClaimedTasksParams
 }
 
 func (f *fakeTaskStore) CreateTask(ctx context.Context, params store.CreateTaskParams) (store.Task, error) {
@@ -170,6 +176,14 @@ func (f *fakeTaskStore) ListNotesForTask(ctx context.Context, scopeID, taskID uu
 
 func (f *fakeTaskStore) ListNotesForEntity(ctx context.Context, scopeID uuid.UUID, kind store.NoteEntityKind, entityID uuid.UUID) ([]store.Note, error) {
 	return f.notesForEntity, f.listNotesForEntityErr
+}
+
+func (f *fakeTaskStore) ListClaimedTasks(ctx context.Context, params store.ListClaimedTasksParams) (store.Page[store.ClaimedTaskRow], error) {
+	f.gotListClaimedTasksParams = params
+	if f.listClaimedTasksErr != nil {
+		return store.Page[store.ClaimedTaskRow]{}, f.listClaimedTasksErr
+	}
+	return f.listClaimedTasksResult, nil
 }
 
 var _ store.TaskStore = (*fakeTaskStore)(nil)

@@ -193,12 +193,15 @@ func run() error {
 	// (registered by later M5 tasks, via server.RegisterOpsRead/
 	// RegisterOpsWrite -- registry.go) can never end up reachable from
 	// specMountPath or designMountPath, the same isolation specSrv/
-	// designSrv give each other above. No tool is registered on it yet
-	// -- this task ships the empty, authorized surface the rest of M5
-	// registers onto.
+	// designSrv give each other above.
+	//
+	// tools.RegisterListClaimedTasks (issue #2869, FR4) is the first
+	// tool registered here: list_claimed_tasks, PersonaSwarmOperator only
+	// (enforced by RegisterOpsRead/the mount itself, not a per-tool
+	// allow-list).
 	opsSrv := server.New()
 	opsReg := server.NewRegistry(opsSrv)
-	_ = opsReg
+	tools.RegisterListClaimedTasks(opsReg, entities.Tasks())
 
 	// The mcpauth (human) front door's CredentialStore preflights the
 	// consuming domain's credential table at boot -- exactly like

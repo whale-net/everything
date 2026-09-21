@@ -90,6 +90,10 @@ func (f *fakeTaskStore) ListNotesForEntity(ctx context.Context, scopeID uuid.UUI
 	panic("not used by this test")
 }
 
+func (f *fakeTaskStore) ListClaimedTasks(ctx context.Context, params store.ListClaimedTasksParams) (store.Page[store.ClaimedTaskRow], error) {
+	panic("not used by this test")
+}
+
 var _ store.TaskStore = (*fakeTaskStore)(nil)
 
 // TestAssemble_CrossScopeTaskID_NotFound proves NFR1: a taskID that

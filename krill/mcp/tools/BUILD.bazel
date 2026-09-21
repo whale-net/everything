@@ -13,6 +13,7 @@ go_library(
     name = "tools",
     srcs = [
         "abandon.go",
+        "console.go",
         "delivery_shipment.go",
         "design.go",
         "milestone.go",
