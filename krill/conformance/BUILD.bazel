@@ -59,6 +59,22 @@ load("@rules_go//go:def.bzl", "go_test")
 # filegroup data deps below and //krill/store, //krill/api/handlers, and
 # //krill/work's own BUILD.bazel comments on that filegroup.
 #
+# escalation_console_integration_test.go (issue #2877, krill M5's own
+# end-to-end proof) shares this target too: one connected walk through
+# the whole escalation/intervention/console axis (#2867-#2876) against a
+# real Postgres -- claimed-console view, thrash-cap escalation,
+# attempt-cap escalation, manual escalation (including FR9's
+# single-event-at-cap exception), the escalated-console view, release,
+# requeue, cancel and the cancelled-console view, note lifecycle and the
+# open-notes console view, and paging with cross-scope token rejection --
+# plus an NFR1-NFR6 and claimability-index audit. Like
+# delivery_axis_integration_test.go/work_axis_integration_test.go, it
+# never goes through //krill/importer -- built directly against
+# //krill/store. NFR2's grep assertion reuses //krill/store's own
+# work_axis_srcs filegroup below ("task*.go" already covers every M5
+# store file with no glob change needed) rather than defining a second
+# filegroup for the same directory.
+#
 # Run the round-trip tests explicitly (requires a working Docker daemon):
 #   bazel test //krill/conformance:roundtrip_integration_test --test_output=all
 #
@@ -74,6 +90,7 @@ go_test(
     srcs = [
         "delivery_axis_integration_test.go",
         "design_milestone_query_integration_test.go",
+        "escalation_console_integration_test.go",
         "roundtrip_integration_test.go",
         "whagent_net_import_integration_test.go",
         "work_axis_integration_test.go",
