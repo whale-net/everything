@@ -1,10 +1,11 @@
-// Unit tests for ListCancelledTasksHandler (console.go, issue #2873's
-// Testing section, FR10) and ListEscalatedTasksHandler (console.go, issue
-// #2875's Testing section, FR5): GET /console/cancelled and
-// GET /console/escalated are both ungated with scope_id as a required
-// query parameter (mirroring GET /console/claimed, issue #2869),
-// page_size/page_token pass-through, and writeConsoleQueryError's mapping
-// of a token error to 400. ListEscalatedTasksHandler additionally gets its
+// Unit tests for ListClaimedTasksHandler (console.go, issue #2916's Testing
+// section, FR4), ListCancelledTasksHandler (console.go, issue #2873's
+// Testing section, FR10), and ListEscalatedTasksHandler (console.go, issue
+// #2875's Testing section, FR5): GET /console/claimed, GET /console/cancelled,
+// and GET /console/escalated are all ungated with scope_id as a required
+// query parameter, page_size/page_token pass-through, and
+// writeConsoleQueryError's mapping of a token error to 400.
+// ListEscalatedTasksHandler additionally gets its
 // own no-inline-history regression guard at the wire boundary (FR5/NFR6/
 // #2851 Assumption 11), mirroring
 // TestTaskStore_EscalatedTaskRow_NoInlineHistoryFields
@@ -27,6 +28,92 @@ import (
 	"github.com/whale-net/everything/krill/api/handlers"
 	"github.com/whale-net/everything/krill/store"
 )
+
+// TestListClaimedTasksHandler_MissingScopeID_Returns400 proves scope_id is
+// required -- there is no path entity to resolve it from (FR4, issue
+// #2916).
+func TestListClaimedTasksHandler_MissingScopeID_Returns400(t *testing.T) {
+	tasks := &fakeTaskStore{}
+
+	req := httptest.NewRequest(http.MethodGet, "/console/claimed", nil)
+	rec := httptest.NewRecorder()
+	handlers.ListClaimedTasksHandler(tasks)(rec, req)
+
+	assert.Equal(t, http.StatusBadRequest, rec.Code, rec.Body.String())
+}
+
+// TestListClaimedTasksHandler_ParamsPassThrough proves scope_id/page_size/
+// page_token all pass through to the store call unchanged.
+func TestListClaimedTasksHandler_ParamsPassThrough(t *testing.T) {
+	scopeID := uuid.New()
+	tasks := &fakeTaskStore{}
+
+	req := httptest.NewRequest(http.MethodGet, "/console/claimed?scope_id="+scopeID.String()+"&page_size=10&page_token=abc", nil)
+	rec := httptest.NewRecorder()
+	handlers.ListClaimedTasksHandler(tasks)(rec, req)
+
+	require.Equal(t, http.StatusOK, rec.Code, rec.Body.String())
+	assert.Equal(t, scopeID, tasks.gotListClaimedTasksParams.ScopeID)
+	assert.Equal(t, 10, tasks.gotListClaimedTasksParams.Page.PageSize)
+	assert.Equal(t, "abc", tasks.gotListClaimedTasksParams.Page.ContinuationToken)
+}
+
+// TestListClaimedTasksHandler_TokenError_Returns400 proves
+// writeConsoleQueryError maps a token error (a stale, cross-scope, or
+// forged continuation token) to 400, never a 500.
+func TestListClaimedTasksHandler_TokenError_Returns400(t *testing.T) {
+	tasks := &fakeTaskStore{listClaimedTasksErr: store.ErrTokenScopeMismatch}
+
+	req := httptest.NewRequest(http.MethodGet, "/console/claimed?scope_id="+uuid.New().String(), nil)
+	rec := httptest.NewRecorder()
+	handlers.ListClaimedTasksHandler(tasks)(rec, req)
+
+	assert.Equal(t, http.StatusBadRequest, rec.Code, rec.Body.String())
+}
+
+// TestListClaimedTasksHandler_RowContent proves the wire shape carries
+// title, delivery reference, claimant session id, both subject pairs,
+// current lane, lease expiry, and attempt count.
+func TestListClaimedTasksHandler_RowContent(t *testing.T) {
+	taskID := uuid.New()
+	deliveryRefID := uuid.New()
+	acting := store.Subject{Iss: "https://issuer.example.com", Sub: "operator-1", Kind: store.SubjectKindHuman}
+	onBehalfOf := store.Subject{Iss: "https://issuer.example.com", Sub: "swarm-1", Kind: store.SubjectKindService}
+
+	tasks := &fakeTaskStore{
+		listClaimedTasksResult: store.Page[store.ClaimedTaskRow]{
+			Items: []store.ClaimedTaskRow{
+				{
+					TaskID: taskID,
+					Title:  "claimed task",
+					DeliveryRef: store.ClaimedTaskDeliveryRef{
+						ID:    deliveryRefID,
+						Kind:  store.MilestoneKindMilepebble,
+						Title: "MP1",
+					},
+					ClaimantActing:     acting,
+					ClaimantOnBehalfOf: onBehalfOf,
+					CurrentLane:        store.LaneScaffold,
+					AttemptCount:       2,
+				},
+			},
+		},
+	}
+
+	req := httptest.NewRequest(http.MethodGet, "/console/claimed?scope_id="+uuid.New().String(), nil)
+	rec := httptest.NewRecorder()
+	handlers.ListClaimedTasksHandler(tasks)(rec, req)
+
+	require.Equal(t, http.StatusOK, rec.Code, rec.Body.String())
+	body := rec.Body.String()
+	assert.Contains(t, body, taskID.String())
+	assert.Contains(t, body, "claimed task")
+	assert.Contains(t, body, deliveryRefID.String())
+	assert.Contains(t, body, "milepebble")
+	assert.Contains(t, body, "operator-1")
+	assert.Contains(t, body, "swarm-1")
+	assert.Contains(t, body, "Scaffold")
+}
 
 // TestListCancelledTasksHandler_MissingScopeID_Returns400 proves scope_id
 // is required -- there is no path entity to resolve it from.

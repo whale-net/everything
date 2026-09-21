@@ -1,7 +1,18 @@
 //go:build integration
 
-// Real-Postgres coverage for TaskStore.ListCancelledTasks and
-// TaskStore.ListEscalatedTasks (task_console.go).
+// Real-Postgres coverage for TaskStore.ListClaimedTasks,
+// TaskStore.ListCancelledTasks, and TaskStore.ListEscalatedTasks
+// (task_console.go).
+//
+// ListClaimedTasks (issue #2916's Testing section, FR4): only currently-
+// claimed tasks appear (an ordinary and a cancelled task are both absent),
+// each row carries title, delivery reference (both shapes -- a milepebble
+// and an uncut milestone), the live claim's own claimant session id and
+// both LB4 subject pairs, current lane, a non-zero lease expiry, and
+// attempt count, paging default/max/clamp, deterministic order (soonest-
+// lease-to-lapse first, id as tiebreak), a continuation walk with no gaps
+// or duplicates, a cross-scope token rejected, and another scope's claimed
+// task never appearing.
 //
 // ListCancelledTasks (issue #2873's Testing section, FR10): only cancelled
 // tasks appear (a claimed-but-not-cancelled and a Done task are both
@@ -54,6 +65,246 @@ import (
 	"github.com/whale-net/everything/krill/store"
 	"github.com/whale-net/everything/libs/go/dbtest"
 )
+
+// claimTestTask creates a task and claims it from a fresh session -- the
+// cheapest real path to a claimed row, mirroring cancelTestTask/
+// escalateTestTask's own shape below.
+func claimTestTask(t *testing.T, ctx context.Context, s *store.Store, db *dbtest.Postgres, scopeID, milestoneID uuid.UUID, title string, self store.Subject) (store.Task, store.Claim) {
+	t.Helper()
+	task := createTestTask(t, ctx, s, scopeID, milestoneID, title, self)
+	sessionID := claimTestSession(t, ctx, db, scopeID, self)
+	claim, err := s.Tasks().ClaimTask(ctx, store.ClaimTaskParams{
+		ScopeID: scopeID, TaskID: task.ID, SessionID: sessionID, Acting: self, OnBehalfOf: self,
+	})
+	require.NoError(t, err)
+	return task, claim
+}
+
+// TestTaskStore_ListClaimedTasks_OnlyClaimedAppear is issue #2916's Testing
+// section item: only currently-claimed tasks appear -- an ordinary,
+// never-claimed task and a cancelled task are both absent from the page.
+func TestTaskStore_ListClaimedTasks_OnlyClaimedAppear(t *testing.T) {
+	ctx := context.Background()
+	s, db := newTaskTestStore(t)
+	scopeID := newTaskTestScope(t, ctx, db)
+	self := taskTestSubject("operator-1")
+	world := newTaskTestWorld(t, ctx, s, scopeID, self)
+
+	claimed, _ := claimTestTask(t, ctx, s, db, scopeID, world.uncutMilestoneID, "claimed task", self)
+	_ = createTestTask(t, ctx, s, scopeID, world.uncutMilestoneID, "ordinary task", self)
+	cancelTestTask(t, ctx, s, scopeID, world.uncutMilestoneID, "cancelled task", self)
+
+	page, err := s.Tasks().ListClaimedTasks(ctx, store.ListClaimedTasksParams{ScopeID: scopeID})
+	require.NoError(t, err)
+	require.Len(t, page.Items, 1)
+	assert.Equal(t, claimed.ID, page.Items[0].TaskID)
+}
+
+// TestTaskStore_ListClaimedTasks_RowContent is issue #2916's Testing
+// section item: each row carries title, delivery reference (both a
+// milepebble and an uncut milestone shape), the live claim's own claimant
+// session id and both LB4 subject pairs, current lane, a non-zero lease
+// expiry, and attempt count.
+func TestTaskStore_ListClaimedTasks_RowContent(t *testing.T) {
+	ctx := context.Background()
+	s, db := newTaskTestStore(t)
+	scopeID := newTaskTestScope(t, ctx, db)
+	acting := taskTestSubject("operator-1")
+	onBehalfOf := taskTestSubject("swarm-1")
+	world := newTaskTestWorld(t, ctx, s, scopeID, acting)
+
+	milepebbleTask := createTestTask(t, ctx, s, scopeID, world.milepebbleID, "against a milepebble", acting)
+	sessionID := claimTestSession(t, ctx, db, scopeID, acting)
+	milepebbleClaim, err := s.Tasks().ClaimTask(ctx, store.ClaimTaskParams{
+		ScopeID: scopeID, TaskID: milepebbleTask.ID, SessionID: sessionID, Acting: acting, OnBehalfOf: onBehalfOf,
+	})
+	require.NoError(t, err)
+
+	milestoneTask, milestoneClaim := claimTestTask(t, ctx, s, db, scopeID, world.uncutMilestoneID, "against an uncut milestone", acting)
+
+	page, err := s.Tasks().ListClaimedTasks(ctx, store.ListClaimedTasksParams{ScopeID: scopeID})
+	require.NoError(t, err)
+	require.Len(t, page.Items, 2)
+
+	byTaskID := map[uuid.UUID]store.ClaimedTaskRow{}
+	for _, row := range page.Items {
+		byTaskID[row.TaskID] = row
+	}
+
+	mp := byTaskID[milepebbleTask.ID]
+	assert.Equal(t, "against a milepebble", mp.Title)
+	assert.Equal(t, world.milepebbleID, mp.DeliveryRef.ID)
+	assert.Equal(t, store.MilestoneKindMilepebble, mp.DeliveryRef.Kind)
+	assert.NotEmpty(t, mp.DeliveryRef.Title)
+	assert.Equal(t, sessionID, mp.ClaimantSessionID)
+	assert.Equal(t, acting, mp.ClaimantActing)
+	assert.Equal(t, onBehalfOf, mp.ClaimantOnBehalfOf)
+	assert.Equal(t, store.LaneScaffold, mp.CurrentLane)
+	assert.False(t, mp.LeaseExpiresAt.IsZero())
+	assert.Equal(t, mp.LeaseExpiresAt.UTC(), milepebbleClaim.InitialLeaseExpiresAt.UTC())
+	assert.Equal(t, 0, mp.AttemptCount)
+
+	ms := byTaskID[milestoneTask.ID]
+	assert.Equal(t, "against an uncut milestone", ms.Title)
+	assert.Equal(t, world.uncutMilestoneID, ms.DeliveryRef.ID)
+	assert.Equal(t, store.MilestoneKindMilestone, ms.DeliveryRef.Kind)
+	assert.NotEmpty(t, ms.DeliveryRef.Title)
+	assert.Equal(t, milestoneClaim.SessionID, ms.ClaimantSessionID)
+}
+
+// TestTaskStore_ListClaimedTasks_PageSizeDefaultMaxClamp is issue #2916's
+// Testing section item: an absent page size applies DefaultConsolePageSize,
+// and a page size above MaxConsolePageSize is clamped down to it rather
+// than rejected -- mirrors TestTaskStore_ListCancelledTasks_PageSizeDefaultMaxClamp.
+func TestTaskStore_ListClaimedTasks_PageSizeDefaultMaxClamp(t *testing.T) {
+	ctx := context.Background()
+	s, db := newTaskTestStore(t)
+	scopeID := newTaskTestScope(t, ctx, db)
+	self := taskTestSubject("operator-1")
+	world := newTaskTestWorld(t, ctx, s, scopeID, self)
+
+	const total = store.DefaultConsolePageSize + 5
+	for i := 0; i < total; i++ {
+		claimTestTask(t, ctx, s, db, scopeID, world.uncutMilestoneID, fmt.Sprintf("task %d", i), self)
+	}
+
+	page, err := s.Tasks().ListClaimedTasks(ctx, store.ListClaimedTasksParams{ScopeID: scopeID})
+	require.NoError(t, err)
+	assert.Len(t, page.Items, store.DefaultConsolePageSize, "an absent page size must apply DefaultConsolePageSize")
+	assert.NotEmpty(t, page.NextToken, "more rows remain beyond the default page")
+
+	clamped, err := s.Tasks().ListClaimedTasks(ctx, store.ListClaimedTasksParams{
+		ScopeID: scopeID,
+		Page:    store.PageParams{PageSize: store.MaxConsolePageSize + 1000},
+	})
+	require.NoError(t, err)
+	assert.Len(t, clamped.Items, total, "a page size above MaxConsolePageSize must clamp down, not reject, and every row here fits within the clamp")
+}
+
+// TestTaskStore_ListClaimedTasks_ContinuationNoGapsOrDuplicates is issue
+// #2916's Testing section item: walking every page via NextToken visits
+// every claimed task exactly once, in the query's own deterministic order
+// (soonest-lease-to-lapse first, id as tiebreak), and the same walk
+// repeated produces the exact same order -- mirrors
+// TestTaskStore_ListCancelledTasks_ContinuationNoGapsOrDuplicates.
+func TestTaskStore_ListClaimedTasks_ContinuationNoGapsOrDuplicates(t *testing.T) {
+	ctx := context.Background()
+	s, db := newTaskTestStore(t)
+	scopeID := newTaskTestScope(t, ctx, db)
+	self := taskTestSubject("operator-1")
+	world := newTaskTestWorld(t, ctx, s, scopeID, self)
+
+	const total = 23
+	const pageSize = 5
+	want := make(map[uuid.UUID]bool, total)
+	for i := 0; i < total; i++ {
+		task, _ := claimTestTask(t, ctx, s, db, scopeID, world.uncutMilestoneID, fmt.Sprintf("task %d", i), self)
+		want[task.ID] = true
+	}
+
+	seen := map[uuid.UUID]bool{}
+	var order []uuid.UUID
+	token := ""
+	pages := 0
+	for {
+		page, err := s.Tasks().ListClaimedTasks(ctx, store.ListClaimedTasksParams{
+			ScopeID: scopeID,
+			Page:    store.PageParams{PageSize: pageSize, ContinuationToken: token},
+		})
+		require.NoError(t, err)
+		pages++
+		require.Less(t, pages, 20, "must terminate well within a sane number of pages")
+
+		for _, row := range page.Items {
+			require.False(t, seen[row.TaskID], "task %s must not be seen twice across the continuation walk", row.TaskID)
+			seen[row.TaskID] = true
+			order = append(order, row.TaskID)
+		}
+
+		if page.NextToken == "" {
+			break
+		}
+		token = page.NextToken
+	}
+
+	assert.Len(t, seen, total, "every claimed task must be visited exactly once with no gaps")
+	for id := range want {
+		assert.True(t, seen[id], "task %s must appear somewhere in the continuation walk", id)
+	}
+
+	var replay []uuid.UUID
+	token = ""
+	for {
+		page, err := s.Tasks().ListClaimedTasks(ctx, store.ListClaimedTasksParams{
+			ScopeID: scopeID,
+			Page:    store.PageParams{PageSize: pageSize, ContinuationToken: token},
+		})
+		require.NoError(t, err)
+		for _, row := range page.Items {
+			replay = append(replay, row.TaskID)
+		}
+		if page.NextToken == "" {
+			break
+		}
+		token = page.NextToken
+	}
+	assert.Equal(t, order, replay, "the same walk repeated must produce the exact same order")
+}
+
+// TestTaskStore_ListClaimedTasks_CrossScopeToken_Rejected is issue #2916's
+// Testing section item: a continuation token issued for one scope is
+// rejected when presented against a different scope's query -- mirrors
+// TestTaskStore_ListCancelledTasks_CrossScopeToken_Rejected.
+func TestTaskStore_ListClaimedTasks_CrossScopeToken_Rejected(t *testing.T) {
+	ctx := context.Background()
+	s, db := newTaskTestStore(t)
+	scopeA := newTaskTestScope(t, ctx, db)
+	scopeB := newTaskTestScope(t, ctx, db)
+	self := taskTestSubject("operator-1")
+	worldA := newTaskTestWorld(t, ctx, s, scopeA, self)
+	worldB := newTaskTestWorld(t, ctx, s, scopeB, self)
+
+	for i := 0; i < 3; i++ {
+		claimTestTask(t, ctx, s, db, scopeA, worldA.uncutMilestoneID, fmt.Sprintf("a-task %d", i), self)
+	}
+	claimTestTask(t, ctx, s, db, scopeB, worldB.uncutMilestoneID, "b-task", self)
+
+	pageA, err := s.Tasks().ListClaimedTasks(ctx, store.ListClaimedTasksParams{
+		ScopeID: scopeA,
+		Page:    store.PageParams{PageSize: 1},
+	})
+	require.NoError(t, err)
+	require.NotEmpty(t, pageA.NextToken)
+
+	_, err = s.Tasks().ListClaimedTasks(ctx, store.ListClaimedTasksParams{
+		ScopeID: scopeB,
+		Page:    store.PageParams{PageSize: 1, ContinuationToken: pageA.NextToken},
+	})
+	require.Error(t, err)
+	assert.ErrorIs(t, err, store.ErrTokenScopeMismatch)
+}
+
+// TestTaskStore_ListClaimedTasks_OtherScopeRowsAbsent is issue #2916's
+// Testing section item: a second scope's claimed task never appears in the
+// first scope's page (NFR1) -- mirrors
+// TestTaskStore_ListCancelledTasks_OtherScopeRowsAbsent.
+func TestTaskStore_ListClaimedTasks_OtherScopeRowsAbsent(t *testing.T) {
+	ctx := context.Background()
+	s, db := newTaskTestStore(t)
+	scopeA := newTaskTestScope(t, ctx, db)
+	scopeB := newTaskTestScope(t, ctx, db)
+	self := taskTestSubject("operator-1")
+	worldA := newTaskTestWorld(t, ctx, s, scopeA, self)
+	worldB := newTaskTestWorld(t, ctx, s, scopeB, self)
+
+	taskA, _ := claimTestTask(t, ctx, s, db, scopeA, worldA.uncutMilestoneID, "scope a", self)
+	claimTestTask(t, ctx, s, db, scopeB, worldB.uncutMilestoneID, "scope b", self)
+
+	page, err := s.Tasks().ListClaimedTasks(ctx, store.ListClaimedTasksParams{ScopeID: scopeA})
+	require.NoError(t, err)
+	require.Len(t, page.Items, 1)
+	assert.Equal(t, taskA.ID, page.Items[0].TaskID)
+}
 
 func cancelTestTask(t *testing.T, ctx context.Context, s *store.Store, scopeID, milestoneID uuid.UUID, title string, self store.Subject) (store.Task, store.CancelResult) {
 	t.Helper()

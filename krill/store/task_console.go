@@ -15,18 +15,11 @@ package store
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"time"
 
 	"github.com/google/uuid"
 )
-
-// ErrNotImplemented is ListClaimedTasks' Scaffold-phase placeholder
-// return -- mirrors krill/work/payload.go's own precedent (issue #2721)
-// for a store method whose real query logic lands in this task's
-// Implementation phase.
-var ErrNotImplemented = errors.New("krill/store: not implemented")
 
 // ClaimedTaskDeliveryRef is one ClaimedTaskRow's delivery-axis reference
 // (LB6, M4 FR1) -- the `milestone_ref` row task.milestone_id names, of
@@ -69,17 +62,99 @@ type ListClaimedTasksParams struct {
 }
 
 // ListClaimedTasks returns scopeID's currently-claimed tasks (FR4),
-// soonest-lease-to-lapse first (`lease_expires_at ASC, task.id ASC` --
+// soonest-lease-to-lapse first (`task.lease_expires_at ASC, task.id ASC` --
 // the useful operator order), bounded and continuable per PageParams
 // (NFR6).
 //
-// Scaffold-phase stub: returns ErrNotImplemented unconditionally. This
-// task's Implementation phase fills in the join this file's own doc
-// comment describes: task JOIN task_claim (task.current_claim_id) JOIN
-// milestone_ref (task.milestone_id), scope-qualified, restricted to a
-// task with a live claim (task.current_claim_id IS NOT NULL).
+// Joins task (WHERE current_claim_id IS NOT NULL) to milestone_ref (the
+// identifying delivery reference this file's own doc comment describes)
+// and to task_claim (task.current_claim_id) for the claimant session and
+// both LB4 subject pairs -- task_claim's created_by_acting/
+// created_by_on_behalf_of columns name whoever created the claim (the
+// claimant), per ClaimedTaskRow's own doc comment. task.current_claim_id
+// carries no DB-level FK onto task_claim(id) (migration 015's own note:
+// task_claim is created later in the same migration), so this join is
+// enforced here in Go/SQL, not by the schema.
 func (s taskStore) ListClaimedTasks(ctx context.Context, params ListClaimedTasksParams) (Page[ClaimedTaskRow], error) {
-	return Page[ClaimedTaskRow]{}, ErrNotImplemented
+	pageSize := ResolvePageSize(params.Page.PageSize)
+
+	var cursor *Cursor
+	if params.Page.ContinuationToken != "" {
+		c, err := DecodeContinuationToken(params.ScopeID, params.Page.ContinuationToken)
+		if err != nil {
+			return Page[ClaimedTaskRow]{}, err
+		}
+		cursor = &c
+	}
+
+	args := []any{params.ScopeID}
+	query := `
+		SELECT task.id, task.title, milestone_ref.id, milestone_ref.kind, milestone_ref.name,
+			tc.session_id,
+			tc.created_by_acting_iss, tc.created_by_acting_sub, tc.created_by_acting_kind,
+			tc.created_by_on_behalf_of_iss, tc.created_by_on_behalf_of_sub, tc.created_by_on_behalf_of_kind,
+			task.current_lane, task.lease_expires_at, task.attempt_count
+		FROM task
+		JOIN milestone_ref ON milestone_ref.id = task.milestone_id
+		JOIN task_claim tc ON tc.id = task.current_claim_id
+		WHERE task.scope_id = $1 AND task.current_claim_id IS NOT NULL
+	`
+	if cursor != nil {
+		sortVal, err := time.Parse(time.RFC3339Nano, cursor.SortKey)
+		if err != nil {
+			return Page[ClaimedTaskRow]{}, fmt.Errorf("%w: malformed cursor sort key", ErrInvalidContinuationToken)
+		}
+		query += fmt.Sprintf(` AND (task.lease_expires_at > $%d OR (task.lease_expires_at = $%d AND task.id > $%d))`, len(args)+1, len(args)+1, len(args)+2)
+		args = append(args, sortVal, cursor.ID)
+	}
+	// Fetch one extra row beyond pageSize -- its presence, not a second
+	// COUNT query, is what decides whether NextToken is populated.
+	query += fmt.Sprintf(` ORDER BY task.lease_expires_at ASC, task.id ASC LIMIT $%d`, len(args)+1)
+	args = append(args, pageSize+1)
+
+	rows, err := s.pool.Query(ctx, query, args...)
+	if err != nil {
+		return Page[ClaimedTaskRow]{}, fmt.Errorf("query claimed tasks: %w", err)
+	}
+	defer rows.Close()
+
+	var items []ClaimedTaskRow
+	for rows.Next() {
+		var row ClaimedTaskRow
+		var deliveryKind string
+		var sessionID uuid.UUID
+		var actingKind, onBehalfOfKind string
+		var currentLane string
+		if err := rows.Scan(
+			&row.TaskID, &row.Title, &row.DeliveryRef.ID, &deliveryKind, &row.DeliveryRef.Title,
+			&sessionID,
+			&row.ClaimantActing.Iss, &row.ClaimantActing.Sub, &actingKind,
+			&row.ClaimantOnBehalfOf.Iss, &row.ClaimantOnBehalfOf.Sub, &onBehalfOfKind,
+			&currentLane, &row.LeaseExpiresAt, &row.AttemptCount,
+		); err != nil {
+			return Page[ClaimedTaskRow]{}, fmt.Errorf("scan claimed task row: %w", err)
+		}
+		row.DeliveryRef.Kind = MilestoneKind(deliveryKind)
+		row.ClaimantSessionID = SessionID(sessionID)
+		row.ClaimantActing.Kind = SubjectKind(actingKind)
+		row.ClaimantOnBehalfOf.Kind = SubjectKind(onBehalfOfKind)
+		row.CurrentLane = Lane(currentLane)
+		items = append(items, row)
+	}
+	if err := rows.Err(); err != nil {
+		return Page[ClaimedTaskRow]{}, fmt.Errorf("iterate claimed tasks: %w", err)
+	}
+
+	page := Page[ClaimedTaskRow]{Items: items}
+	if len(items) > pageSize {
+		page.Items = items[:pageSize]
+		last := page.Items[pageSize-1]
+		page.NextToken = EncodeContinuationToken(params.ScopeID, Cursor{
+			SortKey: last.LeaseExpiresAt.Format(time.RFC3339Nano),
+			ID:      last.TaskID,
+		})
+	}
+	return page, nil
 }
 
 // CancelledTaskDeliveryRef is one CancelledTaskRow's delivery-axis
