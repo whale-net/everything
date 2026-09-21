@@ -88,6 +88,16 @@ go_test(
     data = ["importer.go"],
 )
 
+# Pure unit test for parseDecisions (issue #2522 regression): Body must not
+# include the entry's own title line, which parseDecisions already captures
+# separately as Name/ID. No database or fixture data needed.
+go_test(
+    name = "parse_test",
+    srcs = ["parse_test.go"],
+    embed = [":importer"],
+    deps = ["@com_github_stretchr_testify//assert"],
+)
+
 # Non-manual smoke check for the drift class issue #2629 fixed: Parse
 # alone against whagent_net's real doc set (data deps on //whagent_net:docs
 # and //whagent_net/product:docs, located via runfiles the same way
