@@ -779,6 +779,54 @@ func TestUploadWindowChecksExistsWhenPriorRecordExists(t *testing.T) {
 	}
 }
 
+// TestCloseDrainsQueuedWindowsWithoutPanic is a regression test for a
+// shutdown race in uploadWorker: Close() cancels a.ctx and then closes
+// a.uploadChan, so once both have happened the worker's select had two
+// simultaneously-ready cases. If Go picked the uploadChan case, the receive
+// on a closed channel produced a nil *MinuteWindow, and uploadWindow
+// panicked dereferencing it (window.mu.Lock()). It queues several windows
+// directly onto uploadChan -- bypassing closeStaleWindows, so the channel
+// still has buffered work when Close() runs -- then calls Close()
+// immediately, without waiting for workers to drain it first. Run with
+// -race and repeated iterations to make the race reliably observable if it
+// regresses.
+func TestCloseDrainsQueuedWindowsWithoutPanic(t *testing.T) {
+	const iterations = 20
+	const windowsPerIteration = 8
+
+	for iter := 0; iter < iterations; iter++ {
+		mockS3 := newMockS3Client()
+		repo := newMockLogRepo()
+		a := NewArchiver(mockS3, repo)
+
+		for i := 0; i < windowsPerIteration; i++ {
+			minuteTimestamp := time.Date(2026, 9, 10, 12, i, 0, 0, time.UTC)
+			window := &MinuteWindow{
+				SGCID:           1,
+				SessionID:       int64(iter),
+				MinuteTimestamp: minuteTimestamp,
+				FirstLogTime:    minuteTimestamp,
+				LastLogTime:     minuteTimestamp,
+				LineCount:       1,
+			}
+			window.Buffer.WriteString("[stdout] queued right before close\n")
+			a.uploadChan <- window
+		}
+
+		// Close immediately, without waiting for the workers to drain the
+		// channel -- this is what raced ctx cancellation against the
+		// channel close in the original bug.
+		if err := a.Close(); err != nil {
+			t.Fatalf("iteration %d: Close returned error: %v", iter, err)
+		}
+
+		if got := len(mockS3.storage); got != windowsPerIteration {
+			t.Fatalf("iteration %d: expected all %d queued windows to be uploaded before Close returned, got %d",
+				iter, windowsPerIteration, got)
+		}
+	}
+}
+
 // TestFlushSession tests that FlushSession only flushes windows for a specific session
 // TODO: This test requires refactoring the Archiver to accept interfaces instead of concrete types
 // For now, these tests serve as documentation of expected behavior
