@@ -348,6 +348,33 @@ type TaskStore interface {
 	// reuses ListClaimedTasks' own paging machinery and
 	// identifying-context join style rather than forking a copy.
 	ListOpenNotes(ctx context.Context, params ListOpenNotesParams) (Page[OpenNoteRow], error)
+
+	// ReleaseLease is FR8's operator-initiated force-close
+	// (task_release.go, issue #2872): a single transaction that refuses a
+	// cancelled task (ErrTaskCancelled) and an unclaimed one
+	// (ErrTaskNotClaimed), force-closes the open claim (forceCloseClaimTx,
+	// release_reason='release'), appends one `released` task_attempt row,
+	// increments attempt_count -- counting as an attempt against the same
+	// DefaultAttemptCap ClaimTask/ReclaimExpired/AbandonClaim enforce
+	// (#2851 Assumption 2) -- and, if that increment reaches the cap,
+	// records the attempt-cap escalation (FR3, issue #2871) in this same
+	// transaction. Appends one task_intervention_event row
+	// (action='release'). current_lane is never touched.
+	ReleaseLease(ctx context.Context, params ReleaseParams) (ReleaseResult, error)
+
+	// EscalateTask is FR9's operator-initiated manual escalation
+	// (task_escalate.go, issue #2872): a single transaction that refuses a
+	// cancelled task (ErrTaskCancelled), records one 'manual'
+	// task_escalation_event with NULL counter/cap (recordEscalationTx,
+	// refusing an already-escalated task with ErrTaskEscalated -- see
+	// task_escalate.go's own doc comment for why), force-closes any open
+	// claim (forceCloseClaimTx, release_reason='escalate') and counts that
+	// force-close as an attempt (one `force-closed` task_attempt row,
+	// attempt_count+1) -- but never records a second escalation event even
+	// when that increment reaches DefaultAttemptCap (FR9's stated
+	// exception to FR8's "cap crossed => attempt-cap escalation" rule).
+	// Appends one task_intervention_event row (action='escalate').
+	EscalateTask(ctx context.Context, params EscalateParams) (EscalateResult, error)
 }
 
 // ErrMilestoneHasMilepebbleCut is CreateTask's named, loud rejection

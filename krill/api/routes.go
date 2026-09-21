@@ -204,6 +204,21 @@ func setupRoutes(mux *http.ServeMux, pool *pgxpool.Pool, githubToken string) {
 	// /console/claimed above.
 	mux.HandleFunc("GET /console/cancelled", handlers.ListCancelledTasksHandler(entities.Tasks()))
 
+	// task_release (issue #2872, FR8): a Swarm Operator force-closes the
+	// active lease on a claimed task directly, independent of lease
+	// expiry -- counts as an attempt against the same DefaultAttemptCap
+	// M4's claim/reclaim/abandon paths enforce. Gated like every other
+	// write endpoint (NFR6); the response is the same work.Payload
+	// document GET /tasks/{id} and claim/complete/abandon/cancel return.
+	mux.Handle("POST /tasks/{id}/release", gate(handlers.ReleaseTaskHandler(entities.Tasks(), assembler)))
+
+	// task_escalate (issue #2872, FR9): a Swarm Operator manually
+	// escalates a task at any time, the same reasoned escalation event
+	// FR2/FR3 record automatically but with reason 'manual'. Gated like
+	// every other write endpoint (NFR6); the response is the same
+	// work.Payload document GET /tasks/{id} and release return.
+	mux.Handle("POST /tasks/{id}/escalate", gate(handlers.EscalateTaskHandler(entities.Tasks(), assembler)))
+
 	mux.Handle("POST /design-sessions", gate(handlers.OpenDesignSessionHandler(entities.DesignSessions())))
 	mux.HandleFunc("GET /design-sessions/{id}", handlers.GetDesignSessionHandler(entities.DesignSessions(), entities.RevisionEvents()))
 	mux.Handle("POST /design-sessions/{id}/revision-events", gate(handlers.AppendRevisionEventHandler(entities.RevisionEvents())))

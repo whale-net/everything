@@ -98,3 +98,4 @@ query" section below).
 | [`ARCHITECTURE/27-task-payload-document.md`](ARCHITECTURE/27-task-payload-document.md) | The task payload document (FR4, FR10, NFR4, issue #2721) — `work.Payload`, `GetMilestoneDeliversSlice` |
 | [`ARCHITECTURE/28-work-axis-m4.md`](ARCHITECTURE/28-work-axis-m4.md) | The work axis (M4): task, claim, lease, attempt, note (root plan issue #2717, conformance issue #2728) — the whole-milestone view |
 | [`ARCHITECTURE/29-open-items.md`](ARCHITECTURE/29-open-items.md) | Open items — what's still unwired or open as of the most recent milestone |
+| [`ARCHITECTURE/30-operator-release-and-manual-escalate.md`](ARCHITECTURE/30-operator-release-and-manual-escalate.md) | Operator `release` and manual `escalate` (FR8, FR9, issue #2872) — force-close, attempt accounting, and the already-escalated design choice |
