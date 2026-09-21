@@ -449,7 +449,7 @@ func TestHandleActivity_SSEEnabled_CorrectDataAndLiveIndicatorPresent(t *testing
 	if strings.Contains(body, `href="/sessions" class="btn btn-sm btn-warning"`) {
 		t.Errorf("expected no hard-coded /sessions Reload target left over from the sessions-page origin, got body: %s", body)
 	}
-	if !strings.Contains(body, `id="deployments-live-status"`) {
+	if !strings.Contains(body, `data-live-status`) {
 		t.Errorf("expected the not-live indicator badge element to be present, got body: %s", body)
 	}
 }
