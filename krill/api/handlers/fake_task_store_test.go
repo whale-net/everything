@@ -23,7 +23,10 @@
 // later Testing-phase task exercises it. The GetEscalationEventByID stub
 // exists for the same reason now that task_escalation.go/task_complete.go
 // (issue #2870) widen it once more -- task_complete_test.go's own Testing
-// section is what actually exercises it.
+// section is what actually exercises it. The CancelTask/
+// ListCancelledTasks stubs exist for the same reason now that
+// task_cancel.go/console.go (issue #2873) widen it once more --
+// task_cancel_test.go/console_test.go exercise them.
 package handlers_test
 
 import (
@@ -87,6 +90,13 @@ type fakeTaskStore struct {
 
 	getEscalationEventByIDResult store.EscalationEvent
 	getEscalationEventByIDErr    error
+
+	cancelErr           error
+	cancelResult        store.CancelResult
+	gotCancelParams     store.CancelTaskParams
+	listCancelledErr    error
+	listCancelledResult store.Page[store.CancelledTaskRow]
+	gotListCancelled    store.ListCancelledTasksParams
 }
 
 func (f *fakeTaskStore) CreateTask(ctx context.Context, params store.CreateTaskParams) (store.Task, error) {
@@ -194,6 +204,22 @@ func (f *fakeTaskStore) ListClaimedTasks(ctx context.Context, params store.ListC
 
 func (f *fakeTaskStore) GetEscalationEventByID(ctx context.Context, id uuid.UUID) (store.EscalationEvent, error) {
 	return f.getEscalationEventByIDResult, f.getEscalationEventByIDErr
+}
+
+func (f *fakeTaskStore) CancelTask(ctx context.Context, params store.CancelTaskParams) (store.CancelResult, error) {
+	f.gotCancelParams = params
+	if f.cancelErr != nil {
+		return store.CancelResult{}, f.cancelErr
+	}
+	return f.cancelResult, nil
+}
+
+func (f *fakeTaskStore) ListCancelledTasks(ctx context.Context, params store.ListCancelledTasksParams) (store.Page[store.CancelledTaskRow], error) {
+	f.gotListCancelled = params
+	if f.listCancelledErr != nil {
+		return store.Page[store.CancelledTaskRow]{}, f.listCancelledErr
+	}
+	return f.listCancelledResult, nil
 }
 
 var _ store.TaskStore = (*fakeTaskStore)(nil)

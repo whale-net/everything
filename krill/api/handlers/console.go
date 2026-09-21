@@ -141,6 +141,95 @@ func parsePageSizeParam(r *http.Request) (int, error) {
 	return size, nil
 }
 
+// CancelledTaskDeliveryRefWire is the wire shape of one
+// store.CancelledTaskDeliveryRef.
+type CancelledTaskDeliveryRefWire struct {
+	ID    string `json:"id"`
+	Kind  string `json:"kind"`
+	Title string `json:"title"`
+}
+
+// CancelledTaskWire is the wire shape of one store.CancelledTaskRow
+// (FR10). Exported (mirrors ClaimedTaskWire's own precedent above) so
+// krill/mcp/tools' list_cancelled_tasks tool can return this exact shape
+// rather than an MCP-local mirror (LB7).
+type CancelledTaskWire struct {
+	TaskID                string                       `json:"task_id"`
+	Title                 string                       `json:"title"`
+	DeliveryRef           CancelledTaskDeliveryRefWire `json:"delivery_ref"`
+	CancelledByActing     SubjectWire                  `json:"cancelled_by_acting"`
+	CancelledByOnBehalfOf SubjectWire                  `json:"cancelled_by_on_behalf_of"`
+	CancelledAt           time.Time                    `json:"cancelled_at"`
+}
+
+// ToCancelledTaskWire converts one store.CancelledTaskRow to its wire
+// shape.
+func ToCancelledTaskWire(row store.CancelledTaskRow) CancelledTaskWire {
+	return CancelledTaskWire{
+		TaskID: row.TaskID.String(),
+		Title:  row.Title,
+		DeliveryRef: CancelledTaskDeliveryRefWire{
+			ID:    row.DeliveryRef.ID.String(),
+			Kind:  string(row.DeliveryRef.Kind),
+			Title: row.DeliveryRef.Title,
+		},
+		CancelledByActing:     ToSubjectWire(row.CancelledByActing),
+		CancelledByOnBehalfOf: ToSubjectWire(row.CancelledByOnBehalfOf),
+		CancelledAt:           row.CancelledAt,
+	}
+}
+
+// listCancelledTasksResponse is ListCancelledTasksHandler's response body
+// (NFR6): a bounded page plus a continuation token, present exactly when
+// more rows remain.
+type listCancelledTasksResponse struct {
+	Tasks     []CancelledTaskWire `json:"tasks"`
+	NextToken string              `json:"next_token,omitempty"`
+}
+
+// ListCancelledTasksHandler returns the console cancelled-task view
+// (FR10): GET /console/cancelled?scope_id=...&page_size=...&page_token=....
+// Ungated like ListClaimedTasksHandler above -- the query has no single
+// path entity to resolve scope_id from, so scope_id is a required query
+// parameter here too.
+func ListCancelledTasksHandler(tasks store.TaskStore) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		scopeID, err := uuid.Parse(r.URL.Query().Get(scopeIDQueryParam))
+		if err != nil {
+			writeJSONError(w, http.StatusBadRequest, "scope_id: invalid or missing UUID")
+			return
+		}
+
+		pageSize, err := parsePageSizeParam(r)
+		if err != nil {
+			writeJSONError(w, http.StatusBadRequest, err.Error())
+			return
+		}
+
+		page, err := tasks.ListCancelledTasks(r.Context(), store.ListCancelledTasksParams{
+			ScopeID: scopeID,
+			Page: store.PageParams{
+				PageSize:          pageSize,
+				ContinuationToken: r.URL.Query().Get(pageTokenQueryParam),
+			},
+		})
+		if err != nil {
+			writeConsoleQueryError(w, err)
+			return
+		}
+
+		resp := listCancelledTasksResponse{
+			Tasks:     make([]CancelledTaskWire, len(page.Items)),
+			NextToken: page.NextToken,
+		}
+		for i, row := range page.Items {
+			resp.Tasks[i] = ToCancelledTaskWire(row)
+		}
+
+		writeJSON(w, http.StatusOK, resp)
+	}
+}
+
 // writeConsoleQueryError maps a console query's store error onto this
 // package's one JSON error shape -- store.ErrTokenScopeMismatch and
 // store.ErrInvalidContinuationToken (paging.go) are caller errors (a

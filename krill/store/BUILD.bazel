@@ -60,6 +60,7 @@ go_library(
         "store.go",
         "task.go",
         "task_abandon.go",
+        "task_cancel.go",
         "task_claim.go",
         "task_complete.go",
         "task_console.go",
@@ -839,6 +840,24 @@ go_test(
     ],
 )
 
+# Pure unit tests for paging.go's ResolvePageSize and Encode/
+# DecodeContinuationToken (issue #2869, NFR6; issue #2873's FR10 "paging
+# default/max/clamp" and "cross-scope token rejected" Testing items): the
+# default/clamp rule, a token round trip, a cross-scope token's
+# ErrTokenScopeMismatch, and a malformed token's ErrInvalidContinuationToken.
+# No database needed -- part of `bazel test //...` (no "manual"/
+# "integration" tag).
+go_test(
+    name = "paging_test",
+    srcs = ["paging_test.go"],
+    deps = [
+        ":store",
+        "@com_github_google_uuid//:uuid",
+        "@com_github_stretchr_testify//assert",
+        "@com_github_stretchr_testify//require",
+    ],
+)
+
 # Real Postgres integration test for TaskStore.CreateTask (task.go,
 # migration 015, issue #2719's Testing section, FR1): the milepebble and
 # uncut-milestone creation shapes, the cut-milestone rejection
@@ -1160,6 +1179,98 @@ go_test(
     srcs = [
         "task_abandon_integration_test.go",
         "task_claim_integration_test.go",
+        "task_dependency_integration_test.go",
+        "task_integration_test.go",
+    ],
+    gotags = ["integration"],
+    tags = [
+        "external",
+        "integration",
+        "manual",
+        "no-cache",
+        "no-sandbox",
+        "requires-network",
+    ],
+    deps = [
+        ":store",
+        "//krill/migrate/schema",
+        "//libs/go/dbtest",
+        "//libs/go/migrate",
+        "@com_github_google_uuid//:uuid",
+        "@com_github_jackc_pgx_v5//stdlib",
+        "@com_github_stretchr_testify//assert",
+        "@com_github_stretchr_testify//require",
+    ],
+)
+
+# Real-Postgres coverage for TaskStore.CancelTask (task_cancel.go,
+# migration 016, issue #2873's Testing section, FR7, NFR5): cancelling an
+# unclaimed task, cancelling a claimed task (claim force-closed, a
+# subsequent heartbeat/complete rejected), cancelling an escalated task
+# (succeeds), ClaimTask afterwards refusing with ErrTaskCancelled
+# (including N concurrent claims), cancelling an already-cancelled task
+# (ErrTaskAlreadyCancelled, nothing further written), and NFR5's
+# byte-for-byte task_attempt/task_note proof. Shares
+# task_integration_test.go's test-store/test-scope/test-world/subject
+# helpers, task_dependency_integration_test.go's createTestTask helper,
+# and task_claim_integration_test.go's claimTestSession/countRows helpers
+# rather than duplicating them. Deliberately NOT part of `bazel test //...`
+# -- see //libs/go/dbtest's README for the full rationale.
+#
+# Run it explicitly (requires a working Docker daemon):
+#   bazel test //krill/store:task_cancel_integration_test --test_output=all
+go_test(
+    name = "task_cancel_integration_test",
+    size = "large",
+    timeout = "long",
+    srcs = [
+        "task_cancel_integration_test.go",
+        "task_claim_integration_test.go",
+        "task_dependency_integration_test.go",
+        "task_integration_test.go",
+    ],
+    gotags = ["integration"],
+    tags = [
+        "external",
+        "integration",
+        "manual",
+        "no-cache",
+        "no-sandbox",
+        "requires-network",
+    ],
+    deps = [
+        ":store",
+        "//krill/migrate/schema",
+        "//libs/go/dbtest",
+        "//libs/go/migrate",
+        "@com_github_google_uuid//:uuid",
+        "@com_github_jackc_pgx_v5//stdlib",
+        "@com_github_stretchr_testify//assert",
+        "@com_github_stretchr_testify//require",
+    ],
+)
+
+# Real-Postgres coverage for TaskStore.ListCancelledTasks (task_console.go,
+# issue #2873's Testing section, FR10): only cancelled tasks appear, each
+# row's title/delivery-reference (both shapes)/both cancellation subject
+# pairs, paging default/max/clamp, deterministic order, a continuation
+# walk with no gaps or duplicates, a cross-scope token rejected, and
+# another scope's rows absent. Shares task_integration_test.go's
+# test-store/test-scope/test-world/subject helpers,
+# task_dependency_integration_test.go's createTestTask helper, and
+# task_claim_integration_test.go's claimTestSession helper rather than
+# duplicating them. Deliberately NOT part of `bazel test //...` -- see
+# //libs/go/dbtest's README for the full rationale.
+#
+# Run it explicitly (requires a working Docker daemon):
+#   bazel test //krill/store:task_console_integration_test --test_output=all
+go_test(
+    name = "task_console_integration_test",
+    size = "large",
+    timeout = "long",
+    srcs = [
+        "task_claim_integration_test.go",
+        "task_console_integration_test.go",
         "task_dependency_integration_test.go",
         "task_integration_test.go",
     ],

@@ -80,3 +80,62 @@ func RegisterListClaimedTasks(reg *server.Registry, tasks store.TaskStore) {
 		return nil, out, nil
 	})
 }
+
+// listCancelledTasksInput is list_cancelled_tasks' argument schema (FR10,
+// issue #2873) -- mirrors listClaimedTasksInput's own shape: ScopeID is
+// explicit input, not session-derived, since this is a read tool (NFR6's
+// gate is write-only).
+type listCancelledTasksInput struct {
+	ScopeID   string `json:"scope_id" jsonschema:"The scope to query, as a UUID string (NFR1)."`
+	PageSize  int    `json:"page_size" jsonschema:"Optional page size, up to the server-enforced maximum (NFR6); absent or zero applies the default."`
+	PageToken string `json:"page_token" jsonschema:"Optional continuation token from a prior page's next_token (NFR6)."`
+}
+
+// listCancelledTasksOutput mirrors krill/api/handlers/console.go's HTTP
+// response for the same query 1:1 (LB7), reusing its exported
+// handlers.CancelledTaskWire rather than a bespoke MCP-local shape.
+type listCancelledTasksOutput struct {
+	Tasks     []handlers.CancelledTaskWire `json:"tasks"`
+	NextToken string                       `json:"next_token,omitempty"`
+}
+
+// RegisterListCancelledTasks registers list_cancelled_tasks (FR10, issue
+// #2873): every cancelled task in a scope -- title, delivery reference,
+// and the cancellation's own acting/on-behalf-of subjects and timestamp --
+// via store.TaskStore.ListCancelledTasks, mirroring
+// krill/api/handlers/console.go's ListCancelledTasksHandler for the same
+// capability. Mounted via server.RegisterOpsRead -- PersonaSwarmOperator
+// only.
+func RegisterListCancelledTasks(reg *server.Registry, tasks store.TaskStore) {
+	server.RegisterOpsRead(reg, &mcp.Tool{
+		Name:        "list_cancelled_tasks",
+		Description: "Return every cancelled (dead-lettered) task in a scope: title, delivery reference, and who cancelled it (FR10). Bounded and continuable (NFR6).",
+	}, func(ctx context.Context, _ *mcp.CallToolRequest, in listCancelledTasksInput) (*mcp.CallToolResult, listCancelledTasksOutput, error) {
+		var zero listCancelledTasksOutput
+
+		scopeID, err := uuid.Parse(in.ScopeID)
+		if err != nil {
+			return nil, zero, fmt.Errorf("scope_id: invalid or missing UUID")
+		}
+
+		page, err := tasks.ListCancelledTasks(ctx, store.ListCancelledTasksParams{
+			ScopeID: scopeID,
+			Page: store.PageParams{
+				PageSize:          in.PageSize,
+				ContinuationToken: in.PageToken,
+			},
+		})
+		if err != nil {
+			return nil, zero, err
+		}
+
+		out := listCancelledTasksOutput{
+			Tasks:     make([]handlers.CancelledTaskWire, len(page.Items)),
+			NextToken: page.NextToken,
+		}
+		for i, row := range page.Items {
+			out.Tasks[i] = handlers.ToCancelledTaskWire(row)
+		}
+		return nil, out, nil
+	})
+}

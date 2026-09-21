@@ -183,6 +183,19 @@ func setupRoutes(mux *http.ServeMux, pool *pgxpool.Pool, githubToken string) {
 	// comment).
 	mux.HandleFunc("GET /console/claimed", handlers.ListClaimedTasksHandler(entities.Tasks()))
 
+	// task_cancel (issue #2873, FR7): a Swarm Operator moves any task --
+	// escalated or not -- into a dead-lettered terminal state, distinct
+	// from lane Done, that claim never again returns and requeue cannot
+	// reopen. Gated like every other write endpoint (NFR6); the response
+	// is the same work.Payload document GET /tasks/{id} and claim/
+	// complete/abandon return.
+	mux.Handle("POST /tasks/{id}/cancel", gate(handlers.CancelTaskHandler(entities.Tasks(), assembler)))
+
+	// FR10's cancelled-task console view (issue #2873): GET
+	// /console/cancelled, ungated and scope_id-as-query-parameter like GET
+	// /console/claimed above.
+	mux.HandleFunc("GET /console/cancelled", handlers.ListCancelledTasksHandler(entities.Tasks()))
+
 	mux.Handle("POST /design-sessions", gate(handlers.OpenDesignSessionHandler(entities.DesignSessions())))
 	mux.HandleFunc("GET /design-sessions/{id}", handlers.GetDesignSessionHandler(entities.DesignSessions(), entities.RevisionEvents()))
 	mux.Handle("POST /design-sessions/{id}/revision-events", gate(handlers.AppendRevisionEventHandler(entities.RevisionEvents())))

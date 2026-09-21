@@ -314,6 +314,25 @@ type TaskStore interface {
 	// work.Assembler.Assemble, resolving the reason behind a task's own
 	// current_escalation_id for the payload document (FR2, issue #2870).
 	GetEscalationEventByID(ctx context.Context, id uuid.UUID) (EscalationEvent, error)
+
+	// CancelTask is FR7's dead-letter terminal state (task_cancel.go,
+	// issue #2873): a single transaction that row-locks the `task`,
+	// refuses an already-cancelled task (ErrTaskAlreadyCancelled, nothing
+	// written), force-closes any open claim (forceCloseClaimTx,
+	// release_reason='cancel'), sets task.cancelled_at, and appends one
+	// `task_intervention_event` row (action='cancel'). Works identically
+	// on an escalated task -- cancel is the "terminate" half of the
+	// recover-or-terminate pair FR6's requeue is the other half of.
+	// current_lane and current_escalation_id are never touched (NFR5):
+	// nothing already written is rewritten.
+	CancelTask(ctx context.Context, params CancelTaskParams) (CancelResult, error)
+
+	// ListCancelledTasks returns every cancelled task in params.ScopeID
+	// (task_console.go, issue #2873, FR10), bounded and continuable per
+	// params.Page (NFR6) -- reuses ListClaimedTasks' paging machinery
+	// (paging.go) and identifying-context join shape rather than rolling
+	// its own.
+	ListCancelledTasks(ctx context.Context, params ListCancelledTasksParams) (Page[CancelledTaskRow], error)
 }
 
 // ErrMilestoneHasMilepebbleCut is CreateTask's named, loud rejection

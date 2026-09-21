@@ -198,10 +198,15 @@ func run() error {
 	// tools.RegisterListClaimedTasks (issue #2869, FR4) is the first
 	// tool registered here: list_claimed_tasks, PersonaSwarmOperator only
 	// (enforced by RegisterOpsRead/the mount itself, not a per-tool
-	// allow-list).
+	// allow-list). tools.RegisterCancelTask (issue #2873, FR7) and
+	// tools.RegisterListCancelledTasks (issue #2873, FR10) are the next
+	// two: cancel_task (write) and list_cancelled_tasks (read), the same
+	// PersonaSwarmOperator-only posture.
 	opsSrv := server.New()
 	opsReg := server.NewRegistry(opsSrv)
 	tools.RegisterListClaimedTasks(opsReg, entities.Tasks())
+	tools.RegisterCancelTask(opsReg, sessions, entities.Tasks(), assembler)
+	tools.RegisterListCancelledTasks(opsReg, entities.Tasks())
 
 	// The mcpauth (human) front door's CredentialStore preflights the
 	// consuming domain's credential table at boot -- exactly like
