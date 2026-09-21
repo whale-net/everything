@@ -149,7 +149,9 @@ func TestReleaseWorkflow_DispatchBuildFailure_MarksTargetsFailed(t *testing.T) {
 	// successfully -- a real GitHub Actions run must exist first (see
 	// workflow.go's ReleaseWorkflow) -- so it must never be dispatched here.
 	env.OnActivity(ActivityRecordTargetState, mock.Anything, "run-2", testTarget(), repository.ReleaseRunTargetStateBuilding, mock.Anything, mock.Anything).Return(nil).Maybe().
-		Run(func(args mock.Arguments) { calledPollOrVerify = append(calledPollOrVerify, "RecordTargetState(Building)") })
+		Run(func(args mock.Arguments) {
+			calledPollOrVerify = append(calledPollOrVerify, "RecordTargetState(Building)")
+		})
 	env.OnActivity(ActivityPollBuild, mock.Anything, mock.Anything).Return(BuildStatus{}, nil).Maybe().
 		Run(func(args mock.Arguments) { calledPollOrVerify = append(calledPollOrVerify, ActivityPollBuild) })
 	env.OnActivity(ActivityVerifyPublished, mock.Anything, mock.Anything, mock.Anything).Return(VerifyResult{}, nil).Maybe().
@@ -555,6 +557,67 @@ func TestReleaseWorkflow_SignalBeatsPoll(t *testing.T) {
 	require.Len(t, got.Targets, 1)
 	require.Equal(t, repository.ReleaseRunTargetStateSucceeded, got.Targets[0].State,
 		"the signal must decide the build outcome (and the poll must not have needed to finish)")
+}
+
+// TestReleaseWorkflow_TargetProgressSignal_RecordsWithoutDeciding proves
+// SignalTargetProgress is drained by the same
+// awaitBuildCompletion loop as SignalBuildCompleted, but never decides the
+// build outcome: it records the reported target's Built state via
+// RecordTargetState and keeps waiting -- only the later build-completed
+// signal actually finishes the loop.
+func TestReleaseWorkflow_TargetProgressSignal_RecordsWithoutDeciding(t *testing.T) {
+	ts := testsuite.WorkflowTestSuite{}
+	env := ts.NewTestWorkflowEnvironment()
+
+	pollStarted := make(chan struct{})
+	registerActivityStubsWithPoll(env, blockingPoll(pollStarted))
+
+	in := ReleaseWorkflowInput{ReleaseRunID: "run-13", Targets: []ReleaseTarget{testTarget()}}
+	rawJSON := []byte(`{"build_id":"13131313-1313-1313-1313-131313131313","version":"v1.0.1"}`)
+	plan := ResolvedPlan{ReleaseRunID: "run-13", Versions: map[string]string{testTarget().key(): "v1.0.1"}, RawJSON: rawJSON}
+	ref := BuildRef{ReleaseRunID: "run-13", RunID: "413"}
+
+	env.OnActivity(ActivityCheckApproval, mock.Anything, "run-13").Return(true, nil).Once()
+	env.OnActivity(ActivityResolvePlan, mock.Anything, in.Targets).Return(plan, nil).Once()
+	env.OnActivity(ActivityRecordResolvedPlan, mock.Anything, "run-13", rawJSON).Return(nil).Once()
+	env.OnActivity(ActivityDispatchBuild, mock.Anything, plan, map[string]string{}).Return(ref, nil).Once()
+	env.OnActivity(ActivityRecordTargetState, mock.Anything, "run-13", testTarget(), repository.ReleaseRunTargetStateBuilding, "13131313-1313-1313-1313-131313131313", "").Return(nil).Once()
+	// The progress signal's own RecordTargetState call: Built, same build
+	// id, and the signal's detail line -- landed WHILE the poll is still
+	// blocked (proving it didn't have to wait for a terminal decision).
+	env.OnActivity(ActivityRecordTargetState, mock.Anything, "run-13", testTarget(), repository.ReleaseRunTargetStateBuilt, "13131313-1313-1313-1313-131313131313", "image built locally").Return(nil).Once()
+	env.OnActivity(ActivityFinalizePublish, mock.Anything, "run-13", plan, ref).Return(FinalizeResult{Succeeded: true}, nil).Once()
+	env.OnActivity(ActivityVerifyPublished, mock.Anything, "run-13", mock.Anything).Return(VerifyResult{AllPublished: true}, nil).Once()
+	env.OnActivity(ActivityRecordTargetState, mock.Anything, "run-13", testTarget(), repository.ReleaseRunTargetStateSucceeded, "13131313-1313-1313-1313-131313131313", "").
+		Return(nil).Once()
+
+	env.RegisterDelayedCallback(func() {
+		env.SignalWorkflow(SignalTargetProgress, TargetProgressSignal{
+			GitHubRunID:   "413",
+			OwnerFullName: testTarget().OwnerFullName,
+			Kind:          testTarget().Kind,
+			State:         repository.ReleaseRunTargetStateBuilt,
+			Detail:        "image built locally",
+		})
+	}, time.Millisecond)
+	env.RegisterDelayedCallback(func() {
+		env.SignalWorkflow(SignalBuildCompleted, BuildCompletedSignal{
+			GitHubRunID: "413",
+			Succeeded:   true,
+			Detail:      "run 413 conclusion=success",
+		})
+	}, 2*time.Millisecond)
+
+	env.ExecuteWorkflow(ReleaseWorkflow, in)
+
+	require.True(t, env.IsWorkflowCompleted())
+	require.NoError(t, env.GetWorkflowError())
+
+	var got ReleaseWorkflowResult
+	require.NoError(t, env.GetWorkflowResult(&got))
+	require.Len(t, got.Targets, 1)
+	require.Equal(t, repository.ReleaseRunTargetStateSucceeded, got.Targets[0].State,
+		"the progress signal must not decide the build outcome -- only the later build-completed signal does")
 }
 
 // TestReleaseWorkflow_SignalFailure_RecordsFailed proves the signal path
