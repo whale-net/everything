@@ -1,47 +1,52 @@
 ---
 name: validate
-description: Runs whole-system validation for a krill-work plan (fork of project-manager's validate) — dispatches system-validator to exercise the merged result in Tilt against the FeatureSet's Requirements (read live from krill), then routes any findings to planner for follow-up tasks.
+description: Runs whole-system validation for a krill-work plan (fork of project-manager's validate) — dispatches system-validator to exercise the merged result in Tilt against the FeatureSet's Requirements (read live from krill), then routes any findings to planner for follow-up tasks. On the Milestone path this never touches GitHub Issues/Projects.
 ---
 
 # validate
 
-Forked from `tools/project-manager/skills/validate` — mechanics unchanged
-except step 3's grading rubric now comes from krill instead of the issue
-body's copied-in text. Only meaningful once all swimlane tasks are `Done`.
+Forked from `tools/project-manager/skills/validate`. Only meaningful once
+every task in the manifest (Milestone path) or every task item (no-Milestone
+path) is `Done`.
 
 ## Usage
 
 ```
-/krill-work:validate 123
+/krill-work:validate <milestone-id>     # Milestone path — needs the task manifest plan/implement produced
+/krill-work:validate 123                # no-Milestone GitHub fallback: the tracking issue number
 ```
 
-## Steps
+## Steps (Milestone path)
 
-1-2. Identical to project-manager's `validate` steps 1-2: confirm every task
-   item is `Status: Done`, then build the `pm-<n>-integration` branch from
-   every task's own tip (most will already be on `main` via continuous
-   merge) right before dispatching system-validator.
+1. Confirm every task in the manifest (CONVENTIONS.md "No task-discovery
+   query exists" — you must already have it) is `Done`: `get_task {id}` on
+   each, don't trust a stale snapshot.
+2. Build the integration branch from every task's own tip (most will
+   already be on `main` via continuous merge) right before dispatching
+   system-validator — same mechanic as project-manager's `validate` step 2.
+3. Dispatch `krill-work:system-validator` with the FeatureSet id (and
+   Milestone id). It calls `get_feature_set_slice {id}` for the live
+   Requirements, brings the system up via Tilt, exercises it, and reports
+   findings as `record_note` scope-notes (expected to hit
+   whale-net/everything#2926's `forbidden` gate — see
+   `agents/system-validator.md`).
+4. **If everything passed:** re-dispatch `mergepush` as a no-op
+   re-confirmation, verify every PR is `MERGED`. Call `set_milestone_status
+   {milestone_id, status: "shipped"}` (also blocked by #2926 — make the
+   call, report the error) and, per-item, `mark_delivered_item_shipped` for
+   each delivered Feature/Requirement (same blocker). Report the plan fully
+   validated with the full PR list regardless of whether those two calls
+   succeeded.
+5. **If there are findings:** dispatch `krill-work:planner` with the
+   finding text `system-validator` reported (not note ids, since
+   `record_note` itself is blocked) to run its findings-handling process.
+   Report the new task manifest additions and point to
+   `/krill-work:implement <milestone-id>`.
 
-3. Dispatch `krill-work:system-validator` with the tracking issue number.
-   It reads the tracking issue's `krill feature-set-id: <id>` first line,
-   calls `get_feature_set_slice {id}` for the live Requirements (see
-   `agents/system-validator.md`), brings the system up via Tilt, exercises
-   it, and files finding issues for anything that isn't a clean pass.
+## Steps (no-Milestone GitHub fallback)
 
-4. **If everything passed:** identical finalize sequence to project-manager's
-   `validate` step 4 — re-dispatch `mergepush` as a no-op re-confirmation,
-   verify every PR is `MERGED`, post `PRs: ...` on the tracking issue. Post
-   `Ledger: M<k> → shipped` on the product tracking issue if this is a
-   milestone not hosted in krill; call `set_milestone_status {milestone_id,
-   status: "shipped"}` instead for a krill-hosted milestone (and, per-item,
-   `mark_delivered_item_shipped` for each delivered Feature/Requirement —
-   CONVENTIONS.md). Report the plan fully validated with the full PR list.
-
-5. **If there are findings:** dispatch `krill-work:planner` with the finding
-   issue numbers to run its findings-handling process. Report the new task
-   issue numbers and point to `/krill-work:implement <n>`.
-
-Once krill's M4 work-tracking surface ships, this skill is the second
-candidate (after `implement`) for replacing its `gh project item-list`/
-`gh pr`/`gh issue comment` calls with native MCP calls — see
-`krill/plugin/shared/CONVENTIONS.md`.
+Identical to `tools/project-manager/skills/validate/SKILL.md` — `<n>` is
+the GitHub tracking issue, findings become task issues on the Project,
+`Ledger: M<k> → shipped` posts on the product tracking issue. Read that
+file for the full process; it is not duplicated here since none of it
+changed on this path.

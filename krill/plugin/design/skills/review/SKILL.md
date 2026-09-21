@@ -50,16 +50,23 @@ approved plan — there is no root plan Issue to create (see
      post `gh issue comment <product-issue> --body "Ledger: M<n> → planned
      (<design-session-id>)"` on the tracking issue (never a body edit). **If
      it's a krill-hosted milestone** — call `set_milestone_status
-     {milestone_id, status: "planned"}` instead.
+     {milestone_id, status: "planned"}` instead (**known blocker,
+     whale-net/everything#2926**: this call is `{PersonaRequirementContributor,
+     PersonaAgent}`-only and expected to fail `forbidden` from an ordinary
+     Claude Code dispatch — make the call anyway, report the error, and
+     continue).
    - Tell the user the design is approved and that `/krill-work:plan
      <feature-set-id>` (plus `--milestone-id <id>` if one exists) is the
-     next step. Task breakdown still creates a GitHub Project/tracking issue
-     for swimlane execution either way (**TODO(M3)**: no krill
-     `PointerArtifact` MCP write path exists yet to link that issue to the
-     FeatureSet/Milestone natively) — but on the Milestone path, `plan` also
-     creates real krill `Task` entities via `create_task` (M4 FR1). If no
-     stakeholder meeting was held, mention `/krill-design:stakeholder-meeting
-     <design-session-id>` is still available before implementation starts.
+     next step. **On the Milestone path, task breakdown is fully
+     krill-native — no GitHub Project or tracking issue at all** — `plan`
+     creates real krill `Task` entities via `create_task`/
+     `declare_task_dependencies` and returns a task manifest (see
+     `krill-work/CONVENTIONS.md` "Work axis"). Without a Milestone id, `plan`
+     still falls back to a GitHub Project/tracking issue (no krill Task
+     container exists outside a Milestone, NFR7 — a real capability gap, not
+     a default). If no stakeholder meeting was held, mention
+     `/krill-design:stakeholder-meeting <design-session-id>` is still
+     available before implementation starts.
 
 5. **If changes requested:**
    - Ask the user for feedback text.
