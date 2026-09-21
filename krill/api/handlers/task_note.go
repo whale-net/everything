@@ -110,7 +110,9 @@ func writeNoteStoreError(w http.ResponseWriter, err error) {
 }
 
 // noteResponse is one entry of ListTaskNotesHandler's response body -- the
-// wire shape of a store.Note row.
+// wire shape of a store.Note row, including its current lifecycle Status
+// (M5's C26, issue #2874, FR11) alongside the body wherever a note is
+// returned.
 type noteResponse struct {
 	ID         string  `json:"id"`
 	TaskID     *string `json:"task_id,omitempty"`
@@ -118,13 +120,15 @@ type noteResponse struct {
 	EntityID   *string `json:"entity_id,omitempty"`
 	Kind       string  `json:"kind"`
 	Body       string  `json:"body"`
+	Status     string  `json:"status"`
 }
 
 func toNoteResponse(n store.Note) noteResponse {
 	resp := noteResponse{
-		ID:   n.ID.String(),
-		Kind: string(n.Kind),
-		Body: n.Body,
+		ID:     n.ID.String(),
+		Kind:   string(n.Kind),
+		Body:   n.Body,
+		Status: string(n.CurrentStatus),
 	}
 	if n.TaskID != nil {
 		id := n.TaskID.String()

@@ -405,9 +405,14 @@ func TestTaskNoteStore_RecordNote_UnclaimedTask_Succeeds(t *testing.T) {
 }
 
 // TestTaskNoteStore_NoUpdateOrDeletePath is issue #2727's Testing section
-// item 8 (FR12): no exported store.TaskStore method mutates a task_note
-// row -- exactly RecordNote (the one append) plus the two scope-qualified
-// reads exist -- and task_note itself carries no status/lifecycle column.
+// item 8 (FR12), updated by issue #2874 (M5's C26, FR11) now that
+// TransitionNoteLifecycle/ListOpenNotes exist: task_note's Body/Kind/target
+// still have no update or delete path -- exactly RecordNote (the one
+// append), its two scope-qualified reads, and the two lifecycle/console
+// additions exist, and TransitionNoteLifecycle only ever mutates
+// current_status, never body/kind/task_id/entity_kind/entity_id (see
+// TestTaskNoteLifecycleStore_TransitionNoteLifecycle_NeverTouchesBodyOrKind,
+// task_note_lifecycle_integration_test.go, for the row-level proof).
 func TestTaskNoteStore_NoUpdateOrDeletePath(t *testing.T) {
 	ifaceType := reflect.TypeOf((*store.TaskStore)(nil)).Elem()
 	var noteMethods []string
@@ -417,8 +422,8 @@ func TestTaskNoteStore_NoUpdateOrDeletePath(t *testing.T) {
 			noteMethods = append(noteMethods, name)
 		}
 	}
-	assert.ElementsMatch(t, []string{"RecordNote", "ListNotesForTask", "ListNotesForEntity"}, noteMethods,
-		"FR12: task_note must have no update/delete method -- only the one append and its two scope-qualified reads")
+	assert.ElementsMatch(t, []string{"RecordNote", "ListNotesForTask", "ListNotesForEntity", "TransitionNoteLifecycle", "ListOpenNotes"}, noteMethods,
+		"FR12: task_note must have no update/delete method for body/kind/target -- only the one append, its two scope-qualified reads, and the lifecycle-transition/open-notes-query pair (M5's C26)")
 
 	ctx := context.Background()
 	_, db := newTaskNoteTestStore(t)
@@ -432,8 +437,9 @@ func TestTaskNoteStore_NoUpdateOrDeletePath(t *testing.T) {
 		columns = append(columns, col)
 	}
 	require.NoError(t, rows.Err())
-	assert.NotContains(t, columns, "status", "FR12: task_note must never gain a status/lifecycle column")
-	assert.NotContains(t, columns, "state", "FR12: task_note must never gain a status/lifecycle column")
+	assert.NotContains(t, columns, "status", "task_note's lifecycle column is named current_status, never a bare status/state")
+	assert.NotContains(t, columns, "state", "task_note's lifecycle column is named current_status, never a bare status/state")
+	assert.Contains(t, columns, "current_status", "M5's C26 (migration 016) must have added task_note.current_status")
 }
 
 // TestTaskNoteStore_ListNotesForTask_CrossScopeIsolation is issue #2727's

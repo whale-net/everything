@@ -6,7 +6,9 @@
 // This task ships list_claimed_tasks (FR4), mirroring
 // krill/api/handlers/console.go's HTTP surface for the same capability
 // 1:1 (LB7) by reusing its exported wire types rather than an MCP-local
-// mirror.
+// mirror. list_open_notes (issue #2874, FR12) is the sibling read tool
+// over store.TaskStore.ListOpenNotes, mirroring
+// krill/api/handlers/console.go's ListOpenNotesHandler the same way.
 package tools
 
 import (
@@ -135,6 +137,63 @@ func RegisterListCancelledTasks(reg *server.Registry, tasks store.TaskStore) {
 		}
 		for i, row := range page.Items {
 			out.Tasks[i] = handlers.ToCancelledTaskWire(row)
+		}
+		return nil, out, nil
+	})
+}
+
+// listOpenNotesInput is list_open_notes' argument schema (FR12). ScopeID is
+// explicit input, not session-derived -- mirrors listClaimedTasksInput's own
+// posture for the same reason (see its own doc comment).
+type listOpenNotesInput struct {
+	ScopeID   string `json:"scope_id" jsonschema:"The scope to query, as a UUID string (NFR1)."`
+	PageSize  int    `json:"page_size" jsonschema:"Optional page size, up to the server-enforced maximum (NFR6); absent or zero applies the default."`
+	PageToken string `json:"page_token" jsonschema:"Optional continuation token from a prior page's next_token (NFR6)."`
+}
+
+// listOpenNotesOutput mirrors krill/api/handlers/console.go's HTTP response
+// for the same query 1:1 (LB7), reusing its exported handlers.OpenNoteWire
+// rather than a bespoke MCP-local shape.
+type listOpenNotesOutput struct {
+	Notes     []handlers.OpenNoteWire `json:"notes"`
+	NextToken string                  `json:"next_token,omitempty"`
+}
+
+// RegisterListOpenNotes registers list_open_notes (FR12): every note still
+// at NoteLifecycleStatusNoted in a scope, across both target shapes a note
+// can name, via store.TaskStore.ListOpenNotes, mirroring
+// krill/api/handlers/console.go's ListOpenNotesHandler for the same
+// capability. Mounted via server.RegisterOpsRead -- PersonaSwarmOperator
+// only.
+func RegisterListOpenNotes(reg *server.Registry, tasks store.TaskStore) {
+	server.RegisterOpsRead(reg, &mcp.Tool{
+		Name:        "list_open_notes",
+		Description: "Return every note still at 'noted' in a scope -- body, kind, and the identifying context of whichever task or spec-axis entity it targets (FR12). Bounded and continuable (NFR6).",
+	}, func(ctx context.Context, _ *mcp.CallToolRequest, in listOpenNotesInput) (*mcp.CallToolResult, listOpenNotesOutput, error) {
+		var zero listOpenNotesOutput
+
+		scopeID, err := uuid.Parse(in.ScopeID)
+		if err != nil {
+			return nil, zero, fmt.Errorf("scope_id: invalid or missing UUID")
+		}
+
+		page, err := tasks.ListOpenNotes(ctx, store.ListOpenNotesParams{
+			ScopeID: scopeID,
+			Page: store.PageParams{
+				PageSize:          in.PageSize,
+				ContinuationToken: in.PageToken,
+			},
+		})
+		if err != nil {
+			return nil, zero, err
+		}
+
+		out := listOpenNotesOutput{
+			Notes:     make([]handlers.OpenNoteWire, len(page.Items)),
+			NextToken: page.NextToken,
+		}
+		for i, row := range page.Items {
+			out.Notes[i] = handlers.ToOpenNoteWire(row)
 		}
 		return nil, out, nil
 	})

@@ -1,6 +1,7 @@
 // This file (issue #2869, FR4, NFR6) is M5's console query HTTP surface:
 // the home for every console handler this milestone adds. This task ships
-// GET /console/claimed over store.TaskStore.ListClaimedTasks (FR4).
+// GET /console/claimed over store.TaskStore.ListClaimedTasks (FR4); issue
+// #2874 (FR12) adds GET /console/notes over store.TaskStore.ListOpenNotes.
 // Ungated like every other read endpoint in this package (NFR6's gate is
 // write-only) -- unlike every other ungated GET route here, this query
 // has no single path entity to resolve scope_id from (contrast
@@ -224,6 +225,114 @@ func ListCancelledTasksHandler(tasks store.TaskStore) http.HandlerFunc {
 		}
 		for i, row := range page.Items {
 			resp.Tasks[i] = ToCancelledTaskWire(row)
+		}
+
+		writeJSON(w, http.StatusOK, resp)
+	}
+}
+
+// OpenNoteTaskContextWire is the wire shape of one
+// store.OpenNoteTaskContext.
+type OpenNoteTaskContextWire struct {
+	TaskID      string                     `json:"task_id"`
+	Title       string                     `json:"title"`
+	DeliveryRef ClaimedTaskDeliveryRefWire `json:"delivery_ref"`
+}
+
+// OpenNoteEntityContextWire is the wire shape of one
+// store.OpenNoteEntityContext.
+type OpenNoteEntityContextWire struct {
+	EntityKind string `json:"entity_kind"`
+	EntityID   string `json:"entity_id"`
+	Title      string `json:"title"`
+}
+
+// OpenNoteWire is the wire shape of one store.OpenNoteRow (FR12). Exported
+// (mirrors ClaimedTaskWire's own precedent) so krill/mcp/tools' list_open_
+// notes tool can return this exact shape rather than an MCP-local mirror
+// (LB7). Exactly one of TaskContext/EntityContext is set, mirroring
+// store.OpenNoteRow's own doc comment.
+type OpenNoteWire struct {
+	NoteID    string                     `json:"note_id"`
+	Kind      string                     `json:"kind"`
+	Body      string                     `json:"body"`
+	CreatedAt time.Time                  `json:"created_at"`
+	Task      *OpenNoteTaskContextWire   `json:"task,omitempty"`
+	Entity    *OpenNoteEntityContextWire `json:"entity,omitempty"`
+}
+
+// ToOpenNoteWire converts one store.OpenNoteRow to its wire shape.
+func ToOpenNoteWire(row store.OpenNoteRow) OpenNoteWire {
+	wire := OpenNoteWire{
+		NoteID:    row.NoteID.String(),
+		Kind:      string(row.Kind),
+		Body:      row.Body,
+		CreatedAt: row.CreatedAt,
+	}
+	if row.TaskContext != nil {
+		wire.Task = &OpenNoteTaskContextWire{
+			TaskID: row.TaskContext.TaskID.String(),
+			Title:  row.TaskContext.Title,
+			DeliveryRef: ClaimedTaskDeliveryRefWire{
+				ID:    row.TaskContext.DeliveryRef.ID.String(),
+				Kind:  string(row.TaskContext.DeliveryRef.Kind),
+				Title: row.TaskContext.DeliveryRef.Title,
+			},
+		}
+	}
+	if row.EntityContext != nil {
+		wire.Entity = &OpenNoteEntityContextWire{
+			EntityKind: string(row.EntityContext.EntityKind),
+			EntityID:   row.EntityContext.EntityID.String(),
+			Title:      row.EntityContext.Title,
+		}
+	}
+	return wire
+}
+
+// listOpenNotesResponse is ListOpenNotesHandler's response body (NFR6): a
+// bounded page plus a continuation token, present exactly when more rows
+// remain.
+type listOpenNotesResponse struct {
+	Notes     []OpenNoteWire `json:"notes"`
+	NextToken string         `json:"next_token,omitempty"`
+}
+
+// ListOpenNotesHandler returns the console open-notes view (FR12): GET
+// /console/notes?scope_id=...&page_size=...&page_token=.... Ungated like
+// ListClaimedTasksHandler -- see this file's own doc comment.
+func ListOpenNotesHandler(tasks store.TaskStore) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		scopeID, err := uuid.Parse(r.URL.Query().Get(scopeIDQueryParam))
+		if err != nil {
+			writeJSONError(w, http.StatusBadRequest, "scope_id: invalid or missing UUID")
+			return
+		}
+
+		pageSize, err := parsePageSizeParam(r)
+		if err != nil {
+			writeJSONError(w, http.StatusBadRequest, err.Error())
+			return
+		}
+
+		page, err := tasks.ListOpenNotes(r.Context(), store.ListOpenNotesParams{
+			ScopeID: scopeID,
+			Page: store.PageParams{
+				PageSize:          pageSize,
+				ContinuationToken: r.URL.Query().Get(pageTokenQueryParam),
+			},
+		})
+		if err != nil {
+			writeConsoleQueryError(w, err)
+			return
+		}
+
+		resp := listOpenNotesResponse{
+			Notes:     make([]OpenNoteWire, len(page.Items)),
+			NextToken: page.NextToken,
+		}
+		for i, row := range page.Items {
+			resp.Notes[i] = ToOpenNoteWire(row)
 		}
 
 		writeJSON(w, http.StatusOK, resp)

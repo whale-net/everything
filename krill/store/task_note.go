@@ -12,10 +12,15 @@
 // caller's job (RequireSession in the HTTP layer, requireKrillSession in the
 // MCP layer), never re-implemented here.
 //
-// `task_note` is flat and immutable (FR12): no status/state column, no
-// lifecycle transition, and no update or delete method exists anywhere in
-// this package for it -- see this file's own doc comment on Note for why
-// that must stay true even after M5's C26 lifecycle lands.
+// `task_note`'s Body/Kind/target are flat and immutable (FR12): no update or
+// delete method exists anywhere in this package for them, and none ever
+// will. current_status (016_escalation_axis.up.sql, M5's C26) is the one
+// exception this file's own earlier comment anticipated ("M5's C26
+// lifecycle, when it lands, is a new migration adding new columns, not a
+// reshaping of this one") -- a denormalized "current value" column, exactly
+// like task.current_lane, mutated only by TransitionNoteLifecycle
+// (task_note_lifecycle.go), never by this file. Body/Kind/TaskID/EntityKind/
+// EntityID stay untouched by that method -- see its own doc comment.
 package store
 
 import (
@@ -119,10 +124,13 @@ var ErrEmptyNoteBody = errors.New("krill/store: note body must not be empty")
 // Note is one row of `task_note` (migration 015) -- a flat, immutable
 // record that Body (of Kind) was recorded against exactly one target,
 // either the task TaskID names or the spec-axis entity EntityKind+EntityID
-// names. Never revised, resolved, or deleted (FR12): no status/state field
-// exists on this struct, and none may be added by widening this struct in
-// place -- M5's C26 lifecycle, when it lands, is a new migration adding new
-// columns, not a reshaping of this one.
+// names. Body/Kind/TaskID/EntityKind/EntityID are never revised, resolved,
+// or deleted (FR12): no method in this package updates or deletes any of
+// them. CurrentStatus (M5's C26, migration 016) is the one additive,
+// mutable field on this struct -- RecordNote's INSERT never sets it
+// explicitly (task_note.current_status's own DB DEFAULT 'noted' does); only
+// TransitionNoteLifecycle (task_note_lifecycle.go) ever changes it, and
+// that method never touches Body/Kind/the target fields.
 type Note struct {
 	ID      uuid.UUID
 	ScopeID uuid.UUID
@@ -136,6 +144,11 @@ type Note struct {
 
 	Kind NoteKind
 	Body string
+
+	// CurrentStatus is task_note.current_status's denormalized "current
+	// value" (FR11) -- 'noted' at creation, transitioned only by
+	// TransitionNoteLifecycle. See this struct's own doc comment.
+	CurrentStatus NoteLifecycleStatus
 
 	// CreatedByActing/CreatedByOnBehalfOf are always populated (NFR3,
 	// LB4) -- RecordNote is the only write path onto this table, and it
@@ -179,7 +192,7 @@ func validateNoteTarget(params RecordNoteParams) error {
 	return nil
 }
 
-const noteColumns = `id, scope_id, task_id, entity_kind, entity_id, kind, body, ` +
+const noteColumns = `id, scope_id, task_id, entity_kind, entity_id, kind, body, current_status, ` +
 	`created_by_acting_iss, created_by_acting_sub, created_by_acting_kind, ` +
 	`created_by_on_behalf_of_iss, created_by_on_behalf_of_sub, created_by_on_behalf_of_kind, created_at`
 
@@ -188,7 +201,7 @@ func scanNote(row pgx.Row) (Note, error) {
 	var entityKind *string
 	var actingKind, onBehalfOfKind string
 	err := row.Scan(
-		&n.ID, &n.ScopeID, &n.TaskID, &entityKind, &n.EntityID, &n.Kind, &n.Body,
+		&n.ID, &n.ScopeID, &n.TaskID, &entityKind, &n.EntityID, &n.Kind, &n.Body, &n.CurrentStatus,
 		&n.CreatedByActing.Iss, &n.CreatedByActing.Sub, &actingKind,
 		&n.CreatedByOnBehalfOf.Iss, &n.CreatedByOnBehalfOf.Sub, &onBehalfOfKind,
 		&n.CreatedAt,

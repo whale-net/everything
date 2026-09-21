@@ -141,6 +141,42 @@ go_test(
     ],
 )
 
+# No-database unit test (issue #2874's own MCP-layer structural proof,
+# FR11): RegisterRecordNote/RegisterTransitionNoteLifecycle together
+# register exactly {record_note, transition_note_lifecycle}. Mirrors
+# :task_cancel_registration_test's own store.New(nil)/in-memory transport
+# technique, so it needs no Docker and is part of `bazel test //...`.
+go_test(
+    name = "task_note_registration_test",
+    srcs = ["task_note_registration_test.go"],
+    deps = [
+        ":tools",
+        "//krill/mcp/server",
+        "//krill/store",
+        "@com_github_modelcontextprotocol_go_sdk//mcp",
+        "@com_github_stretchr_testify//assert",
+        "@com_github_stretchr_testify//require",
+    ],
+)
+
+# No-database unit test (issue #2869/#2874's own MCP-layer structural
+# proof, FR4/FR12): RegisterListClaimedTasks/RegisterListOpenNotes together
+# register exactly {list_claimed_tasks, list_open_notes}. Mirrors
+# :task_cancel_registration_test's own store.New(nil)/in-memory transport
+# technique, so it needs no Docker and is part of `bazel test //...`.
+go_test(
+    name = "console_registration_test",
+    srcs = ["console_registration_test.go"],
+    deps = [
+        ":tools",
+        "//krill/mcp/server",
+        "//krill/store",
+        "@com_github_modelcontextprotocol_go_sdk//mcp",
+        "@com_github_stretchr_testify//assert",
+        "@com_github_stretchr_testify//require",
+    ],
+)
+
 # No-database unit test (issue #2827's own MCP-layer structural proof):
 # RegisterInitSession registers exactly {init_session} over a real
 # in-memory MCP client/server connection. Mirrors

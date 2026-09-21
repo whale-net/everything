@@ -106,6 +106,14 @@ func (f *fakeTaskStore) ListCancelledTasks(ctx context.Context, params store.Lis
 	panic("not used by this test")
 }
 
+func (f *fakeTaskStore) TransitionNoteLifecycle(ctx context.Context, params store.TransitionNoteLifecycleParams) (store.NoteLifecycleEvent, error) {
+	panic("not used by this test")
+}
+
+func (f *fakeTaskStore) ListOpenNotes(ctx context.Context, params store.ListOpenNotesParams) (store.Page[store.OpenNoteRow], error) {
+	panic("not used by this test")
+}
+
 var _ store.TaskStore = (*fakeTaskStore)(nil)
 
 // TestAssemble_CrossScopeTaskID_NotFound proves NFR1: a taskID that

@@ -333,6 +333,21 @@ type TaskStore interface {
 	// (paging.go) and identifying-context join shape rather than rolling
 	// its own.
 	ListCancelledTasks(ctx context.Context, params ListCancelledTasksParams) (Page[CancelledTaskRow], error)
+
+	// TransitionNoteLifecycle appends one task_note_lifecycle_event row and
+	// mirrors its Status onto task_note.current_status, in one transaction
+	// (task_note_lifecycle.go, issue #2874, FR11). Open to any persona --
+	// no claim or ownership check, mirroring RecordNote's own "any Agent,
+	// claimant or not" posture. Never touches task_note.body/kind/task_id/
+	// entity_kind/entity_id -- see Note's own doc comment (task_note.go).
+	TransitionNoteLifecycle(ctx context.Context, params TransitionNoteLifecycleParams) (NoteLifecycleEvent, error)
+
+	// ListOpenNotes returns every note in params.ScopeID whose
+	// current_status is NoteLifecycleStatusNoted (task_note_console.go,
+	// issue #2874, FR12), bounded and continuable per params.Page (NFR6) --
+	// reuses ListClaimedTasks' own paging machinery and
+	// identifying-context join style rather than forking a copy.
+	ListOpenNotes(ctx context.Context, params ListOpenNotesParams) (Page[OpenNoteRow], error)
 }
 
 // ErrMilestoneHasMilepebbleCut is CreateTask's named, loud rejection

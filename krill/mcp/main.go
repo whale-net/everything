@@ -162,10 +162,11 @@ func run() error {
 	// add_must_not_foreclose/add_deferral/set_milestone_status/
 	// mark_delivered_item_shipped/move_delivery_scope/abandon_milestone/
 	// create_task/declare_task_dependencies/claim_task/heartbeat_task/
-	// complete_task/abandon_task/record_note all need the same
-	// krill-session-derived LB4 subject pair every write tool on that mount
-	// already resolves; get_task needs no session (ungated read, NFR6) but
-	// mounts here too rather than a fourth surface of its own (LB7).
+	// complete_task/abandon_task/record_note/transition_note_lifecycle
+	// (issue #2874, FR11) all need the same krill-session-derived LB4
+	// subject pair every write tool on that mount already resolves;
+	// get_task needs no session (ungated read, NFR6) but mounts here too
+	// rather than a fourth surface of its own (LB7).
 	specSrv := server.New()
 	specReg := server.NewRegistry(specSrv)
 	tools.RegisterAll(specReg, querier)
@@ -187,6 +188,7 @@ func run() error {
 	tools.RegisterCompleteTask(designReg, sessions, entities.Tasks(), assembler)
 	tools.RegisterAbandonTask(designReg, sessions, entities.Tasks(), assembler)
 	tools.RegisterRecordNote(designReg, sessions, entities.Tasks())
+	tools.RegisterTransitionNoteLifecycle(designReg, sessions, entities.Tasks())
 
 	// opsSrv/opsReg is M5's operator surface (issue #2867, /mcp/ops):
 	// its own *mcp.Server so an operator verb or console query
@@ -195,18 +197,23 @@ func run() error {
 	// specMountPath or designMountPath, the same isolation specSrv/
 	// designSrv give each other above.
 	//
-	// tools.RegisterListClaimedTasks (issue #2869, FR4) is the first
+	// tools.RegisterListClaimedTasks (issue #2869, FR4) was the first
 	// tool registered here: list_claimed_tasks, PersonaSwarmOperator only
 	// (enforced by RegisterOpsRead/the mount itself, not a per-tool
 	// allow-list). tools.RegisterCancelTask (issue #2873, FR7) and
 	// tools.RegisterListCancelledTasks (issue #2873, FR10) are the next
 	// two: cancel_task (write) and list_cancelled_tasks (read), the same
-	// PersonaSwarmOperator-only posture.
+	// PersonaSwarmOperator-only posture. tools.RegisterListOpenNotes (issue
+	// #2874, FR12) mounts the same way, just below.
 	opsSrv := server.New()
 	opsReg := server.NewRegistry(opsSrv)
 	tools.RegisterListClaimedTasks(opsReg, entities.Tasks())
 	tools.RegisterCancelTask(opsReg, sessions, entities.Tasks(), assembler)
 	tools.RegisterListCancelledTasks(opsReg, entities.Tasks())
+
+	// tools.RegisterListOpenNotes (issue #2874, FR12): list_open_notes,
+	// PersonaSwarmOperator only (RegisterOpsRead/the mount itself).
+	tools.RegisterListOpenNotes(opsReg, entities.Tasks())
 
 	// The mcpauth (human) front door's CredentialStore preflights the
 	// consuming domain's credential table at boot -- exactly like

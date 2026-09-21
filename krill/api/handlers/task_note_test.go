@@ -140,7 +140,7 @@ func TestListTaskNotesHandler_Success(t *testing.T) {
 	tasks := &fakeTaskStore{
 		getTaskByIDResult: store.Task{ID: taskID, ScopeID: scopeID},
 		notesForTask: []store.Note{
-			{ID: noteID, TaskID: &taskID, Kind: store.NoteKindComment, Body: "hello"},
+			{ID: noteID, TaskID: &taskID, Kind: store.NoteKindComment, Body: "hello", CurrentStatus: store.NoteLifecycleStatusDeferred},
 		},
 	}
 
@@ -153,6 +153,7 @@ func TestListTaskNotesHandler_Success(t *testing.T) {
 			TaskID string `json:"task_id"`
 			Kind   string `json:"kind"`
 			Body   string `json:"body"`
+			Status string `json:"status"`
 		} `json:"notes"`
 	}
 	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &resp))
@@ -160,6 +161,7 @@ func TestListTaskNotesHandler_Success(t *testing.T) {
 	assert.Equal(t, taskID.String(), resp.Notes[0].TaskID)
 	assert.Equal(t, "comment", resp.Notes[0].Kind)
 	assert.Equal(t, "hello", resp.Notes[0].Body)
+	assert.Equal(t, "deferred", resp.Notes[0].Status, "FR11: GET /tasks/{id}/notes must carry each note's current lifecycle status")
 }
 
 // TestListTaskNotesHandler_TaskNotFound_Returns404 proves an unknown task

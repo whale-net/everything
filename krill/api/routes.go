@@ -175,13 +175,21 @@ func setupRoutes(mux *http.ServeMux, pool *pgxpool.Pool, githubToken string) {
 	mux.Handle("POST /notes", gate(handlers.RecordNoteHandler(entities.Tasks())))
 	mux.HandleFunc("GET /tasks/{id}/notes", handlers.ListTaskNotesHandler(entities.Tasks()))
 
+	// task_note_lifecycle_event (issue #2874, FR11): any persona
+	// transitions a note's lifecycle status -- POST gated (NFR6), the same
+	// session-only gate POST /notes uses, deliberately never restricted to
+	// PersonaSwarmOperator (see task_note_lifecycle.go's own doc comment).
+	mux.Handle("POST /notes/{id}/lifecycle", gate(handlers.TransitionNoteLifecycleHandler(entities.Tasks())))
+
 	// M5's console query surface (issue #2869, FR4, NFR6): GET
 	// /console/claimed, ungated like every other read endpoint in this
 	// package -- unlike every other ungated GET route above, this query
 	// has no single path entity to resolve scope_id from, so scope_id is
 	// a required query parameter instead (see console.go's own doc
-	// comment).
+	// comment). GET /console/notes (issue #2874, FR12) is the same shape,
+	// over store.TaskStore.ListOpenNotes.
 	mux.HandleFunc("GET /console/claimed", handlers.ListClaimedTasksHandler(entities.Tasks()))
+	mux.HandleFunc("GET /console/notes", handlers.ListOpenNotesHandler(entities.Tasks()))
 
 	// task_cancel (issue #2873, FR7): a Swarm Operator moves any task --
 	// escalated or not -- into a dead-lettered terminal state, distinct

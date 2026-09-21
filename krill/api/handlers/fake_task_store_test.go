@@ -26,7 +26,11 @@
 // section is what actually exercises it. The CancelTask/
 // ListCancelledTasks stubs exist for the same reason now that
 // task_cancel.go/console.go (issue #2873) widen it once more --
-// task_cancel_test.go/console_test.go exercise them.
+// task_cancel_test.go/console_test.go exercise them. The
+// TransitionNoteLifecycle/ListOpenNotes stubs exist for the same reason now
+// that task_note_lifecycle.go/task_note_console.go (issue #2874) widen it
+// once more -- task_note_lifecycle_test.go/console_test.go's own later
+// Testing-phase task exercises them.
 package handlers_test
 
 import (
@@ -97,6 +101,14 @@ type fakeTaskStore struct {
 	listCancelledErr    error
 	listCancelledResult store.Page[store.CancelledTaskRow]
 	gotListCancelled    store.ListCancelledTasksParams
+
+	transitionNoteLifecycleErr       error
+	transitionNoteLifecycleResult    store.NoteLifecycleEvent
+	gotTransitionNoteLifecycleParams store.TransitionNoteLifecycleParams
+
+	listOpenNotesErr       error
+	listOpenNotesResult    store.Page[store.OpenNoteRow]
+	gotListOpenNotesParams store.ListOpenNotesParams
 }
 
 func (f *fakeTaskStore) CreateTask(ctx context.Context, params store.CreateTaskParams) (store.Task, error) {
@@ -220,6 +232,22 @@ func (f *fakeTaskStore) ListCancelledTasks(ctx context.Context, params store.Lis
 		return store.Page[store.CancelledTaskRow]{}, f.listCancelledErr
 	}
 	return f.listCancelledResult, nil
+}
+
+func (f *fakeTaskStore) TransitionNoteLifecycle(ctx context.Context, params store.TransitionNoteLifecycleParams) (store.NoteLifecycleEvent, error) {
+	f.gotTransitionNoteLifecycleParams = params
+	if f.transitionNoteLifecycleErr != nil {
+		return store.NoteLifecycleEvent{}, f.transitionNoteLifecycleErr
+	}
+	return f.transitionNoteLifecycleResult, nil
+}
+
+func (f *fakeTaskStore) ListOpenNotes(ctx context.Context, params store.ListOpenNotesParams) (store.Page[store.OpenNoteRow], error) {
+	f.gotListOpenNotesParams = params
+	if f.listOpenNotesErr != nil {
+		return store.Page[store.OpenNoteRow]{}, f.listOpenNotesErr
+	}
+	return f.listOpenNotesResult, nil
 }
 
 var _ store.TaskStore = (*fakeTaskStore)(nil)

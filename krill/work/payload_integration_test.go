@@ -292,3 +292,45 @@ func TestAssemble_AttemptCapEscalatedTask_SurfacesCurrentEscalationID(t *testing
 	require.NotNil(t, escalated.Task.CurrentEscalationID, "GET /tasks/{id} must show the task escalated, with no second call needed")
 	assert.Equal(t, *reclaimResult.Reclaimed[0].EscalationID, *escalated.Task.CurrentEscalationID)
 }
+
+// TestAssemble_NoteStatus_AppearsInPayload is issue #2874's Testing section
+// item: a note's current lifecycle status (M5's C26, FR11) actually
+// appears in the assembled GET /tasks/{id} payload -- 'noted' immediately
+// after RecordNote, and the transitioned-to status after
+// TransitionNoteLifecycle, with the body left untouched. Exercises the
+// real store.TaskStore.ListNotesForTask/TransitionNoteLifecycle path, not
+// just the fake store's stub methods payload_test.go's fakeTaskStore needs
+// for interface compilation.
+func TestAssemble_NoteStatus_AppearsInPayload(t *testing.T) {
+	ctx := context.Background()
+	s, pool := newPayloadTestStore(t)
+	scopeID := payloadTestScope(t, ctx, pool)
+	self := payloadTestSubject("agent-1")
+	w := seedPayloadWorld(t, ctx, s, scopeID, self)
+	task := createPayloadTestTask(t, ctx, s, scopeID, w.MilepebbleID, self)
+
+	assembler := work.NewAssembler(s.Tasks(), slice.NewQuerier(s))
+
+	note, err := s.Tasks().RecordNote(ctx, store.RecordNoteParams{
+		ScopeID: scopeID, TaskID: &task.ID,
+		Kind: store.NoteKindComment, Body: "worth flagging", Acting: self, OnBehalfOf: self,
+	})
+	require.NoError(t, err)
+
+	fresh, err := assembler.Assemble(ctx, scopeID, task.ID)
+	require.NoError(t, err)
+	require.Len(t, fresh.Task.Notes, 1)
+	assert.Equal(t, "noted", fresh.Task.Notes[0].Status, "a freshly recorded note's status must default to 'noted' in the payload")
+	assert.Equal(t, "worth flagging", fresh.Task.Notes[0].Body)
+
+	_, err = s.Tasks().TransitionNoteLifecycle(ctx, store.TransitionNoteLifecycleParams{
+		ScopeID: scopeID, NoteID: note.ID, Status: store.NoteLifecycleStatusDeferred, Acting: self, OnBehalfOf: self,
+	})
+	require.NoError(t, err)
+
+	transitioned, err := assembler.Assemble(ctx, scopeID, task.ID)
+	require.NoError(t, err)
+	require.Len(t, transitioned.Task.Notes, 1)
+	assert.Equal(t, "deferred", transitioned.Task.Notes[0].Status, "GET /tasks/{id} must reflect the transitioned status, with no second call needed")
+	assert.Equal(t, "worth flagging", transitioned.Task.Notes[0].Body, "the note's body must stay unchanged by the status transition")
+}
