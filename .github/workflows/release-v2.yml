@@ -736,6 +736,7 @@ jobs:
           target_env: ${{ vars.APP_REGISTRY_BUILDER_ENV || 'dev' }}
         env:
           APP_REGISTRY_ADDRESS: ${{ vars.APP_REGISTRY_ADDRESS }}
+          GRPC_AUTH_MODE: oidc
           GRPC_AUTH_TOKEN_URL: ${{ vars.APP_REGISTRY_AUTH_TOKEN_URL }}
           GRPC_AUTH_CLIENT_ID: app-registry-builder-${{ vars.APP_REGISTRY_BUILDER_ENV || 'dev' }}
           GRPC_AUTH_CLIENT_SECRET: ${{ secrets.APP_REGISTRY_BUILDER_CLIENT_SECRET }}
@@ -749,6 +750,7 @@ jobs:
         if: steps.download-tools.outcome == 'success'
         env:
           APP_REGISTRY_ADDRESS: ${{ vars.APP_REGISTRY_ADDRESS }}
+          GRPC_AUTH_MODE: oidc
           GRPC_AUTH_TOKEN_URL: ${{ vars.APP_REGISTRY_AUTH_TOKEN_URL }}
           GRPC_AUTH_CLIENT_ID: app-registry-builder-${{ vars.APP_REGISTRY_BUILDER_ENV || 'dev' }}
           GRPC_AUTH_CLIENT_SECRET: ${{ secrets.APP_REGISTRY_BUILDER_CLIENT_SECRET }}
