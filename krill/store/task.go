@@ -127,6 +127,21 @@ type Task struct {
 	CurrentClaimID *uuid.UUID
 	LeaseExpiresAt *time.Time
 
+	// ThrashCount/CurrentEscalationID/CancelledAt (016_escalation_axis.
+	// up.sql, issue #2868) are M5's additive escalation-axis state --
+	// CreateTask never sets any of them directly (ThrashCount starts at 0,
+	// CurrentEscalationID/CancelledAt start nil). ThrashCount is FR1's
+	// lane-thrash counter, fed and reset independently of AttemptCount
+	// (NFR4). CurrentEscalationID names the task's one active
+	// EscalationEvent (recordEscalationTx sets it, requeue/cancel clear
+	// it -- task_escalation.go's own doc comment); ClaimTask refuses any
+	// task with this set (ErrTaskEscalated), regardless of claim state.
+	// CancelledAt is FR7's dead-letter terminal state, distinct from lane
+	// Done; ClaimTask refuses any task with this set (ErrTaskCancelled).
+	ThrashCount         int
+	CurrentEscalationID *uuid.UUID
+	CancelledAt         *time.Time
+
 	// CreatedByActing/CreatedByOnBehalfOf are always populated (NFR3,
 	// LB4) -- CreateTask is the only write path onto this table, and it
 	// always has a real caller session (NFR6's write gate).
@@ -313,6 +328,7 @@ var _ TaskStore = taskStore{}
 // scanMilestoneRef's sql.NullString one.
 const taskColumns = `id, scope_id, milestone_id, title, body, lane_sequence, current_lane, ` +
 	`attempt_count, current_claim_id, lease_expires_at, ` +
+	`thrash_count, current_escalation_id, cancelled_at, ` +
 	`created_by_acting_iss, created_by_acting_sub, created_by_acting_kind, ` +
 	`created_by_on_behalf_of_iss, created_by_on_behalf_of_sub, created_by_on_behalf_of_kind, created_at`
 
@@ -324,6 +340,7 @@ func scanTask(row pgx.Row) (Task, error) {
 	err := row.Scan(
 		&t.ID, &t.ScopeID, &t.MilestoneID, &t.Title, &t.Body, &laneSeq, &currentLane,
 		&t.AttemptCount, &t.CurrentClaimID, &t.LeaseExpiresAt,
+		&t.ThrashCount, &t.CurrentEscalationID, &t.CancelledAt,
 		&t.CreatedByActing.Iss, &t.CreatedByActing.Sub, &actingKind,
 		&t.CreatedByOnBehalfOf.Iss, &t.CreatedByOnBehalfOf.Sub, &onBehalfOfKind,
 		&t.CreatedAt,
