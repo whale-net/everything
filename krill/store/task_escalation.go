@@ -82,6 +82,19 @@ func validateEscalationReason(reason EscalationReason) error {
 	return nil
 }
 
+// TaskState is the two-value resulting state a caller-facing response
+// (TaskLaneResult here, work.TaskView, issue #2870 FR2) reports for a
+// task: TaskStateEscalated the moment task.current_escalation_id is set
+// by any of the three EscalationReason paths, TaskStateActive otherwise.
+// Not a DB column -- always derived from current_escalation_id, never
+// stored redundantly.
+type TaskState string
+
+const (
+	TaskStateActive    TaskState = "active"
+	TaskStateEscalated TaskState = "escalated"
+)
+
 // InterventionAction is the fixed enumeration of `task_intervention_event.
 // action` values (016_escalation_axis.up.sql's CHECK) -- the one operator-
 // driven mutation each of FR6 (requeue), FR7 (cancel), FR8 (release), and
@@ -392,4 +405,25 @@ func forceCloseClaimTx(ctx context.Context, tx pgx.Tx, taskID uuid.UUID, release
 	}
 
 	return nil
+}
+
+// GetEscalationEventByID returns the EscalationEvent row for id --
+// escalation event ids are globally unique surrogates, mirroring
+// GetTaskByID/GetClaimByID's own id-only read shape (task.go,
+// task_claim.go). The one caller today is work.Assembler.Assemble
+// (krill/work/payload.go), resolving the reason behind a task's own
+// current_escalation_id for the payload document (FR2, issue #2870).
+func (s taskStore) GetEscalationEventByID(ctx context.Context, id uuid.UUID) (EscalationEvent, error) {
+	event, err := scanEscalationEvent(s.pool.QueryRow(ctx, `
+		SELECT `+escalationEventColumns+`
+		FROM task_escalation_event
+		WHERE id = $1
+	`, id))
+	if errors.Is(err, pgx.ErrNoRows) {
+		return EscalationEvent{}, errParentNotFound("task_escalation_event", id)
+	}
+	if err != nil {
+		return EscalationEvent{}, fmt.Errorf("get task_escalation_event: %w", err)
+	}
+	return event, nil
 }

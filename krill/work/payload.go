@@ -78,19 +78,29 @@ type NoteView struct {
 // declared dependency list, current claim/lease state (#2722), and note
 // list (#2727) -- populated with every note recorded against the task
 // (FR4), ordered by CreatedAt -- alongside the spec slice Payload.Slice
-// embeds. Both CurrentClaim and Notes are purely additive fields, per this
-// package's own doc comment.
+// embeds. CurrentClaim, Notes, State, and EscalationReason are all purely
+// additive fields, per this package's own doc comment.
+//
+// State/EscalationReason (issue #2870, FR2, root plan #2851's C26) report
+// the same resulting state a completion response already carries
+// (store.TaskLaneResult) -- "escalated" with a reason exactly when
+// task.current_escalation_id is set, "active" with no reason otherwise.
+// CurrentLane always names the lane the task is actually held at (never a
+// reverted lane it was not in fact routed to), so an Agent that logs this
+// field never logs a stale lane.
 type TaskView struct {
-	ID            uuid.UUID  `json:"id"`
-	MilestoneID   uuid.UUID  `json:"milestone_id"`
-	Title         string     `json:"title"`
-	Body          string     `json:"body"`
-	CurrentLane   string     `json:"current_lane"`
-	LaneSequence  []string   `json:"lane_sequence"`
-	Dependencies  []TaskDep  `json:"dependencies"`
-	AttemptNumber int        `json:"attempt_number"`
-	CurrentClaim  *ClaimView `json:"current_claim"`
-	Notes         []NoteView `json:"notes"`
+	ID               uuid.UUID  `json:"id"`
+	MilestoneID      uuid.UUID  `json:"milestone_id"`
+	Title            string     `json:"title"`
+	Body             string     `json:"body"`
+	CurrentLane      string     `json:"current_lane"`
+	LaneSequence     []string   `json:"lane_sequence"`
+	Dependencies     []TaskDep  `json:"dependencies"`
+	AttemptNumber    int        `json:"attempt_number"`
+	CurrentClaim     *ClaimView `json:"current_claim"`
+	Notes            []NoteView `json:"notes"`
+	State            string     `json:"state"`
+	EscalationReason *string    `json:"escalation_reason,omitempty"`
 }
 
 // Payload is the one typed, self-describing task payload document (FR4,
@@ -201,19 +211,37 @@ func (a *Assembler) Assemble(ctx context.Context, scopeID, taskID uuid.UUID) (Pa
 		noteViews[i] = NoteView{ID: n.ID, Kind: string(n.Kind), Body: n.Body}
 	}
 
+	// State/EscalationReason (issue #2870, FR2): "escalated" the moment
+	// task.CurrentEscalationID is set (by any of the three
+	// store.EscalationReason paths), "active" otherwise -- re-derived
+	// from the task row just read, never cached on it.
+	state := string(store.TaskStateActive)
+	var escalationReason *string
+	if task.CurrentEscalationID != nil {
+		state = string(store.TaskStateEscalated)
+		event, err := a.tasks.GetEscalationEventByID(ctx, *task.CurrentEscalationID)
+		if err != nil {
+			return Payload{}, fmt.Errorf("get task escalation event: %w", err)
+		}
+		reason := string(event.Reason)
+		escalationReason = &reason
+	}
+
 	return Payload{
 		Slice: sliceDoc,
 		Task: TaskView{
-			ID:            task.ID,
-			MilestoneID:   task.MilestoneID,
-			Title:         task.Title,
-			Body:          body,
-			CurrentLane:   string(task.CurrentLane),
-			LaneSequence:  laneSequence,
-			Dependencies:  taskDeps,
-			AttemptNumber: task.AttemptCount,
-			CurrentClaim:  currentClaim,
-			Notes:         noteViews,
+			ID:               task.ID,
+			MilestoneID:      task.MilestoneID,
+			Title:            task.Title,
+			Body:             body,
+			CurrentLane:      string(task.CurrentLane),
+			LaneSequence:     laneSequence,
+			Dependencies:     taskDeps,
+			AttemptNumber:    task.AttemptCount,
+			CurrentClaim:     currentClaim,
+			Notes:            noteViews,
+			State:            state,
+			EscalationReason: escalationReason,
 		},
 	}, nil
 }

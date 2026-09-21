@@ -20,7 +20,10 @@
 // task_abandon_test.go's own Testing-phase task is what actually exercises
 // it. The ListClaimedTasks stub exists for the same reason now that
 // console.go (issue #2869) widens it once more -- console_test.go's own
-// later Testing-phase task exercises it.
+// later Testing-phase task exercises it. The GetEscalationEventByID stub
+// exists for the same reason now that task_escalation.go/task_complete.go
+// (issue #2870) widen it once more -- task_complete_test.go's own Testing
+// section is what actually exercises it.
 package handlers_test
 
 import (
@@ -81,6 +84,9 @@ type fakeTaskStore struct {
 	listClaimedTasksErr       error
 	listClaimedTasksResult    store.Page[store.ClaimedTaskRow]
 	gotListClaimedTasksParams store.ListClaimedTasksParams
+
+	getEscalationEventByIDResult store.EscalationEvent
+	getEscalationEventByIDErr    error
 }
 
 func (f *fakeTaskStore) CreateTask(ctx context.Context, params store.CreateTaskParams) (store.Task, error) {
@@ -184,6 +190,10 @@ func (f *fakeTaskStore) ListClaimedTasks(ctx context.Context, params store.ListC
 		return store.Page[store.ClaimedTaskRow]{}, f.listClaimedTasksErr
 	}
 	return f.listClaimedTasksResult, nil
+}
+
+func (f *fakeTaskStore) GetEscalationEventByID(ctx context.Context, id uuid.UUID) (store.EscalationEvent, error) {
+	return f.getEscalationEventByIDResult, f.getEscalationEventByIDErr
 }
 
 var _ store.TaskStore = (*fakeTaskStore)(nil)
