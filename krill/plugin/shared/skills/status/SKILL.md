@@ -44,10 +44,9 @@ from `krill/plugin/shared/skills/status/` (see
    manifest; CONVENTIONS.md "No task-discovery query exists"): call
    `get_task {id}` for every task id in the manifest (ungated, no session
    needed) and group by `current_lane`. Also call `get_milestone_status
-   {milestone_id}` — note plainly if it doesn't reflect reality, since
-   `set_milestone_status` hits whale-net/everything#2926's `PersonaAgent`
-   gate and may never have actually written (report the raw value anyway,
-   caveated).
+   {milestone_id}` — `set_milestone_status` works from an ordinary Claude
+   Code session today (whale-net/everything#2928), so this reflects
+   `planner`/`plan`/`validate`'s actual writes.
 
 3. **GitHub tracking-issue number given** (no-Milestone fallback, or a
    legacy `project-manager` `plan:approved` issue): same as

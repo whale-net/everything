@@ -38,13 +38,9 @@ a `signoff` event with `signoff_status: approved`, and the Milestone id:
 2. Ensure every Feature/Requirement this FeatureSet slice contains is in
    the milestone's `Delivers` set — `add_delivers {krill_session_id,
    milestone_id, entity_id}` per entity (idempotent, safe to call even if
-   already added). **Known blocker (whale-net/everything#2926):**
-   `add_delivers` is `{PersonaRequirementContributor, PersonaAgent}`-only;
-   an ordinary Claude Code session resolves `PersonaSwarmOperator` and this
-   call is expected to fail with `forbidden`. Make the call anyway, report
-   the exact error, and continue to step 3 regardless — don't let this
-   block task creation, and don't fall back to any GitHub equivalent for
-   it (there isn't one; `Delivers` membership is krill-only).
+   already added). `add_delivers` is `{PersonaRequirementContributor,
+   PersonaAgent, PersonaSwarmOperator}` (whale-net/everything#2928 widened
+   this) — works from an ordinary Claude Code session today.
 3. Break the work into cohesive tasks exactly as project-manager's planner
    breaks work into issues — one per vertical slice, ordered
    expand-contract (`tools/project-manager/CONVENTIONS.md` § Task issues &
@@ -77,15 +73,10 @@ a `signoff` event with `signoff_status: approved`, and the Milestone id:
    checked by `claim_task` itself, not a convention a reader has to trust.
 4. Call `set_milestone_status {krill_session_id, milestone_id, status:
    "planned"}` once every task is created, then `{status: "in progress"}`
-   once the first task is dispatched. **Known blocker
-   (whale-net/everything#2926):** `set_milestone_status` is
-   `{PersonaRequirementContributor, PersonaAgent}`-only and expected to
-   fail with `forbidden` from this ordinary-session dispatch — make the
-   call anyway and report the error. Because of this, step 1's
-   `get_milestone_status`-based idempotency check will not actually observe
-   `"planned"` after a real run until #2926 closes; until then, treat the
-   task manifest you report in step 5 as the only reliable idempotency
-   signal available to a re-run (hand it back to whoever asks).
+   once the first task is dispatched. `set_milestone_status` is also
+   `{PersonaRequirementContributor, PersonaAgent, PersonaSwarmOperator}`
+   (#2928) — works today, so step 1's `get_milestone_status`-based
+   idempotency check is a real, reliable signal, not just the task manifest.
 5. **Report the full task manifest** — every task id, title, and starting
    lane, in dependency order — to whoever dispatched you. This manifest is
    the only durable record of the milestone's task set (CONVENTIONS.md);

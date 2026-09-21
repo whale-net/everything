@@ -16,7 +16,7 @@ each phase's subagent must be handed the manifest explicitly since nothing
 can re-derive it. On the no-Milestone fallback, `<n>` is still the GitHub
 tracking issue `krill-work:planner` mints.
 
-**Known blocker (whale-net/everything#2926):** on the Milestone path, every
+**Known blocker (whale-net/everything#2930):** on the Milestone path, every
 `worker`/`validator`/`system-validator` dispatch inside `implement`/
 `validate` is expected to hit the `PersonaAgent` gate and report
 `forbidden` — see `agents/worker.md`. This loop does not retry around that

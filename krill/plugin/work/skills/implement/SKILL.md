@@ -40,7 +40,7 @@ format) is unchanged; what changed is task discovery and dispatch.
    title}` in place of `{task-issue-number, title}` (see
    `agents/mergepush.md`).
 
-**Known blocker (whale-net/everything#2926):** every `worker`/`validator`
+**Known blocker (whale-net/everything#2930):** every `worker`/`validator`
 dispatch you make will itself hit `claim_task`/`complete_task`'s
 `PersonaAgent` gate and report `forbidden` — see `agents/worker.md`. Don't
 route around it; surface those failures in your own report as-is.

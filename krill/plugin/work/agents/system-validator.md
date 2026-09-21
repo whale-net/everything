@@ -32,7 +32,7 @@ Everything you need for normal execution is below;
 
 ## Reporting findings (Milestone path)
 
-**Known blocker (whale-net/everything#2926):** `record_note` is
+**Known blocker (whale-net/everything#2930):** `record_note` is
 `PersonaAgent`-only and this persona, dispatched as an ordinary Claude Code
 subagent, resolves `PersonaSwarmOperator` — the call below is expected to
 fail with `forbidden`. Make it anyway, report the exact error per finding,

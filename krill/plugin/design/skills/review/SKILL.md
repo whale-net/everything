@@ -50,11 +50,8 @@ approved plan — there is no root plan Issue to create (see
      post `gh issue comment <product-issue> --body "Ledger: M<n> → planned
      (<design-session-id>)"` on the tracking issue (never a body edit). **If
      it's a krill-hosted milestone** — call `set_milestone_status
-     {milestone_id, status: "planned"}` instead (**known blocker,
-     whale-net/everything#2926**: this call is `{PersonaRequirementContributor,
-     PersonaAgent}`-only and expected to fail `forbidden` from an ordinary
-     Claude Code dispatch — make the call anyway, report the error, and
-     continue).
+     {milestone_id, status: "planned"}` instead (works from an ordinary
+     Claude Code dispatch today, whale-net/everything#2928).
    - Tell the user the design is approved and that `/krill-work:plan
      <feature-set-id>` (plus `--milestone-id <id>` if one exists) is the
      next step. **On the Milestone path, task breakdown is fully

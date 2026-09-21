@@ -28,15 +28,14 @@ path) is `Done`.
    Milestone id). It calls `get_feature_set_slice {id}` for the live
    Requirements, brings the system up via Tilt, exercises it, and reports
    findings as `record_note` scope-notes (expected to hit
-   whale-net/everything#2926's `forbidden` gate — see
+   whale-net/everything#2930's `forbidden` gate — see
    `agents/system-validator.md`).
 4. **If everything passed:** re-dispatch `mergepush` as a no-op
    re-confirmation, verify every PR is `MERGED`. Call `set_milestone_status
-   {milestone_id, status: "shipped"}` (also blocked by #2926 — make the
-   call, report the error) and, per-item, `mark_delivered_item_shipped` for
-   each delivered Feature/Requirement (same blocker). Report the plan fully
-   validated with the full PR list regardless of whether those two calls
-   succeeded.
+   {milestone_id, status: "shipped"}` and, per-item,
+   `mark_delivered_item_shipped` for each delivered Feature/Requirement —
+   both work from this dispatch today (whale-net/everything#2928). Report
+   the plan fully validated with the full PR list.
 5. **If there are findings:** dispatch `krill-work:planner` with the
    finding text `system-validator` reported (not note ids, since
    `record_note` itself is blocked) to run its findings-handling process.

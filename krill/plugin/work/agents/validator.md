@@ -21,7 +21,7 @@ task issue and its Project `Status` field instead, exactly as
 `tools/project-manager/agents/validator.md` describes. Your caller tells
 you which path you're on; say so in your report either way.
 
-**Known blocker (whale-net/everything#2926) — `claim_task` and
+**Known blocker (whale-net/everything#2930) — `claim_task` and
 `complete_task` are `PersonaAgent`-only, and this persona, dispatched as an
 ordinary Claude Code subagent, always resolves `PersonaSwarmOperator`
 instead — both calls are expected to fail with `forbidden` today.** Make

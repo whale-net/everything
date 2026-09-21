@@ -43,10 +43,9 @@ Milestone), not a default worth avoiding when it doesn't apply.
    `model` set to `--planner-model` (default `opus`) — with the FeatureSet
    id and Milestone id. `planner` adds the Feature/Requirement entities to
    the milestone's `Delivers` set, creates krill Tasks with
-   `create_task`/`declare_task_dependencies` (the only work-axis write
-   tools that actually work from this dispatch today —
-   whale-net/everything#2926, see `agents/planner.md`), and returns the
-   task manifest.
+   `create_task`/`declare_task_dependencies`, and sets the milestone's
+   status — every one of these works from this dispatch today (see
+   `agents/planner.md`) — and returns the task manifest.
 3. **Report.** Relay `planner`'s full task manifest (every task id, title,
    starting lane, dependency edges) to the user verbatim — **this is the
    only durable record of what was just created**; nothing else can

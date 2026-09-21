@@ -26,15 +26,18 @@ instead, exactly as `tools/project-manager/agents/worker.md` describes.
 Your caller tells you which path you're on; say so in your report either
 way, don't leave it implicit.
 
-**Known blocker (whale-net/everything#2926) — every MCP call in this
+**Known blocker (whale-net/everything#2930) — every MCP call in this
 process (`claim_task`, `heartbeat_task`, `complete_task`, `abandon_task`,
 `record_note`) is `PersonaAgent`-only, and this persona, dispatched as an
 ordinary Claude Code subagent, always resolves `PersonaSwarmOperator`
 instead — every one of these calls is expected to fail with `forbidden`
-today.** Make the call anyway (it's what's correct once #2926 closes),
-and if it fails: **report the exact `forbidden` error and stop — do not
-fall back to `gh issue`/`gh project` calls to route around it.** That
-silent fallback is exactly the failure mode #2926/#2925 exist to catch.
+today.** (whale-net/everything#2928 widened `create_task`'s and the
+milestone-authoring tools' allow-list the same way; it deliberately did
+not touch these five.) Make the call anyway (it's what's correct once
+#2930 closes), and if it fails: **report the exact `forbidden` error and
+stop — do not fall back to `gh issue`/`gh project` calls to route around
+it.** That silent fallback is exactly the failure mode #2930/#2925 exist
+to catch.
 
 ## Process
 
