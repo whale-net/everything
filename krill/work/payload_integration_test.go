@@ -248,3 +248,47 @@ func TestAssemble_NoDependencies_EmptyNotNullList(t *testing.T) {
 	require.NoError(t, err)
 	assert.Contains(t, string(encoded), `"dependencies":[]`, "an empty dependency list must marshal as [], never null")
 }
+
+// TestAssemble_AttemptCapEscalatedTask_SurfacesCurrentEscalationID is issue
+// #2871's own Validation criterion: after a reclaim brings a task's
+// attempt_count to the cap (FR3), GET /tasks/{id} -- this package's one
+// payload document -- shows the task escalated, without any second call.
+// An unescalated task's payload carries no current_escalation_id at all
+// (omitempty), proving this field is purely additive.
+func TestAssemble_AttemptCapEscalatedTask_SurfacesCurrentEscalationID(t *testing.T) {
+	ctx := context.Background()
+	s, pool := newPayloadTestStore(t)
+	scopeID := payloadTestScope(t, ctx, pool)
+	self := payloadTestSubject("agent-1")
+	w := seedPayloadWorld(t, ctx, s, scopeID, self)
+	task := createPayloadTestTask(t, ctx, s, scopeID, w.MilepebbleID, self)
+
+	assembler := work.NewAssembler(s.Tasks(), slice.NewQuerier(s))
+
+	unescalated, err := assembler.Assemble(ctx, scopeID, task.ID)
+	require.NoError(t, err)
+	assert.Nil(t, unescalated.Task.CurrentEscalationID, "an ordinary task's payload must carry no current_escalation_id")
+	unescalatedJSON, err := json.Marshal(unescalated)
+	require.NoError(t, err)
+	assert.NotContains(t, string(unescalatedJSON), "current_escalation_id", "omitempty must drop the field entirely when the task is not escalated")
+
+	sessions := store.NewSessionStore(pool)
+	sessionID, err := sessions.InitSession(ctx, scopeID, self, self, nil)
+	require.NoError(t, err)
+	_, err = s.Tasks().ClaimTask(ctx, store.ClaimTaskParams{
+		ScopeID: scopeID, TaskID: task.ID, SessionID: sessionID, Acting: self, OnBehalfOf: self,
+	})
+	require.NoError(t, err)
+	_, err = pool.Exec(ctx, `UPDATE task SET attempt_count = $1, lease_expires_at = NOW() - INTERVAL '1 minute' WHERE id = $2`,
+		store.DefaultAttemptCap-1, task.ID)
+	require.NoError(t, err)
+	reclaimResult, err := s.Tasks().ReclaimExpired(ctx, store.ReclaimParams{ScopeID: scopeID, Acting: self, OnBehalfOf: self})
+	require.NoError(t, err)
+	require.Len(t, reclaimResult.Reclaimed, 1)
+	require.True(t, reclaimResult.Reclaimed[0].CapExhausted)
+
+	escalated, err := assembler.Assemble(ctx, scopeID, task.ID)
+	require.NoError(t, err)
+	require.NotNil(t, escalated.Task.CurrentEscalationID, "GET /tasks/{id} must show the task escalated, with no second call needed")
+	assert.Equal(t, *reclaimResult.Reclaimed[0].EscalationID, *escalated.Task.CurrentEscalationID)
+}

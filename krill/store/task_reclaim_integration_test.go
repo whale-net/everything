@@ -1,7 +1,8 @@
 //go:build integration
 
 // Real-Postgres coverage for TaskStore.ReclaimExpired (task_reclaim.go,
-// migration 015, issue #2724's Testing section, FR7): the successful-reclaim
+// migration 015, issue #2724's Testing section, FR7; attempt-cap escalation
+// issue #2871, root plan #2851's M5, FR3): the successful-reclaim
 // accounting (prior claim released with release_reason='reclaim', one
 // lapsed task_attempt row, attempt_count+1 from the lapse alone,
 // current_claim_id/lease_expires_at cleared, current_lane untouched),
@@ -9,24 +10,22 @@
 // session (the FR3+FR7 round trip), the zombie-heartbeat rejection after
 // reclaim (the FR6/FR7 interaction), a live (unexpired) lease left
 // untouched, a single-TaskID sweep touching only the named task, the
-// attempt-cap terminal state (reclaim refuses to re-serve, and no
-// escalation table exists anywhere in the schema), repeated-sweep
-// idempotency (NFR2), NFR1's scope qualification, and NFR3's two-subject
-// attribution on the lapsed task_attempt row. Shares
+// attempt-cap terminal state (a lapse that brings attempt_count to
+// DefaultAttemptCap records exactly one task_escalation_event, reason
+// 'attempt-cap', in the same transaction, sets task.current_escalation_id,
+// and a subsequent ClaimTask refuses with ErrTaskEscalated, not
+// ErrAttemptCapExhausted), a same-transaction rollback proof when the
+// escalation insert itself fails, a multi-task sweep where only the
+// capped task gets an event, repeated-sweep idempotency (NFR2, including
+// no second escalation event on a repeat sweep of an already-escalated
+// task), NFR1's scope qualification, and NFR3's two-subject attribution
+// on the lapsed task_attempt row. Shares
 // task_integration_test.go's test-store/test-scope/test-world/subject
 // helpers, task_dependency_integration_test.go's createTestTask helper, and
 // task_claim_integration_test.go's claimTestSession/countRows helpers,
 // mirroring task_lease_integration_test.go's own choice to share rather
 // than duplicate fixture helpers. See store_integration_test.go's package
 // doc for why this file only builds under the "integration" build tag.
-//
-// TestTaskStore_ReclaimExpired_AttemptCapReached_RefusesToReserve's own
-// doc comment notes that migration 016 (issue #2868, M5's C26) has since
-// landed task_escalation_event/task_intervention_event/task_note_lifecycle_event
-// -- that table's existence is no longer an M4/M5 scope boundary this test
-// enforces; what it still proves is that ReclaimExpired itself writes no
-// escalation event for the cap-exhausted task (escalating a capped task is
-// FR3, issue #2871, a later M5 task this one is not).
 //
 // Run it explicitly (requires a working Docker daemon):
 //
@@ -37,6 +36,7 @@ import (
 	"context"
 	"testing"
 
+	"github.com/google/uuid"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
@@ -93,6 +93,12 @@ func TestTaskStore_ReclaimExpired_LeaseExpired_ReclaimsWithAccounting(t *testing
 	assert.Nil(t, got.CurrentClaimID, "current_claim_id must be cleared")
 	assert.Nil(t, got.LeaseExpiresAt, "lease_expires_at must be cleared")
 	assert.Equal(t, store.LaneScaffold, got.CurrentLane, "current_lane must be untouched by a reclaim -- a lapse is not a verdict")
+	assert.Nil(t, got.CurrentEscalationID, "a below-cap lapse must not escalate the task")
+	assert.Nil(t, result.Reclaimed[0].EscalationID, "a below-cap lapse's result must carry no escalation reference")
+
+	var escalationEvents int
+	require.NoError(t, db.Pool.QueryRow(ctx, `SELECT count(*) FROM task_escalation_event WHERE task_id = $1`, task.ID).Scan(&escalationEvents))
+	assert.Equal(t, 0, escalationEvents, "a below-cap lapse must write no task_escalation_event row (issue #2871's FR3 regression)")
 }
 
 // TestTaskStore_ReclaimExpired_ReclaimedTask_ImmediatelyClaimableByAnotherSession
@@ -244,14 +250,16 @@ func TestTaskStore_ReclaimExpired_SingleTaskID_SweepsOnlyThatTask(t *testing.T) 
 }
 
 // TestTaskStore_ReclaimExpired_AttemptCapReached_RefusesToReserve is issue
-// #2724's Testing section item 5 (FR7's terminal state): a task at the
-// attempt cap is reclaimed (the lapse still counts, and CapExhausted is
-// reported), but reclaim refuses to re-serve it -- a subsequent ClaimTask
-// by any session returns ErrAttemptCapExhausted, the task stays claimed by
-// no one, and ReclaimExpired itself writes no task_escalation_event row for
-// it (escalating a capped task is FR3, issue #2871, a later M5 task this
-// one is not -- migration 016, issue #2868, has since landed the table
-// itself, but this task's own reclaim sweep never writes to it).
+// #2724's Testing section item 5 (FR7's terminal state), updated by issue
+// #2871's Testing section (FR3): a task at the attempt cap is reclaimed
+// (the lapse still counts, and CapExhausted is reported), the same
+// transaction records exactly one task_escalation_event (reason
+// 'attempt-cap', counter_value/cap_value = DefaultAttemptCap,
+// lane_at_escalation = the task's current_lane) and sets
+// task.current_escalation_id to it, and a subsequent ClaimTask by any
+// session is refused with ErrTaskEscalated -- not ErrAttemptCapExhausted,
+// since the task is now excluded "regardless of claim state" (#2851 FR2)
+// rather than merely over the counter.
 func TestTaskStore_ReclaimExpired_AttemptCapReached_RefusesToReserve(t *testing.T) {
 	ctx := context.Background()
 	s, db := newTaskTestStore(t)
@@ -276,24 +284,50 @@ func TestTaskStore_ReclaimExpired_AttemptCapReached_RefusesToReserve(t *testing.
 	require.NoError(t, err)
 	require.Len(t, result.Reclaimed, 1)
 	assert.True(t, result.Reclaimed[0].CapExhausted, "a lapse that brings attempt_count to DefaultAttemptCap must report CapExhausted")
+	require.NotNil(t, result.Reclaimed[0].EscalationID, "a cap-exhausted reclaim must report the escalation event it wrote, in the same call")
+	require.NotNil(t, result.Reclaimed[0].EscalationReason)
+	assert.Equal(t, store.EscalationReasonAttemptCap, *result.Reclaimed[0].EscalationReason)
 
 	got, err := s.Tasks().GetTaskByID(ctx, task.ID)
 	require.NoError(t, err)
 	assert.Equal(t, store.DefaultAttemptCap, got.AttemptCount)
 	assert.Nil(t, got.CurrentClaimID, "a cap-exhausted task must be left claimed by no one")
+	require.NotNil(t, got.CurrentEscalationID)
+	assert.Equal(t, *result.Reclaimed[0].EscalationID, *got.CurrentEscalationID)
 
-	otherSession := claimTestSession(t, ctx, db, scopeID, self)
-	_, err = s.Tasks().ClaimTask(ctx, store.ClaimTaskParams{
-		ScopeID: scopeID, TaskID: task.ID, SessionID: otherSession, Acting: self, OnBehalfOf: self,
-	})
-	require.Error(t, err, "any subsequent claim of a cap-exhausted task must be refused")
-	assert.ErrorIs(t, err, store.ErrAttemptCapExhausted)
+	var reason, laneAtEscalation string
+	var counterValue, capValue int
+	require.NoError(t, db.Pool.QueryRow(ctx, `
+		SELECT reason, counter_value, cap_value, lane_at_escalation FROM task_escalation_event WHERE task_id = $1
+	`, task.ID).Scan(&reason, &counterValue, &capValue, &laneAtEscalation))
+	assert.Equal(t, "attempt-cap", reason)
+	assert.Equal(t, store.DefaultAttemptCap, counterValue)
+	assert.Equal(t, store.DefaultAttemptCap, capValue)
+	assert.Equal(t, string(store.LaneScaffold), laneAtEscalation, "lane_at_escalation must snapshot the task's current_lane at escalation time")
 
 	var escalationEvents int
 	require.NoError(t, db.Pool.QueryRow(ctx, `
 		SELECT count(*) FROM task_escalation_event WHERE task_id = $1
 	`, task.ID).Scan(&escalationEvents))
-	assert.Equal(t, 0, escalationEvents, "ReclaimExpired must write no task_escalation_event row -- escalating a capped task is FR3 (issue #2871), a later M5 task this one is not")
+	assert.Equal(t, 1, escalationEvents, "exactly one task_escalation_event row must exist for the cap-exhausted task")
+
+	otherSession := claimTestSession(t, ctx, db, scopeID, self)
+	_, err = s.Tasks().ClaimTask(ctx, store.ClaimTaskParams{
+		ScopeID: scopeID, TaskID: task.ID, SessionID: otherSession, Acting: self, OnBehalfOf: self,
+	})
+	require.Error(t, err, "any subsequent claim of an escalated task must be refused")
+	assert.ErrorIs(t, err, store.ErrTaskEscalated, "an escalated task is refused with ErrTaskEscalated, not ErrAttemptCapExhausted, once the escalation event exists")
+
+	// A repeat sweep leaves the task alone: it has no live claim (cleared
+	// by the first reclaim), so it is no longer a reclaim candidate at
+	// all, and no second escalation event appears.
+	repeat, err := s.Tasks().ReclaimExpired(ctx, store.ReclaimParams{ScopeID: scopeID, Acting: self, OnBehalfOf: self})
+	require.NoError(t, err)
+	assert.Empty(t, repeat.Reclaimed, "an already cap-exhausted, unclaimed task is not a reclaim candidate on a repeat sweep")
+	require.NoError(t, db.Pool.QueryRow(ctx, `
+		SELECT count(*) FROM task_escalation_event WHERE task_id = $1
+	`, task.ID).Scan(&escalationEvents))
+	assert.Equal(t, 1, escalationEvents, "a repeat sweep must write no second escalation event")
 }
 
 // TestTaskStore_ReclaimExpired_RepeatedSweep_Idempotent is issue #2724's
@@ -433,4 +467,129 @@ func TestTaskStore_ReclaimExpired_RecordsBothSubjectPairsOnLapsedAttempt(t *test
 	assert.Equal(t, "agent-1", actingSub)
 	assert.Equal(t, "human-1", onBehalfOfSub)
 	assert.NotEqual(t, actingSub, onBehalfOfSub, "a distinct acting/on-behalf-of pair must be recorded distinctly, never collapsed into one")
+}
+
+// TestTaskStore_ReclaimExpired_AttemptCapEscalation_SameTransactionRollback
+// is issue #2871's Testing section "same-transaction proof": when the
+// escalation insert itself fails (here, because the task already has an
+// active escalation, forcing recordEscalationTx's own one-active-escalation
+// rule to reject it), the entire reclaim rolls back with it -- the stale
+// claim is never marked released, no lapsed task_attempt row is appended,
+// and attempt_count is never incremented. A task is never left
+// cap-exhausted with no escalation event explaining it, which is the
+// precise failure FR3 exists to prevent.
+func TestTaskStore_ReclaimExpired_AttemptCapEscalation_SameTransactionRollback(t *testing.T) {
+	ctx := context.Background()
+	s, db := newTaskTestStore(t)
+	scopeID := newTaskTestScope(t, ctx, db)
+	self := taskTestSubject("agent-1")
+	world := newTaskTestWorld(t, ctx, s, scopeID, self)
+
+	task := createTestTask(t, ctx, s, scopeID, world.milepebbleID, "rollback-proof", self)
+	sessionID := claimTestSession(t, ctx, db, scopeID, self)
+	claim, err := s.Tasks().ClaimTask(ctx, store.ClaimTaskParams{
+		ScopeID: scopeID, TaskID: task.ID, SessionID: sessionID, Acting: self, OnBehalfOf: self,
+	})
+	require.NoError(t, err)
+
+	// Force attempt_count to one below the cap, exactly like the ordinary
+	// cap-reached test, so this reclaim's own increment would reach
+	// DefaultAttemptCap and attempt to escalate -- the failure this test
+	// forces below.
+	_, err = db.Pool.Exec(ctx, `UPDATE task SET attempt_count = $1 WHERE id = $2`, store.DefaultAttemptCap-1, task.ID)
+	require.NoError(t, err)
+
+	rowsBefore := countRows(t, ctx, db, "task_attempt", task.ID)
+
+	// Plant a pre-existing active escalation directly (bypassing
+	// recordEscalationTx, which is exactly what this test must not go
+	// through) so this reclaim's own recordEscalationTx call hits its
+	// one-active-escalation rule and fails.
+	var existingEscalationID uuid.UUID
+	require.NoError(t, db.Pool.QueryRow(ctx, `
+		INSERT INTO task_escalation_event (
+			scope_id, task_id, reason, counter_value, cap_value, lane_at_escalation,
+			created_by_acting_iss, created_by_acting_sub, created_by_acting_kind,
+			created_by_on_behalf_of_iss, created_by_on_behalf_of_sub, created_by_on_behalf_of_kind
+		) VALUES ($1, $2, 'manual', NULL, NULL, 'scaffold', 'test', 'planted', 'agent', 'test', 'planted', 'agent')
+		RETURNING id
+	`, scopeID, task.ID).Scan(&existingEscalationID))
+	_, err = db.Pool.Exec(ctx, `UPDATE task SET current_escalation_id = $1, lease_expires_at = NOW() - INTERVAL '1 minute' WHERE id = $2`,
+		existingEscalationID, task.ID)
+	require.NoError(t, err)
+
+	_, err = s.Tasks().ReclaimExpired(ctx, store.ReclaimParams{ScopeID: scopeID, Acting: self, OnBehalfOf: self})
+	require.Error(t, err, "a reclaim whose own escalation insert fails must fail as a whole")
+	assert.ErrorIs(t, err, store.ErrTaskEscalated)
+
+	stillOpen, err := s.Tasks().GetClaimByID(ctx, claim.ID)
+	require.NoError(t, err)
+	assert.Nil(t, stillOpen.ReleasedAt, "a rolled-back reclaim must leave the stale claim exactly as it was, not released")
+
+	assert.Equal(t, rowsBefore, countRows(t, ctx, db, "task_attempt", task.ID), "a rolled-back reclaim must write no lapsed task_attempt row")
+
+	got, err := s.Tasks().GetTaskByID(ctx, task.ID)
+	require.NoError(t, err)
+	assert.Equal(t, store.DefaultAttemptCap-1, got.AttemptCount, "a rolled-back reclaim must never increment attempt_count")
+	require.NotNil(t, got.CurrentClaimID, "a rolled-back reclaim must leave current_claim_id untouched")
+	assert.Equal(t, claim.ID, *got.CurrentClaimID)
+
+	var escalationEvents int
+	require.NoError(t, db.Pool.QueryRow(ctx, `SELECT count(*) FROM task_escalation_event WHERE task_id = $1`, task.ID).Scan(&escalationEvents))
+	assert.Equal(t, 1, escalationEvents, "only the one planted escalation event must exist -- the failed reclaim wrote no second one")
+}
+
+// TestTaskStore_ReclaimExpired_MultiTaskSweep_OnlyCappedTaskEscalates is
+// issue #2871's Testing section: a multi-task ReclaimExpired sweep where
+// one task hits the attempt cap and another does not records exactly one
+// escalation event, for the capped task alone -- one task's escalation
+// never touches, or is affected by, another task's own reclaim in the same
+// sweep.
+func TestTaskStore_ReclaimExpired_MultiTaskSweep_OnlyCappedTaskEscalates(t *testing.T) {
+	ctx := context.Background()
+	s, db := newTaskTestStore(t)
+	scopeID := newTaskTestScope(t, ctx, db)
+	self := taskTestSubject("agent-1")
+	world := newTaskTestWorld(t, ctx, s, scopeID, self)
+
+	cappedTask := createTestTask(t, ctx, s, scopeID, world.milepebbleID, "sweep-capped", self)
+	plainTask := createTestTask(t, ctx, s, scopeID, world.milepebbleID, "sweep-plain", self)
+
+	cappedSession := claimTestSession(t, ctx, db, scopeID, self)
+	_, err := s.Tasks().ClaimTask(ctx, store.ClaimTaskParams{
+		ScopeID: scopeID, TaskID: cappedTask.ID, SessionID: cappedSession, Acting: self, OnBehalfOf: self,
+	})
+	require.NoError(t, err)
+	_, err = db.Pool.Exec(ctx, `UPDATE task SET attempt_count = $1, lease_expires_at = NOW() - INTERVAL '1 minute' WHERE id = $2`,
+		store.DefaultAttemptCap-1, cappedTask.ID)
+	require.NoError(t, err)
+
+	plainSession := claimTestSession(t, ctx, db, scopeID, self)
+	_, err = s.Tasks().ClaimTask(ctx, store.ClaimTaskParams{
+		ScopeID: scopeID, TaskID: plainTask.ID, SessionID: plainSession, Acting: self, OnBehalfOf: self,
+	})
+	require.NoError(t, err)
+	_, err = db.Pool.Exec(ctx, `UPDATE task SET lease_expires_at = NOW() - INTERVAL '1 minute' WHERE id = $1`, plainTask.ID)
+	require.NoError(t, err)
+
+	result, err := s.Tasks().ReclaimExpired(ctx, store.ReclaimParams{ScopeID: scopeID, Acting: self, OnBehalfOf: self})
+	require.NoError(t, err)
+	require.Len(t, result.Reclaimed, 2)
+
+	byID := map[uuid.UUID]store.ReclaimedTask{}
+	for _, r := range result.Reclaimed {
+		byID[r.TaskID] = r
+	}
+	require.Contains(t, byID, cappedTask.ID)
+	require.Contains(t, byID, plainTask.ID)
+	assert.True(t, byID[cappedTask.ID].CapExhausted)
+	assert.NotNil(t, byID[cappedTask.ID].EscalationID)
+	assert.False(t, byID[plainTask.ID].CapExhausted)
+	assert.Nil(t, byID[plainTask.ID].EscalationID)
+
+	var totalEscalations int
+	require.NoError(t, db.Pool.QueryRow(ctx, `
+		SELECT count(*) FROM task_escalation_event WHERE task_id IN ($1, $2)
+	`, cappedTask.ID, plainTask.ID).Scan(&totalEscalations))
+	assert.Equal(t, 1, totalEscalations, "exactly one escalation event must exist across the sweep, for the capped task alone")
 }
