@@ -386,6 +386,23 @@ type TaskStore interface {
 	// NFR6, #2851 Assumption 11) -- that full history is M4 FR10's
 	// per-task fetch (GET /tasks/{id}).
 	ListEscalatedTasks(ctx context.Context, params ListEscalatedTasksParams) (Page[EscalatedTaskRow], error)
+
+	// RequeueTask is FR6's recover half of the recover-or-terminate pair
+	// CancelTask (above) is the other half of (task_requeue.go, issue
+	// #2876): a single transaction that row-locks the `task`, refuses a
+	// cancelled task (ErrTaskCancelled) and a task with no active
+	// escalation (ErrTaskNotEscalated, nothing written in either case),
+	// resets exactly the counter named by the active escalation's reason
+	// (thrash-cap -> thrash_count=0, attempt-cap -> attempt_count=0,
+	// manual -> attempt_count=0 only where FR9's force-close left it at
+	// or past DefaultAttemptCap), clears task.current_escalation_id, and
+	// appends one `task_intervention_event` row (action='requeue',
+	// naming the resolved escalation). Never writes a task_attempt row or
+	// increments attempt_count -- requeuing is not an attempt. The task
+	// returns to claimable at the lane it held when escalated, never
+	// touched by this call since no escalation producer ever moves
+	// current_lane.
+	RequeueTask(ctx context.Context, params RequeueParams) (RequeueResult, error)
 }
 
 // ErrMilestoneHasMilepebbleCut is CreateTask's named, loud rejection

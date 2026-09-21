@@ -225,6 +225,15 @@ func setupRoutes(mux *http.ServeMux, pool *pgxpool.Pool, githubToken string) {
 	// work.Payload document GET /tasks/{id} and release return.
 	mux.Handle("POST /tasks/{id}/escalate", gate(handlers.EscalateTaskHandler(entities.Tasks(), assembler)))
 
+	// task_requeue (issue #2876, FR6): a Swarm Operator returns an
+	// escalated task to claimable, resetting exactly the counter (thrash
+	// or attempt) whose cap triggered the escalation being resolved --
+	// the "recover" half of the recover-or-terminate pair cancel is the
+	// other half of. Gated like every other write endpoint (NFR6); the
+	// response is the same work.Payload document GET /tasks/{id} and
+	// claim/complete/abandon/cancel/release/escalate return.
+	mux.Handle("POST /tasks/{id}/requeue", gate(handlers.RequeueTaskHandler(entities.Tasks(), assembler)))
+
 	mux.Handle("POST /design-sessions", gate(handlers.OpenDesignSessionHandler(entities.DesignSessions())))
 	mux.HandleFunc("GET /design-sessions/{id}", handlers.GetDesignSessionHandler(entities.DesignSessions(), entities.RevisionEvents()))
 	mux.Handle("POST /design-sessions/{id}/revision-events", gate(handlers.AppendRevisionEventHandler(entities.RevisionEvents())))

@@ -33,6 +33,7 @@ go_library(
         "task_note.go",
         "task_payload.go",
         "task_release.go",
+        "task_requeue.go",
     ],
     importpath = "github.com/whale-net/everything/krill/mcp/tools",
     visibility = ["//visibility:public"],
@@ -152,6 +153,24 @@ go_test(
 go_test(
     name = "task_release_escalate_registration_test",
     srcs = ["task_release_escalate_registration_test.go"],
+    deps = [
+        ":tools",
+        "//krill/mcp/server",
+        "//krill/store",
+        "@com_github_modelcontextprotocol_go_sdk//mcp",
+        "@com_github_stretchr_testify//assert",
+        "@com_github_stretchr_testify//require",
+    ],
+)
+
+# No-database unit test (issue #2876's own MCP-layer structural proof,
+# FR6): RegisterRequeueTask registers exactly {requeue_task} over a real
+# in-memory MCP client/server connection. Mirrors
+# :task_cancel_registration_test's own store.New(nil)/in-memory transport
+# technique, so it needs no Docker and is part of `bazel test //...`.
+go_test(
+    name = "task_requeue_registration_test",
+    srcs = ["task_requeue_registration_test.go"],
     deps = [
         ":tools",
         "//krill/mcp/server",

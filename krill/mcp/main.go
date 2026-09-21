@@ -232,6 +232,12 @@ func run() error {
 	// (RegisterOpsRead/the mount itself).
 	tools.RegisterListEscalatedTasks(opsReg, entities.Tasks())
 
+	// tools.RegisterRequeueTask (issue #2876, FR6): requeue_task, the
+	// recover half of the recover-or-terminate pair cancel_task is the
+	// other half of, PersonaSwarmOperator only (RegisterOpsWrite/the
+	// mount itself).
+	tools.RegisterRequeueTask(opsReg, sessions, entities.Tasks(), assembler)
+
 	// The mcpauth (human) front door's CredentialStore preflights the
 	// consuming domain's credential table at boot -- exactly like
 	// audience_score_system/mcp/main.go's own NewCredentialStore call.
