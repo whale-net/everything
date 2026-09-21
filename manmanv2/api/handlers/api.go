@@ -268,6 +268,10 @@ func (s *APIServer) DeleteBackup(ctx context.Context, req *pb.DeleteBackupReques
 	return s.backupHandler.DeleteBackup(ctx, req)
 }
 
+func (s *APIServer) GetBackupDownloadURL(ctx context.Context, req *pb.GetBackupDownloadURLRequest) (*pb.GetBackupDownloadURLResponse, error) {
+	return s.backupHandler.GetBackupDownloadURL(ctx, req)
+}
+
 func (s *APIServer) TriggerBackup(ctx context.Context, req *pb.TriggerBackupRequest) (*pb.TriggerBackupResponse, error) {
 	return s.backupConfigHandler.TriggerBackup(ctx, req)
 }
