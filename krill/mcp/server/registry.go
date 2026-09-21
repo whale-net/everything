@@ -58,15 +58,18 @@ func RegisterRead[In, Out any](reg *Registry, tool *mcp.Tool, h mcp.ToolHandlerF
 //
 // allowedPersonas is the minimal per-tool allow-list this task's Scope
 // section calls for: pass nil (or an empty slice) for a tool any resolved
-// persona may call -- open_design_session and append_revision_event, the
-// two write tools with no persona-sensitivity of their own -- or a
-// non-empty list to reject every persona not named in it.
-// tools.RegisterProposeEntities is the one caller that passes a non-empty
-// list ([]Persona{PersonaAgent}): FR9/FR10's mediated write requires a
-// producer-role Agent to be the caller, since FR10's "acting must differ
-// from on-behalf-of" can never be satisfied by a human acting for itself.
-// This is deliberately an allow-list per tool, not a policy engine --
-// nothing in this milestone needs more than that.
+// persona may call -- open_design_session, append_revision_event, and
+// init_session, the write tools with no persona-sensitivity of their own --
+// or a non-empty list to reject every persona not named in it. Every
+// non-empty allow-list in this package includes PersonaSwarmOperator
+// (issue #2926): an allow-list naming only PersonaAgent and/or
+// PersonaRequirementContributor made the tool unreachable end-to-end from
+// any mcpauth-authenticated caller, including every krill-design/krill-work
+// subagent, which share the parent session's mcpauth connection and can
+// never resolve PersonaAgent themselves (that persona is produced only by
+// the whagent-net front door, whagent_auth.go). This is deliberately an
+// allow-list per tool, not a policy engine -- nothing in this milestone
+// needs more than that.
 //
 // This mirrors audience_score_system/mcp/server/registry.go's
 // RegisterRead/RegisterWrite split in spirit -- persona gating stands in

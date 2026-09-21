@@ -216,9 +216,14 @@ func TestMCPMilestoneSurface_EndToEnd(t *testing.T) {
 
 	// Mirrors ../main.go's own construction order exactly (see
 	// design_test.go's identical comment): every milestone write tool is
-	// registered for PersonaRequirementContributor/PersonaAgent, and
-	// PersonaRequirementContributor has no real front door yet -- only the
-	// whagent-net (PersonaAgent) door can call these tools today.
+	// registered for PersonaRequirementContributor/PersonaAgent/
+	// PersonaSwarmOperator (issue #2926), and PersonaRequirementContributor
+	// has no real front door yet -- both the whagent-net (PersonaAgent) and
+	// mcpauth (PersonaSwarmOperator) doors can call these tools today. This
+	// test still exercises writes through agentToken/PersonaAgent below,
+	// matching the Requirement Contributor scenario its own doc comment
+	// names; entity_test.go/design_test.go cover the mcpauth-door write
+	// path.
 	designSrv.AddReceivingMiddleware(server.WhagentPersonaMiddleware())
 
 	handler := server.NewDualAuthHTTPHandler(server.New(), designSrv, server.New(), credentials, server.WhagentAuthConfig{

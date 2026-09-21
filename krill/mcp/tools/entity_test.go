@@ -200,9 +200,10 @@ func TestMCPEntityCreateSurface_EndToEnd(t *testing.T) {
 
 	// Mirrors ../main.go's own construction order exactly (see
 	// milestone_test.go's identical comment): every entity-create write
-	// tool is registered for PersonaRequirementContributor/PersonaAgent,
-	// and PersonaRequirementContributor has no real front door yet -- only
-	// the whagent-net (PersonaAgent) door can call these tools today.
+	// tool is registered for PersonaRequirementContributor/PersonaAgent/
+	// PersonaSwarmOperator (issue #2926), and PersonaRequirementContributor
+	// has no real front door yet -- both the whagent-net (PersonaAgent) and
+	// mcpauth (PersonaSwarmOperator) doors can call these tools today.
 	designSrv.AddReceivingMiddleware(server.WhagentPersonaMiddleware())
 
 	handler := server.NewDualAuthHTTPHandler(server.New(), designSrv, server.New(), credentials, server.WhagentAuthConfig{
@@ -214,6 +215,30 @@ func TestMCPEntityCreateSurface_EndToEnd(t *testing.T) {
 
 	designURL := ts.URL + "/mcp/design"
 	agentToken := mintEntityWhagentToken(t, signer, "human-e2e-1")
+	humanToken := credentials.validToken
+
+	t.Run("create_product succeeds for the mcpauth (PersonaSwarmOperator) door too (issue #2926)", func(t *testing.T) {
+		cs, err := connectEntityMCP(t, designURL, humanToken)
+		require.NoError(t, err)
+
+		res, err := cs.CallTool(ctx, &mcp.CallToolParams{
+			Name: "create_product",
+			Arguments: map[string]any{
+				"krill_session_id": selfSessionID.String(),
+				"name":             "krill (mcpauth door)",
+				"vision":           "proves PersonaSwarmOperator can call create_product directly",
+			},
+		})
+		require.NoError(t, err)
+		require.False(t, res.IsError, "unexpected error: %s", entityTextOf(res))
+
+		structured, ok := res.StructuredContent.(map[string]any)
+		require.True(t, ok)
+		id, ok := structured["id"].(string)
+		require.True(t, ok, "response must carry an id field")
+		_, err = uuid.Parse(id)
+		require.NoError(t, err)
+	})
 
 	t.Run("create_product rejects a missing vision", func(t *testing.T) {
 		cs, err := connectEntityMCP(t, designURL, agentToken)

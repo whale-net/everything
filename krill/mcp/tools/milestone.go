@@ -1,8 +1,8 @@
 // This file (issue #2683, FR1/FR2, C13) is krill's milestone authoring MCP
 // tool group: thin wrappers over store.MilestoneAuthoringStore --
 // create_milestone, set_fr_budget, add_delivers, add_must_not_foreclose,
-// and add_deferral (write, Requirement Contributor and Agent personas)
-// and get_milestone (read) -- mirroring
+// and add_deferral (write, Requirement Contributor/Agent/Swarm Operator
+// personas -- issue #2926) and get_milestone (read) -- mirroring
 // krill/api/handlers/milestone.go's HTTP surface for the same capability,
 // via the same handlers.IDResponse/handlers.NewMilestoneResponse this
 // package's other write/read tools reuse (LB7). Registered from
@@ -43,7 +43,7 @@ func RegisterCreateMilestone(reg *server.Registry, sessions store.SessionStore, 
 	server.RegisterWrite(reg, &mcp.Tool{
 		Name:        "create_milestone",
 		Description: "Create a milestone with an outcome sentence and optional FR budget (FR1, FR2).",
-	}, []server.Persona{server.PersonaRequirementContributor, server.PersonaAgent}, func(ctx context.Context, _ *mcp.CallToolRequest, in createMilestoneInput) (*mcp.CallToolResult, handlers.IDResponse, error) {
+	}, []server.Persona{server.PersonaRequirementContributor, server.PersonaAgent, server.PersonaSwarmOperator}, func(ctx context.Context, _ *mcp.CallToolRequest, in createMilestoneInput) (*mcp.CallToolResult, handlers.IDResponse, error) {
 		var zero handlers.IDResponse
 
 		sess, err := requireKrillSession(ctx, sessions, in.KrillSessionID)
@@ -83,7 +83,7 @@ func RegisterSetFRBudget(reg *server.Registry, sessions store.SessionStore, mile
 	server.RegisterWrite(reg, &mcp.Tool{
 		Name:        "set_fr_budget",
 		Description: "Revise a milestone's FR budget (FR2).",
-	}, []server.Persona{server.PersonaRequirementContributor, server.PersonaAgent}, func(ctx context.Context, _ *mcp.CallToolRequest, in setFRBudgetInput) (*mcp.CallToolResult, handlers.IDResponse, error) {
+	}, []server.Persona{server.PersonaRequirementContributor, server.PersonaAgent, server.PersonaSwarmOperator}, func(ctx context.Context, _ *mcp.CallToolRequest, in setFRBudgetInput) (*mcp.CallToolResult, handlers.IDResponse, error) {
 		var zero handlers.IDResponse
 
 		sess, err := requireKrillSession(ctx, sessions, in.KrillSessionID)
@@ -117,7 +117,7 @@ func RegisterAddDelivers(reg *server.Registry, sessions store.SessionStore, mile
 	server.RegisterWrite(reg, &mcp.Tool{
 		Name:        "add_delivers",
 		Description: "Record that a milestone delivers a given feature or FR (LB6).",
-	}, []server.Persona{server.PersonaRequirementContributor, server.PersonaAgent}, func(ctx context.Context, _ *mcp.CallToolRequest, in addDeliversInput) (*mcp.CallToolResult, handlers.IDResponse, error) {
+	}, []server.Persona{server.PersonaRequirementContributor, server.PersonaAgent, server.PersonaSwarmOperator}, func(ctx context.Context, _ *mcp.CallToolRequest, in addDeliversInput) (*mcp.CallToolResult, handlers.IDResponse, error) {
 		var zero handlers.IDResponse
 
 		sess, err := requireKrillSession(ctx, sessions, in.KrillSessionID)
@@ -155,7 +155,7 @@ func RegisterAddMustNotForeclose(reg *server.Registry, sessions store.SessionSto
 	server.RegisterWrite(reg, &mcp.Tool{
 		Name:        "add_must_not_foreclose",
 		Description: "Record a decision or entity a milestone must not foreclose (LB6).",
-	}, []server.Persona{server.PersonaRequirementContributor, server.PersonaAgent}, func(ctx context.Context, _ *mcp.CallToolRequest, in addMustNotForecloseInput) (*mcp.CallToolResult, handlers.IDResponse, error) {
+	}, []server.Persona{server.PersonaRequirementContributor, server.PersonaAgent, server.PersonaSwarmOperator}, func(ctx context.Context, _ *mcp.CallToolRequest, in addMustNotForecloseInput) (*mcp.CallToolResult, handlers.IDResponse, error) {
 		var zero handlers.IDResponse
 
 		sess, err := requireKrillSession(ctx, sessions, in.KrillSessionID)
@@ -194,7 +194,7 @@ func RegisterAddDeferral(reg *server.Registry, sessions store.SessionStore, mile
 	server.RegisterWrite(reg, &mcp.Tool{
 		Name:        "add_deferral",
 		Description: "Record a deferred item and the destination it was pushed to (FR1).",
-	}, []server.Persona{server.PersonaRequirementContributor, server.PersonaAgent}, func(ctx context.Context, _ *mcp.CallToolRequest, in addDeferralInput) (*mcp.CallToolResult, handlers.IDResponse, error) {
+	}, []server.Persona{server.PersonaRequirementContributor, server.PersonaAgent, server.PersonaSwarmOperator}, func(ctx context.Context, _ *mcp.CallToolRequest, in addDeferralInput) (*mcp.CallToolResult, handlers.IDResponse, error) {
 		var zero handlers.IDResponse
 
 		sess, err := requireKrillSession(ctx, sessions, in.KrillSessionID)
@@ -268,7 +268,7 @@ func RegisterCreateMilepebble(reg *server.Registry, sessions store.SessionStore,
 	server.RegisterWrite(reg, &mcp.Tool{
 		Name:        "create_milepebble",
 		Description: "Cut a milestone into a new sub-milestone container (milepebble) (FR3).",
-	}, []server.Persona{server.PersonaRequirementContributor, server.PersonaAgent}, func(ctx context.Context, _ *mcp.CallToolRequest, in createMilepebbleInput) (*mcp.CallToolResult, handlers.IDResponse, error) {
+	}, []server.Persona{server.PersonaRequirementContributor, server.PersonaAgent, server.PersonaSwarmOperator}, func(ctx context.Context, _ *mcp.CallToolRequest, in createMilepebbleInput) (*mcp.CallToolResult, handlers.IDResponse, error) {
 		var zero handlers.IDResponse
 
 		sess, err := requireKrillSession(ctx, sessions, in.KrillSessionID)
@@ -310,7 +310,7 @@ func RegisterAddMilepebbleScope(reg *server.Registry, sessions store.SessionStor
 	server.RegisterWrite(reg, &mcp.Tool{
 		Name:        "add_milepebble_scope",
 		Description: "Attach an entity already delivered by the parent milestone to one of its milepebbles (FR3).",
-	}, []server.Persona{server.PersonaRequirementContributor, server.PersonaAgent}, func(ctx context.Context, _ *mcp.CallToolRequest, in addMilepebbleScopeInput) (*mcp.CallToolResult, handlers.IDResponse, error) {
+	}, []server.Persona{server.PersonaRequirementContributor, server.PersonaAgent, server.PersonaSwarmOperator}, func(ctx context.Context, _ *mcp.CallToolRequest, in addMilepebbleScopeInput) (*mcp.CallToolResult, handlers.IDResponse, error) {
 		var zero handlers.IDResponse
 
 		sess, err := requireKrillSession(ctx, sessions, in.KrillSessionID)
@@ -364,7 +364,7 @@ func RegisterAddDiscoveredScope(reg *server.Registry, sessions store.SessionStor
 	server.RegisterWrite(reg, &mcp.Tool{
 		Name:        "add_discovered_scope",
 		Description: "Add scope discovered mid-milestone (a one-off Feature or Requirement) to a milepebble, without re-drafting the parent milestone (FR4).",
-	}, []server.Persona{server.PersonaRequirementContributor, server.PersonaAgent}, func(ctx context.Context, _ *mcp.CallToolRequest, in addDiscoveredScopeInput) (*mcp.CallToolResult, discoveredScopeResponse, error) {
+	}, []server.Persona{server.PersonaRequirementContributor, server.PersonaAgent, server.PersonaSwarmOperator}, func(ctx context.Context, _ *mcp.CallToolRequest, in addDiscoveredScopeInput) (*mcp.CallToolResult, discoveredScopeResponse, error) {
 		var zero discoveredScopeResponse
 
 		sess, err := requireKrillSession(ctx, sessions, in.KrillSessionID)

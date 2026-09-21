@@ -46,8 +46,11 @@
   until C12 lands. As of issue #2547, `krill/mcp` also mounts the
   design-session write/read surface at `/mcp/design` (see "The
   design-session MCP surface" above) — its persona resolution is the same
-  fixed `auth.go`/`whagent_auth.go` pair, with a new per-tool allow-list
-  (`RegisterWrite`) restricting `propose_entities` to `PersonaAgent` only.
+  fixed `auth.go`/`whagent_auth.go` pair, with a per-tool allow-list
+  (`RegisterWrite`) restricting `propose_entities` to `PersonaAgent`/
+  `PersonaSwarmOperator` (widened from `PersonaAgent`-only by issue #2926,
+  which had made the tool unreachable from any mcpauth-authenticated
+  caller, including every krill-design/krill-work subagent).
 - No auth wired up on `api` — `POST /sessions/init`, every future write
   endpoint, and the FR5-FR9 slice routes all trust caller-asserted
   identity or are unauthenticated (see "`init` and the write gate"

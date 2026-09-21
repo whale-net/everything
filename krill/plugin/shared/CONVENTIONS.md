@@ -83,11 +83,14 @@ entity any event in the session has touched.
   proposal's sibling position server-side now, per FR7; don't bother
   setting it.) This is **mediated intake** (FR9/FR10) and is the *only* way
   new Features/Requirements get created — there is no separate "create entity"
-  tool. **Restricted to `PersonaAgent`** (never callable as
-  `PersonaSwarmOperator`/human) and requires the resolved `krill_session`'s
-  `Acting` and `OnBehalfOf` identities to be distinct (`ErrMediatedIdentitySame`
-  otherwise) — i.e. an Agent proposing on behalf of a specific human, never an
-  Agent proposing "on behalf of itself." `parent_proposal_index` (0-based, into
+  tool. Allow-listed to `PersonaAgent` and `PersonaSwarmOperator` (issue
+  #2926 widened this from `PersonaAgent`-only, which made the tool
+  unreachable from any mcpauth-authenticated caller); FR9/FR10's actual
+  mediation guarantee is enforced independently, by requiring the resolved
+  `krill_session`'s `Acting` and `OnBehalfOf` identities to be distinct
+  (`ErrMediatedIdentitySame` otherwise) regardless of which persona is
+  calling — i.e. proposing on behalf of a specific human, never on behalf
+  of oneself. `parent_proposal_index` (0-based, into
   this same call's `proposals[]`) lets one call create a Feature and its
   Requirements together without a round-trip.
 - **Read back**: `get_design_session {id}` (session + full revision_events
@@ -107,10 +110,15 @@ never gated by a `krill_session` and available to every persona.
 ## Milestone and delivery-axis tools (M3, real today)
 
 krill's `Milestone`/`Milepebble` are real entities now, with every write
-tool below allow-listed to `{PersonaRequirementContributor, PersonaAgent}`
-— in practice today that means `PersonaAgent` only, since
-`PersonaRequirementContributor` has no auth path that ever resolves to it
-yet (reserved for a later capability, `krill/mcp/server/auth.go`). Unlike
+tool below allow-listed to `{PersonaRequirementContributor, PersonaAgent,
+PersonaSwarmOperator}` — `PersonaSwarmOperator` was added per issue #2926,
+since an allow-list naming only the other two made every one of these
+tools unreachable end-to-end from any mcpauth-authenticated caller
+(including every `krill-design`/`krill-work` subagent, which share the
+parent session's mcpauth connection and can never resolve `PersonaAgent`
+themselves). `PersonaRequirementContributor` still has no auth path that
+ever resolves to it (reserved for a later capability,
+`krill/mcp/server/auth.go`). Unlike
 `propose_entities` (Agent-only, mediated, requiring a distinct
 acting/on-behalf-of pair), these tools need no mediated session — an
 ordinary Agent-authenticated session calling on its own behalf is fine. This
