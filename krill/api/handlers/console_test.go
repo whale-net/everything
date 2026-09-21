@@ -101,3 +101,100 @@ func TestListCancelledTasksHandler_RowContent(t *testing.T) {
 	assert.Contains(t, body, "operator-1")
 	assert.Contains(t, body, "swarm-1")
 }
+
+// TestListOpenNotesHandler_MissingScopeID_Returns400 proves scope_id is
+// required -- there is no path entity to resolve it from (FR12, issue
+// #2874).
+func TestListOpenNotesHandler_MissingScopeID_Returns400(t *testing.T) {
+	tasks := &fakeTaskStore{}
+
+	req := httptest.NewRequest(http.MethodGet, "/console/notes", nil)
+	rec := httptest.NewRecorder()
+	handlers.ListOpenNotesHandler(tasks)(rec, req)
+
+	assert.Equal(t, http.StatusBadRequest, rec.Code, rec.Body.String())
+}
+
+// TestListOpenNotesHandler_ParamsPassThrough proves scope_id/page_size/
+// page_token all pass through to the store call unchanged.
+func TestListOpenNotesHandler_ParamsPassThrough(t *testing.T) {
+	scopeID := uuid.New()
+	tasks := &fakeTaskStore{}
+
+	req := httptest.NewRequest(http.MethodGet, "/console/notes?scope_id="+scopeID.String()+"&page_size=10&page_token=abc", nil)
+	rec := httptest.NewRecorder()
+	handlers.ListOpenNotesHandler(tasks)(rec, req)
+
+	require.Equal(t, http.StatusOK, rec.Code, rec.Body.String())
+	assert.Equal(t, scopeID, tasks.gotListOpenNotesParams.ScopeID)
+	assert.Equal(t, 10, tasks.gotListOpenNotesParams.Page.PageSize)
+	assert.Equal(t, "abc", tasks.gotListOpenNotesParams.Page.ContinuationToken)
+}
+
+// TestListOpenNotesHandler_TokenError_Returns400 proves
+// writeConsoleQueryError maps a token error (a stale, cross-scope, or
+// forged continuation token) to 400, never a 500.
+func TestListOpenNotesHandler_TokenError_Returns400(t *testing.T) {
+	tasks := &fakeTaskStore{listOpenNotesErr: store.ErrTokenScopeMismatch}
+
+	req := httptest.NewRequest(http.MethodGet, "/console/notes?scope_id="+uuid.New().String(), nil)
+	rec := httptest.NewRecorder()
+	handlers.ListOpenNotesHandler(tasks)(rec, req)
+
+	assert.Equal(t, http.StatusBadRequest, rec.Code, rec.Body.String())
+}
+
+// TestListOpenNotesHandler_RowContent_BothTargetShapes proves the wire
+// shape carries body/kind/created_at plus exactly one of task/entity
+// context, for both target shapes a note can name (FR12).
+func TestListOpenNotesHandler_RowContent_BothTargetShapes(t *testing.T) {
+	taskID := uuid.New()
+	deliveryRefID := uuid.New()
+	entityID := uuid.New()
+
+	tasks := &fakeTaskStore{
+		listOpenNotesResult: store.Page[store.OpenNoteRow]{
+			Items: []store.OpenNoteRow{
+				{
+					NoteID: uuid.New(),
+					Kind:   store.NoteKindComment,
+					Body:   "task-scoped body",
+					TaskContext: &store.OpenNoteTaskContext{
+						TaskID: taskID,
+						Title:  "do the thing",
+						DeliveryRef: store.ClaimedTaskDeliveryRef{
+							ID:    deliveryRefID,
+							Kind:  store.MilestoneKindMilepebble,
+							Title: "MP1",
+						},
+					},
+				},
+				{
+					NoteID: uuid.New(),
+					Kind:   store.NoteKindScopeNote,
+					Body:   "entity-scoped body",
+					EntityContext: &store.OpenNoteEntityContext{
+						EntityKind: store.NoteEntityKindRequirement,
+						EntityID:   entityID,
+						Title:      "FR1",
+					},
+				},
+			},
+		},
+	}
+
+	req := httptest.NewRequest(http.MethodGet, "/console/notes?scope_id="+uuid.New().String(), nil)
+	rec := httptest.NewRecorder()
+	handlers.ListOpenNotesHandler(tasks)(rec, req)
+
+	require.Equal(t, http.StatusOK, rec.Code, rec.Body.String())
+	body := rec.Body.String()
+	assert.Contains(t, body, "task-scoped body")
+	assert.Contains(t, body, taskID.String())
+	assert.Contains(t, body, "do the thing")
+	assert.Contains(t, body, deliveryRefID.String())
+	assert.Contains(t, body, "entity-scoped body")
+	assert.Contains(t, body, entityID.String())
+	assert.Contains(t, body, "requirement")
+	assert.Contains(t, body, "FR1")
+}

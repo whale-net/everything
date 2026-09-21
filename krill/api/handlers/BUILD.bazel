@@ -171,6 +171,7 @@ go_test(
         "task_complete_test.go",
         "task_dependency_test.go",
         "task_lease_test.go",
+        "task_note_lifecycle_test.go",
         "task_note_test.go",
         "task_payload_test.go",
         "task_reclaim_test.go",

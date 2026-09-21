@@ -939,6 +939,96 @@ go_test(
     ],
 )
 
+# Real-Postgres coverage for TaskStore.TransitionNoteLifecycle
+# (task_note_lifecycle.go, migration 016, issue #2874's Testing section,
+# FR11): default 'noted' at creation, each transition appending exactly one
+# event and mirroring current_status, the row-level immutability proof
+# (body/kind/target untouched), append-only/queryable/ordered history, an
+# unknown status rejected at both layers, the FR11 "any persona" regression
+# guard, a no-op transition accepted, and unknown/cross-scope note id
+# rejection. Shares task_note_integration_test.go's test-store/test-scope/
+# test-world/subject helpers rather than duplicating them. Deliberately NOT
+# part of `bazel test //...` -- see //libs/go/dbtest's README for the full
+# rationale.
+#
+# Run it explicitly (requires a working Docker daemon):
+#   bazel test //krill/store:task_note_lifecycle_integration_test --test_output=all
+go_test(
+    name = "task_note_lifecycle_integration_test",
+    size = "large",
+    timeout = "long",
+    srcs = [
+        "task_note_integration_test.go",
+        "task_note_lifecycle_integration_test.go",
+    ],
+    gotags = ["integration"],
+    tags = [
+        "external",
+        "integration",
+        "manual",
+        "no-cache",
+        "no-sandbox",
+        "requires-network",
+    ],
+    deps = [
+        ":store",
+        "//krill/migrate/schema",
+        "//krill/slice",
+        "//krill/work",
+        "//libs/go/dbtest",
+        "//libs/go/migrate",
+        "@com_github_google_uuid//:uuid",
+        "@com_github_jackc_pgx_v5//stdlib",
+        "@com_github_stretchr_testify//assert",
+        "@com_github_stretchr_testify//require",
+    ],
+)
+
+# Real-Postgres coverage for TaskStore.ListOpenNotes (task_note_console.go,
+# migration 016, issue #2874's Testing section, FR12): only 'noted' notes
+# appear, a note moved to each of the other three statuses disappears, row
+# content for both target shapes (task-scoped and spec-entity-scoped,
+# covering more than one entity_kind), paging default/max/clamp,
+# deterministic order, a continuation walk with no gaps or duplicates, a
+# cross-scope token rejected, and another scope's rows absent. Shares
+# task_note_integration_test.go's test-store/test-scope/test-world/subject
+# helpers rather than duplicating them. Deliberately NOT part of
+# `bazel test //...` -- see //libs/go/dbtest's README for the full
+# rationale.
+#
+# Run it explicitly (requires a working Docker daemon):
+#   bazel test //krill/store:task_note_console_integration_test --test_output=all
+go_test(
+    name = "task_note_console_integration_test",
+    size = "large",
+    timeout = "long",
+    srcs = [
+        "task_note_console_integration_test.go",
+        "task_note_integration_test.go",
+    ],
+    gotags = ["integration"],
+    tags = [
+        "external",
+        "integration",
+        "manual",
+        "no-cache",
+        "no-sandbox",
+        "requires-network",
+    ],
+    deps = [
+        ":store",
+        "//krill/migrate/schema",
+        "//krill/slice",
+        "//krill/work",
+        "//libs/go/dbtest",
+        "//libs/go/migrate",
+        "@com_github_google_uuid//:uuid",
+        "@com_github_jackc_pgx_v5//stdlib",
+        "@com_github_stretchr_testify//assert",
+        "@com_github_stretchr_testify//require",
+    ],
+)
+
 go_test(
     name = "task_dependency_integration_test",
     size = "large",
