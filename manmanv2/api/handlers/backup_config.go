@@ -334,7 +334,9 @@ func (h *BackupConfigHandler) TriggerBackup(ctx context.Context, req *pb.Trigger
 	cmd := &hostrmq.BackupCommand{
 		BackupID:          backup.BackupID,
 		SGCID:             sgc.SGCID,
+		VolumeType:        volume.VolumeType,
 		VolumeHostPath:    buildVolumeHostPath(volume.HostSubpath),
+		VolumeName:        volume.Name,
 		BackupPath:        cfg.BackupPath,
 		S3Key:             s3Key,
 		PresignedURL:      presignedURL,
