@@ -42,12 +42,10 @@ Do not log expected/handled control flow at WARNING or ERROR — reserve those f
 
 ## Effective Subagent Usage
 
-Prompt-cache read cost per turn grows with a session's own turn count — every turn re-sends and re-reads the full prior transcript, so cost compounds as a session's transcript grows. A **fork** inherits the parent's entire transcript, so it re-pays that large cache-read cost on every turn it takes: a 200k-token fork running 20 turns reads roughly 200k × 20 tokens in cache reads. A **fresh, non-forking subagent** starts from a small context (system prompt + tool schemas only), so even after the one-time cache-write premium on its first turn, its total cost over the same number of turns is lower. Do not fork — use regular (non-fork) subagents instead, to keep both the parent session's turn count *and* the delegated work's own context small.
+Do not fork (`subagent_type: "fork"`). A fork inherits the parent's full transcript and re-pays that cache-read cost on every turn it takes, which is more expensive than a fresh subagent's small starting context — not less. Use regular subagents instead.
 
-- **Spawn a regular subagent for exploratory or investigative work whose intermediate output you don't need to keep**: multi-step searches, log/codebase investigations, research questions, broad reads across many files. This keeps the heavy tool-output slog (grep noise, file reads, search results) out of the main transcript entirely, and the subagent itself runs from a small starting context instead of the parent's full history.
-- **Don't defeat the purpose by pulling detail back in.** Spawning a subagent and then asking for its full transcript, or requesting verbose intermediate output, reintroduces the cost delegation was supposed to avoid. Ask for a synthesized result, not a raw dump.
-- **Don't chain many small one-off subagent calls** for trivial lookups — each spawn pays its own cache-write on shared context (system prompt, tool schemas) without meaningfully shrinking the parent transcript. Batch related exploration into one subagent call when possible.
-- **Do not fork.** Forking is never cheaper than a fresh subagent — it just moves the parent's large context into another session that keeps re-reading it every turn.
+- Spawn a regular subagent for exploratory/investigative work whose intermediate output you don't need in the main transcript (searches, log/codebase digging, research, broad file reads). Ask for a synthesized result, not a raw dump.
+- Don't chain many small one-off subagent calls for trivial lookups — batch related exploration into one call.
 
 ## Bazel — Default Build, Test, and Query Tool
 
