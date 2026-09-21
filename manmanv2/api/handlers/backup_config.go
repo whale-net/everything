@@ -331,18 +331,8 @@ func (h *BackupConfigHandler) TriggerBackup(ctx context.Context, req *pb.Trigger
 		return nil, status.Errorf(codes.Internal, "failed to generate presigned URL: %v", err)
 	}
 
-	cmd := &hostrmq.BackupCommand{
-		BackupID:          backup.BackupID,
-		SGCID:             sgc.SGCID,
-		VolumeType:        volume.VolumeType,
-		VolumeHostPath:    buildVolumeHostPath(volume.HostSubpath),
-		VolumeName:        volume.Name,
-		BackupPath:        cfg.BackupPath,
-		S3Key:             s3Key,
-		PresignedURL:      presignedURL,
-		PreActionCommands: preActionCommands,
-		CreatedAt:         time.Now(),
-	}
+	cmd := hostrmq.BuildBackupCommand(backup, cfg, volume, s3Key, presignedURL, preActionCommands)
+	cmd.CreatedAt = time.Now()
 
 	if err := h.commandPublisher.PublishBackup(ctx, server.ServerID, cmd); err != nil {
 		// Mark backup as failed if we can't dispatch
@@ -367,13 +357,6 @@ func backupConfigToProto(c *manman.BackupConfig) *pb.BackupConfig {
 		pb.LastBackupAt = c.LastBackupAt.Unix()
 	}
 	return pb
-}
-
-func buildVolumeHostPath(hostSubpath *string) string {
-	if hostSubpath != nil {
-		return *hostSubpath
-	}
-	return ""
 }
 
 func renderActionTemplate(tmplStr string, inputs map[string]string) (string, error) {
