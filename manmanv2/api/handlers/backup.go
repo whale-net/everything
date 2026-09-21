@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"time"
 
 	"github.com/whale-net/everything/libs/go/s3"
 	"github.com/whale-net/everything/manmanv2/models"
@@ -12,6 +13,13 @@ import (
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 )
+
+// backupDownloadURLTTL bounds how long a backup archive's presigned download
+// URL stays valid -- short-lived (matching Workshop's cacheURLTTL precedent,
+// manmanv2/api/handlers/workshop/cache.go), but long enough for a Server
+// Manager to click "Download" on the run detail page and have the browser
+// actually start fetching a potentially large archive before it expires.
+const backupDownloadURLTTL = 15 * time.Minute
 
 type BackupHandler struct {
 	backupRepo  repository.BackupRepository
@@ -181,6 +189,48 @@ func (h *BackupHandler) DeleteBackup(ctx context.Context, req *pb.DeleteBackupRe
 	slog.Info("backup deleted", "backup_id", req.BackupId, "session_id", backup.SessionID)
 
 	return &pb.DeleteBackupResponse{}, nil
+}
+
+// GetBackupDownloadURL issues a short-lived pre-signed public S3 GET URL for
+// one backup run's archive, mirroring Workshop's GetCacheDownloadURL pattern
+// (manmanv2/api/handlers/workshop/cache.go): signed against the public
+// endpoint so a browser can fetch it directly, scoped to exactly this one
+// object key. A run with no S3 object yet (pending/running/failed) is a
+// FailedPrecondition, not a NotFound -- the run itself exists, it just has
+// nothing to download yet.
+func (h *BackupHandler) GetBackupDownloadURL(ctx context.Context, req *pb.GetBackupDownloadURLRequest) (*pb.GetBackupDownloadURLResponse, error) {
+	backup, err := h.backupRepo.Get(ctx, req.BackupId)
+	if err != nil {
+		return nil, status.Errorf(codes.NotFound, "backup not found: %v", err)
+	}
+
+	if backup.S3URL == nil {
+		return nil, status.Error(codes.FailedPrecondition, "backup has no S3 URL")
+	}
+	s3Key, err := extractS3Key(*backup.S3URL)
+	if err != nil {
+		slog.Warn("backup download rejected: invalid S3 URL", "backup_id", req.BackupId, "s3_url", *backup.S3URL, "error", err)
+		return nil, status.Errorf(codes.Internal, "invalid S3 URL: %v", err)
+	}
+
+	presignedURL, err := h.s3Client.PresignPublicGetURL(ctx, s3Key, backupDownloadURLTTL)
+	if err != nil {
+		slog.Warn("failed to presign backup download URL", "backup_id", req.BackupId, "error", err)
+		return nil, status.Errorf(codes.Internal, "failed to generate presigned URL: %v", err)
+	}
+	expiresAt := time.Now().Add(backupDownloadURLTTL)
+
+	// Log the run identity and expiry, never the URL or its query string.
+	slog.Info("issued backup download URL", "backup_id", req.BackupId, "expires_at", expiresAt.Unix())
+
+	resp := &pb.GetBackupDownloadURLResponse{
+		PresignedUrl: presignedURL,
+		ExpiresAt:    expiresAt.Unix(),
+	}
+	if backup.SizeBytes != nil {
+		resp.SizeBytes = *backup.SizeBytes
+	}
+	return resp, nil
 }
 
 func backupToProto(b *manman.Backup) *pb.Backup {

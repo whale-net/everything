@@ -209,13 +209,14 @@ var manmanv2RouteTable = []string{
 	"/deployments/1", // #2279 amendment A3: deployment-first name for "/sgc/<id>"'s redirect
 	"/backup-configs/create",
 	"/backup-configs/1",
-	"/backups",               // #2812 M7: fleet-wide backup management surface shell (FR1, FR3, FR4)
-	"/backups/runs",          // #2812 M7: "Backup runs" tab's htmx fragment (filter submit + "Load more")
-	"/backups/configs",       // #2816 M7: "Backup configs" tab's htmx fragment (filter submit + "Load more")
-	"/backups/trigger-form",  // #2813 M7: fleet-wide "trigger a backup run" picker fragment (FR5)
-	"/backups/trigger",       // #2813 M7: fleet-wide "trigger a backup run" submit target (FR5)
-	"/backups/runs/1",        // #2814 M7: single backup-run detail view (FR6)
-	"/backups/runs/1/delete", // #2815 M7: delete one backup run (FR7, FR8)
+	"/backups",                 // #2812 M7: fleet-wide backup management surface shell (FR1, FR3, FR4)
+	"/backups/runs",            // #2812 M7: "Backup runs" tab's htmx fragment (filter submit + "Load more")
+	"/backups/configs",         // #2816 M7: "Backup configs" tab's htmx fragment (filter submit + "Load more")
+	"/backups/trigger-form",    // #2813 M7: fleet-wide "trigger a backup run" picker fragment (FR5)
+	"/backups/trigger",         // #2813 M7: fleet-wide "trigger a backup run" submit target (FR5)
+	"/backups/runs/1",          // #2814 M7: single backup-run detail view (FR6)
+	"/backups/runs/1/delete",   // #2815 M7: delete one backup run (FR7, FR8)
+	"/backups/runs/1/download", // backup detail download link: mint a pre-signed public S3 URL and redirect
 	"/api/dashboard-summary",
 	"/api/dashboard-sessions",
 }

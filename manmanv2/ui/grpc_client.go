@@ -1136,6 +1136,16 @@ func (c *ControlClient) GetBackup(ctx context.Context, backupID int64) (*manmanp
 	return resp.Backup, nil
 }
 
+// GetBackupDownloadURL issues a short-lived pre-signed public S3 GET URL for
+// one completed backup run's archive, mirroring Workshop's
+// GetCacheDownloadURL pattern (manmanv2/api/handlers/workshop/cache.go). The
+// API returns codes.FailedPrecondition when the run has no S3 object yet
+// (pending/running/failed); the handler maps that to an inline notice
+// instead of a 500.
+func (c *ControlClient) GetBackupDownloadURL(ctx context.Context, backupID int64) (*manmanpb.GetBackupDownloadURLResponse, error) {
+	return c.api.GetBackupDownloadURL(ctx, &manmanpb.GetBackupDownloadURLRequest{BackupId: backupID})
+}
+
 // ListBackupConfigActions lists a BackupConfig's attached pre-backup Actions
 // in execution order (task #2814, FR6; #2811 shipped the RPC). There is no
 // per-run execution record in the schema -- the detail view resolves a run's

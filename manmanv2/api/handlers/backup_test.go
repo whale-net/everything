@@ -169,6 +169,65 @@ func TestListBackups_PageSizeDefaultAndClamp(t *testing.T) {
 	}
 }
 
+// fakeBackupGetRepo is a minimal BackupRepository fake for GetBackupDownloadURL
+// tests that only need Get -- it isolates the handler's own precondition
+// checks (missing S3 URL, invalid S3 URL) from the real presign call, which
+// requires a live *s3.Client the handler's s3Client field cannot be faked
+// for at this layer.
+type fakeBackupGetRepo struct {
+	repository.BackupRepository
+
+	backup *manman.Backup
+	err    error
+}
+
+func (f *fakeBackupGetRepo) Get(ctx context.Context, backupID int64) (*manman.Backup, error) {
+	if f.err != nil {
+		return nil, f.err
+	}
+	return f.backup, nil
+}
+
+// TestGetBackupDownloadURL_UnknownIDReturnsNotFound proves an unknown backup
+// id is rejected with NotFound before ever reaching S3.
+func TestGetBackupDownloadURL_UnknownIDReturnsNotFound(t *testing.T) {
+	repo := &fakeBackupGetRepo{err: context.DeadlineExceeded}
+	h := NewBackupHandler(repo, nil, nil)
+
+	_, err := h.GetBackupDownloadURL(context.Background(), &pb.GetBackupDownloadURLRequest{BackupId: 999})
+	if status.Code(err) != codes.NotFound {
+		t.Fatalf("expected NotFound for an unknown backup id, got %v", err)
+	}
+}
+
+// TestGetBackupDownloadURL_NoS3URLReturnsFailedPrecondition proves a run
+// with no archive yet (pending/running/failed) is rejected with
+// FailedPrecondition rather than attempting to presign a nonexistent
+// object -- the run itself exists, it just has nothing to download yet.
+func TestGetBackupDownloadURL_NoS3URLReturnsFailedPrecondition(t *testing.T) {
+	repo := &fakeBackupGetRepo{backup: &manman.Backup{BackupID: 1, Status: manman.BackupStatusPending}}
+	h := NewBackupHandler(repo, nil, nil)
+
+	_, err := h.GetBackupDownloadURL(context.Background(), &pb.GetBackupDownloadURLRequest{BackupId: 1})
+	if status.Code(err) != codes.FailedPrecondition {
+		t.Fatalf("expected FailedPrecondition for a run with no S3 URL, got %v", err)
+	}
+}
+
+// TestGetBackupDownloadURL_InvalidS3URLReturnsInternal proves a malformed
+// stored S3 URL (should never happen, but extractS3Key can fail) surfaces as
+// Internal rather than panicking.
+func TestGetBackupDownloadURL_InvalidS3URLReturnsInternal(t *testing.T) {
+	badURL := "not-an-s3-url"
+	repo := &fakeBackupGetRepo{backup: &manman.Backup{BackupID: 1, Status: manman.BackupStatusCompleted, S3URL: &badURL}}
+	h := NewBackupHandler(repo, nil, nil)
+
+	_, err := h.GetBackupDownloadURL(context.Background(), &pb.GetBackupDownloadURLRequest{BackupId: 1})
+	if status.Code(err) != codes.Internal {
+		t.Fatalf("expected Internal for a malformed S3 URL, got %v", err)
+	}
+}
+
 // TestBackupToProto_MapsStatusAndPointerFields proves backupToProto emits
 // status, error_message, backup_config_id, volume_id, and trigger_source
 // (M7 FR2/FR3 backing, plan #2777, task #2808) -- fields the issue calls out
