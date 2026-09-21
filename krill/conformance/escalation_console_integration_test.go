@@ -29,9 +29,9 @@
 //
 //   - FR1 (lane-thrash counter), FR2 (thrash-cap escalation): "Step 3".
 //   - FR3 (attempt-cap escalation via lease-expiry/abandon): "Step 4".
-//   - FR4 (claimed-console view): "Step 2" -- documents a real production
-//     defect this walk uncovered (ListClaimedTasks is a permanent stub);
-//     see that step's own comment and follow-up issue #2916.
+//   - FR4 (claimed-console view): "Step 2" -- previously documented a real
+//     production defect this walk uncovered (ListClaimedTasks was a
+//     permanent stub, follow-up issue #2916); now proves the real query.
 //   - FR5 (escalated-console view, summary history only): "Step 6".
 //   - FR6 (requeue): "Step 8".
 //   - FR7 (cancel): "Step 9".
@@ -56,6 +56,7 @@ package conformance
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"strings"
 	"testing"
@@ -192,22 +193,34 @@ func TestEscalationConsole_EndToEndWalk_AndNFRAudit(t *testing.T) {
 
 	// FR4: GET /console/claimed (store.TaskStore.ListClaimedTasks) is
 	// wired end-to-end through the HTTP handler (console.go) and the
-	// list_claimed_tasks MCP tool (mcp/tools/console.go), but the store
-	// method itself is a permanent stub -- a genuine production defect
-	// this walk uncovered, not a gap in this test (see #2869's own
-	// "Implementation" section, never actually landed, versus its three
-	// siblings #2873/#2874/#2875, which are). Filed as a follow-up:
-	// issue #2916. This assertion documents the CURRENT (broken)
-	// behaviour explicitly, so a real fix flips it red rather than this
-	// walk silently staying green forever with FR4 unproven.
-	_, err = tasks.ListClaimedTasks(ctx, store.ListClaimedTasksParams{ScopeID: env.scopeID})
-	assert.ErrorIs(t, err, store.ErrNotImplemented,
-		"FR4 (known production defect, see follow-up issue #2916): ListClaimedTasks has never been implemented despite issue #2869 closing -- GET /console/claimed and list_claimed_tasks fail identically in production for every scope")
+	// list_claimed_tasks MCP tool (mcp/tools/console.go), and the store
+	// method itself now implements the real query (issue #2916 -- #2869's
+	// own "Implementation" section, previously never landed, unlike its
+	// three siblings #2873/#2874/#2875). Every one of this step's three
+	// claimed tasks must appear, each carrying its own claimant session,
+	// current lane, and attempt count.
+	claimedPage, err := tasks.ListClaimedTasks(ctx, store.ListClaimedTasksParams{ScopeID: env.scopeID})
+	require.NoError(t, err, "FR4: ListClaimedTasks must succeed now that issue #2916 is fixed")
+	byClaimedTaskID := make(map[uuid.UUID]store.ClaimedTaskRow, len(claimedPage.Items))
+	for _, row := range claimedPage.Items {
+		byClaimedTaskID[row.TaskID] = row
+	}
+	for i, task := range claimedTasks {
+		row, ok := byClaimedTaskID[task.ID]
+		require.True(t, ok, "FR4: claimed task %q must appear in the claimed-console view", task.Title)
+		assert.Equal(t, task.Title, row.Title, "FR4: the row must carry the task's own title, never just a surrogate id")
+		assert.Equal(t, milepebble.ID, row.DeliveryRef.ID, "FR4: the row must carry the task's delivery reference")
+		assert.Equal(t, store.MilestoneKindMilepebble, row.DeliveryRef.Kind)
+		assert.Equal(t, claimedClaims[i].SessionID, row.ClaimantSessionID, "FR4: the row must carry the live claim's own session id")
+		assert.Equal(t, store.LaneScaffold, row.CurrentLane)
+		assert.Equal(t, 0, row.AttemptCount)
+		assert.False(t, row.LeaseExpiresAt.IsZero())
+	}
 
-	// "What is claimed" is still answerable at the store layer directly
+	// "What is claimed" is also answerable at the store layer directly
 	// (claimant session, lane, lease expiry, attempt count, title,
-	// delivery reference) -- proving the underlying claim mechanics work
-	// even though the one console query over them does not.
+	// delivery reference) -- a second, independent confirmation that the
+	// underlying claim mechanics agree with the console view above.
 	for i, task := range claimedTasks {
 		reread, err := tasks.GetTaskByID(ctx, task.ID)
 		require.NoError(t, err)
@@ -791,15 +804,31 @@ func TestEscalationConsole_EndToEndWalk_AndNFRAudit(t *testing.T) {
 
 	// ==================================================================
 	// Step 11: paging across the console queries (NFR6), with
-	// cross-scope token rejection. FR4's ListClaimedTasks is excluded --
-	// see Step 2's own comment; it cannot be paged while it remains an
-	// unconditional ErrNotImplemented stub.
+	// cross-scope token rejection.
 	// ==================================================================
 
 	var otherScopeID uuid.UUID
 	require.NoError(t, env.pool.QueryRow(ctx, `
 		INSERT INTO scope (repo_full_name, default_branch) VALUES ($1, 'main') RETURNING id
 	`, "whale-net/escalation-console-other-scope-"+uuid.NewString()).Scan(&otherScopeID))
+
+	// Five more claimed tasks for the same three-page walk, on top of
+	// Step 2's own three claimed tasks (still claimed -- never released,
+	// completed, or cancelled by any later step).
+	for i := 0; i < 5; i++ {
+		task := singleLaneTask(t, ctx, tasks, env.scopeID, milepebble.ID, "paging claimed task", operator, operatorHuman)
+		agent, human := escalationAgentSession(fmt.Sprintf("paging-claim-%d", i))
+		sessID, err := env.sessions.InitSession(ctx, env.scopeID, agent, human, nil)
+		require.NoError(t, err)
+		_, err = tasks.ClaimTask(ctx, store.ClaimTaskParams{ScopeID: env.scopeID, TaskID: task.ID, SessionID: sessID, Acting: agent, OnBehalfOf: human})
+		require.NoError(t, err)
+	}
+	claimedIDs, firstClaimedToken := pageAllClaimed(t, ctx, tasks, env.scopeID, 2)
+	assert.GreaterOrEqual(t, len(claimedIDs), 8, "NFR6: paging must surface every claimed task (3 from Step 2 + 5 seeded here) with no gaps")
+	assert.Len(t, claimedIDs, len(uniqueUUIDs(claimedIDs)), "NFR6: paging must never repeat a row across pages")
+	require.NotEmpty(t, firstClaimedToken, "NFR6: with more rows than one page, the first page's token must be non-empty")
+	_, err = tasks.ListClaimedTasks(ctx, store.ListClaimedTasksParams{ScopeID: otherScopeID, Page: store.PageParams{ContinuationToken: firstClaimedToken}})
+	assert.ErrorIs(t, err, store.ErrTokenScopeMismatch, "NFR6: a token issued under one scope must be rejected when resumed against another")
 
 	// Seed five more cancelled tasks purely so a page size of 2 forces
 	// three pages (2, 2, 1).
@@ -1023,12 +1052,34 @@ func snapshotTaskNotes(t *testing.T, ctx context.Context, pool *pgxpool.Pool, ta
 	return snaps
 }
 
-// pageAllCancelled/pageAllEscalated/pageAllOpenNotes each walk their own
-// console query to exhaustion with pageSize-sized pages and a
-// continuation token, returning every row's own id (order-insensitive --
+// pageAllClaimed/pageAllCancelled/pageAllEscalated/pageAllOpenNotes each
+// walk their own console query to exhaustion with pageSize-sized pages and
+// a continuation token, returning every row's own id (order-insensitive --
 // NFR6's own deterministic-order proof already lives in
 // task_console_integration_test.go) plus the very first page's token, for
 // the cross-scope-rejection check that follows each call below.
+func pageAllClaimed(t *testing.T, ctx context.Context, tasks store.TaskStore, scopeID uuid.UUID, pageSize int) ([]uuid.UUID, string) {
+	t.Helper()
+	var ids []uuid.UUID
+	var firstToken string
+	token := ""
+	for page := 0; ; page++ {
+		result, err := tasks.ListClaimedTasks(ctx, store.ListClaimedTasksParams{ScopeID: scopeID, Page: store.PageParams{PageSize: pageSize, ContinuationToken: token}})
+		require.NoError(t, err)
+		for _, row := range result.Items {
+			ids = append(ids, row.TaskID)
+		}
+		if page == 0 {
+			firstToken = result.NextToken
+		}
+		if result.NextToken == "" {
+			break
+		}
+		token = result.NextToken
+	}
+	return ids, firstToken
+}
+
 func pageAllCancelled(t *testing.T, ctx context.Context, tasks store.TaskStore, scopeID uuid.UUID, pageSize int) ([]uuid.UUID, string) {
 	t.Helper()
 	var ids []uuid.UUID
