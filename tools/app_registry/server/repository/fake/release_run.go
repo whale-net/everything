@@ -25,6 +25,15 @@ var legalReleaseRunTargetTransitions = map[repository.ReleaseRunTargetState]map[
 		repository.ReleaseRunTargetStateFailed:   true,
 	},
 	repository.ReleaseRunTargetStateBuilding: {
+		repository.ReleaseRunTargetStateBuilt:      true,
+		repository.ReleaseRunTargetStatePublishing: true,
+		repository.ReleaseRunTargetStateFailed:     true,
+	},
+	repository.ReleaseRunTargetStateBuilt: {
+		repository.ReleaseRunTargetStatePushed: true,
+		repository.ReleaseRunTargetStateFailed: true,
+	},
+	repository.ReleaseRunTargetStatePushed: {
 		repository.ReleaseRunTargetStatePublishing: true,
 		repository.ReleaseRunTargetStateFailed:     true,
 	},

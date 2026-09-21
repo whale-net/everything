@@ -1359,9 +1359,14 @@ func TestActivities_FinalizePublish_RecordsPublishingThenRecordingPerTarget(t *t
 	// internal walk happens to write both rows -- see spyReleaseRunRepo's
 	// GetReleaseRun override.
 	require.Equal(t, []string{
-		"GetReleaseRun", "image:demo-gadget->publishing",
+		// Publishing's own call walks image targets through built/pushed
+		// first (releaseRunTargetStateOrderImage) -- these
+		// targets never called ReportTargetProgress in this test, so the
+		// walk synthesizes both in one burst, still as part of the single
+		// "GetReleaseRun"-preceded Publishing call, not a separate one.
+		"GetReleaseRun", "image:demo-gadget->built", "image:demo-gadget->pushed", "image:demo-gadget->publishing",
 		"GetReleaseRun", "image:demo-gadget->recording",
-		"GetReleaseRun", "image:demo-widget->publishing",
+		"GetReleaseRun", "image:demo-widget->built", "image:demo-widget->pushed", "image:demo-widget->publishing",
 		"GetReleaseRun", "image:demo-widget->recording",
 	}, calls, "each target's Publishing and Recording transitions must be written back-to-back for that target as two separate RecordTargetState calls (FR2/FR3, issue #1701), not batched across targets nor merged into a single walking call")
 }

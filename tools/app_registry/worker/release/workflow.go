@@ -196,6 +196,40 @@ type BuildCompletedSignal struct {
 	Detail string
 }
 
+// SignalTargetProgress is the workflow signal ReportTargetProgress (see
+// server/handlers/release.go) delivers onto a running ReleaseWorkflow
+// execution: one image target reporting BUILT or PUSHED, ahead of
+// SignalBuildCompleted's batch-wide terminal signal. Unlike
+// SignalBuildCompleted, receiving this signal never decides
+// awaitBuildCompletion's outcome -- it only records the target's
+// intermediate state and the wait continues.
+const SignalTargetProgress = "target-progress"
+
+// TargetProgressSignal is SignalTargetProgress's payload. The server side
+// (server/handlers/release.go's ReportTargetProgress) constructs this exact
+// type so the default data converter round-trips it across the service
+// boundary -- keep the two sides in sync.
+type TargetProgressSignal struct {
+	// GitHubRunID mirrors BuildCompletedSignal.GitHubRunID -- a signal
+	// whose id doesn't match the DispatchBuild-started run (and isn't
+	// empty/unverifiable) is a stale notification from some other run and
+	// is ignored.
+	GitHubRunID string
+	// OwnerFullName + Kind identify which target in the batch this
+	// progress report is for (repository.ReleaseRunTarget's own key).
+	OwnerFullName string
+	Kind          repository.ArtifactKind
+	// State is the reported progress state -- Built or Pushed. Any other
+	// value is rejected by the server handler before it ever reaches this
+	// signal.
+	State repository.ReleaseRunTargetState
+	// Detail is a human-readable one-liner, threaded straight into
+	// RecordTargetState's errorDetail parameter (repurposed here as a
+	// non-error detail string on non-terminal states -- see that
+	// activity's UpdateTargetState contract).
+	Detail string
+}
+
 // VerifyResult is VerifyPublished's outcome: whether every target in the
 // batch reached published/succeeded (FR12's "same registry-visible end
 // state as v1"), and which ones didn't.
@@ -457,10 +491,14 @@ func ReleaseWorkflow(ctx workflow.Context, in ReleaseWorkflowInput) (ReleaseWork
 	// FR1: DispatchBuild has just confirmed a real GitHub Actions run
 	// exists -- move every target in the batch to BUILDING together before
 	// awaiting that run's completion. This is deliberately batch-wide, not
-	// per target: DispatchBuild/awaitBuildCompletion are batch-scoped (one
-	// GHA run covers every target in the batch, and awaitBuildCompletion's
-	// NotifyBuildComplete signal is still whole-run, not per-target), so
-	// there is no earlier per-target moment to pin this to. Do not wait for
+	// per target: DispatchBuild is batch-scoped (one GHA run covers every
+	// target in the batch), so there is no earlier per-target moment to pin
+	// entry into BUILDING to. NotifyBuildComplete's own terminal signal is
+	// still whole-run, not per-target -- awaitBuildCompletion additionally
+	// drains SignalTargetProgress for finer-grained BUILT/
+	// PUSHED visibility WITHIN this same BUILDING window, but that does not
+	// change when the batch as a whole enters or leaves BUILDING. Do not
+	// wait for
 	// GitHub's run to leave "queued" first -- DispatchBuild does not
 	// confirm that, and BUILDING is pinned to dispatch-confirmed. An error
 	// here routes through recordFailure exactly like dispatchBuild's own
@@ -472,7 +510,7 @@ func ReleaseWorkflow(ctx workflow.Context, in ReleaseWorkflowInput) (ReleaseWork
 		}
 	}
 
-	buildStatus, err := awaitBuildCompletion(ctx, buildRef)
+	buildStatus, err := awaitBuildCompletion(ctx, in.ReleaseRunID, buildID, in.Targets, buildRef)
 	if err != nil {
 		return recordFailure(ctx, in, fmt.Errorf("poll build: %w", err))
 	}
@@ -617,13 +655,22 @@ func dispatchBuild(ctx workflow.Context, plan ResolvedPlan, digests map[string]s
 // of ReleaseWorkflow already consumed, so the split is invisible to the
 // finalize/verify/record steps.
 //
-// Determinism: everything here is workflow code -- the signal channel is
+// Determinism: everything here is workflow code -- the signal channels are
 // registered deterministically, the poll future is deterministic, and the
 // only branching is on received data, so replay is stable. A signal that
 // arrives after the poll decided is simply never read again (no-ops in
 // Temporal); a stale signal (GitHubRunID mismatch) is ignored and the
 // selector keeps waiting -- see BuildCompletedSignal.GitHubRunID.
-func awaitBuildCompletion(ctx workflow.Context, ref BuildRef) (BuildStatus, error) {
+//
+// releaseRunID/buildID/targets let this same loop also drain
+// SignalTargetProgress: a progress signal never decides the loop (decided
+// stays false, the selector keeps waiting) -- it just records the reported
+// target's Built/Pushed state via the same RecordTargetState activity
+// ReleaseWorkflow's own Building loop uses, so it's idempotent and
+// best-effort in exactly the same way (a failed write here is logged and
+// the release proceeds regardless -- a progress-reporting hiccup must
+// never fail a real build).
+func awaitBuildCompletion(ctx workflow.Context, releaseRunID, buildID string, targets []ReleaseTarget, ref BuildRef) (BuildStatus, error) {
 	// The poll runs under its own activity options (long StartToClose for
 	// the polling loop -- see pollBuildActivityOptions) in a cancellable
 	// child context, so the signal path can stop it the moment the notify
@@ -631,6 +678,8 @@ func awaitBuildCompletion(ctx workflow.Context, ref BuildRef) (BuildStatus, erro
 	pollCtx, cancelPoll := workflow.WithCancel(workflow.WithActivityOptions(ctx, pollBuildActivityOptions))
 	pollFuture := workflow.ExecuteActivity(pollCtx, ActivityPollBuild, ref)
 	signalCh := workflow.GetSignalChannel(ctx, SignalBuildCompleted)
+	progressCh := workflow.GetSignalChannel(ctx, SignalTargetProgress)
+	logger := workflow.GetLogger(ctx)
 
 	var status BuildStatus
 	var statusErr error
@@ -657,6 +706,27 @@ func awaitBuildCompletion(ctx workflow.Context, ref BuildRef) (BuildStatus, erro
 			status = BuildStatus{Succeeded: sig.Succeeded, Detail: sig.Detail}
 			decided = true
 		})
+		sel.AddReceive(progressCh, func(c workflow.ReceiveChannel, more bool) {
+			var sig TargetProgressSignal
+			if !c.Receive(ctx, &sig) {
+				return
+			}
+			if sig.GitHubRunID != "" && sig.GitHubRunID != ref.RunID {
+				// Stale signal from a different run -- same ignore-and-
+				// keep-waiting rule as the build-completed signal above.
+				return
+			}
+			target, found := findReleaseTarget(targets, sig.OwnerFullName, sig.Kind)
+			if !found {
+				logger.Warn("target progress: no matching target in batch; ignoring",
+					"release_run_id", releaseRunID, "owner_full_name", sig.OwnerFullName, "kind", sig.Kind, "state", sig.State)
+				return
+			}
+			if rerr := recordTargetState(ctx, releaseRunID, target, sig.State, buildID, sig.Detail); rerr != nil {
+				logger.Warn("target progress: record target state failed; continuing build",
+					"release_run_id", releaseRunID, "target", target.key(), "state", sig.State, "error", rerr)
+			}
+		})
 		sel.Select(ctx)
 	}
 	// Stop the poll on the signal path (cancelling an already-completed
@@ -664,6 +734,19 @@ func awaitBuildCompletion(ctx workflow.Context, ref BuildRef) (BuildStatus, erro
 	// rather than tracked per branch).
 	cancelPoll()
 	return status, statusErr
+}
+
+// findReleaseTarget looks up the ReleaseTarget in targets matching
+// ownerFullName+kind -- SignalTargetProgress identifies its target the same
+// way RecordTargetState's own row lookup does (repository.ReleaseRunTarget's
+// key).
+func findReleaseTarget(targets []ReleaseTarget, ownerFullName string, kind repository.ArtifactKind) (ReleaseTarget, bool) {
+	for _, t := range targets {
+		if t.OwnerFullName == ownerFullName && t.Kind == kind {
+			return t, true
+		}
+	}
+	return ReleaseTarget{}, false
 }
 
 func finalizePublish(ctx workflow.Context, releaseRunID string, plan ResolvedPlan, ref BuildRef) (FinalizeResult, error) {
