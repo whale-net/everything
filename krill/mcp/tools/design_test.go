@@ -239,9 +239,9 @@ func TestMCPDesignSurface_EndToEnd(t *testing.T) {
 	// added AFTER server.New() (which already wired PersonaMiddleware) so it
 	// runs BEFORE it -- see that middleware's own doc comment for the
 	// coexistence contract. Without this, every caller (whagent- or
-	// mcpauth-authenticated) resolves PersonaSwarmOperator, and
-	// propose_entities' Agent-only allow-list (criterion 3) could never be
-	// satisfied by anyone.
+	// mcpauth-authenticated) resolves PersonaSwarmOperator, and this file's
+	// "succeeds for whagent door" coverage (criterion 3) could never
+	// distinguish the two doors.
 	specSrv.AddReceivingMiddleware(server.WhagentPersonaMiddleware())
 	designSrv.AddReceivingMiddleware(server.WhagentPersonaMiddleware())
 	opsSrv.AddReceivingMiddleware(server.WhagentPersonaMiddleware())
@@ -487,9 +487,20 @@ func TestMCPDesignSurface_EndToEnd(t *testing.T) {
 		assert.Len(t, featureSets, 1)
 	})
 
-	// ── criterion 3: propose_entities is Agent-persona-restricted ───────────
+	// ── criterion 3: propose_entities is reachable from the mcpauth door too ──
+	//
+	// PersonaSwarmOperator is allow-listed alongside PersonaAgent (issue
+	// #2926): every mcpauth-authenticated caller -- including an ordinary
+	// interactive Claude Code session and every krill-design subagent, which
+	// share that same mcpauth connection and can never resolve PersonaAgent
+	// -- resolves PersonaSwarmOperator, so a persona-only restriction to
+	// PersonaAgent made this tool unreachable end-to-end from any of them.
+	// FR9/FR10's actual mediation guarantee (acting must differ from
+	// on-behalf-of) is unaffected: it's still enforced independently by
+	// mediatedSessionID's own Acting/OnBehalfOf distinctness, not by which
+	// persona is calling.
 
-	t.Run("propose_entities is rejected for the mcpauth (PersonaSwarmOperator) door", func(t *testing.T) {
+	t.Run("propose_entities succeeds for the mcpauth (PersonaSwarmOperator) door with a genuinely mediated session", func(t *testing.T) {
 		cs, err := connectMCP(t, designURL, humanToken)
 		require.NoError(t, err)
 
@@ -500,13 +511,23 @@ func TestMCPDesignSurface_EndToEnd(t *testing.T) {
 				"design_session_id": designSessionID,
 				"verified_against":  "main@deadbeef",
 				"proposals": []map[string]any{
-					{"kind": "feature", "parent_id": featureSet.ID.String(), "name": "Bulk CSV export", "position": 1, "summary_line": "mediated proposal"},
+					{"kind": "feature", "parent_id": featureSet.ID.String(), "name": "Bulk CSV export (swarm operator)", "position": 1, "summary_line": "mediated proposal via the mcpauth door"},
 				},
 			},
 		})
 		require.NoError(t, err)
-		require.True(t, res.IsError, "PersonaSwarmOperator must never be allowed to call propose_entities (FR9/FR10)")
-		assert.Contains(t, textOf(res), "forbidden")
+		require.False(t, res.IsError, "unexpected error: %s", textOf(res))
+
+		structured, ok := res.StructuredContent.(map[string]any)
+		require.True(t, ok)
+		entitiesOut, ok := structured["entities"].([]any)
+		require.True(t, ok)
+		require.Len(t, entitiesOut, 1)
+		entity, ok := entitiesOut[0].(map[string]any)
+		require.True(t, ok)
+		assert.Equal(t, "feature", entity["kind"])
+		_, err = uuid.Parse(entity["id"].(string))
+		require.NoError(t, err)
 	})
 
 	t.Run("propose_entities succeeds for the whagent (PersonaAgent) door with a genuinely mediated session", func(t *testing.T) {

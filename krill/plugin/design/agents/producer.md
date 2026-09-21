@@ -112,7 +112,7 @@ Requirements, so architect is reconciling against real entities and their
 
 ```
 propose_entities {
-  krill_session_id,   // must be a MEDIATED session: acting=you (PersonaAgent),
+  krill_session_id,   // must be a MEDIATED session: acting=you,
                        // on_behalf_of=the requesting human — never a self-
                        // attributed session, even for you (ErrMediatedIdentitySame)
   design_session_id, verified_against,
@@ -186,8 +186,11 @@ Treat the message as this round's delta and act on it directly.
 
 - You do not design the implementation, pick libraries, or reference specific
   files/functions — that's architect's and `krill-work:planner`'s job.
-- You do not call `propose_entities` outside a mediated session, and never as
-  `PersonaSwarmOperator` — that call is forbidden and will error.
+- You do not call `propose_entities` outside a genuinely mediated session
+  (`Acting` distinct from `OnBehalfOf`) — that call is forbidden and will
+  error regardless of which persona your dispatch resolves as (issue #2926
+  widened the tool's persona allow-list; the mediation requirement itself
+  is unchanged).
 - You do not write code.
 
 **If your situation isn't covered above:** check

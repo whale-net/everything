@@ -42,7 +42,7 @@ func RegisterCreateProduct(reg *server.Registry, sessions store.SessionStore, pr
 	server.RegisterWrite(reg, &mcp.Tool{
 		Name:        "create_product",
 		Description: "Create a Product -- the top of the spec chain, with no parent (FR1).",
-	}, []server.Persona{server.PersonaRequirementContributor, server.PersonaAgent}, func(ctx context.Context, _ *mcp.CallToolRequest, in createProductInput) (*mcp.CallToolResult, handlers.IDResponse, error) {
+	}, []server.Persona{server.PersonaRequirementContributor, server.PersonaAgent, server.PersonaSwarmOperator}, func(ctx context.Context, _ *mcp.CallToolRequest, in createProductInput) (*mcp.CallToolResult, handlers.IDResponse, error) {
 		var zero handlers.IDResponse
 
 		sess, err := requireKrillSession(ctx, sessions, in.KrillSessionID)
@@ -83,7 +83,7 @@ func RegisterCreateFeatureSet(reg *server.Registry, sessions store.SessionStore,
 	server.RegisterWrite(reg, &mcp.Tool{
 		Name:        "create_feature_set",
 		Description: "Create a FeatureSet under a Product (FR2).",
-	}, []server.Persona{server.PersonaRequirementContributor, server.PersonaAgent}, func(ctx context.Context, _ *mcp.CallToolRequest, in createFeatureSetInput) (*mcp.CallToolResult, handlers.IDResponse, error) {
+	}, []server.Persona{server.PersonaRequirementContributor, server.PersonaAgent, server.PersonaSwarmOperator}, func(ctx context.Context, _ *mcp.CallToolRequest, in createFeatureSetInput) (*mcp.CallToolResult, handlers.IDResponse, error) {
 		var zero handlers.IDResponse
 
 		sess, err := requireKrillSession(ctx, sessions, in.KrillSessionID)
@@ -129,7 +129,7 @@ func RegisterCreateLoadBearingDecision(reg *server.Registry, sessions store.Sess
 	server.RegisterWrite(reg, &mcp.Tool{
 		Name:        "create_load_bearing_decision",
 		Description: "Create a Load-Bearing Decision attached to a FeatureSet (FR4) -- PRODUCT.md's LB<n> entries.",
-	}, []server.Persona{server.PersonaRequirementContributor, server.PersonaAgent}, func(ctx context.Context, _ *mcp.CallToolRequest, in createLoadBearingDecisionInput) (*mcp.CallToolResult, handlers.IDResponse, error) {
+	}, []server.Persona{server.PersonaRequirementContributor, server.PersonaAgent, server.PersonaSwarmOperator}, func(ctx context.Context, _ *mcp.CallToolRequest, in createLoadBearingDecisionInput) (*mcp.CallToolResult, handlers.IDResponse, error) {
 		var zero handlers.IDResponse
 
 		sess, err := requireKrillSession(ctx, sessions, in.KrillSessionID)
