@@ -11,31 +11,89 @@ project-manager's inlined-copy convention accepts drift as a tradeoff.
 
 ## Status of this fork
 
-**First iteration, updated as krill's M3/M4 land.** The design axis (this
-file's "Design session model" section) is real and callable today against
-krill's `/mcp/spec` and `/mcp/design` MCP surfaces (M1/M2, merged) — but not
-yet from this plugin's own producer/architect dispatch (whale-net/everything#2926:
-their write tools need `PersonaAgent`, unreachable from an ordinary Claude
-Code subagent). M3
-(milestone/milepebble authoring and delivery status) is now **also fully
-merged**, and M4's first FR (`create_task`) landed right behind it — see
-"Milestone and delivery-axis tools (M3, real today)" and "Work axis:
-task creation is real, execution still bridges on GitHub (M4 FR1 only)"
-below for exactly what that does and does not cover. `krill-work`'s
-persona/skill files carry `TODO(M4)` markers at the points still gapped —
-treat those as real gaps, not optional polish, and re-check this file
-against `krill/README.md`'s own tool tables before trusting an older
-`TODO` marker in a persona file over what's actually shipped.
+**M1-M5 are all merged. Design axis, milestone/delivery axis, and the full
+work-axis task lifecycle are real and krill-native today** — see "Design
+session model," "Milestone and delivery-axis tools," and "Work axis: task
+lifecycle is real and krill-native on the Milestone path" below. **On a
+krill-hosted Milestone, `krill-work`'s swimlane execution — claim, lane
+advance/revert, notes, dependencies — never touches GitHub Issues,
+Projects, or Discussions.** A `gh issue`/`gh project` call anywhere in
+`worker.md`/`validator.md`/`planner.md`'s milestone-path steps means the
+fork has gone stale; fix it, don't route around it. `mergepush`'s `git`/`gh`
+plumbing is a different thing entirely — that's the actual code-review/merge
+mechanism (branches and PRs live on GitHub because the repo does), not
+spec/work tracking, and stays untouched by this rule.
 
-**Everything write-capable in this section — milestone authoring, delivery
-status/shipment/recut/abandon, and `create_task` — mounts on the same
-`/mcp/design` server the design-session tools use (`krill/mcp/main.go`'s
-`designReg`), not a separate `/mcp/work` mount.** An earlier draft of this
-fork assumed krill would stand up a distinct `/mcp/work` endpoint mirroring
-whagent_net's `readonly`/`ops` split; it didn't — krill kept one write
-mount. `krill-work`'s `mcp_config.json`/`.mcp.json` therefore register the
-same `krill-mcp-design-{tilt,dev,prod}` servers `krill-design` does, not a
-work-specific set.
+**Known blocker (whale-net/everything#2930) — read this before calling
+`claim_task`/`heartbeat_task`/`complete_task`/`abandon_task`/`record_note`.**
+whale-net/everything#2926 ("krill-design personas can't write any entity")
+was closed by #2928, which added `PersonaSwarmOperator` to the allow-list
+on every design/milestone-authoring write tool. **#2928 deliberately did
+not touch the work-axis task-lifecycle tools** — `claim_task`,
+`heartbeat_task`, `complete_task`, `abandon_task`, `record_note` are still
+`[]server.Persona{server.PersonaAgent}`-only, and `PersonaAgent` is only
+resolved for a caller authenticated with a whagent-net-issued bearer token
+(`krill/mcp/server/whagent_auth.go`). `krill-work`'s `worker`/`validator`
+are dispatched as ordinary Claude Code subagents sharing the parent
+session's mcpauth-authenticated plugin connection, which always resolves
+`PersonaSwarmOperator` instead (`krill/mcp/server/auth.go`) — the persona
+these five tools still forbid. Concretely, from an ordinary Claude Code
+session today:
+- `create_task`, `declare_task_dependencies` (`PersonaSwarmOperator`), the
+  M5 ops-write tools (`release_task`, `requeue_task`, `escalate_task`,
+  `cancel_task`, also `PersonaSwarmOperator`), `transition_note_lifecycle`
+  (open to any persona), and — as of #2928 — every milestone/product/
+  delivery-authoring tool (`create_product`, `create_feature_set`,
+  `create_load_bearing_decision`, `propose_entities`, `create_milestone`,
+  `set_fr_budget`, `add_delivers`, `add_must_not_foreclose`,
+  `add_deferral`, `create_milepebble`, `add_milepebble_scope`,
+  `add_discovered_scope`, `move_delivery_scope`,
+  `mark_delivered_item_shipped`, `abandon_milestone`, `set_milestone_status`
+  — all now `{PersonaRequirementContributor, PersonaAgent,
+  PersonaSwarmOperator}`) **work today.**
+- `claim_task`, `heartbeat_task`, `complete_task`, `abandon_task`,
+  `record_note` (all still `PersonaAgent`-only) **do not** — every call
+  fails with `forbidden`.
+
+**When `worker`/`validator` hits this: call the tool, let it fail, report
+the exact `forbidden` error, and stop.** Do not silently fall back to
+GitHub to route around it, and do not skip the call and pretend it
+succeeded — see whale-net/everything#2925 for the precedent this follows.
+Closing #2930 needs the same kind of deliberate decision #2928 made for the
+design axis (widen these five tools' allow-list, or bridge `worker`/
+`validator` dispatch through an actual whagent-net session) — out of scope
+for any single skill file to make.
+
+**Two more real, currently-open krill capability gaps, not plugin
+oversights — both are documented inline below, not silently worked
+around:**
+1. **No Task container exists outside a Milestone/Milepebble** (`create_task`
+   requires `milestone_id`, NFR7 rejects a bare FeatureSet/Requirement id),
+   and most domains' `PRODUCT.md` still isn't krill-hosted (today: krill's
+   own domain, and `whagent_net` via import). For that case only,
+   `krill-work` still falls back to `tools/project-manager`'s GitHub
+   Issues/Project mechanics verbatim — every persona that takes this path
+   must say so explicitly.
+2. **No MCP tool lets a `PersonaAgent` discover claimable tasks by lane** —
+   `claim_task` needs a `task_id` already in hand, and the task-listing read
+   tools that exist (`list_claimed_tasks`, `list_cancelled_tasks`,
+   `list_escalated_tasks`) are `PersonaSwarmOperator`-only on `/mcp/ops` and
+   don't cover "unclaimed, ready" tasks anyway. `planner`'s summary is the
+   only durable manifest of a milestone's task set — see "Work axis" below.
+
+**Everything work-axis-write-capable — milestone authoring, delivery
+status/shipment/recut/abandon, `create_task`, and the full task lifecycle
+(`claim_task`/`heartbeat_task`/`complete_task`/`abandon_task`/`record_note`/
+`transition_note_lifecycle`/`declare_task_dependencies`) — mounts on the
+same `/mcp/design` server the design-session tools use (`krill/mcp/main.go`'s
+`designReg`), not a separate `/mcp/work` mount.** `krill-work`'s
+`mcp_config.json`/`.mcp.json` already register the `krill-mcp-design-
+{tilt,dev,prod}` servers this needs — no config change required to use any
+tool in this file. M5 additionally stood up a **Swarm-Operator-only**
+`/mcp/ops` console mount (`list_claimed_tasks`, `list_cancelled_tasks`,
+`list_escalated_tasks`, `list_open_notes`, `release_task`, `requeue_task`,
+`escalate_task`, `cancel_task`) for a human debugging stuck work — none of
+`krill-work`'s personas need it for normal execution, and none register it.
 
 ## Design session model (krill-native, real today)
 
@@ -114,18 +172,20 @@ never gated by a `krill_session` and available to every persona.
 
 krill's `Milestone`/`Milepebble` are real entities now, with every write
 tool below allow-listed to `{PersonaRequirementContributor, PersonaAgent,
-PersonaSwarmOperator}` — `PersonaSwarmOperator` was added per issue #2926,
-since an allow-list naming only the other two made every one of these
-tools unreachable end-to-end from any mcpauth-authenticated caller
-(including every `krill-design`/`krill-work` subagent, which share the
-parent session's mcpauth connection and can never resolve `PersonaAgent`
-themselves). `PersonaRequirementContributor` still has no auth path that
-ever resolves to it (reserved for a later capability,
-`krill/mcp/server/auth.go`). Unlike
-`propose_entities` (Agent-only, mediated, requiring a distinct
-acting/on-behalf-of pair), these tools need no mediated session — an
-ordinary Agent-authenticated session calling on its own behalf is fine. This
-is the layer that replaces project-manager's markdown roadmap milestones
+PersonaSwarmOperator}` — `PersonaSwarmOperator` was added per issue #2926
+(closed by #2928), since an allow-list naming only the other two made every
+one of these tools unreachable end-to-end from any mcpauth-authenticated
+caller (including every `krill-design`/`krill-work` subagent, which share
+the parent session's mcpauth connection and can never resolve
+`PersonaAgent` themselves). `PersonaRequirementContributor` still has no
+auth path that ever resolves to it (reserved for a later capability,
+`krill/mcp/server/auth.go`). Unlike `propose_entities` (mediated, requiring
+a distinct acting/on-behalf-of pair, but likewise widened to
+`PersonaSwarmOperator` by #2928), these tools need no mediated session at
+all — an ordinary Claude Code session's mcpauth-resolved
+`PersonaSwarmOperator` identity calling on its own behalf works today, same
+as `get_milestone`/`list_milepebbles`/`list_product_delivery`/
+`get_backlog` (read-only, never gated). This is the layer that replaces project-manager's markdown roadmap milestones
 (`### M2 — <outcome> / Delivers: ... / Must not foreclose: ... /
 Deliberately deferred: ...`) for
 any product actually hosted in krill (today: krill's own self-hosted domain,
@@ -183,55 +243,106 @@ still isn't imported and stays plain markdown until it is):
   milestone read" — the old superset caveat there is resolved by this tool
   plus `get_milestone`, not still open).
 
-## Work axis: task creation is real, execution still bridges on GitHub (M4 FR1 only)
+## Work axis: task lifecycle is real and krill-native on the Milestone path (M4/M5)
 
-M4's full verb set is `init`, `claim`, `heartbeat`, `complete`, `abandon`,
-`note` (six verbs total, deliberately capped — LB7/"payload-enrichment-is-
-not-a-verb"). **Only the first slice of this has shipped: `create_task`.**
-Nothing else in that list exists yet — no `claim`, no `heartbeat`, no
-`complete`/`abandon`-for-a-task, no `note`, and critically **no
-dependency-declaration tool** (the `task_dependency` table exists in
-migration 015's schema, but no store/API/MCP method writes to it yet) and
-**no lane/status query tool** for a worker or validator to discover ready
-work by lane. Until those ship, `krill-work`'s swimlane execution — finding
-ready work, claiming it, advancing/rolling back its lane, dependency
-gating — still runs entirely on GitHub Issues/a Project's `Status` field,
-exactly like `project-manager`'s does. See
-`tools/project-manager/CONVENTIONS.md` §§ "Project setup", "Task issues &
-swimlane progression", "Worker lifecycle", "Git hygiene" for those mechanics
-in full; this fork does not repeat them.
+M4/M5 shipped the full verb set: `create_task`, `declare_task_dependencies`,
+`claim_task`, `heartbeat_task`, `complete_task`, `abandon_task`,
+`record_note`, `transition_note_lifecycle`, plus `get_task` to re-read
+current state. **A krill `Task`'s `current_lane` is never stale** — every
+verb below mutates it directly; there is no second, GitHub-side source of
+truth to keep in sync anymore on the Milestone path.
 
-**`create_task {krill_session_id, milestone_id, title, body?,
-lane_sequence[], starting_lane}` → `{id}` is real, and its five-value lane
-vocabulary (`Scaffold, Implementation, Testing, Validation, Done`) is
-exactly project-manager's swimlane list — not a coincidence, this is the
-shape M4 is converging toward.** `milestone_id` must be a milepebble, or a
-milestone with no milepebbles cut from it yet (NFR7 — never a bare
-Feature/Requirement id). **Restricted to `PersonaSwarmOperator`, not
-`PersonaAgent`** — per the tool's own doc comment, "the Swarm Operator, not
-the Agent, creates tasks... the Agent's role starts at claim (a later M4
-task)." Concretely: `krill-work:planner` calling `create_task` **works**
-when dispatched inside an ordinary interactive Claude Code session (the
-session's MCP connection authenticates as the signed-in human via mcpauth,
-resolving `PersonaSwarmOperator`) — which is the normal way this plugin
-gets used today. It **fails** if `planner` is ever dispatched through a
-fully unattended whagent-net-authenticated pipeline with no human present,
-since that resolves `PersonaAgent`; there is no interim workaround for that
-case besides falling back to a GitHub-only task record and noting the gap.
+- `create_task {krill_session_id, milestone_id, title, body?,
+  lane_sequence[], starting_lane}` → `{id}`. `lane_sequence` is an ordered
+  subset of `{Scaffold, Implementation, Testing, Validation, Done}` (lanes
+  skippable); `starting_lane` must be a member. `milestone_id` must be a
+  milepebble, or a milestone with no milepebbles cut from it yet (NFR7 —
+  never a bare Feature/Requirement id). **Restricted to
+  `PersonaSwarmOperator`** — works when `krill-work:planner` runs inside an
+  ordinary interactive Claude Code session (the signed-in human's mcpauth
+  identity resolves `PersonaSwarmOperator`), which is the normal way this
+  plugin gets used. Fails with "forbidden" under a fully unattended
+  whagent-net-authenticated dispatch with no human present — there is still
+  no interim workaround for that one case; fall back to a GitHub-only task
+  record and note the gap plainly rather than retrying silently.
+- `declare_task_dependencies {krill_session_id, task_id,
+  depends_on_task_ids[]}` — `task_id` is excluded from the claimable set
+  until every id in `depends_on_task_ids` reaches its own `Done` lane.
+  Idempotent per edge; rejects a self-edge (`ErrSelfDependency`) or a cycle
+  (`ErrDependencyCycle`). Same `PersonaSwarmOperator` restriction as
+  `create_task`. **This is what `Depends on:` meant on the GitHub path —
+  a real edge now, not an issue-body convention.**
 
-Because `current_lane` has no MCP mutation yet (only set at `create_task`
-time), a krill `Task`'s `current_lane` goes stale the moment a worker
-actually advances the task past its `starting_lane` on the GitHub Project
-board — **the GitHub Project's `Status` field remains the authoritative
-swimlane state** until `claim`/`heartbeat`/`complete`/`abandon` land. Treat
-the krill `Task` row `krill-work:planner` creates as the entity of record
-for *what the task is*, and the GitHub issue/Project item as the entity of
-record for *what lane it's currently in* — two records for one task is an
-explicitly temporary seam, not a design to preserve past M4.
+**Blocked from an ordinary Claude Code session today (whale-net/everything#2930,
+`PersonaAgent`-only — #2928 widened the design/milestone-authoring tools
+above but deliberately left these five untouched): `claim_task`,
+`heartbeat_task`, `complete_task`, `abandon_task`, `record_note`.** Listed
+below for completeness and because
+`worker`/`validator` must still call them and report the `forbidden` error
+per this file's top-of-document blocker callout — not because they're
+usable today.
 
-`krill-work` persona files mark their own `TODO(M4)` points inline where a
-`gh issue`/Project `Status` transition should become a `claim`/`heartbeat`/
-`complete`/`abandon`/`note` MCP call once those verbs ship.
+- `claim_task {krill_session_id, task_id}` → the task's full `work.Payload`
+  document: `{slice, task: {id, milestone_id, title, body, current_lane,
+  lane_sequence, dependencies, attempt_number, current_claim: {claim_id,
+  session_id, claimed_at, lease_expires_at, released, release_reason?},
+  notes[], state, escalation_reason?, current_escalation_id?}}`. Mints a
+  lease and records one attempt. `PersonaAgent`.
+- `heartbeat_task {krill_session_id, task_id, claim_id}` — extends the live
+  lease; call periodically during a long-running phase. Rejected
+  (`ErrClaimNotCurrent`) once `claim_id` is no longer the task's current,
+  live claim — a slow or stalled run must not keep writing to a task
+  another run now owns. `PersonaAgent`.
+- `complete_task {krill_session_id, task_id, claim_id, verdict: "pass" |
+  "fail", summary?}` → full `work.Payload`. **krill, not the caller,
+  decides the lane delta**: `pass` advances one lane in the task's own
+  `lane_sequence`, `fail` reverts one lane. There is no destination-lane
+  field on this call — never try to name one. `PersonaAgent`.
+- `abandon_task {krill_session_id, task_id, claim_id, reason?}` → full
+  `work.Payload`. Releases the claim immediately with **no verdict and no
+  lane change** — use this when a phase can't be finished and the task
+  should go back to claimable as-is; use `complete_task` instead whenever
+  you have an actual pass/fail judgment to report. Counts as an attempt
+  against the same cap a lease-expiry lapse counts against. `PersonaAgent`.
+- `record_note {krill_session_id, task_id | (entity_kind, entity_id), kind:
+  "scope-note" | "comment", body}` → `{id}`. Exactly one of `task_id` or
+  `entity_kind`+`entity_id` (one of `product`, `feature_set`, `feature`,
+  `requirement`, `load_bearing_decision` — **not** `milestone`, which has
+  no note target). `kind: "scope-note"` is what replaces GitHub's
+  `source:scope-note` label convention. Any Agent may call this whether or
+  not it holds the task's current claim. `PersonaAgent`.
+- `transition_note_lifecycle {krill_session_id, note_id, status: "noted" |
+  "carried-over" | "deferred" | "closed"}` → `{id}`. This is how
+  `planner`'s scope-note triage resolves a note now, in place of closing a
+  GitHub issue at a label. Open to any resolved persona.
+- `get_task {id}` → the same `work.Payload` shape every write tool above
+  returns. Ungated, no session required — the way to re-read a task's
+  current lane/claim/notes/attempts without re-deriving them yourself.
+
+**Lane semantics, concretely, for `worker`/`validator`:** finishing a phase
+cleanly is `complete_task {verdict: "pass"}` (Scaffold→Implementation,
+Implementation→Testing, Testing→Validation, Validation→Done). A failed
+check at `Testing`, or a failed criterion at `Validation`, is
+`complete_task {verdict: "fail"}` (reverts one lane, back to
+Implementation). Being blocked with no pass/fail judgment to make is
+`abandon_task` (no lane change; the task goes back to claimable).
+
+**No task-discovery query exists for `PersonaAgent`.** `planner`'s
+summary — every task id, title, and starting lane `create_task` returned —
+is the only durable manifest of a milestone's task set; there is no way to
+re-derive it later from krill alone. `implement`/`validate` must be handed
+that manifest explicitly by whoever dispatches them (the same way a human
+today carries a plan identifier between skill invocations), and should
+re-read each task's live state via `get_task {id}` rather than trust a
+stale copy of it.
+
+For the one remaining GitHub-only case — a FeatureSet with no krill
+Milestone to scope `create_task` to — `krill-work` still runs entirely on
+GitHub Issues/a Project's `Status` field, exactly like `project-manager`'s
+does. See `tools/project-manager/CONVENTIONS.md` §§ "Project setup", "Task
+issues & swimlane progression", "Worker lifecycle", "Git hygiene" for those
+mechanics in full; this fork does not repeat them, and every persona that
+falls back to them must say so in its output.
 
 ## Model tiers
 
