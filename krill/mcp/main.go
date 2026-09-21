@@ -139,7 +139,9 @@ func run() error {
 	// krill_session_id minting tool, issue #2827 -- MUST register before
 	// every other designReg call below, since every one of them requires a
 	// session id this tool is the only MCP-reachable way to obtain),
-	// tools.RegisterDesignAll (issue
+	// tools.RegisterEntityCreateAll (create_product/create_feature_set/
+	// create_load_bearing_decision, the top-of-chain spec entity creation
+	// tools that previously existed only over HTTP), tools.RegisterDesignAll (issue
 	// #2547), tools.RegisterMilestoneAll (milestone authoring, issue
 	// #2683), tools.RegisterMilestoneStatusAll (status history, issue
 	// #2685), tools.RegisterDeliveryShipmentAll (per-item shipment, issue
@@ -174,6 +176,7 @@ func run() error {
 	designSrv := server.New()
 	designReg := server.NewRegistry(designSrv)
 	tools.RegisterInitSession(designReg, sessions, entities.Scopes())
+	tools.RegisterEntityCreateAll(designReg, sessions, entities.Products(), entities.FeatureSets(), entities.Decisions())
 	tools.RegisterDesignAll(designReg, entities, sessions, querier)
 	tools.RegisterMilestoneAll(designReg, sessions, entities.MilestoneAuthoring(), entities.Products(), querier)
 	tools.RegisterMilestoneStatusAll(designReg, sessions, entities.MilestoneStatus())
