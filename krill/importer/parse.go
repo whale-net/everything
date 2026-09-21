@@ -45,7 +45,7 @@ type ParsedPersona struct {
 type ParsedDecision struct {
 	ID   string // "LB1".."LBn"
 	Name string // the entry's title line, e.g. "LB1 — Scope is a surrogate key, and it is on every row from M1"
-	Body string // the full block text, including the title line
+	Body string // the block text following the title line, not including the title line itself
 }
 
 // NonGoalKind mirrors store.NonGoalKind without importing krill/store here
@@ -226,9 +226,11 @@ func parsePersonas(body string) []ParsedPersona {
 // parseDecisions scans body for `LB<n> — ...` title lines and collects
 // every following line up to the next title line (or a `###`-or-shallower
 // heading, i.e. the end of the fenced/unfenced block of entries) as that
-// entry's Body. Fence marker lines (a line that is exactly "```", ignoring
-// surrounding whitespace) are dropped -- present or absent, they carry no
-// content of their own.
+// entry's Body -- the title line itself is not included, matching
+// parseNonGoals/parseCapabilityMap's exclusion of an entry's own label from
+// its Body/Description. Fence marker lines (a line that is exactly "```",
+// ignoring surrounding whitespace) are dropped -- present or absent, they
+// carry no content of their own.
 func parseDecisions(body string) []ParsedDecision {
 	var decisions []ParsedDecision
 	var current *ParsedDecision
@@ -258,7 +260,7 @@ func parseDecisions(body string) []ParsedDecision {
 		if m := decisionTitleRe.FindStringSubmatch(trimmed); m != nil {
 			flush()
 			current = &ParsedDecision{ID: "LB" + m[1], Name: trimmed}
-			buf = []string{trimmed}
+			buf = nil
 			continue
 		}
 		if current != nil {
