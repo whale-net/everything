@@ -143,6 +143,48 @@ go_test(
     ],
 )
 
+# No-database unit test (issue #2872's own MCP-layer structural proof,
+# FR8/FR9): RegisterReleaseTask/RegisterEscalateTask together register
+# exactly {release_task, escalate_task}. Mirrors
+# :task_cancel_registration_test's own store.New(nil)/in-memory transport
+# technique, so it needs no Docker and is part of `bazel test //...`.
+go_test(
+    name = "task_release_escalate_registration_test",
+    srcs = ["task_release_escalate_registration_test.go"],
+    deps = [
+        ":tools",
+        "//krill/mcp/server",
+        "//krill/store",
+        "@com_github_modelcontextprotocol_go_sdk//mcp",
+        "@com_github_stretchr_testify//assert",
+        "@com_github_stretchr_testify//require",
+    ],
+)
+
+# No-database, real-HTTP-transport unit test (issue #2872's Testing
+# section, "MCP: a non-swarm_operator persona is refused on both tools"):
+# release_task/escalate_task are registered via server.RegisterOpsWrite,
+# which restricts the /mcp/ops mount to PersonaSwarmOperator only -- this
+# proves that restriction reaches these two tools specifically. Needs a
+# real HTTP round trip (unlike the bare in-memory-transport registration
+# tests in this package) to drive a genuinely whagent-authenticated
+# PersonaAgent caller, but no Postgres: a rejected call never reaches the
+# store. Part of `bazel test //...`.
+go_test(
+    name = "task_release_escalate_persona_test",
+    srcs = ["task_release_escalate_persona_test.go"],
+    deps = [
+        ":tools",
+        "//krill/mcp/server",
+        "//libs/go/mcpauth",
+        "//libs/go/whagent",
+        "@com_github_google_uuid//:uuid",
+        "@com_github_modelcontextprotocol_go_sdk//mcp",
+        "@com_github_stretchr_testify//assert",
+        "@com_github_stretchr_testify//require",
+    ],
+)
+
 # No-database unit test (issue #2874's own MCP-layer structural proof,
 # FR11): RegisterRecordNote/RegisterTransitionNoteLifecycle together
 # register exactly {record_note, transition_note_lifecycle}. Mirrors
