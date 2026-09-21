@@ -40,11 +40,17 @@ type AbandonParams struct {
 // beyond -- mirroring ReclaimedTask's own CapExhausted field
 // (task_reclaim.go) for the identical purpose. The task is left claimed by
 // no one either way; a CapExhausted task additionally fails any subsequent
-// ClaimTask with ErrAttemptCapExhausted.
+// ClaimTask with ErrTaskEscalated once EscalationID below is set.
+// EscalationID/EscalationReason are additive: nil unless CapExhausted, in
+// which case they name the exact task_escalation_event this same
+// transaction wrote (FR3, issue #2871).
 type AbandonClaimResult struct {
 	TaskID       uuid.UUID
 	ClaimID      uuid.UUID
 	CapExhausted bool
+
+	EscalationID     *uuid.UUID
+	EscalationReason *EscalationReason
 }
 
 // AbandonClaim is TaskStore.AbandonClaim (FR9): a single transaction that
@@ -54,8 +60,11 @@ type AbandonClaimResult struct {
 // #2723's Heartbeat and #2725's CompleteTask apply), marks the claim
 // released (release_reason='abandon'), records one `abandoned` task_attempt
 // row, increments task.attempt_count, and clears
-// task.current_claim_id/lease_expires_at. task.current_lane is never
-// touched (FR9: abandoning is not a verdict).
+// task.current_claim_id/lease_expires_at. If that increment brings
+// attempt_count to DefaultAttemptCap or beyond, this same transaction also
+// calls recordEscalationTx (task_escalation.go, FR3, issue #2871) -- never
+// deferred to a later call. task.current_lane is never touched (FR9:
+// abandoning is not a verdict).
 func (s taskStore) AbandonClaim(ctx context.Context, params AbandonParams) (AbandonClaimResult, error) {
 	tx, err := s.pool.Begin(ctx)
 	if err != nil {
@@ -64,12 +73,13 @@ func (s taskStore) AbandonClaim(ctx context.Context, params AbandonParams) (Aban
 	defer tx.Rollback(ctx) //nolint:errcheck
 
 	var currentClaimID *uuid.UUID
+	var currentLane string
 	err = tx.QueryRow(ctx, `
-		SELECT current_claim_id
+		SELECT current_claim_id, current_lane
 		FROM task
 		WHERE id = $1 AND scope_id = $2
 		FOR UPDATE
-	`, params.TaskID, params.ScopeID).Scan(&currentClaimID)
+	`, params.TaskID, params.ScopeID).Scan(&currentClaimID, &currentLane)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return AbandonClaimResult{}, errParentNotFound("task", params.TaskID)
 	}
@@ -124,13 +134,39 @@ func (s taskStore) AbandonClaim(ctx context.Context, params AbandonParams) (Aban
 		return AbandonClaimResult{}, fmt.Errorf("update task abandon state: %w", err)
 	}
 
+	result := AbandonClaimResult{
+		TaskID:       params.TaskID,
+		ClaimID:      params.ClaimID,
+		CapExhausted: newAttemptCount >= DefaultAttemptCap,
+	}
+	if result.CapExhausted {
+		// Recorded inside this same transaction, at the exact moment
+		// CapExhausted is computed true (FR3, issue #2871) -- never
+		// deferred to a later ClaimTask, which has no reason to be called
+		// against a task already known to be exhausted.
+		counterValue := newAttemptCount
+		capValue := DefaultAttemptCap
+		event, err := recordEscalationTx(ctx, tx, RecordEscalationParams{
+			ScopeID:          params.ScopeID,
+			TaskID:           params.TaskID,
+			Reason:           EscalationReasonAttemptCap,
+			CounterValue:     &counterValue,
+			CapValue:         &capValue,
+			LaneAtEscalation: Lane(currentLane),
+			Acting:           params.Acting,
+			OnBehalfOf:       params.OnBehalfOf,
+		})
+		if err != nil {
+			return AbandonClaimResult{}, fmt.Errorf("record attempt-cap escalation: %w", err)
+		}
+		result.EscalationID = &event.ID
+		reason := event.Reason
+		result.EscalationReason = &reason
+	}
+
 	if err := tx.Commit(ctx); err != nil {
 		return AbandonClaimResult{}, fmt.Errorf("commit: %w", err)
 	}
 
-	return AbandonClaimResult{
-		TaskID:       params.TaskID,
-		ClaimID:      params.ClaimID,
-		CapExhausted: newAttemptCount >= DefaultAttemptCap,
-	}, nil
+	return result, nil
 }

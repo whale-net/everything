@@ -30,10 +30,17 @@ type reclaimRequest struct {
 }
 
 // ReclaimedTaskResponse is one task ReclaimExpiredHandler's response body
-// names -- the wire shape of one store.ReclaimedTask.
+// names -- the wire shape of one store.ReclaimedTask. EscalationID/
+// EscalationReason are additive (FR3, issue #2871): both omitted unless
+// CapExhausted, in which case they report the exact task_escalation_event
+// this same reclaim call wrote, so the caller learns *why* the task is now
+// out of circulation without a follow-up read.
 type ReclaimedTaskResponse struct {
 	TaskID       string `json:"task_id"`
 	CapExhausted bool   `json:"cap_exhausted"`
+
+	EscalationID     string `json:"escalation_id,omitempty"`
+	EscalationReason string `json:"escalation_reason,omitempty"`
 }
 
 // ReclaimResponse is ReclaimExpiredHandler's response body (LB7): every
@@ -46,7 +53,14 @@ type ReclaimResponse struct {
 func ToReclaimResponse(r store.ReclaimResult) ReclaimResponse {
 	reclaimed := make([]ReclaimedTaskResponse, len(r.Reclaimed))
 	for i, t := range r.Reclaimed {
-		reclaimed[i] = ReclaimedTaskResponse{TaskID: t.TaskID.String(), CapExhausted: t.CapExhausted}
+		resp := ReclaimedTaskResponse{TaskID: t.TaskID.String(), CapExhausted: t.CapExhausted}
+		if t.EscalationID != nil {
+			resp.EscalationID = t.EscalationID.String()
+		}
+		if t.EscalationReason != nil {
+			resp.EscalationReason = string(*t.EscalationReason)
+		}
+		reclaimed[i] = resp
 	}
 	return ReclaimResponse{Reclaimed: reclaimed}
 }

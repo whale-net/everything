@@ -43,15 +43,21 @@ type ReclaimParams struct {
 
 // ReclaimedTask is one task ReclaimExpired's sweep actually reclaimed.
 // CapExhausted reports whether this lapse brought task.attempt_count to
-// DefaultAttemptCap or beyond -- FR7's terminal state for this milestone:
-// the task is left claimed by no one either way (current_claim_id is
-// always cleared), but a CapExhausted task additionally fails any
-// subsequent ClaimTask with ErrAttemptCapExhausted (task_claim.go's own
-// attempt_count >= DefaultAttemptCap check), never a second flag column or
-// escalation destination on this row.
+// DefaultAttemptCap or beyond -- the task is left claimed by no one either
+// way (current_claim_id is always cleared), but a CapExhausted task
+// additionally fails any subsequent ClaimTask with ErrTaskEscalated
+// (task_claim.go's own current_escalation_id check), never
+// ErrAttemptCapExhausted, once EscalationID below is set. EscalationID/
+// EscalationReason are additive: nil unless CapExhausted, in which case
+// they name the exact task_escalation_event this same transaction wrote
+// (FR3, issue #2871) -- recorded in the same call that computed
+// CapExhausted true, never deferred to a later claim attempt.
 type ReclaimedTask struct {
 	TaskID       uuid.UUID
 	CapExhausted bool
+
+	EscalationID     *uuid.UUID
+	EscalationReason *EscalationReason
 }
 
 // ReclaimResult is ReclaimExpired's output: every task the sweep actually
@@ -86,8 +92,14 @@ type ReclaimResult struct {
 //  4. Clear task.current_claim_id/lease_expires_at unconditionally --
 //     whether the task is actually claimable again now turns entirely on
 //     the attempt_count ClaimTask reads back under its own row lock
-//     (below cap: claimable; at/over cap: ErrAttemptCapExhausted), never a
-//     second piece of state written here.
+//     (below cap: claimable; at/over cap: ErrTaskEscalated). If this
+//     lapse brings attempt_count to DefaultAttemptCap or beyond, step 5
+//     records the attempt-cap escalation in this same transaction (FR3,
+//     issue #2871) -- never a second piece of state written here.
+//  5. When CapExhausted, call recordEscalationTx (task_escalation.go) in
+//     this same transaction, at the exact moment the cap is known
+//     reached -- so a task is never left cap-exhausted with no escalation
+//     event explaining it.
 //
 // task.current_lane is never touched (a lapse is not a verdict).
 func (s taskStore) ReclaimExpired(ctx context.Context, params ReclaimParams) (ReclaimResult, error) {
@@ -155,7 +167,7 @@ func (s taskStore) reclaimCandidates(ctx context.Context, scopeID uuid.UUID, tas
 }
 
 // reclaimOneTask reclaims exactly one task id inside its own transaction --
-// see ReclaimExpired's own doc comment for the four numbered steps. Returns
+// see ReclaimExpired's own doc comment for the numbered steps. Returns
 // ok=false (no error) when taskID no longer matches the candidate predicate
 // under the row lock: either it names no row in scopeID (a stale id from a
 // caller's earlier read), or its lease is not (or no longer) both claimed
@@ -168,13 +180,14 @@ func (s taskStore) reclaimOneTask(ctx context.Context, scopeID, taskID uuid.UUID
 	defer tx.Rollback(ctx) //nolint:errcheck
 
 	var currentClaimID *uuid.UUID
+	var currentLane string
 	var reclaimable bool
 	err = tx.QueryRow(ctx, `
-		SELECT current_claim_id, (current_claim_id IS NOT NULL AND lease_expires_at < NOW())
+		SELECT current_claim_id, current_lane, (current_claim_id IS NOT NULL AND lease_expires_at < NOW())
 		FROM task
 		WHERE id = $1 AND scope_id = $2
 		FOR UPDATE
-	`, taskID, scopeID).Scan(&currentClaimID, &reclaimable)
+	`, taskID, scopeID).Scan(&currentClaimID, &currentLane, &reclaimable)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return ReclaimedTask{}, false, nil
 	}
@@ -218,9 +231,35 @@ func (s taskStore) reclaimOneTask(ctx context.Context, scopeID, taskID uuid.UUID
 		return ReclaimedTask{}, false, fmt.Errorf("update task reclaim state: %w", err)
 	}
 
+	result := ReclaimedTask{TaskID: taskID, CapExhausted: newAttemptCount >= DefaultAttemptCap}
+	if result.CapExhausted {
+		// Recorded inside this same transaction, at the exact moment
+		// CapExhausted is computed true (FR3, issue #2871) -- never
+		// deferred to a later ClaimTask, which has no reason to be called
+		// against a task already known to be exhausted.
+		counterValue := newAttemptCount
+		capValue := DefaultAttemptCap
+		event, err := recordEscalationTx(ctx, tx, RecordEscalationParams{
+			ScopeID:          scopeID,
+			TaskID:           taskID,
+			Reason:           EscalationReasonAttemptCap,
+			CounterValue:     &counterValue,
+			CapValue:         &capValue,
+			LaneAtEscalation: Lane(currentLane),
+			Acting:           acting,
+			OnBehalfOf:       onBehalfOf,
+		})
+		if err != nil {
+			return ReclaimedTask{}, false, fmt.Errorf("record attempt-cap escalation: %w", err)
+		}
+		result.EscalationID = &event.ID
+		reason := event.Reason
+		result.EscalationReason = &reason
+	}
+
 	if err := tx.Commit(ctx); err != nil {
 		return ReclaimedTask{}, false, fmt.Errorf("commit: %w", err)
 	}
 
-	return ReclaimedTask{TaskID: taskID, CapExhausted: newAttemptCount >= DefaultAttemptCap}, true, nil
+	return result, true, nil
 }

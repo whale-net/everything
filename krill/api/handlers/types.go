@@ -80,8 +80,10 @@ func isUniqueViolation(err error) bool {
 //   - store.ErrSelfDependency / store.ErrDependencyCycle
 //     (DeclareDependency's own named FR2 rejections, task_dependency.go) -> 400
 //   - store.ErrTaskAlreadyClaimed / store.ErrDependenciesUnsatisfied /
-//     store.ErrAttemptCapExhausted (ClaimTask's own named FR3/FR5/FR7
-//     rejections, task_claim.go) -- the task exists, but is not
+//     store.ErrAttemptCapExhausted / store.ErrTaskEscalated /
+//     store.ErrTaskCancelled (ClaimTask's own named FR3/FR5/FR7
+//     rejections, task_claim.go; ErrTaskEscalated/ErrTaskCancelled are
+//     issue #2868's M5 additions) -- the task exists, but is not
 //     claimable right now                                             -> 409
 //   - store.ErrClaimNotCurrent (Heartbeat's own named FR6 rejection,
 //     task_lease.go) -- the caller's claim is gone, not current        -> 409
@@ -102,6 +104,8 @@ func writeStoreError(w http.ResponseWriter, err error) {
 	case errors.Is(err, store.ErrTaskAlreadyClaimed),
 		errors.Is(err, store.ErrDependenciesUnsatisfied),
 		errors.Is(err, store.ErrAttemptCapExhausted),
+		errors.Is(err, store.ErrTaskEscalated),
+		errors.Is(err, store.ErrTaskCancelled),
 		errors.Is(err, store.ErrClaimNotCurrent):
 		writeJSONError(w, http.StatusConflict, err.Error())
 	case isUniqueViolation(err):
