@@ -1443,6 +1443,55 @@ go_test(
     ],
 )
 
+# Real-Postgres coverage for TaskStore.RequeueTask (task_requeue.go, issue
+# #2876's Testing section, FR6): the per-reason counter-reset matrix
+# (thrash-cap, attempt-cap via lapse, attempt-cap via abandon, manual at
+# the cap -- FR9's no-strand exception, manual below the cap), the task
+# claimable again immediately at the exact lane it held when escalated, no
+# task_attempt row written and attempt_count never increasing,
+# task_escalation_event left byte-for-byte unchanged with exactly one
+# task_intervention_event naming the resolved escalation, refusal on a
+# non-escalated task and a cancelled task, and double requeue refused.
+# Shares task_integration_test.go's test-store/test-scope/test-world/
+# subject helpers, task_dependency_integration_test.go's createTestTask/
+# setTaskLane helpers, and task_claim_integration_test.go's
+# claimTestSession/countRows helpers rather than duplicating them.
+# Deliberately NOT part of `bazel test //...` -- see //libs/go/dbtest's
+# README for the full rationale.
+#
+# Run it explicitly (requires a working Docker daemon):
+#   bazel test //krill/store:task_requeue_integration_test --test_output=all
+go_test(
+    name = "task_requeue_integration_test",
+    size = "large",
+    timeout = "long",
+    srcs = [
+        "task_claim_integration_test.go",
+        "task_dependency_integration_test.go",
+        "task_integration_test.go",
+        "task_requeue_integration_test.go",
+    ],
+    gotags = ["integration"],
+    tags = [
+        "external",
+        "integration",
+        "manual",
+        "no-cache",
+        "no-sandbox",
+        "requires-network",
+    ],
+    deps = [
+        ":store",
+        "//krill/migrate/schema",
+        "//libs/go/dbtest",
+        "//libs/go/migrate",
+        "@com_github_google_uuid//:uuid",
+        "@com_github_jackc_pgx_v5//stdlib",
+        "@com_github_stretchr_testify//assert",
+        "@com_github_stretchr_testify//require",
+    ],
+)
+
 # Real-Postgres coverage for TaskStore.ListCancelledTasks and
 # TaskStore.ListEscalatedTasks (task_console.go, issue #2873's Testing
 # section (FR10) and issue #2875's Testing section (FR5)): only cancelled/

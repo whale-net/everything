@@ -124,7 +124,11 @@ go_library(
 # work-axis dependency-declaration surface (task_dependency_test.go, issue
 # #2720's Testing section: the same session-derived pass-through/
 # validation/named-rejection/NFR6 shape as task_test.go, plus the ungated
-# GET /tasks/{id}/dependencies read).
+# GET /tasks/{id}/dependencies read), and the work-axis requeue surface
+# (task_requeue_test.go, issue #2876's Testing section: the same
+# session-derived pass-through/validation/NFR6 shape, plus
+# writeRequeueStoreError mapping ErrTaskNotEscalated/ErrTaskCancelled to
+# 409).
 # fakeSessionStore/fake entity stores/fakeAmendStore/fakeDesignSessionStore/
 # fakeRevisionEventStore/fakeEntitySetQuerier/fakeTaskStore stand in for
 # krill/store's (and krill/slice's) interfaces, so none of this needs
@@ -180,6 +184,7 @@ go_test(
         "task_payload_test.go",
         "task_reclaim_test.go",
         "task_release_test.go",
+        "task_requeue_test.go",
         "task_test.go",
     ],
     embed = [":handlers"],
