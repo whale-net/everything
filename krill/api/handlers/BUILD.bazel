@@ -81,6 +81,7 @@ go_library(
         "slice.go",
         "task.go",
         "task_abandon.go",
+        "task_cancel.go",
         "task_claim.go",
         "task_complete.go",
         "task_dependency.go",
@@ -132,6 +133,7 @@ go_test(
     srcs = [
         "abandon_test.go",
         "amend_test.go",
+        "console_test.go",
         "decision_test.go",
         "delivery_shipment_test.go",
         "design_session_test.go",
@@ -163,6 +165,7 @@ go_test(
         "slice_internal_test.go",
         "slice_test.go",
         "task_abandon_test.go",
+        "task_cancel_test.go",
         "task_claim_test.go",
         "task_complete_test.go",
         "task_dependency_test.go",
