@@ -5,6 +5,7 @@ import (
 	"strings"
 
 	"github.com/whale-net/everything/libs/go/htmxauth"
+	"github.com/whale-net/everything/libs/go/htmxsse/liveindicator"
 	"github.com/whale-net/everything/libs/go/htmxui"
 	pb "github.com/whale-net/everything/tools/app_registry/protos"
 	"github.com/whale-net/everything/tools/app_registry/ui/components"
@@ -139,15 +140,12 @@ templ ReleaseStatus(user *htmxauth.UserInfo, s ReleaseStatusViewState) {
 				</div>
 			</div>
 
-			<!-- FR14: Live/not-live indicator (outside the pushed region). -->
-			<div id="release-live-indicator" class="flex items-center gap-2 mb-4">
-				<div id="release-live-status" class="badge badge-success" title="SSE connection is healthy">Live</div>
-			</div>
-
-			<!-- FR15: Reload affordance (only shown when not-live, outside the pushed region). This is the only recovery path from an expired/revoked session on this route. -->
-			<div id="release-reload-container" class="mb-4" style="display: none;">
-				<a href={ templ.URL("/releases/" + s.ReleaseRunID) } class="btn btn-sm btn-warning">Reload</a>
-			</div>
+			<!-- FR14, FR15: Live/not-live indicator + reload affordance (outside the pushed region). Reload is the only recovery path from an expired/revoked session on this route. -->
+			@liveindicator.LiveIndicator(liveindicator.Options{
+				Topics:              []string{"release_run." + s.ReleaseRunID},
+				HeartbeatIntervalMs: s.HeartbeatIntervalMs,
+				ReloadHref:          "/releases/" + s.ReleaseRunID,
+			})
 
 			if s.LoadErr != "" {
 				<div role="alert" class="alert alert-error shadow-md mb-4"><span>{ s.LoadErr }</span></div>
@@ -155,95 +153,6 @@ templ ReleaseStatus(user *htmxauth.UserInfo, s ReleaseStatusViewState) {
 				@releaseStatusDetail(s.Release, s.BuildCommits, s.ReleaseRunID)
 			}
 		</div>
-
-		<!-- FR14, FR15: SSE connection state management, ported from promotion_details.templ's identical script rather than reimplemented. -->
-		<script type="module">
-(function() {
-  const container = document.querySelector('[hx-ext="sse"]');
-  if (!container) return;
-
-  const indicator = document.getElementById('release-live-status');
-  const reloadContainer = document.getElementById('release-reload-container');
-  if (!indicator || !reloadContainer) return;
-
-  let isLive = true;
-  let lastEventTime = Date.now();
-  let heartbeatMs = parseInt(container.getAttribute('data-heartbeat-ms'), 10) || 30000;
-  let debounceTimeoutId = null;
-
-  container.addEventListener('htmx:sseOpen', () => {
-    cancelDebounce();
-    setLive(true);
-    lastEventTime = Date.now();
-  });
-
-  container.addEventListener('htmx:sseError', () => {
-    handleConnectionError();
-  });
-
-  const swapTarget = container.querySelector('[sse-swap]');
-  if (swapTarget) {
-    const observer = new MutationObserver(() => {
-      lastEventTime = Date.now();
-      cancelDebounce();
-      setLive(true);
-    });
-    observer.observe(swapTarget, {
-      childList: true,
-      subtree: true,
-      characterData: true,
-      attributes: true
-    });
-  }
-
-  const heartbeatCheckInterval = setInterval(() => {
-    const timeSinceLastEvent = Date.now() - lastEventTime;
-    const timeoutThreshold = heartbeatMs * 2;
-
-    if (isLive && timeSinceLastEvent > timeoutThreshold) {
-      handleTimeout();
-    }
-  }, 10000);
-
-  function handleConnectionError() {
-    if (debounceTimeoutId) return;
-    debounceTimeoutId = setTimeout(() => {
-      setLive(false);
-      debounceTimeoutId = null;
-    }, heartbeatMs);
-  }
-
-  function handleTimeout() {
-    if (debounceTimeoutId) return;
-    debounceTimeoutId = setTimeout(() => {
-      setLive(false);
-      debounceTimeoutId = null;
-    }, heartbeatMs);
-  }
-
-  function cancelDebounce() {
-    if (debounceTimeoutId) {
-      clearTimeout(debounceTimeoutId);
-      debounceTimeoutId = null;
-    }
-  }
-
-  function setLive(live) {
-    isLive = live;
-    if (live) {
-      indicator.textContent = 'Live';
-      indicator.className = 'badge badge-success';
-      indicator.title = 'SSE connection is healthy';
-      reloadContainer.style.display = 'none';
-    } else {
-      indicator.textContent = 'Not Live';
-      indicator.className = 'badge badge-warning';
-      indicator.title = 'SSE connection is not live - page updates stopped';
-      reloadContainer.style.display = 'block';
-    }
-  }
-})();
-		</script>
 	}
 }
 

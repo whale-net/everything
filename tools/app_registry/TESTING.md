@@ -477,7 +477,7 @@ was observed*, never an exact count.
    `/releases/<id>/status/sse`). Confirm:
    - The request's `Content-Type` in the response headers is
      `text/event-stream` and stays open (status "pending"/no `Content-Length`).
-   - The page shows the `#release-live-status` badge as "Live" (FR14; inspect
+   - The page shows the `[data-live-status]` badge as "Live" (FR14; inspect
      via DevTools Elements if the badge text isn't obviously visible).
 
 4. **Trigger a state change** — either run a real release against this
@@ -520,11 +520,11 @@ was observed*, never an exact count.
 7. **Verify part 3 (heartbeat stability):** leave the tab open and observe
    **several** heartbeat intervals (the deployment's
    `APP_REGISTRY_SSE_HEARTBEAT_INTERVAL`, default `5s` — not one tick).
-   - **Pass signature:** `#release-live-status` stays "Live" throughout; the
+   - **Pass signature:** `[data-live-status]` stays "Live" throughout; the
      EventStream tab in DevTools shows `id:`-only or comment/keepalive frames
      arriving on schedule.
    - **Fail signature:** the indicator flips to not-live and
-     `#release-reload-container` appears (FR15) despite the server process
+     `[data-live-reload]` appears (FR15) despite the server process
      never having restarted — this is the graceful degraded state #1138
      anticipates, but its appearance here means the ingress idle-timed-out or
      buffered the connection.

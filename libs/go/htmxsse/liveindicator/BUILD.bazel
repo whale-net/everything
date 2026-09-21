@@ -1,0 +1,18 @@
+load("//tools:templ.bzl", "templ_library")
+load("@rules_go//go:def.bzl", "go_test")
+
+templ_library(
+    name = "liveindicator",
+    srcs = ["live_indicator.templ"],
+    visibility = ["//visibility:public"],
+)
+
+go_test(
+    name = "liveindicator_test",
+    size = "small",
+    srcs = ["live_indicator_test.go"],
+    embed = [":liveindicator"],
+    deps = [
+        "@com_github_stretchr_testify//require",
+    ],
+)
