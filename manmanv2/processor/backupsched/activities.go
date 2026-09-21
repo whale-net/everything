@@ -105,11 +105,6 @@ func (a *Activities) DispatchBackup(ctx context.Context, backupConfigID int64) e
 		preActionCommands = append(preActionCommands, rendered)
 	}
 
-	hostPath := ""
-	if volume.HostSubpath != nil {
-		hostPath = *volume.HostSubpath
-	}
-
 	for _, sgc := range sgcs {
 		if sgc.GameConfigID != volume.ConfigID {
 			continue
@@ -151,17 +146,7 @@ func (a *Activities) DispatchBackup(ctx context.Context, backupConfigID int64) e
 			continue
 		}
 
-		cmd := &hostrmq.BackupCommand{
-			BackupID:          backup.BackupID,
-			SGCID:             sgc.SGCID,
-			VolumeType:        volume.VolumeType,
-			VolumeHostPath:    hostPath,
-			VolumeName:        volume.Name,
-			BackupPath:        cfg.BackupPath,
-			S3Key:             s3Key,
-			PresignedURL:      presignedURL,
-			PreActionCommands: preActionCommands,
-		}
+		cmd := hostrmq.BuildBackupCommand(backup, cfg, volume, s3Key, presignedURL, preActionCommands)
 
 		routingKey := fmt.Sprintf("command.host.%d.backup", server.ServerID)
 		if err := a.Publisher.Publish(ctx, "manman", routingKey, cmd); err != nil {
