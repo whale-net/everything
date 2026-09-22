@@ -1,6 +1,6 @@
 ---
 name: product
-description: Scope a product before any feature spec exists — interviews you for vision, personas, and a capability map, has the architect record current state and the load-bearing decisions that later capabilities depend on, then breaks the product into milestones as krill entities (Product, FeatureSet, LoadBearingDecision, Milestone). Run this first when a request is a whole product/app rather than one feature; each milestone is then specced with /krill-design:design <product-id> --milestone M<n>. Also the right target for "scope this out", "what should v1 be", "break this into milestones", or when a design has ballooned past ~20 FRs. Blocked today until #2926 closes — see "Known blocker" below.
+description: Scope a product before any feature spec exists — interviews you for vision, personas, and a capability map, has the architect record current state and the load-bearing decisions that later capabilities depend on, then breaks the product into milestones as krill entities (Product, FeatureSet, LoadBearingDecision, Milestone). Run this first when a request is a whole product/app rather than one feature; each milestone is then specced with /krill-design:design <product-id> --milestone M<n>. Also the right target for "scope this out", "what should v1 be", "break this into milestones", or when a design has ballooned past ~20 FRs.
 ---
 
 # product
@@ -10,16 +10,6 @@ entities (`Product`, `FeatureSet`, `LoadBearingDecision`, `Milestone` via a
 `DesignSession`), not a GitHub Discussion + committed `PRODUCT.md` +
 tracking issue — see `krill/plugin/shared/CONVENTIONS.md` for the
 design-session mechanics.
-
-## Known blocker
-
-`create_product`/`create_feature_set`/`create_load_bearing_decision`/
-`create_milestone` require `PersonaAgent`, which this plugin's ordinary
-producer/architect subagent dispatch cannot obtain today — see
-whale-net/everything#2926 for why and the two fix options. Steps 4 and 7
-below will fail with `forbidden: persona "swarm_operator" may not call
-create_product` (or equivalent) until that closes. **Do not fall back to
-GitHub to route around it** — report the failure and stop.
 
 ## The artifact
 

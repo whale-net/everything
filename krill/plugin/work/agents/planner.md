@@ -28,13 +28,26 @@ Given a krill FeatureSet id (or a Feature id) whose design session ended in
 a `signoff` event with `signoff_status: approved`, and the Milestone id:
 
 1. Call `get_feature_set_slice {id}` (or `get_feature_slice`) for the
-   current Requirements/Decisions text, and `get_milestone_status
-   {milestone_id}` for idempotency: a status of `planned` or later means a
-   prior `planner` run already created this milestone's tasks — **stop and
-   report the existing state** (ask whoever dispatched you for the task
+   current Requirements/Decisions text. Bare `get_milestone_status
+   {milestone_id}` is **not** a reliable idempotency signal on its own:
+   `planned` also means "design signed off, no tasks yet" on the
+   design-axis path — `/krill-design:design`, `/krill-design:review`, and
+   `/krill-design:loop-design-panel` all transition a krill-hosted
+   milestone straight from `in design` to `planned` the moment a `signoff`
+   event lands, before any `Task` exists (there is no separate status value
+   for "signed off, not yet planned" in the fixed seven-status enum). Call
+   `get_milestone_status_history {milestone_id}` instead and read the
+   **note** on the latest `planned`-or-later transition: this step's own
+   note (step 4 below) always names the task ids it created, so a note that
+   does *not* name task ids (it names a design-session/signoff event
+   instead) means no prior `planner` run has happened — proceed. A note
+   that does name task ids means a prior run already created them — **stop
+   and report the existing state** (ask whoever dispatched you for the task
    manifest that run returned; krill has no query to re-derive it — see
-   CONVENTIONS.md "No task-discovery query exists"). A status of `not
-   started` or `in design` means proceed.
+   CONVENTIONS.md "No task-discovery query exists"). If the note is
+   ambiguous (freeform text, not a guaranteed machine-readable signal),
+   don't guess either way — ask whoever dispatched you to confirm before
+   creating tasks that might duplicate a prior run's.
 2. Ensure every Feature/Requirement this FeatureSet slice contains is in
    the milestone's `Delivers` set — `add_delivers {krill_session_id,
    milestone_id, entity_id}` per entity (idempotent, safe to call even if
@@ -72,11 +85,15 @@ a `signoff` event with `signoff_status: approved`, and the Milestone id:
    this is what `Depends on:` meant on the GitHub path — a real edge now,
    checked by `claim_task` itself, not a convention a reader has to trust.
 4. Call `set_milestone_status {krill_session_id, milestone_id, status:
-   "planned"}` once every task is created, then `{status: "in progress"}`
-   once the first task is dispatched. `set_milestone_status` is also
+   "planned", note: "created N tasks: <id>, <id>, ..."}` once every task is
+   created, then `{status: "in progress"}` once the first task is
+   dispatched. Always name the created task ids in this transition's own
+   `note` (never a bare "planned" with no ids) — this is what step 1's
+   history-based idempotency check above relies on to tell "design signed
+   off" and "tasks created" apart, since both currently share the same
+   `planned` status value. `set_milestone_status` is also
    `{PersonaRequirementContributor, PersonaAgent, PersonaSwarmOperator}`
-   (#2928) — works today, so step 1's `get_milestone_status`-based
-   idempotency check is a real, reliable signal, not just the task manifest.
+   (#2928) — works today.
 5. **Report the full task manifest** — every task id, title, and starting
    lane, in dependency order — to whoever dispatched you. This manifest is
    the only durable record of the milestone's task set (CONVENTIONS.md);
