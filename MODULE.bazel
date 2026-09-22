@@ -112,6 +112,18 @@ http_file(
     urls = ["https://repo1.maven.org/maven2/org/openapitools/openapi-generator-cli/7.10.0/openapi-generator-cli-7.10.0.jar"],
 )
 
+# pex (Python EXecutable builder) -- used by //tools/bazel:pex_binary.bzl's
+# py_scie_binary to build single-file native executables via `pex --scie
+# eager`. See tools/bazel/pex_binary.bzl's doc comment for how this fits the
+# app_registry "cli"/"binary" packaging path.
+http_file(
+    name = "pex_tool",
+    downloaded_file_path = "pex",
+    executable = True,
+    sha256 = "1fc9c277152e450ab5de2728eac6130b2433d8e94c491d9eaeeae63433a25c15",
+    urls = ["https://github.com/pex-tool/pex/releases/download/v2.101.1/pex"],
+)
+
 # SteamCMD for game server management
 # SteamCMD is architecture-independent - it's a shell script that downloads
 # the appropriate binaries on first run
