@@ -15,8 +15,10 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"reflect"
 	"testing"
 
+	"github.com/google/jsonschema-go/jsonschema"
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgxpool"
 	_ "github.com/jackc/pgx/v5/stdlib"
@@ -412,4 +414,56 @@ func TestAssemble_RequeueRoundTrip_ClaimPayloadCarriesEveryNoteAtCurrentStatus(t
 	require.Contains(t, byID, investigationNote.ID)
 	assert.Equal(t, "root cause: flaky upstream dependency", byID[investigationNote.ID].Body)
 	assert.Equal(t, "carried-over", byID[investigationNote.ID].Status, "the operator's investigation note must reach the next claimant at its current lifecycle status, neither stripped nor filtered by requeue")
+}
+
+// TestAssemble_PayloadValidatesAgainstMCPOutputSchema is a regression test
+// for the get_task/claim_task/complete_task/abandon_task/cancel_task/
+// release_task/requeue_task/escalate_task output-schema bug
+// (krill/mcp/tools/task_payload.go's workPayloadOutputSchema): left to
+// mcp.AddTool's default reflection, jsonschema-go infers JSON schema type
+// "array" for every embedded uuid.UUID leaf (its underlying Go kind is
+// [16]byte), while encoding/json actually marshals a uuid.UUID as a string
+// via MarshalText -- so every one of those MCP tools failed its own
+// advertised output schema on any populated result (surfaced first via
+// get_task, since it needs no write persona to reach). This mirrors
+// task_payload.go's own schema construction (TypeSchemas overriding
+// uuid.UUID to {Type: "string"}) against a REAL assembled Payload --
+// Feature/Decision/Task ids included -- rather than a synthetic fixture,
+// so it fails the same way the real tool call failed before the fix. The
+// second half is a negative control: without the override, the same
+// Payload must still fail validation, proving this test would have caught
+// the original bug rather than exercising a schema that happens to always
+// pass.
+func TestAssemble_PayloadValidatesAgainstMCPOutputSchema(t *testing.T) {
+	ctx := context.Background()
+	s, pool := newPayloadTestStore(t)
+	scopeID := payloadTestScope(t, ctx, pool)
+	self := payloadTestSubject("agent-1")
+	w := seedPayloadWorld(t, ctx, s, scopeID, self)
+	task := createPayloadTestTask(t, ctx, s, scopeID, w.MilepebbleID, self)
+
+	assembler := work.NewAssembler(s.Tasks(), slice.NewQuerier(s))
+	payload, err := assembler.Assemble(ctx, scopeID, task.ID)
+	require.NoError(t, err)
+
+	encoded, err := json.Marshal(payload)
+	require.NoError(t, err)
+	var unmarshaled any
+	require.NoError(t, json.Unmarshal(encoded, &unmarshaled))
+
+	fixedSchema, err := jsonschema.For[work.Payload](&jsonschema.ForOptions{
+		TypeSchemas: map[reflect.Type]*jsonschema.Schema{
+			reflect.TypeFor[uuid.UUID](): {Type: "string"},
+		},
+	})
+	require.NoError(t, err)
+	fixedResolved, err := fixedSchema.Resolve(nil)
+	require.NoError(t, err)
+	assert.NoError(t, fixedResolved.Validate(&unmarshaled), "a real assembled Payload must validate against the same output schema task_payload.go advertises")
+
+	defaultSchema, err := jsonschema.For[work.Payload](nil)
+	require.NoError(t, err)
+	defaultResolved, err := defaultSchema.Resolve(nil)
+	require.NoError(t, err)
+	assert.Error(t, defaultResolved.Validate(&unmarshaled), "jsonschema-go's default reflection must still mis-infer uuid.UUID as \"array\" -- if this stops failing, the TypeSchemas override may no longer be necessary and this test's own premise should be revisited")
 }

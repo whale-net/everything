@@ -37,8 +37,9 @@ type cancelTaskInput struct {
 // claim_task/complete_task/abandon_task return.
 func RegisterCancelTask(reg *server.Registry, sessions store.SessionStore, tasks store.TaskStore, assembler *work.Assembler) {
 	server.RegisterOpsWrite(reg, &mcp.Tool{
-		Name:        "cancel_task",
-		Description: "Cancel a task -- escalated or not -- into a dead-lettered terminal state, distinct from Done, that claim_task never again returns and requeue cannot reopen (FR7). Returns the task's full payload document.",
+		Name:         "cancel_task",
+		Description:  "Cancel a task -- escalated or not -- into a dead-lettered terminal state, distinct from Done, that claim_task never again returns and requeue cannot reopen (FR7). Returns the task's full payload document.",
+		OutputSchema: workPayloadOutputSchema,
 	}, func(ctx context.Context, _ *mcp.CallToolRequest, in cancelTaskInput) (*mcp.CallToolResult, work.Payload, error) {
 		var zero work.Payload
 
