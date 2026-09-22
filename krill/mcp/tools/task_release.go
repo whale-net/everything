@@ -38,8 +38,9 @@ type releaseTaskInput struct {
 // get_task/claim_task/complete_task/abandon_task/cancel_task return.
 func RegisterReleaseTask(reg *server.Registry, sessions store.SessionStore, tasks store.TaskStore, assembler *work.Assembler) {
 	server.RegisterOpsWrite(reg, &mcp.Tool{
-		Name:        "release_task",
-		Description: "Force-close the active lease on a claimed task directly, independent of lease expiry (FR8). Counts as an attempt against the same run-attempt cap claim/reclaim/abandon enforce. Returns the task's full payload document.",
+		Name:         "release_task",
+		Description:  "Force-close the active lease on a claimed task directly, independent of lease expiry (FR8). Counts as an attempt against the same run-attempt cap claim/reclaim/abandon enforce. Returns the task's full payload document.",
+		OutputSchema: workPayloadOutputSchema,
 	}, func(ctx context.Context, _ *mcp.CallToolRequest, in releaseTaskInput) (*mcp.CallToolResult, work.Payload, error) {
 		var zero work.Payload
 

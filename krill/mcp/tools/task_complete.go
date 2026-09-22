@@ -43,8 +43,9 @@ type completeTaskInput struct {
 // claim_task return -- never a bespoke MCP-local shape.
 func RegisterCompleteTask(reg *server.Registry, sessions store.SessionStore, tasks store.TaskStore, assembler *work.Assembler) {
 	server.RegisterWrite(reg, &mcp.Tool{
-		Name:        "complete_task",
-		Description: "Complete a claimed task with a pass/fail verdict (FR8): krill, not the caller, decides whether the task advances one lane or reverts one lane in its own lane sequence. Returns the task's full payload document.",
+		Name:         "complete_task",
+		Description:  "Complete a claimed task with a pass/fail verdict (FR8): krill, not the caller, decides whether the task advances one lane or reverts one lane in its own lane sequence. Returns the task's full payload document.",
+		OutputSchema: workPayloadOutputSchema,
 	}, []server.Persona{server.PersonaAgent, server.PersonaSwarmOperator}, func(ctx context.Context, _ *mcp.CallToolRequest, in completeTaskInput) (*mcp.CallToolResult, work.Payload, error) {
 		var zero work.Payload
 

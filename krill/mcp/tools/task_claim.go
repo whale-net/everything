@@ -37,8 +37,9 @@ type claimTaskInput struct {
 // MCP-local shape.
 func RegisterClaimTask(reg *server.Registry, sessions store.SessionStore, tasks store.TaskStore, assembler *work.Assembler) {
 	server.RegisterWrite(reg, &mcp.Tool{
-		Name:        "claim_task",
-		Description: "Claim a claimable task: mints a lease, records one attempt, and returns the task's full payload document (FR3, FR5).",
+		Name:         "claim_task",
+		Description:  "Claim a claimable task: mints a lease, records one attempt, and returns the task's full payload document (FR3, FR5).",
+		OutputSchema: workPayloadOutputSchema,
 	}, []server.Persona{server.PersonaAgent, server.PersonaSwarmOperator}, func(ctx context.Context, _ *mcp.CallToolRequest, in claimTaskInput) (*mcp.CallToolResult, work.Payload, error) {
 		var zero work.Payload
 
