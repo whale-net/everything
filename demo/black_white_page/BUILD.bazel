@@ -1,5 +1,14 @@
+load("//tools/bazel:pytest.bzl", "py_test")
+
 filegroup(
     name = "black_white_page",
     srcs = ["index.html"],
     visibility = ["//visibility:public"],
+)
+
+py_test(
+    name = "test_index",
+    srcs = ["test_index.py"],
+    data = ["index.html"],
+    size = "small",
 )
