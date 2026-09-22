@@ -15,17 +15,20 @@
 // and returns a single fixed error (see libs/go/mcpauth's NFR1) -- happen
 // before a call ever reaches the registry; PersonMiddleware's rejections
 // log directly against the package-level logger below.
+//
+// The actual span/log/error handling is libs/go/mcpobs.InstrumentToolCall
+// (shared with krill/mcp/server's identical wrapper) -- this file only
+// supplies this package's own caller-identity attribute (a resolved
+// Person's UUID).
 package server
 
 import (
 	"context"
-	"time"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
-	"go.opentelemetry.io/otel/attribute"
-	"go.opentelemetry.io/otel/codes"
 
 	"github.com/whale-net/everything/libs/go/logging"
+	"github.com/whale-net/everything/libs/go/mcpobs"
 )
 
 var (
@@ -41,26 +44,10 @@ var (
 // permission-denied paths those two functions check before invoking the
 // product handler -- not just the product handler itself.
 func instrumentToolCall[Out any](ctx context.Context, toolName string, fn func(context.Context) (*mcp.CallToolResult, Out, error)) (*mcp.CallToolResult, Out, error) {
-	ctx, span := tracer.Start(ctx, "mcp.tool/"+toolName)
-	defer span.End()
-	span.SetAttributes(attribute.String("mcp.tool", toolName))
-
-	start := time.Now()
-	result, out, err := fn(ctx)
-	duration := time.Since(start)
-
-	attrs := []any{"tool", toolName, "duration_ms", duration.Milliseconds()}
-	if person := PersonFromContext(ctx); person != nil {
-		attrs = append(attrs, "person_id", person.ID)
-		span.SetAttributes(attribute.String("mcp.person_id", person.ID.String()))
-	}
-
-	if err != nil {
-		span.RecordError(err)
-		span.SetStatus(codes.Error, err.Error())
-		logger.WarnContext(ctx, "mcp tool call failed", append(attrs, "error", err.Error())...)
-		return result, out, err
-	}
-	logger.InfoContext(ctx, "mcp tool call handled", attrs...)
-	return result, out, err
+	return mcpobs.InstrumentToolCall(ctx, tracer, logger, toolName, func(ctx context.Context) (string, string, bool) {
+		if person := PersonFromContext(ctx); person != nil {
+			return "person_id", person.ID.String(), true
+		}
+		return "", "", false
+	}, fn)
 }

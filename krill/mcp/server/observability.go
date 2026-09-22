@@ -12,17 +12,20 @@
 // handler -- through it, so a tool author gets tracing/logging the same
 // way they already get persona authorization, by going through the
 // registry rather than by remembering to add it themselves.
+//
+// The actual span/log/error handling is libs/go/mcpobs.InstrumentToolCall
+// (shared with audience_score_system/mcp/server's identical wrapper) --
+// this file only supplies this package's own caller-identity attribute
+// (a resolved Persona string).
 package server
 
 import (
 	"context"
-	"time"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
-	"go.opentelemetry.io/otel/attribute"
-	"go.opentelemetry.io/otel/codes"
 
 	"github.com/whale-net/everything/libs/go/logging"
+	"github.com/whale-net/everything/libs/go/mcpobs"
 )
 
 var tracer = logging.Tracer("krill/mcp/server")
@@ -35,26 +38,10 @@ var tracer = logging.Tracer("krill/mcp/server")
 // unauthenticated/forbidden paths those functions check before invoking
 // the product handler -- not just the product handler itself.
 func instrumentToolCall[Out any](ctx context.Context, toolName string, fn func(context.Context) (*mcp.CallToolResult, Out, error)) (*mcp.CallToolResult, Out, error) {
-	ctx, span := tracer.Start(ctx, "mcp.tool/"+toolName)
-	defer span.End()
-	span.SetAttributes(attribute.String("mcp.tool", toolName))
-
-	start := time.Now()
-	result, out, err := fn(ctx)
-	duration := time.Since(start)
-
-	attrs := []any{"tool", toolName, "duration_ms", duration.Milliseconds()}
-	if persona := PersonaFromContext(ctx); persona != "" {
-		attrs = append(attrs, "persona", string(persona))
-		span.SetAttributes(attribute.String("mcp.persona", string(persona)))
-	}
-
-	if err != nil {
-		span.RecordError(err)
-		span.SetStatus(codes.Error, err.Error())
-		logger.WarnContext(ctx, "mcp tool call failed", append(attrs, "error", err.Error())...)
-		return result, out, err
-	}
-	logger.InfoContext(ctx, "mcp tool call handled", attrs...)
-	return result, out, err
+	return mcpobs.InstrumentToolCall(ctx, tracer, logger, toolName, func(ctx context.Context) (string, string, bool) {
+		if persona := PersonaFromContext(ctx); persona != "" {
+			return "persona", string(persona), true
+		}
+		return "", "", false
+	}, fn)
 }

@@ -7,8 +7,8 @@ import (
 	"net/http"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
-	"go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp"
 
+	"github.com/whale-net/everything/libs/go/mcpobs"
 	"github.com/whale-net/everything/libs/go/whagent"
 )
 
@@ -54,9 +54,9 @@ func (rt bearerRoundTripper) RoundTrip(req *http.Request) (*http.Response, error
 // the "mint per target server, never reuse across servers" rule this
 // package's credential (keys.go) already follows.
 //
-// The transport is wrapped in otelhttp.NewTransport so every ListTools/
-// CallTool request carries the caller's active trace as a W3C traceparent
-// header -- domain servers (e.g. audience_score_system/mcp,
+// The transport is wrapped in mcpobs.WrapClientTransport so every
+// ListTools/CallTool request carries the caller's active trace as a W3C
+// traceparent header -- domain servers (e.g. audience_score_system/mcp,
 // krill/mcp) already extract it via their own otelhttp.NewHandler wrap
 // (libs/go/logging's global propagator), so without this a domain
 // server's MCP tool-call span would always start a disconnected root
@@ -64,7 +64,7 @@ func (rt bearerRoundTripper) RoundTrip(req *http.Request) (*http.Response, error
 func Connect(ctx context.Context, serverURL, token string) (*mcp.ClientSession, error) {
 	transport := &mcp.StreamableClientTransport{
 		Endpoint:   serverURL,
-		HTTPClient: &http.Client{Transport: otelhttp.NewTransport(bearerRoundTripper{token: token})},
+		HTTPClient: &http.Client{Transport: mcpobs.WrapClientTransport(bearerRoundTripper{token: token})},
 	}
 	client := mcp.NewClient(&mcp.Implementation{Name: clientName, Version: clientVersion}, nil)
 	cs, err := client.Connect(ctx, transport, nil)

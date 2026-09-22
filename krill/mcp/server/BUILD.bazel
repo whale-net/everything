@@ -19,11 +19,10 @@ go_library(
     deps = [
         "//libs/go/logging",
         "//libs/go/mcpauth",
+        "//libs/go/mcpobs",
         "//libs/go/whagent",
         "@com_github_modelcontextprotocol_go_sdk//auth",
         "@com_github_modelcontextprotocol_go_sdk//mcp",
-        "@io_opentelemetry_go_otel//attribute",
-        "@io_opentelemetry_go_otel//codes",
     ],
 )
 
