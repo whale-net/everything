@@ -34,11 +34,22 @@ Milestone), not a default worth avoiding when it doesn't apply.
    `get_design_session` gives you both). If not, point the user to
    `/krill-design:design`, `/krill-design:review`, or
    `/krill-design:loop-design-panel`. Call `get_milestone {id}` to confirm
-   the Milestone exists and belongs to the same Product, and
-   `get_milestone_status {id}` for idempotency — `planned` or later means a
-   prior `plan` run already created this milestone's tasks; ask the user
-   for that run's task manifest (there is no krill query to reconstruct it
-   — CONVENTIONS.md) rather than re-running `planner`.
+   the Milestone exists and belongs to the same Product. For idempotency,
+   don't trust bare `get_milestone_status {id}` alone: `planned` is
+   ambiguous on this path — `/krill-design:design`/`review`/
+   `loop-design-panel` all set a krill-hosted milestone to `planned` the
+   moment its design signs off, before any task exists, and `planner` sets
+   the same status again once it actually creates tasks (there is no
+   separate status value for the two). Call
+   `get_milestone_status_history {id}` and read the note on the latest
+   `planned`-or-later transition instead — `planner` always names the
+   created task ids in that note (`agents/planner.md` step 4); a note that
+   names task ids means a prior `plan` run already created them, ask the
+   user for that run's task manifest (there is no krill query to
+   reconstruct it — CONVENTIONS.md) rather than re-running `planner`. A
+   note that names a design-session/signoff event instead (no task ids)
+   means this is genuinely the first planning pass — proceed. If the note
+   is ambiguous, ask the user to confirm before dispatching `planner`.
 2. **Task breakdown.** Dispatch `krill-work:planner` — via `Agent` with
    `model` set to `--planner-model` (default `opus`) — with the FeatureSet
    id and Milestone id. `planner` adds the Feature/Requirement entities to

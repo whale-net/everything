@@ -95,6 +95,55 @@ tool in this file. M5 additionally stood up a **Swarm-Operator-only**
 `escalate_task`, `cancel_task`) for a human debugging stuck work — none of
 `krill-work`'s personas need it for normal execution, and none register it.
 
+## Session bootstrapping
+
+Every write tool on `/mcp/design` requires a `krill_session_id` as input
+(NFR6's gate is write-only — every read tool, `get_design_session_slice`
+etc., is ungated and needs no session at all). Mint one first with
+`init_session {acting, on_behalf_of, whagent_session_id?}` →
+`{session_id}` — no persona restriction, any resolved caller may call it.
+
+`acting`/`on_behalf_of` are each a `{iss, sub, kind}` triple
+(`api/handlers/session.go`'s `ParseSubject`, reused verbatim by
+`init_session` per LB7):
+
+- `kind` is a closed enum, exactly `"human"` or `"service"` — there is no
+  third value and no `"agent"` spelling (`store.SubjectKind`,
+  `003_session.up.sql`'s CHECK constraint). Use `"human"` for an ordinary
+  interactive Claude Code session; the `loop-design-panel` skill's
+  `reviewer`/other unattended personas use `"service"` for the same call
+  shape.
+- `iss`/`sub` are only required to be non-empty free-text — `ParseSubject`
+  checks presence, not identity against any real issuer registry today.
+  For an ordinary interactive session acting on its own behalf (the common
+  case — `acting == on_behalf_of`, never inferred), a stable per-caller
+  string works: e.g. `iss: "whalenet-cli"`, `sub: "<caller's email>"`.
+  `acting` differs from `on_behalf_of` only for a genuinely mediated call
+  (a Requirement Contributor's plain-language ask relayed by an Agent via
+  `propose_entities`, FR9/FR10) — never set them to the same value there,
+  or the mediated write is rejected (`ErrMediatedIdentitySame`).
+
+`krill_session_id` values are not durable across a plugin-connection reset
+(a `/reload-plugins`, a dropped MCP auth session) — mint a fresh one rather
+than reusing an id from a prior connection.
+
+### Two MCP mounts, one backend
+
+`krill-design` and `krill-work` each declare their own
+`krill-mcp-design-{tilt,dev,prod}` (and `krill-mcp-{tilt,dev,prod}`)
+server entries in their own `mcp_config.json`/`.mcp.json` — both point at
+the same krill deployment, but each plugin's connection (and any OAuth
+login it requires) is independent of the other's. Authenticating
+`krill-design`'s connection does **not** authenticate `krill-work`'s, and
+vice versa: after a `/reload-plugins` or any other event that drops a
+plugin's MCP connections, expect to need `authenticate`/
+`complete_authentication` again on whichever plugin's tools you call next,
+even if the other plugin's identically-named tools already worked in the
+same session. A `krill_session_id` minted through one plugin's `init_session`
+call is a krill-server-side value and works identically when passed to the
+other plugin's tools (same backend) — only the MCP-level connection/auth is
+per-plugin, not the krill session itself.
+
 ## Design session model (krill-native, real today)
 
 krill has no Discussion/gist/comment-thread concept. A design conversation is a
