@@ -1,0 +1,5 @@
+filegroup(
+    name = "black_white_page",
+    srcs = ["index.html"],
+    visibility = ["//visibility:public"],
+)
