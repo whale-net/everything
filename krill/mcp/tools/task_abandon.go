@@ -47,8 +47,9 @@ type abandonTaskInput struct {
 // shape.
 func RegisterAbandonTask(reg *server.Registry, sessions store.SessionStore, tasks store.TaskStore, assembler *work.Assembler) {
 	server.RegisterWrite(reg, &mcp.Tool{
-		Name:        "abandon_task",
-		Description: "Abandon a claimed task without reporting a verdict (FR9): releases the claim immediately, leaves the task's current lane unchanged, and counts as an attempt against the same cap a lease-expiry lapse counts against. Returns the task's full payload document.",
+		Name:         "abandon_task",
+		Description:  "Abandon a claimed task without reporting a verdict (FR9): releases the claim immediately, leaves the task's current lane unchanged, and counts as an attempt against the same cap a lease-expiry lapse counts against. Returns the task's full payload document.",
+		OutputSchema: workPayloadOutputSchema,
 	}, []server.Persona{server.PersonaAgent, server.PersonaSwarmOperator}, func(ctx context.Context, _ *mcp.CallToolRequest, in abandonTaskInput) (*mcp.CallToolResult, work.Payload, error) {
 		var zero work.Payload
 

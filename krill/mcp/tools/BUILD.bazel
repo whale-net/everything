@@ -29,11 +29,12 @@ go_library(
         "task_complete.go",
         "task_dependency.go",
         "task_escalate.go",
+        "task_get.go",
         "task_lease.go",
         "task_note.go",
-        "task_payload.go",
         "task_release.go",
         "task_requeue.go",
+        "work_payload_schema.go",
     ],
     importpath = "github.com/whale-net/everything/krill/mcp/tools",
     visibility = ["//visibility:public"],
@@ -104,6 +105,35 @@ go_test(
         "//krill/store",
         "@com_github_modelcontextprotocol_go_sdk//mcp",
         "@com_github_stretchr_testify//assert",
+        "@com_github_stretchr_testify//require",
+    ],
+)
+
+# No-database unit test (issue #2935): work.Payload's shared
+# workPayloadOutputSchema (work_payload_schema.go), advertised by get_task,
+# claim_task, complete_task, abandon_task, cancel_task, release_task,
+# escalate_task, and requeue_task, must validate a real Payload value
+# whose Slice.Features is populated -- the exact
+# shape that failed go-sdk's own output-schema validation before this fix
+# (jsonschema-go's reflection-based default infers uuid.UUID's [16]byte
+# kind as JSON schema type "array", but encoding/json actually marshals it
+# as a string). Fetches get_task's declared schema over a real in-memory
+# MCP client/server connection (store.New(nil), no Postgres needed --
+# registration never queries), mirroring :task_registration_test's own
+# technique, rather than embedding :tools to reach the unexported
+# workPayloadOutputSchema var directly.
+go_test(
+    name = "task_payload_schema_test",
+    srcs = ["task_payload_schema_test.go"],
+    deps = [
+        ":tools",
+        "//krill/mcp/server",
+        "//krill/slice",
+        "//krill/store",
+        "//krill/work",
+        "@com_github_google_jsonschema_go//jsonschema",
+        "@com_github_google_uuid//:uuid",
+        "@com_github_modelcontextprotocol_go_sdk//mcp",
         "@com_github_stretchr_testify//require",
     ],
 )

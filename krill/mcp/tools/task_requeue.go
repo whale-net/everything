@@ -37,8 +37,9 @@ type requeueTaskInput struct {
 // get_task/claim_task/.../cancel_task/release_task/escalate_task return.
 func RegisterRequeueTask(reg *server.Registry, sessions store.SessionStore, tasks store.TaskStore, assembler *work.Assembler) {
 	server.RegisterOpsWrite(reg, &mcp.Tool{
-		Name:        "requeue_task",
-		Description: "Return an escalated task to claimable (FR6), resetting exactly the counter (thrash or attempt) whose cap triggered the escalation being resolved -- refused on a non-escalated or cancelled task. Returns the task's full payload document.",
+		Name:         "requeue_task",
+		Description:  "Return an escalated task to claimable (FR6), resetting exactly the counter (thrash or attempt) whose cap triggered the escalation being resolved -- refused on a non-escalated or cancelled task. Returns the task's full payload document.",
+		OutputSchema: workPayloadOutputSchema,
 	}, func(ctx context.Context, _ *mcp.CallToolRequest, in requeueTaskInput) (*mcp.CallToolResult, work.Payload, error) {
 		var zero work.Payload
 

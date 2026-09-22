@@ -4,6 +4,9 @@
 // krill/api/handlers/task_payload.go's HTTP surface for the same
 // capability. Ungated like every other read tool (server.RegisterRead) --
 // NFR6's gate is write-only, so no krillSessionInput here.
+//
+// get_task advertises workPayloadOutputSchema (work_payload_schema.go) --
+// see that file's own doc comment for why.
 package tools
 
 import (
@@ -33,8 +36,9 @@ type getTaskInput struct {
 // (#2722) will, never a bespoke MCP-local shape.
 func RegisterGetTaskPayload(reg *server.Registry, tasks store.TaskStore, assembler *work.Assembler) {
 	server.RegisterRead(reg, &mcp.Tool{
-		Name:        "get_task",
-		Description: "Return a task's payload document: its embedded spec slice plus lane, dependency, and attempt state (FR4/FR10). Ungated -- returns whether or not a claim on the task is currently live.",
+		Name:         "get_task",
+		Description:  "Return a task's payload document: its embedded spec slice plus lane, dependency, and attempt state (FR4/FR10). Ungated -- returns whether or not a claim on the task is currently live.",
+		OutputSchema: workPayloadOutputSchema,
 	}, func(ctx context.Context, _ *mcp.CallToolRequest, in getTaskInput) (*mcp.CallToolResult, work.Payload, error) {
 		var zero work.Payload
 

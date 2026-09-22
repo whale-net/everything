@@ -37,8 +37,9 @@ type escalateTaskInput struct {
 // get_task/claim_task/.../release_task return.
 func RegisterEscalateTask(reg *server.Registry, sessions store.SessionStore, tasks store.TaskStore, assembler *work.Assembler) {
 	server.RegisterOpsWrite(reg, &mcp.Tool{
-		Name:        "escalate_task",
-		Description: "Manually escalate a task at any time (FR9), recording the same reasoned escalation event automatic thrash-cap/attempt-cap escalation record, but with reason 'manual'. Returns the task's full payload document.",
+		Name:         "escalate_task",
+		Description:  "Manually escalate a task at any time (FR9), recording the same reasoned escalation event automatic thrash-cap/attempt-cap escalation record, but with reason 'manual'. Returns the task's full payload document.",
+		OutputSchema: workPayloadOutputSchema,
 	}, func(ctx context.Context, _ *mcp.CallToolRequest, in escalateTaskInput) (*mcp.CallToolResult, work.Payload, error) {
 		var zero work.Payload
 
