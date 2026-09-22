@@ -18,6 +18,36 @@ func main() {
 }
 ```
 
+## Shared library migrations
+
+A shared library that owns a table (e.g. `libs/go/htmxauth`'s `ui_sessions`)
+can bundle its own `//go:embed migrations/*.sql` and have every adopting
+domain apply it with `WithSource`, instead of each domain copying the
+library's SQL into its own migrations directory:
+
+```go
+migrate.RunCLI(migrations, "migrations",
+	migrate.WithSource("htmxauth", htmxauth.Migrations, "migrations"))
+```
+
+`WithSource` does **not** merge the library's migrations into the domain's
+own version sequence — it applies them against their own dedicated
+`schema_migrations_<name>` table (`ApplySource` in `source.go`), fully
+independent of the domain's `schema_migrations`. This isn't a stylistic
+choice: golang-migrate's `Up()` tracks exactly one "current version" integer
+per table and only ever advances to the next version *strictly greater*
+than it — it can never go back for a lower one. If a library's migrations
+shared the domain's table, applying one would push that single tracked
+version ahead; any domain migration added later with an ordinary, lower
+number would then be permanently invisible to `Up()` — not an error, just
+silently never applied, forever. A dedicated table per source avoids that
+by construction, so a shared library's migrations number from 1 like any
+ordinary sequence — no reserved range, no coordination with any domain's
+own numbering required.
+
+Only reach for this when a second domain actually needs the same
+library-owned schema; a single adopter can just embed its own copy.
+
 ## CLI flags / env vars
 
 | Flag | Env var | Default | Description |
