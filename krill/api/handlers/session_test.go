@@ -49,9 +49,11 @@ func TestInitSessionHandler_Success(t *testing.T) {
 
 	var resp struct {
 		SessionID string `json:"session_id"`
+		ScopeID   string `json:"scope_id"`
 	}
 	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &resp))
 	require.NotEmpty(t, resp.SessionID)
+	assert.Equal(t, scopeID.String(), resp.ScopeID, "response must hand back the scope the session was minted under")
 	assert.NotEqual(t, whagentSessionID, resp.SessionID, "the minted krill session id must never equal the whagent session id")
 
 	id, err := uuid.Parse(resp.SessionID)

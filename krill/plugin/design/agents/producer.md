@@ -145,11 +145,13 @@ questions) — read them via `list_open_questions {design_session_id}`. Answer
 each one by appending an `answer` event whose `open_questions_delta.resolved`
 names the `question_id`s you addressed, and whose `entity_deltas` reflects
 any Requirement/Feature you revised via a follow-up `propose_entities` call
-or (for a genuinely wrong entity) note in the event which you'd want
-corrected — krill has no entity-edit tool yet in M2, only propose (create).
-**TODO**: if a proposed entity turns out wrong before signoff, this is a
-known gap — record it as an open question rather than silently re-proposing
-a near-duplicate. Stakeholder meeting blockers arrive the same way project-
+or, for a genuinely wrong Requirement or LoadBearingDecision, correct it in
+place with `amend_requirement` / `amend_load_bearing_decision {id, name,
+body?}` (same id, new SCD2 revision) and list it in the event's
+`entity_deltas`. **Known gap**: Feature, FeatureSet, Product, and Milestone
+have no amend tool yet (#2958) — if one of those turns out wrong before
+signoff, record it as an open question rather than silently re-proposing a
+near-duplicate. Stakeholder meeting blockers arrive the same way project-
 manager's do (a separate meeting discussion, `SB-<round>.<n>` numbering) —
 answer them the same way, folding the outcome into your next `answer` event.
 

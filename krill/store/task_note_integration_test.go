@@ -468,3 +468,61 @@ func TestTaskNoteStore_ListNotesForTask_CrossScopeIsolation(t *testing.T) {
 	require.NoError(t, err)
 	assert.Empty(t, notesFromWrongScope, "NFR1: a task's notes must never appear when read under another scope's id")
 }
+
+// TestTaskNoteStore_ListNotesForEntity_OrderingStatusAndKind covers the
+// entity read-back path list_entity_notes exposes: every note on the
+// entity oldest-first regardless of lifecycle status, an entity with no
+// notes lists empty, and a note on one kind never leaks to another.
+func TestTaskNoteStore_ListNotesForEntity_OrderingStatusAndKind(t *testing.T) {
+	ctx := context.Background()
+	s, db := newTaskNoteTestStore(t)
+	scopeID := newTaskNoteTestScope(t, ctx, db)
+	self := taskNoteTestSubject("agent-1")
+
+	product, err := s.Products().Create(ctx, scopeID, "Notes", "read-back")
+	require.NoError(t, err)
+	featureSet, err := s.FeatureSets().Create(ctx, scopeID, product.ID, "FS", nil)
+	require.NoError(t, err)
+	feature, err := s.Features().Create(ctx, scopeID, featureSet.ID, "F", nil)
+	require.NoError(t, err)
+
+	fsKind, productKind := store.NoteEntityKindFeatureSet, store.NoteEntityKindProduct
+	record := func(kind *store.NoteEntityKind, id uuid.UUID, body string) store.Note {
+		t.Helper()
+		n, err := s.Tasks().RecordNote(ctx, store.RecordNoteParams{
+			ScopeID: scopeID, EntityKind: kind, EntityID: &id,
+			Kind: store.NoteKindComment, Body: body, Acting: self, OnBehalfOf: self,
+		})
+		require.NoError(t, err)
+		return n
+	}
+	round1 := record(&fsKind, featureSet.ID, "round 1")
+	round2 := record(&fsKind, featureSet.ID, "round 2")
+	productNote := record(&productKind, product.ID, "product note")
+
+	_, err = s.Tasks().TransitionNoteLifecycle(ctx, store.TransitionNoteLifecycleParams{
+		ScopeID: scopeID, NoteID: round1.ID, Status: store.NoteLifecycleStatusClosed, Acting: self, OnBehalfOf: self,
+	})
+	require.NoError(t, err)
+
+	fsNotes, err := s.Tasks().ListNotesForEntity(ctx, scopeID, store.NoteEntityKindFeatureSet, featureSet.ID)
+	require.NoError(t, err)
+	require.Len(t, fsNotes, 2, "a closed note must still be listed")
+	assert.Equal(t, round1.ID, fsNotes[0].ID)
+	assert.Equal(t, store.NoteLifecycleStatusClosed, fsNotes[0].CurrentStatus)
+	assert.Equal(t, round2.ID, fsNotes[1].ID)
+	assert.Equal(t, store.NoteLifecycleStatusNoted, fsNotes[1].CurrentStatus)
+
+	productNotes, err := s.Tasks().ListNotesForEntity(ctx, scopeID, store.NoteEntityKindProduct, product.ID)
+	require.NoError(t, err)
+	require.Len(t, productNotes, 1)
+	assert.Equal(t, productNote.ID, productNotes[0].ID)
+
+	featureNotes, err := s.Tasks().ListNotesForEntity(ctx, scopeID, store.NoteEntityKindFeature, feature.ID)
+	require.NoError(t, err)
+	assert.Empty(t, featureNotes)
+
+	mismatched, err := s.Tasks().ListNotesForEntity(ctx, scopeID, store.NoteEntityKindProduct, featureSet.ID)
+	require.NoError(t, err)
+	assert.Empty(t, mismatched, "a feature_set's notes must never list under the product kind")
+}

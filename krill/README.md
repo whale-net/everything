@@ -121,6 +121,7 @@ unless noted otherwise.
 | `POST /tasks/reclaim` | Sweeps the caller's own scope for lease-expired tasks and reclaims them, or reclaims one named task instead (FR7). Body: `{"task_id"?}` (empty/absent sweeps the whole scope). Gated. Returns `{"reclaimed": [{"task_id", "cap_exhausted"}]}`. |
 | `POST /notes` | Records a flat, immutable note against a task or a spec-axis entity — any Agent, claimant or not (FR11/FR12). Body: `{"task_id"?, "entity_kind"?, "entity_id"?, "kind", "body"}` (exactly one of `task_id` or `entity_kind`+`entity_id`). Gated. Never accepts a status/lifecycle field. |
 | `GET /tasks/{id}/notes` | Lists every note recorded against a task. Never gated. |
+| `GET /{products,feature-sets,features,requirements,load-bearing-decisions}/{id}/notes` | Lists every note recorded against that spec-axis entity, oldest first, any lifecycle status; scope resolved from the entity. Returns `{"entity_kind", "entity_id", "notes"}`. Never gated. |
 
 The MCP surface below mirrors every endpoint above one-to-one, mounted on
 the same `/mcp/design` server the delivery-axis tools above use (see
@@ -141,6 +142,7 @@ too rather than a fourth surface of its own (LB7).
 | `abandon_task` | write | `TaskStore.AbandonClaim` (FR9) | Agent |
 | `record_note` | write | `TaskStore.RecordNote` (FR11, FR12) | Agent |
 | `transition_note_lifecycle` | write | `TaskStore.TransitionNoteLifecycle` (M5, FR11, issue #2874) | any resolved persona |
+| `list_entity_notes` | read | `TaskStore.ListNotesForEntity` via `handlers.ListEntityNotes` | any resolved persona |
 
 `declare_task_dependencies`/`get_task`/`heartbeat_task`/`complete_task`/
 `abandon_task`/`record_note`/`transition_note_lifecycle` return the same

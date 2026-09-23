@@ -32,6 +32,7 @@ import (
 	"github.com/google/uuid"
 	"go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp"
 
+	"github.com/whale-net/everything/krill/api/handlers"
 	"github.com/whale-net/everything/krill/mcp/server"
 	"github.com/whale-net/everything/krill/mcp/tools"
 	"github.com/whale-net/everything/krill/slice"
@@ -177,6 +178,8 @@ func run() error {
 	designReg := server.NewRegistry(designSrv)
 	tools.RegisterInitSession(designReg, sessions, entities.Scopes())
 	tools.RegisterEntityCreateAll(designReg, sessions, entities.Products(), entities.FeatureSets(), entities.Decisions())
+	// amend_requirement/amend_load_bearing_decision: SCD2 corrections, the MCP twin of POST /{requirements,load-bearing-decisions}/{id}/amend.
+	tools.RegisterAmendAll(designReg, sessions, entities.Amend())
 	// list_products: ungated Product discovery, the entry point for every get_*_slice product_id.
 	tools.RegisterListProducts(designReg, entities.Products())
 	tools.RegisterDesignAll(designReg, entities, sessions, querier)
@@ -196,6 +199,14 @@ func run() error {
 	tools.RegisterAbandonTask(designReg, sessions, entities.Tasks(), assembler)
 	tools.RegisterRecordNote(designReg, sessions, entities.Tasks())
 	tools.RegisterTransitionNoteLifecycle(designReg, sessions, entities.Tasks())
+	// list_entity_notes: ungated read-back of record_note's spec-axis entity notes.
+	tools.RegisterListEntityNotes(designReg, handlers.NoteEntityScopes{
+		Products:     entities.Products(),
+		FeatureSets:  entities.FeatureSets(),
+		Features:     entities.Features(),
+		Requirements: entities.Requirements(),
+		Decisions:    entities.Decisions(),
+	}, entities.Tasks())
 
 	// opsSrv/opsReg is M5's operator surface (issue #2867, /mcp/ops):
 	// its own *mcp.Server so an operator verb or console query

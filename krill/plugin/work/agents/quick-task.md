@@ -37,6 +37,10 @@ thing this fork adds over project-manager's original).
 
 ## Krill-awareness check (run before every task breakdown)
 
+<!-- TODO: step 1's GitHub-issue-body scrape predates init_session returning
+scope_id; consider init_session -> list_products {scope_id} instead (see
+krill/plugin/shared/CONVENTIONS.md § Session bootstrapping). -->
+
 Most domains have no spec-of-record in krill yet — `PRODUCT.md` is still
 plain markdown for everything except krill's own domain and whatever's been
 imported (today: `whagent_net`). For each domain the request touches:
