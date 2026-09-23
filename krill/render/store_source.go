@@ -11,8 +11,8 @@ import (
 
 // StoreSource adapts a *store.Store into a Source (FR15): it holds the
 // same concrete store.Store a write path would, but the only methods it
-// exposes to a caller holding it as a Source are the five read methods
-// Source declares -- there is no way to reach StoreSource's underlying
+// exposes to a caller holding it as a Source are the read methods Source
+// declares -- there is no way to reach StoreSource's underlying
 // Create/GetOrCreateRef/AddAssociation methods through the Source
 // interface, so Render (which only ever holds a Source) has no path to
 // any of them either. Construct one with NewStoreSource; krill/render/cmd
@@ -47,4 +47,8 @@ func (s *StoreSource) ListMilestoneRefs(ctx context.Context, scopeID, productID 
 
 func (s *StoreSource) ListMilestoneAssociations(ctx context.Context, milestoneID uuid.UUID) ([]store.EntityMilestone, error) {
 	return s.store.Milestones().ListAssociationsByMilestone(ctx, milestoneID)
+}
+
+func (s *StoreSource) ListMilestoneDeferrals(ctx context.Context, milestoneID uuid.UUID) ([]store.MilestoneDeferral, error) {
+	return s.store.MilestoneAuthoring().ListDeferrals(ctx, milestoneID)
 }

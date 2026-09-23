@@ -367,7 +367,9 @@ func TestDeliveryAxis_EndToEndLifecycle_EveryStepReassertsCapturedIDs(t *testing
 
 	files, err := render.Render(ctx, render.NewStoreSource(env.store), env.scopeID, product.ID)
 	require.NoError(t, err)
-	assert.Contains(t, files.RoadmapMD, "### M-A", "the milestone itself must still render")
+	assert.Contains(t, files.RoadmapMD, "### M-A — ship the whole delivery axis, provably", "issue #2970: the outcome sentence must render in the milestone heading")
+	assert.Contains(t, files.RoadmapMD, "FR budget: 5", "issue #2970: the current (revised) FR budget must render, not the superseded initial one")
+	assert.Contains(t, files.RoadmapMD, "Deliberately deferred: a live per-milestone Delivers filter over MCP (→ M4 (root plan issue #2681's own out-of-scope note)); an un-abandon verb (→ Later (krill/product/02-capability-map.md))", "issue #2970: every deferral must render, in position order")
 	assert.NotContains(t, files.RoadmapMD, "mp-1", "a milepebble must never appear in the rendered roadmap")
 	assert.NotContains(t, files.RoadmapMD, "mp-2", "a milepebble must never appear in the rendered roadmap, even once abandoned")
 	assert.NotContains(t, files.RoadmapMD, "backlog", "the backlog bucket must never appear in the rendered roadmap")
