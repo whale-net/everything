@@ -6,11 +6,9 @@ description: Runs a stakeholder meeting round on a krill design — dispatches o
 # stakeholder-meeting
 
 Convenes every persona named in a design's specification for one round of
-feedback. Forked from `tools/project-manager/skills/stakeholder-meeting` —
-the meeting mechanic itself (a dedicated GitHub Discussion per round, one
-link comment on the target, consolidated minutes) is **unchanged**, since
-krill has no meeting entity. Only *what the target is* and *where the spec
-comes from* change. See `krill/plugin/shared/CONVENTIONS.md`.
+feedback. The meeting mechanic (a dedicated GitHub Discussion per round, one
+link comment on the target, consolidated minutes) stays on GitHub — krill
+has no meeting entity. See `krill/plugin/shared/CONVENTIONS.md`.
 
 Callable directly, or automatically by `/krill-design:design
 --stakeholder-meeting`.
@@ -30,20 +28,18 @@ Callable directly, or automatically by `/krill-design:design
    `reconciliation` event still has open blocking questions, say so and ask
    the user whether to hold the meeting anyway — a meeting on an
    unreconciled draft usually just re-raises what architect is about to ask.
-   Read the spec from `get_design_session_slice {id}` — authoritative, the
-   same way project-manager's working-draft gist was.
+   Read the spec from `get_design_session_slice {id}` — authoritative.
 
 2. **Determine the round number.** Count existing `Stakeholder meeting round
-   <N>: <url>` link comments on the design (posted the same way
-   project-manager's are — see step 4); this meeting is round `N+1`.
+   <N>: <url>` link comments on the design (posted per step 4); this
+   meeting is round `N+1`.
 
-3. **Enumerate the personas.** Same as project-manager: take the intake's
-   named personas (from your own conversation history / prior `draft` event
-   notes — krill has no dedicated Personas entity), apply
-   `--personas`/`--add-persona`, deduplicate. Stop if none are named.
+3. **Enumerate the personas.** Take the intake's named personas (from your
+   own conversation history / prior `draft` event notes — krill has no
+   dedicated Personas entity), apply `--personas`/`--add-persona`,
+   deduplicate. Stop if none are named.
 
-4. **Open the meeting.** Same GitHub Discussion mechanic as
-   project-manager's: `gh discussion create --title "Stakeholder meeting
+4. **Open the meeting.** `gh discussion create --title "Stakeholder meeting
    round <N>: <feature>" ...` with the agenda (personas attending, the
    entity slice under review, the three response sections), then post the
    `Stakeholder meeting round <N>: <meeting-discussion-url>` link comment —
@@ -58,7 +54,7 @@ Callable directly, or automatically by `/krill-design:design
    `Stakeholder feedback — <persona> (round <N>)` comment on the meeting
    discussion.
 
-6. **Post minutes.** Same format as project-manager: a persona/blockers/
+6. **Post minutes.** A persona/blockers/
    summary table, consolidated deduplicated `SB-<N>.<n>` blockers, grouped
    non-blocking guidance/feedback, and a terminal `Stakeholder meeting:
    blocked (<k> blockers)` / `Stakeholder meeting: cleared` line.

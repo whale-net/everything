@@ -7,19 +7,15 @@ description: Drives a feature (or milestone) through the full krill-design pipel
 
 Chains `/krill-design:design --stakeholder-meeting` with a `reviewer`
 subagent that stands in for the human at every point the pipeline would
-otherwise stop and ask one, until a `signoff` revision event lands. Forked
-from `tools/project-manager/skills/loop-design-panel`.
+otherwise stop and ask one, until a `signoff` revision event lands.
 
 **No `plan:agent-approved` label exists here, and none is needed.** Every
-`RevisionEvent`'s `acting`/`on_behalf_of` `Subject` already records whether
-the caller was a human (`kind: human`, via mcpauth) or an agent (`kind:
-service`, via whagent-net) — provenance is structural, not a label convention
-bolted on top. A `signoff` event appended by this skill's `reviewer`
-dispatch is indistinguishable in *mechanics* from a human's, but its
-`acting.kind` on the stored event tells you plainly it wasn't one — `status`
-and `get_design_session` both surface this. This is a genuine improvement
-over project-manager's `plan:approved`/`plan:agent-approved` two-label
-scheme, not a gap to fill in later.
+`RevisionEvent`'s `acting`/`on_behalf_of` `Subject` records whether the
+caller was a human (`kind: human`, via mcpauth) or an agent (`kind:
+service`, via whagent-net) — provenance is structural. A `signoff` event
+appended by this skill's `reviewer` dispatch is indistinguishable in
+*mechanics* from a human's, but its `acting.kind` on the stored event tells
+you it wasn't one — `status` and `get_design_session` both surface this.
 
 ## Usage
 
@@ -31,8 +27,8 @@ scheme, not a gap to fill in later.
 ```
 
 Parameters (`--milestone`, `--personas`, `--stakeholder-rounds`,
-`--max-panel-rounds`, default 3) are unchanged from project-manager's — see
-that skill for the exact forwarding/capping semantics.
+`--max-panel-rounds`, default 3) — see `tools/project-manager`'s
+`loop-design-panel` skill for the exact forwarding/capping semantics.
 
 ## Steps
 

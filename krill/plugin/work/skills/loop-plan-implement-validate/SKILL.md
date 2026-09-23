@@ -5,8 +5,8 @@ description: Drives a signed-off krill design (fork of project-manager's loop-pl
 
 # loop-plan-implement-validate
 
-Forked from `tools/project-manager/skills/loop-plan-implement-validate` —
-same loop-control and final-verification mechanics, with
+Same loop-control and final-verification mechanics as
+`tools/project-manager/skills/loop-plan-implement-validate`, with
 `krill-work:plan`/`implement`/`validate` in place of the
 `project-manager:*` skill names, starting from a krill FeatureSet/
 design-session id (once signed off). **On the Milestone path, `<n>`
@@ -16,12 +16,11 @@ each phase's subagent must be handed the manifest explicitly since nothing
 can re-derive it. On the no-Milestone fallback, `<n>` is still the GitHub
 tracking issue `krill-work:planner` mints.
 
-**Known blocker (whale-net/everything#2930):** on the Milestone path, every
-`worker`/`validator`/`system-validator` dispatch inside `implement`/
-`validate` is expected to hit the `PersonaAgent` gate and report
-`forbidden` — see `agents/worker.md`. This loop does not retry around that
-failure or fall back to GitHub; it surfaces the failure in its final report
-like any other blocker.
+On the Milestone path, every `worker`/`validator`/`system-validator`
+dispatch inside `implement`/`validate` is expected to hit the known
+task-lifecycle blocker and report `forbidden` — see `agents/worker.md`.
+This loop does not retry around that failure or fall back to GitHub; it
+surfaces the failure in its final report like any other blocker.
 
 ## Usage
 

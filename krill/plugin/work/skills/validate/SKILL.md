@@ -5,9 +5,8 @@ description: Runs whole-system validation for a krill-work plan (fork of project
 
 # validate
 
-Forked from `tools/project-manager/skills/validate`. Only meaningful once
-every task in the manifest (Milestone path) or every task item (no-Milestone
-path) is `Done`.
+Only meaningful once every task in the manifest (Milestone path) or every
+task item (no-Milestone path) is `Done`.
 
 ## Usage
 
@@ -27,15 +26,14 @@ path) is `Done`.
 3. Dispatch `krill-work:system-validator` with the FeatureSet id (and
    Milestone id). It calls `get_feature_set_slice {id}` for the live
    Requirements, brings the system up via Tilt, exercises it, and reports
-   findings as `record_note` scope-notes (expected to hit
-   whale-net/everything#2930's `forbidden` gate — see
-   `agents/system-validator.md`).
+   findings as `record_note` scope-notes (expected to hit the known
+   `record_note` blocker — see `agents/system-validator.md`).
 4. **If everything passed:** re-dispatch `mergepush` as a no-op
    re-confirmation, verify every PR is `MERGED`. Call `set_milestone_status
    {milestone_id, status: "shipped"}` and, per-item,
    `mark_delivered_item_shipped` for each delivered Feature/Requirement —
-   both work from this dispatch today (whale-net/everything#2928). Report
-   the plan fully validated with the full PR list.
+   both work from this dispatch today. Report the plan fully validated with
+   the full PR list.
 5. **If there are findings:** dispatch `krill-work:planner` with the
    finding text `system-validator` reported (not note ids, since
    `record_note` itself is blocked) to run its findings-handling process.

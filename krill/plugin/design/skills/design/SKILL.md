@@ -9,10 +9,8 @@ Orchestrates the `krill-design` pipeline inside a krill DesignSession from a
 feature idea up to architect sign-off, optionally including a stakeholder
 meeting round. Comes before `/krill-design:review` (human approval) and
 `/krill-work:plan` (task breakdown) — this skill produces the spec, not the
-Project board. Forked from `tools/project-manager/skills/design`; see
-`krill/plugin/shared/CONVENTIONS.md` for the design-session mechanics this
-fork uses, and the original skill for anything not called out below as
-changed.
+Project board. See `krill/plugin/shared/CONVENTIONS.md` for the
+design-session mechanics.
 
 ## Usage
 
@@ -25,18 +23,17 @@ changed.
 
 ### Parameters
 
-Identical to project-manager's `design` skill: `--milestone M<n>`,
-`--stakeholder-meeting`, `--stakeholder-rounds <n>` (default 2),
-`--personas "<a,b>"`, `--resume-agents`. See that skill's parameter table for
-the full effect of each — unchanged by this fork.
+`--milestone M<n>`, `--stakeholder-meeting`, `--stakeholder-rounds <n>`
+(default 2), `--personas "<a,b>"`, `--resume-agents` — see
+`tools/project-manager`'s `design` skill for the full effect of each.
 
 ## Steps
 
-0. **Check the scope of the request.** Unchanged from project-manager: stop
-   and recommend `/krill-design:product` for a whole product/app/subsystem;
-   flag a milestone draft heading past ~20 Requirements the same way.
+0. **Check the scope of the request.** Stop and recommend
+   `/krill-design:product` for a whole product/app/subsystem; flag a
+   milestone draft heading past ~20 Requirements the same way.
 
-1. **Survey related issues.** Unchanged — `gh issue list` for overlapping
+1. **Survey related issues.** `gh issue list` for overlapping
    `idea`/`source:scope-note` issues before intake. This stays on GitHub;
    krill has no issue-tracking entity of its own yet.
 
@@ -44,14 +41,11 @@ the full effect of each — unchanged by this fork.
    - **Check `--milestone` first** — the positional argument is a product
      issue number. `gh issue view <n>` and confirm `product:approved`; read
      `<domain>/PRODUCT.md` → `product/03-roadmap.md` for the milestone entry
-     — **except for a product actually hosted in krill** (krill's own
-     domain, or one imported via `krill/importer`), where a real krill
-     Milestone entity exists (M3): call `get_milestone {id}` for its exact
-     authoring fields/`Delivers`/`Must not foreclose`/deferrals. This is an
-     exact per-milestone read, not the whole-product `get_product_slice`
-     superset project-manager's own `design` skill still falls back to for
-     krill's own domain (its "krill's own milestone read" section describes
-     that pre-M3 limitation; it no longer applies here). Take the last
+     — **except for a product hosted in krill** (krill's own domain, or one
+     imported via `krill/importer`), where a real krill Milestone entity
+     exists: call `get_milestone {id}` for its exact authoring
+     fields/`Delivers`/`Must not foreclose`/deferrals (an exact per-milestone
+     read, not `get_product_slice`'s whole-product superset). Take the last
      `Ledger: M<n> → <status> (<design-session-id>)` tracking-issue comment
      for a non-krill-hosted product, or `get_milestone_status {id}` for a
      krill-hosted one — already `in design` or later means resume that

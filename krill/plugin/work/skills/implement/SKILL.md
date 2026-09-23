@@ -5,10 +5,10 @@ description: Runs the swimlane execution phase of a krill-work plan (fork of pro
 
 # implement
 
-Forked from `tools/project-manager/skills/implement` — the
-orchestrator/branch/worktree/batch/mergepush machinery (worktree creation,
-`<plan-branches>` tracking, batching, the mergepush hand-off, the report
-format) is unchanged; what changed is task discovery and dispatch.
+The orchestrator/branch/worktree/batch/mergepush machinery (worktree
+creation, `<plan-branches>` tracking, batching, the mergepush hand-off, the
+report format) matches `tools/project-manager/skills/implement`; task
+discovery and dispatch differ, below.
 
 ## Usage
 
@@ -40,10 +40,10 @@ format) is unchanged; what changed is task discovery and dispatch.
    title}` in place of `{task-issue-number, title}` (see
    `agents/mergepush.md`).
 
-**Known blocker (whale-net/everything#2930):** every `worker`/`validator`
-dispatch you make will itself hit `claim_task`/`complete_task`'s
-`PersonaAgent` gate and report `forbidden` — see `agents/worker.md`. Don't
-route around it; surface those failures in your own report as-is.
+Every `worker`/`validator` dispatch you make will itself hit the known
+`claim_task`/`complete_task` blocker and report `forbidden` — see
+`agents/worker.md`. Don't route around it; surface those failures in your
+own report as-is.
 
 ## Steps (no-Milestone GitHub fallback)
 

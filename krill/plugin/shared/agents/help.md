@@ -31,7 +31,7 @@ tracking issue number.
 ## Decision guide
 
 Read `krill/plugin/shared/CONVENTIONS.md` if you need mechanics beyond this
-summary — it's the canonical source and this table can drift from it.
+summary.
 
 | Situation | Skill | Notes |
 |---|---|---|
