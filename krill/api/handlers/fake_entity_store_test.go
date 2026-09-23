@@ -26,6 +26,12 @@ type fakeProductStore struct {
 	gotScopeID uuid.UUID
 	gotName    string
 	gotVision  string
+
+	// listed/listErr back ListCurrentByScope; gotListScopeID records its
+	// last scopeID argument.
+	listed         []store.Product
+	listErr        error
+	gotListScopeID uuid.UUID
 }
 
 func (f *fakeProductStore) Create(ctx context.Context, scopeID uuid.UUID, name, vision string) (store.Product, error) {
@@ -41,7 +47,11 @@ func (f *fakeProductStore) GetCurrentByID(ctx context.Context, id uuid.UUID) (st
 }
 
 func (f *fakeProductStore) ListCurrentByScope(ctx context.Context, scopeID uuid.UUID) ([]store.Product, error) {
-	return nil, nil
+	f.gotListScopeID = scopeID
+	if f.listErr != nil {
+		return nil, f.listErr
+	}
+	return f.listed, nil
 }
 
 // fakeFeatureSetStore backs featureset_test.go.

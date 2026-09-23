@@ -150,6 +150,17 @@ type Task struct {
 	CreatedAt           time.Time
 }
 
+// TaskSummary is one entry of ListTasksByMilestone's result (issue
+// #2941): the same summary fields get_task/GET /tasks/{id} already
+// return per task, without a second per-task fetch.
+type TaskSummary struct {
+	ID           uuid.UUID
+	Title        string
+	CurrentLane  Lane
+	AttemptCount int
+	HasLiveClaim bool
+}
+
 // CreateTaskParams is CreateTask's input (FR1). Exactly the fields
 // 015_work_axis's issue body names for the Implementation phase: a single
 // delivery-axis reference (MilestoneID, resolved to either a milepebble or
@@ -214,6 +225,17 @@ type TaskStore interface {
 	// posture GetProductDeliveryHandler already established
 	// (milestone.go's own doc comment).
 	GetTaskByID(ctx context.Context, id uuid.UUID) (Task, error)
+
+	// ListTasksByMilestone returns every task whose milestone_id is
+	// milestoneID (a milestone_ref row of either Kind -- a milepebble or a
+	// milestone with no milepebble cut, mirroring CreateTask's own
+	// MilestoneID semantics), oldest-created first. Task ids are globally
+	// unique surrogates and milestone_id is resolved the same way
+	// ListMilepebblesByMilestone resolves its own milestoneID (no scope
+	// argument needed -- mirrors that method's own id-only shape,
+	// milestone_authoring.go). Unpaginated: a milestone's task count is
+	// inherently bounded, same reasoning as ListMilepebblesByMilestone.
+	ListTasksByMilestone(ctx context.Context, milestoneID uuid.UUID) ([]TaskSummary, error)
 
 	// ClaimTask is FR3/FR5's race-safe claim (task_claim.go, issue #2722):
 	// a single transaction that row-locks the `task` (SELECT ... FOR
@@ -555,4 +577,33 @@ func (s taskStore) GetTaskByID(ctx context.Context, id uuid.UUID) (Task, error) 
 		return Task{}, fmt.Errorf("get task: %w", err)
 	}
 	return task, nil
+}
+
+func (s taskStore) ListTasksByMilestone(ctx context.Context, milestoneID uuid.UUID) ([]TaskSummary, error) {
+	rows, err := s.pool.Query(ctx, `
+		SELECT id, title, current_lane, attempt_count, current_claim_id
+		FROM task
+		WHERE milestone_id = $1
+		ORDER BY created_at ASC, id ASC
+	`, milestoneID)
+	if err != nil {
+		return nil, fmt.Errorf("list tasks by milestone: %w", err)
+	}
+	defer rows.Close()
+
+	summaries := []TaskSummary{}
+	for rows.Next() {
+		var (
+			summary        TaskSummary
+			lane           string
+			currentClaimID *uuid.UUID
+		)
+		if err := rows.Scan(&summary.ID, &summary.Title, &lane, &summary.AttemptCount, &currentClaimID); err != nil {
+			return nil, fmt.Errorf("scan task summary: %w", err)
+		}
+		summary.CurrentLane = Lane(lane)
+		summary.HasLiveClaim = currentClaimID != nil
+		summaries = append(summaries, summary)
+	}
+	return summaries, rows.Err()
 }

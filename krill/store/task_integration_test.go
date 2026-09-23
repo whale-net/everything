@@ -7,7 +7,8 @@
 // NFR7's "never a Feature/Requirement id" rejection, every lane_sequence
 // validation branch (out of order, duplicate, empty, starting lane not a
 // member, and a lane-skipping sequence accepted), and NFR1/NFR3's
-// scope_id/two-subject attribution. See store_integration_test.go's
+// scope_id/two-subject attribution, plus ListTasksByMilestone (issue
+// #2941). See store_integration_test.go's
 // package doc for why this file only builds under the "integration" build
 // tag.
 //
@@ -340,4 +341,82 @@ func TestTaskStore_CreateTask_ScopeIDRecorded(t *testing.T) {
 	var countInScopeB int
 	require.NoError(t, db.Pool.QueryRow(ctx, `SELECT count(*) FROM task WHERE scope_id = $1`, scopeB).Scan(&countInScopeB))
 	assert.Equal(t, 0, countInScopeB, "a task created in scope A must never show up when querying scope B")
+}
+
+// TestTaskStore_ListTasksByMilestone covers issue #2941's discovery read:
+// an empty milestone lists as an empty slice (not an error), tasks list
+// oldest-created first under their own milestone_id only (milepebble vs
+// uncut milestone), and HasLiveClaim flips once a task is claimed.
+func TestTaskStore_ListTasksByMilestone(t *testing.T) {
+	ctx := context.Background()
+	s, db := newTaskTestStore(t)
+	scopeID := newTaskTestScope(t, ctx, db)
+	self := taskTestSubject("agent-1")
+	world := newTaskTestWorld(t, ctx, s, scopeID, self)
+
+	t.Run("no tasks lists empty", func(t *testing.T) {
+		got, err := s.Tasks().ListTasksByMilestone(ctx, world.milepebbleID)
+		require.NoError(t, err)
+		assert.NotNil(t, got)
+		assert.Empty(t, got)
+
+		got, err = s.Tasks().ListTasksByMilestone(ctx, uuid.New())
+		require.NoError(t, err)
+		assert.Empty(t, got, "an unknown milestone id lists empty, not an error")
+	})
+
+	var pebbleTaskIDs []uuid.UUID
+	for _, title := range []string{"first", "second", "third"} {
+		params := defaultLaneParams(scopeID, world.milepebbleID, self, self)
+		params.Title = title
+		task, err := s.Tasks().CreateTask(ctx, params)
+		require.NoError(t, err)
+		pebbleTaskIDs = append(pebbleTaskIDs, task.ID)
+	}
+	uncutParams := defaultLaneParams(scopeID, world.uncutMilestoneID, self, self)
+	uncutParams.Title = "uncut"
+	uncutTask, err := s.Tasks().CreateTask(ctx, uncutParams)
+	require.NoError(t, err)
+
+	t.Run("milepebble tasks in creation order, unclaimed", func(t *testing.T) {
+		got, err := s.Tasks().ListTasksByMilestone(ctx, world.milepebbleID)
+		require.NoError(t, err)
+		require.Len(t, got, 3)
+		for i, summary := range got {
+			assert.Equal(t, pebbleTaskIDs[i], summary.ID)
+			assert.Equal(t, []string{"first", "second", "third"}[i], summary.Title)
+			assert.Equal(t, store.LaneScaffold, summary.CurrentLane)
+			assert.Equal(t, 0, summary.AttemptCount)
+			assert.False(t, summary.HasLiveClaim)
+		}
+	})
+
+	t.Run("uncut milestone lists only its own task", func(t *testing.T) {
+		got, err := s.Tasks().ListTasksByMilestone(ctx, world.uncutMilestoneID)
+		require.NoError(t, err)
+		require.Len(t, got, 1)
+		assert.Equal(t, uncutTask.ID, got[0].ID)
+
+		got, err = s.Tasks().ListTasksByMilestone(ctx, world.cutMilestoneID)
+		require.NoError(t, err)
+		assert.Empty(t, got, "a milepebble's tasks never list under its parent milestone")
+	})
+
+	t.Run("claim sets HasLiveClaim", func(t *testing.T) {
+		sessionID, err := store.NewSessionStore(db.Pool).InitSession(ctx, scopeID, self, self, nil)
+		require.NoError(t, err)
+		_, err = s.Tasks().ClaimTask(ctx, store.ClaimTaskParams{
+			ScopeID: scopeID, TaskID: pebbleTaskIDs[1], SessionID: sessionID,
+			Acting: self, OnBehalfOf: self,
+		})
+		require.NoError(t, err)
+
+		got, err := s.Tasks().ListTasksByMilestone(ctx, world.milepebbleID)
+		require.NoError(t, err)
+		require.Len(t, got, 3)
+		assert.False(t, got[0].HasLiveClaim)
+		assert.True(t, got[1].HasLiveClaim)
+		assert.Equal(t, 0, got[1].AttemptCount, "a claim never moves attempt_count -- only lapsed/abandoned attempts count")
+		assert.False(t, got[2].HasLiveClaim)
+	})
 }

@@ -38,7 +38,8 @@
 // (issue #2875, FR5) widens it once more -- console_test.go's own Testing-
 // phase task exercises it. The RequeueTask stub exists for the same reason
 // now that task_requeue.go (issue #2876) widens it once more --
-// task_requeue_test.go's own later Testing-phase task exercises it.
+// task_requeue_test.go's own later Testing-phase task exercises it. The
+// ListTasksByMilestone fake backs task_list_test.go.
 package handlers_test
 
 import (
@@ -133,6 +134,11 @@ type fakeTaskStore struct {
 	requeueErr       error
 	requeueResult    store.RequeueResult
 	gotRequeueParams store.RequeueParams
+
+	// tasksByMilestone is keyed by milestone id; a missing key lists empty.
+	tasksByMilestone        map[uuid.UUID][]store.TaskSummary
+	listTasksByMilestoneErr error
+	gotListTasksMilestoneID uuid.UUID
 }
 
 func (f *fakeTaskStore) CreateTask(ctx context.Context, params store.CreateTaskParams) (store.Task, error) {
@@ -304,6 +310,14 @@ func (f *fakeTaskStore) RequeueTask(ctx context.Context, params store.RequeuePar
 		return store.RequeueResult{}, f.requeueErr
 	}
 	return f.requeueResult, nil
+}
+
+func (f *fakeTaskStore) ListTasksByMilestone(ctx context.Context, milestoneID uuid.UUID) ([]store.TaskSummary, error) {
+	f.gotListTasksMilestoneID = milestoneID
+	if f.listTasksByMilestoneErr != nil {
+		return nil, f.listTasksByMilestoneErr
+	}
+	return append([]store.TaskSummary{}, f.tasksByMilestone[milestoneID]...), nil
 }
 
 var _ store.TaskStore = (*fakeTaskStore)(nil)

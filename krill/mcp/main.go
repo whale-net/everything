@@ -177,6 +177,8 @@ func run() error {
 	designReg := server.NewRegistry(designSrv)
 	tools.RegisterInitSession(designReg, sessions, entities.Scopes())
 	tools.RegisterEntityCreateAll(designReg, sessions, entities.Products(), entities.FeatureSets(), entities.Decisions())
+	// list_products: ungated Product discovery, the entry point for every get_*_slice product_id.
+	tools.RegisterListProducts(designReg, entities.Products())
 	tools.RegisterDesignAll(designReg, entities, sessions, querier)
 	tools.RegisterMilestoneAll(designReg, sessions, entities.MilestoneAuthoring(), entities.Products(), querier)
 	tools.RegisterMilestoneStatusAll(designReg, sessions, entities.MilestoneStatus())
@@ -186,6 +188,8 @@ func run() error {
 	tools.RegisterCreateTask(designReg, sessions, entities.Tasks())
 	tools.RegisterDeclareTaskDependencies(designReg, sessions, entities.Tasks())
 	tools.RegisterGetTaskPayload(designReg, entities.Tasks(), assembler)
+	// list_tasks: ungated per-milestone/milepebble task discovery, feeding get_task its ids.
+	tools.RegisterListTasks(designReg, entities.Tasks())
 	tools.RegisterClaimTask(designReg, sessions, entities.Tasks(), assembler)
 	tools.RegisterHeartbeatTask(designReg, sessions, entities.Tasks())
 	tools.RegisterCompleteTask(designReg, sessions, entities.Tasks(), assembler)
