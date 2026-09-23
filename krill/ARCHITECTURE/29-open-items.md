@@ -8,8 +8,13 @@
   `GET /requirements/{id}/versions`, and the `load-bearing-decisions`
   equivalents) — still no HTTP surface for Persona/NonGoal (`krill/store`'s
   `PersonaStore`/`NonGoalStore` remain store-layer only over HTTP, issue
-  #2488); the MCP surface gap is closed (`create_persona`/`create_non_goal`
-  on the design mount, entity.go), and no
+  #2488); the MCP surface gap is closed for create
+  (`create_persona`/`create_non_goal`, entity.go) and list
+  (`list_personas`/`list_non_goals`, persona_nongoal.go — neither entity is
+  part of the FR5-FR9 slice document, so this is a standalone discovery
+  pair, not a `Document` field) on the design mount, but amend remains open
+  for both (no `store.PersonaStore`/`store.NonGoalStore` amend method
+  exists at all, unlike Requirement/LoadBearingDecision), and no
   amend/history surface for Product, FeatureSet, or Feature (issue #2493
   scopes FR11/FR12 to Requirement and LoadBearingDecision only). FR5-FR9's
   read path exists (issue #2491, see "The scoped-slice query" above); FR21

@@ -21,6 +21,7 @@ go_library(
         "entity_note.go",
         "milestone.go",
         "milestone_status.go",
+        "persona_nongoal.go",
         "product.go",
         "recut.go",
         "session.go",
@@ -249,12 +250,15 @@ go_test(
 # register exactly {list_products, list_tasks}, and each call maps its
 # (in-memory fake) store result onto the shared handlers wire shape.
 # entity_note_registration_test.go covers list_entity_notes the same way,
-# sharing this file's operatorPersona/discoveryTextOf helpers.
+# and persona_nongoal_registration_test.go covers
+# RegisterListPersonas/RegisterListNonGoals the same way, all three sharing
+# this file's operatorPersona/discoveryTextOf helpers.
 go_test(
     name = "discovery_registration_test",
     srcs = [
         "discovery_registration_test.go",
         "entity_note_registration_test.go",
+        "persona_nongoal_registration_test.go",
     ],
     deps = [
         ":tools",
