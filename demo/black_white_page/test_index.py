@@ -291,6 +291,84 @@ def test_localstorage_access_is_inside_non_rethrowing_try():
         )
 
 
+def test_head_script_restores_color_before_first_paint():
+    """The <head> restore <script> must appear after the white-background
+    declaration (preserving M1's no-flash default), reference STORAGE_KEY,
+    and keep its localStorage access inside a non-rethrowing try."""
+    source = _read_source()
+    white_match = _WHITE_BG_RE.search(source)
+    assert white_match, "no white background declaration found in source"
+
+    head_match = _HEAD_RE.search(source)
+    assert head_match, "no <head>...</head> block found"
+    head_content = head_match.group(1)
+    head_offset = head_match.start(1)
+
+    restore_script = None
+    for script_match in _SCRIPT_BLOCK_RE.finditer(head_content):
+        script_start = head_offset + script_match.start()
+        if script_start <= white_match.start():
+            continue
+        if "STORAGE_KEY" in script_match.group(1):
+            restore_script = script_match
+            break
+    assert restore_script, (
+        "no <head> <script> found after the white-background declaration "
+        "that references STORAGE_KEY"
+    )
+
+    script_body = restore_script.group(1)
+    code_only = _strip_js_comments(script_body)
+    ls_occurrences = [m.start() for m in re.finditer(r"\blocalStorage\b", code_only)]
+    assert ls_occurrences, "the head restore script does not access localStorage"
+
+    spans = _try_catch_spans(script_body)
+    assert spans, (
+        "the head restore script's localStorage access is not wrapped in "
+        "a try/catch block"
+    )
+    for idx in ls_occurrences:
+        assert any(open_i < idx < close_i for open_i, close_i, _ in spans), (
+            "localStorage access in the head restore script is not "
+            "lexically inside a try block"
+        )
+    for _, _, catch_body in spans:
+        assert not re.search(r"\bthrow\b", _strip_js_comments(catch_body)), (
+            "the head restore script's catch block rethrows -- a storage "
+            "read failure must never propagate out of initialization"
+        )
+
+
+def test_restored_value_validated_against_black_or_white():
+    """The localStorage read's try block must validate the stored value
+    against exactly 'black' or 'white' before use -- any other value
+    (corrupted/unexpected) must be treated as no persisted value."""
+    source = _read_source()
+    code_only = _strip_js_comments(source)
+
+    spans = _try_catch_spans(source)
+    read_try = next(
+        (
+            (open_i, close_i)
+            for open_i, close_i, _ in spans
+            if "localStorage" in code_only[open_i:close_i]
+            and "getItem" in code_only[open_i:close_i]
+        ),
+        None,
+    )
+    assert read_try, "no try block wrapping a localStorage.getItem call found"
+    open_i, close_i = read_try
+    try_body = code_only[open_i:close_i]
+    assert re.search(r"===\s*['\"]black['\"]", try_body), (
+        "the localStorage read's try block does not validate the stored "
+        "value against exactly 'black'"
+    )
+    assert re.search(r"===\s*['\"]white['\"]", try_body), (
+        "the localStorage read's try block does not validate the stored "
+        "value against exactly 'white'"
+    )
+
+
 def test_applytoggle_applies_display_before_saving():
     """Inside the toggle function, the background assignment must precede
     the persistence call in source order -- the visible change must never
