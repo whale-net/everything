@@ -22,7 +22,7 @@ import (
 	"github.com/whale-net/everything/krill/store"
 )
 
-// expectedEntityCreateToolNames is exactly the five tools
+// expectedEntityCreateToolNames is exactly the seven tools
 // RegisterEntityCreateAll wires -- see krill/mcp/tools/entity.go.
 var expectedEntityCreateToolNames = []string{
 	"create_product",
@@ -30,24 +30,28 @@ var expectedEntityCreateToolNames = []string{
 	"create_load_bearing_decision",
 	"create_persona",
 	"create_non_goal",
+	"create_feature",
+	"create_requirement",
 }
 
-// TestRegisterEntityCreateAll_RegistersExactlyThreeTools proves
+// TestRegisterEntityCreateAll_RegistersExactlySevenTools proves
 // RegisterEntityCreateAll wires exactly {create_product, create_feature_set,
-// create_load_bearing_decision, create_persona, create_non_goal} -- the
-// top-of-chain spec entities that, before this file, could only be created
-// over HTTP (POST /products, POST /feature-sets,
-// POST /load-bearing-decisions) or, for Persona/NonGoal, only through
-// krill/importer's one-shot import path -- never through an MCP tool.
-// Listed over a real in-memory MCP client/server connection
-// (mcp.NewInMemoryTransports), not by inspecting Go source.
-func TestRegisterEntityCreateAll_RegistersExactlyFiveTools(t *testing.T) {
+// create_load_bearing_decision, create_persona, create_non_goal,
+// create_feature, create_requirement} -- the non-mediated spec entity
+// creation tools that, before this file (and before issue #2961 for the
+// latter two, and before issue #2960 for create_persona/create_non_goal),
+// could only be created over HTTP (POST /products, POST /feature-sets,
+// POST /load-bearing-decisions, POST /features, POST /requirements) or, for
+// Persona/NonGoal, only through krill/importer's one-shot import path --
+// never through an MCP tool. Listed over a real in-memory MCP client/server
+// connection (mcp.NewInMemoryTransports), not by inspecting Go source.
+func TestRegisterEntityCreateAll_RegistersExactlySevenTools(t *testing.T) {
 	ctx := context.Background()
 	entities := store.New(nil)
 
 	srv := mcp.NewServer(server.Implementation, nil)
 	reg := server.NewRegistry(srv)
-	tools.RegisterEntityCreateAll(reg, nil, entities.Products(), entities.FeatureSets(), entities.Decisions(), entities.Personas(), entities.NonGoals())
+	tools.RegisterEntityCreateAll(reg, nil, entities.Products(), entities.FeatureSets(), entities.Decisions(), entities.Personas(), entities.NonGoals(), entities.Features(), entities.Requirements())
 
 	serverTransport, clientTransport := mcp.NewInMemoryTransports()
 	_, err := srv.Connect(ctx, serverTransport, nil)
@@ -64,7 +68,7 @@ func TestRegisterEntityCreateAll_RegistersExactlyFiveTools(t *testing.T) {
 		registered[tool.Name] = true
 	}
 
-	require.Len(t, registered, len(expectedEntityCreateToolNames), "RegisterEntityCreateAll must register exactly these five tools -- nothing more, nothing fewer")
+	require.Len(t, registered, len(expectedEntityCreateToolNames), "RegisterEntityCreateAll must register exactly these seven tools -- nothing more, nothing fewer")
 	for _, name := range expectedEntityCreateToolNames {
 		assert.True(t, registered[name], "%s must be registered", name)
 	}

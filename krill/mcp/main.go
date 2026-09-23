@@ -141,10 +141,12 @@ func run() error {
 	// every other designReg call below, since every one of them requires a
 	// session id this tool is the only MCP-reachable way to obtain),
 	// tools.RegisterEntityCreateAll (create_product/create_feature_set/
-	// create_load_bearing_decision, the top-of-chain spec entity creation
-	// tools that previously existed only over HTTP, plus create_persona/
-	// create_non_goal, which previously existed only inside
-	// krill/importer's one-shot import path), tools.RegisterDesignAll (issue
+	// create_load_bearing_decision/create_feature/create_requirement, the
+	// non-mediated spec entity creation tools that previously existed only
+	// over HTTP -- create_feature/create_requirement close issue #2961's
+	// gap for a self-authoring caller -- plus create_persona/create_non_goal,
+	// which previously existed only inside krill/importer's one-shot import
+	// path), tools.RegisterDesignAll (issue
 	// #2547), tools.RegisterMilestoneAll (milestone authoring, issue
 	// #2683), tools.RegisterMilestoneStatusAll (status history, issue
 	// #2685), tools.RegisterDeliveryShipmentAll (per-item shipment, issue
@@ -179,7 +181,7 @@ func run() error {
 	designSrv := server.New()
 	designReg := server.NewRegistry(designSrv)
 	tools.RegisterInitSession(designReg, sessions, entities.Scopes())
-	tools.RegisterEntityCreateAll(designReg, sessions, entities.Products(), entities.FeatureSets(), entities.Decisions(), entities.Personas(), entities.NonGoals())
+	tools.RegisterEntityCreateAll(designReg, sessions, entities.Products(), entities.FeatureSets(), entities.Decisions(), entities.Personas(), entities.NonGoals(), entities.Features(), entities.Requirements())
 	// amend_requirement/amend_load_bearing_decision: SCD2 corrections, the MCP twin of POST /{requirements,load-bearing-decisions}/{id}/amend.
 	tools.RegisterAmendAll(designReg, sessions, entities.Amend())
 	// list_products: ungated Product discovery, the entry point for every get_*_slice product_id.

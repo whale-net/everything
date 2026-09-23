@@ -1,14 +1,15 @@
 //go:build integration
 
 // Real-Postgres + real-HTTP-transport MCP client coverage for krill's
-// top-of-chain entity creation surface (entity.go): create_product,
-// create_feature_set, create_load_bearing_decision, create_persona, and
-// create_non_goal exercised through the MCP tool registration/dispatch
-// layer -- the store-level coverage for these already lives in the
-// krill/store package tests; this file is specifically about the
-// RegisterEntityCreateAll wrapper layer, never the HTTP handlers
-// (krill/api/handlers/product.go, featureset.go, decision.go have their own
-// coverage -- Persona and NonGoal have no HTTP handler to cover).
+// non-mediated entity creation surface (entity.go): create_product,
+// create_feature_set, create_load_bearing_decision, create_persona,
+// create_non_goal, create_feature, and create_requirement exercised through
+// the MCP tool registration/dispatch layer -- the store-level coverage for
+// these already lives in the krill/store package tests; this file is
+// specifically about the RegisterEntityCreateAll wrapper layer, never the
+// HTTP handlers (krill/api/handlers/product.go, featureset.go, decision.go,
+// feature.go, requirement.go have their own coverage -- Persona and NonGoal
+// have no HTTP handler to cover).
 //
 // Mirrors milestone_test.go's seeding/HTTP/auth plumbing (duplicated here,
 // not shared, since this file compiles into its own go_test target -- see
@@ -197,7 +198,7 @@ func TestMCPEntityCreateSurface_EndToEnd(t *testing.T) {
 
 	designSrv := server.New()
 	designReg := server.NewRegistry(designSrv)
-	tools.RegisterEntityCreateAll(designReg, sessions, entities.Products(), entities.FeatureSets(), entities.Decisions(), entities.Personas(), entities.NonGoals())
+	tools.RegisterEntityCreateAll(designReg, sessions, entities.Products(), entities.FeatureSets(), entities.Decisions(), entities.Personas(), entities.NonGoals(), entities.Features(), entities.Requirements())
 
 	// Mirrors ../main.go's own construction order exactly (see
 	// milestone_test.go's identical comment): every entity-create write
@@ -416,6 +417,95 @@ func TestMCPEntityCreateSurface_EndToEnd(t *testing.T) {
 		require.NoError(t, err)
 	})
 
+	t.Run("create_feature rejects an unknown feature_set_id", func(t *testing.T) {
+		cs, err := connectEntityMCP(t, designURL, agentToken)
+		require.NoError(t, err)
+
+		res, err := cs.CallTool(ctx, &mcp.CallToolParams{
+			Name: "create_feature",
+			Arguments: map[string]any{
+				"krill_session_id": selfSessionID.String(),
+				"feature_set_id":   uuid.New().String(),
+				"name":             "orphan feature",
+			},
+		})
+		require.NoError(t, err)
+		assert.True(t, res.IsError, "LB2 parentage must be enforced even over MCP")
+	})
+
+	var featureID string
+	t.Run("create_feature mints a new Feature under the FeatureSet for a self-authored session (issue #2961)", func(t *testing.T) {
+		// selfSessionID's Acting and OnBehalfOf are the same identity
+		// (selfSubject, selfSubject above) -- exactly the case
+		// design.go's propose_entities rejects (ErrMediatedIdentitySame,
+		// FR10). create_feature has no such requirement: it is the
+		// non-mediated path issue #2961 asked for.
+		cs, err := connectEntityMCP(t, designURL, agentToken)
+		require.NoError(t, err)
+
+		res, err := cs.CallTool(ctx, &mcp.CallToolParams{
+			Name: "create_feature",
+			Arguments: map[string]any{
+				"krill_session_id": selfSessionID.String(),
+				"feature_set_id":   featureSetID,
+				"name":             "entity create e2e feature",
+			},
+		})
+		require.NoError(t, err)
+		require.False(t, res.IsError, "unexpected error: %s", entityTextOf(res))
+
+		structured, ok := res.StructuredContent.(map[string]any)
+		require.True(t, ok)
+		featureID, ok = structured["id"].(string)
+		require.True(t, ok, "response must carry an id field")
+		_, err = uuid.Parse(featureID)
+		require.NoError(t, err)
+	})
+
+	t.Run("create_requirement rejects an invalid kind", func(t *testing.T) {
+		cs, err := connectEntityMCP(t, designURL, agentToken)
+		require.NoError(t, err)
+
+		res, err := cs.CallTool(ctx, &mcp.CallToolParams{
+			Name: "create_requirement",
+			Arguments: map[string]any{
+				"krill_session_id": selfSessionID.String(),
+				"feature_id":       featureID,
+				"kind":             "bogus",
+				"name":             "bad kind requirement",
+			},
+		})
+		require.NoError(t, err)
+		assert.True(t, res.IsError)
+		assert.Contains(t, entityTextOf(res), "kind")
+	})
+
+	var requirementID string
+	t.Run("create_requirement mints a new Requirement under the Feature for a self-authored session (issue #2961)", func(t *testing.T) {
+		cs, err := connectEntityMCP(t, designURL, agentToken)
+		require.NoError(t, err)
+
+		res, err := cs.CallTool(ctx, &mcp.CallToolParams{
+			Name: "create_requirement",
+			Arguments: map[string]any{
+				"krill_session_id": selfSessionID.String(),
+				"feature_id":       featureID,
+				"kind":             "FR",
+				"name":             "entity create e2e requirement",
+				"body":             "created directly over MCP by a self-authored session, never only via propose_entities",
+			},
+		})
+		require.NoError(t, err)
+		require.False(t, res.IsError, "unexpected error: %s", entityTextOf(res))
+
+		structured, ok := res.StructuredContent.(map[string]any)
+		require.True(t, ok)
+		requirementID, ok = structured["id"].(string)
+		require.True(t, ok, "response must carry an id field")
+		_, err = uuid.Parse(requirementID)
+		require.NoError(t, err)
+	})
+
 	// ── cross-check against the store layer directly, so this test proves ──
 	// ── the MCP dispatch path produces the same result the store itself ────
 	// ── would -- never a divergent MCP-local projection ─────────────────────
@@ -454,5 +544,19 @@ func TestMCPEntityCreateSurface_EndToEnd(t *testing.T) {
 		require.NoError(t, err)
 		assert.Equal(t, pID, nonGoal.ProductID)
 		assert.Equal(t, store.NonGoalKindDeferred, nonGoal.Kind)
+
+		fID, err := uuid.Parse(featureID)
+		require.NoError(t, err)
+		feature, err := entities.Features().GetCurrentByID(ctx, fID)
+		require.NoError(t, err)
+		assert.Equal(t, fsID, feature.FeatureSetID)
+
+		rID, err := uuid.Parse(requirementID)
+		require.NoError(t, err)
+		requirement, err := entities.Requirements().GetCurrentByID(ctx, rID)
+		require.NoError(t, err)
+		assert.Equal(t, fID, requirement.FeatureID)
+		require.NotNil(t, requirement.Body)
+		assert.Equal(t, "created directly over MCP by a self-authored session, never only via propose_entities", *requirement.Body)
 	})
 }
