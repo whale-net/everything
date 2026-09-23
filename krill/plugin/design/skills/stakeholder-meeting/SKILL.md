@@ -7,10 +7,13 @@ description: Runs a stakeholder meeting round on a krill design — dispatches o
 
 Convenes every persona named in a design's specification for one round of
 feedback. Forked from `tools/project-manager/skills/stakeholder-meeting` —
-the meeting mechanic itself (a dedicated GitHub Discussion per round, one
-link comment on the target, consolidated minutes) is **unchanged**, since
-krill has no meeting entity. Only *what the target is* and *where the spec
-comes from* change. See `krill/plugin/shared/CONVENTIONS.md`.
+the meeting mechanic itself (a dedicated GitHub Discussion per round,
+consolidated minutes) is **unchanged**, since krill has no meeting entity.
+*What the target is*, *where the spec comes from*, and *where the round's
+link comment lands* change — the last of those has two paths depending on
+whether the design has a GitHub anchor at all (step 4). See
+`krill/plugin/shared/CONVENTIONS.md` § "record_note fallback for
+anchor-less designs".
 
 Callable directly, or automatically by `/krill-design:design
 --stakeholder-meeting`.
@@ -34,8 +37,10 @@ Callable directly, or automatically by `/krill-design:design
    same way project-manager's working-draft gist was.
 
 2. **Determine the round number.** Count existing `Stakeholder meeting round
-   <N>: <url>` link comments on the design (posted the same way
-   project-manager's are — see step 4); this meeting is round `N+1`.
+   <N>: <url>` link comments for this design — on the product tracking
+   issue if it has one, or among the anchoring FeatureSet's `record_note`
+   entries (`kind: "comment"`) if it doesn't (see step 4); this meeting is
+   round `N+1`.
 
 3. **Enumerate the personas.** Same as project-manager: take the intake's
    named personas (from your own conversation history / prior `draft` event
@@ -45,11 +50,31 @@ Callable directly, or automatically by `/krill-design:design
 4. **Open the meeting.** Same GitHub Discussion mechanic as
    project-manager's: `gh discussion create --title "Stakeholder meeting
    round <N>: <feature>" ...` with the agenda (personas attending, the
-   entity slice under review, the three response sections), then post the
-   `Stakeholder meeting round <N>: <meeting-discussion-url>` link comment —
-   but on the design (no dedicated home for it besides the same GitHub
-   Discussion trail linked from wherever the design was announced, e.g. the
-   product tracking issue's `Ledger:` comment for a milestone).
+   entity slice under review, the three response sections). Capture the
+   discussion URL, then record the `Stakeholder meeting round <N>:
+   <meeting-discussion-url>` link comment so it's durably discoverable from
+   the design — where it lands depends on whether this design has a GitHub
+   anchor:
+   - **Has an anchor** (the design was announced via a `Ledger:` comment on
+     a product tracking issue — i.e. not a krill-hosted product/milestone)
+     — post the link comment there, same as project-manager's.
+   - **No anchor** (a krill-hosted product/milestone, tracked purely via
+     `set_milestone_status`/`get_milestone_status` — there is no tracking
+     issue to comment on) — call `record_note {entity_kind: "feature_set",
+     entity_id: <the design's anchoring FeatureSet>, kind: "comment", body:
+     "Stakeholder meeting round <N>: <meeting-discussion-url>"}` instead.
+     Resolve the anchoring FeatureSet from `get_design_session_slice`'s
+     FeatureSet entries; if the session never touched the FeatureSet itself
+     (only Features/Requirements under a pre-existing one), resolve it via
+     that Feature's/Requirement's `feature_set_id`. This is the
+     standardized fallback (CONVENTIONS.md) — always the same fixed body
+     string and the same entity, not something improvised per run.
+     **Known blocker (whale-net/everything#2930):** `record_note` is
+     `PersonaAgent`-only, and this skill, dispatched as an ordinary Claude
+     Code subagent, resolves `PersonaSwarmOperator` — expect `forbidden`
+     today. Make the call anyway, and on failure report the exact error
+     plus the link text to the user so it isn't lost — do not silently
+     fall back to opening a GitHub Discussion/issue to route around it.
 
 5. **Collect feedback.** Dispatch one `krill-design:stakeholder` subagent
    **per persona, in parallel**. Each gets: the persona name, the
@@ -78,7 +103,9 @@ Callable directly, or automatically by `/krill-design:design
      round on the same design session), then have producer note
      `Amended after stakeholder meeting round <N>: <summary>` as a comment on
      wherever the design's ledger lives (the product tracking issue, for a
-     milestone).
+     milestone with one) — or, when there is none, via the same
+     `record_note {entity_kind: "feature_set", entity_id: <anchor>, kind:
+     "comment"}` fallback as step 4.
 
 8. **Do not create task issues or a Project board.** A blocker changes the
    design; it does not become a task.

@@ -217,6 +217,48 @@ Read-only slice queries (`get_feature_set_slice`, `get_feature_slice`,
 `get_requirement_slice`, `get_product_slice`, all `{id}` → `slice.Document`) are
 never gated by a `krill_session` and available to every persona.
 
+### record_note fallback for anchor-less designs
+
+A design conversation normally gets a durable link comment posted somewhere
+GitHub-native — a Discussion link on the product tracking issue's `Ledger:`
+comment, same as project-manager. That anchor doesn't exist for a
+krill-hosted product/milestone (one whose status is tracked purely via
+`set_milestone_status`/`get_milestone_status`, never a `Ledger:`
+tracking-issue comment — see "Milestone and delivery-axis tools" above).
+Any skill that needs to leave a durable pointer against a design in that
+situation (a stakeholder meeting round's link, an amendment note, or
+similar) uses this standardized fallback instead of improvising one per
+run:
+
+- Call `record_note {entity_kind: "feature_set", entity_id: <anchor>,
+  kind: "comment", body: <the same fixed-format string the GitHub path
+  would have posted, e.g. "Stakeholder meeting round <N>: <url>">}`.
+- `<anchor>` is the FeatureSet the design's Requirements/Features roll up
+  under: read it from `get_design_session_slice`'s FeatureSet entries, or
+  — if the session's events never touched the FeatureSet itself, only
+  Features/Requirements under a pre-existing one — resolve it via that
+  Feature's/Requirement's `feature_set_id`.
+- `design_session` is not itself a valid `record_note` `entity_kind` (the
+  fixed enumeration is `product, feature_set, feature, requirement,
+  load_bearing_decision`), which is why the FeatureSet, not the session, is
+  the target.
+- Keep the body string identical in shape to whatever the GitHub-anchored
+  path would have posted, so both paths stay grep-discoverable the same
+  way — this is a location fallback, not a different format.
+
+**Known blocker (whale-net/everything#2930) applies here too:** `record_note`
+is `PersonaAgent`-only, and a design-axis skill dispatched as an ordinary
+Claude Code subagent resolves `PersonaSwarmOperator` instead — this call is
+expected to fail with `forbidden` today. Make it anyway (it's what's
+correct once #2930 closes); if it fails, report the exact `forbidden` error
+and the link/body text you tried to record directly to whoever dispatched
+you, so it isn't lost, and **do not** fall back to opening a GitHub
+Discussion/issue to route around it — same handling as `krill-work`'s
+worker/system-validator (see `krill/plugin/work/agents/worker.md`).
+
+See `krill-design:stakeholder-meeting`'s step 4 for the concrete
+application.
+
 ## Milestone and delivery-axis tools (M3, real today)
 
 krill's `Milestone`/`Milepebble` are real entities now, with every write
