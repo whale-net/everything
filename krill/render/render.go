@@ -76,6 +76,11 @@ type Source interface {
 	// milestoneID -- the rows a `Delivers:`/`Must not foreclose:` line is
 	// reconstructed from (LB6), never stored prose.
 	ListMilestoneAssociations(ctx context.Context, milestoneID uuid.UUID) ([]store.EntityMilestone, error)
+
+	// ListMilestoneDeferrals returns every MilestoneDeferral row for
+	// milestoneID (migration 010, issue #2683, FR1) -- the rows a
+	// `Deliberately deferred:` line is reconstructed from.
+	ListMilestoneDeferrals(ctx context.Context, milestoneID uuid.UUID) ([]store.MilestoneDeferral, error)
 }
 
 // GeneratedMarker is the exact sentence NFR3's AGENTS.md carve-out and
@@ -291,16 +296,20 @@ func renderCapabilityMapMD(name, revision string, doc slice.Document) string {
 }
 
 // milestoneEntry is one milestone's rendered content, reconstructed
-// entirely from milestone_ref + entity_milestone rows (LB6) -- never
-// authored prose. M1 ships no milestone title, outcome sentence, or FR
-// budget (those are M3's, per krill/ARCHITECTURE.md's "milestone
-// references" section), so this is deliberately thinner than a
-// hand-authored roadmap entry.
+// entirely from milestone_ref, entity_milestone, and milestone_deferral rows
+// (LB6, migration 010) -- never authored prose. It still omits the
+// freeform per-milestone prose a hand-authored roadmap entry carries (the
+// "Notes for design" and "Pre-agreed over-budget cut" paragraphs, and any
+// explanatory prose attached to an individual `Must not foreclose` LB or
+// deferral) -- nothing in krill's schema backs that prose today.
 type milestoneEntry struct {
 	Number           int
 	ID               string // "M1".."Mn"
+	Outcome          *string
+	FRBudget         *int
 	Delivers         []string
 	MustNotForeclose []string
+	Deferrals        []store.MilestoneDeferral
 }
 
 // milestoneNumRe extracts the numeric suffix of a bare "M<n>" identifier.
@@ -353,6 +362,11 @@ func renderMilestones(ctx context.Context, src Source, scopeID, productID uuid.U
 		sort.Ints(delivers)
 		sort.Ints(mustNot)
 
+		deferrals, err := src.ListMilestoneDeferrals(ctx, ref.ID)
+		if err != nil {
+			return nil, fmt.Errorf("list deferrals for milestone %s: %w", ref.Name, err)
+		}
+
 		num := 0
 		if m := milestoneNumRe.FindStringSubmatch(ref.Name); m != nil {
 			num, _ = strconv.Atoi(m[1])
@@ -360,8 +374,11 @@ func renderMilestones(ctx context.Context, src Source, scopeID, productID uuid.U
 		entries = append(entries, milestoneEntry{
 			Number:           num,
 			ID:               ref.Name,
+			Outcome:          ref.Outcome,
+			FRBudget:         ref.FRBudget,
 			Delivers:         prefixEach("C", delivers),
 			MustNotForeclose: prefixEach("LB", mustNot),
+			Deferrals:        deferrals,
 		})
 	}
 
@@ -388,6 +405,10 @@ func renderRoadmapMD(name, revision string, milestones []milestoneEntry) string 
 	for _, m := range milestones {
 		b.WriteString("### ")
 		b.WriteString(m.ID)
+		if m.Outcome != nil && *m.Outcome != "" {
+			b.WriteString(" — ")
+			b.WriteString(*m.Outcome)
+		}
 		b.WriteString("\n\n")
 		if len(m.Delivers) > 0 {
 			b.WriteString("Delivers: ")
@@ -398,6 +419,18 @@ func renderRoadmapMD(name, revision string, milestones []milestoneEntry) string 
 			b.WriteString("Must not foreclose: ")
 			b.WriteString(strings.Join(m.MustNotForeclose, ", "))
 			b.WriteString("\n")
+		}
+		if len(m.Deferrals) > 0 {
+			items := make([]string, len(m.Deferrals))
+			for i, d := range m.Deferrals {
+				items[i] = fmt.Sprintf("%s (→ %s)", d.Body, d.Destination)
+			}
+			b.WriteString("Deliberately deferred: ")
+			b.WriteString(strings.Join(items, "; "))
+			b.WriteString("\n")
+		}
+		if m.FRBudget != nil {
+			b.WriteString(fmt.Sprintf("FR budget: %d\n", *m.FRBudget))
 		}
 		b.WriteString("\n")
 	}

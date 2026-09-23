@@ -349,7 +349,20 @@ jobs:
         #
         # Uses --config=ci (defined in .bazelrc with --noimplicit_deps) and
         # --universe_scope to accelerate target discovery.
-        SCOPE='//libs/... + //tools/... + //manmanv2/... + //audience_score_system/...'
+        SCOPE='//libs/... + //tools/... + //manmanv2/... + //audience_score_system/... + //krill/... + //whagent_net/... + //leaflab/...'
+
+        # A domain missing from SCOPE has its dbtest targets silently never
+        # run (and never reported to Codecov), so fail if any BUILD file
+        # depending on dbtest lives outside it.
+        MISSING=""
+        for dir in $(grep -rl --include=BUILD.bazel '//libs/go/dbtest' . | cut -d/ -f2 | sort -u); do
+          case " $SCOPE " in *"//$dir/..."*) ;; *) MISSING="$MISSING //$dir/...";; esac
+        done
+        if [ -n "$MISSING" ]; then
+          echo "::error::dbtest-backed targets exist outside the discovery SCOPE; add them:$MISSING"
+          exit 1
+        fi
+
         CANDIDATES="(tests($SCOPE) intersect rdeps($SCOPE, //libs/go/dbtest:dbtest)) union //libs/go/s3:s3_integration_test"
         ALL_TARGETS=$(bazel query \
           --config=ci \
