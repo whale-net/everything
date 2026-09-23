@@ -1,14 +1,19 @@
 // This file is krill's top-of-chain entity creation MCP tool group:
-// create_product, create_feature_set, and create_load_bearing_decision --
-// thin wrappers over store.ProductStore.Create/store.FeatureSetStore.Create/
-// store.LoadBearingDecisionStore.Create, mirroring
-// krill/api/handlers/product.go's, featureset.go's, and decision.go's HTTP
-// surface for the same three capabilities (LB7), the same way milestone.go
-// mirrors krill/api/handlers/milestone.go. Before this file, a Product,
-// FeatureSet, or LoadBearingDecision could only be created over HTTP
-// (POST /products, POST /feature-sets, POST /load-bearing-decisions) --
-// propose_entities (design.go) is explicitly scoped to Feature/Requirement
-// only and never reaches this high in the spec chain.
+// create_product, create_feature_set, create_load_bearing_decision,
+// create_persona, and create_non_goal -- thin wrappers over
+// store.ProductStore.Create/store.FeatureSetStore.Create/
+// store.LoadBearingDecisionStore.Create/store.PersonaStore.Create/
+// store.NonGoalStore.Create, mirroring krill/api/handlers/product.go's,
+// featureset.go's, and decision.go's HTTP surface for the first three
+// capabilities (LB7), the same way milestone.go mirrors
+// krill/api/handlers/milestone.go. Persona and NonGoal have no HTTP handler
+// of their own to mirror -- before this file, the only way to create either
+// was krill/importer/write.go's one-shot import path, never a live session;
+// these two tools wrap store.PersonaStore/store.NonGoalStore directly, same
+// as the other three tools wrap their store, just with no handlers.IDResponse
+// producer in between to reuse. propose_entities (design.go) is explicitly
+// scoped to Feature/Requirement only and never reaches this high in the spec
+// chain.
 package tools
 
 import (
@@ -153,15 +158,118 @@ func RegisterCreateLoadBearingDecision(reg *server.Registry, sessions store.Sess
 	})
 }
 
+// ── create_persona (write) ──────────────────────────────────────────────────
+
+// createPersonaInput is create_persona's argument schema -- there is no
+// HTTP request type to mirror (Persona has no HTTP handler), so this
+// follows createFeatureSetInput's shape: a single required parent id plus
+// name/description.
+type createPersonaInput struct {
+	krillSessionInput
+	ProductID   string  `json:"product_id" jsonschema:"The Product surrogate id this Persona belongs to, as a UUID string (single required parent reference)."`
+	Name        string  `json:"name" jsonschema:"The Persona's name, unique within its parent Product (LB1)."`
+	Description *string `json:"description,omitempty" jsonschema:"Optional Persona description."`
+}
+
+// RegisterCreatePersona registers create_persona: mints a new Persona row
+// under an existing Product via store.PersonaStore.Create -- previously only
+// reachable through krill/importer/write.go's one-shot import path, never a
+// live session.
+func RegisterCreatePersona(reg *server.Registry, sessions store.SessionStore, personas store.PersonaStore) {
+	server.RegisterWrite(reg, &mcp.Tool{
+		Name:        "create_persona",
+		Description: "Create a Persona under a Product.",
+	}, []server.Persona{server.PersonaRequirementContributor, server.PersonaAgent, server.PersonaSwarmOperator}, func(ctx context.Context, _ *mcp.CallToolRequest, in createPersonaInput) (*mcp.CallToolResult, handlers.IDResponse, error) {
+		var zero handlers.IDResponse
+
+		sess, err := requireKrillSession(ctx, sessions, in.KrillSessionID)
+		if err != nil {
+			return nil, zero, err
+		}
+
+		productID, err := uuid.Parse(in.ProductID)
+		if err != nil {
+			return nil, zero, fmt.Errorf("product_id: invalid or missing UUID")
+		}
+		if in.Name == "" {
+			return nil, zero, fmt.Errorf("name: required")
+		}
+
+		persona, err := personas.Create(ctx, sess.ScopeID, productID, in.Name, in.Description)
+		if err != nil {
+			return nil, zero, err
+		}
+		return nil, handlers.IDResponse{ID: persona.ID.String()}, nil
+	})
+}
+
+// ── create_non_goal (write) ─────────────────────────────────────────────────
+
+// createNonGoalInput is create_non_goal's argument schema -- there is no
+// HTTP request type to mirror (NonGoal has no HTTP handler), so this
+// follows createFeatureSetInput's shape plus the kind discriminator
+// krill/importer/write.go already parses from its own source format.
+type createNonGoalInput struct {
+	krillSessionInput
+	ProductID string  `json:"product_id" jsonschema:"The Product surrogate id this Non-Goal belongs to, as a UUID string (single required parent reference)."`
+	Kind      string  `json:"kind" jsonschema:"Either 'permanent' or 'deferred' -- PRODUCT.md's two Non-goals buckets."`
+	Name      string  `json:"name" jsonschema:"The Non-Goal's name, unique within its parent Product (LB1)."`
+	Body      *string `json:"body,omitempty" jsonschema:"Optional Non-Goal body."`
+}
+
+// RegisterCreateNonGoal registers create_non_goal: mints a new NonGoal row
+// under an existing Product via store.NonGoalStore.Create -- previously only
+// reachable through krill/importer/write.go's one-shot import path, never a
+// live session.
+func RegisterCreateNonGoal(reg *server.Registry, sessions store.SessionStore, nonGoals store.NonGoalStore) {
+	server.RegisterWrite(reg, &mcp.Tool{
+		Name:        "create_non_goal",
+		Description: "Create a Non-Goal (permanent or deferred) under a Product.",
+	}, []server.Persona{server.PersonaRequirementContributor, server.PersonaAgent, server.PersonaSwarmOperator}, func(ctx context.Context, _ *mcp.CallToolRequest, in createNonGoalInput) (*mcp.CallToolResult, handlers.IDResponse, error) {
+		var zero handlers.IDResponse
+
+		sess, err := requireKrillSession(ctx, sessions, in.KrillSessionID)
+		if err != nil {
+			return nil, zero, err
+		}
+
+		productID, err := uuid.Parse(in.ProductID)
+		if err != nil {
+			return nil, zero, fmt.Errorf("product_id: invalid or missing UUID")
+		}
+		var kind store.NonGoalKind
+		switch in.Kind {
+		case string(store.NonGoalKindPermanent):
+			kind = store.NonGoalKindPermanent
+		case string(store.NonGoalKindDeferred):
+			kind = store.NonGoalKindDeferred
+		default:
+			return nil, zero, fmt.Errorf("kind: must be %q or %q", store.NonGoalKindPermanent, store.NonGoalKindDeferred)
+		}
+		if in.Name == "" {
+			return nil, zero, fmt.Errorf("name: required")
+		}
+
+		nonGoal, err := nonGoals.Create(ctx, sess.ScopeID, productID, kind, in.Name, in.Body)
+		if err != nil {
+			return nil, zero, err
+		}
+		return nil, handlers.IDResponse{ID: nonGoal.ID.String()}, nil
+	})
+}
+
 // ── entrypoint ───────────────────────────────────────────────────────────────
 
 // RegisterEntityCreateAll registers every top-of-chain entity creation tool
-// this file exposes against reg -- create_product, create_feature_set, and
-// create_load_bearing_decision. The caller (../main.go) mounts reg at the
-// design mount (server.designMountPath via designReg), the same mount every
-// other write tool in this package registers on.
-func RegisterEntityCreateAll(reg *server.Registry, sessions store.SessionStore, products store.ProductStore, featureSets store.FeatureSetStore, decisions store.LoadBearingDecisionStore) {
+// this file exposes against reg -- create_product, create_feature_set,
+// create_load_bearing_decision, create_persona, and create_non_goal. The
+// caller (../main.go) mounts reg at the design mount
+// (server.designMountPath via designReg), the same mount every other write
+// tool in this package registers on.
+func RegisterEntityCreateAll(reg *server.Registry, sessions store.SessionStore, products store.ProductStore, featureSets store.FeatureSetStore, decisions store.LoadBearingDecisionStore, personas store.PersonaStore, nonGoals store.NonGoalStore) {
 	RegisterCreateProduct(reg, sessions, products)
 	RegisterCreateFeatureSet(reg, sessions, featureSets)
 	RegisterCreateLoadBearingDecision(reg, sessions, decisions)
+	RegisterCreatePersona(reg, sessions, personas)
+	RegisterCreateNonGoal(reg, sessions, nonGoals)
 }

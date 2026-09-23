@@ -2,12 +2,13 @@
 
 // Real-Postgres + real-HTTP-transport MCP client coverage for krill's
 // top-of-chain entity creation surface (entity.go): create_product,
-// create_feature_set, and create_load_bearing_decision exercised through
-// the MCP tool registration/dispatch layer -- the store-level coverage for
-// these already lives in the krill/store package tests; this file is
-// specifically about the RegisterEntityCreateAll wrapper layer, never the
-// HTTP handlers (krill/api/handlers/product.go, featureset.go, decision.go
-// have their own coverage).
+// create_feature_set, create_load_bearing_decision, create_persona, and
+// create_non_goal exercised through the MCP tool registration/dispatch
+// layer -- the store-level coverage for these already lives in the
+// krill/store package tests; this file is specifically about the
+// RegisterEntityCreateAll wrapper layer, never the HTTP handlers
+// (krill/api/handlers/product.go, featureset.go, decision.go have their own
+// coverage -- Persona and NonGoal have no HTTP handler to cover).
 //
 // Mirrors milestone_test.go's seeding/HTTP/auth plumbing (duplicated here,
 // not shared, since this file compiles into its own go_test target -- see
@@ -196,7 +197,7 @@ func TestMCPEntityCreateSurface_EndToEnd(t *testing.T) {
 
 	designSrv := server.New()
 	designReg := server.NewRegistry(designSrv)
-	tools.RegisterEntityCreateAll(designReg, sessions, entities.Products(), entities.FeatureSets(), entities.Decisions())
+	tools.RegisterEntityCreateAll(designReg, sessions, entities.Products(), entities.FeatureSets(), entities.Decisions(), entities.Personas(), entities.NonGoals())
 
 	// Mirrors ../main.go's own construction order exactly (see
 	// milestone_test.go's identical comment): every entity-create write
@@ -346,6 +347,75 @@ func TestMCPEntityCreateSurface_EndToEnd(t *testing.T) {
 		require.NoError(t, err)
 	})
 
+	var personaID string
+	t.Run("create_persona mints a new Persona row under the Product", func(t *testing.T) {
+		cs, err := connectEntityMCP(t, designURL, agentToken)
+		require.NoError(t, err)
+
+		res, err := cs.CallTool(ctx, &mcp.CallToolParams{
+			Name: "create_persona",
+			Arguments: map[string]any{
+				"krill_session_id": selfSessionID.String(),
+				"product_id":       productID,
+				"name":             "entity create e2e persona",
+				"description":      "created directly over MCP, never only via krill/importer",
+			},
+		})
+		require.NoError(t, err)
+		require.False(t, res.IsError, "unexpected error: %s", entityTextOf(res))
+
+		structured, ok := res.StructuredContent.(map[string]any)
+		require.True(t, ok)
+		personaID, ok = structured["id"].(string)
+		require.True(t, ok, "response must carry an id field")
+		_, err = uuid.Parse(personaID)
+		require.NoError(t, err)
+	})
+
+	t.Run("create_non_goal rejects an unknown kind", func(t *testing.T) {
+		cs, err := connectEntityMCP(t, designURL, agentToken)
+		require.NoError(t, err)
+
+		res, err := cs.CallTool(ctx, &mcp.CallToolParams{
+			Name: "create_non_goal",
+			Arguments: map[string]any{
+				"krill_session_id": selfSessionID.String(),
+				"product_id":       productID,
+				"kind":             "sometimes",
+				"name":             "bad kind non-goal",
+			},
+		})
+		require.NoError(t, err)
+		assert.True(t, res.IsError, "kind must be restricted to permanent/deferred")
+		assert.Contains(t, entityTextOf(res), "kind")
+	})
+
+	var nonGoalID string
+	t.Run("create_non_goal mints a new NonGoal row under the Product", func(t *testing.T) {
+		cs, err := connectEntityMCP(t, designURL, agentToken)
+		require.NoError(t, err)
+
+		res, err := cs.CallTool(ctx, &mcp.CallToolParams{
+			Name: "create_non_goal",
+			Arguments: map[string]any{
+				"krill_session_id": selfSessionID.String(),
+				"product_id":       productID,
+				"kind":             "deferred",
+				"name":             "entity create e2e non-goal",
+				"body":             "created directly over MCP, never only via krill/importer",
+			},
+		})
+		require.NoError(t, err)
+		require.False(t, res.IsError, "unexpected error: %s", entityTextOf(res))
+
+		structured, ok := res.StructuredContent.(map[string]any)
+		require.True(t, ok)
+		nonGoalID, ok = structured["id"].(string)
+		require.True(t, ok, "response must carry an id field")
+		_, err = uuid.Parse(nonGoalID)
+		require.NoError(t, err)
+	})
+
 	// ── cross-check against the store layer directly, so this test proves ──
 	// ── the MCP dispatch path produces the same result the store itself ────
 	// ── would -- never a divergent MCP-local projection ─────────────────────
@@ -370,5 +440,19 @@ func TestMCPEntityCreateSurface_EndToEnd(t *testing.T) {
 		assert.Equal(t, fsID, decision.FeatureSetID)
 		require.NotNil(t, decision.Body)
 		assert.Equal(t, "created directly over MCP, never only via HTTP", *decision.Body)
+
+		personaUUID, err := uuid.Parse(personaID)
+		require.NoError(t, err)
+		persona, err := entities.Personas().GetCurrentByID(ctx, personaUUID)
+		require.NoError(t, err)
+		assert.Equal(t, pID, persona.ProductID)
+		assert.Equal(t, "entity create e2e persona", persona.Name)
+
+		nonGoalUUID, err := uuid.Parse(nonGoalID)
+		require.NoError(t, err)
+		nonGoal, err := entities.NonGoals().GetCurrentByID(ctx, nonGoalUUID)
+		require.NoError(t, err)
+		assert.Equal(t, pID, nonGoal.ProductID)
+		assert.Equal(t, store.NonGoalKindDeferred, nonGoal.Kind)
 	})
 }
