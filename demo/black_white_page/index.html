@@ -12,5 +12,15 @@
   </style>
 </head>
 <body>
+  <script>
+    document.body.addEventListener('click', function () {
+      var current = window.getComputedStyle(document.body).backgroundColor;
+      if (current === 'rgb(0, 0, 0)') {
+        document.body.style.background = '#ffffff';
+      } else {
+        document.body.style.background = '#000000';
+      }
+    });
+  </script>
 </body>
 </html>
