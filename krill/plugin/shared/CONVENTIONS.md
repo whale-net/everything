@@ -74,12 +74,16 @@ around:**
    `krill-work` still falls back to `tools/project-manager`'s GitHub
    Issues/Project mechanics verbatim — every persona that takes this path
    must say so explicitly.
-2. **No MCP tool lets a `PersonaAgent` discover claimable tasks by lane** —
-   `claim_task` needs a `task_id` already in hand, and the task-listing read
-   tools that exist (`list_claimed_tasks`, `list_cancelled_tasks`,
-   `list_escalated_tasks`) are `PersonaSwarmOperator`-only on `/mcp/ops` and
-   don't cover "unclaimed, ready" tasks anyway. `planner`'s summary is the
-   only durable manifest of a milestone's task set — see "Work axis" below.
+2. **`list_tasks` covers milestone-wide task discovery, but not
+   claimability.** `list_tasks {milestone_id}` (issue #2941, ungated, any
+   persona, `/mcp/design`) returns every task under a milestone/milepebble
+   — id, title, `current_lane`, attempt count, and whether a claim is
+   currently live — so `planner`'s hand-carried summary is no longer the
+   only way to find a milestone's task ids (see "Work axis" below). It does
+   **not** filter by claimable: unresolved dependencies, the attempt cap,
+   and an active escalation are invisible to it — `claim_task` still needs
+   a `task_id` already in hand, and a caller still cross-checks `get_task
+   {id}` per candidate before calling it.
 
 **Everything work-axis-write-capable — milestone authoring, delivery
 status/shipment/recut/abandon, `create_task`, and the full task lifecycle
@@ -215,7 +219,11 @@ entity any event in the session has touched.
 
 Read-only slice queries (`get_feature_set_slice`, `get_feature_slice`,
 `get_requirement_slice`, `get_product_slice`, all `{id}` → `slice.Document`) are
-never gated by a `krill_session` and available to every persona.
+never gated by a `krill_session` and available to every persona. Each
+takes a surrogate id you must already have — `list_products {scope_id}` →
+`{products: [{id, name, vision}]}` (issue #2941, ungated, `/mcp/design`)
+is the discovery entry point for `get_product_slice`'s `product_id`, in
+place of a human pasting one in out-of-band.
 
 ### record_note fallback for anchor-less designs
 
@@ -409,6 +417,11 @@ usable today.
 - `get_task {id}` → the same `work.Payload` shape every write tool above
   returns. Ungated, no session required — the way to re-read a task's
   current lane/claim/notes/attempts without re-deriving them yourself.
+- `list_tasks {milestone_id}` → `{tasks: [{id, title, current_lane,
+  attempt_count, has_live_claim}]}`, oldest-created first. Ungated, no
+  session required — the way to discover a milestone's/milepebble's task
+  ids in the first place rather than needing them handed to you (issue
+  #2941). Call `get_task` on a returned id for its full payload.
 
 **Lane semantics, concretely, for `worker`/`validator`:** finishing a phase
 cleanly is `complete_task {verdict: "pass"}` (Scaffold→Implementation,
@@ -418,14 +431,13 @@ check at `Testing`, or a failed criterion at `Validation`, is
 Implementation). Being blocked with no pass/fail judgment to make is
 `abandon_task` (no lane change; the task goes back to claimable).
 
-**No task-discovery query exists for `PersonaAgent`.** `planner`'s
-summary — every task id, title, and starting lane `create_task` returned —
-is the only durable manifest of a milestone's task set; there is no way to
-re-derive it later from krill alone. `implement`/`validate` must be handed
-that manifest explicitly by whoever dispatches them (the same way a human
-today carries a plan identifier between skill invocations), and should
-re-read each task's live state via `get_task {id}` rather than trust a
-stale copy of it.
+**`list_tasks {milestone_id}` is now the durable manifest of a milestone's
+task set** (issue #2941) — no persona restriction, so `implement`/
+`validate` can re-derive a milestone's task ids directly from krill
+instead of depending on `planner`'s hand-carried summary surviving between
+skill invocations. Its own `current_lane`/`attempt_count`/`has_live_claim`
+fields are a discovery aid, not a substitute for the real thing — still
+re-read each task's live state via `get_task {id}` before acting on it.
 
 For the one remaining GitHub-only case — a FeatureSet with no krill
 Milestone to scope `create_task` to — `krill-work` still runs entirely on
