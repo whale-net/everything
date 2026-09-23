@@ -22,28 +22,32 @@ import (
 	"github.com/whale-net/everything/krill/store"
 )
 
-// expectedEntityCreateToolNames is exactly the three tools
+// expectedEntityCreateToolNames is exactly the five tools
 // RegisterEntityCreateAll wires -- see krill/mcp/tools/entity.go.
 var expectedEntityCreateToolNames = []string{
 	"create_product",
 	"create_feature_set",
 	"create_load_bearing_decision",
+	"create_persona",
+	"create_non_goal",
 }
 
 // TestRegisterEntityCreateAll_RegistersExactlyThreeTools proves
 // RegisterEntityCreateAll wires exactly {create_product, create_feature_set,
-// create_load_bearing_decision} -- the three top-of-chain spec entities
-// that, before this file, could only be created over HTTP (POST /products,
-// POST /feature-sets, POST /load-bearing-decisions), never through an MCP
-// tool. Listed over a real in-memory MCP client/server connection
+// create_load_bearing_decision, create_persona, create_non_goal} -- the
+// top-of-chain spec entities that, before this file, could only be created
+// over HTTP (POST /products, POST /feature-sets,
+// POST /load-bearing-decisions) or, for Persona/NonGoal, only through
+// krill/importer's one-shot import path -- never through an MCP tool.
+// Listed over a real in-memory MCP client/server connection
 // (mcp.NewInMemoryTransports), not by inspecting Go source.
-func TestRegisterEntityCreateAll_RegistersExactlyThreeTools(t *testing.T) {
+func TestRegisterEntityCreateAll_RegistersExactlyFiveTools(t *testing.T) {
 	ctx := context.Background()
 	entities := store.New(nil)
 
 	srv := mcp.NewServer(server.Implementation, nil)
 	reg := server.NewRegistry(srv)
-	tools.RegisterEntityCreateAll(reg, nil, entities.Products(), entities.FeatureSets(), entities.Decisions())
+	tools.RegisterEntityCreateAll(reg, nil, entities.Products(), entities.FeatureSets(), entities.Decisions(), entities.Personas(), entities.NonGoals())
 
 	serverTransport, clientTransport := mcp.NewInMemoryTransports()
 	_, err := srv.Connect(ctx, serverTransport, nil)
@@ -60,7 +64,7 @@ func TestRegisterEntityCreateAll_RegistersExactlyThreeTools(t *testing.T) {
 		registered[tool.Name] = true
 	}
 
-	require.Len(t, registered, len(expectedEntityCreateToolNames), "RegisterEntityCreateAll must register exactly these three tools -- nothing more, nothing fewer")
+	require.Len(t, registered, len(expectedEntityCreateToolNames), "RegisterEntityCreateAll must register exactly these five tools -- nothing more, nothing fewer")
 	for _, name := range expectedEntityCreateToolNames {
 		assert.True(t, registered[name], "%s must be registered", name)
 	}
