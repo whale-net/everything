@@ -10,13 +10,28 @@
       height: 100%;
     }
   </style>
+  <script>
+    // Single source of truth for the persisted-color key and vocabulary,
+    // declared here (not in the body script) so this same, synchronous
+    // head script can read it before body is parsed.
+    var STORAGE_KEY = 'black_white_page:color';
+
+    // Restore-on-load, read-failure-safe. Wiring this into the actual
+    // pre-paint apply + toggle-state reconciliation is Implementation.
+    function readColor() {
+      try {
+        var v = localStorage.getItem(STORAGE_KEY);
+        return (v === 'black' || v === 'white') ? v : null;
+      } catch (e) {
+        return null;
+      }
+    }
+  </script>
 </head>
 <body>
   <script>
-    // Single source of truth for the persisted-color key and vocabulary.
-    // Task 2 (restore-on-load) reuses this same key and 'black'/'white' values.
-    var STORAGE_KEY = 'black_white_page:color';
-
+    // STORAGE_KEY is declared in the <head> script above so it's available
+    // before this script runs.
     function saveColor(color) {
       try {
         localStorage.setItem(STORAGE_KEY, color);
