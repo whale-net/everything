@@ -52,7 +52,7 @@ Ships alongside: `poll`, `polloption`, `pollvote` tables (votes are never delete
 Must not foreclose: LB1 (C9 may later render an agent's question as a poll — a poll is keyed by its
   own ID and Slack message ts, not by a producer route), LB3 (votes are recorded by the voter's
   Slack user ID, never FCM's)
-Deliberately deferred: creating polls from a modal, scheduled auto-close/deadlines, editing or adding
+Deliberately deferred: picking a different channel from the form, scheduled auto-close/deadlines, editing or adding
   options after posting, per-option custom emoji, results export or charts, recurring polls
 FR budget: 8
 ```

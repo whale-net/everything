@@ -4,6 +4,10 @@ Simple Poll-style polls created with a slash command. Delivers capability C12 (s
 
 ## Usage
 
+Type `/poll` with nothing after it to open the **Create a poll** form: a question, option fields (3 to start, **+ Add another option** up to 10), an **Anonymous votes** checkbox, and a **Votes per person** picker. Mistakes are shown next to the field; if the bot isn't in the channel, the form stays open with an "invite me" error.
+
+For quick polls, the one-line form also works:
+
 ```
 /poll "Question?" "Option 1" "Option 2" [anonymous] [limit N]
 ```
@@ -20,9 +24,10 @@ Bad input is answered with an ephemeral usage message; nothing is stored.
 
 Everything runs in the `bot` deployment over the existing bolt Socket Mode connection — no new service, no HTTP endpoint.
 
-1. `/poll` (`bot/handlers/poll.py`) parses the text (`bot/poll/parse.py`), records the command in `slackcommand`, inserts the poll and options, posts the Block Kit message (`bot/poll/render.py`), then stores the message `ts` on the poll.
-2. A vote button click arrives as a `block_actions` event on the socket. `cast_poll_vote` (`db/dal/poll_dal.py`) locks the poll row, applies the toggle/limit rules, and returns a fresh snapshot; the handler re-renders the message with `chat.update`.
-3. A per-poll in-process lock keeps vote → render → `chat.update` ordered so a stale render never overwrites a newer one (the bot runs as a single replica).
+1. A bare `/poll` opens the modal (`bot/poll/modal.py`); **+ Add another option** re-renders it with `views.update` (unchanged `block_id`s keep typed values). On submit, the form is validated and the poll is posted *before* the modal is acked, so a posting failure can be shown in the form.
+2. `/poll <text>` (`bot/handlers/poll.py`) parses the text (`bot/poll/parse.py`), records the command in `slackcommand`, inserts the poll and options, posts the Block Kit message (`bot/poll/render.py`), then stores the message `ts` on the poll.
+3. A vote button click arrives as a `block_actions` event on the socket. `cast_poll_vote` (`db/dal/poll_dal.py`) locks the poll row, applies the toggle/limit rules, and returns a fresh snapshot; the handler re-renders the message with `chat.update`.
+4. A per-poll in-process lock keeps vote → render → `chat.update` ordered so a stale render never overwrites a newer one (the bot runs as a single replica).
 
 ## Data (schema `fcm`)
 
@@ -36,4 +41,4 @@ Slack users and channels are stored by Slack ID, not as FKs to `slackuser`/`slac
 
 ## Slack app setup
 
-The Slack app config must include a `/poll` slash command and have Interactivity enabled (Socket Mode apps need no request URL). The bot must be a member of the channel to post the poll; otherwise the creator gets an ephemeral "invite me" message.
+The Slack app config must include a `/poll` slash command and have Interactivity enabled (needed for buttons and the modal) (Socket Mode apps need no request URL). The bot must be a member of the channel to post the poll; otherwise the creator gets an ephemeral "invite me" message.

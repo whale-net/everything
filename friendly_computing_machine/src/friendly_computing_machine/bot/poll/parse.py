@@ -23,7 +23,10 @@ USAGE = (
 
 
 class PollParseError(ValueError):
-    pass
+    def __init__(self, message: str, field: str | None = None):
+        super().__init__(message)
+        # "question" or "options" when the error belongs to one input
+        self.field = field
 
 
 @dataclass(frozen=True)
@@ -92,16 +95,35 @@ def parse_poll_command(text: str) -> PollSpec:
             )
 
     if not quoted:
-        raise PollParseError("A poll needs a question.")
-    question, options = quoted[0], quoted[1:]
-    if len(options) < MIN_OPTIONS:
-        raise PollParseError(f"A poll needs at least {MIN_OPTIONS} options.")
-    if len(options) > MAX_OPTIONS:
-        raise PollParseError(f"A poll can have at most {MAX_OPTIONS} options.")
+        raise PollParseError("A poll needs a question.", field="question")
+    return build_poll_spec(quoted[0], quoted[1:], anonymous, vote_limit)
+
+
+def build_poll_spec(
+    question: str,
+    options: list[str],
+    anonymous: bool = False,
+    vote_limit: int | None = None,
+) -> PollSpec:
+    """Validate a poll from any input surface (slash command text or the modal)."""
+    if not question:
+        raise PollParseError("A poll needs a question.", field="question")
     if len(question) > MAX_QUESTION_LEN:
-        raise PollParseError(f"Question is longer than {MAX_QUESTION_LEN} characters.")
+        raise PollParseError(
+            f"Question is longer than {MAX_QUESTION_LEN} characters.", field="question"
+        )
+    if len(options) < MIN_OPTIONS:
+        raise PollParseError(
+            f"A poll needs at least {MIN_OPTIONS} options.", field="options"
+        )
+    if len(options) > MAX_OPTIONS:
+        raise PollParseError(
+            f"A poll can have at most {MAX_OPTIONS} options.", field="options"
+        )
     if any(len(o) > MAX_OPTION_LEN for o in options):
-        raise PollParseError(f"Options must be at most {MAX_OPTION_LEN} characters.")
+        raise PollParseError(
+            f"Options must be at most {MAX_OPTION_LEN} characters.", field="options"
+        )
 
     # a limit that covers every option is no limit at all
     if vote_limit is not None and vote_limit >= len(options):

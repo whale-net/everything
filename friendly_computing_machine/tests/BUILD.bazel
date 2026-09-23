@@ -69,6 +69,7 @@ py_test(
     srcs = [
         "conftest.py",
         "poll/test_poll_dal.py",
+        "poll/test_poll_modal.py",
         "poll/test_poll_parse.py",
         "poll/test_poll_render.py",
     ],
