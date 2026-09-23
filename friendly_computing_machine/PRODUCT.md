@@ -14,11 +14,11 @@ Live milestone status is **not** in this file. It is tracked as `Ledger: M<n> �
 
 ## Vision
 
-FCM is the Slack front door to the `everything` monorepo. For the people in the workspace, it is a community bot and an AI assistant that lives where they already talk: it runs the music poll, answers questions with the channel's context, and eventually holds real conversations. For the monorepo's services and agents, it is the one place that holds Slack credentials. They post notifications, ask a human a question, or receive a slash command through FCM instead of each one integrating with Slack. All of this runs on free tiers: FCM uses Slack's free Bolt/Socket Mode surface, never Slack's paid agent platform. Agent reasoning lives in whagent_net, not in FCM.
+FCM is the Slack front door to the `everything` monorepo. For the people in the workspace, it is a community bot and an AI assistant that lives where they already talk: it runs the music poll and ad-hoc polls, answers questions with the channel's context, and eventually holds real conversations. For the monorepo's services and agents, it is the one place that holds Slack credentials. They post notifications, ask a human a question, or receive a slash command through FCM instead of each one integrating with Slack. All of this runs on free tiers: FCM uses Slack's free Bolt/Socket Mode surface, never Slack's paid agent platform. Agent reasoning lives in whagent_net, not in FCM.
 
 ## Personas
 
-- **Community member** — a person in the Slack workspace who uses the social and AI features (`/wai`, the music poll, and later AI conversations and game-server status).
+- **Community member** — a person in the Slack workspace who uses the social and AI features (`/wai`, the music poll, `/poll`, and later AI conversations and game-server status).
 - **Service / agent** — another monorepo system (manmanv2, whagent_net, deploy tooling, krill agents) that uses FCM to reach people in Slack.
 - **Operator** — runs the FCM deployment. This is the same person who owns the workspace and needs it to be deployable and debuggable.
 

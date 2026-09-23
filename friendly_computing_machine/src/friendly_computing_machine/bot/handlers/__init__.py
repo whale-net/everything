@@ -2,5 +2,6 @@
 from . import actions  # noqa
 from . import commands  # noqa
 from . import events  # noqa
+from . import poll  # noqa
 from . import shortcuts  # noqa
 from . import views  # noqa

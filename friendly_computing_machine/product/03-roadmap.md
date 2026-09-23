@@ -41,6 +41,22 @@ Deliberately deferred: assistant tool actions (C11 → Later), agent-initiated q
 FR budget: 12
 ```
 
+## M4 — A community member can run an ad-hoc Simple Poll-style poll in any channel FCM is in, with every vote stored
+
+Independent of M1–M3: it needs no V1 removal, no service contract, and no whagent_net. It can ship before M1 closes; M1's "no new user-facing features" scope is unchanged.
+
+```
+Delivers: C12
+Ships alongside: `poll`, `polloption`, `pollvote` tables (votes are never deleted; un-voting stamps
+  `removed_at`); docs/poll.md; `/poll` registered in the Slack app config
+Must not foreclose: LB1 (C9 may later render an agent's question as a poll — a poll is keyed by its
+  own ID and Slack message ts, not by a producer route), LB3 (votes are recorded by the voter's
+  Slack user ID, never FCM's)
+Deliberately deferred: creating polls from a modal, scheduled auto-close/deadlines, editing or adding
+  options after posting, per-option custom emoji, results export or charts, recurring polls
+FR budget: 8
+```
+
 ## Later coverage
 
 Every `Later` capability is protected by a load-bearing decision:

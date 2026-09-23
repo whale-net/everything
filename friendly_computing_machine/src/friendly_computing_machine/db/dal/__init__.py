@@ -40,6 +40,15 @@ from .music_poll_dal import (
     update_music_poll_instance,
     update_music_poll_response,
 )
+from .poll_dal import (
+    PollSnapshot,
+    VoteOutcome,
+    cast_poll_vote,
+    close_poll,
+    create_poll,
+    get_poll_snapshot,
+    set_poll_message,
+)
 from .slack_dal import (
     find_poll_instance_messages,
     get_bot_slack_user_slack_ids,
@@ -121,6 +130,14 @@ __all__ = [
     "get_music_poll_responses",
     "update_music_poll_response",
     "delete_music_poll_response",
+    # Poll functions
+    "PollSnapshot",
+    "VoteOutcome",
+    "create_poll",
+    "set_poll_message",
+    "get_poll_snapshot",
+    "cast_poll_vote",
+    "close_poll",
     # ManMan functions
     "insert_manman_status_update",
     "get_manman_status_update_by_id",
