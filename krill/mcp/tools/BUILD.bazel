@@ -289,11 +289,12 @@ go_test(
 
 # No-database unit test: RegisterEntityCreateAll registers exactly
 # {create_product, create_feature_set, create_load_bearing_decision,
-# create_persona, create_non_goal} over a real in-memory MCP client/server
-# connection -- the top-of-chain spec entities that, before this test's
-# sibling entity.go, could only be created over HTTP (Product, FeatureSet,
-# LoadBearingDecision) or only through krill/importer's one-shot import path
-# (Persona, NonGoal). Mirrors :milestone_status_registration_test's own
+# create_persona, create_non_goal, create_feature, create_requirement} over
+# a real in-memory MCP client/server connection -- the non-mediated spec
+# entity creation tools that, before this test's sibling entity.go, could
+# only be created over HTTP (Product, FeatureSet, LoadBearingDecision,
+# Feature, Requirement) or only through krill/importer's one-shot import
+# path (Persona, NonGoal). Mirrors :milestone_status_registration_test's own
 # store.New(nil)/in-memory transport technique, so it needs no Docker and
 # is part of `bazel test //...`.
 go_test(
@@ -329,9 +330,10 @@ go_test(
 )
 
 # Real Postgres + real HTTP-transport MCP client integration test for the
-# top-of-chain entity creation surface (entity.go): create_product ->
+# non-mediated entity creation surface (entity.go): create_product ->
 # create_feature_set -> create_load_bearing_decision, plus create_persona
-# and create_non_goal under the same Product, exercised through the MCP
+# and create_non_goal under the same Product, plus create_feature ->
+# create_requirement under the same FeatureSet, exercised through the MCP
 # tool registration/dispatch layer, plus LB1/LB2 validation rejections
 # and a cross-check against the store layer directly. Deliberately NOT
 # part of `bazel test //...` -- see //libs/go/dbtest's README, mirrored by

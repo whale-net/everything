@@ -1,19 +1,27 @@
-// This file is krill's top-of-chain entity creation MCP tool group:
+// This file is krill's non-mediated entity creation MCP tool group:
 // create_product, create_feature_set, create_load_bearing_decision,
-// create_persona, and create_non_goal -- thin wrappers over
-// store.ProductStore.Create/store.FeatureSetStore.Create/
+// create_persona, create_non_goal, create_feature, and create_requirement --
+// thin wrappers over store.ProductStore.Create/store.FeatureSetStore.Create/
 // store.LoadBearingDecisionStore.Create/store.PersonaStore.Create/
-// store.NonGoalStore.Create, mirroring krill/api/handlers/product.go's,
-// featureset.go's, and decision.go's HTTP surface for the first three
-// capabilities (LB7), the same way milestone.go mirrors
-// krill/api/handlers/milestone.go. Persona and NonGoal have no HTTP handler
-// of their own to mirror -- before this file, the only way to create either
-// was krill/importer/write.go's one-shot import path, never a live session;
-// these two tools wrap store.PersonaStore/store.NonGoalStore directly, same
-// as the other three tools wrap their store, just with no handlers.IDResponse
-// producer in between to reuse. propose_entities (design.go) is explicitly
-// scoped to Feature/Requirement only and never reaches this high in the spec
-// chain.
+// store.NonGoalStore.Create/store.FeatureStore.Create/
+// store.RequirementStore.Create, mirroring krill/api/handlers/product.go's,
+// featureset.go's, decision.go's, feature.go's, and requirement.go's HTTP
+// surface for those five capabilities (LB7), the same way milestone.go
+// mirrors krill/api/handlers/milestone.go. Persona and NonGoal have no HTTP
+// handler of their own to mirror -- before this file, the only way to
+// create either was krill/importer/write.go's one-shot import path, never a
+// live session; those two tools wrap store.PersonaStore/store.NonGoalStore
+// directly, same as the other tools wrap their store, just with no
+// handlers.IDResponse producer in between to reuse. Before this file, a
+// Product, FeatureSet, or LoadBearingDecision could only be created over
+// HTTP (POST /products, POST /feature-sets, POST /load-bearing-decisions);
+// create_feature/create_requirement close the same gap for Feature/
+// Requirement (issue #2961) -- design.go's propose_entities remains the
+// only mediated-intake path (FR9/FR10, acting != on_behalf_of required),
+// but a self-authoring caller (acting == on_behalf_of, e.g. an architect
+// persona or a straight import/replay with no Requirement Contributor in
+// the loop) now has a non-mediated way to create Feature/Requirement rows
+// too, exactly like every other entity kind in this file.
 package tools
 
 import (
@@ -258,18 +266,122 @@ func RegisterCreateNonGoal(reg *server.Registry, sessions store.SessionStore, no
 	})
 }
 
+// ── create_feature (write) ──────────────────────────────────────────────────
+
+// createFeatureInput is create_feature's argument schema -- mirrors
+// api/handlers/feature.go's createFeatureRequest, plus the krill session id
+// that request's HTTP twin takes via a header instead.
+type createFeatureInput struct {
+	krillSessionInput
+	FeatureSetID string  `json:"feature_set_id" jsonschema:"The FeatureSet surrogate id this Feature belongs to, as a UUID string (LB2's single required parent reference)."`
+	Name         string  `json:"name" jsonschema:"The Feature's name, unique within its parent FeatureSet (LB1)."`
+	Description  *string `json:"description,omitempty" jsonschema:"Optional Feature description."`
+}
+
+// RegisterCreateFeature registers create_feature: mints a new Feature row
+// under an existing FeatureSet via store.FeatureStore.Create -- a
+// non-mediated path (issue #2961), distinct from design.go's propose_entities
+// (FR9/FR10's mediated intake, which requires acting != on_behalf_of): the
+// caller here is attributed to the resolved krill session's own Acting/
+// OnBehalfOf identities exactly like every other tool in this file, with no
+// distinctness requirement.
+func RegisterCreateFeature(reg *server.Registry, sessions store.SessionStore, features store.FeatureStore) {
+	server.RegisterWrite(reg, &mcp.Tool{
+		Name:        "create_feature",
+		Description: "Create a Feature under a FeatureSet (FR2) -- a non-mediated alternative to propose_entities for a self-authoring caller.",
+	}, []server.Persona{server.PersonaRequirementContributor, server.PersonaAgent, server.PersonaSwarmOperator}, func(ctx context.Context, _ *mcp.CallToolRequest, in createFeatureInput) (*mcp.CallToolResult, handlers.IDResponse, error) {
+		var zero handlers.IDResponse
+
+		sess, err := requireKrillSession(ctx, sessions, in.KrillSessionID)
+		if err != nil {
+			return nil, zero, err
+		}
+
+		featureSetID, err := uuid.Parse(in.FeatureSetID)
+		if err != nil {
+			return nil, zero, fmt.Errorf("feature_set_id: invalid or missing UUID")
+		}
+		if in.Name == "" {
+			return nil, zero, fmt.Errorf("name: required")
+		}
+
+		feature, err := features.Create(ctx, sess.ScopeID, featureSetID, in.Name, in.Description)
+		if err != nil {
+			return nil, zero, err
+		}
+		return nil, handlers.IDResponse{ID: feature.ID.String()}, nil
+	})
+}
+
+// ── create_requirement (write) ──────────────────────────────────────────────
+
+// createRequirementInput is create_requirement's argument schema -- mirrors
+// api/handlers/requirement.go's createRequirementRequest, plus the krill
+// session id that request's HTTP twin takes via a header instead. Kind must
+// be "FR" or "NFR" -- there is no separate tool per kind, mirroring
+// store/requirement.go's one-table-two-kinds design.
+type createRequirementInput struct {
+	krillSessionInput
+	FeatureID string  `json:"feature_id" jsonschema:"The Feature surrogate id this Requirement belongs to, as a UUID string (LB2's single required parent reference)."`
+	Kind      string  `json:"kind" jsonschema:"FR or NFR."`
+	Name      string  `json:"name" jsonschema:"The Requirement's name, unique within its parent Feature (LB1)."`
+	Body      *string `json:"body,omitempty" jsonschema:"Optional Requirement body."`
+}
+
+// RegisterCreateRequirement registers create_requirement: mints a new
+// Requirement row (FR or NFR) under an existing Feature via
+// store.RequirementStore.Create -- a non-mediated path (issue #2961), the
+// same distinction from design.go's propose_entities as create_feature
+// above.
+func RegisterCreateRequirement(reg *server.Registry, sessions store.SessionStore, requirements store.RequirementStore) {
+	server.RegisterWrite(reg, &mcp.Tool{
+		Name:        "create_requirement",
+		Description: "Create a Requirement (FR or NFR) under a Feature (FR2) -- a non-mediated alternative to propose_entities for a self-authoring caller.",
+	}, []server.Persona{server.PersonaRequirementContributor, server.PersonaAgent, server.PersonaSwarmOperator}, func(ctx context.Context, _ *mcp.CallToolRequest, in createRequirementInput) (*mcp.CallToolResult, handlers.IDResponse, error) {
+		var zero handlers.IDResponse
+
+		sess, err := requireKrillSession(ctx, sessions, in.KrillSessionID)
+		if err != nil {
+			return nil, zero, err
+		}
+
+		featureID, err := uuid.Parse(in.FeatureID)
+		if err != nil {
+			return nil, zero, fmt.Errorf("feature_id: invalid or missing UUID")
+		}
+		if in.Name == "" {
+			return nil, zero, fmt.Errorf("name: required")
+		}
+
+		kind := store.RequirementKind(in.Kind)
+		switch kind {
+		case store.RequirementKindFR, store.RequirementKindNFR:
+		default:
+			return nil, zero, fmt.Errorf("kind must be %q or %q, got %q", store.RequirementKindFR, store.RequirementKindNFR, in.Kind)
+		}
+
+		requirement, err := requirements.Create(ctx, sess.ScopeID, featureID, kind, in.Name, in.Body)
+		if err != nil {
+			return nil, zero, err
+		}
+		return nil, handlers.IDResponse{ID: requirement.ID.String()}, nil
+	})
+}
+
 // ── entrypoint ───────────────────────────────────────────────────────────────
 
-// RegisterEntityCreateAll registers every top-of-chain entity creation tool
+// RegisterEntityCreateAll registers every non-mediated entity creation tool
 // this file exposes against reg -- create_product, create_feature_set,
-// create_load_bearing_decision, create_persona, and create_non_goal. The
-// caller (../main.go) mounts reg at the design mount
-// (server.designMountPath via designReg), the same mount every other write
-// tool in this package registers on.
-func RegisterEntityCreateAll(reg *server.Registry, sessions store.SessionStore, products store.ProductStore, featureSets store.FeatureSetStore, decisions store.LoadBearingDecisionStore, personas store.PersonaStore, nonGoals store.NonGoalStore) {
+// create_load_bearing_decision, create_persona, create_non_goal,
+// create_feature, and create_requirement. The caller (../main.go) mounts reg
+// at the design mount (server.designMountPath via designReg), the same
+// mount every other write tool in this package registers on.
+func RegisterEntityCreateAll(reg *server.Registry, sessions store.SessionStore, products store.ProductStore, featureSets store.FeatureSetStore, decisions store.LoadBearingDecisionStore, personas store.PersonaStore, nonGoals store.NonGoalStore, features store.FeatureStore, requirements store.RequirementStore) {
 	RegisterCreateProduct(reg, sessions, products)
 	RegisterCreateFeatureSet(reg, sessions, featureSets)
 	RegisterCreateLoadBearingDecision(reg, sessions, decisions)
 	RegisterCreatePersona(reg, sessions, personas)
 	RegisterCreateNonGoal(reg, sessions, nonGoals)
+	RegisterCreateFeature(reg, sessions, features)
+	RegisterCreateRequirement(reg, sessions, requirements)
 }
