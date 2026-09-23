@@ -20,11 +20,12 @@ format) is unchanged; what changed is task discovery and dispatch.
 
 ## Steps (Milestone path)
 
-1. **Discovery — no krill query exists for this** (CONVENTIONS.md "No
-   task-discovery query exists"): you must already have the task manifest
-   `krill-work:plan`/`planner` reported (every task id, title, starting
-   lane, and dependency edges). If you don't have it, ask the user for it —
-   there is no MCP call that reconstructs it.
+1. **Discovery**: use the task manifest `krill-work:plan`/`planner`
+   reported (every task id, title, starting lane, and dependency edges) if
+   you have it. If you don't, call `list_tasks {milestone_id}`
+   (CONVENTIONS.md "Work axis") for the task ids, then `get_task {id}` on
+   each for its dependency edges — `list_tasks` itself doesn't carry
+   dependencies, only id/title/`current_lane`/attempt count/live-claim.
 2. For each task whose dependencies (from the manifest) are all `Done` —
    call `get_task {id}` on each to confirm current state rather than
    trusting the manifest's snapshot — create its branch/worktree exactly as

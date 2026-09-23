@@ -42,9 +42,9 @@ a `signoff` event with `signoff_status: approved`, and the Milestone id:
    does *not* name task ids (it names a design-session/signoff event
    instead) means no prior `planner` run has happened — proceed. A note
    that does name task ids means a prior run already created them — **stop
-   and report the existing state** (ask whoever dispatched you for the task
-   manifest that run returned; krill has no query to re-derive it — see
-   CONVENTIONS.md "No task-discovery query exists"). If the note is
+   and report the existing state** (call `list_tasks {milestone_id}` to
+   re-derive that run's task manifest directly — CONVENTIONS.md "Work
+   axis" — rather than asking whoever dispatched you). If the note is
    ambiguous (freeform text, not a guaranteed machine-readable signal),
    don't guess either way — ask whoever dispatched you to confirm before
    creating tasks that might duplicate a prior run's.
