@@ -609,7 +609,7 @@ func (s milestoneAuthoringStore) AddDiscoveredScope(ctx context.Context, scopeID
 
 	var result DiscoveredScopeResult
 	if input.FeatureSetID != nil {
-		feature, err := createFeatureTx(ctx, tx, scopeID, *input.FeatureSetID, input.Name, input.Description)
+		feature, err := createFeatureTx(ctx, tx, scopeID, *input.FeatureSetID, input.Name, input.Description, nil)
 		if err != nil {
 			return DiscoveredScopeResult{}, err
 		}

@@ -9,13 +9,17 @@
 // through #2495's renderer, and proving every entity FR16's report says it
 // created is present in what comes back out -- keyed by entity id against
 // the report, never by diffing rendered text against the original
-// document (the roadmap's own success condition explicitly rejects
-// byte-equivalence: capability numbering in krill's own capability map is
-// allocated, not sequential -- see product/02-capability-map.md's own
-// "Numbering is by allocation, not by bucket" note -- so the renderer's
-// FR14 position-derived Cn citations are *expected* to renumber some
-// capabilities on the way out; LBn citations are not, because krill's own
-// seven Load-bearing decisions have no such gaps).
+// document.
+//
+// Cn/LBn citations now round-trip exactly (issue #2969): the importer
+// (write.go's CreateWithDisplayNumber) preserves the source document's own
+// numeral verbatim instead of letting a fresh one be assigned by creation
+// order, and the renderer reads that stored DisplayNumber back rather than
+// recomputing one from sibling position. Krill's own capability map's
+// "Numbering is by allocation, not by bucket" convention (C25-C28 appended
+// out of position in product/02-capability-map.md) is exactly the case this
+// guards -- before #2969, re-rendering after import would have silently
+// renumbered C25-C28.
 //
 // Only krill's own brief is imported here. Importing `whagent_net` is
 // C27/M2 and explicitly out of scope for this task -- this file never
@@ -131,22 +135,6 @@ func krillDocsRoot(t *testing.T) string {
 	return filepath.Dir(productMD)
 }
 
-// numberByOrder assigns a 1-based display number to every element of
-// entities in the order the slice already arrives in, mirroring
-// krill/render's own unexported numberByOrder (render.go). This is a
-// deliberately independent re-implementation -- not a call into
-// krill/render's internals -- so this test proves the renderer's actual
-// numbering by recomputing it from the same ordered read the renderer
-// itself uses (slice.Querier.GetProductSlice), rather than trusting the
-// renderer's own arithmetic.
-func numberByOrder[T any](entities []T, idOf func(T) uuid.UUID) map[uuid.UUID]int {
-	numbers := make(map[uuid.UUID]int, len(entities))
-	for i, e := range entities {
-		numbers[idOf(e)] = i + 1
-	}
-	return numbers
-}
-
 func joinPrefixed(prefix string, nums []int) string {
 	out := ""
 	for i, n := range nums {
@@ -218,8 +206,18 @@ func TestRoundTrip_KrillOwnBrief_EveryFR16EntityPresentInRenderedOutput(t *testi
 	for _, d := range doc.Decisions {
 		decisionByID[d.ID] = d
 	}
-	featureNumbers := numberByOrder(doc.Features, func(f slice.FeatureEntity) uuid.UUID { return f.ID })
-	decisionNumbers := numberByOrder(doc.Decisions, func(d slice.DecisionEntity) uuid.UUID { return d.ID })
+	// DisplayNumber (issue #2969) is read straight off each entity -- not
+	// recomputed from sibling order -- so this test's own lookup tables
+	// mirror render.go's actual source of truth instead of a second,
+	// independently-derived numbering scheme.
+	featureNumbers := make(map[uuid.UUID]int, len(doc.Features))
+	for _, f := range doc.Features {
+		featureNumbers[f.ID] = f.DisplayNumber
+	}
+	decisionNumbers := make(map[uuid.UUID]int, len(doc.Decisions))
+	for _, d := range doc.Decisions {
+		decisionNumbers[d.ID] = d.DisplayNumber
+	}
 
 	milestoneRefs, err := env.store.Milestones().ListRefsByProduct(ctx, env.scopeID, report.ProductID)
 	require.NoError(t, err)
@@ -248,14 +246,12 @@ func TestRoundTrip_KrillOwnBrief_EveryFR16EntityPresentInRenderedOutput(t *testi
 			d, ok := decisionByID[e.EntityID]
 			require.True(t, ok, "decision %s (entity %s) is in the FR16 report but missing from GetProductSlice's Decisions -- the read render.Source itself calls", e.SourceID, e.EntityID)
 			num, ok := decisionNumbers[e.EntityID]
-			require.True(t, ok, "decision %s: expected a computed render position", e.SourceID)
+			require.True(t, ok, "decision %s: expected a stored DisplayNumber", e.SourceID)
 			gotSourceID := fmt.Sprintf("LB%d", num)
-			// krill's own seven Load-bearing decisions are numbered
-			// sequentially with no gaps (unlike the capability map --
-			// see this file's package doc), so the renderer's
-			// position-derived citation is expected to reproduce the
-			// same "LBn" the source document used.
-			assert.Equal(t, e.SourceID, gotSourceID, "decision entity %s: imported as %s but the renderer's own position-derived numbering would call it %s -- citation drifted across the round trip", e.EntityID, e.SourceID, gotSourceID)
+			// The importer preserves the source document's own "LBn" token
+			// verbatim as DisplayNumber (issue #2969) -- this must match
+			// exactly, not just "happen to" for krill's own gapless seven.
+			assert.Equal(t, e.SourceID, gotSourceID, "decision entity %s: imported as %s but round-tripped to %s -- DisplayNumber must survive the round trip unchanged", e.EntityID, e.SourceID, gotSourceID)
 			assert.Equal(t, e.Name, d.Name, "decision %s's title must survive the round trip unchanged", e.SourceID)
 			title := leadingLBLabelRe.ReplaceAllString(e.Name, "")
 			assert.Contains(t, files.ProductMD, fmt.Sprintf("LB%d — %s\n", num, title), "decision %s must render at its round-tripped number with its title preserved", e.SourceID)
@@ -264,17 +260,18 @@ func TestRoundTrip_KrillOwnBrief_EveryFR16EntityPresentInRenderedOutput(t *testi
 			f, ok := featureByID[e.EntityID]
 			require.True(t, ok, "capability %s (entity %s) is in the FR16 report but missing from GetProductSlice's Features -- the read render.Source itself calls", e.SourceID, e.EntityID)
 			assert.Equal(t, e.Name, f.Name, "capability %s's description must survive the round trip unchanged", e.SourceID)
-			// Deliberately not asserting e.SourceID's numeral matches the
-			// renderer's computed number here: krill's own capability map
-			// numbers "by allocation, not by bucket" (round 2/3 entries
-			// C25-C28 appended out of sequence), while FR14 always
-			// computes a citation from current sibling position. A
-			// renumbering here is the *expected*, documented divergence
-			// FR19's semantic-equivalence review must record, not a
-			// round-trip defect -- see this file's package doc.
-			_, ok = featureNumbers[e.EntityID]
-			require.True(t, ok, "capability %s: expected a computed render position", e.SourceID)
-			assert.Contains(t, files.CapabilityMapMD, "— "+f.Name, "capability %s's description must appear in the rendered capability map", e.SourceID)
+			num, ok := featureNumbers[e.EntityID]
+			require.True(t, ok, "capability %s: expected a stored DisplayNumber", e.SourceID)
+			gotSourceID := fmt.Sprintf("C%d", num)
+			// The importer preserves the source document's own "Cn" token
+			// verbatim as DisplayNumber (issue #2969), even though krill's
+			// own capability map appends entries out of position (C25-C28,
+			// "numbering is by allocation, not by bucket" -- see this
+			// file's package doc and product/02-capability-map.md). Before
+			// #2969 this would have silently renumbered on the way out;
+			// now it must not.
+			assert.Equal(t, e.SourceID, gotSourceID, "capability entity %s: imported as %s but round-tripped to %s -- DisplayNumber must survive the round trip unchanged even when the source appended it out of position", e.EntityID, e.SourceID, gotSourceID)
+			assert.Contains(t, files.CapabilityMapMD, fmt.Sprintf("**C%d** — %s\n", num, f.Name), "capability %s must render at its round-tripped number with its description preserved", e.SourceID)
 
 		case "milestone":
 			ref, ok := milestoneByID[e.EntityID]

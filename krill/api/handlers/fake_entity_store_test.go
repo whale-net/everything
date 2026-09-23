@@ -96,6 +96,14 @@ func (f *fakeFeatureStore) Create(ctx context.Context, scopeID, featureSetID uui
 	return store.Feature{ID: uuid.New(), ScopeID: scopeID, FeatureSetID: featureSetID, Name: name, Description: description}, nil
 }
 
+func (f *fakeFeatureStore) CreateWithDisplayNumber(ctx context.Context, scopeID, featureSetID uuid.UUID, name string, description *string, displayNumber int) (store.Feature, error) {
+	f.gotScopeID, f.gotFeatureSetID, f.gotName = scopeID, featureSetID, name
+	if f.createErr != nil {
+		return store.Feature{}, f.createErr
+	}
+	return store.Feature{ID: uuid.New(), ScopeID: scopeID, FeatureSetID: featureSetID, Name: name, Description: description, DisplayNumber: displayNumber}, nil
+}
+
 func (f *fakeFeatureStore) GetCurrentByID(ctx context.Context, id uuid.UUID) (store.Feature, error) {
 	return store.Feature{}, store.ErrNotFound
 }
@@ -145,6 +153,14 @@ func (f *fakeDecisionStore) Create(ctx context.Context, scopeID, featureSetID uu
 		return store.LoadBearingDecision{}, f.createErr
 	}
 	return store.LoadBearingDecision{ID: uuid.New(), ScopeID: scopeID, FeatureSetID: featureSetID, Name: name, Body: body}, nil
+}
+
+func (f *fakeDecisionStore) CreateWithDisplayNumber(ctx context.Context, scopeID, featureSetID uuid.UUID, name string, body *string, displayNumber int) (store.LoadBearingDecision, error) {
+	f.gotScopeID, f.gotFeatureSetID, f.gotName = scopeID, featureSetID, name
+	if f.createErr != nil {
+		return store.LoadBearingDecision{}, f.createErr
+	}
+	return store.LoadBearingDecision{ID: uuid.New(), ScopeID: scopeID, FeatureSetID: featureSetID, Name: name, Body: body, DisplayNumber: displayNumber}, nil
 }
 
 func (f *fakeDecisionStore) GetCurrentByID(ctx context.Context, id uuid.UUID) (store.LoadBearingDecision, error) {

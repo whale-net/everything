@@ -275,11 +275,21 @@ func (s mediatedWriteStore) ProposeEntities(ctx context.Context, in MediatedProp
 			if err != nil {
 				return RevisionEvent{}, nil, err
 			}
+			var productID uuid.UUID
+			if err := tx.QueryRow(ctx, `
+				SELECT product_id FROM feature_set WHERE id = $1 AND scope_id = $2 AND valid_to IS NULL
+			`, parentID, in.ScopeID).Scan(&productID); err != nil {
+				return RevisionEvent{}, nil, fmt.Errorf("get feature_set for proposed feature: %w", err)
+			}
+			displayNumber, err := nextDisplayNumber(ctx, tx, "feature", productID, in.ScopeID)
+			if err != nil {
+				return RevisionEvent{}, nil, err
+			}
 			err = tx.QueryRow(ctx, `
-				INSERT INTO feature (scope_id, feature_set_id, name, description, position)
-				VALUES ($1, $2, $3, $4, $5)
+				INSERT INTO feature (scope_id, feature_set_id, name, description, position, display_number)
+				VALUES ($1, $2, $3, $4, $5, $6)
 				RETURNING id
-			`, in.ScopeID, parentID, p.Name, p.Body, position).Scan(&newID)
+			`, in.ScopeID, parentID, p.Name, p.Body, position, displayNumber).Scan(&newID)
 			if err != nil {
 				return RevisionEvent{}, nil, fmt.Errorf("insert feature (proposals[%d]): %w", i, err)
 			}

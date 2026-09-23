@@ -26,12 +26,12 @@ func newRef() slice.EntityRef {
 	return slice.EntityRef{ID: uuid.New(), RevisionID: uuid.New()}
 }
 
-func newFeature(name string) slice.FeatureEntity {
-	return slice.FeatureEntity{EntityRef: newRef(), Name: name}
+func newFeature(name string, displayNumber int) slice.FeatureEntity {
+	return slice.FeatureEntity{EntityRef: newRef(), Name: name, DisplayNumber: displayNumber}
 }
 
-func newDecision(name string) slice.DecisionEntity {
-	return slice.DecisionEntity{EntityRef: newRef(), Name: name}
+func newDecision(name string, displayNumber int) slice.DecisionEntity {
+	return slice.DecisionEntity{EntityRef: newRef(), Name: name, DisplayNumber: displayNumber}
 }
 
 // TestRender_ProducesFourFileLayout is the "rendering a seeded product
@@ -52,8 +52,8 @@ func TestRender_ProducesFourFileLayout(t *testing.T) {
 				Vision:    "Make great widgets.",
 			},
 			Decisions: []slice.DecisionEntity{
-				newDecision("LB1 — Keep it simple"),
-				newDecision("Ship fast"),
+				newDecision("LB1 — Keep it simple", 1),
+				newDecision("Ship fast", 2),
 			},
 		},
 		Personas: []store.Persona{
@@ -125,17 +125,16 @@ func boolMap(m map[string]string) map[string]bool {
 	return out
 }
 
-// TestRender_FR14_InsertingSiblingRenumbersCitations is FR14's core
-// assertion: "inserting a new capability between two existing ones
-// renumbers citations in the rendered output while no stored row changed."
-// X, Y, and Z's identities (EntityRef.ID) never change between the two
-// renders below -- only their position in the slice Source returns, which
-// is exactly what a real insert-between-siblings changes in krill/store
-// (position, never id, per LB2) -- and yet Y's and Z's rendered citation
-// changes. That is the proof this package computes citations from sibling
-// order at render time, never from a stored display-number column (no such
-// column exists, LB2).
-func TestRender_FR14_InsertingSiblingRenumbersCitations(t *testing.T) {
+// TestRender_DisplayNumbersStableAcrossReorder is issue #2969's core
+// assertion, reversing the old (buggy) FR14 behavior this test used to
+// name: inserting a new sibling out of order, or reordering existing
+// siblings, must NOT change any existing entity's rendered citation --
+// DisplayNumber is read verbatim off each entity (stored at creation time),
+// never recomputed from the entity's position in the slice Source returns.
+// X, Y, Z keep C1/C2/C3 even after the slice order is scrambled and a
+// fourth sibling W is appended; W gets its own stored number (C4), not one
+// derived from where it landed in the list.
+func TestRender_DisplayNumbersStableAcrossReorder(t *testing.T) {
 	ctx := context.Background()
 	productID := uuid.New()
 	scopeID := uuid.New()
@@ -144,11 +143,11 @@ func TestRender_FR14_InsertingSiblingRenumbersCitations(t *testing.T) {
 	fsID := uuid.New()
 	featureSet := slice.FeatureSetEntity{EntityRef: slice.EntityRef{ID: fsID, RevisionID: uuid.New()}, Name: "Core"}
 
-	x := newFeature("X")
+	x := newFeature("X", 1)
 	x.FeatureSetID = fsID
-	y := newFeature("Y")
+	y := newFeature("Y", 2)
 	y.FeatureSetID = fsID
-	z := newFeature("Z")
+	z := newFeature("Z", 3)
 	z.FeatureSetID = fsID
 
 	before := &fakeSource{Doc: slice.Document{
@@ -163,30 +162,26 @@ func TestRender_FR14_InsertingSiblingRenumbersCitations(t *testing.T) {
 	assert.Contains(t, beforeFiles.CapabilityMapMD, "- **C2** — Y\n")
 	assert.Contains(t, beforeFiles.CapabilityMapMD, "- **C3** — Z\n")
 
-	// Insert W between X and Y. X, Y, Z's IDs/RevisionIDs are untouched --
-	// only the returned order changes, mirroring what a real
-	// insert-between-siblings does to krill/store's own Position column.
-	w := newFeature("W")
+	// Scramble X/Y's order (mirroring a real Position swap in krill/store)
+	// and append a new sibling W carrying its own stored DisplayNumber --
+	// krill's own capability map appends entries out of position on purpose
+	// (C25-C28), exactly this shape.
+	w := newFeature("W", 4)
 	w.FeatureSetID = fsID
 
 	after := &fakeSource{Doc: slice.Document{
 		SchemaVersion: slice.SchemaVersion,
 		Product:       product,
 		FeatureSets:   []slice.FeatureSetEntity{featureSet},
-		Features:      []slice.FeatureEntity{x, w, y, z},
+		Features:      []slice.FeatureEntity{y, x, w, z},
 	}}
 	afterFiles, err := render.Render(ctx, after, scopeID, productID)
 	require.NoError(t, err)
 
-	assert.Contains(t, afterFiles.CapabilityMapMD, "- **C1** — X\n", "X's own citation is unaffected by an insert after it")
-	assert.Contains(t, afterFiles.CapabilityMapMD, "- **C2** — W\n", "the newly inserted sibling gets the number its new position earns")
-	assert.Contains(t, afterFiles.CapabilityMapMD, "- **C3** — Y\n", "Y renumbers from C2 to C3 -- its own row never changed")
-	assert.Contains(t, afterFiles.CapabilityMapMD, "- **C4** — Z\n", "Z renumbers from C3 to C4 -- its own row never changed")
-
-	// The identities themselves never changed -- only the computed number.
-	assert.Equal(t, x.ID, x.ID)
-	assert.Equal(t, y.ID, y.ID)
-	assert.Equal(t, z.ID, z.ID)
+	assert.Contains(t, afterFiles.CapabilityMapMD, "- **C1** — X\n", "X keeps its stored citation despite the reorder")
+	assert.Contains(t, afterFiles.CapabilityMapMD, "- **C2** — Y\n", "Y keeps its stored citation despite the reorder")
+	assert.Contains(t, afterFiles.CapabilityMapMD, "- **C3** — Z\n", "Z keeps its stored citation despite W's append")
+	assert.Contains(t, afterFiles.CapabilityMapMD, "- **C4** — W\n", "W renders its own stored number, never one derived from its position in the list")
 }
 
 // TestRender_MustNotForecloseRendersFromAssociationRows is #2495's "a `Must
@@ -202,18 +197,18 @@ func TestRender_MustNotForecloseRendersFromAssociationRows(t *testing.T) {
 	fsID := uuid.New()
 	featureSet := slice.FeatureSetEntity{EntityRef: slice.EntityRef{ID: fsID, RevisionID: uuid.New()}, Name: "Core"}
 
-	f1 := newFeature("F1")
+	f1 := newFeature("F1", 1)
 	f1.FeatureSetID = fsID
-	f2 := newFeature("F2")
+	f2 := newFeature("F2", 2)
 	f2.FeatureSetID = fsID
 
-	lb1 := newDecision("Keep it simple")
+	lb1 := newDecision("Keep it simple", 1)
 	lb1.FeatureSetID = fsID
-	lb2 := newDecision("Ship fast")
+	lb2 := newDecision("Ship fast", 2)
 	lb2.FeatureSetID = fsID
-	lb3 := newDecision("Own the data model")
+	lb3 := newDecision("Own the data model", 3)
 	lb3.FeatureSetID = fsID
-	lb4 := newDecision("No second writable source")
+	lb4 := newDecision("No second writable source", 4)
 	lb4.FeatureSetID = fsID
 
 	milestoneID := uuid.New()
@@ -260,7 +255,7 @@ func TestRender_MilepebbleRefsExcludedFromRoadmap(t *testing.T) {
 	fsID := uuid.New()
 	featureSet := slice.FeatureSetEntity{EntityRef: slice.EntityRef{ID: fsID, RevisionID: uuid.New()}, Name: "Core"}
 
-	f1 := newFeature("F1")
+	f1 := newFeature("F1", 1)
 	f1.FeatureSetID = fsID
 
 	milestoneID := uuid.New()
@@ -307,9 +302,9 @@ func TestRender_BacklogRefsExcludedFromRoadmap(t *testing.T) {
 	fsID := uuid.New()
 	featureSet := slice.FeatureSetEntity{EntityRef: slice.EntityRef{ID: fsID, RevisionID: uuid.New()}, Name: "Core"}
 
-	f1 := newFeature("F1")
+	f1 := newFeature("F1", 1)
 	f1.FeatureSetID = fsID
-	f2 := newFeature("F2 (backlogged)")
+	f2 := newFeature("F2 (backlogged)", 2)
 	f2.FeatureSetID = fsID
 
 	milestoneID := uuid.New()

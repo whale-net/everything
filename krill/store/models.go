@@ -68,16 +68,22 @@ type FeatureSet struct {
 // non-goals" section. There is no separate Capability type: krill's model
 // retires that vocabulary slot in favor of Feature (PRODUCT.md's
 // product/02-capability-map.md, "a vocabulary collision, on purpose").
+//
+// DisplayNumber (migration 017, issue #2969) is the `Cn` a caller cites --
+// assigned once at creation (product-wide auto-increment, or an imported
+// document's own token) and never recomputed from Position or sibling
+// order the way krill/render's old numberByOrder did.
 type Feature struct {
-	RevisionID   uuid.UUID
-	ID           uuid.UUID
-	ScopeID      uuid.UUID
-	FeatureSetID uuid.UUID
-	Name         string
-	Description  *string
-	Position     int
-	ValidFrom    time.Time
-	ValidTo      *time.Time
+	RevisionID    uuid.UUID
+	ID            uuid.UUID
+	ScopeID       uuid.UUID
+	FeatureSetID  uuid.UUID
+	Name          string
+	Description   *string
+	Position      int
+	DisplayNumber int
+	ValidFrom     time.Time
+	ValidTo       *time.Time
 }
 
 // RequirementKind discriminates a functional from a non-functional
@@ -113,16 +119,22 @@ type Requirement struct {
 // global list a caller has to load in full). A later many-to-many for this
 // specifically (C23, cross-product decisions) is deliberately deferred --
 // see PRODUCT.md's LB2 "Stays cheap" clause.
+//
+// DisplayNumber (migration 017, issue #2969) is the `LBn` a caller cites --
+// same stored-not-computed shape as Feature.DisplayNumber above. Amending a
+// decision (store/amend.go's AmendLoadBearingDecision) carries it forward
+// unchanged, exactly like Position.
 type LoadBearingDecision struct {
-	RevisionID   uuid.UUID
-	ID           uuid.UUID
-	ScopeID      uuid.UUID
-	FeatureSetID uuid.UUID
-	Name         string
-	Body         *string
-	Position     int
-	ValidFrom    time.Time
-	ValidTo      *time.Time
+	RevisionID    uuid.UUID
+	ID            uuid.UUID
+	ScopeID       uuid.UUID
+	FeatureSetID  uuid.UUID
+	Name          string
+	Body          *string
+	Position      int
+	DisplayNumber int
+	ValidFrom     time.Time
+	ValidTo       *time.Time
 }
 
 // Persona is one row of `persona` (migration 002) -- a product-level spec
