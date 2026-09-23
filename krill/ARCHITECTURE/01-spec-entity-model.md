@@ -12,15 +12,34 @@ Every one of those seven tables shares one shape:
   shares it) — `revision_id` is. "Current" is `WHERE id = $1 AND
   valid_to IS NULL`, backed by a `UNIQUE` partial index on `(id) WHERE
   valid_to IS NULL` on every table (LB3).
-- **No stored display number.** No table has a `display_number`,
-  `ordinal`-as-identity, or `fr_number` column — LB2's trap: if a display
-  number were the primary key, inserting a sibling or superseding an
-  entity would renumber every citation of it in every generated doc, code
-  comment, and CI check that greps for it. Sibling order lives in
+- **No stored display number — except `feature` and `load_bearing_decision`
+  (migration 017, issue #2969).** Every other table (`requirement`,
+  `persona`, `non_goal`, `feature_set`, `product`) still has no
+  `display_number`, `ordinal`-as-identity, or `fr_number` column — LB2's
+  original trap still holds for them: if a display number were the primary
+  key, inserting a sibling or superseding an entity would renumber every
+  citation of it in every generated doc, code comment, and CI check that
+  greps for it. Sibling order for those tables still lives only in
   `position`, an `INT` that carries no identity meaning and may be
-  rewritten freely (inserting between two siblings changes no existing
-  sibling's `id`). A render-time pass — not this task — turns `position`
-  (or creation order) into `FR7`/`C4`/`LB3`-style numbers.
+  rewritten freely.
+  `feature.display_number` (`Cn`) and `load_bearing_decision.display_number`
+  (`LBn`) are the deliberate reversal: `krill/render`'s original render-time
+  computation from `position` was not actually stable — appending a sibling
+  out of order, reordering, or superseding an entity silently renumbered
+  every earlier citation on the next render, which krill's own capability
+  map's "numbering is by allocation, not by bucket" convention (C25-C28
+  appended out of position) depends on *not* happening. `display_number` is
+  assigned once, at creation — `krill/store`'s `nextDisplayNumber`
+  auto-increments it per-product (not per-FeatureSet, matching
+  `krill/render`'s product-wide `Cn`/`LBn` numbering) — or, for
+  `krill/importer`, taken verbatim from the source document's own `Cn`/
+  `LBn` token via `CreateWithDisplayNumber`. It is never rewritten after
+  creation, except that amending a `LoadBearingDecision`
+  (`AmendLoadBearingDecision`) carries it forward unchanged, exactly like
+  `position`. `requirement`'s `FRn`/`NFRn` has no render path yet, so it
+  deliberately keeps LB2's original no-column stance — any future
+  Requirement renderer built the same way should get its own
+  `display_number` column rather than reusing `position`.
 - **Single-parent FK to the immutable id, not DB-enforced.** Every child's
   parent column (`feature_set.product_id`, `feature.feature_set_id`,
   `requirement.feature_id`, `load_bearing_decision.feature_set_id`,

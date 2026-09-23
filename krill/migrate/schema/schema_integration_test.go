@@ -160,18 +160,18 @@ func TestMigrations_UpDownUp_LeavesCleanDatabaseAndIsRerunnable(t *testing.T) {
 
 	latest, err := runner.LatestVersion()
 	require.NoError(t, err)
-	require.Equal(t, uint(16), latest, "expected the latest migration source version to be 16 (001_scope, 002_spec_entities, 003_session, 004_milestone_assoc, 005_pointer_artifact, 006_mcpauth_credential, 007_ui_sessions, 008_design_session, 009_import_completion, 010_milestone_authoring, 011_milepebble, 012_milestone_status, 013_delivery_shipment, 014_backlog_bucket, 015_work_axis, 016_escalation_axis) -- update this test if a later migration has since landed")
+	require.Equal(t, uint(17), latest, "expected the latest migration source version to be 17 (001_scope, 002_spec_entities, 003_session, 004_milestone_assoc, 005_pointer_artifact, 006_mcpauth_credential, 007_ui_sessions, 008_design_session, 009_import_completion, 010_milestone_authoring, 011_milepebble, 012_milestone_status, 013_delivery_shipment, 014_backlog_bucket, 015_work_axis, 016_escalation_axis, 017_display_numbers) -- update this test if a later migration has since landed")
 
 	// -- Up: scope, krill_session, the milestone tables, pointer_artifact,
 	// the mcpauth tables, ui_sessions, design_session/revision_event,
 	// milestone_status_event, delivery_shipment, and the work-axis tables
 	// must exist, version must land clean at the latest --
-	require.NoError(t, runner.Up(), "apply migrations 001-016")
+	require.NoError(t, runner.Up(), "apply migrations 001-017")
 
 	version, dirty, err := runner.Version()
 	require.NoError(t, err)
 	assert.False(t, dirty)
-	assert.Equal(t, uint(16), version)
+	assert.Equal(t, uint(17), version)
 
 	assert.True(t, tableExists(t, ctx, db, "scope"), "expected table \"scope\" to exist after Up()")
 	assert.True(t, tableExists(t, ctx, db, "krill_session"), "expected table \"krill_session\" to exist after Up() (003_session, issue #2489)")
@@ -226,7 +226,7 @@ func TestMigrations_UpDownUp_LeavesCleanDatabaseAndIsRerunnable(t *testing.T) {
 	version, dirty, err = runner.Version()
 	require.NoError(t, err)
 	assert.False(t, dirty)
-	assert.Equal(t, uint(16), version)
+	assert.Equal(t, uint(17), version)
 
 	assert.True(t, tableExists(t, ctx, db, "scope"), "expected table \"scope\" to exist again after the second Up()")
 	assert.True(t, tableExists(t, ctx, db, "krill_session"), "expected table \"krill_session\" to exist again after the second Up()")
@@ -462,7 +462,7 @@ func TestMigration002_SchemaContract(t *testing.T) {
 	`, scopeID, productID).Scan(&featureSetID))
 	var featureID string
 	require.NoError(t, db.Pool.QueryRow(ctx, `
-		INSERT INTO feature (scope_id, feature_set_id, name) VALUES ($1, $2, 'F') RETURNING id
+		INSERT INTO feature (scope_id, feature_set_id, name, display_number) VALUES ($1, $2, 'F', 1) RETURNING id
 	`, scopeID, featureSetID).Scan(&featureID))
 
 	_, err = db.Pool.Exec(ctx, `
@@ -525,16 +525,55 @@ func TestMigration002_NoDisplayNumberColumnsOrJoinTables(t *testing.T) {
 	sort.Strings(expected)
 	assert.Equal(t, expected, tables, "the public schema must contain exactly scope + the seven spec tables + krill_session (003_session, issue #2489) + milestone_ref + entity_milestone (004_milestone_assoc, issue #2492) + pointer_artifact (005_pointer_artifact, issue #2496) + mcp_credential/mcp_oauth_client/mcp_auth_code (006_mcpauth_credential) + ui_sessions (007_ui_sessions) + design_session/revision_event (008_design_session, issue #2542) + import_completion (009_import_completion, issue #2548) + milestone_deferral (010_milestone_authoring, issue #2683) + milestone_status_event (012_milestone_status, issue #2685) + delivery_shipment (013_delivery_shipment, issue #2686) + task/task_dependency/task_claim/task_lease_event/task_attempt/task_note (015_work_axis, issue #2719) + task_escalation_event/task_intervention_event/task_note_lifecycle_event (016_escalation_axis, issue #2868) + golang-migrate's schema_migrations -- no fourth parallel table (e.g. \"capability\") and no join/bridge table for parentage (LB2)")
 
-	// No display-number-shaped column on any spec table -- LB2's own
-	// vocabulary for the trap this guards against.
+	// No display-number-shaped column on any spec table EXCEPT feature and
+	// load_bearing_decision -- migration 017 (issue #2969) reversed LB2's
+	// original "no such column exists" stance for exactly those two
+	// tables (Cn/LBn citations were not stable across renders once entities
+	// were appended out of order, reordered, or superseded). Every other
+	// spec table -- crucially requirement, whose FRn/NFRn has no render
+	// path yet -- still carries no display-number column at all.
 	forbidden := []string{"display_number", "fr_number", "nfr_number", "lb_number", "c_number", "ordinal"}
+	displayNumberReversedTables := map[string]bool{"feature": true, "load_bearing_decision": true}
 	for _, table := range specTables {
 		cols := columnNames(t, ctx, db, table)
 		for _, col := range cols {
 			for _, bad := range forbidden {
+				if displayNumberReversedTables[table] && bad == "display_number" {
+					continue
+				}
 				assert.NotEqual(t, bad, col, "%s must not have a stored display-number column %q (LB2's trap -- display numbers are rendered, never persisted)", table, bad)
 			}
 		}
+	}
+}
+
+// TestMigration017_SchemaContract asserts 017_display_numbers' shape
+// (issue #2969): feature and load_bearing_decision each gain a NOT NULL
+// display_number column, and every current row was backfilled to the exact
+// number krill/render's old numberByOrder would already have rendered it
+// as -- this migration changes no existing citation, it only stops a
+// future render from being able to change one.
+func TestMigration017_SchemaContract(t *testing.T) {
+	ctx := context.Background()
+	db := dbtest.NewPostgres(ctx, t, dbtest.Options{})
+
+	sqlDB, err := sql.Open("pgx", db.ConnString)
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = sqlDB.Close() })
+
+	runner := migrate.NewRunner(sqlDB, schema.Migrations, schema.Dir)
+	require.NoError(t, runner.Up())
+
+	for _, table := range []string{"feature", "load_bearing_decision"} {
+		cols := columnNames(t, ctx, db, table)
+		assert.Contains(t, cols, "display_number", "%s must carry a display_number column", table)
+
+		var isNullable string
+		require.NoError(t, db.Pool.QueryRow(ctx, `
+			SELECT is_nullable FROM information_schema.columns
+			WHERE table_name = $1 AND column_name = 'display_number'
+		`, table).Scan(&isNullable))
+		assert.Equal(t, "NO", isNullable, "%s.display_number must be NOT NULL", table)
 	}
 }
 
@@ -675,7 +714,7 @@ func TestMigration004_SchemaContract(t *testing.T) {
 		INSERT INTO feature_set (scope_id, product_id, name) VALUES ($1, $2, 'fs') RETURNING id
 	`, scopeID, productID).Scan(&featureSetID))
 	require.NoError(t, db.Pool.QueryRow(ctx, `
-		INSERT INTO feature (scope_id, feature_set_id, name) VALUES ($1, $2, 'f') RETURNING id
+		INSERT INTO feature (scope_id, feature_set_id, name, display_number) VALUES ($1, $2, 'f', 1) RETURNING id
 	`, scopeID, featureSetID).Scan(&featureID))
 
 	_, err = db.Pool.Exec(ctx, `
@@ -920,7 +959,7 @@ func TestMigration010_SchemaContract(t *testing.T) {
 		INSERT INTO feature_set (scope_id, product_id, name) VALUES ($1, $2, 'fs') RETURNING id
 	`, scopeID, productID).Scan(&featureSetID))
 	require.NoError(t, db.Pool.QueryRow(ctx, `
-		INSERT INTO feature (scope_id, feature_set_id, name) VALUES ($1, $2, 'f') RETURNING id
+		INSERT INTO feature (scope_id, feature_set_id, name, display_number) VALUES ($1, $2, 'f', 1) RETURNING id
 	`, scopeID, featureSetID).Scan(&featureID))
 
 	_, err = db.Pool.Exec(ctx, `
@@ -2329,4 +2368,142 @@ func TestMigration016_UpDownRoundTrip(t *testing.T) {
 	assert.Contains(t, taskCols, "cancelled_at")
 	noteCols = columnNames(t, ctx, db, "task_note")
 	assert.Contains(t, noteCols, "current_status", "016's additive task_note column must exist again after re-applying 016")
+}
+
+// TestMigration017_BackfillMatchesOldRenderOrder is issue #2969's own
+// Testing ask: migration 017's backfill must assign every pre-existing
+// Feature/LoadBearingDecision the exact number krill/render's old
+// numberByOrder would already have rendered it as -- (feature_set.position,
+// feature_set.name, <table>.position, <table>.name), scoped per product --
+// so landing this migration changes no existing citation. Seeds two
+// FeatureSets under one Product (deliberately out of alphabetical name
+// order but in the position order that decides numbering) with Features
+// and LoadBearingDecisions in each, migrates up to exactly 016 (before
+// display_number exists) so the rows are seeded on a schema with no such
+// column, then migrates to 017 and asserts the backfilled numbers.
+func TestMigration017_BackfillMatchesOldRenderOrder(t *testing.T) {
+	ctx := context.Background()
+	db := dbtest.NewPostgres(ctx, t, dbtest.Options{})
+
+	sqlDB, err := sql.Open("pgx", db.ConnString)
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = sqlDB.Close() })
+
+	runner := migrate.NewRunner(sqlDB, schema.Migrations, schema.Dir)
+	require.NoError(t, runner.Migrate(16), "apply every migration through exactly 016 -- before display_number exists")
+
+	var scopeID uuid.UUID
+	require.NoError(t, db.Pool.QueryRow(ctx, `
+		INSERT INTO scope (repo_full_name, default_branch) VALUES ('display-number-017/repo', 'main') RETURNING id
+	`).Scan(&scopeID))
+	var productID uuid.UUID
+	require.NoError(t, db.Pool.QueryRow(ctx, `
+		INSERT INTO product (scope_id, name, vision) VALUES ($1, 'P', 'V') RETURNING id
+	`, scopeID).Scan(&productID))
+
+	// Two FeatureSets, position 0 and 1 -- "Zeta" sorts after "Alpha" by
+	// name, so this also proves numbering follows position, not name, when
+	// both are present (matching numberByOrder's own (position, name) sort
+	// key).
+	var fsZeta, fsAlpha uuid.UUID
+	require.NoError(t, db.Pool.QueryRow(ctx, `
+		INSERT INTO feature_set (scope_id, product_id, name, position) VALUES ($1, $2, 'Zeta', 0) RETURNING id
+	`, scopeID, productID).Scan(&fsZeta))
+	require.NoError(t, db.Pool.QueryRow(ctx, `
+		INSERT INTO feature_set (scope_id, product_id, name, position) VALUES ($1, $2, 'Alpha', 1) RETURNING id
+	`, scopeID, productID).Scan(&fsAlpha))
+
+	var featureZ1, featureZ2, featureA1 uuid.UUID
+	require.NoError(t, db.Pool.QueryRow(ctx, `
+		INSERT INTO feature (scope_id, feature_set_id, name, position) VALUES ($1, $2, 'Z1', 0) RETURNING id
+	`, scopeID, fsZeta).Scan(&featureZ1))
+	require.NoError(t, db.Pool.QueryRow(ctx, `
+		INSERT INTO feature (scope_id, feature_set_id, name, position) VALUES ($1, $2, 'Z2', 1) RETURNING id
+	`, scopeID, fsZeta).Scan(&featureZ2))
+	require.NoError(t, db.Pool.QueryRow(ctx, `
+		INSERT INTO feature (scope_id, feature_set_id, name, position) VALUES ($1, $2, 'A1', 0) RETURNING id
+	`, scopeID, fsAlpha).Scan(&featureA1))
+
+	var decisionZ1, decisionA1 uuid.UUID
+	require.NoError(t, db.Pool.QueryRow(ctx, `
+		INSERT INTO load_bearing_decision (scope_id, feature_set_id, name, position) VALUES ($1, $2, 'LB Zeta', 0) RETURNING id
+	`, scopeID, fsZeta).Scan(&decisionZ1))
+	require.NoError(t, db.Pool.QueryRow(ctx, `
+		INSERT INTO load_bearing_decision (scope_id, feature_set_id, name, position) VALUES ($1, $2, 'LB Alpha', 0) RETURNING id
+	`, scopeID, fsAlpha).Scan(&decisionA1))
+
+	require.NoError(t, runner.Migrate(17), "apply migration 017 -- backfills display_number on the rows seeded above")
+
+	assertDisplayNumber := func(table string, id uuid.UUID, want int) {
+		t.Helper()
+		var got int
+		require.NoError(t, db.Pool.QueryRow(ctx, `SELECT display_number FROM `+table+` WHERE id = $1`, id).Scan(&got))
+		assert.Equal(t, want, got, "%s id %s must backfill to display_number %d (feature_set position order, not name)", table, id, want)
+	}
+	assertDisplayNumber("feature", featureZ1, 1)
+	assertDisplayNumber("feature", featureZ2, 2)
+	assertDisplayNumber("feature", featureA1, 3)
+	assertDisplayNumber("load_bearing_decision", decisionZ1, 1)
+	assertDisplayNumber("load_bearing_decision", decisionA1, 2)
+}
+
+// TestMigration017_UpDownRoundTrip proves 017_display_numbers rolls back
+// cleanly (dropping both new columns, leaving every other column and every
+// row untouched) and is re-runnable -- backfilling to the same numbers a
+// second time, since the underlying position/name order it reads from
+// never changed.
+func TestMigration017_UpDownRoundTrip(t *testing.T) {
+	ctx := context.Background()
+	db := dbtest.NewPostgres(ctx, t, dbtest.Options{})
+
+	sqlDB, err := sql.Open("pgx", db.ConnString)
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = sqlDB.Close() })
+
+	runner := migrate.NewRunner(sqlDB, schema.Migrations, schema.Dir)
+	require.NoError(t, runner.Migrate(17))
+
+	var scopeID uuid.UUID
+	require.NoError(t, db.Pool.QueryRow(ctx, `
+		INSERT INTO scope (repo_full_name, default_branch) VALUES ('display-number-017-roundtrip/repo', 'main') RETURNING id
+	`).Scan(&scopeID))
+	var productID uuid.UUID
+	require.NoError(t, db.Pool.QueryRow(ctx, `
+		INSERT INTO product (scope_id, name, vision) VALUES ($1, 'P', 'V') RETURNING id
+	`, scopeID).Scan(&productID))
+	var fsID uuid.UUID
+	require.NoError(t, db.Pool.QueryRow(ctx, `
+		INSERT INTO feature_set (scope_id, product_id, name, position) VALUES ($1, $2, 'Core', 0) RETURNING id
+	`, scopeID, productID).Scan(&fsID))
+	var featureID uuid.UUID
+	require.NoError(t, db.Pool.QueryRow(ctx, `
+		INSERT INTO feature (scope_id, feature_set_id, name, position, display_number) VALUES ($1, $2, 'F1', 0, 1) RETURNING id
+	`, scopeID, fsID).Scan(&featureID))
+
+	require.NoError(t, runner.Steps(-1), "roll back exactly migration 017")
+
+	version, dirty, err := runner.Version()
+	require.NoError(t, err)
+	assert.False(t, dirty)
+	assert.Equal(t, uint(16), version)
+
+	featureCols := columnNames(t, ctx, db, "feature")
+	assert.NotContains(t, featureCols, "display_number", "017's Down() must drop feature.display_number")
+	decisionCols := columnNames(t, ctx, db, "load_bearing_decision")
+	assert.NotContains(t, decisionCols, "display_number", "017's Down() must drop load_bearing_decision.display_number")
+
+	var featureName string
+	require.NoError(t, db.Pool.QueryRow(ctx, `SELECT name FROM feature WHERE id = $1`, featureID).Scan(&featureName))
+	assert.Equal(t, "F1", featureName, "rolling back 017 must not touch feature rows beyond dropping the column")
+
+	require.NoError(t, runner.Steps(1), "re-apply migration 017 after Down() -- must be re-runnable")
+
+	version, dirty, err = runner.Version()
+	require.NoError(t, err)
+	assert.False(t, dirty)
+	assert.Equal(t, uint(17), version)
+
+	var displayNumber int
+	require.NoError(t, db.Pool.QueryRow(ctx, `SELECT display_number FROM feature WHERE id = $1`, featureID).Scan(&displayNumber))
+	assert.Equal(t, 1, displayNumber, "re-applying 017 must backfill the same row to the same display_number")
 }

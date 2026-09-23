@@ -17,11 +17,14 @@
 // connection whose role has had every write privilege revoked.
 //
 // FR14 -- every numbered citation (`Cn`, `LBn`) this package renders is
-// computed here, at render time, from each entity's position among its
-// returned siblings (krill/store's queries already order by `position` then
-// `name` -- see krill/store/models.go's package doc). Nothing in this
-// package reads a stored display number, because no such column exists
-// (LB2) -- see numberByOrder below.
+// read directly off each Feature's/LoadBearingDecision's own stored
+// DisplayNumber (migration 017, issue #2969) -- assigned once at creation
+// (product-wide auto-increment, or an imported document's own token), never
+// recomputed from sibling position on render. This reverses migration
+// 002's original LB2 stance ("no such column exists"): a display number
+// computed fresh from position on every render was not stable once
+// entities were appended out of order, reordered, or superseded -- see
+// issue #2969.
 package render
 
 import (
@@ -197,10 +200,9 @@ func renderProductMD(name, revision string, doc slice.Document, personas []store
 	b.WriteString("\n")
 
 	b.WriteString("## Load-bearing decisions\n\n")
-	decisionNumbers := numberByOrder(doc.Decisions, func(d slice.DecisionEntity) uuid.UUID { return d.ID })
 	for _, d := range doc.Decisions {
 		title := cleanDecisionTitle(d.Name)
-		b.WriteString(fmt.Sprintf("LB%d — %s\n", decisionNumbers[d.ID], title))
+		b.WriteString(fmt.Sprintf("LB%d — %s\n", d.DisplayNumber, title))
 		if d.Body != nil && strings.TrimSpace(*d.Body) != "" {
 			b.WriteString(strings.TrimSpace(*d.Body))
 			b.WriteString("\n")
@@ -266,8 +268,6 @@ func renderCapabilityMapMD(name, revision string, doc slice.Document) string {
 	b.WriteString(header(name, revision, nowFunc()))
 	b.WriteString("\n# Capability map\n\n")
 
-	featureNumbers := numberByOrder(doc.Features, func(f slice.FeatureEntity) uuid.UUID { return f.ID })
-
 	// Group Features by their parent FeatureSet, in the order FeatureSets
 	// and Features are both already returned (feature_set.position/name,
 	// then feature.position/name -- krill/store/slice.go's
@@ -287,7 +287,7 @@ func renderCapabilityMapMD(name, revision string, doc slice.Document) string {
 		b.WriteString(fs.Name)
 		b.WriteString("\n\n")
 		for _, f := range features {
-			b.WriteString(fmt.Sprintf("- **C%d** — %s\n", featureNumbers[f.ID], f.Name))
+			b.WriteString(fmt.Sprintf("- **C%d** — %s\n", f.DisplayNumber, f.Name))
 		}
 		b.WriteString("\n")
 	}
@@ -324,8 +324,14 @@ func renderMilestones(ctx context.Context, src Source, scopeID, productID uuid.U
 		return nil, nil
 	}
 
-	featureNumbers := numberByOrder(doc.Features, func(f slice.FeatureEntity) uuid.UUID { return f.ID })
-	decisionNumbers := numberByOrder(doc.Decisions, func(d slice.DecisionEntity) uuid.UUID { return d.ID })
+	featureNumbers := make(map[uuid.UUID]int, len(doc.Features))
+	for _, f := range doc.Features {
+		featureNumbers[f.ID] = f.DisplayNumber
+	}
+	decisionNumbers := make(map[uuid.UUID]int, len(doc.Decisions))
+	for _, d := range doc.Decisions {
+		decisionNumbers[d.ID] = d.DisplayNumber
+	}
 
 	entries := make([]milestoneEntry, 0, len(refs))
 	for _, ref := range refs {
@@ -430,23 +436,4 @@ func renderRoadmapMD(name, revision string, milestones []milestoneEntry) string 
 	}
 
 	return b.String()
-}
-
-// numberByOrder assigns a 1-based display number to every element of
-// entities in the order the slice already arrives in -- FR14's "computed
-// at render time from the entity's current position among its siblings."
-// krill/store's own queries already return Features and
-// LoadBearingDecisions ordered by (position, name) (see
-// krill/store/models.go's package doc and krill/store/slice.go's ORDER BY
-// clauses), so the order this function numbers is exactly sibling order;
-// nothing here reads or writes a stored column. Inserting a new sibling
-// between two existing ones changes no id in krill/store and no entry of
-// this map for an untouched sibling's identity -- only the *number* that
-// entity resolves to next render.
-func numberByOrder[T any](entities []T, idOf func(T) uuid.UUID) map[uuid.UUID]int {
-	numbers := make(map[uuid.UUID]int, len(entities))
-	for i, e := range entities {
-		numbers[idOf(e)] = i + 1
-	}
-	return numbers
 }

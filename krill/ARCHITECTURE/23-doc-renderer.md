@@ -16,17 +16,24 @@ holds a `*store.Store` (which does expose `Create`); it exists solely to
 adapt one into a `Source`, so a caller wiring up `krill/render/cmd` can only
 ever hand `Render` the narrow read surface, never the concrete store.
 
-**FR14 -- citations are computed at render time, never stored.** `Cn`
-(a Feature) and `LBn` (a LoadBearingDecision) are both numbered by
-`numberByOrder`, a 1-based index over whatever order `krill/store`'s own
-queries already return -- `position` then `name` (see "The spec entity
-model" above). Nothing in `krill/render` reads or writes a display-number
-column, because none exists. A `LoadBearingDecision.Name` occasionally
-carries a stale citation baked in by the importer's own parsing (it keeps
-a decision's whole source title line, `LB1 — ...`, as `Name`) --
-`cleanDecisionTitle` strips that leading token before the renderer
-re-prefixes it with the freshly computed number, so a renumber is never
-masked by what the importer happened to store.
+**FR14 (revised by issue #2969) -- citations are read off a stored
+DisplayNumber, never recomputed at render time.** `Cn` (a Feature) and
+`LBn` (a LoadBearingDecision) are both `slice.FeatureEntity`/
+`slice.DecisionEntity`'s own `DisplayNumber` field, read straight off
+`feature.display_number`/`load_bearing_decision.display_number` (migration
+017 -- see "The spec entity model" above). This package used to compute
+both numbers at render time via `numberByOrder`, a 1-based index over
+whatever sibling order `krill/store`'s queries returned (`position` then
+`name`) -- that made every citation reshuffle on the next render whenever a
+sibling was appended out of order, reordered, or superseded, which is
+exactly what krill's own capability map's "numbering is by allocation, not
+by bucket" append convention (C25-C28) depended on not happening.
+`numberByOrder` no longer exists in this package. A `LoadBearingDecision.Name`
+occasionally carries a stale citation baked in by the importer's own
+parsing (it keeps a decision's whole source title line, `LB1 — ...`, as
+`Name`) -- `cleanDecisionTitle` strips that leading token before the
+renderer re-prefixes it with the stored number, so a mismatch between the
+embedded text and the real `DisplayNumber` is never masked.
 
 **Milestones are reconstructed from associations, never authored.**
 `renderMilestones` enumerates a product's `milestone_ref` rows
