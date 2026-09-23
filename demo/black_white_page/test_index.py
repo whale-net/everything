@@ -369,6 +369,36 @@ def test_restored_value_validated_against_black_or_white():
     )
 
 
+_BUTTON_TAG_RE = re.compile(r"<button\b", re.IGNORECASE)
+_BODY_TAG_RE = re.compile(r"<body([^>]*)>", re.IGNORECASE)
+_TABINDEX_RE = re.compile(r"tabindex\s*=\s*[\"']?(-?\d+)[\"']?", re.IGNORECASE)
+
+
+def test_toggle_control_is_focusable():
+    """The toggle control must be Tab-reachable: either a native <button>
+    (focusable by default), or the <body> click target carries an explicit
+    tabindex="0". A negative tabindex removes an element from the tab
+    order, so it does not satisfy this -- it must be rejected."""
+    # Strip JS comments first -- a prose comment mentioning "<body>" (as
+    # one already does, in the head restore script) must not masquerade as
+    # the real tag.
+    source = _strip_js_comments(_read_source())
+    if _BUTTON_TAG_RE.search(source):
+        return
+
+    body_match = _BODY_TAG_RE.search(source)
+    assert body_match, "no <body> tag found"
+    tabindex_match = _TABINDEX_RE.search(body_match.group(1))
+    assert tabindex_match, (
+        "toggle control (<body>) is neither a native <button> nor carries "
+        "a tabindex attribute -- it is not reachable via Tab"
+    )
+    assert tabindex_match.group(1) == "0", (
+        f"<body> tabindex is {tabindex_match.group(1)!r}, not \"0\" -- a "
+        "negative tabindex removes it from the tab order"
+    )
+
+
 def test_applytoggle_applies_display_before_saving():
     """Inside the toggle function, the background assignment must precede
     the persistence call in source order -- the visible change must never
