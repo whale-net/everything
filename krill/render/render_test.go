@@ -244,6 +244,50 @@ func TestRender_MustNotForecloseRendersFromAssociationRows(t *testing.T) {
 	assert.Contains(t, files.RoadmapMD, "Must not foreclose: LB1, LB4")
 }
 
+// TestRender_OutcomeFRBudgetAndDeferralsRenderFromMilestoneRows is issue
+// #2970's fix: a milestone's outcome sentence, FR budget, and deliberately
+// deferred items are already stored on milestone_ref/milestone_deferral
+// rows (migration 010) but were never copied into the rendered roadmap --
+// renderRoadmapMD must emit all three, never just Delivers/Must not
+// foreclose.
+func TestRender_OutcomeFRBudgetAndDeferralsRenderFromMilestoneRows(t *testing.T) {
+	ctx := context.Background()
+	productID := uuid.New()
+	scopeID := uuid.New()
+
+	product := &slice.ProductEntity{EntityRef: slice.EntityRef{ID: productID, RevisionID: uuid.New()}, Name: "Widgets", Vision: "v"}
+
+	milestoneID := uuid.New()
+	outcome := "An Agent can do the thing"
+	frBudget := 12
+
+	src := &fakeSource{
+		Doc: slice.Document{
+			SchemaVersion: slice.SchemaVersion,
+			Product:       product,
+		},
+		MilestoneRefs: []store.MilestoneRef{{
+			ID:       milestoneID,
+			Name:     "M1",
+			Kind:     store.MilestoneKindMilestone,
+			Outcome:  &outcome,
+			FRBudget: &frBudget,
+		}},
+		Deferrals: map[uuid.UUID][]store.MilestoneDeferral{
+			milestoneID: {
+				{Body: "design sessions", Destination: "M2"},
+			},
+		},
+	}
+
+	files, err := render.Render(ctx, src, scopeID, productID)
+	require.NoError(t, err)
+
+	assert.Contains(t, files.RoadmapMD, "### M1 — An Agent can do the thing")
+	assert.Contains(t, files.RoadmapMD, "Deliberately deferred: design sessions (→ M2)")
+	assert.Contains(t, files.RoadmapMD, "FR budget: 12")
+}
+
 // TestRender_MilepebbleRefsExcludedFromRoadmap is issue #2684's Testing
 // section item 7: with a real kind="milepebble" MilestoneRef present
 // alongside a kind="milestone" one (migration 011's own new row shape),
