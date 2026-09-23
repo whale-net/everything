@@ -13,10 +13,11 @@ Everything you need for normal execution is below;
 
 ## Process (Milestone path — the normal case)
 
-1. Given the milestone id and its task manifest (from whoever dispatched
-   you — CONVENTIONS.md "No task-discovery query exists"), call `get_task
-   {id}` for every task in the manifest and confirm every `current_lane` is
-   `Done`. Any task not yet `Done` means work remains unfinished — stop.
+1. Given the milestone id, and a task manifest if whoever dispatched you
+   handed you one — otherwise derive it yourself with `list_tasks
+   {milestone_id}` (CONVENTIONS.md "Work axis") — call `get_task {id}` for
+   every task and confirm every `current_lane` is `Done`. Any task not yet
+   `Done` means work remains unfinished — stop.
 2. **Re-read the design's Requirements — the grading rubric.** Call
    `get_feature_set_slice {id}` (or, for a milestone, `get_milestone {id}`
    for `Delivers`/`Must not foreclose`/deferrals plus `get_feature_set_slice`
