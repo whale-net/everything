@@ -19,6 +19,7 @@ go_library(
         "entity.go",
         "milestone.go",
         "milestone_status.go",
+        "product.go",
         "recut.go",
         "session.go",
         "slice.go",
@@ -30,6 +31,7 @@ go_library(
         "task_dependency.go",
         "task_escalate.go",
         "task_lease.go",
+        "task_list.go",
         "task_note.go",
         "task_payload.go",
         "task_release.go",
@@ -235,6 +237,24 @@ go_test(
         ":tools",
         "//krill/mcp/server",
         "//krill/store",
+        "@com_github_modelcontextprotocol_go_sdk//mcp",
+        "@com_github_stretchr_testify//assert",
+        "@com_github_stretchr_testify//require",
+    ],
+)
+
+# No-database unit test (issue #2941): RegisterListProducts/RegisterListTasks
+# register exactly {list_products, list_tasks}, and each call maps its
+# (in-memory fake) store result onto the shared handlers wire shape.
+go_test(
+    name = "discovery_registration_test",
+    srcs = ["discovery_registration_test.go"],
+    deps = [
+        ":tools",
+        "//krill/mcp/server",
+        "//krill/store",
+        "@com_github_google_uuid//:uuid",
+        "@com_github_modelcontextprotocol_go_sdk//auth",
         "@com_github_modelcontextprotocol_go_sdk//mcp",
         "@com_github_stretchr_testify//assert",
         "@com_github_stretchr_testify//require",
