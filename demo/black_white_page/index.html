@@ -80,6 +80,15 @@
     // a storage read failure must never abort initialization. M2-P2's
     // keyboard wiring joins this same unconditional init path.
     document.body.addEventListener('click', applyToggle);
+
+    // Handles Enter/Space activation of the focusable toggle control.
+    // Registration only for now -- the Implementation phase fills in the
+    // key match, repeat/modifier guards, Space's preventDefault(), and
+    // the applyToggle() call.
+    function handleToggleKeydown(event) {
+    }
+
+    document.body.addEventListener('keydown', handleToggleKeydown);
   </script>
 </body>
 </html>
