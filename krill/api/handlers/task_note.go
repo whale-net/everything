@@ -109,11 +109,11 @@ func writeNoteStoreError(w http.ResponseWriter, err error) {
 	}
 }
 
-// noteResponse is one entry of ListTaskNotesHandler's response body -- the
-// wire shape of a store.Note row, including its current lifecycle Status
+// NoteWire is one entry of ListTaskNotesHandler's and ListEntityNotes'
+// response bodies -- the wire shape of a store.Note row, including its current lifecycle Status
 // (M5's C26, issue #2874, FR11) alongside the body wherever a note is
 // returned.
-type noteResponse struct {
+type NoteWire struct {
 	ID         string  `json:"id"`
 	TaskID     *string `json:"task_id,omitempty"`
 	EntityKind *string `json:"entity_kind,omitempty"`
@@ -123,8 +123,8 @@ type noteResponse struct {
 	Status     string  `json:"status"`
 }
 
-func toNoteResponse(n store.Note) noteResponse {
-	resp := noteResponse{
+func toNoteResponse(n store.Note) NoteWire {
+	resp := NoteWire{
 		ID:     n.ID.String(),
 		Kind:   string(n.Kind),
 		Body:   n.Body,
@@ -148,7 +148,7 @@ func toNoteResponse(n store.Note) noteResponse {
 // listTaskNotesResponse is ListTaskNotesHandler's response body: taskID's
 // recorded notes, ordered by CreatedAt.
 type listTaskNotesResponse struct {
-	Notes []noteResponse `json:"notes"`
+	Notes []NoteWire `json:"notes"`
 }
 
 // ListTaskNotesHandler returns the note-list read endpoint: GET
@@ -181,7 +181,7 @@ func ListTaskNotesHandler(tasks store.TaskStore) http.HandlerFunc {
 			return
 		}
 
-		resp := make([]noteResponse, len(notes))
+		resp := make([]NoteWire, len(notes))
 		for i, n := range notes {
 			resp[i] = toNoteResponse(n)
 		}

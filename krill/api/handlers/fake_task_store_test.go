@@ -97,6 +97,11 @@ type fakeTaskStore struct {
 	notesForEntity        []store.Note
 	listNotesForEntityErr error
 
+	// gotListNotesForEntity* record the last ListNotesForEntity call.
+	gotListNotesForEntityScopeID uuid.UUID
+	gotListNotesForEntityKind    store.NoteEntityKind
+	gotListNotesForEntityID      uuid.UUID
+
 	listClaimedTasksErr       error
 	listClaimedTasksResult    store.Page[store.ClaimedTaskRow]
 	gotListClaimedTasksParams store.ListClaimedTasksParams
@@ -233,6 +238,7 @@ func (f *fakeTaskStore) ListNotesForTask(ctx context.Context, scopeID, taskID uu
 }
 
 func (f *fakeTaskStore) ListNotesForEntity(ctx context.Context, scopeID uuid.UUID, kind store.NoteEntityKind, entityID uuid.UUID) ([]store.Note, error) {
+	f.gotListNotesForEntityScopeID, f.gotListNotesForEntityKind, f.gotListNotesForEntityID = scopeID, kind, entityID
 	return f.notesForEntity, f.listNotesForEntityErr
 }
 

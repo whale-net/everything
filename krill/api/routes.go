@@ -181,6 +181,25 @@ func setupRoutes(mux *http.ServeMux, pool *pgxpool.Pool, githubToken string) {
 	mux.Handle("POST /notes", gate(handlers.RecordNoteHandler(entities.Tasks())))
 	mux.HandleFunc("GET /tasks/{id}/notes", handlers.ListTaskNotesHandler(entities.Tasks()))
 
+	// Read-back for notes recorded against a spec-axis entity: one route per
+	// store.NoteEntityKind, under each entity's own route prefix.
+	noteScopes := handlers.NoteEntityScopes{
+		Products:     entities.Products(),
+		FeatureSets:  entities.FeatureSets(),
+		Features:     entities.Features(),
+		Requirements: entities.Requirements(),
+		Decisions:    entities.Decisions(),
+	}
+	for prefix, kind := range map[string]store.NoteEntityKind{
+		"products":               store.NoteEntityKindProduct,
+		"feature-sets":           store.NoteEntityKindFeatureSet,
+		"features":               store.NoteEntityKindFeature,
+		"requirements":           store.NoteEntityKindRequirement,
+		"load-bearing-decisions": store.NoteEntityKindLoadBearingDecision,
+	} {
+		mux.HandleFunc("GET /"+prefix+"/{id}/notes", handlers.ListEntityNotesHandler(kind, noteScopes, entities.Tasks()))
+	}
+
 	// task_note_lifecycle_event (issue #2874, FR11): any persona
 	// transitions a note's lifecycle status -- POST gated (NFR6), the same
 	// session-only gate POST /notes uses, deliberately never restricted to

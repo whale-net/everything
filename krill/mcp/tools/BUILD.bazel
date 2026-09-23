@@ -17,6 +17,7 @@ go_library(
         "delivery_shipment.go",
         "design.go",
         "entity.go",
+        "entity_note.go",
         "milestone.go",
         "milestone_status.go",
         "product.go",
@@ -246,11 +247,17 @@ go_test(
 # No-database unit test (issue #2941): RegisterListProducts/RegisterListTasks
 # register exactly {list_products, list_tasks}, and each call maps its
 # (in-memory fake) store result onto the shared handlers wire shape.
+# entity_note_registration_test.go covers list_entity_notes the same way,
+# sharing this file's operatorPersona/discoveryTextOf helpers.
 go_test(
     name = "discovery_registration_test",
-    srcs = ["discovery_registration_test.go"],
+    srcs = [
+        "discovery_registration_test.go",
+        "entity_note_registration_test.go",
+    ],
     deps = [
         ":tools",
+        "//krill/api/handlers",
         "//krill/mcp/server",
         "//krill/store",
         "@com_github_google_uuid//:uuid",

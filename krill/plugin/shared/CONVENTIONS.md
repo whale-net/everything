@@ -288,6 +288,12 @@ truth on the Milestone path.
   `requirement`, `load_bearing_decision` — **not** `milestone`, which has
   no note target). Any Agent may call this whether or not it holds the
   task's current claim.
+- `list_entity_notes {entity_kind, entity_id}` → `{entity_kind, entity_id,
+  notes: [{id, entity_kind, entity_id, kind, body, status}]}`, oldest
+  first, every lifecycle status (not just `noted`). Ungated, no session
+  required — the read-back path for notes `record_note` attached to a
+  spec-axis entity (same `entity_kind` enum). Task notes come back on
+  `get_task` instead.
 - `transition_note_lifecycle {krill_session_id, note_id, status: "noted" |
   "carried-over" | "deferred" | "closed"}` → `{id}`. Open to any resolved
   persona.
