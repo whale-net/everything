@@ -178,6 +178,8 @@ func run() error {
 	designReg := server.NewRegistry(designSrv)
 	tools.RegisterInitSession(designReg, sessions, entities.Scopes())
 	tools.RegisterEntityCreateAll(designReg, sessions, entities.Products(), entities.FeatureSets(), entities.Decisions())
+	// amend_requirement/amend_load_bearing_decision: SCD2 corrections, the MCP twin of POST /{requirements,load-bearing-decisions}/{id}/amend.
+	tools.RegisterAmendAll(designReg, sessions, entities.Amend())
 	// list_products: ungated Product discovery, the entry point for every get_*_slice product_id.
 	tools.RegisterListProducts(designReg, entities.Products())
 	tools.RegisterDesignAll(designReg, entities, sessions, querier)

@@ -13,6 +13,7 @@ go_library(
     name = "tools",
     srcs = [
         "abandon.go",
+        "amend.go",
         "console.go",
         "delivery_shipment.go",
         "design.go",
@@ -258,6 +259,24 @@ go_test(
     deps = [
         ":tools",
         "//krill/api/handlers",
+        "//krill/mcp/server",
+        "//krill/store",
+        "@com_github_google_uuid//:uuid",
+        "@com_github_modelcontextprotocol_go_sdk//auth",
+        "@com_github_modelcontextprotocol_go_sdk//mcp",
+        "@com_github_stretchr_testify//assert",
+        "@com_github_stretchr_testify//require",
+    ],
+)
+
+# No-database unit test: RegisterAmendAll registers exactly
+# {amend_requirement, amend_load_bearing_decision}, gates both on
+# krill_session_id, and passes id/name/body through to a fake AmendStore.
+go_test(
+    name = "amend_registration_test",
+    srcs = ["amend_registration_test.go"],
+    deps = [
+        ":tools",
         "//krill/mcp/server",
         "//krill/store",
         "@com_github_google_uuid//:uuid",

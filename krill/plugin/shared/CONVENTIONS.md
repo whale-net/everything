@@ -22,7 +22,8 @@ Tools that work today from an ordinary session (resolve
 ops-write tools (`release_task`, `requeue_task`, `escalate_task`,
 `cancel_task`), `transition_note_lifecycle`, and every milestone/product/
 delivery-authoring tool (`create_product`, `create_feature_set`,
-`create_load_bearing_decision`, `propose_entities`, `create_milestone`,
+`create_load_bearing_decision`, `amend_requirement`,
+`amend_load_bearing_decision`, `propose_entities`, `create_milestone`,
 `set_fr_budget`, `add_delivers`, `add_must_not_foreclose`, `add_deferral`,
 `create_milepebble`, `add_milepebble_scope`, `add_discovered_scope`,
 `move_delivery_scope`, `mark_delivered_item_shipped`, `abandon_milestone`,
