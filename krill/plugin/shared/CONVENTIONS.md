@@ -59,7 +59,10 @@ persona here needs or registers it.
 
 Every write tool on `/mcp/design` requires a `krill_session_id` (every read
 tool is ungated). Mint one first: `init_session {acting, on_behalf_of,
-whagent_session_id?}` → `{session_id}` — no persona restriction.
+whagent_session_id?}` → `{session_id, scope_id}` — no persona restriction.
+`scope_id` is the scope the session was minted under — the value
+`list_products`, `list_tasks`, and the ops console tools (`list_claimed_tasks`
+etc.) take as input (`POST /sessions/init` returns the same shape).
 
 `acting`/`on_behalf_of` are each a `{iss, sub, kind}` triple:
 
@@ -144,7 +147,8 @@ Read-only slice queries (`get_feature_set_slice`, `get_feature_slice`,
 are never gated and available to every persona. Each takes a surrogate id
 you must already have — `list_products {scope_id}` → `{products: [{id,
 name, vision}]}` (ungated, `/mcp/design`) is the discovery entry point for
-`get_product_slice`'s `product_id`.
+`get_product_slice`'s `product_id`; its `scope_id` comes from
+`init_session`'s response (see "Session bootstrapping" above).
 
 ### record_note fallback for anchor-less designs
 

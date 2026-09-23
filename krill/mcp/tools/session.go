@@ -53,7 +53,8 @@ func RegisterInitSession(reg *server.Registry, sessions store.SessionStore, scop
 	server.RegisterWrite(reg, &mcp.Tool{
 		Name: "init_session",
 		Description: "Mint a krill_session_id (FR3): the session id every other write tool on this mount requires as " +
-			"input. Call this first -- every other write tool rejects a missing or unknown krill_session_id.",
+			"input. Call this first -- every other write tool rejects a missing or unknown krill_session_id. " +
+			"The response also carries scope_id, the value list_products, list_tasks, and the ops console tools take as input.",
 	}, nil, func(ctx context.Context, _ *mcp.CallToolRequest, in initSessionInput) (*mcp.CallToolResult, handlers.InitSessionResponse, error) {
 		var zero handlers.InitSessionResponse
 
@@ -75,6 +76,6 @@ func RegisterInitSession(reg *server.Registry, sessions store.SessionStore, scop
 		if err != nil {
 			return nil, zero, fmt.Errorf("init session: %w", err)
 		}
-		return nil, handlers.InitSessionResponse{SessionID: id.String()}, nil
+		return nil, handlers.InitSessionResponse{SessionID: id.String(), ScopeID: scope.ID.String()}, nil
 	})
 }
