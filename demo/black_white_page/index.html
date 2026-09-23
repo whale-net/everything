@@ -13,14 +13,38 @@
 </head>
 <body>
   <script>
-    document.body.addEventListener('click', function () {
+    // Single source of truth for the persisted-color key and vocabulary.
+    // Task 2 (restore-on-load) reuses this same key and 'black'/'white' values.
+    var STORAGE_KEY = 'black_white_page:color';
+
+    function saveColor(color) {
+      try {
+        localStorage.setItem(STORAGE_KEY, color);
+      } catch (e) {
+        // Ignore: quota exceeded, private-mode denial, or storage
+        // disabled by policy -- the visible toggle must never depend on
+        // a successful write. window.localStorage access itself can
+        // throw (SecurityError), so it stays inside this try too.
+      }
+    }
+
+    // Single reusable toggle path: applies the visible change first, then
+    // persists it. Future keyboard activation (M2-P2) calls this same
+    // function so it gets persistence for free.
+    function applyToggle() {
       var current = window.getComputedStyle(document.body).backgroundColor;
+      var next;
       if (current === 'rgb(0, 0, 0)') {
         document.body.style.background = '#ffffff';
+        next = 'white';
       } else {
         document.body.style.background = '#000000';
+        next = 'black';
       }
-    });
+      saveColor(next);
+    }
+
+    document.body.addEventListener('click', applyToggle);
   </script>
 </body>
 </html>

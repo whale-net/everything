@@ -30,6 +30,16 @@ _CLICK_LISTENER_RE = re.compile(
     re.IGNORECASE,
 )
 
+# The handler argument/value of a click listener registration -- either the
+# literal keyword `function` (an inline function expression) or an
+# identifier (a reference to a separately-defined named function, e.g. a
+# shared toggle function also reusable by future keyboard handling).
+_HANDLER_REF_RE = re.compile(
+    r"(?:addEventListener\(\s*['\"]click['\"]\s*,\s*|\.onclick\s*=\s*)"
+    r"(function\b|[A-Za-z_$][\w$]*)",
+    re.IGNORECASE,
+)
+
 # Any background value assigned via `.style.background(Color) = <value>` or
 # `setProperty('background(-color)', <value>)`, capturing the value token so
 # it can be checked against the two supported colors.
@@ -68,22 +78,46 @@ def _top_level_text(script_body: str) -> str:
     return "".join(result)
 
 
-def _click_handler_span(script_body: str) -> tuple[int, int]:
-    """Return the (open_brace_index, close_brace_index) of the function body
-    passed to the click listener registration found in script_body."""
-    listener_match = _CLICK_LISTENER_RE.search(script_body)
-    assert listener_match, "no click listener registration found in <script>"
-
-    open_brace = script_body.index("{", listener_match.end())
+def _brace_span_from(text: str, open_brace: int) -> tuple[int, int]:
+    """Return (open_brace, close_brace) for the brace-delimited block that
+    starts at open_brace (text[open_brace] must be '{')."""
     depth = 0
-    for i in range(open_brace, len(script_body)):
-        if script_body[i] == "{":
+    for i in range(open_brace, len(text)):
+        if text[i] == "{":
             depth += 1
-        elif script_body[i] == "}":
+        elif text[i] == "}":
             depth -= 1
             if depth == 0:
                 return open_brace, i
-    raise AssertionError("unbalanced braces in click handler function body")
+    raise AssertionError("unbalanced braces")
+
+
+def _click_handler_span(script_body: str) -> tuple[int, int]:
+    """Return the (open_brace_index, close_brace_index) of the click
+    handler's function body -- either an inline function literal passed
+    directly to the listener registration, or the body of a named function
+    the registration refers to by reference (e.g. a shared toggle function
+    also reusable by future keyboard handling)."""
+    assert _CLICK_LISTENER_RE.search(script_body), (
+        "no click listener registration found in <script>"
+    )
+    ref_match = _HANDLER_REF_RE.search(script_body)
+    assert ref_match, "no click listener handler argument found in <script>"
+
+    token = ref_match.group(1)
+    if token.lower() == "function":
+        open_brace = script_body.index("{", ref_match.end())
+        return _brace_span_from(script_body, open_brace)
+
+    # Named handler reference -- follow it to its own function declaration.
+    decl_re = re.compile(r"function\s+" + re.escape(token) + r"\s*\([^)]*\)\s*\{")
+    decl_match = decl_re.search(script_body)
+    assert decl_match, (
+        f"click handler references {token!r} but no function {token}(...) "
+        "definition was found"
+    )
+    open_brace = decl_match.end() - 1
+    return _brace_span_from(script_body, open_brace)
 
 
 def test_index_html_exists_and_nonempty():
@@ -189,3 +223,97 @@ def test_background_mutation_is_inside_click_handler():
                 "function body -- every background mutation must be "
                 "lexically inside the click handler"
             )
+
+
+def test_storage_key_constant_used_by_setitem():
+    source = _read_source()
+    assert re.search(r"\bSTORAGE_KEY\s*=\s*['\"][^'\"]+['\"]", source), (
+        "no STORAGE_KEY constant declaration found"
+    )
+    assert re.search(
+        r"localStorage\.setItem\(\s*STORAGE_KEY\s*,", source, re.IGNORECASE
+    ), "localStorage.setItem must be called with the STORAGE_KEY constant"
+
+
+_JS_LINE_COMMENT_RE = re.compile(r"//[^\n]*")
+_JS_BLOCK_COMMENT_RE = re.compile(r"/\*.*?\*/", re.DOTALL)
+
+
+def _strip_js_comments(text: str) -> str:
+    """Blank out // and /* */ comments (replacing each with same-length
+    whitespace, preserving every other character's offset) so prose
+    mentioning a keyword (e.g. a comment that says "can throw") doesn't
+    masquerade as real code."""
+
+    def _blank(match: re.Match[str]) -> str:
+        return "".join(" " if c != "\n" else "\n" for c in match.group(0))
+
+    return _JS_BLOCK_COMMENT_RE.sub(_blank, _JS_LINE_COMMENT_RE.sub(_blank, text))
+
+
+def _try_catch_spans(source: str) -> list[tuple[int, int, str]]:
+    """Return (try_open_brace, try_close_brace, catch_body) for every
+    try {...} catch (...) {...} block in source."""
+    spans = []
+    for try_match in re.finditer(r"try\s*\{", source):
+        try_open, try_close = _brace_span_from(source, try_match.end() - 1)
+        rest = source[try_close + 1 :]
+        catch_match = re.match(r"\s*catch\s*\([^)]*\)\s*\{", rest)
+        assert catch_match, "a try block has no matching catch block"
+        catch_open, catch_close = _brace_span_from(
+            source, try_close + 1 + catch_match.end() - 1
+        )
+        spans.append((try_open, try_close, source[catch_open + 1 : catch_close]))
+    return spans
+
+
+def test_localstorage_access_is_inside_non_rethrowing_try():
+    """Every localStorage access -- both the setItem call and the bare
+    `localStorage` property reference, which can itself throw
+    (SecurityError) when storage is disabled -- must be lexically inside a
+    try block, and that try's catch must not rethrow."""
+    source = _read_source()
+    spans = _try_catch_spans(source)
+    assert spans, "no try/catch block found wrapping localStorage access"
+    for _, _, catch_body in spans:
+        assert not re.search(r"\bthrow\b", _strip_js_comments(catch_body)), (
+            "a catch block wrapping localStorage access rethrows -- a "
+            "persistence failure must never propagate out"
+        )
+
+    code_only = _strip_js_comments(source)
+    occurrences = [m.start() for m in re.finditer(r"\blocalStorage\b", code_only)]
+    assert occurrences, "no localStorage access found"
+    for idx in occurrences:
+        assert any(open_i < idx < close_i for open_i, close_i, _ in spans), (
+            f"localStorage access at source offset {idx} is not lexically "
+            "inside a try block"
+        )
+
+
+def test_applytoggle_applies_display_before_saving():
+    """Inside the toggle function, the background assignment must precede
+    the persistence call in source order -- the visible change must never
+    wait on or be reverted by the write."""
+    source = _read_source()
+    for script_match in _SCRIPT_BLOCK_RE.finditer(source):
+        script_body = script_match.group(1)
+        decl_match = re.search(
+            r"function\s+applyToggle\s*\([^)]*\)\s*\{", script_body
+        )
+        if not decl_match:
+            continue
+        open_brace, close_brace = _brace_span_from(
+            script_body, decl_match.end() - 1
+        )
+        body = script_body[open_brace + 1 : close_brace]
+        bg_match = _BACKGROUND_ASSIGNMENT_RE.search(body)
+        save_match = re.search(r"\bsaveColor\s*\(", body)
+        assert bg_match, "applyToggle does not assign the background"
+        assert save_match, "applyToggle does not call saveColor"
+        assert bg_match.start() < save_match.start(), (
+            "the background assignment must precede the saveColor call "
+            "inside applyToggle's source order"
+        )
+        return
+    raise AssertionError("no applyToggle function found in any <script> block")
