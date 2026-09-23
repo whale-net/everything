@@ -14,7 +14,7 @@ from `krill/plugin/shared/skills/status/` (see
 
 ```
 /status <design-session-id>
-/status <milestone-id> <task-manifest>   # Milestone path — the manifest plan/implement returned; no krill query re-derives it
+/status <milestone-id> [<task-manifest>] # Milestone path — manifest optional; list_tasks {milestone_id} re-derives it if omitted
 /status <tracking-issue-number>          # no-Milestone GitHub fallback
 ```
 
@@ -45,8 +45,8 @@ from `krill/plugin/shared/skills/status/` (see
    ungated, no session needed) and group by `current_lane`. Also call
    `get_milestone_status
    {milestone_id}` — `set_milestone_status` works from an ordinary Claude
-   Code session today (whale-net/everything#2928), so this reflects
-   `planner`/`plan`/`validate`'s actual writes.
+   Code session today, so this reflects `planner`/`plan`/`validate`'s
+   actual writes.
 
 3. **GitHub tracking-issue number given** (no-Milestone fallback, or a
    legacy `project-manager` `plan:approved` issue): same as

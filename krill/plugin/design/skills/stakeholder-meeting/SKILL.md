@@ -6,12 +6,10 @@ description: Runs a stakeholder meeting round on a krill design — dispatches o
 # stakeholder-meeting
 
 Convenes every persona named in a design's specification for one round of
-feedback. Forked from `tools/project-manager/skills/stakeholder-meeting` —
-the meeting mechanic itself (a dedicated GitHub Discussion per round,
-consolidated minutes) is **unchanged**, since krill has no meeting entity.
-*What the target is*, *where the spec comes from*, and *where the round's
-link comment lands* change — the last of those has two paths depending on
-whether the design has a GitHub anchor at all (step 4). See
+feedback. The meeting mechanic (a dedicated GitHub Discussion per round,
+consolidated minutes) stays on GitHub — krill has no meeting entity. Where
+the round's link comment lands has two paths depending on whether the
+design has a GitHub anchor at all (step 4). See
 `krill/plugin/shared/CONVENTIONS.md` § "record_note fallback for
 anchor-less designs".
 
@@ -33,8 +31,7 @@ Callable directly, or automatically by `/krill-design:design
    `reconciliation` event still has open blocking questions, say so and ask
    the user whether to hold the meeting anyway — a meeting on an
    unreconciled draft usually just re-raises what architect is about to ask.
-   Read the spec from `get_design_session_slice {id}` — authoritative, the
-   same way project-manager's working-draft gist was.
+   Read the spec from `get_design_session_slice {id}` — authoritative.
 
 2. **Determine the round number.** Count existing `Stakeholder meeting round
    <N>: <url>` link comments for this design — on the product tracking
@@ -42,13 +39,12 @@ Callable directly, or automatically by `/krill-design:design
    entries (`kind: "comment"`) if it doesn't (see step 4); this meeting is
    round `N+1`.
 
-3. **Enumerate the personas.** Same as project-manager: take the intake's
-   named personas (from your own conversation history / prior `draft` event
-   notes — krill has no dedicated Personas entity), apply
-   `--personas`/`--add-persona`, deduplicate. Stop if none are named.
+3. **Enumerate the personas.** Take the intake's named personas (from your
+   own conversation history / prior `draft` event notes — krill has no
+   dedicated Personas entity), apply `--personas`/`--add-persona`,
+   deduplicate. Stop if none are named.
 
-4. **Open the meeting.** Same GitHub Discussion mechanic as
-   project-manager's: `gh discussion create --title "Stakeholder meeting
+4. **Open the meeting.** `gh discussion create --title "Stakeholder meeting
    round <N>: <feature>" ...` with the agenda (personas attending, the
    entity slice under review, the three response sections). Capture the
    discussion URL, then record the `Stakeholder meeting round <N>:
@@ -69,12 +65,12 @@ Callable directly, or automatically by `/krill-design:design
      that Feature's/Requirement's `feature_set_id`. This is the
      standardized fallback (CONVENTIONS.md) — always the same fixed body
      string and the same entity, not something improvised per run.
-     **Known blocker (whale-net/everything#2930):** `record_note` is
-     `PersonaAgent`-only, and this skill, dispatched as an ordinary Claude
-     Code subagent, resolves `PersonaSwarmOperator` — expect `forbidden`
-     today. Make the call anyway, and on failure report the exact error
-     plus the link text to the user so it isn't lost — do not silently
-     fall back to opening a GitHub Discussion/issue to route around it.
+     `record_note` hits a known blocker (below) — make the call anyway, and
+     on failure report the exact error plus the link text to the user so
+     it isn't lost. Do not silently fall back to opening a GitHub
+     Discussion/issue to route around it.
+
+     @../../../shared/snippets/task-lifecycle-blocker.md
 
 5. **Collect feedback.** Dispatch one `krill-design:stakeholder` subagent
    **per persona, in parallel**. Each gets: the persona name, the
@@ -83,7 +79,7 @@ Callable directly, or automatically by `/krill-design:design
    `Stakeholder feedback — <persona> (round <N>)` comment on the meeting
    discussion.
 
-6. **Post minutes.** Same format as project-manager: a persona/blockers/
+6. **Post minutes.** A persona/blockers/
    summary table, consolidated deduplicated `SB-<N>.<n>` blockers, grouped
    non-blocking guidance/feedback, and a terminal `Stakeholder meeting:
    blocked (<k> blockers)` / `Stakeholder meeting: cleared` line.

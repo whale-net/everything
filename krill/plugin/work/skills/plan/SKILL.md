@@ -7,7 +7,7 @@ description: Task breakdown (krill-work fork) — converts a krill-design design
 
 Turns a signed-off krill design into krill `Task` entities, by dispatching
 `krill-work:planner`. Pure task breakdown — no code written, no branches
-touched. Forked from `tools/project-manager/skills/plan`.
+touched.
 
 ## Usage
 

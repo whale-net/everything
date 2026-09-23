@@ -5,11 +5,10 @@ description: Scope a product before any feature spec exists — interviews you f
 
 # product
 
-Forked from `tools/project-manager/skills/product`. The artifact is krill
-entities (`Product`, `FeatureSet`, `LoadBearingDecision`, `Milestone` via a
-`DesignSession`), not a GitHub Discussion + committed `PRODUCT.md` +
-tracking issue — see `krill/plugin/shared/CONVENTIONS.md` for the
-design-session mechanics.
+The artifact is krill entities (`Product`, `FeatureSet`,
+`LoadBearingDecision`, `Milestone` via a `DesignSession`), not a GitHub
+Discussion + committed `PRODUCT.md` + tracking issue — see
+`krill/plugin/shared/CONVENTIONS.md` for the design-session mechanics.
 
 ## The artifact
 
