@@ -28,14 +28,23 @@
       }
     }
 
-    document.body.addEventListener('click', function () {
+    // Single reusable toggle path: applies the visible change first, then
+    // persists it. Future keyboard activation (M2-P2) calls this same
+    // function so it gets persistence for free.
+    function applyToggle() {
       var current = window.getComputedStyle(document.body).backgroundColor;
+      var next;
       if (current === 'rgb(0, 0, 0)') {
         document.body.style.background = '#ffffff';
+        next = 'white';
       } else {
         document.body.style.background = '#000000';
+        next = 'black';
       }
-    });
+      saveColor(next);
+    }
+
+    document.body.addEventListener('click', applyToggle);
   </script>
 </body>
 </html>
