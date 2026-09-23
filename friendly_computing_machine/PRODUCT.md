@@ -56,12 +56,6 @@ Translating a domain's events into Slack messages, such as turning manmanv2's `e
 
 **Stays cheap:** linking Slack users to Keycloak accounts, each system's authorization policy (for example, who may restart a server), and display names. What is expensive later: sessions and actions recorded under FCM's identity can never be re-attributed to the person who asked. Every "who did this" rollup and every per-person permission would then have to start with no history.
 
-### Considered and not load-bearing
-
-- **One scheduler (Temporal) instead of the task pool.** The task pool runs only the four music-poll tasks and uses two tables. Moving them to Temporal is cheap at any point, so M1's spec can choose either.
-- **Channel routing in the database instead of hardcoded.** The mapping from channel type to channel already lives in `slackspecialchannel`. Only the type name `manman_dev` is hardcoded. LB1's route name covers the part that matters.
-- **manmanv2 through its `external` exchange instead of generated clients.** This is covered by LB1's adapter clause, so it does not need an entry of its own.
-
 ---
 
 ## Non-goals

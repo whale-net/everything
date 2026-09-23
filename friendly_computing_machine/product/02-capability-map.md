@@ -12,12 +12,17 @@ Part of the [FCM product brief](../PRODUCT.md). One line per capability, phrased
 ### Next
 
 - C5 — A service can post a notification to a Slack channel through FCM without holding Slack credentials itself.
-- C6 — A game-server player can see manmanv2 server status changes in a Slack channel.
+- C6 — A community member can see manmanv2 server status changes in a Slack channel.
 - C7 — A community member can hold a multi-turn AI conversation in Slack that is run by a whagent_net session.
 
 ### Later
 
-- C8 — A game-server player can start, stop, or restart a manmanv2 server from Slack.
+- C8 — A community member can start, stop, or restart a manmanv2 server from Slack.
 - C9 — An agent can ask a human a question in Slack and receive the answer back in its own workflow.
 - C10 — A service can register a slash command or interaction that FCM routes to it.
 - C11 — A community member can have the Slack AI assistant take actions in other monorepo systems through whagent_net tools.
+
+### Cheap later (no load-bearing decision needed)
+
+- Moving the music poll from the custom task pool onto Temporal is cheap at any point: it is four tasks and two tables. No milestone depends on which scheduler runs them.
+- Routing to new channels needs no schema work. The `slackspecialchannel` tables already map a channel type to channels, and LB1 turns those types into routes.
