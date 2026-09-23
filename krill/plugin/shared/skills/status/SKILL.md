@@ -14,7 +14,7 @@ from `krill/plugin/shared/skills/status/` (see
 
 ```
 /status <design-session-id>
-/status <milestone-id> <task-manifest>   # Milestone path — the manifest plan/implement returned; no krill query re-derives it
+/status <milestone-id> [<task-manifest>] # Milestone path — manifest optional; list_tasks {milestone_id} re-derives it if omitted
 /status <tracking-issue-number>          # no-Milestone GitHub fallback
 ```
 
@@ -39,14 +39,14 @@ from `krill/plugin/shared/skills/status/` (see
      open — report the count and, since this is often the real answer to
      "why hasn't this signed off yet," name them.
 
-2. **Milestone id plus a task manifest given** (Milestone path — there is no
-   krill query that lists a milestone's tasks, so you must be handed the
-   manifest; CONVENTIONS.md "No task-discovery query exists"): call
-   `get_task {id}` for every task id in the manifest (ungated, no session
-   needed) and group by `current_lane`. Also call `get_milestone_status
+2. **Milestone path** — use the task manifest if you were handed one, or
+   derive it yourself with `list_tasks {milestone_id}` (CONVENTIONS.md
+   "Work axis"): call `get_task {id}` for every task id (both tools
+   ungated, no session needed) and group by `current_lane`. Also call
+   `get_milestone_status
    {milestone_id}` — `set_milestone_status` works from an ordinary Claude
-   Code session today (whale-net/everything#2928), so this reflects
-   `planner`/`plan`/`validate`'s actual writes.
+   Code session today, so this reflects `planner`/`plan`/`validate`'s
+   actual writes.
 
 3. **GitHub tracking-issue number given** (no-Milestone fallback, or a
    legacy `project-manager` `plan:approved` issue): same as

@@ -38,9 +38,9 @@ a `signoff` event with `signoff_status: approved`, and the Milestone id:
    does *not* name task ids (it names a design-session/signoff event
    instead) means no prior `planner` run has happened — proceed. A note
    that does name task ids means a prior run already created them — **stop
-   and report the existing state** (ask whoever dispatched you for the task
-   manifest that run returned; krill has no query to re-derive it — see
-   CONVENTIONS.md "No task-discovery query exists"). If the note is
+   and report the existing state** (call `list_tasks {milestone_id}` to
+   re-derive that run's task manifest directly — CONVENTIONS.md "Work
+   axis" — rather than asking whoever dispatched you). If the note is
    ambiguous (freeform text, not a guaranteed machine-readable signal),
    don't guess either way — ask whoever dispatched you to confirm before
    creating tasks that might duplicate a prior run's.
@@ -116,9 +116,9 @@ listing follow-ups.
 
 ## Scope note triage
 
-**Milestone path:** call `get_task {id}` for each task you created this
-milestone (from your own manifest — there's no krill query that lists them
-for you) and read its `notes[]` for anything still `kind: "scope-note",
+**Milestone path:** call `list_tasks {milestone_id}` for every task under
+the milestone (CONVENTIONS.md "Work axis"), then `get_task {id}` on each
+and read its `notes[]` for anything still `kind: "scope-note",
 status: "noted"`. Classify each: actioning it now means `create_task` for
 the follow-up plus `transition_note_lifecycle {status: "closed"}` on the
 note; deferring means `transition_note_lifecycle {status: "carried-over"}`

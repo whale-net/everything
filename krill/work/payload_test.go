@@ -130,6 +130,10 @@ func (f *fakeTaskStore) RequeueTask(ctx context.Context, params store.RequeuePar
 	panic("not used by this test")
 }
 
+func (f *fakeTaskStore) ListTasksByMilestone(ctx context.Context, milestoneID uuid.UUID) ([]store.TaskSummary, error) {
+	panic("not used by this test")
+}
+
 var _ store.TaskStore = (*fakeTaskStore)(nil)
 
 // TestAssemble_CrossScopeTaskID_NotFound proves NFR1: a taskID that

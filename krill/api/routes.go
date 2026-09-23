@@ -60,6 +60,9 @@ func setupRoutes(mux *http.ServeMux, pool *pgxpool.Pool, githubToken string) {
 	mux.HandleFunc("POST /sessions/init", handlers.InitSessionHandler(sessions))
 
 	mux.Handle("POST /products", gate(handlers.CreateProductHandler(entities.Products())))
+	// Product discovery (issue #2941): ungated read, scope_id is a
+	// required query parameter since a Product has no parent entity.
+	mux.HandleFunc("GET /products", handlers.ListProductsHandler(entities.Products()))
 	mux.Handle("POST /feature-sets", gate(handlers.CreateFeatureSetHandler(entities.FeatureSets())))
 	mux.Handle("POST /features", gate(handlers.CreateFeatureHandler(entities.Features())))
 	mux.Handle("POST /requirements", gate(handlers.CreateRequirementHandler(entities.Requirements())))
@@ -78,6 +81,9 @@ func setupRoutes(mux *http.ServeMux, pool *pgxpool.Pool, githubToken string) {
 	mux.Handle("POST /milepebbles/{id}/discovered-scope", gate(handlers.AddDiscoveredScopeHandler(entities.MilestoneAuthoring())))
 	mux.HandleFunc("GET /milepebbles/{id}", handlers.GetMilepebbleHandler(entities.MilestoneAuthoring()))
 	mux.HandleFunc("GET /milestones/{id}/milepebbles", handlers.ListMilepebblesHandler(entities.MilestoneAuthoring()))
+	// Task discovery (issue #2941): every task scoped to one milestone_ref
+	// row (milepebble or uncut milestone), ungated read.
+	mux.HandleFunc("GET /milestones/{id}/tasks", handlers.ListTasksHandler(entities.Tasks()))
 
 	// milestone_status_event (issue #2685, FR8/FR9/FR12) serves both a
 	// MilestoneKindMilestone and a MilestoneKindMilepebble row -- both are

@@ -1,12 +1,15 @@
 // Unit tests for CreateProductHandler (product.go, issue #2490's Testing
-// section). No Postgres dependency -- fakeProductStore/fakeSessionStore
-// stand in for the store interfaces (krill/store/entities_integration_test.go
-// covers the real-Postgres chain).
+// section) and ListProductsHandler (product.go, issue #2941). No Postgres
+// dependency -- fakeProductStore/fakeSessionStore stand in for the store
+// interfaces (krill/store/entities_integration_test.go covers the
+// real-Postgres chain).
 package handlers_test
 
 import (
 	"encoding/json"
+	"errors"
 	"net/http"
+	"net/http/httptest"
 	"testing"
 
 	"github.com/google/uuid"
@@ -114,4 +117,66 @@ func TestCreateProductHandler_ActingDiffersFromOnBehalfOf_BothRecordedDistinctly
 	assert.Equal(t, acting, sess.Acting)
 	assert.Equal(t, onBehalfOf, sess.OnBehalfOf)
 	assert.NotEqual(t, sess.Acting, sess.OnBehalfOf, "a create must never collapse acting and on_behalf_of into one subject")
+}
+
+// TestListProductsHandler_MissingOrInvalidScopeID_Returns400 proves
+// scope_id is a required query parameter -- a Product has no parent
+// entity to resolve scope from.
+func TestListProductsHandler_MissingOrInvalidScopeID_Returns400(t *testing.T) {
+	for name, target := range map[string]string{
+		"missing": "/products",
+		"invalid": "/products?scope_id=not-a-uuid",
+	} {
+		t.Run(name, func(t *testing.T) {
+			products := &fakeProductStore{}
+			rec := httptest.NewRecorder()
+			handlers.ListProductsHandler(products)(rec, httptest.NewRequest(http.MethodGet, target, nil))
+
+			assert.Equal(t, http.StatusBadRequest, rec.Code, rec.Body.String())
+			assert.Equal(t, uuid.Nil, products.gotListScopeID, "a bad scope_id must never reach the store")
+		})
+	}
+}
+
+// TestListProductsHandler_Success proves scope_id passes through unchanged
+// and every current Product is returned in store order with id/name/vision.
+func TestListProductsHandler_Success(t *testing.T) {
+	scopeID := uuid.New()
+	first, second := uuid.New(), uuid.New()
+	products := &fakeProductStore{listed: []store.Product{
+		{ID: first, ScopeID: scopeID, Name: "Alpha", Vision: "first vision"},
+		{ID: second, ScopeID: scopeID, Name: "Beta", Vision: "second vision"},
+	}}
+
+	rec := httptest.NewRecorder()
+	handlers.ListProductsHandler(products)(rec, httptest.NewRequest(http.MethodGet, "/products?scope_id="+scopeID.String(), nil))
+
+	require.Equal(t, http.StatusOK, rec.Code, rec.Body.String())
+	assert.Equal(t, scopeID, products.gotListScopeID)
+	var resp handlers.ListProductsResponse
+	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &resp))
+	assert.Equal(t, []handlers.ProductSummary{
+		{ID: first.String(), Name: "Alpha", Vision: "first vision"},
+		{ID: second.String(), Name: "Beta", Vision: "second vision"},
+	}, resp.Products)
+}
+
+// TestListProductsHandler_Empty_ReturnsEmptyArray proves a scope with no
+// Products lists as `[]`, never `null`.
+func TestListProductsHandler_Empty_ReturnsEmptyArray(t *testing.T) {
+	rec := httptest.NewRecorder()
+	handlers.ListProductsHandler(&fakeProductStore{})(rec, httptest.NewRequest(http.MethodGet, "/products?scope_id="+uuid.New().String(), nil))
+
+	require.Equal(t, http.StatusOK, rec.Code, rec.Body.String())
+	assert.JSONEq(t, `{"products": []}`, rec.Body.String())
+}
+
+// TestListProductsHandler_StoreError_Returns500 proves an unexpected store
+// failure is a 500, not a partial list.
+func TestListProductsHandler_StoreError_Returns500(t *testing.T) {
+	products := &fakeProductStore{listErr: errors.New("boom")}
+	rec := httptest.NewRecorder()
+	handlers.ListProductsHandler(products)(rec, httptest.NewRequest(http.MethodGet, "/products?scope_id="+uuid.New().String(), nil))
+
+	assert.Equal(t, http.StatusInternalServerError, rec.Code, rec.Body.String())
 }

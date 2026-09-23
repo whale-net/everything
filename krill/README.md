@@ -26,6 +26,7 @@ milestone hangs off. No spec entities exist yet — that is later M1 work.
 | `GET /healthz` | Live DB connectivity check. Never gated. |
 | `POST /sessions/init` | Mints a krill-native session id (FR3). Body: `{"scope_id": "<uuid>", "acting": {"iss", "sub", "kind"}, "on_behalf_of": {"iss", "sub", "kind"}, "whagent_session_id": "<optional string>"}`; `kind` is `human` or `service`. Returns `{"session_id": "<uuid>"}`. Every write endpoint below (and every write endpoint added by a later M1 task -- #2493/#2496) requires the resulting id on an `X-Krill-Session-Id` header (`api/handlers/gate.go`'s `RequireSession`) — see `ARCHITECTURE.md` "`init` and the write gate" for why `init` itself takes the caller's identity fields as-is rather than verifying a bearer credential. The importer (`//krill/importer/cmd`, issue #2492) is gated the same way but takes the resulting id as a `--session-id` flag, since it is a CLI, not an HTTP write endpoint. |
 | `POST /products` | Creates a Product (FR1). Body: `{"name", "vision"}`. No parent -- top of the spec chain. Gated. Returns `{"id": "<uuid>"}` (the surrogate id, LB2 -- never a display number). |
+| `GET /products?scope_id=<uuid>` | Lists every current Product in a scope as `{"products": [{"id", "name", "vision"}]}`, ordered by position then name — the discovery entry point for the Product id every slice read needs (issue #2941). `scope_id` is a required query parameter. Never gated. Also exposed as the `list_products` MCP tool on `/mcp/design`. |
 | `POST /feature-sets` | Creates a FeatureSet under a Product (FR2). Body: `{"product_id", "name", "description"?}`. Gated. Returns `{"id": "<uuid>"}`. |
 | `POST /features` | Creates a Feature under a FeatureSet (FR2). Body: `{"feature_set_id", "name", "description"?}`. Gated. Returns `{"id": "<uuid>"}`. |
 | `POST /requirements` | Creates an FR or NFR under a Feature (FR2). Body: `{"feature_id", "kind": "FR"\|"NFR", "name", "body"?}`. Gated. Returns `{"id": "<uuid>"}`. |
@@ -111,6 +112,7 @@ unless noted otherwise.
 | `POST /tasks` | Creates a task under a milepebble or milestone, with a lane sequence and starting lane (FR1). Body: `{"milestone_id", "title", "body"?, "lane_sequence", "starting_lane"}`. Gated. Returns `{"id": "<uuid>"}`. |
 | `POST /tasks/{id}/dependencies` | Declares that a task depends on one or more other tasks (FR2). Body: `{"depends_on_task_ids"}`. Gated. |
 | `GET /tasks/{id}/dependencies` | Lists the task ids a task depends on. Never gated. |
+| `GET /milestones/{id}/tasks` | Lists every task scoped to a milepebble (or uncut milestone), oldest-created first, as `{"tasks": [{"id", "title", "current_lane", "attempt_count", "has_live_claim"}]}` — task discovery without already knowing ids (issue #2941). Never gated. |
 | `GET /tasks/{id}` | Returns the task's payload document (current lane, live claim if any, dependency and note summaries) — the same document claim/complete/abandon return, whether or not a claim is currently live (FR4/FR10). Never gated. |
 | `POST /tasks/{id}/claim` | Claims a task for the caller's session, mints a lease, and records one attempt — race-safe via a row lock, not an application mutex (FR3/FR5). Gated. Returns the task payload document. |
 | `POST /tasks/{id}/heartbeat` | Extends the caller's current claim's lease (FR6). Body: `{"claim_id"}`. Gated. Rejects a stale/superseded claim id with 409, never a silent no-op. Returns `{"task_id", "claim_id", "extended_to"}`. |
@@ -132,6 +134,7 @@ too rather than a fourth surface of its own (LB7).
 | `create_task` | write | `TaskStore.CreateTask` (FR1) | Swarm Operator |
 | `declare_task_dependencies` | write | `TaskStore.DeclareDependency` (FR2) | Swarm Operator |
 | `get_task` | read | `work.Assembler.Assemble` (FR4, FR10) | any resolved persona |
+| `list_tasks` | read | `TaskStore.ListTasksByMilestone` (issue #2941) | any resolved persona |
 | `claim_task` | write | `TaskStore.ClaimTask` (FR3, FR5) | Agent |
 | `heartbeat_task` | write | `TaskStore.Heartbeat` (FR6) | Agent |
 | `complete_task` | write | `TaskStore.CompleteTask` (FR8) | Agent |

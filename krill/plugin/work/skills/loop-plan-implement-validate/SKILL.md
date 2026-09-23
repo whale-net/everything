@@ -11,10 +11,11 @@ Same loop-control and final-verification mechanics as
 `project-manager:*` skill names, starting from a krill FeatureSet/
 design-session id (once signed off). **On the Milestone path, `<n>`
 throughout is the Milestone id plus the task manifest `plan` produced — not
-a GitHub tracking issue** (CONVENTIONS.md "No task-discovery query exists");
-each phase's subagent must be handed the manifest explicitly since nothing
-can re-derive it. On the no-Milestone fallback, `<n>` is still the GitHub
-tracking issue `krill-work:planner` mints.
+a GitHub tracking issue.** Hand each phase's subagent the manifest
+explicitly where you have it (faster than a re-derive); a subagent missing
+it can still recover the task set itself with `list_tasks {milestone_id}`
+(CONVENTIONS.md "Work axis"). On the no-Milestone fallback, `<n>` is still
+the GitHub tracking issue `krill-work:planner` mints.
 
 On the Milestone path, every `worker`/`validator`/`system-validator`
 dispatch inside `implement`/`validate` is expected to hit the known

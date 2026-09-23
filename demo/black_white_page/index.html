@@ -1,0 +1,102 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>Black and White Page</title>
+  <style>
+    html, body {
+      background: #ffffff;
+      margin: 0;
+      height: 100%;
+    }
+    html.dark, html.dark body {
+      background: #000000;
+    }
+  </style>
+  <script>
+    // Single source of truth for the persisted-color key and vocabulary,
+    // declared here (not in the body script) so this same, synchronous
+    // head script can read it before body is parsed.
+    var STORAGE_KEY = 'black_white_page:color';
+
+    // Restore-on-load, read-failure-safe. A thrown or corrupted read is
+    // treated as no persisted value -- caller falls back to M1's white
+    // default.
+    function readColor() {
+      try {
+        var v = localStorage.getItem(STORAGE_KEY);
+        return (v === 'black' || v === 'white') ? v : null;
+      } catch (e) {
+        return null;
+      }
+    }
+
+    // Applies the restored color before <body> is parsed, so there's no
+    // white-then-black flash. document.documentElement (<html>) is the
+    // only element that exists this early; the 'dark' class it toggles
+    // here is the same one applyToggle() (body script) flips on click,
+    // so the two stay in sync without a second color-tracking mechanism.
+    if (readColor() === 'black') {
+      document.documentElement.classList.add('dark');
+    }
+  </script>
+</head>
+<body tabindex="0" role="button" aria-label="Toggle background color">
+  <script>
+    // STORAGE_KEY is declared in the <head> script above so it's available
+    // before this script runs.
+    function saveColor(color) {
+      try {
+        localStorage.setItem(STORAGE_KEY, color);
+      } catch (e) {
+        // Ignore: quota exceeded, private-mode denial, or storage
+        // disabled by policy -- the visible toggle must never depend on
+        // a successful write. window.localStorage access itself can
+        // throw (SecurityError), so it stays inside this try too.
+      }
+    }
+
+    // Single reusable toggle path: applies the visible change first, then
+    // persists it. Future keyboard activation (M2-P2) calls this same
+    // function so it gets persistence for free. Current color is derived
+    // from the 'dark' class (which the head script may have already set
+    // on restore), not a separate variable, so a restored-black page's
+    // first click correctly goes to white.
+    function applyToggle() {
+      var next;
+      if (document.documentElement.classList.contains('dark')) {
+        document.documentElement.classList.remove('dark');
+        document.body.style.background = '#ffffff';
+        next = 'white';
+      } else {
+        document.documentElement.classList.add('dark');
+        document.body.style.background = '#000000';
+        next = 'black';
+      }
+      saveColor(next);
+    }
+
+    // Wired unconditionally, regardless of what readColor() above did --
+    // a storage read failure must never abort initialization. M2-P2's
+    // keyboard wiring joins this same unconditional init path.
+    document.body.addEventListener('click', applyToggle);
+
+    // Handles Enter/Space activation of the focusable toggle control.
+    // Ignores repeats and modified keys so holding a key doesn't strobe;
+    // reuses applyToggle() rather than duplicating the color mutation.
+    function handleToggleKeydown(event) {
+      if (event.repeat || event.ctrlKey || event.altKey || event.metaKey) {
+        return;
+      }
+      if (event.key === 'Enter') {
+        applyToggle();
+      } else if (event.key === ' ' || event.key === 'Spacebar') {
+        event.preventDefault();
+        applyToggle();
+      }
+    }
+
+    document.body.addEventListener('keydown', handleToggleKeydown);
+  </script>
+</body>
+</html>
