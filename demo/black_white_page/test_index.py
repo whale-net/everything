@@ -40,6 +40,23 @@ _HANDLER_REF_RE = re.compile(
     re.IGNORECASE,
 )
 
+# A keydown listener attached to document, window, or document.body -- either
+# via addEventListener('keydown', ...) or an onkeydown assignment.
+_KEYDOWN_LISTENER_RE = re.compile(
+    r"(?:document\s*\.\s*body|document|window)\s*\.\s*addEventListener\(\s*['\"]keydown['\"]"
+    r"|(?:document\s*\.\s*body|document|window)\s*\.\s*onkeydown\s*=",
+    re.IGNORECASE,
+)
+
+# The handler argument/value of a keydown listener registration -- either the
+# literal keyword `function` (an inline function expression) or an
+# identifier (a reference to a separately-defined named function).
+_KEYDOWN_HANDLER_REF_RE = re.compile(
+    r"(?:addEventListener\(\s*['\"]keydown['\"]\s*,\s*|\.onkeydown\s*=\s*)"
+    r"(function\b|[A-Za-z_$][\w$]*)",
+    re.IGNORECASE,
+)
+
 # Any background value assigned via `.style.background(Color) = <value>` or
 # `setProperty('background(-color)', <value>)`, capturing the value token so
 # it can be checked against the two supported colors.
@@ -114,6 +131,32 @@ def _click_handler_span(script_body: str) -> tuple[int, int]:
     decl_match = decl_re.search(script_body)
     assert decl_match, (
         f"click handler references {token!r} but no function {token}(...) "
+        "definition was found"
+    )
+    open_brace = decl_match.end() - 1
+    return _brace_span_from(script_body, open_brace)
+
+
+def _keydown_handler_span(script_body: str) -> tuple[int, int]:
+    """Return the (open_brace_index, close_brace_index) of the keydown
+    handler's function body -- either an inline function literal passed
+    directly to the listener registration, or the body of a named function
+    the registration refers to by reference (mirrors _click_handler_span)."""
+    assert _KEYDOWN_LISTENER_RE.search(script_body), (
+        "no keydown listener registration found in <script>"
+    )
+    ref_match = _KEYDOWN_HANDLER_REF_RE.search(script_body)
+    assert ref_match, "no keydown listener handler argument found in <script>"
+
+    token = ref_match.group(1)
+    if token.lower() == "function":
+        open_brace = script_body.index("{", ref_match.end())
+        return _brace_span_from(script_body, open_brace)
+
+    decl_re = re.compile(r"function\s+" + re.escape(token) + r"\s*\([^)]*\)\s*\{")
+    decl_match = decl_re.search(script_body)
+    assert decl_match, (
+        f"keydown handler references {token!r} but no function {token}(...) "
         "definition was found"
     )
     open_brace = decl_match.end() - 1
@@ -425,3 +468,90 @@ def test_applytoggle_applies_display_before_saving():
         )
         return
     raise AssertionError("no applyToggle function found in any <script> block")
+
+
+def test_keydown_listener_exists_and_references_apply_toggle():
+    """The toggle control must handle keyboard activation: either a keydown
+    listener whose handler calls applyToggle() (reusing the click handler's
+    single toggle path, never duplicating the color mutation), or -- if the
+    toggle is a native <button> -- Enter/Space already fire a native click,
+    so no separate keydown handler is required."""
+    source = _read_source()
+    code_only = _strip_js_comments(source)
+    if _BUTTON_TAG_RE.search(code_only):
+        return
+
+    assert _KEYDOWN_LISTENER_RE.search(source), (
+        "no keydown listener (addEventListener('keydown', ...) or "
+        "onkeydown=) found registered on document, window, or "
+        "document.body, and no native <button> toggle control was found "
+        "either"
+    )
+    for script_match in _SCRIPT_BLOCK_RE.finditer(source):
+        script_body = script_match.group(1)
+        if not _KEYDOWN_LISTENER_RE.search(script_body):
+            continue
+        open_brace, close_brace = _keydown_handler_span(script_body)
+        body = script_body[open_brace + 1 : close_brace]
+        assert re.search(r"\bapplyToggle\s*\(", body), (
+            "keydown handler does not call applyToggle() -- the color "
+            "mutation must stay lexically inside applyToggle(), not be "
+            "duplicated in the keydown handler"
+        )
+        return
+    raise AssertionError(
+        "no <script> block contains the keydown listener registration"
+    )
+
+
+def test_keydown_handles_enter_and_space():
+    """The keydown handler must check for both the Enter key and the Space
+    key (accepting the legacy 'Spacebar' key value too). Skipped for a
+    native <button> toggle -- Enter/Space already activate it natively."""
+    source = _read_source()
+    code_only = _strip_js_comments(source)
+    if _BUTTON_TAG_RE.search(code_only):
+        return
+
+    for script_match in _SCRIPT_BLOCK_RE.finditer(source):
+        script_body = script_match.group(1)
+        if not _KEYDOWN_LISTENER_RE.search(script_body):
+            continue
+        open_brace, close_brace = _keydown_handler_span(script_body)
+        body = script_body[open_brace + 1 : close_brace]
+        assert re.search(r"['\"]Enter['\"]", body), (
+            "keydown handler does not check for the Enter key"
+        )
+        assert re.search(r"['\"] ['\"]|['\"]Spacebar['\"]", body), (
+            "keydown handler does not check for the Space key (' ' or "
+            "'Spacebar')"
+        )
+        return
+    raise AssertionError("no keydown listener handler body found")
+
+
+def test_space_keydown_calls_prevent_default():
+    """preventDefault must be called on the Space key path so pressing
+    Space while the toggle is focused does not also scroll the page.
+    Skipped for a native <button> toggle -- out of this handler's scope."""
+    source = _read_source()
+    code_only = _strip_js_comments(source)
+    if _BUTTON_TAG_RE.search(code_only):
+        return
+
+    for script_match in _SCRIPT_BLOCK_RE.finditer(source):
+        script_body = script_match.group(1)
+        if not _KEYDOWN_LISTENER_RE.search(script_body):
+            continue
+        open_brace, close_brace = _keydown_handler_span(script_body)
+        body = script_body[open_brace + 1 : close_brace]
+        space_match = re.search(r"['\"] ['\"]|['\"]Spacebar['\"]", body)
+        assert space_match, "keydown handler does not check for the Space key"
+        prevent_match = re.search(r"\.preventDefault\s*\(", body)
+        assert prevent_match, "keydown handler never calls preventDefault()"
+        assert prevent_match.start() > space_match.start(), (
+            "preventDefault() must be called on the Space key path, not "
+            "before the Space key check"
+        )
+        return
+    raise AssertionError("no keydown listener handler body found")
