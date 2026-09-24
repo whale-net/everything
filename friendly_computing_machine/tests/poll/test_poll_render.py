@@ -53,6 +53,7 @@ def test_open_poll_has_vote_buttons_and_voters():
     texts = _texts(blocks)
     assert "<@U1>, <@U2>" in texts
     assert any("2 votes" in t for t in texts)
+    assert any("Created by <@U0> · created with /wpoll" in t for t in texts)
     assert blocks[-1]["elements"][0]["action_id"] == POLL_CLOSE_ACTION
 
 

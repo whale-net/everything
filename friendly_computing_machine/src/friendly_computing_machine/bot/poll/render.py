@@ -83,7 +83,10 @@ def render_poll_blocks(snapshot: PollSnapshot) -> list[dict]:
                 }
             )
 
-    footer = [f"Created by <@{poll.creator_slack_user_slack_id}>"]
+    footer = [
+        f"Created by <@{poll.creator_slack_user_slack_id}>",
+        "created with /wpoll",
+    ]
     if poll.anonymous:
         footer.append("anonymous")
     if poll.vote_limit is not None:
