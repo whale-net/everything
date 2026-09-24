@@ -126,7 +126,9 @@ def test_not_running_with_a_new_message_resolves_with_its_text_and_next_seq():
     assert outcome == ("the real answer", 9)
 
 
-def test_capped_resolves_immediately_regardless_of_transcript():
+def test_capped_with_no_transcript_text_falls_back_to_cap_notice_only():
+    # The mid-tool-loop cap trip: the turn ends without committing its own
+    # final assistant_message, so there's genuinely nothing else to show.
     outcome = resolve_turn_outcome(
         SESSION_STATE_CAPPED, None, since_seq=5, transcript_result=None
     )
@@ -135,6 +137,25 @@ def test_capped_resolves_immediately_regardless_of_transcript():
     text, next_seq = outcome
     assert "budget" in text
     assert next_seq == 5
+
+
+def test_capped_with_a_real_reply_shows_the_reply_and_the_cap_notice():
+    # The common cap trip path: the turn that hits the cap still runs to
+    # completion and commits its own transcript event first
+    # (whagent_net/worker/caps.go) -- that real reply must win over the
+    # generic cap notice rather than being discarded by it.
+    outcome = resolve_turn_outcome(
+        SESSION_STATE_CAPPED,
+        None,
+        since_seq=5,
+        transcript_result=WhagentTranscriptResult(text="the real answer", seq=8),
+    )
+
+    assert outcome is not None
+    text, next_seq = outcome
+    assert "the real answer" in text
+    assert "budget" in text
+    assert next_seq == 9
 
 
 def test_failed_resolves_immediately_and_includes_error_detail():
