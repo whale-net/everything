@@ -22,6 +22,7 @@ for a worked example, or the ground-truth `claude-native-ui` bundle pulled
 via `sys_agent_download` during authoring):
 
 ```yaml
+spec_version: 1
 name: <agent name>
 description: >-
   <one paragraph -- when to use this agent>
@@ -111,6 +112,9 @@ This repo vendors no separate Omnigent documentation — the CLI's own
 
 ## Known gaps
 
+- **`spec_version: 1` is required** — confirmed live: `omnigent run` rejects
+  a bundle with `Error: config.yaml missing required field: spec_version`
+  otherwise. Every bundle here must set it.
 - **MCP-server wiring syntax is best-effort, not confirmed.** Each bundle's
   `mcp_servers:` key is modeled on `tools/project-manager/mcp_config.json`'s
   server-entry shape (`name` + `serverUrl`). `sys_agent_get` confirms the
