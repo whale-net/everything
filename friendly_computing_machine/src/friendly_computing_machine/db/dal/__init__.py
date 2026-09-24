@@ -51,6 +51,7 @@ from .poll_dal import (
 )
 from .slack_dal import (
     find_poll_instance_messages,
+    get_agent_link_for_channel,
     get_bot_slack_user_slack_ids,
     get_music_poll_channel_slack_ids,
     get_slack_channel,
@@ -60,11 +61,14 @@ from .slack_dal import (
     get_slack_special_channels_from_type,
     get_slack_team_id_map,
     get_slack_teams,
+    get_thread_session,
     get_user_teams_from_messages,
     insert_message,
     insert_slack_command,
+    insert_thread_session,
     select_distinct_slack_team_slack_id_from_slack_message,
     update_slack_command,
+    update_thread_session_status,
     upsert_message,
     upsert_slack_team,
     upsert_slack_teams,
@@ -100,6 +104,11 @@ __all__ = [
     "get_slack_special_channel_type_from_name",
     "get_slack_special_channels_from_type",
     "get_slack_message_from_id",
+    # whagent-net channel/thread link functions
+    "get_agent_link_for_channel",
+    "get_thread_session",
+    "insert_thread_session",
+    "update_thread_session_status",
     # Task functions
     "upsert_tasks",
     "upsert_task",
