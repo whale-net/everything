@@ -96,13 +96,26 @@ def resolve_turn_outcome(
     multi-message turn, and not-RUNNING with no message means a stale
     read of the *previous* turn's terminal state, caught before SendTurn's
     new turn has been observed as started.
+
+    A capped turn still runs to completion and commits its own transcript
+    event before the session flips to CAPPED (whagent_net/worker/caps.go)
+    -- only a cap that trips mid-tool-loop leaves no final assistant
+    message, so transcript_result can still be None here. Either way the
+    real reply, when one exists, must win over the generic cap notice
+    rather than being replaced by it -- so it's shown with the notice
+    appended, not discarded.
     """
     if state == SESSION_STATE_CAPPED:
-        return (
-            "This conversation hit its budget (turn or cost cap) and has "
-            "stopped -- see the session link above for details.",
-            since_seq,
+        cap_notice = (
+            "_This conversation hit its budget (turn or cost cap) and has "
+            "stopped -- see the session link above for details._"
         )
+        if transcript_result is not None:
+            return (
+                f"{transcript_result.text}\n\n{cap_notice}",
+                transcript_result.seq + 1,
+            )
+        return (cap_notice, since_seq)
     if state == SESSION_STATE_FAILED:
         detail = f" ({error_detail})" if error_detail else ""
         return (
