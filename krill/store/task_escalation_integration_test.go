@@ -158,7 +158,11 @@ func TestMigration016_UpDownUp_Clean(t *testing.T) {
 		return count == 1
 	}
 
-	require.NoError(t, runner.Up(), "first Up must apply every migration, including 016, cleanly")
+	// Migrate to exactly 016, not Up() (which now applies every later
+	// migration too, e.g. 017_display_numbers, issue #2969) -- this test
+	// is about 016's own up/down/up idempotency specifically, and must stay
+	// correct regardless of how many migrations land after it.
+	require.NoError(t, runner.Migrate(16), "apply every migration through exactly 016, including 016 itself, cleanly")
 	assert.True(t, tableExists("task_escalation_event"))
 	assert.True(t, tableExists("task_intervention_event"))
 	assert.True(t, tableExists("task_note_lifecycle_event"))
@@ -173,7 +177,9 @@ func TestMigration016_UpDownUp_Clean(t *testing.T) {
 	// Runner.Down() rolls back every migration in the schema, not just
 	// this one (libs/go/migrate's own doc comment) -- Steps(-1) is the
 	// single-migration-down primitive this test actually needs, to prove
-	// 016's own down.sql, not migration 001's.
+	// 016's own down.sql, not migration 001's. Since the runner is
+	// pinned at exactly 016 above, this steps down 016 regardless of what
+	// migrations exist after it.
 	require.NoError(t, runner.Steps(-1), "stepping down one migration (016's own down.sql) must be clean")
 	assert.False(t, tableExists("task_escalation_event"))
 	assert.False(t, tableExists("task_intervention_event"))

@@ -90,11 +90,11 @@ var _ SliceStore = sliceStore{}
 const qualifiedRequirementColumns = `requirement.revision_id, requirement.id, requirement.scope_id, requirement.feature_id, requirement.kind, requirement.name, requirement.body, requirement.position, requirement.valid_from, requirement.valid_to`
 
 // qualifiedFeatureColumns mirrors featureColumns (feature.go) the same way.
-const qualifiedFeatureColumns = `feature.revision_id, feature.id, feature.scope_id, feature.feature_set_id, feature.name, feature.description, feature.position, feature.valid_from, feature.valid_to`
+const qualifiedFeatureColumns = `feature.revision_id, feature.id, feature.scope_id, feature.feature_set_id, feature.name, feature.description, feature.position, feature.display_number, feature.valid_from, feature.valid_to`
 
 // qualifiedLoadBearingDecisionColumns mirrors loadBearingDecisionColumns
 // (decision.go) the same way.
-const qualifiedLoadBearingDecisionColumns = `load_bearing_decision.revision_id, load_bearing_decision.id, load_bearing_decision.scope_id, load_bearing_decision.feature_set_id, load_bearing_decision.name, load_bearing_decision.body, load_bearing_decision.position, load_bearing_decision.valid_from, load_bearing_decision.valid_to`
+const qualifiedLoadBearingDecisionColumns = `load_bearing_decision.revision_id, load_bearing_decision.id, load_bearing_decision.scope_id, load_bearing_decision.feature_set_id, load_bearing_decision.name, load_bearing_decision.body, load_bearing_decision.position, load_bearing_decision.display_number, load_bearing_decision.valid_from, load_bearing_decision.valid_to`
 
 func (s sliceStore) ListRequirementsByFeatureSet(ctx context.Context, featureSetID uuid.UUID) ([]Requirement, error) {
 	rows, err := s.pool.Query(ctx, `

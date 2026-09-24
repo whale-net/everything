@@ -105,6 +105,42 @@ mux.HandleFunc("/events", htmxsse.Handler(hub, topics, fragment))
 </script>
 ```
 
+### Detecting a Live Connection (Not-Live Indicators)
+
+Use `libs/go/htmxsse/liveindicator` for a client-visible "Live"/"Not Live"
+badge with a reload affordance -- do not hand-roll this again. Three
+consumers (`tools/app_registry/ui`'s release-status and promotion-details
+screens, `manmanv2/ui`'s live regions) each independently wrote a watchdog
+that tracked liveness via a `MutationObserver` on the real content region,
+reasoning "if the content hasn't visibly changed in a while, the
+connection must be dead." It isn't: `Handler`'s heartbeat loop emits a
+`<topic>-keepalive` event (no swap, by design -- NFR11) whenever a topic's
+content is unchanged, specifically so the client has *something* to see on
+every heartbeat tick without forcing a DOM update. But htmx's `sse`
+extension only ever dispatches `htmx:sseMessage` for an event name some
+element on the page subscribes to via `sse-swap` -- and nothing subscribed
+to `<topic>-keepalive`, so every one of those hand-rolled watchdogs never
+saw it. The result: any page whose content stayed unchanged for longer
+than 2x its heartbeat interval reported "Not Live" even though the
+connection was healthy and heartbeating the entire time -- indistinguishable,
+from the user's point of view, from the page "periodically disconnecting."
+
+`liveindicator.LiveIndicator` fixes this by rendering one hidden, no-op
+`sse-swap="<topic>-keepalive"` target per topic (so htmx actually registers
+the listener and fires `htmx:sseMessage` for it) and listening for that
+event instead of watching the DOM. Usage:
+
+```go
+@liveindicator.LiveIndicator(liveindicator.Options{
+    Topics:              []string{"release_run." + releaseRunID},
+    HeartbeatIntervalMs:  int(hub.Config().HeartbeatInterval.Milliseconds()),
+    ReloadHref:           "/releases/" + releaseRunID,
+})
+```
+
+Place it inside the same `hx-ext="sse"` container passed to `sse-connect`,
+alongside your own visible `sse-swap` target(s) for the same topics.
+
 ## Configuration
 
 ### Config Struct

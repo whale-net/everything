@@ -16,7 +16,7 @@ milestone hangs off. No spec entities exist yet — that is later M1 work.
 | `migrate` | `//krill/migrate` | job | Applies `krill/migrate/schema/migrations` and seeds the one `scope` row with this repo's forge coordinates (LB1, NFR2). |
 | `api` | `//krill/api` | external-api | HTTP server; `/healthz` (a live DB ping), `POST /sessions/init` (FR3's `init` primitive, issue #2489), the M1 entity write API (FR1/FR2/FR4, issue #2490), the FR5-FR9 scoped-slice query surface (`GET /slices/{feature-sets,features,requirements,products}/{id}`, issue #2491), the pointer-artifact create endpoint (`POST /pointer-artifacts`, FR20, issue #2496), and (M3, issues #2683-#2689) the delivery-axis surface -- milestone/milepebble authoring, status, shipment, re-cut, backlog, and abandon. See "Delivery-axis endpoints" below. |
 | `import` | `//krill/importer/cmd` | CLI (not deployed) | The one-way markdown importer (FR16, FR17, issue #2492): parses a `PRODUCT.md` + `product/*.md` doc set into `krill/store`'s spec entities and prints the entity-id report. Gated on a valid `init` session, same as every other write path. Records a one-time, one-way `import_completion` marker after a successful run and refuses a second import for the same path before parsing (FR12, NFR3, issue #2548). Run with `bazel run //krill/importer/cmd:import -- --path <dir> --session-id <uuid> --source-revision <sha>`. See `ARCHITECTURE.md` "The markdown importer and the delivery-axis association". |
-| `mcp` | `//krill/mcp` | external-api | krill's MCP surface: the FR5-FR9 scoped-slice query over MCP at `/mcp/spec`, the FR1-FR10 design-session/mediated-intake surface plus (M3, issues #2683-#2689) the delivery-axis tool set at `/mcp/design` (issue #2547), and (M5, issue #2867) the Swarm Operator-only surface at `/mcp/ops` -- mounted but with no tool registered yet -- all three behind the auth (human) + whagent-net (agent) two-front-door auth pattern. See "MCP spec surface", "Design-session MCP surface", "Operator MCP surface", and "Delivery-axis endpoints" below. |
+| `mcp` | `//krill/mcp` | external-api | krill's MCP surface: the FR5-FR9 scoped-slice query over MCP at `/mcp/spec`, the FR1-FR10 design-session/mediated-intake surface plus (M3, issues #2683-#2689) the delivery-axis tool set at `/mcp/design` (issue #2547), the work axis's task-lifecycle tool set at `/mcp/work` (M4, `init_session`/`get_task`/`list_tasks`/`abandon_task` also on `/mcp/design`), and (M5, issues #2867-#2876) the Swarm Operator-only console-query and operator-verb tool set at `/mcp/ops` -- all four behind the auth (human) + whagent-net (agent) two-front-door auth pattern. See "MCP spec surface", "Design-session MCP surface", "Operator MCP surface", and "Delivery-axis endpoints" below. |
 | `ui` | `//krill/ui` | external-api | Barebones Keycloak sign-in shell: gives auth's `/authorize` endpoint (mounted here) a `SignInURL` to redirect a not-yet-signed-in caller to, so the human front door above can actually mint a credential end to end. No session list, no spec browsing -- a real web UI is deferred (`PRODUCT.md`'s C19, "Later"). See "The auth sign-in shell" below. |
 
 ## Endpoints
@@ -26,6 +26,7 @@ milestone hangs off. No spec entities exist yet — that is later M1 work.
 | `GET /healthz` | Live DB connectivity check. Never gated. |
 | `POST /sessions/init` | Mints a krill-native session id (FR3). Body: `{"scope_id": "<uuid>", "acting": {"iss", "sub", "kind"}, "on_behalf_of": {"iss", "sub", "kind"}, "whagent_session_id": "<optional string>"}`; `kind` is `human` or `service`. Returns `{"session_id": "<uuid>"}`. Every write endpoint below (and every write endpoint added by a later M1 task -- #2493/#2496) requires the resulting id on an `X-Krill-Session-Id` header (`api/handlers/gate.go`'s `RequireSession`) — see `ARCHITECTURE.md` "`init` and the write gate" for why `init` itself takes the caller's identity fields as-is rather than verifying a bearer credential. The importer (`//krill/importer/cmd`, issue #2492) is gated the same way but takes the resulting id as a `--session-id` flag, since it is a CLI, not an HTTP write endpoint. |
 | `POST /products` | Creates a Product (FR1). Body: `{"name", "vision"}`. No parent -- top of the spec chain. Gated. Returns `{"id": "<uuid>"}` (the surrogate id, LB2 -- never a display number). |
+| `GET /products?scope_id=<uuid>` | Lists every current Product in a scope as `{"products": [{"id", "name", "vision"}]}`, ordered by position then name — the discovery entry point for the Product id every slice read needs (issue #2941). `scope_id` is a required query parameter. Never gated. Also exposed as the `list_products` MCP tool on `/mcp/design`. |
 | `POST /feature-sets` | Creates a FeatureSet under a Product (FR2). Body: `{"product_id", "name", "description"?}`. Gated. Returns `{"id": "<uuid>"}`. |
 | `POST /features` | Creates a Feature under a FeatureSet (FR2). Body: `{"feature_set_id", "name", "description"?}`. Gated. Returns `{"id": "<uuid>"}`. |
 | `POST /requirements` | Creates an FR or NFR under a Feature (FR2). Body: `{"feature_id", "kind": "FR"\|"NFR", "name", "body"?}`. Gated. Returns `{"id": "<uuid>"}`. |
@@ -111,6 +112,7 @@ unless noted otherwise.
 | `POST /tasks` | Creates a task under a milepebble or milestone, with a lane sequence and starting lane (FR1). Body: `{"milestone_id", "title", "body"?, "lane_sequence", "starting_lane"}`. Gated. Returns `{"id": "<uuid>"}`. |
 | `POST /tasks/{id}/dependencies` | Declares that a task depends on one or more other tasks (FR2). Body: `{"depends_on_task_ids"}`. Gated. |
 | `GET /tasks/{id}/dependencies` | Lists the task ids a task depends on. Never gated. |
+| `GET /milestones/{id}/tasks` | Lists every task scoped to a milepebble (or uncut milestone), oldest-created first, as `{"tasks": [{"id", "title", "current_lane", "attempt_count", "has_live_claim"}]}` — task discovery without already knowing ids (issue #2941). Never gated. |
 | `GET /tasks/{id}` | Returns the task's payload document (current lane, live claim if any, dependency and note summaries) — the same document claim/complete/abandon return, whether or not a claim is currently live (FR4/FR10). Never gated. |
 | `POST /tasks/{id}/claim` | Claims a task for the caller's session, mints a lease, and records one attempt — race-safe via a row lock, not an application mutex (FR3/FR5). Gated. Returns the task payload document. |
 | `POST /tasks/{id}/heartbeat` | Extends the caller's current claim's lease (FR6). Body: `{"claim_id"}`. Gated. Rejects a stale/superseded claim id with 409, never a silent no-op. Returns `{"task_id", "claim_id", "extended_to"}`. |
@@ -119,31 +121,95 @@ unless noted otherwise.
 | `POST /tasks/reclaim` | Sweeps the caller's own scope for lease-expired tasks and reclaims them, or reclaims one named task instead (FR7). Body: `{"task_id"?}` (empty/absent sweeps the whole scope). Gated. Returns `{"reclaimed": [{"task_id", "cap_exhausted"}]}`. |
 | `POST /notes` | Records a flat, immutable note against a task or a spec-axis entity — any Agent, claimant or not (FR11/FR12). Body: `{"task_id"?, "entity_kind"?, "entity_id"?, "kind", "body"}` (exactly one of `task_id` or `entity_kind`+`entity_id`). Gated. Never accepts a status/lifecycle field. |
 | `GET /tasks/{id}/notes` | Lists every note recorded against a task. Never gated. |
+| `GET /{products,feature-sets,features,requirements,load-bearing-decisions}/{id}/notes` | Lists every note recorded against that spec-axis entity, oldest first, any lifecycle status; scope resolved from the entity. Returns `{"entity_kind", "entity_id", "notes"}`. Never gated. |
 
 The MCP surface below mirrors every endpoint above one-to-one, mounted on
-the same `/mcp/design` server the delivery-axis tools above use (see
-"Design-session MCP surface" below for the mount/auth pattern) — every
-write tool still requires the same krill-session-derived subject pair;
-`get_task` alone needs no session (ungated read, NFR6) but mounts here
-too rather than a fourth surface of its own (LB7).
+its own `/mcp/work` server (`krill/mcp/main.go`'s `workReg`) rather than
+the `/mcp/design` mount the delivery-axis tools above use — so the
+`krill-work` Claude Code plugin (see "Claude Code plugins" below) never
+needs the design-session/milestone/delivery write surface just to reach
+its own task-lifecycle verbs. Every write tool still requires the same
+krill-session-derived subject pair. `get_task`, `list_tasks`, and
+`abandon_task` are the deliberate exception: all three also mount on
+`/mcp/design`, so a `krill-design` caller keeps ad hoc task
+discovery/read/cleanup access (`get_task`/`list_tasks` need no session at
+all — ungated reads).
 
-| Tool | Kind | Wraps | Persona |
-|------|------|-------|---------|
-| `create_task` | write | `TaskStore.CreateTask` (FR1) | Swarm Operator |
-| `declare_task_dependencies` | write | `TaskStore.DeclareDependency` (FR2) | Swarm Operator |
-| `get_task` | read | `work.Assembler.Assemble` (FR4, FR10) | any resolved persona |
-| `claim_task` | write | `TaskStore.ClaimTask` (FR3, FR5) | Agent |
-| `heartbeat_task` | write | `TaskStore.Heartbeat` (FR6) | Agent |
-| `complete_task` | write | `TaskStore.CompleteTask` (FR8) | Agent |
-| `abandon_task` | write | `TaskStore.AbandonClaim` (FR9) | Agent |
-| `record_note` | write | `TaskStore.RecordNote` (FR11, FR12) | Agent |
+| Tool | Kind | Wraps | Persona | Mount(s) |
+|------|------|-------|---------|----------|
+| `create_task` | write | `TaskStore.CreateTask` (FR1) | Swarm Operator | `/mcp/work` |
+| `declare_task_dependencies` | write | `TaskStore.DeclareDependency` (FR2) | Swarm Operator | `/mcp/work` |
+| `get_task` | read | `work.Assembler.Assemble` (FR4, FR10) | any resolved persona | `/mcp/work`, `/mcp/design` |
+| `list_tasks` | read | `TaskStore.ListTasksByMilestone` (issue #2941) | any resolved persona | `/mcp/work`, `/mcp/design` |
+| `claim_task` | write | `TaskStore.ClaimTask` (FR3, FR5) | Agent | `/mcp/work` |
+| `heartbeat_task` | write | `TaskStore.Heartbeat` (FR6) | Agent | `/mcp/work` |
+| `complete_task` | write | `TaskStore.CompleteTask` (FR8) | Agent | `/mcp/work` |
+| `abandon_task` | write | `TaskStore.AbandonClaim` (FR9) | Agent | `/mcp/work`, `/mcp/design` |
+| `record_note` | write | `TaskStore.RecordNote` (FR11, FR12) | Agent | `/mcp/work` |
+| `transition_note_lifecycle` | write | `TaskStore.TransitionNoteLifecycle` (M5, FR11, issue #2874) | any resolved persona | `/mcp/work` |
+| `list_entity_notes` | read | `TaskStore.ListNotesForEntity` via `handlers.ListEntityNotes` | any resolved persona | `/mcp/design` |
 
 `declare_task_dependencies`/`get_task`/`heartbeat_task`/`complete_task`/
-`abandon_task`/`record_note` return the same wire types their HTTP
-counterparts above do (`handlers.IDResponse`, `work.Payload`, or
-`handlers.HeartbeatResponse`), never a bespoke MCP-only shape (LB7). There
-is no MCP tool for `POST /tasks/reclaim`, `GET /tasks/{id}/dependencies`,
-or `GET /tasks/{id}/notes` in this milestone — those three stay HTTP-only.
+`abandon_task`/`record_note`/`transition_note_lifecycle` return the same
+wire types their HTTP counterparts above do (`handlers.IDResponse`,
+`work.Payload`, or `handlers.HeartbeatResponse`), never a bespoke MCP-only
+shape (LB7). There is no MCP tool for `POST /tasks/reclaim`,
+`GET /tasks/{id}/dependencies`, or `GET /tasks/{id}/notes` in this
+milestone — those three stay HTTP-only. `transition_note_lifecycle`
+mounts here, on `/mcp/design`, not on the Swarm-Operator-only `/mcp/ops`
+below — FR11 says any persona may transition a note's lifecycle, the same
+"any Agent, claimant or not" posture `record_note` already has.
+
+## Escalation/intervention/console endpoints (M5, issues #2867-#2877)
+
+M5 adds the escalation/intervention/console axis on top of the work axis
+above: automatic escalation when a task thrashes lanes or exhausts its
+attempt cap, manual escalation, the operator verbs that resolve or
+terminate an escalation, note lifecycle status, and four console queries
+that answer "what is claimed, stuck, dead-lettered, or open" from krill
+alone. See `ARCHITECTURE.md` "The escalation/intervention/console axis
+(M5)" for the design; every write endpoint here still requires
+`X-Krill-Session-Id` (`RequireSession`) exactly like every other write
+endpoint above — the **Swarm Operator persona restriction** FR6-FR9 name
+is enforced only on the MCP side (`/mcp/ops`, below), never on HTTP.
+
+| Endpoint | Description |
+|----------|-------------|
+| `POST /tasks/{id}/release` | Force-closes the active lease on a claimed task, independent of lease expiry (FR8). Counts as an attempt against the same cap `claim`/`reclaim`/`abandon` enforce; recording the attempt-cap escalation in the same call if that increment reaches it. Body: `{"reason"?}`. Gated. Returns the task payload document. |
+| `POST /tasks/{id}/escalate` | Manually escalates a task at any time (FR9) — the same `task_escalation_event` shape FR2/FR3 record automatically, but `reason: "manual"` and no triggering counter. Force-closes any open claim and counts that force-close as an attempt; refuses an already-escalated task (`ErrTaskEscalated`, never a silent no-op) and a cancelled one. Body: `{"reason"?}`. Gated. Returns the task payload document. |
+| `POST /tasks/{id}/requeue` | Returns an escalated task to claimable (FR6) — resets exactly the counter named by the resolved escalation's own reason, preserves the held lane, and never counts as an attempt itself. Refuses a task with no active escalation and a cancelled one. Body: `{"reason"?}`. Gated. Returns the task payload document. |
+| `POST /tasks/{id}/cancel` | Moves a task — escalated or not — to a dead-lettered terminal state a later `requeue` can never reopen (FR7), distinct from lane `Done`. Force-closes any open claim; refuses an already-cancelled task. Body: `{"reason"?}`. Gated. Returns the task payload document. |
+| `POST /notes/{id}/lifecycle` | Transitions a note's lifecycle status — `noted` → `carried-over`/`deferred`/`closed`, or back (FR11). Open to any persona, the same "no claim/ownership check" posture `POST /notes` already has. Body: `{"status"}`. Gated (session only, no persona restriction). |
+| `GET /console/claimed` | **Known defect (issue #2916):** always returns an error — the underlying store query was scaffolded in issue #2869 but never implemented. Intended to return every currently-claimed task (FR4) with claimant, lane, lease expiry, attempt count, title, and delivery reference. Query params: `scope_id` (required), `page_size`, `page_token`. Never gated (read-only). |
+| `GET /console/escalated` | Returns every escalated task in a scope (FR5) — reason, triggering counter/cap (`null` for manual), the held lane, summary counts (attempt count, failing-verdict count, note count), and the most recent verdict where knowable — never the task's full attempt/verdict/note history inline. Query params: `scope_id` (required), `page_size`, `page_token`. Never gated. |
+| `GET /console/cancelled` | Returns every cancelled task in a scope (FR10) — title, delivery reference, and the cancellation's own acting/on-behalf-of subjects and timestamp. Query params: `scope_id` (required), `page_size`, `page_token`. Never gated. |
+| `GET /console/notes` | Returns every note still at status `noted` in a scope (FR12), across both target shapes (a task, or a spec-axis entity) — never a note that has been carried over, deferred, or closed. Query params: `scope_id` (required), `page_size`, `page_token`. Never gated. |
+
+All four `GET /console/...` queries share one paging contract (NFR6): a
+caller-supplied `page_size` (default 25, clamped to a max of 100) and an
+opaque `page_token` from the prior page's `next_token` — see
+`ARCHITECTURE.md`'s "console paging contract" section for the full
+keyset/continuation-token design, including why a token is rejected when
+resumed against a different scope than the one that issued it.
+
+The MCP surface below is a **separate, Swarm-Operator-only mount**,
+`/mcp/ops`, not `/mcp/design` — see "Operator MCP surface" below.
+
+| Tool | Kind | Wraps |
+|------|------|-------|
+| `release_task` | write | `TaskStore.ReleaseLease` (FR8) |
+| `escalate_task` | write | `TaskStore.EscalateTask` (FR9) |
+| `requeue_task` | write | `TaskStore.RequeueTask` (FR6) |
+| `cancel_task` | write | `TaskStore.CancelTask` (FR7) |
+| `list_claimed_tasks` | read | `TaskStore.ListClaimedTasks` (FR4) — **known defect, issue #2916**: always errors, see `GET /console/claimed` above |
+| `list_escalated_tasks` | read | `TaskStore.ListEscalatedTasks` (FR5) |
+| `list_cancelled_tasks` | read | `TaskStore.ListCancelledTasks` (FR10) |
+| `list_open_notes` | read | `TaskStore.ListOpenNotes` (FR12) |
+
+Every write tool above returns the same task payload document
+(`work.Payload`) its HTTP counterpart does; every read tool mirrors its
+HTTP counterpart's response 1:1 (LB7), via `krill/api/handlers/console.go`'s
+exported wire types.
 
 ## Local development
 
@@ -288,13 +354,16 @@ is one of `krill/api/handlers`' own exported types, or (`get_design_session_slic
 
 See `ARCHITECTURE.md` "The design-session MCP surface" for the full design.
 
-## Operator MCP surface (M5, issue #2867)
+## Operator MCP surface (M5, issues #2867-#2876)
 
 `mcp` also mounts a third, pre-filtered endpoint, `/mcp/ops`, alongside
-`/mcp/spec` and `/mcp/design` -- the surface FR6-FR9's operator verbs and
-FR4/FR5/FR10/FR12's console queries (the rest of M5) register onto. No
-tool is registered here yet; this task ships only the mount and its
-authorization boundary.
+`/mcp/spec` and `/mcp/design` -- the surface FR6-FR9's operator verbs
+(`release_task`, `escalate_task`, `requeue_task`, `cancel_task`) and
+FR4/FR5/FR10/FR12's console queries (`list_claimed_tasks`,
+`list_escalated_tasks`, `list_cancelled_tasks`, `list_open_notes`) all
+register onto -- see "Escalation/intervention/console endpoints" above
+for each tool's own description. `list_claimed_tasks` currently always
+errors -- see that section's own "known defect" note (issue #2916).
 
 **Auth -- Swarm Operator only.** Both front doors (auth/human,
 whagent-net/agent) are mounted at `/mcp/ops` exactly as they are at the

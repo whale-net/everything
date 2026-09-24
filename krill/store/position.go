@@ -59,3 +59,34 @@ func nextSiblingPositionPlain(ctx context.Context, q txQuerier, table, parentCol
 	}
 	return position, nil
 }
+
+// nextDisplayNumber returns the display_number (migration 017, issue
+// #2969) the next row created under productID in table should carry: one
+// greater than the current max display_number among every current row of
+// table anywhere in productID -- not just the immediate FeatureSet's own
+// siblings. This is deliberately product-wide, not FeatureSet-scoped like
+// nextSiblingPosition, because krill/render's Cn/LBn numbering has always
+// been computed over a Product's whole Feature/LoadBearingDecision list
+// (ListFeaturesByProduct/ListDecisionsByProduct, slice.go), and the point
+// of this column is to freeze exactly that numbering at creation time
+// instead of recomputing it from position on every render.
+//
+// table is always one of this package's own constant names ("feature" or
+// "load_bearing_decision"), never caller input, so building the query with
+// fmt.Sprintf carries no injection risk (matches nextSiblingPosition's own
+// note above). Every caller of this function joins through feature_set to
+// resolve productID, so that join is baked into the query here rather than
+// parameterized.
+func nextDisplayNumber(ctx context.Context, q txQuerier, table string, productID, scopeID uuid.UUID) (int, error) {
+	var n int
+	err := q.QueryRow(ctx, fmt.Sprintf(`
+		SELECT COALESCE(MAX(%s.display_number), 0) + 1
+		FROM %s
+		JOIN feature_set ON %s.feature_set_id = feature_set.id AND feature_set.valid_to IS NULL
+		WHERE feature_set.product_id = $1 AND %s.scope_id = $2 AND %s.valid_to IS NULL
+	`, table, table, table, table, table), productID, scopeID).Scan(&n)
+	if err != nil {
+		return 0, fmt.Errorf("next display number in %s: %w", table, err)
+	}
+	return n, nil
+}

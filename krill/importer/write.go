@@ -3,6 +3,8 @@ package importer
 import (
 	"context"
 	"fmt"
+	"strconv"
+	"strings"
 
 	"github.com/google/uuid"
 
@@ -20,6 +22,21 @@ import (
 // identically every time so a second import resolves the same row rather
 // than creating a sibling.
 const loadBearingFeatureSetName = "Load-bearing decisions"
+
+// displayNumberFromToken parses the numeric suffix off a source doc's own
+// "C25" or "LB4"-shaped id token (ParsedCapability.ID / ParsedDecision.ID)
+// -- write uses this to preserve that number verbatim via
+// CreateWithDisplayNumber (issue #2969) instead of letting Create
+// auto-increment a fresh one from insertion order, which would renumber a
+// document like krill's own capability map that appends entries
+// out-of-position on purpose (C25-C28).
+func displayNumberFromToken(prefix, token string) (int, error) {
+	n, err := strconv.Atoi(strings.TrimPrefix(token, prefix))
+	if err != nil {
+		return 0, fmt.Errorf("parse display number from %q (prefix %q): %w", token, prefix, err)
+	}
+	return n, nil
+}
 
 // write persists parsed into st under scopeID, producing the entity-id
 // report FR16 requires. It is the only place this package calls a Create
@@ -62,7 +79,11 @@ func write(ctx context.Context, st *store.Store, scopeID uuid.UUID, parsed *Pars
 		}
 		for _, d := range parsed.Decisions {
 			body := d.Body
-			decision, err := st.Decisions().Create(ctx, scopeID, lbFeatureSet.ID, d.Name, &body)
+			displayNumber, err := displayNumberFromToken("LB", d.ID)
+			if err != nil {
+				return nil, fmt.Errorf("decision %s: %w", d.ID, err)
+			}
+			decision, err := st.Decisions().CreateWithDisplayNumber(ctx, scopeID, lbFeatureSet.ID, d.Name, &body, displayNumber)
 			if err != nil {
 				return nil, fmt.Errorf("create load_bearing_decision %s: %w", d.ID, err)
 			}
@@ -82,7 +103,11 @@ func write(ctx context.Context, st *store.Store, scopeID uuid.UUID, parsed *Pars
 		}
 		for _, c := range bucket.Capabilities {
 			desc := c.Description
-			feature, err := st.Features().Create(ctx, scopeID, featureSet.ID, desc, &desc)
+			displayNumber, err := displayNumberFromToken("C", c.ID)
+			if err != nil {
+				return nil, fmt.Errorf("capability %s: %w", c.ID, err)
+			}
+			feature, err := st.Features().CreateWithDisplayNumber(ctx, scopeID, featureSet.ID, desc, &desc, displayNumber)
 			if err != nil {
 				return nil, fmt.Errorf("create feature %s: %w", c.ID, err)
 			}

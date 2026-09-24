@@ -17,11 +17,14 @@
 // connection whose role has had every write privilege revoked.
 //
 // FR14 -- every numbered citation (`Cn`, `LBn`) this package renders is
-// computed here, at render time, from each entity's position among its
-// returned siblings (krill/store's queries already order by `position` then
-// `name` -- see krill/store/models.go's package doc). Nothing in this
-// package reads a stored display number, because no such column exists
-// (LB2) -- see numberByOrder below.
+// read directly off each Feature's/LoadBearingDecision's own stored
+// DisplayNumber (migration 017, issue #2969) -- assigned once at creation
+// (product-wide auto-increment, or an imported document's own token), never
+// recomputed from sibling position on render. This reverses migration
+// 002's original LB2 stance ("no such column exists"): a display number
+// computed fresh from position on every render was not stable once
+// entities were appended out of order, reordered, or superseded -- see
+// issue #2969.
 package render
 
 import (
@@ -73,6 +76,11 @@ type Source interface {
 	// milestoneID -- the rows a `Delivers:`/`Must not foreclose:` line is
 	// reconstructed from (LB6), never stored prose.
 	ListMilestoneAssociations(ctx context.Context, milestoneID uuid.UUID) ([]store.EntityMilestone, error)
+
+	// ListMilestoneDeferrals returns every MilestoneDeferral row for
+	// milestoneID (migration 010, issue #2683, FR1) -- the rows a
+	// `Deliberately deferred:` line is reconstructed from.
+	ListMilestoneDeferrals(ctx context.Context, milestoneID uuid.UUID) ([]store.MilestoneDeferral, error)
 }
 
 // GeneratedMarker is the exact sentence NFR3's AGENTS.md carve-out and
@@ -192,10 +200,9 @@ func renderProductMD(name, revision string, doc slice.Document, personas []store
 	b.WriteString("\n")
 
 	b.WriteString("## Load-bearing decisions\n\n")
-	decisionNumbers := numberByOrder(doc.Decisions, func(d slice.DecisionEntity) uuid.UUID { return d.ID })
 	for _, d := range doc.Decisions {
 		title := cleanDecisionTitle(d.Name)
-		b.WriteString(fmt.Sprintf("LB%d — %s\n", decisionNumbers[d.ID], title))
+		b.WriteString(fmt.Sprintf("LB%d — %s\n", d.DisplayNumber, title))
 		if d.Body != nil && strings.TrimSpace(*d.Body) != "" {
 			b.WriteString(strings.TrimSpace(*d.Body))
 			b.WriteString("\n")
@@ -248,6 +255,17 @@ func cleanDecisionTitle(name string) string {
 	return leadingLBLabelRe.ReplaceAllString(strings.TrimSpace(name), "")
 }
 
+// leadingCLabelRe strips a leading "C<n> — " (or "--"/"-") token from a
+// stored Feature.Name, mirroring leadingLBLabelRe above -- a Feature
+// imported (or hand-created pre-#2961) with its own "Cn —" prefix baked
+// into Name must not carry that stale prefix into a re-render, which
+// recomputes the citation from the stored DisplayNumber instead.
+var leadingCLabelRe = regexp.MustCompile(`^C\d+\s*[—–-]\s*`)
+
+func cleanFeatureTitle(name string) string {
+	return leadingCLabelRe.ReplaceAllString(strings.TrimSpace(name), "")
+}
+
 func renderCurrentStateMD(name, revision string) string {
 	var b strings.Builder
 	b.WriteString(header(name, revision, nowFunc()))
@@ -260,8 +278,6 @@ func renderCapabilityMapMD(name, revision string, doc slice.Document) string {
 	var b strings.Builder
 	b.WriteString(header(name, revision, nowFunc()))
 	b.WriteString("\n# Capability map\n\n")
-
-	featureNumbers := numberByOrder(doc.Features, func(f slice.FeatureEntity) uuid.UUID { return f.ID })
 
 	// Group Features by their parent FeatureSet, in the order FeatureSets
 	// and Features are both already returned (feature_set.position/name,
@@ -282,7 +298,7 @@ func renderCapabilityMapMD(name, revision string, doc slice.Document) string {
 		b.WriteString(fs.Name)
 		b.WriteString("\n\n")
 		for _, f := range features {
-			b.WriteString(fmt.Sprintf("- **C%d** — %s\n", featureNumbers[f.ID], f.Name))
+			b.WriteString(fmt.Sprintf("- **C%d** — %s\n", f.DisplayNumber, cleanFeatureTitle(f.Name)))
 		}
 		b.WriteString("\n")
 	}
@@ -291,16 +307,20 @@ func renderCapabilityMapMD(name, revision string, doc slice.Document) string {
 }
 
 // milestoneEntry is one milestone's rendered content, reconstructed
-// entirely from milestone_ref + entity_milestone rows (LB6) -- never
-// authored prose. M1 ships no milestone title, outcome sentence, or FR
-// budget (those are M3's, per krill/ARCHITECTURE.md's "milestone
-// references" section), so this is deliberately thinner than a
-// hand-authored roadmap entry.
+// entirely from milestone_ref, entity_milestone, and milestone_deferral rows
+// (LB6, migration 010) -- never authored prose. It still omits the
+// freeform per-milestone prose a hand-authored roadmap entry carries (the
+// "Notes for design" and "Pre-agreed over-budget cut" paragraphs, and any
+// explanatory prose attached to an individual `Must not foreclose` LB or
+// deferral) -- nothing in krill's schema backs that prose today.
 type milestoneEntry struct {
 	Number           int
 	ID               string // "M1".."Mn"
+	Outcome          *string
+	FRBudget         *int
 	Delivers         []string
 	MustNotForeclose []string
+	Deferrals        []store.MilestoneDeferral
 }
 
 // milestoneNumRe extracts the numeric suffix of a bare "M<n>" identifier.
@@ -315,8 +335,14 @@ func renderMilestones(ctx context.Context, src Source, scopeID, productID uuid.U
 		return nil, nil
 	}
 
-	featureNumbers := numberByOrder(doc.Features, func(f slice.FeatureEntity) uuid.UUID { return f.ID })
-	decisionNumbers := numberByOrder(doc.Decisions, func(d slice.DecisionEntity) uuid.UUID { return d.ID })
+	featureNumbers := make(map[uuid.UUID]int, len(doc.Features))
+	for _, f := range doc.Features {
+		featureNumbers[f.ID] = f.DisplayNumber
+	}
+	decisionNumbers := make(map[uuid.UUID]int, len(doc.Decisions))
+	for _, d := range doc.Decisions {
+		decisionNumbers[d.ID] = d.DisplayNumber
+	}
 
 	entries := make([]milestoneEntry, 0, len(refs))
 	for _, ref := range refs {
@@ -347,6 +373,11 @@ func renderMilestones(ctx context.Context, src Source, scopeID, productID uuid.U
 		sort.Ints(delivers)
 		sort.Ints(mustNot)
 
+		deferrals, err := src.ListMilestoneDeferrals(ctx, ref.ID)
+		if err != nil {
+			return nil, fmt.Errorf("list deferrals for milestone %s: %w", ref.Name, err)
+		}
+
 		num := 0
 		if m := milestoneNumRe.FindStringSubmatch(ref.Name); m != nil {
 			num, _ = strconv.Atoi(m[1])
@@ -354,8 +385,11 @@ func renderMilestones(ctx context.Context, src Source, scopeID, productID uuid.U
 		entries = append(entries, milestoneEntry{
 			Number:           num,
 			ID:               ref.Name,
+			Outcome:          ref.Outcome,
+			FRBudget:         ref.FRBudget,
 			Delivers:         prefixEach("C", delivers),
 			MustNotForeclose: prefixEach("LB", mustNot),
+			Deferrals:        deferrals,
 		})
 	}
 
@@ -382,6 +416,10 @@ func renderRoadmapMD(name, revision string, milestones []milestoneEntry) string 
 	for _, m := range milestones {
 		b.WriteString("### ")
 		b.WriteString(m.ID)
+		if m.Outcome != nil && *m.Outcome != "" {
+			b.WriteString(" — ")
+			b.WriteString(*m.Outcome)
+		}
 		b.WriteString("\n\n")
 		if len(m.Delivers) > 0 {
 			b.WriteString("Delivers: ")
@@ -393,27 +431,20 @@ func renderRoadmapMD(name, revision string, milestones []milestoneEntry) string 
 			b.WriteString(strings.Join(m.MustNotForeclose, ", "))
 			b.WriteString("\n")
 		}
+		if len(m.Deferrals) > 0 {
+			items := make([]string, len(m.Deferrals))
+			for i, d := range m.Deferrals {
+				items[i] = fmt.Sprintf("%s (→ %s)", d.Body, d.Destination)
+			}
+			b.WriteString("Deliberately deferred: ")
+			b.WriteString(strings.Join(items, "; "))
+			b.WriteString("\n")
+		}
+		if m.FRBudget != nil {
+			b.WriteString(fmt.Sprintf("FR budget: %d\n", *m.FRBudget))
+		}
 		b.WriteString("\n")
 	}
 
 	return b.String()
-}
-
-// numberByOrder assigns a 1-based display number to every element of
-// entities in the order the slice already arrives in -- FR14's "computed
-// at render time from the entity's current position among its siblings."
-// krill/store's own queries already return Features and
-// LoadBearingDecisions ordered by (position, name) (see
-// krill/store/models.go's package doc and krill/store/slice.go's ORDER BY
-// clauses), so the order this function numbers is exactly sibling order;
-// nothing here reads or writes a stored column. Inserting a new sibling
-// between two existing ones changes no id in krill/store and no entry of
-// this map for an untouched sibling's identity -- only the *number* that
-// entity resolves to next render.
-func numberByOrder[T any](entities []T, idOf func(T) uuid.UUID) map[uuid.UUID]int {
-	numbers := make(map[uuid.UUID]int, len(entities))
-	for i, e := range entities {
-		numbers[idOf(e)] = i + 1
-	}
-	return numbers
 }

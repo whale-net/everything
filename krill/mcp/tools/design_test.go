@@ -229,24 +229,27 @@ func TestMCPDesignSurface_EndToEnd(t *testing.T) {
 	designReg := server.NewRegistry(designSrv)
 	tools.RegisterDesignAll(designReg, entities, sessions, querier)
 
-	// opsSrv exists only so server.NewDualAuthHTTPHandler's three-mount
-	// signature (issue #2867) is satisfied here, at /mcp/ops, alongside
-	// specSrv/designSrv -- no tool is registered on it, and this file's
-	// own coverage stays scoped to /mcp/spec and /mcp/design.
+	// workSrv/opsSrv exist only so server.NewDualAuthHTTPHandler's
+	// four-mount signature (issues #2719, #2867) is satisfied here, at
+	// /mcp/work and /mcp/ops, alongside specSrv/designSrv -- no tool is
+	// registered on either, and this file's own coverage stays scoped to
+	// /mcp/spec and /mcp/design.
+	workSrv := server.New()
 	opsSrv := server.New()
 
 	// Mirrors ../main.go's own construction order exactly: WhagentPersonaMiddleware
 	// added AFTER server.New() (which already wired PersonaMiddleware) so it
 	// runs BEFORE it -- see that middleware's own doc comment for the
 	// coexistence contract. Without this, every caller (whagent- or
-	// auth-authenticated) resolves PersonaSwarmOperator, and
-	// propose_entities' Agent-only allow-list (criterion 3) could never be
-	// satisfied by anyone.
+	// auth-authenticated) resolves PersonaSwarmOperator, and this file's
+	// "succeeds for whagent door" coverage (criterion 3) could never
+	// distinguish the two doors.
 	specSrv.AddReceivingMiddleware(server.WhagentPersonaMiddleware())
 	designSrv.AddReceivingMiddleware(server.WhagentPersonaMiddleware())
+	workSrv.AddReceivingMiddleware(server.WhagentPersonaMiddleware())
 	opsSrv.AddReceivingMiddleware(server.WhagentPersonaMiddleware())
 
-	handler := server.NewDualAuthHTTPHandler(specSrv, designSrv, opsSrv, credentials, server.WhagentAuthConfig{
+	handler := server.NewDualAuthHTTPHandler(specSrv, designSrv, workSrv, opsSrv, credentials, server.WhagentAuthConfig{
 		Verifier: verifier,
 		Audience: testWhagentAudience,
 	}, server.ResourceMetadataConfig{})
@@ -487,9 +490,20 @@ func TestMCPDesignSurface_EndToEnd(t *testing.T) {
 		assert.Len(t, featureSets, 1)
 	})
 
-	// ── criterion 3: propose_entities is Agent-persona-restricted ───────────
+	// ── criterion 3: propose_entities is reachable from the auth door too ──
+	//
+	// PersonaSwarmOperator is allow-listed alongside PersonaAgent (issue
+	// #2926): every auth-authenticated caller -- including an ordinary
+	// interactive Claude Code session and every krill-design subagent, which
+	// share that same auth connection and can never resolve PersonaAgent
+	// -- resolves PersonaSwarmOperator, so a persona-only restriction to
+	// PersonaAgent made this tool unreachable end-to-end from any of them.
+	// FR9/FR10's actual mediation guarantee (acting must differ from
+	// on-behalf-of) is unaffected: it's still enforced independently by
+	// mediatedSessionID's own Acting/OnBehalfOf distinctness, not by which
+	// persona is calling.
 
-	t.Run("propose_entities is rejected for the auth (PersonaSwarmOperator) door", func(t *testing.T) {
+	t.Run("propose_entities succeeds for the auth (PersonaSwarmOperator) door with a genuinely mediated session", func(t *testing.T) {
 		cs, err := connectMCP(t, designURL, humanToken)
 		require.NoError(t, err)
 
@@ -500,13 +514,23 @@ func TestMCPDesignSurface_EndToEnd(t *testing.T) {
 				"design_session_id": designSessionID,
 				"verified_against":  "main@deadbeef",
 				"proposals": []map[string]any{
-					{"kind": "feature", "parent_id": featureSet.ID.String(), "name": "Bulk CSV export", "position": 1, "summary_line": "mediated proposal"},
+					{"kind": "feature", "parent_id": featureSet.ID.String(), "name": "Bulk CSV export (swarm operator)", "position": 1, "summary_line": "mediated proposal via the auth door"},
 				},
 			},
 		})
 		require.NoError(t, err)
-		require.True(t, res.IsError, "PersonaSwarmOperator must never be allowed to call propose_entities (FR9/FR10)")
-		assert.Contains(t, textOf(res), "forbidden")
+		require.False(t, res.IsError, "unexpected error: %s", textOf(res))
+
+		structured, ok := res.StructuredContent.(map[string]any)
+		require.True(t, ok)
+		entitiesOut, ok := structured["entities"].([]any)
+		require.True(t, ok)
+		require.Len(t, entitiesOut, 1)
+		entity, ok := entitiesOut[0].(map[string]any)
+		require.True(t, ok)
+		assert.Equal(t, "feature", entity["kind"])
+		_, err = uuid.Parse(entity["id"].(string))
+		require.NoError(t, err)
 	})
 
 	t.Run("propose_entities succeeds for the whagent (PersonaAgent) door with a genuinely mediated session", func(t *testing.T) {

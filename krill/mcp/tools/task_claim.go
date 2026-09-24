@@ -1,10 +1,13 @@
 // This file (issue #2722, FR3/FR5, C14) is krill's work-axis claim MCP
 // tool: claim_task, a thin wrapper over store.TaskStore.ClaimTask
 // (krill/store/task_claim.go), mirroring krill/api/handlers/task_claim.go's
-// HTTP surface for the same capability (LB7). Restricted to PersonaAgent,
-// unlike create_task/declare_task_dependencies' PersonaSwarmOperator:
-// root plan issue #2717's Personas section states the Agent, not the
-// Swarm Operator, "claims a task" in this milestone.
+// HTTP surface for the same capability (LB7). Originally restricted to
+// PersonaAgent only -- root plan issue #2717's Personas section states the
+// Agent, not the Swarm Operator, "claims a task" in this milestone -- but
+// also allow-listed to PersonaSwarmOperator as of issue #2926's follow-up:
+// no mechanism in this repo mints a whagent-net JWT for krill-work today
+// (issue #2932), so PersonaAgent alone made this tool unreachable from any
+// actual caller. Stopgap until #2932 lands a real whagent-net path.
 package tools
 
 import (
@@ -34,9 +37,10 @@ type claimTaskInput struct {
 // MCP-local shape.
 func RegisterClaimTask(reg *server.Registry, sessions store.SessionStore, tasks store.TaskStore, assembler *work.Assembler) {
 	server.RegisterWrite(reg, &mcp.Tool{
-		Name:        "claim_task",
-		Description: "Claim a claimable task: mints a lease, records one attempt, and returns the task's full payload document (FR3, FR5).",
-	}, []server.Persona{server.PersonaAgent}, func(ctx context.Context, _ *mcp.CallToolRequest, in claimTaskInput) (*mcp.CallToolResult, work.Payload, error) {
+		Name:         "claim_task",
+		Description:  "Claim a claimable task: mints a lease, records one attempt, and returns the task's full payload document (FR3, FR5).",
+		OutputSchema: workPayloadOutputSchema,
+	}, []server.Persona{server.PersonaAgent, server.PersonaSwarmOperator}, func(ctx context.Context, _ *mcp.CallToolRequest, in claimTaskInput) (*mcp.CallToolResult, work.Payload, error) {
 		var zero work.Payload
 
 		sess, err := requireKrillSession(ctx, sessions, in.KrillSessionID)

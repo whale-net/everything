@@ -153,7 +153,7 @@ func TestMCPInitSession_EndToEnd(t *testing.T) {
 	tools.RegisterInitSession(designReg, sessions, entities.Scopes())
 	tools.RegisterDesignAll(designReg, entities, sessions, querier)
 
-	handler := server.NewHTTPHandler(server.New(), designSrv, server.New(), credentials, server.ResourceMetadataConfig{})
+	handler := server.NewHTTPHandler(server.New(), designSrv, server.New(), server.New(), credentials, server.ResourceMetadataConfig{})
 	ts := httptest.NewServer(handler)
 	t.Cleanup(ts.Close)
 
@@ -178,6 +178,7 @@ func TestMCPInitSession_EndToEnd(t *testing.T) {
 		sessionID, ok := structured["session_id"].(string)
 		require.True(t, ok, "response must carry session_id, not a bare id field")
 		require.NotEmpty(t, sessionID)
+		assert.Equal(t, scopeID.String(), structured["scope_id"], "response must hand back the resolved scope_id")
 
 		res, err = cs.CallTool(ctx, &mcp.CallToolParams{
 			Name: "open_design_session",

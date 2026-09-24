@@ -87,6 +87,8 @@ func isUniqueViolation(err error) bool {
 //     claimable right now                                             -> 409
 //   - store.ErrClaimNotCurrent (Heartbeat's own named FR6 rejection,
 //     task_lease.go) -- the caller's claim is gone, not current        -> 409
+//   - store.ErrTaskNotClaimed (ReleaseLease's own named FR8 rejection,
+//     task_release.go) -- nothing to release                          -> 409
 //   - a scope-qualified unique-constraint violation                   -> 409
 //   - anything else (a genuine store failure)                         -> 500
 //
@@ -106,7 +108,8 @@ func writeStoreError(w http.ResponseWriter, err error) {
 		errors.Is(err, store.ErrAttemptCapExhausted),
 		errors.Is(err, store.ErrTaskEscalated),
 		errors.Is(err, store.ErrTaskCancelled),
-		errors.Is(err, store.ErrClaimNotCurrent):
+		errors.Is(err, store.ErrClaimNotCurrent),
+		errors.Is(err, store.ErrTaskNotClaimed):
 		writeJSONError(w, http.StatusConflict, err.Error())
 	case isUniqueViolation(err):
 		writeJSONError(w, http.StatusConflict, "an entity with this name already exists in this scope")

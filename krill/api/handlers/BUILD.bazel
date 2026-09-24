@@ -63,6 +63,7 @@ go_library(
         "decision.go",
         "delivery_shipment.go",
         "design_session.go",
+        "entity_note.go",
         "feature.go",
         "featureset.go",
         "gate.go",
@@ -85,11 +86,15 @@ go_library(
         "task_claim.go",
         "task_complete.go",
         "task_dependency.go",
+        "task_escalate.go",
         "task_lease.go",
+        "task_list.go",
         "task_note.go",
         "task_note_lifecycle.go",
         "task_payload.go",
         "task_reclaim.go",
+        "task_release.go",
+        "task_requeue.go",
         "types.go",
     ],
     importpath = "github.com/whale-net/everything/krill/api/handlers",
@@ -121,7 +126,11 @@ go_library(
 # work-axis dependency-declaration surface (task_dependency_test.go, issue
 # #2720's Testing section: the same session-derived pass-through/
 # validation/named-rejection/NFR6 shape as task_test.go, plus the ungated
-# GET /tasks/{id}/dependencies read).
+# GET /tasks/{id}/dependencies read), and the work-axis requeue surface
+# (task_requeue_test.go, issue #2876's Testing section: the same
+# session-derived pass-through/validation/NFR6 shape, plus
+# writeRequeueStoreError mapping ErrTaskNotEscalated/ErrTaskCancelled to
+# 409).
 # fakeSessionStore/fake entity stores/fakeAmendStore/fakeDesignSessionStore/
 # fakeRevisionEventStore/fakeEntitySetQuerier/fakeTaskStore stand in for
 # krill/store's (and krill/slice's) interfaces, so none of this needs
@@ -138,6 +147,7 @@ go_test(
         "decision_test.go",
         "delivery_shipment_test.go",
         "design_session_test.go",
+        "entity_note_test.go",
         "entity_test_helpers_test.go",
         "fake_abandon_store_test.go",
         "fake_delivery_shipment_store_test.go",
@@ -170,11 +180,15 @@ go_test(
         "task_claim_test.go",
         "task_complete_test.go",
         "task_dependency_test.go",
+        "task_escalate_test.go",
         "task_lease_test.go",
+        "task_list_test.go",
         "task_note_lifecycle_test.go",
         "task_note_test.go",
         "task_payload_test.go",
         "task_reclaim_test.go",
+        "task_release_test.go",
+        "task_requeue_test.go",
         "task_test.go",
     ],
     embed = [":handlers"],

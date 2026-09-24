@@ -110,8 +110,8 @@ func TestReleaseStatus_FR11_ExcludedElementsOutsideSwapTarget(t *testing.T) {
 		name   string
 		needle string
 	}{
-		{"live indicator", `id="release-live-indicator"`},
-		{"reload affordance", `id="release-reload-container"`},
+		{"live indicator", `class="live-indicator"`},
+		{"reload affordance", `data-live-reload`},
 		{"Refresh link", "↻ Refresh"},
 		{"Run info card heading", ">Run<"},
 	}
@@ -308,7 +308,7 @@ func TestReleaseStatus_FR14_IndicatorStartsLive(t *testing.T) {
 	}
 	body := renderComponent(t, ReleaseStatus(adminUser(), s))
 
-	if !strings.Contains(body, `id="release-live-status" class="badge badge-success"`) {
+	if !strings.Contains(body, `data-live-status class="badge badge-success"`) {
 		t.Errorf("FR14: indicator must start Live with badge-success; got %q", body)
 	}
 	if !strings.Contains(body, ">Live<") {
@@ -326,11 +326,11 @@ func TestReleaseStatus_FR15_ReloadAffordancePresentAndHiddenByDefault(t *testing
 	}
 	body := renderComponent(t, ReleaseStatus(adminUser(), s))
 
-	containerIdx := strings.Index(body, `id="release-reload-container"`)
+	containerIdx := strings.Index(body, `data-live-reload`)
 	if containerIdx < 0 {
 		t.Fatalf("FR15: reload container must be present; got %q", body)
 	}
-	// The container carries style="display: none;" hidden-by-default, and
+	// The container carries style="display:none" hidden-by-default, and
 	// its link is a plain GET back to /releases/<id>.
 	containerRegion := body[containerIdx:]
 	closeIdx := strings.Index(containerRegion, "</div>")
@@ -340,7 +340,7 @@ func TestReleaseStatus_FR15_ReloadAffordancePresentAndHiddenByDefault(t *testing
 	section := containerRegion[:closeIdx]
 	// The style attribute is on the container's opening tag, which precedes
 	// the anchor -- checked over the wider preceding text back to the id.
-	if !strings.Contains(body[containerIdx:containerIdx+120], `style="display: none;"`) {
+	if !strings.Contains(body[containerIdx:containerIdx+120], `style="display:none"`) {
 		t.Errorf("FR15: reload container must be hidden by default; got %q", body[containerIdx:containerIdx+120])
 	}
 	if !strings.Contains(section, `href="/releases/run-42"`) {
@@ -351,12 +351,12 @@ func TestReleaseStatus_FR15_ReloadAffordancePresentAndHiddenByDefault(t *testing
 	}
 }
 
-// heartbeatMsAttr is a tiny helper matching PromotionDetailsViewState's own
-// data-heartbeat-ms wiring convention, used only to build an expected
+// heartbeatMsAttr is a tiny helper matching liveindicator.LiveIndicator's
+// data-live-heartbeat-ms wiring convention, used only to build an expected
 // attribute value for the assertion below without hardcoding strconv calls
 // inline.
 func heartbeatMsAttr(ms int) string {
-	return `data-heartbeat-ms="` + strconv.Itoa(ms) + `"`
+	return `data-live-heartbeat-ms="` + strconv.Itoa(ms) + `"`
 }
 
 func TestReleaseStatus_FR14_HeartbeatIntervalBinding(t *testing.T) {
@@ -368,9 +368,9 @@ func TestReleaseStatus_FR14_HeartbeatIntervalBinding(t *testing.T) {
 	body := renderComponent(t, ReleaseStatus(adminUser(), s))
 
 	if !strings.Contains(body, heartbeatMsAttr(15000)) {
-		t.Errorf("FR14: expected data-heartbeat-ms=\"15000\"; got %q", body)
+		t.Errorf("FR14: expected data-live-heartbeat-ms=\"15000\"; got %q", body)
 	}
-	if !strings.Contains(body, `heartbeatMs * 2`) {
+	if !strings.Contains(body, `heartbeatMsFor(indicator) * 2`) {
 		t.Errorf("FR14: timeout threshold must be 2x heartbeat interval; got %q", body)
 	}
 }

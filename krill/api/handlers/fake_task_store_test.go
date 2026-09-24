@@ -30,7 +30,16 @@
 // TransitionNoteLifecycle/ListOpenNotes stubs exist for the same reason now
 // that task_note_lifecycle.go/task_note_console.go (issue #2874) widen it
 // once more -- task_note_lifecycle_test.go/console_test.go's own later
-// Testing-phase task exercises them.
+// Testing-phase task exercises them. The ReleaseLease/EscalateTask stubs
+// exist for the same reason now that task_release.go/task_escalate.go
+// (issue #2872) widen it once more -- task_release_test.go/
+// task_escalate_test.go's own later Testing-phase task exercises them. The
+// ListEscalatedTasks stub exists for the same reason now that console.go
+// (issue #2875, FR5) widens it once more -- console_test.go's own Testing-
+// phase task exercises it. The RequeueTask stub exists for the same reason
+// now that task_requeue.go (issue #2876) widens it once more --
+// task_requeue_test.go's own later Testing-phase task exercises it. The
+// ListTasksByMilestone fake backs task_list_test.go.
 package handlers_test
 
 import (
@@ -88,6 +97,11 @@ type fakeTaskStore struct {
 	notesForEntity        []store.Note
 	listNotesForEntityErr error
 
+	// gotListNotesForEntity* record the last ListNotesForEntity call.
+	gotListNotesForEntityScopeID uuid.UUID
+	gotListNotesForEntityKind    store.NoteEntityKind
+	gotListNotesForEntityID      uuid.UUID
+
 	listClaimedTasksErr       error
 	listClaimedTasksResult    store.Page[store.ClaimedTaskRow]
 	gotListClaimedTasksParams store.ListClaimedTasksParams
@@ -109,6 +123,27 @@ type fakeTaskStore struct {
 	listOpenNotesErr       error
 	listOpenNotesResult    store.Page[store.OpenNoteRow]
 	gotListOpenNotesParams store.ListOpenNotesParams
+
+	releaseErr       error
+	releaseResult    store.ReleaseResult
+	gotReleaseParams store.ReleaseParams
+
+	escalateErr       error
+	escalateResult    store.EscalateResult
+	gotEscalateParams store.EscalateParams
+
+	listEscalatedErr    error
+	listEscalatedResult store.Page[store.EscalatedTaskRow]
+	gotListEscalated    store.ListEscalatedTasksParams
+
+	requeueErr       error
+	requeueResult    store.RequeueResult
+	gotRequeueParams store.RequeueParams
+
+	// tasksByMilestone is keyed by milestone id; a missing key lists empty.
+	tasksByMilestone        map[uuid.UUID][]store.TaskSummary
+	listTasksByMilestoneErr error
+	gotListTasksMilestoneID uuid.UUID
 }
 
 func (f *fakeTaskStore) CreateTask(ctx context.Context, params store.CreateTaskParams) (store.Task, error) {
@@ -203,6 +238,7 @@ func (f *fakeTaskStore) ListNotesForTask(ctx context.Context, scopeID, taskID uu
 }
 
 func (f *fakeTaskStore) ListNotesForEntity(ctx context.Context, scopeID uuid.UUID, kind store.NoteEntityKind, entityID uuid.UUID) ([]store.Note, error) {
+	f.gotListNotesForEntityScopeID, f.gotListNotesForEntityKind, f.gotListNotesForEntityID = scopeID, kind, entityID
 	return f.notesForEntity, f.listNotesForEntityErr
 }
 
@@ -248,6 +284,46 @@ func (f *fakeTaskStore) ListOpenNotes(ctx context.Context, params store.ListOpen
 		return store.Page[store.OpenNoteRow]{}, f.listOpenNotesErr
 	}
 	return f.listOpenNotesResult, nil
+}
+
+func (f *fakeTaskStore) ReleaseLease(ctx context.Context, params store.ReleaseParams) (store.ReleaseResult, error) {
+	f.gotReleaseParams = params
+	if f.releaseErr != nil {
+		return store.ReleaseResult{}, f.releaseErr
+	}
+	return f.releaseResult, nil
+}
+
+func (f *fakeTaskStore) EscalateTask(ctx context.Context, params store.EscalateParams) (store.EscalateResult, error) {
+	f.gotEscalateParams = params
+	if f.escalateErr != nil {
+		return store.EscalateResult{}, f.escalateErr
+	}
+	return f.escalateResult, nil
+}
+
+func (f *fakeTaskStore) ListEscalatedTasks(ctx context.Context, params store.ListEscalatedTasksParams) (store.Page[store.EscalatedTaskRow], error) {
+	f.gotListEscalated = params
+	if f.listEscalatedErr != nil {
+		return store.Page[store.EscalatedTaskRow]{}, f.listEscalatedErr
+	}
+	return f.listEscalatedResult, nil
+}
+
+func (f *fakeTaskStore) RequeueTask(ctx context.Context, params store.RequeueParams) (store.RequeueResult, error) {
+	f.gotRequeueParams = params
+	if f.requeueErr != nil {
+		return store.RequeueResult{}, f.requeueErr
+	}
+	return f.requeueResult, nil
+}
+
+func (f *fakeTaskStore) ListTasksByMilestone(ctx context.Context, milestoneID uuid.UUID) ([]store.TaskSummary, error) {
+	f.gotListTasksMilestoneID = milestoneID
+	if f.listTasksByMilestoneErr != nil {
+		return nil, f.listTasksByMilestoneErr
+	}
+	return append([]store.TaskSummary{}, f.tasksByMilestone[milestoneID]...), nil
 }
 
 var _ store.TaskStore = (*fakeTaskStore)(nil)

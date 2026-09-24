@@ -6,17 +6,35 @@
 // design-session MCP surface" for the two-front-door design this mirrors
 // from audience_score_system/mcp and whagent_net/mcp.
 //
-// `mcp` mounts three pre-filtered tool surfaces, each on its own
+// `mcp` mounts four pre-filtered tool surfaces, each on its own
 // *mcp.Server and its own mount point (server/transport.go's
-// specMountPath, designMountPath, and opsMountPath): the FR5-FR8
-// read-only spec surface at /mcp/spec (unchanged since M1), the
-// design-scoped write/read surface at /mcp/design -- milestone authoring,
-// status, delivery, and, as of M4 (issue #2719), the work axis's own
-// create_task tool, all mount here rather than on a fourth mount of their
-// own -- and, as of M5 (issue #2867), the Swarm Operator-only surface at
-// /mcp/ops, mounted but with no tool registered yet (the rest of M5
-// registers onto it). Both front doors (auth/human, whagent-net/agent)
-// apply to all three mounts identically.
+// specMountPath, designMountPath, workMountPath, and opsMountPath): the
+// FR5-FR8 read-only spec surface at /mcp/spec (unchanged since M1), the
+// design-scoped write/read surface at /mcp/design -- design-session
+// authoring, milestone status, and delivery -- the work-axis task-
+// lifecycle surface at /mcp/work (create_task, declare_task_dependencies,
+// claim_task, heartbeat_task, complete_task, record_note,
+// transition_note_lifecycle; init_session, get_task, list_tasks, and
+// abandon_task also mount here, see below), and, as of M5 (issue #2867),
+// the Swarm Operator-only surface at /mcp/ops, mounted but with no tool
+// registered yet (the rest of M5 registers onto it). Both front doors
+// (auth/human, whagent-net/agent) apply to all four mounts identically.
+//
+// workMountPath is a deliberate split from designMountPath (originally
+// the work axis rode on /mcp/design entirely): the krill-design and
+// krill-work Claude Code plugins each need a distinct write surface --
+// krill-design's producer/architect/reviewer/stakeholder personas never
+// touch a task's lifecycle, and krill-work's planner/worker/validator
+// personas have no business authoring design sessions or milestones --
+// so each plugin's own .mcp.json now points at spec+design or spec+work
+// respectively, instead of both plugins pointing at both. init_session
+// (every work-axis write tool needs a krill_session_id, and a
+// krill-work-only caller has no other MCP-reachable way to mint one),
+// get_task (ungated read, NFR6), list_tasks (ungated discovery), and
+// abandon_task (PersonaAgent-gated cleanup) are registered on BOTH
+// designMountPath and workMountPath: krill-design keeps ad hoc task
+// discovery/inspection/unwinding even though no design persona's
+// instructions call any of them today.
 package main
 
 import (
@@ -32,6 +50,7 @@ import (
 	"github.com/google/uuid"
 	"go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp"
 
+	"github.com/whale-net/everything/krill/api/handlers"
 	"github.com/whale-net/everything/krill/mcp/server"
 	"github.com/whale-net/everything/krill/mcp/tools"
 	"github.com/whale-net/everything/krill/slice"
@@ -130,43 +149,44 @@ func run() error {
 	querier := slice.NewQuerier(entities)
 	assembler := work.NewAssembler(entities.Tasks(), querier)
 
-	// Three *mcp.Server instances, one per mount (server/transport.go's
-	// specMountPath, designMountPath, and opsMountPath) -- registering a
-	// tool is a per-server operation (mcp.AddTool), so the only way to
-	// guarantee a write tool can never end up reachable from specMountPath
-	// is to never register it on the same *mcp.Server that backs it.
-	// tools.RegisterAll (FR5-FR8, read-only) is unchanged; tools.RegisterInitSession (the
-	// krill_session_id minting tool, issue #2827 -- MUST register before
-	// every other designReg call below, since every one of them requires a
-	// session id this tool is the only MCP-reachable way to obtain),
-	// tools.RegisterDesignAll (issue
-	// #2547), tools.RegisterMilestoneAll (milestone authoring, issue
-	// #2683), tools.RegisterMilestoneStatusAll (status history, issue
-	// #2685), tools.RegisterDeliveryShipmentAll (per-item shipment, issue
-	// #2686), tools.RegisterRecutAll (delivery-axis re-cut plus the
-	// backlog bucket, issue #2687), tools.RegisterAbandonAll (the
-	// composed abandon verb, issue #2688), tools.RegisterCreateTask (the
-	// work-axis task-create tool, issue #2719, FR1),
-	// tools.RegisterDeclareTaskDependencies (the work-axis dependency-
-	// declaration tool, issue #2720, FR2), tools.RegisterGetTaskPayload
-	// (the work-axis by-task-id fetch tool, issue #2721, FR4/FR10),
-	// tools.RegisterClaimTask (the work-axis claim tool, issue #2722,
-	// FR3/FR5), tools.RegisterHeartbeatTask (the work-axis lease-extension
-	// tool, issue #2723, FR6), tools.RegisterCompleteTask (the work-axis
-	// complete-with-a-verdict tool, issue #2725, FR8),
-	// tools.RegisterAbandonTask (the work-axis abandon tool, issue #2726,
-	// FR9 -- distinct from tools.RegisterAbandonAll's delivery-axis
-	// abandon_milestone above), and tools.RegisterRecordNote (the
-	// work-axis note-recording tool, issue #2727, FR11/FR12) all mount on
-	// designReg -- create_milestone/set_fr_budget/add_delivers/
-	// add_must_not_foreclose/add_deferral/set_milestone_status/
-	// mark_delivered_item_shipped/move_delivery_scope/abandon_milestone/
-	// create_task/declare_task_dependencies/claim_task/heartbeat_task/
-	// complete_task/abandon_task/record_note/transition_note_lifecycle
-	// (issue #2874, FR11) all need the same krill-session-derived LB4
-	// subject pair every write tool on that mount already resolves;
-	// get_task needs no session (ungated read, NFR6) but mounts here too
-	// rather than a fourth surface of its own (LB7).
+	// Four *mcp.Server instances, one per mount (server/transport.go's
+	// specMountPath, designMountPath, workMountPath, and opsMountPath) --
+	// registering a tool is a per-server operation (mcp.AddTool), so the
+	// only way to guarantee a write tool can never end up reachable from
+	// specMountPath is to never register it on the same *mcp.Server that
+	// backs it. tools.RegisterAll (FR5-FR8, read-only) is unchanged;
+	// tools.RegisterInitSession (the krill_session_id minting tool, issue
+	// #2827 -- MUST register before every other designReg call below,
+	// since every one of them requires a session id this tool is the only
+	// MCP-reachable way to obtain), tools.RegisterEntityCreateAll
+	// (create_product/create_feature_set/create_load_bearing_decision/
+	// create_feature/create_requirement, the non-mediated spec entity
+	// creation tools that previously existed only over HTTP -- plus
+	// create_persona/create_non_goal), tools.RegisterAmendAll,
+	// tools.RegisterListProducts, tools.RegisterListPersonas/
+	// RegisterListNonGoals, tools.RegisterDesignAll (issue #2547),
+	// tools.RegisterMilestoneAll (milestone authoring, issue #2683),
+	// tools.RegisterMilestoneStatusAll (status history, issue #2685),
+	// tools.RegisterDeliveryShipmentAll (per-item shipment, issue #2686),
+	// tools.RegisterRecutAll (delivery-axis re-cut plus the backlog
+	// bucket, issue #2687), and tools.RegisterAbandonAll (the composed
+	// abandon verb, issue #2688) all mount on designReg only --
+	// create_milestone/set_fr_budget/add_delivers/add_must_not_foreclose/
+	// add_deferral/set_milestone_status/mark_delivered_item_shipped/
+	// move_delivery_scope/abandon_milestone all need the same
+	// krill-session-derived LB4 subject pair every write tool on that
+	// mount already resolves.
+	//
+	// The work axis's own task-lifecycle tools mount on workReg instead,
+	// not designReg (see main.go's package doc comment for why):
+	// tools.RegisterGetTaskPayload (the work-axis by-task-id fetch tool,
+	// issue #2721, FR4/FR10 -- ungated read, NFR6), tools.RegisterListTasks
+	// (ungated per-milestone/milepebble task discovery, feeding get_task
+	// its ids), and tools.RegisterAbandonTask (the work-axis abandon tool,
+	// issue #2726, FR9 -- distinct from tools.RegisterAbandonAll's
+	// delivery-axis abandon_milestone above) also mount on designReg, so a
+	// krill-design caller retains ad hoc task discovery/read/cleanup
+	// access.
 	specSrv := server.New()
 	specReg := server.NewRegistry(specSrv)
 	tools.RegisterAll(specReg, querier)
@@ -174,28 +194,68 @@ func run() error {
 	designSrv := server.New()
 	designReg := server.NewRegistry(designSrv)
 	tools.RegisterInitSession(designReg, sessions, entities.Scopes())
+	tools.RegisterEntityCreateAll(designReg, sessions, entities.Products(), entities.FeatureSets(), entities.Decisions(), entities.Personas(), entities.NonGoals(), entities.Features(), entities.Requirements())
+	// amend_requirement/amend_load_bearing_decision: SCD2 corrections, the MCP twin of POST /{requirements,load-bearing-decisions}/{id}/amend.
+	tools.RegisterAmendAll(designReg, sessions, entities.Amend())
+	// list_products: ungated Product discovery, the entry point for every get_*_slice product_id.
+	tools.RegisterListProducts(designReg, entities.Products())
+	// list_personas/list_non_goals: ungated discovery for the two entity kinds create_persona/create_non_goal mint, with no other MCP-reachable read path (not part of the slice.Document either).
+	tools.RegisterListPersonas(designReg, entities.Personas())
+	tools.RegisterListNonGoals(designReg, entities.NonGoals())
 	tools.RegisterDesignAll(designReg, entities, sessions, querier)
 	tools.RegisterMilestoneAll(designReg, sessions, entities.MilestoneAuthoring(), entities.Products(), querier)
 	tools.RegisterMilestoneStatusAll(designReg, sessions, entities.MilestoneStatus())
 	tools.RegisterDeliveryShipmentAll(designReg, sessions, entities.DeliveryShipments(), entities.MilestoneStatus(), querier)
 	tools.RegisterRecutAll(designReg, sessions, entities.Recut(), querier)
 	tools.RegisterAbandonAll(designReg, sessions, entities.Abandon())
-	tools.RegisterCreateTask(designReg, sessions, entities.Tasks())
-	tools.RegisterDeclareTaskDependencies(designReg, sessions, entities.Tasks())
 	tools.RegisterGetTaskPayload(designReg, entities.Tasks(), assembler)
-	tools.RegisterClaimTask(designReg, sessions, entities.Tasks(), assembler)
-	tools.RegisterHeartbeatTask(designReg, sessions, entities.Tasks())
-	tools.RegisterCompleteTask(designReg, sessions, entities.Tasks(), assembler)
+	// list_tasks: ungated per-milestone/milepebble task discovery, feeding get_task its ids -- also registered on workReg below, the same shared-mount exception get_task/abandon_task get.
+	tools.RegisterListTasks(designReg, entities.Tasks())
 	tools.RegisterAbandonTask(designReg, sessions, entities.Tasks(), assembler)
-	tools.RegisterRecordNote(designReg, sessions, entities.Tasks())
-	tools.RegisterTransitionNoteLifecycle(designReg, sessions, entities.Tasks())
+	// list_entity_notes: ungated read-back of record_note's spec-axis entity notes.
+	tools.RegisterListEntityNotes(designReg, handlers.NoteEntityScopes{
+		Products:     entities.Products(),
+		FeatureSets:  entities.FeatureSets(),
+		Features:     entities.Features(),
+		Requirements: entities.Requirements(),
+		Decisions:    entities.Decisions(),
+	}, entities.Tasks())
+
+	// workReg is the work axis's own mount (server/transport.go's
+	// workMountPath, /mcp/work): create_task (issue #2719, FR1),
+	// declare_task_dependencies (issue #2720, FR2), claim_task (issue
+	// #2722, FR3/FR5), heartbeat_task (issue #2723, FR6), complete_task
+	// (issue #2725, FR8), record_note and transition_note_lifecycle
+	// (issue #2727/#2874, FR11/FR12) live ONLY here -- the krill-work
+	// plugin's manifest points at this mount instead of designMountPath,
+	// so it never gains the design-session/milestone/delivery write
+	// surface above. get_task, list_tasks, and abandon_task are
+	// registered here too (see designReg above), the deliberate exception
+	// to "a tool lives on exactly one mount." tools.RegisterInitSession
+	// also registers here (as well as designReg): every work-axis write
+	// tool requires a krill_session_id, and a krill-work-only caller (its
+	// manifest no longer includes designMountPath) would otherwise have no
+	// MCP-reachable way to mint one at all.
+	workSrv := server.New()
+	workReg := server.NewRegistry(workSrv)
+	tools.RegisterInitSession(workReg, sessions, entities.Scopes())
+	tools.RegisterCreateTask(workReg, sessions, entities.Tasks())
+	tools.RegisterDeclareTaskDependencies(workReg, sessions, entities.Tasks())
+	tools.RegisterGetTaskPayload(workReg, entities.Tasks(), assembler)
+	tools.RegisterListTasks(workReg, entities.Tasks())
+	tools.RegisterClaimTask(workReg, sessions, entities.Tasks(), assembler)
+	tools.RegisterHeartbeatTask(workReg, sessions, entities.Tasks())
+	tools.RegisterCompleteTask(workReg, sessions, entities.Tasks(), assembler)
+	tools.RegisterAbandonTask(workReg, sessions, entities.Tasks(), assembler)
+	tools.RegisterRecordNote(workReg, sessions, entities.Tasks())
+	tools.RegisterTransitionNoteLifecycle(workReg, sessions, entities.Tasks())
 
 	// opsSrv/opsReg is M5's operator surface (issue #2867, /mcp/ops):
 	// its own *mcp.Server so an operator verb or console query
 	// (registered by later M5 tasks, via server.RegisterOpsRead/
 	// RegisterOpsWrite -- registry.go) can never end up reachable from
-	// specMountPath or designMountPath, the same isolation specSrv/
-	// designSrv give each other above.
+	// specMountPath, designMountPath, or workMountPath, the same isolation
+	// specSrv/designSrv/workSrv give each other above.
 	//
 	// tools.RegisterListClaimedTasks (issue #2869, FR4) was the first
 	// tool registered here: list_claimed_tasks, PersonaSwarmOperator only
@@ -204,7 +264,10 @@ func run() error {
 	// tools.RegisterListCancelledTasks (issue #2873, FR10) are the next
 	// two: cancel_task (write) and list_cancelled_tasks (read), the same
 	// PersonaSwarmOperator-only posture. tools.RegisterListOpenNotes (issue
-	// #2874, FR12) mounts the same way, just below.
+	// #2874, FR12) mounts the same way, just below. tools.RegisterReleaseTask/
+	// RegisterEscalateTask (issue #2872, FR8/FR9) are the next two:
+	// release_task and escalate_task (both write), the same
+	// PersonaSwarmOperator-only posture.
 	opsSrv := server.New()
 	opsReg := server.NewRegistry(opsSrv)
 	tools.RegisterListClaimedTasks(opsReg, entities.Tasks())
@@ -214,6 +277,23 @@ func run() error {
 	// tools.RegisterListOpenNotes (issue #2874, FR12): list_open_notes,
 	// PersonaSwarmOperator only (RegisterOpsRead/the mount itself).
 	tools.RegisterListOpenNotes(opsReg, entities.Tasks())
+
+	// tools.RegisterReleaseTask/RegisterEscalateTask (issue #2872, FR8/FR9):
+	// release_task and escalate_task, PersonaSwarmOperator only
+	// (RegisterOpsWrite/the mount itself).
+	tools.RegisterReleaseTask(opsReg, sessions, entities.Tasks(), assembler)
+	tools.RegisterEscalateTask(opsReg, sessions, entities.Tasks(), assembler)
+
+	// tools.RegisterListEscalatedTasks (issue #2875, FR5): list_escalated_tasks,
+	// this milestone's headline console query, PersonaSwarmOperator only
+	// (RegisterOpsRead/the mount itself).
+	tools.RegisterListEscalatedTasks(opsReg, entities.Tasks())
+
+	// tools.RegisterRequeueTask (issue #2876, FR6): requeue_task, the
+	// recover half of the recover-or-terminate pair cancel_task is the
+	// other half of, PersonaSwarmOperator only (RegisterOpsWrite/the
+	// mount itself).
+	tools.RegisterRequeueTask(opsReg, sessions, entities.Tasks(), assembler)
 
 	// The auth (human) front door's CredentialStore preflights the
 	// consuming domain's credential table at boot -- exactly like
@@ -251,13 +331,14 @@ func run() error {
 		}
 		specSrv.AddReceivingMiddleware(server.WhagentPersonaMiddleware())
 		designSrv.AddReceivingMiddleware(server.WhagentPersonaMiddleware())
+		workSrv.AddReceivingMiddleware(server.WhagentPersonaMiddleware())
 		opsSrv.AddReceivingMiddleware(server.WhagentPersonaMiddleware())
-		handler = server.NewDualAuthHTTPHandler(specSrv, designSrv, opsSrv, credentials, server.WhagentAuthConfig{
+		handler = server.NewDualAuthHTTPHandler(specSrv, designSrv, workSrv, opsSrv, credentials, server.WhagentAuthConfig{
 			Verifier: whagentVerifier,
 			Audience: cfg.MCPPublicURL,
 		}, resourceMeta)
 	} else {
-		handler = server.NewHTTPHandler(specSrv, designSrv, opsSrv, credentials, resourceMeta)
+		handler = server.NewHTTPHandler(specSrv, designSrv, workSrv, opsSrv, credentials, resourceMeta)
 	}
 
 	httpServer := &http.Server{

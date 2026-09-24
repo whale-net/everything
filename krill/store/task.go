@@ -150,6 +150,17 @@ type Task struct {
 	CreatedAt           time.Time
 }
 
+// TaskSummary is one entry of ListTasksByMilestone's result (issue
+// #2941): the same summary fields get_task/GET /tasks/{id} already
+// return per task, without a second per-task fetch.
+type TaskSummary struct {
+	ID           uuid.UUID
+	Title        string
+	CurrentLane  Lane
+	AttemptCount int
+	HasLiveClaim bool
+}
+
 // CreateTaskParams is CreateTask's input (FR1). Exactly the fields
 // 015_work_axis's issue body names for the Implementation phase: a single
 // delivery-axis reference (MilestoneID, resolved to either a milepebble or
@@ -214,6 +225,17 @@ type TaskStore interface {
 	// posture GetProductDeliveryHandler already established
 	// (milestone.go's own doc comment).
 	GetTaskByID(ctx context.Context, id uuid.UUID) (Task, error)
+
+	// ListTasksByMilestone returns every task whose milestone_id is
+	// milestoneID (a milestone_ref row of either Kind -- a milepebble or a
+	// milestone with no milepebble cut, mirroring CreateTask's own
+	// MilestoneID semantics), oldest-created first. Task ids are globally
+	// unique surrogates and milestone_id is resolved the same way
+	// ListMilepebblesByMilestone resolves its own milestoneID (no scope
+	// argument needed -- mirrors that method's own id-only shape,
+	// milestone_authoring.go). Unpaginated: a milestone's task count is
+	// inherently bounded, same reasoning as ListMilepebblesByMilestone.
+	ListTasksByMilestone(ctx context.Context, milestoneID uuid.UUID) ([]TaskSummary, error)
 
 	// ClaimTask is FR3/FR5's race-safe claim (task_claim.go, issue #2722):
 	// a single transaction that row-locks the `task` (SELECT ... FOR
@@ -348,6 +370,61 @@ type TaskStore interface {
 	// reuses ListClaimedTasks' own paging machinery and
 	// identifying-context join style rather than forking a copy.
 	ListOpenNotes(ctx context.Context, params ListOpenNotesParams) (Page[OpenNoteRow], error)
+
+	// ReleaseLease is FR8's operator-initiated force-close
+	// (task_release.go, issue #2872): a single transaction that refuses a
+	// cancelled task (ErrTaskCancelled) and an unclaimed one
+	// (ErrTaskNotClaimed), force-closes the open claim (forceCloseClaimTx,
+	// release_reason='release'), appends one `released` task_attempt row,
+	// increments attempt_count -- counting as an attempt against the same
+	// DefaultAttemptCap ClaimTask/ReclaimExpired/AbandonClaim enforce
+	// (#2851 Assumption 2) -- and, if that increment reaches the cap,
+	// records the attempt-cap escalation (FR3, issue #2871) in this same
+	// transaction. Appends one task_intervention_event row
+	// (action='release'). current_lane is never touched.
+	ReleaseLease(ctx context.Context, params ReleaseParams) (ReleaseResult, error)
+
+	// EscalateTask is FR9's operator-initiated manual escalation
+	// (task_escalate.go, issue #2872): a single transaction that refuses a
+	// cancelled task (ErrTaskCancelled), records one 'manual'
+	// task_escalation_event with NULL counter/cap (recordEscalationTx,
+	// refusing an already-escalated task with ErrTaskEscalated -- see
+	// task_escalate.go's own doc comment for why), force-closes any open
+	// claim (forceCloseClaimTx, release_reason='escalate') and counts that
+	// force-close as an attempt (one `force-closed` task_attempt row,
+	// attempt_count+1) -- but never records a second escalation event even
+	// when that increment reaches DefaultAttemptCap (FR9's stated
+	// exception to FR8's "cap crossed => attempt-cap escalation" rule).
+	// Appends one task_intervention_event row (action='escalate').
+	EscalateTask(ctx context.Context, params EscalateParams) (EscalateResult, error)
+
+	// ListEscalatedTasks returns every task in params.ScopeID with an
+	// active escalation (task_console.go, issue #2875, FR5), bounded and
+	// continuable per params.Page (NFR6) -- reuses ListClaimedTasks' own
+	// paging machinery and identifying-context join style rather than
+	// forking a copy. Each row carries summary history only (attempt
+	// count, failing-verdict count, most recent verdict, note count),
+	// never the task's full attempt/verdict/note history inline (FR5,
+	// NFR6, #2851 Assumption 11) -- that full history is M4 FR10's
+	// per-task fetch (GET /tasks/{id}).
+	ListEscalatedTasks(ctx context.Context, params ListEscalatedTasksParams) (Page[EscalatedTaskRow], error)
+
+	// RequeueTask is FR6's recover half of the recover-or-terminate pair
+	// CancelTask (above) is the other half of (task_requeue.go, issue
+	// #2876): a single transaction that row-locks the `task`, refuses a
+	// cancelled task (ErrTaskCancelled) and a task with no active
+	// escalation (ErrTaskNotEscalated, nothing written in either case),
+	// resets exactly the counter named by the active escalation's reason
+	// (thrash-cap -> thrash_count=0, attempt-cap -> attempt_count=0,
+	// manual -> attempt_count=0 only where FR9's force-close left it at
+	// or past DefaultAttemptCap), clears task.current_escalation_id, and
+	// appends one `task_intervention_event` row (action='requeue',
+	// naming the resolved escalation). Never writes a task_attempt row or
+	// increments attempt_count -- requeuing is not an attempt. The task
+	// returns to claimable at the lane it held when escalated, never
+	// touched by this call since no escalation producer ever moves
+	// current_lane.
+	RequeueTask(ctx context.Context, params RequeueParams) (RequeueResult, error)
 }
 
 // ErrMilestoneHasMilepebbleCut is CreateTask's named, loud rejection
@@ -500,4 +577,33 @@ func (s taskStore) GetTaskByID(ctx context.Context, id uuid.UUID) (Task, error) 
 		return Task{}, fmt.Errorf("get task: %w", err)
 	}
 	return task, nil
+}
+
+func (s taskStore) ListTasksByMilestone(ctx context.Context, milestoneID uuid.UUID) ([]TaskSummary, error) {
+	rows, err := s.pool.Query(ctx, `
+		SELECT id, title, current_lane, attempt_count, current_claim_id
+		FROM task
+		WHERE milestone_id = $1
+		ORDER BY created_at ASC, id ASC
+	`, milestoneID)
+	if err != nil {
+		return nil, fmt.Errorf("list tasks by milestone: %w", err)
+	}
+	defer rows.Close()
+
+	summaries := []TaskSummary{}
+	for rows.Next() {
+		var (
+			summary        TaskSummary
+			lane           string
+			currentClaimID *uuid.UUID
+		)
+		if err := rows.Scan(&summary.ID, &summary.Title, &lane, &summary.AttemptCount, &currentClaimID); err != nil {
+			return nil, fmt.Errorf("scan task summary: %w", err)
+		}
+		summary.CurrentLane = Lane(lane)
+		summary.HasLiveClaim = currentClaimID != nil
+		summaries = append(summaries, summary)
+	}
+	return summaries, rows.Err()
 }

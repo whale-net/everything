@@ -51,8 +51,12 @@ type initSessionRequest struct {
 // (issue #2827) so krill/mcp/tools' init_session tool returns this exact
 // value rather than an MCP-local mirror (LB7, the same rule IDResponse's
 // doc comment states for open_design_session).
+//
+// ScopeID is the scope the session was minted under -- the value
+// list_products, list_tasks, and the ops console tools take as input.
 type InitSessionResponse struct {
 	SessionID string `json:"session_id"`
+	ScopeID   string `json:"scope_id"`
 }
 
 // InitSessionHandler returns the `init` endpoint (FR3): POST /sessions/init.
@@ -98,7 +102,7 @@ func InitSessionHandler(sessions store.SessionStore) http.HandlerFunc {
 			return
 		}
 
-		writeJSON(w, http.StatusCreated, InitSessionResponse{SessionID: id.String()})
+		writeJSON(w, http.StatusCreated, InitSessionResponse{SessionID: id.String(), ScopeID: scopeID.String()})
 	}
 }
 

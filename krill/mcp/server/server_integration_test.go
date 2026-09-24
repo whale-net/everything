@@ -221,13 +221,15 @@ func newTestDualAuthServer(t *testing.T, querier *slice.Querier, credentials aut
 	tools.RegisterAll(specReg, querier)
 
 	// This file's own coverage (its doc comment) is scoped to specMountPath
-	// -- the FR5-FR8 spec surface's two-front-door round trip. designSrv
-	// below has no design-session tool registered: it exists only so
-	// server.NewDualAuthHTTPHandler's three-mount signature (issues #2547,
-	// #2867) is satisfied here, at /mcp/design, alongside specSrv. See
-	// krill/mcp/tools/design_test.go (this task's Testing phase) for the
-	// design-session surface's own end-to-end coverage.
+	// -- the FR5-FR8 spec surface's two-front-door round trip. designSrv/
+	// workSrv below have no tool registered: they exist only so
+	// server.NewDualAuthHTTPHandler's four-mount signature (issues #2547,
+	// #2719, #2867) is satisfied here, at /mcp/design and /mcp/work,
+	// alongside specSrv. See krill/mcp/tools/design_test.go and this
+	// package's registry_tools_test.go (this task's Testing phase) for the
+	// design-session and work-axis surfaces' own coverage.
 	designSrv := server.New()
+	workSrv := server.New()
 
 	// opsSrv carries one synthetic tool (opsProbeHandler, gated by
 	// server.RegisterOpsRead) so this file's own ops-mount subtest below has
@@ -250,9 +252,10 @@ func newTestDualAuthServer(t *testing.T, querier *slice.Querier, credentials aut
 	// case unable to fail the way it's meant to.
 	specSrv.AddReceivingMiddleware(server.WhagentPersonaMiddleware())
 	designSrv.AddReceivingMiddleware(server.WhagentPersonaMiddleware())
+	workSrv.AddReceivingMiddleware(server.WhagentPersonaMiddleware())
 	opsSrv.AddReceivingMiddleware(server.WhagentPersonaMiddleware())
 
-	handler := server.NewDualAuthHTTPHandler(specSrv, designSrv, opsSrv, credentials, server.WhagentAuthConfig{
+	handler := server.NewDualAuthHTTPHandler(specSrv, designSrv, workSrv, opsSrv, credentials, server.WhagentAuthConfig{
 		Verifier: verifier,
 		Audience: testWhagentAudience,
 	}, server.ResourceMetadataConfig{})

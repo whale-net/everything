@@ -173,15 +173,15 @@ func (h *WorkshopServiceHandler) ResolveLibraryMigrationConflict(ctx context.Con
 		return nil, status.Errorf(codes.InvalidArgument, "resolution must be \"union\" or \"override\", got %q", req.Resolution)
 	}
 
+	candidates, err := h.gcLibraryRepo.ListConflictCandidates(ctx, req.ConflictId)
+	if err != nil {
+		return nil, status.Errorf(codes.Internal, "failed to look up conflict candidates: %v", err)
+	}
+
 	var keepLibraryID *int64
 	if req.Resolution == "override" {
 		if req.KeepLibraryId == 0 {
 			return nil, status.Error(codes.InvalidArgument, "keep_library_id is required for an override resolution")
-		}
-
-		candidates, err := h.gcLibraryRepo.ListConflictCandidates(ctx, req.ConflictId)
-		if err != nil {
-			return nil, status.Errorf(codes.Internal, "failed to look up conflict candidates: %v", err)
 		}
 
 		found := false
@@ -206,7 +206,18 @@ func (h *WorkshopServiceHandler) ResolveLibraryMigrationConflict(ctx context.Con
 		return nil, status.Errorf(codes.FailedPrecondition, "failed to resolve conflict %d: %v", req.ConflictId, err)
 	}
 
-	slog.Info("library migration conflict resolved", "conflict_id", req.ConflictId, "resolution", req.Resolution)
+	// Override always keeps exactly one library; union keeps one row per
+	// distinct library_id among the candidates (see ResolveConflict).
+	attachmentCount := 1
+	if req.Resolution == "union" {
+		distinctLibraryIDs := make(map[int64]struct{}, len(candidates))
+		for _, cand := range candidates {
+			distinctLibraryIDs[cand.LibraryID] = struct{}{}
+		}
+		attachmentCount = len(distinctLibraryIDs)
+	}
+
+	slog.Info("library migration conflict resolved", "conflict_id", req.ConflictId, "resolution", req.Resolution, "attachment_count", attachmentCount)
 
 	return &pb.ResolveLibraryMigrationConflictResponse{}, nil
 }

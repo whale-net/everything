@@ -114,6 +114,26 @@ func (f *fakeTaskStore) ListOpenNotes(ctx context.Context, params store.ListOpen
 	panic("not used by this test")
 }
 
+func (f *fakeTaskStore) ReleaseLease(ctx context.Context, params store.ReleaseParams) (store.ReleaseResult, error) {
+	panic("not used by this test")
+}
+
+func (f *fakeTaskStore) EscalateTask(ctx context.Context, params store.EscalateParams) (store.EscalateResult, error) {
+	panic("not used by this test")
+}
+
+func (f *fakeTaskStore) ListEscalatedTasks(ctx context.Context, params store.ListEscalatedTasksParams) (store.Page[store.EscalatedTaskRow], error) {
+	panic("not used by this test")
+}
+
+func (f *fakeTaskStore) RequeueTask(ctx context.Context, params store.RequeueParams) (store.RequeueResult, error) {
+	panic("not used by this test")
+}
+
+func (f *fakeTaskStore) ListTasksByMilestone(ctx context.Context, milestoneID uuid.UUID) ([]store.TaskSummary, error) {
+	panic("not used by this test")
+}
+
 var _ store.TaskStore = (*fakeTaskStore)(nil)
 
 // TestAssemble_CrossScopeTaskID_NotFound proves NFR1: a taskID that

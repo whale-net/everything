@@ -5,19 +5,31 @@ description: Drives a signed-off krill design (fork of project-manager's loop-pl
 
 # loop-plan-implement-validate
 
-Forked verbatim from `tools/project-manager/skills/loop-plan-implement-validate`
-— mechanics unchanged, with `krill-work:plan`/`implement`/`validate` in
-place of the `project-manager:*` skill names, and starting from a krill
-FeatureSet/design-session id (once signed off) rather than a `plan:approved`
-root Issue number. `<n>` throughout is the GitHub tracking issue
-`krill-work:planner` mints — see `agents/planner.md` — not a krill entity.
+Same loop-control and final-verification mechanics as
+`tools/project-manager/skills/loop-plan-implement-validate`, with
+`krill-work:plan`/`implement`/`validate` in place of the
+`project-manager:*` skill names, starting from a krill FeatureSet/
+design-session id (once signed off). **On the Milestone path, `<n>`
+throughout is the Milestone id plus the task manifest `plan` produced — not
+a GitHub tracking issue.** Hand each phase's subagent the manifest
+explicitly where you have it (faster than a re-derive); a subagent missing
+it can still recover the task set itself with `list_tasks {milestone_id}`
+(CONVENTIONS.md "Work axis"). On the no-Milestone fallback, `<n>` is still
+the GitHub tracking issue `krill-work:planner` mints.
+
+On the Milestone path, every `worker`/`validator`/`system-validator`
+dispatch inside `implement`/`validate` is expected to hit the known
+task-lifecycle blocker and report `forbidden` — see `agents/worker.md`.
+This loop does not retry around that failure or fall back to GitHub; it
+surfaces the failure in its final report like any other blocker.
 
 ## Usage
 
 ```
-/krill-work:loop-plan-implement-validate <feature-set-id-or-tracking-issue>
-/krill-work:loop-plan-implement-validate 123 --max-subagents 2 --planner-model opus
-/krill-work:loop-plan-implement-validate 123 --max-iterations 8
+/krill-work:loop-plan-implement-validate <feature-set-id> --milestone-id <milestone-id>   # Milestone path
+/krill-work:loop-plan-implement-validate <feature-set-id>                                  # no-Milestone GitHub fallback
+/krill-work:loop-plan-implement-validate <feature-set-id> --milestone-id <milestone-id> --max-subagents 2 --planner-model opus
+/krill-work:loop-plan-implement-validate <feature-set-id> --milestone-id <milestone-id> --max-iterations 8
 ```
 
 Parameters (`--max-subagents`, `--planner-model`, `--max-iterations`,

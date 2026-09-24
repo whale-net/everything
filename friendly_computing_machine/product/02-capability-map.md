@@ -1,0 +1,29 @@
+# Capability map
+
+Part of the [FCM product brief](../PRODUCT.md). One line per capability, phrased as *a persona can do a thing*. Milestones deliver capabilities; every milestone FR cites the `Cn` it serves.
+
+### Now
+
+- C1 — A community member can run `/wai` in a channel and get an AI answer grounded in that channel's recent conversation.
+- C2 — A community member can vote in the weekly music poll and see it processed and archived without anyone tending it.
+- C3 — The operator can trust that Slack users, channels, and messages FCM depends on are kept in sync in its own store.
+- C4 — The operator can build, deploy, run locally, and diagnose FCM from docs, health checks, and tests that match the code.
+- C12 — A community member can start an ad-hoc poll with `/wpoll` (Simple Poll-style: a creation form from a bare `/wpoll`, or a one-line quoted question and options with optional `anonymous` and `limit N`), vote with buttons that update the message live, and trust that every vote is kept in FCM's store.
+
+### Next
+
+- C5 — A service can post a notification to a Slack channel through FCM without holding Slack credentials itself.
+- C6 — A community member can see manmanv2 server status changes in a Slack channel.
+- C7 — A community member can hold a multi-turn AI conversation in Slack that is run by a whagent_net session.
+
+### Later
+
+- C8 — A community member can start, stop, or restart a manmanv2 server from Slack.
+- C9 — An agent can ask a human a question in Slack and receive the answer back in its own workflow.
+- C10 — A service can register a slash command or interaction that FCM routes to it.
+- C11 — A community member can have the Slack AI assistant take actions in other monorepo systems through whagent_net tools.
+
+### Cheap later (no load-bearing decision needed)
+
+- Moving the music poll from the custom task pool onto Temporal is cheap at any point: it is four tasks and two tables. No milestone depends on which scheduler runs them.
+- Routing to new channels needs no schema work. The `slackspecialchannel` tables already map a channel type to channels, and LB1 turns those types into routes.

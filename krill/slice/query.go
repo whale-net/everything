@@ -545,11 +545,12 @@ func toFeatureSetEntities(featureSets []store.FeatureSet) []FeatureSetEntity {
 
 func toFeatureEntity(f store.Feature) FeatureEntity {
 	return FeatureEntity{
-		EntityRef:    EntityRef{ID: f.ID, RevisionID: f.RevisionID},
-		FeatureSetID: f.FeatureSetID,
-		Name:         f.Name,
-		Description:  f.Description,
-		Position:     f.Position,
+		EntityRef:     EntityRef{ID: f.ID, RevisionID: f.RevisionID},
+		FeatureSetID:  f.FeatureSetID,
+		Name:          f.Name,
+		Description:   f.Description,
+		Position:      f.Position,
+		DisplayNumber: f.DisplayNumber,
 	}
 }
 
@@ -582,11 +583,12 @@ func toRequirementEntities(requirements []store.Requirement) []RequirementEntity
 
 func toDecisionEntity(d store.LoadBearingDecision) DecisionEntity {
 	return DecisionEntity{
-		EntityRef:    EntityRef{ID: d.ID, RevisionID: d.RevisionID},
-		FeatureSetID: d.FeatureSetID,
-		Name:         d.Name,
-		Body:         d.Body,
-		Position:     d.Position,
+		EntityRef:     EntityRef{ID: d.ID, RevisionID: d.RevisionID},
+		FeatureSetID:  d.FeatureSetID,
+		Name:          d.Name,
+		Body:          d.Body,
+		Position:      d.Position,
+		DisplayNumber: d.DisplayNumber,
 	}
 }
 

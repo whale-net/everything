@@ -275,17 +275,21 @@ type proposeEntitiesInput struct {
 // validateMediatedProposals) and is the one place this rule can never be
 // bypassed by a future caller (../../ARCHITECTURE.md).
 //
-// This is the one write tool in this file gated to PersonaAgent only (this
-// task's Scope section, item 3): FR9/FR10 require a producer-role Agent to
-// be the caller of a mediated write, since FR10's "acting must differ from
-// on-behalf-of" can never be satisfied by a human acting for itself. Every
-// other write tool in this file accepts any resolved persona.
+// Allow-listed to PersonaAgent and PersonaSwarmOperator (issue #2926):
+// PersonaAgent alone made this tool unreachable end-to-end from any
+// mcpauth-authenticated caller, including every krill-design subagent,
+// which share the parent session's mcpauth connection and can never
+// resolve PersonaAgent themselves (that persona is produced only by the
+// whagent-net front door, whagent_auth.go). FR9/FR10's actual mediation
+// guarantee -- "acting must differ from on-behalf-of" -- is unaffected:
+// it's enforced independently, against the resolved krill_session's own
+// Acting/OnBehalfOf identities, regardless of which persona is calling.
 func RegisterProposeEntities(reg *server.Registry, sessions store.SessionStore, mediated store.MediatedWriteStore) {
 	server.RegisterWrite(reg, &mcp.Tool{
 		Name: "propose_entities",
 		Description: "Turn a Requirement Contributor's plain-language submission into Feature/Requirement rows (FR9), as " +
-			"a producer-role Agent acting on that Contributor's behalf (FR10). Callable only by the Agent persona.",
-	}, []server.Persona{server.PersonaAgent}, func(ctx context.Context, _ *mcp.CallToolRequest, in proposeEntitiesInput) (*mcp.CallToolResult, handlers.ProposeEntitiesResponse, error) {
+			"a producer-role Agent acting on that Contributor's behalf (FR10).",
+	}, []server.Persona{server.PersonaAgent, server.PersonaSwarmOperator}, func(ctx context.Context, _ *mcp.CallToolRequest, in proposeEntitiesInput) (*mcp.CallToolResult, handlers.ProposeEntitiesResponse, error) {
 		var zero handlers.ProposeEntitiesResponse
 
 		sess, err := requireKrillSession(ctx, sessions, in.KrillSessionID)

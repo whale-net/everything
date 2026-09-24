@@ -103,6 +103,17 @@ migration `006_mcpauth_credential`).
 | `KRILL_UI_PUBLIC_URL` | *(required)* | This instance's own externally reachable URL -- `auth.ProviderConfig.Issuer`, the base every auth endpoint URL (`/authorize`, `/token`, `/register`, discovery metadata) is built from. Must match what `mcp`'s own `KRILL_MCP_OAUTH_ISSUER` advertises. |
 | `KRILL_MCP_PUBLIC_URL` | *(required)* | `mcp`'s own externally reachable URL -- `auth.ProviderConfig.Resource`. Must be byte-identical to `mcp`'s own `KRILL_MCP_PUBLIC_URL`. |
 
+## M5 (escalation/intervention/console axis, issues #2867-#2877)
+
+No new environment variable. Every M5 tunable — `store.DefaultThrashCap`,
+the shared `store.DefaultAttemptCap` (both `task_claim.go`), and the
+console queries' `store.DefaultConsolePageSize`/`store.MaxConsolePageSize`
+(`paging.go`) — is a provisional Go constant, the same "config-free in
+this milestone" posture `ARCHITECTURE/28-work-axis-m4.md` already
+documents for `DefaultAttemptCap`/`DefaultLeaseDuration`. `/mcp/ops`
+(the M5 operator mount) shares `mcp`'s own `KRILL_MCP_*` variables above
+verbatim — it is a third mount on the same binary, not a separate one.
+
 ## Postgres MCP (Claude Code plugin)
 
 `.mcp.json` at the plugin root (`krill/plugin/data/.mcp.json`, symlinked to

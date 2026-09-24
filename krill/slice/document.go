@@ -53,13 +53,16 @@ type FeatureSetEntity struct {
 
 // FeatureEntity is one Feature's slice payload. A capability-map entry
 // (`Cn`) resolves onto exactly this entity -- see
-// krill/store/models.go's doc comment on store.Feature.
+// krill/store/models.go's doc comment on store.Feature. DisplayNumber is
+// that `Cn` -- a stored, stable number (migration 017, issue #2969), not
+// recomputed from Position.
 type FeatureEntity struct {
 	EntityRef
-	FeatureSetID uuid.UUID `json:"feature_set_id"`
-	Name         string    `json:"name"`
-	Description  *string   `json:"description,omitempty"`
-	Position     int       `json:"position"`
+	FeatureSetID  uuid.UUID `json:"feature_set_id"`
+	Name          string    `json:"name"`
+	Description   *string   `json:"description,omitempty"`
+	Position      int       `json:"position"`
+	DisplayNumber int       `json:"display_number"`
 }
 
 // RequirementEntity is one FR or NFR's slice payload, discriminated by
@@ -73,13 +76,16 @@ type RequirementEntity struct {
 	Position  int       `json:"position"`
 }
 
-// DecisionEntity is one LoadBearingDecision's slice payload.
+// DecisionEntity is one LoadBearingDecision's slice payload. DisplayNumber
+// is the `LBn` a caller cites -- a stored, stable number (migration 017,
+// issue #2969), not recomputed from Position.
 type DecisionEntity struct {
 	EntityRef
-	FeatureSetID uuid.UUID `json:"feature_set_id"`
-	Name         string    `json:"name"`
-	Body         *string   `json:"body,omitempty"`
-	Position     int       `json:"position"`
+	FeatureSetID  uuid.UUID `json:"feature_set_id"`
+	Name          string    `json:"name"`
+	Body          *string   `json:"body,omitempty"`
+	Position      int       `json:"position"`
+	DisplayNumber int       `json:"display_number"`
 }
 
 // PointerArtifactEntity is one PointerArtifact's slice payload (issue

@@ -19,6 +19,7 @@ go_library(
     importpath = "github.com/whale-net/everything/whagent_net/worker/tools",
     visibility = ["//visibility:public"],
     deps = [
+        "//libs/go/mcpobs",
         "//libs/go/whagent",
         "//whagent_net/api/persona",
         "//whagent_net/llm",

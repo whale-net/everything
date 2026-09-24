@@ -42,7 +42,7 @@ func RegisterSetMilestoneStatus(reg *server.Registry, sessions store.SessionStor
 	server.RegisterWrite(reg, &mcp.Tool{
 		Name:        "set_milestone_status",
 		Description: "Record a new status transition for a milestone or milepebble (FR8, FR9) -- appended to history, never an overwrite (NFR2).",
-	}, []server.Persona{server.PersonaRequirementContributor, server.PersonaAgent}, func(ctx context.Context, _ *mcp.CallToolRequest, in setMilestoneStatusInput) (*mcp.CallToolResult, handlers.IDResponse, error) {
+	}, []server.Persona{server.PersonaRequirementContributor, server.PersonaAgent, server.PersonaSwarmOperator}, func(ctx context.Context, _ *mcp.CallToolRequest, in setMilestoneStatusInput) (*mcp.CallToolResult, handlers.IDResponse, error) {
 		var zero handlers.IDResponse
 
 		sess, err := requireKrillSession(ctx, sessions, in.KrillSessionID)

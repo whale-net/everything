@@ -91,7 +91,7 @@ Small, and useful on its own: with M1–M3, the whole producer/architect loop ru
 
 ```
 Delivers: C13, C28
-Must not foreclose: LB2, LB6, LB7
+Must not foreclose: LB2, LB3, LB6, LB7
 Deliberately deferred: the work surface (C14, C15, C16, C25 → M4); operator console and
   escalation (C17, C18, C26 → M5); branch/PR lifecycle (C20 → Later)
 FR budget: 12

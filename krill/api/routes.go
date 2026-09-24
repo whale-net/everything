@@ -60,6 +60,9 @@ func setupRoutes(mux *http.ServeMux, pool *pgxpool.Pool, githubToken string) {
 	mux.HandleFunc("POST /sessions/init", handlers.InitSessionHandler(sessions))
 
 	mux.Handle("POST /products", gate(handlers.CreateProductHandler(entities.Products())))
+	// Product discovery (issue #2941): ungated read, scope_id is a
+	// required query parameter since a Product has no parent entity.
+	mux.HandleFunc("GET /products", handlers.ListProductsHandler(entities.Products()))
 	mux.Handle("POST /feature-sets", gate(handlers.CreateFeatureSetHandler(entities.FeatureSets())))
 	mux.Handle("POST /features", gate(handlers.CreateFeatureHandler(entities.Features())))
 	mux.Handle("POST /requirements", gate(handlers.CreateRequirementHandler(entities.Requirements())))
@@ -78,6 +81,9 @@ func setupRoutes(mux *http.ServeMux, pool *pgxpool.Pool, githubToken string) {
 	mux.Handle("POST /milepebbles/{id}/discovered-scope", gate(handlers.AddDiscoveredScopeHandler(entities.MilestoneAuthoring())))
 	mux.HandleFunc("GET /milepebbles/{id}", handlers.GetMilepebbleHandler(entities.MilestoneAuthoring()))
 	mux.HandleFunc("GET /milestones/{id}/milepebbles", handlers.ListMilepebblesHandler(entities.MilestoneAuthoring()))
+	// Task discovery (issue #2941): every task scoped to one milestone_ref
+	// row (milepebble or uncut milestone), ungated read.
+	mux.HandleFunc("GET /milestones/{id}/tasks", handlers.ListTasksHandler(entities.Tasks()))
 
 	// milestone_status_event (issue #2685, FR8/FR9/FR12) serves both a
 	// MilestoneKindMilestone and a MilestoneKindMilepebble row -- both are
@@ -175,6 +181,25 @@ func setupRoutes(mux *http.ServeMux, pool *pgxpool.Pool, githubToken string) {
 	mux.Handle("POST /notes", gate(handlers.RecordNoteHandler(entities.Tasks())))
 	mux.HandleFunc("GET /tasks/{id}/notes", handlers.ListTaskNotesHandler(entities.Tasks()))
 
+	// Read-back for notes recorded against a spec-axis entity: one route per
+	// store.NoteEntityKind, under each entity's own route prefix.
+	noteScopes := handlers.NoteEntityScopes{
+		Products:     entities.Products(),
+		FeatureSets:  entities.FeatureSets(),
+		Features:     entities.Features(),
+		Requirements: entities.Requirements(),
+		Decisions:    entities.Decisions(),
+	}
+	for prefix, kind := range map[string]store.NoteEntityKind{
+		"products":               store.NoteEntityKindProduct,
+		"feature-sets":           store.NoteEntityKindFeatureSet,
+		"features":               store.NoteEntityKindFeature,
+		"requirements":           store.NoteEntityKindRequirement,
+		"load-bearing-decisions": store.NoteEntityKindLoadBearingDecision,
+	} {
+		mux.HandleFunc("GET /"+prefix+"/{id}/notes", handlers.ListEntityNotesHandler(kind, noteScopes, entities.Tasks()))
+	}
+
 	// task_note_lifecycle_event (issue #2874, FR11): any persona
 	// transitions a note's lifecycle status -- POST gated (NFR6), the same
 	// session-only gate POST /notes uses, deliberately never restricted to
@@ -203,6 +228,36 @@ func setupRoutes(mux *http.ServeMux, pool *pgxpool.Pool, githubToken string) {
 	// /console/cancelled, ungated and scope_id-as-query-parameter like GET
 	// /console/claimed above.
 	mux.HandleFunc("GET /console/cancelled", handlers.ListCancelledTasksHandler(entities.Tasks()))
+
+	// FR5's escalated-task console view (issue #2875): GET
+	// /console/escalated, ungated and scope_id-as-query-parameter like GET
+	// /console/claimed above -- the milestone's headline query, over
+	// store.TaskStore.ListEscalatedTasks.
+	mux.HandleFunc("GET /console/escalated", handlers.ListEscalatedTasksHandler(entities.Tasks()))
+
+	// task_release (issue #2872, FR8): a Swarm Operator force-closes the
+	// active lease on a claimed task directly, independent of lease
+	// expiry -- counts as an attempt against the same DefaultAttemptCap
+	// M4's claim/reclaim/abandon paths enforce. Gated like every other
+	// write endpoint (NFR6); the response is the same work.Payload
+	// document GET /tasks/{id} and claim/complete/abandon/cancel return.
+	mux.Handle("POST /tasks/{id}/release", gate(handlers.ReleaseTaskHandler(entities.Tasks(), assembler)))
+
+	// task_escalate (issue #2872, FR9): a Swarm Operator manually
+	// escalates a task at any time, the same reasoned escalation event
+	// FR2/FR3 record automatically but with reason 'manual'. Gated like
+	// every other write endpoint (NFR6); the response is the same
+	// work.Payload document GET /tasks/{id} and release return.
+	mux.Handle("POST /tasks/{id}/escalate", gate(handlers.EscalateTaskHandler(entities.Tasks(), assembler)))
+
+	// task_requeue (issue #2876, FR6): a Swarm Operator returns an
+	// escalated task to claimable, resetting exactly the counter (thrash
+	// or attempt) whose cap triggered the escalation being resolved --
+	// the "recover" half of the recover-or-terminate pair cancel is the
+	// other half of. Gated like every other write endpoint (NFR6); the
+	// response is the same work.Payload document GET /tasks/{id} and
+	// claim/complete/abandon/cancel/release/escalate return.
+	mux.Handle("POST /tasks/{id}/requeue", gate(handlers.RequeueTaskHandler(entities.Tasks(), assembler)))
 
 	mux.Handle("POST /design-sessions", gate(handlers.OpenDesignSessionHandler(entities.DesignSessions())))
 	mux.HandleFunc("GET /design-sessions/{id}", handlers.GetDesignSessionHandler(entities.DesignSessions(), entities.RevisionEvents()))

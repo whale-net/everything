@@ -27,6 +27,9 @@ type fakeSource struct {
 	// ListMilestoneAssociations should return for it -- the same shape
 	// krill/store.MilestoneStore itself returns.
 	Associations map[uuid.UUID][]store.EntityMilestone
+	// Deferrals maps a MilestoneRef.ID to the milestone_deferral rows
+	// ListMilestoneDeferrals should return for it.
+	Deferrals map[uuid.UUID][]store.MilestoneDeferral
 }
 
 var _ render.Source = (*fakeSource)(nil)
@@ -49,4 +52,8 @@ func (f *fakeSource) ListMilestoneRefs(ctx context.Context, scopeID, productID u
 
 func (f *fakeSource) ListMilestoneAssociations(ctx context.Context, milestoneID uuid.UUID) ([]store.EntityMilestone, error) {
 	return f.Associations[milestoneID], nil
+}
+
+func (f *fakeSource) ListMilestoneDeferrals(ctx context.Context, milestoneID uuid.UUID) ([]store.MilestoneDeferral, error) {
+	return f.Deferrals[milestoneID], nil
 }

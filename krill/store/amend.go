@@ -116,10 +116,10 @@ func (s amendStore) AmendLoadBearingDecision(ctx context.Context, id uuid.UUID, 
 	}
 
 	amended, err := scanLoadBearingDecision(tx.QueryRow(ctx, `
-		INSERT INTO load_bearing_decision (id, scope_id, feature_set_id, name, body, position)
-		VALUES ($1, $2, $3, $4, $5, $6)
+		INSERT INTO load_bearing_decision (id, scope_id, feature_set_id, name, body, position, display_number)
+		VALUES ($1, $2, $3, $4, $5, $6, $7)
 		RETURNING `+loadBearingDecisionColumns,
-		current.ID, current.ScopeID, current.FeatureSetID, name, body, current.Position))
+		current.ID, current.ScopeID, current.FeatureSetID, name, body, current.Position, current.DisplayNumber))
 	if err != nil {
 		return LoadBearingDecision{}, fmt.Errorf("insert amended load_bearing_decision: %w", err)
 	}

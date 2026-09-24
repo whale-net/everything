@@ -26,6 +26,12 @@ type fakeProductStore struct {
 	gotScopeID uuid.UUID
 	gotName    string
 	gotVision  string
+
+	// listed/listErr back ListCurrentByScope; gotListScopeID records its
+	// last scopeID argument.
+	listed         []store.Product
+	listErr        error
+	gotListScopeID uuid.UUID
 }
 
 func (f *fakeProductStore) Create(ctx context.Context, scopeID uuid.UUID, name, vision string) (store.Product, error) {
@@ -41,7 +47,11 @@ func (f *fakeProductStore) GetCurrentByID(ctx context.Context, id uuid.UUID) (st
 }
 
 func (f *fakeProductStore) ListCurrentByScope(ctx context.Context, scopeID uuid.UUID) ([]store.Product, error) {
-	return nil, nil
+	f.gotListScopeID = scopeID
+	if f.listErr != nil {
+		return nil, f.listErr
+	}
+	return f.listed, nil
 }
 
 // fakeFeatureSetStore backs featureset_test.go.
@@ -84,6 +94,14 @@ func (f *fakeFeatureStore) Create(ctx context.Context, scopeID, featureSetID uui
 		return store.Feature{}, f.createErr
 	}
 	return store.Feature{ID: uuid.New(), ScopeID: scopeID, FeatureSetID: featureSetID, Name: name, Description: description}, nil
+}
+
+func (f *fakeFeatureStore) CreateWithDisplayNumber(ctx context.Context, scopeID, featureSetID uuid.UUID, name string, description *string, displayNumber int) (store.Feature, error) {
+	f.gotScopeID, f.gotFeatureSetID, f.gotName = scopeID, featureSetID, name
+	if f.createErr != nil {
+		return store.Feature{}, f.createErr
+	}
+	return store.Feature{ID: uuid.New(), ScopeID: scopeID, FeatureSetID: featureSetID, Name: name, Description: description, DisplayNumber: displayNumber}, nil
 }
 
 func (f *fakeFeatureStore) GetCurrentByID(ctx context.Context, id uuid.UUID) (store.Feature, error) {
@@ -135,6 +153,14 @@ func (f *fakeDecisionStore) Create(ctx context.Context, scopeID, featureSetID uu
 		return store.LoadBearingDecision{}, f.createErr
 	}
 	return store.LoadBearingDecision{ID: uuid.New(), ScopeID: scopeID, FeatureSetID: featureSetID, Name: name, Body: body}, nil
+}
+
+func (f *fakeDecisionStore) CreateWithDisplayNumber(ctx context.Context, scopeID, featureSetID uuid.UUID, name string, body *string, displayNumber int) (store.LoadBearingDecision, error) {
+	f.gotScopeID, f.gotFeatureSetID, f.gotName = scopeID, featureSetID, name
+	if f.createErr != nil {
+		return store.LoadBearingDecision{}, f.createErr
+	}
+	return store.LoadBearingDecision{ID: uuid.New(), ScopeID: scopeID, FeatureSetID: featureSetID, Name: name, Body: body, DisplayNumber: displayNumber}, nil
 }
 
 func (f *fakeDecisionStore) GetCurrentByID(ctx context.Context, id uuid.UUID) (store.LoadBearingDecision, error) {

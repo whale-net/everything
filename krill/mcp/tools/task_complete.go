@@ -2,9 +2,12 @@
 // verdict MCP tool: complete_task, a thin wrapper over
 // store.TaskStore.CompleteTask (krill/store/task_complete.go), mirroring
 // krill/api/handlers/task_complete.go's HTTP surface for the same
-// capability (LB7). Restricted to PersonaAgent, mirroring claim_task
-// (task_claim.go) -- root plan issue #2717's Personas section names the
-// Agent, not the Swarm Operator, as the one that completes a claimed task.
+// capability (LB7). Originally restricted to PersonaAgent only, mirroring
+// claim_task (task_claim.go) -- root plan issue #2717's Personas section
+// names the Agent, not the Swarm Operator, as the one that completes a
+// claimed task -- but also allow-listed to PersonaSwarmOperator as of
+// issue #2926's follow-up (see task_claim.go's doc comment for why: no
+// whagent-net JWT-minting path exists for krill-work yet, issue #2932).
 // completeTaskInput declares no lane/destination field of any kind (FR8):
 // the completing Agent reports only a verdict, never a destination lane.
 package tools
@@ -40,9 +43,10 @@ type completeTaskInput struct {
 // claim_task return -- never a bespoke MCP-local shape.
 func RegisterCompleteTask(reg *server.Registry, sessions store.SessionStore, tasks store.TaskStore, assembler *work.Assembler) {
 	server.RegisterWrite(reg, &mcp.Tool{
-		Name:        "complete_task",
-		Description: "Complete a claimed task with a pass/fail verdict (FR8): krill, not the caller, decides whether the task advances one lane or reverts one lane in its own lane sequence. Returns the task's full payload document.",
-	}, []server.Persona{server.PersonaAgent}, func(ctx context.Context, _ *mcp.CallToolRequest, in completeTaskInput) (*mcp.CallToolResult, work.Payload, error) {
+		Name:         "complete_task",
+		Description:  "Complete a claimed task with a pass/fail verdict (FR8): krill, not the caller, decides whether the task advances one lane or reverts one lane in its own lane sequence. Returns the task's full payload document.",
+		OutputSchema: workPayloadOutputSchema,
+	}, []server.Persona{server.PersonaAgent, server.PersonaSwarmOperator}, func(ctx context.Context, _ *mcp.CallToolRequest, in completeTaskInput) (*mcp.CallToolResult, work.Payload, error) {
 		var zero work.Payload
 
 		sess, err := requireKrillSession(ctx, sessions, in.KrillSessionID)

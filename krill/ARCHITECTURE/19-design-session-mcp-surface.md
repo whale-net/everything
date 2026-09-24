@@ -39,12 +39,16 @@ for either registration path yet (registry.go's `RegisterWrite` doc
 comment has the full reasoning). What `RegisterWrite` **does** carry over,
 new for M2: an optional per-tool persona allow-list. Every write tool here
 accepts any resolved persona except `propose_entities`, which is
-restricted to `PersonaAgent` — FR9/FR10 require a producer-role Agent to be
-the caller of a mediated write, since FR10's "acting must differ from
-on-behalf-of" can never be satisfied by a human acting for itself. This is
-a bare allow-list per tool (a `[]Persona` slice `RegisterWrite` checks
-membership against), not a policy engine — nothing here needs more than
-that.
+allow-listed to `PersonaAgent`/`PersonaSwarmOperator` — FR9/FR10's mediated
+write requires the resolved `krill_session`'s "acting must differ from
+on-behalf-of" identities, enforced independently of which persona is
+calling; the persona allow-list itself was widened from `PersonaAgent`-only
+by issue #2926, since that made the tool unreachable end-to-end from any
+mcpauth-authenticated caller (every krill-design/krill-work subagent
+included, since they share the parent session's mcpauth connection and can
+never resolve `PersonaAgent`). This is a bare allow-list per tool (a
+`[]Persona` slice `RegisterWrite` checks membership against), not a policy
+engine — nothing here needs more than that.
 
 **Krill-session gating now reaches `krill/mcp` (correcting "never touches
 `krill_session`").** `krill/ARCHITECTURE.md` used to say the `krill/mcp`

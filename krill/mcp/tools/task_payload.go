@@ -10,7 +10,9 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"reflect"
 
+	"github.com/google/jsonschema-go/jsonschema"
 	"github.com/google/uuid"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 
@@ -25,6 +27,36 @@ type getTaskInput struct {
 	ID string `json:"id" jsonschema:"The task's surrogate id, as a UUID string."`
 }
 
+// workPayloadOutputSchema is the MCP output schema every work.Payload-
+// returning tool advertises -- get_task and every write tool that echoes
+// the task's payload back (claim_task, heartbeat_task's neighbors
+// complete_task/abandon_task/cancel_task/release_task/requeue_task/
+// escalate_task) -- computed once and shared, mirroring
+// ../tools/slice.go's sliceDocumentOutputSchema for the exact same reason:
+// jsonschema-go's default reflection walks uuid.UUID's underlying Go kind
+// ([16]byte) and infers JSON schema type "array", but encoding/json's
+// actual marshaling of a uuid.UUID (via its MarshalText method) produces a
+// JSON string. Left to mcp.AddTool's default inference, every one of these
+// tools fails its own output-schema validation on any populated payload
+// (work.Payload embeds slice.Document, whose FeatureEntity/RequirementEntity/
+// DecisionEntity/etc. all carry a uuid.UUID id via their embedded
+// EntityRef) -- so the schema is set explicitly here instead, via
+// jsonschema.ForOptions.TypeSchemas overriding just the uuid.UUID leaf to
+// match its real wire shape.
+var workPayloadOutputSchema = mustWorkPayloadOutputSchema()
+
+func mustWorkPayloadOutputSchema() *jsonschema.Schema {
+	s, err := jsonschema.For[work.Payload](&jsonschema.ForOptions{
+		TypeSchemas: map[reflect.Type]*jsonschema.Schema{
+			reflect.TypeFor[uuid.UUID](): {Type: "string"},
+		},
+	})
+	if err != nil {
+		panic(fmt.Errorf("krill/mcp/tools: building work.Payload output schema: %w", err))
+	}
+	return s
+}
+
 // RegisterGetTaskPayload registers get_task (FR4, FR10): a task's payload
 // document -- its embedded spec slice plus lane/dependency/attempt state --
 // via work.Assembler.Assemble, mirroring
@@ -33,8 +65,9 @@ type getTaskInput struct {
 // (#2722) will, never a bespoke MCP-local shape.
 func RegisterGetTaskPayload(reg *server.Registry, tasks store.TaskStore, assembler *work.Assembler) {
 	server.RegisterRead(reg, &mcp.Tool{
-		Name:        "get_task",
-		Description: "Return a task's payload document: its embedded spec slice plus lane, dependency, and attempt state (FR4/FR10). Ungated -- returns whether or not a claim on the task is currently live.",
+		Name:         "get_task",
+		Description:  "Return a task's payload document: its embedded spec slice plus lane, dependency, and attempt state (FR4/FR10). Ungated -- returns whether or not a claim on the task is currently live.",
+		OutputSchema: workPayloadOutputSchema,
 	}, func(ctx context.Context, _ *mcp.CallToolRequest, in getTaskInput) (*mcp.CallToolResult, work.Payload, error) {
 		var zero work.Payload
 

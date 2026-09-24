@@ -65,12 +65,15 @@ go_library(
         "task_complete.go",
         "task_console.go",
         "task_dependency.go",
+        "task_escalate.go",
         "task_escalation.go",
         "task_lease.go",
         "task_note.go",
         "task_note_console.go",
         "task_note_lifecycle.go",
         "task_reclaim.go",
+        "task_release.go",
+        "task_requeue.go",
     ],
     importpath = "github.com/whale-net/everything/krill/store",
     visibility = ["//visibility:public"],
@@ -108,6 +111,42 @@ go_test(
         "persona_integration_test.go",
         "product_integration_test.go",
         "requirement_integration_test.go",
+        "store_integration_test.go",
+    ],
+    gotags = ["integration"],
+    tags = [
+        "external",
+        "integration",
+        "manual",
+        "no-cache",
+        "no-sandbox",
+        "requires-network",
+    ],
+    deps = [
+        ":store",
+        "//krill/migrate/schema",
+        "//libs/go/dbtest",
+        "//libs/go/migrate",
+        "@com_github_google_uuid//:uuid",
+        "@com_github_jackc_pgx_v5//stdlib",
+        "@com_github_stretchr_testify//assert",
+        "@com_github_stretchr_testify//require",
+    ],
+)
+
+# Real Postgres integration test for SliceStore (slice.go): ordering,
+# product isolation, and current-row filtering across every join leg of
+# the product/feature-set/entity-set slice reads. Deliberately NOT part of
+# `bazel test //...` -- see //libs/go/dbtest's README for the full rationale.
+#
+# Run it explicitly (requires a working Docker daemon):
+#   bazel test //krill/store:slice_integration_test --test_output=all
+go_test(
+    name = "slice_integration_test",
+    size = "large",
+    timeout = "long",
+    srcs = [
+        "slice_integration_test.go",
         "store_integration_test.go",
     ],
     gotags = ["integration"],
@@ -1342,15 +1381,166 @@ go_test(
     ],
 )
 
-# Real-Postgres coverage for TaskStore.ListCancelledTasks (task_console.go,
-# issue #2873's Testing section, FR10): only cancelled tasks appear, each
-# row's title/delivery-reference (both shapes)/both cancellation subject
-# pairs, paging default/max/clamp, deterministic order, a continuation
-# walk with no gaps or duplicates, a cross-scope token rejected, and
-# another scope's rows absent. Shares task_integration_test.go's
+# Real-Postgres coverage for TaskStore.ReleaseLease (task_release.go,
+# migration 016, issue #2872's Testing section, FR8): releasing a live
+# lease (claimable again immediately, attempt_count+1, one task_attempt
+# row, one task_intervention_event with both subjects), the original
+# claimant's subsequent heartbeat/complete/abandon each rejected, release
+# on an unclaimed task refused, cap-crossing recording the attempt-cap
+# escalation in the same call (and the whole release rolling back when
+# that escalation insert itself fails), and release on a cancelled task
+# refused. Shares task_integration_test.go's test-store/test-scope/
+# test-world/subject helpers, task_dependency_integration_test.go's
+# createTestTask helper, and task_claim_integration_test.go's
+# claimTestSession/countRows helpers rather than duplicating them.
+# Deliberately NOT part of `bazel test //...` -- see //libs/go/dbtest's
+# README for the full rationale.
+#
+# Run it explicitly (requires a working Docker daemon):
+#   bazel test //krill/store:task_release_integration_test --test_output=all
+go_test(
+    name = "task_release_integration_test",
+    size = "large",
+    timeout = "long",
+    srcs = [
+        "task_claim_integration_test.go",
+        "task_dependency_integration_test.go",
+        "task_integration_test.go",
+        "task_release_integration_test.go",
+    ],
+    gotags = ["integration"],
+    tags = [
+        "external",
+        "integration",
+        "manual",
+        "no-cache",
+        "no-sandbox",
+        "requires-network",
+    ],
+    deps = [
+        ":store",
+        "//krill/migrate/schema",
+        "//libs/go/dbtest",
+        "//libs/go/migrate",
+        "@com_github_google_uuid//:uuid",
+        "@com_github_jackc_pgx_v5//stdlib",
+        "@com_github_stretchr_testify//assert",
+        "@com_github_stretchr_testify//require",
+    ],
+)
+
+# Real-Postgres coverage for TaskStore.EscalateTask (task_escalate.go,
+# migration 016, issue #2872's Testing section, FR9): a manual escalation
+# on an unclaimed, uncapped task, a manual escalation on a claimed task
+# (claim force-closed, attempt_count+1, the claimant's later heartbeat
+# rejected), FR9's single-event exception at the cap (the single most
+# important assertion in this task: exactly one task_escalation_event
+# exists, reason 'manual', even when the force-close itself crosses
+# DefaultAttemptCap), escalating an already-escalated task (this task's
+# own documented choice: reject by reusing ErrTaskEscalated), and
+# escalating a cancelled task refused. Shares task_integration_test.go's
 # test-store/test-scope/test-world/subject helpers,
 # task_dependency_integration_test.go's createTestTask helper, and
-# task_claim_integration_test.go's claimTestSession helper rather than
+# task_claim_integration_test.go's claimTestSession/countRows helpers
+# rather than duplicating them. Deliberately NOT part of
+# `bazel test //...` -- see //libs/go/dbtest's README for the full
+# rationale.
+#
+# Run it explicitly (requires a working Docker daemon):
+#   bazel test //krill/store:task_escalate_integration_test --test_output=all
+go_test(
+    name = "task_escalate_integration_test",
+    size = "large",
+    timeout = "long",
+    srcs = [
+        "task_claim_integration_test.go",
+        "task_dependency_integration_test.go",
+        "task_escalate_integration_test.go",
+        "task_integration_test.go",
+    ],
+    gotags = ["integration"],
+    tags = [
+        "external",
+        "integration",
+        "manual",
+        "no-cache",
+        "no-sandbox",
+        "requires-network",
+    ],
+    deps = [
+        ":store",
+        "//krill/migrate/schema",
+        "//libs/go/dbtest",
+        "//libs/go/migrate",
+        "@com_github_google_uuid//:uuid",
+        "@com_github_jackc_pgx_v5//stdlib",
+        "@com_github_stretchr_testify//assert",
+        "@com_github_stretchr_testify//require",
+    ],
+)
+
+# Real-Postgres coverage for TaskStore.RequeueTask (task_requeue.go, issue
+# #2876's Testing section, FR6): the per-reason counter-reset matrix
+# (thrash-cap, attempt-cap via lapse, attempt-cap via abandon, manual at
+# the cap -- FR9's no-strand exception, manual below the cap), the task
+# claimable again immediately at the exact lane it held when escalated, no
+# task_attempt row written and attempt_count never increasing,
+# task_escalation_event left byte-for-byte unchanged with exactly one
+# task_intervention_event naming the resolved escalation, refusal on a
+# non-escalated task and a cancelled task, and double requeue refused.
+# Shares task_integration_test.go's test-store/test-scope/test-world/
+# subject helpers, task_dependency_integration_test.go's createTestTask/
+# setTaskLane helpers, and task_claim_integration_test.go's
+# claimTestSession/countRows helpers rather than duplicating them.
+# Deliberately NOT part of `bazel test //...` -- see //libs/go/dbtest's
+# README for the full rationale.
+#
+# Run it explicitly (requires a working Docker daemon):
+#   bazel test //krill/store:task_requeue_integration_test --test_output=all
+go_test(
+    name = "task_requeue_integration_test",
+    size = "large",
+    timeout = "long",
+    srcs = [
+        "task_claim_integration_test.go",
+        "task_dependency_integration_test.go",
+        "task_integration_test.go",
+        "task_requeue_integration_test.go",
+    ],
+    gotags = ["integration"],
+    tags = [
+        "external",
+        "integration",
+        "manual",
+        "no-cache",
+        "no-sandbox",
+        "requires-network",
+    ],
+    deps = [
+        ":store",
+        "//krill/migrate/schema",
+        "//libs/go/dbtest",
+        "//libs/go/migrate",
+        "@com_github_google_uuid//:uuid",
+        "@com_github_jackc_pgx_v5//stdlib",
+        "@com_github_stretchr_testify//assert",
+        "@com_github_stretchr_testify//require",
+    ],
+)
+
+# Real-Postgres coverage for TaskStore.ListCancelledTasks and
+# TaskStore.ListEscalatedTasks (task_console.go, issue #2873's Testing
+# section (FR10) and issue #2875's Testing section (FR5)): only cancelled/
+# escalated tasks appear, produced through the real per-reason paths for
+# escalation, each row's title/delivery-reference/subject pairs/counter-cap/
+# summary counts, no inline history, paging default/max/clamp, deterministic
+# order, a continuation walk with no gaps or duplicates, a cross-scope token
+# rejected, another scope's rows absent, a requeued/cancelled task's
+# absence, and a row-size proof that a long history doesn't grow the row.
+# Shares task_integration_test.go's test-store/test-scope/test-world/
+# subject helpers, task_dependency_integration_test.go's createTestTask
+# helper, task_claim_integration_test.go's claimTestSession helper, and
+# task_complete_integration_test.go's tripThrashCap helper rather than
 # duplicating them. Deliberately NOT part of `bazel test //...` -- see
 # //libs/go/dbtest's README for the full rationale.
 #
@@ -1362,6 +1552,7 @@ go_test(
     timeout = "long",
     srcs = [
         "task_claim_integration_test.go",
+        "task_complete_integration_test.go",
         "task_console_integration_test.go",
         "task_dependency_integration_test.go",
         "task_integration_test.go",

@@ -1,68 +1,72 @@
 ---
 name: plan
-description: Task breakdown (krill-work fork) — converts a krill-design design session that ended in a signoff revision event (signoff_status approved) into a GitHub Project board with swimlanes and cohesive task issues, by dispatching the planner persona, which also creates real krill Task entities when a Milestone exists (M3/M4 FR1) and mints the bridging GitHub tracking issue (TODO(M4) for swimlane execution). Idempotent. Run after /krill-design:review (or /krill-design:loop-design-panel) approves the design, before /krill-work:implement. Also the right target for "just set up the board" / "create the tasks but don't start work" / "plan only".
+description: Task breakdown (krill-work fork) — converts a krill-design design session that ended in a signoff revision event (signoff_status approved) into real krill Task entities when a Milestone exists (M3/M4), by dispatching the planner persona; no GitHub tracking issue or Project board on that path. Falls back to project-manager's GitHub Project mechanics only when no krill Milestone scopes the work. Idempotent. Run after /krill-design:review (or /krill-design:loop-design-panel) approves the design, before /krill-work:implement. Also the right target for "just create the tasks, don't start work" / "plan only".
 ---
 
 # plan
 
-Turns a signed-off krill design into executable, dependency-tracked task
-issues on a Project board, by dispatching `krill-work:planner`. Pure task
-breakdown — no code written, no branches touched. Forked from
-`tools/project-manager/skills/plan`.
+Turns a signed-off krill design into krill `Task` entities, by dispatching
+`krill-work:planner`. Pure task breakdown — no code written, no branches
+touched.
 
 ## Usage
 
 ```
-/krill-work:plan <feature-set-id>
-/krill-work:plan <feature-set-id> --milestone-id <milestone-id>   # krill-hosted product: also mints real Task entities
-/krill-work:plan <feature-set-id> --planner-model sonnet
-/krill-work:plan <tracking-issue-number>   # idempotency re-check on an already-planned FeatureSet/milestone
+/krill-work:plan <feature-set-id> --milestone-id <milestone-id>   # krill-hosted product: mints real Task entities, no GitHub
+/krill-work:plan <feature-set-id>                                 # no krill Milestone: GitHub Project fallback (project-manager mechanics)
+/krill-work:plan <feature-set-id> --milestone-id <milestone-id> --planner-model sonnet
 ```
 
 `--planner-model <model>` — same meaning as project-manager's, default `opus`.
 `--milestone-id <id>` — pass when this FeatureSet's design was scoped to a
 Milestone already authored in krill (`create_milestone`, M3 — only possible
 for a product actually hosted in krill, e.g. krill's own domain or an
-imported one). Without it, `planner` creates GitHub-only task issues, same
-as before M3 existed.
+imported one). Without it, `planner` falls back to `tools/project-manager`'s
+GitHub Issues/Project mechanics entirely (CONVENTIONS.md "Work axis") — this
+is a real krill capability gap (no Task container exists outside a
+Milestone), not a default worth avoiding when it doesn't apply.
 
-## Steps
+## Steps (Milestone path)
 
-1. **Confirm and idempotency-check.** Given a FeatureSet id: call
-   `get_feature_set_slice {id}` and confirm its design session's last event
-   was `signoff` with `signoff_status: approved` (if you only have the
-   design-session id, `get_design_session` gives you both). If not, point
-   the user to `/krill-design:design`, `/krill-design:review`, or
-   `/krill-design:loop-design-panel`. If `--milestone-id` was given, also
-   call `get_milestone {id}` to confirm it exists and belongs to the same
-   Product. Then check for an existing tracking issue citing this FeatureSet
-   or Milestone id (**TODO(M3)** — `gh issue list --search "krill
-   feature-set-id: <id>"` / `"krill milestone-id: <id>"`, since no
-   `PointerArtifact` lookup exists for either yet). If found and it already
-   has a `Project board: <url>` comment, the task breakdown has already
-   run — report the existing project and task issues (grouped by swimlane,
-   per `/status`) and stop.
+1. **Confirm and idempotency-check.** Call `get_feature_set_slice {id}` and
+   confirm its design session's last event was `signoff` with
+   `signoff_status: approved` (if you only have the design-session id,
+   `get_design_session` gives you both). If not, point the user to
+   `/krill-design:design`, `/krill-design:review`, or
+   `/krill-design:loop-design-panel`. Call `get_milestone {id}` to confirm
+   the Milestone exists and belongs to the same Product. For idempotency,
+   don't trust bare `get_milestone_status {id}` alone: `planned` is
+   ambiguous on this path — `/krill-design:design`/`review`/
+   `loop-design-panel` all set a krill-hosted milestone to `planned` the
+   moment its design signs off, before any task exists, and `planner` sets
+   the same status again once it actually creates tasks (there is no
+   separate status value for the two). Call
+   `get_milestone_status_history {id}` and read the note on the latest
+   `planned`-or-later transition instead — `planner` always names the
+   created task ids in that note (`agents/planner.md` step 4); a note that
+   names task ids means a prior `plan` run already created them, ask the
+   user for that run's task manifest (there is no krill query to
+   reconstruct it — CONVENTIONS.md) rather than re-running `planner`. A
+   note that names a design-session/signoff event instead (no task ids)
+   means this is genuinely the first planning pass — proceed. If the note
+   is ambiguous, ask the user to confirm before dispatching `planner`.
+2. **Task breakdown.** Dispatch `krill-work:planner` — via `Agent` with
+   `model` set to `--planner-model` (default `opus`) — with the FeatureSet
+   id and Milestone id. `planner` adds the Feature/Requirement entities to
+   the milestone's `Delivers` set, creates krill Tasks with
+   `create_task`/`declare_task_dependencies`, and sets the milestone's
+   status — every one of these works from this dispatch today (see
+   `agents/planner.md`) — and returns the task manifest.
+3. **Report.** Relay `planner`'s full task manifest (every task id, title,
+   starting lane, dependency edges) to the user verbatim — **this is the
+   only durable record of what was just created**; nothing else can
+   reconstruct it. Tell the user `/krill-work:implement <milestone-id>` is
+   next, and that it needs this exact manifest.
 
-   Given a tracking-issue number directly (from a prior `plan` run): same
-   idempotency check via `gh issue view <n> --comments`.
+## Steps (no-Milestone GitHub fallback)
 
-2. **Task breakdown.** Otherwise, dispatch `krill-work:planner` — via
-   `Agent` with `model` set to `--planner-model` (default `opus`) — with the
-   FeatureSet id (and the Milestone id, if given), to add the Feature/
-   Requirement entities to the milestone's `Delivers` set (Milestone path
-   only), mint the tracking issue if needed, create the Project board with
-   swimlanes, create cohesive task issues (calling `create_task` per task on
-   the Milestone path — see `agents/planner.md` for the `PersonaSwarmOperator`
-   restriction this requires), and post the summary comment.
-
-   **If this FeatureSet is a milestone of a product brief not hosted in
-   krill:** post `gh issue comment <product-issue> --body "Ledger: M<k> →
-   in progress (Project board)"` on the tracking issue once the board
-   exists. **If `--milestone-id` was given:** `planner` calls
-   `set_milestone_status {milestone_id, status: "in progress"}` instead —
-   this replaces the `Ledger:` comment for a krill-hosted milestone.
-
-3. **Report.** Summarize the Project board URL, the tracking issue number
-   (needed for `/krill-work:implement`/`validate`), and the created task
-   issues by starting swimlane. Tell the user `/krill-work:implement <n>` is
-   next.
+Identical to `tools/project-manager/skills/plan/SKILL.md` — mint a tracking
+issue citing `krill feature-set-id: <id>`, set up the Project board,
+`gh issue list --search "krill feature-set-id: <id>"` for idempotency on a
+re-run. Read that file for the full process; it is not duplicated here
+since none of it changed on this path.

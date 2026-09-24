@@ -48,7 +48,7 @@ func RegisterMarkDeliveredItemShipped(reg *server.Registry, sessions store.Sessi
 	server.RegisterWrite(reg, &mcp.Tool{
 		Name:        "mark_delivered_item_shipped",
 		Description: "Record that a Feature or Requirement shipped as part of a milestone or milepebble's delivered scope (FR10) -- appended to history, never an overwrite (NFR2/NFR3).",
-	}, []server.Persona{server.PersonaRequirementContributor, server.PersonaAgent}, func(ctx context.Context, _ *mcp.CallToolRequest, in markDeliveredItemShippedInput) (*mcp.CallToolResult, handlers.IDResponse, error) {
+	}, []server.Persona{server.PersonaRequirementContributor, server.PersonaAgent, server.PersonaSwarmOperator}, func(ctx context.Context, _ *mcp.CallToolRequest, in markDeliveredItemShippedInput) (*mcp.CallToolResult, handlers.IDResponse, error) {
 		var zero handlers.IDResponse
 
 		sess, err := requireKrillSession(ctx, sessions, in.KrillSessionID)

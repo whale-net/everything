@@ -51,7 +51,7 @@ func RegisterAbandonMilestone(reg *server.Registry, sessions store.SessionStore,
 	server.RegisterWrite(reg, &mcp.Tool{
 		Name:        "abandon_milestone",
 		Description: "Abandon a stalled milestone or milepebble (FR6): appends an 'abandoned' status transition and sweeps its not-yet-shipped scope into the backlog bucket, atomically. Irreversible -- there is no un-abandon tool -- and never alters what already shipped (NFR3).",
-	}, []server.Persona{server.PersonaRequirementContributor, server.PersonaAgent}, func(ctx context.Context, _ *mcp.CallToolRequest, in abandonMilestoneInput) (*mcp.CallToolResult, handlers.AbandonResponse, error) {
+	}, []server.Persona{server.PersonaRequirementContributor, server.PersonaAgent, server.PersonaSwarmOperator}, func(ctx context.Context, _ *mcp.CallToolRequest, in abandonMilestoneInput) (*mcp.CallToolResult, handlers.AbandonResponse, error) {
 		var zero handlers.AbandonResponse
 
 		sess, err := requireKrillSession(ctx, sessions, in.KrillSessionID)

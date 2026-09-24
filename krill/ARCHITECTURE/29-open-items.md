@@ -6,8 +6,15 @@
   `POST /requirements/{id}/amend`, `POST
   /load-bearing-decisions/{id}/amend`, `GET /requirements/{id}/as-of`,
   `GET /requirements/{id}/versions`, and the `load-bearing-decisions`
-  equivalents) — no surface at all yet for Persona/NonGoal (`krill/store`'s
-  `PersonaStore`/`NonGoalStore` are store-layer only, issue #2488), and no
+  equivalents) — still no HTTP surface for Persona/NonGoal (`krill/store`'s
+  `PersonaStore`/`NonGoalStore` remain store-layer only over HTTP, issue
+  #2488); the MCP surface gap is closed for create
+  (`create_persona`/`create_non_goal`, entity.go) and list
+  (`list_personas`/`list_non_goals`, persona_nongoal.go — neither entity is
+  part of the FR5-FR9 slice document, so this is a standalone discovery
+  pair, not a `Document` field) on the design mount, but amend remains open
+  for both (no `store.PersonaStore`/`store.NonGoalStore` amend method
+  exists at all, unlike Requirement/LoadBearingDecision), and no
   amend/history surface for Product, FeatureSet, or Feature (issue #2493
   scopes FR11/FR12 to Requirement and LoadBearingDecision only). FR5-FR9's
   read path exists (issue #2491, see "The scoped-slice query" above); FR21
@@ -46,8 +53,11 @@
   until C12 lands. As of issue #2547, `krill/mcp` also mounts the
   design-session write/read surface at `/mcp/design` (see "The
   design-session MCP surface" above) — its persona resolution is the same
-  fixed `auth.go`/`whagent_auth.go` pair, with a new per-tool allow-list
-  (`RegisterWrite`) restricting `propose_entities` to `PersonaAgent` only.
+  fixed `auth.go`/`whagent_auth.go` pair, with a per-tool allow-list
+  (`RegisterWrite`) restricting `propose_entities` to `PersonaAgent`/
+  `PersonaSwarmOperator` (widened from `PersonaAgent`-only by issue #2926,
+  which had made the tool unreachable from any mcpauth-authenticated
+  caller, including every krill-design/krill-work subagent).
 - No auth wired up on `api` — `POST /sessions/init`, every future write
   endpoint, and the FR5-FR9 slice routes all trust caller-asserted
   identity or are unauthenticated (see "`init` and the write gate"

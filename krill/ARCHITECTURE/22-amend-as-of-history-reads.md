@@ -80,3 +80,9 @@ wraps `HistoryStore` with no session gate at all (`GET
 and the `load-bearing-decisions` equivalents) — FR11 is a read path, and
 read paths never require `init` (root plan issue #2485), exactly like
 `krill/slice`'s four granularities.
+
+**MCP surface.** `krill/mcp/tools/amend.go` exposes the same two writes as
+`amend_requirement` and `amend_load_bearing_decision` on the `/mcp/design`
+mount (`RegisterWrite`, `krill_session_id` required), taking the HTTP
+body's `{name, body}` plus `id` and returning `handlers.IDResponse`. No MCP
+twin exists yet for the history reads.

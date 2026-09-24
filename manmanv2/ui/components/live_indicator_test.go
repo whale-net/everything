@@ -22,6 +22,7 @@ func renderLiveRegion(t *testing.T, opts LiveRegionOptions) string {
 func TestLiveRegion_SSEConnectAttribute(t *testing.T) {
 	html := renderLiveRegion(t, LiveRegionOptions{
 		SSEPath:             "/api/live/deployments",
+		Topics:              []string{"deployment.1"},
 		HeartbeatIntervalMs: 15000,
 		ReloadHref:          "/sessions",
 	})
@@ -35,18 +36,16 @@ func TestLiveRegion_SSEConnectAttribute(t *testing.T) {
 }
 
 // TestLiveRegion_LiveStatusBadge covers the task's requirement to assert the
-// deployments-live-status badge element, starting in the Live state.
+// live-status badge element, starting in the Live state.
 func TestLiveRegion_LiveStatusBadge(t *testing.T) {
 	html := renderLiveRegion(t, LiveRegionOptions{
 		SSEPath:             "/api/live/deployments",
+		Topics:              []string{"deployment.1"},
 		HeartbeatIntervalMs: 15000,
 		ReloadHref:          "/sessions",
 	})
 
-	if !strings.Contains(html, `id="deployments-live-status"`) {
-		t.Errorf("expected a #deployments-live-status badge element, got body %q", html)
-	}
-	if !strings.Contains(html, `id="deployments-live-status" class="badge badge-success"`) {
+	if !strings.Contains(html, `data-live-status class="badge badge-success"`) {
 		t.Errorf("expected the badge to start in the Live (badge-success) state, got body %q", html)
 	}
 	if !strings.Contains(html, ">Live<") {
@@ -62,6 +61,7 @@ func TestLiveRegion_LiveStatusBadge(t *testing.T) {
 func TestLiveRegion_ReloadHrefHonoured(t *testing.T) {
 	html := renderLiveRegion(t, LiveRegionOptions{
 		SSEPath:             "/api/live/activity",
+		Topics:              []string{"deployment.1"},
 		HeartbeatIntervalMs: 15000,
 		ReloadHref:          "/activity",
 	})
@@ -76,13 +76,14 @@ func TestLiveRegion_ReloadHrefHonoured(t *testing.T) {
 
 // TestLiveRegion_ChildrenRenderInsideContainer proves the { children... }
 // slot renders inside the hx-ext="sse" container -- the shape every M5
-// caller (Sessions today, Activity/FR15 next) relies on: rows rendered as
+// caller (Sessions originally, Activity today) relies on: rows rendered as
 // children live under the same SSE ancestor as the indicator/reload
 // affordance, never outside it.
 func TestLiveRegion_ChildrenRenderInsideContainer(t *testing.T) {
 	var buf strings.Builder
 	err := LiveRegion(LiveRegionOptions{
 		SSEPath:             "/api/live/deployments",
+		Topics:              []string{"deployment.1"},
 		HeartbeatIntervalMs: 15000,
 		ReloadHref:          "/sessions",
 	}).Render(context.Background(), &buf)
@@ -91,13 +92,36 @@ func TestLiveRegion_ChildrenRenderInsideContainer(t *testing.T) {
 	}
 	html := buf.String()
 
-	regionIdx := strings.Index(html, `id="deployments-live-region"`)
+	regionIdx := strings.Index(html, `sse-connect="/api/live/deployments"`)
 	if regionIdx < 0 {
-		t.Fatalf("expected a #deployments-live-region container, got body %q", html)
+		t.Fatalf("expected a container carrying sse-connect, got body %q", html)
 	}
-	statusIdx := strings.Index(html, `id="deployments-live-status"`)
-	reloadIdx := strings.Index(html, `id="deployments-reload-container"`)
+	statusIdx := strings.Index(html, `data-live-status`)
+	reloadIdx := strings.Index(html, `data-live-reload`)
 	if statusIdx < regionIdx || reloadIdx < regionIdx {
 		t.Errorf("expected the status badge and reload container to render after the region opens, got body %q", html)
+	}
+}
+
+// TestLiveRegion_TopicsForwardedToLiveIndicator proves LiveRegion's Topics
+// option -- the per-caller topic list, one entry per row for a per-row
+// table just as much as a single fleet-wide entry -- reaches
+// liveindicator.LiveIndicator so its hidden per-topic keepalive targets
+// actually get rendered; without this, htmx never registers a listener for
+// the heartbeat event and the indicator falsely reports "Not Live" on any
+// quiet stretch (see live_indicator.templ's doc comment).
+func TestLiveRegion_TopicsForwardedToLiveIndicator(t *testing.T) {
+	html := renderLiveRegion(t, LiveRegionOptions{
+		SSEPath:             "/api/live/deployments",
+		Topics:              []string{"deployment.1", "deployment.2"},
+		HeartbeatIntervalMs: 15000,
+		ReloadHref:          "/sessions",
+	})
+
+	if !strings.Contains(html, `sse-swap="deployment.1-keepalive"`) {
+		t.Errorf("expected a hidden keepalive target for deployment.1, got body %q", html)
+	}
+	if !strings.Contains(html, `sse-swap="deployment.2-keepalive"`) {
+		t.Errorf("expected a hidden keepalive target for deployment.2, got body %q", html)
 	}
 }

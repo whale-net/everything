@@ -1,20 +1,21 @@
 ---
 name: status
-description: Read-only status dashboard shared by krill-design and krill-work — for a design-session/product id, its revision-event timeline and open questions; for a signed-off design's tracking issue, the GitHub Project swimlane breakdown (TODO(M4) — will become a krill work-tracking query once that surface exists). Use to check where a design or plan stands before deciding which orchestration skill to run next.
+description: Read-only status dashboard shared by krill-design and krill-work — for a design-session/product id, its revision-event timeline and open questions; for a Milestone plus its task manifest, per-task lane state via get_task (krill-native, no GitHub); for a no-Milestone GitHub tracking issue, the Project swimlane breakdown. Use to check where a design or plan stands before deciding which orchestration skill to run next.
 ---
 
 # status
 
-Pure read — never appends revision events, never edits Project items, never
-dispatches personas. This file is symlinked into both plugins' `skills/` from
-`krill/plugin/shared/skills/status/` (see
+Pure read — never appends revision events, never mutates a task, never
+dispatches personas. This file is symlinked into both plugins' `skills/`
+from `krill/plugin/shared/skills/status/` (see
 `krill/plugin/shared/CONVENTIONS.md`).
 
 ## Usage
 
 ```
 /status <design-session-id>
-/status <tracking-issue-number>
+/status <milestone-id> [<task-manifest>] # Milestone path — manifest optional; list_tasks {milestone_id} re-derives it if omitted
+/status <tracking-issue-number>          # no-Milestone GitHub fallback
 ```
 
 ## Steps
@@ -24,9 +25,8 @@ dispatches personas. This file is symlinked into both plugins' `skills/` from
    - The last event's `event_type`. If it's `signoff` with
      `signoff_status: approved`, this design is fully approved for
      implementation — report the FeatureSet/Feature id(s) its `entity_deltas`
-     touched and that `/krill-work:plan <feature-set-id>` is next (TODO(M3)
-     note: today `plan` still creates a GitHub tracking issue citing that id,
-     since no `PointerArtifact` MCP write path exists yet).
+     touched and that `/krill-work:plan <feature-set-id> [--milestone-id
+     <id>]` is next.
    - If the last event is `signoff` with `changes_requested`, report that
      producer/architect need another round.
    - Otherwise (`draft`/`answer`/`reconciliation`), call `list_open_questions
@@ -39,21 +39,31 @@ dispatches personas. This file is symlinked into both plugins' `skills/` from
      open — report the count and, since this is often the real answer to
      "why hasn't this signed off yet," name them.
 
-2. **GitHub tracking-issue number given** (a `krill-work:plan`-created issue,
-   or a legacy `project-manager` `plan:approved` issue): same as
-   `project-manager`'s `status` skill from here — `gh issue view <n>
-   --comments`, then list every Project item and group by swimlane
+2. **Milestone path** — use the task manifest if you were handed one, or
+   derive it yourself with `list_tasks {milestone_id}` (CONVENTIONS.md
+   "Work axis"): call `get_task {id}` for every task id (both tools
+   ungated, no session needed) and group by `current_lane`. Also call
+   `get_milestone_status
+   {milestone_id}` — `set_milestone_status` works from an ordinary Claude
+   Code session today, so this reflects `planner`/`plan`/`validate`'s
+   actual writes.
+
+3. **GitHub tracking-issue number given** (no-Milestone fallback, or a
+   legacy `project-manager` `plan:approved` issue): same as
+   `project-manager`'s `status` skill — `gh issue view <n> --comments`, then
+   list every Project item and group by swimlane
    (`Scaffold`/`Implementation`/`Testing`/`Validation`/`Done`/`Noted`/
    `Carry-over`/`Deferred`), batch-checking `Depends on:` closure in one
    `gh api graphql` call rather than one lookup per dependency. See
    `tools/project-manager/CONVENTIONS.md` §§ "Worker lifecycle", "Task issues
    & swimlane progression" for the exact queries — this fork doesn't repeat
-   them, and **TODO(M4)**: this whole step becomes a krill work-tracking MCP
-   query once that surface ships, replacing the `gh`/Project calls entirely.
+   them.
 
-3. Report a compact table for whichever of the two applies: for a design
-   session, revision-event count / last event type / open-question count; for
-   a tracking issue, Swimlane × (Blocked / Ready / Claimed / Done) counts.
+4. Report a compact table for whichever applies: for a design session,
+   revision-event count / last event type / open-question count; for a
+   Milestone, Lane × task-id counts (Scaffold/Implementation/Testing/
+   Validation/Done) straight from `get_task`; for a tracking issue,
+   Swimlane × (Blocked / Ready / Claimed / Done) counts.
 
-4. If a tracking issue's items are all `Done` with no open `Validation`
-   findings, report that `/krill-work:validate <n>` is available.
+5. If every task is `Done` with no open findings, report that
+   `/krill-work:validate <milestone-id|n>` is available.

@@ -48,7 +48,7 @@ func RegisterMoveDeliveryScope(reg *server.Registry, sessions store.SessionStore
 	server.RegisterWrite(reg, &mcp.Tool{
 		Name:        "move_delivery_scope",
 		Description: "Re-cut not-yet-shipped scope: move entities to a different milestone, milepebble, or the backlog bucket (FR5) -- refuses anything already shipped (NFR3), all-or-nothing over the batch.",
-	}, []server.Persona{server.PersonaRequirementContributor, server.PersonaAgent}, func(ctx context.Context, _ *mcp.CallToolRequest, in moveDeliveryScopeInput) (*mcp.CallToolResult, handlers.MoveScopeResponse, error) {
+	}, []server.Persona{server.PersonaRequirementContributor, server.PersonaAgent, server.PersonaSwarmOperator}, func(ctx context.Context, _ *mcp.CallToolRequest, in moveDeliveryScopeInput) (*mcp.CallToolResult, handlers.MoveScopeResponse, error) {
 		var zero handlers.MoveScopeResponse
 
 		sess, err := requireKrillSession(ctx, sessions, in.KrillSessionID)
