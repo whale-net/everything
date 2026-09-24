@@ -72,6 +72,27 @@ def workflow_id_for_thread(app_env: str, channel_id: str, thread_ts: str) -> str
     return f"fcm-{app_env}-whagent-thread-{channel_id}-{thread_ts}"
 
 
+def render_resolved_turn_text(state: int, text: Optional[str]) -> str:
+    """Render the Slack message body for a turn that left RUNNING cleanly
+    (not FAILED, not timed out) -- DONE, AWAITING_INPUT, or CAPPED.
+
+    A capped turn still runs to completion and commits its own transcript
+    event before the session flips to CAPPED (whagent_net/worker/caps.go) --
+    only a cap that trips mid-tool-loop leaves no final assistant message,
+    so `text` can still be empty there. Either way the real reply, when one
+    exists, must win over the generic cap notice rather than being replaced
+    by it. Kept Temporal-free (like TurnQueue above) so this branching is
+    unit testable without a Temporal test environment.
+    """
+    if state == SESSION_STATE_CAPPED:
+        cap_notice = (
+            "_This conversation hit its budget (turn or cost cap) and has "
+            "stopped -- see the session link above for details._"
+        )
+        return f"{text}\n\n{cap_notice}" if text else cap_notice
+    return text or "_(no response text found -- see the session link above)_"
+
+
 class TurnQueue:
     """The turn-queuing state machine, kept deliberately Temporal-free.
 
@@ -173,9 +194,19 @@ class SlackThreadAgentWorkflow:
             start_to_close_timeout=ACTIVITY_TIMEOUT,
         )
 
+        # Bounds each turn's transcript read to events committed at or after
+        # this position -- otherwise a turn that ends without committing its
+        # own assistant_message (the mid-tool-loop cap trip) would be
+        # rendered using a *previous* turn's stale reply (both reads default
+        # to from_seq=0 and "latest assistant_message in the whole session"
+        # looks the same either way unless this boundary moves each turn).
+        transcript_seq = 0
+
         while True:
             self._queue.turn_in_flight = True
-            final_text = await self._resolve_turn(session_id)
+            final_text, transcript_seq = await self._resolve_turn(
+                session_id, transcript_seq
+            )
             await workflow.execute_activity(
                 update_slack_message_activity,
                 UpdateSlackMessageParams(
@@ -227,8 +258,15 @@ class SlackThreadAgentWorkflow:
                 start_to_close_timeout=ACTIVITY_TIMEOUT,
             )
 
-    async def _resolve_turn(self, session_id: str) -> str:
-        """Poll until the turn leaves RUNNING, then render its result text."""
+    async def _resolve_turn(
+        self, session_id: str, transcript_seq: int
+    ) -> tuple[str, int]:
+        """Poll until the turn leaves RUNNING, then render its result text.
+
+        Returns the rendered text plus the transcript position to resume
+        from on the *next* turn (unchanged from transcript_seq when this
+        turn didn't advance the transcript, e.g. the timeout/failed paths).
+        """
         elapsed = timedelta()
         status = None
         while elapsed < TURN_TIMEOUT:
@@ -244,21 +282,36 @@ class SlackThreadAgentWorkflow:
         else:
             return (
                 "_This turn timed out waiting for whagent-net -- check the session "
-                "link above for its current status._"
+                "link above for its current status._",
+                transcript_seq,
             )
 
-        if status.state == SESSION_STATE_CAPPED:
-            return (
-                "This conversation hit its budget (turn or cost cap) and has "
-                "stopped -- see the session link above for details."
-            )
         if status.state == SESSION_STATE_FAILED:
             detail = f" ({status.error_detail})" if status.error_detail else ""
-            return f"This turn failed{detail} -- see the session link above for details."
+            return (
+                f"This turn failed{detail} -- see the session link above for details.",
+                transcript_seq,
+            )
 
-        text = await workflow.execute_activity(
+        if status.state == SESSION_STATE_CAPPED and not workflow.patched(
+            "whagent-capped-turn-shows-reply"
+        ):
+            # A workflow execution already open (still in the idle-wait
+            # below) when this patch deploys must keep replaying its old
+            # history exactly -- that history never scheduled the
+            # read_whagent_transcript_activity call below for a capped
+            # turn, so scheduling it now on replay would be a
+            # nondeterminism error (whagent_net/worker/caps.go's own
+            # workflow.GetVersion gate is the Go-side precedent for this).
+            return (
+                "This conversation hit its budget (turn or cost cap) and has "
+                "stopped -- see the session link above for details.",
+                transcript_seq,
+            )
+
+        read = await workflow.execute_activity(
             read_whagent_transcript_activity,
-            ReadWhagentTranscriptParams(session_id=session_id, from_seq=0),
+            ReadWhagentTranscriptParams(session_id=session_id, from_seq=transcript_seq),
             start_to_close_timeout=ACTIVITY_TIMEOUT,
         )
-        return text or "_(no response text found -- see the session link above)_"
+        return render_resolved_turn_text(status.state, read.text), read.next_from_seq

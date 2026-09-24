@@ -168,16 +168,23 @@ class WhagentClient:
         )
         return list(resp.events), resp.next_from_seq
 
-    def latest_assistant_message(self, session_id: str, from_seq: int = 0) -> Optional[str]:
-        """Return the most recent assistant_message event's text, if any.
+    def latest_assistant_message(
+        self, session_id: str, from_seq: int = 0
+    ) -> tuple[Optional[str], int]:
+        """Return the most recent assistant_message event's text from
+        from_seq on (if any), plus the position to resume reading from.
 
         Payload is per-type JSON (session.proto's TranscriptEvent doc
         comment); an unparseable or unexpected payload is skipped rather
         than raised, so one bad event doesn't take down the whole
         relay -- see this method's caller (the whagent temporal activity)
-        for how that's surfaced to the user instead.
+        for how that's surfaced to the user instead. Callers must pass the
+        from_seq of the turn they're rendering, not always 0 -- a turn
+        that ends without committing its own assistant_message (the
+        mid-tool-loop cap trip) must not be rendered using an earlier
+        turn's stale reply.
         """
-        events, _ = self.read_transcript(session_id, from_seq=from_seq)
+        events, next_from_seq = self.read_transcript(session_id, from_seq=from_seq)
         text: Optional[str] = None
         for event in events:
             if event.type != _ASSISTANT_MESSAGE_EVENT_TYPE:
@@ -194,7 +201,7 @@ class WhagentClient:
             content = payload.get("content") if isinstance(payload, dict) else None
             if content:
                 text = content
-        return text
+        return text, next_from_seq
 
 
 # ----------------------------------------------------------------------

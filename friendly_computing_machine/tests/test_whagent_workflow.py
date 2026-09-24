@@ -9,7 +9,10 @@ workflow delegates to for exactly this reason.
 """
 
 from friendly_computing_machine.src.friendly_computing_machine.temporal.whagent.workflow import (
+    SESSION_STATE_CAPPED,
+    SESSION_STATE_DONE,
     TurnQueue,
+    render_resolved_turn_text,
     workflow_id_for_thread,
 )
 
@@ -69,3 +72,25 @@ def test_workflow_id_for_thread_is_deterministic():
 
     assert first == second
     assert first == "fcm-dev-whagent-thread-C123-1712345678.123456"
+
+
+def test_capped_turn_with_real_reply_shows_the_reply_and_the_cap_notice():
+    rendered = render_resolved_turn_text(SESSION_STATE_CAPPED, "the real answer")
+
+    assert "the real answer" in rendered
+    assert "hit its budget" in rendered
+
+
+def test_capped_turn_with_no_transcript_text_falls_back_to_cap_notice_only():
+    rendered = render_resolved_turn_text(SESSION_STATE_CAPPED, None)
+
+    assert rendered == (
+        "_This conversation hit its budget (turn or cost cap) and has "
+        "stopped -- see the session link above for details._"
+    )
+
+
+def test_done_turn_shows_its_transcript_text_unmodified():
+    rendered = render_resolved_turn_text(SESSION_STATE_DONE, "the real answer")
+
+    assert rendered == "the real answer"
