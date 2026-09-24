@@ -76,6 +76,7 @@ go_test(
     timeout = "long",
     srcs = [
         "agent_definition_scopes_integration_test.go",
+        "control_on_behalf_of_integration_test.go",
         "fake_temporal_test.go",
         "service_account_integration_test.go",
         "session_integration_test.go",
