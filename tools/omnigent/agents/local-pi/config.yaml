@@ -6,8 +6,10 @@ description: >-
   surface for spec-of-record awareness before touching a krill-hosted
   domain. Bootstrap/testing bundle -- not a fixed persona.
 executor:
-  harness: pi-native
-  model: locallm/bonsai2
+  type: omnigent
+  config:
+    harness: pi-native
+    model: locallm/bonsai2
 mcp_servers:
   - name: krill-mcp-prod
     serverUrl: https://mcp.krill.whalenet.app/mcp/spec

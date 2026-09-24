@@ -27,8 +27,10 @@ name: <agent name>
 description: >-
   <one paragraph -- when to use this agent>
 executor:
-  harness: <claude-sdk | claude-native | pi-native | codex-native | ...>
-  model: <provider/model-id>       # omit for harnesses with a pinned model
+  type: omnigent
+  config:
+    harness: <see valid values below>
+    model: <provider/model-id>     # omit for harnesses with a pinned model
 mcp_servers:
   - name: <server name>
     serverUrl: <https url>          # see "Known gaps" below
@@ -41,9 +43,18 @@ os_env:
     type: none
 ```
 
-`omnigent run --harness --help` lists the valid `harness` values; run
-`omnigent host --help` / `omnigent config list` locally to see which
-harnesses have credentials configured on this machine.
+Valid `harness` values (confirmed live, from an `omnigent run` validation
+error): `acp`, `agy`, `agy-native`, `antigravity`, `antigravity-native`,
+`claude`, `claude-native`, `claude-sdk`, `codex`, `codex-native`,
+`copilot`, `cursor`, `cursor-native`, `devin`, `github-copilot`,
+`google-antigravity`, `goose`, `goose-native`, `grok`, `grok-build`,
+`hermes`, `hermes-native`, `jcode`, `kimi`, `kimi-code`, `kimi-native`,
+`kiro-native`, `native-agy`, `native-antigravity`, `native-goose`,
+`native-hermes`, `native-kimi`, `native-kiro`, `native-opencode`,
+`native-pi`, `native-qwen`, `open-responses`, `openai-agents`,
+`openai-agents-sdk`, `opencode`, `opencode-native`, `pi`, `pi-native`,
+`qwen`, `qwen-code`, `qwen-native`. Run `omnigent config list` locally to
+see which harnesses have credentials configured on this machine.
 
 ## Building and testing a new agent locally
 
@@ -115,6 +126,12 @@ This repo vendors no separate Omnigent documentation — the CLI's own
 - **`spec_version: 1` is required** — confirmed live: `omnigent run` rejects
   a bundle with `Error: config.yaml missing required field: spec_version`
   otherwise. Every bundle here must set it.
+- **`executor.type: omnigent` + `executor.config.harness` is the required
+  nesting** — confirmed live: `omnigent run` rejected a flat
+  `executor.harness` with `executor.config.harness: required when
+  executor.type is 'omnigent'`, and enumerated the valid `harness` values
+  (listed above). Where exactly `model` belongs under `executor.config` is
+  still a guess by analogy — not yet confirmed by a successful run.
 - **MCP-server wiring syntax is best-effort, not confirmed.** Each bundle's
   `mcp_servers:` key is modeled on `tools/project-manager/mcp_config.json`'s
   server-entry shape (`name` + `serverUrl`). `sys_agent_get` confirms the
