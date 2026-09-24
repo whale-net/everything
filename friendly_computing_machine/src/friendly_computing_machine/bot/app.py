@@ -2,6 +2,7 @@ import logging
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 from threading import Lock
+from typing import Optional
 
 from slack_bolt import App
 
@@ -9,6 +10,7 @@ from friendly_computing_machine.src.friendly_computing_machine.bot.slack_client 
     SlackWebClientFCM,
 )
 from friendly_computing_machine.src.friendly_computing_machine.db.dal import (
+    get_agent_link_for_channel,
     get_bot_slack_user_slack_ids,
     get_music_polls,
     get_slack_channel,
@@ -122,3 +124,37 @@ def get_slack_web_client() -> SlackWebClientFCM:
     if client is None:
         raise RuntimeError("client not init")
     return client
+
+
+# ------
+# per-channel whagent-net agent link cache
+#
+# Unlike SlackBotConfig above (which eagerly loads and refreshes every
+# music-poll channel's config as one blob), the agent-link table is
+# expected to be sparse and this lookup sits on a hot path (every
+# app_mention) -- so this caches lazily, one channel at a time, rather
+# than eagerly loading every channel's link up front.
+
+AGENT_LINK_CACHE_TTL = timedelta(minutes=1)
+agent_link_cache_lock = Lock()
+_agent_link_by_channel: dict[int, tuple[Optional[str], datetime]] = {}
+
+
+def get_agent_id_for_channel(slack_channel_id: int) -> Optional[str]:
+    """Return the enabled whagent-net agent_id linked to a channel DB id, if any.
+
+    slack_channel_id is the SlackChannel row's own id (not Slack's string
+    channel id) -- same as SlackChannelAgentLink.slack_channel_id.
+    """
+    now = datetime.now()
+    with agent_link_cache_lock:
+        cached = _agent_link_by_channel.get(slack_channel_id)
+        if cached is not None and cached[1] + AGENT_LINK_CACHE_TTL >= now:
+            return cached[0]
+
+    link = get_agent_link_for_channel(slack_channel_id)
+    agent_id = link.whagent_agent_id if link is not None else None
+
+    with agent_link_cache_lock:
+        _agent_link_by_channel[slack_channel_id] = (agent_id, now)
+    return agent_id

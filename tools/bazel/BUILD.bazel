@@ -1,5 +1,7 @@
 # Bazel rules and macros for the monorepo
 
+load("@rules_python//python:defs.bzl", "py_binary")
+
 package(default_visibility = ["//visibility:public"])
 
 exports_files([
@@ -8,3 +10,12 @@ exports_files([
     "pytest.bzl",
     "release.bzl",
 ])
+
+# Shared genrule tool for py_grpc_library (see grpc.bzl) -- generates the
+# `_pb2_grpc.py` gRPC service stub that py_proto_library doesn't cover.
+py_binary(
+    name = "protoc_grpc_python",
+    srcs = ["grpc_python_protoc.py"],
+    main = "grpc_python_protoc.py",
+    deps = ["@pypi//:grpcio-tools"],
+)

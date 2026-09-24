@@ -2,6 +2,7 @@ import datetime
 from enum import Enum
 from typing import Any, Dict, Optional
 
+from sqlalchemy import Column, DateTime, UniqueConstraint, func
 from sqlmodel import Field, Relationship
 
 from friendly_computing_machine.src.friendly_computing_machine.models.base import Base
@@ -216,4 +217,97 @@ class SlackSpecialChannel(SlackSpecialChannelBase, table=True):
 
 
 class SlackSpecialChannelCreate(SlackSpecialChannelBase):
+    pass
+
+
+# ------
+# slack channel -> whagent-net agent link
+#
+# maps a Slack channel to the whagent-net agent definition that a new session
+# started in that channel should use. hand-inserted via SQL for now, no
+# admin UI/command yet.
+
+
+class SlackChannelAgentLinkBase(Base):
+    # whagent-net's agent_id string (e.g. "audience-score-system-research").
+    # whagent-net's own agent_definition table is out of this repo's reach,
+    # so this is just a plain string column, not a FK.
+    whagent_agent_id: str
+
+    enabled: bool = True
+
+
+class SlackChannelAgentLink(SlackChannelAgentLinkBase, table=True):
+    id: int = Field(default=None, nullable=False, primary_key=True)
+
+    slack_channel_id: int = Field(
+        nullable=False, foreign_key="slackchannel.id", index=True
+    )
+
+    slack_channel: SlackChannel = Relationship()
+
+
+class SlackChannelAgentLinkCreate(SlackChannelAgentLinkBase):
+    pass
+
+
+# ------
+# slack thread -> whagent-net session
+#
+# tracks which active Slack thread maps to which whagent-net session, so a
+# reply landing in an existing thread continues that session instead of
+# starting a new one. read/written by a per-thread Temporal workflow.
+
+
+class SlackThreadSessionStatusEnum(Enum):
+    """Corresponds to the SlackThreadSession table's status field."""
+
+    ACTIVE = 0
+    CLOSED = 1
+
+
+class SlackThreadSessionBase(Base):
+    thread_ts: str = Field(index=True)
+
+    # whagent-net's session_id string
+    whagent_session_id: str
+
+    status: SlackThreadSessionStatusEnum = Field(
+        default=SlackThreadSessionStatusEnum.ACTIVE
+    )
+
+
+class SlackThreadSession(SlackThreadSessionBase, table=True):
+    __table_args__ = (
+        UniqueConstraint(
+            "slack_channel_id", "thread_ts", name="uq_slackthreadsession_channel_thread"
+        ),
+    )
+
+    id: int = Field(default=None, nullable=False, primary_key=True)
+
+    slack_channel_id: int = Field(
+        nullable=False, foreign_key="slackchannel.id", index=True
+    )
+
+    created_at: datetime.datetime = Field(
+        sa_column=Column(
+            DateTime(timezone=True),
+            nullable=False,
+            server_default=func.current_timestamp(),
+        ),
+    )
+    updated_at: datetime.datetime = Field(
+        sa_column=Column(
+            DateTime(timezone=True),
+            nullable=False,
+            server_default=func.current_timestamp(),
+            onupdate=func.current_timestamp(),
+        ),
+    )
+
+    slack_channel: SlackChannel = Relationship()
+
+
+class SlackThreadSessionCreate(SlackThreadSessionBase):
     pass

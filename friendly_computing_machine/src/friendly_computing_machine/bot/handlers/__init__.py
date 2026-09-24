@@ -5,3 +5,4 @@ from . import events  # noqa
 from . import poll  # noqa
 from . import shortcuts  # noqa
 from . import views  # noqa
+from . import whagent  # noqa

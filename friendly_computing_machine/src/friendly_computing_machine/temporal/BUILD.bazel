@@ -9,7 +9,8 @@ py_library(
     deps = [
         "//friendly_computing_machine/src/friendly_computing_machine/db",
         "//friendly_computing_machine/src/friendly_computing_machine/models",
-        "@pypi//:google-generativeai",
+        "//friendly_computing_machine/src/friendly_computing_machine/whagent",
+        "//friendly_computing_machine/src/friendly_computing_machine/gemini",
         "@pypi//:temporalio",
     ],
 )

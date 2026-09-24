@@ -1,7 +1,6 @@
 import logging
 from typing import Annotated, Optional
 
-import google.generativeai as genai
 import typer
 
 from libs.python.cli.params import (
@@ -11,6 +10,11 @@ from libs.python.cli.params import (
     gemini_params,
     logging_params,
     ManManExperienceApiUrl,
+    WhagentApiUrl,
+    WhagentUiPublicUrl,
+    WhagentKeycloakTokenUrl,
+    WhagentClientId,
+    WhagentClientSecret,
 )
 from libs.python.cli.providers.app_env import app_env_params
 from libs.python.cli.providers.postgres import (
@@ -19,8 +23,14 @@ from libs.python.cli.providers.postgres import (
     create_postgres_context,
 )
 from libs.python.cli.providers.slack import SlackContext, create_slack_context
+from friendly_computing_machine.src.friendly_computing_machine.gemini.client import (
+    init_gemini_client,
+)
 from friendly_computing_machine.src.friendly_computing_machine.manman.api import (
     ManManExperienceAPI,
+)
+from friendly_computing_machine.src.friendly_computing_machine.whagent.client import (
+    init_whagent_client,
 )
 from friendly_computing_machine.src.friendly_computing_machine.temporal.util import (
     init_temporal,
@@ -43,6 +53,11 @@ app = typer.Typer()
 def callback(
     ctx: typer.Context,
     manman_experience_api_url: ManManExperienceApiUrl,
+    whagent_api_url: WhagentApiUrl,
+    whagent_ui_public_url: WhagentUiPublicUrl,
+    whagent_keycloak_token_url: WhagentKeycloakTokenUrl,
+    whagent_client_id: WhagentClientId,
+    whagent_client_secret: WhagentClientSecret,
 ):
     # Get contexts from decorators
     temporal_config = ctx.obj.get('temporal', {})
@@ -63,13 +78,23 @@ def callback(
     init_temporal(host=temporal_config['host'], app_env=app_env)
     
     # Initialize Gemini
-    genai.configure(api_key=gemini_config['api_key'])
+    init_gemini_client(api_key=gemini_config['api_key'])
     
     # Initialize ManMan Experience API with its dedicated URL
     experience_url = manman_experience_api_url.strip().rstrip("/")
     ManManExperienceAPI.init(experience_url)
     logger.info(f"ManMan Experience API initialized with host: {experience_url}")
-    
+
+    # Initialize the whagent-net client (service-account auth)
+    init_whagent_client(
+        api_url=whagent_api_url,
+        keycloak_token_url=whagent_keycloak_token_url,
+        client_id=whagent_client_id,
+        client_secret=whagent_client_secret,
+        ui_public_url=whagent_ui_public_url,
+    )
+    logger.info(f"whagent-net client initialized with host: {whagent_api_url}")
+
     # Store context in dict (keep compatible with decorator pattern)
     ctx.obj['slack'] = slack_ctx
     ctx.obj['temporal_host'] = temporal_config['host']

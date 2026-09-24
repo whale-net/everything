@@ -1,7 +1,7 @@
 """whagent-net SessionService proto -- the gRPC service boundary (issue
 #2113, ARCHITECTURE.md "Service boundary vs. package boundary")."""
 
-load("//tools/bazel:grpc.bzl", "go_grpc_library")
+load("//tools/bazel:grpc.bzl", "go_grpc_library", "py_grpc_library")
 
 go_grpc_library(
     name = "whagentpb",
@@ -12,6 +12,15 @@ go_grpc_library(
     ],
     go_deps = [
         "@rules_go//proto/wkt:timestamp_go_proto",
+    ],
+    visibility = ["//visibility:public"],
+)
+
+py_grpc_library(
+    name = "whagentpb_py",
+    srcs = ["session.proto"],
+    proto_deps = [
+        "@protobuf//:timestamp_proto",
     ],
     visibility = ["//visibility:public"],
 )
