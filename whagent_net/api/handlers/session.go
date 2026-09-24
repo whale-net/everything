@@ -103,6 +103,15 @@ type SessionServer struct {
 	// coverage in session_integration_test.go) -- main.go always
 	// constructs a real one.
 	catalog *llm.Catalog
+	// onBehalfOfAllowlist is the set of Keycloak client_ids permitted to set
+	// StartSessionRequest.on_behalf_of (FR9/FR11/FR12, NFR1) -- a delegated
+	// session is only ever created when the authenticated caller's own
+	// grpcauth.Claims.ClientID is a member (see clientAllowlisted). An empty
+	// set (the default, and the checked-in local-dev configuration) fails
+	// closed: any request carrying on_behalf_of is PermissionDenied, never
+	// silently treated as a non-delegated start. Nil and empty are equivalent
+	// here -- the membership test below never mutates the map.
+	onBehalfOfAllowlist map[string]struct{}
 	// eventsConsumer is StreamEvents' (issue #2239) shared, per-process
 	// subscription onto the whagent/events exchange -- declared/bound
 	// once at api startup (main.go's initializeEventsConsumer), mirroring
@@ -129,8 +138,10 @@ var _ pb.SessionServiceServer = (*SessionServer)(nil)
 // NewSessionServer returns a SessionServer backed by store, authenticating
 // callers against issuer (see SessionServer.issuer), starting/signalling
 // SessionWorkflow executions through temporalClient on taskQueue, checking
-// StartSession's FR5 model_override against catalog, and serving
-// StreamEvents (issue #2239) off eventsConsumer -- nil is fine (see
+// StartSession's FR5 model_override against catalog, permitting delegated
+// StartSession calls (on_behalf_of) only for the client_ids in
+// onBehalfOfAllowedClientIDs (see SessionServer.onBehalfOfAllowlist), and
+// serving StreamEvents (issue #2239) off eventsConsumer -- nil is fine (see
 // SessionServer.eventsConsumer). When eventsConsumer is non-nil,
 // NewSessionServer registers a fresh eventBroadcaster as its sole handler
 // and starts it against ctx (rmq.Consumer.Start's doc comment: it launches
@@ -149,9 +160,21 @@ var _ pb.SessionServiceServer = (*SessionServer)(nil)
 // straight through unchanged, mirroring whagent_net/worker/main.go's
 // identical "env value if set, else the package's own default" fallback
 // for the same setting on the other side of this same queue.
-func NewSessionServer(ctx context.Context, store *session.Store, issuer string, temporalClient temporalclient.Client, taskQueue string, catalog *llm.Catalog, eventsConsumer *rmq.Consumer) *SessionServer {
+//
+// onBehalfOfAllowedClientIDs is the already-parsed Keycloak client_id
+// allowlist (main.go reads and splits the WHAGENT_ON_BEHALF_OF_ALLOWED_CLIENT_IDS
+// env var before calling here). An empty/nil slice means no caller may ever
+// set on_behalf_of -- every such request is PermissionDenied (NFR1's
+// fail-closed rule) -- which is the correct default for a deployment that
+// has not opted a client in.
+func NewSessionServer(ctx context.Context, store *session.Store, issuer string, temporalClient temporalclient.Client, taskQueue string, catalog *llm.Catalog, eventsConsumer *rmq.Consumer, onBehalfOfAllowedClientIDs []string) *SessionServer {
 	if taskQueue == "" {
 		taskQueue = sessionWorkflowTaskQueue
+	}
+
+	allowlist := make(map[string]struct{}, len(onBehalfOfAllowedClientIDs))
+	for _, id := range onBehalfOfAllowedClientIDs {
+		allowlist[id] = struct{}{}
 	}
 
 	var broadcaster *eventBroadcaster
@@ -166,13 +189,14 @@ func NewSessionServer(ctx context.Context, store *session.Store, issuer string, 
 	}
 
 	return &SessionServer{
-		store:          store,
-		issuer:         issuer,
-		temporalClient: temporalClient,
-		taskQueue:      taskQueue,
-		catalog:        catalog,
-		eventsConsumer: eventsConsumer,
-		broadcaster:    broadcaster,
+		store:               store,
+		issuer:              issuer,
+		temporalClient:      temporalClient,
+		taskQueue:           taskQueue,
+		catalog:             catalog,
+		onBehalfOfAllowlist: allowlist,
+		eventsConsumer:      eventsConsumer,
+		broadcaster:         broadcaster,
 	}
 }
 
@@ -340,6 +364,43 @@ func (s *SessionServer) callerSubject(ctx context.Context) (session.Subject, err
 		Sub:  claims.Subject,
 		Kind: kind,
 	}, nil
+}
+
+// callerIdentity is callerSubject plus the authenticated caller's own
+// Keycloak client_id (grpcauth.Claims.ClientID -- the `azp`/`client_id` the
+// token was issued to), which callerSubject alone discards. StartSession's
+// delegated on_behalf_of path (FR9/FR11/FR12) needs both halves: the
+// reconstructed session.Subject to record as the acting identity, and the
+// client_id to check against the on_behalf_of allowlist. Keeping this a
+// sibling of callerSubject (rather than changing it) leaves every existing
+// caller -- and the fail-closed "no claims" Unauthenticated guard -- exactly
+// as it was.
+func (s *SessionServer) callerIdentity(ctx context.Context) (session.Subject, string, error) {
+	claims, ok := grpcauth.ClaimsFromContext(ctx)
+	if !ok {
+		// Same reasoning and same Unauthenticated status as callerSubject --
+		// an auth-wiring bug, never an ownership verdict.
+		return session.Subject{}, "", status.Error(codes.Unauthenticated, "authentication required")
+	}
+	kind := session.SubjectKindHuman
+	if claims.IsServiceAccount {
+		kind = session.SubjectKindService
+	}
+	return session.Subject{
+		Iss:  s.issuer,
+		Sub:  claims.Subject,
+		Kind: kind,
+	}, claims.ClientID, nil
+}
+
+// clientAllowlisted reports whether clientID (the authenticated caller's own
+// Keycloak client_id) may create a delegated session by setting
+// StartSessionRequest.on_behalf_of. An empty allowlist -- nil, or one built
+// from an unset/empty env var -- contains no members, so the answer is false
+// for every client and the delegated path fails closed (NFR1).
+func (s *SessionServer) clientAllowlisted(clientID string) bool {
+	_, ok := s.onBehalfOfAllowlist[clientID]
+	return ok
 }
 
 // subjectsEqual compares identity only -- (iss, sub) -- not Kind, which is

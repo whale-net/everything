@@ -48,11 +48,12 @@ func (s *SessionServer) StartSession(ctx context.Context, req *pb.StartSessionRe
 	// Step 1: authenticate the caller. RequireClaimsUnaryInterceptor
 	// (auth.go) already rejected any call with no verified claims before
 	// this handler ran; callerSubject just reconstructs the (iss, sub,
-	// kind) triple. M1 has no delegated-caller path (LB2/NFR3): the
-	// request's optional on_behalf_of field, and parent_session_id, are
-	// both reserved for M2/M3 and are not read here -- every M1 session is
-	// written with on_behalf_of_* identical to subject_* and
-	// parent_session_id NULL, regardless of what the request carries.
+	// kind) triple. The optional on_behalf_of field is read here (FR9/
+	// FR11/FR12): when set, the caller's own client_id must be on the
+	// allowlist (see callerIdentity/clientAllowlisted). parent_session_id
+	// is still reserved for M3 and is not read here -- every session is
+	// written with parent_session_id NULL regardless of what the request
+	// carries.
 	caller, err := s.callerSubject(ctx)
 	if err != nil {
 		return nil, err

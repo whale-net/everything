@@ -202,6 +202,22 @@ whagent_ui_signing_key_yaml = whagent_ui_signing_key.replace("\n", "\\n")
 whagent_oidc_issuer = os.environ.get('WHAGENT_OIDC_ISSUER', 'dev-issuer')
 
 # ===========================
+# On-behalf-of allowlist (FR12, dev-only)
+# ===========================
+#
+# WHAGENT_ON_BEHALF_OF_ALLOWED_CLIENT_IDS is the comma-separated Keycloak
+# client_id allowlist that decides which callers may set
+# StartSessionRequest.on_behalf_of and create a delegated session (ENV.md
+# "`api` server"). It defaults to empty here, which is the correct
+# fail-closed default (NFR1): api runs with GRPC_AUTH_MODE="none" below, so
+# there is no Keycloak realm and no real client_id to allowlist -- every
+# request carrying on_behalf_of is PermissionDenied either way. In a
+# production deployment this is set to fcm's whagent-net service-account
+# client_id (fcm's WHAGENT_CLIENT_ID) as its only entry; override it in a
+# local .env to exercise the delegated path against a real Keycloak realm.
+whagent_on_behalf_of_allowed_client_ids = os.environ.get('WHAGENT_ON_BEHALF_OF_ALLOWED_CLIENT_IDS', '')
+
+# ===========================
 # ASS link-acceptance URL (issue #2646, FR1 "Link ASS identity")
 # ===========================
 #
@@ -366,6 +382,8 @@ spec:
           value: ":8090"
         - name: WHAGENT_OIDC_ISSUER
           value: "{whagent_oidc_issuer}"
+        - name: WHAGENT_ON_BEHALF_OF_ALLOWED_CLIENT_IDS
+          value: "{whagent_on_behalf_of_allowed_client_ids}"
         - name: OTEL_EXPORTER_OTLP_ENDPOINT
           value: "{otel_endpoint}"
 """.format(
@@ -377,6 +395,7 @@ spec:
         whagent_signing_key_id=whagent_signing_key_id,
         whagent_signing_key=whagent_signing_key_yaml,
         whagent_oidc_issuer=whagent_oidc_issuer,
+        whagent_on_behalf_of_allowed_client_ids=whagent_on_behalf_of_allowed_client_ids,
         otel_endpoint=otel_endpoint,
     )))
 

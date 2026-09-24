@@ -143,7 +143,7 @@ func newStreamTestServer(t *testing.T) (pb.SessionServiceClient, *session.Store,
 
 	// temporalClient/catalog are nil, same as newTestServer -- StreamEvents
 	// touches neither.
-	sessionServer := handlers.NewSessionServer(serverCtx, store, testIssuer, nil, "", nil, consumer)
+	sessionServer := handlers.NewSessionServer(serverCtx, store, testIssuer, nil, "", nil, consumer, nil)
 
 	unaryAuth, streamAuth, err := grpcauth.NewServerInterceptors(ctx, grpcauth.ServerConfig{
 		Mode: grpcauth.AuthModeNone,
