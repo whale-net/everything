@@ -1,15 +1,24 @@
-"""Unit tests for the whagent thread relay's turn-queuing state machine.
+"""Unit tests for the whagent thread relay's turn-queuing and turn-resolution logic.
 
 This repo has no existing WorkflowEnvironment/time-skipping Temporal test
 pattern anywhere (checked friendly_computing_machine/tests and the rest of
-the repo), so per AGENTS.md's guidance this exercises the queuing logic
-directly rather than inventing a new Temporal test harness: TurnQueue
-(temporal/whagent/workflow.py) is a plain, Temporal-free class the
-workflow delegates to for exactly this reason.
+the repo), so per AGENTS.md's guidance this exercises the queuing and
+resolution logic directly rather than inventing a new Temporal test
+harness: TurnQueue and resolve_turn_outcome (temporal/whagent/workflow.py)
+are plain, Temporal-free functions/classes the workflow delegates to for
+exactly this reason.
 """
 
+from friendly_computing_machine.src.friendly_computing_machine.temporal.whagent.activity import (
+    WhagentTranscriptResult,
+)
 from friendly_computing_machine.src.friendly_computing_machine.temporal.whagent.workflow import (
+    SESSION_STATE_AWAITING_INPUT,
+    SESSION_STATE_CAPPED,
+    SESSION_STATE_FAILED,
+    SESSION_STATE_RUNNING,
     TurnQueue,
+    resolve_turn_outcome,
     workflow_id_for_thread,
 )
 
@@ -69,3 +78,71 @@ def test_workflow_id_for_thread_is_deterministic():
 
     assert first == second
     assert first == "fcm-dev-whagent-thread-C123-1712345678.123456"
+
+
+# resolve_turn_outcome -- regression coverage for the stale-reply bug: a
+# poll landing between SendTurn returning and the session genuinely
+# leaving RUNNING must not hand back the *previous* turn's already-shown
+# answer, and a still-RUNNING turn's intermediate assistant_message must
+# not be mistaken for the final one.
+
+
+def test_stale_not_running_with_no_new_message_keeps_polling():
+    # The exact race from the bug report: GetSession still reports the
+    # previous turn's terminal state right after SendTurn returns, and no
+    # new transcript event has landed yet.
+    outcome = resolve_turn_outcome(
+        SESSION_STATE_AWAITING_INPUT,
+        None,
+        since_seq=5,
+        transcript_result=None,
+    )
+
+    assert outcome is None
+
+
+def test_running_with_a_message_keeps_polling_not_final_yet():
+    # A multi-message turn (e.g. "let me check..." then a tool call then
+    # the real answer) must not be treated as resolved just because a
+    # message showed up while the session is still RUNNING.
+    outcome = resolve_turn_outcome(
+        SESSION_STATE_RUNNING,
+        None,
+        since_seq=5,
+        transcript_result=WhagentTranscriptResult(text="let me check...", seq=6),
+    )
+
+    assert outcome is None
+
+
+def test_not_running_with_a_new_message_resolves_with_its_text_and_next_seq():
+    outcome = resolve_turn_outcome(
+        SESSION_STATE_AWAITING_INPUT,
+        None,
+        since_seq=5,
+        transcript_result=WhagentTranscriptResult(text="the real answer", seq=8),
+    )
+
+    assert outcome == ("the real answer", 9)
+
+
+def test_capped_resolves_immediately_regardless_of_transcript():
+    outcome = resolve_turn_outcome(
+        SESSION_STATE_CAPPED, None, since_seq=5, transcript_result=None
+    )
+
+    assert outcome is not None
+    text, next_seq = outcome
+    assert "budget" in text
+    assert next_seq == 5
+
+
+def test_failed_resolves_immediately_and_includes_error_detail():
+    outcome = resolve_turn_outcome(
+        SESSION_STATE_FAILED, "boom", since_seq=5, transcript_result=None
+    )
+
+    assert outcome is not None
+    text, next_seq = outcome
+    assert "boom" in text
+    assert next_seq == 5
