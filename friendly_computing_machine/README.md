@@ -47,6 +47,10 @@ Run the Temporal worker:
 uv run workflow run
 ```
 
+## Slash commands
+- `/wai <prompt>` — AI answer grounded in the channel's recent messages.
+- `/wpoll` — opens a form to build a Simple Poll-style poll with vote buttons; `/wpoll "Question?" "Option 1" "Option 2" [anonymous] [limit N]` creates one inline. See [docs/poll.md](docs/poll.md).
+
 ## Logging, Tracing, and Metrics
 Logging uses the standard library with optional OTLP export. Tracing relies on Opentelemetry auto-instrumentation; the Python SDK is still experimental, so breaking changes may occur. Auto-instrumentation for logging proved unreliable, so logging remains manual. Metrics are currently out of scope. An OTEL collector should ingest signals according to the Helm values. Python keeps logging to stdout, though you can disable it if needed.
 

@@ -61,3 +61,17 @@ py_test(
     ],
     deps = ["//friendly_computing_machine/src:fcm_lib"],
 )
+
+# /poll parsing, rendering, and DAL (SQLite-backed)
+py_test(
+    name = "test_poll",
+    size = "small",
+    srcs = [
+        "conftest.py",
+        "poll/test_poll_dal.py",
+        "poll/test_poll_modal.py",
+        "poll/test_poll_parse.py",
+        "poll/test_poll_render.py",
+    ],
+    deps = ["//friendly_computing_machine/src:fcm_lib"],
+)

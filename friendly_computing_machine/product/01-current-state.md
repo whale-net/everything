@@ -8,6 +8,7 @@ FCM is a Python Slack bot built on slack-bolt (Socket Mode), SQLModel/Alembic, t
 
 - **`/wai` AI command** (live). The handler in `bot/handlers/commands.py` logs the prompt to `genaitext`. It then calls `SlackContextGeminiWorkflow` synchronously from the bolt handler. That workflow (`temporal/slack/workflow.py`) gathers channel context, then runs summary, vibe, prompt, and Gemini steps, followed by call-to-action detection and tag fixing. It uses the deprecated `google.generativeai` SDK with the default model and no pinned version (`temporal/ai/activity.py`). The older direct path in `gemini/ai.py` is marked `@deprecated` and is dead.
 - **Music poll** (live, on the task pool). `bot/task/musicpoll.py` posts the poll weekly, processes it hourly, and archives daily with 89- and 30-day windows. It also has a one-off init. `bot/handlers/events.py` stores only messages from music-poll channels. `message_changed` is not implemented. The poll text is hardcoded.
+- **Ad-hoc polls** (live). `/wpoll` in `bot/handlers/poll.py` posts a Simple Poll-style Block Kit poll. Vote and close buttons arrive over Socket Mode; each vote is written to `pollvote` and the message is re-rendered with `chat.update`. See `docs/poll.md`.
 - **Custom task pool** (live, legacy). `bot/task/taskpool.py` is a sleep-loop scheduler that writes to `task` and `taskinstance`. Only the four music-poll tasks remain. `genai.py`, `slack_qod.py`, and `find*.py` are commented out as "migrated to temporal" and are dead.
 - **Temporal schedules** (live). `temporal/worker.py` upserts two schedules. `SlackMessageQODWorkflow` runs every 2 minutes to backfill IDs and dedupe messages. `SlackUserInfoWorkflow` runs every 30 minutes. The `SayHello` sample workflow (`temporal/sample.py`) is still registered and is dead.
 - **manman V1 server control** (half-built). `bot/handlers/actions.py`, `shortcuts.py`, and `views.py` provide start/stop/restart/stdin buttons, a server-select modal, and a shortcut commented "UNUSED?". All of them call the V1 experience API (`manman/api.py`, `//generated/py/manman:*`). `/test` opens the same modal: a live debug command.
@@ -23,13 +24,14 @@ FCM is a Python Slack bot built on slack-bolt (Socket Mode), SQLModel/Alembic, t
 ## Runtime shape
 
 - **Deployments.** `BUILD.bazel` defines five `release_app`s: `bot`, `taskpool`, `subscribe`, `worker`, and the `migration` Job. All five build from one binary, `//friendly_computing_machine/src:fcm_cli`. Each runs one replica with `health_check_enabled=False`. They are composed into the helm chart `bot-services` (namespace `fcm`) and published to `ghcr.io/whale-net/friendly-computing-machine-*`. Local dev runs through the `Tiltfile`.
-- **Datastore.** Postgres schema `fcm` holds 14 tables from 11 migrations. None of them are SCD2.
+- **Datastore.** Postgres schema `fcm` holds 17 tables from 12 migrations. None of them are SCD2.
 
   | Area | Tables |
   |---|---|
   | Slack | `slackteam`, `slackuser`, `slackchannel`, `slackmessage`, `slackcommand`, `slackspecialchanneltype`, `slackspecialchannel` |
   | AI | `genaitext` |
   | Music poll | `musicpoll`, `musicpollinstance`, `musicpollresponse` |
+  | Ad-hoc poll | `poll`, `polloption`, `pollvote` |
   | Task pool | `task`, `taskinstance` |
   | manman | `manmanstatusupdate` |
 - **External dependencies.**
