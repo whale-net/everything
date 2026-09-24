@@ -9,6 +9,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/whale-net/everything/libs/go/grpcauth"
+	"github.com/whale-net/everything/libs/go/logging"
 	pb "github.com/whale-net/everything/whagent_net/protos"
 	"github.com/whale-net/everything/whagent_net/session"
 
@@ -21,7 +22,8 @@ import (
 // order the issue body fixes so every failure below stays fail-closed:
 //
 //  1. authenticate the caller (already done by the interceptor chain by the
-//     time this handler runs; callerSubject reconstructs the identity)
+//     time this handler runs; callerIdentity reconstructs the identity and the
+//     caller's own client_id, which gates a delegated on_behalf_of start)
 //  2. resolve the named agent's latest definition version
 //  3. FR9 -- the definition's required_role, if any, gates the call
 //  4. FR5 -- a requested model_override is checked against the provider
@@ -47,16 +49,37 @@ func (s *SessionServer) StartSession(ctx context.Context, req *pb.StartSessionRe
 
 	// Step 1: authenticate the caller. RequireClaimsUnaryInterceptor
 	// (auth.go) already rejected any call with no verified claims before
-	// this handler ran; callerSubject just reconstructs the (iss, sub,
-	// kind) triple. The optional on_behalf_of field is read here (FR9/
-	// FR11/FR12): when set, the caller's own client_id must be on the
-	// allowlist (see callerIdentity/clientAllowlisted). parent_session_id
-	// is still reserved for M3 and is not read here -- every session is
-	// written with parent_session_id NULL regardless of what the request
-	// carries.
-	caller, err := s.callerSubject(ctx)
+	// this handler ran; callerIdentity just reconstructs the (iss, sub,
+	// kind) triple and reads back the caller's own client_id. The optional
+	// on_behalf_of field is read here (FR9/FR11/FR12): when set, the
+	// caller's own client_id must be on the allowlist (see
+	// callerIdentity/clientAllowlisted). parent_session_id is still reserved
+	// for M3 and is not read here -- every session is written with
+	// parent_session_id NULL regardless of what the request carries.
+	caller, callerClientID, err := s.callerIdentity(ctx)
 	if err != nil {
 		return nil, err
+	}
+
+	// A request that leaves on_behalf_of unset is non-delegated and behaves
+	// exactly as before: the session runs as the caller. A request that sets
+	// it asks to create a delegated session, and both halves are checked here,
+	// before anything is written.
+	onBehalfOf := caller
+	if req.OnBehalfOf != nil {
+		// The gate is on the caller's own client_id, never on anything in the
+		// request: an authenticated human is not thereby allowed to assert
+		// someone else's identity, only an opted-in client is. An unset or
+		// empty allowlist contains no members, so this fails closed for every
+		// caller.
+		if !s.clientAllowlisted(callerClientID) {
+			return nil, status.Error(codes.PermissionDenied, "caller is not permitted to start a session on behalf of another subject")
+		}
+		asserted, err := subjectFromProto(req.GetOnBehalfOf())
+		if err != nil {
+			return nil, err
+		}
+		onBehalfOf = asserted
 	}
 
 	// Step 2: resolve the named agent's current (latest) definition.
@@ -132,14 +155,15 @@ func (s *SessionServer) StartSession(ctx context.Context, req *pb.StartSessionRe
 		modelOverride = &requested
 	}
 
-	// Step 5: insert the `sessions` row. subject_*/on_behalf_of_* are
-	// identical (NFR3's M1 default); parent_session_id is always NULL in
-	// M1.
+	// Step 5: insert the `sessions` row. subject_* is always the
+	// authenticated caller; on_behalf_of_* is the subject the session runs
+	// as, which equals the caller unless this was a delegated start.
+	// parent_session_id is always NULL in M1.
 	sessionID := uuid.New()
 	sess := &session.Session{
 		SessionID:     sessionID,
 		Subject:       caller,
-		OnBehalfOf:    caller,
+		OnBehalfOf:    onBehalfOf,
 		AgentID:       agentID,
 		Model:         resolvedModel,
 		ModelOverride: modelOverride,
@@ -147,6 +171,18 @@ func (s *SessionServer) StartSession(ctx context.Context, req *pb.StartSessionRe
 	}
 	if err := s.store.Sessions().Create(ctx, sess); err != nil {
 		return nil, status.Errorf(codes.Internal, "create session: %v", err)
+	}
+	if req.OnBehalfOf != nil {
+		// A delegated start is the one case where the two identity columns
+		// deliberately differ, so it is worth a line on its own: the caller's
+		// client_id plus the identity the session runs as. Info, not a warning
+		// -- the allowlist check above is what makes this an expected, allowed
+		// shape rather than a deviation.
+		logging.Get("startsession").InfoContext(ctx, "started delegated session on behalf of asserted subject",
+			"session_id", sessionID.String(),
+			"caller_client_id", callerClientID,
+			"on_behalf_of_iss", onBehalfOf.Iss,
+			"on_behalf_of_sub", onBehalfOf.Sub)
 	}
 
 	// Step 6 (LB5/NFR6): pin the resolved definition version. AssignToSession

@@ -502,11 +502,17 @@ A caller may act **on behalf of** a user (a host UI starting a session for its s
 account running a job for someone); the session records both the acting
 subject and the on-behalf-of subject as `(iss, sub, kind)`. `on_behalf_of`
 is always populated — it equals the acting subject whenever a caller acts
-for itself, whatever its kind. Keeping `iss` a real column is what lets a
-non-Keycloak identity (an ASS Person is keyed on Google `sub`) be an
-on-behalf-of subject later without a schema change; C8's role check
-applies to the *acting* subject, identically for a human or a service
-account — `api`'s `StartSession` runs the same `required_role` check
+for itself, whatever its kind. Setting it to a *different* subject is a
+`StartSessionRequest.on_behalf_of`, and `api` gates that on the caller's own
+Keycloak `client_id`: only a `client_id` in the
+`WHAGENT_ON_BEHALF_OF_ALLOWED_CLIENT_IDS` allowlist (ENV.md "`api` server")
+may assert one, so being authenticated is never by itself enough to run as
+someone else. An unset or empty allowlist fails closed — every
+`on_behalf_of`-carrying request is `PermissionDenied`. Keeping `iss` a real
+column is what lets a non-Keycloak identity (an ASS Person is keyed on
+Google `sub`) be an on-behalf-of subject later without a schema change; C8's
+role check applies to the *acting* subject, identically for a human or a
+service account — `api`'s `StartSession` runs the same `required_role` check
 either way (FR6/#2243), never a service-specific branch.
 
 **Kind (FR6/#2243).** `grpcauth.Claims.IsServiceAccount` (derived from a
@@ -515,12 +521,15 @@ Keycloak client-credentials token's `preferred_username`, see
 `callerSubject` (`whagent_net/api/handlers/session.go`) maps to
 `SubjectKindService` vs. `SubjectKindHuman` when it reconstructs the
 acting subject — the only place kind is decided. `StartSession` then
-writes `on_behalf_of = subject` as usual (M1's caller-acts-for-itself
-default, above), so a service account's session records `kind = service`
-on both columns with no other code path aware of the distinction —
-`worker`'s claim-minting and tool-dispatch paths (`api/persona`,
-`worker/tools/dispatch.go`) carry no service-specific branch (LB3): the
-stored `on_behalf_of.kind` is the only thing that differs.
+writes `on_behalf_of = subject` whenever the request did not assert one (the
+caller-acts-for-itself default, above), so a service account's non-delegated
+session records `kind = service` on both columns with no other code path aware
+of the distinction — `worker`'s claim-minting and tool-dispatch paths
+(`api/persona`, `worker/tools/dispatch.go`) carry no service-specific branch
+(LB3): the stored `on_behalf_of.kind` is the only thing that differs. On a
+delegated start the asserted subject's own kind is stored instead, which is
+why the allowlist gate above is on the *acting* subject's `client_id` and
+never inferred from the asserted value.
 
 **Read vs. control are two different rules, not one ownership check
 (#2237).** `SessionService`'s two read RPCs (`GetSession`, `ReadTranscript`)
@@ -531,8 +540,9 @@ point). The two write RPCs that act on a running session (`SendTurn`,
 control a session only when it *is* (or is acting for) the session's
 `on_behalf_of` `(iss, sub)` pair (FR1/C13), matched on both fields per LB2
 (same `sub` under a different `iss` does not control). `on_behalf_of ==
-subject` for every M1 row, so this is behavior-preserving on existing data
-while being the correct rule once a caller acts on behalf of someone else.
+subject` for every non-delegated row, so this is behavior-preserving on
+existing data while being the correct rule once a caller acts on behalf of
+someone else.
 There is no admin override in M1 — a caller that is neither the acting nor
 the on-behalf-of subject simply cannot control a session it didn't start.
 `whagent_net/api/handlers/session.go`'s `canControl` is the single place

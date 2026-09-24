@@ -551,6 +551,32 @@ func subjectKindToProto(k session.SubjectKind) pb.SubjectKind {
 	}
 }
 
+// subjectFromProto is subjectToProto's inverse, for a StartSession request's
+// asserted on_behalf_of. Every field is load-bearing -- the sessions table
+// stores iss/sub/kind verbatim and a CHECK constraint on kind means a
+// half-filled subject would otherwise surface as an opaque write error -- so
+// this validates all three and reports a single InvalidArgument naming the
+// missing field. An unset SubjectKind (SUBJECT_KIND_UNSPECIFIED, or any value
+// this build does not know) maps to the empty SubjectKind here and fails the
+// same check.
+func subjectFromProto(sub *pb.Subject) (session.Subject, error) {
+	if sub.GetIss() == "" {
+		return session.Subject{}, status.Error(codes.InvalidArgument, "on_behalf_of.iss is required")
+	}
+	if sub.GetSub() == "" {
+		return session.Subject{}, status.Error(codes.InvalidArgument, "on_behalf_of.sub is required")
+	}
+	kind := subjectKindFromProto(sub.GetKind())
+	if kind == "" {
+		return session.Subject{}, status.Errorf(codes.InvalidArgument, "on_behalf_of.kind must be %s or %s", pb.SubjectKind_SUBJECT_KIND_HUMAN, pb.SubjectKind_SUBJECT_KIND_SERVICE)
+	}
+	return session.Subject{
+		Iss:  sub.GetIss(),
+		Sub:  sub.GetSub(),
+		Kind: kind,
+	}, nil
+}
+
 // statusFromProto is statusToProto's inverse, for ListSessions' state
 // filter (FR3/C15). SESSION_STATE_UNSPECIFIED maps to the zero Status --
 // ListSessions never calls this unless req.State is set, so that case
