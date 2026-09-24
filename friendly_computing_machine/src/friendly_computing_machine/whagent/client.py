@@ -168,8 +168,16 @@ class WhagentClient:
         )
         return list(resp.events), resp.next_from_seq
 
-    def latest_assistant_message(self, session_id: str, from_seq: int = 0) -> Optional[str]:
-        """Return the most recent assistant_message event's text, if any.
+    def latest_assistant_message(
+        self, session_id: str, from_seq: int = 0
+    ) -> Optional[tuple[str, int]]:
+        """Return the most recent assistant_message event's (text, seq) at or after from_seq.
+
+        Callers use from_seq as a watermark -- events already consumed for
+        a prior turn are excluded, so a hit here is proof a *new* reply has
+        actually landed rather than a stale re-read of the previous turn's
+        answer (see workflow.py's _resolve_turn for why that distinction
+        matters).
 
         Payload is per-type JSON (session.proto's TranscriptEvent doc
         comment); an unparseable or unexpected payload is skipped rather
@@ -178,7 +186,7 @@ class WhagentClient:
         for how that's surfaced to the user instead.
         """
         events, _ = self.read_transcript(session_id, from_seq=from_seq)
-        text: Optional[str] = None
+        result: Optional[tuple[str, int]] = None
         for event in events:
             if event.type != _ASSISTANT_MESSAGE_EVENT_TYPE:
                 continue
@@ -193,8 +201,8 @@ class WhagentClient:
                 continue
             content = payload.get("content") if isinstance(payload, dict) else None
             if content:
-                text = content
-        return text
+                result = (content, event.seq)
+        return result
 
 
 # ----------------------------------------------------------------------
