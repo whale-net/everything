@@ -7,7 +7,7 @@
 // TestMCPCallerResolver_NoCookie_ReturnsFalse. The tampered-cookie,
 // expired-session, and valid-session cases all need a real ui_sessions
 // row (or the deliberate absence/expiry of one) -- see
-// mcpauth_integration_test.go.
+// auth_integration_test.go.
 package main
 
 import (

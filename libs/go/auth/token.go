@@ -1,4 +1,4 @@
-package mcpauth
+package auth
 
 import (
 	"encoding/json"
@@ -41,7 +41,7 @@ func writeInvalidGrant(w http.ResponseWriter) {
 
 // tokenResponse is the exact, minimal success body #1642 (FR4) requires:
 // access_token + token_type only. No expires_in, no refresh_token, no
-// scope — mcpauth's credential has no refresh lifecycle (see mcpauth.go's
+// scope — this package's credential has no refresh lifecycle (see auth.go's
 // package doc, "What this library deliberately is not"), and fabricating
 // any of those fields here would silently promise a lifecycle this package
 // does not implement.

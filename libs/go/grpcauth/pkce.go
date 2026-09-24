@@ -39,11 +39,11 @@ func generatePKCEVerifier() (string, error) {
 // base64url(sha256(verifier)) with no padding.
 //
 // PKCE math note: this and generatePKCEVerifier duplicate the derivation
-// also present (as the *verify* side) in libs/go/mcpauth/pkce.go, which
-// implements PKCE for mcpauth's own role as an authorization server.
-// Depending on mcpauth from here would pull an authorization-server package
+// also present (as the *verify* side) in libs/go/auth/pkce.go, which
+// implements PKCE for auth's own role as an authorization server.
+// Depending on this package from here would pull an authorization-server package
 // into grpcauth's dependency graph for ~10 lines of math; core grpcauth must
-// not gain an mcpauth dependency, so the derivation is copied rather than
+// not gain an auth dependency, so the derivation is copied rather than
 // shared.
 func pkceChallengeS256(verifier string) string {
 	sum := sha256.Sum256([]byte(verifier))

@@ -21,7 +21,7 @@
 // Schema here is a self-contained copy of the shape README.md documents as
 // the schema contract — dbtest's own README asks integration tests to keep
 // schema self-contained rather than importing another package's migrations.
-package mcpauth
+package auth
 
 import (
 	"context"

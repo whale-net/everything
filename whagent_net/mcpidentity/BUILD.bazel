@@ -1,6 +1,6 @@
 load("@rules_go//go:def.bzl", "go_library", "go_test")
 
-# Encode/Decode for the (iss, sub) identity pair mcpauth's Provider
+# Encode/Decode for the (iss, sub) identity pair auth's Provider
 # resolves a signed-in whagent-net operator to (NFR7, issue #2245) --
 # importable by both `ui` (encodes) and `mcp` (decodes, a dependent task)
 # so the two sides cannot drift on the packed string's format. See

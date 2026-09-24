@@ -59,7 +59,7 @@ go_test(
         "//libs/go/grpcauth",
         "//libs/go/grpcauth/grantindex",
         "//libs/go/grpcauth/pgstore",
-        "//libs/go/mcpauth",
+        "//libs/go/auth",
         "//libs/go/migrate",
         "//whagent_net/mcp/server",
         "@com_github_jackc_pgx_v5//stdlib",

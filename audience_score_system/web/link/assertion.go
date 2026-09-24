@@ -25,7 +25,7 @@
 // # NFR5
 //
 // This package is standalone: it must not import, extend, or hook into
-// web/auth's mcpauth machinery (/authorize, /token, /register) --
+// web/auth's auth machinery (/authorize, /token, /register) --
 // "alongside, never on top of".
 package link
 

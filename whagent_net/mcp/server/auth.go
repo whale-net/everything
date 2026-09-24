@@ -10,9 +10,9 @@ import (
 	sdkauth "github.com/modelcontextprotocol/go-sdk/auth"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 
+	"github.com/whale-net/everything/libs/go/auth"
 	"github.com/whale-net/everything/libs/go/grpcauth"
 	"github.com/whale-net/everything/libs/go/logging"
-	"github.com/whale-net/everything/libs/go/mcpauth"
 	"github.com/whale-net/everything/whagent_net/mcpidentity"
 )
 
@@ -28,7 +28,7 @@ var logger = logging.Get("whagent_net/mcp/server")
 const tokenExtraKey = "raw_token"
 
 // identityExtraKey is the sdkauth.TokenInfo.Extra key the OAuth2 path
-// (an opaque mcpauth credential) stores its decoded (iss, sub) identity
+// (an opaque auth credential) stores its decoded (iss, sub) identity
 // under, for AuthMiddleware to read back off the request and place on ctx
 // via mcpidentity.ContextWithIdentity (issue #2430 -- no exchange happens
 // here any more, see AuthMiddleware's own doc comment).
@@ -36,17 +36,17 @@ const identityExtraKey = "resolved_identity"
 
 // resolvedIdentity is the value stored under identityExtraKey: the real
 // Keycloak (iss, sub) pair a credentialVerifier decoded from an opaque
-// mcpauth credential's identity (NFR7) -- never the encoded string
-// itself, and never anything mcpauth.CredentialStore.Verify returns
+// auth credential's identity (NFR7) -- never the encoded string
+// itself, and never anything auth.CredentialStore.Verify returns
 // directly.
 type resolvedIdentity struct {
 	iss string
 	sub string
 }
 
-// credentialShapePattern matches an mcpauth opaque bearer credential:
+// credentialShapePattern matches an auth opaque bearer credential:
 // exactly the 64 lowercase hex characters
-// libs/go/mcpauth/credential.go's generateToken produces (32
+// libs/go/auth/credential.go's generateToken produces (32
 // crypto/rand bytes, hex-encoded) -- with no dot anywhere, unlike a JWT
 // compact serialization (three dot-separated segments). This mirrors
 // audience_score_system/mcp/server/whagent_auth.go's own
@@ -55,7 +55,7 @@ type resolvedIdentity struct {
 // domain's own two paths).
 var credentialShapePattern = regexp.MustCompile(`^[0-9a-f]{64}$`)
 
-// isCredentialShaped reports whether token is shaped like an mcpauth
+// isCredentialShaped reports whether token is shaped like an auth
 // opaque credential (see credentialShapePattern) rather than a Keycloak
 // JWT.
 func isCredentialShaped(token string) bool {
@@ -68,15 +68,15 @@ func isCredentialShaped(token string) bool {
 // credential-shaped -- `mcp` never verifies a Keycloak JWT itself, it
 // only captures it unexamined so AuthMiddleware can forward it, byte for
 // byte, to `api` (FR10). FR9 (issue #2249) adds exactly one new
-// classification: a token shaped like an mcpauth opaque credential
+// classification: a token shaped like an auth opaque credential
 // (isCredentialShaped) is resolved via credentials.Verify (which also
-// stamps last_used_at, mcpauth.CredentialStore's own contract) --
+// stamps last_used_at, auth.CredentialStore's own contract) --
 // success decodes to a real Keycloak (iss, sub) pair via
 // whagent_net/mcpidentity.Decode (the shared helper issue #2245's `ui`
 // side also uses, NFR7: no re-splitting the encoded string here) and
 // routes the call onto AuthMiddleware's browser-OAuth2/resolved-identity
 // branch;
-// failure (unrecognized, malformed, or revoked -- mcpauth.CredentialStore
+// failure (unrecognized, malformed, or revoked -- auth.CredentialStore
 // makes all three indistinguishable, NFR1) is rejected here, before any
 // tool handler runs -- this is expected control flow (a client presenting
 // a stale/revoked credential), not something this package logs as an
@@ -90,9 +90,9 @@ func isCredentialShaped(token string) bool {
 // either way, before any tool handler runs -- see NewHTTPHandler's
 // AllowMissingExpiration:true (neither TokenInfo shape carries an
 // expiration of its own; `api`'s verifier is what actually checks a
-// manually-forwarded token's exp, and mcpauth credentials are revocable
+// manually-forwarded token's exp, and auth credentials are revocable
 // rather than time-boxed).
-func NewVerifier(credentials mcpauth.CredentialStore) sdkauth.TokenVerifier {
+func NewVerifier(credentials auth.CredentialStore) sdkauth.TokenVerifier {
 	return func(ctx context.Context, token string, _ *http.Request) (*sdkauth.TokenInfo, error) {
 		token = strings.TrimSpace(token)
 		if token == "" {
@@ -113,11 +113,11 @@ func NewVerifier(credentials mcpauth.CredentialStore) sdkauth.TokenVerifier {
 			iss, sub, err := mcpidentity.Decode(identity)
 			if err != nil {
 				// This is not expected control flow: credentials.Verify
-				// only ever returns identities `ui`'s mcpauth.Provider
+				// only ever returns identities `ui`'s auth.Provider
 				// minted via mcpidentity.Encode (issue #2245), so a
 				// decode failure here means the stored identity is
 				// corrupt -- an operator needs to know.
-				logger.ErrorContext(ctx, "mcp: resolved mcpauth credential's identity failed to decode", "error", err)
+				logger.ErrorContext(ctx, "mcp: resolved auth credential's identity failed to decode", "error", err)
 				return nil, sdkauth.ErrInvalidToken
 			}
 

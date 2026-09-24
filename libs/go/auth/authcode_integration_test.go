@@ -15,7 +15,7 @@
 // store), single-use enforcement under real concurrent load (Postgres's own
 // DELETE ... RETURNING atomicity, not an in-process mutex), and expired-row
 // pruning enforced by actual SQL rather than an in-memory map sweep.
-package mcpauth
+package auth
 
 import (
 	"context"

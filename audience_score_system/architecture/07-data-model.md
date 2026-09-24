@@ -167,7 +167,7 @@ Channel (`UNIQUE ... WHERE valid_to IS NULL`), a reconnect closes the old
 row and opens a new one.
 
 Migrations 005-007 land `mcp_credential` (original bespoke shape, then
-migrated onto `mcpauth`'s contract) and `mcpauth`'s OAuth2 client-registry/
+migrated onto `auth`'s contract) and `auth`'s OAuth2 client-registry/
 auth-code tables -- see "MCP server: caller authentication" above; no
 `channel_person`/`channel_invite` change.
 

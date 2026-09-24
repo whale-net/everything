@@ -1,6 +1,6 @@
 # Migration numbering (M2)
 
-Assigned up front in issue #2542, but M1's own mcpauth-auth-flow-gap work
+Assigned up front in issue #2542, but M1's own auth-flow-gap work
 (`006_mcpauth_credential`, `007_ui_sessions` above) landed on `main` first
 and claimed `006`/`007` before M2's tasks merged -- M2 renumbers to the
 next free slots so parallel tasks under M2 never collide on a migration

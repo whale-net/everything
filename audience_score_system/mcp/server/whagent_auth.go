@@ -11,7 +11,7 @@
 // there is no exported way to make either a no-op pass-through for a
 // request that instead came in via this domain's OTHER, pre-existing auth
 // path. Mounting HTTPMiddleware+Middleware verbatim in series alongside
-// the existing mcpauth.RequireBearerToken -> PersonMiddleware chain would
+// the existing auth.RequireBearerToken -> PersonMiddleware chain would
 // therefore reject every mcp_credential call outright -- exactly the
 // "built on top of" failure mode FR12(a) forbids. This file instead:
 //
@@ -19,7 +19,7 @@
 //     at the HTTP layer (DualAuthHTTPHandler), keyed on token SHAPE: a
 //     whagent Claim is always a three-segment, two-dot JWT compact
 //     serialization; an ASS mcp_credential is always a 64-character hex
-//     string with no dots (see libs/go/mcpauth/credential.go's
+//     string with no dots (see libs/go/auth/credential.go's
 //     generateToken) -- the two encodings never overlap, so this is a
 //     clean, not probabilistic, split. Each branch is guarded by its own
 //     independent sdkauth.RequireBearerToken instance -- a Keycloak
@@ -61,7 +61,7 @@ import (
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 
 	"github.com/whale-net/everything/audience_score_system/store"
-	"github.com/whale-net/everything/libs/go/mcpauth"
+	"github.com/whale-net/everything/libs/go/auth"
 	"github.com/whale-net/everything/libs/go/whagent"
 )
 
@@ -91,7 +91,7 @@ const whagentClaimExtraKey = "audience_score_system/mcp/server.whagent_claim"
 // -- an unsigned claim, a valid Keycloak token, a token signed by a
 // non-whagent key, a wrong-audience token, an expired token, or a
 // malformed one are all indistinguishable to a caller (mirrors
-// libs/go/mcpauth's own errInvalidToken / libs/go/whagent's own
+// libs/go/auth's own errInvalidToken / libs/go/whagent's own
 // errAuthenticationFailed convention). It wraps sdkauth.ErrInvalidToken so
 // sdkauth.RequireBearerToken's own errors.Is check treats it as a 401, not
 // a 500.
@@ -101,7 +101,7 @@ var errWhagentTokenInvalid = fmt.Errorf("mcp: invalid, expired, or unverifiable 
 // Claim JWT (RFC 7519 compact serialization: exactly three non-empty,
 // dot-separated segments) rather than an ASS mcp_credential (a
 // 64-character hex string with no dots -- see
-// libs/go/mcpauth/credential.go's generateToken). DualAuthHTTPHandler uses
+// libs/go/auth/credential.go's generateToken). DualAuthHTTPHandler uses
 // this to decide which of the two verification paths a given request's
 // bearer token belongs to, without ever trying a credential against the
 // wrong path's verifier (NFR4): the two encodings never overlap, so this
@@ -165,9 +165,9 @@ func whagentTokenVerifier(cfg WhagentAuthConfig) sdkauth.TokenVerifier {
 // either branch never invokes mcpHandler (the tool handler is never
 // entered on a failed verification). See NewDualAuthHTTPHandler
 // (transport.go) for how `mcp`'s mux mounts this.
-func DualAuthHTTPHandler(mcpHandler http.Handler, credentials mcpauth.CredentialStore, cfg WhagentAuthConfig, mcpauthOpts *sdkauth.RequireBearerTokenOptions) http.Handler {
-	credentialGuarded := mcpauth.RequireBearerToken(credentials, mcpauthOpts)(mcpHandler)
-	whagentGuarded := sdkauth.RequireBearerToken(whagentTokenVerifier(cfg), mcpauthOpts)(mcpHandler)
+func DualAuthHTTPHandler(mcpHandler http.Handler, credentials auth.CredentialStore, cfg WhagentAuthConfig, authOpts *sdkauth.RequireBearerTokenOptions) http.Handler {
+	credentialGuarded := auth.RequireBearerToken(credentials, authOpts)(mcpHandler)
+	whagentGuarded := sdkauth.RequireBearerToken(whagentTokenVerifier(cfg), authOpts)(mcpHandler)
 
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if isWhagentShapedToken(bearerToken(r)) {

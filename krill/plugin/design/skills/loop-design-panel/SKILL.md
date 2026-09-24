@@ -11,7 +11,7 @@ otherwise stop and ask one, until a `signoff` revision event lands.
 
 **No `plan:agent-approved` label exists here, and none is needed.** Every
 `RevisionEvent`'s `acting`/`on_behalf_of` `Subject` records whether the
-caller was a human (`kind: human`, via mcpauth) or an agent (`kind:
+caller was a human (`kind: human`, via auth) or an agent (`kind:
 service`, via whagent-net) — provenance is structural. A `signoff` event
 appended by this skill's `reviewer` dispatch is indistinguishable in
 *mechanics* from a human's, but its `acting.kind` on the stored event tells

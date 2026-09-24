@@ -18,7 +18,7 @@ go_library(
         "//krill/work",
         "//libs/go/db",
         "//libs/go/logging",
-        "//libs/go/mcpauth",
+        "//libs/go/auth",
         "//libs/go/whagent",
         "@com_github_google_uuid//:uuid",
         "@io_opentelemetry_go_contrib_instrumentation_net_http_otelhttp//:otelhttp",
@@ -32,14 +32,14 @@ go_binary(
 )
 
 # Release metadata. domain "krill" + name "mcp" produces the "krill-mcp"
-# image/app identity. external-api: MCP-capable clients (human via mcpauth,
+# image/app identity. external-api: MCP-capable clients (human via auth,
 # agent via whagent-net) reach this over ingress, same category as `api`.
 release_app(
     name = "mcp",
     binary_name = ":mcp",
     language = "go",
     domain = "krill",
-    description = "krill MCP spec surface: FR5-FR9 scoped-slice query (feature-set/feature/requirement/product) over MCP, behind the mcpauth + whagent-net two-front-door auth pattern",
+    description = "krill MCP spec surface: FR5-FR9 scoped-slice query (feature-set/feature/requirement/product) over MCP, behind the auth + whagent-net two-front-door auth pattern",
     app_type = "external-api",
     port = 8080,
 )

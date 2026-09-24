@@ -31,9 +31,9 @@ the new path.
         ▲            ▲            ▲
         │            │            │
         │            │       external-api: barebones Keycloak sign-in
-        │            │       shell; mounts mcpauth's /authorize, /token,
+        │            │       shell; mounts auth's /authorize, /token,
         │            │       /register, and discovery -- the SignInURL
-        │            │       mcp's mcpauth front door redirects to
+        │            │       mcp's auth front door redirects to
         │            │
         │       external-api: the FR10/NFR1 spec surface -- /mcp/spec,
         │       the same FR5-FR9 slice query as `api`'s /slices/...
@@ -48,7 +48,7 @@ the new path.
 (`PG_DATABASE_URL`, `//libs/go/db` / `//libs/go/migrate` — see `ENV.md`).
 `ui` additionally owns the `ui_sessions` table (migration 007) and, jointly
 with `mcp`, the `mcp_credential`/`mcp_oauth_client`/`mcp_auth_code` tables
-(migration 006) -- see "krill/ui and the mcpauth front door" below.
+(migration 006) -- see "krill/ui and the auth front door" below.
 `krill/plugin/` now carries `mcp`'s Claude Code plugin entries (`.mcp.json`
 / `mcp_config.json`, issue #2494) rather than being a placeholder, plus a
 companion `plugin/data/` "-data" plugin for direct Postgres access to the
@@ -88,7 +88,7 @@ query" section below).
 | [`ARCHITECTURE/17-scoped-slice-query.md`](ARCHITECTURE/17-scoped-slice-query.md) | The scoped-slice query (LB7, issue #2491) — `slice.Document`'s five granularities |
 | [`ARCHITECTURE/18-mcp-spec-surface.md`](ARCHITECTURE/18-mcp-spec-surface.md) | The MCP spec surface (FR10/NFR1, issue #2494) — the two-front-door pattern, `/mcp/spec` |
 | [`ARCHITECTURE/19-design-session-mcp-surface.md`](ARCHITECTURE/19-design-session-mcp-surface.md) | The design-session MCP surface (FR1-FR10 over MCP, NFR4, issue #2547) — `/mcp/design`, `RegisterWrite` |
-| [`ARCHITECTURE/20-krill-ui-mcpauth-front-door.md`](ARCHITECTURE/20-krill-ui-mcpauth-front-door.md) | krill/ui and the mcpauth front door (the auth-flow gap) |
+| [`ARCHITECTURE/20-krill-ui-mcpauth-front-door.md`](ARCHITECTURE/20-krill-ui-mcpauth-front-door.md) | krill/ui and the auth front door (the auth-flow gap) |
 | [`ARCHITECTURE/21-markdown-importer.md`](ARCHITECTURE/21-markdown-importer.md) | The markdown importer and the delivery-axis association (FR16, FR17, issue #2492), plus one-time import completion (M2's FR12) and completeness accounting / the whagent_net import (M2's FR11) |
 | [`ARCHITECTURE/22-amend-as-of-history-reads.md`](ARCHITECTURE/22-amend-as-of-history-reads.md) | Amend and as-of history reads (FR11, FR12, issue #2493) — the SCD2 close-and-open write, as-of slice assembly |
 | [`ARCHITECTURE/23-doc-renderer.md`](ARCHITECTURE/23-doc-renderer.md) | The doc renderer (FR13-FR15, NFR3, issue #2495) — citations computed at render time, the generated-doc carve-out |

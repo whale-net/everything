@@ -1,10 +1,10 @@
 // Package identity encodes and decodes the (iss, sub) identity pair
-// krill/ui's mcpauth OAuth2 authorization-server front door (the
-// mcpauth.CallerResolver in krill/ui/mcpauth.go) resolves a signed-in
+// krill/ui's auth OAuth2 authorization-server front door (the
+// auth.CallerResolver in krill/ui/auth.go) resolves a signed-in
 // operator to.
 //
-// mcpauth.CredentialStore/mcpauth.AuthCodeStore's Identity column is a
-// plain opaque string (libs/go/mcpauth's package doc, "zero
+// auth.CredentialStore/auth.AuthCodeStore's Identity column is a
+// plain opaque string (libs/go/auth's package doc, "zero
 // domain-specific types") -- krill has no person/user table to key it to
 // (NFR1 authorizes by persona, never by individual identity), so this
 // package is where the signed-in operator's (iss, sub) pair gets packed
@@ -26,7 +26,7 @@ import (
 const separator = "|"
 
 // Encode packs iss and sub into the single opaque string
-// mcpauth.CredentialStore and mcpauth.AuthCodeStore store as Identity. It
+// auth.CredentialStore and auth.AuthCodeStore store as Identity. It
 // fails loudly -- rather than silently producing a string Decode could
 // misparse -- if either part is empty or already contains separator.
 func Encode(iss, sub string) (string, error) {

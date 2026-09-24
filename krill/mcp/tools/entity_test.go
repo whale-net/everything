@@ -13,7 +13,7 @@
 //
 // Mirrors milestone_test.go's seeding/HTTP/auth plumbing (duplicated here,
 // not shared, since this file compiles into its own go_test target -- see
-// design_test.go's own doc comment for why the mcpauth CredentialStore
+// design_test.go's own doc comment for why the auth CredentialStore
 // here is a hand-rolled fake and the whagent-net door is exercised against
 // a real signed JWT).
 //
@@ -43,8 +43,8 @@ import (
 	"github.com/whale-net/everything/krill/mcp/tools"
 	"github.com/whale-net/everything/krill/migrate/schema"
 	"github.com/whale-net/everything/krill/store"
+	"github.com/whale-net/everything/libs/go/auth"
 	"github.com/whale-net/everything/libs/go/dbtest"
-	"github.com/whale-net/everything/libs/go/mcpauth"
 	"github.com/whale-net/everything/libs/go/migrate"
 	"github.com/whale-net/everything/libs/go/whagent"
 )
@@ -80,33 +80,33 @@ func createEntityToolsTestScope(t *testing.T, ctx context.Context, pool *pgxpool
 	return scopeID
 }
 
-// ── fake mcpauth.CredentialStore (no real migration to preflight against yet) ─
+// ── fake auth.CredentialStore (no real migration to preflight against yet) ─
 
 type entityFakeCredentialStore struct {
 	validToken string
 	identity   string
 }
 
-func (f entityFakeCredentialStore) Mint(context.Context, string) (string, mcpauth.Credential, error) {
-	return "", mcpauth.Credential{}, errors.New("entityFakeCredentialStore.Mint is not used by this test")
+func (f entityFakeCredentialStore) Mint(context.Context, string) (string, auth.Credential, error) {
+	return "", auth.Credential{}, errors.New("entityFakeCredentialStore.Mint is not used by this test")
 }
 
-func (f entityFakeCredentialStore) Verify(_ context.Context, rawToken string) (string, mcpauth.Credential, error) {
+func (f entityFakeCredentialStore) Verify(_ context.Context, rawToken string) (string, auth.Credential, error) {
 	if rawToken == f.validToken {
-		return f.identity, mcpauth.Credential{Identity: f.identity}, nil
+		return f.identity, auth.Credential{Identity: f.identity}, nil
 	}
-	return "", mcpauth.Credential{}, mcpauth.ErrInvalidCredential
+	return "", auth.Credential{}, auth.ErrInvalidCredential
 }
 
 func (f entityFakeCredentialStore) Revoke(context.Context, uuid.UUID, string) error {
 	return errors.New("entityFakeCredentialStore.Revoke is not used by this test")
 }
 
-func (f entityFakeCredentialStore) List(context.Context, string) ([]mcpauth.Credential, error) {
+func (f entityFakeCredentialStore) List(context.Context, string) ([]auth.Credential, error) {
 	return nil, errors.New("entityFakeCredentialStore.List is not used by this test")
 }
 
-var _ mcpauth.CredentialStore = entityFakeCredentialStore{}
+var _ auth.CredentialStore = entityFakeCredentialStore{}
 
 // ── whagent fixture ──────────────────────────────────────────────────────────
 
@@ -205,7 +205,7 @@ func TestMCPEntityCreateSurface_EndToEnd(t *testing.T) {
 	// tool is registered for PersonaRequirementContributor/PersonaAgent/
 	// PersonaSwarmOperator (issue #2926), and PersonaRequirementContributor
 	// has no real front door yet -- both the whagent-net (PersonaAgent) and
-	// mcpauth (PersonaSwarmOperator) doors can call these tools today.
+	// auth (PersonaSwarmOperator) doors can call these tools today.
 	designSrv.AddReceivingMiddleware(server.WhagentPersonaMiddleware())
 
 	handler := server.NewDualAuthHTTPHandler(server.New(), designSrv, server.New(), server.New(), credentials, server.WhagentAuthConfig{
@@ -219,7 +219,7 @@ func TestMCPEntityCreateSurface_EndToEnd(t *testing.T) {
 	agentToken := mintEntityWhagentToken(t, signer, "human-e2e-1")
 	humanToken := credentials.validToken
 
-	t.Run("create_product succeeds for the mcpauth (PersonaSwarmOperator) door too (issue #2926)", func(t *testing.T) {
+	t.Run("create_product succeeds for the auth (PersonaSwarmOperator) door too (issue #2926)", func(t *testing.T) {
 		cs, err := connectEntityMCP(t, designURL, humanToken)
 		require.NoError(t, err)
 
@@ -227,7 +227,7 @@ func TestMCPEntityCreateSurface_EndToEnd(t *testing.T) {
 			Name: "create_product",
 			Arguments: map[string]any{
 				"krill_session_id": selfSessionID.String(),
-				"name":             "krill (mcpauth door)",
+				"name":             "krill (auth door)",
 				"vision":           "proves PersonaSwarmOperator can call create_product directly",
 			},
 		})

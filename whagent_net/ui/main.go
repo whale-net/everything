@@ -27,12 +27,12 @@ import (
 	"github.com/gorilla/sessions"
 	"go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp"
 
+	"github.com/whale-net/everything/libs/go/auth"
 	"github.com/whale-net/everything/libs/go/db"
 	"github.com/whale-net/everything/libs/go/grpcauth"
 	"github.com/whale-net/everything/libs/go/htmxauth"
 	"github.com/whale-net/everything/libs/go/htmxsse"
 	"github.com/whale-net/everything/libs/go/logging"
-	"github.com/whale-net/everything/libs/go/mcpauth"
 	"github.com/whale-net/everything/libs/go/rmq"
 	"github.com/whale-net/everything/whagent_net/delegatedgrant"
 	"github.com/whale-net/everything/whagent_net/events"
@@ -99,15 +99,15 @@ type config struct {
 
 	// UIPublicURL is this binary's own externally-reachable base URL
 	// (e.g. https://whagent.example.com) -- FR9/issue #2245's
-	// mcpauth.ProviderConfig.Issuer, the base every mcpauth endpoint URL
+	// auth.ProviderConfig.Issuer, the base every auth endpoint URL
 	// `ui` advertises (`/authorize`, `/token`, `/register`,
 	// `/.well-known/oauth-authorization-server`) is built from. Mirrors
 	// audience_score_system's ASS_OAUTH_REDIRECT_BASE_URL doubling as
-	// mcpauth's issuer (see audience_score_system/ENV.md).
+	// auth's issuer (see audience_score_system/ENV.md).
 	UIPublicURL string
 
 	// MCPPublicURL is `mcp`'s own externally-reachable base URL -- FR9's
-	// mcpauth.ProviderConfig.Resource, the OAuth2 `resource` identifier.
+	// auth.ProviderConfig.Resource, the OAuth2 `resource` identifier.
 	// Must be byte-identical to what `mcp` itself advertises in its own
 	// protected-resource metadata (mcp's dependent task, issue #2245's
 	// Context section) -- a mismatch breaks an MCP client's RFC 9728
@@ -234,17 +234,17 @@ type App struct {
 	// to boot.
 	sseHub *htmxsse.Hub
 
-	// mcpProvider is mcpauth's OAuth2 authorization-server front end
+	// mcpProvider is auth's OAuth2 authorization-server front end
 	// (FR9/C27, issue #2245) -- constructed in NewApp, mounted on this
 	// binary's mux in setupRoutes on unauthenticated routes (discovery
 	// metadata and dynamic client registration must be reachable before
 	// an MCP client has any credential at all). Its Resolver reads
-	// `ui`'s own Keycloak session (mcpCallerResolver, mcpauth.go) --
+	// `ui`'s own Keycloak session (mcpCallerResolver, auth.go) --
 	// `/authorize` mints a credential only once the operator is already
 	// signed in via app.auth, and (issue #2428) only once
 	// authorizeConsentGate (run()) is satisfied, since it wraps this
 	// binary's whole mux rather than being registered as its own route.
-	mcpProvider *mcpauth.Provider
+	mcpProvider *auth.Provider
 
 	// grant is the shared DelegatedGrantSource/Store/Index triple (issue
 	// #2426, FR10/FR13/NFR5/NFR6) initializeDelegatedGrant constructs.
@@ -386,14 +386,14 @@ func NewApp(ctx context.Context, cfg config) (*App, error) {
 		publicURL:     cfg.UIPublicURL,
 	}
 
-	// mcpauth.NewCredentialStore/NewPostgresClientRegistry/
+	// auth.NewCredentialStore/NewPostgresClientRegistry/
 	// NewPostgresAuthCodeStore each preflight their own table (see
 	// whagent_net/migrate/schema/migrations/004_mcpauth_credential) and
 	// fail loudly, naming the table, if it hasn't been applied yet --
 	// exactly like htmxauth.NewDBSessionManager's ui_sessions probe above.
 	mcpProvider, err := setupMCPAuth(ctx, pool, cfg, app.mcpCallerResolver())
 	if err != nil {
-		return nil, fmt.Errorf("failed to initialize mcpauth provider: %w", err)
+		return nil, fmt.Errorf("failed to initialize auth provider: %w", err)
 	}
 	app.mcpProvider = mcpProvider
 
@@ -503,7 +503,7 @@ func run() error {
 	app.setupRoutes(mux)
 
 	// authorizeConsentGate wraps the whole mux, outside routing, rather than
-	// being registered as its own mux pattern: mcpauth.Provider.Mount above
+	// being registered as its own mux pattern: auth.Provider.Mount above
 	// already claims the exact "GET /authorize" pattern, and net/http's
 	// ServeMux panics on a duplicate registration of the same pattern -- see
 	// handlers_consent.go's package doc comment for the full reasoning.
@@ -567,7 +567,7 @@ func (app *App) setupRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("/auth/callback", app.auth.HandleCallback)
 	mux.HandleFunc("/logout", app.auth.HandleLogout)
 
-	// mcpauth's OAuth2 authorization-server endpoints (/authorize, /token,
+	// auth's OAuth2 authorization-server endpoints (/authorize, /token,
 	// /register, and both discovery metadata documents, FR9/issue #2245)
 	// are registered directly on mux here, outside app.auth.RequireAuth --
 	// unlike "/", none of setupRoutes' other registrations wrap these in
@@ -581,7 +581,7 @@ func (app *App) setupRoutes(mux *http.ServeMux) {
 	// Per-domain delegated-grant consent (FR2/FR3/FR5/FR6/FR9/FR12, issue
 	// #2428): the standalone entry point (handlers_consent.go's package doc
 	// comment). Requires a signed-in operator like every other app route --
-	// unlike the mcpauth endpoints above, these are `ui`'s own pages, not
+	// unlike the auth endpoints above, these are `ui`'s own pages, not
 	// an OAuth2 authorization-server surface an MCP client hits directly.
 	mux.HandleFunc("GET /mcp/consent", app.auth.RequireAuthFunc(app.handleMCPConsent))
 	mux.HandleFunc("POST /mcp/consent", app.auth.RequireAuthFunc(app.handleMCPConsentConfirm))

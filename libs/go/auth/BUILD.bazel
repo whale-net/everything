@@ -1,21 +1,22 @@
 load("@rules_go//go:def.bzl", "go_library", "go_test")
 
 go_library(
-    name = "mcpauth",
+    name = "auth",
     srcs = [
+        "auth.go",
         "authcode.go",
         "authorize.go",
         "clients.go",
         "credential.go",
-        "mcpauth.go",
         "metadata.go",
         "pkce.go",
         "provider.go",
         "resolver.go",
+        "selfserve.go",
         "token.go",
         "verify.go",
     ],
-    importpath = "github.com/whale-net/everything/libs/go/mcpauth",
+    importpath = "github.com/whale-net/everything/libs/go/auth",
     visibility = ["//visibility:public"],
     deps = [
         "@com_github_google_uuid//:uuid",
@@ -27,7 +28,7 @@ go_library(
 )
 
 go_test(
-    name = "mcpauth_test",
+    name = "auth_test",
     srcs = [
         "authorize_test.go",
         "clients_test.go",
@@ -36,10 +37,11 @@ go_test(
         "pkce_test.go",
         "provider_test.go",
         "resolver_test.go",
+        "selfserve_test.go",
         "token_test.go",
         "verify_test.go",
     ],
-    embed = [":mcpauth"],
+    embed = [":auth"],
     deps = [
         "@com_github_google_uuid//:uuid",
         "@com_github_modelcontextprotocol_go_sdk//auth",
@@ -60,10 +62,10 @@ go_test(
 # a later `bazel run //:gazelle` not to touch or remove this rule.
 #
 # Run it explicitly (requires a working Docker daemon):
-#   bazel test //libs/go/mcpauth:mcpauth_integration_test --test_output=all
+#   bazel test //libs/go/auth:auth_integration_test --test_output=all
 go_test(
     # keep
-    name = "mcpauth_integration_test",
+    name = "auth_integration_test",
     size = "large",
     timeout = "long",
     srcs = [
@@ -71,7 +73,7 @@ go_test(
         "clients_integration_test.go",
         "credential_integration_test.go",
     ],
-    embed = [":mcpauth"],
+    embed = [":auth"],
     gotags = ["integration"],
     tags = [
         "external",

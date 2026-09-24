@@ -1,4 +1,4 @@
-package mcpauth
+package auth
 
 import (
 	"context"
@@ -47,7 +47,7 @@ type AuthCodeStore interface {
 // handler (token.go, #1642) needs to render "unknown code" the same way it
 // renders every other invalid_grant case — see token.go's Implementation
 // phase.
-var ErrAuthCodeNotFound = errors.New("mcpauth: unknown or already-consumed authorization code")
+var ErrAuthCodeNotFound = errors.New("auth: unknown or already-consumed authorization code")
 
 // generateAuthCode returns a high-entropy (crypto/rand), hex-encoded raw
 // authorization code — same shape as credential.go's generateToken (32
@@ -168,7 +168,7 @@ var _ AuthCodeStore = (*pgxAuthCodeStore)(nil)
 // than on the first real request.
 func NewPostgresAuthCodeStore(ctx context.Context, cfg AuthCodeStoreConfig) (AuthCodeStore, error) {
 	if cfg.Pool == nil {
-		return nil, errors.New("mcpauth: AuthCodeStoreConfig.Pool is required")
+		return nil, errors.New("auth: AuthCodeStoreConfig.Pool is required")
 	}
 	if cfg.TableName == "" {
 		cfg.TableName = defaultAuthCodeTableName
@@ -181,7 +181,7 @@ func NewPostgresAuthCodeStore(ctx context.Context, cfg AuthCodeStoreConfig) (Aut
 
 	if err := s.probeTable(ctx); err != nil {
 		return nil, fmt.Errorf(
-			"mcpauth: auth code table preflight failed for table %q — apply your domain's mcp_auth_code migration (see libs/go/mcpauth/README.md schema contract) before calling NewPostgresAuthCodeStore: %w",
+			"auth: auth code table preflight failed for table %q — apply your domain's mcp_auth_code migration (see libs/go/auth/README.md schema contract) before calling NewPostgresAuthCodeStore: %w",
 			cfg.TableName, err,
 		)
 	}
@@ -230,7 +230,7 @@ func (s *pgxAuthCodeStore) Save(ctx context.Context, code AuthCode) error {
 		code.CodeChallenge, code.CodeChallengeMethod, code.ExpiresAt,
 	)
 	if err != nil {
-		return fmt.Errorf("mcpauth: insert auth code: %w", err)
+		return fmt.Errorf("auth: insert auth code: %w", err)
 	}
 	return nil
 }
@@ -261,7 +261,7 @@ func (s *pgxAuthCodeStore) Consume(ctx context.Context, rawCode string) (AuthCod
 		if errors.Is(err, pgx.ErrNoRows) {
 			return AuthCode{}, ErrAuthCodeNotFound
 		}
-		return AuthCode{}, fmt.Errorf("mcpauth: consume auth code: %w", err)
+		return AuthCode{}, fmt.Errorf("auth: consume auth code: %w", err)
 	}
 	code.Code = hash
 	return code, nil

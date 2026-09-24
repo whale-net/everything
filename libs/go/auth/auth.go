@@ -1,10 +1,13 @@
-// Package mcpauth provides a reusable, DB-backed credential lifecycle for
+// Package auth provides a reusable, DB-backed credential lifecycle for
 // MCP (Model Context Protocol) server bearer authentication (mint, verify,
 // revoke, list), together with its own OAuth2 authorization-server front
 // end (RFC 9728/8414 discovery metadata, RFC 7591 dynamic client
 // registration, and — see provider.go, landed by #1642 — an
 // authorization-code + PKCE `/authorize` and `/token`) that an MCP client
-// uses to obtain that credential.
+// uses to obtain that credential. Despite the generic name, everything here
+// grew out of and is still driven by MCP server bearer-auth needs (NFR2's
+// "other MCP servers in this monorepo" below) — it is not a general-purpose
+// auth toolkit for non-MCP use cases.
 //
 // # What this library is
 //
@@ -29,17 +32,17 @@
 //
 // # What this library deliberately is not
 //
-//   - Not a verifier of *external* identity-provider tokens. mcpauth's own
-//     `/authorize` endpoint never performs an OIDC/SAML round trip, a JWKS
-//     fetch, or any other obtain-step protocol exchange against an
+//   - Not a verifier of *external* identity-provider tokens. This package's
+//     own `/authorize` endpoint never performs an OIDC/SAML round trip, a
+//     JWKS fetch, or any other obtain-step protocol exchange against an
 //     external IdP — Keycloak, Google OIDC, or anything else — to
 //     establish who a caller is. Instead it defers to CallerResolver (see
 //     resolver.go, #1640): by the time `/authorize` runs, the consuming
 //     domain's own sign-in flow has already established the caller's
 //     identity (a session cookie, a trusted proxy header, whatever that
 //     domain's obtain-step machinery leaves on the request), and
-//     CallerResolver's only job is to read it back off the request.
-//     mcpauth's authorization-server role sits entirely downstream of that
+//     CallerResolver's only job is to read it back off the request. This
+//     package's authorization-server role sits entirely downstream of that
 //     already-established session — minting its own opaque bearer
 //     credential for a caller CallerResolver already vouches for — not
 //     upstream of it doing IdP verification itself.
@@ -70,4 +73,4 @@
 // tooling is responsible for creating that table before the first call to
 // NewCredentialStore. See README.md for the exact schema contract a
 // consuming migration must satisfy.
-package mcpauth
+package auth

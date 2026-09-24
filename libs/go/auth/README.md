@@ -1,4 +1,4 @@
-# mcpauth — MCP OAuth2 authorization-server front end + credential lifecycle store
+# auth — MCP OAuth2 authorization-server front end + credential lifecycle store
 
 A Go library providing an OAuth2 authorization-server front end for MCP
 (Model Context Protocol) servers — RFC 9728/8414 discovery metadata, RFC
@@ -9,7 +9,7 @@ bearer credential that front end issues.
 
 ## What this is (and isn't)
 
-mcpauth runs its own OAuth2 authorization server; it does not, however,
+This package runs its own OAuth2 authorization server; it does not, however,
 verify a caller's identity against an *external* identity provider
 (Keycloak, Google OIDC, or any other obtain-step IdP) itself. By the time
 its `/authorize` endpoint runs, the consuming domain's own sign-in flow has
@@ -18,7 +18,7 @@ header, ...); `CallerResolver` (see `resolver.go`) just reads that
 already-established identity back off the request. The credential this
 library then mints is a long-lived, database-backed, individually
 revocable bearer token an MCP client presents on every subsequent call.
-See `mcpauth.go`'s package doc for the full "what this is not" boundary
+See `auth.go`'s package doc for the full "what this is not" boundary
 (no external-IdP verification, no access/refresh-token lifecycle).
 
 This package has **zero domain-specific types or imports** (NFR2) —
@@ -90,7 +90,7 @@ row's value at time T", which is not a question this table needs to answer
 `Verify`/`Revoke`/`List` take a plain Go `string` identity, but a consuming
 domain's identity column may be a non-text PostgreSQL type (ASS's
 `person_id` is `UUID`). `StoreConfig.IdentityCast` lets that domain tell
-`mcpauth` to emit `<IdentityColumn> = $N::<IdentityCast>` instead of
+`auth` to emit `<IdentityColumn> = $N::<IdentityCast>` instead of
 `<IdentityColumn> = $N` in generated SQL.
 
 **Resolved: is the cast actually required?** No — verified directly against
@@ -145,7 +145,7 @@ single-replica constraint.
 
 ### Schema contract
 
-Exactly like `mcp_credential` above, `mcpauth` does **not** own, embed, or
+Exactly like `mcp_credential` above, `auth` does **not** own, embed, or
 run this migration (NFR5) — the consuming domain's own migration tooling
 must create this table before the first call to
 `NewPostgresClientRegistry`, in the same domain-owned-migration style as
@@ -183,7 +183,7 @@ scheme (native app deep links, e.g. `com.example.app:/callback`); it
 rejects `javascript:`/`data:`/`vbscript:` outright, since those could turn
 `/authorize`'s eventual redirect into script execution rather than a
 navigation. On success it mints a random `client_id`, issues no
-`client_secret` (mcpauth only registers public PKCE clients — see the
+`client_secret` (this package only registers public PKCE clients — see the
 authorization-server metadata's `token_endpoint_auth_methods_supported:
 ["none"]`), and returns `201` with an RFC 7591
 `ClientRegistrationResponse`. Bad input gets `400` with an RFC 7591 error
@@ -219,7 +219,7 @@ per OAuth 2.1 guidance that codes be short-lived.
 
 ### Schema contract
 
-Exactly like `mcp_credential` and `mcp_oauth_client` above, `mcpauth` does
+Exactly like `mcp_credential` and `mcp_oauth_client` above, `auth` does
 **not** own, embed, or run this migration (NFR5) — the consuming domain's
 own migration tooling must create this table before the first call to
 `NewPostgresAuthCodeStore`:
@@ -256,10 +256,52 @@ to `ProviderConfig.SignInURL` (if set — otherwise it 401s) with the exact
 original `/authorize` request, query string intact, carried in a query
 parameter named by `ProviderConfig.SignInReturnParam` (defaults to
 `"next"` — see that field's doc for why this defaults to ASS's own
-`?next=` convention rather than an mcpauth-invented name). The consuming
+`?next=` convention rather than an auth-invented name). The consuming
 domain's sign-in flow is expected to redirect back to that URL once the
 caller is signed in, and `/authorize` re-runs from the top — this is a
-plain redirect round trip, not a callback URL mcpauth calls itself.
+plain redirect round trip, not a callback URL this package calls itself.
+
+## Self-serve credential API (no OAuth2 dance, no DB access)
+
+`Provider.MountSelfServe(mux)` registers a small REST surface — `POST
+/credentials` (mint), `GET /credentials` (list), `DELETE /credentials/{id}`
+(revoke) — authenticated the same way `/authorize` is, via
+`ProviderConfig.Resolver` reading the caller's already-established session.
+It exists for exactly one case: an operator who has signed in through the
+browser once and wants a static bearer token to hand to an MCP client that
+cannot (or should not have to) run the OAuth2 authorization-code + PKCE
+flow itself — a headless script, a CI job, or any other harness with no
+interactive browser step. This is the same `CredentialStore.Mint` "Usage"
+below already documents calling directly against a DB pool — `MountSelfServe`
+just exposes it as an HTTP endpoint instead, so minting a token never
+requires DB access, only a signed-in browser session.
+
+It is deliberately **opt-in and separate from `Mount`**: a domain that only
+wants the OAuth2 flow is not forced to also expose a script-friendly
+PAT-minting API. A domain that wants both calls both on the same mux:
+
+```go
+provider.Mount(mux)
+if err := provider.MountSelfServe(mux); err != nil {
+    log.Fatal(err) // only fails if ProviderConfig.Resolver is nil
+}
+```
+
+Unlike `/authorize`, an unresolved caller here gets a plain `401
+{"error":"unauthenticated"}`, never a `SignInURL` redirect — this is a JSON
+API a script or `fetch()` call hits directly, not a browser navigation.
+Concretely, an operator gets a token by signing into the consuming domain's
+own web UI once, then running (from that same browser session, or via any
+HTTP client that carries the session cookie):
+
+```
+curl -X POST https://ui.example.com/credentials --cookie "<session cookie>"
+# {"token":"...","id":"...","created_at":"..."}
+```
+
+The response's `token` is shown exactly once (`GET /credentials` never
+renders it again, only metadata) — the same one-time-display contract
+`CredentialStore.Mint` itself has.
 
 ## Split authorization-server / resource-server binaries
 
@@ -276,14 +318,14 @@ session to resolve a caller from).
 Use these instead, on the resource server's own mux:
 
 ```go
-mux.Handle(mcpauth.ProtectedResourceMetadataPath, mcpauth.NewProtectedResourceMetadataHandler(mcpauth.ProtectedResourceMetadataConfig{
+mux.Handle(auth.ProtectedResourceMetadataPath, auth.NewProtectedResourceMetadataHandler(auth.ProtectedResourceMetadataConfig{
     Resource:            "https://mcp.example.com",      // this resource server's own URL
     AuthorizationServer: "https://auth.example.com",     // the OTHER process's Provider.Issuer
     ResourceName:        "Example MCP",
 }))
 
-requireBearer := mcpauth.RequireBearerToken(credentials, &sdkauth.RequireBearerTokenOptions{
-    ResourceMetadataURL: mcpauth.ProtectedResourceMetadataURL("https://mcp.example.com"),
+requireBearer := auth.RequireBearerToken(credentials, &sdkauth.RequireBearerTokenOptions{
+    ResourceMetadataURL: auth.ProtectedResourceMetadataURL("https://mcp.example.com"),
 })
 ```
 
@@ -306,7 +348,7 @@ import (
     "context"
     "log"
 
-    "github.com/whale-net/everything/libs/go/mcpauth"
+    "github.com/whale-net/everything/libs/go/auth"
     "github.com/jackc/pgx/v5/pgxpool"
 )
 
@@ -318,9 +360,9 @@ func main() {
     }
 
     // Generic consumer.
-    store, err := mcpauth.NewCredentialStore(ctx, mcpauth.StoreConfig{Pool: pool})
+    store, err := auth.NewCredentialStore(ctx, auth.StoreConfig{Pool: pool})
     if err != nil {
-        log.Fatalf("mcpauth: %v — apply your domain's mcp_credential migration first", err)
+        log.Fatalf("auth: %v — apply your domain's mcp_credential migration first", err)
     }
 
     rawToken, cred, err := store.Mint(ctx, "my-service-account")
@@ -345,7 +387,7 @@ func main() {
 ASS-shaped consumer (Person UUID identity):
 
 ```go
-store, err := mcpauth.NewCredentialStore(ctx, mcpauth.StoreConfig{
+store, err := auth.NewCredentialStore(ctx, auth.StoreConfig{
     Pool:           pool,
     IdentityColumn: "person_id",
     IdentityCast:   "uuid",
@@ -361,13 +403,13 @@ store, err := mcpauth.NewCredentialStore(ctx, mcpauth.StoreConfig{
    `htmxauth`'s adopting domains do this for `ui_sessions`; mirror that
    pattern for `mcp_credential`.
 2. Construct a `*pgxpool.Pool` (see `//libs/go/db`).
-3. Call `mcpauth.NewCredentialStore` — it preflights the configured table
+3. Call `auth.NewCredentialStore` — it preflights the configured table
    and returns an error naming it if the migration has not been applied.
 
 ## Testing
 
 Pure-Go unit tests cover, no database required, run via
-`bazel test //libs/go/mcpauth/...`:
+`bazel test //libs/go/auth/...`:
 
 - `credential_test.go` — token generation, hashing parity with ASS's
   current `hashToken`, `StoreConfig` defaults, and identifier validation.
@@ -405,7 +447,7 @@ Integration tests against a real Postgres (`//go:build integration`, using
 Run explicitly (requires a working Docker daemon):
 
 ```sh
-bazel test //libs/go/mcpauth:mcpauth_integration_test --test_output=all
+bazel test //libs/go/auth:auth_integration_test --test_output=all
 ```
 
 ## License

@@ -33,7 +33,7 @@ func TestIsWhagentShapedToken(t *testing.T) {
 		want  bool
 	}{
 		{"well-formed three-segment JWT", "eyJhbGciOiJFZERTQSJ9.eyJzdWIiOiJhIn0.c2ln", true},
-		{"mcpauth credential (64-char hex, no dots)", "abcdef0123456789abcdef0123456789abcdef0123456789abcdef01234567", false},
+		{"auth credential (64-char hex, no dots)", "abcdef0123456789abcdef0123456789abcdef0123456789abcdef01234567", false},
 		{"empty string", "", false},
 		{"one dot only", "a.b", false},
 		{"three dots (four segments)", "a.b.c.d", false},
@@ -130,19 +130,19 @@ func TestDualAuthHTTPHandler(t *testing.T) {
 		assert.Equal(t, "https://keycloak.example.test/realms/humans", claim.SubjectIssuer)
 	})
 
-	t.Run("valid mcpauth-credential-shaped token routes through the credential path and reaches the handler", func(t *testing.T) {
+	t.Run("valid auth-credential-shaped token routes through the credential path and reaches the handler", func(t *testing.T) {
 		handler, called, gotTokenInfo := newHandler()
 		rec := doRequest(handler, credentials.validToken)
 
 		assert.Equal(t, http.StatusOK, rec.Code)
-		assert.True(t, *called, "a valid mcpauth credential must reach the wrapped handler")
+		assert.True(t, *called, "a valid auth credential must reach the wrapped handler")
 		require.NotNil(t, *gotTokenInfo)
 		assert.Equal(t, credentials.identity, (*gotTokenInfo).UserID)
 		_, hasWhagentClaim := (*gotTokenInfo).Extra[whagentClaimExtraKey]
 		assert.False(t, hasWhagentClaim, "a credential-path TokenInfo must never carry a whagent claim marker")
 	})
 
-	t.Run("an unrecognized mcpauth-credential-shaped token is rejected and the handler is never entered", func(t *testing.T) {
+	t.Run("an unrecognized auth-credential-shaped token is rejected and the handler is never entered", func(t *testing.T) {
 		// Not whagent-shaped (no dots), so this is routed to, and can only
 		// be evaluated by, the credential branch -- it never reaches
 		// cfg.Verifier at all.
@@ -156,7 +156,7 @@ func TestDualAuthHTTPHandler(t *testing.T) {
 	t.Run("a whagent credential is shaped so it can only ever route to the whagent branch, never the credential one", func(t *testing.T) {
 		token := mintValid(t)
 		assert.True(t, isWhagentShapedToken(token), "a minted whagent Claim JWT must always route to the whagent branch")
-		assert.NotEqual(t, credentials.validToken, token, "and must never coincide with a live mcpauth credential value")
+		assert.NotEqual(t, credentials.validToken, token, "and must never coincide with a live auth credential value")
 	})
 
 	t.Run("wrong-audience whagent token is rejected and the handler is never entered", func(t *testing.T) {
@@ -209,7 +209,7 @@ func TestWhagentPersonaMiddleware_FallsThroughWhenNotWhagentRouted(t *testing.T)
 	}{
 		{"no Extra at all", requestWithExtra(nil)},
 		{"Extra with nil TokenInfo", requestWithExtra(&mcp.RequestExtra{})},
-		{"TokenInfo with no whagent claim marker (mcpauth path)", requestWithExtra(&mcp.RequestExtra{TokenInfo: &sdkauth.TokenInfo{UserID: "swarm-operator-1"}})},
+		{"TokenInfo with no whagent claim marker (auth path)", requestWithExtra(&mcp.RequestExtra{TokenInfo: &sdkauth.TokenInfo{UserID: "swarm-operator-1"}})},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

@@ -23,7 +23,7 @@ go_library(
     deps = [
         "//audience_score_system/store",
         "//libs/go/logging",
-        "//libs/go/mcpauth",
+        "//libs/go/auth",
         "//libs/go/mcpobs",
         "//libs/go/whagent",
         "@com_github_google_uuid//:uuid",
@@ -56,7 +56,7 @@ go_test(
     deps = [
         "//audience_score_system/mcp/tools",
         "//audience_score_system/store",
-        "//libs/go/mcpauth",
+        "//libs/go/auth",
         "//libs/go/whagent",
         "@com_github_google_uuid//:uuid",
         "@com_github_modelcontextprotocol_go_sdk//auth",
@@ -129,7 +129,7 @@ go_test(
         "//audience_score_system/web/auth",
         "//libs/go/db",
         "//libs/go/dbtest",
-        "//libs/go/mcpauth",
+        "//libs/go/auth",
         "//libs/go/migrate",
         "//libs/go/whagent",
         "@com_github_google_uuid//:uuid",

@@ -9,7 +9,7 @@
 // # Schema contract
 //
 // No migration ships with this package (FR13), exactly like pgstore and
-// libs/go/mcpauth's precedent -- the consuming domain owns and applies its
+// libs/go/auth's precedent -- the consuming domain owns and applies its
 // own migration before calling New. A consuming migration must create a
 // table shaped like this (column/table names are configurable via Config;
 // the shape must match):
@@ -75,7 +75,7 @@ const (
 // matching this pattern before ever building a query string -- this is a
 // hard requirement against SQL injection via configuration, not a style
 // nicety. Identical to grpcauth/pgstore's identifierPattern (and
-// libs/go/mcpauth/credential.go's).
+// libs/go/auth/credential.go's).
 var identifierPattern = regexp.MustCompile(`^[a-z_][a-z0-9_]*$`)
 
 // validateIdentifier rejects any name that is not a safe, lowercase SQL

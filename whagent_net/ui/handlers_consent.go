@@ -12,16 +12,16 @@
 //     finds no active grant for a scope a real call is targeting -- FR5's
 //     "first access to a new scope"; or issue #2431's mid-call reauth
 //     routing). This route never infers or guesses a scope itself.
-//   - authorizeConsentGate wraps GET /authorize (mcpauth's own OAuth2
+//   - authorizeConsentGate wraps GET /authorize (auth's own OAuth2
 //     endpoint for the MCP client, mounted by app.mcpProvider.Mount in
 //     main.go's setupRoutes) with a scope-agnostic prerequisite: the
 //     operator must have completed consent for this deployment's one
 //     statically-configured default scope (WHAGENT_UI_DEFAULT_SCOPE)
-//     before a credential is minted. libs/go/mcpauth is deliberately
+//     before a credential is minted. libs/go/auth is deliberately
 //     domain-agnostic (its own package doc: "NFR2 boundary -- zero
 //     domain-specific types") and its /authorize implementation reads no
 //     resource/scope parameter that could carry a scope (confirmed by
-//     reading libs/go/mcpauth/authorize.go before writing this), and
+//     reading libs/go/auth/authorize.go before writing this), and
 //     mcp/server's own RFC 9728 resource identifier
 //     (whagent_net/mcp/server.ResourceMetadataConfig.Resource) is one
 //     single, instance-wide URL, not one per scope -- there is no wire
@@ -153,17 +153,17 @@ func (app *App) clearPendingConsent(w http.ResponseWriter, r *http.Request) {
 
 // authorizeConsentGate wraps mux (main.go's run()) so a GET /authorize
 // request first passes through this scope-agnostic delegated-grant
-// prerequisite before ever reaching mcpauth.Provider's own /authorize
+// prerequisite before ever reaching auth.Provider's own /authorize
 // handler (mounted directly on mux by app.mcpProvider.Mount,
-// setupMCPAuth/mcpauth.go) -- see this file's package doc comment for why
-// the gate lives here rather than inside libs/go/mcpauth.
+// setupMCPAuth/auth.go) -- see this file's package doc comment for why
+// the gate lives here rather than inside libs/go/auth.
 //
 // Falls through unchanged (never intercepts) when: the request is not a GET
 // /authorize; delegated-grant is unconfigured on this deployment
 // (app.grant.Source == nil, initializeDelegatedGrant's degrade path,
 // mirroring every other WHAGENT_GRANT_*-gated behavior in this binary); no
 // WHAGENT_UI_DEFAULT_SCOPE is configured; the operator is not resolvable
-// (mcpauth's own handleAuthorize already redirects an unauthenticated
+// (auth's own handleAuthorize already redirects an unauthenticated
 // request to SignInURL, so this gate only ever adds a step for an operator
 // who IS already resolvable); or the operator already holds an active
 // grant for the default scope.
@@ -192,7 +192,7 @@ func (app *App) authorizeConsentGate(next http.Handler) http.Handler {
 		// (libs/go/grpcauth/delegatedgrant_authcode.go step 4), which for
 		// any real Keycloak realm is the plain per-user value, never a
 		// composite. mcpidentity.Encode exists for a different subsystem
-		// entirely (the identity packed into a mcpauth.CredentialStore
+		// entirely (the identity packed into a auth.CredentialStore
 		// row, whagent_net/mcpidentity's own package doc) -- reusing it
 		// here was the defect. FR9's "ui and mcp agree on the subject
 		// string" still holds: both resolve the same raw `sub` from the

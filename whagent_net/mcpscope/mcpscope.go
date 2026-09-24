@@ -13,7 +13,7 @@
 // Postgres or Temporal directly; the gRPC API is the service boundary."
 // The Postgres-backed Resolver below is constructed only at
 // whagent_net/mcp/main.go's composition root, mirroring exactly how
-// libs/go/mcpauth.CredentialStore's Postgres implementation is constructed
+// libs/go/auth.CredentialStore's Postgres implementation is constructed
 // there today (see main.go's initializeAuthDeps).
 //
 // FR1/FR4 constraint, restated here: whagent_net/session.AgentDefinition's

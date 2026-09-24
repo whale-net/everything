@@ -1,4 +1,4 @@
-package mcpauth
+package auth
 
 import (
 	"encoding/json"
@@ -89,15 +89,15 @@ func ProtectedResourceMetadataURL(resource string) string {
 	return resource + protectedResourceMetadataPath
 }
 
-// authServerMetadata is mcpauth's own RFC 8414 authorization-server
+// authServerMetadata is this package's own RFC 8414 authorization-server
 // metadata shape — deliberately not oauthex.AuthServerMeta. See the
 // "Resolved: JWKSURI" doc comment below for why.
 //
 // Resolved: JWKSURI (Scaffold-phase decision required by #1641).
 //
 // oauthex.AuthServerMeta.JWKSURI has no `omitempty` json tag, and RFC 8414
-// §2 marks jwks_uri REQUIRED. mcpauth, however, issues its own opaque
-// bearer credentials (see mcpauth.go's package doc) — there is no JWKS
+// §2 marks jwks_uri REQUIRED. This package, however, issues its own opaque
+// bearer credentials (see auth.go's package doc) — there is no JWKS
 // document, no signing key, nothing to publish at a jwks_uri. Serving
 // oauthex.AuthServerMeta directly would therefore always emit
 // `"jwks_uri":""`: present, but neither absent nor a valid URL. That is a
@@ -132,7 +132,7 @@ type authServerMetadata struct {
 // GrantTypesSupported: ["authorization_code"],
 // CodeChallengeMethodsSupported: ["S256"] (S256 only — "plain" must never
 // be advertised or accepted), TokenEndpointAuthMethodsSupported: ["none"]
-// (public PKCE clients; mcpauth issues no client secret).
+// (public PKCE clients; this package issues no client secret).
 func (p *Provider) authServerMetadataDoc() authServerMetadata {
 	return authServerMetadata{
 		Issuer:                            p.cfg.Issuer,
@@ -169,7 +169,7 @@ func (p *Provider) authServerMetadataHandler() http.Handler {
 
 		w.Header().Set("Content-Type", "application/json")
 		if err := json.NewEncoder(w).Encode(p.authServerMetadataDoc()); err != nil {
-			http.Error(w, "mcpauth: failed to encode authorization-server metadata", http.StatusInternalServerError)
+			http.Error(w, "auth: failed to encode authorization-server metadata", http.StatusInternalServerError)
 			return
 		}
 	})

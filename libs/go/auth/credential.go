@@ -1,4 +1,4 @@
-package mcpauth
+package auth
 
 import (
 	"context"
@@ -15,7 +15,7 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
-// Credential is one row of the consuming domain's mcpauth credential table.
+// Credential is one row of the consuming domain's auth credential table.
 // TokenHash is always the hex-encoded SHA-256 hash of the raw bearer token
 // (NFR1) — the raw token itself is never persisted and never appears on
 // this struct.
@@ -31,7 +31,7 @@ type Credential struct {
 // CredentialStore is the mint/verify/revoke/list lifecycle for MCP bearer
 // credentials. Identity is a plain string so this interface stays generic
 // across whatever a consuming domain keys credentials on (a Person UUID
-// rendered as a string, a service-account name, ...) — see mcpauth.go's
+// rendered as a string, a service-account name, ...) — see auth.go's
 // NFR2 boundary. StoreConfig.IdentityCast is how a consuming domain whose
 // identity column is a non-text type (e.g. ASS's person_id UUID) tells this
 // package how to cast the string identity parameter in generated SQL.
@@ -76,7 +76,7 @@ const (
 // are all indistinguishable to a caller (FR6, NFR1) — the error value and
 // its message never vary, and never include the presented token or its
 // hash.
-var ErrInvalidCredential = errors.New("mcpauth: invalid or revoked credential")
+var ErrInvalidCredential = errors.New("auth: invalid or revoked credential")
 
 // identifierPattern is the strict allow-list StoreConfig.TableName,
 // StoreConfig.IdentityColumn, and StoreConfig.IdentityCast must match.
@@ -91,7 +91,7 @@ var identifierPattern = regexp.MustCompile(`^[a-z_][a-z0-9_]*$`)
 // identifier for direct interpolation into generated SQL.
 func validateIdentifier(name, label string) error {
 	if !identifierPattern.MatchString(name) {
-		return fmt.Errorf("mcpauth: StoreConfig.%s %q is not a valid SQL identifier (must match %s)", label, name, identifierPattern.String())
+		return fmt.Errorf("auth: StoreConfig.%s %q is not a valid SQL identifier (must match %s)", label, name, identifierPattern.String())
 	}
 	return nil
 }
@@ -107,7 +107,7 @@ type StoreConfig struct {
 	Pool *pgxpool.Pool
 
 	// TableName is the unqualified name of the consuming domain's
-	// mcpauth-shaped table. Defaults to "mcp_credential". Unqualified so
+	// auth-shaped table. Defaults to "mcp_credential". Unqualified so
 	// the same search_path every other runtime query resolves against is
 	// what the preflight probe exercises too (mirrors
 	// libs/go/htmxauth.DBSessionManager's ui_sessionsTable convention).
@@ -123,7 +123,7 @@ type StoreConfig struct {
 	// `<IdentityColumn> = $N`.
 	//
 	// Resolved question (see README.md "Identity column and casting" and
-	// libs/go/mcpauth/README.md for the full write-up): pgx v5's extended
+	// libs/go/auth/README.md for the full write-up): pgx v5's extended
 	// query protocol *can* encode a Go string parameter against a
 	// PostgreSQL uuid column, and can scan a uuid column into a Go
 	// string, without any explicit cast — verified directly against a
@@ -152,7 +152,7 @@ type StoreConfig struct {
 // migration and retry.
 func NewCredentialStore(ctx context.Context, cfg StoreConfig) (CredentialStore, error) {
 	if cfg.Pool == nil {
-		return nil, errors.New("mcpauth: StoreConfig.Pool is required")
+		return nil, errors.New("auth: StoreConfig.Pool is required")
 	}
 	if cfg.TableName == "" {
 		cfg.TableName = defaultTableName
@@ -177,7 +177,7 @@ func NewCredentialStore(ctx context.Context, cfg StoreConfig) (CredentialStore, 
 
 	if err := s.probeTable(ctx); err != nil {
 		return nil, fmt.Errorf(
-			"mcpauth: credential table preflight failed for table %q — apply your domain's mcp_credential migration (see libs/go/mcpauth/README.md schema contract) before calling NewCredentialStore: %w",
+			"auth: credential table preflight failed for table %q — apply your domain's mcp_credential migration (see libs/go/auth/README.md schema contract) before calling NewCredentialStore: %w",
 			cfg.TableName, err,
 		)
 	}
@@ -253,7 +253,7 @@ func hashToken(rawToken string) string {
 func (s *pgxCredentialStore) Mint(ctx context.Context, identity string) (string, Credential, error) {
 	rawToken, err := generateToken()
 	if err != nil {
-		return "", Credential{}, fmt.Errorf("mcpauth: generate credential token: %w", err)
+		return "", Credential{}, fmt.Errorf("auth: generate credential token: %w", err)
 	}
 
 	query := fmt.Sprintf(`
@@ -264,7 +264,7 @@ func (s *pgxCredentialStore) Mint(ctx context.Context, identity string) (string,
 
 	cred, err := scanCredential(s.cfg.Pool.QueryRow(ctx, query, identity, hashToken(rawToken)))
 	if err != nil {
-		return "", Credential{}, fmt.Errorf("mcpauth: insert credential: %w", err)
+		return "", Credential{}, fmt.Errorf("auth: insert credential: %w", err)
 	}
 	return rawToken, cred, nil
 }
@@ -287,7 +287,7 @@ func (s *pgxCredentialStore) Verify(ctx context.Context, rawToken string) (strin
 		if errors.Is(err, pgx.ErrNoRows) {
 			return "", Credential{}, ErrInvalidCredential
 		}
-		return "", Credential{}, fmt.Errorf("mcpauth: verify credential: %w", err)
+		return "", Credential{}, fmt.Errorf("auth: verify credential: %w", err)
 	}
 	return cred.Identity, cred, nil
 }
@@ -303,7 +303,7 @@ func (s *pgxCredentialStore) Revoke(ctx context.Context, id uuid.UUID, identity 
 	`, s.cfg.TableName, s.identityPlaceholder(2))
 
 	if _, err := s.cfg.Pool.Exec(ctx, query, id, identity); err != nil {
-		return fmt.Errorf("mcpauth: revoke credential: %w", err)
+		return fmt.Errorf("auth: revoke credential: %w", err)
 	}
 	return nil
 }
@@ -320,7 +320,7 @@ func (s *pgxCredentialStore) List(ctx context.Context, identity string) ([]Crede
 
 	rows, err := s.cfg.Pool.Query(ctx, query, identity)
 	if err != nil {
-		return nil, fmt.Errorf("mcpauth: list credentials: %w", err)
+		return nil, fmt.Errorf("auth: list credentials: %w", err)
 	}
 	defer rows.Close()
 
@@ -328,12 +328,12 @@ func (s *pgxCredentialStore) List(ctx context.Context, identity string) ([]Crede
 	for rows.Next() {
 		c, err := scanCredential(rows)
 		if err != nil {
-			return nil, fmt.Errorf("mcpauth: scan credential: %w", err)
+			return nil, fmt.Errorf("auth: scan credential: %w", err)
 		}
 		creds = append(creds, c)
 	}
 	if err := rows.Err(); err != nil {
-		return nil, fmt.Errorf("mcpauth: list credentials: %w", err)
+		return nil, fmt.Errorf("auth: list credentials: %w", err)
 	}
 	return creds, nil
 }

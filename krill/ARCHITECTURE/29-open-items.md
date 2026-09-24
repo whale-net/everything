@@ -45,10 +45,10 @@
   store rather than through this HTTP middleware (see "The markdown
   importer" above).
 - `krill/mcp` (issue #2494) now exists and wraps `krill/slice` directly,
-  per LB7 (see "The MCP spec surface" above) — its mcpauth (human) front
+  per LB7 (see "The MCP spec surface" above) — its auth (human) front
   door now has both its verification-side migration (`006_mcpauth_credential`)
   and a mint-side `/authorize`/`/token` surface (`krill/ui`, see
-  "krill/ui and the mcpauth front door" above); persona resolution
+  "krill/ui and the auth front door" above); persona resolution
   (`auth.go`) still always resolves `PersonaSwarmOperator`, unconditionally,
   until C12 lands. As of issue #2547, `krill/mcp` also mounts the
   design-session write/read surface at `/mcp/design` (see "The

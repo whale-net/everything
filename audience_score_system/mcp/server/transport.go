@@ -7,7 +7,7 @@ import (
 	sdkauth "github.com/modelcontextprotocol/go-sdk/auth"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 
-	"github.com/whale-net/everything/libs/go/mcpauth"
+	"github.com/whale-net/everything/libs/go/auth"
 )
 
 // ResourceMetadataConfig configures NewHTTPHandler's protected-resource
@@ -18,13 +18,13 @@ import (
 type ResourceMetadataConfig struct {
 	// Resource is this `mcp` instance's own externally reachable URL
 	// (ASS_MCP_PUBLIC_URL) -- must equal `web`'s
-	// mcpauth.ProviderConfig.Resource exactly, or MCP client discovery
+	// auth.ProviderConfig.Resource exactly, or MCP client discovery
 	// breaks (RFC 9728).
 	Resource string
 
 	// AuthorizationServer is the issuer identifier of the OAuth2
 	// authorization server protecting Resource -- `web`'s own
-	// mcpauth.ProviderConfig.Issuer (ASS_OAUTH_REDIRECT_BASE_URL).
+	// auth.ProviderConfig.Issuer (ASS_OAUTH_REDIRECT_BASE_URL).
 	AuthorizationServer string
 
 	// ResourceName is the metadata's human-readable `resource_name`.
@@ -34,28 +34,28 @@ type ResourceMetadataConfig struct {
 // NewHTTPHandler builds the mux `mcp`'s main.go binds to ASS_MCP_ADDR: an
 // unauthenticated GET /healthz (for k8s liveness/readiness), RFC 9728
 // protected-resource metadata at the fixed well-known path (issue #1646,
-// NFR4 -- mcpauth.ProtectedResourceMetadataPath, registered at the mux
+// NFR4 -- auth.ProtectedResourceMetadataPath, registered at the mux
 // root so MCP clients' fixed-location probe finds it), and the
 // streamable-HTTP MCP endpoint at "/", guarded by
-// mcpauth.RequireBearerToken(credentials, ...) -- the HTTP half of this
+// auth.RequireBearerToken(credentials, ...) -- the HTTP half of this
 // task's caller-auth design decision (auth.go's PersonMiddleware is the
 // MCP-protocol half; see ../../ARCHITECTURE.md "MCP server: caller
-// authentication"). The 401 mcpauth.RequireBearerToken produces for a
+// authentication"). The 401 auth.RequireBearerToken produces for a
 // missing/invalid bearer token carries a `WWW-Authenticate: Bearer
 // resource_metadata="..."` challenge pointing at that same metadata
-// endpoint, per NFR4's bootstrap sequence. mcpauth.RequireBearerToken
+// endpoint, per NFR4's bootstrap sequence. auth.RequireBearerToken
 // always forces AllowMissingExpiration: true internally (mcp_credential
 // tokens are revocable, not time-boxed -- there is no per-token expiration
 // claim to enforce). srv is reused as-is across every request/session
 // (LB4: statelessness lives in Postgres, never in per-request *mcp.Server
 // construction).
-func NewHTTPHandler(srv *mcp.Server, credentials mcpauth.CredentialStore, resourceMeta ResourceMetadataConfig) http.Handler {
+func NewHTTPHandler(srv *mcp.Server, credentials auth.CredentialStore, resourceMeta ResourceMetadataConfig) http.Handler {
 	mcpHandler := mcp.NewStreamableHTTPHandler(func(*http.Request) *mcp.Server {
 		return srv
 	}, nil)
 
-	requireBearer := mcpauth.RequireBearerToken(credentials, &sdkauth.RequireBearerTokenOptions{
-		ResourceMetadataURL: mcpauth.ProtectedResourceMetadataURL(resourceMeta.Resource),
+	requireBearer := auth.RequireBearerToken(credentials, &sdkauth.RequireBearerTokenOptions{
+		ResourceMetadataURL: auth.ProtectedResourceMetadataURL(resourceMeta.Resource),
 	})
 
 	return newMux(requireBearer(mcpHandler), resourceMeta)
@@ -70,13 +70,13 @@ func NewHTTPHandler(srv *mcp.Server, credentials mcpauth.CredentialStore, resour
 // whagent-net path is configured; NewHTTPHandler itself is left exactly
 // as it was (existing tests/callers keep building and passing unchanged)
 // for any caller that only ever wants the single, pre-existing path.
-func NewDualAuthHTTPHandler(srv *mcp.Server, credentials mcpauth.CredentialStore, whagentCfg WhagentAuthConfig, resourceMeta ResourceMetadataConfig) http.Handler {
+func NewDualAuthHTTPHandler(srv *mcp.Server, credentials auth.CredentialStore, whagentCfg WhagentAuthConfig, resourceMeta ResourceMetadataConfig) http.Handler {
 	mcpHandler := mcp.NewStreamableHTTPHandler(func(*http.Request) *mcp.Server {
 		return srv
 	}, nil)
 
 	guarded := DualAuthHTTPHandler(mcpHandler, credentials, whagentCfg, &sdkauth.RequireBearerTokenOptions{
-		ResourceMetadataURL: mcpauth.ProtectedResourceMetadataURL(resourceMeta.Resource),
+		ResourceMetadataURL: auth.ProtectedResourceMetadataURL(resourceMeta.Resource),
 	})
 
 	return newMux(guarded, resourceMeta)
@@ -90,7 +90,7 @@ func NewDualAuthHTTPHandler(srv *mcp.Server, credentials mcpauth.CredentialStore
 func newMux(guarded http.Handler, resourceMeta ResourceMetadataConfig) http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /healthz", handleHealthz)
-	mux.Handle(mcpauth.ProtectedResourceMetadataPath, mcpauth.NewProtectedResourceMetadataHandler(mcpauth.ProtectedResourceMetadataConfig{
+	mux.Handle(auth.ProtectedResourceMetadataPath, auth.NewProtectedResourceMetadataHandler(auth.ProtectedResourceMetadataConfig{
 		Resource:            resourceMeta.Resource,
 		AuthorizationServer: resourceMeta.AuthorizationServer,
 		ResourceName:        resourceMeta.ResourceName,

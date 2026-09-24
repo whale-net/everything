@@ -45,8 +45,8 @@ import (
 	"github.com/whale-net/everything/audience_score_system/mcp/tools"
 	"github.com/whale-net/everything/audience_score_system/migrate/schema"
 	"github.com/whale-net/everything/audience_score_system/store"
+	"github.com/whale-net/everything/libs/go/auth"
 	"github.com/whale-net/everything/libs/go/dbtest"
-	"github.com/whale-net/everything/libs/go/mcpauth"
 	"github.com/whale-net/everything/libs/go/migrate"
 )
 
@@ -69,12 +69,12 @@ func newAccessTestDB(t *testing.T) *dbtest.Postgres {
 	return pg
 }
 
-// newTestCredentialStore builds the mcpauth.CredentialStore against pool's
+// newTestCredentialStore builds the auth.CredentialStore against pool's
 // mcp_credential table (migration 006) -- the same construction main.go
 // does.
-func newTestCredentialStore(t *testing.T, pool *pgxpool.Pool) mcpauth.CredentialStore {
+func newTestCredentialStore(t *testing.T, pool *pgxpool.Pool) auth.CredentialStore {
 	t.Helper()
-	creds, err := mcpauth.NewCredentialStore(context.Background(), mcpauth.StoreConfig{
+	creds, err := auth.NewCredentialStore(context.Background(), auth.StoreConfig{
 		Pool:           pool,
 		TableName:      "mcp_credential",
 		IdentityColumn: "person_id",
@@ -90,7 +90,7 @@ func newTestCredentialStore(t *testing.T, pool *pgxpool.Pool) mcpauth.Credential
 type accessFixture struct {
 	st         *store.Store
 	pool       *pgxpool.Pool
-	creds      mcpauth.CredentialStore
+	creds      auth.CredentialStore
 	ch         store.Channel
 	founder    store.Person
 	coCreator  store.Person
@@ -351,9 +351,9 @@ func TestPromoteToCoCreator_PromotingFounder_Rejected_Unchanged(t *testing.T) {
 
 func TestRemoveChannelPerson_AuthorizedRemovals_Succeed(t *testing.T) {
 	cases := []struct {
-		name         string
-		actorOf      func(f *accessFixture) store.Person
-		targetOf     func(f *accessFixture) store.Person
+		name     string
+		actorOf  func(f *accessFixture) store.Person
+		targetOf func(f *accessFixture) store.Person
 	}{
 		{"founder removes co_creator", func(f *accessFixture) store.Person { return f.founder }, func(f *accessFixture) store.Person { return f.coCreator }},
 		{"founder removes analyst", func(f *accessFixture) store.Person { return f.founder }, func(f *accessFixture) store.Person { return f.analyst }},

@@ -10,7 +10,7 @@
 // package (package main) -- never from mcp/server or mcp/tools, per
 // issue #2120's TestBUILD_NoStoreOrTemporalDependency in each of those
 // packages. Today that is: the mcp_credential table backing the FR9/
-// issue #2249 OAuth2 identity-resolution path's mcpauth.CredentialStore
+// issue #2249 OAuth2 identity-resolution path's auth.CredentialStore
 // -- see initializeAuthDeps below -- the agent_definition/session_agent
 // tables backing whagent_net/mcpscope.Resolver's ScopeResolver
 // implementation (issue #2427, FR7) -- and the grpcauth_delegated_grant/
@@ -45,11 +45,11 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 	"go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp"
 
+	"github.com/whale-net/everything/libs/go/auth"
 	"github.com/whale-net/everything/libs/go/db"
 	"github.com/whale-net/everything/libs/go/grpcauth"
 	"github.com/whale-net/everything/libs/go/grpcclient"
 	"github.com/whale-net/everything/libs/go/logging"
-	"github.com/whale-net/everything/libs/go/mcpauth"
 	"github.com/whale-net/everything/whagent_net/delegatedgrant"
 	"github.com/whale-net/everything/whagent_net/mcpscope"
 	pb "github.com/whale-net/everything/whagent_net/protos"
@@ -74,7 +74,7 @@ type config struct {
 	// MCPPublicURL is this binary's own externally reachable base URL
 	// (WHAGENT_MCP_PUBLIC_URL) -- FR9/issue #2249's
 	// server.ResourceMetadataConfig.Resource, must be byte-identical to
-	// `ui`'s own mcpauth.ProviderConfig.Resource (same env var name on
+	// `ui`'s own auth.ProviderConfig.Resource (same env var name on
 	// `ui`, ../ENV.md's "`ui`" section). Left empty skips serving RFC
 	// 9728 protected-resource metadata entirely (server.NewHTTPHandler's
 	// doc comment) -- the manual-token recipe never depends on it.
@@ -86,10 +86,10 @@ type config struct {
 	// metadata (server.ResourceMetadataConfig.AuthorizationServer).
 	UIPublicURL string
 
-	// DatabaseURL backs the mcpauth.CredentialStore this binary probes
+	// DatabaseURL backs the auth.CredentialStore this binary probes
 	// at startup for the FR9 OAuth2 path (PG_DATABASE_URL, the same
 	// mcp_credential table #2245's migration created and `ui`'s
-	// mcpauth.Provider already mints into). Left empty disables the
+	// auth.Provider already mints into). Left empty disables the
 	// OAuth2 credential path entirely (initializeAuthDeps) -- the
 	// manual-token recipe never depends on it.
 	DatabaseURL string
@@ -142,8 +142,8 @@ func getEnv(key, def string) string {
 
 // authDeps holds every optional Postgres-backed composition-root
 // dependency `mcp` gates on PG_DATABASE_URL: a Postgres-backed
-// mcpauth.CredentialStore against the same mcp_credential table `ui`'s
-// mcpauth.Provider mints into (whagent_net/migrate/schema/migrations/
+// auth.CredentialStore against the same mcp_credential table `ui`'s
+// auth.Provider mints into (whagent_net/migrate/schema/migrations/
 // 004_mcpauth_credential, issue #2245, FR9's OAuth2 identity-resolution
 // path), whagent_net/mcpscope.Resolver's ScopeResolver implementation
 // (issue #2427, FR7), and //whagent_net/delegatedgrant's
@@ -171,10 +171,10 @@ func getEnv(key, def string) string {
 // scopeResolver/credentials may be nil exactly when cfg.DatabaseURL is
 // unset or the pool is unreachable; grant is then also its zero value.
 type authDeps struct {
-	pool           *pgxpool.Pool
-	credentials    mcpauth.CredentialStore
+	pool          *pgxpool.Pool
+	credentials   auth.CredentialStore
 	scopeResolver *mcpscope.Resolver
-	grant          delegatedgrant.Components
+	grant         delegatedgrant.Components
 }
 
 // Close releases pool, if initializeAuthDeps opened one.
@@ -219,19 +219,19 @@ func initializeAuthDeps(ctx context.Context, cfg config, logger *slog.Logger) (a
 	}
 
 	// NewCredentialStore preflights the mcp_credential table (the same
-	// migration `ui`'s mcpauth.Provider requires, issue #2245) before
+	// migration `ui`'s auth.Provider requires, issue #2245) before
 	// returning.
-	credentials, err := mcpauth.NewCredentialStore(ctx, mcpauth.StoreConfig{Pool: pool})
+	credentials, err := auth.NewCredentialStore(ctx, auth.StoreConfig{Pool: pool})
 	if err != nil {
-		logger.Warn("failed to initialize mcpauth credential store; FR9 OAuth2 credential path unavailable (manual-token recipe still works)", "error", err)
+		logger.Warn("failed to initialize auth credential store; FR9 OAuth2 credential path unavailable (manual-token recipe still works)", "error", err)
 		pool.Close()
 		return authDeps{grant: grant}, nil
 	}
 
-	logger.Info("mcpauth credential store initialized for the FR9 OAuth2 identity-resolution path")
+	logger.Info("auth credential store initialized for the FR9 OAuth2 identity-resolution path")
 
 	// scopeResolver (issue #2427, FR7) is constructed against the same
-	// pool credentials just was. Unlike mcpauth.NewCredentialStore,
+	// pool credentials just was. Unlike auth.NewCredentialStore,
 	// session.New/AgentDefinitions perform no preflight query of their
 	// own, so there is nothing further to degrade on here: the pool
 	// already proved reachable immediately above.
@@ -272,7 +272,7 @@ func run() error {
 	// gRPC address (ARCHITECTURE.md "Service boundary vs. package
 	// boundary"). FR9 (issue #2249) is the one exception on the Postgres
 	// side: when cfg.DatabaseURL is set, initializeAuthDeps below probes
-	// the same mcp_credential table `ui`'s mcpauth.Provider mints into,
+	// the same mcp_credential table `ui`'s auth.Provider mints into,
 	// and wires the OAuth2 identity-resolution path into
 	// server.NewHTTPHandler (the HTTP-layer verifier, auth.go's
 	// NewVerifier) -- resolved before anything else is constructed, so a
@@ -315,7 +315,7 @@ func run() error {
 	// "no identity resolved", since a nil scopeResolver/grant is only
 	// ever consulted when an Identity is actually on ctx, and mcp/server's
 	// NewVerifier never produces one without a reachable
-	// mcpauth.CredentialStore in the first place.
+	// auth.CredentialStore in the first place.
 	tools.RegisterStartSession(srv, client, auth.scopeResolver, auth.grant.Source)
 	tools.RegisterSendTurn(srv, client, auth.scopeResolver, auth.grant.Source)
 	tools.RegisterStopSession(srv, client, auth.scopeResolver, auth.grant.Source)

@@ -41,13 +41,13 @@ import (
 
 	"github.com/whale-net/everything/krill/mcp/server"
 	"github.com/whale-net/everything/krill/mcp/tools"
-	"github.com/whale-net/everything/libs/go/mcpauth"
+	"github.com/whale-net/everything/libs/go/auth"
 	"github.com/whale-net/everything/libs/go/whagent"
 )
 
-// personaTestCredentialStore is a hand-rolled mcpauth.CredentialStore
+// personaTestCredentialStore is a hand-rolled auth.CredentialStore
 // standing in for a real one, resolving exactly one fixed token to one
-// fixed identity -- enough to drive the mcpauth door, which auth.go's
+// fixed identity -- enough to drive the auth door, which auth.go's
 // PersonaMiddleware always resolves to PersonaSwarmOperator. Mint/Revoke/
 // List are not used by this file's tests.
 type personaTestCredentialStore struct {
@@ -55,32 +55,32 @@ type personaTestCredentialStore struct {
 	identity   string
 }
 
-func (f personaTestCredentialStore) Mint(context.Context, string) (string, mcpauth.Credential, error) {
-	return "", mcpauth.Credential{}, errors.New("personaTestCredentialStore.Mint is not used by these tests")
+func (f personaTestCredentialStore) Mint(context.Context, string) (string, auth.Credential, error) {
+	return "", auth.Credential{}, errors.New("personaTestCredentialStore.Mint is not used by these tests")
 }
 
-func (f personaTestCredentialStore) Verify(_ context.Context, rawToken string) (string, mcpauth.Credential, error) {
+func (f personaTestCredentialStore) Verify(_ context.Context, rawToken string) (string, auth.Credential, error) {
 	if rawToken == f.validToken {
-		return f.identity, mcpauth.Credential{Identity: f.identity}, nil
+		return f.identity, auth.Credential{Identity: f.identity}, nil
 	}
-	return "", mcpauth.Credential{}, mcpauth.ErrInvalidCredential
+	return "", auth.Credential{}, auth.ErrInvalidCredential
 }
 
 func (f personaTestCredentialStore) Revoke(context.Context, uuid.UUID, string) error {
 	return errors.New("personaTestCredentialStore.Revoke is not used by these tests")
 }
 
-func (f personaTestCredentialStore) List(context.Context, string) ([]mcpauth.Credential, error) {
+func (f personaTestCredentialStore) List(context.Context, string) ([]auth.Credential, error) {
 	return nil, errors.New("personaTestCredentialStore.List is not used by these tests")
 }
 
-var _ mcpauth.CredentialStore = personaTestCredentialStore{}
+var _ auth.CredentialStore = personaTestCredentialStore{}
 
 const personaTestWhagentAudience = "https://krill-mcp.example.test"
 
 // personaTestBearerRoundTripper attaches a fixed bearer token to every
 // outgoing request -- the minimal client-side half of the
-// mcpauth/whagent-net dual-auth handshake.
+// auth/whagent-net dual-auth handshake.
 type personaTestBearerRoundTripper struct{ token string }
 
 func (rt personaTestBearerRoundTripper) RoundTrip(req *http.Request) (*http.Response, error) {
@@ -121,7 +121,7 @@ func personaTestTextOf(res *mcp.CallToolResult) string {
 // #2872's Testing section "MCP: a non-swarm_operator persona is refused
 // on both tools": a genuinely whagent-authenticated caller (PersonaAgent)
 // is rejected calling either release_task or escalate_task on the ops
-// mount with a "forbidden" error, and a genuinely mcpauth-authenticated
+// mount with a "forbidden" error, and a genuinely auth-authenticated
 // caller (PersonaSwarmOperator) reaches past the persona gate (its own
 // distinct, non-persona rejection -- "required" from
 // requireKrillSession's empty-krill_session_id check -- proves the gate
@@ -192,7 +192,7 @@ func TestReleaseTaskAndEscalateTask_NonOperatorPersona_Refused(t *testing.T) {
 			assert.Contains(t, personaTestTextOf(res), "forbidden")
 		})
 
-		t.Run(toolName+" lets PersonaSwarmOperator (mcpauth door) past the persona gate", func(t *testing.T) {
+		t.Run(toolName+" lets PersonaSwarmOperator (auth door) past the persona gate", func(t *testing.T) {
 			cs, err := personaTestConnectMCP(t, opsURL, credentials.validToken)
 			require.NoError(t, err)
 

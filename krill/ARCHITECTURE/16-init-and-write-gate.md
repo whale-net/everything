@@ -8,7 +8,7 @@ value) and gets back the krill-native session id `InitSession` minted.
 verification is mounted on the `api` binary (see "No auth wired up on
 `api`" below); `init` trusts the caller's asserted identity fields rather
 than re-deriving them from a verified credential. This is a deliberate M1
-boundary, not an oversight: NFR1's two-front-door pattern (`mcpauth` +
+boundary, not an oversight: NFR1's two-front-door pattern (`auth` +
 `libs/go/whagent`) is scoped entirely to the separate `krill/mcp` binary
 (issue #2494) — `api`'s HTTP surface has no equivalent front door in this
 milestone. `krill/mcp` itself did not touch `krill_session` at all as of

@@ -21,9 +21,9 @@ import (
 	"github.com/whale-net/everything/audience_score_system/mcp/tools"
 	"github.com/whale-net/everything/audience_score_system/store"
 	"github.com/whale-net/everything/audience_score_system/worker/sync"
+	"github.com/whale-net/everything/libs/go/auth"
 	"github.com/whale-net/everything/libs/go/db"
 	"github.com/whale-net/everything/libs/go/logging"
-	"github.com/whale-net/everything/libs/go/mcpauth"
 	temporallib "github.com/whale-net/everything/libs/go/temporal"
 	"github.com/whale-net/everything/libs/go/whagent"
 )
@@ -47,8 +47,8 @@ type config struct {
 
 	// MCPPublicURL is ASS_MCP_PUBLIC_URL (issue #1646, FR12/NFR4) -- this
 	// instance's own externally reachable URL, passed as
-	// mcpauth.ProtectedResourceMetadataConfig.Resource. Must equal `web`'s
-	// mcpauth.ProviderConfig.Resource exactly.
+	// auth.ProtectedResourceMetadataConfig.Resource. Must equal `web`'s
+	// auth.ProviderConfig.Resource exactly.
 	MCPPublicURL string
 
 	// OAuthIssuer is ASS_OAUTH_REDIRECT_BASE_URL (issue #1646, FR12/NFR4)
@@ -146,18 +146,18 @@ func run() error {
 
 	st := store.New(pool)
 
-	// mcpauth.NewCredentialStore preflights the mcp_credential table at
+	// auth.NewCredentialStore preflights the mcp_credential table at
 	// boot -- a missing migration 006 fails `mcp` at startup instead of at
 	// first bearer-token verification (see ../ENV.md's mcp_credential
 	// entry).
-	creds, err := mcpauth.NewCredentialStore(ctx, mcpauth.StoreConfig{
+	creds, err := auth.NewCredentialStore(ctx, auth.StoreConfig{
 		Pool:           pool,
 		TableName:      "mcp_credential",
 		IdentityColumn: "person_id",
 		IdentityCast:   "uuid",
 	})
 	if err != nil {
-		return fmt.Errorf("mcpauth credential store: apply migration 006_mcpauth_credential before starting mcp: %w", err)
+		return fmt.Errorf("auth credential store: apply migration 006_mcpauth_credential before starting mcp: %w", err)
 	}
 
 	// `mcp` constructs its own Temporal client and sync.ScheduleManager,

@@ -50,8 +50,8 @@ import (
 	"github.com/whale-net/everything/audience_score_system/mcp/tools"
 	"github.com/whale-net/everything/audience_score_system/migrate/schema"
 	"github.com/whale-net/everything/audience_score_system/store"
+	"github.com/whale-net/everything/libs/go/auth"
 	"github.com/whale-net/everything/libs/go/dbtest"
-	"github.com/whale-net/everything/libs/go/mcpauth"
 	"github.com/whale-net/everything/libs/go/migrate"
 )
 
@@ -107,14 +107,14 @@ func stDecodeMap(t *testing.T, res *mcp.CallToolResult) map[string]any {
 	return out
 }
 
-// newTestCredentialStore builds the mcpauth.CredentialStore against pool's
+// newTestCredentialStore builds the auth.CredentialStore against pool's
 // mcp_credential table (migration 006) -- the same construction main.go
 // does, mirrored here so tests mint/verify through the identical backing
 // production uses (FR13/NFR3 parity), per verdict_integration_test.go's
 // identical helper.
-func newTestCredentialStore(t *testing.T, pool *pgxpool.Pool) mcpauth.CredentialStore {
+func newTestCredentialStore(t *testing.T, pool *pgxpool.Pool) auth.CredentialStore {
 	t.Helper()
-	creds, err := mcpauth.NewCredentialStore(context.Background(), mcpauth.StoreConfig{
+	creds, err := auth.NewCredentialStore(context.Background(), auth.StoreConfig{
 		Pool:           pool,
 		TableName:      "mcp_credential",
 		IdentityColumn: "person_id",
@@ -130,7 +130,7 @@ func newTestCredentialStore(t *testing.T, pool *pgxpool.Pool) mcpauth.Credential
 // RegisterStrategy wired.
 type strategyFixture struct {
 	st       *store.Store
-	creds    mcpauth.CredentialStore
+	creds    auth.CredentialStore
 	ch       store.Channel
 	creator  store.Person
 	analyst  store.Person

@@ -211,8 +211,8 @@ func (f *fakeGrantIdP) mintAccessToken(sub string) (string, error) {
 // bypass), a real *grpcauth.DelegatedGrantSource pointed at fake via its
 // Endpoints override (skips OIDC discovery entirely), and store as its
 // Store. Deliberately no mcpProvider: routes are served via consentMux
-// below, not app.setupRoutes, so nothing here needs a *mcpauth.Provider at
-// all (authorizeConsentGate/mcpauth_test.go's own /authorize concern is
+// below, not app.setupRoutes, so nothing here needs a *auth.Provider at
+// all (authorizeConsentGate/auth_test.go's own /authorize concern is
 // unrelated to this file).
 func newConsentTestApp(t *testing.T, fake *fakeGrantIdP, store grpcauth.Store) *App {
 	t.Helper()
@@ -269,7 +269,7 @@ func consentCookie(t *testing.T, w *httptest.ResponseRecorder) *http.Cookie {
 // consentMux registers exactly the three /mcp/consent routes setupRoutes
 // (main.go) does, wrapped in app.auth.RequireAuthFunc the same way -- built
 // by hand here instead of via app.setupRoutes so this file needs no
-// *mcpauth.Provider (app.mcpProvider.Mount's own construction is unrelated
+// *auth.Provider (app.mcpProvider.Mount's own construction is unrelated
 // to anything this file -- or handlers_consent_integration_test.go, which
 // reuses this same helper -- tests).
 func consentMux(app *App) *http.ServeMux {
@@ -386,7 +386,7 @@ func TestConsentRoundTrip_MatchingGrantSubject_PersistsActiveGrant(t *testing.T)
 
 	// Step 1: POST /mcp/consent confirms consent for audience_score_system.
 	confirmReq := httptest.NewRequest(http.MethodPost, "/mcp/consent", strings.NewReader(url.Values{
-		"scope":    {"audience_score_system"},
+		"scope":     {"audience_score_system"},
 		"return_to": {"/sessions/42"},
 	}.Encode()))
 	confirmReq.Header.Set("Content-Type", "application/x-www-form-urlencoded")
@@ -433,7 +433,7 @@ func TestConsentRoundTrip_MatchingGrantSubject_PersistsActiveGrant(t *testing.T)
 // https://github.com/whale-net/everything/issues/2428#issuecomment-5630520687):
 // handleMCPConsentConfirm used to pass mcpidentity.Encode(app.oidcIssuer,
 // user.Sub) -- an iss|sub composite, meant for the unrelated
-// mcpauth.CredentialStore identity format (whagent_net/mcpidentity's own
+// auth.CredentialStore identity format (whagent_net/mcpidentity's own
 // package doc) -- as BeginAuthorization's `subject` argument. No real
 // Keycloak realm ever mints a `sub` claim equal to that composite for an
 // ordinary user login, so CompleteAuthorization's identity check
@@ -450,7 +450,7 @@ func TestConsentRoundTrip_RealisticCrossClientSubject_MustSucceed(t *testing.T) 
 	mux := consentMux(app)
 
 	confirmReq := httptest.NewRequest(http.MethodPost, "/mcp/consent", strings.NewReader(url.Values{
-		"scope":    {"audience_score_system"},
+		"scope":     {"audience_score_system"},
 		"return_to": {"/sessions/42"},
 	}.Encode()))
 	confirmReq.Header.Set("Content-Type", "application/x-www-form-urlencoded")
@@ -607,7 +607,7 @@ func TestConsentCallback_SubjectDoesNotMatchSignedInSession_Rejected(t *testing.
 			CodeVerifier: "irrelevant-verifier",
 			CreatedAt:    time.Now(),
 		},
-		Scope:   "audience_score_system",
+		Scope:    "audience_score_system",
 		ReturnTo: "/sessions/42",
 	}))
 	cookie := consentCookie(t, saveW)

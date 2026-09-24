@@ -16,7 +16,7 @@ go_library(
     deps = [
         "//libs/go/grpcauth",
         "//libs/go/logging",
-        "//libs/go/mcpauth",
+        "//libs/go/auth",
         "//whagent_net/mcpidentity",
         "@com_github_modelcontextprotocol_go_sdk//auth",
         "@com_github_modelcontextprotocol_go_sdk//mcp",
@@ -36,7 +36,7 @@ go_test(
     deps = [
         "//libs/go/grpcauth",
         "//libs/go/grpcclient",
-        "//libs/go/mcpauth",
+        "//libs/go/auth",
         "//whagent_net/mcp/tools",
         "//whagent_net/mcpidentity",
         "//whagent_net/protos:whagentpb",

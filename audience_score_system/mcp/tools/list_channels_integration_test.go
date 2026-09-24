@@ -42,8 +42,8 @@ import (
 	"github.com/whale-net/everything/audience_score_system/mcp/tools"
 	"github.com/whale-net/everything/audience_score_system/migrate/schema"
 	"github.com/whale-net/everything/audience_score_system/store"
+	"github.com/whale-net/everything/libs/go/auth"
 	"github.com/whale-net/everything/libs/go/dbtest"
-	"github.com/whale-net/everything/libs/go/mcpauth"
 	"github.com/whale-net/everything/libs/go/migrate"
 	"github.com/whale-net/everything/libs/go/whagent"
 )
@@ -100,12 +100,12 @@ func tracedListChannelsStore(t *testing.T, pg *dbtest.Postgres, counter *lcQuery
 	return store.New(pool)
 }
 
-// newTestCredentialStore builds the mcpauth.CredentialStore against pool's
+// newTestCredentialStore builds the auth.CredentialStore against pool's
 // mcp_credential table (migration 006) -- mirrors
 // schedule_read_integration_test.go's helper of the same name.
-func newTestCredentialStore(t *testing.T, pool *pgxpool.Pool) mcpauth.CredentialStore {
+func newTestCredentialStore(t *testing.T, pool *pgxpool.Pool) auth.CredentialStore {
 	t.Helper()
-	creds, err := mcpauth.NewCredentialStore(context.Background(), mcpauth.StoreConfig{
+	creds, err := auth.NewCredentialStore(context.Background(), auth.StoreConfig{
 		Pool:           pool,
 		TableName:      "mcp_credential",
 		IdentityColumn: "person_id",

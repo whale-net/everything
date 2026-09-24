@@ -130,8 +130,8 @@ import (
 	"github.com/whale-net/everything/audience_score_system/web/auth"
 	"github.com/whale-net/everything/audience_score_system/web/components"
 	"github.com/whale-net/everything/audience_score_system/web/research"
+	mcpauth "github.com/whale-net/everything/libs/go/auth"
 	"github.com/whale-net/everything/libs/go/dbtest"
-	"github.com/whale-net/everything/libs/go/mcpauth"
 	"github.com/whale-net/everything/libs/go/migrate"
 )
 
@@ -701,7 +701,7 @@ func TestHandleChannelIndex_FiftyOneNotes_TruncatedNoteAppearsInUnattachedSectio
 	// truncation: the section still renders behind a closed <details> whose
 	// label carries the truncated 50-row count, not 51.
 	sectionStart := unattachedNotesDetailsStart(t, body)
-	sectionTag := body[sectionStart:strings.Index(body[sectionStart:], ">")+sectionStart]
+	sectionTag := body[sectionStart : strings.Index(body[sectionStart:], ">")+sectionStart]
 	assert.NotContains(t, sectionTag, "open", "the disclosure must still be collapsed by default with 51 notes present")
 	assert.Contains(t, body, "Unattached notes (50)", "the toggle label must carry the truncated page's count (NFR2), not the true underlying count")
 }

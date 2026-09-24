@@ -12,7 +12,7 @@
 // covers RegisterRead/RegisterWrite's wiring logic against fakes. What
 // this file proves instead is exactly what a fake cannot:
 //   - the full caller-auth stack end to end -- a real bearer credential
-//     minted via mcpauth.CredentialStore, verified by mcpauth.RequireBearerToken
+//     minted via auth.CredentialStore, verified by auth.RequireBearerToken
 //     over a real HTTP connection, resolved to a Person by PersonMiddleware
 //     -- using a real in-process MCP client (mcp.NewClient +
 //     StreamableClientTransport) against an httptest.Server wrapping
@@ -51,19 +51,19 @@ import (
 	"github.com/whale-net/everything/audience_score_system/mcp/server"
 	"github.com/whale-net/everything/audience_score_system/migrate/schema"
 	"github.com/whale-net/everything/audience_score_system/store"
+	"github.com/whale-net/everything/libs/go/auth"
 	"github.com/whale-net/everything/libs/go/db"
 	"github.com/whale-net/everything/libs/go/dbtest"
-	"github.com/whale-net/everything/libs/go/mcpauth"
 	"github.com/whale-net/everything/libs/go/migrate"
 )
 
-// newTestCredentialStore builds the mcpauth.CredentialStore against pool's
+// newTestCredentialStore builds the auth.CredentialStore against pool's
 // mcp_credential table (migration 006) -- the same construction main.go
 // does, mirrored here so tests mint/verify through the identical backing
 // this task migrated onto (FR13/NFR3 parity).
-func newTestCredentialStore(t *testing.T, pool *pgxpool.Pool) mcpauth.CredentialStore {
+func newTestCredentialStore(t *testing.T, pool *pgxpool.Pool) auth.CredentialStore {
 	t.Helper()
-	creds, err := mcpauth.NewCredentialStore(context.Background(), mcpauth.StoreConfig{
+	creds, err := auth.NewCredentialStore(context.Background(), auth.StoreConfig{
 		Pool:           pool,
 		TableName:      "mcp_credential",
 		IdentityColumn: "person_id",
@@ -260,7 +260,7 @@ func (ts *testServer) connect(t *testing.T, token string) (*mcp.ClientSession, e
 }
 
 // mintToken mints a real bearer credential for personID via
-// mcpauth.CredentialStore (migration 006) -- the same mechanism `web`'s
+// auth.CredentialStore (migration 006) -- the same mechanism `web`'s
 // token-mint endpoint uses in production.
 func mintToken(t *testing.T, pool *pgxpool.Pool, personID uuid.UUID) string {
 	t.Helper()
@@ -332,12 +332,12 @@ func TestMCP_EndToEnd_AuthAndChannelScoping(t *testing.T) {
 	})
 
 	// This is the migration's key parity/regression case (FR13/NFR3): a
-	// credential minted then revoked via mcpauth.CredentialStore must be
+	// credential minted then revoked via auth.CredentialStore must be
 	// rejected at the real HTTP/MCP layer exactly like an unauthenticated
-	// call, not just at the mcpauth unit level (libs/go/mcpauth's own
+	// call, not just at the auth unit level (libs/go/auth's own
 	// integration suite proves Verify-after-Revoke in isolation; this
 	// proves the whole auth stack this task rewired -- transport.go's
-	// mcpauth.RequireBearerToken plus PersonMiddleware -- still rejects it
+	// auth.RequireBearerToken plus PersonMiddleware -- still rejects it
 	// end to end).
 	t.Run("revoked credential is rejected at the HTTP layer, handler not invoked", func(t *testing.T) {
 		creds := newTestCredentialStore(t, pg.Pool)

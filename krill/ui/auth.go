@@ -7,19 +7,19 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/whale-net/everything/krill/identity"
-	"github.com/whale-net/everything/libs/go/mcpauth"
+	"github.com/whale-net/everything/libs/go/auth"
 )
 
 // mcpCallerResolver adapts `ui`'s existing Keycloak sign-in session
-// (app.auth, //libs/go/htmxauth) to mcpauth.CallerResolver so mcpauth's
+// (app.auth, //libs/go/htmxauth) to auth.CallerResolver so auth's
 // `/authorize` endpoint (mounted on `ui`, see setupMCPAuth below) can
 // resolve the already-signed-in operator without ever rendering a login
 // form or collecting credentials itself -- mirrors
-// whagent_net/ui/mcpauth.go's mcpCallerResolver exactly in shape.
+// whagent_net/ui/auth.go's mcpCallerResolver exactly in shape.
 //
 // The resolved identity is the operator's (iss, sub) pair, packed by
 // //krill/identity into the single opaque string
-// mcpauth.CredentialStore/AuthCodeStore store -- krill has no person/user
+// auth.CredentialStore/AuthCodeStore store -- krill has no person/user
 // table to key it to instead (NFR1 authorizes by persona, never by
 // individual identity; see krill/mcp/server/auth.go's doc comment).
 //
@@ -33,7 +33,7 @@ import (
 // is no real (iss, sub) pair to reflect without a configured issuer. The
 // browser OAuth2 flow this resolver backs is only exercised against a
 // real Keycloak realm (AuthModeOIDC).
-func (app *App) mcpCallerResolver() mcpauth.CallerResolverFunc {
+func (app *App) mcpCallerResolver() auth.CallerResolverFunc {
 	return func(r *http.Request) (string, bool) {
 		user, err := app.auth.CurrentUser(r)
 		if err != nil {
@@ -51,33 +51,33 @@ func (app *App) mcpCallerResolver() mcpauth.CallerResolverFunc {
 	}
 }
 
-// setupMCPAuth constructs mcpauth's OAuth2 authorization-server front end
+// setupMCPAuth constructs auth's OAuth2 authorization-server front end
 // -- RFC 9728/8414 discovery metadata, RFC 7591 dynamic client
 // registration, and the authorization-code + PKCE `/authorize`/`/token`
 // endpoints -- against the mcp_credential/mcp_oauth_client/mcp_auth_code
 // tables migration 006_mcpauth_credential creates.
 //
 // Client registrations and pending authorization codes use the
-// Postgres-backed ClientRegistry/AuthCodeStore, not mcpauth's in-memory
+// Postgres-backed ClientRegistry/AuthCodeStore, not auth's in-memory
 // defaults -- `/authorize`, `/token`, and `/register` can land on
 // different `ui` replicas.
-func setupMCPAuth(ctx context.Context, pool *pgxpool.Pool, cfg config, resolver mcpauth.CallerResolverFunc) (*mcpauth.Provider, error) {
-	credentials, err := mcpauth.NewCredentialStore(ctx, mcpauth.StoreConfig{Pool: pool})
+func setupMCPAuth(ctx context.Context, pool *pgxpool.Pool, cfg config, resolver auth.CallerResolverFunc) (*auth.Provider, error) {
+	credentials, err := auth.NewCredentialStore(ctx, auth.StoreConfig{Pool: pool})
 	if err != nil {
 		return nil, err
 	}
 
-	clients, err := mcpauth.NewPostgresClientRegistry(ctx, mcpauth.ClientRegistryConfig{Pool: pool})
+	clients, err := auth.NewPostgresClientRegistry(ctx, auth.ClientRegistryConfig{Pool: pool})
 	if err != nil {
 		return nil, err
 	}
 
-	authCodes, err := mcpauth.NewPostgresAuthCodeStore(ctx, mcpauth.AuthCodeStoreConfig{Pool: pool})
+	authCodes, err := auth.NewPostgresAuthCodeStore(ctx, auth.AuthCodeStoreConfig{Pool: pool})
 	if err != nil {
 		return nil, err
 	}
 
-	return mcpauth.NewProvider(mcpauth.ProviderConfig{
+	return auth.NewProvider(auth.ProviderConfig{
 		Issuer:       cfg.UIPublicURL,
 		Resource:     cfg.MCPPublicURL,
 		ResourceName: "krill MCP",

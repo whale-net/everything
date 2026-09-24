@@ -3,7 +3,7 @@
 // the operator to consent for D on next access; a healthy grant for D' is
 // untouched by that re-consent." authorizeConsentGate (handlers_consent.go)
 // had no direct test at all before this file -- the comment pointing at
-// "mcpauth_test.go's own /authorize concern" (handlers_consent_test.go's
+// "auth_test.go's own /authorize concern" (handlers_consent_test.go's
 // newConsentTestApp doc comment) describes an unrelated bootstrap flow, not
 // this gate -- so this file is new coverage, not a duplicate of anything
 // already exercised.
@@ -30,7 +30,7 @@ import (
 
 // gateProbe wraps a handler with app.authorizeConsentGate and drives one
 // GET /authorize request through it, reporting whether the wrapped
-// "downstream" handler (standing in for mcpauth.Provider's own /authorize
+// "downstream" handler (standing in for auth.Provider's own /authorize
 // handler) was ever reached, and where the response redirected to when it
 // was not.
 func gateProbe(t *testing.T, app *App) (reached bool, redirectLocation string, status int) {
@@ -52,7 +52,7 @@ func gateProbe(t *testing.T, app *App) (reached bool, redirectLocation string, s
 // TestAuthorizeConsentGate_NoGrantForDefaultScope_RedirectsToConsent is the
 // gate's base case (issue #2428, FR2/FR9): no delegated grant at all for
 // app.defaultScope sends the operator to the standalone consent route
-// instead of ever reaching mcpauth's /authorize handler.
+// instead of ever reaching auth's /authorize handler.
 func TestAuthorizeConsentGate_NoGrantForDefaultScope_RedirectsToConsent(t *testing.T) {
 	fake := newFakeGrantIdP(t)
 	store := grpcauth.NewFakeStore()

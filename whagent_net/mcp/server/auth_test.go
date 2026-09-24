@@ -3,7 +3,7 @@ package server
 // Pure-Go coverage for auth.go's dual-path verifier and middleware (issue
 // #2249's Testing section, updated by issue #2430's Testing section):
 // isCredentialShaped's exact shape split, NewVerifier's classification of
-// an opaque mcpauth credential vs. everything else (including the
+// an opaque auth credential vs. everything else (including the
 // nil-credentials degrade-to-pre-FR9 behavior), and AuthMiddleware's two
 // forwarding branches -- all against fakeCredentialStore (below), never a
 // real database or Keycloak. newFakeGRPCBackend proves what actually
@@ -38,9 +38,9 @@ import (
 	"google.golang.org/grpc/status"
 	"google.golang.org/grpc/test/bufconn"
 
+	"github.com/whale-net/everything/libs/go/auth"
 	"github.com/whale-net/everything/libs/go/grpcauth"
 	"github.com/whale-net/everything/libs/go/grpcclient"
-	"github.com/whale-net/everything/libs/go/mcpauth"
 	"github.com/whale-net/everything/whagent_net/mcpidentity"
 	pb "github.com/whale-net/everything/whagent_net/protos"
 )
@@ -55,9 +55,9 @@ func requestWithExtra(extra *mcp.RequestExtra) mcp.Request {
 	return &mcp.ServerRequest[*mcp.CallToolParams]{Extra: extra}
 }
 
-// ── fake mcpauth.CredentialStore ────────────────────────────────────────
+// ── fake auth.CredentialStore ────────────────────────────────────────
 
-// fakeCredentialStore implements mcpauth.CredentialStore in memory, keyed
+// fakeCredentialStore implements auth.CredentialStore in memory, keyed
 // on the exact raw token presented -- enough to drive NewVerifier's
 // credential-shaped branch without a real database. Mint/List are not used
 // by these tests.
@@ -72,33 +72,33 @@ func newFakeCredentialStore() *fakeCredentialStore {
 	return &fakeCredentialStore{identities: map[string]string{}, revoked: map[string]bool{}}
 }
 
-func (f *fakeCredentialStore) Mint(context.Context, string) (string, mcpauth.Credential, error) {
-	return "", mcpauth.Credential{}, errors.New("fakeCredentialStore.Mint is not used by these tests")
+func (f *fakeCredentialStore) Mint(context.Context, string) (string, auth.Credential, error) {
+	return "", auth.Credential{}, errors.New("fakeCredentialStore.Mint is not used by these tests")
 }
 
-func (f *fakeCredentialStore) Verify(_ context.Context, rawToken string) (string, mcpauth.Credential, error) {
+func (f *fakeCredentialStore) Verify(_ context.Context, rawToken string) (string, auth.Credential, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.verifyCalls++
 	if f.revoked[rawToken] {
-		return "", mcpauth.Credential{}, mcpauth.ErrInvalidCredential
+		return "", auth.Credential{}, auth.ErrInvalidCredential
 	}
 	identity, ok := f.identities[rawToken]
 	if !ok {
-		return "", mcpauth.Credential{}, mcpauth.ErrInvalidCredential
+		return "", auth.Credential{}, auth.ErrInvalidCredential
 	}
-	return identity, mcpauth.Credential{Identity: identity}, nil
+	return identity, auth.Credential{Identity: identity}, nil
 }
 
 func (f *fakeCredentialStore) Revoke(context.Context, uuid.UUID, string) error {
 	return errors.New("fakeCredentialStore.Revoke is not used by these tests")
 }
 
-func (f *fakeCredentialStore) List(context.Context, string) ([]mcpauth.Credential, error) {
+func (f *fakeCredentialStore) List(context.Context, string) ([]auth.Credential, error) {
 	return nil, errors.New("fakeCredentialStore.List is not used by these tests")
 }
 
-var _ mcpauth.CredentialStore = (*fakeCredentialStore)(nil)
+var _ auth.CredentialStore = (*fakeCredentialStore)(nil)
 
 // hexToken returns a 64-character lowercase hex string (isCredentialShaped's
 // exact shape) built by repeating r -- deterministic and readable in test

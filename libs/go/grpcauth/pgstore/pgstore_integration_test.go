@@ -8,7 +8,7 @@
 // cannot: a real PostgreSQL round trip, genuine ciphertext-at-rest (NFR2),
 // and status-first enforcement (FR5/FR6/FR7/FR11) backed by actual SQL
 // rather than an in-memory fake -- mirrors
-// libs/go/mcpauth/credential_integration_test.go's pattern via
+// libs/go/auth/credential_integration_test.go's pattern via
 // libs/go/dbtest. Each test creates the expected
 // grpcauth_delegated_grant-shaped table itself (no shipped migration --
 // FR13; see pgstore.go's package doc for the schema contract).
@@ -382,7 +382,7 @@ func TestGrantStore_UnknownGrant_ReturnsNotFound(t *testing.T) {
 
 // TestGrantStore_MultiInstance_SharedPool asserts Persist via one
 // *grantStore and a read via a second one built on the same pool observe
-// the same data (mirrors mcpauth's multi-replica coverage).
+// the same data (mirrors auth's multi-replica coverage).
 func TestGrantStore_MultiInstance_SharedPool(t *testing.T) {
 	ctx := context.Background()
 	db := dbtest.NewPostgres(ctx, t, dbtest.Options{Schema: grantSchema})

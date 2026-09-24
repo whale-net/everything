@@ -18,7 +18,7 @@
 // abandon_task also mount here, see below), and, as of M5 (issue #2867),
 // the Swarm Operator-only surface at /mcp/ops, mounted but with no tool
 // registered yet (the rest of M5 registers onto it). Both front doors
-// (mcpauth/human, whagent-net/agent) apply to all four mounts identically.
+// (auth/human, whagent-net/agent) apply to all four mounts identically.
 //
 // workMountPath is a deliberate split from designMountPath (originally
 // the work axis rode on /mcp/design entirely): the krill-design and
@@ -56,9 +56,9 @@ import (
 	"github.com/whale-net/everything/krill/slice"
 	"github.com/whale-net/everything/krill/store"
 	"github.com/whale-net/everything/krill/work"
+	"github.com/whale-net/everything/libs/go/auth"
 	"github.com/whale-net/everything/libs/go/db"
 	"github.com/whale-net/everything/libs/go/logging"
-	"github.com/whale-net/everything/libs/go/mcpauth"
 	"github.com/whale-net/everything/libs/go/whagent"
 )
 
@@ -80,7 +80,7 @@ type config struct {
 	// whagent Claim this instance verifies must carry.
 	MCPPublicURL string
 
-	// OAuthIssuer is the mcpauth front door's OAuth2 authorization
+	// OAuthIssuer is the auth front door's OAuth2 authorization
 	// server's issuer identifier (KRILL_MCP_OAUTH_ISSUER) -- the
 	// authorization_servers entry this instance's protected-resource
 	// metadata advertises. Left unset skips serving RFC 9728 metadata
@@ -91,7 +91,7 @@ type config struct {
 	// KRILL_MCP_WHAGENT_ISSUER) are whagent-net's own JWKS endpoint and
 	// issuer identifier -- both required to enable the agent front door
 	// (server.WhagentAuthConfig). Left unset, `mcp` mounts only the
-	// mcpauth door (server.NewHTTPHandler), same as
+	// auth door (server.NewHTTPHandler), same as
 	// audience_score_system/mcp's own pre-FR12(a) fallback.
 	WhagentJWKSURL string
 	WhagentIssuer  string
@@ -295,7 +295,7 @@ func run() error {
 	// mount itself).
 	tools.RegisterRequeueTask(opsReg, sessions, entities.Tasks(), assembler)
 
-	// The mcpauth (human) front door's CredentialStore preflights the
+	// The auth (human) front door's CredentialStore preflights the
 	// consuming domain's credential table at boot -- exactly like
 	// audience_score_system/mcp/main.go's own NewCredentialStore call.
 	// krill has not yet shipped that migration (no later M1 task numbers
@@ -305,9 +305,9 @@ func run() error {
 	// initializeAuthDeps degrade-and-log convention for every other
 	// optional dependency: the agent front door below never depends on
 	// this succeeding.
-	credentials, err := mcpauth.NewCredentialStore(ctx, mcpauth.StoreConfig{Pool: pool})
+	credentials, err := auth.NewCredentialStore(ctx, auth.StoreConfig{Pool: pool})
 	if err != nil {
-		logger.Warn("mcpauth credential store unavailable; the mcpauth (human) front door will reject every call until its migration is applied", "error", err)
+		logger.Warn("auth credential store unavailable; the auth (human) front door will reject every call until its migration is applied", "error", err)
 		credentials = rejectingCredentialStore{}
 	}
 
@@ -317,11 +317,11 @@ func run() error {
 		ResourceName:        "krill MCP",
 	}
 
-	// Mount the agent (whagent-net) front door ALONGSIDE the mcpauth one
+	// Mount the agent (whagent-net) front door ALONGSIDE the auth one
 	// -- never in place of it -- whenever it's configured (NFR1: "both
 	// front doors at the same mount point, each env-gated"). Both
 	// KRILL_MCP_WHAGENT_JWKS_URL and KRILL_MCP_WHAGENT_ISSUER unset falls
-	// back to the mcpauth-only handler, exactly mirroring
+	// back to the auth-only handler, exactly mirroring
 	// audience_score_system/mcp/main.go's own FR12(a) fallback.
 	var handler http.Handler
 	if cfg.WhagentJWKSURL != "" && cfg.WhagentIssuer != "" {
@@ -371,28 +371,28 @@ func run() error {
 	return nil
 }
 
-// rejectingCredentialStore is a mcpauth.CredentialStore of last resort:
+// rejectingCredentialStore is a auth.CredentialStore of last resort:
 // every call fails with the same opaque "invalid or revoked credential"
-// mcpauth.TokenVerifier already produces for any other Verify failure, so
-// a caller presenting an mcpauth-shaped credential against a
+// auth.TokenVerifier already produces for any other Verify failure, so
+// a caller presenting an auth-shaped credential against a
 // not-yet-migrated krill deployment gets a clean 401 instead of `mcp`
 // panicking on a nil CredentialStore interface value.
 type rejectingCredentialStore struct{}
 
-func (rejectingCredentialStore) Mint(context.Context, string) (string, mcpauth.Credential, error) {
-	return "", mcpauth.Credential{}, fmt.Errorf("mcpauth: credential store not configured")
+func (rejectingCredentialStore) Mint(context.Context, string) (string, auth.Credential, error) {
+	return "", auth.Credential{}, fmt.Errorf("auth: credential store not configured")
 }
 
-func (rejectingCredentialStore) Verify(context.Context, string) (string, mcpauth.Credential, error) {
-	return "", mcpauth.Credential{}, fmt.Errorf("mcpauth: credential store not configured")
+func (rejectingCredentialStore) Verify(context.Context, string) (string, auth.Credential, error) {
+	return "", auth.Credential{}, fmt.Errorf("auth: credential store not configured")
 }
 
 func (rejectingCredentialStore) Revoke(context.Context, uuid.UUID, string) error {
-	return fmt.Errorf("mcpauth: credential store not configured")
+	return fmt.Errorf("auth: credential store not configured")
 }
 
-func (rejectingCredentialStore) List(context.Context, string) ([]mcpauth.Credential, error) {
-	return nil, fmt.Errorf("mcpauth: credential store not configured")
+func (rejectingCredentialStore) List(context.Context, string) ([]auth.Credential, error) {
+	return nil, fmt.Errorf("auth: credential store not configured")
 }
 
-var _ mcpauth.CredentialStore = rejectingCredentialStore{}
+var _ auth.CredentialStore = rejectingCredentialStore{}

@@ -3,11 +3,11 @@ package auth
 import (
 	"net/http"
 
-	"github.com/whale-net/everything/libs/go/mcpauth"
+	"github.com/whale-net/everything/libs/go/auth"
 )
 
 // MCPCallerResolver adapts ASS's existing signed-in-session lookup to
-// mcpauth.CallerResolver (FR12, issue #1646) so mcpauth's `/authorize`
+// auth.CallerResolver (FR12, issue #1646) so auth's `/authorize`
 // endpoint (mounted on `web`) can resolve the already-signed-in caller
 // without ever rendering a login form or collecting credentials itself
 // (FR2). It performs no IdP call and no fresh token verification: the
@@ -27,7 +27,7 @@ import (
 // -- a cookie parse plus a single SQL query against web_session -- and
 // never touches a.oauth2Config/a.verifier (the Google-calling half of this
 // package), so it makes no IdP or other network call of any kind.
-func (a *Authenticator) MCPCallerResolver() mcpauth.CallerResolverFunc {
+func (a *Authenticator) MCPCallerResolver() auth.CallerResolverFunc {
 	return func(r *http.Request) (string, bool) {
 		personID, err := a.sessions.PersonID(r)
 		if err != nil {

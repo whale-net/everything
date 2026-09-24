@@ -28,8 +28,8 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/whale-net/everything/libs/go/auth"
 	"github.com/whale-net/everything/libs/go/dbtest"
-	"github.com/whale-net/everything/libs/go/mcpauth"
 	"github.com/whale-net/everything/libs/go/migrate"
 	"github.com/whale-net/everything/whagent_net/migrate/schema"
 
@@ -120,7 +120,7 @@ func TestMigration009_DeletesAllPreCutoverCredentialAndAuthCodeRows(t *testing.T
 // this issue's second Testing-section bullet: "A request presenting a
 // pre-cutover credential is rejected -- it does not resolve to an identity
 // that can acquire a token, and it does not fall back to the manual-token
-// path." This drives the real libs/go/mcpauth.CredentialStore AND the
+// path." This drives the real libs/go/auth.CredentialStore AND the
 // real whagent_net/mcp/server.NewVerifier against the same
 // migration-applied database, end to end: mint a credential before
 // cutover, apply 009, then present that exact raw token to the real
@@ -128,7 +128,7 @@ func TestMigration009_DeletesAllPreCutoverCredentialAndAuthCodeRows(t *testing.T
 func TestMigration009_PreCutoverCredentialRejectedAfterCutover_NoFallback(t *testing.T) {
 	ctx, db, runner := preCutoverDB(t)
 
-	credentialsBeforeCutover, err := mcpauth.NewCredentialStore(ctx, mcpauth.StoreConfig{Pool: db.Pool})
+	credentialsBeforeCutover, err := auth.NewCredentialStore(ctx, auth.StoreConfig{Pool: db.Pool})
 	require.NoError(t, err)
 
 	rawToken, cred, err := credentialsBeforeCutover.Mint(ctx, "pre-cutover-operator-identity")
@@ -142,11 +142,11 @@ func TestMigration009_PreCutoverCredentialRejectedAfterCutover_NoFallback(t *tes
 	// mirrors how `mcp` and `ui` each construct their own store against
 	// whatever mcp_credential currently holds; nothing here is a cached
 	// reference to the pre-cutover row.
-	credentialsAfterCutover, err := mcpauth.NewCredentialStore(ctx, mcpauth.StoreConfig{Pool: db.Pool})
+	credentialsAfterCutover, err := auth.NewCredentialStore(ctx, auth.StoreConfig{Pool: db.Pool})
 	require.NoError(t, err)
 
 	_, _, err = credentialsAfterCutover.Verify(ctx, rawToken)
-	assert.ErrorIs(t, err, mcpauth.ErrInvalidCredential, "a credential minted before cutover must not verify after 009 has run")
+	assert.ErrorIs(t, err, auth.ErrInvalidCredential, "a credential minted before cutover must not verify after 009 has run")
 
 	// Same assertion one layer up, through the real verifier
 	// AuthMiddleware/NewHTTPHandler wire onto every mcp request

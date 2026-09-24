@@ -11,7 +11,7 @@ import (
 // externally reachable base URL. Fixed rather than configurable so every
 // consuming domain's Verifier wiring is the same one-line JWKS URL
 // (mirrors the RFC 8414/9728-style fixed well-known-path convention
-// libs/go/mcpauth already uses for its own metadata endpoints).
+// libs/go/auth already uses for its own metadata endpoints).
 const JWKSPath = "/.well-known/jwks.json"
 
 // JWKSHandler serves ks's public JWKS document -- every key ks knows

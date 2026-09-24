@@ -11,8 +11,8 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/whale-net/everything/libs/go/auth"
 	"github.com/whale-net/everything/libs/go/htmxauth"
-	"github.com/whale-net/everything/libs/go/mcpauth"
 )
 
 // newTestOIDCAuthenticator builds a real *htmxauth.Authenticator in OIDC
@@ -57,49 +57,49 @@ func newTestOIDCAuthenticator(t *testing.T) *htmxauth.Authenticator {
 	return auth
 }
 
-// stubCredentialStore is a mcpauth.CredentialStore that never actually
+// stubCredentialStore is a auth.CredentialStore that never actually
 // mints/verifies anything -- newTestMCPProvider only needs a non-nil
-// CredentialStore to satisfy mcpauth.NewProvider's construction-time
+// CredentialStore to satisfy auth.NewProvider's construction-time
 // validation (setupRoutes' route-table guard below never exercises
 // /token, so no method here needs to succeed).
 type stubCredentialStore struct{}
 
-func (stubCredentialStore) Mint(ctx context.Context, identity string) (string, mcpauth.Credential, error) {
-	return "", mcpauth.Credential{}, errors.New("stubCredentialStore: not implemented")
+func (stubCredentialStore) Mint(ctx context.Context, identity string) (string, auth.Credential, error) {
+	return "", auth.Credential{}, errors.New("stubCredentialStore: not implemented")
 }
 
-func (stubCredentialStore) Verify(ctx context.Context, rawToken string) (string, mcpauth.Credential, error) {
-	return "", mcpauth.Credential{}, errors.New("stubCredentialStore: not implemented")
+func (stubCredentialStore) Verify(ctx context.Context, rawToken string) (string, auth.Credential, error) {
+	return "", auth.Credential{}, errors.New("stubCredentialStore: not implemented")
 }
 
 func (stubCredentialStore) Revoke(ctx context.Context, id uuid.UUID, identity string) error {
 	return errors.New("stubCredentialStore: not implemented")
 }
 
-func (stubCredentialStore) List(ctx context.Context, identity string) ([]mcpauth.Credential, error) {
+func (stubCredentialStore) List(ctx context.Context, identity string) ([]auth.Credential, error) {
 	return nil, errors.New("stubCredentialStore: not implemented")
 }
 
-// newTestMCPProvider builds a real *mcpauth.Provider against loopback
+// newTestMCPProvider builds a real *auth.Provider against loopback
 // issuer/resource URLs and a resolver that never resolves (mirrors this
-// scaffold's mcpCallerResolver stub, mcpauth.go), so setupRoutes' guard
+// scaffold's mcpCallerResolver stub, auth.go), so setupRoutes' guard
 // test below exercises the actual Provider.Mount route registration
-// rather than a stand-in. Clients/AuthCodes are left at mcpauth's
+// rather than a stand-in. Clients/AuthCodes are left at auth's
 // in-memory defaults -- fine for this route-table guard, which only
-// checks whether each mcpauth path is reachable without a Keycloak
+// checks whether each auth path is reachable without a Keycloak
 // session, never a full authorization-code exchange.
-func newTestMCPProvider(t *testing.T) *mcpauth.Provider {
+func newTestMCPProvider(t *testing.T) *auth.Provider {
 	t.Helper()
 
-	p, err := mcpauth.NewProvider(mcpauth.ProviderConfig{
+	p, err := auth.NewProvider(auth.ProviderConfig{
 		Issuer:      "http://localhost",
 		Resource:    "http://localhost:8082",
-		Resolver:    mcpauth.CallerResolverFunc(func(r *http.Request) (string, bool) { return "", false }),
+		Resolver:    auth.CallerResolverFunc(func(r *http.Request) (string, bool) { return "", false }),
 		Credentials: stubCredentialStore{},
 		SignInURL:   "/login",
 	})
 	if err != nil {
-		t.Fatalf("mcpauth.NewProvider: %v", err)
+		t.Fatalf("auth.NewProvider: %v", err)
 	}
 	return p
 }
@@ -145,7 +145,7 @@ var whagentPublicRoutes = map[string]bool{
 // stands in for both the exact "/" route and any other unclaimed path,
 // since the catch-all pattern dispatches both there.
 //
-// The mcpauth.Provider.Mount routes (FR9, issue #2245) need their real
+// The auth.Provider.Mount routes (FR9, issue #2245) need their real
 // method: "/register" and "/token" are registered as "POST <path>", and
 // Go's http.ServeMux (1.22+) falls through a method mismatch on an exact
 // pattern to a still-matching *broader* pattern rather than 405ing --

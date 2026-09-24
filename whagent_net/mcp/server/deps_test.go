@@ -24,7 +24,7 @@ func TestBUILD_NoStoreOrTemporalDependency(t *testing.T) {
 		"dbtest",
 		"jackc",
 	}
-	// mcpauth.CredentialStore (libs/go/mcpauth) is fine to depend on --
+	// auth.CredentialStore (libs/go/auth) is fine to depend on --
 	// it is the interface boundary this package uses, never a direct
 	// Postgres/pgx import of its own (see the forbidden pgx/jackc/dbtest
 	// checks above, which still hold).

@@ -2689,8 +2689,8 @@ func ptrInt64(v int64) *int64        { return &v }
 // (#1569), extended again for 003 (web_session, #1570), again for 005
 // (mcp_credential, #1575 -- 004 is Channel-connect's channel_credential
 // store, #1571), again for 006 (mcp_credential dropped and recreated
-// against libs/go/mcpauth's schema contract, #1643), again for 007
-// (mcp_oauth_client + mcp_auth_code, mcpauth's OAuth2 authorization-code +
+// against libs/go/auth's schema contract, #1643), again for 007
+// (mcp_oauth_client + mcp_auth_code, auth's OAuth2 authorization-code +
 // PKCE front end, #1646), again for 008 (strategy/strategy_verdict,
 // #1637), again for 009 (co_creator_tier, #1713), again for 010
 // (video_script + video_schedule_match.video_script_id, issues
@@ -3057,8 +3057,8 @@ func TestMigration009_AuditViewEmitsGrantAndRevokeEvents(t *testing.T) {
 // TestMigration006_McpCredentialTable_ConstraintsAndIndexesSurviveDownUp
 // machine-checks (rather than eyeballs) the two things FR13/NFR5 require
 // migration 006 preserve from 005's mcp_credential shape even though the
-// table is now built against mcpauth's generic schema contract: the
-// person_id FOREIGN KEY (mcpauth itself treats identity as an opaque
+// table is now built against auth's generic schema contract: the
+// person_id FOREIGN KEY (auth itself treats identity as an opaque
 // string -- ASS's own FK is layered on top and must not get lost) and both
 // indexes named in 006's SQL. TestMigrations_UpDownUp_LeavesNoOrphanObjects
 // above only proves the table itself exists after down/up; this proves its
@@ -3077,7 +3077,7 @@ func TestMigration006_McpCredentialTable_ConstraintsAndIndexesSurviveDownUp(t *t
 	require.NoError(t, runner.Up(), "second up")
 
 	// FOREIGN KEY: a mcp_credential row referencing a person_id that does
-	// not exist must be rejected -- mcpauth's own CredentialStore never
+	// not exist must be rejected -- auth's own CredentialStore never
 	// exercises this (it only ever binds identities the caller already
 	// validated), so it can only be proven with a direct SQL insert like
 	// this one.

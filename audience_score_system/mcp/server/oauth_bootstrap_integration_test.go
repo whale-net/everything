@@ -41,12 +41,12 @@ import (
 	"github.com/whale-net/everything/audience_score_system/mcp/tools"
 	"github.com/whale-net/everything/audience_score_system/store"
 	"github.com/whale-net/everything/audience_score_system/web/auth"
+	mcpauth "github.com/whale-net/everything/libs/go/auth"
 	"github.com/whale-net/everything/libs/go/dbtest"
-	"github.com/whale-net/everything/libs/go/mcpauth"
 )
 
 // bootstrapPKCEPair returns a random code_verifier and its S256
-// code_challenge -- this package cannot reach libs/go/mcpauth's own
+// code_challenge -- this package cannot reach libs/go/auth's own
 // unexported genPKCEPair, so this is a local, functionally identical copy.
 func bootstrapPKCEPair(t *testing.T) (verifier, challenge string) {
 	t.Helper()

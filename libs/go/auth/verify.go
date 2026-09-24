@@ -1,4 +1,4 @@
-package mcpauth
+package auth
 
 import (
 	"context"
@@ -24,7 +24,7 @@ var errInvalidToken = errInvalidTokenWrap{}
 // per-call detail (a token, a hash, a store error) into the message.
 type errInvalidTokenWrap struct{}
 
-func (errInvalidTokenWrap) Error() string { return "mcpauth: invalid or revoked credential" }
+func (errInvalidTokenWrap) Error() string { return "auth: invalid or revoked credential" }
 
 func (errInvalidTokenWrap) Unwrap() error { return sdkauth.ErrInvalidToken }
 
@@ -43,8 +43,8 @@ var _ error = errInvalidTokenWrap{}
 // compile-time constant, so there is no code path that could interpolate
 // either into it.
 //
-// The returned TokenInfo always carries a zero Expiration: mcpauth
-// credentials are revocable, not time-boxed (see mcpauth.go's package doc,
+// The returned TokenInfo always carries a zero Expiration: this package
+// credentials are revocable, not time-boxed (see auth.go's package doc,
 // "What this library deliberately is not"), so there is no per-token `exp`
 // to report. Callers must pair TokenVerifier with RequireBearerToken (or
 // otherwise set AllowMissingExpiration: true) — see that function's doc.
@@ -59,8 +59,8 @@ func TokenVerifier(store CredentialStore) sdkauth.TokenVerifier {
 }
 
 // RequireBearerToken wraps sdkauth.RequireBearerToken with the defaults an
-// mcpauth credential needs: mcpauth credentials are revocable, not
-// time-boxed (see mcpauth.go's package doc, "What this library deliberately
+// this package's credential needs: its credentials are revocable, not
+// time-boxed (see auth.go's package doc, "What this library deliberately
 // is not") — there is no per-token `exp` claim, so TokenVerifier always
 // returns a TokenInfo with a zero Expiration, which sdkauth.RequireBearerToken
 // rejects outright unless AllowMissingExpiration is set.
@@ -69,7 +69,7 @@ func TokenVerifier(store CredentialStore) sdkauth.TokenVerifier {
 // zero-value RequireBearerTokenOptions with AllowMissingExpiration: true is
 // used; if opts is non-nil, its AllowMissingExpiration field is overwritten
 // to true regardless of what the caller set (a caller-supplied false would
-// otherwise reject every single mcpauth credential outright, since none of
+// otherwise reject every single credential this package issues outright, since none of
 // them ever carry an expiration — there is no legitimate reason to pass
 // false here). ResourceMetadataURL and Scopes, if set, are passed straight
 // through unmodified.

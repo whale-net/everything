@@ -179,14 +179,14 @@ revoke *any* operator's grants (e.g. for offboarding or a compromised
 session) -- see `ARCHITECTURE.md` "Identity and auth chaining" for both
 pages' authorization rules.
 
-### Cutover: pre-existing mcpauth credentials invalidated (FR11)
+### Cutover: pre-existing auth credentials invalidated (FR11)
 
 The plan #2421 rolled out (per-domain delegated-grant consent replacing
 Keycloak-token impersonation for the browser-OAuth2 path above) ends with a
 one-time, single-deploy cutover migration (`009_mcpauth_cutover`, issue
 #2434). On that deploy:
 
-- **Every opaque `mcpauth` credential minted before cutover stops working,
+- **Every opaque `auth` credential minted before cutover stops working,
   immediately and permanently.** The migration deletes every row from
   `mcp_credential` and `mcp_auth_code` outright — not a revoke, not a
   time-boxed grace period, no feature flag gating it (NFR8). There is

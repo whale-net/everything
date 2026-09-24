@@ -23,7 +23,7 @@ import (
 //
 // Live as of issue #2430 (FR8/FR9): `ui`'s /authorize handler
 // (handlers_consent.go) drives the per-scope consent flow through the
-// Components this builds -- the opaque mcpauth-credential path it
+// Components this builds -- the opaque auth-credential path it
 // previously minted unconditionally is gone.
 func initializeDelegatedGrant(ctx context.Context, cfg config, pool *pgxpool.Pool, logger *slog.Logger) (delegatedgrant.Components, error) {
 	grantCfg := delegatedgrant.Config{

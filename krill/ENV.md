@@ -6,7 +6,7 @@ read the variables below. `krill/importer/cmd`'s `import` CLI (issue
 defaults to it), but is not a deployed binary and takes its other inputs
 (`--path`, `--session-id`) as flags -- see `krill/README.md`'s Binaries
 table. `mcp` (issue #2494, FR10/NFR1) is a third binary and `ui` (the
-mcpauth `/authorize` sign-in shell) a fourth; see their own sections
+auth `/authorize` sign-in shell) a fourth; see their own sections
 below.
 
 ## Database
@@ -60,31 +60,31 @@ behind the two-front-door auth pattern already shipped in
 `audience_score_system/mcp` and `whagent_net/mcp` -- see
 `ARCHITECTURE.md` "The MCP spec surface" for the full design. It shares
 `PG_DATABASE_URL` with `api` (same pool, both the `//krill/slice` query
-layer and the mcpauth credential store read from it).
+layer and the auth credential store read from it).
 
 | Variable | Default | Description |
 |----------|---------|--------------|
 | `KRILL_MCP_ADDR` | `:8080` | Address `mcp`'s HTTP surface listens on. |
 | `KRILL_MCP_PUBLIC_URL` | — | This instance's own externally reachable URL. Passed as the RFC 9728 protected-resource `resource` value and as the audience every whagent Claim this instance verifies must carry. Leaving it unset skips serving RFC 9728 metadata (`server.ResourceMetadataConfig.enabled`). |
-| `KRILL_MCP_OAUTH_ISSUER` | — | The mcpauth (human) front door's OAuth2 authorization server issuer identifier, advertised in RFC 9728 metadata's `authorization_servers`. |
-| `KRILL_MCP_WHAGENT_JWKS_URL` | — | whagent-net's own JWKS endpoint. Both this and `KRILL_MCP_WHAGENT_ISSUER` must be set to enable the agent front door (`server.WhagentAuthConfig`) -- left unset, `mcp` mounts only the mcpauth door, mirroring `audience_score_system/mcp`'s own pre-FR12(a) fallback. |
+| `KRILL_MCP_OAUTH_ISSUER` | — | The auth (human) front door's OAuth2 authorization server issuer identifier, advertised in RFC 9728 metadata's `authorization_servers`. |
+| `KRILL_MCP_WHAGENT_JWKS_URL` | — | whagent-net's own JWKS endpoint. Both this and `KRILL_MCP_WHAGENT_ISSUER` must be set to enable the agent front door (`server.WhagentAuthConfig`) -- left unset, `mcp` mounts only the auth door, mirroring `audience_score_system/mcp`'s own pre-FR12(a) fallback. |
 | `KRILL_MCP_WHAGENT_ISSUER` | — | whagent-net's own issuer identifier, verified against every whagent Claim `mcp` accepts. |
 
-The mcpauth (human OAuth2) front door additionally requires its
+The auth (human OAuth2) front door additionally requires its
 `mcp_credential`-shaped table to exist against the same `PG_DATABASE_URL`
-pool (`libs/go/mcpauth.NewCredentialStore`'s preflight). Migration
+pool (`libs/go/auth.NewCredentialStore`'s preflight). Migration
 `006_mcpauth_credential` now provides it (mirroring
 `audience_score_system`'s own migration 006 and `whagent_net`'s migration
 004) -- until it is applied, `mcp` still degrades that door to reject
 every call (`main.go`'s `rejectingCredentialStore`) rather than failing to
 boot; the agent front door never depends on it either way.
 
-## `ui` (Keycloak sign-in shell, mcpauth's `/authorize` front end)
+## `ui` (Keycloak sign-in shell, auth's `/authorize` front end)
 
-`ui` is a barebones binary whose sole job is to give mcpauth's
+`ui` is a barebones binary whose sole job is to give auth's
 `/authorize` endpoint (mounted here, not on `mcp`) a `SignInURL` to
 redirect a not-yet-signed-in caller to -- see `krill/ui/main.go`'s package
-doc and `ARCHITECTURE.md` "krill/ui and the mcpauth front door" for why
+doc and `ARCHITECTURE.md` "krill/ui and the auth front door" for why
 `mcp`'s own door had nowhere to send a caller before this binary existed.
 It shares `PG_DATABASE_URL` with `api`/`mcp` (its own `ui_sessions` table,
 migration `007_ui_sessions`, plus the same `mcp_credential`/
@@ -99,9 +99,9 @@ migration `006_mcpauth_credential`).
 | `KRILL_OIDC_CLIENT_ID` / `KRILL_OIDC_CLIENT_SECRET` | `""` | Keycloak client credentials. Required when `AUTH_MODE=oidc`. |
 | `KRILL_OIDC_REDIRECT_URI` | `http://localhost:8080/auth/callback` | OIDC redirect URI registered on the Keycloak client. |
 | `SECRET_KEY` | `dev-secret-key-change-in-production` | Encrypts the DB-backed session store's access/refresh tokens (`//libs/go/htmxauth`). |
-| `PG_DATABASE_URL` | *(required)* | Backs both the `ui_sessions` table and the mcpauth Postgres-backed credential/client/auth-code stores. |
-| `KRILL_UI_PUBLIC_URL` | *(required)* | This instance's own externally reachable URL -- `mcpauth.ProviderConfig.Issuer`, the base every mcpauth endpoint URL (`/authorize`, `/token`, `/register`, discovery metadata) is built from. Must match what `mcp`'s own `KRILL_MCP_OAUTH_ISSUER` advertises. |
-| `KRILL_MCP_PUBLIC_URL` | *(required)* | `mcp`'s own externally reachable URL -- `mcpauth.ProviderConfig.Resource`. Must be byte-identical to `mcp`'s own `KRILL_MCP_PUBLIC_URL`. |
+| `PG_DATABASE_URL` | *(required)* | Backs both the `ui_sessions` table and the auth Postgres-backed credential/client/auth-code stores. |
+| `KRILL_UI_PUBLIC_URL` | *(required)* | This instance's own externally reachable URL -- `auth.ProviderConfig.Issuer`, the base every auth endpoint URL (`/authorize`, `/token`, `/register`, discovery metadata) is built from. Must match what `mcp`'s own `KRILL_MCP_OAUTH_ISSUER` advertises. |
+| `KRILL_MCP_PUBLIC_URL` | *(required)* | `mcp`'s own externally reachable URL -- `auth.ProviderConfig.Resource`. Must be byte-identical to `mcp`'s own `KRILL_MCP_PUBLIC_URL`. |
 
 ## M5 (escalation/intervention/console axis, issues #2867-#2877)
 

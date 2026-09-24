@@ -35,24 +35,24 @@ that stopped being true as of issue #2547, which adds `RegisterWrite` to
 `registry.go`; `/mcp/spec` itself still carries zero write tools.
 
 **Two front doors, one mount point, authorized by persona (NFR1).**
-`krill/mcp/server/auth.go` (mcpauth/human) and `whagent_auth.go`
+`krill/mcp/server/auth.go` (auth/human) and `whagent_auth.go`
 (whagent-net/agent) are structured identically to
 `audience_score_system/mcp/server`'s own `auth.go`/`whagent_auth.go`
 split — `DualAuthHTTPHandler` routes each request to exactly one door by
 bearer-token *shape* (a whagent Claim is always a three-segment JWT; an
-mcpauth credential is always a 64-character hex string with no dots),
+auth credential is always a 64-character hex string with no dots),
 never by trial-and-error against both verifiers. The one deliberate
 departure from that precedent: NFR1 authorizes by **persona** (Swarm
 Operator / Requirement Contributor / Agent — `krill/PRODUCT.md`'s
 Personas section), not by individual identity, so there is no
 `store.Person`/`PersonStore` anywhere in `krill/mcp` — `server.Persona`
 is the only identity-shaped value either middleware ever places on
-context. Today that resolution is fixed, not looked up: the mcpauth door
+context. Today that resolution is fixed, not looked up: the auth door
 always resolves `PersonaSwarmOperator`, the whagent door always resolves
 `PersonaAgent`. This is not an oversight — `PRODUCT.md` is explicit that
 "The Requirement Contributor exists in the model and in permissions from
 M1, but has no unmediated path into krill until C12 lands in M2", so
-there is no second human persona for M1's mcpauth door to distinguish,
+there is no second human persona for M1's auth door to distinguish,
 and a whagent Claim never carries a human profile to resolve further
 (`//libs/go/whagent`'s FR10). `krill/mcp/server/registry.go`'s
 `RegisterRead` requires only that *some* Persona resolved before a tool
@@ -61,8 +61,22 @@ there is no per-tool allow-list on the read side. `RegisterWrite` (issue
 #2547) is where a per-tool allow-list first exists — see "The
 design-session MCP surface" below.
 
-**The mcpauth door's migration (`006_mcpauth_credential`) now exists.**
-`libs/go/mcpauth.NewCredentialStore` preflights a `mcp_credential`-shaped
+**Getting a static token for a non-OAuth2 MCP client.** `krill/ui` mounts
+`libs/go/auth`'s self-serve credential API
+(`Provider.MountSelfServe`, `krill/ui/main.go`'s `setupRoutes`) alongside
+the OAuth2 endpoints: `POST /credentials` mints a long-lived bearer
+credential for the signed-in operator's session, `GET /credentials` lists
+their own (never showing the raw token again), `DELETE /credentials/{id}`
+revokes one. This is for a harness that cannot or should not run the
+authorization-code + PKCE flow itself (a headless script, a non-MCP-aware
+HTTP client) — sign into `krill/ui` once, `POST /credentials` from that
+same session, and use the returned token as `Authorization: Bearer <token>`
+against `/mcp/spec` directly, same as a token obtained through
+`/authorize`/`/token`. See `libs/go/auth/README.md`'s "Self-serve
+credential API" section for the full contract.
+
+**The auth door's migration (`006_mcpauth_credential`) now exists.**
+`libs/go/auth.NewCredentialStore` preflights a `mcp_credential`-shaped
 table at boot, exactly like `audience_score_system`'s migration 006 and
 `whagent_net`'s migration 004; migration 006 now provides it. Until it is
 applied against a given deployment, `krill/mcp/main.go` still degrades
@@ -70,8 +84,8 @@ rather than failing to boot entirely (which would also break the agent
 door, which does not need Postgres at all): a failed `NewCredentialStore`
 call logs a warning and substitutes `rejectingCredentialStore`, a
 `CredentialStore` of last resort whose every method fails with the same
-opaque error `mcpauth.TokenVerifier` already produces for a revoked
-credential — so a caller presenting an mcpauth-shaped token against a
+opaque error `auth.TokenVerifier` already produces for a revoked
+credential — so a caller presenting an auth-shaped token against a
 not-yet-migrated deployment gets a clean 401, never a panic on a nil
 interface. The agent door is unaffected either way.
 

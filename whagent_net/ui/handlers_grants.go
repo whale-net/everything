@@ -59,7 +59,7 @@ const grantStatusActive = "active"
 // grantSubjectKey is grpcauth.Store's "subject" parameter for a signed-in
 // operator: the operator's raw Keycloak `sub` claim, unencoded. This is
 // NOT whagent_net/mcpidentity's (iss, sub) packing -- that format exists
-// solely for mcpauth.CredentialStore/AuthCodeStore's Identity column (an
+// solely for auth.CredentialStore/AuthCodeStore's Identity column (an
 // unrelated persistence concern, see mcpidentity's package doc comment)
 // and was previously (incorrectly) reused here, which meant this page's
 // Status/Revoke calls targeted a subject key that handleMCPConsentConfirm's

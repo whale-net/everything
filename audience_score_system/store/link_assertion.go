@@ -1,7 +1,7 @@
 // link_assertion_consumption (migration 021, issue #2597, FR3/NFR1): the
 // Postgres-backed, single-use ledger that makes an FR2 link assertion
 // usable exactly once. Keyed on the assertion's `jti`, following the same
-// pattern mcp_auth_code / libs/go/mcpauth's auth-code consumption already
+// pattern mcp_auth_code / libs/go/auth's auth-code consumption already
 // establishes -- not a new bespoke mechanism, and not an in-memory set.
 // See migration 021's header for why this is a SEPARATE table from
 // mcp_auth_code rather than a reuse of it.
