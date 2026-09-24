@@ -15,20 +15,20 @@
       "type": "http",
       "url": "https://mcp.krill.whalenet.app/mcp/spec"
     },
-    "krill-mcp-design-tilt": {
+    "krill-mcp-work-tilt": {
       "type": "http",
-      "url": "http://localhost:8084/mcp/design",
+      "url": "http://localhost:8084/mcp/work",
       "headers": {
         "Authorization": "Bearer dev-local"
       }
     },
-    "krill-mcp-design-dev": {
+    "krill-mcp-work-dev": {
       "type": "http",
-      "url": "https://dev-mcp.krill.whalenet.dev/mcp/design"
+      "url": "https://dev-mcp.krill.whalenet.dev/mcp/work"
     },
-    "krill-mcp-design-prod": {
+    "krill-mcp-work-prod": {
       "type": "http",
-      "url": "https://mcp.krill.whalenet.app/mcp/design"
+      "url": "https://mcp.krill.whalenet.app/mcp/work"
     }
   }
 }

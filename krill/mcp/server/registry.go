@@ -54,10 +54,12 @@ func RegisterRead[In, Out any](reg *Registry, tool *mcp.Tool, h mcp.ToolHandlerF
 	mcp.AddTool(reg.server, tool, wrapped)
 }
 
-// RegisterWrite adds a write tool to the design-session surface
-// (/mcp/design, transport.go's designMountPath) -- M2's first MCP write
-// path (issue #2547). Exactly like RegisterRead, every call requires a
-// Persona to have been resolved before h runs.
+// RegisterWrite adds a write tool to whichever mount reg backs --
+// originally only the design-session surface (/mcp/design, transport.go's
+// designMountPath, M2's first MCP write path, issue #2547), now also the
+// work-axis surface (/mcp/work, transport.go's workMountPath, M4). Exactly
+// like RegisterRead, every call requires a Persona to have been resolved
+// before h runs.
 //
 // allowedPersonas is the minimal per-tool allow-list this task's Scope
 // section calls for: pass nil (or an empty slice) for a tool any resolved

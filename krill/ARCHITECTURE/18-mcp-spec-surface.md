@@ -21,15 +21,18 @@ could silently drift. All four tools are mounted at `krill/mcp/server`'s
 (`whagent_net/ARCHITECTURE.md` "Domain-owned MCP servers and the tool
 contract"): no write tool is registered on this endpoint. This sentence
 used to predict a dedicated `/mcp/work` mount for the future work-axis
-surface (M4) — that never happened: M2's write tools (`open_design_session`,
-`append_revision_event`, `propose_entities`) mount at `/mcp/design` instead
-(see "The design-session MCP surface" below), and M4's own first write
-tool, `create_task` (issue #2719, FR1), mounts there too rather than on a
-third surface of its own — `mcp/main.go` only ever builds the two
-`*mcp.Server`s this section already describes. This sentence used to read
-"there is no `RegisterWrite` in `krill/mcp/server` at all" — that stopped being true as of issue #2547,
-which adds `RegisterWrite` to `registry.go`; `/mcp/spec` itself still
-carries zero write tools.
+surface (M4), then a later revision said that never happened and folded
+the work axis onto `/mcp/design` instead: neither is the final state.
+M2's write tools (`open_design_session`, `append_revision_event`,
+`propose_entities`) mount at `/mcp/design` (see "The design-session MCP
+surface" below), but the work axis's own task-lifecycle tools
+(`create_task` and its siblings, issue #2719 onward) mount on a fourth
+surface of their own, `/mcp/work` — `mcp/main.go` builds four
+`*mcp.Server`s in total (`/mcp/spec`, `/mcp/design`, `/mcp/work`,
+`/mcp/ops`), not the two this section originally described. This sentence
+used to read "there is no `RegisterWrite` in `krill/mcp/server` at all" —
+that stopped being true as of issue #2547, which adds `RegisterWrite` to
+`registry.go`; `/mcp/spec` itself still carries zero write tools.
 
 **Two front doors, one mount point, authorized by persona (NFR1).**
 `krill/mcp/server/auth.go` (mcpauth/human) and `whagent_auth.go`

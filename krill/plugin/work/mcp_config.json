@@ -12,17 +12,17 @@
     "krill-mcp-prod": {
       "serverUrl": "https://mcp.krill.whalenet.app/mcp/spec"
     },
-    "krill-mcp-design-tilt": {
-      "serverUrl": "http://localhost:8084/mcp/design",
+    "krill-mcp-work-tilt": {
+      "serverUrl": "http://localhost:8084/mcp/work",
       "headers": {
         "Authorization": "Bearer dev-local"
       }
     },
-    "krill-mcp-design-dev": {
-      "serverUrl": "https://dev-mcp.krill.whalenet.dev/mcp/design"
+    "krill-mcp-work-dev": {
+      "serverUrl": "https://dev-mcp.krill.whalenet.dev/mcp/work"
     },
-    "krill-mcp-design-prod": {
-      "serverUrl": "https://mcp.krill.whalenet.app/mcp/design"
+    "krill-mcp-work-prod": {
+      "serverUrl": "https://mcp.krill.whalenet.app/mcp/work"
     }
   }
 }

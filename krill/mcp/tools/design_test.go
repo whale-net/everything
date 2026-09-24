@@ -229,10 +229,12 @@ func TestMCPDesignSurface_EndToEnd(t *testing.T) {
 	designReg := server.NewRegistry(designSrv)
 	tools.RegisterDesignAll(designReg, entities, sessions, querier)
 
-	// opsSrv exists only so server.NewDualAuthHTTPHandler's three-mount
-	// signature (issue #2867) is satisfied here, at /mcp/ops, alongside
-	// specSrv/designSrv -- no tool is registered on it, and this file's
-	// own coverage stays scoped to /mcp/spec and /mcp/design.
+	// workSrv/opsSrv exist only so server.NewDualAuthHTTPHandler's
+	// four-mount signature (issues #2719, #2867) is satisfied here, at
+	// /mcp/work and /mcp/ops, alongside specSrv/designSrv -- no tool is
+	// registered on either, and this file's own coverage stays scoped to
+	// /mcp/spec and /mcp/design.
+	workSrv := server.New()
 	opsSrv := server.New()
 
 	// Mirrors ../main.go's own construction order exactly: WhagentPersonaMiddleware
@@ -244,9 +246,10 @@ func TestMCPDesignSurface_EndToEnd(t *testing.T) {
 	// distinguish the two doors.
 	specSrv.AddReceivingMiddleware(server.WhagentPersonaMiddleware())
 	designSrv.AddReceivingMiddleware(server.WhagentPersonaMiddleware())
+	workSrv.AddReceivingMiddleware(server.WhagentPersonaMiddleware())
 	opsSrv.AddReceivingMiddleware(server.WhagentPersonaMiddleware())
 
-	handler := server.NewDualAuthHTTPHandler(specSrv, designSrv, opsSrv, credentials, server.WhagentAuthConfig{
+	handler := server.NewDualAuthHTTPHandler(specSrv, designSrv, workSrv, opsSrv, credentials, server.WhagentAuthConfig{
 		Verifier: verifier,
 		Audience: testWhagentAudience,
 	}, server.ResourceMetadataConfig{})

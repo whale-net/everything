@@ -226,7 +226,7 @@ func TestMCPMilestoneSurface_EndToEnd(t *testing.T) {
 	// path.
 	designSrv.AddReceivingMiddleware(server.WhagentPersonaMiddleware())
 
-	handler := server.NewDualAuthHTTPHandler(server.New(), designSrv, server.New(), credentials, server.WhagentAuthConfig{
+	handler := server.NewDualAuthHTTPHandler(server.New(), designSrv, server.New(), server.New(), credentials, server.WhagentAuthConfig{
 		Verifier: verifier,
 		Audience: milestoneTestWhagentAudience,
 	}, server.ResourceMetadataConfig{})
@@ -458,7 +458,7 @@ func TestMCPMilepebbleSurface_EndToEnd(t *testing.T) {
 	tools.RegisterMilestoneAll(designReg, sessions, entities.MilestoneAuthoring(), entities.Products(), slice.NewQuerier(entities))
 	designSrv.AddReceivingMiddleware(server.WhagentPersonaMiddleware())
 
-	handler := server.NewDualAuthHTTPHandler(server.New(), designSrv, server.New(), credentials, server.WhagentAuthConfig{
+	handler := server.NewDualAuthHTTPHandler(server.New(), designSrv, server.New(), server.New(), credentials, server.WhagentAuthConfig{
 		Verifier: verifier,
 		Audience: milestoneTestWhagentAudience,
 	}, server.ResourceMetadataConfig{})
@@ -641,7 +641,7 @@ func TestMCPListProductDelivery_EndToEnd(t *testing.T) {
 	tools.RegisterMilestoneAll(designReg, store.NewSessionStore(pool), entities.MilestoneAuthoring(), entities.Products(), slice.NewQuerier(entities))
 	designSrv.AddReceivingMiddleware(server.WhagentPersonaMiddleware())
 
-	handler := server.NewDualAuthHTTPHandler(server.New(), designSrv, server.New(), credentials, server.WhagentAuthConfig{
+	handler := server.NewDualAuthHTTPHandler(server.New(), designSrv, server.New(), server.New(), credentials, server.WhagentAuthConfig{
 		Verifier: verifier,
 		Audience: milestoneTestWhagentAudience,
 	}, server.ResourceMetadataConfig{})

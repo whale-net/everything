@@ -208,7 +208,7 @@ func TestMCPEntityCreateSurface_EndToEnd(t *testing.T) {
 	// mcpauth (PersonaSwarmOperator) doors can call these tools today.
 	designSrv.AddReceivingMiddleware(server.WhagentPersonaMiddleware())
 
-	handler := server.NewDualAuthHTTPHandler(server.New(), designSrv, server.New(), credentials, server.WhagentAuthConfig{
+	handler := server.NewDualAuthHTTPHandler(server.New(), designSrv, server.New(), server.New(), credentials, server.WhagentAuthConfig{
 		Verifier: verifier,
 		Audience: entityTestWhagentAudience,
 	}, server.ResourceMetadataConfig{})

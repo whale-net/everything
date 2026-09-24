@@ -138,12 +138,14 @@ func TestReleaseTaskAndEscalateTask_NonOperatorPersona_Refused(t *testing.T) {
 	verifier, err := whagent.NewVerifierFromKey(pub, "https://whagent.example.test")
 	require.NoError(t, err)
 
-	// specSrv/designSrv exist only so NewDualAuthHTTPHandler's three-mount
-	// signature is satisfied -- no tool is registered on either, and this
-	// file's own coverage stays scoped to /mcp/ops, mirroring
-	// design_test.go's own "opsSrv exists only so..." precedent inverted.
+	// specSrv/designSrv/workSrv exist only so NewDualAuthHTTPHandler's
+	// four-mount signature is satisfied -- no tool is registered on any of
+	// them, and this file's own coverage stays scoped to /mcp/ops,
+	// mirroring design_test.go's own "opsSrv exists only so..." precedent
+	// inverted.
 	specSrv := server.New()
 	designSrv := server.New()
+	workSrv := server.New()
 
 	opsSrv := server.New()
 	opsReg := server.NewRegistry(opsSrv)
@@ -155,9 +157,10 @@ func TestReleaseTaskAndEscalateTask_NonOperatorPersona_Refused(t *testing.T) {
 	// it runs BEFORE it.
 	specSrv.AddReceivingMiddleware(server.WhagentPersonaMiddleware())
 	designSrv.AddReceivingMiddleware(server.WhagentPersonaMiddleware())
+	workSrv.AddReceivingMiddleware(server.WhagentPersonaMiddleware())
 	opsSrv.AddReceivingMiddleware(server.WhagentPersonaMiddleware())
 
-	handler := server.NewDualAuthHTTPHandler(specSrv, designSrv, opsSrv, credentials, server.WhagentAuthConfig{
+	handler := server.NewDualAuthHTTPHandler(specSrv, designSrv, workSrv, opsSrv, credentials, server.WhagentAuthConfig{
 		Verifier: verifier,
 		Audience: personaTestWhagentAudience,
 	}, server.ResourceMetadataConfig{})
