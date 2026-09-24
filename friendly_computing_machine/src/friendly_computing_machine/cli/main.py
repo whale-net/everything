@@ -22,6 +22,9 @@ with workflow.unsafe.imports_passed_through():
     from friendly_computing_machine.src.friendly_computing_machine.cli.workflow_cli import (
         app as workflow_app,
     )
+    from friendly_computing_machine.src.friendly_computing_machine.cli.web_cli import (
+        app as web_app,
+    )
 
 logger = logging.getLogger(__name__)
 
@@ -31,3 +34,4 @@ app.add_typer(migration_app, name="migration")
 app.add_typer(subscribe_app, name="subscribe")
 app.add_typer(tool_app, name="tools")
 app.add_typer(workflow_app, name="workflow")
+app.add_typer(web_app, name="web")

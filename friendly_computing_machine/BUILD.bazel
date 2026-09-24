@@ -101,6 +101,25 @@ release_app(
 )
 
 release_app(
+    name = "web",
+    app_type = "external-api",
+    args = [
+        "web",
+        "--log-otlp",
+        "run",
+    ],
+    binary_name = "//friendly_computing_machine/src:fcm_cli",
+    description = "OIDC Slack-to-Keycloak identity link web endpoint for Friendly Computing Machine",
+    domain = "friendly-computing-machine",
+    fastapi_app = "friendly_computing_machine.src.friendly_computing_machine.web.app:app",
+    health_check_enabled = True,
+    health_check_path = "/health",
+    language = "python",
+    port = 8000,
+    replicas = 1,
+)
+
+release_app(
     name = "migration",
     app_type = "job",
     args = [
@@ -125,6 +144,7 @@ FCM_APPS = [
     ":taskpool_metadata",
     ":subscribe_metadata",
     ":worker_metadata",
+    ":web_metadata",
     ":migration_metadata",
 ]
 

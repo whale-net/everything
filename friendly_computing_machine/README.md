@@ -34,6 +34,14 @@ WHAGENT_KEYCLOAK_TOKEN_URL=<Keycloak token endpoint>
 WHAGENT_CLIENT_ID=<fcm's service-account client id>
 WHAGENT_CLIENT_SECRET=<fcm's service-account client secret>
 ```
+Required to run the OIDC identity-link web app (see [ARCHITECTURE.md](ARCHITECTURE.md) and [ENV.md](ENV.md)):
+```bash
+FCM_WEB_PUBLIC_URL=<externally-reachable base URL of the web app, e.g. http://localhost:8000>
+FCM_OIDC_ISSUER_URL=<Keycloak realm issuer URL>
+FCM_OIDC_CLIENT_ID=<confidential browser-login client id>
+FCM_OIDC_CLIENT_SECRET=<confidential browser-login client secret>
+FCM_WEB_SESSION_SECRET=<a long random signing key>
+```
 Load them before running the CLI:
 ```bash
 export $(cat .env | xargs)
@@ -54,6 +62,16 @@ Run the Temporal worker:
 ```bash
 uv run workflow run
 ```
+
+Run the OIDC identity-link web app (serves on `http://localhost:8000`, `/health` returns `ok`):
+```bash
+uv run fcm web run
+```
+Manual end-to-end check against a dev Keycloak: open
+`http://localhost:8000/link/<token>` in a browser (mint a token with
+`mint_link_token` from the DAL or a shell), complete the Keycloak login, and confirm the
+`slackkeycloakidentity` row now holds your `(iss, sub)`. See
+[ARCHITECTURE.md](ARCHITECTURE.md) for the full flow.
 
 ## Slash commands
 - `/wai <prompt>` — AI answer grounded in the channel's recent messages.

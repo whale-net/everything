@@ -13,6 +13,9 @@ dependencies = [
     "fastapi",
     "uvicorn[standard]",
     "gunicorn",
+    # OIDC login (fcm's Slack->Keycloak link web endpoint) and Starlette session signing
+    "authlib",
+    "itsdangerous",
     
     # Database and ORM
     "sqlmodel",

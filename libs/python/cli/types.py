@@ -103,3 +103,49 @@ WhagentClientSecret = Annotated[
         help="Keycloak client secret for fcm's whagent-net service account"
     )
 ]
+
+# fcm web (Slack -> Keycloak identity link endpoint, browser OIDC login)
+FcmWebPublicUrl = Annotated[
+    str,
+    typer.Option(
+        ...,
+        envvar="FCM_WEB_PUBLIC_URL",
+        help="Externally-reachable base URL of fcm's web app, used to build the OIDC callback URL (e.g. https://fcm-web.example.com)"
+    )
+]
+
+FcmOidcIssuerUrl = Annotated[
+    str,
+    typer.Option(
+        ...,
+        envvar="FCM_OIDC_ISSUER_URL",
+        help="Keycloak realm issuer URL for the browser-login OIDC client"
+    )
+]
+
+FcmOidcClientId = Annotated[
+    str,
+    typer.Option(
+        ...,
+        envvar="FCM_OIDC_CLIENT_ID",
+        help="Keycloak client id for the confidential browser-login client"
+    )
+]
+
+FcmOidcClientSecret = Annotated[
+    str,
+    typer.Option(
+        ...,
+        envvar="FCM_OIDC_CLIENT_SECRET",
+        help="Keycloak client secret for the confidential browser-login client"
+    )
+]
+
+FcmWebSessionSecret = Annotated[
+    str,
+    typer.Option(
+        ...,
+        envvar="FCM_WEB_SESSION_SECRET",
+        help="Signing key for the Starlette session cookie"
+    )
+]

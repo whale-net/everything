@@ -1,16 +1,70 @@
 # Friendly Computing Machine — Architecture
 
-> System design for the Slack bot and its Temporal workflows.
+> System design for the Slack bot, its Temporal workflows, and the OIDC identity-link web app.
 > Read this before adding new commands, workflows, or integrations.
 
 ## Overview
 
-<!-- TODO: What the bot does, what events it responds to, and how Temporal fits in -->
+Friendly Computing Machine is a Slack bot (Socket Mode) that turns `@mention`s into whagent-net AI
+sessions, runs ad-hoc polls, and orchestrates game-server work through ManMan. Slack-facing commands
+are quick; anything long-running is handed to a Temporal workflow so it survives restarts and can be
+queried later.
+
+The bot also exposes one small inbound HTTP surface — the **identity-link web app** — used only to bind
+a Slack user to their Keycloak identity so whagent-net's `on_behalf_of` delegation can act as them.
+It is additive and currently unlinked; nothing points at it until the Slack gating task lands.
 
 ## Components
 
-<!-- TODO: Slack event handling, Temporal workers, workflow definitions, and integrations -->
+| Component | Entry point | Role |
+|---|---|---|
+| Bot (Socket Mode) | `bot run-slack-socket-app` | Slack event handling; queues work, posts replies. |
+| Task pool | `bot run-taskpool` | Background execution for bot tasks. |
+| Workflow worker | `workflow run` | Temporal worker that runs the long-running workflows and calls whagent-net. |
+| Subscriber | `subscribe run` | Consumes ManMan RabbitMQ status notifications. |
+| Identity-link web | `web run` | FastAPI app that performs the browser OIDC login and writes the Slack→Keycloak mapping. |
+| Migration job | `migration run` | Applies Alembic migrations. |
+
+### Identity-link web app (`web`)
+
+`friendly_computing_machine/src/friendly_computing_machine/web/` is a small FastAPI app. It performs a
+standard OIDC authorization-code login against the Keycloak realm whagent-net uses, via Authlib's
+`authlib.integrations.starlette_client.OAuth`. It serves only static redirect/result pages — no HTMX,
+no rich UI.
+
+Two tables back the flow (see `db/dal/identity_dal.py`):
+
+- **`slacklinktoken`** — a one-time, short-lived (10 min) link token minted for a Slack user. It carries
+  a link attempt across the Keycloak redirect so the callback can identify *which* Slack identity to
+  bind without trusting anything from the browser.
+- **`slackkeycloakidentity`** — the durable one-row-per-Slack-user mapping from
+  `(slack_team_id, slack_user_id)` to `(keycloak_iss, keycloak_sub)`.
+
+#### Link flow
+
+1. `GET /link/{token}` — validates the token with `peek_link_token`. An unknown, expired, or already
+   consumed token renders a static error page (no redirect). A valid token is stashed in the Starlette
+   session (alongside Authlib's own OIDC `state`/`nonce`) and the browser is redirected to Keycloak's
+   authorize endpoint.
+2. `GET /link/callback` — completes the code exchange with `authorize_access_token`. Authlib verifies
+   the ID token (no custom verification). The verified `iss`/`sub` claims are read and
+   `complete_link(token, iss, sub)` is called, which consumes the token and upserts the mapping in a
+   single transaction. The session is cleared afterwards.
+
+Guarantees:
+- The DB row is the sole authority for the Slack binding — the session only carries a reference to it.
+- On any failure or abandonment mid-flow, nothing is written: consumption and the mapping write happen
+  in one transaction, so a failed or replayed link leaves the DB unchanged.
+- No access, refresh, or ID token is ever persisted or logged; only the `(iss, sub)` pair is stored.
+- A successful link logs at INFO with the Slack team/user ids and `iss`/`sub` (never tokens).
 
 ## Integrations
 
-<!-- TODO: ManMan subscribe, ArgoCD notifications, and other external system hooks -->
+- **whagent-net** — `@mention`-triggered AI sessions. The bot queues a turn, the workflow worker calls
+  whagent-net's `api` over gRPC with a service-account Keycloak token, and the reply is posted back to
+  the Slack thread. See [docs/whagent_integration.md](docs/whagent_integration.md).
+- **ManMan** — `subscribe` consumes status notifications over RabbitMQ. See
+  [docs/manman_subscribe.md](docs/manman_subscribe.md).
+- **Keycloak** — whagent-net service accounts (`WHAGENT_*`) and the web app's confidential browser-login
+  client (`FCM_OIDC_*`) both authenticate against the same realm. See [ENV.md](ENV.md).
+- **ArgoCD** — deploy notifications. See [docs/argocd-integration.md](docs/argocd-integration.md).
