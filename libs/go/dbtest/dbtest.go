@@ -33,8 +33,11 @@ import (
 	"github.com/testcontainers/testcontainers-go/wait"
 )
 
-// DefaultImage is used when Options.Image is empty.
-const DefaultImage = "postgres:16-alpine"
+// DefaultImage is used when Options.Image is empty. Pinned by digest (tag
+// kept only for readability) so a Docker Hub tag move can't silently swap
+// the image out from under every dbtest-backed test in the repo -- see
+// issue #2990, where an equivalent unpinned quay.io tag broke CI outright.
+const DefaultImage = "postgres:16-alpine@sha256:721873c34ceb9f8d8fc265984940dc982404c105f19ad51be9fdc5970a6080ea"
 
 // Options configures NewPostgres.
 type Options struct {

@@ -176,7 +176,7 @@ func startRabbitMQ(ctx context.Context, t *testing.T) string {
 	t.Helper()
 	ctr, err := testcontainers.GenericContainer(ctx, testcontainers.GenericContainerRequest{
 		ContainerRequest: testcontainers.ContainerRequest{
-			Image:        "rabbitmq:3-alpine",
+			Image:        "rabbitmq:3-alpine@sha256:d7af1c87c5f1eda13fcfca06db452bf3aeab6619fc3358b68535c0c02c4e52bc",
 			ExposedPorts: []string{"5672/tcp"},
 			WaitingFor:   wait.ForListeningPort("5672/tcp"),
 		},
