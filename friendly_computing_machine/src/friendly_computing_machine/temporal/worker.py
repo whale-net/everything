@@ -47,6 +47,19 @@ from friendly_computing_machine.src.friendly_computing_machine.temporal.util imp
     get_temporal_client_async,
     get_temporal_queue_name,
 )
+from friendly_computing_machine.src.friendly_computing_machine.temporal.whagent.activity import (
+    get_whagent_session_activity,
+    insert_thread_session_activity,
+    post_slack_thread_message_activity,
+    read_whagent_transcript_activity,
+    send_whagent_turn_activity,
+    start_whagent_session_activity,
+    update_slack_message_activity,
+    update_thread_session_status_activity,
+)
+from friendly_computing_machine.src.friendly_computing_machine.temporal.whagent.workflow import (
+    SlackThreadAgentWorkflow,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -56,6 +69,7 @@ WORKFLOWS = [
     SlackContextGeminiWorkflow,
     SlackMessageQODWorkflow,
     SlackUserInfoWorkflow,
+    SlackThreadAgentWorkflow,
 ]
 ACTIVITIES = [
     generate_context_prompt,
@@ -76,6 +90,14 @@ ACTIVITIES = [
     backfill_genai_text_slack_user_id_activity,
     backfill_genai_text_slack_channel_id_activity,
     fix_slack_tagging_activity,
+    start_whagent_session_activity,
+    send_whagent_turn_activity,
+    get_whagent_session_activity,
+    read_whagent_transcript_activity,
+    insert_thread_session_activity,
+    update_thread_session_status_activity,
+    post_slack_thread_message_activity,
+    update_slack_message_activity,
 ]
 
 

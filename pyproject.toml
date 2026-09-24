@@ -45,12 +45,20 @@ dependencies = [
     "opentelemetry-exporter-otlp",
     
     # Generative AI
-    "google-generativeai",
+    "google-genai",
 
     # HTTP client
     "httpx",
     "requests",
-    
+
+    # gRPC. grpcio-tools' protobuf requirement is what actually pins the
+    # resolved protobuf major version; keep it inside the 6.x range that
+    # matches whagent_net/protos' Bazel-pinned protobuf module (33.4).
+    # grpcio-tools>=1.82 requires protobuf 7.x, which would drift out of
+    # that range again.
+    "grpcio>=1.72.1",
+    "grpcio-tools>=1.72.1,<1.82",
+
     # JWT handling
     "python-jose",
     "python-dateutil",

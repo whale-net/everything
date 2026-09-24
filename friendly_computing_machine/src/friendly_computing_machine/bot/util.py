@@ -128,6 +128,50 @@ def slack_send_message(
     return out_message
 
 
+def slack_post_thread_message(
+    channel: str,
+    text: str,
+    thread_ts: Optional[str] = None,
+    blocks: Optional[list[Block]] = None,
+) -> str:
+    """Post a message to Slack using Slack's own ts string directly.
+
+    slack_send_message's thread_ts param is typed datetime and round-trips
+    a Slack ts string through it via .timestamp() -- risky for Slack's
+    "<seconds>.<microseconds>" format, which callers holding a real Slack
+    thread_ts (e.g. from a Bolt event payload) should never need. This is
+    a lower-level helper for exactly that case: it forwards thread_ts
+    straight through to chat_postMessage and does not insert a
+    SlackMessage row (the whagent-net thread relay's placeholder/status
+    messages aren't channel content to sync, just UI state it owns).
+
+    Returns the posted message's ts.
+    """
+    web_client = get_slack_web_client()
+    kwargs = {"channel": channel, "text": text}
+    if blocks is not None:
+        kwargs["blocks"] = blocks
+    if thread_ts is not None:
+        kwargs["thread_ts"] = thread_ts
+    response = web_client.chat_postMessage(**kwargs)
+    return response["ts"]
+
+
+def slack_update_message(
+    channel: str,
+    ts: str,
+    text: str,
+    blocks: Optional[list[Block]] = None,
+) -> str:
+    """Update an existing Slack message by ts. See slack_post_thread_message."""
+    web_client = get_slack_web_client()
+    kwargs = {"channel": channel, "ts": ts, "text": text}
+    if blocks is not None:
+        kwargs["blocks"] = blocks
+    response = web_client.chat_update(**kwargs)
+    return response["ts"]
+
+
 def slack_bot_who_am_i():
     web_client = get_slack_web_client()
     return web_client.auth_test()

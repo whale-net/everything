@@ -15,6 +15,7 @@ from friendly_computing_machine.src.friendly_computing_machine.models.music_poll
 )
 from friendly_computing_machine.src.friendly_computing_machine.models.slack import (
     SlackChannel,
+    SlackChannelAgentLink,
     SlackCommand,
     SlackCommandCreate,
     SlackMessage,
@@ -23,6 +24,8 @@ from friendly_computing_machine.src.friendly_computing_machine.models.slack impo
     SlackSpecialChannelType,
     SlackTeam,
     SlackTeamCreate,
+    SlackThreadSession,
+    SlackThreadSessionStatusEnum,
     SlackUser,
     SlackUserCreate,
 )
@@ -349,3 +352,67 @@ def get_slack_special_channels_from_type(
             (result, result.slack_channel, result.slack_special_channel_type)
             for result in results
         ]
+
+
+def get_agent_link_for_channel(
+    slack_channel_id: int,
+    session: Optional[Session] = None,
+) -> SlackChannelAgentLink | None:
+    """Get the enabled whagent-net agent link for a Slack channel, if any."""
+    with SessionManager(session) as session:
+        stmt = select(SlackChannelAgentLink).where(
+            and_(
+                SlackChannelAgentLink.slack_channel_id == slack_channel_id,
+                SlackChannelAgentLink.enabled,
+            )
+        )
+        return session.exec(stmt).one_or_none()
+
+
+def get_thread_session(
+    slack_channel_id: int,
+    thread_ts: str,
+    session: Optional[Session] = None,
+) -> SlackThreadSession | None:
+    """Get the thread session row for a Slack channel + thread ts, if any."""
+    with SessionManager(session) as session:
+        stmt = select(SlackThreadSession).where(
+            and_(
+                SlackThreadSession.slack_channel_id == slack_channel_id,
+                SlackThreadSession.thread_ts == thread_ts,
+            )
+        )
+        return session.exec(stmt).one_or_none()
+
+
+def insert_thread_session(
+    slack_channel_id: int,
+    thread_ts: str,
+    whagent_session_id: str,
+    status: SlackThreadSessionStatusEnum = SlackThreadSessionStatusEnum.ACTIVE,
+    session: Optional[Session] = None,
+) -> SlackThreadSession:
+    """Insert a new Slack thread -> whagent-net session mapping."""
+    with SessionManager(session) as session:
+        thread_session = SlackThreadSession(
+            slack_channel_id=slack_channel_id,
+            thread_ts=thread_ts,
+            whagent_session_id=whagent_session_id,
+            status=status,
+        )
+        session.add(thread_session)
+        session.commit()
+        session.refresh(thread_session)
+        return thread_session
+
+
+def update_thread_session_status(
+    thread_session_id: int,
+    status: SlackThreadSessionStatusEnum,
+    session: Optional[Session] = None,
+) -> SlackThreadSession | None:
+    """Update a Slack thread session's status."""
+    with SessionManager(session) as session:
+        return db_update(
+            session, SlackThreadSession, thread_session_id, {"status": status}
+        )

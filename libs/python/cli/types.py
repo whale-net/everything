@@ -57,3 +57,49 @@ ManManWorkerDalApiUrl = Annotated[
         help="URL for ManMan Worker DAL API (e.g., http://worker-dal-api.manman.svc.cluster.local)"
     )
 ]
+
+# whagent-net client (fcm -> whagent_net's api SessionService, service account)
+WhagentApiUrl = Annotated[
+    str,
+    typer.Option(
+        ...,
+        envvar="WHAGENT_API_URL",
+        help="gRPC address for whagent-net's api SessionService (host:port)"
+    )
+]
+
+WhagentUiPublicUrl = Annotated[
+    str,
+    typer.Option(
+        ...,
+        envvar="WHAGENT_UI_PUBLIC_URL",
+        help="Public base URL for whagent-net's ui, used to build session links (e.g. https://whagent.example.com)"
+    )
+]
+
+WhagentKeycloakTokenUrl = Annotated[
+    str,
+    typer.Option(
+        ...,
+        envvar="WHAGENT_KEYCLOAK_TOKEN_URL",
+        help="Keycloak token endpoint for fcm's whagent-net service-account client_credentials grant"
+    )
+]
+
+WhagentClientId = Annotated[
+    str,
+    typer.Option(
+        ...,
+        envvar="WHAGENT_CLIENT_ID",
+        help="Keycloak client id for fcm's whagent-net service account"
+    )
+]
+
+WhagentClientSecret = Annotated[
+    str,
+    typer.Option(
+        ...,
+        envvar="WHAGENT_CLIENT_SECRET",
+        help="Keycloak client secret for fcm's whagent-net service account"
+    )
+]

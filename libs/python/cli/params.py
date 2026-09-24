@@ -91,6 +91,11 @@ from libs.python.cli.types import (
     ManManExperienceApiUrl,
     ManManStatusApiUrl,
     ManManWorkerDalApiUrl,
+    WhagentApiUrl,
+    WhagentUiPublicUrl,
+    WhagentKeycloakTokenUrl,
+    WhagentClientId,
+    WhagentClientSecret,
 )
 
 
@@ -104,7 +109,12 @@ __all__ = [
     'ManManExperienceApiUrl',
     'ManManStatusApiUrl',
     'ManManWorkerDalApiUrl',
-    
+    'WhagentApiUrl',
+    'WhagentUiPublicUrl',
+    'WhagentKeycloakTokenUrl',
+    'WhagentClientId',
+    'WhagentClientSecret',
+
     # Type aliases - RabbitMQ
     'RabbitMQHost',
     'RabbitMQPort',
