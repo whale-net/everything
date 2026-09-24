@@ -255,6 +255,17 @@ func cleanDecisionTitle(name string) string {
 	return leadingLBLabelRe.ReplaceAllString(strings.TrimSpace(name), "")
 }
 
+// leadingCLabelRe strips a leading "C<n> — " (or "--"/"-") token from a
+// stored Feature.Name, mirroring leadingLBLabelRe above -- a Feature
+// imported (or hand-created pre-#2961) with its own "Cn —" prefix baked
+// into Name must not carry that stale prefix into a re-render, which
+// recomputes the citation from the stored DisplayNumber instead.
+var leadingCLabelRe = regexp.MustCompile(`^C\d+\s*[—–-]\s*`)
+
+func cleanFeatureTitle(name string) string {
+	return leadingCLabelRe.ReplaceAllString(strings.TrimSpace(name), "")
+}
+
 func renderCurrentStateMD(name, revision string) string {
 	var b strings.Builder
 	b.WriteString(header(name, revision, nowFunc()))
@@ -287,7 +298,7 @@ func renderCapabilityMapMD(name, revision string, doc slice.Document) string {
 		b.WriteString(fs.Name)
 		b.WriteString("\n\n")
 		for _, f := range features {
-			b.WriteString(fmt.Sprintf("- **C%d** — %s\n", f.DisplayNumber, f.Name))
+			b.WriteString(fmt.Sprintf("- **C%d** — %s\n", f.DisplayNumber, cleanFeatureTitle(f.Name)))
 		}
 		b.WriteString("\n")
 	}

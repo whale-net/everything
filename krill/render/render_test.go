@@ -184,6 +184,37 @@ func TestRender_DisplayNumbersStableAcrossReorder(t *testing.T) {
 	assert.Contains(t, afterFiles.CapabilityMapMD, "- **C4** — W\n", "W renders its own stored number, never one derived from its position in the list")
 }
 
+// TestRender_FeatureNamePrefixStripped mirrors the LB1-prefix case in
+// TestRender_ProducesFourFileLayout: a Feature whose stored Name still
+// carries its own baked-in "Cn — " prefix (e.g. imported, or hand-created
+// before #2961's create_feature existed) must not have that stale prefix
+// doubled up with the freshly computed DisplayNumber at render time.
+func TestRender_FeatureNamePrefixStripped(t *testing.T) {
+	ctx := context.Background()
+	productID := uuid.New()
+	scopeID := uuid.New()
+
+	fsID := uuid.New()
+	f1 := newFeature("C1 — Do the thing", 1)
+	f1.FeatureSetID = fsID
+	f2 := newFeature("Do another thing", 2)
+	f2.FeatureSetID = fsID
+
+	src := &fakeSource{Doc: slice.Document{
+		SchemaVersion: slice.SchemaVersion,
+		Product:       &slice.ProductEntity{EntityRef: slice.EntityRef{ID: productID, RevisionID: uuid.New()}, Name: "Widgets", Vision: "v"},
+		FeatureSets:   []slice.FeatureSetEntity{{EntityRef: slice.EntityRef{ID: fsID, RevisionID: uuid.New()}, Name: "Core"}},
+		Features:      []slice.FeatureEntity{f1, f2},
+	}}
+
+	files, err := render.Render(ctx, src, scopeID, productID)
+	require.NoError(t, err)
+
+	assert.Contains(t, files.CapabilityMapMD, "- **C1** — Do the thing\n")
+	assert.NotContains(t, files.CapabilityMapMD, "C1 — C1")
+	assert.Contains(t, files.CapabilityMapMD, "- **C2** — Do another thing\n")
+}
+
 // TestRender_MustNotForecloseRendersFromAssociationRows is #2495's "a `Must
 // not foreclose: LB1, LB4` line renders from association rows" case: the
 // roadmap line must be reconstructed from entity_milestone rows, never
