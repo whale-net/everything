@@ -56,7 +56,7 @@ func startArchiveMinIO(ctx context.Context, t *testing.T) *s3.Client {
 
 	ctr, err := testcontainers.GenericContainer(ctx, testcontainers.GenericContainerRequest{
 		ContainerRequest: testcontainers.ContainerRequest{
-			Image:        "cgr.dev/chainguard/minio:latest",
+			Image:        "cgr.dev/chainguard/minio:latest@sha256:bd014394a80898e68c149f2311fdf8d5a2c2f3bb2c33b9327ae6d02b4b065ae1",
 			ExposedPorts: []string{"9000/tcp"},
 			Env: map[string]string{
 				"MINIO_ROOT_USER":     archiveTestMinioUser,
