@@ -37,3 +37,68 @@ Documentation Conventions describe, and `ARCHITECTURE.md`/`README.md`/
 `ENV.md`/`TOC.md` stay hand-written even for a krill-migrated domain —
 krill's own non-goals scope its renderer to the product doc set only (see
 `krill/PRODUCT.md`'s Non-goals).
+
+## Source of truth: krill MCP, not this file
+
+Decided during issue #2971's readiness dogfood (2026-09-24): for a
+krill-migrated domain, **krill itself (via its MCP/API surface, and
+eventually a UI) is the source of truth and the intended read surface** —
+not the rendered `PRODUCT.md`/`product/*.md`. Rendering is a manual,
+occasional confidence check that everything is actually tracked in krill,
+not a required or automated pipeline step — no CI job renders these files,
+and none is planned (no Postgres/kube secrets are being added to GitHub
+Actions for this). If you need krill's current spec, query the MCP surface
+directly rather than assuming a checked-in rendered file is fresh.
+
+## Rendering manually
+
+There is no CI job for this — do it by hand when you want a confidence
+check:
+
+1. Get a **read-only** Postgres credential for the environment you want
+   (`krill-dev` or `krill-prod`): the secret
+   `krill-<env>-reader-user.common-postgresql.credentials.postgresql.acid.zalan.do`
+   lives in the **`postgres`** namespace (not `krill-<env>`) on the
+   `kubernetes-admin@humpback` kubectl context, with `username`/`password`
+   keys (base64-encoded). Database name is `krill_<env>`.
+2. Port-forward to the Postgres pod, not the Service — `common-postgresql`
+   is a selector-less Service (the Zalando operator manages its endpoints
+   directly), so `kubectl port-forward svc/common-postgresql` fails with
+   "Service is defined without a selector." Forward to whichever pod
+   currently has `spilo-role=master` instead, e.g.:
+   ```
+   kubectl --context kubernetes-admin@humpback -n postgres \
+     port-forward pod/common-postgresql-1 5433:5432
+   ```
+3. Run the renderer against the tunnel:
+   ```
+   bazel run //krill/render/cmd:render -- --product krill --out <dir> \
+     --database-url "postgres://<reader-user>:<password>@localhost:5433/krill_<env>?sslmode=require"
+   ```
+4. Diff `<dir>` against the committed files before deciding whether to
+   commit the refresh — a re-render is not guaranteed content-equivalent to
+   what's committed (see "Known content gaps" below).
+
+## Known content gaps
+
+A re-render is **not** a full replacement for the hand-authored docs it
+projects from — some prose in the committed files has no entity to render
+from at all:
+
+- **`product/01-current-state.md` always renders as a fixed placeholder.**
+  There is no entity in krill's model for freeform current-state analysis
+  (an architect's narrative survey of what exists and what a milestone
+  replaces) — `renderCurrentStateMD` has never had anything to read here
+  and none is planned yet.
+- **`product/03-roadmap.md` renders the structured facts, not the reasoning
+  prose behind them.** A milestone's outcome sentence, FR budget, and the
+  bare `Delivers`/`Must not foreclose`/`Deliberately deferred` id lists do
+  render (issue #2970). The paragraph of *why* each `Must not foreclose`
+  entry matters, "Notes for design," and pre-agreed over-budget-cut
+  rationale do not — krill has no schema slot for that prose.
+
+Practical consequence: don't delete or stop maintaining that prose in the
+committed hand-authored files on the assumption a re-render will preserve
+it — it won't. Re-rendering on top of those files today would silently
+drop it, per this doc's "A hand edit... is silently lost" rule above,
+applied to prose rather than a hand edit.
