@@ -10,6 +10,6 @@ py_library(
         "//friendly_computing_machine/src/friendly_computing_machine:util",
         "//friendly_computing_machine/src/friendly_computing_machine/db",
         "//friendly_computing_machine/src/friendly_computing_machine/models",
-        "@pypi//:google-generativeai",
+        "@pypi//:google-genai",
     ],
 )

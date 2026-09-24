@@ -1,9 +1,12 @@
 import random
 from textwrap import dedent
 
-import google.generativeai as genai
 from temporalio import activity
 
+from friendly_computing_machine.src.friendly_computing_machine.gemini.client import (
+    DEFAULT_GEMINI_MODEL,
+    get_gemini_client,
+)
 from friendly_computing_machine.src.friendly_computing_machine.models.genai import GenAIText
 
 
@@ -11,8 +14,10 @@ async def gen_text(prompt: str) -> str:
     """
     Generate text using the Gemini AI model.
     """
-    model = genai.GenerativeModel()
-    response = await model.generate_content_async(prompt)
+    client = get_gemini_client()
+    response = await client.aio.models.generate_content(
+        model=DEFAULT_GEMINI_MODEL, contents=prompt
+    )
     return response.text
 
 

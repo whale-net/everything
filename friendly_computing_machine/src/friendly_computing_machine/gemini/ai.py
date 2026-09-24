@@ -1,9 +1,11 @@
 import logging
 from textwrap import dedent
 
-import google.generativeai as genai
-
 from friendly_computing_machine.src.friendly_computing_machine.db.dal import get_genai_texts_by_slack_channel
+from friendly_computing_machine.src.friendly_computing_machine.gemini.client import (
+    DEFAULT_GEMINI_MODEL,
+    get_gemini_client,
+)
 from friendly_computing_machine.src.friendly_computing_machine.util import deprecated
 
 logger = logging.getLogger(__name__)
@@ -58,10 +60,11 @@ def generate_text_with_slack_context(
 @deprecated
 def generate_text(user_name: str, prompt_text: str) -> tuple:
     try:
-        # TODO - model name - using default for now
-        model = genai.GenerativeModel()
+        client = get_gemini_client()
         logger.info("about to generate response for %s", prompt_text[:100])
-        response = model.generate_content(prompt_text)
+        response = client.models.generate_content(
+            model=DEFAULT_GEMINI_MODEL, contents=prompt_text
+        )
 
         response_text = response.text
         # Check for prompt feedback (e.g., blocked due to safety settings)
@@ -85,8 +88,9 @@ def generate_text(user_name: str, prompt_text: str) -> tuple:
 
             # You might want to handle blocked prompts differently, e.g.,
             # by informing the user or modifying the prompt.
-            feedback_response = model.generate_content(
-                feedback_prompt.replace("{user_name}", user_name)
+            feedback_response = client.models.generate_content(
+                model=DEFAULT_GEMINI_MODEL,
+                contents=feedback_prompt.replace("{user_name}", user_name),
             )
             response_text = feedback_response.text or feedback_response.prompt_feedback
             is_safe = False

@@ -36,7 +36,7 @@ def create_gemini_context(
     
     Args:
         api_key: Google API key
-        gemini_initializer: Optional function to initialize Gemini (e.g., genai.configure)
+        gemini_initializer: Optional function to initialize Gemini (e.g., init_gemini_client)
     
     Returns:
         GeminiContext with API key

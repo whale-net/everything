@@ -10,6 +10,7 @@ py_library(
         "//friendly_computing_machine/src/friendly_computing_machine:util",
         "//friendly_computing_machine/src/friendly_computing_machine/bot",
         "//friendly_computing_machine/src/friendly_computing_machine/db",
+        "//friendly_computing_machine/src/friendly_computing_machine/gemini",
         "//friendly_computing_machine/src/friendly_computing_machine/models",
         "//friendly_computing_machine/src/friendly_computing_machine/temporal",
         "//friendly_computing_machine/src/migrations",
@@ -25,7 +26,6 @@ py_library(
         "//libs/python/cli/providers/temporal",
         "//libs/python/logging",
         "//libs/python/rmq",
-        "@pypi//:google-generativeai",
         "@pypi//:typer",
     ],
 )
