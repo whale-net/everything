@@ -4,6 +4,10 @@ app_mention starts a new per-thread relay workflow (SlackThreadAgentWorkflow,
 temporal/whagent/workflow.py). A plain message reply in an already-tracked
 thread signals that same workflow rather than starting a new one -- see
 get_thread_session's fast "is this thread active" check below.
+
+relay_thread_reply is not a Bolt listener itself: Bolt dispatches only the
+first matching listener per event, so events.py's single "message" listener
+calls it.
 """
 
 import logging
@@ -74,6 +78,16 @@ def handle_whagent_app_mention(event, say):
                 return
             span.set_attribute("whagent.agent_id", agent_id)
 
+            # A mention inside an already-active thread is just another reply;
+            # the "message" event for it is relayed by relay_thread_reply.
+            existing = get_thread_session(slack_channel.id, thread_ts)
+            if (
+                existing is not None
+                and existing.status == SlackThreadSessionStatusEnum.ACTIVE
+            ):
+                span.set_attribute("whagent.thread_already_active", True)
+                return
+
             first_message = _strip_bot_mention(event.get("text", ""))
             client = get_whagent_client()
 
@@ -103,40 +117,43 @@ def handle_whagent_app_mention(event, say):
             raise
 
 
-@app.event("message")
-def handle_whagent_thread_reply(event, say):
-    with tracer.start_as_current_span("handle_whagent_thread_reply") as span:
+def relay_thread_reply(event) -> bool:
+    """Signal the thread's relay workflow if this message belongs to an active one.
+
+    Returns True if the message was relayed.
+    """
+    with tracer.start_as_current_span("relay_whagent_thread_reply") as span:
         try:
             # Only plain user messages are turns -- edits, joins, bot
             # posts (including the relay's own placeholder/status
             # messages) never are.
             if event.get("subtype") is not None or event.get("bot_id"):
-                return
+                return False
 
             thread_ts = event.get("thread_ts")
             if not thread_ts:
-                return  # not a threaded reply
+                return False  # not a threaded reply
 
             user_id = event.get("user")
             if user_id is None:
-                return
+                return False
             config = get_bot_config()
             if user_id in config.BOT_SLACK_USER_IDS:
-                return
+                return False
 
             channel_slack_id = event["channel"]
             slack_channel = get_slack_channel(slack_channel_slack_id=channel_slack_id)
             if slack_channel is None:
-                return
+                return False
 
             thread_session = get_thread_session(slack_channel.id, thread_ts)
             if (
                 thread_session is None
                 or thread_session.status != SlackThreadSessionStatusEnum.ACTIVE
             ):
-                return
+                return False
 
-            text = event.get("text", "")
+            text = _strip_bot_mention(event.get("text", ""))
             workflow_id = workflow_id_for_thread(
                 get_app_env(), channel_slack_id, thread_ts
             )
@@ -144,6 +161,7 @@ def handle_whagent_thread_reply(event, say):
 
             signal_workflow(workflow_id, SlackThreadAgentWorkflow.queue_message, text)
             span.set_attribute("whagent.signal.sent", True)
+            return True
         except Exception as e:
             span.record_exception(e)
             span.set_status(trace.Status(trace.StatusCode.ERROR, str(e)))

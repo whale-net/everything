@@ -6,17 +6,17 @@ Talk to a whagent-net AI agent by `@mention`ing the bot in a linked channel.
 
 - Link a channel to a whagent-net agent definition first (see "Channel setup" below) — one agent per channel today.
 - `@mention` the bot anywhere in a linked channel: `@fcm <your message>`. The bot starts a new whagent-net session and replies in a thread under your message.
-- The first reply links to the session's whagent-net web page and shows a "Thinking…" placeholder; it's edited in place once the turn resolves.
-- Send more messages in that same thread to continue the session. A message sent while the bot is still working on a turn is queued and combined with any other queued messages into the next turn — it does not start a second, overlapping turn.
+- The first reply is a standalone link to the session's whagent-net web page; it stays put for the life of the thread. Each turn then gets its own "Thinking…" placeholder message, edited in place once the turn resolves.
+- Send more messages in that same thread to continue the session (with or without `@mention`ing the bot). A message sent while the bot is still working on a turn is queued and combined with any other queued messages into the next turn — it does not start a second, overlapping turn.
 - If the channel isn't linked to an agent, mentioning the bot replies with a short "no agent configured for this channel" message and nothing else happens.
 
 ## How it works
 
 One Temporal workflow (`SlackThreadAgentWorkflow`, `temporal/whagent/workflow.py`) per Slack thread, started on `app_mention` (`bot/handlers/whagent.py`) and identified by `fcm-<app_env>-whagent-thread-<channel>-<thread_ts>`:
 
-1. Calls whagent-net's `StartSession` (service-account auth) with the mention text as the first turn, and posts the first thread message (session link + placeholder) via a Slack activity, capturing its `ts`.
+1. Calls whagent-net's `StartSession` (service-account auth) with the mention text as the first turn, posts a standalone session-link message, then a placeholder message whose `ts` is captured.
 2. Polls `GetSession`/`ReadTranscript` until the turn resolves, then edits that same message (`chat.update`) with the response — or a distinct message for a capped/failed session.
-3. Any reply that lands in the thread while a turn is in flight is buffered (a `queue_message` signal) rather than triggering a new turn immediately; once the current turn resolves, everything queued is joined into one combined `SendTurn` call, posted as a new placeholder message, and the loop repeats.
+3. Thread replies reach the workflow via `relay_thread_reply` (`bot/handlers/whagent.py`), called from the single `message` listener in `bot/handlers/events.py` — Bolt runs only the first matching listener per event, so a second `@app.event("message")` would never fire. Any reply that lands in the thread while a turn is in flight is buffered (a `queue_message` signal) rather than triggering a new turn immediately; once the current turn resolves, everything queued is joined into one combined `SendTurn` call, posted as a new placeholder message, and the loop repeats.
 4. An idle thread (no reply and no in-flight turn) times out after 30 minutes and the workflow ends, marking `SlackThreadSession.status = CLOSED`.
 
 Auth is a single shared service-account client-credentials grant (`WHAGENT_CLIENT_ID`/`WHAGENT_CLIENT_SECRET` against `WHAGENT_KEYCLOAK_TOKEN_URL`) — every session in every channel runs as that one service identity; there's no per-Slack-user identity resolution yet.

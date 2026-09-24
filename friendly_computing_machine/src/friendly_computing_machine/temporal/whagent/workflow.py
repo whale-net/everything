@@ -151,13 +151,24 @@ class SlackThreadAgentWorkflow:
             start_to_close_timeout=ACTIVITY_TIMEOUT,
         )
 
+        # The link gets its own message so per-turn placeholder updates never
+        # overwrite it.
         session_link = f"{params.whagent_ui_public_url.rstrip('/')}/sessions/{session_id}"
+        await workflow.execute_activity(
+            post_slack_thread_message_activity,
+            PostSlackThreadMessageParams(
+                channel_id=params.channel_slack_id,
+                thread_ts=params.thread_ts,
+                text=f"Started a whagent-net session: {session_link}",
+            ),
+            start_to_close_timeout=ACTIVITY_TIMEOUT,
+        )
         current_ts = await workflow.execute_activity(
             post_slack_thread_message_activity,
             PostSlackThreadMessageParams(
                 channel_id=params.channel_slack_id,
                 thread_ts=params.thread_ts,
-                text=f"Started a whagent-net session: {session_link}\n{THINKING_TEXT}",
+                text=THINKING_TEXT,
             ),
             start_to_close_timeout=ACTIVITY_TIMEOUT,
         )
