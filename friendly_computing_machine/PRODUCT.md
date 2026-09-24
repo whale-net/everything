@@ -18,7 +18,7 @@ FCM is the Slack front door to the `everything` monorepo. For the people in the 
 
 ## Personas
 
-- **Community member** — a person in the Slack workspace who uses the social and AI features (`/wai`, the music poll, `/poll`, and later AI conversations and game-server status).
+- **Community member** — a person in the Slack workspace who uses the social and AI features (`/wai`, the music poll, `/wpoll`, and later AI conversations and game-server status).
 - **Service / agent** — another monorepo system (manmanv2, whagent_net, deploy tooling, krill agents) that uses FCM to reach people in Slack.
 - **Operator** — runs the FCM deployment. This is the same person who owns the workspace and needs it to be deployable and debuggable.
 

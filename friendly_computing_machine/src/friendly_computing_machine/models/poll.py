@@ -1,4 +1,4 @@
-"""Ad-hoc `/poll` models.
+"""Ad-hoc `/wpoll` models.
 
 Slack identities are stored as Slack IDs rather than FKs to `slackuser`/`slackchannel`
 because those tables are filled by a periodic sync and may not yet contain a new voter.

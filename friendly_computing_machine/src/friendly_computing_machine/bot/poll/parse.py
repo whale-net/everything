@@ -1,6 +1,6 @@
-"""Parse `/poll` command text in the Simple Poll style.
+"""Parse `/wpoll` command text in the Simple Poll style.
 
-/poll "Question?" "Option A" "Option B" [anonymous] [limit N]
+/wpoll "Question?" "Option A" "Option B" [anonymous] [limit N]
 """
 
 from dataclasses import dataclass
@@ -15,7 +15,7 @@ _OPEN_QUOTES = {'"', "“", "„"}
 _CLOSE_QUOTES = {'"', "”", "“"}
 
 USAGE = (
-    'Usage: `/poll "Question?" "Option 1" "Option 2" [anonymous] [limit N]`\n'
+    'Usage: `/wpoll "Question?" "Option 1" "Option 2" [anonymous] [limit N]`\n'
     "Wrap the question and each option in double quotes. "
     f"{MIN_OPTIONS}-{MAX_OPTIONS} options. "
     "`anonymous` hides who voted; `limit N` caps votes per person."

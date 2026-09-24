@@ -1,4 +1,4 @@
-"""Block Kit rendering for `/poll` messages."""
+"""Block Kit rendering for `/wpoll` messages."""
 
 from friendly_computing_machine.src.friendly_computing_machine.db.dal.poll_dal import (
     PollSnapshot,

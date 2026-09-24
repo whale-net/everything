@@ -1,4 +1,4 @@
-"""Ad-hoc `/poll` DAL functions."""
+"""Ad-hoc `/wpoll` DAL functions."""
 
 import datetime
 import logging

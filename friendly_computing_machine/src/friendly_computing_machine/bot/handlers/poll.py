@@ -1,4 +1,4 @@
-"""`/poll` slash command and its vote/close button handlers.
+"""`/wpoll` slash command and its vote/close button handlers.
 
 All interactions arrive over the bolt Socket Mode connection; each vote is
 persisted, then the poll message is re-rendered in place with `chat.update`.
@@ -62,6 +62,8 @@ from friendly_computing_machine.src.friendly_computing_machine.models.slack impo
 logger = logging.getLogger(__name__)
 tracer = trace.get_tracer(__name__)
 
+POLL_COMMAND = "/wpoll"
+
 # Serializes vote -> render -> chat.update per poll so a stale render never wins.
 _poll_locks: defaultdict[int, threading.Lock] = defaultdict(threading.Lock)
 
@@ -83,7 +85,7 @@ def _record_command(user_id: str, channel_id: str, text: str) -> None:
     insert_slack_command(
         SlackCommandCreate(
             caller_slack_user_id=user_id,
-            command_base="/poll",
+            command_base=POLL_COMMAND,
             command_text=text,
             slack_channel_slack_id=channel_id,
             created_at=datetime.datetime.now(),
@@ -125,13 +127,13 @@ def _publish_poll(
     return None
 
 
-@app.command("/poll")
+@app.command(POLL_COMMAND)
 def handle_poll_command(ack: Ack, respond: Respond, command, client: SlackWebClientFCM):
     with tracer.start_as_current_span("handle_poll_command") as span:
         user_id = command["user_id"]
         channel_id = command["channel_id"]
         text = command.get("text", "")
-        span.set_attribute("slack.command", "/poll")
+        span.set_attribute("slack.command", POLL_COMMAND)
         span.set_attribute("slack.user.id", user_id)
         span.set_attribute("slack.channel.id", channel_id)
 

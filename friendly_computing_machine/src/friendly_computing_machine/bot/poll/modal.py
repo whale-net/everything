@@ -1,4 +1,4 @@
-"""Poll-creation modal opened by a bare `/poll`."""
+"""Poll-creation modal opened by a bare `/wpoll`."""
 
 import json
 from dataclasses import dataclass

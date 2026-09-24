@@ -8,7 +8,7 @@ Part of the [FCM product brief](../PRODUCT.md). One line per capability, phrased
 - C2 — A community member can vote in the weekly music poll and see it processed and archived without anyone tending it.
 - C3 — The operator can trust that Slack users, channels, and messages FCM depends on are kept in sync in its own store.
 - C4 — The operator can build, deploy, run locally, and diagnose FCM from docs, health checks, and tests that match the code.
-- C12 — A community member can start an ad-hoc poll with `/poll` (Simple Poll-style: a creation form from a bare `/poll`, or a one-line quoted question and options with optional `anonymous` and `limit N`), vote with buttons that update the message live, and trust that every vote is kept in FCM's store.
+- C12 — A community member can start an ad-hoc poll with `/wpoll` (Simple Poll-style: a creation form from a bare `/wpoll`, or a one-line quoted question and options with optional `anonymous` and `limit N`), vote with buttons that update the message live, and trust that every vote is kept in FCM's store.
 
 ### Next
 

@@ -48,7 +48,7 @@ Independent of M1–M3: it needs no V1 removal, no service contract, and no whag
 ```
 Delivers: C12
 Ships alongside: `poll`, `polloption`, `pollvote` tables (votes are never deleted; un-voting stamps
-  `removed_at`); docs/poll.md; `/poll` registered in the Slack app config
+  `removed_at`); docs/poll.md; `/wpoll` registered in the Slack app config
 Must not foreclose: LB1 (C9 may later render an agent's question as a poll — a poll is keyed by its
   own ID and Slack message ts, not by a producer route), LB3 (votes are recorded by the voter's
   Slack user ID, never FCM's)
