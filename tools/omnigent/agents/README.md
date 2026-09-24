@@ -13,11 +13,11 @@ Each subdirectory is a standalone single-agent bundle (`config.yaml`).
 
 | Agent | Harness | Model | Purpose |
 |-------|---------|-------|---------|
-| `pi-dev/` | `pi-native` | `locallm/bonsai2` | General-purpose dev agent wired to krill's prod work-axis MCP surface (`krill-mcp-prod`, `/mcp/spec`) |
+| `local-pi/` | `pi-native` | `locallm/bonsai2` | General-purpose dev agent wired to krill's prod work-axis MCP surface (`krill-mcp-prod`, `/mcp/spec`) |
 
 ## Bundle shape
 
-A bundle is a directory holding one `config.yaml` (see `pi-dev/config.yaml`
+A bundle is a directory holding one `config.yaml` (see `local-pi/config.yaml`
 for a worked example, or the ground-truth `claude-native-ui` bundle pulled
 via `sys_agent_download` during authoring):
 
