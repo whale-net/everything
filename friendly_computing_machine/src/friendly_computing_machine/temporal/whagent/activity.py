@@ -100,13 +100,23 @@ class ReadWhagentTranscriptParams:
     from_seq: int = 0
 
 
+@dataclass
+class WhagentTranscriptResult:
+    text: str
+    seq: int
+
+
 @activity.defn
 async def read_whagent_transcript_activity(
     params: ReadWhagentTranscriptParams,
-) -> Optional[str]:
-    """Return the latest assistant_message event's text, if any."""
+) -> Optional[WhagentTranscriptResult]:
+    """Return the latest assistant_message event at or after from_seq, if any."""
     client = get_whagent_client()
-    return client.latest_assistant_message(params.session_id, from_seq=params.from_seq)
+    result = client.latest_assistant_message(params.session_id, from_seq=params.from_seq)
+    if result is None:
+        return None
+    text, seq = result
+    return WhagentTranscriptResult(text=text, seq=seq)
 
 
 # ----------------------------------------------------------------------

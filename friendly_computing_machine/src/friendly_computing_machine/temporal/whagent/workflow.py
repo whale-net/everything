@@ -27,6 +27,7 @@ from friendly_computing_machine.src.friendly_computing_machine.temporal.whagent.
     StartWhagentSessionParams,
     UpdateSlackMessageParams,
     UpdateThreadSessionStatusParams,
+    WhagentTranscriptResult,
     get_whagent_session_activity,
     insert_thread_session_activity,
     post_slack_thread_message_activity,
@@ -70,6 +71,47 @@ def workflow_id_for_thread(app_env: str, channel_id: str, thread_ts: str) -> str
     messier to handle than a DB row check).
     """
     return f"fcm-{app_env}-whagent-thread-{channel_id}-{thread_ts}"
+
+
+def resolve_turn_outcome(
+    state: int,
+    error_detail: Optional[str],
+    since_seq: int,
+    transcript_result: Optional[WhagentTranscriptResult],
+) -> Optional[tuple[str, int]]:
+    """Decide whether one poll's (session state, transcript read) resolves the turn.
+
+    Returns (text, next_since_seq) once resolved, or None to keep polling.
+    Kept Temporal-free (like TurnQueue below) so the actual bug this
+    guards against -- a poll that lands between SendTurn returning and the
+    session genuinely leaving RUNNING, or an agent's non-final
+    assistant_message during a still-RUNNING turn -- can be unit tested
+    without a Temporal test environment.
+
+    CAPPED/FAILED are terminal regardless of RUNNING/transcript state.
+    Otherwise a poll only resolves once the session has left RUNNING
+    *and* transcript_result is a genuinely new assistant_message (its
+    caller only passes one when since_seq has advanced past it) --
+    RUNNING with a message means an intermediate message from a
+    multi-message turn, and not-RUNNING with no message means a stale
+    read of the *previous* turn's terminal state, caught before SendTurn's
+    new turn has been observed as started.
+    """
+    if state == SESSION_STATE_CAPPED:
+        return (
+            "This conversation hit its budget (turn or cost cap) and has "
+            "stopped -- see the session link above for details.",
+            since_seq,
+        )
+    if state == SESSION_STATE_FAILED:
+        detail = f" ({error_detail})" if error_detail else ""
+        return (
+            f"This turn failed{detail} -- see the session link above for details.",
+            since_seq,
+        )
+    if state != SESSION_STATE_RUNNING and transcript_result is not None:
+        return transcript_result.text, transcript_result.seq + 1
+    return None
 
 
 class TurnQueue:
@@ -173,9 +215,10 @@ class SlackThreadAgentWorkflow:
             start_to_close_timeout=ACTIVITY_TIMEOUT,
         )
 
+        since_seq = 0
         while True:
             self._queue.turn_in_flight = True
-            final_text = await self._resolve_turn(session_id)
+            final_text, since_seq = await self._resolve_turn(session_id, since_seq)
             await workflow.execute_activity(
                 update_slack_message_activity,
                 UpdateSlackMessageParams(
@@ -227,38 +270,44 @@ class SlackThreadAgentWorkflow:
                 start_to_close_timeout=ACTIVITY_TIMEOUT,
             )
 
-    async def _resolve_turn(self, session_id: str) -> str:
-        """Poll until the turn leaves RUNNING, then render its result text."""
+    async def _resolve_turn(self, session_id: str, since_seq: int) -> tuple[str, int]:
+        """Poll until the turn genuinely resolves, then render its result text.
+
+        Returns the reply text and the transcript seq to use as next
+        turn's watermark. See resolve_turn_outcome for what "genuinely
+        resolves" requires -- transcript is only read once the session
+        has left RUNNING, both to avoid an extra call per poll while a
+        turn is still in flight and because a message seen while still
+        RUNNING would just be an intermediate one for a multi-message
+        turn.
+        """
         elapsed = timedelta()
-        status = None
         while elapsed < TURN_TIMEOUT:
             status = await workflow.execute_activity(
                 get_whagent_session_activity,
                 session_id,
                 start_to_close_timeout=ACTIVITY_TIMEOUT,
             )
+
+            transcript_result: Optional[WhagentTranscriptResult] = None
             if status.state != SESSION_STATE_RUNNING:
-                break
+                transcript_result = await workflow.execute_activity(
+                    read_whagent_transcript_activity,
+                    ReadWhagentTranscriptParams(session_id=session_id, from_seq=since_seq),
+                    start_to_close_timeout=ACTIVITY_TIMEOUT,
+                )
+
+            outcome = resolve_turn_outcome(
+                status.state, status.error_detail, since_seq, transcript_result
+            )
+            if outcome is not None:
+                return outcome
+
             await workflow.sleep(POLL_INTERVAL)
             elapsed += POLL_INTERVAL
-        else:
-            return (
-                "_This turn timed out waiting for whagent-net -- check the session "
-                "link above for its current status._"
-            )
 
-        if status.state == SESSION_STATE_CAPPED:
-            return (
-                "This conversation hit its budget (turn or cost cap) and has "
-                "stopped -- see the session link above for details."
-            )
-        if status.state == SESSION_STATE_FAILED:
-            detail = f" ({status.error_detail})" if status.error_detail else ""
-            return f"This turn failed{detail} -- see the session link above for details."
-
-        text = await workflow.execute_activity(
-            read_whagent_transcript_activity,
-            ReadWhagentTranscriptParams(session_id=session_id, from_seq=0),
-            start_to_close_timeout=ACTIVITY_TIMEOUT,
+        return (
+            "_This turn timed out waiting for whagent-net -- check the session "
+            "link above for its current status._",
+            since_seq,
         )
-        return text or "_(no response text found -- see the session link above)_"
