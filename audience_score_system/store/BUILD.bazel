@@ -14,7 +14,7 @@ load("@rules_go//go:def.bzl", "go_library", "go_test")
 #
 # The bearer-credential-to-Person caller-auth mechanism `mcp` uses no
 # longer lives here (migration 005/credential.go, issue #1575) -- issue
-# #1643 migrated it onto the shared //libs/go/mcpauth.CredentialStore
+# #1643 migrated it onto the shared //libs/go/auth.CredentialStore
 # against migration 006's mcp_credential table.
 #
 # video_script.go is the video-script-model milestone's foundation

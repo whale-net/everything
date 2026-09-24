@@ -16,8 +16,8 @@ milestone hangs off. No spec entities exist yet — that is later M1 work.
 | `migrate` | `//krill/migrate` | job | Applies `krill/migrate/schema/migrations` and seeds the one `scope` row with this repo's forge coordinates (LB1, NFR2). |
 | `api` | `//krill/api` | external-api | HTTP server; `/healthz` (a live DB ping), `POST /sessions/init` (FR3's `init` primitive, issue #2489), the M1 entity write API (FR1/FR2/FR4, issue #2490), the FR5-FR9 scoped-slice query surface (`GET /slices/{feature-sets,features,requirements,products}/{id}`, issue #2491), the pointer-artifact create endpoint (`POST /pointer-artifacts`, FR20, issue #2496), and (M3, issues #2683-#2689) the delivery-axis surface -- milestone/milepebble authoring, status, shipment, re-cut, backlog, and abandon. See "Delivery-axis endpoints" below. |
 | `import` | `//krill/importer/cmd` | CLI (not deployed) | The one-way markdown importer (FR16, FR17, issue #2492): parses a `PRODUCT.md` + `product/*.md` doc set into `krill/store`'s spec entities and prints the entity-id report. Gated on a valid `init` session, same as every other write path. Records a one-time, one-way `import_completion` marker after a successful run and refuses a second import for the same path before parsing (FR12, NFR3, issue #2548). Run with `bazel run //krill/importer/cmd:import -- --path <dir> --session-id <uuid> --source-revision <sha>`. See `ARCHITECTURE.md` "The markdown importer and the delivery-axis association". |
-| `mcp` | `//krill/mcp` | external-api | krill's MCP surface: the FR5-FR9 scoped-slice query over MCP at `/mcp/spec`, the FR1-FR10 design-session/mediated-intake surface plus (M3, issues #2683-#2689) the delivery-axis tool set at `/mcp/design` (issue #2547), and (M5, issue #2867) the Swarm Operator-only surface at `/mcp/ops` -- mounted but with no tool registered yet -- all three behind the mcpauth (human) + whagent-net (agent) two-front-door auth pattern. See "MCP spec surface", "Design-session MCP surface", "Operator MCP surface", and "Delivery-axis endpoints" below. |
-| `ui` | `//krill/ui` | external-api | Barebones Keycloak sign-in shell: gives mcpauth's `/authorize` endpoint (mounted here) a `SignInURL` to redirect a not-yet-signed-in caller to, so the human front door above can actually mint a credential end to end. No session list, no spec browsing -- a real web UI is deferred (`PRODUCT.md`'s C19, "Later"). See "The mcpauth sign-in shell" below. |
+| `mcp` | `//krill/mcp` | external-api | krill's MCP surface: the FR5-FR9 scoped-slice query over MCP at `/mcp/spec`, the FR1-FR10 design-session/mediated-intake surface plus (M3, issues #2683-#2689) the delivery-axis tool set at `/mcp/design` (issue #2547), and (M5, issue #2867) the Swarm Operator-only surface at `/mcp/ops` -- mounted but with no tool registered yet -- all three behind the auth (human) + whagent-net (agent) two-front-door auth pattern. See "MCP spec surface", "Design-session MCP surface", "Operator MCP surface", and "Delivery-axis endpoints" below. |
+| `ui` | `//krill/ui` | external-api | Barebones Keycloak sign-in shell: gives auth's `/authorize` endpoint (mounted here) a `SignInURL` to redirect a not-yet-signed-in caller to, so the human front door above can actually mint a credential end to end. No session list, no spec browsing -- a real web UI is deferred (`PRODUCT.md`'s C19, "Later"). See "The auth sign-in shell" below. |
 
 ## Endpoints
 
@@ -252,7 +252,7 @@ below). No write tool is registered on this endpoint in M1.
 independently env-gated (see `ENV.md`), authorized by **persona** (Swarm
 Operator / Requirement Contributor / Agent), never individual identity:
 
-- human callers via `//libs/go/mcpauth` (OAuth2-capable) -- resolves to
+- human callers via `//libs/go/auth` (OAuth2-capable) -- resolves to
   `PersonaSwarmOperator` in M1 (see `krill/mcp/server/auth.go`'s doc
   comment for why no second human persona is distinguished yet);
 - agent callers via the `//libs/go/whagent` verifier -- resolves to
@@ -296,7 +296,7 @@ FR4/FR5/FR10/FR12's console queries (the rest of M5) register onto. No
 tool is registered here yet; this task ships only the mount and its
 authorization boundary.
 
-**Auth -- Swarm Operator only.** Both front doors (mcpauth/human,
+**Auth -- Swarm Operator only.** Both front doors (auth/human,
 whagent-net/agent) are mounted at `/mcp/ops` exactly as they are at the
 other two mounts, but every tool registered here -- read or write, via
 `krill/mcp/server/registry.go`'s `RegisterOpsRead`/`RegisterOpsWrite` --
@@ -311,15 +311,15 @@ concept at all.
 See `krill/mcp/server/transport.go`'s `opsMountPath` doc comment for the
 full reasoning.
 
-## The mcpauth sign-in shell (`ui`)
+## The auth sign-in shell (`ui`)
 
-`ui` mounts mcpauth's OAuth2 authorization-server endpoints (`/authorize`,
+`ui` mounts auth's OAuth2 authorization-server endpoints (`/authorize`,
 `/token`, `/register`, and both discovery metadata documents) and the
 Keycloak sign-in flow (`/login`, `/auth/callback`, `/logout`) they redirect
-an unresolved caller to. This is what makes the mcpauth (human) front door
+an unresolved caller to. This is what makes the auth (human) front door
 on `mcp` actually usable end to end -- before `ui` existed, `/authorize`
 had no `SignInURL` configured and any unresolved caller just got a 401
-(see `ARCHITECTURE.md` "krill/ui and the mcpauth front door"). The one
+(see `ARCHITECTURE.md` "krill/ui and the auth front door"). The one
 authenticated page it serves (`GET /`) is a bare "signed in as ..." shell,
 not a real operator UI.
 
@@ -330,7 +330,7 @@ PG_DATABASE_URL=postgres://postgres:password@localhost:5432/krill?sslmode=disabl
   bazel run //krill/ui
 ```
 
-See `ENV.md` "`ui` (Keycloak sign-in shell, mcpauth's `/authorize` front
+See `ENV.md` "`ui` (Keycloak sign-in shell, auth's `/authorize` front
 end)" for every variable it reads.
 
 ## Claude Code plugins

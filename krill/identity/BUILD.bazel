@@ -1,8 +1,8 @@
 load("@rules_go//go:def.bzl", "go_library", "go_test")
 
-# Encode/Decode for the (iss, sub) identity pair mcpauth's Provider
+# Encode/Decode for the (iss, sub) identity pair auth's Provider
 # resolves a signed-in krill operator to -- krill/ui encodes it
-# (mcpauth.go's mcpCallerResolver); krill has no person/user table to key
+# (auth.go's mcpCallerResolver); krill has no person/user table to key
 # it to instead (NFR1 authorizes by persona, never by individual
 # identity). See identity.go's package doc.
 go_library(

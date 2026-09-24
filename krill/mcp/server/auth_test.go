@@ -58,7 +58,7 @@ func TestPersonaMiddleware_ResolvesSwarmOperatorAndCallsNext(t *testing.T) {
 	_, err := PersonaMiddleware()(next)(context.Background(), "tools/call", req)
 	require.NoError(t, err)
 	assert.True(t, nextCalled, "next must run once caller identity resolves")
-	assert.Equal(t, PersonaSwarmOperator, gotPersona, "the mcpauth door resolves every authenticated caller to PersonaSwarmOperator in M1 -- see auth.go's doc comment")
+	assert.Equal(t, PersonaSwarmOperator, gotPersona, "the auth door resolves every authenticated caller to PersonaSwarmOperator in M1 -- see auth.go's doc comment")
 }
 
 func TestPersonaMiddleware_DoesNotReResolveWhenPersonaAlreadySet(t *testing.T) {

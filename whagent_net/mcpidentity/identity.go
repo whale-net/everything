@@ -3,14 +3,14 @@
 // resolves a signed-in operator to.
 //
 // NFR7 is the reason this package exists at all: the identity a
-// mcpauth.CredentialStore/mcpauth.AuthCodeStore row holds must be exactly
+// auth.CredentialStore/auth.AuthCodeStore row holds must be exactly
 // the LB2 (iss, sub) pair whagent_net/session.Subject and
 // sessions.subject_iss/subject_sub already use -- never a new
 // whagent-net-only user/person id, keyed on the credential or otherwise.
-// mcpauth.CredentialStore.Identity is a plain opaque string (see
-// libs/go/mcpauth's package doc, "zero domain-specific types"), so that
+// auth.CredentialStore.Identity is a plain opaque string (see
+// libs/go/auth's package doc, "zero domain-specific types"), so that
 // pair has to be packed into one string somehow; this package is the one
-// place that packing happens, so `ui` (whagent_net/ui/mcpauth.go's
+// place that packing happens, so `ui` (whagent_net/ui/auth.go's
 // CallerResolver, which encodes the signed-in operator's own (iss, sub))
 // and `mcp` (whagent_net/mcp/server/auth.go's NewVerifier, which decodes an
 // already-verified credential's identity back) cannot drift apart on the
@@ -39,7 +39,7 @@ import (
 const separator = "|"
 
 // Encode packs iss and sub into the single opaque string
-// mcpauth.CredentialStore and mcpauth.AuthCodeStore store as Identity.
+// auth.CredentialStore and auth.AuthCodeStore store as Identity.
 // It fails loudly -- rather than silently producing a string Decode could
 // misparse -- if either part is empty or already contains separator.
 func Encode(iss, sub string) (string, error) {
@@ -79,7 +79,7 @@ func Decode(encoded string) (iss, sub string, err error) {
 // whagent_net/mcp/tools' dispatch-time handlers (the consumer). It is
 // deliberately not this package's packed single-string encoding
 // (Encode/Decode above): that format exists solely for
-// mcpauth.CredentialStore/mcpauth.AuthCodeStore's Identity column (NFR7),
+// auth.CredentialStore/auth.AuthCodeStore's Identity column (NFR7),
 // an unrelated persistence concern, whereas this type never leaves process
 // memory.
 //

@@ -9,7 +9,7 @@
 // # Schema contract
 //
 // No migration ships with this package (FR13) — exactly like
-// libs/go/mcpauth's precedent, the consuming domain owns and applies its own
+// libs/go/auth's precedent, the consuming domain owns and applies its own
 // migration before calling NewGrantStore. A consuming migration must create
 // a table shaped like this (column/table names are configurable via
 // StoreConfig; the shape must match):
@@ -57,7 +57,7 @@ const (
 // SQL (they cannot be bound query parameters), so NewGrantStore rejects
 // anything not matching this pattern before ever building a query string —
 // this is a hard requirement against SQL injection via configuration, not a
-// style nicety. Identical to libs/go/mcpauth/credential.go's
+// style nicety. Identical to libs/go/auth/credential.go's
 // identifierPattern.
 var identifierPattern = regexp.MustCompile(`^[a-z_][a-z0-9_]*$`)
 
@@ -70,8 +70,8 @@ func validateIdentifier(name, label string) error {
 	return nil
 }
 
-// StoreConfig configures NewGrantStore, shaped like mcpauth.StoreConfig
-// (see libs/go/mcpauth/credential.go) — the same SQL-identifier allow-list
+// StoreConfig configures NewGrantStore, shaped like auth.StoreConfig
+// (see libs/go/auth/credential.go) — the same SQL-identifier allow-list
 // discipline applies here.
 type StoreConfig struct {
 	// Pool is the PostgreSQL connection pool. Required.
@@ -81,7 +81,7 @@ type StoreConfig struct {
 	// grpcauth-delegated-grant-shaped table. Defaults to
 	// "grpcauth_delegated_grant". Unqualified so it resolves through
 	// whatever search_path every other runtime query uses (mirrors
-	// mcpauth.StoreConfig.TableName).
+	// auth.StoreConfig.TableName).
 	TableName string
 
 	// SubjectColumn is the unqualified name of the subject column.
@@ -105,7 +105,7 @@ type StoreConfig struct {
 	// SubjectCast is an optional PostgreSQL type name (e.g. "uuid") to cast
 	// the subject parameter to in generated SQL, producing
 	// `<SubjectColumn> = $N::<SubjectCast>` instead of
-	// `<SubjectColumn> = $N` — mirrors mcpauth.StoreConfig.IdentityCast.
+	// `<SubjectColumn> = $N` — mirrors auth.StoreConfig.IdentityCast.
 	SubjectCast string
 
 	// EncryptionKey is the AES-256-GCM key (exactly grpcauth.GrantKeySize
@@ -131,7 +131,7 @@ type StoreConfig struct {
 // cfg.Pool and cfg.EncryptionKey are validated before defaults are applied.
 // TableName, SubjectColumn, GrantColumn, MaterialColumn, StatusColumn, and
 // (if set) SubjectCast are then validated as safe SQL identifiers before any
-// query is ever built — mirrors libs/go/mcpauth.NewCredentialStore.
+// query is ever built — mirrors libs/go/auth.NewCredentialStore.
 func NewGrantStore(ctx context.Context, cfg StoreConfig) (grpcauth.Store, error) {
 	if cfg.Pool == nil {
 		return nil, errors.New("grpcauth/pgstore: StoreConfig.Pool is required")
@@ -190,7 +190,7 @@ var _ grpcauth.Store = (*grantStore)(nil)
 
 // subjectPlaceholder renders "$<paramNum>[::<SubjectCast>]" for use as a
 // bound-parameter value in generated SQL — mirrors
-// mcpauth.pgxCredentialStore.identityPlaceholder's cast handling.
+// auth.pgxCredentialStore.identityPlaceholder's cast handling.
 func (s *grantStore) subjectPlaceholder(paramNum int) string {
 	if s.cfg.SubjectCast == "" {
 		return fmt.Sprintf("$%d", paramNum)
@@ -269,7 +269,7 @@ func (s *grantStore) Persist(ctx context.Context, subject, grant string, materia
 // single round trip, then branches on status BEFORE ever calling
 // grpcauth.Decrypt: revoked/needs_reauth return their sentinel error with
 // the fetched ciphertext simply discarded, unexamined — no decrypt attempt
-// and no Keycloak call, mirroring mcpauth.Verify's RevokedAt == nil check.
+// and no Keycloak call, mirroring auth.Verify's RevokedAt == nil check.
 // Only status == active proceeds to decrypt and return material. A missing
 // row is grpcauth.ErrGrantNotFound.
 func (s *grantStore) TokenMaterial(ctx context.Context, subject, grant string) (grpcauth.TokenMaterial, error) {

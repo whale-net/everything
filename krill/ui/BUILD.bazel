@@ -1,5 +1,5 @@
 """krill's barebones operator web UI: Keycloak sign-in shell whose sole job
-is to give mcpauth's `/authorize` endpoint (mounted here) a SignInURL to
+is to give auth's `/authorize` endpoint (mounted here) a SignInURL to
 redirect a not-yet-signed-in caller to -- see main.go's package doc."""
 
 load("@rules_go//go:def.bzl", "go_binary", "go_library")
@@ -9,7 +9,7 @@ go_library(
     name = "ui_lib",
     srcs = [
         "main.go",
-        "mcpauth.go",
+        "auth.go",
     ],
     importpath = "github.com/whale-net/everything/krill/ui",
     visibility = ["//visibility:private"],
@@ -18,7 +18,7 @@ go_library(
         "//libs/go/db",
         "//libs/go/htmxauth",
         "//libs/go/logging",
-        "//libs/go/mcpauth",
+        "//libs/go/auth",
         "@com_github_jackc_pgx_v5//pgxpool",
         "@io_opentelemetry_go_contrib_instrumentation_net_http_otelhttp//:otelhttp",
     ],
@@ -38,7 +38,7 @@ release_app(
     binary_name = ":ui",
     language = "go",
     domain = "krill",
-    description = "krill's barebones operator web UI: Keycloak sign-in shell backing the mcpauth OAuth2 authorization-server front door",
+    description = "krill's barebones operator web UI: Keycloak sign-in shell backing the auth OAuth2 authorization-server front door",
     app_type = "external-api",
     port = 8080,
     replicas = 1,

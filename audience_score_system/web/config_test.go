@@ -5,7 +5,7 @@ import "testing"
 // TestLoadConfig_MCPPublicURL covers issue #2645's ASS_WEB_MCP_RESOURCE_URL
 // override: unset, it falls back to ASS_MCP_PUBLIC_URL verbatim (backward
 // compatible); set, it wins over ASS_MCP_PUBLIC_URL so `web` can satisfy
-// mcpauth's loopback/https validation in local dev without touching `mcp`'s
+// auth's loopback/https validation in local dev without touching `mcp`'s
 // in-cluster value.
 func TestLoadConfig_MCPPublicURL(t *testing.T) {
 	t.Run("falls back to ASS_MCP_PUBLIC_URL when override unset", func(t *testing.T) {

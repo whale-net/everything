@@ -67,7 +67,7 @@ LB3 — Persona claim: the wire contract a domain MCP server verifies
   carrying `sub` and `sub_iss` (the on-behalf-of subject's `iss`+`sub`, i.e. LB2's shape
   verbatim), `act` (acting subject + agent id), `whagent_session_id`, `aud` = the domain
   server — and a verifier the domain server mounts against whagent-net's public key (for ASS:
-  `libs/go/whagent`'s verifying middleware runs before `mcpauth`; ASS's `CallerResolver`
+  `libs/go/whagent`'s verifying middleware runs before `auth`; ASS's `CallerResolver`
   reads the verified claims off the request and maps `(iss, sub)` → Person).
   whagent-net is the trust root for agent actions. [Q5 resolved: whagent-minted.
   Round-2 nitpicks 3 and 4 folded: `sub_iss` in the claim set; the whagent piece is a

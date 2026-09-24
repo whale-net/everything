@@ -69,7 +69,7 @@ several UIs at once, and any consuming domain gets those semantics for free.
 | Postgres | `//libs/go/db`, `//libs/go/migrate` | Same as `audience_score_system`. |
 | RabbitMQ | `//libs/go/rmq`, `//libs/go/htmxsse` | `htmxsse.Hub` + `DefaultAttachFunc` for SSE fan-out; reference implementation `tools/app_registry/ui/main.go` `initializeSSEHub`. |
 | Web UI | `//libs/go/htmxbase`, `//libs/go/htmxui`, `//libs/go/htmxauth` | Go + `templ` + htmx + daisyUI, CDN-pinned, no Node — the convention every UI in this repo follows. |
-| MCP | `github.com/modelcontextprotocol/go-sdk` | Precedent: `audience_score_system/mcp` (first Go MCP server in the repo, so #1552's "would be the first" note is stale). Auth via `//libs/go/mcpauth`. |
+| MCP | `github.com/modelcontextprotocol/go-sdk` | Precedent: `audience_score_system/mcp` (first Go MCP server in the repo, so #1552's "would be the first" note is stale). Auth via `//libs/go/auth`. |
 | gRPC auth | `//libs/go/grpcauth` | Verifies Keycloak OIDC (`coreos/go-oidc/v3`; `Claims{Subject, Roles, Audience, ClientID, IsServiceAccount}`; user-token and service-account dial options). `IsServiceAccount` (FR6/#2243) is what `api` derives a session's `subject`/`on_behalf_of` `kind` from — see [Identity](#identity-and-auth-chaining). |
 | LLM client | `openai/openai-go` (candidate; architect to verify) | Serving is via **OpenRouter**, which is OpenAI-wire-compatible — the Anthropic SDK does not target it. One client with a base-URL override covers every OpenRouter model; a future second provider is another base URL, not an abstraction layer. |
 | Identity | Keycloak (OIDC) | Humans and service accounts alike — see [Identity](#identity-and-auth-chaining). |
@@ -543,11 +543,11 @@ this control rule lives; no other handler re-derives it.
 that verifier is unchanged by this design (`libs/go/grpcauth`). `mcp`
 accepts a second credential shape alongside the manual Keycloak access
 token (`README.md` "Browser-based sign-in"): an opaque bearer credential
-`ui`'s own OAuth2 authorization-server front end (`libs/go/mcpauth.Provider`,
-mounted by `whagent_net/ui/mcpauth.go`) mints for an operator already
+`ui`'s own OAuth2 authorization-server front end (`libs/go/auth.Provider`,
+mounted by `whagent_net/ui/auth.go`) mints for an operator already
 signed in there. That credential resolves (via
-`mcpauth.CredentialStore.Verify`) to the operator's own real Keycloak
-`(iss, sub)` — packed into `mcpauth.CredentialStore`'s opaque `Identity`
+`auth.CredentialStore.Verify`) to the operator's own real Keycloak
+`(iss, sub)` — packed into `auth.CredentialStore`'s opaque `Identity`
 string by `whagent_net/mcpidentity.Encode`/`Decode`, the one place that
 packing happens — never a new whagent-net-only identity.
 
@@ -605,11 +605,11 @@ has completed a one-time, per-scope browser consent:
 `CompleteAuthorization` (requesting `offline_access`) for one explicit
 scope and records a bookkeeping-index entry (FR12, `grantindex`) on
 success — this route never infers or guesses a scope itself.
-`authorizeConsentGate` wraps `GET /authorize` (`ui`'s mcpauth-hosted
+`authorizeConsentGate` wraps `GET /authorize` (`ui`'s auth-hosted
 OAuth2 endpoint for the MCP client) with a prerequisite that the operator
 hold an active grant for `WHAGENT_UI_DEFAULT_SCOPE` before a credential
 is minted — deliberately scope-agnostic at the OAuth layer rather than
-resource/scope-driven: `libs/go/mcpauth` is scope-agnostic by design
+resource/scope-driven: `libs/go/auth` is scope-agnostic by design
 (its own "zero scope-specific types" NFR) and `mcp`'s RFC 9728 resource
 identifier is one single, instance-wide URL, not one per scope —
 per-scope resolution happens later, at dispatch time (above). Consent
@@ -712,7 +712,7 @@ re-derive another operator's username later.
 **Cutover (FR11/NFR8, issue #2434).** Migration `009_mcpauth_cutover` is
 a single, one-time deploy: every row in `mcp_credential`/`mcp_auth_code`
 is deleted outright (not revoked, not time-boxed), so every
-previously-minted opaque `mcpauth` credential stops working immediately
+previously-minted opaque `auth` credential stops working immediately
 and permanently, and every operator who used the browser-OAuth2 path
 before cutover must redo the per-domain consent above to regain access.
 There is no feature flag, dual-read, or coexistence window between the

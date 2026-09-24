@@ -43,7 +43,7 @@ type initSessionInput struct {
 // (api/handlers/session.go's InitSessionHandler, krill/importer) uses --
 // this tool is a third caller, not a fourth code path.
 //
-// No allowedPersonas restriction: any resolved persona (mcpauth's
+// No allowedPersonas restriction: any resolved persona (auth's
 // PersonaSwarmOperator or whagent-net's PersonaAgent) may mint a session,
 // exactly as InitSessionHandler accepts any caller today -- the MCP mount's
 // own two front doors (../server's PersonaMiddleware/

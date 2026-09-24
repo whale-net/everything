@@ -9,7 +9,7 @@
 //
 //   - an unauthenticated call is rejected before the MCP session even
 //     opens;
-//   - a human (OAuth2-shaped) identity through the mcpauth front door
+//   - a human (OAuth2-shaped) identity through the auth front door
 //     resolves PersonaSwarmOperator and can call a spec-surface tool;
 //   - an agent identity through the whagent-net front door resolves
 //     PersonaAgent and can call every FR5-FR8 granularity;
@@ -28,7 +28,7 @@
 // (registry.go's registerOpsGated) while letting PersonaSwarmOperator
 // through.
 //
-// mcpauth's CredentialStore here is a hand-rolled in-memory fake, not the
+// auth's CredentialStore here is a hand-rolled in-memory fake, not the
 // real Postgres-backed one: krill has not yet shipped its own
 // mcp_credential-shaped migration (see mcp/main.go's
 // rejectingCredentialStore doc comment for that interim gap) -- there is
@@ -66,8 +66,8 @@ import (
 	"github.com/whale-net/everything/krill/migrate/schema"
 	"github.com/whale-net/everything/krill/slice"
 	"github.com/whale-net/everything/krill/store"
+	"github.com/whale-net/everything/libs/go/auth"
 	"github.com/whale-net/everything/libs/go/dbtest"
-	"github.com/whale-net/everything/libs/go/mcpauth"
 	"github.com/whale-net/everything/libs/go/migrate"
 	"github.com/whale-net/everything/libs/go/whagent"
 )
@@ -137,33 +137,33 @@ func seedWorld(t *testing.T, ctx context.Context, entities *store.Store, scopeID
 	return world{Product: product, FeatureSet: featureSet, Feature: feature, Requirement: requirement, Decision: decision}
 }
 
-// ── fake mcpauth.CredentialStore (no real migration to preflight against yet) ─
+// ── fake auth.CredentialStore (no real migration to preflight against yet) ─
 
 type fakeCredentialStore struct {
 	validToken string
 	identity   string
 }
 
-func (f fakeCredentialStore) Mint(context.Context, string) (string, mcpauth.Credential, error) {
-	return "", mcpauth.Credential{}, errors.New("fakeCredentialStore.Mint is not used by this test")
+func (f fakeCredentialStore) Mint(context.Context, string) (string, auth.Credential, error) {
+	return "", auth.Credential{}, errors.New("fakeCredentialStore.Mint is not used by this test")
 }
 
-func (f fakeCredentialStore) Verify(_ context.Context, rawToken string) (string, mcpauth.Credential, error) {
+func (f fakeCredentialStore) Verify(_ context.Context, rawToken string) (string, auth.Credential, error) {
 	if rawToken == f.validToken {
-		return f.identity, mcpauth.Credential{Identity: f.identity}, nil
+		return f.identity, auth.Credential{Identity: f.identity}, nil
 	}
-	return "", mcpauth.Credential{}, mcpauth.ErrInvalidCredential
+	return "", auth.Credential{}, auth.ErrInvalidCredential
 }
 
 func (f fakeCredentialStore) Revoke(context.Context, uuid.UUID, string) error {
 	return errors.New("fakeCredentialStore.Revoke is not used by this test")
 }
 
-func (f fakeCredentialStore) List(context.Context, string) ([]mcpauth.Credential, error) {
+func (f fakeCredentialStore) List(context.Context, string) ([]auth.Credential, error) {
 	return nil, errors.New("fakeCredentialStore.List is not used by this test")
 }
 
-var _ mcpauth.CredentialStore = fakeCredentialStore{}
+var _ auth.CredentialStore = fakeCredentialStore{}
 
 // ── whagent fixture ──────────────────────────────────────────────────────────
 
@@ -213,7 +213,7 @@ func opsProbeHandler(context.Context, *mcp.CallToolRequest, opsProbeInput) (*mcp
 	return nil, opsProbeOutput{}, nil
 }
 
-func newTestDualAuthServer(t *testing.T, querier *slice.Querier, credentials mcpauth.CredentialStore, verifier *whagent.Verifier) *testServer {
+func newTestDualAuthServer(t *testing.T, querier *slice.Querier, credentials auth.CredentialStore, verifier *whagent.Verifier) *testServer {
 	t.Helper()
 
 	specSrv := server.New()
@@ -233,7 +233,7 @@ func newTestDualAuthServer(t *testing.T, querier *slice.Querier, credentials mcp
 	// server.RegisterOpsRead) so this file's own ops-mount subtest below has
 	// something to actually call -- proving the same two-front-door
 	// authentication path applies at /mcp/ops as at /mcp/spec, and that
-	// PersonaSwarmOperator (resolved by the mcpauth door) is let through
+	// PersonaSwarmOperator (resolved by the auth door) is let through
 	// while PersonaAgent (resolved by the whagent door) is rejected by the
 	// mount's own persona gate.
 	opsSrv := server.New()
@@ -343,7 +343,7 @@ func TestMCPSpecSurface_EndToEnd_BothFrontDoorsAndDocumentRoundTrip(t *testing.T
 		require.Error(t, err, "a request with no bearer token must be rejected at the HTTP layer, before any MCP session opens")
 	})
 
-	t.Run("human identity through the mcpauth door resolves PersonaSwarmOperator and round-trips the feature-set slice", func(t *testing.T) {
+	t.Run("human identity through the auth door resolves PersonaSwarmOperator and round-trips the feature-set slice", func(t *testing.T) {
 		cs, err := ts.connect(t, credentials.validToken)
 		require.NoError(t, err)
 
@@ -356,7 +356,7 @@ func TestMCPSpecSurface_EndToEnd_BothFrontDoorsAndDocumentRoundTrip(t *testing.T
 
 		expected, err := querier.GetFeatureSetSlice(ctx, w.FeatureSet.ID)
 		require.NoError(t, err)
-		assert.Equal(t, asStructuredContent(t, expected), res.StructuredContent, "the mcpauth door's tool response must be byte-identical to the querier's own document (LB7) -- no second projection")
+		assert.Equal(t, asStructuredContent(t, expected), res.StructuredContent, "the auth door's tool response must be byte-identical to the querier's own document (LB7) -- no second projection")
 	})
 
 	t.Run("agent identity through the whagent door resolves PersonaAgent and round-trips all four granularities", func(t *testing.T) {
@@ -395,7 +395,7 @@ func TestMCPSpecSurface_EndToEnd_BothFrontDoorsAndDocumentRoundTrip(t *testing.T
 		callAndCompare(t, "get_product_slice", w.Product.ID, productDoc)
 	})
 
-	t.Run("an invalid mcpauth credential is rejected and never resolves a persona", func(t *testing.T) {
+	t.Run("an invalid auth credential is rejected and never resolves a persona", func(t *testing.T) {
 		_, err := ts.connect(t, "0000000000000000000000000000000000000000000000000000000000000000")
 		require.Error(t, err)
 	})
@@ -413,7 +413,7 @@ func TestMCPSpecSurface_EndToEnd_BothFrontDoorsAndDocumentRoundTrip(t *testing.T
 //   - an unauthenticated request against /mcp/ops is refused before the
 //     MCP session opens, exactly like /mcp/spec (same requireBearer/
 //     DualAuthHTTPHandler guard, transport.go's newMux);
-//   - the mcpauth door's human identity, which resolves
+//   - the auth door's human identity, which resolves
 //     PersonaSwarmOperator (auth.go), can call the ops tool;
 //   - the whagent door's agent identity, which resolves PersonaAgent, is
 //     rejected -- not by the HTTP layer (the credential itself is valid,
@@ -438,9 +438,9 @@ func TestMCPOpsSurface_EndToEnd_SameCredentialPathPersonaGated(t *testing.T) {
 		require.Error(t, err, "a request with no bearer token must be rejected at the HTTP layer, before any MCP session opens -- identical to /mcp/spec")
 	})
 
-	t.Run("PersonaSwarmOperator (mcpauth door) can call an ops tool", func(t *testing.T) {
+	t.Run("PersonaSwarmOperator (auth door) can call an ops tool", func(t *testing.T) {
 		cs, err := ts.connectOps(t, credentials.validToken)
-		require.NoError(t, err, "the mcpauth door must authenticate against /mcp/ops the same way it does against /mcp/spec")
+		require.NoError(t, err, "the auth door must authenticate against /mcp/ops the same way it does against /mcp/spec")
 
 		res, err := cs.CallTool(ctx, &mcp.CallToolParams{Name: "ops_probe", Arguments: opsProbeInput{}})
 		require.NoError(t, err)

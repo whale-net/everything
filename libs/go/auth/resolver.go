@@ -1,4 +1,4 @@
-package mcpauth
+package auth
 
 import "net/http"
 
@@ -20,7 +20,7 @@ import "net/http"
 // before this interface is ever consulted. An implementation that does
 // either of those things is a misuse of this interface: it duplicates work
 // the domain's sign-in flow already did, and it reintroduces the very IdP
-// dependency mcpauth is designed to stay free of (see mcpauth.go's package
+// dependency this package is designed to stay free of (see auth.go's package
 // doc, "What this library deliberately is not").
 type CallerResolver interface {
 	// ResolveCaller returns the stable identity key of the caller already
@@ -39,7 +39,7 @@ type CallerResolver interface {
 // domain's sign-in flow has already validated the session; this merely
 // reads the identity it left behind):
 //
-//	resolver := mcpauth.CallerResolverFunc(func(r *http.Request) (string, bool) {
+//	resolver := auth.CallerResolverFunc(func(r *http.Request) (string, bool) {
 //		sess, ok := sessions.FromRequest(r)
 //		if !ok {
 //			return "", false

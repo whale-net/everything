@@ -12,7 +12,7 @@
 //
 // Mirrors delivery_shipment_test.go's seeding/HTTP/auth plumbing
 // (duplicated here, not shared, since this file compiles into its own
-// go_test target -- see that file's own doc comment for why the mcpauth
+// go_test target -- see that file's own doc comment for why the auth
 // CredentialStore here is a hand-rolled fake and the whagent-net door is
 // exercised against a real signed JWT).
 //
@@ -43,8 +43,8 @@ import (
 	"github.com/whale-net/everything/krill/migrate/schema"
 	"github.com/whale-net/everything/krill/slice"
 	"github.com/whale-net/everything/krill/store"
+	"github.com/whale-net/everything/libs/go/auth"
 	"github.com/whale-net/everything/libs/go/dbtest"
-	"github.com/whale-net/everything/libs/go/mcpauth"
 	"github.com/whale-net/everything/libs/go/migrate"
 	"github.com/whale-net/everything/libs/go/whagent"
 )
@@ -80,33 +80,33 @@ func createRecutToolsTestScope(t *testing.T, ctx context.Context, pool *pgxpool.
 	return scopeID
 }
 
-// ── fake mcpauth.CredentialStore (no real migration to preflight against yet) ─
+// ── fake auth.CredentialStore (no real migration to preflight against yet) ─
 
 type recutFakeCredentialStore struct {
 	validToken string
 	identity   string
 }
 
-func (f recutFakeCredentialStore) Mint(context.Context, string) (string, mcpauth.Credential, error) {
-	return "", mcpauth.Credential{}, errors.New("recutFakeCredentialStore.Mint is not used by this test")
+func (f recutFakeCredentialStore) Mint(context.Context, string) (string, auth.Credential, error) {
+	return "", auth.Credential{}, errors.New("recutFakeCredentialStore.Mint is not used by this test")
 }
 
-func (f recutFakeCredentialStore) Verify(_ context.Context, rawToken string) (string, mcpauth.Credential, error) {
+func (f recutFakeCredentialStore) Verify(_ context.Context, rawToken string) (string, auth.Credential, error) {
 	if rawToken == f.validToken {
-		return f.identity, mcpauth.Credential{Identity: f.identity}, nil
+		return f.identity, auth.Credential{Identity: f.identity}, nil
 	}
-	return "", mcpauth.Credential{}, mcpauth.ErrInvalidCredential
+	return "", auth.Credential{}, auth.ErrInvalidCredential
 }
 
 func (f recutFakeCredentialStore) Revoke(context.Context, uuid.UUID, string) error {
 	return errors.New("recutFakeCredentialStore.Revoke is not used by this test")
 }
 
-func (f recutFakeCredentialStore) List(context.Context, string) ([]mcpauth.Credential, error) {
+func (f recutFakeCredentialStore) List(context.Context, string) ([]auth.Credential, error) {
 	return nil, errors.New("recutFakeCredentialStore.List is not used by this test")
 }
 
-var _ mcpauth.CredentialStore = recutFakeCredentialStore{}
+var _ auth.CredentialStore = recutFakeCredentialStore{}
 
 // ── whagent fixture ──────────────────────────────────────────────────────────
 

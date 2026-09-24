@@ -60,7 +60,7 @@
 //   - "rejected" -- the assertion was invalid, expired, or already used.
 //
 // NFR5: this package must not import, extend, or hook into web/auth's
-// mcpauth machinery (/authorize, /token, /register) -- "alongside, never
+// auth machinery (/authorize, /token, /register) -- "alongside, never
 // on top of".
 package link
 

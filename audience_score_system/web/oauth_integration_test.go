@@ -7,7 +7,7 @@
 // dbtest-provisioned database and the domain's real embedded migrations
 // (including 007_mcpauth_oauth). This is the this task's Testing section
 // "`web` handler tests via httptest against the mounted provider" bullet:
-// what it proves that libs/go/mcpauth's own extensive authorize_test.go/
+// what it proves that libs/go/auth's own extensive authorize_test.go/
 // token_test.go suite (stubResolver, in-memory stores) cannot -- that
 // ASS's real MCPCallerResolver and real Postgres-backed stores actually
 // integrate through Provider correctly. See
@@ -39,8 +39,8 @@ import (
 	"github.com/whale-net/everything/audience_score_system/migrate/schema"
 	"github.com/whale-net/everything/audience_score_system/store"
 	"github.com/whale-net/everything/audience_score_system/web/auth"
+	mcpauth "github.com/whale-net/everything/libs/go/auth"
 	"github.com/whale-net/everything/libs/go/dbtest"
-	"github.com/whale-net/everything/libs/go/mcpauth"
 	"github.com/whale-net/everything/libs/go/migrate"
 )
 
@@ -205,7 +205,7 @@ func TestOAuthAuthorize_NoSession_RedirectsToLoginWithNext(t *testing.T) {
 	assert.Equal(t, "/login", loc.Path, "an unresolved caller must be sent to /login, never a form Provider renders itself")
 
 	next := loc.Query().Get("next")
-	require.NotEmpty(t, next, "the return-to target must use ASS's own ?next= convention (HandleLogin), not mcpauth's return_to default")
+	require.NotEmpty(t, next, "the return-to target must use ASS's own ?next= convention (HandleLogin), not auth's return_to default")
 	nextURL, err := url.Parse(next)
 	require.NoError(t, err)
 	assert.Equal(t, "/authorize", nextURL.Path)

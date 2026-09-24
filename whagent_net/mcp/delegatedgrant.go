@@ -13,7 +13,7 @@ import (
 // initializeDelegatedGrant builds `mcp`'s share of the single shared
 // DelegatedGrantSource/Store/Index triple (issue #2426, FR10/FR13/NFR5/
 // NFR6 of plan #2421) against pool -- the same *pgxpool.Pool
-// initializeAuthDeps already opened for the FR9 mcpauth.CredentialStore,
+// initializeAuthDeps already opened for the FR9 auth.CredentialStore,
 // when PG_DATABASE_URL is set; pool is nil (and this function is not
 // called) otherwise. Construction is non-fatal when the feature is
 // entirely unconfigured (delegatedgrant.ErrNotConfigured --

@@ -12,7 +12,7 @@ from `tools/project-manager/skills/loop-design-panel`.
 
 **No `plan:agent-approved` label exists here, and none is needed.** Every
 `RevisionEvent`'s `acting`/`on_behalf_of` `Subject` already records whether
-the caller was a human (`kind: human`, via mcpauth) or an agent (`kind:
+the caller was a human (`kind: human`, via auth) or an agent (`kind:
 service`, via whagent-net) — provenance is structural, not a label convention
 bolted on top. A `signoff` event appended by this skill's `reviewer`
 dispatch is indistinguishable in *mechanics* from a human's, but its

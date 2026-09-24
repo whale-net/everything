@@ -1,4 +1,4 @@
-package mcpauth
+package auth
 
 import (
 	"context"
@@ -76,7 +76,7 @@ func TestTokenVerifier_ValidToken_ResolvesToMintingIdentity(t *testing.T) {
 	require.NoError(t, err)
 	require.NotNil(t, info)
 	assert.Equal(t, "person-42", info.UserID)
-	assert.True(t, info.Expiration.IsZero(), "mcpauth credentials carry no expiration")
+	assert.True(t, info.Expiration.IsZero(), "this package's credentials carry no expiration")
 }
 
 // TestTokenVerifier_FailureModesAreIndistinguishable proves FR6/NFR1: an
@@ -171,7 +171,7 @@ func TestRequireBearerToken_WrongScheme_Returns401(t *testing.T) {
 
 // TestRequireBearerToken_ValidToken_InvokesHandlerWithTokenInfo also proves
 // the AllowMissingExpiration default (NFR3): fakeCredentialStore-minted
-// credentials never carry an expiration, exactly like every real mcpauth
+// credentials never carry an expiration, exactly like every real credential this package mints
 // credential (audience_score_system/mcp/server/transport.go relies on this
 // same behavior today) — without RequireBearerToken forcing
 // AllowMissingExpiration true, this request would 401 on "token missing
@@ -204,7 +204,7 @@ func TestRequireBearerToken_ValidToken_InvokesHandlerWithTokenInfo(t *testing.T)
 
 // TestRequireBearerToken_ForcesAllowMissingExpirationTrue proves that even
 // a caller-supplied opts with AllowMissingExpiration explicitly false is
-// overridden — since no mcpauth credential ever carries an expiration, a
+// overridden — since no credential this package mints ever carries an expiration, a
 // caller-set false here would break every credential outright.
 func TestRequireBearerToken_ForcesAllowMissingExpirationTrue(t *testing.T) {
 	store := newFakeCredentialStore()
@@ -237,7 +237,7 @@ func TestRequireBearerToken_ForcesAllowMissingExpirationTrue(t *testing.T) {
 // (github.com/modelcontextprotocol/go-sdk/auth) tokenizes the header with
 // strings.Fields (collapses runs of whitespace, requires exactly two
 // fields, compares the scheme case-insensitively) — these cases pin that
-// behavior as observed through mcpauth's RequireBearerToken wiring, not
+// behavior as observed through this package's RequireBearerToken wiring, not
 // just the SDK's own tests.
 func TestRequireBearerToken_MalformedAuthorizationHeader_Returns401(t *testing.T) {
 	store := newFakeCredentialStore()

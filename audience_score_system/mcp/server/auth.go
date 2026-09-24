@@ -1,25 +1,25 @@
 // Caller authentication -- migrated (issue #1643) from the bespoke
 // store.CredentialStore (migration 005, issue #1575's Scaffold-phase
-// design decision) onto the shared libs/go/mcpauth.CredentialStore. See
+// design decision) onto the shared libs/go/auth.CredentialStore. See
 // ../../ARCHITECTURE.md "MCP server: caller authentication" for the full
 // obtain/revoke/NFR3 rationale; in short: an MCP client authenticates
 // with a bearer credential minted by an authenticated endpoint on `web`
 // (sign-in machinery, not a new C4-C10 capability surface, so NFR3 is not
-// violated), stored as a SHA-256 hash (mcpauth.CredentialStore, migration
+// violated), stored as a SHA-256 hash (auth.CredentialStore, migration
 // 006), and resolved to a Person in two steps:
 //
-//  1. HTTP layer (transport.go): mcpauth.RequireBearerToken wraps every
-//     request, calling mcpauth.TokenVerifier under the hood to hash the
-//     raw token, resolve it via mcpauth.CredentialStore.Verify, and
+//  1. HTTP layer (transport.go): auth.RequireBearerToken wraps every
+//     request, calling auth.TokenVerifier under the hood to hash the
+//     raw token, resolve it via auth.CredentialStore.Verify, and
 //     produce an auth.TokenInfo carrying the Person's UUID (rendered as a
-//     string) as UserID. That verifier now lives in libs/go/mcpauth --
+//     string) as UserID. That verifier now lives in libs/go/auth --
 //     this package no longer defines its own TokenVerifier.
 //  2. PersonMiddleware (MCP-protocol layer, wraps every tools/call via
 //     mcp.Server.AddReceivingMiddleware in server.go) reads that
 //     TokenInfo off the request's RequestExtra, parses UserID back into a
 //     uuid.UUID, resolves the full store.Person via store.PersonStore,
 //     and places it on ctx for handlers to read via PersonFromContext.
-//     This step is unchanged by the mcpauth migration (FR11) -- mcpauth
+//     This step is unchanged by the auth migration (FR11) -- auth
 //     only replaces the credential storage/verification layer, not how a
 //     resolved identity becomes a Person.
 package server

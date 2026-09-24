@@ -1,5 +1,5 @@
 """krill/mcp's bootstrap: *mcp.Server construction, the two-front-door
-persona auth (mcpauth + whagent-net), and the streamable-HTTP transport
+persona auth (auth-package + whagent-net), and the streamable-HTTP transport
 mounted at /mcp/spec."""
 
 load("@rules_go//go:def.bzl", "go_library", "go_test")
@@ -17,7 +17,7 @@ go_library(
     visibility = ["//visibility:public"],
     deps = [
         "//libs/go/logging",
-        "//libs/go/mcpauth",
+        "//libs/go/auth",
         "//libs/go/whagent",
         "@com_github_modelcontextprotocol_go_sdk//auth",
         "@com_github_modelcontextprotocol_go_sdk//mcp",
@@ -42,7 +42,7 @@ go_test(
     ],
     embed = [":server"],
     deps = [
-        "//libs/go/mcpauth",
+        "//libs/go/auth",
         "//libs/go/whagent",
         "@com_github_google_uuid//:uuid",
         "@com_github_modelcontextprotocol_go_sdk//auth",
@@ -74,7 +74,7 @@ go_test(
 )
 
 # Real Postgres + real HTTP-transport MCP client integration test: both
-# caller-auth front doors (mcpauth and whagent-net) mounted at the same
+# caller-auth front doors (auth-package and whagent-net) mounted at the same
 # spec-surface mount point, end to end, plus each of the four FR5-FR8
 # tools' byte-identical document round trip (LB7) against a real
 # //krill/slice.Querier. Deliberately NOT part of `bazel test //...` --
@@ -104,7 +104,7 @@ go_test(
         "//krill/slice",
         "//krill/store",
         "//libs/go/dbtest",
-        "//libs/go/mcpauth",
+        "//libs/go/auth",
         "//libs/go/migrate",
         "//libs/go/whagent",
         "@com_github_google_uuid//:uuid",

@@ -25,7 +25,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/whale-net/everything/audience_score_system/store"
-	"github.com/whale-net/everything/libs/go/mcpauth"
+	"github.com/whale-net/everything/libs/go/auth"
 )
 
 // ── fake RoleStore ──────────────────────────────────────────────────────────
@@ -234,9 +234,9 @@ func (f *fakePersonIdentityStore) LinkToExistingPerson(_ context.Context, iss, s
 
 var _ store.PersonIdentityStore = (*fakePersonIdentityStore)(nil)
 
-// ── fake mcpauth.CredentialStore ──────────────────────────────────────────────
+// ── fake auth.CredentialStore ──────────────────────────────────────────────
 
-// fakeCredentialStore implements mcpauth.CredentialStore against a single
+// fakeCredentialStore implements auth.CredentialStore against a single
 // fixed valid token -- enough to drive whagent_auth.go's
 // DualAuthHTTPHandler's mcp_credential branch without a real database.
 // Mint/Revoke/List are not used by these tests.
@@ -245,26 +245,26 @@ type fakeCredentialStore struct {
 	identity   string
 }
 
-func (f fakeCredentialStore) Mint(context.Context, string) (string, mcpauth.Credential, error) {
-	return "", mcpauth.Credential{}, errors.New("fakeCredentialStore.Mint is not used by these tests")
+func (f fakeCredentialStore) Mint(context.Context, string) (string, auth.Credential, error) {
+	return "", auth.Credential{}, errors.New("fakeCredentialStore.Mint is not used by these tests")
 }
 
-func (f fakeCredentialStore) Verify(_ context.Context, rawToken string) (string, mcpauth.Credential, error) {
+func (f fakeCredentialStore) Verify(_ context.Context, rawToken string) (string, auth.Credential, error) {
 	if rawToken == f.validToken {
-		return f.identity, mcpauth.Credential{Identity: f.identity}, nil
+		return f.identity, auth.Credential{Identity: f.identity}, nil
 	}
-	return "", mcpauth.Credential{}, mcpauth.ErrInvalidCredential
+	return "", auth.Credential{}, auth.ErrInvalidCredential
 }
 
 func (f fakeCredentialStore) Revoke(context.Context, uuid.UUID, string) error {
 	return errors.New("fakeCredentialStore.Revoke is not used by these tests")
 }
 
-func (f fakeCredentialStore) List(context.Context, string) ([]mcpauth.Credential, error) {
+func (f fakeCredentialStore) List(context.Context, string) ([]auth.Credential, error) {
 	return nil, errors.New("fakeCredentialStore.List is not used by these tests")
 }
 
-var _ mcpauth.CredentialStore = fakeCredentialStore{}
+var _ auth.CredentialStore = fakeCredentialStore{}
 
 // ── test tool input/output types ─────────────────────────────────────────────
 

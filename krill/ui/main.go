@@ -1,18 +1,18 @@
 // Command ui is krill's barebones operator web UI: just enough of a shell
-// (Keycloak sign-in + a landing page) to give //libs/go/mcpauth's
+// (Keycloak sign-in + a landing page) to give //libs/go/auth's
 // `/authorize` endpoint (mounted here) somewhere to redirect a
 // not-yet-signed-in caller, per ProviderConfig.SignInURL. This is what
-// unblocks the mcpauth (human) front door on krill/mcp
+// unblocks the auth (human) front door on krill/mcp
 // (krill/mcp/server/auth.go): before this binary existed, `/authorize`
 // had no SignInURL configured and just 401ed on an unresolved caller (see
-// ARCHITECTURE.md "krill/ui and the mcpauth front door").
+// ARCHITECTURE.md "krill/ui and the auth front door").
 //
 // There is no session list, no spec-entity browsing, and no admin
 // surface here -- krill's own PRODUCT.md roadmap defers a real web UI to
 // "Later" (C19). This binary exists solely to make the OAuth2
 // authorization-code + PKCE flow (discovery -> registration -> sign-in ->
 // `/authorize` -> `/token`) actually completable, mirroring
-// whagent_net/ui's own mcpauth wiring (whagent_net/ui/mcpauth.go)
+// whagent_net/ui's own auth wiring (whagent_net/ui/auth.go)
 // stripped down to that one job.
 package main
 
@@ -28,10 +28,10 @@ import (
 
 	"go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp"
 
+	"github.com/whale-net/everything/libs/go/auth"
 	"github.com/whale-net/everything/libs/go/db"
 	"github.com/whale-net/everything/libs/go/htmxauth"
 	"github.com/whale-net/everything/libs/go/logging"
-	"github.com/whale-net/everything/libs/go/mcpauth"
 )
 
 // config holds `ui`'s configuration, loaded entirely from environment
@@ -56,20 +56,20 @@ type config struct {
 	SessionSecret string
 
 	// DatabaseURL backs both htmxauth's DB-backed session manager
-	// (ui_sessions table, migration 007) and mcpauth's Postgres-backed
+	// (ui_sessions table, migration 007) and auth's Postgres-backed
 	// credential/client/auth-code stores (mcp_credential/mcp_oauth_client/
 	// mcp_auth_code, migration 006) -- always required, never falls back
 	// to cookie-only sessions, mirroring whagent_net/ui/main.go's config.
 	DatabaseURL string
 
 	// UIPublicURL is this binary's own externally-reachable base URL --
-	// mcpauth.ProviderConfig.Issuer, the base every mcpauth endpoint URL
+	// auth.ProviderConfig.Issuer, the base every auth endpoint URL
 	// (`/authorize`, `/token`, `/register`,
 	// `/.well-known/oauth-authorization-server`) is built from.
 	UIPublicURL string
 
 	// MCPPublicURL is `mcp`'s own externally-reachable base URL --
-	// mcpauth.ProviderConfig.Resource, the OAuth2 `resource` identifier.
+	// auth.ProviderConfig.Resource, the OAuth2 `resource` identifier.
 	// Must be byte-identical to what `mcp` itself advertises
 	// (KRILL_MCP_PUBLIC_URL, see krill/mcp/main.go) -- a mismatch breaks
 	// an MCP client's RFC 9728 discovery chain.
@@ -103,22 +103,22 @@ type App struct {
 	auth *htmxauth.Authenticator
 
 	// oidcIssuer is cfg.OIDCIssuer verbatim -- the fixed issuer every
-	// signed-in operator's encoded identity carries (mcpauth.go's
+	// signed-in operator's encoded identity carries (auth.go's
 	// mcpCallerResolver).
 	oidcIssuer string
 
-	// mcpProvider is mcpauth's OAuth2 authorization-server front end,
+	// mcpProvider is auth's OAuth2 authorization-server front end,
 	// constructed in NewApp and mounted on this binary's mux in
 	// setupRoutes on unauthenticated routes (discovery metadata and
 	// dynamic client registration must be reachable before an MCP client
 	// has any credential at all). Its Resolver reads this binary's own
-	// Keycloak session (mcpCallerResolver, mcpauth.go) -- `/authorize`
+	// Keycloak session (mcpCallerResolver, auth.go) -- `/authorize`
 	// mints a credential only once the operator is already signed in via
 	// app.auth.
-	mcpProvider *mcpauth.Provider
+	mcpProvider *auth.Provider
 }
 
-// NewApp wires up Keycloak sign-in and the mcpauth OAuth2 provider. A
+// NewApp wires up Keycloak sign-in and the auth OAuth2 provider. A
 // failure here is always a startup-fatal condition -- see run()'s
 // logger.Error call at the call site -- never a degrade-and-serve path.
 func NewApp(ctx context.Context, cfg config) (*App, error) {
@@ -178,14 +178,14 @@ func NewApp(ctx context.Context, cfg config) (*App, error) {
 		oidcIssuer: cfg.OIDCIssuer,
 	}
 
-	// mcpauth.NewCredentialStore/NewPostgresClientRegistry/
+	// auth.NewCredentialStore/NewPostgresClientRegistry/
 	// NewPostgresAuthCodeStore each preflight their own table (migration
 	// 006) and fail loudly, naming the table, if it hasn't been applied
 	// yet -- exactly like htmxauth.NewDBSessionManager's ui_sessions probe
 	// above.
 	mcpProvider, err := setupMCPAuth(ctx, pool, cfg, app.mcpCallerResolver())
 	if err != nil {
-		return nil, fmt.Errorf("failed to initialize mcpauth provider: %w", err)
+		return nil, fmt.Errorf("failed to initialize auth provider: %w", err)
 	}
 	app.mcpProvider = mcpProvider
 
@@ -278,7 +278,7 @@ func (app *App) setupRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("/auth/callback", app.auth.HandleCallback)
 	mux.HandleFunc("/logout", app.auth.HandleLogout)
 
-	// mcpauth's OAuth2 authorization-server endpoints (/authorize, /token,
+	// auth's OAuth2 authorization-server endpoints (/authorize, /token,
 	// /register, and both discovery metadata documents) are registered
 	// directly on mux here, outside app.auth.RequireAuth -- discovery and
 	// dynamic client registration must be reachable before an MCP client
@@ -286,6 +286,20 @@ func (app *App) setupRoutes(mux *http.ServeMux) {
 	// app.mcpProvider's own Resolver + SignInURL gate access to a
 	// signed-in operator, not RequireAuth.
 	app.mcpProvider.Mount(mux)
+
+	// The self-serve credential API (POST/GET /credentials, DELETE
+	// /credentials/{id}) lets an already-signed-in operator mint a static
+	// bearer token for a non-OAuth2 MCP client (any harness that can't run
+	// the authorization-code + PKCE dance) without ever needing DB access.
+	// Gated the same way /authorize is -- app.mcpCallerResolver reads the
+	// same session cookie -- so it is safe to leave unauthenticated at the
+	// mux level; an unresolved caller gets a 401 from the handler itself.
+	// MountSelfServe only errors on a nil Resolver, which setupMCPAuth
+	// above never leaves unset, so a returned error here would be a
+	// programming mistake, not a runtime condition -- panic is correct.
+	if err := app.mcpProvider.MountSelfServe(mux); err != nil {
+		panic(err)
+	}
 
 	// The one shell page this barebones binary has: confirms sign-in
 	// worked and links to where an MCP client would actually connect.

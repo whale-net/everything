@@ -1,4 +1,4 @@
-package mcpauth
+package auth
 
 import (
 	"context"
@@ -19,7 +19,7 @@ import (
 )
 
 // OAuthClient is a client dynamically registered against this provider via
-// RFC 7591 (see Provider.handleRegister). mcpauth issues no client secret
+// RFC 7591 (see Provider.handleRegister). this package issues no client secret
 // (public PKCE clients only) — see NewProvider's TokenEndpointAuthMethod
 // note.
 type OAuthClient struct {
@@ -35,7 +35,7 @@ type OAuthClient struct {
 // distinguishable sentinel, not an opaque error, because callers (the
 // #1642 `/authorize`/`/token` handlers) need to tell "unknown client" apart
 // from a registry-level failure.
-var ErrClientNotFound = errors.New("mcpauth: unknown client_id")
+var ErrClientNotFound = errors.New("auth: unknown client_id")
 
 // ClientRegistry stores OAuth2 clients dynamically registered via RFC 7591.
 type ClientRegistry interface {
@@ -89,7 +89,7 @@ func NewMemoryClientRegistry() ClientRegistry {
 func (m *memoryClientRegistry) Register(ctx context.Context, meta oauthex.ClientRegistrationMetadata) (OAuthClient, error) {
 	clientID, err := generateClientID()
 	if err != nil {
-		return OAuthClient{}, fmt.Errorf("mcpauth: generate client_id: %w", err)
+		return OAuthClient{}, fmt.Errorf("auth: generate client_id: %w", err)
 	}
 
 	client := OAuthClient{
@@ -152,7 +152,7 @@ var _ ClientRegistry = (*pgxClientRegistry)(nil)
 // rather than on the first real request.
 func NewPostgresClientRegistry(ctx context.Context, cfg ClientRegistryConfig) (ClientRegistry, error) {
 	if cfg.Pool == nil {
-		return nil, errors.New("mcpauth: ClientRegistryConfig.Pool is required")
+		return nil, errors.New("auth: ClientRegistryConfig.Pool is required")
 	}
 	if cfg.TableName == "" {
 		cfg.TableName = defaultClientTableName
@@ -165,7 +165,7 @@ func NewPostgresClientRegistry(ctx context.Context, cfg ClientRegistryConfig) (C
 
 	if err := r.probeTable(ctx); err != nil {
 		return nil, fmt.Errorf(
-			"mcpauth: oauth client table preflight failed for table %q — apply your domain's mcp_oauth_client migration (see libs/go/mcpauth/README.md schema contract) before calling NewPostgresClientRegistry: %w",
+			"auth: oauth client table preflight failed for table %q — apply your domain's mcp_oauth_client migration (see libs/go/auth/README.md schema contract) before calling NewPostgresClientRegistry: %w",
 			cfg.TableName, err,
 		)
 	}
@@ -185,12 +185,12 @@ func (r *pgxClientRegistry) probeTable(ctx context.Context) error {
 func (r *pgxClientRegistry) Register(ctx context.Context, meta oauthex.ClientRegistrationMetadata) (OAuthClient, error) {
 	clientID, err := generateClientID()
 	if err != nil {
-		return OAuthClient{}, fmt.Errorf("mcpauth: generate client_id: %w", err)
+		return OAuthClient{}, fmt.Errorf("auth: generate client_id: %w", err)
 	}
 
 	metaJSON, err := json.Marshal(meta)
 	if err != nil {
-		return OAuthClient{}, fmt.Errorf("mcpauth: marshal client metadata: %w", err)
+		return OAuthClient{}, fmt.Errorf("auth: marshal client metadata: %w", err)
 	}
 
 	query := fmt.Sprintf(`
@@ -201,7 +201,7 @@ func (r *pgxClientRegistry) Register(ctx context.Context, meta oauthex.ClientReg
 
 	var createdAt time.Time
 	if err := r.cfg.Pool.QueryRow(ctx, query, clientID, metaJSON).Scan(&createdAt); err != nil {
-		return OAuthClient{}, fmt.Errorf("mcpauth: insert oauth client: %w", err)
+		return OAuthClient{}, fmt.Errorf("auth: insert oauth client: %w", err)
 	}
 
 	return OAuthClient{
@@ -227,12 +227,12 @@ func (r *pgxClientRegistry) Get(ctx context.Context, clientID string) (OAuthClie
 		if errors.Is(err, pgx.ErrNoRows) {
 			return OAuthClient{}, ErrClientNotFound
 		}
-		return OAuthClient{}, fmt.Errorf("mcpauth: get oauth client: %w", err)
+		return OAuthClient{}, fmt.Errorf("auth: get oauth client: %w", err)
 	}
 
 	var meta oauthex.ClientRegistrationMetadata
 	if err := json.Unmarshal(metaJSON, &meta); err != nil {
-		return OAuthClient{}, fmt.Errorf("mcpauth: unmarshal oauth client metadata: %w", err)
+		return OAuthClient{}, fmt.Errorf("auth: unmarshal oauth client metadata: %w", err)
 	}
 
 	return OAuthClient{
@@ -320,7 +320,7 @@ func writeClientRegistrationError(w http.ResponseWriter, status int, code, descr
 // completing /authorize (#1642).
 //
 // On success: mints a random client_id (generateClientID), issues no
-// client_secret, forces token_endpoint_auth_method to "none" (mcpauth
+// client_secret, forces token_endpoint_auth_method to "none" (this package
 // issues only public PKCE clients), and responds 201 with an RFC 7591
 // ClientRegistrationResponse. On bad input: responds 400 with an RFC 7591
 // ClientRegistrationError body — "invalid_redirect_uri" for a redirect URI
@@ -345,7 +345,7 @@ func (p *Provider) handleRegister(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	// Public PKCE clients only: mcpauth issues no client secret, so every
+	// Public PKCE clients only: this package issues no client secret, so every
 	// registered client is forced to "none" regardless of what the
 	// request asked for.
 	meta.TokenEndpointAuthMethod = "none"

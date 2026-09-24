@@ -12,7 +12,7 @@
 // instance being retrievable via a second, separately constructed instance
 // sharing the same database (the "replica A / replica B" scenario
 // README.md documents).
-package mcpauth
+package auth
 
 import (
 	"context"

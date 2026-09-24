@@ -1,4 +1,4 @@
-package mcpauth
+package auth
 
 import (
 	"errors"
@@ -83,7 +83,7 @@ type ProviderConfig struct {
 	AuthCodeTTL time.Duration
 }
 
-// Provider is the object every OAuth2 endpoint mcpauth serves hangs off:
+// Provider is the object every OAuth2 endpoint this package serves hangs off:
 // discovery metadata (RFC 9728/8414), dynamic client registration
 // (RFC 7591), and — landed by #1642 — the authorization-code + PKCE
 // `/authorize` and `/token` endpoints.
@@ -98,25 +98,25 @@ type Provider struct {
 // construction-time failure is a returned error, not a request-time panic.
 func NewProvider(cfg ProviderConfig) (*Provider, error) {
 	if cfg.Issuer == "" {
-		return nil, errors.New("mcpauth: ProviderConfig.Issuer is required")
+		return nil, errors.New("auth: ProviderConfig.Issuer is required")
 	}
 	if err := validateAbsoluteURL(cfg.Issuer); err != nil {
-		return nil, fmt.Errorf("mcpauth: ProviderConfig.Issuer %q is invalid: %w", cfg.Issuer, err)
+		return nil, fmt.Errorf("auth: ProviderConfig.Issuer %q is invalid: %w", cfg.Issuer, err)
 	}
 	if strings.HasSuffix(cfg.Issuer, "/") {
-		return nil, fmt.Errorf("mcpauth: ProviderConfig.Issuer %q must not have a trailing slash", cfg.Issuer)
+		return nil, fmt.Errorf("auth: ProviderConfig.Issuer %q must not have a trailing slash", cfg.Issuer)
 	}
 	if cfg.Resource == "" {
-		return nil, errors.New("mcpauth: ProviderConfig.Resource is required")
+		return nil, errors.New("auth: ProviderConfig.Resource is required")
 	}
 	if err := validateAbsoluteURL(cfg.Resource); err != nil {
-		return nil, fmt.Errorf("mcpauth: ProviderConfig.Resource %q is invalid: %w", cfg.Resource, err)
+		return nil, fmt.Errorf("auth: ProviderConfig.Resource %q is invalid: %w", cfg.Resource, err)
 	}
 	if cfg.Resolver == nil {
-		return nil, errors.New("mcpauth: ProviderConfig.Resolver is required")
+		return nil, errors.New("auth: ProviderConfig.Resolver is required")
 	}
 	if cfg.Credentials == nil {
-		return nil, errors.New("mcpauth: ProviderConfig.Credentials is required")
+		return nil, errors.New("auth: ProviderConfig.Credentials is required")
 	}
 	if cfg.Clients == nil {
 		cfg.Clients = NewMemoryClientRegistry()

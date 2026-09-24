@@ -29,7 +29,7 @@ go_test(
 # status-first enforcement backed by actual SQL rather than an in-memory
 # fake). Gated behind `//go:build integration`, gazelle skips it when
 # scanning for go_test srcs; this go_test is hand-written with EXACTLY the
-# tag set from //libs/go/mcpauth:mcpauth_integration_test and
+# tag set from //libs/go/auth:auth_integration_test and
 # //libs/go/dbtest:postgres_constraints_test (see those packages'
 # BUILD.bazel/README.md for why each tag is required). `# keep` marker
 # tells a later `bazel run //:gazelle` not to touch or remove this rule.

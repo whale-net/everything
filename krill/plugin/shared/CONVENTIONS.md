@@ -201,7 +201,7 @@ Feature/Requirement id). **Restricted to `PersonaSwarmOperator`, not
 the Agent, creates tasks... the Agent's role starts at claim (a later M4
 task)." Concretely: `krill-work:planner` calling `create_task` **works**
 when dispatched inside an ordinary interactive Claude Code session (the
-session's MCP connection authenticates as the signed-in human via mcpauth,
+session's MCP connection authenticates as the signed-in human via auth,
 resolving `PersonaSwarmOperator`) — which is the normal way this plugin
 gets used today. It **fails** if `planner` is ever dispatched through a
 fully unattended whagent-net-authenticated pipeline with no human present,

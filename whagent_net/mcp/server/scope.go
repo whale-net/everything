@@ -17,7 +17,7 @@ import "context"
 // nil scope means the agent carries no delegated-grant scoping at all.
 // whagent_net/mcpscope.Resolver is the only production implementation,
 // constructed exclusively at whagent_net/mcp/main.go's composition root,
-// exactly like this package's own mcpauth.CredentialStore usage (see
+// exactly like this package's own auth.CredentialStore usage (see
 // auth.go's NewVerifier and main.go's initializeAuthDeps).
 //
 // A caller resolving "not found" (an unknown agent id or session id) gets

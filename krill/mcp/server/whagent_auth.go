@@ -1,5 +1,5 @@
 // Caller authentication, agent front door (NFR1) -- new, parallel to
-// (never built on top of) auth.go's mcpauth -> PersonaMiddleware flow.
+// (never built on top of) auth.go's own auth -> PersonaMiddleware flow.
 // Mirrors audience_score_system/mcp/server/whagent_auth.go's design
 // verbatim, adapted from resolving a store.Person to resolving a fixed
 // Persona (PersonaAgent) -- see that file's package doc comment for the
@@ -8,8 +8,8 @@
 //  1. Routes each request's bearer token to exactly one of the two doors
 //     at the HTTP layer (DualAuthHTTPHandler), keyed on token SHAPE: a
 //     whagent Claim is always a three-segment, two-dot JWT compact
-//     serialization; an mcpauth credential is always a 64-character hex
-//     string with no dots (libs/go/mcpauth/credential.go's
+//     serialization; an auth credential is always a 64-character hex
+//     string with no dots (libs/go/auth/credential.go's
 //     generateToken) -- the two encodings never overlap, so this split
 //     is exact, not probabilistic.
 //  2. For the whagent-shaped case, calls whagent.Verifier.Verify
@@ -24,7 +24,7 @@
 //     every whagent-routed call to PersonaAgent, unconditionally -- a
 //     whagent Claim never carries a human profile (FR10 of
 //     //libs/go/whagent), so there is no further identity to resolve.
-//     A mcpauth-routed call has no such Extra key, so
+//     A auth-routed call has no such Extra key, so
 //     WhagentPersonaMiddleware calls next unchanged -- next IS
 //     PersonaMiddleware, which authenticates it exactly as it always has.
 package server
@@ -38,7 +38,7 @@ import (
 	sdkauth "github.com/modelcontextprotocol/go-sdk/auth"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 
-	"github.com/whale-net/everything/libs/go/mcpauth"
+	"github.com/whale-net/everything/libs/go/auth"
 	"github.com/whale-net/everything/libs/go/whagent"
 )
 
@@ -66,7 +66,7 @@ var errWhagentTokenInvalid = fmt.Errorf("mcp: invalid, expired, or unverifiable 
 
 // isWhagentShapedToken reports whether token is shaped like a whagent
 // Claim JWT (RFC 7519 compact serialization: exactly three non-empty,
-// dot-separated segments) rather than an mcpauth credential (a
+// dot-separated segments) rather than an auth credential (a
 // 64-character hex string with no dots). DualAuthHTTPHandler uses this to
 // decide which of the two verification paths a given request's bearer
 // token belongs to, without ever trying a credential against the wrong
@@ -87,7 +87,7 @@ func isWhagentShapedToken(token string) bool {
 
 // bearerToken extracts the raw bearer token from r's Authorization header
 // (RFC 6750), or "" if none is present. An empty return routes to the
-// mcpauth branch by default, which then rejects with its own standard
+// auth branch by default, which then rejects with its own standard
 // "no bearer token" 401.
 func bearerToken(r *http.Request) string {
 	fields := strings.Fields(r.Header.Get("Authorization"))
@@ -116,15 +116,15 @@ func whagentTokenVerifier(cfg WhagentAuthConfig) sdkauth.TokenVerifier {
 }
 
 // DualAuthHTTPHandler wraps mcpHandler with BOTH caller-authentication
-// front doors (NFR1): the mcpauth (human OAuth2) door (via credentials)
+// front doors (NFR1): the auth (human OAuth2) door (via credentials)
 // and the whagent-net (agent) door (via cfg), routed per-request by
 // isWhagentShapedToken so neither door is built on the other and neither
 // can be satisfied by the other's credential. Each branch is its own
 // independent sdkauth.RequireBearerToken instance around mcpHandler, so a
 // rejection in either branch never invokes mcpHandler.
-func DualAuthHTTPHandler(mcpHandler http.Handler, credentials mcpauth.CredentialStore, cfg WhagentAuthConfig, mcpauthOpts *sdkauth.RequireBearerTokenOptions) http.Handler {
-	credentialGuarded := mcpauth.RequireBearerToken(credentials, mcpauthOpts)(mcpHandler)
-	whagentGuarded := sdkauth.RequireBearerToken(whagentTokenVerifier(cfg), mcpauthOpts)(mcpHandler)
+func DualAuthHTTPHandler(mcpHandler http.Handler, credentials auth.CredentialStore, cfg WhagentAuthConfig, authOpts *sdkauth.RequireBearerTokenOptions) http.Handler {
+	credentialGuarded := auth.RequireBearerToken(credentials, authOpts)(mcpHandler)
+	whagentGuarded := sdkauth.RequireBearerToken(whagentTokenVerifier(cfg), authOpts)(mcpHandler)
 
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if isWhagentShapedToken(bearerToken(r)) {
@@ -141,7 +141,7 @@ func DualAuthHTTPHandler(mcpHandler http.Handler, credentials mcpauth.Credential
 // TokenInfo.Extra), it places PersonaAgent on ctx unconditionally -- a
 // whagent Claim never carries a human profile to resolve further (FR10 of
 // //libs/go/whagent), so there is nothing to look up. A call
-// DualAuthHTTPHandler routed through the mcpauth door has no
+// DualAuthHTTPHandler routed through the auth door has no
 // whagentClaimExtraKey to find, so this middleware calls next unchanged
 // -- next is PersonaMiddleware (server.go wires both as receiving
 // middleware, this one mounted to run first by mcp/main.go), which

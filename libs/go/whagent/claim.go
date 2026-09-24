@@ -24,7 +24,7 @@
 //     of -- any web-session caller-resolution flow it already has (e.g.
 //     audience_score_system's mcp/server/auth.go PersonMiddleware).
 //     Mounts HTTPMiddleware as the paired HTTP-layer half, standalone: it
-//     does not require libs/go/mcpauth to be anywhere in the chain.
+//     does not require libs/go/auth to be anywhere in the chain.
 //  2. Resolves the verified Claim's (iss, sub) -- i.e. (SubjectIssuer,
 //     Subject) -- on-behalf-of pair to its own user record, auto-
 //     provisioning that record the first time a given (iss, sub) is seen

@@ -179,9 +179,9 @@ store, err := pgstore.NewGrantStore(ctx, pgstore.StoreConfig{
 ```
 
 **The SQL migration is domain-owned — no migration ships with this
-library**, exactly like `libs/go/mcpauth`'s precedent
+library**, exactly like `libs/go/auth`'s precedent
 (`audience_score_system/migrate/schema/migrations/006_mcpauth_credential.up.sql`
-plays the same role for `mcpauth`). Your migration must create a table
+plays the same role for `auth`). Your migration must create a table
 shaped like this (column/table names are configurable via `StoreConfig`;
 the shape must match):
 

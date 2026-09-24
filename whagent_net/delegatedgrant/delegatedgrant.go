@@ -137,7 +137,7 @@ func redactedPlaceholder(secret string) string {
 // Config.unset's doc comment) -- every WHAGENT_GRANT_* variable is unset,
 // regardless of WHAGENT_OIDC_ISSUER. Both `ui` and `mcp`'s main.go treat
 // this as non-fatal (skip, WARNING-log, leave the delegated-grant wiring
-// absent) -- mirroring `mcp`'s own mcpauth.CredentialStore degrade
+// absent) -- mirroring `mcp`'s own auth.CredentialStore degrade
 // precedent (main.go's initializeAuthDeps, PG_DATABASE_URL unset) -- not
 // as a startup failure, since local dev (whagent_net/Tiltfile) leaves
 // every WHAGENT_GRANT_* variable unset by default for both binaries

@@ -1,4 +1,4 @@
-package mcpauth
+package auth
 
 import (
 	"context"
@@ -136,7 +136,7 @@ func TestRegister_HappyPath_Returns201WithClientIDNoSecretEchoedRedirects(t *tes
 	var reg oauthex.ClientRegistrationResponse
 	require.NoError(t, json.NewDecoder(resp.Body).Decode(&reg))
 	assert.NotEmpty(t, reg.ClientID)
-	assert.Empty(t, reg.ClientSecret, "mcpauth issues no client secret — public PKCE clients only")
+	assert.Empty(t, reg.ClientSecret, "this package issues no client secret — public PKCE clients only")
 	assert.Equal(t, redirects, reg.RedirectURIs)
 	assert.Equal(t, "none", reg.TokenEndpointAuthMethod, "token_endpoint_auth_method must be forced to none")
 }

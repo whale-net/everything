@@ -132,7 +132,7 @@ var specTables = []string{"product", "feature_set", "feature", "requirement", "l
 // 010_milestone_authoring, 011_milepebble, 012_milestone_status,
 // 013_delivery_shipment, 014_backlog_bucket, and 015_work_axis have all
 // landed -- 008/009 rather than 006/007 because 006/007 were already
-// claimed by the mcpauth auth-flow gap work by the time this plan's
+// claimed by the auth-flow gap work by the time this plan's
 // migrations merged; see ARCHITECTURE.md's "Migration numbering (M2)"
 // table). `milestone_ref` itself is not a new table (004 created it) so it
 // is not listed again below -- only `milestone_deferral` is new since
@@ -163,7 +163,7 @@ func TestMigrations_UpDownUp_LeavesCleanDatabaseAndIsRerunnable(t *testing.T) {
 	require.Equal(t, uint(16), latest, "expected the latest migration source version to be 16 (001_scope, 002_spec_entities, 003_session, 004_milestone_assoc, 005_pointer_artifact, 006_mcpauth_credential, 007_ui_sessions, 008_design_session, 009_import_completion, 010_milestone_authoring, 011_milepebble, 012_milestone_status, 013_delivery_shipment, 014_backlog_bucket, 015_work_axis, 016_escalation_axis) -- update this test if a later migration has since landed")
 
 	// -- Up: scope, krill_session, the milestone tables, pointer_artifact,
-	// the mcpauth tables, ui_sessions, design_session/revision_event,
+	// the auth tables, ui_sessions, design_session/revision_event,
 	// milestone_status_event, delivery_shipment, and the work-axis tables
 	// must exist, version must land clean at the latest --
 	require.NoError(t, runner.Up(), "apply migrations 001-016")

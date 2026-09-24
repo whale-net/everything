@@ -1,4 +1,4 @@
-package mcpauth
+package auth
 
 import (
 	"encoding/json"
@@ -75,7 +75,7 @@ func TestAuthServerMetadata_ExactShape(t *testing.T) {
 }
 
 func TestAuthServerMetadata_JWKSURI_NeverPresent(t *testing.T) {
-	// mcpauth issues opaque credentials and has no JWKS document (see the
+	// this package issues opaque credentials and has no JWKS document (see the
 	// "Resolved: JWKSURI" doc comment in metadata.go) — the field must be
 	// entirely absent from the wire body, not present-but-empty.
 	srv, _ := newTestServer(t)

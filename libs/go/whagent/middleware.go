@@ -11,8 +11,8 @@ import (
 
 // errUnauthenticated is the single fixed error Middleware returns for every
 // rejection case -- an absent, malformed, or wrong-audience/issuer verified
-// credential -- mirroring mcpauth's own single-fixed-error convention
-// (libs/go/mcpauth/verify.go's errInvalidToken) rather than echoing which
+// credential -- mirroring auth's own single-fixed-error convention
+// (libs/go/auth/verify.go's errInvalidToken) rather than echoing which
 // specific check failed back to an MCP caller.
 var errUnauthenticated = errors.New("whagent: unauthenticated: no verified whagent-net credential")
 
@@ -20,7 +20,7 @@ var errUnauthenticated = errors.New("whagent: unauthenticated: no verified whage
 // sdkauth.TokenVerifier returns for every Verifier.Verify failure. It wraps
 // sdkauth.ErrInvalidToken so sdkauth.RequireBearerToken's own
 // errors.Is(err, sdkauth.ErrInvalidToken) branch treats it as a 401, not a
-// 500 -- and, like mcpauth's errInvalidToken, its Error() string is a
+// 500 -- and, like auth's errInvalidToken, its Error() string is a
 // compile-time constant that never varies with, or reveals, which of
 // Verify's distinct rejection cases actually occurred, since that string is
 // what sdkauth.RequireBearerToken writes directly to the HTTP response
@@ -43,7 +43,7 @@ var _ error = errAuthenticationFailedWrap{}
 // mcp-go-sdk streamable transport already threads through from the HTTP
 // layer to the MCP-protocol layer for any bearer-token auth (see
 // audience_score_system/mcp/server/transport.go and auth.go for the
-// mcpauth-based precedent this mirrors).
+// auth-based precedent this mirrors).
 const claimExtraKey = "whagent.claim"
 
 // claimContextKey is the unexported context key ClaimFromContext /
@@ -107,10 +107,10 @@ func Middleware(v *Verifier, aud string) mcp.Middleware {
 // request, verifies it against v for aud, and -- on success -- stashes
 // the resulting Claim (via claimExtraKey) where Middleware can read it
 // back off mcp.Request.GetExtra(). Built on sdkauth.RequireBearerToken
-// (the same bearer-extraction machinery libs/go/mcpauth.RequireBearerToken
+// (the same bearer-extraction machinery libs/go/auth.RequireBearerToken
 // already uses), but with its own TokenVerifier calling v.Verify --
 // mountable as a standalone authentication path that does not require
-// libs/go/mcpauth to be anywhere in the chain (FR12(a)).
+// libs/go/auth to be anywhere in the chain (FR12(a)).
 func HTTPMiddleware(v *Verifier, aud string) func(http.Handler) http.Handler {
 	verifier := sdkauth.TokenVerifier(func(ctx context.Context, token string, _ *http.Request) (*sdkauth.TokenInfo, error) {
 		claim, err := v.Verify(ctx, token, aud)

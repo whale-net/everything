@@ -10,6 +10,6 @@ milestone never collide on a migration version:
 | `003` | `session` (FR3's `init` gate) | #2489 |
 | `004` | Milestone reference + association (FR17) | #2492 |
 | `005` | Pointer artifact (FR20) | #2496 |
-| `006` | mcpauth credential/client/auth-code (`mcp_credential`, `mcp_oauth_client`, `mcp_auth_code`) | mcpauth auth-flow gap |
-| `007` | UI sessions (`ui_sessions`, `//libs/go/htmxauth`) | mcpauth auth-flow gap |
+| `006` | auth credential/client/auth-code (`mcp_credential`, `mcp_oauth_client`, `mcp_auth_code`) | auth-flow gap |
+| `007` | UI sessions (`ui_sessions`, `//libs/go/htmxauth`) | auth-flow gap |
 

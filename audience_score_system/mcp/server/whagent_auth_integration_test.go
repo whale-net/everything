@@ -246,7 +246,7 @@ func (i whagentFR11Input) IdempotencyKey() string { return i.Key }
 // (b) is explicit that this is out of scope for M1), so this test
 // constructs the "same human, same person_id, reached via both paths"
 // precondition directly: auto-provision a Person via the whagent identity
-// store, then mint an mcp_credential for that EXACT person_id (mcpauth
+// store, then mint an mcp_credential for that EXACT person_id (auth
 // treats identity as an opaque string -- nothing about Mint requires the
 // identity to have signed in via Google). What this proves is the part
 // that is genuinely this task's own responsibility: once two calls

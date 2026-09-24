@@ -39,10 +39,10 @@ import (
 	"github.com/whale-net/everything/audience_score_system/web/schedule"
 	"github.com/whale-net/everything/audience_score_system/web/videos"
 	"github.com/whale-net/everything/audience_score_system/worker/sync"
+	mcpauth "github.com/whale-net/everything/libs/go/auth"
 	"github.com/whale-net/everything/libs/go/db"
 	"github.com/whale-net/everything/libs/go/htmxbase"
 	"github.com/whale-net/everything/libs/go/logging"
-	"github.com/whale-net/everything/libs/go/mcpauth"
 	temporallib "github.com/whale-net/everything/libs/go/temporal"
 )
 
@@ -93,7 +93,7 @@ type config struct {
 	// authorization server) and `mcp` (the OAuth2 protected resource) must
 	// agree on this exact value -- see ../ENV.md. ASS_WEB_MCP_RESOURCE_URL
 	// overrides it for `web` alone, letting a local-dev deployment satisfy
-	// mcpauth's loopback/https validation without changing `mcp`'s
+	// auth's loopback/https validation without changing `mcp`'s
 	// in-cluster value.
 	MCPPublicURL string
 
@@ -169,7 +169,7 @@ type app struct {
 	outcomes *outcomes.Handlers
 	videos   *videos.Handlers
 
-	// mcpProvider is mcpauth's OAuth2 authorization-server front end
+	// mcpProvider is auth's OAuth2 authorization-server front end
 	// (issue #1646, FR12/NFR4): /authorize, /token, /register, and
 	// discovery metadata, mounted in setupRoutes. `web` hosts this because
 	// it is the only process holding the caller's session cookie
@@ -343,7 +343,7 @@ func run() error {
 	// is web-only in this milestone; no MCP mirror.
 	videosHandlers := videos.New(st)
 
-	// mcpauth's OAuth2 authorization-server front end (issue #1646,
+	// auth's OAuth2 authorization-server front end (issue #1646,
 	// FR12/NFR4): mints the bearer credential an MCP client presents to
 	// `mcp`, reusing this Person's existing C1 Google-OIDC-backed session
 	// (auth.MCPCallerResolver) rather than any new sign-in UI. `web` and
@@ -351,7 +351,7 @@ func run() error {
 	// verifiable by `mcp` -- no cross-service call.
 	//
 	// The client registry and pending-authorization-code store MUST be the
-	// Postgres-backed implementations, not mcpauth's in-memory defaults:
+	// Postgres-backed implementations, not auth's in-memory defaults:
 	// /authorize, /token, and /register can each land on a different `web`
 	// replica.
 	mcpClients, err := mcpauth.NewPostgresClientRegistry(ctx, mcpauth.ClientRegistryConfig{Pool: pool})
@@ -435,9 +435,9 @@ func (a *app) setupRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("/oauth/google/callback", a.auth.HandleCallback)
 	mux.HandleFunc("POST /logout", a.auth.HandleLogout)
 
-	// mcpauth's OAuth2 authorization-server endpoints (/authorize, /token,
+	// auth's OAuth2 authorization-server endpoints (/authorize, /token,
 	// /register, discovery metadata -- issue #1646, FR12/NFR4) also sit
-	// outside RequireSignedIn: mcpauth's own Resolver + SignInURL do the
+	// outside RequireSignedIn: auth's own Resolver + SignInURL do the
 	// gating for /authorize (an unauthenticated request round-trips through
 	// /login?next=<authorize URL> and back), and /token and /register are
 	// called directly by the MCP client with no session cookie at all --

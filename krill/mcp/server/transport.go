@@ -7,7 +7,7 @@ import (
 	sdkauth "github.com/modelcontextprotocol/go-sdk/auth"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 
-	"github.com/whale-net/everything/libs/go/mcpauth"
+	"github.com/whale-net/everything/libs/go/auth"
 )
 
 // specMountPath is where krill's spec-scoped MCP surface is mounted --
@@ -95,18 +95,18 @@ func mcpHandlerFor(srv *mcp.Server) http.Handler {
 // resourceMeta is configured), the streamable-HTTP MCP endpoint at
 // specSrv's specMountPath, the one at designSrv's designMountPath, and the
 // one at opsSrv's opsMountPath -- all three guarded by
-// mcpauth.RequireBearerToken(credentials, ...), the mcpauth-only door.
+// auth.RequireBearerToken(credentials, ...), the auth-only door.
 // `mcp`'s main.go calls NewDualAuthHTTPHandler instead once the
 // whagent-net door is configured; this function stays exactly as the
-// single-door shape for a caller that only ever wants the mcpauth door
+// single-door shape for a caller that only ever wants the auth door
 // (mirrors audience_score_system/mcp/server/transport.go's own
 // NewHTTPHandler/NewDualAuthHTTPHandler split).
-func NewHTTPHandler(specSrv, designSrv, opsSrv *mcp.Server, credentials mcpauth.CredentialStore, resourceMeta ResourceMetadataConfig) http.Handler {
+func NewHTTPHandler(specSrv, designSrv, opsSrv *mcp.Server, credentials auth.CredentialStore, resourceMeta ResourceMetadataConfig) http.Handler {
 	opts := &sdkauth.RequireBearerTokenOptions{AllowMissingExpiration: true}
 	if resourceMeta.enabled() {
-		opts.ResourceMetadataURL = mcpauth.ProtectedResourceMetadataURL(resourceMeta.Resource)
+		opts.ResourceMetadataURL = auth.ProtectedResourceMetadataURL(resourceMeta.Resource)
 	}
-	requireBearer := mcpauth.RequireBearerToken(credentials, opts)
+	requireBearer := auth.RequireBearerToken(credentials, opts)
 
 	return newMux(requireBearer(mcpHandlerFor(specSrv)), requireBearer(mcpHandlerFor(designSrv)), requireBearer(mcpHandlerFor(opsSrv)), resourceMeta)
 }
@@ -114,15 +114,15 @@ func NewHTTPHandler(specSrv, designSrv, opsSrv *mcp.Server, credentials mcpauth.
 // NewDualAuthHTTPHandler is NewHTTPHandler's two-front-door counterpart
 // (NFR1): the same mux, specMountPath, designMountPath, and opsMountPath
 // all guarded instead by DualAuthHTTPHandler (whagent_auth.go) so BOTH
-// caller-authentication paths -- the mcpauth door (credentials) and the
+// caller-authentication paths -- the auth door (credentials) and the
 // whagent-net door (whagentCfg) -- are mounted alongside one another, at
 // EACH mount (issue #2547's Scope: "Both existing front doors ... apply to
 // the new mount ... unchanged", carried forward to opsMountPath by this
 // task).
-func NewDualAuthHTTPHandler(specSrv, designSrv, opsSrv *mcp.Server, credentials mcpauth.CredentialStore, whagentCfg WhagentAuthConfig, resourceMeta ResourceMetadataConfig) http.Handler {
+func NewDualAuthHTTPHandler(specSrv, designSrv, opsSrv *mcp.Server, credentials auth.CredentialStore, whagentCfg WhagentAuthConfig, resourceMeta ResourceMetadataConfig) http.Handler {
 	opts := &sdkauth.RequireBearerTokenOptions{AllowMissingExpiration: true}
 	if resourceMeta.enabled() {
-		opts.ResourceMetadataURL = mcpauth.ProtectedResourceMetadataURL(resourceMeta.Resource)
+		opts.ResourceMetadataURL = auth.ProtectedResourceMetadataURL(resourceMeta.Resource)
 	}
 
 	specGuarded := DualAuthHTTPHandler(mcpHandlerFor(specSrv), credentials, whagentCfg, opts)
@@ -143,7 +143,7 @@ func newMux(specGuarded, designGuarded, opsGuarded http.Handler, resourceMeta Re
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /healthz", handleHealthz)
 	if resourceMeta.enabled() {
-		mux.Handle(mcpauth.ProtectedResourceMetadataPath, mcpauth.NewProtectedResourceMetadataHandler(mcpauth.ProtectedResourceMetadataConfig{
+		mux.Handle(auth.ProtectedResourceMetadataPath, auth.NewProtectedResourceMetadataHandler(auth.ProtectedResourceMetadataConfig{
 			Resource:            resourceMeta.Resource,
 			AuthorizationServer: resourceMeta.AuthorizationServer,
 			ResourceName:        resourceMeta.ResourceName,

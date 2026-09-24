@@ -63,8 +63,8 @@ import (
 	"github.com/whale-net/everything/audience_score_system/mcp/tools"
 	"github.com/whale-net/everything/audience_score_system/migrate/schema"
 	"github.com/whale-net/everything/audience_score_system/store"
+	"github.com/whale-net/everything/libs/go/auth"
 	"github.com/whale-net/everything/libs/go/dbtest"
-	"github.com/whale-net/everything/libs/go/mcpauth"
 	"github.com/whale-net/everything/libs/go/migrate"
 )
 
@@ -104,9 +104,9 @@ func obDecode[T any](t *testing.T, res *mcp.CallToolResult) T {
 
 // newOutcomeBarTestCredentialStore mirrors strategy_integration_test.go's
 // newTestCredentialStore -- the same construction main.go does.
-func newOutcomeBarTestCredentialStore(t *testing.T, pool *pgxpool.Pool) mcpauth.CredentialStore {
+func newOutcomeBarTestCredentialStore(t *testing.T, pool *pgxpool.Pool) auth.CredentialStore {
 	t.Helper()
-	creds, err := mcpauth.NewCredentialStore(context.Background(), mcpauth.StoreConfig{
+	creds, err := auth.NewCredentialStore(context.Background(), auth.StoreConfig{
 		Pool:           pool,
 		TableName:      "mcp_credential",
 		IdentityColumn: "person_id",
@@ -121,7 +121,7 @@ func newOutcomeBarTestCredentialStore(t *testing.T, pool *pgxpool.Pool) mcpauth.
 // RegisterOutcomeBar wired.
 type outcomeBarFixture struct {
 	st       *store.Store
-	creds    mcpauth.CredentialStore
+	creds    auth.CredentialStore
 	ch       store.Channel
 	creator  store.Person
 	analyst  store.Person

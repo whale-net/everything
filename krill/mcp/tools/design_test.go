@@ -12,7 +12,7 @@
 // Mirrors server_integration_test.go's seeding/HTTP/auth plumbing
 // (duplicated here, not imported: that file's helpers are unexported in
 // package server_test, a different package). See that file's own doc
-// comment for why the mcpauth CredentialStore here is a hand-rolled fake
+// comment for why the auth CredentialStore here is a hand-rolled fake
 // and the whagent-net door is exercised against a real signed JWT.
 //
 // Run it explicitly (requires a working Docker daemon):
@@ -44,8 +44,8 @@ import (
 	"github.com/whale-net/everything/krill/migrate/schema"
 	"github.com/whale-net/everything/krill/slice"
 	"github.com/whale-net/everything/krill/store"
+	"github.com/whale-net/everything/libs/go/auth"
 	"github.com/whale-net/everything/libs/go/dbtest"
-	"github.com/whale-net/everything/libs/go/mcpauth"
 	"github.com/whale-net/everything/libs/go/migrate"
 	"github.com/whale-net/everything/libs/go/whagent"
 )
@@ -81,33 +81,33 @@ func createScope(t *testing.T, ctx context.Context, pool *pgxpool.Pool, repoFull
 	return scopeID
 }
 
-// ── fake mcpauth.CredentialStore (no real migration to preflight against yet) ─
+// ── fake auth.CredentialStore (no real migration to preflight against yet) ─
 
 type fakeCredentialStore struct {
 	validToken string
 	identity   string
 }
 
-func (f fakeCredentialStore) Mint(context.Context, string) (string, mcpauth.Credential, error) {
-	return "", mcpauth.Credential{}, errors.New("fakeCredentialStore.Mint is not used by this test")
+func (f fakeCredentialStore) Mint(context.Context, string) (string, auth.Credential, error) {
+	return "", auth.Credential{}, errors.New("fakeCredentialStore.Mint is not used by this test")
 }
 
-func (f fakeCredentialStore) Verify(_ context.Context, rawToken string) (string, mcpauth.Credential, error) {
+func (f fakeCredentialStore) Verify(_ context.Context, rawToken string) (string, auth.Credential, error) {
 	if rawToken == f.validToken {
-		return f.identity, mcpauth.Credential{Identity: f.identity}, nil
+		return f.identity, auth.Credential{Identity: f.identity}, nil
 	}
-	return "", mcpauth.Credential{}, mcpauth.ErrInvalidCredential
+	return "", auth.Credential{}, auth.ErrInvalidCredential
 }
 
 func (f fakeCredentialStore) Revoke(context.Context, uuid.UUID, string) error {
 	return errors.New("fakeCredentialStore.Revoke is not used by this test")
 }
 
-func (f fakeCredentialStore) List(context.Context, string) ([]mcpauth.Credential, error) {
+func (f fakeCredentialStore) List(context.Context, string) ([]auth.Credential, error) {
 	return nil, errors.New("fakeCredentialStore.List is not used by this test")
 }
 
-var _ mcpauth.CredentialStore = fakeCredentialStore{}
+var _ auth.CredentialStore = fakeCredentialStore{}
 
 // ── whagent fixture ──────────────────────────────────────────────────────────
 
@@ -239,7 +239,7 @@ func TestMCPDesignSurface_EndToEnd(t *testing.T) {
 	// added AFTER server.New() (which already wired PersonaMiddleware) so it
 	// runs BEFORE it -- see that middleware's own doc comment for the
 	// coexistence contract. Without this, every caller (whagent- or
-	// mcpauth-authenticated) resolves PersonaSwarmOperator, and
+	// auth-authenticated) resolves PersonaSwarmOperator, and
 	// propose_entities' Agent-only allow-list (criterion 3) could never be
 	// satisfied by anyone.
 	specSrv.AddReceivingMiddleware(server.WhagentPersonaMiddleware())
@@ -489,7 +489,7 @@ func TestMCPDesignSurface_EndToEnd(t *testing.T) {
 
 	// ── criterion 3: propose_entities is Agent-persona-restricted ───────────
 
-	t.Run("propose_entities is rejected for the mcpauth (PersonaSwarmOperator) door", func(t *testing.T) {
+	t.Run("propose_entities is rejected for the auth (PersonaSwarmOperator) door", func(t *testing.T) {
 		cs, err := connectMCP(t, designURL, humanToken)
 		require.NoError(t, err)
 

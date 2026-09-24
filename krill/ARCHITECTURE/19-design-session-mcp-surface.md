@@ -19,7 +19,7 @@ until this task, every tool `krill/mcp` registered anywhere was
 because registering a tool is a per-`*mcp.Server` operation
 (`mcp.AddTool`) — the only way to guarantee a write tool can never end up
 reachable from `/mcp/spec` is to never register it on the `*mcp.Server`
-that backs that mount. Both front doors (mcpauth/human, whagent-net/agent)
+that backs that mount. Both front doors (auth/human, whagent-net/agent)
 apply identically to both mounts: `server.NewHTTPHandler`/
 `NewDualAuthHTTPHandler` now each take both `*mcp.Server`s and mount them
 under their own `newMux`-built mux, so the two caller-auth entry points can

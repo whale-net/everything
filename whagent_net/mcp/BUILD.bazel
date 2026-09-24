@@ -19,7 +19,7 @@ go_library(
         "//libs/go/grpcauth",
         "//libs/go/grpcclient",
         "//libs/go/logging",
-        "//libs/go/mcpauth",
+        "//libs/go/auth",
         "//whagent_net/delegatedgrant",
         "//whagent_net/mcp/server",
         "//whagent_net/mcp/tools",

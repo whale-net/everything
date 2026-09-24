@@ -35,7 +35,7 @@ go_library(
         "//libs/go/db",
         "//libs/go/htmxbase",
         "//libs/go/logging",
-        "//libs/go/mcpauth",
+        "//libs/go/auth",
         "//libs/go/temporal",
         "@com_github_a_h_templ//:templ",
         "@com_github_google_uuid//:uuid",
@@ -58,7 +58,7 @@ go_test(
     embed = [":web_lib"],
 )
 
-# `web` handler tests via httptest against the real mcpauth.Provider mounted
+# `web` handler tests via httptest against the real auth.Provider mounted
 # exactly like run() mounts it in main.go (issue #1646). Gated behind
 # `//go:build integration`; hand-written with the same tag set as
 # //audience_score_system/web/auth:auth_integration_test (see that
@@ -88,7 +88,7 @@ go_test(
         "//audience_score_system/store",
         "//audience_score_system/web/auth",
         "//libs/go/dbtest",
-        "//libs/go/mcpauth",
+        "//libs/go/auth",
         "//libs/go/migrate",
         "@com_github_jackc_pgx_v5//stdlib",
         "@com_github_stretchr_testify//assert",

@@ -36,8 +36,8 @@ import (
 	"github.com/whale-net/everything/audience_score_system/mcp/tools"
 	"github.com/whale-net/everything/audience_score_system/migrate/schema"
 	"github.com/whale-net/everything/audience_score_system/store"
+	"github.com/whale-net/everything/libs/go/auth"
 	"github.com/whale-net/everything/libs/go/dbtest"
-	"github.com/whale-net/everything/libs/go/mcpauth"
 	"github.com/whale-net/everything/libs/go/migrate"
 )
 
@@ -48,7 +48,7 @@ import (
 type accessAuditFixture struct {
 	pg       *dbtest.Postgres
 	st       *store.Store
-	creds    mcpauth.CredentialStore
+	creds    auth.CredentialStore
 	ch       store.Channel
 	founder  store.Person
 	coCr     store.Person
@@ -72,7 +72,7 @@ func newAccessAuditFixture(t *testing.T) *accessAuditFixture {
 
 	st := store.New(pg.Pool)
 
-	creds, err := mcpauth.NewCredentialStore(ctx, mcpauth.StoreConfig{
+	creds, err := auth.NewCredentialStore(ctx, auth.StoreConfig{
 		Pool:           pg.Pool,
 		TableName:      "mcp_credential",
 		IdentityColumn: "person_id",

@@ -67,8 +67,8 @@ import (
 	"github.com/whale-net/everything/audience_score_system/mcp/server"
 	assschema "github.com/whale-net/everything/audience_score_system/migrate/schema"
 	"github.com/whale-net/everything/audience_score_system/store"
+	"github.com/whale-net/everything/libs/go/auth"
 	"github.com/whale-net/everything/libs/go/dbtest"
-	"github.com/whale-net/everything/libs/go/mcpauth"
 	"github.com/whale-net/everything/libs/go/migrate"
 	"github.com/whale-net/everything/libs/go/whagent"
 	"github.com/whale-net/everything/whagent_net/api/persona"
@@ -263,7 +263,7 @@ func newCrossDomainFixture(t *testing.T) *crossDomainFixture {
 
 	srv.AddReceivingMiddleware(server.WhagentPersonMiddleware(st.PersonIdentities()))
 
-	creds, err := mcpauth.NewCredentialStore(context.Background(), mcpauth.StoreConfig{
+	creds, err := auth.NewCredentialStore(context.Background(), auth.StoreConfig{
 		Pool:           assPG.Pool,
 		TableName:      "mcp_credential",
 		IdentityColumn: "person_id",

@@ -43,25 +43,25 @@ double consumers use in tests with no network call.
 ### MCP server: caller authentication
 
 **Decision (landed in #1575's Scaffold/Implementation phases, migrated
-onto the shared `//libs/go/mcpauth` library by #1643):** an MCP client
+onto the shared `//libs/go/auth` library by #1643):** an MCP client
 authenticates as a Person with a bearer credential that `mcp`'s auth stack
 resolves to `person.id` server-side. The credential is a high-entropy
 random token; only its SHA-256 hash is ever persisted, in `mcp_credential`
-(migration 006, backed by `libs/go/mcpauth.CredentialStore` — see
-`libs/go/mcpauth/README.md`'s schema contract) — the raw token is shown to
+(migration 006, backed by `libs/go/auth.CredentialStore` — see
+`libs/go/auth/README.md`'s schema contract) — the raw token is shown to
 the Person exactly once, at mint time, and is never recoverable from the
 database afterward. `mcp_credential` was originally created by migration
 005 against ASS's own bespoke `store.CredentialStore` (#1575); migration
-006 drops and recreates it against `mcpauth`'s generic contract while
+006 drops and recreates it against `auth`'s generic contract while
 preserving ASS's own referential integrity (`person_id` stays a real
 foreign key to `person(id)`, and both of 005's indexes are kept verbatim)
-— `mcpauth` itself treats identity as an opaque string
+— `auth` itself treats identity as an opaque string
 (`StoreConfig.IdentityColumn = "person_id"`,
 `StoreConfig.IdentityCast = "uuid"` tell it how to bind/cast against this
 column), so that genericity never became a reason ASS lost its FK
 (FR13/NFR5).
 
-- **(a) Obtained:** minted via `mcpauth`'s own OAuth2 authorization-code +
+- **(a) Obtained:** minted via `auth`'s own OAuth2 authorization-code +
   PKCE `/token` endpoint, mounted on `web` (issue #1646). An MCP client
   drives the standard RFC 9728/8414/7591 discovery-to-registration chain
   against `web`, then `/authorize` resolves the caller through
@@ -70,14 +70,14 @@ column), so that genericity never became a reason ASS lost its FK
   `RequireSignedIn` performs) rather than any new credential-collection UI
   or a fresh IdP round trip. An unresolved caller is redirected to `/login`
   with the exact original `/authorize` request preserved via ASS's
-  existing `?next=` convention (`mcpauth.ProviderConfig.SignInReturnParam`,
+  existing `?next=` convention (`auth.ProviderConfig.SignInReturnParam`,
   defaulted to `"next"`) and returns to `/authorize` after Google sign-in.
-  `mcpauth.CredentialStore.Mint`'s only production caller is `/token`'s
+  `auth.CredentialStore.Mint`'s only production caller is `/token`'s
   handler, invoked once the authorization code is redeemed. A self-serve
   mint/revoke/list UI page on `web` is separate scope (#1591) — not
   needed for a caller that IS an MCP client, since the client itself
   drives the OAuth2 flow.
-- **(b) Revoked:** `mcpauth.CredentialStore.Revoke` closes a credential by
+- **(b) Revoked:** `auth.CredentialStore.Revoke` closes a credential by
   setting `revoked_at`; a revoked credential's hash no longer resolves in
   `Verify`, so any MCP call bearing it is rejected on the next request
   without needing to invalidate anything client-side. Revocation is
@@ -93,13 +93,13 @@ column), so that genericity never became a reason ASS lost its FK
 Mechanically, resolution happens in two layers (see
 `audience_score_system/mcp/server/`):
 
-1. **HTTP layer** (`transport.go`): `mcpauth.RequireBearerToken` wraps the
-   streamable HTTP handler, calling `mcpauth.TokenVerifier` under the hood
+1. **HTTP layer** (`transport.go`): `auth.RequireBearerToken` wraps the
+   streamable HTTP handler, calling `auth.TokenVerifier` under the hood
    to hash the raw token and resolve it via
-   `mcpauth.CredentialStore.Verify`, producing an `auth.TokenInfo` whose
+   `auth.CredentialStore.Verify`, producing an `auth.TokenInfo` whose
    `UserID` is the resolved Person's ID (rendered as a string). Credentials
    do not expire on a timer (they live until revoked), so
-   `mcpauth.RequireBearerToken` always forces `AllowMissingExpiration:
+   `auth.RequireBearerToken` always forces `AllowMissingExpiration:
    true` internally rather than requiring a per-token `exp` claim.
 2. **MCP-protocol layer** (`server.go`/`auth.go`): `PersonMiddleware`, wired
    via `mcp.Server.AddReceivingMiddleware`, reads that `TokenInfo` off each
@@ -109,34 +109,34 @@ Mechanically, resolution happens in two layers (see
    A request with no resolved `TokenInfo`, an unparseable `UserID`, or a
    `UserID` that doesn't resolve to a real Person, is rejected here — the
    tool handler is never entered. This step is unchanged by the #1643
-   migration — `mcpauth` only replaces the credential storage/verification
+   migration — `auth` only replaces the credential storage/verification
    layer, not how a resolved identity becomes a Person.
 
-`mcpauth.CredentialStore.Verify`, `Mint`, `Revoke`, and `List` are real
+`auth.CredentialStore.Verify`, `Mint`, `Revoke`, and `List` are real
 SQL-backed implementations against `mcp_credential`, constructed in
-`mcp/main.go` via `mcpauth.NewCredentialStore` — its preflight probe means
+`mcp/main.go` via `auth.NewCredentialStore` — its preflight probe means
 a missing migration 006 fails `mcp` at boot instead of at first call.
 `Verify` also stamps `last_used_at` in the same round trip, so it doubles
 as the "last seen" signal for a future credential-management view (see
 issue #1591's scope note).
 
-**Split across two binaries (issue #1646).** `mcpauth`'s OAuth2
+**Split across two binaries (issue #1646).** `auth`'s OAuth2
 authorization-code + PKCE `/authorize` endpoint needs the caller's ASS web
 session cookie, which only `web` has; the OAuth2 protected resource an MCP
 client ultimately calls is `mcp`. So:
 
 - `web` hosts the full OAuth2 authorization server: `/authorize`, `/token`,
   `/register`, and `/.well-known/oauth-authorization-server`
-  (`mcpauth.Provider`, `web/main.go`'s `run()`, mounted outside
-  `RequireSignedIn` — `mcpauth`'s own `Resolver`/`SignInURL` do the gating
+  (`auth.Provider`, `web/main.go`'s `run()`, mounted outside
+  `RequireSignedIn` — `auth`'s own `Resolver`/`SignInURL` do the gating
   for `/authorize`, and `/token`/`/register` are called directly by the MCP
   client with no session cookie at all, so wrapping either in
   `RequireSignedIn` would break them).
 - `mcp` hosts only the protected-resource half: `/.well-known/oauth-protected-resource`
-  (`mcpauth.NewProtectedResourceMetadataHandler`, `mcp/server/transport.go`'s
+  (`auth.NewProtectedResourceMetadataHandler`, `mcp/server/transport.go`'s
   `NewHTTPHandler`) plus the `WWW-Authenticate: Bearer resource_metadata="..."`
   challenge a missing/invalid bearer token gets
-  (`mcpauth.ProtectedResourceMetadataURL`, passed as
+  (`auth.ProtectedResourceMetadataURL`, passed as
   `sdkauth.RequireBearerTokenOptions.ResourceMetadataURL`). `mcp` never
   mounts `/authorize` or `/token` — it has no session cookie to resolve a
   caller from, and has no business doing so.
@@ -146,15 +146,15 @@ client ultimately calls is `mcp`. So:
 - `web` and `mcp` share one Postgres and nothing else (no cross-service
   call, no shared in-process state): a credential minted by `web`'s
   `/token` is immediately verifiable by `mcp`'s
-  `mcpauth.CredentialStore.Verify` against the same `mcp_credential`
+  `auth.CredentialStore.Verify` against the same `mcp_credential`
   table, and an authorization code or dynamically registered client
   `/authorize`/`/register` create on one `web` replica is resolvable by
   `/token` on a different `web` replica — this is why ASS MUST construct
-  `mcpauth.NewPostgresClientRegistry` and `mcpauth.NewPostgresAuthCodeStore`
+  `auth.NewPostgresClientRegistry` and `auth.NewPostgresAuthCodeStore`
   (migration 007, `mcp_oauth_client`/`mcp_auth_code`) rather than
-  `mcpauth`'s single-replica in-memory defaults (NFR5's schema-ownership
-  split: `mcpauth` ships no migrations of its own, ASS's own migration
-  tooling owns 006 and 007 against `mcpauth`'s documented schema
+  `auth`'s single-replica in-memory defaults (NFR5's schema-ownership
+  split: `auth` ships no migrations of its own, ASS's own migration
+  tooling owns 006 and 007 against `auth`'s documented schema
   contracts).
 - Discovery chain an MCP client actually drives, end to end: unauthenticated
   call to `mcp` → 401 naming `mcp`'s own `resource_metadata` URL → GET that

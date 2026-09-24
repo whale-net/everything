@@ -1,4 +1,4 @@
-package mcpauth
+package auth
 
 import (
 	"net/http"

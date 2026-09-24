@@ -14,7 +14,7 @@
 // TestMCPCallerResolver_TamperedCookie_ReturnsFalse /
 // TestMCPCallerResolver_ExpiredSession_ReturnsFalse -- and the full
 // authorization-code + PKCE bootstrap round trip against the actually-
-// mounted mcpauth.Provider (discovery -> registration -> /authorize ->
+// mounted auth.Provider (discovery -> registration -> /authorize ->
 // /token -> a credential whose stored identity is the encoded pair),
 // mirroring audience_score_system/mcp/server/
 // oauth_bootstrap_integration_test.go reduced to the single-binary
@@ -53,16 +53,16 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/whale-net/everything/libs/go/auth"
 	"github.com/whale-net/everything/libs/go/dbtest"
 	"github.com/whale-net/everything/libs/go/htmxauth"
-	"github.com/whale-net/everything/libs/go/mcpauth"
 	"github.com/whale-net/everything/libs/go/migrate"
 	"github.com/whale-net/everything/whagent_net/mcpidentity"
 	"github.com/whale-net/everything/whagent_net/migrate/schema"
 )
 
 // mcpAuthTestStack bundles a fully wired *App (real DB-backed
-// htmxauth.Authenticator + a real mcpauth.Provider constructed exactly
+// htmxauth.Authenticator + a real auth.Provider constructed exactly
 // like setupMCPAuth/NewApp do in production) mounted on a real
 // httptest.Server via app.setupRoutes -- so tests drive actual HTTP
 // requests against the actual route table, not a hand-built subset of it.
@@ -81,11 +81,11 @@ type mcpAuthTestStack struct {
 // exactly the way NewApp does: a real *htmxauth.Authenticator in OIDC mode
 // (against a throwaway
 // discovery server -- see newTestOIDCAuthenticator's doc comment for why
-// AuthModeNone cannot stand in here) and a real *mcpauth.Provider via
+// AuthModeNone cannot stand in here) and a real *auth.Provider via
 // setupMCPAuth, mounted via app.setupRoutes on an httptest.Server.
 //
 // The server's own address must be known before ProviderConfig.Issuer can
-// be set (mcpauth.NewProvider validates it as an absolute URL up front),
+// be set (auth.NewProvider validates it as an absolute URL up front),
 // so this uses httptest.NewUnstartedServer to learn the listening address
 // first -- mirroring oauth_bootstrap_integration_test.go's mcpTS trick in
 // audience_score_system.
@@ -247,14 +247,14 @@ func TestMCPCallerResolver_ExpiredSession_ReturnsFalse(t *testing.T) {
 
 // ── Red/green discipline (verified by hand, then reverted) ─────────────
 //
-// Temporarily changed mcpCallerResolver (mcpauth.go) to treat
+// Temporarily changed mcpCallerResolver (auth.go) to treat
 // app.auth.CurrentUser's error case as success (returning a bogus
 // identity/true instead of ""/false) and ran both this target and
 // ui_test. Went red exactly where expected --
-// TestMCPCallerResolver_NoCookie_ReturnsFalse (mcpauth_test.go),
+// TestMCPCallerResolver_NoCookie_ReturnsFalse (auth_test.go),
 // TestMCPCallerResolver_TamperedCookie_ReturnsFalse,
 // TestMCPCallerResolver_ExpiredSession_ReturnsFalse (both here), and
-// TestAuthorize_SignedOut_RedirectsToLogin (a 400 from mcpauth's own
+// TestAuthorize_SignedOut_RedirectsToLogin (a 400 from auth's own
 // unknown-client_id check instead of the expected 302 to /login, since
 // /authorize no longer treated the caller as unresolved) -- while
 // TestMCPCallerResolver_ValidSession_ReturnsEncodedIssSub and the full
@@ -266,7 +266,7 @@ func TestMCPCallerResolver_ExpiredSession_ReturnsFalse(t *testing.T) {
 // ── Full OAuth2 authorization-code + PKCE bootstrap ─────────────────────
 
 // pkcePair returns a random code_verifier and its S256 code_challenge --
-// this package cannot reach libs/go/mcpauth's own unexported genPKCEPair,
+// this package cannot reach libs/go/auth's own unexported genPKCEPair,
 // so this is a local, functionally identical copy (mirrors
 // oauth_bootstrap_integration_test.go's bootstrapPKCEPair).
 func pkcePair(t *testing.T) (verifier, challenge string) {
@@ -372,7 +372,7 @@ func TestOAuthBootstrap_DiscoveryToToken_MintsCredentialWithEncodedIdentity(t *t
 	// independently constructed CredentialStore against the same table,
 	// exactly as `mcp`'s own verification middleware (a dependent task)
 	// eventually will.
-	credentials, err := mcpauth.NewCredentialStore(ctx, mcpauth.StoreConfig{Pool: stack.pool})
+	credentials, err := auth.NewCredentialStore(ctx, auth.StoreConfig{Pool: stack.pool})
 	require.NoError(t, err)
 	identity, cred, err := credentials.Verify(ctx, tokenResp.AccessToken)
 	require.NoError(t, err)
@@ -407,7 +407,7 @@ func TestAuthorize_SignedOut_RedirectsToLogin(t *testing.T) {
 	require.Equal(t, http.StatusFound, resp.StatusCode)
 	loc, err := url.Parse(resp.Header.Get("Location"))
 	require.NoError(t, err)
-	assert.Equal(t, "/login", loc.Path, "an unresolved caller must be sent to SignInURL, not shown an error or a login form of mcpauth's own")
+	assert.Equal(t, "/login", loc.Path, "an unresolved caller must be sent to SignInURL, not shown an error or a login form of auth's own")
 
 	returnTo := loc.Query().Get("next")
 	require.NotEmpty(t, returnTo, "the return-to target must be preserved so sign-in can redirect back")

@@ -14,7 +14,7 @@ rest of whagent-net's M1 work.
   root for agent actions. A domain server **never** accepts a bare
   Keycloak token or an unsigned claim in its place (NFR4) — there is no
   per-domain Keycloak token-exchange configuration to set up.
-- **Not an OAuth2 authorization server.** Unlike `libs/go/mcpauth`, this
+- **Not an OAuth2 authorization server.** Unlike `libs/go/auth`, this
   package does not run `/authorize`/`/token`/`/register` endpoints, and
   does not manage a long-lived, revocable, database-backed credential.
   `Signer`/`Verifier` mint and check a short-lived (minutes, not hours)
@@ -109,7 +109,7 @@ existing auth the domain already has:
 ```go
 // HTTP layer -- extracts the bearer credential, verifies it, and
 // stashes the result for the MCP-protocol layer below. Standalone: does
-// not require libs/go/mcpauth to be anywhere in this chain.
+// not require libs/go/auth to be anywhere in this chain.
 httpHandler := whagent.HTTPMiddleware(verifier, myAudience)(mcpHandler)
 
 // MCP-protocol layer -- reads the verified Claim and places it on ctx.
@@ -127,9 +127,9 @@ claim := whagent.ClaimFromContext(ctx)
 This mirrors the shape `audience_score_system/mcp/server/auth.go`'s
 `PersonMiddleware` already uses (`mcp.Server.AddReceivingMiddleware`), and
 is built on the same `sdkauth.RequireBearerToken` bearer-extraction
-machinery `libs/go/mcpauth.RequireBearerToken` already uses — but with its
+machinery `libs/go/auth.RequireBearerToken` already uses — but with its
 own `sdkauth.TokenVerifier` calling `Verifier.Verify`, so it is a genuinely
-standalone authentication path, not one built on top of `mcpauth`.
+standalone authentication path, not one built on top of `auth`.
 
 ## Identity mapping — `(iss, sub)` to local user record
 

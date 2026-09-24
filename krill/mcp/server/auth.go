@@ -1,18 +1,18 @@
 // Caller authentication and authorization for krill's spec-scoped MCP
 // surface (FR10/NFR1, issue #2494) -- the human front door, via
-// //libs/go/mcpauth's OAuth2-capable CredentialStore. See
+// //libs/go/auth's OAuth2-capable CredentialStore. See
 // whagent_auth.go for the parallel agent front door and
 // ../../ARCHITECTURE.md "The MCP spec surface" for the two-door design.
 //
 // NFR1 authorizes by **persona** (Swarm Operator / Requirement
 // Contributor / Agent), never by individual identity -- there is no
 // per-caller allow-list anywhere in this package. This file resolves a
-// caller authenticated through the mcpauth front door to exactly one
+// caller authenticated through the auth front door to exactly one
 // persona: PersonaSwarmOperator. That is not a scaffold shortcut to be
 // widened casually -- krill/PRODUCT.md's Personas section is explicit
 // that "The Requirement Contributor exists in the model and in
 // permissions from M1, but has no unmediated path into krill until C12
-// lands in M2", so M1's mcpauth door has no second human persona to
+// lands in M2", so M1's auth door has no second human persona to
 // distinguish yet. When C12 lands, this is the one place a real
 // identity -> persona lookup replaces the constant below.
 package server
@@ -37,7 +37,7 @@ type Persona string
 
 const (
 	// PersonaSwarmOperator is the admin persona -- today, every caller the
-	// mcpauth (human OAuth2) front door authenticates resolves to this
+	// auth (human OAuth2) front door authenticates resolves to this
 	// persona; see this file's doc comment for why.
 	PersonaSwarmOperator Persona = "swarm_operator"
 
@@ -72,9 +72,9 @@ func withPersona(ctx context.Context, persona Persona) context.Context {
 
 // PersonaMiddleware is the mcp.Middleware every request passes through
 // (wired in server.New): it reads the caller identity the HTTP layer
-// already verified via the mcpauth front door
+// already verified via the auth front door
 // (req.GetExtra().TokenInfo, populated by transport.go's
-// mcpauth.RequireBearerToken) and resolves it to PersonaSwarmOperator
+// auth.RequireBearerToken) and resolves it to PersonaSwarmOperator
 // (see this file's doc comment for why that is the only persona this
 // door produces in M1). A call with no resolved TokenInfo at all is
 // rejected here and next is never invoked.

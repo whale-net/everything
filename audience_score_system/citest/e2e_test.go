@@ -147,8 +147,8 @@ import (
 	"github.com/whale-net/everything/audience_score_system/worker/sync"
 	"github.com/whale-net/everything/audience_score_system/youtube"
 	"github.com/whale-net/everything/audience_score_system/youtube/fake"
+	mcpauth "github.com/whale-net/everything/libs/go/auth"
 	"github.com/whale-net/everything/libs/go/dbtest"
-	"github.com/whale-net/everything/libs/go/mcpauth"
 	"github.com/whale-net/everything/libs/go/migrate"
 )
 
@@ -336,7 +336,7 @@ func (rt bearerRoundTripper) RoundTrip(req *http.Request) (*http.Response, error
 	return http.DefaultTransport.RoundTrip(req)
 }
 
-// mcpConnect mints a real bearer credential for personID (mcpauth.
+// mcpConnect mints a real bearer credential for personID (auth.
 // CredentialStore.Mint, the same mechanism web's token-mint endpoint uses
 // in production) and opens a real streamable-HTTP MCP client session.
 func (w *world) mcpConnect(personID uuid.UUID) *mcp.ClientSession {

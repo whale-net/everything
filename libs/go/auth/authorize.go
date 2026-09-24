@@ -1,4 +1,4 @@
-package mcpauth
+package auth
 
 import (
 	"net/http"
@@ -33,13 +33,13 @@ func (p *Provider) handleAuthorize(w http.ResponseWriter, r *http.Request) {
 	identity, ok := p.cfg.Resolver.ResolveCaller(r)
 	if !ok {
 		if p.cfg.SignInURL == "" {
-			http.Error(w, "mcpauth: no established session and no SignInURL configured", http.StatusUnauthorized)
+			http.Error(w, "auth: no established session and no SignInURL configured", http.StatusUnauthorized)
 			return
 		}
 
 		signIn, err := url.Parse(p.cfg.SignInURL)
 		if err != nil {
-			http.Error(w, "mcpauth: server misconfiguration (invalid SignInURL)", http.StatusInternalServerError)
+			http.Error(w, "auth: server misconfiguration (invalid SignInURL)", http.StatusInternalServerError)
 			return
 		}
 		// The return-to target is this exact /authorize request — query
@@ -63,13 +63,13 @@ func (p *Provider) handleAuthorize(w http.ResponseWriter, r *http.Request) {
 	clientID := q.Get("client_id")
 	client, err := p.cfg.Clients.Get(r.Context(), clientID)
 	if err != nil {
-		http.Error(w, "mcpauth: unknown or unregistered client_id", http.StatusBadRequest)
+		http.Error(w, "auth: unknown or unregistered client_id", http.StatusBadRequest)
 		return
 	}
 
 	redirectURI := q.Get("redirect_uri")
 	if !redirectURIRegistered(client, redirectURI) {
-		http.Error(w, "mcpauth: redirect_uri is not registered for this client_id", http.StatusBadRequest)
+		http.Error(w, "auth: redirect_uri is not registered for this client_id", http.StatusBadRequest)
 		return
 	}
 
@@ -126,7 +126,7 @@ func (p *Provider) handleAuthorize(w http.ResponseWriter, r *http.Request) {
 		// registered, previously-validated (validateRedirectURI,
 		// clients.go) redirect_uris, so this is unreachable in practice —
 		// guarded defensively rather than assumed.
-		http.Error(w, "mcpauth: invalid redirect_uri", http.StatusBadRequest)
+		http.Error(w, "auth: invalid redirect_uri", http.StatusBadRequest)
 		return
 	}
 	values := dest.Query()
@@ -165,7 +165,7 @@ func redirectURIRegistered(client OAuthClient, redirectURI string) bool {
 func writeAuthorizeRedirectError(w http.ResponseWriter, r *http.Request, redirectURI, state, errorCode string) {
 	dest, err := url.Parse(redirectURI)
 	if err != nil {
-		http.Error(w, "mcpauth: invalid redirect_uri", http.StatusBadRequest)
+		http.Error(w, "auth: invalid redirect_uri", http.StatusBadRequest)
 		return
 	}
 	values := dest.Query()

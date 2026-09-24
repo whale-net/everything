@@ -5,16 +5,16 @@ package server_test
 // exchange and its tokenexchange.go cache are gone -- token acquisition
 // now goes through GrantSource at tool-dispatch time): a real
 // streamable-HTTP mcp.Client against a real server.NewHTTPHandler, a real
-// (fake-Postgres-backed) mcpauth.CredentialStore.Verify call, a fake
+// (fake-Postgres-backed) auth.CredentialStore.Verify call, a fake
 // ScopeResolver/GrantSource standing in for whagent_net/mcpscope.Resolver
 // and //whagent_net/delegatedgrant's real, Postgres/Keycloak-backed
 // implementations, and a real (bufconn) gRPC call into a fake `api`. It
 // does not stand up #2245's authorization-server side (`ui`'s
-// mcpauth.Provider/browser sign-in) -- that belongs to that task's own
+// auth.Provider/browser sign-in) -- that belongs to that task's own
 // Testing phase -- so credentials here are minted directly into
 // fakeOAuthCredentialStore rather than through a real /authorize -> /token
 // exchange; everything downstream of "an operator already holds a live
-// mcpauth credential" is exercised for real.
+// auth credential" is exercised for real.
 import (
 	"context"
 	"crypto/rand"
@@ -34,16 +34,16 @@ import (
 	"github.com/stretchr/testify/require"
 	"golang.org/x/oauth2"
 
+	"github.com/whale-net/everything/libs/go/auth"
 	"github.com/whale-net/everything/libs/go/grpcauth"
-	"github.com/whale-net/everything/libs/go/mcpauth"
 	"github.com/whale-net/everything/whagent_net/mcp/server"
 	"github.com/whale-net/everything/whagent_net/mcp/tools"
 	"github.com/whale-net/everything/whagent_net/mcpidentity"
 )
 
-// ── fake mcpauth.CredentialStore ─────────────────────────────────────────
+// ── fake auth.CredentialStore ─────────────────────────────────────────
 
-// fakeOAuthCredentialStore implements mcpauth.CredentialStore in memory --
+// fakeOAuthCredentialStore implements auth.CredentialStore in memory --
 // this file's own copy, distinct from server_test's package boundary
 // (server package's auth_test.go has its own, for its own unit tests).
 type fakeOAuthCredentialStore struct {
@@ -58,7 +58,7 @@ func newFakeOAuthCredentialStore() *fakeOAuthCredentialStore {
 
 // newCredentialShapedToken returns a 64-character lowercase hex string --
 // the exact shape server.isCredentialShaped (auth.go) routes onto the
-// OAuth2 path, mirroring libs/go/mcpauth/credential.go's own
+// OAuth2 path, mirroring libs/go/auth/credential.go's own
 // generateToken (32 crypto/rand bytes, hex-encoded).
 func newCredentialShapedToken(t *testing.T) string {
 	t.Helper()
@@ -85,32 +85,32 @@ func (f *fakeOAuthCredentialStore) revoke(token string) {
 	f.mu.Unlock()
 }
 
-func (f *fakeOAuthCredentialStore) Mint(context.Context, string) (string, mcpauth.Credential, error) {
-	return "", mcpauth.Credential{}, errors.New("fakeOAuthCredentialStore.Mint is not used by these tests")
+func (f *fakeOAuthCredentialStore) Mint(context.Context, string) (string, auth.Credential, error) {
+	return "", auth.Credential{}, errors.New("fakeOAuthCredentialStore.Mint is not used by these tests")
 }
 
-func (f *fakeOAuthCredentialStore) Verify(_ context.Context, rawToken string) (string, mcpauth.Credential, error) {
+func (f *fakeOAuthCredentialStore) Verify(_ context.Context, rawToken string) (string, auth.Credential, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	if f.revoked[rawToken] {
-		return "", mcpauth.Credential{}, mcpauth.ErrInvalidCredential
+		return "", auth.Credential{}, auth.ErrInvalidCredential
 	}
 	identity, ok := f.identities[rawToken]
 	if !ok {
-		return "", mcpauth.Credential{}, mcpauth.ErrInvalidCredential
+		return "", auth.Credential{}, auth.ErrInvalidCredential
 	}
-	return identity, mcpauth.Credential{Identity: identity}, nil
+	return identity, auth.Credential{Identity: identity}, nil
 }
 
 func (f *fakeOAuthCredentialStore) Revoke(context.Context, uuid.UUID, string) error {
 	return errors.New("fakeOAuthCredentialStore.Revoke is not used by these tests")
 }
 
-func (f *fakeOAuthCredentialStore) List(context.Context, string) ([]mcpauth.Credential, error) {
+func (f *fakeOAuthCredentialStore) List(context.Context, string) ([]auth.Credential, error) {
 	return nil, errors.New("fakeOAuthCredentialStore.List is not used by these tests")
 }
 
-var _ mcpauth.CredentialStore = (*fakeOAuthCredentialStore)(nil)
+var _ auth.CredentialStore = (*fakeOAuthCredentialStore)(nil)
 
 // ── fake tools.ScopeResolver / tools.GrantSource ─────────────────────────
 
@@ -204,7 +204,7 @@ const integrationScope = "audience_score_system"
 
 // oauth2Stack bundles one fully wired `mcp` instance (real
 // server.NewHTTPHandler/server.New, a fake api backend, an in-memory
-// mcpauth.CredentialStore, and fake ScopeResolver/GrantSource doubles)
+// auth.CredentialStore, and fake ScopeResolver/GrantSource doubles)
 // for this file's tests to drive.
 type oauth2Stack struct {
 	url         string
@@ -312,7 +312,7 @@ func TestOAuth2_MintedCredential_ToolCallAcquiresDelegatedGrantToken(t *testing.
 	headers := stack.fake.recordedAuthHeaders()
 	require.Len(t, headers, 1)
 	assert.Equal(t, "Bearer delegated-grant-token-xyz", headers[0], "api must see the token GrantSource acquired, never the opaque credential itself")
-	assert.NotContains(t, headers[0], token, "the opaque mcpauth credential itself must never reach api")
+	assert.NotContains(t, headers[0], token, "the opaque auth credential itself must never reach api")
 
 	// Red/green (verified by hand, then reverted): temporarily changing
 	// AuthMiddleware/dispatch.go to forward the raw presented credential
@@ -368,7 +368,7 @@ func TestOAuth2_RevokedCredential_Rejected(t *testing.T) {
 	stack.credentials.revoke(token)
 
 	_, err := callGetSession(t, stack.url, token)
-	require.Error(t, err, "a revoked mcpauth credential must be rejected before any tool handler runs")
+	require.Error(t, err, "a revoked auth credential must be rejected before any tool handler runs")
 	assert.Empty(t, stack.fake.recordedAuthHeaders(), "api must never be reached for a revoked credential")
 	assert.Empty(t, stack.grant.calls, "GrantSource must never be consulted for a rejected credential")
 }
@@ -389,7 +389,7 @@ func TestOAuth2_GarbageCredential_Rejected(t *testing.T) {
 // task's regression requirement, the OAuth2-configured mirror of
 // auth_pass_through_test.go's own coverage (which proves the same thing
 // with NO OAuth2 configuration present at all): with a real
-// mcpauth.CredentialStore and real ScopeResolver/GrantSource doubles all
+// auth.CredentialStore and real ScopeResolver/GrantSource doubles all
 // wired in, a manual (non-credential-shaped) bearer token must still be
 // forwarded byte for byte, completely bypassing the credential store and
 // dispatch-time resolution.

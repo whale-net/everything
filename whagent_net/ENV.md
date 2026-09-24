@@ -147,7 +147,7 @@ bookkeeping index (`grpcauth_grant_index`, same migration) that plan
 `ui`'s `/authorize` drives the per-domain consent flow
 (`handlers_consent.go`) and `mcp` acquires every call's working token
 from this wiring at tool-dispatch time (`mcp/tools/dispatch.go`) — the
-opaque `mcpauth`-credential-plus-RFC-8693-exchange path this replaced is
+opaque `auth`-credential-plus-RFC-8693-exchange path this replaced is
 gone (`WHAGENT_MCP_KEYCLOAK_*`, deleted, see "`mcp` server" below).
 
 **NFR5: one shared client, not one per scope.** Every variable below
@@ -277,7 +277,7 @@ browser-OAuth2 path now comes exclusively from the shared
 | `WHAGENT_API_URL` | mcp | *(required)* | `api`'s gRPC address -- the only outbound dependency this binary dials (see "Service wiring" above). |
 | `WHAGENT_MCP_PUBLIC_URL` | mcp | — | This binary's own externally reachable base URL -- must be byte-identical to `ui`'s own `WHAGENT_MCP_PUBLIC_URL` (above, "`ui`" section) -- the RFC 9728 `resource` this binary advertises at `/.well-known/oauth-protected-resource`. Unset skips serving that endpoint entirely; a mismatch with `ui`'s value silently breaks an MCP client's discovery instead. |
 | `WHAGENT_UI_PUBLIC_URL` | mcp | — | `ui`'s own externally reachable base URL (matches `ui`'s own `WHAGENT_UI_PUBLIC_URL`) -- the OAuth2 authorization server issuer this binary's RFC 9728 metadata names. Unset alongside `WHAGENT_MCP_PUBLIC_URL` above also skips serving that endpoint. |
-| `PG_DATABASE_URL` | mcp | — | Backs a `mcpauth.CredentialStore` against the same `mcp_credential` table `ui`'s OAuth2 provider mints into (the "Database" section above; `whagent_net/migrate/schema/migrations/004_mcpauth_credential`, issue #2245). Also gates issue #2426's delegated-grant wiring (`main.go`'s `initializeDelegatedGrant`, reusing the same pool) -- see "Delegated grant (issue #2426, plan #2421)" above for the four `WHAGENT_GRANT_*` variables that also needs. Unset, unreachable, or a missing table all degrade to "OAuth2 credential path unavailable" (logged at `WARNING`), never a failed boot. |
+| `PG_DATABASE_URL` | mcp | — | Backs a `auth.CredentialStore` against the same `mcp_credential` table `ui`'s OAuth2 provider mints into (the "Database" section above; `whagent_net/migrate/schema/migrations/004_mcpauth_credential`, issue #2245). Also gates issue #2426's delegated-grant wiring (`main.go`'s `initializeDelegatedGrant`, reusing the same pool) -- see "Delegated grant (issue #2426, plan #2421)" above for the four `WHAGENT_GRANT_*` variables that also needs. Unset, unreachable, or a missing table all degrade to "OAuth2 credential path unavailable" (logged at `WARNING`), never a failed boot. |
 
 ## `ui` (standalone agent web UI, issue #2236)
 
@@ -295,7 +295,7 @@ address, the only outbound dependency this binary dials; `PG_DATABASE_URL`
 Postgres *table* from `whagent_net/session`'s domain tables even though it
 shares the same connection string, since `ui` never queries the domain
 tables directly, only through `api`'s gRPC surface. `ui` also hosts
-mcpauth's OAuth2 authorization-server front end (FR9/C27, issue #2245) --
+auth's OAuth2 authorization-server front end (FR9/C27, issue #2245) --
 `WHAGENT_UI_PUBLIC_URL`/`WHAGENT_MCP_PUBLIC_URL` below configure it; it
 shares `PG_DATABASE_URL` too (`mcp_credential`/`mcp_oauth_client`/
 `mcp_auth_code` tables, `whagent_net/migrate/schema/migrations/
@@ -309,8 +309,8 @@ purely-additive delegated-grant wiring (`main.go`'s
 | `WHAGENT_UI_ADDR` | ui | `:8080` | Listen address for `ui`'s HTTP surface (`GET /healthz` unauthenticated, every other route requiring a Keycloak session). |
 | `AUTH_MODE` | ui | `none` | `none` (dev-only synthetic `dev-user`, `//libs/go/htmxauth.AuthModeNone`) or `oidc` (real Keycloak sign-in, NFR1). Matches manmanv2/ui's and app-registry-ui's own literal `AUTH_MODE` name. |
 | `GRPC_AUTH_MODE` | ui | `none` | `none` or `oidc` (`//libs/go/grpcauth.AuthMode`) -- gates whether the operator's access token is actually forwarded to `api` on outbound calls. Should match `api`'s own `GRPC_AUTH_MODE` above. |
-| `WHAGENT_UI_PUBLIC_URL` | ui | *(required)* | `ui`'s own externally-reachable base URL, e.g. `https://whagent.example.com` -- FR9/issue #2245's `mcpauth.ProviderConfig.Issuer`, the base every mcpauth endpoint URL `ui` advertises (`/authorize`, `/token`, `/register`, `/.well-known/oauth-authorization-server`) is built from. Mirrors `audience_score_system`'s `ASS_OAUTH_REDIRECT_BASE_URL` doubling as mcpauth's issuer (see `audience_score_system/ENV.md`). |
-| `WHAGENT_MCP_PUBLIC_URL` | ui | *(required)* | `mcp`'s own externally-reachable base URL -- FR9's `mcpauth.ProviderConfig.Resource`, the OAuth2 `resource` identifier both binaries must agree on exactly. Must be byte-identical to what `mcp` itself advertises in its own protected-resource metadata (a dependent task, issue #2245's Context section) -- a mismatch breaks an MCP client's RFC 9728 discovery chain. |
+| `WHAGENT_UI_PUBLIC_URL` | ui | *(required)* | `ui`'s own externally-reachable base URL, e.g. `https://whagent.example.com` -- FR9/issue #2245's `auth.ProviderConfig.Issuer`, the base every auth endpoint URL `ui` advertises (`/authorize`, `/token`, `/register`, `/.well-known/oauth-authorization-server`) is built from. Mirrors `audience_score_system`'s `ASS_OAUTH_REDIRECT_BASE_URL` doubling as auth's issuer (see `audience_score_system/ENV.md`). |
+| `WHAGENT_MCP_PUBLIC_URL` | ui | *(required)* | `mcp`'s own externally-reachable base URL -- FR9's `auth.ProviderConfig.Resource`, the OAuth2 `resource` identifier both binaries must agree on exactly. Must be byte-identical to what `mcp` itself advertises in its own protected-resource metadata (a dependent task, issue #2245's Context section) -- a mismatch breaks an MCP client's RFC 9728 discovery chain. |
 | `SECRET_KEY` | ui | `dev-secret-key-change-in-production` | Encrypts `ui`'s DB-backed session store's access/refresh tokens, and (issue #2428) the short-lived, httpOnly cookie `handlers_consent.go`'s `pendingConsent` round-trips through between `BeginAuthorization` and its Keycloak-redirect callback. Matches manmanv2/ui's and app-registry-ui's own literal `SECRET_KEY` name; distinct from `WHAGENT_SIGNING_KEY` above (JWKS signing, a different purpose entirely). |
 | `WHAGENT_UI_DEFAULT_SCOPE` | ui | — | The one `AgentDefinition.Scope` (issue #2424's FR1, nullable as of migration 010) `authorizeConsentGate` (`handlers_consent.go`, issue #2428) requires an active delegated grant for before `/authorize` mints an MCP-client credential — see that file's package doc comment for why this is a single configured scope rather than a live multi-scope chooser (`ui` has no `agent_definition`-listing API to build one from; that table stays behind `api`'s gRPC surface per `ARCHITECTURE.md`). Unset disables the `/authorize` gate entirely (the standalone `GET /mcp/consent?scope=<d>` route, issue #2428, is unaffected either way). |
 | `WHAGENT_UI_SIGNING_KEY` | ui | *(required)* | PEM-encoded PKCS8 asymmetric private signing key for `ui`'s own FR2 link-assertion key (`whagent_net/ui/linkassert.Key`, issue #2595) — the browser-identity handshake FR1/FR2's flow mints and ASS `web` verifies. Never checked in. Distinct key material from `WHAGENT_SIGNING_KEY` above — see "Persona claim issuance" above for why this is a second, independent signing surface rather than a reuse. `ui` fails startup loudly when this is missing or unparseable; there is no unsigned or symmetric fallback mode. |

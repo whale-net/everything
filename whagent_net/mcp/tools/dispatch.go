@@ -108,7 +108,7 @@ func resolveGrantTokenForSession(ctx context.Context, scopeResolver ScopeResolve
 // the delegated-grant Store is keyed on the operator's raw Keycloak `sub`
 // claim, the same value grpcauth.CompleteAuthorization compares literally
 // against, never the mcpidentity-encoded iss|sub composite (that encoding
-// exists for a different, unrelated concern -- mcpauth.CredentialStore's
+// exists for a different, unrelated concern -- auth.CredentialStore's
 // Identity column, mcpidentity's own package doc).
 //
 // Only called once a scope has already been resolved as non-nil by the
