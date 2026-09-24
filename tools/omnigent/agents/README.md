@@ -1,0 +1,176 @@
+# Omnigent agent bundles
+
+Omnigent-native agent config bundles for this repo — uploadable directly via
+`sys_session_create(config_path=...)`. Distinct from
+[`tools/project-manager/omnigent-agents/`](../../project-manager/omnigent-agents/README.md),
+which holds Omnigent ports of the `project-manager` plugin's Claude Code
+personas; this directory is for agents that exist only as Omnigent bundles,
+with no corresponding Claude Code plugin persona.
+
+Each subdirectory is a standalone single-agent bundle (`config.yaml`).
+
+## Agents
+
+| Agent | Harness | Model | Purpose |
+|-------|---------|-------|---------|
+| `local-pi/` | `pi-native` | `locallm/bonsai2` | General-purpose dev agent intended to be wired to krill's prod work-axis MCP surface (`krill-mcp-prod`, `/mcp/spec`) — **MCP wiring not actually working yet, see "Known gaps"**. Registered on the prod server (`agent_id: 7527918405dc422da225428f8537cae4`) via `sys_session_create`. |
+
+## Bundle shape
+
+A bundle is a directory holding one `config.yaml` (see `local-pi/config.yaml`
+for a worked example, or the ground-truth `claude-native-ui` bundle pulled
+via `sys_agent_download` during authoring):
+
+```yaml
+spec_version: 1
+name: <agent name>
+description: >-
+  <one paragraph -- when to use this agent>
+executor:
+  type: omnigent
+  config:
+    harness: <see valid values below>
+    model: <provider/model-id>     # omit for harnesses with a pinned model
+mcp_servers:
+  - name: <server name>
+    serverUrl: <https url>          # see "Known gaps" below
+prompt: |
+  <system prompt>
+os_env:
+  type: caller_process
+  cwd: .
+  sandbox:
+    type: none
+```
+
+Valid `harness` values (confirmed live, from an `omnigent run` validation
+error): `acp`, `agy`, `agy-native`, `antigravity`, `antigravity-native`,
+`claude`, `claude-native`, `claude-sdk`, `codex`, `codex-native`,
+`copilot`, `cursor`, `cursor-native`, `devin`, `github-copilot`,
+`google-antigravity`, `goose`, `goose-native`, `grok`, `grok-build`,
+`hermes`, `hermes-native`, `jcode`, `kimi`, `kimi-code`, `kimi-native`,
+`kiro-native`, `native-agy`, `native-antigravity`, `native-goose`,
+`native-hermes`, `native-kimi`, `native-kiro`, `native-opencode`,
+`native-pi`, `native-qwen`, `open-responses`, `openai-agents`,
+`openai-agents-sdk`, `opencode`, `opencode-native`, `pi`, `pi-native`,
+`qwen`, `qwen-code`, `qwen-native`. Run `omnigent config list` locally to
+see which harnesses have credentials configured on this machine.
+
+## Building and testing a new agent locally
+
+1. Write `tools/omnigent/agents/<name>/config.yaml` following the shape
+   above.
+2. Test it against a local server, without touching the shared prod
+   server:
+   ```sh
+   omnigent run tools/omnigent/agents/<name>          # AGENT may be a directory or a YAML file
+   omnigent run tools/omnigent/agents/<name> --server local
+   ```
+3. Iterate — `omnigent run` re-reads the YAML each launch, so no
+   upload/re-upload step is needed while testing locally.
+4. From inside a running Omnigent session (e.g. this one), you can instead
+   upload straight into the current server with the `sys_session_create`
+   MCP tool:
+   ```
+   sys_session_create(config_path="tools/omnigent/agents/<name>")
+   ```
+   then verify with `sys_agent_get` (confirms `harness` resolved as
+   written) and `sys_list_models` (confirms the `model` string resolves for
+   that harness).
+
+   **Caveat, confirmed live:** this upload path does not validate the
+   bundle strictly — unrecognized top-level keys are silently dropped
+   rather than erroring. Registering `local-pi` this way succeeded (a real
+   `agent_id` came back, `harness` and `description` resolved correctly),
+   but `sys_agent_get` reported `"mcp_servers": []` even though the bundle
+   sets a `mcp_servers:` block — the key was ignored, not rejected. `omnigent
+   run --server <url>` from a terminal is the stricter path: it rejected
+   `spec_version` and `executor.harness` mistakes with specific errors
+   (see "Known gaps"), so prefer it over `sys_session_create` for shaking
+   out schema mistakes in a new bundle.
+
+## Deploying to the shared server
+
+The shared server for this repo's agents is `https://omnigent.whalenet.dev`
+(`~/.omnigent/config.yaml`'s configured default — check with `omnigent
+config list`).
+
+- **Ad hoc / ephemeral:** `omnigent run tools/omnigent/agents/<name>
+  --server https://omnigent.whalenet.dev` uploads the local YAML as a
+  one-off agent and spawns a local runner tunneling to the server, so any
+  `os_env: caller_process` terminals/MCPs still execute on your machine.
+- **Persistent registration** (so the agent shows up in `sys_agent_list`
+  for others to launch by `agent_id`): either upload it via
+  `sys_session_create(config_path=...)` from a live session against that
+  server (as in "Building and testing" above), or have whoever operates the
+  server add `--agent tools/omnigent/agents/<name>` to its `omnigent
+  server` startup command (`omnigent server --help`) — pre-registers the
+  bundle at boot, replacing any existing agent of the same name.
+- **If the bundle needs to run terminals/MCPs on a specific machine**
+  (anything with `os_env: caller_process`, like every bundle in this repo),
+  that machine must first be registered as a host against the target
+  server: `omnigent host https://omnigent.whalenet.dev`, or `omnigent host
+  enable` for a persistent per-user system service (`omnigent host
+  --help`).
+
+## Reference docs
+
+This repo vendors no separate Omnigent documentation — the CLI's own
+`--help` text is the authoritative, version-matched reference for whatever
+`omnigent` build is installed here (`omnigent --version`):
+
+- `omnigent --help` — top-level command/harness list
+- `omnigent run --help` — local vs. `--server` launch topologies (its own
+  docstring cites "RUNNER.md §6 Flow 1" for the local-runner/remote-server
+  architecture — that doc isn't vendored into this repo or shipped with the
+  installed package, so it can't be linked from here; ask in the Omnigent
+  support channel if you need it)
+- `omnigent host --help` — registering/serving a machine as a host
+- `omnigent server --help` — running/deploying the server itself
+- `omnigent config --help` / `omnigent config list` — defaults and
+  configured credentials by harness
+- `omnigent doctor --help`, `omnigent diagnose --help` — environment/health
+  checks for bug reports
+
+## Known gaps
+
+- **`pi-native` requires the `pi` CLI installed on the executing machine —
+  confirmed live, and it's not installed anywhere we've tried yet.**
+  `pi-native` shells out to a local `pi` binary the same way `claude-native`
+  shells out to `claude`; it is not a hosted/remote harness. Launching
+  `local-pi` (registered via `sys_session_create`, harness `pi-native`)
+  failed on this worktree's host with `click.exceptions.ClickException:
+  Native Pi requires the 'pi' CLI on PATH. Install Pi, add it to PATH, or
+  install it with: npm install -g @earendil-works/pi-coding-agent. You can
+  also set OMNIGENT_PI_PATH=/path/to/pi.` — whatever machine ends up
+  running this bundle's terminal (i.e. whatever's registered as its
+  `omnigent host`) needs that installed first.
+- **`spec_version: 1` is required** — confirmed live: `omnigent run` rejects
+  a bundle with `Error: config.yaml missing required field: spec_version`
+  otherwise. Every bundle here must set it.
+- **`executor.type: omnigent` + `executor.config.harness` is the required
+  nesting** — confirmed live: `omnigent run` rejected a flat
+  `executor.harness` with `executor.config.harness: required when
+  executor.type is 'omnigent'`, and enumerated the valid `harness` values
+  (listed above). Where exactly `model` belongs under `executor.config` is
+  still a guess by analogy — not yet confirmed by a successful run.
+- **MCP-server wiring syntax is confirmed wrong, not just unconfirmed.**
+  Each bundle's `mcp_servers:` key was modeled on
+  `tools/project-manager/mcp_config.json`'s server-entry shape (`name` +
+  `serverUrl`) — a guess. Registering `local-pi` via
+  `sys_session_create(config_path=...)` against the prod server proved the
+  guess wrong: the upload succeeded, but `sys_agent_get` on the resulting
+  session reported `"mcp_servers": []` — the key was silently dropped, not
+  parsed. The right way to wire an MCP server into an Omnigent bundle is
+  still unknown; `krill-mcp-prod` is **not actually reachable** from
+  `local-pi` today despite the config claiming it. Next step: run `omnigent
+  run tools/omnigent/agents/local-pi --server <url>` (which validates
+  strictly, unlike `sys_session_create`) and see whether it errors on
+  `mcp_servers` — if it doesn't error there either, the key may need to
+  live in a sibling file (e.g. a `mcp_config.json`/`.mcp.json`, mirroring
+  the Claude Code plugin convention) rather than inside `config.yaml`.
+- **Model string format** (`provider/model-id`, e.g. `locallm/bonsai2`) is
+  confirmed from `sys_session_create`'s own `model` parameter description
+  and mirrors `whagent_net/config/agents.yaml`'s `model:` convention, but
+  `locallm` as a provider id isn't otherwise referenced in this repo —
+  confirm it resolves via `sys_list_models` after upload.
