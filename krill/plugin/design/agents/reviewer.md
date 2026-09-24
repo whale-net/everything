@@ -58,11 +58,12 @@ blockers still standing.
      // verified_against is forbidden on a ruling event
    }
    ```
-   Put the per-blocker Sustain/Overrule reasoning and the closing tally
-   (`<s> sustained, <o> overruled`) in your dispatch response back to
-   `loop-design-panel` — the event itself just marks that a ruling happened
-   at this point in the log; `loop-design-panel` relays your reasoning to
-   producer for the next `draft`/`answer` round.
+   The event itself just marks that a ruling happened at this point in the
+   log and has no body field, so post the per-blocker Sustain/Overrule
+   reasoning and the closing tally (`<s> sustained, <o> overruled`) as a
+   `Reviewer ruling (round <N>)` comment on the meeting discussion. Return
+   only the tally and that comment's URL to `loop-design-panel`, which hands
+   the URL (not the text) to producer for the next `answer` round.
 5. **Return control** to `loop-design-panel` — you do not update entities
    yourself (that's producer's `propose_entities` job, fed by your ruling)
    and you do not re-run the stakeholder meeting.

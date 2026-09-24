@@ -12,8 +12,9 @@ and the `<root>` citation come from.
 
 **On the Milestone path**, `<root>` is the Milestone id (not a GitHub
 issue), and step 3's PR-body context comes from `get_task {id}` (ungated,
-no krill session needed) instead of `gh issue view` — its `work.Payload`
-returns `task.title`/`task.body` directly:
+no krill session needed) instead of `gh issue view` — you are handed task
+ids and branch names, not task text, and its `work.Payload` returns
+`task.title`/`task.body` directly:
 ```sh
 gh pr create --head <branch-name> --base <parent> \
   --title "<task.title, verbatim or a short imperative rewording>" \

@@ -88,7 +88,9 @@ Callable directly, or automatically by `/krill-design:design
    - **Cleared** — report to the user. If invoked from `/krill-design:design`,
      control returns there for hand-off to `/krill-design:review`.
    - **Blocked, session not yet signed off** — dispatch `krill-design:producer`
-     (Mode 2) to append an `answer` event resolving each `SB-<N>.<n>`, then
+     (Mode 2) with the design-session id and meeting discussion URL (it reads
+     the minutes there, not from your prompt) to append an `answer` event
+     resolving each `SB-<N>.<n>`, then
      dispatch `krill-design:architect` for a fresh `reconciliation`. Once
      clear, re-run this skill for round `N+1`. Cap at 3 meeting rounds; if
      blockers persist, stop and summarize for the user.

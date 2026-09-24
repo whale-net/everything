@@ -340,6 +340,34 @@ For a FeatureSet with no krill Milestone to scope `create_task` to,
 "Git hygiene" for those mechanics; every persona that falls back to them
 must say so in its output.
 
+## Subagent dispatch: ids, not bodies
+
+Every dispatch prompt a krill skill or persona writes for a subagent passes
+**krill ids** (plus the `krill_session_id` and dispatch-shape fields like
+mode, round number, worktree path) — never the body of an entity, event, or
+slice the subagent can read itself. The subagent fetches what it needs:
+
+| Id passed | Subagent reads it with |
+|-----------|------------------------|
+| `design_session_id` | `get_design_session`, `get_design_session_slice`, `list_open_questions` |
+| `feature_set_id` / `feature_id` / `requirement_id` / `product_id` | `get_feature_set_slice` / `get_feature_slice` / `get_requirement_slice` / `get_product_slice` |
+| `milestone_id` | `get_milestone`, `get_milestone_status`, `list_tasks` |
+| `task_id` | `get_task` |
+
+Why: the id is the lineage — the subagent reads the live, versioned record
+(and cites the same id in its own events/commits) instead of a
+dispatcher's paraphrased snapshot that may be stale or truncated — and it
+keeps both the dispatcher's and the subagent's context to what's actually
+needed. The same applies in reverse: a subagent reports back ids and a
+short outcome, not the bodies it wrote.
+
+Pass a body only when it has no krill home to read it from, and say so in
+the dispatch: live human input not yet recorded (e.g. `review`'s
+change-request text), and output a known blocker kept from being written
+(e.g. `system-validator` findings while `record_note` is blocked). For
+content that lives on GitHub (meeting minutes, reviewer rulings), pass the
+discussion/comment URL, not its text.
+
 ## Model tiers
 
 Same assignment as `project-manager` — see its CONVENTIONS.md § "Model

@@ -31,15 +31,17 @@ discovery and dispatch differ, below.
    trusting the manifest's snapshot — create its branch/worktree exactly as
    `tools/project-manager/skills/implement/SKILL.md` describes, then
    dispatch `krill-work:worker` with `<krill-session-id>`, `<task-id>`, and
-   `<worktree-path>` (not an issue number).
+   `<worktree-path>` only (not an issue number, and not the task's
+   title/body — worker reads those via `get_task`; CONVENTIONS.md "Subagent
+   dispatch: ids, not bodies").
 3. Once a worker/validator returns, re-read the task via `get_task {id}` to
    see the lane krill itself moved it to (`complete_task`'s pass/fail
    delta) — this is what decides the next dispatch, not a `Status` field
    you set yourself.
 4. Batch and hand off to `mergepush` exactly as project-manager's
-   `implement` does — `mergepush` needs the task manifest's `{task_id,
-   title}` in place of `{task-issue-number, title}` (see
-   `agents/mergepush.md`).
+   `implement` does — `mergepush` gets each ready task's `task_id` and
+   branch name in place of `{task-issue-number, title}`, and reads title/body
+   itself via `get_task` (see `agents/mergepush.md`).
 
 Every `worker`/`validator` dispatch you make will itself hit the known
 `claim_task`/`complete_task` blocker and report `forbidden` — see

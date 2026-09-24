@@ -67,7 +67,9 @@ approved plan — there is no root plan Issue to create (see
 
 5. **If changes requested:**
    - Ask the user for feedback text.
-   - Dispatch `krill-design:producer` (Mode 2) to append an `answer` event
+   - Dispatch `krill-design:producer` (Mode 2) with the design-session id
+     and the user's feedback text (live human input with no krill home yet —
+     the one body it gets) to append an `answer` event
      addressing it (or, if it requires new/changed entities, a follow-up
      `propose_entities` call) and update the draft.
    - Dispatch `krill-design:architect` for a follow-up `reconciliation`.
