@@ -13,7 +13,7 @@ Each subdirectory is a standalone single-agent bundle (`config.yaml`).
 
 | Agent | Harness | Model | Purpose |
 |-------|---------|-------|---------|
-| `local-pi/` | `pi-native` | `locallm/bonsai2` | General-purpose dev agent wired to krill's prod work-axis MCP surface (`krill-mcp-prod`, `/mcp/spec`) |
+| `local-pi/` | `pi-native` | `locallm/bonsai2` | General-purpose dev agent intended to be wired to krill's prod work-axis MCP surface (`krill-mcp-prod`, `/mcp/spec`) — **MCP wiring not actually working yet, see "Known gaps"**. Registered on the prod server (`agent_id: 7527918405dc422da225428f8537cae4`) via `sys_session_create`. |
 
 ## Bundle shape
 
@@ -74,9 +74,20 @@ see which harnesses have credentials configured on this machine.
    ```
    sys_session_create(config_path="tools/omnigent/agents/<name>")
    ```
-   then verify with `sys_agent_get` (confirms `mcp_servers`/`harness`
-   resolved as written) and `sys_list_models` (confirms the `model` string
-   resolves for that harness).
+   then verify with `sys_agent_get` (confirms `harness` resolved as
+   written) and `sys_list_models` (confirms the `model` string resolves for
+   that harness).
+
+   **Caveat, confirmed live:** this upload path does not validate the
+   bundle strictly — unrecognized top-level keys are silently dropped
+   rather than erroring. Registering `local-pi` this way succeeded (a real
+   `agent_id` came back, `harness` and `description` resolved correctly),
+   but `sys_agent_get` reported `"mcp_servers": []` even though the bundle
+   sets a `mcp_servers:` block — the key was ignored, not rejected. `omnigent
+   run --server <url>` from a terminal is the stricter path: it rejected
+   `spec_version` and `executor.harness` mistakes with specific errors
+   (see "Known gaps"), so prefer it over `sys_session_create` for shaking
+   out schema mistakes in a new bundle.
 
 ## Deploying to the shared server
 
@@ -132,15 +143,21 @@ This repo vendors no separate Omnigent documentation — the CLI's own
   executor.type is 'omnigent'`, and enumerated the valid `harness` values
   (listed above). Where exactly `model` belongs under `executor.config` is
   still a guess by analogy — not yet confirmed by a successful run.
-- **MCP-server wiring syntax is best-effort, not confirmed.** Each bundle's
-  `mcp_servers:` key is modeled on `tools/project-manager/mcp_config.json`'s
-  server-entry shape (`name` + `serverUrl`). `sys_agent_get` confirms the
-  server recognizes a top-level `mcp_servers` field on an agent, but no
-  populated example was available to inspect while authoring these bundles
-  — every live agent checked (`claude-native-ui`, `polly`) had an empty
-  list. Confirm the field/key names resolve as expected after uploading via
-  `sys_session_create(config_path=...)`, by checking `sys_agent_get` on the
-  resulting session, before relying on it.
+- **MCP-server wiring syntax is confirmed wrong, not just unconfirmed.**
+  Each bundle's `mcp_servers:` key was modeled on
+  `tools/project-manager/mcp_config.json`'s server-entry shape (`name` +
+  `serverUrl`) — a guess. Registering `local-pi` via
+  `sys_session_create(config_path=...)` against the prod server proved the
+  guess wrong: the upload succeeded, but `sys_agent_get` on the resulting
+  session reported `"mcp_servers": []` — the key was silently dropped, not
+  parsed. The right way to wire an MCP server into an Omnigent bundle is
+  still unknown; `krill-mcp-prod` is **not actually reachable** from
+  `local-pi` today despite the config claiming it. Next step: run `omnigent
+  run tools/omnigent/agents/local-pi --server <url>` (which validates
+  strictly, unlike `sys_session_create`) and see whether it errors on
+  `mcp_servers` — if it doesn't error there either, the key may need to
+  live in a sibling file (e.g. a `mcp_config.json`/`.mcp.json`, mirroring
+  the Claude Code plugin convention) rather than inside `config.yaml`.
 - **Model string format** (`provider/model-id`, e.g. `locallm/bonsai2`) is
   confirmed from `sys_session_create`'s own `model` parameter description
   and mirrors `whagent_net/config/agents.yaml`'s `model:` convention, but
