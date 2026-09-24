@@ -101,26 +101,22 @@ class ReadWhagentTranscriptParams:
 
 
 @dataclass
-class TranscriptRead:
-    text: Optional[str]
-    next_from_seq: int
+class WhagentTranscriptResult:
+    text: str
+    seq: int
 
 
 @activity.defn
 async def read_whagent_transcript_activity(
     params: ReadWhagentTranscriptParams,
-) -> TranscriptRead:
-    """Return the latest assistant_message event's text from from_seq on,
-    plus the position to resume from -- the workflow threads that position
-    into the next turn's from_seq so a turn that ends without committing
-    its own assistant_message (the mid-tool-loop cap trip) can't be
-    rendered using a *previous* turn's stale reply.
-    """
+) -> Optional[WhagentTranscriptResult]:
+    """Return the latest assistant_message event at or after from_seq, if any."""
     client = get_whagent_client()
-    text, next_from_seq = client.latest_assistant_message(
-        params.session_id, from_seq=params.from_seq
-    )
-    return TranscriptRead(text=text, next_from_seq=next_from_seq)
+    result = client.latest_assistant_message(params.session_id, from_seq=params.from_seq)
+    if result is None:
+        return None
+    text, seq = result
+    return WhagentTranscriptResult(text=text, seq=seq)
 
 
 # ----------------------------------------------------------------------

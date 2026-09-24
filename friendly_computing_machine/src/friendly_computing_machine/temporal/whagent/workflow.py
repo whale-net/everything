@@ -27,6 +27,7 @@ from friendly_computing_machine.src.friendly_computing_machine.temporal.whagent.
     StartWhagentSessionParams,
     UpdateSlackMessageParams,
     UpdateThreadSessionStatusParams,
+    WhagentTranscriptResult,
     get_whagent_session_activity,
     insert_thread_session_activity,
     post_slack_thread_message_activity,
@@ -72,25 +73,45 @@ def workflow_id_for_thread(app_env: str, channel_id: str, thread_ts: str) -> str
     return f"fcm-{app_env}-whagent-thread-{channel_id}-{thread_ts}"
 
 
-def render_resolved_turn_text(state: int, text: Optional[str]) -> str:
-    """Render the Slack message body for a turn that left RUNNING cleanly
-    (not FAILED, not timed out) -- DONE, AWAITING_INPUT, or CAPPED.
+def resolve_turn_outcome(
+    state: int,
+    error_detail: Optional[str],
+    since_seq: int,
+    transcript_result: Optional[WhagentTranscriptResult],
+) -> Optional[tuple[str, int]]:
+    """Decide whether one poll's (session state, transcript read) resolves the turn.
 
-    A capped turn still runs to completion and commits its own transcript
-    event before the session flips to CAPPED (whagent_net/worker/caps.go) --
-    only a cap that trips mid-tool-loop leaves no final assistant message,
-    so `text` can still be empty there. Either way the real reply, when one
-    exists, must win over the generic cap notice rather than being replaced
-    by it. Kept Temporal-free (like TurnQueue above) so this branching is
-    unit testable without a Temporal test environment.
+    Returns (text, next_since_seq) once resolved, or None to keep polling.
+    Kept Temporal-free (like TurnQueue below) so the actual bug this
+    guards against -- a poll that lands between SendTurn returning and the
+    session genuinely leaving RUNNING, or an agent's non-final
+    assistant_message during a still-RUNNING turn -- can be unit tested
+    without a Temporal test environment.
+
+    CAPPED/FAILED are terminal regardless of RUNNING/transcript state.
+    Otherwise a poll only resolves once the session has left RUNNING
+    *and* transcript_result is a genuinely new assistant_message (its
+    caller only passes one when since_seq has advanced past it) --
+    RUNNING with a message means an intermediate message from a
+    multi-message turn, and not-RUNNING with no message means a stale
+    read of the *previous* turn's terminal state, caught before SendTurn's
+    new turn has been observed as started.
     """
     if state == SESSION_STATE_CAPPED:
-        cap_notice = (
-            "_This conversation hit its budget (turn or cost cap) and has "
-            "stopped -- see the session link above for details._"
+        return (
+            "This conversation hit its budget (turn or cost cap) and has "
+            "stopped -- see the session link above for details.",
+            since_seq,
         )
-        return f"{text}\n\n{cap_notice}" if text else cap_notice
-    return text or "_(no response text found -- see the session link above)_"
+    if state == SESSION_STATE_FAILED:
+        detail = f" ({error_detail})" if error_detail else ""
+        return (
+            f"This turn failed{detail} -- see the session link above for details.",
+            since_seq,
+        )
+    if state != SESSION_STATE_RUNNING and transcript_result is not None:
+        return transcript_result.text, transcript_result.seq + 1
+    return None
 
 
 class TurnQueue:
@@ -194,19 +215,10 @@ class SlackThreadAgentWorkflow:
             start_to_close_timeout=ACTIVITY_TIMEOUT,
         )
 
-        # Bounds each turn's transcript read to events committed at or after
-        # this position -- otherwise a turn that ends without committing its
-        # own assistant_message (the mid-tool-loop cap trip) would be
-        # rendered using a *previous* turn's stale reply (both reads default
-        # to from_seq=0 and "latest assistant_message in the whole session"
-        # looks the same either way unless this boundary moves each turn).
-        transcript_seq = 0
-
+        since_seq = 0
         while True:
             self._queue.turn_in_flight = True
-            final_text, transcript_seq = await self._resolve_turn(
-                session_id, transcript_seq
-            )
+            final_text, since_seq = await self._resolve_turn(session_id, since_seq)
             await workflow.execute_activity(
                 update_slack_message_activity,
                 UpdateSlackMessageParams(
@@ -258,60 +270,44 @@ class SlackThreadAgentWorkflow:
                 start_to_close_timeout=ACTIVITY_TIMEOUT,
             )
 
-    async def _resolve_turn(
-        self, session_id: str, transcript_seq: int
-    ) -> tuple[str, int]:
-        """Poll until the turn leaves RUNNING, then render its result text.
+    async def _resolve_turn(self, session_id: str, since_seq: int) -> tuple[str, int]:
+        """Poll until the turn genuinely resolves, then render its result text.
 
-        Returns the rendered text plus the transcript position to resume
-        from on the *next* turn (unchanged from transcript_seq when this
-        turn didn't advance the transcript, e.g. the timeout/failed paths).
+        Returns the reply text and the transcript seq to use as next
+        turn's watermark. See resolve_turn_outcome for what "genuinely
+        resolves" requires -- transcript is only read once the session
+        has left RUNNING, both to avoid an extra call per poll while a
+        turn is still in flight and because a message seen while still
+        RUNNING would just be an intermediate one for a multi-message
+        turn.
         """
         elapsed = timedelta()
-        status = None
         while elapsed < TURN_TIMEOUT:
             status = await workflow.execute_activity(
                 get_whagent_session_activity,
                 session_id,
                 start_to_close_timeout=ACTIVITY_TIMEOUT,
             )
+
+            transcript_result: Optional[WhagentTranscriptResult] = None
             if status.state != SESSION_STATE_RUNNING:
-                break
+                transcript_result = await workflow.execute_activity(
+                    read_whagent_transcript_activity,
+                    ReadWhagentTranscriptParams(session_id=session_id, from_seq=since_seq),
+                    start_to_close_timeout=ACTIVITY_TIMEOUT,
+                )
+
+            outcome = resolve_turn_outcome(
+                status.state, status.error_detail, since_seq, transcript_result
+            )
+            if outcome is not None:
+                return outcome
+
             await workflow.sleep(POLL_INTERVAL)
             elapsed += POLL_INTERVAL
-        else:
-            return (
-                "_This turn timed out waiting for whagent-net -- check the session "
-                "link above for its current status._",
-                transcript_seq,
-            )
 
-        if status.state == SESSION_STATE_FAILED:
-            detail = f" ({status.error_detail})" if status.error_detail else ""
-            return (
-                f"This turn failed{detail} -- see the session link above for details.",
-                transcript_seq,
-            )
-
-        if status.state == SESSION_STATE_CAPPED and not workflow.patched(
-            "whagent-capped-turn-shows-reply"
-        ):
-            # A workflow execution already open (still in the idle-wait
-            # below) when this patch deploys must keep replaying its old
-            # history exactly -- that history never scheduled the
-            # read_whagent_transcript_activity call below for a capped
-            # turn, so scheduling it now on replay would be a
-            # nondeterminism error (whagent_net/worker/caps.go's own
-            # workflow.GetVersion gate is the Go-side precedent for this).
-            return (
-                "This conversation hit its budget (turn or cost cap) and has "
-                "stopped -- see the session link above for details.",
-                transcript_seq,
-            )
-
-        read = await workflow.execute_activity(
-            read_whagent_transcript_activity,
-            ReadWhagentTranscriptParams(session_id=session_id, from_seq=transcript_seq),
-            start_to_close_timeout=ACTIVITY_TIMEOUT,
+        return (
+            "_This turn timed out waiting for whagent-net -- check the session "
+            "link above for its current status._",
+            since_seq,
         )
-        return render_resolved_turn_text(status.state, read.text), read.next_from_seq
