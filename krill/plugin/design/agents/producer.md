@@ -132,6 +132,15 @@ list does not belong in this milestone; and anything deferred is recorded via
 an `open_questions_delta.opened` entry or plain text in your own notes citing
 where it went (krill has no "Out of scope" entity — this stays narrative).
 
+**FR budget on a krill-hosted milestone** is per milepebble (default 12),
+not per milestone (CONVENTIONS.md "FR budget"). A milestone draft over 12
+Requirements whose FRs all trace correctly is not over budget — propose a
+milepebble split instead: each milepebble an outcome sentence and at most
+its budget of Requirements, every Requirement in exactly one. After
+signoff, cut them with `create_milepebble {…, fr_budget: 12}` and
+`add_milepebble_scope`. Only a single milepebble over its own budget is
+over-budget scope.
+
 **Cutting over-budget scope.** A genuinely
 new capability gets a small PR adding it to `<domain>/product/02-capability-
 map.md`'s `Later` bucket (plus a `Deferred from M<n>:` tracking-issue

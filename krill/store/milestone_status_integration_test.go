@@ -138,7 +138,7 @@ func TestMilestoneStatusStore_Milepebble_SupportsSameOperations_UnknownIDRejecte
 	self := milestoneAuthoringTestSubject("agent-1")
 	milestone, err := s.MilestoneAuthoring().CreateMilestone(ctx, scopeID, product.ID, "M1", "", nil, self, self)
 	require.NoError(t, err)
-	milepebble, err := s.MilestoneAuthoring().CreateMilepebble(ctx, scopeID, milestone.ID, "cut 1", "", self, self)
+	milepebble, err := s.MilestoneAuthoring().CreateMilepebble(ctx, scopeID, milestone.ID, "cut 1", "", nil, self, self)
 	require.NoError(t, err)
 
 	status, err := s.MilestoneStatus().CurrentStatus(ctx, milepebble.ID)

@@ -77,8 +77,9 @@ type MilestoneAuthoringStore interface {
 	// parentMilestoneID has no `milestone_ref` row in scopeID, or if that
 	// row is itself a milepebble (a milepebble's parent must be a
 	// milestone, never another milepebble -- FR3's "exactly one
-	// milestone").
-	CreateMilepebble(ctx context.Context, scopeID, parentMilestoneID uuid.UUID, name, outcome string, acting, onBehalfOf Subject) (MilestoneRef, error)
+	// milestone"). frBudget may be nil; the FR budget is enforced per
+	// milepebble, so a milestone may exceed it once cut into milepebbles.
+	CreateMilepebble(ctx context.Context, scopeID, parentMilestoneID uuid.UUID, name, outcome string, frBudget *int, acting, onBehalfOf Subject) (MilestoneRef, error)
 
 	// AddMilepebbleDelivers records that entityID is delivered by
 	// milepebbleID -- an `entity_milestone` row with
@@ -418,7 +419,7 @@ func errNotAMilestone(id uuid.UUID) error {
 	return fmt.Errorf("%w: milestone_ref id %s is not a milestone (a milepebble's parent must be a milestone, never another milepebble)", ErrNotFound, id)
 }
 
-func (s milestoneAuthoringStore) CreateMilepebble(ctx context.Context, scopeID, parentMilestoneID uuid.UUID, name, outcome string, acting, onBehalfOf Subject) (MilestoneRef, error) {
+func (s milestoneAuthoringStore) CreateMilepebble(ctx context.Context, scopeID, parentMilestoneID uuid.UUID, name, outcome string, frBudget *int, acting, onBehalfOf Subject) (MilestoneRef, error) {
 	tx, err := s.pool.Begin(ctx)
 	if err != nil {
 		return MilestoneRef{}, fmt.Errorf("begin tx: %w", err)
@@ -451,12 +452,12 @@ func (s milestoneAuthoringStore) CreateMilepebble(ctx context.Context, scopeID, 
 
 	ref, err := scanMilestoneRef(tx.QueryRow(ctx, `
 		INSERT INTO milestone_ref (
-			scope_id, product_id, name, kind, outcome, position, parent_milestone_id,
+			scope_id, product_id, name, kind, outcome, fr_budget, position, parent_milestone_id,
 			created_by_acting_iss, created_by_acting_sub, created_by_acting_kind,
 			created_by_on_behalf_of_iss, created_by_on_behalf_of_sub, created_by_on_behalf_of_kind
-		) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
+		) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)
 		RETURNING `+milestoneRefColumns,
-		scopeID, productID, name, string(MilestoneKindMilepebble), outcome, position, parentMilestoneID,
+		scopeID, productID, name, string(MilestoneKindMilepebble), outcome, frBudget, position, parentMilestoneID,
 		acting.Iss, acting.Sub, string(acting.Kind),
 		onBehalfOf.Iss, onBehalfOf.Sub, string(onBehalfOf.Kind)))
 	if err != nil {

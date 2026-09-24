@@ -623,7 +623,7 @@ func TestMCPListProductDelivery_EndToEnd(t *testing.T) {
 	_, err = entities.MilestoneStatus().RecordTransition(ctx, scopeID, planned.ID, store.MilestoneStatusPlanned, nil, self, self)
 	require.NoError(t, err)
 
-	mp, err := entities.MilestoneAuthoring().CreateMilepebble(ctx, scopeID, planned.ID, "planned's own milepebble", "ship the first cut", self, self)
+	mp, err := entities.MilestoneAuthoring().CreateMilepebble(ctx, scopeID, planned.ID, "planned's own milepebble", "ship the first cut", nil, self, self)
 	require.NoError(t, err)
 	_, err = entities.MilestoneStatus().RecordTransition(ctx, scopeID, mp.ID, store.MilestoneStatusPlanned, nil, self, self)
 	require.NoError(t, err)
