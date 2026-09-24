@@ -61,10 +61,12 @@ Parameters (`--milestone`, `--personas`, `--stakeholder-rounds`,
 4. **Panel round.** Track a panel-round counter, starting at 1.
    a. Dispatch `krill-design:reviewer` (model `opus`) with Mode: Ruling — the
       design-session id, the meeting discussion URL, the round number. It
-      appends a `ruling` revision event and returns the sustained/overruled
-      counts and per-blocker reasoning.
+      appends a `ruling` revision event, posts its per-blocker reasoning as a
+      comment on the meeting discussion, and returns the sustained/overruled
+      counts plus that comment's URL.
    b. Dispatch `krill-design:producer` (Mode 2) with the design-session id
-      and the ruling's reasoning, instructing it to fold in every
+      and the ruling comment URL (not the reasoning text — CONVENTIONS.md
+      "Subagent dispatch: ids, not bodies"), instructing it to fold in every
       **sustained** item via an `answer` event (and a follow-up
       `propose_entities` call if a Requirement needs to change) and record
       every **overruled** item's rationale in the same event's notes.

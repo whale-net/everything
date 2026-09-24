@@ -64,7 +64,9 @@ design-session mechanics.
    step 2). There is no separate "intake discussion" artifact to create —
    the DesignSession's own event log is the durable record. Conduct the
    interview conversationally directly in this session (do not delegate —
-   it needs live back-and-forth), following `agents/producer.md` Mode 0.
+   it needs live back-and-forth), following `agents/producer.md` Mode 0 —
+   including recording each interview round as a `draft` revision event, so
+   the interview lives on the session rather than only in this context.
    If step 1 turned up real overlap, open with those issue numbers. If this
    is a milestone, post `gh issue comment <product-issue> --body "Ledger:
    M<n> → in design (<design-session-id>)"` before interviewing — or, for a
@@ -74,9 +76,11 @@ design-session mechanics.
 4. **Draft the specification.** Dispatch with an explicit `name: "producer-
    <design-session-id>"` (and `name: "architect-<design-session-id>"` for
    architect) so a later round has a stable target under `--resume-agents`.
-   Dispatch `krill-design:producer` with the interview transcript and
-   design-session id, instructing it to run Mode 1: append a `draft` revision
-   event and `propose_entities` for the Requirements gathered.
+   Dispatch `krill-design:producer` with the design-session id (not the
+   interview transcript — producer reads the recorded `draft` rounds via
+   `get_design_session`; CONVENTIONS.md "Subagent dispatch: ids, not
+   bodies"), instructing it to run Mode 1: append a `draft` revision event
+   and `propose_entities` for the Requirements gathered.
 
 5. **Reconcile.** Dispatch `krill-design:architect` with the design-session
    id, instructing it to run its Process: reconcile against repo
@@ -98,8 +102,9 @@ design-session mechanics.
 7. **Stakeholder meeting (only with `--stakeholder-meeting`).** Once
    architect has signed off, invoke `/krill-design:stakeholder-meeting
    <design-session-id>` — passing `--personas` through. Cleared → step 8.
-   Blocked → dispatch `krill-design:producer` (Mode 2) to answer the
-   consolidated blockers via an `answer` event, dispatch
+   Blocked → dispatch `krill-design:producer` (Mode 2) with the
+   design-session id and meeting discussion URL (not the blocker text) to
+   answer the consolidated blockers via an `answer` event, dispatch
    `krill-design:architect` for a fresh `reconciliation`, hold the next
    round. Cap at `--stakeholder-rounds`; if blockers still stand, stop and
    summarize — unless running inside `loop-design-panel`, which takes over

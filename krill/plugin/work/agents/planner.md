@@ -86,7 +86,7 @@ a `signoff` event with `signoff_status: approved`, and the Milestone id:
 5. **Report the full task manifest** — every task id, title, and starting
    lane, in dependency order — to whoever dispatched you. This manifest is
    the only durable record of the milestone's task set (CONVENTIONS.md);
-   the caller must carry it forward into `implement`/`validate` verbatim,
+   the caller must carry its ids forward into `implement`/`validate` verbatim,
    the same way a human today carries a plan identifier between skill
    invocations.
 

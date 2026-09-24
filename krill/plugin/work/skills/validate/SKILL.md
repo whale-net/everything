@@ -36,7 +36,10 @@ task item (no-Milestone path) is `Done`.
    the full PR list.
 5. **If there are findings:** dispatch `krill-work:planner` with the
    finding text `system-validator` reported (not note ids, since
-   `record_note` itself is blocked) to run its findings-handling process.
+   `record_note` itself is blocked — the one sanctioned body-passing
+   exception in CONVENTIONS.md "Subagent dispatch: ids, not bodies"; switch
+   to note ids once it's unblocked) plus the Milestone id to run its
+   findings-handling process.
    Report the new task manifest additions and point to
    `/krill-work:implement <milestone-id>`.
 
