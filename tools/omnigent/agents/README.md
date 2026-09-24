@@ -134,6 +134,17 @@ This repo vendors no separate Omnigent documentation — the CLI's own
 
 ## Known gaps
 
+- **`pi-native` requires the `pi` CLI installed on the executing machine —
+  confirmed live, and it's not installed anywhere we've tried yet.**
+  `pi-native` shells out to a local `pi` binary the same way `claude-native`
+  shells out to `claude`; it is not a hosted/remote harness. Launching
+  `local-pi` (registered via `sys_session_create`, harness `pi-native`)
+  failed on this worktree's host with `click.exceptions.ClickException:
+  Native Pi requires the 'pi' CLI on PATH. Install Pi, add it to PATH, or
+  install it with: npm install -g @earendil-works/pi-coding-agent. You can
+  also set OMNIGENT_PI_PATH=/path/to/pi.` — whatever machine ends up
+  running this bundle's terminal (i.e. whatever's registered as its
+  `omnigent host`) needs that installed first.
 - **`spec_version: 1` is required** — confirmed live: `omnigent run` rejects
   a bundle with `Error: config.yaml missing required field: spec_version`
   otherwise. Every bundle here must set it.
