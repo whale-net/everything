@@ -106,6 +106,10 @@ def complete_link(
     with SessionManager(session) as session:
         # conditional UPDATE is the atomicity gate: only one racing caller can
         # flip consumed false -> true, and only that caller sees rowcount 1.
+        # synchronize_session=False: the consume is a raw conditional flip whose
+        # only output we read is rowcount, so skip the ORM's Python-side WHERE
+        # evaluation (which mis-compares naive vs aware datetimes on backends
+        # that don't preserve tz). We re-read the row and refresh below.
         result = session.execute(
             update(SlackLinkToken)
             .where(
@@ -113,7 +117,8 @@ def complete_link(
                 SlackLinkToken.consumed.is_(False),
                 SlackLinkToken.expires_at > now,
             )
-            .values(consumed=True, consumed_at=now)
+            .values(consumed=True, consumed_at=now),
+            execution_options={"synchronize_session": False},
         )
         if result.rowcount != 1:
             session.rollback()
