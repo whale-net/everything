@@ -16,7 +16,7 @@ milestone hangs off. No spec entities exist yet — that is later M1 work.
 | `migrate` | `//krill/migrate` | job | Applies `krill/migrate/schema/migrations` and seeds the one `scope` row with this repo's forge coordinates (LB1, NFR2). |
 | `api` | `//krill/api` | external-api | HTTP server; `/healthz` (a live DB ping), `POST /sessions/init` (FR3's `init` primitive, issue #2489), the M1 entity write API (FR1/FR2/FR4, issue #2490), the FR5-FR9 scoped-slice query surface (`GET /slices/{feature-sets,features,requirements,products}/{id}`, issue #2491), the pointer-artifact create endpoint (`POST /pointer-artifacts`, FR20, issue #2496), and (M3, issues #2683-#2689) the delivery-axis surface -- milestone/milepebble authoring, status, shipment, re-cut, backlog, and abandon. See "Delivery-axis endpoints" below. |
 | `import` | `//krill/importer/cmd` | CLI (not deployed) | The one-way markdown importer (FR16, FR17, issue #2492): parses a `PRODUCT.md` + `product/*.md` doc set into `krill/store`'s spec entities and prints the entity-id report. Gated on a valid `init` session, same as every other write path. Records a one-time, one-way `import_completion` marker after a successful run and refuses a second import for the same path before parsing (FR12, NFR3, issue #2548). Run with `bazel run //krill/importer/cmd:import -- --path <dir> --session-id <uuid> --source-revision <sha>`. See `ARCHITECTURE.md` "The markdown importer and the delivery-axis association". |
-| `mcp` | `//krill/mcp` | external-api | krill's MCP surface: the FR5-FR9 scoped-slice query over MCP at `/mcp/spec`, the FR1-FR10 design-session/mediated-intake surface plus (M3, issues #2683-#2689) the delivery-axis tool set at `/mcp/design` (issue #2547), and (M5, issues #2867-#2876) the Swarm Operator-only console-query and operator-verb tool set at `/mcp/ops` -- all three behind the mcpauth (human) + whagent-net (agent) two-front-door auth pattern. See "MCP spec surface", "Design-session MCP surface", "Operator MCP surface", and "Delivery-axis endpoints" below. |
+| `mcp` | `//krill/mcp` | external-api | krill's MCP surface: the FR5-FR9 scoped-slice query over MCP at `/mcp/spec`, the FR1-FR10 design-session/mediated-intake surface plus (M3, issues #2683-#2689) the delivery-axis tool set at `/mcp/design` (issue #2547), the work axis's task-lifecycle tool set at `/mcp/work` (M4, `init_session`/`get_task`/`list_tasks`/`abandon_task` also on `/mcp/design`), and (M5, issues #2867-#2876) the Swarm Operator-only console-query and operator-verb tool set at `/mcp/ops` -- all four behind the mcpauth (human) + whagent-net (agent) two-front-door auth pattern. See "MCP spec surface", "Design-session MCP surface", "Operator MCP surface", and "Delivery-axis endpoints" below. |
 | `ui` | `//krill/ui` | external-api | Barebones Keycloak sign-in shell: gives mcpauth's `/authorize` endpoint (mounted here) a `SignInURL` to redirect a not-yet-signed-in caller to, so the human front door above can actually mint a credential end to end. No session list, no spec browsing -- a real web UI is deferred (`PRODUCT.md`'s C19, "Later"). See "The mcpauth sign-in shell" below. |
 
 ## Endpoints
@@ -124,25 +124,30 @@ unless noted otherwise.
 | `GET /{products,feature-sets,features,requirements,load-bearing-decisions}/{id}/notes` | Lists every note recorded against that spec-axis entity, oldest first, any lifecycle status; scope resolved from the entity. Returns `{"entity_kind", "entity_id", "notes"}`. Never gated. |
 
 The MCP surface below mirrors every endpoint above one-to-one, mounted on
-the same `/mcp/design` server the delivery-axis tools above use (see
-"Design-session MCP surface" below for the mount/auth pattern) — every
-write tool still requires the same krill-session-derived subject pair;
-`get_task` alone needs no session (ungated read, NFR6) but mounts here
-too rather than a fourth surface of its own (LB7).
+its own `/mcp/work` server (`krill/mcp/main.go`'s `workReg`) rather than
+the `/mcp/design` mount the delivery-axis tools above use — so the
+`krill-work` Claude Code plugin (see "Claude Code plugins" below) never
+needs the design-session/milestone/delivery write surface just to reach
+its own task-lifecycle verbs. Every write tool still requires the same
+krill-session-derived subject pair. `get_task`, `list_tasks`, and
+`abandon_task` are the deliberate exception: all three also mount on
+`/mcp/design`, so a `krill-design` caller keeps ad hoc task
+discovery/read/cleanup access (`get_task`/`list_tasks` need no session at
+all — ungated reads).
 
-| Tool | Kind | Wraps | Persona |
-|------|------|-------|---------|
-| `create_task` | write | `TaskStore.CreateTask` (FR1) | Swarm Operator |
-| `declare_task_dependencies` | write | `TaskStore.DeclareDependency` (FR2) | Swarm Operator |
-| `get_task` | read | `work.Assembler.Assemble` (FR4, FR10) | any resolved persona |
-| `list_tasks` | read | `TaskStore.ListTasksByMilestone` (issue #2941) | any resolved persona |
-| `claim_task` | write | `TaskStore.ClaimTask` (FR3, FR5) | Agent |
-| `heartbeat_task` | write | `TaskStore.Heartbeat` (FR6) | Agent |
-| `complete_task` | write | `TaskStore.CompleteTask` (FR8) | Agent |
-| `abandon_task` | write | `TaskStore.AbandonClaim` (FR9) | Agent |
-| `record_note` | write | `TaskStore.RecordNote` (FR11, FR12) | Agent |
-| `transition_note_lifecycle` | write | `TaskStore.TransitionNoteLifecycle` (M5, FR11, issue #2874) | any resolved persona |
-| `list_entity_notes` | read | `TaskStore.ListNotesForEntity` via `handlers.ListEntityNotes` | any resolved persona |
+| Tool | Kind | Wraps | Persona | Mount(s) |
+|------|------|-------|---------|----------|
+| `create_task` | write | `TaskStore.CreateTask` (FR1) | Swarm Operator | `/mcp/work` |
+| `declare_task_dependencies` | write | `TaskStore.DeclareDependency` (FR2) | Swarm Operator | `/mcp/work` |
+| `get_task` | read | `work.Assembler.Assemble` (FR4, FR10) | any resolved persona | `/mcp/work`, `/mcp/design` |
+| `list_tasks` | read | `TaskStore.ListTasksByMilestone` (issue #2941) | any resolved persona | `/mcp/work`, `/mcp/design` |
+| `claim_task` | write | `TaskStore.ClaimTask` (FR3, FR5) | Agent | `/mcp/work` |
+| `heartbeat_task` | write | `TaskStore.Heartbeat` (FR6) | Agent | `/mcp/work` |
+| `complete_task` | write | `TaskStore.CompleteTask` (FR8) | Agent | `/mcp/work` |
+| `abandon_task` | write | `TaskStore.AbandonClaim` (FR9) | Agent | `/mcp/work`, `/mcp/design` |
+| `record_note` | write | `TaskStore.RecordNote` (FR11, FR12) | Agent | `/mcp/work` |
+| `transition_note_lifecycle` | write | `TaskStore.TransitionNoteLifecycle` (M5, FR11, issue #2874) | any resolved persona | `/mcp/work` |
+| `list_entity_notes` | read | `TaskStore.ListNotesForEntity` via `handlers.ListEntityNotes` | any resolved persona | `/mcp/design` |
 
 `declare_task_dependencies`/`get_task`/`heartbeat_task`/`complete_task`/
 `abandon_task`/`record_note`/`transition_note_lifecycle` return the same

@@ -16,20 +16,22 @@ plus the NFR1-NFR6 audit named below — see its own doc comment and
 
 M5 adds no new binary and no new component box to the top-level map in
 `ARCHITECTURE.md` — it widens `api` (new routes), `krill/store` (new
-tables, new `TaskStore` methods), and `mcp` (a **third** MCP mount,
-`/mcp/ops`, alongside `specMountPath`/`designMountPath`):
+tables, new `TaskStore` methods), and `mcp` (a fourth MCP mount,
+`/mcp/ops`, alongside `specMountPath`/`designMountPath`/`workMountPath` —
+the last of those a later revision added, splitting the work axis off
+`/mcp/design` onto its own mount):
 
 ```
         mcp
-   ┌─────────────┬──────────────┬─────────────┐
-   │  /mcp/spec  │ /mcp/design  │  /mcp/ops   │
-   │ (every      │ (every       │ (Persona-   │
-   │  resolved   │  resolved    │  SwarmOper- │
-   │  persona)   │  persona,    │  ator only, │
-   │             │  per-tool    │  the mount  │
-   │             │  allow-list) │  itself is  │
-   │             │              │  the gate)  │
-   └─────────────┴──────────────┴─────────────┘
+   ┌─────────────┬──────────────┬─────────────┬─────────────┐
+   │  /mcp/spec  │ /mcp/design  │  /mcp/work  │  /mcp/ops   │
+   │ (every      │ (every       │ (every      │ (Persona-   │
+   │  resolved   │  resolved    │  resolved   │  SwarmOper- │
+   │  persona)   │  persona,    │  persona,   │  ator only, │
+   │             │  per-tool    │  per-tool   │  the mount  │
+   │             │  allow-list) │  allow-list)│  itself is  │
+   │             │              │             │  the gate)  │
+   └─────────────┴──────────────┴─────────────┴─────────────┘
 ```
 
 One migration, `016_escalation_axis` (issue #2868), carries the whole
@@ -114,15 +116,17 @@ genuinely additional conditions, never implied by the claim predicate
 alone. The index and the Go check are defense in depth for the same one
 rule, never two different rules that could disagree.
 
-## `/mcp/ops`: a third mount, not a per-call check on an existing one (issue #2867)
+## `/mcp/ops`: its own mount, not a per-call check on an existing one (issue #2867)
 
 FR6-FR9 all name their actor as "a Swarm Operator" — root plan #2851's
 own design note leaves *how* that restriction is enforced open ("mount
 routing vs. per-call auth check... at the altitude M1 already placed
-it"). M5 resolves it as a **third MCP mount**, `/mcp/ops`
-(`krill/mcp/server/transport.go`'s `opsMountPath`), alongside
-`specMountPath`/`designMountPath` — never a per-tool allow-list layered
-onto an existing mount. `registry.go`'s `RegisterOpsRead`/`RegisterOpsWrite`
+it"). M5 resolves it as its own MCP mount, `/mcp/ops`
+(`krill/mcp/server/transport.go`'s `opsMountPath`, the third at the time
+M5 shipped, now the fourth alongside a later-added `workMountPath`) —
+alongside `specMountPath`/`designMountPath` — never a per-tool allow-list
+layered onto an existing mount. `registry.go`'s
+`RegisterOpsRead`/`RegisterOpsWrite`
 fix the allowed persona to `PersonaSwarmOperator` with no allow-list
 parameter to vary, because the mount itself already answers "who may call
 anything registered here" — the same way `specMountPath`'s complete

@@ -38,23 +38,33 @@ delivery-authoring tool (`create_product`, `create_feature_set`,
    say so explicitly when you take this path.
 2. **`list_tasks` covers milestone-wide task discovery, but not
    claimability.** `list_tasks {milestone_id}` (ungated, any persona,
-   `/mcp/design`) returns every task under a milestone/milepebble — id,
-   title, `current_lane`, attempt count, and whether a claim is currently
-   live — so `planner`'s hand-carried summary is no longer the only way to
-   find a milestone's task ids (see "Work axis" below). It does **not**
-   filter by claimable: unresolved dependencies, the attempt cap, and an
-   active escalation are invisible to it — `claim_task` still needs a
-   `task_id` already in hand, and a caller still cross-checks `get_task
-   {id}` per candidate before calling it.
+   `/mcp/work`, also `/mcp/design`) returns every task under a
+   milestone/milepebble — id, title, `current_lane`, attempt count, and
+   whether a claim is currently live — so `planner`'s hand-carried summary
+   is no longer the only way to find a milestone's task ids (see "Work
+   axis" below). It does **not** filter by claimable: unresolved
+   dependencies, the attempt cap, and an active escalation are invisible
+   to it — `claim_task` still needs a `task_id` already in hand, and a
+   caller still cross-checks `get_task {id}` per candidate before calling
+   it.
 
-Every work-axis-write tool (milestone authoring, delivery status/shipment/
-recut/abandon, `create_task`, and the full task lifecycle) mounts on the
-same `/mcp/design` server the design-session tools use — no separate
-`/mcp/work` mount, no config change required. A **Swarm-Operator-only**
-`/mcp/ops` mount (`list_claimed_tasks`, `list_cancelled_tasks`,
-`list_escalated_tasks`, `list_open_notes`, `release_task`, `requeue_task`,
-`escalate_task`, `cancel_task`) exists for human debugging only — no
-persona here needs or registers it.
+Milestone authoring and delivery status/shipment/recut/abandon mount on
+`/mcp/design` (`krill/mcp/main.go`'s `designReg`); the work axis's own
+task-lifecycle tools (`create_task`, `declare_task_dependencies`,
+`claim_task`, `heartbeat_task`, `complete_task`, `record_note`,
+`transition_note_lifecycle`) mount on a separate `/mcp/work` server
+(`workReg`) instead — `krill-work`'s `.mcp.json`/`mcp_config.json`
+register `krill-mcp-work-{tilt,dev,prod}` (pointing at `/mcp/work`), not
+`krill-design`'s `krill-mcp-design-{tilt,dev,prod}`, so the two plugins no
+longer share a write surface. `get_task`, `list_tasks`, and `abandon_task`
+are the deliberate exception: all three are registered on **both**
+`/mcp/design` and `/mcp/work`, so `krill-design` keeps ad hoc task
+discovery/read/cleanup access even though no design persona's own
+instructions call any of them today. A **Swarm-Operator-only** `/mcp/ops`
+mount (`list_claimed_tasks`, `list_cancelled_tasks`, `list_escalated_tasks`,
+`list_open_notes`, `release_task`, `requeue_task`, `escalate_task`,
+`cancel_task`) exists for human debugging only — no persona here needs or
+registers it.
 
 ## Session bootstrapping
 

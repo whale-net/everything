@@ -217,7 +217,7 @@ func TestMCPMilestoneStatusSurface_EndToEnd(t *testing.T) {
 	// whagent-net (PersonaAgent) door can call these tools today.
 	designSrv.AddReceivingMiddleware(server.WhagentPersonaMiddleware())
 
-	handler := server.NewDualAuthHTTPHandler(server.New(), designSrv, server.New(), credentials, server.WhagentAuthConfig{
+	handler := server.NewDualAuthHTTPHandler(server.New(), designSrv, server.New(), server.New(), credentials, server.WhagentAuthConfig{
 		Verifier: verifier,
 		Audience: milestoneStatusTestWhagentAudience,
 	}, server.ResourceMetadataConfig{})

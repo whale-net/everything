@@ -36,12 +36,12 @@ LB4 pair from the caller's session — `sess.ScopeID`/`sess.Acting`/
 `sess.OnBehalfOf` on the HTTP side (`RequireSession`, NFR6's write gate),
 `requireKrillSession`'s resolved `store.Session` on the MCP side — never
 from the request body or tool input, mirroring every other create
-endpoint in this package. `create_task` mounts on the same design-scoped
-`*mcp.Server` `/mcp/design` already backs (see "The design-session MCP
-surface" above and "The MCP spec surface"'s corrected note on the
-`/mcp/work` mount that never happened) rather than getting a dedicated
-work-axis mount, and is restricted to `PersonaSwarmOperator` — root plan
-issue #2717's Personas section states the Swarm Operator, not the Agent,
-creates tasks and their dependency edges; the Agent's role starts at claim,
-a later M4 task.
+endpoint in this package. `create_task` mounts on its own work-scoped
+`*mcp.Server`, `/mcp/work` (a later revision of this milestone gave the
+work axis the dedicated mount an earlier note here said never happened —
+see "The design-session MCP surface" above), not the design-scoped
+`/mcp/design` server, and is restricted to `PersonaSwarmOperator` — root
+plan issue #2717's Personas section states the Swarm Operator, not the
+Agent, creates tasks and their dependency edges; the Agent's role starts
+at claim, a later M4 task.
 
