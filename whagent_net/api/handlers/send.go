@@ -43,7 +43,7 @@ func (s *SessionServer) SendTurn(ctx context.Context, req *pb.SendTurnRequest) (
 		return nil, err
 	}
 	if !s.canControl(sess, caller, clientID) {
-		return nil, status.Error(codes.PermissionDenied, "control is scoped to the session's on-behalf-of subject")
+		return nil, status.Error(codes.PermissionDenied, "control is scoped to the session's on-behalf-of subject or to an allowlisted client that started it")
 	}
 
 	if sess.Status.IsTerminal() {
