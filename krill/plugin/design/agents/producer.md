@@ -122,6 +122,13 @@ you create a Feature and its Requirements in one call. Keep requirements
 falsifiable: "the API returns a 404 for an unknown device ID" is a
 requirement; "the API should be intuitive" is not.
 
+For an FR complex enough that a single sentence doesn't obviously read as
+falsifiable, shape `body` as Given/When/Then — `Given <starting state>,
+when <action>, then <observable outcome>` — so `krill-work:worker`/
+`validator` can check it against the code mechanically instead of judging
+prose. This is encouraged, not required: a simple one-liner like the 404
+example above doesn't need the scaffolding.
+
 **Drafting under a product brief.** When the design is a milestone of a
 `product:approved` brief, the same three extra rules from project-manager's
 producer apply: the opening submission/first draft event should name
