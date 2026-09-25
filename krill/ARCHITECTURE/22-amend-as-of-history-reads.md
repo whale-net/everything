@@ -45,9 +45,11 @@ two tables:
   superseded what, and when.
 
 Neither `AmendStore` nor `HistoryStore` reads or writes anything beyond
-`requirement`/`load_bearing_decision` — no other entity kind (Product,
-FeatureSet, Feature, Persona, NonGoal) is amendable or as-of-readable in
-this milestone.
+`requirement`/`load_bearing_decision` *as history* — no other entity kind
+is as-of-readable in this milestone. `AmendStore` itself has since been
+generalised to every spec-axis kind, which is a supersession write only
+and adds no as-of read: see
+[`33-scd2-amend-all-spec-kinds.md`](33-scd2-amend-all-spec-kinds.md).
 
 **As-of slice assembly (`krill/slice`).** Every one of C3's four
 granularities (`GetFeatureSetSlice`, `GetFeatureSlice`,
@@ -58,10 +60,9 @@ same `Document` shape as of a past `asOf` instead of today: every
 `HistoryStore` (the revision current at `asOf`, not the latest), and any
 entity whose first revision postdates `asOf` is dropped from the
 assembly rather than reported at its current contents. `Product`,
-`FeatureSet`, and `Feature` have no write path that supersedes a row yet
-(no other entity kind is amendable, per the paragraph above), so for
-those three "as of `asOf`" reduces to "had it been created by `asOf`"
-(`entityExistedAsOf`) — the current row is their only revision, and a
+`FeatureSet`, and `Feature` were not amendable when this was written, so
+for those three "as of `asOf`" reduced to "had it been created by
+`asOf`" (`entityExistedAsOf`) — the current row is their only revision, and a
 top-level `*AsOf` call whose own entity postdates `asOf` returns
 `store.ErrNotFound`, exactly like `HistoryStore`'s own not-found
 semantics. `EntityRef.RevisionID` (`krill/slice/document.go`) is the

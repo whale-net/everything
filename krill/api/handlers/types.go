@@ -89,7 +89,9 @@ func isUniqueViolation(err error) bool {
 //     task_lease.go) -- the caller's claim is gone, not current        -> 409
 //   - store.ErrTaskNotClaimed (ReleaseLease's own named FR8 rejection,
 //     task_release.go) -- nothing to release                          -> 409
-//   - a scope-qualified unique-constraint violation                   -> 409
+//   - store.ErrNameConflict (an amend's replacement name collides with a
+//     live sibling, errors.go) / a scope-qualified unique-constraint
+//     violation                                                  -> 409
 //   - anything else (a genuine store failure)                         -> 500
 //
 // Every create handler below funnels its store call's error through this
@@ -109,7 +111,8 @@ func writeStoreError(w http.ResponseWriter, err error) {
 		errors.Is(err, store.ErrTaskEscalated),
 		errors.Is(err, store.ErrTaskCancelled),
 		errors.Is(err, store.ErrClaimNotCurrent),
-		errors.Is(err, store.ErrTaskNotClaimed):
+		errors.Is(err, store.ErrTaskNotClaimed),
+		errors.Is(err, store.ErrNameConflict):
 		writeJSONError(w, http.StatusConflict, err.Error())
 	case isUniqueViolation(err):
 		writeJSONError(w, http.StatusConflict, "an entity with this name already exists in this scope")
