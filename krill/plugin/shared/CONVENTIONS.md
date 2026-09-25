@@ -368,6 +368,15 @@ change-request text), and output a known blocker kept from being written
 content that lives on GitHub (meeting minutes, reviewer rulings), pass the
 discussion/comment URL, not its text.
 
+**Dispatch prompt shape.** A persona's `agents/*.md` file is the subagent's
+system prompt — fully caller-invariant, and it always precedes the dispatch
+message. Never bake a specific id, path, or round number into a persona
+file itself; every per-invocation value belongs in the dispatch message,
+not the file. Within the dispatch message, put the ids/parameters from the
+table above in one block at the end (after the role/mode instruction) —
+keeps the message diffable and auditable, and mirrors the id-not-body rule
+instead of interleaving ids through prose.
+
 ## Model tiers
 
 Same assignment as `project-manager` — see its CONVENTIONS.md § "Model
