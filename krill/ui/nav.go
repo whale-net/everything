@@ -79,6 +79,10 @@ nav a { display: inline-block; margin-right: 0.75rem; padding: 0.25rem 0.5rem; b
 nav a.active { font-weight: 600; background: rgba(128,128,128,0.2); }
 .identity { margin: 0.5rem 0 0; font-size: 0.9rem; opacity: 0.8; }
 main { padding: 1.5rem; max-width: 60rem; }
+nav.subnav { margin: 0.5rem 0 1.25rem; padding-bottom: 0.5rem; border-bottom: 1px solid rgba(128,128,128,0.25); }
+nav.subnav a { display: inline-block; margin-right: 0.75rem; }
+nav.subnav a[aria-current="page"] { font-weight: 600; text-decoration: underline; }
+code.id { font-size: 0.8em; opacity: 0.6; }
 </style>
 </head>
 <body>
