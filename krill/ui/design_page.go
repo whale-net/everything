@@ -51,10 +51,16 @@ type designSessionRow struct {
 	DetailPath        string
 }
 
-// designSessionListPage is the product-scoped session list.
+// designSessionListPage is the product-scoped session list. Error and
+// OpeningSubmission are set only when an "open a session" submission is
+// rejected and the form is re-rendered in-shell: Error is the readable
+// api status + message shown inline, and OpeningSubmission is the operator's
+// typed text, preserved so a rejection is not a data-loss event.
 type designSessionListPage struct {
-	ProductID string
-	Sessions  []designSessionRow
+	ProductID         string
+	Sessions          []designSessionRow
+	Error             string
+	OpeningSubmission string
 }
 
 // entityDeltaRow is one spec entity a revision event touched.
@@ -97,7 +103,12 @@ type openQuestionRow struct {
 }
 
 // designSessionDetailPage is one session: its row, its full ordered
-// revision-event log, and its currently-open questions.
+// revision-event log, and its currently-open questions. Error, FollowUp, and
+// CheckedResolve are set only when a "submit follow-up" round is rejected and
+// the form is re-rendered in-shell: Error is the readable api status +
+// message, FollowUp is the operator's typed text, and CheckedResolve holds
+// the question ids whose resolve box was ticked, all preserved so a
+// rejection is not a data-loss event.
 type designSessionDetailPage struct {
 	ID                     string
 	ProductID              string
@@ -107,6 +118,9 @@ type designSessionDetailPage struct {
 	ProductSessionsPath    string
 	Events                 []revisionEventRow
 	OpenQuestions          []openQuestionRow
+	Error                  string
+	FollowUp               string
+	CheckedResolve         map[string]bool
 }
 
 // ── read helpers ─────────────────────────────────────────────────────────────
@@ -151,6 +165,12 @@ func isSignedOff(events []store.RevisionEvent) bool {
 	}
 	return signedOff
 }
+
+// IsChecked reports whether a resolve box for the given question id was
+// ticked, so a rejected follow-up round re-renders the form with the
+// operator's original ticks intact. A nil CheckedResolve reads every id as
+// unticked, which is the GET handler's normal case.
+func (p designSessionDetailPage) IsChecked(id string) bool { return p.CheckedResolve[id] }
 
 // buildDesignSessionDetail assembles one session's read view from the same
 // three store reads get_design_session (GetByID + ListBySession) and
@@ -287,6 +307,18 @@ document.getElementById('browse-btn').addEventListener('click', function () {
 // its detail page.
 var designSessionListTemplate = template.Must(template.New("design-session-list").Parse(`<h2>Design sessions</h2>
 <p>Product <code>{{.ProductID}}</code></p>
+
+<h3>Open a new design session</h3>
+<p>Describe your idea in plain language. krill records it as the session's opening submission; it does not create or change any spec entity here.</p>
+{{if .Error}}
+<p class="form-error" role="alert"><strong>Not saved:</strong> {{.Error}}</p>
+{{end}}
+<form method="post" action="/design/products/{{.ProductID}}/design-sessions">
+  <p><label for="opening-submission">Your idea or user story</label><br>
+  <textarea id="opening-submission" name="opening_submission" rows="4" cols="60" required placeholder="Users need to bulk-export their data as CSV">{{.OpeningSubmission}}</textarea></p>
+  <p><button type="submit">Open design session</button></p>
+</form>
+
 {{if .Sessions}}
 <table>
   <thead><tr><th>Session</th><th>Opening submission</th><th>Status</th><th>Created</th></tr></thead>
@@ -360,7 +392,40 @@ var designSessionDetailTemplate = template.Must(template.New("design-session-det
 {{else}}
 <p>No open questions.</p>
 {{end}}
-<p><a href="{{.ProductSessionsPath}}">Back to this product's sessions</a></p>`))
+<p><a href="{{.ProductSessionsPath}}">Back to this product's sessions</a></p>
+
+<h3>Submit follow-up</h3>
+<p>Answer in plain language. krill records this as an <code>answer</code> round on this session; it does not create or change any spec entity here. Tick any open question your answer closes.</p>
+{{if .Error}}
+<p class="form-error" role="alert"><strong>Not saved:</strong> {{.Error}}</p>
+{{end}}
+<form method="post" action="/design/design-sessions/{{.ID}}/answers" id="follow-up-form">
+  {{if .OpenQuestions}}
+  <fieldset>
+    <legend>Open questions this answer closes</legend>
+    {{range .OpenQuestions}}
+    <p><label><input type="checkbox" name="resolve" value="{{.QuestionID}}"{{if $.IsChecked .QuestionID}} checked{{end}}> <code>{{.QuestionID}}</code> ({{.Blocking}}): {{.Text}}</label></p>
+    {{end}}
+  </fieldset>
+  {{end}}
+  <p><label for="follow-up">Your follow-up</label><br>
+  <textarea id="follow-up" name="follow_up" rows="4" cols="60" placeholder="It should use the postgres flag table.">{{.FollowUp}}</textarea></p>
+  <p><button type="submit">Submit follow-up</button></p>
+</form>
+<script>
+// An answer round is meaningful with either follow-up text or at least one
+// ticked resolve box; an empty round is rejected client-side so the operator
+// sees the requirement before a round-trip. The textarea is therefore not
+// marked required on its own.
+document.getElementById('follow-up-form').addEventListener('submit', function (e) {
+  var text = document.getElementById('follow-up').value.trim();
+  var anyBox = this.querySelectorAll('input[name="resolve"]:checked').length > 0;
+  if (!text && !anyBox) {
+    e.preventDefault();
+    window.alert('Write a follow-up, or tick an open question your answer closes.');
+  }
+});
+</script>`))
 
 // ── handlers ─────────────────────────────────────────────────────────────────
 

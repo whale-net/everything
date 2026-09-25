@@ -440,6 +440,18 @@ func (app *App) mountShellRoutes(mux *http.ServeMux) {
 	mux.HandleFunc(specProductPath+"/decisions", app.auth.RequireAuthFunc(app.handleSpecDecisions))
 	mux.HandleFunc(specProductPath+"/personas", app.auth.RequireAuthFunc(app.handleSpecPersonas))
 	mux.HandleFunc(specProductPath+"/non-goals", app.auth.RequireAuthFunc(app.handleSpecNonGoals))
+
+	// The design-session write surface (design_write.go), hung off the read
+	// views above: the list page's "open a session" form and a session detail
+	// page's "submit follow-up" form. Both are operatorRoute (RequireAuth +
+	// requireOperator), so a write only ever proceeds with the signed-in
+	// operator's real (iss, sub) resolved onto the request context, and both
+	// reach krill only through withKrillSession. The open form posts to the
+	// same product-scoped path as the list view (POST vs GET on one pattern);
+	// the answer form posts to a sub-path of the detail route.
+	mux.HandleFunc("POST /design/products/{productID}/design-sessions", app.operatorRoute(app.handleOpenDesignSessionForm))
+	mux.HandleFunc("POST /design/design-sessions/{id}/answers", app.operatorRoute(app.handleDesignSessionAnswerForm))
+
 }
 
 // operatorRoute is the wrapper every signed-in-operator route in this

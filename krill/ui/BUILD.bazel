@@ -19,6 +19,7 @@ go_library(
         "routes.go",
         "credentials_page.go",
         "design_page.go",
+        "design_write.go",
         "identity.go",
         "interventions.go",
         "writeclient.go",
@@ -56,7 +57,32 @@ go_binary(
 # no database, so this runs as part of `bazel test //krill/...`.
 go_test(
     name = "ui_test",
-    srcs = ["writes_test.go"],
+    srcs = [
+        "harness_test.go",
+        "writes_test.go",
+    ],
+    embed = [":ui_lib"],
+    deps = [
+        "//krill/store",
+        "//libs/go/htmxauth",
+        "@com_github_google_uuid//:uuid",
+        "@com_github_stretchr_testify//assert",
+        "@com_github_stretchr_testify//require",
+    ],
+)
+
+# The design-session write surface (design_write.go), driven through the
+# real form routes: an opening submission opens a session, a follow-up
+# appends an `answer` round, both attributed to the signed-in operator's
+# real (iss, sub) and neither ever writing a spec entity. Shares the
+# signed-in-operator harness (harness_test.go) with ui_test rather than
+# copying it, so both prove the same path through one fake IdP + fake api.
+go_test(
+    name = "design_write_test",
+    srcs = [
+        "design_write_test.go",
+        "harness_test.go",
+    ],
     embed = [":ui_lib"],
     deps = [
         "//krill/store",
@@ -73,12 +99,13 @@ go_test(
 # attributed to the real signed-in operator, and 303s back to the originating
 # view; plus open-redirect-safe return_to, the in-shell rejection page, and
 # cancel's confirm-before-post affordance. Reuses the sign-in / fake-Keycloak /
-# fake-api harness in writes_test.go, which is compiled in alongside it.
+# fake-api harness in harness_test.go, which is compiled in alongside it.
 go_test(
     name = "ui_interventions_test",
     srcs = [
         "writes_test.go",
         "interventions_test.go",
+        "harness_test.go",
     ],
     embed = [":ui_lib"],
     deps = [
