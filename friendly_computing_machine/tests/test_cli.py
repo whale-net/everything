@@ -4,7 +4,7 @@ import typer
 def test_cli_main_imports():
     """Importing the CLI entry point must not raise.
 
-    fcm_lib bundles every subcommand (bot/worker/subscribe/web/...) into one
+    fcm_lib bundles every subcommand (bot/worker/web/...) into one
     binary, so this import chain pulls in both whagent's proto-generated
     client and the OTLP log exporter in the same process -- the combination
     that broke web_openapi_spec's generator with a "google" namespace

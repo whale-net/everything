@@ -11,7 +11,6 @@ from libs.python.cli.params import pg_params, logging_params
 from friendly_computing_machine.src.friendly_computing_machine.models import (  # noqa: F401
     base,
     genai,
-    manman,
     music_poll,
     slack,
     task,

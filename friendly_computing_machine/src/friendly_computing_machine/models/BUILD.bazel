@@ -8,7 +8,6 @@ py_library(
     visibility = ["//visibility:public"],
     deps = [
         "//friendly_computing_machine/src/friendly_computing_machine:util",
-        "//generated/py/manman:status_api",
         "@pypi//:sqlalchemy",
         "@pypi//:sqlmodel",
     ],

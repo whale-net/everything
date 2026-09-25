@@ -26,18 +26,6 @@ py_test(
     deps = ["//friendly_computing_machine/src:fcm_lib"],
 )
 
-# ManMan integration tests
-py_test(
-    name = "test_manman",
-    size = "small",
-    srcs = [
-        "conftest.py",
-        "manman/test_manman_util.py",
-        "test_manman_subscribe.py",
-    ],
-    deps = ["//friendly_computing_machine/src:fcm_lib"],
-)
-
 # Temporal workflow tests
 py_test(
     name = "test_temporal",

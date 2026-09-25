@@ -1,66 +1,71 @@
 #!/usr/bin/env python3
-"""Test script to verify the slack blocks functionality."""
+"""Block-to-text rendering, which is what gets persisted for a sent message.
 
-from datetime import datetime
+This is the plain-text mirror Slack builds for accessibility and for FCM's own
+message store, so every block type the bot can post has to survive the round
+trip. The V1 status-block renderers that used to be covered here are gone with
+manman V1.
+"""
 
 import pytest
-from slack_sdk.models.blocks import ActionsBlock
+from slack_sdk.models.blocks import (
+    ActionsBlock,
+    ButtonElement,
+    ContextBlock,
+    DividerBlock,
+    HeaderBlock,
+    ImageBlock,
+    InputBlock,
+    PlainTextObject,
+    SectionBlock,
+)
 
-from generated.py.manman.status_api.models.external_status_info import ExternalStatusInfo
-from generated.py.manman.status_api.models.status_type import StatusType
 from friendly_computing_machine.src.friendly_computing_machine.bot.slack_models import (
-    create_worker_status_blocks,
     render_blocks_to_text,
 )
-from friendly_computing_machine.src.friendly_computing_machine.models.slack import (
-    SlackSpecialChannelType,
-)
+
+
+def test_empty_input_renders_empty():
+    assert render_blocks_to_text([]) == ""
 
 
 @pytest.mark.parametrize(
-    "status, has_buttons",
+    "block, expected",
     [
-        (StatusType.RUNNING, True),
-        (StatusType.LOST, False),
-        (StatusType.CREATED, False),
-        (StatusType.COMPLETE, False),
-        # INIT intentionally left
+        (SectionBlock(text={"type": "mrkdwn", "text": "a section"}), "a section"),
+        (HeaderBlock(text=PlainTextObject(text="a header", emoji=False)), "# a header"),
+        (DividerBlock(), "---"),
+        (ImageBlock(image_url="http://example.com/i.png", alt_text="an image"), "[an image]"),
+        (
+            ActionsBlock(
+                elements=[
+                    ButtonElement(text=PlainTextObject(text="Go", emoji=False), action_id="go")
+                ]
+            ),
+            "[Go]",
+        ),
+        (ContextBlock(elements=[PlainTextObject(text="some context")]), "(some context)"),
+        (
+            InputBlock(
+                block_id="b",
+                label=PlainTextObject(text="A question", emoji=False),
+                element=None,
+            ),
+            "Input: A question",
+        ),
     ],
 )
-def test_blocks(status: StatusType, has_buttons: bool):
-    """Test creating blocks and rendering them to text."""
-    # Create test objects
-    special_channel_type = SlackSpecialChannelType(
-        id=1, type_name="test_worker", friendly_type_name="Test Worker"
+def test_each_block_type_renders_to_text(block, expected):
+    assert render_blocks_to_text([block]) == expected
+
+
+def test_blocks_join_in_order():
+    rendered = render_blocks_to_text(
+        [
+            SectionBlock(text={"type": "mrkdwn", "text": "first"}),
+            DividerBlock(),
+            SectionBlock(text={"type": "mrkdwn", "text": "second"}),
+        ]
     )
 
-    current_status = ExternalStatusInfo(
-        class_name="TestWorker",
-        status_info_id=1,
-        status_type=status,
-        worker_id=123,
-        as_of=datetime.now(),
-    )
-
-    # Create worker status blocks
-    blocks = create_worker_status_blocks(special_channel_type, current_status)
-
-    has_action_block = any(isinstance(block, ActionsBlock) for block in blocks)
-
-    print("Created blocks:")
-    for i, block in enumerate(blocks):
-        print(f"  Block {i}: {type(block).__name__}")
-
-    # Render to text
-    text_output = render_blocks_to_text(blocks)
-    print(f"\nRendered text:\n{text_output}")
-    if not text_output:
-        raise ValueError("Rendered text is empty")
-    if has_buttons:
-        assert "Stop" in text_output, "Expected 'Stop' button text in rendered output"
-        assert has_action_block
-    else:
-        assert "Stop" not in text_output, (
-            "Did not expect 'Stop' button text in rendered output"
-        )
-        assert not has_action_block
+    assert rendered.splitlines() == ["first", "---", "second"]
