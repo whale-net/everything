@@ -410,19 +410,32 @@ func subjectsEqual(a, b session.Subject) bool {
 }
 
 // canControl reports whether caller may send turns to or stop sess (FR1/
-// C13). Control is scoped to sess.OnBehalfOf, never sess.Subject: a caller
-// controls a session when it is (or is acting for) the on-behalf-of
-// subject the session runs as, regardless of which identity actually
-// started it -- e.g. a service account starting a session on a user's
-// behalf records that user as OnBehalfOf, and it is the user, not the
-// service account's own identity, who can subsequently send turns or stop
-// it. Reads have no such check at all (see GetSession/ReadTranscript) --
-// this is deliberately the only place a control decision is made, so no
-// later UI/MCP task re-derives it. There is no admin override in M1: a
-// caller who is neither the session's on-behalf-of subject nor started it
+// C13, FR10). Control is granted by either of two independent rules:
+//   (a) caller is (or is acting for) sess.OnBehalfOf -- the identity the
+//     session runs as; or
+//   (b) caller is sess.Subject, the identity that actually started the
+//     session, AND the current call's own Keycloak client_id is on the
+//     on-behalf-of allowlist. This lets the client that started a delegated
+//     session keep driving it after handing it off, without ever widening
+//     the rule to arbitrary callers.
+//
+// clientID is the authenticated caller's client_id (grpcauth.Claims.
+// ClientID), read fresh from every call's claims -- never persisted on the
+// session row and never cached, so removing a client from the allowlist
+// takes effect on the very next call. The allowlist is the same fail-closed
+// set StartSession's delegated path uses (see clientAllowlisted), so an
+// empty allowlist means branch (b) never grants.
+//
+// Reads have no such check at all (see GetSession/ReadTranscript) -- this
+// is deliberately the only place a control decision is made, so no later
+// UI/MCP task re-derives it. There is no admin override in M1: a caller who
+// is neither the session's on-behalf-of subject nor an allowlisted starter
 // simply cannot control it.
-func canControl(sess *session.Session, caller session.Subject) bool {
-	return subjectsEqual(sess.OnBehalfOf, caller)
+func (s *SessionServer) canControl(sess *session.Session, caller session.Subject, clientID string) bool {
+	if subjectsEqual(sess.OnBehalfOf, caller) {
+		return true
+	}
+	return subjectsEqual(sess.Subject, caller) && s.clientAllowlisted(clientID)
 }
 
 // hasRole reports whether required is present in roles (FR9's role check:
