@@ -239,10 +239,29 @@ as the read-only tools below (`get_milestone`/`list_milepebbles`/
   directly. This overrides `tools/project-manager/CONVENTIONS.md`'s
   per-milestone default for krill-hosted milestones only.
 - `set_milestone_status {krill_session_id, milestone_id, status, note?}` —
-  `status` is one of the fixed seven: `not started, in design, planned, in
-  progress, shipped, partially complete, abandoned`. `get_milestone_status`
-  (current) and `get_milestone_status_history` (every transition,
-  chronological, with actor) are real queries.
+  `status` is one of the fixed eight: `not started, in design, designed,
+  planned, in progress, shipped, partially complete, abandoned`. Only the
+  transitions below are accepted; anything else is rejected naming the
+  illegal edge and the legal alternatives, and re-setting the status a
+  milestone already holds is a no-op that writes no history row.
+
+  ```
+  not started        -> in design | abandoned
+  in design          -> designed | abandoned
+  designed           -> planned | in design | abandoned
+  planned            -> in progress | abandoned
+  in progress        -> partially complete | shipped | abandoned
+  partially complete -> in progress | shipped | abandoned
+  shipped            -> (terminal)
+  abandoned          -> (terminal)
+  ```
+
+  `designed` is the rung between a decided design and a committed plan;
+  `designed -> in design` is the rework edge (`planned -> in design` is
+  not legal), and `in progress <-> partially complete` is the
+  partial-completion loop. `get_milestone_status` (current) and
+  `get_milestone_status_history` (every transition, chronological, with
+  actor) are real queries.
 - `mark_delivered_item_shipped {krill_session_id, milestone_id, entity_id,
   note?}` and `get_delivery_breakdown {milestone_id}` (→ shipped/unshipped
   entity sets) — per-item shipment tracking within a milestone/milepebble.

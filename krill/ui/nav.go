@@ -88,6 +88,7 @@ code.id { font-size: 0.8em; opacity: 0.6; }
 .status { display: inline-block; padding: 0.05rem 0.55rem; border-radius: 999px; font-size: 0.8rem; border: 1px solid rgba(128,128,128,0.4); white-space: nowrap; }
 .status-not-started { background: rgba(128,128,128,0.1); }
 .status-in-design { background: rgba(128,128,128,0.18); }
+.status-designed { background: rgba(128,128,128,0.26); }
 .status-planned { background: rgba(66,133,244,0.14); border-color: rgba(66,133,244,0.5); }
 .status-in-progress { background: rgba(66,133,244,0.24); border-color: rgba(66,133,244,0.6); }
 .status-shipped { background: rgba(46,160,67,0.18); border-color: rgba(46,160,67,0.5); }

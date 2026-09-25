@@ -123,6 +123,8 @@ design-session mechanics.
    scope cut. Otherwise use the roadmap file's `FR budget` line. `review`
    appends the `signoff` event that makes the proposed entities the
    approved plan as usual; producer posts `Ledger: M<n> → planned
-   (<design-session-id>)` on the tracking issue, or calls
-   `set_milestone_status {milestone_id, status: "planned"}` for a
-   krill-hosted milestone.
+   (<design-session-id>)` on the tracking issue, or for a krill-hosted
+   milestone calls `set_milestone_status {milestone_id, status: "designed"}`
+   then `{status: "planned"}` — the edge table (CONVENTIONS.md) puts
+   `designed` between `in design` and `planned`, so the two calls are
+   required, not redundant.

@@ -1,7 +1,7 @@
 // This file (issue #2685, FR8, FR9, FR12, C28) is
 // MilestoneStatusEventStore -- the append-only status history register
 // (migration 012) that gives every `milestone_ref` row, of either Kind, a
-// status drawn from MilestoneStatus's fixed seven-value set. Kept as a
+// status drawn from MilestoneStatus's fixed eight-value set. Kept as a
 // sibling accessor ((*Store).MilestoneStatus()), mirroring
 // MilestoneAuthoringStore's own relationship to MilestoneStore, so the
 // existing milestone_ref/entity_milestone write paths stay untouched --

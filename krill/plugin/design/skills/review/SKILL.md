@@ -50,7 +50,9 @@ approved plan — there is no root plan Issue to create (see
      post `gh issue comment <product-issue> --body "Ledger: M<n> → planned
      (<design-session-id>)"` on the tracking issue (never a body edit). **If
      it's a krill-hosted milestone** — call `set_milestone_status
-     {milestone_id, status: "planned"}` instead (works from an ordinary
+     {milestone_id, status: "designed"}` then `{status: "planned"}`
+     instead (the edge table requires the `designed` rung between
+     `in design` and `planned` — CONVENTIONS.md; works from an ordinary
      Claude Code dispatch today, whale-net/everything#2928).
    - Tell the user the design is approved and that `/krill-work:plan
      <feature-set-id>` (plus `--milestone-id <id>` if one exists) is the

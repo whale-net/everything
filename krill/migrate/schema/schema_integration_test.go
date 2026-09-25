@@ -163,18 +163,18 @@ func TestMigrations_UpDownUp_LeavesCleanDatabaseAndIsRerunnable(t *testing.T) {
 
 	latest, err := runner.LatestVersion()
 	require.NoError(t, err)
-	require.Equal(t, uint(18), latest, "expected the latest migration source version to be 18 (001_scope, 002_spec_entities, 003_session, 004_milestone_assoc, 005_pointer_artifact, 006_mcpauth_credential, 007_ui_sessions, 008_design_session, 009_import_completion, 010_milestone_authoring, 011_milepebble, 012_milestone_status, 013_delivery_shipment, 014_backlog_bucket, 015_work_axis, 016_escalation_axis, 017_display_numbers, 018_agent_subject_kind) -- update this test if a later migration has since landed")
+	require.Equal(t, uint(19), latest, "expected the latest migration source version to be 19 (001_scope, 002_spec_entities, 003_session, 004_milestone_assoc, 005_pointer_artifact, 006_mcpauth_credential, 007_ui_sessions, 008_design_session, 009_import_completion, 010_milestone_authoring, 011_milepebble, 012_milestone_status, 013_delivery_shipment, 014_backlog_bucket, 015_work_axis, 016_escalation_axis, 017_display_numbers, 018_agent_subject_kind, 019_milestone_status_designed) -- update this test if a later migration has since landed")
 
 	// -- Up: scope, krill_session, the milestone tables, pointer_artifact,
 	// the auth tables, ui_sessions, design_session/revision_event,
 	// milestone_status_event, delivery_shipment, and the work-axis tables
 	// must exist, version must land clean at the latest --
-	require.NoError(t, runner.Up(), "apply migrations 001-017")
+	require.NoError(t, runner.Up(), "apply migrations 001-019")
 
 	version, dirty, err := runner.Version()
 	require.NoError(t, err)
 	assert.False(t, dirty)
-	assert.Equal(t, uint(18), version)
+	assert.Equal(t, uint(19), version)
 
 	assert.True(t, tableExists(t, ctx, db, "scope"), "expected table \"scope\" to exist after Up()")
 	assert.True(t, tableExists(t, ctx, db, "krill_session"), "expected table \"krill_session\" to exist after Up() (003_session, issue #2489)")
@@ -229,7 +229,7 @@ func TestMigrations_UpDownUp_LeavesCleanDatabaseAndIsRerunnable(t *testing.T) {
 	version, dirty, err = runner.Version()
 	require.NoError(t, err)
 	assert.False(t, dirty)
-	assert.Equal(t, uint(18), version)
+	assert.Equal(t, uint(19), version)
 
 	assert.True(t, tableExists(t, ctx, db, "scope"), "expected table \"scope\" to exist again after the second Up()")
 	assert.True(t, tableExists(t, ctx, db, "krill_session"), "expected table \"krill_session\" to exist again after the second Up()")
@@ -1286,8 +1286,9 @@ func TestMigration011_DownLeavesMilestoneRefIntact(t *testing.T) {
 
 // TestMigration012_SchemaContract asserts 012_milestone_status's own
 // boundary calls (issue #2685's Testing section, items 2, 3, and 7):
-// `status` is CHECK-constrained to exactly FR8's seven values (an eighth,
-// made-up value is rejected by the database itself), `milestone_id` is a
+// `status` is CHECK-constrained to exactly FR8's eight values -- 012's own
+// seven, widened by 019 -- so a ninth, made-up value is rejected by the
+// database itself, `milestone_id` is a
 // real DB-enforced FK back onto milestone_ref(id) (accepting both a
 // kind='milestone' and a kind='milepebble' row, FR9), `scope_id` is
 // NOT NULL with a real DB-enforced FK to scope(id) (LB1), every LB4
@@ -1368,15 +1369,15 @@ func TestMigration012_SchemaContract(t *testing.T) {
 		return err
 	}
 
-	// -- status CHECK: all seven fixed values accepted ------------------------
+	// -- status CHECK: all eight fixed values accepted ------------------------
 	for _, status := range []string{
-		"not started", "in design", "planned", "in progress", "shipped", "partially complete", "abandoned",
+		"not started", "in design", "designed", "planned", "in progress", "shipped", "partially complete", "abandoned",
 	} {
-		assert.NoError(t, insertStatusEvent(milestoneID, status), "status %q must be one of FR8's fixed seven values", status)
+		assert.NoError(t, insertStatusEvent(milestoneID, status), "status %q must be one of FR8's fixed eight values", status)
 	}
 
-	// -- status CHECK: an eighth, made-up value is rejected -------------------
-	assert.Error(t, insertStatusEvent(milestoneID, "bogus-status"), "milestone_status_event.status must reject a value outside FR8's fixed seven (CHECK constraint)")
+	// -- status CHECK: a ninth, made-up value is rejected ---------------------
+	assert.Error(t, insertStatusEvent(milestoneID, "bogus-status"), "milestone_status_event.status must reject a value outside FR8's fixed eight (CHECK constraint)")
 
 	// -- FR9: the exact same operation works against a kind='milepebble' row --
 	assert.NoError(t, insertStatusEvent(milepebbleID, "planned"), "milestone_status_event must accept a kind='milepebble' target the same as a kind='milestone' one (FR9)")
@@ -2509,4 +2510,132 @@ func TestMigration017_UpDownRoundTrip(t *testing.T) {
 	var displayNumber int
 	require.NoError(t, db.Pool.QueryRow(ctx, `SELECT display_number FROM feature WHERE id = $1`, featureID).Scan(&displayNumber))
 	assert.Equal(t, 1, displayNumber, "re-applying 017 must backfill the same row to the same display_number")
+}
+
+// seedMilestoneStatus019Fixture brings a Migrate(19) database up to the
+// point where a milestone_status_event row can be inserted, returning the
+// seeded scope/milestone ids and an insert helper -- the shape
+// TestMigration012_SchemaContract builds by hand for 012.
+func seedMilestoneStatus019Fixture(t *testing.T, ctx context.Context, db *dbtest.Postgres, repo string) (uuid.UUID, func(string) error) {
+	t.Helper()
+
+	var scopeID uuid.UUID
+	require.NoError(t, db.Pool.QueryRow(ctx, `
+		INSERT INTO scope (repo_full_name, default_branch) VALUES ($1, 'main') RETURNING id
+	`, repo).Scan(&scopeID))
+	var productID uuid.UUID
+	require.NoError(t, db.Pool.QueryRow(ctx, `
+		INSERT INTO product (scope_id, name, vision) VALUES ($1, 'P', 'V') RETURNING id
+	`, scopeID).Scan(&productID))
+	var milestoneID uuid.UUID
+	require.NoError(t, db.Pool.QueryRow(ctx, `
+		INSERT INTO milestone_ref (scope_id, product_id, name) VALUES ($1, $2, 'M1') RETURNING id
+	`, scopeID, productID).Scan(&milestoneID))
+
+	insertStatusEvent := func(status string) error {
+		_, err := db.Pool.Exec(ctx, `
+			INSERT INTO milestone_status_event (
+				scope_id, milestone_id, status,
+				created_by_acting_iss, created_by_acting_sub, created_by_acting_kind,
+				created_by_on_behalf_of_iss, created_by_on_behalf_of_sub, created_by_on_behalf_of_kind
+			) VALUES ($1, $2, $3, 'iss', 'sub', 'human', 'iss', 'sub', 'human')
+		`, scopeID, milestoneID, status)
+		return err
+	}
+	return milestoneID, insertStatusEvent
+}
+
+// theEightMilestoneStatuses is FR8's full value set after 019 -- every one
+// of which the CHECK must accept, in the same order the design lists them.
+var theEightMilestoneStatuses = []string{
+	"not started", "in design", "designed", "planned", "in progress", "shipped", "partially complete", "abandoned",
+}
+
+// TestMigration019_WidensStatusCheck asserts 019_milestone_status_designed's
+// Up() half (issue #2963): the CHECK on milestone_status_event.status --
+// under the same auto-assigned name 012's inline CHECK was given, so this
+// is a replace and not a second competing constraint -- admits all eight
+// values including the new 'designed', and still rejects a ninth.
+//
+// Migrates to exactly version 19 (not Up()/latest) so a later migration
+// landing on top of this one cannot shift what this file is about -- the
+// same choice TestMigration012_UpDownRoundTrip makes about its own
+// version.
+func TestMigration019_WidensStatusCheck(t *testing.T) {
+	ctx := context.Background()
+	db := dbtest.NewPostgres(ctx, t, dbtest.Options{})
+
+	sqlDB, err := sql.Open("pgx", db.ConnString)
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = sqlDB.Close() })
+
+	runner := migrate.NewRunner(sqlDB, schema.Migrations, schema.Dir)
+	require.NoError(t, runner.Migrate(19))
+
+	_, insertStatusEvent := seedMilestoneStatus019Fixture(t, ctx, db, "milestone-status-019-check/repo")
+
+	for _, status := range theEightMilestoneStatuses {
+		assert.NoError(t, insertStatusEvent(status), "status %q must be one of FR8's fixed eight values after 019", status)
+	}
+	assert.Error(t, insertStatusEvent("bogus-status"), "a value outside FR8's fixed eight must still be rejected by the CHECK after 019")
+}
+
+// TestMigration019_DownFailsLoudlyOnDesignedRow asserts the Down() half:
+// restoring 012's seven-value CHECK must fail loudly rather than silently
+// dropping or rewriting a row already holding 'designed'. It gets its own
+// database because a failed migration leaves the schema_migrations table
+// dirty, which is exactly the operator situation this is about -- not
+// something a follow-up step in the same test could step around.
+func TestMigration019_DownFailsLoudlyOnDesignedRow(t *testing.T) {
+	ctx := context.Background()
+	db := dbtest.NewPostgres(ctx, t, dbtest.Options{})
+
+	sqlDB, err := sql.Open("pgx", db.ConnString)
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = sqlDB.Close() })
+
+	runner := migrate.NewRunner(sqlDB, schema.Migrations, schema.Dir)
+	require.NoError(t, runner.Migrate(19))
+
+	milestoneID, insertStatusEvent := seedMilestoneStatus019Fixture(t, ctx, db, "milestone-status-019-down-fails/repo")
+	require.NoError(t, insertStatusEvent("designed"))
+
+	err = runner.Steps(-1)
+	require.Error(t, err, "019's Down() restores the seven-value CHECK, which a 'designed' row violates -- it must fail loudly, not drop or rewrite the row")
+
+	var stillDesigned int
+	require.NoError(t, db.Pool.QueryRow(ctx, `SELECT count(*) FROM milestone_status_event WHERE milestone_id = $1 AND status = 'designed'`, milestoneID).Scan(&stillDesigned))
+	assert.Equal(t, 1, stillDesigned, "the failed Down() must leave the 'designed' row exactly where it was")
+}
+
+// TestMigration019_UpDownRoundTrip is the happy-path reversibility: with
+// no row holding the eighth value, Down() restores 012's seven-value
+// CHECK ('designed' rejected again, the other seven still accepted) and
+// re-applying 019 accepts 'designed' again -- a pure CHECK replacement
+// moves no table and no row.
+func TestMigration019_UpDownRoundTrip(t *testing.T) {
+	ctx := context.Background()
+	db := dbtest.NewPostgres(ctx, t, dbtest.Options{})
+
+	sqlDB, err := sql.Open("pgx", db.ConnString)
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = sqlDB.Close() })
+
+	runner := migrate.NewRunner(sqlDB, schema.Migrations, schema.Dir)
+	require.NoError(t, runner.Migrate(19))
+
+	_, insertStatusEvent := seedMilestoneStatus019Fixture(t, ctx, db, "milestone-status-019-roundtrip/repo")
+
+	require.NoError(t, runner.Steps(-1), "019's Down() must apply cleanly while no row holds the eighth value")
+
+	version, dirty, err := runner.Version()
+	require.NoError(t, err)
+	assert.False(t, dirty)
+	assert.Equal(t, uint(18), version)
+
+	assert.Error(t, insertStatusEvent("designed"), "after 019's Down() the seven-value CHECK must reject 'designed' again")
+	assert.NoError(t, insertStatusEvent("in design"), "the values 012 already accepted must still be accepted after 019's Down()")
+
+	require.NoError(t, runner.Steps(1), "re-apply migration 019 after Down() -- must be re-runnable")
+	assert.NoError(t, insertStatusEvent("designed"), "re-applying 019 must accept 'designed' again")
 }

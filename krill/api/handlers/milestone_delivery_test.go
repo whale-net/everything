@@ -142,11 +142,11 @@ func TestGetProductDeliveryHandler_RepeatedStatusParam_ParsesEveryValue(t *testi
 	assert.Equal(t, []store.MilestoneStatus{store.MilestoneStatusPlanned, store.MilestoneStatusInProgress}, querier.gotStatuses)
 }
 
-// TestGetProductDeliveryHandler_UnknownStatus_Returns400NamingSevenValues
+// TestGetProductDeliveryHandler_UnknownStatus_Returns400NamingEightValues
 // proves issue #2689's own design constraint: an unrecognized `status`
-// value is a 400 naming the seven valid values, never a silent empty
+// value is a 400 naming the eight valid values, never a silent empty
 // result -- and the querier is never called.
-func TestGetProductDeliveryHandler_UnknownStatus_Returns400NamingSevenValues(t *testing.T) {
+func TestGetProductDeliveryHandler_UnknownStatus_Returns400NamingEightValues(t *testing.T) {
 	productID := uuid.New()
 	products := &fakeProductDeliveryProductStore{product: store.Product{ID: productID, ScopeID: uuid.New()}}
 	querier := &fakeProductDeliveryQuerier{}
@@ -157,9 +157,9 @@ func TestGetProductDeliveryHandler_UnknownStatus_Returns400NamingSevenValues(t *
 	assert.False(t, querier.called, "an invalid filter must never reach the querier")
 
 	for _, want := range []string{
-		"not started", "in design", "planned", "in progress", "shipped", "partially complete", "abandoned",
+		"not started", "in design", "designed", "planned", "in progress", "shipped", "partially complete", "abandoned",
 	} {
-		assert.Contains(t, rec.Body.String(), want, "the 400 body must name every one of the seven valid values")
+		assert.Contains(t, rec.Body.String(), want, "the 400 body must name every one of the eight valid values")
 	}
 }
 

@@ -311,7 +311,7 @@ type EntityMilestone struct {
 }
 
 // MilestoneStatus discriminates `milestone_status_event.status` (migration
-// 012, issue #2685, FR8, FR9) -- CHECK-constrained to exactly these seven
+// 012, issue #2685, FR8, FR9) -- CHECK-constrained to exactly these eight
 // values, shared verbatim by a MilestoneKindMilestone and a
 // MilestoneKindMilepebble row (FR9). Not a column on `milestone_ref`: the
 // current value is always derived from MilestoneStatusEventStore's
@@ -324,8 +324,12 @@ const (
 	// MilestoneStatusNotStarted is the derived answer when a milestone or
 	// milepebble has zero MilestoneStatusEvent rows -- the absence of a
 	// transition, never a seeded one (FR8).
-	MilestoneStatusNotStarted        MilestoneStatus = "not started"
-	MilestoneStatusInDesign          MilestoneStatus = "in design"
+	MilestoneStatusNotStarted MilestoneStatus = "not started"
+	MilestoneStatusInDesign   MilestoneStatus = "in design"
+	// MilestoneStatusDesigned is the rung between "in design" and "planned"
+	// (migration 019, issue #2963): a container whose scope is decided but
+	// which has not yet committed to a plan.
+	MilestoneStatusDesigned          MilestoneStatus = "designed"
 	MilestoneStatusPlanned           MilestoneStatus = "planned"
 	MilestoneStatusInProgress        MilestoneStatus = "in progress"
 	MilestoneStatusShipped           MilestoneStatus = "shipped"

@@ -477,7 +477,7 @@ var _ productDeliveryQuerier = (*slice.Querier)(nil)
 // slice.Querier.ListProductDelivery's own contract.
 type listProductDeliveryInput struct {
 	ProductID string   `json:"product_id" jsonschema:"The Product surrogate id to list delivery for, as a UUID string."`
-	Statuses  []string `json:"statuses,omitempty" jsonschema:"Optional list of MilestoneStatus values to filter to (see get_milestone_status for the fixed seven-value set) -- omitted or empty means all statuses."`
+	Statuses  []string `json:"statuses,omitempty" jsonschema:"Optional list of MilestoneStatus values to filter to (see get_milestone_status for the fixed eight-value set) -- omitted or empty means all statuses."`
 }
 
 // listProductDeliveryOutputSchema is list_product_delivery's advertised

@@ -429,25 +429,26 @@ func TestDeliveryPresenceFailsOnEmptyPage(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// 6. all seven statuses render, distinct classes, neutral fallback
+// 6. all eight statuses render, distinct classes, neutral fallback
 // ---------------------------------------------------------------------------
 
 // TestDeliveryAllStatusesRenderDistinctBadge (FR 4398c532): every one of
-// store.MilestoneStatus's seven values renders its human label and a
+// store.MilestoneStatus's eight values renders its human label and a
 // non-empty, non-neutral CSS class, so no status silently falls through to
 // the fallback badge.
 func TestDeliveryAllStatusesRenderDistinctBadge(t *testing.T) {
 	all := []store.MilestoneStatus{
 		store.MilestoneStatusNotStarted,
 		store.MilestoneStatusInDesign,
+		store.MilestoneStatusDesigned,
 		store.MilestoneStatusPlanned,
 		store.MilestoneStatusInProgress,
 		store.MilestoneStatusShipped,
 		store.MilestoneStatusPartiallyComplete,
 		store.MilestoneStatusAbandoned,
 	}
-	if len(all) != 7 {
-		t.Fatalf("expected the seven-value MilestoneStatus set, listed %d", len(all))
+	if len(all) != 8 {
+		t.Fatalf("expected the eight-value MilestoneStatus set, listed %d", len(all))
 	}
 
 	seen := map[string]store.MilestoneStatus{}
@@ -473,7 +474,7 @@ func TestDeliveryAllStatusesRenderDistinctBadge(t *testing.T) {
 			t.Errorf("status %q label not rendered", s)
 		}
 		_ = mID
-		// Distinct classes keep the seven states visually distinct.
+		// Distinct classes keep the eight states visually distinct.
 		if prev, dup := seen[class]; dup {
 			t.Errorf("statuses %q and %q share the class %q; they must be visually distinct", prev, s, class)
 		}
@@ -482,7 +483,7 @@ func TestDeliveryAllStatusesRenderDistinctBadge(t *testing.T) {
 }
 
 // TestDeliveryUnknownStatusUsesNeutralFallback pins that a genuinely
-// unknown status value (one outside the seven-value set) renders with the
+// unknown status value (one outside the eight-value set) renders with the
 // neutral status-other class, so adding a new status without a mapping is
 // caught rather than rendering an empty badge.
 func TestDeliveryUnknownStatusUsesNeutralFallback(t *testing.T) {

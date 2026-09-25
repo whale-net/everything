@@ -30,18 +30,20 @@ import (
 type setMilestoneStatusInput struct {
 	krillSessionInput
 	MilestoneID string  `json:"milestone_id" jsonschema:"The milestone or milepebble surrogate id, as a UUID string."`
-	Status      string  `json:"status" jsonschema:"One of: not started, in design, planned, in progress, shipped, partially complete, abandoned (FR8)."`
+	Status      string  `json:"status" jsonschema:"One of: not started, in design, designed, planned, in progress, shipped, partially complete, abandoned (FR8). Only the transitions handlers' edge table allows are accepted; the error names the legal alternatives."`
 	Note        *string `json:"note" jsonschema:"Optional free-text note attached to this transition."`
 }
 
-// RegisterSetMilestoneStatus registers set_milestone_status (FR8, FR9):
-// appends a new status transition via
-// store.MilestoneStatusEventStore.RecordTransition. A re-affirmation of
-// the same status is still appended as a new row, never a no-op (NFR2).
+// RegisterSetMilestoneStatus registers set_milestone_status (FR8, FR9,
+// issue #2963): appends a new status transition via
+// handlers.ApplyMilestoneStatus -- the same write path the HTTP surface
+// uses, so the transition edge table and the no-op-on-self-transition
+// rule cannot be enforced here and skipped there (LB7). Re-affirming the
+// status a container already holds is a no-op that writes no history row.
 func RegisterSetMilestoneStatus(reg *server.Registry, sessions store.SessionStore, statuses store.MilestoneStatusEventStore) {
 	server.RegisterWrite(reg, &mcp.Tool{
 		Name:        "set_milestone_status",
-		Description: "Record a new status transition for a milestone or milepebble (FR8, FR9) -- appended to history, never an overwrite (NFR2).",
+		Description: "Record a new status transition for a milestone or milepebble (FR8, FR9) -- appended to history, never an overwrite (NFR2). Only transitions the status edge table allows are accepted; re-setting the status already held writes nothing.",
 	}, []server.Persona{server.PersonaRequirementContributor, server.PersonaAgent, server.PersonaSwarmOperator}, func(ctx context.Context, _ *mcp.CallToolRequest, in setMilestoneStatusInput) (*mcp.CallToolResult, handlers.IDResponse, error) {
 		var zero handlers.IDResponse
 
@@ -60,9 +62,12 @@ func RegisterSetMilestoneStatus(reg *server.Registry, sessions store.SessionStor
 			return nil, zero, fmt.Errorf("status: must be one of the fixed FR8 values, got %q", in.Status)
 		}
 
-		event, err := statuses.RecordTransition(ctx, sess.ScopeID, milestoneID, status, in.Note, sess.Acting, sess.OnBehalfOf)
+		event, _, err := handlers.ApplyMilestoneStatus(ctx, statuses, sess.ScopeID, milestoneID, status, in.Note, sess.Acting, sess.OnBehalfOf)
 		if err != nil {
 			return nil, zero, err
+		}
+		if event.ID == uuid.Nil {
+			return nil, handlers.IDResponse{ID: ""}, nil
 		}
 		return nil, handlers.IDResponse{ID: event.ID.String()}, nil
 	})
