@@ -1,0 +1,22 @@
+--- a/python/build_targets.bzl
++++ b/python/build_targets.bzl
+@@ -199,7 +199,18 @@
+                 "google/protobuf/internal/test_util.py",
+                 "google/protobuf/internal/import_test_package/__init__.py",
+             ],
+-        ) + ["google/protobuf/internal/python_edition_defaults.py"],
++        ) + [
++            "google/protobuf/internal/python_edition_defaults.py",
++            # "google/protobuf/**/*.py" (above) doesn't match the top-level
++            # google/__init__.py sibling, so without this Bazel synthesizes an
++            # empty stub for it (--incompatible_default_to_explicit_init_py
++            # defaults to false) instead of using the real, pkgutil-based
++            # namespace-package __init__.py this file ships -- silently
++            # breaking `import google.<anything>` for every OTHER "google.*"
++            # pip package (google-auth, googleapis-common-protos, ...) that
++            # ends up sharing a py_binary's sys.path with this target.
++            "google/__init__.py",
++        ],
+     )
+ 
+     py_library(
