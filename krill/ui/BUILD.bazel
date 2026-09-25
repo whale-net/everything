@@ -57,7 +57,32 @@ go_binary(
 # no database, so this runs as part of `bazel test //krill/...`.
 go_test(
     name = "ui_test",
-    srcs = ["writes_test.go"],
+    srcs = [
+        "harness_test.go",
+        "writes_test.go",
+    ],
+    embed = [":ui_lib"],
+    deps = [
+        "//krill/store",
+        "//libs/go/htmxauth",
+        "@com_github_google_uuid//:uuid",
+        "@com_github_stretchr_testify//assert",
+        "@com_github_stretchr_testify//require",
+    ],
+)
+
+# The design-session write surface (design_write.go), driven through the
+# real form routes: an opening submission opens a session, a follow-up
+# appends an `answer` round, both attributed to the signed-in operator's
+# real (iss, sub) and neither ever writing a spec entity. Shares the
+# signed-in-operator harness (harness_test.go) with ui_test rather than
+# copying it, so both prove the same path through one fake IdP + fake api.
+go_test(
+    name = "design_write_test",
+    srcs = [
+        "design_write_test.go",
+        "harness_test.go",
+    ],
     embed = [":ui_lib"],
     deps = [
         "//krill/store",
