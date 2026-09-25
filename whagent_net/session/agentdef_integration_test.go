@@ -118,6 +118,34 @@ func TestAgentDefinitionStore_NilScope_RoundTripsThroughGetVersion(t *testing.T)
 	assert.Nil(t, got.Scope)
 }
 
+// TestAgentDefinitionStore_SystemPrompt_RoundTripsThroughGetVersion proves
+// an AgentDefinition written with a SystemPrompt (migration 015)
+// round-trips through GetVersion unchanged, and that leaving it unset
+// round-trips as nil rather than an empty string or an error -- the "no
+// system prompt configured" case this field's nullability exists for.
+func TestAgentDefinitionStore_SystemPrompt_RoundTripsThroughGetVersion(t *testing.T) {
+	ctx := context.Background()
+	s, _ := newStore(t)
+
+	def := newTestAgentDefinition("system-prompt-agent", 1)
+	def.SystemPrompt = strPtr("You are a helpful research assistant.")
+	require.NoError(t, s.AgentDefinitions().Upsert(ctx, def))
+
+	got, err := s.AgentDefinitions().GetVersion(ctx, "system-prompt-agent", 1)
+	require.NoError(t, err)
+	require.NotNil(t, got)
+	require.NotNil(t, got.SystemPrompt)
+	assert.Equal(t, "You are a helpful research assistant.", *got.SystemPrompt)
+
+	unset := newTestAgentDefinition("system-prompt-unset-agent", 1)
+	require.NoError(t, s.AgentDefinitions().Upsert(ctx, unset))
+
+	gotUnset, err := s.AgentDefinitions().GetVersion(ctx, "system-prompt-unset-agent", 1)
+	require.NoError(t, err)
+	require.NotNil(t, gotUnset)
+	assert.Nil(t, gotUnset.SystemPrompt)
+}
+
 // TestAgentDefinitionStore_ListScopes_DistinctSortedExcludingNull proves
 // ListScopes returns every distinct non-null Scope, sorted alphabetically,
 // deduplicated across agent_id/version, with no null-scope row surfaced.

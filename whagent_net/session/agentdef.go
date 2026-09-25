@@ -87,7 +87,13 @@ type AgentDefinition struct {
 	MaxToolIterations int
 	RequiredRole      *string
 	ToolLoadingMode   ToolLoadingMode
-	CreatedAt         time.Time
+	// SystemPrompt is an optional system-role instruction text for a
+	// session using this definition (migration 015). Nil means no system
+	// prompt is set -- the historical, still-default behavior. Storage
+	// only for now: nothing in worker/context.go reads this field into a
+	// model call yet.
+	SystemPrompt *string
+	CreatedAt    time.Time
 }
 
 // SessionAgent is a `session_agent` row (LB5/NFR6): the SCD2 history of
@@ -139,14 +145,14 @@ type agentDefinitionStore struct{ pool *pgxpool.Pool }
 
 var _ AgentDefinitionStore = agentDefinitionStore{}
 
-const agentDefinitionColumns = `id, agent_id, scope, version, model, model_definition_id, tool_set, max_turns, max_cost_usd, max_tool_iterations, required_role, tool_loading_mode, created_at`
+const agentDefinitionColumns = `id, agent_id, scope, version, model, model_definition_id, tool_set, max_turns, max_cost_usd, max_tool_iterations, required_role, tool_loading_mode, system_prompt, created_at`
 
 func scanAgentDefinition(row pgx.Row) (*AgentDefinition, error) {
 	var def AgentDefinition
 	var toolSet json.RawMessage
 	if err := row.Scan(
 		&def.ID, &def.AgentID, &def.Scope, &def.Version, &def.Model, &def.ModelDefinitionID, &toolSet,
-		&def.MaxTurns, &def.MaxCostUSD, &def.MaxToolIterations, &def.RequiredRole, &def.ToolLoadingMode, &def.CreatedAt,
+		&def.MaxTurns, &def.MaxCostUSD, &def.MaxToolIterations, &def.RequiredRole, &def.ToolLoadingMode, &def.SystemPrompt, &def.CreatedAt,
 	); err != nil {
 		return nil, err
 	}
@@ -236,8 +242,8 @@ func (s agentDefinitionStore) Upsert(ctx context.Context, def *AgentDefinition) 
 	}
 
 	err = s.pool.QueryRow(ctx, `
-		INSERT INTO agent_definition (agent_id, scope, version, model, model_definition_id, tool_set, max_turns, max_cost_usd, max_tool_iterations, required_role, tool_loading_mode)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+		INSERT INTO agent_definition (agent_id, scope, version, model, model_definition_id, tool_set, max_turns, max_cost_usd, max_tool_iterations, required_role, tool_loading_mode, system_prompt)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
 		ON CONFLICT (agent_id, version) DO UPDATE SET
 			scope = EXCLUDED.scope,
 			model = EXCLUDED.model,
@@ -247,9 +253,10 @@ func (s agentDefinitionStore) Upsert(ctx context.Context, def *AgentDefinition) 
 			max_cost_usd = EXCLUDED.max_cost_usd,
 			max_tool_iterations = EXCLUDED.max_tool_iterations,
 			required_role = EXCLUDED.required_role,
-			tool_loading_mode = EXCLUDED.tool_loading_mode
+			tool_loading_mode = EXCLUDED.tool_loading_mode,
+			system_prompt = EXCLUDED.system_prompt
 		RETURNING id, created_at
-	`, def.AgentID, def.Scope, def.Version, def.Model, def.ModelDefinitionID, toolSet, def.MaxTurns, def.MaxCostUSD, def.MaxToolIterations, def.RequiredRole, toolLoadingMode).Scan(&def.ID, &def.CreatedAt)
+	`, def.AgentID, def.Scope, def.Version, def.Model, def.ModelDefinitionID, toolSet, def.MaxTurns, def.MaxCostUSD, def.MaxToolIterations, def.RequiredRole, toolLoadingMode, def.SystemPrompt).Scan(&def.ID, &def.CreatedAt)
 	if err != nil {
 		return fmt.Errorf("upsert agent definition: %w", err)
 	}
