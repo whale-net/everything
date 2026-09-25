@@ -1,8 +1,9 @@
-"""krill's barebones operator web UI: Keycloak sign-in shell whose sole job
-is to give auth's `/authorize` endpoint (mounted here) a SignInURL to
-redirect a not-yet-signed-in caller to -- see main.go's package doc."""
+"""krill's operator web UI: Keycloak sign-in (which gives auth's
+`/authorize` endpoint its SignInURL) plus the persistent nav shell behind
+it -- ops console, design-session browser, spec+delivery browser, and the
+credential widget. See main.go's package doc."""
 
-load("@rules_go//go:def.bzl", "go_binary", "go_library")
+load("@rules_go//go:def.bzl", "go_binary", "go_library", "go_test")
 load("//tools/bazel:release.bzl", "release_app")
 
 go_library(
@@ -10,6 +11,9 @@ go_library(
     srcs = [
         "main.go",
         "auth.go",
+        "nav.go",
+        "routes.go",
+        "credentials_page.go",
     ],
     importpath = "github.com/whale-net/everything/krill/ui",
     visibility = ["//visibility:private"],
@@ -38,8 +42,15 @@ release_app(
     binary_name = ":ui",
     language = "go",
     domain = "krill",
-    description = "krill's barebones operator web UI: Keycloak sign-in shell backing the auth OAuth2 authorization-server front door",
+    description = "krill's operator web UI: Keycloak sign-in shell backing the auth OAuth2 authorization-server front door, plus the operator nav shell",
     app_type = "external-api",
     port = 8080,
     replicas = 1,
+)
+
+go_test(
+    name = "ui_lib_test",
+    srcs = ["nav_test.go"],
+    embed = [":ui_lib"],
+    deps = ["//libs/go/htmxauth"],
 )

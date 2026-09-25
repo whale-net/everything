@@ -79,13 +79,14 @@ pool (`libs/go/auth.NewCredentialStore`'s preflight). Migration
 every call (`main.go`'s `rejectingCredentialStore`) rather than failing to
 boot; the agent front door never depends on it either way.
 
-## `ui` (Keycloak sign-in shell, auth's `/authorize` front end)
+## `ui` (Keycloak sign-in plus the operator nav shell)
 
-`ui` is a barebones binary whose sole job is to give auth's
-`/authorize` endpoint (mounted here, not on `mcp`) a `SignInURL` to
-redirect a not-yet-signed-in caller to -- see `krill/ui/main.go`'s package
-doc and `ARCHITECTURE.md` "krill/ui and the auth front door" for why
-`mcp`'s own door had nowhere to send a caller before this binary existed.
+`ui` gives auth's `/authorize` endpoint (mounted here, not on `mcp`) a
+`SignInURL` to redirect a not-yet-signed-in caller to -- see
+`krill/ui/main.go`'s package doc and `ARCHITECTURE.md` "krill/ui and the
+auth front door" for why `mcp`'s own door had nowhere to send a caller
+before this binary existed -- and serves the operator nav shell behind
+that sign-in. It reads no variable the nav shell does not already read.
 It shares `PG_DATABASE_URL` with `api`/`mcp` (its own `ui_sessions` table,
 migration `007_ui_sessions`, plus the same `mcp_credential`/
 `mcp_oauth_client`/`mcp_auth_code` tables `mcp` verifies against,

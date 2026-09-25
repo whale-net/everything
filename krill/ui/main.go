@@ -1,19 +1,19 @@
-// Command ui is krill's barebones operator web UI: just enough of a shell
-// (Keycloak sign-in + a landing page) to give //libs/go/auth's
+// Command ui is krill's operator web UI. It is two things layered on one
+// binary: the Keycloak sign-in flow that gives //libs/go/auth's
 // `/authorize` endpoint (mounted here) somewhere to redirect a
-// not-yet-signed-in caller, per ProviderConfig.SignInURL. This is what
-// unblocks the auth (human) front door on krill/mcp
-// (krill/mcp/server/auth.go): before this binary existed, `/authorize`
-// had no SignInURL configured and just 401ed on an unresolved caller (see
-// ARCHITECTURE.md "krill/ui and the auth front door").
+// not-yet-signed-in caller, per ProviderConfig.SignInURL -- before this
+// binary existed, `/authorize` had no SignInURL configured and just 401ed
+// on an unresolved caller (see ARCHITECTURE.md "krill/ui and the auth front
+// door") -- and, behind that sign-in, the persistent nav shell (nav.go)
+// linking the ops console, the design-session browser, and the
+// spec+delivery browser, plus the credential widget that shell inherited
+// from the original single-page UI.
 //
-// There is no session list, no spec-entity browsing, and no admin
-// surface here -- krill's own PRODUCT.md roadmap defers a real web UI to
-// "Later" (C19). This binary exists solely to make the OAuth2
-// authorization-code + PKCE flow (discovery -> registration -> sign-in ->
-// `/authorize` -> `/token`) actually completable, mirroring
-// whagent_net/ui's own auth wiring (whagent_net/ui/auth.go)
-// stripped down to that one job.
+// The OAuth2 authorization-code + PKCE flow (discovery -> registration ->
+// sign-in -> `/authorize` -> `/token`) must stay completable regardless of
+// what the shell grows: every one of its pages sits behind
+// app.auth.RequireAuthFunc, and none of them is on the OAuth2 path
+// (auth.go's setupMCPAuth mounts that, plus the self-serve credential API).
 package main
 
 import (
@@ -264,6 +264,12 @@ func run() error {
 // "/logout" are the Keycloak sign-in flow's own public routes; every
 // other app route requires a signed-in operator.
 //
+// The signed-in app surface is the persistent nav shell (FR 85a8b33c):
+// "/{$}" is its home page and each nav area's own prefix is registered
+// here (see nav.go's navAreas). The home page is registered as "/{$}"
+// rather than the old catch-all "/" so an unknown path 404s instead of
+// silently rendering the landing page.
+//
 // "/login" is this binary's chosen route name, but
 // libs/go/htmxauth.Authenticator's RequireAuth/WithAccessToken hardcode
 // their own unauthenticated-redirect target to "/auth/login" (not
@@ -301,125 +307,27 @@ func (app *App) setupRoutes(mux *http.ServeMux) {
 		panic(err)
 	}
 
-	// The one shell page this barebones binary has: confirms sign-in
-	// worked and links to where an MCP client would actually connect.
-	mux.HandleFunc("/", app.auth.RequireAuthFunc(app.handleIndex))
+	// The signed-in shell (FR 85a8b33c): a home page plus one root per
+	// nav area, every one of them wrapped in the same chrome by
+	// renderShell. Each area's sub-pages register under its prefix
+	// alongside its root.
+	app.mountShellRoutes(mux)
+}
+
+// mountShellRoutes registers the persistent nav shell's pages, each behind
+// the sign-in gate. Split out of setupRoutes so the shell's tests mount
+// the same registrations production does, rather than a copy that could
+// drift from it.
+func (app *App) mountShellRoutes(mux *http.ServeMux) {
+	mux.HandleFunc("/{$}", app.auth.RequireAuthFunc(app.handleShellHome))
+	mux.HandleFunc(opsPath, app.auth.RequireAuthFunc(app.handleOps))
+	mux.HandleFunc(designPath, app.auth.RequireAuthFunc(app.handleDesign))
+	mux.HandleFunc(specPath, app.auth.RequireAuthFunc(app.handleSpec))
+	mux.HandleFunc(credentialsPath, app.auth.RequireAuthFunc(app.handleCredentials))
 }
 
 func handleHealthz(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusOK)
 	fmt.Fprint(w, `{"status":"ok"}`)
-}
-
-// handleIndex is the barebones authenticated landing page -- just enough
-// shell to prove a sign-in round-tripped correctly, plus a self-serve
-// credential widget (inline vanilla JS against POST/GET /credentials and
-// DELETE /credentials/{id}, mounted by setupRoutes via
-// app.mcpProvider.MountSelfServe) so an operator can mint a static bearer
-// token for a non-OAuth2 MCP client without a devtools console. No session
-// list, no spec browsing: see this file's package doc comment for why --
-// that deferral is about a full admin surface, not this narrow,
-// already-scoped widget.
-func (app *App) handleIndex(w http.ResponseWriter, r *http.Request) {
-	user := htmxauth.GetUser(r.Context())
-	w.Header().Set("Content-Type", "text/html; charset=utf-8")
-	fmt.Fprintf(w, `<!DOCTYPE html>
-<html>
-<head><title>krill</title></head>
-<body>
-<h1>krill</h1>
-<p>Signed in as %s.</p>
-<p><a href="/logout">Sign out</a></p>
-
-<h2>Credentials</h2>
-<p>Mint a static bearer token for an MCP client that can't run the OAuth2 sign-in flow.</p>
-<button id="generate-btn" type="button">Generate a token</button>
-<div id="new-token" style="display:none; margin-top: 0.5em;">
-  <p><strong>Copy this token now -- it will not be shown again after you leave this page.</strong></p>
-  <input id="new-token-value" type="text" readonly style="width: 100%%; font-family: monospace;">
-</div>
-
-<h3>Existing credentials</h3>
-<button id="refresh-btn" type="button">Refresh</button>
-<table id="credentials-table">
-  <thead>
-    <tr><th>ID</th><th>Created</th><th>Status</th><th></th></tr>
-  </thead>
-  <tbody id="credentials-body"></tbody>
-</table>
-
-<script>
-function escapeHTML(s) {
-  const div = document.createElement('div');
-  div.textContent = s;
-  return div.innerHTML;
-}
-
-async function refreshCredentials() {
-  const body = document.getElementById('credentials-body');
-  body.innerHTML = '';
-  const res = await fetch('/credentials', { method: 'GET' });
-  if (!res.ok) {
-    body.innerHTML = '<tr><td colspan="4">failed to load credentials</td></tr>';
-    return;
-  }
-  const data = await res.json();
-  const creds = data.credentials || [];
-  if (creds.length === 0) {
-    body.innerHTML = '<tr><td colspan="4">no credentials yet</td></tr>';
-    return;
-  }
-  for (const cred of creds) {
-    const row = document.createElement('tr');
-    const status = cred.revoked_at ? 'revoked' : 'active';
-    row.innerHTML =
-      '<td>' + escapeHTML(cred.id) + '</td>' +
-      '<td>' + escapeHTML(cred.created_at) + '</td>' +
-      '<td>' + escapeHTML(status) + '</td>' +
-      '<td></td>';
-    if (!cred.revoked_at) {
-      const revokeBtn = document.createElement('button');
-      revokeBtn.type = 'button';
-      revokeBtn.textContent = 'Revoke';
-      revokeBtn.addEventListener('click', function () { revokeCredential(cred.id); });
-      row.lastElementChild.appendChild(revokeBtn);
-    }
-    body.appendChild(row);
-  }
-}
-
-async function revokeCredential(id) {
-  await fetch('/credentials/' + encodeURIComponent(id), { method: 'DELETE' });
-  refreshCredentials();
-}
-
-document.getElementById('generate-btn').addEventListener('click', async function () {
-  const res = await fetch('/credentials', { method: 'POST' });
-  if (!res.ok) {
-    alert('failed to generate token');
-    return;
-  }
-  const data = await res.json();
-  document.getElementById('new-token-value').value = data.token;
-  document.getElementById('new-token').style.display = 'block';
-  refreshCredentials();
-});
-
-document.getElementById('refresh-btn').addEventListener('click', refreshCredentials);
-
-refreshCredentials();
-</script>
-</body>
-</html>`, htmlEscape(user.PreferredUsername))
-}
-
-func htmlEscape(s string) string {
-	replacer := strings.NewReplacer(
-		"&", "&amp;",
-		"<", "&lt;",
-		">", "&gt;",
-		`"`, "&quot;",
-	)
-	return replacer.Replace(s)
 }
