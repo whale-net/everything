@@ -18,6 +18,7 @@ go_library(
         "ops.go",
         "routes.go",
         "credentials_page.go",
+        "design_page.go",
         "identity.go",
         "writeclient.go",
         "writes.go",
@@ -99,5 +100,23 @@ go_test(
         "//krill/store",
         "@com_github_google_uuid//:uuid",
         "@com_github_stretchr_testify//assert",
+    ],
+)
+
+# The design-session read surface, against in-memory fakes of the two store
+# accessors it reads: the session list (open + signed-off, each a working
+# link), one session's full ordered revision-event log matching
+# get_design_session's, and its currently-open questions matching
+# list_open_questions -- plus the 400/404/500 error paths.
+go_test(
+    name = "design_test",
+    srcs = ["design_page_test.go"],
+    embed = [":ui_lib"],
+    deps = [
+        "//krill/api/handlers",
+        "//krill/store",
+        "@com_github_google_uuid//:uuid",
+        "@com_github_stretchr_testify//assert",
+        "@com_github_stretchr_testify//require",
     ],
 )

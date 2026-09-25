@@ -93,12 +93,13 @@ func (app *App) handleOps(w http.ResponseWriter, r *http.Request) {
 	renderShell(w, r, "Ops console", opsPath, renderPage(opsIndexTemplate, opsIndexLinks))
 }
 
-// handleDesign is the design-session browser root.
+// handleDesign is the design-session browser root. It is the entry point
+// into the read sub-pages registered under this prefix in mountShellRoutes
+// (design_page.go): a product's session list and one session's
+// revision-event log + open questions. The root itself just takes a product
+// id and navigates to that product's session list.
 func (app *App) handleDesign(w http.ResponseWriter, r *http.Request) {
-	renderShell(w, r, "Design sessions", designPath, renderPage(areaTemplate, areaPage{
-		Heading: "No design sessions yet.",
-		Detail:  "The session list, a session's revisions, and its open questions land here.",
-	}))
+	renderShell(w, r, "Design sessions", designPath, renderPage(designRootTemplate, nil))
 }
 
 // handleSpec is the spec + delivery browser root.
