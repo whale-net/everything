@@ -30,6 +30,17 @@ WorkflowEnvironment/time-skipping harness, the same constraint
 tests/test_whagent_workflow.py documents. The handler's choice of
 `SlackContextGeminiWorkflow.run` is asserted directly, so the chain is pinned
 from both ends.
+
+Red-proof. Each mutation below was applied, run, and reverted; the listed
+tests went red, which is what makes the rest of this file load-bearing rather
+than vacuous:
+
+  * say() called twice in the handler        -> answers-exactly-once, per-user
+  * previous_context dropped from the prompt -> grounding-in-stored-rows,
+                                                influenced-by-previous-answer
+  * insert_genai_text skipped               -> 12 tests, incl. the audit-row ones
+  * get_slack_channel_context returns []     -> the FR 00e4b7f8 xfail XPASSes
+                                                and strict-xfail fails it
 """
 
 import asyncio
