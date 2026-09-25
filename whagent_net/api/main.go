@@ -15,6 +15,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"strings"
 	"sync"
 	"syscall"
 	"time"
@@ -167,7 +168,7 @@ func run() error {
 		defer eventsConsumer.Close() //nolint:errcheck
 	}
 
-	sessionServer := handlers.NewSessionServer(ctx, store, grpcOIDCIssuer, temporalClient, temporalCfg.TaskQueue, catalog, eventsConsumer)
+	sessionServer := handlers.NewSessionServer(ctx, store, grpcOIDCIssuer, temporalClient, temporalCfg.TaskQueue, catalog, eventsConsumer, parseOnBehalfOfAllowedClientIDs(os.Getenv("WHAGENT_ON_BEHALF_OF_ALLOWED_CLIENT_IDS")))
 
 	// agentDefs feeds DevRoles below: DevRoles matters only in
 	// AuthModeNone, where it makes the injected dev Claims carry every
@@ -353,4 +354,23 @@ func getEnv(key, def string) string {
 		return v
 	}
 	return def
+}
+
+// parseOnBehalfOfAllowedClientIDs splits the comma-separated
+// WHAGENT_ON_BEHALF_OF_ALLOWED_CLIENT_IDS value into the Keycloak client_id
+// allowlist that decides which callers may set StartSessionRequest.on_behalf_of
+// (FR9/FR11/FR12, NFR1). Surrounding whitespace on each entry is trimmed and
+// empty entries (from trailing/leading/doubled commas, or an all-whitespace
+// value) are ignored, so "a, b,,c" yields exactly ["a" "b" "c"]. An unset or
+// empty value yields an empty (non-nil) slice, which the SessionServer treats
+// as "no client may delegate" -- the fail-closed default.
+func parseOnBehalfOfAllowedClientIDs(raw string) []string {
+	parts := strings.Split(raw, ",")
+	out := make([]string, 0, len(parts))
+	for _, p := range parts {
+		if id := strings.TrimSpace(p); id != "" {
+			out = append(out, id)
+		}
+	}
+	return out
 }

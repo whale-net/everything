@@ -73,7 +73,7 @@ func newServiceAccountTestServer(t *testing.T) (*handlers.SessionServer, *sessio
 
 	store := session.New(db.Pool, nil)
 	temporal := &fakeTemporalClient{}
-	srv := handlers.NewSessionServer(ctx, store, testIssuer, temporal, "test-task-queue", nil, nil)
+	srv := handlers.NewSessionServer(ctx, store, testIssuer, temporal, "test-task-queue", nil, nil, nil)
 	return srv, store, temporal
 }
 

@@ -49,3 +49,28 @@ func TestDevRolesCarrySeededRequiredRoles(t *testing.T) {
 
 	assert.Contains(t, captured.Roles, "whagent-audience-score-system-research")
 }
+
+// TestParseOnBehalfOfAllowedClientIDs proves the WHAGENT_ON_BEHALF_OF_ALLOWED_CLIENT_IDS
+// parser (main.go) splits a comma-separated list the way main.go documents:
+// surrounding whitespace on each entry is trimmed and empty entries are
+// dropped, so "a, b,,c" yields exactly [a b c] and an empty/unset value
+// yields an empty (fail-closed) allowlist.
+func TestParseOnBehalfOfAllowedClientIDs(t *testing.T) {
+	tests := []struct {
+		name string
+		raw  string
+		want []string
+	}{
+		{"trims and drops empty entries", "a, b,,c", []string{"a", "b", "c"}},
+		{"empty value yields empty allowlist", "", []string{}},
+		{"all whitespace yields empty allowlist", "   ", []string{}},
+		{"single entry", "friendly-computing-machine", []string{"friendly-computing-machine"}},
+		{"trims outer whitespace", "  a , b  ", []string{"a", "b"}},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			assert.Equal(t, tc.want, parseOnBehalfOfAllowedClientIDs(tc.raw))
+		})
+	}
+}
