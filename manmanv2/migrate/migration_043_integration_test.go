@@ -34,6 +34,7 @@ import (
 
 	"github.com/whale-net/everything/libs/go/dbtest"
 	"github.com/whale-net/everything/libs/go/migrate"
+	"github.com/whale-net/everything/manmanv2/migrate/schema"
 )
 
 // openMigrateTestDB043 mirrors migration_042_integration_test.go's helper --
@@ -146,7 +147,7 @@ func indexExists043(ctx context.Context, t *testing.T, db *dbtest.Postgres, inde
 func migrateTo42_043(ctx context.Context, t *testing.T, db *dbtest.Postgres, sqlDB *sql.DB) *migrate.Runner {
 	t.Helper()
 
-	runner := migrate.NewRunner(sqlDB, migrations, "migrations")
+	runner := migrate.NewRunner(sqlDB, schema.Migrations, schema.Dir)
 
 	latest, err := runner.LatestVersion()
 	if err != nil {
@@ -181,7 +182,7 @@ func TestMigration043_AppliesOnTopOfFullHistoryAndDropsTable(t *testing.T) {
 	db := dbtest.NewPostgres(ctx, t, dbtest.Options{})
 	sqlDB := openMigrateTestDB043(t, db)
 
-	runner := migrate.NewRunner(sqlDB, migrations, "migrations")
+	runner := migrate.NewRunner(sqlDB, schema.Migrations, schema.Dir)
 	// Target version 43 explicitly rather than Up() (which now also
 	// applies 044) -- this test is about migration 043 specifically, not
 	// "whatever the latest migration happens to be".
@@ -320,7 +321,7 @@ func TestMigration043_DownRecreatesEmptyTable(t *testing.T) {
 	db := dbtest.NewPostgres(ctx, t, dbtest.Options{})
 	sqlDB := openMigrateTestDB043(t, db)
 
-	runner := migrate.NewRunner(sqlDB, migrations, "migrations")
+	runner := migrate.NewRunner(sqlDB, schema.Migrations, schema.Dir)
 	// Target version 43 explicitly rather than Up() (which now also
 	// applies 044) -- same rationale as the other migration integration
 	// tests' use of Migrate(N) over a relative Up()/Steps() call.

@@ -512,9 +512,11 @@ service ManManAPI {
 │
 ├── migrate/                     # Migration tool (control-migration)
 │   ├── main.go                  # CLI runner using libs/go/migrate
-│   ├── migrations/              # Embedded SQL migration files
-│   │   ├── 001_initial_schema.up.sql
-│   │   └── 001_initial_schema.down.sql
+│   └── schema/                  # Importable embed.FS of the SQL
+│       ├── schema.go            # Exports Migrations + Dir
+│       └── migrations/          # Embedded SQL migration files
+│           ├── 001_initial_schema.up.sql
+│           └── 001_initial_schema.down.sql
 │   └── BUILD.bazel              # release_app for migration job
 │
 ├── protos/                      # Protobuf definitions (planned)

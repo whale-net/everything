@@ -23,6 +23,7 @@ import (
 
 	"github.com/whale-net/everything/libs/go/dbtest"
 	"github.com/whale-net/everything/libs/go/migrate"
+	"github.com/whale-net/everything/manmanv2/migrate/schema"
 )
 
 // openMigrateTestDB opens a *sql.DB against db's isolated dbtest
@@ -56,7 +57,7 @@ func TestMigration036_AppliesOnTopOfFullHistoryAndCreatesExpectedShape(t *testin
 	db := dbtest.NewPostgres(ctx, t, dbtest.Options{})
 	sqlDB := openMigrateTestDB(t, db)
 
-	runner := migrate.NewRunner(sqlDB, migrations, "migrations")
+	runner := migrate.NewRunner(sqlDB, schema.Migrations, schema.Dir)
 
 	latest, err := runner.LatestVersion()
 	if err != nil {
@@ -160,7 +161,7 @@ func TestMigration036_RollsBackCleanlyToPriorVersion(t *testing.T) {
 	db := dbtest.NewPostgres(ctx, t, dbtest.Options{})
 	sqlDB := openMigrateTestDB(t, db)
 
-	runner := migrate.NewRunner(sqlDB, migrations, "migrations")
+	runner := migrate.NewRunner(sqlDB, schema.Migrations, schema.Dir)
 
 	if err := runner.Up(); err != nil {
 		t.Fatalf("Up: %v", err)

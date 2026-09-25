@@ -4,9 +4,9 @@ load("//tools/bazel:release.bzl", "release_app")
 go_binary(
     name = "control-migration",
     srcs = ["main.go"],
-    embedsrcs = glob(["migrations/*.sql"]),
     deps = [
         "//libs/go/migrate",
+        "//manmanv2/migrate/schema",
     ],
     visibility = ["//visibility:public"],
 )
@@ -33,11 +33,7 @@ go_test(
     name = "migration_037_integration_test",
     size = "large",
     timeout = "long",
-    srcs = [
-        "main.go",
-        "migration_037_integration_test.go",
-    ],
-    embedsrcs = glob(["migrations/*.sql"]),
+    srcs = ["migration_037_integration_test.go"],
     gotags = ["integration"],
     tags = [
         "external",
@@ -50,6 +46,7 @@ go_test(
     deps = [
         "//libs/go/dbtest",
         "//libs/go/migrate",
+        "//manmanv2/migrate/schema",
         "@com_github_jackc_pgx_v5//stdlib",
     ],
 )
@@ -59,11 +56,7 @@ go_test(
     name = "migration_036_integration_test",
     size = "large",
     timeout = "long",
-    srcs = [
-        "main.go",
-        "migration_036_integration_test.go",
-    ],
-    embedsrcs = glob(["migrations/*.sql"]),
+    srcs = ["migration_036_integration_test.go"],
     gotags = ["integration"],
     tags = [
         "external",
@@ -76,6 +69,7 @@ go_test(
     deps = [
         "//libs/go/dbtest",
         "//libs/go/migrate",
+        "//manmanv2/migrate/schema",
         "@com_github_jackc_pgx_v5//stdlib",
     ],
 )
@@ -89,11 +83,7 @@ go_test(
     name = "migration_038_integration_test",
     size = "large",
     timeout = "long",
-    srcs = [
-        "main.go",
-        "migration_038_integration_test.go",
-    ],
-    embedsrcs = glob(["migrations/*.sql"]),
+    srcs = ["migration_038_integration_test.go"],
     gotags = ["integration"],
     tags = [
         "external",
@@ -106,6 +96,7 @@ go_test(
     deps = [
         "//libs/go/dbtest",
         "//libs/go/migrate",
+        "//manmanv2/migrate/schema",
         "@com_github_jackc_pgx_v5//stdlib",
     ],
 )
@@ -120,11 +111,7 @@ go_test(
     name = "migration_039_integration_test",
     size = "large",
     timeout = "long",
-    srcs = [
-        "main.go",
-        "migration_039_integration_test.go",
-    ],
-    embedsrcs = glob(["migrations/*.sql"]),
+    srcs = ["migration_039_integration_test.go"],
     gotags = ["integration"],
     tags = [
         "external",
@@ -137,6 +124,7 @@ go_test(
     deps = [
         "//libs/go/dbtest",
         "//libs/go/migrate",
+        "//manmanv2/migrate/schema",
         "@com_github_jackc_pgx_v5//stdlib",
     ],
 )
@@ -155,11 +143,7 @@ go_test(
     name = "migration_040_integration_test",
     size = "large",
     timeout = "long",
-    srcs = [
-        "main.go",
-        "migration_040_integration_test.go",
-    ],
-    embedsrcs = glob(["migrations/*.sql"]),
+    srcs = ["migration_040_integration_test.go"],
     gotags = ["integration"],
     tags = [
         "external",
@@ -172,6 +156,7 @@ go_test(
     deps = [
         "//libs/go/dbtest",
         "//libs/go/migrate",
+        "//manmanv2/migrate/schema",
         "@com_github_jackc_pgx_v5//stdlib",
     ],
 )
@@ -189,11 +174,7 @@ go_test(
     name = "migration_041_integration_test",
     size = "large",
     timeout = "long",
-    srcs = [
-        "main.go",
-        "migration_041_integration_test.go",
-    ],
-    embedsrcs = glob(["migrations/*.sql"]),
+    srcs = ["migration_041_integration_test.go"],
     gotags = ["integration"],
     tags = [
         "external",
@@ -206,6 +187,7 @@ go_test(
     deps = [
         "//libs/go/dbtest",
         "//libs/go/migrate",
+        "//manmanv2/migrate/schema",
         "@com_github_jackc_pgx_v5//stdlib",
     ],
 )
@@ -227,11 +209,7 @@ go_test(
     name = "migration_042_integration_test",
     size = "large",
     timeout = "long",
-    srcs = [
-        "main.go",
-        "migration_042_integration_test.go",
-    ],
-    embedsrcs = glob(["migrations/*.sql"]),
+    srcs = ["migration_042_integration_test.go"],
     gotags = ["integration"],
     tags = [
         "external",
@@ -244,6 +222,7 @@ go_test(
     deps = [
         "//libs/go/dbtest",
         "//libs/go/migrate",
+        "//manmanv2/migrate/schema",
         "@com_github_jackc_pgx_v5//stdlib",
     ],
 )
@@ -263,11 +242,7 @@ go_test(
     name = "migration_043_integration_test",
     size = "large",
     timeout = "long",
-    srcs = [
-        "main.go",
-        "migration_043_integration_test.go",
-    ],
-    embedsrcs = glob(["migrations/*.sql"]),
+    srcs = ["migration_043_integration_test.go"],
     gotags = ["integration"],
     tags = [
         "external",
@@ -280,6 +255,7 @@ go_test(
     deps = [
         "//libs/go/dbtest",
         "//libs/go/migrate",
+        "//manmanv2/migrate/schema",
         "@com_github_jackc_pgx_v5//stdlib",
     ],
 )
@@ -297,11 +273,7 @@ go_test(
     name = "migration_044_integration_test",
     size = "large",
     timeout = "long",
-    srcs = [
-        "main.go",
-        "migration_044_integration_test.go",
-    ],
-    embedsrcs = glob(["migrations/*.sql"]),
+    srcs = ["migration_044_integration_test.go"],
     gotags = ["integration"],
     tags = [
         "external",
@@ -314,6 +286,7 @@ go_test(
     deps = [
         "//libs/go/dbtest",
         "//libs/go/migrate",
+        "//manmanv2/migrate/schema",
         "@com_github_jackc_pgx_v5//stdlib",
     ],
 )
@@ -333,11 +306,7 @@ go_test(
     name = "migration_046_integration_test",
     size = "large",
     timeout = "long",
-    srcs = [
-        "main.go",
-        "migration_046_integration_test.go",
-    ],
-    embedsrcs = glob(["migrations/*.sql"]),
+    srcs = ["migration_046_integration_test.go"],
     gotags = ["integration"],
     tags = [
         "external",
@@ -350,6 +319,7 @@ go_test(
     deps = [
         "//libs/go/dbtest",
         "//libs/go/migrate",
+        "//manmanv2/migrate/schema",
         "@com_github_jackc_pgx_v5//stdlib",
     ],
 )

@@ -19,6 +19,7 @@ Active game server orchestration platform. Split-plane architecture: cloud contr
 - [processor/README.md](processor/README.md) — Event processor overview
 - [processor/VERIFICATION.md](processor/VERIFICATION.md) — Verifying processor behavior
 - [log-processor/README.md](log-processor/README.md) — Log processing pipeline
+- [migrate/README.md](migrate/README.md) — Control-plane migration runner and the importable `migrate/schema` migration embed
 - [host/DEPLOYMENT.md](host/DEPLOYMENT.md) — Bare metal host manager deployment
 - [host/RESOLVER.md](host/RESOLVER.md) — Self-updating docker-compose deployment: resolver sidecar polls App Registry and redeploys `host-manager` automatically
 
