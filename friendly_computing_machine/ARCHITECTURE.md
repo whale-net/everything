@@ -22,7 +22,6 @@ prompted with a one-time link (see below) instead of being given a session.
 | Bot (Socket Mode) | `bot run-slack-socket-app` | Slack event handling; queues work, posts replies. |
 | Task pool | `bot run-taskpool` | Background execution for bot tasks. |
 | Workflow worker | `workflow run` | Temporal worker that runs the long-running workflows and calls whagent-net. |
-| Subscriber | `subscribe run` | Consumes ManMan RabbitMQ status notifications. |
 | Identity-link web | `web run` | FastAPI app that performs the browser OIDC login and writes the Slack→Keycloak mapping. |
 | Migration job | `migration run` | Applies Alembic migrations. |
 
@@ -81,8 +80,8 @@ Multi-participant attribution inside an already-linked thread is out of scope.
 - **whagent-net** — `@mention`-triggered AI sessions. The bot queues a turn, the workflow worker calls
   whagent-net's `api` over gRPC with a service-account Keycloak token, and the reply is posted back to
   the Slack thread. See [docs/whagent_integration.md](docs/whagent_integration.md).
-- **ManMan** — `subscribe` consumes status notifications over RabbitMQ. See
-  [docs/manman_subscribe.md](docs/manman_subscribe.md).
+- **ManMan** — the RabbitMQ notification path FCM used to relay manman V1 status events over is gone;
+  the connection variables and the route tables behind it stay for the replacement path.
 - **Keycloak** — whagent-net service accounts (`WHAGENT_*`) and the web app's confidential browser-login
   client (`FCM_OIDC_*`) both authenticate against the same realm. See [ENV.md](ENV.md).
 - **ArgoCD** — deploy notifications. See [docs/argocd-integration.md](docs/argocd-integration.md).

@@ -59,11 +59,6 @@ APPS = {
         'bazel_target': '//friendly_computing_machine:taskpool_image_load',
         'image_name': 'friendly-computing-machine-taskpool',
     },
-    'subscribe': {
-        'enabled_env': 'FCM_ENABLE_SUBSCRIBE',
-        'bazel_target': '//friendly_computing_machine:subscribe_image_load',
-        'image_name': 'friendly-computing-machine-subscribe',
-    },
     'worker': {
         'enabled_env': 'FCM_ENABLE_WORKER',
         'bazel_target': '//friendly_computing_machine:worker_image_load',

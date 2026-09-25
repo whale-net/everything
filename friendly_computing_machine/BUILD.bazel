@@ -65,24 +65,6 @@ release_app(
 )
 
 release_app(
-    name = "subscribe",
-    app_type = "worker",
-    args = [
-        "subscribe",
-        "--log-otlp",
-        "run",
-        "--skip-migration-check",
-    ],
-    binary_name = "//friendly_computing_machine/src:fcm_cli",
-    description = "RabbitMQ subscriber for ManMan status notifications",
-    domain = "friendly-computing-machine",
-    health_check_enabled = False,
-    language = "python",
-    port = 7654,
-    replicas = 1,
-)
-
-release_app(
     name = "worker",
     app_type = "worker",
     args = [
@@ -113,7 +95,7 @@ release_app(
     description = "OIDC Slack-to-Keycloak identity link web endpoint for Friendly Computing Machine",
     domain = "friendly-computing-machine",
     fastapi_app = "friendly_computing_machine.src.friendly_computing_machine.web.app:app",
-    # fcm_cli is a shared multi-command binary (bot/worker/subscribe/web/...); importing
+    # fcm_cli is a shared multi-command binary (bot/worker/web/...); importing
     # web.app's module through it for spec generation would drag in unrelated subcommands'
     # deps (e.g. whagent's proto library, which ships its own native "google" namespace
     # package that collides with the OTLP exporter's "google.rpc" import). Point OpenAPI
@@ -149,7 +131,6 @@ release_app(
 FCM_APPS = [
     ":bot_metadata",
     ":taskpool_metadata",
-    ":subscribe_metadata",
     ":worker_metadata",
     ":web_metadata",
     ":migration_metadata",
