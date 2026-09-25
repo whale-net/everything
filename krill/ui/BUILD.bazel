@@ -82,3 +82,17 @@ go_test(
     embed = [":ui_lib"],
     deps = ["//libs/go/htmxauth"],
 )
+
+# Field-parity coverage for the ops console's read views: each row mapper
+# presents the store row's subject pairs and target identity the same way
+# the GET /console/* wire does.
+go_test(
+    name = "ui_ops_test",
+    srcs = ["ops_test.go"],
+    embed = [":ui_lib"],
+    deps = [
+        "//krill/store",
+        "@com_github_google_uuid//:uuid",
+        "@com_github_stretchr_testify//assert",
+    ],
+)

@@ -126,7 +126,27 @@ func opsNextHref(path, nextToken string, pageSize int) string {
 // Display helpers. Subjects and timestamps are pre-formatted here so the
 // templates stay free of pointer/reach-into-store logic.
 
-func opsSubject(s store.Subject) string { return s.Iss + " " + s.Sub }
+// opsSubject renders one subject triple readably. An unset subject (a
+// claim taken with no on-behalf-of, or a cancelled-by that is itself the
+// acting identity) renders as "-" rather than a bare space, so an empty
+// cell is visibly empty and not a formatting bug.
+func opsSubject(s store.Subject) string {
+	if s.Iss == "" && s.Sub == "" {
+		return "-"
+	}
+	return s.Iss + " " + s.Sub
+}
+
+// opsActor renders the acting subject with its kind ("human"/"service"),
+// which is the part an operator scans for first -- a swarm-operator UI
+// where a claim reads as a human acting for a service reads wrong.
+func opsActor(s store.Subject) string {
+	base := opsSubject(s)
+	if base == "-" || s.Kind == "" {
+		return base
+	}
+	return base + " (" + string(s.Kind) + ")"
+}
 
 func opsTime(t time.Time) string { return t.Format(time.RFC3339) }
 
@@ -162,32 +182,36 @@ func (app *App) handleClaimedTasks(w http.ResponseWriter, r *http.Request) {
 }
 
 type claimedRow struct {
-	TaskID   string
-	Title    string
-	Delivery string
-	Claimant string
-	Lane     string
-	Lease    string
-	Attempts int
+	TaskID     string
+	Title      string
+	Delivery   string
+	Session    string
+	Claimant   string
+	OnBehalfOf string
+	Lane       string
+	Lease      string
+	Attempts   int
 }
 
 func newClaimedRow(r store.ClaimedTaskRow) claimedRow {
 	return claimedRow{
-		TaskID:   r.TaskID.String(),
-		Title:    r.Title,
-		Delivery: string(r.DeliveryRef.Kind) + ": " + r.DeliveryRef.Title,
-		Claimant: opsSubject(r.ClaimantActing),
-		Lane:     string(r.CurrentLane),
-		Lease:    opsTime(r.LeaseExpiresAt),
-		Attempts: r.AttemptCount,
+		TaskID:     r.TaskID.String(),
+		Title:      r.Title,
+		Delivery:   string(r.DeliveryRef.Kind) + ": " + r.DeliveryRef.Title,
+		Session:    r.ClaimantSessionID.String(),
+		Claimant:   opsActor(r.ClaimantActing),
+		OnBehalfOf: opsSubject(r.ClaimantOnBehalfOf),
+		Lane:       string(r.CurrentLane),
+		Lease:      opsTime(r.LeaseExpiresAt),
+		Attempts:   r.AttemptCount,
 	}
 }
 
 var claimedTableTemplate = template.Must(template.New("claimed").Parse(`<table>
-<thead><tr><th>Task</th><th>Delivery</th><th>Claimant</th><th>Lane</th><th>Lease expires</th><th>Attempts</th></tr></thead>
+<thead><tr><th>Task</th><th>Delivery</th><th>Claimant</th><th>On behalf of</th><th>Lane</th><th>Lease expires</th><th>Attempts</th></tr></thead>
 <tbody>
-{{range .}}<tr><td>{{.TaskID}}<br>{{.Title}}</td><td>{{.Delivery}}</td><td>{{.Claimant}}</td><td>{{.Lane}}</td><td>{{.Lease}}</td><td>{{.Attempts}}</td></tr>
-{{else}}<tr><td colspan="6">No claimed tasks.</td></tr>
+{{range .}}<tr><td>{{.TaskID}}<br>{{.Title}}</td><td>{{.Delivery}}</td><td>{{.Claimant}}<br><small>session {{.Session}}</small></td><td>{{.OnBehalfOf}}</td><td>{{.Lane}}</td><td>{{.Lease}}</td><td>{{.Attempts}}</td></tr>
+{{else}}<tr><td colspan="7">No claimed tasks.</td></tr>
 {{end}}</tbody></table>`))
 
 // handleEscalatedTasks renders the escalated-task console view (FR5): every
@@ -222,16 +246,17 @@ func (app *App) handleEscalatedTasks(w http.ResponseWriter, r *http.Request) {
 }
 
 type escalatedRow struct {
-	TaskID   string
-	Title    string
-	Delivery string
-	Reason   string
-	Counter  string
-	Lane     string
-	At       string
-	Actor    string
-	Summary  string
-	Verdict  string
+	TaskID     string
+	Title      string
+	Delivery   string
+	Reason     string
+	Counter    string
+	Lane       string
+	At         string
+	Actor      string
+	OnBehalfOf string
+	Summary    string
+	Verdict    string
 }
 
 func newEscalatedRow(r store.EscalatedTaskRow) escalatedRow {
@@ -244,24 +269,25 @@ func newEscalatedRow(r store.EscalatedTaskRow) escalatedRow {
 		verdict = string(*r.MostRecentVerdict)
 	}
 	return escalatedRow{
-		TaskID:   r.TaskID.String(),
-		Title:    r.Title,
-		Delivery: string(r.DeliveryRef.Kind) + ": " + r.DeliveryRef.Title,
-		Reason:   string(r.Reason),
-		Counter:  counter,
-		Lane:     string(r.Lane),
-		At:       opsTime(r.EscalatedAt),
-		Actor:    opsSubject(r.EscalatedByActing),
-		Summary:  fmt.Sprintf("attempts %d / failing %d / notes %d", r.AttemptCount, r.FailingVerdictCount, r.NoteCount),
-		Verdict:  verdict,
+		TaskID:     r.TaskID.String(),
+		Title:      r.Title,
+		Delivery:   string(r.DeliveryRef.Kind) + ": " + r.DeliveryRef.Title,
+		Reason:     string(r.Reason),
+		Counter:    counter,
+		Lane:       string(r.Lane),
+		At:         opsTime(r.EscalatedAt),
+		Actor:      opsActor(r.EscalatedByActing),
+		OnBehalfOf: opsSubject(r.EscalatedByOnBehalfOf),
+		Summary:    fmt.Sprintf("attempts %d / failing %d / notes %d", r.AttemptCount, r.FailingVerdictCount, r.NoteCount),
+		Verdict:    verdict,
 	}
 }
 
 var escalatedTableTemplate = template.Must(template.New("escalated").Parse(`<table>
-<thead><tr><th>Task</th><th>Delivery</th><th>Reason</th><th>Counter/cap</th><th>Lane</th><th>Escalated</th><th>By</th><th>Summary</th><th>Last verdict</th></tr></thead>
+<thead><tr><th>Task</th><th>Delivery</th><th>Reason</th><th>Counter/cap</th><th>Lane</th><th>Escalated</th><th>By</th><th>On behalf of</th><th>Summary</th><th>Last verdict</th></tr></thead>
 <tbody>
-{{range .}}<tr><td>{{.TaskID}}<br>{{.Title}}</td><td>{{.Delivery}}</td><td>{{.Reason}}</td><td>{{.Counter}}</td><td>{{.Lane}}</td><td>{{.At}}</td><td>{{.Actor}}</td><td>{{.Summary}}</td><td>{{.Verdict}}</td></tr>
-{{else}}<tr><td colspan="9">No escalated tasks.</td></tr>
+{{range .}}<tr><td>{{.TaskID}}<br>{{.Title}}</td><td>{{.Delivery}}</td><td>{{.Reason}}</td><td>{{.Counter}}</td><td>{{.Lane}}</td><td>{{.At}}</td><td>{{.Actor}}</td><td>{{.OnBehalfOf}}</td><td>{{.Summary}}</td><td>{{.Verdict}}</td></tr>
+{{else}}<tr><td colspan="10">No escalated tasks.</td></tr>
 {{end}}</tbody></table>`))
 
 // handleCancelledTasks renders the cancelled-task console view (FR10),
@@ -295,28 +321,30 @@ func (app *App) handleCancelledTasks(w http.ResponseWriter, r *http.Request) {
 }
 
 type cancelledRow struct {
-	TaskID   string
-	Title    string
-	Delivery string
-	By       string
-	At       string
+	TaskID     string
+	Title      string
+	Delivery   string
+	By         string
+	OnBehalfOf string
+	At         string
 }
 
 func newCancelledRow(r store.CancelledTaskRow) cancelledRow {
 	return cancelledRow{
-		TaskID:   r.TaskID.String(),
-		Title:    r.Title,
-		Delivery: string(r.DeliveryRef.Kind) + ": " + r.DeliveryRef.Title,
-		By:       opsSubject(r.CancelledByActing),
-		At:       opsTime(r.CancelledAt),
+		TaskID:     r.TaskID.String(),
+		Title:      r.Title,
+		Delivery:   string(r.DeliveryRef.Kind) + ": " + r.DeliveryRef.Title,
+		By:         opsActor(r.CancelledByActing),
+		OnBehalfOf: opsSubject(r.CancelledByOnBehalfOf),
+		At:         opsTime(r.CancelledAt),
 	}
 }
 
 var cancelledTableTemplate = template.Must(template.New("cancelled").Parse(`<table>
-<thead><tr><th>Task</th><th>Delivery</th><th>Cancelled by</th><th>Cancelled at</th></tr></thead>
+<thead><tr><th>Task</th><th>Delivery</th><th>Cancelled by</th><th>On behalf of</th><th>Cancelled at</th></tr></thead>
 <tbody>
-{{range .}}<tr><td>{{.TaskID}}<br>{{.Title}}</td><td>{{.Delivery}}</td><td>{{.By}}</td><td>{{.At}}</td></tr>
-{{else}}<tr><td colspan="4">No cancelled tasks.</td></tr>
+{{range .}}<tr><td>{{.TaskID}}<br>{{.Title}}</td><td>{{.Delivery}}</td><td>{{.By}}</td><td>{{.OnBehalfOf}}</td><td>{{.At}}</td></tr>
+{{else}}<tr><td colspan="5">No cancelled tasks.</td></tr>
 {{end}}</tbody></table>`))
 
 // handleOpenNotes renders the open-notes console view (FR12): every task
@@ -359,11 +387,15 @@ type noteRow struct {
 }
 
 func newNoteRow(r store.OpenNoteRow) noteRow {
+	// Exactly one of TaskContext/EntityContext is set (task_note's own
+	// exactly-one-target CHECK), so at most one branch fills Target. The
+	// target's id is rendered next to its title so the row names the same
+	// entity the note points at, not just its human label.
 	target := "-"
 	if r.TaskContext != nil {
-		target = "task: " + r.TaskContext.Title
+		target = "task: " + r.TaskContext.Title + " (" + r.TaskContext.TaskID.String() + ")"
 	} else if r.EntityContext != nil {
-		target = string(r.EntityContext.EntityKind) + ": " + r.EntityContext.Title
+		target = string(r.EntityContext.EntityKind) + ": " + r.EntityContext.Title + " (" + r.EntityContext.EntityID.String() + ")"
 	}
 	return noteRow{
 		NoteID:    r.NoteID.String(),
