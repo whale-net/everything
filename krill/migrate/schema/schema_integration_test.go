@@ -89,6 +89,26 @@ func hasForeignKeyTo(t *testing.T, ctx context.Context, db *dbtest.Postgres, tab
 	return exists
 }
 
+// hasPrimaryKeyOn reports whether table's PRIMARY KEY is exactly the one
+// named column. A table can carry at most one, so this is the assertion
+// that pins which column is the per-row key after a migration reshapes a
+// table around it.
+func hasPrimaryKeyOn(t *testing.T, ctx context.Context, db *dbtest.Postgres, table, column string) bool {
+	t.Helper()
+	var exists bool
+	require.NoError(t, db.Pool.QueryRow(ctx, `
+		SELECT EXISTS (
+			SELECT 1
+			FROM pg_constraint c
+			JOIN pg_class t ON t.oid = c.conrelid
+			JOIN pg_attribute a ON a.attrelid = t.oid AND a.attnum = ANY(c.conkey)
+			WHERE t.relname = $1 AND c.contype = 'p'
+			  AND array_length(c.conkey, 1) = 1 AND a.attname = $2
+		)
+	`, table, column).Scan(&exists))
+	return exists
+}
+
 // columnNames returns every column name for table from information_schema.
 func columnNames(t *testing.T, ctx context.Context, db *dbtest.Postgres, table string) []string {
 	t.Helper()
@@ -2641,4 +2661,80 @@ func TestMigration019_UpDownRoundTrip(t *testing.T) {
 
 	require.NoError(t, runner.Steps(1), "re-apply migration 019 after Down() -- must be re-runnable")
 	assert.NoError(t, insertStatusEvent("designed"), "re-applying 019 must accept 'designed' again")
+}
+
+// TestMigration020_SchemaContract asserts the shape migration 020 gives
+// `milestone_ref`: the SCD2 triple migration 002 gave every other
+// spec-axis table, `revision_id` as the row key rather than `id`, and
+// every name index scoped to current rows only.
+func TestMigration020_SchemaContract(t *testing.T) {
+	ctx := context.Background()
+	db := dbtest.NewPostgres(ctx, t, dbtest.Options{})
+
+	sqlDB, err := sql.Open("pgx", db.ConnString)
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = sqlDB.Close() })
+
+	runner := migrate.NewRunner(sqlDB, schema.Migrations, schema.Dir)
+	require.NoError(t, runner.Up())
+
+	// -- the SCD2 triple, with the same types migration 002 uses --
+	for _, col := range []struct{ name, dataType string }{
+		{"revision_id", "uuid"},
+		{"valid_from", "timestamp with time zone"},
+		{"valid_to", "timestamp with time zone"},
+	} {
+		dataType, _ := nullableColumn(t, ctx, db, "milestone_ref", col.name)
+		assert.Equal(t, col.dataType, dataType, "milestone_ref.%s must carry the SCD2 type every other spec-axis table uses", col.name)
+	}
+	_, nullable := nullableColumn(t, ctx, db, "milestone_ref", "valid_to")
+	assert.Equal(t, "YES", nullable, "milestone_ref.valid_to must be nullable -- NULL marks the current revision")
+
+	// -- revision_id is the primary key now, id no longer is --
+	assert.True(t, hasPrimaryKeyOn(t, ctx, db, "milestone_ref", "revision_id"),
+		"milestone_ref's primary key must be revision_id, not id -- multiple revisions of one milestone legitimately share an id")
+	assert.False(t, hasPrimaryKeyOn(t, ctx, db, "milestone_ref", "id"),
+		"milestone_ref.id must no longer be the primary key once the table is SCD2")
+
+	// -- every pre-existing row became its own first, current revision --
+	var scopeID uuid.UUID
+	require.NoError(t, db.Pool.QueryRow(ctx, `
+		INSERT INTO scope (repo_full_name, default_branch) VALUES ('milestone-scd2-020/repo', 'main') RETURNING id
+	`).Scan(&scopeID))
+	var productID uuid.UUID
+	require.NoError(t, db.Pool.QueryRow(ctx, `
+		INSERT INTO product (scope_id, name, vision) VALUES ($1, 'P', 'V') RETURNING id
+	`, scopeID).Scan(&productID))
+
+	var milestoneID uuid.UUID
+	require.NoError(t, db.Pool.QueryRow(ctx, `
+		INSERT INTO milestone_ref (scope_id, product_id, name) VALUES ($1, $2, 'M1') RETURNING id
+	`, scopeID, productID).Scan(&milestoneID))
+	var validTo sql.NullTime
+	require.NoError(t, db.Pool.QueryRow(ctx, `
+		SELECT valid_to FROM milestone_ref WHERE id = $1 AND valid_to IS NULL
+	`, milestoneID).Scan(&validTo))
+	assert.False(t, validTo.Valid, "every row migration 020 finds must become a current revision -- it supersedes no id")
+
+	// -- closing a row and opening its successor under the same id is what
+	// an amend does, and the unique indexes must tolerate it --
+	_, err = db.Pool.Exec(ctx, `UPDATE milestone_ref SET valid_to = NOW() WHERE id = $1`, milestoneID)
+	require.NoError(t, err)
+	var successorID uuid.UUID
+	require.NoError(t, db.Pool.QueryRow(ctx, `
+		INSERT INTO milestone_ref (id, scope_id, product_id, name) VALUES ($1, $2, $3, 'M1') RETURNING id
+	`, milestoneID, scopeID, productID).Scan(&successorID))
+	assert.Equal(t, milestoneID, successorID, "a supersession reuses the immutable id (LB2)")
+
+	// A second current row for the same id is what the SCD2 index forbids.
+	_, err = db.Pool.Exec(ctx, `UPDATE milestone_ref SET valid_to = NULL WHERE id = $1`, milestoneID)
+	assert.Error(t, err, "milestone_ref_current_id_idx must reject a second current revision for one id")
+
+	// -- the child milestone_id columns are plain uuid columns, not FKs --
+	for _, table := range []string{"entity_milestone", "milestone_deferral", "milestone_status_event", "delivery_shipment", "task"} {
+		assert.False(t, hasForeignKeyTo(t, ctx, db, table, "milestone_ref"),
+			"%s.milestone_id must NOT carry a DB-enforced FK to milestone_ref -- since 020 milestone_ref is SCD2, so its immutable id is not table-wide unique; parent existence is krill/store's job", table)
+	}
+	assert.False(t, hasForeignKeyTo(t, ctx, db, "milestone_ref", "milestone_ref"),
+		"milestone_ref.parent_milestone_id must NOT carry a DB-enforced self-FK, for the same reason")
 }

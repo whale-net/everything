@@ -139,3 +139,124 @@ func TestAmendLoadBearingDecisionHandler_ValidSession_CallsStoreWithPathIDAndBod
 	assert.Equal(t, id, amend.gotDecisionID)
 	assert.Equal(t, "Amended", amend.gotDecisionName)
 }
+
+// ── every spec-axis kind, and the two rules that hold across all of them ──
+
+// amendEndpoint pairs each spec-axis kind's amend handler with a body that
+// is valid for that kind and no other -- every endpoint decodes strictly
+// against its own per-kind shape, so one table-driven test can cover all
+// eight without a body that would be rejected as an unknown field.
+type amendEndpoint struct {
+	handler func(store.AmendStore) http.HandlerFunc
+	body    string
+}
+
+var amendEndpoints = map[string]amendEndpoint{
+	"product":               {handlers.AmendProductHandler, `{"name": "Amended", "vision": "new vision"}`},
+	"feature set":           {handlers.AmendFeatureSetHandler, `{"name": "Amended", "description": "new description"}`},
+	"feature":               {handlers.AmendFeatureHandler, `{"name": "Amended", "description": "new description"}`},
+	"requirement":           {handlers.AmendRequirementHandler, `{"name": "Amended", "body": "new body"}`},
+	"persona":               {handlers.AmendPersonaHandler, `{"name": "Amended", "description": "new description"}`},
+	"non-goal":              {handlers.AmendNonGoalHandler, `{"name": "Amended", "body": "new body"}`},
+	"load-bearing decision": {handlers.AmendLoadBearingDecisionHandler, `{"name": "Amended", "body": "new body"}`},
+	"milestone":             {handlers.AmendMilestoneHandler, `{"name": "Amended", "outcome": "new outcome"}`},
+}
+
+// TestAmendHandlers_ValidSessionReachesStore proves each of the eight
+// endpoints is gated like every other write path and passes the path's id
+// plus the body's replacement content through to store.AmendStore
+// unchanged.
+func TestAmendHandlers_ValidSessionReachesStore(t *testing.T) {
+	for kind, endpoint := range amendEndpoints {
+		t.Run(kind, func(t *testing.T) {
+			sessions, _, sessionIDStr := newTestSession(t)
+			amend := &fakeAmendStore{}
+			id := uuid.New()
+
+			rec := doAmendRequest(t, endpoint.handler(amend), sessions, sessionIDStr, id.String(), endpoint.body)
+
+			require.Equal(t, http.StatusOK, rec.Code, rec.Body.String())
+			require.Len(t, amend.calls, 1)
+			assert.Equal(t, id, amend.calls[0].id)
+			assert.Equal(t, "Amended", amend.calls[0].name)
+		})
+	}
+}
+
+// TestAmendHandlers_NoSessionID_Rejected proves every one of the eight is
+// behind RequireSession (FR3): no session id means the store is never
+// reached.
+func TestAmendHandlers_NoSessionID_Rejected(t *testing.T) {
+	for kind, endpoint := range amendEndpoints {
+		t.Run(kind, func(t *testing.T) {
+			sessions := newFakeSessionStore()
+			amend := &fakeAmendStore{}
+
+			rec := doAmendRequest(t, endpoint.handler(amend), sessions, "", uuid.New().String(), endpoint.body)
+
+			assert.Equal(t, http.StatusUnauthorized, rec.Code)
+			assert.Empty(t, amend.calls, "an ungated request must never reach AmendStore")
+		})
+	}
+}
+
+// TestAmendHandlers_RefuseReparentAndReKind is FR f0f6bc18 at the surface:
+// a body carrying a parent or a kind is refused by name, with a 400, and
+// never reaches the store -- whatever the caller was trying to move or
+// re-kind.
+func TestAmendHandlers_RefuseReparentAndReKind(t *testing.T) {
+	for kind, endpoint := range amendEndpoints {
+		for field, value := range map[string]string{
+			"product_id":          uuid.NewString(),
+			"feature_set_id":      uuid.NewString(),
+			"feature_id":          uuid.NewString(),
+			"parent_milestone_id": uuid.NewString(),
+			"kind":                "milepebble",
+		} {
+			t.Run(kind+"/"+field, func(t *testing.T) {
+				sessions, _, sessionIDStr := newTestSession(t)
+				amend := &fakeAmendStore{}
+
+				rec := doAmendRequest(t, endpoint.handler(amend), sessions, sessionIDStr, uuid.New().String(),
+					`{"name": "Amended", "`+field+`": "`+value+`"}`)
+
+				assert.Equal(t, http.StatusBadRequest, rec.Code, rec.Body.String())
+				assert.Contains(t, rec.Body.String(), "amend cannot reparent or re-kind")
+				assert.Contains(t, rec.Body.String(), field, "the refusal must name the field the caller tried to change")
+				assert.Empty(t, amend.calls, "a refused reparent or re-kind must never reach AmendStore")
+			})
+		}
+	}
+}
+
+// TestAmendHandlers_NameConflictReturns409 proves store.ErrNameConflict --
+// an amend whose replacement name collides with a live sibling (FR
+// b2767a89) -- maps to 409, the same conflict status a create's collision
+// gets.
+func TestAmendHandlers_NameConflictReturns409(t *testing.T) {
+	sessions, _, sessionIDStr := newTestSession(t)
+	amend := &fakeAmendStore{amendErr: store.ErrNameConflict}
+
+	rec := doAmendRequest(t, handlers.AmendRequirementHandler(amend), sessions, sessionIDStr, uuid.New().String(),
+		`{"name": "A Name Another Live Sibling Already Holds"}`)
+
+	assert.Equal(t, http.StatusConflict, rec.Code, rec.Body.String())
+	assert.Contains(t, rec.Body.String(), "already has this name")
+}
+
+// TestAmendPlacementChange_Refuse pins the store-side rule the surfaces
+// share: no placement field set means no refusal, and the first one set is
+// the one named.
+func TestAmendPlacementChange_Refuse(t *testing.T) {
+	none := store.AmendPlacementChange{}
+	assert.NoError(t, none.Refuse("feature"), "an amend that changes nothing about placement is allowed")
+
+	productID := uuid.NewString()
+	changed := store.AmendPlacementChange{ProductID: &productID, Kind: strPtr("permanent")}
+	err := changed.Refuse("feature")
+	require.ErrorIs(t, err, store.ErrPlacementChange)
+	assert.Contains(t, err.Error(), "cannot change product_id on amend", "the first offending field is the one named")
+	assert.NotContains(t, err.Error(), "cannot change kind on amend")
+}
+
+func strPtr(s string) *string { return &s }
