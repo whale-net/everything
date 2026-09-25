@@ -391,6 +391,10 @@ func (app *App) setupRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("POST "+opsTaskActionBase+"{id}/"+actionRequeue, app.operatorRoute(app.handleTaskIntervention(actionRequeue)))
 	mux.HandleFunc("POST "+opsTaskActionBase+"{id}/"+actionEscalate, app.operatorRoute(app.handleTaskIntervention(actionEscalate)))
 	mux.HandleFunc("POST "+opsTaskActionBase+"{id}/"+actionCancel, app.operatorRoute(app.handleTaskIntervention(actionCancel)))
+	// Cancel is the one irreversible verb, so its row control is a link to
+	// this confirmation page; nothing posts to the cancel route until the
+	// operator confirms here.
+	mux.HandleFunc("GET "+opsTaskActionBase+"{id}"+cancelConfirmSuffix, app.operatorRoute(app.handleCancelConfirm))
 
 	// The signed-in shell (FR 85a8b33c): a home page plus one root per
 	// nav area, every one of them wrapped in the same chrome by
