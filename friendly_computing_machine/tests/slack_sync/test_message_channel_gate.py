@@ -16,6 +16,7 @@ from sqlmodel import select
 
 from friendly_computing_machine.src.friendly_computing_machine.bot import app as app_mod
 from friendly_computing_machine.src.friendly_computing_machine.bot.app import (
+    SlackBotConfig,
     get_bot_config,
 )
 from friendly_computing_machine.src.friendly_computing_machine.bot.handlers import events
@@ -108,3 +109,29 @@ def test_special_channel_route_does_not_open_the_gate(slack_db, routed_agent_cha
     events.handle_message(_event(routed_agent_channel.slack_id), Mock())
 
     assert _stored(slack_db) == []
+
+
+def test_poll_channel_set_is_cached_for_one_minute(slack_db):
+    assert SlackBotConfig.REFRESH_PERIOD == datetime.timedelta(minutes=1)
+
+    cached = get_bot_config()
+    assert get_bot_config() is cached
+
+    row = SlackChannel(slack_id="C_LATE", name="late", channel_type="public")
+    slack_db.add(row)
+    slack_db.commit()
+    slack_db.refresh(row)
+    slack_db.add(
+        MusicPoll(
+            slack_channel_id=row.id,
+            start_date=datetime.datetime(2024, 1, 1),
+            name="weekly",
+        )
+    )
+    slack_db.commit()
+
+    # within the window the gate still runs on the cached set
+    assert "C_LATE" not in _gated_channels()
+
+    cached.as_of -= datetime.timedelta(minutes=2)
+    assert "C_LATE" in _gated_channels()
