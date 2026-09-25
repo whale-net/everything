@@ -198,8 +198,33 @@ class UpdateSlackMessageParams:
     channel_id: str
     ts: str
     text: str
+    # Render text as standard Markdown (agent replies) rather than Slack mrkdwn.
+    # Defaulted so in-flight workflow histories still deserialize.
+    markdown: bool = False
+
+
+# Slack caps the cumulative text of all markdown blocks in one payload.
+SLACK_MARKDOWN_BLOCK_MAX_CHARS = 12000
+
+
+def markdown_blocks(text: str) -> Optional[list[dict]]:
+    """Wrap text in a Slack markdown block, which renders standard Markdown.
+
+    Returns None when text exceeds Slack's markdown block limit, so the
+    caller falls back to a plain text message instead of a rejected payload.
+    """
+    if not text or len(text) > SLACK_MARKDOWN_BLOCK_MAX_CHARS:
+        return None
+    return [{"type": "markdown", "text": text}]
 
 
 @activity.defn
 async def update_slack_message_activity(params: UpdateSlackMessageParams) -> str:
-    return slack_update_message(params.channel_id, params.ts, params.text)
+    blocks = markdown_blocks(params.text) if params.markdown else None
+    if params.markdown and blocks is None:
+        logger.warning(
+            "agent reply too long for a Slack markdown block (%d chars), "
+            "posting as plain text",
+            len(params.text),
+        )
+    return slack_update_message(params.channel_id, params.ts, params.text, blocks=blocks)

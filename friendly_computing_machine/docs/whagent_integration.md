@@ -6,7 +6,7 @@ Talk to a whagent-net AI agent by `@mention`ing the bot in a linked channel.
 
 - Link a channel to a whagent-net agent definition first (see "Channel setup" below) — one agent per channel today.
 - `@mention` the bot anywhere in a linked channel: `@fcm <your message>`. The bot starts a new whagent-net session and replies in a thread under your message.
-- The first reply is a standalone link to the session's whagent-net web page; it stays put for the life of the thread. Each turn then gets its own "Thinking…" placeholder message, edited in place once the turn resolves.
+- The first reply is a standalone link to the session's whagent-net web page; it stays put for the life of the thread. Each turn then gets its own "Thinking…" placeholder message, edited in place once the turn resolves. The agent's reply is sent as a Slack `markdown` block so its standard Markdown (headings, lists, `**bold**`, code fences) renders; replies over Slack's 12,000-character markdown block limit fall back to plain text.
 - Send more messages in that same thread to continue the session (with or without `@mention`ing the bot). A message sent while the bot is still working on a turn is queued and combined with any other queued messages into the next turn — it does not start a second, overlapping turn.
 - If the channel isn't linked to an agent, mentioning the bot replies with a short "no agent configured for this channel" message and nothing else happens.
 
