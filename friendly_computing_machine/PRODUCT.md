@@ -12,7 +12,7 @@ This file is the canonical entry point for FCM's product scope. Start here, then
 | Capability map | [product/02-capability-map.md](product/02-capability-map.md) | To find the `Cn` a requirement traces to, or to see what is deliberately deferred |
 | Roadmap | [product/03-roadmap.md](product/03-roadmap.md) | Before designing a milestone: its outcome sentence, `Delivers`, `Must not foreclose`, and `FR budget` |
 
-Live milestone status is **not** in this file. It is tracked as `Ledger: M<n> → <status>` comments on the `Product: friendly_computing_machine` tracking issue. See `tools/project-manager/CONVENTIONS.md` § Roadmap ledger.
+Live milestone status is **not** in this file. This brief is migrated into krill (Product `60eb8d7b-7717-45f6-bc20-8a65703153f9`), and krill is the source of truth. Read status with `list_product_delivery { product_id: 60eb8d7b-7717-45f6-bc20-8a65703153f9 }` or `get_milestone_status { milestone_id }`. There is no `Product: friendly_computing_machine` tracking issue and no `Ledger:` comment ledger — the krill onboarding path creates neither.
 
 ---
 
