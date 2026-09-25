@@ -18,6 +18,7 @@ go_library(
         "ops.go",
         "routes.go",
         "credentials_page.go",
+        "design_page.go",
         "identity.go",
         "writeclient.go",
         "writes.go",

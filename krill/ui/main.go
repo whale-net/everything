@@ -145,6 +145,16 @@ type App struct {
 	// GET /console/* serve, over the same store/paging.go pagination
 	// contract, with no krill session in between.
 	tasks store.TaskStore
+
+	// designSessions and revisionEvents back the design-session read
+	// surface (design_page.go): the exact store accessors the MCP tools'
+	// get_design_session / list_open_questions call, reused directly so a
+	// browser and an MCP client see one session, one ordering, and one
+	// open-question derivation. A read carries no attribution, so -- unlike
+	// app.writes -- it needs no krill session and reads the store in
+	// process, exactly as api's own ungated read handlers do.
+	designSessions store.DesignSessionStore
+	revisionEvents store.RevisionEventStore
 }
 
 // NewApp wires up Keycloak sign-in and the auth OAuth2 provider. A
@@ -205,11 +215,14 @@ func NewApp(ctx context.Context, cfg config) (*App, error) {
 		return nil, fmt.Errorf("failed to initialize authenticator (keycloak discovery): %w", err)
 	}
 
+	entities := store.New(pool)
 	app := &App{
-		auth:       auth,
-		oidcIssuer: cfg.OIDCIssuer,
-		scopes:     store.New(pool).Scopes(),
-		tasks:      store.New(pool).Tasks(),
+		auth:           auth,
+		oidcIssuer:     cfg.OIDCIssuer,
+		scopes:         entities.Scopes(),
+		tasks:          entities.Tasks(),
+		designSessions: entities.DesignSessions(),
+		revisionEvents: entities.RevisionEvents(),
 	}
 
 	// auth.NewCredentialStore/NewPostgresClientRegistry/
@@ -385,6 +398,14 @@ func (app *App) mountShellRoutes(mux *http.ServeMux) {
 	mux.HandleFunc(opsEscalatedPath, app.auth.RequireAuthFunc(app.handleEscalatedTasks))
 	mux.HandleFunc(opsCancelledPath, app.auth.RequireAuthFunc(app.handleCancelledTasks))
 	mux.HandleFunc(opsNotesPath, app.auth.RequireAuthFunc(app.handleOpenNotes))
+
+	// The design-session read surface (design_page.go): a product's session
+	// list and one session's revision-event log + open questions. Behind
+	// the sign-in gate like every other shell page, but NOT operatorRoute --
+	// a read attributes no mutation, so it resolves no operator Subject and
+	// carries no krill session, exactly like api's ungated read handlers.
+	mux.HandleFunc("GET /design/products/{productID}/design-sessions", app.auth.RequireAuthFunc(app.handleDesignSessionList))
+	mux.HandleFunc("GET /design/design-sessions/{id}", app.auth.RequireAuthFunc(app.handleDesignSessionDetail))
 }
 
 // operatorRoute is the wrapper every signed-in-operator route in this
