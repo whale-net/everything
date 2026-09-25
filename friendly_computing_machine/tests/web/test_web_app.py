@@ -10,6 +10,7 @@ from friendly_computing_machine.src.friendly_computing_machine.db.dal.identity_d
     complete_link,
     get_keycloak_identity,
     mint_link_token,
+    peek_link_token,
 )
 from friendly_computing_machine.src.friendly_computing_machine.models.base import Base
 from friendly_computing_machine.src.friendly_computing_machine.models.slack import (
@@ -118,7 +119,9 @@ def test_valid_link_redirects_to_keycloak_authorize(session, monkeypatch):
     assert "redirect_uri=https%3A%2F%2Ffcm-web.example.com%2Flink%2Fcallback" in location
 
 
-# 2. /link/{expired|consumed|unknown} => error page, no redirect
+# 2. /link/{expired|consumed|unknown} => error page, no redirect, nothing written
+#    (FR6/US7: an unusable token must never send the browser to Keycloak, and
+#    must not leave a partial mapping behind.)
 def test_expired_link_is_rejected(session, monkeypatch):
     import datetime
 
@@ -132,6 +135,12 @@ def test_expired_link_is_rejected(session, monkeypatch):
     assert resp.status_code == 400
     assert "Location" not in resp.headers
     assert "Link failed" in resp.text
+    # nothing was written by the rejected attempt
+    assert _identities(session) == []
+    row = session.exec(
+        select(SlackLinkToken).where(SlackLinkToken.token == token)
+    ).one()
+    assert row.consumed is False
 
 
 def test_consumed_link_is_rejected(session, monkeypatch):
@@ -143,6 +152,10 @@ def test_consumed_link_is_rejected(session, monkeypatch):
 
     assert resp.status_code == 400
     assert "Location" not in resp.headers
+    # the existing mapping is untouched; no new row was added
+    stored = get_keycloak_identity(TEAM, "U1", session=session)
+    assert stored.keycloak_sub == "sub-1"
+    assert len(_identities(session)) == 1
 
 
 def test_unknown_link_is_rejected(session, monkeypatch):
@@ -152,6 +165,12 @@ def test_unknown_link_is_rejected(session, monkeypatch):
 
     assert resp.status_code == 400
     assert "Location" not in resp.headers
+    assert _identities(session) == []
+    # a rejected /link must not have primed the session with a link token, so a
+    # following callback has nothing to redeem and is refused too.
+    callback = tc.get("/link/callback?code=abc&state=xyz")
+    assert callback.status_code == 400
+    assert _identities(session) == []
 
 
 # 3. callback with valid session token + verified claims => mapping written
@@ -257,3 +276,69 @@ def test_health_returns_200(session, monkeypatch):
     tc, _ = _build_client(session, monkeypatch)
     resp = tc.get("/health")
     assert resp.status_code == 200
+
+
+# 9. NFR3: a valid-but-abandoned flow (redirected to Keycloak, never returns)
+#    leaves no partial row and does not burn the token.
+def test_abandoned_flow_writes_nothing(session, monkeypatch):
+    token = mint_link_token(TEAM, "U1", session=session)
+    tc, _ = _build_client(session, monkeypatch, access_token_result=_token_response())
+
+    # user reaches Keycloak but abandons there: the /link hop alone must not
+    # create a mapping, consume the token, or otherwise persist progress.
+    resp = tc.get(f"/link/{token}", follow_redirects=False)
+    assert resp.status_code == 302
+
+    assert _identities(session) == []
+    row = session.exec(
+        select(SlackLinkToken).where(SlackLinkToken.token == token)
+    ).one()
+    assert row.consumed is False
+    assert row.consumed_at is None
+
+    # the token is still redeemable: an abandoned attempt did not exhaust it
+    assert peek_link_token(token, session=session) is not None
+
+
+# 10. FR2: only the verified (iss, sub) pair is stored. A token response whose
+#     verified claims lack iss/sub is refused and writes nothing.
+def test_callback_without_verified_identity_refused(session, monkeypatch):
+    token = mint_link_token(TEAM, "U1", session=session)
+    # Authlib returned tokens but no verified identity claims.
+    unverified = {
+        "access_token": ACCESS_TOKEN,
+        "refresh_token": REFRESH_TOKEN,
+        "id_token": ID_TOKEN,
+        "token_type": "Bearer",
+    }
+    tc, _ = _build_client(session, monkeypatch, access_token_result=unverified)
+
+    tc.get(f"/link/{token}", follow_redirects=False)
+    resp = tc.get("/link/callback?code=abc&state=xyz")
+
+    assert resp.status_code == 400
+    assert "Link failed" in resp.text
+    assert get_keycloak_identity(TEAM, "U1", session=session) is None
+    assert _identities(session) == []
+    # and the token is left unconsumed so the user can retry properly
+    row = session.exec(
+        select(SlackLinkToken).where(SlackLinkToken.token == token)
+    ).one()
+    assert row.consumed is False
+
+
+# 11. FR4: no access/refresh/ID token is logged on the success path either.
+def test_no_keycloak_tokens_logged(session, monkeypatch, caplog):
+    import logging
+
+    token = mint_link_token(TEAM, "U1", session=session)
+    tc, _ = _build_client(session, monkeypatch, access_token_result=_token_response())
+
+    with caplog.at_level(logging.INFO):
+        tc.get(f"/link/{token}", follow_redirects=False)
+        resp = tc.get("/link/callback?code=abc&state=xyz")
+    assert resp.status_code == 200
+
+    logged = "\n".join(record.getMessage() for record in caplog.records)
+    for secret in (ACCESS_TOKEN, REFRESH_TOKEN, ID_TOKEN):
+        assert secret not in logged
