@@ -198,8 +198,10 @@ type BuildCompletedSignal struct {
 
 // SignalTargetProgress is the workflow signal ReportTargetProgress (see
 // server/handlers/release.go) delivers onto a running ReleaseWorkflow
-// execution: one image target reporting BUILT or PUSHED, ahead of
-// SignalBuildCompleted's batch-wide terminal signal. Unlike
+// execution: one target reporting BUILDING, BUILT, or PUSHED, ahead of
+// SignalBuildCompleted's batch-wide terminal signal. This is the only
+// source of a target's entry into BUILDING -- the build reports it as it
+// reaches that target, so only the in-flight target is BUILDING. Unlike
 // SignalBuildCompleted, receiving this signal never decides
 // awaitBuildCompletion's outcome -- it only records the target's
 // intermediate state and the wait continues.
@@ -403,15 +405,15 @@ var finalizePublishActivityOptions = workflow.ActivityOptions{
 // RecordResolvedPlan, issue #906 -- see that activity's doc comment; only
 // called when ResolvePlan actually returns RawJSON, so it does not
 // interpose an extra dispatch on a test double or future ResolvePlan
-// implementation that omits it), then DispatchBuild, then RecordTargetState
-// once per target with BUILDING (FR1, issue #1701 -- every target enters
-// BUILDING together the moment DispatchBuild confirms a real GitHub Actions
-// run exists, not at the very end of the workflow), then
+// implementation that omits it), then DispatchBuild, then
 // awaitBuildCompletion (NotifyBuildComplete's build-completed signal raced
 // against the PollBuild activity -- signal first when it arrives, poll as
-// the fallback), then FinalizePublish (which itself records each target's
-// PUBLISHING and RECORDING transitions in place as it does that target's
-// real work -- FR2/FR3, issue #1701, see finalize.go), then VerifyPublished,
+// the fallback -- which also drains SignalTargetProgress, so a target
+// enters BUILDING when its own build starts rather than the whole batch
+// entering it at dispatch), then FinalizePublish (which itself records each
+// target's PUBLISHING and RECORDING transitions in place as it does that
+// target's real work -- FR2/FR3, issue #1701, see finalize.go), then
+// VerifyPublished,
 // then RecordTargetState once per target with its terminal state -- in that
 // exact order, matching the dispatch sequence
 // worker/release/workflow_test.go (Testing phase) asserts against. A
@@ -488,28 +490,21 @@ func ReleaseWorkflow(ctx workflow.Context, in ReleaseWorkflowInput) (ReleaseWork
 	// in production with "invalid input syntax for type uuid".
 	buildID := planBuildID(plan.RawJSON)
 
-	// FR1: DispatchBuild has just confirmed a real GitHub Actions run
-	// exists -- move every target in the batch to BUILDING together before
-	// awaiting that run's completion. This is deliberately batch-wide, not
-	// per target: DispatchBuild is batch-scoped (one GHA run covers every
-	// target in the batch), so there is no earlier per-target moment to pin
-	// entry into BUILDING to. NotifyBuildComplete's own terminal signal is
-	// still whole-run, not per-target -- awaitBuildCompletion additionally
-	// drains SignalTargetProgress for finer-grained BUILT/
-	// PUSHED visibility WITHIN this same BUILDING window, but that does not
-	// change when the batch as a whole enters or leaves BUILDING. Do not
-	// wait for
-	// GitHub's run to leave "queued" first -- DispatchBuild does not
-	// confirm that, and BUILDING is pinned to dispatch-confirmed. An error
-	// here routes through recordFailure exactly like dispatchBuild's own
-	// error (FR6) rather than returning early and leaving targets stuck at
-	// QUEUED.
-	for _, t := range in.Targets {
-		if rerr := recordTargetState(ctx, in.ReleaseRunID, t, repository.ReleaseRunTargetStateBuilding, buildID, ""); rerr != nil {
-			return recordFailure(ctx, in, fmt.Errorf("record building state for %s: %w", t.key(), rerr))
-		}
-	}
-
+	// Targets are NOT moved to BUILDING here. DispatchBuild is batch-scoped
+	// (one GitHub Actions run covers every target), so the workflow has no
+	// per-target moment of its own to pin BUILDING to -- but the build does:
+	// release_helper_go reports "building" per target as it reaches that
+	// target in its own build loop, and awaitBuildCompletion drains those
+	// SignalTargetProgress reports into the same RecordTargetState activity
+	// this loop used to call. So a target enters BUILDING when its own build
+	// starts rather than when the whole batch was dispatched, and a
+	// multi-target run shows one BUILDING target instead of N.
+	//
+	// A target that never reports "building" is not stranded: RecordTargetState
+	// walks forward one adjacent step at a time (see record.go), so that
+	// target's later "built" report still takes it through BUILDING, and
+	// FinalizePublish's walk-forward writes self-heal any target that reports
+	// nothing at all.
 	buildStatus, err := awaitBuildCompletion(ctx, in.ReleaseRunID, buildID, in.Targets, buildRef)
 	if err != nil {
 		return recordFailure(ctx, in, fmt.Errorf("poll build: %w", err))
@@ -665,11 +660,13 @@ func dispatchBuild(ctx workflow.Context, plan ResolvedPlan, digests map[string]s
 // releaseRunID/buildID/targets let this same loop also drain
 // SignalTargetProgress: a progress signal never decides the loop (decided
 // stays false, the selector keeps waiting) -- it just records the reported
-// target's Built/Pushed state via the same RecordTargetState activity
-// ReleaseWorkflow's own Building loop uses, so it's idempotent and
-// best-effort in exactly the same way (a failed write here is logged and
-// the release proceeds regardless -- a progress-reporting hiccup must
-// never fail a real build).
+// target's Building/Built/Pushed state via RecordTargetState, so it is
+// idempotent and best-effort (a failed write here is logged and the
+// release proceeds regardless -- a progress-reporting hiccup must
+// never fail a real build). This is also the sole source of a target's
+// entry into BUILDING, so a build that never reports one still self-heals:
+// RecordTargetState walks forward one step at a time from whatever state
+// the target is in, and FinalizePublish walks it the rest of the way.
 func awaitBuildCompletion(ctx workflow.Context, releaseRunID, buildID string, targets []ReleaseTarget, ref BuildRef) (BuildStatus, error) {
 	// The poll runs under its own activity options (long StartToClose for
 	// the polling loop -- see pollBuildActivityOptions) in a cancellable
