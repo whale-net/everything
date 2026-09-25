@@ -105,6 +105,20 @@ py_test(
     deps = ["//friendly_computing_machine/src:fcm_lib"],
 )
 
+# The manman V1 removal holds: no V1 module, no generated-client import, and
+# no manmanstatusupdate left in the migrated schema. Reads the migration chain
+# off disk, so the versioned migrations are runtime data here.
+py_test(
+    name = "test_v1_removal",
+    size = "small",
+    srcs = [
+        "conftest.py",
+        "db/test_v1_removal.py",
+    ],
+    data = ["//friendly_computing_machine/src/migrations:migration_versions"],
+    deps = ["//friendly_computing_machine/src:fcm_lib"],
+)
+
 # CLI entry point import (guards against transitive dependency collisions
 # across fcm_lib's bundled subcommands, e.g. "google" namespace conflicts)
 py_test(
