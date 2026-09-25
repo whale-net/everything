@@ -381,6 +381,21 @@ func (app *App) setupRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("POST /tasks/{id}/escalate", app.operatorRoute(app.handleEscalateTask))
 	mux.HandleFunc("POST /design-sessions", app.operatorRoute(app.handleOpenDesignSession))
 
+	// The console's four task interventions (interventions.go), one route per
+	// verb, reached from a console view's row action forms. Each is mounted
+	// through operatorRoute exactly like every other write here, so the
+	// browser's submission is attributed to the signed-in operator's real
+	// (iss, sub) by the same withKrillSession path, and forwarded to the same
+	// krill api endpoint the ops-mount MCP tools drive.
+	mux.HandleFunc("POST "+opsTaskActionBase+"{id}/"+actionRelease, app.operatorRoute(app.handleTaskIntervention(actionRelease)))
+	mux.HandleFunc("POST "+opsTaskActionBase+"{id}/"+actionRequeue, app.operatorRoute(app.handleTaskIntervention(actionRequeue)))
+	mux.HandleFunc("POST "+opsTaskActionBase+"{id}/"+actionEscalate, app.operatorRoute(app.handleTaskIntervention(actionEscalate)))
+	mux.HandleFunc("POST "+opsTaskActionBase+"{id}/"+actionCancel, app.operatorRoute(app.handleTaskIntervention(actionCancel)))
+	// Cancel is the one irreversible verb, so its row control is a link to
+	// this confirmation page; nothing posts to the cancel route until the
+	// operator confirms here.
+	mux.HandleFunc("GET "+opsTaskActionBase+"{id}"+cancelConfirmSuffix, app.operatorRoute(app.handleCancelConfirm))
+
 	// The signed-in shell (FR 85a8b33c): a home page plus one root per
 	// nav area, every one of them wrapped in the same chrome by
 	// renderShell. Each area's sub-pages register under its prefix
