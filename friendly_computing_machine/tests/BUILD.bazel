@@ -46,6 +46,7 @@ py_test(
         "test_scheduled_abstract_task.py",
         "test_temporal_workflow_fix.py",
         "test_whagent_client.py",
+        "test_whagent_on_behalf_of.py",
         "test_whagent_workflow.py",
     ],
     deps = ["//friendly_computing_machine/src:fcm_lib"],

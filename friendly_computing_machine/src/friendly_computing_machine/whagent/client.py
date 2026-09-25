@@ -7,11 +7,14 @@ the same `Authorization: Bearer <token>` a human's token would, minted
 here via a client_credentials grant against Keycloak instead of a browser
 sign-in.
 
-`on_behalf_of` is left unset on every StartSessionRequest: per the
-proto's own comment and the README's service-account section, a service
-account acting on its own credential acts for itself, and unset means
-"acting subject == on-behalf-of subject" (the M1 default `api` already
-applies) -- there is no separate identity to set it to.
+`on_behalf_of` is unset by default (a service account acting on its own
+credential acts for itself), but a caller whose Slack user has a linked
+Keycloak identity may assert that identity on StartSession so whagent-net
+records the session as running on behalf of that user. Only whagent-net's
+allowlisted client_id may assert a non-empty `on_behalf_of`; every other
+call -- including every follow-up SendTurn -- stays under this client's own
+service-account credential. The Slack user never authenticates here: the
+asserted subject is just data on the request, not a credential.
 
 Uses a plain insecure gRPC channel. `api` sits behind ingress-terminated
 TLS the same way every other in-repo caller of a sibling service reaches
@@ -124,18 +127,33 @@ class WhagentClient:
     # ------------------------------------------------------------------
 
     def start_session(
-        self, agent_id: str, first_turn: Optional[str] = None
+        self,
+        agent_id: str,
+        first_turn: Optional[str] = None,
+        on_behalf_of: Optional[tuple[str, str]] = None,
     ) -> session_pb2.Session:
         """Start a session, optionally sending its first turn.
 
         Mirrors whagent_net/mcp's start_session tool: StartSessionRequest
         carries no first-turn field of its own, so a non-empty first_turn
         is a second SendTurn call after StartSession succeeds.
+
+        on_behalf_of is the linked user's (iss, sub) Keycloak identity, or
+        None to leave the field unset (a non-delegated, self-acting start).
+        The assertion is authorized by this client's own allowlisted
+        client_id, not by any credential the Slack user holds.
         """
-        resp = self._call(
-            self._stub.StartSession,
-            self._pb2.StartSessionRequest(agent_id=agent_id),
-        )
+        request = self._pb2.StartSessionRequest(agent_id=agent_id)
+        if on_behalf_of is not None:
+            iss, sub = on_behalf_of
+            request.on_behalf_of.CopyFrom(
+                self._pb2.Subject(
+                    iss=iss,
+                    sub=sub,
+                    kind=self._pb2.SUBJECT_KIND_HUMAN,
+                )
+            )
+        resp = self._call(self._stub.StartSession, request)
         session = resp.session
         if first_turn:
             turn_resp = self._call(

@@ -169,6 +169,11 @@ class SlackThreadAgentWorkflowParams:
     first_message: str
     slack_user_id: str
     whagent_ui_public_url: str
+    # The mentioning Slack user's linked Keycloak (iss, sub), or None when
+    # the user has no stored mapping. Both default to None so in-flight
+    # workflow histories recorded before identity linking still deserialize.
+    on_behalf_of_iss: Optional[str] = None
+    on_behalf_of_sub: Optional[str] = None
 
 
 @workflow.defn
@@ -187,13 +192,40 @@ class SlackThreadAgentWorkflow:
 
     @workflow.run
     async def run(self, params: SlackThreadAgentWorkflowParams) -> str:
-        start_result = await workflow.execute_activity(
-            start_whagent_session_activity,
-            StartWhagentSessionParams(
-                agent_id=params.agent_id, first_turn=params.first_message
-            ),
-            start_to_close_timeout=START_ACTIVITY_TIMEOUT,
-        )
+        on_behalf_of = None
+        if params.on_behalf_of_iss and params.on_behalf_of_sub:
+            on_behalf_of = (params.on_behalf_of_iss, params.on_behalf_of_sub)
+
+        try:
+            start_result = await workflow.execute_activity(
+                start_whagent_session_activity,
+                StartWhagentSessionParams(
+                    agent_id=params.agent_id,
+                    first_turn=params.first_message,
+                    on_behalf_of=on_behalf_of,
+                ),
+                start_to_close_timeout=START_ACTIVITY_TIMEOUT,
+            )
+        except Exception:
+            # A delegated start can be refused (e.g. fcm's client_id is not
+            # yet in whagent-net's on_behalf_of allowlist). Reply in-thread so
+            # the user isn't left with silence; the activity's ERROR log has
+            # the underlying reason.
+            logger.exception("failed to start whagent-net session")
+            await workflow.execute_activity(
+                post_slack_thread_message_activity,
+                PostSlackThreadMessageParams(
+                    channel_id=params.channel_slack_id,
+                    thread_ts=params.thread_ts,
+                    text=(
+                        "_Couldn't start a whagent-net session for this "
+                        "request. If you are a linked Slack user, this may be "
+                        "a permissions issue -- check the bot logs._"
+                    ),
+                ),
+                start_to_close_timeout=ACTIVITY_TIMEOUT,
+            )
+            raise
         session_id = start_result.session_id
 
         thread_session_id = await workflow.execute_activity(

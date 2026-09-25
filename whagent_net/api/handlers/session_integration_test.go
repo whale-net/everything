@@ -93,7 +93,7 @@ func newTestServer(t *testing.T) (pb.SessionServiceClient, *session.Store) {
 	// constructs a real Temporal test environment and a stubbed catalogue
 	// instead, and StreamEvents' own coverage (issue #2239's Testing
 	// phase) constructs a real broker.
-	sessionServer := handlers.NewSessionServer(ctx, store, testIssuer, nil, "", nil, nil)
+	sessionServer := handlers.NewSessionServer(ctx, store, testIssuer, nil, "", nil, nil, nil)
 
 	unaryAuth, streamAuth, err := grpcauth.NewServerInterceptors(ctx, grpcauth.ServerConfig{
 		Mode: grpcauth.AuthModeNone,
@@ -138,8 +138,9 @@ func createSession(t *testing.T, ctx context.Context, store *session.Store, subj
 
 // createSessionWithSubjects inserts a Session row whose Subject and
 // OnBehalfOf are deliberately set independently -- the shape the canControl
-// tests below need to prove control is scoped to on_behalf_of and not
-// subject, rather than incidentally passing because the two are equal.
+// tests below need, so a passing case identifies which of its two branches
+// (on_behalf_of subject, or allowlisted subject) fired rather than
+// incidentally passing because the two columns are equal.
 func createSessionWithSubjects(t *testing.T, ctx context.Context, store *session.Store, subject, onBehalfOf session.Subject, status session.Status) *session.Session {
 	t.Helper()
 	sess := &session.Session{
@@ -424,9 +425,10 @@ func TestReadTranscript_Pagination_ResumesWithNoGapAndNoDuplicate(t *testing.T) 
 }
 
 // The tests below prove canControl (FR1/C13): SendTurn/StopSession are
-// scoped to a session's on_behalf_of subject, never its subject, with iss
-// staying load-bearing (LB2). Every fixture here uses newTestServer's nil
-// Temporal client (see newTestServer's doc comment) -- deliberately: each
+// scoped to either a session's on_behalf_of subject or an allowlisted client
+// that started it, with iss staying load-bearing (LB2). Every fixture here
+// uses newTestServer's nil Temporal client (see newTestServer's doc comment)
+// -- deliberately: each
 // PERMISSION_DENIED case is rejected by canControl before either handler
 // ever touches s.temporalClient, and each "control is allowed" case below
 // uses a session already in a terminal status so the handler's own

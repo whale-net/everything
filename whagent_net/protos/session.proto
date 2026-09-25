@@ -153,9 +153,10 @@ message Subject {
 }
 
 // Session is the wire shape of a `sessions` control-plane row
-// (ARCHITECTURE.md "Three nouns"). In M1, on_behalf_of is always populated
-// identically to subject (LB2/NFR3) -- no delegated-caller path exists
-// yet.
+// (ARCHITECTURE.md "Three nouns"). on_behalf_of is the subject the session
+// runs as. For a non-delegated start (the request left on_behalf_of unset) it
+// is identical to subject; for a delegated start it is the asserted subject,
+// and subject is the authenticated caller that created it.
 message Session {
   string session_id = 1;
   SessionState state = 2;
@@ -224,7 +225,12 @@ message StartSessionRequest {
   // The subject this session runs as, when the caller acts on behalf of
   // someone else (a host UI starting a session for its signed-in user; a
   // service account running a job for someone). Unset means "acting
-  // subject == on-behalf-of subject" (LB2/NFR3's M1 default).
+  // subject == on-behalf-of subject" -- the recorded on_behalf_of is then
+  // identical to subject. Setting it is permitted only for callers whose own
+  // Keycloak client_id is allowlisted server-side
+  // (WHAGENT_ON_BEHALF_OF_ALLOWED_CLIENT_IDS); any other caller, or an
+  // unset/empty allowlist, is rejected with PERMISSION_DENIED, and a
+  // malformed subject (empty iss/sub/kind) with INVALID_ARGUMENT.
   Subject on_behalf_of = 6;
 }
 
