@@ -20,6 +20,7 @@ go_library(
         "credentials_page.go",
         "design_page.go",
         "identity.go",
+        "interventions.go",
         "writeclient.go",
         "writes.go",
         "readclient.go",

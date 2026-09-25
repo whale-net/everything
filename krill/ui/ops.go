@@ -191,6 +191,7 @@ type claimedRow struct {
 	Lane       string
 	Lease      string
 	Attempts   int
+	Actions    template.HTML
 }
 
 func newClaimedRow(r store.ClaimedTaskRow) claimedRow {
@@ -204,14 +205,18 @@ func newClaimedRow(r store.ClaimedTaskRow) claimedRow {
 		Lane:       string(r.CurrentLane),
 		Lease:      opsTime(r.LeaseExpiresAt),
 		Attempts:   r.AttemptCount,
+		// A claimed task is the one view a Swarm Operator force-releases
+		// (release), flags for attention (escalate), or dead-letters
+		// (cancel) from directly.
+		Actions: renderTaskActions(r.TaskID.String(), opsClaimedPath, actionRelease, actionEscalate, actionCancel),
 	}
 }
 
 var claimedTableTemplate = template.Must(template.New("claimed").Parse(`<table>
-<thead><tr><th>Task</th><th>Delivery</th><th>Claimant</th><th>On behalf of</th><th>Lane</th><th>Lease expires</th><th>Attempts</th></tr></thead>
+<thead><tr><th>Task</th><th>Delivery</th><th>Claimant</th><th>On behalf of</th><th>Lane</th><th>Lease expires</th><th>Attempts</th><th>Actions</th></tr></thead>
 <tbody>
-{{range .}}<tr><td>{{.TaskID}}<br>{{.Title}}</td><td>{{.Delivery}}</td><td>{{.Claimant}}<br><small>session {{.Session}}</small></td><td>{{.OnBehalfOf}}</td><td>{{.Lane}}</td><td>{{.Lease}}</td><td>{{.Attempts}}</td></tr>
-{{else}}<tr><td colspan="7">No claimed tasks.</td></tr>
+{{range .}}<tr><td>{{.TaskID}}<br>{{.Title}}</td><td>{{.Delivery}}</td><td>{{.Claimant}}<br><small>session {{.Session}}</small></td><td>{{.OnBehalfOf}}</td><td>{{.Lane}}</td><td>{{.Lease}}</td><td>{{.Attempts}}</td><td>{{.Actions}}</td></tr>
+{{else}}<tr><td colspan="8">No claimed tasks.</td></tr>
 {{end}}</tbody></table>`))
 
 // handleEscalatedTasks renders the escalated-task console view (FR5): every
@@ -257,6 +262,7 @@ type escalatedRow struct {
 	OnBehalfOf string
 	Summary    string
 	Verdict    string
+	Actions    template.HTML
 }
 
 func newEscalatedRow(r store.EscalatedTaskRow) escalatedRow {
@@ -280,14 +286,19 @@ func newEscalatedRow(r store.EscalatedTaskRow) escalatedRow {
 		OnBehalfOf: opsSubject(r.EscalatedByOnBehalfOf),
 		Summary:    fmt.Sprintf("attempts %d / failing %d / notes %d", r.AttemptCount, r.FailingVerdictCount, r.NoteCount),
 		Verdict:    verdict,
+		// The escalated view is where a Swarm Operator recovers a task back
+		// to claimable (requeue) or gives up on it (cancel). Escalate is
+		// absent here -- the task is already escalated -- and release has no
+		// active claim to force-close on this view.
+		Actions: renderTaskActions(r.TaskID.String(), opsEscalatedPath, actionRequeue, actionCancel),
 	}
 }
 
 var escalatedTableTemplate = template.Must(template.New("escalated").Parse(`<table>
-<thead><tr><th>Task</th><th>Delivery</th><th>Reason</th><th>Counter/cap</th><th>Lane</th><th>Escalated</th><th>By</th><th>On behalf of</th><th>Summary</th><th>Last verdict</th></tr></thead>
+<thead><tr><th>Task</th><th>Delivery</th><th>Reason</th><th>Counter/cap</th><th>Lane</th><th>Escalated</th><th>By</th><th>On behalf of</th><th>Summary</th><th>Last verdict</th><th>Actions</th></tr></thead>
 <tbody>
-{{range .}}<tr><td>{{.TaskID}}<br>{{.Title}}</td><td>{{.Delivery}}</td><td>{{.Reason}}</td><td>{{.Counter}}</td><td>{{.Lane}}</td><td>{{.At}}</td><td>{{.Actor}}</td><td>{{.OnBehalfOf}}</td><td>{{.Summary}}</td><td>{{.Verdict}}</td></tr>
-{{else}}<tr><td colspan="10">No escalated tasks.</td></tr>
+{{range .}}<tr><td>{{.TaskID}}<br>{{.Title}}</td><td>{{.Delivery}}</td><td>{{.Reason}}</td><td>{{.Counter}}</td><td>{{.Lane}}</td><td>{{.At}}</td><td>{{.Actor}}</td><td>{{.OnBehalfOf}}</td><td>{{.Summary}}</td><td>{{.Verdict}}</td><td>{{.Actions}}</td></tr>
+{{else}}<tr><td colspan="11">No escalated tasks.</td></tr>
 {{end}}</tbody></table>`))
 
 // handleCancelledTasks renders the cancelled-task console view (FR10),
