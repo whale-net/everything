@@ -440,6 +440,12 @@ func (app *App) mountShellRoutes(mux *http.ServeMux) {
 	mux.HandleFunc(specProductPath+"/decisions", app.auth.RequireAuthFunc(app.handleSpecDecisions))
 	mux.HandleFunc(specProductPath+"/personas", app.auth.RequireAuthFunc(app.handleSpecPersonas))
 	mux.HandleFunc(specProductPath+"/non-goals", app.auth.RequireAuthFunc(app.handleSpecNonGoals))
+	// The delivery/roadmap view: every milestone and milepebble with its
+	// current status, plus the shipped/unshipped breakdown for each
+	// partially-complete container (FR 4398c532). It hangs off the same
+	// /spec/products/{id} prefix as the spec pages above, so it cannot
+	// collide with the sibling spec routes or the /spec landing.
+	mux.HandleFunc(specProductPath+"/delivery", app.auth.RequireAuthFunc(app.handleSpecDelivery))
 
 	// The design-session write surface (design_write.go), hung off the read
 	// views above: the list page's "open a session" form and a session detail
@@ -451,7 +457,6 @@ func (app *App) mountShellRoutes(mux *http.ServeMux) {
 	// the answer form posts to a sub-path of the detail route.
 	mux.HandleFunc("POST /design/products/{productID}/design-sessions", app.operatorRoute(app.handleOpenDesignSessionForm))
 	mux.HandleFunc("POST /design/design-sessions/{id}/answers", app.operatorRoute(app.handleDesignSessionAnswerForm))
-
 }
 
 // operatorRoute is the wrapper every signed-in-operator route in this

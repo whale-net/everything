@@ -70,6 +70,40 @@ func (r *specReader) NonGoals(ctx context.Context, productID uuid.UUID) ([]store
 	return nonGoals, nil
 }
 
+// Delivery is list_product_delivery: every milestone and milepebble under
+// the Product, each with its derived current status and -- for a
+// partially-complete container -- its shipped/unshipped counts, resolved
+// through the exact //krill/slice.Querier.ListProductDelivery the MCP tool
+// wraps. The product's own scope_id is resolved from its current row first,
+// exactly as the tool's handler does, because an ungated read carries no
+// krill session to read scope_id from. An empty statuses slice means "all",
+// mirroring the querier's own contract.
+func (r *specReader) Delivery(ctx context.Context, productID uuid.UUID, statuses []store.MilestoneStatus) (slice.DeliveryListing, error) {
+	product, err := r.store.Products().GetCurrentByID(ctx, productID)
+	if err != nil {
+		return slice.DeliveryListing{}, fmt.Errorf("get product: %w", err)
+	}
+	listing, err := r.querier.ListProductDelivery(ctx, product.ScopeID, productID, statuses)
+	if err != nil {
+		return slice.DeliveryListing{}, fmt.Errorf("list product delivery: %w", err)
+	}
+	return listing, nil
+}
+
+// DeliveryBreakdown is get_delivery_breakdown: one container's per-item
+// shipped vs not-yet-shipped scope, as the same two slice.Documents
+// //krill/slice.Querier.GetDeliveryBreakdown returns to the MCP tool. Works
+// for a milepebble exactly as for a milestone -- both are milestone_ref
+// rows, which the querier resolves through DeliveryShipments().
+// DeliveryBreakdown.
+func (r *specReader) DeliveryBreakdown(ctx context.Context, containerID uuid.UUID) (shipped, unshipped slice.Document, err error) {
+	shipped, unshipped, err = r.querier.GetDeliveryBreakdown(ctx, containerID)
+	if err != nil {
+		return slice.Document{}, slice.Document{}, fmt.Errorf("delivery breakdown: %w", err)
+	}
+	return shipped, unshipped, nil
+}
+
 // Product returns the Product's own current row -- the header every
 // product-scoped page shows (name, vision), so an operator can tell which
 // product they are browsing.

@@ -98,10 +98,13 @@ func productPath(id uuid.UUID) string {
 }
 
 // decisionsPath, personasPath, nonGoalsPath are the other three per-product
-// pages, so the cross-nav and the route table agree on one spelling.
+// spec pages; deliveryPath is the delivery/roadmap view (delivery_page.go).
+// All four hang off the /spec/products/{id} prefix, so the cross-nav and the
+// route table agree on one spelling.
 func decisionsPath(id uuid.UUID) string { return productPath(id) + "/decisions" }
 func personasPath(id uuid.UUID) string  { return productPath(id) + "/personas" }
 func nonGoalsPath(id uuid.UUID) string  { return productPath(id) + "/non-goals" }
+func deliveryPath(id uuid.UUID) string  { return productPath(id) + "/delivery" }
 
 // productNavLink is one destination in the per-product cross-nav.
 type productNavLink struct {
@@ -110,13 +113,13 @@ type productNavLink struct {
 	Active bool // the page currently being rendered
 }
 
-// productNav is the four per-product cross-links every spec page carries, so
-// an operator landing on any one of them can reach the other three -- and the
+// productNav is the five per-product cross-links every spec page carries, so
+// an operator landing on any one of them can reach the other four -- and the
 // sibling ops / design areas the shell nav offers -- without retyping a URL.
 type productNav []productNavLink
 
 // productNavTemplate is the shared cross-nav fragment, included by each of
-// the four per-product page templates via {{template "productnav" .}}. It
+// the per-product page templates via {{template "productnav" .}}. It
 // lives in its own define so the links are spelled once.
 const productNavTemplate = `{{define "productnav"}}
 <nav class="subnav">
@@ -124,7 +127,7 @@ const productNavTemplate = `{{define "productnav"}}
 {{end}}</nav>
 {{end}}`
 
-// productNavFor builds the four per-product cross-links, marking the one
+// productNavFor builds the five per-product cross-links, marking the one
 // matching current as active.
 func productNavFor(id uuid.UUID, current string) productNav {
 	links := []struct{ label, href string }{
@@ -132,6 +135,7 @@ func productNavFor(id uuid.UUID, current string) productNav {
 		{"Decisions", decisionsPath(id)},
 		{"Personas", personasPath(id)},
 		{"Non-goals", nonGoalsPath(id)},
+		{"Delivery", deliveryPath(id)},
 	}
 	nav := make(productNav, 0, len(links))
 	for _, l := range links {

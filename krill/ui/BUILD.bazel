@@ -26,6 +26,7 @@ go_library(
         "writes.go",
         "readclient.go",
         "spec_page.go",
+        "delivery_page.go",
     ],
     importpath = "github.com/whale-net/everything/krill/ui",
     visibility = ["//visibility:private"],
