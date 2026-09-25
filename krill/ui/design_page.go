@@ -74,6 +74,7 @@ type openQuestionDeltaRow struct {
 // revisionEventRow is one round of a session's ordered log, carrying every
 // field get_design_session's own log exposes for that round.
 type revisionEventRow struct {
+	ID                string
 	SeqNo             int
 	EventType         string
 	Acting            string
@@ -199,6 +200,7 @@ func revisionEventRows(events []store.RevisionEvent) []revisionEventRow {
 			})
 		}
 		rows = append(rows, revisionEventRow{
+			ID:                ev.ID.String(),
 			SeqNo:             ev.SeqNo,
 			EventType:         string(ev.EventType),
 			Acting:            subjectLabel(ev.Acting),
@@ -321,6 +323,7 @@ var designSessionDetailTemplate = template.Must(template.New("design-session-det
   <li>
     <strong>#{{.SeqNo}} {{.EventType}}</strong>{{if .SignoffStatus}} &mdash; signoff: {{.SignoffStatus}}{{end}}
     <br><small>acting: {{.Acting}} &middot; on behalf of: {{.OnBehalfOf}} &middot; {{.CreatedAt}}</small>
+    <br><small>event id: <code>{{.ID}}</code></small>
     {{if .VerifiedAgainst}}<br><small>verified against: {{.VerifiedAgainst}}</small>{{end}}
     {{if .EntityDeltas}}
     <ul>
