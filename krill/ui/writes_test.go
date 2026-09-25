@@ -24,7 +24,6 @@ import (
 	"github.com/whale-net/everything/libs/go/htmxauth"
 )
 
-
 // ---------------------------------------------------------------------------
 // present identity: attributed correctly
 // ---------------------------------------------------------------------------

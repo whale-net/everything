@@ -233,6 +233,14 @@ type fakeAPI struct {
 	// hands back, so a test can assert the redirect lands on it.
 	createdSessionID string
 
+	// rejectStatus, when non-zero, makes every non-init, non-design-session
+	// request (i.e. a task write) answer with that status and rejectBody
+	// instead of 200 -- standing in for a real api refusal (stale claim,
+	// already-cancelled task) so a route's rejection page can be exercised.
+	// Zero (the default) keeps the 200 success path the other tests rely on.
+	rejectStatus int
+	rejectBody   string
+
 	mu       sync.Mutex
 	requests []recordedRequest
 	respond  apiResponder
@@ -277,6 +285,14 @@ func newFakeAPI(t *testing.T) *fakeAPI {
 			w.WriteHeader(http.StatusCreated)
 			fmt.Fprintf(w, `{"id":%q}`, api.createdSessionID)
 		default:
+			api.mu.Lock()
+			rejStatus, rejBody := api.rejectStatus, api.rejectBody
+			api.mu.Unlock()
+			if rejStatus != 0 {
+				w.WriteHeader(rejStatus)
+				fmt.Fprint(w, rejBody)
+				return
+			}
 			w.WriteHeader(http.StatusOK)
 			fmt.Fprint(w, `{"status":"ok"}`)
 		}
@@ -289,6 +305,15 @@ func (a *fakeAPI) recorded() []recordedRequest {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	return append([]recordedRequest(nil), a.requests...)
+}
+
+// rejectWrite makes every subsequent task write answer with status and body,
+// standing in for an api refusal. Zero status restores the default 200.
+func (a *fakeAPI) rejectWrite(status int, body string) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	a.rejectStatus = status
+	a.rejectBody = body
 }
 
 // onRequest installs the responder that overrides the canned replies.

@@ -99,12 +99,13 @@ go_test(
 # attributed to the real signed-in operator, and 303s back to the originating
 # view; plus open-redirect-safe return_to, the in-shell rejection page, and
 # cancel's confirm-before-post affordance. Reuses the sign-in / fake-Keycloak /
-# fake-api harness in writes_test.go, which is compiled in alongside it.
+# fake-api harness in harness_test.go, which is compiled in alongside it.
 go_test(
     name = "ui_interventions_test",
     srcs = [
         "writes_test.go",
         "interventions_test.go",
+        "harness_test.go",
     ],
     embed = [":ui_lib"],
     deps = [
