@@ -16,6 +16,7 @@ from friendly_computing_machine.src.friendly_computing_machine.bot.task.abstract
 from friendly_computing_machine.src.friendly_computing_machine.bot.util import slack_send_message
 from friendly_computing_machine.src.friendly_computing_machine.db.dal import (
     find_poll_instance_messages,
+    get_music_poll_responses,
     get_unprocessed_music_poll_instances,
     insert_music_poll_instance,
     insert_music_poll_responses,
@@ -97,11 +98,11 @@ class MusicPollProcessPoll(AbstractTask):
         return timedelta(hours=1)
 
     def _run(self) -> TaskInstanceStatus:
-        # find unprocessed polls
+        # find polls whose voting window is closed
         # TODO - live poll processing - maybe better suited for the event handler
-        # TODO - this will pick up polls that had no responses
-        #   need some other way to track this state such as a new field
-        #   this could also help simplify the above todo and all sql
+        # TODO - a week with no links is re-selected on every pass, because
+        #   nothing marks it as processed; a field recording that a window was
+        #   read would end that, at the cost of never re-reading it
         instances_to_process = get_unprocessed_music_poll_instances()
 
         for poll_instance in instances_to_process:
@@ -112,8 +113,16 @@ class MusicPollProcessPoll(AbstractTask):
 
     @staticmethod
     def _process_poll_instance(poll_instance: MusicPollInstance):
+        # a window is re-read every hour, so each message may only be turned
+        # into response rows once however many passes it survives
+        already_recorded = {
+            response.slack_message_id
+            for response in get_music_poll_responses(poll_instance.id)
+        }
         messages = find_poll_instance_messages(poll_instance)
         for message in messages:
+            if message.id in already_recorded:
+                continue
             # Extract URLs from message text
             urls = re.findall(MusicPollProcessPoll.URL_PATTERN, message.text)
             responses = [

@@ -4,7 +4,7 @@ import datetime
 import logging
 from typing import Optional
 
-from sqlmodel import Session, and_, exists, not_, null, select
+from sqlmodel import Session, select
 
 from friendly_computing_machine.src.friendly_computing_machine.db.util import (
     SessionManager,
@@ -105,17 +105,18 @@ def get_music_poll_instances(
 def get_unprocessed_music_poll_instances(
     in_session: Optional[Session] = None,
 ) -> list[MusicPollInstance]:
-    """Get unprocessed music poll instances."""
+    """Get the music poll instances whose voting window is closed.
+
+    A closed window is re-read on every pass rather than retired after its first
+    response, so a week can accumulate as many responses as it gets votes and a
+    link that arrives after the week closed is still recorded. The pickup skips
+    messages it has already turned into response rows, which is what keeps the
+    repeated passes idempotent. Weeks with no links are therefore re-selected
+    forever, because there is no processed-but-empty state.
+    """
     with SessionManager(in_session) as session:
         stmt = select(MusicPollInstance).where(
-            and_(
-                MusicPollInstance.next_instance_id is not null(),
-                not_(
-                    exists().where(
-                        MusicPollResponse.music_poll_instance_id == MusicPollInstance.id
-                    )
-                ),
-            )
+            MusicPollInstance.next_instance_id.isnot(None)
         )
         return list(session.exec(stmt).all())
 
