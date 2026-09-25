@@ -57,6 +57,16 @@ query:ci --noimplicit_deps
 # plain ci's --remote_download_minimal above leaves outputs remote-only.
 build:ci-images --config=ci
 build:ci-images --remote_download_toplevel
+# Release builds are cache consumers, not producers: plain ci (what ci.yml
+# uses) already populates the remote cache, so uploading from here buys
+# nothing. Worse, the image-push path pays for it -- a release run tries to
+# upload one ~770MB artifact per app, which the cache endpoint answers with
+# 502s until --remote_timeout (60s) trips and Bazel retries the write before
+# the run can finish. Observed on fcm's 5-app release (run 36052969015): each
+# app's build finished in ~46s (709 remote cache hits) but the stalled upload
+# held the push for ~5m50s, 5x over = ~29 of the run's 33 minutes. Reads are
+# unaffected, so release builds still get their cache hits.
+build:ci-images --remote_upload_local_results=false
 
 # Test configurations
 test --test_output=errors
