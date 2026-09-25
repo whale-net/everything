@@ -147,11 +147,15 @@ bazel run //tools:release -- changed-targets \
 `--candidates` is any Bazel query expression describing the pool of targets to filter (it does
 not have to mention `app_metadata`/`release_app` at all). Given `--base-commit`, it prints the
 subset of `--candidates` targets that transitively depend on the files changed since that
-commit; with `--base-commit` omitted, or when the diff touches global build configuration
-(`MODULE.bazel`, `.bzl` files, etc.), it prints every candidate — callers should treat that as
-"run everything," not "nothing changed." See `.github/workflows/ci.yml`'s `test-database` job
-for a worked example gating a database-integration test suite this way on pull requests while
-still running the full suite on `main`.
+commit. Unlike the release path, this command scopes `.bzl` and `.lock` edits precisely through
+`rdeps` instead of treating them as global — a `.bzl` is an ordinary source target in the Bazel
+graph, so only the candidates whose `BUILD` loads it are affected. Only truly unattributable
+build configuration (`MODULE.bazel`, `WORKSPACE*`, `.bazelrc`, `.bazelversion`) forces a full
+run: with `--base-commit` omitted or the diff touching one of those, it prints every candidate
+— callers should treat that as "run everything," not "nothing changed." See
+`.github/workflows/ci.yml`'s `test-database` job for a worked example gating a
+database-integration test suite this way on pull requests while still running the full suite on
+`main`.
 
 ## Container Publishing
 

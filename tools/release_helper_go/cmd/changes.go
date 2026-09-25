@@ -57,8 +57,10 @@ func newChangedTargetsCmd() *cobra.Command {
 		Long: "Given a Bazel query expression describing a pool of candidate targets (e.g. a family of\n" +
 			"integration tests), prints the subset of those targets affected by file changes since\n" +
 			"--base-commit. If --base-commit is empty, or the diff touches global build configuration\n" +
-			"(MODULE.bazel, .bzl files, etc.), every candidate target is printed -- callers should\n" +
-			"treat that as \"run everything\", not as \"nothing changed\".",
+			"that rdeps cannot attribute (MODULE.bazel, .bazelrc, WORKSPACE, .bazelversion), every\n" +
+			"candidate target is printed -- callers should treat that as \"run everything\", not as\n" +
+			"\"nothing changed\". Changes to .bzl or .lock files are scoped precisely rather than\n" +
+			"treated as global.",
 		SilenceUsage: true,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			if candidates == "" {
@@ -189,10 +191,12 @@ func unionQueryExpr(labels []string, pkgs []string) string {
 // expression describing a pool of targets, e.g. a family of integration
 // tests) down to the subset affected by changes since baseCommit.
 //
-// If baseCommit is empty, or the diff touches global build configuration
-// (MODULE.bazel, .bzl files, etc.), every target matching candidatesExpr is
-// returned -- callers should treat that as "run everything", the same
-// conservative default DetectChangedApps uses.
+// If baseCommit is empty, or the diff touches global build configuration that
+// rdeps cannot attribute (MODULE.bazel, .bazelrc, WORKSPACE, .bazelversion),
+// every target matching candidatesExpr is returned -- callers should treat
+// that as "run everything". Unlike the release path (DetectChangedApps), this
+// scopes .bzl and .lock edits precisely instead of treating them as global,
+// because here a false positive costs a slow full-pool container test run.
 func DetectAffectedTargets(baseCommit string, candidatesExpr string, bazel BazelRunner, git GitRunner) ([]string, error) {
 	if baseCommit == "" {
 		return queryLabels(bazel, candidatesExpr)
@@ -206,7 +210,7 @@ func DetectAffectedTargets(baseCommit string, candidatesExpr string, bazel Bazel
 		return nil, nil
 	}
 
-	if hasGlobalBuildChanges(changedFiles) {
+	if hasUnscopableChanges(changedFiles) {
 		return queryLabels(bazel, candidatesExpr)
 	}
 
@@ -279,8 +283,11 @@ func getPreviousTag(git GitRunner) (string, error) {
 	return strings.TrimSpace(out), nil
 }
 
-// hasGlobalBuildChanges returns true if the changed files touch workspace-level build
-// configuration or shared Starlark macro definitions that can transitively affect all targets.
+// hasGlobalBuildChanges reports whether the changed files include workspace-level build
+// configuration or a shared macro whose effect cannot be attributed to a specific set of
+// targets -- i.e. every app is a candidate. This is the conservative release-path check
+// used by DetectChangedApps: under-building a release ships a stale image, so it errs
+// toward "rebuild everything" for .bzl and .lock edits.
 func hasGlobalBuildChanges(files []string) bool {
 	for _, f := range files {
 		switch f {
@@ -295,7 +302,29 @@ func hasGlobalBuildChanges(files []string) bool {
 	return false
 }
 
-// filterBuildFiles removes files that cannot affect any build (docs, CI, etc.).
+// hasUnscopableChanges is the narrower global check DetectAffectedTargets uses before it
+// tries to scope a candidate pool with rdeps. It matches hasGlobalBuildChanges minus .bzl
+// and .lock, because rdeps attributes both precisely: a .bzl file is an ordinary source
+// target in the Bazel graph, so every candidate whose BUILD loads it has a real reverse-
+// dependency edge to it, and a .lock file is not a build input at all. Treating either as
+// global meant a one-macro edit (or a regenerated lockfile) re-ran an entire candidate pool
+// -- e.g. the full container-backed DB suite -- for no correctness benefit, making a
+// narrowly-scoped PR as slow as a whole-repo change.
+func hasUnscopableChanges(files []string) bool {
+	for _, f := range files {
+		switch f {
+		case "MODULE.bazel",
+			"WORKSPACE", "WORKSPACE.bzlmod", "WORKSPACE.bazel", ".bazelrc", ".bazelversion":
+			return true
+		}
+	}
+	return false
+}
+
+// filterBuildFiles removes files that cannot affect any build (docs, CI, auto-generated
+// lockfiles, etc.). It deliberately keeps .bzl files: they are real source files in the
+// Bazel graph (loaded by the packages that reference them), so filesToBazelLabels turns
+// them into labels and the rdeps intersection scopes the affected targets precisely.
 func filterBuildFiles(files []string) []string {
 	var out []string
 	for _, f := range files {
@@ -303,16 +332,16 @@ func filterBuildFiles(files []string) []string {
 			strings.HasPrefix(f, ".github/actions/") ||
 			strings.HasPrefix(f, "docs/") ||
 			strings.HasSuffix(f, ".md") ||
-			strings.HasSuffix(f, "copilot-instructions.md") {
+			strings.HasSuffix(f, "copilot-instructions.md") ||
+			strings.HasSuffix(f, ".lock") {
 			continue
 		}
 		switch f {
-		case "MODULE.bazel", "MODULE.bazel.lock",
+		case "MODULE.bazel",
 			"WORKSPACE", "WORKSPACE.bzlmod", "WORKSPACE.bazel", ".bazelrc", ".bazelversion":
 			continue
 		}
-		if strings.HasPrefix(f, ".bazel") || strings.HasSuffix(f, ".bzl") ||
-			strings.HasSuffix(f, ".lock") {
+		if strings.HasPrefix(f, ".bazel") {
 			continue
 		}
 		out = append(out, f)
@@ -324,9 +353,6 @@ func filterBuildFiles(files []string) []string {
 func filesToBazelLabels(files []string) (labels []string, packages map[string]struct{}) {
 	packages = make(map[string]struct{})
 	for _, f := range files {
-		if strings.HasSuffix(f, ".bzl") {
-			continue
-		}
 		base := filepath.Base(f)
 		if base == "BUILD" || base == "BUILD.bazel" {
 			dir := filepath.Dir(f)
