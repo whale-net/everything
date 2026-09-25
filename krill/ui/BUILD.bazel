@@ -26,6 +26,7 @@ go_library(
         "writes.go",
         "readclient.go",
         "spec_page.go",
+        "delivery_page.go",
     ],
     importpath = "github.com/whale-net/everything/krill/ui",
     visibility = ["//visibility:private"],
@@ -137,6 +138,7 @@ go_test(
         "nav_test.go",
         "spec_page_test.go",
         "spec_parity_test.go",
+        "delivery_page_test.go",
     ],
     embed = [":ui_lib"],
     deps = [

@@ -119,6 +119,40 @@ var wireClasses = map[string]map[string]wireFieldClass{
 		"name": wireCarried,
 		"body": wireCarried,
 	},
+	// list_product_delivery's milestone row (FR 4398c532). The container's
+	// own operator-facing fields are carried verbatim; the delivers /
+	// must-not-foreclose documents, the deferral list, and the inlined
+	// shipped/unshipped counts are structural (the page shows the per-item
+	// breakdown from get_delivery_breakdown instead of these inline
+	// shapes). milepebbles is grouped -- each child is carried by the
+	// MilepebbleListingEntry table below and covered by the nested
+	// test.
+	"MilestoneListingEntry": {
+		"id":                 wireCarried,
+		"name":               wireCarried,
+		"outcome":            wireCarried, // nil optional: omitted, not a placeholder
+		"fr_budget":          wireCarried, // nil optional: omitted, never a bogus 0
+		"status":             wireCarried,
+		"delivers":           wireStructural,
+		"must_not_foreclose": wireStructural,
+		"deferrals":          wireStructural,
+		"shipped_count":      wireStructural,
+		"unshipped_count":    wireStructural,
+		"milepebbles":        wireGrouped,
+	},
+	// list_product_delivery's milepebble row (FR 4398c532). A milepebble
+	// carries no must-not-foreclose associations or deferrals of its own;
+	// its deliverables document and inline counts are structural, exactly
+	// as on the milestone row.
+	"MilepebbleListingEntry": {
+		"id":              wireCarried,
+		"name":            wireCarried,
+		"outcome":         wireCarried, // nil optional: omitted, not a placeholder
+		"status":          wireCarried,
+		"delivers":        wireStructural,
+		"shipped_count":   wireStructural,
+		"unshipped_count": wireStructural,
+	},
 }
 
 // jsonName is a struct field's JSON tag name (or lowercased Go name when
@@ -234,12 +268,14 @@ func requireCarried(t *testing.T, typeName string, entity any, html string) {
 // keeping the carried/structural lists honest as the wire evolves.
 func TestSpecWireFieldClassesAreComplete(t *testing.T) {
 	wires := map[string]any{
-		"FeatureSetEntity":  slice.FeatureSetEntity{},
-		"FeatureEntity":     slice.FeatureEntity{},
-		"RequirementEntity": slice.RequirementEntity{},
-		"DecisionEntity":    slice.DecisionEntity{},
-		"PersonaSummary":    tools.PersonaSummary{},
-		"NonGoalSummary":    tools.NonGoalSummary{},
+		"FeatureSetEntity":       slice.FeatureSetEntity{},
+		"FeatureEntity":          slice.FeatureEntity{},
+		"RequirementEntity":      slice.RequirementEntity{},
+		"DecisionEntity":         slice.DecisionEntity{},
+		"PersonaSummary":         tools.PersonaSummary{},
+		"NonGoalSummary":         tools.NonGoalSummary{},
+		"MilestoneListingEntry":  slice.MilestoneListingEntry{},
+		"MilepebbleListingEntry": slice.MilepebbleListingEntry{},
 	}
 
 	for typeName, zero := range wires {

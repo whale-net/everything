@@ -57,6 +57,7 @@ func TestSpecBadProductIDIsBadRequest(t *testing.T) {
 		specProductPath + "/decisions",
 		specProductPath + "/personas",
 		specProductPath + "/non-goals",
+		specProductPath + "/delivery",
 	} {
 		target := strings.Replace(path, "{id}", "not-a-uuid", 1)
 		rec := fetch(t, mux, target)
@@ -199,9 +200,9 @@ func TestNonGoalsFieldParityAndKinds(t *testing.T) {
 }
 
 // TestProductPagesCrossLink pins the cross-nav: every per-product page links
-// to the other three, so an operator who lands anywhere under
-// /spec/products/{id} can reach decisions, personas, and non-goals (and back
-// to the capability map) without retyping a URL.
+// to the other four, so an operator who lands anywhere under
+// /spec/products/{id} can reach decisions, personas, non-goals, and delivery
+// (and back to the capability map) without retyping a URL.
 func TestProductPagesCrossLink(t *testing.T) {
 	productID := mustID(t, "11111111-1111-1111-1111-111111111111")
 	product := store.Product{ID: productID, Name: "krill"}
@@ -212,12 +213,14 @@ func TestProductPagesCrossLink(t *testing.T) {
 		"decisions":  string(renderPage(decisionsTemplate, decisionsPageOf(doc, productID))),
 		"personas":   string(renderPage(personasTemplate, personasPageOf(product, nil, productID))),
 		"non-goals":  string(renderPage(nonGoalsTemplate, nonGoalsPageOf(product, nil, productID))),
+		"delivery":   string(renderPage(deliveryTemplate, deliveryPageOf(product, slice.DeliveryListing{}, nil, productID))),
 	}
 	links := []string{
 		productPath(productID),
 		decisionsPath(productID),
 		personasPath(productID),
 		nonGoalsPath(productID),
+		deliveryPath(productID),
 	}
 
 	for name, body := range pages {
@@ -229,6 +232,18 @@ func TestProductPagesCrossLink(t *testing.T) {
 		// Exactly one link is the current page.
 		if got := strings.Count(body, `aria-current="page"`); got != 1 {
 			t.Errorf("%s page has %d active cross-links, want 1", name, got)
+		}
+	}
+
+	// On the delivery page, Delivery is the active link (aria-current), and
+	// the other four are present but not marked current.
+	delivery := pages["delivery"]
+	if !strings.Contains(delivery, `href="`+deliveryPath(productID)+`" aria-current="page"`) {
+		t.Errorf("delivery page does not mark the Delivery cross-link as the current page")
+	}
+	for _, href := range []string{productPath(productID), decisionsPath(productID), personasPath(productID), nonGoalsPath(productID)} {
+		if strings.Contains(delivery, `href="`+href+`" aria-current="page"`) {
+			t.Errorf("delivery page wrongly marks %s as the current page", href)
 		}
 	}
 }
