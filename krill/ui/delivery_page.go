@@ -10,7 +10,7 @@
 // capability map, decisions, personas, and non-goals. Every container's
 // status is the batched MilestoneStatusEventStore.CurrentStatuses derivation
 // the querier performs, so a page never disagrees with the tools about which
-// of the seven-value set a milestone is in.
+// of the eight-value set a milestone is in.
 package main
 
 import (
@@ -47,7 +47,7 @@ type deliveryMilepebble struct {
 	ID          string
 	Name        string
 	Outcome     string
-	Status      string // one of the seven-value store.MilestoneStatus set
+	Status      string // one of the eight-value store.MilestoneStatus set
 	StatusClass string // CSS modifier keeping the seven states visually distinct
 	Breakdown   *deliveryBreakdown
 }
@@ -249,7 +249,7 @@ func frBudgetString(budget *int) string {
 	return strconv.Itoa(*budget)
 }
 
-// statusClass maps the seven-value MilestoneStatus set to the CSS modifier
+// statusClass maps the eight-value MilestoneStatus set to the CSS modifier
 // a status badge carries, so each state is visually distinct -- notably
 // "shipped" (done) versus "partially complete" (has a breakdown) -- without
 // the template doing any string munging. An unrecognized value falls back
@@ -260,6 +260,8 @@ func statusClass(s store.MilestoneStatus) string {
 		return "status-not-started"
 	case store.MilestoneStatusInDesign:
 		return "status-in-design"
+	case store.MilestoneStatusDesigned:
+		return "status-designed"
 	case store.MilestoneStatusPlanned:
 		return "status-planned"
 	case store.MilestoneStatusInProgress:

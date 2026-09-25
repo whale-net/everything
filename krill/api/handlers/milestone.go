@@ -576,7 +576,7 @@ var _ productDeliveryQuerier = (*slice.Querier)(nil)
 // ungated like every other read endpoint in this package. A repeated
 // `status` query parameter narrows the listing to those statuses; absent
 // entirely, it means "all" (slice.Querier.ListProductDelivery's own
-// contract). An unrecognized status value is a 400 naming the seven valid
+// contract). An unrecognized status value is a 400 naming the eight valid
 // values (ValidMilestoneStatuses, milestone_status.go) rather than a
 // silent empty result.
 func GetProductDeliveryHandler(products store.ProductStore, querier productDeliveryQuerier) http.HandlerFunc {
@@ -618,7 +618,7 @@ func GetProductDeliveryHandler(products store.ProductStore, querier productDeliv
 }
 
 // parseStatusFilter parses r's repeated `status` query parameter into a
-// []store.MilestoneStatus, writing a 400 naming the seven valid values
+// []store.MilestoneStatus, writing a 400 naming the eight valid values
 // (ValidMilestoneStatuses, milestone_status.go) and returning ok=false on
 // the first unrecognized value.
 func parseStatusFilter(w http.ResponseWriter, r *http.Request) (statuses []store.MilestoneStatus, ok bool) {
