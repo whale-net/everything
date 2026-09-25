@@ -53,14 +53,19 @@ Start a Temporal dev server:
 temporal server start-dev
 ```
 
-Run the combined Slack bot + task pool:
+Run the Slack bot (Socket Mode):
 ```bash
-uv run fcm bot run
+uv run fcm bot run-slack-socket-app
+```
+
+Run the task pool (scheduled background tasks, e.g. the weekly music poll) in a second process:
+```bash
+uv run fcm bot run-taskpool
 ```
 
 Run the Temporal worker:
 ```bash
-uv run workflow run
+uv run fcm workflow run
 ```
 
 Run the OIDC identity-link web app (serves on `http://localhost:8000`, `/health` returns `ok`):

@@ -69,6 +69,11 @@ APPS = {
         'bazel_target': '//friendly_computing_machine:worker_image_load',
         'image_name': 'friendly-computing-machine-worker',
     },
+    'web': {
+        'enabled_env': 'FCM_ENABLE_WEB',
+        'bazel_target': '//friendly_computing_machine:web_image_load',
+        'image_name': 'friendly-computing-machine-web',
+    },
     'migration': {
         'enabled_env': 'FCM_ENABLE_MIGRATION',
         'bazel_target': '//friendly_computing_machine:migration_image_load',

@@ -6,9 +6,8 @@
 ## Overview
 
 Friendly Computing Machine is a Slack bot (Socket Mode) that turns `@mention`s into whagent-net AI
-sessions, runs ad-hoc polls, and orchestrates game-server work through ManMan. Slack-facing commands
-are quick; anything long-running is handed to a Temporal workflow so it survives restarts and can be
-queried later.
+sessions and runs ad-hoc polls. Slack-facing commands are quick; anything long-running is handed to a
+Temporal workflow so it survives restarts and can be queried later.
 
 The bot also exposes one small inbound HTTP surface — the **identity-link web app** — used only to bind
 a Slack user to their Keycloak identity so whagent-net's `on_behalf_of` delegation can act as them.
@@ -22,7 +21,6 @@ prompted with a one-time link (see below) instead of being given a session.
 | Bot (Socket Mode) | `bot run-slack-socket-app` | Slack event handling; queues work, posts replies. |
 | Task pool | `bot run-taskpool` | Background execution for bot tasks. |
 | Workflow worker | `workflow run` | Temporal worker that runs the long-running workflows and calls whagent-net. |
-| Subscriber | `subscribe run` | Consumes ManMan RabbitMQ status notifications. |
 | Identity-link web | `web run` | FastAPI app that performs the browser OIDC login and writes the Slack→Keycloak mapping. |
 | Migration job | `migration run` | Applies Alembic migrations. |
 
@@ -81,8 +79,27 @@ Multi-participant attribution inside an already-linked thread is out of scope.
 - **whagent-net** — `@mention`-triggered AI sessions. The bot queues a turn, the workflow worker calls
   whagent-net's `api` over gRPC with a service-account Keycloak token, and the reply is posted back to
   the Slack thread. See [docs/whagent_integration.md](docs/whagent_integration.md).
-- **ManMan** — `subscribe` consumes status notifications over RabbitMQ. See
-  [docs/manman_subscribe.md](docs/manman_subscribe.md).
+- **ManMan** — none. The manman V1 integration (server-control actions, the
+  server-select shortcut, the `/test` debug command, and the RabbitMQ
+  `subscribe` relay) was removed; see [docs/deploy_recovery.md](docs/deploy_recovery.md)
+  for what the removal did to the database.
 - **Keycloak** — whagent-net service accounts (`WHAGENT_*`) and the web app's confidential browser-login
   client (`FCM_OIDC_*`) both authenticate against the same realm. See [ENV.md](ENV.md).
 - **ArgoCD** — deploy notifications. See [docs/argocd-integration.md](docs/argocd-integration.md).
+
+## Slack special channel route tables
+
+`slackspecialchanneltype` and `slackchannel` rows in `slackspecialchannel` are a
+generic two-level route table — "channels of type T" — that FCM will use to route
+Slack messages by channel. Nothing populates them from this repository and
+nothing reads them yet; they are retained deliberately while that work is
+scoped, and the models, the migrations, and the two lookups
+(`get_slack_special_channel_type_from_name`, `get_slack_special_channels_from_type`)
+are kept alive in `db/dal/slack_dal.py` for it.
+
+**A lookup that returns nothing is a legitimate state, not a defect.** Retaining
+the tables does not mean they are populated: the one channel type that ever
+existed was inserted out of band, by hand, as an operator-managed production
+artifact, and there is no seeder here to re-create it. `SlackSpecialChannelTypeEnum`
+is deliberately an empty enum — its vocabulary is the routing work's to choose,
+and an empty enum is not a bug. Do not add a data migration to populate it.
