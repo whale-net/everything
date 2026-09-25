@@ -789,11 +789,20 @@ go_test(
 #
 # Run it explicitly (requires a working Docker daemon):
 #   bazel test //krill/store:recut_integration_test --test_output=all
+#
+# delivery_parent_integration_test.go, compiled in alongside, covers the
+# single-delivery-parent rule: AddDeliversMany delivering a slice that
+# spans the `Now` and `Next` FeatureSets in one call, the empty-batch
+# rejection, the competing-milestone refusal writing nothing over the
+# whole batch, same-milestone re-delivery staying idempotent, the re-cut
+# that frees an entity for the competing milestone, and the milepebble
+# and backlog bucket not counting as competing owners.
 go_test(
     name = "recut_integration_test",
     size = "large",
     timeout = "long",
     srcs = [
+        "delivery_parent_integration_test.go",
         "milestone_authoring_integration_test.go",
         "recut_integration_test.go",
     ],

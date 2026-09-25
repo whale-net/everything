@@ -739,3 +739,151 @@ func TestMCPListProductDelivery_EndToEnd(t *testing.T) {
 		assert.True(t, res.IsError)
 	})
 }
+
+// TestMCPAddDelivers_SingleCallAcrossFeatureSets_AndCompetingRefusal is
+// the MCP-layer half of the single-delivery-parent rule, on top of the
+// store-level coverage in //krill/store:recut_integration_test: one
+// add_delivers call delivers a slice spanning the `Now` and `Next`
+// FeatureSets, and a second milestone of the same product is refused an
+// entity the first one already delivers, with the re-cut named.
+func TestMCPAddDelivers_SingleCallAcrossFeatureSets_AndCompetingRefusal(t *testing.T) {
+	ctx := context.Background()
+	entities, pool := newMilestoneToolsTestStore(t)
+	scopeID := createMilestoneToolsTestScope(t, ctx, pool, "whale-net/krill-mcp-delivery-parent-test")
+	sessions := store.NewSessionStore(pool)
+
+	product, err := entities.Products().Create(ctx, scopeID, "krill", "delivery parent e2e product")
+	require.NoError(t, err)
+	now, err := entities.FeatureSets().Create(ctx, scopeID, product.ID, "Now", nil)
+	require.NoError(t, err)
+	next, err := entities.FeatureSets().Create(ctx, scopeID, product.ID, "Next", nil)
+	require.NoError(t, err)
+	nowFeature, err := entities.Features().Create(ctx, scopeID, now.ID, "in Now", nil)
+	require.NoError(t, err)
+	nextFeature, err := entities.Features().Create(ctx, scopeID, next.ID, "in Next", nil)
+	require.NoError(t, err)
+
+	selfSubject := store.Subject{Iss: "https://keycloak.example.test/realms/humans", Sub: "human-1", Kind: store.SubjectKindHuman}
+	selfSessionID, err := sessions.InitSession(ctx, scopeID, selfSubject, selfSubject, nil)
+	require.NoError(t, err)
+
+	credentials := milestoneFakeCredentialStore{validToken: "abcdef0123456789abcdef0123456789abcdef0123456789abcdef01234567", identity: "swarm-operator-1"}
+	signer, verifier := newMilestoneTestWhagentVerifier(t, "https://whagent.example.test")
+
+	designSrv := server.New()
+	designReg := server.NewRegistry(designSrv)
+	tools.RegisterMilestoneAll(designReg, sessions, entities.MilestoneAuthoring(), entities.Products(), slice.NewQuerier(entities))
+	// The refusal below points at move_delivery_scope as the way out, so
+	// the re-cut has to be on the same mount for that advice to be
+	// testable end to end -- main.go registers both groups onto the design
+	// mount for the same reason.
+	tools.RegisterRecutAll(designReg, sessions, entities.Recut(), slice.NewQuerier(entities))
+	designSrv.AddReceivingMiddleware(server.WhagentPersonaMiddleware())
+
+	handler := server.NewDualAuthHTTPHandler(server.New(), designSrv, server.New(), server.New(), credentials, server.WhagentAuthConfig{
+		Verifier: verifier,
+		Audience: milestoneTestWhagentAudience,
+	}, server.ResourceMetadataConfig{})
+	ts := httptest.NewServer(handler)
+	t.Cleanup(ts.Close)
+
+	designURL := ts.URL + "/mcp/design"
+	agentToken := mintMilestoneWhagentToken(t, signer, "human-delivery-parent")
+
+	first, err := entities.MilestoneAuthoring().CreateMilestone(ctx, scopeID, product.ID, "M6", "", nil, selfSubject, selfSubject)
+	require.NoError(t, err)
+	second, err := entities.MilestoneAuthoring().CreateMilestone(ctx, scopeID, product.ID, "M7", "", nil, selfSubject, selfSubject)
+	require.NoError(t, err)
+
+	t.Run("one add_delivers call delivers entities from two FeatureSets", func(t *testing.T) {
+		cs, err := connectMilestoneMCP(t, designURL, agentToken)
+		require.NoError(t, err)
+
+		res, err := cs.CallTool(ctx, &mcp.CallToolParams{
+			Name: "add_delivers",
+			Arguments: map[string]any{
+				"krill_session_id": selfSessionID.String(),
+				"milestone_id":     first.ID.String(),
+				"entity_ids":       []any{nowFeature.ID.String(), nextFeature.ID.String()},
+			},
+		})
+		require.NoError(t, err)
+		require.False(t, res.IsError, "unexpected error: %s", milestoneTextOf(res))
+
+		_, delivers, _, _, err := entities.MilestoneAuthoring().GetMilestone(ctx, first.ID)
+		require.NoError(t, err)
+		delivered := map[uuid.UUID]bool{}
+		for _, m := range delivers {
+			delivered[m.EntityID] = true
+		}
+		assert.True(t, delivered[nowFeature.ID])
+		assert.True(t, delivered[nextFeature.ID])
+		assert.Len(t, delivers, 2)
+	})
+
+	t.Run("a competing milestone in the same lane is refused, naming the re-cut", func(t *testing.T) {
+		cs, err := connectMilestoneMCP(t, designURL, agentToken)
+		require.NoError(t, err)
+
+		res, err := cs.CallTool(ctx, &mcp.CallToolParams{
+			Name: "add_delivers",
+			Arguments: map[string]any{
+				"krill_session_id": selfSessionID.String(),
+				"milestone_id":     second.ID.String(),
+				"entity_id":        nextFeature.ID.String(),
+			},
+		})
+		require.NoError(t, err, "a refusal is a tool error, not a protocol error")
+		assert.True(t, res.IsError)
+		assert.Contains(t, milestoneTextOf(res), "already delivered by another milestone")
+		assert.Contains(t, milestoneTextOf(res), "move_delivery_scope")
+
+		_, delivers, _, _, err := entities.MilestoneAuthoring().GetMilestone(ctx, second.ID)
+		require.NoError(t, err)
+		assert.Empty(t, delivers, "a refused call must not associate anything at all")
+	})
+
+	t.Run("the re-cut then makes the competing delivery legal", func(t *testing.T) {
+		cs, err := connectMilestoneMCP(t, designURL, agentToken)
+		require.NoError(t, err)
+
+		res, err := cs.CallTool(ctx, &mcp.CallToolParams{
+			Name: "move_delivery_scope",
+			Arguments: map[string]any{
+				"krill_session_id": selfSessionID.String(),
+				"entity_ids":       []any{nextFeature.ID.String()},
+				"from":             first.ID.String(),
+				"to":               second.ID.String(),
+			},
+		})
+		require.NoError(t, err)
+		require.False(t, res.IsError, "unexpected error: %s", milestoneTextOf(res))
+
+		res, err = cs.CallTool(ctx, &mcp.CallToolParams{
+			Name: "add_delivers",
+			Arguments: map[string]any{
+				"krill_session_id": selfSessionID.String(),
+				"milestone_id":     second.ID.String(),
+				"entity_id":        nextFeature.ID.String(),
+			},
+		})
+		require.NoError(t, err)
+		require.False(t, res.IsError, "after the re-cut the same call must succeed: %s", milestoneTextOf(res))
+	})
+
+	t.Run("add_delivers with neither entity_id nor entity_ids is rejected", func(t *testing.T) {
+		cs, err := connectMilestoneMCP(t, designURL, agentToken)
+		require.NoError(t, err)
+
+		res, err := cs.CallTool(ctx, &mcp.CallToolParams{
+			Name: "add_delivers",
+			Arguments: map[string]any{
+				"krill_session_id": selfSessionID.String(),
+				"milestone_id":     first.ID.String(),
+			},
+		})
+		require.NoError(t, err)
+		assert.True(t, res.IsError)
+		assert.Contains(t, milestoneTextOf(res), "at least one delivered entity id is required")
+	})
+}
