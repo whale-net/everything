@@ -145,7 +145,7 @@ app_metadata = rule(
 # - OpenAPI config: fastapi_app
 # - Container config: additional_tars
 # Bazel/Starlark does not support nested struct parameters, so they remain flat.
-def release_app(name, binary_name = None, language = None, domain = None, description = "", version = "latest", registry = "ghcr.io", organization = "whale-net", custom_repo_name = None, app_type = "", port = 0, additional_ports = [], replicas = 0, health_check_enabled = False, health_check_path = "/health", ingress_host = "", ingress_tls_secret = "", command = [], args = [], resources_requests_cpu = "", resources_requests_memory = "", resources_limits_cpu = "", resources_limits_memory = "", fastapi_app = None, additional_tars = None, deploy_unit = None, app_name = None, base = None):
+def release_app(name, binary_name = None, language = None, domain = None, description = "", version = "latest", registry = "ghcr.io", organization = "whale-net", custom_repo_name = None, app_type = "", port = 0, additional_ports = [], replicas = 0, health_check_enabled = False, health_check_path = "/health", ingress_host = "", ingress_tls_secret = "", command = [], args = [], resources_requests_cpu = "", resources_requests_memory = "", resources_limits_cpu = "", resources_limits_memory = "", fastapi_app = None, openapi_lib_target = None, additional_tars = None, deploy_unit = None, app_name = None, base = None):
     """Convenience macro to set up release metadata and OCI images for an app.
 
     This macro consolidates the creation of OCI images and release metadata,
@@ -187,6 +187,16 @@ def release_app(name, binary_name = None, language = None, domain = None, descri
         resources_limits_memory: Custom memory limit (e.g., "256Mi", "2Gi"). Empty = use defaults from app type
         fastapi_app: For FastAPI apps, specify the module path and variable name (e.g., "main:app")
                      to auto-generate OpenAPI specs. Creates a {name}_openapi_spec target.
+        openapi_lib_target: Library target to import fastapi_app's module from when generating
+                     the OpenAPI spec. Defaults to binary_name, which is correct when binary_name
+                     already builds only this one app (the common case). Set this explicitly when
+                     binary_name is a shared multi-app binary (e.g. a CLI binary_name reused across
+                     several release_app entries) -- importing fastapi_app's module still runs that
+                     binary's full package __init__ chain, so pulling in the whole shared binary's
+                     dependency closure just to read one app's schema risks unrelated transitive
+                     deps (e.g. another subcommand's native proto runtime) colliding with this app's
+                     own deps at import time. Point this at a narrower py_library covering only the
+                     fastapi_app module's own package instead.
         additional_tars: Additional tar layers to include in the image (e.g., ["//tools/steamcmd:steamcmd"])
         deploy_unit: How the app reaches an environment: "chart" (default for containerized apps, bundled
                      into a Helm chart and not independently promotable), "image" (deployed by moving an image
@@ -286,13 +296,11 @@ def release_app(name, binary_name = None, language = None, domain = None, descri
             module_path = fastapi_app
             app_var = "app"
 
-        # For OpenAPI generation, we need a library target, not a binary
-        # Try to find a corresponding _lib target, or use the binary if that's all we have
-        lib_target = base_label
-        if not lib_target.endswith("_lib"):
-            # Check if there's a {name}_lib or main_lib target we should use instead
-            # For now, just use the binary target - it will work but might be less efficient
-            pass
+        # For OpenAPI generation, we need a library target, not a binary. Default to
+        # binary_name (correct when it already builds only this one app); callers whose
+        # binary_name is a shared multi-app binary pass openapi_lib_target explicitly
+        # (see the Args doc above).
+        lib_target = openapi_lib_target if openapi_lib_target else base_label
 
         # Use the openapi_spec rule to generate spec with proper dependencies
         openapi_spec_target_name = name + "_openapi_spec"

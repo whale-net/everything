@@ -113,6 +113,12 @@ release_app(
     description = "OIDC Slack-to-Keycloak identity link web endpoint for Friendly Computing Machine",
     domain = "friendly-computing-machine",
     fastapi_app = "friendly_computing_machine.src.friendly_computing_machine.web.app:app",
+    # fcm_cli is a shared multi-command binary (bot/worker/subscribe/web/...); importing
+    # web.app's module through it for spec generation would drag in unrelated subcommands'
+    # deps (e.g. whagent's proto library, which ships its own native "google" namespace
+    # package that collides with the OTLP exporter's "google.rpc" import). Point OpenAPI
+    # generation at the web app's own narrow library instead.
+    openapi_lib_target = "//friendly_computing_machine/src/friendly_computing_machine/web",
     health_check_enabled = True,
     health_check_path = "/health",
     language = "python",

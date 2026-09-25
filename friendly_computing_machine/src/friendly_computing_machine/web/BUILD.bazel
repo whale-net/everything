@@ -11,6 +11,7 @@ py_library(
         "//friendly_computing_machine/src/friendly_computing_machine/models",
         "@pypi//:authlib",
         "@pypi//:fastapi",
+        "@pypi//:httpx",
         "@pypi//:itsdangerous",
         "@pypi//:sqlmodel",
         "@pypi//:uvicorn",

@@ -101,3 +101,14 @@ py_test(
     ],
     deps = ["//friendly_computing_machine/src:fcm_lib"],
 )
+
+# CLI entry point import (guards against transitive dependency collisions
+# across fcm_lib's bundled subcommands, e.g. "google" namespace conflicts)
+py_test(
+    name = "test_cli",
+    size = "small",
+    srcs = [
+        "test_cli.py",
+    ],
+    deps = ["//friendly_computing_machine/src:fcm_lib"],
+)
