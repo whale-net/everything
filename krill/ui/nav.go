@@ -117,7 +117,6 @@ func navIsActive(area navArea, activePath string) bool {
 // mounted behind app.auth.RequireAuthFunc by setupRoutes, so the
 // identity renderShell reads is always present.
 func renderShell(w http.ResponseWriter, r *http.Request, title, activePath string, content template.HTML) {
-func renderShell(w http.ResponseWriter, r *http.Request, title, activePath string, content template.HTML) {
 	renderShellStatus(w, r, title, activePath, content, http.StatusOK)
 }
 
