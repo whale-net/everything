@@ -225,8 +225,25 @@ type fakeAPI struct {
 	server    *httptest.Server
 	sessionID string
 
+	// rejectStatus, when non-zero, makes every non-init, non-design-session
+	// request (i.e. a task write) answer with that status and rejectBody
+	// instead of 200 -- standing in for a real api refusal (stale claim,
+	// already-cancelled task) so a route's rejection page can be exercised.
+	// Zero (the default) keeps the 200 success path the other tests rely on.
+	rejectStatus int
+	rejectBody   string
+
 	mu       sync.Mutex
 	requests []recordedRequest
+}
+
+// rejectWrite makes every subsequent task write answer with status and body,
+// standing in for an api refusal. Zero status restores the default 200.
+func (a *fakeAPI) rejectWrite(status int, body string) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	a.rejectStatus = status
+	a.rejectBody = body
 }
 
 func newFakeAPI(t *testing.T) *fakeAPI {
@@ -259,6 +276,14 @@ func newFakeAPI(t *testing.T) *fakeAPI {
 			w.WriteHeader(http.StatusCreated)
 			fmt.Fprint(w, `{"id":"`+uuid.NewString()+`"}`)
 		default:
+			api.mu.Lock()
+			rejStatus, rejBody := api.rejectStatus, api.rejectBody
+			api.mu.Unlock()
+			if rejStatus != 0 {
+				w.WriteHeader(rejStatus)
+				fmt.Fprint(w, rejBody)
+				return
+			}
 			w.WriteHeader(http.StatusOK)
 			fmt.Fprint(w, `{"status":"ok"}`)
 		}

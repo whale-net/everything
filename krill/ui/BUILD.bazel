@@ -67,6 +67,29 @@ go_test(
     ],
 )
 
+# Round-trip coverage for the console's four task interventions
+# (release/requeue/escalate/cancel, FR 1f44e461): each form POST reaches the
+# same api endpoint its MCP tool drives, with the same {"reason"} body,
+# attributed to the real signed-in operator, and 303s back to the originating
+# view; plus open-redirect-safe return_to, the in-shell rejection page, and
+# cancel's confirm-before-post affordance. Reuses the sign-in / fake-Keycloak /
+# fake-api harness in writes_test.go, which is compiled in alongside it.
+go_test(
+    name = "ui_interventions_test",
+    srcs = [
+        "writes_test.go",
+        "interventions_test.go",
+    ],
+    embed = [":ui_lib"],
+    deps = [
+        "//krill/store",
+        "//libs/go/htmxauth",
+        "@com_github_google_uuid//:uuid",
+        "@com_github_stretchr_testify//assert",
+        "@com_github_stretchr_testify//require",
+    ],
+)
+
 # domain "krill" + name "ui" produces the "krill-ui" image/app identity.
 # external-api: this is the browser-facing sign-in shell an operator's
 # MCP client redirects them to during `/authorize`.
