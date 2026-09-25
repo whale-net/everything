@@ -41,7 +41,7 @@ The repository supports optional Bazel remote caching for improved CI performanc
 - Remote cache is enabled when `bazel-remote-cache-url` input is provided.
 - Remote asset downloader (Remote Asset API for caching `http_file` and `http_archive` dependencies) is enabled when `bazel-remote-downloader-url` is provided.
 - Credentials (`BAZEL_REMOTE_CACHE_USER` and `BAZEL_REMOTE_CACHE_PASSWORD`) are passed to both the remote cache and remote downloader authorization headers if provided.
-- Automatically sets `--remote_upload_local_results=true` for cache population.
+- Automatically sets `--remote_upload_local_results=true` for cache population. Release builds are the exception: `.bazelrc`'s `build:ci-images` overrides this to `false`, so the release image-push path (v1's `release.yml`, v2's `release-v2.yml`, and the tools source-build fallback) reads from the remote cache but never writes to it — cache population is left to `ci.yml`'s plain `build:ci`. See the comment on that flag in `.bazelrc` for the stall it avoids.
 
 ### Secrets and Variables
 
