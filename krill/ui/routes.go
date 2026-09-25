@@ -59,23 +59,38 @@ func (app *App) handleShellHome(w http.ResponseWriter, r *http.Request) {
 var areaTemplate = template.Must(template.New("area").Parse(`<h2>{{.Heading}}</h2>
 <p>{{.Detail}}</p>`))
 
-// The three area handlers below own the shell's per-area roots. Each
-// renders the chrome and a placeholder body; the read and write surfaces
-// under these prefixes are separate tasks, which register their sub-pages
-// alongside these roots.
+// The area handlers below own the shell's per-area roots. Each renders the
+// chrome; the read and write surfaces under these prefixes are separate
+// tasks, which register their sub-pages alongside these roots.
 
 type areaPage struct {
 	Heading string
 	Detail  string
 }
 
-// handleOps is the ops console root (claimed / escalated / cancelled
-// tasks, open notes).
+// opsIndexTemplate is the ops console root's body: the four read views it
+// now owns, one link each (ops.go renders the views themselves).
+var opsIndexTemplate = template.Must(template.New("opsindex").Parse(`<h2>Ops console</h2>
+<ul>
+{{range .}}<li><a href="{{.Path}}">{{.Label}}</a> &mdash; {{.Blurb}}</li>
+{{end}}</ul>`))
+
+type opsIndexLink struct {
+	Path  string
+	Label string
+	Blurb string
+}
+
+var opsIndexLinks = []opsIndexLink{
+	{opsClaimedPath, "Claimed tasks", "every task that currently holds a claim."},
+	{opsEscalatedPath, "Escalated tasks", "every task with an active escalation, and why."},
+	{opsCancelledPath, "Cancelled tasks", "every cancelled (dead-lettered) task."},
+	{opsNotesPath, "Open notes", "every note still in an open lifecycle status."},
+}
+
+// handleOps is the ops console root, linking its four read views.
 func (app *App) handleOps(w http.ResponseWriter, r *http.Request) {
-	renderShell(w, r, "Ops console", opsPath, renderPage(areaTemplate, areaPage{
-		Heading: "No task views yet.",
-		Detail:  "Claimed, escalated, and cancelled task consoles land here.",
-	}))
+	renderShell(w, r, "Ops console", opsPath, renderPage(opsIndexTemplate, opsIndexLinks))
 }
 
 // handleDesign is the design-session browser root.

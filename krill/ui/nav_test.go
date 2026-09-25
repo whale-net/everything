@@ -231,6 +231,38 @@ func TestShellRoutesDoNotCollideWithSelfServe(t *testing.T) {
 	}
 }
 
+// TestOpsConsoleReadRoutesRegistered pins the ops console's four read
+// views: each is a real registered route under the ops prefix (so it is
+// not a 404), and the ops root links to every one. Registration is
+// asserted via mux.Handler rather than a request so this runs against the
+// nil-store harness -- the views themselves need a scope/task store and
+// belong to the implementation and testing phases.
+func TestOpsConsoleReadRoutesRegistered(t *testing.T) {
+	mux := newTestMux(t)
+
+	for _, path := range []string{opsClaimedPath, opsEscalatedPath, opsCancelledPath, opsNotesPath} {
+		if !strings.HasPrefix(path, opsPath+"/") {
+			t.Errorf("read view %s is not under the ops prefix %s", path, opsPath)
+		}
+		_, pattern := mux.Handler(httptest.NewRequest(http.MethodGet, path, nil))
+		if pattern == "" {
+			t.Errorf("ops read view %s is not registered", path)
+		}
+		if !navIsActive(areaByPath(t, opsPath), path) {
+			t.Errorf("ops read view %s does not keep the Ops console nav link active", path)
+		}
+	}
+
+	// The ops root indexes the views, so an operator can reach every one
+	// from /ops.
+	opsRoot := fetch(t, mux, opsPath).Body.String()
+	for _, path := range []string{opsClaimedPath, opsEscalatedPath, opsCancelledPath, opsNotesPath} {
+		if !strings.Contains(opsRoot, `href="`+path+`"`) {
+			t.Errorf("ops root does not link to %s", path)
+		}
+	}
+}
+
 // TestUnknownPathIsNotFound keeps the shell's home from swallowing typos:
 // the home page is registered as /{$}, not as a catch-all "/".
 func TestUnknownPathIsNotFound(t *testing.T) {

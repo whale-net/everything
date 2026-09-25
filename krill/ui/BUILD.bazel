@@ -15,6 +15,7 @@ go_library(
         "main.go",
         "auth.go",
         "nav.go",
+        "ops.go",
         "routes.go",
         "credentials_page.go",
         "identity.go",

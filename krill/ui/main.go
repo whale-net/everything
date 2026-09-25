@@ -137,6 +137,14 @@ type App struct {
 	// -- a browser has no way to learn a scope id, and there is exactly
 	// one, so GetSole is the whole of it.
 	scopes store.ScopeStore
+
+	// tasks is the console query surface the ops read views (ops.go) call
+	// directly. Reads are ungated (NFR6's gate is write-only) and the
+	// views resolve the sole scope themselves, so -- unlike writes -- they
+	// reach the same List* store methods the MCP ops mount and
+	// GET /console/* serve, over the same store/paging.go pagination
+	// contract, with no krill session in between.
+	tasks store.TaskStore
 }
 
 // NewApp wires up Keycloak sign-in and the auth OAuth2 provider. A
@@ -201,6 +209,7 @@ func NewApp(ctx context.Context, cfg config) (*App, error) {
 		auth:       auth,
 		oidcIssuer: cfg.OIDCIssuer,
 		scopes:     store.New(pool).Scopes(),
+		tasks:      store.New(pool).Tasks(),
 	}
 
 	// auth.NewCredentialStore/NewPostgresClientRegistry/
@@ -367,6 +376,15 @@ func (app *App) mountShellRoutes(mux *http.ServeMux) {
 	mux.HandleFunc(designPath, app.auth.RequireAuthFunc(app.handleDesign))
 	mux.HandleFunc(specPath, app.auth.RequireAuthFunc(app.handleSpec))
 	mux.HandleFunc(credentialsPath, app.auth.RequireAuthFunc(app.handleCredentials))
+
+	// The ops console's read views (ops.go), each behind the same sign-in
+	// gate as the area roots. Reads are ungated and attribute nothing, so
+	// they need no operator identity and no krill session -- just a
+	// signed-in browser and the deployment's sole scope.
+	mux.HandleFunc(opsClaimedPath, app.auth.RequireAuthFunc(app.handleClaimedTasks))
+	mux.HandleFunc(opsEscalatedPath, app.auth.RequireAuthFunc(app.handleEscalatedTasks))
+	mux.HandleFunc(opsCancelledPath, app.auth.RequireAuthFunc(app.handleCancelledTasks))
+	mux.HandleFunc(opsNotesPath, app.auth.RequireAuthFunc(app.handleOpenNotes))
 }
 
 // operatorRoute is the wrapper every signed-in-operator route in this
