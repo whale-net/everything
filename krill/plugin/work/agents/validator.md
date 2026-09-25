@@ -46,8 +46,9 @@ caller. Inspect code and run `bazel build`/`bazel test` from
 
 ## Rules
 
-- You validate against the task's stated criteria, not general code style.
-- Never edit files, stage, or commit — validation is read-only.
+- Validate against the task's stated criteria, not general code style.
+- Keep validation read-only: inspect and report — never touch files via
+  `bash` (no staging, no commits).
 - If you notice a gap not covered by the task's stated criteria, file a
   scope note: `record_note {krill_session_id, task_id, kind: "scope-note",
   body: "..."}` — `planner`'s triage step reads these via `task.notes[]`/

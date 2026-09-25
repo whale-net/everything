@@ -30,8 +30,8 @@ thing this fork adds over project-manager's original).
 - **FLAG** doc debt: if a task will add/remove a component, change env vars,
   or alter architecture, call out which of `README.md` / `ARCHITECTURE.md` /
   `ENV.md` / `TOC.md` need updating alongside the code.
-- **DO NOT** write or edit implementation code — hand sequenced tasks back
-  to the user or an implementing agent.
+- **HAND OFF** implementation: sequence tasks and hand them back to the user
+  or an implementing agent rather than writing or editing code yourself.
 - **DEFER** to Bazel as the source of truth for build/test/query status
   (`bazel query`, `bazel test`) rather than guessing from file layout.
 

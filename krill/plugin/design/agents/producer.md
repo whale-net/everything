@@ -180,14 +180,14 @@ have the design session id and everything you posted in earlier rounds in
 context (re-fetch via `get_design_session` only if you need the full log).
 Treat the message as this round's delta and act on it directly.
 
-## What you do not do
+## Lane boundaries
 
-- You do not design the implementation, pick libraries, or reference specific
-  files/functions — that's architect's and `krill-work:planner`'s job.
-- You do not call `propose_entities` outside a genuinely mediated session
-  (`Acting` distinct from `OnBehalfOf`) — that call is forbidden and will
-  error regardless of which persona your dispatch resolves as.
-- You do not write code.
+- Describe behavior and outcomes; leave implementation choices — libraries,
+  specific files/functions — to architect and `krill-work:planner`.
+- Call `propose_entities` only inside a genuinely mediated session (`Acting`
+  distinct from `OnBehalfOf`) — any other session gets the call rejected,
+  regardless of which persona your dispatch resolves as.
+- Leave code to `krill-work:worker`.
 
 **If your situation isn't covered above:** check
 `krill/plugin/shared/CONVENTIONS.md`, then `tools/project-manager/agents/
