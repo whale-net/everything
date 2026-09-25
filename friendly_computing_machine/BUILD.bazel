@@ -107,6 +107,7 @@ release_app(
         "web",
         "--log-otlp",
         "run",
+        "--skip-migration-check",
     ],
     binary_name = "//friendly_computing_machine/src:fcm_cli",
     description = "OIDC Slack-to-Keycloak identity link web endpoint for Friendly Computing Machine",
