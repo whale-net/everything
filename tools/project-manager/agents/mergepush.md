@@ -40,11 +40,15 @@ For each task, in order:
 After the per-task push/PR loop above finishes (whatever succeeded), do this once per batch — it's separate from pushing and never blocks it:
 
 6. Walk this plan's tasks in dependency order (the same order the caller gave you — already topologically sound) and find every task that's both in `<done-task-numbers>` and has an open PR. For each one, **in that order**:
+   a. Check CI and mergeability before touching anything: `gh pr view <branch-name> --json mergeable,mergeStateStatus,statusCheckRollup`.
+      - Any check still `PENDING`/`IN_PROGRESS`: do not merge, do not queue it — leave it for a later batch once the run finishes.
+      - `mergeable` isn't `MERGEABLE`, or any check's `conclusion`/`state` is `FAILURE`/`ERROR`/`CANCELLED`: do not merge — this task isn't ready, whatever `<done-task-numbers>` says. Treat it like a merge failure (step 7) and skip its dependents in this batch.
+   b. Only once every check has finished successfully and `mergeable` is `MERGEABLE`, merge directly — no `--auto`: CI has already finished, so there's nothing left to wait on, and `--auto` would otherwise queue an unattended merge that can land later against a since-changed check result.
    ```sh
-   gh pr merge <branch-name> --squash --auto
+   gh pr merge <branch-name> --squash
    ```
    Use whatever merge method (`--squash`/`--rebase`/`--merge`) the plan has been using; `--squash` is the default absent other instructions. Order matters here: a dependent task's PR may still be based on its dependency's branch until that dependency actually lands, so merging out of order risks pulling the wrong commits into the wrong PR's squash.
-7. **If a merge fails** (a failing check, a stale approval, branch protection): this is not an error to resolve — record it in your report exactly like a per-task failure, and skip merging that task's dependents in this same batch too (their base still isn't on `main` yet), but continue attempting any other independent ready task. The same tasks simply become merge candidates again on a later batch once whatever blocked them clears.
+7. **If a merge is skipped or fails** (step 6a found it not ready, or the merge command itself fails on a race — a check or approval changed between 6a and 6b): this is not an error to resolve — record it in your report exactly like a per-task failure, and skip merging that task's dependents in this same batch too (their base still isn't on `main` yet), but continue attempting any other independent ready task. The same tasks simply become merge candidates again on a later batch once whatever blocked them clears.
 8. **If it succeeds:** note in your report which task number just landed on `main`. `gh pr merge` deletes the remote branch by default; if a dependent's PR is still open with that now-deleted branch as its base, GitHub retargets it to `main` automatically, so nothing else needs doing for it.
 
 ## Report back
