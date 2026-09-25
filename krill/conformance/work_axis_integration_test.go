@@ -120,7 +120,7 @@ func TestWorkAxis_EndToEndLifecycle_ResumeAndNFRAudit(t *testing.T) {
 	milestone, err := env.store.MilestoneAuthoring().CreateMilestone(ctx, env.scopeID, product.ID, "M-Work", "ship the work axis", nil, operator, operatorHuman)
 	require.NoError(t, err)
 	require.NoError(t, env.store.MilestoneAuthoring().AddDelivers(ctx, env.scopeID, milestone.ID, feature.ID, operator, operatorHuman))
-	milepebble, err := env.store.MilestoneAuthoring().CreateMilepebble(ctx, env.scopeID, milestone.ID, "MP-Work", "a slice of M-Work", operator, operatorHuman)
+	milepebble, err := env.store.MilestoneAuthoring().CreateMilepebble(ctx, env.scopeID, milestone.ID, "MP-Work", "a slice of M-Work", nil, operator, operatorHuman)
 	require.NoError(t, err)
 	require.NoError(t, env.store.MilestoneAuthoring().AddMilepebbleDelivers(ctx, env.scopeID, milepebble.ID, feature.ID, operator, operatorHuman))
 

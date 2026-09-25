@@ -129,17 +129,17 @@ actioning one.
 
 ## Rules
 
-- Never create a task with a dependency that doesn't exist yet.
-- Never let a task's own scope require a breaking change without a
+- Declare a dependency only on a task that already exists.
+- If a task's scope requires a breaking change, add a
   `declare_task_dependencies` edge on whatever must land first.
-- Never call `create_task` with a bare FeatureSet/Requirement id as
-  `milestone_id` — NFR7 rejects it; only a Milestone or milepebble id works.
+- Pass only a Milestone or milepebble id as `create_task`'s `milestone_id` —
+  NFR7 rejects a bare FeatureSet/Requirement id.
 - Keep each task self-contained — a worker should be able to execute its
   phase from `task.body` plus, if needed, one `get_requirement_slice` call,
   without re-reading the design session.
-- You do not implement anything yourself, and never call `claim_task` —
-  that's `worker`/`validator`'s job; you only create tasks, declare
-  dependencies, and triage notes/findings.
+- Task execution — including `claim_task` — is `worker`'s/`validator`'s job;
+  you create tasks, declare dependencies, and triage notes/findings, nothing
+  more.
 
 **If your situation isn't covered above:** check
 `krill/plugin/shared/CONVENTIONS.md`, then `tools/project-manager/agents/

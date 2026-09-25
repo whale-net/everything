@@ -324,3 +324,55 @@ func TestDispatch_BulkMode_UnlockedSetIgnored(t *testing.T) {
 	assert.False(t, result.IsError, "unexpected tool error: %s", result.Content)
 	assert.Contains(t, result.Content, "chan-1")
 }
+
+// TestDispatch_MalformedArguments_IsErrorResultNotSessionFailure proves a
+// model that emits unparseable tool arguments gets an ordinary IsError
+// tool result back, so it can see what it did wrong and retry -- rather
+// than a hard Go error, which propagates to failTurn and ends the whole
+// session `failed` over one bad argument blob. That error would also be
+// classified non_retryable, so retrying the session could never rescue it.
+//
+// This is the same handling SearchTools already gave a malformed query
+// (worker/activities.go's decodeSearchQuery); this closes the gap for an
+// ordinary domain tool, where the mistake is far more likely.
+func TestDispatch_MalformedArguments_IsErrorResultNotSessionFailure(t *testing.T) {
+	ctx := context.Background()
+	serverURL, httpHits, readCalls := newDispatchTestServerCounting(t)
+	dispatcher, in := newDispatchTestFixture(t, serverURL)
+
+	in.Turn = 1
+	in.CallIndex = 0
+	in.Call = llm.ToolCall{ID: "call-1", Name: "read_probe", Arguments: `{"channel_id": `} // truncated JSON
+
+	result, err := dispatcher.Dispatch(ctx, in)
+
+	require.NoError(t, err, "malformed arguments must not fail the dispatch; they are the model's mistake to correct")
+	assert.True(t, result.IsError, "an undecodable argument blob must be reported to the model as a tool error")
+	assert.Contains(t, result.Content, "arguments", "the model needs to be told what was wrong: %s", result.Content)
+	assert.Equal(t, "call-1", result.ToolCallID, "the error result must stay bound to the call that produced it")
+	assert.Equal(t, "read_probe", result.Name)
+
+	// resolveTarget has already opened the MCP session and listed tools by
+	// this point (it must, to check the name is callable), so HTTP hits
+	// are expected. What must not have happened is the tool itself running.
+	assert.Zero(t, *readCalls, "the tool must not be invoked with undecodable arguments")
+	assert.Positive(t, *httpHits, "resolveTarget is expected to have connected before decoding")
+}
+
+// TestDispatch_ValidArguments_AreUnaffected is the counterweight: the
+// malformed-arguments path must not have changed how a well-formed call
+// dispatches.
+func TestDispatch_ValidArguments_AreUnaffected(t *testing.T) {
+	ctx := context.Background()
+	serverURL := newDispatchTestServer(t)
+	dispatcher, in := newDispatchTestFixture(t, serverURL)
+
+	in.Turn = 1
+	in.CallIndex = 0
+	in.Call = llm.ToolCall{ID: "call-1", Name: "read_probe", Arguments: `{"channel_id":"chan-1"}`}
+
+	result, err := dispatcher.Dispatch(ctx, in)
+	require.NoError(t, err)
+	assert.False(t, result.IsError, "a valid call must dispatch normally: %s", result.Content)
+	assert.Contains(t, result.Content, "chan-1")
+}

@@ -246,7 +246,7 @@ func TestDeliveryShipmentStore_Milepebble_ScopedToOwnDeliversSubset(t *testing.T
 	self := milestoneAuthoringTestSubject("agent-1")
 	milestone, err := s.MilestoneAuthoring().CreateMilestone(ctx, scopeID, product.ID, "M1", "", nil, self, self)
 	require.NoError(t, err)
-	milepebble, err := s.MilestoneAuthoring().CreateMilepebble(ctx, scopeID, milestone.ID, "cut 1", "", self, self)
+	milepebble, err := s.MilestoneAuthoring().CreateMilepebble(ctx, scopeID, milestone.ID, "cut 1", "", nil, self, self)
 	require.NoError(t, err)
 
 	featureSet, err := s.FeatureSets().Create(ctx, scopeID, product.ID, "FS", nil)

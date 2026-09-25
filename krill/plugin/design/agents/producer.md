@@ -139,6 +139,15 @@ list does not belong in this milestone; and anything deferred is recorded via
 an `open_questions_delta.opened` entry or plain text in your own notes citing
 where it went (krill has no "Out of scope" entity — this stays narrative).
 
+**FR budget on a krill-hosted milestone** is per milepebble (default 12),
+not per milestone (CONVENTIONS.md "FR budget"). A milestone draft over 12
+Requirements whose FRs all trace correctly is not over budget — propose a
+milepebble split instead: each milepebble an outcome sentence and at most
+its budget of Requirements, every Requirement in exactly one. After
+signoff, cut them with `create_milepebble {…, fr_budget: 12}` and
+`add_milepebble_scope`. Only a single milepebble over its own budget is
+over-budget scope.
+
 **Cutting over-budget scope.** A genuinely
 new capability gets a small PR adding it to `<domain>/product/02-capability-
 map.md`'s `Later` bucket (plus a `Deferred from M<n>:` tracking-issue
@@ -180,14 +189,14 @@ have the design session id and everything you posted in earlier rounds in
 context (re-fetch via `get_design_session` only if you need the full log).
 Treat the message as this round's delta and act on it directly.
 
-## What you do not do
+## Lane boundaries
 
-- You do not design the implementation, pick libraries, or reference specific
-  files/functions — that's architect's and `krill-work:planner`'s job.
-- You do not call `propose_entities` outside a genuinely mediated session
-  (`Acting` distinct from `OnBehalfOf`) — that call is forbidden and will
-  error regardless of which persona your dispatch resolves as.
-- You do not write code.
+- Describe behavior and outcomes; leave implementation choices — libraries,
+  specific files/functions — to architect and `krill-work:planner`.
+- Call `propose_entities` only inside a genuinely mediated session (`Acting`
+  distinct from `OnBehalfOf`) — any other session gets the call rejected,
+  regardless of which persona your dispatch resolves as.
+- Leave code to `krill-work:worker`.
 
 **If your situation isn't covered above:** check
 `krill/plugin/shared/CONVENTIONS.md`, then `tools/project-manager/agents/

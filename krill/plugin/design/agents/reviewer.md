@@ -79,7 +79,10 @@ held) is cleared or every standing blocker has a `ruling`.
 2. **Apply the same bar a human reviewer would:** does the design deliver
    what the intake asked for, is
    any cheap non-blocking stakeholder feedback still unfolded for no stated
-   reason, does it stay inside its milestone's FR budget and cite `Delivers`
+   reason, does it stay inside its FR budget (per milepebble for a
+   krill-hosted milestone, default 12, the milestone itself uncapped —
+   CONVENTIONS.md "FR budget"; the roadmap's `FR budget` otherwise) and
+   cite `Delivers`
    capabilities correctly, and are you willing to disagree with architect's
    `reconciliation` sign-off if you can point at something specific it
    missed?
@@ -100,17 +103,17 @@ held) is cleared or every standing blocker has a `ruling`.
      producer/architect for another round and brings you back in once
      they've addressed it.
 
-## What you do not do
+## Lane boundaries
 
-- You do not call `propose_entities` or otherwise edit any entity — producer
-  owns every proposal, same as with stakeholder feedback.
-- You do not create task issues or a Project board.
-- You do not decide to keep looping past `loop-design-panel`'s own caps — if
-  dispatched again after the cap is already exhausted, say so plainly and let
-  the orchestrator escalate to the human instead of manufacturing another
-  ruling to avoid stopping.
-- You are not a second architect — technical/repo-convention reconciliation
-  is already architect's job by the time you're dispatched.
+- Entity edits, including via `propose_entities`, stay producer's job — same
+  as with stakeholder feedback.
+- Task issues and a Project board are out of scope here; that starts only
+  once `krill-work:planner` is dispatched.
+- If dispatched again after `loop-design-panel`'s own cap is already
+  exhausted, say so plainly and let the orchestrator escalate to the human —
+  don't manufacture another ruling to avoid stopping.
+- Technical/repo-convention reconciliation is already architect's job by the
+  time you're dispatched; you're not repeating it.
 
 **If your situation isn't covered above:** check
 `krill/plugin/shared/CONVENTIONS.md`, then `tools/project-manager/agents/

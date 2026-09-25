@@ -59,17 +59,17 @@ read) unless noted otherwise.
 
 | Endpoint | Description |
 |----------|-------------|
-| `POST /milestones` | Creates a milestone under a Product with an outcome sentence and an optional FR budget (FR1, FR2, issue #2683). Body: `{"product_id", "name", "outcome", "fr_budget"?}`. Gated. Returns `{"id": "<uuid>"}`. |
-| `POST /milestones/{id}/fr-budget` | Revises a milestone's FR budget (FR2) — the current value after this call is the only one that reads back; the prior value is not resurrected. Gated. |
+| `POST /milestones` | Creates a milestone under a Product with an outcome sentence and an optional FR budget (FR1, FR2, issue #2683). Body: `{"product_id", "name", "outcome", "fr_budget"?}`. Gated. Returns `{"id": "<uuid>"}`. The 12-FR default budget applies per milepebble, so a milestone itself has no cap. |
+| `POST /milestones/{id}/fr-budget` | Revises a milestone's or milepebble's FR budget (FR2) — the current value after this call is the only one that reads back; the prior value is not resurrected. Gated. |
 | `POST /milestones/{id}/delivers` | Adds a Feature or LoadBearingDecision to a milestone's Delivers set (LB6 — an `entity_milestone` row, never a column on the entity). Idempotent. Gated. |
 | `POST /milestones/{id}/must-not-foreclose` | Adds a LoadBearingDecision to a milestone's Must-not-foreclose set, the same association mechanism as Delivers, discriminated by `relation`. Idempotent. Gated. |
 | `POST /milestones/{id}/deferrals` | Records one deliberately-deferred item on a milestone, with a required destination (FR1). Gated. |
 | `GET /milestones/{id}` | Returns a milestone's authoring fields, Delivers/Must-not-foreclose association sets, and deferrals. Never gated. |
-| `POST /milestones/{id}/milepebbles` | Cuts a new milepebble from a milestone (FR3, issue #2684). Gated. Returns `{"id": "<uuid>"}`. |
+| `POST /milestones/{id}/milepebbles` | Cuts a new milepebble from a milestone (FR3, issue #2684). Body: `{"name", "outcome", "fr_budget"?}`. Gated. Returns `{"id": "<uuid>"}`. |
 | `POST /milepebbles/{id}/delivers` | Adds an entity to a milepebble's Delivers set — rejected if the entity is not already in the parent milestone's own Delivers set (FR3's subset invariant). Gated. |
 | `POST /milepebbles/{id}/discovered-scope` | Lands mid-milestone discovery as a real Feature or Requirement row, associated to the milepebble and, in the same transaction, to its parent milestone's Delivers set (FR4). Gated. |
 | `GET /milepebbles/{id}` | Returns a milepebble's own fields and Delivers set. Never gated. |
-| `GET /milestones/{id}/milepebbles` | Lists a milestone's milepebbles in position order. Never gated. |
+| `GET /milestones/{id}/milepebbles` | Lists a milestone's milepebbles in position order, each with its `fr_budget`. Never gated. |
 | `POST /milestones/{id}/status` | Appends a status transition for a milestone or milepebble (FR8, FR9, issue #2685) — a re-affirmation of the current status still appends a new row. Gated. |
 | `GET /milestones/{id}/status` | Returns the current (latest) status, or "not started" when no transition has ever been recorded. Never gated. |
 | `GET /milestones/{id}/status/history` | Returns every status transition in chronological order, each with its actor and timestamp (FR12). Never gated. |

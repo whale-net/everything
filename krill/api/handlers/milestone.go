@@ -314,8 +314,9 @@ func AddDeferralHandler(milestones store.MilestoneAuthoringStore) http.HandlerFu
 
 // createMilepebbleRequest is CreateMilepebbleHandler's request body (FR3).
 type createMilepebbleRequest struct {
-	Name    string `json:"name"`
-	Outcome string `json:"outcome"`
+	Name     string `json:"name"`
+	Outcome  string `json:"outcome"`
+	FRBudget *int   `json:"fr_budget"`
 }
 
 // addMilepebbleDeliversRequest is AddMilepebbleDeliversHandler's request
@@ -347,9 +348,10 @@ type DiscoveredScopeResponse struct {
 
 // MilepebbleSummary is one entry of ListMilepebblesResponse.Milepebbles.
 type MilepebbleSummary struct {
-	ID      string  `json:"id"`
-	Name    string  `json:"name"`
-	Outcome *string `json:"outcome"`
+	ID       string  `json:"id"`
+	Name     string  `json:"name"`
+	Outcome  *string `json:"outcome"`
+	FRBudget *int    `json:"fr_budget"`
 }
 
 // ListMilepebblesResponse is ListMilepebblesHandler's response body.
@@ -392,7 +394,7 @@ func CreateMilepebbleHandler(milestones store.MilestoneAuthoringStore) http.Hand
 			return
 		}
 
-		milepebble, err := milestones.CreateMilepebble(r.Context(), sess.ScopeID, parentMilestoneID, req.Name, req.Outcome, sess.Acting, sess.OnBehalfOf)
+		milepebble, err := milestones.CreateMilepebble(r.Context(), sess.ScopeID, parentMilestoneID, req.Name, req.Outcome, req.FRBudget, sess.Acting, sess.OnBehalfOf)
 		if err != nil {
 			writeStoreError(w, err)
 			return
@@ -546,7 +548,7 @@ func ListMilepebblesHandler(milestones store.MilestoneAuthoringStore) http.Handl
 
 		summaries := make([]MilepebbleSummary, len(milepebbles))
 		for i, m := range milepebbles {
-			summaries[i] = MilepebbleSummary{ID: m.ID.String(), Name: m.Name, Outcome: m.Outcome}
+			summaries[i] = MilepebbleSummary{ID: m.ID.String(), Name: m.Name, Outcome: m.Outcome, FRBudget: m.FRBudget}
 		}
 
 		writeJSON(w, http.StatusOK, ListMilepebblesResponse{Milepebbles: summaries})

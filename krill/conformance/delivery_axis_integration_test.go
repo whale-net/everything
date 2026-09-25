@@ -128,9 +128,9 @@ func TestDeliveryAxis_EndToEndLifecycle_EveryStepReassertsCapturedIDs(t *testing
 	// -- Step 3: cut M-A into two milepebbles, each with a subset of M-A's
 	// delivered items; a non-subset item is refused (FR3). ------------
 
-	mp1, err := env.store.MilestoneAuthoring().CreateMilepebble(ctx, env.scopeID, milestone.ID, "mp-1", "first cut", agent, human)
+	mp1, err := env.store.MilestoneAuthoring().CreateMilepebble(ctx, env.scopeID, milestone.ID, "mp-1", "first cut", nil, agent, human)
 	require.NoError(t, err)
-	mp2, err := env.store.MilestoneAuthoring().CreateMilepebble(ctx, env.scopeID, milestone.ID, "mp-2", "second cut", agent, human)
+	mp2, err := env.store.MilestoneAuthoring().CreateMilepebble(ctx, env.scopeID, milestone.ID, "mp-2", "second cut", nil, agent, human)
 	require.NoError(t, err)
 
 	require.NoError(t, env.store.MilestoneAuthoring().AddMilepebbleDelivers(ctx, env.scopeID, mp1.ID, features[0].ID, agent, human))

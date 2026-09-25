@@ -166,7 +166,7 @@ func TestEscalationConsole_EndToEndWalk_AndNFRAudit(t *testing.T) {
 	milestone, err := env.store.MilestoneAuthoring().CreateMilestone(ctx, env.scopeID, product.ID, "M-Escalation", "ship the escalation console axis", nil, operator, operatorHuman)
 	require.NoError(t, err)
 	require.NoError(t, env.store.MilestoneAuthoring().AddDelivers(ctx, env.scopeID, milestone.ID, feature.ID, operator, operatorHuman))
-	milepebble, err := env.store.MilestoneAuthoring().CreateMilepebble(ctx, env.scopeID, milestone.ID, "MP-Escalation", "a slice of M-Escalation", operator, operatorHuman)
+	milepebble, err := env.store.MilestoneAuthoring().CreateMilepebble(ctx, env.scopeID, milestone.ID, "MP-Escalation", "a slice of M-Escalation", nil, operator, operatorHuman)
 	require.NoError(t, err)
 	require.NoError(t, env.store.MilestoneAuthoring().AddMilepebbleDelivers(ctx, env.scopeID, milepebble.ID, feature.ID, operator, operatorHuman))
 

@@ -44,27 +44,56 @@ type BuildContextResult struct {
 	EventIDs []uuid.UUID
 }
 
-// maxContextEvents bounds how many of a session's transcript events
-// BuildContext selects for a turn's context: a placeholder budgeting
-// strategy for M1 (ARCHITECTURE.md "Open items" -- "Context budgeting
-// strategy (summarization vs. truncation, when to write summary events):
-// worker-internal, defer to the milestone that first hits the budget").
-// Bounded ~100-turn sessions producing a handful of events each stay
-// comfortably under this ceiling in practice, so plain truncation to the
-// most recent maxContextEvents (oldest events dropped first) is a safe
-// placeholder rather than a real token-budget/summarization algorithm.
+// maxContextEvents bounds how many of a session's transcript events a
+// BULK-mode turn's context selects, applied before the character budget
+// below. It is a ceiling on the number of event IDs a turn records in its
+// turn_context row -- a per-turn resource that does not shrink just
+// because every event is tiny -- and not on the size of the request the
+// provider receives; bulkModeContextBudget is what bounds that.
 //
-// M4 (issue #2673, FR10) answered this open item for search-mode sessions
-// only -- see fitToBudget (budget.go) and this function's own branch on
-// Definition.ToolLoadingMode below. maxContextEvents remains exactly what
-// it always was for a bulk-mode session: still a placeholder, still this
-// file's open item, until a future milestone gives bulk mode the same
-// real accounting.
+// A count is the wrong unit for request size, and was originally the only
+// bound: a single tool_result event can carry tens of kilobytes, so a
+// count ceiling never fires for exactly the sessions that need one. A dev
+// session (2026-09-20, audience-score-system-research) accumulated 48
+// events totalling 191KB inside a single turn -- far under this ceiling --
+// and re-sent that whole transcript on every one of the turn's ~10 model
+// calls, each of which then ran past CallModel's activity timeout and was
+// retried, failing the session outright. Hence both bounds, count then
+// characters.
+//
+// Search-mode turns are bounded by searchModeContextBudget alone and are
+// deliberately NOT subject to this ceiling: that budget, not a count, is
+// FR10's whole contract for them, and a session whose events are small
+// enough to fit the budget must not be truncated anyway.
 const maxContextEvents = 400
 
+// bulkModeContextBudget is the per-turn character budget BuildContext
+// charges a bulk-mode turn's transcript content against -- the bulk-mode
+// half of the context-budgeting open item (ARCHITECTURE.md "Open items",
+// "Context budgeting strategy"), closed the same way M4 (issue #2673,
+// FR10) closed the search-mode half: with fitToBudget, in the same
+// character unit as searchModeContextBudget, and for the same reason a
+// count was insufficient (see maxContextEvents above).
+//
+// Value: the same 120,000 characters search mode uses -- ~30K tokens at a
+// ~4-chars/token heuristic. Bulk mode's un-charged tool definitions (below)
+// are what it has instead, so the two budgets are deliberately equal
+// rather than tuned apart.
+//
+// Bulk mode is budgeted against transcript content only, not its tool
+// definitions, because processTurn deliberately runs
+// ActivityListToolDefinitions AFTER ActivityBuildContext for a bulk-mode
+// turn (workflow.go) -- so no turn_tool_defs row exists yet when
+// BuildContext runs, and reordering the two would need its own
+// workflow.GetVersion change ID. The un-charged tool definitions are a
+// stable per-agent cost rather than a per-turn one, so leaving them out
+// costs a bounded, predictable slice of headroom. Summarization (rather
+// than truncation) remains the larger, still-open half of the strategy.
+const bulkModeContextBudget = 120_000
+
 // transcriptReadPageSize bounds each Read call BuildContext issues while
-// paging through the whole transcript before truncating to
-// maxContextEvents.
+// paging through the whole transcript before budgeting it down to the
+// selected projection.
 const transcriptReadPageSize = 200
 
 // BuildContext is per-turn activity #2 (ARCHITECTURE.md "Session
@@ -72,8 +101,8 @@ const transcriptReadPageSize = 200
 // new-input event append" -- the one piece of this turn's context not
 // already sitting in the transcript), then selects a budgeted projection
 // over the transcript -- recent events plus the agent definition, fitted
-// to maxContextEvents (bulk mode) or searchModeContextBudget via
-// fitToBudget (search mode, FR10) -- and persists the exact ordered
+// to bulkModeContextBudget (bulk mode) or searchModeContextBudget (search
+// mode, FR10), both via fitToBudget -- and persists the exact ordered
 // event-ID list that projection was built from into `turn_context` (LB1).
 // The projection itself (the assembled llm.Message list) is derived and
 // ephemeral and never enters workflow history or the `turn_context` row
@@ -104,8 +133,8 @@ func (a *Activities) BuildContext(ctx context.Context, in BuildContextInput) (Bu
 	}
 	if in.Definition.ToolLoadingMode == session.ToolLoadingModeSearch {
 		// FR10 (issue #2673): a shared budget spanning this turn's tool
-		// definitions and transcript content, replacing the flat
-		// maxContextEvents truncation below for search-mode sessions only.
+		// definitions and transcript content, and -- unlike the bulk-mode
+		// branch below -- with no event-count ceiling layered on top.
 		// toolDefs is re-read from the turn_tool_defs row
 		// ActivityListToolDefinitions persisted earlier this turn (search
 		// mode always resolves tools before BuildContext runs, workflow.go's
@@ -121,8 +150,23 @@ func (a *Activities) BuildContext(ctx context.Context, in BuildContextInput) (Bu
 				"session_id", in.SessionID, "turn", in.Turn, "overage_chars", overage)
 		}
 		all = fitToBudget(toolDefs, all, searchModeContextBudget)
-	} else if len(all) > maxContextEvents {
-		all = all[len(all)-maxContextEvents:]
+	} else {
+		// Bulk mode, two bounds. The count ceiling is applied first and
+		// unchanged: it bounds how many event IDs land in the turn_context
+		// row (a per-turn resource independent of content size), not how
+		// big the request is. The character budget is applied second and
+		// is what actually bounds the request. Order matters -- the
+		// count truncation can itself cut between an assistant message and
+		// its tool results, so it has to run before fitToBudget, whose
+		// trimOrphanedToolResults is the last thing to touch the window.
+		if len(all) > maxContextEvents {
+			all = all[len(all)-maxContextEvents:]
+		}
+		// Tool definitions are deliberately not charged here -- this
+		// branch runs before ActivityListToolDefinitions for a bulk-mode
+		// turn, so no turn_tool_defs row exists yet (see
+		// bulkModeContextBudget).
+		all = fitToBudget(nil, all, bulkModeContextBudget)
 	}
 
 	eventIDs := make([]uuid.UUID, len(all))
@@ -288,15 +332,85 @@ func eventsToMessages(evs []events.Event) ([]llm.Message, error) {
 				return nil, fmt.Errorf("unmarshal tool result payload for event %s: %w", ev.EventID, err)
 			}
 			messages = append(messages, llm.Message{
-				Role:       llm.RoleTool,
-				Content:    payload.Content,
+				Role: llm.RoleTool,
+				// A domain MCP server's result is whatever it chose to
+				// return, and one list-style call can run to tens of
+				// kilobytes -- the dev transcript's largest was 84KB.
+				// Clamp it here, at the one place the content becomes a
+				// message, so a single fat result degrades one message
+				// instead of crowding every other message out of the
+				// budget. The transcript event itself keeps its full
+				// body (LB1); only the model's view of it is clamped.
+				Content:    clampToolResultContent(payload.Content),
 				ToolCallID: payload.ToolCallID,
 			})
 		default:
 			continue
 		}
 	}
-	return messages, nil
+	return hoistAssistantToolCalls(messages), nil
+}
+
+// hoistAssistantToolCalls moves an assistant message that carries tool
+// calls to immediately BEFORE the run of tool results answering it, when
+// the transcript committed them in the other order.
+//
+// processTurn dispatches a response's tool calls and only afterwards
+// commits the assistant_message carrying them (workflow.go) -- the order
+// ARCHITECTURE.md's "Session workflow" step 4 describes. So one tool-loop
+// iteration's transcript segment is seq-ordered
+// [tool_result:N ... assistant_message:I(tool_calls=[N...])], and rendered
+// in that order a `tool` message PRECEDES the assistant message it
+// answers. The provider requires the opposite: a tool message must respond
+// to a tool call in a preceding assistant message. Left alone this is a
+// hard 400 on every model call after a turn's first tool use, and the
+// malformed events stay in the transcript, so it poisons the next turn too
+// -- one tool call and the session can never complete another model call.
+// It has only gone unnoticed because the model used in dev tolerated it.
+//
+// Context is a projection over the transcript ("Three nouns": derived,
+// rebuilt every turn, never stored), so the projection is the right place
+// to repair this: the transcript keeps the order it actually recorded, and
+// sessions already stored in the broken order are repaired too rather than
+// only new ones.
+//
+// Deliberately narrow, and deterministic: the walk back stops at the first
+// result this message does NOT answer -- that one belongs to an earlier
+// assistant message and stays put -- so a message only ever moves earlier
+// past results it itself answers, and never past anything else. Reordering
+// is therefore a pure function of the transcript, which matters for prompt
+// caching: a turn's already-rendered messages keep their exact relative
+// order as the session grows, so the prefix does not churn between turns.
+func hoistAssistantToolCalls(msgs []llm.Message) []llm.Message {
+	out := append([]llm.Message(nil), msgs...)
+	for j := range out {
+		if out[j].Role != llm.RoleAssistant || len(out[j].ToolCalls) == 0 {
+			continue
+		}
+		answered := make(map[string]bool, len(out[j].ToolCalls))
+		for _, tc := range out[j].ToolCalls {
+			answered[tc.ID] = true
+		}
+		// Walk back over the contiguous run of results this message
+		// answers. Consecutive iterations' results abut in the transcript,
+		// so requiring the whole preceding run to match would refuse to
+		// repair the second of two iterations once the first was repaired;
+		// stopping at the first foreign result is what makes one pass over
+		// the list enough.
+		i := j
+		for i > 0 && out[i-1].Role == llm.RoleTool && answered[out[i-1].ToolCallID] {
+			i--
+		}
+		if i == j {
+			continue // already in protocol order
+		}
+		// Shift the run one slot right (copy is memmove, so the overlap is
+		// safe) and drop the assistant message into the vacated slot.
+		assistant := out[j]
+		copy(out[i+1:j+1], out[i:j])
+		out[i] = assistant
+	}
+	return out
 }
 
 // toolCallEventType/toolResultEventType derive the `type` column

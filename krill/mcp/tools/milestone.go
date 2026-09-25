@@ -34,7 +34,7 @@ type createMilestoneInput struct {
 	ProductID string `json:"product_id" jsonschema:"The Product surrogate id this milestone belongs to, as a UUID string."`
 	Name      string `json:"name" jsonschema:"The bare milestone identifier, e.g. \"M3\"."`
 	Outcome   string `json:"outcome" jsonschema:"The milestone's outcome sentence (FR1)."`
-	FRBudget  *int   `json:"fr_budget" jsonschema:"Optional FR budget (FR2) -- may be set later via set_fr_budget."`
+	FRBudget  *int   `json:"fr_budget,omitempty" jsonschema:"Optional FR budget (FR2) -- may be set later via set_fr_budget. No default cap: the 12-FR default applies per milepebble."`
 }
 
 // RegisterCreateMilestone registers create_milestone (FR1): mints a new
@@ -73,8 +73,8 @@ func RegisterCreateMilestone(reg *server.Registry, sessions store.SessionStore, 
 // setFRBudgetInput is set_fr_budget's argument schema (FR2's revise path).
 type setFRBudgetInput struct {
 	krillSessionInput
-	MilestoneID string `json:"milestone_id" jsonschema:"The milestone surrogate id, as a UUID string."`
-	FRBudget    int    `json:"fr_budget" jsonschema:"The milestone's revised FR budget -- the current value after two calls is always the latest."`
+	MilestoneID string `json:"milestone_id" jsonschema:"The milestone or milepebble surrogate id, as a UUID string."`
+	FRBudget    int    `json:"fr_budget" jsonschema:"The milestone's or milepebble's revised FR budget -- the current value after two calls is always the latest."`
 }
 
 // RegisterSetFRBudget registers set_fr_budget (FR2): revises a milestone's
@@ -82,7 +82,7 @@ type setFRBudgetInput struct {
 func RegisterSetFRBudget(reg *server.Registry, sessions store.SessionStore, milestones store.MilestoneAuthoringStore) {
 	server.RegisterWrite(reg, &mcp.Tool{
 		Name:        "set_fr_budget",
-		Description: "Revise a milestone's FR budget (FR2).",
+		Description: "Revise a milestone's or milepebble's FR budget (FR2).",
 	}, []server.Persona{server.PersonaRequirementContributor, server.PersonaAgent, server.PersonaSwarmOperator}, func(ctx context.Context, _ *mcp.CallToolRequest, in setFRBudgetInput) (*mcp.CallToolResult, handlers.IDResponse, error) {
 		var zero handlers.IDResponse
 
@@ -259,6 +259,7 @@ type createMilepebbleInput struct {
 	MilestoneID string `json:"milestone_id" jsonschema:"The parent milestone's surrogate id, as a UUID string."`
 	Name        string `json:"name" jsonschema:"The milepebble's short name, unique among its parent milestone's own milepebbles."`
 	Outcome     string `json:"outcome" jsonschema:"The milepebble's outcome sentence."`
+	FRBudget    *int   `json:"fr_budget,omitempty" jsonschema:"Optional FR budget for this milepebble (default 12 by convention) -- may be set later via set_fr_budget."`
 }
 
 // RegisterCreateMilepebble registers create_milepebble (FR3): cuts a
@@ -267,7 +268,7 @@ type createMilepebbleInput struct {
 func RegisterCreateMilepebble(reg *server.Registry, sessions store.SessionStore, milestones store.MilestoneAuthoringStore) {
 	server.RegisterWrite(reg, &mcp.Tool{
 		Name:        "create_milepebble",
-		Description: "Cut a milestone into a new sub-milestone container (milepebble) (FR3).",
+		Description: "Cut a milestone into a new sub-milestone container (milepebble) with an optional FR budget (FR3).",
 	}, []server.Persona{server.PersonaRequirementContributor, server.PersonaAgent, server.PersonaSwarmOperator}, func(ctx context.Context, _ *mcp.CallToolRequest, in createMilepebbleInput) (*mcp.CallToolResult, handlers.IDResponse, error) {
 		var zero handlers.IDResponse
 
@@ -287,7 +288,7 @@ func RegisterCreateMilepebble(reg *server.Registry, sessions store.SessionStore,
 			return nil, zero, fmt.Errorf("outcome: required")
 		}
 
-		milepebble, err := milestones.CreateMilepebble(ctx, sess.ScopeID, milestoneID, in.Name, in.Outcome, sess.Acting, sess.OnBehalfOf)
+		milepebble, err := milestones.CreateMilepebble(ctx, sess.ScopeID, milestoneID, in.Name, in.Outcome, in.FRBudget, sess.Acting, sess.OnBehalfOf)
 		if err != nil {
 			return nil, zero, err
 		}
@@ -421,9 +422,10 @@ type listMilepebblesInput struct {
 // milepebbleSummary is one entry of listMilepebblesResponse.Milepebbles,
 // mirroring handlers.MilepebbleSummary (LB7).
 type milepebbleSummary struct {
-	ID      string  `json:"id"`
-	Name    string  `json:"name"`
-	Outcome *string `json:"outcome"`
+	ID       string  `json:"id"`
+	Name     string  `json:"name"`
+	Outcome  *string `json:"outcome"`
+	FRBudget *int    `json:"fr_budget" jsonschema:"The milepebble's FR budget, or null if none is set."`
 }
 
 // listMilepebblesResponse is list_milepebbles' response body.
@@ -453,7 +455,7 @@ func RegisterListMilepebbles(reg *server.Registry, milestones store.MilestoneAut
 
 		summaries := make([]milepebbleSummary, len(milepebbles))
 		for i, m := range milepebbles {
-			summaries[i] = milepebbleSummary{ID: m.ID.String(), Name: m.Name, Outcome: m.Outcome}
+			summaries[i] = milepebbleSummary{ID: m.ID.String(), Name: m.Name, Outcome: m.Outcome, FRBudget: m.FRBudget}
 		}
 		return nil, listMilepebblesResponse{Milepebbles: summaries}, nil
 	})

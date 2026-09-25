@@ -116,8 +116,11 @@ design-session mechanics.
    <design-session-id>` runs the same pipeline unattended.
 
    **With `--milestone`:** also report the Requirement count against the
-   milestone's FR budget (`get_milestone`'s `fr_budget` for a krill-hosted
-   milestone, the roadmap file's `FR budget` line otherwise). `review`
+   FR budget. For a krill-hosted milestone the budget is per milepebble
+   (CONVENTIONS.md "FR budget"): report each milepebble's count against
+   its `fr_budget` from `list_milepebbles` (default 12); a milestone over
+   12 with no milepebbles cut yet needs a proposed milepebble split, not a
+   scope cut. Otherwise use the roadmap file's `FR budget` line. `review`
    appends the `signoff` event that makes the proposed entities the
    approved plan as usual; producer posts `Ledger: M<n> → planned
    (<design-session-id>)` on the tracking issue, or calls

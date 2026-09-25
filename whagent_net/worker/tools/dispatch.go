@@ -239,7 +239,22 @@ func (d *Dispatcher) Dispatch(ctx context.Context, in DispatchInput) (Result, er
 
 	args, err := DecodeArguments(in.Call.Arguments)
 	if err != nil {
-		return Result{}, fmt.Errorf("tools: decode arguments for call %q: %w", in.Call.Name, err)
+		// Malformed arguments are the model's mistake, not a transport
+		// failure and not a whagent-net fault, so they are answered to the
+		// model as an ordinary IsError tool result -- the same handling
+		// SearchTools gives a malformed query (worker/activities.go). A
+		// hard Go error here would instead fail the whole turn and end the
+		// session `failed` over one bad argument blob, and would be
+		// classified non_retryable (worker/classify.go), so retrying the
+		// session could never rescue it. Leaving the ledger unrecorded
+		// (as before) is correct: nothing was dispatched, and re-decoding
+		// the same call deterministically yields this same result.
+		return Result{
+			ToolCallID: in.Call.ID,
+			Name:       in.Call.Name,
+			Content:    fmt.Sprintf("%s: could not decode arguments as JSON: %v", in.Call.Name, err),
+			IsError:    true,
+		}, nil
 	}
 	// A write tool's InputSchema declares idempotency_key as a property
 	// (the domain server's own IdempotencyKeyed classification, reflected

@@ -147,7 +147,10 @@ var specTables = []string{"product", "feature_set", "feature", "requirement", "l
 // `kind='backlog'` row on the same table, no new table) -- covered by
 // TestMigration014_SchemaContract, not here; migration 015 (issue #2719)
 // creates the whole work axis in one migration, six brand-new tables --
-// covered in detail by TestMigration015_UpDownRoundTrip, not here.
+// covered in detail by TestMigration015_UpDownRoundTrip, not here; migration
+// 018 (issue #2962) only widens the `krill_session` acting_kind /
+// on_behalf_of_kind CHECKs to admit 'agent' -- no new table, so the
+// Up/Down round-trip below is what covers it.
 func TestMigrations_UpDownUp_LeavesCleanDatabaseAndIsRerunnable(t *testing.T) {
 	ctx := context.Background()
 	db := dbtest.NewPostgres(ctx, t, dbtest.Options{})
@@ -160,7 +163,7 @@ func TestMigrations_UpDownUp_LeavesCleanDatabaseAndIsRerunnable(t *testing.T) {
 
 	latest, err := runner.LatestVersion()
 	require.NoError(t, err)
-	require.Equal(t, uint(17), latest, "expected the latest migration source version to be 17 (001_scope, 002_spec_entities, 003_session, 004_milestone_assoc, 005_pointer_artifact, 006_mcpauth_credential, 007_ui_sessions, 008_design_session, 009_import_completion, 010_milestone_authoring, 011_milepebble, 012_milestone_status, 013_delivery_shipment, 014_backlog_bucket, 015_work_axis, 016_escalation_axis, 017_display_numbers) -- update this test if a later migration has since landed")
+	require.Equal(t, uint(18), latest, "expected the latest migration source version to be 18 (001_scope, 002_spec_entities, 003_session, 004_milestone_assoc, 005_pointer_artifact, 006_mcpauth_credential, 007_ui_sessions, 008_design_session, 009_import_completion, 010_milestone_authoring, 011_milepebble, 012_milestone_status, 013_delivery_shipment, 014_backlog_bucket, 015_work_axis, 016_escalation_axis, 017_display_numbers, 018_agent_subject_kind) -- update this test if a later migration has since landed")
 
 	// -- Up: scope, krill_session, the milestone tables, pointer_artifact,
 	// the auth tables, ui_sessions, design_session/revision_event,
@@ -171,7 +174,7 @@ func TestMigrations_UpDownUp_LeavesCleanDatabaseAndIsRerunnable(t *testing.T) {
 	version, dirty, err := runner.Version()
 	require.NoError(t, err)
 	assert.False(t, dirty)
-	assert.Equal(t, uint(17), version)
+	assert.Equal(t, uint(18), version)
 
 	assert.True(t, tableExists(t, ctx, db, "scope"), "expected table \"scope\" to exist after Up()")
 	assert.True(t, tableExists(t, ctx, db, "krill_session"), "expected table \"krill_session\" to exist after Up() (003_session, issue #2489)")
@@ -226,7 +229,7 @@ func TestMigrations_UpDownUp_LeavesCleanDatabaseAndIsRerunnable(t *testing.T) {
 	version, dirty, err = runner.Version()
 	require.NoError(t, err)
 	assert.False(t, dirty)
-	assert.Equal(t, uint(17), version)
+	assert.Equal(t, uint(18), version)
 
 	assert.True(t, tableExists(t, ctx, db, "scope"), "expected table \"scope\" to exist again after the second Up()")
 	assert.True(t, tableExists(t, ctx, db, "krill_session"), "expected table \"krill_session\" to exist again after the second Up()")

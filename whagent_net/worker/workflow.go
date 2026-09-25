@@ -171,11 +171,43 @@ type SendTurnSignal struct {
 // executes, unless overridden per call site. MaximumAttempts is bounded --
 // no infinite retry -- matching every other workflow precedent in this
 // repo (tools/app_registry/worker/writeback, audience_score_system/worker/
-// sync).
+// sync). Sized for the store-backed activities (BuildContext,
+// ListToolDefinitions, CommitTurn, the dispatch bookkeeping), which are
+// Postgres reads and writes and finish in milliseconds. The one activity
+// that is categorically not of that kind -- CallModel, which waits on a
+// third-party inference provider -- overrides it; see
+// callModelActivityOptions.
 var defaultActivityOptions = workflow.ActivityOptions{
 	StartToCloseTimeout: 2 * time.Minute,
 	RetryPolicy: &temporal.RetryPolicy{
 		MaximumAttempts: 5,
+	},
+}
+
+// callModelActivityOptions overrides defaultActivityOptions for the
+// ActivityCallModel call sites, because an LLM completion is bounded by
+// neither a database nor our own latency budget.
+//
+// The 2-minute default was measurably wrong for it. In dev, a
+// research-agent turn's model calls ran 95s, 96s, 99s, 89s and 150s --
+// each one either brushing or crossing the 2-minute ceiling, and the
+// 150s one only completing because Temporal retried it. Every such retry
+// re-sends the entire request to the provider and is billed for it, while
+// the abandoned attempt records PromptTokens: 0, so the cost cap that
+// was supposed to bound spend silently under-counts exactly the calls
+// that overspend. Five attempts at a ceiling the call cannot meet turns
+// one slow model into ten minutes of duplicated, unbilled-to-us work.
+//
+// 5 minutes is the ceiling for a single attempt, 3 attempts the total
+// budget: enough headroom for a genuinely slow model on a large context,
+// few enough that a hopeless call still fails in minutes rather than
+// consuming a turn's entire wall clock. This is a ceiling, not a target --
+// the context budget in budget.go is what keeps a normal call fast; this
+// only stops a slow one from being killed and re-sent.
+var callModelActivityOptions = workflow.ActivityOptions{
+	StartToCloseTimeout: 5 * time.Minute,
+	RetryPolicy: &temporal.RetryPolicy{
+		MaximumAttempts: 3,
 	},
 }
 
@@ -583,7 +615,7 @@ func processTurn(ctx workflow.Context, sessionID uuid.UUID, turn int, in SendTur
 		Provider:  resolved.Provider,
 		EventIDs:  built.EventIDs,
 	}
-	if err := workflow.ExecuteActivity(ctx, ActivityCallModel, callIn).Get(ctx, &modelResult); err != nil {
+	if err := workflow.ExecuteActivity(workflow.WithActivityOptions(ctx, callModelActivityOptions), ActivityCallModel, callIn).Get(ctx, &modelResult); err != nil {
 		if v == workflow.DefaultVersion {
 			return CommitTurnResult{}, err
 		}
@@ -733,7 +765,7 @@ func processTurn(ctx workflow.Context, sessionID uuid.UUID, turn int, in SendTur
 				Provider:  resolved.Provider,
 				EventIDs:  rebuilt.EventIDs,
 			}
-			if err := workflow.ExecuteActivity(ctx, ActivityCallModel, loopCallIn).Get(ctx, &modelResult); err != nil {
+			if err := workflow.ExecuteActivity(workflow.WithActivityOptions(ctx, callModelActivityOptions), ActivityCallModel, loopCallIn).Get(ctx, &modelResult); err != nil {
 				return failTurn(ctx, sessionID, turn, err)
 			}
 		}
