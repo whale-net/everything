@@ -45,12 +45,12 @@ func TestFilesToBazelLabels(t *testing.T) {
 		"manmanv2/api/main.go",
 		"libs/go/rmq/consumer.go",
 		"demo/hello_go/BUILD.bazel",
-		"script.bzl", // should be skipped
+		"tools/bazel/release.bzl", // a .bzl is a real source target, not skipped
 	}
 	labels, pkgs := filesToBazelLabels(files)
 
-	if len(labels) != 2 {
-		t.Errorf("expected 2 labels, got %d: %v", len(labels), labels)
+	if len(labels) != 3 {
+		t.Errorf("expected 3 labels, got %d: %v", len(labels), labels)
 	}
 	if len(pkgs) != 1 {
 		t.Errorf("expected 1 package, got %d: %v", len(pkgs), pkgs)
@@ -213,7 +213,7 @@ func TestDetectAffectedTargetsGlobalBuildFiles(t *testing.T) {
 		output:      "//libs/go/dbtest:postgres_constraints_test",
 	})
 	git := newFakeGit(
-		fakeGitCall{argsContain: []string{"diff", "--name-only"}, output: "tools/bazel/release.bzl\n"},
+		fakeGitCall{argsContain: []string{"diff", "--name-only"}, output: "MODULE.bazel\n"},
 	)
 
 	result, err := DetectAffectedTargets("abc123", "tests(//libs/...)", bazel, git)
@@ -222,6 +222,39 @@ func TestDetectAffectedTargetsGlobalBuildFiles(t *testing.T) {
 	}
 	if len(result) != 1 || result[0] != "//libs/go/dbtest:postgres_constraints_test" {
 		t.Errorf("expected all candidates on global build change, got %v", result)
+	}
+}
+
+func TestDetectAffectedTargetsScopesBzlChange(t *testing.T) {
+	// A .bzl edit must be scoped through rdeps, not treated as a global change.
+	// Only the intersected rdeps query is registered below; the "all candidates"
+	// query is intentionally absent, so a regression to the global path would
+	// return nothing and fail the assertion.
+	candidates := "tests(//pkg/...)"
+	changedBzl := "//pkg/lib:macros.bzl"
+	wantExpr := "(tests(//pkg/...)) intersect rdeps(tests(//pkg/...), //pkg/lib:macros.bzl)"
+
+	bazel := newFakeBazel(
+		fakeBazelCall{
+			argsContain:    []string{changedBzl},
+			argsNotContain: []string{"rdeps"},
+			output:         changedBzl,
+		},
+		fakeBazelCall{
+			argsContain: []string{wantExpr},
+			output:      "//pkg/lib:lib_test",
+		},
+	)
+	git := newFakeGit(
+		fakeGitCall{argsContain: []string{"diff", "--name-only"}, output: "pkg/lib/macros.bzl"},
+	)
+
+	result, err := DetectAffectedTargets("abc123", candidates, bazel, git)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(result) != 1 || result[0] != "//pkg/lib:lib_test" {
+		t.Errorf("expected the .bzl change to be scoped to the intersected candidate, got %v", result)
 	}
 }
 
@@ -331,6 +364,29 @@ func TestHasGlobalBuildChanges(t *testing.T) {
 	for _, tt := range tests {
 		if got := hasGlobalBuildChanges(tt.files); got != tt.want {
 			t.Errorf("hasGlobalBuildChanges(%v) = %v, want %v", tt.files, got, tt.want)
+		}
+	}
+}
+
+func TestHasUnscopableChanges(t *testing.T) {
+	tests := []struct {
+		files []string
+		want  bool
+	}{
+		{files: []string{"MODULE.bazel"}, want: true},
+		{files: []string{".bazelrc"}, want: true},
+		{files: []string{".bazelversion"}, want: true},
+		{files: []string{"WORKSPACE"}, want: true},
+		// .bzl and .lock edits are scoped precisely rather than treated as global.
+		{files: []string{"tools/bazel/release.bzl"}, want: false},
+		{files: []string{"MODULE.bazel.lock"}, want: false},
+		{files: []string{"Cargo.lock"}, want: false},
+		{files: []string{"manmanv2/api/main.go"}, want: false},
+		{files: []string{"README.md", "docs/RELEASE.md"}, want: false},
+	}
+	for _, tt := range tests {
+		if got := hasUnscopableChanges(tt.files); got != tt.want {
+			t.Errorf("hasUnscopableChanges(%v) = %v, want %v", tt.files, got, tt.want)
 		}
 	}
 }
