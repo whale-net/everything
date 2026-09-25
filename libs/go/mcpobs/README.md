@@ -1,16 +1,16 @@
 # mcpobs — shared MCP tracing/logging middleware
 
 The observability half of the MCP contract every domain's MCP server and
-MCP client should share, so a caller's trace ID correlates end-to-end
-instead of showing up as disconnected root traces on either side of the
-MCP boundary.
+MCP client should share: each MCP tool call shows up as its own trace
+containing that call and its DB work, and a client's outbound calls carry
+a trace so the two ends can be correlated.
 
 ## Server side: `InstrumentToolCall`
 
 Wrap every tool registration path a domain's MCP server has (read, write,
-or any gated variant) so each call gets its own `mcp.tool/<name>` child
-span — nested under whatever span the inbound HTTP request already
-carries — plus a structured log line recording outcome and duration.
+or any gated variant) so each call gets its own `mcp.tool/<name>` span —
+with the call's DB spans underneath it — plus a structured log line
+recording outcome and duration.
 
 ```go
 var (
@@ -33,13 +33,37 @@ See `audience_score_system/mcp/server/observability.go` and
 supplies its own caller-identity attribute (a `Person` UUID vs. a
 `Persona` string) but shares this package's span/log/error handling.
 
-This only produces a *child* span if the `ctx` passed in already carries
-a parent span from the inbound request. If a domain's MCP server sees
-only a root span with no `mcp.tool/<name>` child underneath it despite
-using `InstrumentToolCall`, the request's `context.Context` reaching the
-registered tool handler is not the same context tree as the span-bearing
-HTTP request — check how the MCP transport threads context from the HTTP
-handler down into `mcp.ToolHandlerFor`.
+### Why each tool call is its own trace, not a child of the HTTP span
+
+`InstrumentToolCall` deliberately does **not** nest the tool span under
+whatever span `ctx` already carries. On the streamable-HTTP transport
+that would look right and be wrong.
+
+The go-sdk builds one jsonrpc2 connection per MCP **session**, at
+`initialize` time, from *that request's* context (`mcp.connect` →
+`jsonrpc2.NewConnection(ctx, …)`). Tool handlers are dispatched off that
+connection's read loop, so their context descends from the `initialize`
+request — not from the POST that carried the call. The transport never
+threads the per-request HTTP context down: `servePOST` publishes the bare
+JSON-RPC message onto the connection's incoming channel, and
+`RequestExtra` exposes only `TokenInfo`/`Header`, no `Context`.
+
+Inheriting that context produces two failure modes that look like
+unrelated bugs in a tracing backend:
+
+- **The POST span looks empty.** Each tool call's own POST produces a
+  span whose only child is the auth `UPDATE mcp_credential SET
+  last_used_at`. The tool span and its queries are in a *different* trace.
+- **One trace accumulates the whole session.** Every tool call in the
+  session shares the dead `initialize` span as ancestor, so the trace's
+  duration is the session's lifetime and its span count grows without
+  bound (observed: 989 spans over 7 minutes), with children that start
+  minutes after their parent ended.
+
+Starting a fresh trace per call costs the trace-level link to the HTTP
+request, which carries no information the tool span doesn't already have
+(same tool, same persona) and cannot be recovered from the transport
+anyway.
 
 ## Client side: `WrapClientTransport`
 
