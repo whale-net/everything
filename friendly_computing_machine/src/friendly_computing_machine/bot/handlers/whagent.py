@@ -129,10 +129,12 @@ def handle_whagent_app_mention(event, say, client=None, body=None):
                     )
                 else:
                     token = mint_link_token(team_id, slack_user_id)
+                    # Posted at the channel top level, not scoped to thread_ts:
+                    # a thread-scoped ephemeral only renders if the user has
+                    # that specific thread open, so they'd never see it.
                     client.chat_postEphemeral(
                         channel=channel_slack_id,
                         user=slack_user_id,
-                        thread_ts=thread_ts,
                         text=(
                             "Link your Slack account to use this agent: "
                             f"<{web_public_url}/link/{token}|Link my account> "
