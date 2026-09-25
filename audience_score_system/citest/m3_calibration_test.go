@@ -378,6 +378,13 @@ func TestE2E_M3_CalibrationTrend(t *testing.T) {
 		assert.Equal(t, second, got, "NFR1: an identical repeat call converges -- get_outcome_bar must be unchanged")
 
 		after := decode[mcptools.GetCalibrationTrendOutput](t, callTool(t, csCreator, "get_calibration_trend", mcptools.GetCalibrationTrendInput{ChannelID: vsc.ch.ID.String()}))
+
+		// A repeat write intentionally refreshes outcome_bar.updated_at (the
+		// upsert's audit timestamp tracks the last write, not the last
+		// change), so that one field is expected to differ. Exclude only it --
+		// every other field of the trend, buckets included, must still match.
+		before.OutcomeBar.UpdatedAt = ""
+		after.OutcomeBar.UpdatedAt = ""
 		assert.Equal(t, before, after, "NFR1: the trend must not double-count after an identical repeat write")
 	})
 
