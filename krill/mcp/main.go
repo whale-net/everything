@@ -235,20 +235,19 @@ func run() error {
 	// also registers here (as well as designReg): every work-axis write
 	// tool requires a krill_session_id, and a krill-work-only caller (its
 	// manifest no longer includes designMountPath) would otherwise have no
-	// MCP-reachable way to mint one at all.
+	// MCP-reachable way to mint one at all. For the same reason the six
+	// ungated milestone/product discovery reads dual-mount here (issue
+	// #3028): a krill-work persona holding a milestone or task id still
+	// needs to resolve the product and read the milestone it belongs to,
+	// and with only the task-lifecycle verbs above it could not do either.
+	// These are reads -- no work-axis write is reachable from this mount
+	// that designReg does not already carry.
 	workSrv := server.New()
 	workReg := server.NewRegistry(workSrv)
-	tools.RegisterInitSession(workReg, sessions, entities.Scopes())
-	tools.RegisterCreateTask(workReg, sessions, entities.Tasks())
-	tools.RegisterDeclareTaskDependencies(workReg, sessions, entities.Tasks())
-	tools.RegisterGetTaskPayload(workReg, entities.Tasks(), assembler)
-	tools.RegisterListTasks(workReg, entities.Tasks())
-	tools.RegisterClaimTask(workReg, sessions, entities.Tasks(), assembler)
-	tools.RegisterHeartbeatTask(workReg, sessions, entities.Tasks())
-	tools.RegisterCompleteTask(workReg, sessions, entities.Tasks(), assembler)
-	tools.RegisterAbandonTask(workReg, sessions, entities.Tasks(), assembler)
-	tools.RegisterRecordNote(workReg, sessions, entities.Tasks())
-	tools.RegisterTransitionNoteLifecycle(workReg, sessions, entities.Tasks())
+	// RegisterWorkAll (mcp/tools/work_mount.go) is the single call site for
+	// this mount's tool set, so work_mount_registration_test.go can pin the
+	// exact set rather than re-deriving it here.
+	tools.RegisterWorkAll(workReg, entities, sessions, assembler, querier)
 
 	// opsSrv/opsReg is M5's operator surface (issue #2867, /mcp/ops):
 	// its own *mcp.Server so an operator verb or console query

@@ -120,9 +120,9 @@ func ParseSubject(s SubjectRequest) (store.Subject, error) {
 		return store.Subject{}, fmt.Errorf("sub is required")
 	}
 	switch store.SubjectKind(s.Kind) {
-	case store.SubjectKindHuman, store.SubjectKindService:
+	case store.SubjectKindHuman, store.SubjectKindService, store.SubjectKindAgent:
 	default:
-		return store.Subject{}, fmt.Errorf("kind must be %q or %q, got %q", store.SubjectKindHuman, store.SubjectKindService, s.Kind)
+		return store.Subject{}, fmt.Errorf("kind must be %q, %q or %q, got %q", store.SubjectKindHuman, store.SubjectKindService, store.SubjectKindAgent, s.Kind)
 	}
 	return store.Subject{Iss: s.Iss, Sub: s.Sub, Kind: store.SubjectKind(s.Kind)}, nil
 }

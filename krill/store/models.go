@@ -279,19 +279,19 @@ const (
 // that changes over time -- see migration 010's comment. Destination is
 // never empty: FR1 requires every deferred entry to cite where it went.
 type MilestoneDeferral struct {
-	ID          uuid.UUID
-	ScopeID     uuid.UUID
-	MilestoneID uuid.UUID
-	Body        string // what was deferred
-	Destination string // the milestone or "Later" capability bucket it moved to
-	Position    int
-	CreatedAt   time.Time
+	ID          uuid.UUID `json:"id"`
+	ScopeID     uuid.UUID `json:"scope_id"`
+	MilestoneID uuid.UUID `json:"milestone_id"`
+	Body        string    `json:"body"`        // what was deferred
+	Destination string    `json:"destination"` // the milestone or "Later" capability bucket it moved to
+	Position    int       `json:"position"`
+	CreatedAt   time.Time `json:"created_at"`
 
 	// CreatedByActing/CreatedByOnBehalfOf are always populated (NFR4) --
 	// every write path onto this table is the new AddDeferral method,
 	// which always has a real caller session.
-	CreatedByActing     Subject
-	CreatedByOnBehalfOf Subject
+	CreatedByActing     Subject `json:"created_by_acting"`
+	CreatedByOnBehalfOf Subject `json:"created_by_on_behalf_of"`
 }
 
 // EntityMilestone is one row of `entity_milestone` (migration 004; the

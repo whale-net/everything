@@ -31,9 +31,9 @@ than cost or latency here.
 
 ## Reporting findings (Milestone path)
 
-`record_note` hits a known blocker (below). Make the call anyway, report the
-exact error per finding, and still hand the finding text (not just a note
-id) to `krill-work:planner` in your report so it isn't lost.
+`record_note` works normally from this dispatch. Make the call, and still
+hand the finding text (not just a note id) to `krill-work:planner` in your
+report so it isn't lost if the note write ever fails.
 
 @../../shared/snippets/task-lifecycle-blocker.md
 

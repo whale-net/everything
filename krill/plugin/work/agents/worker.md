@@ -24,8 +24,8 @@ Your caller tells you which path you're on; say so in your report either
 way, don't leave it implicit.
 
 **Every MCP call in this process (`claim_task`, `heartbeat_task`,
-`complete_task`, `abandon_task`, `record_note`) hits a known blocker. Make
-the call anyway — it's what's correct once the blocker closes.**
+`complete_task`, `abandon_task`, `record_note`) works normally from this
+dispatch — the persona gate that once rejected them is fixed.**
 
 @../../shared/snippets/task-lifecycle-blocker.md
 

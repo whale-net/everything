@@ -20,10 +20,10 @@ axis"). On the no-Milestone fallback, `<n>` is still
 the GitHub tracking issue `krill-work:planner` mints.
 
 On the Milestone path, every `worker`/`validator`/`system-validator`
-dispatch inside `implement`/`validate` is expected to hit the known
-task-lifecycle blocker and report `forbidden` — see `agents/worker.md`.
-This loop does not retry around that failure or fall back to GitHub; it
-surfaces the failure in its final report like any other blocker.
+dispatch inside `implement`/`validate` has a working task-lifecycle tool
+surface — the persona gate that once rejected `claim_task`/`complete_task`
+is fixed (#2930, #2933). A `forbidden` from one of those tools is a real
+regression: report it, don't fall back to GitHub.
 
 ## Usage
 

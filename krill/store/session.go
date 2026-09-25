@@ -20,14 +20,23 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
-// SubjectKind distinguishes a human caller from a service account (LB4,
-// mirrors whagent_net's LB2 verbatim) -- both are treated uniformly
-// wherever a Subject appears.
+// SubjectKind distinguishes a human caller, a service account, and an
+// agent (LB4, mirrors whagent_net's LB2 verbatim) -- all three are treated
+// uniformly wherever a Subject appears.
+//
+// `agent` is the kind a producer-role or worker-role Agent records itself
+// as when it acts on behalf of a human: LB4 requires every mutating call to
+// distinguish the acting subject from the on-behalf-of subject, and
+// "this was done by an agent, for this person" is not expressible by
+// calling the agent a service. C24 (agent identity) stays Later -- this
+// makes the shape LB4 already reserves the column for usable today, it
+// does not decide how an agent identity is minted or verified.
 type SubjectKind string
 
 const (
 	SubjectKindHuman   SubjectKind = "human"
 	SubjectKindService SubjectKind = "service"
+	SubjectKindAgent   SubjectKind = "agent"
 )
 
 // Subject is an (issuer, subject, kind) identity triple -- kept as three
