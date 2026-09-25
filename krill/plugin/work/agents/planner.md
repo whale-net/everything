@@ -29,9 +29,9 @@ a `signoff` event with `signoff_status: approved`, and the Milestone id:
    `planned` also means "design signed off, no tasks yet" on the
    design-axis path — `/krill-design:design`, `/krill-design:review`, and
    `/krill-design:loop-design-panel` all transition a krill-hosted
-   milestone straight from `in design` to `planned` the moment a `signoff`
-   event lands, before any `Task` exists (there is no separate status value
-   for "signed off, not yet planned" in the fixed seven-status enum). Call
+   milestone to `planned` the moment a `signoff` event lands, before any
+   `Task` exists (the `designed` rung sits between `in design` and
+   `planned`, and signoff advances through both). Call
    `get_milestone_status_history {milestone_id}` instead and read the
    **note** on the latest `planned`-or-later transition: this step's own
    note (step 4 below) always names the task ids it created, so a note that
@@ -81,8 +81,11 @@ a `signoff` event with `signoff_status: approved`, and the Milestone id:
    dispatched. Always name the created task ids in this transition's own
    `note` (never a bare "planned" with no ids) — this is what step 1's
    history-based idempotency check above relies on to tell "design signed
-   off" and "tasks created" apart, since both currently share the same
-   `planned` status value.
+   off" and "tasks created" apart. On a milestone the design path already
+   moved to `planned`, that first call is a **self-transition and therefore
+   writes no history row** (CONVENTIONS.md), so the task ids must go on
+   the `{status: "in progress"}` call that follows; step 1's read covers
+   both, since it looks at the latest `planned`-or-later transition.
 5. **Report the full task manifest** — every task id, title, and starting
    lane, in dependency order — to whoever dispatched you. This manifest is
    the only durable record of the milestone's task set (CONVENTIONS.md);

@@ -3,8 +3,8 @@
 // Real-Postgres coverage for MilestoneStatusEventStore
 // (milestone_status.go, migration 012, issue #2685's Testing section,
 // FR8/FR9/FR12): a milestone or milepebble with no transitions reports
-// "not started" with zero rows (item 1), every one of the seven statuses
-// is DB-CHECK-accepted while an eighth is rejected by the database itself
+// "not started" with zero rows (item 1), every one of the eight statuses
+// is DB-CHECK-accepted while a ninth is rejected by the database itself
 // (item 2), the same reads/writes work against a kind='milepebble' row and
 // an unknown id is rejected loudly (item 3, FR9), a
 // planned -> in progress -> shipped sequence returns three chronological
@@ -21,6 +21,15 @@
 // newMilestoneAuthoringTestStore/newMilestoneAuthoringTestScope/
 // milestoneAuthoringTestSubject helpers this file reuses (same package,
 // same go_test target).
+//
+// Several of those cases drive a status sequence that the set_milestone_status
+// edge table (krill/api/handlers, issue #2963) would refuse -- the
+// re-affirmation one in particular. That is deliberate: RecordTransition is
+// the raw append-only primitive, and the edge table plus the
+// no-op-on-self-transition rule live one layer up, in the write path both the
+// HTTP handler and the MCP tool share. The store's own contract -- no Go-side
+// status or transition validation, the DB CHECK as the only gate -- is what
+// this file pins.
 //
 // Run it explicitly (requires a working Docker daemon):
 //
@@ -75,14 +84,16 @@ func TestMilestoneStatusStore_NoTransitions_ReportsNotStartedWithZeroRows(t *tes
 	assert.Empty(t, transitions)
 }
 
-// TestMilestoneStatusStore_AllSevenStatuses_EighthRejectedByDBCheck is
-// issue #2685's Testing item 2 (FR8): every one of the seven fixed status
-// values is accepted by RecordTransition, and an eighth, made-up value is
-// rejected by the database's own CHECK constraint (migration 012) --
-// RecordTransition itself performs no Go-side status validation (that is
-// krill/api/handlers.ValidMilestoneStatuses' job), so a rejection here can
-// only be the DB CHECK firing.
-func TestMilestoneStatusStore_AllSevenStatuses_EighthRejectedByDBCheck(t *testing.T) {
+// TestMilestoneStatusStore_AllEightStatuses_NinthRejectedByDBCheck is
+// issue #2685's Testing item 2 (FR8), updated for issue #2963's eighth
+// value: every one of the eight fixed status values is accepted by
+// RecordTransition -- including the 'designed' migration 019 added between
+// 'in design' and 'planned' -- and a ninth, made-up value is rejected by
+// the database's own CHECK constraint. RecordTransition itself performs
+// no Go-side status or transition validation (that is
+// krill/api/handlers' job), so a rejection here can only be the DB CHECK
+// firing.
+func TestMilestoneStatusStore_AllEightStatuses_NinthRejectedByDBCheck(t *testing.T) {
 	ctx := context.Background()
 	s, db := newMilestoneAuthoringTestStore(t)
 	scopeID := newMilestoneAuthoringTestScope(t, ctx, db)
@@ -93,29 +104,30 @@ func TestMilestoneStatusStore_AllSevenStatuses_EighthRejectedByDBCheck(t *testin
 	milestone, err := s.MilestoneAuthoring().CreateMilestone(ctx, scopeID, product.ID, "M1", "", nil, self, self)
 	require.NoError(t, err)
 
-	sevenStatuses := []store.MilestoneStatus{
+	eightStatuses := []store.MilestoneStatus{
 		store.MilestoneStatusNotStarted,
 		store.MilestoneStatusInDesign,
+		store.MilestoneStatusDesigned,
 		store.MilestoneStatusPlanned,
 		store.MilestoneStatusInProgress,
 		store.MilestoneStatusShipped,
 		store.MilestoneStatusPartiallyComplete,
 		store.MilestoneStatusAbandoned,
 	}
-	for _, status := range sevenStatuses {
+	for _, status := range eightStatuses {
 		_, err := s.MilestoneStatus().RecordTransition(ctx, scopeID, milestone.ID, status, nil, self, self)
-		assert.NoError(t, err, "status %q must be accepted -- it is one of FR8's fixed seven values", status)
+		assert.NoError(t, err, "status %q must be accepted -- it is one of FR8's fixed eight values", status)
 	}
 
 	var count int
 	require.NoError(t, db.Pool.QueryRow(ctx, `SELECT count(*) FROM milestone_status_event WHERE milestone_id = $1`, milestone.ID).Scan(&count))
-	assert.Equal(t, len(sevenStatuses), count)
+	assert.Equal(t, len(eightStatuses), count)
 
 	_, err = s.MilestoneStatus().RecordTransition(ctx, scopeID, milestone.ID, store.MilestoneStatus("bogus-status"), nil, self, self)
-	assert.Error(t, err, "an eighth, made-up status value must be rejected by the DB CHECK constraint, not silently accepted")
+	assert.Error(t, err, "a ninth, made-up status value must be rejected by the DB CHECK constraint, not silently accepted")
 
 	require.NoError(t, db.Pool.QueryRow(ctx, `SELECT count(*) FROM milestone_status_event WHERE milestone_id = $1`, milestone.ID).Scan(&count))
-	assert.Equal(t, len(sevenStatuses), count, "the rejected eighth status must not have inserted a row")
+	assert.Equal(t, len(eightStatuses), count, "the rejected ninth status must not have inserted a row")
 }
 
 // TestMilestoneStatusStore_Milepebble_SupportsSameOperations_

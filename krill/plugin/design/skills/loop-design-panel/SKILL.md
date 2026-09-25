@@ -94,8 +94,10 @@ Parameters (`--milestone`, `--personas`, `--stakeholder-rounds`,
 7. **Report.** If this is a milestone of a product brief not hosted in
    krill, post `Ledger: M<n> → planned (<design-session-id>)` on the
    tracking issue. If it's a krill-hosted milestone, call
-   `set_milestone_status {milestone_id, status: "planned"}` instead
-   (CONVENTIONS.md). There is no separate "publish" dispatch — the
+   `set_milestone_status {milestone_id, status: "designed"}` then
+   `{status: "planned"}` instead (CONVENTIONS.md) — the edge table puts
+   `designed` between `in design` and `planned`, so both calls are
+   required. There is no separate "publish" dispatch — the
    `signoff` event from step 5 already made the proposed entities the
    approved plan.
 

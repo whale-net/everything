@@ -183,10 +183,13 @@ func milestoneStatusTextOf(res *mcp.CallToolResult) string {
 // section's MCP-layer re-verification of its Validation section's first
 // bullet: a Requirement Contributor can, over MCP alone,
 // set_milestone_status a real milestone through a
-// planned -> in progress -> shipped sequence, read the current (derived)
+// in design -> designed -> planned -> in progress -> shipped sequence, read
+// the current (derived)
 // status back via get_milestone_status, and read the full chronological
 // transition history -- with actor and timestamp -- via
-// get_milestone_status_history.
+// get_milestone_status_history. It also re-verifies issue #2963's edge
+// table over the MCP surface: an edge outside the table is a tool error
+// naming the edge, and writes no history row.
 func TestMCPMilestoneStatusSurface_EndToEnd(t *testing.T) {
 	ctx := context.Background()
 	entities, pool := newMilestoneStatusToolsTestStore(t)
@@ -247,7 +250,7 @@ func TestMCPMilestoneStatusSurface_EndToEnd(t *testing.T) {
 		assert.Contains(t, milestoneStatusTextOf(res), "required")
 	})
 
-	t.Run("set_milestone_status rejects a value outside FR8's fixed seven", func(t *testing.T) {
+	t.Run("set_milestone_status rejects a value outside FR8's fixed eight", func(t *testing.T) {
 		cs, err := connectMilestoneStatusMCP(t, designURL, agentToken)
 		require.NoError(t, err)
 
@@ -281,10 +284,16 @@ func TestMCPMilestoneStatusSurface_EndToEnd(t *testing.T) {
 		assert.Equal(t, "not started", structured["status"])
 	})
 
-	// ── set_milestone_status (planned -> in progress -> shipped) -> ────────
-	// ── get_milestone_status -> get_milestone_status_history, over MCP ──────
+	// ── set_milestone_status (in design -> designed -> planned -> in ────────
+	// ── progress -> shipped) -> get_milestone_status -> ───────────────────
+	// ── get_milestone_status_history, over MCP ──────────────────────────────
+	//
+	// The walk is a legal edge path out of the derived "not started"
+	// (issue #2963): only "in design" and "abandoned" may follow a
+	// container that has never been transitioned, and "designed" is the
+	// rung between "in design" and "planned" (migration 019).
 
-	for _, status := range []string{"planned", "in progress", "shipped"} {
+	for _, status := range []string{"in design", "designed", "planned", "in progress", "shipped"} {
 		status := status
 		t.Run("set_milestone_status records "+status, func(t *testing.T) {
 			cs, err := connectMilestoneStatusMCP(t, designURL, agentToken)
@@ -311,6 +320,32 @@ func TestMCPMilestoneStatusSurface_EndToEnd(t *testing.T) {
 		})
 	}
 
+	t.Run("set_milestone_status rejects an edge outside the table, naming it and the alternatives", func(t *testing.T) {
+		cs, err := connectMilestoneStatusMCP(t, designURL, agentToken)
+		require.NoError(t, err)
+
+		res, err := cs.CallTool(ctx, &mcp.CallToolParams{
+			Name: "set_milestone_status",
+			Arguments: map[string]any{
+				"krill_session_id": selfSessionID.String(),
+				"milestone_id":     milestone.ID.String(),
+				"status":           "in design",
+				"note":             nil,
+			},
+		})
+		require.NoError(t, err, "a rejected transition is a tool error, not a protocol error")
+		assert.True(t, res.IsError, "shipped is terminal -- nothing may follow it")
+		text := milestoneStatusTextOf(res)
+		assert.Contains(t, text, `"shipped" -> "in design"`, "the error must name the illegal edge")
+		assert.Contains(t, text, "terminal")
+	})
+
+	t.Run("set_milestone_status on an illegal edge writes no history row", func(t *testing.T) {
+		transitions, err := entities.MilestoneStatus().ListTransitions(ctx, milestone.ID)
+		require.NoError(t, err)
+		assert.Len(t, transitions, 5, "the rejected transition above must not have appended a row")
+	})
+
 	t.Run("get_milestone_status now reports the latest recorded status (\"shipped\")", func(t *testing.T) {
 		cs, err := connectMilestoneStatusMCP(t, designURL, humanToken)
 		require.NoError(t, err)
@@ -327,7 +362,7 @@ func TestMCPMilestoneStatusSurface_EndToEnd(t *testing.T) {
 		assert.Equal(t, "shipped", structured["status"])
 	})
 
-	t.Run("get_milestone_status_history returns all three transitions in chronological order with actor and timestamp (FR12)", func(t *testing.T) {
+	t.Run("get_milestone_status_history returns all five transitions in chronological order with actor and timestamp (FR12)", func(t *testing.T) {
 		cs, err := connectMilestoneStatusMCP(t, designURL, humanToken)
 		require.NoError(t, err)
 
@@ -342,9 +377,9 @@ func TestMCPMilestoneStatusSurface_EndToEnd(t *testing.T) {
 		require.True(t, ok)
 		transitions, ok := structured["transitions"].([]any)
 		require.True(t, ok)
-		require.Len(t, transitions, 3)
+		require.Len(t, transitions, 5)
 
-		wantStatuses := []string{"planned", "in progress", "shipped"}
+		wantStatuses := []string{"in design", "designed", "planned", "in progress", "shipped"}
 		for i, raw := range transitions {
 			entry, ok := raw.(map[string]any)
 			require.True(t, ok)
@@ -369,10 +404,12 @@ func TestMCPMilestoneStatusSurface_EndToEnd(t *testing.T) {
 	t.Run("the MCP-recorded history matches what the store layer reports directly", func(t *testing.T) {
 		transitions, err := entities.MilestoneStatus().ListTransitions(ctx, milestone.ID)
 		require.NoError(t, err)
-		require.Len(t, transitions, 3)
-		assert.Equal(t, store.MilestoneStatusPlanned, transitions[0].Status)
-		assert.Equal(t, store.MilestoneStatusInProgress, transitions[1].Status)
-		assert.Equal(t, store.MilestoneStatusShipped, transitions[2].Status)
+		require.Len(t, transitions, 5)
+		assert.Equal(t, store.MilestoneStatusInDesign, transitions[0].Status)
+		assert.Equal(t, store.MilestoneStatusDesigned, transitions[1].Status)
+		assert.Equal(t, store.MilestoneStatusPlanned, transitions[2].Status)
+		assert.Equal(t, store.MilestoneStatusInProgress, transitions[3].Status)
+		assert.Equal(t, store.MilestoneStatusShipped, transitions[4].Status)
 
 		status, err := entities.MilestoneStatus().CurrentStatus(ctx, milestone.ID)
 		require.NoError(t, err)
