@@ -13,6 +13,8 @@
 package handlers
 
 import (
+	"context"
+	"errors"
 	"fmt"
 	"net/http"
 	"strings"
@@ -69,14 +71,15 @@ type MilestoneStatusHistoryResponse struct {
 	Transitions []MilestoneStatusEventWire `json:"transitions"`
 }
 
-// ValidMilestoneStatuses is FR8's fixed seven-value set, rejected at the
+// ValidMilestoneStatuses is FR8's fixed eight-value set, rejected at the
 // Go layer with a field-scoped error before ever reaching the DB CHECK
-// constraint (migration 012) that is the real enforcement point. Exported
-// (LB7) so krill/mcp/tools' set_milestone_status tool validates against
-// this exact set rather than a second, MCP-local copy.
+// constraint (migration 012, widened by 019) that is the real enforcement
+// point. Exported (LB7) so krill/mcp/tools' set_milestone_status tool
+// validates against this exact set rather than a second, MCP-local copy.
 var ValidMilestoneStatuses = map[store.MilestoneStatus]struct{}{
 	store.MilestoneStatusNotStarted:        {},
 	store.MilestoneStatusInDesign:          {},
+	store.MilestoneStatusDesigned:          {},
 	store.MilestoneStatusPlanned:           {},
 	store.MilestoneStatusInProgress:        {},
 	store.MilestoneStatusShipped:           {},
@@ -86,11 +89,12 @@ var ValidMilestoneStatuses = map[store.MilestoneStatus]struct{}{
 
 // validMilestoneStatusesOrdered is ValidMilestoneStatuses' own fixed FR8
 // order (not map iteration order, which Go randomizes) -- used only to
-// name the seven valid values in a 400 body (e.g.
+// name the eight valid values in a 400 body (e.g.
 // GetProductDeliveryHandler's unknown-`status`-query-param rejection).
 var validMilestoneStatusesOrdered = []store.MilestoneStatus{
 	store.MilestoneStatusNotStarted,
 	store.MilestoneStatusInDesign,
+	store.MilestoneStatusDesigned,
 	store.MilestoneStatusPlanned,
 	store.MilestoneStatusInProgress,
 	store.MilestoneStatusShipped,
@@ -108,9 +112,145 @@ func validMilestoneStatusesJoined() string {
 	return strings.Join(quoted, ", ")
 }
 
+// ============================================================================
+// Transition edge table (issue #2963, FR 5652b8b9) -- a status may only ever
+// be replaced by one of the values listed under the status it already holds
+// ============================================================================
+// The value set above answers "which statuses exist"; this table answers the
+// separate, stricter question "which of them may follow which". Without it a
+// Swarm Operator holding a Requirement Contributor session could drive a
+// milestone from "not started" straight to "shipped", and the append-only
+// history would faithfully record an incoherent lifecycle as though it had
+// been planned -- the history is immutable, so an illegal edge is not
+// something a later correction can quietly overwrite.
+//
+// Deliberately NOT a DB CHECK: the DB constrains each row's value in
+// isolation and knows nothing of the row before it. Enforcing the table here,
+// in the one write path both surfaces share, is the same split every other
+// krill write rule makes (e.g. the lane-sequence rule on a task).
+//
+// The table, read as "from -> to":
+//
+//	not started       -> in design | abandoned
+//	in design         -> designed | abandoned
+//	designed          -> planned | in design | abandoned
+//	planned           -> in progress | abandoned
+//	in progress       -> partially complete | shipped | abandoned
+//	partially complete -> in progress | shipped | abandoned
+//	shipped           -> (terminal)
+//	abandoned         -> (terminal)
+//
+// Three of those rows carry more than the obvious reading:
+//   - "designed -> in design" is the rework edge: a container whose design
+//     turned out to be wrong goes back to being designed, but a planned
+//     one may NOT -- a plan is a commitment, and un-committing it is a
+//     different operation than re-designing.
+//   - "in progress -> partially complete -> in progress" is the loop: a
+//     container with shipped scope reports partial completion, keeps its
+//     unshipped remainder in flight, and can move again.
+//   - "abandoned" is reachable from every non-terminal row, because
+//     abandoning a commitment is always allowed; "shipped" only from
+//     "in progress" or "partially complete", because a container that was
+//     never worked on has nothing to have shipped.
+var milestoneStatusTransitions = map[store.MilestoneStatus][]store.MilestoneStatus{
+	store.MilestoneStatusNotStarted:        {store.MilestoneStatusInDesign, store.MilestoneStatusAbandoned},
+	store.MilestoneStatusInDesign:          {store.MilestoneStatusDesigned, store.MilestoneStatusAbandoned},
+	store.MilestoneStatusDesigned:          {store.MilestoneStatusPlanned, store.MilestoneStatusInDesign, store.MilestoneStatusAbandoned},
+	store.MilestoneStatusPlanned:           {store.MilestoneStatusInProgress, store.MilestoneStatusAbandoned},
+	store.MilestoneStatusInProgress:        {store.MilestoneStatusPartiallyComplete, store.MilestoneStatusShipped, store.MilestoneStatusAbandoned},
+	store.MilestoneStatusPartiallyComplete: {store.MilestoneStatusInProgress, store.MilestoneStatusShipped, store.MilestoneStatusAbandoned},
+	store.MilestoneStatusShipped:           nil,
+	store.MilestoneStatusAbandoned:         nil,
+}
+
+// ErrIllegalMilestoneStatusTransition is the sentinel every rejection from
+// ValidateMilestoneStatusTransition unwraps to, so a caller can tell "you
+// asked for a transition the table forbids" apart from "the store was
+// unreachable" without string-matching the message.
+var ErrIllegalMilestoneStatusTransition = errors.New("illegal milestone status transition")
+
+// IllegalMilestoneStatusTransition names the rejected edge and the legal
+// alternatives out of the status the container already holds, so a caller
+// is told what it may do next rather than only what it may not.
+type IllegalMilestoneStatusTransition struct {
+	From  store.MilestoneStatus
+	To    store.MilestoneStatus
+	Legal []store.MilestoneStatus
+}
+
+func (e *IllegalMilestoneStatusTransition) Error() string {
+	if len(e.Legal) == 0 {
+		return fmt.Sprintf("milestone status: illegal transition %q -> %q: %q is terminal, so no transition is legal from it",
+			e.From, e.To, e.From)
+	}
+	legal := make([]string, len(e.Legal))
+	for i, s := range e.Legal {
+		legal[i] = fmt.Sprintf("%q", string(s))
+	}
+	return fmt.Sprintf("milestone status: illegal transition %q -> %q: the legal transitions out of %q are: %s",
+		e.From, e.To, e.From, strings.Join(legal, ", "))
+}
+
+func (e *IllegalMilestoneStatusTransition) Unwrap() error { return ErrIllegalMilestoneStatusTransition }
+
+// ValidateMilestoneStatusTransition reports whether `to` may replace
+// `from` per the edge table above. It knows nothing about persistence, so
+// it is a pure function of the two statuses -- the caller supplies `from`
+// (normally MilestoneStatusEventStore.CurrentStatus) and applies the
+// verdict.
+func ValidateMilestoneStatusTransition(from, to store.MilestoneStatus) error {
+	for _, legal := range milestoneStatusTransitions[from] {
+		if legal == to {
+			return nil
+		}
+	}
+	return &IllegalMilestoneStatusTransition{From: from, To: to, Legal: milestoneStatusTransitions[from]}
+}
+
+// ApplyMilestoneStatus is the one set_milestone_status write path, shared
+// by the HTTP handler below and krill/mcp/tools' set_milestone_status tool
+// (LB7) so the edge table cannot be enforced on one surface and quietly
+// skipped on the other.
+//
+// Two behaviors, both required by issue #2963:
+//   - a self-transition (to == the status already held) is not an edge at
+//     all: it is accepted and writes NO history row, returning the latest
+//     existing transition (zero-valued when the container has none, which
+//     is the "not started" -> "not started" case) so callers still get a
+//     stable id back. Re-affirming a status is not a way to fabricate
+//     history.
+//   - every other transition must be an edge the table allows, else it is
+//     rejected with *IllegalMilestoneStatusTransition before any write.
+func ApplyMilestoneStatus(ctx context.Context, statuses store.MilestoneStatusEventStore, scopeID, milestoneID uuid.UUID, status store.MilestoneStatus, note *string, acting, onBehalfOf store.Subject) (store.MilestoneStatusEvent, bool, error) {
+	current, err := statuses.CurrentStatus(ctx, milestoneID)
+	if err != nil {
+		return store.MilestoneStatusEvent{}, false, err
+	}
+	if current == status {
+		transitions, err := statuses.ListTransitions(ctx, milestoneID)
+		if err != nil {
+			return store.MilestoneStatusEvent{}, false, err
+		}
+		if len(transitions) == 0 {
+			return store.MilestoneStatusEvent{}, true, nil
+		}
+		return transitions[len(transitions)-1], true, nil
+	}
+	if err := ValidateMilestoneStatusTransition(current, status); err != nil {
+		return store.MilestoneStatusEvent{}, false, err
+	}
+	event, err := statuses.RecordTransition(ctx, scopeID, milestoneID, status, note, acting, onBehalfOf)
+	if err != nil {
+		return store.MilestoneStatusEvent{}, false, err
+	}
+	return event, false, nil
+}
+
 // SetMilestoneStatusHandler returns the status-transition endpoint (FR8,
-// FR9): POST /milestones/{id}/status. Must be mounted behind
-// RequireSession.
+// FR9, issue #2963): POST /milestones/{id}/status. Must be mounted behind
+// RequireSession. The transition itself -- which status may follow which,
+// and the no-op-on-self-transition rule -- is ApplyMilestoneStatus below,
+// shared with the MCP surface.
 func SetMilestoneStatusHandler(statuses store.MilestoneStatusEventStore) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodPost {
@@ -141,14 +281,39 @@ func SetMilestoneStatusHandler(statuses store.MilestoneStatusEventStore) http.Ha
 			return
 		}
 
-		event, err := statuses.RecordTransition(r.Context(), sess.ScopeID, id, status, req.Note, sess.Acting, sess.OnBehalfOf)
+		event, noop, err := ApplyMilestoneStatus(r.Context(), statuses, sess.ScopeID, id, status, req.Note, sess.Acting, sess.OnBehalfOf)
 		if err != nil {
+			// An illegal edge conflicts with the status the container
+			// already holds, so 409 rather than 400: the request was
+			// well-formed, it just cannot be applied now. The body names
+			// the edge and the legal alternatives.
+			if errors.Is(err, ErrIllegalMilestoneStatusTransition) {
+				writeJSONError(w, http.StatusConflict, err.Error())
+				return
+			}
 			writeStoreError(w, err)
+			return
+		}
+
+		if noop {
+			// 200, not 201: nothing was created. See ApplyMilestoneStatus.
+			writeJSON(w, http.StatusOK, IDResponse{ID: eventIDString(event)})
 			return
 		}
 
 		writeJSON(w, http.StatusCreated, IDResponse{ID: event.ID.String()})
 	}
+}
+
+// eventIDString renders a MilestoneStatusEvent's id for the wire, empty
+// when the event is the zero value -- the "not started" container that was
+// re-affirmed as "not started" has no transition row to point at, and an
+// empty id is more honest than a nil UUID rendered as a real-looking one.
+func eventIDString(e store.MilestoneStatusEvent) string {
+	if e.ID == uuid.Nil {
+		return ""
+	}
+	return e.ID.String()
 }
 
 // GetMilestoneStatusHandler returns the current-status read endpoint
