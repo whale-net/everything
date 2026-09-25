@@ -114,22 +114,24 @@ def handle_whagent_app_mention(event, say, client=None, body=None):
             # Slack->Keycloak mapping gets a one-time link prompt instead of a
             # session, checked before any workflow / slackthreadsession row is
             # created so a blocked mention leaves no orphaned ACTIVE thread.
+            # The one lookup below feeds both the gate and on_behalf_of below.
             team_id = _slack_team_id(event)
-            user_id = event.get("user")
-            if user_id and get_keycloak_identity(team_id, user_id) is None:
+            slack_user_id = event.get("user", "")
+            identity = get_keycloak_identity(team_id, slack_user_id)
+            if slack_user_id and identity is None:
                 web_public_url = _web_public_url()
                 if not web_public_url:
                     logger.error(
                         "FCM_WEB_PUBLIC_URL is unset; cannot mint identity link "
                         "for unlinked slack team=%s user=%s",
                         team_id,
-                        user_id,
+                        slack_user_id,
                     )
                 else:
-                    token = mint_link_token(team_id, user_id)
+                    token = mint_link_token(team_id, slack_user_id)
                     client.chat_postEphemeral(
                         channel=channel_slack_id,
-                        user=user_id,
+                        user=slack_user_id,
                         thread_ts=thread_ts,
                         text=(
                             "Link your Slack account to use this agent: "
@@ -140,7 +142,7 @@ def handle_whagent_app_mention(event, say, client=None, body=None):
                     logger.info(
                         "issued identity link prompt slack team=%s user=%s",
                         team_id,
-                        user_id,
+                        slack_user_id,
                     )
                 span.set_attribute("whagent.identity_link_prompted", True)
                 return
@@ -163,10 +165,6 @@ def handle_whagent_app_mention(event, say, client=None, body=None):
             # human, not the bot. Unlinked users keep the default unset
             # behaviour; the Slack user never holds a credential -- the
             # asserted subject is only data on fcm's service-credential call.
-            slack_user_id = event.get("user", "")
-            identity = get_keycloak_identity(
-                _slack_team_id(event), slack_user_id
-            )
             if identity is not None:
                 span.set_attribute("whagent.on_behalf_of", True)
 
