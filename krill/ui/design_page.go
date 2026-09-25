@@ -287,6 +287,15 @@ document.getElementById('browse-btn').addEventListener('click', function () {
 // its detail page.
 var designSessionListTemplate = template.Must(template.New("design-session-list").Parse(`<h2>Design sessions</h2>
 <p>Product <code>{{.ProductID}}</code></p>
+
+<h3>Open a new design session</h3>
+<p>Describe your idea in plain language. krill records it as the session's opening submission; it does not create or change any spec entity here.</p>
+<form method="post" action="/design/products/{{.ProductID}}/design-sessions">
+  <p><label for="opening-submission">Your idea or user story</label><br>
+  <textarea id="opening-submission" name="opening_submission" rows="4" cols="60" required placeholder="Users need to bulk-export their data as CSV"></textarea></p>
+  <p><button type="submit">Open design session</button></p>
+</form>
+
 {{if .Sessions}}
 <table>
   <thead><tr><th>Session</th><th>Opening submission</th><th>Status</th><th>Created</th></tr></thead>
@@ -360,7 +369,23 @@ var designSessionDetailTemplate = template.Must(template.New("design-session-det
 {{else}}
 <p>No open questions.</p>
 {{end}}
-<p><a href="{{.ProductSessionsPath}}">Back to this product's sessions</a></p>`))
+<p><a href="{{.ProductSessionsPath}}">Back to this product's sessions</a></p>
+
+<h3>Submit follow-up</h3>
+<p>Answer in plain language. krill records this as an <code>answer</code> round on this session; it does not create or change any spec entity here. Tick any open question your answer closes.</p>
+<form method="post" action="/design/design-sessions/{{.ID}}/answers">
+  {{if .OpenQuestions}}
+  <fieldset>
+    <legend>Open questions this answer closes</legend>
+    {{range .OpenQuestions}}
+    <p><label><input type="checkbox" name="resolve" value="{{.QuestionID}}"> <code>{{.QuestionID}}</code> ({{.Blocking}}): {{.Text}}</label></p>
+    {{end}}
+  </fieldset>
+  {{end}}
+  <p><label for="follow-up">Your follow-up</label><br>
+  <textarea id="follow-up" name="follow_up" rows="4" cols="60" required placeholder="It should use the postgres flag table."></textarea></p>
+  <p><button type="submit">Submit follow-up</button></p>
+</form>`))
 
 // ── handlers ─────────────────────────────────────────────────────────────────
 
