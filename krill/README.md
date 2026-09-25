@@ -394,8 +394,9 @@ Behind that sign-in, `ui` serves the persistent nav shell: a home page
 plus one root per top-level area -- the ops console (`/ops`), the
 design-session browser (`/design`), the spec+delivery browser (`/spec`) --
 plus the credential widget at `/account/credentials`, all rendered inside
-one shared chrome (`krill/ui/nav.go`). Each area's real read surface is
-its own task; today each root renders the shell with a placeholder body.
+one shared chrome (`krill/ui/nav.go`), which marks the link for the area
+being viewed. Each area's real read surface is its own task; today each
+root renders the shell with a placeholder body.
 
 ```sh
 PG_DATABASE_URL=postgres://postgres:password@localhost:5432/krill?sslmode=disable \

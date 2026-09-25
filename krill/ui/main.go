@@ -323,17 +323,3 @@ func handleHealthz(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusOK)
 	fmt.Fprint(w, `{"status":"ok"}`)
 }
-
-// htmlEscape escapes a string before it is concatenated into markup.
-// The shell renders its page bodies as template.HTML, so this is for the
-// nav's own Path/Label/Blurb fields and the area placeholders, which are
-// assembled before they ever reach the template.
-func htmlEscape(s string) string {
-	replacer := strings.NewReplacer(
-		"&", "&amp;",
-		"<", "&lt;",
-		">", "&gt;",
-		`"`, "&quot;",
-	)
-	return replacer.Replace(s)
-}

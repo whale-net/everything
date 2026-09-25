@@ -5,7 +5,7 @@ import (
 	"net/http"
 )
 
-// handleCredentials is the credential-widget page the barebones UI
+// handleCredentials is the credential-widget page the original UI
 // shipped with, now rendered inside the shell chrome at its own route
 // (FR 85a8b33c keeps it reachable from the nav rather than replacing it).
 // The widget itself is unchanged: inline vanilla JS against
@@ -14,14 +14,16 @@ import (
 // a static bearer token for a non-OAuth2 MCP client without a devtools
 // console.
 func (app *App) handleCredentials(w http.ResponseWriter, r *http.Request) {
-	renderShell(w, r, "Credentials", credentialsPath, credentialsBody)
+	renderShell(w, r, "Credentials", credentialsPath, renderPage(credentialsTemplate, nil))
 }
 
-// credentialsBody is the widget's markup, pre-escaped into template.HTML
-// because it carries no request data -- the only per-caller string on
-// this page (the signed-in username) is rendered by the shell chrome,
-// not here.
-var credentialsBody = template.HTML(`<h2>Credentials</h2>
+// credentialsTemplate is the widget's markup. It is a template rather
+// than a constant because every other page body is, and so that the
+// widget's markup is escaped by the same machinery as the rest of the
+// shell -- the one per-caller string on this page (the signed-in
+// username) is rendered by the shell chrome, not here. The script body
+// contains no {{ }} sequences, so html/template treats it as static text.
+var credentialsTemplate = template.Must(template.New("credentials").Parse(`<h2>Credentials</h2>
 <p>Mint a static bearer token for an MCP client that can't run the OAuth2 sign-in flow.</p>
 <button id="generate-btn" type="button">Generate a token</button>
 <div id="new-token" style="display:none; margin-top: 0.5em;">
@@ -98,4 +100,5 @@ document.getElementById('generate-btn').addEventListener('click', async function
 document.getElementById('refresh-btn').addEventListener('click', refreshCredentials);
 
 refreshCredentials();
-</script>`)
+</script>`))
+

@@ -3,6 +3,7 @@ package main
 import (
 	"html/template"
 	"net/http"
+	"strings"
 
 	"github.com/whale-net/everything/libs/go/htmxauth"
 )
@@ -52,21 +53,41 @@ var navAreas = []navArea{
 
 // shellLayout wraps every signed-in page: the persistent nav, the
 // signed-in identity, a sign-out link, and whatever the page handler
-// rendered into Content. Content is a template.HTML the page handlers
-// build, never raw request data -- see the navClass/content contract in
-// renderShell.
+// rendered into Content. A page's Content is the already-rendered output
+// of one of this package's own page templates -- never request data
+// concatenated into markup; see the page templates in routes.go and
+// credentials_page.go.
+//
+// The stylesheet is inlined rather than served from a static route: this
+// binary has no asset pipeline, and a nav an operator cannot see the
+// active state of is not a nav.
 var shellLayout = template.Must(template.New("shell").Funcs(template.FuncMap{
-	"navClass": navClass,
+	"navIsActive": navIsActive,
 }).Parse(`<!DOCTYPE html>
-<html>
-<head><meta charset="utf-8"><title>{{.Title}} &middot; krill</title></head>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>{{.Title}} &middot; krill</title>
+<style>
+:root { color-scheme: light dark; }
+body { font-family: system-ui, sans-serif; margin: 0; line-height: 1.5; }
+header { border-bottom: 1px solid rgba(128,128,128,0.35); padding: 0.75rem 1.5rem; }
+header h1 { font-size: 1.1rem; margin: 0 0 0.5rem; }
+header h1 a { color: inherit; text-decoration: none; }
+nav a { display: inline-block; margin-right: 0.75rem; padding: 0.25rem 0.5rem; border-radius: 4px; text-decoration: none; }
+nav a.active { font-weight: 600; background: rgba(128,128,128,0.2); }
+.identity { margin: 0.5rem 0 0; font-size: 0.9rem; opacity: 0.8; }
+main { padding: 1.5rem; max-width: 60rem; }
+</style>
+</head>
 <body>
 <header>
-  <h1>krill</h1>
+  <h1><a href="/">krill</a></h1>
   <nav>
-    {{range .Areas}}<a href="{{.Path}}" class="{{navClass . $.ActivePath}}">{{.Label}}</a> {{end}}
-  </nav>
-  <p>Signed in as {{.User}} &middot; <a href="/logout">Sign out</a></p>
+    {{range .Areas}}<a href="{{.Path}}"{{if navIsActive . $.ActivePath}} class="active" aria-current="page"{{end}}>{{.Label}}</a>
+    {{end}}</nav>
+  <p class="identity">{{if .User}}Signed in as {{.User}} &middot; {{end}}<a href="/logout">Sign out</a></p>
 </header>
 <main>
 {{.Content}}
@@ -74,25 +95,30 @@ var shellLayout = template.Must(template.New("shell").Funcs(template.FuncMap{
 </body>
 </html>`))
 
-// navClass marks the nav link for the page currently being rendered, so
-// an operator can see where they are without reading the URL. Matched on
-// path prefix rather than equality because the three area roots are
-// prefixes of their sub-pages.
-func navClass(area navArea, activePath string) string {
-	if activePath == area.Path || len(activePath) > len(area.Path) && activePath[:len(area.Path)] == area.Path {
-		return "active"
+// navIsActive reports whether the page being rendered belongs to this nav
+// area, so an operator can see where they are without reading the URL.
+// Matched at path-segment boundaries rather than by raw prefix: an area
+// root is a prefix of its sub-pages ("/ops" of "/ops/claimed"), but not
+// of an unrelated sibling that merely starts with the same characters
+// ("/opsarchive").
+func navIsActive(area navArea, activePath string) bool {
+	if activePath == area.Path {
+		return true
 	}
-	return ""
+	return strings.HasPrefix(activePath, area.Path+"/")
 }
 
 // renderShell writes one signed-in page: the shell chrome plus the
-// caller's own already-escaped content. Every app route is mounted
-// behind app.auth.RequireAuthFunc by setupRoutes, so the identity
-// renderShell reads is always present.
+// page's own rendered body. Every app route is mounted behind
+// app.auth.RequireAuthFunc by setupRoutes, so the identity renderShell
+// reads is always present.
 func renderShell(w http.ResponseWriter, r *http.Request, title, activePath string, content template.HTML) {
-	user := htmxauth.GetUser(r.Context())
-	username := ""
-	if user != nil {
+	// Every app route is behind app.auth.RequireAuthFunc, so a user is
+	// present in practice; the nil guard keeps the identity line from
+	// rendering as a dangling "Signed in as ." if a route is ever mounted
+	// without the gate.
+	var username string
+	if user := htmxauth.GetUser(r.Context()); user != nil {
 		username = user.PreferredUsername
 	}
 
@@ -111,8 +137,10 @@ func renderShell(w http.ResponseWriter, r *http.Request, title, activePath strin
 		Content:    content,
 	})
 	if err != nil {
-		// The template is parsed once at init and the data is this
-		// package's own, so an error here is a programming mistake.
+		// shellLayout is parsed once at init and this package's data
+		// never fails to execute against it, so an error here is a
+		// programming mistake -- the same reasoning setupRoutes uses to
+		// panic on MountSelfServe's error.
 		panic(err)
 	}
 }
