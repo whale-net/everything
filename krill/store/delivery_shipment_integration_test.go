@@ -198,6 +198,15 @@ func TestDeliveryShipmentStore_DeliveryBreakdown_ZeroDelivers_ReturnsTwoEmptySli
 // containers, shipped in only one, reports shipped only in that one --
 // shipped-ness hangs off the (entity, container) association, never off
 // the spec entity itself.
+//
+// The second container is a milepebble cut from the same milestone, not
+// a competing milestone: an entity has one delivery parent, so a second
+// milestone is only reachable through a re-cut
+// (ErrEntityDeliveredByCompetingMilestone, covered by
+// milestone_authoring_integration_test.go). A milepebble is the shape
+// that still legitimately gives one entity two live containers, since
+// FR3's subset invariant deliberately associates the parent and the cut
+// with the same entity.
 func TestDeliveryShipmentStore_ShippedPerEntityContainerPair_NotPerEntity(t *testing.T) {
 	ctx := context.Background()
 	s, db := newMilestoneAuthoringTestStore(t)
@@ -208,7 +217,7 @@ func TestDeliveryShipmentStore_ShippedPerEntityContainerPair_NotPerEntity(t *tes
 	self := milestoneAuthoringTestSubject("agent-1")
 	milestoneA, err := s.MilestoneAuthoring().CreateMilestone(ctx, scopeID, product.ID, "MA", "", nil, self, self)
 	require.NoError(t, err)
-	milestoneB, err := s.MilestoneAuthoring().CreateMilestone(ctx, scopeID, product.ID, "MB", "", nil, self, self)
+	milepebbleA, err := s.MilestoneAuthoring().CreateMilepebble(ctx, scopeID, milestoneA.ID, "cut 1", "", nil, self, self)
 	require.NoError(t, err)
 	featureSet, err := s.FeatureSets().Create(ctx, scopeID, product.ID, "FS", nil)
 	require.NoError(t, err)
@@ -216,9 +225,9 @@ func TestDeliveryShipmentStore_ShippedPerEntityContainerPair_NotPerEntity(t *tes
 	require.NoError(t, err)
 
 	require.NoError(t, s.MilestoneAuthoring().AddDelivers(ctx, scopeID, milestoneA.ID, feature.ID, self, self))
-	require.NoError(t, s.MilestoneAuthoring().AddDelivers(ctx, scopeID, milestoneB.ID, feature.ID, self, self))
+	require.NoError(t, s.MilestoneAuthoring().AddMilepebbleDelivers(ctx, scopeID, milepebbleA.ID, feature.ID, self, self))
 
-	// Ship the feature against milestoneA only.
+	// Ship the feature against the milestone only, not against its cut.
 	require.NoError(t, s.DeliveryShipments().MarkShipped(ctx, scopeID, milestoneA.ID, feature.ID, nil, self, self))
 
 	shippedA, unshippedA, err := s.DeliveryShipments().DeliveryBreakdown(ctx, milestoneA.ID)
@@ -226,10 +235,10 @@ func TestDeliveryShipmentStore_ShippedPerEntityContainerPair_NotPerEntity(t *tes
 	assert.ElementsMatch(t, []uuid.UUID{feature.ID}, shippedA)
 	assert.Empty(t, unshippedA)
 
-	shippedB, unshippedB, err := s.DeliveryShipments().DeliveryBreakdown(ctx, milestoneB.ID)
+	shippedCut, unshippedCut, err := s.DeliveryShipments().DeliveryBreakdown(ctx, milepebbleA.ID)
 	require.NoError(t, err)
-	assert.Empty(t, shippedB, "the same Feature must not report shipped against milestoneB just because it shipped against milestoneA")
-	assert.ElementsMatch(t, []uuid.UUID{feature.ID}, unshippedB)
+	assert.Empty(t, shippedCut, "the same Feature must not report shipped against the cut just because it shipped against the parent milestone")
+	assert.ElementsMatch(t, []uuid.UUID{feature.ID}, unshippedCut)
 }
 
 // TestDeliveryShipmentStore_Milepebble_ScopedToOwnDeliversSubset is issue

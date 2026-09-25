@@ -111,6 +111,11 @@ type RecutStore interface {
 	// walk every milepebble and detach the item there before it can move
 	// the milestone-level association would make re-cutting a milestone
 	// with milepebbles impractical for exactly the case FR5 exists for.
+	//
+	// This is the re-cut MilestoneAuthoringStore.AddDeliversMany names as
+	// the way out of ErrEntityDeliveredByCompetingMilestone, so it is not
+	// itself held to that rule: a move is what establishes the single
+	// delivery parent, not a second claim on it.
 	MoveScope(ctx context.Context, scopeID uuid.UUID, entityIDs []uuid.UUID, fromContainerID, toContainerID uuid.UUID, acting, onBehalfOf Subject) error
 }
 

@@ -28,6 +28,15 @@ Milestone), not a default worth avoiding when it doesn't apply.
 
 ## Steps (Milestone path)
 
+The unit of planning is the **Milestone**, not the FeatureSet. A
+milestone's delivered scope routinely spans several FeatureSets — krill's
+own are named `Now`/`Next`/`Later`, which is a naming convention, not a
+second delivery parent — so nothing below requires a separate run per
+FeatureSet. `planner` records the whole scope with one `add_delivers`
+call, and that call refuses an entity another milestone of the same
+product already delivers: re-cut it with `move_delivery_scope` rather
+than opening a second owner.
+
 1. **Confirm and idempotency-check.** Call `get_feature_set_slice {id}` and
    confirm its design session's last event was `signoff` with
    `signoff_status: approved` (if you only have the design-session id,

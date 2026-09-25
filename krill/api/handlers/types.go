@@ -112,7 +112,8 @@ func writeStoreError(w http.ResponseWriter, err error) {
 		errors.Is(err, store.ErrTaskCancelled),
 		errors.Is(err, store.ErrClaimNotCurrent),
 		errors.Is(err, store.ErrTaskNotClaimed),
-		errors.Is(err, store.ErrNameConflict):
+		errors.Is(err, store.ErrNameConflict),
+		errors.Is(err, store.ErrEntityDeliveredByCompetingMilestone):
 		writeJSONError(w, http.StatusConflict, err.Error())
 	case isUniqueViolation(err):
 		writeJSONError(w, http.StatusConflict, "an entity with this name already exists in this scope")
