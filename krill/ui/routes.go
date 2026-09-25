@@ -53,24 +53,23 @@ func (app *App) handleShellHome(w http.ResponseWriter, r *http.Request) {
 	renderShell(w, r, "Home", "/", renderPage(shellHomeTemplate, navAreas))
 }
 
-// areaTemplate is the shared body for an area that has a route but no
-// content of its own yet, so a freshly-added area still renders inside
-// the shell rather than as a bare or missing page.
-var areaTemplate = template.Must(template.New("area").Parse(`<h2>{{.Heading}}</h2>
-<p>{{.Detail}}</p>`))
-
 // The area handlers below own the shell's per-area roots. Each renders the
 // chrome; the read and write surfaces under these prefixes are separate
-// tasks, which register their sub-pages alongside these roots.
-
-type areaPage struct {
-	Heading string
-	Detail  string
-}
+// tasks, which register their sub-pages alongside these roots. The spec
+// root links into the store-backed spec pages in spec_page.go.
 
 // opsIndexTemplate is the ops console root's body: the four read views it
 // now owns, one link each (ops.go renders the views themselves).
 var opsIndexTemplate = template.Must(template.New("opsindex").Parse(`<h2>Ops console</h2>
+<ul>
+{{range .}}<li><a href="{{.Path}}">{{.Label}}</a> &mdash; {{.Blurb}}</li>
+{{end}}</ul>`))
+
+// specLandingTemplate is the spec area's static landing: the same
+// link-and-blurb shape as the home page's nav list, so the spec root
+// reads like the rest of the shell and links into the store-backed pages
+// under specProductsPath.
+var specLandingTemplate = template.Must(template.New("specLanding").Parse(`<h2>Spec &amp; delivery</h2>
 <ul>
 {{range .}}<li><a href="{{.Path}}">{{.Label}}</a> &mdash; {{.Blurb}}</li>
 {{end}}</ul>`))
@@ -102,10 +101,14 @@ func (app *App) handleDesign(w http.ResponseWriter, r *http.Request) {
 	renderShell(w, r, "Design sessions", designPath, renderPage(designRootTemplate, nil))
 }
 
-// handleSpec is the spec + delivery browser root.
+// handleSpec is the spec + delivery browser root. It is a static landing
+// (like the ops and design roots) that links into the store-backed spec
+// pages under specProductsPath -- the product index, and per product the
+// capability map, load-bearing decisions, personas, and non-goals (all in
+// spec_page.go). The landing itself reads nothing, so the area root stays
+// cheap; a sibling task adds the delivery/roadmap view alongside it.
 func (app *App) handleSpec(w http.ResponseWriter, r *http.Request) {
-	renderShell(w, r, "Spec & delivery", specPath, renderPage(areaTemplate, areaPage{
-		Heading: "No spec entities yet.",
-		Detail:  "Products, feature sets, requirements, load-bearing decisions, and the delivery roadmap land here.",
+	renderShell(w, r, "Spec & delivery", specPath, renderPage(specLandingTemplate, []navArea{
+		{Path: specProductsPath, Label: "Products", Blurb: "Browse a product's capability map, load-bearing decisions, personas, and non-goals."},
 	}))
 }

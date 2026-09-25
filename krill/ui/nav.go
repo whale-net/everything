@@ -109,10 +109,17 @@ func navIsActive(area navArea, activePath string) bool {
 }
 
 // renderShell writes one signed-in page: the shell chrome plus the
-// page's own rendered body. Every app route is mounted behind
-// app.auth.RequireAuthFunc by setupRoutes, so the identity renderShell
-// reads is always present.
+// page's own rendered body, with a 200 status. Every app route is
+// mounted behind app.auth.RequireAuthFunc by setupRoutes, so the
+// identity renderShell reads is always present.
 func renderShell(w http.ResponseWriter, r *http.Request, title, activePath string, content template.HTML) {
+	renderShellStatus(w, r, title, activePath, content, http.StatusOK)
+}
+
+// renderShellStatus is renderShell with an explicit status code, so a
+// page that renders a real "not found" or "bad request" body still does
+// so inside the shell chrome rather than as a bare http.Error string.
+func renderShellStatus(w http.ResponseWriter, r *http.Request, title, activePath string, content template.HTML, status int) {
 	// Every app route is behind app.auth.RequireAuthFunc, so a user is
 	// present in practice; the nil guard keeps the identity line from
 	// rendering as a dangling "Signed in as ." if a route is ever mounted
@@ -123,6 +130,7 @@ func renderShell(w http.ResponseWriter, r *http.Request, title, activePath strin
 	}
 
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	w.WriteHeader(status)
 	err := shellLayout.Execute(w, struct {
 		Title      string
 		ActivePath string

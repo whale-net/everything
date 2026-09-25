@@ -155,6 +155,14 @@ type App struct {
 	// process, exactly as api's own ungated read handlers do.
 	designSessions store.DesignSessionStore
 	revisionEvents store.RevisionEventStore
+
+	// spec reads the spec axis (products, the capability map, decisions,
+	// personas, non-goals) for the /spec pages. Unlike writes it is not a
+	// session-attributed HTTP client: reads are ungated, and the reader
+	// calls the same //krill/slice.Querier and //krill/store methods the
+	// MCP spec tools wrap, so a page and the matching tool agree (see
+	// readclient.go).
+	spec *specReader
 }
 
 // NewApp wires up Keycloak sign-in and the auth OAuth2 provider. A
@@ -223,6 +231,7 @@ func NewApp(ctx context.Context, cfg config) (*App, error) {
 		tasks:          entities.Tasks(),
 		designSessions: entities.DesignSessions(),
 		revisionEvents: entities.RevisionEvents(),
+		spec:           newSpecReader(entities),
 	}
 
 	// auth.NewCredentialStore/NewPostgresClientRegistry/
@@ -387,7 +396,6 @@ func (app *App) mountShellRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("/{$}", app.auth.RequireAuthFunc(app.handleShellHome))
 	mux.HandleFunc(opsPath, app.auth.RequireAuthFunc(app.handleOps))
 	mux.HandleFunc(designPath, app.auth.RequireAuthFunc(app.handleDesign))
-	mux.HandleFunc(specPath, app.auth.RequireAuthFunc(app.handleSpec))
 	mux.HandleFunc(credentialsPath, app.auth.RequireAuthFunc(app.handleCredentials))
 
 	// The ops console's read views (ops.go), each behind the same sign-in
@@ -406,6 +414,17 @@ func (app *App) mountShellRoutes(mux *http.ServeMux) {
 	// carries no krill session, exactly like api's ungated read handlers.
 	mux.HandleFunc("GET /design/products/{productID}/design-sessions", app.auth.RequireAuthFunc(app.handleDesignSessionList))
 	mux.HandleFunc("GET /design/design-sessions/{id}", app.auth.RequireAuthFunc(app.handleDesignSessionDetail))
+
+	// The spec browser (FRs 638a7e5f, 6aa70e3a, b4c1c77f): a static area
+	// landing, then the store-backed product index at /spec/products, and
+	// per product the capability map, load-bearing decisions, personas, and
+	// non-goals. All the data pages read through app.spec (readclient.go).
+	mux.HandleFunc(specPath, app.auth.RequireAuthFunc(app.handleSpec))
+	mux.HandleFunc(specProductsPath, app.auth.RequireAuthFunc(app.handleSpecProducts))
+	mux.HandleFunc(specProductPath, app.auth.RequireAuthFunc(app.handleCapabilityMap))
+	mux.HandleFunc(specProductPath+"/decisions", app.auth.RequireAuthFunc(app.handleSpecDecisions))
+	mux.HandleFunc(specProductPath+"/personas", app.auth.RequireAuthFunc(app.handleSpecPersonas))
+	mux.HandleFunc(specProductPath+"/non-goals", app.auth.RequireAuthFunc(app.handleSpecNonGoals))
 }
 
 // operatorRoute is the wrapper every signed-in-operator route in this

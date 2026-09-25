@@ -22,11 +22,14 @@ go_library(
         "identity.go",
         "writeclient.go",
         "writes.go",
+        "readclient.go",
+        "spec_page.go",
     ],
     importpath = "github.com/whale-net/everything/krill/ui",
     visibility = ["//visibility:private"],
     deps = [
         "//krill/identity",
+        "//krill/slice",
         "//krill/store",
         "//libs/go/db",
         "//libs/go/htmxauth",
@@ -79,7 +82,10 @@ release_app(
 
 go_test(
     name = "ui_lib_test",
-    srcs = ["nav_test.go"],
+    srcs = [
+        "nav_test.go",
+        "spec_page_test.go",
+    ],
     embed = [":ui_lib"],
     deps = ["//libs/go/htmxauth"],
 )
