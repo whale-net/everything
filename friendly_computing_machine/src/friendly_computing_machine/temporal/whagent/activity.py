@@ -9,6 +9,7 @@ import logging
 from dataclasses import dataclass
 from typing import Optional
 
+import grpc
 from temporalio import activity
 
 from friendly_computing_machine.src.friendly_computing_machine.bot.util import (
@@ -38,6 +39,10 @@ logger = logging.getLogger(__name__)
 class StartWhagentSessionParams:
     agent_id: str
     first_turn: Optional[str] = None
+    # (iss, sub) of the Slack user's linked Keycloak identity, or None for a
+    # non-delegated start. Optional so in-flight workflow histories carrying
+    # the pre-identity payload still deserialize.
+    on_behalf_of: Optional[tuple[str, str]] = None
 
 
 @dataclass
@@ -51,7 +56,22 @@ async def start_whagent_session_activity(
     params: StartWhagentSessionParams,
 ) -> WhagentSessionResult:
     client = get_whagent_client()
-    session = client.start_session(params.agent_id, first_turn=params.first_turn)
+    try:
+        session = client.start_session(
+            params.agent_id,
+            first_turn=params.first_turn,
+            on_behalf_of=params.on_behalf_of,
+        )
+    except grpc.RpcError as e:
+        if e.code() == grpc.StatusCode.PERMISSION_DENIED:
+            logger.error(
+                "whagent-net denied StartSession -- a delegated start needs "
+                "fcm's client_id in whagent-net's on_behalf_of allowlist "
+                "(agent_id=%s on_behalf_of=%s)",
+                params.agent_id,
+                params.on_behalf_of,
+            )
+        raise
     return WhagentSessionResult(session_id=session.session_id, state=session.state)
 
 

@@ -24,6 +24,9 @@ from friendly_computing_machine.src.friendly_computing_machine.db.dal import (
     get_slack_channel,
     get_thread_session,
 )
+from friendly_computing_machine.src.friendly_computing_machine.db.dal.identity_dal import (
+    get_keycloak_identity,
+)
 from friendly_computing_machine.src.friendly_computing_machine.models.slack import (
     SlackThreadSessionStatusEnum,
 )
@@ -52,6 +55,27 @@ _LEADING_MENTION_RE = re.compile(r"^\s*<@[^>]+>\s*")
 
 def _strip_bot_mention(text: str) -> str:
     return _LEADING_MENTION_RE.sub("", text, count=1).strip()
+
+
+def _slack_team_id(event) -> str:
+    """The workspace team id for an app_mention event.
+
+    Slack's app_mention payload carries the team as team_id (string) on the
+    event, with team sometimes present as a string and sometimes as a dict --
+    accept both and ignore anything that isn't a usable team id, so a
+    missing/odd team just falls through to the unlinked (unset) behaviour.
+    """
+    team_id = event.get("team_id")
+    if isinstance(team_id, str) and team_id:
+        return team_id
+    team = event.get("team")
+    if isinstance(team, str) and team:
+        return team
+    if isinstance(team, dict):
+        nested = team.get("id")
+        if isinstance(nested, str) and nested:
+            return nested
+    return ""
 
 
 @app.event("app_mention")
@@ -91,6 +115,18 @@ def handle_whagent_app_mention(event, say):
             first_message = _strip_bot_mention(event.get("text", ""))
             client = get_whagent_client()
 
+            # A linked user's session runs on behalf of their Keycloak
+            # identity so whagent-net (and downstream MCP servers) see the
+            # human, not the bot. Unlinked users keep the default unset
+            # behaviour; the Slack user never holds a credential -- the
+            # asserted subject is only data on fcm's service-credential call.
+            slack_user_id = event.get("user", "")
+            identity = get_keycloak_identity(
+                _slack_team_id(event), slack_user_id
+            )
+            if identity is not None:
+                span.set_attribute("whagent.on_behalf_of", True)
+
             workflow_id = workflow_id_for_thread(
                 get_app_env(), channel_slack_id, thread_ts
             )
@@ -104,8 +140,14 @@ def handle_whagent_app_mention(event, say):
                     thread_ts=thread_ts,
                     agent_id=agent_id,
                     first_message=first_message,
-                    slack_user_id=event.get("user", ""),
+                    slack_user_id=slack_user_id,
                     whagent_ui_public_url=client.ui_public_url,
+                    on_behalf_of_iss=(
+                        identity.keycloak_iss if identity is not None else None
+                    ),
+                    on_behalf_of_sub=(
+                        identity.keycloak_sub if identity is not None else None
+                    ),
                 ),
                 id=workflow_id,
                 task_queue=get_temporal_queue_name("main"),
