@@ -2,11 +2,9 @@ package main
 
 import (
 	"context"
-	"net/http"
 
 	"github.com/jackc/pgx/v5/pgxpool"
 
-	"github.com/whale-net/everything/krill/identity"
 	"github.com/whale-net/everything/libs/go/auth"
 )
 
@@ -23,32 +21,11 @@ import (
 // table to key it to instead (NFR1 authorizes by persona, never by
 // individual identity; see krill/mcp/server/auth.go's doc comment).
 //
-// app.auth.CurrentUser reads app.auth's DB-backed session directly, so a
-// missing, tampered, or expired session surfaces here as "not resolved",
-// exactly like RequireAuth's own session check.
-//
-// In AuthModeNone (local dev, no Keycloak), CurrentUser returns the fixed
-// dev user but cfg.OIDCIssuer is unset, so identity.Encode fails on the
-// empty iss and this resolver reports not-resolved -- deliberately: there
-// is no real (iss, sub) pair to reflect without a configured issuer. The
-// browser OAuth2 flow this resolver backs is only exercised against a
-// real Keycloak realm (AuthModeOIDC).
+// The pair itself is resolved by identity.go's operatorIdentity, shared
+// with this binary's own app write path so both front doors attribute a
+// caller to the exact same (iss, sub) values.
 func (app *App) mcpCallerResolver() auth.CallerResolverFunc {
-	return func(r *http.Request) (string, bool) {
-		user, err := app.auth.CurrentUser(r)
-		if err != nil {
-			return "", false
-		}
-
-		// app.oidcIssuer (cfg.OIDCIssuer verbatim) rather than any
-		// per-token claim -- the operator only ever signs in against this
-		// one configured issuer.
-		id, err := identity.Encode(app.oidcIssuer, user.Sub)
-		if err != nil {
-			return "", false
-		}
-		return id, true
-	}
+	return app.operatorEncodedIdentity
 }
 
 // setupMCPAuth constructs auth's OAuth2 authorization-server front end

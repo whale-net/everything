@@ -402,6 +402,7 @@ root renders the shell with a placeholder body.
 PG_DATABASE_URL=postgres://postgres:password@localhost:5432/krill?sslmode=disable \
   KRILL_UI_PUBLIC_URL=http://localhost:8085 \
   KRILL_MCP_PUBLIC_URL=http://localhost:8084 \
+  KRILL_API_URL=http://localhost:8083 \
   bazel run //krill/ui
 ```
 

@@ -74,6 +74,13 @@ type config struct {
 	// (KRILL_MCP_PUBLIC_URL, see krill/mcp/main.go) -- a mismatch breaks
 	// an MCP client's RFC 9728 discovery chain.
 	MCPPublicURL string
+
+	// APIBaseURL is krill `api`'s own base URL, the target this binary's
+	// app write client mints krill sessions against and issues every
+	// mutating request to (writeclient.go). Required: a UI with no
+	// configured `api` cannot attribute a write to a real operator
+	// identity, so it refuses to boot rather than run write-less.
+	APIBaseURL string
 }
 
 func loadConfig() config {
@@ -88,6 +95,7 @@ func loadConfig() config {
 		DatabaseURL:      getEnv("PG_DATABASE_URL", ""),
 		UIPublicURL:      getEnv("KRILL_UI_PUBLIC_URL", ""),
 		MCPPublicURL:     getEnv("KRILL_MCP_PUBLIC_URL", ""),
+		APIBaseURL:       getEnv("KRILL_API_URL", ""),
 	}
 }
 
@@ -116,6 +124,12 @@ type App struct {
 	// mints a credential only once the operator is already signed in via
 	// app.auth.
 	mcpProvider *auth.Provider
+
+	// writes is the client this binary's own app pages use to issue krill
+	// writes (writeclient.go): it mints a krill session whose acting /
+	// on-behalf-of subjects are the signed-in operator's real (iss, sub)
+	// pair, then presents that session on every mutating request.
+	writes *writeClient
 }
 
 // NewApp wires up Keycloak sign-in and the auth OAuth2 provider. A
@@ -140,6 +154,9 @@ func NewApp(ctx context.Context, cfg config) (*App, error) {
 	}
 	if cfg.MCPPublicURL == "" {
 		return nil, fmt.Errorf("KRILL_MCP_PUBLIC_URL is required")
+	}
+	if cfg.APIBaseURL == "" {
+		return nil, fmt.Errorf("KRILL_API_URL is required: krill-ui issues its writes against krill's api binary")
 	}
 
 	pool, err := db.NewPool(ctx, cfg.DatabaseURL)
@@ -188,6 +205,15 @@ func NewApp(ctx context.Context, cfg config) (*App, error) {
 		return nil, fmt.Errorf("failed to initialize auth provider: %w", err)
 	}
 	app.mcpProvider = mcpProvider
+
+	// The write client is what this binary's own app pages call krill's
+	// write API through; an unusable APIBaseURL is startup-fatal for the
+	// same reason the two URLs above are.
+	writes, err := newWriteClient(writeClientConfig{BaseURL: cfg.APIBaseURL})
+	if err != nil {
+		return nil, fmt.Errorf("failed to initialize write client: %w", err)
+	}
+	app.writes = writes
 
 	return app, nil
 }
