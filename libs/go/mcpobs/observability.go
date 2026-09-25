@@ -1,16 +1,16 @@
 // Package mcpobs is the shared tracing/logging middleware every domain's
-// MCP server and MCP client should route through, so a caller's trace ID
-// correlates end-to-end: InstrumentToolCall (server side) gives every
-// tool call its own child span nested under whatever span the inbound
-// request already carries, and WrapClientTransport (client side, see
-// transport.go) makes sure that inbound request actually carries one by
-// injecting a W3C traceparent header on the way out. Before this package
-// existed, audience_score_system/mcp/server and krill/mcp/server each
-// carried their own byte-identical InstrumentToolCall (only their
-// caller-identity attribute differed), and whagent_net's MCP client
-// issued every call through a bare http.RoundTripper with no trace
-// context at all -- see each of those packages' own observability.go /
-// client.go for how they plug into this one now.
+// MCP server and MCP client should route through: InstrumentToolCall
+// (server side) gives every tool call its own self-contained trace --
+// one mcp.tool/<name> span with the call's DB spans underneath it -- and
+// WrapClientTransport (client side, see transport.go) makes sure an
+// inbound request carries a trace at all by injecting a W3C traceparent
+// header on the way out. Before this package existed,
+// audience_score_system/mcp/server and krill/mcp/server each carried
+// their own byte-identical InstrumentToolCall (only their caller-identity
+// attribute differed), and whagent_net's MCP client issued every call
+// through a bare http.RoundTripper with no trace context at all -- see
+// each of those packages' own observability.go / client.go for how they
+// plug into this one now.
 package mcpobs
 
 import (
@@ -40,6 +40,23 @@ type CallerAttr func(ctx context.Context) (key, value string, ok bool)
 // always wraps the full call -- including whatever auth/authorization
 // checks run before the product handler -- not just the product handler
 // itself. callerAttr may be nil to skip the caller attribute entirely.
+//
+// The span deliberately starts a NEW trace rather than nesting under the
+// span ctx already carries. go-sdk's streamable-HTTP transport gives a
+// tool handler a context descending from the jsonrpc2 connection, which
+// is built once per MCP session from the `initialize` request's context
+// (mcp.connect -> jsonrpc2.NewConnection) -- not from the POST that
+// actually carried this call, which the transport never threads down
+// (servePOST publishes the bare JSON-RPC message onto the connection's
+// incoming channel). Inheriting it therefore parents every tool call in a
+// session to one long-dead `initialize` span, so a "trace" accumulates
+// every call the session ever makes: the per-POST span shows nothing but
+// the auth UPDATE, while the tool's own span and all its queries land in
+// a sibling mega-trace whose duration is the whole session. Starting fresh
+// makes each tool call one self-contained trace -- tool span, then its DB
+// spans underneath -- at the cost of trace-level linkage to the HTTP
+// request, which names no additional information (same tool, same
+// persona) and cannot be recovered from the transport anyway.
 func InstrumentToolCall[Out any](
 	ctx context.Context,
 	tracer trace.Tracer,
@@ -48,7 +65,7 @@ func InstrumentToolCall[Out any](
 	callerAttr CallerAttr,
 	fn func(context.Context) (*mcp.CallToolResult, Out, error),
 ) (*mcp.CallToolResult, Out, error) {
-	ctx, span := tracer.Start(ctx, "mcp.tool/"+toolName)
+	ctx, span := tracer.Start(trace.ContextWithSpanContext(ctx, trace.SpanContext{}), "mcp.tool/"+toolName)
 	defer span.End()
 	span.SetAttributes(attribute.String("mcp.tool", toolName))
 

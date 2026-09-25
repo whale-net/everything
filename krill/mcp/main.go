@@ -341,13 +341,7 @@ func run() error {
 		handler = server.NewHTTPHandler(specSrv, designSrv, workSrv, opsSrv, credentials, resourceMeta)
 	}
 
-	httpServer := &http.Server{
-		Addr:         cfg.MCPAddr,
-		Handler:      otelhttp.NewHandler(handler, "krill-mcp"),
-		ReadTimeout:  15 * time.Second,
-		WriteTimeout: 15 * time.Second,
-		IdleTimeout:  60 * time.Second,
-	}
+	httpServer := newHTTPServer(cfg.MCPAddr, handler)
 
 	shutdownCtx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
@@ -369,6 +363,26 @@ func run() error {
 		logger.Warn("graceful shutdown did not complete cleanly", "error", err)
 	}
 	return nil
+}
+
+// newHTTPServer builds the http.Server `mcp` listens on, wrapped in the
+// otelhttp handler that gives every streamable-HTTP request a server span.
+//
+// WriteTimeout is deliberately left unset. net/http applies it as an
+// absolute deadline measured from when the request header was read, not
+// as a per-write budget, so any non-zero value silently breaks the
+// transport's long-lived `GET <mount>` listening stream (MCP §2.1.3):
+// every server->client notification written after that deadline fails
+// with i/o timeout while the handler keeps hanging, so the client sees a
+// stream that accepts connections and then goes deaf. Stream lifetime
+// belongs to the transport, not to this server.
+func newHTTPServer(addr string, handler http.Handler) *http.Server {
+	return &http.Server{
+		Addr:        addr,
+		Handler:     otelhttp.NewHandler(handler, "krill-mcp"),
+		ReadTimeout: 15 * time.Second,
+		IdleTimeout: 60 * time.Second,
+	}
 }
 
 // rejectingCredentialStore is a auth.CredentialStore of last resort:

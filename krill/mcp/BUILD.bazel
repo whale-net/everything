@@ -1,7 +1,7 @@
 """krill's MCP spec surface (FR10/NFR1, issue #2494): the two-front-door
 MCP server exposing the FR5-FR9 scoped-slice query at /mcp/spec."""
 
-load("@rules_go//go:def.bzl", "go_binary", "go_library")
+load("@rules_go//go:def.bzl", "go_binary", "go_library", "go_test")
 load("//tools/bazel:release.bzl", "release_app")
 
 go_library(
@@ -29,6 +29,16 @@ go_binary(
     name = "mcp",
     embed = [":mcp_lib"],
     visibility = ["//visibility:public"],
+)
+
+go_test(
+    name = "httpserver_test",
+    srcs = ["httpserver_test.go"],
+    embed = [":mcp_lib"],
+    deps = [
+        "@com_github_stretchr_testify//assert",
+        "@com_github_stretchr_testify//require",
+    ],
 )
 
 # Release metadata. domain "krill" + name "mcp" produces the "krill-mcp"
