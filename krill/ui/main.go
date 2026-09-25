@@ -28,6 +28,7 @@ import (
 
 	"go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp"
 
+	"github.com/whale-net/everything/krill/store"
 	"github.com/whale-net/everything/libs/go/auth"
 	"github.com/whale-net/everything/libs/go/db"
 	"github.com/whale-net/everything/libs/go/htmxauth"
@@ -74,6 +75,13 @@ type config struct {
 	// (KRILL_MCP_PUBLIC_URL, see krill/mcp/main.go) -- a mismatch breaks
 	// an MCP client's RFC 9728 discovery chain.
 	MCPPublicURL string
+
+	// APIBaseURL is krill `api`'s own base URL, the target this binary's
+	// app write client mints krill sessions against and issues every
+	// mutating request to (writeclient.go). Required: a UI with no
+	// configured `api` cannot attribute a write to a real operator
+	// identity, so it refuses to boot rather than run write-less.
+	APIBaseURL string
 }
 
 func loadConfig() config {
@@ -88,6 +96,7 @@ func loadConfig() config {
 		DatabaseURL:      getEnv("PG_DATABASE_URL", ""),
 		UIPublicURL:      getEnv("KRILL_UI_PUBLIC_URL", ""),
 		MCPPublicURL:     getEnv("KRILL_MCP_PUBLIC_URL", ""),
+		APIBaseURL:       getEnv("KRILL_API_URL", ""),
 	}
 }
 
@@ -116,6 +125,18 @@ type App struct {
 	// mints a credential only once the operator is already signed in via
 	// app.auth.
 	mcpProvider *auth.Provider
+
+	// writes is the client this binary's own app pages use to issue krill
+	// writes (writeclient.go): it mints a krill session whose acting /
+	// on-behalf-of subjects are the signed-in operator's real (iss, sub)
+	// pair, then presents that session on every mutating request.
+	writes *writeClient
+
+	// scopes is the read-only `scope` view this binary uses to resolve the
+	// scope a krill session is minted under (writes.go's withKrillSession)
+	// -- a browser has no way to learn a scope id, and there is exactly
+	// one, so GetSole is the whole of it.
+	scopes store.ScopeStore
 }
 
 // NewApp wires up Keycloak sign-in and the auth OAuth2 provider. A
@@ -141,6 +162,9 @@ func NewApp(ctx context.Context, cfg config) (*App, error) {
 	if cfg.MCPPublicURL == "" {
 		return nil, fmt.Errorf("KRILL_MCP_PUBLIC_URL is required")
 	}
+	if cfg.APIBaseURL == "" {
+		return nil, fmt.Errorf("KRILL_API_URL is required: krill-ui issues its writes against krill's api binary")
+	}
 
 	pool, err := db.NewPool(ctx, cfg.DatabaseURL)
 	if err != nil {
@@ -150,7 +174,7 @@ func NewApp(ctx context.Context, cfg config) (*App, error) {
 	// NewDBSessionManager probes the ui_sessions table before returning; a
 	// missing table (migration 007) fails boot here rather than at the
 	// first sign-in.
-	store, err := htmxauth.NewDBSessionManager(ctx, pool, cfg.SessionSecret, "krill_ui_session")
+	sessionStore, err := htmxauth.NewDBSessionManager(ctx, pool, cfg.SessionSecret, "krill_ui_session")
 	if err != nil {
 		return nil, fmt.Errorf("failed to initialize session store: %w", err)
 	}
@@ -168,7 +192,7 @@ func NewApp(ctx context.Context, cfg config) (*App, error) {
 	// initOIDC (inside NewAuthenticatorWithDB, oidc.NewProvider) performs
 	// Keycloak discovery -- a failure here means the UI cannot start at
 	// all, so the caller logs it at ERROR (AGENTS.md "Logging Levels").
-	auth, err := htmxauth.NewAuthenticatorWithDB(ctx, authConfig, store)
+	auth, err := htmxauth.NewAuthenticatorWithDB(ctx, authConfig, sessionStore)
 	if err != nil {
 		return nil, fmt.Errorf("failed to initialize authenticator (keycloak discovery): %w", err)
 	}
@@ -176,6 +200,7 @@ func NewApp(ctx context.Context, cfg config) (*App, error) {
 	app := &App{
 		auth:       auth,
 		oidcIssuer: cfg.OIDCIssuer,
+		scopes:     store.New(pool).Scopes(),
 	}
 
 	// auth.NewCredentialStore/NewPostgresClientRegistry/
@@ -188,6 +213,15 @@ func NewApp(ctx context.Context, cfg config) (*App, error) {
 		return nil, fmt.Errorf("failed to initialize auth provider: %w", err)
 	}
 	app.mcpProvider = mcpProvider
+
+	// The write client is what this binary's own app pages call krill's
+	// write API through; an unusable APIBaseURL is startup-fatal for the
+	// same reason the two URLs above are.
+	writes, err := newWriteClient(writeClientConfig{BaseURL: cfg.APIBaseURL})
+	if err != nil {
+		return nil, fmt.Errorf("failed to initialize write client: %w", err)
+	}
+	app.writes = writes
 
 	return app, nil
 }
@@ -307,6 +341,15 @@ func (app *App) setupRoutes(mux *http.ServeMux) {
 		panic(err)
 	}
 
+	// The mutating actions this binary's own app pages perform. Each is
+	// mounted through operatorRoute, so a request without a signed-in
+	// operator never reaches the handler at all; writes.go's
+	// withKrillSession is then the only way any of them can reach krill,
+	// and it attributes what it does to the operator requireOperator
+	// resolved (LB4).
+	mux.HandleFunc("POST /tasks/{id}/escalate", app.operatorRoute(app.handleEscalateTask))
+	mux.HandleFunc("POST /design-sessions", app.operatorRoute(app.handleOpenDesignSession))
+
 	// The signed-in shell (FR 85a8b33c): a home page plus one root per
 	// nav area, every one of them wrapped in the same chrome by
 	// renderShell. Each area's sub-pages register under its prefix
@@ -324,6 +367,16 @@ func (app *App) mountShellRoutes(mux *http.ServeMux) {
 	mux.HandleFunc(designPath, app.auth.RequireAuthFunc(app.handleDesign))
 	mux.HandleFunc(specPath, app.auth.RequireAuthFunc(app.handleSpec))
 	mux.HandleFunc(credentialsPath, app.auth.RequireAuthFunc(app.handleCredentials))
+}
+
+// operatorRoute is the wrapper every signed-in-operator route in this
+// binary wears: RequireAuth first (an unauthenticated browser is sent to
+// the Keycloak sign-in flow), then requireOperator, which resolves the
+// operator's real (iss, sub) Subject onto the request context and rejects
+// the request when it does not resolve. A handler mounted this way can
+// always read a Subject, and can never be reached without one.
+func (app *App) operatorRoute(next http.HandlerFunc) http.HandlerFunc {
+	return app.auth.RequireAuthFunc(app.requireOperator(next))
 }
 
 func handleHealthz(w http.ResponseWriter, r *http.Request) {

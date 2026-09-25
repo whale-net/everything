@@ -1,7 +1,10 @@
-"""krill's operator web UI: Keycloak sign-in (which gives auth's
-`/authorize` endpoint its SignInURL) plus the persistent nav shell behind
-it -- ops console, design-session browser, spec+delivery browser, and the
-credential widget. See main.go's package doc."""
+"""krill's operator web UI: the Keycloak sign-in shell that gives auth's
+`/authorize` endpoint a SignInURL to redirect a not-yet-signed-in caller
+to, the persistent nav shell behind it (ops console, design-session
+browser, spec+delivery browser, and the credential widget), and the
+mutating actions this binary issues against krill api -- each attributed to
+the signed-in operator's real (iss, sub) (writes.go, identity.go). See
+main.go's package doc."""
 
 load("@rules_go//go:def.bzl", "go_binary", "go_library", "go_test")
 load("//tools/bazel:release.bzl", "release_app")
@@ -14,15 +17,20 @@ go_library(
         "nav.go",
         "routes.go",
         "credentials_page.go",
+        "identity.go",
+        "writeclient.go",
+        "writes.go",
     ],
     importpath = "github.com/whale-net/everything/krill/ui",
     visibility = ["//visibility:private"],
     deps = [
         "//krill/identity",
+        "//krill/store",
         "//libs/go/db",
         "//libs/go/htmxauth",
         "//libs/go/logging",
         "//libs/go/auth",
+        "@com_github_google_uuid//:uuid",
         "@com_github_jackc_pgx_v5//pgxpool",
         "@io_opentelemetry_go_contrib_instrumentation_net_http_otelhttp//:otelhttp",
     ],
@@ -32,6 +40,25 @@ go_binary(
     name = "ui",
     embed = [":ui_lib"],
     visibility = ["//visibility:public"],
+)
+
+# Attribution coverage for the write path: a UI write is rejected when no
+# real (iss, sub) resolves (dev mode, no session, forged session), and is
+# minted under + carried by the signed-in operator's real pair when one
+# does. The present-identity cases run the real htmxauth sign-in callback
+# against a fake Keycloak and the real write client against a fake api --
+# no database, so this runs as part of `bazel test //krill/...`.
+go_test(
+    name = "ui_test",
+    srcs = ["writes_test.go"],
+    embed = [":ui_lib"],
+    deps = [
+        "//krill/store",
+        "//libs/go/htmxauth",
+        "@com_github_google_uuid//:uuid",
+        "@com_github_stretchr_testify//assert",
+        "@com_github_stretchr_testify//require",
+    ],
 )
 
 # domain "krill" + name "ui" produces the "krill-ui" image/app identity.

@@ -103,6 +103,7 @@ migration `006_mcpauth_credential`).
 | `PG_DATABASE_URL` | *(required)* | Backs both the `ui_sessions` table and the auth Postgres-backed credential/client/auth-code stores. |
 | `KRILL_UI_PUBLIC_URL` | *(required)* | This instance's own externally reachable URL -- `auth.ProviderConfig.Issuer`, the base every auth endpoint URL (`/authorize`, `/token`, `/register`, discovery metadata) is built from. Must match what `mcp`'s own `KRILL_MCP_OAUTH_ISSUER` advertises. |
 | `KRILL_MCP_PUBLIC_URL` | *(required)* | `mcp`'s own externally reachable URL -- `auth.ProviderConfig.Resource`. Must be byte-identical to `mcp`'s own `KRILL_MCP_PUBLIC_URL`. |
+| `KRILL_API_URL` | *(required)* | `api`'s base URL, the target `ui`'s app write client mints krill sessions against (`POST <KRILL_API_URL>/sessions/init`) and issues every mutating request to. Unset fails `ui`'s boot: a UI with no configured `api` cannot attribute a write to a real operator identity. |
 
 ## M5 (escalation/intervention/console axis, issues #2867-#2877)
 

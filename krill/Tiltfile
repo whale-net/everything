@@ -321,6 +321,8 @@ spec:
           value: "http://localhost:8085"
         - name: KRILL_MCP_PUBLIC_URL
           value: "http://localhost:8084"
+        - name: KRILL_API_URL
+          value: "http://krill-api:8080"
         - name: OTEL_EXPORTER_OTLP_ENDPOINT
           value: "{otel_endpoint}"
 """.format(
@@ -332,6 +334,10 @@ spec:
     ui_deps = []
     if get_env_bool('ENABLE_KRILL_MIGRATE', default='true'):
         ui_deps.append('krill-migrate')
+    # ui's write client mints krill sessions against api (KRILL_API_URL),
+    # so api has to be up before ui can serve.
+    if get_env_bool('ENABLE_KRILL_API', default='true'):
+        ui_deps.append('krill-api')
 
     k8s_resource(
         'krill-ui',
